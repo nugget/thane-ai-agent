@@ -29,8 +29,8 @@ const (
 	factColumns = "id, category, key, value, source, confidence, created_at, updated_at, accessed_at"
 	// Columns including embedding.
 	factColumnsWithEmbed = "id, category, key, value, source, confidence, embedding, created_at, updated_at, accessed_at"
-	// Standard filter for active (non-deleted) facts.
-	notDeleted = "deleted_at IS NULL"
+	// Filter for active facts (currently: not soft-deleted).
+	activeFilter = "deleted_at IS NULL"
 )
 
 // Fact represents a piece of long-term memory.
@@ -177,7 +177,7 @@ func (s *Store) Set(category Category, key, value, source string, confidence flo
 // Get retrieves a fact by category and key.
 func (s *Store) Get(category Category, key string) (*Fact, error) {
 	fact, err := s.scanFact(s.db.QueryRow(
-		`SELECT `+factColumns+` FROM facts WHERE `+notDeleted+` AND category = ? AND key = ?`,
+		`SELECT `+factColumns+` FROM facts WHERE `+activeFilter+` AND category = ? AND key = ?`,
 		category, key))
 	if err != nil {
 		return nil, err
@@ -194,7 +194,7 @@ func (s *Store) Get(category Category, key string) (*Fact, error) {
 // GetByCategory retrieves all facts in a category.
 func (s *Store) GetByCategory(category Category) ([]*Fact, error) {
 	rows, err := s.db.Query(
-		`SELECT `+factColumns+` FROM facts WHERE `+notDeleted+` AND category = ? ORDER BY key`,
+		`SELECT `+factColumns+` FROM facts WHERE `+activeFilter+` AND category = ? ORDER BY key`,
 		category)
 	if err != nil {
 		return nil, fmt.Errorf("query: %w", err)
@@ -215,7 +215,7 @@ func (s *Store) GetByCategory(category Category) ([]*Fact, error) {
 // GetAll retrieves all facts.
 func (s *Store) GetAll() ([]*Fact, error) {
 	rows, err := s.db.Query(
-		`SELECT ` + factColumns + ` FROM facts WHERE ` + notDeleted + ` ORDER BY category, key`)
+		`SELECT ` + factColumns + ` FROM facts WHERE ` + activeFilter + ` ORDER BY category, key`)
 	if err != nil {
 		return nil, fmt.Errorf("query: %w", err)
 	}
@@ -236,7 +236,7 @@ func (s *Store) GetAll() ([]*Fact, error) {
 func (s *Store) Search(query string) ([]*Fact, error) {
 	pattern := "%" + query + "%"
 	rows, err := s.db.Query(
-		`SELECT `+factColumns+` FROM facts WHERE `+notDeleted+` AND (key LIKE ? OR value LIKE ?) ORDER BY accessed_at DESC LIMIT 50`,
+		`SELECT `+factColumns+` FROM facts WHERE `+activeFilter+` AND (key LIKE ? OR value LIKE ?) ORDER BY accessed_at DESC LIMIT 50`,
 		pattern, pattern)
 	if err != nil {
 		return nil, fmt.Errorf("query: %w", err)
@@ -280,11 +280,11 @@ func (s *Store) DeleteBySource(source string) error {
 // Stats returns fact statistics.
 func (s *Store) Stats() map[string]any {
 	var total int
-	_ = s.db.QueryRow(`SELECT COUNT(*) FROM facts WHERE ` + notDeleted).Scan(&total)
+	_ = s.db.QueryRow(`SELECT COUNT(*) FROM facts WHERE ` + activeFilter).Scan(&total)
 
 	// Count by category
 	cats := make(map[string]int)
-	rows, _ := s.db.Query(`SELECT category, COUNT(*) FROM facts WHERE ` + notDeleted + ` GROUP BY category`)
+	rows, _ := s.db.Query(`SELECT category, COUNT(*) FROM facts WHERE ` + activeFilter + ` GROUP BY category`)
 	if rows != nil {
 		defer rows.Close()
 		for rows.Next() {
@@ -357,7 +357,7 @@ func (s *Store) SetEmbedding(id uuid.UUID, embedding []float32) error {
 // GetAllWithEmbeddings returns all facts that have embeddings.
 func (s *Store) GetAllWithEmbeddings() ([]*Fact, error) {
 	rows, err := s.db.Query(
-		`SELECT ` + factColumnsWithEmbed + ` FROM facts WHERE ` + notDeleted + ` AND embedding IS NOT NULL`)
+		`SELECT ` + factColumnsWithEmbed + ` FROM facts WHERE ` + activeFilter + ` AND embedding IS NOT NULL`)
 	if err != nil {
 		return nil, err
 	}
@@ -423,7 +423,7 @@ func (s *Store) SemanticSearch(queryEmbedding []float32, limit int) ([]*Fact, []
 // GetFactsWithoutEmbeddings returns facts that need embeddings generated.
 func (s *Store) GetFactsWithoutEmbeddings() ([]*Fact, error) {
 	rows, err := s.db.Query(
-		`SELECT ` + factColumns + ` FROM facts WHERE ` + notDeleted + ` AND embedding IS NULL`)
+		`SELECT ` + factColumns + ` FROM facts WHERE ` + activeFilter + ` AND embedding IS NULL`)
 	if err != nil {
 		return nil, err
 	}
