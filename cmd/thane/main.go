@@ -14,6 +14,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/api"
 	"github.com/nugget/thane-ai-agent/internal/config"
 	"github.com/nugget/thane-ai-agent/internal/homeassistant"
+	"github.com/nugget/thane-ai-agent/internal/llm"
 	"github.com/nugget/thane-ai-agent/internal/memory"
 )
 
@@ -116,9 +117,29 @@ func runServe(logger *slog.Logger, configPath string, portOverride int) {
 		ollamaURL = "http://localhost:11434"
 	}
 	
-	// Create compactor (for now, nil - will enable with LLM summarizer later)
-	// TODO: Create LLM summarizer and wire up compactor
-	var compactor agent.Compactor = nil
+	// Create LLM client for summarization
+	llmClient := llm.NewOllamaClient(ollamaURL)
+	
+	// Create compactor with LLM summarizer
+	compactionConfig := memory.CompactionConfig{
+		MaxTokens:            8000,  // Adjust based on model
+		TriggerRatio:         0.7,   // Compact at 70% full
+		KeepRecent:           10,    // Keep last 10 messages
+		MinMessagesToCompact: 15,    // Need enough to be worth summarizing
+	}
+	
+	// LLM summarization function
+	summarizeFunc := func(ctx context.Context, prompt string) (string, error) {
+		msgs := []llm.Message{{Role: "user", Content: prompt}}
+		resp, err := llmClient.Chat(ctx, cfg.Models.Default, msgs, nil)
+		if err != nil {
+			return "", err
+		}
+		return resp.Message.Content, nil
+	}
+	
+	summarizer := memory.NewLLMSummarizer(summarizeFunc)
+	compactor := memory.NewCompactor(mem, compactionConfig, summarizer)
 	
 	loop := agent.NewLoop(logger, mem, compactor, ha, ollamaURL, cfg.Models.Default)
 	server := api.NewServer(cfg.Listen.Port, loop, logger)

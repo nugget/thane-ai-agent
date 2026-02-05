@@ -26,9 +26,17 @@ func DefaultCompactionConfig() CompactionConfig {
 	}
 }
 
+// CompactableStore is the interface for stores that support compaction.
+type CompactableStore interface {
+	GetTokenCount(conversationID string) int
+	GetMessagesForCompaction(conversationID string, keep int) []Message
+	MarkCompacted(conversationID string, before time.Time) error
+	AddCompactionSummary(conversationID, summary string) error
+}
+
 // Compactor handles conversation compaction.
 type Compactor struct {
-	store      *SQLiteStore
+	store      CompactableStore
 	config     CompactionConfig
 	summarizer Summarizer
 }
@@ -39,7 +47,7 @@ type Summarizer interface {
 }
 
 // NewCompactor creates a new compactor.
-func NewCompactor(store *SQLiteStore, config CompactionConfig, summarizer Summarizer) *Compactor {
+func NewCompactor(store CompactableStore, config CompactionConfig, summarizer Summarizer) *Compactor {
 	return &Compactor{
 		store:      store,
 		config:     config,
