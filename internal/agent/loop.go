@@ -4,6 +4,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -45,6 +46,13 @@ type MemoryStore interface {
 	AddMessage(conversationID, role, content string) error
 	GetTokenCount(conversationID string) int
 	Stats() map[string]any
+}
+
+// ToolCallRecorder optionally records tool call execution.
+// Implemented by stores that support tool call tracking.
+type ToolCallRecorder interface {
+	RecordToolCall(conversationID, messageID, toolCallID, toolName, arguments string) error
+	CompleteToolCall(toolCallID, result, errMsg string) error
 }
 
 // Compactor handles conversation compaction.
@@ -248,8 +256,16 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (*R
 			llmMessages = append(llmMessages, llmResp.Message)
 
 			// Execute each tool call
-			for _, tc := range llmResp.Message.ToolCalls {
+			// Check if memory store supports tool call recording
+			recorder, hasRecorder := l.memory.(ToolCallRecorder)
+			convID := req.ConversationID
+			if convID == "" {
+				convID = "default"
+			}
+			
+			for idx, tc := range llmResp.Message.ToolCalls {
 				toolName := tc.Function.Name
+				toolCallID := fmt.Sprintf("call_%d_%d", time.Now().UnixNano(), idx)
 				
 				// Convert arguments map to JSON string for Execute
 				argsJSON := ""
@@ -260,15 +276,32 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (*R
 
 				l.logger.Info("executing tool",
 					"tool", toolName,
+					"call_id", toolCallID,
 					"args", argsJSON,
 				)
 
+				// Record tool call start (if supported)
+				if hasRecorder {
+					if err := recorder.RecordToolCall(convID, "", toolCallID, toolName, argsJSON); err != nil {
+						l.logger.Warn("failed to record tool call", "error", err)
+					}
+				}
+
 				result, err := l.tools.Execute(ctx, toolName, argsJSON)
+				errMsg := ""
 				if err != nil {
-					result = "Error: " + err.Error()
+					errMsg = err.Error()
+					result = "Error: " + errMsg
 					l.logger.Error("tool execution failed", "tool", toolName, "error", err)
 				} else {
 					l.logger.Info("tool executed", "tool", toolName, "result_len", len(result))
+				}
+
+				// Record tool call completion (if supported)
+				if hasRecorder {
+					if err := recorder.CompleteToolCall(toolCallID, result, errMsg); err != nil {
+						l.logger.Warn("failed to complete tool call record", "error", err)
+					}
 				}
 
 				// Add tool result message

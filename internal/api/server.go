@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/nugget/thane-ai-agent/internal/agent"
 	"github.com/nugget/thane-ai-agent/internal/checkpoint"
+	"github.com/nugget/thane-ai-agent/internal/memory"
 	"github.com/nugget/thane-ai-agent/internal/router"
 )
 
@@ -22,6 +23,7 @@ type Server struct {
 	loop         *agent.Loop
 	router       *router.Router
 	checkpointer *checkpoint.Checkpointer
+	memoryStore  *memory.SQLiteStore
 	logger       *slog.Logger
 	server       *http.Server
 }
@@ -39,6 +41,11 @@ func NewServer(port int, loop *agent.Loop, rtr *router.Router, logger *slog.Logg
 // SetCheckpointer configures the checkpointer for checkpoint API endpoints.
 func (s *Server) SetCheckpointer(cp *checkpoint.Checkpointer) {
 	s.checkpointer = cp
+}
+
+// SetMemoryStore configures the memory store for history API endpoints.
+func (s *Server) SetMemoryStore(ms *memory.SQLiteStore) {
+	s.memoryStore = ms
 }
 
 // Start begins serving HTTP requests.
@@ -64,6 +71,12 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("GET /v1/checkpoint/{id}", s.handleCheckpointGet)
 	mux.HandleFunc("DELETE /v1/checkpoint/{id}", s.handleCheckpointDelete)
 	mux.HandleFunc("POST /v1/checkpoint/{id}/restore", s.handleCheckpointRestore)
+
+	// History endpoints
+	mux.HandleFunc("GET /v1/conversations", s.handleConversationList)
+	mux.HandleFunc("GET /v1/conversations/{id}", s.handleConversationGet)
+	mux.HandleFunc("GET /v1/tools/calls", s.handleToolCalls)
+	mux.HandleFunc("GET /v1/tools/stats", s.handleToolStats)
 
 	s.server = &http.Server{
 		Addr:         fmt.Sprintf(":%d", s.port),
@@ -518,4 +531,103 @@ func (s *Server) handleCheckpointRestore(w http.ResponseWriter, r *http.Request)
 		"id":      idStr,
 		"message": "checkpoint restored successfully",
 	})
+}
+
+// History endpoints
+
+func (s *Server) handleConversationList(w http.ResponseWriter, r *http.Request) {
+	if s.memoryStore == nil {
+		s.errorResponse(w, http.StatusServiceUnavailable, "memory store not configured")
+		return
+	}
+
+	convs := s.memoryStore.GetAllConversations()
+	
+	// Return summary without full message content
+	type ConvSummary struct {
+		ID           string    `json:"id"`
+		MessageCount int       `json:"message_count"`
+		CreatedAt    time.Time `json:"created_at"`
+		UpdatedAt    time.Time `json:"updated_at"`
+	}
+	
+	summaries := make([]ConvSummary, len(convs))
+	for i, c := range convs {
+		summaries[i] = ConvSummary{
+			ID:           c.ID,
+			MessageCount: len(c.Messages),
+			CreatedAt:    c.CreatedAt,
+			UpdatedAt:    c.UpdatedAt,
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"conversations": summaries,
+		"count":         len(summaries),
+	})
+}
+
+func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request) {
+	if s.memoryStore == nil {
+		s.errorResponse(w, http.StatusServiceUnavailable, "memory store not configured")
+		return
+	}
+
+	id := r.PathValue("id")
+	conv := s.memoryStore.GetConversation(id)
+	if conv == nil {
+		s.errorResponse(w, http.StatusNotFound, "conversation not found")
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(conv)
+}
+
+func (s *Server) handleToolCalls(w http.ResponseWriter, r *http.Request) {
+	if s.memoryStore == nil {
+		s.errorResponse(w, http.StatusServiceUnavailable, "memory store not configured")
+		return
+	}
+
+	// Parse query params
+	convID := r.URL.Query().Get("conversation_id")
+	toolName := r.URL.Query().Get("tool")
+	limitStr := r.URL.Query().Get("limit")
+	
+	limit := 50
+	if limitStr != "" {
+		if n, err := strconv.Atoi(limitStr); err == nil && n > 0 {
+			limit = n
+		}
+	}
+
+	var calls []memory.ToolCall
+	if toolName != "" {
+		calls = s.memoryStore.GetToolCallsByName(toolName, limit)
+	} else if convID != "" {
+		calls = s.memoryStore.GetToolCalls(convID, limit)
+	} else {
+		// Get all recent (no specific filter)
+		calls = s.memoryStore.GetToolCalls("", limit)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"tool_calls": calls,
+		"count":      len(calls),
+	})
+}
+
+func (s *Server) handleToolStats(w http.ResponseWriter, r *http.Request) {
+	if s.memoryStore == nil {
+		s.errorResponse(w, http.StatusServiceUnavailable, "memory store not configured")
+		return
+	}
+
+	stats := s.memoryStore.ToolCallStats()
+	
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(stats)
 }
