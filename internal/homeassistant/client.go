@@ -31,11 +31,11 @@ func NewClient(baseURL, token string) *Client {
 
 // State represents an entity state from Home Assistant.
 type State struct {
-	EntityID    string                 `json:"entity_id"`
-	State       string                 `json:"state"`
-	Attributes  map[string]any         `json:"attributes"`
-	LastChanged time.Time              `json:"last_changed"`
-	LastUpdated time.Time              `json:"last_updated"`
+	EntityID    string         `json:"entity_id"`
+	State       string         `json:"state"`
+	Attributes  map[string]any `json:"attributes"`
+	LastChanged time.Time      `json:"last_changed"`
+	LastUpdated time.Time      `json:"last_updated"`
 }
 
 // APIStatus represents the HA API status response.

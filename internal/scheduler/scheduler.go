@@ -16,11 +16,11 @@ type Scheduler struct {
 	store   *Store
 	execute ExecuteFunc
 
-	mu       sync.Mutex
-	timers   map[string]*time.Timer // taskID -> timer
-	running  bool
-	stopCh   chan struct{}
-	wg       sync.WaitGroup
+	mu      sync.Mutex
+	timers  map[string]*time.Timer // taskID -> timer
+	running bool
+	stopCh  chan struct{}
+	wg      sync.WaitGroup
 }
 
 // New creates a new scheduler.

@@ -24,8 +24,8 @@ const (
 type Fact struct {
 	ID         uuid.UUID `json:"id"`
 	Category   Category  `json:"category"`
-	Key        string    `json:"key"`   // Unique within category
-	Value      string    `json:"value"` // The actual information
+	Key        string    `json:"key"`                  // Unique within category
+	Value      string    `json:"value"`                // The actual information
 	Source     string    `json:"source,omitempty"`     // Where we learned this
 	Confidence float64   `json:"confidence,omitempty"` // 0-1, how certain
 	CreatedAt  time.Time `json:"created_at"`
@@ -93,11 +93,11 @@ func (s *Store) Close() error {
 // Set creates or updates a fact.
 func (s *Store) Set(category Category, key, value, source string, confidence float64) (*Fact, error) {
 	now := time.Now().UTC()
-	
+
 	// Check if exists
 	var existingID string
 	err := s.db.QueryRow(`SELECT id FROM facts WHERE category = ? AND key = ?`, category, key).Scan(&existingID)
-	
+
 	if err == sql.ErrNoRows {
 		// Create new
 		id, _ := uuid.NewV7()
@@ -112,11 +112,11 @@ func (s *Store) Set(category Category, key, value, source string, confidence flo
 			UpdatedAt:  now,
 			AccessedAt: now,
 		}
-		
+
 		_, err = s.db.Exec(`
 			INSERT INTO facts (id, category, key, value, source, confidence, created_at, updated_at, accessed_at)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-		`, id.String(), category, key, value, source, confidence, 
+		`, id.String(), category, key, value, source, confidence,
 			now.Format(time.RFC3339), now.Format(time.RFC3339), now.Format(time.RFC3339))
 		if err != nil {
 			return nil, fmt.Errorf("insert: %w", err)
@@ -125,7 +125,7 @@ func (s *Store) Set(category Category, key, value, source string, confidence flo
 	} else if err != nil {
 		return nil, fmt.Errorf("check existing: %w", err)
 	}
-	
+
 	// Update existing
 	_, err = s.db.Exec(`
 		UPDATE facts SET value = ?, source = ?, confidence = ?, updated_at = ?, accessed_at = ?
@@ -134,7 +134,7 @@ func (s *Store) Set(category Category, key, value, source string, confidence flo
 	if err != nil {
 		return nil, fmt.Errorf("update: %w", err)
 	}
-	
+
 	id, _ := uuid.Parse(existingID)
 	return &Fact{
 		ID:         id,
@@ -157,12 +157,12 @@ func (s *Store) Get(category Category, key string) (*Fact, error) {
 	if err != nil {
 		return nil, err
 	}
-	
+
 	// Update accessed_at
 	now := time.Now().UTC()
 	_, _ = s.db.Exec(`UPDATE facts SET accessed_at = ? WHERE id = ?`, now.Format(time.RFC3339), fact.ID.String())
 	fact.AccessedAt = now
-	
+
 	return fact, nil
 }
 
@@ -242,7 +242,7 @@ func (s *Store) Delete(category Category, key string) error {
 	if err != nil {
 		return fmt.Errorf("delete: %w", err)
 	}
-	
+
 	affected, _ := result.RowsAffected()
 	if affected == 0 {
 		return fmt.Errorf("fact not found: %s/%s", category, key)
@@ -254,7 +254,7 @@ func (s *Store) Delete(category Category, key string) error {
 func (s *Store) Stats() map[string]any {
 	var total int
 	_ = s.db.QueryRow(`SELECT COUNT(*) FROM facts`).Scan(&total)
-	
+
 	// Count by category
 	cats := make(map[string]int)
 	rows, _ := s.db.Query(`SELECT category, COUNT(*) FROM facts GROUP BY category`)
@@ -269,7 +269,7 @@ func (s *Store) Stats() map[string]any {
 			cats[cat] = count
 		}
 	}
-	
+
 	return map[string]any{
 		"total":      total,
 		"categories": cats,

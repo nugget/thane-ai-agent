@@ -15,18 +15,18 @@ import (
 
 // Tool represents a callable tool.
 type Tool struct {
-	Name        string                 `json:"name"`
-	Description string                 `json:"description"`
-	Parameters  map[string]any         `json:"parameters"`
+	Name        string                                                         `json:"name"`
+	Description string                                                         `json:"description"`
+	Parameters  map[string]any                                                 `json:"parameters"`
 	Handler     func(ctx context.Context, args map[string]any) (string, error) `json:"-"`
 }
 
 // Registry holds available tools.
 type Registry struct {
-	tools      map[string]*Tool
-	ha         *homeassistant.Client
-	scheduler  *scheduler.Scheduler
-	factTools  *facts.Tools
+	tools     map[string]*Tool
+	ha        *homeassistant.Client
+	scheduler *scheduler.Scheduler
+	factTools *facts.Tools
 }
 
 // NewRegistry creates a tool registry with HA integration.
@@ -313,7 +313,7 @@ func (r *Registry) handleGetState(ctx context.Context, args map[string]any) (str
 	if r.ha == nil {
 		return "", fmt.Errorf("Home Assistant not configured")
 	}
-	
+
 	entityID, _ := args["entity_id"].(string)
 	if entityID == "" {
 		return "", fmt.Errorf("entity_id is required")
@@ -326,7 +326,7 @@ func (r *Registry) handleGetState(ctx context.Context, args map[string]any) (str
 
 	// Format nicely for the LLM
 	result := fmt.Sprintf("Entity: %s\nState: %s\n", state.EntityID, state.State)
-	
+
 	// Add key attributes
 	if name, ok := state.Attributes["friendly_name"].(string); ok {
 		result += fmt.Sprintf("Name: %s\n", name)
@@ -348,7 +348,7 @@ func (r *Registry) handleListEntities(ctx context.Context, args map[string]any) 
 	if r.ha == nil {
 		return "", fmt.Errorf("Home Assistant not configured")
 	}
-	
+
 	domain, _ := args["domain"].(string)
 	if domain == "" {
 		return "", fmt.Errorf("domain is required")
@@ -390,7 +390,7 @@ func (r *Registry) handleCallService(ctx context.Context, args map[string]any) (
 	if r.ha == nil {
 		return "", fmt.Errorf("Home Assistant not configured")
 	}
-	
+
 	domain, _ := args["domain"].(string)
 	service, _ := args["service"].(string)
 	entityID, _ := args["entity_id"].(string)
@@ -402,7 +402,7 @@ func (r *Registry) handleCallService(ctx context.Context, args map[string]any) (
 	data := map[string]any{
 		"entity_id": entityID,
 	}
-	
+
 	// Merge additional data
 	if extra, ok := args["data"].(map[string]any); ok {
 		for k, v := range extra {
@@ -477,14 +477,14 @@ func (r *Registry) handleListTasks(ctx context.Context, args map[string]any) (st
 
 	var result strings.Builder
 	result.WriteString(fmt.Sprintf("Found %d task(s):\n", len(tasks)))
-	
+
 	for _, t := range tasks {
 		next, hasNext := t.NextRun(time.Now())
 		status := "enabled"
 		if !t.Enabled {
 			status = "disabled"
 		}
-		
+
 		result.WriteString(fmt.Sprintf("- %s (%s): %s", t.Name, t.ID[:8], status))
 		if hasNext {
 			result.WriteString(fmt.Sprintf(", next: %s", next.Format("2006-01-02 15:04")))
@@ -602,7 +602,7 @@ func parseWhen(when, repeat string) (scheduler.Schedule, error) {
 
 func parseDuration(s string) (time.Duration, error) {
 	s = strings.ToLower(strings.TrimSpace(s))
-	
+
 	// Handle "daily", "hourly" etc
 	switch s {
 	case "daily":
@@ -619,7 +619,7 @@ func parseDuration(s string) (time.Duration, error) {
 func parseHumanDuration(s string) (time.Duration, error) {
 	s = strings.TrimSpace(s)
 	parts := strings.Fields(s)
-	
+
 	if len(parts) < 2 {
 		return 0, fmt.Errorf("expected '<number> <unit>'")
 	}
