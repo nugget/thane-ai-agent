@@ -1,19 +1,31 @@
 package facts
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
 )
 
+// EmbeddingClient generates embeddings for semantic search.
+type EmbeddingClient interface {
+	Generate(ctx context.Context, text string) ([]float32, error)
+}
+
 // Tools provides fact-related tools for the agent.
 type Tools struct {
-	store *Store
+	store      *Store
+	embeddings EmbeddingClient
 }
 
 // NewTools creates fact tools using the given store.
 func NewTools(store *Store) *Tools {
 	return &Tools{store: store}
+}
+
+// SetEmbeddingClient sets the embedding client for semantic search.
+func (t *Tools) SetEmbeddingClient(client EmbeddingClient) {
+	t.embeddings = client
 }
 
 // RememberArgs are arguments for the remember_fact tool.
@@ -135,6 +147,57 @@ func (t *Tools) Forget(argsJSON string) (string, error) {
 	return fmt.Sprintf("Forgot: [%s] %s", args.Category, args.Key), nil
 }
 
+// SemanticRecallArgs are arguments for semantic_recall tool.
+type SemanticRecallArgs struct {
+	Query string `json:"query"`
+	Limit int    `json:"limit,omitempty"`
+}
+
+// SemanticRecall finds facts semantically similar to the query.
+func (t *Tools) SemanticRecall(argsJSON string) (string, error) {
+	var args SemanticRecallArgs
+	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+		return "", fmt.Errorf("parse args: %w", err)
+	}
+
+	if args.Query == "" {
+		return "", fmt.Errorf("query is required")
+	}
+	if args.Limit <= 0 {
+		args.Limit = 5
+	}
+	if args.Limit > 20 {
+		args.Limit = 20
+	}
+
+	if t.embeddings == nil {
+		return "", fmt.Errorf("semantic search not available (no embedding client)")
+	}
+
+	// Generate embedding for query
+	queryEmb, err := t.embeddings.Generate(context.Background(), args.Query)
+	if err != nil {
+		return "", fmt.Errorf("generate embedding: %w", err)
+	}
+
+	// Search
+	facts, scores, err := t.store.SemanticSearch(queryEmb, args.Limit)
+	if err != nil {
+		return "", fmt.Errorf("semantic search: %w", err)
+	}
+
+	if len(facts) == 0 {
+		return "No semantically similar facts found", nil
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Found %d relevant facts:\n\n", len(facts)))
+	for i, f := range facts {
+		sb.WriteString(fmt.Sprintf("%.2f | [%s] %s: %s\n", scores[i], f.Category, f.Key, f.Value))
+	}
+	return sb.String(), nil
+}
+
 // GetDefinitions returns tool definitions for the fact tools.
 func (t *Tools) GetDefinitions() []map[string]any {
 	return []map[string]any{
@@ -148,7 +211,7 @@ func (t *Tools) GetDefinitions() []map[string]any {
 					"properties": map[string]any{
 						"category": map[string]any{
 							"type":        "string",
-							"enum":        []string{"user", "home", "device", "routine", "preference"},
+							"enum":        []string{"user", "home", "device", "routine", "preference", "architecture"},
 							"description": "Category for organizing the fact",
 						},
 						"key": map[string]any{
@@ -210,6 +273,27 @@ func (t *Tools) GetDefinitions() []map[string]any {
 						},
 					},
 					"required": []string{"category", "key"},
+				},
+			},
+		},
+		{
+			"type": "function",
+			"function": map[string]any{
+				"name":        "semantic_recall",
+				"description": "Search memory using natural language. Finds facts semantically similar to your query, even if exact keywords don't match. Use for open-ended questions like 'what do I know about the bedroom?' or 'how does checkpointing work?'",
+				"parameters": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"query": map[string]any{
+							"type":        "string",
+							"description": "Natural language query to search for",
+						},
+						"limit": map[string]any{
+							"type":        "integer",
+							"description": "Maximum results to return (default 5, max 20)",
+						},
+					},
+					"required": []string{"query"},
 				},
 			},
 		},
