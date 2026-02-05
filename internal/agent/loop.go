@@ -54,10 +54,11 @@ type Loop struct {
 	llm       *llm.OllamaClient
 	tools     *tools.Registry
 	model     string
+	talents   string // Combined talent content for system prompt
 }
 
 // NewLoop creates a new agent loop.
-func NewLoop(logger *slog.Logger, mem MemoryStore, compactor Compactor, ha *homeassistant.Client, ollamaURL, defaultModel string) *Loop {
+func NewLoop(logger *slog.Logger, mem MemoryStore, compactor Compactor, ha *homeassistant.Client, ollamaURL, defaultModel, talents string) *Loop {
 	return &Loop{
 		logger:    logger,
 		memory:    mem,
@@ -65,17 +66,25 @@ func NewLoop(logger *slog.Logger, mem MemoryStore, compactor Compactor, ha *home
 		llm:       llm.NewOllamaClient(ollamaURL),
 		tools:     tools.NewRegistry(ha),
 		model:     defaultModel,
+		talents:   talents,
 	}
 }
 
-const systemPrompt = `You are Thane, an autonomous AI agent for Home Assistant. You help users manage their smart home.
+const baseSystemPrompt = `You are Thane, an autonomous AI agent for Home Assistant. You help users manage their smart home.
 
 You have access to tools to query and control Home Assistant:
 - get_state: Check the state of any entity (lights, sensors, doors, etc.)
 - list_entities: Discover entities by domain
 - call_service: Control devices (turn on/off lights, set temperatures, etc.)
 
-Be helpful and concise. When asked about the home, use tools to get real data. When asked to control something, use call_service.`
+When asked about the home, use tools to get real data. When asked to control something, use call_service.`
+
+func (l *Loop) buildSystemPrompt() string {
+	if l.talents == "" {
+		return baseSystemPrompt
+	}
+	return baseSystemPrompt + "\n\n## Behavioral Guidance\n\n" + l.talents
+}
 
 // Run executes one iteration of the agent loop.
 func (l *Loop) Run(ctx context.Context, req *Request) (*Response, error) {
@@ -103,7 +112,7 @@ func (l *Loop) Run(ctx context.Context, req *Request) (*Response, error) {
 	var llmMessages []llm.Message
 	llmMessages = append(llmMessages, llm.Message{
 		Role:    "system",
-		Content: systemPrompt,
+		Content: l.buildSystemPrompt(),
 	})
 
 	// Add history

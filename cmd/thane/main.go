@@ -16,6 +16,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/llm"
 	"github.com/nugget/thane-ai-agent/internal/memory"
+	"github.com/nugget/thane-ai-agent/internal/talents"
 )
 
 func main() {
@@ -92,11 +93,19 @@ func runAsk(logger *slog.Logger, configPath string, args []string) {
 		ollamaURL = "http://localhost:11434"
 	}
 	
+	// Load talents
+	talentsDir := cfg.TalentsDir
+	if talentsDir == "" {
+		talentsDir = "./talents"
+	}
+	talentLoader := talents.NewLoader(talentsDir)
+	talentContent, _ := talentLoader.Load()
+	
 	// Create minimal memory store (in-memory for ask)
 	mem := memory.NewStore(100)
 	
 	// Create agent loop
-	loop := agent.NewLoop(logger, mem, nil, ha, ollamaURL, cfg.Models.Default)
+	loop := agent.NewLoop(logger, mem, nil, ha, ollamaURL, cfg.Models.Default, talentContent)
 	
 	// Process the question
 	ctx := context.Background()
@@ -198,7 +207,23 @@ func runServe(logger *slog.Logger, configPath string, portOverride int) {
 	summarizer := memory.NewLLMSummarizer(summarizeFunc)
 	compactor := memory.NewCompactor(mem, compactionConfig, summarizer)
 	
-	loop := agent.NewLoop(logger, mem, compactor, ha, ollamaURL, cfg.Models.Default)
+	// Load talents
+	talentsDir := cfg.TalentsDir
+	if talentsDir == "" {
+		talentsDir = "./talents"
+	}
+	talentLoader := talents.NewLoader(talentsDir)
+	talentContent, err := talentLoader.Load()
+	if err != nil {
+		logger.Error("failed to load talents", "error", err)
+		os.Exit(1)
+	}
+	if talentContent != "" {
+		talentList, _ := talentLoader.List()
+		logger.Info("talents loaded", "count", len(talentList), "talents", talentList)
+	}
+	
+	loop := agent.NewLoop(logger, mem, compactor, ha, ollamaURL, cfg.Models.Default, talentContent)
 	server := api.NewServer(cfg.Listen.Port, loop, logger)
 
 	// Setup graceful shutdown
