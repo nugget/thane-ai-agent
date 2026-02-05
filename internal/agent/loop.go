@@ -3,9 +3,9 @@ package agent
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 
+	"github.com/nugget/thane-ai-agent/internal/llm"
 	"github.com/nugget/thane-ai-agent/internal/memory"
 )
 
@@ -33,13 +33,17 @@ type Response struct {
 type Loop struct {
 	logger *slog.Logger
 	memory *memory.Store
+	llm    *llm.OllamaClient
+	model  string
 }
 
 // NewLoop creates a new agent loop.
-func NewLoop(logger *slog.Logger, mem *memory.Store) *Loop {
+func NewLoop(logger *slog.Logger, mem *memory.Store, ollamaURL, defaultModel string) *Loop {
 	return &Loop{
 		logger: logger,
 		memory: mem,
+		llm:    llm.NewOllamaClient(ollamaURL),
+		model:  defaultModel,
 	}
 }
 
@@ -78,20 +82,49 @@ func (l *Loop) Run(ctx context.Context, req *Request) (*Response, error) {
 	// Phase 3: Tool Execution
 	// TODO: Execute tools (can be parallel)
 	
-	// Phase 4: Response Generation
-	// For now, echo back with context awareness
-	lastMsg := ""
+	// Phase 4: Response Generation via LLM
+	// Build messages for LLM (history + current)
+	var llmMessages []llm.Message
+	
+	// Add system prompt
+	llmMessages = append(llmMessages, llm.Message{
+		Role:    "system",
+		Content: "You are Thane, an autonomous AI agent for Home Assistant. You help users manage their smart home. Be concise and helpful.",
+	})
+	
+	// Add conversation history
+	for _, m := range history {
+		llmMessages = append(llmMessages, llm.Message{
+			Role:    m.Role,
+			Content: m.Content,
+		})
+	}
+	
+	// Add current request messages
 	for _, m := range req.Messages {
-		if m.Role == "user" {
-			lastMsg = m.Content
-		}
+		llmMessages = append(llmMessages, llm.Message{
+			Role:    m.Role,
+			Content: m.Content,
+		})
 	}
 
-	// Show we're tracking history
-	historyCount := len(history)
+	// Select model
+	model := req.Model
+	if model == "" || model == "thane" {
+		model = l.model
+	}
+
+	// Call LLM
+	l.logger.Info("calling LLM", "model", model, "messages", len(llmMessages))
+	llmResp, err := l.llm.Chat(ctx, model, llmMessages)
+	if err != nil {
+		l.logger.Error("LLM call failed", "error", err)
+		return nil, err
+	}
+
 	resp := &Response{
-		Content:      fmt.Sprintf("[Thane] Received: %q (history: %d messages)", lastMsg, historyCount),
-		Model:        req.Model,
+		Content:      llmResp.Message.Content,
+		Model:        model,
 		FinishReason: "stop",
 	}
 
@@ -100,7 +133,7 @@ func (l *Loop) Run(ctx context.Context, req *Request) (*Response, error) {
 
 	l.logger.Info("agent loop completed",
 		"conversation", convID,
-		"history", historyCount+len(req.Messages)+1,
+		"history", len(history)+len(req.Messages)+1,
 	)
 
 	return resp, nil

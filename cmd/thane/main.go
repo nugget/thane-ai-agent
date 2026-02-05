@@ -73,9 +73,22 @@ func runServe(logger *slog.Logger, configPath string, portOverride int) {
 		cfg.Listen.Port = portOverride
 	}
 
+	logger.Info("config loaded",
+		"port", cfg.Listen.Port,
+		"model", cfg.Models.Default,
+		"ollama_url", cfg.Models.OllamaURL,
+	)
+
 	// Create components
 	mem := memory.NewStore(100) // 100 messages per conversation
-	loop := agent.NewLoop(logger, mem)
+	
+	// Ollama URL from config or environment
+	ollamaURL := cfg.Models.OllamaURL
+	if ollamaURL == "" {
+		ollamaURL = "http://localhost:11434"
+	}
+	
+	loop := agent.NewLoop(logger, mem, ollamaURL, cfg.Models.Default)
 	server := api.NewServer(cfg.Listen.Port, loop, logger)
 
 	// Setup graceful shutdown

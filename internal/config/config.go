@@ -27,7 +27,8 @@ type HomeAssistantConfig struct {
 
 // ModelsConfig defines model routing settings.
 type ModelsConfig struct {
-	Default string `yaml:"default"`
+	Default   string `yaml:"default"`
+	OllamaURL string `yaml:"ollama_url"`
 }
 
 // Load reads configuration from a YAML file.
