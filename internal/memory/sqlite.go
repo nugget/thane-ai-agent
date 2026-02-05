@@ -467,16 +467,19 @@ func (s *SQLiteStore) GetToolCalls(conversationID string, limit int) []ToolCall 
 	var calls []ToolCall
 	for rows.Next() {
 		var tc ToolCall
-		var result, errMsg sql.NullString
+		var messageID, result, errMsg sql.NullString
 		var completedAt sql.NullTime
 		var durationMs sql.NullInt64
 		
-		err := rows.Scan(&tc.ID, &tc.MessageID, &tc.ConversationID, &tc.ToolName,
+		err := rows.Scan(&tc.ID, &messageID, &tc.ConversationID, &tc.ToolName,
 			&tc.Arguments, &result, &errMsg, &tc.StartedAt, &completedAt, &durationMs)
 		if err != nil {
 			continue
 		}
 		
+		if messageID.Valid {
+			tc.MessageID = messageID.String
+		}
 		if result.Valid {
 			tc.Result = result.String
 		}
@@ -521,16 +524,19 @@ func (s *SQLiteStore) GetToolCallsByName(toolName string, limit int) []ToolCall 
 	var calls []ToolCall
 	for rows.Next() {
 		var tc ToolCall
-		var result, errMsg sql.NullString
+		var messageID, result, errMsg sql.NullString
 		var completedAt sql.NullTime
 		var durationMs sql.NullInt64
 		
-		err := rows.Scan(&tc.ID, &tc.MessageID, &tc.ConversationID, &tc.ToolName,
+		err := rows.Scan(&tc.ID, &messageID, &tc.ConversationID, &tc.ToolName,
 			&tc.Arguments, &result, &errMsg, &tc.StartedAt, &completedAt, &durationMs)
 		if err != nil {
 			continue
 		}
 		
+		if messageID.Valid {
+			tc.MessageID = messageID.String
+		}
 		if result.Valid {
 			tc.Result = result.String
 		}
