@@ -90,7 +90,7 @@ func parseMarkdown(r interface{ Read([]byte) (int, error) }) []Chunk {
 	var chunks []Chunk
 	scanner := bufio.NewScanner(r)
 
-	var currentH1, currentH2, currentH3 string
+	var currentH1, currentH2 string
 	var currentContent strings.Builder
 	var lastKey string
 
@@ -133,7 +133,6 @@ func parseMarkdown(r interface{ Read([]byte) (int, error) }) []Chunk {
 			flushChunk()
 			currentH1 = m[1]
 			currentH2 = ""
-			currentH3 = ""
 			lastKey = slugify(currentH1)
 			continue
 		}
@@ -141,7 +140,6 @@ func parseMarkdown(r interface{ Read([]byte) (int, error) }) []Chunk {
 		if m := h2Pattern.FindStringSubmatch(line); m != nil {
 			flushChunk()
 			currentH2 = m[1]
-			currentH3 = ""
 			if currentH1 != "" {
 				lastKey = slugify(currentH1) + "/" + slugify(currentH2)
 			} else {
@@ -152,13 +150,13 @@ func parseMarkdown(r interface{ Read([]byte) (int, error) }) []Chunk {
 
 		if m := h3Pattern.FindStringSubmatch(line); m != nil {
 			flushChunk()
-			currentH3 = m[1]
+			h3 := m[1]
 			if currentH2 != "" {
-				lastKey = slugify(currentH1) + "/" + slugify(currentH2) + "/" + slugify(currentH3)
+				lastKey = slugify(currentH1) + "/" + slugify(currentH2) + "/" + slugify(h3)
 			} else if currentH1 != "" {
-				lastKey = slugify(currentH1) + "/" + slugify(currentH3)
+				lastKey = slugify(currentH1) + "/" + slugify(h3)
 			} else {
-				lastKey = slugify(currentH3)
+				lastKey = slugify(h3)
 			}
 			continue
 		}
