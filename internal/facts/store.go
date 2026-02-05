@@ -262,6 +262,13 @@ func (s *Store) Delete(category Category, key string) error {
 	return nil
 }
 
+// DeleteBySource removes all facts from a given source.
+// Used for re-importing documents without duplicates.
+func (s *Store) DeleteBySource(source string) error {
+	_, err := s.db.Exec(`DELETE FROM facts WHERE source = ?`, source)
+	return err
+}
+
 // Stats returns fact statistics.
 func (s *Store) Stats() map[string]any {
 	var total int

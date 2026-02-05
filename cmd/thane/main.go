@@ -18,6 +18,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/embeddings"
 	"github.com/nugget/thane-ai-agent/internal/facts"
 	"github.com/nugget/thane-ai-agent/internal/homeassistant"
+	"github.com/nugget/thane-ai-agent/internal/ingest"
 	"github.com/nugget/thane-ai-agent/internal/llm"
 	"github.com/nugget/thane-ai-agent/internal/memory"
 	"github.com/nugget/thane-ai-agent/internal/router"
@@ -49,6 +50,12 @@ func main() {
 				os.Exit(1)
 			}
 			runAsk(logger, *configPath, flag.Args()[1:])
+		case "ingest":
+			if flag.NArg() < 2 {
+				fmt.Fprintln(os.Stderr, "usage: thane ingest <file.md>")
+				os.Exit(1)
+			}
+			runIngest(logger, *configPath, flag.Arg(1))
 		case "version":
 			fmt.Println("thane v0.1.0")
 		default:
@@ -64,6 +71,7 @@ func main() {
 	fmt.Println("Commands:")
 	fmt.Println("  serve    Start the API server")
 	fmt.Println("  ask      Ask a single question (for testing)")
+	fmt.Println("  ingest   Import architecture docs into fact store")
 	fmt.Println("  version  Show version")
 	fmt.Println()
 	fmt.Println("Flags:")
@@ -126,6 +134,77 @@ func runAsk(logger *slog.Logger, configPath string, args []string) {
 	}
 
 	fmt.Println(response)
+}
+
+func runIngest(logger *slog.Logger, configPath string, filePath string) {
+	logger.Info("ingesting architecture document", "file", filePath)
+
+	// Load config
+	var cfg *config.Config
+	var err error
+	if configPath != "" {
+		cfg, err = config.Load(configPath)
+		if err != nil {
+			logger.Error("failed to load config", "path", configPath, "error", err)
+			os.Exit(1)
+		}
+	} else {
+		cfg = config.Default()
+	}
+
+	// Data directory
+	dataDir := cfg.DataDir
+	if dataDir == "" {
+		dataDir = "./data"
+	}
+	if err := os.MkdirAll(dataDir, 0755); err != nil {
+		logger.Error("failed to create data directory", "error", err)
+		os.Exit(1)
+	}
+
+	// Open fact store
+	factStore, err := facts.NewStore(dataDir + "/facts.db")
+	if err != nil {
+		logger.Error("failed to open fact store", "error", err)
+		os.Exit(1)
+	}
+	defer factStore.Close()
+
+	// Set up embedding client if configured
+	var embClient facts.EmbeddingClient
+	if cfg.Embeddings.Enabled {
+		embURL := cfg.Embeddings.BaseURL
+		if embURL == "" {
+			embURL = cfg.Models.OllamaURL
+			if embURL == "" {
+				embURL = "http://localhost:11434"
+			}
+		}
+		embModel := cfg.Embeddings.Model
+		if embModel == "" {
+			embModel = "nomic-embed-text"
+		}
+		embClient = embeddings.New(embeddings.Config{
+			BaseURL: embURL,
+			Model:   embModel,
+		})
+		logger.Info("embeddings enabled", "model", embModel)
+	}
+
+	// Create ingester
+	source := "file:" + filePath
+	ingester := ingest.NewArchitectureIngester(factStore, embClient, source)
+
+	// Run ingestion
+	ctx := context.Background()
+	count, err := ingester.IngestFile(ctx, filePath)
+	if err != nil {
+		logger.Error("ingestion failed", "error", err)
+		os.Exit(1)
+	}
+
+	logger.Info("ingestion complete", "facts_created", count, "source", source)
+	fmt.Printf("Successfully ingested %d facts from %s\n", count, filePath)
 }
 
 func runServe(logger *slog.Logger, configPath string, portOverride int) {
