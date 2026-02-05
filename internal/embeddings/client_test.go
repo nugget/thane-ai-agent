@@ -50,9 +50,9 @@ func TestCosineSimilarity(t *testing.T) {
 func TestTopK(t *testing.T) {
 	query := []float32{1, 0, 0}
 	vectors := [][]float32{
-		{0, 1, 0},  // orthogonal, sim = 0
-		{1, 0, 0},  // identical, sim = 1
-		{-1, 0, 0}, // opposite, sim = -1
+		{0, 1, 0},     // orthogonal, sim = 0
+		{1, 0, 0},     // identical, sim = 1
+		{-1, 0, 0},    // opposite, sim = -1
 		{0.7, 0.7, 0}, // similar, sim ≈ 0.707
 	}
 
