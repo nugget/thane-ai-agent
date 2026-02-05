@@ -240,3 +240,20 @@ func (l *Loop) ToolsJSON() string {
 	data, _ := json.MarshalIndent(l.tools.List(), "", "  ")
 	return string(data)
 }
+
+// Process is a convenience wrapper for single-shot requests.
+func (l *Loop) Process(ctx context.Context, conversationID, message string) (string, error) {
+	req := &Request{
+		ConversationID: conversationID,
+		Messages: []Message{{
+			Role:    "user",
+			Content: message,
+		}},
+	}
+	
+	resp, err := l.Run(ctx, req)
+	if err != nil {
+		return "", err
+	}
+	return resp.Content, nil
+}

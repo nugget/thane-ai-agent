@@ -34,6 +34,12 @@ func main() {
 		switch flag.Arg(0) {
 		case "serve":
 			runServe(logger, *configPath, *port)
+		case "ask":
+			if flag.NArg() < 2 {
+				fmt.Fprintln(os.Stderr, "usage: thane ask <question>")
+				os.Exit(1)
+			}
+			runAsk(logger, *configPath, flag.Args()[1:])
 		case "version":
 			fmt.Println("thane v0.1.0")
 		default:
@@ -48,10 +54,61 @@ func main() {
 	fmt.Println()
 	fmt.Println("Commands:")
 	fmt.Println("  serve    Start the API server")
+	fmt.Println("  ask      Ask a single question (for testing)")
 	fmt.Println("  version  Show version")
 	fmt.Println()
 	fmt.Println("Flags:")
 	flag.PrintDefaults()
+}
+
+func runAsk(logger *slog.Logger, configPath string, args []string) {
+	question := args[0]
+	for _, a := range args[1:] {
+		question += " " + a
+	}
+	
+	// Load config
+	var cfg *config.Config
+	var err error
+	if configPath != "" {
+		cfg, err = config.Load(configPath)
+		if err != nil {
+			logger.Error("failed to load config", "path", configPath, "error", err)
+			os.Exit(1)
+		}
+	} else {
+		cfg = config.Default()
+	}
+	
+	// Home Assistant client
+	var ha *homeassistant.Client
+	if cfg.HomeAssistant.URL != "" && cfg.HomeAssistant.Token != "" {
+		ha = homeassistant.NewClient(cfg.HomeAssistant.URL, cfg.HomeAssistant.Token)
+	}
+	
+	// Ollama URL
+	ollamaURL := cfg.Models.OllamaURL
+	if ollamaURL == "" {
+		ollamaURL = "http://localhost:11434"
+	}
+	
+	// Create minimal memory store (in-memory for ask)
+	mem := memory.NewStore(100)
+	
+	// Create agent loop
+	loop := agent.NewLoop(logger, mem, nil, ha, ollamaURL, cfg.Models.Default)
+	
+	// Process the question
+	ctx := context.Background()
+	threadID := "cli-test"
+	
+	response, err := loop.Process(ctx, threadID, question)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		os.Exit(1)
+	}
+	
+	fmt.Println(response)
 }
 
 func runServe(logger *slog.Logger, configPath string, portOverride int) {
