@@ -308,6 +308,7 @@ func runServe(logger *slog.Logger, configPath string, portOverride int) {
 	logger.Info("fact store initialized", "path", dataDir+"/facts.db")
 	
 	server := api.NewServer(cfg.Listen.Port, loop, rtr, logger)
+	server.SetMemoryStore(mem)
 	
 	// Create checkpointer
 	checkpointDB, err := sql.Open("sqlite3", dataDir+"/checkpoints.db")

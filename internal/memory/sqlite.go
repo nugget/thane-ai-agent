@@ -67,6 +67,25 @@ func (s *SQLiteStore) migrate() error {
 	CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id, timestamp);
 	CREATE INDEX IF NOT EXISTS idx_messages_compacted ON messages(conversation_id, compacted);
 
+	-- Tool calls (structured, queryable)
+	CREATE TABLE IF NOT EXISTS tool_calls (
+		id TEXT PRIMARY KEY,
+		message_id TEXT,
+		conversation_id TEXT NOT NULL,
+		tool_name TEXT NOT NULL,
+		arguments TEXT NOT NULL,
+		result TEXT,
+		error TEXT,
+		started_at TIMESTAMP NOT NULL,
+		completed_at TIMESTAMP,
+		duration_ms INTEGER,
+		FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE SET NULL,
+		FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+	);
+	CREATE INDEX IF NOT EXISTS idx_tool_calls_conversation ON tool_calls(conversation_id, started_at);
+	CREATE INDEX IF NOT EXISTS idx_tool_calls_tool ON tool_calls(tool_name);
+	CREATE INDEX IF NOT EXISTS idx_tool_calls_message ON tool_calls(message_id);
+
 	-- Entity facts (for Phase 3)
 	CREATE TABLE IF NOT EXISTS entity_facts (
 		id TEXT PRIMARY KEY,
@@ -352,4 +371,229 @@ func (s *SQLiteStore) AddCompactionSummary(conversationID, summary string) error
 // Rule of thumb: ~4 characters per token for English.
 func estimateTokens(text string) int {
 	return len(text) / 4
+}
+
+// ToolCall represents a recorded tool invocation.
+type ToolCall struct {
+	ID             string     `json:"id"`
+	MessageID      string     `json:"message_id"`
+	ConversationID string     `json:"conversation_id"`
+	ToolName       string     `json:"tool_name"`
+	Arguments      string     `json:"arguments"`
+	Result         string     `json:"result,omitempty"`
+	Error          string     `json:"error,omitempty"`
+	StartedAt      time.Time  `json:"started_at"`
+	CompletedAt    *time.Time `json:"completed_at,omitempty"`
+	DurationMs     int64      `json:"duration_ms,omitempty"`
+}
+
+// RecordToolCall records a tool call execution.
+// messageID can be empty - it will be stored as NULL.
+func (s *SQLiteStore) RecordToolCall(conversationID, messageID, toolCallID, toolName, arguments string) error {
+	now := time.Now()
+	
+	var msgID any
+	if messageID != "" {
+		msgID = messageID
+	} // else nil (NULL)
+	
+	_, err := s.db.Exec(`
+		INSERT INTO tool_calls (id, message_id, conversation_id, tool_name, arguments, started_at)
+		VALUES (?, ?, ?, ?, ?, ?)
+	`, toolCallID, msgID, conversationID, toolName, arguments, now)
+	
+	return err
+}
+
+// CompleteToolCall records the result of a tool call.
+func (s *SQLiteStore) CompleteToolCall(toolCallID, result, errMsg string) error {
+	now := time.Now()
+	
+	// Get started_at to calculate duration
+	var startedAt time.Time
+	err := s.db.QueryRow(`SELECT started_at FROM tool_calls WHERE id = ?`, toolCallID).Scan(&startedAt)
+	if err != nil {
+		return fmt.Errorf("tool call not found: %s", toolCallID)
+	}
+	
+	durationMs := now.Sub(startedAt).Milliseconds()
+	
+	_, err = s.db.Exec(`
+		UPDATE tool_calls 
+		SET result = ?, error = ?, completed_at = ?, duration_ms = ?
+		WHERE id = ?
+	`, result, errMsg, now, durationMs, toolCallID)
+	
+	return err
+}
+
+// GetToolCalls retrieves tool calls, optionally filtered by conversation.
+// If conversationID is empty, returns all recent tool calls.
+func (s *SQLiteStore) GetToolCalls(conversationID string, limit int) []ToolCall {
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 1000 {
+		limit = 1000 // Cap to prevent memory exhaustion
+	}
+	
+	var rows *sql.Rows
+	var err error
+	
+	if conversationID != "" {
+		rows, err = s.db.Query(`
+			SELECT id, message_id, conversation_id, tool_name, arguments, 
+			       result, error, started_at, completed_at, duration_ms
+			FROM tool_calls
+			WHERE conversation_id = ?
+			ORDER BY started_at DESC
+			LIMIT ?
+		`, conversationID, limit)
+	} else {
+		// No filter - get all recent
+		rows, err = s.db.Query(`
+			SELECT id, message_id, conversation_id, tool_name, arguments, 
+			       result, error, started_at, completed_at, duration_ms
+			FROM tool_calls
+			ORDER BY started_at DESC
+			LIMIT ?
+		`, limit)
+	}
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	
+	var calls []ToolCall
+	for rows.Next() {
+		var tc ToolCall
+		var messageID, result, errMsg sql.NullString
+		var completedAt sql.NullTime
+		var durationMs sql.NullInt64
+		
+		err := rows.Scan(&tc.ID, &messageID, &tc.ConversationID, &tc.ToolName,
+			&tc.Arguments, &result, &errMsg, &tc.StartedAt, &completedAt, &durationMs)
+		if err != nil {
+			continue
+		}
+		
+		if messageID.Valid {
+			tc.MessageID = messageID.String
+		}
+		if result.Valid {
+			tc.Result = result.String
+		}
+		if errMsg.Valid {
+			tc.Error = errMsg.String
+		}
+		if completedAt.Valid {
+			tc.CompletedAt = &completedAt.Time
+		}
+		if durationMs.Valid {
+			tc.DurationMs = durationMs.Int64
+		}
+		
+		calls = append(calls, tc)
+	}
+	
+	return calls
+}
+
+// GetToolCallsByName retrieves tool calls filtered by tool name.
+func (s *SQLiteStore) GetToolCallsByName(toolName string, limit int) []ToolCall {
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 1000 {
+		limit = 1000 // Cap to prevent memory exhaustion
+	}
+	
+	rows, err := s.db.Query(`
+		SELECT id, message_id, conversation_id, tool_name, arguments,
+		       result, error, started_at, completed_at, duration_ms
+		FROM tool_calls
+		WHERE tool_name = ?
+		ORDER BY started_at DESC
+		LIMIT ?
+	`, toolName, limit)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	
+	var calls []ToolCall
+	for rows.Next() {
+		var tc ToolCall
+		var messageID, result, errMsg sql.NullString
+		var completedAt sql.NullTime
+		var durationMs sql.NullInt64
+		
+		err := rows.Scan(&tc.ID, &messageID, &tc.ConversationID, &tc.ToolName,
+			&tc.Arguments, &result, &errMsg, &tc.StartedAt, &completedAt, &durationMs)
+		if err != nil {
+			continue
+		}
+		
+		if messageID.Valid {
+			tc.MessageID = messageID.String
+		}
+		if result.Valid {
+			tc.Result = result.String
+		}
+		if errMsg.Valid {
+			tc.Error = errMsg.String
+		}
+		if completedAt.Valid {
+			tc.CompletedAt = &completedAt.Time
+		}
+		if durationMs.Valid {
+			tc.DurationMs = durationMs.Int64
+		}
+		
+		calls = append(calls, tc)
+	}
+	
+	return calls
+}
+
+// ToolCallStats returns statistics about tool usage.
+func (s *SQLiteStore) ToolCallStats() map[string]any {
+	stats := make(map[string]any)
+	
+	// Total calls
+	var total int
+	s.db.QueryRow(`SELECT COUNT(*) FROM tool_calls`).Scan(&total)
+	stats["total_calls"] = total
+	
+	// By tool
+	byTool := make(map[string]int)
+	rows, err := s.db.Query(`SELECT tool_name, COUNT(*) FROM tool_calls GROUP BY tool_name ORDER BY COUNT(*) DESC`)
+	if err == nil && rows != nil {
+		defer rows.Close()
+		for rows.Next() {
+			var name string
+			var count int
+			if err := rows.Scan(&name, &count); err != nil {
+				continue // Skip malformed rows
+			}
+			byTool[name] = count
+		}
+	}
+	stats["by_tool"] = byTool
+	
+	// Average duration
+	var avgMs float64
+	s.db.QueryRow(`SELECT COALESCE(AVG(duration_ms), 0) FROM tool_calls WHERE completed_at IS NOT NULL`).Scan(&avgMs)
+	stats["avg_duration_ms"] = avgMs
+	
+	// Error rate
+	var errors int
+	s.db.QueryRow(`SELECT COUNT(*) FROM tool_calls WHERE error IS NOT NULL AND error != ''`).Scan(&errors)
+	if total > 0 {
+		stats["error_rate"] = float64(errors) / float64(total)
+	} else {
+		stats["error_rate"] = 0.0
+	}
+	
+	return stats
 }
