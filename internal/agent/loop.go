@@ -28,6 +28,10 @@ type Request struct {
 	ConversationID string    `json:"conversation_id,omitempty"`
 }
 
+// StreamCallback is called for each token during streaming.
+// Alias to llm.StreamCallback for compatibility.
+type StreamCallback = llm.StreamCallback
+
 // Response represents the agent's response.
 type Response struct {
 	Content      string `json:"content"`
@@ -92,7 +96,8 @@ func (l *Loop) buildSystemPrompt() string {
 }
 
 // Run executes one iteration of the agent loop.
-func (l *Loop) Run(ctx context.Context, req *Request) (*Response, error) {
+// If stream is non-nil, tokens are pushed to it as they arrive.
+func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (*Response, error) {
 	convID := req.ConversationID
 	if convID == "" {
 		convID = "default"
@@ -187,9 +192,7 @@ func (l *Loop) Run(ctx context.Context, req *Request) (*Response, error) {
 		)
 
 		// Use streaming to avoid HTTP timeouts on slow models
-		llmResp, err := l.llm.ChatStream(ctx, model, llmMessages, toolDefs, func(token string) {
-			// Future: push to SSE/websocket for live updates
-		})
+		llmResp, err := l.llm.ChatStream(ctx, model, llmMessages, toolDefs, stream)
 		if err != nil {
 			l.logger.Error("LLM call failed", "error", err)
 			return nil, err
@@ -296,7 +299,7 @@ func (l *Loop) ToolsJSON() string {
 	return string(data)
 }
 
-// Process is a convenience wrapper for single-shot requests.
+// Process is a convenience wrapper for single-shot requests (no streaming).
 func (l *Loop) Process(ctx context.Context, conversationID, message string) (string, error) {
 	req := &Request{
 		ConversationID: conversationID,
@@ -306,7 +309,7 @@ func (l *Loop) Process(ctx context.Context, conversationID, message string) (str
 		}},
 	}
 	
-	resp, err := l.Run(ctx, req)
+	resp, err := l.Run(ctx, req, nil)
 	if err != nil {
 		return "", err
 	}

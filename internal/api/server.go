@@ -149,19 +149,18 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: Handle streaming (req.Stream)
-	if req.Stream {
-		s.errorResponse(w, http.StatusNotImplemented, "streaming not yet implemented")
-		return
-	}
-
-	// Run through the agent loop
 	agentReq := &agent.Request{
 		Messages: req.Messages,
 		Model:    req.Model,
 	}
 
-	resp, err := s.loop.Run(r.Context(), agentReq)
+	if req.Stream {
+		s.handleStreamingCompletion(w, r, agentReq)
+		return
+	}
+
+	// Non-streaming: run and return complete response
+	resp, err := s.loop.Run(r.Context(), agentReq, nil)
 	if err != nil {
 		s.logger.Error("agent loop failed", "error", err)
 		s.errorResponse(w, http.StatusInternalServerError, "agent error")
@@ -193,6 +192,110 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(completion)
+}
+
+// StreamChunk is the SSE format for streaming responses.
+type StreamChunk struct {
+	ID      string         `json:"id"`
+	Object  string         `json:"object"`
+	Created int64          `json:"created"`
+	Model   string         `json:"model"`
+	Choices []StreamChoice `json:"choices"`
+}
+
+// StreamChoice represents a streaming choice with delta content.
+type StreamChoice struct {
+	Index        int         `json:"index"`
+	Delta        StreamDelta `json:"delta"`
+	FinishReason *string     `json:"finish_reason"`
+}
+
+// StreamDelta represents incremental content.
+type StreamDelta struct {
+	Role    string `json:"role,omitempty"`
+	Content string `json:"content,omitempty"`
+}
+
+func (s *Server) handleStreamingCompletion(w http.ResponseWriter, r *http.Request, agentReq *agent.Request) {
+	// Set SSE headers
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no") // Disable nginx buffering
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		s.errorResponse(w, http.StatusInternalServerError, "streaming not supported")
+		return
+	}
+
+	completionID := fmt.Sprintf("chatcmpl-%d", time.Now().UnixNano())
+	created := time.Now().Unix()
+	modelName := "thane" // Will be updated when we get the response
+
+	// Send initial chunk with role
+	initialChunk := StreamChunk{
+		ID:      completionID,
+		Object:  "chat.completion.chunk",
+		Created: created,
+		Model:   modelName,
+		Choices: []StreamChoice{{
+			Index: 0,
+			Delta: StreamDelta{Role: "assistant"},
+		}},
+	}
+	s.writeSSE(w, initialChunk)
+	flusher.Flush()
+
+	// Stream callback sends each token
+	streamCallback := func(token string) {
+		chunk := StreamChunk{
+			ID:      completionID,
+			Object:  "chat.completion.chunk",
+			Created: created,
+			Model:   modelName,
+			Choices: []StreamChoice{{
+				Index: 0,
+				Delta: StreamDelta{Content: token},
+			}},
+		}
+		s.writeSSE(w, chunk)
+		flusher.Flush()
+	}
+
+	// Run agent with streaming
+	resp, err := s.loop.Run(r.Context(), agentReq, streamCallback)
+	if err != nil {
+		s.logger.Error("agent loop failed", "error", err)
+		// Can't change status code after streaming started, just close
+		return
+	}
+
+	// Update model name and send final chunk
+	modelName = resp.Model
+	finishReason := resp.FinishReason
+	finalChunk := StreamChunk{
+		ID:      completionID,
+		Object:  "chat.completion.chunk",
+		Created: created,
+		Model:   modelName,
+		Choices: []StreamChoice{{
+			Index:        0,
+			Delta:        StreamDelta{},
+			FinishReason: &finishReason,
+		}},
+	}
+	s.writeSSE(w, finalChunk)
+	flusher.Flush()
+
+	// Send [DONE] marker
+	fmt.Fprintf(w, "data: [DONE]\n\n")
+	flusher.Flush()
+}
+
+func (s *Server) writeSSE(w http.ResponseWriter, chunk StreamChunk) {
+	data, _ := json.Marshal(chunk)
+	fmt.Fprintf(w, "data: %s\n\n", data)
 }
 
 func (s *Server) errorResponse(w http.ResponseWriter, code int, message string) {
