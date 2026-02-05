@@ -115,7 +115,7 @@ func TestNewContextProvider(t *testing.T) {
 	// Test with nil embedder (valid case)
 	provider := NewContextProvider(store, nil)
 	if provider == nil {
-		t.Error("expected non-nil provider")
+		t.Fatal("expected non-nil provider")
 	}
 	if provider.store != store {
 		t.Error("store not set correctly")
