@@ -15,6 +15,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/api"
 	"github.com/nugget/thane-ai-agent/internal/checkpoint"
 	"github.com/nugget/thane-ai-agent/internal/config"
+	"github.com/nugget/thane-ai-agent/internal/embeddings"
 	"github.com/nugget/thane-ai-agent/internal/facts"
 	"github.com/nugget/thane-ai-agent/internal/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/llm"
@@ -306,6 +307,24 @@ func runServe(logger *slog.Logger, configPath string, portOverride int) {
 	factTools := facts.NewTools(factStore)
 	loop.Tools().SetFactTools(factTools)
 	logger.Info("fact store initialized", "path", dataDir+"/facts.db")
+
+	// Set up embedding client for semantic search
+	if cfg.Embeddings.Enabled {
+		embURL := cfg.Embeddings.BaseURL
+		if embURL == "" {
+			embURL = ollamaURL
+		}
+		embModel := cfg.Embeddings.Model
+		if embModel == "" {
+			embModel = "nomic-embed-text"
+		}
+		embClient := embeddings.New(embeddings.Config{
+			BaseURL: embURL,
+			Model:   embModel,
+		})
+		factTools.SetEmbeddingClient(embClient)
+		logger.Info("embeddings enabled", "model", embModel, "url", embURL)
+	}
 
 	server := api.NewServer(cfg.Listen.Port, loop, rtr, logger)
 	server.SetMemoryStore(mem)

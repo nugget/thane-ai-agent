@@ -59,6 +59,14 @@ func (t *Tools) Remember(argsJSON string) (string, error) {
 		return "", fmt.Errorf("store fact: %w", err)
 	}
 
+	// Generate embedding if client available
+	if t.embeddings != nil {
+		embText := fmt.Sprintf("%s: %s - %s", args.Category, args.Key, args.Value)
+		if emb, err := t.embeddings.Generate(context.Background(), embText); err == nil {
+			_ = t.store.SetEmbedding(fact.ID, emb)
+		}
+	}
+
 	return fmt.Sprintf("Remembered: [%s] %s = %s", fact.Category, fact.Key, fact.Value), nil
 }
 
@@ -306,4 +314,32 @@ func formatFacts(facts []*Fact) string {
 		sb.WriteString(fmt.Sprintf("[%s] %s = %s\n", f.Category, f.Key, f.Value))
 	}
 	return sb.String()
+}
+
+// GenerateMissingEmbeddings creates embeddings for facts that don't have them.
+// Returns count of facts embedded.
+func (t *Tools) GenerateMissingEmbeddings() (int, error) {
+	if t.embeddings == nil {
+		return 0, fmt.Errorf("embedding client not configured")
+	}
+
+	facts, err := t.store.GetFactsWithoutEmbeddings()
+	if err != nil {
+		return 0, err
+	}
+
+	count := 0
+	for _, f := range facts {
+		embText := fmt.Sprintf("%s: %s - %s", f.Category, f.Key, f.Value)
+		emb, err := t.embeddings.Generate(context.Background(), embText)
+		if err != nil {
+			continue // Skip failures, don't halt
+		}
+		if err := t.store.SetEmbedding(f.ID, emb); err != nil {
+			continue
+		}
+		count++
+	}
+
+	return count, nil
 }
