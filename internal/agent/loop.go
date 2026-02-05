@@ -186,7 +186,10 @@ func (l *Loop) Run(ctx context.Context, req *Request) (*Response, error) {
 			"iteration", i+1,
 		)
 
-		llmResp, err := l.llm.Chat(ctx, model, llmMessages, toolDefs)
+		// Use streaming to avoid HTTP timeouts on slow models
+		llmResp, err := l.llm.ChatStream(ctx, model, llmMessages, toolDefs, func(token string) {
+			// Future: push to SSE/websocket for live updates
+		})
 		if err != nil {
 			l.logger.Error("LLM call failed", "error", err)
 			return nil, err
