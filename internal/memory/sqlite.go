@@ -70,7 +70,7 @@ func (s *SQLiteStore) migrate() error {
 	-- Tool calls (structured, queryable)
 	CREATE TABLE IF NOT EXISTS tool_calls (
 		id TEXT PRIMARY KEY,
-		message_id TEXT NOT NULL,
+		message_id TEXT,
 		conversation_id TEXT NOT NULL,
 		tool_name TEXT NOT NULL,
 		arguments TEXT NOT NULL,
@@ -79,8 +79,8 @@ func (s *SQLiteStore) migrate() error {
 		started_at TIMESTAMP NOT NULL,
 		completed_at TIMESTAMP,
 		duration_ms INTEGER,
-		FOREIGN KEY (message_id) REFERENCES messages(id),
-		FOREIGN KEY (conversation_id) REFERENCES conversations(id)
+		FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE SET NULL,
+		FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
 	);
 	CREATE INDEX IF NOT EXISTS idx_tool_calls_conversation ON tool_calls(conversation_id, started_at);
 	CREATE INDEX IF NOT EXISTS idx_tool_calls_tool ON tool_calls(tool_name);
@@ -388,13 +388,19 @@ type ToolCall struct {
 }
 
 // RecordToolCall records a tool call execution.
+// messageID can be empty - it will be stored as NULL.
 func (s *SQLiteStore) RecordToolCall(conversationID, messageID, toolCallID, toolName, arguments string) error {
 	now := time.Now()
+	
+	var msgID any
+	if messageID != "" {
+		msgID = messageID
+	} // else nil (NULL)
 	
 	_, err := s.db.Exec(`
 		INSERT INTO tool_calls (id, message_id, conversation_id, tool_name, arguments, started_at)
 		VALUES (?, ?, ?, ?, ?, ?)
-	`, toolCallID, messageID, conversationID, toolName, arguments, now)
+	`, toolCallID, msgID, conversationID, toolName, arguments, now)
 	
 	return err
 }
@@ -421,20 +427,38 @@ func (s *SQLiteStore) CompleteToolCall(toolCallID, result, errMsg string) error 
 	return err
 }
 
-// GetToolCalls retrieves tool calls for a conversation.
+// GetToolCalls retrieves tool calls, optionally filtered by conversation.
+// If conversationID is empty, returns all recent tool calls.
 func (s *SQLiteStore) GetToolCalls(conversationID string, limit int) []ToolCall {
 	if limit <= 0 {
 		limit = 100
 	}
+	if limit > 1000 {
+		limit = 1000 // Cap to prevent memory exhaustion
+	}
 	
-	rows, err := s.db.Query(`
-		SELECT id, message_id, conversation_id, tool_name, arguments, 
-		       result, error, started_at, completed_at, duration_ms
-		FROM tool_calls
-		WHERE conversation_id = ?
-		ORDER BY started_at DESC
-		LIMIT ?
-	`, conversationID, limit)
+	var rows *sql.Rows
+	var err error
+	
+	if conversationID != "" {
+		rows, err = s.db.Query(`
+			SELECT id, message_id, conversation_id, tool_name, arguments, 
+			       result, error, started_at, completed_at, duration_ms
+			FROM tool_calls
+			WHERE conversation_id = ?
+			ORDER BY started_at DESC
+			LIMIT ?
+		`, conversationID, limit)
+	} else {
+		// No filter - get all recent
+		rows, err = s.db.Query(`
+			SELECT id, message_id, conversation_id, tool_name, arguments, 
+			       result, error, started_at, completed_at, duration_ms
+			FROM tool_calls
+			ORDER BY started_at DESC
+			LIMIT ?
+		`, limit)
+	}
 	if err != nil {
 		return nil
 	}
@@ -476,6 +500,9 @@ func (s *SQLiteStore) GetToolCalls(conversationID string, limit int) []ToolCall 
 func (s *SQLiteStore) GetToolCallsByName(toolName string, limit int) []ToolCall {
 	if limit <= 0 {
 		limit = 100
+	}
+	if limit > 1000 {
+		limit = 1000 // Cap to prevent memory exhaustion
 	}
 	
 	rows, err := s.db.Query(`
@@ -534,13 +561,15 @@ func (s *SQLiteStore) ToolCallStats() map[string]any {
 	
 	// By tool
 	byTool := make(map[string]int)
-	rows, _ := s.db.Query(`SELECT tool_name, COUNT(*) FROM tool_calls GROUP BY tool_name ORDER BY COUNT(*) DESC`)
-	if rows != nil {
+	rows, err := s.db.Query(`SELECT tool_name, COUNT(*) FROM tool_calls GROUP BY tool_name ORDER BY COUNT(*) DESC`)
+	if err == nil && rows != nil {
 		defer rows.Close()
 		for rows.Next() {
 			var name string
 			var count int
-			rows.Scan(&name, &count)
+			if err := rows.Scan(&name, &count); err != nil {
+				continue // Skip malformed rows
+			}
 			byTool[name] = count
 		}
 	}

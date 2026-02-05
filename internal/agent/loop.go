@@ -4,10 +4,10 @@ package agent
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/nugget/thane-ai-agent/internal/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/llm"
 	"github.com/nugget/thane-ai-agent/internal/memory"
@@ -263,9 +263,10 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (*R
 				convID = "default"
 			}
 			
-			for idx, tc := range llmResp.Message.ToolCalls {
+			for _, tc := range llmResp.Message.ToolCalls {
 				toolName := tc.Function.Name
-				toolCallID := fmt.Sprintf("call_%d_%d", time.Now().UnixNano(), idx)
+				toolCallID, _ := uuid.NewV7()
+				toolCallIDStr := toolCallID.String()
 				
 				// Convert arguments map to JSON string for Execute
 				argsJSON := ""
@@ -276,13 +277,13 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (*R
 
 				l.logger.Info("executing tool",
 					"tool", toolName,
-					"call_id", toolCallID,
+					"call_id", toolCallIDStr,
 					"args", argsJSON,
 				)
 
 				// Record tool call start (if supported)
 				if hasRecorder {
-					if err := recorder.RecordToolCall(convID, "", toolCallID, toolName, argsJSON); err != nil {
+					if err := recorder.RecordToolCall(convID, "", toolCallIDStr, toolName, argsJSON); err != nil {
 						l.logger.Warn("failed to record tool call", "error", err)
 					}
 				}
@@ -299,7 +300,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (*R
 
 				// Record tool call completion (if supported)
 				if hasRecorder {
-					if err := recorder.CompleteToolCall(toolCallID, result, errMsg); err != nil {
+					if err := recorder.CompleteToolCall(toolCallIDStr, result, errMsg); err != nil {
 						l.logger.Warn("failed to complete tool call record", "error", err)
 					}
 				}
