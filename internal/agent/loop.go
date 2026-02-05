@@ -53,16 +53,24 @@ type Compactor interface {
 	Compact(ctx context.Context, conversationID string) error
 }
 
+// FailoverHandler is called before model failover to allow checkpointing.
+type FailoverHandler interface {
+	// OnFailover is called when switching from one model to another due to failure.
+	// Returns an error if failover should be aborted.
+	OnFailover(ctx context.Context, fromModel, toModel, reason string) error
+}
+
 // Loop is the core agent execution loop.
 type Loop struct {
-	logger    *slog.Logger
-	memory    MemoryStore
-	compactor Compactor
-	router    *router.Router
-	llm       *llm.OllamaClient
-	tools     *tools.Registry
-	model     string
-	talents   string // Combined talent content for system prompt
+	logger          *slog.Logger
+	memory          MemoryStore
+	compactor       Compactor
+	router          *router.Router
+	llm             *llm.OllamaClient
+	tools           *tools.Registry
+	model           string
+	talents         string // Combined talent content for system prompt
+	failoverHandler FailoverHandler
 }
 
 // NewLoop creates a new agent loop.
@@ -77,6 +85,11 @@ func NewLoop(logger *slog.Logger, mem MemoryStore, compactor Compactor, rtr *rou
 		model:     defaultModel,
 		talents:   talents,
 	}
+}
+
+// SetFailoverHandler configures a handler to be called before model failover.
+func (l *Loop) SetFailoverHandler(handler FailoverHandler) {
+	l.failoverHandler = handler
 }
 
 const baseSystemPrompt = `You are Thane, an autonomous AI agent for Home Assistant. You help users manage their smart home.
@@ -194,8 +207,32 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (*R
 		// Use streaming to avoid HTTP timeouts on slow models
 		llmResp, err := l.llm.ChatStream(ctx, model, llmMessages, toolDefs, stream)
 		if err != nil {
-			l.logger.Error("LLM call failed", "error", err)
-			return nil, err
+			l.logger.Error("LLM call failed", "error", err, "model", model)
+			
+			// Try failover to default model if using a routed model
+			if model != l.model {
+				fallbackModel := l.model
+				l.logger.Info("attempting failover", "from", model, "to", fallbackModel)
+				
+				// Call failover handler if configured (for checkpointing)
+				if l.failoverHandler != nil {
+					if ferr := l.failoverHandler.OnFailover(ctx, model, fallbackModel, err.Error()); ferr != nil {
+						l.logger.Warn("failover handler failed", "error", ferr)
+						// Continue with failover anyway
+					}
+				}
+				
+				// Retry with fallback model
+				model = fallbackModel
+				llmResp, err = l.llm.ChatStream(ctx, model, llmMessages, toolDefs, stream)
+				if err != nil {
+					l.logger.Error("failover also failed", "error", err, "model", model)
+					return nil, err
+				}
+				l.logger.Info("failover successful", "model", model)
+			} else {
+				return nil, err
+			}
 		}
 
 		// Check for tool calls

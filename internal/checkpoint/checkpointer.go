@@ -1,6 +1,7 @@
 package checkpoint
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"log/slog"
@@ -131,6 +132,12 @@ func (c *Checkpointer) CreatePreFailover(fromModel, toModel string) (*Checkpoint
 // CreateShutdown creates a checkpoint during graceful shutdown.
 func (c *Checkpointer) CreateShutdown() (*Checkpoint, error) {
 	return c.Create(TriggerShutdown, "graceful shutdown")
+}
+
+// OnFailover implements agent.FailoverHandler for checkpoint creation before model switches.
+func (c *Checkpointer) OnFailover(ctx context.Context, fromModel, toModel, reason string) error {
+	_, err := c.CreatePreFailover(fromModel, toModel)
+	return err
 }
 
 // Get retrieves a checkpoint by ID.

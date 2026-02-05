@@ -352,6 +352,7 @@ func runServe(logger *slog.Logger, configPath string, portOverride int) {
 	
 	checkpointer.SetProviders(convProvider, nil, taskProvider)
 	server.SetCheckpointer(checkpointer)
+	loop.SetFailoverHandler(checkpointer) // Checkpoint before model failover
 	logger.Info("checkpointing enabled", "periodic_messages", checkpointCfg.PeriodicMessages)
 
 	// Setup graceful shutdown
