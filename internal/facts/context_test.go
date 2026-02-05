@@ -14,7 +14,7 @@ type mockEmbedder struct {
 	err       error
 }
 
-func (m *mockEmbedder) Generate(ctx context.Context, text string) ([]float32, error) {
+func (m *mockEmbedder) Generate(_ context.Context, _ string) ([]float32, error) {
 	if m.err != nil {
 		return nil, m.err
 	}
