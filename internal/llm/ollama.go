@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -79,10 +80,21 @@ type ChatResponse struct {
 
 // Chat sends a chat completion request to Ollama.
 func (c *OllamaClient) Chat(ctx context.Context, model string, messages []Message, tools []map[string]any) (*ChatResponse, error) {
+	return c.ChatStream(ctx, model, messages, tools, nil)
+}
+
+// StreamCallback is called for each streamed token.
+type StreamCallback func(token string)
+
+// ChatStream sends a streaming chat request to Ollama.
+// If callback is non-nil, tokens are streamed to it.
+func (c *OllamaClient) ChatStream(ctx context.Context, model string, messages []Message, tools []map[string]any, callback StreamCallback) (*ChatResponse, error) {
+	stream := callback != nil
+	
 	req := ChatRequest{
 		Model:    model,
 		Messages: messages,
-		Stream:   false,
+		Stream:   stream,
 		Tools:    tools,
 	}
 
@@ -108,12 +120,51 @@ func (c *OllamaClient) Chat(ctx context.Context, model string, messages []Messag
 		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, string(body))
 	}
 
-	var chatResp ChatResponse
-	if err := json.NewDecoder(resp.Body).Decode(&chatResp); err != nil {
-		return nil, fmt.Errorf("decode response: %w", err)
+	if !stream {
+		// Non-streaming: single JSON response
+		var chatResp ChatResponse
+		if err := json.NewDecoder(resp.Body).Decode(&chatResp); err != nil {
+			return nil, fmt.Errorf("decode response: %w", err)
+		}
+		return &chatResp, nil
 	}
 
-	return &chatResp, nil
+	// Streaming: read newline-delimited JSON
+	var finalResp ChatResponse
+	var contentBuilder strings.Builder
+	decoder := json.NewDecoder(resp.Body)
+	
+	for {
+		var chunk ChatResponse
+		if err := decoder.Decode(&chunk); err != nil {
+			if err == io.EOF {
+				break
+			}
+			return nil, fmt.Errorf("decode stream chunk: %w", err)
+		}
+		
+		// Accumulate content
+		if chunk.Message.Content != "" {
+			contentBuilder.WriteString(chunk.Message.Content)
+			if callback != nil {
+				callback(chunk.Message.Content)
+			}
+		}
+		
+		// Tool calls come in the final message
+		if len(chunk.Message.ToolCalls) > 0 {
+			finalResp.Message.ToolCalls = chunk.Message.ToolCalls
+		}
+		
+		// Capture final metadata
+		if chunk.Done {
+			finalResp = chunk
+			finalResp.Message.Content = contentBuilder.String()
+			break
+		}
+	}
+
+	return &finalResp, nil
 }
 
 // Ping checks if Ollama is reachable.
