@@ -105,25 +105,14 @@ type Preference struct {
 
 ### Event Memory
 
-Temporal log of significant events.
+**NOT IMPLEMENTED** — Home Assistant already tracks this.
 
-```go
-type Event struct {
-    ID         string    // UUID
-    EventType  string    // state_change, user_action, automation, alert
-    EntityID   string    // Related entity (if any)
-    Summary    string    // Human-readable summary
-    Details    string    // JSON with full details
-    Timestamp  time.Time
-    Importance float64   // 0-1, for filtering
-}
-```
+Use HA's APIs instead:
+- `recorder` component for state history
+- `logbook` for human-readable events  
+- `history` API for querying past states
 
-**Event Types:**
-- `state_change`: "Front door opened at 3am" (high importance)
-- `user_action`: "User turned on living room lights"
-- `automation`: "Scheduled automation ran"
-- `alert`: "Smoke detector triggered"
+Thane queries HA directly rather than duplicating this data.
 
 ## Compaction Strategy
 
@@ -225,18 +214,8 @@ CREATE TABLE preferences (
     UNIQUE(category, key, context)
 );
 
--- Events
-CREATE TABLE events (
-    id TEXT PRIMARY KEY,
-    event_type TEXT NOT NULL,
-    entity_id TEXT,
-    summary TEXT NOT NULL,
-    details TEXT,
-    timestamp TIMESTAMP NOT NULL,
-    importance REAL DEFAULT 0.5
-);
-CREATE INDEX idx_events_timestamp ON events(timestamp DESC);
-CREATE INDEX idx_events_entity ON events(entity_id);
+-- Note: Events/state history NOT stored here
+-- Query Home Assistant's recorder/history APIs instead
 
 -- Vector embeddings (for semantic search)
 CREATE TABLE embeddings (
@@ -254,27 +233,21 @@ CREATE INDEX idx_embeddings_source ON embeddings(source_type, source_id);
 ### "What do I know about the garage?"
 
 ```sql
--- Entity facts
+-- Entity facts (learned knowledge)
 SELECT * FROM entity_facts 
 WHERE entity_id LIKE 'garage%' OR content LIKE '%garage%';
-
--- Recent events
-SELECT * FROM events 
-WHERE entity_id LIKE 'garage%' 
-ORDER BY timestamp DESC LIMIT 10;
-
--- Semantic search via embeddings
--- (Vector similarity query)
 ```
+
+Plus query HA for current state via `get_state` tool.
 
 ### "What happened last night?"
 
-```sql
-SELECT * FROM events
-WHERE timestamp BETWEEN '2024-01-15 20:00' AND '2024-01-16 06:00'
-AND importance > 0.3
-ORDER BY timestamp;
+**Query Home Assistant directly** — use HA's history API:
 ```
+GET /api/history/period/{timestamp}?filter_entity_id=...
+```
+
+Thane doesn't duplicate HA's event log.
 
 ### "User's lighting preferences"
 
@@ -286,7 +259,7 @@ ORDER BY confidence DESC;
 
 ## Implementation Phases
 
-### Phase 1: SQLite Persistence (Now)
+### Phase 1: SQLite Persistence ✅
 - Replace in-memory store with SQLite
 - Conversations and messages tables
 - Basic CRUD operations
@@ -299,18 +272,17 @@ ORDER BY confidence DESC;
 
 ### Phase 3: Entity Memory
 - Entity facts table
-- Learning from conversations
-- Fact retrieval for context
+- Learning from conversations ("user calls this the reading lamp")
+- Fact retrieval for context enrichment
 
-### Phase 4: Semantic Search
-- Embedding generation
-- Vector storage
-- Similarity queries
+### Phase 4: Preferences
+- Preference learning from behavior
+- Context-aware retrieval (time of day, etc.)
 
-### Phase 5: Preferences & Events
-- Preference learning
-- Event logging
-- Temporal queries
+### Phase 5: Semantic Search (Maybe)
+- Embedding generation for conversations
+- Vector similarity for "related past discussions"
+- Evaluate if actually needed vs. structured queries
 
 ## Integration with Agent Loop
 

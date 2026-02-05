@@ -94,17 +94,8 @@ func (s *SQLiteStore) migrate() error {
 		updated_at TIMESTAMP NOT NULL
 	);
 
-	-- Events (for Phase 5)
-	CREATE TABLE IF NOT EXISTS events (
-		id TEXT PRIMARY KEY,
-		event_type TEXT NOT NULL,
-		entity_id TEXT,
-		summary TEXT NOT NULL,
-		details TEXT,
-		timestamp TIMESTAMP NOT NULL,
-		importance REAL DEFAULT 0.5
-	);
-	CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(timestamp DESC);
+	-- Note: Events/state history NOT stored here
+	-- Query Home Assistant's recorder/history APIs instead
 	`
 
 	_, err := s.db.Exec(schema)
