@@ -13,6 +13,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/agent"
 	"github.com/nugget/thane-ai-agent/internal/api"
 	"github.com/nugget/thane-ai-agent/internal/config"
+	"github.com/nugget/thane-ai-agent/internal/memory"
 )
 
 func main() {
@@ -73,7 +74,8 @@ func runServe(logger *slog.Logger, configPath string, portOverride int) {
 	}
 
 	// Create components
-	loop := agent.NewLoop(logger)
+	mem := memory.NewStore(100) // 100 messages per conversation
+	loop := agent.NewLoop(logger, mem)
 	server := api.NewServer(cfg.Listen.Port, loop, logger)
 
 	// Setup graceful shutdown
