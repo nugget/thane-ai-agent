@@ -160,7 +160,7 @@ func (s *Store) Get(category Category, key string) (*Fact, error) {
 	
 	// Update accessed_at
 	now := time.Now().UTC()
-	s.db.Exec(`UPDATE facts SET accessed_at = ? WHERE id = ?`, now.Format(time.RFC3339), fact.ID.String())
+	_, _ = s.db.Exec(`UPDATE facts SET accessed_at = ? WHERE id = ?`, now.Format(time.RFC3339), fact.ID.String())
 	fact.AccessedAt = now
 	
 	return fact, nil
@@ -253,7 +253,7 @@ func (s *Store) Delete(category Category, key string) error {
 // Stats returns fact statistics.
 func (s *Store) Stats() map[string]any {
 	var total int
-	s.db.QueryRow(`SELECT COUNT(*) FROM facts`).Scan(&total)
+	_ = s.db.QueryRow(`SELECT COUNT(*) FROM facts`).Scan(&total)
 	
 	// Count by category
 	cats := make(map[string]int)
@@ -263,7 +263,9 @@ func (s *Store) Stats() map[string]any {
 		for rows.Next() {
 			var cat string
 			var count int
-			rows.Scan(&cat, &count)
+			if err := rows.Scan(&cat, &count); err != nil {
+				continue
+			}
 			cats[cat] = count
 		}
 	}

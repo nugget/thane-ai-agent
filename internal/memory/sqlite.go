@@ -224,7 +224,7 @@ func (s *SQLiteStore) Clear(conversationID string) error {
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	_, err = tx.Exec(`DELETE FROM messages WHERE conversation_id = ?`, conversationID)
 	if err != nil {
@@ -243,9 +243,9 @@ func (s *SQLiteStore) Clear(conversationID string) error {
 func (s *SQLiteStore) Stats() map[string]any {
 	var convCount, msgCount, tokenCount int
 
-	s.db.QueryRow(`SELECT COUNT(*) FROM conversations`).Scan(&convCount)
-	s.db.QueryRow(`SELECT COUNT(*) FROM messages WHERE compacted = FALSE`).Scan(&msgCount)
-	s.db.QueryRow(`SELECT COALESCE(SUM(token_count), 0) FROM messages WHERE compacted = FALSE`).Scan(&tokenCount)
+	_ = s.db.QueryRow(`SELECT COUNT(*) FROM conversations`).Scan(&convCount)
+	_ = s.db.QueryRow(`SELECT COUNT(*) FROM messages WHERE compacted = FALSE`).Scan(&msgCount)
+	_ = s.db.QueryRow(`SELECT COALESCE(SUM(token_count), 0) FROM messages WHERE compacted = FALSE`).Scan(&tokenCount)
 
 	return map[string]any{
 		"conversations":  convCount,
@@ -288,7 +288,7 @@ func (s *SQLiteStore) GetAllConversations() []*Conversation {
 // GetTokenCount returns the total token count for a conversation.
 func (s *SQLiteStore) GetTokenCount(conversationID string) int {
 	var count int
-	s.db.QueryRow(`
+	_ = s.db.QueryRow(`
 		SELECT COALESCE(SUM(token_count), 0) 
 		FROM messages 
 		WHERE conversation_id = ? AND compacted = FALSE
@@ -306,7 +306,7 @@ func (s *SQLiteStore) NeedsCompaction(conversationID string, maxTokens int) bool
 func (s *SQLiteStore) GetMessagesForCompaction(conversationID string, keep int) []Message {
 	// Get total count
 	var total int
-	s.db.QueryRow(`
+	_ = s.db.QueryRow(`
 		SELECT COUNT(*) FROM messages 
 		WHERE conversation_id = ? AND compacted = FALSE AND role != 'system'
 	`, conversationID).Scan(&total)
@@ -562,7 +562,7 @@ func (s *SQLiteStore) ToolCallStats() map[string]any {
 	
 	// Total calls
 	var total int
-	s.db.QueryRow(`SELECT COUNT(*) FROM tool_calls`).Scan(&total)
+	_ = s.db.QueryRow(`SELECT COUNT(*) FROM tool_calls`).Scan(&total)
 	stats["total_calls"] = total
 	
 	// By tool
@@ -583,12 +583,12 @@ func (s *SQLiteStore) ToolCallStats() map[string]any {
 	
 	// Average duration
 	var avgMs float64
-	s.db.QueryRow(`SELECT COALESCE(AVG(duration_ms), 0) FROM tool_calls WHERE completed_at IS NOT NULL`).Scan(&avgMs)
+	_ = s.db.QueryRow(`SELECT COALESCE(AVG(duration_ms), 0) FROM tool_calls WHERE completed_at IS NOT NULL`).Scan(&avgMs)
 	stats["avg_duration_ms"] = avgMs
 	
 	// Error rate
 	var errors int
-	s.db.QueryRow(`SELECT COUNT(*) FROM tool_calls WHERE error IS NOT NULL AND error != ''`).Scan(&errors)
+	_ = s.db.QueryRow(`SELECT COUNT(*) FROM tool_calls WHERE error IS NOT NULL AND error != ''`).Scan(&errors)
 	if total > 0 {
 		stats["error_rate"] = float64(errors) / float64(total)
 	} else {

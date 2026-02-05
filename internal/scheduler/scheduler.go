@@ -317,7 +317,7 @@ func (s *Scheduler) checkMissedExecutions(ctx context.Context) {
 			// Too old, skip it
 			exec.Status = StatusSkipped
 			exec.Result = "missed execution window (>24h)"
-			s.store.UpdateExecution(exec)
+			_ = s.store.UpdateExecution(exec)
 			s.logger.Info("skipped stale execution", "id", exec.ID, "scheduled", exec.ScheduledAt)
 		} else {
 			// Run it now
@@ -329,8 +329,8 @@ func (s *Scheduler) checkMissedExecutions(ctx context.Context) {
 			// Mark this one as skipped and create a new one
 			exec.Status = StatusSkipped
 			exec.Result = "replaced by catch-up execution"
-			s.store.UpdateExecution(exec)
-			s.executeTask(ctx, task, exec.ScheduledAt)
+			_ = s.store.UpdateExecution(exec)
+			_, _ = s.executeTask(ctx, task, exec.ScheduledAt)
 		}
 	}
 }
