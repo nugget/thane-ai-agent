@@ -12,8 +12,16 @@ type Config struct {
 	Listen        ListenConfig        `yaml:"listen"`
 	HomeAssistant HomeAssistantConfig `yaml:"homeassistant"`
 	Models        ModelsConfig        `yaml:"models"`
+	Embeddings    EmbeddingsConfig    `yaml:"embeddings"`
 	DataDir       string              `yaml:"data_dir"`
 	TalentsDir    string              `yaml:"talents_dir"`
+}
+
+// EmbeddingsConfig defines embedding generation settings.
+type EmbeddingsConfig struct {
+	Enabled bool   `yaml:"enabled"`
+	Model   string `yaml:"model"`   // Embedding model name (e.g., nomic-embed-text)
+	BaseURL string `yaml:"baseurl"` // Ollama URL (defaults to models.ollama_url)
 }
 
 // ListenConfig defines the API server settings.
