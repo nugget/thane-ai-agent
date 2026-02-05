@@ -1,0 +1,25 @@
+# Git
+.git
+.gitignore
+
+# IDE
+.idea
+.vscode
+*.swp
+
+# Build artifacts
+/thane
+*.exe
+
+# Local config
+*.local.yaml
+thane.yaml
+
+# Docs (not needed in image)
+*.md
+!README.md
+docs/
+
+# Test files
+*_test.go
+testdata/

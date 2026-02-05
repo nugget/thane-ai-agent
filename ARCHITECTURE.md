@@ -243,6 +243,42 @@ Full HA API client supporting:
 - **Vector search**: sqlite-vec or built-in cosine similarity
 - **Config**: YAML with env var substitution
 - **API**: OpenAI-compatible (broad tooling support)
+- **Deployment**: Docker container (first-class), HA Add-on compatible
+
+## Deployment
+
+### Docker (Recommended)
+
+Thane ships as a multi-arch Docker image:
+
+```bash
+docker run -d \
+  -p 8080:8080 \
+  -e HA_URL=http://homeassistant.local:8123 \
+  -e HA_TOKEN=your_token \
+  -v thane-data:/data \
+  ghcr.io/nugget/thane:latest
+```
+
+### Home Assistant Add-on
+
+Thane integrates with Home Assistant's Add-on (Apps) framework:
+
+1. Add the repository: `https://github.com/nugget/thane-ai-agent`
+2. Install "Thane" from the Add-on Store
+3. Configure via the Add-on UI
+4. Start and register as a conversation agent
+
+The Add-on uses Supervisor API for seamless HA integration — no manual token management needed.
+
+### Standalone Binary
+
+For development or non-Docker deployments:
+
+```bash
+go install github.com/nugget/thane-ai-agent/cmd/thane@latest
+thane serve --config thane.yaml
+```
 
 ## Contributing
 
