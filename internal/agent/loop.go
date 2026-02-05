@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -68,6 +69,13 @@ type FailoverHandler interface {
 	OnFailover(ctx context.Context, fromModel, toModel, reason string) error
 }
 
+// ContextProvider supplies dynamic context for the system prompt.
+type ContextProvider interface {
+	// GetContext returns context to inject into the system prompt.
+	// The userMessage is provided to enable semantic search for relevant facts.
+	GetContext(ctx context.Context, userMessage string) (string, error)
+}
+
 // Loop is the core agent execution loop.
 type Loop struct {
 	logger          *slog.Logger
@@ -79,6 +87,7 @@ type Loop struct {
 	model           string
 	talents         string // Combined talent content for system prompt
 	failoverHandler FailoverHandler
+	contextProvider ContextProvider
 }
 
 // NewLoop creates a new agent loop.
@@ -100,6 +109,11 @@ func (l *Loop) SetFailoverHandler(handler FailoverHandler) {
 	l.failoverHandler = handler
 }
 
+// SetContextProvider configures a provider for dynamic system prompt context.
+func (l *Loop) SetContextProvider(provider ContextProvider) {
+	l.contextProvider = provider
+}
+
 // Tools returns the tool registry for adding additional tools.
 func (l *Loop) Tools() *tools.Registry {
 	return l.tools
@@ -114,11 +128,32 @@ You have access to tools to query and control Home Assistant:
 
 When asked about the home, use tools to get real data. When asked to control something, use call_service.`
 
-func (l *Loop) buildSystemPrompt() string {
-	if l.talents == "" {
-		return baseSystemPrompt
+func (l *Loop) buildSystemPrompt(ctx context.Context, userMessage string) string {
+	var sb strings.Builder
+	sb.WriteString(baseSystemPrompt)
+
+	// Add current time
+	sb.WriteString("\n\n## Current Time\n")
+	sb.WriteString(time.Now().Format("Monday, January 2, 2006 at 15:04 MST"))
+
+	// Add talents
+	if l.talents != "" {
+		sb.WriteString("\n\n## Behavioral Guidance\n\n")
+		sb.WriteString(l.talents)
 	}
-	return baseSystemPrompt + "\n\n## Behavioral Guidance\n\n" + l.talents
+
+	// Add dynamic context (semantic facts, etc.)
+	if l.contextProvider != nil {
+		dynCtx, err := l.contextProvider.GetContext(ctx, userMessage)
+		if err != nil {
+			l.logger.Warn("failed to get dynamic context", "error", err)
+		} else if dynCtx != "" {
+			sb.WriteString("\n\n## Relevant Context\n\n")
+			sb.WriteString(dynCtx)
+		}
+	}
+
+	return sb.String()
 }
 
 // Run executes one iteration of the agent loop.
@@ -144,11 +179,20 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (*R
 		}
 	}
 
+	// Extract user message for context search
+	var userMessage string
+	for i := len(req.Messages) - 1; i >= 0; i-- {
+		if req.Messages[i].Role == "user" {
+			userMessage = req.Messages[i].Content
+			break
+		}
+	}
+
 	// Build messages for LLM
 	var llmMessages []llm.Message
 	llmMessages = append(llmMessages, llm.Message{
 		Role:    "system",
-		Content: l.buildSystemPrompt(),
+		Content: l.buildSystemPrompt(ctx, userMessage),
 	})
 
 	// Add history
