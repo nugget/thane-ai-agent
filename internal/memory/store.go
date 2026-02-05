@@ -157,6 +157,23 @@ func (s *Store) Clear(conversationID string) {
 	delete(s.conversations, conversationID)
 }
 
+// GetTokenCount returns estimated token count for a conversation.
+func (s *Store) GetTokenCount(conversationID string) int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	
+	conv, ok := s.conversations[conversationID]
+	if !ok {
+		return 0
+	}
+	
+	total := 0
+	for _, m := range conv.Messages {
+		total += len(m.Content) / 4 // Rough estimate: 4 chars per token
+	}
+	return total
+}
+
 // Stats returns memory statistics.
 func (s *Store) Stats() map[string]any {
 	s.mu.RLock()

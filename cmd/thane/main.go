@@ -116,7 +116,11 @@ func runServe(logger *slog.Logger, configPath string, portOverride int) {
 		ollamaURL = "http://localhost:11434"
 	}
 	
-	loop := agent.NewLoop(logger, mem, ha, ollamaURL, cfg.Models.Default)
+	// Create compactor (for now, nil - will enable with LLM summarizer later)
+	// TODO: Create LLM summarizer and wire up compactor
+	var compactor agent.Compactor = nil
+	
+	loop := agent.NewLoop(logger, mem, compactor, ha, ollamaURL, cfg.Models.Default)
 	server := api.NewServer(cfg.Listen.Port, loop, logger)
 
 	// Setup graceful shutdown

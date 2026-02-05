@@ -36,26 +36,35 @@ type Response struct {
 type MemoryStore interface {
 	GetMessages(conversationID string) []memory.Message
 	AddMessage(conversationID, role, content string) error
+	GetTokenCount(conversationID string) int
 	Stats() map[string]any
+}
+
+// Compactor handles conversation compaction.
+type Compactor interface {
+	NeedsCompaction(conversationID string) bool
+	Compact(ctx context.Context, conversationID string) error
 }
 
 // Loop is the core agent execution loop.
 type Loop struct {
-	logger *slog.Logger
-	memory MemoryStore
-	llm    *llm.OllamaClient
-	tools  *tools.Registry
-	model  string
+	logger    *slog.Logger
+	memory    MemoryStore
+	compactor Compactor
+	llm       *llm.OllamaClient
+	tools     *tools.Registry
+	model     string
 }
 
 // NewLoop creates a new agent loop.
-func NewLoop(logger *slog.Logger, mem MemoryStore, ha *homeassistant.Client, ollamaURL, defaultModel string) *Loop {
+func NewLoop(logger *slog.Logger, mem MemoryStore, compactor Compactor, ha *homeassistant.Client, ollamaURL, defaultModel string) *Loop {
 	return &Loop{
-		logger: logger,
-		memory: mem,
-		llm:    llm.NewOllamaClient(ollamaURL),
-		tools:  tools.NewRegistry(ha),
-		model:  defaultModel,
+		logger:    logger,
+		memory:    mem,
+		compactor: compactor,
+		llm:       llm.NewOllamaClient(ollamaURL),
+		tools:     tools.NewRegistry(ha),
+		model:     defaultModel,
 	}
 }
 
@@ -192,9 +201,22 @@ func (l *Loop) Run(ctx context.Context, req *Request) (*Response, error) {
 			l.logger.Warn("failed to store response", "error", err)
 		}
 
+		// Check if compaction needed (async-safe: doesn't block response)
+		if l.compactor != nil && l.compactor.NeedsCompaction(convID) {
+			l.logger.Info("triggering compaction", "conversation", convID)
+			go func() {
+				if err := l.compactor.Compact(context.Background(), convID); err != nil {
+					l.logger.Error("compaction failed", "error", err)
+				} else {
+					l.logger.Info("compaction completed", "conversation", convID)
+				}
+			}()
+		}
+
 		l.logger.Info("agent loop completed",
 			"conversation", convID,
 			"iterations", i+1,
+			"tokens", l.memory.GetTokenCount(convID),
 		)
 
 		return resp, nil
