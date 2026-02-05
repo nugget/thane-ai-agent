@@ -29,8 +29,22 @@ type HomeAssistantConfig struct {
 
 // ModelsConfig defines model routing settings.
 type ModelsConfig struct {
-	Default   string `yaml:"default"`
-	OllamaURL string `yaml:"ollama_url"`
+	Default    string        `yaml:"default"`
+	OllamaURL  string        `yaml:"ollama_url"`
+	LocalFirst bool          `yaml:"local_first"`
+	Available  []ModelConfig `yaml:"available"`
+}
+
+// ModelConfig defines a single model's capabilities.
+type ModelConfig struct {
+	Name          string `yaml:"name"`
+	Provider      string `yaml:"provider"`      // ollama, anthropic, openai
+	SupportsTools bool   `yaml:"supports_tools"`
+	ContextWindow int    `yaml:"context_window"`
+	Speed         int    `yaml:"speed"`         // 1-10
+	Quality       int    `yaml:"quality"`       // 1-10
+	CostTier      int    `yaml:"cost_tier"`     // 0=local, 1=cheap, 2=moderate, 3=expensive
+	MinComplexity string `yaml:"min_complexity"` // simple, moderate, complex
 }
 
 // Load reads configuration from a YAML file.
@@ -57,6 +71,31 @@ func Load(path string) (*Config, error) {
 func Default() *Config {
 	return &Config{
 		Listen: ListenConfig{Port: 8080},
-		Models: ModelsConfig{Default: "ollama/llama3:8b"},
+		Models: ModelsConfig{
+			Default:    "qwen3:4b",
+			LocalFirst: true,
+			Available: []ModelConfig{
+				{
+					Name:          "qwen3:4b",
+					Provider:      "ollama",
+					SupportsTools: true,
+					ContextWindow: 4096,
+					Speed:         9,
+					Quality:       5,
+					CostTier:      0,
+					MinComplexity: "simple",
+				},
+				{
+					Name:          "qwen2.5:72b",
+					Provider:      "ollama",
+					SupportsTools: true,
+					ContextWindow: 32768,
+					Speed:         4,
+					Quality:       8,
+					CostTier:      0,
+					MinComplexity: "moderate",
+				},
+			},
+		},
 	}
 }

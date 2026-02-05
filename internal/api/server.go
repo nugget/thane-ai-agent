@@ -7,24 +7,28 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/agent"
+	"github.com/nugget/thane-ai-agent/internal/router"
 )
 
 // Server is the HTTP API server.
 type Server struct {
 	port   int
 	loop   *agent.Loop
+	router *router.Router
 	logger *slog.Logger
 	server *http.Server
 }
 
 // NewServer creates a new API server.
-func NewServer(port int, loop *agent.Loop, logger *slog.Logger) *Server {
+func NewServer(port int, loop *agent.Loop, rtr *router.Router, logger *slog.Logger) *Server {
 	return &Server{
 		port:   port,
 		loop:   loop,
+		router: rtr,
 		logger: logger,
 	}
 }
@@ -40,6 +44,11 @@ func (s *Server) Start(ctx context.Context) error {
 	// Health endpoints
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("GET /", s.handleRoot)
+
+	// Router introspection endpoints
+	mux.HandleFunc("GET /v1/router/stats", s.handleRouterStats)
+	mux.HandleFunc("GET /v1/router/audit", s.handleRouterAudit)
+	mux.HandleFunc("GET /v1/router/explain/{requestId}", s.handleRouterExplain)
 
 	s.server = &http.Server{
 		Addr:         fmt.Sprintf(":%d", s.port),
@@ -196,4 +205,61 @@ func (s *Server) errorResponse(w http.ResponseWriter, code int, message string) 
 			"code":    code,
 		},
 	})
+}
+
+// Router introspection handlers
+
+func (s *Server) handleRouterStats(w http.ResponseWriter, r *http.Request) {
+	if s.router == nil {
+		s.errorResponse(w, http.StatusServiceUnavailable, "router not configured")
+		return
+	}
+	
+	stats := s.router.GetStats()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(stats)
+}
+
+func (s *Server) handleRouterAudit(w http.ResponseWriter, r *http.Request) {
+	if s.router == nil {
+		s.errorResponse(w, http.StatusServiceUnavailable, "router not configured")
+		return
+	}
+	
+	// Parse limit from query
+	limit := 20
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 {
+			limit = parsed
+		}
+	}
+	
+	decisions := s.router.GetAuditLog(limit)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"count":     len(decisions),
+		"decisions": decisions,
+	})
+}
+
+func (s *Server) handleRouterExplain(w http.ResponseWriter, r *http.Request) {
+	if s.router == nil {
+		s.errorResponse(w, http.StatusServiceUnavailable, "router not configured")
+		return
+	}
+	
+	requestID := r.PathValue("requestId")
+	if requestID == "" {
+		s.errorResponse(w, http.StatusBadRequest, "requestId required")
+		return
+	}
+	
+	decision := s.router.Explain(requestID)
+	if decision == nil {
+		s.errorResponse(w, http.StatusNotFound, "decision not found")
+		return
+	}
+	
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(decision)
 }

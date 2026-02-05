@@ -16,6 +16,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/llm"
 	"github.com/nugget/thane-ai-agent/internal/memory"
+	"github.com/nugget/thane-ai-agent/internal/router"
 	"github.com/nugget/thane-ai-agent/internal/talents"
 )
 
@@ -104,8 +105,8 @@ func runAsk(logger *slog.Logger, configPath string, args []string) {
 	// Create minimal memory store (in-memory for ask)
 	mem := memory.NewStore(100)
 	
-	// Create agent loop
-	loop := agent.NewLoop(logger, mem, nil, ha, ollamaURL, cfg.Models.Default, talentContent)
+	// Create agent loop (no router for CLI mode - uses default model)
+	loop := agent.NewLoop(logger, mem, nil, nil, ha, ollamaURL, cfg.Models.Default, talentContent)
 	
 	// Process the question
 	ctx := context.Background()
@@ -223,8 +224,44 @@ func runServe(logger *slog.Logger, configPath string, portOverride int) {
 		logger.Info("talents loaded", "count", len(talentList), "talents", talentList)
 	}
 	
-	loop := agent.NewLoop(logger, mem, compactor, ha, ollamaURL, cfg.Models.Default, talentContent)
-	server := api.NewServer(cfg.Listen.Port, loop, logger)
+	// Create model router
+	routerCfg := router.Config{
+		DefaultModel: cfg.Models.Default,
+		LocalFirst:   cfg.Models.LocalFirst,
+		MaxAuditLog:  1000,
+	}
+	
+	// Convert config models to router models
+	for _, m := range cfg.Models.Available {
+		minComp := router.ComplexitySimple
+		switch m.MinComplexity {
+		case "moderate":
+			minComp = router.ComplexityModerate
+		case "complex":
+			minComp = router.ComplexityComplex
+		}
+		
+		routerCfg.Models = append(routerCfg.Models, router.Model{
+			Name:          m.Name,
+			Provider:      m.Provider,
+			SupportsTools: m.SupportsTools,
+			ContextWindow: m.ContextWindow,
+			Speed:         m.Speed,
+			Quality:       m.Quality,
+			CostTier:      m.CostTier,
+			MinComplexity: minComp,
+		})
+	}
+	
+	rtr := router.NewRouter(logger, routerCfg)
+	logger.Info("model router initialized",
+		"models", len(routerCfg.Models),
+		"default", routerCfg.DefaultModel,
+		"local_first", routerCfg.LocalFirst,
+	)
+	
+	loop := agent.NewLoop(logger, mem, compactor, rtr, ha, ollamaURL, cfg.Models.Default, talentContent)
+	server := api.NewServer(cfg.Listen.Port, loop, rtr, logger)
 
 	// Setup graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())

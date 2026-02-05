@@ -5,10 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/llm"
 	"github.com/nugget/thane-ai-agent/internal/memory"
+	"github.com/nugget/thane-ai-agent/internal/router"
 	"github.com/nugget/thane-ai-agent/internal/tools"
 )
 
@@ -51,6 +53,7 @@ type Loop struct {
 	logger    *slog.Logger
 	memory    MemoryStore
 	compactor Compactor
+	router    *router.Router
 	llm       *llm.OllamaClient
 	tools     *tools.Registry
 	model     string
@@ -58,11 +61,12 @@ type Loop struct {
 }
 
 // NewLoop creates a new agent loop.
-func NewLoop(logger *slog.Logger, mem MemoryStore, compactor Compactor, ha *homeassistant.Client, ollamaURL, defaultModel, talents string) *Loop {
+func NewLoop(logger *slog.Logger, mem MemoryStore, compactor Compactor, rtr *router.Router, ha *homeassistant.Client, ollamaURL, defaultModel, talents string) *Loop {
 	return &Loop{
 		logger:    logger,
 		memory:    mem,
 		compactor: compactor,
+		router:    rtr,
 		llm:       llm.NewOllamaClient(ollamaURL),
 		tools:     tools.NewRegistry(ha),
 		model:     defaultModel,
@@ -131,14 +135,44 @@ func (l *Loop) Run(ctx context.Context, req *Request) (*Response, error) {
 		})
 	}
 
-	// Select model
+	// Select model via router
 	model := req.Model
+	var routerDecision *router.Decision
+	
 	if model == "" || model == "thane" {
-		model = l.model
+		if l.router != nil {
+			// Get the user's query from messages
+			query := ""
+			for i := len(req.Messages) - 1; i >= 0; i-- {
+				if req.Messages[i].Role == "user" {
+					query = req.Messages[i].Content
+					break
+				}
+			}
+			
+			// Calculate context size (rough estimate)
+			contextSize := len(l.talents) / 4 // talents
+			for _, m := range history {
+				contextSize += len(m.Content) / 4
+			}
+			
+			routerReq := router.Request{
+				Query:       query,
+				ContextSize: contextSize,
+				NeedsTools:  true, // We always have tools available
+				Priority:    router.PriorityInteractive,
+			}
+			
+			model, routerDecision = l.router.Route(ctx, routerReq)
+		} else {
+			model = l.model
+		}
 	}
 
 	// Get available tools
 	toolDefs := l.tools.List()
+	
+	startTime := time.Now()
 
 	// Agent loop - may iterate if tool calls are needed
 	maxIterations := 5
@@ -222,10 +256,17 @@ func (l *Loop) Run(ctx context.Context, req *Request) (*Response, error) {
 			}()
 		}
 
+		// Record router outcome
+		if l.router != nil && routerDecision != nil {
+			latency := time.Since(startTime).Milliseconds()
+			l.router.RecordOutcome(routerDecision.RequestID, latency, l.memory.GetTokenCount(convID), true)
+		}
+		
 		l.logger.Info("agent loop completed",
 			"conversation", convID,
 			"iterations", i+1,
 			"tokens", l.memory.GetTokenCount(convID),
+			"model", model,
 		)
 
 		return resp, nil
