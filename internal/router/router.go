@@ -14,6 +14,7 @@ type Request struct {
 	Query        string            // The user's input
 	ContextSize  int               // Estimated tokens of context (talents, history)
 	NeedsTools   bool              // Whether tool calling is required
+	ToolCount    int               // Number of tools available
 	Priority     Priority          // Latency requirements
 	Metadata     map[string]string // Additional hints
 }
@@ -259,6 +260,28 @@ func (r *Router) selectModel(req Request, decision *Decision) string {
 		}
 		if decision.Complexity == ComplexityComplex && m.Quality >= 7 {
 			score += 15 // Prefer quality for complex
+		}
+		
+		// Context size penalty for small models
+		// Small context window models struggle with large prompts
+		contextRatio := float64(req.ContextSize) / float64(m.ContextWindow)
+		if contextRatio > 0.3 {
+			// Using >30% of context window - penalize low-quality models
+			if m.Quality < 7 {
+				score -= 30 // Heavy penalty
+				decision.RulesMatched = append(decision.RulesMatched, "context_penalty_"+m.Name)
+			}
+		}
+		if contextRatio > 0.5 && m.Quality >= 7 {
+			// High context but capable model - bonus
+			score += 10
+			decision.RulesMatched = append(decision.RulesMatched, "context_bonus_"+m.Name)
+		}
+		
+		// Tool count consideration - more tools = need smarter model
+		if req.ToolCount > 4 && m.Quality < 7 {
+			score -= 20 // Penalty for many tools on weak model
+			decision.RulesMatched = append(decision.RulesMatched, "tools_penalty_"+m.Name)
 		}
 		
 		// Local preference

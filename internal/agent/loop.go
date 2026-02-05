@@ -161,6 +161,7 @@ func (l *Loop) Run(ctx context.Context, req *Request) (*Response, error) {
 				Query:       query,
 				ContextSize: contextSize,
 				NeedsTools:  true, // We always have tools available
+				ToolCount:   len(l.tools.List()),
 				Priority:    router.PriorityInteractive,
 			}
 			

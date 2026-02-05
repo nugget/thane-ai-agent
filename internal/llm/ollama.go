@@ -33,7 +33,7 @@ func NewOllamaClient(baseURL string) *OllamaClient {
 	return &OllamaClient{
 		baseURL: baseURL,
 		httpClient: &http.Client{
-			Timeout: 120 * time.Second, // LLM calls can be slow
+			Timeout: 5 * time.Minute, // Large models with tools need time
 		},
 	}
 }
