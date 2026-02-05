@@ -13,6 +13,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/agent"
 	"github.com/nugget/thane-ai-agent/internal/api"
 	"github.com/nugget/thane-ai-agent/internal/config"
+	"github.com/nugget/thane-ai-agent/internal/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/memory"
 )
 
@@ -82,13 +83,22 @@ func runServe(logger *slog.Logger, configPath string, portOverride int) {
 	// Create components
 	mem := memory.NewStore(100) // 100 messages per conversation
 	
+	// Home Assistant client
+	var ha *homeassistant.Client
+	if cfg.HomeAssistant.URL != "" && cfg.HomeAssistant.Token != "" {
+		ha = homeassistant.NewClient(cfg.HomeAssistant.URL, cfg.HomeAssistant.Token)
+		logger.Info("Home Assistant configured", "url", cfg.HomeAssistant.URL)
+	} else {
+		logger.Warn("Home Assistant not configured - tools will be limited")
+	}
+	
 	// Ollama URL from config or environment
 	ollamaURL := cfg.Models.OllamaURL
 	if ollamaURL == "" {
 		ollamaURL = "http://localhost:11434"
 	}
 	
-	loop := agent.NewLoop(logger, mem, ollamaURL, cfg.Models.Default)
+	loop := agent.NewLoop(logger, mem, ha, ollamaURL, cfg.Models.Default)
 	server := api.NewServer(cfg.Listen.Port, loop, logger)
 
 	// Setup graceful shutdown

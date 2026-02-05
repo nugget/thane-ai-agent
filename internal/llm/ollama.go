@@ -13,8 +13,10 @@ import (
 
 // Message represents a chat message for the LLM.
 type Message struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
+	Role       string     `json:"role"`
+	Content    string     `json:"content"`
+	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string     `json:"tool_call_id,omitempty"` // For tool responses
 }
 
 // OllamaClient is a client for the Ollama API.
@@ -38,10 +40,11 @@ func NewOllamaClient(baseURL string) *OllamaClient {
 
 // ChatRequest is the request format for Ollama chat API.
 type ChatRequest struct {
-	Model    string    `json:"model"`
-	Messages []Message `json:"messages"`
-	Stream   bool      `json:"stream"`
-	Options  *Options  `json:"options,omitempty"`
+	Model    string           `json:"model"`
+	Messages []Message        `json:"messages"`
+	Stream   bool             `json:"stream"`
+	Tools    []map[string]any `json:"tools,omitempty"`
+	Options  *Options         `json:"options,omitempty"`
 }
 
 // Options are model parameters.
@@ -50,12 +53,20 @@ type Options struct {
 	NumPredict  int     `json:"num_predict,omitempty"`
 }
 
+// ToolCall represents a tool call from the model.
+type ToolCall struct {
+	Function struct {
+		Name      string         `json:"name"`
+		Arguments map[string]any `json:"arguments"` // Ollama returns object, not string
+	} `json:"function"`
+}
+
 // ChatResponse is the response from Ollama chat API.
 type ChatResponse struct {
-	Model     string  `json:"model"`
-	CreatedAt string  `json:"created_at"`
-	Message   Message `json:"message"`
-	Done      bool    `json:"done"`
+	Model     string     `json:"model"`
+	CreatedAt string     `json:"created_at"`
+	Message   Message    `json:"message"`
+	Done      bool       `json:"done"`
 	
 	// Usage stats (when done=true)
 	TotalDuration      int64 `json:"total_duration,omitempty"`
@@ -67,11 +78,12 @@ type ChatResponse struct {
 }
 
 // Chat sends a chat completion request to Ollama.
-func (c *OllamaClient) Chat(ctx context.Context, model string, messages []Message) (*ChatResponse, error) {
+func (c *OllamaClient) Chat(ctx context.Context, model string, messages []Message, tools []map[string]any) (*ChatResponse, error) {
 	req := ChatRequest{
 		Model:    model,
 		Messages: messages,
 		Stream:   false,
+		Tools:    tools,
 	}
 
 	jsonData, err := json.Marshal(req)
