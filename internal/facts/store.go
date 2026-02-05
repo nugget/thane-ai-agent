@@ -80,19 +80,22 @@ func (s *Store) migrate() error {
 			created_at TEXT NOT NULL,
 			updated_at TEXT NOT NULL,
 			accessed_at TEXT NOT NULL,
+			deleted_at TEXT,
 			UNIQUE(category, key)
 		);
 
 		CREATE INDEX IF NOT EXISTS idx_facts_category ON facts(category);
 		CREATE INDEX IF NOT EXISTS idx_facts_key ON facts(key);
 		CREATE INDEX IF NOT EXISTS idx_facts_accessed ON facts(accessed_at DESC);
+		CREATE INDEX IF NOT EXISTS idx_facts_deleted ON facts(deleted_at);
 	`)
 	if err != nil {
 		return err
 	}
 
-	// Add embedding column if it doesn't exist (migration for existing DBs)
+	// Add columns if they don't exist (migrations for existing DBs)
 	_, _ = s.db.Exec(`ALTER TABLE facts ADD COLUMN embedding BLOB`)
+	_, _ = s.db.Exec(`ALTER TABLE facts ADD COLUMN deleted_at TEXT`)
 
 	return nil
 }
@@ -102,13 +105,14 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
-// Set creates or updates a fact.
+// Set creates or updates a fact. Resurrects soft-deleted facts if they exist.
 func (s *Store) Set(category Category, key, value, source string, confidence float64) (*Fact, error) {
 	now := time.Now().UTC()
 
-	// Check if exists
+	// Check if exists (including soft-deleted)
 	var existingID string
-	err := s.db.QueryRow(`SELECT id FROM facts WHERE category = ? AND key = ?`, category, key).Scan(&existingID)
+	var isDeleted bool
+	err := s.db.QueryRow(`SELECT id, deleted_at IS NOT NULL FROM facts WHERE category = ? AND key = ?`, category, key).Scan(&existingID, &isDeleted)
 
 	if err == sql.ErrNoRows {
 		// Create new
@@ -138,9 +142,9 @@ func (s *Store) Set(category Category, key, value, source string, confidence flo
 		return nil, fmt.Errorf("check existing: %w", err)
 	}
 
-	// Update existing
+	// Update existing (resurrect if soft-deleted)
 	_, err = s.db.Exec(`
-		UPDATE facts SET value = ?, source = ?, confidence = ?, updated_at = ?, accessed_at = ?
+		UPDATE facts SET value = ?, source = ?, confidence = ?, updated_at = ?, accessed_at = ?, deleted_at = NULL
 		WHERE category = ? AND key = ?
 	`, value, source, confidence, now.Format(time.RFC3339), now.Format(time.RFC3339), category, key)
 	if err != nil {
@@ -164,7 +168,7 @@ func (s *Store) Set(category Category, key, value, source string, confidence flo
 func (s *Store) Get(category Category, key string) (*Fact, error) {
 	fact, err := s.scanFact(s.db.QueryRow(`
 		SELECT id, category, key, value, source, confidence, created_at, updated_at, accessed_at
-		FROM facts WHERE category = ? AND key = ?
+		FROM facts WHERE deleted_at IS NULL AND category = ? AND key = ?
 	`, category, key))
 	if err != nil {
 		return nil, err
@@ -182,7 +186,7 @@ func (s *Store) Get(category Category, key string) (*Fact, error) {
 func (s *Store) GetByCategory(category Category) ([]*Fact, error) {
 	rows, err := s.db.Query(`
 		SELECT id, category, key, value, source, confidence, created_at, updated_at, accessed_at
-		FROM facts WHERE category = ? ORDER BY key
+		FROM facts WHERE deleted_at IS NULL AND category = ? ORDER BY key
 	`, category)
 	if err != nil {
 		return nil, fmt.Errorf("query: %w", err)
@@ -204,7 +208,7 @@ func (s *Store) GetByCategory(category Category) ([]*Fact, error) {
 func (s *Store) GetAll() ([]*Fact, error) {
 	rows, err := s.db.Query(`
 		SELECT id, category, key, value, source, confidence, created_at, updated_at, accessed_at
-		FROM facts ORDER BY category, key
+		FROM facts WHERE deleted_at IS NULL ORDER BY category, key
 	`)
 	if err != nil {
 		return nil, fmt.Errorf("query: %w", err)
@@ -228,7 +232,7 @@ func (s *Store) Search(query string) ([]*Fact, error) {
 	rows, err := s.db.Query(`
 		SELECT id, category, key, value, source, confidence, created_at, updated_at, accessed_at
 		FROM facts 
-		WHERE key LIKE ? OR value LIKE ?
+		WHERE deleted_at IS NULL AND (key LIKE ? OR value LIKE ?)
 		ORDER BY accessed_at DESC
 		LIMIT 50
 	`, pattern, pattern)
@@ -248,9 +252,10 @@ func (s *Store) Search(query string) ([]*Fact, error) {
 	return facts, rows.Err()
 }
 
-// Delete removes a fact.
+// Delete soft-deletes a fact (sets deleted_at timestamp).
 func (s *Store) Delete(category Category, key string) error {
-	result, err := s.db.Exec(`DELETE FROM facts WHERE category = ? AND key = ?`, category, key)
+	now := time.Now().UTC().Format(time.RFC3339)
+	result, err := s.db.Exec(`UPDATE facts SET deleted_at = ? WHERE category = ? AND key = ? AND deleted_at IS NULL`, now, category, key)
 	if err != nil {
 		return fmt.Errorf("delete: %w", err)
 	}
@@ -262,21 +267,22 @@ func (s *Store) Delete(category Category, key string) error {
 	return nil
 }
 
-// DeleteBySource removes all facts from a given source.
+// DeleteBySource soft-deletes all facts from a given source.
 // Used for re-importing documents without duplicates.
 func (s *Store) DeleteBySource(source string) error {
-	_, err := s.db.Exec(`DELETE FROM facts WHERE source = ?`, source)
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := s.db.Exec(`UPDATE facts SET deleted_at = ? WHERE source = ? AND deleted_at IS NULL`, now, source)
 	return err
 }
 
 // Stats returns fact statistics.
 func (s *Store) Stats() map[string]any {
 	var total int
-	_ = s.db.QueryRow(`SELECT COUNT(*) FROM facts`).Scan(&total)
+	_ = s.db.QueryRow(`SELECT COUNT(*) FROM facts WHERE deleted_at IS NULL`).Scan(&total)
 
 	// Count by category
 	cats := make(map[string]int)
-	rows, _ := s.db.Query(`SELECT category, COUNT(*) FROM facts GROUP BY category`)
+	rows, _ := s.db.Query(`SELECT category, COUNT(*) FROM facts WHERE deleted_at IS NULL GROUP BY category`)
 	if rows != nil {
 		defer rows.Close()
 		for rows.Next() {
@@ -350,7 +356,7 @@ func (s *Store) SetEmbedding(id uuid.UUID, embedding []float32) error {
 func (s *Store) GetAllWithEmbeddings() ([]*Fact, error) {
 	rows, err := s.db.Query(`
 		SELECT id, category, key, value, source, confidence, embedding, created_at, updated_at, accessed_at
-		FROM facts WHERE embedding IS NOT NULL
+		FROM facts WHERE deleted_at IS NULL AND embedding IS NOT NULL
 	`)
 	if err != nil {
 		return nil, err
@@ -418,7 +424,7 @@ func (s *Store) SemanticSearch(queryEmbedding []float32, limit int) ([]*Fact, []
 func (s *Store) GetFactsWithoutEmbeddings() ([]*Fact, error) {
 	rows, err := s.db.Query(`
 		SELECT id, category, key, value, source, confidence, created_at, updated_at, accessed_at
-		FROM facts WHERE embedding IS NULL
+		FROM facts WHERE deleted_at IS NULL AND embedding IS NULL
 	`)
 	if err != nil {
 		return nil, err
