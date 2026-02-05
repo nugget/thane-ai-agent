@@ -32,17 +32,24 @@ type Response struct {
 	FinishReason string `json:"finish_reason"`
 }
 
+// MemoryStore is the interface for memory storage.
+type MemoryStore interface {
+	GetMessages(conversationID string) []memory.Message
+	AddMessage(conversationID, role, content string) error
+	Stats() map[string]any
+}
+
 // Loop is the core agent execution loop.
 type Loop struct {
 	logger *slog.Logger
-	memory *memory.Store
+	memory MemoryStore
 	llm    *llm.OllamaClient
 	tools  *tools.Registry
 	model  string
 }
 
 // NewLoop creates a new agent loop.
-func NewLoop(logger *slog.Logger, mem *memory.Store, ha *homeassistant.Client, ollamaURL, defaultModel string) *Loop {
+func NewLoop(logger *slog.Logger, mem MemoryStore, ha *homeassistant.Client, ollamaURL, defaultModel string) *Loop {
 	return &Loop{
 		logger: logger,
 		memory: mem,
@@ -78,7 +85,9 @@ func (l *Loop) Run(ctx context.Context, req *Request) (*Response, error) {
 
 	// Add incoming messages to memory
 	for _, m := range req.Messages {
-		l.memory.AddMessage(convID, m.Role, m.Content)
+		if err := l.memory.AddMessage(convID, m.Role, m.Content); err != nil {
+			l.logger.Warn("failed to store message", "error", err)
+		}
 	}
 
 	// Build messages for LLM
@@ -179,7 +188,9 @@ func (l *Loop) Run(ctx context.Context, req *Request) (*Response, error) {
 		}
 
 		// Store response in memory
-		l.memory.AddMessage(convID, "assistant", resp.Content)
+		if err := l.memory.AddMessage(convID, "assistant", resp.Content); err != nil {
+			l.logger.Warn("failed to store response", "error", err)
+		}
 
 		l.logger.Info("agent loop completed",
 			"conversation", convID,

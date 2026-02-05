@@ -80,8 +80,26 @@ func runServe(logger *slog.Logger, configPath string, portOverride int) {
 		"ollama_url", cfg.Models.OllamaURL,
 	)
 
-	// Create components
-	mem := memory.NewStore(100) // 100 messages per conversation
+	// Create memory store (SQLite)
+	dataDir := cfg.DataDir
+	if dataDir == "" {
+		dataDir = "./data"
+	}
+	
+	// Ensure data directory exists
+	if err := os.MkdirAll(dataDir, 0755); err != nil {
+		logger.Error("failed to create data directory", "path", dataDir, "error", err)
+		os.Exit(1)
+	}
+	
+	dbPath := dataDir + "/thane.db"
+	mem, err := memory.NewSQLiteStore(dbPath, 100)
+	if err != nil {
+		logger.Error("failed to open memory database", "path", dbPath, "error", err)
+		os.Exit(1)
+	}
+	defer mem.Close()
+	logger.Info("memory database opened", "path", dbPath)
 	
 	// Home Assistant client
 	var ha *homeassistant.Client

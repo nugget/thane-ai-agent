@@ -34,7 +34,7 @@ thane.local.yaml
 # Memory database
 *.db
 *.sqlite
-memory/
+/data/
 
 # Logs
 *.log

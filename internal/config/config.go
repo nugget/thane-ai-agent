@@ -12,6 +12,7 @@ type Config struct {
 	Listen        ListenConfig        `yaml:"listen"`
 	HomeAssistant HomeAssistantConfig `yaml:"homeassistant"`
 	Models        ModelsConfig        `yaml:"models"`
+	DataDir       string              `yaml:"data_dir"`
 }
 
 // ListenConfig defines the API server settings.
