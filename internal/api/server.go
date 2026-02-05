@@ -111,7 +111,7 @@ func (s *Server) withLogging(next http.Handler) http.Handler {
 
 func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
+	_ = json.NewEncoder(w).Encode(map[string]string{
 		"name":    "Thane",
 		"version": "0.1.0",
 		"status":  "ok",
@@ -120,13 +120,13 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "healthy"})
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "healthy"})
 }
 
 func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	// OpenAI-compatible models list
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	_ = json.NewEncoder(w).Encode(map[string]any{
 		"object": "list",
 		"data": []map[string]any{
 			{
@@ -219,7 +219,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(completion)
+	_ = json.NewEncoder(w).Encode(completion)
 }
 
 // StreamChunk is the SSE format for streaming responses.
@@ -329,7 +329,7 @@ func (s *Server) writeSSE(w http.ResponseWriter, chunk StreamChunk) {
 func (s *Server) errorResponse(w http.ResponseWriter, code int, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
-	json.NewEncoder(w).Encode(map[string]any{
+	_ = json.NewEncoder(w).Encode(map[string]any{
 		"error": map[string]any{
 			"message": message,
 			"type":    "invalid_request_error",
@@ -345,10 +345,10 @@ func (s *Server) handleRouterStats(w http.ResponseWriter, r *http.Request) {
 		s.errorResponse(w, http.StatusServiceUnavailable, "router not configured")
 		return
 	}
-	
+
 	stats := s.router.GetStats()
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(stats)
+	_ = json.NewEncoder(w).Encode(stats)
 }
 
 func (s *Server) handleRouterAudit(w http.ResponseWriter, r *http.Request) {
@@ -356,7 +356,7 @@ func (s *Server) handleRouterAudit(w http.ResponseWriter, r *http.Request) {
 		s.errorResponse(w, http.StatusServiceUnavailable, "router not configured")
 		return
 	}
-	
+
 	// Parse limit from query
 	limit := 20
 	if l := r.URL.Query().Get("limit"); l != "" {
@@ -364,10 +364,10 @@ func (s *Server) handleRouterAudit(w http.ResponseWriter, r *http.Request) {
 			limit = parsed
 		}
 	}
-	
+
 	decisions := s.router.GetAuditLog(limit)
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	_ = json.NewEncoder(w).Encode(map[string]any{
 		"count":     len(decisions),
 		"decisions": decisions,
 	})
@@ -378,21 +378,21 @@ func (s *Server) handleRouterExplain(w http.ResponseWriter, r *http.Request) {
 		s.errorResponse(w, http.StatusServiceUnavailable, "router not configured")
 		return
 	}
-	
+
 	requestID := r.PathValue("requestId")
 	if requestID == "" {
 		s.errorResponse(w, http.StatusBadRequest, "requestId required")
 		return
 	}
-	
+
 	decision := s.router.Explain(requestID)
 	if decision == nil {
 		s.errorResponse(w, http.StatusNotFound, "decision not found")
 		return
 	}
-	
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(decision)
+	_ = json.NewEncoder(w).Encode(decision)
 }
 
 // Checkpoint handlers
@@ -430,7 +430,7 @@ func (s *Server) handleCheckpointCreate(w http.ResponseWriter, r *http.Request) 
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(cp)
+	_ = json.NewEncoder(w).Encode(cp)
 }
 
 func (s *Server) handleCheckpointList(w http.ResponseWriter, r *http.Request) {
@@ -454,7 +454,7 @@ func (s *Server) handleCheckpointList(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	_ = json.NewEncoder(w).Encode(map[string]any{
 		"count":       len(checkpoints),
 		"checkpoints": checkpoints,
 	})
@@ -481,7 +481,7 @@ func (s *Server) handleCheckpointGet(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(cp)
+	_ = json.NewEncoder(w).Encode(cp)
 }
 
 func (s *Server) handleCheckpointDelete(w http.ResponseWriter, r *http.Request) {
@@ -526,7 +526,7 @@ func (s *Server) handleCheckpointRestore(w http.ResponseWriter, r *http.Request)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	_ = json.NewEncoder(w).Encode(map[string]any{
 		"status":  "restored",
 		"id":      idStr,
 		"message": "checkpoint restored successfully",
@@ -542,7 +542,7 @@ func (s *Server) handleConversationList(w http.ResponseWriter, r *http.Request) 
 	}
 
 	convs := s.memoryStore.GetAllConversations()
-	
+
 	// Return summary without full message content
 	type ConvSummary struct {
 		ID           string    `json:"id"`
@@ -550,7 +550,7 @@ func (s *Server) handleConversationList(w http.ResponseWriter, r *http.Request) 
 		CreatedAt    time.Time `json:"created_at"`
 		UpdatedAt    time.Time `json:"updated_at"`
 	}
-	
+
 	summaries := make([]ConvSummary, len(convs))
 	for i, c := range convs {
 		summaries[i] = ConvSummary{
@@ -562,7 +562,7 @@ func (s *Server) handleConversationList(w http.ResponseWriter, r *http.Request) 
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	_ = json.NewEncoder(w).Encode(map[string]any{
 		"conversations": summaries,
 		"count":         len(summaries),
 	})
@@ -582,7 +582,7 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(conv)
+	_ = json.NewEncoder(w).Encode(conv)
 }
 
 func (s *Server) handleToolCalls(w http.ResponseWriter, r *http.Request) {
@@ -595,7 +595,7 @@ func (s *Server) handleToolCalls(w http.ResponseWriter, r *http.Request) {
 	convID := r.URL.Query().Get("conversation_id")
 	toolName := r.URL.Query().Get("tool")
 	limitStr := r.URL.Query().Get("limit")
-	
+
 	limit := 50
 	if limitStr != "" {
 		if n, err := strconv.Atoi(limitStr); err == nil && n > 0 {
@@ -614,7 +614,7 @@ func (s *Server) handleToolCalls(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	_ = json.NewEncoder(w).Encode(map[string]any{
 		"tool_calls": calls,
 		"count":      len(calls),
 	})
@@ -627,7 +627,7 @@ func (s *Server) handleToolStats(w http.ResponseWriter, r *http.Request) {
 	}
 
 	stats := s.memoryStore.ToolCallStats()
-	
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(stats)
+	_ = json.NewEncoder(w).Encode(stats)
 }

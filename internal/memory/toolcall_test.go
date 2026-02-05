@@ -174,9 +174,9 @@ func TestToolCallStats(t *testing.T) {
 	store.RecordToolCall("test", "", "c1", "get_state", "{}")
 	store.RecordToolCall("test", "", "c2", "get_state", "{}")
 	store.RecordToolCall("test", "", "c3", "call_service", "{}")
-	
+
 	time.Sleep(10 * time.Millisecond) // Ensure measurable duration
-	
+
 	store.CompleteToolCall("c1", "ok", "")
 	store.CompleteToolCall("c2", "ok", "")
 	store.CompleteToolCall("c3", "", "error!")

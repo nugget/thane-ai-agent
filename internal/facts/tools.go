@@ -18,10 +18,10 @@ func NewTools(store *Store) *Tools {
 
 // RememberArgs are arguments for the remember_fact tool.
 type RememberArgs struct {
-	Category string  `json:"category"` // user, home, device, routine, preference
-	Key      string  `json:"key"`      // Unique identifier within category
-	Value    string  `json:"value"`    // The information to remember
-	Source   string  `json:"source,omitempty"` // Where this came from
+	Category string `json:"category"`         // user, home, device, routine, preference
+	Key      string `json:"key"`              // Unique identifier within category
+	Value    string `json:"value"`            // The information to remember
+	Source   string `json:"source,omitempty"` // Where this came from
 }
 
 // Remember stores a fact for later recall.
@@ -70,7 +70,7 @@ func (t *Tools) Recall(argsJSON string) (string, error) {
 		if err != nil {
 			return "Not found", nil
 		}
-		return fmt.Sprintf("[%s] %s = %s (confidence: %.1f)", 
+		return fmt.Sprintf("[%s] %s = %s (confidence: %.1f)",
 			fact.Category, fact.Key, fact.Value, fact.Confidence), nil
 	}
 
@@ -100,9 +100,9 @@ func (t *Tools) Recall(argsJSON string) (string, error) {
 
 	// List all (summarized)
 	stats := t.store.Stats()
-	total := stats["total"].(int)
-	cats := stats["categories"].(map[string]int)
-	
+	total, _ := stats["total"].(int)
+	cats, _ := stats["categories"].(map[string]int)
+
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("Memory contains %d facts:\n", total))
 	for cat, count := range cats {

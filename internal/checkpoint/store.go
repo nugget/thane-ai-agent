@@ -149,7 +149,7 @@ func (s *Store) Latest() (*Checkpoint, error) {
 		ORDER BY created_at DESC
 		LIMIT 1
 	`)
-	
+
 	cp, err := s.scanFull(row)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -163,7 +163,7 @@ func (s *Store) Delete(id uuid.UUID) error {
 	if err != nil {
 		return fmt.Errorf("delete: %w", err)
 	}
-	
+
 	affected, _ := result.RowsAffected()
 	if affected == 0 {
 		return fmt.Errorf("checkpoint not found: %s", id)

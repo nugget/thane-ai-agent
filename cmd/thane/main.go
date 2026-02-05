@@ -74,7 +74,7 @@ func runAsk(logger *slog.Logger, configPath string, args []string) {
 	for _, a := range args[1:] {
 		question += " " + a
 	}
-	
+
 	// Load config
 	var cfg *config.Config
 	var err error
@@ -87,19 +87,19 @@ func runAsk(logger *slog.Logger, configPath string, args []string) {
 	} else {
 		cfg = config.Default()
 	}
-	
+
 	// Home Assistant client
 	var ha *homeassistant.Client
 	if cfg.HomeAssistant.URL != "" && cfg.HomeAssistant.Token != "" {
 		ha = homeassistant.NewClient(cfg.HomeAssistant.URL, cfg.HomeAssistant.Token)
 	}
-	
+
 	// Ollama URL
 	ollamaURL := cfg.Models.OllamaURL
 	if ollamaURL == "" {
 		ollamaURL = "http://localhost:11434"
 	}
-	
+
 	// Load talents
 	talentsDir := cfg.TalentsDir
 	if talentsDir == "" {
@@ -107,23 +107,23 @@ func runAsk(logger *slog.Logger, configPath string, args []string) {
 	}
 	talentLoader := talents.NewLoader(talentsDir)
 	talentContent, _ := talentLoader.Load()
-	
+
 	// Create minimal memory store (in-memory for ask)
 	mem := memory.NewStore(100)
-	
+
 	// Create agent loop (no router/scheduler for CLI mode - uses default model)
 	loop := agent.NewLoop(logger, mem, nil, nil, ha, nil, ollamaURL, cfg.Models.Default, talentContent)
-	
+
 	// Process the question
 	ctx := context.Background()
 	threadID := "cli-test"
-	
+
 	response, err := loop.Process(ctx, threadID, question)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
-	
+
 	fmt.Println(response)
 }
 
@@ -159,13 +159,13 @@ func runServe(logger *slog.Logger, configPath string, portOverride int) {
 	if dataDir == "" {
 		dataDir = "./data"
 	}
-	
+
 	// Ensure data directory exists
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
 		logger.Error("failed to create data directory", "path", dataDir, "error", err)
 		os.Exit(1)
 	}
-	
+
 	dbPath := dataDir + "/thane.db"
 	mem, err := memory.NewSQLiteStore(dbPath, 100)
 	if err != nil {
@@ -174,7 +174,7 @@ func runServe(logger *slog.Logger, configPath string, portOverride int) {
 	}
 	defer mem.Close()
 	logger.Info("memory database opened", "path", dbPath)
-	
+
 	// Home Assistant client
 	var ha *homeassistant.Client
 	if cfg.HomeAssistant.URL != "" && cfg.HomeAssistant.Token != "" {
@@ -183,24 +183,24 @@ func runServe(logger *slog.Logger, configPath string, portOverride int) {
 	} else {
 		logger.Warn("Home Assistant not configured - tools will be limited")
 	}
-	
+
 	// Ollama URL from config or environment
 	ollamaURL := cfg.Models.OllamaURL
 	if ollamaURL == "" {
 		ollamaURL = "http://localhost:11434"
 	}
-	
+
 	// Create LLM client for summarization
 	llmClient := llm.NewOllamaClient(ollamaURL)
-	
+
 	// Create compactor with LLM summarizer
 	compactionConfig := memory.CompactionConfig{
-		MaxTokens:            8000,  // Adjust based on model
-		TriggerRatio:         0.7,   // Compact at 70% full
-		KeepRecent:           10,    // Keep last 10 messages
-		MinMessagesToCompact: 15,    // Need enough to be worth summarizing
+		MaxTokens:            8000, // Adjust based on model
+		TriggerRatio:         0.7,  // Compact at 70% full
+		KeepRecent:           10,   // Keep last 10 messages
+		MinMessagesToCompact: 15,   // Need enough to be worth summarizing
 	}
-	
+
 	// LLM summarization function
 	summarizeFunc := func(ctx context.Context, prompt string) (string, error) {
 		msgs := []llm.Message{{Role: "user", Content: prompt}}
@@ -210,10 +210,10 @@ func runServe(logger *slog.Logger, configPath string, portOverride int) {
 		}
 		return resp.Message.Content, nil
 	}
-	
+
 	summarizer := memory.NewLLMSummarizer(summarizeFunc)
 	compactor := memory.NewCompactor(mem, compactionConfig, summarizer)
-	
+
 	// Load talents
 	talentsDir := cfg.TalentsDir
 	if talentsDir == "" {
@@ -229,14 +229,14 @@ func runServe(logger *slog.Logger, configPath string, portOverride int) {
 		talentList, _ := talentLoader.List()
 		logger.Info("talents loaded", "count", len(talentList), "talents", talentList)
 	}
-	
+
 	// Create model router
 	routerCfg := router.Config{
 		DefaultModel: cfg.Models.Default,
 		LocalFirst:   cfg.Models.LocalFirst,
 		MaxAuditLog:  1000,
 	}
-	
+
 	// Convert config models to router models
 	for _, m := range cfg.Models.Available {
 		minComp := router.ComplexitySimple
@@ -246,7 +246,7 @@ func runServe(logger *slog.Logger, configPath string, portOverride int) {
 		case "complex":
 			minComp = router.ComplexityComplex
 		}
-		
+
 		routerCfg.Models = append(routerCfg.Models, router.Model{
 			Name:          m.Name,
 			Provider:      m.Provider,
@@ -258,14 +258,14 @@ func runServe(logger *slog.Logger, configPath string, portOverride int) {
 			MinComplexity: minComp,
 		})
 	}
-	
+
 	rtr := router.NewRouter(logger, routerCfg)
 	logger.Info("model router initialized",
 		"models", len(routerCfg.Models),
 		"default", routerCfg.DefaultModel,
 		"local_first", routerCfg.LocalFirst,
 	)
-	
+
 	// Create scheduler
 	schedStore, err := scheduler.NewStore(dataDir + "/scheduler.db")
 	if err != nil {
@@ -273,7 +273,7 @@ func runServe(logger *slog.Logger, configPath string, portOverride int) {
 		os.Exit(1)
 	}
 	defer schedStore.Close()
-	
+
 	// Scheduler execution callback - will be wired to agent loop
 	executeTask := func(ctx context.Context, task *scheduler.Task, exec *scheduler.Execution) error {
 		// For wake payloads, we'd inject a message into the agent
@@ -285,16 +285,16 @@ func runServe(logger *slog.Logger, configPath string, portOverride int) {
 		)
 		return nil
 	}
-	
+
 	sched := scheduler.New(logger, schedStore, executeTask)
 	if err := sched.Start(context.Background()); err != nil {
 		logger.Error("failed to start scheduler", "error", err)
 		os.Exit(1)
 	}
 	defer sched.Stop()
-	
+
 	loop := agent.NewLoop(logger, mem, compactor, rtr, ha, sched, ollamaURL, cfg.Models.Default, talentContent)
-	
+
 	// Create fact store for long-term memory
 	factStore, err := facts.NewStore(dataDir + "/facts.db")
 	if err != nil {
@@ -302,14 +302,14 @@ func runServe(logger *slog.Logger, configPath string, portOverride int) {
 		os.Exit(1)
 	}
 	defer factStore.Close()
-	
+
 	factTools := facts.NewTools(factStore)
 	loop.Tools().SetFactTools(factTools)
 	logger.Info("fact store initialized", "path", dataDir+"/facts.db")
-	
+
 	server := api.NewServer(cfg.Listen.Port, loop, rtr, logger)
 	server.SetMemoryStore(mem)
-	
+
 	// Create checkpointer
 	checkpointDB, err := sql.Open("sqlite3", dataDir+"/checkpoints.db")
 	if err != nil {
@@ -317,7 +317,7 @@ func runServe(logger *slog.Logger, configPath string, portOverride int) {
 		os.Exit(1)
 	}
 	defer checkpointDB.Close()
-	
+
 	checkpointCfg := checkpoint.Config{
 		PeriodicMessages: 50, // Checkpoint every 50 messages
 	}
@@ -326,7 +326,7 @@ func runServe(logger *slog.Logger, configPath string, portOverride int) {
 		logger.Error("failed to create checkpointer", "error", err)
 		os.Exit(1)
 	}
-	
+
 	// Wire up providers for checkpointing
 	convProvider := checkpoint.ConversationProviderFunc(func() ([]checkpoint.Conversation, error) {
 		convs := mem.GetAllConversations()
@@ -344,7 +344,7 @@ func runServe(logger *slog.Logger, configPath string, portOverride int) {
 		}
 		return result, nil
 	})
-	
+
 	taskProvider := checkpoint.TaskProviderFunc(func() ([]checkpoint.Task, error) {
 		tasks, err := sched.GetAllTasks()
 		if err != nil {
@@ -364,7 +364,7 @@ func runServe(logger *slog.Logger, configPath string, portOverride int) {
 		}
 		return result, nil
 	})
-	
+
 	// Fact provider for checkpointing
 	factProvider := checkpoint.FactProviderFunc(func() ([]checkpoint.Fact, error) {
 		allFacts, err := factStore.GetAll()
@@ -386,7 +386,7 @@ func runServe(logger *slog.Logger, configPath string, portOverride int) {
 		}
 		return result, nil
 	})
-	
+
 	checkpointer.SetProviders(convProvider, factProvider, taskProvider)
 	server.SetCheckpointer(checkpointer)
 	loop.SetFailoverHandler(checkpointer) // Checkpoint before model failover
@@ -402,14 +402,14 @@ func runServe(logger *slog.Logger, configPath string, portOverride int) {
 	go func() {
 		<-sigCh
 		logger.Info("shutdown signal received")
-		
+
 		// Create shutdown checkpoint
 		if _, err := checkpointer.CreateShutdown(); err != nil {
 			logger.Error("failed to create shutdown checkpoint", "error", err)
 		}
-		
+
 		cancel()
-		server.Shutdown(context.Background())
+		_ = server.Shutdown(context.Background())
 	}()
 
 	// Start server

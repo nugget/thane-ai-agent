@@ -224,7 +224,7 @@ func (s *SQLiteStore) Clear(conversationID string) error {
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	_, err = tx.Exec(`DELETE FROM messages WHERE conversation_id = ?`, conversationID)
 	if err != nil {
@@ -243,16 +243,16 @@ func (s *SQLiteStore) Clear(conversationID string) error {
 func (s *SQLiteStore) Stats() map[string]any {
 	var convCount, msgCount, tokenCount int
 
-	s.db.QueryRow(`SELECT COUNT(*) FROM conversations`).Scan(&convCount)
-	s.db.QueryRow(`SELECT COUNT(*) FROM messages WHERE compacted = FALSE`).Scan(&msgCount)
-	s.db.QueryRow(`SELECT COALESCE(SUM(token_count), 0) FROM messages WHERE compacted = FALSE`).Scan(&tokenCount)
+	_ = s.db.QueryRow(`SELECT COUNT(*) FROM conversations`).Scan(&convCount)
+	_ = s.db.QueryRow(`SELECT COUNT(*) FROM messages WHERE compacted = FALSE`).Scan(&msgCount)
+	_ = s.db.QueryRow(`SELECT COALESCE(SUM(token_count), 0) FROM messages WHERE compacted = FALSE`).Scan(&tokenCount)
 
 	return map[string]any{
-		"conversations":  convCount,
-		"messages":       msgCount,
-		"total_tokens":   tokenCount,
-		"max_per_conv":   s.maxMessages,
-		"storage":        "sqlite",
+		"conversations": convCount,
+		"messages":      msgCount,
+		"total_tokens":  tokenCount,
+		"max_per_conv":  s.maxMessages,
+		"storage":       "sqlite",
 	}
 }
 
@@ -288,7 +288,7 @@ func (s *SQLiteStore) GetAllConversations() []*Conversation {
 // GetTokenCount returns the total token count for a conversation.
 func (s *SQLiteStore) GetTokenCount(conversationID string) int {
 	var count int
-	s.db.QueryRow(`
+	_ = s.db.QueryRow(`
 		SELECT COALESCE(SUM(token_count), 0) 
 		FROM messages 
 		WHERE conversation_id = ? AND compacted = FALSE
@@ -306,7 +306,7 @@ func (s *SQLiteStore) NeedsCompaction(conversationID string, maxTokens int) bool
 func (s *SQLiteStore) GetMessagesForCompaction(conversationID string, keep int) []Message {
 	// Get total count
 	var total int
-	s.db.QueryRow(`
+	_ = s.db.QueryRow(`
 		SELECT COUNT(*) FROM messages 
 		WHERE conversation_id = ? AND compacted = FALSE AND role != 'system'
 	`, conversationID).Scan(&total)
@@ -391,39 +391,39 @@ type ToolCall struct {
 // messageID can be empty - it will be stored as NULL.
 func (s *SQLiteStore) RecordToolCall(conversationID, messageID, toolCallID, toolName, arguments string) error {
 	now := time.Now()
-	
+
 	var msgID any
 	if messageID != "" {
 		msgID = messageID
 	} // else nil (NULL)
-	
+
 	_, err := s.db.Exec(`
 		INSERT INTO tool_calls (id, message_id, conversation_id, tool_name, arguments, started_at)
 		VALUES (?, ?, ?, ?, ?, ?)
 	`, toolCallID, msgID, conversationID, toolName, arguments, now)
-	
+
 	return err
 }
 
 // CompleteToolCall records the result of a tool call.
 func (s *SQLiteStore) CompleteToolCall(toolCallID, result, errMsg string) error {
 	now := time.Now()
-	
+
 	// Get started_at to calculate duration
 	var startedAt time.Time
 	err := s.db.QueryRow(`SELECT started_at FROM tool_calls WHERE id = ?`, toolCallID).Scan(&startedAt)
 	if err != nil {
 		return fmt.Errorf("tool call not found: %s", toolCallID)
 	}
-	
+
 	durationMs := now.Sub(startedAt).Milliseconds()
-	
+
 	_, err = s.db.Exec(`
 		UPDATE tool_calls 
 		SET result = ?, error = ?, completed_at = ?, duration_ms = ?
 		WHERE id = ?
 	`, result, errMsg, now, durationMs, toolCallID)
-	
+
 	return err
 }
 
@@ -436,10 +436,10 @@ func (s *SQLiteStore) GetToolCalls(conversationID string, limit int) []ToolCall 
 	if limit > 1000 {
 		limit = 1000 // Cap to prevent memory exhaustion
 	}
-	
+
 	var rows *sql.Rows
 	var err error
-	
+
 	if conversationID != "" {
 		rows, err = s.db.Query(`
 			SELECT id, message_id, conversation_id, tool_name, arguments, 
@@ -463,20 +463,20 @@ func (s *SQLiteStore) GetToolCalls(conversationID string, limit int) []ToolCall 
 		return nil
 	}
 	defer rows.Close()
-	
+
 	var calls []ToolCall
 	for rows.Next() {
 		var tc ToolCall
 		var messageID, result, errMsg sql.NullString
 		var completedAt sql.NullTime
 		var durationMs sql.NullInt64
-		
+
 		err := rows.Scan(&tc.ID, &messageID, &tc.ConversationID, &tc.ToolName,
 			&tc.Arguments, &result, &errMsg, &tc.StartedAt, &completedAt, &durationMs)
 		if err != nil {
 			continue
 		}
-		
+
 		if messageID.Valid {
 			tc.MessageID = messageID.String
 		}
@@ -492,10 +492,10 @@ func (s *SQLiteStore) GetToolCalls(conversationID string, limit int) []ToolCall 
 		if durationMs.Valid {
 			tc.DurationMs = durationMs.Int64
 		}
-		
+
 		calls = append(calls, tc)
 	}
-	
+
 	return calls
 }
 
@@ -507,7 +507,7 @@ func (s *SQLiteStore) GetToolCallsByName(toolName string, limit int) []ToolCall 
 	if limit > 1000 {
 		limit = 1000 // Cap to prevent memory exhaustion
 	}
-	
+
 	rows, err := s.db.Query(`
 		SELECT id, message_id, conversation_id, tool_name, arguments,
 		       result, error, started_at, completed_at, duration_ms
@@ -520,20 +520,20 @@ func (s *SQLiteStore) GetToolCallsByName(toolName string, limit int) []ToolCall 
 		return nil
 	}
 	defer rows.Close()
-	
+
 	var calls []ToolCall
 	for rows.Next() {
 		var tc ToolCall
 		var messageID, result, errMsg sql.NullString
 		var completedAt sql.NullTime
 		var durationMs sql.NullInt64
-		
+
 		err := rows.Scan(&tc.ID, &messageID, &tc.ConversationID, &tc.ToolName,
 			&tc.Arguments, &result, &errMsg, &tc.StartedAt, &completedAt, &durationMs)
 		if err != nil {
 			continue
 		}
-		
+
 		if messageID.Valid {
 			tc.MessageID = messageID.String
 		}
@@ -549,22 +549,22 @@ func (s *SQLiteStore) GetToolCallsByName(toolName string, limit int) []ToolCall 
 		if durationMs.Valid {
 			tc.DurationMs = durationMs.Int64
 		}
-		
+
 		calls = append(calls, tc)
 	}
-	
+
 	return calls
 }
 
 // ToolCallStats returns statistics about tool usage.
 func (s *SQLiteStore) ToolCallStats() map[string]any {
 	stats := make(map[string]any)
-	
+
 	// Total calls
 	var total int
-	s.db.QueryRow(`SELECT COUNT(*) FROM tool_calls`).Scan(&total)
+	_ = s.db.QueryRow(`SELECT COUNT(*) FROM tool_calls`).Scan(&total)
 	stats["total_calls"] = total
-	
+
 	// By tool
 	byTool := make(map[string]int)
 	rows, err := s.db.Query(`SELECT tool_name, COUNT(*) FROM tool_calls GROUP BY tool_name ORDER BY COUNT(*) DESC`)
@@ -580,20 +580,20 @@ func (s *SQLiteStore) ToolCallStats() map[string]any {
 		}
 	}
 	stats["by_tool"] = byTool
-	
+
 	// Average duration
 	var avgMs float64
-	s.db.QueryRow(`SELECT COALESCE(AVG(duration_ms), 0) FROM tool_calls WHERE completed_at IS NOT NULL`).Scan(&avgMs)
+	_ = s.db.QueryRow(`SELECT COALESCE(AVG(duration_ms), 0) FROM tool_calls WHERE completed_at IS NOT NULL`).Scan(&avgMs)
 	stats["avg_duration_ms"] = avgMs
-	
+
 	// Error rate
 	var errors int
-	s.db.QueryRow(`SELECT COUNT(*) FROM tool_calls WHERE error IS NOT NULL AND error != ''`).Scan(&errors)
+	_ = s.db.QueryRow(`SELECT COUNT(*) FROM tool_calls WHERE error IS NOT NULL AND error != ''`).Scan(&errors)
 	if total > 0 {
 		stats["error_rate"] = float64(errors) / float64(total)
 	} else {
 		stats["error_rate"] = 0.0
 	}
-	
+
 	return stats
 }

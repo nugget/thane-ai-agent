@@ -38,12 +38,12 @@ type ModelsConfig struct {
 // ModelConfig defines a single model's capabilities.
 type ModelConfig struct {
 	Name          string `yaml:"name"`
-	Provider      string `yaml:"provider"`      // ollama, anthropic, openai
+	Provider      string `yaml:"provider"` // ollama, anthropic, openai
 	SupportsTools bool   `yaml:"supports_tools"`
 	ContextWindow int    `yaml:"context_window"`
-	Speed         int    `yaml:"speed"`         // 1-10
-	Quality       int    `yaml:"quality"`       // 1-10
-	CostTier      int    `yaml:"cost_tier"`     // 0=local, 1=cheap, 2=moderate, 3=expensive
+	Speed         int    `yaml:"speed"`          // 1-10
+	Quality       int    `yaml:"quality"`        // 1-10
+	CostTier      int    `yaml:"cost_tier"`      // 0=local, 1=cheap, 2=moderate, 3=expensive
 	MinComplexity string `yaml:"min_complexity"` // simple, moderate, complex
 }
 

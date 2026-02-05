@@ -18,7 +18,7 @@ import (
 
 // Message represents a chat message.
 type Message struct {
-	Role    string `json:"role"`    // system, user, assistant
+	Role    string `json:"role"` // system, user, assistant
 	Content string `json:"content"`
 }
 
@@ -170,7 +170,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (*R
 	// Select model via router
 	model := req.Model
 	var routerDecision *router.Decision
-	
+
 	if model == "" || model == "thane" {
 		if l.router != nil {
 			// Get the user's query from messages
@@ -181,13 +181,13 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (*R
 					break
 				}
 			}
-			
+
 			// Calculate context size (rough estimate)
 			contextSize := len(l.talents) / 4 // talents
 			for _, m := range history {
 				contextSize += len(m.Content) / 4
 			}
-			
+
 			routerReq := router.Request{
 				Query:       query,
 				ContextSize: contextSize,
@@ -195,7 +195,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (*R
 				ToolCount:   len(l.tools.List()),
 				Priority:    router.PriorityInteractive,
 			}
-			
+
 			model, routerDecision = l.router.Route(ctx, routerReq)
 		} else {
 			model = l.model
@@ -204,7 +204,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (*R
 
 	// Get available tools
 	toolDefs := l.tools.List()
-	
+
 	startTime := time.Now()
 
 	// Agent loop - may iterate if tool calls are needed
@@ -221,12 +221,12 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (*R
 		llmResp, err := l.llm.ChatStream(ctx, model, llmMessages, toolDefs, stream)
 		if err != nil {
 			l.logger.Error("LLM call failed", "error", err, "model", model)
-			
+
 			// Try failover to default model if using a routed model
 			if model != l.model {
 				fallbackModel := l.model
 				l.logger.Info("attempting failover", "from", model, "to", fallbackModel)
-				
+
 				// Call failover handler if configured (for checkpointing)
 				if l.failoverHandler != nil {
 					if ferr := l.failoverHandler.OnFailover(ctx, model, fallbackModel, err.Error()); ferr != nil {
@@ -234,7 +234,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (*R
 						// Continue with failover anyway
 					}
 				}
-				
+
 				// Retry with fallback model
 				model = fallbackModel
 				llmResp, err = l.llm.ChatStream(ctx, model, llmMessages, toolDefs, stream)
@@ -262,12 +262,12 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (*R
 			if convID == "" {
 				convID = "default"
 			}
-			
+
 			for _, tc := range llmResp.Message.ToolCalls {
 				toolName := tc.Function.Name
 				toolCallID, _ := uuid.NewV7()
 				toolCallIDStr := toolCallID.String()
-				
+
 				// Convert arguments map to JSON string for Execute
 				argsJSON := ""
 				if tc.Function.Arguments != nil {
@@ -345,7 +345,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (*R
 			latency := time.Since(startTime).Milliseconds()
 			l.router.RecordOutcome(routerDecision.RequestID, latency, l.memory.GetTokenCount(convID), true)
 		}
-		
+
 		l.logger.Info("agent loop completed",
 			"conversation", convID,
 			"iterations", i+1,
@@ -384,7 +384,7 @@ func (l *Loop) Process(ctx context.Context, conversationID, message string) (str
 			Content: message,
 		}},
 	}
-	
+
 	resp, err := l.Run(ctx, req, nil)
 	if err != nil {
 		return "", err

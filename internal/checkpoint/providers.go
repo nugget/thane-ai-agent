@@ -12,13 +12,6 @@ func ParseUUID(s string) uuid.UUID {
 	return id
 }
 
-// MemoryStoreAdapter adapts a memory store to ConversationProvider.
-type MemoryStoreAdapter struct {
-	store interface {
-		GetAllConversations() []*MemoryConversation
-	}
-}
-
 // MemoryConversation is the memory package's conversation type.
 // We define it here to avoid import cycles.
 type MemoryConversation struct {

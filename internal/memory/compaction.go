@@ -10,19 +10,19 @@ import (
 
 // CompactionConfig controls compaction behavior.
 type CompactionConfig struct {
-	MaxTokens       int     // Context window size
-	TriggerRatio    float64 // Trigger compaction at this ratio (e.g., 0.7 = 70%)
-	KeepRecent      int     // Number of recent messages to always keep
-	MinMessagesToCompact int // Minimum messages before considering compaction
+	MaxTokens            int     // Context window size
+	TriggerRatio         float64 // Trigger compaction at this ratio (e.g., 0.7 = 70%)
+	KeepRecent           int     // Number of recent messages to always keep
+	MinMessagesToCompact int     // Minimum messages before considering compaction
 }
 
 // DefaultCompactionConfig returns sensible defaults.
 func DefaultCompactionConfig() CompactionConfig {
 	return CompactionConfig{
-		MaxTokens:            8000,  // Conservative default
-		TriggerRatio:         0.7,   // Trigger at 70% full
-		KeepRecent:           10,    // Keep last 10 messages
-		MinMessagesToCompact: 20,    // Don't compact tiny conversations
+		MaxTokens:            8000, // Conservative default
+		TriggerRatio:         0.7,  // Trigger at 70% full
+		KeepRecent:           10,   // Keep last 10 messages
+		MinMessagesToCompact: 20,   // Don't compact tiny conversations
 	}
 }
 
@@ -66,7 +66,7 @@ func (c *Compactor) NeedsCompaction(conversationID string) bool {
 func (c *Compactor) Compact(ctx context.Context, conversationID string) error {
 	// Get messages to compact (older ones)
 	messages := c.store.GetMessagesForCompaction(conversationID, c.config.KeepRecent)
-	
+
 	if len(messages) < c.config.MinMessagesToCompact {
 		return nil // Not enough to bother
 	}
@@ -110,7 +110,7 @@ func formatCompactionSummary(messages []Message, summary string) string {
 
 	var sb strings.Builder
 	sb.WriteString("[Conversation Summary]\n")
-	sb.WriteString(fmt.Sprintf("Period: %s to %s\n", 
+	sb.WriteString(fmt.Sprintf("Period: %s to %s\n",
 		startTime.Format("2006-01-02 15:04"),
 		endTime.Format("2006-01-02 15:04")))
 	sb.WriteString(fmt.Sprintf("Messages compacted: %d\n\n", len(messages)))
@@ -123,13 +123,13 @@ func formatCompactionSummary(messages []Message, summary string) string {
 func (c *Compactor) CompactionStats(conversationID string) map[string]any {
 	tokenCount := c.store.GetTokenCount(conversationID)
 	threshold := int(float64(c.config.MaxTokens) * c.config.TriggerRatio)
-	
+
 	return map[string]any{
-		"token_count":     tokenCount,
-		"max_tokens":      c.config.MaxTokens,
-		"trigger_at":      threshold,
+		"token_count":      tokenCount,
+		"max_tokens":       c.config.MaxTokens,
+		"trigger_at":       threshold,
 		"needs_compaction": tokenCount > threshold,
-		"ratio":           float64(tokenCount) / float64(c.config.MaxTokens),
+		"ratio":            float64(tokenCount) / float64(c.config.MaxTokens),
 	}
 }
 
@@ -148,7 +148,11 @@ func (s *LLMSummarizer) Summarize(ctx context.Context, messages []Message) (stri
 	// Build conversation text
 	var sb strings.Builder
 	for _, m := range messages {
-		sb.WriteString(fmt.Sprintf("%s: %s\n\n", strings.Title(m.Role), m.Content))
+		role := m.Role
+		if len(role) > 0 {
+			role = strings.ToUpper(role[:1]) + role[1:]
+		}
+		sb.WriteString(fmt.Sprintf("%s: %s\n\n", role, m.Content))
 	}
 
 	prompt := fmt.Sprintf(`Summarize this conversation concisely. Focus on:

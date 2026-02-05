@@ -7,10 +7,10 @@ import (
 
 // Task is the definition of a scheduled action.
 type Task struct {
-	ID        string    `json:"id"`         // UUIDv7
-	Name      string    `json:"name"`       // Human-readable label
-	Schedule  Schedule  `json:"schedule"`   // When to run
-	Payload   Payload   `json:"payload"`    // What to do
+	ID        string    `json:"id"`       // UUIDv7
+	Name      string    `json:"name"`     // Human-readable label
+	Schedule  Schedule  `json:"schedule"` // When to run
+	Payload   Payload   `json:"payload"`  // What to do
 	Enabled   bool      `json:"enabled"`
 	CreatedAt time.Time `json:"created_at"`
 	CreatedBy string    `json:"created_by"` // Session or user ID
@@ -20,10 +20,10 @@ type Task struct {
 // Schedule defines when a task should run.
 type Schedule struct {
 	Kind     ScheduleKind `json:"kind"`
-	At       *time.Time   `json:"at,omitempty"`        // For "at" kind
-	Every    *Duration    `json:"every,omitempty"`     // For "every" kind
-	Cron     string       `json:"cron,omitempty"`      // For "cron" kind
-	Timezone string       `json:"timezone,omitempty"`  // IANA timezone
+	At       *time.Time   `json:"at,omitempty"`       // For "at" kind
+	Every    *Duration    `json:"every,omitempty"`    // For "every" kind
+	Cron     string       `json:"cron,omitempty"`     // For "cron" kind
+	Timezone string       `json:"timezone,omitempty"` // IANA timezone
 }
 
 // ScheduleKind identifies the schedule type.

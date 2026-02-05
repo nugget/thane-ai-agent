@@ -17,7 +17,7 @@ type MemoryStore interface {
 
 // Message represents a conversation message.
 type Message struct {
-	Role      string    `json:"role"`      // system, user, assistant, tool
+	Role      string    `json:"role"` // system, user, assistant, tool
 	Content   string    `json:"content"`
 	Timestamp time.Time `json:"timestamp"`
 }
@@ -54,12 +54,12 @@ func NewStore(maxMessages int) *Store {
 func (s *Store) GetConversation(id string) *Conversation {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	
+
 	conv, ok := s.conversations[id]
 	if !ok {
 		return nil
 	}
-	
+
 	// Return a copy to avoid race conditions
 	return conv.copy()
 }
@@ -68,7 +68,7 @@ func (s *Store) GetConversation(id string) *Conversation {
 func (s *Store) GetOrCreateConversation(id string) *Conversation {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	
+
 	conv, ok := s.conversations[id]
 	if !ok {
 		conv = &Conversation{
@@ -79,7 +79,7 @@ func (s *Store) GetOrCreateConversation(id string) *Conversation {
 		}
 		s.conversations[id] = conv
 	}
-	
+
 	return conv.copy()
 }
 
@@ -87,7 +87,7 @@ func (s *Store) GetOrCreateConversation(id string) *Conversation {
 func (s *Store) AddMessage(conversationID string, role, content string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	
+
 	conv, ok := s.conversations[conversationID]
 	if !ok {
 		conv = &Conversation{
@@ -97,14 +97,14 @@ func (s *Store) AddMessage(conversationID string, role, content string) error {
 		}
 		s.conversations[conversationID] = conv
 	}
-	
+
 	conv.Messages = append(conv.Messages, Message{
 		Role:      role,
 		Content:   content,
 		Timestamp: time.Now(),
 	})
 	conv.UpdatedAt = time.Now()
-	
+
 	// Trim if over max (keep system messages + recent)
 	if len(conv.Messages) > s.maxMessages {
 		// Find system messages
@@ -117,7 +117,7 @@ func (s *Store) AddMessage(conversationID string, role, content string) error {
 				otherMsgs = append(otherMsgs, m)
 			}
 		}
-		
+
 		// Keep system + last N-len(system) messages
 		keep := s.maxMessages - len(systemMsgs)
 		if keep < 10 {
@@ -126,10 +126,10 @@ func (s *Store) AddMessage(conversationID string, role, content string) error {
 		if len(otherMsgs) > keep {
 			otherMsgs = otherMsgs[len(otherMsgs)-keep:]
 		}
-		
+
 		conv.Messages = append(systemMsgs, otherMsgs...)
 	}
-	
+
 	return nil
 }
 
@@ -138,12 +138,12 @@ func (s *Store) AddMessage(conversationID string, role, content string) error {
 func (s *Store) GetMessages(conversationID string) []Message {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	
+
 	conv, ok := s.conversations[conversationID]
 	if !ok {
 		return []Message{}
 	}
-	
+
 	// Return a copy
 	msgs := make([]Message, len(conv.Messages))
 	copy(msgs, conv.Messages)
@@ -161,12 +161,12 @@ func (s *Store) Clear(conversationID string) {
 func (s *Store) GetTokenCount(conversationID string) int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	
+
 	conv, ok := s.conversations[conversationID]
 	if !ok {
 		return 0
 	}
-	
+
 	total := 0
 	for _, m := range conv.Messages {
 		total += len(m.Content) / 4 // Rough estimate: 4 chars per token
@@ -178,12 +178,12 @@ func (s *Store) GetTokenCount(conversationID string) int {
 func (s *Store) Stats() map[string]any {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	
+
 	totalMessages := 0
 	for _, conv := range s.conversations {
 		totalMessages += len(conv.Messages)
 	}
-	
+
 	return map[string]any{
 		"conversations": len(s.conversations),
 		"messages":      totalMessages,
@@ -195,7 +195,7 @@ func (s *Store) Stats() map[string]any {
 func (s *Store) GetAllConversations() []*Conversation {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	
+
 	convs := make([]*Conversation, 0, len(s.conversations))
 	for _, conv := range s.conversations {
 		convs = append(convs, conv.copy())
@@ -207,7 +207,7 @@ func (s *Store) GetAllConversations() []*Conversation {
 func (s *Store) RestoreConversations(convs []*Conversation) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	
+
 	s.conversations = make(map[string]*Conversation, len(convs))
 	for _, conv := range convs {
 		s.conversations[conv.ID] = conv.copy()

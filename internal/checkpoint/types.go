@@ -11,11 +11,11 @@ import (
 type Trigger string
 
 const (
-	TriggerManual     Trigger = "manual"      // Explicit API call
-	TriggerPeriodic   Trigger = "periodic"    // Every N messages
+	TriggerManual      Trigger = "manual"       // Explicit API call
+	TriggerPeriodic    Trigger = "periodic"     // Every N messages
 	TriggerPreFailover Trigger = "pre-failover" // Before model switch
-	TriggerShutdown   Trigger = "shutdown"    // Graceful shutdown
-	TriggerPreCompact Trigger = "pre-compact" // Before memory compaction
+	TriggerShutdown    Trigger = "shutdown"     // Graceful shutdown
+	TriggerPreCompact  Trigger = "pre-compact"  // Before memory compaction
 )
 
 // Checkpoint represents a point-in-time snapshot of agent state.
@@ -29,9 +29,9 @@ type Checkpoint struct {
 	State *State `json:"state"`
 
 	// Metadata
-	ByteSize    int64  `json:"byte_size"`    // Compressed size
+	ByteSize     int64 `json:"byte_size"`     // Compressed size
 	MessageCount int   `json:"message_count"` // Total messages captured
-	FactCount   int    `json:"fact_count"`   // Total facts captured
+	FactCount    int   `json:"fact_count"`    // Total facts captured
 }
 
 // State holds the actual restorable data.
@@ -66,27 +66,27 @@ type Message struct {
 
 	// Tool-specific fields
 	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
-	ToolID    string     `json:"tool_id,omitempty"`    // For tool responses
-	ToolName  string     `json:"tool_name,omitempty"`  // For tool responses
+	ToolID    string     `json:"tool_id,omitempty"`   // For tool responses
+	ToolName  string     `json:"tool_name,omitempty"` // For tool responses
 }
 
 // ToolCall represents a function call made by the assistant.
 type ToolCall struct {
-	ID       string `json:"id"`
-	Name     string `json:"name"`
+	ID        string `json:"id"`
+	Name      string `json:"name"`
 	Arguments string `json:"arguments"` // JSON string
 }
 
 // Fact is a piece of long-term memory.
 type Fact struct {
-	ID        uuid.UUID `json:"id"`
-	Category  string    `json:"category"` // "user", "home", "preference", etc.
-	Key       string    `json:"key"`
-	Value     string    `json:"value"`
-	Source    string    `json:"source,omitempty"`    // Where this fact came from
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-	Confidence float64  `json:"confidence,omitempty"` // 0-1, how sure we are
+	ID         uuid.UUID `json:"id"`
+	Category   string    `json:"category"` // "user", "home", "preference", etc.
+	Key        string    `json:"key"`
+	Value      string    `json:"value"`
+	Source     string    `json:"source,omitempty"` // Where this fact came from
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
+	Confidence float64   `json:"confidence,omitempty"` // 0-1, how sure we are
 }
 
 // Task is a scheduled action.
@@ -109,7 +109,7 @@ type ConfigSnapshot struct {
 
 // Summary returns a human-readable summary of the checkpoint.
 func (c *Checkpoint) Summary() string {
-	return c.ID.String()[:8] + " | " + 
+	return c.ID.String()[:8] + " | " +
 		c.CreatedAt.Format("2006-01-02 15:04") + " | " +
 		string(c.Trigger) + " | " +
 		formatCount(c.MessageCount, "msg") + ", " +

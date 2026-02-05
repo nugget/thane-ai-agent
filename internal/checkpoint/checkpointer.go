@@ -44,7 +44,7 @@ type Checkpointer struct {
 
 	// Config
 	periodicInterval int // Create checkpoint every N messages (0 = disabled)
-	
+
 	// State
 	mu            sync.Mutex
 	messagesSince int // Messages since last checkpoint
@@ -182,7 +182,7 @@ func (c *Checkpointer) Restore(id uuid.UUID) error {
 
 	// TODO: Implement actual restoration by calling provider restore methods
 	// For now, we just validate the checkpoint can be loaded
-	
+
 	return nil
 }
 

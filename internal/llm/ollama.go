@@ -64,11 +64,11 @@ type ToolCall struct {
 
 // ChatResponse is the response from Ollama chat API.
 type ChatResponse struct {
-	Model     string     `json:"model"`
-	CreatedAt string     `json:"created_at"`
-	Message   Message    `json:"message"`
-	Done      bool       `json:"done"`
-	
+	Model     string  `json:"model"`
+	CreatedAt string  `json:"created_at"`
+	Message   Message `json:"message"`
+	Done      bool    `json:"done"`
+
 	// Usage stats (when done=true)
 	TotalDuration      int64 `json:"total_duration,omitempty"`
 	LoadDuration       int64 `json:"load_duration,omitempty"`
@@ -90,7 +90,7 @@ type StreamCallback func(token string)
 // If callback is non-nil, tokens are streamed to it.
 func (c *OllamaClient) ChatStream(ctx context.Context, model string, messages []Message, tools []map[string]any, callback StreamCallback) (*ChatResponse, error) {
 	stream := callback != nil
-	
+
 	req := ChatRequest{
 		Model:    model,
 		Messages: messages,
@@ -133,7 +133,7 @@ func (c *OllamaClient) ChatStream(ctx context.Context, model string, messages []
 	var finalResp ChatResponse
 	var contentBuilder strings.Builder
 	decoder := json.NewDecoder(resp.Body)
-	
+
 	for {
 		var chunk ChatResponse
 		if err := decoder.Decode(&chunk); err != nil {
@@ -142,7 +142,7 @@ func (c *OllamaClient) ChatStream(ctx context.Context, model string, messages []
 			}
 			return nil, fmt.Errorf("decode stream chunk: %w", err)
 		}
-		
+
 		// Accumulate content
 		if chunk.Message.Content != "" {
 			contentBuilder.WriteString(chunk.Message.Content)
@@ -150,12 +150,12 @@ func (c *OllamaClient) ChatStream(ctx context.Context, model string, messages []
 				callback(chunk.Message.Content)
 			}
 		}
-		
+
 		// Tool calls come in the final message
 		if len(chunk.Message.ToolCalls) > 0 {
 			finalResp.Message.ToolCalls = chunk.Message.ToolCalls
 		}
-		
+
 		// Capture final metadata
 		if chunk.Done {
 			finalResp = chunk
