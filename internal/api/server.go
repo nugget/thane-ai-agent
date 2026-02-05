@@ -56,6 +56,9 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("POST /v1/chat/completions", s.handleChatCompletions)
 	mux.HandleFunc("GET /v1/models", s.handleModels)
 
+	// Simplified chat endpoint (easier testing)
+	mux.HandleFunc("POST /v1/chat", s.handleSimpleChat)
+
 	// Health endpoints
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("GET /", s.handleRoot)
@@ -220,6 +223,61 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(completion)
+}
+
+// SimpleChatRequest is a minimal chat request for easy testing.
+type SimpleChatRequest struct {
+	Message        string `json:"message"`
+	ConversationID string `json:"conversation_id,omitempty"`
+}
+
+// SimpleChatResponse is a minimal chat response.
+type SimpleChatResponse struct {
+	Response       string   `json:"response"`
+	Model          string   `json:"model"`
+	ConversationID string   `json:"conversation_id"`
+	ToolCalls      []string `json:"tool_calls,omitempty"` // Tool names used
+}
+
+// handleSimpleChat provides a simplified chat interface for testing.
+// POST /v1/chat {"message": "turn on the lights"}
+func (s *Server) handleSimpleChat(w http.ResponseWriter, r *http.Request) {
+	var req SimpleChatRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.errorResponse(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if req.Message == "" {
+		s.errorResponse(w, http.StatusBadRequest, "message is required")
+		return
+	}
+
+	convID := req.ConversationID
+	if convID == "" {
+		convID = "default"
+	}
+
+	agentReq := &agent.Request{
+		Messages: []agent.Message{
+			{Role: "user", Content: req.Message},
+		},
+		ConversationID: convID,
+	}
+
+	resp, err := s.loop.Run(r.Context(), agentReq, nil)
+	if err != nil {
+		s.logger.Error("agent loop failed", "error", err)
+		s.errorResponse(w, http.StatusInternalServerError, "agent error: "+err.Error())
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(SimpleChatResponse{
+		Response:       resp.Content,
+		Model:          resp.Model,
+		ConversationID: convID,
+	})
 }
 
 // StreamChunk is the SSE format for streaming responses.
