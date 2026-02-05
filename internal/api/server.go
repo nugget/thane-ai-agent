@@ -10,17 +10,20 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/nugget/thane-ai-agent/internal/agent"
+	"github.com/nugget/thane-ai-agent/internal/checkpoint"
 	"github.com/nugget/thane-ai-agent/internal/router"
 )
 
 // Server is the HTTP API server.
 type Server struct {
-	port   int
-	loop   *agent.Loop
-	router *router.Router
-	logger *slog.Logger
-	server *http.Server
+	port         int
+	loop         *agent.Loop
+	router       *router.Router
+	checkpointer *checkpoint.Checkpointer
+	logger       *slog.Logger
+	server       *http.Server
 }
 
 // NewServer creates a new API server.
@@ -31,6 +34,11 @@ func NewServer(port int, loop *agent.Loop, rtr *router.Router, logger *slog.Logg
 		router: rtr,
 		logger: logger,
 	}
+}
+
+// SetCheckpointer configures the checkpointer for checkpoint API endpoints.
+func (s *Server) SetCheckpointer(cp *checkpoint.Checkpointer) {
+	s.checkpointer = cp
 }
 
 // Start begins serving HTTP requests.
@@ -49,6 +57,13 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("GET /v1/router/stats", s.handleRouterStats)
 	mux.HandleFunc("GET /v1/router/audit", s.handleRouterAudit)
 	mux.HandleFunc("GET /v1/router/explain/{requestId}", s.handleRouterExplain)
+
+	// Checkpoint endpoints
+	mux.HandleFunc("POST /v1/checkpoint", s.handleCheckpointCreate)
+	mux.HandleFunc("GET /v1/checkpoints", s.handleCheckpointList)
+	mux.HandleFunc("GET /v1/checkpoint/{id}", s.handleCheckpointGet)
+	mux.HandleFunc("DELETE /v1/checkpoint/{id}", s.handleCheckpointDelete)
+	mux.HandleFunc("POST /v1/checkpoint/{id}/restore", s.handleCheckpointRestore)
 
 	s.server = &http.Server{
 		Addr:         fmt.Sprintf(":%d", s.port),
@@ -365,4 +380,142 @@ func (s *Server) handleRouterExplain(w http.ResponseWriter, r *http.Request) {
 	
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(decision)
+}
+
+// Checkpoint handlers
+
+type checkpointCreateRequest struct {
+	Trigger string `json:"trigger,omitempty"` // defaults to "manual"
+	Note    string `json:"note,omitempty"`
+}
+
+func (s *Server) handleCheckpointCreate(w http.ResponseWriter, r *http.Request) {
+	if s.checkpointer == nil {
+		s.errorResponse(w, http.StatusServiceUnavailable, "checkpointing not configured")
+		return
+	}
+
+	var req checkpointCreateRequest
+	if r.ContentLength > 0 {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			s.errorResponse(w, http.StatusBadRequest, "invalid request body")
+			return
+		}
+	}
+
+	trigger := checkpoint.TriggerManual
+	if req.Trigger != "" {
+		trigger = checkpoint.Trigger(req.Trigger)
+	}
+
+	cp, err := s.checkpointer.Create(trigger, req.Note)
+	if err != nil {
+		s.logger.Error("checkpoint create failed", "error", err)
+		s.errorResponse(w, http.StatusInternalServerError, "failed to create checkpoint")
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(cp)
+}
+
+func (s *Server) handleCheckpointList(w http.ResponseWriter, r *http.Request) {
+	if s.checkpointer == nil {
+		s.errorResponse(w, http.StatusServiceUnavailable, "checkpointing not configured")
+		return
+	}
+
+	limit := 20
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 {
+			limit = parsed
+		}
+	}
+
+	checkpoints, err := s.checkpointer.List(limit)
+	if err != nil {
+		s.logger.Error("checkpoint list failed", "error", err)
+		s.errorResponse(w, http.StatusInternalServerError, "failed to list checkpoints")
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"count":       len(checkpoints),
+		"checkpoints": checkpoints,
+	})
+}
+
+func (s *Server) handleCheckpointGet(w http.ResponseWriter, r *http.Request) {
+	if s.checkpointer == nil {
+		s.errorResponse(w, http.StatusServiceUnavailable, "checkpointing not configured")
+		return
+	}
+
+	idStr := r.PathValue("id")
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		s.errorResponse(w, http.StatusBadRequest, "invalid checkpoint id")
+		return
+	}
+
+	cp, err := s.checkpointer.Get(id)
+	if err != nil {
+		s.logger.Error("checkpoint get failed", "error", err, "id", idStr)
+		s.errorResponse(w, http.StatusNotFound, "checkpoint not found")
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(cp)
+}
+
+func (s *Server) handleCheckpointDelete(w http.ResponseWriter, r *http.Request) {
+	if s.checkpointer == nil {
+		s.errorResponse(w, http.StatusServiceUnavailable, "checkpointing not configured")
+		return
+	}
+
+	idStr := r.PathValue("id")
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		s.errorResponse(w, http.StatusBadRequest, "invalid checkpoint id")
+		return
+	}
+
+	if err := s.checkpointer.Delete(id); err != nil {
+		s.logger.Error("checkpoint delete failed", "error", err, "id", idStr)
+		s.errorResponse(w, http.StatusNotFound, "checkpoint not found")
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleCheckpointRestore(w http.ResponseWriter, r *http.Request) {
+	if s.checkpointer == nil {
+		s.errorResponse(w, http.StatusServiceUnavailable, "checkpointing not configured")
+		return
+	}
+
+	idStr := r.PathValue("id")
+	id, err := uuid.Parse(idStr)
+	if err != nil {
+		s.errorResponse(w, http.StatusBadRequest, "invalid checkpoint id")
+		return
+	}
+
+	if err := s.checkpointer.Restore(id); err != nil {
+		s.logger.Error("checkpoint restore failed", "error", err, "id", idStr)
+		s.errorResponse(w, http.StatusInternalServerError, "failed to restore checkpoint")
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"status":  "restored",
+		"id":      idStr,
+		"message": "checkpoint restored successfully",
+	})
 }
