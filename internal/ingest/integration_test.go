@@ -68,7 +68,7 @@ Docker recommended.
 
 	// Create ingester with mock embedder
 	mock := &mockEmbedder{}
-	ingester := NewArchitectureIngester(store, mock, "test:integration")
+	ingester := NewMarkdownIngester(store, mock, "test:integration", facts.CategoryArchitecture)
 
 	// Run ingestion
 	ctx := context.Background()
@@ -129,7 +129,7 @@ func TestArchitectureIngesterReimport(t *testing.T) {
 	}
 	defer store.Close()
 
-	ingester := NewArchitectureIngester(store, nil, "test:reimport")
+	ingester := NewMarkdownIngester(store, nil, "test:reimport", facts.CategoryArchitecture)
 	ctx := context.Background()
 
 	// First import

@@ -12,19 +12,22 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/facts"
 )
 
-// ArchitectureIngester parses ARCHITECTURE.md into facts.
-type ArchitectureIngester struct {
+// MarkdownIngester parses markdown documents into facts.
+type MarkdownIngester struct {
 	store      *facts.Store
 	embeddings facts.EmbeddingClient
 	source     string
+	category   facts.Category
 }
 
-// NewArchitectureIngester creates an ingester for architecture docs.
-func NewArchitectureIngester(store *facts.Store, embeddings facts.EmbeddingClient, source string) *ArchitectureIngester {
-	return &ArchitectureIngester{
+// NewMarkdownIngester creates a markdown document ingester.
+// Category determines how facts are categorized (e.g., CategoryArchitecture).
+func NewMarkdownIngester(store *facts.Store, embeddings facts.EmbeddingClient, source string, category facts.Category) *MarkdownIngester {
+	return &MarkdownIngester{
 		store:      store,
 		embeddings: embeddings,
 		source:     source,
+		category:   category,
 	}
 }
 
@@ -35,8 +38,8 @@ type Chunk struct {
 	Section string
 }
 
-// IngestFile reads and processes an architecture markdown file.
-func (a *ArchitectureIngester) IngestFile(ctx context.Context, path string) (int, error) {
+// IngestFile reads and processes a markdown file into facts.
+func (m *MarkdownIngester) IngestFile(ctx context.Context, path string) (int, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return 0, fmt.Errorf("open file: %w", err)
@@ -44,27 +47,27 @@ func (a *ArchitectureIngester) IngestFile(ctx context.Context, path string) (int
 	defer file.Close()
 
 	chunks := parseMarkdown(file)
-	return a.ingestChunks(ctx, chunks)
+	return m.ingestChunks(ctx, chunks)
 }
 
-// IngestString processes architecture content from a string.
-func (a *ArchitectureIngester) IngestString(ctx context.Context, content string) (int, error) {
+// IngestString processes markdown content from a string.
+func (m *MarkdownIngester) IngestString(ctx context.Context, content string) (int, error) {
 	chunks := parseMarkdown(strings.NewReader(content))
-	return a.ingestChunks(ctx, chunks)
+	return m.ingestChunks(ctx, chunks)
 }
 
-func (a *ArchitectureIngester) ingestChunks(ctx context.Context, chunks []Chunk) (int, error) {
-	// Delete existing architecture facts from this source
-	_ = a.store.DeleteBySource(a.source)
+func (m *MarkdownIngester) ingestChunks(ctx context.Context, chunks []Chunk) (int, error) {
+	// Delete existing facts from this source (enables clean re-imports)
+	_ = m.store.DeleteBySource(m.source)
 
 	count := 0
 	for _, chunk := range chunks {
 		// Store the fact
-		fact, err := a.store.Set(
-			facts.CategoryArchitecture,
+		fact, err := m.store.Set(
+			m.category,
 			chunk.Key,
 			chunk.Content,
-			a.source,
+			m.source,
 			1.0,
 		)
 		if err != nil {
@@ -72,10 +75,10 @@ func (a *ArchitectureIngester) ingestChunks(ctx context.Context, chunks []Chunk)
 		}
 
 		// Generate and store embedding
-		if a.embeddings != nil {
-			embText := fmt.Sprintf("architecture: %s - %s", chunk.Key, chunk.Content)
-			if emb, err := a.embeddings.Generate(ctx, embText); err == nil {
-				_ = a.store.SetEmbedding(fact.ID, emb)
+		if m.embeddings != nil {
+			embText := fmt.Sprintf("%s: %s - %s", m.category, chunk.Key, chunk.Content)
+			if emb, err := m.embeddings.Generate(ctx, embText); err == nil {
+				_ = m.store.SetEmbedding(fact.ID, emb)
 			}
 		}
 

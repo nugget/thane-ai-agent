@@ -71,7 +71,7 @@ func main() {
 	fmt.Println("Commands:")
 	fmt.Println("  serve    Start the API server")
 	fmt.Println("  ask      Ask a single question (for testing)")
-	fmt.Println("  ingest   Import architecture docs into fact store")
+	fmt.Println("  ingest   Import markdown docs into fact store")
 	fmt.Println("  version  Show version")
 	fmt.Println()
 	fmt.Println("Flags:")
@@ -137,7 +137,7 @@ func runAsk(logger *slog.Logger, configPath string, args []string) {
 }
 
 func runIngest(logger *slog.Logger, configPath string, filePath string) {
-	logger.Info("ingesting architecture document", "file", filePath)
+	logger.Info("ingesting markdown document", "file", filePath)
 
 	// Load config
 	var cfg *config.Config
@@ -191,9 +191,9 @@ func runIngest(logger *slog.Logger, configPath string, filePath string) {
 		logger.Info("embeddings enabled", "model", embModel)
 	}
 
-	// Create ingester
+	// Create ingester (defaults to architecture category for docs)
 	source := "file:" + filePath
-	ingester := ingest.NewArchitectureIngester(factStore, embClient, source)
+	ingester := ingest.NewMarkdownIngester(factStore, embClient, source, facts.CategoryArchitecture)
 
 	// Run ingestion
 	ctx := context.Background()
