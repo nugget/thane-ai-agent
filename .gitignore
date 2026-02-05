@@ -1,0 +1,41 @@
+# Binaries (built output in root)
+/thane
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test binary
+*.test
+
+# Output of go coverage
+*.out
+
+# Go workspace
+go.work
+go.work.sum
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local config (may contain secrets)
+thane.yaml
+thane.local.yaml
+*.local.yaml
+
+# Memory database
+*.db
+*.sqlite
+memory/
+
+# Logs
+*.log
+logs/
