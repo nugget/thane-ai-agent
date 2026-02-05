@@ -148,7 +148,11 @@ func (s *LLMSummarizer) Summarize(ctx context.Context, messages []Message) (stri
 	// Build conversation text
 	var sb strings.Builder
 	for _, m := range messages {
-		sb.WriteString(fmt.Sprintf("%s: %s\n\n", strings.Title(m.Role), m.Content))
+		role := m.Role
+		if len(role) > 0 {
+			role = strings.ToUpper(role[:1]) + role[1:]
+		}
+		sb.WriteString(fmt.Sprintf("%s: %s\n\n", role, m.Content))
 	}
 
 	prompt := fmt.Sprintf(`Summarize this conversation concisely. Focus on:
