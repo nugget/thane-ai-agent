@@ -3,7 +3,9 @@ package facts
 
 import (
 	"database/sql"
+	"encoding/binary"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/google/uuid"
@@ -13,11 +15,12 @@ import (
 type Category string
 
 const (
-	CategoryUser       Category = "user"       // User preferences and info
-	CategoryHome       Category = "home"       // Home layout, room names
-	CategoryDevice     Category = "device"     // Device mappings and traits
-	CategoryRoutine    Category = "routine"    // Observed patterns
-	CategoryPreference Category = "preference" // How the user likes things
+	CategoryUser         Category = "user"         // User preferences and info
+	CategoryHome         Category = "home"         // Home layout, room names
+	CategoryDevice       Category = "device"       // Device mappings and traits
+	CategoryRoutine      Category = "routine"      // Observed patterns
+	CategoryPreference   Category = "preference"   // How the user likes things
+	CategoryArchitecture Category = "architecture" // System design knowledge
 )
 
 // Fact represents a piece of long-term memory.
@@ -28,6 +31,7 @@ type Fact struct {
 	Value      string    `json:"value"`                // The actual information
 	Source     string    `json:"source,omitempty"`     // Where we learned this
 	Confidence float64   `json:"confidence,omitempty"` // 0-1, how certain
+	Embedding  []float32 `json:"embedding,omitempty"`  // Vector embedding for semantic search
 	CreatedAt  time.Time `json:"created_at"`
 	UpdatedAt  time.Time `json:"updated_at"`
 	AccessedAt time.Time `json:"accessed_at"` // For LRU-style relevance
@@ -72,6 +76,7 @@ func (s *Store) migrate() error {
 			value TEXT NOT NULL,
 			source TEXT,
 			confidence REAL DEFAULT 1.0,
+			embedding BLOB,
 			created_at TEXT NOT NULL,
 			updated_at TEXT NOT NULL,
 			accessed_at TEXT NOT NULL,
@@ -82,7 +87,14 @@ func (s *Store) migrate() error {
 		CREATE INDEX IF NOT EXISTS idx_facts_key ON facts(key);
 		CREATE INDEX IF NOT EXISTS idx_facts_accessed ON facts(accessed_at DESC);
 	`)
-	return err
+	if err != nil {
+		return err
+	}
+
+	// Add embedding column if it doesn't exist (migration for existing DBs)
+	_, _ = s.db.Exec(`ALTER TABLE facts ADD COLUMN embedding BLOB`)
+
+	return nil
 }
 
 // Close closes the database connection.
@@ -318,4 +330,169 @@ func (s *Store) scanFactRow(rows *sql.Rows) (*Fact, error) {
 	f.AccessedAt, _ = time.Parse(time.RFC3339, accessedStr)
 
 	return &f, nil
+}
+
+// SetEmbedding updates a fact's embedding vector.
+func (s *Store) SetEmbedding(id uuid.UUID, embedding []float32) error {
+	blob := encodeEmbedding(embedding)
+	_, err := s.db.Exec(`UPDATE facts SET embedding = ? WHERE id = ?`, blob, id.String())
+	return err
+}
+
+// GetAllWithEmbeddings returns all facts that have embeddings.
+func (s *Store) GetAllWithEmbeddings() ([]*Fact, error) {
+	rows, err := s.db.Query(`
+		SELECT id, category, key, value, source, confidence, embedding, created_at, updated_at, accessed_at
+		FROM facts WHERE embedding IS NOT NULL
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var facts []*Fact
+	for rows.Next() {
+		f, err := s.scanFactWithEmbedding(rows)
+		if err != nil {
+			continue
+		}
+		facts = append(facts, f)
+	}
+	return facts, nil
+}
+
+// SemanticSearch finds facts similar to the query embedding.
+func (s *Store) SemanticSearch(queryEmbedding []float32, limit int) ([]*Fact, []float32, error) {
+	facts, err := s.GetAllWithEmbeddings()
+	if err != nil {
+		return nil, nil, err
+	}
+
+	if len(facts) == 0 {
+		return nil, nil, nil
+	}
+
+	// Calculate similarities
+	type scored struct {
+		fact  *Fact
+		score float32
+	}
+	scores := make([]scored, 0, len(facts))
+	for _, f := range facts {
+		if len(f.Embedding) > 0 {
+			sim := cosineSimilarity(queryEmbedding, f.Embedding)
+			scores = append(scores, scored{fact: f, score: sim})
+		}
+	}
+
+	// Sort by score descending (simple selection sort)
+	for i := 0; i < limit && i < len(scores); i++ {
+		maxIdx := i
+		for j := i + 1; j < len(scores); j++ {
+			if scores[j].score > scores[maxIdx].score {
+				maxIdx = j
+			}
+		}
+		scores[i], scores[maxIdx] = scores[maxIdx], scores[i]
+	}
+
+	// Return top k
+	resultFacts := make([]*Fact, 0, limit)
+	resultScores := make([]float32, 0, limit)
+	for i := 0; i < limit && i < len(scores); i++ {
+		resultFacts = append(resultFacts, scores[i].fact)
+		resultScores = append(resultScores, scores[i].score)
+	}
+
+	return resultFacts, resultScores, nil
+}
+
+// GetFactsWithoutEmbeddings returns facts that need embeddings generated.
+func (s *Store) GetFactsWithoutEmbeddings() ([]*Fact, error) {
+	rows, err := s.db.Query(`
+		SELECT id, category, key, value, source, confidence, created_at, updated_at, accessed_at
+		FROM facts WHERE embedding IS NULL
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var facts []*Fact
+	for rows.Next() {
+		f, err := s.scanFactRow(rows)
+		if err != nil {
+			continue
+		}
+		facts = append(facts, f)
+	}
+	return facts, nil
+}
+
+func (s *Store) scanFactWithEmbedding(rows *sql.Rows) (*Fact, error) {
+	var f Fact
+	var idStr, catStr, createdStr, updatedStr, accessedStr string
+	var source sql.NullString
+	var embeddingBlob []byte
+
+	err := rows.Scan(&idStr, &catStr, &f.Key, &f.Value, &source, &f.Confidence, &embeddingBlob, &createdStr, &updatedStr, &accessedStr)
+	if err != nil {
+		return nil, err
+	}
+
+	f.ID, _ = uuid.Parse(idStr)
+	f.Category = Category(catStr)
+	if source.Valid {
+		f.Source = source.String
+	}
+	f.Embedding = decodeEmbedding(embeddingBlob)
+	f.CreatedAt, _ = time.Parse(time.RFC3339, createdStr)
+	f.UpdatedAt, _ = time.Parse(time.RFC3339, updatedStr)
+	f.AccessedAt, _ = time.Parse(time.RFC3339, accessedStr)
+
+	return &f, nil
+}
+
+// encodeEmbedding converts float32 slice to bytes for storage.
+func encodeEmbedding(embedding []float32) []byte {
+	if len(embedding) == 0 {
+		return nil
+	}
+	buf := make([]byte, len(embedding)*4)
+	for i, v := range embedding {
+		binary.LittleEndian.PutUint32(buf[i*4:], math.Float32bits(v))
+	}
+	return buf
+}
+
+// decodeEmbedding converts bytes back to float32 slice.
+func decodeEmbedding(data []byte) []float32 {
+	if len(data) == 0 {
+		return nil
+	}
+	result := make([]float32, len(data)/4)
+	for i := range result {
+		result[i] = math.Float32frombits(binary.LittleEndian.Uint32(data[i*4:]))
+	}
+	return result
+}
+
+// cosineSimilarity computes similarity between two vectors.
+func cosineSimilarity(a, b []float32) float32 {
+	if len(a) != len(b) || len(a) == 0 {
+		return 0
+	}
+
+	var dotProduct, normA, normB float32
+	for i := range a {
+		dotProduct += a[i] * b[i]
+		normA += a[i] * a[i]
+		normB += b[i] * b[i]
+	}
+
+	if normA == 0 || normB == 0 {
+		return 0
+	}
+
+	return dotProduct / (float32(math.Sqrt(float64(normA))) * float32(math.Sqrt(float64(normB))))
 }
