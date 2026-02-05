@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/agent"
 	"github.com/nugget/thane-ai-agent/internal/api"
+	"github.com/nugget/thane-ai-agent/internal/checkpoint"
 	"github.com/nugget/thane-ai-agent/internal/config"
 	"github.com/nugget/thane-ai-agent/internal/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/llm"
@@ -19,6 +21,8 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/router"
 	"github.com/nugget/thane-ai-agent/internal/scheduler"
 	"github.com/nugget/thane-ai-agent/internal/talents"
+
+	_ "github.com/mattn/go-sqlite3"
 )
 
 func main() {
@@ -290,6 +294,65 @@ func runServe(logger *slog.Logger, configPath string, portOverride int) {
 	
 	loop := agent.NewLoop(logger, mem, compactor, rtr, ha, sched, ollamaURL, cfg.Models.Default, talentContent)
 	server := api.NewServer(cfg.Listen.Port, loop, rtr, logger)
+	
+	// Create checkpointer
+	checkpointDB, err := sql.Open("sqlite3", dataDir+"/checkpoints.db")
+	if err != nil {
+		logger.Error("failed to open checkpoint database", "error", err)
+		os.Exit(1)
+	}
+	defer checkpointDB.Close()
+	
+	checkpointCfg := checkpoint.Config{
+		PeriodicMessages: 50, // Checkpoint every 50 messages
+	}
+	checkpointer, err := checkpoint.NewCheckpointer(checkpointDB, checkpointCfg, logger)
+	if err != nil {
+		logger.Error("failed to create checkpointer", "error", err)
+		os.Exit(1)
+	}
+	
+	// Wire up providers for checkpointing
+	convProvider := checkpoint.ConversationProviderFunc(func() ([]checkpoint.Conversation, error) {
+		convs := mem.GetAllConversations()
+		result := make([]checkpoint.Conversation, len(convs))
+		for i, c := range convs {
+			msgs := make([]checkpoint.MemoryMessage, len(c.Messages))
+			for j, m := range c.Messages {
+				msgs[j] = checkpoint.MemoryMessage{
+					Role:      m.Role,
+					Content:   m.Content,
+					Timestamp: m.Timestamp,
+				}
+			}
+			result[i] = checkpoint.ConvertMemoryConversation(c.ID, msgs, c.CreatedAt, c.UpdatedAt)
+		}
+		return result, nil
+	})
+	
+	taskProvider := checkpoint.TaskProviderFunc(func() ([]checkpoint.Task, error) {
+		tasks, err := sched.GetAllTasks()
+		if err != nil {
+			return nil, err
+		}
+		result := make([]checkpoint.Task, len(tasks))
+		for i, t := range tasks {
+			result[i] = checkpoint.Task{
+				ID:          checkpoint.ParseUUID(t.ID),
+				Name:        t.Name,
+				Description: "", // Not in scheduler type yet
+				Schedule:    t.Schedule.Cron,
+				Action:      string(t.Payload.Kind),
+				Enabled:     t.Enabled,
+				CreatedAt:   t.CreatedAt,
+			}
+		}
+		return result, nil
+	})
+	
+	checkpointer.SetProviders(convProvider, nil, taskProvider)
+	server.SetCheckpointer(checkpointer)
+	logger.Info("checkpointing enabled", "periodic_messages", checkpointCfg.PeriodicMessages)
 
 	// Setup graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
@@ -301,6 +364,12 @@ func runServe(logger *slog.Logger, configPath string, portOverride int) {
 	go func() {
 		<-sigCh
 		logger.Info("shutdown signal received")
+		
+		// Create shutdown checkpoint
+		if _, err := checkpointer.CreateShutdown(); err != nil {
+			logger.Error("failed to create shutdown checkpoint", "error", err)
+		}
+		
 		cancel()
 		server.Shutdown(context.Background())
 	}()

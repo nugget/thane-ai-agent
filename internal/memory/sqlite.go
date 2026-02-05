@@ -237,6 +237,35 @@ func (s *SQLiteStore) Stats() map[string]any {
 	}
 }
 
+// GetAllConversations returns all conversations for checkpointing.
+func (s *SQLiteStore) GetAllConversations() []*Conversation {
+	rows, err := s.db.Query(`
+		SELECT id, created_at, updated_at FROM conversations ORDER BY updated_at DESC
+	`)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+
+	var convs []*Conversation
+	for rows.Next() {
+		var id, createdAt, updatedAt string
+		if err := rows.Scan(&id, &createdAt, &updatedAt); err != nil {
+			continue
+		}
+
+		conv := &Conversation{
+			ID:       id,
+			Messages: s.GetMessages(id),
+		}
+		conv.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
+		conv.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt)
+
+		convs = append(convs, conv)
+	}
+	return convs
+}
+
 // GetTokenCount returns the total token count for a conversation.
 func (s *SQLiteStore) GetTokenCount(conversationID string) int {
 	var count int

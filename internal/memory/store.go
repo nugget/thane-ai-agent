@@ -191,6 +191,29 @@ func (s *Store) Stats() map[string]any {
 	}
 }
 
+// GetAllConversations returns all conversations for checkpointing.
+func (s *Store) GetAllConversations() []*Conversation {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	
+	convs := make([]*Conversation, 0, len(s.conversations))
+	for _, conv := range s.conversations {
+		convs = append(convs, conv.copy())
+	}
+	return convs
+}
+
+// RestoreConversations replaces all conversations from a checkpoint.
+func (s *Store) RestoreConversations(convs []*Conversation) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	
+	s.conversations = make(map[string]*Conversation, len(convs))
+	for _, conv := range convs {
+		s.conversations[conv.ID] = conv.copy()
+	}
+}
+
 func (c *Conversation) copy() *Conversation {
 	msgs := make([]Message, len(c.Messages))
 	copy(msgs, c.Messages)

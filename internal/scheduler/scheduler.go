@@ -146,6 +146,11 @@ func (s *Scheduler) ListTasks(enabledOnly bool) ([]*Task, error) {
 	return s.store.ListTasks(enabledOnly)
 }
 
+// GetAllTasks returns all tasks for checkpointing.
+func (s *Scheduler) GetAllTasks() ([]*Task, error) {
+	return s.store.ListTasks(false) // Include disabled tasks
+}
+
 // GetTaskExecutions returns execution history for a task.
 func (s *Scheduler) GetTaskExecutions(taskID string, limit int) ([]*Execution, error) {
 	return s.store.ListExecutions(taskID, limit)
