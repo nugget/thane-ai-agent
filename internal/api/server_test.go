@@ -66,7 +66,7 @@ func TestSimpleChatRequest_DefaultConversationID(t *testing.T) {
 
 func TestSimpleChatResponse_JSON(t *testing.T) {
 	resp := SimpleChatResponse{
-		Response:       "The kitchen is 72°F.",
+		Response:       "The kitchen is 22°C.",
 		Model:          "qwen2.5:72b",
 		ConversationID: "kitchen-conv",
 		ToolCalls:      []string{"get_state"},
