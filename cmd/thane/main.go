@@ -17,6 +17,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/llm"
 	"github.com/nugget/thane-ai-agent/internal/memory"
 	"github.com/nugget/thane-ai-agent/internal/router"
+	"github.com/nugget/thane-ai-agent/internal/scheduler"
 	"github.com/nugget/thane-ai-agent/internal/talents"
 )
 
@@ -105,8 +106,8 @@ func runAsk(logger *slog.Logger, configPath string, args []string) {
 	// Create minimal memory store (in-memory for ask)
 	mem := memory.NewStore(100)
 	
-	// Create agent loop (no router for CLI mode - uses default model)
-	loop := agent.NewLoop(logger, mem, nil, nil, ha, ollamaURL, cfg.Models.Default, talentContent)
+	// Create agent loop (no router/scheduler for CLI mode - uses default model)
+	loop := agent.NewLoop(logger, mem, nil, nil, ha, nil, ollamaURL, cfg.Models.Default, talentContent)
 	
 	// Process the question
 	ctx := context.Background()
@@ -260,7 +261,34 @@ func runServe(logger *slog.Logger, configPath string, portOverride int) {
 		"local_first", routerCfg.LocalFirst,
 	)
 	
-	loop := agent.NewLoop(logger, mem, compactor, rtr, ha, ollamaURL, cfg.Models.Default, talentContent)
+	// Create scheduler
+	schedStore, err := scheduler.NewStore(dataDir + "/scheduler.db")
+	if err != nil {
+		logger.Error("failed to open scheduler database", "error", err)
+		os.Exit(1)
+	}
+	defer schedStore.Close()
+	
+	// Scheduler execution callback - will be wired to agent loop
+	executeTask := func(ctx context.Context, task *scheduler.Task, exec *scheduler.Execution) error {
+		// For wake payloads, we'd inject a message into the agent
+		// For now, just log it
+		logger.Info("task executed",
+			"task_id", task.ID,
+			"task_name", task.Name,
+			"payload_kind", task.Payload.Kind,
+		)
+		return nil
+	}
+	
+	sched := scheduler.New(logger, schedStore, executeTask)
+	if err := sched.Start(context.Background()); err != nil {
+		logger.Error("failed to start scheduler", "error", err)
+		os.Exit(1)
+	}
+	defer sched.Stop()
+	
+	loop := agent.NewLoop(logger, mem, compactor, rtr, ha, sched, ollamaURL, cfg.Models.Default, talentContent)
 	server := api.NewServer(cfg.Listen.Port, loop, rtr, logger)
 
 	// Setup graceful shutdown

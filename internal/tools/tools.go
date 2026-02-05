@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/homeassistant"
+	"github.com/nugget/thane-ai-agent/internal/scheduler"
 )
 
 // Tool represents a callable tool.
@@ -20,15 +22,17 @@ type Tool struct {
 
 // Registry holds available tools.
 type Registry struct {
-	tools map[string]*Tool
-	ha    *homeassistant.Client
+	tools     map[string]*Tool
+	ha        *homeassistant.Client
+	scheduler *scheduler.Scheduler
 }
 
 // NewRegistry creates a tool registry with HA integration.
-func NewRegistry(ha *homeassistant.Client) *Registry {
+func NewRegistry(ha *homeassistant.Client, sched *scheduler.Scheduler) *Registry {
 	r := &Registry{
-		tools: make(map[string]*Tool),
-		ha:    ha,
+		tools:     make(map[string]*Tool),
+		ha:        ha,
+		scheduler: sched,
 	}
 	r.registerBuiltins()
 	return r
@@ -100,6 +104,68 @@ func (r *Registry) registerBuiltins() {
 			"required": []string{"domain", "service", "entity_id"},
 		},
 		Handler: r.handleCallService,
+	})
+
+	// Schedule task
+	r.Register(&Tool{
+		Name:        "schedule_task",
+		Description: "Schedule a future action. Use for reminders, delayed commands, or recurring tasks.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"name": map[string]any{
+					"type":        "string",
+					"description": "Human-readable name for the task",
+				},
+				"when": map[string]any{
+					"type":        "string",
+					"description": "When to run: ISO timestamp, duration (e.g., '30m', '2h'), or 'in 30 minutes'",
+				},
+				"action": map[string]any{
+					"type":        "string",
+					"description": "What to do when the task fires (message to process)",
+				},
+				"repeat": map[string]any{
+					"type":        "string",
+					"description": "Optional: repeat interval (e.g., '1h', '24h', 'daily')",
+				},
+			},
+			"required": []string{"name", "when", "action"},
+		},
+		Handler: r.handleScheduleTask,
+	})
+
+	// List tasks
+	r.Register(&Tool{
+		Name:        "list_tasks",
+		Description: "List scheduled tasks.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"enabled_only": map[string]any{
+					"type":        "boolean",
+					"description": "Only show enabled tasks (default: true)",
+				},
+			},
+		},
+		Handler: r.handleListTasks,
+	})
+
+	// Cancel task
+	r.Register(&Tool{
+		Name:        "cancel_task",
+		Description: "Cancel a scheduled task.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"task_id": map[string]any{
+					"type":        "string",
+					"description": "The task ID to cancel",
+				},
+			},
+			"required": []string{"task_id"},
+		},
+		Handler: r.handleCancelTask,
 	})
 }
 
@@ -254,4 +320,232 @@ func (r *Registry) handleCallService(ctx context.Context, args map[string]any) (
 	}
 
 	return fmt.Sprintf("Successfully called %s.%s on %s", domain, service, entityID), nil
+}
+
+func (r *Registry) handleScheduleTask(ctx context.Context, args map[string]any) (string, error) {
+	if r.scheduler == nil {
+		return "", fmt.Errorf("scheduler not configured")
+	}
+
+	name, _ := args["name"].(string)
+	when, _ := args["when"].(string)
+	action, _ := args["action"].(string)
+	repeat, _ := args["repeat"].(string)
+
+	if name == "" || when == "" || action == "" {
+		return "", fmt.Errorf("name, when, and action are required")
+	}
+
+	// Parse the "when" parameter
+	schedule, err := parseWhen(when, repeat)
+	if err != nil {
+		return "", fmt.Errorf("invalid schedule: %w", err)
+	}
+
+	task := &scheduler.Task{
+		Name:     name,
+		Schedule: schedule,
+		Payload: scheduler.Payload{
+			Kind: scheduler.PayloadWake,
+			Data: map[string]any{"message": action},
+		},
+		Enabled:   true,
+		CreatedBy: "agent",
+	}
+
+	if err := r.scheduler.CreateTask(task); err != nil {
+		return "", err
+	}
+
+	nextRun, _ := task.NextRun(time.Now())
+	return fmt.Sprintf("Task '%s' scheduled (ID: %s). Next run: %s", name, task.ID, nextRun.Format(time.RFC3339)), nil
+}
+
+func (r *Registry) handleListTasks(ctx context.Context, args map[string]any) (string, error) {
+	if r.scheduler == nil {
+		return "", fmt.Errorf("scheduler not configured")
+	}
+
+	enabledOnly := true
+	if e, ok := args["enabled_only"].(bool); ok {
+		enabledOnly = e
+	}
+
+	tasks, err := r.scheduler.ListTasks(enabledOnly)
+	if err != nil {
+		return "", err
+	}
+
+	if len(tasks) == 0 {
+		return "No scheduled tasks.", nil
+	}
+
+	var result strings.Builder
+	result.WriteString(fmt.Sprintf("Found %d task(s):\n", len(tasks)))
+	
+	for _, t := range tasks {
+		next, hasNext := t.NextRun(time.Now())
+		status := "enabled"
+		if !t.Enabled {
+			status = "disabled"
+		}
+		
+		result.WriteString(fmt.Sprintf("- %s (%s): %s", t.Name, t.ID[:8], status))
+		if hasNext {
+			result.WriteString(fmt.Sprintf(", next: %s", next.Format("2006-01-02 15:04")))
+		}
+		result.WriteString("\n")
+	}
+
+	return result.String(), nil
+}
+
+func (r *Registry) handleCancelTask(ctx context.Context, args map[string]any) (string, error) {
+	if r.scheduler == nil {
+		return "", fmt.Errorf("scheduler not configured")
+	}
+
+	taskID, _ := args["task_id"].(string)
+	if taskID == "" {
+		return "", fmt.Errorf("task_id is required")
+	}
+
+	// Try to find task by full ID or prefix
+	tasks, _ := r.scheduler.ListTasks(false)
+	var found *scheduler.Task
+	for _, t := range tasks {
+		if t.ID == taskID || strings.HasPrefix(t.ID, taskID) {
+			found = t
+			break
+		}
+	}
+
+	if found == nil {
+		return "", fmt.Errorf("task not found: %s", taskID)
+	}
+
+	if err := r.scheduler.DeleteTask(found.ID); err != nil {
+		return "", err
+	}
+
+	return fmt.Sprintf("Task '%s' cancelled.", found.Name), nil
+}
+
+// parseWhen converts a human-friendly time specification to a Schedule.
+func parseWhen(when, repeat string) (scheduler.Schedule, error) {
+	now := time.Now()
+
+	// Try parsing as duration first (e.g., "30m", "2h")
+	if dur, err := time.ParseDuration(when); err == nil {
+		if repeat != "" {
+			// Repeating interval
+			repeatDur, err := parseDuration(repeat)
+			if err != nil {
+				return scheduler.Schedule{}, fmt.Errorf("invalid repeat: %w", err)
+			}
+			return scheduler.Schedule{
+				Kind:  scheduler.ScheduleEvery,
+				Every: &scheduler.Duration{Duration: repeatDur},
+			}, nil
+		}
+		// One-shot after duration
+		at := now.Add(dur)
+		return scheduler.Schedule{
+			Kind: scheduler.ScheduleAt,
+			At:   &at,
+		}, nil
+	}
+
+	// Try parsing "in X minutes/hours" format
+	if strings.HasPrefix(strings.ToLower(when), "in ") {
+		durStr := strings.TrimPrefix(strings.ToLower(when), "in ")
+		dur, err := parseHumanDuration(durStr)
+		if err == nil {
+			at := now.Add(dur)
+			return scheduler.Schedule{
+				Kind: scheduler.ScheduleAt,
+				At:   &at,
+			}, nil
+		}
+	}
+
+	// Try parsing as RFC3339 timestamp
+	if t, err := time.Parse(time.RFC3339, when); err == nil {
+		return scheduler.Schedule{
+			Kind: scheduler.ScheduleAt,
+			At:   &t,
+		}, nil
+	}
+
+	// Try common date formats
+	formats := []string{
+		"2006-01-02 15:04",
+		"2006-01-02T15:04",
+		"15:04",
+		"3:04pm",
+		"3:04 pm",
+	}
+	for _, format := range formats {
+		if t, err := time.Parse(format, when); err == nil {
+			// For time-only formats, use today's date
+			if format == "15:04" || format == "3:04pm" || format == "3:04 pm" {
+				t = time.Date(now.Year(), now.Month(), now.Day(), t.Hour(), t.Minute(), 0, 0, now.Location())
+				// If time has passed today, schedule for tomorrow
+				if t.Before(now) {
+					t = t.Add(24 * time.Hour)
+				}
+			}
+			return scheduler.Schedule{
+				Kind: scheduler.ScheduleAt,
+				At:   &t,
+			}, nil
+		}
+	}
+
+	return scheduler.Schedule{}, fmt.Errorf("could not parse time: %s", when)
+}
+
+func parseDuration(s string) (time.Duration, error) {
+	s = strings.ToLower(strings.TrimSpace(s))
+	
+	// Handle "daily", "hourly" etc
+	switch s {
+	case "daily":
+		return 24 * time.Hour, nil
+	case "hourly":
+		return time.Hour, nil
+	case "weekly":
+		return 7 * 24 * time.Hour, nil
+	}
+
+	return time.ParseDuration(s)
+}
+
+func parseHumanDuration(s string) (time.Duration, error) {
+	s = strings.TrimSpace(s)
+	parts := strings.Fields(s)
+	
+	if len(parts) < 2 {
+		return 0, fmt.Errorf("expected '<number> <unit>'")
+	}
+
+	var num int
+	_, err := fmt.Sscanf(parts[0], "%d", &num)
+	if err != nil {
+		return 0, err
+	}
+
+	unit := strings.ToLower(parts[1])
+	switch {
+	case strings.HasPrefix(unit, "second"):
+		return time.Duration(num) * time.Second, nil
+	case strings.HasPrefix(unit, "minute"):
+		return time.Duration(num) * time.Minute, nil
+	case strings.HasPrefix(unit, "hour"):
+		return time.Duration(num) * time.Hour, nil
+	case strings.HasPrefix(unit, "day"):
+		return time.Duration(num) * 24 * time.Hour, nil
+	default:
+		return 0, fmt.Errorf("unknown unit: %s", unit)
+	}
 }

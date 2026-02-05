@@ -11,6 +11,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/llm"
 	"github.com/nugget/thane-ai-agent/internal/memory"
 	"github.com/nugget/thane-ai-agent/internal/router"
+	"github.com/nugget/thane-ai-agent/internal/scheduler"
 	"github.com/nugget/thane-ai-agent/internal/tools"
 )
 
@@ -61,14 +62,14 @@ type Loop struct {
 }
 
 // NewLoop creates a new agent loop.
-func NewLoop(logger *slog.Logger, mem MemoryStore, compactor Compactor, rtr *router.Router, ha *homeassistant.Client, ollamaURL, defaultModel, talents string) *Loop {
+func NewLoop(logger *slog.Logger, mem MemoryStore, compactor Compactor, rtr *router.Router, ha *homeassistant.Client, sched *scheduler.Scheduler, ollamaURL, defaultModel, talents string) *Loop {
 	return &Loop{
 		logger:    logger,
 		memory:    mem,
 		compactor: compactor,
 		router:    rtr,
 		llm:       llm.NewOllamaClient(ollamaURL),
-		tools:     tools.NewRegistry(ha),
+		tools:     tools.NewRegistry(ha, sched),
 		model:     defaultModel,
 		talents:   talents,
 	}
