@@ -6,30 +6,31 @@ import (
 )
 
 func TestParseMarkdown(t *testing.T) {
-	content := `# Main Title
+	content := `# Houseplant Care Guide
 
-Some intro text.
+A reference for common indoor plants and their needs.
 
-## Section One
+## Watering
 
-Content for section one.
-More content here.
+Most houseplants prefer soil that dries slightly between waterings.
+Overwatering is the most common cause of plant death.
 
-### Subsection A
+### Succulents
 
-Details about subsection A.
+Water succulents every 2-3 weeks. They store water in their leaves.
 
-## Section Two
+## Light Requirements
 
-Content for section two.
+Different plants have different light needs based on their natural habitat.
 
-### Subsection B
+### Low Light Plants
 
-Details about B.
+Pothos and snake plants thrive in low light conditions.
+They can survive in rooms with no windows.
 
-### Subsection C
+### Bright Indirect Light
 
-Details about C.
+Monstera and fiddle leaf figs prefer bright indirect light.
 `
 
 	chunks := parseMarkdown(strings.NewReader(content))
@@ -38,12 +39,12 @@ Details about C.
 		key     string
 		hasText string
 	}{
-		{"main-title", "intro text"},
-		{"main-title/section-one", "section one"},
-		{"main-title/section-one/subsection-a", "subsection A"},
-		{"main-title/section-two", "section two"},
-		{"main-title/section-two/subsection-b", "Details about B"},
-		{"main-title/section-two/subsection-c", "Details about C"},
+		{"houseplant-care-guide", "indoor plants"},
+		{"houseplant-care-guide/watering", "dries slightly"},
+		{"houseplant-care-guide/watering/succulents", "2-3 weeks"},
+		{"houseplant-care-guide/light-requirements", "natural habitat"},
+		{"houseplant-care-guide/light-requirements/low-light-plants", "Pothos"},
+		{"houseplant-care-guide/light-requirements/bright-indirect-light", "Monstera"},
 	}
 
 	if len(chunks) != len(expected) {
@@ -61,7 +62,20 @@ Details about C.
 }
 
 func TestParseMarkdownWithCodeBlocks(t *testing.T) {
-	content := "## Config Example\n\nHere's how to configure:\n\n```yaml\nkey: value\nanother: thing\n```\n\nMore text after code.\n"
+	content := `## Watering Schedule
+
+Here's a simple watering schedule for common plants:
+
+` + "```" + `
+Plant           | Frequency
+----------------|----------
+Snake Plant     | Every 3 weeks
+Pothos          | Weekly
+Succulent       | Every 2 weeks
+` + "```" + `
+
+Adjust based on humidity and season.
+`
 
 	chunks := parseMarkdown(strings.NewReader(content))
 
@@ -69,12 +83,12 @@ func TestParseMarkdownWithCodeBlocks(t *testing.T) {
 		t.Fatalf("expected 1 chunk, got %d", len(chunks))
 	}
 
-	// Code block should be preserved
-	if !strings.Contains(chunks[0].Content, "```yaml") {
-		t.Error("code block opening not preserved")
-	}
-	if !strings.Contains(chunks[0].Content, "key: value") {
+	// Code block (table) should be preserved
+	if !strings.Contains(chunks[0].Content, "Snake Plant") {
 		t.Error("code block content not preserved")
+	}
+	if !strings.Contains(chunks[0].Content, "Adjust based on") {
+		t.Error("text after code block not preserved")
 	}
 }
 

@@ -36,23 +36,25 @@ func TestArchitectureIngesterIntegration(t *testing.T) {
 	}
 	defer os.Remove(tmpMD.Name())
 
-	mdContent := `# Test Architecture
+	mdContent := `# Coffee Brewing Methods
 
-Introduction to the system.
+A guide to popular ways of brewing coffee at home.
 
-## Components
+## Pour Over
 
-### Database
+Pour over produces a clean, bright cup by slowly dripping water through grounds.
 
-SQLite for storage.
+### Equipment Needed
 
-### API
+You'll need a dripper, paper filters, a gooseneck kettle, and a scale.
 
-REST endpoints.
+## French Press
 
-## Deployment
+French press creates a full-bodied cup with more oils and sediment.
 
-Docker recommended.
+### Steep Time
+
+Steep for 4 minutes, then press slowly to avoid agitation.
 `
 	if _, err := tmpMD.WriteString(mdContent); err != nil {
 		t.Fatal(err)
@@ -77,15 +79,14 @@ Docker recommended.
 		t.Fatalf("IngestFile failed: %v", err)
 	}
 
-	// Verify counts (4 chunks: intro, database, api, deployment)
-	// Note: "Components" header has no content before its subheaders
-	if count != 4 {
-		t.Errorf("expected 4 facts, got %d", count)
+	// Verify counts (5 chunks: intro, pour-over, equipment, french-press, steep-time)
+	if count != 5 {
+		t.Errorf("expected 5 facts, got %d", count)
 	}
 
 	// Verify embeddings were generated
-	if mock.calls != 4 {
-		t.Errorf("expected 4 embedding calls, got %d", mock.calls)
+	if mock.calls != 5 {
+		t.Errorf("expected 5 embedding calls, got %d", mock.calls)
 	}
 
 	// Verify facts can be retrieved
@@ -93,8 +94,8 @@ Docker recommended.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(allFacts) != 4 {
-		t.Errorf("expected 4 facts with embeddings, got %d", len(allFacts))
+	if len(allFacts) != 5 {
+		t.Errorf("expected 5 facts with embeddings, got %d", len(allFacts))
 	}
 
 	// Verify semantic search works
@@ -133,14 +134,14 @@ func TestArchitectureIngesterReimport(t *testing.T) {
 	ctx := context.Background()
 
 	// First import
-	content1 := "# Doc\n\nVersion 1 content.\n"
+	content1 := "# Tea Varieties\n\nBlack tea is fully oxidized and has a bold flavor.\n"
 	count1, _ := ingester.IngestString(ctx, content1)
 	if count1 != 1 {
 		t.Errorf("first import: expected 1 fact, got %d", count1)
 	}
 
-	// Second import (should replace)
-	content2 := "# Doc\n\nVersion 2 content.\n\n## New Section\n\nMore stuff.\n"
+	// Second import (should replace, adding a section)
+	content2 := "# Tea Varieties\n\nTea comes from the Camellia sinensis plant.\n\n## Green Tea\n\nGreen tea is unoxidized and has a lighter flavor.\n"
 	count2, _ := ingester.IngestString(ctx, content2)
 	if count2 != 2 {
 		t.Errorf("second import: expected 2 facts, got %d", count2)
