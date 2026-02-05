@@ -62,7 +62,7 @@ func (s *SQLiteStore) migrate() error {
 		compacted BOOLEAN DEFAULT FALSE,
 		tool_calls TEXT,
 		tool_call_id TEXT,
-		FOREIGN KEY (conversation_id) REFERENCES conversations(id)
+		FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
 	);
 	CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id, timestamp);
 	CREATE INDEX IF NOT EXISTS idx_messages_compacted ON messages(conversation_id, compacted);
@@ -149,7 +149,7 @@ func (s *SQLiteStore) GetOrCreateConversation(id string) (*Conversation, error) 
 // AddMessage adds a message to a conversation.
 func (s *SQLiteStore) AddMessage(conversationID, role, content string) error {
 	now := time.Now()
-	msgID := uuid.New().String()
+	msgID, _ := uuid.NewV7()
 
 	// Ensure conversation exists
 	_, err := s.GetOrCreateConversation(conversationID)
@@ -161,7 +161,7 @@ func (s *SQLiteStore) AddMessage(conversationID, role, content string) error {
 	_, err = s.db.Exec(`
 		INSERT INTO messages (id, conversation_id, role, content, timestamp, token_count)
 		VALUES (?, ?, ?, ?, ?, ?)
-	`, msgID, conversationID, role, content, now, estimateTokens(content))
+	`, msgID.String(), conversationID, role, content, now, estimateTokens(content))
 	if err != nil {
 		return fmt.Errorf("insert message: %w", err)
 	}
@@ -357,12 +357,12 @@ func (s *SQLiteStore) MarkCompacted(conversationID string, before time.Time) err
 // AddCompactionSummary adds a compaction summary message.
 func (s *SQLiteStore) AddCompactionSummary(conversationID, summary string) error {
 	now := time.Now()
-	msgID := uuid.New().String()
+	msgID, _ := uuid.NewV7()
 
 	_, err := s.db.Exec(`
 		INSERT INTO messages (id, conversation_id, role, content, timestamp, token_count, compacted)
 		VALUES (?, ?, 'system', ?, ?, ?, FALSE)
-	`, msgID, conversationID, summary, now, estimateTokens(summary))
+	`, msgID.String(), conversationID, summary, now, estimateTokens(summary))
 
 	return err
 }
