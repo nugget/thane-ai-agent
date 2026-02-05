@@ -15,6 +15,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/api"
 	"github.com/nugget/thane-ai-agent/internal/checkpoint"
 	"github.com/nugget/thane-ai-agent/internal/config"
+	"github.com/nugget/thane-ai-agent/internal/facts"
 	"github.com/nugget/thane-ai-agent/internal/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/llm"
 	"github.com/nugget/thane-ai-agent/internal/memory"
@@ -293,6 +294,19 @@ func runServe(logger *slog.Logger, configPath string, portOverride int) {
 	defer sched.Stop()
 	
 	loop := agent.NewLoop(logger, mem, compactor, rtr, ha, sched, ollamaURL, cfg.Models.Default, talentContent)
+	
+	// Create fact store for long-term memory
+	factStore, err := facts.NewStore(dataDir + "/facts.db")
+	if err != nil {
+		logger.Error("failed to open fact store", "error", err)
+		os.Exit(1)
+	}
+	defer factStore.Close()
+	
+	factTools := facts.NewTools(factStore)
+	loop.Tools().SetFactTools(factTools)
+	logger.Info("fact store initialized", "path", dataDir+"/facts.db")
+	
 	server := api.NewServer(cfg.Listen.Port, loop, rtr, logger)
 	
 	// Create checkpointer
@@ -350,7 +364,29 @@ func runServe(logger *slog.Logger, configPath string, portOverride int) {
 		return result, nil
 	})
 	
-	checkpointer.SetProviders(convProvider, nil, taskProvider)
+	// Fact provider for checkpointing
+	factProvider := checkpoint.FactProviderFunc(func() ([]checkpoint.Fact, error) {
+		allFacts, err := factStore.GetAll()
+		if err != nil {
+			return nil, err
+		}
+		result := make([]checkpoint.Fact, len(allFacts))
+		for i, f := range allFacts {
+			result[i] = checkpoint.Fact{
+				ID:         f.ID,
+				Category:   string(f.Category),
+				Key:        f.Key,
+				Value:      f.Value,
+				Source:     f.Source,
+				CreatedAt:  f.CreatedAt,
+				UpdatedAt:  f.UpdatedAt,
+				Confidence: f.Confidence,
+			}
+		}
+		return result, nil
+	})
+	
+	checkpointer.SetProviders(convProvider, factProvider, taskProvider)
 	server.SetCheckpointer(checkpointer)
 	loop.SetFailoverHandler(checkpointer) // Checkpoint before model failover
 	logger.Info("checkpointing enabled", "periodic_messages", checkpointCfg.PeriodicMessages)

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nugget/thane-ai-agent/internal/facts"
 	"github.com/nugget/thane-ai-agent/internal/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/scheduler"
 )
@@ -22,9 +23,10 @@ type Tool struct {
 
 // Registry holds available tools.
 type Registry struct {
-	tools     map[string]*Tool
-	ha        *homeassistant.Client
-	scheduler *scheduler.Scheduler
+	tools      map[string]*Tool
+	ha         *homeassistant.Client
+	scheduler  *scheduler.Scheduler
+	factTools  *facts.Tools
 }
 
 // NewRegistry creates a tool registry with HA integration.
@@ -36,6 +38,99 @@ func NewRegistry(ha *homeassistant.Client, sched *scheduler.Scheduler) *Registry
 	}
 	r.registerBuiltins()
 	return r
+}
+
+// SetFactTools adds fact management tools to the registry.
+func (r *Registry) SetFactTools(ft *facts.Tools) {
+	r.factTools = ft
+	r.registerFactTools()
+}
+
+func (r *Registry) registerFactTools() {
+	if r.factTools == nil {
+		return
+	}
+
+	r.Register(&Tool{
+		Name:        "remember_fact",
+		Description: "Store a piece of information for later recall. Use for user preferences, home layout, device mappings, or observed patterns.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"category": map[string]any{
+					"type":        "string",
+					"enum":        []string{"user", "home", "device", "routine", "preference"},
+					"description": "Category for organizing the fact",
+				},
+				"key": map[string]any{
+					"type":        "string",
+					"description": "Unique identifier for this fact within the category",
+				},
+				"value": map[string]any{
+					"type":        "string",
+					"description": "The information to remember",
+				},
+				"source": map[string]any{
+					"type":        "string",
+					"description": "Where this information came from",
+				},
+			},
+			"required": []string{"key", "value"},
+		},
+		Handler: func(ctx context.Context, args map[string]any) (string, error) {
+			argsJSON, _ := json.Marshal(args)
+			return r.factTools.Remember(string(argsJSON))
+		},
+	})
+
+	r.Register(&Tool{
+		Name:        "recall_fact",
+		Description: "Retrieve information from long-term memory. Can look up specific facts, list a category, or search.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"category": map[string]any{
+					"type":        "string",
+					"description": "Category to filter by",
+				},
+				"key": map[string]any{
+					"type":        "string",
+					"description": "Specific key to recall",
+				},
+				"query": map[string]any{
+					"type":        "string",
+					"description": "Search term to find matching facts",
+				},
+			},
+		},
+		Handler: func(ctx context.Context, args map[string]any) (string, error) {
+			argsJSON, _ := json.Marshal(args)
+			return r.factTools.Recall(string(argsJSON))
+		},
+	})
+
+	r.Register(&Tool{
+		Name:        "forget_fact",
+		Description: "Remove a fact from long-term memory.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"category": map[string]any{
+					"type":        "string",
+					"description": "Category of the fact to forget",
+				},
+				"key": map[string]any{
+					"type":        "string",
+					"description": "Key of the fact to forget",
+				},
+			},
+			"required": []string{"category", "key"},
+		},
+		Handler: func(ctx context.Context, args map[string]any) (string, error) {
+			argsJSON, _ := json.Marshal(args)
+			return r.factTools.Forget(string(argsJSON))
+		},
+	})
 }
 
 func (r *Registry) registerBuiltins() {

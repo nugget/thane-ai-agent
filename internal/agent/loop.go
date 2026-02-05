@@ -92,6 +92,11 @@ func (l *Loop) SetFailoverHandler(handler FailoverHandler) {
 	l.failoverHandler = handler
 }
 
+// Tools returns the tool registry for adding additional tools.
+func (l *Loop) Tools() *tools.Registry {
+	return l.tools
+}
+
 const baseSystemPrompt = `You are Thane, an autonomous AI agent for Home Assistant. You help users manage their smart home.
 
 You have access to tools to query and control Home Assistant:
