@@ -490,6 +490,9 @@ func runServe(logger *slog.Logger, configPath string, portOverride int) {
 	loop.SetFailoverHandler(checkpointer) // Checkpoint before model failover
 	logger.Info("checkpointing enabled", "periodic_messages", checkpointCfg.PeriodicMessages)
 
+	// Log what state we're resuming with
+	checkpointer.LogStartupStatus()
+
 	// Setup graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

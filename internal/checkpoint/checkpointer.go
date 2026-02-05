@@ -186,6 +186,72 @@ func (c *Checkpointer) Restore(id uuid.UUID) error {
 	return nil
 }
 
+// StartupStatus returns info about persisted state for logging at startup.
+// Since SQLite persists automatically, this just reports what exists.
+type StartupStatus struct {
+	Conversations  int        `json:"conversations"`
+	Messages       int        `json:"messages"`
+	Facts          int        `json:"facts"`
+	LastCheckpoint *time.Time `json:"last_checkpoint,omitempty"`
+}
+
+// GetStartupStatus collects state info for startup logging.
+func (c *Checkpointer) GetStartupStatus() (*StartupStatus, error) {
+	status := &StartupStatus{}
+
+	// Get conversation/message counts from provider
+	if c.conversations != nil {
+		convs, err := c.conversations.GetConversations()
+		if err == nil {
+			status.Conversations = len(convs)
+			for _, conv := range convs {
+				status.Messages += len(conv.Messages)
+			}
+		}
+	}
+
+	// Get fact count from provider
+	if c.facts != nil {
+		facts, err := c.facts.GetFacts()
+		if err == nil {
+			status.Facts = len(facts)
+		}
+	}
+
+	// Get latest checkpoint time
+	latest, err := c.store.Latest()
+	if err == nil && latest != nil {
+		status.LastCheckpoint = &latest.CreatedAt
+	}
+
+	return status, nil
+}
+
+// LogStartupStatus logs the current persisted state.
+func (c *Checkpointer) LogStartupStatus() {
+	status, err := c.GetStartupStatus()
+	if err != nil {
+		c.log.Warn("failed to get startup status", "error", err)
+		return
+	}
+
+	if status.Conversations == 0 && status.Facts == 0 {
+		c.log.Info("starting fresh (no persisted state)")
+		return
+	}
+
+	attrs := []any{
+		"conversations", status.Conversations,
+		"messages", status.Messages,
+		"facts", status.Facts,
+	}
+	if status.LastCheckpoint != nil {
+		attrs = append(attrs, "last_checkpoint", status.LastCheckpoint.Format(time.RFC3339))
+	}
+
+	c.log.Info("resuming from persisted state", attrs...)
+}
+
 func (c *Checkpointer) collectState() (*State, error) {
 	state := &State{}
 
