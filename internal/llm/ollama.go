@@ -126,6 +126,13 @@ func (c *OllamaClient) ChatStream(ctx context.Context, model string, messages []
 		if err := json.NewDecoder(resp.Body).Decode(&chatResp); err != nil {
 			return nil, fmt.Errorf("decode response: %w", err)
 		}
+		// Try to parse text-based tool calls if no native tool_calls
+		if len(chatResp.Message.ToolCalls) == 0 && chatResp.Message.Content != "" {
+			if parsed := parseTextToolCalls(chatResp.Message.Content); len(parsed) > 0 {
+				chatResp.Message.ToolCalls = parsed
+				chatResp.Message.Content = "" // Clear content since it was a tool call
+			}
+		}
 		return &chatResp, nil
 	}
 
@@ -164,7 +171,73 @@ func (c *OllamaClient) ChatStream(ctx context.Context, model string, messages []
 		}
 	}
 
+	// Try to parse text-based tool calls if no native tool_calls
+	if len(finalResp.Message.ToolCalls) == 0 && finalResp.Message.Content != "" {
+		if parsed := parseTextToolCalls(finalResp.Message.Content); len(parsed) > 0 {
+			finalResp.Message.ToolCalls = parsed
+			finalResp.Message.Content = "" // Clear content since it was a tool call
+		}
+	}
+
 	return &finalResp, nil
+}
+
+// parseTextToolCalls attempts to extract tool calls from content text.
+// Many models output tool calls as JSON in the content rather than using
+// the native tool_calls field. This function handles common formats:
+// - Raw JSON object: {"name": "...", "arguments": {...}}
+// - JSON array: [{"name": "...", "arguments": {...}}]
+// - Tagged: <tool_call>...</tool_call>
+func parseTextToolCalls(content string) []ToolCall {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return nil
+	}
+
+	// Try to extract from <tool_call> tags
+	if strings.Contains(content, "<tool_call>") {
+		start := strings.Index(content, "<tool_call>")
+		end := strings.Index(content, "</tool_call>")
+		if start != -1 && end > start {
+			content = strings.TrimSpace(content[start+len("<tool_call>") : end])
+		} else if start != -1 {
+			// No closing tag, take rest of content
+			content = strings.TrimSpace(content[start+len("<tool_call>"):])
+		}
+	}
+
+	// Try parsing as array of tool calls
+	var calls []struct {
+		Name      string         `json:"name"`
+		Arguments map[string]any `json:"arguments"`
+	}
+	if err := json.Unmarshal([]byte(content), &calls); err == nil && len(calls) > 0 {
+		result := make([]ToolCall, len(calls))
+		for i, c := range calls {
+			result[i].Function.Name = c.Name
+			result[i].Function.Arguments = c.Arguments
+		}
+		return result
+	}
+
+	// Try parsing as single tool call object
+	var single struct {
+		Name      string         `json:"name"`
+		Arguments map[string]any `json:"arguments"`
+	}
+	if err := json.Unmarshal([]byte(content), &single); err == nil && single.Name != "" {
+		return []ToolCall{{
+			Function: struct {
+				Name      string         `json:"name"`
+				Arguments map[string]any `json:"arguments"`
+			}{
+				Name:      single.Name,
+				Arguments: single.Arguments,
+			},
+		}}
+	}
+
+	return nil
 }
 
 // Ping checks if Ollama is reachable.
