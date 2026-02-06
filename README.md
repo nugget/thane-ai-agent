@@ -10,81 +10,141 @@ Home Assistant's Assist is a **subjected agent** — an LLM constrained to see o
 
 - *"Is anyone home?"* — Requires checking presence sensors, motion, device trackers
 - *"Why is the garage warm?"* — Needs to correlate HVAC, weather, door states
-- *"Remind me when the laundry is done"* — Monitoring power sensors over time
+- *"What time does the sun set?"* — Simple query, but Assist can't see `sun.sun`
 
 Thane is an **autonomous agent**. It has full access to your Home Assistant API and can:
 
 - Query any entity to understand context
 - Call any service to take action
-- Monitor events and act proactively
 - Remember facts and learn preferences
+- Route tasks to the best model (local vs cloud)
 
 ## Features
 
-- **Ollama-compatible API** — Drop-in replacement for any OpenAI-compatible LLM endpoint
-- **Full HA access** — Queries entities, calls services, subscribes to events
-- **Smart model routing** — Uses local models for simple tasks, cloud for complex reasoning
-- **Structured memory** — Learns about your home, not just chat history
-- **Event-driven** — Responds to state changes, not just prompts
+- **Ollama-powered** — Runs entirely on local models via Ollama
+- **Full HA access** — Queries entities, lists domains, calls services
+- **Smart model routing** — Selects models based on task complexity
+- **Semantic memory** — Learns facts about your home with embeddings-based recall
+- **Talents** — Behavioral guidance via markdown files (conversational style, time awareness, proactive curiosity)
+- **Checkpoint/restore** — Persists conversations and facts across restarts
+- **HTTP API** — OpenAI-compatible `/v1/chat/completions` endpoint
+- **CLI mode** — Quick testing with `thane ask "your question"`
 - **Single binary** — Go-based, no runtime dependencies
 
 ## Status
 
-🚧 **Early development** — Architecture defined, implementation starting.
+🚧 **Active development** — Core features working, running alongside existing assistant for comparison.
+
+**Working:**
+- Conversation loop with tool calling
+- Home Assistant integration (get_state, list_entities, call_service)
+- SQLite persistence (conversations, tool calls, facts)
+- Semantic fact storage with embeddings
+- Model router with audit trail
+- Checkpoint/restore system
+- HTTP API (streaming and non-streaming)
+- Talents system
+- CLI mode
+
+**In Progress:**
+- Lightweight hints for smaller models ([#22](https://github.com/nugget/thane-ai-agent/issues/22))
+- Home Assistant custom component integration
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for design details.
 
 ## Quick Start
 
-*(Coming soon)*
-
 ```bash
-# Install
-go install github.com/nugget/thane-ai-agent@latest
+# Build
+go build -o thane ./cmd/thane
 
 # Configure
-cat > thane.yaml <<EOF
+cat > config.yaml <<EOF
 homeassistant:
   url: http://homeassistant.local:8123
-  token: ${HA_TOKEN}
+  token: \${HOMEASSISTANT_TOKEN}
 
 models:
-  default: ollama/llama3:8b
+  default: granite3.1-dense:8b
+  ollama_url: http://localhost:11434
+  local_first: true
+  available:
+    - name: granite3.1-dense:8b
+      provider: ollama
+      supports_tools: true
+      context_window: 131072
+      speed: 8
+      quality: 7
+      cost_tier: 0
+
+data_dir: ./data
+talents_dir: ./talents
 EOF
 
-# Run
-thane serve
+# Run server
+export HOMEASSISTANT_TOKEN="your-token"
+./thane -config config.yaml serve
+
+# Or test via CLI
+./thane -config config.yaml ask "Is the sun up?"
 ```
 
 ## Configuration
 
-Thane uses a simple YAML config:
-
 ```yaml
 homeassistant:
   url: http://homeassistant.local:8123
-  token: ${HA_TOKEN}  # or use HA_TOKEN env var
+  token: ${HOMEASSISTANT_TOKEN}
 
 models:
-  default: ollama/llama3:8b           # Local model for quick tasks
-  reasoning: anthropic/claude-sonnet-4  # Cloud model for complex reasoning
+  default: granite3.1-dense:8b      # Fast local model
+  ollama_url: http://localhost:11434
+  local_first: true                  # Prefer local models
+  available:
+    - name: granite3.1-dense:8b
+      provider: ollama
+      supports_tools: true
+      context_window: 131072
+      speed: 8
+      quality: 7
+      cost_tier: 0
 
-memory:
-  path: ./memory    # Where to store memory database
-  
+embeddings:
+  enabled: true
+  model: nomic-embed-text
+  baseurl: http://localhost:11434
+
+data_dir: ./data       # SQLite databases
+talents_dir: ./talents # Behavioral guidance files
+
 listen:
-  port: 8080        # API server port
+  port: 8080
 ```
 
-## Home Assistant Integration
+## Tools
 
-*(Coming in Phase 4)*
+Thane provides these tools to the LLM:
 
-Thane will include a custom component that registers it as a conversation agent in Home Assistant, enabling:
+| Tool | Description |
+|------|-------------|
+| `get_state` | Get current state of any HA entity |
+| `list_entities` | Discover entities by domain or pattern |
+| `call_service` | Call any HA service (turn on lights, etc.) |
+| `schedule_task` | Schedule future actions |
+| `remember_fact` | Store a fact with semantic embeddings |
+| `recall_fact` | Retrieve facts by category or semantic search |
+| `forget_fact` | Remove a stored fact |
+| `semantic_recall` | Natural language search across all facts |
 
-- Voice assistant integration
-- Automation triggers
-- Dashboard cards
+## Talents
+
+Talents are markdown files that guide agent behavior:
+
+- `conversational.md` — Tone and style guidance
+- `time-awareness.md` — Timezone handling, time formatting
+- `spatial-reasoning.md` — Understanding home layout
+- `proactive-curiosity.md` — When to explore vs. wait
+- `channel-awareness.md` — Adapting to communication context
 
 ## Architecture
 
@@ -95,30 +155,45 @@ Request → API Server → Agent Loop → Response
               ↓           ↓           ↓
            Memory    Model Router   HA Client
               ↓           ↓           ↓
-           SQLite    Ollama/Claude   HA API
+           SQLite      Ollama       HA API
+              ↓
+        Facts + Embeddings
 ```
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for the full design.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for details.
 
-## Roadmap
+## API
 
-- [x] Architecture design
-- [ ] OpenAI-compatible API server
-- [ ] Home Assistant REST client
-- [ ] Basic agent loop
-- [ ] Conversation memory
-- [ ] WebSocket event subscription
-- [ ] Model routing
-- [ ] Parallel tool execution
-- [ ] Proactive automation
+**Chat endpoint (OpenAI-compatible):**
+```bash
+curl http://localhost:8080/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "granite3.1-dense:8b",
+    "messages": [{"role": "user", "content": "Is the sun up?"}],
+    "stream": false
+  }'
+```
+
+**Simple chat endpoint:**
+```bash
+curl http://localhost:8080/v1/chat \
+  -H "Content-Type: application/json" \
+  -d '{"message": "Is the sun up?"}'
+```
+
+**Health check:**
+```bash
+curl http://localhost:8080/health
+```
+
+## Name
+
+**Thane** — A Scottish term for a landholder who managed an estate on behalf of the crown. Your home automation estate deserves a capable steward.
 
 ## Contributing
 
 Contributions welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
-
-## Name
-
-**Thane** — A Scottish term for a landholder who managed an estate on behalf of the crown. Your home automation "estate" deserves a capable steward.
 
 ## License
 
