@@ -40,7 +40,10 @@ func (s *OllamaServer) Start(ctx context.Context) error {
 	mux.HandleFunc("POST /api/generate", s.handleGenerate)
 	mux.HandleFunc("GET /api/tags", s.handleTags)
 	mux.HandleFunc("GET /api/version", s.handleVersion)
-	mux.HandleFunc("HEAD /", s.handleHead) // Health check
+
+	// Health check - matches root path only (not a prefix match)
+	mux.HandleFunc("HEAD /{$}", s.handleHead)
+	mux.HandleFunc("GET /{$}", s.handleHealth)
 
 	s.server = &http.Server{
 		Addr:         fmt.Sprintf(":%d", s.port),
@@ -76,6 +79,12 @@ func (s *OllamaServer) withLogging(next http.Handler) http.Handler {
 // handleHead responds to HEAD / for health checks.
 func (s *OllamaServer) handleHead(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
+}
+
+// handleHealth responds to GET / for health checks.
+func (s *OllamaServer) handleHealth(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Write([]byte(`{"status":"ok"}`))
 }
 
 // handleChat handles POST /api/chat (main conversation endpoint).
