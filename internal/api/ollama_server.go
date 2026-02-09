@@ -84,7 +84,9 @@ func (s *OllamaServer) handleHead(w http.ResponseWriter, r *http.Request) {
 // handleHealth responds to GET / for health checks.
 func (s *OllamaServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	_, _ = w.Write([]byte(`{"status":"ok"}`))
+	if _, err := w.Write([]byte(`{"status":"ok"}`)); err != nil {
+		s.logger.Debug("health check write failed", "error", err)
+	}
 }
 
 // handleChat handles POST /api/chat (main conversation endpoint).
