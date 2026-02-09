@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/agent"
@@ -19,6 +20,9 @@ type OllamaChatRequest struct {
 	Stream   *bool                `json:"stream,omitempty"`
 	Options  map[string]any       `json:"options,omitempty"`
 	Format   string               `json:"format,omitempty"`
+	Tools    []map[string]any     `json:"tools,omitempty"`
+	Think    bool                 `json:"think,omitempty"`
+	KeepAlive string              `json:"keep_alive,omitempty"`
 }
 
 // OllamaChatMessage is the Ollama message format.
@@ -109,6 +113,10 @@ func (s *Server) handleOllamaChat(w http.ResponseWriter, r *http.Request) {
 		s.ollamaError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+
+	// Sanitize: strip HA tools and instructions, extract area context
+	areaContext := s.sanitizeHARequest(&req)
+	_ = areaContext // TODO: pass to agent for room-aware responses
 
 	// Convert Ollama messages to agent messages
 	messages := make([]agent.Message, len(req.Messages))
@@ -285,4 +293,49 @@ func (s *Server) ollamaError(w http.ResponseWriter, code int, message string) {
 	_ = json.NewEncoder(w).Encode(map[string]string{
 		"error": message,
 	})
+}
+
+// sanitizeHARequest strips HA-provided tools and instructions, keeping only
+// what Thane needs. HA is the dumb pipe; Thane is the brain.
+func (s *Server) sanitizeHARequest(req *OllamaChatRequest) (areaContext string) {
+	// Log and strip HA tools (we use our own)
+	if len(req.Tools) > 0 {
+		toolNames := make([]string, 0, len(req.Tools))
+		for _, tool := range req.Tools {
+			if fn, ok := tool["function"].(map[string]any); ok {
+				if name, ok := fn["name"].(string); ok {
+					toolNames = append(toolNames, name)
+				}
+			}
+		}
+		s.logger.Info("HA tools stripped",
+			"count", len(req.Tools),
+			"tools", toolNames,
+		)
+		req.Tools = nil
+	}
+
+	// Extract area context from system message before stripping
+	// Look for "You are in area X (floor Y)"
+	for i, msg := range req.Messages {
+		if msg.Role == "system" {
+			// Extract area context if present
+			if idx := strings.Index(msg.Content, "You are in area "); idx != -1 {
+				end := strings.Index(msg.Content[idx:], "\n")
+				if end == -1 {
+					end = len(msg.Content) - idx
+				}
+				areaContext = msg.Content[idx : idx+end]
+				s.logger.Info("area context extracted", "area", areaContext)
+			}
+
+			// For now, strip the entire HA system message
+			// Thane will inject its own via talents
+			req.Messages = append(req.Messages[:i], req.Messages[i+1:]...)
+			s.logger.Info("HA system message stripped")
+			break
+		}
+	}
+
+	return areaContext
 }
