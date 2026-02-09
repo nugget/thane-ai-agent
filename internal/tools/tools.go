@@ -584,7 +584,7 @@ func (r *Registry) handleControlDevice(ctx context.Context, args map[string]any)
 	case "turn_on", "turn_off", "toggle", "set_brightness", "set_color":
 		domain = "light" // Default to light for these actions
 	}
-	
+
 	// Also check description for domain hints
 	descLower := strings.ToLower(description)
 	if strings.Contains(descLower, "fan") {
