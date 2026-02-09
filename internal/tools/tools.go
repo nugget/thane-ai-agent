@@ -39,6 +39,7 @@ func NewRegistry(ha *homeassistant.Client, sched *scheduler.Scheduler) *Registry
 		scheduler: sched,
 	}
 	r.registerBuiltins()
+	r.registerFindEntity() // Smart entity discovery
 	return r
 }
 
