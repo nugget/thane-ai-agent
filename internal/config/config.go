@@ -10,11 +10,20 @@ import (
 // Config holds all Thane configuration.
 type Config struct {
 	Listen        ListenConfig        `yaml:"listen"`
+	OllamaAPI     OllamaAPIConfig     `yaml:"ollama_api"`
 	HomeAssistant HomeAssistantConfig `yaml:"homeassistant"`
 	Models        ModelsConfig        `yaml:"models"`
 	Embeddings    EmbeddingsConfig    `yaml:"embeddings"`
 	DataDir       string              `yaml:"data_dir"`
 	TalentsDir    string              `yaml:"talents_dir"`
+}
+
+// OllamaAPIConfig defines the optional Ollama-compatible API server.
+// When enabled, Thane exposes an Ollama-compatible API on a separate port
+// for Home Assistant integration.
+type OllamaAPIConfig struct {
+	Enabled bool `yaml:"enabled"`
+	Port    int  `yaml:"port"` // Default: 11434
 }
 
 // EmbeddingsConfig defines embedding generation settings.

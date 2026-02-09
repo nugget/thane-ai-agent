@@ -1,20 +1,50 @@
 # Thane Configuration Example
 # Copy to config.yaml and customize for your deployment
 
+# Native Thane API server
 listen:
-  port: 11434  # Default Ollama port for HA compatibility
+  port: 8080  # Native API (OpenAI-compatible, router introspection, etc.)
 
+# Ollama-compatible API (optional, for Home Assistant integration)
+# When enabled, Thane exposes an Ollama-compatible API on a separate port
+ollama_api:
+  enabled: true   # Set to false if not using HA Ollama integration
+  port: 11434     # Standard Ollama port
+
+# Home Assistant connection
 homeassistant:
   url: https://your-homeassistant.local:8123
   token: ${HOMEASSISTANT_TOKEN}  # Or paste token directly
 
+# Model routing
 models:
   default: qwen2.5:72b
   ollama_url: http://your-ollama-server:11434
   local_first: true
+  available:
+    - name: qwen3:4b
+      provider: ollama
+      supports_tools: true
+      context_window: 32768
+      speed: 9
+      quality: 5
+      cost_tier: 0
+      min_complexity: simple
+    - name: qwen2.5:72b
+      provider: ollama
+      supports_tools: true
+      context_window: 131072
+      speed: 3
+      quality: 9
+      cost_tier: 0
+      min_complexity: moderate
 
+# Storage paths
 data_dir: ./data
 talents_dir: ./talents
 
+# Semantic search (optional)
 embeddings:
   enabled: false
+  model: nomic-embed-text
+  # baseurl: http://localhost:11434  # Defaults to models.ollama_url

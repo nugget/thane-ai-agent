@@ -1,11 +1,16 @@
 // Package api implements the Ollama-compatible HTTP API endpoints.
 // This allows Thane to be used as a drop-in replacement for Ollama
 // in Home Assistant's native Ollama integration.
+//
+// The Ollama-compatible API can be served either:
+// - On a dedicated port via OllamaServer (recommended for HA integration)
+// - Embedded in the main server via RegisterOllamaRoutes (for single-port setups)
 package api
 
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -15,13 +20,13 @@ import (
 
 // OllamaChatRequest is the Ollama /api/chat request format.
 type OllamaChatRequest struct {
-	Model    string               `json:"model"`
-	Messages []OllamaChatMessage  `json:"messages"`
-	Stream   *bool                `json:"stream,omitempty"`
-	Options  map[string]any       `json:"options,omitempty"`
-	Format   string               `json:"format,omitempty"`
-	Tools    []map[string]any     `json:"tools,omitempty"`
-	Think    bool                 `json:"think,omitempty"`
+	Model     string              `json:"model"`
+	Messages  []OllamaChatMessage `json:"messages"`
+	Stream    *bool               `json:"stream,omitempty"`
+	Options   map[string]any      `json:"options,omitempty"`
+	Format    string              `json:"format,omitempty"`
+	Tools     []map[string]any    `json:"tools,omitempty"`
+	Think     bool                `json:"think,omitempty"`
 	KeepAlive string              `json:"keep_alive,omitempty"`
 }
 
@@ -78,14 +83,18 @@ type OllamaVersionResponse struct {
 }
 
 // RegisterOllamaRoutes adds Ollama-compatible API endpoints to the mux.
+// Use this for single-port setups. For dual-port, use OllamaServer instead.
 func (s *Server) RegisterOllamaRoutes(mux *http.ServeMux) {
-	mux.HandleFunc("POST /api/chat", s.handleOllamaChat)
-	mux.HandleFunc("GET /api/tags", s.handleOllamaTags)
-	mux.HandleFunc("GET /api/version", s.handleOllamaVersion)
+	mux.HandleFunc("POST /api/chat", func(w http.ResponseWriter, r *http.Request) {
+		handleOllamaChatShared(w, r, s.loop, s.logger)
+	})
+	mux.HandleFunc("GET /api/tags", handleOllamaTagsShared)
+	mux.HandleFunc("GET /api/version", handleOllamaVersionShared)
 }
 
-// handleOllamaChat handles the Ollama /api/chat endpoint.
-func (s *Server) handleOllamaChat(w http.ResponseWriter, r *http.Request) {
+// handleOllamaChatShared handles the Ollama /api/chat endpoint.
+// This is a shared implementation used by both OllamaServer and embedded routes.
+func handleOllamaChatShared(w http.ResponseWriter, r *http.Request, loop *agent.Loop, logger *slog.Logger) {
 	start := time.Now()
 
 	// Capture and log raw request for debugging (headers + body)
@@ -96,13 +105,13 @@ func (s *Server) handleOllamaChat(w http.ResponseWriter, r *http.Request) {
 			headers[k] = fmt.Sprintf("%v", v)
 		}
 	}
-	
+
 	rawBody, err := captureBody(r)
 	if err != nil {
-		s.ollamaError(w, http.StatusBadRequest, "failed to read body")
+		ollamaError(w, http.StatusBadRequest, "failed to read body")
 		return
 	}
-	s.logger.Info("ollama chat request received",
+	logger.Info("ollama chat request received",
 		"remote_addr", r.RemoteAddr,
 		"headers", headers,
 		"raw_body", string(rawBody),
@@ -110,12 +119,12 @@ func (s *Server) handleOllamaChat(w http.ResponseWriter, r *http.Request) {
 
 	var req OllamaChatRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		s.ollamaError(w, http.StatusBadRequest, "invalid request body")
+		ollamaError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 
 	// Sanitize: strip HA tools and instructions, extract area context
-	areaContext := s.sanitizeHARequest(&req)
+	areaContext := sanitizeHARequest(&req, logger)
 	_ = areaContext // TODO: pass to agent for room-aware responses
 
 	// Convert Ollama messages to agent messages
@@ -146,15 +155,15 @@ func (s *Server) handleOllamaChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if streaming {
-		s.handleOllamaStreamingChat(w, r, agentReq, start)
+		handleOllamaStreamingChatShared(w, r, agentReq, start, loop, logger)
 		return
 	}
 
 	// Non-streaming response
-	resp, err := s.loop.Run(r.Context(), agentReq, nil)
+	resp, err := loop.Run(r.Context(), agentReq, nil)
 	if err != nil {
-		s.logger.Error("agent loop failed", "error", err)
-		s.ollamaError(w, http.StatusInternalServerError, "agent error")
+		logger.Error("agent loop failed", "error", err)
+		ollamaError(w, http.StatusInternalServerError, "agent error")
 		return
 	}
 
@@ -177,8 +186,8 @@ func (s *Server) handleOllamaChat(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(ollamaResp)
 }
 
-// handleOllamaStreamingChat handles streaming chat responses in Ollama format.
-func (s *Server) handleOllamaStreamingChat(w http.ResponseWriter, r *http.Request, req *agent.Request, start time.Time) {
+// handleOllamaStreamingChatShared handles streaming chat responses in Ollama format.
+func handleOllamaStreamingChatShared(w http.ResponseWriter, r *http.Request, req *agent.Request, start time.Time, loop *agent.Loop, logger *slog.Logger) {
 	// Set headers for streaming
 	w.Header().Set("Content-Type", "application/x-ndjson")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -186,7 +195,7 @@ func (s *Server) handleOllamaStreamingChat(w http.ResponseWriter, r *http.Reques
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		s.ollamaError(w, http.StatusInternalServerError, "streaming not supported")
+		ollamaError(w, http.StatusInternalServerError, "streaming not supported")
 		return
 	}
 
@@ -212,9 +221,9 @@ func (s *Server) handleOllamaStreamingChat(w http.ResponseWriter, r *http.Reques
 	}
 
 	// Run agent with streaming callback
-	resp, err := s.loop.Run(r.Context(), req, streamCallback)
+	resp, err := loop.Run(r.Context(), req, streamCallback)
 	if err != nil {
-		s.logger.Error("streaming failed", "error", err)
+		logger.Error("streaming failed", "error", err)
 		// Send error as final message
 		errResp := OllamaChatResponse{
 			Model:     model,
@@ -251,8 +260,8 @@ func (s *Server) handleOllamaStreamingChat(w http.ResponseWriter, r *http.Reques
 	flusher.Flush()
 }
 
-// handleOllamaTags returns the list of available models.
-func (s *Server) handleOllamaTags(w http.ResponseWriter, r *http.Request) {
+// handleOllamaTagsShared returns the list of available models.
+func handleOllamaTagsShared(w http.ResponseWriter, r *http.Request) {
 	// Return Thane as the only available model
 	resp := OllamaTagsResponse{
 		Models: []OllamaModel{
@@ -278,8 +287,8 @@ func (s *Server) handleOllamaTags(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(resp)
 }
 
-// handleOllamaVersion returns the Ollama-compatible version.
-func (s *Server) handleOllamaVersion(w http.ResponseWriter, r *http.Request) {
+// handleOllamaVersionShared returns the Ollama-compatible version.
+func handleOllamaVersionShared(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(OllamaVersionResponse{
 		Version: "0.1.0", // Thane version
@@ -287,7 +296,7 @@ func (s *Server) handleOllamaVersion(w http.ResponseWriter, r *http.Request) {
 }
 
 // ollamaError sends an error response in a format Ollama clients expect.
-func (s *Server) ollamaError(w http.ResponseWriter, code int, message string) {
+func ollamaError(w http.ResponseWriter, code int, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(map[string]string{
@@ -297,7 +306,7 @@ func (s *Server) ollamaError(w http.ResponseWriter, code int, message string) {
 
 // sanitizeHARequest strips HA-provided tools and instructions, keeping only
 // what Thane needs. HA is the dumb pipe; Thane is the brain.
-func (s *Server) sanitizeHARequest(req *OllamaChatRequest) (areaContext string) {
+func sanitizeHARequest(req *OllamaChatRequest, logger *slog.Logger) (areaContext string) {
 	// Log and strip HA tools (we use our own)
 	if len(req.Tools) > 0 {
 		toolNames := make([]string, 0, len(req.Tools))
@@ -308,7 +317,7 @@ func (s *Server) sanitizeHARequest(req *OllamaChatRequest) (areaContext string) 
 				}
 			}
 		}
-		s.logger.Info("HA tools stripped",
+		logger.Info("HA tools stripped",
 			"count", len(req.Tools),
 			"tools", toolNames,
 		)
@@ -326,16 +335,18 @@ func (s *Server) sanitizeHARequest(req *OllamaChatRequest) (areaContext string) 
 					end = len(msg.Content) - idx
 				}
 				areaContext = msg.Content[idx : idx+end]
-				s.logger.Info("area context extracted", "area", areaContext)
+				logger.Info("area context extracted", "area", areaContext)
 			}
 
 			// For now, strip the entire HA system message
 			// Thane will inject its own via talents
 			req.Messages = append(req.Messages[:i], req.Messages[i+1:]...)
-			s.logger.Info("HA system message stripped")
+			logger.Info("HA system message stripped")
 			break
 		}
 	}
 
 	return areaContext
 }
+
+// Note: captureBody is defined in debug_request.go
