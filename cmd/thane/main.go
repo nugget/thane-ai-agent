@@ -519,6 +519,21 @@ func runServe(logger *slog.Logger, configPath string, portOverride int) {
 	// Log what state we're resuming with
 	checkpointer.LogStartupStatus()
 
+	// Start Ollama-compatible API server if configured
+	var ollamaServer *api.OllamaServer
+	if cfg.OllamaAPI.Enabled {
+		port := cfg.OllamaAPI.Port
+		if port == 0 {
+			port = 11434 // Default Ollama port
+		}
+		ollamaServer = api.NewOllamaServer(port, loop, logger)
+		go func() {
+			if err := ollamaServer.Start(context.Background()); err != nil {
+				logger.Error("ollama API server failed", "error", err)
+			}
+		}()
+	}
+
 	// Setup graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -537,6 +552,9 @@ func runServe(logger *slog.Logger, configPath string, portOverride int) {
 
 		cancel()
 		_ = server.Shutdown(context.Background())
+		if ollamaServer != nil {
+			_ = ollamaServer.Shutdown(context.Background())
+		}
 	}()
 
 	// Start server

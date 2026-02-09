@@ -17,6 +17,15 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/router"
 )
 
+// writeJSON encodes v as JSON to w, logging any errors at debug level.
+// Errors here typically mean the client disconnected mid-response,
+// which is not actionable but worth tracking for debugging.
+func writeJSON(w http.ResponseWriter, v any, logger *slog.Logger) {
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		logger.Debug("failed to write JSON response", "error", err)
+	}
+}
+
 // Server is the HTTP API server.
 type Server struct {
 	port         int
@@ -81,6 +90,10 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("GET /v1/tools/calls", s.handleToolCalls)
 	mux.HandleFunc("GET /v1/tools/stats", s.handleToolStats)
 
+	// Note: Ollama-compatible API is served on a separate port via OllamaServer
+	// when ollama_api.enabled is true in config. Use RegisterOllamaRoutes()
+	// only if you need single-port operation.
+
 	s.server = &http.Server{
 		Addr:         fmt.Sprintf(":%d", s.port),
 		Handler:      s.withLogging(mux),
@@ -114,22 +127,22 @@ func (s *Server) withLogging(next http.Handler) http.Handler {
 
 func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{
+	writeJSON(w, map[string]string{
 		"name":    "Thane",
 		"version": "0.1.0",
 		"status":  "ok",
-	})
+	}, s.logger)
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{"status": "healthy"})
+	writeJSON(w, map[string]string{"status": "healthy"}, s.logger)
 }
 
 func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 	// OpenAI-compatible models list
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	writeJSON(w, map[string]any{
 		"object": "list",
 		"data": []map[string]any{
 			{
@@ -139,7 +152,7 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 				"owned_by": "thane",
 			},
 		},
-	})
+	}, s.logger)
 }
 
 // ChatCompletionRequest is the OpenAI-compatible request format.
@@ -222,7 +235,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(completion)
+	writeJSON(w, completion, s.logger)
 }
 
 // SimpleChatRequest is a minimal chat request for easy testing.
@@ -273,11 +286,11 @@ func (s *Server) handleSimpleChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(SimpleChatResponse{
+	writeJSON(w, SimpleChatResponse{
 		Response:       resp.Content,
 		Model:          resp.Model,
 		ConversationID: convID,
-	})
+	}, s.logger)
 }
 
 // StreamChunk is the SSE format for streaming responses.
@@ -380,20 +393,26 @@ func (s *Server) handleStreamingCompletion(w http.ResponseWriter, r *http.Reques
 }
 
 func (s *Server) writeSSE(w http.ResponseWriter, chunk StreamChunk) {
-	data, _ := json.Marshal(chunk)
-	fmt.Fprintf(w, "data: %s\n\n", data)
+	data, err := json.Marshal(chunk)
+	if err != nil {
+		s.logger.Debug("failed to marshal SSE chunk", "error", err)
+		return
+	}
+	if _, err := fmt.Fprintf(w, "data: %s\n\n", data); err != nil {
+		s.logger.Debug("failed to write SSE chunk", "error", err)
+	}
 }
 
 func (s *Server) errorResponse(w http.ResponseWriter, code int, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	writeJSON(w, map[string]any{
 		"error": map[string]any{
 			"message": message,
 			"type":    "invalid_request_error",
 			"code":    code,
 		},
-	})
+	}, s.logger)
 }
 
 // Router introspection handlers
@@ -406,7 +425,7 @@ func (s *Server) handleRouterStats(w http.ResponseWriter, r *http.Request) {
 
 	stats := s.router.GetStats()
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(stats)
+	writeJSON(w, stats, s.logger)
 }
 
 func (s *Server) handleRouterAudit(w http.ResponseWriter, r *http.Request) {
@@ -425,10 +444,10 @@ func (s *Server) handleRouterAudit(w http.ResponseWriter, r *http.Request) {
 
 	decisions := s.router.GetAuditLog(limit)
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	writeJSON(w, map[string]any{
 		"count":     len(decisions),
 		"decisions": decisions,
-	})
+	}, s.logger)
 }
 
 func (s *Server) handleRouterExplain(w http.ResponseWriter, r *http.Request) {
@@ -450,7 +469,7 @@ func (s *Server) handleRouterExplain(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(decision)
+	writeJSON(w, decision, s.logger)
 }
 
 // Checkpoint handlers
@@ -488,7 +507,7 @@ func (s *Server) handleCheckpointCreate(w http.ResponseWriter, r *http.Request) 
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(w).Encode(cp)
+	writeJSON(w, cp, s.logger)
 }
 
 func (s *Server) handleCheckpointList(w http.ResponseWriter, r *http.Request) {
@@ -512,10 +531,10 @@ func (s *Server) handleCheckpointList(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	writeJSON(w, map[string]any{
 		"count":       len(checkpoints),
 		"checkpoints": checkpoints,
-	})
+	}, s.logger)
 }
 
 func (s *Server) handleCheckpointGet(w http.ResponseWriter, r *http.Request) {
@@ -539,7 +558,7 @@ func (s *Server) handleCheckpointGet(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(cp)
+	writeJSON(w, cp, s.logger)
 }
 
 func (s *Server) handleCheckpointDelete(w http.ResponseWriter, r *http.Request) {
@@ -584,11 +603,11 @@ func (s *Server) handleCheckpointRestore(w http.ResponseWriter, r *http.Request)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	writeJSON(w, map[string]any{
 		"status":  "restored",
 		"id":      idStr,
 		"message": "checkpoint restored successfully",
-	})
+	}, s.logger)
 }
 
 // History endpoints
@@ -620,10 +639,10 @@ func (s *Server) handleConversationList(w http.ResponseWriter, r *http.Request) 
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	writeJSON(w, map[string]any{
 		"conversations": summaries,
 		"count":         len(summaries),
-	})
+	}, s.logger)
 }
 
 func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request) {
@@ -640,7 +659,7 @@ func (s *Server) handleConversationGet(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(conv)
+	writeJSON(w, conv, s.logger)
 }
 
 func (s *Server) handleToolCalls(w http.ResponseWriter, r *http.Request) {
@@ -672,10 +691,10 @@ func (s *Server) handleToolCalls(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	writeJSON(w, map[string]any{
 		"tool_calls": calls,
 		"count":      len(calls),
-	})
+	}, s.logger)
 }
 
 func (s *Server) handleToolStats(w http.ResponseWriter, r *http.Request) {
@@ -687,5 +706,5 @@ func (s *Server) handleToolStats(w http.ResponseWriter, r *http.Request) {
 	stats := s.memoryStore.ToolCallStats()
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(stats)
+	writeJSON(w, stats, s.logger)
 }
