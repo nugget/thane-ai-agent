@@ -39,3 +39,4 @@ thane.local.yaml
 # Logs
 *.log
 logs/
+thane-darwin-arm64
