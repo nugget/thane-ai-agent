@@ -99,9 +99,16 @@ func (s *Server) handleOllamaChat(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Map model name: "thane:latest" or "thane" should use default model
+	// Don't pass our fake model name through to the real LLM
+	model := req.Model
+	if model == "" || model == "thane" || model == "thane:latest" {
+		model = "" // Empty = use Thane's configured default
+	}
+
 	agentReq := &agent.Request{
 		Messages: messages,
-		Model:    req.Model,
+		Model:    model,
 	}
 
 	// Check if streaming is requested (default true for Ollama)
