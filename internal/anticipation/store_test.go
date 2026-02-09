@@ -30,8 +30,8 @@ func TestCreateAndGet(t *testing.T) {
 		Description: "Dan's flight arriving",
 		Context:     "Check flight status for AA1234. Offer pickup if needed.",
 		Trigger: Trigger{
-			AfterTime: &afterTime,
-			Zone:      "airport",
+			AfterTime:  &afterTime,
+			Zone:       "airport",
 			ZoneAction: "enter",
 		},
 	}
@@ -107,7 +107,7 @@ func TestResolve(t *testing.T) {
 	// But should still be retrievable
 	got, _ := store.Get(a.ID)
 	if got == nil {
-		t.Error("expected to still get resolved anticipation")
+		t.Fatal("expected to still get resolved anticipation")
 	}
 	if got.ResolvedAt == nil {
 		t.Error("expected resolved_at to be set")

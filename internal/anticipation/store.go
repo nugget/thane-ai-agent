@@ -14,13 +14,13 @@ import (
 // Anticipation represents something the agent is expecting/waiting for.
 type Anticipation struct {
 	ID          string            `json:"id"`
-	Description string            `json:"description"`          // Human-readable: "Dan's flight arriving"
-	Context     string            `json:"context"`              // Injected on match: instructions/reasoning
-	Trigger     Trigger           `json:"trigger"`              // When this anticipation activates
+	Description string            `json:"description"` // Human-readable: "Dan's flight arriving"
+	Context     string            `json:"context"`     // Injected on match: instructions/reasoning
+	Trigger     Trigger           `json:"trigger"`     // When this anticipation activates
 	CreatedAt   time.Time         `json:"created_at"`
 	ExpiresAt   *time.Time        `json:"expires_at,omitempty"` // nil = no expiration
 	ResolvedAt  *time.Time        `json:"resolved_at,omitempty"`
-	Metadata    map[string]string `json:"metadata,omitempty"`   // Arbitrary k/v for matching
+	Metadata    map[string]string `json:"metadata,omitempty"` // Arbitrary k/v for matching
 }
 
 // Trigger defines conditions for when an anticipation activates.
@@ -143,10 +143,10 @@ func (s *Store) Get(id string) (*Anticipation, error) {
 	}
 
 	if triggerJSON.Valid {
-		json.Unmarshal([]byte(triggerJSON.String), &a.Trigger)
+		_ = json.Unmarshal([]byte(triggerJSON.String), &a.Trigger)
 	}
 	if metadataJSON.Valid && metadataJSON.String != "" {
-		json.Unmarshal([]byte(metadataJSON.String), &a.Metadata)
+		_ = json.Unmarshal([]byte(metadataJSON.String), &a.Metadata)
 	}
 	if expiresAt.Valid {
 		a.ExpiresAt = &expiresAt.Time
@@ -188,10 +188,10 @@ func (s *Store) scanAnticipations(rows *sql.Rows) ([]*Anticipation, error) {
 		}
 
 		if triggerJSON.Valid {
-			json.Unmarshal([]byte(triggerJSON.String), &a.Trigger)
+			_ = json.Unmarshal([]byte(triggerJSON.String), &a.Trigger)
 		}
 		if metadataJSON.Valid && metadataJSON.String != "" {
-			json.Unmarshal([]byte(metadataJSON.String), &a.Metadata)
+			_ = json.Unmarshal([]byte(metadataJSON.String), &a.Metadata)
 		}
 		if expiresAt.Valid {
 			a.ExpiresAt = &expiresAt.Time
