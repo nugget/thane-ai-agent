@@ -263,7 +263,11 @@ func isAbbreviation(abbr, full string) bool {
 }
 
 func toJSON(v any) string {
-	b, _ := json.Marshal(v)
+	b, err := json.Marshal(v)
+	if err != nil {
+		// Should never happen with our result types, but be defensive
+		return `{"error":"json encoding failed"}`
+	}
 	return string(b)
 }
 
