@@ -12,6 +12,7 @@ import (
 	"syscall"
 
 	"github.com/nugget/thane-ai-agent/internal/agent"
+	"github.com/nugget/thane-ai-agent/internal/anticipation"
 	"github.com/nugget/thane-ai-agent/internal/api"
 	"github.com/nugget/thane-ai-agent/internal/checkpoint"
 	"github.com/nugget/thane-ai-agent/internal/config"
@@ -387,6 +388,24 @@ func runServe(logger *slog.Logger, configPath string, portOverride int) {
 	loop.Tools().SetFactTools(factTools)
 	logger.Info("fact store initialized", "path", dataDir+"/facts.db")
 
+	// Create anticipation store for bridging intent to wake
+	anticipationDB, err := sql.Open("sqlite3", dataDir+"/anticipations.db")
+	if err != nil {
+		logger.Error("failed to open anticipation db", "error", err)
+		os.Exit(1)
+	}
+	defer anticipationDB.Close()
+
+	anticipationStore, err := anticipation.NewStore(anticipationDB)
+	if err != nil {
+		logger.Error("failed to create anticipation store", "error", err)
+		os.Exit(1)
+	}
+
+	anticipationTools := anticipation.NewTools(anticipationStore)
+	loop.Tools().SetAnticipationTools(anticipationTools)
+	logger.Info("anticipation store initialized", "path", dataDir+"/anticipations.db")
+
 	// Set up embedding client for semantic search
 	if cfg.Embeddings.Enabled {
 		embURL := cfg.Embeddings.BaseURL
@@ -404,6 +423,13 @@ func runServe(logger *slog.Logger, configPath string, portOverride int) {
 		factTools.SetEmbeddingClient(embClient)
 		logger.Info("embeddings enabled", "model", embModel, "url", embURL)
 	}
+
+	// Set up context providers for dynamic system prompt injection
+	anticipationProvider := anticipation.NewProvider(anticipationStore)
+	contextProvider := agent.NewCompositeContextProvider(anticipationProvider)
+	// TODO: Add facts.ContextProvider when semantic search is ready
+	loop.SetContextProvider(contextProvider)
+	logger.Info("context providers initialized")
 
 	server := api.NewServer(cfg.Listen.Port, loop, rtr, logger)
 	server.SetMemoryStore(mem)
@@ -493,6 +519,21 @@ func runServe(logger *slog.Logger, configPath string, portOverride int) {
 	// Log what state we're resuming with
 	checkpointer.LogStartupStatus()
 
+	// Start Ollama-compatible API server if configured
+	var ollamaServer *api.OllamaServer
+	if cfg.OllamaAPI.Enabled {
+		port := cfg.OllamaAPI.Port
+		if port == 0 {
+			port = 11434 // Default Ollama port
+		}
+		ollamaServer = api.NewOllamaServer(port, loop, logger)
+		go func() {
+			if err := ollamaServer.Start(context.Background()); err != nil {
+				logger.Error("ollama API server failed", "error", err)
+			}
+		}()
+	}
+
 	// Setup graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -511,6 +552,9 @@ func runServe(logger *slog.Logger, configPath string, portOverride int) {
 
 		cancel()
 		_ = server.Shutdown(context.Background())
+		if ollamaServer != nil {
+			_ = ollamaServer.Shutdown(context.Background())
+		}
 	}()
 
 	// Start server

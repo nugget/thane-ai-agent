@@ -6,7 +6,7 @@ homeassistant:
   token: ${HOMEASSISTANT_TOKEN}
 
 models:
-  default: qwen2.5:72b
+  default: qwen3:4b
   ollama_url: http://spark-a23e.hollowoak.net:11434
   local_first: true
   available:

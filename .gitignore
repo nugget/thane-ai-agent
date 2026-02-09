@@ -30,6 +30,7 @@ Thumbs.db
 thane.yaml
 thane.local.yaml
 *.local.yaml
+config.yaml
 
 # Memory database
 *.db
@@ -39,3 +40,7 @@ thane.local.yaml
 # Logs
 *.log
 logs/
+
+# Build artifacts
+thane-darwin-arm64
+thane-linux-*

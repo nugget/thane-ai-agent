@@ -104,6 +104,101 @@ func (c *Client) CallService(ctx context.Context, domain, service string, data m
 	return c.post(ctx, path, data, nil)
 }
 
+// Area represents a Home Assistant area.
+type Area struct {
+	AreaID  string   `json:"area_id"`
+	Name    string   `json:"name"`
+	Aliases []string `json:"aliases"`
+}
+
+// GetAreas retrieves all areas from the area registry.
+func (c *Client) GetAreas(ctx context.Context) ([]Area, error) {
+	var areas []Area
+	if err := c.get(ctx, "/api/config/area_registry/list", &areas); err != nil {
+		return nil, err
+	}
+	return areas, nil
+}
+
+// EntityRegistryEntry represents an entity from the registry with area info.
+type EntityRegistryEntry struct {
+	EntityID     string `json:"entity_id"`
+	Name         string `json:"name"`          // Custom name (may be empty)
+	OriginalName string `json:"original_name"` // Default name from integration
+	AreaID       string `json:"area_id"`
+	DeviceID     string `json:"device_id"`
+	Platform     string `json:"platform"`
+	Disabled     bool   `json:"disabled_by"`
+}
+
+// GetEntityRegistry retrieves the entity registry.
+func (c *Client) GetEntityRegistry(ctx context.Context) ([]EntityRegistryEntry, error) {
+	var entries []EntityRegistryEntry
+	if err := c.get(ctx, "/api/config/entity_registry/list", &entries); err != nil {
+		return nil, err
+	}
+	return entries, nil
+}
+
+// EntityInfo combines state and registry info for an entity.
+type EntityInfo struct {
+	EntityID     string
+	FriendlyName string
+	AreaID       string
+	Domain       string
+	State        string
+}
+
+// GetEntities retrieves entities, optionally filtered by domain.
+func (c *Client) GetEntities(ctx context.Context, domain string) ([]EntityInfo, error) {
+	// Get states for current values and friendly names
+	states, err := c.GetStates(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("get states: %w", err)
+	}
+
+	// Build entity list from states
+	var entities []EntityInfo
+	for _, s := range states {
+		// Extract domain from entity_id
+		parts := splitEntityID(s.EntityID)
+		if len(parts) != 2 {
+			continue
+		}
+		entityDomain := parts[0]
+
+		// Filter by domain if specified
+		if domain != "" && entityDomain != domain {
+			continue
+		}
+
+		// Get friendly name from attributes
+		friendlyName := ""
+		if fn, ok := s.Attributes["friendly_name"].(string); ok {
+			friendlyName = fn
+		}
+
+		entities = append(entities, EntityInfo{
+			EntityID:     s.EntityID,
+			FriendlyName: friendlyName,
+			Domain:       entityDomain,
+			State:        s.State,
+		})
+	}
+
+	return entities, nil
+}
+
+// splitEntityID splits "light.office" into ["light", "office"].
+func splitEntityID(entityID string) []string {
+	for i, c := range entityID {
+		if c == '.' {
+			return []string{entityID[:i], entityID[i+1:]}
+		}
+	}
+	return nil
+}
+
 // get performs a GET request to the HA API.
 func (c *Client) get(ctx context.Context, path string, result any) error {
 	req, err := http.NewRequestWithContext(ctx, "GET", c.baseURL+path, nil)
