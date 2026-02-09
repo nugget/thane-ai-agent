@@ -662,7 +662,11 @@ func (r *Registry) handleControlDevice(ctx context.Context, args map[string]any)
 		verb = action
 	}
 
-	return fmt.Sprintf("Done. %s %s.", strings.Title(verb), foundName), nil
+	// Capitalize first letter of verb
+	if len(verb) > 0 {
+		verb = strings.ToUpper(verb[:1]) + verb[1:]
+	}
+	return fmt.Sprintf("Done. %s %s.", verb, foundName), nil
 }
 
 func (r *Registry) handleScheduleTask(ctx context.Context, args map[string]any) (string, error) {
