@@ -120,11 +120,21 @@ func (c *OllamaClient) ChatStream(ctx context.Context, model string, messages []
 		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, string(body))
 	}
 
+	// Extract valid tool names for validation
+	validToolNames := extractToolNames(tools)
+
 	if !stream {
 		// Non-streaming: single JSON response
 		var chatResp ChatResponse
 		if err := json.NewDecoder(resp.Body).Decode(&chatResp); err != nil {
 			return nil, fmt.Errorf("decode response: %w", err)
+		}
+		// Try to parse text-based tool calls if no native tool_calls
+		if len(chatResp.Message.ToolCalls) == 0 && chatResp.Message.Content != "" {
+			if parsed := parseTextToolCalls(chatResp.Message.Content, validToolNames); len(parsed) > 0 {
+				chatResp.Message.ToolCalls = parsed
+				chatResp.Message.Content = "" // Clear content since it was a tool call
+			}
 		}
 		return &chatResp, nil
 	}
@@ -164,7 +174,124 @@ func (c *OllamaClient) ChatStream(ctx context.Context, model string, messages []
 		}
 	}
 
+	// Try to parse text-based tool calls if no native tool_calls
+	if len(finalResp.Message.ToolCalls) == 0 && finalResp.Message.Content != "" {
+		if parsed := parseTextToolCalls(finalResp.Message.Content, validToolNames); len(parsed) > 0 {
+			finalResp.Message.ToolCalls = parsed
+			finalResp.Message.Content = "" // Clear content since it was a tool call
+		}
+	}
+
 	return &finalResp, nil
+}
+
+// extractToolNames extracts tool names from the tools definition.
+// Tools are expected to be in OpenAI/Ollama format with function.name.
+func extractToolNames(tools []map[string]any) []string {
+	if len(tools) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(tools))
+	for _, tool := range tools {
+		if fn, ok := tool["function"].(map[string]any); ok {
+			if name, ok := fn["name"].(string); ok && name != "" {
+				names = append(names, name)
+			}
+		}
+	}
+	return names
+}
+
+// parseTextToolCalls attempts to extract tool calls from content text.
+// Many models output tool calls as JSON in the content rather than using
+// the native tool_calls field. This function handles common formats:
+// - Raw JSON object: {"name": "...", "arguments": {...}}
+// - JSON array: [{"name": "...", "arguments": {...}}]
+// - Tagged: <tool_call>...</tool_call>
+//
+// If validTools is non-empty, only tool calls with names in that list are returned.
+// This prevents false positives when models output JSON that happens to have
+// name/arguments fields but isn't meant to be a tool call.
+func parseTextToolCalls(content string, validTools []string) []ToolCall {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return nil
+	}
+
+	// Try to extract from <tool_call> tags
+	if strings.Contains(content, "<tool_call>") {
+		start := strings.Index(content, "<tool_call>")
+		end := strings.Index(content, "</tool_call>")
+		if start != -1 && end > start {
+			content = strings.TrimSpace(content[start+len("<tool_call>") : end])
+		} else if start != -1 {
+			// No closing tag, take rest of content
+			content = strings.TrimSpace(content[start+len("<tool_call>"):])
+		}
+	}
+
+	var result []ToolCall
+
+	// Try parsing as array of tool calls
+	var calls []struct {
+		Name      string         `json:"name"`
+		Arguments map[string]any `json:"arguments"`
+	}
+	if err := json.Unmarshal([]byte(content), &calls); err == nil && len(calls) > 0 {
+		for _, c := range calls {
+			if c.Name == "" {
+				continue
+			}
+			if !isValidTool(c.Name, validTools) {
+				continue
+			}
+			result = append(result, ToolCall{
+				Function: struct {
+					Name      string         `json:"name"`
+					Arguments map[string]any `json:"arguments"`
+				}{
+					Name:      c.Name,
+					Arguments: c.Arguments,
+				},
+			})
+		}
+		return result
+	}
+
+	// Try parsing as single tool call object
+	var single struct {
+		Name      string         `json:"name"`
+		Arguments map[string]any `json:"arguments"`
+	}
+	if err := json.Unmarshal([]byte(content), &single); err == nil && single.Name != "" {
+		if isValidTool(single.Name, validTools) {
+			return []ToolCall{{
+				Function: struct {
+					Name      string         `json:"name"`
+					Arguments map[string]any `json:"arguments"`
+				}{
+					Name:      single.Name,
+					Arguments: single.Arguments,
+				},
+			}}
+		}
+	}
+
+	return nil
+}
+
+// isValidTool checks if a tool name is in the valid tools list.
+// Returns true if validTools is nil or empty (no validation).
+func isValidTool(name string, validTools []string) bool {
+	if len(validTools) == 0 {
+		return true
+	}
+	for _, v := range validTools {
+		if v == name {
+			return true
+		}
+	}
+	return false
 }
 
 // Ping checks if Ollama is reachable.
