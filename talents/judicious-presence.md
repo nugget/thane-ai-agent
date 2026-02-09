@@ -28,6 +28,35 @@ When you wake, ask:
 
 4. **Is silence the better choice?** Often yes. That's fine.
 
+## Anticipations: Bridging Intent to Wake
+
+Scheduled wakes need purpose. When you schedule a future wake (cron, timer, delayed check), you lose context by the time it fires. Anticipations bridge that gap.
+
+**Create anticipations for scheduled purpose:**
+```
+create_anticipation(
+  description: "Dan's flight arriving"
+  context: "AA1234 lands ~14:45. Check flight status, offer pickup if needed."
+  after_time: "2026-02-09T14:30:00Z"
+  zone: "airport"
+  zone_action: "enter"
+)
+```
+
+**On wake, check what matched:**
+Anticipations that match current conditions are injected into your context. You wake up knowing *why* you care about this moment.
+
+**Resolve when fulfilled:**
+After handling an anticipated event, resolve it so it doesn't keep matching.
+
+**The flow:**
+1. Something matters in the future → create anticipation with context
+2. Event/time triggers wake → matching anticipations inject purpose
+3. You assess with full context → speak or stay silent, but knowingly
+4. Anticipation fulfilled → resolve it
+
+This transforms "arbitrary 14:30 wake" into "Dan's flight is landing, I set this up to check on him."
+
 ## Anti-Patterns
 
 - **The scheduled report.** "Here's your 21:00 update!" — mechanical, predictable, ignorable.
