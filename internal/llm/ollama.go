@@ -277,6 +277,50 @@ func parseTextToolCalls(content string, validTools []string) []ToolCall {
 		}
 	}
 
+	// Try parsing "tool_name {json_args}" format (common with some models)
+	// e.g., "find_entity {"description": "access point LED", "area": "office"}"
+	for _, toolName := range validTools {
+		prefix := toolName + " "
+		if strings.HasPrefix(content, prefix) {
+			argsJSON := strings.TrimPrefix(content, prefix)
+			// Try to find where the JSON ends (handle trailing text)
+			argsJSON = strings.TrimSpace(argsJSON)
+
+			// Find the matching closing brace
+			if strings.HasPrefix(argsJSON, "{") {
+				depth := 0
+				endIdx := -1
+				for i, c := range argsJSON {
+					if c == '{' {
+						depth++
+					} else if c == '}' {
+						depth--
+						if depth == 0 {
+							endIdx = i + 1
+							break
+						}
+					}
+				}
+				if endIdx > 0 {
+					argsJSON = argsJSON[:endIdx]
+				}
+			}
+
+			var args map[string]any
+			if err := json.Unmarshal([]byte(argsJSON), &args); err == nil {
+				return []ToolCall{{
+					Function: struct {
+						Name      string         `json:"name"`
+						Arguments map[string]any `json:"arguments"`
+					}{
+						Name:      toolName,
+						Arguments: args,
+					},
+				}}
+			}
+		}
+	}
+
 	return nil
 }
 

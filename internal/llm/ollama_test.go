@@ -228,3 +228,71 @@ func TestParseTextToolCalls_Arguments(t *testing.T) {
 		t.Errorf("entity_id = %v, want 'light.kitchen'", args["entity_id"])
 	}
 }
+
+func TestParseTextToolCalls_ToolNameSpaceJSON(t *testing.T) {
+	// Test "tool_name {json}" format that some models output
+	tests := []struct {
+		name       string
+		content    string
+		validTools []string
+		wantTool   string
+		wantArgs   map[string]any
+	}{
+		{
+			name:       "find_entity format",
+			content:    `find_entity {"description": "access point LED", "area": "office", "domain": "light"}`,
+			validTools: []string{"find_entity", "call_service"},
+			wantTool:   "find_entity",
+			wantArgs:   map[string]any{"description": "access point LED", "area": "office", "domain": "light"},
+		},
+		{
+			name:       "call_service format",
+			content:    `call_service {"domain": "light", "service": "turn_on"}`,
+			validTools: []string{"find_entity", "call_service"},
+			wantTool:   "call_service",
+			wantArgs:   map[string]any{"domain": "light", "service": "turn_on"},
+		},
+		{
+			name:       "with trailing text",
+			content:    `find_entity {"description": "office light"} I will turn it on.`,
+			validTools: []string{"find_entity"},
+			wantTool:   "find_entity",
+			wantArgs:   map[string]any{"description": "office light"},
+		},
+		{
+			name:       "invalid tool ignored",
+			content:    `unknown_tool {"foo": "bar"}`,
+			validTools: []string{"find_entity"},
+			wantTool:   "",
+			wantArgs:   nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			calls := parseTextToolCalls(tt.content, tt.validTools)
+
+			if tt.wantTool == "" {
+				if len(calls) != 0 {
+					t.Errorf("expected no tool calls, got %d", len(calls))
+				}
+				return
+			}
+
+			if len(calls) != 1 {
+				t.Fatalf("expected 1 tool call, got %d", len(calls))
+			}
+
+			if calls[0].Function.Name != tt.wantTool {
+				t.Errorf("tool name = %q, want %q", calls[0].Function.Name, tt.wantTool)
+			}
+
+			for k, want := range tt.wantArgs {
+				got := calls[0].Function.Arguments[k]
+				if got != want {
+					t.Errorf("args[%q] = %v, want %v", k, got, want)
+				}
+			}
+		})
+	}
+}
