@@ -378,6 +378,19 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (*R
 		}
 
 		// No tool calls - we have the final response
+		// Debug: log when we expected tool calls but got text
+		if i == 0 && len(llmResp.Message.Content) > 0 {
+			// First iteration with no tool calls - might indicate model didn't use tools
+			preview := llmResp.Message.Content
+			if len(preview) > 200 {
+				preview = preview[:200] + "..."
+			}
+			l.logger.Debug("model responded with text instead of tool call",
+				"content_preview", preview,
+				"content_len", len(llmResp.Message.Content),
+			)
+		}
+		
 		resp := &Response{
 			Content:      llmResp.Message.Content,
 			Model:        model,
