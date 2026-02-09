@@ -424,6 +424,13 @@ func runServe(logger *slog.Logger, configPath string, portOverride int) {
 		logger.Info("embeddings enabled", "model", embModel, "url", embURL)
 	}
 
+	// Set up context providers for dynamic system prompt injection
+	anticipationProvider := anticipation.NewProvider(anticipationStore)
+	contextProvider := agent.NewCompositeContextProvider(anticipationProvider)
+	// TODO: Add facts.ContextProvider when semantic search is ready
+	loop.SetContextProvider(contextProvider)
+	logger.Info("context providers initialized")
+
 	server := api.NewServer(cfg.Listen.Port, loop, rtr, logger)
 	server.SetMemoryStore(mem)
 
