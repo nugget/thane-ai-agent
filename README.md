@@ -33,22 +33,26 @@ Thane is an **autonomous agent**. It has full access to your Home Assistant API 
 
 ## Status
 
-🚧 **Active development** — Core features working, running alongside existing assistant for comparison.
+🚧 **Active development** — HA conversation agent working, testbed running.
 
 **Working:**
+- **HA conversation agent integration** — Dual-port architecture (8080 native + 11434 Ollama-compat)
+- **control_device tool** — Reliable device control with fuzzy entity matching (voice or text)
 - Conversation loop with tool calling
-- Home Assistant integration (get_state, list_entities, call_service)
+- Home Assistant integration (get_state, list_entities, call_service, find_entity)
 - SQLite persistence (conversations, tool calls, facts)
 - Semantic fact storage with embeddings
+- WebSocket client for HA events (event subscriptions, registry access)
 - Model router with audit trail
 - Checkpoint/restore system
-- HTTP API (streaming and non-streaming)
+- HTTP API (OpenAI-compatible)
 - Talents system
 - CLI mode
 
 **In Progress:**
-- Lightweight hints for smaller models ([#22](https://github.com/nugget/thane-ai-agent/issues/22))
-- Home Assistant custom component integration
+- Wire WebSocket events to anticipation triggers
+- Companion app notifications for proactive alerts
+- Intent-parser architecture for model-resilient execution
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for design details.
 
@@ -96,29 +100,33 @@ homeassistant:
   url: http://homeassistant.local:8123
   token: ${HOMEASSISTANT_TOKEN}
 
+# Native API server
+listen:
+  port: 8080
+
+# Ollama-compatible API (for HA integration)
+ollama_api:
+  enabled: true
+  port: 11434
+
 models:
-  default: granite3.1-dense:8b      # Fast local model
+  default: qwen2.5-coder:32b
   ollama_url: http://localhost:11434
-  local_first: true                  # Prefer local models
+  local_first: true
   available:
-    - name: granite3.1-dense:8b
+    - name: qwen2.5-coder:32b
       provider: ollama
       supports_tools: true
       context_window: 131072
-      speed: 8
-      quality: 7
+      speed: 5
+      quality: 8
       cost_tier: 0
-
-embeddings:
-  enabled: true
-  model: nomic-embed-text
-  baseurl: http://localhost:11434
 
 data_dir: ./data       # SQLite databases
 talents_dir: ./talents # Behavioral guidance files
 
-listen:
-  port: 8080
+embeddings:
+  enabled: false  # Optional semantic search
 ```
 
 ## Tools
@@ -127,14 +135,20 @@ Thane provides these tools to the LLM:
 
 | Tool | Description |
 |------|-------------|
+| **`control_device`** | **Primary tool for HA agent** — finds entity by description + executes action |
+| `find_entity` | Smart entity discovery with fuzzy matching |
 | `get_state` | Get current state of any HA entity |
 | `list_entities` | Discover entities by domain or pattern |
-| `call_service` | Call any HA service (turn on lights, etc.) |
+| `call_service` | Low-level HA service call (prefer control_device for natural language) |
 | `schedule_task` | Schedule future actions |
+| `cancel_task` | Cancel a scheduled task |
+| `list_tasks` | List scheduled tasks |
 | `remember_fact` | Store a fact with semantic embeddings |
 | `recall_fact` | Retrieve facts by category or semantic search |
 | `forget_fact` | Remove a stored fact |
-| `semantic_recall` | Natural language search across all facts |
+| `create_anticipation` | Set up event-based triggers |
+| `list_anticipations` | List active anticipations |
+| `resolve_anticipation` | Mark anticipation as handled |
 
 ## Talents
 
@@ -164,23 +178,36 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for details.
 
 ## API
 
-**Chat endpoint (OpenAI-compatible):**
+Thane exposes two API servers:
+
+### Port 8080 — Native API (OpenAI-compatible)
+
+For direct integration and development:
+
 ```bash
 curl http://localhost:8080/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "granite3.1-dense:8b",
-    "messages": [{"role": "user", "content": "Is the sun up?"}],
+    "messages": [{"role": "user", "content": "Turn on the kitchen light"}],
     "stream": false
   }'
 ```
 
-**Simple chat endpoint:**
-```bash
-curl http://localhost:8080/v1/chat \
-  -H "Content-Type: application/json" \
-  -d '{"message": "Is the sun up?"}'
+### Port 11434 — Ollama-compatible API
+
+For Home Assistant's native Ollama integration:
+
+```yaml
+# In HA configuration.yaml
+conversation:
+  - agent_id: conversation.ollama
+    
+# Or via HA UI: Settings → Voice Assistants → Add Ollama
+# URL: http://thane-host:11434
+# Model: thane:latest
 ```
+
+Thane strips HA's injected tools and system prompts, using its own smarter toolset.
 
 **Health check:**
 ```bash

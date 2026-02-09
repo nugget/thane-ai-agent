@@ -149,12 +149,13 @@ Exposes OpenAI-compatible `/v1/chat/completions` endpoint. Requests include:
 - Optional conversation ID for session continuity
 - Tool definitions (auto-populated with HA capabilities)
 
-### Event Listener
+### Event Listener (WebSocket Client)
 
 Connects to HA WebSocket API and:
-- Maintains subscription to state changes
-- Filters events by relevance (configurable)
-- Routes significant events to agent evaluation
+- Authenticates and maintains persistent connection
+- Subscribes to state_changed and other event types
+- Accesses area/device/entity registries (26k+ entities supported)
+- **TODO**: Route events to anticipation matcher for proactive triggers
 
 ### Scheduler
 
@@ -212,29 +213,32 @@ Full HA API client supporting:
 
 ## Roadmap
 
-### Phase 1: Foundation
-- [ ] OpenAI-compatible API server
-- [ ] Basic HA client (REST)
-- [ ] Simple agent loop (single model)
-- [ ] Conversation memory
+### Phase 1: Foundation ✅
+- [x] OpenAI-compatible API server
+- [x] Basic HA client (REST)
+- [x] Simple agent loop with tool calling
+- [x] Conversation memory with SQLite
+- [x] Ollama-compatible API (dual-port architecture)
 
-### Phase 2: Intelligence
-- [ ] HA WebSocket event stream
-- [ ] Model routing
-- [ ] Parallel tool execution
-- [ ] Structured memory store
+### Phase 2: Intelligence ✅
+- [x] HA WebSocket client (event subscriptions, registries)
+- [x] Model routing with audit trail
+- [x] Checkpoint/restore system
+- [x] Structured memory store with embeddings
+- [x] control_device tool (fuzzy entity matching)
 
-### Phase 3: Autonomy
-- [ ] Scheduler with conditions
-- [ ] Proactive actions
-- [ ] Learning from corrections
-- [ ] Multi-agent coordination
+### Phase 3: Autonomy 🚧
+- [x] Scheduler with time-based triggers
+- [x] Anticipation storage (event-based triggers)
+- [ ] Wire WebSocket events to anticipation matcher
+- [ ] Proactive notifications (Companion app)
+- [ ] Intent-parser architecture (model-resilient execution)
 
 ### Phase 4: Polish
-- [ ] HA integration (custom component)
+- [ ] HA Add-on packaging
 - [ ] Web dashboard
 - [ ] Voice pipeline integration
-- [ ] Community tool library
+- [ ] Custom wake word support
 
 ## Technology Choices
 
