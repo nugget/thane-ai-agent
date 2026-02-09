@@ -81,6 +81,9 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("GET /v1/tools/calls", s.handleToolCalls)
 	mux.HandleFunc("GET /v1/tools/stats", s.handleToolStats)
 
+	// Ollama-compatible endpoints (for Home Assistant Ollama integration)
+	s.RegisterOllamaRoutes(mux)
+
 	s.server = &http.Server{
 		Addr:         fmt.Sprintf(":%d", s.port),
 		Handler:      s.withLogging(mux),
