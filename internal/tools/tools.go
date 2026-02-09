@@ -286,10 +286,44 @@ func (r *Registry) registerBuiltins() {
 		Handler: r.handleListEntities,
 	})
 
-	// Call service
+	// Control device - combined find + action (preferred tool for voice control)
+	r.Register(&Tool{
+		Name:        "control_device",
+		Description: "Control a device by description. Finds the device first, then performs the action. USE THIS for voice commands like 'turn on the kitchen light'.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"description": map[string]any{
+					"type":        "string",
+					"description": "Device description (e.g., 'kitchen light', 'office lamp', 'bedroom fan')",
+				},
+				"area": map[string]any{
+					"type":        "string",
+					"description": "Area/room name (e.g., 'office', 'kitchen', 'bedroom')",
+				},
+				"action": map[string]any{
+					"type":        "string",
+					"enum":        []string{"turn_on", "turn_off", "toggle", "set_brightness", "set_color"},
+					"description": "Action to perform",
+				},
+				"brightness": map[string]any{
+					"type":        "integer",
+					"description": "Brightness 0-100 (for set_brightness)",
+				},
+				"color": map[string]any{
+					"type":        "string",
+					"description": "Color name (for set_color, e.g., 'red', 'blue', 'purple')",
+				},
+			},
+			"required": []string{"description", "action"},
+		},
+		Handler: r.handleControlDevice,
+	})
+
+	// Call service (low-level, use control_device for voice commands)
 	r.Register(&Tool{
 		Name:        "call_service",
-		Description: "Call a Home Assistant service to control devices. Examples: turn on lights, set thermostat temperature, lock doors.",
+		Description: "Low-level Home Assistant service call. Only use if you already have the exact entity_id. For voice commands, use control_device instead.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -303,7 +337,7 @@ func (r *Registry) registerBuiltins() {
 				},
 				"entity_id": map[string]any{
 					"type":        "string",
-					"description": "The target entity ID",
+					"description": "The EXACT entity ID (must be verified, not guessed)",
 				},
 				"data": map[string]any{
 					"type":        "object",
@@ -529,6 +563,106 @@ func (r *Registry) handleCallService(ctx context.Context, args map[string]any) (
 	}
 
 	return fmt.Sprintf("Successfully called %s.%s on %s", domain, service, entityID), nil
+}
+
+func (r *Registry) handleControlDevice(ctx context.Context, args map[string]any) (string, error) {
+	if r.ha == nil {
+		return "", fmt.Errorf("Home Assistant not configured")
+	}
+
+	description, _ := args["description"].(string)
+	area, _ := args["area"].(string)
+	action, _ := args["action"].(string)
+
+	if description == "" || action == "" {
+		return "", fmt.Errorf("description and action are required")
+	}
+
+	// Infer domain from action
+	domain := ""
+	switch action {
+	case "turn_on", "turn_off", "toggle", "set_brightness", "set_color":
+		domain = "light" // Default to light for these actions
+	}
+	
+	// Also check description for domain hints
+	descLower := strings.ToLower(description)
+	if strings.Contains(descLower, "fan") {
+		domain = "fan"
+	} else if strings.Contains(descLower, "switch") || strings.Contains(descLower, "outlet") {
+		domain = "switch"
+	} else if strings.Contains(descLower, "lock") {
+		domain = "lock"
+	}
+
+	// Find the entity
+	entities, err := r.ha.GetEntities(ctx, domain)
+	if err != nil {
+		return "", fmt.Errorf("failed to get entities: %w", err)
+	}
+
+	// Build search string
+	searchStr := description
+	if area != "" {
+		searchStr = area + " " + description
+	}
+
+	// Use the fuzzy matching from find_entity
+	matches := fuzzyMatchEntityInfos(searchStr, entities)
+	if len(matches) == 0 {
+		return fmt.Sprintf("Could not find a device matching '%s'", description), nil
+	}
+
+	best := matches[0]
+	entityID := best.EntityID
+	foundName := best.FriendlyName
+	if foundName == "" {
+		foundName = entityID
+	}
+
+	// Build service call
+	service := action
+	if action == "set_brightness" || action == "set_color" {
+		service = "turn_on" // These are turn_on with extra data
+	}
+
+	data := map[string]any{
+		"entity_id": entityID,
+	}
+
+	// Add brightness/color data (works with turn_on too)
+	if brightness, ok := args["brightness"].(float64); ok {
+		data["brightness_pct"] = int(brightness)
+	}
+	if color, ok := args["color"].(string); ok && color != "" {
+		data["color_name"] = color
+	}
+
+	// Extract domain from entity_id
+	parts := strings.SplitN(entityID, ".", 2)
+	if len(parts) == 2 {
+		domain = parts[0]
+	}
+
+	// Execute the service call
+	if err := r.ha.CallService(ctx, domain, service, data); err != nil {
+		return "", fmt.Errorf("failed to control %s: %w", foundName, err)
+	}
+
+	// Build friendly response
+	actionPast := map[string]string{
+		"turn_on":        "turned on",
+		"turn_off":       "turned off",
+		"toggle":         "toggled",
+		"set_brightness": "adjusted brightness of",
+		"set_color":      "changed color of",
+	}
+	verb := actionPast[action]
+	if verb == "" {
+		verb = action
+	}
+
+	return fmt.Sprintf("Done. %s %s.", strings.Title(verb), foundName), nil
 }
 
 func (r *Registry) handleScheduleTask(ctx context.Context, args map[string]any) (string, error) {

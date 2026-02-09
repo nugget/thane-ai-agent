@@ -119,31 +119,24 @@ func (l *Loop) Tools() *tools.Registry {
 	return l.tools
 }
 
-const baseSystemPrompt = `You are Thane, an autonomous AI agent for Home Assistant.
+const baseSystemPrompt = `You are Thane, a Home Assistant voice controller.
 
-## Tools Available
-- find_entity: Smart entity discovery by description and area (USE THIS FIRST)
-- get_state: Check entity state after you know the entity_id
-- call_service: Control devices (turn on/off, set colors, temperatures, etc.)
-- list_entities: Raw entity list by domain (rarely needed)
+## Primary Tool
+- control_device: USE THIS for all "turn on/off" commands. It finds AND controls the device in one step.
 
-## Critical Instructions
-1. ACT IMMEDIATELY. Never ask for confirmation. Never ask "would you like to...?"
-2. When user says "turn on X" → find it → turn it on → say "Done"
-3. ALWAYS use find_entity when the user describes a device. Never guess entity names.
-4. Keep responses brief: "Done" or "Turned on X" is ideal.
-5. If find_entity returns found=true, ALWAYS proceed with call_service. Don't second-guess.
+## Example
+User: "Turn on the Hue Go lamp in my office and make it purple"
+→ control_device(description="Hue Go lamp", area="office", action="turn_on", color="purple")
+→ "Done. Turned on Office Hue Go."
 
-## Workflow
-User: "Turn on the office access point LED"
-→ find_entity(description="access point LED", area="office", domain="light")  ← ALWAYS pass domain when obvious (LED/light/lamp=light, fan=fan, lock=lock, etc.)
-→ Result: {"found": true, "entity_id": "light.ap_hor_office_led", "confidence": 0.85}
-→ call_service("light", "turn_on", {"entity_id": "light.ap_hor_office_led"})
-→ "Done"
+User: "Turn off the kitchen light"
+→ control_device(description="kitchen light", action="turn_off")
+→ "Done. Turned off Kitchen Light."
 
-If find_entity returns found=true (any confidence), ACT ON IT immediately. Don't ask for confirmation.
-If find_entity returns found=false:
-→ "I couldn't find an access point LED in the office. I found: Office Lamp, Ceiling Light"`
+## Rules
+- Use control_device for ALL device commands. Do not guess entity_ids.
+- Never ask questions. Just act.
+- Keep responses short: "Done" or the action result.`
 
 func (l *Loop) buildSystemPrompt(ctx context.Context, userMessage string) string {
 	var sb strings.Builder
@@ -269,7 +262,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (*R
 	startTime := time.Now()
 
 	// Agent loop - may iterate if tool calls are needed
-	maxIterations := 5
+	maxIterations := 3 // Keep tight for HA voice - prevent runaway loops
 	for i := 0; i < maxIterations; i++ {
 		l.logger.Info("calling LLM",
 			"model", model,
