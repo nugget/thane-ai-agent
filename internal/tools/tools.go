@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nugget/thane-ai-agent/internal/anticipation"
 	"github.com/nugget/thane-ai-agent/internal/facts"
 	"github.com/nugget/thane-ai-agent/internal/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/scheduler"
@@ -23,10 +24,11 @@ type Tool struct {
 
 // Registry holds available tools.
 type Registry struct {
-	tools     map[string]*Tool
-	ha        *homeassistant.Client
-	scheduler *scheduler.Scheduler
-	factTools *facts.Tools
+	tools             map[string]*Tool
+	ha                *homeassistant.Client
+	scheduler         *scheduler.Scheduler
+	factTools         *facts.Tools
+	anticipationTools *anticipation.Tools
 }
 
 // NewRegistry creates a tool registry with HA integration.
@@ -44,6 +46,12 @@ func NewRegistry(ha *homeassistant.Client, sched *scheduler.Scheduler) *Registry
 func (r *Registry) SetFactTools(ft *facts.Tools) {
 	r.factTools = ft
 	r.registerFactTools()
+}
+
+// SetAnticipationTools adds anticipation management tools to the registry.
+func (r *Registry) SetAnticipationTools(at *anticipation.Tools) {
+	r.anticipationTools = at
+	r.registerAnticipationTools()
 }
 
 func (r *Registry) registerFactTools() {
@@ -129,6 +137,111 @@ func (r *Registry) registerFactTools() {
 		Handler: func(ctx context.Context, args map[string]any) (string, error) {
 			argsJSON, _ := json.Marshal(args)
 			return r.factTools.Forget(string(argsJSON))
+		},
+	})
+}
+
+func (r *Registry) registerAnticipationTools() {
+	if r.anticipationTools == nil {
+		return
+	}
+
+	r.Register(&Tool{
+		Name:        "create_anticipation",
+		Description: "Create an anticipation — something you're expecting to happen. When you wake and conditions match, you'll receive context to remember why you care about this moment.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"description": map[string]any{
+					"type":        "string",
+					"description": "Short description of what you're anticipating (e.g., 'Dan's flight arriving')",
+				},
+				"context": map[string]any{
+					"type":        "string",
+					"description": "Instructions/reasoning to inject when this anticipation matches. What should you do or check when this happens?",
+				},
+				"after_time": map[string]any{
+					"type":        "string",
+					"description": "ISO8601 timestamp — anticipation activates after this time (e.g., '2026-02-09T14:30:00Z')",
+				},
+				"entity_id": map[string]any{
+					"type":        "string",
+					"description": "Entity to watch (e.g., 'person.dan', 'binary_sensor.front_door')",
+				},
+				"entity_state": map[string]any{
+					"type":        "string",
+					"description": "State to match for entity (e.g., 'home', 'on', 'open')",
+				},
+				"zone": map[string]any{
+					"type":        "string",
+					"description": "Zone name for presence matching (e.g., 'airport', 'home')",
+				},
+				"zone_action": map[string]any{
+					"type":        "string",
+					"enum":        []string{"enter", "leave"},
+					"description": "Zone transition type",
+				},
+				"event_type": map[string]any{
+					"type":        "string",
+					"description": "Event type to match (e.g., 'presence_change', 'state_change')",
+				},
+				"expires_in": map[string]any{
+					"type":        "string",
+					"description": "Duration until expiration (e.g., '2h', '24h', '7d'). Omit for no expiration.",
+				},
+			},
+			"required": []string{"description", "context"},
+		},
+		Handler: func(ctx context.Context, args map[string]any) (string, error) {
+			return r.anticipationTools.Execute("create_anticipation", args)
+		},
+	})
+
+	r.Register(&Tool{
+		Name:        "list_anticipations",
+		Description: "List all active (non-resolved, non-expired) anticipations.",
+		Parameters: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{},
+		},
+		Handler: func(ctx context.Context, args map[string]any) (string, error) {
+			return r.anticipationTools.Execute("list_anticipations", args)
+		},
+	})
+
+	r.Register(&Tool{
+		Name:        "resolve_anticipation",
+		Description: "Mark an anticipation as resolved — it happened and was handled.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"id": map[string]any{
+					"type":        "string",
+					"description": "Anticipation ID to resolve",
+				},
+			},
+			"required": []string{"id"},
+		},
+		Handler: func(ctx context.Context, args map[string]any) (string, error) {
+			return r.anticipationTools.Execute("resolve_anticipation", args)
+		},
+	})
+
+	r.Register(&Tool{
+		Name:        "cancel_anticipation",
+		Description: "Cancel an anticipation — no longer relevant or needed.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"id": map[string]any{
+					"type":        "string",
+					"description": "Anticipation ID to cancel",
+				},
+			},
+			"required": []string{"id"},
+		},
+		Handler: func(ctx context.Context, args map[string]any) (string, error) {
+			return r.anticipationTools.Execute("cancel_anticipation", args)
 		},
 	})
 }

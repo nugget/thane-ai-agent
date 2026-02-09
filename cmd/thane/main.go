@@ -12,6 +12,7 @@ import (
 	"syscall"
 
 	"github.com/nugget/thane-ai-agent/internal/agent"
+	"github.com/nugget/thane-ai-agent/internal/anticipation"
 	"github.com/nugget/thane-ai-agent/internal/api"
 	"github.com/nugget/thane-ai-agent/internal/checkpoint"
 	"github.com/nugget/thane-ai-agent/internal/config"
@@ -386,6 +387,24 @@ func runServe(logger *slog.Logger, configPath string, portOverride int) {
 	factTools := facts.NewTools(factStore)
 	loop.Tools().SetFactTools(factTools)
 	logger.Info("fact store initialized", "path", dataDir+"/facts.db")
+
+	// Create anticipation store for bridging intent to wake
+	anticipationDB, err := sql.Open("sqlite3", dataDir+"/anticipations.db")
+	if err != nil {
+		logger.Error("failed to open anticipation db", "error", err)
+		os.Exit(1)
+	}
+	defer anticipationDB.Close()
+
+	anticipationStore, err := anticipation.NewStore(anticipationDB)
+	if err != nil {
+		logger.Error("failed to create anticipation store", "error", err)
+		os.Exit(1)
+	}
+
+	anticipationTools := anticipation.NewTools(anticipationStore)
+	loop.Tools().SetAnticipationTools(anticipationTools)
+	logger.Info("anticipation store initialized", "path", dataDir+"/anticipations.db")
 
 	// Set up embedding client for semantic search
 	if cfg.Embeddings.Enabled {
