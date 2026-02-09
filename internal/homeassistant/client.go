@@ -128,7 +128,12 @@ type EntityRegistryEntry struct {
 	AreaID       string `json:"area_id"`
 	DeviceID     string `json:"device_id"`
 	Platform     string `json:"platform"`
-	Disabled     bool   `json:"disabled_by"`
+	DisabledBy   string `json:"disabled_by"` // "user", "integration", or empty
+}
+
+// IsDisabled returns true if the entity is disabled.
+func (e EntityRegistryEntry) IsDisabled() bool {
+	return e.DisabledBy != ""
 }
 
 // GetEntityRegistry retrieves the entity registry.

@@ -152,11 +152,10 @@ func handleOllamaChatShared(w http.ResponseWriter, r *http.Request, loop *agent.
 		Model:    model,
 	}
 
-	// Check if streaming is requested (default true for Ollama)
-	streaming := true
-	if req.Stream != nil {
-		streaming = *req.Stream
-	}
+	// Force non-streaming - text-based tool calls leak JSON during streaming
+	// TODO: Buffer first response chunk to detect tool calls before streaming
+	streaming := false
+	_ = req.Stream
 
 	if streaming {
 		handleOllamaStreamingChatShared(w, r, agentReq, start, loop, logger)
@@ -335,6 +334,32 @@ func sanitizeHARequest(req *OllamaChatRequest, logger *slog.Logger) (areaContext
 		req.Tools = nil
 	}
 
+	// Clean up assistant messages that have JSON tool calls as text
+	// (from previous text-based tool call parsing that leaked to HA)
+	// Check both unescaped and escaped JSON prefixes
+	for i, msg := range req.Messages {
+		if msg.Role == "assistant" {
+			content := msg.Content
+			// Check for JSON tool call patterns (escaped or unescaped)
+			hasToolJSON := strings.HasPrefix(content, "{\"name\":") ||
+				strings.HasPrefix(content, "{\\\"name\\\":") ||
+				strings.Contains(content, "\"name\": \"find_entity\"") ||
+				strings.Contains(content, "\"name\": \"call_service\"")
+
+			if hasToolJSON {
+				// Find where JSON objects end and keep only the trailing text
+				cleaned := stripLeadingJSON(content)
+				if cleaned != content {
+					req.Messages[i].Content = cleaned
+					logger.Info("stripped JSON from assistant message",
+						"original_len", len(content),
+						"cleaned", cleaned,
+					)
+				}
+			}
+		}
+	}
+
 	// Extract area context from system message before stripping
 	// Look for "You are in area X (floor Y)"
 	for i, msg := range req.Messages {
@@ -358,6 +383,59 @@ func sanitizeHARequest(req *OllamaChatRequest, logger *slog.Logger) (areaContext
 	}
 
 	return areaContext
+}
+
+// stripLeadingJSON removes JSON objects from the beginning of a string,
+// returning any trailing text. Handles multiple consecutive JSON objects.
+func stripLeadingJSON(s string) string {
+	s = strings.TrimSpace(s)
+	for {
+		if !strings.HasPrefix(s, "{") {
+			break
+		}
+		end := findJSONEnd(s)
+		if end <= 0 {
+			break
+		}
+		s = strings.TrimSpace(s[end:])
+	}
+	return s
+}
+
+// findJSONEnd finds the end of a JSON object in a string.
+func findJSONEnd(s string) int {
+	if !strings.HasPrefix(s, "{") {
+		return -1
+	}
+	depth := 0
+	inString := false
+	escape := false
+	for i, c := range s {
+		if escape {
+			escape = false
+			continue
+		}
+		if c == '\\' {
+			escape = true
+			continue
+		}
+		if c == '"' {
+			inString = !inString
+			continue
+		}
+		if inString {
+			continue
+		}
+		if c == '{' {
+			depth++
+		} else if c == '}' {
+			depth--
+			if depth == 0 {
+				return i + 1
+			}
+		}
+	}
+	return -1
 }
 
 // Note: captureBody is defined in debug_request.go
