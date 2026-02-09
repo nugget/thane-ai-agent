@@ -84,6 +84,14 @@ func (s *Server) RegisterOllamaRoutes(mux *http.ServeMux) {
 func (s *Server) handleOllamaChat(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 
+	// Capture and log raw request for debugging
+	rawBody, err := captureBody(r)
+	if err != nil {
+		s.ollamaError(w, http.StatusBadRequest, "failed to read body")
+		return
+	}
+	s.logger.Info("ollama chat request received", "raw_body", string(rawBody))
+
 	var req OllamaChatRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		s.ollamaError(w, http.StatusBadRequest, "invalid request body")
