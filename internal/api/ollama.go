@@ -88,8 +88,12 @@ func (s *Server) RegisterOllamaRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/chat", func(w http.ResponseWriter, r *http.Request) {
 		handleOllamaChatShared(w, r, s.loop, s.logger)
 	})
-	mux.HandleFunc("GET /api/tags", handleOllamaTagsShared)
-	mux.HandleFunc("GET /api/version", handleOllamaVersionShared)
+	mux.HandleFunc("GET /api/tags", func(w http.ResponseWriter, r *http.Request) {
+		handleOllamaTagsShared(w, r, s.logger)
+	})
+	mux.HandleFunc("GET /api/version", func(w http.ResponseWriter, r *http.Request) {
+		handleOllamaVersionShared(w, r, s.logger)
+	})
 }
 
 // handleOllamaChatShared handles the Ollama /api/chat endpoint.
@@ -183,7 +187,9 @@ func handleOllamaChatShared(w http.ResponseWriter, r *http.Request, loop *agent.
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(ollamaResp)
+	if err := json.NewEncoder(w).Encode(ollamaResp); err != nil {
+		logger.Debug("failed to encode ollama response", "error", err)
+	}
 }
 
 // handleOllamaStreamingChatShared handles streaming chat responses in Ollama format.
@@ -261,7 +267,7 @@ func handleOllamaStreamingChatShared(w http.ResponseWriter, r *http.Request, req
 }
 
 // handleOllamaTagsShared returns the list of available models.
-func handleOllamaTagsShared(w http.ResponseWriter, r *http.Request) {
+func handleOllamaTagsShared(w http.ResponseWriter, r *http.Request, logger *slog.Logger) {
 	// Return Thane as the only available model
 	resp := OllamaTagsResponse{
 		Models: []OllamaModel{
@@ -284,24 +290,29 @@ func handleOllamaTagsShared(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(resp)
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		logger.Debug("failed to encode tags response", "error", err)
+	}
 }
 
 // handleOllamaVersionShared returns the Ollama-compatible version.
-func handleOllamaVersionShared(w http.ResponseWriter, r *http.Request) {
+func handleOllamaVersionShared(w http.ResponseWriter, r *http.Request, logger *slog.Logger) {
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(OllamaVersionResponse{
+	if err := json.NewEncoder(w).Encode(OllamaVersionResponse{
 		Version: "0.1.0", // Thane version
-	})
+	}); err != nil {
+		logger.Debug("failed to encode version response", "error", err)
+	}
 }
 
 // ollamaError sends an error response in a format Ollama clients expect.
+// Errors writing the response are intentionally not logged - if the client
+// disconnected, there's nothing actionable we can do.
 func ollamaError(w http.ResponseWriter, code int, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
-	_ = json.NewEncoder(w).Encode(map[string]string{
-		"error": message,
-	})
+	// Best-effort write - client may have disconnected
+	_, _ = w.Write([]byte(`{"error":"` + message + `"}`))
 }
 
 // sanitizeHARequest strips HA-provided tools and instructions, keeping only

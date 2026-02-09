@@ -103,10 +103,10 @@ func (s *OllamaServer) handleGenerate(w http.ResponseWriter, r *http.Request) {
 
 // handleTags handles GET /api/tags (list models).
 func (s *OllamaServer) handleTags(w http.ResponseWriter, r *http.Request) {
-	handleOllamaTagsShared(w, r)
+	handleOllamaTagsShared(w, r, s.logger)
 }
 
 // handleVersion handles GET /api/version.
 func (s *OllamaServer) handleVersion(w http.ResponseWriter, r *http.Request) {
-	handleOllamaVersionShared(w, r)
+	handleOllamaVersionShared(w, r, s.logger)
 }
