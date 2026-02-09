@@ -1,0 +1,20 @@
+# Thane Configuration Example
+# Copy to config.yaml and customize for your deployment
+
+listen:
+  port: 11434  # Default Ollama port for HA compatibility
+
+homeassistant:
+  url: https://your-homeassistant.local:8123
+  token: ${HOMEASSISTANT_TOKEN}  # Or paste token directly
+
+models:
+  default: qwen2.5:72b
+  ollama_url: http://your-ollama-server:11434
+  local_first: true
+
+data_dir: ./data
+talents_dir: ./talents
+
+embeddings:
+  enabled: false
