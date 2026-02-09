@@ -152,12 +152,10 @@ func handleOllamaChatShared(w http.ResponseWriter, r *http.Request, loop *agent.
 		Model:    model,
 	}
 
-	// Check if streaming is requested (default true for Ollama)
-	// Re-enabled now that control_device makes proper tool calls
-	streaming := true
-	if req.Stream != nil {
-		streaming = *req.Stream
-	}
+	// Force non-streaming - text-based tool calls leak JSON during streaming
+	// TODO: Buffer first response chunk to detect tool calls before streaming
+	streaming := false
+	_ = req.Stream
 
 	if streaming {
 		handleOllamaStreamingChatShared(w, r, agentReq, start, loop, logger)
