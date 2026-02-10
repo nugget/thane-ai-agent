@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/anticipation"
+	"github.com/nugget/thane-ai-agent/internal/buildinfo"
 	"github.com/nugget/thane-ai-agent/internal/facts"
 	"github.com/nugget/thane-ai-agent/internal/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/scheduler"
@@ -624,6 +625,21 @@ func (r *Registry) registerBuiltins() {
 			"required": []string{"task_id"},
 		},
 		Handler: r.handleCancelTask,
+	})
+
+	// Get version/build info
+	r.Register(&Tool{
+		Name:        "get_version",
+		Description: "Get Thane's version, build info, git commit, and uptime. Use when asked about your version or to diagnose issues.",
+		Parameters: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{},
+		},
+		Handler: func(ctx context.Context, args map[string]any) (string, error) {
+			info := buildinfo.Info()
+			out, _ := json.MarshalIndent(info, "", "  ")
+			return string(out), nil
+		},
 	})
 }
 

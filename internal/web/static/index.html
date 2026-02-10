@@ -411,7 +411,7 @@
         <span class="header-stats" id="header-stats" title="Click to refresh">
             <span id="stats-text">—</span>
         </span>
-        <a href="https://github.com/nugget/thane-ai-agent" target="_blank" rel="noopener" style="font-size:10px; color:var(--text-secondary); text-decoration:none; opacity:0.5; margin-left:8px;">v0.1.1</a>
+        <a id="version-link" href="https://github.com/nugget/thane-ai-agent" target="_blank" rel="noopener" style="font-size:10px; color:var(--text-secondary); text-decoration:none; opacity:0.5; margin-left:8px;">—</a>
     </div>
 
     <div id="context-bar" style="padding:4px 16px; background:var(--bg-secondary); border-bottom:1px solid var(--border); display:flex; align-items:center; gap:12px; font-size:11px; color:var(--text-secondary);">
@@ -669,6 +669,18 @@
                     text = `~$${bal} remaining · ${text}`;
                 }
                 statsEl.textContent = text;
+
+                // Update build info
+                if (data.build) {
+                    const b = data.build;
+                    const bar = document.getElementById('context-bar');
+                    bar.title = `Thane ${b.version} (${b.git_commit}@${b.git_branch}) · built ${b.build_time} · up ${b.uptime} · ${b.go_version}`;
+                    const vLink = document.getElementById('version-link');
+                    vLink.textContent = b.version;
+                    if (b.git_commit !== 'unknown') {
+                        vLink.href = `https://github.com/nugget/thane-ai-agent/commit/${b.git_commit}`;
+                    }
+                }
 
                 // Update context window bar
                 if (data.context_window > 0) {

@@ -15,6 +15,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/agent"
 	"github.com/nugget/thane-ai-agent/internal/anticipation"
 	"github.com/nugget/thane-ai-agent/internal/api"
+	"github.com/nugget/thane-ai-agent/internal/buildinfo"
 	"github.com/nugget/thane-ai-agent/internal/checkpoint"
 	"github.com/nugget/thane-ai-agent/internal/config"
 	"github.com/nugget/thane-ai-agent/internal/embeddings"
@@ -60,7 +61,10 @@ func main() {
 			}
 			runIngest(logger, *configPath, flag.Arg(1))
 		case "version":
-			fmt.Println("thane v0.1.1")
+			fmt.Println(buildinfo.String())
+			for k, v := range buildinfo.Info() {
+				fmt.Printf("  %-12s %s\n", k+":", v)
+			}
 		default:
 			fmt.Fprintf(os.Stderr, "unknown command: %s\n", flag.Arg(0))
 			os.Exit(1)
@@ -208,7 +212,7 @@ func runIngest(logger *slog.Logger, configPath string, filePath string) {
 }
 
 func runServe(logger *slog.Logger, configPath string, portOverride int) {
-	logger.Info("starting Thane", "version", "0.1.1")
+	logger.Info("starting Thane", "version", buildinfo.Version, "commit", buildinfo.GitCommit, "branch", buildinfo.GitBranch, "built", buildinfo.BuildTime)
 
 	// Load config
 	var cfg *config.Config

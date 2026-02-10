@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nugget/thane-ai-agent/internal/agent"
+	"github.com/nugget/thane-ai-agent/internal/buildinfo"
 	"github.com/nugget/thane-ai-agent/internal/checkpoint"
 	"github.com/nugget/thane-ai-agent/internal/memory"
 	"github.com/nugget/thane-ai-agent/internal/router"
@@ -84,15 +85,16 @@ func (s *SessionStats) SetBalance(balance float64) {
 
 // SessionStatsSnapshot is a copy-safe snapshot of session stats.
 type SessionStatsSnapshot struct {
-	TotalInputTokens  int64   `json:"total_input_tokens"`
-	TotalOutputTokens int64   `json:"total_output_tokens"`
-	TotalRequests     int64   `json:"total_requests"`
-	EstimatedCostUSD  float64 `json:"estimated_cost_usd"`
-	ReportedBalance   float64 `json:"reported_balance_usd,omitempty"`
-	BalanceSetAt      string  `json:"balance_set_at,omitempty"`
-	ContextTokens     int     `json:"context_tokens"`
-	ContextWindow     int     `json:"context_window"`
-	MessageCount      int     `json:"message_count"`
+	TotalInputTokens  int64             `json:"total_input_tokens"`
+	TotalOutputTokens int64             `json:"total_output_tokens"`
+	TotalRequests     int64             `json:"total_requests"`
+	EstimatedCostUSD  float64           `json:"estimated_cost_usd"`
+	ReportedBalance   float64           `json:"reported_balance_usd,omitempty"`
+	BalanceSetAt      string            `json:"balance_set_at,omitempty"`
+	ContextTokens     int               `json:"context_tokens"`
+	ContextWindow     int               `json:"context_window"`
+	MessageCount      int               `json:"message_count"`
+	Build             map[string]string `json:"build,omitempty"`
 }
 
 func (s *SessionStats) Snapshot() SessionStatsSnapshot {
@@ -142,6 +144,7 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("POST /v1/chat", s.handleSimpleChat)
 
 	// Health endpoints
+	mux.HandleFunc("GET /v1/version", s.handleVersion)
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("GET /", s.handleRoot)
 
@@ -216,9 +219,14 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	writeJSON(w, map[string]string{
 		"name":    "Thane",
-		"version": "0.1.1",
+		"version": buildinfo.Version,
 		"status":  "ok",
 	}, s.logger)
+}
+
+func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	writeJSON(w, buildinfo.Info(), s.logger)
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -824,6 +832,7 @@ func (s *Server) handleSessionStats(w http.ResponseWriter, r *http.Request) {
 	// Estimate context tokens from the "default" conversation
 	snap.ContextTokens = s.loop.GetTokenCount("default")
 	snap.ContextWindow = s.loop.GetContextWindow()
+	snap.Build = buildinfo.Info()
 
 	w.Header().Set("Content-Type", "application/json")
 	writeJSON(w, snap, s.logger)
