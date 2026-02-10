@@ -82,7 +82,7 @@ type Loop struct {
 	memory          MemoryStore
 	compactor       Compactor
 	router          *router.Router
-	llm             *llm.OllamaClient
+	llm             llm.Client
 	tools           *tools.Registry
 	model           string
 	talents         string // Combined talent content for system prompt
@@ -91,13 +91,13 @@ type Loop struct {
 }
 
 // NewLoop creates a new agent loop.
-func NewLoop(logger *slog.Logger, mem MemoryStore, compactor Compactor, rtr *router.Router, ha *homeassistant.Client, sched *scheduler.Scheduler, ollamaURL, defaultModel, talents string) *Loop {
+func NewLoop(logger *slog.Logger, mem MemoryStore, compactor Compactor, rtr *router.Router, ha *homeassistant.Client, sched *scheduler.Scheduler, llmClient llm.Client, defaultModel, talents string) *Loop {
 	return &Loop{
 		logger:    logger,
 		memory:    mem,
 		compactor: compactor,
 		router:    rtr,
-		llm:       llm.NewOllamaClient(ollamaURL),
+		llm:       llmClient,
 		tools:     tools.NewRegistry(ha, sched),
 		model:     defaultModel,
 		talents:   talents,
@@ -428,8 +428,9 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (*R
 
 				// Add tool result message
 				llmMessages = append(llmMessages, llm.Message{
-					Role:    "tool",
-					Content: result,
+					Role:       "tool",
+					Content:    result,
+					ToolCallID: tc.ID, // Required by Anthropic for tool_result correlation
 				})
 			}
 

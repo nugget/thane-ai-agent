@@ -13,11 +13,17 @@ type Config struct {
 	OllamaAPI     OllamaAPIConfig     `yaml:"ollama_api"`
 	HomeAssistant HomeAssistantConfig `yaml:"homeassistant"`
 	Models        ModelsConfig        `yaml:"models"`
+	Anthropic     AnthropicConfig     `yaml:"anthropic"`
 	Embeddings    EmbeddingsConfig    `yaml:"embeddings"`
 	Workspace     WorkspaceConfig     `yaml:"workspace"`
 	ShellExec     ShellExecConfig     `yaml:"shell_exec"`
 	DataDir       string              `yaml:"data_dir"`
 	TalentsDir    string              `yaml:"talents_dir"`
+}
+
+// AnthropicConfig defines Anthropic API settings.
+type AnthropicConfig struct {
+	APIKey string `yaml:"api_key"`
 }
 
 // WorkspaceConfig defines the agent's workspace for file operations.
