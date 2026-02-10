@@ -14,8 +14,17 @@ type Config struct {
 	HomeAssistant HomeAssistantConfig `yaml:"homeassistant"`
 	Models        ModelsConfig        `yaml:"models"`
 	Embeddings    EmbeddingsConfig    `yaml:"embeddings"`
+	Workspace     WorkspaceConfig     `yaml:"workspace"`
 	DataDir       string              `yaml:"data_dir"`
 	TalentsDir    string              `yaml:"talents_dir"`
+}
+
+// WorkspaceConfig defines the agent's workspace for file operations.
+type WorkspaceConfig struct {
+	// Path is the root directory for file operations.
+	// All file tool paths are relative to this directory.
+	// If empty, file tools are disabled.
+	Path string `yaml:"path"`
 }
 
 // OllamaAPIConfig defines the optional Ollama-compatible API server.
