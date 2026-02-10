@@ -1,6 +1,6 @@
 # Thane
 
-> Your home already has an agent. We make it *autonomous*.
+> An autonomous AI agent that learns, remembers, and acts.
 
 **Thane** is an autonomous AI agent that manages your home and life — not just your smart home, but anything you point it at. It smartly selects between local models via Ollama and cloud-based frontier models, optimizing for performance or cost as the task demands. Persistent memory means it learns and grows over time.
 
