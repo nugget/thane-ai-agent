@@ -431,7 +431,7 @@ func runServe(logger *slog.Logger, configPath string, portOverride int) {
 	loop.SetContextProvider(contextProvider)
 	logger.Info("context providers initialized")
 
-	server := api.NewServer(cfg.Listen.Port, loop, rtr, logger)
+	server := api.NewServer(cfg.Listen.Address, cfg.Listen.Port, loop, rtr, logger)
 	server.SetMemoryStore(mem)
 
 	// Create checkpointer

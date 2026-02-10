@@ -29,6 +29,7 @@ func writeJSON(w http.ResponseWriter, v any, logger *slog.Logger) {
 
 // Server is the HTTP API server.
 type Server struct {
+	address      string
 	port         int
 	loop         *agent.Loop
 	router       *router.Router
@@ -39,12 +40,13 @@ type Server struct {
 }
 
 // NewServer creates a new API server.
-func NewServer(port int, loop *agent.Loop, rtr *router.Router, logger *slog.Logger) *Server {
+func NewServer(address string, port int, loop *agent.Loop, rtr *router.Router, logger *slog.Logger) *Server {
 	return &Server{
-		port:   port,
-		loop:   loop,
-		router: rtr,
-		logger: logger,
+		address: address,
+		port:    port,
+		loop:    loop,
+		router:  rtr,
+		logger:  logger,
 	}
 }
 
@@ -99,13 +101,17 @@ func (s *Server) Start(ctx context.Context) error {
 	// only if you need single-port operation.
 
 	s.server = &http.Server{
-		Addr:         fmt.Sprintf(":%d", s.port),
+		Addr:         fmt.Sprintf("%s:%d", s.address, s.port),
 		Handler:      s.withLogging(mux),
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 120 * time.Second, // Long for streaming responses
 	}
 
-	s.logger.Info("starting API server", "port", s.port)
+	addr := s.address
+	if addr == "" {
+		addr = "0.0.0.0"
+	}
+	s.logger.Info("starting API server", "address", addr, "port", s.port)
 	return s.server.ListenAndServe()
 }
 

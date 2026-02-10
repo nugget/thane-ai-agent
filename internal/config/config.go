@@ -35,7 +35,8 @@ type EmbeddingsConfig struct {
 
 // ListenConfig defines the API server settings.
 type ListenConfig struct {
-	Port int `yaml:"port"`
+	Address string `yaml:"address"` // Bind address (default: "" = all interfaces)
+	Port    int    `yaml:"port"`
 }
 
 // HomeAssistantConfig defines HA connection settings.
