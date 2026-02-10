@@ -88,12 +88,13 @@ type Loop struct {
 	tools           *tools.Registry
 	model           string
 	talents         string // Combined talent content for system prompt
+	persona         string // Persona content (replaces base system prompt if set)
 	failoverHandler FailoverHandler
 	contextProvider ContextProvider
 }
 
 // NewLoop creates a new agent loop.
-func NewLoop(logger *slog.Logger, mem MemoryStore, compactor Compactor, rtr *router.Router, ha *homeassistant.Client, sched *scheduler.Scheduler, llmClient llm.Client, defaultModel, talents string) *Loop {
+func NewLoop(logger *slog.Logger, mem MemoryStore, compactor Compactor, rtr *router.Router, ha *homeassistant.Client, sched *scheduler.Scheduler, llmClient llm.Client, defaultModel, talents, persona string) *Loop {
 	return &Loop{
 		logger:    logger,
 		memory:    mem,
@@ -103,6 +104,7 @@ func NewLoop(logger *slog.Logger, mem MemoryStore, compactor Compactor, rtr *rou
 		tools:     tools.NewRegistry(ha, sched),
 		model:     defaultModel,
 		talents:   talents,
+		persona:   persona,
 	}
 }
 
@@ -195,7 +197,11 @@ User: "Turn off the kitchen light"
 
 func (l *Loop) buildSystemPrompt(ctx context.Context, userMessage string) string {
 	var sb strings.Builder
-	sb.WriteString(baseSystemPrompt)
+	if l.persona != "" {
+		sb.WriteString(l.persona)
+	} else {
+		sb.WriteString(baseSystemPrompt)
+	}
 
 	// Add current time
 	sb.WriteString("\n\n## Current Time\n")

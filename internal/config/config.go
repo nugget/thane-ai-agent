@@ -19,6 +19,7 @@ type Config struct {
 	ShellExec     ShellExecConfig     `yaml:"shell_exec"`
 	DataDir       string              `yaml:"data_dir"`
 	TalentsDir    string              `yaml:"talents_dir"`
+	PersonaFile   string              `yaml:"persona_file"`
 }
 
 // AnthropicConfig defines Anthropic API settings.
