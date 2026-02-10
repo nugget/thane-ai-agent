@@ -15,6 +15,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/checkpoint"
 	"github.com/nugget/thane-ai-agent/internal/memory"
 	"github.com/nugget/thane-ai-agent/internal/router"
+	"github.com/nugget/thane-ai-agent/internal/web"
 )
 
 // writeJSON encodes v as JSON to w, logging any errors at debug level.
@@ -89,6 +90,9 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("GET /v1/conversations/{id}", s.handleConversationGet)
 	mux.HandleFunc("GET /v1/tools/calls", s.handleToolCalls)
 	mux.HandleFunc("GET /v1/tools/stats", s.handleToolStats)
+
+	// Chat web UI
+	web.RegisterRoutes(mux)
 
 	// Note: Ollama-compatible API is served on a separate port via OllamaServer
 	// when ollama_api.enabled is true in config. Use RegisterOllamaRoutes()
