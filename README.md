@@ -69,7 +69,7 @@ Thane's agent loop receives a request, assembles context from memory and home st
 
 **Working today:** Conversation agent, HA integration, device control, semantic memory, checkpoints, shell exec, web chat UI, dual-port APIs.
 
-**Next up:** Proactive event-driven triggers, companion app notifications, voice pipeline integration, Apple ecosystem access.
+**Next up:** Proactive event-driven triggers, voice pipeline integration, Apple ecosystem access.
 
 **Longer term:** HA Add-on packaging, multi-instance deployment, identity system with cryptographic integrity.
 
