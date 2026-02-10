@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/agent"
 	"github.com/nugget/thane-ai-agent/internal/anticipation"
@@ -25,6 +26,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/router"
 	"github.com/nugget/thane-ai-agent/internal/scheduler"
 	"github.com/nugget/thane-ai-agent/internal/talents"
+	"github.com/nugget/thane-ai-agent/internal/tools"
 
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -58,7 +60,7 @@ func main() {
 			}
 			runIngest(logger, *configPath, flag.Arg(1))
 		case "version":
-			fmt.Println("thane v0.1.0")
+			fmt.Println("thane v0.1.1")
 		default:
 			fmt.Fprintf(os.Stderr, "unknown command: %s\n", flag.Arg(0))
 			os.Exit(1)
@@ -209,7 +211,7 @@ func runIngest(logger *slog.Logger, configPath string, filePath string) {
 }
 
 func runServe(logger *slog.Logger, configPath string, portOverride int) {
-	logger.Info("starting Thane", "version", "0.1.0")
+	logger.Info("starting Thane", "version", "0.1.1")
 
 	// Load config
 	var cfg *config.Config
@@ -405,6 +407,39 @@ func runServe(logger *slog.Logger, configPath string, portOverride int) {
 	anticipationTools := anticipation.NewTools(anticipationStore)
 	loop.Tools().SetAnticipationTools(anticipationTools)
 	logger.Info("anticipation store initialized", "path", dataDir+"/anticipations.db")
+
+	// Set up file tools for workspace access
+	if cfg.Workspace.Path != "" {
+		fileTools := tools.NewFileTools(cfg.Workspace.Path)
+		loop.Tools().SetFileTools(fileTools)
+		logger.Info("file tools enabled", "workspace", cfg.Workspace.Path)
+	} else {
+		logger.Info("file tools disabled (no workspace path configured)")
+	}
+
+	// Set up shell exec tools
+	if cfg.ShellExec.Enabled {
+		timeout := cfg.ShellExec.DefaultTimeoutSec
+		if timeout == 0 {
+			timeout = 30
+		}
+		shellCfg := tools.ShellExecConfig{
+			Enabled:        true,
+			WorkingDir:     cfg.ShellExec.WorkingDir,
+			AllowedCmds:    cfg.ShellExec.AllowedPrefixes,
+			DeniedCmds:     cfg.ShellExec.DeniedPatterns,
+			DefaultTimeout: time.Duration(timeout) * time.Second,
+		}
+		// Add default denied patterns if none configured
+		if len(shellCfg.DeniedCmds) == 0 {
+			shellCfg.DeniedCmds = tools.DefaultShellExecConfig().DeniedCmds
+		}
+		shellExec := tools.NewShellExec(shellCfg)
+		loop.Tools().SetShellExec(shellExec)
+		logger.Info("shell exec enabled", "working_dir", cfg.ShellExec.WorkingDir)
+	} else {
+		logger.Info("shell exec disabled")
+	}
 
 	// Set up embedding client for semantic search
 	if cfg.Embeddings.Enabled {

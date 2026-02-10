@@ -29,6 +29,8 @@ type Registry struct {
 	scheduler         *scheduler.Scheduler
 	factTools         *facts.Tools
 	anticipationTools *anticipation.Tools
+	fileTools         *FileTools
+	shellExec         *ShellExec
 }
 
 // NewRegistry creates a tool registry with HA integration.
@@ -53,6 +55,18 @@ func (r *Registry) SetFactTools(ft *facts.Tools) {
 func (r *Registry) SetAnticipationTools(at *anticipation.Tools) {
 	r.anticipationTools = at
 	r.registerAnticipationTools()
+}
+
+// SetFileTools adds file operation tools to the registry.
+func (r *Registry) SetFileTools(ft *FileTools) {
+	r.fileTools = ft
+	r.registerFileTools()
+}
+
+// SetShellExec adds shell execution tools to the registry.
+func (r *Registry) SetShellExec(se *ShellExec) {
+	r.shellExec = se
+	r.registerShellExec()
 }
 
 func (r *Registry) registerFactTools() {
@@ -87,7 +101,10 @@ func (r *Registry) registerFactTools() {
 			"required": []string{"key", "value"},
 		},
 		Handler: func(ctx context.Context, args map[string]any) (string, error) {
-			argsJSON, _ := json.Marshal(args)
+			argsJSON, err := json.Marshal(args)
+			if err != nil {
+				return "", fmt.Errorf("failed to serialize arguments: %w", err)
+			}
 			return r.factTools.Remember(string(argsJSON))
 		},
 	})
@@ -113,7 +130,10 @@ func (r *Registry) registerFactTools() {
 			},
 		},
 		Handler: func(ctx context.Context, args map[string]any) (string, error) {
-			argsJSON, _ := json.Marshal(args)
+			argsJSON, err := json.Marshal(args)
+			if err != nil {
+				return "", fmt.Errorf("failed to serialize arguments: %w", err)
+			}
 			return r.factTools.Recall(string(argsJSON))
 		},
 	})
@@ -136,7 +156,10 @@ func (r *Registry) registerFactTools() {
 			"required": []string{"category", "key"},
 		},
 		Handler: func(ctx context.Context, args map[string]any) (string, error) {
-			argsJSON, _ := json.Marshal(args)
+			argsJSON, err := json.Marshal(args)
+			if err != nil {
+				return "", fmt.Errorf("failed to serialize arguments: %w", err)
+			}
 			return r.factTools.Forget(string(argsJSON))
 		},
 	})
@@ -243,6 +266,198 @@ func (r *Registry) registerAnticipationTools() {
 		},
 		Handler: func(ctx context.Context, args map[string]any) (string, error) {
 			return r.anticipationTools.Execute("cancel_anticipation", args)
+		},
+	})
+}
+
+func (r *Registry) registerFileTools() {
+	if r.fileTools == nil || !r.fileTools.Enabled() {
+		return
+	}
+
+	r.Register(&Tool{
+		Name:        "file_read",
+		Description: "Read the contents of a file from the workspace. Use for accessing configuration, memory files, documentation, or any text file.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"path": map[string]any{
+					"type":        "string",
+					"description": "Path to the file (relative to workspace root)",
+				},
+				"offset": map[string]any{
+					"type":        "integer",
+					"description": "Line number to start reading from (1-indexed, optional)",
+				},
+				"limit": map[string]any{
+					"type":        "integer",
+					"description": "Maximum number of lines to read (optional)",
+				},
+			},
+			"required": []string{"path"},
+		},
+		Handler: func(ctx context.Context, args map[string]any) (string, error) {
+			path, _ := args["path"].(string)
+			offset := 0
+			limit := 0
+			if o, ok := args["offset"].(float64); ok {
+				offset = int(o)
+			}
+			if l, ok := args["limit"].(float64); ok {
+				limit = int(l)
+			}
+			return r.fileTools.Read(ctx, path, offset, limit)
+		},
+	})
+
+	r.Register(&Tool{
+		Name:        "file_write",
+		Description: "Write content to a file in the workspace. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"path": map[string]any{
+					"type":        "string",
+					"description": "Path to the file (relative to workspace root)",
+				},
+				"content": map[string]any{
+					"type":        "string",
+					"description": "Content to write to the file",
+				},
+			},
+			"required": []string{"path", "content"},
+		},
+		Handler: func(ctx context.Context, args map[string]any) (string, error) {
+			path, _ := args["path"].(string)
+			content, _ := args["content"].(string)
+			if err := r.fileTools.Write(ctx, path, content); err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("Successfully wrote %d bytes to %s", len(content), path), nil
+		},
+	})
+
+	r.Register(&Tool{
+		Name:        "file_edit",
+		Description: "Edit a file by replacing exact text. The old text must match exactly (including whitespace). Use this for precise, surgical edits.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"path": map[string]any{
+					"type":        "string",
+					"description": "Path to the file (relative to workspace root)",
+				},
+				"old_text": map[string]any{
+					"type":        "string",
+					"description": "Exact text to find and replace (must match exactly)",
+				},
+				"new_text": map[string]any{
+					"type":        "string",
+					"description": "New text to replace the old text with",
+				},
+			},
+			"required": []string{"path", "old_text", "new_text"},
+		},
+		Handler: func(ctx context.Context, args map[string]any) (string, error) {
+			path, _ := args["path"].(string)
+			oldText, _ := args["old_text"].(string)
+			newText, _ := args["new_text"].(string)
+			if err := r.fileTools.Edit(ctx, path, oldText, newText); err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("Successfully edited %s", path), nil
+		},
+	})
+
+	r.Register(&Tool{
+		Name:        "file_list",
+		Description: "List files and directories in a workspace path.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"path": map[string]any{
+					"type":        "string",
+					"description": "Path to the directory (relative to workspace root, use '.' for root)",
+				},
+			},
+			"required": []string{"path"},
+		},
+		Handler: func(ctx context.Context, args map[string]any) (string, error) {
+			path, _ := args["path"].(string)
+			if path == "" {
+				path = "."
+			}
+			entries, err := r.fileTools.List(ctx, path)
+			if err != nil {
+				return "", err
+			}
+			if len(entries) == 0 {
+				return "Directory is empty", nil
+			}
+			return fmt.Sprintf("Contents of %s:\n%s", path, strings.Join(entries, "\n")), nil
+		},
+	})
+}
+
+func (r *Registry) registerShellExec() {
+	if r.shellExec == nil || !r.shellExec.Enabled() {
+		return
+	}
+
+	r.Register(&Tool{
+		Name:        "exec",
+		Description: "Execute a shell command. Use for system administration, network diagnostics (ping, curl, traceroute), building software, or any task requiring shell access.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"command": map[string]any{
+					"type":        "string",
+					"description": "Shell command to execute",
+				},
+				"timeout": map[string]any{
+					"type":        "integer",
+					"description": "Timeout in seconds (optional, default 30, max 300)",
+				},
+			},
+			"required": []string{"command"},
+		},
+		Handler: func(ctx context.Context, args map[string]any) (string, error) {
+			command, _ := args["command"].(string)
+			timeout := 0
+			if t, ok := args["timeout"].(float64); ok {
+				timeout = int(t)
+			}
+
+			result, err := r.shellExec.Exec(ctx, command, timeout)
+			if err != nil {
+				return "", err
+			}
+
+			// Format result for LLM
+			var output strings.Builder
+			if result.Stdout != "" {
+				output.WriteString(result.Stdout)
+			}
+			if result.Stderr != "" {
+				if output.Len() > 0 {
+					output.WriteString("\n\n[stderr]\n")
+				}
+				output.WriteString(result.Stderr)
+			}
+			if result.ExitCode != 0 {
+				output.WriteString(fmt.Sprintf("\n\n[exit code: %d]", result.ExitCode))
+			}
+			if result.TimedOut {
+				output.WriteString("\n\n[command timed out]")
+			}
+			if result.Error != "" {
+				output.WriteString(fmt.Sprintf("\n\n[error: %s]", result.Error))
+			}
+
+			if output.Len() == 0 {
+				return "(no output)", nil
+			}
+			return output.String(), nil
 		},
 	})
 }
@@ -758,7 +973,10 @@ func (r *Registry) handleCancelTask(ctx context.Context, args map[string]any) (s
 	}
 
 	// Try to find task by full ID or prefix
-	tasks, _ := r.scheduler.ListTasks(false)
+	tasks, err := r.scheduler.ListTasks(false)
+	if err != nil {
+		return "", fmt.Errorf("failed to list tasks: %w", err)
+	}
 	var found *scheduler.Task
 	for _, t := range tasks {
 		if t.ID == taskID || strings.HasPrefix(t.ID, taskID) {

@@ -139,7 +139,7 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	writeJSON(w, map[string]string{
 		"name":    "Thane",
-		"version": "0.1.0",
+		"version": "0.1.1",
 		"status":  "ok",
 	}, s.logger)
 }

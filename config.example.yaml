@@ -43,6 +43,30 @@ models:
 data_dir: ./data
 talents_dir: ./talents
 
+# Workspace for file operations (optional)
+# When configured, the agent can read/write files within this directory
+# All file tool paths are sandboxed to this directory
+workspace:
+  path: ""  # e.g., /home/aimee/.openclaw/workspace
+
+# Shell execution (optional, disabled by default)
+# When enabled, the agent can execute shell commands on the host.
+# Use with caution — configure denied_patterns and allowed_prefixes
+# to restrict what the agent can do.
+shell_exec:
+  enabled: false
+  working_dir: ""  # e.g., /home/thane — defaults to process cwd
+  denied_patterns:
+    - "rm -rf /"
+    - "rm -rf /*"
+    - "mkfs"
+    - "dd if="
+    - ":(){:|:&};:"
+    - "chmod -R 777 /"
+    - "> /dev/sda"
+  allowed_prefixes: []  # Empty = allow all (subject to denied_patterns)
+  default_timeout_sec: 30
+
 # Semantic search (optional)
 embeddings:
   enabled: false

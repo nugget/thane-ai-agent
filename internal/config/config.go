@@ -14,8 +14,33 @@ type Config struct {
 	HomeAssistant HomeAssistantConfig `yaml:"homeassistant"`
 	Models        ModelsConfig        `yaml:"models"`
 	Embeddings    EmbeddingsConfig    `yaml:"embeddings"`
+	Workspace     WorkspaceConfig     `yaml:"workspace"`
+	ShellExec     ShellExecConfig     `yaml:"shell_exec"`
 	DataDir       string              `yaml:"data_dir"`
 	TalentsDir    string              `yaml:"talents_dir"`
+}
+
+// WorkspaceConfig defines the agent's workspace for file operations.
+type WorkspaceConfig struct {
+	// Path is the root directory for file operations.
+	// All file tool paths are relative to this directory.
+	// If empty, file tools are disabled.
+	Path string `yaml:"path"`
+}
+
+// ShellExecConfig defines shell execution capabilities.
+type ShellExecConfig struct {
+	// Enabled allows shell command execution. Disabled by default for safety.
+	Enabled bool `yaml:"enabled"`
+	// WorkingDir sets the default working directory for commands.
+	WorkingDir string `yaml:"working_dir"`
+	// DeniedPatterns are command patterns to block (e.g., "rm -rf /").
+	DeniedPatterns []string `yaml:"denied_patterns"`
+	// AllowedPrefixes limits commands to those starting with these prefixes.
+	// Empty means all commands are allowed (subject to denied patterns).
+	AllowedPrefixes []string `yaml:"allowed_prefixes"`
+	// DefaultTimeoutSec is the default timeout in seconds (default 30).
+	DefaultTimeoutSec int `yaml:"default_timeout_sec"`
 }
 
 // OllamaAPIConfig defines the optional Ollama-compatible API server.
