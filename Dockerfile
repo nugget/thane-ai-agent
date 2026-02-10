@@ -41,8 +41,9 @@ RUN mkdir -p /data /config && chown -R thane:thane /data /config
 
 USER thane
 
-# Default port (OpenAI-compatible API)
+# Default ports
 EXPOSE 8080
+EXPOSE 11434
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s \

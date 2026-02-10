@@ -1,0 +1,45 @@
+# Docker Compose for Thane on pocket.hollowoak.net
+# Uses Traefik for TLS termination
+
+services:
+  thane:
+    build: .
+    container_name: thane
+    restart: unless-stopped
+    environment:
+      - HOMEASSISTANT_TOKEN=${HOMEASSISTANT_TOKEN}
+    volumes:
+      - ./config.yaml:/config/config.yaml:ro
+      - thane-data:/data
+      - ./talents:/config/talents:ro
+    command: ["-config", "/config/config.yaml", "serve"]
+    expose:
+      - "8080"
+      - "11434"
+    networks:
+      - traefik_proxy
+    labels:
+      # Enable Traefik
+      - "traefik.enable=true"
+      - "traefik.docker.network=traefik_proxy"
+      
+      # Chat UI service (port 8080)
+      - "traefik.http.services.thane-chat.loadbalancer.server.port=8080"
+      - "traefik.http.routers.thane-chat.service=thane-chat"
+      - "traefik.http.routers.thane-chat.rule=Host(`chat.hollowoak.net`)"
+      - "traefik.http.routers.thane-chat.entrypoints=websecure"
+      - "traefik.http.routers.thane-chat.tls.certresolver=${TRAEFIK_CERTRESOLVER:-letsEncryptTLS}"
+      
+      # Ollama API service (port 11434) 
+      - "traefik.http.services.thane-ollama.loadbalancer.server.port=11434"
+      - "traefik.http.routers.thane-ollama.service=thane-ollama"
+      - "traefik.http.routers.thane-ollama.rule=Host(`thane.hollowoak.net`)"
+      - "traefik.http.routers.thane-ollama.entrypoints=websecure"
+      - "traefik.http.routers.thane-ollama.tls.certresolver=${TRAEFIK_CERTRESOLVER:-letsEncryptTLS}"
+
+volumes:
+  thane-data:
+
+networks:
+  traefik_proxy:
+    external: true
