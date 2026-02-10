@@ -600,34 +600,42 @@ func runServe(logger *slog.Logger, configPath string, portOverride int) {
 	logger.Info("Thane stopped")
 }
 
-// createLLMClient creates the appropriate LLM client based on the default model's provider.
+// createLLMClient creates a multi-provider LLM client based on config.
+// Routes each model to its configured provider. Falls back to Ollama for unknown models.
 func createLLMClient(cfg *config.Config, logger *slog.Logger) llm.Client {
-	// Determine provider from the default model config
-	provider := "ollama" // default
+	ollamaURL := cfg.Models.OllamaURL
+	if ollamaURL == "" {
+		ollamaURL = "http://localhost:11434"
+	}
+
+	ollamaClient := llm.NewOllamaClient(ollamaURL)
+	multi := llm.NewMultiClient(ollamaClient)
+	multi.AddProvider("ollama", ollamaClient)
+
+	// Register Anthropic provider if configured
+	if cfg.Anthropic.APIKey != "" {
+		anthropicClient := llm.NewAnthropicClient(cfg.Anthropic.APIKey)
+		multi.AddProvider("anthropic", anthropicClient)
+		logger.Info("Anthropic provider configured")
+	}
+
+	// Map each model to its provider
 	for _, m := range cfg.Models.Available {
-		if m.Name == cfg.Models.Default {
-			if m.Provider != "" {
-				provider = m.Provider
-			}
-			break
+		provider := m.Provider
+		if provider == "" {
+			provider = "ollama"
 		}
+		multi.AddModel(m.Name, provider)
 	}
 
-	switch provider {
-	case "anthropic":
-		if cfg.Anthropic.APIKey == "" {
-			logger.Error("anthropic provider selected but no API key configured")
-			os.Exit(1)
+	// Log default model's provider
+	defaultProvider := "ollama"
+	for _, m := range cfg.Models.Available {
+		if m.Name == cfg.Models.Default && m.Provider != "" {
+			defaultProvider = m.Provider
 		}
-		logger.Info("using Anthropic provider", "model", cfg.Models.Default)
-		return llm.NewAnthropicClient(cfg.Anthropic.APIKey)
-
-	default: // "ollama" or unspecified
-		ollamaURL := cfg.Models.OllamaURL
-		if ollamaURL == "" {
-			ollamaURL = "http://localhost:11434"
-		}
-		logger.Info("using Ollama provider", "model", cfg.Models.Default, "url", ollamaURL)
-		return llm.NewOllamaClient(ollamaURL)
 	}
+	logger.Info("LLM client initialized", "default_model", cfg.Models.Default, "default_provider", defaultProvider)
+
+	return multi
 }

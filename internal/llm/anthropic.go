@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"time"
 )
 
 const (
@@ -28,7 +27,9 @@ func NewAnthropicClient(apiKey string) *AnthropicClient {
 	return &AnthropicClient{
 		apiKey: apiKey,
 		httpClient: &http.Client{
-			Timeout: 5 * time.Minute,
+			// No global timeout — streaming responses can be long-lived.
+			// Rely on ctx deadlines/cancellation for timeout control.
+			Timeout: 0,
 		},
 	}
 }
@@ -183,9 +184,8 @@ func (c *AnthropicClient) Ping(ctx context.Context) error {
 	if httpResp.StatusCode == http.StatusUnauthorized {
 		return fmt.Errorf("invalid API key")
 	}
-	// Any non-server-error response means we can reach the API
-	if httpResp.StatusCode >= 500 {
-		return fmt.Errorf("API error %d", httpResp.StatusCode)
+	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
+		return fmt.Errorf("unexpected status from Anthropic API: %d", httpResp.StatusCode)
 	}
 	return nil
 }
@@ -221,7 +221,7 @@ func (c *AnthropicClient) handleStreaming(body io.Reader, callback StreamCallbac
 			continue
 		}
 
-		data := strings.TrimPrefix(line, "data: ")
+		data := strings.TrimSpace(strings.TrimPrefix(line, "data: "))
 		if data == "[DONE]" {
 			break
 		}
@@ -235,7 +235,7 @@ func (c *AnthropicClient) handleStreaming(body io.Reader, callback StreamCallbac
 		case "message_start":
 			if event.Message != nil {
 				model = event.Message.Model
-				usage.InputTokens = event.Message.Usage.InputTokens
+				usage = event.Message.Usage
 			}
 
 		case "content_block_start":
@@ -303,12 +303,13 @@ func (c *AnthropicClient) handleStreaming(body io.Reader, callback StreamCallbac
 			Content:   contentBuilder.String(),
 			ToolCalls: toolCalls,
 		},
-		Done: true,
+		Done:            true,
+		PromptEvalCount: usage.InputTokens,
+		EvalCount:       usage.OutputTokens,
 	}
 
-	// Map Anthropic stop reasons
-	_ = stopReason // Available for future use (end_turn, tool_use, max_tokens, stop_sequence)
-	_ = usage      // Available for future cost tracking
+	// stopReason available for future use (end_turn, tool_use, max_tokens, stop_sequence)
+	_ = stopReason
 
 	return resp, nil
 }
@@ -334,14 +335,14 @@ func convertToAnthropic(messages []Message) ([]anthropicMessage, string) {
 						Text: msg.Content,
 					})
 				}
-				for _, tc := range msg.ToolCalls {
+				for i, tc := range msg.ToolCalls {
 					args := tc.Function.Arguments
 					if args == nil {
 						args = map[string]any{}
 					}
 					id := tc.ID
 					if id == "" {
-						id = "toolu_" + tc.Function.Name
+						id = fmt.Sprintf("toolu_%s_%d", tc.Function.Name, i)
 					}
 					blocks = append(blocks, anthropicContent{
 						Type:  "tool_use",
