@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/agent"
 	"github.com/nugget/thane-ai-agent/internal/anticipation"
@@ -414,6 +415,30 @@ func runServe(logger *slog.Logger, configPath string, portOverride int) {
 		logger.Info("file tools enabled", "workspace", cfg.Workspace.Path)
 	} else {
 		logger.Info("file tools disabled (no workspace path configured)")
+	}
+
+	// Set up shell exec tools
+	if cfg.ShellExec.Enabled {
+		timeout := cfg.ShellExec.DefaultTimeoutSec
+		if timeout == 0 {
+			timeout = 30
+		}
+		shellCfg := tools.ShellExecConfig{
+			Enabled:        true,
+			WorkingDir:     cfg.ShellExec.WorkingDir,
+			AllowedCmds:    cfg.ShellExec.AllowedPrefixes,
+			DeniedCmds:     cfg.ShellExec.DeniedPatterns,
+			DefaultTimeout: time.Duration(timeout) * time.Second,
+		}
+		// Add default denied patterns if none configured
+		if len(shellCfg.DeniedCmds) == 0 {
+			shellCfg.DeniedCmds = tools.DefaultShellExecConfig().DeniedCmds
+		}
+		shellExec := tools.NewShellExec(shellCfg)
+		loop.Tools().SetShellExec(shellExec)
+		logger.Info("shell exec enabled", "working_dir", cfg.ShellExec.WorkingDir)
+	} else {
+		logger.Info("shell exec disabled")
 	}
 
 	// Set up embedding client for semantic search
