@@ -4,6 +4,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"strings"
 	"time"
@@ -48,6 +49,7 @@ type MemoryStore interface {
 	GetMessages(conversationID string) []memory.Message
 	AddMessage(conversationID, role, content string) error
 	GetTokenCount(conversationID string) int
+	Clear(conversationID string) error
 	Stats() map[string]any
 }
 
@@ -88,21 +90,25 @@ type Loop struct {
 	tools           *tools.Registry
 	model           string
 	talents         string // Combined talent content for system prompt
+	persona         string // Persona content (replaces base system prompt if set)
+	contextWindow   int    // Context window size of default model
 	failoverHandler FailoverHandler
 	contextProvider ContextProvider
 }
 
 // NewLoop creates a new agent loop.
-func NewLoop(logger *slog.Logger, mem MemoryStore, compactor Compactor, rtr *router.Router, ha *homeassistant.Client, sched *scheduler.Scheduler, llmClient llm.Client, defaultModel, talents string) *Loop {
+func NewLoop(logger *slog.Logger, mem MemoryStore, compactor Compactor, rtr *router.Router, ha *homeassistant.Client, sched *scheduler.Scheduler, llmClient llm.Client, defaultModel, talents, persona string, contextWindow int) *Loop {
 	return &Loop{
-		logger:    logger,
-		memory:    mem,
-		compactor: compactor,
-		router:    rtr,
-		llm:       llmClient,
-		tools:     tools.NewRegistry(ha, sched),
-		model:     defaultModel,
-		talents:   talents,
+		logger:        logger,
+		memory:        mem,
+		compactor:     compactor,
+		router:        rtr,
+		llm:           llmClient,
+		tools:         tools.NewRegistry(ha, sched),
+		model:         defaultModel,
+		talents:       talents,
+		persona:       persona,
+		contextWindow: contextWindow,
 	}
 }
 
@@ -195,7 +201,11 @@ User: "Turn off the kitchen light"
 
 func (l *Loop) buildSystemPrompt(ctx context.Context, userMessage string) string {
 	var sb strings.Builder
-	sb.WriteString(baseSystemPrompt)
+	if l.persona != "" {
+		sb.WriteString(l.persona)
+	} else {
+		sb.WriteString(baseSystemPrompt)
+	}
 
 	// Add current time
 	sb.WriteString("\n\n## Current Time\n")
@@ -511,6 +521,29 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (*R
 // MemoryStats returns current memory statistics.
 func (l *Loop) MemoryStats() map[string]any {
 	return l.memory.Stats()
+}
+
+// GetTokenCount returns the estimated token count for a conversation.
+func (l *Loop) GetTokenCount(conversationID string) int {
+	return l.memory.GetTokenCount(conversationID)
+}
+
+// GetContextWindow returns the context window size of the default model.
+func (l *Loop) GetContextWindow() int {
+	return l.contextWindow
+}
+
+// ResetConversation clears the conversation history.
+func (l *Loop) ResetConversation(conversationID string) error {
+	return l.memory.Clear(conversationID)
+}
+
+// TriggerCompaction manually triggers conversation compaction.
+func (l *Loop) TriggerCompaction(ctx context.Context, conversationID string) error {
+	if l.compactor == nil {
+		return fmt.Errorf("compaction not configured")
+	}
+	return l.compactor.Compact(ctx, conversationID)
 }
 
 // ToolsJSON returns the tools definition as JSON (for debugging).

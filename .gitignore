@@ -47,3 +47,14 @@ thane-linux-*
 .env
 docker-compose.pocket.yml
 docker-compose.*.yml
+
+# Instance-specific identity symlinks (Phase 1 memory pooling)
+MEMORY.md
+SOUL.md
+USER.md
+TOOLS.md
+IDENTITY.md
+/memory/
+thane-notes/
+persona.md
+talents/shared-memory.md

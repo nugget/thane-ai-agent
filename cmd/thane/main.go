@@ -121,7 +121,7 @@ func runAsk(logger *slog.Logger, configPath string, args []string) {
 	mem := memory.NewStore(100)
 
 	// Create agent loop (no router/scheduler for CLI mode - uses default model)
-	loop := agent.NewLoop(logger, mem, nil, nil, ha, nil, llmClient, cfg.Models.Default, talentContent)
+	loop := agent.NewLoop(logger, mem, nil, nil, ha, nil, llmClient, cfg.Models.Default, talentContent, "", 0)
 
 	// Process the question
 	ctx := context.Background()
@@ -310,6 +310,18 @@ func runServe(logger *slog.Logger, configPath string, portOverride int) {
 		logger.Info("talents loaded", "count", len(talentList), "talents", talentList)
 	}
 
+	// Load persona file (replaces default system prompt if set)
+	var personaContent string
+	if cfg.PersonaFile != "" {
+		data, err := os.ReadFile(cfg.PersonaFile)
+		if err != nil {
+			logger.Error("failed to load persona file", "path", cfg.PersonaFile, "error", err)
+			os.Exit(1)
+		}
+		personaContent = string(data)
+		logger.Info("persona loaded", "path", cfg.PersonaFile, "size", len(personaContent))
+	}
+
 	// Create model router
 	routerCfg := router.Config{
 		DefaultModel: cfg.Models.Default,
@@ -373,7 +385,16 @@ func runServe(logger *slog.Logger, configPath string, portOverride int) {
 	}
 	defer sched.Stop()
 
-	loop := agent.NewLoop(logger, mem, compactor, rtr, ha, sched, llmClient, cfg.Models.Default, talentContent)
+	// Find context window for default model
+	defaultContextWindow := 200000 // sensible default
+	for _, m := range cfg.Models.Available {
+		if m.Name == cfg.Models.Default {
+			defaultContextWindow = m.ContextWindow
+			break
+		}
+	}
+
+	loop := agent.NewLoop(logger, mem, compactor, rtr, ha, sched, llmClient, cfg.Models.Default, talentContent, personaContent, defaultContextWindow)
 
 	// Create fact store for long-term memory
 	factStore, err := facts.NewStore(dataDir + "/facts.db")
@@ -407,7 +428,7 @@ func runServe(logger *slog.Logger, configPath string, portOverride int) {
 
 	// Set up file tools for workspace access
 	if cfg.Workspace.Path != "" {
-		fileTools := tools.NewFileTools(cfg.Workspace.Path)
+		fileTools := tools.NewFileTools(cfg.Workspace.Path, cfg.Workspace.ReadOnlyDirs)
 		loop.Tools().SetFileTools(fileTools)
 		logger.Info("file tools enabled", "workspace", cfg.Workspace.Path)
 	} else {

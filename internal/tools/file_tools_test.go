@@ -15,7 +15,7 @@ func TestFileTools_ResolvePath(t *testing.T) {
 	}
 	defer os.RemoveAll(workspace)
 
-	ft := NewFileTools(workspace)
+	ft := NewFileTools(workspace, nil)
 
 	tests := []struct {
 		name    string
@@ -32,7 +32,7 @@ func TestFileTools_ResolvePath(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := ft.resolvePath(tt.path)
+			_, _, err := ft.resolvePath(tt.path)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("resolvePath(%q) error = %v, wantErr %v", tt.path, err, tt.wantErr)
 			}
@@ -48,7 +48,7 @@ func TestFileTools_ReadWriteEdit(t *testing.T) {
 	}
 	defer os.RemoveAll(workspace)
 
-	ft := NewFileTools(workspace)
+	ft := NewFileTools(workspace, nil)
 	ctx := context.Background()
 
 	// Test write
@@ -117,7 +117,7 @@ func TestFileTools_List(t *testing.T) {
 	os.WriteFile(filepath.Join(workspace, "file2.md"), []byte("test"), 0644)
 	os.MkdirAll(filepath.Join(workspace, "subdir"), 0755)
 
-	ft := NewFileTools(workspace)
+	ft := NewFileTools(workspace, nil)
 	ctx := context.Background()
 
 	entries, err := ft.List(ctx, ".")
@@ -149,7 +149,7 @@ func TestFileTools_CreateNestedDirectories(t *testing.T) {
 	}
 	defer os.RemoveAll(workspace)
 
-	ft := NewFileTools(workspace)
+	ft := NewFileTools(workspace, nil)
 	ctx := context.Background()
 
 	// Write to deeply nested path
@@ -169,7 +169,7 @@ func TestFileTools_CreateNestedDirectories(t *testing.T) {
 }
 
 func TestFileTools_Disabled(t *testing.T) {
-	ft := NewFileTools("")
+	ft := NewFileTools("", nil)
 
 	if ft.Enabled() {
 		t.Error("FileTools should be disabled with empty path")
@@ -204,7 +204,7 @@ func TestFileTools_ReadNonExistent(t *testing.T) {
 	}
 	defer os.RemoveAll(workspace)
 
-	ft := NewFileTools(workspace)
+	ft := NewFileTools(workspace, nil)
 	ctx := context.Background()
 
 	_, err = ft.Read(ctx, "does-not-exist.txt", 0, 0)
@@ -220,7 +220,7 @@ func TestFileTools_EditDuplicateText(t *testing.T) {
 	}
 	defer os.RemoveAll(workspace)
 
-	ft := NewFileTools(workspace)
+	ft := NewFileTools(workspace, nil)
 	ctx := context.Background()
 
 	// Write file with duplicate text
@@ -244,7 +244,7 @@ func TestFileTools_EditNonExistent(t *testing.T) {
 	}
 	defer os.RemoveAll(workspace)
 
-	ft := NewFileTools(workspace)
+	ft := NewFileTools(workspace, nil)
 	ctx := context.Background()
 
 	err = ft.Edit(ctx, "does-not-exist.txt", "old", "new")
@@ -260,7 +260,7 @@ func TestFileTools_ListNonExistent(t *testing.T) {
 	}
 	defer os.RemoveAll(workspace)
 
-	ft := NewFileTools(workspace)
+	ft := NewFileTools(workspace, nil)
 	ctx := context.Background()
 
 	_, err = ft.List(ctx, "does-not-exist")
@@ -276,7 +276,7 @@ func TestFileTools_ReadOffsetBeyondFile(t *testing.T) {
 	}
 	defer os.RemoveAll(workspace)
 
-	ft := NewFileTools(workspace)
+	ft := NewFileTools(workspace, nil)
 	ctx := context.Background()
 
 	// Write 3-line file
@@ -299,7 +299,7 @@ func TestFileTools_OverwriteExisting(t *testing.T) {
 	}
 	defer os.RemoveAll(workspace)
 
-	ft := NewFileTools(workspace)
+	ft := NewFileTools(workspace, nil)
 	ctx := context.Background()
 
 	// Write initial content

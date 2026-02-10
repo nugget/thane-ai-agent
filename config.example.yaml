@@ -56,6 +56,10 @@ models:
 data_dir: ./data
 talents_dir: ./talents
 
+# Persona file — replaces the default system prompt with custom identity.
+# Copy persona.default.md to persona.md and customize for your instance.
+# persona_file: ./persona.md
+
 # Workspace for file operations (optional)
 # When configured, the agent can read/write files within this directory
 # All file tool paths are sandboxed to this directory
