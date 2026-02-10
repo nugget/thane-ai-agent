@@ -16,16 +16,18 @@ import (
 // OllamaServer is a dedicated server for Ollama-compatible API endpoints.
 // It runs on a separate port (default 11434) to avoid conflicts with the native API.
 type OllamaServer struct {
-	port   int
-	loop   *agent.Loop
-	logger *slog.Logger
-	server *http.Server
+	address string
+	port    int
+	loop    *agent.Loop
+	logger  *slog.Logger
+	server  *http.Server
 }
 
 // NewOllamaServer creates a new Ollama-compatible API server.
-func NewOllamaServer(port int, loop *agent.Loop, logger *slog.Logger) *OllamaServer {
+func NewOllamaServer(address string, port int, loop *agent.Loop, logger *slog.Logger) *OllamaServer {
 	return &OllamaServer{
-		port:   port,
+		address: address,
+		port:    port,
 		loop:   loop,
 		logger: logger,
 	}
@@ -46,13 +48,17 @@ func (s *OllamaServer) Start(ctx context.Context) error {
 	mux.HandleFunc("GET /{$}", s.handleHealth)
 
 	s.server = &http.Server{
-		Addr:         fmt.Sprintf(":%d", s.port),
+		Addr:         fmt.Sprintf("%s:%d", s.address, s.port),
 		Handler:      s.withLogging(mux),
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 300 * time.Second, // Long for slow models
 	}
 
-	s.logger.Info("starting Ollama-compatible API server", "port", s.port)
+	addr := s.address
+	if addr == "" {
+		addr = "0.0.0.0"
+	}
+	s.logger.Info("starting Ollama-compatible API server", "address", addr, "port", s.port)
 	return s.server.ListenAndServe()
 }
 

@@ -22,8 +22,9 @@ type Config struct {
 // When enabled, Thane exposes an Ollama-compatible API on a separate port
 // for Home Assistant integration.
 type OllamaAPIConfig struct {
-	Enabled bool `yaml:"enabled"`
-	Port    int  `yaml:"port"` // Default: 11434
+	Enabled bool   `yaml:"enabled"`
+	Address string `yaml:"address"` // Bind address (default: "" = all interfaces)
+	Port    int    `yaml:"port"`    // Default: 11434
 }
 
 // EmbeddingsConfig defines embedding generation settings.

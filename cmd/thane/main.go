@@ -526,7 +526,7 @@ func runServe(logger *slog.Logger, configPath string, portOverride int) {
 		if port == 0 {
 			port = 11434 // Default Ollama port
 		}
-		ollamaServer = api.NewOllamaServer(port, loop, logger)
+		ollamaServer = api.NewOllamaServer(cfg.OllamaAPI.Address, port, loop, logger)
 		go func() {
 			if err := ollamaServer.Start(context.Background()); err != nil {
 				logger.Error("ollama API server failed", "error", err)
