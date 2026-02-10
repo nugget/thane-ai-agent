@@ -754,6 +754,23 @@
         refreshStats();
         setInterval(refreshStats, 30000);
 
+        // Load chat history on page load
+        async function loadHistory() {
+            try {
+                const resp = await fetch('/v1/session/history');
+                const data = await resp.json();
+                if (data.messages && data.messages.length > 0) {
+                    for (const msg of data.messages) {
+                        addMessage(msg.role, msg.content);
+                    }
+                    messagesEl.scrollTop = messagesEl.scrollHeight;
+                }
+            } catch (e) {
+                console.log('Failed to load history:', e);
+            }
+        }
+        loadHistory();
+
         // Focus input on load
         inputEl.focus();
     </script>

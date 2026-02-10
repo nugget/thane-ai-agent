@@ -524,6 +524,11 @@ func (l *Loop) MemoryStats() map[string]any {
 }
 
 // GetTokenCount returns the estimated token count for a conversation.
+// GetHistory returns the conversation messages for a given conversation.
+func (l *Loop) GetHistory(conversationID string) []memory.Message {
+	return l.memory.GetMessages(conversationID)
+}
+
 func (l *Loop) GetTokenCount(conversationID string) int {
 	return l.memory.GetTokenCount(conversationID)
 }
