@@ -38,6 +38,19 @@ models:
       quality: 9
       cost_tier: 0
       min_complexity: moderate
+    # Anthropic models (requires anthropic.api_key)
+    # - name: claude-opus-4-20250514
+    #   provider: anthropic
+    #   supports_tools: true
+    #   context_window: 200000
+    #   speed: 5
+    #   quality: 10
+    #   cost_tier: 3
+    #   min_complexity: complex
+
+# Anthropic API (optional — for Claude models)
+# anthropic:
+#   api_key: ${ANTHROPIC_API_KEY}
 
 # Storage paths
 data_dir: ./data

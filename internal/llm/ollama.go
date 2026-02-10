@@ -56,6 +56,7 @@ type Options struct {
 
 // ToolCall represents a tool call from the model.
 type ToolCall struct {
+	ID       string `json:"id,omitempty"` // Provider-assigned ID (required by Anthropic for tool_result correlation)
 	Function struct {
 		Name      string         `json:"name"`
 		Arguments map[string]any `json:"arguments"` // Ollama returns object, not string
