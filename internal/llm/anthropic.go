@@ -449,7 +449,9 @@ func convertFromAnthropic(resp *anthropicResponse) *ChatResponse {
 			Content:   content,
 			ToolCalls: toolCalls,
 		},
-		Done: true,
+		Done:            true,
+		PromptEvalCount: resp.Usage.InputTokens,
+		EvalCount:       resp.Usage.OutputTokens,
 	}
 }
 

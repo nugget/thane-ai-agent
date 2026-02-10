@@ -39,6 +39,8 @@ type Response struct {
 	Content      string `json:"content"`
 	Model        string `json:"model"`
 	FinishReason string `json:"finish_reason"`
+	InputTokens  int    `json:"input_tokens,omitempty"`
+	OutputTokens int    `json:"output_tokens,omitempty"`
 }
 
 // MemoryStore is the interface for memory storage.
@@ -119,12 +121,65 @@ func (l *Loop) Tools() *tools.Registry {
 	return l.tools
 }
 
-const baseSystemPrompt = `You are Thane, a Home Assistant voice controller.
+// Simple greeting patterns that don't need tool calls
+var greetingPatterns = []string{
+	"hi", "hello", "hey", "howdy", "hiya", "yo",
+	"good morning", "good afternoon", "good evening",
+	"what's up", "whats up", "sup",
+}
+
+// isSimpleGreeting checks if the message is a simple greeting
+func isSimpleGreeting(msg string) bool {
+	lower := strings.ToLower(strings.TrimSpace(msg))
+	// Remove punctuation
+	lower = strings.TrimRight(lower, "!?.,")
+	for _, pattern := range greetingPatterns {
+		if lower == pattern {
+			return true
+		}
+	}
+	return false
+}
+
+// Greeting responses to cycle through
+var greetingResponses = []string{
+	"Hey! What can I help you with?",
+	"Hi there! How can I help?",
+	"Hello! What would you like me to do?",
+	"Hey! Ready to help.",
+}
+
+var greetingIndex int
+
+// getGreetingResponse returns a friendly greeting response
+func getGreetingResponse() string {
+	resp := greetingResponses[greetingIndex%len(greetingResponses)]
+	greetingIndex++
+	return resp
+}
+
+const baseSystemPrompt = `You are Thane, a friendly Home Assistant voice controller.
+
+## When to Use Tools
+Only use tools when the user asks you to DO something or CHECK something specific:
+- "Turn on the light" → use control_device
+- "Is the door locked?" → use get_state
+- "What's the temperature?" → use get_state
+
+Do NOT use tools for:
+- Greetings ("hi", "hello", "hey") — just say hi back!
+- Conversation ("how are you?", "thanks") — respond directly
+- Questions about yourself ("who are you?") — answer from your knowledge
+
+IMPORTANT: For simple greetings, respond IMMEDIATELY with a friendly greeting. No need to recall facts or check anything first.
 
 ## Primary Tool
 - control_device: USE THIS for all "turn on/off" commands. It finds AND controls the device in one step.
 
-## Example
+## Examples
+User: "Hi"
+→ "Hey! What can I help you with?"
+
 User: "Turn on the Hue Go lamp in my office and make it purple"
 → control_device(description="Hue Go lamp", area="office", action="turn_on", color="purple")
 → "Done. Turned on Office Hue Go."
@@ -134,9 +189,9 @@ User: "Turn off the kitchen light"
 → "Done. Turned off Kitchen Light."
 
 ## Rules
-- Use control_device for ALL device commands. Do not guess entity_ids.
-- Never ask questions. Just act.
-- Keep responses short: "Done" or the action result.`
+- Use control_device for device commands. Do not guess entity_ids.
+- Keep responses short for actions: "Done" or the result.
+- Be conversational for chat — you don't need tools for every message.`
 
 func (l *Loop) buildSystemPrompt(ctx context.Context, userMessage string) string {
 	var sb strings.Builder
@@ -196,6 +251,20 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (*R
 			userMessage = req.Messages[i].Content
 			break
 		}
+	}
+
+	// Fast-path: handle simple greetings without tool calls
+	if isSimpleGreeting(userMessage) {
+		l.logger.Info("simple greeting detected, responding directly")
+		response := getGreetingResponse()
+		if err := l.memory.AddMessage(convID, "assistant", response); err != nil {
+			l.logger.Warn("failed to store greeting response", "error", err)
+		}
+		return &Response{
+			Content:      response,
+			Model:        "greeting-handler",
+			FinishReason: "stop",
+		}, nil
 	}
 
 	// Build messages for LLM
@@ -262,7 +331,10 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (*R
 	startTime := time.Now()
 
 	// Agent loop - may iterate if tool calls are needed
-	maxIterations := 3 // Keep tight for HA voice - prevent runaway loops
+	// Accumulate token usage across iterations
+	var totalInputTokens, totalOutputTokens int
+
+	maxIterations := 5 // Allow enough iterations for context gathering + response
 	for i := 0; i < maxIterations; i++ {
 		l.logger.Info("calling LLM",
 			"model", model,
@@ -301,6 +373,10 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (*R
 				return nil, err
 			}
 		}
+
+		// Accumulate token usage
+		totalInputTokens += llmResp.PromptEvalCount
+		totalOutputTokens += llmResp.EvalCount
 
 		// Check for tool calls
 		if len(llmResp.Message.ToolCalls) > 0 {
@@ -387,6 +463,8 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (*R
 			Content:      llmResp.Message.Content,
 			Model:        model,
 			FinishReason: "stop",
+			InputTokens:  totalInputTokens,
+			OutputTokens: totalOutputTokens,
 		}
 
 		// Store response in memory

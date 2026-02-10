@@ -44,3 +44,6 @@ logs/
 # Build artifacts
 thane-darwin-arm64
 thane-linux-*
+.env
+docker-compose.pocket.yml
+docker-compose.*.yml

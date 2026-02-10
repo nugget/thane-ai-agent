@@ -463,7 +463,7 @@ func runServe(logger *slog.Logger, configPath string, portOverride int) {
 	loop.SetContextProvider(contextProvider)
 	logger.Info("context providers initialized")
 
-	server := api.NewServer(cfg.Listen.Port, loop, rtr, logger)
+	server := api.NewServer(cfg.Listen.Address, cfg.Listen.Port, loop, rtr, logger)
 	server.SetMemoryStore(mem)
 
 	// Create checkpointer
@@ -558,7 +558,7 @@ func runServe(logger *slog.Logger, configPath string, portOverride int) {
 		if port == 0 {
 			port = 11434 // Default Ollama port
 		}
-		ollamaServer = api.NewOllamaServer(port, loop, logger)
+		ollamaServer = api.NewOllamaServer(cfg.OllamaAPI.Address, port, loop, logger)
 		go func() {
 			if err := ollamaServer.Start(context.Background()); err != nil {
 				logger.Error("ollama API server failed", "error", err)

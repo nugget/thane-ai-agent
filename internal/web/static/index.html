@@ -1,0 +1,675 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#0d1117">
+    <title>Aimée</title>
+    <link rel="manifest" href="/manifest.json">
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>✨</text></svg>">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+    <style>
+        :root {
+            --bg-primary: #0d1117;
+            --bg-secondary: #161b22;
+            --bg-tertiary: #21262d;
+            --text-primary: #e6edf3;
+            --text-secondary: #8b949e;
+            --teal: #00c8b4;
+            --teal-dim: #00a89a;
+            --teal-glow: rgba(0, 200, 180, 0.15);
+            --border: #30363d;
+            --code-bg: #1a1f26;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* Header */
+        .header {
+            padding: 12px 20px;
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .header-icon {
+            font-size: 24px;
+        }
+
+        .header-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: var(--teal);
+        }
+
+        .header-status {
+            font-size: 12px;
+            color: var(--text-secondary);
+            margin-left: auto;
+        }
+
+        .header-stats {
+            font-size: 11px;
+            color: var(--text-secondary);
+            cursor: pointer;
+            padding: 2px 8px;
+            border-radius: 4px;
+            margin-left: 8px;
+            opacity: 0.7;
+            transition: opacity 0.2s;
+        }
+        .header-stats:hover {
+            opacity: 1;
+        }
+
+        .status-dot {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--teal);
+            margin-right: 6px;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        /* Messages area */
+        .messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .message {
+            max-width: 85%;
+            padding: 12px 16px;
+            border-radius: 12px;
+            line-height: 1.5;
+        }
+
+        .message.user {
+            align-self: flex-end;
+            background: var(--teal);
+            color: #000;
+            border-bottom-right-radius: 4px;
+        }
+
+        .message.assistant {
+            align-self: flex-start;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-bottom-left-radius: 4px;
+        }
+
+        .message.assistant .content {
+            overflow-wrap: break-word;
+        }
+
+        /* Markdown styling */
+        .message.assistant p {
+            margin-bottom: 12px;
+        }
+
+        .message.assistant p:last-child {
+            margin-bottom: 0;
+        }
+
+        .message.assistant h1, 
+        .message.assistant h2, 
+        .message.assistant h3 {
+            margin: 16px 0 8px 0;
+            color: var(--teal);
+        }
+
+        .message.assistant h1:first-child,
+        .message.assistant h2:first-child,
+        .message.assistant h3:first-child {
+            margin-top: 0;
+        }
+
+        .message.assistant ul, 
+        .message.assistant ol {
+            margin: 8px 0 8px 20px;
+        }
+
+        .message.assistant li {
+            margin: 4px 0;
+        }
+
+        .message.assistant a {
+            color: var(--teal);
+        }
+
+        .message.assistant strong {
+            color: var(--teal);
+        }
+
+        /* Code blocks */
+        .code-block {
+            position: relative;
+            margin: 12px 0;
+        }
+
+        .code-block:last-child {
+            margin-bottom: 0;
+        }
+
+        .code-block pre {
+            background: var(--code-bg);
+            border-radius: 8px;
+            padding: 12px;
+            overflow-x: auto;
+            border: 1px solid var(--border);
+        }
+
+        .code-block code {
+            font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+            font-size: 13px;
+            line-height: 1.4;
+        }
+
+        .code-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border);
+            border-bottom: none;
+            border-radius: 8px 8px 0 0;
+            padding: 6px 12px;
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
+        .code-header + pre {
+            border-top-left-radius: 0;
+            border-top-right-radius: 0;
+        }
+
+        .copy-btn {
+            background: transparent;
+            border: 1px solid var(--border);
+            color: var(--text-secondary);
+            padding: 4px 8px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 11px;
+            transition: all 0.2s;
+        }
+
+        .copy-btn:hover {
+            background: var(--teal);
+            color: #000;
+            border-color: var(--teal);
+        }
+
+        .copy-btn.copied {
+            background: var(--teal);
+            color: #000;
+            border-color: var(--teal);
+        }
+
+        /* Inline code */
+        .message.assistant code:not(pre code) {
+            background: var(--code-bg);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+            font-size: 0.9em;
+        }
+
+        /* Tables */
+        .message.assistant table {
+            border-collapse: collapse;
+            margin: 12px 0;
+            width: 100%;
+        }
+
+        .message.assistant th,
+        .message.assistant td {
+            border: 1px solid var(--border);
+            padding: 8px 12px;
+            text-align: left;
+        }
+
+        .message.assistant th {
+            background: var(--bg-tertiary);
+            color: var(--teal);
+        }
+
+        /* Input area */
+        .input-area {
+            padding: 16px 20px;
+            background: var(--bg-secondary);
+            border-top: 1px solid var(--border);
+        }
+
+        .input-container {
+            display: flex;
+            gap: 12px;
+            max-width: 900px;
+            margin: 0 auto;
+        }
+
+        .input-wrapper {
+            flex: 1;
+            position: relative;
+        }
+
+        #message-input {
+            width: 100%;
+            padding: 12px 16px;
+            background: var(--bg-primary);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            color: var(--text-primary);
+            font-size: 15px;
+            resize: none;
+            min-height: 48px;
+            max-height: 200px;
+            font-family: inherit;
+            line-height: 1.4;
+        }
+
+        #message-input:focus {
+            outline: none;
+            border-color: var(--teal);
+            box-shadow: 0 0 0 3px var(--teal-glow);
+        }
+
+        #message-input::placeholder {
+            color: var(--text-secondary);
+        }
+
+        #send-btn {
+            padding: 12px 24px;
+            background: var(--teal);
+            border: none;
+            border-radius: 12px;
+            color: #000;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        #send-btn:hover {
+            background: var(--teal-dim);
+        }
+
+        #send-btn:disabled {
+            background: var(--bg-tertiary);
+            color: var(--text-secondary);
+            cursor: not-allowed;
+        }
+
+        /* Typing indicator */
+        .thinking {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: var(--text-secondary);
+            font-size: 0.85rem;
+            font-style: italic;
+        }
+        .thinking-pulse {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--teal);
+            animation: pulse 1.5s ease-in-out infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 0.3; transform: scale(0.8); }
+            50% { opacity: 1; transform: scale(1.2); }
+        }
+
+        .typing {
+            display: flex;
+            gap: 4px;
+            padding: 8px 12px;
+        }
+
+        .typing span {
+            width: 8px;
+            height: 8px;
+            background: var(--teal);
+            border-radius: 50%;
+            animation: typing 1.4s infinite;
+        }
+
+        .typing span:nth-child(2) { animation-delay: 0.2s; }
+        .typing span:nth-child(3) { animation-delay: 0.4s; }
+
+        @keyframes typing {
+            0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+            30% { transform: translateY(-4px); opacity: 1; }
+        }
+
+        /* Scrollbar */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: var(--bg-primary);
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: var(--border);
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--text-secondary);
+        }
+
+        /* Responsive */
+        @media (max-width: 600px) {
+            .message {
+                max-width: 95%;
+            }
+            
+            .header-status {
+                display: none;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <span class="header-icon">✨</span>
+        <span class="header-title">Aimée</span>
+        <span class="header-status">
+            <span class="status-dot"></span>
+            <span id="status-text">Connected</span>
+        </span>
+        <span class="header-stats" id="header-stats" title="Click to refresh">
+            <span id="stats-text">—</span>
+        </span>
+        <a href="https://github.com/nugget/thane-ai-agent" target="_blank" rel="noopener" style="font-size:10px; color:var(--text-secondary); text-decoration:none; opacity:0.5; margin-left:8px;">v0.1.1</a>
+    </div>
+
+    <div class="messages" id="messages">
+        <!-- Messages appear here -->
+    </div>
+
+    <div class="input-area">
+        <div class="input-container">
+            <div class="input-wrapper">
+                <textarea 
+                    id="message-input" 
+                    placeholder="Message Aimée..."
+                    rows="1"
+                ></textarea>
+            </div>
+            <button id="send-btn">Send</button>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/11.1.1/marked.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script>
+        const messagesEl = document.getElementById('messages');
+        const inputEl = document.getElementById('message-input');
+        const sendBtn = document.getElementById('send-btn');
+        const statusText = document.getElementById('status-text');
+        
+        let conversationHistory = [];
+
+        // Configure marked
+        marked.setOptions({
+            highlight: function(code, lang) {
+                if (lang && hljs.getLanguage(lang)) {
+                    return hljs.highlight(code, { language: lang }).value;
+                }
+                return hljs.highlightAuto(code).value;
+            },
+            breaks: true,
+            gfm: true
+        });
+
+        // Custom renderer for code blocks with copy button
+        const renderer = new marked.Renderer();
+        renderer.code = function(code, language) {
+            const lang = language || 'plaintext';
+            const highlighted = lang && hljs.getLanguage(lang) 
+                ? hljs.highlight(code, { language: lang }).value 
+                : hljs.highlightAuto(code).value;
+            
+            const id = 'code-' + Math.random().toString(36).substr(2, 9);
+            return `
+                <div class="code-block">
+                    <div class="code-header">
+                        <span>${lang}</span>
+                        <button class="copy-btn" onclick="copyCode('${id}')">Copy</button>
+                    </div>
+                    <pre><code id="${id}" class="hljs language-${lang}">${highlighted}</code></pre>
+                </div>
+            `;
+        };
+        marked.setOptions({ renderer });
+
+        function copyCode(id) {
+            const codeEl = document.getElementById(id);
+            const text = codeEl.textContent;
+            navigator.clipboard.writeText(text).then(() => {
+                const btn = codeEl.closest('.code-block').querySelector('.copy-btn');
+                btn.textContent = 'Copied!';
+                btn.classList.add('copied');
+                setTimeout(() => {
+                    btn.textContent = 'Copy';
+                    btn.classList.remove('copied');
+                }, 2000);
+            });
+        }
+
+        function addMessage(role, content) {
+            const msgEl = document.createElement('div');
+            msgEl.className = `message ${role}`;
+            
+            if (role === 'assistant') {
+                const contentEl = document.createElement('div');
+                contentEl.className = 'content';
+                contentEl.innerHTML = marked.parse(content);
+                msgEl.appendChild(contentEl);
+            } else {
+                msgEl.textContent = content;
+            }
+            
+            messagesEl.appendChild(msgEl);
+            messagesEl.scrollTop = messagesEl.scrollHeight;
+            
+            conversationHistory.push({ role, content });
+            return msgEl;
+        }
+
+        function addThinkingIndicator() {
+            const el = document.createElement('div');
+            el.className = 'message assistant';
+            el.id = 'thinking-indicator';
+            el.innerHTML = '<div class="thinking"><span class="thinking-pulse"></span> Thinking…</div>';
+            messagesEl.appendChild(el);
+            messagesEl.scrollTop = messagesEl.scrollHeight;
+        }
+
+        function transitionToTyping() {
+            const el = document.getElementById('thinking-indicator');
+            if (el) {
+                el.id = 'typing-indicator';
+                el.innerHTML = '<div class="typing"><span></span><span></span><span></span></div>';
+            }
+        }
+
+        function removeIndicator() {
+            const el = document.getElementById('thinking-indicator') || document.getElementById('typing-indicator');
+            if (el) el.remove();
+        }
+
+        async function sendMessage() {
+            const content = inputEl.value.trim();
+            if (!content) return;
+
+            inputEl.value = '';
+            inputEl.style.height = 'auto';
+            sendBtn.disabled = true;
+
+            addMessage('user', content);
+            addThinkingIndicator();
+
+            try {
+                const response = await fetch('/v1/chat/completions', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        messages: conversationHistory.map(m => ({
+                            role: m.role,
+                            content: m.content
+                        })),
+                        stream: true
+                    })
+                });
+
+                if (!response.ok) {
+                    removeIndicator();
+                    throw new Error(`HTTP ${response.status}`);
+                }
+
+                // Transition to typing indicator while waiting for first content
+                transitionToTyping();
+
+                // Stream SSE response
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let assistantContent = '';
+                let msgEl = null;
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    const chunk = decoder.decode(value, { stream: true });
+                    const lines = chunk.split('\n');
+
+                    for (const line of lines) {
+                        if (!line.startsWith('data: ')) continue;
+                        const data = line.slice(6).trim();
+                        if (data === '[DONE]') continue;
+
+                        try {
+                            const parsed = JSON.parse(data);
+                            const delta = parsed.choices?.[0]?.delta?.content;
+                            if (delta) {
+                                assistantContent += delta;
+                                if (!msgEl) {
+                                    removeIndicator();
+                                    msgEl = addMessage('assistant', assistantContent);
+                                } else {
+                                    const contentEl = msgEl.querySelector('.content');
+                                    if (contentEl) contentEl.innerHTML = marked.parse(assistantContent);
+                                    messagesEl.scrollTop = messagesEl.scrollHeight;
+                                }
+                            }
+                        } catch (e) { /* skip parse errors */ }
+                    }
+                }
+
+                if (!msgEl && !assistantContent) {
+                    addMessage('assistant', 'No response');
+                } else if (assistantContent) {
+                    // Update conversation history with final content
+                    const lastEntry = conversationHistory[conversationHistory.length - 1];
+                    if (lastEntry && lastEntry.role === 'assistant') {
+                        lastEntry.content = assistantContent;
+                    }
+                }
+
+            } catch (error) {
+                removeIndicator();
+                addMessage('assistant', `*Error: ${error.message}*`);
+                statusText.textContent = 'Error';
+            }
+
+            sendBtn.disabled = false;
+            inputEl.focus();
+            refreshStats();
+        }
+
+        // Event listeners
+        sendBtn.addEventListener('click', sendMessage);
+        
+        inputEl.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage();
+            }
+        });
+
+        // Auto-resize textarea
+        inputEl.addEventListener('input', () => {
+            inputEl.style.height = 'auto';
+            inputEl.style.height = Math.min(inputEl.scrollHeight, 200) + 'px';
+        });
+
+        // Session stats
+        const statsEl = document.getElementById('stats-text');
+        const headerStats = document.getElementById('header-stats');
+
+        async function refreshStats() {
+            try {
+                const resp = await fetch('/v1/session/stats');
+                const data = await resp.json();
+                const cost = data.estimated_cost_usd.toFixed(4);
+                const reqs = data.total_requests;
+                const inTok = (data.total_input_tokens / 1000).toFixed(1);
+                const outTok = (data.total_output_tokens / 1000).toFixed(1);
+                let text = `$${cost} · ${reqs} req · ${inTok}k/${outTok}k tokens`;
+                if (data.reported_balance_usd > 0) {
+                    const bal = (data.reported_balance_usd - data.estimated_cost_usd).toFixed(2);
+                    text = `~$${bal} remaining · ${text}`;
+                }
+                statsEl.textContent = text;
+            } catch (e) {
+                statsEl.textContent = '—';
+            }
+        }
+
+        headerStats.addEventListener('click', refreshStats);
+
+        // Refresh stats after each message send
+        const origSendMessage = sendMessage;
+        // We'll call refreshStats after responses instead
+
+        // Auto-refresh stats periodically
+        refreshStats();
+        setInterval(refreshStats, 30000);
+
+        // Focus input on load
+        inputEl.focus();
+    </script>
+</body>
+</html>

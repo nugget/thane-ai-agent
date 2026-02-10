@@ -1,10 +1,10 @@
 # Build stage
-FROM golang:1.23-alpine AS builder
+FROM golang:1.24-alpine AS builder
 
 WORKDIR /build
 
-# Install build dependencies
-RUN apk add --no-cache git ca-certificates
+# Install build dependencies (including CGO for SQLite)
+RUN apk add --no-cache git ca-certificates gcc musl-dev
 
 # Copy go mod files first for layer caching
 COPY go.mod go.sum* ./
@@ -13,8 +13,8 @@ RUN go mod download || true
 # Copy source
 COPY . .
 
-# Build static binary
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-w -s" -o thane ./cmd/thane
+# Build with CGO for SQLite support
+RUN CGO_ENABLED=1 GOOS=linux go build -ldflags="-w -s" -o thane ./cmd/thane
 
 # Runtime stage
 FROM alpine:3.20
@@ -41,8 +41,9 @@ RUN mkdir -p /data /config && chown -R thane:thane /data /config
 
 USER thane
 
-# Default port (OpenAI-compatible API)
+# Default ports
 EXPOSE 8080
+EXPOSE 11434
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s \
