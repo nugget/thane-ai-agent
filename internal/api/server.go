@@ -168,6 +168,7 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("POST /v1/session/balance", s.handleSetBalance)
 	mux.HandleFunc("POST /v1/session/reset", s.handleSessionReset)
 	mux.HandleFunc("POST /v1/session/compact", s.handleSessionCompact)
+	mux.HandleFunc("GET /v1/session/history", s.handleSessionHistory)
 
 	// Chat web UI
 	web.RegisterRoutes(mux)
@@ -862,4 +863,29 @@ func (s *Server) handleSessionCompact(w http.ResponseWriter, r *http.Request) {
 	s.logger.Info("compaction triggered via API")
 	w.Header().Set("Content-Type", "application/json")
 	writeJSON(w, map[string]any{"status": "ok", "message": "conversation compacted"}, s.logger)
+}
+
+func (s *Server) handleSessionHistory(w http.ResponseWriter, r *http.Request) {
+	messages := s.loop.GetHistory("default")
+
+	// Filter to user/assistant messages only (skip system/tool)
+	type historyMessage struct {
+		Role      string `json:"role"`
+		Content   string `json:"content"`
+		Timestamp string `json:"timestamp"`
+	}
+
+	var filtered []historyMessage
+	for _, m := range messages {
+		if m.Role == "user" || m.Role == "assistant" {
+			filtered = append(filtered, historyMessage{
+				Role:      m.Role,
+				Content:   m.Content,
+				Timestamp: m.Timestamp.Format("2006-01-02T15:04:05Z07:00"),
+			})
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	writeJSON(w, map[string]any{"messages": filtered}, s.logger)
 }
