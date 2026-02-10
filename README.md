@@ -14,7 +14,7 @@ If you have Home Assistant, Thane drops in as a native conversation agent and bl
 
 **Local-first.** Runs entirely on Ollama. Your conversations, your data, your hardware. Cloud models available as fallback, never required.
 
-**Single binary.** Written in Go. No Python environments, no dependency hell. Trivially deployed in a container environment, easily adaptable to your favorite container orchestration platform (including HAOS).
+**Single binary.** Written in Go. No Python environments, no dependency hell. Trivially deployed in a container environment, easily adaptable to your favorite container orchestration platform (including Home Assistant Operating System).
 
 ## Quick Start
 
