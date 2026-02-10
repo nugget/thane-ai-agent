@@ -48,6 +48,7 @@ type MemoryStore interface {
 	GetMessages(conversationID string) []memory.Message
 	AddMessage(conversationID, role, content string) error
 	GetTokenCount(conversationID string) int
+	Clear(conversationID string) error
 	Stats() map[string]any
 }
 
@@ -89,22 +90,24 @@ type Loop struct {
 	model           string
 	talents         string // Combined talent content for system prompt
 	persona         string // Persona content (replaces base system prompt if set)
+	contextWindow   int    // Context window size of default model
 	failoverHandler FailoverHandler
 	contextProvider ContextProvider
 }
 
 // NewLoop creates a new agent loop.
-func NewLoop(logger *slog.Logger, mem MemoryStore, compactor Compactor, rtr *router.Router, ha *homeassistant.Client, sched *scheduler.Scheduler, llmClient llm.Client, defaultModel, talents, persona string) *Loop {
+func NewLoop(logger *slog.Logger, mem MemoryStore, compactor Compactor, rtr *router.Router, ha *homeassistant.Client, sched *scheduler.Scheduler, llmClient llm.Client, defaultModel, talents, persona string, contextWindow int) *Loop {
 	return &Loop{
-		logger:    logger,
-		memory:    mem,
-		compactor: compactor,
-		router:    rtr,
-		llm:       llmClient,
-		tools:     tools.NewRegistry(ha, sched),
-		model:     defaultModel,
-		talents:   talents,
-		persona:   persona,
+		logger:        logger,
+		memory:        mem,
+		compactor:     compactor,
+		router:        rtr,
+		llm:           llmClient,
+		tools:         tools.NewRegistry(ha, sched),
+		model:         defaultModel,
+		talents:       talents,
+		persona:       persona,
+		contextWindow: contextWindow,
 	}
 }
 
@@ -517,6 +520,21 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (*R
 // MemoryStats returns current memory statistics.
 func (l *Loop) MemoryStats() map[string]any {
 	return l.memory.Stats()
+}
+
+// GetTokenCount returns the estimated token count for a conversation.
+func (l *Loop) GetTokenCount(conversationID string) int {
+	return l.memory.GetTokenCount(conversationID)
+}
+
+// GetContextWindow returns the context window size of the default model.
+func (l *Loop) GetContextWindow() int {
+	return l.contextWindow
+}
+
+// ResetConversation clears the conversation history.
+func (l *Loop) ResetConversation(conversationID string) error {
+	return l.memory.Clear(conversationID)
 }
 
 // ToolsJSON returns the tools definition as JSON (for debugging).

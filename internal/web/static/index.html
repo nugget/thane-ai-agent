@@ -1,3 +1,4 @@
+Warning: Permanently added 'pocket.hollowoak.net' (ED25519) to the list of known hosts.
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -414,6 +415,17 @@
         <a href="https://github.com/nugget/thane-ai-agent" target="_blank" rel="noopener" style="font-size:10px; color:var(--text-secondary); text-decoration:none; opacity:0.5; margin-left:8px;">v0.1.1</a>
     </div>
 
+    <div id="context-bar" style="padding:4px 16px; background:var(--bg-secondary); border-bottom:1px solid var(--border); display:flex; align-items:center; gap:12px; font-size:11px; color:var(--text-secondary);">
+        <div style="flex:1; display:flex; align-items:center; gap:8px;">
+            <span id="context-label">Context: —</span>
+            <div style="flex:1; max-width:200px; height:4px; background:var(--border); border-radius:2px; overflow:hidden;">
+                <div id="context-fill" style="height:100%; background:var(--teal); border-radius:2px; width:0%; transition:width 0.3s;"></div>
+            </div>
+            <span id="context-pct" style="min-width:30px;">0%</span>
+        </div>
+        <button id="btn-reset" title="Reset conversation" style="background:none; border:1px solid var(--border); border-radius:4px; color:var(--text-secondary); font-size:10px; padding:2px 8px; cursor:pointer;">⟳ Reset</button>
+    </div>
+
     <div class="messages" id="messages">
         <!-- Messages appear here -->
     </div>
@@ -639,6 +651,10 @@
         const statsEl = document.getElementById('stats-text');
         const headerStats = document.getElementById('header-stats');
 
+        const contextLabel = document.getElementById('context-label');
+        const contextFill = document.getElementById('context-fill');
+        const contextPct = document.getElementById('context-pct');
+
         async function refreshStats() {
             try {
                 const resp = await fetch('/v1/session/stats');
@@ -653,12 +669,42 @@
                     text = `~$${bal} remaining · ${text}`;
                 }
                 statsEl.textContent = text;
+
+                // Update context window bar
+                if (data.context_window > 0) {
+                    const ctxK = (data.context_tokens / 1000).toFixed(1);
+                    const winK = (data.context_window / 1000).toFixed(0);
+                    const pct = Math.min(100, (data.context_tokens / data.context_window) * 100);
+                    contextLabel.textContent = `Context: ~${ctxK}k / ${winK}k · ${data.message_count} msgs`;
+                    contextFill.style.width = pct + '%';
+                    contextPct.textContent = pct.toFixed(0) + '%';
+                    // Color coding: green → yellow → red
+                    if (pct > 80) {
+                        contextFill.style.background = '#e74c3c';
+                    } else if (pct > 60) {
+                        contextFill.style.background = '#f39c12';
+                    } else {
+                        contextFill.style.background = 'var(--teal)';
+                    }
+                }
             } catch (e) {
                 statsEl.textContent = '—';
             }
         }
 
         headerStats.addEventListener('click', refreshStats);
+
+        // Session reset
+        document.getElementById('btn-reset').addEventListener('click', async () => {
+            if (!confirm('Reset conversation? This clears all chat history.')) return;
+            try {
+                await fetch('/v1/session/reset', { method: 'POST' });
+                document.getElementById('messages').innerHTML = '';
+                refreshStats();
+            } catch (e) {
+                alert('Reset failed: ' + e.message);
+            }
+        });
 
         // Refresh stats after each message send
         const origSendMessage = sendMessage;

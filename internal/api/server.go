@@ -90,6 +90,9 @@ type SessionStatsSnapshot struct {
 	EstimatedCostUSD  float64 `json:"estimated_cost_usd"`
 	ReportedBalance   float64 `json:"reported_balance_usd,omitempty"`
 	BalanceSetAt      string  `json:"balance_set_at,omitempty"`
+	ContextTokens     int     `json:"context_tokens"`
+	ContextWindow     int     `json:"context_window"`
+	MessageCount      int     `json:"message_count"`
 }
 
 func (s *SessionStats) Snapshot() SessionStatsSnapshot {
@@ -163,6 +166,7 @@ func (s *Server) Start(ctx context.Context) error {
 	// Session stats
 	mux.HandleFunc("GET /v1/session/stats", s.handleSessionStats)
 	mux.HandleFunc("POST /v1/session/balance", s.handleSetBalance)
+	mux.HandleFunc("POST /v1/session/reset", s.handleSessionReset)
 
 	// Chat web UI
 	web.RegisterRoutes(mux)
@@ -809,6 +813,16 @@ func (s *Server) handleToolStats(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleSessionStats(w http.ResponseWriter, r *http.Request) {
 	snap := s.stats.Snapshot()
+
+	// Enrich with context window info from memory
+	memStats := s.loop.MemoryStats()
+	if msgs, ok := memStats["messages"].(int); ok {
+		snap.MessageCount = msgs
+	}
+	// Estimate context tokens from the "default" conversation
+	snap.ContextTokens = s.loop.GetTokenCount("default")
+	snap.ContextWindow = s.loop.GetContextWindow()
+
 	w.Header().Set("Content-Type", "application/json")
 	writeJSON(w, snap, s.logger)
 }
@@ -825,4 +839,15 @@ func (s *Server) handleSetBalance(w http.ResponseWriter, r *http.Request) {
 	s.logger.Info("balance updated", "balance_usd", req.Balance)
 	w.Header().Set("Content-Type", "application/json")
 	writeJSON(w, map[string]any{"status": "ok", "balance_usd": req.Balance}, s.logger)
+}
+
+func (s *Server) handleSessionReset(w http.ResponseWriter, r *http.Request) {
+	if err := s.loop.ResetConversation("default"); err != nil {
+		s.logger.Error("session reset failed", "error", err)
+		s.errorResponse(w, http.StatusInternalServerError, "reset failed")
+		return
+	}
+	s.logger.Info("session reset via API")
+	w.Header().Set("Content-Type", "application/json")
+	writeJSON(w, map[string]any{"status": "ok", "message": "conversation cleared"}, s.logger)
 }

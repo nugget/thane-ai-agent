@@ -121,7 +121,7 @@ func runAsk(logger *slog.Logger, configPath string, args []string) {
 	mem := memory.NewStore(100)
 
 	// Create agent loop (no router/scheduler for CLI mode - uses default model)
-	loop := agent.NewLoop(logger, mem, nil, nil, ha, nil, llmClient, cfg.Models.Default, talentContent, "")
+	loop := agent.NewLoop(logger, mem, nil, nil, ha, nil, llmClient, cfg.Models.Default, talentContent, "", 0)
 
 	// Process the question
 	ctx := context.Background()
@@ -385,7 +385,16 @@ func runServe(logger *slog.Logger, configPath string, portOverride int) {
 	}
 	defer sched.Stop()
 
-	loop := agent.NewLoop(logger, mem, compactor, rtr, ha, sched, llmClient, cfg.Models.Default, talentContent, personaContent)
+	// Find context window for default model
+	defaultContextWindow := 200000 // sensible default
+	for _, m := range cfg.Models.Available {
+		if m.Name == cfg.Models.Default {
+			defaultContextWindow = m.ContextWindow
+			break
+		}
+	}
+
+	loop := agent.NewLoop(logger, mem, compactor, rtr, ha, sched, llmClient, cfg.Models.Default, talentContent, personaContent, defaultContextWindow)
 
 	// Create fact store for long-term memory
 	factStore, err := facts.NewStore(dataDir + "/facts.db")

@@ -151,10 +151,11 @@ func (s *Store) GetMessages(conversationID string) []Message {
 }
 
 // Clear removes a conversation.
-func (s *Store) Clear(conversationID string) {
+func (s *Store) Clear(conversationID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.conversations, conversationID)
+	return nil
 }
 
 // GetTokenCount returns estimated token count for a conversation.
