@@ -1,60 +1,20 @@
 # Thane
 
-> Your Home Assistant already has an agent. We make it *autonomous*.
+> Your home already has an agent. We make it *autonomous*.
 
-**Thane** is an autonomous AI agent for Home Assistant that breaks free from the constraints of the built-in Assist. Instead of being limited to pre-selected entities, Thane dynamically queries your Home Assistant to understand state, discover devices, and take intelligent action.
+**Thane** is an autonomous AI agent that manages your home — and anything else you point it at. It runs on local models via Ollama, keeps a persistent memory, and talks to your smart home through natural conversation.
 
-## Why Thane?
+If you have Home Assistant, Thane drops in as a native conversation agent and blows the doors off the built-in Assist. If you don't, Thane is still a capable, self-hosted AI with persistent memory and tool use that might just convince you to get one.
 
-Home Assistant's Assist is a **subjected agent** — an LLM constrained to see only what you explicitly expose. That's fine for "turn off the lights" but breaks down when you want real intelligence:
+## What Makes Thane Different
 
-- *"Is anyone home?"* — Requires checking presence sensors, motion, device trackers
-- *"Why is the garage warm?"* — Needs to correlate HVAC, weather, door states
-- *"What time does the sun set?"* — Simple query, but Assist can't see `sun.sun`
+**Autonomous, not subjected.** Home Assistant's Assist can only see entities you pre-select. Thane has full API access — it discovers devices, understands context, and takes action on its own. Ask *"why is the garage warm?"* and it correlates HVAC, weather, and door states without you wiring anything up.
 
-Thane is an **autonomous agent**. It has full access to your Home Assistant API and can:
+**Memory that persists.** Thane remembers facts about your home, your preferences, and your routines. It learns over time. Tell it once that you like the lights dim after 10pm and it just... knows.
 
-- Query any entity to understand context
-- Call any service to take action
-- Remember facts and learn preferences
-- Route tasks to the best model (local vs cloud)
+**Local-first.** Runs entirely on Ollama. Your conversations, your data, your hardware. Cloud models available as fallback, never required.
 
-## Features
-
-- **Ollama-powered** — Runs entirely on local models via Ollama
-- **Full HA access** — Queries entities, lists domains, calls services
-- **Smart model routing** — Selects models based on task complexity
-- **Semantic memory** — Learns facts about your home with embeddings-based recall
-- **Talents** — Behavioral guidance via markdown files (conversational style, time awareness, proactive curiosity)
-- **Checkpoint/restore** — Persists conversations and facts across restarts
-- **HTTP API** — OpenAI-compatible `/v1/chat/completions` endpoint
-- **CLI mode** — Quick testing with `thane ask "your question"`
-- **Single binary** — Go-based, no runtime dependencies
-
-## Status
-
-🚧 **Active development** — HA conversation agent working, testbed running.
-
-**Working:**
-- **HA conversation agent integration** — Dual-port architecture (8080 native + 11434 Ollama-compat)
-- **control_device tool** — Reliable device control with fuzzy entity matching (voice or text)
-- Conversation loop with tool calling
-- Home Assistant integration (get_state, list_entities, call_service, find_entity)
-- SQLite persistence (conversations, tool calls, facts)
-- Semantic fact storage with embeddings
-- WebSocket client for HA events (event subscriptions, registry access)
-- Model router with audit trail
-- Checkpoint/restore system
-- HTTP API (OpenAI-compatible)
-- Talents system
-- CLI mode
-
-**In Progress:**
-- Wire WebSocket events to anticipation triggers
-- Companion app notifications for proactive alerts
-- Intent-parser architecture for model-resilient execution
-
-See [ARCHITECTURE.md](ARCHITECTURE.md) for design details.
+**Single binary.** Written in Go. No Python environments, no dependency hell. Build it, run it, done.
 
 ## Quick Start
 
@@ -62,157 +22,58 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for design details.
 # Build
 go build -o thane ./cmd/thane
 
-# Configure
-cat > config.yaml <<EOF
-homeassistant:
-  url: http://homeassistant.local:8123
-  token: \${HOMEASSISTANT_TOKEN}
+# Configure (see config.example.yaml for all options)
+cp config.example.yaml config.yaml
+# Edit config.yaml with your Ollama URL and (optionally) Home Assistant token
 
-models:
-  default: granite3.1-dense:8b
-  ollama_url: http://localhost:11434
-  local_first: true
-  available:
-    - name: granite3.1-dense:8b
-      provider: ollama
-      supports_tools: true
-      context_window: 131072
-      speed: 8
-      quality: 7
-      cost_tier: 0
-
-data_dir: ./data
-talents_dir: ./talents
-EOF
-
-# Run server
-export HOMEASSISTANT_TOKEN="your-token"
+# Run
 ./thane -config config.yaml serve
 
-# Or test via CLI
-./thane -config config.yaml ask "Is the sun up?"
+# Test
+./thane -config config.yaml ask "Hello, who are you?"
 ```
 
-## Configuration
+Thane serves two APIs:
+- **Port 8080** — Native API (OpenAI-compatible chat/completions)
+- **Port 11434** — Ollama-compatible API (for Home Assistant's native integration)
 
-```yaml
-homeassistant:
-  url: http://homeassistant.local:8123
-  token: ${HOMEASSISTANT_TOKEN}
+To connect Home Assistant: point an Ollama integration at `http://thane-host:11434`, select model `thane:latest`.
 
-# Native API server
-listen:
-  port: 8080
+See [docs/getting-started.md](docs/getting-started.md) for detailed setup, [docs/homeassistant.md](docs/homeassistant.md) for HA integration.
 
-# Ollama-compatible API (for HA integration)
-ollama_api:
-  enabled: true
-  port: 11434
+## Features
 
-models:
-  default: qwen2.5-coder:32b
-  ollama_url: http://localhost:11434
-  local_first: true
-  available:
-    - name: qwen2.5-coder:32b
-      provider: ollama
-      supports_tools: true
-      context_window: 131072
-      speed: 5
-      quality: 8
-      cost_tier: 0
-
-data_dir: ./data       # SQLite databases
-talents_dir: ./talents # Behavioral guidance files
-
-embeddings:
-  enabled: false  # Optional semantic search
-```
-
-## Tools
-
-Thane provides these tools to the LLM:
-
-| Tool | Description |
-|------|-------------|
-| **`control_device`** | **Primary tool for HA agent** — finds entity by description + executes action |
-| `find_entity` | Smart entity discovery with fuzzy matching |
-| `get_state` | Get current state of any HA entity |
-| `list_entities` | Discover entities by domain or pattern |
-| `call_service` | Low-level HA service call (prefer control_device for natural language) |
-| `schedule_task` | Schedule future actions |
-| `cancel_task` | Cancel a scheduled task |
-| `list_tasks` | List scheduled tasks |
-| `remember_fact` | Store a fact with semantic embeddings |
-| `recall_fact` | Retrieve facts by category or semantic search |
-| `forget_fact` | Remove a stored fact |
-| `create_anticipation` | Set up event-based triggers |
-| `list_anticipations` | List active anticipations |
-| `resolve_anticipation` | Mark anticipation as handled |
-
-## Talents
-
-Talents are markdown files that guide agent behavior:
-
-- `conversational.md` — Tone and style guidance
-- `time-awareness.md` — Timezone handling, time formatting
-- `spatial-reasoning.md` — Understanding home layout
-- `proactive-curiosity.md` — When to explore vs. wait
-- `channel-awareness.md` — Adapting to communication context
+- **Full Home Assistant integration** — entity discovery, state queries, service calls, WebSocket events
+- **Smart device control** — natural language to action with fuzzy entity matching
+- **Semantic memory** — learns and recalls facts with embeddings-based search
+- **Shell execution** — run commands on the host (configurable safety guardrails)
+- **Talent system** — customize agent behavior with markdown files
+- **Model routing** — selects the right model for each task (speed vs. quality vs. cost)
+- **Checkpoint/restore** — survives restarts without losing context
+- **Dual-port architecture** — native API + Ollama-compatible API simultaneously
 
 ## Architecture
 
 ```
-Request → API Server → Agent Loop → Response
-                          ↓
-              ┌───────────┼───────────┐
-              ↓           ↓           ↓
-           Memory    Model Router   HA Client
-              ↓           ↓           ↓
-           SQLite      Ollama       HA API
-              ↓
-        Facts + Embeddings
+User ──→ API Server ──→ Agent Loop ──→ Response
+                           │
+              ┌────────────┼────────────┐
+              ↓            ↓            ↓
+           Memory     Model Router   HA Client
+           (SQLite)    (Ollama)      (REST/WS)
 ```
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for details.
+Thane's agent loop receives a request, assembles context from memory and home state, plans tool calls, executes them (in parallel where possible), and shapes a response. See [ARCHITECTURE.md](ARCHITECTURE.md) for the full design.
 
-## API
+## Roadmap
 
-Thane exposes two API servers:
+**Working today:** Conversation agent, HA integration, device control, semantic memory, checkpoints, shell exec, web chat UI, dual-port APIs.
 
-### Port 8080 — Native API (OpenAI-compatible)
+**Next up:** Proactive event-driven triggers, companion app notifications, voice pipeline integration, Apple ecosystem access.
 
-For direct integration and development:
+**Longer term:** HA Add-on packaging, multi-instance deployment, identity system with cryptographic integrity.
 
-```bash
-curl http://localhost:8080/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{
-    "messages": [{"role": "user", "content": "Turn on the kitchen light"}],
-    "stream": false
-  }'
-```
-
-### Port 11434 — Ollama-compatible API
-
-For Home Assistant's native Ollama integration:
-
-```yaml
-# In HA configuration.yaml
-conversation:
-  - agent_id: conversation.ollama
-    
-# Or via HA UI: Settings → Voice Assistants → Add Ollama
-# URL: http://thane-host:11434
-# Model: thane:latest
-```
-
-Thane strips HA's injected tools and system prompts, using its own smarter toolset.
-
-**Health check:**
-```bash
-curl http://localhost:8080/health
-```
+See [GitHub Issues](https://github.com/nugget/thane-ai-agent/issues) for the full backlog.
 
 ## Name
 
