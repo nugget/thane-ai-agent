@@ -428,7 +428,7 @@ func runServe(logger *slog.Logger, configPath string, portOverride int) {
 
 	// Set up file tools for workspace access
 	if cfg.Workspace.Path != "" {
-		fileTools := tools.NewFileTools(cfg.Workspace.Path)
+		fileTools := tools.NewFileTools(cfg.Workspace.Path, cfg.Workspace.ReadOnlyDirs)
 		loop.Tools().SetFileTools(fileTools)
 		logger.Info("file tools enabled", "workspace", cfg.Workspace.Path)
 	} else {

@@ -33,6 +33,8 @@ type WorkspaceConfig struct {
 	// All file tool paths are relative to this directory.
 	// If empty, file tools are disabled.
 	Path string `yaml:"path"`
+	// ReadOnlyDirs are additional directories the agent can read but not write.
+	ReadOnlyDirs []string `yaml:"read_only_dirs"`
 }
 
 // ShellExecConfig defines shell execution capabilities.

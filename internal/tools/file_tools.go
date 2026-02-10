@@ -12,12 +12,13 @@ import (
 // FileTools provides file read/write/edit capabilities within a workspace.
 type FileTools struct {
 	workspacePath string
+	readOnlyDirs  []string // Additional read-only directories
 }
 
 // NewFileTools creates a new FileTools instance.
 // If workspacePath is empty, file tools will be disabled.
-func NewFileTools(workspacePath string) *FileTools {
-	return &FileTools{workspacePath: workspacePath}
+func NewFileTools(workspacePath string, readOnlyDirs []string) *FileTools {
+	return &FileTools{workspacePath: workspacePath, readOnlyDirs: readOnlyDirs}
 }
 
 // Enabled returns true if file tools are available.
@@ -30,11 +31,11 @@ func (ft *FileTools) WorkspacePath() string {
 	return ft.workspacePath
 }
 
-// resolvePath converts a relative path to an absolute path within the workspace.
-// Returns an error if the path would escape the workspace.
-func (ft *FileTools) resolvePath(path string) (string, error) {
+// resolvePath converts a relative path to an absolute path within allowed directories.
+// Returns the resolved path and whether it's read-only.
+func (ft *FileTools) resolvePath(path string) (string, bool, error) {
 	if ft.workspacePath == "" {
-		return "", fmt.Errorf("workspace not configured")
+		return "", false, fmt.Errorf("workspace not configured")
 	}
 
 	// Clean and resolve the path
@@ -45,23 +46,44 @@ func (ft *FileTools) resolvePath(path string) (string, error) {
 		absPath = filepath.Clean(filepath.Join(ft.workspacePath, path))
 	}
 
-	// Ensure the path is within the workspace
+	// Resolve symlinks to get the real path
+	realPath, err := filepath.EvalSymlinks(absPath)
+	if err != nil {
+		// File might not exist yet (for writes) — check parent
+		parentReal, perr := filepath.EvalSymlinks(filepath.Dir(absPath))
+		if perr != nil {
+			realPath = absPath // Fall through to directory checks
+		} else {
+			realPath = filepath.Join(parentReal, filepath.Base(absPath))
+		}
+	}
+
+	// Check workspace (read-write)
 	workspaceAbs, err := filepath.Abs(ft.workspacePath)
 	if err != nil {
-		return "", fmt.Errorf("failed to resolve workspace: %w", err)
+		return "", false, fmt.Errorf("failed to resolve workspace: %w", err)
+	}
+	if strings.HasPrefix(absPath, workspaceAbs) || strings.HasPrefix(realPath, workspaceAbs) {
+		return realPath, false, nil
 	}
 
-	// Check that absPath starts with workspace path
-	if !strings.HasPrefix(absPath, workspaceAbs) {
-		return "", fmt.Errorf("path escapes workspace: %s", path)
+	// Check read-only directories
+	for _, dir := range ft.readOnlyDirs {
+		dirAbs, err := filepath.Abs(dir)
+		if err != nil {
+			continue
+		}
+		if strings.HasPrefix(absPath, dirAbs) || strings.HasPrefix(realPath, dirAbs) {
+			return realPath, true, nil
+		}
 	}
 
-	return absPath, nil
+	return "", false, fmt.Errorf("path escapes allowed directories: %s", path)
 }
 
 // Read reads the contents of a file.
 func (ft *FileTools) Read(ctx context.Context, path string, offset, limit int) (string, error) {
-	absPath, err := ft.resolvePath(path)
+	absPath, _, err := ft.resolvePath(path)
 	if err != nil {
 		return "", err
 	}
@@ -113,9 +135,12 @@ func (ft *FileTools) Read(ctx context.Context, path string, offset, limit int) (
 
 // Write writes content to a file, creating directories as needed.
 func (ft *FileTools) Write(ctx context.Context, path, content string) error {
-	absPath, err := ft.resolvePath(path)
+	absPath, readOnly, err := ft.resolvePath(path)
 	if err != nil {
 		return err
+	}
+	if readOnly {
+		return fmt.Errorf("path is read-only: %s", path)
 	}
 
 	// Create parent directories
@@ -134,9 +159,12 @@ func (ft *FileTools) Write(ctx context.Context, path, content string) error {
 
 // Edit performs a surgical text replacement in a file.
 func (ft *FileTools) Edit(ctx context.Context, path, oldText, newText string) error {
-	absPath, err := ft.resolvePath(path)
+	absPath, readOnly, err := ft.resolvePath(path)
 	if err != nil {
 		return err
+	}
+	if readOnly {
+		return fmt.Errorf("path is read-only: %s", path)
 	}
 
 	// Read current content
@@ -178,7 +206,7 @@ func (ft *FileTools) Edit(ctx context.Context, path, oldText, newText string) er
 
 // List lists files in a directory.
 func (ft *FileTools) List(ctx context.Context, path string) ([]string, error) {
-	absPath, err := ft.resolvePath(path)
+	absPath, _, err := ft.resolvePath(path)
 	if err != nil {
 		return nil, err
 	}
