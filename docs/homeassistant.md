@@ -1,5 +1,7 @@
 # Home Assistant Integration
 
+> Your home already has an agent. We make it *autonomous*.
+
 Thane integrates with Home Assistant as a native conversation agent through the Ollama-compatible API.
 
 ## Setup
