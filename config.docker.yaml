@@ -1,0 +1,34 @@
+# Thane config for Docker deployment
+# Mount this to /config/config.yaml
+
+listen:
+  address: "0.0.0.0"
+  port: 8080
+
+ollama_api:
+  enabled: true
+  address: "0.0.0.0"
+  port: 11434
+
+homeassistant:
+  url: https://homeassistant.hollowoak.net
+  token: ${HOMEASSISTANT_TOKEN}
+
+models:
+  default: qwen2.5-coder:32b
+  ollama_url: http://spark-a23e.hollowoak.net:11434
+  local_first: true
+  available:
+    - name: qwen2.5-coder:32b
+      provider: ollama
+      supports_tools: true
+      context_window: 131072
+      speed: 5
+      quality: 8
+      cost_tier: 0
+
+data_dir: /data
+talents_dir: /config/talents
+
+embeddings:
+  enabled: false

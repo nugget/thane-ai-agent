@@ -17,11 +17,11 @@ services:
       - "8080"
       - "11434"
     networks:
-      - traefik_proxy
+      - bespoke-traefik_traefik_proxy
     labels:
       # Enable Traefik
       - "traefik.enable=true"
-      - "traefik.docker.network=traefik_proxy"
+      - "traefik.docker.network=bespoke-traefik_traefik_proxy"
       
       # Chat UI service (port 8080)
       - "traefik.http.services.thane-chat.loadbalancer.server.port=8080"
@@ -41,5 +41,5 @@ volumes:
   thane-data:
 
 networks:
-  traefik_proxy:
+  bespoke-traefik_traefik_proxy:
     external: true
