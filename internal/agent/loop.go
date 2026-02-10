@@ -39,6 +39,8 @@ type Response struct {
 	Content      string `json:"content"`
 	Model        string `json:"model"`
 	FinishReason string `json:"finish_reason"`
+	InputTokens  int    `json:"input_tokens,omitempty"`
+	OutputTokens int    `json:"output_tokens,omitempty"`
 }
 
 // MemoryStore is the interface for memory storage.
@@ -329,6 +331,9 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (*R
 	startTime := time.Now()
 
 	// Agent loop - may iterate if tool calls are needed
+	// Accumulate token usage across iterations
+	var totalInputTokens, totalOutputTokens int
+
 	maxIterations := 5 // Allow enough iterations for context gathering + response
 	for i := 0; i < maxIterations; i++ {
 		l.logger.Info("calling LLM",
@@ -368,6 +373,10 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (*R
 				return nil, err
 			}
 		}
+
+		// Accumulate token usage
+		totalInputTokens += llmResp.PromptEvalCount
+		totalOutputTokens += llmResp.EvalCount
 
 		// Check for tool calls
 		if len(llmResp.Message.ToolCalls) > 0 {
@@ -454,6 +463,8 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (*R
 			Content:      llmResp.Message.Content,
 			Model:        model,
 			FinishReason: "stop",
+			InputTokens:  totalInputTokens,
+			OutputTokens: totalOutputTokens,
 		}
 
 		// Store response in memory

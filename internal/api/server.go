@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sync"
 	"strconv"
 	"time"
 
@@ -37,6 +38,61 @@ type Server struct {
 	memoryStore  *memory.SQLiteStore
 	logger       *slog.Logger
 	server       *http.Server
+	stats        *SessionStats
+}
+
+// SessionStats tracks token usage and cost for the current session.
+type SessionStats struct {
+	TotalInputTokens  int64   `json:"total_input_tokens"`
+	TotalOutputTokens int64   `json:"total_output_tokens"`
+	TotalRequests     int64   `json:"total_requests"`
+	EstimatedCostUSD  float64 `json:"estimated_cost_usd"`
+	ReportedBalance   float64 `json:"reported_balance_usd,omitempty"`
+	BalanceSetAt      string  `json:"balance_set_at,omitempty"`
+	mu                sync.Mutex
+}
+
+// Model pricing per million tokens (USD)
+var modelPricing = map[string][2]float64{
+	// [input_per_1M, output_per_1M]
+	"claude-opus-4-20250514":   {15.0, 75.0},
+	"claude-sonnet-4-20250514": {3.0, 15.0},
+	"claude-haiku-3-20240307":  {0.25, 1.25},
+}
+
+func (s *SessionStats) Record(model string, inputTokens, outputTokens int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.TotalInputTokens += int64(inputTokens)
+	s.TotalOutputTokens += int64(outputTokens)
+	s.TotalRequests++
+
+	pricing, ok := modelPricing[model]
+	if !ok {
+		pricing = [2]float64{15.0, 75.0} // default to Opus pricing
+	}
+	s.EstimatedCostUSD += float64(inputTokens) / 1_000_000.0 * pricing[0]
+	s.EstimatedCostUSD += float64(outputTokens) / 1_000_000.0 * pricing[1]
+}
+
+func (s *SessionStats) SetBalance(balance float64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ReportedBalance = balance
+	s.BalanceSetAt = time.Now().UTC().Format(time.RFC3339)
+}
+
+func (s *SessionStats) Snapshot() SessionStats {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return SessionStats{
+		TotalInputTokens:  s.TotalInputTokens,
+		TotalOutputTokens: s.TotalOutputTokens,
+		TotalRequests:     s.TotalRequests,
+		EstimatedCostUSD:  s.EstimatedCostUSD,
+		ReportedBalance:   s.ReportedBalance,
+		BalanceSetAt:      s.BalanceSetAt,
+	}
 }
 
 // NewServer creates a new API server.
@@ -47,6 +103,7 @@ func NewServer(address string, port int, loop *agent.Loop, rtr *router.Router, l
 		loop:    loop,
 		router:  rtr,
 		logger:  logger,
+		stats:   &SessionStats{},
 	}
 }
 
@@ -92,6 +149,10 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("GET /v1/conversations/{id}", s.handleConversationGet)
 	mux.HandleFunc("GET /v1/tools/calls", s.handleToolCalls)
 	mux.HandleFunc("GET /v1/tools/stats", s.handleToolStats)
+
+	// Session stats
+	mux.HandleFunc("GET /v1/session/stats", s.handleSessionStats)
+	mux.HandleFunc("POST /v1/session/balance", s.handleSetBalance)
 
 	// Chat web UI
 	web.RegisterRoutes(mux)
@@ -221,6 +282,9 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Record usage stats
+	s.stats.Record(resp.Model, resp.InputTokens, resp.OutputTokens)
+
 	// Format as OpenAI response
 	completion := ChatCompletionResponse{
 		ID:      fmt.Sprintf("chatcmpl-%d", time.Now().UnixNano()),
@@ -295,6 +359,8 @@ func (s *Server) handleSimpleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.stats.Record(resp.Model, resp.InputTokens, resp.OutputTokens)
+
 	w.Header().Set("Content-Type", "application/json")
 	writeJSON(w, SimpleChatResponse{
 		Response:       resp.Content,
@@ -356,8 +422,12 @@ func (s *Server) handleStreamingCompletion(w http.ResponseWriter, r *http.Reques
 	s.writeSSE(w, initialChunk)
 	flusher.Flush()
 
+	// Track if any tokens were streamed (greeting fast-path skips streaming)
+	streamed := false
+
 	// Stream callback sends each token
 	streamCallback := func(token string) {
+		streamed = true
 		chunk := StreamChunk{
 			ID:      completionID,
 			Object:  "chat.completion.chunk",
@@ -379,6 +449,14 @@ func (s *Server) handleStreamingCompletion(w http.ResponseWriter, r *http.Reques
 		// Can't change status code after streaming started, just close
 		return
 	}
+
+	// If content was not streamed (e.g. greeting fast-path), emit it now
+	if !streamed && resp.Content != "" {
+		streamCallback(resp.Content)
+	}
+
+	// Record usage stats
+	s.stats.Record(resp.Model, resp.InputTokens, resp.OutputTokens)
 
 	// Update model name and send final chunk
 	modelName = resp.Model
@@ -717,4 +795,24 @@ func (s *Server) handleToolStats(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	writeJSON(w, stats, s.logger)
+}
+
+func (s *Server) handleSessionStats(w http.ResponseWriter, r *http.Request) {
+	snap := s.stats.Snapshot()
+	w.Header().Set("Content-Type", "application/json")
+	writeJSON(w, snap, s.logger)
+}
+
+func (s *Server) handleSetBalance(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Balance float64 `json:"balance_usd"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.errorResponse(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	s.stats.SetBalance(req.Balance)
+	s.logger.Info("balance updated", "balance_usd", req.Balance)
+	w.Header().Set("Content-Type", "application/json")
+	writeJSON(w, map[string]any{"status": "ok", "balance_usd": req.Balance}, s.logger)
 }

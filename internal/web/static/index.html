@@ -6,7 +6,7 @@
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="theme-color" content="#0d1117">
-    <title>Aimee</title>
+    <title>Aimée</title>
     <link rel="manifest" href="/manifest.json">
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>✨</text></svg>">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
@@ -63,6 +63,20 @@
             font-size: 12px;
             color: var(--text-secondary);
             margin-left: auto;
+        }
+
+        .header-stats {
+            font-size: 11px;
+            color: var(--text-secondary);
+            cursor: pointer;
+            padding: 2px 8px;
+            border-radius: 4px;
+            margin-left: 8px;
+            opacity: 0.7;
+            transition: opacity 0.2s;
+        }
+        .header-stats:hover {
+            opacity: 1;
         }
 
         .status-dot {
@@ -314,6 +328,26 @@
         }
 
         /* Typing indicator */
+        .thinking {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: var(--text-secondary);
+            font-size: 0.85rem;
+            font-style: italic;
+        }
+        .thinking-pulse {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--teal);
+            animation: pulse 1.5s ease-in-out infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { opacity: 0.3; transform: scale(0.8); }
+            50% { opacity: 1; transform: scale(1.2); }
+        }
+
         .typing {
             display: flex;
             gap: 4px;
@@ -369,11 +403,15 @@
 <body>
     <div class="header">
         <span class="header-icon">✨</span>
-        <span class="header-title">Aimee</span>
+        <span class="header-title">Aimée</span>
         <span class="header-status">
             <span class="status-dot"></span>
             <span id="status-text">Connected</span>
         </span>
+        <span class="header-stats" id="header-stats" title="Click to refresh">
+            <span id="stats-text">—</span>
+        </span>
+        <a href="https://github.com/nugget/thane-ai-agent" target="_blank" rel="noopener" style="font-size:10px; color:var(--text-secondary); text-decoration:none; opacity:0.5; margin-left:8px;">v0.1.1</a>
     </div>
 
     <div class="messages" id="messages">
@@ -385,7 +423,7 @@
             <div class="input-wrapper">
                 <textarea 
                     id="message-input" 
-                    placeholder="Message Aimee..."
+                    placeholder="Message Aimée..."
                     rows="1"
                 ></textarea>
             </div>
@@ -467,20 +505,29 @@
             messagesEl.scrollTop = messagesEl.scrollHeight;
             
             conversationHistory.push({ role, content });
+            return msgEl;
         }
 
-        function addTypingIndicator() {
-            const typing = document.createElement('div');
-            typing.className = 'message assistant';
-            typing.id = 'typing-indicator';
-            typing.innerHTML = '<div class="typing"><span></span><span></span><span></span></div>';
-            messagesEl.appendChild(typing);
+        function addThinkingIndicator() {
+            const el = document.createElement('div');
+            el.className = 'message assistant';
+            el.id = 'thinking-indicator';
+            el.innerHTML = '<div class="thinking"><span class="thinking-pulse"></span> Thinking…</div>';
+            messagesEl.appendChild(el);
             messagesEl.scrollTop = messagesEl.scrollHeight;
         }
 
-        function removeTypingIndicator() {
-            const typing = document.getElementById('typing-indicator');
-            if (typing) typing.remove();
+        function transitionToTyping() {
+            const el = document.getElementById('thinking-indicator');
+            if (el) {
+                el.id = 'typing-indicator';
+                el.innerHTML = '<div class="typing"><span></span><span></span><span></span></div>';
+            }
+        }
+
+        function removeIndicator() {
+            const el = document.getElementById('thinking-indicator') || document.getElementById('typing-indicator');
+            if (el) el.remove();
         }
 
         async function sendMessage() {
@@ -492,7 +539,7 @@
             sendBtn.disabled = true;
 
             addMessage('user', content);
-            addTypingIndicator();
+            addThinkingIndicator();
 
             try {
                 const response = await fetch('/v1/chat/completions', {
@@ -503,28 +550,73 @@
                             role: m.role,
                             content: m.content
                         })),
-                        stream: false
+                        stream: true
                     })
                 });
 
-                removeTypingIndicator();
-
                 if (!response.ok) {
+                    removeIndicator();
                     throw new Error(`HTTP ${response.status}`);
                 }
 
-                const data = await response.json();
-                const assistantMessage = data.choices?.[0]?.message?.content || 'No response';
-                addMessage('assistant', assistantMessage);
+                // Transition to typing indicator while waiting for first content
+                transitionToTyping();
+
+                // Stream SSE response
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let assistantContent = '';
+                let msgEl = null;
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    const chunk = decoder.decode(value, { stream: true });
+                    const lines = chunk.split('\n');
+
+                    for (const line of lines) {
+                        if (!line.startsWith('data: ')) continue;
+                        const data = line.slice(6).trim();
+                        if (data === '[DONE]') continue;
+
+                        try {
+                            const parsed = JSON.parse(data);
+                            const delta = parsed.choices?.[0]?.delta?.content;
+                            if (delta) {
+                                assistantContent += delta;
+                                if (!msgEl) {
+                                    removeIndicator();
+                                    msgEl = addMessage('assistant', assistantContent);
+                                } else {
+                                    const contentEl = msgEl.querySelector('.content');
+                                    if (contentEl) contentEl.innerHTML = marked.parse(assistantContent);
+                                    messagesEl.scrollTop = messagesEl.scrollHeight;
+                                }
+                            }
+                        } catch (e) { /* skip parse errors */ }
+                    }
+                }
+
+                if (!msgEl && !assistantContent) {
+                    addMessage('assistant', 'No response');
+                } else if (assistantContent) {
+                    // Update conversation history with final content
+                    const lastEntry = conversationHistory[conversationHistory.length - 1];
+                    if (lastEntry && lastEntry.role === 'assistant') {
+                        lastEntry.content = assistantContent;
+                    }
+                }
 
             } catch (error) {
-                removeTypingIndicator();
+                removeIndicator();
                 addMessage('assistant', `*Error: ${error.message}*`);
                 statusText.textContent = 'Error';
             }
 
             sendBtn.disabled = false;
             inputEl.focus();
+            refreshStats();
         }
 
         // Event listeners
@@ -542,6 +634,39 @@
             inputEl.style.height = 'auto';
             inputEl.style.height = Math.min(inputEl.scrollHeight, 200) + 'px';
         });
+
+        // Session stats
+        const statsEl = document.getElementById('stats-text');
+        const headerStats = document.getElementById('header-stats');
+
+        async function refreshStats() {
+            try {
+                const resp = await fetch('/v1/session/stats');
+                const data = await resp.json();
+                const cost = data.estimated_cost_usd.toFixed(4);
+                const reqs = data.total_requests;
+                const inTok = (data.total_input_tokens / 1000).toFixed(1);
+                const outTok = (data.total_output_tokens / 1000).toFixed(1);
+                let text = `$${cost} · ${reqs} req · ${inTok}k/${outTok}k tokens`;
+                if (data.reported_balance_usd > 0) {
+                    const bal = (data.reported_balance_usd - data.estimated_cost_usd).toFixed(2);
+                    text = `~$${bal} remaining · ${text}`;
+                }
+                statsEl.textContent = text;
+            } catch (e) {
+                statsEl.textContent = '—';
+            }
+        }
+
+        headerStats.addEventListener('click', refreshStats);
+
+        // Refresh stats after each message send
+        const origSendMessage = sendMessage;
+        // We'll call refreshStats after responses instead
+
+        // Auto-refresh stats periodically
+        refreshStats();
+        setInterval(refreshStats, 30000);
 
         // Focus input on load
         inputEl.focus();
