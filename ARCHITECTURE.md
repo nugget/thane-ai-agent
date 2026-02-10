@@ -1,13 +1,13 @@
 # Thane Architecture
 
 > **Thane**: A Scottish landholder who managed an estate on behalf of the crown.
-> Your home already has an agent. We make it *autonomous*.
+> An autonomous AI agent that learns, remembers, and acts.
 
 ## The Core Insight
 
-Home Assistant exposes a comprehensive REST and WebSocket API. An autonomous agent doesn't need entity pre-selection — it can query the API directly to understand state, discover devices, and take action. The LLM becomes a **reasoning layer** over HA's full capabilities, not a constrained responder to a curated subset.
+Thane is an **autonomous agent** — an LLM with persistent memory, tool use, and the ability to act on your behalf. It's not constrained to a pre-defined set of capabilities; it discovers what's available and reasons about how to help.
 
-This is the key difference between a **subjected agent** (Assist) and an **autonomous agent** (Thane).
+Home Assistant is Thane's flagship integration, but not a requirement. With HA, Thane becomes a dramatically more capable replacement for the built-in Assist — querying any entity, discovering devices dynamically, and taking intelligent action without pre-selection. Without HA, Thane is still a capable self-hosted AI with semantic memory, shell access, and file operations.
 
 ## Design Principles
 
@@ -60,8 +60,8 @@ This means Thane works with HA out of the box — no custom integration needed.
 │         │                │                    │                │
 │         ▼                ▼                    ▼                │
 │  ┌─────────────┐  ┌────────────┐  ┌──────────────────────┐   │
-│  │   Memory    │  │   Model    │  │   Home Assistant     │   │
-│  │   Store     │  │   Router   │  │   Client (REST/WS)   │   │
+│  │   Memory    │  │   Model    │  │   Integrations       │   │
+│  │   Store     │  │   Router   │  │   (HA, shell, files)  │   │
 │  │  (SQLite)   │  │  (Ollama)  │  │                      │   │
 │  └─────────────┘  └────────────┘  └──────────────────────┘   │
 │                                                               │
@@ -108,9 +108,9 @@ SQLite-backed with optional vector search:
 
 Selects models based on task complexity, speed requirements, and cost. Maintains an audit trail of routing decisions. Supports automatic failover with checkpoint before model switch.
 
-### Home Assistant Client
+### Home Assistant Client (optional)
 
-Full HA API integration:
+When configured, full HA API integration:
 
 - **REST** — State queries, service calls, template rendering
 - **WebSocket** — Persistent connection for real-time events, area/device/entity registry access
