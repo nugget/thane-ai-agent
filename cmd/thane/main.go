@@ -25,6 +25,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/router"
 	"github.com/nugget/thane-ai-agent/internal/scheduler"
 	"github.com/nugget/thane-ai-agent/internal/talents"
+	"github.com/nugget/thane-ai-agent/internal/tools"
 
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -405,6 +406,15 @@ func runServe(logger *slog.Logger, configPath string, portOverride int) {
 	anticipationTools := anticipation.NewTools(anticipationStore)
 	loop.Tools().SetAnticipationTools(anticipationTools)
 	logger.Info("anticipation store initialized", "path", dataDir+"/anticipations.db")
+
+	// Set up file tools for workspace access
+	if cfg.Workspace.Path != "" {
+		fileTools := tools.NewFileTools(cfg.Workspace.Path)
+		loop.Tools().SetFileTools(fileTools)
+		logger.Info("file tools enabled", "workspace", cfg.Workspace.Path)
+	} else {
+		logger.Info("file tools disabled (no workspace path configured)")
+	}
 
 	// Set up embedding client for semantic search
 	if cfg.Embeddings.Enabled {

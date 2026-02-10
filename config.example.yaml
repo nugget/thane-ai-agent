@@ -43,6 +43,12 @@ models:
 data_dir: ./data
 talents_dir: ./talents
 
+# Workspace for file operations (optional)
+# When configured, the agent can read/write files within this directory
+# All file tool paths are sandboxed to this directory
+workspace:
+  path: ""  # e.g., /home/aimee/.openclaw/workspace
+
 # Semantic search (optional)
 embeddings:
   enabled: false

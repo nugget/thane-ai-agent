@@ -29,6 +29,7 @@ type Registry struct {
 	scheduler         *scheduler.Scheduler
 	factTools         *facts.Tools
 	anticipationTools *anticipation.Tools
+	fileTools         *FileTools
 }
 
 // NewRegistry creates a tool registry with HA integration.
@@ -53,6 +54,12 @@ func (r *Registry) SetFactTools(ft *facts.Tools) {
 func (r *Registry) SetAnticipationTools(at *anticipation.Tools) {
 	r.anticipationTools = at
 	r.registerAnticipationTools()
+}
+
+// SetFileTools adds file operation tools to the registry.
+func (r *Registry) SetFileTools(ft *FileTools) {
+	r.fileTools = ft
+	r.registerFileTools()
 }
 
 func (r *Registry) registerFactTools() {
@@ -243,6 +250,135 @@ func (r *Registry) registerAnticipationTools() {
 		},
 		Handler: func(ctx context.Context, args map[string]any) (string, error) {
 			return r.anticipationTools.Execute("cancel_anticipation", args)
+		},
+	})
+}
+
+func (r *Registry) registerFileTools() {
+	if r.fileTools == nil || !r.fileTools.Enabled() {
+		return
+	}
+
+	r.Register(&Tool{
+		Name:        "file_read",
+		Description: "Read the contents of a file from the workspace. Use for accessing configuration, memory files, documentation, or any text file.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"path": map[string]any{
+					"type":        "string",
+					"description": "Path to the file (relative to workspace root)",
+				},
+				"offset": map[string]any{
+					"type":        "integer",
+					"description": "Line number to start reading from (1-indexed, optional)",
+				},
+				"limit": map[string]any{
+					"type":        "integer",
+					"description": "Maximum number of lines to read (optional)",
+				},
+			},
+			"required": []string{"path"},
+		},
+		Handler: func(ctx context.Context, args map[string]any) (string, error) {
+			path, _ := args["path"].(string)
+			offset := 0
+			limit := 0
+			if o, ok := args["offset"].(float64); ok {
+				offset = int(o)
+			}
+			if l, ok := args["limit"].(float64); ok {
+				limit = int(l)
+			}
+			return r.fileTools.Read(ctx, path, offset, limit)
+		},
+	})
+
+	r.Register(&Tool{
+		Name:        "file_write",
+		Description: "Write content to a file in the workspace. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"path": map[string]any{
+					"type":        "string",
+					"description": "Path to the file (relative to workspace root)",
+				},
+				"content": map[string]any{
+					"type":        "string",
+					"description": "Content to write to the file",
+				},
+			},
+			"required": []string{"path", "content"},
+		},
+		Handler: func(ctx context.Context, args map[string]any) (string, error) {
+			path, _ := args["path"].(string)
+			content, _ := args["content"].(string)
+			if err := r.fileTools.Write(ctx, path, content); err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("Successfully wrote %d bytes to %s", len(content), path), nil
+		},
+	})
+
+	r.Register(&Tool{
+		Name:        "file_edit",
+		Description: "Edit a file by replacing exact text. The old text must match exactly (including whitespace). Use this for precise, surgical edits.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"path": map[string]any{
+					"type":        "string",
+					"description": "Path to the file (relative to workspace root)",
+				},
+				"old_text": map[string]any{
+					"type":        "string",
+					"description": "Exact text to find and replace (must match exactly)",
+				},
+				"new_text": map[string]any{
+					"type":        "string",
+					"description": "New text to replace the old text with",
+				},
+			},
+			"required": []string{"path", "old_text", "new_text"},
+		},
+		Handler: func(ctx context.Context, args map[string]any) (string, error) {
+			path, _ := args["path"].(string)
+			oldText, _ := args["old_text"].(string)
+			newText, _ := args["new_text"].(string)
+			if err := r.fileTools.Edit(ctx, path, oldText, newText); err != nil {
+				return "", err
+			}
+			return fmt.Sprintf("Successfully edited %s", path), nil
+		},
+	})
+
+	r.Register(&Tool{
+		Name:        "file_list",
+		Description: "List files and directories in a workspace path.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"path": map[string]any{
+					"type":        "string",
+					"description": "Path to the directory (relative to workspace root, use '.' for root)",
+				},
+			},
+			"required": []string{"path"},
+		},
+		Handler: func(ctx context.Context, args map[string]any) (string, error) {
+			path, _ := args["path"].(string)
+			if path == "" {
+				path = "."
+			}
+			entries, err := r.fileTools.List(ctx, path)
+			if err != nil {
+				return "", err
+			}
+			if len(entries) == 0 {
+				return "Directory is empty", nil
+			}
+			return fmt.Sprintf("Contents of %s:\n%s", path, strings.Join(entries, "\n")), nil
 		},
 	})
 }
