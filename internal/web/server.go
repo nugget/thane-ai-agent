@@ -35,24 +35,26 @@ func Handler() http.Handler {
 func RegisterRoutes(mux *http.ServeMux) {
 	handler := Handler()
 
-	// Serve chat UI at /chat
-	mux.HandleFunc("/chat", func(w http.ResponseWriter, r *http.Request) {
+	// Serve chat UI at /chat (GET only to avoid conflicts)
+	mux.HandleFunc("GET /chat", func(w http.ResponseWriter, r *http.Request) {
 		r.URL.Path = "/"
 		handler.ServeHTTP(w, r)
 	})
 
-	// Serve chat UI assets at /chat/*
-	mux.HandleFunc("/chat/", func(w http.ResponseWriter, r *http.Request) {
-		// Strip /chat prefix for file serving
-		r.URL.Path = r.URL.Path[5:] // len("/chat") = 5
-		if r.URL.Path == "" {
+	// Serve chat UI assets at /chat/* (GET only)
+	mux.HandleFunc("GET /chat/{path...}", func(w http.ResponseWriter, r *http.Request) {
+		// Get the path suffix
+		path := r.PathValue("path")
+		if path == "" {
 			r.URL.Path = "/"
+		} else {
+			r.URL.Path = "/" + path
 		}
 		handler.ServeHTTP(w, r)
 	})
 
-	// Also serve manifest at root for PWA
-	mux.HandleFunc("/manifest.json", func(w http.ResponseWriter, r *http.Request) {
+	// Also serve manifest at root for PWA (GET only)
+	mux.HandleFunc("GET /manifest.json", func(w http.ResponseWriter, r *http.Request) {
 		r.URL.Path = "/manifest.json"
 		handler.ServeHTTP(w, r)
 	})
