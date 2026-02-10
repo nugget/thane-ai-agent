@@ -30,6 +30,7 @@ type Registry struct {
 	factTools         *facts.Tools
 	anticipationTools *anticipation.Tools
 	fileTools         *FileTools
+	shellExec         *ShellExec
 }
 
 // NewRegistry creates a tool registry with HA integration.
@@ -60,6 +61,12 @@ func (r *Registry) SetAnticipationTools(at *anticipation.Tools) {
 func (r *Registry) SetFileTools(ft *FileTools) {
 	r.fileTools = ft
 	r.registerFileTools()
+}
+
+// SetShellExec adds shell execution tools to the registry.
+func (r *Registry) SetShellExec(se *ShellExec) {
+	r.shellExec = se
+	r.registerShellExec()
 }
 
 func (r *Registry) registerFactTools() {
@@ -388,6 +395,69 @@ func (r *Registry) registerFileTools() {
 				return "Directory is empty", nil
 			}
 			return fmt.Sprintf("Contents of %s:\n%s", path, strings.Join(entries, "\n")), nil
+		},
+	})
+}
+
+func (r *Registry) registerShellExec() {
+	if r.shellExec == nil || !r.shellExec.Enabled() {
+		return
+	}
+
+	r.Register(&Tool{
+		Name:        "exec",
+		Description: "Execute a shell command. Use for system administration, network diagnostics (ping, curl, traceroute), building software, or any task requiring shell access.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"command": map[string]any{
+					"type":        "string",
+					"description": "Shell command to execute",
+				},
+				"timeout": map[string]any{
+					"type":        "integer",
+					"description": "Timeout in seconds (optional, default 30, max 300)",
+				},
+			},
+			"required": []string{"command"},
+		},
+		Handler: func(ctx context.Context, args map[string]any) (string, error) {
+			command, _ := args["command"].(string)
+			timeout := 0
+			if t, ok := args["timeout"].(float64); ok {
+				timeout = int(t)
+			}
+
+			result, err := r.shellExec.Exec(ctx, command, timeout)
+			if err != nil {
+				return "", err
+			}
+
+			// Format result for LLM
+			var output strings.Builder
+			if result.Stdout != "" {
+				output.WriteString(result.Stdout)
+			}
+			if result.Stderr != "" {
+				if output.Len() > 0 {
+					output.WriteString("\n\n[stderr]\n")
+				}
+				output.WriteString(result.Stderr)
+			}
+			if result.ExitCode != 0 {
+				output.WriteString(fmt.Sprintf("\n\n[exit code: %d]", result.ExitCode))
+			}
+			if result.TimedOut {
+				output.WriteString("\n\n[command timed out]")
+			}
+			if result.Error != "" {
+				output.WriteString(fmt.Sprintf("\n\n[error: %s]", result.Error))
+			}
+
+			if output.Len() == 0 {
+				return "(no output)", nil
+			}
+			return output.String(), nil
 		},
 	})
 }
