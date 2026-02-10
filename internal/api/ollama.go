@@ -298,7 +298,7 @@ func handleOllamaTagsShared(w http.ResponseWriter, r *http.Request, logger *slog
 func handleOllamaVersionShared(w http.ResponseWriter, r *http.Request, logger *slog.Logger) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(OllamaVersionResponse{
-		Version: "0.1.0", // Thane version
+		Version: "0.1.1", // Thane version
 	}); err != nil {
 		logger.Debug("failed to encode version response", "error", err)
 	}
