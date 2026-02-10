@@ -119,6 +119,43 @@ func (l *Loop) Tools() *tools.Registry {
 	return l.tools
 }
 
+// Simple greeting patterns that don't need tool calls
+var greetingPatterns = []string{
+	"hi", "hello", "hey", "howdy", "hiya", "yo",
+	"good morning", "good afternoon", "good evening",
+	"what's up", "whats up", "sup",
+}
+
+// isSimpleGreeting checks if the message is a simple greeting
+func isSimpleGreeting(msg string) bool {
+	lower := strings.ToLower(strings.TrimSpace(msg))
+	// Remove punctuation
+	lower = strings.TrimRight(lower, "!?.,")
+	for _, pattern := range greetingPatterns {
+		if lower == pattern {
+			return true
+		}
+	}
+	return false
+}
+
+// Greeting responses to cycle through
+var greetingResponses = []string{
+	"Hey! What can I help you with?",
+	"Hi there! How can I help?",
+	"Hello! What would you like me to do?",
+	"Hey! Ready to help.",
+}
+
+var greetingIndex int
+
+// getGreetingResponse returns a friendly greeting response
+func getGreetingResponse() string {
+	resp := greetingResponses[greetingIndex%len(greetingResponses)]
+	greetingIndex++
+	return resp
+}
+
 const baseSystemPrompt = `You are Thane, a friendly Home Assistant voice controller.
 
 ## When to Use Tools
@@ -212,6 +249,20 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (*R
 			userMessage = req.Messages[i].Content
 			break
 		}
+	}
+
+	// Fast-path: handle simple greetings without tool calls
+	if isSimpleGreeting(userMessage) {
+		l.logger.Info("simple greeting detected, responding directly")
+		response := getGreetingResponse()
+		if err := l.memory.AddMessage(convID, "assistant", response); err != nil {
+			l.logger.Warn("failed to store greeting response", "error", err)
+		}
+		return &Response{
+			Content:      response,
+			Model:        "greeting-handler",
+			FinishReason: "stop",
+		}, nil
 	}
 
 	// Build messages for LLM
