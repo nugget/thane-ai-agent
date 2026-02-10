@@ -260,6 +260,11 @@ func runServe(logger *slog.Logger, configPath string, portOverride int) {
 	if cfg.HomeAssistant.URL != "" && cfg.HomeAssistant.Token != "" {
 		ha = homeassistant.NewClient(cfg.HomeAssistant.URL, cfg.HomeAssistant.Token)
 		logger.Info("Home Assistant configured", "url", cfg.HomeAssistant.URL)
+		if err := ha.Ping(context.Background()); err != nil {
+			logger.Error("Home Assistant ping failed", "error", err)
+		} else {
+			logger.Info("Home Assistant ping succeeded")
+		}
 	} else {
 		logger.Warn("Home Assistant not configured - tools will be limited")
 	}

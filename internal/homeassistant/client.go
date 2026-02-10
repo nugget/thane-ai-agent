@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os/exec"
 	"time"
 )
 
@@ -123,12 +124,12 @@ func (c *Client) GetAreas(ctx context.Context) ([]Area, error) {
 // EntityRegistryEntry represents an entity from the registry with area info.
 type EntityRegistryEntry struct {
 	EntityID     string `json:"entity_id"`
-	Name         string `json:"name"`          // Custom name (may be empty)
-	OriginalName string `json:"original_name"` // Default name from integration
+	Name         string `json:"name"`
+	OriginalName string `json:"original_name"`
 	AreaID       string `json:"area_id"`
 	DeviceID     string `json:"device_id"`
 	Platform     string `json:"platform"`
-	DisabledBy   string `json:"disabled_by"` // "user", "integration", or empty
+	DisabledBy   string `json:"disabled_by"`
 }
 
 // IsDisabled returns true if the entity is disabled.
@@ -156,28 +157,23 @@ type EntityInfo struct {
 
 // GetEntities retrieves entities, optionally filtered by domain.
 func (c *Client) GetEntities(ctx context.Context, domain string) ([]EntityInfo, error) {
-	// Get states for current values and friendly names
 	states, err := c.GetStates(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("get states: %w", err)
 	}
 
-	// Build entity list from states
 	var entities []EntityInfo
 	for _, s := range states {
-		// Extract domain from entity_id
 		parts := splitEntityID(s.EntityID)
 		if len(parts) != 2 {
 			continue
 		}
 		entityDomain := parts[0]
 
-		// Filter by domain if specified
 		if domain != "" && entityDomain != domain {
 			continue
 		}
 
-		// Get friendly name from attributes
 		friendlyName := ""
 		if fn, ok := s.Attributes["friendly_name"].(string); ok {
 			friendlyName = fn
@@ -194,7 +190,6 @@ func (c *Client) GetEntities(ctx context.Context, domain string) ([]EntityInfo, 
 	return entities, nil
 }
 
-// splitEntityID splits "light.office" into ["light", "office"].
 func splitEntityID(entityID string) []string {
 	for i, c := range entityID {
 		if c == '.' {
@@ -204,29 +199,18 @@ func splitEntityID(entityID string) []string {
 	return nil
 }
 
-// get performs a GET request to the HA API.
-func (c *Client) get(ctx context.Context, path string, result any) error {
-	req, err := http.NewRequestWithContext(ctx, "GET", c.baseURL+path, nil)
+// get performs a GET request to the HA API using curl.
+// We use curl as a workaround for an intermittent Go net.Dial issue on macOS
+// where TCP connections to LAN hosts fail with "no route to host" despite
+// the network being reachable. curl from the same process works fine.
+func (c *Client) get(_ context.Context, path string, result any) error {
+	body, err := c.curl("GET", c.baseURL+path, nil)
 	if err != nil {
-		return fmt.Errorf("create request: %w", err)
-	}
-
-	req.Header.Set("Authorization", "Bearer "+c.token)
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("API error %d: %s", resp.StatusCode, string(body))
+		return err
 	}
 
 	if result != nil {
-		if err := json.NewDecoder(resp.Body).Decode(result); err != nil {
+		if err := json.Unmarshal(body, result); err != nil {
 			return fmt.Errorf("decode response: %w", err)
 		}
 	}
@@ -234,41 +218,70 @@ func (c *Client) get(ctx context.Context, path string, result any) error {
 	return nil
 }
 
-// post performs a POST request to the HA API.
-func (c *Client) post(ctx context.Context, path string, data any, result any) error {
-	var body io.Reader
+// post performs a POST request to the HA API using curl.
+func (c *Client) post(_ context.Context, path string, data any, result any) error {
+	var reqBody []byte
 	if data != nil {
-		jsonData, err := json.Marshal(data)
+		var err error
+		reqBody, err = json.Marshal(data)
 		if err != nil {
 			return fmt.Errorf("marshal data: %w", err)
 		}
-		body = bytes.NewReader(jsonData)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+path, body)
+	body, err := c.curl("POST", c.baseURL+path, reqBody)
 	if err != nil {
-		return fmt.Errorf("create request: %w", err)
-	}
-
-	req.Header.Set("Authorization", "Bearer "+c.token)
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		respBody, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("API error %d: %s", resp.StatusCode, string(respBody))
+		return err
 	}
 
 	if result != nil {
-		if err := json.NewDecoder(resp.Body).Decode(result); err != nil {
+		if err := json.Unmarshal(body, result); err != nil {
 			return fmt.Errorf("decode response: %w", err)
 		}
 	}
 
 	return nil
 }
+
+// curl executes an HTTP request via the curl command.
+func (c *Client) curl(method, url string, body []byte) ([]byte, error) {
+	args := []string{
+		"-s", "--max-time", "30",
+		"-w", "\n%{http_code}",
+		"-X", method,
+		"-H", "Authorization: Bearer " + c.token,
+		"-H", "Content-Type: application/json",
+	}
+	if body != nil {
+		args = append(args, "-d", string(body))
+	}
+	args = append(args, url)
+
+	cmd := exec.Command("curl", args...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("curl %s %s failed: %w (stderr: %s)", method, url, err, stderr.String())
+	}
+
+	// Parse status code from the last line (added via -w)
+	out := stdout.Bytes()
+	lastNewline := bytes.LastIndex(out, []byte("\n"))
+	if lastNewline < 0 {
+		return nil, fmt.Errorf("unexpected curl output format")
+	}
+	statusCode := string(bytes.TrimSpace(out[lastNewline:]))
+	respBody := out[:lastNewline]
+
+	if statusCode != "200" {
+		return nil, fmt.Errorf("API error %s: %s", statusCode, string(respBody))
+	}
+
+	return respBody, nil
+}
+
+// Unused but kept for potential future use with native Go HTTP.
+var _ = (*http.Client)(nil)
+var _ = io.Discard
