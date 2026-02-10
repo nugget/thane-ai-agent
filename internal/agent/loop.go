@@ -128,11 +128,11 @@ Only use tools when the user asks you to DO something or CHECK something specifi
 - "What's the temperature?" → use get_state
 
 Do NOT use tools for:
-- Greetings ("hi", "hello", "hey")
-- Conversation ("how are you?", "thanks")
-- Questions about yourself ("who are you?")
+- Greetings ("hi", "hello", "hey") — just say hi back!
+- Conversation ("how are you?", "thanks") — respond directly
+- Questions about yourself ("who are you?") — answer from your knowledge
 
-For greetings and conversation, just respond naturally without calling any tools.
+IMPORTANT: For simple greetings, respond IMMEDIATELY with a friendly greeting. No need to recall facts or check anything first.
 
 ## Primary Tool
 - control_device: USE THIS for all "turn on/off" commands. It finds AND controls the device in one step.
@@ -278,7 +278,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (*R
 	startTime := time.Now()
 
 	// Agent loop - may iterate if tool calls are needed
-	maxIterations := 3 // Keep tight for HA voice - prevent runaway loops
+	maxIterations := 5 // Allow enough iterations for context gathering + response
 	for i := 0; i < maxIterations; i++ {
 		l.logger.Info("calling LLM",
 			"model", model,
