@@ -2,7 +2,7 @@
 
 > Your home already has an agent. We make it *autonomous*.
 
-**Thane** is an autonomous AI agent that manages your home — and anything else you point it at. It runs on local models via Ollama, keeps a persistent memory, and talks to your smart home through natural conversation.
+**Thane** is an autonomous AI agent that manages your home and life — not just your smart home, but anything you point it at. It smartly selects between local models via Ollama and cloud-based frontier models, optimizing for performance or cost as the task demands. Persistent memory means it learns and grows over time.
 
 If you have Home Assistant, Thane drops in as a native conversation agent and blows the doors off the built-in Assist. If you don't, Thane is still a capable, self-hosted AI with persistent memory and tool use that might just convince you to get one.
 
@@ -14,7 +14,7 @@ If you have Home Assistant, Thane drops in as a native conversation agent and bl
 
 **Local-first.** Runs entirely on Ollama. Your conversations, your data, your hardware. Cloud models available as fallback, never required.
 
-**Single binary.** Written in Go. No Python environments, no dependency hell. Build it, run it, done.
+**Single binary.** Written in Go. No Python environments, no dependency hell. Trivially deployed in a container environment, easily adaptable to your favorite container orchestration platform (including HAOS).
 
 ## Quick Start
 
