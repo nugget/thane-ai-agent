@@ -4,7 +4,6 @@ package homeassistant
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -26,9 +25,6 @@ func NewClient(baseURL, token string) *Client {
 		token:   token,
 		httpClient: &http.Client{
 			Timeout: 30 * time.Second,
-			Transport: &http.Transport{
-				TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // HA uses self-signed certs on LAN
-			},
 		},
 	}
 }
