@@ -33,8 +33,8 @@ type ShellExecConfig struct {
 // DefaultShellExecConfig returns safe defaults.
 func DefaultShellExecConfig() ShellExecConfig {
 	return ShellExecConfig{
-		Enabled:    false, // Disabled by default for safety
-		WorkingDir: "",
+		Enabled:     false, // Disabled by default for safety
+		WorkingDir:  "",
 		AllowedCmds: []string{}, // Empty = allow all (when enabled)
 		DeniedCmds: []string{
 			"rm -rf /",
