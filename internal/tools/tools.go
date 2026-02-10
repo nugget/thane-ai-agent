@@ -94,7 +94,10 @@ func (r *Registry) registerFactTools() {
 			"required": []string{"key", "value"},
 		},
 		Handler: func(ctx context.Context, args map[string]any) (string, error) {
-			argsJSON, _ := json.Marshal(args)
+			argsJSON, err := json.Marshal(args)
+			if err != nil {
+				return "", fmt.Errorf("failed to serialize arguments: %w", err)
+			}
 			return r.factTools.Remember(string(argsJSON))
 		},
 	})
@@ -120,7 +123,10 @@ func (r *Registry) registerFactTools() {
 			},
 		},
 		Handler: func(ctx context.Context, args map[string]any) (string, error) {
-			argsJSON, _ := json.Marshal(args)
+			argsJSON, err := json.Marshal(args)
+			if err != nil {
+				return "", fmt.Errorf("failed to serialize arguments: %w", err)
+			}
 			return r.factTools.Recall(string(argsJSON))
 		},
 	})
@@ -143,7 +149,10 @@ func (r *Registry) registerFactTools() {
 			"required": []string{"category", "key"},
 		},
 		Handler: func(ctx context.Context, args map[string]any) (string, error) {
-			argsJSON, _ := json.Marshal(args)
+			argsJSON, err := json.Marshal(args)
+			if err != nil {
+				return "", fmt.Errorf("failed to serialize arguments: %w", err)
+			}
 			return r.factTools.Forget(string(argsJSON))
 		},
 	})
@@ -894,7 +903,10 @@ func (r *Registry) handleCancelTask(ctx context.Context, args map[string]any) (s
 	}
 
 	// Try to find task by full ID or prefix
-	tasks, _ := r.scheduler.ListTasks(false)
+	tasks, err := r.scheduler.ListTasks(false)
+	if err != nil {
+		return "", fmt.Errorf("failed to list tasks: %w", err)
+	}
 	var found *scheduler.Task
 	for _, t := range tasks {
 		if t.ID == taskID || strings.HasPrefix(t.ID, taskID) {

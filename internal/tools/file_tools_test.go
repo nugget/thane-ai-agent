@@ -180,4 +180,146 @@ func TestFileTools_Disabled(t *testing.T) {
 	if err == nil {
 		t.Error("Read should fail when disabled")
 	}
+
+	err = ft.Write(ctx, "test.txt", "content")
+	if err == nil {
+		t.Error("Write should fail when disabled")
+	}
+
+	err = ft.Edit(ctx, "test.txt", "old", "new")
+	if err == nil {
+		t.Error("Edit should fail when disabled")
+	}
+
+	_, err = ft.List(ctx, ".")
+	if err == nil {
+		t.Error("List should fail when disabled")
+	}
+}
+
+func TestFileTools_ReadNonExistent(t *testing.T) {
+	workspace, err := os.MkdirTemp("", "thane-file-test-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(workspace)
+
+	ft := NewFileTools(workspace)
+	ctx := context.Background()
+
+	_, err = ft.Read(ctx, "does-not-exist.txt", 0, 0)
+	if err == nil {
+		t.Error("Read should fail for non-existent file")
+	}
+}
+
+func TestFileTools_EditDuplicateText(t *testing.T) {
+	workspace, err := os.MkdirTemp("", "thane-file-test-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(workspace)
+
+	ft := NewFileTools(workspace)
+	ctx := context.Background()
+
+	// Write file with duplicate text
+	content := "duplicate\nsome text\nduplicate\n"
+	err = ft.Write(ctx, "dup.txt", content)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Edit should fail because "duplicate" appears twice
+	err = ft.Edit(ctx, "dup.txt", "duplicate", "unique")
+	if err == nil {
+		t.Error("Edit should fail when old text appears multiple times")
+	}
+}
+
+func TestFileTools_EditNonExistent(t *testing.T) {
+	workspace, err := os.MkdirTemp("", "thane-file-test-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(workspace)
+
+	ft := NewFileTools(workspace)
+	ctx := context.Background()
+
+	err = ft.Edit(ctx, "does-not-exist.txt", "old", "new")
+	if err == nil {
+		t.Error("Edit should fail for non-existent file")
+	}
+}
+
+func TestFileTools_ListNonExistent(t *testing.T) {
+	workspace, err := os.MkdirTemp("", "thane-file-test-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(workspace)
+
+	ft := NewFileTools(workspace)
+	ctx := context.Background()
+
+	_, err = ft.List(ctx, "does-not-exist")
+	if err == nil {
+		t.Error("List should fail for non-existent directory")
+	}
+}
+
+func TestFileTools_ReadOffsetBeyondFile(t *testing.T) {
+	workspace, err := os.MkdirTemp("", "thane-file-test-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(workspace)
+
+	ft := NewFileTools(workspace)
+	ctx := context.Background()
+
+	// Write 3-line file
+	err = ft.Write(ctx, "short.txt", "line1\nline2\nline3")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Try to read from line 100
+	_, err = ft.Read(ctx, "short.txt", 100, 0)
+	if err == nil {
+		t.Error("Read should fail when offset exceeds file length")
+	}
+}
+
+func TestFileTools_OverwriteExisting(t *testing.T) {
+	workspace, err := os.MkdirTemp("", "thane-file-test-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(workspace)
+
+	ft := NewFileTools(workspace)
+	ctx := context.Background()
+
+	// Write initial content
+	err = ft.Write(ctx, "overwrite.txt", "initial content")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Overwrite with new content
+	err = ft.Write(ctx, "overwrite.txt", "new content")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify new content
+	content, err := ft.Read(ctx, "overwrite.txt", 0, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if content != "new content" {
+		t.Errorf("Expected 'new content', got %q", content)
+	}
 }
