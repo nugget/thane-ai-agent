@@ -106,11 +106,8 @@ func runAsk(logger *slog.Logger, configPath string, args []string) {
 		ha = homeassistant.NewClient(cfg.HomeAssistant.URL, cfg.HomeAssistant.Token)
 	}
 
-	// Ollama URL
-	ollamaURL := cfg.Models.OllamaURL
-	if ollamaURL == "" {
-		ollamaURL = "http://localhost:11434"
-	}
+	// Create LLM client
+	llmClient := createLLMClient(cfg, logger)
 
 	// Load talents
 	talentsDir := cfg.TalentsDir
@@ -124,7 +121,7 @@ func runAsk(logger *slog.Logger, configPath string, args []string) {
 	mem := memory.NewStore(100)
 
 	// Create agent loop (no router/scheduler for CLI mode - uses default model)
-	loop := agent.NewLoop(logger, mem, nil, nil, ha, nil, ollamaURL, cfg.Models.Default, talentContent)
+	loop := agent.NewLoop(logger, mem, nil, nil, ha, nil, llmClient, cfg.Models.Default, talentContent)
 
 	// Process the question
 	ctx := context.Background()
@@ -273,8 +270,8 @@ func runServe(logger *slog.Logger, configPath string, portOverride int) {
 		ollamaURL = "http://localhost:11434"
 	}
 
-	// Create LLM client for summarization
-	llmClient := llm.NewOllamaClient(ollamaURL)
+	// Create LLM client based on provider
+	llmClient := createLLMClient(cfg, logger)
 
 	// Create compactor with LLM summarizer
 	compactionConfig := memory.CompactionConfig{
@@ -376,7 +373,7 @@ func runServe(logger *slog.Logger, configPath string, portOverride int) {
 	}
 	defer sched.Stop()
 
-	loop := agent.NewLoop(logger, mem, compactor, rtr, ha, sched, ollamaURL, cfg.Models.Default, talentContent)
+	loop := agent.NewLoop(logger, mem, compactor, rtr, ha, sched, llmClient, cfg.Models.Default, talentContent)
 
 	// Create fact store for long-term memory
 	factStore, err := facts.NewStore(dataDir + "/facts.db")
@@ -601,4 +598,36 @@ func runServe(logger *slog.Logger, configPath string, portOverride int) {
 	}
 
 	logger.Info("Thane stopped")
+}
+
+// createLLMClient creates the appropriate LLM client based on the default model's provider.
+func createLLMClient(cfg *config.Config, logger *slog.Logger) llm.Client {
+	// Determine provider from the default model config
+	provider := "ollama" // default
+	for _, m := range cfg.Models.Available {
+		if m.Name == cfg.Models.Default {
+			if m.Provider != "" {
+				provider = m.Provider
+			}
+			break
+		}
+	}
+
+	switch provider {
+	case "anthropic":
+		if cfg.Anthropic.APIKey == "" {
+			logger.Error("anthropic provider selected but no API key configured")
+			os.Exit(1)
+		}
+		logger.Info("using Anthropic provider", "model", cfg.Models.Default)
+		return llm.NewAnthropicClient(cfg.Anthropic.APIKey)
+
+	default: // "ollama" or unspecified
+		ollamaURL := cfg.Models.OllamaURL
+		if ollamaURL == "" {
+			ollamaURL = "http://localhost:11434"
+		}
+		logger.Info("using Ollama provider", "model", cfg.Models.Default, "url", ollamaURL)
+		return llm.NewOllamaClient(ollamaURL)
+	}
 }
