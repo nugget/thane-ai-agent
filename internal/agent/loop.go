@@ -4,6 +4,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"strings"
 	"time"
@@ -535,6 +536,14 @@ func (l *Loop) GetContextWindow() int {
 // ResetConversation clears the conversation history.
 func (l *Loop) ResetConversation(conversationID string) error {
 	return l.memory.Clear(conversationID)
+}
+
+// TriggerCompaction manually triggers conversation compaction.
+func (l *Loop) TriggerCompaction(ctx context.Context, conversationID string) error {
+	if l.compactor == nil {
+		return fmt.Errorf("compaction not configured")
+	}
+	return l.compactor.Compact(ctx, conversationID)
 }
 
 // ToolsJSON returns the tools definition as JSON (for debugging).

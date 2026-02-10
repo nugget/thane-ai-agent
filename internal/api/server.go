@@ -167,6 +167,7 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("GET /v1/session/stats", s.handleSessionStats)
 	mux.HandleFunc("POST /v1/session/balance", s.handleSetBalance)
 	mux.HandleFunc("POST /v1/session/reset", s.handleSessionReset)
+	mux.HandleFunc("POST /v1/session/compact", s.handleSessionCompact)
 
 	// Chat web UI
 	web.RegisterRoutes(mux)
@@ -850,4 +851,15 @@ func (s *Server) handleSessionReset(w http.ResponseWriter, r *http.Request) {
 	s.logger.Info("session reset via API")
 	w.Header().Set("Content-Type", "application/json")
 	writeJSON(w, map[string]any{"status": "ok", "message": "conversation cleared"}, s.logger)
+}
+
+func (s *Server) handleSessionCompact(w http.ResponseWriter, r *http.Request) {
+	if err := s.loop.TriggerCompaction(r.Context(), "default"); err != nil {
+		s.logger.Error("compaction failed", "error", err)
+		s.errorResponse(w, http.StatusInternalServerError, "compaction failed: "+err.Error())
+		return
+	}
+	s.logger.Info("compaction triggered via API")
+	w.Header().Set("Content-Type", "application/json")
+	writeJSON(w, map[string]any{"status": "ok", "message": "conversation compacted"}, s.logger)
 }

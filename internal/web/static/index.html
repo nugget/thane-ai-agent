@@ -422,6 +422,7 @@
             </div>
             <span id="context-pct" style="min-width:30px;">0%</span>
         </div>
+        <button id="btn-compact" title="Save memories and compact context" style="background:none; border:1px solid var(--border); border-radius:4px; color:var(--text-secondary); font-size:10px; padding:2px 8px; cursor:pointer;">📦 Compact</button>
         <button id="btn-reset" title="Reset conversation" style="background:none; border:1px solid var(--border); border-radius:4px; color:var(--text-secondary); font-size:10px; padding:2px 8px; cursor:pointer;">⟳ Reset</button>
     </div>
 
@@ -692,6 +693,46 @@
         }
 
         headerStats.addEventListener('click', refreshStats);
+
+        // Session compact (two-phase: memory flush then compact)
+        document.getElementById('btn-compact').addEventListener('click', async () => {
+            if (!confirm('Compact session? This will ask Aimée to save important memories, then compress the conversation.')) return;
+            const btn = document.getElementById('btn-compact');
+            btn.disabled = true;
+            btn.textContent = '⏳ Flushing…';
+            try {
+                // Phase 1: Ask Thane to do memory housekeeping
+                const flushResp = await fetch('/v1/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        model: 'thane',
+                        messages: [{ role: 'user', content: '[SYSTEM] Pre-compaction memory flush. Review this conversation for anything important. Write significant events, decisions, or context to today\'s memory file (memory/YYYY-MM-DD.md). Then respond with a brief summary of what you saved. If nothing notable, just say so.' }],
+                        stream: false
+                    })
+                });
+                const flushData = await flushResp.json();
+                if (flushData.choices && flushData.choices[0]) {
+                    addMessage('assistant', flushData.choices[0].message.content);
+                }
+
+                // Phase 2: Trigger compaction
+                btn.textContent = '⏳ Compacting…';
+                const compactResp = await fetch('/v1/session/compact', { method: 'POST' });
+                const compactData = await compactResp.json();
+                if (compactData.status === 'ok') {
+                    addMessage('assistant', '*✅ Conversation compacted.*');
+                } else {
+                    addMessage('assistant', '*⚠️ Compaction failed: ' + (compactData.error || 'unknown') + '*');
+                }
+                refreshStats();
+            } catch (e) {
+                addMessage('assistant', '*⚠️ Compact failed: ' + e.message + '*');
+            } finally {
+                btn.disabled = false;
+                btn.textContent = '📦 Compact';
+            }
+        });
 
         // Session reset
         document.getElementById('btn-reset').addEventListener('click', async () => {
