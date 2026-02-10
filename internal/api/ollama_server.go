@@ -28,8 +28,8 @@ func NewOllamaServer(address string, port int, loop *agent.Loop, logger *slog.Lo
 	return &OllamaServer{
 		address: address,
 		port:    port,
-		loop:   loop,
-		logger: logger,
+		loop:    loop,
+		logger:  logger,
 	}
 }
 

@@ -40,7 +40,7 @@ func serveFile(w http.ResponseWriter, r *http.Request, name string) {
 		w.Header().Set("Content-Type", "application/javascript")
 	}
 
-	w.Write(content)
+	_, _ = w.Write(content)
 }
 
 // RegisterRoutes adds the chat UI routes to a mux.

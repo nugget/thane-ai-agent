@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"sync"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -82,10 +82,20 @@ func (s *SessionStats) SetBalance(balance float64) {
 	s.BalanceSetAt = time.Now().UTC().Format(time.RFC3339)
 }
 
-func (s *SessionStats) Snapshot() SessionStats {
+// SessionStatsSnapshot is a copy-safe snapshot of session stats.
+type SessionStatsSnapshot struct {
+	TotalInputTokens  int64   `json:"total_input_tokens"`
+	TotalOutputTokens int64   `json:"total_output_tokens"`
+	TotalRequests     int64   `json:"total_requests"`
+	EstimatedCostUSD  float64 `json:"estimated_cost_usd"`
+	ReportedBalance   float64 `json:"reported_balance_usd,omitempty"`
+	BalanceSetAt      string  `json:"balance_set_at,omitempty"`
+}
+
+func (s *SessionStats) Snapshot() SessionStatsSnapshot {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return SessionStats{
+	return SessionStatsSnapshot{
 		TotalInputTokens:  s.TotalInputTokens,
 		TotalOutputTokens: s.TotalOutputTokens,
 		TotalRequests:     s.TotalRequests,
