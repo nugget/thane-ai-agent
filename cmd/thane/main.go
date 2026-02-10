@@ -60,7 +60,7 @@ func main() {
 			}
 			runIngest(logger, *configPath, flag.Arg(1))
 		case "version":
-			fmt.Println("thane v0.1.0")
+			fmt.Println("thane v0.1.1")
 		default:
 			fmt.Fprintf(os.Stderr, "unknown command: %s\n", flag.Arg(0))
 			os.Exit(1)
@@ -211,7 +211,7 @@ func runIngest(logger *slog.Logger, configPath string, filePath string) {
 }
 
 func runServe(logger *slog.Logger, configPath string, portOverride int) {
-	logger.Info("starting Thane", "version", "0.1.0")
+	logger.Info("starting Thane", "version", "0.1.1")
 
 	// Load config
 	var cfg *config.Config
