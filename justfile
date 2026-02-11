@@ -27,12 +27,8 @@ build-all:
     just build darwin amd64
     just build darwin arm64
 
-# Run tests
+# Run tests (always with race detector)
 test:
-    go test ./...
-
-# Run tests with race detector
-test-race:
     go test -race ./...
 
 # Check formatting
@@ -43,8 +39,8 @@ fmt-check:
 lint:
     golangci-lint run ./... || true
 
-# CI: format check, lint, tests with race detector
-ci: fmt-check lint test-race
+# CI: format check, lint, and tests
+ci: fmt-check lint test
 
 # Build and show version
 version: build
@@ -55,6 +51,7 @@ version: build
 install: build
     install -D dist/thane-{{host_os}}-{{host_arch}} {{install-prefix}}/bin/thane
 
+# Install the binary to the appropriate system location
 [macos]
 install: build
     install dist/thane-{{host_os}}-{{host_arch}} {{install-prefix}}/bin/thane
@@ -140,15 +137,17 @@ service-uninstall:
 service-status:
     systemctl status thane.service
 
+# Show service status
 [macos]
 service-status:
     launchctl list info.nugget.thane 2>/dev/null || echo "Service not loaded"
 
-# Tail live logs
+# Tail live service logs
 [linux]
 logs:
     journalctl -u thane -f
 
+# Tail live service logs
 [macos]
 logs:
     log stream --process thane
