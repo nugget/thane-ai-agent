@@ -39,7 +39,7 @@ cp config.example.yaml config.yaml
 
 # Run
 just version          # verify the build
-./dist/thane-$(go env GOOS)-$(go env GOARCH) serve
+just serve            # start the server from the build directory
 ```
 
 Thane serves two APIs:
