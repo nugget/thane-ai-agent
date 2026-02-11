@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -21,16 +22,17 @@ type Client struct {
 
 // NewClient creates a new Home Assistant client.
 //
-// Issue #53: Previous versions used curl as a workaround for Go net.Dial
-// failures on macOS. This version uses native Go HTTP with explicit dial
-// timeouts and connection management via httpkit.NewClient. If the issue
-// recurs, the fix belongs in httpkit's transport configuration, not here.
-func NewClient(baseURL, token string) *Client {
+// Issue #53: Go net.Dial intermittently fails on macOS with "no route to host"
+// for LAN targets due to ARP table race conditions. Retry with a short delay
+// allows the ARP entry to refresh before the second attempt.
+func NewClient(baseURL, token string, logger *slog.Logger) *Client {
 	return &Client{
 		baseURL: baseURL,
 		token:   token,
 		httpClient: httpkit.NewClient(
-			httpkit.WithTimeout(30 * time.Second),
+			httpkit.WithTimeout(30*time.Second),
+			httpkit.WithRetry(2, 500*time.Millisecond),
+			httpkit.WithLogger(logger),
 		),
 	}
 }

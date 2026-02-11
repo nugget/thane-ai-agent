@@ -202,7 +202,7 @@ func runAsk(ctx context.Context, stdout io.Writer, stderr io.Writer, configPath 
 	// Home Assistant client (optional — ask works without it)
 	var ha *homeassistant.Client
 	if cfg.HomeAssistant.Configured() {
-		ha = homeassistant.NewClient(cfg.HomeAssistant.URL, cfg.HomeAssistant.Token)
+		ha = homeassistant.NewClient(cfg.HomeAssistant.URL, cfg.HomeAssistant.Token, logger)
 	}
 
 	llmClient := createLLMClient(cfg, logger)
@@ -335,7 +335,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// and Thane operates as a general-purpose agent.
 	var ha *homeassistant.Client
 	if cfg.HomeAssistant.Configured() {
-		ha = homeassistant.NewClient(cfg.HomeAssistant.URL, cfg.HomeAssistant.Token)
+		ha = homeassistant.NewClient(cfg.HomeAssistant.URL, cfg.HomeAssistant.Token, logger)
 		logger.Info("Home Assistant configured", "url", cfg.HomeAssistant.URL)
 		if err := ha.Ping(ctx); err != nil {
 			logger.Error("Home Assistant ping failed", "error", err)

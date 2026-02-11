@@ -10,10 +10,13 @@ package httpkit
 
 import (
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
+	"syscall"
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/buildinfo"
@@ -54,6 +57,9 @@ type clientConfig struct {
 	transport             *http.Transport
 	disableKeepAlives     bool
 	tlsInsecureSkipVerify bool
+	retryCount            int
+	retryDelay            time.Duration
+	logger                *slog.Logger
 }
 
 // WithTimeout sets the overall request timeout on the http.Client.
@@ -87,6 +93,22 @@ func WithDisableKeepAlives() ClientOption {
 // Use only for local/development targets.
 func WithTLSInsecureSkipVerify() ClientOption {
 	return func(c *clientConfig) { c.tlsInsecureSkipVerify = true }
+}
+
+// WithRetry enables automatic retry on transient connection errors
+// (e.g., EHOSTUNREACH, connection refused). Only retries when the
+// request body has not been consumed (safe for all methods).
+// Designed to handle macOS ARP table race conditions (issue #53).
+func WithRetry(count int, delay time.Duration) ClientOption {
+	return func(c *clientConfig) {
+		c.retryCount = count
+		c.retryDelay = delay
+	}
+}
+
+// WithLogger sets a logger for retry diagnostics.
+func WithLogger(l *slog.Logger) ClientOption {
+	return func(c *clientConfig) { c.logger = l }
 }
 
 // NewTransport creates an http.Transport with sensible defaults.
@@ -141,6 +163,15 @@ func NewClient(opts ...ClientOption) *http.Client {
 		}
 	}
 
+	if cfg.retryCount > 0 {
+		rt = &retryTransport{
+			base:   rt,
+			count:  cfg.retryCount,
+			delay:  cfg.retryDelay,
+			logger: cfg.logger,
+		}
+	}
+
 	return &http.Client{
 		Timeout:   cfg.timeout,
 		Transport: rt,
@@ -171,6 +202,106 @@ func DrainAndClose(rc io.ReadCloser, limit int64) {
 	}
 	_, _ = io.Copy(io.Discard, io.LimitReader(rc, limit))
 	rc.Close()
+}
+
+// retryTransport wraps a RoundTripper and retries on transient connection
+// errors. It only retries when the request body (if any) supports rewinding
+// via GetBody, ensuring safety for POST/PUT requests.
+type retryTransport struct {
+	base   http.RoundTripper
+	count  int
+	delay  time.Duration
+	logger *slog.Logger
+}
+
+func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	resp, err := t.base.RoundTrip(req)
+	if err == nil || !isRetryableError(err) {
+		return resp, err
+	}
+
+	// If request has a body, we need GetBody to rewind it for retry.
+	if req.Body != nil && req.GetBody == nil {
+		return resp, err
+	}
+
+	for attempt := 1; attempt <= t.count; attempt++ {
+		if t.logger != nil {
+			t.logger.Warn("retrying request after transient error",
+				"method", req.Method,
+				"url", req.URL.String(),
+				"attempt", attempt,
+				"maxRetries", t.count,
+				"error", err,
+			)
+		}
+
+		// Wait before retry to allow ARP/route table to settle.
+		timer := time.NewTimer(t.delay)
+		select {
+		case <-req.Context().Done():
+			timer.Stop()
+			return nil, req.Context().Err()
+		case <-timer.C:
+		}
+
+		// Rewind body if present.
+		if req.GetBody != nil {
+			body, bodyErr := req.GetBody()
+			if bodyErr != nil {
+				return nil, fmt.Errorf("retry: rewind body: %w", bodyErr)
+			}
+			req.Body = body
+		}
+
+		resp, err = t.base.RoundTrip(req)
+		if err == nil || !isRetryableError(err) {
+			if err == nil && t.logger != nil {
+				t.logger.Info("retry succeeded",
+					"method", req.Method,
+					"url", req.URL.String(),
+					"attempt", attempt,
+				)
+			}
+			return resp, err
+		}
+	}
+
+	return resp, err
+}
+
+// isRetryableError returns true for transient connection-level errors
+// that are likely to succeed on retry (e.g., macOS ARP race conditions).
+func isRetryableError(err error) bool {
+	if err == nil {
+		return false
+	}
+
+	// Check for specific syscall errors that indicate transient network issues.
+	var errno syscall.Errno
+	if errors.As(err, &errno) {
+		switch errno {
+		case syscall.EHOSTUNREACH, // no route to host
+			syscall.ENETUNREACH,  // network unreachable
+			syscall.ECONNREFUSED, // connection refused (service restarting)
+			syscall.ECONNRESET:   // connection reset
+			return true
+		}
+	}
+
+	// Check for net.OpError wrapping these.
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		if errors.As(opErr.Err, &errno) {
+			switch errno {
+			case syscall.EHOSTUNREACH, syscall.ENETUNREACH,
+				syscall.ECONNREFUSED, syscall.ECONNRESET:
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 // ReadErrorBody reads up to limit bytes from rc for error messages,

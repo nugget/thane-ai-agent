@@ -1,11 +1,14 @@
 package httpkit
 
 import (
+	"context"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -231,4 +234,218 @@ func TestDrainAndClose_LimitsReading(t *testing.T) {
 	data := strings.Repeat("x", 10000)
 	rc := io.NopCloser(strings.NewReader(data))
 	DrainAndClose(rc, 100) // should drain at most 100 bytes
+}
+
+// --- Retry transport tests ---
+
+// failingRoundTripper simulates transient errors then succeeds.
+type failingRoundTripper struct {
+	failures int
+	calls    int
+}
+
+func (f *failingRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	f.calls++
+	if f.calls <= f.failures {
+		return nil, &net.OpError{
+			Op:  "dial",
+			Net: "tcp",
+			Err: &net.OpError{Op: "connect", Err: syscall.EHOSTUNREACH},
+		}
+	}
+	return &http.Response{
+		StatusCode: 200,
+		Body:       io.NopCloser(strings.NewReader("ok")),
+	}, nil
+}
+
+func TestRetryTransport_RetriesOnEHOSTUNREACH(t *testing.T) {
+	ft := &failingRoundTripper{failures: 1}
+	rt := &retryTransport{
+		base:  ft,
+		count: 2,
+		delay: 10 * time.Millisecond,
+	}
+
+	req, _ := http.NewRequest("GET", "http://example.com", nil)
+	resp, err := rt.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("expected success after retry, got: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	if ft.calls != 2 {
+		t.Fatalf("expected 2 calls (1 fail + 1 success), got %d", ft.calls)
+	}
+}
+
+func TestRetryTransport_NoRetryOnSuccess(t *testing.T) {
+	ft := &failingRoundTripper{failures: 0}
+	rt := &retryTransport{
+		base:  ft,
+		count: 2,
+		delay: 10 * time.Millisecond,
+	}
+
+	req, _ := http.NewRequest("GET", "http://example.com", nil)
+	resp, err := rt.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	if ft.calls != 1 {
+		t.Fatalf("expected 1 call, got %d", ft.calls)
+	}
+}
+
+func TestRetryTransport_ExhaustsRetries(t *testing.T) {
+	ft := &failingRoundTripper{failures: 10} // always fails
+	rt := &retryTransport{
+		base:  ft,
+		count: 2,
+		delay: 10 * time.Millisecond,
+	}
+
+	req, _ := http.NewRequest("GET", "http://example.com", nil)
+	_, err := rt.RoundTrip(req)
+	if err == nil {
+		t.Fatal("expected error after exhausting retries")
+	}
+	// 1 initial + 2 retries = 3
+	if ft.calls != 3 {
+		t.Fatalf("expected 3 calls, got %d", ft.calls)
+	}
+}
+
+func TestRetryTransport_RespectsContextCancellation(t *testing.T) {
+	ft := &failingRoundTripper{failures: 10}
+	rt := &retryTransport{
+		base:  ft,
+		count: 5,
+		delay: 5 * time.Second, // long delay
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	req, _ := http.NewRequestWithContext(ctx, "GET", "http://example.com", nil)
+
+	// Cancel during the retry delay
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+
+	_, err := rt.RoundTrip(req)
+	if err == nil {
+		t.Fatal("expected context cancellation error")
+	}
+	// Should have only made 1 call (initial failure), then cancelled during delay
+	if ft.calls != 1 {
+		t.Fatalf("expected 1 call before cancellation, got %d", ft.calls)
+	}
+}
+
+// nonRetryableRoundTripper returns a non-retryable error.
+type nonRetryableRoundTripper struct {
+	calls int
+}
+
+func (f *nonRetryableRoundTripper) RoundTrip(*http.Request) (*http.Response, error) {
+	f.calls++
+	return nil, fmt.Errorf("some non-retryable error")
+}
+
+func TestRetryTransport_NoRetryOnNonRetryableError(t *testing.T) {
+	ft := &nonRetryableRoundTripper{}
+	rt := &retryTransport{
+		base:  ft,
+		count: 2,
+		delay: 10 * time.Millisecond,
+	}
+
+	req, _ := http.NewRequest("GET", "http://example.com", nil)
+	_, err := rt.RoundTrip(req)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if ft.calls != 1 {
+		t.Fatalf("expected 1 call (no retry), got %d", ft.calls)
+	}
+}
+
+func TestIsRetryableError(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      error
+		expected bool
+	}{
+		{"nil", nil, false},
+		{"generic", fmt.Errorf("oops"), false},
+		{"EHOSTUNREACH", syscall.EHOSTUNREACH, true},
+		{"ENETUNREACH", syscall.ENETUNREACH, true},
+		{"ECONNREFUSED", syscall.ECONNREFUSED, true},
+		{"ECONNRESET", syscall.ECONNRESET, true},
+		{"wrapped EHOSTUNREACH", fmt.Errorf("connect: %w", syscall.EHOSTUNREACH), true},
+		{"OpError wrapping EHOSTUNREACH", &net.OpError{
+			Op: "dial", Net: "tcp",
+			Err: &net.OpError{Op: "connect", Err: syscall.EHOSTUNREACH},
+		}, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isRetryableError(tt.err)
+			if got != tt.expected {
+				t.Errorf("isRetryableError(%v) = %v, want %v", tt.err, got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestRetryTransport_WithBody(t *testing.T) {
+	ft := &failingRoundTripper{failures: 1}
+	rt := &retryTransport{
+		base:  ft,
+		count: 2,
+		delay: 10 * time.Millisecond,
+	}
+
+	body := strings.NewReader(`{"key":"value"}`)
+	req, _ := http.NewRequest("POST", "http://example.com", body)
+	req.GetBody = func() (io.ReadCloser, error) {
+		return io.NopCloser(strings.NewReader(`{"key":"value"}`)), nil
+	}
+
+	resp, err := rt.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("expected success after retry, got: %v", err)
+	}
+	if resp.StatusCode != 200 {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+}
+
+func TestRetryTransport_NoRetryWithoutGetBody(t *testing.T) {
+	ft := &failingRoundTripper{failures: 1}
+	rt := &retryTransport{
+		base:  ft,
+		count: 2,
+		delay: 10 * time.Millisecond,
+	}
+
+	// POST with body but no GetBody — cannot safely retry.
+	// Must nil out GetBody since http.NewRequest auto-sets it for some body types.
+	body := strings.NewReader(`{"key":"value"}`)
+	req, _ := http.NewRequest("POST", "http://example.com", body)
+	req.GetBody = nil
+
+	_, err := rt.RoundTrip(req)
+	if err == nil {
+		t.Fatal("expected error (should not retry without GetBody)")
+	}
+	if ft.calls != 1 {
+		t.Fatalf("expected 1 call (no retry), got %d", ft.calls)
+	}
 }
