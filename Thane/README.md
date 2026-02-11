@@ -1,20 +1,32 @@
 # Development Working Directory
 
-This directory mirrors the production `~/Thane/` layout. Put your
-site-specific files here for local development with `just serve`.
+This directory mirrors the production `~/Thane/` layout. `just serve`
+runs Thane from here, so all relative paths in your config resolve
+against this directory — same as production.
 
-## Expected contents
+## Layout
 
 ```
 Thane/
-├── config.yaml     # Your config (cp ../config.example.yaml config.yaml)
-├── persona.md      # Agent personality
-├── data/           # SQLite databases (created automatically)
-└── thane.log       # Log output (when running via just serve)
+├── config.yaml       # Site-specific config (cp ../config.example.yaml)
+├── persona.md        # Agent personality (replaces default system prompt)
+├── talents/          # Skill/behavior markdown files (extend system prompt)
+│   └── *.md
+├── data/             # SQLite databases — facts, memory, checkpoints (auto-created)
+├── workspace/        # Agent's sandboxed file access (if configured)
+└── thane.log         # Log output
 ```
 
-Everything in this directory except this README is gitignored —
-it contains secrets and local state.
+## Config defaults
+
+All paths default to locations inside this directory:
+
+| Config key      | Default         | What it is                          |
+|-----------------|-----------------|-------------------------------------|
+| `persona_file`  | `./persona.md`  | Agent personality                   |
+| `talents_dir`   | `./talents`     | Skill markdown files                |
+| `data_dir`      | `./data`        | SQLite databases                    |
+| `workspace.root`| *(none)*        | Sandboxed file access for the agent |
 
 ## Getting started
 
@@ -23,3 +35,6 @@ cp config.example.yaml Thane/config.yaml
 # Edit Thane/config.yaml with your settings
 just serve
 ```
+
+Everything in this directory except this README is gitignored —
+it contains secrets and local state.
