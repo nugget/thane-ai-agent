@@ -30,11 +30,17 @@ func NewOllamaClient(baseURL string, logger *slog.Logger) *OllamaClient {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	// Large local models can take significant time before sending headers
+	// (loading, thinking). Override the default 15s ResponseHeaderTimeout.
+	t := httpkit.NewTransport()
+	t.ResponseHeaderTimeout = 5 * time.Minute
+
 	return &OllamaClient{
 		baseURL: baseURL,
 		logger:  logger.With("provider", "ollama"),
 		httpClient: httpkit.NewClient(
-			httpkit.WithTimeout(5 * time.Minute), // Large models with tools need time
+			httpkit.WithTimeout(5*time.Minute),
+			httpkit.WithTransport(t),
 		),
 	}
 }

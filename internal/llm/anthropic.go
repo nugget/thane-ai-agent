@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/httpkit"
 )
@@ -31,14 +32,21 @@ func NewAnthropicClient(apiKey string, logger *slog.Logger) *AnthropicClient {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	// LLM responses can take significant time before sending headers
+	// (thinking, long prompts). Use a custom transport with a generous
+	// response header timeout. Streaming and non-streaming (compaction)
+	// requests both benefit.
+	t := httpkit.NewTransport()
+	t.ResponseHeaderTimeout = 120 * time.Second
+
 	return &AnthropicClient{
 		apiKey: apiKey,
 		logger: logger.With("provider", "anthropic"),
 		httpClient: httpkit.NewClient(
 			// No global timeout — streaming responses can be long-lived.
 			// Rely on ctx deadlines/cancellation for timeout control.
-			// Transport-level timeouts (dial, TLS, response header) still apply.
 			httpkit.WithTimeout(0),
+			httpkit.WithTransport(t),
 		),
 	}
 }
