@@ -2,10 +2,46 @@
 package config
 
 import (
+	"fmt"
 	"os"
+	"path/filepath"
 
 	"gopkg.in/yaml.v3"
 )
+
+// DefaultSearchPaths returns the config file search order.
+// An explicit path (from -config flag) is checked first.
+// Then: ./config.yaml, ~/.config/thane/config.yaml, /etc/thane/config.yaml.
+func DefaultSearchPaths() []string {
+	paths := []string{"config.yaml"}
+
+	if home, err := os.UserHomeDir(); err == nil {
+		paths = append(paths, filepath.Join(home, ".config", "thane", "config.yaml"))
+	}
+
+	paths = append(paths, "/etc/thane/config.yaml")
+	return paths
+}
+
+// FindConfig locates a config file. If explicit is non-empty, it must exist.
+// Otherwise, searches DefaultSearchPaths and returns the first that exists.
+// Returns the path found, or an error if nothing was found.
+func FindConfig(explicit string) (string, error) {
+	if explicit != "" {
+		if _, err := os.Stat(explicit); err != nil {
+			return "", fmt.Errorf("config file not found: %s", explicit)
+		}
+		return explicit, nil
+	}
+
+	for _, p := range DefaultSearchPaths() {
+		if _, err := os.Stat(p); err == nil {
+			return p, nil
+		}
+	}
+
+	return "", fmt.Errorf("no config file found (searched: %v)", DefaultSearchPaths())
+}
 
 // Config holds all Thane configuration.
 type Config struct {

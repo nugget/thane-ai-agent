@@ -35,7 +35,6 @@ import (
 func main() {
 	// Parse flags
 	configPath := flag.String("config", "", "path to config file")
-	port := flag.Int("port", 0, "override listen port")
 	flag.Parse()
 
 	// Setup logging
@@ -47,7 +46,7 @@ func main() {
 	if flag.NArg() > 0 {
 		switch flag.Arg(0) {
 		case "serve":
-			runServe(logger, *configPath, *port)
+			runServe(logger, *configPath)
 		case "ask":
 			if flag.NArg() < 2 {
 				fmt.Fprintln(os.Stderr, "usage: thane ask <question>")
@@ -92,16 +91,16 @@ func runAsk(logger *slog.Logger, configPath string, args []string) {
 	}
 
 	// Load config
-	var cfg *config.Config
-	var err error
-	if configPath != "" {
-		cfg, err = config.Load(configPath)
-		if err != nil {
-			logger.Error("failed to load config", "path", configPath, "error", err)
-			os.Exit(1)
-		}
-	} else {
-		cfg = config.Default()
+	cfgPath, err := config.FindConfig(configPath)
+	if err != nil {
+		logger.Error("config", "error", err)
+		os.Exit(1)
+	}
+
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		logger.Error("failed to load config", "path", cfgPath, "error", err)
+		os.Exit(1)
 	}
 
 	// Home Assistant client
@@ -144,16 +143,16 @@ func runIngest(logger *slog.Logger, configPath string, filePath string) {
 	logger.Info("ingesting markdown document", "file", filePath)
 
 	// Load config
-	var cfg *config.Config
-	var err error
-	if configPath != "" {
-		cfg, err = config.Load(configPath)
-		if err != nil {
-			logger.Error("failed to load config", "path", configPath, "error", err)
-			os.Exit(1)
-		}
-	} else {
-		cfg = config.Default()
+	cfgPath, err := config.FindConfig(configPath)
+	if err != nil {
+		logger.Error("config", "error", err)
+		os.Exit(1)
+	}
+
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		logger.Error("failed to load config", "path", cfgPath, "error", err)
+		os.Exit(1)
 	}
 
 	// Data directory
@@ -211,25 +210,20 @@ func runIngest(logger *slog.Logger, configPath string, filePath string) {
 	fmt.Printf("Successfully ingested %d facts from %s\n", count, filePath)
 }
 
-func runServe(logger *slog.Logger, configPath string, portOverride int) {
+func runServe(logger *slog.Logger, configPath string) {
 	logger.Info("starting Thane", "version", buildinfo.Version, "commit", buildinfo.GitCommit, "branch", buildinfo.GitBranch, "built", buildinfo.BuildTime)
 
 	// Load config
-	var cfg *config.Config
-	var err error
-	if configPath != "" {
-		cfg, err = config.Load(configPath)
-		if err != nil {
-			logger.Error("failed to load config", "path", configPath, "error", err)
-			os.Exit(1)
-		}
-	} else {
-		cfg = config.Default()
+	cfgPath, err := config.FindConfig(configPath)
+	if err != nil {
+		logger.Error("config", "error", err)
+		os.Exit(1)
 	}
 
-	// Apply overrides
-	if portOverride > 0 {
-		cfg.Listen.Port = portOverride
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		logger.Error("failed to load config", "path", cfgPath, "error", err)
+		os.Exit(1)
 	}
 
 	// Reconfigure logger with config-driven level
@@ -246,6 +240,7 @@ func runServe(logger *slog.Logger, configPath string, portOverride int) {
 	}
 
 	logger.Info("config loaded",
+		"path", cfgPath,
 		"port", cfg.Listen.Port,
 		"model", cfg.Models.Default,
 		"ollama_url", cfg.Models.OllamaURL,
