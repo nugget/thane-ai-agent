@@ -6,9 +6,21 @@ build_time := `date -u '+%Y-%m-%dT%H:%M:%SZ'`
 
 ldflags := "-X " + pkg + ".Version=" + version + " -X " + pkg + ".GitCommit=" + git_commit + " -X " + pkg + ".GitBranch=" + git_branch + " -X " + pkg + ".BuildTime=" + build_time
 
-# Build the thane binary with version info stamped
-build:
-    go build -ldflags "{{ldflags}}" -o thane ./cmd/thane
+host_os := if os() == "macos" { "darwin" } else { os() }
+host_arch := if arch() == "aarch64" { "arm64" } else if arch() == "x86_64" { "amd64" } else { arch() }
+
+# Build a binary into dist/ (defaults to current platform, or specify OS/ARCH)
+build target_os=host_os target_arch=host_arch:
+    @mkdir -p dist
+    GOOS={{target_os}} GOARCH={{target_arch}} go build -ldflags "{{ldflags}}" -o dist/thane-{{target_os}}-{{target_arch}} ./cmd/thane
+    @echo "Built dist/thane-{{target_os}}-{{target_arch}}"
+
+# Build for all release targets
+build-all:
+    just build linux amd64
+    just build linux arm64
+    just build darwin amd64
+    just build darwin arm64
 
 # Run tests
 test:
@@ -31,11 +43,11 @@ ci: fmt-check lint test-race
 
 # Build and show version
 version: build
-    ./thane version
+    dist/thane-{{host_os}}-{{host_arch}} version
 
 # Clean build artifacts
 clean:
-    rm -f thane
+    rm -rf dist
 
 # Tag and publish a GitHub release (usage: just release 0.2.0)
 release tag:
