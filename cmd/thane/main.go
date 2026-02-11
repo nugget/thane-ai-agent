@@ -11,7 +11,7 @@
 //	thane ask <question>     Ask a single question (for testing)
 //	thane ingest <file.md>   Import a markdown document into the fact store
 //	thane version            Print version and build information
-//	thane -o json version    Output as JSON (applies to any command)
+//	thane -o json version    Output version information as JSON
 package main
 
 import (

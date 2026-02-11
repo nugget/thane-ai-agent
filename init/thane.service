@@ -9,7 +9,6 @@ Type=simple
 ExecStart=/usr/local/bin/thane serve
 Restart=on-failure
 RestartSec=5
-WatchdogSec=60
 
 # Run as a dedicated unprivileged user
 User=thane
