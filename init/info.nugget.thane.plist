@@ -40,6 +40,12 @@
         <integer>65536</integer>
     </dict>
 
+    <key>StandardOutPath</key>
+    <string>/usr/local/var/thane/thane.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/usr/local/var/thane/thane.log</string>
+
     <key>ProcessType</key>
     <string>Standard</string>
 </dict>

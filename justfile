@@ -136,7 +136,7 @@ service-install: install
     echo "  Binary:  $THANE_HOME/bin/thane"
     echo "  Config:  $THANE_HOME/config.yaml"
     echo "  Data:    $THANE_HOME/data/"
-    echo "  Logs:    log stream --process thane"
+    echo "  Logs:    $THANE_HOME/thane.log"
     echo ""
     echo "Next steps:"
     echo "  1. Copy your config:  cp config.example.yaml $THANE_HOME/config.yaml"
@@ -191,7 +191,7 @@ logs:
 [group('operations')]
 [macos]
 logs:
-    log stream --process thane
+    tail -f {{thane-home}}/thane.log
 
 # --- Release ---
 
