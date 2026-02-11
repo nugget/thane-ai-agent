@@ -34,7 +34,7 @@ cd thane-ai-agent
 just build
 
 # Configure
-cp config.example.yaml config.yaml
+cp examples/config.example.yaml config.yaml
 # Edit config.yaml with your Ollama URL and (optionally) Home Assistant token
 
 # Run
@@ -107,7 +107,7 @@ For production use, create a dedicated macOS user account for Thane (standard or
 ```bash
 just install                  # → ~/Thane/bin/thane
 just service-install          # → ~/Library/LaunchAgents/info.nugget.thane.plist
-cp config.example.yaml ~/Thane/config.yaml
+cp examples/config.example.yaml ~/Thane/config.yaml
 # Edit ~/Thane/config.yaml with your settings
 launchctl load ~/Library/LaunchAgents/info.nugget.thane.plist
 just logs                     # Tail ~/Thane/thane.log
@@ -117,7 +117,7 @@ just logs                     # Tail ~/Thane/thane.log
 ```bash
 sudo just install             # → /usr/local/bin/thane
 sudo just service-install     # Creates thane user, installs unit, enables service
-sudo cp config.example.yaml /etc/thane/config.yaml
+sudo cp examples/config.example.yaml /etc/thane/config.yaml
 # Edit /etc/thane/config.yaml with your settings
 sudo systemctl start thane
 ```

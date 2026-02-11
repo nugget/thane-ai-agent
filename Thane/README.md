@@ -8,7 +8,7 @@ against this directory — same as production.
 
 ```
 Thane/
-├── config.yaml       # Site-specific config (cp ../config.example.yaml)
+├── config.yaml       # Site-specific config (cp ../examples/config.example.yaml)
 ├── persona.md        # Agent personality (replaces default system prompt)
 ├── talents/          # Skill/behavior markdown files (extend system prompt)
 │   └── *.md
@@ -31,7 +31,7 @@ All paths default to locations inside this directory:
 ## Getting started
 
 ```bash
-cp config.example.yaml Thane/config.yaml
+cp examples/config.example.yaml Thane/config.yaml
 # Edit Thane/config.yaml with your settings
 just serve
 ```

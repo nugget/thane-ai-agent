@@ -111,7 +111,7 @@ service-install: install
     echo "  Logs:    journalctl -u thane"
     echo ""
     echo "Next steps:"
-    echo "  1. Copy your config:  cp config.example.yaml /etc/thane/config.yaml"
+    echo "  1. Copy your config:  cp examples/config.example.yaml /etc/thane/config.yaml"
     echo "  2. Edit secrets:      $EDITOR /etc/thane/config.yaml"
     echo "  3. Lock it down:      chmod 600 /etc/thane/config.yaml && chown thane:thane /etc/thane/config.yaml"
     echo "  4. Start it up:       systemctl start thane"
@@ -139,7 +139,7 @@ service-install: install
     echo "  Logs:    $THANE_HOME/thane.log"
     echo ""
     echo "Next steps:"
-    echo "  1. Copy your config:  cp config.example.yaml $THANE_HOME/config.yaml"
+    echo "  1. Copy your config:  cp examples/config.example.yaml $THANE_HOME/config.yaml"
     echo "  2. Edit secrets:      \$EDITOR $THANE_HOME/config.yaml"
     echo "  3. Lock it down:      chmod 600 $THANE_HOME/config.yaml"
     echo "  4. Start it up:       launchctl load ~/Library/LaunchAgents/info.nugget.thane.plist"
@@ -188,7 +188,7 @@ init dir="Thane":
     set -e
     mkdir -p "{{dir}}/db" "{{dir}}/talents"
     if [ ! -f "{{dir}}/config.yaml" ]; then
-        cp config.example.yaml "{{dir}}/config.yaml"
+        cp examples/config.example.yaml "{{dir}}/config.yaml"
         echo "Created {{dir}}/config.yaml — edit with your settings"
     else
         echo "{{dir}}/config.yaml already exists, skipping"
@@ -197,9 +197,15 @@ init dir="Thane":
         [ -f "$f" ] && cp -n "$f" "{{dir}}/talents/" 2>/dev/null || true
     done
     echo "Copied talents to {{dir}}/talents/"
-    if [ -f persona.md ] && [ ! -f "{{dir}}/persona.md" ]; then
-        cp persona.md "{{dir}}/persona.md"
-        echo "Copied persona.md"
+    if [ ! -f "{{dir}}/persona.md" ]; then
+        if [ -f persona.md ]; then
+            cp persona.md "{{dir}}/persona.md"
+        elif [ -f examples/persona.example.md ]; then
+            cp examples/persona.example.md "{{dir}}/persona.md"
+        fi
+        echo "Created {{dir}}/persona.md — customize your agent's personality"
+    else
+        echo "{{dir}}/persona.md already exists, skipping"
     fi
     echo ""
     echo "Working directory ready: {{dir}}/"
