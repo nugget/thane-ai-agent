@@ -14,53 +14,77 @@ install-prefix := env("INSTALL_PREFIX", "/usr/local")
 default:
     @just --list
 
+# --- Build ---
+
 # Build a binary into dist/ (defaults to current platform, or specify OS/ARCH)
+[group('build')]
 build target_os=host_os target_arch=host_arch:
     @mkdir -p dist
     GOOS={{target_os}} GOARCH={{target_arch}} go build -ldflags "{{ldflags}}" -o dist/thane-{{target_os}}-{{target_arch}} ./cmd/thane
     @echo "Built dist/thane-{{target_os}}-{{target_arch}}"
 
 # Build for all release targets
+[group('build')]
 build-all:
     just build linux amd64
     just build linux arm64
     just build darwin amd64
     just build darwin arm64
 
+# Build and show version
+[group('build')]
+version: build
+    dist/thane-{{host_os}}-{{host_arch}} version
+
+# Clean build artifacts
+[group('build')]
+clean:
+    rm -rf dist
+
+# --- Test ---
+
 # Run tests (always with race detector)
+[group('test')]
 test:
     go test -race ./...
 
 # Check formatting
+[group('test')]
 fmt-check:
     @test -z "$(gofmt -l .)" || (echo "Files need formatting:" && gofmt -l . && exit 1)
 
 # Run linter (if golangci-lint is available)
+[group('test')]
 lint:
     golangci-lint run ./... || true
 
 # CI: format check, lint, and tests
+[group('test')]
 ci: fmt-check lint test
 
-# Build and show version
-version: build
-    dist/thane-{{host_os}}-{{host_arch}} version
+# --- Install ---
 
 # Install the binary to the appropriate system location
+[group('deploy')]
 [linux]
 install: build
     install -D dist/thane-{{host_os}}-{{host_arch}} {{install-prefix}}/bin/thane
 
 # Install the binary to the appropriate system location
+[group('deploy')]
 [macos]
 install: build
     install dist/thane-{{host_os}}-{{host_arch}} {{install-prefix}}/bin/thane
 
 # Uninstall the binary
+[group('deploy')]
 uninstall:
     rm -f {{install-prefix}}/bin/thane
 
-# Install systemd service, create user and directories
+# --- Service ---
+
+# Install and enable the system service (systemd unit + user + directories)
+[group('deploy')]
 [linux]
 service-install: install
     #!/usr/bin/env sh
@@ -90,18 +114,8 @@ service-install: install
     echo "  3. Lock it down:      chmod 600 /etc/thane/config.yaml && chown thane:thane /etc/thane/config.yaml"
     echo "  4. Start it up:       systemctl start thane"
 
-# Uninstall systemd service and clean up
-[linux]
-service-uninstall:
-    #!/usr/bin/env sh
-    set -e
-    systemctl stop thane.service 2>/dev/null || true
-    systemctl disable thane.service 2>/dev/null || true
-    rm -f /etc/systemd/system/thane.service
-    systemctl daemon-reload
-    echo "Service removed. User 'thane' and /var/lib/thane preserved (remove manually if desired)."
-
-# Install launchd service, create directories
+# Install and enable the system service (launchd agent + directories)
+[group('deploy')]
 [macos]
 service-install: install
     #!/usr/bin/env sh
@@ -123,7 +137,20 @@ service-install: install
     echo "  3. Lock it down:      chmod 600 /usr/local/etc/thane/config.yaml"
     echo "  4. Start it up:       launchctl load ~/Library/LaunchAgents/info.nugget.thane.plist"
 
-# Uninstall launchd service
+# Remove the system service
+[group('deploy')]
+[linux]
+service-uninstall:
+    #!/usr/bin/env sh
+    set -e
+    systemctl stop thane.service 2>/dev/null || true
+    systemctl disable thane.service 2>/dev/null || true
+    rm -f /etc/systemd/system/thane.service
+    systemctl daemon-reload
+    echo "Service removed. User 'thane' and /var/lib/thane preserved (remove manually if desired)."
+
+# Remove the system service
+[group('deploy')]
 [macos]
 service-uninstall:
     #!/usr/bin/env sh
@@ -133,30 +160,33 @@ service-uninstall:
     echo "Service removed. /usr/local/var/thane and logs preserved (remove manually if desired)."
 
 # Show service status
+[group('operations')]
 [linux]
 service-status:
     systemctl status thane.service
 
 # Show service status
+[group('operations')]
 [macos]
 service-status:
     launchctl list info.nugget.thane 2>/dev/null || echo "Service not loaded"
 
 # Tail live service logs
+[group('operations')]
 [linux]
 logs:
     journalctl -u thane -f
 
 # Tail live service logs
+[group('operations')]
 [macos]
 logs:
     log stream --process thane
 
-# Clean build artifacts
-clean:
-    rm -rf dist
+# --- Release ---
 
 # Tag and publish a GitHub release (usage: just release 0.2.0)
+[group('release-engineering')]
 release tag:
     git tag -a "v{{tag}}" -m "Release v{{tag}}"
     git push origin "v{{tag}}"
