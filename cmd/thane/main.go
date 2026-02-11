@@ -4,11 +4,12 @@ package main
 import (
 	"context"
 	"database/sql"
-	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -32,76 +33,100 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
+// main does as little as we can get away with.
 func main() {
-	// Parse flags
-	configPath := flag.String("config", "", "path to config file")
-	flag.Parse()
+	ctx := context.Background()
 
-	// Setup logging
-	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
-	}))
-
-	// Handle subcommands
-	if flag.NArg() > 0 {
-		switch flag.Arg(0) {
-		case "serve":
-			runServe(logger, *configPath)
-		case "ask":
-			if flag.NArg() < 2 {
-				fmt.Fprintln(os.Stderr, "usage: thane ask <question>")
-				os.Exit(1)
-			}
-			runAsk(logger, *configPath, flag.Args()[1:])
-		case "ingest":
-			if flag.NArg() < 2 {
-				fmt.Fprintln(os.Stderr, "usage: thane ingest <file.md>")
-				os.Exit(1)
-			}
-			runIngest(logger, *configPath, flag.Arg(1))
-		case "version":
-			fmt.Println(buildinfo.String())
-			for k, v := range buildinfo.Info() {
-				fmt.Printf("  %-12s %s\n", k+":", v)
-			}
-		default:
-			fmt.Fprintf(os.Stderr, "unknown command: %s\n", flag.Arg(0))
-			os.Exit(1)
-		}
-		return
+	if err := run(ctx, os.Stdout, os.Stderr, os.Args[1:]); err != nil {
+		fmt.Fprintf(os.Stderr, "%s\n", err)
+		os.Exit(1)
 	}
-
-	// Default: show help
-	fmt.Println("Thane - Autonomous Home Assistant Agent")
-	fmt.Println()
-	fmt.Println("Commands:")
-	fmt.Println("  serve    Start the API server")
-	fmt.Println("  ask      Ask a single question (for testing)")
-	fmt.Println("  ingest   Import markdown docs into fact store")
-	fmt.Println("  version  Show version")
-	fmt.Println()
-	fmt.Println("Flags:")
-	flag.PrintDefaults()
 }
 
-func runAsk(logger *slog.Logger, configPath string, args []string) {
-	question := args[0]
-	for _, a := range args[1:] {
-		question += " " + a
+// run is the real entry point. All dependencies are injected so the full
+// startup-to-shutdown lifecycle can be exercised from tests without
+// subprocesses, real environment variables, or os.Exit.
+func run(ctx context.Context, stdout io.Writer, stderr io.Writer, args []string) error {
+	// Parse args manually (flag package uses globals, not test-friendly)
+	var configPath string
+	var command string
+	var cmdArgs []string
+
+	for i := 0; i < len(args); i++ {
+		switch {
+		case args[i] == "-config" && i+1 < len(args):
+			configPath = args[i+1]
+			i++ // skip value
+		case strings.HasPrefix(args[i], "-config="):
+			configPath = strings.TrimPrefix(args[i], "-config=")
+		case args[i] == "-h" || args[i] == "-help" || args[i] == "--help":
+			return printUsage(stdout)
+		case !strings.HasPrefix(args[i], "-") && command == "":
+			command = args[i]
+		default:
+			if command != "" {
+				cmdArgs = append(cmdArgs, args[i])
+			} else {
+				return fmt.Errorf("unknown flag: %s", args[i])
+			}
+		}
 	}
+
+	switch command {
+	case "serve":
+		return runServe(ctx, stdout, stderr, configPath)
+	case "ask":
+		if len(cmdArgs) == 0 {
+			return fmt.Errorf("usage: thane ask <question>")
+		}
+		return runAsk(ctx, stdout, stderr, configPath, cmdArgs)
+	case "ingest":
+		if len(cmdArgs) == 0 {
+			return fmt.Errorf("usage: thane ingest <file.md>")
+		}
+		return runIngest(ctx, stdout, stderr, configPath, cmdArgs[0])
+	case "version":
+		fmt.Fprintln(stdout, buildinfo.String())
+		for k, v := range buildinfo.Info() {
+			fmt.Fprintf(stdout, "  %-12s %s\n", k+":", v)
+		}
+		return nil
+	case "":
+		return printUsage(stdout)
+	default:
+		return fmt.Errorf("unknown command: %s", command)
+	}
+}
+
+func printUsage(w io.Writer) error {
+	fmt.Fprintln(w, "Thane - Autonomous Home Assistant Agent")
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Usage: thane [flags] <command> [args]")
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Commands:")
+	fmt.Fprintln(w, "  serve    Start the API server")
+	fmt.Fprintln(w, "  ask      Ask a single question (for testing)")
+	fmt.Fprintln(w, "  ingest   Import markdown docs into fact store")
+	fmt.Fprintln(w, "  version  Show version information")
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Flags:")
+	fmt.Fprintln(w, "  -config <path>  Path to config file (default: auto-discover)")
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Config search order: ./config.yaml, ~/.config/thane/config.yaml, /etc/thane/config.yaml")
+	return nil
+}
+
+func runAsk(ctx context.Context, stdout io.Writer, stderr io.Writer, configPath string, args []string) error {
+	logger := newLogger(stdout, slog.LevelInfo)
+
+	question := strings.Join(args, " ")
 
 	// Load config
-	cfgPath, err := config.FindConfig(configPath)
+	cfg, cfgPath, err := loadConfig(configPath)
 	if err != nil {
-		logger.Error("config", "error", err)
-		os.Exit(1)
+		return err
 	}
-
-	cfg, err := config.Load(cfgPath)
-	if err != nil {
-		logger.Error("failed to load config", "path", cfgPath, "error", err)
-		os.Exit(1)
-	}
+	logger.Info("config loaded", "path", cfgPath)
 
 	// Home Assistant client
 	var ha *homeassistant.Client
@@ -127,32 +152,24 @@ func runAsk(logger *slog.Logger, configPath string, args []string) {
 	loop := agent.NewLoop(logger, mem, nil, nil, ha, nil, llmClient, cfg.Models.Default, talentContent, "", 0)
 
 	// Process the question
-	ctx := context.Background()
 	threadID := "cli-test"
-
 	response, err := loop.Process(ctx, threadID, question)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("ask: %w", err)
 	}
 
-	fmt.Println(response)
+	fmt.Fprintln(stdout, response)
+	return nil
 }
 
-func runIngest(logger *slog.Logger, configPath string, filePath string) {
+func runIngest(ctx context.Context, stdout io.Writer, stderr io.Writer, configPath string, filePath string) error {
+	logger := newLogger(stdout, slog.LevelInfo)
 	logger.Info("ingesting markdown document", "file", filePath)
 
 	// Load config
-	cfgPath, err := config.FindConfig(configPath)
+	cfg, _, err := loadConfig(configPath)
 	if err != nil {
-		logger.Error("config", "error", err)
-		os.Exit(1)
-	}
-
-	cfg, err := config.Load(cfgPath)
-	if err != nil {
-		logger.Error("failed to load config", "path", cfgPath, "error", err)
-		os.Exit(1)
+		return err
 	}
 
 	// Data directory
@@ -161,15 +178,13 @@ func runIngest(logger *slog.Logger, configPath string, filePath string) {
 		dataDir = "./data"
 	}
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
-		logger.Error("failed to create data directory", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("create data directory: %w", err)
 	}
 
 	// Open fact store
 	factStore, err := facts.NewStore(dataDir + "/facts.db")
 	if err != nil {
-		logger.Error("failed to open fact store", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("open fact store: %w", err)
 	}
 	defer factStore.Close()
 
@@ -198,42 +213,33 @@ func runIngest(logger *slog.Logger, configPath string, filePath string) {
 	source := "file:" + filePath
 	ingester := ingest.NewMarkdownIngester(factStore, embClient, source, facts.CategoryArchitecture)
 
-	// Run ingestion
-	ctx := context.Background()
 	count, err := ingester.IngestFile(ctx, filePath)
 	if err != nil {
-		logger.Error("ingestion failed", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("ingestion failed: %w", err)
 	}
 
 	logger.Info("ingestion complete", "facts_created", count, "source", source)
-	fmt.Printf("Successfully ingested %d facts from %s\n", count, filePath)
+	fmt.Fprintf(stdout, "Successfully ingested %d facts from %s\n", count, filePath)
+	return nil
 }
 
-func runServe(logger *slog.Logger, configPath string) {
+func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPath string) error {
+	logger := newLogger(stdout, slog.LevelInfo)
 	logger.Info("starting Thane", "version", buildinfo.Version, "commit", buildinfo.GitCommit, "branch", buildinfo.GitBranch, "built", buildinfo.BuildTime)
 
 	// Load config
-	cfgPath, err := config.FindConfig(configPath)
+	cfg, cfgPath, err := loadConfig(configPath)
 	if err != nil {
-		logger.Error("config", "error", err)
-		os.Exit(1)
-	}
-
-	cfg, err := config.Load(cfgPath)
-	if err != nil {
-		logger.Error("failed to load config", "path", cfgPath, "error", err)
-		os.Exit(1)
+		return err
 	}
 
 	// Reconfigure logger with config-driven level
 	if cfg.LogLevel != "" {
 		level, err := config.ParseLogLevel(cfg.LogLevel)
 		if err != nil {
-			logger.Error("invalid log_level in config", "error", err)
-			os.Exit(1)
+			return fmt.Errorf("invalid log_level in config: %w", err)
 		}
-		logger = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+		logger = slog.New(slog.NewTextHandler(stdout, &slog.HandlerOptions{
 			Level:       level,
 			ReplaceAttr: config.ReplaceLogLevelNames,
 		}))
@@ -254,15 +260,13 @@ func runServe(logger *slog.Logger, configPath string) {
 
 	// Ensure data directory exists
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
-		logger.Error("failed to create data directory", "path", dataDir, "error", err)
-		os.Exit(1)
+		return fmt.Errorf("create data directory %s: %w", dataDir, err)
 	}
 
 	dbPath := dataDir + "/thane.db"
 	mem, err := memory.NewSQLiteStore(dbPath, 100)
 	if err != nil {
-		logger.Error("failed to open memory database", "path", dbPath, "error", err)
-		os.Exit(1)
+		return fmt.Errorf("open memory database %s: %w", dbPath, err)
 	}
 	defer mem.Close()
 	logger.Info("memory database opened", "path", dbPath)
@@ -272,7 +276,7 @@ func runServe(logger *slog.Logger, configPath string) {
 	if cfg.HomeAssistant.URL != "" && cfg.HomeAssistant.Token != "" {
 		ha = homeassistant.NewClient(cfg.HomeAssistant.URL, cfg.HomeAssistant.Token)
 		logger.Info("Home Assistant configured", "url", cfg.HomeAssistant.URL)
-		if err := ha.Ping(context.Background()); err != nil {
+		if err := ha.Ping(ctx); err != nil {
 			logger.Error("Home Assistant ping failed", "error", err)
 		} else {
 			logger.Info("Home Assistant ping succeeded")
@@ -319,8 +323,7 @@ func runServe(logger *slog.Logger, configPath string) {
 	talentLoader := talents.NewLoader(talentsDir)
 	talentContent, err := talentLoader.Load()
 	if err != nil {
-		logger.Error("failed to load talents", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("load talents: %w", err)
 	}
 	if talentContent != "" {
 		talentList, _ := talentLoader.List()
@@ -332,8 +335,7 @@ func runServe(logger *slog.Logger, configPath string) {
 	if cfg.PersonaFile != "" {
 		data, err := os.ReadFile(cfg.PersonaFile)
 		if err != nil {
-			logger.Error("failed to load persona file", "path", cfg.PersonaFile, "error", err)
-			os.Exit(1)
+			return fmt.Errorf("load persona %s: %w", cfg.PersonaFile, err)
 		}
 		personaContent = string(data)
 		logger.Info("persona loaded", "path", cfg.PersonaFile, "size", len(personaContent))
@@ -378,8 +380,7 @@ func runServe(logger *slog.Logger, configPath string) {
 	// Create scheduler
 	schedStore, err := scheduler.NewStore(dataDir + "/scheduler.db")
 	if err != nil {
-		logger.Error("failed to open scheduler database", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("open scheduler database: %w", err)
 	}
 	defer schedStore.Close()
 
@@ -396,9 +397,8 @@ func runServe(logger *slog.Logger, configPath string) {
 	}
 
 	sched := scheduler.New(logger, schedStore, executeTask)
-	if err := sched.Start(context.Background()); err != nil {
-		logger.Error("failed to start scheduler", "error", err)
-		os.Exit(1)
+	if err := sched.Start(ctx); err != nil {
+		return fmt.Errorf("start scheduler: %w", err)
 	}
 	defer sched.Stop()
 
@@ -416,8 +416,7 @@ func runServe(logger *slog.Logger, configPath string) {
 	// Create fact store for long-term memory
 	factStore, err := facts.NewStore(dataDir + "/facts.db")
 	if err != nil {
-		logger.Error("failed to open fact store", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("open fact store: %w", err)
 	}
 	defer factStore.Close()
 
@@ -428,15 +427,13 @@ func runServe(logger *slog.Logger, configPath string) {
 	// Create anticipation store for bridging intent to wake
 	anticipationDB, err := sql.Open("sqlite3", dataDir+"/anticipations.db")
 	if err != nil {
-		logger.Error("failed to open anticipation db", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("open anticipation db: %w", err)
 	}
 	defer anticipationDB.Close()
 
 	anticipationStore, err := anticipation.NewStore(anticipationDB)
 	if err != nil {
-		logger.Error("failed to create anticipation store", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("create anticipation store: %w", err)
 	}
 
 	anticipationTools := anticipation.NewTools(anticipationStore)
@@ -507,8 +504,7 @@ func runServe(logger *slog.Logger, configPath string) {
 	// Create checkpointer
 	checkpointDB, err := sql.Open("sqlite3", dataDir+"/checkpoints.db")
 	if err != nil {
-		logger.Error("failed to open checkpoint database", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("open checkpoint database: %w", err)
 	}
 	defer checkpointDB.Close()
 
@@ -517,8 +513,7 @@ func runServe(logger *slog.Logger, configPath string) {
 	}
 	checkpointer, err := checkpoint.NewCheckpointer(checkpointDB, checkpointCfg, logger)
 	if err != nil {
-		logger.Error("failed to create checkpointer", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("create checkpointer: %w", err)
 	}
 
 	// Wire up providers for checkpointing
@@ -598,21 +593,18 @@ func runServe(logger *slog.Logger, configPath string) {
 		}
 		ollamaServer = api.NewOllamaServer(cfg.OllamaAPI.Address, port, loop, logger)
 		go func() {
-			if err := ollamaServer.Start(context.Background()); err != nil {
+			if err := ollamaServer.Start(ctx); err != nil {
 				logger.Error("ollama API server failed", "error", err)
 			}
 		}()
 	}
 
 	// Setup graceful shutdown
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-
 	go func() {
-		<-sigCh
+		<-ctx.Done()
 		logger.Info("shutdown signal received")
 
 		// Create shutdown checkpoint
@@ -620,22 +612,45 @@ func runServe(logger *slog.Logger, configPath string) {
 			logger.Error("failed to create shutdown checkpoint", "error", err)
 		}
 
-		cancel()
-		_ = server.Shutdown(context.Background())
+		shutdownCtx := context.Background()
+		_ = server.Shutdown(shutdownCtx)
 		if ollamaServer != nil {
-			_ = ollamaServer.Shutdown(context.Background())
+			_ = ollamaServer.Shutdown(shutdownCtx)
 		}
 	}()
 
-	// Start server
+	// Start server (blocks until shutdown)
 	if err := server.Start(ctx); err != nil {
 		if ctx.Err() == nil {
-			logger.Error("server failed", "error", err)
-			os.Exit(1)
+			return fmt.Errorf("server failed: %w", err)
 		}
 	}
 
 	logger.Info("Thane stopped")
+	return nil
+}
+
+// newLogger creates a slog.Logger writing to the given writer.
+func newLogger(w io.Writer, level slog.Level) *slog.Logger {
+	return slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{
+		Level: level,
+	}))
+}
+
+// loadConfig finds and loads the config file. Returns the config, the path
+// that was loaded, and any error.
+func loadConfig(explicit string) (*config.Config, string, error) {
+	cfgPath, err := config.FindConfig(explicit)
+	if err != nil {
+		return nil, "", err
+	}
+
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		return nil, cfgPath, fmt.Errorf("load config %s: %w", cfgPath, err)
+	}
+
+	return cfg, cfgPath, nil
 }
 
 // createLLMClient creates a multi-provider LLM client based on config.
