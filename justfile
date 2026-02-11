@@ -181,6 +181,31 @@ service-status:
 service-status:
     @launchctl list info.nugget.thane 2>/dev/null || echo "Service not loaded"
 
+# Bootstrap a working directory from repo sources (config, talents, persona)
+[group('deploy')]
+init dir="Thane":
+    #!/usr/bin/env sh
+    set -e
+    mkdir -p "{{dir}}/db" "{{dir}}/talents"
+    if [ ! -f "{{dir}}/config.yaml" ]; then
+        cp config.example.yaml "{{dir}}/config.yaml"
+        echo "Created {{dir}}/config.yaml — edit with your settings"
+    else
+        echo "{{dir}}/config.yaml already exists, skipping"
+    fi
+    for f in talents/*.md; do
+        [ -f "$f" ] && cp -n "$f" "{{dir}}/talents/" 2>/dev/null || true
+    done
+    echo "Copied talents to {{dir}}/talents/"
+    if [ -f persona.md ] && [ ! -f "{{dir}}/persona.md" ]; then
+        cp persona.md "{{dir}}/persona.md"
+        echo "Copied persona.md"
+    fi
+    echo ""
+    echo "Working directory ready: {{dir}}/"
+    echo "  1. Edit config:  $EDITOR {{dir}}/config.yaml"
+    echo "  2. Run:          just serve"
+
 # Build and run from the local Thane/ working directory (for development)
 [group('operations')]
 serve: build
