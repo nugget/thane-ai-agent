@@ -147,7 +147,9 @@ service-uninstall:
     systemctl disable thane.service 2>/dev/null || true
     rm -f /etc/systemd/system/thane.service
     systemctl daemon-reload
-    echo "Service removed. User 'thane' and /var/lib/thane preserved (remove manually if desired)."
+    echo "Service removed. To fully clean up:"
+    echo "  rm -rf /var/lib/thane /etc/thane"
+    echo "  userdel thane"
 
 # Remove the system service
 [group('deploy')]
@@ -157,7 +159,8 @@ service-uninstall:
     set -e
     launchctl unload ~/Library/LaunchAgents/info.nugget.thane.plist 2>/dev/null || true
     rm -f ~/Library/LaunchAgents/info.nugget.thane.plist
-    echo "Service removed. /usr/local/var/thane and logs preserved (remove manually if desired)."
+    echo "Service removed. To fully clean up:"
+    echo "  rm -rf /usr/local/var/thane /usr/local/etc/thane"
 
 # Show service status
 [group('operations')]
