@@ -449,24 +449,38 @@ func (s *Server) handleStreamingCompletion(w http.ResponseWriter, r *http.Reques
 	// Track if any tokens were streamed (greeting fast-path skips streaming)
 	streamed := false
 
-	// Stream callback sends each token (ignores tool events for now)
+	// Get response controller for deadline management (Go 1.20+)
+	rc := http.NewResponseController(w)
+
+	// Stream callback sends tokens and keepalives during tool execution
 	streamCallback := func(event agent.StreamEvent) {
-		if event.Kind != agent.KindToken {
-			return // OpenAI SSE only forwards text tokens
+		switch event.Kind {
+		case agent.KindToken:
+			streamed = true
+			chunk := StreamChunk{
+				ID:      completionID,
+				Object:  "chat.completion.chunk",
+				Created: created,
+				Model:   modelName,
+				Choices: []StreamChoice{{
+					Index: 0,
+					Delta: StreamDelta{Content: event.Token},
+				}},
+			}
+			s.writeSSE(w, chunk)
+			flusher.Flush()
+
+		case agent.KindToolCallStart, agent.KindToolCallDone:
+			// Send SSE comment as keepalive to prevent write timeout
+			fmt.Fprintf(w, ": keepalive\n\n")
+			flusher.Flush()
 		}
-		streamed = true
-		chunk := StreamChunk{
-			ID:      completionID,
-			Object:  "chat.completion.chunk",
-			Created: created,
-			Model:   modelName,
-			Choices: []StreamChoice{{
-				Index: 0,
-				Delta: StreamDelta{Content: event.Token},
-			}},
+
+		// Reset write deadline after every event to prevent timeout
+		// during multi-iteration tool loops
+		if err := rc.SetWriteDeadline(time.Now().Add(120 * time.Second)); err != nil {
+			s.logger.Debug("failed to reset write deadline", "error", err)
 		}
-		s.writeSSE(w, chunk)
-		flusher.Flush()
 	}
 
 	// Run agent with streaming
