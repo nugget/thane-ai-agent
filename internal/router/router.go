@@ -4,6 +4,7 @@ package router
 import (
 	"context"
 	"log/slog"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -310,7 +311,7 @@ func (r *Router) selectModel(req Request, decision *Decision) string {
 	}
 
 	reasoning.WriteString("Selected " + best.Name)
-	reasoning.WriteString(" (score=" + itoa(bestScore) + ")")
+	reasoning.WriteString(" (score=" + strconv.Itoa(bestScore) + ")")
 	reasoning.WriteString(" for " + decision.Complexity.String() + " " + decision.DetectedIntent + " query.")
 
 	if r.config.LocalFirst && best.CostTier == 0 {
@@ -408,26 +409,4 @@ func priorityString(p Priority) string {
 		return "interactive"
 	}
 	return "background"
-}
-
-func itoa(i int) string {
-	if i == 0 {
-		return "0"
-	}
-	var b [20]byte
-	n := len(b)
-	neg := i < 0
-	if neg {
-		i = -i
-	}
-	for i > 0 {
-		n--
-		b[n] = byte('0' + i%10)
-		i /= 10
-	}
-	if neg {
-		n--
-		b[n] = '-'
-	}
-	return string(b[n:])
 }
