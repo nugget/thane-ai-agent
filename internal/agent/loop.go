@@ -430,7 +430,6 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (*R
 				l.logger.Debug("executing tool",
 					"tool", toolName,
 					"call_id", toolCallIDStr,
-					"args", argsJSON,
 				)
 
 				// Record tool call start (if supported)
