@@ -33,6 +33,10 @@ thane.local.yaml
 *.local.yaml
 config.yaml
 
+# Development working directory (site-specific, mirrors ~/Thane/ in production)
+/Thane/*
+!/Thane/README.md
+
 # Memory database
 *.db
 *.sqlite

@@ -181,10 +181,10 @@ service-status:
 service-status:
     @launchctl list info.nugget.thane 2>/dev/null || echo "Service not loaded"
 
-# Run thane directly from the build directory (for development)
+# Build and run from the local Thane/ working directory (for development)
 [group('operations')]
 serve: build
-    dist/thane-{{host_os}}-{{host_arch}} serve
+    cd Thane && ../dist/thane-{{host_os}}-{{host_arch}} serve
 
 # Tail live service logs
 [group('operations')]
