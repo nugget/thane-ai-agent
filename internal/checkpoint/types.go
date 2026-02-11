@@ -2,6 +2,7 @@
 package checkpoint
 
 import (
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -120,5 +121,5 @@ func formatCount(n int, unit string) string {
 	if n == 1 {
 		return "1 " + unit
 	}
-	return string(rune('0'+n%10)) + " " + unit + "s"
+	return strconv.Itoa(n) + " " + unit + "s"
 }
