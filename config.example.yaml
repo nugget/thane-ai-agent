@@ -58,7 +58,7 @@ models:
 #   api_key: sk-ant-...
 
 # Storage paths
-data_dir: ./data
+data_dir: ./db
 talents_dir: ./talents
 
 # Persona file — replaces the default system prompt with custom identity.

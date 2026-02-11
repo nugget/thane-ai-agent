@@ -98,9 +98,9 @@ type Config struct {
 	// ShellExec configures the agent's ability to run shell commands.
 	ShellExec ShellExecConfig `yaml:"shell_exec"`
 
-	// DataDir is the root directory for all persistent state (SQLite
+	// DataDir is the root directory for all SQLite databases (
 	// databases for memory, facts, scheduler, checkpoints, and
-	// anticipations). Default: "./data".
+	// anticipations). Default: "./db".
 	DataDir string `yaml:"data_dir"`
 
 	// TalentsDir is the directory containing talent markdown files that
@@ -296,7 +296,7 @@ func (c *Config) applyDefaults() {
 		c.Listen.Port = 8080
 	}
 	if c.DataDir == "" {
-		c.DataDir = "./data"
+		c.DataDir = "./db"
 	}
 	if c.TalentsDir == "" {
 		c.TalentsDir = "./talents"

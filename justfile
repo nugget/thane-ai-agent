@@ -124,7 +124,7 @@ service-install: install
     set -e
     THANE_HOME="{{thane-home}}"
     # Create directory structure
-    mkdir -p "$THANE_HOME/data"
+    mkdir -p "$THANE_HOME/db"
     # Generate plist with absolute paths for this user
     mkdir -p ~/Library/LaunchAgents
     sed -e "s|/usr/local/bin/thane|$THANE_HOME/bin/thane|g" \
@@ -135,7 +135,7 @@ service-install: install
     echo "  Home:    $THANE_HOME/"
     echo "  Binary:  $THANE_HOME/bin/thane"
     echo "  Config:  $THANE_HOME/config.yaml"
-    echo "  Data:    $THANE_HOME/data/"
+    echo "  Data:    $THANE_HOME/db/"
     echo "  Logs:    $THANE_HOME/thane.log"
     echo ""
     echo "Next steps:"

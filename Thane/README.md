@@ -12,7 +12,7 @@ Thane/
 ├── persona.md        # Agent personality (replaces default system prompt)
 ├── talents/          # Skill/behavior markdown files (extend system prompt)
 │   └── *.md
-├── data/             # SQLite databases — facts, memory, checkpoints (auto-created)
+├── db/             # SQLite databases — facts, memory, checkpoints (auto-created)
 ├── workspace/        # Agent's sandboxed file access (if configured)
 └── thane.log         # Log output
 ```
@@ -25,7 +25,7 @@ All paths default to locations inside this directory:
 |-----------------|-----------------|-------------------------------------|
 | `persona_file`  | `./persona.md`  | Agent personality                   |
 | `talents_dir`   | `./talents`     | Skill markdown files                |
-| `data_dir`      | `./data`        | SQLite databases                    |
+| `data_dir`      | `./db`        | SQLite databases                    |
 | `workspace.root`| *(none)*        | Sandboxed file access for the agent |
 
 ## Getting started
