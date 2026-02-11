@@ -169,7 +169,7 @@ service-status:
 [group('operations')]
 [macos]
 service-status:
-    launchctl list info.nugget.thane 2>/dev/null || echo "Service not loaded"
+    @launchctl list info.nugget.thane 2>/dev/null || echo "Service not loaded"
 
 # Tail live service logs
 [group('operations')]
