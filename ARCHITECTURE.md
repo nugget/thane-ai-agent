@@ -182,9 +182,9 @@ docker run -d -p 8080:8080 -p 11434:11434 \
   ghcr.io/nugget/thane:latest
 ```
 
-### Home Assistant Add-on (planned)
+### Home Assistant App (planned)
 
-Native HA Add-on packaging is on the roadmap.
+Native HA App packaging is on the roadmap.
 
 ## Roadmap
 
@@ -198,7 +198,7 @@ Native HA Add-on packaging is on the roadmap.
 - Wire events to anticipation triggers, proactive notifications, intent-parser architecture
 
 ### Phase 4: Ecosystem
-- HA Add-on packaging, Apple ecosystem integration, companion app, multi-instance deployment, git-backed identity store
+- HA App packaging, Apple ecosystem integration, companion app, multi-instance deployment, git-backed identity store
 
 ## License
 
