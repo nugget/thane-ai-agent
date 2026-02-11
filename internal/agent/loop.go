@@ -356,7 +356,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (*R
 	// Accumulate token usage across iterations
 	var totalInputTokens, totalOutputTokens int
 
-	maxIterations := 5 // Allow enough iterations for context gathering + response
+	maxIterations := 10 // Tool call budget; final text response always gets one extra call
 	for i := 0; i < maxIterations; i++ {
 		l.logger.Debug("calling LLM",
 			"model", model,
@@ -539,11 +539,58 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (*R
 		return resp, nil
 	}
 
-	// Shouldn't reach here, but safety net
+	// Max iterations exhausted. If the last message is a tool result,
+	// make one final LLM call with tools disabled to generate a response.
+	if len(llmMessages) > 0 && llmMessages[len(llmMessages)-1].Role == "tool" {
+		l.logger.Warn("max iterations reached with pending tool results, making final LLM call",
+			"maxIterations", maxIterations,
+		)
+
+		llmResp, err := l.llm.ChatStream(ctx, model, llmMessages, nil, stream) // nil tools = no more tool calls
+		if err != nil {
+			l.logger.Error("final LLM call failed after max iterations", "error", err, "model", model, "maxIterations", maxIterations)
+			return &Response{
+				Content:      "I found the information but couldn't compose a response. Please try again.",
+				Model:        model,
+				FinishReason: "max_iterations",
+				InputTokens:  totalInputTokens,
+				OutputTokens: totalOutputTokens,
+			}, nil
+		}
+
+		totalInputTokens += llmResp.InputTokens
+		totalOutputTokens += llmResp.OutputTokens
+
+		resp := &Response{
+			Content:      llmResp.Message.Content,
+			Model:        model,
+			FinishReason: "stop",
+			InputTokens:  totalInputTokens,
+			OutputTokens: totalOutputTokens,
+		}
+
+		if err := l.memory.AddMessage(convID, "assistant", resp.Content); err != nil {
+			l.logger.Warn("failed to store response", "error", err)
+		}
+
+		l.logger.Info("agent loop completed (after max iterations recovery)",
+			"conversation", convID,
+			"model", model,
+		)
+
+		return resp, nil
+	}
+
+	l.logger.Error("max iterations reached without tool results or response",
+		"maxIterations", maxIterations,
+		"model", model,
+	)
 	return &Response{
-		Content:      "I apologize, but I wasn't able to complete that request. Please try again.",
+		Content:      "I wasn't able to complete that request. Please try again.",
 		Model:        model,
 		FinishReason: "max_iterations",
+		InputTokens:  totalInputTokens,
+		OutputTokens: totalOutputTokens,
 	}, nil
 }
 
