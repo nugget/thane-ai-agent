@@ -11,11 +11,13 @@
 //	thane ask <question>     Ask a single question (for testing)
 //	thane ingest <file.md>   Import a markdown document into the fact store
 //	thane version            Print version and build information
+//	thane -o json version    Output as JSON (applies to any command)
 package main
 
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -77,6 +79,7 @@ func run(ctx context.Context, stdout io.Writer, stderr io.Writer, args []string)
 	// concurrently from tests. Our argument surface is small enough that
 	// manual parsing is clearer than bringing in a CLI framework.
 	var configPath string
+	var outputFmt string // "text" (default) or "json"
 	var command string
 	var cmdArgs []string
 
@@ -87,6 +90,13 @@ func run(ctx context.Context, stdout io.Writer, stderr io.Writer, args []string)
 			i++ // skip the value
 		case strings.HasPrefix(args[i], "-config="):
 			configPath = strings.TrimPrefix(args[i], "-config=")
+		case (args[i] == "-o" || args[i] == "--output") && i+1 < len(args):
+			outputFmt = args[i+1]
+			i++
+		case strings.HasPrefix(args[i], "-o="):
+			outputFmt = strings.TrimPrefix(args[i], "-o=")
+		case strings.HasPrefix(args[i], "--output="):
+			outputFmt = strings.TrimPrefix(args[i], "--output=")
 		case args[i] == "-h" || args[i] == "-help" || args[i] == "--help":
 			return printUsage(stdout)
 		case !strings.HasPrefix(args[i], "-") && command == "":
@@ -99,6 +109,14 @@ func run(ctx context.Context, stdout io.Writer, stderr io.Writer, args []string)
 				return fmt.Errorf("unknown flag: %s", args[i])
 			}
 		}
+	}
+
+	// Default to human-readable text output.
+	if outputFmt == "" {
+		outputFmt = "text"
+	}
+	if outputFmt != "text" && outputFmt != "json" {
+		return fmt.Errorf("unknown output format: %q (expected text or json)", outputFmt)
 	}
 
 	switch command {
@@ -115,16 +133,30 @@ func run(ctx context.Context, stdout io.Writer, stderr io.Writer, args []string)
 		}
 		return runIngest(ctx, stdout, stderr, configPath, cmdArgs[0])
 	case "version":
-		fmt.Fprintln(stdout, buildinfo.String())
-		for k, v := range buildinfo.BuildInfo() {
-			fmt.Fprintf(stdout, "  %-12s %s\n", k+":", v)
-		}
-		return nil
+		return runVersion(stdout, outputFmt)
 	case "":
 		return printUsage(stdout)
 	default:
 		return fmt.Errorf("unknown command: %s", command)
 	}
+}
+
+// runVersion prints build metadata in the requested output format.
+func runVersion(w io.Writer, outputFmt string) error {
+	info := buildinfo.BuildInfo()
+	if outputFmt == "json" {
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		return enc.Encode(info)
+	}
+	fmt.Fprintln(w, buildinfo.String())
+	// Print fields in a stable order for human readability.
+	for _, k := range []string{"version", "git_commit", "git_branch", "build_time", "go_version", "os", "arch"} {
+		if v, ok := info[k]; ok {
+			fmt.Fprintf(w, "  %-12s %s\n", k+":", v)
+		}
+	}
+	return nil
 }
 
 // printUsage writes the top-level help text to w. It is called when
@@ -141,7 +173,8 @@ func printUsage(w io.Writer) error {
 	fmt.Fprintln(w, "  version  Show version information")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Flags:")
-	fmt.Fprintln(w, "  -config <path>  Path to config file (default: auto-discover)")
+	fmt.Fprintln(w, "  -config <path>    Path to config file (default: auto-discover)")
+	fmt.Fprintln(w, "  -o, --output fmt  Output format: text (default) or json")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Config search order: ./config.yaml, ~/.config/thane/config.yaml, /config/config.yaml, /etc/thane/config.yaml")
 	return nil
