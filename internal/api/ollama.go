@@ -210,13 +210,16 @@ func handleOllamaStreamingChatShared(w http.ResponseWriter, r *http.Request, req
 	}
 
 	// Create stream callback that writes Ollama-format chunks
-	streamCallback := func(token string) {
+	streamCallback := func(event agent.StreamEvent) {
+		if event.Kind != agent.KindToken {
+			return // Ollama wire format only carries text tokens
+		}
 		chunk := OllamaChatResponse{
 			Model:     model,
 			CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
 			Message: OllamaChatMessage{
 				Role:    "assistant",
-				Content: token,
+				Content: event.Token,
 			},
 			Done: false,
 		}

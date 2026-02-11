@@ -253,7 +253,7 @@ func (c *AnthropicClient) handleStreaming(body io.Reader, callback StreamCallbac
 				case "text_delta":
 					contentBuilder.WriteString(event.Delta.Text)
 					if callback != nil {
-						callback(event.Delta.Text)
+						callback(StreamEvent{Kind: KindToken, Token: event.Delta.Text})
 					}
 				case "input_json_delta":
 					toolJSONBuf.WriteString(event.Delta.PartialJSON)

@@ -39,5 +39,43 @@ type ChatResponse struct {
 	EvalDuration  time.Duration
 }
 
-// StreamCallback is called for each streamed token.
-type StreamCallback func(token string)
+// StreamEvent represents a single event in a streaming response.
+// Consumers switch on Kind to determine what data is available.
+type StreamEvent struct {
+	Kind StreamEventKind
+
+	// Token is set for KindToken events.
+	Token string
+
+	// ToolCall is set for KindToolCallStart events.
+	ToolCall *ToolCall
+
+	// ToolName and ToolResult are set for KindToolCallDone events.
+	ToolName   string
+	ToolResult string
+	ToolError  string
+
+	// Response is set for KindDone events (final summary).
+	Response *ChatResponse
+}
+
+// StreamEventKind identifies the type of stream event.
+type StreamEventKind int
+
+const (
+	// KindToken is an incremental text token from the model.
+	KindToken StreamEventKind = iota
+
+	// KindToolCallStart fires when the model invokes a tool.
+	KindToolCallStart
+
+	// KindToolCallDone fires when a tool execution completes.
+	KindToolCallDone
+
+	// KindDone signals the stream is complete. Response carries final metadata.
+	KindDone
+)
+
+// StreamCallback receives streaming events.
+// For backward compatibility, pure-text consumers can check event.Kind == KindToken.
+type StreamCallback func(event StreamEvent)

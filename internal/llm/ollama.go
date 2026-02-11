@@ -155,7 +155,7 @@ func (c *OllamaClient) ChatStream(ctx context.Context, model string, messages []
 		if wire.Message.Content != "" {
 			contentBuilder.WriteString(wire.Message.Content)
 			if callback != nil {
-				callback(wire.Message.Content)
+				callback(StreamEvent{Kind: KindToken, Token: wire.Message.Content})
 			}
 		}
 

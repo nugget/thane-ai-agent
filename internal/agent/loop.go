@@ -31,9 +31,21 @@ type Request struct {
 	ConversationID string    `json:"conversation_id,omitempty"`
 }
 
-// StreamCallback is called for each token during streaming.
+// StreamEvent is a single event in a streaming response.
+// Alias to llm.StreamEvent for use by consumers.
+type StreamEvent = llm.StreamEvent
+
+// StreamCallback receives streaming events.
 // Alias to llm.StreamCallback for compatibility.
 type StreamCallback = llm.StreamCallback
+
+// Stream event kinds re-exported for consumers.
+const (
+	KindToken         = llm.KindToken
+	KindToolCallStart = llm.KindToolCallStart
+	KindToolCallDone  = llm.KindToolCallDone
+	KindDone          = llm.KindDone
+)
 
 // Response represents the agent's response.
 type Response struct {
@@ -428,6 +440,14 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (*R
 					}
 				}
 
+				// Emit tool call start event
+				if stream != nil {
+					stream(llm.StreamEvent{
+						Kind:     llm.KindToolCallStart,
+						ToolCall: &tc,
+					})
+				}
+
 				result, err := l.tools.Execute(ctx, toolName, argsJSON)
 				errMsg := ""
 				if err != nil {
@@ -436,6 +456,16 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (*R
 					l.logger.Error("tool execution failed", "tool", toolName, "error", err)
 				} else {
 					l.logger.Info("tool executed", "tool", toolName, "result_len", len(result))
+				}
+
+				// Emit tool call done event
+				if stream != nil {
+					stream(llm.StreamEvent{
+						Kind:       llm.KindToolCallDone,
+						ToolName:   toolName,
+						ToolResult: result,
+						ToolError:  errMsg,
+					})
 				}
 
 				// Record tool call completion (if supported)

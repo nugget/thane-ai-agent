@@ -449,8 +449,11 @@ func (s *Server) handleStreamingCompletion(w http.ResponseWriter, r *http.Reques
 	// Track if any tokens were streamed (greeting fast-path skips streaming)
 	streamed := false
 
-	// Stream callback sends each token
-	streamCallback := func(token string) {
+	// Stream callback sends each token (ignores tool events for now)
+	streamCallback := func(event agent.StreamEvent) {
+		if event.Kind != agent.KindToken {
+			return // OpenAI SSE only forwards text tokens
+		}
 		streamed = true
 		chunk := StreamChunk{
 			ID:      completionID,
@@ -459,7 +462,7 @@ func (s *Server) handleStreamingCompletion(w http.ResponseWriter, r *http.Reques
 			Model:   modelName,
 			Choices: []StreamChoice{{
 				Index: 0,
-				Delta: StreamDelta{Content: token},
+				Delta: StreamDelta{Content: event.Token},
 			}},
 		}
 		s.writeSSE(w, chunk)
@@ -476,7 +479,7 @@ func (s *Server) handleStreamingCompletion(w http.ResponseWriter, r *http.Reques
 
 	// If content was not streamed (e.g. greeting fast-path), emit it now
 	if !streamed && resp.Content != "" {
-		streamCallback(resp.Content)
+		streamCallback(agent.StreamEvent{Kind: agent.KindToken, Token: resp.Content})
 	}
 
 	// Record usage stats
