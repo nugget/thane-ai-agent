@@ -21,7 +21,7 @@ func NewFileTools(workspacePath string, readOnlyDirs []string) *FileTools {
 	return &FileTools{workspacePath: workspacePath, readOnlyDirs: readOnlyDirs}
 }
 
-// Enabled returns true if file tools are available.
+// Enabled reports whether file tools are available.
 func (ft *FileTools) Enabled() bool {
 	return ft.workspacePath != ""
 }

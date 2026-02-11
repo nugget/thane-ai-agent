@@ -304,7 +304,7 @@ func truncate(s string, maxLen int) string {
 	return s[:maxLen-3] + "..."
 }
 
-// IsAnticipationTool returns true if the tool name is an anticipation tool.
+// IsAnticipationTool reports whether the named tool is an anticipation tool.
 func IsAnticipationTool(name string) bool {
 	switch name {
 	case "create_anticipation", "list_anticipations", "resolve_anticipation", "cancel_anticipation":
