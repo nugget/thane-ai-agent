@@ -160,7 +160,7 @@ func (c *AnthropicClient) ChatStream(ctx context.Context, model string, messages
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		c.logger.Error("API error", "status", resp.StatusCode, "body", string(body))
-		return nil, fmt.Errorf("Anthropic API error %d: %s", resp.StatusCode, string(body))
+		return nil, fmt.Errorf("anthropic API error %d: %s", resp.StatusCode, string(body))
 	}
 
 	if !stream {
