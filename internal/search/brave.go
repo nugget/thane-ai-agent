@@ -9,6 +9,8 @@ import (
 	"net/url"
 	"strconv"
 	"time"
+
+	"github.com/nugget/thane-ai-agent/internal/buildinfo"
 )
 
 // Brave implements the Provider interface for the Brave Search API.
@@ -64,6 +66,7 @@ func (b *Brave) Search(ctx context.Context, query string, opts Options) ([]Resul
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Accept-Encoding", "gzip")
+	req.Header.Set("User-Agent", buildinfo.UserAgent())
 	req.Header.Set("X-Subscription-Token", b.apiKey)
 
 	resp, err := b.httpClient.Do(req)

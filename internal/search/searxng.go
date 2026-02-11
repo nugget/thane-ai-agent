@@ -9,6 +9,8 @@ import (
 	"net/url"
 	"strconv"
 	"time"
+
+	"github.com/nugget/thane-ai-agent/internal/buildinfo"
 )
 
 // SearXNG implements the Provider interface for a SearXNG instance.
@@ -62,6 +64,7 @@ func (s *SearXNG) Search(ctx context.Context, query string, opts Options) ([]Res
 		return nil, fmt.Errorf("searxng: build request: %w", err)
 	}
 	req.Header.Set("Accept", "application/json")
+	req.Header.Set("User-Agent", buildinfo.UserAgent())
 
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
