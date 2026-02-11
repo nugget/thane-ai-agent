@@ -3,6 +3,32 @@
 > **Thane**: A Scottish landholder who managed an estate on behalf of the crown.
 > An autonomous AI agent that learns, remembers, and acts.
 
+## Philosophy
+
+A vibration sensor on a washer tells you it's done. But understanding that you're home, it's been 30 minutes, and you haven't moved the laundry — and gently reminding you before it gets musty — that's the difference between automation and comprehension.
+
+This is what Thane is building toward: a system that notices, understands, and helps. Not through rigid automation rules, but through genuine contextual awareness.
+
+**Understanding over Rules.** Traditional home automation fires events. Thane comprehends situations. The difference between "washer stopped" and "laundry needs attention before it mildews."
+
+**Boring Tech, Creative Application.** Go, SQLite, MQTT, Home Assistant. Mature, stable, documented. The innovation isn't in the stack — it's in how these pieces compose to create something that can actually care about your environment.
+
+**Open Source as Philosophy.** This isn't a product seeking users. It's an idea seeking evolution. Every component is accessible, every decision documented. Someone will fork this and do something we never imagined. That's the point.
+
+### What We're Not Building
+
+- Not another voice assistant (though voice is one interface)
+- Not another automation platform (though we integrate with automation)
+- Not a business model (this is gift culture)
+
+### What We Are Building
+
+A nervous system for living spaces. Sensors that notice. Anticipations that remember what matters. Context engines that understand. All working together to create an environment that's genuinely helpful without being intrusive.
+
+*Wake frequently, speak rarely. The difference is the craft.*
+
+---
+
 ## The Core Insight
 
 Thane is an **autonomous agent** — an LLM with persistent memory, tool use, and the ability to act on your behalf. It's not constrained to a pre-defined set of capabilities; it discovers what's available and reasons about how to help.
@@ -156,9 +182,9 @@ docker run -d -p 8080:8080 -p 11434:11434 \
   ghcr.io/nugget/thane:latest
 ```
 
-### Home Assistant Add-on (planned)
+### Home Assistant App (planned)
 
-Native HA Add-on packaging is on the roadmap.
+Native HA App packaging is on the roadmap.
 
 ## Roadmap
 
@@ -172,7 +198,7 @@ Native HA Add-on packaging is on the roadmap.
 - Wire events to anticipation triggers, proactive notifications, intent-parser architecture
 
 ### Phase 4: Ecosystem
-- HA Add-on packaging, Apple ecosystem integration, companion app, multi-instance deployment, git-backed identity store
+- HA App packaging, Apple ecosystem integration, companion app, multi-instance deployment, git-backed identity store
 
 ## License
 
