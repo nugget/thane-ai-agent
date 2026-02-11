@@ -548,7 +548,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (*R
 
 		llmResp, err := l.llm.ChatStream(ctx, model, llmMessages, nil, stream) // nil tools = no more tool calls
 		if err != nil {
-			l.logger.Error("final LLM call failed after max iterations", "error", err)
+			l.logger.Error("final LLM call failed after max iterations", "error", err, "model", model)
 			return &Response{
 				Content:      "I found the information but couldn't compose a response. Please try again.",
 				Model:        model,
@@ -583,6 +583,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (*R
 
 	l.logger.Error("max iterations reached without tool results or response",
 		"iterations", maxIterations,
+		"model", model,
 	)
 	return &Response{
 		Content:      "I wasn't able to complete that request. Please try again.",
