@@ -565,7 +565,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		loop.Tools().SetSearchManager(mgr)
 		logger.Info("web search enabled", "primary", primary, "providers", mgr.Providers())
 	} else {
-		logger.Info("web search disabled (no providers configured)")
+		logger.Warn("web search disabled (no providers configured)")
 	}
 
 	// --- Embeddings ---
