@@ -41,6 +41,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/memory"
 	"github.com/nugget/thane-ai-agent/internal/router"
 	"github.com/nugget/thane-ai-agent/internal/scheduler"
+	"github.com/nugget/thane-ai-agent/internal/search"
 	"github.com/nugget/thane-ai-agent/internal/talents"
 	"github.com/nugget/thane-ai-agent/internal/tools"
 
@@ -528,6 +529,43 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		logger.Info("shell exec enabled", "working_dir", cfg.ShellExec.WorkingDir)
 	} else {
 		logger.Info("shell exec disabled")
+	}
+
+	// --- Web Search ---
+	// Optional web search tool. Supports multiple providers; the first
+	// configured provider becomes the default if none is specified.
+	if cfg.Search.Configured() {
+		primary := cfg.Search.Default
+		mgr := search.NewManager(primary)
+
+		if cfg.Search.SearXNG.Configured() {
+			mgr.Register(search.NewSearXNG(cfg.Search.SearXNG.URL))
+			if primary == "" {
+				primary = "searxng"
+			}
+		}
+		if cfg.Search.Brave.Configured() {
+			mgr.Register(search.NewBrave(cfg.Search.Brave.APIKey))
+			if primary == "" {
+				primary = "brave"
+			}
+		}
+
+		// Re-create manager with resolved primary if it was empty.
+		if cfg.Search.Default == "" && primary != "" {
+			mgr = search.NewManager(primary)
+			if cfg.Search.SearXNG.Configured() {
+				mgr.Register(search.NewSearXNG(cfg.Search.SearXNG.URL))
+			}
+			if cfg.Search.Brave.Configured() {
+				mgr.Register(search.NewBrave(cfg.Search.Brave.APIKey))
+			}
+		}
+
+		loop.Tools().SetSearchManager(mgr)
+		logger.Info("web search enabled", "primary", primary, "providers", mgr.Providers())
+	} else {
+		logger.Info("web search disabled (no providers configured)")
 	}
 
 	// --- Embeddings ---

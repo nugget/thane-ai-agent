@@ -13,6 +13,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/facts"
 	"github.com/nugget/thane-ai-agent/internal/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/scheduler"
+	"github.com/nugget/thane-ai-agent/internal/search"
 )
 
 // Tool represents a callable tool.
@@ -68,6 +69,16 @@ func (r *Registry) SetFileTools(ft *FileTools) {
 func (r *Registry) SetShellExec(se *ShellExec) {
 	r.shellExec = se
 	r.registerShellExec()
+}
+
+// SetSearchManager adds the web_search tool to the registry.
+func (r *Registry) SetSearchManager(mgr *search.Manager) {
+	r.Register(&Tool{
+		Name:        "web_search",
+		Description: "Search the web for information. Returns titles, URLs, and snippets.",
+		Parameters:  search.ToolDefinition(),
+		Handler:     search.ToolHandler(mgr),
+	})
 }
 
 func (r *Registry) registerFactTools() {

@@ -22,6 +22,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/nugget/thane-ai-agent/internal/search"
 	"gopkg.in/yaml.v3"
 )
 
@@ -110,6 +111,9 @@ type Config struct {
 	// system prompt with a custom agent identity.
 	PersonaFile string `yaml:"persona_file"`
 
+	// Search configures web search providers.
+	Search SearchConfig `yaml:"search"`
+
 	// LogLevel sets the minimum log level. Valid values: trace, debug,
 	// info, warn, error. Default: info. See [ParseLogLevel].
 	LogLevel string `yaml:"log_level"`
@@ -197,6 +201,25 @@ type ModelConfig struct {
 	Quality       int    `yaml:"quality"`        // Relative quality rating, 1 (low) to 10 (high)
 	CostTier      int    `yaml:"cost_tier"`      // 0=local/free, 1=cheap, 2=moderate, 3=expensive
 	MinComplexity string `yaml:"min_complexity"` // Minimum task complexity: simple, moderate, complex
+}
+
+// SearchConfig configures web search providers. At least one provider
+// must be configured for the web_search tool to be available.
+type SearchConfig struct {
+	// Default is the provider name to use when the agent doesn't
+	// specify one. If empty, the first configured provider is used.
+	Default string `yaml:"default"`
+
+	// SearXNG configures the self-hosted SearXNG meta-search provider.
+	SearXNG search.SearXNGConfig `yaml:"searxng"`
+
+	// Brave configures the Brave Search API provider.
+	Brave search.BraveConfig `yaml:"brave"`
+}
+
+// Configured reports whether at least one search provider is configured.
+func (c SearchConfig) Configured() bool {
+	return c.SearXNG.Configured() || c.Brave.Configured()
 }
 
 // EmbeddingsConfig configures vector embedding generation for semantic
