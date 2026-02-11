@@ -217,17 +217,10 @@ init dir="Thane":
 serve: build
     cd Thane && ../dist/thane-{{host_os}}-{{host_arch}} serve
 
-# Tail live service logs
+# Tail live service logs (default: dev workdir)
 [group('operations')]
-[linux]
-logs:
-    journalctl -u thane -f
-
-# Tail live service logs
-[group('operations')]
-[macos]
-logs:
-    tail -f {{thane-home}}/thane.log
+logs workdir="./Thane":
+    tail -f {{workdir}}/thane.log
 
 # --- Release ---
 
