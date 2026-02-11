@@ -29,7 +29,8 @@ import (
 // checks when no explicit path is provided. The first existing file wins.
 //
 // The search order is:
-//   - ./config.yaml (project directory)
+//   - ./config.yaml (project directory / working directory)
+//   - ~/Thane/config.yaml (macOS role account convention)
 //   - ~/.config/thane/config.yaml (XDG user config)
 //   - /config/config.yaml (container convention)
 //   - /usr/local/etc/thane/config.yaml (macOS/BSD local sysconfig)
@@ -38,6 +39,7 @@ func DefaultSearchPaths() []string {
 	paths := []string{"config.yaml"}
 
 	if home, err := os.UserHomeDir(); err == nil {
+		paths = append(paths, filepath.Join(home, "Thane", "config.yaml"))
 		paths = append(paths, filepath.Join(home, ".config", "thane", "config.yaml"))
 	}
 

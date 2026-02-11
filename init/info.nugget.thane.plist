@@ -42,11 +42,5 @@
 
     <key>ProcessType</key>
     <string>Standard</string>
-
-    <key>EnvironmentVariables</key>
-    <dict>
-        <key>HOME</key>
-        <string>/usr/local/var/thane</string>
-    </dict>
 </dict>
 </plist>

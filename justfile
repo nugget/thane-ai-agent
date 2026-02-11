@@ -8,7 +8,8 @@ ldflags := "-X " + pkg + ".Version=" + version + " -X " + pkg + ".GitCommit=" + 
 
 host_os := if os() == "macos" { "darwin" } else { os() }
 host_arch := if arch() == "aarch64" { "arm64" } else if arch() == "x86_64" { "amd64" } else { arch() }
-install-prefix := env("INSTALL_PREFIX", "/usr/local")
+thane-home := home_directory() / "Thane"
+install-prefix := if os() == "macos" { env("INSTALL_PREFIX", thane-home) } else { env("INSTALL_PREFIX", "/usr/local") }
 
 # List available recipes
 default:
@@ -74,6 +75,7 @@ install: build
 [group('deploy')]
 [macos]
 install: build
+    @mkdir -p {{install-prefix}}/bin
     install dist/thane-{{host_os}}-{{host_arch}} {{install-prefix}}/bin/thane
 
 # Uninstall the binary
@@ -114,27 +116,32 @@ service-install: install
     echo "  3. Lock it down:      chmod 600 /etc/thane/config.yaml && chown thane:thane /etc/thane/config.yaml"
     echo "  4. Start it up:       systemctl start thane"
 
-# Install and enable the system service (launchd agent + directories)
+# Install and enable the system service (launchd user agent)
 [group('deploy')]
 [macos]
 service-install: install
     #!/usr/bin/env sh
     set -e
-    # Create state and config directories
-    mkdir -p /usr/local/var/thane
-    mkdir -p /usr/local/etc/thane
-    # Install plist (user agent — runs as current user, no root required)
-    cp init/info.nugget.thane.plist ~/Library/LaunchAgents/info.nugget.thane.plist
+    THANE_HOME="{{thane-home}}"
+    # Create directory structure
+    mkdir -p "$THANE_HOME/data"
+    # Generate plist with absolute paths for this user
+    mkdir -p ~/Library/LaunchAgents
+    sed -e "s|/usr/local/bin/thane|$THANE_HOME/bin/thane|g" \
+        -e "s|/usr/local/var/thane|$THANE_HOME|g" \
+        init/info.nugget.thane.plist > ~/Library/LaunchAgents/info.nugget.thane.plist
     echo ""
     echo "Service installed as user launch agent."
-    echo "  Config:  /usr/local/etc/thane/config.yaml"
-    echo "  State:   /usr/local/var/thane/"
+    echo "  Home:    $THANE_HOME/"
+    echo "  Binary:  $THANE_HOME/bin/thane"
+    echo "  Config:  $THANE_HOME/config.yaml"
+    echo "  Data:    $THANE_HOME/data/"
     echo "  Logs:    log stream --process thane"
     echo ""
     echo "Next steps:"
-    echo "  1. Copy your config:  cp config.example.yaml /usr/local/etc/thane/config.yaml"
-    echo "  2. Edit secrets:      \$EDITOR /usr/local/etc/thane/config.yaml"
-    echo "  3. Lock it down:      chmod 600 /usr/local/etc/thane/config.yaml"
+    echo "  1. Copy your config:  cp config.example.yaml $THANE_HOME/config.yaml"
+    echo "  2. Edit secrets:      \$EDITOR $THANE_HOME/config.yaml"
+    echo "  3. Lock it down:      chmod 600 $THANE_HOME/config.yaml"
     echo "  4. Start it up:       launchctl load ~/Library/LaunchAgents/info.nugget.thane.plist"
 
 # Remove the system service
@@ -160,7 +167,7 @@ service-uninstall:
     launchctl unload ~/Library/LaunchAgents/info.nugget.thane.plist 2>/dev/null || true
     rm -f ~/Library/LaunchAgents/info.nugget.thane.plist
     echo "Service removed. To fully clean up:"
-    echo "  rm -rf /usr/local/var/thane /usr/local/etc/thane"
+    echo "  rm -rf {{thane-home}}"
 
 # Show service status
 [group('operations')]
