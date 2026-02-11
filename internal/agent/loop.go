@@ -402,7 +402,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (*R
 
 		// Check for tool calls
 		if len(llmResp.Message.ToolCalls) > 0 {
-			l.logger.Info("processing tool calls", "count", len(llmResp.Message.ToolCalls))
+			l.logger.Debug("processing tool calls", "count", len(llmResp.Message.ToolCalls))
 
 			// Add assistant message with tool calls
 			llmMessages = append(llmMessages, llmResp.Message)
@@ -427,7 +427,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (*R
 					argsJSON = string(argsBytes)
 				}
 
-				l.logger.Info("executing tool",
+				l.logger.Debug("executing tool",
 					"tool", toolName,
 					"call_id", toolCallIDStr,
 				)
@@ -454,7 +454,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (*R
 					result = "Error: " + errMsg
 					l.logger.Error("tool execution failed", "tool", toolName, "error", err)
 				} else {
-					l.logger.Info("tool executed", "tool", toolName, "result_len", len(result))
+					l.logger.Debug("tool executed", "tool", toolName, "result_len", len(result))
 				}
 
 				// Emit tool call done event
