@@ -156,6 +156,8 @@ type userAgentTransport struct {
 
 func (t *userAgentTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if req.Header.Get("User-Agent") == "" {
+		// Clone the request to avoid mutating the original, per RoundTripper contract.
+		req = req.Clone(req.Context())
 		req.Header.Set("User-Agent", t.ua)
 	}
 	return t.base.RoundTrip(req)
@@ -171,14 +173,16 @@ func DrainAndClose(rc io.ReadCloser, limit int64) {
 	rc.Close()
 }
 
-// ReadErrorBody reads up to limit bytes from rc for error messages.
+// ReadErrorBody reads up to limit bytes from rc for error messages,
+// then drains and closes the remainder to allow connection reuse.
 // Returns an empty string if rc is nil.
 func ReadErrorBody(rc io.ReadCloser, limit int64) string {
 	if rc == nil {
 		return ""
 	}
-	defer rc.Close()
 	body, err := io.ReadAll(io.LimitReader(rc, limit))
+	// Drain remainder so the connection can be reused, then close.
+	DrainAndClose(rc, 1024)
 	if err != nil {
 		return fmt.Sprintf("(failed to read error body: %v)", err)
 	}

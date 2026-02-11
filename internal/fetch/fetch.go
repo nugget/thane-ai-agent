@@ -9,13 +9,14 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/nugget/thane-ai-agent/internal/httpkit"
 )
 
 // DefaultTimeout is the HTTP request timeout for fetching pages.
-const DefaultTimeout = 30 * 1e9 // 30s in nanoseconds, same as time.Duration
+const DefaultTimeout = 30 * time.Second
 
 // DefaultMaxBytes is the maximum response body size (5 MB).
 const DefaultMaxBytes int64 = 5 * 1024 * 1024

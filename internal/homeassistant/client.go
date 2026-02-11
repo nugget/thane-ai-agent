@@ -217,7 +217,8 @@ func (c *Client) get(ctx context.Context, path string, result any) error {
 	if err != nil {
 		return fmt.Errorf("request %s: %w", path, err)
 	}
-	defer resp.Body.Close()
+	// Drain and close to ensure connection reuse even when result is nil.
+	defer httpkit.DrainAndClose(resp.Body, 4096)
 
 	if resp.StatusCode != http.StatusOK {
 		body := httpkit.ReadErrorBody(resp.Body, 512)
@@ -255,7 +256,8 @@ func (c *Client) post(ctx context.Context, path string, data any, result any) er
 	if err != nil {
 		return fmt.Errorf("request %s: %w", path, err)
 	}
-	defer resp.Body.Close()
+	// Drain and close to ensure connection reuse even when result is nil.
+	defer httpkit.DrainAndClose(resp.Body, 4096)
 
 	if resp.StatusCode != http.StatusOK {
 		body := httpkit.ReadErrorBody(resp.Body, 512)
