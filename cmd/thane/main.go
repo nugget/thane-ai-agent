@@ -35,6 +35,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/config"
 	"github.com/nugget/thane-ai-agent/internal/embeddings"
 	"github.com/nugget/thane-ai-agent/internal/facts"
+	"github.com/nugget/thane-ai-agent/internal/fetch"
 	"github.com/nugget/thane-ai-agent/internal/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/ingest"
 	"github.com/nugget/thane-ai-agent/internal/llm"
@@ -567,6 +568,12 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	} else {
 		logger.Warn("web search disabled (no providers configured)")
 	}
+
+	// --- Web Fetch ---
+	// Always available — no configuration needed. Fetches web pages and
+	// extracts readable text content.
+	loop.Tools().SetFetcher(fetch.New())
+	logger.Info("web fetch enabled")
 
 	// --- Embeddings ---
 	// Optional semantic search over the fact store. When enabled, facts
