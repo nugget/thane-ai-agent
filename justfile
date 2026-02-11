@@ -8,6 +8,7 @@ ldflags := "-X " + pkg + ".Version=" + version + " -X " + pkg + ".GitCommit=" + 
 
 host_os := if os() == "macos" { "darwin" } else { os() }
 host_arch := if arch() == "aarch64" { "arm64" } else if arch() == "x86_64" { "amd64" } else { arch() }
+install-prefix := env("INSTALL_PREFIX", "/usr/local")
 
 # Build a binary into dist/ (defaults to current platform, or specify OS/ARCH)
 build target_os=host_os target_arch=host_arch:
@@ -44,6 +45,19 @@ ci: fmt-check lint test-race
 # Build and show version
 version: build
     dist/thane-{{host_os}}-{{host_arch}} version
+
+# Install the binary to the appropriate system location
+[linux]
+install: build
+    install -D dist/thane-{{host_os}}-{{host_arch}} {{install-prefix}}/bin/thane
+
+[macos]
+install: build
+    install dist/thane-{{host_os}}-{{host_arch}} {{install-prefix}}/bin/thane
+
+# Uninstall the binary
+uninstall:
+    rm -f {{install-prefix}}/bin/thane
 
 # Clean build artifacts
 clean:
