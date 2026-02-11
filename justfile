@@ -54,10 +54,10 @@ test:
 fmt-check:
     @test -z "$(gofmt -l .)" || (echo "Files need formatting:" && gofmt -l . && exit 1)
 
-# Run linter (if golangci-lint is available)
+# Run linter
 [group('test')]
 lint:
-    golangci-lint run ./... || true
+    golangci-lint run ./...
 
 # CI: format check, lint, and tests
 [group('test')]
