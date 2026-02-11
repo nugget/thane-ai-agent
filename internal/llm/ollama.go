@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/nugget/thane-ai-agent/internal/httpkit"
 )
 
 // OllamaClient is a client for the Ollama API.
@@ -31,9 +33,9 @@ func NewOllamaClient(baseURL string, logger *slog.Logger) *OllamaClient {
 	return &OllamaClient{
 		baseURL: baseURL,
 		logger:  logger.With("provider", "ollama"),
-		httpClient: &http.Client{
-			Timeout: 5 * time.Minute, // Large models with tools need time
-		},
+		httpClient: httpkit.NewClient(
+			httpkit.WithTimeout(5 * time.Minute), // Large models with tools need time
+		),
 	}
 }
 
@@ -127,9 +129,9 @@ func (c *OllamaClient) ChatStream(ctx context.Context, model string, messages []
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		c.logger.Error("API error", "status", resp.StatusCode, "body", string(body))
-		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, string(body))
+		errBody := httpkit.ReadErrorBody(resp.Body, 4096)
+		c.logger.Error("API error", "status", resp.StatusCode, "body", errBody)
+		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, errBody)
 	}
 
 	// Extract valid tool names for validation

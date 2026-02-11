@@ -12,7 +12,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/nugget/thane-ai-agent/internal/buildinfo"
+	"github.com/nugget/thane-ai-agent/internal/httpkit"
 )
 
 // DefaultTimeout is the HTTP request timeout for fetching pages.
@@ -44,9 +44,9 @@ type Fetcher struct {
 // New creates a Fetcher with default settings.
 func New() *Fetcher {
 	return &Fetcher{
-		client: &http.Client{
-			Timeout: DefaultTimeout,
-		},
+		client: httpkit.NewClient(
+			httpkit.WithTimeout(DefaultTimeout),
+		),
 		maxBytes: DefaultMaxBytes,
 	}
 }
@@ -72,7 +72,6 @@ func (f *Fetcher) Fetch(ctx context.Context, rawURL string, maxChars int) (*Resu
 		return nil, fmt.Errorf("web_fetch: invalid url: %w", err)
 	}
 
-	req.Header.Set("User-Agent", buildinfo.UserAgent())
 	req.Header.Set("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,text/plain;q=0.8,*/*;q=0.7")
 	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
 

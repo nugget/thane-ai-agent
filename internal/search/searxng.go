@@ -4,13 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strconv"
 	"time"
 
-	"github.com/nugget/thane-ai-agent/internal/buildinfo"
+	"github.com/nugget/thane-ai-agent/internal/httpkit"
 )
 
 // SearXNG implements the Provider interface for a SearXNG instance.
@@ -24,9 +23,9 @@ type SearXNG struct {
 func NewSearXNG(baseURL string) *SearXNG {
 	return &SearXNG{
 		baseURL: baseURL,
-		httpClient: &http.Client{
-			Timeout: 15 * time.Second,
-		},
+		httpClient: httpkit.NewClient(
+			httpkit.WithTimeout(15 * time.Second),
+		),
 	}
 }
 
@@ -64,7 +63,6 @@ func (s *SearXNG) Search(ctx context.Context, query string, opts Options) ([]Res
 		return nil, fmt.Errorf("searxng: build request: %w", err)
 	}
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", buildinfo.UserAgent())
 
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
@@ -73,8 +71,8 @@ func (s *SearXNG) Search(ctx context.Context, query string, opts Options) ([]Res
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return nil, fmt.Errorf("searxng: HTTP %d: %s", resp.StatusCode, string(body))
+		body := httpkit.ReadErrorBody(resp.Body, 512)
+		return nil, fmt.Errorf("searxng: HTTP %d: %s", resp.StatusCode, body)
 	}
 
 	var sr searxngResponse
@@ -107,7 +105,7 @@ func (c SearXNGConfig) Configured() bool {
 	return c.URL != ""
 }
 
-// Used by the tool to build a human-readable result string.
+// FormatResults builds a human-readable result string.
 func FormatResults(results []Result, count int) string {
 	if len(results) == 0 {
 		return "No results found."
