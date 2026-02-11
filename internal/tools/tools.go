@@ -701,7 +701,7 @@ func (r *Registry) Execute(ctx context.Context, name string, argsJSON string) (s
 
 func (r *Registry) handleGetState(ctx context.Context, args map[string]any) (string, error) {
 	if r.ha == nil {
-		return "", fmt.Errorf("Home Assistant not configured")
+		return "", fmt.Errorf("home assistant not configured")
 	}
 
 	entityID, _ := args["entity_id"].(string)
@@ -736,7 +736,7 @@ func (r *Registry) handleGetState(ctx context.Context, args map[string]any) (str
 
 func (r *Registry) handleListEntities(ctx context.Context, args map[string]any) (string, error) {
 	if r.ha == nil {
-		return "", fmt.Errorf("Home Assistant not configured")
+		return "", fmt.Errorf("home assistant not configured")
 	}
 
 	domain, _ := args["domain"].(string)
@@ -778,7 +778,7 @@ func (r *Registry) handleListEntities(ctx context.Context, args map[string]any) 
 
 func (r *Registry) handleCallService(ctx context.Context, args map[string]any) (string, error) {
 	if r.ha == nil {
-		return "", fmt.Errorf("Home Assistant not configured")
+		return "", fmt.Errorf("home assistant not configured")
 	}
 
 	domain, _ := args["domain"].(string)
@@ -809,7 +809,7 @@ func (r *Registry) handleCallService(ctx context.Context, args map[string]any) (
 
 func (r *Registry) handleControlDevice(ctx context.Context, args map[string]any) (string, error) {
 	if r.ha == nil {
-		return "", fmt.Errorf("Home Assistant not configured")
+		return "", fmt.Errorf("home assistant not configured")
 	}
 
 	description, _ := args["description"].(string)

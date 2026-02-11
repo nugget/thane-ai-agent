@@ -392,10 +392,7 @@ func sanitizeHARequest(req *OllamaChatRequest, logger *slog.Logger) (areaContext
 // returning any trailing text. Handles multiple consecutive JSON objects.
 func stripLeadingJSON(s string) string {
 	s = strings.TrimSpace(s)
-	for {
-		if !strings.HasPrefix(s, "{") {
-			break
-		}
+	for strings.HasPrefix(s, "{") {
 		end := findJSONEnd(s)
 		if end <= 0 {
 			break
@@ -429,9 +426,10 @@ func findJSONEnd(s string) int {
 		if inString {
 			continue
 		}
-		if c == '{' {
+		switch c {
+		case '{':
 			depth++
-		} else if c == '}' {
+		case '}':
 			depth--
 			if depth == 0 {
 				return i + 1
