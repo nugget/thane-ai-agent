@@ -450,7 +450,14 @@
         const inputEl = document.getElementById('message-input');
         const sendBtn = document.getElementById('send-btn');
         const statusText = document.getElementById('status-text');
-        
+
+        // Session ID: persist per tab, generate if missing
+        let sessionId = sessionStorage.getItem('thane-session-id');
+        if (!sessionId) {
+            sessionId = crypto.randomUUID();
+            sessionStorage.setItem('thane-session-id', sessionId);
+        }
+
         let conversationHistory = [];
 
         // Configure marked
@@ -562,6 +569,7 @@
                             role: m.role,
                             content: m.content
                         })),
+                        conversation_id: sessionId,
                         stream: true
                     })
                 });

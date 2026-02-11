@@ -366,7 +366,7 @@ func (s *Server) handleSimpleChat(w http.ResponseWriter, r *http.Request) {
 
 	convID := req.ConversationID
 	if convID == "" {
-		convID = "default"
+		convID = uuid.New().String()
 	}
 
 	agentReq := &agent.Request{
