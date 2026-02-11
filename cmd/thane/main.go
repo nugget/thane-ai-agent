@@ -11,11 +11,13 @@
 //	thane ask <question>     Ask a single question (for testing)
 //	thane ingest <file.md>   Import a markdown document into the fact store
 //	thane version            Print version and build information
+//	thane -o json version    Output version information as JSON
 package main
 
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -77,6 +79,7 @@ func run(ctx context.Context, stdout io.Writer, stderr io.Writer, args []string)
 	// concurrently from tests. Our argument surface is small enough that
 	// manual parsing is clearer than bringing in a CLI framework.
 	var configPath string
+	var outputFmt string // "text" (default) or "json"
 	var command string
 	var cmdArgs []string
 
@@ -87,6 +90,13 @@ func run(ctx context.Context, stdout io.Writer, stderr io.Writer, args []string)
 			i++ // skip the value
 		case strings.HasPrefix(args[i], "-config="):
 			configPath = strings.TrimPrefix(args[i], "-config=")
+		case (args[i] == "-o" || args[i] == "--output") && i+1 < len(args):
+			outputFmt = args[i+1]
+			i++
+		case strings.HasPrefix(args[i], "-o="):
+			outputFmt = strings.TrimPrefix(args[i], "-o=")
+		case strings.HasPrefix(args[i], "--output="):
+			outputFmt = strings.TrimPrefix(args[i], "--output=")
 		case args[i] == "-h" || args[i] == "-help" || args[i] == "--help":
 			return printUsage(stdout)
 		case !strings.HasPrefix(args[i], "-") && command == "":
@@ -99,6 +109,14 @@ func run(ctx context.Context, stdout io.Writer, stderr io.Writer, args []string)
 				return fmt.Errorf("unknown flag: %s", args[i])
 			}
 		}
+	}
+
+	// Default to human-readable text output.
+	if outputFmt == "" {
+		outputFmt = "text"
+	}
+	if outputFmt != "text" && outputFmt != "json" {
+		return fmt.Errorf("unknown output format: %q (expected text or json)", outputFmt)
 	}
 
 	switch command {
@@ -115,16 +133,30 @@ func run(ctx context.Context, stdout io.Writer, stderr io.Writer, args []string)
 		}
 		return runIngest(ctx, stdout, stderr, configPath, cmdArgs[0])
 	case "version":
-		fmt.Fprintln(stdout, buildinfo.String())
-		for k, v := range buildinfo.Info() {
-			fmt.Fprintf(stdout, "  %-12s %s\n", k+":", v)
-		}
-		return nil
+		return runVersion(stdout, outputFmt)
 	case "":
 		return printUsage(stdout)
 	default:
 		return fmt.Errorf("unknown command: %s", command)
 	}
+}
+
+// runVersion prints build metadata in the requested output format.
+func runVersion(w io.Writer, outputFmt string) error {
+	info := buildinfo.BuildInfo()
+	if outputFmt == "json" {
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		return enc.Encode(info)
+	}
+	fmt.Fprintln(w, buildinfo.String())
+	// Print fields in a stable order for human readability.
+	for _, k := range []string{"version", "git_commit", "git_branch", "build_time", "go_version", "os", "arch"} {
+		if v, ok := info[k]; ok {
+			fmt.Fprintf(w, "  %-12s %s\n", k+":", v)
+		}
+	}
+	return nil
 }
 
 // printUsage writes the top-level help text to w. It is called when
@@ -141,9 +173,12 @@ func printUsage(w io.Writer) error {
 	fmt.Fprintln(w, "  version  Show version information")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Flags:")
-	fmt.Fprintln(w, "  -config <path>  Path to config file (default: auto-discover)")
+	fmt.Fprintln(w, "  -config <path>    Path to config file (default: auto-discover)")
+	fmt.Fprintln(w, "  -o, --output fmt  Output format: text (default) or json")
 	fmt.Fprintln(w)
-	fmt.Fprintln(w, "Config search order: ./config.yaml, ~/.config/thane/config.yaml, /config/config.yaml, /etc/thane/config.yaml")
+	fmt.Fprintln(w, "Config search order:")
+	fmt.Fprintln(w, "  ./config.yaml, ~/Thane/config.yaml, ~/.config/thane/config.yaml,")
+	fmt.Fprintln(w, "  /config/config.yaml, /usr/local/etc/thane/config.yaml, /etc/thane/config.yaml")
 	return nil
 }
 
@@ -152,7 +187,7 @@ func printUsage(w io.Writer) error {
 // and processes a single question, printing the response to stdout.
 // Useful for quick smoke tests and debugging without starting the server.
 func runAsk(ctx context.Context, stdout io.Writer, stderr io.Writer, configPath string, args []string) error {
-	logger := newLogger(stdout, slog.LevelInfo)
+	logger := newLogger(stdout, slog.LevelInfo, "text")
 
 	question := strings.Join(args, " ")
 
@@ -193,7 +228,7 @@ func runAsk(ctx context.Context, stdout io.Writer, stderr io.Writer, configPath 
 // a markdown document into discrete facts and stores them in the fact
 // database, optionally generating embeddings for semantic search.
 func runIngest(ctx context.Context, stdout io.Writer, stderr io.Writer, configPath string, filePath string) error {
-	logger := newLogger(stdout, slog.LevelInfo)
+	logger := newLogger(stdout, slog.LevelInfo, "text")
 	logger.Info("ingesting markdown document", "file", filePath)
 
 	cfg, _, err := loadConfig(configPath)
@@ -246,7 +281,7 @@ func runIngest(ctx context.Context, stdout io.Writer, stderr io.Writer, configPa
 //  3. HTTP servers drain in-flight requests
 //  4. Database connections and the scheduler are closed via defers
 func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPath string) error {
-	logger := newLogger(stdout, slog.LevelInfo)
+	logger := newLogger(stdout, slog.LevelInfo, "text")
 	logger.Info("starting Thane", "version", buildinfo.Version, "commit", buildinfo.GitCommit, "branch", buildinfo.GitBranch, "built", buildinfo.BuildTime)
 
 	cfg, cfgPath, err := loadConfig(configPath)
@@ -254,17 +289,18 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		return err
 	}
 
-	// Reconfigure logger now that we know the desired level. The initial
-	// Info-level logger is used only for the startup banner and config
-	// load message; everything after this point uses the configured level.
-	if cfg.LogLevel != "" {
-		// ParseLogLevel is already validated by config.Validate(), so
-		// this error path should be unreachable in practice.
-		level, _ := config.ParseLogLevel(cfg.LogLevel)
-		logger = slog.New(slog.NewTextHandler(stdout, &slog.HandlerOptions{
-			Level:       level,
-			ReplaceAttr: config.ReplaceLogLevelNames,
-		}))
+	// Reconfigure logger now that we know the desired level and format.
+	// The initial Info-level text logger is used only for the startup
+	// banner and config load message; everything after this point uses
+	// the configured level and format.
+	{
+		level := slog.LevelInfo
+		if cfg.LogLevel != "" {
+			// ParseLogLevel is already validated by config.Validate(), so
+			// this error path should be unreachable in practice.
+			level, _ = config.ParseLogLevel(cfg.LogLevel)
+		}
+		logger = newLogger(stdout, level, cfg.LogFormat)
 	}
 
 	logger.Info("config loaded",
@@ -651,13 +687,22 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	return nil
 }
 
-// newLogger creates a structured logger that writes to w at the given level.
-// All log output in Thane goes through slog; this helper standardizes the
-// handler configuration across subcommands.
-func newLogger(w io.Writer, level slog.Level) *slog.Logger {
-	return slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{
-		Level: level,
-	}))
+// newLogger creates a structured logger that writes to w at the given level
+// and format. Format must be "text" or "json"; any other value defaults to
+// text. All log output in Thane goes through slog; this helper standardizes
+// the handler configuration across subcommands.
+func newLogger(w io.Writer, level slog.Level, format string) *slog.Logger {
+	opts := &slog.HandlerOptions{
+		Level:       level,
+		ReplaceAttr: config.ReplaceLogLevelNames,
+	}
+	var handler slog.Handler
+	if format == "json" {
+		handler = slog.NewJSONHandler(w, opts)
+	} else {
+		handler = slog.NewTextHandler(w, opts)
+	}
+	return slog.New(handler)
 }
 
 // loadConfig locates and parses the YAML configuration file. If explicit

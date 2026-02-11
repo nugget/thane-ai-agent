@@ -1,6 +1,7 @@
 # Thane Configuration
 #
-# Search order: ./config.yaml, ~/.config/thane/config.yaml, /config/config.yaml, /etc/thane/config.yaml
+# Search order: ./config.yaml, ~/Thane/config.yaml, ~/.config/thane/config.yaml,
+#               /config/config.yaml, /usr/local/etc/thane/config.yaml, /etc/thane/config.yaml
 # Override with: thane -config /path/to/config.yaml serve
 #
 # Environment variables are expanded (e.g., ${HOME}), but secrets can go
@@ -58,7 +59,7 @@ models:
 #   api_key: sk-ant-...
 
 # Storage paths
-data_dir: ./data
+data_dir: ./db
 talents_dir: ./talents
 
 # Persona file — replaces the default system prompt with custom identity.
@@ -100,3 +101,4 @@ embeddings:
 # - debug: per-request detail (LLM calls, tool execution, token counts)
 # - trace: wire-level payloads (full JSON requests/responses — VERY verbose)
 # log_level: info
+# log_format: text    # text (human-readable) or json (structured, for log aggregation)

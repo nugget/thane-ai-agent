@@ -21,9 +21,12 @@ jobs:
       - name: Install just
         uses: extractions/setup-just@v2
 
+      - name: Install golangci-lint
+        run: go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+
       - name: Run CI checks
         run: just ci
-        # Runs: fmt-check, lint, test-race
+        # Runs: fmt-check, lint, test
 
       - name: Generate coverage
         run: go test -coverprofile=coverage.out ./...
@@ -34,4 +37,3 @@ jobs:
           files: coverage.out
           fail_ci_if_error: false
         continue-on-error: true
-

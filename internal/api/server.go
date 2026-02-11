@@ -226,7 +226,7 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	writeJSON(w, buildinfo.Info(), s.logger)
+	writeJSON(w, buildinfo.RuntimeInfo(), s.logger)
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -835,7 +835,7 @@ func (s *Server) handleSessionStats(w http.ResponseWriter, r *http.Request) {
 	// Estimate context tokens from the "default" conversation
 	snap.ContextTokens = s.loop.GetTokenCount("default")
 	snap.ContextWindow = s.loop.GetContextWindow()
-	snap.Build = buildinfo.Info()
+	snap.Build = buildinfo.RuntimeInfo()
 
 	w.Header().Set("Content-Type", "application/json")
 	writeJSON(w, snap, s.logger)

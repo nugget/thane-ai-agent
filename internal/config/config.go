@@ -29,18 +29,22 @@ import (
 // checks when no explicit path is provided. The first existing file wins.
 //
 // The search order is:
-//   - ./config.yaml (project directory)
+//   - ./config.yaml (project directory / working directory)
+//   - ~/Thane/config.yaml (macOS role account convention)
 //   - ~/.config/thane/config.yaml (XDG user config)
 //   - /config/config.yaml (container convention)
+//   - /usr/local/etc/thane/config.yaml (macOS/BSD local sysconfig)
 //   - /etc/thane/config.yaml (system-wide)
 func DefaultSearchPaths() []string {
 	paths := []string{"config.yaml"}
 
 	if home, err := os.UserHomeDir(); err == nil {
+		paths = append(paths, filepath.Join(home, "Thane", "config.yaml"))
 		paths = append(paths, filepath.Join(home, ".config", "thane", "config.yaml"))
 	}
 
 	paths = append(paths, "/config/config.yaml")
+	paths = append(paths, "/usr/local/etc/thane/config.yaml")
 	paths = append(paths, "/etc/thane/config.yaml")
 	return paths
 }
@@ -94,9 +98,8 @@ type Config struct {
 	// ShellExec configures the agent's ability to run shell commands.
 	ShellExec ShellExecConfig `yaml:"shell_exec"`
 
-	// DataDir is the root directory for all persistent state (SQLite
-	// databases for memory, facts, scheduler, checkpoints, and
-	// anticipations). Default: "./data".
+	// DataDir is the root directory for SQLite databases (memory, facts,
+	// scheduler, checkpoints, and anticipations). Default: "./db".
 	DataDir string `yaml:"data_dir"`
 
 	// TalentsDir is the directory containing talent markdown files that
@@ -110,6 +113,11 @@ type Config struct {
 	// LogLevel sets the minimum log level. Valid values: trace, debug,
 	// info, warn, error. Default: info. See [ParseLogLevel].
 	LogLevel string `yaml:"log_level"`
+
+	// LogFormat sets the log output format. Valid values: text, json.
+	// Default: text. Text is human-readable; JSON enables structured
+	// log aggregation (Loki, Datadog, jq, etc.).
+	LogFormat string `yaml:"log_format"`
 }
 
 // ListenConfig configures an HTTP server's bind address and port.
@@ -280,11 +288,14 @@ func Load(path string) (*Config, error) {
 // Cross-field defaults are resolved here too — for example,
 // Embeddings.BaseURL defaults to Models.OllamaURL when unset.
 func (c *Config) applyDefaults() {
+	if c.LogFormat == "" {
+		c.LogFormat = "text"
+	}
 	if c.Listen.Port == 0 {
 		c.Listen.Port = 8080
 	}
 	if c.DataDir == "" {
-		c.DataDir = "./data"
+		c.DataDir = "./db"
 	}
 	if c.TalentsDir == "" {
 		c.TalentsDir = "./talents"
@@ -329,6 +340,12 @@ func (c *Config) Validate() error {
 		if _, err := ParseLogLevel(c.LogLevel); err != nil {
 			return err
 		}
+	}
+	switch c.LogFormat {
+	case "text", "json", "":
+		// valid
+	default:
+		return fmt.Errorf("log_format %q invalid (expected text or json)", c.LogFormat)
 	}
 	return nil
 }

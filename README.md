@@ -16,23 +16,30 @@ If you have Home Assistant, Thane drops in as a native conversation agent and bl
 
 **Local-first.** Runs entirely on Ollama. Your conversations, your data, your hardware. Cloud models available as fallback, never required.
 
-**Single binary.** Written in Go. No Python environments, no dependency hell. Trivially deployed in a container environment, easily adaptable to your favorite container orchestration platform (including Home Assistant Operating System).
+**Single binary.** Written in Go. No Python environments, no dependency hell. One command: `thane`.
+
+## Prerequisites
+
+- [Go](https://go.dev/) 1.24+ (to build from source)
+- [just](https://just.systems/) (command runner — replaces Makefiles)
+- [Ollama](https://ollama.ai/) (for local model inference)
+- Home Assistant (optional, for smart home integration)
 
 ## Quick Start
 
 ```bash
-# Build
-go build -o thane ./cmd/thane
+# Clone and build
+git clone https://github.com/nugget/thane-ai-agent.git
+cd thane-ai-agent
+just build
 
-# Configure (see config.example.yaml for all options)
-cp config.example.yaml config.yaml
+# Configure
+cp examples/config.example.yaml config.yaml
 # Edit config.yaml with your Ollama URL and (optionally) Home Assistant token
 
 # Run
-./thane -config config.yaml serve
-
-# Test
-./thane -config config.yaml ask "Hello, who are you?"
+just version          # verify the build
+just serve            # start the server from the build directory
 ```
 
 Thane serves two APIs:
@@ -42,6 +49,80 @@ Thane serves two APIs:
 To connect Home Assistant: point an Ollama integration at `http://thane-host:11434`, select model `thane:latest`.
 
 See [docs/getting-started.md](docs/getting-started.md) for detailed setup, [docs/homeassistant.md](docs/homeassistant.md) for HA integration.
+
+## Development
+
+All workflows go through [just](https://just.systems/). Run `just` with no arguments to see available recipes:
+
+```
+$ just
+Available recipes:
+
+    [build]
+    build target_os=host_os target_arch=host_arch  # Build a binary into dist/
+    build-all                                       # Build for all release targets
+    clean                                           # Clean build artifacts
+    version                                         # Build and show version
+
+    [test]
+    ci                                              # CI: format check, lint, and tests
+    fmt-check                                       # Check formatting
+    lint                                            # Run linter
+    test                                            # Run tests (always with race detector)
+
+    [deploy]
+    install                                         # Install the binary
+    service-install                                 # Install and enable the system service
+    service-uninstall                               # Remove the system service
+    uninstall                                       # Uninstall the binary
+
+    [operations]
+    logs                                            # Tail live service logs
+    service-status                                  # Show service status
+
+    [release-engineering]
+    release tag                                     # Tag and publish a GitHub release
+```
+
+### Common workflows
+
+```bash
+just build                    # Build for current platform → dist/
+just build linux arm64        # Cross-compile
+just test                     # Run tests (always with -race)
+just ci                       # Full CI gate: fmt + lint + test
+just install                  # Install binary to system
+just service-install          # Install + enable as system service
+just logs                     # Tail live logs
+```
+
+### Deployment
+
+Thane ships with production-grade service definitions for both platforms:
+
+**macOS** — User launch agent, zero sudo required.
+
+For production use, create a dedicated macOS user account for Thane (standard or administrator). This keeps Thane's data, config, and runtime isolated from your personal account. Everything lives under `~/Thane/` in that user's home directory — Finder-visible, easy to inspect and back up.
+
+```bash
+just install                  # → ~/Thane/bin/thane
+just service-install          # → ~/Library/LaunchAgents/info.nugget.thane.plist
+cp examples/config.example.yaml ~/Thane/config.yaml
+# Edit ~/Thane/config.yaml with your settings
+launchctl load ~/Library/LaunchAgents/info.nugget.thane.plist
+just logs                     # Tail ~/Thane/thane.log
+```
+
+**Linux** — systemd with dedicated service user and full security hardening:
+```bash
+sudo just install             # → /usr/local/bin/thane
+sudo just service-install     # Creates thane user, installs unit, enables service
+sudo cp examples/config.example.yaml /etc/thane/config.yaml
+# Edit /etc/thane/config.yaml with your settings
+sudo systemctl start thane
+```
+
+The systemd unit includes comprehensive sandboxing: `ProtectSystem=strict`, `NoNewPrivileges`, `PrivateTmp`, `MemoryDenyWriteExecute`, `SystemCallFilter`, and more.
 
 ## Features
 
@@ -53,6 +134,7 @@ See [docs/getting-started.md](docs/getting-started.md) for detailed setup, [docs
 - **Model routing** — selects the right model for each task (speed vs. quality vs. cost)
 - **Checkpoint/restore** — survives restarts without losing context
 - **Dual-port architecture** — native API + Ollama-compatible API simultaneously
+- **Structured logging** — text or JSON format (`log_format` in config)
 
 ## Architecture
 
@@ -66,6 +148,27 @@ User ──→ API Server ──→ Agent Loop ──→ Response
 ```
 
 Thane's agent loop receives a request, assembles context from memory and home state, plans tool calls, executes them (in parallel where possible), and shapes a response. See [ARCHITECTURE.md](ARCHITECTURE.md) for the full design.
+
+## CLI
+
+```
+$ thane --help
+Thane - Autonomous Home Assistant Agent
+
+Usage: thane [flags] <command> [args]
+
+Commands:
+  serve    Start the API server
+  ask      Ask a single question (for testing)
+  ingest   Import markdown docs into fact store
+  version  Show version information
+
+Flags:
+  -config <path>    Path to config file (default: auto-discover)
+  -o, --output fmt  Output format: text (default) or json
+```
+
+Config is auto-discovered from: `./config.yaml`, `~/Thane/config.yaml`, `~/.config/thane/config.yaml`, `/config/config.yaml`, `/usr/local/etc/thane/config.yaml`, `/etc/thane/config.yaml`
 
 ## Roadmap
 
