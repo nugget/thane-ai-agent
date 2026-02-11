@@ -11,6 +11,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/anticipation"
 	"github.com/nugget/thane-ai-agent/internal/buildinfo"
 	"github.com/nugget/thane-ai-agent/internal/facts"
+	"github.com/nugget/thane-ai-agent/internal/fetch"
 	"github.com/nugget/thane-ai-agent/internal/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/scheduler"
 	"github.com/nugget/thane-ai-agent/internal/search"
@@ -78,6 +79,16 @@ func (r *Registry) SetSearchManager(mgr *search.Manager) {
 		Description: "Search the web for information. Returns titles, URLs, and snippets.",
 		Parameters:  search.ToolDefinition(),
 		Handler:     search.ToolHandler(mgr),
+	})
+}
+
+// SetFetcher adds the web_fetch tool to the registry.
+func (r *Registry) SetFetcher(f *fetch.Fetcher) {
+	r.Register(&Tool{
+		Name:        "web_fetch",
+		Description: "Fetch a web page and extract its readable text content. Use to read articles, documentation, or any web page. Complements web_search.",
+		Parameters:  fetch.ToolDefinition(),
+		Handler:     fetch.ToolHandler(f),
 	})
 }
 
