@@ -176,7 +176,7 @@ func printUsage(w io.Writer) error {
 	fmt.Fprintln(w, "  -config <path>    Path to config file (default: auto-discover)")
 	fmt.Fprintln(w, "  -o, --output fmt  Output format: text (default) or json")
 	fmt.Fprintln(w)
-	fmt.Fprintln(w, "Config search order: ./config.yaml, ~/.config/thane/config.yaml, /config/config.yaml, /etc/thane/config.yaml")
+	fmt.Fprintln(w, "Config search order: ./config.yaml, ~/.config/thane/config.yaml, /config/config.yaml, /usr/local/etc/thane/config.yaml, /etc/thane/config.yaml")
 	return nil
 }
 

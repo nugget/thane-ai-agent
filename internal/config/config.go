@@ -32,6 +32,7 @@ import (
 //   - ./config.yaml (project directory)
 //   - ~/.config/thane/config.yaml (XDG user config)
 //   - /config/config.yaml (container convention)
+//   - /usr/local/etc/thane/config.yaml (macOS/BSD local sysconfig)
 //   - /etc/thane/config.yaml (system-wide)
 func DefaultSearchPaths() []string {
 	paths := []string{"config.yaml"}
@@ -41,6 +42,7 @@ func DefaultSearchPaths() []string {
 	}
 
 	paths = append(paths, "/config/config.yaml")
+	paths = append(paths, "/usr/local/etc/thane/config.yaml")
 	paths = append(paths, "/etc/thane/config.yaml")
 	return paths
 }
