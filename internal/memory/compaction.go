@@ -207,10 +207,3 @@ func (s *SimpleSummarizer) Summarize(ctx context.Context, messages []Message) (s
 
 	return sb.String(), nil
 }
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}

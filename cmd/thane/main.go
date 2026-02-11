@@ -1,14 +1,29 @@
-// Package main is the entry point for the Thane agent.
+// Thane is an autonomous Home Assistant agent.
+//
+// It exposes an OpenAI-compatible API, an optional Ollama-compatible API
+// (for Home Assistant integration), and a CLI for one-shot queries and
+// document ingestion. Configuration is loaded from a single YAML file
+// discovered automatically (see [config.DefaultSearchPaths]).
+//
+// Usage:
+//
+//	thane serve              Start the API server
+//	thane ask <question>     Ask a single question (for testing)
+//	thane ingest <file.md>   Import a markdown document into the fact store
+//	thane version            Print version and build information
+//	thane -o json version    Output version information as JSON
 package main
 
 import (
 	"context"
 	"database/sql"
-	"flag"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -29,242 +44,298 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/talents"
 	"github.com/nugget/thane-ai-agent/internal/tools"
 
-	_ "github.com/mattn/go-sqlite3"
+	_ "github.com/mattn/go-sqlite3" // SQLite driver for database/sql
 )
 
+// main is intentionally minimal. It constructs the OS-level environment
+// (context, stdio, argv) and delegates immediately to [run]. This keeps
+// os.Exit, os.Stdout, and os.Args out of the application logic so that
+// the full startup-to-shutdown lifecycle can be driven from tests.
 func main() {
-	// Parse flags
-	configPath := flag.String("config", "", "path to config file")
-	port := flag.Int("port", 0, "override listen port")
-	flag.Parse()
+	ctx := context.Background()
 
-	// Setup logging
-	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
-	}))
-
-	// Handle subcommands
-	if flag.NArg() > 0 {
-		switch flag.Arg(0) {
-		case "serve":
-			runServe(logger, *configPath, *port)
-		case "ask":
-			if flag.NArg() < 2 {
-				fmt.Fprintln(os.Stderr, "usage: thane ask <question>")
-				os.Exit(1)
-			}
-			runAsk(logger, *configPath, flag.Args()[1:])
-		case "ingest":
-			if flag.NArg() < 2 {
-				fmt.Fprintln(os.Stderr, "usage: thane ingest <file.md>")
-				os.Exit(1)
-			}
-			runIngest(logger, *configPath, flag.Arg(1))
-		case "version":
-			fmt.Println(buildinfo.String())
-			for k, v := range buildinfo.Info() {
-				fmt.Printf("  %-12s %s\n", k+":", v)
-			}
-		default:
-			fmt.Fprintf(os.Stderr, "unknown command: %s\n", flag.Arg(0))
-			os.Exit(1)
-		}
-		return
+	if err := run(ctx, os.Stdout, os.Stderr, os.Args[1:]); err != nil {
+		fmt.Fprintf(os.Stderr, "%s\n", err)
+		os.Exit(1)
 	}
-
-	// Default: show help
-	fmt.Println("Thane - Autonomous Home Assistant Agent")
-	fmt.Println()
-	fmt.Println("Commands:")
-	fmt.Println("  serve    Start the API server")
-	fmt.Println("  ask      Ask a single question (for testing)")
-	fmt.Println("  ingest   Import markdown docs into fact store")
-	fmt.Println("  version  Show version")
-	fmt.Println()
-	fmt.Println("Flags:")
-	flag.PrintDefaults()
 }
 
-func runAsk(logger *slog.Logger, configPath string, args []string) {
-	question := args[0]
-	for _, a := range args[1:] {
-		question += " " + a
-	}
+// run is the real entry point for the thane command. All OS-level
+// dependencies are injected as parameters:
+//
+//   - ctx controls the lifetime of the process. Cancelling it triggers
+//     graceful shutdown of all servers and background goroutines.
+//   - stdout and stderr receive all program output. Structured logs go
+//     to stdout; fatal error messages go to stderr.
+//   - args is os.Args[1:] — the command-line arguments after the program
+//     name. We parse these manually rather than using the flag package
+//     to avoid global state that interferes with parallel tests.
+//
+// run returns nil on clean shutdown and a non-nil error for any failure.
+// The caller (main) is responsible for printing the error and exiting.
+func run(ctx context.Context, stdout io.Writer, stderr io.Writer, args []string) error {
+	// Parse arguments by hand. The flag package relies on package-level
+	// globals (flag.CommandLine), which makes it impossible to call run()
+	// concurrently from tests. Our argument surface is small enough that
+	// manual parsing is clearer than bringing in a CLI framework.
+	var configPath string
+	var outputFmt string // "text" (default) or "json"
+	var command string
+	var cmdArgs []string
 
-	// Load config
-	var cfg *config.Config
-	var err error
-	if configPath != "" {
-		cfg, err = config.Load(configPath)
-		if err != nil {
-			logger.Error("failed to load config", "path", configPath, "error", err)
-			os.Exit(1)
+	for i := 0; i < len(args); i++ {
+		switch {
+		case args[i] == "-config" && i+1 < len(args):
+			configPath = args[i+1]
+			i++ // skip the value
+		case strings.HasPrefix(args[i], "-config="):
+			configPath = strings.TrimPrefix(args[i], "-config=")
+		case (args[i] == "-o" || args[i] == "--output") && i+1 < len(args):
+			outputFmt = args[i+1]
+			i++
+		case strings.HasPrefix(args[i], "-o="):
+			outputFmt = strings.TrimPrefix(args[i], "-o=")
+		case strings.HasPrefix(args[i], "--output="):
+			outputFmt = strings.TrimPrefix(args[i], "--output=")
+		case args[i] == "-h" || args[i] == "-help" || args[i] == "--help":
+			return printUsage(stdout)
+		case !strings.HasPrefix(args[i], "-") && command == "":
+			command = args[i]
+		default:
+			if command != "" {
+				// Collect remaining args as subcommand arguments.
+				cmdArgs = append(cmdArgs, args[i])
+			} else {
+				return fmt.Errorf("unknown flag: %s", args[i])
+			}
 		}
-	} else {
-		cfg = config.Default()
 	}
 
-	// Home Assistant client
+	// Default to human-readable text output.
+	if outputFmt == "" {
+		outputFmt = "text"
+	}
+	if outputFmt != "text" && outputFmt != "json" {
+		return fmt.Errorf("unknown output format: %q (expected text or json)", outputFmt)
+	}
+
+	switch command {
+	case "serve":
+		return runServe(ctx, stdout, stderr, configPath)
+	case "ask":
+		if len(cmdArgs) == 0 {
+			return fmt.Errorf("usage: thane ask <question>")
+		}
+		return runAsk(ctx, stdout, stderr, configPath, cmdArgs)
+	case "ingest":
+		if len(cmdArgs) == 0 {
+			return fmt.Errorf("usage: thane ingest <file.md>")
+		}
+		return runIngest(ctx, stdout, stderr, configPath, cmdArgs[0])
+	case "version":
+		return runVersion(stdout, outputFmt)
+	case "":
+		return printUsage(stdout)
+	default:
+		return fmt.Errorf("unknown command: %s", command)
+	}
+}
+
+// runVersion prints build metadata in the requested output format.
+func runVersion(w io.Writer, outputFmt string) error {
+	info := buildinfo.BuildInfo()
+	if outputFmt == "json" {
+		enc := json.NewEncoder(w)
+		enc.SetIndent("", "  ")
+		return enc.Encode(info)
+	}
+	fmt.Fprintln(w, buildinfo.String())
+	// Print fields in a stable order for human readability.
+	for _, k := range []string{"version", "git_commit", "git_branch", "build_time", "go_version", "os", "arch"} {
+		if v, ok := info[k]; ok {
+			fmt.Fprintf(w, "  %-12s %s\n", k+":", v)
+		}
+	}
+	return nil
+}
+
+// printUsage writes the top-level help text to w. It is called when
+// thane is invoked with no arguments, or with -h / --help.
+func printUsage(w io.Writer) error {
+	fmt.Fprintln(w, "Thane - Autonomous Home Assistant Agent")
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Usage: thane [flags] <command> [args]")
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Commands:")
+	fmt.Fprintln(w, "  serve    Start the API server")
+	fmt.Fprintln(w, "  ask      Ask a single question (for testing)")
+	fmt.Fprintln(w, "  ingest   Import markdown docs into fact store")
+	fmt.Fprintln(w, "  version  Show version information")
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Flags:")
+	fmt.Fprintln(w, "  -config <path>    Path to config file (default: auto-discover)")
+	fmt.Fprintln(w, "  -o, --output fmt  Output format: text (default) or json")
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Config search order:")
+	fmt.Fprintln(w, "  ./config.yaml, ~/Thane/config.yaml, ~/.config/thane/config.yaml,")
+	fmt.Fprintln(w, "  /config/config.yaml, /usr/local/etc/thane/config.yaml, /etc/thane/config.yaml")
+	return nil
+}
+
+// runAsk handles the "thane ask <question>" subcommand. It boots a
+// minimal agent (in-memory conversation store, no router, no scheduler)
+// and processes a single question, printing the response to stdout.
+// Useful for quick smoke tests and debugging without starting the server.
+func runAsk(ctx context.Context, stdout io.Writer, stderr io.Writer, configPath string, args []string) error {
+	logger := newLogger(stdout, slog.LevelInfo, "text")
+
+	question := strings.Join(args, " ")
+
+	cfg, cfgPath, err := loadConfig(configPath)
+	if err != nil {
+		return err
+	}
+	logger.Info("config loaded", "path", cfgPath)
+
+	// Home Assistant client (optional — ask works without it)
 	var ha *homeassistant.Client
-	if cfg.HomeAssistant.URL != "" && cfg.HomeAssistant.Token != "" {
+	if cfg.HomeAssistant.Configured() {
 		ha = homeassistant.NewClient(cfg.HomeAssistant.URL, cfg.HomeAssistant.Token)
 	}
 
-	// Create LLM client
 	llmClient := createLLMClient(cfg, logger)
 
-	// Load talents
-	talentsDir := cfg.TalentsDir
-	if talentsDir == "" {
-		talentsDir = "./talents"
-	}
-	talentLoader := talents.NewLoader(talentsDir)
+	talentLoader := talents.NewLoader(cfg.TalentsDir)
 	talentContent, _ := talentLoader.Load()
 
-	// Create minimal memory store (in-memory for ask)
+	// In-memory store is fine for a single question — nothing to persist.
 	mem := memory.NewStore(100)
 
-	// Create agent loop (no router/scheduler for CLI mode - uses default model)
+	// Minimal loop: no router, no scheduler, no compactor. The default
+	// model handles everything for CLI one-shots.
 	loop := agent.NewLoop(logger, mem, nil, nil, ha, nil, llmClient, cfg.Models.Default, talentContent, "", 0)
 
-	// Process the question
-	ctx := context.Background()
-	threadID := "cli-test"
-
-	response, err := loop.Process(ctx, threadID, question)
+	response, err := loop.Process(ctx, "cli-test", question)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("ask: %w", err)
 	}
 
-	fmt.Println(response)
+	fmt.Fprintln(stdout, response)
+	return nil
 }
 
-func runIngest(logger *slog.Logger, configPath string, filePath string) {
+// runIngest handles the "thane ingest <file.md>" subcommand. It parses
+// a markdown document into discrete facts and stores them in the fact
+// database, optionally generating embeddings for semantic search.
+func runIngest(ctx context.Context, stdout io.Writer, stderr io.Writer, configPath string, filePath string) error {
+	logger := newLogger(stdout, slog.LevelInfo, "text")
 	logger.Info("ingesting markdown document", "file", filePath)
 
-	// Load config
-	var cfg *config.Config
-	var err error
-	if configPath != "" {
-		cfg, err = config.Load(configPath)
-		if err != nil {
-			logger.Error("failed to load config", "path", configPath, "error", err)
-			os.Exit(1)
-		}
-	} else {
-		cfg = config.Default()
-	}
-
-	// Data directory
-	dataDir := cfg.DataDir
-	if dataDir == "" {
-		dataDir = "./data"
-	}
-	if err := os.MkdirAll(dataDir, 0755); err != nil {
-		logger.Error("failed to create data directory", "error", err)
-		os.Exit(1)
-	}
-
-	// Open fact store
-	factStore, err := facts.NewStore(dataDir + "/facts.db")
+	cfg, _, err := loadConfig(configPath)
 	if err != nil {
-		logger.Error("failed to open fact store", "error", err)
-		os.Exit(1)
+		return err
+	}
+
+	if err := os.MkdirAll(cfg.DataDir, 0755); err != nil {
+		return fmt.Errorf("create data directory: %w", err)
+	}
+
+	factStore, err := facts.NewStore(cfg.DataDir + "/facts.db")
+	if err != nil {
+		return fmt.Errorf("open fact store: %w", err)
 	}
 	defer factStore.Close()
 
-	// Set up embedding client if configured
+	// Embeddings are optional. When enabled, each ingested fact gets a
+	// vector embedding for later semantic search.
 	var embClient facts.EmbeddingClient
 	if cfg.Embeddings.Enabled {
-		embURL := cfg.Embeddings.BaseURL
-		if embURL == "" {
-			embURL = cfg.Models.OllamaURL
-			if embURL == "" {
-				embURL = "http://localhost:11434"
-			}
-		}
-		embModel := cfg.Embeddings.Model
-		if embModel == "" {
-			embModel = "nomic-embed-text"
-		}
 		embClient = embeddings.New(embeddings.Config{
-			BaseURL: embURL,
-			Model:   embModel,
+			BaseURL: cfg.Embeddings.BaseURL,
+			Model:   cfg.Embeddings.Model,
 		})
-		logger.Info("embeddings enabled", "model", embModel)
+		logger.Info("embeddings enabled", "model", cfg.Embeddings.Model)
 	}
 
-	// Create ingester (defaults to architecture category for docs)
 	source := "file:" + filePath
 	ingester := ingest.NewMarkdownIngester(factStore, embClient, source, facts.CategoryArchitecture)
 
-	// Run ingestion
-	ctx := context.Background()
 	count, err := ingester.IngestFile(ctx, filePath)
 	if err != nil {
-		logger.Error("ingestion failed", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("ingestion failed: %w", err)
 	}
 
 	logger.Info("ingestion complete", "facts_created", count, "source", source)
-	fmt.Printf("Successfully ingested %d facts from %s\n", count, filePath)
+	fmt.Fprintf(stdout, "Successfully ingested %d facts from %s\n", count, filePath)
+	return nil
 }
 
-func runServe(logger *slog.Logger, configPath string, portOverride int) {
+// runServe handles the "thane serve" subcommand. It is the primary
+// operating mode: loads config, opens databases, connects to Home
+// Assistant, initializes the agent loop with all tools and providers,
+// starts the API server(s), and blocks until a shutdown signal arrives.
+//
+// The shutdown sequence is:
+//  1. SIGINT or SIGTERM cancels the context
+//  2. A shutdown checkpoint is persisted (conversations, facts, tasks)
+//  3. HTTP servers drain in-flight requests
+//  4. Database connections and the scheduler are closed via defers
+func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPath string) error {
+	logger := newLogger(stdout, slog.LevelInfo, "text")
 	logger.Info("starting Thane", "version", buildinfo.Version, "commit", buildinfo.GitCommit, "branch", buildinfo.GitBranch, "built", buildinfo.BuildTime)
 
-	// Load config
-	var cfg *config.Config
-	var err error
-	if configPath != "" {
-		cfg, err = config.Load(configPath)
-		if err != nil {
-			logger.Error("failed to load config", "path", configPath, "error", err)
-			os.Exit(1)
-		}
-	} else {
-		cfg = config.Default()
+	cfg, cfgPath, err := loadConfig(configPath)
+	if err != nil {
+		return err
 	}
 
-	// Apply overrides
-	if portOverride > 0 {
-		cfg.Listen.Port = portOverride
+	// Reconfigure logger now that we know the desired level and format.
+	// The initial Info-level text logger is used only for the startup
+	// banner and config load message; everything after this point uses
+	// the configured level and format.
+	{
+		level := slog.LevelInfo
+		if cfg.LogLevel != "" {
+			// ParseLogLevel is already validated by config.Validate(), so
+			// this error path should be unreachable in practice.
+			level, _ = config.ParseLogLevel(cfg.LogLevel)
+		}
+		logger = newLogger(stdout, level, cfg.LogFormat)
 	}
 
 	logger.Info("config loaded",
+		"path", cfgPath,
 		"port", cfg.Listen.Port,
 		"model", cfg.Models.Default,
 		"ollama_url", cfg.Models.OllamaURL,
 	)
 
-	// Create memory store (SQLite)
-	dataDir := cfg.DataDir
-	if dataDir == "" {
-		dataDir = "./data"
+	// --- Data directory ---
+	// All persistent state (SQLite databases for memory, facts, scheduler,
+	// checkpoints, and anticipations) lives under this directory.
+	if err := os.MkdirAll(cfg.DataDir, 0755); err != nil {
+		return fmt.Errorf("create data directory %s: %w", cfg.DataDir, err)
 	}
 
-	// Ensure data directory exists
-	if err := os.MkdirAll(dataDir, 0755); err != nil {
-		logger.Error("failed to create data directory", "path", dataDir, "error", err)
-		os.Exit(1)
-	}
-
-	dbPath := dataDir + "/thane.db"
+	// --- Memory store ---
+	// SQLite-backed conversation memory. Persists across restarts so the
+	// agent can resume in-progress conversations.
+	dbPath := cfg.DataDir + "/thane.db"
 	mem, err := memory.NewSQLiteStore(dbPath, 100)
 	if err != nil {
-		logger.Error("failed to open memory database", "path", dbPath, "error", err)
-		os.Exit(1)
+		return fmt.Errorf("open memory database %s: %w", dbPath, err)
 	}
 	defer mem.Close()
 	logger.Info("memory database opened", "path", dbPath)
 
-	// Home Assistant client
+	// --- Home Assistant client ---
+	// Optional but central. Without it, HA-related tools are unavailable
+	// and Thane operates as a general-purpose agent.
 	var ha *homeassistant.Client
-	if cfg.HomeAssistant.URL != "" && cfg.HomeAssistant.Token != "" {
+	if cfg.HomeAssistant.Configured() {
 		ha = homeassistant.NewClient(cfg.HomeAssistant.URL, cfg.HomeAssistant.Token)
 		logger.Info("Home Assistant configured", "url", cfg.HomeAssistant.URL)
-		if err := ha.Ping(context.Background()); err != nil {
+		if err := ha.Ping(ctx); err != nil {
 			logger.Error("Home Assistant ping failed", "error", err)
 		} else {
 			logger.Info("Home Assistant ping succeeded")
@@ -273,24 +344,22 @@ func runServe(logger *slog.Logger, configPath string, portOverride int) {
 		logger.Warn("Home Assistant not configured - tools will be limited")
 	}
 
-	// Ollama URL from config or environment
-	ollamaURL := cfg.Models.OllamaURL
-	if ollamaURL == "" {
-		ollamaURL = "http://localhost:11434"
-	}
-
-	// Create LLM client based on provider
+	// --- LLM client ---
+	// Multi-provider client that routes each model name to its configured
+	// provider (Ollama, Anthropic, etc.). Unknown models fall back to Ollama.
 	llmClient := createLLMClient(cfg, logger)
 
-	// Create compactor with LLM summarizer
+	// --- Conversation compactor ---
+	// When a conversation grows too long, the compactor summarizes older
+	// messages to stay within the model's context window. Uses the default
+	// LLM model to generate summaries.
 	compactionConfig := memory.CompactionConfig{
-		MaxTokens:            8000, // Adjust based on model
-		TriggerRatio:         0.7,  // Compact at 70% full
-		KeepRecent:           10,   // Keep last 10 messages
-		MinMessagesToCompact: 15,   // Need enough to be worth summarizing
+		MaxTokens:            8000,
+		TriggerRatio:         0.7, // Compact at 70% of MaxTokens
+		KeepRecent:           10,  // Preserve the last 10 messages verbatim
+		MinMessagesToCompact: 15,  // Don't bother compacting tiny conversations
 	}
 
-	// LLM summarization function
 	summarizeFunc := func(ctx context.Context, prompt string) (string, error) {
 		msgs := []llm.Message{{Role: "user", Content: prompt}}
 		resp, err := llmClient.Chat(ctx, cfg.Models.Default, msgs, nil)
@@ -303,42 +372,41 @@ func runServe(logger *slog.Logger, configPath string, portOverride int) {
 	summarizer := memory.NewLLMSummarizer(summarizeFunc)
 	compactor := memory.NewCompactor(mem, compactionConfig, summarizer)
 
-	// Load talents
-	talentsDir := cfg.TalentsDir
-	if talentsDir == "" {
-		talentsDir = "./talents"
-	}
-	talentLoader := talents.NewLoader(talentsDir)
+	// --- Talents ---
+	// Talents are markdown files that extend the system prompt with
+	// domain-specific knowledge and instructions.
+	talentLoader := talents.NewLoader(cfg.TalentsDir)
 	talentContent, err := talentLoader.Load()
 	if err != nil {
-		logger.Error("failed to load talents", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("load talents: %w", err)
 	}
 	if talentContent != "" {
 		talentList, _ := talentLoader.List()
 		logger.Info("talents loaded", "count", len(talentList), "talents", talentList)
 	}
 
-	// Load persona file (replaces default system prompt if set)
+	// --- Persona ---
+	// An optional markdown file that replaces the default system prompt,
+	// giving the agent a custom identity and behavioral guidelines.
 	var personaContent string
 	if cfg.PersonaFile != "" {
 		data, err := os.ReadFile(cfg.PersonaFile)
 		if err != nil {
-			logger.Error("failed to load persona file", "path", cfg.PersonaFile, "error", err)
-			os.Exit(1)
+			return fmt.Errorf("load persona %s: %w", cfg.PersonaFile, err)
 		}
 		personaContent = string(data)
 		logger.Info("persona loaded", "path", cfg.PersonaFile, "size", len(personaContent))
 	}
 
-	// Create model router
+	// --- Model router ---
+	// Selects the best model for each request based on complexity, cost,
+	// and capability requirements. Falls back to the default model.
 	routerCfg := router.Config{
 		DefaultModel: cfg.Models.Default,
 		LocalFirst:   cfg.Models.LocalFirst,
 		MaxAuditLog:  1000,
 	}
 
-	// Convert config models to router models
 	for _, m := range cfg.Models.Available {
 		minComp := router.ComplexitySimple
 		switch m.MinComplexity {
@@ -367,18 +435,16 @@ func runServe(logger *slog.Logger, configPath string, portOverride int) {
 		"local_first", routerCfg.LocalFirst,
 	)
 
-	// Create scheduler
-	schedStore, err := scheduler.NewStore(dataDir + "/scheduler.db")
+	// --- Scheduler ---
+	// Persistent task scheduler for deferred and recurring work (e.g.,
+	// wake events, periodic checks). Tasks survive restarts.
+	schedStore, err := scheduler.NewStore(cfg.DataDir + "/scheduler.db")
 	if err != nil {
-		logger.Error("failed to open scheduler database", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("open scheduler database: %w", err)
 	}
 	defer schedStore.Close()
 
-	// Scheduler execution callback - will be wired to agent loop
 	executeTask := func(ctx context.Context, task *scheduler.Task, exec *scheduler.Execution) error {
-		// For wake payloads, we'd inject a message into the agent
-		// For now, just log it
 		logger.Info("task executed",
 			"task_id", task.ID,
 			"task_name", task.Name,
@@ -388,54 +454,53 @@ func runServe(logger *slog.Logger, configPath string, portOverride int) {
 	}
 
 	sched := scheduler.New(logger, schedStore, executeTask)
-	if err := sched.Start(context.Background()); err != nil {
-		logger.Error("failed to start scheduler", "error", err)
-		os.Exit(1)
+	if err := sched.Start(ctx); err != nil {
+		return fmt.Errorf("start scheduler: %w", err)
 	}
 	defer sched.Stop()
 
-	// Find context window for default model
-	defaultContextWindow := 200000 // sensible default
-	for _, m := range cfg.Models.Available {
-		if m.Name == cfg.Models.Default {
-			defaultContextWindow = m.ContextWindow
-			break
-		}
-	}
+	// --- Agent loop ---
+	// The core conversation engine. Receives messages, manages context,
+	// invokes tools, and streams responses. All other components plug
+	// into it.
+	defaultContextWindow := cfg.ContextWindowForModel(cfg.Models.Default, 200000)
 
 	loop := agent.NewLoop(logger, mem, compactor, rtr, ha, sched, llmClient, cfg.Models.Default, talentContent, personaContent, defaultContextWindow)
 
-	// Create fact store for long-term memory
-	factStore, err := facts.NewStore(dataDir + "/facts.db")
+	// --- Fact store ---
+	// Long-term memory backed by SQLite. Facts are discrete pieces of
+	// knowledge that persist across conversations and restarts.
+	factStore, err := facts.NewStore(cfg.DataDir + "/facts.db")
 	if err != nil {
-		logger.Error("failed to open fact store", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("open fact store: %w", err)
 	}
 	defer factStore.Close()
 
 	factTools := facts.NewTools(factStore)
 	loop.Tools().SetFactTools(factTools)
-	logger.Info("fact store initialized", "path", dataDir+"/facts.db")
+	logger.Info("fact store initialized", "path", cfg.DataDir+"/facts.db")
 
-	// Create anticipation store for bridging intent to wake
-	anticipationDB, err := sql.Open("sqlite3", dataDir+"/anticipations.db")
+	// --- Anticipation store ---
+	// Bridges intent to action. The agent can set anticipations ("I expect
+	// X to happen") that trigger context injection when they're fulfilled.
+	anticipationDB, err := sql.Open("sqlite3", cfg.DataDir+"/anticipations.db")
 	if err != nil {
-		logger.Error("failed to open anticipation db", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("open anticipation db: %w", err)
 	}
 	defer anticipationDB.Close()
 
 	anticipationStore, err := anticipation.NewStore(anticipationDB)
 	if err != nil {
-		logger.Error("failed to create anticipation store", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("create anticipation store: %w", err)
 	}
 
 	anticipationTools := anticipation.NewTools(anticipationStore)
 	loop.Tools().SetAnticipationTools(anticipationTools)
-	logger.Info("anticipation store initialized", "path", dataDir+"/anticipations.db")
+	logger.Info("anticipation store initialized", "path", cfg.DataDir+"/anticipations.db")
 
-	// Set up file tools for workspace access
+	// --- File tools ---
+	// When a workspace path is configured, the agent can read and write
+	// files within that directory. All paths are sandboxed.
 	if cfg.Workspace.Path != "" {
 		fileTools := tools.NewFileTools(cfg.Workspace.Path, cfg.Workspace.ReadOnlyDirs)
 		loop.Tools().SetFileTools(fileTools)
@@ -444,20 +509,17 @@ func runServe(logger *slog.Logger, configPath string, portOverride int) {
 		logger.Info("file tools disabled (no workspace path configured)")
 	}
 
-	// Set up shell exec tools
+	// --- Shell exec ---
+	// Optional and disabled by default. When enabled, the agent can
+	// execute shell commands on the host, subject to allow/deny lists.
 	if cfg.ShellExec.Enabled {
-		timeout := cfg.ShellExec.DefaultTimeoutSec
-		if timeout == 0 {
-			timeout = 30
-		}
 		shellCfg := tools.ShellExecConfig{
 			Enabled:        true,
 			WorkingDir:     cfg.ShellExec.WorkingDir,
 			AllowedCmds:    cfg.ShellExec.AllowedPrefixes,
 			DeniedCmds:     cfg.ShellExec.DeniedPatterns,
-			DefaultTimeout: time.Duration(timeout) * time.Second,
+			DefaultTimeout: time.Duration(cfg.ShellExec.DefaultTimeoutSec) * time.Second,
 		}
-		// Add default denied patterns if none configured
 		if len(shellCfg.DeniedCmds) == 0 {
 			shellCfg.DeniedCmds = tools.DefaultShellExecConfig().DeniedCmds
 		}
@@ -468,52 +530,51 @@ func runServe(logger *slog.Logger, configPath string, portOverride int) {
 		logger.Info("shell exec disabled")
 	}
 
-	// Set up embedding client for semantic search
+	// --- Embeddings ---
+	// Optional semantic search over the fact store. When enabled, facts
+	// are indexed with vector embeddings generated by a local model.
 	if cfg.Embeddings.Enabled {
-		embURL := cfg.Embeddings.BaseURL
-		if embURL == "" {
-			embURL = ollamaURL
-		}
-		embModel := cfg.Embeddings.Model
-		if embModel == "" {
-			embModel = "nomic-embed-text"
-		}
 		embClient := embeddings.New(embeddings.Config{
-			BaseURL: embURL,
-			Model:   embModel,
+			BaseURL: cfg.Embeddings.BaseURL,
+			Model:   cfg.Embeddings.Model,
 		})
 		factTools.SetEmbeddingClient(embClient)
-		logger.Info("embeddings enabled", "model", embModel, "url", embURL)
+		logger.Info("embeddings enabled", "model", cfg.Embeddings.Model, "url", cfg.Embeddings.BaseURL)
 	}
 
-	// Set up context providers for dynamic system prompt injection
+	// --- Context providers ---
+	// Dynamic system prompt injection. Providers add context based on
+	// current state (e.g., pending anticipations) before each LLM call.
 	anticipationProvider := anticipation.NewProvider(anticipationStore)
 	contextProvider := agent.NewCompositeContextProvider(anticipationProvider)
-	// TODO: Add facts.ContextProvider when semantic search is ready
 	loop.SetContextProvider(contextProvider)
 	logger.Info("context providers initialized")
 
+	// --- API server ---
+	// The primary HTTP server exposing the OpenAI-compatible chat API,
+	// health endpoint, router introspection, and the web UI.
 	server := api.NewServer(cfg.Listen.Address, cfg.Listen.Port, loop, rtr, logger)
 	server.SetMemoryStore(mem)
 
-	// Create checkpointer
-	checkpointDB, err := sql.Open("sqlite3", dataDir+"/checkpoints.db")
+	// --- Checkpointer ---
+	// Periodically snapshots application state (conversations, facts,
+	// scheduled tasks) to enable crash recovery. Also creates a snapshot
+	// on clean shutdown and before model failover.
+	checkpointDB, err := sql.Open("sqlite3", cfg.DataDir+"/checkpoints.db")
 	if err != nil {
-		logger.Error("failed to open checkpoint database", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("open checkpoint database: %w", err)
 	}
 	defer checkpointDB.Close()
 
 	checkpointCfg := checkpoint.Config{
-		PeriodicMessages: 50, // Checkpoint every 50 messages
+		PeriodicMessages: 50, // Snapshot every 50 messages
 	}
 	checkpointer, err := checkpoint.NewCheckpointer(checkpointDB, checkpointCfg, logger)
 	if err != nil {
-		logger.Error("failed to create checkpointer", "error", err)
-		os.Exit(1)
+		return fmt.Errorf("create checkpointer: %w", err)
 	}
 
-	// Wire up providers for checkpointing
+	// Wire up the data providers that the checkpointer snapshots.
 	convProvider := checkpoint.ConversationProviderFunc(func() ([]checkpoint.Conversation, error) {
 		convs := mem.GetAllConversations()
 		result := make([]checkpoint.Conversation, len(convs))
@@ -541,7 +602,7 @@ func runServe(logger *slog.Logger, configPath string, portOverride int) {
 			result[i] = checkpoint.Task{
 				ID:          checkpoint.ParseUUID(t.ID),
 				Name:        t.Name,
-				Description: "", // Not in scheduler type yet
+				Description: "",
 				Schedule:    t.Schedule.Cron,
 				Action:      string(t.Payload.Kind),
 				Enabled:     t.Enabled,
@@ -551,7 +612,6 @@ func runServe(logger *slog.Logger, configPath string, portOverride int) {
 		return result, nil
 	})
 
-	// Fact provider for checkpointing
 	factProvider := checkpoint.FactProviderFunc(func() ([]checkpoint.Fact, error) {
 		allFacts, err := factStore.GetAll()
 		if err != nil {
@@ -575,93 +635,117 @@ func runServe(logger *slog.Logger, configPath string, portOverride int) {
 
 	checkpointer.SetProviders(convProvider, factProvider, taskProvider)
 	server.SetCheckpointer(checkpointer)
-	loop.SetFailoverHandler(checkpointer) // Checkpoint before model failover
+	loop.SetFailoverHandler(checkpointer)
 	logger.Info("checkpointing enabled", "periodic_messages", checkpointCfg.PeriodicMessages)
 
-	// Log what state we're resuming with
 	checkpointer.LogStartupStatus()
 
-	// Start Ollama-compatible API server if configured
+	// --- Ollama-compatible API server ---
+	// Optional second HTTP server that speaks the Ollama wire protocol.
+	// Home Assistant's Ollama integration connects here, allowing Thane
+	// to serve as a drop-in replacement for a standalone Ollama instance.
 	var ollamaServer *api.OllamaServer
 	if cfg.OllamaAPI.Enabled {
-		port := cfg.OllamaAPI.Port
-		if port == 0 {
-			port = 11434 // Default Ollama port
-		}
-		ollamaServer = api.NewOllamaServer(cfg.OllamaAPI.Address, port, loop, logger)
+		ollamaServer = api.NewOllamaServer(cfg.OllamaAPI.Address, cfg.OllamaAPI.Port, loop, logger)
 		go func() {
-			if err := ollamaServer.Start(context.Background()); err != nil {
+			if err := ollamaServer.Start(ctx); err != nil {
 				logger.Error("ollama API server failed", "error", err)
 			}
 		}()
 	}
 
-	// Setup graceful shutdown
-	ctx, cancel := context.WithCancel(context.Background())
+	// --- Signal handling and graceful shutdown ---
+	// NotifyContext wraps the parent context so that SIGINT/SIGTERM
+	// cancellation flows through the same ctx used by all components.
+	ctx, cancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-
 	go func() {
-		<-sigCh
+		<-ctx.Done()
 		logger.Info("shutdown signal received")
 
-		// Create shutdown checkpoint
 		if _, err := checkpointer.CreateShutdown(); err != nil {
 			logger.Error("failed to create shutdown checkpoint", "error", err)
 		}
 
-		cancel()
-		_ = server.Shutdown(context.Background())
+		shutdownCtx := context.Background()
+		_ = server.Shutdown(shutdownCtx)
 		if ollamaServer != nil {
-			_ = ollamaServer.Shutdown(context.Background())
+			_ = ollamaServer.Shutdown(shutdownCtx)
 		}
 	}()
 
-	// Start server
+	// Start the primary API server. This blocks until the server is shut
+	// down (via context cancellation or fatal error).
 	if err := server.Start(ctx); err != nil {
 		if ctx.Err() == nil {
-			logger.Error("server failed", "error", err)
-			os.Exit(1)
+			return fmt.Errorf("server failed: %w", err)
 		}
 	}
 
 	logger.Info("Thane stopped")
+	return nil
 }
 
-// createLLMClient creates a multi-provider LLM client based on config.
-// Routes each model to its configured provider. Falls back to Ollama for unknown models.
-func createLLMClient(cfg *config.Config, logger *slog.Logger) llm.Client {
-	ollamaURL := cfg.Models.OllamaURL
-	if ollamaURL == "" {
-		ollamaURL = "http://localhost:11434"
+// newLogger creates a structured logger that writes to w at the given level
+// and format. Format must be "text" or "json"; any other value defaults to
+// text. All log output in Thane goes through slog; this helper standardizes
+// the handler configuration across subcommands.
+func newLogger(w io.Writer, level slog.Level, format string) *slog.Logger {
+	opts := &slog.HandlerOptions{
+		Level:       level,
+		ReplaceAttr: config.ReplaceLogLevelNames,
+	}
+	var handler slog.Handler
+	if format == "json" {
+		handler = slog.NewJSONHandler(w, opts)
+	} else {
+		handler = slog.NewTextHandler(w, opts)
+	}
+	return slog.New(handler)
+}
+
+// loadConfig locates and parses the YAML configuration file. If explicit
+// is non-empty, that exact path is used (and must exist). Otherwise,
+// [config.FindConfig] searches the default locations. Returns the parsed
+// config, the path that was loaded, and any error.
+func loadConfig(explicit string) (*config.Config, string, error) {
+	cfgPath, err := config.FindConfig(explicit)
+	if err != nil {
+		return nil, "", err
 	}
 
-	ollamaClient := llm.NewOllamaClient(ollamaURL)
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		return nil, cfgPath, fmt.Errorf("load config %s: %w", cfgPath, err)
+	}
+
+	return cfg, cfgPath, nil
+}
+
+// createLLMClient builds a multi-provider LLM client from the configuration.
+// Each model listed in config is mapped to its provider (ollama, anthropic,
+// etc.). Models not explicitly mapped fall through to the Ollama provider,
+// which acts as the default backend.
+func createLLMClient(cfg *config.Config, logger *slog.Logger) llm.Client {
+	ollamaClient := llm.NewOllamaClient(cfg.Models.OllamaURL, logger)
 	multi := llm.NewMultiClient(ollamaClient)
 	multi.AddProvider("ollama", ollamaClient)
 
-	// Register Anthropic provider if configured
-	if cfg.Anthropic.APIKey != "" {
-		anthropicClient := llm.NewAnthropicClient(cfg.Anthropic.APIKey)
+	if cfg.Anthropic.Configured() {
+		anthropicClient := llm.NewAnthropicClient(cfg.Anthropic.APIKey, logger)
 		multi.AddProvider("anthropic", anthropicClient)
 		logger.Info("Anthropic provider configured")
 	}
 
-	// Map each model to its provider
+	// Model providers are already defaulted to "ollama" by applyDefaults.
 	for _, m := range cfg.Models.Available {
-		provider := m.Provider
-		if provider == "" {
-			provider = "ollama"
-		}
-		multi.AddModel(m.Name, provider)
+		multi.AddModel(m.Name, m.Provider)
 	}
 
-	// Log default model's provider
 	defaultProvider := "ollama"
 	for _, m := range cfg.Models.Available {
-		if m.Name == cfg.Models.Default && m.Provider != "" {
+		if m.Name == cfg.Models.Default {
 			defaultProvider = m.Provider
 		}
 	}

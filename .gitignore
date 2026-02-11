@@ -1,4 +1,5 @@
-# Binaries (built output in root)
+# Build output
+/dist/
 /thane
 *.exe
 *.dll
@@ -32,16 +33,21 @@ thane.local.yaml
 *.local.yaml
 config.yaml
 
+# Development working directory (site-specific, mirrors ~/Thane/ in production)
+/Thane/*
+!/Thane/README.md
+
 # Memory database
 *.db
 *.sqlite
 /data/
+/db/
 
 # Logs
 *.log
 logs/
 
-# Build artifacts
+# Legacy build artifacts
 thane-darwin-arm64
 thane-linux-*
 .env

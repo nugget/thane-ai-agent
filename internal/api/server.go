@@ -226,7 +226,7 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	writeJSON(w, buildinfo.Info(), s.logger)
+	writeJSON(w, buildinfo.RuntimeInfo(), s.logger)
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
@@ -366,7 +366,7 @@ func (s *Server) handleSimpleChat(w http.ResponseWriter, r *http.Request) {
 
 	convID := req.ConversationID
 	if convID == "" {
-		convID = "default"
+		convID = uuid.New().String()
 	}
 
 	agentReq := &agent.Request{
@@ -449,21 +449,38 @@ func (s *Server) handleStreamingCompletion(w http.ResponseWriter, r *http.Reques
 	// Track if any tokens were streamed (greeting fast-path skips streaming)
 	streamed := false
 
-	// Stream callback sends each token
-	streamCallback := func(token string) {
-		streamed = true
-		chunk := StreamChunk{
-			ID:      completionID,
-			Object:  "chat.completion.chunk",
-			Created: created,
-			Model:   modelName,
-			Choices: []StreamChoice{{
-				Index: 0,
-				Delta: StreamDelta{Content: token},
-			}},
+	// Get response controller for deadline management (Go 1.20+)
+	rc := http.NewResponseController(w)
+
+	// Stream callback sends tokens and keepalives during tool execution
+	streamCallback := func(event agent.StreamEvent) {
+		switch event.Kind {
+		case agent.KindToken:
+			streamed = true
+			chunk := StreamChunk{
+				ID:      completionID,
+				Object:  "chat.completion.chunk",
+				Created: created,
+				Model:   modelName,
+				Choices: []StreamChoice{{
+					Index: 0,
+					Delta: StreamDelta{Content: event.Token},
+				}},
+			}
+			s.writeSSE(w, chunk)
+			flusher.Flush()
+
+		case agent.KindToolCallStart, agent.KindToolCallDone:
+			// Send SSE comment as keepalive to prevent write timeout
+			fmt.Fprintf(w, ": keepalive\n\n")
+			flusher.Flush()
 		}
-		s.writeSSE(w, chunk)
-		flusher.Flush()
+
+		// Reset write deadline after every event to prevent timeout
+		// during multi-iteration tool loops
+		if err := rc.SetWriteDeadline(time.Now().Add(120 * time.Second)); err != nil {
+			s.logger.Debug("failed to reset write deadline", "error", err)
+		}
 	}
 
 	// Run agent with streaming
@@ -476,7 +493,7 @@ func (s *Server) handleStreamingCompletion(w http.ResponseWriter, r *http.Reques
 
 	// If content was not streamed (e.g. greeting fast-path), emit it now
 	if !streamed && resp.Content != "" {
-		streamCallback(resp.Content)
+		streamCallback(agent.StreamEvent{Kind: agent.KindToken, Token: resp.Content})
 	}
 
 	// Record usage stats
@@ -832,7 +849,7 @@ func (s *Server) handleSessionStats(w http.ResponseWriter, r *http.Request) {
 	// Estimate context tokens from the "default" conversation
 	snap.ContextTokens = s.loop.GetTokenCount("default")
 	snap.ContextWindow = s.loop.GetContextWindow()
-	snap.Build = buildinfo.Info()
+	snap.Build = buildinfo.RuntimeInfo()
 
 	w.Header().Set("Content-Type", "application/json")
 	writeJSON(w, snap, s.logger)

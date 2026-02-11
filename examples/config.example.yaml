@@ -1,5 +1,11 @@
-# Thane Configuration Example
-# Copy to config.yaml and customize for your deployment
+# Thane Configuration
+#
+# Search order: ./config.yaml, ~/Thane/config.yaml, ~/.config/thane/config.yaml,
+#               /config/config.yaml, /usr/local/etc/thane/config.yaml, /etc/thane/config.yaml
+# Override with: thane -config /path/to/config.yaml serve
+#
+# Environment variables are expanded (e.g., ${HOME}), but secrets can go
+# directly in this file. Protect it: chmod 600 config.yaml
 
 # Native Thane API server
 listen:
@@ -14,7 +20,7 @@ ollama_api:
 # Home Assistant connection
 homeassistant:
   url: https://your-homeassistant.local:8123
-  token: ${HOMEASSISTANT_TOKEN}  # Or paste token directly
+  token: your-long-lived-access-token  # Generate in HA → Profile → Long-Lived Access Tokens
 
 # Model routing
 models:
@@ -50,10 +56,10 @@ models:
 
 # Anthropic API (optional — for Claude models)
 # anthropic:
-#   api_key: ${ANTHROPIC_API_KEY}
+#   api_key: sk-ant-...
 
 # Storage paths
-data_dir: ./data
+data_dir: ./db
 talents_dir: ./talents
 
 # Persona file — replaces the default system prompt with custom identity.
@@ -89,3 +95,10 @@ embeddings:
   enabled: false
   model: nomic-embed-text
   # baseurl: http://localhost:11434  # Defaults to models.ollama_url
+
+# Logging level: trace, debug, info (default), warn, error
+# - info: normal operation (loop start/end, failover, compaction)
+# - debug: per-request detail (LLM calls, tool execution, token counts)
+# - trace: wire-level payloads (full JSON requests/responses — VERY verbose)
+# log_level: info
+# log_format: text    # text (human-readable) or json (structured, for log aggregation)

@@ -636,7 +636,7 @@ func (r *Registry) registerBuiltins() {
 			"properties": map[string]any{},
 		},
 		Handler: func(ctx context.Context, args map[string]any) (string, error) {
-			info := buildinfo.Info()
+			info := buildinfo.RuntimeInfo()
 			out, _ := json.MarshalIndent(info, "", "  ")
 			return string(out), nil
 		},

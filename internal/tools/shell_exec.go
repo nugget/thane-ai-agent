@@ -68,7 +68,7 @@ func NewShellExec(cfg ShellExecConfig) *ShellExec {
 	}
 }
 
-// Enabled returns whether shell exec is available.
+// Enabled reports whether shell execution is available.
 func (s *ShellExec) Enabled() bool {
 	return s.enabled
 }

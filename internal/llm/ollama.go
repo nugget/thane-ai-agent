@@ -7,32 +7,30 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
 )
 
-// Message represents a chat message for the LLM.
-type Message struct {
-	Role       string     `json:"role"`
-	Content    string     `json:"content"`
-	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string     `json:"tool_call_id,omitempty"` // For tool responses
-}
-
 // OllamaClient is a client for the Ollama API.
 type OllamaClient struct {
 	baseURL    string
 	httpClient *http.Client
+	logger     *slog.Logger
 }
 
 // NewOllamaClient creates a new Ollama client.
-func NewOllamaClient(baseURL string) *OllamaClient {
+func NewOllamaClient(baseURL string, logger *slog.Logger) *OllamaClient {
 	if baseURL == "" {
 		baseURL = "http://localhost:11434"
 	}
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &OllamaClient{
 		baseURL: baseURL,
+		logger:  logger.With("provider", "ollama"),
 		httpClient: &http.Client{
 			Timeout: 5 * time.Minute, // Large models with tools need time
 		},
@@ -54,29 +52,35 @@ type Options struct {
 	NumPredict  int     `json:"num_predict,omitempty"`
 }
 
-// ToolCall represents a tool call from the model.
-type ToolCall struct {
-	ID       string `json:"id,omitempty"` // Provider-assigned ID (required by Anthropic for tool_result correlation)
-	Function struct {
-		Name      string         `json:"name"`
-		Arguments map[string]any `json:"arguments"` // Ollama returns object, not string
-	} `json:"function"`
+// ollamaWireResponse is the raw JSON response from Ollama's /api/chat endpoint.
+// This is a deserialization target only — convert to ChatResponse for internal use.
+type ollamaWireResponse struct {
+	Model              string  `json:"model"`
+	CreatedAt          string  `json:"created_at"`
+	Message            Message `json:"message"`
+	Done               bool    `json:"done"`
+	TotalDuration      int64   `json:"total_duration,omitempty"`
+	LoadDuration       int64   `json:"load_duration,omitempty"`
+	PromptEvalCount    int     `json:"prompt_eval_count,omitempty"`
+	PromptEvalDuration int64   `json:"prompt_eval_duration,omitempty"`
+	EvalCount          int     `json:"eval_count,omitempty"`
+	EvalDuration       int64   `json:"eval_duration,omitempty"`
 }
 
-// ChatResponse is the response from Ollama chat API.
-type ChatResponse struct {
-	Model     string  `json:"model"`
-	CreatedAt string  `json:"created_at"`
-	Message   Message `json:"message"`
-	Done      bool    `json:"done"`
-
-	// Usage stats (when done=true)
-	TotalDuration      int64 `json:"total_duration,omitempty"`
-	LoadDuration       int64 `json:"load_duration,omitempty"`
-	PromptEvalCount    int   `json:"prompt_eval_count,omitempty"`
-	PromptEvalDuration int64 `json:"prompt_eval_duration,omitempty"`
-	EvalCount          int   `json:"eval_count,omitempty"`
-	EvalDuration       int64 `json:"eval_duration,omitempty"`
+// toChatResponse converts an Ollama wire response to the internal ChatResponse type.
+func (w *ollamaWireResponse) toChatResponse() *ChatResponse {
+	createdAt, _ := time.Parse(time.RFC3339Nano, w.CreatedAt)
+	return &ChatResponse{
+		Model:         w.Model,
+		CreatedAt:     createdAt,
+		Message:       w.Message,
+		Done:          w.Done,
+		InputTokens:   w.PromptEvalCount,
+		OutputTokens:  w.EvalCount,
+		TotalDuration: time.Duration(w.TotalDuration),
+		LoadDuration:  time.Duration(w.LoadDuration),
+		EvalDuration:  time.Duration(w.EvalDuration),
+	}
 }
 
 // Chat sends a chat completion request to Ollama.
@@ -84,13 +88,17 @@ func (c *OllamaClient) Chat(ctx context.Context, model string, messages []Messag
 	return c.ChatStream(ctx, model, messages, tools, nil)
 }
 
-// StreamCallback is called for each streamed token.
-type StreamCallback func(token string)
-
 // ChatStream sends a streaming chat request to Ollama.
 // If callback is non-nil, tokens are streamed to it.
 func (c *OllamaClient) ChatStream(ctx context.Context, model string, messages []Message, tools []map[string]any, callback StreamCallback) (*ChatResponse, error) {
 	stream := callback != nil
+
+	c.logger.Debug("preparing request",
+		"model", model,
+		"messages", len(messages),
+		"tools", len(tools),
+		"stream", stream,
+	)
 
 	req := ChatRequest{
 		Model:    model,
@@ -103,6 +111,8 @@ func (c *OllamaClient) ChatStream(ctx context.Context, model string, messages []
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
+
+	c.logger.Log(ctx, LevelTrace, "request payload", "json", string(jsonData))
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/api/chat", bytes.NewReader(jsonData))
 	if err != nil {
@@ -118,6 +128,7 @@ func (c *OllamaClient) ChatStream(ctx context.Context, model string, messages []
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
+		c.logger.Error("API error", "status", resp.StatusCode, "body", string(body))
 		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, string(body))
 	}
 
@@ -126,28 +137,41 @@ func (c *OllamaClient) ChatStream(ctx context.Context, model string, messages []
 
 	if !stream {
 		// Non-streaming: single JSON response
-		var chatResp ChatResponse
-		if err := json.NewDecoder(resp.Body).Decode(&chatResp); err != nil {
+		var wire ollamaWireResponse
+		if err := json.NewDecoder(resp.Body).Decode(&wire); err != nil {
 			return nil, fmt.Errorf("decode response: %w", err)
 		}
+		chatResp := wire.toChatResponse()
+
+		c.logger.Debug("response received",
+			"model", chatResp.Model,
+			"input_tokens", chatResp.InputTokens,
+			"output_tokens", chatResp.OutputTokens,
+			"total_duration", chatResp.TotalDuration,
+			"tool_calls", len(chatResp.Message.ToolCalls),
+		)
+		c.logger.Log(ctx, LevelTrace, "response content", "content", chatResp.Message.Content)
+
 		// Try to parse text-based tool calls if no native tool_calls
 		if len(chatResp.Message.ToolCalls) == 0 && chatResp.Message.Content != "" {
 			if parsed := parseTextToolCalls(chatResp.Message.Content, validToolNames); len(parsed) > 0 {
+				c.logger.Debug("parsed text-based tool calls", "count", len(parsed))
 				chatResp.Message.ToolCalls = parsed
 				chatResp.Message.Content = "" // Clear content since it was a tool call
 			}
 		}
-		return &chatResp, nil
+		return chatResp, nil
 	}
 
 	// Streaming: read newline-delimited JSON
-	var finalResp ChatResponse
+	var finalResp *ChatResponse
+	var toolCalls []ToolCall
 	var contentBuilder strings.Builder
 	decoder := json.NewDecoder(resp.Body)
 
 	for {
-		var chunk ChatResponse
-		if err := decoder.Decode(&chunk); err != nil {
+		var wire ollamaWireResponse
+		if err := decoder.Decode(&wire); err != nil {
 			if err == io.EOF {
 				break
 			}
@@ -155,35 +179,54 @@ func (c *OllamaClient) ChatStream(ctx context.Context, model string, messages []
 		}
 
 		// Accumulate content
-		if chunk.Message.Content != "" {
-			contentBuilder.WriteString(chunk.Message.Content)
+		if wire.Message.Content != "" {
+			contentBuilder.WriteString(wire.Message.Content)
 			if callback != nil {
-				callback(chunk.Message.Content)
+				callback(StreamEvent{Kind: KindToken, Token: wire.Message.Content})
 			}
 		}
 
 		// Tool calls come in the final message
-		if len(chunk.Message.ToolCalls) > 0 {
-			finalResp.Message.ToolCalls = chunk.Message.ToolCalls
+		if len(wire.Message.ToolCalls) > 0 {
+			toolCalls = wire.Message.ToolCalls
 		}
 
 		// Capture final metadata
-		if chunk.Done {
-			finalResp = chunk
+		if wire.Done {
+			finalResp = wire.toChatResponse()
 			finalResp.Message.Content = contentBuilder.String()
+			finalResp.Message.ToolCalls = toolCalls
 			break
 		}
 	}
 
+	if finalResp == nil {
+		c.logger.Debug("stream ended without done marker, synthesizing response")
+		finalResp = &ChatResponse{Model: model, Done: true}
+		finalResp.Message.Content = contentBuilder.String()
+		finalResp.Message.ToolCalls = toolCalls
+	}
+
+	c.logger.Debug("stream complete",
+		"model", finalResp.Model,
+		"input_tokens", finalResp.InputTokens,
+		"output_tokens", finalResp.OutputTokens,
+		"total_duration", finalResp.TotalDuration,
+		"content_len", len(finalResp.Message.Content),
+		"tool_calls", len(finalResp.Message.ToolCalls),
+	)
+	c.logger.Log(ctx, LevelTrace, "stream final content", "content", finalResp.Message.Content)
+
 	// Try to parse text-based tool calls if no native tool_calls
 	if len(finalResp.Message.ToolCalls) == 0 && finalResp.Message.Content != "" {
 		if parsed := parseTextToolCalls(finalResp.Message.Content, validToolNames); len(parsed) > 0 {
+			c.logger.Debug("parsed text-based tool calls from stream", "count", len(parsed))
 			finalResp.Message.ToolCalls = parsed
 			finalResp.Message.Content = "" // Clear content since it was a tool call
 		}
 	}
 
-	return &finalResp, nil
+	return finalResp, nil
 }
 
 // extractToolNames extracts tool names from the tools definition.

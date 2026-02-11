@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 )
@@ -20,12 +21,17 @@ const (
 type AnthropicClient struct {
 	apiKey     string
 	httpClient *http.Client
+	logger     *slog.Logger
 }
 
 // NewAnthropicClient creates a new Anthropic client.
-func NewAnthropicClient(apiKey string) *AnthropicClient {
+func NewAnthropicClient(apiKey string, logger *slog.Logger) *AnthropicClient {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &AnthropicClient{
 		apiKey: apiKey,
+		logger: logger.With("provider", "anthropic"),
 		httpClient: &http.Client{
 			// No global timeout — streaming responses can be long-lived.
 			// Rely on ctx deadlines/cancellation for timeout control.
@@ -113,6 +119,14 @@ func (c *AnthropicClient) ChatStream(ctx context.Context, model string, messages
 	anthropicMsgs, systemPrompt := convertToAnthropic(messages)
 	anthropicTools := convertToolsToAnthropic(tools)
 
+	c.logger.Debug("preparing request",
+		"model", model,
+		"messages", len(anthropicMsgs),
+		"tools", len(anthropicTools),
+		"stream", stream,
+		"system_len", len(systemPrompt),
+	)
+
 	req := anthropicRequest{
 		Model:     model,
 		Messages:  anthropicMsgs,
@@ -126,6 +140,8 @@ func (c *AnthropicClient) ChatStream(ctx context.Context, model string, messages
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
+
+	c.logger.Log(ctx, LevelTrace, "request payload", "json", string(jsonData))
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", anthropicAPIURL, bytes.NewReader(jsonData))
 	if err != nil {
@@ -143,13 +159,14 @@ func (c *AnthropicClient) ChatStream(ctx context.Context, model string, messages
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
+		c.logger.Error("API error", "status", resp.StatusCode, "body", string(body))
 		return nil, fmt.Errorf("Anthropic API error %d: %s", resp.StatusCode, string(body))
 	}
 
 	if !stream {
-		return c.handleNonStreaming(resp.Body)
+		return c.handleNonStreaming(ctx, resp.Body)
 	}
-	return c.handleStreaming(resp.Body, callback)
+	return c.handleStreaming(ctx, resp.Body, callback)
 }
 
 // Ping checks if the Anthropic API is reachable.
@@ -190,15 +207,25 @@ func (c *AnthropicClient) Ping(ctx context.Context) error {
 	return nil
 }
 
-func (c *AnthropicClient) handleNonStreaming(body io.Reader) (*ChatResponse, error) {
+func (c *AnthropicClient) handleNonStreaming(ctx context.Context, body io.Reader) (*ChatResponse, error) {
 	var resp anthropicResponse
 	if err := json.NewDecoder(body).Decode(&resp); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
-	return convertFromAnthropic(&resp), nil
+	result := convertFromAnthropic(&resp)
+
+	c.logger.Debug("response received",
+		"model", result.Model,
+		"input_tokens", result.InputTokens,
+		"output_tokens", result.OutputTokens,
+		"tool_calls", len(result.Message.ToolCalls),
+	)
+	c.logger.Log(ctx, LevelTrace, "response content", "content", result.Message.Content)
+
+	return result, nil
 }
 
-func (c *AnthropicClient) handleStreaming(body io.Reader, callback StreamCallback) (*ChatResponse, error) {
+func (c *AnthropicClient) handleStreaming(ctx context.Context, body io.Reader, callback StreamCallback) (*ChatResponse, error) {
 	scanner := bufio.NewScanner(body)
 	// Increase scanner buffer for large responses
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
@@ -253,7 +280,7 @@ func (c *AnthropicClient) handleStreaming(body io.Reader, callback StreamCallbac
 				case "text_delta":
 					contentBuilder.WriteString(event.Delta.Text)
 					if callback != nil {
-						callback(event.Delta.Text)
+						callback(StreamEvent{Kind: KindToken, Token: event.Delta.Text})
 					}
 				case "input_json_delta":
 					toolJSONBuf.WriteString(event.Delta.PartialJSON)
@@ -303,13 +330,22 @@ func (c *AnthropicClient) handleStreaming(body io.Reader, callback StreamCallbac
 			Content:   contentBuilder.String(),
 			ToolCalls: toolCalls,
 		},
-		Done:            true,
-		PromptEvalCount: usage.InputTokens,
-		EvalCount:       usage.OutputTokens,
+		Done:         true,
+		InputTokens:  usage.InputTokens,
+		OutputTokens: usage.OutputTokens,
 	}
 
 	// stopReason available for future use (end_turn, tool_use, max_tokens, stop_sequence)
 	_ = stopReason
+
+	c.logger.Debug("stream complete",
+		"model", resp.Model,
+		"input_tokens", resp.InputTokens,
+		"output_tokens", resp.OutputTokens,
+		"content_len", len(resp.Message.Content),
+		"tool_calls", len(resp.Message.ToolCalls),
+	)
+	c.logger.Log(ctx, LevelTrace, "stream final content", "content", resp.Message.Content)
 
 	return resp, nil
 }
@@ -449,9 +485,9 @@ func convertFromAnthropic(resp *anthropicResponse) *ChatResponse {
 			Content:   content,
 			ToolCalls: toolCalls,
 		},
-		Done:            true,
-		PromptEvalCount: resp.Usage.InputTokens,
-		EvalCount:       resp.Usage.OutputTokens,
+		Done:         true,
+		InputTokens:  resp.Usage.InputTokens,
+		OutputTokens: resp.Usage.OutputTokens,
 	}
 }
 

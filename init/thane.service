@@ -1,0 +1,72 @@
+[Unit]
+Description=Thane - Autonomous AI Agent for Home Assistant
+Documentation=https://github.com/nugget/thane-ai-agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/thane serve
+Restart=on-failure
+RestartSec=5
+
+# Run as a dedicated unprivileged user
+User=thane
+Group=thane
+
+# Config and state directories
+ConfigurationDirectory=thane
+StateDirectory=thane
+WorkingDirectory=/var/lib/thane
+
+# Environment (for config discovery)
+Environment=HOME=/var/lib/thane
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=thane
+
+# --- Security hardening ---
+# Filesystem
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/thane
+PrivateTmp=yes
+
+# Network (thane needs outbound for APIs and inbound for its own server)
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+# Capabilities
+CapabilityBoundingSet=
+AmbientCapabilities=
+NoNewPrivileges=yes
+
+# Kernel
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+
+# Misc
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+
+# Process
+PrivateDevices=yes
+PrivateUsers=yes
+
+# Resource limits
+LimitNOFILE=65536
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target
