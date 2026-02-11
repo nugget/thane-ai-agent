@@ -243,7 +243,7 @@ type ShellExecConfig struct {
 // Load reads a YAML configuration file, expands environment variables,
 // applies defaults for any unset fields, and validates the result.
 //
-// After Load returns a non-nil Config, every field is usable without
+// After [Load] returns a non-nil [Config], every field is usable without
 // additional nil or empty-string checks. The load pipeline is:
 //
 //  1. Read the file.

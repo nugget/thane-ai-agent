@@ -132,7 +132,7 @@ type EntityRegistryEntry struct {
 	DisabledBy   string `json:"disabled_by"`
 }
 
-// IsDisabled returns true if the entity is disabled.
+// IsDisabled reports whether the entity is disabled in Home Assistant.
 func (e EntityRegistryEntry) IsDisabled() bool {
 	return e.DisabledBy != ""
 }

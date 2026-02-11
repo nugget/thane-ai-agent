@@ -1,12 +1,11 @@
-// Package main provides the thane command, the entry point for the Thane
-// autonomous Home Assistant agent.
+// Thane is an autonomous Home Assistant agent.
 //
-// Thane exposes an OpenAI-compatible API, an optional Ollama-compatible API
+// It exposes an OpenAI-compatible API, an optional Ollama-compatible API
 // (for Home Assistant integration), and a CLI for one-shot queries and
 // document ingestion. Configuration is loaded from a single YAML file
 // discovered automatically (see [config.DefaultSearchPaths]).
 //
-// The command supports four subcommands:
+// Usage:
 //
 //	thane serve              Start the API server
 //	thane ask <question>     Ask a single question (for testing)
