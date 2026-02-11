@@ -386,7 +386,7 @@ func TestIsRetryableError(t *testing.T) {
 		{"EHOSTUNREACH", syscall.EHOSTUNREACH, true},
 		{"ENETUNREACH", syscall.ENETUNREACH, true},
 		{"ECONNREFUSED", syscall.ECONNREFUSED, true},
-		{"ECONNRESET", syscall.ECONNRESET, true},
+		{"ECONNRESET", syscall.ECONNRESET, false},
 		{"wrapped EHOSTUNREACH", fmt.Errorf("connect: %w", syscall.EHOSTUNREACH), true},
 		{"OpError wrapping EHOSTUNREACH", &net.OpError{
 			Op: "dial", Net: "tcp",

@@ -96,8 +96,11 @@ func WithTLSInsecureSkipVerify() ClientOption {
 }
 
 // WithRetry enables automatic retry on transient connection errors
-// (e.g., EHOSTUNREACH, connection refused). Only retries when the
-// request body has not been consumed (safe for all methods).
+// (e.g., EHOSTUNREACH, ENETUNREACH, connection refused). Retries are
+// only attempted when the request body can be rewound, but this does
+// not guarantee that the server has not already received the prior
+// attempt. In practice, the retryable error set (dial/connect failures)
+// occurs before any bytes reach the server.
 // Designed to handle macOS ARP table race conditions (issue #53).
 func WithRetry(count int, delay time.Duration) ClientOption {
 	return func(c *clientConfig) {
@@ -220,8 +223,9 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		return resp, err
 	}
 
-	// If request has a body, we need GetBody to rewind it for retry.
-	if req.Body != nil && req.GetBody == nil {
+	// If request has a non-empty body, we need GetBody to rewind it for retry.
+	// http.NoBody is treated as empty (common for GET/HEAD/DELETE).
+	if req.Body != nil && req.Body != http.NoBody && req.GetBody == nil {
 		return resp, err
 	}
 
@@ -245,16 +249,17 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		case <-timer.C:
 		}
 
-		// Rewind body if present.
+		// Clone the request to avoid mutating the original, per RoundTripper contract.
+		retryReq := req.Clone(req.Context())
 		if req.GetBody != nil {
 			body, bodyErr := req.GetBody()
 			if bodyErr != nil {
 				return nil, fmt.Errorf("retry: rewind body: %w", bodyErr)
 			}
-			req.Body = body
+			retryReq.Body = body
 		}
 
-		resp, err = t.base.RoundTrip(req)
+		resp, err = t.base.RoundTrip(retryReq)
 		if err == nil || !isRetryableError(err) {
 			if err == nil && t.logger != nil {
 				t.logger.Info("retry succeeded",
@@ -277,14 +282,16 @@ func isRetryableError(err error) bool {
 		return false
 	}
 
-	// Check for specific syscall errors that indicate transient network issues.
+	// Check for specific syscall errors that indicate transient dial/connect
+	// failures. These occur before any bytes reach the server, making retry safe.
+	// ECONNRESET is intentionally excluded — it can occur after the server has
+	// received and processed the request, risking duplicate side effects.
 	var errno syscall.Errno
 	if errors.As(err, &errno) {
 		switch errno {
-		case syscall.EHOSTUNREACH, // no route to host
+		case syscall.EHOSTUNREACH, // no route to host (ARP race)
 			syscall.ENETUNREACH,  // network unreachable
-			syscall.ECONNREFUSED, // connection refused (service restarting)
-			syscall.ECONNRESET:   // connection reset
+			syscall.ECONNREFUSED: // connection refused (service restarting)
 			return true
 		}
 	}
@@ -295,7 +302,7 @@ func isRetryableError(err error) bool {
 		if errors.As(opErr.Err, &errno) {
 			switch errno {
 			case syscall.EHOSTUNREACH, syscall.ENETUNREACH,
-				syscall.ECONNREFUSED, syscall.ECONNRESET:
+				syscall.ECONNREFUSED:
 				return true
 			}
 		}
