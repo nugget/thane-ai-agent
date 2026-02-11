@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -16,15 +17,20 @@ import (
 type OllamaClient struct {
 	baseURL    string
 	httpClient *http.Client
+	logger     *slog.Logger
 }
 
 // NewOllamaClient creates a new Ollama client.
-func NewOllamaClient(baseURL string) *OllamaClient {
+func NewOllamaClient(baseURL string, logger *slog.Logger) *OllamaClient {
 	if baseURL == "" {
 		baseURL = "http://localhost:11434"
 	}
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &OllamaClient{
 		baseURL: baseURL,
+		logger:  logger.With("provider", "ollama"),
 		httpClient: &http.Client{
 			Timeout: 5 * time.Minute, // Large models with tools need time
 		},
@@ -87,6 +93,13 @@ func (c *OllamaClient) Chat(ctx context.Context, model string, messages []Messag
 func (c *OllamaClient) ChatStream(ctx context.Context, model string, messages []Message, tools []map[string]any, callback StreamCallback) (*ChatResponse, error) {
 	stream := callback != nil
 
+	c.logger.Debug("preparing request",
+		"model", model,
+		"messages", len(messages),
+		"tools", len(tools),
+		"stream", stream,
+	)
+
 	req := ChatRequest{
 		Model:    model,
 		Messages: messages,
@@ -98,6 +111,8 @@ func (c *OllamaClient) ChatStream(ctx context.Context, model string, messages []
 	if err != nil {
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
+
+	c.logger.Log(ctx, LevelTrace, "request payload", "json", string(jsonData))
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/api/chat", bytes.NewReader(jsonData))
 	if err != nil {
@@ -113,6 +128,7 @@ func (c *OllamaClient) ChatStream(ctx context.Context, model string, messages []
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
+		c.logger.Error("API error", "status", resp.StatusCode, "body", string(body))
 		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, string(body))
 	}
 
@@ -126,9 +142,20 @@ func (c *OllamaClient) ChatStream(ctx context.Context, model string, messages []
 			return nil, fmt.Errorf("decode response: %w", err)
 		}
 		chatResp := wire.toChatResponse()
+
+		c.logger.Debug("response received",
+			"model", chatResp.Model,
+			"input_tokens", chatResp.InputTokens,
+			"output_tokens", chatResp.OutputTokens,
+			"total_duration", chatResp.TotalDuration,
+			"tool_calls", len(chatResp.Message.ToolCalls),
+		)
+		c.logger.Log(ctx, LevelTrace, "response content", "content", chatResp.Message.Content)
+
 		// Try to parse text-based tool calls if no native tool_calls
 		if len(chatResp.Message.ToolCalls) == 0 && chatResp.Message.Content != "" {
 			if parsed := parseTextToolCalls(chatResp.Message.Content, validToolNames); len(parsed) > 0 {
+				c.logger.Debug("parsed text-based tool calls", "count", len(parsed))
 				chatResp.Message.ToolCalls = parsed
 				chatResp.Message.Content = "" // Clear content since it was a tool call
 			}
@@ -174,14 +201,26 @@ func (c *OllamaClient) ChatStream(ctx context.Context, model string, messages []
 	}
 
 	if finalResp == nil {
+		c.logger.Debug("stream ended without done marker, synthesizing response")
 		finalResp = &ChatResponse{Model: model, Done: true}
 		finalResp.Message.Content = contentBuilder.String()
 		finalResp.Message.ToolCalls = toolCalls
 	}
 
+	c.logger.Debug("stream complete",
+		"model", finalResp.Model,
+		"input_tokens", finalResp.InputTokens,
+		"output_tokens", finalResp.OutputTokens,
+		"total_duration", finalResp.TotalDuration,
+		"content_len", len(finalResp.Message.Content),
+		"tool_calls", len(finalResp.Message.ToolCalls),
+	)
+	c.logger.Log(ctx, LevelTrace, "stream final content", "content", finalResp.Message.Content)
+
 	// Try to parse text-based tool calls if no native tool_calls
 	if len(finalResp.Message.ToolCalls) == 0 && finalResp.Message.Content != "" {
 		if parsed := parseTextToolCalls(finalResp.Message.Content, validToolNames); len(parsed) > 0 {
+			c.logger.Debug("parsed text-based tool calls from stream", "count", len(parsed))
 			finalResp.Message.ToolCalls = parsed
 			finalResp.Message.Content = "" // Clear content since it was a tool call
 		}

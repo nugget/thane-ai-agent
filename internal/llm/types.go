@@ -1,7 +1,13 @@
 // Package llm provides LLM client implementations.
 package llm
 
-import "time"
+import (
+	"log/slog"
+	"time"
+)
+
+// LevelTrace is below Debug, used for wire-level payload logging.
+const LevelTrace = slog.Level(-8)
 
 // Message represents a chat message for the LLM.
 type Message struct {

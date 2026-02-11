@@ -277,7 +277,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (*R
 
 	// Fast-path: handle simple greetings without tool calls
 	if isSimpleGreeting(userMessage) {
-		l.logger.Info("simple greeting detected, responding directly")
+		l.logger.Debug("simple greeting detected, responding directly")
 		response := getGreetingResponse()
 		if err := l.memory.AddMessage(convID, "assistant", response); err != nil {
 			l.logger.Warn("failed to store greeting response", "error", err)
@@ -358,7 +358,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (*R
 
 	maxIterations := 5 // Allow enough iterations for context gathering + response
 	for i := 0; i < maxIterations; i++ {
-		l.logger.Info("calling LLM",
+		l.logger.Debug("calling LLM",
 			"model", model,
 			"messages", len(llmMessages),
 			"tools", len(toolDefs),
@@ -402,7 +402,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (*R
 
 		// Check for tool calls
 		if len(llmResp.Message.ToolCalls) > 0 {
-			l.logger.Info("processing tool calls", "count", len(llmResp.Message.ToolCalls))
+			l.logger.Debug("processing tool calls", "count", len(llmResp.Message.ToolCalls))
 
 			// Add assistant message with tool calls
 			llmMessages = append(llmMessages, llmResp.Message)
@@ -427,7 +427,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (*R
 					argsJSON = string(argsBytes)
 				}
 
-				l.logger.Info("executing tool",
+				l.logger.Debug("executing tool",
 					"tool", toolName,
 					"call_id", toolCallIDStr,
 					"args", argsJSON,
@@ -455,7 +455,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (*R
 					result = "Error: " + errMsg
 					l.logger.Error("tool execution failed", "tool", toolName, "error", err)
 				} else {
-					l.logger.Info("tool executed", "tool", toolName, "result_len", len(result))
+					l.logger.Debug("tool executed", "tool", toolName, "result_len", len(result))
 				}
 
 				// Emit tool call done event
@@ -494,7 +494,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (*R
 			if len(preview) > 300 {
 				preview = preview[:300] + "..."
 			}
-			l.logger.Info("model responded with text (no tool call)",
+			l.logger.Debug("model responded with text (no tool call)",
 				"content_preview", preview,
 			)
 		}

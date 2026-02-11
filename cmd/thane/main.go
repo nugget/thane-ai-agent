@@ -232,6 +232,19 @@ func runServe(logger *slog.Logger, configPath string, portOverride int) {
 		cfg.Listen.Port = portOverride
 	}
 
+	// Reconfigure logger with config-driven level
+	if cfg.LogLevel != "" {
+		level, err := config.ParseLogLevel(cfg.LogLevel)
+		if err != nil {
+			logger.Error("invalid log_level in config", "error", err)
+			os.Exit(1)
+		}
+		logger = slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+			Level:       level,
+			ReplaceAttr: config.ReplaceLogLevelNames,
+		}))
+	}
+
 	logger.Info("config loaded",
 		"port", cfg.Listen.Port,
 		"model", cfg.Models.Default,
@@ -638,13 +651,13 @@ func createLLMClient(cfg *config.Config, logger *slog.Logger) llm.Client {
 		ollamaURL = "http://localhost:11434"
 	}
 
-	ollamaClient := llm.NewOllamaClient(ollamaURL)
+	ollamaClient := llm.NewOllamaClient(ollamaURL, logger)
 	multi := llm.NewMultiClient(ollamaClient)
 	multi.AddProvider("ollama", ollamaClient)
 
 	// Register Anthropic provider if configured
 	if cfg.Anthropic.APIKey != "" {
-		anthropicClient := llm.NewAnthropicClient(cfg.Anthropic.APIKey)
+		anthropicClient := llm.NewAnthropicClient(cfg.Anthropic.APIKey, logger)
 		multi.AddProvider("anthropic", anthropicClient)
 		logger.Info("Anthropic provider configured")
 	}
