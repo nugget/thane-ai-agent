@@ -138,30 +138,117 @@ type ModelConfig struct {
 	MinComplexity string `yaml:"min_complexity"` // simple, moderate, complex
 }
 
-// Load reads configuration from a YAML file.
+// Configured reports whether the Home Assistant connection has both a
+// URL and a token. A partial configuration (URL without token or vice
+// versa) is treated as unconfigured.
+func (c HomeAssistantConfig) Configured() bool {
+	return c.URL != "" && c.Token != ""
+}
+
+// Configured reports whether an Anthropic API key is present.
+func (c AnthropicConfig) Configured() bool {
+	return c.APIKey != ""
+}
+
+// Load reads configuration from a YAML file, expands environment
+// variables, applies defaults for any unset fields, and validates
+// the result. After Load returns successfully, all fields are usable
+// without additional nil/empty checks.
 func Load(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
 
-	// Expand environment variables
+	// Expand environment variables (e.g., ${HOME}, ${ANTHROPIC_API_KEY}).
+	// This is a convenience for container deployments; the recommended
+	// approach is to put values directly in the config file.
 	expanded := os.ExpandEnv(string(data))
 
-	cfg := &Config{
-		Listen: ListenConfig{Port: 8080},
-	}
+	cfg := &Config{}
 	if err := yaml.Unmarshal([]byte(expanded), cfg); err != nil {
 		return nil, err
+	}
+
+	cfg.applyDefaults()
+
+	if err := cfg.Validate(); err != nil {
+		return nil, fmt.Errorf("config validation: %w", err)
 	}
 
 	return cfg, nil
 }
 
-// Default returns a default configuration.
+// applyDefaults fills in zero-value fields with sensible defaults.
+// Called automatically by Load. After this, callers can read any field
+// without checking for empty strings or zero values.
+func (c *Config) applyDefaults() {
+	if c.Listen.Port == 0 {
+		c.Listen.Port = 8080
+	}
+	if c.DataDir == "" {
+		c.DataDir = "./data"
+	}
+	if c.TalentsDir == "" {
+		c.TalentsDir = "./talents"
+	}
+	if c.Models.OllamaURL == "" {
+		c.Models.OllamaURL = "http://localhost:11434"
+	}
+	if c.OllamaAPI.Port == 0 {
+		c.OllamaAPI.Port = 11434
+	}
+	if c.Embeddings.Model == "" {
+		c.Embeddings.Model = "nomic-embed-text"
+	}
+	if c.Embeddings.BaseURL == "" {
+		c.Embeddings.BaseURL = c.Models.OllamaURL
+	}
+	if c.ShellExec.DefaultTimeoutSec == 0 {
+		c.ShellExec.DefaultTimeoutSec = 30
+	}
+
+	// Ensure each model has a provider (default: ollama)
+	for i := range c.Models.Available {
+		if c.Models.Available[i].Provider == "" {
+			c.Models.Available[i].Provider = "ollama"
+		}
+	}
+}
+
+// Validate checks that the configuration is internally consistent.
+// It runs after applyDefaults, so it can assume defaults are populated.
+// Returns an error describing the first problem found, or nil.
+func (c *Config) Validate() error {
+	if c.Listen.Port < 1 || c.Listen.Port > 65535 {
+		return fmt.Errorf("listen.port %d out of range (1-65535)", c.Listen.Port)
+	}
+	if c.OllamaAPI.Enabled && (c.OllamaAPI.Port < 1 || c.OllamaAPI.Port > 65535) {
+		return fmt.Errorf("ollama_api.port %d out of range (1-65535)", c.OllamaAPI.Port)
+	}
+	if c.LogLevel != "" {
+		if _, err := ParseLogLevel(c.LogLevel); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ContextWindowForModel returns the context window size for the named
+// model, or defaultSize if the model is not found in the configuration.
+func (c *Config) ContextWindowForModel(name string, defaultSize int) int {
+	for _, m := range c.Models.Available {
+		if m.Name == name {
+			return m.ContextWindow
+		}
+	}
+	return defaultSize
+}
+
+// Default returns a default configuration suitable for local development
+// with Ollama. All defaults are already applied.
 func Default() *Config {
-	return &Config{
-		Listen: ListenConfig{Port: 8080},
+	cfg := &Config{
 		Models: ModelsConfig{
 			Default:    "qwen3:4b",
 			LocalFirst: true,
@@ -189,4 +276,6 @@ func Default() *Config {
 			},
 		},
 	}
+	cfg.applyDefaults()
+	return cfg
 }

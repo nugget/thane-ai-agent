@@ -165,17 +165,13 @@ func runAsk(ctx context.Context, stdout io.Writer, stderr io.Writer, configPath 
 
 	// Home Assistant client (optional — ask works without it)
 	var ha *homeassistant.Client
-	if cfg.HomeAssistant.URL != "" && cfg.HomeAssistant.Token != "" {
+	if cfg.HomeAssistant.Configured() {
 		ha = homeassistant.NewClient(cfg.HomeAssistant.URL, cfg.HomeAssistant.Token)
 	}
 
 	llmClient := createLLMClient(cfg, logger)
 
-	talentsDir := cfg.TalentsDir
-	if talentsDir == "" {
-		talentsDir = "./talents"
-	}
-	talentLoader := talents.NewLoader(talentsDir)
+	talentLoader := talents.NewLoader(cfg.TalentsDir)
 	talentContent, _ := talentLoader.Load()
 
 	// In-memory store is fine for a single question — nothing to persist.
@@ -206,15 +202,11 @@ func runIngest(ctx context.Context, stdout io.Writer, stderr io.Writer, configPa
 		return err
 	}
 
-	dataDir := cfg.DataDir
-	if dataDir == "" {
-		dataDir = "./data"
-	}
-	if err := os.MkdirAll(dataDir, 0755); err != nil {
+	if err := os.MkdirAll(cfg.DataDir, 0755); err != nil {
 		return fmt.Errorf("create data directory: %w", err)
 	}
 
-	factStore, err := facts.NewStore(dataDir + "/facts.db")
+	factStore, err := facts.NewStore(cfg.DataDir + "/facts.db")
 	if err != nil {
 		return fmt.Errorf("open fact store: %w", err)
 	}
@@ -224,22 +216,11 @@ func runIngest(ctx context.Context, stdout io.Writer, stderr io.Writer, configPa
 	// vector embedding for later semantic search.
 	var embClient facts.EmbeddingClient
 	if cfg.Embeddings.Enabled {
-		embURL := cfg.Embeddings.BaseURL
-		if embURL == "" {
-			embURL = cfg.Models.OllamaURL
-			if embURL == "" {
-				embURL = "http://localhost:11434"
-			}
-		}
-		embModel := cfg.Embeddings.Model
-		if embModel == "" {
-			embModel = "nomic-embed-text"
-		}
 		embClient = embeddings.New(embeddings.Config{
-			BaseURL: embURL,
-			Model:   embModel,
+			BaseURL: cfg.Embeddings.BaseURL,
+			Model:   cfg.Embeddings.Model,
 		})
-		logger.Info("embeddings enabled", "model", embModel)
+		logger.Info("embeddings enabled", "model", cfg.Embeddings.Model)
 	}
 
 	source := "file:" + filePath
@@ -278,10 +259,9 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// Info-level logger is used only for the startup banner and config
 	// load message; everything after this point uses the configured level.
 	if cfg.LogLevel != "" {
-		level, err := config.ParseLogLevel(cfg.LogLevel)
-		if err != nil {
-			return fmt.Errorf("invalid log_level in config: %w", err)
-		}
+		// ParseLogLevel is already validated by config.Validate(), so
+		// this error path should be unreachable in practice.
+		level, _ := config.ParseLogLevel(cfg.LogLevel)
 		logger = slog.New(slog.NewTextHandler(stdout, &slog.HandlerOptions{
 			Level:       level,
 			ReplaceAttr: config.ReplaceLogLevelNames,
@@ -298,18 +278,14 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// --- Data directory ---
 	// All persistent state (SQLite databases for memory, facts, scheduler,
 	// checkpoints, and anticipations) lives under this directory.
-	dataDir := cfg.DataDir
-	if dataDir == "" {
-		dataDir = "./data"
-	}
-	if err := os.MkdirAll(dataDir, 0755); err != nil {
-		return fmt.Errorf("create data directory %s: %w", dataDir, err)
+	if err := os.MkdirAll(cfg.DataDir, 0755); err != nil {
+		return fmt.Errorf("create data directory %s: %w", cfg.DataDir, err)
 	}
 
 	// --- Memory store ---
 	// SQLite-backed conversation memory. Persists across restarts so the
 	// agent can resume in-progress conversations.
-	dbPath := dataDir + "/thane.db"
+	dbPath := cfg.DataDir + "/thane.db"
 	mem, err := memory.NewSQLiteStore(dbPath, 100)
 	if err != nil {
 		return fmt.Errorf("open memory database %s: %w", dbPath, err)
@@ -321,7 +297,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// Optional but central. Without it, HA-related tools are unavailable
 	// and Thane operates as a general-purpose agent.
 	var ha *homeassistant.Client
-	if cfg.HomeAssistant.URL != "" && cfg.HomeAssistant.Token != "" {
+	if cfg.HomeAssistant.Configured() {
 		ha = homeassistant.NewClient(cfg.HomeAssistant.URL, cfg.HomeAssistant.Token)
 		logger.Info("Home Assistant configured", "url", cfg.HomeAssistant.URL)
 		if err := ha.Ping(ctx); err != nil {
@@ -336,10 +312,6 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// --- LLM client ---
 	// Multi-provider client that routes each model name to its configured
 	// provider (Ollama, Anthropic, etc.). Unknown models fall back to Ollama.
-	ollamaURL := cfg.Models.OllamaURL
-	if ollamaURL == "" {
-		ollamaURL = "http://localhost:11434"
-	}
 	llmClient := createLLMClient(cfg, logger)
 
 	// --- Conversation compactor ---
@@ -368,11 +340,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// --- Talents ---
 	// Talents are markdown files that extend the system prompt with
 	// domain-specific knowledge and instructions.
-	talentsDir := cfg.TalentsDir
-	if talentsDir == "" {
-		talentsDir = "./talents"
-	}
-	talentLoader := talents.NewLoader(talentsDir)
+	talentLoader := talents.NewLoader(cfg.TalentsDir)
 	talentContent, err := talentLoader.Load()
 	if err != nil {
 		return fmt.Errorf("load talents: %w", err)
@@ -435,7 +403,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// --- Scheduler ---
 	// Persistent task scheduler for deferred and recurring work (e.g.,
 	// wake events, periodic checks). Tasks survive restarts.
-	schedStore, err := scheduler.NewStore(dataDir + "/scheduler.db")
+	schedStore, err := scheduler.NewStore(cfg.DataDir + "/scheduler.db")
 	if err != nil {
 		return fmt.Errorf("open scheduler database: %w", err)
 	}
@@ -460,20 +428,14 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// The core conversation engine. Receives messages, manages context,
 	// invokes tools, and streams responses. All other components plug
 	// into it.
-	defaultContextWindow := 200000 // sensible default if not specified
-	for _, m := range cfg.Models.Available {
-		if m.Name == cfg.Models.Default {
-			defaultContextWindow = m.ContextWindow
-			break
-		}
-	}
+	defaultContextWindow := cfg.ContextWindowForModel(cfg.Models.Default, 200000)
 
 	loop := agent.NewLoop(logger, mem, compactor, rtr, ha, sched, llmClient, cfg.Models.Default, talentContent, personaContent, defaultContextWindow)
 
 	// --- Fact store ---
 	// Long-term memory backed by SQLite. Facts are discrete pieces of
 	// knowledge that persist across conversations and restarts.
-	factStore, err := facts.NewStore(dataDir + "/facts.db")
+	factStore, err := facts.NewStore(cfg.DataDir + "/facts.db")
 	if err != nil {
 		return fmt.Errorf("open fact store: %w", err)
 	}
@@ -481,12 +443,12 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 
 	factTools := facts.NewTools(factStore)
 	loop.Tools().SetFactTools(factTools)
-	logger.Info("fact store initialized", "path", dataDir+"/facts.db")
+	logger.Info("fact store initialized", "path", cfg.DataDir+"/facts.db")
 
 	// --- Anticipation store ---
 	// Bridges intent to action. The agent can set anticipations ("I expect
 	// X to happen") that trigger context injection when they're fulfilled.
-	anticipationDB, err := sql.Open("sqlite3", dataDir+"/anticipations.db")
+	anticipationDB, err := sql.Open("sqlite3", cfg.DataDir+"/anticipations.db")
 	if err != nil {
 		return fmt.Errorf("open anticipation db: %w", err)
 	}
@@ -499,7 +461,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 
 	anticipationTools := anticipation.NewTools(anticipationStore)
 	loop.Tools().SetAnticipationTools(anticipationTools)
-	logger.Info("anticipation store initialized", "path", dataDir+"/anticipations.db")
+	logger.Info("anticipation store initialized", "path", cfg.DataDir+"/anticipations.db")
 
 	// --- File tools ---
 	// When a workspace path is configured, the agent can read and write
@@ -516,16 +478,12 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// Optional and disabled by default. When enabled, the agent can
 	// execute shell commands on the host, subject to allow/deny lists.
 	if cfg.ShellExec.Enabled {
-		timeout := cfg.ShellExec.DefaultTimeoutSec
-		if timeout == 0 {
-			timeout = 30
-		}
 		shellCfg := tools.ShellExecConfig{
 			Enabled:        true,
 			WorkingDir:     cfg.ShellExec.WorkingDir,
 			AllowedCmds:    cfg.ShellExec.AllowedPrefixes,
 			DeniedCmds:     cfg.ShellExec.DeniedPatterns,
-			DefaultTimeout: time.Duration(timeout) * time.Second,
+			DefaultTimeout: time.Duration(cfg.ShellExec.DefaultTimeoutSec) * time.Second,
 		}
 		if len(shellCfg.DeniedCmds) == 0 {
 			shellCfg.DeniedCmds = tools.DefaultShellExecConfig().DeniedCmds
@@ -541,20 +499,12 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// Optional semantic search over the fact store. When enabled, facts
 	// are indexed with vector embeddings generated by a local model.
 	if cfg.Embeddings.Enabled {
-		embURL := cfg.Embeddings.BaseURL
-		if embURL == "" {
-			embURL = ollamaURL
-		}
-		embModel := cfg.Embeddings.Model
-		if embModel == "" {
-			embModel = "nomic-embed-text"
-		}
 		embClient := embeddings.New(embeddings.Config{
-			BaseURL: embURL,
-			Model:   embModel,
+			BaseURL: cfg.Embeddings.BaseURL,
+			Model:   cfg.Embeddings.Model,
 		})
 		factTools.SetEmbeddingClient(embClient)
-		logger.Info("embeddings enabled", "model", embModel, "url", embURL)
+		logger.Info("embeddings enabled", "model", cfg.Embeddings.Model, "url", cfg.Embeddings.BaseURL)
 	}
 
 	// --- Context providers ---
@@ -575,7 +525,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// Periodically snapshots application state (conversations, facts,
 	// scheduled tasks) to enable crash recovery. Also creates a snapshot
 	// on clean shutdown and before model failover.
-	checkpointDB, err := sql.Open("sqlite3", dataDir+"/checkpoints.db")
+	checkpointDB, err := sql.Open("sqlite3", cfg.DataDir+"/checkpoints.db")
 	if err != nil {
 		return fmt.Errorf("open checkpoint database: %w", err)
 	}
@@ -661,11 +611,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// to serve as a drop-in replacement for a standalone Ollama instance.
 	var ollamaServer *api.OllamaServer
 	if cfg.OllamaAPI.Enabled {
-		port := cfg.OllamaAPI.Port
-		if port == 0 {
-			port = 11434
-		}
-		ollamaServer = api.NewOllamaServer(cfg.OllamaAPI.Address, port, loop, logger)
+		ollamaServer = api.NewOllamaServer(cfg.OllamaAPI.Address, cfg.OllamaAPI.Port, loop, logger)
 		go func() {
 			if err := ollamaServer.Start(ctx); err != nil {
 				logger.Error("ollama API server failed", "error", err)
@@ -738,32 +684,24 @@ func loadConfig(explicit string) (*config.Config, string, error) {
 // etc.). Models not explicitly mapped fall through to the Ollama provider,
 // which acts as the default backend.
 func createLLMClient(cfg *config.Config, logger *slog.Logger) llm.Client {
-	ollamaURL := cfg.Models.OllamaURL
-	if ollamaURL == "" {
-		ollamaURL = "http://localhost:11434"
-	}
-
-	ollamaClient := llm.NewOllamaClient(ollamaURL, logger)
+	ollamaClient := llm.NewOllamaClient(cfg.Models.OllamaURL, logger)
 	multi := llm.NewMultiClient(ollamaClient)
 	multi.AddProvider("ollama", ollamaClient)
 
-	if cfg.Anthropic.APIKey != "" {
+	if cfg.Anthropic.Configured() {
 		anthropicClient := llm.NewAnthropicClient(cfg.Anthropic.APIKey, logger)
 		multi.AddProvider("anthropic", anthropicClient)
 		logger.Info("Anthropic provider configured")
 	}
 
+	// Model providers are already defaulted to "ollama" by applyDefaults.
 	for _, m := range cfg.Models.Available {
-		provider := m.Provider
-		if provider == "" {
-			provider = "ollama"
-		}
-		multi.AddModel(m.Name, provider)
+		multi.AddModel(m.Name, m.Provider)
 	}
 
 	defaultProvider := "ollama"
 	for _, m := range cfg.Models.Available {
-		if m.Name == cfg.Models.Default && m.Provider != "" {
+		if m.Name == cfg.Models.Default {
 			defaultProvider = m.Provider
 		}
 	}
