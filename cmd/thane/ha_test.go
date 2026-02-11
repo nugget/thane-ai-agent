@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"log/slog"
 	"os"
 	"testing"
 
@@ -18,7 +19,7 @@ func TestHAClient(t *testing.T) {
 		t.Skip("HA_URL and HA_TOKEN not set")
 	}
 
-	client := homeassistant.NewClient(url, token)
+	client := homeassistant.NewClient(url, token, slog.Default())
 	ctx := context.Background()
 
 	// Test ping
