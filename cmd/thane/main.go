@@ -116,7 +116,7 @@ func run(ctx context.Context, stdout io.Writer, stderr io.Writer, args []string)
 		return runIngest(ctx, stdout, stderr, configPath, cmdArgs[0])
 	case "version":
 		fmt.Fprintln(stdout, buildinfo.String())
-		for k, v := range buildinfo.Info() {
+		for k, v := range buildinfo.BuildInfo() {
 			fmt.Fprintf(stdout, "  %-12s %s\n", k+":", v)
 		}
 		return nil

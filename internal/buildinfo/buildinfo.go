@@ -18,8 +18,9 @@ var (
 // startTime records when the process started.
 var startTime = time.Now()
 
-// Info returns all build and runtime info as a map.
-func Info() map[string]string {
+// BuildInfo returns compile-time and platform metadata. This is the
+// static information appropriate for "thane version" output.
+func BuildInfo() map[string]string {
 	return map[string]string{
 		"version":    Version,
 		"git_commit": GitCommit,
@@ -28,8 +29,15 @@ func Info() map[string]string {
 		"go_version": runtime.Version(),
 		"os":         runtime.GOOS,
 		"arch":       runtime.GOARCH,
-		"uptime":     Uptime().String(),
 	}
+}
+
+// RuntimeInfo returns build metadata plus runtime state (uptime, etc.).
+// Use this for health endpoints and status pages.
+func RuntimeInfo() map[string]string {
+	info := BuildInfo()
+	info["uptime"] = Uptime().String()
+	return info
 }
 
 // Uptime returns the duration since process start.
