@@ -303,9 +303,9 @@ func (c *AnthropicClient) handleStreaming(body io.Reader, callback StreamCallbac
 			Content:   contentBuilder.String(),
 			ToolCalls: toolCalls,
 		},
-		Done:            true,
-		PromptEvalCount: usage.InputTokens,
-		EvalCount:       usage.OutputTokens,
+		Done:         true,
+		InputTokens:  usage.InputTokens,
+		OutputTokens: usage.OutputTokens,
 	}
 
 	// stopReason available for future use (end_turn, tool_use, max_tokens, stop_sequence)
@@ -449,9 +449,9 @@ func convertFromAnthropic(resp *anthropicResponse) *ChatResponse {
 			Content:   content,
 			ToolCalls: toolCalls,
 		},
-		Done:            true,
-		PromptEvalCount: resp.Usage.InputTokens,
-		EvalCount:       resp.Usage.OutputTokens,
+		Done:         true,
+		InputTokens:  resp.Usage.InputTokens,
+		OutputTokens: resp.Usage.OutputTokens,
 	}
 }
 

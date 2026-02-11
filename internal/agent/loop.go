@@ -385,8 +385,8 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (*R
 		}
 
 		// Accumulate token usage
-		totalInputTokens += llmResp.PromptEvalCount
-		totalOutputTokens += llmResp.EvalCount
+		totalInputTokens += llmResp.InputTokens
+		totalOutputTokens += llmResp.OutputTokens
 
 		// Check for tool calls
 		if len(llmResp.Message.ToolCalls) > 0 {
