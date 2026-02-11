@@ -10,6 +10,10 @@ host_os := if os() == "macos" { "darwin" } else { os() }
 host_arch := if arch() == "aarch64" { "arm64" } else if arch() == "x86_64" { "amd64" } else { arch() }
 install-prefix := env("INSTALL_PREFIX", "/usr/local")
 
+# List available recipes
+default:
+    @just --list
+
 # Build a binary into dist/ (defaults to current platform, or specify OS/ARCH)
 build target_os=host_os target_arch=host_arch:
     @mkdir -p dist
