@@ -6,10 +6,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
-	"os/exec"
 	"time"
+
+	"github.com/nugget/thane-ai-agent/internal/httpkit"
 )
 
 // Client is a Home Assistant REST API client.
@@ -20,13 +20,18 @@ type Client struct {
 }
 
 // NewClient creates a new Home Assistant client.
+//
+// Issue #53: Previous versions used curl as a workaround for Go net.Dial
+// failures on macOS. This version uses native Go HTTP with explicit dial
+// timeouts and connection management via httpkit.NewClient. If the issue
+// recurs, the fix belongs in httpkit's transport configuration, not here.
 func NewClient(baseURL, token string) *Client {
 	return &Client{
 		baseURL: baseURL,
 		token:   token,
-		httpClient: &http.Client{
-			Timeout: 30 * time.Second,
-		},
+		httpClient: httpkit.NewClient(
+			httpkit.WithTimeout(30 * time.Second),
+		),
 	}
 }
 
@@ -199,18 +204,28 @@ func splitEntityID(entityID string) []string {
 	return nil
 }
 
-// get performs a GET request to the HA API using curl.
-// We use curl as a workaround for an intermittent Go net.Dial issue on macOS
-// where TCP connections to LAN hosts fail with "no route to host" despite
-// the network being reachable. curl from the same process works fine.
-func (c *Client) get(_ context.Context, path string, result any) error {
-	body, err := c.curl("GET", c.baseURL+path, nil)
+// get performs a GET request to the HA API.
+func (c *Client) get(ctx context.Context, path string, result any) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
 	if err != nil {
-		return err
+		return fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("request %s: %w", path, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body := httpkit.ReadErrorBody(resp.Body, 512)
+		return fmt.Errorf("API error %d: %s", resp.StatusCode, body)
 	}
 
 	if result != nil {
-		if err := json.Unmarshal(body, result); err != nil {
+		if err := json.NewDecoder(resp.Body).Decode(result); err != nil {
 			return fmt.Errorf("decode response: %w", err)
 		}
 	}
@@ -218,8 +233,8 @@ func (c *Client) get(_ context.Context, path string, result any) error {
 	return nil
 }
 
-// post performs a POST request to the HA API using curl.
-func (c *Client) post(_ context.Context, path string, data any, result any) error {
+// post performs a POST request to the HA API.
+func (c *Client) post(ctx context.Context, path string, data any, result any) error {
 	var reqBody []byte
 	if data != nil {
 		var err error
@@ -229,59 +244,29 @@ func (c *Client) post(_ context.Context, path string, data any, result any) erro
 		}
 	}
 
-	body, err := c.curl("POST", c.baseURL+path, reqBody)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+path, bytes.NewReader(reqBody))
 	if err != nil {
-		return err
+		return fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("request %s: %w", path, err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body := httpkit.ReadErrorBody(resp.Body, 512)
+		return fmt.Errorf("API error %d: %s", resp.StatusCode, body)
 	}
 
 	if result != nil {
-		if err := json.Unmarshal(body, result); err != nil {
+		if err := json.NewDecoder(resp.Body).Decode(result); err != nil {
 			return fmt.Errorf("decode response: %w", err)
 		}
 	}
 
 	return nil
 }
-
-// curl executes an HTTP request via the curl command.
-func (c *Client) curl(method, url string, body []byte) ([]byte, error) {
-	args := []string{
-		"-s", "--max-time", "30",
-		"-w", "\n%{http_code}",
-		"-X", method,
-		"-H", "Authorization: Bearer " + c.token,
-		"-H", "Content-Type: application/json",
-	}
-	if body != nil {
-		args = append(args, "-d", string(body))
-	}
-	args = append(args, url)
-
-	cmd := exec.Command("curl", args...)
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("curl %s %s failed: %w (stderr: %s)", method, url, err, stderr.String())
-	}
-
-	// Parse status code from the last line (added via -w)
-	out := stdout.Bytes()
-	lastNewline := bytes.LastIndex(out, []byte("\n"))
-	if lastNewline < 0 {
-		return nil, fmt.Errorf("unexpected curl output format")
-	}
-	statusCode := string(bytes.TrimSpace(out[lastNewline:]))
-	respBody := out[:lastNewline]
-
-	if statusCode != "200" {
-		return nil, fmt.Errorf("API error %s: %s", statusCode, string(respBody))
-	}
-
-	return respBody, nil
-}
-
-// Unused but kept for potential future use with native Go HTTP.
-var _ = (*http.Client)(nil)
-var _ = io.Discard

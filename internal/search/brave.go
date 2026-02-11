@@ -4,13 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strconv"
 	"time"
 
-	"github.com/nugget/thane-ai-agent/internal/buildinfo"
+	"github.com/nugget/thane-ai-agent/internal/httpkit"
 )
 
 // Brave implements the Provider interface for the Brave Search API.
@@ -23,9 +22,9 @@ type Brave struct {
 func NewBrave(apiKey string) *Brave {
 	return &Brave{
 		apiKey: apiKey,
-		httpClient: &http.Client{
-			Timeout: 15 * time.Second,
-		},
+		httpClient: httpkit.NewClient(
+			httpkit.WithTimeout(15 * time.Second),
+		),
 	}
 }
 
@@ -66,7 +65,6 @@ func (b *Brave) Search(ctx context.Context, query string, opts Options) ([]Resul
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Accept-Encoding", "gzip")
-	req.Header.Set("User-Agent", buildinfo.UserAgent())
 	req.Header.Set("X-Subscription-Token", b.apiKey)
 
 	resp, err := b.httpClient.Do(req)
@@ -76,8 +74,8 @@ func (b *Brave) Search(ctx context.Context, query string, opts Options) ([]Resul
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return nil, fmt.Errorf("brave: HTTP %d: %s", resp.StatusCode, string(body))
+		body := httpkit.ReadErrorBody(resp.Body, 512)
+		return nil, fmt.Errorf("brave: HTTP %d: %s", resp.StatusCode, body)
 	}
 
 	var br braveResponse

@@ -10,6 +10,8 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+
+	"github.com/nugget/thane-ai-agent/internal/httpkit"
 )
 
 const (
@@ -32,11 +34,12 @@ func NewAnthropicClient(apiKey string, logger *slog.Logger) *AnthropicClient {
 	return &AnthropicClient{
 		apiKey: apiKey,
 		logger: logger.With("provider", "anthropic"),
-		httpClient: &http.Client{
+		httpClient: httpkit.NewClient(
 			// No global timeout — streaming responses can be long-lived.
 			// Rely on ctx deadlines/cancellation for timeout control.
-			Timeout: 0,
-		},
+			// Transport-level timeouts (dial, TLS, response header) still apply.
+			httpkit.WithTimeout(0),
+		),
 	}
 }
 
@@ -158,9 +161,9 @@ func (c *AnthropicClient) ChatStream(ctx context.Context, model string, messages
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		c.logger.Error("API error", "status", resp.StatusCode, "body", string(body))
-		return nil, fmt.Errorf("anthropic API error %d: %s", resp.StatusCode, string(body))
+		errBody := httpkit.ReadErrorBody(resp.Body, 4096)
+		c.logger.Error("API error", "status", resp.StatusCode, "body", errBody)
+		return nil, fmt.Errorf("anthropic API error %d: %s", resp.StatusCode, errBody)
 	}
 
 	if !stream {

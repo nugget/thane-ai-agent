@@ -9,6 +9,8 @@ import (
 	"math"
 	"net/http"
 	"time"
+
+	"github.com/nugget/thane-ai-agent/internal/httpkit"
 )
 
 // Client generates embeddings using Ollama's embedding API.
@@ -32,9 +34,9 @@ func New(cfg Config) *Client {
 	return &Client{
 		baseURL: cfg.BaseURL,
 		model:   cfg.Model,
-		client: &http.Client{
-			Timeout: 30 * time.Second,
-		},
+		client: httpkit.NewClient(
+			httpkit.WithTimeout(30 * time.Second),
+		),
 	}
 }
 
@@ -74,7 +76,8 @@ func (c *Client) Generate(ctx context.Context, text string) ([]float32, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("ollama returned status %d", resp.StatusCode)
+		errBody := httpkit.ReadErrorBody(resp.Body, 512)
+		return nil, fmt.Errorf("ollama returned status %d: %s", resp.StatusCode, errBody)
 	}
 
 	var embedResp embedResponse
