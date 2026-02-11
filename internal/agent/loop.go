@@ -543,7 +543,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (*R
 	// make one final LLM call with tools disabled to generate a response.
 	if len(llmMessages) > 0 && llmMessages[len(llmMessages)-1].Role == "tool" {
 		l.logger.Warn("max iterations reached with pending tool results, making final LLM call",
-			"iterations", maxIterations,
+			"maxIterations", maxIterations,
 		)
 
 		llmResp, err := l.llm.ChatStream(ctx, model, llmMessages, nil, stream) // nil tools = no more tool calls
@@ -582,7 +582,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (*R
 	}
 
 	l.logger.Error("max iterations reached without tool results or response",
-		"iterations", maxIterations,
+		"maxIterations", maxIterations,
 		"model", model,
 	)
 	return &Response{
