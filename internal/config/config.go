@@ -20,6 +20,7 @@ type Config struct {
 	DataDir       string              `yaml:"data_dir"`
 	TalentsDir    string              `yaml:"talents_dir"`
 	PersonaFile   string              `yaml:"persona_file"`
+	LogLevel      string              `yaml:"log_level"`
 }
 
 // AnthropicConfig defines Anthropic API settings.
