@@ -31,7 +31,7 @@ func NewClient(baseURL, token string, logger *slog.Logger) *Client {
 		token:   token,
 		httpClient: httpkit.NewClient(
 			httpkit.WithTimeout(30*time.Second),
-			httpkit.WithRetry(2, 500*time.Millisecond),
+			httpkit.WithRetry(3, 2*time.Second),
 			httpkit.WithLogger(logger),
 		),
 	}
