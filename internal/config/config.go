@@ -19,6 +19,7 @@ func DefaultSearchPaths() []string {
 		paths = append(paths, filepath.Join(home, ".config", "thane", "config.yaml"))
 	}
 
+	paths = append(paths, "/config/config.yaml") // Container convention
 	paths = append(paths, "/etc/thane/config.yaml")
 	return paths
 }

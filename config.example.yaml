@@ -1,6 +1,6 @@
 # Thane Configuration
 #
-# Search order: ./config.yaml, ~/.config/thane/config.yaml, /etc/thane/config.yaml
+# Search order: ./config.yaml, ~/.config/thane/config.yaml, /config/config.yaml, /etc/thane/config.yaml
 # Override with: thane -config /path/to/config.yaml serve
 #
 # Environment variables are expanded (e.g., ${HOME}), but secrets can go
