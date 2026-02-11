@@ -187,7 +187,7 @@ func printUsage(w io.Writer) error {
 // and processes a single question, printing the response to stdout.
 // Useful for quick smoke tests and debugging without starting the server.
 func runAsk(ctx context.Context, stdout io.Writer, stderr io.Writer, configPath string, args []string) error {
-	logger := newLogger(stdout, slog.LevelInfo)
+	logger := newLogger(stdout, slog.LevelInfo, "text")
 
 	question := strings.Join(args, " ")
 
@@ -228,7 +228,7 @@ func runAsk(ctx context.Context, stdout io.Writer, stderr io.Writer, configPath 
 // a markdown document into discrete facts and stores them in the fact
 // database, optionally generating embeddings for semantic search.
 func runIngest(ctx context.Context, stdout io.Writer, stderr io.Writer, configPath string, filePath string) error {
-	logger := newLogger(stdout, slog.LevelInfo)
+	logger := newLogger(stdout, slog.LevelInfo, "text")
 	logger.Info("ingesting markdown document", "file", filePath)
 
 	cfg, _, err := loadConfig(configPath)
@@ -281,7 +281,7 @@ func runIngest(ctx context.Context, stdout io.Writer, stderr io.Writer, configPa
 //  3. HTTP servers drain in-flight requests
 //  4. Database connections and the scheduler are closed via defers
 func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPath string) error {
-	logger := newLogger(stdout, slog.LevelInfo)
+	logger := newLogger(stdout, slog.LevelInfo, "text")
 	logger.Info("starting Thane", "version", buildinfo.Version, "commit", buildinfo.GitCommit, "branch", buildinfo.GitBranch, "built", buildinfo.BuildTime)
 
 	cfg, cfgPath, err := loadConfig(configPath)
@@ -289,17 +289,18 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		return err
 	}
 
-	// Reconfigure logger now that we know the desired level. The initial
-	// Info-level logger is used only for the startup banner and config
-	// load message; everything after this point uses the configured level.
-	if cfg.LogLevel != "" {
-		// ParseLogLevel is already validated by config.Validate(), so
-		// this error path should be unreachable in practice.
-		level, _ := config.ParseLogLevel(cfg.LogLevel)
-		logger = slog.New(slog.NewTextHandler(stdout, &slog.HandlerOptions{
-			Level:       level,
-			ReplaceAttr: config.ReplaceLogLevelNames,
-		}))
+	// Reconfigure logger now that we know the desired level and format.
+	// The initial Info-level text logger is used only for the startup
+	// banner and config load message; everything after this point uses
+	// the configured level and format.
+	{
+		level := slog.LevelInfo
+		if cfg.LogLevel != "" {
+			// ParseLogLevel is already validated by config.Validate(), so
+			// this error path should be unreachable in practice.
+			level, _ = config.ParseLogLevel(cfg.LogLevel)
+		}
+		logger = newLogger(stdout, level, cfg.LogFormat)
 	}
 
 	logger.Info("config loaded",
@@ -686,13 +687,22 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	return nil
 }
 
-// newLogger creates a structured logger that writes to w at the given level.
-// All log output in Thane goes through slog; this helper standardizes the
-// handler configuration across subcommands.
-func newLogger(w io.Writer, level slog.Level) *slog.Logger {
-	return slog.New(slog.NewTextHandler(w, &slog.HandlerOptions{
-		Level: level,
-	}))
+// newLogger creates a structured logger that writes to w at the given level
+// and format. Format must be "text" or "json"; any other value defaults to
+// text. All log output in Thane goes through slog; this helper standardizes
+// the handler configuration across subcommands.
+func newLogger(w io.Writer, level slog.Level, format string) *slog.Logger {
+	opts := &slog.HandlerOptions{
+		Level:       level,
+		ReplaceAttr: config.ReplaceLogLevelNames,
+	}
+	var handler slog.Handler
+	if format == "json" {
+		handler = slog.NewJSONHandler(w, opts)
+	} else {
+		handler = slog.NewTextHandler(w, opts)
+	}
+	return slog.New(handler)
 }
 
 // loadConfig locates and parses the YAML configuration file. If explicit

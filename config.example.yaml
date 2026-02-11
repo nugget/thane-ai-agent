@@ -100,3 +100,4 @@ embeddings:
 # - debug: per-request detail (LLM calls, tool execution, token counts)
 # - trace: wire-level payloads (full JSON requests/responses — VERY verbose)
 # log_level: info
+# log_format: text    # text (human-readable) or json (structured, for log aggregation)

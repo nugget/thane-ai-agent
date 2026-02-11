@@ -114,6 +114,11 @@ type Config struct {
 	// LogLevel sets the minimum log level. Valid values: trace, debug,
 	// info, warn, error. Default: info. See [ParseLogLevel].
 	LogLevel string `yaml:"log_level"`
+
+	// LogFormat sets the log output format. Valid values: text, json.
+	// Default: text. Text is human-readable; JSON enables structured
+	// log aggregation (Loki, Datadog, jq, etc.).
+	LogFormat string `yaml:"log_format"`
 }
 
 // ListenConfig configures an HTTP server's bind address and port.
@@ -284,6 +289,9 @@ func Load(path string) (*Config, error) {
 // Cross-field defaults are resolved here too — for example,
 // Embeddings.BaseURL defaults to Models.OllamaURL when unset.
 func (c *Config) applyDefaults() {
+	if c.LogFormat == "" {
+		c.LogFormat = "text"
+	}
 	if c.Listen.Port == 0 {
 		c.Listen.Port = 8080
 	}
@@ -333,6 +341,12 @@ func (c *Config) Validate() error {
 		if _, err := ParseLogLevel(c.LogLevel); err != nil {
 			return err
 		}
+	}
+	switch c.LogFormat {
+	case "text", "json", "":
+		// valid
+	default:
+		return fmt.Errorf("log_format %q invalid (expected text or json)", c.LogFormat)
 	}
 	return nil
 }
