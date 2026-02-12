@@ -70,8 +70,10 @@ func ContextString() string {
 
 	// Truncate build time to minute precision
 	buildShort := BuildTime
-	if len(buildShort) > 16 {
-		buildShort = buildShort[:16] + "Z"
+	if t, err := time.Parse(time.RFC3339, BuildTime); err == nil {
+		buildShort = t.Format("2006-01-02T15:04Z")
+	} else if t, err := time.Parse("2006-01-02T15:04:05Z", BuildTime); err == nil {
+		buildShort = t.Format("2006-01-02T15:04Z")
 	}
 
 	line := fmt.Sprintf("%s (%s, %s) | %s@%s | built %s",

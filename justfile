@@ -3,7 +3,7 @@ version := `git describe --tags --always --dirty 2>/dev/null || echo "dev"`
 git_commit := `git rev-parse --short HEAD 2>/dev/null || echo "unknown"`
 git_branch := `git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown"`
 build_time := `date -u '+%Y-%m-%dT%H:%M:%SZ'`
-changelog := `git log --oneline $(git describe --tags --abbrev=0 2>/dev/null || echo HEAD)..HEAD --no-merges 2>/dev/null | head -5 | sed 's/^[a-f0-9]* //' | tr '\n' ';' | sed 's/;$//' | sed 's/;/; /g' || echo ""`
+changelog := `git log --oneline $(git describe --tags --abbrev=0 2>/dev/null || echo HEAD)..HEAD --no-merges 2>/dev/null | head -5 | sed 's/^[a-f0-9]* //' | tr "'" "_" | tr '\n' ';' | sed 's/;$//' | sed 's/;/; /g' || echo ""`
 
 ldflags := "-X " + pkg + ".Version=" + version + " -X " + pkg + ".GitCommit=" + git_commit + " -X " + pkg + ".GitBranch=" + git_branch + " -X " + pkg + ".BuildTime=" + build_time + " -X '" + pkg + ".Changelog=" + changelog + "'"
 

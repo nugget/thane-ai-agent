@@ -304,9 +304,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			sessionTag = sid
 		}
 	}
-	if len(sessionTag) > 8 {
-		sessionTag = sessionTag[:8]
-	}
+	sessionTag = memory.ShortID(sessionTag)
 
 	l.logger.Info("agent loop started",
 		"session", sessionTag, "conversation", convID,
@@ -424,6 +422,8 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			iterMsgTokens += len(m.Content) / 4
 		}
 
+		iterStart := time.Now()
+
 		l.logger.Info("llm call",
 			"session", sessionTag, "conversation", convID,
 			"iter", i+1,
@@ -476,6 +476,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			"cumul_in", totalInputTokens,
 			"cumul_out", totalOutputTokens,
 			"tool_calls", len(llmResp.Message.ToolCalls),
+			"elapsed", time.Since(iterStart).Round(time.Millisecond),
 		)
 
 		// Check for tool calls
@@ -504,17 +505,24 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 					argsJSON = string(argsBytes)
 				}
 
-				// Log tool call with truncated arguments for observability
-				argPreview := argsJSON
-				if len(argPreview) > 200 {
-					argPreview = argPreview[:200] + "..."
-				}
 				l.logger.Info("tool exec",
 					"session", sessionTag, "conversation", convID,
 					"iter", i+1,
 					"tool", toolName,
-					"args", argPreview,
 				)
+				// Log arguments at DEBUG to avoid leaking sensitive data
+				// (exec commands, file contents, credentials in paths)
+				if l.logger.Enabled(ctx, slog.LevelDebug) {
+					argPreview := argsJSON
+					if len(argPreview) > 200 {
+						argPreview = argPreview[:200] + "..."
+					}
+					l.logger.Debug("tool exec args",
+						"session", sessionTag,
+						"tool", toolName,
+						"args", argPreview,
+					)
+				}
 
 				// Record tool call start (if supported)
 				if hasRecorder {
