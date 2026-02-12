@@ -112,11 +112,12 @@ func TestAdapter_ArchiveConversation_WithToolCallFields(t *testing.T) {
 	adapter, store := newTestAdapter(t)
 	sid, _ := adapter.StartSession("conv-1")
 
+	now := time.Now()
 	msgs := []Message{
-		{Role: "user", Content: "do something", Timestamp: time.Now()},
-		{Role: "assistant", Content: "calling tool", Timestamp: time.Now(),
+		{Role: "user", Content: "do something", Timestamp: now},
+		{Role: "assistant", Content: "calling tool", Timestamp: now.Add(time.Second),
 			ToolCalls: `[{"id":"tc-1","name":"test_tool"}]`},
-		{Role: "tool", Content: "tool result", Timestamp: time.Now(),
+		{Role: "tool", Content: "tool result", Timestamp: now.Add(2 * time.Second),
 			ToolCallID: "tc-1"},
 	}
 

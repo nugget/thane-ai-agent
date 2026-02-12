@@ -166,7 +166,14 @@ func (c *OllamaClient) ChatStream(ctx context.Context, model string, messages []
 				c.logger.Debug("parsed text-based tool calls", "count", len(parsed))
 				chatResp.Message.ToolCalls = parsed
 				chatResp.Message.Content = "" // Clear content since it was a tool call
+			} else if looksLikeHallucinatedToolCall(chatResp.Message.Content) {
+				c.logger.Warn("suppressed hallucinated tool call",
+					"content", chatResp.Message.Content)
+				chatResp.Message.Content = ""
 			}
+		}
+		if chatResp.Message.Content != "" {
+			chatResp.Message.Content = stripTrailingToolCallJSON(chatResp.Message.Content, validToolNames)
 		}
 		return chatResp, nil
 	}
@@ -175,6 +182,7 @@ func (c *OllamaClient) ChatStream(ctx context.Context, model string, messages []
 	var finalResp *ChatResponse
 	var toolCalls []ToolCall
 	var contentBuilder strings.Builder
+	toolCallBufferFlushed := false // tracks whether we've started streaming to client
 	decoder := json.NewDecoder(resp.Body)
 
 	for {
@@ -186,11 +194,26 @@ func (c *OllamaClient) ChatStream(ctx context.Context, model string, messages []
 			return nil, fmt.Errorf("decode stream chunk: %w", err)
 		}
 
-		// Accumulate content
+		// Accumulate content.
+		// When tools are available, buffer tokens that look like they
+		// might be text-based tool calls (starting with '{' or '<tool_call>')
+		// so we don't stream raw JSON to the client prematurely.
 		if wire.Message.Content != "" {
 			contentBuilder.WriteString(wire.Message.Content)
 			if callback != nil {
-				callback(StreamEvent{Kind: KindToken, Token: wire.Message.Content})
+				accumulated := contentBuilder.String()
+				if len(tools) > 0 && !toolCallBufferFlushed && looksLikeToolCall(accumulated) {
+					// Hold back — might be a text-based tool call
+				} else {
+					// Flush any buffered content + this token
+					if !toolCallBufferFlushed && contentBuilder.Len() > len(wire.Message.Content) {
+						// First flush: send everything accumulated so far
+						callback(StreamEvent{Kind: KindToken, Token: accumulated})
+					} else {
+						callback(StreamEvent{Kind: KindToken, Token: wire.Message.Content})
+					}
+					toolCallBufferFlushed = true
+				}
 			}
 		}
 
@@ -231,7 +254,17 @@ func (c *OllamaClient) ChatStream(ctx context.Context, model string, messages []
 			c.logger.Debug("parsed text-based tool calls from stream", "count", len(parsed))
 			finalResp.Message.ToolCalls = parsed
 			finalResp.Message.Content = "" // Clear content since it was a tool call
+		} else if looksLikeHallucinatedToolCall(finalResp.Message.Content) {
+			c.logger.Warn("suppressed hallucinated tool call from stream",
+				"content", finalResp.Message.Content)
+			finalResp.Message.Content = ""
 		}
+	}
+
+	// Strip trailing tool-call JSON from mixed prose+JSON responses.
+	// Models sometimes answer and then append a raw tool call at the end.
+	if finalResp.Message.Content != "" {
+		finalResp.Message.Content = stripTrailingToolCallJSON(finalResp.Message.Content, validToolNames)
 	}
 
 	return finalResp, nil
@@ -252,6 +285,67 @@ func extractToolNames(tools []map[string]any) []string {
 		}
 	}
 	return names
+}
+
+// looksLikeToolCall checks if accumulated stream content might be a text-based
+// tool call. Used to buffer streaming output until we can determine whether
+// the model is emitting a tool call as text or actual prose.
+// looksLikeHallucinatedToolCall checks if content is JSON with "name" and "arguments"
+// stripTrailingToolCallJSON removes JSON tool call objects appended to the end
+// of prose content. Returns the cleaned prose (or original if no trailing JSON found).
+func stripTrailingToolCallJSON(content string, validTools []string) string {
+	lastBrace := strings.LastIndex(content, "{")
+	if lastBrace <= 0 {
+		return content
+	}
+	jsonPart := strings.TrimSpace(content[lastBrace:])
+	var obj struct {
+		Name      string         `json:"name"`
+		Arguments map[string]any `json:"arguments"`
+	}
+	if err := json.Unmarshal([]byte(jsonPart), &obj); err != nil || obj.Name == "" {
+		return content
+	}
+	// It's a tool call shape — strip it regardless of whether the name is valid
+	cleaned := strings.TrimSpace(content[:lastBrace])
+	if cleaned == "" {
+		return content // Don't strip if there's no prose left
+	}
+	return cleaned
+}
+
+// looksLikeHallucinatedToolCall checks if content is JSON with "name" and "arguments"
+// fields — the shape of a tool call — but wasn't matched by parseTextToolCalls
+// (meaning the tool name is invalid). This is a hallucinated tool call that should
+// be suppressed rather than shown to the user.
+func looksLikeHallucinatedToolCall(content string) bool {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" || trimmed[0] != '{' {
+		return false
+	}
+	var obj map[string]any
+	if err := json.Unmarshal([]byte(trimmed), &obj); err != nil {
+		return false
+	}
+	_, hasName := obj["name"]
+	_, hasArgs := obj["arguments"]
+	return hasName && hasArgs
+}
+
+func looksLikeToolCall(content string) bool {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return false
+	}
+	// JSON object that might contain "name" — common tool call format
+	if trimmed[0] == '{' {
+		return true
+	}
+	// <tool_call> tag format
+	if strings.HasPrefix(trimmed, "<tool_call>") || strings.HasPrefix(trimmed, "<tool") {
+		return true
+	}
+	return false
 }
 
 // parseTextToolCalls attempts to extract tool calls from content text.
@@ -326,6 +420,35 @@ func parseTextToolCalls(content string, validTools []string) []ToolCall {
 					Arguments: single.Arguments,
 				},
 			}}
+		}
+	}
+
+	// Try parsing concatenated JSON objects: {"name":"a","arguments":{}}{"name":"b","arguments":{}}
+	// Common with qwen and other models that emit multiple tool calls as adjacent JSON blobs.
+	if strings.Count(content, `"name"`) > 1 && strings.Contains(content, "}{") {
+		dec := json.NewDecoder(strings.NewReader(content))
+		for dec.More() {
+			var tc struct {
+				Name      string         `json:"name"`
+				Arguments map[string]any `json:"arguments"`
+			}
+			if err := dec.Decode(&tc); err != nil {
+				break
+			}
+			if tc.Name != "" && isValidTool(tc.Name, validTools) {
+				result = append(result, ToolCall{
+					Function: struct {
+						Name      string         `json:"name"`
+						Arguments map[string]any `json:"arguments"`
+					}{
+						Name:      tc.Name,
+						Arguments: tc.Arguments,
+					},
+				})
+			}
+		}
+		if len(result) > 0 {
+			return result
 		}
 	}
 

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"strings"
 	"time"
 
@@ -27,9 +28,10 @@ type Message struct {
 
 // Request represents an incoming agent request.
 type Request struct {
-	Messages       []Message `json:"messages"`
-	Model          string    `json:"model,omitempty"`
-	ConversationID string    `json:"conversation_id,omitempty"`
+	Messages       []Message         `json:"messages"`
+	Model          string            `json:"model,omitempty"`
+	ConversationID string            `json:"conversation_id,omitempty"`
+	Hints          map[string]string `json:"hints,omitempty"` // Routing hints (channel, mission, etc.)
 }
 
 // StreamEvent is a single event in a streaming response.
@@ -311,13 +313,28 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		"messages", len(req.Messages),
 	)
 
-	// Load conversation history
+	// Always use Thane's memory as the source of truth.
+	// For externally-managed conversations (owu-), the client sends full history
+	// but Thane's store is the superset (includes tool calls, results, etc.).
+	// Only store the NEW message from the client — the last user message.
 	history := l.memory.GetMessages(convID)
 
-	// Add incoming messages to memory
-	for _, m := range req.Messages {
-		if err := l.memory.AddMessage(convID, m.Role, m.Content); err != nil {
-			l.logger.Warn("failed to store message", "error", err)
+	if strings.HasPrefix(convID, "owu-") {
+		// External client (Open WebUI): only add the last user message
+		for i := len(req.Messages) - 1; i >= 0; i-- {
+			if req.Messages[i].Role == "user" {
+				if err := l.memory.AddMessage(convID, "user", req.Messages[i].Content); err != nil {
+					l.logger.Warn("failed to store message", "error", err)
+				}
+				break
+			}
+		}
+	} else {
+		// Internal/API clients: store all messages
+		for _, m := range req.Messages {
+			if err := l.memory.AddMessage(convID, m.Role, m.Content); err != nil {
+				l.logger.Warn("failed to store message", "error", err)
+			}
 		}
 	}
 
@@ -371,6 +388,8 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	model := req.Model
 	var routerDecision *router.Decision
 
+	l.logger.Debug("model selection start", "session", sessionTag, "req_model", req.Model, "default_model", l.model)
+
 	if model == "" || model == "thane" {
 		if l.router != nil {
 			// Get the user's query from messages
@@ -394,12 +413,17 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 				NeedsTools:  true, // We always have tools available
 				ToolCount:   len(l.tools.List()),
 				Priority:    router.PriorityInteractive,
+				Hints:       req.Hints,
 			}
 
 			model, routerDecision = l.router.Route(ctx, routerReq)
+			l.logger.Debug("model selected by router", "session", sessionTag, "model", model)
 		} else {
 			model = l.model
+			l.logger.Debug("model selected as default (no router)", "session", sessionTag, "model", model)
 		}
+	} else {
+		l.logger.Debug("model specified in request, skipping router", "session", sessionTag, "model", model)
 	}
 
 	// Get available tools
@@ -414,7 +438,12 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	// Estimate system prompt size for cost logging
 	systemTokens := len(llmMessages[0].Content) / 4 // rough char-to-token ratio
 
+	// Track tool call repetitions to detect loops
+	toolCallCounts := make(map[string]int) // "toolName:argsHash" → count
+	const maxToolRepeat = 3                // Break if same tool+args called this many times
+
 	maxIterations := 50 // Tool call budget; final text response always gets one extra call
+iterLoop:
 	for i := 0; i < maxIterations; i++ {
 		// Estimate total message size for this iteration
 		iterMsgTokens := 0
@@ -471,12 +500,21 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		l.logger.Info("llm response",
 			"session", sessionTag, "conversation", convID,
 			"iter", i+1,
+			"model", model,
+			"resp_model", llmResp.Model,
 			"input_tokens", llmResp.InputTokens,
 			"output_tokens", llmResp.OutputTokens,
 			"cumul_in", totalInputTokens,
 			"cumul_out", totalOutputTokens,
 			"tool_calls", len(llmResp.Message.ToolCalls),
 			"elapsed", time.Since(iterStart).Round(time.Millisecond),
+			"tok_per_sec", func() float64 {
+				elapsed := time.Since(iterStart).Seconds()
+				if elapsed > 0 && llmResp.OutputTokens > 0 {
+					return math.Round(float64(llmResp.OutputTokens)/elapsed*10) / 10
+				}
+				return 0
+			}(),
 		)
 
 		// Check for tool calls
@@ -503,6 +541,22 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 				if tc.Function.Arguments != nil {
 					argsBytes, _ := json.Marshal(tc.Function.Arguments)
 					argsJSON = string(argsBytes)
+				}
+
+				// Detect tool call loops
+				callKey := toolName + ":" + argsJSON
+				toolCallCounts[callKey]++
+				if toolCallCounts[callKey] > maxToolRepeat {
+					l.logger.Warn("tool call loop detected, breaking",
+						"session", sessionTag, "conversation", convID,
+						"tool", toolName, "repeat_count", toolCallCounts[callKey],
+					)
+					// Inject an error message to help the model recover
+					llmMessages = append(llmMessages, llm.Message{
+						Role:    "tool",
+						Content: fmt.Sprintf("Error: tool '%s' has been called %d times with the same arguments. Stop calling tools and provide your response to the user.", toolName, toolCallCounts[callKey]),
+					})
+					continue iterLoop
 				}
 
 				l.logger.Info("tool exec",
@@ -539,7 +593,8 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 					})
 				}
 
-				result, err := l.tools.Execute(ctx, toolName, argsJSON)
+				toolCtx := tools.WithConversationID(ctx, convID)
+				result, err := l.tools.Execute(toolCtx, toolName, argsJSON)
 				errMsg := ""
 				if err != nil {
 					errMsg = err.Error()

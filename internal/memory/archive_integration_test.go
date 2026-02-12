@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"log/slog"
 	"testing"
 	"time"
 )
@@ -34,7 +35,7 @@ func TestCompaction_ArchivesBeforeCompacting(t *testing.T) {
 		KeepRecent:           3,
 		MinMessagesToCompact: 5,
 	}
-	compactor := NewCompactor(memStore, cfg, summarizer)
+	compactor := NewCompactor(memStore, cfg, summarizer, slog.Default())
 	compactor.SetArchiver(archiveStore)
 
 	// Add enough messages to trigger compaction

@@ -8,6 +8,8 @@
 package api
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -16,6 +18,7 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/agent"
+	"github.com/nugget/thane-ai-agent/internal/router"
 )
 
 // OllamaChatRequest is the Ollama /api/chat request format.
@@ -168,16 +171,53 @@ func handleOllamaChatShared(w http.ResponseWriter, r *http.Request, loop *agent.
 		}
 	}
 
-	// Map model name: "thane:latest" or "thane" should use default model
-	// Don't pass our fake model name through to the real LLM
+	// Map model name to routing profile.
+	// Ollama "model" names like "thane:thinking" become routing hints.
 	model := req.Model
-	if model == "" || model == "thane" || model == "thane:latest" {
-		model = "" // Empty = use Thane's configured default
+	hints := map[string]string{
+		"channel": "ollama",
 	}
 
+	switch model {
+	case "", "thane", "thane:latest":
+		model = "" // default routing
+	case "thane:thinking":
+		model = ""
+		hints[router.HintQualityFloor] = "9"
+		hints[router.HintMission] = "conversation"
+	case "thane:fast":
+		model = ""
+		hints[router.HintMission] = "device_control"
+		// Cost-aware scoring already prefers cheap models
+	case "thane:homeassistant":
+		model = ""
+		hints[router.HintChannel] = "homeassistant"
+		hints[router.HintMission] = "device_control"
+	case "thane:local":
+		model = ""
+		hints[router.HintQualityFloor] = "1"   // accept anything
+		hints[router.HintModelPreference] = "" // clear any preference
+		// local_first scoring handles the rest; also exclude paid models
+		hints[router.HintLocalOnly] = "true"
+	default:
+		// Unknown profile or explicit model name — pass through
+		if strings.HasPrefix(model, "thane:") {
+			model = "" // unknown thane profile, use default
+		}
+		// else: explicit model name, pass through to router
+	}
+
+	// Derive a conversation ID from the message history.
+	// Open WebUI sends full history with each request, so hashing the first
+	// user message gives a stable ID per chat. Different OWU chats get
+	// isolated conversation buffers, archive sessions, and compaction state.
+	conversationID := deriveConversationID(messages)
+
 	agentReq := &agent.Request{
-		Messages: messages,
-		Model:    model,
+		Messages:       messages,
+		Model:          model,
+		Hints:          hints,
+		ConversationID: conversationID,
 	}
 
 	// Check if streaming was requested. For Ollama compatibility, a nil stream defaults to true.
@@ -401,31 +441,45 @@ func handleOllamaStreamingChatShared(w http.ResponseWriter, r *http.Request, req
 }
 
 // handleOllamaTagsShared returns the list of available models.
-// Currently returns only "thane:latest" as Thane presents itself as a single
+// Returns routing profiles (thane:latest, thane:thinking, etc.) as Thane presents itself as a single
 // model to Ollama clients, with actual model selection handled internally.
 //
 // The response format matches Ollama's /api/tags endpoint specification.
 func handleOllamaTagsShared(w http.ResponseWriter, r *http.Request, logger *slog.Logger) {
-	// Return Thane as the only available model
-	resp := OllamaTagsResponse{
-		Models: []OllamaModel{
-			{
-				Name:       "thane:latest",
-				Model:      "thane:latest",
-				ModifiedAt: time.Now().UTC().Format(time.RFC3339),
-				Size:       0,
-				Digest:     "thane-autonomous-agent",
-				Details: OllamaModelDetail{
-					ParentModel:       "",
-					Format:            "thane",
-					Family:            "thane",
-					Families:          []string{"thane"},
-					ParameterSize:     "autonomous",
-					QuantizationLevel: "native",
-				},
-			},
-		},
+	// Expose routing profiles as Ollama "models".
+	// Callers select a profile via the model picker; Thane maps it to routing hints.
+	now := time.Now().UTC().Format(time.RFC3339)
+	baseDetails := OllamaModelDetail{
+		Format:            "thane",
+		Family:            "thane",
+		Families:          []string{"thane"},
+		ParameterSize:     "autonomous",
+		QuantizationLevel: "native",
 	}
+
+	profiles := []struct {
+		name   string
+		digest string
+	}{
+		{"thane:latest", "default routing"},
+		{"thane:thinking", "prefer quality, complex reasoning"},
+		{"thane:fast", "prefer speed and cost efficiency"},
+		{"thane:homeassistant", "optimized for HA device control"},
+		{"thane:local", "prefer local/free models only"},
+	}
+
+	var models []OllamaModel
+	for _, p := range profiles {
+		models = append(models, OllamaModel{
+			Name:       p.name,
+			Model:      p.name,
+			ModifiedAt: now,
+			Digest:     p.digest,
+			Details:    baseDetails,
+		})
+	}
+
+	resp := OllamaTagsResponse{Models: models}
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
@@ -594,3 +648,17 @@ func findJSONEnd(s string) int {
 }
 
 // Note: captureBody is defined in debug_request.go
+
+// deriveConversationID creates a stable conversation ID from the message history.
+// Uses the first user message as the key — all requests from the same Open WebUI
+// chat will have the same first user message, giving a consistent ID.
+// Falls back to "default" if no user messages are found.
+func deriveConversationID(messages []agent.Message) string {
+	for _, m := range messages {
+		if m.Role == "user" && m.Content != "" {
+			h := sha256.Sum256([]byte(m.Content))
+			return "owu-" + hex.EncodeToString(h[:8]) // 16 hex chars, e.g. "owu-a1b2c3d4e5f6a7b8"
+		}
+	}
+	return "default"
+}

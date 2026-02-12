@@ -17,8 +17,21 @@ type Request struct {
 	NeedsTools  bool              // Whether tool calling is required
 	ToolCount   int               // Number of tools available
 	Priority    Priority          // Latency requirements
-	Metadata    map[string]string // Additional hints
+	Hints       map[string]string // Caller-supplied routing hints (see HintXxx constants)
 }
+
+// Hint keys for routing decisions. Callers set these to influence model selection.
+const (
+	// HintChannel identifies the request source: "ollama", "homeassistant", "voice", "api"
+	HintChannel = "channel"
+	// HintQualityFloor is the minimum quality rating (1-10) the caller requires.
+	HintQualityFloor = "quality_floor"
+	// HintModelPreference suggests a specific model (soft preference, not override).
+	HintModelPreference = "model_preference"
+	// HintMission describes the task context: "conversation", "device_control", "background", "anticipation"
+	HintMission   = "mission"
+	HintLocalOnly = "local_only"
+)
 
 // Priority indicates latency requirements.
 type Priority int
@@ -65,6 +78,7 @@ const (
 	ComplexityComplex                    // Reasoning, analysis, explanation
 )
 
+// String returns the human-readable name of a complexity level.
 func (c Complexity) String() string {
 	switch c {
 	case ComplexitySimple:
@@ -248,51 +262,141 @@ func (r *Router) selectModel(req Request, decision *Decision) string {
 	}
 
 	// Score candidates
+	//
+	// The scoring system implements the urgency×quality routing matrix:
+	//   - Simple tasks should prefer fast/cheap models
+	//   - Complex tasks earn expensive models
+	//   - Cost is always a factor, never free
 	scores := make(map[string]int)
 	for _, m := range candidates {
 		score := 0
 
-		// Complexity matching
+		// --- Complexity matching ---
 		if decision.Complexity >= m.MinComplexity {
 			score += 20
 		}
 		if decision.Complexity == ComplexitySimple && m.Speed >= 7 {
 			score += 15 // Prefer fast for simple
+			decision.RulesMatched = append(decision.RulesMatched, "speed_bonus_"+m.Name)
 		}
-		if decision.Complexity == ComplexityComplex && m.Quality >= 7 {
-			score += 15 // Prefer quality for complex
+		if decision.Complexity == ComplexityComplex {
+			// Scale bonus with quality: quality 8 = +16, quality 10 = +20
+			if m.Quality >= 7 {
+				score += m.Quality * 2
+				decision.RulesMatched = append(decision.RulesMatched, "quality_bonus_"+m.Name)
+			}
 		}
 
-		// Context size penalty for small models
-		// Small context window models struggle with large prompts
+		// --- Cost awareness ---
+		// Expensive models must justify their cost. The penalty scales
+		// inversely with complexity: simple tasks penalize heavily,
+		// complex tasks penalize lightly.
+		if m.CostTier > 0 {
+			switch decision.Complexity {
+			case ComplexitySimple:
+				score -= m.CostTier * 15 // e.g. tier 3 = -45
+				decision.RulesMatched = append(decision.RulesMatched, "cost_penalty_simple_"+m.Name)
+			case ComplexityModerate:
+				score -= m.CostTier * 8 // e.g. tier 3 = -24
+				decision.RulesMatched = append(decision.RulesMatched, "cost_penalty_moderate_"+m.Name)
+			case ComplexityComplex:
+				score -= m.CostTier * 3 // e.g. tier 3 = -9
+				decision.RulesMatched = append(decision.RulesMatched, "cost_penalty_complex_"+m.Name)
+			}
+		}
+
+		// Free/local models get a bonus for non-complex tasks
+		if m.CostTier == 0 && decision.Complexity < ComplexityComplex {
+			score += 15
+			decision.RulesMatched = append(decision.RulesMatched, "free_model_bonus_"+m.Name)
+		}
+
+		// --- Context size penalty for small models ---
 		contextRatio := float64(req.ContextSize) / float64(m.ContextWindow)
 		if contextRatio > 0.3 {
-			// Using >30% of context window - penalize low-quality models
 			if m.Quality < 7 {
-				score -= 30 // Heavy penalty
+				score -= 30
 				decision.RulesMatched = append(decision.RulesMatched, "context_penalty_"+m.Name)
 			}
 		}
 		if contextRatio > 0.5 && m.Quality >= 7 {
-			// High context but capable model - bonus
 			score += 10
 			decision.RulesMatched = append(decision.RulesMatched, "context_bonus_"+m.Name)
 		}
 
-		// Tool count consideration - more tools = need smarter model
+		// --- Tool count consideration ---
 		if req.ToolCount > 4 && m.Quality < 7 {
-			score -= 20 // Penalty for many tools on weak model
+			score -= 20
 			decision.RulesMatched = append(decision.RulesMatched, "tools_penalty_"+m.Name)
 		}
 
-		// Local preference
+		// --- Local preference ---
 		if r.config.LocalFirst && m.CostTier == 0 {
 			score += 10
+			decision.RulesMatched = append(decision.RulesMatched, "local_first_"+m.Name)
 		}
 
-		// Interactive needs speed
+		// --- Interactive needs speed ---
 		if req.Priority == PriorityInteractive && m.Speed >= 7 {
 			score += 10
+			decision.RulesMatched = append(decision.RulesMatched, "interactive_speed_"+m.Name)
+		}
+
+		// --- Hint-based adjustments ---
+		if req.Hints != nil {
+			// Channel hint: HA/voice channels prefer cheap+fast, OpenWebUI prefers quality
+			switch req.Hints[HintChannel] {
+			case "homeassistant", "voice":
+				// HA/voice: strongly prefer fast and cheap
+				if m.CostTier == 0 {
+					score += 20
+					decision.RulesMatched = append(decision.RulesMatched, "channel_ha_bonus_"+m.Name)
+				}
+				if m.Speed >= 7 {
+					score += 10
+					decision.RulesMatched = append(decision.RulesMatched, "channel_ha_speed_"+m.Name)
+				}
+			case "openwebui":
+				// Direct conversation via Open WebUI: boost quality models
+				if m.Quality >= 9 {
+					score += 15
+					decision.RulesMatched = append(decision.RulesMatched, "channel_webui_quality_"+m.Name)
+				}
+			}
+
+			// Quality floor: disqualify models below the requested minimum
+			if floor, ok := req.Hints[HintQualityFloor]; ok {
+				if floorInt, err := strconv.Atoi(floor); err == nil && m.Quality < floorInt {
+					score -= 100 // effectively disqualify
+					decision.RulesMatched = append(decision.RulesMatched, "below_quality_floor_"+m.Name)
+				}
+			}
+
+			// Mission hint: background/anticipation tasks prefer cheap
+			switch req.Hints[HintMission] {
+			case "background", "anticipation":
+				if m.CostTier == 0 {
+					score += 20
+					decision.RulesMatched = append(decision.RulesMatched, "mission_background_bonus_"+m.Name)
+				}
+			case "conversation":
+				if m.Quality >= 8 {
+					score += 10
+					decision.RulesMatched = append(decision.RulesMatched, "mission_conversation_bonus_"+m.Name)
+				}
+			}
+
+			// Model preference: soft boost for suggested model
+			if pref, ok := req.Hints[HintModelPreference]; ok && pref == m.Name {
+				score += 25
+				decision.RulesMatched = append(decision.RulesMatched, "model_preference_"+m.Name)
+			}
+
+			// Local only: heavily penalize paid models
+			if req.Hints[HintLocalOnly] == "true" && m.CostTier > 0 {
+				score -= 200
+				decision.RulesMatched = append(decision.RulesMatched, "local_only_penalty_"+m.Name)
+			}
 		}
 
 		scores[m.Name] = score
@@ -300,13 +404,16 @@ func (r *Router) selectModel(req Request, decision *Decision) string {
 
 	decision.Scores = scores
 
-	// Pick highest score
+	// Pick highest score; on tie, prefer cheaper model; on equal cost, prefer higher quality
 	var best Model
-	bestScore := -1
+	bestScore := -1 << 30 // effectively -infinity
 	for _, m := range candidates {
-		if scores[m.Name] > bestScore {
+		s := scores[m.Name]
+		if s > bestScore ||
+			(s == bestScore && m.CostTier < best.CostTier) ||
+			(s == bestScore && m.CostTier == best.CostTier && m.Quality > best.Quality) {
 			best = m
-			bestScore = scores[m.Name]
+			bestScore = s
 		}
 	}
 
@@ -400,10 +507,12 @@ func (r *Router) Explain(requestID string) *Decision {
 
 // Helper functions
 
+// generateRequestID creates a timestamp-based ID for log correlation.
 func generateRequestID() string {
 	return time.Now().Format("20060102-150405.000")
 }
 
+// priorityString returns the human-readable name of a priority level.
 func priorityString(p Priority) string {
 	if p == PriorityInteractive {
 		return "interactive"

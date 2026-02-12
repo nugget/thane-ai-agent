@@ -7,8 +7,22 @@ import (
 	"strings"
 	"time"
 
+	"unicode/utf8"
+
 	"github.com/nugget/thane-ai-agent/internal/memory"
 )
+
+// truncateUTF8 truncates s to at most maxBytes, ensuring the result is valid UTF-8.
+func truncateUTF8(s string, maxBytes int) string {
+	if len(s) <= maxBytes {
+		return s
+	}
+	// Back up to a valid UTF-8 boundary
+	for maxBytes > 0 && !utf8.RuneStart(s[maxBytes]) {
+		maxBytes--
+	}
+	return s[:maxBytes]
+}
 
 // SetArchiveStore adds conversation archive tools to the registry.
 func (r *Registry) SetArchiveStore(store *memory.ArchiveStore) {
@@ -84,7 +98,17 @@ func (r *Registry) registerArchiveSearch(store *memory.ArchiveStore) {
 				return "No results found in conversation archive.", nil
 			}
 
-			return formatSearchResults(results), nil
+			// Cap results to prevent context flooding (182KB observed in production)
+			const maxResultBytes = 16000 // ~4K tokens — enough for useful context
+			formatted := formatSearchResults(results)
+			if len(formatted) > maxResultBytes {
+				totalLen := len(formatted)
+				formatted = truncateUTF8(formatted, maxResultBytes) + fmt.Sprintf(
+					"\n\n[Truncated: %d bytes total, showing first %d bytes. Use archive_session_transcript for full context of a specific session.]",
+					totalLen, maxResultBytes,
+				)
+			}
+			return formatted, nil
 		},
 	})
 }
@@ -202,19 +226,36 @@ func (r *Registry) registerArchiveSessionGet(store *memory.ArchiveStore) {
 				sessionID = fullID
 			}
 
+			const maxTranscriptBytes = 32000 // ~8K tokens
+
 			if format == "json" {
 				messages, err := store.GetSessionTranscript(sessionID)
 				if err != nil {
 					return "", fmt.Errorf("get transcript: %w", err)
 				}
 				data, _ := json.MarshalIndent(messages, "", "  ")
-				return string(data), nil
+				result := string(data)
+				if len(result) > maxTranscriptBytes {
+					totalLen := len(result)
+					result = truncateUTF8(result, maxTranscriptBytes) + fmt.Sprintf(
+						"\n\n[Truncated: %d bytes total. Full transcript has %d messages.]",
+						totalLen, len(messages),
+					)
+				}
+				return result, nil
 			}
 
 			// Text format — use markdown export
 			md, err := store.ExportSessionMarkdown(sessionID)
 			if err != nil {
 				return "", fmt.Errorf("export session: %w", err)
+			}
+			if len(md) > maxTranscriptBytes {
+				totalLen := len(md)
+				md = truncateUTF8(md, maxTranscriptBytes) + fmt.Sprintf(
+					"\n\n[Truncated: %d bytes total. Use archive_search to find specific content.]",
+					totalLen,
+				)
 			}
 			return md, nil
 		},

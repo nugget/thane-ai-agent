@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"log/slog"
 	"os"
 	"testing"
 )
@@ -41,7 +42,7 @@ func TestCompaction(t *testing.T) {
 		KeepRecent:           10,
 		MinMessagesToCompact: 10,
 	}
-	compactor := NewCompactor(store, config, &SimpleSummarizer{})
+	compactor := NewCompactor(store, config, &SimpleSummarizer{}, slog.Default())
 
 	// Check if needs compaction
 	if !compactor.NeedsCompaction(convID) {
@@ -96,7 +97,7 @@ func TestCompactionStats(t *testing.T) {
 	defer store.Close()
 
 	config := DefaultCompactionConfig()
-	compactor := NewCompactor(store, config, &SimpleSummarizer{})
+	compactor := NewCompactor(store, config, &SimpleSummarizer{}, slog.Default())
 
 	stats := compactor.CompactionStats("test")
 	t.Logf("Stats: %+v", stats)
