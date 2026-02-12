@@ -2,6 +2,7 @@ package memory
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -22,7 +23,8 @@ const (
 
 // ArchiveStore handles immutable session transcript archiving.
 type ArchiveStore struct {
-	db *sql.DB
+	db     *sql.DB
+	logger *slog.Logger
 
 	// Whether FTS5 is available
 	ftsEnabled bool
@@ -74,13 +76,44 @@ type ArchivedMessage struct {
 
 // Session represents a conversation session with boundaries.
 type Session struct {
-	ID             string     `json:"id"`
-	ConversationID string     `json:"conversation_id"`
-	StartedAt      time.Time  `json:"started_at"`
-	EndedAt        *time.Time `json:"ended_at,omitempty"`
-	EndReason      string     `json:"end_reason,omitempty"`
-	MessageCount   int        `json:"message_count"`
-	Summary        string     `json:"summary,omitempty"`
+	ID             string           `json:"id"`
+	ConversationID string           `json:"conversation_id"`
+	StartedAt      time.Time        `json:"started_at"`
+	EndedAt        *time.Time       `json:"ended_at,omitempty"`
+	EndReason      string           `json:"end_reason,omitempty"`
+	MessageCount   int              `json:"message_count"`
+	Summary        string           `json:"summary,omitempty"`
+	Title          string           `json:"title,omitempty"`
+	Tags           []string         `json:"tags,omitempty"`
+	Metadata       *SessionMetadata `json:"metadata,omitempty"`
+}
+
+// SessionMetadata holds rich, LLM-generated metadata for human-oriented
+// search and browsing. Stored as JSON in the database for flexibility —
+// new fields can be added without schema migrations.
+type SessionMetadata struct {
+	// Summaries at different lengths for different display contexts.
+	OneLiner  string `json:"one_liner,omitempty"` // ~10 words
+	Paragraph string `json:"paragraph,omitempty"` // 2-4 sentences
+	Detailed  string `json:"detailed,omitempty"`  // full summary
+
+	// Key decisions or outcomes from the session.
+	KeyDecisions []string `json:"key_decisions,omitempty"`
+
+	// People involved or mentioned.
+	Participants []string `json:"participants,omitempty"`
+
+	// Characterization of the session's nature.
+	SessionType string `json:"session_type,omitempty"` // e.g. "debugging", "architecture", "philosophy", "casual"
+
+	// Tools used during the session (tool name → call count).
+	ToolsUsed map[string]int `json:"tools_used,omitempty"`
+
+	// Files touched or discussed during the session.
+	FilesTouched []string `json:"files_touched,omitempty"`
+
+	// Model(s) used, if known.
+	Models []string `json:"models,omitempty"`
 }
 
 // ArchivedToolCall represents a tool call preserved in the archive.
@@ -134,6 +167,7 @@ func NewArchiveStore(dbPath string, cfg *ArchiveConfig, logger *slog.Logger) (*A
 
 	s := &ArchiveStore{
 		db:                      db,
+		logger:                  logger,
 		defaultSilenceThreshold: cfg.SilenceThreshold,
 		defaultMaxMessages:      cfg.MaxContextMessages,
 		defaultMaxDuration:      cfg.MaxContextDuration,
@@ -143,6 +177,9 @@ func NewArchiveStore(dbPath string, cfg *ArchiveConfig, logger *slog.Logger) (*A
 		db.Close()
 		return nil, fmt.Errorf("archive migrate: %w", err)
 	}
+
+	// Apply incremental migrations for existing databases
+	s.migrateSchema()
 
 	// Try to enable FTS5 — gracefully degrade if not available
 	s.ftsEnabled = s.tryEnableFTS()
@@ -237,7 +274,10 @@ func (s *ArchiveStore) migrate() error {
 			ended_at TIMESTAMP,
 			end_reason TEXT,
 			message_count INTEGER DEFAULT 0,
-			summary TEXT
+			summary TEXT,
+			title TEXT,
+			tags TEXT,
+			metadata TEXT
 		);
 
 		CREATE INDEX IF NOT EXISTS idx_sessions_conversation 
@@ -258,6 +298,32 @@ func (s *ArchiveStore) migrate() error {
 		);
 	`)
 	return err
+}
+
+// migrateSchema applies incremental migrations for existing databases.
+func (s *ArchiveStore) migrateSchema() {
+	// v2: add title, tags, metadata columns to sessions table
+	migrations := []struct {
+		column string
+		sql    string
+	}{
+		{"title", "ALTER TABLE sessions ADD COLUMN title TEXT"},
+		{"tags", "ALTER TABLE sessions ADD COLUMN tags TEXT"},
+		{"metadata", "ALTER TABLE sessions ADD COLUMN metadata TEXT"},
+	}
+
+	for _, m := range migrations {
+		// Check if column exists by trying a query
+		_, err := s.db.Exec("SELECT " + m.column + " FROM sessions LIMIT 0")
+		if err != nil {
+			// Column doesn't exist — add it
+			if _, err := s.db.Exec(m.sql); err != nil {
+				if s.logger != nil {
+					s.logger.Warn("migration failed", "column", m.column, "error", err)
+				}
+			}
+		}
+	}
 }
 
 // tryEnableFTS attempts to create the FTS5 virtual table.
@@ -708,11 +774,49 @@ func (s *ArchiveStore) EndSessionAt(sessionID string, reason string, endedAt tim
 	return err
 }
 
-// SetSessionSummary updates the summary/topics for a session.
+// SetSessionSummary updates only the summary text for a session.
+// For richer metadata, use SetSessionMetadata.
 func (s *ArchiveStore) SetSessionSummary(sessionID string, summary string) error {
 	_, err := s.db.Exec(`
 		UPDATE sessions SET summary = ? WHERE id = ?
 	`, summary, sessionID)
+	return err
+}
+
+// SetSessionMetadata updates the full rich metadata for a session,
+// including title, tags, summary, and structured metadata JSON.
+func (s *ArchiveStore) SetSessionMetadata(sessionID string, meta *SessionMetadata, title string, tags []string) error {
+	var metaJSON []byte
+	if meta != nil {
+		var err error
+		metaJSON, err = json.Marshal(meta)
+		if err != nil {
+			return fmt.Errorf("marshal metadata: %w", err)
+		}
+	}
+
+	var tagsJSON []byte
+	if len(tags) > 0 {
+		var err error
+		tagsJSON, err = json.Marshal(tags)
+		if err != nil {
+			return fmt.Errorf("marshal tags: %w", err)
+		}
+	}
+
+	// Update summary from the metadata's paragraph-level summary
+	summary := ""
+	if meta != nil {
+		summary = meta.Paragraph
+		if summary == "" {
+			summary = meta.OneLiner
+		}
+	}
+
+	_, err := s.db.Exec(`
+		UPDATE sessions SET title = ?, tags = ?, metadata = ?, summary = ?
+		WHERE id = ?
+	`, nullString(title), nullString(string(tagsJSON)), nullString(string(metaJSON)), nullString(summary), sessionID)
 	return err
 }
 
@@ -735,7 +839,7 @@ func (s *ArchiveStore) SetSessionMessageCount(sessionID string, count int) error
 // ActiveSession returns the most recent unclosed session for a conversation, if any.
 func (s *ArchiveStore) ActiveSession(conversationID string) (*Session, error) {
 	row := s.db.QueryRow(`
-		SELECT id, conversation_id, started_at, ended_at, end_reason, message_count, summary
+		SELECT id, conversation_id, started_at, ended_at, end_reason, message_count, summary, title, tags, metadata
 		FROM sessions
 		WHERE conversation_id = ? AND ended_at IS NULL
 		ORDER BY started_at DESC
@@ -748,7 +852,7 @@ func (s *ArchiveStore) ActiveSession(conversationID string) (*Session, error) {
 // GetSession retrieves a session by ID.
 func (s *ArchiveStore) GetSession(sessionID string) (*Session, error) {
 	row := s.db.QueryRow(`
-		SELECT id, conversation_id, started_at, ended_at, end_reason, message_count, summary
+		SELECT id, conversation_id, started_at, ended_at, end_reason, message_count, summary, title, tags, metadata
 		FROM sessions WHERE id = ?
 	`, sessionID)
 
@@ -766,14 +870,14 @@ func (s *ArchiveStore) ListSessions(conversationID string, limit int) ([]*Sessio
 
 	if conversationID != "" {
 		query = `
-			SELECT id, conversation_id, started_at, ended_at, end_reason, message_count, summary
+			SELECT id, conversation_id, started_at, ended_at, end_reason, message_count, summary, title, tags, metadata
 			FROM sessions WHERE conversation_id = ?
 			ORDER BY started_at DESC LIMIT ?
 		`
 		args = []any{conversationID, limit}
 	} else {
 		query = `
-			SELECT id, conversation_id, started_at, ended_at, end_reason, message_count, summary
+			SELECT id, conversation_id, started_at, ended_at, end_reason, message_count, summary, title, tags, metadata
 			FROM sessions
 			ORDER BY started_at DESC LIMIT ?
 		`
@@ -1007,10 +1111,11 @@ func (s *ArchiveStore) Stats() (map[string]any, error) {
 func (s *ArchiveStore) scanSession(row *sql.Row) (*Session, error) {
 	var sess Session
 	var startStr string
-	var endStr, endReason, summary sql.NullString
+	var endStr, endReason, summary, title, tagsJSON, metaJSON sql.NullString
 
 	err := row.Scan(&sess.ID, &sess.ConversationID, &startStr,
-		&endStr, &endReason, &sess.MessageCount, &summary)
+		&endStr, &endReason, &sess.MessageCount, &summary,
+		&title, &tagsJSON, &metaJSON)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
@@ -1018,32 +1123,28 @@ func (s *ArchiveStore) scanSession(row *sql.Row) (*Session, error) {
 		return nil, err
 	}
 
-	sess.StartedAt, _ = time.Parse(time.RFC3339Nano, startStr)
-	if endStr.Valid {
-		t, _ := time.Parse(time.RFC3339Nano, endStr.String)
-		sess.EndedAt = &t
-	}
-	if endReason.Valid {
-		sess.EndReason = endReason.String
-	}
-	if summary.Valid {
-		sess.Summary = summary.String
-	}
-
+	populateSession(&sess, startStr, endStr, endReason, summary, title, tagsJSON, metaJSON)
 	return &sess, nil
 }
 
 func (s *ArchiveStore) scanSessionRow(rows *sql.Rows) (*Session, error) {
 	var sess Session
 	var startStr string
-	var endStr, endReason, summary sql.NullString
+	var endStr, endReason, summary, title, tagsJSON, metaJSON sql.NullString
 
 	err := rows.Scan(&sess.ID, &sess.ConversationID, &startStr,
-		&endStr, &endReason, &sess.MessageCount, &summary)
+		&endStr, &endReason, &sess.MessageCount, &summary,
+		&title, &tagsJSON, &metaJSON)
 	if err != nil {
 		return nil, err
 	}
 
+	populateSession(&sess, startStr, endStr, endReason, summary, title, tagsJSON, metaJSON)
+	return &sess, nil
+}
+
+// populateSession fills parsed fields from nullable database columns.
+func populateSession(sess *Session, startStr string, endStr, endReason, summary, title, tagsJSON, metaJSON sql.NullString) {
 	sess.StartedAt, _ = time.Parse(time.RFC3339Nano, startStr)
 	if endStr.Valid {
 		t, _ := time.Parse(time.RFC3339Nano, endStr.String)
@@ -1055,8 +1156,18 @@ func (s *ArchiveStore) scanSessionRow(rows *sql.Rows) (*Session, error) {
 	if summary.Valid {
 		sess.Summary = summary.String
 	}
-
-	return &sess, nil
+	if title.Valid {
+		sess.Title = title.String
+	}
+	if tagsJSON.Valid {
+		_ = json.Unmarshal([]byte(tagsJSON.String), &sess.Tags)
+	}
+	if metaJSON.Valid {
+		var meta SessionMetadata
+		if err := json.Unmarshal([]byte(metaJSON.String), &meta); err == nil {
+			sess.Metadata = &meta
+		}
+	}
 }
 
 func (s *ArchiveStore) scanMessages(rows *sql.Rows) ([]ArchivedMessage, error) {

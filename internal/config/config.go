@@ -111,6 +111,9 @@ type Config struct {
 	// system prompt with a custom agent identity.
 	PersonaFile string `yaml:"persona_file"`
 
+	// Archive configures session archive behavior.
+	Archive ArchiveConfig `yaml:"archive"`
+
 	// Search configures web search providers.
 	Search SearchConfig `yaml:"search"`
 
@@ -229,6 +232,15 @@ type EmbeddingsConfig struct {
 	Enabled bool   `yaml:"enabled"`
 	Model   string `yaml:"model"`   // Embedding model name. Default: "nomic-embed-text"
 	BaseURL string `yaml:"baseurl"` // Ollama URL for embeddings. Default: models.ollama_url
+}
+
+// ArchiveConfig configures session archive behavior.
+type ArchiveConfig struct {
+	// MetadataModel is the LLM model used for generating session metadata
+	// (title, tags, summaries) on session close. This is an asynchronous
+	// operation where latency doesn't matter — ideal for local/free models.
+	// Default: uses the default model.
+	MetadataModel string `yaml:"metadata_model"`
 }
 
 // WorkspaceConfig configures the agent's sandboxed file system access.
