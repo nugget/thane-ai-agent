@@ -4,6 +4,7 @@ package memory
 import (
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -103,9 +104,12 @@ type SearchOptions struct {
 }
 
 // NewArchiveStore creates a new archive store at the given database path.
-func NewArchiveStore(dbPath string, cfg ArchiveConfig) (*ArchiveStore, error) {
-	if cfg.SilenceThreshold == 0 {
-		cfg = DefaultArchiveConfig()
+// Pass nil for cfg to use DefaultArchiveConfig().
+// Pass nil for logger to suppress startup logging.
+func NewArchiveStore(dbPath string, cfg *ArchiveConfig, logger *slog.Logger) (*ArchiveStore, error) {
+	if cfg == nil {
+		defaults := DefaultArchiveConfig()
+		cfg = &defaults
 	}
 
 	db, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_busy_timeout=5000")
@@ -127,6 +131,27 @@ func NewArchiveStore(dbPath string, cfg ArchiveConfig) (*ArchiveStore, error) {
 
 	// Try to enable FTS5 — gracefully degrade if not available
 	s.ftsEnabled = s.tryEnableFTS()
+
+	if logger != nil {
+		if s.ftsEnabled {
+			logger.Info("session archive initialized",
+				"path", dbPath,
+				"fts5", true,
+				"silence_threshold", cfg.SilenceThreshold.String(),
+				"max_context_messages", cfg.MaxContextMessages,
+				"max_context_duration", cfg.MaxContextDuration.String(),
+			)
+		} else {
+			logger.Warn("session archive: FTS5 not available — search will use slower LIKE fallback. "+
+				"Rebuild SQLite with FTS5 enabled for full-text search capability.",
+				"path", dbPath,
+				"fts5", false,
+				"silence_threshold", cfg.SilenceThreshold.String(),
+				"max_context_messages", cfg.MaxContextMessages,
+				"max_context_duration", cfg.MaxContextDuration.String(),
+			)
+		}
+	}
 
 	return s, nil
 }
