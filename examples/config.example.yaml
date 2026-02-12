@@ -66,6 +66,14 @@ talents_dir: ./talents
 # Copy persona.default.md to persona.md and customize for your instance.
 # persona_file: ./persona.md
 
+# Context injection — files to pre-load into the system prompt.
+# Saves the agent from spending tool call iterations reading files it
+# needs every session. Supports ~ expansion. Missing files are skipped.
+# context:
+#   inject_files:
+#     - ~/.agents.md          # Host-specific breadcrumb (paths, services, tools)
+#     - ~/Aimee/MEMORY.md     # Long-term curated memory
+
 # Workspace for file operations (optional)
 # When configured, the agent can read/write files within this directory
 # All file tool paths are sandboxed to this directory
@@ -106,6 +114,12 @@ embeddings:
   enabled: false
   model: nomic-embed-text
   # baseurl: http://localhost:11434  # Defaults to models.ollama_url
+
+# Session archive — configures LLM-generated session metadata.
+# When sessions end, Thane generates titles, tags, and summaries.
+# Use a cheap/local model for this async task.
+# archive:
+#   metadata_model: qwen2.5-coder:32b  # Defaults to models.default
 
 # Logging level: trace, debug, info (default), warn, error
 # - info: normal operation (loop start/end, failover, compaction)

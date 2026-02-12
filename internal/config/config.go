@@ -111,6 +111,9 @@ type Config struct {
 	// system prompt with a custom agent identity.
 	PersonaFile string `yaml:"persona_file"`
 
+	// Context configures static context injection into the system prompt.
+	Context ContextConfig `yaml:"context"`
+
 	// Archive configures session archive behavior.
 	Archive ArchiveConfig `yaml:"archive"`
 
@@ -235,6 +238,17 @@ type EmbeddingsConfig struct {
 }
 
 // ArchiveConfig configures session archive behavior.
+// ContextConfig configures static context injection into the system prompt.
+// Files listed in InjectFiles are read at session start and appended to the
+// system prompt, giving the agent immediate access to key knowledge without
+// spending tool call iterations reading files.
+type ContextConfig struct {
+	// InjectFiles is a list of file paths to read and inject into the
+	// system prompt. Paths support ~ expansion. Files that don't exist
+	// are silently skipped.
+	InjectFiles []string `yaml:"inject_files"`
+}
+
 type ArchiveConfig struct {
 	// MetadataModel is the LLM model used for generating session metadata
 	// (title, tags, summaries) on session close. This is an asynchronous
