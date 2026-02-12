@@ -38,6 +38,14 @@ func (ft *FileTools) resolvePath(path string) (string, bool, error) {
 		return "", false, fmt.Errorf("workspace not configured")
 	}
 
+	// Expand ~ to home directory
+	if strings.HasPrefix(path, "~/") || path == "~" {
+		home, err := os.UserHomeDir()
+		if err == nil {
+			path = filepath.Join(home, path[1:])
+		}
+	}
+
 	// Clean and resolve the path
 	var absPath string
 	if filepath.IsAbs(path) {
