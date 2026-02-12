@@ -339,11 +339,17 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	var ha *homeassistant.Client
 	if cfg.HomeAssistant.Configured() {
 		ha = homeassistant.NewClient(cfg.HomeAssistant.URL, cfg.HomeAssistant.Token, logger)
-		logger.Info("Home Assistant configured", "url", cfg.HomeAssistant.URL)
+		logger.Debug("Home Assistant configured", "url", cfg.HomeAssistant.URL)
 		if err := ha.Ping(ctx); err != nil {
-			logger.Error("Home Assistant ping failed", "error", err)
+			logger.Error("Home Assistant unreachable", "url", cfg.HomeAssistant.URL, "error", err)
+		} else if haCfg, err := ha.GetConfig(ctx); err == nil {
+			logger.Info("connected to Home Assistant",
+				"url", cfg.HomeAssistant.URL,
+				"version", haCfg.Version,
+				"location", haCfg.LocationName,
+			)
 		} else {
-			logger.Info("Home Assistant ping succeeded")
+			logger.Info("connected to Home Assistant", "url", cfg.HomeAssistant.URL)
 		}
 	} else {
 		logger.Warn("Home Assistant not configured - tools will be limited")
