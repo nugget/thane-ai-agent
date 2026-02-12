@@ -172,6 +172,9 @@ func (c *OllamaClient) ChatStream(ctx context.Context, model string, messages []
 				chatResp.Message.Content = ""
 			}
 		}
+		if chatResp.Message.Content != "" {
+			chatResp.Message.Content = stripTrailingToolCallJSON(chatResp.Message.Content, validToolNames)
+		}
 		return chatResp, nil
 	}
 
@@ -252,12 +255,16 @@ func (c *OllamaClient) ChatStream(ctx context.Context, model string, messages []
 			finalResp.Message.ToolCalls = parsed
 			finalResp.Message.Content = "" // Clear content since it was a tool call
 		} else if looksLikeHallucinatedToolCall(finalResp.Message.Content) {
-			// Model emitted JSON that looks like a tool call but with an invalid name.
-			// Suppress it — hallucinated tool calls are noise, not content.
 			c.logger.Warn("suppressed hallucinated tool call from stream",
 				"content", finalResp.Message.Content)
 			finalResp.Message.Content = ""
 		}
+	}
+
+	// Strip trailing tool-call JSON from mixed prose+JSON responses.
+	// Models sometimes answer and then append a raw tool call at the end.
+	if finalResp.Message.Content != "" {
+		finalResp.Message.Content = stripTrailingToolCallJSON(finalResp.Message.Content, validToolNames)
 	}
 
 	return finalResp, nil
@@ -287,6 +294,29 @@ func extractToolNames(tools []map[string]any) []string {
 // fields — the shape of a tool call — but wasn't matched by parseTextToolCalls
 // (meaning the tool name is invalid). This is a hallucinated tool call that should
 // be suppressed rather than shown to the user.
+// stripTrailingToolCallJSON removes JSON tool call objects appended to the end
+// of prose content. Returns the cleaned prose (or original if no trailing JSON found).
+func stripTrailingToolCallJSON(content string, validTools []string) string {
+	lastBrace := strings.LastIndex(content, "{")
+	if lastBrace <= 0 {
+		return content
+	}
+	jsonPart := strings.TrimSpace(content[lastBrace:])
+	var obj struct {
+		Name      string         `json:"name"`
+		Arguments map[string]any `json:"arguments"`
+	}
+	if err := json.Unmarshal([]byte(jsonPart), &obj); err != nil || obj.Name == "" {
+		return content
+	}
+	// It's a tool call shape — strip it regardless of whether the name is valid
+	cleaned := strings.TrimSpace(content[:lastBrace])
+	if cleaned == "" {
+		return content // Don't strip if there's no prose left
+	}
+	return cleaned
+}
+
 func looksLikeHallucinatedToolCall(content string) bool {
 	trimmed := strings.TrimSpace(content)
 	if trimmed == "" || trimmed[0] != '{' {
