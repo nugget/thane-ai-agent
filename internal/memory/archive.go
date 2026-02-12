@@ -1112,7 +1112,7 @@ func (s *ArchiveStore) PurgeImported(sourceType string) (int, error) {
 	if err != nil {
 		return 0, fmt.Errorf("begin tx: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 
 	// Get all archive session IDs for this source type
 	rows, err := tx.Query(`
@@ -1139,18 +1139,28 @@ func (s *ArchiveStore) PurgeImported(sourceType string) (int, error) {
 
 	// Delete in dependency order: messages, tool calls, FTS, sessions, metadata
 	for _, sid := range sessionIDs {
-		tx.Exec(`DELETE FROM archive_messages WHERE session_id = ?`, sid)
-		tx.Exec(`DELETE FROM archive_tool_calls WHERE session_id = ?`, sid)
-		tx.Exec(`DELETE FROM sessions WHERE id = ?`, sid)
+		if _, err := tx.Exec(`DELETE FROM archive_messages WHERE session_id = ?`, sid); err != nil {
+			return 0, fmt.Errorf("delete messages for session %s: %w", sid[:8], err)
+		}
+		if _, err := tx.Exec(`DELETE FROM archive_tool_calls WHERE session_id = ?`, sid); err != nil {
+			return 0, fmt.Errorf("delete tool calls for session %s: %w", sid[:8], err)
+		}
+		if _, err := tx.Exec(`DELETE FROM sessions WHERE id = ?`, sid); err != nil {
+			return 0, fmt.Errorf("delete session %s: %w", sid[:8], err)
+		}
 	}
 
 	// Rebuild FTS index if enabled
 	if s.ftsEnabled {
-		tx.Exec(`INSERT INTO archive_fts(archive_fts) VALUES('rebuild')`)
+		if _, err := tx.Exec(`INSERT INTO archive_fts(archive_fts) VALUES('rebuild')`); err != nil {
+			return 0, fmt.Errorf("rebuild FTS: %w", err)
+		}
 	}
 
 	// Remove all import metadata for this source type
-	tx.Exec(`DELETE FROM import_metadata WHERE source_type = ?`, sourceType)
+	if _, err := tx.Exec(`DELETE FROM import_metadata WHERE source_type = ?`, sourceType); err != nil {
+		return 0, fmt.Errorf("delete import metadata: %w", err)
+	}
 
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("commit purge: %w", err)
