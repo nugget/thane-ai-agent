@@ -18,11 +18,14 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -578,6 +581,41 @@ JSON:`, transcript.String())
 
 	loop := agent.NewLoop(logger, mem, compactor, rtr, ha, sched, llmClient, cfg.Models.Default, talentContent, personaContent, defaultContextWindow)
 	loop.SetArchiver(archiveAdapter)
+
+	// --- Static context injection ---
+	if len(cfg.Context.InjectFiles) > 0 {
+		var ctxBuf strings.Builder
+		for _, path := range cfg.Context.InjectFiles {
+			// Expand ~ to the user's home directory.
+			if strings.HasPrefix(path, "~") {
+				if home, err := os.UserHomeDir(); err == nil {
+					switch {
+					case path == "~":
+						path = home
+					case strings.HasPrefix(path, "~/") || strings.HasPrefix(path, "~"+string(filepath.Separator)):
+						path = filepath.Join(home, path[2:])
+					}
+				}
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				if errors.Is(err, fs.ErrNotExist) {
+					logger.Warn("context inject file not found", "path", path)
+				} else {
+					logger.Warn("context inject file unreadable", "path", path, "error", err)
+				}
+				continue
+			}
+			logger.Info("context file injected", "path", path, "size", len(data))
+			if ctxBuf.Len() > 0 {
+				ctxBuf.WriteString("\n\n---\n\n")
+			}
+			ctxBuf.WriteString(string(data))
+		}
+		if ctxBuf.Len() > 0 {
+			loop.SetInjectedContext(ctxBuf.String())
+		}
+	}
 
 	// Start initial session
 	archiveAdapter.EnsureSession("default")

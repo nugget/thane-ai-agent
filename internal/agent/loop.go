@@ -119,6 +119,7 @@ type Loop struct {
 	model           string
 	talents         string // Combined talent content for system prompt
 	persona         string // Persona content (replaces base system prompt if set)
+	injectedContext string // Static context from inject_files, loaded at startup
 	contextWindow   int    // Context window size of default model
 	failoverHandler FailoverHandler
 	contextProvider ContextProvider
@@ -154,6 +155,11 @@ func (l *Loop) SetContextProvider(provider ContextProvider) {
 // SetArchiver configures the session archiver for preserving conversations.
 func (l *Loop) SetArchiver(archiver SessionArchiver) {
 	l.archiver = archiver
+}
+
+// SetInjectedContext sets static context to include in every system prompt.
+func (l *Loop) SetInjectedContext(ctx string) {
+	l.injectedContext = ctx
 }
 
 // Tools returns the tool registry for adding additional tools.
@@ -239,6 +245,12 @@ func (l *Loop) buildSystemPrompt(ctx context.Context, userMessage string) string
 		sb.WriteString(l.persona)
 	} else {
 		sb.WriteString(baseSystemPrompt)
+	}
+
+	// Add static injected context (from config inject_files)
+	if l.injectedContext != "" {
+		sb.WriteString("\n\n## Injected Context\n\n")
+		sb.WriteString(l.injectedContext)
 	}
 
 	// Add current time

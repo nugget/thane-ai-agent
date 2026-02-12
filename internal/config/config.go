@@ -111,6 +111,9 @@ type Config struct {
 	// system prompt with a custom agent identity.
 	PersonaFile string `yaml:"persona_file"`
 
+	// Context configures static context injection into the system prompt.
+	Context ContextConfig `yaml:"context"`
+
 	// Archive configures session archive behavior.
 	Archive ArchiveConfig `yaml:"archive"`
 
@@ -232,6 +235,17 @@ type EmbeddingsConfig struct {
 	Enabled bool   `yaml:"enabled"`
 	Model   string `yaml:"model"`   // Embedding model name. Default: "nomic-embed-text"
 	BaseURL string `yaml:"baseurl"` // Ollama URL for embeddings. Default: models.ollama_url
+}
+
+// ContextConfig configures static context injection into the system prompt.
+// Files listed in InjectFiles are read at session start and appended to the
+// system prompt, giving the agent immediate access to key knowledge without
+// spending tool call iterations reading files.
+type ContextConfig struct {
+	// InjectFiles is a list of file paths to read and inject into the
+	// system prompt. Paths support ~ expansion. Missing or unreadable
+	// files are skipped with a warning.
+	InjectFiles []string `yaml:"inject_files"`
 }
 
 // ArchiveConfig configures session archive behavior.
