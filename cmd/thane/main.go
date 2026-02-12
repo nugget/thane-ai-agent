@@ -585,6 +585,7 @@ JSON:`, transcript.String())
 	// --- Static context injection ---
 	if len(cfg.Context.InjectFiles) > 0 {
 		var ctxBuf strings.Builder
+		var injectedCount int
 		for _, path := range cfg.Context.InjectFiles {
 			// Expand ~ to the user's home directory.
 			if strings.HasPrefix(path, "~") {
@@ -606,11 +607,15 @@ JSON:`, transcript.String())
 				}
 				continue
 			}
-			logger.Info("context file injected", "path", path, "size", len(data))
+			logger.Debug("context file injected", "path", path, "size", len(data))
+			injectedCount++
 			if ctxBuf.Len() > 0 {
 				ctxBuf.WriteString("\n\n---\n\n")
 			}
 			ctxBuf.WriteString(string(data))
+		}
+		if injectedCount > 0 {
+			logger.Info("context injected", "files", injectedCount, "total_bytes", ctxBuf.Len())
 		}
 		if ctxBuf.Len() > 0 {
 			loop.SetInjectedContext(ctxBuf.String())
