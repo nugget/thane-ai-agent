@@ -229,6 +229,41 @@ func TestParseTextToolCalls_Arguments(t *testing.T) {
 	}
 }
 
+func TestParseTextToolCalls_ConcatenatedJSON(t *testing.T) {
+	// Test concatenated JSON objects (qwen-style): {...}{...}{...}
+	content := `{"name": "archive_search", "arguments": {"query": "model thane:local routing"}}{"name": "archive_search", "arguments": {"query": "what was discussed previously"}}{"name": "file_read", "arguments": {"path": "logs/log.txt"}}`
+	validTools := []string{"archive_search", "file_read", "archive_sessions"}
+
+	calls := parseTextToolCalls(content, validTools)
+	if len(calls) != 3 {
+		t.Fatalf("expected 3 tool calls, got %d", len(calls))
+	}
+
+	if calls[0].Function.Name != "archive_search" {
+		t.Errorf("call[0] name = %q, want archive_search", calls[0].Function.Name)
+	}
+	if calls[1].Function.Name != "archive_search" {
+		t.Errorf("call[1] name = %q, want archive_search", calls[1].Function.Name)
+	}
+	if calls[2].Function.Name != "file_read" {
+		t.Errorf("call[2] name = %q, want file_read", calls[2].Function.Name)
+	}
+	if calls[2].Function.Arguments["path"] != "logs/log.txt" {
+		t.Errorf("call[2] path = %v, want logs/log.txt", calls[2].Function.Arguments["path"])
+	}
+}
+
+func TestParseTextToolCalls_ConcatenatedWithTrailingText(t *testing.T) {
+	// Concatenated JSON followed by prose (as seen from qwen)
+	content := `{"name": "archive_search", "arguments": {"query": "routing"}}{"name": "file_read", "arguments": {"path": "log.txt"}}Session Management in Open WebUI and Thane`
+	validTools := []string{"archive_search", "file_read"}
+
+	calls := parseTextToolCalls(content, validTools)
+	if len(calls) != 2 {
+		t.Fatalf("expected 2 tool calls, got %d (trailing text should be ignored)", len(calls))
+	}
+}
+
 func TestParseTextToolCalls_ToolNameSpaceJSON(t *testing.T) {
 	// Test "tool_name {json}" format that some models output
 	tests := []struct {

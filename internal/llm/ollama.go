@@ -329,6 +329,35 @@ func parseTextToolCalls(content string, validTools []string) []ToolCall {
 		}
 	}
 
+	// Try parsing concatenated JSON objects: {"name":"a","arguments":{}}{"name":"b","arguments":{}}
+	// Common with qwen and other models that emit multiple tool calls as adjacent JSON blobs.
+	if strings.Count(content, `"name"`) > 1 && strings.Contains(content, "}{") {
+		dec := json.NewDecoder(strings.NewReader(content))
+		for dec.More() {
+			var tc struct {
+				Name      string         `json:"name"`
+				Arguments map[string]any `json:"arguments"`
+			}
+			if err := dec.Decode(&tc); err != nil {
+				break
+			}
+			if tc.Name != "" && isValidTool(tc.Name, validTools) {
+				result = append(result, ToolCall{
+					Function: struct {
+						Name      string         `json:"name"`
+						Arguments map[string]any `json:"arguments"`
+					}{
+						Name:      tc.Name,
+						Arguments: tc.Arguments,
+					},
+				})
+			}
+		}
+		if len(result) > 0 {
+			return result
+		}
+	}
+
 	// Try parsing "tool_name {json_args}" format (common with some models)
 	// e.g., "find_entity {"description": "access point LED", "area": "office"}"
 	for _, toolName := range validTools {
