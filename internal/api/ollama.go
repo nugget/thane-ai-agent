@@ -167,16 +167,14 @@ func handleOllamaChatShared(w http.ResponseWriter, r *http.Request, loop *agent.
 		Model:    model,
 	}
 
-	// Force non-streaming - text-based tool calls leak JSON during streaming
-	// TODO: Buffer first response chunk to detect tool calls before streaming
-	streaming := false
-	_ = req.Stream
-
+	// Implement smart streaming with tool call detection
+	streaming := req.Stream != nil && *req.Stream
+	
 	if streaming {
-		handleOllamaStreamingChatShared(w, r, agentReq, start, loop, logger)
+		handleOllamaStreamingWithDetection(w, r, agentReq, start, loop, logger)
 		return
 	}
-
+	
 	// Non-streaming response
 	resp, err := loop.Run(r.Context(), agentReq, nil)
 	if err != nil {
@@ -203,6 +201,138 @@ func handleOllamaChatShared(w http.ResponseWriter, r *http.Request, loop *agent.
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(ollamaResp); err != nil {
 		logger.Debug("failed to encode ollama response", "error", err)
+	}
+}
+
+// handleOllamaStreamingWithDetection handles streaming with tool call detection.
+// It buffers initial events and falls back to non-streaming if tool calls are detected.
+func handleOllamaStreamingWithDetection(w http.ResponseWriter, r *http.Request, req *agent.Request, start time.Time, loop *agent.Loop, logger *slog.Logger) {
+	// Buffer to collect response content
+	var buffer strings.Builder
+	hasToolCalls := false
+	streamStarted := false
+	
+	model := "thane"
+	if req.Model != "" {
+		model = req.Model
+	}
+	
+	// Create a stream callback that buffers and detects
+	streamCallback := func(event agent.StreamEvent) {
+		switch event.Kind {
+		case agent.KindToolCallStart:
+			hasToolCalls = true
+			// Don't stream tool calls
+			return
+			
+		case agent.KindToolCallDone:
+			// Don't stream tool results
+			return
+			
+		case agent.KindToken:
+			if !hasToolCalls {
+				// If we haven't started streaming yet, start now
+				if !streamStarted {
+					streamStarted = true
+					// Set streaming headers
+					w.Header().Set("Content-Type", "application/x-ndjson")
+					w.Header().Set("Cache-Control", "no-cache")
+					w.Header().Set("Connection", "keep-alive")
+				}
+				
+				// Stream the token
+				chunk := OllamaChatResponse{
+					Model:     model,
+					CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+					Message: OllamaChatMessage{
+						Role:    "assistant",
+						Content: event.Token,
+					},
+					Done: false,
+				}
+				
+				if flusher, ok := w.(http.Flusher); ok {
+					data, _ := json.Marshal(chunk)
+					fmt.Fprintf(w, "%s\n", data)
+					flusher.Flush()
+				}
+			}
+			// Always collect tokens for final response
+			buffer.WriteString(event.Token)
+		}
+	}
+	
+	// Run the agent with our callback
+	resp, err := loop.Run(r.Context(), req, streamCallback)
+	
+	if err != nil {
+		logger.Error("agent loop failed", "error", err)
+		if !streamStarted {
+			// If we haven't started streaming, send a proper error
+			ollamaError(w, http.StatusInternalServerError, "agent error")
+		} else {
+			// Already streaming, send error in stream format
+			errChunk := OllamaChatResponse{
+				Model:     model,
+				CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+				Message: OllamaChatMessage{
+					Role:    "assistant",
+					Content: fmt.Sprintf("Error: %v", err),
+				},
+				Done:       true,
+				DoneReason: "error",
+			}
+			if flusher, ok := w.(http.Flusher); ok {
+				data, _ := json.Marshal(errChunk)
+				fmt.Fprintf(w, "%s\n", data)
+				flusher.Flush()
+			}
+		}
+		return
+	}
+	
+	// If we had tool calls and didn't stream, send the complete response
+	if hasToolCalls && !streamStarted {
+		duration := time.Since(start)
+		completeResp := OllamaChatResponse{
+			Model:     resp.Model,
+			CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+			Message: OllamaChatMessage{
+				Role:    "assistant",
+				Content: resp.Content,
+			},
+			Done:          true,
+			DoneReason:    "stop",
+			TotalDuration: duration.Nanoseconds(),
+			EvalDuration:  duration.Nanoseconds(),
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(completeResp); err != nil {
+			logger.Debug("failed to encode ollama response", "error", err)
+		}
+		return
+	}
+	
+	// Send final message for streaming response
+	if streamStarted {
+		duration := time.Since(start)
+		finalChunk := OllamaChatResponse{
+			Model:     model,
+			CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+			Message: OllamaChatMessage{
+				Role:    "assistant",
+				Content: "", // Empty content for final message
+			},
+			Done:          true,
+			DoneReason:    "stop",
+			TotalDuration: duration.Nanoseconds(),
+			EvalDuration:  duration.Nanoseconds(),
+		}
+		if flusher, ok := w.(http.Flusher); ok {
+			data, _ := json.Marshal(finalChunk)
+			fmt.Fprintf(w, "%s\n", data)
+			flusher.Flush()
+		}
 	}
 }
 
