@@ -244,6 +244,18 @@ func (s *ArchiveStore) migrate() error {
 			ON sessions(conversation_id, started_at DESC);
 		CREATE INDEX IF NOT EXISTS idx_sessions_started 
 			ON sessions(started_at DESC);
+
+		-- Import tracking for idempotent re-imports and purge support.
+		-- Maps external source IDs to archive session IDs so we can
+		-- detect duplicates and cleanly remove all imported data.
+		CREATE TABLE IF NOT EXISTS import_metadata (
+			source_id TEXT NOT NULL,
+			source_type TEXT NOT NULL,
+			archive_session_id TEXT NOT NULL,
+			imported_at TIMESTAMP NOT NULL,
+			PRIMARY KEY (source_id, source_type),
+			FOREIGN KEY (archive_session_id) REFERENCES sessions(id)
+		);
 	`)
 	return err
 }
@@ -1070,6 +1082,81 @@ func (s *ArchiveStore) scanMessages(rows *sql.Rows) ([]ArchivedMessage, error) {
 		messages = append(messages, m)
 	}
 	return messages, nil
+}
+
+// RecordImport creates a mapping from an external source ID to an archive session ID.
+// Used by importers to track which external sessions have already been imported,
+// enabling idempotent re-runs.
+func (s *ArchiveStore) RecordImport(sourceID, sourceType, archiveSessionID string) error {
+	_, err := s.db.Exec(`
+		INSERT OR IGNORE INTO import_metadata (source_id, source_type, archive_session_id, imported_at)
+		VALUES (?, ?, ?, ?)
+	`, sourceID, sourceType, archiveSessionID, time.Now().UTC().Format(time.RFC3339Nano))
+	return err
+}
+
+// IsImported checks whether an external source ID has already been imported.
+func (s *ArchiveStore) IsImported(sourceID, sourceType string) (bool, error) {
+	var count int
+	err := s.db.QueryRow(`
+		SELECT COUNT(*) FROM import_metadata WHERE source_id = ? AND source_type = ?
+	`, sourceID, sourceType).Scan(&count)
+	return count > 0, err
+}
+
+// PurgeImported removes all archive data that was imported from a given source type.
+// This deletes sessions, messages, tool calls, and import metadata — a clean slate
+// so the import can be re-run with improved logic.
+func (s *ArchiveStore) PurgeImported(sourceType string) (int, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Get all archive session IDs for this source type
+	rows, err := tx.Query(`
+		SELECT archive_session_id FROM import_metadata WHERE source_type = ?
+	`, sourceType)
+	if err != nil {
+		return 0, fmt.Errorf("query imports: %w", err)
+	}
+
+	var sessionIDs []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return 0, fmt.Errorf("scan session id: %w", err)
+		}
+		sessionIDs = append(sessionIDs, id)
+	}
+	rows.Close()
+
+	if len(sessionIDs) == 0 {
+		return 0, nil
+	}
+
+	// Delete in dependency order: messages, tool calls, FTS, sessions, metadata
+	for _, sid := range sessionIDs {
+		tx.Exec(`DELETE FROM archive_messages WHERE session_id = ?`, sid)
+		tx.Exec(`DELETE FROM archive_tool_calls WHERE session_id = ?`, sid)
+		tx.Exec(`DELETE FROM sessions WHERE id = ?`, sid)
+	}
+
+	// Rebuild FTS index if enabled
+	if s.ftsEnabled {
+		tx.Exec(`INSERT INTO archive_fts(archive_fts) VALUES('rebuild')`)
+	}
+
+	// Remove all import metadata for this source type
+	tx.Exec(`DELETE FROM import_metadata WHERE source_type = ?`, sourceType)
+
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit purge: %w", err)
+	}
+
+	return len(sessionIDs), nil
 }
 
 func nullString(s string) any {

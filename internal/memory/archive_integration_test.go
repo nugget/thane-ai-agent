@@ -251,3 +251,136 @@ func TestFTSEnabled(t *testing.T) {
 	// Just verify the method doesn't panic — value depends on build
 	_ = store.FTSEnabled()
 }
+
+// TestImportTracking_RecordAndCheck verifies idempotent import detection.
+func TestImportTracking_RecordAndCheck(t *testing.T) {
+	store := newTestArchiveStore(t)
+
+	sess, _ := store.StartSession("conv-1")
+
+	// Not imported yet
+	imported, err := store.IsImported("oc-session-1", "openclaw")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if imported {
+		t.Error("expected not-imported before recording")
+	}
+
+	// Record the import
+	if err := store.RecordImport("oc-session-1", "openclaw", sess.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	// Now it should show as imported
+	imported, err = store.IsImported("oc-session-1", "openclaw")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !imported {
+		t.Error("expected imported after recording")
+	}
+
+	// Different source type should not match
+	imported, _ = store.IsImported("oc-session-1", "other-source")
+	if imported {
+		t.Error("expected not-imported for different source type")
+	}
+}
+
+// TestImportTracking_DuplicateRecordIgnored verifies INSERT OR IGNORE behavior.
+func TestImportTracking_DuplicateRecordIgnored(t *testing.T) {
+	store := newTestArchiveStore(t)
+
+	sess, _ := store.StartSession("conv-1")
+
+	if err := store.RecordImport("oc-1", "openclaw", sess.ID); err != nil {
+		t.Fatal(err)
+	}
+	// Second call should not error
+	if err := store.RecordImport("oc-1", "openclaw", sess.ID); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestPurgeImported removes all data from a given source type.
+func TestPurgeImported(t *testing.T) {
+	store := newTestArchiveStore(t)
+
+	// Create two "imported" sessions with messages and tool calls
+	sess1, _ := store.StartSessionAt("imported", time.Date(2026, 2, 1, 10, 0, 0, 0, time.UTC))
+	sess2, _ := store.StartSessionAt("imported", time.Date(2026, 2, 2, 10, 0, 0, 0, time.UTC))
+
+	msgs := []ArchivedMessage{
+		{ID: "m1", ConversationID: "imported", SessionID: sess1.ID,
+			Role: "user", Content: "hello from session 1",
+			Timestamp: time.Now(), ArchiveReason: "import"},
+		{ID: "m2", ConversationID: "imported", SessionID: sess2.ID,
+			Role: "user", Content: "hello from session 2",
+			Timestamp: time.Now(), ArchiveReason: "import"},
+	}
+	store.ArchiveMessages(msgs)
+
+	calls := []ArchivedToolCall{
+		{ID: "tc1", ConversationID: "imported", SessionID: sess1.ID,
+			ToolName: "test", Arguments: "{}", StartedAt: time.Now()},
+	}
+	store.ArchiveToolCalls(calls)
+
+	store.RecordImport("oc-1", "openclaw", sess1.ID)
+	store.RecordImport("oc-2", "openclaw", sess2.ID)
+
+	// Also create a non-imported session that should survive the purge
+	nativeSess, _ := store.StartSession("native")
+	store.ArchiveMessages([]ArchivedMessage{
+		{ID: "m3", ConversationID: "native", SessionID: nativeSess.ID,
+			Role: "user", Content: "native message",
+			Timestamp: time.Now(), ArchiveReason: "reset"},
+	})
+
+	// Purge
+	purged, err := store.PurgeImported("openclaw")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if purged != 2 {
+		t.Errorf("expected 2 purged, got %d", purged)
+	}
+
+	// Imported sessions should be gone
+	stats, _ := store.Stats()
+	if stats["total_sessions"].(int) != 1 {
+		t.Errorf("expected 1 surviving session, got %v", stats["total_sessions"])
+	}
+	if stats["total_messages"].(int) != 1 {
+		t.Errorf("expected 1 surviving message, got %v", stats["total_messages"])
+	}
+	if stats["total_tool_calls"].(int) != 0 {
+		t.Errorf("expected 0 surviving tool calls, got %v", stats["total_tool_calls"])
+	}
+
+	// Import metadata should be cleared
+	imported, _ := store.IsImported("oc-1", "openclaw")
+	if imported {
+		t.Error("expected import metadata to be cleared")
+	}
+
+	// Native message should survive
+	transcript, _ := store.GetSessionTranscript(nativeSess.ID)
+	if len(transcript) != 1 || transcript[0].Content != "native message" {
+		t.Error("native session data should survive purge")
+	}
+}
+
+// TestPurgeImported_NoData returns zero when nothing to purge.
+func TestPurgeImported_NoData(t *testing.T) {
+	store := newTestArchiveStore(t)
+
+	purged, err := store.PurgeImported("openclaw")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if purged != 0 {
+		t.Errorf("expected 0 purged, got %d", purged)
+	}
+}

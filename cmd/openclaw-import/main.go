@@ -25,10 +25,13 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/memory"
 )
 
+const sourceType = "openclaw"
+
 func main() {
 	openclawDir := flag.String("openclaw", "", "Path to .openclaw directory")
 	dataDir := flag.String("data", "", "Path to Thane data directory (where archive.db will be created)")
 	dryRun := flag.Bool("dry-run", false, "Parse and report without writing to database")
+	purge := flag.Bool("purge", false, "Remove all previously imported OpenClaw data and re-import")
 	verbose := flag.Bool("verbose", false, "Verbose output")
 	flag.Parse()
 
@@ -128,9 +131,29 @@ func main() {
 	}
 	defer store.Close()
 
-	// Import each session
-	imported := 0
+	// Purge previously imported data if requested
+	if *purge {
+		purged, err := store.PurgeImported(sourceType)
+		if err != nil {
+			logger.Error("purge failed", "error", err)
+			os.Exit(1)
+		}
+		logger.Info("purged previous import", "sessions_removed", purged)
+	}
+
+	// Import each session, skipping duplicates
+	imported, skipped := 0, 0
 	for _, sess := range allSessions {
+		already, err := store.IsImported(sess.id, sourceType)
+		if err != nil {
+			logger.Warn("failed to check import status", "session", sess.id[:8], "error", err)
+		}
+		if already {
+			logger.Debug("skipping already-imported session", "openclaw_id", sess.id[:8])
+			skipped++
+			continue
+		}
+
 		if err := importSession(store, sess, logger); err != nil {
 			logger.Error("failed to import session",
 				"session", sess.id[:8],
@@ -143,7 +166,8 @@ func main() {
 
 	logger.Info("import complete",
 		"imported", imported,
-		"failed", len(allSessions)-imported,
+		"skipped", skipped,
+		"failed", len(allSessions)-imported-skipped,
 		"archive_path", archivePath,
 	)
 
@@ -445,6 +469,11 @@ func importSession(store *memory.ArchiveStore, sess parsedSession, logger *slog.
 
 	summary := fmt.Sprintf("[Imported from OpenClaw session %s]", sess.id[:8])
 	_ = store.SetSessionSummary(archiveSess.ID, summary)
+
+	// Record the import mapping for idempotent re-runs
+	if err := store.RecordImport(sess.id, sourceType, archiveSess.ID); err != nil {
+		return fmt.Errorf("record import: %w", err)
+	}
 
 	logger.Debug("imported session",
 		"openclaw_id", sess.id[:8],
