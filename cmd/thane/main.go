@@ -363,6 +363,14 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 
 	archiveAdapter := memory.NewArchiveAdapter(archiveStore, logger)
 	archiveAdapter.SetToolCallSource(mem)
+
+	// Choose which model generates session metadata — async, latency doesn't matter.
+	metadataModel := cfg.Archive.MetadataModel
+	if metadataModel == "" {
+		metadataModel = cfg.Models.Default
+	}
+	logger.Info("archive metadata model configured", "model", metadataModel)
+
 	archiveAdapter.SetMetadataGenerator(func(ctx context.Context, messages []memory.ArchivedMessage, toolCalls []memory.ArchivedToolCall) (*memory.SessionMetadata, string, []string, error) {
 		// Build a condensed transcript for the LLM
 		var transcript strings.Builder
@@ -406,7 +414,7 @@ Conversation:
 JSON:`, transcript.String())
 
 		msgs := []llm.Message{{Role: "user", Content: prompt}}
-		resp, err := llmClient.Chat(ctx, cfg.Models.Default, msgs, nil)
+		resp, err := llmClient.Chat(ctx, metadataModel, msgs, nil)
 		if err != nil {
 			return nil, "", nil, err
 		}
