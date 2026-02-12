@@ -172,7 +172,7 @@ func handleOllamaChatShared(w http.ResponseWriter, r *http.Request, loop *agent.
 	if req.Stream != nil {
 		stream = *req.Stream
 	}
-	
+
 	if stream {
 		handleOllamaStreamingChatShared(w, r, agentReq, start, loop, logger)
 		return
@@ -240,7 +240,7 @@ func handleOllamaStreamingChatShared(w http.ResponseWriter, r *http.Request, req
 		if hasToolCalls {
 			return
 		}
-		
+
 		if !streaming {
 			// Still buffering - check for tool calls
 			if event.Kind == agent.KindToolCallStart {
