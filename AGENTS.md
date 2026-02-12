@@ -48,6 +48,7 @@ internal/
 - **Go 1.24+** required
 - **Conventional commits**: `feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `chore:`
 - **All HTTP clients** must use `httpkit.NewClient()` / `httpkit.NewTransport()` — never construct `http.Client{}` directly
+- **Prefer the standard library**. Third-party module imports are expensive — they add supply chain risk, version churn, and transitive dependencies. If `net/http`, `encoding/json`, `crypto/tls`, or another stdlib package can do the job, use it. Only reach for an external module when the stdlib genuinely can't.
 - **Error handling**: Always drain response bodies (`httpkit.DrainAndClose`), bound error reads (`httpkit.ReadErrorBody`)
 - **Tests**: Table-driven where possible, always with `-race`
 - **Logging**: Structured via `slog`. Include relevant context fields (method, URL, entity_id, etc.)
