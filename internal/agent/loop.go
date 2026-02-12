@@ -102,6 +102,8 @@ type SessionArchiver interface {
 	EndSession(sessionID string, reason string) error
 	// ActiveSessionID returns the current session ID, or empty if none.
 	ActiveSessionID(conversationID string) string
+	// EnsureSession starts a session if none is active, returns the session ID.
+	EnsureSession(conversationID string) string
 	// OnMessage is called after each message to track session stats.
 	OnMessage(conversationID string)
 }
@@ -265,11 +267,19 @@ func (l *Loop) buildSystemPrompt(ctx context.Context, userMessage string) string
 
 // Run executes one iteration of the agent loop.
 // If stream is non-nil, tokens are pushed to it as they arrive.
-func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (*Response, error) {
+func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (resp *Response, err error) {
 	convID := req.ConversationID
 	if convID == "" {
 		convID = "default"
 	}
+
+	// Track session activity on successful completion
+	defer func() {
+		if err == nil && l.archiver != nil {
+			l.archiver.EnsureSession(convID)
+			l.archiver.OnMessage(convID)
+		}
+	}()
 
 	l.logger.Info("agent loop started",
 		"conversation", convID,
@@ -636,9 +646,16 @@ func (l *Loop) GetContextWindow() int {
 
 // ResetConversation archives and then clears the conversation history.
 func (l *Loop) ResetConversation(conversationID string) error {
-	// Archive before destroying
+	// Archive before destroying — get ALL messages including compacted ones
 	if l.archiver != nil {
-		messages := l.memory.GetMessages(conversationID)
+		var messages []memory.Message
+		if full, ok := l.memory.(interface {
+			GetAllMessages(string) []memory.Message
+		}); ok {
+			messages = full.GetAllMessages(conversationID)
+		} else {
+			messages = l.memory.GetMessages(conversationID)
+		}
 		if len(messages) > 0 {
 			if err := l.archiver.ArchiveConversation(conversationID, messages, "reset"); err != nil {
 				l.logger.Error("failed to archive before reset", "error", err)
@@ -673,7 +690,14 @@ func (l *Loop) ShutdownArchive(conversationID string) {
 		return
 	}
 
-	messages := l.memory.GetMessages(conversationID)
+	var messages []memory.Message
+	if full, ok := l.memory.(interface {
+		GetAllMessages(string) []memory.Message
+	}); ok {
+		messages = full.GetAllMessages(conversationID)
+	} else {
+		messages = l.memory.GetMessages(conversationID)
+	}
 	if len(messages) > 0 {
 		if err := l.archiver.ArchiveConversation(conversationID, messages, "shutdown"); err != nil {
 			l.logger.Error("failed to archive on shutdown", "error", err)

@@ -125,6 +125,16 @@ func NewArchiveStore(db *sql.DB, cfg ArchiveConfig) (*ArchiveStore, error) {
 	return s, nil
 }
 
+// FTSEnabled returns whether FTS5 full-text search is available.
+func (s *ArchiveStore) FTSEnabled() bool {
+	return s.ftsEnabled
+}
+
+// Close closes the underlying database connection.
+func (s *ArchiveStore) Close() error {
+	return s.db.Close()
+}
+
 func (s *ArchiveStore) migrate() error {
 	_, err := s.db.Exec(`
 		-- Immutable archive of all messages

@@ -355,22 +355,26 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// Immutable archive of all conversation transcripts. Messages are
 	// archived before compaction, reset, or shutdown — primary source data
 	// is never discarded.
-	archiveStore, err := memory.NewArchiveStore(
-		func() *sql.DB {
-			db, err := sql.Open("sqlite3", cfg.DataDir+"/archive.db?_journal_mode=WAL&_busy_timeout=5000")
-			if err != nil {
-				logger.Error("failed to open archive database", "error", err)
-				return nil
-			}
-			return db
-		}(),
-		memory.DefaultArchiveConfig(),
-	)
+	archiveDB, err := sql.Open("sqlite3", cfg.DataDir+"/archive.db?_journal_mode=WAL&_busy_timeout=5000")
 	if err != nil {
 		return fmt.Errorf("open archive database: %w", err)
 	}
+	defer archiveDB.Close()
+
+	archiveStore, err := memory.NewArchiveStore(archiveDB, memory.DefaultArchiveConfig())
+	if err != nil {
+		return fmt.Errorf("initialize archive store: %w", err)
+	}
+
+	if archiveStore.FTSEnabled() {
+		logger.Info("session archive initialized", "path", cfg.DataDir+"/archive.db", "fts5", true)
+	} else {
+		logger.Warn("session archive: FTS5 not available — search will use slower LIKE fallback. "+
+			"Rebuild SQLite with FTS5 enabled for full-text search capability.",
+			"path", cfg.DataDir+"/archive.db", "fts5", false)
+	}
+
 	archiveAdapter := memory.NewArchiveAdapter(archiveStore, logger)
-	logger.Info("session archive initialized", "path", cfg.DataDir+"/archive.db")
 
 	// --- Conversation compactor ---
 	// When a conversation grows too long, the compactor summarizes older

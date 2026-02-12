@@ -285,6 +285,32 @@ func (s *SQLiteStore) GetAllConversations() []*Conversation {
 	return convs
 }
 
+// GetAllMessages retrieves ALL messages for a conversation, including compacted ones.
+// Use this for archiving before destructive operations — never lose primary sources.
+func (s *SQLiteStore) GetAllMessages(conversationID string) []Message {
+	rows, err := s.db.Query(`
+		SELECT role, content, timestamp
+		FROM messages
+		WHERE conversation_id = ?
+		ORDER BY timestamp ASC
+	`, conversationID)
+	if err != nil {
+		return []Message{}
+	}
+	defer rows.Close()
+
+	var messages []Message
+	for rows.Next() {
+		var m Message
+		if err := rows.Scan(&m.Role, &m.Content, &m.Timestamp); err != nil {
+			continue
+		}
+		messages = append(messages, m)
+	}
+
+	return messages
+}
+
 // GetTokenCount returns the total token count for a conversation.
 func (s *SQLiteStore) GetTokenCount(conversationID string) int {
 	var count int
