@@ -4,6 +4,7 @@ package buildinfo
 import (
 	"fmt"
 	"runtime"
+	"strings"
 	"time"
 )
 
@@ -13,6 +14,7 @@ var (
 	GitCommit = "unknown"
 	GitBranch = "unknown"
 	BuildTime = "unknown"
+	Changelog = "" // commits since last release tag, semicolon-separated
 )
 
 // startTime records when the process started.
@@ -48,6 +50,38 @@ func Uptime() time.Duration {
 // String returns a one-line summary for logging.
 func String() string {
 	return fmt.Sprintf("Thane %s (%s@%s) built %s", Version, GitCommit, GitBranch, BuildTime)
+}
+
+// ContextString returns a compact multi-line summary for system prompt injection.
+// Includes version, build status, and changelog when available.
+func ContextString() string {
+	// Determine release status
+	status := "dev"
+	if strings.Contains(Version, "-") {
+		// e.g. v0.3.1-2-gf8923d2 or v0.3.1-2-gf8923d2-dirty
+		if strings.HasSuffix(Version, "-dirty") {
+			status = "dev, dirty"
+		} else {
+			status = "dev"
+		}
+	} else if Version != "dev" {
+		status = "release"
+	}
+
+	// Truncate build time to minute precision
+	buildShort := BuildTime
+	if len(buildShort) > 16 {
+		buildShort = buildShort[:16] + "Z"
+	}
+
+	line := fmt.Sprintf("%s (%s, %s) | %s@%s | built %s",
+		Version, status, runtime.GOARCH, GitCommit, GitBranch, buildShort)
+
+	if Changelog != "" {
+		line += "\nChanges since last release: " + Changelog
+	}
+
+	return line
 }
 
 // UserAgent returns an HTTP User-Agent string suitable for outgoing
