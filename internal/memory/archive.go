@@ -1123,7 +1123,7 @@ func (s *ArchiveStore) scanSession(row *sql.Row) (*Session, error) {
 		return nil, err
 	}
 
-	populateSession(&sess, startStr, endStr, endReason, summary, title, tagsJSON, metaJSON)
+	populateSession(&sess, startStr, endStr, endReason, summary, title, tagsJSON, metaJSON, s.logger)
 	return &sess, nil
 }
 
@@ -1139,12 +1139,12 @@ func (s *ArchiveStore) scanSessionRow(rows *sql.Rows) (*Session, error) {
 		return nil, err
 	}
 
-	populateSession(&sess, startStr, endStr, endReason, summary, title, tagsJSON, metaJSON)
+	populateSession(&sess, startStr, endStr, endReason, summary, title, tagsJSON, metaJSON, s.logger)
 	return &sess, nil
 }
 
 // populateSession fills parsed fields from nullable database columns.
-func populateSession(sess *Session, startStr string, endStr, endReason, summary, title, tagsJSON, metaJSON sql.NullString) {
+func populateSession(sess *Session, startStr string, endStr, endReason, summary, title, tagsJSON, metaJSON sql.NullString, logger *slog.Logger) {
 	sess.StartedAt, _ = time.Parse(time.RFC3339Nano, startStr)
 	if endStr.Valid {
 		t, _ := time.Parse(time.RFC3339Nano, endStr.String)
@@ -1160,11 +1160,17 @@ func populateSession(sess *Session, startStr string, endStr, endReason, summary,
 		sess.Title = title.String
 	}
 	if tagsJSON.Valid {
-		_ = json.Unmarshal([]byte(tagsJSON.String), &sess.Tags)
+		if err := json.Unmarshal([]byte(tagsJSON.String), &sess.Tags); err != nil && logger != nil {
+			logger.Warn("corrupt tags JSON in session", "session", ShortID(sess.ID), "error", err)
+		}
 	}
 	if metaJSON.Valid {
 		var meta SessionMetadata
-		if err := json.Unmarshal([]byte(metaJSON.String), &meta); err == nil {
+		if err := json.Unmarshal([]byte(metaJSON.String), &meta); err != nil {
+			if logger != nil {
+				logger.Warn("corrupt metadata JSON in session", "session", ShortID(sess.ID), "error", err)
+			}
+		} else {
 			sess.Metadata = &meta
 		}
 	}

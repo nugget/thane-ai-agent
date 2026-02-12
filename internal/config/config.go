@@ -350,6 +350,9 @@ func (c *Config) applyDefaults() {
 	if c.ShellExec.DefaultTimeoutSec == 0 {
 		c.ShellExec.DefaultTimeoutSec = 30
 	}
+	if c.Archive.MetadataModel == "" {
+		c.Archive.MetadataModel = c.Models.Default
+	}
 
 	for i := range c.Models.Available {
 		if c.Models.Available[i].Provider == "" {
