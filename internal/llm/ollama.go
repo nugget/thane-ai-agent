@@ -166,6 +166,10 @@ func (c *OllamaClient) ChatStream(ctx context.Context, model string, messages []
 				c.logger.Debug("parsed text-based tool calls", "count", len(parsed))
 				chatResp.Message.ToolCalls = parsed
 				chatResp.Message.Content = "" // Clear content since it was a tool call
+			} else if looksLikeHallucinatedToolCall(chatResp.Message.Content) {
+				c.logger.Warn("suppressed hallucinated tool call",
+					"content", chatResp.Message.Content)
+				chatResp.Message.Content = ""
 			}
 		}
 		return chatResp, nil
@@ -247,6 +251,12 @@ func (c *OllamaClient) ChatStream(ctx context.Context, model string, messages []
 			c.logger.Debug("parsed text-based tool calls from stream", "count", len(parsed))
 			finalResp.Message.ToolCalls = parsed
 			finalResp.Message.Content = "" // Clear content since it was a tool call
+		} else if looksLikeHallucinatedToolCall(finalResp.Message.Content) {
+			// Model emitted JSON that looks like a tool call but with an invalid name.
+			// Suppress it — hallucinated tool calls are noise, not content.
+			c.logger.Warn("suppressed hallucinated tool call from stream",
+				"content", finalResp.Message.Content)
+			finalResp.Message.Content = ""
 		}
 	}
 
@@ -273,6 +283,24 @@ func extractToolNames(tools []map[string]any) []string {
 // looksLikeToolCall checks if accumulated stream content might be a text-based
 // tool call. Used to buffer streaming output until we can determine whether
 // the model is emitting a tool call as text or actual prose.
+// looksLikeHallucinatedToolCall checks if content is JSON with "name" and "arguments"
+// fields — the shape of a tool call — but wasn't matched by parseTextToolCalls
+// (meaning the tool name is invalid). This is a hallucinated tool call that should
+// be suppressed rather than shown to the user.
+func looksLikeHallucinatedToolCall(content string) bool {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" || trimmed[0] != '{' {
+		return false
+	}
+	var obj map[string]any
+	if err := json.Unmarshal([]byte(trimmed), &obj); err != nil {
+		return false
+	}
+	_, hasName := obj["name"]
+	_, hasArgs := obj["arguments"]
+	return hasName && hasArgs
+}
+
 func looksLikeToolCall(content string) bool {
 	trimmed := strings.TrimSpace(content)
 	if trimmed == "" {
