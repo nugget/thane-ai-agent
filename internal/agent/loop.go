@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"strings"
 	"time"
 
@@ -492,6 +493,13 @@ iterLoop:
 			"cumul_out", totalOutputTokens,
 			"tool_calls", len(llmResp.Message.ToolCalls),
 			"elapsed", time.Since(iterStart).Round(time.Millisecond),
+			"tok_per_sec", func() float64 {
+				elapsed := time.Since(iterStart).Seconds()
+				if elapsed > 0 && llmResp.OutputTokens > 0 {
+					return math.Round(float64(llmResp.OutputTokens)/elapsed*10) / 10
+				}
+				return 0
+			}(),
 		)
 
 		// Check for tool calls
