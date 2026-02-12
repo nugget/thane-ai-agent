@@ -65,7 +65,7 @@ internal/
 
 ## Things to Watch For
 
-- **macOS Local Network Privacy**: launchd-launched binaries need explicit permission to access LAN hosts (System Settings → Privacy & Security → Local Network). Internet targets work without it. This caused months of debugging (issue #53).
+- **macOS Local Network Privacy**: launchd-launched binaries need explicit permission to access LAN hosts (System Settings → Privacy & Security → Local Network). Internet targets work without it. This was a tricky diagnosis (issue #53).
 - **Branch protection**: `main` requires PRs with verified signatures. No direct pushes.
 - **Version injection**: Uses build-time `ldflags`, not hardcoded strings. The justfile handles this.
 - **Config discovery**: Auto-searches `./config.yaml`, `~/Thane/config.yaml`, `~/.config/thane/config.yaml`, and system paths.
