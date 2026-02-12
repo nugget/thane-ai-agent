@@ -187,6 +187,10 @@ func handleOllamaChatShared(w http.ResponseWriter, r *http.Request, loop *agent.
 		model = ""
 		hints[router.HintMission] = "device_control"
 		// Cost-aware scoring already prefers cheap models
+	case "thane:homeassistant":
+		model = ""
+		hints[router.HintChannel] = "homeassistant"
+		hints[router.HintMission] = "device_control"
 	case "thane:local":
 		model = ""
 		hints[router.HintQualityFloor] = "1"   // accept anything
@@ -451,6 +455,7 @@ func handleOllamaTagsShared(w http.ResponseWriter, r *http.Request, logger *slog
 		{"thane:latest", "default routing"},
 		{"thane:thinking", "prefer quality, complex reasoning"},
 		{"thane:fast", "prefer speed and cost efficiency"},
+		{"thane:homeassistant", "optimized for HA device control"},
 		{"thane:local", "prefer local/free models only"},
 	}
 
