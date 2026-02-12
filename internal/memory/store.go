@@ -17,9 +17,11 @@ type MemoryStore interface {
 
 // Message represents a conversation message.
 type Message struct {
-	Role      string    `json:"role"` // system, user, assistant, tool
-	Content   string    `json:"content"`
-	Timestamp time.Time `json:"timestamp"`
+	Role       string    `json:"role"` // system, user, assistant, tool
+	Content    string    `json:"content"`
+	Timestamp  time.Time `json:"timestamp"`
+	ToolCalls  string    `json:"tool_calls,omitempty"`  // JSON array of tool calls (assistant messages)
+	ToolCallID string    `json:"tool_call_id,omitempty"` // Tool call ID (tool response messages)
 }
 
 // Conversation holds the state of a single conversation.

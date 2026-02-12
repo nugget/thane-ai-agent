@@ -974,10 +974,17 @@ func (s *Server) handleArchiveSessionGet(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	toolCalls, err := s.archiveStore.GetSessionToolCalls(id)
+	if err != nil {
+		s.errorResponse(w, http.StatusInternalServerError, "get tool calls: "+err.Error())
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	writeJSON(w, map[string]any{
 		"session":    sess,
 		"transcript": transcript,
+		"tool_calls": toolCalls,
 	}, s.logger)
 }
 
@@ -1053,9 +1060,8 @@ func (s *Server) handleArchiveSearch(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Parse context=0 to disable context expansion
-	if contextStr := r.URL.Query().Get("context"); contextStr == "0" {
-		opts.MaxMessages = 0
-		opts.MaxDuration = 1 // near-zero to effectively disable
+	if r.URL.Query().Get("context") == "0" {
+		opts.NoContext = true
 	}
 
 	results, err := s.archiveStore.Search(opts)

@@ -6,11 +6,17 @@ import (
 	"sync"
 )
 
+// ToolCallSource provides tool call records for archiving.
+type ToolCallSource interface {
+	GetToolCalls(conversationID string, limit int) []ToolCall
+}
+
 // ArchiveAdapter bridges the ArchiveStore to the agent.SessionArchiver interface.
 // It manages session lifecycle and converts between memory and archive message types.
 type ArchiveAdapter struct {
-	store  *ArchiveStore
-	logger *slog.Logger
+	store      *ArchiveStore
+	logger     *slog.Logger
+	toolSource ToolCallSource // optional — archives tool calls alongside messages
 
 	// Track active session IDs in memory for fast lookup
 	mu       sync.RWMutex
@@ -26,6 +32,11 @@ func NewArchiveAdapter(store *ArchiveStore, logger *slog.Logger) *ArchiveAdapter
 	}
 }
 
+// SetToolCallSource configures a source for tool call records to archive.
+func (a *ArchiveAdapter) SetToolCallSource(source ToolCallSource) {
+	a.toolSource = source
+}
+
 // ArchiveConversation archives all messages from a conversation.
 func (a *ArchiveAdapter) ArchiveConversation(conversationID string, messages []Message, reason string) error {
 	sessionID := a.ActiveSessionID(conversationID)
@@ -39,6 +50,8 @@ func (a *ArchiveAdapter) ArchiveConversation(conversationID string, messages []M
 			Content:        m.Content,
 			Timestamp:      m.Timestamp,
 			TokenCount:     estimateTokens(m.Content),
+			ToolCalls:      m.ToolCalls,
+			ToolCallID:     m.ToolCallID,
 			ArchiveReason:  reason,
 		}
 	}
@@ -47,9 +60,39 @@ func (a *ArchiveAdapter) ArchiveConversation(conversationID string, messages []M
 		return err
 	}
 
+	// Archive associated tool calls if a source is configured
+	toolCallCount := 0
+	if a.toolSource != nil {
+		calls := a.toolSource.GetToolCalls(conversationID, 10000)
+		if len(calls) > 0 {
+			archivedCalls := make([]ArchivedToolCall, len(calls))
+			for i, tc := range calls {
+				archivedCalls[i] = ArchivedToolCall{
+					ID:             tc.ID,
+					ConversationID: tc.ConversationID,
+					SessionID:      sessionID,
+					ToolName:       tc.ToolName,
+					Arguments:      tc.Arguments,
+					Result:         tc.Result,
+					Error:          tc.Error,
+					StartedAt:      tc.StartedAt,
+					CompletedAt:    tc.CompletedAt,
+					DurationMs:     tc.DurationMs,
+				}
+			}
+			if err := a.store.ArchiveToolCalls(archivedCalls); err != nil {
+				a.logger.Error("failed to archive tool calls", "error", err)
+				// Don't fail the whole archive for tool calls
+			} else {
+				toolCallCount = len(archivedCalls)
+			}
+		}
+	}
+
 	a.logger.Info("conversation archived",
 		"conversation", conversationID,
 		"messages", len(messages),
+		"tool_calls", toolCallCount,
 		"reason", reason,
 	)
 	return nil

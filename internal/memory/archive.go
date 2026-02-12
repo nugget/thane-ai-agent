@@ -84,6 +84,21 @@ type Session struct {
 	Summary        string     `json:"summary,omitempty"`
 }
 
+// ArchivedToolCall represents a tool call preserved in the archive.
+type ArchivedToolCall struct {
+	ID             string     `json:"id"`
+	ConversationID string     `json:"conversation_id"`
+	SessionID      string     `json:"session_id"`
+	ToolName       string     `json:"tool_name"`
+	Arguments      string     `json:"arguments"`
+	Result         string     `json:"result,omitempty"`
+	Error          string     `json:"error,omitempty"`
+	StartedAt      time.Time  `json:"started_at"`
+	CompletedAt    *time.Time `json:"completed_at,omitempty"`
+	DurationMs     int64      `json:"duration_ms,omitempty"`
+	ArchivedAt     time.Time  `json:"archived_at"`
+}
+
 // SearchResult represents a search hit with surrounding context.
 type SearchResult struct {
 	Match         ArchivedMessage   `json:"match"`
@@ -101,6 +116,7 @@ type SearchOptions struct {
 	MaxMessages      int           // hard cap per direction
 	MaxDuration      time.Duration // time-based cap per direction
 	Limit            int           // max results
+	NoContext         bool          // if true, return matches only (no surrounding context)
 }
 
 // NewArchiveStore creates a new archive store at the given database path.
@@ -191,6 +207,28 @@ func (s *ArchiveStore) migrate() error {
 			ON archive_messages(timestamp);
 		CREATE INDEX IF NOT EXISTS idx_archive_reason 
 			ON archive_messages(archive_reason);
+
+		-- Archived tool call records
+		CREATE TABLE IF NOT EXISTS archive_tool_calls (
+			id TEXT PRIMARY KEY,
+			conversation_id TEXT NOT NULL,
+			session_id TEXT NOT NULL,
+			tool_name TEXT NOT NULL,
+			arguments TEXT NOT NULL,
+			result TEXT,
+			error TEXT,
+			started_at TIMESTAMP NOT NULL,
+			completed_at TIMESTAMP,
+			duration_ms INTEGER,
+			archived_at TIMESTAMP NOT NULL
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_archive_tc_conversation
+			ON archive_tool_calls(conversation_id, started_at);
+		CREATE INDEX IF NOT EXISTS idx_archive_tc_session
+			ON archive_tool_calls(session_id, started_at);
+		CREATE INDEX IF NOT EXISTS idx_archive_tc_tool
+			ON archive_tool_calls(tool_name);
 
 		-- Session boundaries
 		CREATE TABLE IF NOT EXISTS sessions (
@@ -291,6 +329,104 @@ func (s *ArchiveStore) ArchiveMessages(messages []ArchivedMessage) error {
 	}
 
 	return tx.Commit()
+}
+
+// ArchiveToolCalls copies tool call records to the immutable archive.
+func (s *ArchiveStore) ArchiveToolCalls(calls []ArchivedToolCall) error {
+	if len(calls) == 0 {
+		return nil
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	stmt, err := tx.Prepare(`
+		INSERT OR IGNORE INTO archive_tool_calls
+			(id, conversation_id, session_id, tool_name, arguments,
+			 result, error, started_at, completed_at, duration_ms, archived_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`)
+	if err != nil {
+		return fmt.Errorf("prepare: %w", err)
+	}
+	defer stmt.Close()
+
+	now := time.Now().UTC()
+	for _, tc := range calls {
+		var completedAt any
+		if tc.CompletedAt != nil {
+			completedAt = tc.CompletedAt.Format(time.RFC3339Nano)
+		}
+
+		_, err := stmt.Exec(
+			tc.ID, tc.ConversationID, tc.SessionID, tc.ToolName, tc.Arguments,
+			nullString(tc.Result), nullString(tc.Error),
+			tc.StartedAt.Format(time.RFC3339Nano), completedAt,
+			tc.DurationMs, now.Format(time.RFC3339Nano),
+		)
+		if err != nil {
+			return fmt.Errorf("insert tool call %s: %w", tc.ID, err)
+		}
+	}
+
+	return tx.Commit()
+}
+
+// GetSessionToolCalls returns archived tool calls for a session in chronological order.
+func (s *ArchiveStore) GetSessionToolCalls(sessionID string) ([]ArchivedToolCall, error) {
+	rows, err := s.db.Query(`
+		SELECT id, conversation_id, session_id, tool_name, arguments,
+		       result, error, started_at, completed_at, duration_ms, archived_at
+		FROM archive_tool_calls
+		WHERE session_id = ?
+		ORDER BY started_at ASC
+	`, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("get tool calls: %w", err)
+	}
+	defer rows.Close()
+
+	return s.scanToolCalls(rows)
+}
+
+func (s *ArchiveStore) scanToolCalls(rows *sql.Rows) ([]ArchivedToolCall, error) {
+	var calls []ArchivedToolCall
+	for rows.Next() {
+		var tc ArchivedToolCall
+		var startStr, archivedStr string
+		var completedStr, result, errMsg sql.NullString
+		var durationMs sql.NullInt64
+
+		err := rows.Scan(
+			&tc.ID, &tc.ConversationID, &tc.SessionID, &tc.ToolName, &tc.Arguments,
+			&result, &errMsg, &startStr, &completedStr, &durationMs, &archivedStr,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("scan tool call: %w", err)
+		}
+
+		tc.StartedAt, _ = time.Parse(time.RFC3339Nano, startStr)
+		tc.ArchivedAt, _ = time.Parse(time.RFC3339Nano, archivedStr)
+		if completedStr.Valid {
+			t, _ := time.Parse(time.RFC3339Nano, completedStr.String)
+			tc.CompletedAt = &t
+		}
+		if result.Valid {
+			tc.Result = result.String
+		}
+		if errMsg.Valid {
+			tc.Error = errMsg.String
+		}
+		if durationMs.Valid {
+			tc.DurationMs = durationMs.Int64
+		}
+
+		calls = append(calls, tc)
+	}
+	return calls, nil
 }
 
 // Search performs a full-text search with gap-aware context expansion.
@@ -405,8 +541,11 @@ func (s *ArchiveStore) Search(opts SearchOptions) ([]SearchResult, error) {
 	// Now expand context for each match (safe to query again)
 	var results []SearchResult
 	for _, mh := range matches {
-		before := s.expandContext(mh.msg.ConversationID, mh.msg.Timestamp, true, opts)
-		after := s.expandContext(mh.msg.ConversationID, mh.msg.Timestamp, false, opts)
+		var before, after []ArchivedMessage
+		if !opts.NoContext {
+			before = s.expandContext(mh.msg.ConversationID, mh.msg.Timestamp, true, opts)
+			after = s.expandContext(mh.msg.ConversationID, mh.msg.Timestamp, false, opts)
+		}
 
 		results = append(results, SearchResult{
 			Match:         mh.msg,
@@ -729,16 +868,18 @@ func (s *ArchiveStore) ExportSessionMarkdown(sessionID string) (string, error) {
 func (s *ArchiveStore) Stats() (map[string]any, error) {
 	stats := make(map[string]any)
 
-	var msgCount, sessionCount int
+	var msgCount, sessionCount, toolCallCount int
 	var oldestStr, newestStr sql.NullString
 
 	_ = s.db.QueryRow(`SELECT COUNT(*) FROM archive_messages`).Scan(&msgCount)
 	_ = s.db.QueryRow(`SELECT COUNT(*) FROM sessions`).Scan(&sessionCount)
+	_ = s.db.QueryRow(`SELECT COUNT(*) FROM archive_tool_calls`).Scan(&toolCallCount)
 	_ = s.db.QueryRow(`SELECT MIN(timestamp) FROM archive_messages`).Scan(&oldestStr)
 	_ = s.db.QueryRow(`SELECT MAX(timestamp) FROM archive_messages`).Scan(&newestStr)
 
 	stats["total_messages"] = msgCount
 	stats["total_sessions"] = sessionCount
+	stats["total_tool_calls"] = toolCallCount
 
 	if oldestStr.Valid {
 		stats["oldest_message"] = oldestStr.String

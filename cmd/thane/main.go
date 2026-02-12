@@ -362,6 +362,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	defer archiveStore.Close()
 
 	archiveAdapter := memory.NewArchiveAdapter(archiveStore, logger)
+	archiveAdapter.SetToolCallSource(mem)
 
 	// --- Conversation compactor ---
 	// When a conversation grows too long, the compactor summarizes older
