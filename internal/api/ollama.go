@@ -230,13 +230,13 @@ func handleOllamaStreamingChatShared(w http.ResponseWriter, r *http.Request, req
 		if !streaming {
 			// Still buffering - check for tool calls
 			buffer = append(buffer, event)
-			
+
 			if event.Kind == agent.KindToolCallStart {
 				hasToolCalls = true
 				// Stop buffering and fall back to non-streaming
 				return
 			}
-			
+
 			// Start streaming after we get some content and no tool calls
 			if event.Kind == agent.KindToken && len(buffer) >= 5 && !hasToolCalls {
 				streaming = true
