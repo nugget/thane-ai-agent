@@ -352,8 +352,8 @@ func (r *Router) selectModel(req Request, decision *Decision) string {
 				if m.Speed >= 7 {
 					score += 10
 				}
-			case "ollama", "openwebui":
-				// Direct conversation via Open WebUI or Ollama API: boost quality models
+			case "openwebui":
+				// Direct conversation via Open WebUI: boost quality models
 				if m.Quality >= 9 {
 					score += 15
 					decision.RulesMatched = append(decision.RulesMatched, "channel_webui_quality_"+m.Name)
