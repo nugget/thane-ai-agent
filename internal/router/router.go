@@ -77,6 +77,7 @@ const (
 	ComplexityComplex                    // Reasoning, analysis, explanation
 )
 
+// String returns the human-readable name of a complexity level.
 func (c Complexity) String() string {
 	switch c {
 	case ComplexitySimple:
@@ -503,10 +504,12 @@ func (r *Router) Explain(requestID string) *Decision {
 
 // Helper functions
 
+// generateRequestID creates a timestamp-based ID for log correlation.
 func generateRequestID() string {
 	return time.Now().Format("20060102-150405.000")
 }
 
+// priorityString returns the human-readable name of a priority level.
 func priorityString(p Priority) string {
 	if p == PriorityInteractive {
 		return "interactive"

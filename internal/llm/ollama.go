@@ -291,9 +291,6 @@ func extractToolNames(tools []map[string]any) []string {
 // tool call. Used to buffer streaming output until we can determine whether
 // the model is emitting a tool call as text or actual prose.
 // looksLikeHallucinatedToolCall checks if content is JSON with "name" and "arguments"
-// fields — the shape of a tool call — but wasn't matched by parseTextToolCalls
-// (meaning the tool name is invalid). This is a hallucinated tool call that should
-// be suppressed rather than shown to the user.
 // stripTrailingToolCallJSON removes JSON tool call objects appended to the end
 // of prose content. Returns the cleaned prose (or original if no trailing JSON found).
 func stripTrailingToolCallJSON(content string, validTools []string) string {
@@ -317,6 +314,10 @@ func stripTrailingToolCallJSON(content string, validTools []string) string {
 	return cleaned
 }
 
+// looksLikeHallucinatedToolCall checks if content is JSON with "name" and "arguments"
+// fields — the shape of a tool call — but wasn't matched by parseTextToolCalls
+// (meaning the tool name is invalid). This is a hallucinated tool call that should
+// be suppressed rather than shown to the user.
 func looksLikeHallucinatedToolCall(content string) bool {
 	trimmed := strings.TrimSpace(content)
 	if trimmed == "" || trimmed[0] != '{' {
