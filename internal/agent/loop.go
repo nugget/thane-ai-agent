@@ -386,7 +386,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	// Accumulate token usage across iterations
 	var totalInputTokens, totalOutputTokens int
 
-	maxIterations := 10 // Tool call budget; final text response always gets one extra call
+	maxIterations := 50 // Tool call budget; final text response always gets one extra call
 	for i := 0; i < maxIterations; i++ {
 		l.logger.Debug("calling LLM",
 			"model", model,
