@@ -498,10 +498,16 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 					argsJSON = string(argsBytes)
 				}
 
+				// Log tool call with truncated arguments for observability
+				argPreview := argsJSON
+				if len(argPreview) > 200 {
+					argPreview = argPreview[:200] + "..."
+				}
 				l.logger.Info("tool exec",
 					"conv", shortConv,
 					"iter", i+1,
 					"tool", toolName,
+					"args", argPreview,
 				)
 
 				// Record tool call start (if supported)
