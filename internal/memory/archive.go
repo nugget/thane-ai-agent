@@ -815,6 +815,7 @@ func (s *ArchiveStore) GetMessagesByTimeRange(from, to time.Time, conversationID
 }
 
 // ExportSessionMarkdown exports a session transcript as human-readable markdown.
+// Includes tool call records interleaved chronologically with messages.
 func (s *ArchiveStore) ExportSessionMarkdown(sessionID string) (string, error) {
 	sess, err := s.GetSession(sessionID)
 	if err != nil {
@@ -826,6 +827,18 @@ func (s *ArchiveStore) ExportSessionMarkdown(sessionID string) (string, error) {
 		return "", fmt.Errorf("get transcript: %w", err)
 	}
 
+	toolCalls, _ := s.GetSessionToolCalls(sessionID)
+
+	// Build a lookup of tool calls by start time for interleaving
+	type toolCallEntry struct {
+		tc   ArchivedToolCall
+		used bool
+	}
+	tcEntries := make([]toolCallEntry, len(toolCalls))
+	for i, tc := range toolCalls {
+		tcEntries[i] = toolCallEntry{tc: tc}
+	}
+
 	var sb strings.Builder
 
 	// Header
@@ -835,10 +848,13 @@ func (s *ArchiveStore) ExportSessionMarkdown(sessionID string) (string, error) {
 	if sess.EndedAt != nil {
 		sb.WriteString(fmt.Sprintf("**Ended:** %s (%s)\n", sess.EndedAt.Format("2006-01-02 15:04:05 MST"), sess.EndReason))
 	}
-	sb.WriteString(fmt.Sprintf("**Messages:** %d\n\n", len(messages)))
-	sb.WriteString("---\n\n")
+	sb.WriteString(fmt.Sprintf("**Messages:** %d\n", len(messages)))
+	if len(toolCalls) > 0 {
+		sb.WriteString(fmt.Sprintf("**Tool Calls:** %d\n", len(toolCalls)))
+	}
+	sb.WriteString("\n---\n\n")
 
-	// Messages
+	// Messages with interleaved tool calls
 	for _, m := range messages {
 		ts := m.Timestamp.Format("15:04:05")
 		role := strings.ToUpper(m.Role[:1]) + m.Role[1:]
@@ -851,11 +867,35 @@ func (s *ArchiveStore) ExportSessionMarkdown(sessionID string) (string, error) {
 		case "system":
 			sb.WriteString(fmt.Sprintf("### ⚙️ %s [%s]\n\n%s\n\n", role, ts, m.Content))
 		case "tool":
-			name := m.ToolCallID
-			if name == "" {
-				name = "tool"
+			// Find matching tool call record for richer output
+			var matchedTC *ArchivedToolCall
+			for i := range tcEntries {
+				if !tcEntries[i].used && tcEntries[i].tc.StartedAt.Before(m.Timestamp.Add(time.Second)) &&
+					tcEntries[i].tc.StartedAt.After(m.Timestamp.Add(-30*time.Second)) {
+					matchedTC = &tcEntries[i].tc
+					tcEntries[i].used = true
+					break
+				}
 			}
-			sb.WriteString(fmt.Sprintf("### 🔧 %s [%s]\n\n```\n%s\n```\n\n", name, ts, m.Content))
+
+			if matchedTC != nil {
+				duration := ""
+				if matchedTC.DurationMs > 0 {
+					duration = fmt.Sprintf(" (%dms)", matchedTC.DurationMs)
+				}
+				sb.WriteString(fmt.Sprintf("### 🔧 %s%s [%s]\n\n", matchedTC.ToolName, duration, ts))
+				sb.WriteString(fmt.Sprintf("**Arguments:**\n```json\n%s\n```\n\n", matchedTC.Arguments))
+				if matchedTC.Error != "" {
+					sb.WriteString(fmt.Sprintf("**Error:** %s\n\n", matchedTC.Error))
+				}
+				sb.WriteString(fmt.Sprintf("**Result:**\n```\n%s\n```\n\n", m.Content))
+			} else {
+				name := m.ToolCallID
+				if name == "" {
+					name = "tool"
+				}
+				sb.WriteString(fmt.Sprintf("### 🔧 %s [%s]\n\n```\n%s\n```\n\n", name, ts, m.Content))
+			}
 		default:
 			sb.WriteString(fmt.Sprintf("### %s [%s]\n\n%s\n\n", role, ts, m.Content))
 		}
