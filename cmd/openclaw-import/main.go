@@ -328,10 +328,6 @@ func convertMessage(entry openclawLine, sessionID string, ts time.Time) ([]memor
 
 	case "toolResult":
 		text := extractText(msg.Content)
-		toolName := msg.ToolName
-		if toolName == "" {
-			toolName = "tool"
-		}
 
 		messages = append(messages, memory.ArchivedMessage{
 			ID:             entry.ID,
