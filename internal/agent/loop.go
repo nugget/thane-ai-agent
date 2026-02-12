@@ -92,6 +92,20 @@ type ContextProvider interface {
 	GetContext(ctx context.Context, userMessage string) (string, error)
 }
 
+// SessionArchiver handles session lifecycle and message archiving.
+type SessionArchiver interface {
+	// ArchiveConversation archives all messages from a conversation before clearing.
+	ArchiveConversation(conversationID string, messages []memory.Message, reason string) error
+	// StartSession begins a new session for a conversation.
+	StartSession(conversationID string) (sessionID string, err error)
+	// EndSession ends the current session.
+	EndSession(sessionID string, reason string) error
+	// ActiveSessionID returns the current session ID, or empty if none.
+	ActiveSessionID(conversationID string) string
+	// OnMessage is called after each message to track session stats.
+	OnMessage(conversationID string)
+}
+
 // Loop is the core agent execution loop.
 type Loop struct {
 	logger          *slog.Logger
@@ -106,6 +120,7 @@ type Loop struct {
 	contextWindow   int    // Context window size of default model
 	failoverHandler FailoverHandler
 	contextProvider ContextProvider
+	archiver        SessionArchiver
 }
 
 // NewLoop creates a new agent loop.
@@ -132,6 +147,11 @@ func (l *Loop) SetFailoverHandler(handler FailoverHandler) {
 // SetContextProvider configures a provider for dynamic system prompt context.
 func (l *Loop) SetContextProvider(provider ContextProvider) {
 	l.contextProvider = provider
+}
+
+// SetArchiver configures the session archiver for preserving conversations.
+func (l *Loop) SetArchiver(archiver SessionArchiver) {
+	l.archiver = archiver
 }
 
 // Tools returns the tool registry for adding additional tools.
@@ -614,9 +634,57 @@ func (l *Loop) GetContextWindow() int {
 	return l.contextWindow
 }
 
-// ResetConversation clears the conversation history.
+// ResetConversation archives and then clears the conversation history.
 func (l *Loop) ResetConversation(conversationID string) error {
-	return l.memory.Clear(conversationID)
+	// Archive before destroying
+	if l.archiver != nil {
+		messages := l.memory.GetMessages(conversationID)
+		if len(messages) > 0 {
+			if err := l.archiver.ArchiveConversation(conversationID, messages, "reset"); err != nil {
+				l.logger.Error("failed to archive before reset", "error", err)
+				// Don't block the reset — log and continue
+			}
+		}
+		// End the current session
+		if sid := l.archiver.ActiveSessionID(conversationID); sid != "" {
+			if err := l.archiver.EndSession(sid, "reset"); err != nil {
+				l.logger.Error("failed to end session", "error", err)
+			}
+		}
+	}
+
+	if err := l.memory.Clear(conversationID); err != nil {
+		return err
+	}
+
+	// Start a fresh session
+	if l.archiver != nil {
+		if _, err := l.archiver.StartSession(conversationID); err != nil {
+			l.logger.Error("failed to start new session after reset", "error", err)
+		}
+	}
+
+	return nil
+}
+
+// ShutdownArchive archives the current conversation state before shutdown.
+func (l *Loop) ShutdownArchive(conversationID string) {
+	if l.archiver == nil {
+		return
+	}
+
+	messages := l.memory.GetMessages(conversationID)
+	if len(messages) > 0 {
+		if err := l.archiver.ArchiveConversation(conversationID, messages, "shutdown"); err != nil {
+			l.logger.Error("failed to archive on shutdown", "error", err)
+		}
+	}
+
+	if sid := l.archiver.ActiveSessionID(conversationID); sid != "" {
+		if err := l.archiver.EndSession(sid, "shutdown"); err != nil {
+			l.logger.Error("failed to end session on shutdown", "error", err)
+		}
+	}
 }
 
 // TriggerCompaction manually triggers conversation compaction.

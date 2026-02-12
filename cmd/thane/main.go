@@ -351,6 +351,27 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// provider (Ollama, Anthropic, etc.). Unknown models fall back to Ollama.
 	llmClient := createLLMClient(cfg, logger)
 
+	// --- Session archive ---
+	// Immutable archive of all conversation transcripts. Messages are
+	// archived before compaction, reset, or shutdown — primary source data
+	// is never discarded.
+	archiveStore, err := memory.NewArchiveStore(
+		func() *sql.DB {
+			db, err := sql.Open("sqlite3", cfg.DataDir+"/archive.db?_journal_mode=WAL&_busy_timeout=5000")
+			if err != nil {
+				logger.Error("failed to open archive database", "error", err)
+				return nil
+			}
+			return db
+		}(),
+		memory.DefaultArchiveConfig(),
+	)
+	if err != nil {
+		return fmt.Errorf("open archive database: %w", err)
+	}
+	archiveAdapter := memory.NewArchiveAdapter(archiveStore, logger)
+	logger.Info("session archive initialized", "path", cfg.DataDir+"/archive.db")
+
 	// --- Conversation compactor ---
 	// When a conversation grows too long, the compactor summarizes older
 	// messages to stay within the model's context window. Uses the default
@@ -373,6 +394,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 
 	summarizer := memory.NewLLMSummarizer(summarizeFunc)
 	compactor := memory.NewCompactor(mem, compactionConfig, summarizer)
+	compactor.SetArchiver(archiveStore)
 
 	// --- Talents ---
 	// Talents are markdown files that extend the system prompt with
@@ -468,6 +490,10 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	defaultContextWindow := cfg.ContextWindowForModel(cfg.Models.Default, 200000)
 
 	loop := agent.NewLoop(logger, mem, compactor, rtr, ha, sched, llmClient, cfg.Models.Default, talentContent, personaContent, defaultContextWindow)
+	loop.SetArchiver(archiveAdapter)
+
+	// Start initial session
+	archiveAdapter.EnsureSession("default")
 
 	// --- Fact store ---
 	// Long-term memory backed by SQLite. Facts are discrete pieces of
@@ -600,6 +626,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// health endpoint, router introspection, and the web UI.
 	server := api.NewServer(cfg.Listen.Address, cfg.Listen.Port, loop, rtr, logger)
 	server.SetMemoryStore(mem)
+	server.SetArchiveStore(archiveStore)
 
 	// --- Checkpointer ---
 	// Periodically snapshots application state (conversations, facts,
@@ -708,6 +735,9 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	go func() {
 		<-ctx.Done()
 		logger.Info("shutdown signal received")
+
+		// Archive conversation before shutdown
+		loop.ShutdownArchive("default")
 
 		if _, err := checkpointer.CreateShutdown(); err != nil {
 			logger.Error("failed to create shutdown checkpoint", "error", err)

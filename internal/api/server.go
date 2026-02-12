@@ -37,6 +37,7 @@ type Server struct {
 	router       *router.Router
 	checkpointer *checkpoint.Checkpointer
 	memoryStore  *memory.SQLiteStore
+	archiveStore *memory.ArchiveStore
 	logger       *slog.Logger
 	server       *http.Server
 	stats        *SessionStats
@@ -132,6 +133,11 @@ func (s *Server) SetMemoryStore(ms *memory.SQLiteStore) {
 	s.memoryStore = ms
 }
 
+// SetArchiveStore configures the archive store for archive API endpoints.
+func (s *Server) SetArchiveStore(as *memory.ArchiveStore) {
+	s.archiveStore = as
+}
+
 // Start begins serving HTTP requests.
 func (s *Server) Start(ctx context.Context) error {
 	mux := http.NewServeMux()
@@ -172,6 +178,14 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("POST /v1/session/reset", s.handleSessionReset)
 	mux.HandleFunc("POST /v1/session/compact", s.handleSessionCompact)
 	mux.HandleFunc("GET /v1/session/history", s.handleSessionHistory)
+
+	// Archive endpoints
+	mux.HandleFunc("GET /v1/archive/sessions", s.handleArchiveSessions)
+	mux.HandleFunc("GET /v1/archive/sessions/{id}", s.handleArchiveSessionGet)
+	mux.HandleFunc("GET /v1/archive/sessions/{id}/export", s.handleArchiveSessionExport)
+	mux.HandleFunc("GET /v1/archive/search", s.handleArchiveSearch)
+	mux.HandleFunc("GET /v1/archive/messages", s.handleArchiveMessages)
+	mux.HandleFunc("GET /v1/archive/stats", s.handleArchiveStats)
 
 	// Chat web UI
 	web.RegisterRoutes(mux)
@@ -914,4 +928,217 @@ func (s *Server) handleSessionHistory(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	writeJSON(w, map[string]any{"messages": filtered}, s.logger)
+}
+
+// --- Archive endpoints ---
+
+func (s *Server) handleArchiveSessions(w http.ResponseWriter, r *http.Request) {
+	if s.archiveStore == nil {
+		s.errorResponse(w, http.StatusServiceUnavailable, "archive not configured")
+		return
+	}
+
+	convID := r.URL.Query().Get("conversation_id")
+	limit := parseIntParam(r, "limit", 50)
+
+	sessions, err := s.archiveStore.ListSessions(convID, limit)
+	if err != nil {
+		s.errorResponse(w, http.StatusInternalServerError, "list sessions: "+err.Error())
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	writeJSON(w, map[string]any{
+		"sessions": sessions,
+		"count":    len(sessions),
+	}, s.logger)
+}
+
+func (s *Server) handleArchiveSessionGet(w http.ResponseWriter, r *http.Request) {
+	if s.archiveStore == nil {
+		s.errorResponse(w, http.StatusServiceUnavailable, "archive not configured")
+		return
+	}
+
+	id := r.PathValue("id")
+
+	sess, err := s.archiveStore.GetSession(id)
+	if err != nil || sess == nil {
+		s.errorResponse(w, http.StatusNotFound, "session not found")
+		return
+	}
+
+	transcript, err := s.archiveStore.GetSessionTranscript(id)
+	if err != nil {
+		s.errorResponse(w, http.StatusInternalServerError, "get transcript: "+err.Error())
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	writeJSON(w, map[string]any{
+		"session":    sess,
+		"transcript": transcript,
+	}, s.logger)
+}
+
+func (s *Server) handleArchiveSessionExport(w http.ResponseWriter, r *http.Request) {
+	if s.archiveStore == nil {
+		s.errorResponse(w, http.StatusServiceUnavailable, "archive not configured")
+		return
+	}
+
+	id := r.PathValue("id")
+	format := r.URL.Query().Get("format")
+	if format == "" {
+		format = "markdown"
+	}
+
+	switch format {
+	case "markdown", "md":
+		md, err := s.archiveStore.ExportSessionMarkdown(id)
+		if err != nil {
+			s.errorResponse(w, http.StatusInternalServerError, "export: "+err.Error())
+			return
+		}
+		w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"session-%s.md\"", id[:8]))
+		fmt.Fprint(w, md)
+
+	case "json":
+		sess, err := s.archiveStore.GetSession(id)
+		if err != nil || sess == nil {
+			s.errorResponse(w, http.StatusNotFound, "session not found")
+			return
+		}
+		transcript, err := s.archiveStore.GetSessionTranscript(id)
+		if err != nil {
+			s.errorResponse(w, http.StatusInternalServerError, "get transcript: "+err.Error())
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"session-%s.json\"", id[:8]))
+		writeJSON(w, map[string]any{
+			"session":    sess,
+			"transcript": transcript,
+		}, s.logger)
+
+	default:
+		s.errorResponse(w, http.StatusBadRequest, "unsupported format: "+format+" (use markdown or json)")
+	}
+}
+
+func (s *Server) handleArchiveSearch(w http.ResponseWriter, r *http.Request) {
+	if s.archiveStore == nil {
+		s.errorResponse(w, http.StatusServiceUnavailable, "archive not configured")
+		return
+	}
+
+	query := r.URL.Query().Get("q")
+	if query == "" {
+		s.errorResponse(w, http.StatusBadRequest, "q parameter is required")
+		return
+	}
+
+	opts := memory.SearchOptions{
+		Query:          query,
+		ConversationID: r.URL.Query().Get("conversation_id"),
+		Limit:          parseIntParam(r, "limit", 10),
+	}
+
+	// Parse silence threshold
+	if silenceStr := r.URL.Query().Get("silence"); silenceStr != "" {
+		if d, err := time.ParseDuration(silenceStr); err == nil {
+			opts.SilenceThreshold = d
+		}
+	}
+
+	// Parse context=0 to disable context expansion
+	if contextStr := r.URL.Query().Get("context"); contextStr == "0" {
+		opts.MaxMessages = 0
+		opts.MaxDuration = 1 // near-zero to effectively disable
+	}
+
+	results, err := s.archiveStore.Search(opts)
+	if err != nil {
+		s.errorResponse(w, http.StatusInternalServerError, "search: "+err.Error())
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	writeJSON(w, map[string]any{
+		"results": results,
+		"count":   len(results),
+		"query":   query,
+	}, s.logger)
+}
+
+func (s *Server) handleArchiveMessages(w http.ResponseWriter, r *http.Request) {
+	if s.archiveStore == nil {
+		s.errorResponse(w, http.StatusServiceUnavailable, "archive not configured")
+		return
+	}
+
+	fromStr := r.URL.Query().Get("from")
+	toStr := r.URL.Query().Get("to")
+
+	if fromStr == "" || toStr == "" {
+		s.errorResponse(w, http.StatusBadRequest, "from and to parameters are required (RFC3339)")
+		return
+	}
+
+	from, err := time.Parse(time.RFC3339, fromStr)
+	if err != nil {
+		s.errorResponse(w, http.StatusBadRequest, "invalid from time: "+err.Error())
+		return
+	}
+	to, err := time.Parse(time.RFC3339, toStr)
+	if err != nil {
+		s.errorResponse(w, http.StatusBadRequest, "invalid to time: "+err.Error())
+		return
+	}
+
+	convID := r.URL.Query().Get("conversation_id")
+	limit := parseIntParam(r, "limit", 500)
+
+	messages, err := s.archiveStore.GetMessagesByTimeRange(from, to, convID, limit)
+	if err != nil {
+		s.errorResponse(w, http.StatusInternalServerError, "query: "+err.Error())
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	writeJSON(w, map[string]any{
+		"messages": messages,
+		"count":    len(messages),
+		"from":     fromStr,
+		"to":       toStr,
+	}, s.logger)
+}
+
+func (s *Server) handleArchiveStats(w http.ResponseWriter, r *http.Request) {
+	if s.archiveStore == nil {
+		s.errorResponse(w, http.StatusServiceUnavailable, "archive not configured")
+		return
+	}
+
+	stats, err := s.archiveStore.Stats()
+	if err != nil {
+		s.errorResponse(w, http.StatusInternalServerError, "stats: "+err.Error())
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	writeJSON(w, stats, s.logger)
+}
+
+func parseIntParam(r *http.Request, name string, defaultVal int) int {
+	s := r.URL.Query().Get(name)
+	if s == "" {
+		return defaultVal
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil || n < 0 {
+		return defaultVal
+	}
+	return n
 }
