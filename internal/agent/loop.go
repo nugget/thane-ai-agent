@@ -309,7 +309,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	}
 
 	l.logger.Info("agent loop started",
-		"session", sessionTag,
+		"session", sessionTag, "conversation", convID,
 		"messages", len(req.Messages),
 	)
 
@@ -425,7 +425,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		}
 
 		l.logger.Info("llm call",
-			"session", sessionTag,
+			"session", sessionTag, "conversation", convID,
 			"iter", i+1,
 			"model", model,
 			"msgs", len(llmMessages),
@@ -469,7 +469,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		totalOutputTokens += llmResp.OutputTokens
 
 		l.logger.Info("llm response",
-			"session", sessionTag,
+			"session", sessionTag, "conversation", convID,
 			"iter", i+1,
 			"input_tokens", llmResp.InputTokens,
 			"output_tokens", llmResp.OutputTokens,
@@ -510,7 +510,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 					argPreview = argPreview[:200] + "..."
 				}
 				l.logger.Info("tool exec",
-					"session", sessionTag,
+					"session", sessionTag, "conversation", convID,
 					"iter", i+1,
 					"tool", toolName,
 					"args", argPreview,
@@ -536,9 +536,9 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 				if err != nil {
 					errMsg = err.Error()
 					result = "Error: " + errMsg
-					l.logger.Error("tool exec failed", "session", sessionTag, "tool", toolName, "error", err)
+					l.logger.Error("tool exec failed", "session", sessionTag, "conversation", convID, "tool", toolName, "error", err)
 				} else {
-					l.logger.Debug("tool exec done", "session", sessionTag, "tool", toolName, "result_len", len(result))
+					l.logger.Debug("tool exec done", "session", sessionTag, "conversation", convID, "tool", toolName, "result_len", len(result))
 				}
 
 				// Emit tool call done event
@@ -615,7 +615,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 
 		elapsed := time.Since(startTime)
 		l.logger.Info("agent loop completed",
-			"session", sessionTag,
+			"session", sessionTag, "conversation", convID,
 			"model", model,
 			"iterations", i+1,
 			"input_tokens", totalInputTokens,
@@ -663,7 +663,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 
 		elapsed := time.Since(startTime)
 		l.logger.Info("agent loop completed (max iterations recovery)",
-			"session", sessionTag,
+			"session", sessionTag, "conversation", convID,
 			"model", model,
 			"iterations", maxIterations,
 			"input_tokens", totalInputTokens,
