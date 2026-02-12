@@ -247,15 +247,15 @@ func (l *Loop) buildSystemPrompt(ctx context.Context, userMessage string) string
 		sb.WriteString(baseSystemPrompt)
 	}
 
-	// Add current time
-	sb.WriteString("\n\n## Current Time\n")
-	sb.WriteString(time.Now().Format("Monday, January 2, 2006 at 15:04 MST"))
-
 	// Add static injected context (from config inject_files)
 	if l.injectedContext != "" {
 		sb.WriteString("\n\n## Injected Context\n\n")
 		sb.WriteString(l.injectedContext)
 	}
+
+	// Add current time
+	sb.WriteString("\n\n## Current Time\n")
+	sb.WriteString(time.Now().Format("Monday, January 2, 2006 at 15:04 MST"))
 
 	// Add talents
 	if l.talents != "" {

@@ -18,8 +18,10 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -584,15 +586,24 @@ JSON:`, transcript.String())
 	if len(cfg.Context.InjectFiles) > 0 {
 		var ctxBuf strings.Builder
 		for _, path := range cfg.Context.InjectFiles {
-			// Expand ~
-			if strings.HasPrefix(path, "~/") {
+			// Expand ~ to the user's home directory.
+			if strings.HasPrefix(path, "~") {
 				if home, err := os.UserHomeDir(); err == nil {
-					path = filepath.Join(home, path[2:])
+					switch {
+					case path == "~":
+						path = home
+					case strings.HasPrefix(path, "~/") || strings.HasPrefix(path, "~"+string(filepath.Separator)):
+						path = filepath.Join(home, path[2:])
+					}
 				}
 			}
 			data, err := os.ReadFile(path)
 			if err != nil {
-				logger.Warn("context inject file not found", "path", path, "error", err)
+				if errors.Is(err, fs.ErrNotExist) {
+					logger.Warn("context inject file not found", "path", path)
+				} else {
+					logger.Warn("context inject file unreadable", "path", path, "error", err)
+				}
 				continue
 			}
 			logger.Info("context file injected", "path", path, "size", len(data))

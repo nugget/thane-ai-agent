@@ -237,18 +237,18 @@ type EmbeddingsConfig struct {
 	BaseURL string `yaml:"baseurl"` // Ollama URL for embeddings. Default: models.ollama_url
 }
 
-// ArchiveConfig configures session archive behavior.
 // ContextConfig configures static context injection into the system prompt.
 // Files listed in InjectFiles are read at session start and appended to the
 // system prompt, giving the agent immediate access to key knowledge without
 // spending tool call iterations reading files.
 type ContextConfig struct {
 	// InjectFiles is a list of file paths to read and inject into the
-	// system prompt. Paths support ~ expansion. Files that don't exist
-	// are silently skipped.
+	// system prompt. Paths support ~ expansion. Missing or unreadable
+	// files are skipped with a warning.
 	InjectFiles []string `yaml:"inject_files"`
 }
 
+// ArchiveConfig configures session archive behavior.
 type ArchiveConfig struct {
 	// MetadataModel is the LLM model used for generating session metadata
 	// (title, tags, summaries) on session close. This is an asynchronous
