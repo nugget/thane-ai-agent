@@ -540,7 +540,10 @@ func (s *ArchiveStore) Search(opts SearchOptions) ([]SearchResult, error) {
 			FROM archive_fts
 			JOIN archive_messages am ON archive_fts.rowid = am.rowid
 		`
-		args = []any{opts.Query}
+		// Sanitize query for FTS5: wrap each term in double quotes to prevent
+		// syntax errors from special characters (periods, colons, etc.)
+		sanitized := sanitizeFTS5Query(opts.Query)
+		args = []any{sanitized}
 		conditions := []string{"archive_fts MATCH ?"}
 
 		if opts.ConversationID != "" {
@@ -1305,4 +1308,21 @@ func nullString(s string) any {
 		return nil
 	}
 	return s
+}
+
+// sanitizeFTS5Query wraps each search term in double quotes to prevent FTS5
+// syntax errors from special characters like periods, colons, and parentheses.
+// E.g., "models.yaml config" becomes `"models.yaml" "config"`.
+func sanitizeFTS5Query(query string) string {
+	words := strings.Fields(query)
+	if len(words) == 0 {
+		return query
+	}
+	quoted := make([]string, len(words))
+	for i, w := range words {
+		// Escape any existing double quotes in the term
+		w = strings.ReplaceAll(w, `"`, `""`)
+		quoted[i] = `"` + w + `"`
+	}
+	return strings.Join(quoted, " ")
 }
