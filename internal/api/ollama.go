@@ -101,7 +101,7 @@ func (s *Server) RegisterOllamaRoutes(mux *http.ServeMux) {
 func handleOllamaChatShared(w http.ResponseWriter, r *http.Request, loop *agent.Loop, logger *slog.Logger) {
 	start := time.Now()
 
-	// Capture and log raw request for debugging (headers + body)
+	// Capture raw request for parsing; headers/body logged at debug level only
 	headers := make(map[string]string)
 	for k, v := range r.Header {
 		headers[k] = v[0]
@@ -115,17 +115,32 @@ func handleOllamaChatShared(w http.ResponseWriter, r *http.Request, loop *agent.
 		ollamaError(w, http.StatusBadRequest, "failed to read body")
 		return
 	}
-	logger.Info("ollama chat request received",
-		"remote_addr", r.RemoteAddr,
-		"headers", headers,
-		"raw_body", string(rawBody),
-	)
-
 	var req OllamaChatRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		ollamaError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+
+	// Derive real client IP from reverse proxy headers
+	remoteIP := r.RemoteAddr
+	if xri := r.Header.Get("X-Real-Ip"); xri != "" {
+		remoteIP = xri
+	} else if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		remoteIP = xff
+	}
+
+	logger.Info("ollama chat request received",
+		"remote_addr", r.RemoteAddr,
+		"remote_ip", remoteIP,
+		"user_agent", r.Header.Get("User-Agent"),
+		"model", req.Model,
+		"messages", len(req.Messages),
+		"stream", req.Stream,
+	)
+	logger.Debug("ollama chat request details",
+		"headers", headers,
+		"body_len", len(rawBody),
+	)
 
 	// Sanitize: strip HA tools and instructions, extract area context
 	areaContext := sanitizeHARequest(&req, logger)
