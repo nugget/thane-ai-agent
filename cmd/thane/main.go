@@ -739,6 +739,7 @@ JSON:`, transcript.String())
 	// --- Archive tools ---
 	// Gives the agent the ability to search and recall past conversations.
 	loop.Tools().SetArchiveStore(archiveStore)
+	loop.Tools().SetConversationResetter(loop)
 	logger.Info("web fetch enabled")
 
 	// --- Embeddings ---
