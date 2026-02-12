@@ -1,4 +1,3 @@
-// Package memory provides conversation memory storage.
 package memory
 
 import (
@@ -283,6 +282,39 @@ func (s *SQLiteStore) GetAllConversations() []*Conversation {
 		convs = append(convs, conv)
 	}
 	return convs
+}
+
+// GetAllMessages retrieves ALL messages for a conversation, including compacted ones.
+// Includes tool call data for full-fidelity archiving — never lose primary sources.
+func (s *SQLiteStore) GetAllMessages(conversationID string) []Message {
+	rows, err := s.db.Query(`
+		SELECT role, content, timestamp, tool_calls, tool_call_id
+		FROM messages
+		WHERE conversation_id = ?
+		ORDER BY timestamp ASC
+	`, conversationID)
+	if err != nil {
+		return []Message{}
+	}
+	defer rows.Close()
+
+	var messages []Message
+	for rows.Next() {
+		var m Message
+		var toolCalls, toolCallID sql.NullString
+		if err := rows.Scan(&m.Role, &m.Content, &m.Timestamp, &toolCalls, &toolCallID); err != nil {
+			continue
+		}
+		if toolCalls.Valid {
+			m.ToolCalls = toolCalls.String
+		}
+		if toolCallID.Valid {
+			m.ToolCallID = toolCallID.String
+		}
+		messages = append(messages, m)
+	}
+
+	return messages
 }
 
 // GetTokenCount returns the total token count for a conversation.

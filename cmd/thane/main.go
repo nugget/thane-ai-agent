@@ -351,6 +351,53 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// provider (Ollama, Anthropic, etc.). Unknown models fall back to Ollama.
 	llmClient := createLLMClient(cfg, logger)
 
+	// --- Session archive ---
+	// Immutable archive of all conversation transcripts. Messages are
+	// archived before compaction, reset, or shutdown — primary source data
+	// is never discarded.
+	archiveStore, err := memory.NewArchiveStore(cfg.DataDir+"/archive.db", nil, logger)
+	if err != nil {
+		return fmt.Errorf("open archive store: %w", err)
+	}
+	defer archiveStore.Close()
+
+	archiveAdapter := memory.NewArchiveAdapter(archiveStore, logger)
+	archiveAdapter.SetToolCallSource(mem)
+	archiveAdapter.SetSummarizer(func(ctx context.Context, messages []memory.ArchivedMessage) (string, error) {
+		// Build a condensed transcript for the summarizer
+		var transcript strings.Builder
+		for _, m := range messages {
+			if m.Role == "system" {
+				continue // Skip system prompts — they're noise for summaries
+			}
+			transcript.WriteString(fmt.Sprintf("[%s] %s: %s\n",
+				m.Timestamp.Format("15:04"), m.Role, m.Content))
+			if transcript.Len() > 8000 {
+				transcript.WriteString("\n... (truncated)\n")
+				break
+			}
+		}
+
+		prompt := fmt.Sprintf(`Summarize this conversation session in 1-3 short sentences. Focus on:
+- Key topics discussed
+- Decisions made or actions taken
+- Important outcomes
+
+Be concise — this is metadata for browsing session history, not a full summary.
+
+Conversation:
+%s
+
+Summary:`, transcript.String())
+
+		msgs := []llm.Message{{Role: "user", Content: prompt}}
+		resp, err := llmClient.Chat(ctx, cfg.Models.Default, msgs, nil)
+		if err != nil {
+			return "", err
+		}
+		return resp.Message.Content, nil
+	})
+
 	// --- Conversation compactor ---
 	// When a conversation grows too long, the compactor summarizes older
 	// messages to stay within the model's context window. Uses the default
@@ -373,6 +420,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 
 	summarizer := memory.NewLLMSummarizer(summarizeFunc)
 	compactor := memory.NewCompactor(mem, compactionConfig, summarizer)
+	compactor.SetArchiver(archiveStore)
 
 	// --- Talents ---
 	// Talents are markdown files that extend the system prompt with
@@ -468,6 +516,10 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	defaultContextWindow := cfg.ContextWindowForModel(cfg.Models.Default, 200000)
 
 	loop := agent.NewLoop(logger, mem, compactor, rtr, ha, sched, llmClient, cfg.Models.Default, talentContent, personaContent, defaultContextWindow)
+	loop.SetArchiver(archiveAdapter)
+
+	// Start initial session
+	archiveAdapter.EnsureSession("default")
 
 	// --- Fact store ---
 	// Long-term memory backed by SQLite. Facts are discrete pieces of
@@ -573,6 +625,10 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// Always available — no configuration needed. Fetches web pages and
 	// extracts readable text content.
 	loop.Tools().SetFetcher(fetch.New())
+
+	// --- Archive tools ---
+	// Gives the agent the ability to search and recall past conversations.
+	loop.Tools().SetArchiveStore(archiveStore)
 	logger.Info("web fetch enabled")
 
 	// --- Embeddings ---
@@ -600,6 +656,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// health endpoint, router introspection, and the web UI.
 	server := api.NewServer(cfg.Listen.Address, cfg.Listen.Port, loop, rtr, logger)
 	server.SetMemoryStore(mem)
+	server.SetArchiveStore(archiveStore)
 
 	// --- Checkpointer ---
 	// Periodically snapshots application state (conversations, facts,
@@ -708,6 +765,9 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	go func() {
 		<-ctx.Done()
 		logger.Info("shutdown signal received")
+
+		// Archive conversation before shutdown
+		loop.ShutdownArchive("default")
 
 		if _, err := checkpointer.CreateShutdown(); err != nil {
 			logger.Error("failed to create shutdown checkpoint", "error", err)

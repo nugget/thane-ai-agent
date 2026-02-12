@@ -1,4 +1,3 @@
-// Package memory provides conversation memory storage.
 package memory
 
 import (
@@ -34,11 +33,18 @@ type CompactableStore interface {
 	AddCompactionSummary(conversationID, summary string) error
 }
 
+// Archiver is the interface for archiving messages before destructive operations.
+type Archiver interface {
+	ArchiveMessages(messages []ArchivedMessage) error
+	ActiveSession(conversationID string) (*Session, error)
+}
+
 // Compactor handles conversation compaction.
 type Compactor struct {
 	store      CompactableStore
 	config     CompactionConfig
 	summarizer Summarizer
+	archiver   Archiver // optional — archive before compaction
 }
 
 // Summarizer generates summaries from messages.
@@ -55,6 +61,11 @@ func NewCompactor(store CompactableStore, config CompactionConfig, summarizer Su
 	}
 }
 
+// SetArchiver configures an archiver for preserving messages before compaction.
+func (c *Compactor) SetArchiver(a Archiver) {
+	c.archiver = a
+}
+
 // NeedsCompaction checks if a conversation needs compaction.
 func (c *Compactor) NeedsCompaction(conversationID string) bool {
 	tokenCount := c.store.GetTokenCount(conversationID)
@@ -69,6 +80,30 @@ func (c *Compactor) Compact(ctx context.Context, conversationID string) error {
 
 	if len(messages) < c.config.MinMessagesToCompact {
 		return nil // Not enough to bother
+	}
+
+	// Archive messages before compaction (never lose primary sources)
+	if c.archiver != nil {
+		sessionID := ""
+		if sess, err := c.archiver.ActiveSession(conversationID); err == nil && sess != nil {
+			sessionID = sess.ID
+		}
+
+		archived := make([]ArchivedMessage, len(messages))
+		for i, m := range messages {
+			archived[i] = ArchivedMessage{
+				ConversationID: conversationID,
+				SessionID:      sessionID,
+				Role:           m.Role,
+				Content:        m.Content,
+				Timestamp:      m.Timestamp,
+				TokenCount:     estimateTokens(m.Content),
+				ArchiveReason:  string(ArchiveReasonCompaction),
+			}
+		}
+		if err := c.archiver.ArchiveMessages(archived); err != nil {
+			return fmt.Errorf("archive before compaction: %w", err)
+		}
 	}
 
 	// Find the cutoff time (last message being compacted)

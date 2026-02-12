@@ -1,4 +1,17 @@
-// Package memory provides conversation memory storage.
+// Package memory provides conversation memory storage and session archiving.
+//
+// The package has two main subsystems:
+//
+// Active memory (SQLiteStore) manages the working conversation context —
+// messages that are actively used for LLM context windows. Messages can be
+// compacted (summarized) when the context grows too large.
+//
+// Session archive (ArchiveStore) provides immutable, long-term storage of
+// all conversation transcripts. Messages are archived before any destructive
+// operation (compaction, reset, shutdown), ensuring primary source data is
+// never lost. The archive supports full-text search with gap-aware context
+// expansion — search results include surrounding conversation bounded by
+// natural silence gaps rather than rigid message counts.
 package memory
 
 import (
@@ -17,9 +30,11 @@ type MemoryStore interface {
 
 // Message represents a conversation message.
 type Message struct {
-	Role      string    `json:"role"` // system, user, assistant, tool
-	Content   string    `json:"content"`
-	Timestamp time.Time `json:"timestamp"`
+	Role       string    `json:"role"` // system, user, assistant, tool
+	Content    string    `json:"content"`
+	Timestamp  time.Time `json:"timestamp"`
+	ToolCalls  string    `json:"tool_calls,omitempty"`   // JSON array of tool calls (assistant messages)
+	ToolCallID string    `json:"tool_call_id,omitempty"` // Tool call ID (tool response messages)
 }
 
 // Conversation holds the state of a single conversation.

@@ -1,6 +1,7 @@
 # Build output
 /dist/
 /thane
+/openclaw-import
 *.exe
 *.dll
 *.so
