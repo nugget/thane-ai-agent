@@ -215,6 +215,29 @@ init dir="Thane":
     echo "  1. Edit config:  $EDITOR {{dir}}/config.yaml"
     echo "  2. Run:          just serve"
 
+# Build from main branch and deploy to ~/Thane (ensures clean release metadata)
+[group('deploy')]
+[macos]
+deploy:
+    #!/usr/bin/env sh
+    set -e
+    current_branch=$(git rev-parse --abbrev-ref HEAD)
+    if [ "$current_branch" != "main" ]; then
+        echo "Switching to main (was on $current_branch)..."
+        git checkout main
+        git pull origin main
+    fi
+    git fetch --tags
+    just build
+    cp dist/thane-{{host_os}}-{{host_arch}} {{thane-home}}/bin/thane
+    echo "Deployed $(dist/thane-{{host_os}}-{{host_arch}} version 2>/dev/null || echo 'thane') to {{thane-home}}/bin/thane"
+    launchctl kickstart -k gui/$(id -u)/info.nugget.thane
+    echo "Service restarted."
+    if [ "$current_branch" != "main" ]; then
+        echo "Returning to $current_branch..."
+        git checkout "$current_branch"
+    fi
+
 # Build and run from the local Thane/ working directory (for development)
 [group('operations')]
 serve: build
