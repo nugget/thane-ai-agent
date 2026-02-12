@@ -102,10 +102,15 @@ type SearchOptions struct {
 	Limit            int           // max results
 }
 
-// NewArchiveStore creates a new archive store using the given database.
-func NewArchiveStore(db *sql.DB, cfg ArchiveConfig) (*ArchiveStore, error) {
+// NewArchiveStore creates a new archive store at the given database path.
+func NewArchiveStore(dbPath string, cfg ArchiveConfig) (*ArchiveStore, error) {
 	if cfg.SilenceThreshold == 0 {
 		cfg = DefaultArchiveConfig()
+	}
+
+	db, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_busy_timeout=5000")
+	if err != nil {
+		return nil, fmt.Errorf("open archive database: %w", err)
 	}
 
 	s := &ArchiveStore{
@@ -116,6 +121,7 @@ func NewArchiveStore(db *sql.DB, cfg ArchiveConfig) (*ArchiveStore, error) {
 	}
 
 	if err := s.migrate(); err != nil {
+		db.Close()
 		return nil, fmt.Errorf("archive migrate: %w", err)
 	}
 

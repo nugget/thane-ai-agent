@@ -355,16 +355,12 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// Immutable archive of all conversation transcripts. Messages are
 	// archived before compaction, reset, or shutdown — primary source data
 	// is never discarded.
-	archiveDB, err := sql.Open("sqlite3", cfg.DataDir+"/archive.db?_journal_mode=WAL&_busy_timeout=5000")
+	archivePath := cfg.DataDir + "/archive.db"
+	archiveStore, err := memory.NewArchiveStore(archivePath, memory.DefaultArchiveConfig())
 	if err != nil {
-		return fmt.Errorf("open archive database: %w", err)
+		return fmt.Errorf("open archive store: %w", err)
 	}
-	defer archiveDB.Close()
-
-	archiveStore, err := memory.NewArchiveStore(archiveDB, memory.DefaultArchiveConfig())
-	if err != nil {
-		return fmt.Errorf("initialize archive store: %w", err)
-	}
+	defer archiveStore.Close()
 
 	if archiveStore.FTSEnabled() {
 		logger.Info("session archive initialized", "path", cfg.DataDir+"/archive.db", "fts5", true)

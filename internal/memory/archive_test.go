@@ -1,26 +1,21 @@
 package memory
 
 import (
-	"database/sql"
 	"fmt"
 	"testing"
 	"time"
-
-	_ "github.com/mattn/go-sqlite3"
 )
 
 func newTestArchiveStore(t *testing.T) *ArchiveStore {
 	t.Helper()
-	db, err := sql.Open("sqlite3", ":memory:")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { db.Close() })
 
-	store, err := NewArchiveStore(db, DefaultArchiveConfig())
+	dbPath := t.TempDir() + "/test-archive.db"
+	store, err := NewArchiveStore(dbPath, DefaultArchiveConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { store.Close() })
+
 	return store
 }
 
