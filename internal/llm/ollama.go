@@ -175,6 +175,7 @@ func (c *OllamaClient) ChatStream(ctx context.Context, model string, messages []
 	var finalResp *ChatResponse
 	var toolCalls []ToolCall
 	var contentBuilder strings.Builder
+	toolCallBufferFlushed := false // tracks whether we've started streaming to client
 	decoder := json.NewDecoder(resp.Body)
 
 	for {
@@ -186,11 +187,26 @@ func (c *OllamaClient) ChatStream(ctx context.Context, model string, messages []
 			return nil, fmt.Errorf("decode stream chunk: %w", err)
 		}
 
-		// Accumulate content
+		// Accumulate content.
+		// When tools are available, buffer tokens that look like they
+		// might be text-based tool calls (starting with '{' or '<tool_call>')
+		// so we don't stream raw JSON to the client prematurely.
 		if wire.Message.Content != "" {
 			contentBuilder.WriteString(wire.Message.Content)
 			if callback != nil {
-				callback(StreamEvent{Kind: KindToken, Token: wire.Message.Content})
+				accumulated := contentBuilder.String()
+				if len(tools) > 0 && !toolCallBufferFlushed && looksLikeToolCall(accumulated) {
+					// Hold back — might be a text-based tool call
+				} else {
+					// Flush any buffered content + this token
+					if !toolCallBufferFlushed && contentBuilder.Len() > len(wire.Message.Content) {
+						// First flush: send everything accumulated so far
+						callback(StreamEvent{Kind: KindToken, Token: accumulated})
+					} else {
+						callback(StreamEvent{Kind: KindToken, Token: wire.Message.Content})
+					}
+					toolCallBufferFlushed = true
+				}
 			}
 		}
 
@@ -252,6 +268,25 @@ func extractToolNames(tools []map[string]any) []string {
 		}
 	}
 	return names
+}
+
+// looksLikeToolCall checks if accumulated stream content might be a text-based
+// tool call. Used to buffer streaming output until we can determine whether
+// the model is emitting a tool call as text or actual prose.
+func looksLikeToolCall(content string) bool {
+	trimmed := strings.TrimSpace(content)
+	if trimmed == "" {
+		return false
+	}
+	// JSON object that might contain "name" — common tool call format
+	if trimmed[0] == '{' {
+		return true
+	}
+	// <tool_call> tag format
+	if strings.HasPrefix(trimmed, "<tool_call>") || strings.HasPrefix(trimmed, "<tool") {
+		return true
+	}
+	return false
 }
 
 // parseTextToolCalls attempts to extract tool calls from content text.
