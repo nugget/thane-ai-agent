@@ -71,14 +71,14 @@ talents_dir: ./talents
 # needs every session. Supports ~ expansion. Missing files are skipped.
 # context:
 #   inject_files:
-#     - ~/.agents.md          # Host-specific breadcrumb (paths, services, tools)
-#     - ~/Aimee/MEMORY.md     # Long-term curated memory
+#     - ~/.agents.md            # Host-specific breadcrumb (paths, services, tools)
+#     - ~/path/to/MEMORY.md    # Long-term curated memory
 
 # Workspace for file operations (optional)
 # When configured, the agent can read/write files within this directory
 # All file tool paths are sandboxed to this directory
 workspace:
-  path: ""  # e.g., /home/aimee/.openclaw/workspace
+  path: ""  # e.g., /home/user/workspace
 
 # Shell execution (optional, disabled by default)
 # When enabled, the agent can execute shell commands on the host.
