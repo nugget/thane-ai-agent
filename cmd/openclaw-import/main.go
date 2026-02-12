@@ -393,17 +393,11 @@ func parseTimestamp(isoStr string, unixMs int64) time.Time {
 // --- Importing ---
 
 func importSession(store *memory.ArchiveStore, sess parsedSession, logger *slog.Logger) error {
-	// Create session record
-	// We can't use store.StartSession because we need to set our own timestamps
-	// So we'll create it manually and use the store's internal methods
-	archiveSess, err := store.StartSession("openclaw-import")
+	// Create session with original OpenClaw timestamp
+	archiveSess, err := store.StartSessionAt("openclaw-import", sess.startedAt)
 	if err != nil {
 		return fmt.Errorf("create session: %w", err)
 	}
-
-	// Override the session ID to match OpenClaw's
-	// Actually, we should use the generated ID since UUIDs might collide with
-	// Thane's UUID v7 format. Let's just close it with correct timestamps.
 
 	// Archive messages
 	if len(sess.messages) > 0 {
@@ -441,12 +435,14 @@ func importSession(store *memory.ArchiveStore, sess parsedSession, logger *slog.
 		}
 	}
 
-	// End the session with the original timestamps
-	if err := store.EndSession(archiveSess.ID, "import"); err != nil {
+	// End the session with the original end timestamp
+	if err := store.EndSessionAt(archiveSess.ID, "import", sess.endedAt); err != nil {
 		return fmt.Errorf("end session: %w", err)
 	}
 
-	// Set a summary noting this was imported
+	// Set message count and summary
+	_ = store.SetSessionMessageCount(archiveSess.ID, len(sess.messages))
+
 	summary := fmt.Sprintf("[Imported from OpenClaw session %s]", sess.id[:8])
 	_ = store.SetSessionSummary(archiveSess.ID, summary)
 

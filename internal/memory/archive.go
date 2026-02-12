@@ -652,21 +652,26 @@ func (s *ArchiveStore) expandContext(
 	return messages
 }
 
-// StartSession creates a new session record.
+// StartSession creates a new session record with the current time.
 func (s *ArchiveStore) StartSession(conversationID string) (*Session, error) {
+	return s.StartSessionAt(conversationID, time.Now().UTC())
+}
+
+// StartSessionAt creates a new session record with a specific start time.
+// Use for imports where the original timestamp must be preserved.
+func (s *ArchiveStore) StartSessionAt(conversationID string, startedAt time.Time) (*Session, error) {
 	id, _ := uuid.NewV7()
-	now := time.Now().UTC()
 
 	sess := &Session{
 		ID:             id.String(),
 		ConversationID: conversationID,
-		StartedAt:      now,
+		StartedAt:      startedAt,
 	}
 
 	_, err := s.db.Exec(`
 		INSERT INTO sessions (id, conversation_id, started_at, message_count)
 		VALUES (?, ?, ?, 0)
-	`, sess.ID, conversationID, now.Format(time.RFC3339Nano))
+	`, sess.ID, conversationID, startedAt.Format(time.RFC3339Nano))
 	if err != nil {
 		return nil, fmt.Errorf("insert session: %w", err)
 	}
@@ -674,12 +679,16 @@ func (s *ArchiveStore) StartSession(conversationID string) (*Session, error) {
 	return sess, nil
 }
 
-// EndSession marks a session as ended.
+// EndSession marks a session as ended at the current time.
 func (s *ArchiveStore) EndSession(sessionID string, reason string) error {
-	now := time.Now().UTC()
+	return s.EndSessionAt(sessionID, reason, time.Now().UTC())
+}
+
+// EndSessionAt marks a session as ended at a specific time.
+func (s *ArchiveStore) EndSessionAt(sessionID string, reason string, endedAt time.Time) error {
 	_, err := s.db.Exec(`
 		UPDATE sessions SET ended_at = ?, end_reason = ? WHERE id = ?
-	`, now.Format(time.RFC3339Nano), reason, sessionID)
+	`, endedAt.Format(time.RFC3339Nano), reason, sessionID)
 	return err
 }
 
@@ -696,6 +705,14 @@ func (s *ArchiveStore) IncrementSessionCount(sessionID string) error {
 	_, err := s.db.Exec(`
 		UPDATE sessions SET message_count = message_count + 1 WHERE id = ?
 	`, sessionID)
+	return err
+}
+
+// SetSessionMessageCount sets the message count for a session directly.
+func (s *ArchiveStore) SetSessionMessageCount(sessionID string, count int) error {
+	_, err := s.db.Exec(`
+		UPDATE sessions SET message_count = ? WHERE id = ?
+	`, count, sessionID)
 	return err
 }
 
