@@ -387,6 +387,12 @@ func (r *Router) selectModel(req Request, decision *Decision) string {
 				score += 25
 				decision.RulesMatched = append(decision.RulesMatched, "model_preference_"+m.Name)
 			}
+
+			// Local only: heavily penalize paid models
+			if req.Hints["local_only"] == "true" && m.CostTier > 0 {
+				score -= 200
+				decision.RulesMatched = append(decision.RulesMatched, "local_only_penalty_"+m.Name)
+			}
 		}
 
 		scores[m.Name] = score

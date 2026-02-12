@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/agent"
+	"github.com/nugget/thane-ai-agent/internal/router"
 )
 
 // OllamaChatRequest is the Ollama /api/chat request format.
@@ -168,19 +169,42 @@ func handleOllamaChatShared(w http.ResponseWriter, r *http.Request, loop *agent.
 		}
 	}
 
-	// Map model name: "thane:latest" or "thane" should use default model
-	// Don't pass our fake model name through to the real LLM
+	// Map model name to routing profile.
+	// Ollama "model" names like "thane:thinking" become routing hints.
 	model := req.Model
-	if model == "" || model == "thane" || model == "thane:latest" {
-		model = "" // Empty = use Thane's configured default
+	hints := map[string]string{
+		"channel": "ollama",
+	}
+
+	switch model {
+	case "", "thane", "thane:latest":
+		model = "" // default routing
+	case "thane:thinking":
+		model = ""
+		hints[router.HintQualityFloor] = "9"
+		hints[router.HintMission] = "conversation"
+	case "thane:fast":
+		model = ""
+		hints[router.HintMission] = "device_control"
+		// Cost-aware scoring already prefers cheap models
+	case "thane:local":
+		model = ""
+		hints[router.HintQualityFloor] = "1"   // accept anything
+		hints[router.HintModelPreference] = "" // clear any preference
+		// local_first scoring handles the rest; also exclude paid models
+		hints["local_only"] = "true"
+	default:
+		// Unknown profile or explicit model name — pass through
+		if strings.HasPrefix(model, "thane:") {
+			model = "" // unknown thane profile, use default
+		}
+		// else: explicit model name, pass through to router
 	}
 
 	agentReq := &agent.Request{
 		Messages: messages,
 		Model:    model,
-		Hints: map[string]string{
-			"channel": "ollama", // Ollama API — could be HA, Open WebUI, or direct
-		},
+		Hints:    hints,
 	}
 
 	// Check if streaming was requested. For Ollama compatibility, a nil stream defaults to true.
@@ -409,26 +433,39 @@ func handleOllamaStreamingChatShared(w http.ResponseWriter, r *http.Request, req
 //
 // The response format matches Ollama's /api/tags endpoint specification.
 func handleOllamaTagsShared(w http.ResponseWriter, r *http.Request, logger *slog.Logger) {
-	// Return Thane as the only available model
-	resp := OllamaTagsResponse{
-		Models: []OllamaModel{
-			{
-				Name:       "thane:latest",
-				Model:      "thane:latest",
-				ModifiedAt: time.Now().UTC().Format(time.RFC3339),
-				Size:       0,
-				Digest:     "thane-autonomous-agent",
-				Details: OllamaModelDetail{
-					ParentModel:       "",
-					Format:            "thane",
-					Family:            "thane",
-					Families:          []string{"thane"},
-					ParameterSize:     "autonomous",
-					QuantizationLevel: "native",
-				},
-			},
-		},
+	// Expose routing profiles as Ollama "models".
+	// Callers select a profile via the model picker; Thane maps it to routing hints.
+	now := time.Now().UTC().Format(time.RFC3339)
+	baseDetails := OllamaModelDetail{
+		Format:            "thane",
+		Family:            "thane",
+		Families:          []string{"thane"},
+		ParameterSize:     "autonomous",
+		QuantizationLevel: "native",
 	}
+
+	profiles := []struct {
+		name   string
+		digest string
+	}{
+		{"thane:latest", "default routing"},
+		{"thane:thinking", "prefer quality, complex reasoning"},
+		{"thane:fast", "prefer speed and cost efficiency"},
+		{"thane:local", "prefer local/free models only"},
+	}
+
+	var models []OllamaModel
+	for _, p := range profiles {
+		models = append(models, OllamaModel{
+			Name:       p.name,
+			Model:      p.name,
+			ModifiedAt: now,
+			Digest:     p.digest,
+			Details:    baseDetails,
+		})
+	}
+
+	resp := OllamaTagsResponse{Models: models}
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(resp); err != nil {
