@@ -352,8 +352,8 @@ func (r *Router) selectModel(req Request, decision *Decision) string {
 				if m.Speed >= 7 {
 					score += 10
 				}
-			case "openwebui":
-				// Direct conversation: boost quality models
+			case "ollama", "openwebui":
+				// Direct conversation via Open WebUI or Ollama API: boost quality models
 				if m.Quality >= 9 {
 					score += 15
 					decision.RulesMatched = append(decision.RulesMatched, "channel_webui_quality_"+m.Name)
@@ -400,13 +400,16 @@ func (r *Router) selectModel(req Request, decision *Decision) string {
 
 	decision.Scores = scores
 
-	// Pick highest score; on tie, prefer cheaper model
+	// Pick highest score; on tie, prefer cheaper model; on equal cost, prefer higher quality
 	var best Model
 	bestScore := -1
 	for _, m := range candidates {
-		if scores[m.Name] > bestScore || (scores[m.Name] == bestScore && m.CostTier < best.CostTier) {
+		s := scores[m.Name]
+		if s > bestScore ||
+			(s == bestScore && m.CostTier < best.CostTier) ||
+			(s == bestScore && m.CostTier == best.CostTier && m.Quality > best.Quality) {
 			best = m
-			bestScore = scores[m.Name]
+			bestScore = s
 		}
 	}
 
