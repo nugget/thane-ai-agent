@@ -167,8 +167,13 @@ func handleOllamaChatShared(w http.ResponseWriter, r *http.Request, loop *agent.
 		Model:    model,
 	}
 
-	// Check if streaming was requested
-	if req.Stream != nil && *req.Stream {
+	// Check if streaming was requested. For Ollama compatibility, a nil stream defaults to true.
+	stream := true
+	if req.Stream != nil {
+		stream = *req.Stream
+	}
+	
+	if stream {
 		handleOllamaStreamingChatShared(w, r, agentReq, start, loop, logger)
 		return
 	}
@@ -221,41 +226,53 @@ func handleOllamaStreamingChatShared(w http.ResponseWriter, r *http.Request, req
 	}
 
 	// Buffer to detect tool calls at the start of streaming
+	// Note: Tool call detection relies on KindToolCallStart events which are emitted
+	// by the agent loop before any tool-related tokens. This prevents JSON leakage
+	// in the stream. If the LLM generates text-based tool calls (not using the proper
+	// tool syntax), those would stream as regular text - but that's expected behavior.
 	var buffer []agent.StreamEvent
 	var hasToolCalls bool
 	var streaming bool
 
 	// Create stream callback that buffers initially, then streams if no tool calls
 	streamCallback := func(event agent.StreamEvent) {
+		// If we've already detected tool calls, stop processing events
+		if hasToolCalls {
+			return
+		}
+		
 		if !streaming {
 			// Still buffering - check for tool calls
-			buffer = append(buffer, event)
-
 			if event.Kind == agent.KindToolCallStart {
 				hasToolCalls = true
+				buffer = nil // Clear buffer to avoid unnecessary memory usage
 				// Stop buffering and fall back to non-streaming
 				return
 			}
 
+			// Only buffer token events
+			if event.Kind == agent.KindToken {
+				buffer = append(buffer, event)
+			}
+
 			// Start streaming after we get some content and no tool calls
-			if event.Kind == agent.KindToken && len(buffer) >= 5 && !hasToolCalls {
+			// Use a smaller threshold to handle short responses
+			if event.Kind == agent.KindToken && len(buffer) >= 2 && !hasToolCalls {
 				streaming = true
 				// Flush buffered content
 				for _, bufferedEvent := range buffer {
-					if bufferedEvent.Kind == agent.KindToken {
-						chunk := OllamaChatResponse{
-							Model:     model,
-							CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
-							Message: OllamaChatMessage{
-								Role:    "assistant",
-								Content: bufferedEvent.Token,
-							},
-							Done: false,
-						}
-						data, _ := json.Marshal(chunk)
-						fmt.Fprintf(w, "%s\n", data)
-						flusher.Flush()
+					chunk := OllamaChatResponse{
+						Model:     model,
+						CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+						Message: OllamaChatMessage{
+							Role:    "assistant",
+							Content: bufferedEvent.Token,
+						},
+						Done: false,
 					}
+					data, _ := json.Marshal(chunk)
+					fmt.Fprintf(w, "%s\n", data)
+					flusher.Flush()
 				}
 				buffer = nil // Clear buffer
 			}
@@ -314,6 +331,24 @@ func handleOllamaStreamingChatShared(w http.ResponseWriter, r *http.Request, req
 		data, _ := json.Marshal(chunk)
 		fmt.Fprintf(w, "%s\n", data)
 		flusher.Flush()
+	}
+
+	// If we never started streaming (very short response), send buffered tokens now
+	if !streaming && !hasToolCalls && len(buffer) > 0 {
+		for _, bufferedEvent := range buffer {
+			chunk := OllamaChatResponse{
+				Model:     model,
+				CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+				Message: OllamaChatMessage{
+					Role:    "assistant",
+					Content: bufferedEvent.Token,
+				},
+				Done: false,
+			}
+			data, _ := json.Marshal(chunk)
+			fmt.Fprintf(w, "%s\n", data)
+			flusher.Flush()
+		}
 	}
 
 	// Send final message with stats
