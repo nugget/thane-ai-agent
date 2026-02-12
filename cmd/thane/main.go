@@ -363,12 +363,12 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 
 	archiveAdapter := memory.NewArchiveAdapter(archiveStore, logger)
 	archiveAdapter.SetToolCallSource(mem)
-	archiveAdapter.SetSummarizer(func(ctx context.Context, messages []memory.ArchivedMessage) (string, error) {
-		// Build a condensed transcript for the summarizer
+	archiveAdapter.SetMetadataGenerator(func(ctx context.Context, messages []memory.ArchivedMessage, toolCalls []memory.ArchivedToolCall) (*memory.SessionMetadata, string, []string, error) {
+		// Build a condensed transcript for the LLM
 		var transcript strings.Builder
 		for _, m := range messages {
 			if m.Role == "system" {
-				continue // Skip system prompts — they're noise for summaries
+				continue
 			}
 			transcript.WriteString(fmt.Sprintf("[%s] %s: %s\n",
 				m.Timestamp.Format("15:04"), m.Role, m.Content))
@@ -378,24 +378,77 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 			}
 		}
 
-		prompt := fmt.Sprintf(`Summarize this conversation session in 1-3 short sentences. Focus on:
-- Key topics discussed
-- Decisions made or actions taken
-- Important outcomes
+		// Build tool usage summary
+		toolUsage := make(map[string]int)
+		for _, tc := range toolCalls {
+			toolUsage[tc.ToolName]++
+		}
 
-Be concise — this is metadata for browsing session history, not a full summary.
+		prompt := fmt.Sprintf(`Analyze this conversation session and produce structured metadata as JSON. 
+The JSON must have exactly these fields:
+
+{
+  "title": "short descriptive title, like an email subject (max 10 words)",
+  "tags": ["lowercase", "topic", "tags", "3-7 tags"],
+  "one_liner": "one sentence summary (~10 words)",
+  "paragraph": "2-4 sentence summary covering key topics and outcomes",
+  "detailed": "comprehensive summary including context, decisions, and nuance",
+  "key_decisions": ["decision 1", "decision 2"],
+  "participants": ["names of people involved or mentioned"],
+  "session_type": "one of: debugging, architecture, philosophy, casual, planning, operations, creative"
+}
+
+Be accurate. Base everything on what actually happened in the conversation.
 
 Conversation:
 %s
 
-Summary:`, transcript.String())
+JSON:`, transcript.String())
 
 		msgs := []llm.Message{{Role: "user", Content: prompt}}
 		resp, err := llmClient.Chat(ctx, cfg.Models.Default, msgs, nil)
 		if err != nil {
-			return "", err
+			return nil, "", nil, err
 		}
-		return resp.Message.Content, nil
+
+		// Parse the LLM response as JSON
+		content := resp.Message.Content
+		// Strip markdown code fences if present
+		content = strings.TrimPrefix(content, "```json\n")
+		content = strings.TrimPrefix(content, "```\n")
+		content = strings.TrimSuffix(content, "\n```")
+		content = strings.TrimSpace(content)
+
+		var result struct {
+			Title        string   `json:"title"`
+			Tags         []string `json:"tags"`
+			OneLiner     string   `json:"one_liner"`
+			Paragraph    string   `json:"paragraph"`
+			Detailed     string   `json:"detailed"`
+			KeyDecisions []string `json:"key_decisions"`
+			Participants []string `json:"participants"`
+			SessionType  string   `json:"session_type"`
+		}
+		if err := json.Unmarshal([]byte(content), &result); err != nil {
+			// If JSON parsing fails, fall back to using the raw text as a summary
+			logger.Warn("session metadata JSON parse failed, using raw summary",
+				"error", err,
+			)
+			meta := &memory.SessionMetadata{Paragraph: resp.Message.Content}
+			return meta, "", nil, nil
+		}
+
+		meta := &memory.SessionMetadata{
+			OneLiner:     result.OneLiner,
+			Paragraph:    result.Paragraph,
+			Detailed:     result.Detailed,
+			KeyDecisions: result.KeyDecisions,
+			Participants: result.Participants,
+			SessionType:  result.SessionType,
+			ToolsUsed:    toolUsage,
+		}
+
+		return meta, result.Title, result.Tags, nil
 	})
 
 	// --- Conversation compactor ---

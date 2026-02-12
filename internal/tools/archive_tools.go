@@ -133,14 +133,21 @@ func (r *Registry) registerArchiveSessionList(store *memory.ArchiveStore) {
 					duration := s.EndedAt.Sub(s.StartedAt).Round(time.Minute)
 					endInfo = fmt.Sprintf("ended (%s, %s)", s.EndReason, duration)
 				}
+				title := memory.ShortID(s.ID)
+				if s.Title != "" {
+					title = fmt.Sprintf("%s — %s", memory.ShortID(s.ID), s.Title)
+				}
 				sb.WriteString(fmt.Sprintf("- **%s** — %s, %d messages, %s\n",
-					memory.ShortID(s.ID),
+					title,
 					s.StartedAt.Format("2006-01-02 15:04"),
 					s.MessageCount,
 					endInfo,
 				))
 				if s.Summary != "" {
 					sb.WriteString(fmt.Sprintf("  *%s*\n", s.Summary))
+				}
+				if len(s.Tags) > 0 {
+					sb.WriteString(fmt.Sprintf("  Tags: %s\n", strings.Join(s.Tags, ", ")))
 				}
 			}
 
