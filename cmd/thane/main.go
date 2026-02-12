@@ -489,7 +489,7 @@ JSON:`, transcript.String())
 	}
 
 	summarizer := memory.NewLLMSummarizer(summarizeFunc)
-	compactor := memory.NewCompactor(mem, compactionConfig, summarizer)
+	compactor := memory.NewCompactor(mem, compactionConfig, summarizer, logger)
 	compactor.SetArchiver(archiveStore)
 
 	// --- Talents ---

@@ -372,6 +372,8 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	model := req.Model
 	var routerDecision *router.Decision
 
+	l.logger.Debug("model selection start", "session", sessionTag, "req_model", req.Model, "default_model", l.model)
+
 	if model == "" || model == "thane" {
 		if l.router != nil {
 			// Get the user's query from messages
@@ -399,9 +401,13 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			}
 
 			model, routerDecision = l.router.Route(ctx, routerReq)
+			l.logger.Debug("model selected by router", "session", sessionTag, "model", model)
 		} else {
 			model = l.model
+			l.logger.Debug("model selected as default (no router)", "session", sessionTag, "model", model)
 		}
+	} else {
+		l.logger.Debug("model specified in request, skipping router", "session", sessionTag, "model", model)
 	}
 
 	// Get available tools

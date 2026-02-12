@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 )
@@ -45,6 +46,7 @@ type Compactor struct {
 	config     CompactionConfig
 	summarizer Summarizer
 	archiver   Archiver // optional — archive before compaction
+	logger     *slog.Logger
 }
 
 // Summarizer generates summaries from messages.
@@ -53,11 +55,12 @@ type Summarizer interface {
 }
 
 // NewCompactor creates a new compactor.
-func NewCompactor(store CompactableStore, config CompactionConfig, summarizer Summarizer) *Compactor {
+func NewCompactor(store CompactableStore, config CompactionConfig, summarizer Summarizer, logger *slog.Logger) *Compactor {
 	return &Compactor{
 		store:      store,
 		config:     config,
 		summarizer: summarizer,
+		logger:     logger,
 	}
 }
 
@@ -78,7 +81,21 @@ func (c *Compactor) Compact(ctx context.Context, conversationID string) error {
 	// Get messages to compact (older ones)
 	messages := c.store.GetMessagesForCompaction(conversationID, c.config.KeepRecent)
 
+	c.logger.Debug("compaction check",
+		"conversation", conversationID,
+		"eligible_messages", len(messages),
+		"min_required", c.config.MinMessagesToCompact,
+		"keep_recent", c.config.KeepRecent,
+		"token_count", c.store.GetTokenCount(conversationID),
+		"max_tokens", c.config.MaxTokens,
+	)
+
 	if len(messages) < c.config.MinMessagesToCompact {
+		c.logger.Debug("compaction skipped: not enough messages",
+			"conversation", conversationID,
+			"eligible", len(messages),
+			"required", c.config.MinMessagesToCompact,
+		)
 		return nil // Not enough to bother
 	}
 
