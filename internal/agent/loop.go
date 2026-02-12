@@ -605,12 +605,31 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 
 		// Check if compaction needed (async-safe: doesn't block response)
 		if l.compactor != nil && l.compactor.NeedsCompaction(convID) {
-			l.logger.Info("triggering compaction", "session", sessionTag)
+			preTokens := l.memory.GetTokenCount(convID)
+			preMessages := len(l.memory.GetMessages(convID))
+			l.logger.Info("triggering compaction",
+				"session", sessionTag, "conversation", convID,
+				"tokens_before", preTokens,
+				"messages_before", preMessages,
+			)
 			go func() {
+				compactStart := time.Now()
 				if err := l.compactor.Compact(context.Background(), convID); err != nil {
-					l.logger.Error("compaction failed", "error", err)
+					l.logger.Error("compaction failed",
+						"session", sessionTag, "conversation", convID,
+						"error", err,
+					)
 				} else {
-					l.logger.Info("compaction completed", "session", sessionTag)
+					postTokens := l.memory.GetTokenCount(convID)
+					postMessages := len(l.memory.GetMessages(convID))
+					l.logger.Info("compaction completed",
+						"session", sessionTag, "conversation", convID,
+						"tokens_after", postTokens,
+						"messages_after", postMessages,
+						"tokens_freed", preTokens-postTokens,
+						"messages_compacted", preMessages-postMessages,
+						"elapsed", time.Since(compactStart).Round(time.Millisecond),
+					)
 				}
 			}()
 		}
