@@ -139,6 +139,9 @@ func (r *Registry) registerArchiveSessionList(store *memory.ArchiveStore) {
 					s.MessageCount,
 					endInfo,
 				))
+				if s.Summary != "" {
+					sb.WriteString(fmt.Sprintf("  *%s*\n", s.Summary))
+				}
 			}
 
 			return sb.String(), nil

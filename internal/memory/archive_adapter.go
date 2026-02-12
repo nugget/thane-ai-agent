@@ -2,8 +2,10 @@
 package memory
 
 import (
+	"context"
 	"log/slog"
 	"sync"
+	"time"
 )
 
 // ToolCallSource provides tool call records for archiving.
@@ -11,12 +13,16 @@ type ToolCallSource interface {
 	GetToolCalls(conversationID string, limit int) []ToolCall
 }
 
+// SessionSummarizer generates a brief summary of a conversation for session metadata.
+type SessionSummarizer func(ctx context.Context, messages []ArchivedMessage) (string, error)
+
 // ArchiveAdapter bridges the ArchiveStore to the agent.SessionArchiver interface.
 // It manages session lifecycle and converts between memory and archive message types.
 type ArchiveAdapter struct {
 	store      *ArchiveStore
 	logger     *slog.Logger
-	toolSource ToolCallSource // optional — archives tool calls alongside messages
+	toolSource ToolCallSource   // optional — archives tool calls alongside messages
+	summarizer SessionSummarizer // optional — generates session summaries on close
 
 	// Track active session IDs in memory for fast lookup
 	mu       sync.RWMutex
@@ -35,6 +41,11 @@ func NewArchiveAdapter(store *ArchiveStore, logger *slog.Logger) *ArchiveAdapter
 // SetToolCallSource configures a source for tool call records to archive.
 func (a *ArchiveAdapter) SetToolCallSource(source ToolCallSource) {
 	a.toolSource = source
+}
+
+// SetSummarizer configures a function to generate session summaries on close.
+func (a *ArchiveAdapter) SetSummarizer(fn SessionSummarizer) {
+	a.summarizer = fn
 }
 
 // ArchiveConversation archives all messages from a conversation.
@@ -116,10 +127,15 @@ func (a *ArchiveAdapter) StartSession(conversationID string) (string, error) {
 	return sess.ID, nil
 }
 
-// EndSession ends a session.
+// EndSession ends a session and generates a summary if a summarizer is configured.
 func (a *ArchiveAdapter) EndSession(sessionID string, reason string) error {
 	if err := a.store.EndSession(sessionID, reason); err != nil {
 		return err
+	}
+
+	// Generate summary asynchronously — don't block the caller
+	if a.summarizer != nil {
+		go a.generateSessionSummary(sessionID)
 	}
 
 	// Remove from active cache
@@ -137,6 +153,39 @@ func (a *ArchiveAdapter) EndSession(sessionID string, reason string) error {
 		"reason", reason,
 	)
 	return nil
+}
+
+// generateSessionSummary creates an AI summary of the session.
+func (a *ArchiveAdapter) generateSessionSummary(sessionID string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	messages, err := a.store.GetSessionTranscript(sessionID)
+	if err != nil || len(messages) == 0 {
+		return
+	}
+
+	summary, err := a.summarizer(ctx, messages)
+	if err != nil {
+		a.logger.Warn("failed to generate session summary",
+			"session", sessionID[:8],
+			"error", err,
+		)
+		return
+	}
+
+	if err := a.store.SetSessionSummary(sessionID, summary); err != nil {
+		a.logger.Warn("failed to save session summary",
+			"session", sessionID[:8],
+			"error", err,
+		)
+		return
+	}
+
+	a.logger.Info("session summary generated",
+		"session", sessionID[:8],
+		"summary_len", len(summary),
+	)
 }
 
 // ActiveSessionID returns the current session ID for a conversation, or empty.

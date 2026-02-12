@@ -683,6 +683,14 @@ func (s *ArchiveStore) EndSession(sessionID string, reason string) error {
 	return err
 }
 
+// SetSessionSummary updates the summary/topics for a session.
+func (s *ArchiveStore) SetSessionSummary(sessionID string, summary string) error {
+	_, err := s.db.Exec(`
+		UPDATE sessions SET summary = ? WHERE id = ?
+	`, summary, sessionID)
+	return err
+}
+
 // IncrementSessionCount bumps the message count for a session.
 func (s *ArchiveStore) IncrementSessionCount(sessionID string) error {
 	_, err := s.db.Exec(`
