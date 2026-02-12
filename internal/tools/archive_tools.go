@@ -84,7 +84,17 @@ func (r *Registry) registerArchiveSearch(store *memory.ArchiveStore) {
 				return "No results found in conversation archive.", nil
 			}
 
-			return formatSearchResults(results), nil
+			// Cap results to prevent context flooding (182KB observed in production)
+			const maxResultBytes = 16000 // ~4K tokens — enough for useful context
+			formatted := formatSearchResults(results)
+			if len(formatted) > maxResultBytes {
+				// Truncate and indicate more results exist
+				formatted = formatted[:maxResultBytes] + fmt.Sprintf(
+					"\n\n[Truncated: %d bytes total, showing first %d bytes. Use archive_session_transcript for full context of a specific session.]",
+					len(formatted), maxResultBytes,
+				)
+			}
+			return formatted, nil
 		},
 	})
 }
@@ -202,19 +212,34 @@ func (r *Registry) registerArchiveSessionGet(store *memory.ArchiveStore) {
 				sessionID = fullID
 			}
 
+			const maxTranscriptBytes = 32000 // ~8K tokens
+
 			if format == "json" {
 				messages, err := store.GetSessionTranscript(sessionID)
 				if err != nil {
 					return "", fmt.Errorf("get transcript: %w", err)
 				}
 				data, _ := json.MarshalIndent(messages, "", "  ")
-				return string(data), nil
+				result := string(data)
+				if len(result) > maxTranscriptBytes {
+					result = result[:maxTranscriptBytes] + fmt.Sprintf(
+						"\n\n[Truncated: %d bytes total. Full transcript has %d messages.]",
+						len(result), len(messages),
+					)
+				}
+				return result, nil
 			}
 
 			// Text format — use markdown export
 			md, err := store.ExportSessionMarkdown(sessionID)
 			if err != nil {
 				return "", fmt.Errorf("export session: %w", err)
+			}
+			if len(md) > maxTranscriptBytes {
+				md = md[:maxTranscriptBytes] + fmt.Sprintf(
+					"\n\n[Truncated: %d bytes total. Use archive_search to find specific content.]",
+					len(md),
+				)
 			}
 			return md, nil
 		},
