@@ -111,7 +111,7 @@ just logs                     # Tail live logs
 
 ## Deployment
 
-Thane ships with production-grade service definitions for both platforms.
+Thane ships with production-grade service definitions. Go's cross-compilation means Thane runs anywhere — these are the platforms with tested service configs today:
 
 ### macOS
 
