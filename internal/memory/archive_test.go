@@ -26,13 +26,13 @@ func TestArchiveMessages_BasicInsert(t *testing.T) {
 		{
 			ID: "msg-1", ConversationID: "conv-1", SessionID: "sess-1",
 			Role: "user", Content: "hello there",
-			Timestamp: time.Date(2026, 2, 12, 10, 0, 0, 0, time.UTC),
+			Timestamp:     time.Date(2026, 2, 12, 10, 0, 0, 0, time.UTC),
 			ArchiveReason: string(ArchiveReasonReset),
 		},
 		{
 			ID: "msg-2", ConversationID: "conv-1", SessionID: "sess-1",
 			Role: "assistant", Content: "hi! how can I help?",
-			Timestamp: time.Date(2026, 2, 12, 10, 0, 5, 0, time.UTC),
+			Timestamp:     time.Date(2026, 2, 12, 10, 0, 5, 0, time.UTC),
 			ArchiveReason: string(ArchiveReasonReset),
 		},
 	}
@@ -63,7 +63,7 @@ func TestArchiveMessages_Deduplication(t *testing.T) {
 	msg := ArchivedMessage{
 		ID: "msg-1", ConversationID: "conv-1", SessionID: "sess-1",
 		Role: "user", Content: "hello",
-		Timestamp: time.Date(2026, 2, 12, 10, 0, 0, 0, time.UTC),
+		Timestamp:     time.Date(2026, 2, 12, 10, 0, 0, 0, time.UTC),
 		ArchiveReason: string(ArchiveReasonCompaction),
 	}
 
@@ -91,19 +91,19 @@ func TestSearch_BasicFTS(t *testing.T) {
 		{
 			ID: "msg-1", ConversationID: "conv-1", SessionID: "sess-1",
 			Role: "user", Content: "what about the pool heater timer",
-			Timestamp: time.Date(2026, 2, 12, 10, 0, 0, 0, time.UTC),
+			Timestamp:     time.Date(2026, 2, 12, 10, 0, 0, 0, time.UTC),
 			ArchiveReason: string(ArchiveReasonReset),
 		},
 		{
 			ID: "msg-2", ConversationID: "conv-1", SessionID: "sess-1",
 			Role: "assistant", Content: "the pool heater is set to run from 10am to 4pm",
-			Timestamp: time.Date(2026, 2, 12, 10, 0, 5, 0, time.UTC),
+			Timestamp:     time.Date(2026, 2, 12, 10, 0, 5, 0, time.UTC),
 			ArchiveReason: string(ArchiveReasonReset),
 		},
 		{
 			ID: "msg-3", ConversationID: "conv-1", SessionID: "sess-1",
 			Role: "user", Content: "what is the weather today",
-			Timestamp: time.Date(2026, 2, 12, 10, 1, 0, 0, time.UTC),
+			Timestamp:     time.Date(2026, 2, 12, 10, 1, 0, 0, time.UTC),
 			ArchiveReason: string(ArchiveReasonReset),
 		},
 	}
@@ -202,7 +202,7 @@ func TestSearch_SilenceGapContextExpansion(t *testing.T) {
 		}
 	}
 
-	// For m3, context before should include m1/m2 (5-30s gaps) 
+	// For m3, context before should include m1/m2 (5-30s gaps)
 	// For m4, context before should include m1/m2/m3
 	// Either way, we should get some context
 	totalContext := len(result.ContextBefore) + len(result.ContextAfter)

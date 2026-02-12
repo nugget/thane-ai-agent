@@ -115,7 +115,7 @@ type SearchOptions struct {
 	MaxMessages      int           // hard cap per direction
 	MaxDuration      time.Duration // time-based cap per direction
 	Limit            int           // max results
-	NoContext         bool          // if true, return matches only (no surrounding context)
+	NoContext        bool          // if true, return matches only (no surrounding context)
 }
 
 // NewArchiveStore creates a new archive store at the given database path.

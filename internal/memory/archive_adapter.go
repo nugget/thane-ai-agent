@@ -20,7 +20,7 @@ type SessionSummarizer func(ctx context.Context, messages []ArchivedMessage) (st
 type ArchiveAdapter struct {
 	store      *ArchiveStore
 	logger     *slog.Logger
-	toolSource ToolCallSource   // optional — archives tool calls alongside messages
+	toolSource ToolCallSource    // optional — archives tool calls alongside messages
 	summarizer SessionSummarizer // optional — generates session summaries on close
 
 	// Track active session IDs in memory for fast lookup

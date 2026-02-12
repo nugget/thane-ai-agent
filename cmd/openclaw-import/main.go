@@ -192,11 +192,11 @@ type parsedSession struct {
 
 // openclawLine represents a single JSONL line from an OpenClaw session file.
 type openclawLine struct {
-	Type      string          `json:"type"`
-	ID        string          `json:"id"`
-	Timestamp string          `json:"timestamp"`
-	Message   *openclawMsg    `json:"message,omitempty"`
-	CustomType string         `json:"customType,omitempty"`
+	Type       string       `json:"type"`
+	ID         string       `json:"id"`
+	Timestamp  string       `json:"timestamp"`
+	Message    *openclawMsg `json:"message,omitempty"`
+	CustomType string       `json:"customType,omitempty"`
 }
 
 type openclawMsg struct {
@@ -397,7 +397,7 @@ func extractAssistantContent(content json.RawMessage) (string, []openclawContent
 			}
 		case "toolCall":
 			toolCalls = append(toolCalls, b)
-		// Skip "thinking" blocks — internal reasoning, not conversation
+			// Skip "thinking" blocks — internal reasoning, not conversation
 		}
 	}
 
