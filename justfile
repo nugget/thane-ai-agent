@@ -22,6 +22,8 @@ default:
 build target_os=host_os target_arch=host_arch:
     @mkdir -p dist
     GOOS={{target_os}} GOARCH={{target_arch}} go build -ldflags "{{ldflags}}" -o dist/thane-{{target_os}}-{{target_arch}} ./cmd/thane
+    @# Ad-hoc sign macOS binaries so Gatekeeper doesn't kill them on each rebuild
+    @if [ "{{target_os}}" = "darwin" ]; then codesign -s - dist/thane-{{target_os}}-{{target_arch}} 2>/dev/null && echo "Signed dist/thane-{{target_os}}-{{target_arch}}"; fi
     @echo "Built dist/thane-{{target_os}}-{{target_arch}}"
 
 # Build for all release targets
