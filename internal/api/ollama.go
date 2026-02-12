@@ -8,6 +8,8 @@
 package api
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -205,10 +207,17 @@ func handleOllamaChatShared(w http.ResponseWriter, r *http.Request, loop *agent.
 		// else: explicit model name, pass through to router
 	}
 
+	// Derive a conversation ID from the message history.
+	// Open WebUI sends full history with each request, so hashing the first
+	// user message gives a stable ID per chat. Different OWU chats get
+	// isolated conversation buffers, archive sessions, and compaction state.
+	conversationID := deriveConversationID(messages)
+
 	agentReq := &agent.Request{
-		Messages: messages,
-		Model:    model,
-		Hints:    hints,
+		Messages:       messages,
+		Model:          model,
+		Hints:          hints,
+		ConversationID: conversationID,
 	}
 
 	// Check if streaming was requested. For Ollama compatibility, a nil stream defaults to true.
@@ -639,3 +648,17 @@ func findJSONEnd(s string) int {
 }
 
 // Note: captureBody is defined in debug_request.go
+
+// deriveConversationID creates a stable conversation ID from the message history.
+// Uses the first user message as the key — all requests from the same Open WebUI
+// chat will have the same first user message, giving a consistent ID.
+// Falls back to "default" if no user messages are found.
+func deriveConversationID(messages []agent.Message) string {
+	for _, m := range messages {
+		if m.Role == "user" && m.Content != "" {
+			h := sha256.Sum256([]byte(m.Content))
+			return "owu-" + hex.EncodeToString(h[:8]) // 16 hex chars, e.g. "owu-a1b2c3d4e5f6a7b8"
+		}
+	}
+	return "default"
+}

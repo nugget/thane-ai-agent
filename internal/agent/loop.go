@@ -313,10 +313,16 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		"messages", len(req.Messages),
 	)
 
-	// Load conversation history
-	history := l.memory.GetMessages(convID)
+	// For externally-managed conversations (e.g., Open WebUI sends full history),
+	// skip local history to avoid duplication. The client provides all context.
+	isExternalHistory := strings.HasPrefix(convID, "owu-")
 
-	// Add incoming messages to memory
+	var history []memory.Message
+	if !isExternalHistory {
+		history = l.memory.GetMessages(convID)
+	}
+
+	// Store incoming messages for archival (but history retrieval skips them for external convs)
 	for _, m := range req.Messages {
 		if err := l.memory.AddMessage(convID, m.Role, m.Content); err != nil {
 			l.logger.Warn("failed to store message", "error", err)
