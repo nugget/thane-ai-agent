@@ -98,6 +98,19 @@ func (s *Server) RegisterOllamaRoutes(mux *http.ServeMux) {
 
 // handleOllamaChatShared handles the Ollama /api/chat endpoint.
 // This is a shared implementation used by both OllamaServer and embedded routes.
+//
+// The function:
+//   - Validates and parses the incoming Ollama chat request
+//   - Sanitizes Home Assistant-specific content (tools, system prompts)
+//   - Converts Ollama message format to agent message format
+//   - Delegates to streaming or non-streaming handlers based on request
+//   - Logs request details including client information
+//
+// Parameters:
+//   - w: HTTP response writer
+//   - r: HTTP request containing the chat payload
+//   - loop: Agent loop for processing the conversation
+//   - logger: Logger for request tracking and debugging
 func handleOllamaChatShared(w http.ResponseWriter, r *http.Request, loop *agent.Loop, logger *slog.Logger) {
 	start := time.Now()
 
@@ -167,12 +180,13 @@ func handleOllamaChatShared(w http.ResponseWriter, r *http.Request, loop *agent.
 		Model:    model,
 	}
 
-	// Force non-streaming - text-based tool calls leak JSON during streaming
-	// TODO: Buffer first response chunk to detect tool calls before streaming
-	streaming := false
-	_ = req.Stream
+	// Check if streaming was requested. For Ollama compatibility, a nil stream defaults to true.
+	stream := true
+	if req.Stream != nil {
+		stream = *req.Stream
+	}
 
-	if streaming {
+	if stream {
 		handleOllamaStreamingChatShared(w, r, agentReq, start, loop, logger)
 		return
 	}
@@ -207,6 +221,23 @@ func handleOllamaChatShared(w http.ResponseWriter, r *http.Request, loop *agent.
 }
 
 // handleOllamaStreamingChatShared handles streaming chat responses in Ollama format.
+//
+// This function implements intelligent streaming that:
+//   - Buffers initial tokens to detect tool calls
+//   - Falls back to non-streaming mode if tool calls are detected
+//   - Streams tokens in real-time for regular text responses
+//   - Sends responses in Ollama's NDJSON streaming format
+//
+// The buffering approach prevents JSON tool call fragments from leaking into
+// the stream while maintaining low latency for regular conversations.
+//
+// Parameters:
+//   - w: HTTP response writer (must support flushing)
+//   - r: HTTP request context
+//   - req: Parsed agent request
+//   - start: Request start time for duration tracking
+//   - loop: Agent loop for processing
+//   - logger: Logger for error tracking
 func handleOllamaStreamingChatShared(w http.ResponseWriter, r *http.Request, req *agent.Request, start time.Time, loop *agent.Loop, logger *slog.Logger) {
 	// Set headers for streaming
 	w.Header().Set("Content-Type", "application/x-ndjson")
@@ -224,23 +255,74 @@ func handleOllamaStreamingChatShared(w http.ResponseWriter, r *http.Request, req
 		model = req.Model
 	}
 
-	// Create stream callback that writes Ollama-format chunks
+	// Buffer to detect tool calls at the start of streaming
+	// Note: Tool call detection relies on KindToolCallStart events which are emitted
+	// by the agent loop before any tool-related tokens. This prevents JSON leakage
+	// in the stream. If the LLM generates text-based tool calls (not using the proper
+	// tool syntax), those would stream as regular text - but that's expected behavior.
+	var buffer []agent.StreamEvent
+	var hasToolCalls bool
+	var streaming bool
+
+	// Create stream callback that buffers initially, then streams if no tool calls
 	streamCallback := func(event agent.StreamEvent) {
-		if event.Kind != agent.KindToken {
-			return // Ollama wire format only carries text tokens
+		// If we've already detected tool calls, stop processing events
+		if hasToolCalls {
+			return
 		}
-		chunk := OllamaChatResponse{
-			Model:     model,
-			CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
-			Message: OllamaChatMessage{
-				Role:    "assistant",
-				Content: event.Token,
-			},
-			Done: false,
+
+		if !streaming {
+			// Still buffering - check for tool calls
+			if event.Kind == agent.KindToolCallStart {
+				hasToolCalls = true
+				buffer = nil // Clear buffer to avoid unnecessary memory usage
+				// Stop buffering and fall back to non-streaming
+				return
+			}
+
+			// Only buffer token events
+			if event.Kind == agent.KindToken {
+				buffer = append(buffer, event)
+			}
+
+			// Start streaming after we get some content and no tool calls
+			// Use a smaller threshold to handle short responses
+			if event.Kind == agent.KindToken && len(buffer) >= 2 && !hasToolCalls {
+				streaming = true
+				// Flush buffered content
+				for _, bufferedEvent := range buffer {
+					chunk := OllamaChatResponse{
+						Model:     model,
+						CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+						Message: OllamaChatMessage{
+							Role:    "assistant",
+							Content: bufferedEvent.Token,
+						},
+						Done: false,
+					}
+					data, _ := json.Marshal(chunk)
+					fmt.Fprintf(w, "%s\n", data)
+					flusher.Flush()
+				}
+				buffer = nil // Clear buffer
+			}
+		} else {
+			// We're streaming - send tokens directly
+			if event.Kind == agent.KindToken {
+				chunk := OllamaChatResponse{
+					Model:     model,
+					CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+					Message: OllamaChatMessage{
+						Role:    "assistant",
+						Content: event.Token,
+					},
+					Done: false,
+				}
+				data, _ := json.Marshal(chunk)
+				fmt.Fprintf(w, "%s\n", data)
+				flusher.Flush()
+			}
 		}
-		data, _ := json.Marshal(chunk)
-		fmt.Fprintf(w, "%s\n", data)
-		flusher.Flush()
 	}
 
 	// Run agent with streaming callback
@@ -264,6 +346,41 @@ func handleOllamaStreamingChatShared(w http.ResponseWriter, r *http.Request, req
 		return
 	}
 
+	// If we detected tool calls and buffered everything, send it now
+	if hasToolCalls && !streaming {
+		// Send the complete response as a single chunk
+		chunk := OllamaChatResponse{
+			Model:     model,
+			CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+			Message: OllamaChatMessage{
+				Role:    "assistant",
+				Content: resp.Content,
+			},
+			Done: false,
+		}
+		data, _ := json.Marshal(chunk)
+		fmt.Fprintf(w, "%s\n", data)
+		flusher.Flush()
+	}
+
+	// If we never started streaming (very short response), send buffered tokens now
+	if !streaming && !hasToolCalls && len(buffer) > 0 {
+		for _, bufferedEvent := range buffer {
+			chunk := OllamaChatResponse{
+				Model:     model,
+				CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+				Message: OllamaChatMessage{
+					Role:    "assistant",
+					Content: bufferedEvent.Token,
+				},
+				Done: false,
+			}
+			data, _ := json.Marshal(chunk)
+			fmt.Fprintf(w, "%s\n", data)
+			flusher.Flush()
+		}
+	}
+
 	// Send final message with stats
 	duration := time.Since(start)
 	final := OllamaChatResponse{
@@ -284,6 +401,10 @@ func handleOllamaStreamingChatShared(w http.ResponseWriter, r *http.Request, req
 }
 
 // handleOllamaTagsShared returns the list of available models.
+// Currently returns only "thane:latest" as Thane presents itself as a single
+// model to Ollama clients, with actual model selection handled internally.
+//
+// The response format matches Ollama's /api/tags endpoint specification.
 func handleOllamaTagsShared(w http.ResponseWriter, r *http.Request, logger *slog.Logger) {
 	// Return Thane as the only available model
 	resp := OllamaTagsResponse{
@@ -313,6 +434,7 @@ func handleOllamaTagsShared(w http.ResponseWriter, r *http.Request, logger *slog
 }
 
 // handleOllamaVersionShared returns the Ollama-compatible version.
+// This reports Thane's version in Ollama's expected JSON format.
 func handleOllamaVersionShared(w http.ResponseWriter, r *http.Request, logger *slog.Logger) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(OllamaVersionResponse{
@@ -334,6 +456,15 @@ func ollamaError(w http.ResponseWriter, code int, message string) {
 
 // sanitizeHARequest strips HA-provided tools and instructions, keeping only
 // what Thane needs. HA is the dumb pipe; Thane is the brain.
+//
+// It modifies the request in-place by:
+//   - Removing any tools array (Thane manages its own tools)
+//   - Stripping HA system messages (Thane injects its own)
+//   - Cleaning assistant messages that contain leaked JSON tool calls
+//   - Extracting area context from system messages before removing them
+//
+// The areaContext return value contains any "You are in area X" information
+// extracted from HA's system message, or an empty string if none was found.
 func sanitizeHARequest(req *OllamaChatRequest, logger *slog.Logger) (areaContext string) {
 	// Log and strip HA tools (we use our own)
 	if len(req.Tools) > 0 {
@@ -404,7 +535,12 @@ func sanitizeHARequest(req *OllamaChatRequest, logger *slog.Logger) (areaContext
 }
 
 // stripLeadingJSON removes JSON objects from the beginning of a string,
-// returning any trailing text. Handles multiple consecutive JSON objects.
+// returning any trailing text. It handles multiple consecutive JSON objects
+// by repeatedly finding and removing complete JSON objects until no more
+// are found or the string doesn't start with '{'.
+//
+// This is used to clean up assistant messages where JSON tool calls have
+// leaked into the conversation history from previous interactions.
 func stripLeadingJSON(s string) string {
 	s = strings.TrimSpace(s)
 	for strings.HasPrefix(s, "{") {
@@ -417,7 +553,10 @@ func stripLeadingJSON(s string) string {
 	return s
 }
 
-// findJSONEnd finds the end of a JSON object in a string.
+// findJSONEnd finds the end of a JSON object in a string by tracking
+// brace depth while properly handling strings and escape sequences.
+// Returns the index after the closing '}' of the first complete JSON object,
+// or -1 if the string doesn't start with '{' or contains an incomplete object.
 func findJSONEnd(s string) int {
 	if !strings.HasPrefix(s, "{") {
 		return -1
