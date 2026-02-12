@@ -429,3 +429,60 @@ func searchStr(s, sub string) bool {
 	}
 	return false
 }
+
+// TestSetSessionMetadata verifies round-trip of rich session metadata.
+func TestSetSessionMetadata(t *testing.T) {
+	store := newTestArchiveStore(t)
+
+	sess, err := store.StartSession("test-conv")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	meta := &SessionMetadata{
+		OneLiner:     "Built session archive system",
+		Paragraph:    "Marathon session building the complete archive system with FTS5 search.",
+		Detailed:     "Full session archive with gap-aware context expansion, import tool, and metadata.",
+		KeyDecisions: []string{"Gap-aware over rigid ±N", "FTS5 optional with LIKE fallback"},
+		Participants: []string{"Nugget", "Aimee"},
+		SessionType:  "architecture",
+		ToolsUsed:    map[string]int{"archive_search": 3, "shell_exec": 12},
+	}
+	tags := []string{"thane", "archive", "architecture"}
+	title := "Session archive system build"
+
+	if err := store.SetSessionMetadata(sess.ID, meta, title, tags); err != nil {
+		t.Fatal(err)
+	}
+
+	// Read it back
+	got, err := store.GetSession(sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got.Title != title {
+		t.Errorf("title: got %q, want %q", got.Title, title)
+	}
+	if got.Summary != meta.Paragraph {
+		t.Errorf("summary should be set from paragraph: got %q", got.Summary)
+	}
+	if len(got.Tags) != 3 || got.Tags[0] != "thane" {
+		t.Errorf("tags: got %v, want %v", got.Tags, tags)
+	}
+	if got.Metadata == nil {
+		t.Fatal("metadata should not be nil")
+	}
+	if got.Metadata.OneLiner != meta.OneLiner {
+		t.Errorf("one_liner: got %q, want %q", got.Metadata.OneLiner, meta.OneLiner)
+	}
+	if got.Metadata.SessionType != "architecture" {
+		t.Errorf("session_type: got %q, want %q", got.Metadata.SessionType, "architecture")
+	}
+	if got.Metadata.ToolsUsed["shell_exec"] != 12 {
+		t.Errorf("tools_used: got %v", got.Metadata.ToolsUsed)
+	}
+	if len(got.Metadata.KeyDecisions) != 2 {
+		t.Errorf("key_decisions: got %v", got.Metadata.KeyDecisions)
+	}
+}

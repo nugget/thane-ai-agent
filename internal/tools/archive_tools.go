@@ -135,7 +135,12 @@ func (r *Registry) registerArchiveSessionList(store *memory.ArchiveStore) {
 				}
 				title := memory.ShortID(s.ID)
 				if s.Title != "" {
-					title = fmt.Sprintf("%s — %s", memory.ShortID(s.ID), s.Title)
+					// Sanitize: single line, cap length
+					t := strings.ReplaceAll(s.Title, "\n", " ")
+					if len(t) > 80 {
+						t = t[:80] + "…"
+					}
+					title = fmt.Sprintf("%s — %s", memory.ShortID(s.ID), t)
 				}
 				sb.WriteString(fmt.Sprintf("- **%s** — %s, %d messages, %s\n",
 					title,
