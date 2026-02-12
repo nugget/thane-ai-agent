@@ -305,6 +305,9 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	agentReq := &agent.Request{
 		Messages: req.Messages,
 		Model:    req.Model,
+		Hints: map[string]string{
+			"channel": "api", // Native OpenAI-compatible API
+		},
 	}
 
 	if req.Stream {
@@ -388,6 +391,9 @@ func (s *Server) handleSimpleChat(w http.ResponseWriter, r *http.Request) {
 			{Role: "user", Content: req.Message},
 		},
 		ConversationID: convID,
+		Hints: map[string]string{
+			"channel": "api",
+		},
 	}
 
 	resp, err := s.loop.Run(r.Context(), agentReq, nil)

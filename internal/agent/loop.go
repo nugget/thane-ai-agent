@@ -27,9 +27,10 @@ type Message struct {
 
 // Request represents an incoming agent request.
 type Request struct {
-	Messages       []Message `json:"messages"`
-	Model          string    `json:"model,omitempty"`
-	ConversationID string    `json:"conversation_id,omitempty"`
+	Messages       []Message         `json:"messages"`
+	Model          string            `json:"model,omitempty"`
+	ConversationID string            `json:"conversation_id,omitempty"`
+	Hints          map[string]string `json:"hints,omitempty"` // Routing hints (channel, mission, etc.)
 }
 
 // StreamEvent is a single event in a streaming response.
@@ -394,6 +395,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 				NeedsTools:  true, // We always have tools available
 				ToolCount:   len(l.tools.List()),
 				Priority:    router.PriorityInteractive,
+				Hints:       req.Hints,
 			}
 
 			model, routerDecision = l.router.Route(ctx, routerReq)

@@ -178,6 +178,9 @@ func handleOllamaChatShared(w http.ResponseWriter, r *http.Request, loop *agent.
 	agentReq := &agent.Request{
 		Messages: messages,
 		Model:    model,
+		Hints: map[string]string{
+			"channel": "ollama", // Ollama API — could be HA, Open WebUI, or direct
+		},
 	}
 
 	// Check if streaming was requested. For Ollama compatibility, a nil stream defaults to true.
