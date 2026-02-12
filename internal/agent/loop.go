@@ -479,6 +479,8 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		l.logger.Info("llm response",
 			"session", sessionTag, "conversation", convID,
 			"iter", i+1,
+			"model", model,
+			"resp_model", llmResp.Model,
 			"input_tokens", llmResp.InputTokens,
 			"output_tokens", llmResp.OutputTokens,
 			"cumul_in", totalInputTokens,
