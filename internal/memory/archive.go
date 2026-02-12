@@ -313,7 +313,10 @@ func (s *ArchiveStore) ArchiveMessages(messages []ArchivedMessage) error {
 
 	for _, m := range messages {
 		if m.ID == "" {
-			id, _ := uuid.NewV7()
+			id, err := uuid.NewV7()
+			if err != nil {
+				return fmt.Errorf("generate UUID: %w", err)
+			}
 			m.ID = id.String()
 		}
 		if m.ArchivedAt.IsZero() {
@@ -671,7 +674,10 @@ func (s *ArchiveStore) StartSession(conversationID string) (*Session, error) {
 // StartSessionAt creates a new session record with a specific start time.
 // Use for imports where the original timestamp must be preserved.
 func (s *ArchiveStore) StartSessionAt(conversationID string, startedAt time.Time) (*Session, error) {
-	id, _ := uuid.NewV7()
+	id, err := uuid.NewV7()
+	if err != nil {
+		return nil, fmt.Errorf("generate UUID: %w", err)
+	}
 
 	sess := &Session{
 		ID:             id.String(),
@@ -679,11 +685,10 @@ func (s *ArchiveStore) StartSessionAt(conversationID string, startedAt time.Time
 		StartedAt:      startedAt,
 	}
 
-	_, err := s.db.Exec(`
+	if _, err = s.db.Exec(`
 		INSERT INTO sessions (id, conversation_id, started_at, message_count)
 		VALUES (?, ?, ?, 0)
-	`, sess.ID, conversationID, startedAt.Format(time.RFC3339Nano))
-	if err != nil {
+	`, sess.ID, conversationID, startedAt.Format(time.RFC3339Nano)); err != nil {
 		return nil, fmt.Errorf("insert session: %w", err)
 	}
 
@@ -878,7 +883,7 @@ func (s *ArchiveStore) ExportSessionMarkdown(sessionID string) (string, error) {
 	var sb strings.Builder
 
 	// Header
-	sb.WriteString(fmt.Sprintf("# Session %s\n\n", sessionID[:8]))
+	sb.WriteString(fmt.Sprintf("# Session %s\n\n", ShortID(sessionID)))
 	sb.WriteString(fmt.Sprintf("**Conversation:** %s\n", sess.ConversationID))
 	sb.WriteString(fmt.Sprintf("**Started:** %s\n", sess.StartedAt.Format("2006-01-02 15:04:05 MST")))
 	if sess.EndedAt != nil {
@@ -1140,13 +1145,13 @@ func (s *ArchiveStore) PurgeImported(sourceType string) (int, error) {
 	// Delete in dependency order: messages, tool calls, FTS, sessions, metadata
 	for _, sid := range sessionIDs {
 		if _, err := tx.Exec(`DELETE FROM archive_messages WHERE session_id = ?`, sid); err != nil {
-			return 0, fmt.Errorf("delete messages for session %s: %w", sid[:8], err)
+			return 0, fmt.Errorf("delete messages for session %s: %w", ShortID(sid), err)
 		}
 		if _, err := tx.Exec(`DELETE FROM archive_tool_calls WHERE session_id = ?`, sid); err != nil {
-			return 0, fmt.Errorf("delete tool calls for session %s: %w", sid[:8], err)
+			return 0, fmt.Errorf("delete tool calls for session %s: %w", ShortID(sid), err)
 		}
 		if _, err := tx.Exec(`DELETE FROM sessions WHERE id = ?`, sid); err != nil {
-			return 0, fmt.Errorf("delete session %s: %w", sid[:8], err)
+			return 0, fmt.Errorf("delete session %s: %w", ShortID(sid), err)
 		}
 	}
 
@@ -1167,6 +1172,15 @@ func (s *ArchiveStore) PurgeImported(sourceType string) (int, error) {
 	}
 
 	return len(sessionIDs), nil
+}
+
+// ShortID safely truncates an ID to 8 characters for display.
+// Returns the full string if shorter than 8 characters.
+func ShortID(id string) string {
+	if len(id) <= 8 {
+		return id
+	}
+	return id[:8]
 }
 
 func nullString(s string) any {

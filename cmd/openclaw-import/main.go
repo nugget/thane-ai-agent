@@ -107,7 +107,7 @@ func main() {
 				endStr = s.endedAt.Format("15:04:05")
 			}
 			fmt.Printf("  %s  %s → %s  %d msgs, %d tools\n",
-				s.id[:8],
+				memory.ShortID(s.id),
 				s.startedAt.Format("2006-01-02 15:04:05"),
 				endStr,
 				len(s.messages),
@@ -146,17 +146,17 @@ func main() {
 	for _, sess := range allSessions {
 		already, err := store.IsImported(sess.id, sourceType)
 		if err != nil {
-			logger.Warn("failed to check import status", "session", sess.id[:8], "error", err)
+			logger.Warn("failed to check import status", "session", memory.ShortID(sess.id), "error", err)
 		}
 		if already {
-			logger.Debug("skipping already-imported session", "openclaw_id", sess.id[:8])
+			logger.Debug("skipping already-imported session", "openclaw_id", memory.ShortID(sess.id))
 			skipped++
 			continue
 		}
 
 		if err := importSession(store, sess, logger); err != nil {
 			logger.Error("failed to import session",
-				"session", sess.id[:8],
+				"session", memory.ShortID(sess.id),
 				"error", err,
 			)
 			continue
@@ -315,7 +315,10 @@ func convertMessage(entry openclawLine, sessionID string, ts time.Time) ([]memor
 
 		// Convert tool calls
 		for _, tc := range tcs {
-			argsJSON, _ := json.Marshal(tc.Arguments)
+			argsJSON, err := json.Marshal(tc.Arguments)
+			if err != nil {
+				argsJSON = []byte("{}")
+			}
 			toolCalls = append(toolCalls, memory.ArchivedToolCall{
 				ID:             tc.ID,
 				ConversationID: "openclaw-import",
@@ -400,6 +403,8 @@ func extractAssistantContent(content json.RawMessage) (string, []openclawContent
 	return strings.Join(texts, "\n"), toolCalls
 }
 
+// parseTimestamp tries the ISO string first, then unix milliseconds.
+// Returns zero time if both fail — callers should check with IsZero().
 func parseTimestamp(isoStr string, unixMs int64) time.Time {
 	if t, err := time.Parse(time.RFC3339Nano, isoStr); err == nil {
 		return t
@@ -407,7 +412,7 @@ func parseTimestamp(isoStr string, unixMs int64) time.Time {
 	if unixMs > 0 {
 		return time.UnixMilli(unixMs)
 	}
-	return time.Now()
+	return time.Time{}
 }
 
 // --- Importing ---
@@ -463,7 +468,7 @@ func importSession(store *memory.ArchiveStore, sess parsedSession, logger *slog.
 	// Set message count and summary
 	_ = store.SetSessionMessageCount(archiveSess.ID, len(sess.messages))
 
-	summary := fmt.Sprintf("[Imported from OpenClaw session %s]", sess.id[:8])
+	summary := fmt.Sprintf("[Imported from OpenClaw session %s]", memory.ShortID(sess.id))
 	_ = store.SetSessionSummary(archiveSess.ID, summary)
 
 	// Record the import mapping for idempotent re-runs
@@ -472,8 +477,8 @@ func importSession(store *memory.ArchiveStore, sess parsedSession, logger *slog.
 	}
 
 	logger.Debug("imported session",
-		"openclaw_id", sess.id[:8],
-		"thane_id", archiveSess.ID[:8],
+		"openclaw_id", memory.ShortID(sess.id),
+		"thane_id", memory.ShortID(archiveSess.ID),
 		"started", sess.startedAt.Format(time.RFC3339),
 		"messages", len(sess.messages),
 		"tool_calls", len(sess.toolCalls),

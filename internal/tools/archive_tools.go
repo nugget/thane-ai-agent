@@ -134,7 +134,7 @@ func (r *Registry) registerArchiveSessionList(store *memory.ArchiveStore) {
 					endInfo = fmt.Sprintf("ended (%s, %s)", s.EndReason, duration)
 				}
 				sb.WriteString(fmt.Sprintf("- **%s** — %s, %d messages, %s\n",
-					s.ID[:8],
+					memory.ShortID(s.ID),
 					s.StartedAt.Format("2006-01-02 15:04"),
 					s.MessageCount,
 					endInfo,
@@ -239,7 +239,7 @@ func formatSearchResults(results []memory.SearchResult) string {
 	sb.WriteString(fmt.Sprintf("Found %d results:\n\n", len(results)))
 
 	for i, r := range results {
-		sb.WriteString(fmt.Sprintf("--- Result %d (session %s) ---\n", i+1, r.SessionID[:8]))
+		sb.WriteString(fmt.Sprintf("--- Result %d (session %s) ---\n", i+1, memory.ShortID(r.SessionID)))
 
 		// Context before
 		for _, m := range r.ContextBefore {

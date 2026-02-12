@@ -1008,7 +1008,7 @@ func (s *Server) handleArchiveSessionExport(w http.ResponseWriter, r *http.Reque
 			return
 		}
 		w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
-		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"session-%s.md\"", id[:8]))
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"session-%s.md\"", memory.ShortID(id)))
 		fmt.Fprint(w, md)
 
 	case "json":
@@ -1023,7 +1023,7 @@ func (s *Server) handleArchiveSessionExport(w http.ResponseWriter, r *http.Reque
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"session-%s.json\"", id[:8]))
+		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"session-%s.json\"", memory.ShortID(id)))
 		writeJSON(w, map[string]any{
 			"session":    sess,
 			"transcript": transcript,

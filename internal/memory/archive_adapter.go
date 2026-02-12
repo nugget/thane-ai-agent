@@ -120,7 +120,7 @@ func (a *ArchiveAdapter) StartSession(conversationID string) (string, error) {
 	a.mu.Unlock()
 
 	a.logger.Info("session started",
-		"session", sess.ID[:8],
+		"session", ShortID(sess.ID),
 		"conversation", conversationID,
 	)
 	return sess.ID, nil
@@ -148,7 +148,7 @@ func (a *ArchiveAdapter) EndSession(sessionID string, reason string) error {
 	a.mu.Unlock()
 
 	a.logger.Info("session ended",
-		"session", sessionID[:8],
+		"session", ShortID(sessionID),
 		"reason", reason,
 	)
 	return nil
@@ -167,7 +167,7 @@ func (a *ArchiveAdapter) generateSessionSummary(sessionID string) {
 	summary, err := a.summarizer(ctx, messages)
 	if err != nil {
 		a.logger.Warn("failed to generate session summary",
-			"session", sessionID[:8],
+			"session", ShortID(sessionID),
 			"error", err,
 		)
 		return
@@ -175,14 +175,14 @@ func (a *ArchiveAdapter) generateSessionSummary(sessionID string) {
 
 	if err := a.store.SetSessionSummary(sessionID, summary); err != nil {
 		a.logger.Warn("failed to save session summary",
-			"session", sessionID[:8],
+			"session", ShortID(sessionID),
 			"error", err,
 		)
 		return
 	}
 
 	a.logger.Info("session summary generated",
-		"session", sessionID[:8],
+		"session", ShortID(sessionID),
 		"summary_len", len(summary),
 	)
 }
