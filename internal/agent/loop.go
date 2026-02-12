@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/nugget/thane-ai-agent/internal/buildinfo"
 	"github.com/nugget/thane-ai-agent/internal/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/llm"
 	"github.com/nugget/thane-ai-agent/internal/memory"
@@ -253,8 +254,10 @@ func (l *Loop) buildSystemPrompt(ctx context.Context, userMessage string) string
 		sb.WriteString(l.injectedContext)
 	}
 
-	// Add current time
-	sb.WriteString("\n\n## Current Time\n")
+	// Add build info and current time
+	sb.WriteString("\n\n## Thane Runtime\n")
+	sb.WriteString(buildinfo.ContextString())
+	sb.WriteString("\nCurrent time: ")
 	sb.WriteString(time.Now().Format("Monday, January 2, 2006 at 15:04 MST"))
 
 	// Add talents
@@ -293,8 +296,18 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		}
 	}()
 
+	// Get session ID for log correlation. The session ID (UUIDv7 prefix)
+	// is more meaningful than the conversation name (usually "default").
+	sessionTag := convID // fallback if no archiver
+	if l.archiver != nil {
+		if sid := l.archiver.ActiveSessionID(convID); sid != "" {
+			sessionTag = sid
+		}
+	}
+	sessionTag = memory.ShortID(sessionTag)
+
 	l.logger.Info("agent loop started",
-		"conversation", convID,
+		"session", sessionTag, "conversation", convID,
 		"messages", len(req.Messages),
 	)
 
@@ -398,13 +411,26 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	// Accumulate token usage across iterations
 	var totalInputTokens, totalOutputTokens int
 
+	// Estimate system prompt size for cost logging
+	systemTokens := len(llmMessages[0].Content) / 4 // rough char-to-token ratio
+
 	maxIterations := 50 // Tool call budget; final text response always gets one extra call
 	for i := 0; i < maxIterations; i++ {
-		l.logger.Debug("calling LLM",
+		// Estimate total message size for this iteration
+		iterMsgTokens := 0
+		for _, m := range llmMessages {
+			iterMsgTokens += len(m.Content) / 4
+		}
+
+		iterStart := time.Now()
+
+		l.logger.Info("llm call",
+			"session", sessionTag, "conversation", convID,
+			"iter", i+1,
 			"model", model,
-			"messages", len(llmMessages),
-			"tools", len(toolDefs),
-			"iteration", i+1,
+			"msgs", len(llmMessages),
+			"est_tokens", iterMsgTokens,
+			"system_tokens", systemTokens,
 		)
 
 		// Use streaming to avoid HTTP timeouts on slow models
@@ -442,9 +468,19 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		totalInputTokens += llmResp.InputTokens
 		totalOutputTokens += llmResp.OutputTokens
 
+		l.logger.Info("llm response",
+			"session", sessionTag, "conversation", convID,
+			"iter", i+1,
+			"input_tokens", llmResp.InputTokens,
+			"output_tokens", llmResp.OutputTokens,
+			"cumul_in", totalInputTokens,
+			"cumul_out", totalOutputTokens,
+			"tool_calls", len(llmResp.Message.ToolCalls),
+			"elapsed", time.Since(iterStart).Round(time.Millisecond),
+		)
+
 		// Check for tool calls
 		if len(llmResp.Message.ToolCalls) > 0 {
-			l.logger.Debug("processing tool calls", "count", len(llmResp.Message.ToolCalls))
 
 			// Add assistant message with tool calls
 			llmMessages = append(llmMessages, llmResp.Message)
@@ -469,10 +505,24 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 					argsJSON = string(argsBytes)
 				}
 
-				l.logger.Debug("executing tool",
+				l.logger.Info("tool exec",
+					"session", sessionTag, "conversation", convID,
+					"iter", i+1,
 					"tool", toolName,
-					"call_id", toolCallIDStr,
 				)
+				// Log arguments at DEBUG to avoid leaking sensitive data
+				// (exec commands, file contents, credentials in paths)
+				if l.logger.Enabled(ctx, slog.LevelDebug) {
+					argPreview := argsJSON
+					if len(argPreview) > 200 {
+						argPreview = argPreview[:200] + "..."
+					}
+					l.logger.Debug("tool exec args",
+						"session", sessionTag,
+						"tool", toolName,
+						"args", argPreview,
+					)
+				}
 
 				// Record tool call start (if supported)
 				if hasRecorder {
@@ -494,9 +544,9 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 				if err != nil {
 					errMsg = err.Error()
 					result = "Error: " + errMsg
-					l.logger.Error("tool execution failed", "tool", toolName, "error", err)
+					l.logger.Error("tool exec failed", "session", sessionTag, "conversation", convID, "tool", toolName, "error", err)
 				} else {
-					l.logger.Debug("tool executed", "tool", toolName, "result_len", len(result))
+					l.logger.Debug("tool exec done", "session", sessionTag, "conversation", convID, "tool", toolName, "result_len", len(result))
 				}
 
 				// Emit tool call done event
@@ -555,12 +605,31 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 
 		// Check if compaction needed (async-safe: doesn't block response)
 		if l.compactor != nil && l.compactor.NeedsCompaction(convID) {
-			l.logger.Info("triggering compaction", "conversation", convID)
+			preTokens := l.memory.GetTokenCount(convID)
+			preMessages := len(l.memory.GetMessages(convID))
+			l.logger.Info("triggering compaction",
+				"session", sessionTag, "conversation", convID,
+				"tokens_before", preTokens,
+				"messages_before", preMessages,
+			)
 			go func() {
+				compactStart := time.Now()
 				if err := l.compactor.Compact(context.Background(), convID); err != nil {
-					l.logger.Error("compaction failed", "error", err)
+					l.logger.Error("compaction failed",
+						"session", sessionTag, "conversation", convID,
+						"error", err,
+					)
 				} else {
-					l.logger.Info("compaction completed", "conversation", convID)
+					postTokens := l.memory.GetTokenCount(convID)
+					postMessages := len(l.memory.GetMessages(convID))
+					l.logger.Info("compaction completed",
+						"session", sessionTag, "conversation", convID,
+						"tokens_after", postTokens,
+						"messages_after", postMessages,
+						"tokens_freed", preTokens-postTokens,
+						"messages_compacted", preMessages-postMessages,
+						"elapsed", time.Since(compactStart).Round(time.Millisecond),
+					)
 				}
 			}()
 		}
@@ -571,11 +640,15 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			l.router.RecordOutcome(routerDecision.RequestID, latency, l.memory.GetTokenCount(convID), true)
 		}
 
+		elapsed := time.Since(startTime)
 		l.logger.Info("agent loop completed",
-			"conversation", convID,
-			"iterations", i+1,
-			"tokens", l.memory.GetTokenCount(convID),
+			"session", sessionTag, "conversation", convID,
 			"model", model,
+			"iterations", i+1,
+			"input_tokens", totalInputTokens,
+			"output_tokens", totalOutputTokens,
+			"elapsed", elapsed.Round(time.Millisecond),
+			"context_tokens", l.memory.GetTokenCount(convID),
 		)
 
 		return resp, nil
@@ -615,9 +688,14 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			l.logger.Warn("failed to store response", "error", err)
 		}
 
-		l.logger.Info("agent loop completed (after max iterations recovery)",
-			"conversation", convID,
+		elapsed := time.Since(startTime)
+		l.logger.Info("agent loop completed (max iterations recovery)",
+			"session", sessionTag, "conversation", convID,
 			"model", model,
+			"iterations", maxIterations,
+			"input_tokens", totalInputTokens,
+			"output_tokens", totalOutputTokens,
+			"elapsed", elapsed.Round(time.Millisecond),
 		)
 
 		return resp, nil

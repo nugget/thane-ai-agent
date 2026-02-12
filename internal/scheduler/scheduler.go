@@ -44,7 +44,7 @@ func (s *Scheduler) Start(ctx context.Context) error {
 	s.running = true
 	s.mu.Unlock()
 
-	s.logger.Info("scheduler starting")
+	s.logger.Debug("scheduler starting")
 
 	// Load and schedule all enabled tasks
 	tasks, err := s.store.ListTasks(true)
@@ -56,7 +56,7 @@ func (s *Scheduler) Start(ctx context.Context) error {
 		s.scheduleTask(task)
 	}
 
-	s.logger.Info("scheduler started", "tasks", len(tasks))
+	s.logger.Debug("scheduler started", "tasks", len(tasks))
 
 	// Check for any missed executions on startup
 	s.checkMissedExecutions(ctx)
