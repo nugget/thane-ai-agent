@@ -255,7 +255,7 @@ func (l *Loop) buildSystemPrompt(ctx context.Context, userMessage string) string
 	}
 
 	// Add build info and current time
-	sb.WriteString("\n\n## Runtime\n")
+	sb.WriteString("\n\n## Thane Runtime\n")
 	sb.WriteString(buildinfo.ContextString())
 	sb.WriteString("\nCurrent time: ")
 	sb.WriteString(time.Now().Format("Monday, January 2, 2006 at 15:04 MST"))
