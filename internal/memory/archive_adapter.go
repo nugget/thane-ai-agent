@@ -1,4 +1,3 @@
-// Package memory provides conversation memory storage.
 package memory
 
 import (

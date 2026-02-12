@@ -1,4 +1,17 @@
-// Package memory provides conversation memory storage.
+// Package memory provides conversation memory storage and session archiving.
+//
+// The package has two main subsystems:
+//
+// Active memory (SQLiteStore) manages the working conversation context —
+// messages that are actively used for LLM context windows. Messages can be
+// compacted (summarized) when the context grows too large.
+//
+// Session archive (ArchiveStore) provides immutable, long-term storage of
+// all conversation transcripts. Messages are archived before any destructive
+// operation (compaction, reset, shutdown), ensuring primary source data is
+// never lost. The archive supports full-text search with gap-aware context
+// expansion — search results include surrounding conversation bounded by
+// natural silence gaps rather than rigid message counts.
 package memory
 
 import (
