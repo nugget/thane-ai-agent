@@ -296,14 +296,20 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		}
 	}()
 
-	// Short conversation ID for log readability
-	shortConv := convID
-	if len(shortConv) > 8 {
-		shortConv = shortConv[:8]
+	// Get session ID for log correlation. The session ID (UUIDv7 prefix)
+	// is more meaningful than the conversation name (usually "default").
+	sessionTag := convID // fallback if no archiver
+	if l.archiver != nil {
+		if sid := l.archiver.ActiveSessionID(convID); sid != "" {
+			sessionTag = sid
+		}
+	}
+	if len(sessionTag) > 8 {
+		sessionTag = sessionTag[:8]
 	}
 
 	l.logger.Info("agent loop started",
-		"conv", shortConv,
+		"session", sessionTag,
 		"messages", len(req.Messages),
 	)
 
@@ -419,7 +425,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		}
 
 		l.logger.Info("llm call",
-			"conv", shortConv,
+			"session", sessionTag,
 			"iter", i+1,
 			"model", model,
 			"msgs", len(llmMessages),
@@ -463,7 +469,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		totalOutputTokens += llmResp.OutputTokens
 
 		l.logger.Info("llm response",
-			"conv", shortConv,
+			"session", sessionTag,
 			"iter", i+1,
 			"input_tokens", llmResp.InputTokens,
 			"output_tokens", llmResp.OutputTokens,
@@ -504,7 +510,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 					argPreview = argPreview[:200] + "..."
 				}
 				l.logger.Info("tool exec",
-					"conv", shortConv,
+					"session", sessionTag,
 					"iter", i+1,
 					"tool", toolName,
 					"args", argPreview,
@@ -530,9 +536,9 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 				if err != nil {
 					errMsg = err.Error()
 					result = "Error: " + errMsg
-					l.logger.Error("tool exec failed", "conv", shortConv, "tool", toolName, "error", err)
+					l.logger.Error("tool exec failed", "session", sessionTag, "tool", toolName, "error", err)
 				} else {
-					l.logger.Debug("tool exec done", "conv", shortConv, "tool", toolName, "result_len", len(result))
+					l.logger.Debug("tool exec done", "session", sessionTag, "tool", toolName, "result_len", len(result))
 				}
 
 				// Emit tool call done event
@@ -591,12 +597,12 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 
 		// Check if compaction needed (async-safe: doesn't block response)
 		if l.compactor != nil && l.compactor.NeedsCompaction(convID) {
-			l.logger.Info("triggering compaction", "conv", shortConv)
+			l.logger.Info("triggering compaction", "session", sessionTag)
 			go func() {
 				if err := l.compactor.Compact(context.Background(), convID); err != nil {
 					l.logger.Error("compaction failed", "error", err)
 				} else {
-					l.logger.Info("compaction completed", "conv", shortConv)
+					l.logger.Info("compaction completed", "session", sessionTag)
 				}
 			}()
 		}
@@ -609,7 +615,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 
 		elapsed := time.Since(startTime)
 		l.logger.Info("agent loop completed",
-			"conv", shortConv,
+			"session", sessionTag,
 			"model", model,
 			"iterations", i+1,
 			"input_tokens", totalInputTokens,
@@ -657,7 +663,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 
 		elapsed := time.Since(startTime)
 		l.logger.Info("agent loop completed (max iterations recovery)",
-			"conv", shortConv,
+			"session", sessionTag,
 			"model", model,
 			"iterations", maxIterations,
 			"input_tokens", totalInputTokens,
