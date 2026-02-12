@@ -24,17 +24,18 @@ func (r *Registry) SetConversationResetter(resetter ConversationResetter) {
 				},
 			},
 		},
-		Handler: func(_ context.Context, args map[string]any) (string, error) {
+		Handler: func(ctx context.Context, args map[string]any) (string, error) {
 			reason, _ := args["reason"].(string)
 			if reason == "" {
 				reason = "user request"
 			}
 
-			if err := resetter.ResetConversation("default"); err != nil {
+			convID := ConversationIDFromContext(ctx)
+			if err := resetter.ResetConversation(convID); err != nil {
 				return "", err
 			}
 
-			return "Conversation reset successfully. All previous messages have been archived. Reason: " + reason, nil
+			return "Conversation " + convID + " reset successfully. All previous messages have been archived. Reason: " + reason, nil
 		},
 	})
 }

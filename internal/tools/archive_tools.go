@@ -7,8 +7,22 @@ import (
 	"strings"
 	"time"
 
+	"unicode/utf8"
+
 	"github.com/nugget/thane-ai-agent/internal/memory"
 )
+
+// truncateUTF8 truncates s to at most maxBytes, ensuring the result is valid UTF-8.
+func truncateUTF8(s string, maxBytes int) string {
+	if len(s) <= maxBytes {
+		return s
+	}
+	// Back up to a valid UTF-8 boundary
+	for maxBytes > 0 && !utf8.RuneStart(s[maxBytes]) {
+		maxBytes--
+	}
+	return s[:maxBytes]
+}
 
 // SetArchiveStore adds conversation archive tools to the registry.
 func (r *Registry) SetArchiveStore(store *memory.ArchiveStore) {
@@ -88,10 +102,10 @@ func (r *Registry) registerArchiveSearch(store *memory.ArchiveStore) {
 			const maxResultBytes = 16000 // ~4K tokens — enough for useful context
 			formatted := formatSearchResults(results)
 			if len(formatted) > maxResultBytes {
-				// Truncate and indicate more results exist
-				formatted = formatted[:maxResultBytes] + fmt.Sprintf(
+				totalLen := len(formatted)
+				formatted = truncateUTF8(formatted, maxResultBytes) + fmt.Sprintf(
 					"\n\n[Truncated: %d bytes total, showing first %d bytes. Use archive_session_transcript for full context of a specific session.]",
-					len(formatted), maxResultBytes,
+					totalLen, maxResultBytes,
 				)
 			}
 			return formatted, nil
@@ -222,9 +236,10 @@ func (r *Registry) registerArchiveSessionGet(store *memory.ArchiveStore) {
 				data, _ := json.MarshalIndent(messages, "", "  ")
 				result := string(data)
 				if len(result) > maxTranscriptBytes {
-					result = result[:maxTranscriptBytes] + fmt.Sprintf(
+					totalLen := len(result)
+					result = truncateUTF8(result, maxTranscriptBytes) + fmt.Sprintf(
 						"\n\n[Truncated: %d bytes total. Full transcript has %d messages.]",
-						len(result), len(messages),
+						totalLen, len(messages),
 					)
 				}
 				return result, nil
@@ -236,9 +251,10 @@ func (r *Registry) registerArchiveSessionGet(store *memory.ArchiveStore) {
 				return "", fmt.Errorf("export session: %w", err)
 			}
 			if len(md) > maxTranscriptBytes {
-				md = md[:maxTranscriptBytes] + fmt.Sprintf(
+				totalLen := len(md)
+				md = truncateUTF8(md, maxTranscriptBytes) + fmt.Sprintf(
 					"\n\n[Truncated: %d bytes total. Use archive_search to find specific content.]",
-					len(md),
+					totalLen,
 				)
 			}
 			return md, nil

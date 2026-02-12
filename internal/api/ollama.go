@@ -198,7 +198,7 @@ func handleOllamaChatShared(w http.ResponseWriter, r *http.Request, loop *agent.
 		hints[router.HintQualityFloor] = "1"   // accept anything
 		hints[router.HintModelPreference] = "" // clear any preference
 		// local_first scoring handles the rest; also exclude paid models
-		hints["local_only"] = "true"
+		hints[router.HintLocalOnly] = "true"
 	default:
 		// Unknown profile or explicit model name — pass through
 		if strings.HasPrefix(model, "thane:") {
@@ -441,7 +441,7 @@ func handleOllamaStreamingChatShared(w http.ResponseWriter, r *http.Request, req
 }
 
 // handleOllamaTagsShared returns the list of available models.
-// Currently returns only "thane:latest" as Thane presents itself as a single
+// Returns routing profiles (thane:latest, thane:thinking, etc.) as Thane presents itself as a single
 // model to Ollama clients, with actual model selection handled internally.
 //
 // The response format matches Ollama's /api/tags endpoint specification.

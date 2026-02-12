@@ -22,14 +22,15 @@ type Request struct {
 
 // Hint keys for routing decisions. Callers set these to influence model selection.
 const (
-	// HintChannel identifies the request source: "openwebui", "homeassistant", "voice", "api"
+	// HintChannel identifies the request source: "ollama", "homeassistant", "voice", "api"
 	HintChannel = "channel"
 	// HintQualityFloor is the minimum quality rating (1-10) the caller requires.
 	HintQualityFloor = "quality_floor"
 	// HintModelPreference suggests a specific model (soft preference, not override).
 	HintModelPreference = "model_preference"
 	// HintMission describes the task context: "conversation", "device_control", "background", "anticipation"
-	HintMission = "mission"
+	HintMission   = "mission"
+	HintLocalOnly = "local_only"
 )
 
 // Priority indicates latency requirements.
@@ -338,6 +339,7 @@ func (r *Router) selectModel(req Request, decision *Decision) string {
 		// --- Interactive needs speed ---
 		if req.Priority == PriorityInteractive && m.Speed >= 7 {
 			score += 10
+			decision.RulesMatched = append(decision.RulesMatched, "interactive_speed_"+m.Name)
 		}
 
 		// --- Hint-based adjustments ---
@@ -352,6 +354,7 @@ func (r *Router) selectModel(req Request, decision *Decision) string {
 				}
 				if m.Speed >= 7 {
 					score += 10
+					decision.RulesMatched = append(decision.RulesMatched, "channel_ha_speed_"+m.Name)
 				}
 			case "openwebui":
 				// Direct conversation via Open WebUI: boost quality models
@@ -390,7 +393,7 @@ func (r *Router) selectModel(req Request, decision *Decision) string {
 			}
 
 			// Local only: heavily penalize paid models
-			if req.Hints["local_only"] == "true" && m.CostTier > 0 {
+			if req.Hints[HintLocalOnly] == "true" && m.CostTier > 0 {
 				score -= 200
 				decision.RulesMatched = append(decision.RulesMatched, "local_only_penalty_"+m.Name)
 			}
@@ -403,7 +406,7 @@ func (r *Router) selectModel(req Request, decision *Decision) string {
 
 	// Pick highest score; on tie, prefer cheaper model; on equal cost, prefer higher quality
 	var best Model
-	bestScore := -1
+	bestScore := -1 << 30 // effectively -infinity
 	for _, m := range candidates {
 		s := scores[m.Name]
 		if s > bestScore ||

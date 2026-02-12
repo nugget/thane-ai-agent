@@ -593,7 +593,8 @@ iterLoop:
 					})
 				}
 
-				result, err := l.tools.Execute(ctx, toolName, argsJSON)
+				toolCtx := tools.WithConversationID(ctx, convID)
+				result, err := l.tools.Execute(toolCtx, toolName, argsJSON)
 				errMsg := ""
 				if err != nil {
 					errMsg = err.Error()
