@@ -35,13 +35,13 @@ git clone https://github.com/nugget/thane-ai-agent.git
 cd thane-ai-agent
 just build
 
-# Configure
-cp examples/config.example.yaml config.yaml
-# Edit config.yaml with your Ollama URL and (optionally) Home Assistant token
+# Initialize ~/Thane with config, talents, and persona
+just init
+# Edit ~/Thane/config.yaml with your Ollama URL and (optionally) Home Assistant token
 
 # Run
 just version          # verify the build
-just serve            # start the server from the build directory
+just serve            # start the server
 ```
 
 Thane serves two APIs:

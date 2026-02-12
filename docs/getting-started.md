@@ -17,13 +17,15 @@ just build
 
 This builds a platform-specific binary into `dist/`. Cross-compile with `just build linux arm64`.
 
-## Configure
+## Initialize
 
-Copy the example config and edit for your setup:
+Set up the `~/Thane` directory with config, talents, and persona:
 
 ```bash
-cp examples/config.example.yaml config.yaml
+just init
 ```
+
+This creates `~/Thane/config.yaml`, copies talent files, and sets up the persona. Edit `~/Thane/config.yaml` for your setup.
 
 At minimum, set:
 - `models.ollama_url` — where your Ollama instance lives
