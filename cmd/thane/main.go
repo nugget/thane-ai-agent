@@ -591,6 +591,10 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// Always available — no configuration needed. Fetches web pages and
 	// extracts readable text content.
 	loop.Tools().SetFetcher(fetch.New())
+
+	// --- Archive tools ---
+	// Gives the agent the ability to search and recall past conversations.
+	loop.Tools().SetArchiveStore(archiveStore)
 	logger.Info("web fetch enabled")
 
 	// --- Embeddings ---
