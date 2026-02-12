@@ -230,8 +230,9 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 
 	for attempt := 1; attempt <= t.count; attempt++ {
+		lastErr := err // capture for success logging
 		if t.logger != nil {
-			t.logger.Warn("retrying request after transient error",
+			t.logger.Debug("retrying request after transient error",
 				"method", req.Method,
 				"url", req.URL.String(),
 				"attempt", attempt,
@@ -262,10 +263,11 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		resp, err = t.base.RoundTrip(retryReq)
 		if err == nil || !isRetryableError(err) {
 			if err == nil && t.logger != nil {
-				t.logger.Info("retry succeeded",
+				t.logger.Info("request succeeded after retry",
 					"method", req.Method,
 					"url", req.URL.String(),
-					"attempt", attempt,
+					"attempts", attempt+1, // total attempts including original
+					"last_error", lastErr.Error(),
 				)
 			}
 			return resp, err
