@@ -2,10 +2,6 @@
 
 Thank you for your interest in contributing to Thane!
 
-## Development Status
-
-Thane is in early development. The architecture is defined but implementation is just starting. This is a great time to contribute ideas and discuss design decisions.
-
 ## Ways to Contribute
 
 ### Ideas & Discussion
@@ -27,6 +23,33 @@ Thane is in early development. The architecture is defined but implementation is
 - Add examples and use cases
 - Fix typos and clarify confusing sections
 
+## Development Setup
+
+### Prerequisites
+
+- [Go](https://go.dev/) 1.24+
+- [just](https://just.systems/) (command runner)
+- [golangci-lint](https://golangci-lint.run/) v2.x
+
+### Workflow
+
+```bash
+# Clone and build
+git clone https://github.com/nugget/thane-ai-agent.git
+cd thane-ai-agent
+just build
+
+# Run the full CI gate before pushing
+just ci    # fmt check + lint + tests with -race
+
+# Individual steps
+just test        # Tests only
+just lint        # Linter only
+just fmt-check   # Format check only
+```
+
+All workflows go through `just`. Don't call `gofmt`, `go vet`, or `go test` directly — the justfile is the interface.
+
 ## Commit Messages
 
 We use [Conventional Commits](https://www.conventionalcommits.org/):
@@ -40,17 +63,11 @@ test: add integration tests for HA client
 chore: update dependencies
 ```
 
-## Code Style
-
-- Run `go fmt` before committing
-- Run `go vet` and fix warnings
-- Keep functions small and focused
-- Prefer clarity over cleverness
-
 ## Testing
 
 ```bash
-go test ./...
+just test    # Always runs with -race detector
+just ci      # Full gate: format + lint + test
 ```
 
 ## Questions?

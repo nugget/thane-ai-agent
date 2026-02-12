@@ -18,6 +18,8 @@ If you have Home Assistant, Thane drops in as a native conversation agent and bl
 
 **Single binary.** Written in Go. No Python environments, no dependency hell. One command: `thane`.
 
+📐 **[ARCHITECTURE.md](ARCHITECTURE.md)** — Full system design, component overview, and roadmap.
+
 ## Prerequisites
 
 - [Go](https://go.dev/) 1.24+ (to build from source)
@@ -129,6 +131,8 @@ The systemd unit includes comprehensive sandboxing: `ProtectSystem=strict`, `NoN
 - **Full Home Assistant integration** — entity discovery, state queries, service calls, WebSocket events
 - **Smart device control** — natural language to action with fuzzy entity matching
 - **Semantic memory** — learns and recalls facts with embeddings-based search
+- **Web search** — SearXNG and Brave Search providers with pluggable architecture
+- **Web fetch** — extract readable content from any URL
 - **Shell execution** — run commands on the host (configurable safety guardrails)
 - **Talent system** — customize agent behavior with markdown files
 - **Model routing** — selects the right model for each task (speed vs. quality vs. cost)
@@ -147,7 +151,7 @@ User ──→ API Server ──→ Agent Loop ──→ Response
            (SQLite)    (Ollama)      (REST/WS)
 ```
 
-Thane's agent loop receives a request, assembles context from memory and home state, plans tool calls, executes them (in parallel where possible), and shapes a response. See [ARCHITECTURE.md](ARCHITECTURE.md) for the full design.
+Thane's agent loop receives a request, assembles context from memory and home state, plans tool calls, executes them (in parallel where possible), and shapes a response.
 
 ## CLI
 
@@ -172,11 +176,11 @@ Config is auto-discovered from: `./config.yaml`, `~/Thane/config.yaml`, `~/.conf
 
 ## Roadmap
 
-**Working today:** Conversation agent, HA integration, device control, semantic memory, checkpoints, shell exec, web chat UI, dual-port APIs.
+**Working today:** Conversation agent, HA integration, device control, semantic memory, checkpoints, shell exec, web search (SearXNG + Brave), web fetch, web chat UI, dual-port APIs, Anthropic + Ollama model routing.
 
-**Next up:** Proactive event-driven triggers, voice pipeline integration, Apple ecosystem access (requires native macOS host).
+**Next up:** Email (IMAP/SMTP), TTS, cron scheduling, proactive event-driven triggers, voice pipeline integration.
 
-**Longer term:** HA Add-on packaging, multi-instance deployment, identity system with cryptographic integrity.
+**Longer term:** HA Add-on packaging, Apple ecosystem integration, multi-instance deployment, identity system.
 
 See [GitHub Issues](https://github.com/nugget/thane-ai-agent/issues) for the full backlog.
 

@@ -23,7 +23,7 @@ homeassistant:
 ### 2. Start Thane
 
 ```bash
-./thane -config config.yaml serve
+just serve
 ```
 
 Verify the Ollama-compatible API is running:
@@ -50,8 +50,18 @@ When you talk to your voice assistant or type in the HA chat, Home Assistant sen
 
 1. **Strips HA's injected tools** — HA sends its own limited tool definitions (HassTurnOn, GetLiveContext, etc.). Thane removes these and uses its own, smarter toolset.
 2. **Queries HA directly** — Instead of relying on pre-selected entities, Thane discovers and queries entities through the REST and WebSocket APIs.
-3. **Executes actions** — `control_device` handles natural language commands with fuzzy entity matching. Say "turn on the kitchen light" and Thane finds the right entity.
+3. **Executes actions** — `control_device` handles natural language commands with fuzzy entity matching.
 4. **Remembers context** — Facts and preferences persist across conversations.
+
+## Available Tools
+
+| Tool | Description |
+|------|-------------|
+| `control_device` | Natural language device control with fuzzy entity matching |
+| `find_entity` | Smart entity discovery across all HA domains |
+| `get_state` | Current state of any entity |
+| `list_entities` | Browse entities by domain or pattern |
+| `call_service` | Direct HA service invocation |
 
 ## What You Can Do
 
@@ -68,7 +78,6 @@ When you talk to your voice assistant or type in the HA chat, Home Assistant sen
 **Complex reasoning:**
 - "Why is the house so warm?"
 - "What happened while I was away?"
-- "Remind me to check the mail when I get home"
 
 ## Compared to Built-in Assist
 
@@ -78,4 +87,8 @@ When you talk to your voice assistant or type in the HA chat, Home Assistant sen
 | Device discovery | Manual exposure | Automatic |
 | Memory | None | Persistent semantic memory |
 | Context awareness | Limited | Full state correlation |
-| Model choice | Single | Smart routing |
+| Model choice | Single | Smart routing (local + cloud) |
+
+## macOS Note
+
+If running Thane as a launchd service on macOS, you must grant **Local Network** permission in System Settings → Privacy & Security → Local Network. Without this, macOS silently blocks unsigned binaries from accessing LAN hosts like Home Assistant. See [issue #53](https://github.com/nugget/thane-ai-agent/issues/53).

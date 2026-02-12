@@ -90,6 +90,17 @@ shell_exec:
   allowed_prefixes: []  # Empty = allow all (subject to denied_patterns)
   default_timeout_sec: 30
 
+# Web search (optional)
+# Enables the web_search tool. Configure one or more providers.
+# web_fetch is always available (no config needed).
+# search:
+#   default_provider: searxng
+#   providers:
+#     searxng:
+#       base_url: http://your-searxng-instance:8080
+#     brave:
+#       api_key: your-brave-api-key
+
 # Semantic search (optional)
 embeddings:
   enabled: false

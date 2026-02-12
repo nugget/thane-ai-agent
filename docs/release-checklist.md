@@ -4,7 +4,7 @@ Every version bump follows this checklist. The version bump PR includes all of t
 
 ## Documentation Audit
 
-- [ ] **README.md** — Accurate description of current capabilities, not aspirational
+- [ ] **README.md** — Accurate description of current capabilities
 - [ ] **ARCHITECTURE.md** — Reflects actual implementation, roadmap phases updated
 - [ ] **config.example.yaml** — Includes all current config options with documentation
 - [ ] **docs/** — Getting started, integration guides reflect current reality
@@ -15,10 +15,7 @@ Every version bump follows this checklist. The version bump PR includes all of t
 - [ ] All tests pass (`go test ./...`)
 - [ ] Linting clean (`gofmt`, `golangci-lint`)
 - [ ] No stale files in repo root (dead configs, temp files, etc.)
-- [ ] Version string updated in all locations:
-  - `cmd/thane/main.go` (CLI output + startup log)
-  - `internal/api/server.go` (health endpoint)
-  - `internal/api/ollama.go` (Ollama version response)
+- [ ] Version string injected correctly (uses build-time `ldflags`, not hardcoded)
 
 ## Release Notes
 

@@ -2,8 +2,9 @@
 
 ## Prerequisites
 
-- **Go 1.21+** (for building from source)
-- **Ollama** running with at least one model pulled
+- **[Go](https://go.dev/) 1.24+** (for building from source)
+- **[just](https://just.systems/)** (command runner — replaces Makefiles)
+- **[Ollama](https://ollama.ai/)** running with at least one model pulled
 - **Home Assistant** (optional but recommended)
 
 ## Build
@@ -11,15 +12,17 @@
 ```bash
 git clone https://github.com/nugget/thane-ai-agent.git
 cd thane-ai-agent
-go build -o thane ./cmd/thane
+just build
 ```
+
+This builds a platform-specific binary into `dist/`. Cross-compile with `just build linux arm64`.
 
 ## Configure
 
 Copy the example config and edit for your setup:
 
 ```bash
-cp config.example.yaml config.yaml
+cp examples/config.example.yaml config.yaml
 ```
 
 At minimum, set:
@@ -31,16 +34,22 @@ If you have Home Assistant:
 - `homeassistant.url` — your HA instance URL
 - `homeassistant.token` — a long-lived access token ([how to create one](https://www.home-assistant.io/docs/authentication/#your-account-profile))
 
-See `config.example.yaml` for all available options with documentation.
+Optional cloud model support:
+- `anthropic.api_key` — enables Claude models for complex reasoning
+
+See `examples/config.example.yaml` for all available options with documentation.
 
 ## Run
 
 ```bash
 # Start the server
-./thane -config config.yaml serve
+just serve
+
+# Or run the binary directly
+./dist/thane-*/thane -config config.yaml serve
 
 # Quick test from CLI
-./thane -config config.yaml ask "Hello!"
+./dist/thane-*/thane -config config.yaml ask "Hello!"
 ```
 
 The server starts two API endpoints:
@@ -51,8 +60,19 @@ The server starts two API endpoints:
 
 Thane includes a built-in web chat interface at `http://localhost:8080/chat`.
 
+## Development
+
+All workflows go through `just`. Run `just` with no arguments to see available recipes:
+
+```bash
+just ci                       # Full CI gate: fmt + lint + test
+just build                    # Build for current platform
+just test                     # Run tests (always with -race)
+just logs                     # Tail live logs
+```
+
 ## Next Steps
 
 - [Home Assistant Integration](homeassistant.md) — Connect Thane as your HA conversation agent
 - [ARCHITECTURE.md](../ARCHITECTURE.md) — Understand how Thane works under the hood
-- [config.example.yaml](../config.example.yaml) — Full configuration reference
+- [config.example.yaml](../examples/config.example.yaml) — Full configuration reference
