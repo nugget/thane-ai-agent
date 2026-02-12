@@ -313,19 +313,28 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		"messages", len(req.Messages),
 	)
 
-	// For externally-managed conversations (e.g., Open WebUI sends full history),
-	// skip local history to avoid duplication. The client provides all context.
-	isExternalHistory := strings.HasPrefix(convID, "owu-")
+	// Always use Thane's memory as the source of truth.
+	// For externally-managed conversations (owu-), the client sends full history
+	// but Thane's store is the superset (includes tool calls, results, etc.).
+	// Only store the NEW message from the client — the last user message.
+	history := l.memory.GetMessages(convID)
 
-	var history []memory.Message
-	if !isExternalHistory {
-		history = l.memory.GetMessages(convID)
-	}
-
-	// Store incoming messages for archival (but history retrieval skips them for external convs)
-	for _, m := range req.Messages {
-		if err := l.memory.AddMessage(convID, m.Role, m.Content); err != nil {
-			l.logger.Warn("failed to store message", "error", err)
+	if strings.HasPrefix(convID, "owu-") {
+		// External client (Open WebUI): only add the last user message
+		for i := len(req.Messages) - 1; i >= 0; i-- {
+			if req.Messages[i].Role == "user" {
+				if err := l.memory.AddMessage(convID, "user", req.Messages[i].Content); err != nil {
+					l.logger.Warn("failed to store message", "error", err)
+				}
+				break
+			}
+		}
+	} else {
+		// Internal/API clients: store all messages
+		for _, m := range req.Messages {
+			if err := l.memory.AddMessage(convID, m.Role, m.Content); err != nil {
+				l.logger.Warn("failed to store message", "error", err)
+			}
 		}
 	}
 
