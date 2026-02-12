@@ -119,6 +119,8 @@ The core reasoning cycle:
 | `forget_fact` | Remove stored knowledge |
 | `schedule_task` | Time-based future actions |
 | `create_anticipation` | Event-based triggers |
+| `web_search` | Search the web via SearXNG or Brave Search |
+| `web_fetch` | Fetch and extract readable content from a URL |
 | `exec` | Host shell command execution (configurable safety) |
 | `read_file` / `write_file` / `edit_file` | Workspace file operations |
 
@@ -132,7 +134,7 @@ SQLite-backed with optional vector search:
 
 ### Model Router
 
-Selects models based on task complexity, speed requirements, and cost. Maintains an audit trail of routing decisions. Supports automatic failover with checkpoint before model switch.
+Selects between local (Ollama) and cloud (Anthropic) models based on task complexity, speed requirements, and cost. Maintains an audit trail of routing decisions. Supports automatic failover with checkpoint before model switch.
 
 ### Home Assistant Client (optional)
 
@@ -168,23 +170,23 @@ Talents are injected into the system prompt. Instance-specific talents can layer
 ### Standalone Binary
 
 ```bash
-go build -o thane ./cmd/thane
-./thane -config config.yaml serve
+just build
+./dist/thane-*/thane -config config.yaml serve
 ```
 
-### Docker
+### Service Installation
 
+**macOS** — User launch agent (no sudo):
 ```bash
-docker run -d -p 8080:8080 -p 11434:11434 \
-  -v thane-data:/data \
-  -e HA_URL=http://homeassistant.local:8123 \
-  -e HA_TOKEN=your_token \
-  ghcr.io/nugget/thane:latest
+just install && just service-install
 ```
 
-### Home Assistant App (planned)
+**Linux** — systemd with dedicated user and security hardening:
+```bash
+sudo just install && sudo just service-install
+```
 
-Native HA App packaging is on the roadmap.
+See [README.md](README.md) for detailed deployment instructions.
 
 ## Roadmap
 
@@ -192,13 +194,13 @@ Native HA App packaging is on the roadmap.
 - OpenAI-compatible API, HA REST client, agent loop, conversation memory, Ollama-compatible dual-port
 
 ### Phase 2: Intelligence ✅
-- WebSocket client, model routing, checkpoint/restore, semantic memory, control_device, shell exec
+- WebSocket client, model routing, checkpoint/restore, semantic memory, control_device, shell exec, web search (SearXNG + Brave), web fetch, Anthropic provider, httpkit networking layer
 
 ### Phase 3: Autonomy 🚧
-- Wire events to anticipation triggers, proactive notifications, intent-parser architecture
+- Proactive event-driven triggers, voice pipeline integration, email (IMAP/SMTP), TTS, cron scheduling
 
 ### Phase 4: Ecosystem
-- HA App packaging, Apple ecosystem integration, companion app, multi-instance deployment, git-backed identity store
+- HA Add-on packaging, Apple ecosystem integration, multi-instance deployment, identity system
 
 ## License
 

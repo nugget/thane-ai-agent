@@ -18,6 +18,8 @@ If you have Home Assistant, Thane drops in as a native conversation agent and bl
 
 **Single binary.** Written in Go. No Python environments, no dependency hell. One command: `thane`.
 
+📐 **[ARCHITECTURE.md](ARCHITECTURE.md)** — Full system design, component overview, and roadmap.
+
 ## Prerequisites
 
 - [Go](https://go.dev/) 1.24+ (to build from source)
@@ -33,13 +35,13 @@ git clone https://github.com/nugget/thane-ai-agent.git
 cd thane-ai-agent
 just build
 
-# Configure
-cp examples/config.example.yaml config.yaml
-# Edit config.yaml with your Ollama URL and (optionally) Home Assistant token
+# Initialize ~/Thane with config, talents, and persona
+just init
+# Edit ~/Thane/config.yaml with your Ollama URL and (optionally) Home Assistant token
 
 # Run
 just version          # verify the build
-just serve            # start the server from the build directory
+just serve            # start the server
 ```
 
 Thane serves two APIs:
@@ -48,87 +50,15 @@ Thane serves two APIs:
 
 To connect Home Assistant: point an Ollama integration at `http://thane-host:11434`, select model `thane:latest`.
 
-See [docs/getting-started.md](docs/getting-started.md) for detailed setup, [docs/homeassistant.md](docs/homeassistant.md) for HA integration.
-
-## Development
-
-All workflows go through [just](https://just.systems/). Run `just` with no arguments to see available recipes:
-
-```
-$ just
-Available recipes:
-
-    [build]
-    build target_os=host_os target_arch=host_arch  # Build a binary into dist/
-    build-all                                       # Build for all release targets
-    clean                                           # Clean build artifacts
-    version                                         # Build and show version
-
-    [test]
-    ci                                              # CI: format check, lint, and tests
-    fmt-check                                       # Check formatting
-    lint                                            # Run linter
-    test                                            # Run tests (always with race detector)
-
-    [deploy]
-    install                                         # Install the binary
-    service-install                                 # Install and enable the system service
-    service-uninstall                               # Remove the system service
-    uninstall                                       # Uninstall the binary
-
-    [operations]
-    logs                                            # Tail live service logs
-    service-status                                  # Show service status
-
-    [release-engineering]
-    release tag                                     # Tag and publish a GitHub release
-```
-
-### Common workflows
-
-```bash
-just build                    # Build for current platform → dist/
-just build linux arm64        # Cross-compile
-just test                     # Run tests (always with -race)
-just ci                       # Full CI gate: fmt + lint + test
-just install                  # Install binary to system
-just service-install          # Install + enable as system service
-just logs                     # Tail live logs
-```
-
-### Deployment
-
-Thane ships with production-grade service definitions for both platforms:
-
-**macOS** — User launch agent, zero sudo required.
-
-For production use, create a dedicated macOS user account for Thane (standard or administrator). This keeps Thane's data, config, and runtime isolated from your personal account. Everything lives under `~/Thane/` in that user's home directory — Finder-visible, easy to inspect and back up.
-
-```bash
-just install                  # → ~/Thane/bin/thane
-just service-install          # → ~/Library/LaunchAgents/info.nugget.thane.plist
-cp examples/config.example.yaml ~/Thane/config.yaml
-# Edit ~/Thane/config.yaml with your settings
-launchctl load ~/Library/LaunchAgents/info.nugget.thane.plist
-just logs                     # Tail ~/Thane/thane.log
-```
-
-**Linux** — systemd with dedicated service user and full security hardening:
-```bash
-sudo just install             # → /usr/local/bin/thane
-sudo just service-install     # Creates thane user, installs unit, enables service
-sudo cp examples/config.example.yaml /etc/thane/config.yaml
-# Edit /etc/thane/config.yaml with your settings
-sudo systemctl start thane
-```
-
-The systemd unit includes comprehensive sandboxing: `ProtectSystem=strict`, `NoNewPrivileges`, `PrivateTmp`, `MemoryDenyWriteExecute`, `SystemCallFilter`, and more.
+See [docs/getting-started.md](docs/getting-started.md) for detailed setup and deployment, [docs/homeassistant.md](docs/homeassistant.md) for HA integration.
 
 ## Features
 
 - **Full Home Assistant integration** — entity discovery, state queries, service calls, WebSocket events
 - **Smart device control** — natural language to action with fuzzy entity matching
 - **Semantic memory** — learns and recalls facts with embeddings-based search
+- **Web search** — SearXNG and Brave Search providers with pluggable architecture
+- **Web fetch** — extract readable content from any URL
 - **Shell execution** — run commands on the host (configurable safety guardrails)
 - **Talent system** — customize agent behavior with markdown files
 - **Model routing** — selects the right model for each task (speed vs. quality vs. cost)
@@ -147,7 +77,7 @@ User ──→ API Server ──→ Agent Loop ──→ Response
            (SQLite)    (Ollama)      (REST/WS)
 ```
 
-Thane's agent loop receives a request, assembles context from memory and home state, plans tool calls, executes them (in parallel where possible), and shapes a response. See [ARCHITECTURE.md](ARCHITECTURE.md) for the full design.
+Thane's agent loop receives a request, assembles context from memory and home state, plans tool calls, executes them (in parallel where possible), and shapes a response.
 
 ## CLI
 
@@ -172,11 +102,11 @@ Config is auto-discovered from: `./config.yaml`, `~/Thane/config.yaml`, `~/.conf
 
 ## Roadmap
 
-**Working today:** Conversation agent, HA integration, device control, semantic memory, checkpoints, shell exec, web chat UI, dual-port APIs.
+**Working today:** Conversation agent, HA integration, device control, semantic memory, checkpoints, shell exec, web search (SearXNG + Brave), web fetch, web chat UI, dual-port APIs, Anthropic + Ollama model routing.
 
-**Next up:** Proactive event-driven triggers, voice pipeline integration, Apple ecosystem access (requires native macOS host).
+**Next up:** Email (IMAP/SMTP), TTS, cron scheduling, proactive event-driven triggers, voice pipeline integration.
 
-**Longer term:** HA Add-on packaging, multi-instance deployment, identity system with cryptographic integrity.
+**Longer term:** HA Add-on packaging, Apple ecosystem integration, multi-instance deployment, identity system.
 
 See [GitHub Issues](https://github.com/nugget/thane-ai-agent/issues) for the full backlog.
 
