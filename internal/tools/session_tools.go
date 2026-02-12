@@ -13,8 +13,8 @@ func (r *Registry) SetConversationResetter(resetter ConversationResetter) {
 	r.Register(&Tool{
 		Name: "conversation_reset",
 		Description: "Reset the current conversation, archiving all messages and starting fresh. " +
-			"Use when the user asks to clear history, start over, or when the conversation " +
-			"has become confused or polluted. All messages are archived before clearing.",
+			"ONLY use when the user EXPLICITLY asks to clear history, start over, or reset. " +
+			"NEVER call this tool on your own initiative. All messages are archived before clearing.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

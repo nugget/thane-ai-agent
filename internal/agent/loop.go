@@ -422,7 +422,12 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	// Estimate system prompt size for cost logging
 	systemTokens := len(llmMessages[0].Content) / 4 // rough char-to-token ratio
 
+	// Track tool call repetitions to detect loops
+	toolCallCounts := make(map[string]int) // "toolName:argsHash" → count
+	const maxToolRepeat = 3                // Break if same tool+args called this many times
+
 	maxIterations := 50 // Tool call budget; final text response always gets one extra call
+iterLoop:
 	for i := 0; i < maxIterations; i++ {
 		// Estimate total message size for this iteration
 		iterMsgTokens := 0
@@ -513,6 +518,22 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 				if tc.Function.Arguments != nil {
 					argsBytes, _ := json.Marshal(tc.Function.Arguments)
 					argsJSON = string(argsBytes)
+				}
+
+				// Detect tool call loops
+				callKey := toolName + ":" + argsJSON
+				toolCallCounts[callKey]++
+				if toolCallCounts[callKey] > maxToolRepeat {
+					l.logger.Warn("tool call loop detected, breaking",
+						"session", sessionTag, "conversation", convID,
+						"tool", toolName, "repeat_count", toolCallCounts[callKey],
+					)
+					// Inject an error message to help the model recover
+					llmMessages = append(llmMessages, llm.Message{
+						Role:    "tool",
+						Content: fmt.Sprintf("Error: tool '%s' has been called %d times with the same arguments. Stop calling tools and provide your response to the user.", toolName, toolCallCounts[callKey]),
+					})
+					continue iterLoop
 				}
 
 				l.logger.Info("tool exec",
