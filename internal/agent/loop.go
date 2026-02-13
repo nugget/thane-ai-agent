@@ -740,7 +740,7 @@ iterLoop:
 		if l.extractor != nil {
 			extractMsgs := recentSlice(history, 6)
 			go func() {
-				if !l.extractor.ShouldExtract(userMessage, resp.Content, len(history)+len(req.Messages), req.SkipContext) {
+				if !l.extractor.ShouldExtract(userMessage, resp.Content, len(history)+len(req.Messages)+1, req.SkipContext) {
 					return
 				}
 				extractCtx, cancel := context.WithTimeout(context.Background(), l.extractor.Timeout())

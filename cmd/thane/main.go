@@ -44,6 +44,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/ingest"
 	"github.com/nugget/thane-ai-agent/internal/llm"
 	"github.com/nugget/thane-ai-agent/internal/memory"
+	"github.com/nugget/thane-ai-agent/internal/prompts"
 	"github.com/nugget/thane-ai-agent/internal/router"
 	"github.com/nugget/thane-ai-agent/internal/scheduler"
 	"github.com/nugget/thane-ai-agent/internal/search"
@@ -708,39 +709,7 @@ JSON:`, transcript.String())
 				}
 			}
 
-			prompt := fmt.Sprintf(`Extract noteworthy facts from this interaction that would be useful to
-remember for future conversations. Focus on:
-- User preferences (temperature, lighting, schedules, routines)
-- Home layout (room names, device locations, areas)
-- Personal information the user shared (names, relationships)
-- Observed patterns (daily routines, habits)
-- Device configuration knowledge (which devices are where)
-- Architecture/system design knowledge
-
-Valid categories: user, home, device, routine, preference, architecture
-
-Return JSON only. Examples:
-
-{"worth_persisting": true, "facts": [
-  {"category": "preference", "key": "bedroom_temperature", "value": "Prefers 68°F at night", "confidence": 0.9}
-]}
-
-{"worth_persisting": true, "facts": [
-  {"category": "user", "key": "partner_name", "value": "Partner is named Alex", "confidence": 0.85},
-  {"category": "home", "key": "office_location", "value": "Office is upstairs, second door on the left", "confidence": 0.8}
-]}
-
-If nothing is worth remembering:
-{"worth_persisting": false, "facts": []}
-
-User: %s
-Assistant: %s
-
-Recent context:
-%s
-
-JSON:`, userMsg, assistantResp, transcript.String())
-
+			prompt := prompts.FactExtractionPrompt(userMsg, assistantResp, transcript.String())
 			msgs := []llm.Message{{Role: "user", Content: prompt}}
 			resp, err := llmClient.Chat(ctx, extractionModel, msgs, nil)
 			if err != nil {
@@ -1118,6 +1087,12 @@ type factSetterFunc struct {
 func (f *factSetterFunc) SetFact(category, key, value, source string, confidence float64) error {
 	// Check for existing fact to apply confidence reinforcement.
 	existing, err := f.store.Get(facts.Category(category), key)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		// Real database error (not just "fact doesn't exist yet") — log and bail.
+		f.logger.Warn("failed to check existing fact for reinforcement",
+			"category", category, "key", key, "error", err)
+		return err
+	}
 	if err == nil && existing != nil {
 		reinforced := existing.Confidence + 0.1
 		if reinforced > 1.0 {
