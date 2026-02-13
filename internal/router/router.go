@@ -344,7 +344,10 @@ func (r *Router) selectModel(req Request, decision *Decision) string {
 
 		// --- Hint-based adjustments ---
 		if req.Hints != nil {
-			// Channel hint: HA/voice channels prefer cheap+fast, OpenWebUI prefers quality
+			// Channel hint: HA/voice channels prefer cheap+fast.
+			// Note: openwebui channel no longer gets a quality bonus — the routing
+			// profile (thane:thinking vs thane:latest) is the correct signal for
+			// quality preference. See issue #107.
 			switch req.Hints[HintChannel] {
 			case "homeassistant", "voice":
 				// HA/voice: strongly prefer fast and cheap
@@ -356,12 +359,6 @@ func (r *Router) selectModel(req Request, decision *Decision) string {
 					score += 10
 					decision.RulesMatched = append(decision.RulesMatched, "channel_ha_speed_"+m.Name)
 				}
-			case "openwebui":
-				// Direct conversation via Open WebUI: boost quality models
-				if m.Quality >= 9 {
-					score += 15
-					decision.RulesMatched = append(decision.RulesMatched, "channel_webui_quality_"+m.Name)
-				}
 			}
 
 			// Quality floor: disqualify models below the requested minimum
@@ -372,17 +369,13 @@ func (r *Router) selectModel(req Request, decision *Decision) string {
 				}
 			}
 
-			// Mission hint: background/anticipation tasks prefer cheap
-			switch req.Hints[HintMission] {
-			case "background", "anticipation":
+			// Mission hint: background/anticipation tasks prefer cheap.
+			// Note: "conversation" mission no longer gets a quality bonus —
+			// thane:thinking sets quality_floor for that purpose. See issue #107.
+			if mission := req.Hints[HintMission]; mission == "background" || mission == "anticipation" {
 				if m.CostTier == 0 {
 					score += 20
 					decision.RulesMatched = append(decision.RulesMatched, "mission_background_bonus_"+m.Name)
-				}
-			case "conversation":
-				if m.Quality >= 8 {
-					score += 10
-					decision.RulesMatched = append(decision.RulesMatched, "mission_conversation_bonus_"+m.Name)
 				}
 			}
 
