@@ -443,26 +443,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 			toolUsage[tc.ToolName]++
 		}
 
-		prompt := fmt.Sprintf(`Analyze this conversation session and produce structured metadata as JSON. 
-The JSON must have exactly these fields:
-
-{
-  "title": "short descriptive title, like an email subject (max 10 words)",
-  "tags": ["lowercase", "topic", "tags", "3-7 tags"],
-  "one_liner": "one sentence summary (~10 words)",
-  "paragraph": "2-4 sentence summary covering key topics and outcomes",
-  "detailed": "comprehensive summary including context, decisions, and nuance",
-  "key_decisions": ["decision 1", "decision 2"],
-  "participants": ["names of people involved or mentioned"],
-  "session_type": "one of: debugging, architecture, philosophy, casual, planning, operations, creative"
-}
-
-Be accurate. Base everything on what actually happened in the conversation.
-
-Conversation:
-%s
-
-JSON:`, transcript.String())
+		prompt := prompts.MetadataPrompt(transcript.String())
 
 		msgs := []llm.Message{{Role: "user", Content: prompt}}
 		resp, err := llmClient.Chat(ctx, metadataModel, msgs, nil)
