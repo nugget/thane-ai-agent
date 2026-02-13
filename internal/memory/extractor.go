@@ -7,13 +7,17 @@ import (
 	"time"
 )
 
-// ExtractionResult is the structured output from an LLM fact extraction call.
+// ExtractionResult is the structured JSON response from an LLM fact
+// extraction call. WorthPersisting acts as a top-level gate: when false,
+// the Facts slice is ignored even if populated.
 type ExtractionResult struct {
 	Facts           []ExtractedFact `json:"facts"`
 	WorthPersisting bool            `json:"worth_persisting"`
 }
 
-// ExtractedFact is a single fact extracted by the LLM.
+// ExtractedFact is a single fact parsed from the LLM extraction response.
+// Category must be one of the valid fact categories (user, home, device,
+// routine, preference, architecture). Confidence is 0–1.
 type ExtractedFact struct {
 	Category   string  `json:"category"`
 	Key        string  `json:"key"`
@@ -21,14 +25,13 @@ type ExtractedFact struct {
 	Confidence float64 `json:"confidence"`
 }
 
-// ExtractFunc performs the LLM call to extract facts from an interaction.
+// ExtractFunc calls an LLM to extract facts from a single interaction.
 // It receives the current user message, assistant response, and recent
-// conversation history for context. Wired from main.go with the actual
-// LLM client (same pattern as archive metadata generation).
+// conversation history for context.
 type ExtractFunc func(ctx context.Context, userMessage, assistantResponse string, recentHistory []Message) (*ExtractionResult, error)
 
-// FactSetter persists extracted facts. Implemented by an adapter in main.go
-// that wraps facts.Store.Set() with confidence reinforcement logic.
+// FactSetter persists extracted facts to long-term storage. Implementations
+// may apply additional logic such as confidence reinforcement on upsert.
 type FactSetter interface {
 	SetFact(category, key, value, source string, confidence float64) error
 }
@@ -44,7 +47,9 @@ type Extractor struct {
 	timeout     time.Duration
 }
 
-// NewExtractor creates a new fact extractor.
+// NewExtractor creates an Extractor that persists facts via the given
+// FactSetter. The minMessages threshold controls the minimum conversation
+// length before extraction is attempted.
 func NewExtractor(facts FactSetter, logger *slog.Logger, minMessages int) *Extractor {
 	return &Extractor{
 		facts:       facts,
@@ -69,9 +74,10 @@ func (e *Extractor) SetExtractFunc(fn ExtractFunc) {
 	e.extract = fn
 }
 
-// ShouldExtract is the classifier gate that decides whether an interaction
-// is worth sending to the LLM for fact extraction. This keeps extraction
-// calls to roughly 30–50% of interactions.
+// ShouldExtract reports whether the given interaction is worth analyzing
+// for facts. It filters out simple device commands, short responses, and
+// auxiliary requests to keep LLM extraction calls to roughly 30–50% of
+// interactions.
 func (e *Extractor) ShouldExtract(userMsg, assistantResp string, messageCount int, skipContext bool) bool {
 	// Auxiliary OWU requests (title/tag gen) never contain facts.
 	if skipContext {
@@ -117,7 +123,10 @@ func isSimpleCommand(lower string) bool {
 	return false
 }
 
-// Extract runs the LLM extraction and persists any discovered facts.
+// Extract calls the configured ExtractFunc and persists any discovered
+// facts via the FactSetter. Incomplete facts (missing category, key, or
+// value) are silently skipped. Errors from individual SetFact calls are
+// logged but do not stop processing of remaining facts.
 func (e *Extractor) Extract(ctx context.Context, userMsg, assistantResp string, recentHistory []Message) error {
 	if e.extract == nil {
 		return nil
