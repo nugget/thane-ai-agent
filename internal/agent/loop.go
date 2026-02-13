@@ -32,6 +32,7 @@ type Request struct {
 	Model          string            `json:"model,omitempty"`
 	ConversationID string            `json:"conversation_id,omitempty"`
 	Hints          map[string]string `json:"hints,omitempty"` // Routing hints (channel, mission, etc.)
+	SkipContext    bool              `json:"-"`               // Skip memory, tools, and context injection (for lightweight completions)
 }
 
 // StreamEvent is a single event in a streaming response.
@@ -290,9 +291,10 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		convID = "default"
 	}
 
-	// Track session activity on successful completion
+	// Track session activity on successful completion.
+	// Skip for lightweight requests (auxiliary) to avoid session noise.
 	defer func() {
-		if err == nil && l.archiver != nil {
+		if err == nil && l.archiver != nil && !req.SkipContext {
 			l.archiver.EnsureSession(convID)
 			l.archiver.OnMessage(convID)
 		}
@@ -317,23 +319,29 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	// For externally-managed conversations (owu-), the client sends full history
 	// but Thane's store is the superset (includes tool calls, results, etc.).
 	// Only store the NEW message from the client — the last user message.
-	history := l.memory.GetMessages(convID)
+	//
+	// Skip memory entirely for lightweight requests (auxiliary title/tag gen)
+	// to avoid polluting conversation history.
+	var history []memory.Message
+	if !req.SkipContext {
+		history = l.memory.GetMessages(convID)
 
-	if strings.HasPrefix(convID, "owu-") {
-		// External client (Open WebUI): only add the last user message
-		for i := len(req.Messages) - 1; i >= 0; i-- {
-			if req.Messages[i].Role == "user" {
-				if err := l.memory.AddMessage(convID, "user", req.Messages[i].Content); err != nil {
+		if strings.HasPrefix(convID, "owu-") {
+			// External client (Open WebUI): only add the last user message
+			for i := len(req.Messages) - 1; i >= 0; i-- {
+				if req.Messages[i].Role == "user" {
+					if err := l.memory.AddMessage(convID, "user", req.Messages[i].Content); err != nil {
+						l.logger.Warn("failed to store message", "error", err)
+					}
+					break
+				}
+			}
+		} else {
+			// Internal/API clients: store all messages
+			for _, m := range req.Messages {
+				if err := l.memory.AddMessage(convID, m.Role, m.Content); err != nil {
 					l.logger.Warn("failed to store message", "error", err)
 				}
-				break
-			}
-		}
-	} else {
-		// Internal/API clients: store all messages
-		for _, m := range req.Messages {
-			if err := l.memory.AddMessage(convID, m.Role, m.Content); err != nil {
-				l.logger.Warn("failed to store message", "error", err)
 			}
 		}
 	}
@@ -358,6 +366,70 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			Content:      response,
 			Model:        "greeting-handler",
 			FinishReason: "stop",
+		}, nil
+	}
+
+	// Lightweight path: skip memory, tools, and heavy context injection.
+	// Used for auxiliary requests (title/tag generation) that don't need the
+	// full agent loop. Just send messages to the LLM with no tools.
+	if req.SkipContext {
+		startTime := time.Now()
+
+		// Resolve model via router (same logic as full path, but inline)
+		liteModel := req.Model
+		var liteDecision *router.Decision
+		if (liteModel == "" || liteModel == "thane") && l.router != nil {
+			liteModel, liteDecision = l.router.Route(ctx, router.Request{
+				Query:    userMessage,
+				Hints:    req.Hints,
+				Priority: router.PriorityBackground,
+			})
+		}
+		if liteModel == "" {
+			liteModel = l.model
+		}
+
+		l.logger.Info("lightweight completion (skip context)",
+			"session", sessionTag, "conversation", convID,
+			"model", liteModel, "messages", len(req.Messages),
+		)
+
+		var llmMessages []llm.Message
+		for _, m := range req.Messages {
+			llmMessages = append(llmMessages, llm.Message{
+				Role:    m.Role,
+				Content: m.Content,
+			})
+		}
+
+		llmResp, err := l.llm.ChatStream(ctx, liteModel, llmMessages, nil, stream)
+		if err != nil {
+			// Record failed outcome
+			if l.router != nil && liteDecision != nil {
+				l.router.RecordOutcome(liteDecision.RequestID, time.Since(startTime).Milliseconds(), 0, false)
+			}
+			return nil, fmt.Errorf("lightweight completion: %w", err)
+		}
+
+		// Record successful outcome
+		if l.router != nil && liteDecision != nil {
+			l.router.RecordOutcome(liteDecision.RequestID, time.Since(startTime).Milliseconds(), llmResp.InputTokens+llmResp.OutputTokens, true)
+		}
+
+		l.logger.Info("lightweight completion done",
+			"session", sessionTag, "conversation", convID,
+			"model", llmResp.Model,
+			"input_tokens", llmResp.InputTokens,
+			"output_tokens", llmResp.OutputTokens,
+			"elapsed", time.Since(startTime).Round(time.Millisecond),
+		)
+
+		return &Response{
+			Content:      llmResp.Message.Content,
+			Model:        llmResp.Model,
+			FinishReason: "stop",
+			InputTokens:  llmResp.InputTokens,
+			OutputTokens: llmResp.OutputTokens,
 		}, nil
 	}
 
