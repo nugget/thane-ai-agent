@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"strings"
 	"time"
+
+	"github.com/nugget/thane-ai-agent/internal/prompts"
 )
 
 // CompactionConfig controls compaction behavior.
@@ -207,20 +209,7 @@ func (s *LLMSummarizer) Summarize(ctx context.Context, messages []Message) (stri
 		sb.WriteString(fmt.Sprintf("%s: %s\n\n", role, m.Content))
 	}
 
-	prompt := fmt.Sprintf(`Summarize this conversation concisely. Focus on:
-1. Key topics discussed
-2. Decisions made or preferences expressed
-3. Actions taken (tool calls, state changes)
-4. Any open items or things to remember
-
-Keep the summary under 500 words. Use bullet points.
-
-Conversation:
-%s
-
-Summary:`, sb.String())
-
-	return s.llmFunc(ctx, prompt)
+	return s.llmFunc(ctx, prompts.CompactionPrompt(sb.String()))
 }
 
 // SimpleSummarizer creates a basic summary without LLM (fallback).
