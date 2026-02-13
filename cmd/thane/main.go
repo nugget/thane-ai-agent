@@ -712,10 +712,20 @@ JSON:`, transcript.String())
 
 			prompt := prompts.FactExtractionPrompt(userMsg, assistantResp, transcript.String())
 			msgs := []llm.Message{{Role: "user", Content: prompt}}
+
+			start := time.Now()
 			resp, err := llmClient.Chat(ctx, extractionModel, msgs, nil)
 			if err != nil {
+				logger.Warn("fact extraction LLM call failed",
+					"model", extractionModel,
+					"elapsed_ms", time.Since(start).Milliseconds(),
+					"error", err)
 				return nil, err
 			}
+			logger.Debug("fact extraction LLM call complete",
+				"model", extractionModel,
+				"elapsed_ms", time.Since(start).Milliseconds(),
+				"response_len", len(resp.Message.Content))
 
 			// Parse JSON (strip code fences, same pattern as metadata gen)
 			content := resp.Message.Content
@@ -726,6 +736,12 @@ JSON:`, transcript.String())
 
 			var result memory.ExtractionResult
 			if err := json.Unmarshal([]byte(content), &result); err != nil {
+				preview := content
+				if len(preview) > 500 {
+					preview = preview[:500]
+				}
+				logger.Debug("extraction JSON parse failed",
+					"raw_response", preview)
 				return nil, fmt.Errorf("parse extraction result: %w", err)
 			}
 			return &result, nil

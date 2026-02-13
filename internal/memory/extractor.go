@@ -81,21 +81,39 @@ func (e *Extractor) SetExtractFunc(fn ExtractFunc) {
 func (e *Extractor) ShouldExtract(userMsg, assistantResp string, messageCount int, skipContext bool) bool {
 	// Auxiliary OWU requests (title/tag gen) never contain facts.
 	if skipContext {
+		e.logger.Debug("extraction skipped: auxiliary request")
 		return false
 	}
 
 	// Very short conversations have no context to extract from.
 	if messageCount < e.minMessages {
+		e.logger.Debug("extraction skipped: too few messages",
+			"count", messageCount, "min", e.minMessages)
 		return false
 	}
 
 	// Error responses or bare confirmations ("Done.", "OK") aren't useful.
 	if len(assistantResp) < 20 {
+		e.logger.Debug("extraction skipped: short response",
+			"len", len(assistantResp))
 		return false
 	}
 
 	// Simple device commands rarely produce extractable facts.
-	return !isSimpleCommand(strings.ToLower(userMsg))
+	if isSimpleCommand(strings.ToLower(userMsg)) {
+		preview := userMsg
+		if len(preview) > 50 {
+			preview = preview[:50]
+		}
+		e.logger.Debug("extraction skipped: simple command",
+			"msg", preview)
+		return false
+	}
+
+	e.logger.Debug("extraction gate passed",
+		"msg_len", len(userMsg), "resp_len", len(assistantResp),
+		"messages", messageCount)
+	return true
 }
 
 // isSimpleCommand detects short device control and status queries that
@@ -159,13 +177,15 @@ func (e *Extractor) Extract(ctx context.Context, userMsg, assistantResp string, 
 
 		e.logger.Debug("persisted extracted fact",
 			"category", fact.Category, "key", fact.Key,
-			"value", fact.Value, "confidence", fact.Confidence)
+			"value", fact.Value, "confidence", fact.Confidence,
+			"source", "auto-extraction")
 		persisted++
 	}
 
 	if persisted > 0 {
 		e.logger.Info("extracted facts from conversation",
-			"count", persisted, "total_extracted", len(result.Facts))
+			"count", persisted, "total_extracted", len(result.Facts),
+			"source", "auto-extraction")
 	}
 
 	return nil
