@@ -36,6 +36,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/buildinfo"
 	"github.com/nugget/thane-ai-agent/internal/checkpoint"
 	"github.com/nugget/thane-ai-agent/internal/config"
+	"github.com/nugget/thane-ai-agent/internal/connwatch"
 	"github.com/nugget/thane-ai-agent/internal/embeddings"
 	"github.com/nugget/thane-ai-agent/internal/facts"
 	"github.com/nugget/thane-ai-agent/internal/fetch"
@@ -208,7 +209,8 @@ func runAsk(ctx context.Context, stdout io.Writer, stderr io.Writer, configPath 
 		ha = homeassistant.NewClient(cfg.HomeAssistant.URL, cfg.HomeAssistant.Token, logger)
 	}
 
-	llmClient := createLLMClient(cfg, logger)
+	ollamaClient := llm.NewOllamaClient(cfg.Models.OllamaURL, logger)
+	llmClient := createLLMClient(cfg, logger, ollamaClient)
 
 	talentLoader := talents.NewLoader(cfg.TalentsDir)
 	talentContent, _ := talentLoader.Load()
@@ -337,20 +339,11 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// Optional but central. Without it, HA-related tools are unavailable
 	// and Thane operates as a general-purpose agent.
 	var ha *homeassistant.Client
+	var haWS *homeassistant.WSClient
 	if cfg.HomeAssistant.Configured() {
 		ha = homeassistant.NewClient(cfg.HomeAssistant.URL, cfg.HomeAssistant.Token, logger)
+		haWS = homeassistant.NewWSClient(cfg.HomeAssistant.URL, cfg.HomeAssistant.Token, logger)
 		logger.Debug("Home Assistant configured", "url", cfg.HomeAssistant.URL)
-		if err := ha.Ping(ctx); err != nil {
-			logger.Error("Home Assistant unreachable", "url", cfg.HomeAssistant.URL, "error", err)
-		} else if haCfg, err := ha.GetConfig(ctx); err == nil {
-			logger.Info("connected to Home Assistant",
-				"url", cfg.HomeAssistant.URL,
-				"version", haCfg.Version,
-				"location", haCfg.LocationName,
-			)
-		} else {
-			logger.Info("connected to Home Assistant", "url", cfg.HomeAssistant.URL)
-		}
 	} else {
 		logger.Warn("Home Assistant not configured - tools will be limited")
 	}
@@ -358,7 +351,55 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// --- LLM client ---
 	// Multi-provider client that routes each model name to its configured
 	// provider (Ollama, Anthropic, etc.). Unknown models fall back to Ollama.
-	llmClient := createLLMClient(cfg, logger)
+	ollamaClient := llm.NewOllamaClient(cfg.Models.OllamaURL, logger)
+	llmClient := createLLMClient(cfg, logger, ollamaClient)
+
+	// --- Connection resilience ---
+	// Background health monitoring with exponential backoff for external
+	// dependencies (Home Assistant, Ollama). Replaces the former single-shot
+	// Ping() check with retries on startup and automatic reconnection at
+	// runtime — no restart required. See issue #96.
+	connMgr := connwatch.NewManager(logger)
+	defer connMgr.Stop()
+
+	if ha != nil {
+		haWatcher := connMgr.Watch(ctx, connwatch.WatcherConfig{
+			Name:    "homeassistant",
+			Probe:   func(pCtx context.Context) error { return ha.Ping(pCtx) },
+			Backoff: connwatch.DefaultBackoffConfig(),
+			OnReady: func() {
+				// Log HA details on first successful connection.
+				infoCtx, infoCancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer infoCancel()
+				if haCfg, err := ha.GetConfig(infoCtx); err == nil {
+					logger.Info("connected to Home Assistant",
+						"url", cfg.HomeAssistant.URL,
+						"version", haCfg.Version,
+						"location", haCfg.LocationName,
+					)
+				}
+
+				// Reconnect WebSocket when HA comes back.
+				if haWS != nil {
+					wsCtx, wsCancel := context.WithTimeout(context.Background(), 30*time.Second)
+					defer wsCancel()
+					if err := haWS.Reconnect(wsCtx); err != nil {
+						logger.Error("WebSocket reconnect failed", "error", err)
+					}
+				}
+			},
+			Logger: logger,
+		})
+		ha.SetWatcher(haWatcher)
+	}
+
+	ollamaWatcher := connMgr.Watch(ctx, connwatch.WatcherConfig{
+		Name:    "ollama",
+		Probe:   func(pCtx context.Context) error { return ollamaClient.Ping(pCtx) },
+		Backoff: connwatch.DefaultBackoffConfig(),
+		Logger:  logger,
+	})
+	ollamaClient.SetWatcher(ollamaWatcher)
 
 	// --- Session archive ---
 	// Immutable archive of all conversation transcripts. Messages are
@@ -768,6 +809,19 @@ JSON:`, transcript.String())
 	server := api.NewServer(cfg.Listen.Address, cfg.Listen.Port, loop, rtr, logger)
 	server.SetMemoryStore(mem)
 	server.SetArchiveStore(archiveStore)
+	server.SetConnManager(func() map[string]any {
+		status := connMgr.Status()
+		result := make(map[string]any, len(status))
+		for name, s := range status {
+			result[name] = map[string]any{
+				"name":       s.Name,
+				"ready":      s.Ready,
+				"last_check": s.LastCheck,
+				"last_error": s.LastError,
+			}
+		}
+		return result
+	})
 
 	// --- Checkpointer ---
 	// Periodically snapshots application state (conversations, facts,
@@ -942,9 +996,9 @@ func loadConfig(explicit string) (*config.Config, string, error) {
 // createLLMClient builds a multi-provider LLM client from the configuration.
 // Each model listed in config is mapped to its provider (ollama, anthropic,
 // etc.). Models not explicitly mapped fall through to the Ollama provider,
-// which acts as the default backend.
-func createLLMClient(cfg *config.Config, logger *slog.Logger) llm.Client {
-	ollamaClient := llm.NewOllamaClient(cfg.Models.OllamaURL, logger)
+// which acts as the default backend. The OllamaClient is created externally
+// so that the caller can register a connwatch watcher on it.
+func createLLMClient(cfg *config.Config, logger *slog.Logger, ollamaClient *llm.OllamaClient) llm.Client {
 	multi := llm.NewMultiClient(ollamaClient)
 	multi.AddProvider("ollama", ollamaClient)
 

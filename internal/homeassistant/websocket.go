@@ -184,6 +184,25 @@ func (c *WSClient) Close() error {
 	return nil
 }
 
+// Reconnect closes the existing connection (if any) and re-establishes
+// the WebSocket, authenticating and restoring all prior subscriptions.
+// Safe to call from any goroutine. Intended to be called from a
+// connwatch OnReady callback when Home Assistant becomes reachable again.
+func (c *WSClient) Reconnect(ctx context.Context) error {
+	c.logger.Info("reconnecting WebSocket")
+
+	// Close the old connection. Ignore errors — it may already be dead.
+	c.connMu.Lock()
+	if c.conn != nil {
+		c.conn.Close()
+		c.conn = nil
+	}
+	c.connMu.Unlock()
+
+	// Connect handles auth, starts readLoop, and calls restoreSubscriptions.
+	return c.Connect(ctx)
+}
+
 // Events returns the channel for receiving subscribed events.
 func (c *WSClient) Events() <-chan Event {
 	return c.events
@@ -315,8 +334,9 @@ func (c *WSClient) readLoop() {
 				c.logger.Info("WebSocket closed normally")
 				return
 			}
-			c.logger.Error("WebSocket read error", "error", err)
-			// TODO: Trigger reconnect
+			c.logger.Error("WebSocket read error, connection lost", "error", err)
+			// Reconnection is handled by connwatch: when the HA service
+			// becomes reachable again, the OnReady callback calls Reconnect().
 			return
 		}
 
@@ -353,10 +373,13 @@ func (c *WSClient) readLoop() {
 }
 
 // restoreSubscriptions re-subscribes to all tracked event types.
+// It clears the subscription list first because Subscribe() appends to it;
+// without clearing, each reconnect would duplicate every entry.
 func (c *WSClient) restoreSubscriptions() {
 	c.subscriptionsMu.Lock()
 	subs := make([]string, len(c.subscriptions))
 	copy(subs, c.subscriptions)
+	c.subscriptions = c.subscriptions[:0] // clear to prevent duplicates
 	c.subscriptionsMu.Unlock()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
