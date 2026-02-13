@@ -685,6 +685,85 @@ JSON:`, transcript.String())
 	loop.Tools().SetFactTools(factTools)
 	logger.Info("fact store initialized", "path", cfg.DataDir+"/facts.db")
 
+	// --- Fact extraction ---
+	// Automatic extraction of facts from conversations. Runs async after
+	// each interaction using a local model. Opt-in via config.
+	if cfg.Extraction.Enabled {
+		extractionModel := cfg.Extraction.Model
+		logger.Info("fact extraction enabled", "model", extractionModel)
+
+		// FactSetter adapter with confidence reinforcement: if a fact already
+		// exists, bump its confidence rather than overwriting.
+		factSetterAdapter := &factSetterFunc{store: factStore, logger: logger}
+
+		extractor := memory.NewExtractor(factSetterAdapter, logger, cfg.Extraction.MinMessages)
+		extractor.SetTimeout(time.Duration(cfg.Extraction.TimeoutSeconds) * time.Second)
+		extractor.SetExtractFunc(func(ctx context.Context, userMsg, assistantResp string, history []memory.Message) (*memory.ExtractionResult, error) {
+			// Build transcript from recent history
+			var transcript strings.Builder
+			for _, m := range history {
+				transcript.WriteString(fmt.Sprintf("[%s] %s\n", m.Role, m.Content))
+				if transcript.Len() > 4000 {
+					break
+				}
+			}
+
+			prompt := fmt.Sprintf(`Extract noteworthy facts from this interaction that would be useful to
+remember for future conversations. Focus on:
+- User preferences (temperature, lighting, schedules, routines)
+- Home layout (room names, device locations, areas)
+- Personal information the user shared (names, relationships)
+- Observed patterns (daily routines, habits)
+- Device configuration knowledge (which devices are where)
+- Architecture/system design knowledge
+
+Valid categories: user, home, device, routine, preference, architecture
+
+Return JSON only. Examples:
+
+{"worth_persisting": true, "facts": [
+  {"category": "preference", "key": "bedroom_temperature", "value": "Prefers 68°F at night", "confidence": 0.9}
+]}
+
+{"worth_persisting": true, "facts": [
+  {"category": "user", "key": "partner_name", "value": "Partner is named Alex", "confidence": 0.85},
+  {"category": "home", "key": "office_location", "value": "Office is upstairs, second door on the left", "confidence": 0.8}
+]}
+
+If nothing is worth remembering:
+{"worth_persisting": false, "facts": []}
+
+User: %s
+Assistant: %s
+
+Recent context:
+%s
+
+JSON:`, userMsg, assistantResp, transcript.String())
+
+			msgs := []llm.Message{{Role: "user", Content: prompt}}
+			resp, err := llmClient.Chat(ctx, extractionModel, msgs, nil)
+			if err != nil {
+				return nil, err
+			}
+
+			// Parse JSON (strip code fences, same pattern as metadata gen)
+			content := resp.Message.Content
+			content = strings.TrimPrefix(content, "```json\n")
+			content = strings.TrimPrefix(content, "```\n")
+			content = strings.TrimSuffix(content, "\n```")
+			content = strings.TrimSpace(content)
+
+			var result memory.ExtractionResult
+			if err := json.Unmarshal([]byte(content), &result); err != nil {
+				return nil, fmt.Errorf("parse extraction result: %w", err)
+			}
+			return &result, nil
+		})
+
+		loop.SetExtractor(extractor)
+	}
+
 	// --- Anticipation store ---
 	// Bridges intent to action. The agent can set anticipations ("I expect
 	// X to happen") that trigger context injection when they're fulfilled.
@@ -1025,4 +1104,34 @@ func createLLMClient(cfg *config.Config, logger *slog.Logger, ollamaClient *llm.
 	logger.Info("LLM client initialized", "default_model", cfg.Models.Default, "default_provider", defaultProvider)
 
 	return multi
+}
+
+// factSetterFunc adapts facts.Store to the memory.FactSetter interface,
+// adding confidence reinforcement: if a fact already exists, its confidence
+// is bumped by 0.1 (capped at 1.0) rather than overwritten. This rewards
+// the model for re-extracting known facts.
+type factSetterFunc struct {
+	store  *facts.Store
+	logger *slog.Logger
+}
+
+func (f *factSetterFunc) SetFact(category, key, value, source string, confidence float64) error {
+	// Check for existing fact to apply confidence reinforcement.
+	existing, err := f.store.Get(facts.Category(category), key)
+	if err == nil && existing != nil {
+		reinforced := existing.Confidence + 0.1
+		if reinforced > 1.0 {
+			reinforced = 1.0
+		}
+		if reinforced > confidence {
+			confidence = reinforced
+		}
+		f.logger.Debug("reinforcing existing fact confidence",
+			"category", category, "key", key,
+			"old_confidence", existing.Confidence,
+			"new_confidence", confidence)
+	}
+
+	_, err = f.store.Set(facts.Category(category), key, value, source, confidence)
+	return err
 }

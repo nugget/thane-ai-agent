@@ -128,6 +128,7 @@ type Loop struct {
 	failoverHandler FailoverHandler
 	contextProvider ContextProvider
 	archiver        SessionArchiver
+	extractor       *memory.Extractor
 }
 
 // NewLoop creates a new agent loop.
@@ -159,6 +160,11 @@ func (l *Loop) SetContextProvider(provider ContextProvider) {
 // SetArchiver configures the session archiver for preserving conversations.
 func (l *Loop) SetArchiver(archiver SessionArchiver) {
 	l.archiver = archiver
+}
+
+// SetExtractor configures the automatic fact extractor.
+func (l *Loop) SetExtractor(e *memory.Extractor) {
+	l.extractor = e
 }
 
 // SetInjectedContext sets static context to include in every system prompt.
@@ -730,6 +736,22 @@ iterLoop:
 			l.logger.Warn("failed to store response", "error", err)
 		}
 
+		// Async fact extraction — don't block the response path.
+		if l.extractor != nil {
+			extractMsgs := recentSlice(history, 6)
+			go func() {
+				if !l.extractor.ShouldExtract(userMessage, resp.Content, len(history)+len(req.Messages), req.SkipContext) {
+					return
+				}
+				extractCtx, cancel := context.WithTimeout(context.Background(), l.extractor.Timeout())
+				defer cancel()
+				if err := l.extractor.Extract(extractCtx, userMessage, resp.Content, extractMsgs); err != nil {
+					l.logger.Warn("fact extraction failed",
+						"error", err, "conversation", convID)
+				}
+			}()
+		}
+
 		// Check if compaction needed (async-safe: doesn't block response)
 		if l.compactor != nil && l.compactor.NeedsCompaction(convID) {
 			preTokens := l.memory.GetTokenCount(convID)
@@ -957,4 +979,13 @@ func (l *Loop) Process(ctx context.Context, conversationID, message string) (str
 		return "", err
 	}
 	return resp.Content, nil
+}
+
+// recentSlice returns the last n messages from the slice, or all of them
+// if the slice is shorter than n. Used for extraction context.
+func recentSlice(msgs []memory.Message, n int) []memory.Message {
+	if len(msgs) <= n {
+		return msgs
+	}
+	return msgs[len(msgs)-n:]
 }
