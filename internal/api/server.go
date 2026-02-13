@@ -29,6 +29,17 @@ func writeJSON(w http.ResponseWriter, v any, logger *slog.Logger) {
 	}
 }
 
+// DependencyStatus describes the health of a single watched dependency.
+type DependencyStatus struct {
+	Name      string `json:"name"`
+	Ready     bool   `json:"ready"`
+	LastCheck string `json:"last_check,omitempty"`
+	LastError string `json:"last_error,omitempty"`
+}
+
+// HealthStatusFunc returns dependency health information for the /health endpoint.
+type HealthStatusFunc func() map[string]DependencyStatus
+
 // Server is the HTTP API server.
 type Server struct {
 	address      string
@@ -38,9 +49,15 @@ type Server struct {
 	checkpointer *checkpoint.Checkpointer
 	memoryStore  *memory.SQLiteStore
 	archiveStore *memory.ArchiveStore
+	healthDeps   HealthStatusFunc
 	logger       *slog.Logger
 	server       *http.Server
 	stats        *SessionStats
+}
+
+// SetConnManager sets the dependency health provider for the /health endpoint.
+func (s *Server) SetConnManager(fn HealthStatusFunc) {
+	s.healthDeps = fn
 }
 
 // SessionStats tracks token usage and cost for the current session.
@@ -245,7 +262,20 @@ func (s *Server) handleVersion(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	writeJSON(w, map[string]string{"status": "healthy"}, s.logger)
+
+	health := map[string]any{"status": "healthy"}
+	if s.healthDeps != nil {
+		deps := s.healthDeps()
+		health["dependencies"] = deps
+		// Degrade to "degraded" if any dependency is down.
+		for _, dep := range deps {
+			if !dep.Ready {
+				health["status"] = "degraded"
+				break
+			}
+		}
+	}
+	writeJSON(w, health, s.logger)
 }
 
 func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {

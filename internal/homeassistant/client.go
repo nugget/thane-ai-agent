@@ -18,6 +18,27 @@ type Client struct {
 	baseURL    string
 	token      string
 	httpClient *http.Client
+	watcher    readyChecker // set via SetWatcher for health status
+}
+
+// readyChecker is satisfied by connwatch.Watcher. Defined here to avoid
+// importing connwatch directly, keeping the dependency one-directional.
+type readyChecker interface {
+	IsReady() bool
+}
+
+// SetWatcher sets the connection watcher for health status queries.
+func (c *Client) SetWatcher(w readyChecker) {
+	c.watcher = w
+}
+
+// IsReady reports whether Home Assistant is currently reachable.
+// Returns true if no watcher is configured (backward compatible).
+func (c *Client) IsReady() bool {
+	if c.watcher == nil {
+		return true
+	}
+	return c.watcher.IsReady()
 }
 
 // NewClient creates a new Home Assistant client.
