@@ -700,13 +700,14 @@ JSON:`, transcript.String())
 		extractor := memory.NewExtractor(factSetterAdapter, logger, cfg.Extraction.MinMessages)
 		extractor.SetTimeout(time.Duration(cfg.Extraction.TimeoutSeconds) * time.Second)
 		extractor.SetExtractFunc(func(ctx context.Context, userMsg, assistantResp string, history []memory.Message) (*memory.ExtractionResult, error) {
-			// Build transcript from recent history
+			// Build transcript from recent history (only complete messages).
 			var transcript strings.Builder
 			for _, m := range history {
-				transcript.WriteString(fmt.Sprintf("[%s] %s\n", m.Role, m.Content))
-				if transcript.Len() > 4000 {
+				line := fmt.Sprintf("[%s] %s\n", m.Role, m.Content)
+				if transcript.Len()+len(line) > 4000 {
 					break
 				}
+				transcript.WriteString(line)
 			}
 
 			prompt := prompts.FactExtractionPrompt(userMsg, assistantResp, transcript.String())
@@ -1094,17 +1095,24 @@ func (f *factSetterFunc) SetFact(category, key, value, source string, confidence
 		return err
 	}
 	if err == nil && existing != nil {
-		reinforced := existing.Confidence + 0.1
-		if reinforced > 1.0 {
-			reinforced = 1.0
+		if existing.Value == value {
+			// Same fact re-observed — reinforce confidence.
+			reinforced := min(existing.Confidence+0.1, 1.0)
+			if reinforced > confidence {
+				confidence = reinforced
+			}
+			f.logger.Debug("reinforcing existing fact confidence",
+				"category", category, "key", key,
+				"old_confidence", existing.Confidence,
+				"new_confidence", confidence)
+		} else {
+			// Value changed — this is a correction, not a reinforcement.
+			// Use the incoming confidence as-is.
+			f.logger.Debug("updating fact value (correction)",
+				"category", category, "key", key,
+				"old_value", existing.Value, "new_value", value,
+				"confidence", confidence)
 		}
-		if reinforced > confidence {
-			confidence = reinforced
-		}
-		f.logger.Debug("reinforcing existing fact confidence",
-			"category", category, "key", key,
-			"old_confidence", existing.Confidence,
-			"new_confidence", confidence)
 	}
 
 	_, err = f.store.Set(facts.Category(category), key, value, source, confidence)
