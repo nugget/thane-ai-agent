@@ -74,8 +74,13 @@ func TestWatcher_ImmediateSuccess(t *testing.T) {
 		OnReady: func() { readyCalled.Add(1) },
 	})
 
-	waitFor(t, 2*time.Second, w.IsReady, "IsReady() == true")
+	waitFor(t, 2*time.Second, func() bool {
+		return readyCalled.Load() >= 1
+	}, "OnReady callback fired")
 
+	if !w.IsReady() {
+		t.Error("expected IsReady() == true")
+	}
 	if w.LastError() != nil {
 		t.Errorf("expected nil LastError, got %v", w.LastError())
 	}
@@ -111,8 +116,13 @@ func TestWatcher_BackoffThenSuccess(t *testing.T) {
 		OnReady: func() { readyCalled.Add(1) },
 	})
 
-	waitFor(t, 2*time.Second, w.IsReady, "IsReady() == true after retries")
+	waitFor(t, 2*time.Second, func() bool {
+		return readyCalled.Load() >= 1
+	}, "OnReady callback fired after retries")
 
+	if !w.IsReady() {
+		t.Error("expected IsReady() == true")
+	}
 	if readyCalled.Load() != 1 {
 		t.Errorf("OnReady called %d times, want 1", readyCalled.Load())
 	}
@@ -179,13 +189,13 @@ func TestWatcher_ServiceGoesDown(t *testing.T) {
 	// Make the service fail.
 	shouldFail.Store(true)
 
-	// Wait for at least one poll cycle to detect the failure.
+	// Wait for OnDown callback to fire (not just IsReady flipping).
 	waitFor(t, 2*time.Second, func() bool {
-		return !w.IsReady()
-	}, "IsReady() == false after failure")
+		return downCalled.Load() >= 1
+	}, "OnDown callback fired")
 
-	if downCalled.Load() < 1 {
-		t.Errorf("OnDown called %d times, want >= 1", downCalled.Load())
+	if w.IsReady() {
+		t.Error("expected IsReady() == false after failure")
 	}
 }
 
@@ -230,11 +240,13 @@ func TestWatcher_ServiceRecovers(t *testing.T) {
 	// Recover the service.
 	shouldFail.Store(false)
 
-	// Wait for background poll to detect recovery.
-	waitFor(t, 2*time.Second, w.IsReady, "IsReady() == true after recovery")
+	// Wait for background poll to detect recovery and fire OnReady.
+	waitFor(t, 2*time.Second, func() bool {
+		return readyCalled.Load() >= 1
+	}, "OnReady callback fired after recovery")
 
-	if readyCalled.Load() < 1 {
-		t.Errorf("OnReady called %d times, want >= 1", readyCalled.Load())
+	if !w.IsReady() {
+		t.Error("expected IsReady() == true after recovery")
 	}
 }
 
