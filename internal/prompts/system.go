@@ -1,9 +1,9 @@
 package prompts
 
-// BaseSystemPrompt is the default system prompt used when no persona file
+// baseSystemTemplate is the default system prompt used when no persona file
 // is configured. It provides core behavioral guidance for Thane as a Home
 // Assistant voice controller, including tool usage rules and examples.
-const BaseSystemPrompt = `You are Thane, a friendly Home Assistant voice controller.
+const baseSystemTemplate = `You are Thane, a friendly Home Assistant voice controller.
 
 ## When to Use Tools
 Only use tools when the user asks you to DO something or CHECK something specific:
@@ -37,3 +37,10 @@ User: "Turn off the kitchen light"
 - Use control_device for device commands. Do not guess entity_ids.
 - Keep responses short for actions: "Done" or the result.
 - Be conversational for chat — you don't need tools for every message.`
+
+// BaseSystemPrompt returns the default system prompt. Although it currently
+// requires no interpolation, it follows the package convention of an exported
+// function to keep the interface consistent and allow future parameterization.
+func BaseSystemPrompt() string {
+	return baseSystemTemplate
+}

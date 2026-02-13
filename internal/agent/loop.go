@@ -220,7 +220,7 @@ func (l *Loop) buildSystemPrompt(ctx context.Context, userMessage string) string
 	if l.persona != "" {
 		sb.WriteString(l.persona)
 	} else {
-		sb.WriteString(prompts.BaseSystemPrompt)
+		sb.WriteString(prompts.BaseSystemPrompt())
 	}
 
 	// Add static injected context (from config inject_files)

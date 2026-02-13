@@ -5,7 +5,7 @@ import "fmt"
 // metadataTemplate is the prompt sent to an LLM to generate structured session
 // metadata from a conversation transcript. The single format verb is the
 // transcript text.
-const metadataTemplate = `Analyze this conversation session and produce structured metadata as JSON.
+const metadataTemplate = `Analyze this conversation session and produce structured metadata as JSON. 
 The JSON must have exactly these fields:
 
 {
