@@ -29,10 +29,16 @@ func writeJSON(w http.ResponseWriter, v any, logger *slog.Logger) {
 	}
 }
 
+// DependencyStatus describes the health of a single watched dependency.
+type DependencyStatus struct {
+	Name      string `json:"name"`
+	Ready     bool   `json:"ready"`
+	LastCheck string `json:"last_check,omitempty"`
+	LastError string `json:"last_error,omitempty"`
+}
+
 // HealthStatusFunc returns dependency health information for the /health endpoint.
-// The returned value is serialized directly as JSON. Satisfied by a closure
-// wrapping connwatch.Manager.Status().
-type HealthStatusFunc func() map[string]any
+type HealthStatusFunc func() map[string]DependencyStatus
 
 // Server is the HTTP API server.
 type Server struct {
@@ -262,12 +268,10 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		deps := s.healthDeps()
 		health["dependencies"] = deps
 		// Degrade to "degraded" if any dependency is down.
-		for _, v := range deps {
-			if dep, ok := v.(map[string]any); ok {
-				if ready, _ := dep["ready"].(bool); !ready {
-					health["status"] = "degraded"
-					break
-				}
+		for _, dep := range deps {
+			if !dep.Ready {
+				health["status"] = "degraded"
+				break
 			}
 		}
 	}

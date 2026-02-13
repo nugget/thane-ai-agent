@@ -809,16 +809,19 @@ JSON:`, transcript.String())
 	server := api.NewServer(cfg.Listen.Address, cfg.Listen.Port, loop, rtr, logger)
 	server.SetMemoryStore(mem)
 	server.SetArchiveStore(archiveStore)
-	server.SetConnManager(func() map[string]any {
+	server.SetConnManager(func() map[string]api.DependencyStatus {
 		status := connMgr.Status()
-		result := make(map[string]any, len(status))
+		result := make(map[string]api.DependencyStatus, len(status))
 		for name, s := range status {
-			result[name] = map[string]any{
-				"name":       s.Name,
-				"ready":      s.Ready,
-				"last_check": s.LastCheck,
-				"last_error": s.LastError,
+			ds := api.DependencyStatus{
+				Name:      s.Name,
+				Ready:     s.Ready,
+				LastError: s.LastError,
 			}
+			if !s.LastCheck.IsZero() {
+				ds.LastCheck = s.LastCheck.Format(time.RFC3339)
+			}
+			result[name] = ds
 		}
 		return result
 	})

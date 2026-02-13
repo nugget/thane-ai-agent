@@ -89,9 +89,19 @@ func NewWSClient(baseURL, token string, logger *slog.Logger) *WSClient {
 }
 
 // Connect establishes the WebSocket connection and authenticates.
+//
+// connMu is held only while swapping the conn pointer, not for the full
+// duration of the handshake. This avoids deadlocking with sendAndWait
+// (called by restoreSubscriptions → Subscribe) which also takes connMu.
 func (c *WSClient) Connect(ctx context.Context) error {
+	// Close any stale connection before dialing a new one.
 	c.connMu.Lock()
-	defer c.connMu.Unlock()
+	old := c.conn
+	c.conn = nil
+	c.connMu.Unlock()
+	if old != nil {
+		old.Close()
+	}
 
 	// Parse base URL and convert to WebSocket URL
 	u, err := url.Parse(c.baseURL)
@@ -123,7 +133,7 @@ func (c *WSClient) Connect(ctx context.Context) error {
 	// Set read limit for large responses (HA can have 12000+ entities)
 	conn.SetReadLimit(100 * 1024 * 1024) // 100MB max message size
 
-	c.conn = conn
+	// Auth handshake uses the local conn directly — no concurrent readers yet.
 
 	// Read auth_required message
 	var authReq wsMessage
@@ -164,10 +174,15 @@ func (c *WSClient) Connect(ctx context.Context) error {
 
 	c.logger.Info("WebSocket authenticated")
 
+	// Publish the authenticated connection so sendAndWait can use it.
+	c.connMu.Lock()
+	c.conn = conn
+	c.connMu.Unlock()
+
 	// Start read loop
 	go c.readLoop()
 
-	// Restore subscriptions
+	// Restore subscriptions (calls Subscribe → sendAndWait, which takes connMu).
 	c.restoreSubscriptions()
 
 	return nil
@@ -184,22 +199,13 @@ func (c *WSClient) Close() error {
 	return nil
 }
 
-// Reconnect closes the existing connection (if any) and re-establishes
-// the WebSocket, authenticating and restoring all prior subscriptions.
-// Safe to call from any goroutine. Intended to be called from a
-// connwatch OnReady callback when Home Assistant becomes reachable again.
+// Reconnect re-establishes the WebSocket connection, authenticating and
+// restoring all prior subscriptions. Safe to call from any goroutine.
+// Intended to be called from a connwatch OnReady callback when Home
+// Assistant becomes reachable again. Connect() handles closing any
+// stale connection before dialing.
 func (c *WSClient) Reconnect(ctx context.Context) error {
 	c.logger.Info("reconnecting WebSocket")
-
-	// Close the old connection. Ignore errors — it may already be dead.
-	c.connMu.Lock()
-	if c.conn != nil {
-		c.conn.Close()
-		c.conn = nil
-	}
-	c.connMu.Unlock()
-
-	// Connect handles auth, starts readLoop, and calls restoreSubscriptions.
 	return c.Connect(ctx)
 }
 
@@ -293,9 +299,12 @@ func (c *WSClient) sendAndWait(ctx context.Context, id int64, msg any) (json.Raw
 
 	// Send message
 	c.connMu.Lock()
-	err := c.conn.WriteJSON(msg)
+	conn := c.conn
 	c.connMu.Unlock()
-	if err != nil {
+	if conn == nil {
+		return nil, fmt.Errorf("send message: connection closed")
+	}
+	if err := conn.WriteJSON(msg); err != nil {
 		return nil, fmt.Errorf("send message: %w", err)
 	}
 

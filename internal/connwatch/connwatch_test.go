@@ -21,6 +21,20 @@ func testBackoff() BackoffConfig {
 	}
 }
 
+// waitFor polls cond every tick until it returns true or timeout elapses.
+// Returns true if the condition was met, false on timeout.
+func waitFor(t *testing.T, timeout time.Duration, cond func() bool, msg string) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if cond() {
+			return
+		}
+		time.Sleep(1 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for condition: %s", msg)
+}
+
 func TestDefaultBackoffConfig(t *testing.T) {
 	t.Parallel()
 	cfg := DefaultBackoffConfig()
@@ -60,12 +74,8 @@ func TestWatcher_ImmediateSuccess(t *testing.T) {
 		OnReady: func() { readyCalled.Add(1) },
 	})
 
-	// Give the goroutine time to run the first probe.
-	time.Sleep(20 * time.Millisecond)
+	waitFor(t, 2*time.Second, w.IsReady, "IsReady() == true")
 
-	if !w.IsReady() {
-		t.Error("expected IsReady() == true after successful probe")
-	}
 	if w.LastError() != nil {
 		t.Errorf("expected nil LastError, got %v", w.LastError())
 	}
@@ -101,12 +111,8 @@ func TestWatcher_BackoffThenSuccess(t *testing.T) {
 		OnReady: func() { readyCalled.Add(1) },
 	})
 
-	// Wait for retries to complete (5 attempts max with tiny delays).
-	time.Sleep(100 * time.Millisecond)
+	waitFor(t, 2*time.Second, w.IsReady, "IsReady() == true after retries")
 
-	if !w.IsReady() {
-		t.Error("expected IsReady() == true after probe recovered")
-	}
 	if readyCalled.Load() != 1 {
 		t.Errorf("OnReady called %d times, want 1", readyCalled.Load())
 	}
@@ -130,14 +136,13 @@ func TestWatcher_ExhaustsRetries(t *testing.T) {
 		Backoff: testBackoff(),
 	})
 
-	// Wait for startup retries to complete.
-	time.Sleep(100 * time.Millisecond)
+	// Wait until all startup retries have been attempted.
+	waitFor(t, 2*time.Second, func() bool {
+		return attempts.Load() >= 5
+	}, "all startup retries attempted")
 
 	if w.IsReady() {
 		t.Error("expected IsReady() == false after exhausting retries")
-	}
-	if n := attempts.Load(); n < 5 {
-		t.Errorf("expected at least %d probe attempts (MaxRetries), got %d", 5, n)
 	}
 	if w.LastError() == nil {
 		t.Error("expected non-nil LastError")
@@ -169,22 +174,16 @@ func TestWatcher_ServiceGoesDown(t *testing.T) {
 		OnDown:  func(err error) { downCalled.Add(1) },
 	})
 
-	// Wait for initial success.
-	time.Sleep(20 * time.Millisecond)
-
-	if !w.IsReady() {
-		t.Fatal("expected IsReady() == true initially")
-	}
+	waitFor(t, 2*time.Second, w.IsReady, "initially ready")
 
 	// Make the service fail.
 	shouldFail.Store(true)
 
 	// Wait for at least one poll cycle to detect the failure.
-	time.Sleep(30 * time.Millisecond)
+	waitFor(t, 2*time.Second, func() bool {
+		return !w.IsReady()
+	}, "IsReady() == false after failure")
 
-	if w.IsReady() {
-		t.Error("expected IsReady() == false after service went down")
-	}
 	if downCalled.Load() < 1 {
 		t.Errorf("OnDown called %d times, want >= 1", downCalled.Load())
 	}
@@ -220,7 +219,9 @@ func TestWatcher_ServiceRecovers(t *testing.T) {
 	})
 
 	// Wait for startup retries to exhaust.
-	time.Sleep(50 * time.Millisecond)
+	waitFor(t, 2*time.Second, func() bool {
+		return w.LastError() != nil
+	}, "startup retries exhausted")
 
 	if w.IsReady() {
 		t.Fatal("expected not ready after startup exhaustion")
@@ -230,11 +231,8 @@ func TestWatcher_ServiceRecovers(t *testing.T) {
 	shouldFail.Store(false)
 
 	// Wait for background poll to detect recovery.
-	time.Sleep(30 * time.Millisecond)
+	waitFor(t, 2*time.Second, w.IsReady, "IsReady() == true after recovery")
 
-	if !w.IsReady() {
-		t.Error("expected IsReady() == true after service recovered")
-	}
 	if readyCalled.Load() < 1 {
 		t.Errorf("OnReady called %d times, want >= 1", readyCalled.Load())
 	}
@@ -264,7 +262,7 @@ func TestWatcher_ContextCancellation(t *testing.T) {
 	select {
 	case <-done:
 		// Good, watcher stopped.
-	case <-time.After(1 * time.Second):
+	case <-time.After(2 * time.Second):
 		t.Fatal("watcher did not stop after context cancellation")
 	}
 }
@@ -280,7 +278,7 @@ func TestWatcher_Stop(t *testing.T) {
 		Backoff: testBackoff(),
 	})
 
-	time.Sleep(10 * time.Millisecond)
+	waitFor(t, 2*time.Second, w.IsReady, "ready before stop")
 
 	// Stop should return promptly.
 	done := make(chan struct{})
@@ -291,7 +289,7 @@ func TestWatcher_Stop(t *testing.T) {
 
 	select {
 	case <-done:
-	case <-time.After(1 * time.Second):
+	case <-time.After(2 * time.Second):
 		t.Fatal("Stop did not return within timeout")
 	}
 }
@@ -318,13 +316,12 @@ func TestWatcher_ProbeTimeout(t *testing.T) {
 		Backoff: bcfg,
 	})
 
-	time.Sleep(50 * time.Millisecond)
+	waitFor(t, 2*time.Second, func() bool {
+		return w.LastError() != nil
+	}, "probe error recorded after timeout")
 
 	if w.IsReady() {
 		t.Error("expected not ready when probe always times out")
-	}
-	if w.LastError() == nil {
-		t.Error("expected non-nil LastError from timed-out probe")
 	}
 }
 
@@ -334,17 +331,23 @@ func TestWatcher_OnReadyNotCalledWhenAlreadyReady(t *testing.T) {
 	defer cancel()
 
 	var readyCalled atomic.Int32
+	var probeCount atomic.Int32
 
 	m := NewManager(slog.Default())
 	_ = m.Watch(ctx, WatcherConfig{
-		Name:    "test-already-ready",
-		Probe:   func(ctx context.Context) error { return nil },
+		Name: "test-already-ready",
+		Probe: func(ctx context.Context) error {
+			probeCount.Add(1)
+			return nil
+		},
 		Backoff: testBackoff(),
 		OnReady: func() { readyCalled.Add(1) },
 	})
 
-	// Let multiple poll cycles pass.
-	time.Sleep(50 * time.Millisecond)
+	// Wait for multiple poll cycles to pass.
+	waitFor(t, 2*time.Second, func() bool {
+		return probeCount.Load() >= 3
+	}, "at least 3 probes completed")
 
 	// OnReady should be called exactly once (startup), not on every successful poll.
 	if n := readyCalled.Load(); n != 1 {
@@ -367,19 +370,20 @@ func TestManager_MultipleWatchers(t *testing.T) {
 		Backoff: testBackoff(),
 	})
 
+	var attempts atomic.Int32
 	bcfg := testBackoff()
 	bcfg.MaxRetries = 1 // exhaust quickly
 	w2 := m.Watch(ctx, WatcherConfig{
 		Name:    "svc-b",
-		Probe:   func(ctx context.Context) error { return errDown },
+		Probe:   func(ctx context.Context) error { attempts.Add(1); return errDown },
 		Backoff: bcfg,
 	})
 
-	time.Sleep(50 * time.Millisecond)
+	waitFor(t, 2*time.Second, w1.IsReady, "svc-a ready")
+	waitFor(t, 2*time.Second, func() bool {
+		return attempts.Load() >= 1
+	}, "svc-b attempted")
 
-	if !w1.IsReady() {
-		t.Error("svc-a should be ready")
-	}
 	if w2.IsReady() {
 		t.Error("svc-b should not be ready")
 	}
@@ -392,21 +396,25 @@ func TestManager_Status(t *testing.T) {
 
 	m := NewManager(slog.Default())
 
-	m.Watch(ctx, WatcherConfig{
+	w1 := m.Watch(ctx, WatcherConfig{
 		Name:    "healthy-svc",
 		Probe:   func(ctx context.Context) error { return nil },
 		Backoff: testBackoff(),
 	})
 
+	var downAttempts atomic.Int32
 	bcfg := testBackoff()
 	bcfg.MaxRetries = 1
 	m.Watch(ctx, WatcherConfig{
 		Name:    "down-svc",
-		Probe:   func(ctx context.Context) error { return errors.New("unreachable") },
+		Probe:   func(ctx context.Context) error { downAttempts.Add(1); return errors.New("unreachable") },
 		Backoff: bcfg,
 	})
 
-	time.Sleep(50 * time.Millisecond)
+	waitFor(t, 2*time.Second, w1.IsReady, "healthy-svc ready")
+	waitFor(t, 2*time.Second, func() bool {
+		return downAttempts.Load() >= 1
+	}, "down-svc attempted")
 
 	status := m.Status()
 
@@ -442,7 +450,7 @@ func TestManager_Stop(t *testing.T) {
 
 	m := NewManager(slog.Default())
 
-	m.Watch(context.Background(), WatcherConfig{
+	w := m.Watch(context.Background(), WatcherConfig{
 		Name:    "svc-1",
 		Probe:   func(ctx context.Context) error { return nil },
 		Backoff: testBackoff(),
@@ -453,7 +461,7 @@ func TestManager_Stop(t *testing.T) {
 		Backoff: testBackoff(),
 	})
 
-	time.Sleep(10 * time.Millisecond)
+	waitFor(t, 2*time.Second, w.IsReady, "svc-1 ready before stop")
 
 	done := make(chan struct{})
 	go func() {
@@ -463,7 +471,54 @@ func TestManager_Stop(t *testing.T) {
 
 	select {
 	case <-done:
-	case <-time.After(1 * time.Second):
+	case <-time.After(2 * time.Second):
 		t.Fatal("Manager.Stop did not return within timeout")
 	}
+}
+
+func TestWatch_PanicsOnEmptyName(t *testing.T) {
+	t.Parallel()
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("expected panic for empty Name")
+		}
+	}()
+
+	m := NewManager(slog.Default())
+	m.Watch(context.Background(), WatcherConfig{
+		Name:    "",
+		Probe:   func(ctx context.Context) error { return nil },
+		Backoff: testBackoff(),
+	})
+}
+
+func TestWatch_PanicsOnNilProbe(t *testing.T) {
+	t.Parallel()
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("expected panic for nil Probe")
+		}
+	}()
+
+	m := NewManager(slog.Default())
+	m.Watch(context.Background(), WatcherConfig{
+		Name:    "test-nil-probe",
+		Probe:   nil,
+		Backoff: testBackoff(),
+	})
+}
+
+func TestWatch_DefaultsZeroBackoffFields(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	m := NewManager(slog.Default())
+	// Pass a completely zero BackoffConfig — all fields should get defaults.
+	w := m.Watch(ctx, WatcherConfig{
+		Name:  "test-defaults",
+		Probe: func(ctx context.Context) error { return nil },
+	})
+
+	waitFor(t, 2*time.Second, w.IsReady, "ready with defaulted backoff")
 }

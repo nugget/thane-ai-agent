@@ -291,9 +291,40 @@ func NewManager(logger *slog.Logger) *Manager {
 
 // Watch registers and starts a new service watcher. The watcher runs in a
 // background goroutine until ctx is cancelled or Stop is called.
+//
+// Panics if Name is empty or Probe is nil — these are programming errors
+// that should be caught during development, not silently ignored at runtime.
+// Zero-value BackoffConfig fields are replaced with defaults.
 func (m *Manager) Watch(ctx context.Context, cfg WatcherConfig) *Watcher {
+	if cfg.Name == "" {
+		panic("connwatch: WatcherConfig.Name must not be empty")
+	}
+	if cfg.Probe == nil {
+		panic("connwatch: WatcherConfig.Probe must not be nil")
+	}
 	if cfg.Logger == nil {
 		cfg.Logger = m.logger
+	}
+
+	// Apply defaults for zero-value backoff fields.
+	defaults := DefaultBackoffConfig()
+	if cfg.Backoff.InitialDelay <= 0 {
+		cfg.Backoff.InitialDelay = defaults.InitialDelay
+	}
+	if cfg.Backoff.MaxDelay <= 0 {
+		cfg.Backoff.MaxDelay = defaults.MaxDelay
+	}
+	if cfg.Backoff.Multiplier <= 0 {
+		cfg.Backoff.Multiplier = defaults.Multiplier
+	}
+	if cfg.Backoff.MaxRetries <= 0 {
+		cfg.Backoff.MaxRetries = defaults.MaxRetries
+	}
+	if cfg.Backoff.PollInterval <= 0 {
+		cfg.Backoff.PollInterval = defaults.PollInterval
+	}
+	if cfg.Backoff.ProbeTimeout <= 0 {
+		cfg.Backoff.ProbeTimeout = defaults.ProbeTimeout
 	}
 
 	watchCtx, cancel := context.WithCancel(ctx)
