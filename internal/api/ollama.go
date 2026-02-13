@@ -171,6 +171,22 @@ func handleOllamaChatShared(w http.ResponseWriter, r *http.Request, loop *agent.
 		}
 	}
 
+	// Detect Open WebUI auxiliary requests (title/tag generation) and
+	// short-circuit them: route to a local model, skip tools, context
+	// injection, and memory to avoid wasting resources on UI housekeeping.
+	//
+	// The "thane:local" profile applies a heavy scoring penalty (-200) to
+	// paid models via HintLocalOnly, which effectively guarantees a local
+	// model when any are available. If no local models are registered (e.g.
+	// Ollama is down), the router will fall back to a paid model — this is
+	// acceptable since the lightweight path still saves significant cost
+	// by skipping context injection and tools.
+	auxiliary := isOWUAuxiliaryRequest(messages)
+	if auxiliary {
+		logger.Info("auxiliary request detected, routing to local model without tools/context")
+		req.Model = "thane:local"
+	}
+
 	// Map model name to routing profile.
 	// Ollama "model" names like "thane:thinking" become routing hints.
 	model := req.Model
@@ -211,13 +227,20 @@ func handleOllamaChatShared(w http.ResponseWriter, r *http.Request, loop *agent.
 	// Open WebUI sends full history with each request, so hashing the first
 	// user message gives a stable ID per chat. Different OWU chats get
 	// isolated conversation buffers, archive sessions, and compaction state.
+	//
+	// Auxiliary requests use a fixed ID — they're ephemeral and should not
+	// pollute the real conversation's memory or session tracking.
 	conversationID := deriveConversationID(messages)
+	if auxiliary {
+		conversationID = "owu-auxiliary"
+	}
 
 	agentReq := &agent.Request{
 		Messages:       messages,
 		Model:          model,
 		Hints:          hints,
 		ConversationID: conversationID,
+		SkipContext:    auxiliary,
 	}
 
 	// Check if streaming was requested. For Ollama compatibility, a nil stream defaults to true.
@@ -661,4 +684,45 @@ func deriveConversationID(messages []agent.Message) string {
 		}
 	}
 	return "default"
+}
+
+// owuAuxiliaryPatterns are substrings found in Open WebUI's auxiliary prompts.
+// OWU sends these as background requests for title generation, tag generation,
+// and other UI housekeeping. The prompts vary across OWU versions and can be
+// customized by users, so we match on characteristic phrases rather than exact
+// strings. Case-insensitive matching is applied.
+var owuAuxiliaryPatterns = []string{
+	// Title generation variants
+	"generate a concise, 3-5 word title",
+	"generate a brief title for this chat",
+	"create a concise title",
+	"generate a title for this conversation",
+	"provide a brief title",
+
+	// Tag generation variants
+	"generate tags for this chat",
+	"suggest tags for this conversation",
+	"generate 1-4 word tags",
+	"provide tags for this chat",
+}
+
+// isOWUAuxiliaryRequest detects Open WebUI auxiliary/meta requests that should
+// be handled by local models rather than the user's selected model. These are
+// UI housekeeping tasks (title generation, tag generation) that happen
+// invisibly in the background and don't need the full conversational pipeline.
+func isOWUAuxiliaryRequest(messages []agent.Message) bool {
+	// Check the last user message for known patterns.
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role != "user" {
+			continue
+		}
+		lower := strings.ToLower(messages[i].Content)
+		for _, pattern := range owuAuxiliaryPatterns {
+			if strings.Contains(lower, pattern) {
+				return true
+			}
+		}
+		return false // only check the most recent user message
+	}
+	return false
 }
