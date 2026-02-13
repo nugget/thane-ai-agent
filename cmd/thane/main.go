@@ -44,6 +44,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/ingest"
 	"github.com/nugget/thane-ai-agent/internal/llm"
 	"github.com/nugget/thane-ai-agent/internal/memory"
+	"github.com/nugget/thane-ai-agent/internal/prompts"
 	"github.com/nugget/thane-ai-agent/internal/router"
 	"github.com/nugget/thane-ai-agent/internal/scheduler"
 	"github.com/nugget/thane-ai-agent/internal/search"
@@ -685,6 +686,70 @@ JSON:`, transcript.String())
 	loop.Tools().SetFactTools(factTools)
 	logger.Info("fact store initialized", "path", cfg.DataDir+"/facts.db")
 
+	// --- Fact extraction ---
+	// Automatic extraction of facts from conversations. Runs async after
+	// each interaction using a local model. Opt-in via config.
+	if cfg.Extraction.Enabled {
+		extractionModel := cfg.Extraction.Model
+		logger.Info("fact extraction enabled", "model", extractionModel)
+
+		// FactSetter adapter with confidence reinforcement: if a fact already
+		// exists, bump its confidence rather than overwriting.
+		factSetterAdapter := &factSetterFunc{store: factStore, logger: logger}
+
+		extractor := memory.NewExtractor(factSetterAdapter, logger, cfg.Extraction.MinMessages)
+		extractor.SetTimeout(time.Duration(cfg.Extraction.TimeoutSeconds) * time.Second)
+		extractor.SetExtractFunc(func(ctx context.Context, userMsg, assistantResp string, history []memory.Message) (*memory.ExtractionResult, error) {
+			// Build transcript from recent history (only complete messages).
+			var transcript strings.Builder
+			for _, m := range history {
+				line := fmt.Sprintf("[%s] %s\n", m.Role, m.Content)
+				if transcript.Len()+len(line) > 4000 {
+					break
+				}
+				transcript.WriteString(line)
+			}
+
+			prompt := prompts.FactExtractionPrompt(userMsg, assistantResp, transcript.String())
+			msgs := []llm.Message{{Role: "user", Content: prompt}}
+
+			start := time.Now()
+			resp, err := llmClient.Chat(ctx, extractionModel, msgs, nil)
+			if err != nil {
+				logger.Warn("fact extraction LLM call failed",
+					"model", extractionModel,
+					"elapsed_ms", time.Since(start).Milliseconds(),
+					"error", err)
+				return nil, err
+			}
+			logger.Debug("fact extraction LLM call complete",
+				"model", extractionModel,
+				"elapsed_ms", time.Since(start).Milliseconds(),
+				"response_len", len(resp.Message.Content))
+
+			// Parse JSON (strip code fences, same pattern as metadata gen)
+			content := resp.Message.Content
+			content = strings.TrimPrefix(content, "```json\n")
+			content = strings.TrimPrefix(content, "```\n")
+			content = strings.TrimSuffix(content, "\n```")
+			content = strings.TrimSpace(content)
+
+			var result memory.ExtractionResult
+			if err := json.Unmarshal([]byte(content), &result); err != nil {
+				preview := content
+				if len(preview) > 500 {
+					preview = preview[:500]
+				}
+				logger.Debug("extraction JSON parse failed",
+					"raw_response", preview)
+				return nil, fmt.Errorf("parse extraction result: %w", err)
+			}
+			return &result, nil
+		})
+
+		loop.SetExtractor(extractor)
+	}
+
 	// --- Anticipation store ---
 	// Bridges intent to action. The agent can set anticipations ("I expect
 	// X to happen") that trigger context injection when they're fulfilled.
@@ -1025,4 +1090,47 @@ func createLLMClient(cfg *config.Config, logger *slog.Logger, ollamaClient *llm.
 	logger.Info("LLM client initialized", "default_model", cfg.Models.Default, "default_provider", defaultProvider)
 
 	return multi
+}
+
+// factSetterFunc adapts facts.Store to the memory.FactSetter interface,
+// adding confidence reinforcement: if a fact already exists, its confidence
+// is bumped by 0.1 (capped at 1.0) rather than overwritten. This rewards
+// the model for re-extracting known facts.
+type factSetterFunc struct {
+	store  *facts.Store
+	logger *slog.Logger
+}
+
+func (f *factSetterFunc) SetFact(category, key, value, source string, confidence float64) error {
+	// Check for existing fact to apply confidence reinforcement.
+	existing, err := f.store.Get(facts.Category(category), key)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		// Real database error (not just "fact doesn't exist yet") — log and bail.
+		f.logger.Warn("failed to check existing fact for reinforcement",
+			"category", category, "key", key, "error", err)
+		return err
+	}
+	if err == nil && existing != nil {
+		if existing.Value == value {
+			// Same fact re-observed — reinforce confidence.
+			reinforced := min(existing.Confidence+0.1, 1.0)
+			if reinforced > confidence {
+				confidence = reinforced
+			}
+			f.logger.Debug("reinforcing existing fact confidence",
+				"category", category, "key", key,
+				"old_confidence", existing.Confidence,
+				"new_confidence", confidence)
+		} else {
+			// Value changed — this is a correction, not a reinforcement.
+			// Use the incoming confidence as-is.
+			f.logger.Debug("updating fact value (correction)",
+				"category", category, "key", key,
+				"old_value", existing.Value, "new_value", value,
+				"confidence", confidence)
+		}
+	}
+
+	_, err = f.store.Set(facts.Category(category), key, value, source, confidence)
+	return err
 }

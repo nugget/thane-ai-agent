@@ -117,6 +117,9 @@ type Config struct {
 	// Archive configures session archive behavior.
 	Archive ArchiveConfig `yaml:"archive"`
 
+	// Extraction configures automatic fact extraction from conversations.
+	Extraction ExtractionConfig `yaml:"extraction"`
+
 	// Search configures web search providers.
 	Search SearchConfig `yaml:"search"`
 
@@ -257,6 +260,30 @@ type ArchiveConfig struct {
 	MetadataModel string `yaml:"metadata_model"`
 }
 
+// ExtractionConfig configures automatic fact extraction from conversations.
+// When enabled, the agent asynchronously analyzes each interaction after
+// the response is delivered and persists noteworthy facts to the fact store.
+// This is a background operation using local models — zero cost, no latency impact.
+type ExtractionConfig struct {
+	// Enabled controls whether automatic fact extraction runs.
+	// Default: false (opt-in).
+	Enabled bool `yaml:"enabled"`
+
+	// Model is the LLM model used for fact extraction. This runs async
+	// in the background — local/free models recommended.
+	// Default: falls back to archive.metadata_model, then models.default.
+	Model string `yaml:"model"`
+
+	// MinMessages is the minimum conversation length (in messages) before
+	// extraction is attempted. Very short exchanges rarely contain facts.
+	// Default: 2.
+	MinMessages int `yaml:"min_messages"`
+
+	// TimeoutSeconds is the maximum time allowed for a single extraction
+	// call. Default: 30.
+	TimeoutSeconds int `yaml:"timeout_seconds"`
+}
+
 // WorkspaceConfig configures the agent's sandboxed file system access.
 // When Path is set, the agent can read and write files within that
 // directory. All paths passed to file tools are resolved relative to
@@ -366,6 +393,15 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Archive.MetadataModel == "" {
 		c.Archive.MetadataModel = c.Models.Default
+	}
+	if c.Extraction.Model == "" {
+		c.Extraction.Model = c.Archive.MetadataModel
+	}
+	if c.Extraction.MinMessages == 0 {
+		c.Extraction.MinMessages = 2
+	}
+	if c.Extraction.TimeoutSeconds == 0 {
+		c.Extraction.TimeoutSeconds = 30
 	}
 
 	for i := range c.Models.Available {
