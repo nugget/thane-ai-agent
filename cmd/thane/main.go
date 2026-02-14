@@ -431,6 +431,15 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	}
 	logger.Info("working memory store initialized")
 
+	// --- Delegation persistence ---
+	// Stores every thane_delegate execution for replay and model evaluation.
+	// Shares the archive database alongside working memory.
+	delegationStore, err := delegate.NewDelegationStore(archiveStore.DB())
+	if err != nil {
+		return fmt.Errorf("create delegation store: %w", err)
+	}
+	logger.Info("delegation store initialized")
+
 	archiveAdapter := memory.NewArchiveAdapter(archiveStore, logger)
 	archiveAdapter.SetToolCallSource(mem)
 
@@ -872,6 +881,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// executor's parent registry snapshot includes the full tool set.
 	delegateExec := delegate.NewExecutor(logger, llmClient, rtr, loop.Tools(), cfg.Models.Default)
 	delegateExec.SetTimezone(cfg.Timezone)
+	delegateExec.SetStore(delegationStore)
 	loop.Tools().Register(&tools.Tool{
 		Name:        "thane_delegate",
 		Description: delegate.ToolDescription,

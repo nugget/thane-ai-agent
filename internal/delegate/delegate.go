@@ -38,6 +38,7 @@ type Executor struct {
 	profiles     map[string]*Profile
 	timezone     string
 	defaultModel string
+	store        *DelegationStore
 }
 
 // NewExecutor creates a delegate executor.
@@ -56,6 +57,12 @@ func NewExecutor(logger *slog.Logger, llmClient llm.Client, rtr *router.Router, 
 // in the delegate system prompt.
 func (e *Executor) SetTimezone(tz string) {
 	e.timezone = tz
+}
+
+// SetStore configures the delegation persistence store. When set, every
+// [Executor.Execute] completion is recorded for replay and evaluation.
+func (e *Executor) SetStore(s *DelegationStore) {
+	e.store = s
 }
 
 // ProfileNames returns the names of all registered profiles.
@@ -171,7 +178,22 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 
 		// No tool calls — we have the final response.
 		if len(resp.Message.ToolCalls) == 0 {
-			e.logCompletion(did, profile.Name, model, i+1, totalInput, totalOutput, false, startTime)
+			e.recordCompletion(&completionRecord{
+				delegateID:     did,
+				conversationID: tools.ConversationIDFromContext(ctx),
+				task:           task,
+				guidance:       guidance,
+				profileName:    profile.Name,
+				model:          model,
+				totalIter:      i + 1,
+				maxIter:        maxIter,
+				totalInput:     totalInput,
+				totalOutput:    totalOutput,
+				exhausted:      false,
+				startTime:      startTime,
+				messages:       messages,
+				resultContent:  resp.Message.Content,
+			})
 			return &Result{
 				Content:      resp.Message.Content,
 				Model:        model,
@@ -190,7 +212,21 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 				"cumul_output", totalOutput,
 				"max_tokens", maxTokens,
 			)
-			return e.forceTextResponse(ctx, did, model, messages, profile.Name, i+1, totalInput, totalOutput, startTime)
+			return e.forceTextResponse(ctx, model, messages, &completionRecord{
+				delegateID:     did,
+				conversationID: tools.ConversationIDFromContext(ctx),
+				task:           task,
+				guidance:       guidance,
+				profileName:    profile.Name,
+				model:          model,
+				totalIter:      i + 1,
+				maxIter:        maxIter,
+				totalInput:     totalInput,
+				totalOutput:    totalOutput,
+				exhausted:      true,
+				startTime:      startTime,
+				messages:       messages,
+			})
 		}
 
 		// Execute tool calls.
@@ -245,34 +281,51 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 		"profile", profile.Name,
 		"max_iter", maxIter,
 	)
-	return e.forceTextResponse(ctx, did, model, messages, profile.Name, maxIter, totalInput, totalOutput, startTime)
+	return e.forceTextResponse(ctx, model, messages, &completionRecord{
+		delegateID:     did,
+		conversationID: tools.ConversationIDFromContext(ctx),
+		task:           task,
+		guidance:       guidance,
+		profileName:    profile.Name,
+		model:          model,
+		totalIter:      maxIter,
+		maxIter:        maxIter,
+		totalInput:     totalInput,
+		totalOutput:    totalOutput,
+		exhausted:      true,
+		startTime:      startTime,
+		messages:       messages,
+	})
 }
 
 // forceTextResponse makes a final LLM call with tools=nil to force text output.
-func (e *Executor) forceTextResponse(ctx context.Context, delegateID, model string, messages []llm.Message, profileName string, totalIter, totalInput, totalOutput int, startTime time.Time) (*Result, error) {
+func (e *Executor) forceTextResponse(ctx context.Context, model string, messages []llm.Message, rec *completionRecord) (*Result, error) {
 	resp, err := e.llm.ChatStream(ctx, model, messages, nil, nil)
 	if err != nil {
-		e.logCompletion(delegateID, profileName, model, totalIter, totalInput, totalOutput, true, startTime)
+		rec.resultContent = "Delegate was unable to complete the task within its budget."
+		rec.errMsg = err.Error()
+		e.recordCompletion(rec)
 		return &Result{
-			Content:      "Delegate was unable to complete the task within its budget.",
+			Content:      rec.resultContent,
 			Model:        model,
-			Iterations:   totalIter,
-			InputTokens:  totalInput,
-			OutputTokens: totalOutput,
+			Iterations:   rec.totalIter,
+			InputTokens:  rec.totalInput,
+			OutputTokens: rec.totalOutput,
 			Exhausted:    true,
 		}, nil
 	}
 
-	totalInput += resp.InputTokens
-	totalOutput += resp.OutputTokens
+	rec.totalInput += resp.InputTokens
+	rec.totalOutput += resp.OutputTokens
+	rec.resultContent = resp.Message.Content
+	e.recordCompletion(rec)
 
-	e.logCompletion(delegateID, profileName, model, totalIter, totalInput, totalOutput, true, startTime)
 	return &Result{
 		Content:      resp.Message.Content,
 		Model:        model,
-		Iterations:   totalIter,
-		InputTokens:  totalInput,
-		OutputTokens: totalOutput,
+		Iterations:   rec.totalIter,
+		InputTokens:  rec.totalInput,
+		OutputTokens: rec.totalOutput,
 		Exhausted:    true,
 	}, nil
 }
@@ -304,18 +357,73 @@ func (e *Executor) selectModel(ctx context.Context, delegateID, task string, pro
 	return e.defaultModel
 }
 
-// logCompletion logs structured information about a completed delegate execution.
-func (e *Executor) logCompletion(delegateID, profileName, model string, totalIter, totalInput, totalOutput int, exhausted bool, startTime time.Time) {
+// completionRecord carries all data for logging and persistence of a
+// delegate execution.
+type completionRecord struct {
+	delegateID     string
+	conversationID string
+	task           string
+	guidance       string
+	profileName    string
+	model          string
+	totalIter      int
+	maxIter        int
+	totalInput     int
+	totalOutput    int
+	exhausted      bool
+	startTime      time.Time
+	messages       []llm.Message
+	resultContent  string
+	errMsg         string
+}
+
+// recordCompletion logs and optionally persists a delegate execution.
+func (e *Executor) recordCompletion(rec *completionRecord) {
+	now := time.Now()
+	elapsed := now.Sub(rec.startTime)
+
 	e.logger.Info("delegate completed",
-		"delegate_id", delegateID,
-		"profile", profileName,
-		"model", model,
-		"total_iter", totalIter,
-		"input_tokens", totalInput,
-		"output_tokens", totalOutput,
-		"exhausted", exhausted,
-		"elapsed", time.Since(startTime).Round(time.Millisecond),
+		"delegate_id", rec.delegateID,
+		"profile", rec.profileName,
+		"model", rec.model,
+		"total_iter", rec.totalIter,
+		"input_tokens", rec.totalInput,
+		"output_tokens", rec.totalOutput,
+		"exhausted", rec.exhausted,
+		"elapsed", elapsed.Round(time.Millisecond),
 	)
+
+	if e.store == nil {
+		return
+	}
+
+	dr := &DelegationRecord{
+		ID:             rec.delegateID,
+		ConversationID: rec.conversationID,
+		Task:           rec.task,
+		Guidance:       rec.guidance,
+		Profile:        rec.profileName,
+		Model:          rec.model,
+		Iterations:     rec.totalIter,
+		MaxIterations:  rec.maxIter,
+		InputTokens:    rec.totalInput,
+		OutputTokens:   rec.totalOutput,
+		Exhausted:      rec.exhausted,
+		ToolsCalled:    ExtractToolsCalled(rec.messages),
+		Messages:       rec.messages,
+		ResultContent:  rec.resultContent,
+		StartedAt:      rec.startTime,
+		CompletedAt:    now,
+		DurationMs:     elapsed.Milliseconds(),
+		Error:          rec.errMsg,
+	}
+
+	if err := e.store.Record(dr); err != nil {
+		e.logger.Warn("failed to persist delegation record",
+			"delegate_id", rec.delegateID,
+			"error", err,
+		)
+	}
 }
 
 // formatTokens formats a token count as a human-readable string (e.g., "1.2K").
