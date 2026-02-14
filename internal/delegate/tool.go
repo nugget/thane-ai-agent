@@ -3,6 +3,7 @@ package delegate
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/nugget/thane-ai-agent/internal/prompts"
 )
@@ -59,14 +60,29 @@ func ToolHandler(exec *Executor) func(ctx context.Context, args map[string]any) 
 		// Format the result with metadata header.
 		header := fmt.Sprintf("[Delegate completed: profile=%s, model=%s, iter=%d, tokens=%s]",
 			profileName, result.Model, result.Iterations, formatTokens(result.OutputTokens))
-		if result.Exhausted {
-			header = fmt.Sprintf("[Delegate budget exhausted: profile=%s, model=%s, iter=%d, tokens=%s]",
-				profileName, result.Model, result.Iterations, formatTokens(result.OutputTokens))
+
+		if !result.Exhausted {
+			if result.Content == "" {
+				return header + "\n\nNo results returned.", nil
+			}
+			return header + "\n\n" + result.Content, nil
 		}
 
-		if result.Content == "" {
-			return header + "\n\nNo results returned.", nil
+		// Exhausted delegation — provide actionable context for retry.
+		header = fmt.Sprintf("[Delegate budget exhausted: profile=%s, model=%s, iter=%d, tokens_in=%s, tokens_out=%s]",
+			profileName, result.Model, result.Iterations,
+			formatTokens(result.InputTokens), formatTokens(result.OutputTokens))
+
+		var out strings.Builder
+		out.WriteString(header)
+		out.WriteString("\n\n")
+		if result.Content != "" {
+			out.WriteString(result.Content)
+			out.WriteString("\n\n")
 		}
-		return header + "\n\n" + result.Content, nil
+		out.WriteString("[Exhaustion note: The delegate ran out of iterations or tokens before completing the task. ")
+		out.WriteString("If retrying, provide more specific guidance to narrow the scope — ")
+		out.WriteString("e.g., exact file paths, entity IDs, or which step to focus on.]")
+		return out.String(), nil
 	}
 }
