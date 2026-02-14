@@ -84,6 +84,7 @@ internal/
 ## Workflow Notes
 
 - The repository uses GitHub with SSH remotes (`git@github.com:nugget/thane-ai-agent.git`)
+- **All commits must be signed.** The SessionStart hook configures repo-local signing automatically each session (see `~/.claude/CLAUDE.md` for identity details). Verify signing is active before your first commit: `git config commit.gpgsign` should return `true`.
 - PRs require review before merge to `main`
 - **Always run `just ci` before pushing** — it catches formatting, lint, and race conditions. This is a hard requirement, not a suggestion.
 - Keep PRs focused: one feature or fix per PR
