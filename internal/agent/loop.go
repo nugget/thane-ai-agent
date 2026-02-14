@@ -132,7 +132,7 @@ type Loop struct {
 	contextProvider ContextProvider
 	archiver        SessionArchiver
 	extractor       *memory.Extractor
-	iter0Tools      []string // Tool names to advertise on iteration 0 (nil = all tools)
+	iter0Tools      []string // Restricted tool set for orchestrator mode (nil = all tools)
 }
 
 // NewLoop creates a new agent loop.
@@ -182,11 +182,12 @@ func (l *Loop) SetTimezone(tz string) {
 	l.timezone = tz
 }
 
-// SetIter0Tools configures the restricted tool set for iteration 0 of
-// the agent loop. When set, only the named tools are advertised on the
-// first LLM call, steering the primary model toward delegation. If
-// thane_delegate is not registered in the tool registry, gating is
-// silently disabled to avoid leaving the agent without actionable tools.
+// SetIter0Tools configures the restricted tool set for all iterations
+// of the agent loop. When set, only the named tools are advertised on
+// every LLM call, keeping the primary model in orchestrator mode and
+// steering it toward delegation. If thane_delegate is not registered
+// in the tool registry, gating is silently disabled to avoid leaving
+// the agent without actionable tools.
 func (l *Loop) SetIter0Tools(names []string) {
 	l.iter0Tools = names
 }
@@ -511,12 +512,12 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		log.Debug("model specified in request, skipping router", "model", model)
 	}
 
-	// Determine whether iter-0 tool gating is active. Gating is silently
-	// disabled when thane_delegate is not registered — without a delegation
-	// tool the restricted set would leave the agent unable to act.
-	iter0Active := len(l.iter0Tools) > 0 && l.tools.Get("thane_delegate") != nil
-	if iter0Active {
-		log.Info("iter-0 tool gating active", "tools", l.iter0Tools)
+	// Determine whether tool gating is active. Gating is silently disabled
+	// when thane_delegate is not registered — without a delegation tool the
+	// restricted set would leave the agent unable to act.
+	gatingActive := len(l.iter0Tools) > 0 && l.tools.Get("thane_delegate") != nil
+	if gatingActive {
+		log.Info("tool gating active", "tools", l.iter0Tools)
 	}
 
 	startTime := time.Now()
@@ -539,7 +540,7 @@ iterLoop:
 		// only advertise the restricted set to keep the primary model in
 		// orchestrator mode across all iterations.
 		var toolDefs []map[string]any
-		if iter0Active {
+		if gatingActive {
 			toolDefs = l.tools.FilteredCopy(l.iter0Tools).List()
 		} else {
 			toolDefs = l.tools.List()
