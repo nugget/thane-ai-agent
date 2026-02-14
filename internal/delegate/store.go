@@ -89,9 +89,39 @@ func (s *DelegationStore) migrate() error {
 	}
 
 	// Add exhaust_reason column for databases created before this migration.
-	// SQLite silently ignores duplicate column additions via this pattern.
-	_, _ = s.db.Exec(`ALTER TABLE delegations ADD COLUMN exhaust_reason TEXT`)
+	if has, err := s.hasColumn("delegations", "exhaust_reason"); err != nil {
+		return fmt.Errorf("check exhaust_reason column: %w", err)
+	} else if !has {
+		if _, err := s.db.Exec(`ALTER TABLE delegations ADD COLUMN exhaust_reason TEXT`); err != nil {
+			return fmt.Errorf("add exhaust_reason column: %w", err)
+		}
+	}
 	return nil
+}
+
+// hasColumn checks whether a column exists on the given table using
+// PRAGMA table_info, avoiding silent ALTER TABLE failures.
+func (s *DelegationStore) hasColumn(table, column string) (bool, error) {
+	rows, err := s.db.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
+	if err != nil {
+		return false, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notNull int
+		var dfltValue sql.NullString
+		var pk int
+		if err := rows.Scan(&cid, &name, &typ, &notNull, &dfltValue, &pk); err != nil {
+			return false, err
+		}
+		if name == column {
+			return true, nil
+		}
+	}
+	return false, rows.Err()
 }
 
 // Record inserts a delegation execution record into the database.

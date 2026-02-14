@@ -566,6 +566,9 @@ func TestToolHandler_ExhaustedOutput(t *testing.T) {
 	if !strings.Contains(result, "reason=max_iterations") {
 		t.Errorf("result missing exhaust reason, got: %s", result)
 	}
+	if !strings.Contains(result, "used all available iterations") {
+		t.Errorf("result missing reason-specific text for max_iterations, got: %s", result)
+	}
 }
 
 func TestExecute_WallClockExhausted(t *testing.T) {

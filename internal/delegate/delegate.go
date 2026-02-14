@@ -203,6 +203,33 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 		totalInput += resp.InputTokens
 		totalOutput += resp.OutputTokens
 
+		// Re-check wall clock after LLM call — it may have taken a while.
+		if time.Since(startTime) > maxDuration {
+			e.logger.Warn("delegate wall clock exceeded after llm call",
+				"delegate_id", did,
+				"profile", profile.Name,
+				"elapsed", time.Since(startTime).Round(time.Millisecond),
+				"max_duration", maxDuration,
+			)
+			messages = append(messages, resp.Message)
+			return e.forceTextResponse(ctx, model, messages, &completionRecord{
+				delegateID:     did,
+				conversationID: tools.ConversationIDFromContext(ctx),
+				task:           task,
+				guidance:       guidance,
+				profileName:    profile.Name,
+				model:          model,
+				totalIter:      i + 1,
+				maxIter:        maxIter,
+				totalInput:     totalInput,
+				totalOutput:    totalOutput,
+				exhausted:      true,
+				exhaustReason:  ExhaustWallClock,
+				startTime:      startTime,
+				messages:       messages,
+			})
+		}
+
 		e.logger.Info("delegate llm response",
 			"delegate_id", did,
 			"profile", profile.Name,
@@ -311,6 +338,32 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 				Role:       "tool",
 				Content:    result,
 				ToolCallID: tc.ID,
+			})
+		}
+
+		// Re-check wall clock after tool execution.
+		if time.Since(startTime) > maxDuration {
+			e.logger.Warn("delegate wall clock exceeded after tool exec",
+				"delegate_id", did,
+				"profile", profile.Name,
+				"elapsed", time.Since(startTime).Round(time.Millisecond),
+				"max_duration", maxDuration,
+			)
+			return e.forceTextResponse(ctx, model, messages, &completionRecord{
+				delegateID:     did,
+				conversationID: tools.ConversationIDFromContext(ctx),
+				task:           task,
+				guidance:       guidance,
+				profileName:    profile.Name,
+				model:          model,
+				totalIter:      i + 1,
+				maxIter:        maxIter,
+				totalInput:     totalInput,
+				totalOutput:    totalOutput,
+				exhausted:      true,
+				exhaustReason:  ExhaustWallClock,
+				startTime:      startTime,
+				messages:       messages,
 			})
 		}
 	}

@@ -80,8 +80,16 @@ func ToolHandler(exec *Executor) func(ctx context.Context, args map[string]any) 
 			out.WriteString(result.Content)
 			out.WriteString("\n\n")
 		}
-		out.WriteString("[Exhaustion note: The delegate ran out of iterations or tokens before completing the task. ")
-		out.WriteString("If retrying, provide more specific guidance to narrow the scope — ")
+		out.WriteString("[Exhaustion note: ")
+		switch result.ExhaustReason {
+		case ExhaustWallClock:
+			out.WriteString("The delegate exceeded its wall clock time limit before completing the task.")
+		case ExhaustTokenBudget:
+			out.WriteString("The delegate exceeded its output token budget before completing the task.")
+		default:
+			out.WriteString("The delegate used all available iterations before completing the task.")
+		}
+		out.WriteString(" If retrying, provide more specific guidance to narrow the scope — ")
 		out.WriteString("e.g., exact file paths, entity IDs, or which step to focus on.]")
 		return out.String(), nil
 	}
