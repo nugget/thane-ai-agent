@@ -266,23 +266,19 @@ func (l *Loop) buildSystemPrompt(ctx context.Context, userMessage string) string
 }
 
 // generateRequestID returns a short, human-scannable identifier for a single
-// user-message turn (e.g., "r_7f3ab2c1"). It combines timestamp and random
-// bytes from a UUIDv7 so IDs are both roughly chronological and unique even
-// when generated within the same millisecond.
+// user-message turn (e.g., "r_7f3ab2c1"). It uses 4 random bytes from a
+// UUIDv7 (bytes 8-11), giving 32 bits of entropy — sufficient for
+// request-level correlation without realistic collision risk.
 func generateRequestID() string {
 	id, err := uuid.NewV7()
 	if err != nil {
 		// Fallback: use current time hex if UUID generation fails.
 		return fmt.Sprintf("r_%08x", time.Now().UnixMilli()&0xFFFFFFFF)
 	}
-	// Bytes 0-1: high 16 bits of ms timestamp (coarse ordering).
-	// Bytes 8-9: random bits (uniqueness within the same ms).
-	var buf [4]byte
-	buf[0] = id[0]
-	buf[1] = id[1]
-	buf[2] = id[8]
-	buf[3] = id[9]
-	return "r_" + hex.EncodeToString(buf[:])
+	// Bytes 8-11 are from the random section of UUIDv7 (after the
+	// variant bits in byte 8, masked by the UUID spec, but still
+	// provide ~30 bits of effective randomness).
+	return "r_" + hex.EncodeToString(id[8:12])
 }
 
 // Run executes one iteration of the agent loop.
@@ -781,7 +777,7 @@ iterLoop:
 		elapsed := time.Since(startTime)
 		log.Info("agent loop completed",
 			"model", model,
-			"iter", i+1,
+			"iter", i,
 			"input_tokens", totalInputTokens,
 			"output_tokens", totalOutputTokens,
 			"elapsed", elapsed.Round(time.Millisecond),
