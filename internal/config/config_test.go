@@ -89,3 +89,61 @@ func TestLoad_InlineSecrets(t *testing.T) {
 		t.Errorf("api_key = %q, want %q", cfg.Anthropic.APIKey, "sk-ant-test-key")
 	}
 }
+
+func TestAgentConfig_DefaultIter0Tools(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	os.WriteFile(path, []byte("agent:\n  delegation_required: true\n"), 0600)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+
+	if !cfg.Agent.DelegationRequired {
+		t.Fatal("expected delegation_required to be true")
+	}
+
+	want := []string{"thane_delegate", "recall_fact", "remember_fact", "session_working_memory", "archive_search"}
+	if len(cfg.Agent.Iter0Tools) != len(want) {
+		t.Fatalf("iter0_tools length = %d, want %d; got %v", len(cfg.Agent.Iter0Tools), len(want), cfg.Agent.Iter0Tools)
+	}
+	for i, name := range want {
+		if cfg.Agent.Iter0Tools[i] != name {
+			t.Errorf("iter0_tools[%d] = %q, want %q", i, cfg.Agent.Iter0Tools[i], name)
+		}
+	}
+}
+
+func TestAgentConfig_CustomIter0Tools(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	os.WriteFile(path, []byte("agent:\n  delegation_required: true\n  iter0_tools:\n    - thane_delegate\n    - recall_fact\n"), 0600)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+
+	if len(cfg.Agent.Iter0Tools) != 2 {
+		t.Fatalf("iter0_tools length = %d, want 2; got %v", len(cfg.Agent.Iter0Tools), cfg.Agent.Iter0Tools)
+	}
+	if cfg.Agent.Iter0Tools[0] != "thane_delegate" || cfg.Agent.Iter0Tools[1] != "recall_fact" {
+		t.Errorf("iter0_tools = %v, want [thane_delegate recall_fact]", cfg.Agent.Iter0Tools)
+	}
+}
+
+func TestAgentConfig_NoDefaultsWhenDisabled(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	os.WriteFile(path, []byte("agent:\n  delegation_required: false\n"), 0600)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+
+	if len(cfg.Agent.Iter0Tools) != 0 {
+		t.Errorf("iter0_tools should be empty when delegation_required is false, got %v", cfg.Agent.Iter0Tools)
+	}
+}

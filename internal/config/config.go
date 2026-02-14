@@ -128,6 +128,10 @@ type Config struct {
 	// memory files and recent conversation history).
 	Episodic EpisodicConfig `yaml:"episodic"`
 
+	// Agent configures agent loop behavior, including iter-0 tool
+	// gating for delegation-first architecture.
+	Agent AgentConfig `yaml:"agent"`
+
 	// Timezone is the IANA timezone for the household (e.g.,
 	// "America/Chicago"). Used in the Current Conditions system prompt
 	// section so the agent reasons about local time. If empty, the
@@ -321,6 +325,22 @@ type EpisodicConfig struct {
 	SessionGapMinutes int `yaml:"session_gap_minutes"`
 }
 
+// AgentConfig configures agent loop behavior. When DelegationRequired
+// is true, the first iteration of the agent loop only advertises the
+// tools listed in Iter0Tools, steering the primary model toward
+// delegation instead of direct tool use. Subsequent iterations unlock
+// the full tool set as an escape hatch.
+type AgentConfig struct {
+	// Iter0Tools lists tool names to advertise on iteration 0 when
+	// DelegationRequired is true. If empty, a sensible default set
+	// is applied (thane_delegate plus lightweight memory tools).
+	Iter0Tools []string `yaml:"iter0_tools"`
+
+	// DelegationRequired enables iter-0 tool gating. When false
+	// (the default), all tools are available on every iteration.
+	DelegationRequired bool `yaml:"delegation_required"`
+}
+
 // WorkspaceConfig configures the agent's sandboxed file system access.
 // When Path is set, the agent can read and write files within that
 // directory. All paths passed to file tools are resolved relative to
@@ -449,6 +469,16 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Episodic.SessionGapMinutes == 0 {
 		c.Episodic.SessionGapMinutes = 30
+	}
+
+	if c.Agent.DelegationRequired && len(c.Agent.Iter0Tools) == 0 {
+		c.Agent.Iter0Tools = []string{
+			"thane_delegate",
+			"recall_fact",
+			"remember_fact",
+			"session_working_memory",
+			"archive_search",
+		}
 	}
 
 	for i := range c.Models.Available {

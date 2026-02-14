@@ -880,6 +880,15 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	})
 	logger.Info("delegation enabled", "profiles", delegateExec.ProfileNames())
 
+	// --- Iter-0 tool gating ---
+	// When delegation_required is true, the first LLM iteration only sees
+	// lightweight tools (delegate + memory), steering the primary model
+	// toward delegation instead of direct tool use.
+	if cfg.Agent.DelegationRequired {
+		loop.SetIter0Tools(cfg.Agent.Iter0Tools)
+		logger.Info("iter-0 tool gating enabled", "tools", cfg.Agent.Iter0Tools)
+	}
+
 	// --- Context providers ---
 	// Dynamic system prompt injection. Providers add context based on
 	// current state (e.g., pending anticipations) before each LLM call.
