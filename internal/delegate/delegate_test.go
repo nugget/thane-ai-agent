@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/llm"
 	"github.com/nugget/thane-ai-agent/internal/router"
@@ -562,14 +563,193 @@ func TestToolHandler_ExhaustedOutput(t *testing.T) {
 	if !strings.Contains(result, "more specific guidance") {
 		t.Errorf("result missing retry guidance, got: %s", result)
 	}
+	if !strings.Contains(result, "reason=max_iterations") {
+		t.Errorf("result missing exhaust reason, got: %s", result)
+	}
+	if !strings.Contains(result, "used all available iterations") {
+		t.Errorf("result missing reason-specific text for max_iterations, got: %s", result)
+	}
+}
+
+func TestExecute_WallClockExhausted(t *testing.T) {
+	// Slow mock: each LLM call sleeps briefly so wall clock exceeds a tiny MaxDuration.
+	slowMock := &slowLLMClient{
+		delay: 20 * time.Millisecond,
+		resp: &llm.ChatResponse{
+			Model: "test-model",
+			Message: llm.Message{
+				Role: "assistant",
+				ToolCalls: []llm.ToolCall{
+					{
+						ID: "call-slow",
+						Function: struct {
+							Name      string         `json:"name"`
+							Arguments map[string]any `json:"arguments"`
+						}{
+							Name:      "get_state",
+							Arguments: map[string]any{"entity_id": "light.test"},
+						},
+					},
+				},
+			},
+			InputTokens:  100,
+			OutputTokens: 20,
+		},
+		forcedTextResp: &llm.ChatResponse{
+			Model:        "test-model",
+			Message:      llm.Message{Role: "assistant", Content: "Ran out of time."},
+			InputTokens:  50,
+			OutputTokens: 10,
+		},
+	}
+
+	exec := NewExecutor(slog.Default(), slowMock, nil, newTestRegistry(), "test-model")
+	// Override the general profile with a tiny MaxDuration.
+	exec.profiles["general"].MaxDuration = 30 * time.Millisecond
+
+	result, err := exec.Execute(context.Background(), "Slow task", "general", "")
+
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if !result.Exhausted {
+		t.Error("Exhausted = false, want true")
+	}
+	if result.ExhaustReason != ExhaustWallClock {
+		t.Errorf("ExhaustReason = %q, want %q", result.ExhaustReason, ExhaustWallClock)
+	}
+}
+
+// slowLLMClient adds a delay to each call and returns tool calls until
+// tools=nil is passed (forced text response).
+type slowLLMClient struct {
+	delay          time.Duration
+	resp           *llm.ChatResponse
+	forcedTextResp *llm.ChatResponse
+	mu             sync.Mutex
+	calls          int
+}
+
+func (m *slowLLMClient) Chat(_ context.Context, model string, messages []llm.Message, toolDefs []map[string]any) (*llm.ChatResponse, error) {
+	return m.ChatStream(context.Background(), model, messages, toolDefs, nil)
+}
+
+func (m *slowLLMClient) ChatStream(_ context.Context, _ string, _ []llm.Message, toolDefs []map[string]any, _ llm.StreamCallback) (*llm.ChatResponse, error) {
+	m.mu.Lock()
+	m.calls++
+	m.mu.Unlock()
+
+	time.Sleep(m.delay)
+
+	// tools=nil means forced text response.
+	if toolDefs == nil {
+		return m.forcedTextResp, nil
+	}
+	return m.resp, nil
+}
+
+func (m *slowLLMClient) Ping(_ context.Context) error { return nil }
+
+func TestExecute_ExhaustReasonMaxIterations(t *testing.T) {
+	toolCallResp := &llm.ChatResponse{
+		Model: "test-model",
+		Message: llm.Message{
+			Role: "assistant",
+			ToolCalls: []llm.ToolCall{
+				{
+					ID: "call-loop",
+					Function: struct {
+						Name      string         `json:"name"`
+						Arguments map[string]any `json:"arguments"`
+					}{
+						Name:      "get_state",
+						Arguments: map[string]any{"entity_id": "light.test"},
+					},
+				},
+			},
+		},
+		InputTokens:  50,
+		OutputTokens: 20,
+	}
+
+	var responses []*llm.ChatResponse
+	for range defaultMaxIter {
+		responses = append(responses, toolCallResp)
+	}
+	responses = append(responses, &llm.ChatResponse{
+		Model:        "test-model",
+		Message:      llm.Message{Role: "assistant", Content: "Done."},
+		InputTokens:  100,
+		OutputTokens: 30,
+	})
+
+	mock := &mockLLMClient{responses: responses}
+	exec := NewExecutor(slog.Default(), mock, nil, newTestRegistry(), "test-model")
+	result, err := exec.Execute(context.Background(), "Loop task", "general", "")
+
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if !result.Exhausted {
+		t.Error("Exhausted = false, want true")
+	}
+	if result.ExhaustReason != ExhaustMaxIterations {
+		t.Errorf("ExhaustReason = %q, want %q", result.ExhaustReason, ExhaustMaxIterations)
+	}
+}
+
+func TestExecute_ExhaustReasonTokenBudget(t *testing.T) {
+	toolCallResp := &llm.ChatResponse{
+		Model: "test-model",
+		Message: llm.Message{
+			Role: "assistant",
+			ToolCalls: []llm.ToolCall{
+				{
+					ID: "call-1",
+					Function: struct {
+						Name      string         `json:"name"`
+						Arguments map[string]any `json:"arguments"`
+					}{
+						Name:      "get_state",
+						Arguments: map[string]any{"entity_id": "light.test"},
+					},
+				},
+			},
+		},
+		InputTokens:  100,
+		OutputTokens: 60000, // Exceeds default 25K budget
+	}
+
+	forcedText := &llm.ChatResponse{
+		Model:        "test-model",
+		Message:      llm.Message{Role: "assistant", Content: "Budget blown."},
+		InputTokens:  200,
+		OutputTokens: 30,
+	}
+
+	mock := &mockLLMClient{responses: []*llm.ChatResponse{toolCallResp, forcedText}}
+	exec := NewExecutor(slog.Default(), mock, nil, newTestRegistry(), "test-model")
+	result, err := exec.Execute(context.Background(), "Expensive task", "general", "")
+
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if !result.Exhausted {
+		t.Error("Exhausted = false, want true")
+	}
+	if result.ExhaustReason != ExhaustTokenBudget {
+		t.Errorf("ExhaustReason = %q, want %q", result.ExhaustReason, ExhaustTokenBudget)
+	}
 }
 
 func TestDefaultBudgets(t *testing.T) {
-	// Verify the reduced budgets are in effect.
-	if defaultMaxIter != 8 {
-		t.Errorf("defaultMaxIter = %d, want 8", defaultMaxIter)
+	if defaultMaxIter != 15 {
+		t.Errorf("defaultMaxIter = %d, want 15", defaultMaxIter)
 	}
 	if defaultMaxTokens != 25000 {
 		t.Errorf("defaultMaxTokens = %d, want 25000", defaultMaxTokens)
+	}
+	if defaultMaxDuration != 90*time.Second {
+		t.Errorf("defaultMaxDuration = %v, want 90s", defaultMaxDuration)
 	}
 }

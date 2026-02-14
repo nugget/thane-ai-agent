@@ -19,14 +19,22 @@ import (
 // delegateToolName is the tool name excluded from delegate registries to prevent recursion.
 const delegateToolName = "thane_delegate"
 
+// Exhaustion reason constants.
+const (
+	ExhaustMaxIterations = "max_iterations"
+	ExhaustTokenBudget   = "token_budget"
+	ExhaustWallClock     = "wall_clock"
+)
+
 // Result is the outcome of a delegated task execution.
 type Result struct {
-	Content      string `json:"content"`
-	Model        string `json:"model"`
-	Iterations   int    `json:"iterations"`
-	InputTokens  int    `json:"input_tokens"`
-	OutputTokens int    `json:"output_tokens"`
-	Exhausted    bool   `json:"exhausted"`
+	Content       string `json:"content"`
+	Model         string `json:"model"`
+	Iterations    int    `json:"iterations"`
+	InputTokens   int    `json:"input_tokens"`
+	OutputTokens  int    `json:"output_tokens"`
+	Exhausted     bool   `json:"exhausted"`
+	ExhaustReason string `json:"exhaust_reason,omitempty"`
 }
 
 // Executor runs delegated tasks using a lightweight iteration loop.
@@ -140,11 +148,41 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 	if maxTokens <= 0 {
 		maxTokens = defaultMaxTokens
 	}
+	maxDuration := profile.MaxDuration
+	if maxDuration <= 0 {
+		maxDuration = defaultMaxDuration
+	}
 
 	for i := range maxIter {
 		// Check context cancellation at iteration boundary.
 		if err := ctx.Err(); err != nil {
 			return nil, fmt.Errorf("delegate cancelled: %w", err)
+		}
+
+		// Check wall clock limit.
+		if time.Since(startTime) > maxDuration {
+			e.logger.Warn("delegate wall clock exceeded",
+				"delegate_id", did,
+				"profile", profile.Name,
+				"elapsed", time.Since(startTime).Round(time.Millisecond),
+				"max_duration", maxDuration,
+			)
+			return e.forceTextResponse(ctx, model, messages, &completionRecord{
+				delegateID:     did,
+				conversationID: tools.ConversationIDFromContext(ctx),
+				task:           task,
+				guidance:       guidance,
+				profileName:    profile.Name,
+				model:          model,
+				totalIter:      i,
+				maxIter:        maxIter,
+				totalInput:     totalInput,
+				totalOutput:    totalOutput,
+				exhausted:      true,
+				exhaustReason:  ExhaustWallClock,
+				startTime:      startTime,
+				messages:       messages,
+			})
 		}
 
 		iterStart := time.Now()
@@ -164,6 +202,33 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 
 		totalInput += resp.InputTokens
 		totalOutput += resp.OutputTokens
+
+		// Re-check wall clock after LLM call — it may have taken a while.
+		if time.Since(startTime) > maxDuration {
+			e.logger.Warn("delegate wall clock exceeded after llm call",
+				"delegate_id", did,
+				"profile", profile.Name,
+				"elapsed", time.Since(startTime).Round(time.Millisecond),
+				"max_duration", maxDuration,
+			)
+			messages = append(messages, resp.Message)
+			return e.forceTextResponse(ctx, model, messages, &completionRecord{
+				delegateID:     did,
+				conversationID: tools.ConversationIDFromContext(ctx),
+				task:           task,
+				guidance:       guidance,
+				profileName:    profile.Name,
+				model:          model,
+				totalIter:      i + 1,
+				maxIter:        maxIter,
+				totalInput:     totalInput,
+				totalOutput:    totalOutput,
+				exhausted:      true,
+				exhaustReason:  ExhaustWallClock,
+				startTime:      startTime,
+				messages:       messages,
+			})
+		}
 
 		e.logger.Info("delegate llm response",
 			"delegate_id", did,
@@ -225,6 +290,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 				totalInput:     totalInput,
 				totalOutput:    totalOutput,
 				exhausted:      true,
+				exhaustReason:  ExhaustTokenBudget,
 				startTime:      startTime,
 				messages:       messages,
 			})
@@ -274,6 +340,32 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 				ToolCallID: tc.ID,
 			})
 		}
+
+		// Re-check wall clock after tool execution.
+		if time.Since(startTime) > maxDuration {
+			e.logger.Warn("delegate wall clock exceeded after tool exec",
+				"delegate_id", did,
+				"profile", profile.Name,
+				"elapsed", time.Since(startTime).Round(time.Millisecond),
+				"max_duration", maxDuration,
+			)
+			return e.forceTextResponse(ctx, model, messages, &completionRecord{
+				delegateID:     did,
+				conversationID: tools.ConversationIDFromContext(ctx),
+				task:           task,
+				guidance:       guidance,
+				profileName:    profile.Name,
+				model:          model,
+				totalIter:      i + 1,
+				maxIter:        maxIter,
+				totalInput:     totalInput,
+				totalOutput:    totalOutput,
+				exhausted:      true,
+				exhaustReason:  ExhaustWallClock,
+				startTime:      startTime,
+				messages:       messages,
+			})
+		}
 	}
 
 	// Max iterations exhausted — force a text response.
@@ -294,6 +386,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 		totalInput:     totalInput,
 		totalOutput:    totalOutput,
 		exhausted:      true,
+		exhaustReason:  ExhaustMaxIterations,
 		startTime:      startTime,
 		messages:       messages,
 	})
@@ -307,12 +400,13 @@ func (e *Executor) forceTextResponse(ctx context.Context, model string, messages
 		rec.errMsg = err.Error()
 		e.recordCompletion(rec)
 		return &Result{
-			Content:      rec.resultContent,
-			Model:        model,
-			Iterations:   rec.totalIter,
-			InputTokens:  rec.totalInput,
-			OutputTokens: rec.totalOutput,
-			Exhausted:    true,
+			Content:       rec.resultContent,
+			Model:         model,
+			Iterations:    rec.totalIter,
+			InputTokens:   rec.totalInput,
+			OutputTokens:  rec.totalOutput,
+			Exhausted:     true,
+			ExhaustReason: rec.exhaustReason,
 		}, nil
 	}
 
@@ -323,12 +417,13 @@ func (e *Executor) forceTextResponse(ctx context.Context, model string, messages
 	e.recordCompletion(rec)
 
 	return &Result{
-		Content:      resp.Message.Content,
-		Model:        model,
-		Iterations:   rec.totalIter,
-		InputTokens:  rec.totalInput,
-		OutputTokens: rec.totalOutput,
-		Exhausted:    true,
+		Content:       resp.Message.Content,
+		Model:         model,
+		Iterations:    rec.totalIter,
+		InputTokens:   rec.totalInput,
+		OutputTokens:  rec.totalOutput,
+		Exhausted:     true,
+		ExhaustReason: rec.exhaustReason,
 	}, nil
 }
 
@@ -373,6 +468,7 @@ type completionRecord struct {
 	totalInput     int
 	totalOutput    int
 	exhausted      bool
+	exhaustReason  string
 	startTime      time.Time
 	messages       []llm.Message
 	resultContent  string
@@ -392,6 +488,7 @@ func (e *Executor) recordCompletion(rec *completionRecord) {
 		"input_tokens", rec.totalInput,
 		"output_tokens", rec.totalOutput,
 		"exhausted", rec.exhausted,
+		"exhaust_reason", rec.exhaustReason,
 		"elapsed", elapsed.Round(time.Millisecond),
 	)
 
@@ -411,6 +508,7 @@ func (e *Executor) recordCompletion(rec *completionRecord) {
 		InputTokens:    rec.totalInput,
 		OutputTokens:   rec.totalOutput,
 		Exhausted:      rec.exhausted,
+		ExhaustReason:  rec.exhaustReason,
 		ToolsCalled:    ExtractToolsCalled(rec.messages),
 		Messages:       rec.messages,
 		ResultContent:  rec.resultContent,
