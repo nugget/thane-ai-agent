@@ -7,8 +7,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/nugget/thane-ai-agent/examples"
-	defaulttalents "github.com/nugget/thane-ai-agent/talents"
+	"github.com/nugget/thane-ai-agent/internal/defaults"
+	"github.com/nugget/thane-ai-agent/internal/talents"
 )
 
 // runInit initializes a Thane working directory with default files.
@@ -27,20 +27,20 @@ func runInit(w io.Writer, dir string) error {
 
 	// Write config example if no config exists.
 	configPath := filepath.Join(dir, "config.yaml")
-	if err := writeIfMissing(configPath, examples.ConfigYAML); err != nil {
+	if err := writeIfMissing(configPath, defaults.ConfigYAML); err != nil {
 		return err
 	}
 	fmt.Fprintf(w, "  ✓ %s\n", configPath)
 
 	// Write persona example if no persona exists.
 	personaPath := filepath.Join(dir, "persona.md")
-	if err := writeIfMissing(personaPath, examples.PersonaMD); err != nil {
+	if err := writeIfMissing(personaPath, defaults.PersonaMD); err != nil {
 		return err
 	}
 	fmt.Fprintf(w, "  ✓ %s\n", personaPath)
 
 	// Copy bundled talent files.
-	err := fs.WalkDir(defaulttalents.FS, ".", func(path string, d fs.DirEntry, err error) error {
+	err := fs.WalkDir(talents.DefaultFiles, "defaults", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -48,9 +48,9 @@ func runInit(w io.Writer, dir string) error {
 			return nil
 		}
 
-		destPath := filepath.Join(dir, "talents", path)
+		destPath := filepath.Join(dir, "talents", d.Name())
 
-		content, err := defaulttalents.FS.ReadFile(path)
+		content, err := talents.DefaultFiles.ReadFile(path)
 		if err != nil {
 			return fmt.Errorf("read embedded %s: %w", path, err)
 		}

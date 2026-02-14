@@ -18,9 +18,14 @@ default:
 
 # --- Build ---
 
+# Copy embedded defaults from repo-root data directories
+[group('build')]
+generate:
+    go generate ./internal/talents/ ./internal/defaults/
+
 # Build a binary into dist/ (defaults to current platform, or specify OS/ARCH)
 [group('build')]
-build target_os=host_os target_arch=host_arch:
+build target_os=host_os target_arch=host_arch: generate
     @mkdir -p dist
     GOOS={{target_os}} GOARCH={{target_arch}} go build -tags "sqlite_fts5" -ldflags "{{ldflags}}" -o dist/thane-{{target_os}}-{{target_arch}} ./cmd/thane
     @# Ad-hoc sign macOS binaries so Gatekeeper doesn't kill them on each rebuild
