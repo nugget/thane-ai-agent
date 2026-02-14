@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -321,5 +322,427 @@ func TestFileTools_OverwriteExisting(t *testing.T) {
 	}
 	if content != "new content" {
 		t.Errorf("Expected 'new content', got %q", content)
+	}
+}
+
+// setupSearchWorkspace creates a temp workspace with a file tree for search/grep/tree tests.
+// Layout:
+//
+//	workspace/
+//	  config.yaml
+//	  readme.md
+//	  src/
+//	    main.go        (contains "func main()")
+//	    util.go        (contains "TODO: refactor")
+//	    data/
+//	      data.json
+//	      binary.dat   (contains null bytes)
+func setupSearchWorkspace(t *testing.T) (string, *FileTools) {
+	t.Helper()
+	workspace, err := os.MkdirTemp("", "thane-file-test-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dirs := []string{
+		filepath.Join(workspace, "src"),
+		filepath.Join(workspace, "src", "data"),
+	}
+	for _, d := range dirs {
+		if err := os.MkdirAll(d, 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	files := map[string][]byte{
+		"config.yaml":         []byte("server:\n  port: 8080\n"),
+		"readme.md":           []byte("# Project\nThis is a readme.\n"),
+		"src/main.go":         []byte("package main\n\nfunc main() {\n\tprintln(\"hello\")\n}\n"),
+		"src/util.go":         []byte("package main\n\n// TODO: refactor this\nfunc helper() {}\n"),
+		"src/data/data.json":  []byte(`{"key": "value"}`),
+		"src/data/binary.dat": append([]byte("header"), 0, 0, 0),
+	}
+	for name, content := range files {
+		if err := os.WriteFile(filepath.Join(workspace, name), content, 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	return workspace, NewFileTools(workspace, nil)
+}
+
+func TestFileTools_Search(t *testing.T) {
+	workspace, ft := setupSearchWorkspace(t)
+	defer os.RemoveAll(workspace)
+	ctx := context.Background()
+
+	tests := []struct {
+		name      string
+		dir       string
+		pattern   string
+		maxDepth  int
+		wantCount int
+		wantMatch string // substring expected in output
+		wantErr   bool
+	}{
+		{
+			name:      "find yaml files",
+			dir:       ".",
+			pattern:   "*.yaml",
+			wantCount: 1,
+			wantMatch: "config.yaml",
+		},
+		{
+			name:      "find go files",
+			dir:       "src",
+			pattern:   "*.go",
+			wantCount: 2,
+			wantMatch: "main.go",
+		},
+		{
+			name:      "find all json",
+			dir:       ".",
+			pattern:   "*.json",
+			wantCount: 1,
+			wantMatch: "data.json",
+		},
+		{
+			name:      "no matches",
+			dir:       ".",
+			pattern:   "*.rs",
+			wantCount: 0,
+			wantMatch: "No files matching",
+		},
+		{
+			name:      "depth limited",
+			dir:       ".",
+			pattern:   "*.json",
+			maxDepth:  1,
+			wantCount: 0,
+			wantMatch: "No files matching",
+		},
+		{
+			name:    "invalid pattern",
+			dir:     ".",
+			pattern: "[invalid",
+			wantErr: true,
+		},
+		{
+			name:    "path escape",
+			dir:     "../outside",
+			pattern: "*",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := ft.Search(ctx, tt.dir, tt.pattern, tt.maxDepth)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("Search() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.wantErr {
+				return
+			}
+			if !strings.Contains(result, tt.wantMatch) {
+				t.Errorf("Search() result missing %q:\n%s", tt.wantMatch, result)
+			}
+			if tt.wantCount > 0 {
+				lines := strings.Split(strings.TrimSpace(result), "\n")
+				if len(lines) < tt.wantCount {
+					t.Errorf("Search() got %d results, want at least %d", len(lines), tt.wantCount)
+				}
+			}
+		})
+	}
+}
+
+func TestFileTools_Grep(t *testing.T) {
+	workspace, ft := setupSearchWorkspace(t)
+	defer os.RemoveAll(workspace)
+	ctx := context.Background()
+
+	tests := []struct {
+		name            string
+		dir             string
+		pattern         string
+		maxDepth        int
+		caseInsensitive bool
+		wantMatch       string
+		wantNoMatch     string
+		wantErr         bool
+	}{
+		{
+			name:      "find TODO comments",
+			dir:       ".",
+			pattern:   "TODO",
+			wantMatch: "util.go:3:// TODO: refactor this",
+		},
+		{
+			name:      "find func declarations",
+			dir:       "src",
+			pattern:   "^func ",
+			wantMatch: "main.go",
+		},
+		{
+			name:            "case insensitive",
+			dir:             ".",
+			pattern:         "project",
+			caseInsensitive: true,
+			wantMatch:       "readme.md",
+		},
+		{
+			name:        "case sensitive no match",
+			dir:         ".",
+			pattern:     "project",
+			wantNoMatch: "readme.md",
+			wantMatch:   "No matches",
+		},
+		{
+			name:        "skips binary files",
+			dir:         ".",
+			pattern:     "header",
+			wantNoMatch: "binary.dat",
+		},
+		{
+			name:      "no matches at all",
+			dir:       ".",
+			pattern:   "ZZZZNOTFOUND",
+			wantMatch: "No matches",
+		},
+		{
+			name:    "invalid regex",
+			dir:     ".",
+			pattern: "[invalid",
+			wantErr: true,
+		},
+		{
+			name:    "path escape",
+			dir:     "../outside",
+			pattern: "test",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := ft.Grep(ctx, tt.dir, tt.pattern, tt.maxDepth, tt.caseInsensitive)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("Grep() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.wantErr {
+				return
+			}
+			if tt.wantMatch != "" && !strings.Contains(result, tt.wantMatch) {
+				t.Errorf("Grep() result missing %q:\n%s", tt.wantMatch, result)
+			}
+			if tt.wantNoMatch != "" && strings.Contains(result, tt.wantNoMatch) {
+				t.Errorf("Grep() result should not contain %q:\n%s", tt.wantNoMatch, result)
+			}
+		})
+	}
+}
+
+func TestFileTools_Stat(t *testing.T) {
+	workspace, ft := setupSearchWorkspace(t)
+	defer os.RemoveAll(workspace)
+	ctx := context.Background()
+
+	tests := []struct {
+		name      string
+		paths     string
+		wantMatch string
+		wantErr   bool
+	}{
+		{
+			name:      "single file",
+			paths:     "config.yaml",
+			wantMatch: "type=file",
+		},
+		{
+			name:      "directory",
+			paths:     "src",
+			wantMatch: "type=directory",
+		},
+		{
+			name:      "multiple paths",
+			paths:     "config.yaml, src, readme.md",
+			wantMatch: "type=directory",
+		},
+		{
+			name:      "non-existent",
+			paths:     "does-not-exist.txt",
+			wantMatch: "not found",
+		},
+		{
+			name:    "path escape",
+			paths:   "../outside",
+			wantErr: false, // Stat reports errors inline, not as error return
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := ft.Stat(ctx, tt.paths)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("Stat() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.wantErr {
+				return
+			}
+			if !strings.Contains(result, tt.wantMatch) {
+				t.Errorf("Stat() result missing %q:\n%s", tt.wantMatch, result)
+			}
+		})
+	}
+
+	// Verify batch returns one line per path
+	t.Run("batch line count", func(t *testing.T) {
+		result, err := ft.Stat(ctx, "config.yaml, src, readme.md")
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines := strings.Split(strings.TrimSpace(result), "\n")
+		if len(lines) != 3 {
+			t.Errorf("Stat() batch returned %d lines, want 3:\n%s", len(lines), result)
+		}
+	})
+}
+
+func TestFileTools_Tree(t *testing.T) {
+	workspace, ft := setupSearchWorkspace(t)
+	defer os.RemoveAll(workspace)
+	ctx := context.Background()
+
+	tests := []struct {
+		name      string
+		dir       string
+		maxDepth  int
+		wantMatch string
+		wantErr   bool
+	}{
+		{
+			name:      "default depth",
+			dir:       ".",
+			wantMatch: "directories",
+		},
+		{
+			name:      "includes files",
+			dir:       ".",
+			wantMatch: "config.yaml",
+		},
+		{
+			name:      "includes tree connectors",
+			dir:       ".",
+			wantMatch: "├──",
+		},
+		{
+			name:      "subdirectory",
+			dir:       "src",
+			wantMatch: "main.go",
+		},
+		{
+			name:     "depth 1 excludes nested",
+			dir:      ".",
+			maxDepth: 1,
+		},
+		{
+			name:    "path escape",
+			dir:     "../outside",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := ft.Tree(ctx, tt.dir, tt.maxDepth)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("Tree() error = %v, wantErr %v", err, tt.wantErr)
+			}
+			if tt.wantErr {
+				return
+			}
+			if tt.wantMatch != "" && !strings.Contains(result, tt.wantMatch) {
+				t.Errorf("Tree() result missing %q:\n%s", tt.wantMatch, result)
+			}
+		})
+	}
+
+	// Verify depth limiting excludes deeply nested files
+	t.Run("depth limiting", func(t *testing.T) {
+		result, err := ft.Tree(ctx, ".", 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// At depth 1, we should see src/ but not main.go inside it
+		if !strings.Contains(result, "src/") {
+			t.Errorf("Tree(depth=1) should contain src/:\n%s", result)
+		}
+		if strings.Contains(result, "main.go") {
+			t.Errorf("Tree(depth=1) should not contain main.go:\n%s", result)
+		}
+	})
+
+	// Verify summary line format
+	t.Run("summary counts", func(t *testing.T) {
+		result, err := ft.Tree(ctx, ".", 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Should have "X directories, Y files" at the end
+		if !strings.Contains(result, "2 directories") {
+			t.Errorf("Tree() summary should show 2 directories:\n%s", result)
+		}
+		if !strings.Contains(result, "6 files") {
+			t.Errorf("Tree() summary should show 6 files:\n%s", result)
+		}
+	})
+}
+
+func TestFileTools_SearchDisabled(t *testing.T) {
+	ft := NewFileTools("", nil)
+	ctx := context.Background()
+
+	_, err := ft.Search(ctx, ".", "*.go", 0)
+	if err == nil {
+		t.Error("Search should fail when disabled")
+	}
+
+	_, err = ft.Grep(ctx, ".", "test", 0, false)
+	if err == nil {
+		t.Error("Grep should fail when disabled")
+	}
+
+	_, err = ft.Stat(ctx, "test.txt")
+	if err == nil {
+		t.Error("Stat should fail when disabled")
+	}
+
+	_, err = ft.Tree(ctx, ".", 0)
+	if err == nil {
+		t.Error("Tree should fail when disabled")
+	}
+}
+
+func TestHumanSize(t *testing.T) {
+	tests := []struct {
+		bytes int64
+		want  string
+	}{
+		{0, "0 B"},
+		{100, "100 B"},
+		{1023, "1023 B"},
+		{1024, "1.0 KB"},
+		{1536, "1.5 KB"},
+		{1048576, "1.0 MB"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.want, func(t *testing.T) {
+			got := humanSize(tt.bytes)
+			if got != tt.want {
+				t.Errorf("humanSize(%d) = %q, want %q", tt.bytes, got, tt.want)
+			}
+		})
 	}
 }

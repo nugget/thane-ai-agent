@@ -2,12 +2,22 @@
 package tools
 
 import (
+	"bufio"
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"time"
 )
+
+// errResultLimit is a sentinel returned from WalkDir callbacks to stop
+// traversal when the result cap is reached.
+var errResultLimit = errors.New("result limit reached")
 
 // FileTools provides file read/write/edit capabilities within a workspace.
 type FileTools struct {
@@ -237,4 +247,350 @@ func (ft *FileTools) List(ctx context.Context, path string) ([]string, error) {
 	}
 
 	return result, nil
+}
+
+// Search finds files matching a glob pattern within a directory tree.
+// Results are returned as workspace-relative paths, one per line.
+func (ft *FileTools) Search(ctx context.Context, dir, pattern string, maxDepth int) (string, error) {
+	absDir, _, err := ft.resolvePath(dir)
+	if err != nil {
+		return "", err
+	}
+
+	if _, err := filepath.Match(pattern, "test"); err != nil {
+		return "", fmt.Errorf("invalid glob pattern: %w", err)
+	}
+
+	if maxDepth <= 0 {
+		maxDepth = 10
+	}
+	if maxDepth > 20 {
+		maxDepth = 20
+	}
+
+	workspaceAbs, err := filepath.Abs(ft.workspacePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve workspace: %w", err)
+	}
+
+	const maxResults = 500
+	var matches []string
+
+	err = filepath.WalkDir(absDir, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return nil // skip inaccessible entries
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
+		// Enforce depth limit relative to the search root
+		rel, _ := filepath.Rel(absDir, path)
+		depth := strings.Count(rel, string(filepath.Separator))
+		if d.IsDir() && depth >= maxDepth {
+			return fs.SkipDir
+		}
+
+		// Only match files, not directories
+		if d.IsDir() {
+			return nil
+		}
+
+		matched, _ := filepath.Match(pattern, d.Name())
+		if matched {
+			displayPath := path
+			if r, err := filepath.Rel(workspaceAbs, path); err == nil {
+				displayPath = r
+			}
+			matches = append(matches, displayPath)
+			if len(matches) >= maxResults {
+				return errResultLimit
+			}
+		}
+		return nil
+	})
+
+	// Swallow the sentinel error from result limiting
+	if err != nil && !errors.Is(err, errResultLimit) && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+		return "", fmt.Errorf("search failed: %w", err)
+	}
+
+	if len(matches) == 0 {
+		return "No files matching pattern: " + pattern, nil
+	}
+
+	result := strings.Join(matches, "\n")
+	if len(matches) >= maxResults {
+		result += fmt.Sprintf("\n\n[... truncated at %d results ...]", maxResults)
+	}
+	return result, nil
+}
+
+// Grep searches file contents for a regular expression pattern.
+// Results are formatted as path:line_number:matching_line.
+func (ft *FileTools) Grep(ctx context.Context, dir, pattern string, maxDepth int, caseInsensitive bool) (string, error) {
+	absDir, _, err := ft.resolvePath(dir)
+	if err != nil {
+		return "", err
+	}
+
+	regexPattern := pattern
+	if caseInsensitive {
+		regexPattern = "(?i)" + pattern
+	}
+	re, err := regexp.Compile(regexPattern)
+	if err != nil {
+		return "", fmt.Errorf("invalid regex pattern: %w", err)
+	}
+
+	if maxDepth <= 0 {
+		maxDepth = 10
+	}
+	if maxDepth > 20 {
+		maxDepth = 20
+	}
+
+	workspaceAbs, err := filepath.Abs(ft.workspacePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve workspace: %w", err)
+	}
+
+	const (
+		maxMatches  = 100
+		maxFileSize = 1 << 20 // 1MB
+	)
+
+	var results []string
+	matchCount := 0
+
+	err = filepath.WalkDir(absDir, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return nil
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
+		rel, _ := filepath.Rel(absDir, path)
+		depth := strings.Count(rel, string(filepath.Separator))
+		if d.IsDir() && depth >= maxDepth {
+			return fs.SkipDir
+		}
+
+		if d.IsDir() || !d.Type().IsRegular() {
+			return nil
+		}
+
+		// Skip large files
+		info, err := d.Info()
+		if err != nil || info.Size() > maxFileSize {
+			return nil
+		}
+
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil
+		}
+
+		// Skip binary files (check first 512 bytes for null bytes)
+		probe := data
+		if len(probe) > 512 {
+			probe = probe[:512]
+		}
+		if bytes.ContainsRune(probe, 0) {
+			return nil
+		}
+
+		displayPath := path
+		if r, err := filepath.Rel(workspaceAbs, path); err == nil {
+			displayPath = r
+		}
+
+		scanner := bufio.NewScanner(bytes.NewReader(data))
+		// Increase buffer to handle long lines up to the file-size cap.
+		scanner.Buffer(make([]byte, 0, 64*1024), maxFileSize)
+		lineNum := 0
+		for scanner.Scan() {
+			lineNum++
+			line := scanner.Text()
+			if re.MatchString(line) {
+				// Truncate very long matching lines
+				if len(line) > 200 {
+					line = line[:200] + "..."
+				}
+				results = append(results, fmt.Sprintf("%s:%d:%s", displayPath, lineNum, line))
+				matchCount++
+				if matchCount >= maxMatches {
+					return errResultLimit
+				}
+			}
+		}
+		// scanner.Err() is non-nil if scanning stopped due to an error
+		// other than EOF (e.g., token too long). Safe to ignore here
+		// since we sized the buffer to the file-size cap.
+
+		return nil
+	})
+
+	if err != nil && !errors.Is(err, errResultLimit) && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+		return "", fmt.Errorf("grep failed: %w", err)
+	}
+
+	if len(results) == 0 {
+		return "No matches for pattern: " + pattern, nil
+	}
+
+	result := strings.Join(results, "\n")
+	if matchCount >= maxMatches {
+		result += fmt.Sprintf("\n\n[... truncated at %d matches ...]", maxMatches)
+	}
+	return result, nil
+}
+
+// Stat returns detailed information about one or more files or directories.
+// Paths should be comma-separated. Each path is resolved through the workspace sandbox.
+func (ft *FileTools) Stat(ctx context.Context, paths string) (string, error) {
+	if ft.workspacePath == "" {
+		return "", fmt.Errorf("workspace not configured")
+	}
+
+	pathList := strings.Split(paths, ",")
+
+	var results []string
+	for _, p := range pathList {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+
+		absPath, _, err := ft.resolvePath(p)
+		if err != nil {
+			results = append(results, fmt.Sprintf("%s: %s", p, err))
+			continue
+		}
+
+		info, err := os.Lstat(absPath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				results = append(results, fmt.Sprintf("%s: not found", p))
+			} else {
+				results = append(results, fmt.Sprintf("%s: %s", p, err))
+			}
+			continue
+		}
+
+		kind := "file"
+		if info.IsDir() {
+			kind = "directory"
+		} else if info.Mode()&os.ModeSymlink != 0 {
+			kind = "symlink"
+		}
+
+		results = append(results, fmt.Sprintf(
+			"%s: type=%s size=%s permissions=%s modified=%s",
+			p, kind, humanSize(info.Size()), info.Mode().Perm(), info.ModTime().Format(time.RFC3339),
+		))
+	}
+
+	return strings.Join(results, "\n"), nil
+}
+
+// Tree renders a directory tree with indentation.
+// The output includes a summary of total directories and files.
+func (ft *FileTools) Tree(ctx context.Context, dir string, maxDepth int) (string, error) {
+	absDir, _, err := ft.resolvePath(dir)
+	if err != nil {
+		return "", err
+	}
+
+	if maxDepth <= 0 {
+		maxDepth = 3
+	}
+	if maxDepth > 10 {
+		maxDepth = 10
+	}
+
+	var buf strings.Builder
+	dirCount := 0
+	fileCount := 0
+
+	// Write root directory name
+	displayRoot := dir
+	if dir == "" || dir == "." {
+		displayRoot = filepath.Base(absDir)
+	}
+	buf.WriteString(displayRoot + "/\n")
+
+	err = ft.renderTree(&buf, absDir, "", maxDepth, 0, &dirCount, &fileCount, ctx)
+	if err != nil && err != context.Canceled {
+		return "", fmt.Errorf("tree failed: %w", err)
+	}
+
+	buf.WriteString(fmt.Sprintf("\n%d directories, %d files", dirCount, fileCount))
+
+	result := buf.String()
+	const maxBytes = 50 * 1024
+	if len(result) > maxBytes {
+		result = result[:maxBytes] + "\n\n[... truncated ...]"
+	}
+
+	return result, nil
+}
+
+// renderTree recursively renders directory entries with tree-style indentation.
+func (ft *FileTools) renderTree(buf *strings.Builder, dir, prefix string, maxDepth, currentDepth int, dirCount, fileCount *int, ctx context.Context) error {
+	if currentDepth >= maxDepth {
+		return nil
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil // skip unreadable directories
+	}
+
+	for i, entry := range entries {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
+		isLast := i == len(entries)-1
+		connector := "├── "
+		childPrefix := "│   "
+		if isLast {
+			connector = "└── "
+			childPrefix = "    "
+		}
+
+		name := entry.Name()
+		if entry.IsDir() {
+			name += "/"
+			*dirCount++
+			buf.WriteString(prefix + connector + name + "\n")
+			err := ft.renderTree(buf, filepath.Join(dir, entry.Name()), prefix+childPrefix, maxDepth, currentDepth+1, dirCount, fileCount, ctx)
+			if err != nil {
+				return err
+			}
+		} else {
+			*fileCount++
+			buf.WriteString(prefix + connector + name + "\n")
+		}
+	}
+	return nil
+}
+
+// humanSize formats a byte count into a human-readable string.
+func humanSize(b int64) string {
+	const unit = 1024
+	if b < unit {
+		return fmt.Sprintf("%d B", b)
+	}
+	div, exp := int64(unit), 0
+	for n := b / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), "KMGTPE"[exp])
 }
