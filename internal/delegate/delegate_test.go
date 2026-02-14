@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/nugget/thane-ai-agent/internal/llm"
+	"github.com/nugget/thane-ai-agent/internal/router"
 	"github.com/nugget/thane-ai-agent/internal/tools"
 )
 
@@ -423,5 +424,85 @@ func TestToolHandler_DefaultProfile(t *testing.T) {
 	}
 	if !strings.Contains(result, "profile=general") {
 		t.Errorf("result = %q, want to contain 'profile=general'", result)
+	}
+}
+
+func TestBuiltinProfiles_GeneralForcesLocalOnly(t *testing.T) {
+	profiles := builtinProfiles()
+	general, ok := profiles["general"]
+	if !ok {
+		t.Fatal("missing 'general' profile")
+	}
+
+	if general.RouterHints == nil {
+		t.Fatal("general profile RouterHints is nil, want HintLocalOnly=true")
+	}
+	if general.RouterHints[router.HintLocalOnly] != "true" {
+		t.Errorf("general profile HintLocalOnly = %q, want %q",
+			general.RouterHints[router.HintLocalOnly], "true")
+	}
+}
+
+func TestBuiltinProfiles_HAForcesLocalOnly(t *testing.T) {
+	profiles := builtinProfiles()
+	ha, ok := profiles["ha"]
+	if !ok {
+		t.Fatal("missing 'ha' profile")
+	}
+
+	if ha.RouterHints[router.HintLocalOnly] != "true" {
+		t.Errorf("ha profile HintLocalOnly = %q, want %q",
+			ha.RouterHints[router.HintLocalOnly], "true")
+	}
+	if ha.RouterHints[router.HintMission] != "device_control" {
+		t.Errorf("ha profile HintMission = %q, want %q",
+			ha.RouterHints[router.HintMission], "device_control")
+	}
+}
+
+func TestExecute_GeneralProfileSelectsLocalModel(t *testing.T) {
+	// Create a router with a cheap local model and an expensive cloud model.
+	rtr := router.NewRouter(slog.Default(), router.Config{
+		DefaultModel: "local-model",
+		LocalFirst:   true,
+		Models: []router.Model{
+			{Name: "local-model", Provider: "ollama", SupportsTools: true, Speed: 8, Quality: 5, CostTier: 0},
+			{Name: "cloud-model", Provider: "anthropic", SupportsTools: true, Speed: 6, Quality: 10, CostTier: 3},
+		},
+		MaxAuditLog: 10,
+	})
+
+	mock := &mockLLMClient{
+		responses: []*llm.ChatResponse{
+			{
+				Model:        "local-model",
+				Message:      llm.Message{Role: "assistant", Content: "Found the archives."},
+				InputTokens:  100,
+				OutputTokens: 20,
+			},
+		},
+	}
+
+	exec := NewExecutor(slog.Default(), mock, rtr, newTestRegistry(), "local-model")
+	result, err := exec.Execute(context.Background(), "search IRC archives for distributed.net history", "general", "")
+
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if result.Model == "cloud-model" {
+		t.Errorf("Model = %q, want local model (general profile should force local-only)", result.Model)
+	}
+	if result.Model != "local-model" {
+		t.Errorf("Model = %q, want %q", result.Model, "local-model")
+	}
+}
+
+func TestDefaultBudgets(t *testing.T) {
+	// Verify the reduced budgets are in effect.
+	if defaultMaxIter != 5 {
+		t.Errorf("defaultMaxIter = %d, want 5", defaultMaxIter)
+	}
+	if defaultMaxTokens != 25000 {
+		t.Errorf("defaultMaxTokens = %d, want 25000", defaultMaxTokens)
 	}
 }
