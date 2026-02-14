@@ -535,10 +535,11 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	maxIterations := 50 // Tool call budget; final text response always gets one extra call
 iterLoop:
 	for i := 0; i < maxIterations; i++ {
-		// Select tool definitions for this iteration. On iter-0 with gating
-		// enabled, only advertise the restricted set to steer toward delegation.
+		// Select tool definitions for this iteration. With gating active,
+		// only advertise the restricted set to keep the primary model in
+		// orchestrator mode across all iterations.
 		var toolDefs []map[string]any
-		if i == 0 && iter0Active {
+		if iter0Active {
 			toolDefs = l.tools.FilteredCopy(l.iter0Tools).List()
 		} else {
 			toolDefs = l.tools.List()

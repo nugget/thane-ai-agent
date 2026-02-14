@@ -499,8 +499,8 @@ func TestExecute_GeneralProfileSelectsLocalModel(t *testing.T) {
 
 func TestDefaultBudgets(t *testing.T) {
 	// Verify the reduced budgets are in effect.
-	if defaultMaxIter != 5 {
-		t.Errorf("defaultMaxIter = %d, want 5", defaultMaxIter)
+	if defaultMaxIter != 8 {
+		t.Errorf("defaultMaxIter = %d, want 8", defaultMaxIter)
 	}
 	if defaultMaxTokens != 25000 {
 		t.Errorf("defaultMaxTokens = %d, want 25000", defaultMaxTokens)

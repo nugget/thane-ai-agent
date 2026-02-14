@@ -114,10 +114,11 @@ func buildTestLoop(mock *mockLLM, extraNames []string) *Loop {
 	return l
 }
 
-func TestIter0ToolGating_RestrictedFirstIteration(t *testing.T) {
-	// On iter-0 with gating active, only the restricted tools should be
-	// visible. The mock returns a tool call on iter-0 (triggering iter-1)
-	// and a text response on iter-1 so we can inspect both calls.
+func TestToolGating_RestrictedAllIterations(t *testing.T) {
+	// With gating active, ALL iterations should see only the restricted
+	// tool set — not just iter-0. The mock returns a tool call on iter-0
+	// (triggering iter-1) and a text response on iter-1 so we can
+	// inspect both calls.
 	mock := &mockLLM{
 		responses: []*llm.ChatResponse{
 			// Iter-0: model calls thane_delegate
@@ -150,7 +151,6 @@ func TestIter0ToolGating_RestrictedFirstIteration(t *testing.T) {
 	}
 
 	loop := buildTestLoop(mock, []string{"thane_delegate", "recall_fact", "web_search"})
-	fullToolCount := len(loop.tools.List())
 	loop.SetIter0Tools([]string{"thane_delegate", "recall_fact"})
 
 	_, err := loop.Run(context.Background(), &Request{
@@ -164,33 +164,27 @@ func TestIter0ToolGating_RestrictedFirstIteration(t *testing.T) {
 		t.Fatalf("expected at least 2 LLM calls, got %d", len(mock.calls))
 	}
 
-	// Iter-0 should only have the restricted tool set.
-	iter0Names := toolNames(mock.calls[0].Tools)
-	if len(iter0Names) != 2 {
-		t.Errorf("iter-0 tool count = %d, want 2; tools: %v", len(iter0Names), iter0Names)
-	}
-	if !hasName(iter0Names, "thane_delegate") {
-		t.Errorf("iter-0 tools missing thane_delegate: %v", iter0Names)
-	}
-	if !hasName(iter0Names, "recall_fact") {
-		t.Errorf("iter-0 tools missing recall_fact: %v", iter0Names)
-	}
-	if hasName(iter0Names, "get_state") {
-		t.Errorf("iter-0 tools should NOT contain get_state: %v", iter0Names)
-	}
-	if hasName(iter0Names, "web_search") {
-		t.Errorf("iter-0 tools should NOT contain web_search: %v", iter0Names)
-	}
-
-	// Iter-1 should have the full tool set.
-	iter1Names := toolNames(mock.calls[1].Tools)
-	if len(iter1Names) != fullToolCount {
-		t.Errorf("iter-1 tool count = %d, want %d; tools: %v", len(iter1Names), fullToolCount, iter1Names)
+	// Both iterations should only have the restricted tool set.
+	for _, idx := range []int{0, 1} {
+		names := toolNames(mock.calls[idx].Tools)
+		if len(names) != 2 {
+			t.Errorf("call[%d] tool count = %d, want 2; tools: %v", idx, len(names), names)
+		}
+		if !hasName(names, "thane_delegate") {
+			t.Errorf("call[%d] tools missing thane_delegate: %v", idx, names)
+		}
+		if !hasName(names, "recall_fact") {
+			t.Errorf("call[%d] tools missing recall_fact: %v", idx, names)
+		}
+		if hasName(names, "web_search") {
+			t.Errorf("call[%d] tools should NOT contain web_search: %v", idx, names)
+		}
 	}
 }
 
-func TestIter0ToolGating_FullToolsAfterFirstIteration(t *testing.T) {
-	// Verify iter-1+ always gets the full tool set even with gating enabled.
+func TestToolGating_RestrictedAcrossMultipleToolCalls(t *testing.T) {
+	// Verify that gating persists across multiple iterations with tool
+	// calls — the model never sees the full tool set.
 	mock := &mockLLM{
 		responses: []*llm.ChatResponse{
 			// Iter-0: delegate call
@@ -210,7 +204,7 @@ func TestIter0ToolGating_FullToolsAfterFirstIteration(t *testing.T) {
 					}},
 				},
 			},
-			// Iter-1: another tool call (now using full set)
+			// Iter-1: another delegate call (re-delegation)
 			{
 				Model: "test-model",
 				Message: llm.Message{
@@ -221,7 +215,7 @@ func TestIter0ToolGating_FullToolsAfterFirstIteration(t *testing.T) {
 							Name      string         `json:"name"`
 							Arguments map[string]any `json:"arguments"`
 						}{
-							Name:      "get_state",
+							Name:      "thane_delegate",
 							Arguments: map[string]any{},
 						},
 					}},
@@ -236,7 +230,6 @@ func TestIter0ToolGating_FullToolsAfterFirstIteration(t *testing.T) {
 	}
 
 	loop := buildTestLoop(mock, []string{"thane_delegate", "recall_fact", "get_state", "web_search"})
-	fullToolCount := len(loop.tools.List())
 	loop.SetIter0Tools([]string{"thane_delegate"})
 
 	_, err := loop.Run(context.Background(), &Request{
@@ -250,11 +243,17 @@ func TestIter0ToolGating_FullToolsAfterFirstIteration(t *testing.T) {
 		t.Fatalf("expected 3 LLM calls, got %d", len(mock.calls))
 	}
 
-	// Both iter-1 and iter-2 should have full tools.
-	for _, idx := range []int{1, 2} {
+	// ALL iterations should have only the restricted set.
+	for _, idx := range []int{0, 1, 2} {
 		names := toolNames(mock.calls[idx].Tools)
-		if len(names) != fullToolCount {
-			t.Errorf("call[%d] tool count = %d, want %d; tools: %v", idx, len(names), fullToolCount, names)
+		if len(names) != 1 {
+			t.Errorf("call[%d] tool count = %d, want 1; tools: %v", idx, len(names), names)
+		}
+		if !hasName(names, "thane_delegate") {
+			t.Errorf("call[%d] tools missing thane_delegate: %v", idx, names)
+		}
+		if hasName(names, "get_state") {
+			t.Errorf("call[%d] tools should NOT contain get_state: %v", idx, names)
 		}
 	}
 }
