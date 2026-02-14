@@ -76,7 +76,7 @@ Focus on completing the task and returning results.
 
 ## Tool usage notes
 
-- File tool paths must be literal filesystem paths. Shell expansion ($HOME, $(whoami), ~user) does NOT work in file tools. Use absolute paths like /Users/aimee/Documents or ~/Documents.
+- File tool paths must be literal filesystem paths. The only expansion supported is a leading ~/ to your home directory; other shell expansions ($HOME, $(whoami), ~user) do NOT work in file tools. Use absolute paths like /path/to/project or ~/Documents.
 - For shell operations that need pipes, globs, or environment variable expansion, use the exec tool. The exec tool runs commands through a real shell where expansion works normally.
 - On macOS (Darwin), common CLI tools differ from GNU/Linux. In particular: sed requires sed -i '' (empty string argument), date flags differ from GNU coreutils, and stat output format is different. Check the platform in Current Conditions before writing platform-specific commands.
 - When a task involves finding files, prefer using the exec tool with find or ls rather than guessing paths with file tools.`
