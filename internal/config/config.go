@@ -19,6 +19,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"time"
@@ -131,6 +132,11 @@ type Config struct {
 	// Agent configures agent loop behavior, including iter-0 tool
 	// gating for delegation-first architecture.
 	Agent AgentConfig `yaml:"agent"`
+
+	// MQTT configures MQTT publishing for Home Assistant device discovery
+	// and sensor state reporting. When Broker and DeviceName are both
+	// set, Thane connects to the broker and registers as an HA device.
+	MQTT MQTTConfig `yaml:"mqtt"`
 
 	// Timezone is the IANA timezone for the household (e.g.,
 	// "America/Chicago"). Used in the Current Conditions system prompt
@@ -356,6 +362,41 @@ type WorkspaceConfig struct {
 	ReadOnlyDirs []string `yaml:"read_only_dirs"`
 }
 
+// MQTTConfig configures the MQTT connection for Home Assistant device
+// discovery and sensor state publishing. When [MQTTConfig.Configured]
+// returns true, Thane connects to the broker at startup and registers
+// as an HA device with availability tracking and runtime sensors.
+type MQTTConfig struct {
+	// Broker is the MQTT broker URL (e.g., "mqtts://host:8883"
+	// or "mqtt://host:1883").
+	Broker string `yaml:"broker"`
+
+	// Username for MQTT broker authentication.
+	Username string `yaml:"username"`
+
+	// Password for MQTT broker authentication.
+	Password string `yaml:"password"`
+
+	// DiscoveryPrefix is the Home Assistant MQTT discovery topic
+	// prefix. Default: "homeassistant".
+	DiscoveryPrefix string `yaml:"discovery_prefix"`
+
+	// DeviceName drives MQTT topic paths and HA entity IDs. Example:
+	// "aimee-thane" produces sensor.aimee_thane_uptime in HA.
+	DeviceName string `yaml:"device_name"`
+
+	// PublishIntervalSec is how often (in seconds) sensor states are
+	// re-published to the broker. Default: 60. Minimum: 10.
+	PublishIntervalSec int `yaml:"publish_interval"`
+}
+
+// Configured reports whether both Broker and DeviceName are set. A
+// partial configuration is treated as unconfigured — Thane will start
+// without MQTT publishing.
+func (c MQTTConfig) Configured() bool {
+	return c.Broker != "" && c.DeviceName != ""
+}
+
 // ShellExecConfig configures the agent's ability to execute shell
 // commands on the host. Disabled by default for safety. When enabled,
 // commands are filtered through allow and deny lists before execution.
@@ -461,6 +502,13 @@ func (c *Config) applyDefaults() {
 		c.Extraction.TimeoutSeconds = 30
 	}
 
+	if c.MQTT.DiscoveryPrefix == "" {
+		c.MQTT.DiscoveryPrefix = "homeassistant"
+	}
+	if c.MQTT.PublishIntervalSec == 0 {
+		c.MQTT.PublishIntervalSec = 60
+	}
+
 	if c.Episodic.LookbackDays == 0 {
 		c.Episodic.LookbackDays = 2
 	}
@@ -515,6 +563,14 @@ func (c *Config) Validate() error {
 	if c.Timezone != "" {
 		if _, err := time.LoadLocation(c.Timezone); err != nil {
 			return fmt.Errorf("timezone %q invalid (expected IANA timezone, e.g. America/Chicago): %w", c.Timezone, err)
+		}
+	}
+	if c.MQTT.Configured() {
+		if _, err := url.Parse(c.MQTT.Broker); err != nil {
+			return fmt.Errorf("mqtt.broker %q is not a valid URL: %w", c.MQTT.Broker, err)
+		}
+		if c.MQTT.PublishIntervalSec < 10 {
+			return fmt.Errorf("mqtt.publish_interval %d too low (minimum 10 seconds)", c.MQTT.PublishIntervalSec)
 		}
 	}
 	if c.Episodic.LookbackDays < 0 {

@@ -47,6 +47,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/ingest"
 	"github.com/nugget/thane-ai-agent/internal/llm"
 	"github.com/nugget/thane-ai-agent/internal/memory"
+	"github.com/nugget/thane-ai-agent/internal/mqtt"
 	"github.com/nugget/thane-ai-agent/internal/prompts"
 	"github.com/nugget/thane-ai-agent/internal/router"
 	"github.com/nugget/thane-ai-agent/internal/scheduler"
@@ -1044,6 +1045,58 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		}()
 	}
 
+	// --- MQTT publisher ---
+	// Optional: publishes HA MQTT discovery messages and periodic sensor
+	// state updates so Thane appears as a native HA device.
+	var mqttPub *mqtt.Publisher
+	if cfg.MQTT.Configured() {
+		instanceID, err := mqtt.LoadOrCreateInstanceID(cfg.DataDir)
+		if err != nil {
+			return fmt.Errorf("load mqtt instance id: %w", err)
+		}
+		logger.Info("mqtt instance ID loaded", "instance_id", instanceID)
+
+		// Timezone for midnight token counter reset.
+		var tokenLoc *time.Location
+		if cfg.Timezone != "" {
+			tokenLoc, _ = time.LoadLocation(cfg.Timezone) // already validated
+		}
+		dailyTokens := mqtt.NewDailyTokens(tokenLoc)
+		server.SetTokenObserver(dailyTokens)
+
+		statsAdapter := &mqttStatsAdapter{
+			model: cfg.Models.Default,
+			stats: server.Stats(),
+		}
+
+		mqttPub = mqtt.New(cfg.MQTT, instanceID, dailyTokens, statsAdapter, logger)
+		go func() {
+			if err := mqttPub.Start(ctx); err != nil {
+				logger.Error("mqtt publisher failed", "error", err)
+			}
+		}()
+
+		// Register with connwatch for health endpoint visibility.
+		connMgr.Watch(ctx, connwatch.WatcherConfig{
+			Name: "mqtt",
+			Probe: func(pCtx context.Context) error {
+				awaitCtx, awaitCancel := context.WithTimeout(pCtx, 2*time.Second)
+				defer awaitCancel()
+				return mqttPub.AwaitConnection(awaitCtx)
+			},
+			Backoff: connwatch.DefaultBackoffConfig(),
+			Logger:  logger,
+		})
+
+		logger.Info("mqtt publishing enabled",
+			"broker", cfg.MQTT.Broker,
+			"device_name", cfg.MQTT.DeviceName,
+			"interval", cfg.MQTT.PublishIntervalSec,
+		)
+	} else {
+		logger.Info("mqtt publishing disabled (not configured)")
+	}
+
 	// --- Signal handling and graceful shutdown ---
 	// NotifyContext wraps the parent context so that SIGINT/SIGTERM
 	// cancellation flows through the same ctx used by all components.
@@ -1056,6 +1109,15 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 
 		// Archive conversation before shutdown
 		loop.ShutdownArchive("default")
+
+		// Publish MQTT offline status before disconnecting.
+		if mqttPub != nil {
+			offlineCtx, offlineCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer offlineCancel()
+			if err := mqttPub.Stop(offlineCtx); err != nil {
+				logger.Error("mqtt shutdown failed", "error", err)
+			}
+		}
 
 		if _, err := checkpointer.CreateShutdown(); err != nil {
 			logger.Error("failed to create shutdown checkpoint", "error", err)
@@ -1189,3 +1251,16 @@ func (f *factSetterFunc) SetFact(category, key, value, source string, confidence
 	_, err = f.store.Set(facts.Category(category), key, value, source, confidence)
 	return err
 }
+
+// mqttStatsAdapter bridges the API server's session stats and build
+// info to the MQTT publisher's [mqtt.StatsSource] interface.
+type mqttStatsAdapter struct {
+	model string
+	stats *api.SessionStats
+}
+
+func (a *mqttStatsAdapter) Uptime() time.Duration      { return buildinfo.Uptime() }
+func (a *mqttStatsAdapter) Version() string            { return buildinfo.Version }
+func (a *mqttStatsAdapter) DefaultModel() string       { return a.model }
+func (a *mqttStatsAdapter) ActiveSessions() int        { return 1 }
+func (a *mqttStatsAdapter) LastRequestTime() time.Time { return a.stats.LastRequest() }
