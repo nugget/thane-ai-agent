@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -13,6 +14,10 @@ import (
 	"strings"
 	"time"
 )
+
+// errResultLimit is a sentinel returned from WalkDir callbacks to stop
+// traversal when the result cap is reached.
+var errResultLimit = errors.New("result limit reached")
 
 // FileTools provides file read/write/edit capabilities within a workspace.
 type FileTools struct {
@@ -286,6 +291,11 @@ func (ft *FileTools) Search(ctx context.Context, dir, pattern string, maxDepth i
 			return fs.SkipDir
 		}
 
+		// Only match files, not directories
+		if d.IsDir() {
+			return nil
+		}
+
 		matched, _ := filepath.Match(pattern, d.Name())
 		if matched {
 			displayPath := path
@@ -294,14 +304,14 @@ func (ft *FileTools) Search(ctx context.Context, dir, pattern string, maxDepth i
 			}
 			matches = append(matches, displayPath)
 			if len(matches) >= maxResults {
-				return fmt.Errorf("result limit reached")
+				return errResultLimit
 			}
 		}
 		return nil
 	})
 
 	// Swallow the sentinel error from result limiting
-	if err != nil && err.Error() != "result limit reached" && err != context.Canceled {
+	if err != nil && !errors.Is(err, errResultLimit) && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 		return "", fmt.Errorf("search failed: %w", err)
 	}
 
@@ -397,6 +407,8 @@ func (ft *FileTools) Grep(ctx context.Context, dir, pattern string, maxDepth int
 		}
 
 		scanner := bufio.NewScanner(bytes.NewReader(data))
+		// Increase buffer to handle long lines up to the file-size cap.
+		scanner.Buffer(make([]byte, 0, 64*1024), maxFileSize)
 		lineNum := 0
 		for scanner.Scan() {
 			lineNum++
@@ -409,15 +421,18 @@ func (ft *FileTools) Grep(ctx context.Context, dir, pattern string, maxDepth int
 				results = append(results, fmt.Sprintf("%s:%d:%s", displayPath, lineNum, line))
 				matchCount++
 				if matchCount >= maxMatches {
-					return fmt.Errorf("match limit reached")
+					return errResultLimit
 				}
 			}
 		}
+		// scanner.Err() is non-nil if scanning stopped due to an error
+		// other than EOF (e.g., token too long). Safe to ignore here
+		// since we sized the buffer to the file-size cap.
 
 		return nil
 	})
 
-	if err != nil && err.Error() != "match limit reached" && err != context.Canceled {
+	if err != nil && !errors.Is(err, errResultLimit) && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 		return "", fmt.Errorf("grep failed: %w", err)
 	}
 
