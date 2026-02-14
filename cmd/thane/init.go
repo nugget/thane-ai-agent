@@ -1,22 +1,15 @@
 package main
 
 import (
-	"embed"
 	"fmt"
 	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
+
+	defaulttalents "github.com/nugget/thane-ai-agent/talents"
+	"github.com/nugget/thane-ai-agent/examples"
 )
-
-//go:embed init_data/talents
-var talentsFS embed.FS
-
-//go:embed init_data/config.example.yaml
-var configExample []byte
-
-//go:embed init_data/persona.example.md
-var personaExample []byte
 
 // runInit initializes a Thane working directory with default files.
 // It creates the directory structure and copies bundled defaults for
@@ -34,32 +27,30 @@ func runInit(w io.Writer, dir string) error {
 
 	// Write config example if no config exists.
 	configPath := filepath.Join(dir, "config.yaml")
-	if err := writeIfMissing(configPath, configExample); err != nil {
+	if err := writeIfMissing(configPath, examples.ConfigYAML); err != nil {
 		return err
 	}
 	fmt.Fprintf(w, "  ✓ %s\n", configPath)
 
 	// Write persona example if no persona exists.
 	personaPath := filepath.Join(dir, "persona.md")
-	if err := writeIfMissing(personaPath, personaExample); err != nil {
+	if err := writeIfMissing(personaPath, examples.PersonaMD); err != nil {
 		return err
 	}
 	fmt.Fprintf(w, "  ✓ %s\n", personaPath)
 
 	// Copy bundled talent files.
-	err := fs.WalkDir(talentsFS, "init_data/talents", func(path string, d fs.DirEntry, err error) error {
+	err := fs.WalkDir(defaulttalents.FS, ".", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if d.IsDir() {
+		if d.IsDir() || filepath.Ext(path) != ".md" {
 			return nil
 		}
 
-		// Strip the "init_data/talents/" prefix to get the relative name.
-		relName, _ := filepath.Rel("init_data/talents", path)
-		destPath := filepath.Join(dir, "talents", relName)
+		destPath := filepath.Join(dir, "talents", path)
 
-		content, err := talentsFS.ReadFile(path)
+		content, err := defaulttalents.FS.ReadFile(path)
 		if err != nil {
 			return fmt.Errorf("read embedded %s: %w", path, err)
 		}
