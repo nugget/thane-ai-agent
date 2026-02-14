@@ -82,7 +82,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 
 	// Generate a unique delegate ID for log correlation.
 	delegateID, _ := uuid.NewV7()
-	did := shortID(delegateID.String())
+	did := delegateID.String()
 
 	profile := e.profiles[profileName]
 	if profile == nil {
@@ -442,12 +442,4 @@ func truncate(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
-}
-
-// shortID returns a truncated prefix of a UUID for compact log output.
-func shortID(id string) string {
-	if len(id) > 8 {
-		return id[:8]
-	}
-	return id
 }

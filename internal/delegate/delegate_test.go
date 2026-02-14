@@ -497,6 +497,73 @@ func TestExecute_GeneralProfileSelectsLocalModel(t *testing.T) {
 	}
 }
 
+func TestToolHandler_ExhaustedOutput(t *testing.T) {
+	// Always return tool calls to exhaust the iteration budget.
+	toolCallResp := &llm.ChatResponse{
+		Model: "test-model",
+		Message: llm.Message{
+			Role: "assistant",
+			ToolCalls: []llm.ToolCall{
+				{
+					ID: "call-loop",
+					Function: struct {
+						Name      string         `json:"name"`
+						Arguments map[string]any `json:"arguments"`
+					}{
+						Name:      "get_state",
+						Arguments: map[string]any{"entity_id": "light.test"},
+					},
+				},
+			},
+		},
+		InputTokens:  500,
+		OutputTokens: 200,
+	}
+
+	var responses []*llm.ChatResponse
+	for range defaultMaxIter {
+		responses = append(responses, toolCallResp)
+	}
+	// Forced text response after budget exhaustion.
+	responses = append(responses, &llm.ChatResponse{
+		Model:        "test-model",
+		Message:      llm.Message{Role: "assistant", Content: "Partial results from exhausted delegate."},
+		InputTokens:  100,
+		OutputTokens: 30,
+	})
+
+	mock := &mockLLMClient{responses: responses}
+	exec := NewExecutor(slog.Default(), mock, nil, newTestRegistry(), "test-model")
+	handler := ToolHandler(exec)
+
+	result, err := handler(context.Background(), map[string]any{
+		"task":    "Do something complex",
+		"profile": "general",
+	})
+
+	if err != nil {
+		t.Fatalf("ToolHandler() error = %v", err)
+	}
+	if !strings.Contains(result, "[Delegate budget exhausted:") {
+		t.Errorf("result missing exhausted header, got: %s", result)
+	}
+	if !strings.Contains(result, "tokens_in=") {
+		t.Errorf("result missing tokens_in, got: %s", result)
+	}
+	if !strings.Contains(result, "tokens_out=") {
+		t.Errorf("result missing tokens_out, got: %s", result)
+	}
+	if !strings.Contains(result, "Partial results from exhausted delegate.") {
+		t.Errorf("result missing delegate content, got: %s", result)
+	}
+	if !strings.Contains(result, "[Exhaustion note:") {
+		t.Errorf("result missing exhaustion note, got: %s", result)
+	}
+	if !strings.Contains(result, "more specific guidance") {
+		t.Errorf("result missing retry guidance, got: %s", result)
+	}
+}
+
 func TestDefaultBudgets(t *testing.T) {
 	// Verify the reduced budgets are in effect.
 	if defaultMaxIter != 8 {
