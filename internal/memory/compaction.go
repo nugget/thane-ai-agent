@@ -42,18 +42,28 @@ type Archiver interface {
 	ActiveSession(conversationID string) (*Session, error)
 }
 
-// Compactor handles conversation compaction.
-type Compactor struct {
-	store      CompactableStore
-	config     CompactionConfig
-	summarizer Summarizer
-	archiver   Archiver // optional — archive before compaction
-	logger     *slog.Logger
+// WorkingMemoryReader is the subset of WorkingMemoryStore needed by the
+// compactor. Defined as an interface for testability and to avoid coupling
+// the compactor to the concrete store type.
+type WorkingMemoryReader interface {
+	Get(conversationID string) (string, time.Time, error)
 }
 
-// Summarizer generates summaries from messages.
+// Compactor handles conversation compaction.
+type Compactor struct {
+	store         CompactableStore
+	config        CompactionConfig
+	summarizer    Summarizer
+	archiver      Archiver            // optional — archive before compaction
+	workingMemory WorkingMemoryReader // optional — include in compaction prompt
+	logger        *slog.Logger
+}
+
+// Summarizer generates summaries from messages. When workingMemory is
+// non-empty, it is included in the prompt so the summarizer preserves
+// experiential context through compaction.
 type Summarizer interface {
-	Summarize(ctx context.Context, messages []Message) (string, error)
+	Summarize(ctx context.Context, messages []Message, workingMemory string) (string, error)
 }
 
 // NewCompactor creates a new compactor.
@@ -69,6 +79,12 @@ func NewCompactor(store CompactableStore, config CompactionConfig, summarizer Su
 // SetArchiver configures an archiver for preserving messages before compaction.
 func (c *Compactor) SetArchiver(a Archiver) {
 	c.archiver = a
+}
+
+// SetWorkingMemoryStore configures a working memory store so that the
+// compactor can include experiential context in the compaction prompt.
+func (c *Compactor) SetWorkingMemoryStore(wm WorkingMemoryReader) {
+	c.workingMemory = wm
 }
 
 // NeedsCompaction checks if a conversation needs compaction.
@@ -131,8 +147,21 @@ func (c *Compactor) Compact(ctx context.Context, conversationID string) error {
 		cutoffTime = messages[len(messages)-1].Timestamp
 	}
 
+	// Read working memory for inclusion in the compaction prompt.
+	var workingMem string
+	if c.workingMemory != nil {
+		content, _, err := c.workingMemory.Get(conversationID)
+		if err != nil {
+			c.logger.Warn("failed to read working memory for compaction",
+				"conversation", conversationID, "error", err)
+			// Non-fatal — proceed without working memory context.
+		} else {
+			workingMem = content
+		}
+	}
+
 	// Generate summary
-	summary, err := c.summarizer.Summarize(ctx, messages)
+	summary, err := c.summarizer.Summarize(ctx, messages, workingMem)
 	if err != nil {
 		return fmt.Errorf("summarize: %w", err)
 	}
@@ -197,8 +226,10 @@ func NewLLMSummarizer(llmFunc func(ctx context.Context, prompt string) (string, 
 	return &LLMSummarizer{llmFunc: llmFunc}
 }
 
-// Summarize generates a summary of the messages using an LLM.
-func (s *LLMSummarizer) Summarize(ctx context.Context, messages []Message) (string, error) {
+// Summarize generates a summary of the messages using an LLM. When
+// workingMemory is non-empty, it is included in the prompt so the
+// summarizer preserves experiential context through compaction.
+func (s *LLMSummarizer) Summarize(ctx context.Context, messages []Message, workingMemory string) (string, error) {
 	// Build conversation text
 	var sb strings.Builder
 	for _, m := range messages {
@@ -209,14 +240,14 @@ func (s *LLMSummarizer) Summarize(ctx context.Context, messages []Message) (stri
 		sb.WriteString(fmt.Sprintf("%s: %s\n\n", role, m.Content))
 	}
 
-	return s.llmFunc(ctx, prompts.CompactionPrompt(sb.String()))
+	return s.llmFunc(ctx, prompts.CompactionPrompt(sb.String(), workingMemory))
 }
 
 // SimpleSummarizer creates a basic summary without LLM (fallback).
 type SimpleSummarizer struct{}
 
 // Summarize creates a simple extractive summary.
-func (s *SimpleSummarizer) Summarize(ctx context.Context, messages []Message) (string, error) {
+func (s *SimpleSummarizer) Summarize(ctx context.Context, messages []Message, _ string) (string, error) {
 	var topics []string
 	var actions []string
 
