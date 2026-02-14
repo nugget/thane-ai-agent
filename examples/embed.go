@@ -2,7 +2,7 @@
 // persona files for use by the init subcommand.
 package examples
 
-import "embed"
+import _ "embed"
 
 // ConfigYAML is the example configuration file.
 //
