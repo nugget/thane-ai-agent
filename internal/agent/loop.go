@@ -3,6 +3,7 @@ package agent
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -264,6 +265,26 @@ func (l *Loop) buildSystemPrompt(ctx context.Context, userMessage string) string
 	return sb.String()
 }
 
+// generateRequestID returns a short, human-scannable identifier for a single
+// user-message turn (e.g., "r_7f3ab2c1"). It combines timestamp and random
+// bytes from a UUIDv7 so IDs are both roughly chronological and unique even
+// when generated within the same millisecond.
+func generateRequestID() string {
+	id, err := uuid.NewV7()
+	if err != nil {
+		// Fallback: use current time hex if UUID generation fails.
+		return fmt.Sprintf("r_%08x", time.Now().UnixMilli()&0xFFFFFFFF)
+	}
+	// Bytes 0-1: high 16 bits of ms timestamp (coarse ordering).
+	// Bytes 8-9: random bits (uniqueness within the same ms).
+	var buf [4]byte
+	buf[0] = id[0]
+	buf[1] = id[1]
+	buf[2] = id[8]
+	buf[3] = id[9]
+	return "r_" + hex.EncodeToString(buf[:])
+}
+
 // Run executes one iteration of the agent loop.
 // If stream is non-nil, tokens are pushed to it as they arrive.
 func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (resp *Response, err error) {
@@ -291,8 +312,12 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	}
 	sessionTag = memory.ShortID(sessionTag)
 
-	l.logger.Info("agent loop started",
-		"session", sessionTag, "conversation", convID,
+	// Generate a request-scoped ID and logger. Every log line within this
+	// turn carries request_id so you can grep for a single user→response cycle.
+	requestID := generateRequestID()
+	log := l.logger.With("request_id", requestID, "session", sessionTag, "conversation", convID)
+
+	log.Info("agent loop started",
 		"messages", len(req.Messages),
 	)
 
@@ -312,7 +337,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			for i := len(req.Messages) - 1; i >= 0; i-- {
 				if req.Messages[i].Role == "user" {
 					if err := l.memory.AddMessage(convID, "user", req.Messages[i].Content); err != nil {
-						l.logger.Warn("failed to store message", "error", err)
+						log.Warn("failed to store message", "error", err)
 					}
 					break
 				}
@@ -321,7 +346,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			// Internal/API clients: store all messages
 			for _, m := range req.Messages {
 				if err := l.memory.AddMessage(convID, m.Role, m.Content); err != nil {
-					l.logger.Warn("failed to store message", "error", err)
+					log.Warn("failed to store message", "error", err)
 				}
 			}
 		}
@@ -338,10 +363,10 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 
 	// Fast-path: handle simple greetings without tool calls
 	if isSimpleGreeting(userMessage) {
-		l.logger.Debug("simple greeting detected, responding directly")
+		log.Debug("simple greeting detected, responding directly")
 		response := getGreetingResponse()
 		if err := l.memory.AddMessage(convID, "assistant", response); err != nil {
-			l.logger.Warn("failed to store greeting response", "error", err)
+			log.Warn("failed to store greeting response", "error", err)
 		}
 		return &Response{
 			Content:      response,
@@ -370,8 +395,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			liteModel = l.model
 		}
 
-		l.logger.Info("lightweight completion (skip context)",
-			"session", sessionTag, "conversation", convID,
+		log.Info("lightweight completion (skip context)",
 			"model", liteModel, "messages", len(req.Messages),
 		)
 
@@ -397,8 +421,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			l.router.RecordOutcome(liteDecision.RequestID, time.Since(startTime).Milliseconds(), llmResp.InputTokens+llmResp.OutputTokens, true)
 		}
 
-		l.logger.Info("lightweight completion done",
-			"session", sessionTag, "conversation", convID,
+		log.Info("lightweight completion done",
 			"model", llmResp.Model,
 			"input_tokens", llmResp.InputTokens,
 			"output_tokens", llmResp.OutputTokens,
@@ -441,7 +464,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	model := req.Model
 	var routerDecision *router.Decision
 
-	l.logger.Debug("model selection start", "session", sessionTag, "req_model", req.Model, "default_model", l.model)
+	log.Debug("model selection start", "req_model", req.Model, "default_model", l.model)
 
 	if model == "" || model == "thane" {
 		if l.router != nil {
@@ -470,13 +493,13 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			}
 
 			model, routerDecision = l.router.Route(ctx, routerReq)
-			l.logger.Debug("model selected by router", "session", sessionTag, "model", model)
+			log.Debug("model selected by router", "model", model)
 		} else {
 			model = l.model
-			l.logger.Debug("model selected as default (no router)", "session", sessionTag, "model", model)
+			log.Debug("model selected as default (no router)", "model", model)
 		}
 	} else {
-		l.logger.Debug("model specified in request, skipping router", "session", sessionTag, "model", model)
+		log.Debug("model specified in request, skipping router", "model", model)
 	}
 
 	// Get available tools
@@ -506,9 +529,8 @@ iterLoop:
 
 		iterStart := time.Now()
 
-		l.logger.Info("llm call",
-			"session", sessionTag, "conversation", convID,
-			"iter", i+1,
+		log.Info("llm call",
+			"iter", i,
 			"model", model,
 			"msgs", len(llmMessages),
 			"est_tokens", iterMsgTokens,
@@ -518,17 +540,17 @@ iterLoop:
 		// Use streaming to avoid HTTP timeouts on slow models
 		llmResp, err := l.llm.ChatStream(ctx, model, llmMessages, toolDefs, stream)
 		if err != nil {
-			l.logger.Error("LLM call failed", "error", err, "model", model)
+			log.Error("LLM call failed", "error", err, "iter", i, "model", model)
 
 			// Try failover to default model if using a routed model
 			if model != l.model {
 				fallbackModel := l.model
-				l.logger.Info("attempting failover", "from", model, "to", fallbackModel)
+				log.Info("attempting failover", "iter", i, "from", model, "to", fallbackModel)
 
 				// Call failover handler if configured (for checkpointing)
 				if l.failoverHandler != nil {
 					if ferr := l.failoverHandler.OnFailover(ctx, model, fallbackModel, err.Error()); ferr != nil {
-						l.logger.Warn("failover handler failed", "error", ferr)
+						log.Warn("failover handler failed", "error", ferr)
 						// Continue with failover anyway
 					}
 				}
@@ -537,10 +559,10 @@ iterLoop:
 				model = fallbackModel
 				llmResp, err = l.llm.ChatStream(ctx, model, llmMessages, toolDefs, stream)
 				if err != nil {
-					l.logger.Error("failover also failed", "error", err, "model", model)
+					log.Error("failover also failed", "error", err, "model", model)
 					return nil, err
 				}
-				l.logger.Info("failover successful", "model", model)
+				log.Info("failover successful", "model", model)
 			} else {
 				return nil, err
 			}
@@ -550,9 +572,8 @@ iterLoop:
 		totalInputTokens += llmResp.InputTokens
 		totalOutputTokens += llmResp.OutputTokens
 
-		l.logger.Info("llm response",
-			"session", sessionTag, "conversation", convID,
-			"iter", i+1,
+		log.Info("llm response",
+			"iter", i,
 			"model", model,
 			"resp_model", llmResp.Model,
 			"input_tokens", llmResp.InputTokens,
@@ -600,9 +621,8 @@ iterLoop:
 				callKey := toolName + ":" + argsJSON
 				toolCallCounts[callKey]++
 				if toolCallCounts[callKey] > maxToolRepeat {
-					l.logger.Warn("tool call loop detected, breaking",
-						"session", sessionTag, "conversation", convID,
-						"tool", toolName, "repeat_count", toolCallCounts[callKey],
+					log.Warn("tool call loop detected, breaking",
+						"iter", i, "tool", toolName, "repeat_count", toolCallCounts[callKey],
 					)
 					// Inject an error message to help the model recover
 					llmMessages = append(llmMessages, llm.Message{
@@ -612,21 +632,18 @@ iterLoop:
 					continue iterLoop
 				}
 
-				l.logger.Info("tool exec",
-					"session", sessionTag, "conversation", convID,
-					"iter", i+1,
-					"tool", toolName,
+				log.Info("tool exec",
+					"iter", i, "tool", toolName,
 				)
 				// Log arguments at DEBUG to avoid leaking sensitive data
 				// (exec commands, file contents, credentials in paths)
-				if l.logger.Enabled(ctx, slog.LevelDebug) {
+				if log.Enabled(ctx, slog.LevelDebug) {
 					argPreview := argsJSON
 					if len(argPreview) > 200 {
 						argPreview = argPreview[:200] + "..."
 					}
-					l.logger.Debug("tool exec args",
-						"session", sessionTag,
-						"tool", toolName,
+					log.Debug("tool exec args",
+						"iter", i, "tool", toolName,
 						"args", argPreview,
 					)
 				}
@@ -634,7 +651,7 @@ iterLoop:
 				// Record tool call start (if supported)
 				if hasRecorder {
 					if err := recorder.RecordToolCall(convID, "", toolCallIDStr, toolName, argsJSON); err != nil {
-						l.logger.Warn("failed to record tool call", "error", err)
+						log.Warn("failed to record tool call", "error", err)
 					}
 				}
 
@@ -652,9 +669,9 @@ iterLoop:
 				if err != nil {
 					errMsg = err.Error()
 					result = "Error: " + errMsg
-					l.logger.Error("tool exec failed", "session", sessionTag, "conversation", convID, "tool", toolName, "error", err)
+					log.Error("tool exec failed", "tool", toolName, "error", err)
 				} else {
-					l.logger.Debug("tool exec done", "session", sessionTag, "conversation", convID, "tool", toolName, "result_len", len(result))
+					log.Debug("tool exec done", "tool", toolName, "result_len", len(result))
 				}
 
 				// Emit tool call done event
@@ -670,7 +687,7 @@ iterLoop:
 				// Record tool call completion (if supported)
 				if hasRecorder {
 					if err := recorder.CompleteToolCall(toolCallIDStr, result, errMsg); err != nil {
-						l.logger.Warn("failed to complete tool call record", "error", err)
+						log.Warn("failed to complete tool call record", "error", err)
 					}
 				}
 
@@ -693,7 +710,7 @@ iterLoop:
 			if len(preview) > 300 {
 				preview = preview[:300] + "..."
 			}
-			l.logger.Debug("model responded with text (no tool call)",
+			log.Debug("model responded with text (no tool call)",
 				"content_preview", preview,
 			)
 		}
@@ -708,7 +725,7 @@ iterLoop:
 
 		// Store response in memory
 		if err := l.memory.AddMessage(convID, "assistant", resp.Content); err != nil {
-			l.logger.Warn("failed to store response", "error", err)
+			log.Warn("failed to store response", "error", err)
 		}
 
 		// Async fact extraction — don't block the response path.
@@ -721,8 +738,8 @@ iterLoop:
 				extractCtx, cancel := context.WithTimeout(context.Background(), l.extractor.Timeout())
 				defer cancel()
 				if err := l.extractor.Extract(extractCtx, userMessage, resp.Content, extractMsgs); err != nil {
-					l.logger.Warn("fact extraction failed",
-						"error", err, "conversation", convID)
+					log.Warn("fact extraction failed",
+						"error", err)
 				}
 			}()
 		}
@@ -731,23 +748,20 @@ iterLoop:
 		if l.compactor != nil && l.compactor.NeedsCompaction(convID) {
 			preTokens := l.memory.GetTokenCount(convID)
 			preMessages := len(l.memory.GetMessages(convID))
-			l.logger.Info("triggering compaction",
-				"session", sessionTag, "conversation", convID,
+			log.Info("triggering compaction",
 				"tokens_before", preTokens,
 				"messages_before", preMessages,
 			)
 			go func() {
 				compactStart := time.Now()
 				if err := l.compactor.Compact(context.Background(), convID); err != nil {
-					l.logger.Error("compaction failed",
-						"session", sessionTag, "conversation", convID,
+					log.Error("compaction failed",
 						"error", err,
 					)
 				} else {
 					postTokens := l.memory.GetTokenCount(convID)
 					postMessages := len(l.memory.GetMessages(convID))
-					l.logger.Info("compaction completed",
-						"session", sessionTag, "conversation", convID,
+					log.Info("compaction completed",
 						"tokens_after", postTokens,
 						"messages_after", postMessages,
 						"tokens_freed", preTokens-postTokens,
@@ -765,10 +779,9 @@ iterLoop:
 		}
 
 		elapsed := time.Since(startTime)
-		l.logger.Info("agent loop completed",
-			"session", sessionTag, "conversation", convID,
+		log.Info("agent loop completed",
 			"model", model,
-			"iterations", i+1,
+			"iter", i+1,
 			"input_tokens", totalInputTokens,
 			"output_tokens", totalOutputTokens,
 			"elapsed", elapsed.Round(time.Millisecond),
@@ -781,13 +794,13 @@ iterLoop:
 	// Max iterations exhausted. If the last message is a tool result,
 	// make one final LLM call with tools disabled to generate a response.
 	if len(llmMessages) > 0 && llmMessages[len(llmMessages)-1].Role == "tool" {
-		l.logger.Warn("max iterations reached with pending tool results, making final LLM call",
-			"maxIterations", maxIterations,
+		log.Warn("max iterations reached with pending tool results, making final LLM call",
+			"max_iter", maxIterations,
 		)
 
 		llmResp, err := l.llm.ChatStream(ctx, model, llmMessages, nil, stream) // nil tools = no more tool calls
 		if err != nil {
-			l.logger.Error("final LLM call failed after max iterations", "error", err, "model", model, "maxIterations", maxIterations)
+			log.Error("final LLM call failed after max iterations", "error", err, "model", model, "max_iter", maxIterations)
 			return &Response{
 				Content:      "I found the information but couldn't compose a response. Please try again.",
 				Model:        model,
@@ -809,14 +822,13 @@ iterLoop:
 		}
 
 		if err := l.memory.AddMessage(convID, "assistant", resp.Content); err != nil {
-			l.logger.Warn("failed to store response", "error", err)
+			log.Warn("failed to store response", "error", err)
 		}
 
 		elapsed := time.Since(startTime)
-		l.logger.Info("agent loop completed (max iterations recovery)",
-			"session", sessionTag, "conversation", convID,
+		log.Info("agent loop completed (max iterations recovery)",
 			"model", model,
-			"iterations", maxIterations,
+			"max_iter", maxIterations,
 			"input_tokens", totalInputTokens,
 			"output_tokens", totalOutputTokens,
 			"elapsed", elapsed.Round(time.Millisecond),
@@ -825,8 +837,8 @@ iterLoop:
 		return resp, nil
 	}
 
-	l.logger.Error("max iterations reached without tool results or response",
-		"maxIterations", maxIterations,
+	log.Error("max iterations reached without tool results or response",
+		"max_iter", maxIterations,
 		"model", model,
 	)
 	return &Response{
