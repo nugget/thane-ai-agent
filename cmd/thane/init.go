@@ -7,8 +7,8 @@ import (
 	"os"
 	"path/filepath"
 
-	defaulttalents "github.com/nugget/thane-ai-agent/talents"
 	"github.com/nugget/thane-ai-agent/examples"
+	defaulttalents "github.com/nugget/thane-ai-agent/talents"
 )
 
 // runInit initializes a Thane working directory with default files.
