@@ -31,7 +31,7 @@ type Profile struct {
 }
 
 const (
-	defaultMaxIter   = 5
+	defaultMaxIter   = 8
 	defaultMaxTokens = 25000
 )
 
