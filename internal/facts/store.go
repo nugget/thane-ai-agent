@@ -5,7 +5,9 @@ import (
 	"database/sql"
 	"encoding/binary"
 	"fmt"
+	"log/slog"
 	"math"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -49,17 +51,19 @@ type Fact struct {
 
 // Store manages fact persistence.
 type Store struct {
-	db *sql.DB
+	db         *sql.DB
+	ftsEnabled bool
+	logger     *slog.Logger
 }
 
 // NewStore creates a fact store using the given database path.
-func NewStore(dbPath string) (*Store, error) {
+func NewStore(dbPath string, logger *slog.Logger) (*Store, error) {
 	db, err := sql.Open("sqlite3", dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
 
-	s := &Store{db: db}
+	s := &Store{db: db, logger: logger}
 	if err := s.migrate(); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
@@ -69,8 +73,8 @@ func NewStore(dbPath string) (*Store, error) {
 }
 
 // NewStoreWithDB creates a fact store using an existing database connection.
-func NewStoreWithDB(db *sql.DB) (*Store, error) {
-	s := &Store{db: db}
+func NewStoreWithDB(db *sql.DB, logger *slog.Logger) (*Store, error) {
+	s := &Store{db: db, logger: logger}
 	if err := s.migrate(); err != nil {
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
@@ -107,7 +111,37 @@ func (s *Store) migrate() error {
 	_, _ = s.db.Exec(`ALTER TABLE facts ADD COLUMN embedding BLOB`)
 	_, _ = s.db.Exec(`ALTER TABLE facts ADD COLUMN deleted_at TEXT`)
 
+	s.tryEnableFTS()
+
 	return nil
+}
+
+// tryEnableFTS creates the FTS5 virtual table for full-text search.
+// If FTS5 is not available (e.g., compiled without it), the store
+// falls back to LIKE-based search gracefully.
+func (s *Store) tryEnableFTS() {
+	_, err := s.db.Exec(`
+		CREATE VIRTUAL TABLE IF NOT EXISTS facts_fts USING fts5(
+			key,
+			value,
+			source,
+			content=facts,
+			content_rowid=rowid
+		)
+	`)
+	if err != nil {
+		s.logger.Warn("FTS5 not available for facts, using LIKE fallback", "error", err)
+		return
+	}
+	s.ftsEnabled = true
+
+	// Populate FTS index from existing data.
+	// This is idempotent — rebuilding is safe on every startup.
+	_, err = s.db.Exec(`INSERT INTO facts_fts(facts_fts) VALUES('rebuild')`)
+	if err != nil {
+		s.logger.Warn("failed to rebuild facts FTS index", "error", err)
+		s.ftsEnabled = false
+	}
 }
 
 // Close closes the database connection.
@@ -147,6 +181,7 @@ func (s *Store) Set(category Category, key, value, source string, confidence flo
 		if err != nil {
 			return nil, fmt.Errorf("insert: %w", err)
 		}
+		s.syncFTS(category, key, value, source)
 		return fact, nil
 	} else if err != nil {
 		return nil, fmt.Errorf("check existing: %w", err)
@@ -160,6 +195,7 @@ func (s *Store) Set(category Category, key, value, source string, confidence flo
 	if err != nil {
 		return nil, fmt.Errorf("update: %w", err)
 	}
+	s.syncFTS(category, key, value, source)
 
 	id, _ := uuid.Parse(existingID)
 	return &Fact{
@@ -232,8 +268,50 @@ func (s *Store) GetAll() ([]*Fact, error) {
 	return facts, rows.Err()
 }
 
-// Search finds facts containing the query in key or value.
+// Search finds facts matching the query. Uses FTS5 full-text search when
+// available, falling back to LIKE-based search otherwise.
 func (s *Store) Search(query string) ([]*Fact, error) {
+	if s.ftsEnabled {
+		return s.searchFTS(query)
+	}
+	return s.searchLIKE(query)
+}
+
+// searchFTS uses FTS5 full-text search with BM25 ranking.
+func (s *Store) searchFTS(query string) ([]*Fact, error) {
+	sanitized := sanitizeFTS5Query(query)
+	if sanitized == "" {
+		return nil, nil
+	}
+
+	rows, err := s.db.Query(`
+		SELECT `+factColumns+`
+		FROM facts_fts
+		JOIN facts ON facts_fts.rowid = facts.rowid
+		WHERE facts_fts MATCH ? AND `+activeFilter+`
+		ORDER BY rank
+		LIMIT 50
+	`, sanitized)
+	if err != nil {
+		// FTS query failed — fall back to LIKE search.
+		s.logger.Warn("FTS5 search failed, falling back to LIKE", "error", err, "query", query)
+		return s.searchLIKE(query)
+	}
+	defer rows.Close()
+
+	var facts []*Fact
+	for rows.Next() {
+		fact, err := s.scanFactRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		facts = append(facts, fact)
+	}
+	return facts, rows.Err()
+}
+
+// searchLIKE uses simple pattern matching as a fallback.
+func (s *Store) searchLIKE(query string) ([]*Fact, error) {
 	pattern := "%" + query + "%"
 	rows, err := s.db.Query(
 		`SELECT `+factColumns+` FROM facts WHERE `+activeFilter+` AND (key LIKE ? OR value LIKE ?) ORDER BY accessed_at DESC LIMIT 50`,
@@ -254,6 +332,42 @@ func (s *Store) Search(query string) ([]*Fact, error) {
 	return facts, rows.Err()
 }
 
+// syncFTS updates the FTS index after a fact is inserted or updated.
+// Uses the external content table pattern: delete old entry, insert new.
+func (s *Store) syncFTS(category Category, key, value, source string) {
+	if !s.ftsEnabled {
+		return
+	}
+	// Rebuild is the simplest correct approach for an external content table
+	// with soft deletes. The facts table is small enough that this is fast.
+	s.rebuildFTS()
+}
+
+// rebuildFTS reconstructs the FTS index from the facts table.
+func (s *Store) rebuildFTS() {
+	if !s.ftsEnabled {
+		return
+	}
+	if _, err := s.db.Exec(`INSERT INTO facts_fts(facts_fts) VALUES('rebuild')`); err != nil {
+		s.logger.Warn("failed to rebuild facts FTS index", "error", err)
+	}
+}
+
+// sanitizeFTS5Query wraps each search term in double quotes to prevent FTS5
+// syntax errors from special characters like periods, colons, and parentheses.
+func sanitizeFTS5Query(query string) string {
+	words := strings.Fields(query)
+	if len(words) == 0 {
+		return ""
+	}
+	quoted := make([]string, len(words))
+	for i, w := range words {
+		w = strings.ReplaceAll(w, `"`, `""`)
+		quoted[i] = `"` + w + `"`
+	}
+	return strings.Join(quoted, " ")
+}
+
 // Delete soft-deletes a fact (sets deleted_at timestamp).
 func (s *Store) Delete(category Category, key string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
@@ -266,6 +380,9 @@ func (s *Store) Delete(category Category, key string) error {
 	if affected == 0 {
 		return fmt.Errorf("fact not found: %s/%s", category, key)
 	}
+
+	// Rebuild FTS to exclude soft-deleted facts.
+	s.rebuildFTS()
 	return nil
 }
 

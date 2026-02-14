@@ -2,6 +2,7 @@ package ingest
 
 import (
 	"context"
+	"log/slog"
 	"os"
 	"testing"
 
@@ -62,7 +63,7 @@ Steep for 4 minutes, then press slowly to avoid agitation.
 	tmpMD.Close()
 
 	// Open fact store
-	store, err := facts.NewStore(tmpDB.Name())
+	store, err := facts.NewStore(tmpDB.Name(), slog.Default())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +125,7 @@ func TestArchitectureIngesterReimport(t *testing.T) {
 	defer os.Remove(tmpDB.Name())
 	tmpDB.Close()
 
-	store, err := facts.NewStore(tmpDB.Name())
+	store, err := facts.NewStore(tmpDB.Name(), slog.Default())
 	if err != nil {
 		t.Fatal(err)
 	}
