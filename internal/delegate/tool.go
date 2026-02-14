@@ -69,8 +69,8 @@ func ToolHandler(exec *Executor) func(ctx context.Context, args map[string]any) 
 		}
 
 		// Exhausted delegation — provide actionable context for retry.
-		header = fmt.Sprintf("[Delegate budget exhausted: profile=%s, model=%s, iter=%d, tokens_in=%s, tokens_out=%s]",
-			profileName, result.Model, result.Iterations,
+		header = fmt.Sprintf("[Delegate budget exhausted: profile=%s, model=%s, reason=%s, iter=%d, tokens_in=%s, tokens_out=%s]",
+			profileName, result.Model, result.ExhaustReason, result.Iterations,
 			formatTokens(result.InputTokens), formatTokens(result.OutputTokens))
 
 		var out strings.Builder

@@ -23,6 +23,7 @@ type DelegationRecord struct {
 	InputTokens    int            `json:"input_tokens"`
 	OutputTokens   int            `json:"output_tokens"`
 	Exhausted      bool           `json:"exhausted"`
+	ExhaustReason  string         `json:"exhaust_reason,omitempty"`
 	ToolsCalled    map[string]int `json:"tools_called,omitempty"`
 	Messages       []llm.Message  `json:"messages,omitempty"`
 	ResultContent  string         `json:"result_content"`
@@ -64,6 +65,7 @@ func (s *DelegationStore) migrate() error {
 			input_tokens    INTEGER NOT NULL,
 			output_tokens   INTEGER NOT NULL,
 			exhausted       BOOLEAN NOT NULL DEFAULT 0,
+			exhaust_reason  TEXT,
 			tools_called    TEXT,
 			messages        TEXT,
 			result_content  TEXT,
@@ -82,7 +84,14 @@ func (s *DelegationStore) migrate() error {
 		CREATE INDEX IF NOT EXISTS idx_delegations_model
 			ON delegations(model);
 	`)
-	return err
+	if err != nil {
+		return err
+	}
+
+	// Add exhaust_reason column for databases created before this migration.
+	// SQLite silently ignores duplicate column additions via this pattern.
+	_, _ = s.db.Exec(`ALTER TABLE delegations ADD COLUMN exhaust_reason TEXT`)
+	return nil
 }
 
 // Record inserts a delegation execution record into the database.
@@ -101,14 +110,14 @@ func (s *DelegationStore) Record(rec *DelegationRecord) error {
 		INSERT INTO delegations (
 			id, conversation_id, task, guidance, profile, model,
 			iterations, max_iterations, input_tokens, output_tokens,
-			exhausted, tools_called, messages, result_content,
+			exhausted, exhaust_reason, tools_called, messages, result_content,
 			started_at, completed_at, duration_ms, error
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		rec.ID, rec.ConversationID, rec.Task, rec.Guidance,
 		rec.Profile, rec.Model,
 		rec.Iterations, rec.MaxIterations,
 		rec.InputTokens, rec.OutputTokens,
-		rec.Exhausted, string(toolsJSON), string(msgsJSON),
+		rec.Exhausted, rec.ExhaustReason, string(toolsJSON), string(msgsJSON),
 		rec.ResultContent,
 		rec.StartedAt.Format(time.RFC3339Nano),
 		rec.CompletedAt.Format(time.RFC3339Nano),
@@ -122,7 +131,7 @@ func (s *DelegationStore) Get(id string) (*DelegationRecord, error) {
 	row := s.db.QueryRow(`
 		SELECT id, conversation_id, task, guidance, profile, model,
 			iterations, max_iterations, input_tokens, output_tokens,
-			exhausted, tools_called, messages, result_content,
+			exhausted, exhaust_reason, tools_called, messages, result_content,
 			started_at, completed_at, duration_ms, error
 		FROM delegations WHERE id = ?`, id)
 	return scanRecord(row)
@@ -134,7 +143,7 @@ func (s *DelegationStore) List(limit int) ([]*DelegationRecord, error) {
 	query := `
 		SELECT id, conversation_id, task, guidance, profile, model,
 			iterations, max_iterations, input_tokens, output_tokens,
-			exhausted, tools_called, messages, result_content,
+			exhausted, exhaust_reason, tools_called, messages, result_content,
 			started_at, completed_at, duration_ms, error
 		FROM delegations ORDER BY started_at DESC`
 	var args []any
@@ -167,7 +176,7 @@ type scanner interface {
 
 func scanInto(s scanner) (*DelegationRecord, error) {
 	var rec DelegationRecord
-	var guidance, toolsJSON, msgsJSON, resultContent, errStr sql.NullString
+	var guidance, exhaustReason, toolsJSON, msgsJSON, resultContent, errStr sql.NullString
 	var startedAt, completedAt string
 
 	err := s.Scan(
@@ -175,7 +184,7 @@ func scanInto(s scanner) (*DelegationRecord, error) {
 		&rec.Profile, &rec.Model,
 		&rec.Iterations, &rec.MaxIterations,
 		&rec.InputTokens, &rec.OutputTokens,
-		&rec.Exhausted, &toolsJSON, &msgsJSON, &resultContent,
+		&rec.Exhausted, &exhaustReason, &toolsJSON, &msgsJSON, &resultContent,
 		&startedAt, &completedAt,
 		&rec.DurationMs, &errStr,
 	)
@@ -184,6 +193,7 @@ func scanInto(s scanner) (*DelegationRecord, error) {
 	}
 
 	rec.Guidance = guidance.String
+	rec.ExhaustReason = exhaustReason.String
 	rec.ResultContent = resultContent.String
 	rec.Error = errStr.String
 

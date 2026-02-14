@@ -3,7 +3,11 @@
 // run with minimal context and a filtered tool set.
 package delegate
 
-import "github.com/nugget/thane-ai-agent/internal/router"
+import (
+	"time"
+
+	"github.com/nugget/thane-ai-agent/internal/router"
+)
 
 // Profile defines the configuration for a delegation context.
 type Profile struct {
@@ -28,11 +32,15 @@ type Profile struct {
 
 	// MaxTokens is the maximum cumulative output tokens before budget exhaustion.
 	MaxTokens int
+
+	// MaxDuration is the maximum wall clock time for the delegation loop.
+	MaxDuration time.Duration
 }
 
 const (
-	defaultMaxIter   = 8
-	defaultMaxTokens = 25000
+	defaultMaxIter     = 15
+	defaultMaxTokens   = 25000
+	defaultMaxDuration = 90 * time.Second
 )
 
 // builtinProfiles returns the MVP delegation profiles.
@@ -46,8 +54,9 @@ func builtinProfiles() map[string]*Profile {
 			RouterHints: map[string]string{
 				router.HintLocalOnly: "true",
 			},
-			MaxIter:   defaultMaxIter,
-			MaxTokens: defaultMaxTokens,
+			MaxIter:     defaultMaxIter,
+			MaxTokens:   defaultMaxTokens,
+			MaxDuration: defaultMaxDuration,
 		},
 		"ha": {
 			Name:        "ha",
@@ -64,8 +73,9 @@ func builtinProfiles() map[string]*Profile {
 				router.HintLocalOnly: "true",
 				router.HintMission:   "device_control",
 			},
-			MaxIter:   defaultMaxIter,
-			MaxTokens: defaultMaxTokens,
+			MaxIter:     defaultMaxIter,
+			MaxTokens:   defaultMaxTokens,
+			MaxDuration: defaultMaxDuration,
 		},
 	}
 }
