@@ -426,6 +426,132 @@ func (r *Registry) registerFileTools() {
 			return fmt.Sprintf("Contents of %s:\n%s", path, strings.Join(entries, "\n")), nil
 		},
 	})
+
+	r.Register(&Tool{
+		Name:        "file_search",
+		Description: "Search for files by name using glob patterns. Recursively searches a directory tree and returns matching file paths. Useful for finding configuration files, specific file types, or files with certain naming patterns.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"pattern": map[string]any{
+					"type":        "string",
+					"description": "Glob pattern to match file names (e.g., '*.yaml', 'config.*', 'test_*.py')",
+				},
+				"path": map[string]any{
+					"type":        "string",
+					"description": "Directory to search in (relative to workspace root, default '.')",
+				},
+				"max_depth": map[string]any{
+					"type":        "integer",
+					"description": "Maximum directory depth to search (default 10, max 20)",
+				},
+			},
+			"required": []string{"pattern"},
+		},
+		Handler: func(ctx context.Context, args map[string]any) (string, error) {
+			pattern, _ := args["pattern"].(string)
+			path := "."
+			if p, ok := args["path"].(string); ok && p != "" {
+				path = p
+			}
+			maxDepth := 0
+			if d, ok := args["max_depth"].(float64); ok {
+				maxDepth = int(d)
+			}
+			return r.fileTools.Search(ctx, path, pattern, maxDepth)
+		},
+	})
+
+	r.Register(&Tool{
+		Name:        "file_grep",
+		Description: "Search file contents for a regular expression pattern. Recursively searches files and returns matching lines with file paths and line numbers. Skips binary files and files larger than 1MB.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"pattern": map[string]any{
+					"type":        "string",
+					"description": "Regular expression pattern to search for in file contents",
+				},
+				"path": map[string]any{
+					"type":        "string",
+					"description": "Directory to search in (relative to workspace root, default '.')",
+				},
+				"max_depth": map[string]any{
+					"type":        "integer",
+					"description": "Maximum directory depth to search (default 10, max 20)",
+				},
+				"case_insensitive": map[string]any{
+					"type":        "boolean",
+					"description": "Whether to perform case-insensitive matching (default false)",
+				},
+			},
+			"required": []string{"pattern"},
+		},
+		Handler: func(ctx context.Context, args map[string]any) (string, error) {
+			pattern, _ := args["pattern"].(string)
+			path := "."
+			if p, ok := args["path"].(string); ok && p != "" {
+				path = p
+			}
+			maxDepth := 0
+			if d, ok := args["max_depth"].(float64); ok {
+				maxDepth = int(d)
+			}
+			caseInsensitive := false
+			if ci, ok := args["case_insensitive"].(bool); ok {
+				caseInsensitive = ci
+			}
+			return r.fileTools.Grep(ctx, path, pattern, maxDepth, caseInsensitive)
+		},
+	})
+
+	r.Register(&Tool{
+		Name:        "file_stat",
+		Description: "Get detailed information about one or more files or directories. Returns type, size, permissions, and modification time. Supports batch queries with comma-separated paths.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"paths": map[string]any{
+					"type":        "string",
+					"description": "Comma-separated file or directory paths to inspect (relative to workspace root)",
+				},
+			},
+			"required": []string{"paths"},
+		},
+		Handler: func(ctx context.Context, args map[string]any) (string, error) {
+			paths, _ := args["paths"].(string)
+			return r.fileTools.Stat(ctx, paths)
+		},
+	})
+
+	r.Register(&Tool{
+		Name:        "file_tree",
+		Description: "Display a directory tree structure with indentation. Shows the hierarchy of files and directories with a summary count. Useful for understanding project layout.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"path": map[string]any{
+					"type":        "string",
+					"description": "Root directory for the tree (relative to workspace root, default '.')",
+				},
+				"max_depth": map[string]any{
+					"type":        "integer",
+					"description": "Maximum depth to display (default 3, max 10)",
+				},
+			},
+		},
+		Handler: func(ctx context.Context, args map[string]any) (string, error) {
+			path := "."
+			if p, ok := args["path"].(string); ok && p != "" {
+				path = p
+			}
+			maxDepth := 0
+			if d, ok := args["max_depth"].(float64); ok {
+				maxDepth = int(d)
+			}
+			return r.fileTools.Tree(ctx, path, maxDepth)
+		},
+	})
 }
 
 func (r *Registry) registerShellExec() {
