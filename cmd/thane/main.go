@@ -257,7 +257,7 @@ func runIngest(ctx context.Context, stdout io.Writer, stderr io.Writer, configPa
 		return fmt.Errorf("create data directory: %w", err)
 	}
 
-	factStore, err := facts.NewStore(cfg.DataDir + "/facts.db")
+	factStore, err := facts.NewStore(cfg.DataDir+"/facts.db", logger)
 	if err != nil {
 		return fmt.Errorf("open fact store: %w", err)
 	}
@@ -667,7 +667,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// --- Fact store ---
 	// Long-term memory backed by SQLite. Facts are discrete pieces of
 	// knowledge that persist across conversations and restarts.
-	factStore, err := facts.NewStore(cfg.DataDir + "/facts.db")
+	factStore, err := facts.NewStore(cfg.DataDir+"/facts.db", logger)
 	if err != nil {
 		return fmt.Errorf("open fact store: %w", err)
 	}

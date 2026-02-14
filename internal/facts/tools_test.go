@@ -2,6 +2,7 @@ package facts
 
 import (
 	"context"
+	"log/slog"
 	"os"
 	"testing"
 
@@ -29,7 +30,7 @@ func TestRememberWithEmbedding(t *testing.T) {
 	defer os.Remove(tmpFile.Name())
 	tmpFile.Close()
 
-	store, err := NewStore(tmpFile.Name())
+	store, err := NewStore(tmpFile.Name(), slog.Default())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +80,7 @@ func TestRememberWithoutEmbedding(t *testing.T) {
 	defer os.Remove(tmpFile.Name())
 	tmpFile.Close()
 
-	store, err := NewStore(tmpFile.Name())
+	store, err := NewStore(tmpFile.Name(), slog.Default())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -115,7 +116,7 @@ func TestGenerateMissingEmbeddings(t *testing.T) {
 	defer os.Remove(tmpFile.Name())
 	tmpFile.Close()
 
-	store, err := NewStore(tmpFile.Name())
+	store, err := NewStore(tmpFile.Name(), slog.Default())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,7 +169,7 @@ func TestGenerateMissingEmbeddingsNoClient(t *testing.T) {
 	defer os.Remove(tmpFile.Name())
 	tmpFile.Close()
 
-	store, err := NewStore(tmpFile.Name())
+	store, err := NewStore(tmpFile.Name(), slog.Default())
 	if err != nil {
 		t.Fatal(err)
 	}
