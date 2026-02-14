@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/nugget/thane-ai-agent/internal/conditions"
 	"github.com/nugget/thane-ai-agent/internal/llm"
 	"github.com/nugget/thane-ai-agent/internal/router"
@@ -72,6 +73,10 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 		return nil, fmt.Errorf("task is required")
 	}
 
+	// Generate a unique delegate ID for log correlation.
+	delegateID, _ := uuid.NewV7()
+	did := shortID(delegateID.String())
+
 	profile := e.profiles[profileName]
 	if profile == nil {
 		profile = e.profiles["general"]
@@ -88,6 +93,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 	toolDefs := reg.List()
 
 	e.logger.Info("delegate started",
+		"delegate_id", did,
 		"task", truncate(task, 200),
 		"profile", profile.Name,
 		"guidance", truncate(guidance, 200),
@@ -114,7 +120,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 	}
 
 	// Select model via router.
-	model := e.selectModel(ctx, task, profile, len(toolDefs))
+	model := e.selectModel(ctx, did, task, profile, len(toolDefs))
 
 	startTime := time.Now()
 	var totalInput, totalOutput int
@@ -137,23 +143,25 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 		iterStart := time.Now()
 
 		e.logger.Info("delegate llm call",
+			"delegate_id", did,
 			"profile", profile.Name,
-			"iter", i+1,
+			"iter", i,
 			"model", model,
 			"msgs", len(messages),
 		)
 
 		resp, err := e.llm.ChatStream(ctx, model, messages, toolDefs, nil)
 		if err != nil {
-			return nil, fmt.Errorf("delegate llm call failed (iter %d): %w", i+1, err)
+			return nil, fmt.Errorf("delegate llm call failed (iter %d): %w", i, err)
 		}
 
 		totalInput += resp.InputTokens
 		totalOutput += resp.OutputTokens
 
 		e.logger.Info("delegate llm response",
+			"delegate_id", did,
 			"profile", profile.Name,
-			"iter", i+1,
+			"iter", i,
 			"model", model,
 			"input_tokens", resp.InputTokens,
 			"output_tokens", resp.OutputTokens,
@@ -163,7 +171,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 
 		// No tool calls — we have the final response.
 		if len(resp.Message.ToolCalls) == 0 {
-			e.logCompletion(profile.Name, model, i+1, totalInput, totalOutput, false, startTime)
+			e.logCompletion(did, profile.Name, model, i+1, totalInput, totalOutput, false, startTime)
 			return &Result{
 				Content:      resp.Message.Content,
 				Model:        model,
@@ -177,11 +185,12 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 		// Check token budget before executing tools.
 		if totalOutput >= maxTokens {
 			e.logger.Warn("delegate token budget exhausted",
+				"delegate_id", did,
 				"profile", profile.Name,
 				"cumul_output", totalOutput,
 				"max_tokens", maxTokens,
 			)
-			return e.forceTextResponse(ctx, model, messages, profile.Name, i+1, totalInput, totalOutput, startTime)
+			return e.forceTextResponse(ctx, did, model, messages, profile.Name, i+1, totalInput, totalOutput, startTime)
 		}
 
 		// Execute tool calls.
@@ -196,8 +205,9 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 			toolStart := time.Now()
 
 			e.logger.Info("delegate tool exec",
+				"delegate_id", did,
 				"profile", profile.Name,
-				"iter", i+1,
+				"iter", i,
 				"tool", tc.Function.Name,
 			)
 
@@ -206,12 +216,14 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 			if err != nil {
 				result = "Error: " + err.Error()
 				e.logger.Error("delegate tool exec failed",
+					"delegate_id", did,
 					"profile", profile.Name,
 					"tool", tc.Function.Name,
 					"error", err,
 				)
 			} else {
 				e.logger.Debug("delegate tool exec done",
+					"delegate_id", did,
 					"profile", profile.Name,
 					"tool", tc.Function.Name,
 					"result_len", len(result),
@@ -229,21 +241,22 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 
 	// Max iterations exhausted — force a text response.
 	e.logger.Warn("delegate max iterations reached",
+		"delegate_id", did,
 		"profile", profile.Name,
 		"max_iter", maxIter,
 	)
-	return e.forceTextResponse(ctx, model, messages, profile.Name, maxIter, totalInput, totalOutput, startTime)
+	return e.forceTextResponse(ctx, did, model, messages, profile.Name, maxIter, totalInput, totalOutput, startTime)
 }
 
 // forceTextResponse makes a final LLM call with tools=nil to force text output.
-func (e *Executor) forceTextResponse(ctx context.Context, model string, messages []llm.Message, profileName string, iterations, totalInput, totalOutput int, startTime time.Time) (*Result, error) {
+func (e *Executor) forceTextResponse(ctx context.Context, delegateID, model string, messages []llm.Message, profileName string, totalIter, totalInput, totalOutput int, startTime time.Time) (*Result, error) {
 	resp, err := e.llm.ChatStream(ctx, model, messages, nil, nil)
 	if err != nil {
-		e.logCompletion(profileName, model, iterations, totalInput, totalOutput, true, startTime)
+		e.logCompletion(delegateID, profileName, model, totalIter, totalInput, totalOutput, true, startTime)
 		return &Result{
 			Content:      "Delegate was unable to complete the task within its budget.",
 			Model:        model,
-			Iterations:   iterations,
+			Iterations:   totalIter,
 			InputTokens:  totalInput,
 			OutputTokens: totalOutput,
 			Exhausted:    true,
@@ -253,19 +266,19 @@ func (e *Executor) forceTextResponse(ctx context.Context, model string, messages
 	totalInput += resp.InputTokens
 	totalOutput += resp.OutputTokens
 
-	e.logCompletion(profileName, model, iterations, totalInput, totalOutput, true, startTime)
+	e.logCompletion(delegateID, profileName, model, totalIter, totalInput, totalOutput, true, startTime)
 	return &Result{
 		Content:      resp.Message.Content,
 		Model:        model,
-		Iterations:   iterations,
+		Iterations:   totalIter,
 		InputTokens:  totalInput,
 		OutputTokens: totalOutput,
 		Exhausted:    true,
 	}, nil
 }
 
-// selectModel picks a model for the delegate via the router or default.
-func (e *Executor) selectModel(ctx context.Context, task string, profile *Profile, toolCount int) string {
+// selectModel picks a model for the delegate via the router or falls back to the default.
+func (e *Executor) selectModel(ctx context.Context, delegateID, task string, profile *Profile, toolCount int) string {
 	if e.router != nil {
 		model, _ := e.router.Route(ctx, router.Request{
 			Query:      task,
@@ -276,6 +289,7 @@ func (e *Executor) selectModel(ctx context.Context, task string, profile *Profil
 		})
 		if model != "" {
 			e.logger.Debug("delegate model selected by router",
+				"delegate_id", delegateID,
 				"profile", profile.Name,
 				"model", model,
 			)
@@ -283,17 +297,20 @@ func (e *Executor) selectModel(ctx context.Context, task string, profile *Profil
 		}
 	}
 	e.logger.Debug("delegate using default model",
+		"delegate_id", delegateID,
 		"profile", profile.Name,
 		"model", e.defaultModel,
 	)
 	return e.defaultModel
 }
 
-func (e *Executor) logCompletion(profileName, model string, iterations, totalInput, totalOutput int, exhausted bool, startTime time.Time) {
+// logCompletion logs structured information about a completed delegate execution.
+func (e *Executor) logCompletion(delegateID, profileName, model string, totalIter, totalInput, totalOutput int, exhausted bool, startTime time.Time) {
 	e.logger.Info("delegate completed",
+		"delegate_id", delegateID,
 		"profile", profileName,
 		"model", model,
-		"iterations", iterations,
+		"total_iter", totalIter,
 		"input_tokens", totalInput,
 		"output_tokens", totalOutput,
 		"exhausted", exhausted,
@@ -309,9 +326,18 @@ func formatTokens(n int) string {
 	return fmt.Sprintf("%.1fK", math.Round(float64(n)/100)/10)
 }
 
+// truncate shortens a string to maxLen characters, adding "..." if truncated.
 func truncate(s string, maxLen int) string {
 	if len(s) <= maxLen {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+// shortID returns a truncated prefix of a UUID for compact log output.
+func shortID(id string) string {
+	if len(id) > 8 {
+		return id[:8]
+	}
+	return id
 }
