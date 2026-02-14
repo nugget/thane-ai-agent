@@ -617,6 +617,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	defaultContextWindow := cfg.ContextWindowForModel(cfg.Models.Default, 200000)
 
 	loop := agent.NewLoop(logger, mem, compactor, rtr, ha, sched, llmClient, cfg.Models.Default, talentContent, personaContent, defaultContextWindow)
+	loop.SetTimezone(cfg.Timezone)
 	loop.SetArchiver(archiveAdapter)
 
 	// --- Static context injection ---

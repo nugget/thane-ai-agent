@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/nugget/thane-ai-agent/internal/buildinfo"
+	"github.com/nugget/thane-ai-agent/internal/conditions"
 	"github.com/nugget/thane-ai-agent/internal/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/llm"
 	"github.com/nugget/thane-ai-agent/internal/memory"
@@ -125,6 +125,7 @@ type Loop struct {
 	talents         string // Combined talent content for system prompt
 	persona         string // Persona content (replaces base system prompt if set)
 	injectedContext string // Static context from inject_files, loaded at startup
+	timezone        string // IANA timezone for Current Conditions (e.g., "America/Chicago")
 	contextWindow   int    // Context window size of default model
 	failoverHandler FailoverHandler
 	contextProvider ContextProvider
@@ -173,6 +174,12 @@ func (l *Loop) SetInjectedContext(ctx string) {
 	l.injectedContext = ctx
 }
 
+// SetTimezone configures the IANA timezone for the Current Conditions
+// section of the system prompt (e.g., "America/Chicago").
+func (l *Loop) SetTimezone(tz string) {
+	l.timezone = tz
+}
+
 // Tools returns the tool registry for adding additional tools.
 func (l *Loop) Tools() *tools.Registry {
 	return l.tools
@@ -217,31 +224,33 @@ func getGreetingResponse() string {
 
 func (l *Loop) buildSystemPrompt(ctx context.Context, userMessage string) string {
 	var sb strings.Builder
+
+	// 1. Persona (identity — who am I)
 	if l.persona != "" {
 		sb.WriteString(l.persona)
 	} else {
 		sb.WriteString(prompts.BaseSystemPrompt())
 	}
 
-	// Add static injected context (from config inject_files)
+	// 2. Injected context (knowledge — what do I know)
 	if l.injectedContext != "" {
 		sb.WriteString("\n\n## Injected Context\n\n")
 		sb.WriteString(l.injectedContext)
 	}
 
-	// Add build info and current time
-	sb.WriteString("\n\n## Thane Runtime\n")
-	sb.WriteString(buildinfo.ContextString())
-	sb.WriteString("\nCurrent time: ")
-	sb.WriteString(time.Now().Format("Monday, January 2, 2006 at 15:04 MST"))
+	// 3. Current Conditions (environment — where/when am I)
+	// Placed early because models attend more strongly to content near
+	// the beginning. Uses H1 heading to signal operational importance.
+	sb.WriteString("\n\n")
+	sb.WriteString(conditions.CurrentConditions(l.timezone))
 
-	// Add talents
+	// 4. Talents (behavior — how should I act)
 	if l.talents != "" {
 		sb.WriteString("\n\n## Behavioral Guidance\n\n")
 		sb.WriteString(l.talents)
 	}
 
-	// Add dynamic context (semantic facts, etc.)
+	// 5. Dynamic context (facts, anticipations — what's relevant right now)
 	if l.contextProvider != nil {
 		dynCtx, err := l.contextProvider.GetContext(ctx, userMessage)
 		if err != nil {

@@ -201,6 +201,10 @@ func handleOllamaChatShared(w http.ResponseWriter, r *http.Request, loop *agent.
 		model = ""
 		hints[router.HintQualityFloor] = "9"
 		hints[router.HintMission] = "conversation"
+	case "thane:balanced":
+		model = ""
+		hints[router.HintQualityFloor] = "7"
+		hints[router.HintMission] = "conversation"
 	case "thane:fast":
 		model = ""
 		hints[router.HintMission] = "device_control"
@@ -486,6 +490,7 @@ func handleOllamaTagsShared(w http.ResponseWriter, r *http.Request, logger *slog
 	}{
 		{"thane:latest", "default routing"},
 		{"thane:thinking", "prefer quality, complex reasoning"},
+		{"thane:balanced", "balanced cost and quality (Sonnet-tier)"},
 		{"thane:fast", "prefer speed and cost efficiency"},
 		{"thane:homeassistant", "optimized for HA device control"},
 		{"thane:local", "prefer local/free models only"},
