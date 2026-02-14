@@ -62,7 +62,8 @@ func TestGetContext_Empty(t *testing.T) {
 
 func TestGetContext_DailyFilesOnly(t *testing.T) {
 	dir := t.TempDir()
-	today := time.Now().Format("2006-01-02")
+	fixedNow := time.Date(2026, 2, 14, 12, 0, 0, 0, time.UTC)
+	today := fixedNow.Format("2006-01-02")
 	err := os.WriteFile(filepath.Join(dir, today+".md"), []byte("Worked on FTS5 today."), 0644)
 	if err != nil {
 		t.Fatal(err)
@@ -73,6 +74,7 @@ func TestGetContext_DailyFilesOnly(t *testing.T) {
 		LookbackDays:  2,
 		HistoryTokens: 4000,
 	})
+	p.nowFunc = func() time.Time { return fixedNow }
 
 	got, err := p.GetContext(context.Background(), "")
 	if err != nil {
@@ -141,12 +143,13 @@ func TestGetContext_HistoryOnly(t *testing.T) {
 
 func TestGetContext_Combined(t *testing.T) {
 	dir := t.TempDir()
-	today := time.Now().Format("2006-01-02")
+	fixedNow := time.Date(2026, 2, 14, 12, 0, 0, 0, time.UTC)
+	today := fixedNow.Format("2006-01-02")
 	if err := os.WriteFile(filepath.Join(dir, today+".md"), []byte("Morning standup notes."), 0644); err != nil {
 		t.Fatal(err)
 	}
 
-	now := time.Now().UTC()
+	now := fixedNow
 	archive := &mockArchive{
 		sessions: []*memory.Session{
 			{
@@ -171,6 +174,7 @@ func TestGetContext_Combined(t *testing.T) {
 		HistoryTokens:     4000,
 		SessionGapMinutes: 30,
 	})
+	p.nowFunc = func() time.Time { return fixedNow }
 
 	got, err := p.GetContext(context.Background(), "")
 	if err != nil {
@@ -186,8 +190,9 @@ func TestGetContext_Combined(t *testing.T) {
 
 func TestDailyMemory_MissingFiles(t *testing.T) {
 	dir := t.TempDir()
+	fixedNow := time.Date(2026, 2, 14, 12, 0, 0, 0, time.UTC)
 	// Only create yesterday's file, not today's.
-	yesterday := time.Now().AddDate(0, 0, -1).Format("2006-01-02")
+	yesterday := fixedNow.AddDate(0, 0, -1).Format("2006-01-02")
 	if err := os.WriteFile(filepath.Join(dir, yesterday+".md"), []byte("Yesterday's notes."), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -196,6 +201,7 @@ func TestDailyMemory_MissingFiles(t *testing.T) {
 		DailyDir:     dir,
 		LookbackDays: 2,
 	})
+	p.nowFunc = func() time.Time { return fixedNow }
 
 	got := p.getDailyMemory()
 	if !strings.Contains(got, "Yesterday") {
@@ -211,7 +217,8 @@ func TestDailyMemory_MissingFiles(t *testing.T) {
 
 func TestDailyMemory_EmptyFile(t *testing.T) {
 	dir := t.TempDir()
-	today := time.Now().Format("2006-01-02")
+	fixedNow := time.Date(2026, 2, 14, 12, 0, 0, 0, time.UTC)
+	today := fixedNow.Format("2006-01-02")
 	if err := os.WriteFile(filepath.Join(dir, today+".md"), []byte("  \n  "), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -220,6 +227,7 @@ func TestDailyMemory_EmptyFile(t *testing.T) {
 		DailyDir:     dir,
 		LookbackDays: 1,
 	})
+	p.nowFunc = func() time.Time { return fixedNow }
 
 	got := p.getDailyMemory()
 	if got != "" {
@@ -480,13 +488,23 @@ func TestHelpers(t *testing.T) {
 		}
 		long := strings.Repeat("x", 300)
 		got := truncateContent(long, 200)
-		if len(got) != 203 { // 200 + "..."
-			t.Errorf("truncated length: got %d, want 203", len(got))
+		if got != strings.Repeat("x", 200)+"..." {
+			t.Errorf("truncated content mismatch")
 		}
 		// Newlines should be replaced with spaces.
 		multiline := "line1\nline2\nline3"
 		if got := truncateContent(multiline, 100); strings.Contains(got, "\n") {
 			t.Errorf("expected newlines replaced, got %q", got)
+		}
+		// UTF-8 safety: multi-byte runes should not be split.
+		utf8Str := strings.Repeat("\u00e9", 10) // 10 × é (2 bytes each)
+		got = truncateContent(utf8Str, 5)
+		if !strings.HasSuffix(got, "...") {
+			t.Errorf("expected ... suffix, got %q", got)
+		}
+		// Should have exactly 5 runes + "..."
+		if got != strings.Repeat("\u00e9", 5)+"..." {
+			t.Errorf("UTF-8 truncation failed: got %q", got)
 		}
 	})
 
@@ -499,8 +517,14 @@ func TestHelpers(t *testing.T) {
 		}
 		long := strings.Repeat("x", 100)
 		got := firstSentence(long)
-		if len(got) != 83 { // 80 + "..."
-			t.Errorf("got length %d, want 83", len(got))
+		if got != strings.Repeat("x", 80)+"..." {
+			t.Errorf("long truncation failed: got %q", got)
+		}
+		// UTF-8 safety: truncation should respect rune boundaries.
+		utf8Long := strings.Repeat("\u00e9", 100)
+		got = firstSentence(utf8Long)
+		if got != strings.Repeat("\u00e9", 80)+"..." {
+			t.Errorf("UTF-8 firstSentence failed: got %q", got)
 		}
 	})
 

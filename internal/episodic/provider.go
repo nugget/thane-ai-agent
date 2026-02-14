@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/nugget/thane-ai-agent/internal/memory"
 )
@@ -62,6 +63,7 @@ type Provider struct {
 	lookbackDays  int
 	historyTokens int
 	sessionGap    time.Duration
+	nowFunc       func() time.Time // injectable for testing; defaults to time.Now
 }
 
 // NewProvider creates an episodic memory context provider.
@@ -74,6 +76,7 @@ func NewProvider(archive ArchiveReader, logger *slog.Logger, cfg Config) *Provid
 		lookbackDays:  cfg.LookbackDays,
 		historyTokens: cfg.HistoryTokens,
 		sessionGap:    time.Duration(cfg.SessionGapMinutes) * time.Minute,
+		nowFunc:       time.Now,
 	}
 }
 
@@ -111,7 +114,7 @@ func (p *Provider) getDailyMemory() string {
 
 	dir := expandTilde(p.dailyDir)
 	loc := p.loadLocation()
-	now := time.Now().In(loc)
+	now := p.nowFunc().In(loc)
 
 	var sb strings.Builder
 	for i := range p.lookbackDays {
@@ -155,10 +158,20 @@ func (p *Provider) getRecentHistory() string {
 		return ""
 	}
 
-	sessions, err := p.archive.ListSessions("", 20)
+	allSessions, err := p.archive.ListSessions("", 20)
 	if err != nil {
 		p.logger.Warn("episodic: failed to list sessions", "error", err)
 		return ""
+	}
+
+	// Filter to closed sessions only. Active (unclosed) sessions have
+	// EndedAt == nil — they represent the current conversation or
+	// other in-progress sessions whose transcripts are incomplete.
+	var sessions []*memory.Session
+	for _, s := range allSessions {
+		if s.EndedAt != nil {
+			sessions = append(sessions, s)
+		}
 	}
 	if len(sessions) == 0 {
 		return ""
@@ -228,6 +241,13 @@ func (p *Provider) getRecentHistory() string {
 	return strings.TrimSpace(sb.String())
 }
 
+// maxExcerptMessages caps how many messages we scan from the tail of a
+// session transcript. This avoids loading excessively large transcripts
+// when the budget only needs a handful of messages. A future
+// optimisation could add a GetRecentMessages(sessionID, limit) method
+// to ArchiveReader to push this limit into the SQL query.
+const maxExcerptMessages = 50
+
 // formatTranscriptExcerpt formats the most recent session with actual
 // message excerpts from the transcript, walking backward from the end
 // until the budget is consumed.
@@ -245,9 +265,12 @@ func (p *Provider) formatTranscriptExcerpt(sess *memory.Session, budget int) (st
 
 	remaining := budget - estimateTokens(header)
 
-	// Collect user/assistant messages from the end.
+	// Collect user/assistant messages from the end, capped to avoid
+	// scanning excessively long transcripts.
 	var excerpts []string
-	for i := len(messages) - 1; i >= 0 && remaining > 0; i-- {
+	scanned := 0
+	for i := len(messages) - 1; i >= 0 && remaining > 0 && scanned < maxExcerptMessages; i-- {
+		scanned++
 		m := messages[i]
 		if m.Role != "user" && m.Role != "assistant" {
 			continue
@@ -383,24 +406,26 @@ func expandTilde(path string) string {
 	return path
 }
 
-// truncateContent shortens a string to maxLen characters, appending
-// "..." if truncated.
+// truncateContent shortens a string to maxLen runes, appending "..."
+// if truncated. Newlines are replaced with spaces for inline display.
 func truncateContent(s string, maxLen int) string {
 	s = strings.ReplaceAll(s, "\n", " ")
-	if len(s) <= maxLen {
+	if utf8.RuneCountInString(s) <= maxLen {
 		return s
 	}
-	return s[:maxLen] + "..."
+	runes := []rune(s)
+	return string(runes[:maxLen]) + "..."
 }
 
 // firstSentence returns the first sentence of a string, or a truncated
-// version if no sentence boundary is found.
+// version if no sentence boundary is found. Truncation is rune-safe.
 func firstSentence(s string) string {
 	if idx := strings.Index(s, ". "); idx > 0 && idx < 100 {
 		return s[:idx+1]
 	}
-	if len(s) > 80 {
-		return s[:80] + "..."
+	if utf8.RuneCountInString(s) > 80 {
+		runes := []rune(s)
+		return string(runes[:80]) + "..."
 	}
 	return s
 }

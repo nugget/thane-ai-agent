@@ -487,6 +487,15 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("timezone %q invalid (expected IANA timezone, e.g. America/Chicago): %w", c.Timezone, err)
 		}
 	}
+	if c.Episodic.LookbackDays < 0 {
+		return fmt.Errorf("episodic.lookback_days %d must be non-negative", c.Episodic.LookbackDays)
+	}
+	if c.Episodic.HistoryTokens < 0 {
+		return fmt.Errorf("episodic.history_tokens %d must be non-negative", c.Episodic.HistoryTokens)
+	}
+	if c.Episodic.SessionGapMinutes < 0 {
+		return fmt.Errorf("episodic.session_gap_minutes %d must be non-negative", c.Episodic.SessionGapMinutes)
+	}
 	return nil
 }
 
