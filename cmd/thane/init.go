@@ -31,13 +31,13 @@ func runInit(w io.Writer, dir string) error {
 		}
 	}
 
-	// Write config.yaml from embedded default.
-	if err := writeIfMissing(w, filepath.Join(absDir, "config.yaml"), defaults.ConfigYAML); err != nil {
+	// Write config.yaml from embedded default (0600 — may contain secrets).
+	if err := writeIfMissing(w, filepath.Join(absDir, "config.yaml"), defaults.ConfigYAML, 0o600); err != nil {
 		return err
 	}
 
 	// Write persona.md from embedded default.
-	if err := writeIfMissing(w, filepath.Join(absDir, "persona.md"), defaults.PersonaMD); err != nil {
+	if err := writeIfMissing(w, filepath.Join(absDir, "persona.md"), defaults.PersonaMD, 0o644); err != nil {
 		return err
 	}
 
@@ -54,7 +54,7 @@ func runInit(w io.Writer, dir string) error {
 		if err != nil {
 			return fmt.Errorf("read embedded %s: %w", name, err)
 		}
-		return writeIfMissing(w, filepath.Join(absDir, "talents", name), data)
+		return writeIfMissing(w, filepath.Join(absDir, "talents", name), data, 0o644)
 	})
 	if err != nil {
 		return fmt.Errorf("deploy talents: %w", err)
@@ -66,14 +66,19 @@ func runInit(w io.Writer, dir string) error {
 	return nil
 }
 
-// writeIfMissing writes data to path if the file doesn't already exist.
-// It prints a status line for each file.
-func writeIfMissing(w io.Writer, path string, data []byte) error {
-	if _, err := os.Stat(path); err == nil {
+// writeIfMissing writes data to path with the given permissions if the file
+// does not already exist. It prints a status line for each file indicating
+// whether it was created or skipped.
+func writeIfMissing(w io.Writer, path string, data []byte, mode os.FileMode) error {
+	_, err := os.Stat(path)
+	if err == nil {
 		fmt.Fprintf(w, "  · %s (exists, skipping)\n", path)
 		return nil
 	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	if !os.IsNotExist(err) {
+		return fmt.Errorf("stat %s: %w", path, err)
+	}
+	if err := os.WriteFile(path, data, mode); err != nil {
 		return fmt.Errorf("write %s: %w", path, err)
 	}
 	fmt.Fprintf(w, "  ✓ %s\n", path)
