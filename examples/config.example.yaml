@@ -45,6 +45,14 @@ models:
       cost_tier: 0
       min_complexity: moderate
     # Anthropic models (requires anthropic.api_key)
+    # - name: claude-sonnet-4-20250514
+    #   provider: anthropic
+    #   supports_tools: true
+    #   context_window: 200000
+    #   speed: 7
+    #   quality: 8
+    #   cost_tier: 2
+    #   min_complexity: moderate
     # - name: claude-opus-4-20250514
     #   provider: anthropic
     #   supports_tools: true
