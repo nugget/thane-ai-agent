@@ -121,7 +121,7 @@ func TestPublisher_SensorDefinitions(t *testing.T) {
 	defs := p.sensorDefinitions()
 
 	expectedEntities := []string{
-		"uptime", "version", "active_sessions",
+		"uptime", "version",
 		"tokens_today", "last_request", "default_model",
 	}
 

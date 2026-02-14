@@ -566,8 +566,18 @@ func (c *Config) Validate() error {
 		}
 	}
 	if c.MQTT.Configured() {
-		if _, err := url.Parse(c.MQTT.Broker); err != nil {
+		u, err := url.Parse(c.MQTT.Broker)
+		if err != nil {
 			return fmt.Errorf("mqtt.broker %q is not a valid URL: %w", c.MQTT.Broker, err)
+		}
+		if u.Scheme == "" || u.Host == "" {
+			return fmt.Errorf("mqtt.broker %q must include a scheme and host", c.MQTT.Broker)
+		}
+		switch u.Scheme {
+		case "mqtt", "mqtts", "ssl", "ws", "wss":
+			// supported schemes
+		default:
+			return fmt.Errorf("mqtt.broker scheme %q invalid (expected one of mqtt, mqtts, ssl, ws, wss)", u.Scheme)
 		}
 		if c.MQTT.PublishIntervalSec < 10 {
 			return fmt.Errorf("mqtt.publish_interval %d too low (minimum 10 seconds)", c.MQTT.PublishIntervalSec)

@@ -25,8 +25,6 @@ type StatsSource interface {
 	Version() string
 	// DefaultModel returns the configured default LLM model name.
 	DefaultModel() string
-	// ActiveSessions returns the count of active conversation sessions.
-	ActiveSessions() int
 	// LastRequestTime returns when the most recent LLM request completed.
 	LastRequestTime() time.Time
 }
@@ -45,8 +43,13 @@ type Publisher struct {
 }
 
 // New creates a Publisher but does not connect. Call [Publisher.Start]
-// to begin the connection and publish loop.
+// to begin the connection and publish loop. A nil logger is replaced
+// with [slog.Default]; nil tokens or stats will cause Start to return
+// an error.
 func New(cfg config.MQTTConfig, instanceID string, tokens *DailyTokens, stats StatsSource, logger *slog.Logger) *Publisher {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &Publisher{
 		cfg:        cfg,
 		instanceID: instanceID,
@@ -61,6 +64,13 @@ func New(cfg config.MQTTConfig, instanceID string, tokens *DailyTokens, stats St
 // loop. It blocks until ctx is cancelled. On every (re-)connect it
 // publishes discovery configs and a birth message.
 func (p *Publisher) Start(ctx context.Context) error {
+	if p.tokens == nil {
+		return fmt.Errorf("mqtt publisher: tokens must not be nil")
+	}
+	if p.stats == nil {
+		return fmt.Errorf("mqtt publisher: stats must not be nil")
+	}
+
 	brokerURL, err := url.Parse(p.cfg.Broker)
 	if err != nil {
 		return fmt.Errorf("parse mqtt broker URL: %w", err)
@@ -81,14 +91,16 @@ func (p *Publisher) Start(ctx context.Context) error {
 		},
 		OnConnectionUp: func(cm *autopaho.ConnectionManager, _ *paho.Connack) {
 			p.logger.Info("mqtt connected to broker", "broker", p.cfg.Broker)
-			p.publishDiscovery(ctx, cm)
-			p.publishAvailability(ctx, cm, "online")
+			publishCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			p.publishDiscovery(publishCtx, cm)
+			p.publishAvailability(publishCtx, cm, "online")
 		},
 		OnConnectError: func(err error) {
 			p.logger.Warn("mqtt connection error", "error", err)
 		},
 		ClientConfig: paho.ClientConfig{
-			ClientID: "thane-" + p.cfg.DeviceName,
+			ClientID: "thane-" + p.instanceID[:8],
 		},
 	}
 
@@ -191,18 +203,6 @@ func (p *Publisher) sensorDefinitions() []sensorDef {
 			},
 		},
 		{
-			entitySuffix: "active_sessions",
-			config: SensorConfig{
-				Name:              p.device.Name + " Active Sessions",
-				UniqueID:          p.instanceID + "_active_sessions",
-				StateTopic:        p.stateTopic("active_sessions"),
-				AvailabilityTopic: avail,
-				Device:            p.device,
-				Icon:              "mdi:chat-processing",
-				StateClass:        "measurement",
-			},
-		},
-		{
 			entitySuffix: "tokens_today",
 			config: SensorConfig{
 				Name:              p.device.Name + " Tokens Today",
@@ -211,7 +211,7 @@ func (p *Publisher) sensorDefinitions() []sensorDef {
 				AvailabilityTopic: avail,
 				Device:            p.device,
 				Icon:              "mdi:counter",
-				StateClass:        "total_increasing",
+				StateClass:        "measurement",
 				UnitOfMeasurement: "tokens",
 			},
 		},
@@ -284,7 +284,14 @@ func (p *Publisher) publishAvailability(ctx context.Context, cm *autopaho.Connec
 // --- Periodic state loop ---
 
 func (p *Publisher) runLoop(ctx context.Context) {
+	const minInterval = 5 * time.Second
 	interval := time.Duration(p.cfg.PublishIntervalSec) * time.Second
+	if interval <= 0 {
+		p.logger.Warn("mqtt publish interval non-positive; using minimum",
+			"configured_seconds", p.cfg.PublishIntervalSec,
+			"minimum", minInterval.String())
+		interval = minInterval
+	}
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
@@ -307,10 +314,9 @@ func (p *Publisher) publishStates(ctx context.Context) {
 	}
 
 	states := map[string]string{
-		"uptime":          p.stats.Uptime().Truncate(time.Second).String(),
-		"version":         p.stats.Version(),
-		"active_sessions": strconv.Itoa(p.stats.ActiveSessions()),
-		"default_model":   p.stats.DefaultModel(),
+		"uptime":        p.stats.Uptime().Truncate(time.Second).String(),
+		"version":       p.stats.Version(),
+		"default_model": p.stats.DefaultModel(),
 	}
 
 	input, output, _ := p.tokens.Snapshot()

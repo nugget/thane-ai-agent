@@ -75,10 +75,11 @@ func (s *Server) SetTokenObserver(obs TokenObserver) {
 	s.tokenObserver = obs
 }
 
-// Stats returns the session stats for external observers (e.g., the
-// MQTT publisher).
-func (s *Server) Stats() *SessionStats {
-	return s.stats
+// LastRequest returns when the most recent LLM request completed.
+// Returns the zero value if no requests have been recorded. This
+// method is safe for concurrent use.
+func (s *Server) LastRequest() time.Time {
+	return s.stats.LastRequest()
 }
 
 // SessionStats tracks token usage and cost for the current session.

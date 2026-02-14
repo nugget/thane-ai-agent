@@ -1065,8 +1065,8 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		server.SetTokenObserver(dailyTokens)
 
 		statsAdapter := &mqttStatsAdapter{
-			model: cfg.Models.Default,
-			stats: server.Stats(),
+			model:  cfg.Models.Default,
+			server: server,
 		}
 
 		mqttPub = mqtt.New(cfg.MQTT, instanceID, dailyTokens, statsAdapter, logger)
@@ -1252,15 +1252,16 @@ func (f *factSetterFunc) SetFact(category, key, value, source string, confidence
 	return err
 }
 
-// mqttStatsAdapter bridges the API server's session stats and build
-// info to the MQTT publisher's [mqtt.StatsSource] interface.
+// mqttStatsAdapter bridges the API server and build info to the MQTT
+// publisher's [mqtt.StatsSource] interface. It holds only a narrow
+// reference to the server (via its lock-protected getter), not a
+// direct pointer to mutable stats fields.
 type mqttStatsAdapter struct {
-	model string
-	stats *api.SessionStats
+	model  string
+	server *api.Server
 }
 
 func (a *mqttStatsAdapter) Uptime() time.Duration      { return buildinfo.Uptime() }
 func (a *mqttStatsAdapter) Version() string            { return buildinfo.Version }
 func (a *mqttStatsAdapter) DefaultModel() string       { return a.model }
-func (a *mqttStatsAdapter) ActiveSessions() int        { return 1 }
-func (a *mqttStatsAdapter) LastRequestTime() time.Time { return a.stats.LastRequest() }
+func (a *mqttStatsAdapter) LastRequestTime() time.Time { return a.server.LastRequest() }
