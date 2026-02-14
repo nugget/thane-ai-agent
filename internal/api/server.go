@@ -40,19 +40,27 @@ type DependencyStatus struct {
 // HealthStatusFunc returns dependency health information for the /health endpoint.
 type HealthStatusFunc func() map[string]DependencyStatus
 
+// TokenObserver is notified after each LLM completion with the token
+// counts from that request. Implementations must be safe for
+// concurrent use.
+type TokenObserver interface {
+	OnTokens(inputTokens, outputTokens int)
+}
+
 // Server is the HTTP API server.
 type Server struct {
-	address      string
-	port         int
-	loop         *agent.Loop
-	router       *router.Router
-	checkpointer *checkpoint.Checkpointer
-	memoryStore  *memory.SQLiteStore
-	archiveStore *memory.ArchiveStore
-	healthDeps   HealthStatusFunc
-	logger       *slog.Logger
-	server       *http.Server
-	stats        *SessionStats
+	address       string
+	port          int
+	loop          *agent.Loop
+	router        *router.Router
+	checkpointer  *checkpoint.Checkpointer
+	memoryStore   *memory.SQLiteStore
+	archiveStore  *memory.ArchiveStore
+	healthDeps    HealthStatusFunc
+	tokenObserver TokenObserver
+	logger        *slog.Logger
+	server        *http.Server
+	stats         *SessionStats
 }
 
 // SetConnManager sets the dependency health provider for the /health endpoint.
@@ -60,14 +68,29 @@ func (s *Server) SetConnManager(fn HealthStatusFunc) {
 	s.healthDeps = fn
 }
 
+// SetTokenObserver registers an observer that is notified after each
+// LLM completion with the token counts from that request. This is used
+// by the MQTT publisher's daily token accumulator.
+func (s *Server) SetTokenObserver(obs TokenObserver) {
+	s.tokenObserver = obs
+}
+
+// LastRequest returns when the most recent LLM request completed.
+// Returns the zero value if no requests have been recorded. This
+// method is safe for concurrent use.
+func (s *Server) LastRequest() time.Time {
+	return s.stats.LastRequest()
+}
+
 // SessionStats tracks token usage and cost for the current session.
 type SessionStats struct {
-	TotalInputTokens  int64   `json:"total_input_tokens"`
-	TotalOutputTokens int64   `json:"total_output_tokens"`
-	TotalRequests     int64   `json:"total_requests"`
-	EstimatedCostUSD  float64 `json:"estimated_cost_usd"`
-	ReportedBalance   float64 `json:"reported_balance_usd,omitempty"`
-	BalanceSetAt      string  `json:"balance_set_at,omitempty"`
+	TotalInputTokens  int64     `json:"total_input_tokens"`
+	TotalOutputTokens int64     `json:"total_output_tokens"`
+	TotalRequests     int64     `json:"total_requests"`
+	EstimatedCostUSD  float64   `json:"estimated_cost_usd"`
+	ReportedBalance   float64   `json:"reported_balance_usd,omitempty"`
+	BalanceSetAt      string    `json:"balance_set_at,omitempty"`
+	LastRequestAt     time.Time `json:"-"` // Used by MQTT publisher, not exposed in JSON.
 	mu                sync.Mutex
 }
 
@@ -85,6 +108,7 @@ func (s *SessionStats) Record(model string, inputTokens, outputTokens int) {
 	s.TotalInputTokens += int64(inputTokens)
 	s.TotalOutputTokens += int64(outputTokens)
 	s.TotalRequests++
+	s.LastRequestAt = time.Now()
 
 	pricing, ok := modelPricing[model]
 	if !ok {
@@ -92,6 +116,24 @@ func (s *SessionStats) Record(model string, inputTokens, outputTokens int) {
 	}
 	s.EstimatedCostUSD += float64(inputTokens) / 1_000_000.0 * pricing[0]
 	s.EstimatedCostUSD += float64(outputTokens) / 1_000_000.0 * pricing[1]
+}
+
+// LastRequest returns when the most recent LLM request completed.
+// Returns the zero value if no requests have been recorded.
+func (s *SessionStats) LastRequest() time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.LastRequestAt
+}
+
+// recordUsage records token usage in session stats and notifies the
+// token observer (if set) so external consumers (e.g., the MQTT daily
+// token accumulator) are updated.
+func (s *Server) recordUsage(model string, inputTokens, outputTokens int) {
+	s.stats.Record(model, inputTokens, outputTokens)
+	if s.tokenObserver != nil {
+		s.tokenObserver.OnTokens(inputTokens, outputTokens)
+	}
 }
 
 func (s *SessionStats) SetBalance(balance float64) {
@@ -354,7 +396,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Record usage stats
-	s.stats.Record(resp.Model, resp.InputTokens, resp.OutputTokens)
+	s.recordUsage(resp.Model, resp.InputTokens, resp.OutputTokens)
 
 	// Format as OpenAI response
 	completion := ChatCompletionResponse{
@@ -433,7 +475,7 @@ func (s *Server) handleSimpleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.stats.Record(resp.Model, resp.InputTokens, resp.OutputTokens)
+	s.recordUsage(resp.Model, resp.InputTokens, resp.OutputTokens)
 
 	w.Header().Set("Content-Type", "application/json")
 	writeJSON(w, SimpleChatResponse{
@@ -547,7 +589,7 @@ func (s *Server) handleStreamingCompletion(w http.ResponseWriter, r *http.Reques
 	}
 
 	// Record usage stats
-	s.stats.Record(resp.Model, resp.InputTokens, resp.OutputTokens)
+	s.recordUsage(resp.Model, resp.InputTokens, resp.OutputTokens)
 
 	// Update model name and send final chunk
 	modelName = resp.Model

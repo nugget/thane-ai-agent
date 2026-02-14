@@ -66,6 +66,17 @@ models:
 # anthropic:
 #   api_key: sk-ant-...
 
+# MQTT publishing (optional — for Home Assistant device discovery)
+# When configured, Thane connects to an MQTT broker and publishes HA
+# discovery messages so it appears as a native device with sensors.
+# mqtt:
+#   broker: mqtts://your-broker:8883   # mqtt:// or mqtts:// URL
+#   username: thane
+#   password: your-mqtt-password
+#   discovery_prefix: homeassistant    # default
+#   device_name: thane-ai-agent        # unique name for this instance
+#   publish_interval: 60               # seconds, default
+
 # Storage paths
 data_dir: ./db
 talents_dir: ./talents
