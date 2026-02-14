@@ -124,6 +124,10 @@ type Config struct {
 	// Search configures web search providers.
 	Search SearchConfig `yaml:"search"`
 
+	// Episodic configures episodic memory context injection (daily
+	// memory files and recent conversation history).
+	Episodic EpisodicConfig `yaml:"episodic"`
+
 	// Timezone is the IANA timezone for the household (e.g.,
 	// "America/Chicago"). Used in the Current Conditions system prompt
 	// section so the agent reasons about local time. If empty, the
@@ -291,6 +295,32 @@ type ExtractionConfig struct {
 	TimeoutSeconds int `yaml:"timeout_seconds"`
 }
 
+// EpisodicConfig configures episodic memory context injection. When
+// configured, the agent receives curated daily notes and a recency-graded
+// summary of recent conversations in its system prompt, giving it
+// continuity across sessions.
+type EpisodicConfig struct {
+	// DailyDir is the directory containing daily memory files named
+	// YYYY-MM-DD.md. Supports ~ expansion. If empty, daily memory
+	// file injection is disabled.
+	DailyDir string `yaml:"daily_dir"`
+
+	// LookbackDays is how many days of daily memory files to include.
+	// Today and the previous (LookbackDays-1) days are checked.
+	// Default: 2 (today + yesterday).
+	LookbackDays int `yaml:"lookback_days"`
+
+	// HistoryTokens is the approximate token budget for recent
+	// conversation history injected into the system prompt.
+	// Default: 4000.
+	HistoryTokens int `yaml:"history_tokens"`
+
+	// SessionGapMinutes is the silence duration (in minutes) between
+	// sessions that triggers a gap annotation in the history output.
+	// Default: 30.
+	SessionGapMinutes int `yaml:"session_gap_minutes"`
+}
+
 // WorkspaceConfig configures the agent's sandboxed file system access.
 // When Path is set, the agent can read and write files within that
 // directory. All paths passed to file tools are resolved relative to
@@ -411,6 +441,16 @@ func (c *Config) applyDefaults() {
 		c.Extraction.TimeoutSeconds = 30
 	}
 
+	if c.Episodic.LookbackDays == 0 {
+		c.Episodic.LookbackDays = 2
+	}
+	if c.Episodic.HistoryTokens == 0 {
+		c.Episodic.HistoryTokens = 4000
+	}
+	if c.Episodic.SessionGapMinutes == 0 {
+		c.Episodic.SessionGapMinutes = 30
+	}
+
 	for i := range c.Models.Available {
 		if c.Models.Available[i].Provider == "" {
 			c.Models.Available[i].Provider = "ollama"
@@ -446,6 +486,15 @@ func (c *Config) Validate() error {
 		if _, err := time.LoadLocation(c.Timezone); err != nil {
 			return fmt.Errorf("timezone %q invalid (expected IANA timezone, e.g. America/Chicago): %w", c.Timezone, err)
 		}
+	}
+	if c.Episodic.LookbackDays < 0 {
+		return fmt.Errorf("episodic.lookback_days %d must be non-negative", c.Episodic.LookbackDays)
+	}
+	if c.Episodic.HistoryTokens < 0 {
+		return fmt.Errorf("episodic.history_tokens %d must be non-negative", c.Episodic.HistoryTokens)
+	}
+	if c.Episodic.SessionGapMinutes < 0 {
+		return fmt.Errorf("episodic.session_gap_minutes %d must be non-negative", c.Episodic.SessionGapMinutes)
 	}
 	return nil
 }
