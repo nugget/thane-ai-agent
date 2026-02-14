@@ -74,6 +74,10 @@ talents_dir: ./talents
 # Copy persona.default.md to persona.md and customize for your instance.
 # persona_file: ./persona.md
 
+# Timezone for the household (IANA format). Used in the system prompt so
+# the agent reasons about local time. Defaults to the system timezone.
+# timezone: America/Chicago
+
 # Context injection — files to pre-load into the system prompt.
 # Saves the agent from spending tool call iterations reading files it
 # needs every session. Supports ~ expansion. Missing files are skipped.
