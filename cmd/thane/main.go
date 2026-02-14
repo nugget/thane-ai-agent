@@ -40,6 +40,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/connwatch"
 	"github.com/nugget/thane-ai-agent/internal/delegate"
 	"github.com/nugget/thane-ai-agent/internal/embeddings"
+	"github.com/nugget/thane-ai-agent/internal/episodic"
 	"github.com/nugget/thane-ai-agent/internal/facts"
 	"github.com/nugget/thane-ai-agent/internal/fetch"
 	"github.com/nugget/thane-ai-agent/internal/homeassistant"
@@ -869,8 +870,21 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// current state (e.g., pending anticipations) before each LLM call.
 	anticipationProvider := anticipation.NewProvider(anticipationStore)
 	contextProvider := agent.NewCompositeContextProvider(anticipationProvider)
+
+	episodicProvider := episodic.NewProvider(archiveStore, logger, episodic.Config{
+		Timezone:          cfg.Timezone,
+		DailyDir:          cfg.Episodic.DailyDir,
+		LookbackDays:      cfg.Episodic.LookbackDays,
+		HistoryTokens:     cfg.Episodic.HistoryTokens,
+		SessionGapMinutes: cfg.Episodic.SessionGapMinutes,
+	})
+	contextProvider.Add(episodicProvider)
+
 	loop.SetContextProvider(contextProvider)
-	logger.Info("context providers initialized")
+	logger.Info("context providers initialized",
+		"episodic_daily_dir", cfg.Episodic.DailyDir,
+		"episodic_history_tokens", cfg.Episodic.HistoryTokens,
+	)
 
 	// --- API server ---
 	// The primary HTTP server exposing the OpenAI-compatible chat API,
