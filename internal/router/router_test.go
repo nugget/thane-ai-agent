@@ -96,8 +96,8 @@ func TestRoute_LocalOnlyHint(t *testing.T) {
 	r := NewRouter(slog.Default(), Config{
 		DefaultModel: "local-model",
 		Models: []Model{
-			{Name: "local-model", Provider: "ollama", SupportsTools: true, Speed: 8, Quality: 5, CostTier: 0},
-			{Name: "cloud-model", Provider: "anthropic", SupportsTools: true, Speed: 6, Quality: 10, CostTier: 3},
+			{Name: "local-model", Provider: "ollama", SupportsTools: true, Speed: 8, Quality: 5, CostTier: 0, ContextWindow: 8192},
+			{Name: "cloud-model", Provider: "anthropic", SupportsTools: true, Speed: 6, Quality: 10, CostTier: 3, ContextWindow: 8192},
 		},
 		MaxAuditLog: 10,
 	})
@@ -117,7 +117,11 @@ func TestRoute_LocalOnlyHint(t *testing.T) {
 	}
 
 	// Cloud model should have a heavily negative score from the -200 penalty.
-	if score, ok := decision.Scores["cloud-model"]; ok && score >= 0 {
+	score, ok := decision.Scores["cloud-model"]
+	if !ok {
+		t.Fatalf("cloud-model score missing from decision.Scores: %#v", decision.Scores)
+	}
+	if score >= 0 {
 		t.Errorf("cloud-model score = %d, want negative (local_only penalty)", score)
 	}
 }

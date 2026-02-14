@@ -466,8 +466,8 @@ func TestExecute_GeneralProfileSelectsLocalModel(t *testing.T) {
 		DefaultModel: "local-model",
 		LocalFirst:   true,
 		Models: []router.Model{
-			{Name: "local-model", Provider: "ollama", SupportsTools: true, Speed: 8, Quality: 5, CostTier: 0},
-			{Name: "cloud-model", Provider: "anthropic", SupportsTools: true, Speed: 6, Quality: 10, CostTier: 3},
+			{Name: "local-model", Provider: "ollama", SupportsTools: true, Speed: 8, Quality: 5, CostTier: 0, ContextWindow: 8192},
+			{Name: "cloud-model", Provider: "anthropic", SupportsTools: true, Speed: 6, Quality: 10, CostTier: 3, ContextWindow: 8192},
 		},
 		MaxAuditLog: 10,
 	})
