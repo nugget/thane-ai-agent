@@ -2,7 +2,7 @@ package talents
 
 import "embed"
 
-//go:generate sh -c "rm -rf defaults && mkdir defaults && cp ../../talents/*.md defaults/ && echo '*.md' > defaults/.gitignore"
+//go:generate sh -c "mkdir -p defaults && rm -f defaults/*.md && cp ../../talents/*.md defaults/"
 
 // DefaultFiles contains the embedded default talent markdown files
 // (copied from the repo-root talents/ directory by go:generate).

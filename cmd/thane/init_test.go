@@ -5,10 +5,20 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
 
+// clearUmask sets the process umask to 0 so file permission assertions are
+// deterministic. It restores the original umask when the test completes.
+func clearUmask(t *testing.T) {
+	t.Helper()
+	old := syscall.Umask(0)
+	t.Cleanup(func() { syscall.Umask(old) })
+}
+
 func TestRunInit_FreshDirectory(t *testing.T) {
+	clearUmask(t)
 	dir := t.TempDir()
 	var buf bytes.Buffer
 
@@ -125,6 +135,7 @@ func TestRunInit_SkipsExistingFiles(t *testing.T) {
 }
 
 func TestWriteIfMissing(t *testing.T) {
+	clearUmask(t)
 	tests := []struct {
 		name       string
 		preExist   bool
@@ -200,10 +211,10 @@ func TestWriteIfMissing(t *testing.T) {
 	}
 }
 
-func TestWriteIfMissing_StatError(t *testing.T) {
-	// Create a regular file, then try to stat a child path under it.
-	// This triggers a "not a directory" error from Stat, which is NOT
-	// os.IsNotExist, so writeIfMissing should surface it.
+func TestWriteIfMissing_CreateError(t *testing.T) {
+	// Try to create a file under a path that is a regular file, not a
+	// directory. OpenFile should fail with a non-ErrExist error which
+	// writeIfMissing must surface.
 	dir := t.TempDir()
 	parent := filepath.Join(dir, "blocker")
 	if err := os.WriteFile(parent, []byte("i am a file"), 0o644); err != nil {
@@ -214,9 +225,9 @@ func TestWriteIfMissing_StatError(t *testing.T) {
 	var buf bytes.Buffer
 	err := writeIfMissing(&buf, badPath, []byte("data"), 0o644)
 	if err == nil {
-		t.Fatal("expected error for stat failure, got nil")
+		t.Fatal("expected error for create failure, got nil")
 	}
-	if !strings.Contains(err.Error(), "stat") {
-		t.Errorf("error = %q, want it to mention 'stat'", err)
+	if !strings.Contains(err.Error(), "create") {
+		t.Errorf("error = %q, want it to mention 'create'", err)
 	}
 }

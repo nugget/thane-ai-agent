@@ -29,7 +29,7 @@ jobs:
         # Runs: fmt-check, lint, test
 
       - name: Generate coverage
-        run: go generate ./internal/talents/ ./internal/defaults/ && go test -coverprofile=coverage.out ./...
+        run: just generate && go test -coverprofile=coverage.out ./...
 
       - name: Upload coverage
         uses: codecov/codecov-action@v4

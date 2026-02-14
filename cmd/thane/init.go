@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -62,24 +63,29 @@ func runInit(w io.Writer, dir string) error {
 
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Edit config.yaml and persona.md to customize your installation.")
-	fmt.Fprintln(w, "See docs/context-layers.md for guidance on persona vs talents.")
+	fmt.Fprintln(w, "See docs/getting-started.md for guidance on persona vs talents.")
 	return nil
 }
 
-// writeIfMissing writes data to path with the given permissions if the file
-// does not already exist. It prints a status line for each file indicating
-// whether it was created or skipped.
+// writeIfMissing atomically creates path with the given permissions and writes
+// data to it. If the file already exists, it is left untouched. The create
+// uses O_CREATE|O_EXCL so there is no race between checking and writing.
 func writeIfMissing(w io.Writer, path string, data []byte, mode os.FileMode) error {
-	_, err := os.Stat(path)
-	if err == nil {
-		fmt.Fprintf(w, "  · %s (exists, skipping)\n", path)
-		return nil
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
+	if err != nil {
+		if errors.Is(err, os.ErrExist) {
+			fmt.Fprintf(w, "  · %s (exists, skipping)\n", path)
+			return nil
+		}
+		return fmt.Errorf("create %s: %w", path, err)
 	}
-	if !os.IsNotExist(err) {
-		return fmt.Errorf("stat %s: %w", path, err)
+	_, writeErr := f.Write(data)
+	closeErr := f.Close()
+	if writeErr != nil {
+		return fmt.Errorf("write %s: %w", path, writeErr)
 	}
-	if err := os.WriteFile(path, data, mode); err != nil {
-		return fmt.Errorf("write %s: %w", path, err)
+	if closeErr != nil {
+		return fmt.Errorf("close %s: %w", path, closeErr)
 	}
 	fmt.Fprintf(w, "  ✓ %s\n", path)
 	return nil
