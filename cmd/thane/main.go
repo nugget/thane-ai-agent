@@ -10,6 +10,7 @@
 //	thane serve              Start the API server
 //	thane ask <question>     Ask a single question (for testing)
 //	thane ingest <file.md>   Import a markdown document into the fact store
+//	thane init [dir]         Initialize a working directory with default files
 //	thane version            Print version and build information
 //	thane -o json version    Output version information as JSON
 package main
@@ -139,6 +140,12 @@ func run(ctx context.Context, stdout io.Writer, stderr io.Writer, args []string)
 			return fmt.Errorf("usage: thane ingest <file.md>")
 		}
 		return runIngest(ctx, stdout, stderr, configPath, cmdArgs[0])
+	case "init":
+		dir := "."
+		if len(cmdArgs) > 0 {
+			dir = cmdArgs[0]
+		}
+		return runInit(stdout, dir)
 	case "version":
 		return runVersion(stdout, outputFmt)
 	case "":
@@ -177,6 +184,7 @@ func printUsage(w io.Writer) error {
 	fmt.Fprintln(w, "  serve    Start the API server")
 	fmt.Fprintln(w, "  ask      Ask a single question (for testing)")
 	fmt.Fprintln(w, "  ingest   Import markdown docs into fact store")
+	fmt.Fprintln(w, "  init     Initialize working directory with default files")
 	fmt.Fprintln(w, "  version  Show version information")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Flags:")

@@ -1,0 +1,137 @@
+# Thane Configuration
+#
+# Search order: ./config.yaml, ~/Thane/config.yaml, ~/.config/thane/config.yaml,
+#               /config/config.yaml, /usr/local/etc/thane/config.yaml, /etc/thane/config.yaml
+# Override with: thane -config /path/to/config.yaml serve
+#
+# Environment variables are expanded (e.g., ${HOME}), but secrets can go
+# directly in this file. Protect it: chmod 600 config.yaml
+
+# Native Thane API server
+listen:
+  port: 8080  # Native API (OpenAI-compatible, router introspection, etc.)
+
+# Ollama-compatible API (optional, for Home Assistant integration)
+# When enabled, Thane exposes an Ollama-compatible API on a separate port
+ollama_api:
+  enabled: true   # Set to false if not using HA Ollama integration
+  port: 11434     # Standard Ollama port
+
+# Home Assistant connection
+homeassistant:
+  url: https://your-homeassistant.local:8123
+  token: your-long-lived-access-token  # Generate in HA → Profile → Long-Lived Access Tokens
+
+# Model routing
+models:
+  default: qwen2.5:72b
+  ollama_url: http://your-ollama-server:11434
+  local_first: true
+  available:
+    - name: qwen3:4b
+      provider: ollama
+      supports_tools: true
+      context_window: 32768
+      speed: 9
+      quality: 5
+      cost_tier: 0
+      min_complexity: simple
+    - name: qwen2.5:72b
+      provider: ollama
+      supports_tools: true
+      context_window: 131072
+      speed: 3
+      quality: 9
+      cost_tier: 0
+      min_complexity: moderate
+    # Anthropic models (requires anthropic.api_key)
+    # - name: claude-sonnet-4-20250514
+    #   provider: anthropic
+    #   supports_tools: true
+    #   context_window: 200000
+    #   speed: 7
+    #   quality: 8
+    #   cost_tier: 2
+    #   min_complexity: moderate
+    # - name: claude-opus-4-20250514
+    #   provider: anthropic
+    #   supports_tools: true
+    #   context_window: 200000
+    #   speed: 5
+    #   quality: 10
+    #   cost_tier: 3
+    #   min_complexity: complex
+
+# Anthropic API (optional — for Claude models)
+# anthropic:
+#   api_key: sk-ant-...
+
+# Storage paths
+data_dir: ./db
+talents_dir: ./talents
+
+# Persona file — replaces the default system prompt with custom identity.
+# Copy persona.default.md to persona.md and customize for your instance.
+# persona_file: ./persona.md
+
+# Context injection — files to pre-load into the system prompt.
+# Saves the agent from spending tool call iterations reading files it
+# needs every session. Supports ~ expansion. Missing files are skipped.
+# context:
+#   inject_files:
+#     - ~/.agents.md            # Host-specific breadcrumb (paths, services, tools)
+#     - ~/path/to/MEMORY.md    # Long-term curated memory
+
+# Workspace for file operations (optional)
+# When configured, the agent can read/write files within this directory
+# All file tool paths are sandboxed to this directory
+workspace:
+  path: ""  # e.g., /home/user/workspace
+
+# Shell execution (optional, disabled by default)
+# When enabled, the agent can execute shell commands on the host.
+# Use with caution — configure denied_patterns and allowed_prefixes
+# to restrict what the agent can do.
+shell_exec:
+  enabled: false
+  working_dir: ""  # e.g., /home/thane — defaults to process cwd
+  denied_patterns:
+    - "rm -rf /"
+    - "rm -rf /*"
+    - "mkfs"
+    - "dd if="
+    - ":(){:|:&};:"
+    - "chmod -R 777 /"
+    - "> /dev/sda"
+  allowed_prefixes: []  # Empty = allow all (subject to denied_patterns)
+  default_timeout_sec: 30
+
+# Web search (optional)
+# Enables the web_search tool. Configure one or more providers.
+# web_fetch is always available (no config needed).
+# search:
+#   default_provider: searxng
+#   providers:
+#     searxng:
+#       base_url: http://your-searxng-instance:8080
+#     brave:
+#       api_key: your-brave-api-key
+
+# Semantic search (optional)
+embeddings:
+  enabled: false
+  model: nomic-embed-text
+  # baseurl: http://localhost:11434  # Defaults to models.ollama_url
+
+# Session archive — configures LLM-generated session metadata.
+# When sessions end, Thane generates titles, tags, and summaries.
+# Use a cheap/local model for this async task.
+# archive:
+#   metadata_model: qwen2.5-coder:32b  # Defaults to models.default
+
+# Logging level: trace, debug, info (default), warn, error
+# - info: normal operation (loop start/end, failover, compaction)
+# - debug: per-request detail (LLM calls, tool execution, token counts)
+# - trace: wire-level payloads (full JSON requests/responses — VERY verbose)
+# log_level: info
+# log_format: text    # text (human-readable) or json (structured, for log aggregation)
