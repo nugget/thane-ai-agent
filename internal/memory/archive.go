@@ -213,6 +213,13 @@ func (s *ArchiveStore) FTSEnabled() bool {
 	return s.ftsEnabled
 }
 
+// DB returns the underlying database connection. This allows other
+// stores (e.g. WorkingMemoryStore) to share the archive database
+// without opening a separate connection.
+func (s *ArchiveStore) DB() *sql.DB {
+	return s.db
+}
+
 // Close closes the underlying database connection.
 func (s *ArchiveStore) Close() error {
 	return s.db.Close()

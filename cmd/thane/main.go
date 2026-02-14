@@ -422,6 +422,15 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	}
 	defer archiveStore.Close()
 
+	// --- Working memory ---
+	// Persists free-form experiential context per conversation. Shares
+	// the archive database so it participates in the same backup/lifecycle.
+	wmStore, err := memory.NewWorkingMemoryStore(archiveStore.DB())
+	if err != nil {
+		return fmt.Errorf("create working memory store: %w", err)
+	}
+	logger.Info("working memory store initialized")
+
 	archiveAdapter := memory.NewArchiveAdapter(archiveStore, logger)
 	archiveAdapter.SetToolCallSource(mem)
 
@@ -524,6 +533,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	summarizer := memory.NewLLMSummarizer(summarizeFunc)
 	compactor := memory.NewCompactor(mem, compactionConfig, summarizer, logger)
 	compactor.SetArchiver(archiveStore)
+	compactor.SetWorkingMemoryStore(wmStore)
 
 	// --- Talents ---
 	// Talents are markdown files that extend the system prompt with
@@ -677,6 +687,11 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	factTools := facts.NewTools(factStore)
 	loop.Tools().SetFactTools(factTools)
 	logger.Info("fact store initialized", "path", cfg.DataDir+"/facts.db")
+
+	// --- Working memory tool ---
+	// Gives the agent a read/write scratchpad for experiential context
+	// that survives compaction. Auto-injected via context provider below.
+	loop.Tools().SetWorkingMemoryStore(wmStore)
 
 	// --- Fact extraction ---
 	// Automatic extraction of facts from conversations. Runs async after
@@ -879,6 +894,9 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		SessionGapMinutes: cfg.Episodic.SessionGapMinutes,
 	})
 	contextProvider.Add(episodicProvider)
+
+	wmProvider := memory.NewWorkingMemoryProvider(wmStore, tools.ConversationIDFromContext)
+	contextProvider.Add(wmProvider)
 
 	loop.SetContextProvider(contextProvider)
 	logger.Info("context providers initialized",

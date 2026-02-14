@@ -433,11 +433,14 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		}, nil
 	}
 
-	// Build messages for LLM
+	// Build messages for LLM. Enrich ctx with conversation ID so that
+	// context providers (e.g. working memory) can scope their output.
+	promptCtx := tools.WithConversationID(ctx, convID)
+
 	var llmMessages []llm.Message
 	llmMessages = append(llmMessages, llm.Message{
 		Role:    "system",
-		Content: l.buildSystemPrompt(ctx, userMessage),
+		Content: l.buildSystemPrompt(promptCtx, userMessage),
 	})
 
 	// Add history
