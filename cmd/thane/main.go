@@ -8,6 +8,7 @@
 // Usage:
 //
 //	thane serve              Start the API server
+//	thane init [dir]         Initialize a working directory with defaults
 //	thane ask <question>     Ask a single question (for testing)
 //	thane ingest <file.md>   Import a markdown document into the fact store
 //	thane version            Print version and build information
@@ -129,6 +130,12 @@ func run(ctx context.Context, stdout io.Writer, stderr io.Writer, args []string)
 	switch command {
 	case "serve":
 		return runServe(ctx, stdout, stderr, configPath)
+	case "init":
+		dir := "."
+		if len(cmdArgs) > 0 {
+			dir = cmdArgs[0]
+		}
+		return runInit(stdout, dir)
 	case "ask":
 		if len(cmdArgs) == 0 {
 			return fmt.Errorf("usage: thane ask <question>")
@@ -174,10 +181,11 @@ func printUsage(w io.Writer) error {
 	fmt.Fprintln(w, "Usage: thane [flags] <command> [args]")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Commands:")
-	fmt.Fprintln(w, "  serve    Start the API server")
-	fmt.Fprintln(w, "  ask      Ask a single question (for testing)")
-	fmt.Fprintln(w, "  ingest   Import markdown docs into fact store")
-	fmt.Fprintln(w, "  version  Show version information")
+	fmt.Fprintln(w, "  serve        Start the API server")
+	fmt.Fprintln(w, "  init [dir]   Initialize working directory with defaults (default: .)")
+	fmt.Fprintln(w, "  ask          Ask a single question (for testing)")
+	fmt.Fprintln(w, "  ingest       Import markdown docs into fact store")
+	fmt.Fprintln(w, "  version      Show version information")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Flags:")
 	fmt.Fprintln(w, "  -config <path>    Path to config file (default: auto-discover)")
