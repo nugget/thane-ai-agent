@@ -2,6 +2,7 @@ package facts
 
 import (
 	"context"
+	"log/slog"
 	"os"
 	"testing"
 
@@ -30,7 +31,7 @@ func TestContextProvider_GetContext_Empty(t *testing.T) {
 	defer os.Remove(tmpDB.Name())
 	tmpDB.Close()
 
-	store, err := NewStore(tmpDB.Name())
+	store, err := NewStore(tmpDB.Name(), slog.Default())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +71,7 @@ func TestContextProvider_Config(t *testing.T) {
 	defer os.Remove(tmpDB.Name())
 	tmpDB.Close()
 
-	store, err := NewStore(tmpDB.Name())
+	store, err := NewStore(tmpDB.Name(), slog.Default())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +107,7 @@ func TestNewContextProvider(t *testing.T) {
 	defer os.Remove(tmpDB.Name())
 	tmpDB.Close()
 
-	store, err := NewStore(tmpDB.Name())
+	store, err := NewStore(tmpDB.Name(), slog.Default())
 	if err != nil {
 		t.Fatal(err)
 	}
