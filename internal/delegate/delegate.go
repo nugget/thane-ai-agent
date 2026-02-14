@@ -178,6 +178,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 
 		// No tool calls — we have the final response.
 		if len(resp.Message.ToolCalls) == 0 {
+			messages = append(messages, resp.Message)
 			e.recordCompletion(&completionRecord{
 				delegateID:     did,
 				conversationID: tools.ConversationIDFromContext(ctx),
@@ -318,6 +319,7 @@ func (e *Executor) forceTextResponse(ctx context.Context, model string, messages
 	rec.totalInput += resp.InputTokens
 	rec.totalOutput += resp.OutputTokens
 	rec.resultContent = resp.Message.Content
+	rec.messages = append(rec.messages, resp.Message)
 	e.recordCompletion(rec)
 
 	return &Result{

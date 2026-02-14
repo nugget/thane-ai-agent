@@ -137,11 +137,13 @@ func (s *DelegationStore) List(limit int) ([]*DelegationRecord, error) {
 			exhausted, tools_called, messages, result_content,
 			started_at, completed_at, duration_ms, error
 		FROM delegations ORDER BY started_at DESC`
+	var args []any
 	if limit > 0 {
-		query += fmt.Sprintf(" LIMIT %d", limit)
+		query += " LIMIT ?"
+		args = append(args, limit)
 	}
 
-	rows, err := s.db.Query(query)
+	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		return nil, err
 	}
