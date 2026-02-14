@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/search"
 	"gopkg.in/yaml.v3"
@@ -122,6 +123,12 @@ type Config struct {
 
 	// Search configures web search providers.
 	Search SearchConfig `yaml:"search"`
+
+	// Timezone is the IANA timezone for the household (e.g.,
+	// "America/Chicago"). Used in the Current Conditions system prompt
+	// section so the agent reasons about local time. If empty, the
+	// system's local timezone is used.
+	Timezone string `yaml:"timezone"`
 
 	// LogLevel sets the minimum log level. Valid values: trace, debug,
 	// info, warn, error. Default: info. See [ParseLogLevel].
@@ -434,6 +441,11 @@ func (c *Config) Validate() error {
 		// valid
 	default:
 		return fmt.Errorf("log_format %q invalid (expected text or json)", c.LogFormat)
+	}
+	if c.Timezone != "" {
+		if _, err := time.LoadLocation(c.Timezone); err != nil {
+			return fmt.Errorf("timezone %q invalid (expected IANA timezone, e.g. America/Chicago): %w", c.Timezone, err)
+		}
 	}
 	return nil
 }
