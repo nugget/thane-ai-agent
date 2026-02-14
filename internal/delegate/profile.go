@@ -31,8 +31,8 @@ type Profile struct {
 }
 
 const (
-	defaultMaxIter   = 10
-	defaultMaxTokens = 50000
+	defaultMaxIter   = 5
+	defaultMaxTokens = 25000
 )
 
 // builtinProfiles returns the MVP delegation profiles.
@@ -43,9 +43,11 @@ func builtinProfiles() map[string]*Profile {
 			Description:  "General-purpose delegation with all tools",
 			AllowedTools: nil, // all tools minus thane_delegate
 			SystemPrompt: generalSystemPrompt,
-			RouterHints:  nil, // router decides freely
-			MaxIter:      defaultMaxIter,
-			MaxTokens:    defaultMaxTokens,
+			RouterHints: map[string]string{
+				router.HintLocalOnly: "true",
+			},
+			MaxIter:   defaultMaxIter,
+			MaxTokens: defaultMaxTokens,
 		},
 		"ha": {
 			Name:        "ha",

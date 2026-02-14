@@ -180,10 +180,31 @@ func (r *Router) Route(ctx context.Context, req Request) (string, *Decision) {
 }
 
 // analyzeComplexity estimates query difficulty.
+//
+// Retrieval verbs at the start of the query (search, read, list, etc.)
+// are checked first because they represent concrete, actionable tasks
+// that should use fast/cheap models even when the query text contains
+// words like "history" that would otherwise trigger complex classification.
 func (r *Router) analyzeComplexity(query string) Complexity {
 	q := strings.ToLower(query)
 
-	// Complex indicators
+	// Retrieval/action verbs at the start of the query indicate concrete
+	// tasks that don't require deep reasoning. Checked first to prevent
+	// false-positive complex classification when the object of the
+	// retrieval contains complex-sounding words (e.g., "search archives
+	// for distributed.net history" is retrieval, not analysis).
+	retrievalPrefixes := []string{
+		"search ", "read ", "list ", "fetch ", "find ", "check ",
+	}
+	for _, p := range retrievalPrefixes {
+		if strings.HasPrefix(q, p) {
+			return ComplexitySimple
+		}
+	}
+
+	// Complex indicators — reasoning, analysis, explanation tasks.
+	// Checked before simple commands because "why did the lights turn on"
+	// is a reasoning question, not a device command.
 	complexWords := []string{"explain", "why", "analyze", "compare", "history", "pattern", "trend", "recommend"}
 	for _, w := range complexWords {
 		if strings.Contains(q, w) {
@@ -191,8 +212,11 @@ func (r *Router) analyzeComplexity(query string) Complexity {
 		}
 	}
 
-	// Simple indicators (direct commands)
-	simplePatterns := []string{"turn on", "turn off", "set ", "lock", "unlock", "open", "close"}
+	// Simple indicators (direct commands). Checked after complex so that
+	// "why did X turn on" is classified as complex, not simple. Trailing
+	// space on "open" and "close" avoids matching questions like "is the
+	// door open".
+	simplePatterns := []string{"turn on", "turn off", "set ", "lock", "unlock", "open ", "close "}
 	for _, p := range simplePatterns {
 		if strings.Contains(q, p) {
 			return ComplexitySimple
