@@ -37,6 +37,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/checkpoint"
 	"github.com/nugget/thane-ai-agent/internal/config"
 	"github.com/nugget/thane-ai-agent/internal/connwatch"
+	"github.com/nugget/thane-ai-agent/internal/delegate"
 	"github.com/nugget/thane-ai-agent/internal/embeddings"
 	"github.com/nugget/thane-ai-agent/internal/facts"
 	"github.com/nugget/thane-ai-agent/internal/fetch"
@@ -841,6 +842,19 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		factTools.SetEmbeddingClient(embClient)
 		logger.Info("embeddings enabled", "model", cfg.Embeddings.Model, "url", cfg.Embeddings.BaseURL)
 	}
+
+	// --- Delegation ---
+	// Register thane_delegate tool AFTER all other tools so the delegate
+	// executor's parent registry snapshot includes the full tool set.
+	delegateExec := delegate.NewExecutor(logger, llmClient, rtr, loop.Tools(), cfg.Models.Default)
+	delegateExec.SetTimezone(cfg.Timezone)
+	loop.Tools().Register(&tools.Tool{
+		Name:        "thane_delegate",
+		Description: delegate.ToolDescription,
+		Parameters:  delegate.ToolDefinition(),
+		Handler:     delegate.ToolHandler(delegateExec),
+	})
+	logger.Info("delegation enabled", "profiles", delegateExec.ProfileNames())
 
 	// --- Context providers ---
 	// Dynamic system prompt injection. Providers add context based on

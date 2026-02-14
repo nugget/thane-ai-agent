@@ -36,6 +36,12 @@ type Registry struct {
 	shellExec         *ShellExec
 }
 
+// NewEmptyRegistry creates an empty tool registry with no built-in tools.
+// Use this for testing or when constructing a registry manually.
+func NewEmptyRegistry() *Registry {
+	return &Registry{tools: make(map[string]*Tool)}
+}
+
 // NewRegistry creates a tool registry with HA integration.
 func NewRegistry(ha *homeassistant.Client, sched *scheduler.Scheduler) *Registry {
 	r := &Registry{
@@ -689,6 +695,44 @@ func (r *Registry) List() []map[string]any {
 		})
 	}
 	return result
+}
+
+// AllToolNames returns the names of all registered tools.
+func (r *Registry) AllToolNames() []string {
+	names := make([]string, 0, len(r.tools))
+	for name := range r.tools {
+		names = append(names, name)
+	}
+	return names
+}
+
+// FilteredCopy creates a new Registry containing only the named tools.
+// Tools not found in the source are silently skipped. The returned
+// registry shares tool handlers with the source but has its own map.
+func (r *Registry) FilteredCopy(names []string) *Registry {
+	filtered := &Registry{tools: make(map[string]*Tool, len(names))}
+	for _, name := range names {
+		if t := r.tools[name]; t != nil {
+			filtered.tools[name] = t
+		}
+	}
+	return filtered
+}
+
+// FilteredCopyExcluding creates a new Registry containing all tools
+// except those in the exclude list.
+func (r *Registry) FilteredCopyExcluding(exclude []string) *Registry {
+	skip := make(map[string]bool, len(exclude))
+	for _, name := range exclude {
+		skip[name] = true
+	}
+	filtered := &Registry{tools: make(map[string]*Tool, len(r.tools))}
+	for name, t := range r.tools {
+		if !skip[name] {
+			filtered.tools[name] = t
+		}
+	}
+	return filtered
 }
 
 // Execute runs a tool by name with given arguments.
