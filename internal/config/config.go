@@ -133,6 +133,12 @@ type Config struct {
 	// gating for delegation-first architecture.
 	Agent AgentConfig `yaml:"agent"`
 
+	// MCP configures external MCP (Model Context Protocol) server
+	// connections for tool discovery. Each server provides additional
+	// tools that are discovered dynamically and bridged into the
+	// agent's tool registry.
+	MCP MCPConfig `yaml:"mcp"`
+
 	// MQTT configures MQTT publishing for Home Assistant device discovery
 	// and sensor state reporting. When Broker and DeviceName are both
 	// set, Thane connects to the broker and registers as an HA device.
@@ -437,6 +443,51 @@ type ShellExecConfig struct {
 	DefaultTimeoutSec int `yaml:"default_timeout_sec"`
 }
 
+// MCPConfig configures MCP (Model Context Protocol) client connections
+// to external tool servers. Each server provides additional tools that
+// are discovered dynamically and bridged into the agent's tool registry.
+type MCPConfig struct {
+	// Servers lists the MCP servers to connect to at startup.
+	Servers []MCPServerConfig `yaml:"servers"`
+}
+
+// MCPServerConfig describes a single MCP server endpoint. Each server
+// is identified by a short name used for tool namespacing and logging.
+type MCPServerConfig struct {
+	// Name is a short identifier used in tool namespacing and logging
+	// (e.g., "home-assistant", "github"). Required.
+	Name string `yaml:"name"`
+
+	// Transport is the connection type: "stdio" or "http". Required.
+	Transport string `yaml:"transport"`
+
+	// Command is the executable to spawn (stdio transport only).
+	Command string `yaml:"command"`
+
+	// Args are command-line arguments for the subprocess (stdio transport only).
+	Args []string `yaml:"args"`
+
+	// Env are additional environment variables for the subprocess
+	// (stdio transport only). Format: "KEY=VALUE".
+	Env []string `yaml:"env"`
+
+	// URL is the MCP server endpoint (http transport only).
+	URL string `yaml:"url"`
+
+	// Headers are additional HTTP headers sent with every request
+	// (http transport only). Useful for authentication tokens.
+	Headers map[string]string `yaml:"headers"`
+
+	// IncludeTools is an optional allowlist of MCP tool names to
+	// bridge. When non-empty, only tools in this list are registered.
+	// Cannot be used together with ExcludeTools.
+	IncludeTools []string `yaml:"include_tools"`
+
+	// ExcludeTools is an optional blocklist of MCP tool names to skip.
+	// Cannot be used together with IncludeTools.
+	ExcludeTools []string `yaml:"exclude_tools"`
+}
+
 // Load reads a YAML configuration file, expands environment variables,
 // applies defaults for any unset fields, and validates the result.
 //
@@ -603,6 +654,9 @@ func (c *Config) Validate() error {
 			}
 		}
 	}
+	if err := c.validateMCP(); err != nil {
+		return err
+	}
 	if c.Episodic.LookbackDays < 0 {
 		return fmt.Errorf("episodic.lookback_days %d must be non-negative", c.Episodic.LookbackDays)
 	}
@@ -611,6 +665,38 @@ func (c *Config) Validate() error {
 	}
 	if c.Episodic.SessionGapMinutes < 0 {
 		return fmt.Errorf("episodic.session_gap_minutes %d must be non-negative", c.Episodic.SessionGapMinutes)
+	}
+	return nil
+}
+
+// validateMCP checks the MCP server configuration for consistency.
+func (c *Config) validateMCP() error {
+	names := make(map[string]bool, len(c.MCP.Servers))
+	for i, srv := range c.MCP.Servers {
+		if srv.Name == "" {
+			return fmt.Errorf("mcp.servers[%d].name must not be empty", i)
+		}
+		if names[srv.Name] {
+			return fmt.Errorf("mcp.servers[%d].name %q is a duplicate", i, srv.Name)
+		}
+		names[srv.Name] = true
+
+		switch srv.Transport {
+		case "stdio":
+			if srv.Command == "" {
+				return fmt.Errorf("mcp.servers[%d] (%s): stdio transport requires a command", i, srv.Name)
+			}
+		case "http":
+			if srv.URL == "" {
+				return fmt.Errorf("mcp.servers[%d] (%s): http transport requires a url", i, srv.Name)
+			}
+		default:
+			return fmt.Errorf("mcp.servers[%d] (%s): transport %q invalid (expected stdio or http)", i, srv.Name, srv.Transport)
+		}
+
+		if len(srv.IncludeTools) > 0 && len(srv.ExcludeTools) > 0 {
+			return fmt.Errorf("mcp.servers[%d] (%s): cannot set both include_tools and exclude_tools", i, srv.Name)
+		}
 	}
 	return nil
 }

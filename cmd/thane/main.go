@@ -46,6 +46,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/ingest"
 	"github.com/nugget/thane-ai-agent/internal/llm"
+	"github.com/nugget/thane-ai-agent/internal/mcp"
 	"github.com/nugget/thane-ai-agent/internal/memory"
 	"github.com/nugget/thane-ai-agent/internal/mqtt"
 	"github.com/nugget/thane-ai-agent/internal/prompts"
@@ -876,6 +877,77 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		factTools.SetEmbeddingClient(embClient)
 		logger.Info("embeddings enabled", "model", cfg.Embeddings.Model, "url", cfg.Embeddings.BaseURL)
 	}
+
+	// --- MCP servers ---
+	// Connect to configured MCP servers and bridge their tools into the
+	// registry. This must happen before delegate executor creation so
+	// delegates have access to MCP tools.
+	var mcpClients []*mcp.Client
+	for _, serverCfg := range cfg.MCP.Servers {
+		var transport mcp.Transport
+		switch serverCfg.Transport {
+		case "stdio":
+			transport = mcp.NewStdioTransport(mcp.StdioConfig{
+				Command: serverCfg.Command,
+				Args:    serverCfg.Args,
+				Env:     serverCfg.Env,
+				Logger:  logger,
+			})
+		case "http":
+			transport = mcp.NewHTTPTransport(mcp.HTTPConfig{
+				URL:     serverCfg.URL,
+				Headers: serverCfg.Headers,
+				Logger:  logger,
+			})
+		}
+
+		client := mcp.NewClient(serverCfg.Name, transport, logger)
+
+		initCtx, initCancel := context.WithTimeout(ctx, 30*time.Second)
+		err := client.Initialize(initCtx)
+		initCancel()
+		if err != nil {
+			logger.Error("MCP server initialization failed",
+				"server", serverCfg.Name,
+				"error", err,
+			)
+			client.Close()
+			continue
+		}
+
+		count, err := mcp.BridgeTools(
+			client, serverCfg.Name, loop.Tools(),
+			serverCfg.IncludeTools, serverCfg.ExcludeTools,
+			logger,
+		)
+		if err != nil {
+			logger.Error("MCP tool bridge failed",
+				"server", serverCfg.Name,
+				"error", err,
+			)
+			client.Close()
+			continue
+		}
+
+		mcpClients = append(mcpClients, client)
+
+		connMgr.Watch(ctx, connwatch.WatcherConfig{
+			Name:    "mcp-" + serverCfg.Name,
+			Probe:   func(pCtx context.Context) error { return client.Ping(pCtx) },
+			Backoff: connwatch.DefaultBackoffConfig(),
+			Logger:  logger,
+		})
+
+		logger.Info("MCP server connected",
+			"server", serverCfg.Name,
+			"tools", count,
+		)
+	}
+	defer func() {
+		for _, c := range mcpClients {
+			c.Close()
+		}
+	}()
 
 	// --- Delegation ---
 	// Register thane_delegate tool AFTER all other tools so the delegate
