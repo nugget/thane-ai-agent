@@ -19,7 +19,7 @@ type agentRunner interface {
 // PayloadWake tasks to the agent loop. Unsupported payload kinds are
 // logged and silently ignored (returning nil, not an error).
 func runScheduledTask(ctx context.Context, task *scheduler.Task, exec *scheduler.Execution, runner agentRunner, logger *slog.Logger) error {
-	logger.Info("task executing",
+	logger.Debug("task executing",
 		"task_id", task.ID,
 		"task_name", task.Name,
 		"payload_kind", task.Payload.Kind,
@@ -53,7 +53,7 @@ func runScheduledTask(ctx context.Context, task *scheduler.Task, exec *scheduler
 	}
 	exec.Result = resp.Content
 
-	logger.Info("task completed",
+	logger.Debug("task completed",
 		"task_id", task.ID,
 		"task_name", task.Name,
 		"result_len", len(resp.Content),
