@@ -92,6 +92,9 @@ func (t *StdioTransport) start() error {
 	}
 
 	if err := cmd.Start(); err != nil {
+		stderrPipe.Close()
+		stdout.Close()
+		stdin.Close()
 		return fmt.Errorf("start subprocess %s: %w", t.config.Command, err)
 	}
 
@@ -115,8 +118,16 @@ func (t *StdioTransport) drainStderr(r io.Reader) {
 	}
 }
 
+// readResult is the outcome of a single line read from stdout.
+type readResult struct {
+	line []byte
+	err  error
+}
+
 // Send sends a JSON-RPC request over stdin and reads the response from
 // stdout. The mutex serializes access since stdio is inherently sequential.
+// The read is performed in a goroutine so that context cancellation can
+// interrupt a blocking read.
 func (t *StdioTransport) Send(ctx context.Context, req *Request) (*Response, error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -136,36 +147,46 @@ func (t *StdioTransport) Send(ctx context.Context, req *Request) (*Response, err
 		return nil, fmt.Errorf("write to subprocess stdin: %w", err)
 	}
 
-	// Read response line. The subprocess may emit notifications before
+	// Read response lines. The subprocess may emit notifications before
 	// the actual response, so we loop until we find a matching ID.
+	// Reads are performed in a goroutine so context cancellation works.
 	for {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
+		ch := make(chan readResult, 1)
+		go func() {
+			line, readErr := t.reader.ReadBytes('\n')
+			ch <- readResult{line: line, err: readErr}
+		}()
 
-		line, err := t.reader.ReadBytes('\n')
-		if err != nil {
+		select {
+		case <-ctx.Done():
+			// Context cancelled or timed out. Kill the subprocess so
+			// the blocked read unblocks, then clean up.
 			t.cleanup()
-			return nil, fmt.Errorf("read from subprocess stdout: %w", err)
-		}
+			return nil, ctx.Err()
+		case res := <-ch:
+			if res.err != nil {
+				t.cleanup()
+				return nil, fmt.Errorf("read from subprocess stdout: %w", res.err)
+			}
 
-		// Try to parse as a response (has "id" field).
-		var resp Response
-		if err := json.Unmarshal(line, &resp); err != nil {
-			t.logger.Debug("skipping non-JSON line from MCP subprocess",
-				"line", string(line),
-			)
-			continue
-		}
+			// Try to parse as a response (has "id" field).
+			var resp Response
+			if err := json.Unmarshal(res.line, &resp); err != nil {
+				t.logger.Debug("skipping non-JSON line from MCP subprocess",
+					"line", string(res.line),
+				)
+				continue
+			}
 
-		// Skip notifications (id == 0 and no result/error could be a
-		// notification). We match on the request ID.
-		if resp.ID == req.ID {
-			return &resp, nil
-		}
+			// Skip notifications (id == 0 and no result/error could be a
+			// notification). We match on the request ID.
+			if resp.ID == req.ID {
+				return &resp, nil
+			}
 
-		// Log unexpected messages.
-		t.logger.Debug("skipping unmatched MCP message", "id", resp.ID)
+			// Log unexpected messages.
+			t.logger.Debug("skipping unmatched MCP message", "id", resp.ID)
+		}
 	}
 }
 

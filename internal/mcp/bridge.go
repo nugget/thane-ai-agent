@@ -23,8 +23,12 @@ var sanitizeRe = regexp.MustCompile(`[^a-z0-9_]`)
 //   - If both are empty, all tools are registered.
 //
 // BridgeTools returns the number of tools registered.
-func BridgeTools(client *Client, serverName string, registry *tools.Registry, include, exclude []string, logger *slog.Logger) (int, error) {
-	mcpTools, err := client.ListTools(context.Background())
+func BridgeTools(ctx context.Context, client *Client, serverName string, registry *tools.Registry, include, exclude []string, logger *slog.Logger) (int, error) {
+	if logger == nil {
+		logger = slog.Default()
+	}
+
+	mcpTools, err := client.ListTools(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("list tools from %s: %w", serverName, err)
 	}

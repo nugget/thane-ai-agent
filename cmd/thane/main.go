@@ -915,11 +915,14 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 			continue
 		}
 
+		bridgeCtx, bridgeCancel := context.WithTimeout(ctx, 30*time.Second)
 		count, err := mcp.BridgeTools(
+			bridgeCtx,
 			client, serverCfg.Name, loop.Tools(),
 			serverCfg.IncludeTools, serverCfg.ExcludeTools,
 			logger,
 		)
+		bridgeCancel()
 		if err != nil {
 			logger.Error("MCP tool bridge failed",
 				"server", serverCfg.Name,

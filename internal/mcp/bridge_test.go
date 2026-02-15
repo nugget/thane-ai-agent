@@ -83,7 +83,7 @@ func TestBridgeTools_AllTools(t *testing.T) {
 	registry := tools.NewEmptyRegistry()
 	logger := slog.Default()
 
-	count, err := BridgeTools(client, "home-assistant", registry, nil, nil, logger)
+	count, err := BridgeTools(context.Background(), client, "home-assistant", registry, nil, nil, logger)
 	if err != nil {
 		t.Fatalf("BridgeTools: %v", err)
 	}
@@ -132,7 +132,7 @@ func TestBridgeTools_IncludeFilter(t *testing.T) {
 	registry := tools.NewEmptyRegistry()
 	logger := slog.Default()
 
-	count, err := BridgeTools(client, "ha", registry,
+	count, err := BridgeTools(context.Background(), client, "ha", registry,
 		[]string{"get_entities", "get_history"}, nil, logger)
 	if err != nil {
 		t.Fatalf("BridgeTools: %v", err)
@@ -166,7 +166,7 @@ func TestBridgeTools_ExcludeFilter(t *testing.T) {
 	registry := tools.NewEmptyRegistry()
 	logger := slog.Default()
 
-	count, err := BridgeTools(client, "ha", registry,
+	count, err := BridgeTools(context.Background(), client, "ha", registry,
 		nil, []string{"call_service"}, logger)
 	if err != nil {
 		t.Fatalf("BridgeTools: %v", err)
@@ -197,7 +197,7 @@ func TestBridgeTools_HandlerProxiesCallTool(t *testing.T) {
 	registry := tools.NewEmptyRegistry()
 	logger := slog.Default()
 
-	_, err := BridgeTools(client, "ha", registry, nil, nil, logger)
+	_, err := BridgeTools(context.Background(), client, "ha", registry, nil, nil, logger)
 	if err != nil {
 		t.Fatalf("BridgeTools: %v", err)
 	}

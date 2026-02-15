@@ -129,6 +129,9 @@ func TestRequestOmitsNilParams(t *testing.T) {
 	}
 
 	var m map[string]any
+	if err := json.Unmarshal(data, &m); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
 	if _, ok := m["params"]; ok {
 		t.Error("params should be omitted when nil")
 	}
