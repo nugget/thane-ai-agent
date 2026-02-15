@@ -18,6 +18,8 @@ If you have Home Assistant, Thane drops in as a native conversation agent and bl
 
 **Single binary.** Written in Go. No Python environments, no dependency hell. One command: `thane`.
 
+📖 **[Your First Thane](docs/guide.md)** — Complete guide for HA users: hardware, models, deployment, and building a relationship with your agent.
+
 📐 **[ARCHITECTURE.md](ARCHITECTURE.md)** — Full system design, component overview, and roadmap.
 
 ## Prerequisites
