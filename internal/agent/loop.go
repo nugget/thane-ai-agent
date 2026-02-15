@@ -533,7 +533,8 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	toolCallCounts := make(map[string]int) // "toolName:argsHash" → count
 	const maxToolRepeat = 3                // Break if same tool+args called this many times
 
-	maxIterations := 50 // Tool call budget; final text response always gets one extra call
+	maxIterations := 50   // Tool call budget; final text response always gets one extra call
+	emptyRetried := false // Track whether we've already nudged after an empty response
 iterLoop:
 	for i := 0; i < maxIterations; i++ {
 		// Select tool definitions for this iteration. With gating active,
@@ -740,6 +741,31 @@ iterLoop:
 			)
 		}
 
+		// Guard against empty responses after tool calls (#167).
+		// The model sometimes returns stop tokens with no content after
+		// spending iterations on tool calls. Nudge it once to respond.
+		if llmResp.Message.Content == "" && i > 0 {
+			if !emptyRetried {
+				log.Warn("empty response after tool calls, nudging model",
+					"iter", i,
+					"input_tokens", totalInputTokens,
+					"output_tokens", totalOutputTokens,
+				)
+				llmMessages = append(llmMessages, llm.Message{
+					Role:    "user",
+					Content: "You executed tool calls but did not provide a response to the user. Please respond now.",
+				})
+				emptyRetried = true
+				continue
+			}
+			log.Error("empty response after nudge, returning fallback",
+				"iter", i,
+				"input_tokens", totalInputTokens,
+				"output_tokens", totalOutputTokens,
+			)
+			llmResp.Message.Content = "I processed your request but wasn't able to compose a response. Please try again."
+		}
+
 		resp := &Response{
 			Content:      llmResp.Message.Content,
 			Model:        model,
@@ -838,8 +864,18 @@ iterLoop:
 		totalInputTokens += llmResp.InputTokens
 		totalOutputTokens += llmResp.OutputTokens
 
+		content := llmResp.Message.Content
+		if content == "" {
+			log.Error("empty response in max-iterations recovery",
+				"max_iter", maxIterations,
+				"input_tokens", totalInputTokens,
+				"output_tokens", totalOutputTokens,
+			)
+			content = "I processed your request but wasn't able to compose a response. Please try again."
+		}
+
 		resp := &Response{
-			Content:      llmResp.Message.Content,
+			Content:      content,
 			Model:        model,
 			FinishReason: "stop",
 			InputTokens:  totalInputTokens,
