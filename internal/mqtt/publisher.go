@@ -141,7 +141,17 @@ func (p *Publisher) Start(ctx context.Context) error {
 			if !p.rateLimiter.allow() {
 				return true, nil
 			}
-			p.handler(pr.Packet.Topic, pr.Packet.Payload)
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						p.logger.Error("mqtt message handler panicked",
+							"topic", pr.Packet.Topic,
+							"panic", r,
+						)
+					}
+				}()
+				p.handler(pr.Packet.Topic, pr.Packet.Payload)
+			}()
 			return true, nil
 		})
 	}

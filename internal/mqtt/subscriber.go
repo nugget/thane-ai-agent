@@ -20,6 +20,10 @@ type MessageHandler func(topic string, payload []byte)
 // payloads are handled gracefully (logged with topic and size only).
 func defaultMessageHandler(logger *slog.Logger) MessageHandler {
 	return func(topic string, payload []byte) {
+		if !logger.Enabled(context.Background(), slog.LevelDebug) {
+			return
+		}
+
 		fields := []any{
 			"topic", topic,
 			"payload_size", len(payload),
