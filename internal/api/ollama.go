@@ -194,37 +194,63 @@ func handleOllamaChatShared(w http.ResponseWriter, r *http.Request, loop *agent.
 		"channel": "ollama",
 	}
 
+	// Derive max quality floor for premium/ops profiles.
+	premiumFloor := "10"
+	if rtr := loop.Router(); rtr != nil {
+		premiumFloor = fmt.Sprintf("%d", rtr.MaxQuality())
+	}
+
 	switch model {
 	case "", "thane", "thane:latest":
-		model = "" // default routing
-	case "thane:thinking":
+		model = "" // default routing — daily conversation
+
+	// --- New intent-based profiles ---
+	case "thane:trigger":
 		model = ""
-		hints[router.HintQualityFloor] = "9"
-		hints[router.HintMission] = "conversation"
-	case "thane:balanced":
-		model = ""
-		hints[router.HintQualityFloor] = "7"
-		hints[router.HintMission] = "conversation"
-	case "thane:fast":
+		hints[router.HintLocalOnly] = "true"
+		hints[router.HintQualityFloor] = "1"
+		hints[router.HintMission] = "automation"
+	case "thane:command":
 		model = ""
 		hints[router.HintMission] = "device_control"
-		// Cost-aware scoring already prefers cheap models
-	case "thane:homeassistant":
+	case "thane:premium":
 		model = ""
-		hints[router.HintChannel] = "homeassistant"
-		hints[router.HintMission] = "device_control"
+		hints[router.HintQualityFloor] = premiumFloor
+	case "thane:ops":
+		model = ""
+		hints[router.HintQualityFloor] = premiumFloor
+		hints[router.HintDelegationGating] = "disabled"
+	case "thane:peer":
+		model = ""
+		hints[router.HintMission] = "conversation"
 	case "thane:local":
 		model = ""
-		hints[router.HintQualityFloor] = "1"   // accept anything
-		hints[router.HintModelPreference] = "" // clear any preference
-		// local_first scoring handles the rest; also exclude paid models
+		hints[router.HintQualityFloor] = "1"
+		hints[router.HintModelPreference] = ""
 		hints[router.HintLocalOnly] = "true"
+
+	// --- Deprecated aliases (backward compat) ---
+	case "thane:thinking":
+		logger.Warn("deprecated profile, use thane:premium", "profile", model)
+		model = ""
+		hints[router.HintQualityFloor] = premiumFloor
+	case "thane:balanced":
+		logger.Warn("deprecated profile, use thane:latest", "profile", model)
+		model = "" // same as latest
+	case "thane:fast":
+		logger.Warn("deprecated profile, use thane:command", "profile", model)
+		model = ""
+		hints[router.HintMission] = "device_control"
+	case "thane:homeassistant":
+		logger.Warn("deprecated profile, use thane:command", "profile", model)
+		model = ""
+		hints[router.HintMission] = "device_control"
+
 	default:
 		// Unknown profile or explicit model name — pass through
 		if strings.HasPrefix(model, "thane:") {
 			model = "" // unknown thane profile, use default
 		}
-		// else: explicit model name, pass through to router
 	}
 
 	// Derive a conversation ID from the message history.
@@ -468,7 +494,7 @@ func handleOllamaStreamingChatShared(w http.ResponseWriter, r *http.Request, req
 }
 
 // handleOllamaTagsShared returns the list of available models.
-// Returns routing profiles (thane:latest, thane:thinking, etc.) as Thane presents itself as a single
+// Returns intent-based routing profiles as Thane presents itself as a single
 // model to Ollama clients, with actual model selection handled internally.
 //
 // The response format matches Ollama's /api/tags endpoint specification.
@@ -488,12 +514,13 @@ func handleOllamaTagsShared(w http.ResponseWriter, r *http.Request, logger *slog
 		name   string
 		digest string
 	}{
-		{"thane:latest", "default routing"},
-		{"thane:thinking", "prefer quality, complex reasoning"},
-		{"thane:balanced", "balanced cost and quality (Sonnet-tier)"},
-		{"thane:fast", "prefer speed and cost efficiency"},
-		{"thane:homeassistant", "optimized for HA device control"},
-		{"thane:local", "prefer local/free models only"},
+		{"thane:latest", "daily conversation (default routing)"},
+		{"thane:trigger", "automation / machine fire-and-forget (local, minimal)"},
+		{"thane:command", "quick task execution (fast, device control)"},
+		{"thane:premium", "complex reasoning (best available model)"},
+		{"thane:ops", "operations / direct tool access (no delegation gating)"},
+		{"thane:peer", "agent-to-agent communication"},
+		{"thane:local", "local/free models only"},
 	}
 
 	var models []OllamaModel

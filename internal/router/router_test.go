@@ -125,3 +125,41 @@ func TestRoute_LocalOnlyHint(t *testing.T) {
 		t.Errorf("cloud-model score = %d, want negative (local_only penalty)", score)
 	}
 }
+
+func TestMaxQuality(t *testing.T) {
+	r := NewRouter(slog.Default(), Config{
+		DefaultModel: "local-model",
+		Models: []Model{
+			{Name: "local-model", Quality: 5},
+			{Name: "mid-model", Quality: 7},
+			{Name: "cloud-model", Quality: 10},
+		},
+	})
+
+	if got := r.MaxQuality(); got != 10 {
+		t.Errorf("MaxQuality() = %d, want 10", got)
+	}
+}
+
+func TestMaxQuality_SingleModel(t *testing.T) {
+	r := NewRouter(slog.Default(), Config{
+		DefaultModel: "only-model",
+		Models: []Model{
+			{Name: "only-model", Quality: 6},
+		},
+	})
+
+	if got := r.MaxQuality(); got != 6 {
+		t.Errorf("MaxQuality() = %d, want 6", got)
+	}
+}
+
+func TestMaxQuality_NoModels(t *testing.T) {
+	r := NewRouter(slog.Default(), Config{
+		DefaultModel: "fallback",
+	})
+
+	if got := r.MaxQuality(); got != 10 {
+		t.Errorf("MaxQuality() with no models = %d, want 10 (safe default)", got)
+	}
+}
