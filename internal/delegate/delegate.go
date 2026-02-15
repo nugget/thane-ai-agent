@@ -24,6 +24,7 @@ const (
 	ExhaustMaxIterations = "max_iterations"
 	ExhaustTokenBudget   = "token_budget"
 	ExhaustWallClock     = "wall_clock"
+	ExhaustNoOutput      = "no_output"
 )
 
 // Result is the outcome of a delegated task execution.
@@ -243,7 +244,45 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 
 		// No tool calls — we have the final response.
 		if len(resp.Message.ToolCalls) == 0 {
+			content := resp.Message.Content
 			messages = append(messages, resp.Message)
+
+			// Empty content after tool-call iterations is a silent failure.
+			// The model completed its tool work but never produced text output.
+			if content == "" && i > 0 {
+				e.logger.Warn("delegate produced empty result after tool calls",
+					"delegate_id", did,
+					"profile", profile.Name,
+					"iter", i+1,
+				)
+				e.recordCompletion(&completionRecord{
+					delegateID:     did,
+					conversationID: tools.ConversationIDFromContext(ctx),
+					task:           task,
+					guidance:       guidance,
+					profileName:    profile.Name,
+					model:          model,
+					totalIter:      i + 1,
+					maxIter:        maxIter,
+					totalInput:     totalInput,
+					totalOutput:    totalOutput,
+					exhausted:      true,
+					exhaustReason:  ExhaustNoOutput,
+					startTime:      startTime,
+					messages:       messages,
+					resultContent:  "",
+				})
+				return &Result{
+					Content:       "",
+					Model:         model,
+					Iterations:    i + 1,
+					InputTokens:   totalInput,
+					OutputTokens:  totalOutput,
+					Exhausted:     true,
+					ExhaustReason: ExhaustNoOutput,
+				}, nil
+			}
+
 			e.recordCompletion(&completionRecord{
 				delegateID:     did,
 				conversationID: tools.ConversationIDFromContext(ctx),
@@ -258,10 +297,10 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 				exhausted:      false,
 				startTime:      startTime,
 				messages:       messages,
-				resultContent:  resp.Message.Content,
+				resultContent:  content,
 			})
 			return &Result{
-				Content:      resp.Message.Content,
+				Content:      content,
 				Model:        model,
 				Iterations:   i + 1,
 				InputTokens:  totalInput,

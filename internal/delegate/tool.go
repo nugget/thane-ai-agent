@@ -57,19 +57,23 @@ func ToolHandler(exec *Executor) func(ctx context.Context, args map[string]any) 
 			return fmt.Sprintf("[Delegate error: profile=%s] %s", profileName, err.Error()), nil
 		}
 
-		// Format the result with metadata header.
-		header := fmt.Sprintf("[Delegate completed: profile=%s, model=%s, iter=%d, tokens=%s]",
-			profileName, result.Model, result.Iterations, formatTokens(result.OutputTokens))
-
+		// Format the result with explicit success/failure headers so the
+		// calling model can distinguish outcomes unambiguously.
 		if !result.Exhausted {
 			if result.Content == "" {
-				return header + "\n\nNo results returned.", nil
+				// Safety net — should be rare after delegate.go now flags
+				// empty-after-tool-calls as ExhaustNoOutput.
+				return fmt.Sprintf("[Delegate FAILED: profile=%s, model=%s, reason=no_output, iter=%d]"+
+					"\n\nDelegate completed without producing results.",
+					profileName, result.Model, result.Iterations), nil
 			}
+			header := fmt.Sprintf("[Delegate SUCCEEDED: profile=%s, model=%s, iter=%d, tokens=%s]",
+				profileName, result.Model, result.Iterations, formatTokens(result.OutputTokens))
 			return header + "\n\n" + result.Content, nil
 		}
 
 		// Exhausted delegation — provide actionable context for retry.
-		header = fmt.Sprintf("[Delegate budget exhausted: profile=%s, model=%s, reason=%s, iter=%d, tokens_in=%s, tokens_out=%s]",
+		header := fmt.Sprintf("[Delegate FAILED: profile=%s, model=%s, reason=%s, iter=%d, tokens_in=%s, tokens_out=%s]",
 			profileName, result.Model, result.ExhaustReason, result.Iterations,
 			formatTokens(result.InputTokens), formatTokens(result.OutputTokens))
 
@@ -82,6 +86,8 @@ func ToolHandler(exec *Executor) func(ctx context.Context, args map[string]any) 
 		}
 		out.WriteString("[Exhaustion note: ")
 		switch result.ExhaustReason {
+		case ExhaustNoOutput:
+			out.WriteString("The delegate completed all tool calls but produced no text output. Retry with more specific guidance — tell the delegate exactly what information to return.")
 		case ExhaustWallClock:
 			out.WriteString("The delegate exceeded its wall clock time limit before completing the task.")
 		case ExhaustTokenBudget:
@@ -89,8 +95,11 @@ func ToolHandler(exec *Executor) func(ctx context.Context, args map[string]any) 
 		default:
 			out.WriteString("The delegate used all available iterations before completing the task.")
 		}
-		out.WriteString(" If retrying, provide more specific guidance to narrow the scope — ")
-		out.WriteString("e.g., exact file paths, entity IDs, or which step to focus on.]")
+		if result.ExhaustReason != ExhaustNoOutput {
+			out.WriteString(" If retrying, provide more specific guidance to narrow the scope — ")
+			out.WriteString("e.g., exact file paths, entity IDs, or which step to focus on.")
+		}
+		out.WriteString("]")
 		return out.String(), nil
 	}
 }
