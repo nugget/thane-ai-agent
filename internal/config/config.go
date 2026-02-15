@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"time"
 
@@ -186,6 +187,26 @@ type OllamaAPIConfig struct {
 type HomeAssistantConfig struct {
 	URL   string `yaml:"url"`
 	Token string `yaml:"token"`
+
+	// Subscribe configures WebSocket event subscriptions for real-time
+	// state change monitoring. When entity_globs is non-empty, only
+	// matching entities are processed; when empty, all state changes
+	// are accepted.
+	Subscribe SubscribeConfig `yaml:"subscribe"`
+}
+
+// SubscribeConfig configures entity-level filtering and rate limiting
+// for Home Assistant WebSocket state_changed event subscriptions.
+type SubscribeConfig struct {
+	// EntityGlobs is a list of glob patterns (using path.Match syntax)
+	// that select which entity IDs to process. Examples: "person.*",
+	// "binary_sensor.*door*", "light.living_room". An empty list
+	// means all entities are accepted.
+	EntityGlobs []string `yaml:"entity_globs"`
+
+	// RateLimitPerMinute caps how many state changes per entity are
+	// forwarded per minute. Zero means no rate limiting.
+	RateLimitPerMinute int `yaml:"rate_limit_per_minute"`
 }
 
 // Configured reports whether both URL and Token are set. A partial
@@ -654,6 +675,9 @@ func (c *Config) Validate() error {
 			}
 		}
 	}
+	if err := c.validateSubscribe(); err != nil {
+		return err
+	}
 	if err := c.validateMCP(); err != nil {
 		return err
 	}
@@ -697,6 +721,20 @@ func (c *Config) validateMCP() error {
 		if len(srv.IncludeTools) > 0 && len(srv.ExcludeTools) > 0 {
 			return fmt.Errorf("mcp.servers[%d] (%s): cannot set both include_tools and exclude_tools", i, srv.Name)
 		}
+	}
+	return nil
+}
+
+// validateSubscribe checks the Home Assistant subscribe configuration
+// for consistency.
+func (c *Config) validateSubscribe() error {
+	for i, glob := range c.HomeAssistant.Subscribe.EntityGlobs {
+		if _, err := path.Match(glob, ""); err != nil {
+			return fmt.Errorf("homeassistant.subscribe.entity_globs[%d] %q: invalid glob pattern: %w", i, glob, err)
+		}
+	}
+	if c.HomeAssistant.Subscribe.RateLimitPerMinute < 0 {
+		return fmt.Errorf("homeassistant.subscribe.rate_limit_per_minute %d must be non-negative", c.HomeAssistant.Subscribe.RateLimitPerMinute)
 	}
 	return nil
 }

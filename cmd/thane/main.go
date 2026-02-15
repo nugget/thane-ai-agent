@@ -28,6 +28,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -375,6 +376,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	connMgr := connwatch.NewManager(logger)
 	defer connMgr.Stop()
 
+	var subscribeOnce sync.Once
 	if ha != nil {
 		haWatcher := connMgr.Watch(ctx, connwatch.WatcherConfig{
 			Name:    "homeassistant",
@@ -399,6 +401,19 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 					if err := haWS.Reconnect(wsCtx); err != nil {
 						logger.Error("WebSocket reconnect failed", "error", err)
 					}
+
+					// Subscribe to state_changed events on first connection.
+					// Subsequent reconnects restore subscriptions automatically
+					// via WSClient.restoreSubscriptions.
+					subscribeOnce.Do(func() {
+						subCtx, subCancel := context.WithTimeout(context.Background(), 30*time.Second)
+						defer subCancel()
+						if err := haWS.Subscribe(subCtx, "state_changed"); err != nil {
+							logger.Error("subscribe to state_changed failed", "error", err)
+						} else {
+							logger.Info("subscribed to state_changed events")
+						}
+					})
 				}
 			},
 			Logger: logger,
@@ -998,6 +1013,35 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		"episodic_daily_dir", cfg.Episodic.DailyDir,
 		"episodic_history_tokens", cfg.Episodic.HistoryTokens,
 	)
+
+	// --- State watcher ---
+	// Consumes state_changed events from the HA WebSocket and bridges
+	// them to the anticipation system via WakeContext. The watcher runs
+	// until ctx is cancelled and is safe to start even if the WebSocket
+	// isn't connected yet (events arrive once the connection is up).
+	if haWS != nil {
+		filter := homeassistant.NewEntityFilter(cfg.HomeAssistant.Subscribe.EntityGlobs)
+		limiter := homeassistant.NewEntityRateLimiter(cfg.HomeAssistant.Subscribe.RateLimitPerMinute)
+		stateHandler := func(entityID, oldState, newState string) {
+			anticipationProvider.SetWakeContext(anticipation.WakeContext{
+				Time:        time.Now(),
+				EventType:   "state_change",
+				EntityID:    entityID,
+				EntityState: newState,
+			})
+			logger.Debug("state change",
+				"entity_id", entityID,
+				"old_state", oldState,
+				"new_state", newState,
+			)
+		}
+		watcher := homeassistant.NewStateWatcher(haWS.Events(), filter, limiter, stateHandler, logger)
+		go watcher.Run(ctx)
+		logger.Info("state watcher started",
+			"entity_globs", cfg.HomeAssistant.Subscribe.EntityGlobs,
+			"rate_limit_per_minute", cfg.HomeAssistant.Subscribe.RateLimitPerMinute,
+		)
+	}
 
 	// --- API server ---
 	// The primary HTTP server exposing the OpenAI-compatible chat API,
