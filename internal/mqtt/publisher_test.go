@@ -129,9 +129,33 @@ func TestPublisher_SensorDefinitions(t *testing.T) {
 		t.Fatalf("got %d sensor definitions, want %d", len(defs), len(expectedEntities))
 	}
 
+	// Expected short names (no device name prefix — issue #164).
+	expectedNames := map[string]string{
+		"uptime":        "Uptime",
+		"version":       "Version",
+		"tokens_today":  "Tokens Today",
+		"last_request":  "Last Request",
+		"default_model": "Default Model",
+	}
+
 	entitySet := make(map[string]bool)
 	for _, d := range defs {
 		entitySet[d.entitySuffix] = true
+
+		// Sensor Name must NOT contain the device name (causes HA
+		// double-prefix entity IDs like sensor.foo_foo_uptime).
+		if strings.Contains(d.config.Name, cfg.DeviceName) {
+			t.Errorf("sensor %s: Name %q contains device name %q (double-prefix bug #164)",
+				d.entitySuffix, d.config.Name, cfg.DeviceName)
+		}
+
+		// Verify the expected short name.
+		if want, ok := expectedNames[d.entitySuffix]; ok {
+			if d.config.Name != want {
+				t.Errorf("sensor %s: Name = %q, want %q",
+					d.entitySuffix, d.config.Name, want)
+			}
+		}
 
 		// Every sensor should reference the availability topic.
 		wantAvail := "thane/test-thane/availability"

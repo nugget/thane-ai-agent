@@ -181,7 +181,7 @@ func (p *Publisher) sensorDefinitions() []sensorDef {
 		{
 			entitySuffix: "uptime",
 			config: SensorConfig{
-				Name:              p.device.Name + " Uptime",
+				Name:              "Uptime",
 				UniqueID:          p.instanceID + "_uptime",
 				StateTopic:        p.stateTopic("uptime"),
 				AvailabilityTopic: avail,
@@ -193,7 +193,7 @@ func (p *Publisher) sensorDefinitions() []sensorDef {
 		{
 			entitySuffix: "version",
 			config: SensorConfig{
-				Name:              p.device.Name + " Version",
+				Name:              "Version",
 				UniqueID:          p.instanceID + "_version",
 				StateTopic:        p.stateTopic("version"),
 				AvailabilityTopic: avail,
@@ -205,7 +205,7 @@ func (p *Publisher) sensorDefinitions() []sensorDef {
 		{
 			entitySuffix: "tokens_today",
 			config: SensorConfig{
-				Name:              p.device.Name + " Tokens Today",
+				Name:              "Tokens Today",
 				UniqueID:          p.instanceID + "_tokens_today",
 				StateTopic:        p.stateTopic("tokens_today"),
 				AvailabilityTopic: avail,
@@ -218,7 +218,7 @@ func (p *Publisher) sensorDefinitions() []sensorDef {
 		{
 			entitySuffix: "last_request",
 			config: SensorConfig{
-				Name:              p.device.Name + " Last Request",
+				Name:              "Last Request",
 				UniqueID:          p.instanceID + "_last_request",
 				StateTopic:        p.stateTopic("last_request"),
 				AvailabilityTopic: avail,
@@ -230,7 +230,7 @@ func (p *Publisher) sensorDefinitions() []sensorDef {
 		{
 			entitySuffix: "default_model",
 			config: SensorConfig{
-				Name:              p.device.Name + " Default Model",
+				Name:              "Default Model",
 				UniqueID:          p.instanceID + "_default_model",
 				StateTopic:        p.stateTopic("default_model"),
 				AvailabilityTopic: avail,
