@@ -183,6 +183,44 @@ func TestPublisher_SensorDefinitions(t *testing.T) {
 	}
 }
 
+func TestPublisher_SetMessageHandler(t *testing.T) {
+	cfg := config.MQTTConfig{
+		Broker:             "mqtt://localhost:1883",
+		DeviceName:         "test-thane",
+		DiscoveryPrefix:    "homeassistant",
+		PublishIntervalSec: 60,
+		Subscriptions: []config.SubscriptionConfig{
+			{Topic: "homeassistant/+/+/state"},
+			{Topic: "frigate/events"},
+		},
+	}
+	p := New(cfg, "test-id-1234", NewDailyTokens(time.UTC), nil, nil)
+
+	var called bool
+	var gotTopic string
+	var gotPayload []byte
+	p.SetMessageHandler(func(topic string, payload []byte) {
+		called = true
+		gotTopic = topic
+		gotPayload = payload
+	})
+
+	if p.handler == nil {
+		t.Fatal("handler should be set after SetMessageHandler")
+	}
+
+	p.handler("test/topic", []byte("hello"))
+	if !called {
+		t.Error("custom handler was not called")
+	}
+	if gotTopic != "test/topic" {
+		t.Errorf("topic = %q, want %q", gotTopic, "test/topic")
+	}
+	if string(gotPayload) != "hello" {
+		t.Errorf("payload = %q, want %q", gotPayload, "hello")
+	}
+}
+
 func TestMQTTConfig_Configured(t *testing.T) {
 	tests := []struct {
 		name string

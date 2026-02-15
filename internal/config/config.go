@@ -388,6 +388,21 @@ type MQTTConfig struct {
 	// PublishIntervalSec is how often (in seconds) sensor states are
 	// re-published to the broker. Default: 60. Minimum: 10.
 	PublishIntervalSec int `yaml:"publish_interval"`
+
+	// Subscriptions lists MQTT topics to subscribe to for ambient
+	// awareness. Messages are received and logged but not autonomously
+	// acted upon. Future phases will route messages to the anticipation
+	// engine. Supports MQTT wildcard characters (+ and #).
+	Subscriptions []SubscriptionConfig `yaml:"subscriptions"`
+}
+
+// SubscriptionConfig describes a single MQTT topic subscription.
+// Each entry is subscribed on every broker (re-)connect. Wildcards
+// (+ and #) are supported per the MQTT specification.
+type SubscriptionConfig struct {
+	// Topic is the MQTT topic filter (e.g., "homeassistant/+/+/state",
+	// "frigate/events"). Supports MQTT wildcard characters.
+	Topic string `yaml:"topic"`
 }
 
 // Configured reports whether both Broker and DeviceName are set. A
@@ -581,6 +596,11 @@ func (c *Config) Validate() error {
 		}
 		if c.MQTT.PublishIntervalSec < 10 {
 			return fmt.Errorf("mqtt.publish_interval %d too low (minimum 10 seconds)", c.MQTT.PublishIntervalSec)
+		}
+		for i, sub := range c.MQTT.Subscriptions {
+			if sub.Topic == "" {
+				return fmt.Errorf("mqtt.subscriptions[%d].topic must not be empty", i)
+			}
 		}
 	}
 	if c.Episodic.LookbackDays < 0 {

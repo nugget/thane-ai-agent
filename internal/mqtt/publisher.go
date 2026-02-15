@@ -30,16 +30,18 @@ type StatsSource interface {
 }
 
 // Publisher manages the MQTT connection, publishes HA discovery config
-// messages on (re-)connect, and runs a periodic loop that pushes
-// sensor state updates to the broker.
+// messages on (re-)connect, subscribes to configured topics, and runs
+// a periodic loop that pushes sensor state updates to the broker.
 type Publisher struct {
-	cfg        config.MQTTConfig
-	instanceID string
-	device     DeviceInfo
-	tokens     *DailyTokens
-	stats      StatsSource
-	logger     *slog.Logger
-	cm         *autopaho.ConnectionManager
+	cfg         config.MQTTConfig
+	instanceID  string
+	device      DeviceInfo
+	tokens      *DailyTokens
+	stats       StatsSource
+	logger      *slog.Logger
+	cm          *autopaho.ConnectionManager
+	handler     MessageHandler
+	rateLimiter *messageRateLimiter
 }
 
 // New creates a Publisher but does not connect. Call [Publisher.Start]
@@ -60,9 +62,18 @@ func New(cfg config.MQTTConfig, instanceID string, tokens *DailyTokens, stats St
 	}
 }
 
+// SetMessageHandler registers a callback for inbound MQTT messages
+// received on subscribed topics. Must be called before [Publisher.Start].
+// If not called, a default handler that logs messages at debug level
+// is used when subscriptions are configured.
+func (p *Publisher) SetMessageHandler(h MessageHandler) {
+	p.handler = h
+}
+
 // Start connects to the MQTT broker and begins the periodic publish
 // loop. It blocks until ctx is cancelled. On every (re-)connect it
-// publishes discovery configs and a birth message.
+// publishes discovery configs, a birth message, and re-subscribes to
+// configured topics.
 func (p *Publisher) Start(ctx context.Context) error {
 	if p.tokens == nil {
 		return fmt.Errorf("mqtt publisher: tokens must not be nil")
@@ -95,6 +106,7 @@ func (p *Publisher) Start(ctx context.Context) error {
 			defer cancel()
 			p.publishDiscovery(publishCtx, cm)
 			p.publishAvailability(publishCtx, cm, "online")
+			p.subscribe(publishCtx, cm)
 		},
 		OnConnectError: func(err error) {
 			p.logger.Warn("mqtt connection error", "error", err)
@@ -116,6 +128,23 @@ func (p *Publisher) Start(ctx context.Context) error {
 		return fmt.Errorf("mqtt connect: %w", err)
 	}
 	p.cm = cm
+
+	// Wire inbound message handler if subscriptions are configured.
+	if len(p.cfg.Subscriptions) > 0 {
+		if p.handler == nil {
+			p.handler = defaultMessageHandler(p.logger)
+		}
+		p.rateLimiter = newMessageRateLimiter(100, time.Second, p.logger)
+		go p.rateLimiter.start(ctx)
+
+		cm.AddOnPublishReceived(func(pr autopaho.PublishReceived) (bool, error) {
+			if !p.rateLimiter.allow() {
+				return true, nil
+			}
+			p.handler(pr.Packet.Topic, pr.Packet.Payload)
+			return true, nil
+		})
+	}
 
 	// Wait for the initial connection before starting the publish loop.
 	connCtx, connCancel := context.WithTimeout(ctx, 30*time.Second)
@@ -278,6 +307,36 @@ func (p *Publisher) publishAvailability(ctx context.Context, cm *autopaho.Connec
 			"status", status, "error", err)
 	} else {
 		p.logger.Info("mqtt availability published", "status", status)
+	}
+}
+
+// --- Subscriptions ---
+
+// subscribe sends SUBSCRIBE packets for all configured topic filters.
+// Called on every (re-)connect because autopaho does not automatically
+// resubscribe after reconnection.
+func (p *Publisher) subscribe(ctx context.Context, cm *autopaho.ConnectionManager) {
+	if len(p.cfg.Subscriptions) == 0 {
+		return
+	}
+
+	opts := make([]paho.SubscribeOptions, 0, len(p.cfg.Subscriptions))
+	topics := make([]string, 0, len(p.cfg.Subscriptions))
+	for _, sub := range p.cfg.Subscriptions {
+		opts = append(opts, paho.SubscribeOptions{
+			Topic: sub.Topic,
+			QoS:   0,
+		})
+		topics = append(topics, sub.Topic)
+	}
+
+	if _, err := cm.Subscribe(ctx, &paho.Subscribe{
+		Subscriptions: opts,
+	}); err != nil {
+		p.logger.Error("mqtt subscribe failed",
+			"error", err, "topics", topics)
+	} else {
+		p.logger.Info("mqtt subscribed to topics", "topics", topics)
 	}
 }
 

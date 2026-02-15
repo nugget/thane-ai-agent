@@ -66,9 +66,10 @@ models:
 # anthropic:
 #   api_key: sk-ant-...
 
-# MQTT publishing (optional — for Home Assistant device discovery)
+# MQTT (optional — for Home Assistant device discovery and ambient awareness)
 # When configured, Thane connects to an MQTT broker and publishes HA
 # discovery messages so it appears as a native device with sensors.
+# Subscriptions enable ambient awareness of HA state changes.
 # mqtt:
 #   broker: mqtts://your-broker:8883   # mqtt:// or mqtts:// URL
 #   username: thane
@@ -76,6 +77,9 @@ models:
 #   discovery_prefix: homeassistant    # default
 #   device_name: thane-ai-agent        # unique name for this instance
 #   publish_interval: 60               # seconds, default
+#   subscriptions:                     # topics to subscribe for ambient awareness
+#     - topic: homeassistant/+/+/state   # HA entity state changes
+#     - topic: frigate/events            # Frigate camera events
 
 # Storage paths
 data_dir: ./db
