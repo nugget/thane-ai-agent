@@ -184,7 +184,7 @@ When configured, deep HA integration via multiple protocols:
 
 - **REST API** — State queries, service calls, template rendering
 - **WebSocket API** — Persistent connection for real-time `state_changed` events, area/device/entity registry access. Client-side filtering by entity glob patterns (e.g., `person.*`, `binary_sensor.*door*`). This is the official HA event bus — the same mechanism used by the HA frontend and mobile apps.
-- **MCP** — ha-mcp server provides 90+ tools for comprehensive HA interaction, bridged into the agent loop via stdio transport
+- **MCP** — [ha-mcp](https://github.com/karimkhaleel/ha-mcp) server provides 90+ tools for comprehensive HA interaction, bridged into the agent loop via stdio transport
 - **MQTT** — Thane publishes its own sensor telemetry (uptime, token usage, model info) as HA-discoverable MQTT entities. Also subscribes to Frigate events for NVR-driven triggers.
 
 **Protocol separation principle:** Each protocol is used for what it does best. WebSocket for HA state subscriptions (real-time, official API, no config changes to HA). MQTT for Frigate (publishes natively) and Thane's own telemetry. MCP for rich HA tool access. REST for simple queries.
@@ -269,7 +269,7 @@ See [README.md](README.md) for detailed deployment instructions.
 - WebSocket client, model routing, checkpoint/restore, semantic memory, control_device, shell exec, web search (SearXNG + Brave), web fetch, Anthropic provider, httpkit networking layer
 
 ### Phase 3: Autonomy 🚧
-- ✅ MCP host support (ha-mcp, extensible)
+- ✅ MCP host support ([ha-mcp](https://github.com/karimkhaleel/ha-mcp), extensible)
 - ✅ Delegation system (primary orchestrates, local models execute)
 - ✅ Intent-based routing profiles
 - ✅ MQTT publishing (Thane telemetry as HA entities)
