@@ -320,3 +320,39 @@ func TestIter0ToolGating_DisabledWhenEmpty(t *testing.T) {
 		t.Errorf("iter-0 tool count = %d, want %d; tools: %v", len(names), fullToolCount, names)
 	}
 }
+
+func TestToolGating_DisabledByDelegationGatingHint(t *testing.T) {
+	// When the delegation_gating hint is "disabled" (thane:ops profile),
+	// gating should be bypassed even when iter0Tools and thane_delegate
+	// are both present.
+	mock := &mockLLM{
+		responses: []*llm.ChatResponse{
+			{
+				Model:   "test-model",
+				Message: llm.Message{Role: "assistant", Content: "Direct tool access."},
+			},
+		},
+	}
+
+	loop := buildTestLoop(mock, []string{"thane_delegate", "recall_fact", "web_search"})
+	fullToolCount := len(loop.tools.List())
+	loop.SetIter0Tools([]string{"thane_delegate", "recall_fact"})
+
+	_, err := loop.Run(context.Background(), &Request{
+		Messages: []Message{{Role: "user", Content: "deploy the update"}},
+		Hints:    map[string]string{"delegation_gating": "disabled"},
+	}, nil)
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+
+	if len(mock.calls) != 1 {
+		t.Fatalf("expected 1 LLM call, got %d", len(mock.calls))
+	}
+
+	// All tools should be visible because gating is disabled via hint.
+	names := toolNames(mock.calls[0].Tools)
+	if len(names) != fullToolCount {
+		t.Errorf("iter-0 tool count = %d, want %d (gating should be disabled by hint); tools: %v", len(names), fullToolCount, names)
+	}
+}

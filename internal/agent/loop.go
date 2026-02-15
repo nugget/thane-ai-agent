@@ -197,6 +197,11 @@ func (l *Loop) Tools() *tools.Registry {
 	return l.tools
 }
 
+// Router returns the model router, or nil if no router is configured.
+func (l *Loop) Router() *router.Router {
+	return l.router
+}
+
 // Simple greeting patterns that don't need tool calls
 var greetingPatterns = []string{
 	"hi", "hello", "hey", "howdy", "hiya", "yo",
@@ -514,8 +519,13 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 
 	// Determine whether tool gating is active. Gating is silently disabled
 	// when thane_delegate is not registered — without a delegation tool the
-	// restricted set would leave the agent unable to act.
+	// restricted set would leave the agent unable to act. The thane:ops
+	// profile disables gating via the delegation_gating hint to give the
+	// model direct access to all tools.
 	gatingActive := len(l.iter0Tools) > 0 && l.tools.Get("thane_delegate") != nil
+	if req.Hints[router.HintDelegationGating] == "disabled" {
+		gatingActive = false
+	}
 	if gatingActive {
 		log.Info("tool gating active", "tools", l.iter0Tools)
 	}

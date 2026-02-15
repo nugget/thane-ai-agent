@@ -28,9 +28,14 @@ const (
 	HintQualityFloor = "quality_floor"
 	// HintModelPreference suggests a specific model (soft preference, not override).
 	HintModelPreference = "model_preference"
-	// HintMission describes the task context: "conversation", "device_control", "background", "anticipation"
-	HintMission   = "mission"
+	// HintMission describes the task context: "conversation", "device_control", "background", "anticipation", "automation"
+	HintMission = "mission"
+	// HintLocalOnly restricts routing to free/local models when set to "true".
 	HintLocalOnly = "local_only"
+	// HintDelegationGating controls whether delegation-first tool gating is
+	// active. Set to "disabled" to give the model direct access to all tools
+	// on every iteration (used by thane:ops).
+	HintDelegationGating = "delegation_gating"
 )
 
 // Priority indicates latency requirements.
@@ -145,6 +150,22 @@ func NewRouter(logger *slog.Logger, config Config) *Router {
 			ComplexityCounts: make(map[string]int64),
 		},
 	}
+}
+
+// MaxQuality returns the highest quality rating among configured models.
+// If no models are configured it returns 10 as a safe default that
+// selects the best available model at runtime.
+func (r *Router) MaxQuality() int {
+	max := 0
+	for _, m := range r.config.Models {
+		if m.Quality > max {
+			max = m.Quality
+		}
+	}
+	if max == 0 {
+		return 10
+	}
+	return max
 }
 
 // Route selects a model for the given request.
