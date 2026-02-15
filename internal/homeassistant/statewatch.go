@@ -159,16 +159,29 @@ func NewStateWatcher(events <-chan Event, filter *EntityFilter, limiter *EntityR
 	}
 }
 
+// cleanupInterval is how often the rate limiter's stale counters are
+// pruned. Five minutes is conservative — entities that haven't fired
+// in a full minute (the rate-limit window) are already stale after 1m,
+// so checking every 5m keeps overhead negligible while bounding growth.
+const cleanupInterval = 5 * time.Minute
+
 // Run reads events from the channel until the context is cancelled or
-// the channel is closed. It blocks the calling goroutine.
+// the channel is closed. It blocks the calling goroutine. A background
+// ticker periodically prunes stale rate-limiter counters so the map
+// does not grow unbounded when many entities are observed.
 func (w *StateWatcher) Run(ctx context.Context) {
 	w.logger.Info("state watcher started")
 	defer w.logger.Info("state watcher stopped")
+
+	cleanupTicker := time.NewTicker(cleanupInterval)
+	defer cleanupTicker.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-cleanupTicker.C:
+			w.limiter.Cleanup()
 		case ev, ok := <-w.events:
 			if !ok {
 				return
