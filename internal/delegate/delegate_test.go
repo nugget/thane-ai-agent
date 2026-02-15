@@ -379,8 +379,8 @@ func TestToolHandler_ValidArgs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ToolHandler() error = %v", err)
 	}
-	if !strings.Contains(result, "[Delegate completed:") {
-		t.Errorf("result = %q, want to contain '[Delegate completed:'", result)
+	if !strings.Contains(result, "[Delegate SUCCEEDED:") {
+		t.Errorf("result = %q, want to contain '[Delegate SUCCEEDED:'", result)
 	}
 	if !strings.Contains(result, "Task done.") {
 		t.Errorf("result = %q, want to contain 'Task done.'", result)
@@ -545,8 +545,8 @@ func TestToolHandler_ExhaustedOutput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ToolHandler() error = %v", err)
 	}
-	if !strings.Contains(result, "[Delegate budget exhausted:") {
-		t.Errorf("result missing exhausted header, got: %s", result)
+	if !strings.Contains(result, "[Delegate FAILED:") {
+		t.Errorf("result missing failure header, got: %s", result)
 	}
 	if !strings.Contains(result, "tokens_in=") {
 		t.Errorf("result missing tokens_in, got: %s", result)
@@ -751,5 +751,168 @@ func TestDefaultBudgets(t *testing.T) {
 	}
 	if defaultMaxDuration != 90*time.Second {
 		t.Errorf("defaultMaxDuration = %v, want 90s", defaultMaxDuration)
+	}
+}
+
+func TestExecute_EmptyResultAfterToolCalls(t *testing.T) {
+	// Issue #162: When a delegate runs tool calls but the final response
+	// is empty, it should be flagged as exhausted with reason "no_output".
+	mock := &mockLLMClient{
+		responses: []*llm.ChatResponse{
+			// Iter 0: tool call
+			{
+				Model: "test-model",
+				Message: llm.Message{
+					Role: "assistant",
+					ToolCalls: []llm.ToolCall{{
+						ID: "call-1",
+						Function: struct {
+							Name      string         `json:"name"`
+							Arguments map[string]any `json:"arguments"`
+						}{
+							Name:      "get_state",
+							Arguments: map[string]any{"entity_id": "light.office"},
+						},
+					}},
+				},
+				InputTokens:  100,
+				OutputTokens: 30,
+			},
+			// Iter 1: empty content, no tool calls
+			{
+				Model:        "test-model",
+				Message:      llm.Message{Role: "assistant", Content: ""},
+				InputTokens:  200,
+				OutputTokens: 2,
+			},
+		},
+	}
+
+	exec := NewExecutor(slog.Default(), mock, nil, newTestRegistry(), "test-model")
+	result, err := exec.Execute(context.Background(), "Check the office light", "general", "")
+
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if !result.Exhausted {
+		t.Error("Exhausted = false, want true")
+	}
+	if result.ExhaustReason != ExhaustNoOutput {
+		t.Errorf("ExhaustReason = %q, want %q", result.ExhaustReason, ExhaustNoOutput)
+	}
+	if result.Content != "" {
+		t.Errorf("Content = %q, want empty", result.Content)
+	}
+	if result.Iterations != 2 {
+		t.Errorf("Iterations = %d, want 2", result.Iterations)
+	}
+}
+
+func TestExecute_EmptyResultFirstIter(t *testing.T) {
+	// Empty result on the first iteration (no prior tool calls) should NOT
+	// be flagged as no_output — it's a different condition.
+	mock := &mockLLMClient{
+		responses: []*llm.ChatResponse{
+			{
+				Model:        "test-model",
+				Message:      llm.Message{Role: "assistant", Content: ""},
+				InputTokens:  100,
+				OutputTokens: 2,
+			},
+		},
+	}
+
+	exec := NewExecutor(slog.Default(), mock, nil, newTestRegistry(), "test-model")
+	result, err := exec.Execute(context.Background(), "Do something", "general", "")
+
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if result.Exhausted {
+		t.Error("Exhausted = true, want false (first-iteration empty should not be flagged)")
+	}
+	if result.ExhaustReason != "" {
+		t.Errorf("ExhaustReason = %q, want empty", result.ExhaustReason)
+	}
+}
+
+func TestToolHandler_SucceededHeader(t *testing.T) {
+	mock := &mockLLMClient{
+		responses: []*llm.ChatResponse{
+			{
+				Model:        "test-model",
+				Message:      llm.Message{Role: "assistant", Content: "Task done."},
+				InputTokens:  50,
+				OutputTokens: 10,
+			},
+		},
+	}
+
+	exec := NewExecutor(slog.Default(), mock, nil, newTestRegistry(), "test-model")
+	handler := ToolHandler(exec)
+
+	result, err := handler(context.Background(), map[string]any{"task": "Check the lights"})
+	if err != nil {
+		t.Fatalf("ToolHandler() error = %v", err)
+	}
+	if !strings.Contains(result, "[Delegate SUCCEEDED:") {
+		t.Errorf("result = %q, want to contain '[Delegate SUCCEEDED:'", result)
+	}
+	if strings.Contains(result, "FAILED") {
+		t.Errorf("successful result should not contain 'FAILED', got: %s", result)
+	}
+}
+
+func TestToolHandler_FailedHeaderNoOutput(t *testing.T) {
+	// After tool calls, empty content → ExhaustNoOutput → FAILED header.
+	mock := &mockLLMClient{
+		responses: []*llm.ChatResponse{
+			// Iter 0: tool call
+			{
+				Model: "test-model",
+				Message: llm.Message{
+					Role: "assistant",
+					ToolCalls: []llm.ToolCall{{
+						ID: "call-1",
+						Function: struct {
+							Name      string         `json:"name"`
+							Arguments map[string]any `json:"arguments"`
+						}{
+							Name:      "get_state",
+							Arguments: map[string]any{"entity_id": "light.test"},
+						},
+					}},
+				},
+				InputTokens:  100,
+				OutputTokens: 30,
+			},
+			// Iter 1: empty content
+			{
+				Model:        "test-model",
+				Message:      llm.Message{Role: "assistant", Content: ""},
+				InputTokens:  200,
+				OutputTokens: 2,
+			},
+		},
+	}
+
+	exec := NewExecutor(slog.Default(), mock, nil, newTestRegistry(), "test-model")
+	handler := ToolHandler(exec)
+
+	result, err := handler(context.Background(), map[string]any{"task": "Check lights"})
+	if err != nil {
+		t.Fatalf("ToolHandler() error = %v", err)
+	}
+	if !strings.Contains(result, "[Delegate FAILED:") {
+		t.Errorf("result = %q, want to contain '[Delegate FAILED:'", result)
+	}
+	if !strings.Contains(result, "reason=no_output") {
+		t.Errorf("result = %q, want to contain 'reason=no_output'", result)
+	}
+	if !strings.Contains(result, "produced no text output") {
+		t.Errorf("result missing no_output exhaustion note, got: %s", result)
+	}
+	if strings.Contains(result, "SUCCEEDED") {
+		t.Errorf("failed result should not contain 'SUCCEEDED', got: %s", result)
 	}
 }
