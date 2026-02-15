@@ -14,7 +14,7 @@ If you have Home Assistant, Thane drops in as a native conversation agent and bl
 
 **Memory that persists.** Thane remembers facts about your home, your preferences, and your routines. It learns over time. Tell it once that you like the lights dim after 10pm and it just... knows.
 
-**Local-first.** Runs entirely on Ollama. Your conversations, your data, your hardware. Cloud models available as fallback, never required.
+**Local-first.** Can run entirely on Ollama. Your conversations, your data, your hardware. Cloud models available as fallback, never required.
 
 **Single binary.** Written in Go. No Python environments, no dependency hell. One command: `thane`.
 

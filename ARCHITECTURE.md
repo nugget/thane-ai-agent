@@ -39,7 +39,7 @@ Home Assistant is Thane's flagship integration, but not a requirement. With HA, 
 
 ### Local-First, Cloud-Optional
 
-Thane runs on Ollama. Every conversation stays on your hardware. Cloud models are available as fallback for complex reasoning, but nothing requires them.
+Thane can run entirely on Ollama. Every conversation stays on your hardware. Cloud models are available for complex reasoning, but nothing requires them.
 
 ### Memory as Foundation
 
