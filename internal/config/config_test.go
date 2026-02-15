@@ -29,12 +29,15 @@ func TestFindConfig_ExplicitMissing(t *testing.T) {
 }
 
 func TestFindConfig_SearchPath(t *testing.T) {
-	// When no config exists anywhere, should error
-	// (Save and restore CWD to avoid finding the repo's config.yaml)
+	// When no config exists anywhere, should error.
+	// Override both CWD and HOME so DefaultSearchPaths won't find
+	// a real ~/Thane/config.yaml on developer machines.
 	dir := t.TempDir()
 	orig, _ := os.Getwd()
 	os.Chdir(dir)
 	defer os.Chdir(orig)
+
+	t.Setenv("HOME", dir)
 
 	_, err := FindConfig("")
 	if err == nil {
