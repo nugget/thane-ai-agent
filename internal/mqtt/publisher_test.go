@@ -129,9 +129,33 @@ func TestPublisher_SensorDefinitions(t *testing.T) {
 		t.Fatalf("got %d sensor definitions, want %d", len(defs), len(expectedEntities))
 	}
 
+	// Expected short names (no device name prefix — issue #164).
+	expectedNames := map[string]string{
+		"uptime":        "Uptime",
+		"version":       "Version",
+		"tokens_today":  "Tokens Today",
+		"last_request":  "Last Request",
+		"default_model": "Default Model",
+	}
+
 	entitySet := make(map[string]bool)
 	for _, d := range defs {
 		entitySet[d.entitySuffix] = true
+
+		// Sensor Name must NOT contain the device name (causes HA
+		// double-prefix entity IDs like sensor.foo_foo_uptime).
+		if strings.Contains(d.config.Name, cfg.DeviceName) {
+			t.Errorf("sensor %s: Name %q contains device name %q (double-prefix bug #164)",
+				d.entitySuffix, d.config.Name, cfg.DeviceName)
+		}
+
+		// Verify the expected short name.
+		if want, ok := expectedNames[d.entitySuffix]; ok {
+			if d.config.Name != want {
+				t.Errorf("sensor %s: Name = %q, want %q",
+					d.entitySuffix, d.config.Name, want)
+			}
+		}
 
 		// Every sensor should reference the availability topic.
 		wantAvail := "thane/test-thane/availability"
@@ -156,6 +180,44 @@ func TestPublisher_SensorDefinitions(t *testing.T) {
 		if !entitySet[name] {
 			t.Errorf("missing sensor definition for %q", name)
 		}
+	}
+}
+
+func TestPublisher_SetMessageHandler(t *testing.T) {
+	cfg := config.MQTTConfig{
+		Broker:             "mqtt://localhost:1883",
+		DeviceName:         "test-thane",
+		DiscoveryPrefix:    "homeassistant",
+		PublishIntervalSec: 60,
+		Subscriptions: []config.SubscriptionConfig{
+			{Topic: "homeassistant/+/+/state"},
+			{Topic: "frigate/events"},
+		},
+	}
+	p := New(cfg, "test-id-1234", NewDailyTokens(time.UTC), nil, nil)
+
+	var called bool
+	var gotTopic string
+	var gotPayload []byte
+	p.SetMessageHandler(func(topic string, payload []byte) {
+		called = true
+		gotTopic = topic
+		gotPayload = payload
+	})
+
+	if p.handler == nil {
+		t.Fatal("handler should be set after SetMessageHandler")
+	}
+
+	p.handler("test/topic", []byte("hello"))
+	if !called {
+		t.Error("custom handler was not called")
+	}
+	if gotTopic != "test/topic" {
+		t.Errorf("topic = %q, want %q", gotTopic, "test/topic")
+	}
+	if string(gotPayload) != "hello" {
+		t.Errorf("payload = %q, want %q", gotPayload, "hello")
 	}
 }
 
