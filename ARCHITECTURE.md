@@ -178,7 +178,7 @@ Intent-based routing profiles select the right model for each task:
 
 Profile names are vendor-neutral — they describe intent, not model names. The router maps profiles to specific models based on configured quality/speed scores, with automatic failover and checkpoint before model switch.
 
-### Home Assistant Integration (optional)
+### Thane + Home Assistant (optional)
 
 When configured, deep HA integration via multiple protocols:
 

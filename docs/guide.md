@@ -230,7 +230,7 @@ Yes, if it has enough resources. Thane itself is lightweight (~50MB binary, mini
 
 ## Next Steps
 
-- **[Home Assistant Integration](homeassistant.md)** — Detailed HA setup and protocol information
+- **[Thane + Home Assistant](homeassistant.md)** — Detailed HA setup and protocol information
 - **[Routing Profiles](routing-profiles.md)** — All available profiles and when to use them
 - **[Delegation & MCP](delegation.md)** — How the orchestration/execution split works
 - **[Architecture](../ARCHITECTURE.md)** — Full system design for the technically curious

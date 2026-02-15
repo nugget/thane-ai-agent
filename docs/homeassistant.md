@@ -1,8 +1,8 @@
-# Home Assistant Integration
+# Thane + Home Assistant
 
 > Your home already has an agent. We make it *autonomous*.
 
-Thane integrates with Home Assistant through multiple protocols, each used for what it does best.
+Thane connects to Home Assistant through multiple protocols, each used for what it does best. No custom integration or HACS required — Thane uses HA's native Ollama integration and standard APIs.
 
 ## Quick Setup
 

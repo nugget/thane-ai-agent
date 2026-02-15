@@ -7,7 +7,7 @@
 ## Setup & Configuration
 
 - **[Getting Started](getting-started.md)** — Build, configure, and run Thane (quick reference)
-- **[Home Assistant Integration](homeassistant.md)** — Connect Thane as your HA conversation agent
+- **[Thane + Home Assistant](homeassistant.md)** — Connect Thane as your HA conversation agent
 - **[Routing Profiles](routing-profiles.md)** — Choose the right model for each task (`thane:latest`, `thane:premium`, `thane:ops`, etc.)
 
 ## How It Works
