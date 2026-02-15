@@ -753,7 +753,7 @@ iterLoop:
 				)
 				llmMessages = append(llmMessages, llm.Message{
 					Role:    "user",
-					Content: "You executed tool calls but did not provide a response to the user. Please respond now.",
+					Content: prompts.EmptyResponseNudge,
 				})
 				emptyRetried = true
 				continue
@@ -763,7 +763,7 @@ iterLoop:
 				"input_tokens", totalInputTokens,
 				"output_tokens", totalOutputTokens,
 			)
-			llmResp.Message.Content = "I processed your request but wasn't able to compose a response. Please try again."
+			llmResp.Message.Content = prompts.EmptyResponseFallback
 		}
 
 		resp := &Response{
@@ -871,7 +871,7 @@ iterLoop:
 				"input_tokens", totalInputTokens,
 				"output_tokens", totalOutputTokens,
 			)
-			content = "I processed your request but wasn't able to compose a response. Please try again."
+			content = prompts.EmptyResponseFallback
 		}
 
 		resp := &Response{

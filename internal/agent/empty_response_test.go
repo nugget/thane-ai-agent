@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/nugget/thane-ai-agent/internal/llm"
+	"github.com/nugget/thane-ai-agent/internal/prompts"
 )
 
 func TestEmptyResponse_NudgeRecovery(t *testing.T) {
@@ -67,7 +68,7 @@ func TestEmptyResponse_NudgeRecovery(t *testing.T) {
 	lastCall := mock.calls[2]
 	nudgeFound := false
 	for _, msg := range lastCall.Messages {
-		if msg.Role == "user" && msg.Content == "You executed tool calls but did not provide a response to the user. Please respond now." {
+		if msg.Role == "user" && msg.Content == prompts.EmptyResponseNudge {
 			nudgeFound = true
 			break
 		}
@@ -138,9 +139,8 @@ func TestEmptyResponse_FallbackAfterNudge(t *testing.T) {
 	}
 
 	// Response should be the fallback message.
-	want := "I processed your request but wasn't able to compose a response. Please try again."
-	if resp.Content != want {
-		t.Errorf("response content = %q, want %q", resp.Content, want)
+	if resp.Content != prompts.EmptyResponseFallback {
+		t.Errorf("response content = %q, want %q", resp.Content, prompts.EmptyResponseFallback)
 	}
 }
 
