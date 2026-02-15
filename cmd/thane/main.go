@@ -633,13 +633,13 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	}
 	defer schedStore.Close()
 
+	// Forward-declare `loop` so the executeTask closure can reference it.
+	// The closure captures by reference; by the time any task fires, loop
+	// is fully initialized.
+	var loop *agent.Loop
+
 	executeTask := func(ctx context.Context, task *scheduler.Task, exec *scheduler.Execution) error {
-		logger.Info("task executed",
-			"task_id", task.ID,
-			"task_name", task.Name,
-			"payload_kind", task.Payload.Kind,
-		)
-		return nil
+		return runScheduledTask(ctx, task, exec, loop, logger)
 	}
 
 	sched := scheduler.New(logger, schedStore, executeTask)
@@ -654,7 +654,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// into it.
 	defaultContextWindow := cfg.ContextWindowForModel(cfg.Models.Default, 200000)
 
-	loop := agent.NewLoop(logger, mem, compactor, rtr, ha, sched, llmClient, cfg.Models.Default, talentContent, personaContent, defaultContextWindow)
+	loop = agent.NewLoop(logger, mem, compactor, rtr, ha, sched, llmClient, cfg.Models.Default, talentContent, personaContent, defaultContextWindow)
 	loop.SetTimezone(cfg.Timezone)
 	loop.SetArchiver(archiveAdapter)
 
