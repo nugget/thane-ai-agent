@@ -18,13 +18,17 @@ type StateWatchHandler func(entityID, oldState, newState string)
 // An empty filter matches all entities.
 type EntityFilter struct {
 	patterns []string
+	logger   *slog.Logger
 }
 
 // NewEntityFilter creates an entity filter from glob patterns. Patterns
 // use [path.Match] syntax (e.g., "person.*", "binary_sensor.*door*").
 // An empty pattern list means all entities match.
-func NewEntityFilter(globs []string) *EntityFilter {
-	return &EntityFilter{patterns: globs}
+func NewEntityFilter(globs []string, logger *slog.Logger) *EntityFilter {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return &EntityFilter{patterns: globs, logger: logger}
 }
 
 // Match reports whether the entity ID matches at least one pattern.
@@ -34,7 +38,12 @@ func (f *EntityFilter) Match(entityID string) bool {
 		return true
 	}
 	for _, pat := range f.patterns {
-		if matched, _ := path.Match(pat, entityID); matched {
+		matched, err := path.Match(pat, entityID)
+		if err != nil {
+			f.logger.Debug("glob match error", "pattern", pat, "entity_id", entityID, "error", err)
+			continue
+		}
+		if matched {
 			return true
 		}
 	}
@@ -93,6 +102,30 @@ func (r *EntityRateLimiter) Allow(entityID string) bool {
 	return true
 }
 
+// Cleanup removes counters for entities whose timestamps have all
+// expired. This prevents unbounded growth of the counters map when
+// entity IDs are dynamically generated or frequently added/removed.
+func (r *EntityRateLimiter) Cleanup() {
+	if r.limit <= 0 {
+		return
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	cutoff := time.Now().Add(-r.window)
+	for entityID, timestamps := range r.counters {
+		if len(timestamps) == 0 {
+			delete(r.counters, entityID)
+			continue
+		}
+		// If the most recent timestamp is expired, the whole entry is stale.
+		if timestamps[len(timestamps)-1].Before(cutoff) {
+			delete(r.counters, entityID)
+		}
+	}
+}
+
 // StateWatcher reads state_changed events from a Home Assistant
 // WebSocket event channel, applies entity filtering and rate limiting,
 // and dispatches matching events to a handler.
@@ -112,7 +145,7 @@ func NewStateWatcher(events <-chan Event, filter *EntityFilter, limiter *EntityR
 		logger = slog.Default()
 	}
 	if filter == nil {
-		filter = NewEntityFilter(nil)
+		filter = NewEntityFilter(nil, logger)
 	}
 	if limiter == nil {
 		limiter = NewEntityRateLimiter(0)

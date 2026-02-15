@@ -1020,7 +1020,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// until ctx is cancelled and is safe to start even if the WebSocket
 	// isn't connected yet (events arrive once the connection is up).
 	if haWS != nil {
-		filter := homeassistant.NewEntityFilter(cfg.HomeAssistant.Subscribe.EntityGlobs)
+		filter := homeassistant.NewEntityFilter(cfg.HomeAssistant.Subscribe.EntityGlobs, logger)
 		limiter := homeassistant.NewEntityRateLimiter(cfg.HomeAssistant.Subscribe.RateLimitPerMinute)
 		stateHandler := func(entityID, oldState, newState string) {
 			anticipationProvider.SetWakeContext(anticipation.WakeContext{

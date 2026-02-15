@@ -28,7 +28,7 @@ func TestEntityFilter_Match(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			f := NewEntityFilter(tt.patterns)
+			f := NewEntityFilter(tt.patterns, nil)
 			got := f.Match(tt.entityID)
 			if got != tt.want {
 				t.Errorf("Match(%q) = %v, want %v", tt.entityID, got, tt.want)
@@ -38,7 +38,7 @@ func TestEntityFilter_Match(t *testing.T) {
 }
 
 func TestEntityFilter_EmptyMatchesAll(t *testing.T) {
-	f := NewEntityFilter([]string{})
+	f := NewEntityFilter([]string{}, nil)
 	entities := []string{"person.dan", "light.kitchen", "binary_sensor.door", "switch.garage"}
 	for _, e := range entities {
 		if !f.Match(e) {
@@ -101,6 +101,33 @@ func TestEntityRateLimiter_WindowExpiry(t *testing.T) {
 	}
 }
 
+func TestEntityRateLimiter_Cleanup(t *testing.T) {
+	limiter := NewEntityRateLimiter(5)
+	limiter.window = 50 * time.Millisecond
+
+	// Add entries for two entities.
+	limiter.Allow("light.a")
+	limiter.Allow("light.b")
+
+	// Both should have counter entries.
+	limiter.mu.Lock()
+	if len(limiter.counters) != 2 {
+		t.Fatalf("expected 2 counter entries, got %d", len(limiter.counters))
+	}
+	limiter.mu.Unlock()
+
+	// Wait for the window to expire.
+	time.Sleep(60 * time.Millisecond)
+
+	limiter.Cleanup()
+
+	limiter.mu.Lock()
+	defer limiter.mu.Unlock()
+	if len(limiter.counters) != 0 {
+		t.Errorf("expected 0 counter entries after cleanup, got %d", len(limiter.counters))
+	}
+}
+
 func TestStateWatcher_Run(t *testing.T) {
 	events := make(chan Event, 10)
 
@@ -117,7 +144,7 @@ func TestStateWatcher_Run(t *testing.T) {
 		}{entityID, oldState, newState})
 	}
 
-	filter := NewEntityFilter([]string{"light.*"})
+	filter := NewEntityFilter([]string{"light.*"}, nil)
 	limiter := NewEntityRateLimiter(0)
 	watcher := NewStateWatcher(events, filter, limiter, handler, nil)
 
