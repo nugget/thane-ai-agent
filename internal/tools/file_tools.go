@@ -19,6 +19,34 @@ import (
 // traversal when the result cap is reached.
 var errResultLimit = errors.New("result limit reached")
 
+// errVisitedLimit is a sentinel returned when the traversal visits more
+// entries than maxVisited, indicating an unexpectedly large directory tree.
+var errVisitedLimit = errors.New("visited limit reached")
+
+// searchTimeout bounds how long Search and Grep may spend walking the
+// file tree. Matches the default shell_exec timeout.
+const searchTimeout = 30 * time.Second
+
+// maxVisited caps the total number of directory entries visited (not just
+// matches) to bail out of unexpectedly large trees early.
+const maxVisited = 50_000
+
+// skipDirs contains directory names that are skipped during file tree
+// traversal. These are known to be large and rarely contain files the
+// agent should search.
+var skipDirs = map[string]bool{
+	".git":         true,
+	"node_modules": true,
+	".venv":        true,
+	"venv":         true,
+	"vendor":       true,
+	"__pycache__":  true,
+	".syncthing":   true,
+	".stversions":  true,
+	".Trash":       true,
+	".cache":       true,
+}
+
 // FileTools provides file read/write/edit capabilities within a workspace.
 type FileTools struct {
 	workspacePath string
@@ -273,15 +301,29 @@ func (ft *FileTools) Search(ctx context.Context, dir, pattern string, maxDepth i
 		return "", fmt.Errorf("failed to resolve workspace: %w", err)
 	}
 
+	searchCtx, cancel := context.WithTimeout(ctx, searchTimeout)
+	defer cancel()
+
 	const maxResults = 500
 	var matches []string
+	visited := 0
 
 	err = filepath.WalkDir(absDir, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return nil // skip inaccessible entries
 		}
-		if ctx.Err() != nil {
-			return ctx.Err()
+		if searchCtx.Err() != nil {
+			return searchCtx.Err()
+		}
+
+		visited++
+		if visited > maxVisited {
+			return errVisitedLimit
+		}
+
+		// Skip known-heavy directories.
+		if d.IsDir() && skipDirs[d.Name()] {
+			return fs.SkipDir
 		}
 
 		// Enforce depth limit relative to the search root
@@ -310,20 +352,28 @@ func (ft *FileTools) Search(ctx context.Context, dir, pattern string, maxDepth i
 		return nil
 	})
 
-	// Swallow the sentinel error from result limiting
-	if err != nil && !errors.Is(err, errResultLimit) && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+	// Build a warning suffix for partial results.
+	var warning string
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		warning = fmt.Sprintf("\n\n[⚠️ search timed out after %s — results are partial, try a narrower directory]", searchTimeout)
+	case errors.Is(err, errVisitedLimit):
+		warning = fmt.Sprintf("\n\n[⚠️ visited %d entries without finishing — results are partial, try a narrower directory]", maxVisited)
+	case errors.Is(err, errResultLimit):
+		warning = fmt.Sprintf("\n\n[... truncated at %d results ...]", maxResults)
+	case err != nil && !errors.Is(err, context.Canceled):
 		return "", fmt.Errorf("search failed: %w", err)
 	}
 
 	if len(matches) == 0 {
-		return "No files matching pattern: " + pattern, nil
+		msg := "No files matching pattern: " + pattern
+		if warning != "" {
+			msg += warning
+		}
+		return msg, nil
 	}
 
-	result := strings.Join(matches, "\n")
-	if len(matches) >= maxResults {
-		result += fmt.Sprintf("\n\n[... truncated at %d results ...]", maxResults)
-	}
-	return result, nil
+	return strings.Join(matches, "\n") + warning, nil
 }
 
 // Grep searches file contents for a regular expression pattern.
@@ -355,6 +405,9 @@ func (ft *FileTools) Grep(ctx context.Context, dir, pattern string, maxDepth int
 		return "", fmt.Errorf("failed to resolve workspace: %w", err)
 	}
 
+	grepCtx, cancel := context.WithTimeout(ctx, searchTimeout)
+	defer cancel()
+
 	const (
 		maxMatches  = 100
 		maxFileSize = 1 << 20 // 1MB
@@ -362,13 +415,24 @@ func (ft *FileTools) Grep(ctx context.Context, dir, pattern string, maxDepth int
 
 	var results []string
 	matchCount := 0
+	visited := 0
 
 	err = filepath.WalkDir(absDir, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return nil
 		}
-		if ctx.Err() != nil {
-			return ctx.Err()
+		if grepCtx.Err() != nil {
+			return grepCtx.Err()
+		}
+
+		visited++
+		if visited > maxVisited {
+			return errVisitedLimit
+		}
+
+		// Skip known-heavy directories.
+		if d.IsDir() && skipDirs[d.Name()] {
+			return fs.SkipDir
 		}
 
 		rel, _ := filepath.Rel(absDir, path)
@@ -432,19 +496,28 @@ func (ft *FileTools) Grep(ctx context.Context, dir, pattern string, maxDepth int
 		return nil
 	})
 
-	if err != nil && !errors.Is(err, errResultLimit) && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+	// Build a warning suffix for partial results.
+	var warning string
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		warning = fmt.Sprintf("\n\n[⚠️ grep timed out after %s — results are partial, try a narrower directory]", searchTimeout)
+	case errors.Is(err, errVisitedLimit):
+		warning = fmt.Sprintf("\n\n[⚠️ visited %d entries without finishing — results are partial, try a narrower directory]", maxVisited)
+	case errors.Is(err, errResultLimit):
+		warning = fmt.Sprintf("\n\n[... truncated at %d matches ...]", maxMatches)
+	case err != nil && !errors.Is(err, context.Canceled):
 		return "", fmt.Errorf("grep failed: %w", err)
 	}
 
 	if len(results) == 0 {
-		return "No matches for pattern: " + pattern, nil
+		msg := "No matches for pattern: " + pattern
+		if warning != "" {
+			msg += warning
+		}
+		return msg, nil
 	}
 
-	result := strings.Join(results, "\n")
-	if matchCount >= maxMatches {
-		result += fmt.Sprintf("\n\n[... truncated at %d matches ...]", maxMatches)
-	}
-	return result, nil
+	return strings.Join(results, "\n") + warning, nil
 }
 
 // Stat returns detailed information about one or more files or directories.
