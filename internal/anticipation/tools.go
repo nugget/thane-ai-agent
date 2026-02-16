@@ -65,6 +65,10 @@ func (t *Tools) ToolDefinitions() []map[string]any {
 							"items":       map[string]any{"type": "string"},
 							"description": "Entity IDs to fetch and include as context when this anticipation fires (e.g., ['sensor.temperature', 'light.living_room']). Max 10.",
 						},
+						"recurring": map[string]any{
+							"type":        "boolean",
+							"description": "If true, the anticipation keeps firing on every match (subject to cooldown). If false (default), it is auto-resolved after the first successful wake.",
+						},
 						"expires_in": map[string]any{
 							"type":        "string",
 							"description": "Duration until expiration (e.g., '2h', '24h', '7d'). Omit for no expiration.",
@@ -176,6 +180,10 @@ func (t *Tools) createAnticipation(args map[string]any) (string, error) {
 		a.Trigger.EventType = v
 	}
 
+	if v, ok := args["recurring"].(bool); ok {
+		a.Recurring = v
+	}
+
 	// Parse context entities (capped at 10).
 	if v, ok := args["context_entities"].([]any); ok {
 		for _, item := range v {
@@ -210,6 +218,11 @@ func (t *Tools) createAnticipation(args map[string]any) (string, error) {
 	}
 
 	result := fmt.Sprintf("Created anticipation: %s\nID: %s\n", a.Description, a.ID)
+	if a.Recurring {
+		result += "Lifecycle: recurring (keeps firing on matches)\n"
+	} else {
+		result += "Lifecycle: one-shot (auto-resolved after first wake)\n"
+	}
 	if a.ExpiresAt != nil {
 		result += fmt.Sprintf("Expires: %s\n", a.ExpiresAt.Format(time.RFC3339))
 	}
@@ -254,6 +267,9 @@ func (t *Tools) listAnticipations() (string, error) {
 	result := fmt.Sprintf("Active anticipations: %d\n\n", len(active))
 	for _, a := range active {
 		result += fmt.Sprintf("**%s** (ID: %s)\n", a.Description, a.ID)
+		if a.Recurring {
+			result += "  Lifecycle: recurring\n"
+		}
 		result += fmt.Sprintf("  Created: %s\n", a.CreatedAt.Format("2006-01-02 15:04"))
 		if a.ExpiresAt != nil {
 			result += fmt.Sprintf("  Expires: %s\n", a.ExpiresAt.Format("2006-01-02 15:04"))

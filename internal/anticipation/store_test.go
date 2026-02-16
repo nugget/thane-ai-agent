@@ -382,6 +382,73 @@ func TestContextEntities_Active(t *testing.T) {
 	}
 }
 
+func TestRecurring_RoundTrip(t *testing.T) {
+	store := setupTestStore(t)
+
+	tests := []struct {
+		name      string
+		recurring bool
+	}{
+		{"recurring true", true},
+		{"recurring false", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a := &Anticipation{
+				Description: "Test recurring " + tt.name,
+				Context:     "Test context",
+				Recurring:   tt.recurring,
+				Trigger:     Trigger{EntityID: "person.dan", EntityState: "home"},
+			}
+			if err := store.Create(a); err != nil {
+				t.Fatalf("create: %v", err)
+			}
+
+			got, err := store.Get(a.ID)
+			if err != nil {
+				t.Fatalf("get: %v", err)
+			}
+			if got.Recurring != tt.recurring {
+				t.Errorf("recurring = %v, want %v", got.Recurring, tt.recurring)
+			}
+		})
+	}
+}
+
+func TestRecurring_Active(t *testing.T) {
+	store := setupTestStore(t)
+
+	store.Create(&Anticipation{
+		Description: "One-shot",
+		Context:     "Once",
+		Recurring:   false,
+		Trigger:     Trigger{EntityID: "sensor.a"},
+	})
+	store.Create(&Anticipation{
+		Description: "Recurring",
+		Context:     "Forever",
+		Recurring:   true,
+		Trigger:     Trigger{EntityID: "sensor.b"},
+	})
+
+	active, err := store.Active()
+	if err != nil {
+		t.Fatalf("active: %v", err)
+	}
+	if len(active) != 2 {
+		t.Fatalf("active count = %d, want 2", len(active))
+	}
+
+	// First should be one-shot (created first).
+	if active[0].Recurring {
+		t.Error("first anticipation should not be recurring")
+	}
+	if !active[1].Recurring {
+		t.Error("second anticipation should be recurring")
+	}
+}
+
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsAt(s, substr))
 }
