@@ -898,10 +898,15 @@ func (r *Registry) handleGetState(ctx context.Context, args map[string]any) (str
 		return "", err
 	}
 
-	// Format nicely for the LLM
+	return formatEntityState(state), nil
+}
+
+// formatEntityState formats a Home Assistant entity state for LLM
+// consumption. Used by both get_state and the post-action verification
+// in control_device.
+func formatEntityState(state *homeassistant.State) string {
 	result := fmt.Sprintf("Entity: %s\nState: %s\n", state.EntityID, state.State)
 
-	// Add key attributes
 	if name, ok := state.Attributes["friendly_name"].(string); ok {
 		result += fmt.Sprintf("Name: %s\n", name)
 	}
@@ -915,7 +920,7 @@ func (r *Registry) handleGetState(ctx context.Context, args map[string]any) (str
 		result += fmt.Sprintf("Temperature: %.1f\n", temp)
 	}
 
-	return result, nil
+	return result
 }
 
 func (r *Registry) handleListEntities(ctx context.Context, args map[string]any) (string, error) {
@@ -1101,7 +1106,22 @@ func (r *Registry) handleControlDevice(ctx context.Context, args map[string]any)
 	if len(verb) > 0 {
 		verb = strings.ToUpper(verb[:1]) + verb[1:]
 	}
-	return fmt.Sprintf("Done. %s %s.", verb, foundName), nil
+
+	result := fmt.Sprintf("Done. %s %s.\n", verb, foundName)
+
+	// Auto-verify: fetch post-action state so the caller can confirm
+	// the action took effect without a second tool call.
+	time.Sleep(500 * time.Millisecond)
+
+	state, err := r.ha.GetState(context.Background(), entityID)
+	if err != nil {
+		// State fetch is best-effort; the action itself succeeded.
+		result += fmt.Sprintf("\n(Could not verify state: %v)", err)
+		return result, nil
+	}
+	result += "\nPost-action state:\n" + formatEntityState(state)
+
+	return result, nil
 }
 
 func (r *Registry) handleScheduleTask(ctx context.Context, args map[string]any) (string, error) {
