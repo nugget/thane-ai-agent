@@ -96,8 +96,8 @@ func TestPublisher_TopicPaths(t *testing.T) {
 		want string
 	}{
 		{"baseTopic", p.baseTopic(), "thane/aimee-thane"},
-		{"availabilityTopic", p.availabilityTopic(), "thane/aimee-thane/availability"},
-		{"stateTopic uptime", p.stateTopic("uptime"), "thane/aimee-thane/uptime/state"},
+		{"AvailabilityTopic", p.AvailabilityTopic(), "thane/aimee-thane/availability"},
+		{"StateTopic uptime", p.StateTopic("uptime"), "thane/aimee-thane/uptime/state"},
 		{"discoveryTopic sensor uptime", p.discoveryTopic("sensor", "uptime"), "homeassistant/sensor/aimee-thane/uptime/config"},
 	}
 
@@ -286,10 +286,10 @@ func TestPublisher_AttributesTopic(t *testing.T) {
 	}
 	p := New(cfg, "test-id", NewDailyTokens(time.UTC), nil, nil)
 
-	got := p.attributesTopic("nugget_ap")
+	got := p.AttributesTopic("nugget_ap")
 	want := "thane/aimee-thane/nugget_ap/attributes"
 	if got != want {
-		t.Errorf("attributesTopic() = %q, want %q", got, want)
+		t.Errorf("AttributesTopic() = %q, want %q", got, want)
 	}
 }
 

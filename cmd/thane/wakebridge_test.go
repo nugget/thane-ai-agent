@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"testing"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/agent"
 	"github.com/nugget/thane-ai-agent/internal/anticipation"
+	"github.com/nugget/thane-ai-agent/internal/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/router"
 )
 
@@ -47,6 +49,20 @@ func (p *mockProvider) SetWakeContext(ctx anticipation.WakeContext) {
 	p.called = true
 }
 
+// stubStateGetter returns preconfigured entity states for testing.
+type stubStateGetter struct {
+	states map[string]*homeassistant.State
+	calls  []string // records entity IDs fetched
+}
+
+func (s *stubStateGetter) GetState(_ context.Context, entityID string) (*homeassistant.State, error) {
+	s.calls = append(s.calls, entityID)
+	if st, ok := s.states[entityID]; ok {
+		return st, nil
+	}
+	return nil, fmt.Errorf("entity not found: %s", entityID)
+}
+
 func newTestBridge(matcher anticipationMatcher, runner agentRunner, cooldown time.Duration) (*WakeBridge, *mockProvider) {
 	provider := &mockProvider{}
 	b := NewWakeBridge(WakeBridgeConfig{
@@ -58,6 +74,10 @@ func newTestBridge(matcher anticipationMatcher, runner agentRunner, cooldown tim
 		Cooldown: cooldown,
 	})
 	return b, provider
+}
+
+func discardLogger() *slog.Logger {
+	return slog.New(slog.DiscardHandler)
 }
 
 func TestWakeBridge_MatchTriggersRun(t *testing.T) {
@@ -320,22 +340,25 @@ func TestWakeBridge_MultipleMatches(t *testing.T) {
 
 func TestFormatWakeMessage(t *testing.T) {
 	tests := []struct {
-		name     string
-		ant      *anticipation.Anticipation
-		entityID string
-		oldState string
-		newState string
-		wantSubs []string
+		name       string
+		ant        *anticipation.Anticipation
+		entityID   string
+		oldState   string
+		newState   string
+		entityCtx  string
+		wantSubs   []string
+		absentSubs []string
 	}{
 		{
-			name: "with context",
+			name: "with context and entity states",
 			ant: &anticipation.Anticipation{
 				Description: "Front door opened after dark",
 				Context:     "Send a notification to Dan.",
 			},
-			entityID: "binary_sensor.front_door",
-			oldState: "off",
-			newState: "on",
+			entityID:  "binary_sensor.front_door",
+			oldState:  "off",
+			newState:  "on",
+			entityCtx: "Entity: sensor.temp\nState: 72\n",
 			wantSubs: []string{
 				`"Front door opened after dark"`,
 				"binary_sensor.front_door",
@@ -343,6 +366,8 @@ func TestFormatWakeMessage(t *testing.T) {
 				`"on"`,
 				"Send a notification to Dan.",
 				"Instructions you left for yourself:",
+				"Relevant entity states:",
+				"sensor.temp",
 			},
 		},
 		{
@@ -358,17 +383,199 @@ func TestFormatWakeMessage(t *testing.T) {
 				`"Dan arrived home"`,
 				"person.dan",
 			},
+			absentSubs: []string{
+				"Instructions you left for yourself:",
+				"Relevant entity states:",
+			},
+		},
+		{
+			name: "with context but no entity states",
+			ant: &anticipation.Anticipation{
+				Description: "Light turned on",
+				Context:     "Check if it's daytime.",
+			},
+			entityID:  "light.kitchen",
+			oldState:  "off",
+			newState:  "on",
+			entityCtx: "",
+			wantSubs: []string{
+				"Light turned on",
+				"Instructions you left for yourself:",
+			},
+			absentSubs: []string{
+				"Relevant entity states:",
+			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			msg := formatWakeMessage(tt.ant, tt.entityID, tt.oldState, tt.newState)
+			msg := formatWakeMessage(tt.ant, tt.entityID, tt.oldState, tt.newState, tt.entityCtx)
 			for _, sub := range tt.wantSubs {
 				if !strings.Contains(msg, sub) {
 					t.Errorf("message missing %q:\n%s", sub, msg)
 				}
 			}
+			for _, sub := range tt.absentSubs {
+				if strings.Contains(msg, sub) {
+					t.Errorf("message should not contain %q:\n%s", sub, msg)
+				}
+			}
 		})
+	}
+}
+
+func TestFetchEntityContext_WithEntities(t *testing.T) {
+	getter := &stubStateGetter{
+		states: map[string]*homeassistant.State{
+			"sensor.temp": {
+				EntityID:   "sensor.temp",
+				State:      "72",
+				Attributes: map[string]any{"friendly_name": "Temperature", "unit_of_measurement": "°F"},
+			},
+			"light.kitchen": {
+				EntityID:   "light.kitchen",
+				State:      "on",
+				Attributes: map[string]any{"friendly_name": "Kitchen Light", "brightness": float64(200)},
+			},
+			"person.dan": {
+				EntityID:   "person.dan",
+				State:      "home",
+				Attributes: map[string]any{"friendly_name": "Dan"},
+			},
+		},
+	}
+
+	b := &WakeBridge{
+		ha:     getter,
+		logger: discardLogger(),
+		ctx:    context.Background(),
+	}
+
+	a := &anticipation.Anticipation{
+		ContextEntities: []string{"sensor.temp", "light.kitchen"},
+	}
+
+	result := b.fetchEntityContext(a, "person.dan")
+
+	if !strings.Contains(result, "sensor.temp") {
+		t.Error("missing sensor.temp in output")
+	}
+	if !strings.Contains(result, "light.kitchen") {
+		t.Error("missing light.kitchen in output")
+	}
+	if !strings.Contains(result, "person.dan") {
+		t.Error("missing trigger entity in output")
+	}
+
+	// Should have fetched 3 entities: 2 context + 1 trigger.
+	if len(getter.calls) != 3 {
+		t.Errorf("expected 3 GetState calls, got %d", len(getter.calls))
+	}
+}
+
+func TestFetchEntityContext_Deduplication(t *testing.T) {
+	getter := &stubStateGetter{
+		states: map[string]*homeassistant.State{
+			"person.dan": {
+				EntityID:   "person.dan",
+				State:      "home",
+				Attributes: map[string]any{"friendly_name": "Dan"},
+			},
+			"sensor.temp": {
+				EntityID:   "sensor.temp",
+				State:      "72",
+				Attributes: map[string]any{"friendly_name": "Temperature"},
+			},
+		},
+	}
+
+	b := &WakeBridge{
+		ha:     getter,
+		logger: discardLogger(),
+		ctx:    context.Background(),
+	}
+
+	// Trigger entity is already in the context entities list.
+	a := &anticipation.Anticipation{
+		ContextEntities: []string{"person.dan", "sensor.temp"},
+	}
+
+	b.fetchEntityContext(a, "person.dan")
+
+	// person.dan appears in both ContextEntities and as trigger — only fetch once.
+	if len(getter.calls) != 2 {
+		t.Errorf("expected 2 GetState calls (deduplicated), got %d: %v", len(getter.calls), getter.calls)
+	}
+}
+
+func TestFetchEntityContext_NilHA(t *testing.T) {
+	b := &WakeBridge{
+		ha:     nil,
+		logger: discardLogger(),
+		ctx:    context.Background(),
+	}
+
+	a := &anticipation.Anticipation{
+		ContextEntities: []string{"sensor.temp"},
+	}
+
+	result := b.fetchEntityContext(a, "person.dan")
+	if result != "" {
+		t.Errorf("expected empty string when HA is nil, got %q", result)
+	}
+}
+
+func TestFetchEntityContext_FetchError(t *testing.T) {
+	getter := &stubStateGetter{
+		states: map[string]*homeassistant.State{
+			"sensor.temp": {
+				EntityID:   "sensor.temp",
+				State:      "72",
+				Attributes: map[string]any{"friendly_name": "Temperature"},
+			},
+		},
+	}
+
+	b := &WakeBridge{
+		ha:     getter,
+		logger: discardLogger(),
+		ctx:    context.Background(),
+	}
+
+	// sensor.missing does not exist in the stub.
+	a := &anticipation.Anticipation{
+		ContextEntities: []string{"sensor.temp", "sensor.missing"},
+	}
+
+	result := b.fetchEntityContext(a, "")
+
+	if !strings.Contains(result, "sensor.temp") {
+		t.Error("missing sensor.temp in output")
+	}
+	if !strings.Contains(result, "sensor.missing") {
+		t.Error("missing sensor.missing in output")
+	}
+	if !strings.Contains(result, "fetch failed") {
+		t.Error("missing fetch failure note")
+	}
+}
+
+func TestFetchEntityContext_NoEntities(t *testing.T) {
+	getter := &stubStateGetter{
+		states: map[string]*homeassistant.State{},
+	}
+
+	b := &WakeBridge{
+		ha:     getter,
+		logger: discardLogger(),
+		ctx:    context.Background(),
+	}
+
+	a := &anticipation.Anticipation{}
+
+	result := b.fetchEntityContext(a, "")
+	if result != "" {
+		t.Errorf("expected empty string with no entities, got %q", result)
 	}
 }

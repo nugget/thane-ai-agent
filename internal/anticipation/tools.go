@@ -60,6 +60,11 @@ func (t *Tools) ToolDefinitions() []map[string]any {
 							"type":        "string",
 							"description": "Event type to match (e.g., 'presence_change', 'state_change')",
 						},
+						"context_entities": map[string]any{
+							"type":        "array",
+							"items":       map[string]any{"type": "string"},
+							"description": "Entity IDs to fetch and include as context when this anticipation fires (e.g., ['sensor.temperature', 'light.living_room']). Max 10.",
+						},
 						"expires_in": map[string]any{
 							"type":        "string",
 							"description": "Duration until expiration (e.g., '2h', '24h', '7d'). Omit for no expiration.",
@@ -171,6 +176,19 @@ func (t *Tools) createAnticipation(args map[string]any) (string, error) {
 		a.Trigger.EventType = v
 	}
 
+	// Parse context entities (capped at 10).
+	if v, ok := args["context_entities"].([]any); ok {
+		for _, item := range v {
+			if s, ok := item.(string); ok && s != "" {
+				a.ContextEntities = append(a.ContextEntities, s)
+			}
+		}
+		const maxContextEntities = 10
+		if len(a.ContextEntities) > maxContextEntities {
+			a.ContextEntities = a.ContextEntities[:maxContextEntities]
+		}
+	}
+
 	// Parse expiration
 	if v, ok := args["expires_in"].(string); ok && v != "" {
 		dur, err := parseDuration(v)
@@ -216,6 +234,9 @@ func (t *Tools) createAnticipation(args map[string]any) (string, error) {
 	if a.Trigger.EventType != "" {
 		result += fmt.Sprintf("  - Event type: %s\n", a.Trigger.EventType)
 	}
+	if len(a.ContextEntities) > 0 {
+		result += fmt.Sprintf("Context entities: %v\n", a.ContextEntities)
+	}
 
 	return result, nil
 }
@@ -236,6 +257,9 @@ func (t *Tools) listAnticipations() (string, error) {
 		result += fmt.Sprintf("  Created: %s\n", a.CreatedAt.Format("2006-01-02 15:04"))
 		if a.ExpiresAt != nil {
 			result += fmt.Sprintf("  Expires: %s\n", a.ExpiresAt.Format("2006-01-02 15:04"))
+		}
+		if len(a.ContextEntities) > 0 {
+			result += fmt.Sprintf("  Context entities: %v\n", a.ContextEntities)
 		}
 		result += fmt.Sprintf("  Context: %s\n\n", truncate(a.Context, 100))
 	}

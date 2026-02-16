@@ -10,7 +10,9 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/agent"
 	"github.com/nugget/thane-ai-agent/internal/anticipation"
+	"github.com/nugget/thane-ai-agent/internal/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/router"
+	"github.com/nugget/thane-ai-agent/internal/tools"
 )
 
 // anticipationMatcher is the subset of anticipation.Store needed by the
@@ -26,6 +28,12 @@ type wakeContextSetter interface {
 	SetWakeContext(ctx anticipation.WakeContext)
 }
 
+// wakeStateGetter fetches entity state from Home Assistant. Satisfied
+// by homeassistant.Client.
+type wakeStateGetter interface {
+	GetState(ctx context.Context, entityID string) (*homeassistant.State, error)
+}
+
 // WakeBridgeConfig holds configuration for creating a WakeBridge.
 type WakeBridgeConfig struct {
 	Store    anticipationMatcher
@@ -33,7 +41,8 @@ type WakeBridgeConfig struct {
 	Provider wakeContextSetter
 	Logger   *slog.Logger
 	Ctx      context.Context
-	Cooldown time.Duration // per-anticipation cooldown; zero defaults to 5m
+	Cooldown time.Duration   // per-anticipation cooldown; zero defaults to 5m
+	HA       wakeStateGetter // optional; nil disables entity context injection
 }
 
 // WakeBridge connects state change events to the anticipation store and
@@ -44,6 +53,7 @@ type WakeBridge struct {
 	store    anticipationMatcher
 	runner   agentRunner
 	provider wakeContextSetter
+	ha       wakeStateGetter
 	logger   *slog.Logger
 	ctx      context.Context
 
@@ -68,6 +78,7 @@ func NewWakeBridge(cfg WakeBridgeConfig) *WakeBridge {
 		store:    cfg.Store,
 		runner:   cfg.Runner,
 		provider: cfg.Provider,
+		ha:       cfg.HA,
 		logger:   logger,
 		ctx:      cfg.Ctx,
 		cooldown: cooldown,
@@ -131,7 +142,8 @@ func (b *WakeBridge) HandleStateChange(entityID, oldState, newState string) {
 		}
 		b.markTriggered(a.ID)
 
-		msg := formatWakeMessage(a, entityID, oldState, newState)
+		entityCtx := b.fetchEntityContext(a, entityID)
+		msg := formatWakeMessage(a, entityID, oldState, newState, entityCtx)
 		b.logger.Info("anticipation matched, triggering wake",
 			"anticipation_id", a.ID,
 			"anticipation", a.Description,
@@ -222,10 +234,58 @@ func (b *WakeBridge) maybeCleanup() {
 	}
 }
 
+// fetchEntityContext fetches and formats the states of entities listed
+// in the anticipation's ContextEntities plus the triggering entity. It
+// is best-effort: fetch failures are logged but do not prevent the wake.
+func (b *WakeBridge) fetchEntityContext(a *anticipation.Anticipation, triggerEntityID string) string {
+	if b.ha == nil {
+		return ""
+	}
+
+	// Build deduplicated entity list: context entities + trigger entity.
+	// Empty/whitespace-only IDs are skipped defensively.
+	seen := make(map[string]bool, len(a.ContextEntities)+1)
+	var entities []string
+	for _, id := range a.ContextEntities {
+		id = strings.TrimSpace(id)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		entities = append(entities, id)
+	}
+	triggerEntityID = strings.TrimSpace(triggerEntityID)
+	if triggerEntityID != "" && !seen[triggerEntityID] {
+		entities = append(entities, triggerEntityID)
+	}
+
+	if len(entities) == 0 {
+		return ""
+	}
+
+	fetchCtx, cancel := context.WithTimeout(b.ctx, 10*time.Second)
+	defer cancel()
+
+	var sb strings.Builder
+	for _, id := range entities {
+		state, err := b.ha.GetState(fetchCtx, id)
+		if err != nil {
+			b.logger.Warn("anticipation entity context fetch failed",
+				"entity_id", id, "error", err)
+			fmt.Fprintf(&sb, "Entity: %s\nState: (fetch failed)\n\n", id)
+			continue
+		}
+		sb.WriteString(tools.FormatEntityState(state))
+		sb.WriteString("\n")
+	}
+	return sb.String()
+}
+
 // formatWakeMessage builds the user-facing message for an anticipation
 // wake. It includes the anticipation description, its stored context
-// (instructions for the agent), and the entity state change details.
-func formatWakeMessage(a *anticipation.Anticipation, entityID, oldState, newState string) string {
+// (instructions for the agent), the entity state change details, and
+// optional entity state context.
+func formatWakeMessage(a *anticipation.Anticipation, entityID, oldState, newState, entityContext string) string {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("Anticipation matched: %q\n\n", a.Description))
 	sb.WriteString(fmt.Sprintf("Entity %s changed from %q to %q.\n\n", entityID, oldState, newState))
@@ -233,6 +293,10 @@ func formatWakeMessage(a *anticipation.Anticipation, entityID, oldState, newStat
 		sb.WriteString("Instructions you left for yourself:\n")
 		sb.WriteString(a.Context)
 		sb.WriteString("\n")
+	}
+	if entityContext != "" {
+		sb.WriteString("\nRelevant entity states:\n")
+		sb.WriteString(entityContext)
 	}
 	return sb.String()
 }

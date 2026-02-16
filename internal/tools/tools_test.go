@@ -84,15 +84,15 @@ func TestFormatEntityState(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := formatEntityState(tc.state)
+			got := FormatEntityState(tc.state)
 			for _, want := range tc.wantParts {
 				if !strings.Contains(got, want) {
-					t.Errorf("formatEntityState() missing %q:\n%s", want, got)
+					t.Errorf("FormatEntityState() missing %q:\n%s", want, got)
 				}
 			}
 			for _, absent := range tc.wantAbsent {
 				if strings.Contains(got, absent) {
-					t.Errorf("formatEntityState() should not contain %q:\n%s", absent, got)
+					t.Errorf("FormatEntityState() should not contain %q:\n%s", absent, got)
 				}
 			}
 		})
