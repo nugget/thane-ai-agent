@@ -50,6 +50,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/mcp"
 	"github.com/nugget/thane-ai-agent/internal/memory"
 	"github.com/nugget/thane-ai-agent/internal/mqtt"
+	"github.com/nugget/thane-ai-agent/internal/person"
 	"github.com/nugget/thane-ai-agent/internal/prompts"
 	"github.com/nugget/thane-ai-agent/internal/router"
 	"github.com/nugget/thane-ai-agent/internal/scheduler"
@@ -376,6 +377,11 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	connMgr := connwatch.NewManager(logger)
 	defer connMgr.Stop()
 
+	// Forward-declare personTracker so the connwatch OnReady callback
+	// can reference it. The closure captures by reference; by the time
+	// HA connects, the tracker is fully initialized.
+	var personTracker *person.Tracker
+
 	var subscribeOnce sync.Once
 	if ha != nil {
 		haWatcher := connMgr.Watch(ctx, connwatch.WatcherConfig{
@@ -414,6 +420,17 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 							logger.Info("subscribed to state_changed events")
 						}
 					})
+				}
+
+				// Initialize (or refresh) person tracker from current HA state.
+				if personTracker != nil {
+					initCtx, initCancel := context.WithTimeout(context.Background(), 10*time.Second)
+					defer initCancel()
+					if err := personTracker.Initialize(initCtx, ha); err != nil {
+						logger.Warn("person tracker initialization incomplete", "error", err)
+					} else {
+						logger.Info("person tracker initialized")
+					}
 				}
 			},
 			Logger: logger,
@@ -1008,6 +1025,17 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	wmProvider := memory.NewWorkingMemoryProvider(wmStore, tools.ConversationIDFromContext)
 	contextProvider.Add(wmProvider)
 
+	// --- Person tracker ---
+	// Tracks configured household members' presence state and injects
+	// it into the system prompt, eliminating tool calls for "who is
+	// home?" queries. Initialization from HA happens in the connwatch
+	// OnReady callback; state updates arrive via the state watcher.
+	if len(cfg.Person.Track) > 0 {
+		personTracker = person.NewTracker(cfg.Person.Track, cfg.Timezone, logger)
+		contextProvider.Add(personTracker)
+		logger.Info("person tracking enabled", "entities", cfg.Person.Track)
+	}
+
 	loop.SetContextProvider(contextProvider)
 	logger.Info("context providers initialized",
 		"episodic_daily_dir", cfg.Episodic.DailyDir,
@@ -1017,12 +1045,15 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// --- State watcher ---
 	// Consumes state_changed events from the HA WebSocket, bridges them
 	// to the anticipation system via WakeContext, and triggers agent wakes
-	// when an active anticipation matches the state change. The watcher
-	// runs until ctx is cancelled and is safe to start even if the
-	// WebSocket isn't connected yet (events arrive once the connection
-	// is up).
+	// when an active anticipation matches the state change. Person entity
+	// IDs are auto-merged into entity globs so the person tracker
+	// receives state changes regardless of the user's subscribe config.
 	if haWS != nil {
-		filter := homeassistant.NewEntityFilter(cfg.HomeAssistant.Subscribe.EntityGlobs, logger)
+		globs := cfg.HomeAssistant.Subscribe.EntityGlobs
+		if personTracker != nil {
+			globs = append(globs, personTracker.EntityIDs()...)
+		}
+		filter := homeassistant.NewEntityFilter(globs, logger)
 		limiter := homeassistant.NewEntityRateLimiter(cfg.HomeAssistant.Subscribe.RateLimitPerMinute)
 		cooldown := time.Duration(cfg.HomeAssistant.Subscribe.CooldownMinutes) * time.Minute
 
@@ -1035,10 +1066,21 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 			Cooldown: cooldown,
 		})
 
-		watcher := homeassistant.NewStateWatcher(haWS.Events(), filter, limiter, bridge.HandleStateChange, logger)
+		// Compose handler: person tracker and wake bridge both see
+		// every state change that passes the filter and rate limiter.
+		var handler homeassistant.StateWatchHandler = bridge.HandleStateChange
+		if personTracker != nil {
+			bridgeHandler := handler
+			handler = func(entityID, oldState, newState string) {
+				personTracker.HandleStateChange(entityID, oldState, newState)
+				bridgeHandler(entityID, oldState, newState)
+			}
+		}
+
+		watcher := homeassistant.NewStateWatcher(haWS.Events(), filter, limiter, handler, logger)
 		go watcher.Run(ctx)
 		logger.Info("state watcher started",
-			"entity_globs", cfg.HomeAssistant.Subscribe.EntityGlobs,
+			"entity_globs", globs,
 			"rate_limit_per_minute", cfg.HomeAssistant.Subscribe.RateLimitPerMinute,
 			"cooldown", cooldown,
 		)
