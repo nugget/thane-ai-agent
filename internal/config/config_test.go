@@ -209,6 +209,39 @@ func TestApplyDefaults_UnifiPollInterval(t *testing.T) {
 	}
 }
 
+func TestApplyDefaults_DebugDumpDir(t *testing.T) {
+	t.Run("sets default when dump enabled", func(t *testing.T) {
+		cfg := Default()
+		cfg.Debug.DumpSystemPrompt = true
+		cfg.applyDefaults()
+
+		if cfg.Debug.DumpDir != "./debug" {
+			t.Errorf("expected default dump_dir './debug', got %q", cfg.Debug.DumpDir)
+		}
+	})
+
+	t.Run("leaves empty when dump disabled", func(t *testing.T) {
+		cfg := Default()
+		cfg.Debug.DumpSystemPrompt = false
+		cfg.applyDefaults()
+
+		if cfg.Debug.DumpDir != "" {
+			t.Errorf("expected empty dump_dir when dump disabled, got %q", cfg.Debug.DumpDir)
+		}
+	})
+
+	t.Run("preserves custom dir", func(t *testing.T) {
+		cfg := Default()
+		cfg.Debug.DumpSystemPrompt = true
+		cfg.Debug.DumpDir = "/tmp/thane-debug"
+		cfg.applyDefaults()
+
+		if cfg.Debug.DumpDir != "/tmp/thane-debug" {
+			t.Errorf("expected custom dump_dir preserved, got %q", cfg.Debug.DumpDir)
+		}
+	})
+}
+
 func TestValidate_PersonDevicesValid(t *testing.T) {
 	cfg := Default()
 	cfg.Person.Track = []string{"person.alice"}
