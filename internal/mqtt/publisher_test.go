@@ -170,6 +170,19 @@ func TestPublisher_SensorDefinitions(t *testing.T) {
 				d.entitySuffix, d.config.UniqueID, "instance-123_")
 		}
 
+		// ObjectID must match entitySuffix so HA derives clean entity IDs.
+		if d.config.ObjectID != d.entitySuffix {
+			t.Errorf("sensor %s: ObjectID = %q, want %q",
+				d.entitySuffix, d.config.ObjectID, d.entitySuffix)
+		}
+
+		// HasEntityName must be true so HA treats the sensor Name as
+		// relative to the device name (avoids double-prefix #207).
+		if !d.config.HasEntityName {
+			t.Errorf("sensor %s: HasEntityName = false, want true",
+				d.entitySuffix)
+		}
+
 		// Every sensor should reference the device.
 		if len(d.config.Device.Identifiers) == 0 {
 			t.Errorf("sensor %s: Device.Identifiers is empty", d.entitySuffix)
