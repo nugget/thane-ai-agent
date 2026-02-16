@@ -17,12 +17,17 @@ import (
 
 // Person represents the current presence state of a tracked household
 // member. State is typically "home", "not_home", or a zone name like
-// "zone.work".
+// "zone.work". Room fields are populated by an external poller (e.g.,
+// UniFi AP associations) when available.
 type Person struct {
 	EntityID     string
 	FriendlyName string
 	State        string
 	Since        time.Time
+	DeviceMACs   []string  // configured MAC addresses for this person
+	Room         string    // inferred from AP association (e.g., "office")
+	RoomSince    time.Time // when the current room was first detected
+	RoomSource   string    // AP name that determined the room (e.g., "ap-hor-office")
 }
 
 // StateGetter abstracts the Home Assistant REST client for fetching
@@ -146,7 +151,8 @@ func (t *Tracker) Initialize(ctx context.Context, ha StateGetter) error {
 // HandleStateChange updates the tracked person's state when a
 // state_changed event is received. It matches the
 // homeassistant.StateWatchHandler function signature. Untracked
-// entities and no-change events are silently ignored.
+// entities and no-change events are silently ignored. Room data is
+// cleared when a person transitions to "not_home".
 func (t *Tracker) HandleStateChange(entityID, _, newState string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -169,11 +175,22 @@ func (t *Tracker) HandleStateChange(entityID, _, newState string) {
 
 	p.State = newState
 	p.Since = time.Now()
+
+	// Clear room data when person leaves home — room presence is
+	// only meaningful while at home.
+	if strings.EqualFold(newState, "not_home") {
+		p.Room = ""
+		p.RoomSince = time.Time{}
+		p.RoomSource = ""
+	}
 }
 
 // GetContext returns a formatted presence block for injection into the
 // agent's system prompt. Returns an empty string if no entities are
 // tracked. This method satisfies the agent.ContextProvider interface.
+//
+// Output uses nested markdown with ISO 8601 timestamps for efficient
+// model consumption. Fields are only emitted when they have values.
 func (t *Tracker) GetContext(_ context.Context, _ string) (string, error) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
@@ -187,18 +204,76 @@ func (t *Tracker) GetContext(_ context.Context, _ string) (string, error) {
 
 	for _, id := range t.order {
 		p := t.people[id]
-		displayState := formatState(p.State)
 		displayName := titleCase(p.FriendlyName)
 
+		fmt.Fprintf(&sb, "- **%s**:\n", displayName)
+
 		if p.State == "Unknown" || p.Since.IsZero() {
-			fmt.Fprintf(&sb, "- **%s**: Unknown\n", displayName)
+			sb.WriteString("  - Unknown\n")
 		} else {
-			since := p.Since.In(t.loc).Format("Jan 2, 3:04 PM")
-			fmt.Fprintf(&sb, "- **%s**: %s (since %s)\n", displayName, displayState, since)
+			displayState := formatState(p.State)
+			since := p.Since.In(t.loc).Format(time.RFC3339)
+			fmt.Fprintf(&sb, "  - %s since %s\n", displayState, since)
 		}
+
+		if p.Room != "" {
+			fmt.Fprintf(&sb, "  - Room: %s\n", p.Room)
+		}
+
+		sb.WriteString("\n")
 	}
 
 	return sb.String(), nil
+}
+
+// UpdateRoom sets the room for a tracked person. If the room is
+// unchanged, no update occurs. When a person transitions to not_home,
+// HandleStateChange clears room data automatically; callers may also
+// pass an empty room to clear it explicitly. The source is the AP name
+// or other identifier that determined the room.
+func (t *Tracker) UpdateRoom(entityID, room, source string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	p, ok := t.people[entityID]
+	if !ok {
+		return
+	}
+
+	if p.Room == room {
+		return
+	}
+
+	t.logger.Debug("person room changed",
+		"entity_id", entityID,
+		"friendly_name", p.FriendlyName,
+		"old_room", p.Room,
+		"new_room", room,
+		"source", source,
+	)
+
+	p.Room = room
+	p.RoomSource = source
+	if room != "" {
+		p.RoomSince = time.Now()
+	} else {
+		p.RoomSince = time.Time{}
+	}
+}
+
+// SetDeviceMACs configures the MAC addresses associated with a tracked
+// person. These MACs are used by the UniFi poller to determine which
+// person a wireless device belongs to. Must be called before the poller
+// starts. Untracked entities are silently ignored.
+func (t *Tracker) SetDeviceMACs(entityID string, macs []string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	p, ok := t.people[entityID]
+	if !ok {
+		return
+	}
+	p.DeviceMACs = macs
 }
 
 // EntityIDs returns a copy of the tracked entity IDs. This is used to

@@ -44,7 +44,7 @@ func TestNewTracker(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetContext: %v", err)
 	}
-	if !strings.Contains(result, "Unknown") {
+	if !strings.Contains(result, "- Unknown") {
 		t.Errorf("expected Unknown state in initial context, got:\n%s", result)
 	}
 }
@@ -79,17 +79,17 @@ func TestTracker_Initialize(t *testing.T) {
 		t.Fatalf("GetContext: %v", err)
 	}
 
-	if !strings.Contains(result, "**Alice**") {
+	if !strings.Contains(result, "- **Alice**:") {
 		t.Errorf("expected Alice in context, got:\n%s", result)
 	}
-	if !strings.Contains(result, "Home") {
-		t.Errorf("expected Home state in context, got:\n%s", result)
+	if !strings.Contains(result, "Home since") {
+		t.Errorf("expected Home since in context, got:\n%s", result)
 	}
-	if !strings.Contains(result, "**Bob**") {
+	if !strings.Contains(result, "- **Bob**:") {
 		t.Errorf("expected Bob in context, got:\n%s", result)
 	}
-	if !strings.Contains(result, "Away") {
-		t.Errorf("expected Away (not_home) in context, got:\n%s", result)
+	if !strings.Contains(result, "Away since") {
+		t.Errorf("expected Away since in context, got:\n%s", result)
 	}
 }
 
@@ -115,12 +115,12 @@ func TestTracker_Initialize_PartialFailure(t *testing.T) {
 
 	result, _ := tracker.GetContext(context.Background(), "")
 
-	// Alice should be populated.
-	if !strings.Contains(result, "**Alice**: Home") {
-		t.Errorf("expected Alice: Home, got:\n%s", result)
+	// Alice should be populated with nested format.
+	if !strings.Contains(result, "- **Alice**:\n  - Home since") {
+		t.Errorf("expected Alice: Home since ..., got:\n%s", result)
 	}
 	// Bob should show Unknown.
-	if !strings.Contains(result, "**Bob**: Unknown") {
+	if !strings.Contains(result, "- **Bob**:\n  - Unknown") {
 		t.Errorf("expected Bob: Unknown, got:\n%s", result)
 	}
 }
@@ -145,8 +145,8 @@ func TestTracker_HandleStateChange(t *testing.T) {
 	tracker.HandleStateChange("person.alice", "home", "not_home")
 
 	result, _ := tracker.GetContext(context.Background(), "")
-	if !strings.Contains(result, "Away") {
-		t.Errorf("expected Away after state change, got:\n%s", result)
+	if !strings.Contains(result, "Away since") {
+		t.Errorf("expected Away since after state change, got:\n%s", result)
 	}
 }
 
@@ -158,7 +158,7 @@ func TestTracker_HandleStateChange_IgnoresUntracked(t *testing.T) {
 	tracker.HandleStateChange("light.kitchen", "off", "on")
 
 	result, _ := tracker.GetContext(context.Background(), "")
-	if !strings.Contains(result, "**Alice**: Unknown") {
+	if !strings.Contains(result, "- **Alice**:\n  - Unknown") {
 		t.Errorf("expected Alice: Unknown unchanged, got:\n%s", result)
 	}
 }
@@ -189,6 +189,39 @@ func TestTracker_HandleStateChange_SameState(t *testing.T) {
 
 	if !since.Equal(now) {
 		t.Errorf("expected Since unchanged at %v, got %v", now, since)
+	}
+}
+
+func TestTracker_HandleStateChange_ClearsRoom(t *testing.T) {
+	now := time.Date(2026, 2, 15, 16, 30, 0, 0, time.UTC)
+	getter := &mockStateGetter{
+		states: map[string]*homeassistant.State{
+			"person.alice": {
+				EntityID:    "person.alice",
+				State:       "home",
+				Attributes:  map[string]any{"friendly_name": "Alice"},
+				LastChanged: now,
+			},
+		},
+	}
+
+	tracker := NewTracker([]string{"person.alice"}, "UTC", nil)
+	_ = tracker.Initialize(context.Background(), getter)
+
+	// Set a room.
+	tracker.UpdateRoom("person.alice", "office", "ap-hor-office")
+
+	result, _ := tracker.GetContext(context.Background(), "")
+	if !strings.Contains(result, "Room: office") {
+		t.Errorf("expected Room: office, got:\n%s", result)
+	}
+
+	// Transition to not_home should clear room.
+	tracker.HandleStateChange("person.alice", "home", "not_home")
+
+	result, _ = tracker.GetContext(context.Background(), "")
+	if strings.Contains(result, "Room:") {
+		t.Errorf("expected room cleared after not_home, got:\n%s", result)
 	}
 }
 
@@ -226,6 +259,11 @@ func TestTracker_GetContext(t *testing.T) {
 		t.Errorf("expected heading, got:\n%s", result)
 	}
 
+	// Verify nested format with ISO 8601.
+	if !strings.Contains(result, "- **Alice**:\n  - Home since 2026-02-15T16:30:00-06:00") {
+		t.Errorf("expected nested format with RFC3339, got:\n%s", result)
+	}
+
 	// Verify Alice comes before Bob (insertion order).
 	aliceIdx := strings.Index(result, "Alice")
 	bobIdx := strings.Index(result, "Bob")
@@ -235,10 +273,54 @@ func TestTracker_GetContext(t *testing.T) {
 	if aliceIdx > bobIdx {
 		t.Errorf("expected Alice before Bob (insertion order), got:\n%s", result)
 	}
+}
 
-	// Verify timezone formatting.
-	if !strings.Contains(result, "Feb 15") {
-		t.Errorf("expected Feb 15 in formatted time, got:\n%s", result)
+func TestTracker_GetContext_WithRoom(t *testing.T) {
+	now := time.Date(2026, 2, 15, 16, 30, 0, 0, time.UTC)
+	getter := &mockStateGetter{
+		states: map[string]*homeassistant.State{
+			"person.alice": {
+				EntityID:    "person.alice",
+				State:       "home",
+				Attributes:  map[string]any{"friendly_name": "Alice"},
+				LastChanged: now,
+			},
+		},
+	}
+
+	tracker := NewTracker([]string{"person.alice"}, "UTC", nil)
+	_ = tracker.Initialize(context.Background(), getter)
+	tracker.UpdateRoom("person.alice", "office", "ap-hor-office")
+
+	result, _ := tracker.GetContext(context.Background(), "")
+
+	// Verify room appears as sub-bullet.
+	if !strings.Contains(result, "  - Room: office\n") {
+		t.Errorf("expected Room: office sub-bullet, got:\n%s", result)
+	}
+}
+
+func TestTracker_GetContext_WithoutRoom(t *testing.T) {
+	now := time.Date(2026, 2, 15, 16, 30, 0, 0, time.UTC)
+	getter := &mockStateGetter{
+		states: map[string]*homeassistant.State{
+			"person.alice": {
+				EntityID:    "person.alice",
+				State:       "home",
+				Attributes:  map[string]any{"friendly_name": "Alice"},
+				LastChanged: now,
+			},
+		},
+	}
+
+	tracker := NewTracker([]string{"person.alice"}, "UTC", nil)
+	_ = tracker.Initialize(context.Background(), getter)
+
+	result, _ := tracker.GetContext(context.Background(), "")
+
+	// No Room line should appear when Room is empty.
+	if strings.Contains(result, "Room:") {
+		t.Errorf("expected no Room line for empty room, got:\n%s", result)
 	}
 }
 
@@ -271,12 +353,110 @@ func TestTracker_GetContext_NotHome(t *testing.T) {
 	_ = tracker.Initialize(context.Background(), getter)
 
 	result, _ := tracker.GetContext(context.Background(), "")
-	if !strings.Contains(result, "Away") {
-		t.Errorf("expected not_home displayed as Away, got:\n%s", result)
+	if !strings.Contains(result, "Away since") {
+		t.Errorf("expected not_home displayed as Away since, got:\n%s", result)
 	}
 	if strings.Contains(result, "not_home") {
 		t.Errorf("raw not_home should not appear in output:\n%s", result)
 	}
+}
+
+func TestTracker_UpdateRoom(t *testing.T) {
+	tracker := NewTracker([]string{"person.alice"}, "UTC", nil)
+
+	tracker.UpdateRoom("person.alice", "office", "ap-hor-office")
+
+	tracker.mu.RLock()
+	p := tracker.people["person.alice"]
+	room := p.Room
+	source := p.RoomSource
+	sinceZero := p.RoomSince.IsZero()
+	tracker.mu.RUnlock()
+
+	if room != "office" {
+		t.Errorf("expected room office, got %q", room)
+	}
+	if source != "ap-hor-office" {
+		t.Errorf("expected source ap-hor-office, got %q", source)
+	}
+	if sinceZero {
+		t.Error("expected RoomSince to be set")
+	}
+}
+
+func TestTracker_UpdateRoom_SameRoom(t *testing.T) {
+	tracker := NewTracker([]string{"person.alice"}, "UTC", nil)
+
+	tracker.UpdateRoom("person.alice", "office", "ap-hor-office")
+
+	tracker.mu.RLock()
+	firstSince := tracker.people["person.alice"].RoomSince
+	tracker.mu.RUnlock()
+
+	// Same room — should not update RoomSince.
+	time.Sleep(time.Millisecond)
+	tracker.UpdateRoom("person.alice", "office", "ap-hor-office")
+
+	tracker.mu.RLock()
+	secondSince := tracker.people["person.alice"].RoomSince
+	tracker.mu.RUnlock()
+
+	if !firstSince.Equal(secondSince) {
+		t.Errorf("expected RoomSince unchanged, got %v then %v", firstSince, secondSince)
+	}
+}
+
+func TestTracker_UpdateRoom_ClearsRoom(t *testing.T) {
+	tracker := NewTracker([]string{"person.alice"}, "UTC", nil)
+
+	tracker.UpdateRoom("person.alice", "office", "ap-hor-office")
+	tracker.UpdateRoom("person.alice", "", "")
+
+	tracker.mu.RLock()
+	p := tracker.people["person.alice"]
+	room := p.Room
+	sinceZero := p.RoomSince.IsZero()
+	tracker.mu.RUnlock()
+
+	if room != "" {
+		t.Errorf("expected empty room, got %q", room)
+	}
+	if !sinceZero {
+		t.Error("expected RoomSince to be zero after clearing")
+	}
+}
+
+func TestTracker_UpdateRoom_IgnoresUntracked(t *testing.T) {
+	tracker := NewTracker([]string{"person.alice"}, "UTC", nil)
+
+	// Should not panic.
+	tracker.UpdateRoom("person.unknown", "office", "ap-hor-office")
+}
+
+func TestTracker_SetDeviceMACs(t *testing.T) {
+	tracker := NewTracker([]string{"person.alice"}, "UTC", nil)
+
+	macs := []string{"aa:bb:cc:dd:ee:ff", "11:22:33:44:55:66"}
+	tracker.SetDeviceMACs("person.alice", macs)
+
+	tracker.mu.RLock()
+	p := tracker.people["person.alice"]
+	got := p.DeviceMACs
+	tracker.mu.RUnlock()
+
+	if len(got) != 2 {
+		t.Fatalf("expected 2 MACs, got %d", len(got))
+	}
+	if got[0] != "aa:bb:cc:dd:ee:ff" || got[1] != "11:22:33:44:55:66" {
+		t.Errorf("unexpected MACs: %v", got)
+	}
+}
+
+func TestTracker_SetDeviceMACs_IgnoresUntracked(t *testing.T) {
+	tracker := NewTracker([]string{"person.alice"}, "UTC", nil)
+
+	// Should not panic.
+	tracker.SetDeviceMACs("person.unknown", []string{"aa:bb:cc:dd:ee:ff"})
 }
 
 func TestTracker_ConcurrentAccess(t *testing.T) {
@@ -299,7 +479,7 @@ func TestTracker_ConcurrentAccess(t *testing.T) {
 	const iterations = 100
 
 	var wg sync.WaitGroup
-	wg.Add(goroutines * 2)
+	wg.Add(goroutines * 3)
 
 	// Concurrent state changes.
 	for range goroutines {
@@ -321,6 +501,20 @@ func TestTracker_ConcurrentAccess(t *testing.T) {
 			defer wg.Done()
 			for range iterations {
 				_, _ = tracker.GetContext(context.Background(), "")
+			}
+		}()
+	}
+
+	// Concurrent room updates.
+	for range goroutines {
+		go func() {
+			defer wg.Done()
+			for i := range iterations {
+				room := "office"
+				if i%2 == 0 {
+					room = "bedroom"
+				}
+				tracker.UpdateRoom("person.alice", room, "ap-test")
 			}
 		}()
 	}

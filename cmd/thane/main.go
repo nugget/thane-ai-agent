@@ -57,6 +57,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/search"
 	"github.com/nugget/thane-ai-agent/internal/talents"
 	"github.com/nugget/thane-ai-agent/internal/tools"
+	"github.com/nugget/thane-ai-agent/internal/unifi"
 
 	_ "github.com/mattn/go-sqlite3" // SQLite driver for database/sql
 )
@@ -1040,6 +1041,16 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	if len(cfg.Person.Track) > 0 {
 		personTracker = person.NewTracker(cfg.Person.Track, cfg.Timezone, logger)
 		contextProvider.Add(personTracker)
+
+		// Configure device MAC addresses from config.
+		for entityID, devices := range cfg.Person.Devices {
+			macs := make([]string, len(devices))
+			for i, d := range devices {
+				macs[i] = strings.ToLower(d.MAC)
+			}
+			personTracker.SetDeviceMACs(entityID, macs)
+		}
+
 		logger.Info("person tracking enabled", "entities", cfg.Person.Track)
 
 		if ha != nil {
@@ -1049,6 +1060,51 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 			}
 			initCancel()
 		}
+	}
+
+	// --- UniFi room presence ---
+	// Optional: polls UniFi controller for wireless client associations
+	// and pushes room-level presence into the person tracker. Requires
+	// both person.track and unifi config to be set.
+	if cfg.Unifi.Configured() && personTracker != nil {
+		unifiClient := unifi.NewClient(cfg.Unifi.URL, cfg.Unifi.APIKey, logger)
+
+		// Build MAC → entity_id mapping from config.
+		deviceOwners := make(map[string]string)
+		for entityID, devices := range cfg.Person.Devices {
+			for _, d := range devices {
+				deviceOwners[strings.ToLower(d.MAC)] = entityID
+			}
+		}
+
+		pollInterval := time.Duration(cfg.Unifi.PollIntervalSec) * time.Second
+		poller := unifi.NewPoller(unifi.PollerConfig{
+			Locator:      unifiClient,
+			Updater:      personTracker,
+			PollInterval: pollInterval,
+			DeviceOwners: deviceOwners,
+			APRooms:      cfg.Person.APRooms,
+			Logger:       logger,
+		})
+
+		go poller.Start(ctx)
+
+		// Register UniFi with connwatch for health endpoint visibility.
+		connMgr.Watch(ctx, connwatch.WatcherConfig{
+			Name:    "unifi",
+			Probe:   func(pCtx context.Context) error { return unifiClient.Ping(pCtx) },
+			Backoff: connwatch.DefaultBackoffConfig(),
+			Logger:  logger,
+		})
+
+		logger.Info("unifi room presence enabled",
+			"url", cfg.Unifi.URL,
+			"poll_interval", pollInterval,
+			"tracked_macs", len(deviceOwners),
+			"ap_rooms", len(cfg.Person.APRooms),
+		)
+	} else if cfg.Unifi.Configured() && personTracker == nil {
+		logger.Warn("unifi configured but person tracking disabled (no person.track entries)")
 	}
 
 	loop.SetContextProvider(contextProvider)
