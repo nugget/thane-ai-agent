@@ -39,6 +39,11 @@ import (
 //   - /config/config.yaml (container convention)
 //   - /usr/local/etc/thane/config.yaml (macOS/BSD local sysconfig)
 //   - /etc/thane/config.yaml (system-wide)
+
+// searchPathsFunc is the function used to generate search paths.
+// Overridden in tests to avoid finding real config files on the host.
+var searchPathsFunc = DefaultSearchPaths
+
 func DefaultSearchPaths() []string {
 	paths := []string{"config.yaml"}
 
@@ -65,7 +70,7 @@ func FindConfig(explicit string) (string, error) {
 		return explicit, nil
 	}
 
-	for _, p := range DefaultSearchPaths() {
+	for _, p := range searchPathsFunc() {
 		if _, err := os.Stat(p); err == nil {
 			return p, nil
 		}
