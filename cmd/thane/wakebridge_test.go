@@ -101,8 +101,8 @@ func TestWakeBridge_MatchTriggersRun(t *testing.T) {
 		if req.Hints[router.HintLocalOnly] != "true" {
 			t.Errorf("hint local_only = %q, want %q", req.Hints[router.HintLocalOnly], "true")
 		}
-		if req.Hints[router.HintQualityFloor] != "1" {
-			t.Errorf("hint quality_floor = %q, want %q", req.Hints[router.HintQualityFloor], "1")
+		if req.Hints[router.HintQualityFloor] != "5" {
+			t.Errorf("hint quality_floor = %q, want %q", req.Hints[router.HintQualityFloor], "5")
 		}
 		if req.Hints[router.HintMission] != "anticipation" {
 			t.Errorf("hint mission = %q, want %q", req.Hints[router.HintMission], "anticipation")

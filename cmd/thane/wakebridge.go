@@ -162,7 +162,7 @@ func (b *WakeBridge) runWake(anticipationID, description, message string) {
 			"source":                "anticipation",
 			"anticipation_id":       anticipationID,
 			router.HintLocalOnly:    "true",
-			router.HintQualityFloor: "1",
+			router.HintQualityFloor: "5",
 			router.HintMission:      "anticipation",
 		},
 	}
