@@ -35,15 +35,18 @@ func runScheduledTask(ctx context.Context, task *scheduler.Task, exec *scheduler
 		msg = "Scheduled wake: " + task.Name
 	}
 
-	// Use trigger-profile hints: cheapest local model, no persona overhead.
+	// Use trigger-profile hints: cheapest local model, full tool access.
+	// Each task gets its own conversation to isolate from interactive chat.
 	req := &agent.Request{
-		Messages: []agent.Message{{Role: "user", Content: msg}},
+		ConversationID: fmt.Sprintf("sched-%s", task.ID),
+		Messages:       []agent.Message{{Role: "user", Content: msg}},
 		Hints: map[string]string{
-			"source":                "scheduler",
-			"task":                  task.Name,
-			router.HintLocalOnly:    "true",
-			router.HintQualityFloor: "1",
-			router.HintMission:      "automation",
+			"source":                    "scheduler",
+			"task":                      task.Name,
+			router.HintLocalOnly:        "true",
+			router.HintQualityFloor:     "1",
+			router.HintMission:          "automation",
+			router.HintDelegationGating: "disabled", // full tool access, no delegation indirection
 		},
 	}
 

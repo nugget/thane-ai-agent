@@ -169,13 +169,17 @@ func (b *WakeBridge) runWake(anticipationID, description, message string) {
 	defer cancel()
 
 	req := &agent.Request{
-		Messages: []agent.Message{{Role: "user", Content: message}},
+		// Each anticipation gets its own conversation so wake history
+		// is isolated from interactive chat (prevents context bloat).
+		ConversationID: fmt.Sprintf("wake-%s", anticipationID),
+		Messages:       []agent.Message{{Role: "user", Content: message}},
 		Hints: map[string]string{
-			"source":                "anticipation",
-			"anticipation_id":       anticipationID,
-			router.HintLocalOnly:    "true",
-			router.HintQualityFloor: "5",
-			router.HintMission:      "anticipation",
+			"source":                    "anticipation",
+			"anticipation_id":           anticipationID,
+			router.HintLocalOnly:        "true",
+			router.HintQualityFloor:     "6", // floor is inclusive; excludes quality≤5 models
+			router.HintMission:          "anticipation",
+			router.HintDelegationGating: "disabled", // full tool access, no delegation indirection
 		},
 	}
 

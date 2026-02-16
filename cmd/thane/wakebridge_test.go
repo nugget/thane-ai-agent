@@ -121,11 +121,19 @@ func TestWakeBridge_MatchTriggersRun(t *testing.T) {
 		if req.Hints[router.HintLocalOnly] != "true" {
 			t.Errorf("hint local_only = %q, want %q", req.Hints[router.HintLocalOnly], "true")
 		}
-		if req.Hints[router.HintQualityFloor] != "5" {
-			t.Errorf("hint quality_floor = %q, want %q", req.Hints[router.HintQualityFloor], "5")
+		if req.Hints[router.HintQualityFloor] != "6" {
+			t.Errorf("hint quality_floor = %q, want %q", req.Hints[router.HintQualityFloor], "6")
 		}
 		if req.Hints[router.HintMission] != "anticipation" {
 			t.Errorf("hint mission = %q, want %q", req.Hints[router.HintMission], "anticipation")
+		}
+		if req.Hints[router.HintDelegationGating] != "disabled" {
+			t.Errorf("hint delegation_gating = %q, want %q", req.Hints[router.HintDelegationGating], "disabled")
+		}
+
+		// Wake runs should use an isolated conversation ID.
+		if req.ConversationID != "wake-ant-1" {
+			t.Errorf("ConversationID = %q, want %q", req.ConversationID, "wake-ant-1")
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("runner.Run was not called within timeout")

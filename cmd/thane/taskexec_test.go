@@ -75,6 +75,14 @@ func TestRunScheduledTask_WakePayload(t *testing.T) {
 	if runner.req.Hints[router.HintMission] != "automation" {
 		t.Errorf("hint mission = %q, want %q", runner.req.Hints[router.HintMission], "automation")
 	}
+	if runner.req.Hints[router.HintDelegationGating] != "disabled" {
+		t.Errorf("hint delegation_gating = %q, want %q", runner.req.Hints[router.HintDelegationGating], "disabled")
+	}
+
+	// Scheduled tasks should use an isolated conversation ID.
+	if runner.req.ConversationID != "sched-task-1" {
+		t.Errorf("ConversationID = %q, want %q", runner.req.ConversationID, "sched-task-1")
+	}
 
 	// Verify execution result was populated.
 	if exec.Result != "I checked the sensors." {
