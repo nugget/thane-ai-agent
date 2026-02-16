@@ -17,6 +17,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/nugget/thane-ai-agent/internal/memory"
+	"github.com/nugget/thane-ai-agent/internal/prompts"
 )
 
 // ArchiveReader is the subset of [memory.ArchiveStore] needed by the
@@ -177,7 +178,8 @@ func (p *Provider) getRecentHistory() string {
 		return ""
 	}
 
-	budget := p.historyTokens
+	framing := prompts.EpisodicHistoryFraming() + "\n\n"
+	budget := p.historyTokens - estimateTokens(framing)
 	var entries []string
 
 	for i, sess := range sessions {
@@ -230,7 +232,7 @@ func (p *Provider) getRecentHistory() string {
 	}
 
 	var sb strings.Builder
-	sb.WriteString("*(The current conversation is your active session — what follows is from prior sessions.)*\n\n")
+	sb.WriteString(framing)
 	for _, e := range entries {
 		sb.WriteString(e)
 		if !strings.HasSuffix(e, "\n") {
@@ -267,6 +269,7 @@ func (p *Provider) formatTranscriptExcerpt(sess *memory.Session, budget int) (st
 
 	// Collect user/assistant messages from the end, capped to avoid
 	// scanning excessively long transcripts.
+	loc := p.loadLocation()
 	var excerpts []string
 	scanned := 0
 	for i := len(messages) - 1; i >= 0 && remaining > 0 && scanned < maxExcerptMessages; i-- {
@@ -275,7 +278,8 @@ func (p *Provider) formatTranscriptExcerpt(sess *memory.Session, budget int) (st
 		if m.Role != "user" && m.Role != "assistant" {
 			continue
 		}
-		line := fmt.Sprintf("**%s:** %s", m.Role, truncateContent(m.Content, 200))
+		ts := m.Timestamp.In(loc).Format(time.RFC3339)
+		line := fmt.Sprintf("[%s] **%s:** %s", ts, m.Role, truncateContent(m.Content, 200))
 		cost := estimateTokens(line)
 		if cost > remaining {
 			break
@@ -317,7 +321,7 @@ func (p *Provider) formatOneLiner(sess *memory.Session) (string, int) {
 // sessionHeader returns a formatted header for a session entry.
 func (p *Provider) sessionHeader(sess *memory.Session) string {
 	loc := p.loadLocation()
-	ts := sess.StartedAt.In(loc).Format("Jan 2 15:04")
+	ts := sess.StartedAt.In(loc).Format(time.RFC3339)
 	title := ""
 	if sess.Title != "" {
 		title = " — " + sess.Title
