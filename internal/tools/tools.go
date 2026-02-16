@@ -1110,10 +1110,17 @@ func (r *Registry) handleControlDevice(ctx context.Context, args map[string]any)
 	result := fmt.Sprintf("Done. %s %s.\n", verb, foundName)
 
 	// Auto-verify: fetch post-action state so the caller can confirm
-	// the action took effect without a second tool call.
-	time.Sleep(500 * time.Millisecond)
+	// the action took effect without a second tool call. Use a
+	// context-aware delay so cancellation is respected promptly.
+	timer := time.NewTimer(500 * time.Millisecond)
+	select {
+	case <-ctx.Done():
+		timer.Stop()
+		return result, nil
+	case <-timer.C:
+	}
 
-	state, err := r.ha.GetState(context.Background(), entityID)
+	state, err := r.ha.GetState(ctx, entityID)
 	if err != nil {
 		// State fetch is best-effort; the action itself succeeded.
 		result += fmt.Sprintf("\n(Could not verify state: %v)", err)
