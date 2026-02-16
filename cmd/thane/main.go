@@ -1015,31 +1015,32 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	)
 
 	// --- State watcher ---
-	// Consumes state_changed events from the HA WebSocket and bridges
-	// them to the anticipation system via WakeContext. The watcher runs
-	// until ctx is cancelled and is safe to start even if the WebSocket
-	// isn't connected yet (events arrive once the connection is up).
+	// Consumes state_changed events from the HA WebSocket, bridges them
+	// to the anticipation system via WakeContext, and triggers agent wakes
+	// when an active anticipation matches the state change. The watcher
+	// runs until ctx is cancelled and is safe to start even if the
+	// WebSocket isn't connected yet (events arrive once the connection
+	// is up).
 	if haWS != nil {
 		filter := homeassistant.NewEntityFilter(cfg.HomeAssistant.Subscribe.EntityGlobs, logger)
 		limiter := homeassistant.NewEntityRateLimiter(cfg.HomeAssistant.Subscribe.RateLimitPerMinute)
-		stateHandler := func(entityID, oldState, newState string) {
-			anticipationProvider.SetWakeContext(anticipation.WakeContext{
-				Time:        time.Now(),
-				EventType:   "state_change",
-				EntityID:    entityID,
-				EntityState: newState,
-			})
-			logger.Debug("state change",
-				"entity_id", entityID,
-				"old_state", oldState,
-				"new_state", newState,
-			)
-		}
-		watcher := homeassistant.NewStateWatcher(haWS.Events(), filter, limiter, stateHandler, logger)
+		cooldown := time.Duration(cfg.HomeAssistant.Subscribe.CooldownMinutes) * time.Minute
+
+		bridge := NewWakeBridge(WakeBridgeConfig{
+			Store:    anticipationStore,
+			Runner:   loop,
+			Provider: anticipationProvider,
+			Logger:   logger,
+			Ctx:      ctx,
+			Cooldown: cooldown,
+		})
+
+		watcher := homeassistant.NewStateWatcher(haWS.Events(), filter, limiter, bridge.HandleStateChange, logger)
 		go watcher.Run(ctx)
 		logger.Info("state watcher started",
 			"entity_globs", cfg.HomeAssistant.Subscribe.EntityGlobs,
 			"rate_limit_per_minute", cfg.HomeAssistant.Subscribe.RateLimitPerMinute,
+			"cooldown", cooldown,
 		)
 	}
 
