@@ -83,6 +83,13 @@ const cleanupInterval = 10 * time.Minute
 // for system prompt injection, queries the anticipation store for
 // matches, and fires async agent runs for each match not on cooldown.
 func (b *WakeBridge) HandleStateChange(entityID, oldState, newState string) {
+	// HA fires state_changed on attribute updates even when the state
+	// itself hasn't changed. Skip these to avoid log noise and
+	// unnecessary anticipation matching.
+	if oldState == newState {
+		return
+	}
+
 	// Periodically evict stale cooldown entries to prevent unbounded map growth.
 	b.maybeCleanup()
 
