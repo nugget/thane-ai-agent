@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestFileTools_ResolvePath(t *testing.T) {
@@ -844,17 +845,42 @@ func TestFileTools_SearchTimeout(t *testing.T) {
 
 	ft := NewFileTools(workspace, nil)
 
-	// Use an already-cancelled context to simulate timeout.
+	// Use an already-expired deadline to exercise the DeadlineExceeded path.
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+
+	result, err := ft.Search(ctx, ".", "*.txt", 0)
+	if err != nil {
+		t.Fatalf("Search() should not return error on expired deadline, got: %v", err)
+	}
+	if !strings.Contains(result, "timed out") {
+		t.Errorf("expected timeout warning in result:\n%s", result)
+	}
+}
+
+func TestFileTools_SearchCanceled(t *testing.T) {
+	workspace, err := os.MkdirTemp("", "thane-cancel-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(workspace)
+
+	if err := os.WriteFile(filepath.Join(workspace, "a.txt"), []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	ft := NewFileTools(workspace, nil)
+
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
 	result, err := ft.Search(ctx, ".", "*.txt", 0)
-	// Should not return an error — partial results or empty with warning.
 	if err != nil {
 		t.Fatalf("Search() should not return error on cancelled context, got: %v", err)
 	}
-	// The result may be empty or partial, but the function shouldn't blow up.
-	_ = result
+	if !strings.Contains(result, "canceled") {
+		t.Errorf("expected cancellation warning in result:\n%s", result)
+	}
 }
 
 func TestFileTools_GrepTimeout(t *testing.T) {
@@ -870,15 +896,17 @@ func TestFileTools_GrepTimeout(t *testing.T) {
 
 	ft := NewFileTools(workspace, nil)
 
-	// Use an already-cancelled context.
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
+	// Use an already-expired deadline to exercise the DeadlineExceeded path.
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
 
 	result, err := ft.Grep(ctx, ".", "hello", 0, false)
 	if err != nil {
-		t.Fatalf("Grep() should not return error on cancelled context, got: %v", err)
+		t.Fatalf("Grep() should not return error on expired deadline, got: %v", err)
 	}
-	_ = result
+	if !strings.Contains(result, "timed out") {
+		t.Errorf("expected timeout warning in result:\n%s", result)
+	}
 }
 
 func TestFileTools_SearchVisitedLimit(t *testing.T) {
@@ -888,24 +916,17 @@ func TestFileTools_SearchVisitedLimit(t *testing.T) {
 	}
 	defer os.RemoveAll(workspace)
 
-	// Create enough files to exceed maxVisited (50,000).
-	// Use nested directories to reduce per-dir file count.
-	const dirs = 100
-	const filesPerDir = 510 // 100 * 510 = 51,000 files + 100 dirs > 50,000
-	for i := range dirs {
-		d := filepath.Join(workspace, fmt.Sprintf("d%03d", i))
-		if err := os.MkdirAll(d, 0755); err != nil {
+	// Create a small tree that exceeds a low visited cap.
+	const fileCount = 20
+	for i := range fileCount {
+		f := filepath.Join(workspace, fmt.Sprintf("f%03d.txt", i))
+		if err := os.WriteFile(f, []byte("."), 0644); err != nil {
 			t.Fatal(err)
-		}
-		for j := range filesPerDir {
-			f := filepath.Join(d, fmt.Sprintf("f%04d.txt", j))
-			if err := os.WriteFile(f, []byte("."), 0644); err != nil {
-				t.Fatal(err)
-			}
 		}
 	}
 
 	ft := NewFileTools(workspace, nil)
+	ft.maxVisited = 5 // Low cap so test doesn't need thousands of files.
 	ctx := context.Background()
 
 	result, err := ft.Search(ctx, ".", "*.txt", 0)

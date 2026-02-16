@@ -27,9 +27,9 @@ var errVisitedLimit = errors.New("visited limit reached")
 // file tree. Matches the default shell_exec timeout.
 const searchTimeout = 30 * time.Second
 
-// maxVisited caps the total number of directory entries visited (not just
-// matches) to bail out of unexpectedly large trees early.
-const maxVisited = 50_000
+// defaultMaxVisited caps the total number of directory entries visited
+// (not just matches) to bail out of unexpectedly large trees early.
+const defaultMaxVisited = 50_000
 
 // skipDirs contains directory names that are skipped during file tree
 // traversal. These are known to be large and rarely contain files the
@@ -51,12 +51,22 @@ var skipDirs = map[string]bool{
 type FileTools struct {
 	workspacePath string
 	readOnlyDirs  []string // Additional read-only directories
+	maxVisited    int      // Traversal entry cap; 0 uses defaultMaxVisited
 }
 
 // NewFileTools creates a new FileTools instance.
 // If workspacePath is empty, file tools will be disabled.
 func NewFileTools(workspacePath string, readOnlyDirs []string) *FileTools {
 	return &FileTools{workspacePath: workspacePath, readOnlyDirs: readOnlyDirs}
+}
+
+// visitedLimit returns the effective max-visited cap, falling back to
+// defaultMaxVisited when no override is set.
+func (ft *FileTools) visitedLimit() int {
+	if ft.maxVisited > 0 {
+		return ft.maxVisited
+	}
+	return defaultMaxVisited
 }
 
 // Enabled reports whether file tools are available.
@@ -307,6 +317,7 @@ func (ft *FileTools) Search(ctx context.Context, dir, pattern string, maxDepth i
 	const maxResults = 500
 	var matches []string
 	visited := 0
+	limit := ft.visitedLimit()
 
 	err = filepath.WalkDir(absDir, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -317,7 +328,7 @@ func (ft *FileTools) Search(ctx context.Context, dir, pattern string, maxDepth i
 		}
 
 		visited++
-		if visited > maxVisited {
+		if visited > limit {
 			return errVisitedLimit
 		}
 
@@ -356,12 +367,14 @@ func (ft *FileTools) Search(ctx context.Context, dir, pattern string, maxDepth i
 	var warning string
 	switch {
 	case errors.Is(err, context.DeadlineExceeded):
-		warning = fmt.Sprintf("\n\n[⚠️ search timed out after %s — results are partial, try a narrower directory]", searchTimeout)
+		warning = "\n\n[⚠️ search timed out — results are partial, try a narrower directory]"
+	case errors.Is(err, context.Canceled):
+		warning = "\n\n[⚠️ search was canceled — results may be incomplete]"
 	case errors.Is(err, errVisitedLimit):
-		warning = fmt.Sprintf("\n\n[⚠️ visited %d entries without finishing — results are partial, try a narrower directory]", maxVisited)
+		warning = fmt.Sprintf("\n\n[⚠️ visited %d entries without finishing — results are partial, try a narrower directory]", visited)
 	case errors.Is(err, errResultLimit):
 		warning = fmt.Sprintf("\n\n[... truncated at %d results ...]", maxResults)
-	case err != nil && !errors.Is(err, context.Canceled):
+	case err != nil:
 		return "", fmt.Errorf("search failed: %w", err)
 	}
 
@@ -416,6 +429,7 @@ func (ft *FileTools) Grep(ctx context.Context, dir, pattern string, maxDepth int
 	var results []string
 	matchCount := 0
 	visited := 0
+	limit := ft.visitedLimit()
 
 	err = filepath.WalkDir(absDir, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -426,7 +440,7 @@ func (ft *FileTools) Grep(ctx context.Context, dir, pattern string, maxDepth int
 		}
 
 		visited++
-		if visited > maxVisited {
+		if visited > limit {
 			return errVisitedLimit
 		}
 
@@ -500,12 +514,14 @@ func (ft *FileTools) Grep(ctx context.Context, dir, pattern string, maxDepth int
 	var warning string
 	switch {
 	case errors.Is(err, context.DeadlineExceeded):
-		warning = fmt.Sprintf("\n\n[⚠️ grep timed out after %s — results are partial, try a narrower directory]", searchTimeout)
+		warning = "\n\n[⚠️ grep timed out — results are partial, try a narrower directory]"
+	case errors.Is(err, context.Canceled):
+		warning = "\n\n[⚠️ grep was canceled — results may be incomplete]"
 	case errors.Is(err, errVisitedLimit):
-		warning = fmt.Sprintf("\n\n[⚠️ visited %d entries without finishing — results are partial, try a narrower directory]", maxVisited)
+		warning = fmt.Sprintf("\n\n[⚠️ visited %d entries without finishing — results are partial, try a narrower directory]", visited)
 	case errors.Is(err, errResultLimit):
 		warning = fmt.Sprintf("\n\n[... truncated at %d matches ...]", maxMatches)
-	case err != nil && !errors.Is(err, context.Canceled):
+	case err != nil:
 		return "", fmt.Errorf("grep failed: %w", err)
 	}
 
