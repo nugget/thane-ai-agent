@@ -378,8 +378,9 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	defer connMgr.Stop()
 
 	// Forward-declare personTracker so the connwatch OnReady callback
-	// can reference it. The closure captures by reference; by the time
-	// HA connects, the tracker is fully initialized.
+	// can reference it. The closure captures by pointer; the tracker
+	// is constructed later and also calls Initialize immediately after
+	// construction to cover the case where HA connected first.
 	var personTracker *person.Tracker
 
 	var subscribeOnce sync.Once
@@ -1028,12 +1029,26 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// --- Person tracker ---
 	// Tracks configured household members' presence state and injects
 	// it into the system prompt, eliminating tool calls for "who is
-	// home?" queries. Initialization from HA happens in the connwatch
-	// OnReady callback; state updates arrive via the state watcher.
+	// home?" queries. State updates arrive via the state watcher.
+	//
+	// Initialization from HA state happens in the connwatch OnReady
+	// callback on each reconnect. However, if HA was already connected
+	// before this tracker was constructed, OnReady would have skipped
+	// initialization (personTracker was nil). Catch up immediately
+	// after construction when HA is available. Initialize is idempotent,
+	// so a redundant call from OnReady is harmless.
 	if len(cfg.Person.Track) > 0 {
 		personTracker = person.NewTracker(cfg.Person.Track, cfg.Timezone, logger)
 		contextProvider.Add(personTracker)
 		logger.Info("person tracking enabled", "entities", cfg.Person.Track)
+
+		if ha != nil {
+			initCtx, initCancel := context.WithTimeout(ctx, 10*time.Second)
+			if err := personTracker.Initialize(initCtx, ha); err != nil {
+				logger.Warn("person tracker initial sync incomplete", "error", err)
+			}
+			initCancel()
+		}
 	}
 
 	loop.SetContextProvider(contextProvider)
@@ -1049,7 +1064,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// IDs are auto-merged into entity globs so the person tracker
 	// receives state changes regardless of the user's subscribe config.
 	if haWS != nil {
-		globs := cfg.HomeAssistant.Subscribe.EntityGlobs
+		globs := append([]string(nil), cfg.HomeAssistant.Subscribe.EntityGlobs...)
 		if personTracker != nil {
 			globs = append(globs, personTracker.EntityIDs()...)
 		}

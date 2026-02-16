@@ -86,34 +86,54 @@ func NewTracker(entityIDs []string, timezone string, logger *slog.Logger) *Track
 // Home Assistant REST API. Entities that fail to load are logged and
 // left in "Unknown" state. This method is idempotent and safe to call
 // from a connwatch OnReady callback on every reconnection.
+//
+// Network I/O is performed without holding the lock so that GetContext
+// and HandleStateChange are not blocked during initialization.
 func (t *Tracker) Initialize(ctx context.Context, ha StateGetter) error {
+	// Read entity order without the lock — order is immutable after
+	// construction, so this is safe.
+	ids := t.EntityIDs()
+
+	// Fetch all states outside the lock to avoid blocking readers
+	// during network I/O.
+	type fetchResult struct {
+		id    string
+		state *homeassistant.State
+		err   error
+	}
+	results := make([]fetchResult, 0, len(ids))
+	for _, id := range ids {
+		state, err := ha.GetState(ctx, id)
+		results = append(results, fetchResult{id: id, state: state, err: err})
+	}
+
+	// Apply fetched results under the lock.
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
 	var firstErr error
-	for _, id := range t.order {
-		state, err := ha.GetState(ctx, id)
-		if err != nil {
+	for _, r := range results {
+		if r.err != nil {
 			t.logger.Warn("failed to fetch person state",
-				"entity_id", id,
-				"error", err,
+				"entity_id", r.id,
+				"error", r.err,
 			)
 			if firstErr == nil {
-				firstErr = fmt.Errorf("fetch %s: %w", id, err)
+				firstErr = fmt.Errorf("fetch %s: %w", r.id, r.err)
 			}
 			continue
 		}
 
-		p := t.people[id]
-		p.State = state.State
-		p.Since = state.LastChanged
+		p := t.people[r.id]
+		p.State = r.state.State
+		p.Since = r.state.LastChanged
 
-		if name, ok := state.Attributes["friendly_name"].(string); ok && name != "" {
+		if name, ok := r.state.Attributes["friendly_name"].(string); ok && name != "" {
 			p.FriendlyName = name
 		}
 
 		t.logger.Debug("person state initialized",
-			"entity_id", id,
+			"entity_id", r.id,
 			"friendly_name", p.FriendlyName,
 			"state", p.State,
 			"since", p.Since,
@@ -181,12 +201,18 @@ func (t *Tracker) GetContext(_ context.Context, _ string) (string, error) {
 	return sb.String(), nil
 }
 
-// EntityIDs returns the list of tracked entity IDs. This is used to
+// EntityIDs returns a copy of the tracked entity IDs. This is used to
 // auto-merge person entities into the state watcher's entity filter
 // globs so that person state changes are delivered regardless of the
-// user's subscribe.entity_globs configuration.
+// user's subscribe.entity_globs configuration. The returned slice is
+// a defensive copy; callers cannot mutate internal state.
 func (t *Tracker) EntityIDs() []string {
-	return t.order
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+
+	ids := make([]string, len(t.order))
+	copy(ids, t.order)
+	return ids
 }
 
 // formatState converts a Home Assistant person state to a
