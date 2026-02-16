@@ -182,15 +182,23 @@ func (p *Provider) getRecentHistory() string {
 	budget := p.historyTokens - estimateTokens(framing)
 	var entries []string
 
-	for i, sess := range sessions {
+	formatted := 0          // Count of sessions actually emitted.
+	var prevStart time.Time // StartedAt of the previously emitted session.
+	for _, sess := range sessions {
 		if budget <= 0 {
 			break
 		}
 
-		// Gap detection between consecutive sessions.
+		// Skip sessions with no useful content (e.g. delegate sessions
+		// with no title, summary, or metadata).
+		if !sessionHasContent(sess) {
+			continue
+		}
+
+		// Gap detection between consecutively emitted sessions.
 		var gapNote string
-		if i > 0 && sess.EndedAt != nil {
-			gap := sessions[i-1].StartedAt.Sub(*sess.EndedAt)
+		if formatted > 0 && sess.EndedAt != nil {
+			gap := prevStart.Sub(*sess.EndedAt)
 			if gap > p.sessionGap {
 				gapNote = fmt.Sprintf("*(%s gap)*\n", formatGap(gap))
 			}
@@ -200,10 +208,10 @@ func (p *Provider) getRecentHistory() string {
 		var cost int
 
 		switch {
-		case i == 0:
+		case formatted == 0:
 			// Most recent archived session: transcript excerpt.
 			entry, cost = p.formatTranscriptExcerpt(sess, budget)
-		case i <= 3:
+		case formatted <= 3:
 			// Recent sessions: paragraph summary.
 			entry, cost = p.formatParagraph(sess)
 		default:
@@ -211,7 +219,7 @@ func (p *Provider) getRecentHistory() string {
 			entry, cost = p.formatOneLiner(sess)
 		}
 
-		if cost > budget && i > 0 {
+		if cost > budget && formatted > 0 {
 			break
 		}
 
@@ -220,6 +228,8 @@ func (p *Provider) getRecentHistory() string {
 		}
 		entries = append(entries, entry)
 		budget -= cost
+		prevStart = sess.StartedAt
+		formatted++
 	}
 
 	if len(entries) == 0 {
@@ -356,6 +366,24 @@ func sessionParagraph(sess *memory.Session) string {
 		return sess.Title
 	}
 	return "(no summary available)"
+}
+
+// sessionHasContent reports whether a session has any meaningful content
+// worth including in the episodic history. Delegate sessions typically
+// have no title, summary, or metadata and should be skipped.
+func sessionHasContent(sess *memory.Session) bool {
+	if sess.Title != "" {
+		return true
+	}
+	if sess.Summary != "" {
+		return true
+	}
+	if sess.Metadata != nil {
+		if sess.Metadata.OneLiner != "" || sess.Metadata.Paragraph != "" || sess.Metadata.Detailed != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // sessionOneLiner returns the best available one-line summary for a
