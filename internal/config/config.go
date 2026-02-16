@@ -161,6 +161,10 @@ type Config struct {
 	// room-level presence detection via wireless AP client associations.
 	Unifi UnifiConfig `yaml:"unifi"`
 
+	// Debug configures diagnostic options for inspecting the assembled
+	// system prompt and other internal state.
+	Debug DebugConfig `yaml:"debug"`
+
 	// Timezone is the IANA timezone for the household (e.g.,
 	// "America/Chicago"). Used in the Current Conditions system prompt
 	// section so the agent reasons about local time. If empty, the
@@ -510,6 +514,20 @@ func (c UnifiConfig) Configured() bool {
 	return c.URL != "" && c.APIKey != ""
 }
 
+// DebugConfig configures diagnostic options for inspecting the
+// assembled system prompt and other internal state.
+type DebugConfig struct {
+	// DumpSystemPrompt enables writing the fully assembled system
+	// prompt to disk on every LLM call, with section markers and
+	// size annotations. The file is overwritten each call so it
+	// always reflects the most recent prompt.
+	DumpSystemPrompt bool `yaml:"dump_system_prompt"`
+
+	// DumpDir is the directory where debug output files are written.
+	// Created automatically on first write. Default: "./debug".
+	DumpDir string `yaml:"dump_dir"`
+}
+
 // ShellExecConfig configures the agent's ability to execute shell
 // commands on the host. Disabled by default for safety. When enabled,
 // commands are filtered through allow and deny lists before execution.
@@ -679,6 +697,10 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Episodic.SessionGapMinutes == 0 {
 		c.Episodic.SessionGapMinutes = 30
+	}
+
+	if c.Debug.DumpSystemPrompt && c.Debug.DumpDir == "" {
+		c.Debug.DumpDir = "./debug"
 	}
 
 	if c.Agent.DelegationRequired && len(c.Agent.Iter0Tools) == 0 {

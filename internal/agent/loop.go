@@ -8,11 +8,14 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/nugget/thane-ai-agent/internal/conditions"
+	"github.com/nugget/thane-ai-agent/internal/config"
 	"github.com/nugget/thane-ai-agent/internal/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/llm"
 	"github.com/nugget/thane-ai-agent/internal/memory"
@@ -132,7 +135,8 @@ type Loop struct {
 	contextProvider ContextProvider
 	archiver        SessionArchiver
 	extractor       *memory.Extractor
-	iter0Tools      []string // Restricted tool set for orchestrator mode (nil = all tools)
+	iter0Tools      []string           // Restricted tool set for orchestrator mode (nil = all tools)
+	debugCfg        config.DebugConfig // Debug options (system prompt dump, etc.)
 }
 
 // NewLoop creates a new agent loop.
@@ -192,6 +196,11 @@ func (l *Loop) SetIter0Tools(names []string) {
 	l.iter0Tools = names
 }
 
+// SetDebugConfig configures debug options for the agent loop.
+func (l *Loop) SetDebugConfig(cfg config.DebugConfig) {
+	l.debugCfg = cfg
+}
+
 // Tools returns the tool registry for adding additional tools.
 func (l *Loop) Tools() *tools.Registry {
 	return l.tools
@@ -239,32 +248,54 @@ func getGreetingResponse() string {
 	return resp
 }
 
+// promptSection records the name and byte boundaries of one section in
+// the assembled system prompt. Used by the debug dump to annotate
+// section sizes.
+type promptSection struct {
+	name  string
+	start int
+	end   int
+}
+
 func (l *Loop) buildSystemPrompt(ctx context.Context, userMessage string) string {
 	var sb strings.Builder
 
+	// Track section boundaries for debug dump.
+	var sections []promptSection
+	mark := func(name string) { sections = append(sections, promptSection{name: name, start: sb.Len()}) }
+	seal := func() { sections[len(sections)-1].end = sb.Len() }
+
 	// 1. Persona (identity — who am I)
+	mark("PERSONA")
 	if l.persona != "" {
 		sb.WriteString(l.persona)
 	} else {
 		sb.WriteString(prompts.BaseSystemPrompt())
 	}
+	seal()
 
 	// 2. Injected context (knowledge — what do I know)
 	if l.injectedContext != "" {
+		mark("INJECTED CONTEXT")
 		sb.WriteString("\n\n## Injected Context\n\n")
 		sb.WriteString(l.injectedContext)
+		seal()
 	}
 
 	// 3. Current Conditions (environment — where/when am I)
 	// Placed early because models attend more strongly to content near
 	// the beginning. Uses H1 heading to signal operational importance.
+	mark("CURRENT CONDITIONS")
 	sb.WriteString("\n\n")
 	sb.WriteString(conditions.CurrentConditions(l.timezone))
+	seal()
 
 	// 4. Talents (behavior — how should I act)
 	if l.talents != "" {
+		mark("TALENTS")
 		sb.WriteString("\n\n## Behavioral Guidance\n\n")
 		sb.WriteString(l.talents)
+		seal()
 	}
 
 	// 5. Dynamic context (facts, anticipations — what's relevant right now)
@@ -273,11 +304,77 @@ func (l *Loop) buildSystemPrompt(ctx context.Context, userMessage string) string
 		if err != nil {
 			l.logger.Warn("failed to get dynamic context", "error", err)
 		} else if dynCtx != "" {
+			mark("DYNAMIC CONTEXT")
 			sb.WriteString("\n\n## Relevant Context\n\n")
 			sb.WriteString(dynCtx)
+			seal()
 		}
 	}
 
+	result := sb.String()
+
+	if l.debugCfg.DumpSystemPrompt {
+		l.dumpSystemPrompt(result, sections)
+	}
+
+	return result
+}
+
+// dumpSystemPrompt writes the assembled system prompt to disk with
+// section markers and size annotations. Errors are logged as warnings
+// and never fail the request.
+func (l *Loop) dumpSystemPrompt(prompt string, sections []promptSection) {
+	dir := l.debugCfg.DumpDir
+	if dir == "" {
+		dir = "./debug"
+	}
+
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		l.logger.Warn("debug: failed to create dump dir", "dir", dir, "error", err)
+		return
+	}
+
+	var dump strings.Builder
+	attrs := make([]any, 0, len(sections)*2+2)
+	for _, s := range sections {
+		size := s.end - s.start
+		attrs = append(attrs, strings.ToLower(strings.ReplaceAll(s.name, " ", "_")), size)
+		fmt.Fprintf(&dump, "=== %s (%s chars) ===\n", s.name, formatNumber(size))
+		dump.WriteString(prompt[s.start:s.end])
+		if !strings.HasSuffix(prompt[s.start:s.end], "\n") {
+			dump.WriteString("\n")
+		}
+		dump.WriteString("\n")
+	}
+	fmt.Fprintf(&dump, "=== TOTAL: %s chars ===\n", formatNumber(len(prompt)))
+	attrs = append(attrs, "total", len(prompt))
+
+	l.logger.Info("debug: system prompt dump", attrs...)
+
+	path := filepath.Join(dir, "system-prompt-latest.txt")
+	if err := os.WriteFile(path, []byte(dump.String()), 0o640); err != nil {
+		l.logger.Warn("debug: failed to write system prompt dump", "path", path, "error", err)
+	}
+}
+
+// formatNumber formats an integer with comma separators for readability
+// in debug output (e.g., 87494 → "87,494").
+func formatNumber(n int) string {
+	s := fmt.Sprintf("%d", n)
+	if len(s) <= 3 {
+		return s
+	}
+	var sb strings.Builder
+	remainder := len(s) % 3
+	if remainder > 0 {
+		sb.WriteString(s[:remainder])
+	}
+	for i := remainder; i < len(s); i += 3 {
+		if sb.Len() > 0 {
+			sb.WriteByte(',')
+		}
+		sb.WriteString(s[i : i+3])
+	}
 	return sb.String()
 }
 
