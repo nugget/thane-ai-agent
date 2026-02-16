@@ -133,8 +133,11 @@ func TestGetContext_HistoryOnly(t *testing.T) {
 	if !strings.Contains(got, "Recent Conversations") {
 		t.Error("expected Recent Conversations section")
 	}
-	if !strings.Contains(got, "active session") {
-		t.Error("expected active session preamble")
+	if !strings.Contains(got, "ARCHIVED HISTORY") {
+		t.Error("expected ARCHIVED HISTORY framing")
+	}
+	if !strings.Contains(got, "PAST sessions") {
+		t.Error("expected temporal boundary warning")
 	}
 	if !strings.Contains(got, "delegation") {
 		t.Errorf("expected transcript content about delegation, got: %s", got)
@@ -575,6 +578,84 @@ func TestHelpers(t *testing.T) {
 			t.Errorf("got %q", got)
 		}
 	})
+}
+
+func TestMessageTimestamps(t *testing.T) {
+	// Fixed time so we can assert exact RFC3339 output.
+	base := time.Date(2026, 2, 15, 21, 0, 0, 0, time.FixedZone("CST", -6*3600))
+	msgTime := base.Add(-10 * time.Minute) // 20:50
+
+	archive := &mockArchive{
+		sessions: []*memory.Session{
+			{
+				ID:        "s1",
+				StartedAt: base.Add(-1 * time.Hour),
+				EndedAt:   ptrTime(base.Add(-30 * time.Minute)),
+				Title:     "Timestamp test",
+				Metadata:  &memory.SessionMetadata{OneLiner: "Testing timestamps"},
+			},
+		},
+		transcripts: map[string][]memory.ArchivedMessage{
+			"s1": {
+				{Role: "user", Content: "what time is it", Timestamp: msgTime},
+				{Role: "assistant", Content: "It's 8:50 PM", Timestamp: msgTime.Add(5 * time.Second)},
+			},
+		},
+	}
+
+	p := NewProvider(archive, slog.Default(), Config{
+		Timezone:          "America/Chicago",
+		HistoryTokens:     4000,
+		SessionGapMinutes: 30,
+	})
+
+	got := p.getRecentHistory()
+
+	// Each transcript message should have an RFC3339 timestamp prefix.
+	if !strings.Contains(got, "[2026-02-15T20:50:00-06:00] **user:**") {
+		t.Errorf("expected RFC3339 timestamp on user message, got:\n%s", got)
+	}
+	if !strings.Contains(got, "[2026-02-15T20:50:05-06:00] **assistant:**") {
+		t.Errorf("expected RFC3339 timestamp on assistant message, got:\n%s", got)
+	}
+}
+
+func TestSessionHeaderRFC3339(t *testing.T) {
+	base := time.Date(2026, 2, 15, 21, 4, 0, 0, time.FixedZone("CST", -6*3600))
+
+	archive := &mockArchive{
+		sessions: []*memory.Session{
+			{
+				ID:        "s1",
+				StartedAt: base,
+				EndedAt:   ptrTime(base.Add(30 * time.Minute)),
+				Title:     "RFC3339 header test",
+				Metadata:  &memory.SessionMetadata{OneLiner: "Testing header format"},
+			},
+		},
+		transcripts: map[string][]memory.ArchivedMessage{
+			"s1": {
+				{Role: "user", Content: "Hello", Timestamp: base},
+			},
+		},
+	}
+
+	p := NewProvider(archive, slog.Default(), Config{
+		Timezone:          "America/Chicago",
+		HistoryTokens:     4000,
+		SessionGapMinutes: 30,
+	})
+
+	got := p.getRecentHistory()
+
+	// Session header should use RFC3339 format, not "Jan 2 15:04".
+	if !strings.Contains(got, "2026-02-15T21:04:00-06:00") {
+		t.Errorf("expected RFC3339 in session header, got:\n%s", got)
+	}
+	// Should NOT contain old-style "Feb 15 21:04".
+	if strings.Contains(got, "Feb 15 21:04") {
+		t.Errorf("session header should not use old format, got:\n%s", got)
+	}
 }
 
 func TestArchiveError(t *testing.T) {
