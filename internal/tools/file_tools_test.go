@@ -2,10 +2,12 @@ package tools
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestFileTools_ResolvePath(t *testing.T) {
@@ -744,5 +746,195 @@ func TestHumanSize(t *testing.T) {
 				t.Errorf("humanSize(%d) = %q, want %q", tt.bytes, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestFileTools_SearchSkipsDirs(t *testing.T) {
+	workspace, err := os.MkdirTemp("", "thane-skip-test-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(workspace)
+
+	// Create files in normal dir and in a skip dir.
+	for _, d := range []string{"src", "node_modules", ".git/objects"} {
+		if err := os.MkdirAll(filepath.Join(workspace, d), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, f := range []string{
+		"src/main.go",
+		"node_modules/dep.go",
+		".git/objects/pack.go",
+	} {
+		if err := os.WriteFile(filepath.Join(workspace, f), []byte("package x"), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	ft := NewFileTools(workspace, nil)
+	ctx := context.Background()
+
+	result, err := ft.Search(ctx, ".", "*.go", 0)
+	if err != nil {
+		t.Fatalf("Search() error: %v", err)
+	}
+
+	if !strings.Contains(result, "main.go") {
+		t.Errorf("expected main.go in results:\n%s", result)
+	}
+	if strings.Contains(result, "node_modules") {
+		t.Errorf("node_modules should be skipped:\n%s", result)
+	}
+	if strings.Contains(result, ".git") {
+		t.Errorf(".git should be skipped:\n%s", result)
+	}
+}
+
+func TestFileTools_GrepSkipsDirs(t *testing.T) {
+	workspace, err := os.MkdirTemp("", "thane-grep-skip-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(workspace)
+
+	for _, d := range []string{"src", "node_modules", "vendor"} {
+		if err := os.MkdirAll(filepath.Join(workspace, d), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, f := range []string{
+		"src/main.go",
+		"node_modules/dep.go",
+		"vendor/lib.go",
+	} {
+		if err := os.WriteFile(filepath.Join(workspace, f), []byte("FINDME here"), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	ft := NewFileTools(workspace, nil)
+	ctx := context.Background()
+
+	result, err := ft.Grep(ctx, ".", "FINDME", 0, false)
+	if err != nil {
+		t.Fatalf("Grep() error: %v", err)
+	}
+
+	if !strings.Contains(result, "main.go") {
+		t.Errorf("expected main.go in results:\n%s", result)
+	}
+	if strings.Contains(result, "node_modules") {
+		t.Errorf("node_modules should be skipped:\n%s", result)
+	}
+	if strings.Contains(result, "vendor") {
+		t.Errorf("vendor should be skipped:\n%s", result)
+	}
+}
+
+func TestFileTools_SearchTimeout(t *testing.T) {
+	workspace, err := os.MkdirTemp("", "thane-timeout-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(workspace)
+
+	if err := os.WriteFile(filepath.Join(workspace, "a.txt"), []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	ft := NewFileTools(workspace, nil)
+
+	// Use an already-expired deadline to exercise the DeadlineExceeded path.
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+
+	result, err := ft.Search(ctx, ".", "*.txt", 0)
+	if err != nil {
+		t.Fatalf("Search() should not return error on expired deadline, got: %v", err)
+	}
+	if !strings.Contains(result, "timed out") {
+		t.Errorf("expected timeout warning in result:\n%s", result)
+	}
+}
+
+func TestFileTools_SearchCanceled(t *testing.T) {
+	workspace, err := os.MkdirTemp("", "thane-cancel-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(workspace)
+
+	if err := os.WriteFile(filepath.Join(workspace, "a.txt"), []byte("x"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	ft := NewFileTools(workspace, nil)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	result, err := ft.Search(ctx, ".", "*.txt", 0)
+	if err != nil {
+		t.Fatalf("Search() should not return error on cancelled context, got: %v", err)
+	}
+	if !strings.Contains(result, "canceled") {
+		t.Errorf("expected cancellation warning in result:\n%s", result)
+	}
+}
+
+func TestFileTools_GrepTimeout(t *testing.T) {
+	workspace, err := os.MkdirTemp("", "thane-grep-timeout-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(workspace)
+
+	if err := os.WriteFile(filepath.Join(workspace, "a.txt"), []byte("hello"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	ft := NewFileTools(workspace, nil)
+
+	// Use an already-expired deadline to exercise the DeadlineExceeded path.
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+
+	result, err := ft.Grep(ctx, ".", "hello", 0, false)
+	if err != nil {
+		t.Fatalf("Grep() should not return error on expired deadline, got: %v", err)
+	}
+	if !strings.Contains(result, "timed out") {
+		t.Errorf("expected timeout warning in result:\n%s", result)
+	}
+}
+
+func TestFileTools_SearchVisitedLimit(t *testing.T) {
+	workspace, err := os.MkdirTemp("", "thane-visited-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(workspace)
+
+	// Create a small tree that exceeds a low visited cap.
+	const fileCount = 20
+	for i := range fileCount {
+		f := filepath.Join(workspace, fmt.Sprintf("f%03d.txt", i))
+		if err := os.WriteFile(f, []byte("."), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	ft := NewFileTools(workspace, nil)
+	ft.maxVisited = 5 // Low cap so test doesn't need thousands of files.
+	ctx := context.Background()
+
+	result, err := ft.Search(ctx, ".", "*.txt", 0)
+	if err != nil {
+		t.Fatalf("Search() should not return error on visited limit, got: %v", err)
+	}
+
+	if !strings.Contains(result, "visited") {
+		t.Errorf("expected visited-limit warning in result:\n%s", result)
 	}
 }
