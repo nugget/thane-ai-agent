@@ -1372,10 +1372,15 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 			}
 			suffix := shortName + "_ap"
 
-			attrs, _ := json.Marshal(map[string]string{
+			attrs, err := json.Marshal(map[string]string{
 				"ap_name":      source,
 				"last_changed": time.Now().Format(time.RFC3339),
 			})
+			if err != nil {
+				logger.Warn("mqtt AP attributes marshal failed",
+					"entity_id", entityID, "error", err)
+				return
+			}
 
 			pubCtx, pubCancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer pubCancel()
