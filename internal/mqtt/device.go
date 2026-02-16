@@ -19,6 +19,8 @@ type DeviceInfo struct {
 // broker (re-)connect.
 type SensorConfig struct {
 	Name              string     `json:"name"`
+	ObjectID          string     `json:"object_id,omitempty"`
+	HasEntityName     bool       `json:"has_entity_name,omitempty"`
 	UniqueID          string     `json:"unique_id"`
 	StateTopic        string     `json:"state_topic"`
 	AvailabilityTopic string     `json:"availability_topic"`
