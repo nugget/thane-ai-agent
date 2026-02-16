@@ -23,6 +23,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/search"
@@ -149,6 +150,12 @@ type Config struct {
 	// and sensor state reporting. When Broker and DeviceName are both
 	// set, Thane connects to the broker and registers as an HA device.
 	MQTT MQTTConfig `yaml:"mqtt"`
+
+	// Person configures household member presence tracking. When Track
+	// contains entity IDs, the agent receives a "People & Presence"
+	// section in its system prompt on every wake, eliminating tool
+	// calls for basic presence questions.
+	Person PersonConfig `yaml:"person"`
 
 	// Timezone is the IANA timezone for the household (e.g.,
 	// "America/Chicago"). Used in the Current Conditions system prompt
@@ -449,6 +456,17 @@ func (c MQTTConfig) Configured() bool {
 	return c.Broker != "" && c.DeviceName != ""
 }
 
+// PersonConfig configures household member presence tracking. When
+// Track contains entity IDs, the person tracker maintains in-memory
+// state from Home Assistant and injects a presence summary into the
+// agent's system prompt on every wake.
+type PersonConfig struct {
+	// Track is a list of Home Assistant person entity IDs to monitor
+	// (e.g., ["person.nugget", "person.dan"]). Each entry must begin
+	// with "person.". An empty list disables person tracking.
+	Track []string `yaml:"track"`
+}
+
 // ShellExecConfig configures the agent's ability to execute shell
 // commands on the host. Disabled by default for safety. When enabled,
 // commands are filtered through allow and deny lists before execution.
@@ -703,6 +721,11 @@ func (c *Config) Validate() error {
 	}
 	if c.Episodic.SessionGapMinutes < 0 {
 		return fmt.Errorf("episodic.session_gap_minutes %d must be non-negative", c.Episodic.SessionGapMinutes)
+	}
+	for i, id := range c.Person.Track {
+		if !strings.HasPrefix(id, "person.") {
+			return fmt.Errorf("person.track[%d] %q must start with \"person.\"", i, id)
+		}
 	}
 	return nil
 }
