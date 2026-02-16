@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/url"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -270,6 +271,15 @@ func (p *Publisher) setCM(cm *autopaho.ConnectionManager) {
 	p.cm = cm
 }
 
+// ObjectIDPrefix returns the device name normalized for use as an HA
+// object_id prefix (hyphens replaced with underscores, trailing
+// underscore included). HA uses object_id directly as the entity_id,
+// so this prefix ensures entities like sensor.aimee_thane_uptime
+// instead of sensor.uptime.
+func (p *Publisher) ObjectIDPrefix() string {
+	return strings.ReplaceAll(p.cfg.DeviceName, "-", "_") + "_"
+}
+
 // --- Topic helpers ---
 
 func (p *Publisher) baseTopic() string {
@@ -308,12 +318,13 @@ type sensorDef struct {
 
 func (p *Publisher) sensorDefinitions() []sensorDef {
 	avail := p.AvailabilityTopic()
+	prefix := p.ObjectIDPrefix()
 	return []sensorDef{
 		{
 			entitySuffix: "uptime",
 			config: SensorConfig{
 				Name:              "Uptime",
-				ObjectID:          "uptime",
+				ObjectID:          prefix + "uptime",
 				HasEntityName:     true,
 				UniqueID:          p.instanceID + "_uptime",
 				StateTopic:        p.StateTopic("uptime"),
@@ -327,7 +338,7 @@ func (p *Publisher) sensorDefinitions() []sensorDef {
 			entitySuffix: "version",
 			config: SensorConfig{
 				Name:              "Version",
-				ObjectID:          "version",
+				ObjectID:          prefix + "version",
 				HasEntityName:     true,
 				UniqueID:          p.instanceID + "_version",
 				StateTopic:        p.StateTopic("version"),
@@ -341,7 +352,7 @@ func (p *Publisher) sensorDefinitions() []sensorDef {
 			entitySuffix: "tokens_today",
 			config: SensorConfig{
 				Name:              "Tokens Today",
-				ObjectID:          "tokens_today",
+				ObjectID:          prefix + "tokens_today",
 				HasEntityName:     true,
 				UniqueID:          p.instanceID + "_tokens_today",
 				StateTopic:        p.StateTopic("tokens_today"),
@@ -356,7 +367,7 @@ func (p *Publisher) sensorDefinitions() []sensorDef {
 			entitySuffix: "last_request",
 			config: SensorConfig{
 				Name:              "Last Request",
-				ObjectID:          "last_request",
+				ObjectID:          prefix + "last_request",
 				HasEntityName:     true,
 				UniqueID:          p.instanceID + "_last_request",
 				StateTopic:        p.StateTopic("last_request"),
@@ -370,7 +381,7 @@ func (p *Publisher) sensorDefinitions() []sensorDef {
 			entitySuffix: "default_model",
 			config: SensorConfig{
 				Name:              "Default Model",
-				ObjectID:          "default_model",
+				ObjectID:          prefix + "default_model",
 				HasEntityName:     true,
 				UniqueID:          p.instanceID + "_default_model",
 				StateTopic:        p.StateTopic("default_model"),
