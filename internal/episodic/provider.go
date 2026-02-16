@@ -379,7 +379,7 @@ func sessionHasContent(sess *memory.Session) bool {
 		return true
 	}
 	if sess.Metadata != nil {
-		if sess.Metadata.OneLiner != "" || sess.Metadata.Paragraph != "" {
+		if sess.Metadata.OneLiner != "" || sess.Metadata.Paragraph != "" || sess.Metadata.Detailed != "" {
 			return true
 		}
 	}

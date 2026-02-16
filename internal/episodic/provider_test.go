@@ -474,6 +474,7 @@ func TestSessionHasContent(t *testing.T) {
 		{"summary only", &memory.Session{Summary: "A summary"}, true},
 		{"metadata oneliner", &memory.Session{Metadata: &memory.SessionMetadata{OneLiner: "short"}}, true},
 		{"metadata paragraph", &memory.Session{Metadata: &memory.SessionMetadata{Paragraph: "long"}}, true},
+		{"metadata detailed", &memory.Session{Metadata: &memory.SessionMetadata{Detailed: "full detail"}}, true},
 		{"empty metadata", &memory.Session{Metadata: &memory.SessionMetadata{}}, false},
 		{"nil metadata", &memory.Session{}, false},
 		{"completely empty", &memory.Session{}, false},
