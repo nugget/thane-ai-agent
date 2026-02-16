@@ -81,6 +81,34 @@ models:
 #     - topic: homeassistant/+/+/state   # HA entity state changes
 #     - topic: frigate/events            # Frigate camera events
 
+# Person presence tracking (optional)
+# Injects a "People & Presence" section into the system prompt with
+# home/away status and optional room-level presence via UniFi.
+# person:
+#   track:
+#     - person.nugget
+#     - person.monica
+#     - person.dan
+#   devices:                          # MAC → person mapping for room presence
+#     person.nugget:
+#       - mac: "AA:BB:CC:DD:EE:FF"    # iPhone
+#       - mac: "11:22:33:44:55:66"    # MacBook
+#     person.monica:
+#       - mac: "77:88:99:AA:BB:CC"
+#   ap_rooms:                         # AP name → room name mapping
+#     ap-hor-office: office
+#     ap-hor-bedroom: bedroom
+#     ap-hor-guest: guest room
+#     ap-sta-living: stable apartment
+
+# UniFi controller (optional — for room-level presence)
+# Polls wireless client associations to determine which room each person
+# is in based on AP connectivity. Requires person.track and person.devices.
+# unifi:
+#   url: https://192.168.1.1
+#   api_key: your-unifi-api-key
+#   poll_interval: 30                 # seconds, default 30, minimum 10
+
 # Storage paths
 data_dir: ./db
 talents_dir: ./talents

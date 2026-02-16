@@ -157,6 +157,10 @@ type Config struct {
 	// calls for basic presence questions.
 	Person PersonConfig `yaml:"person"`
 
+	// Unifi configures the UniFi network controller connection for
+	// room-level presence detection via wireless AP client associations.
+	Unifi UnifiConfig `yaml:"unifi"`
+
 	// Timezone is the IANA timezone for the household (e.g.,
 	// "America/Chicago"). Used in the Current Conditions system prompt
 	// section so the agent reasons about local time. If empty, the
@@ -465,6 +469,45 @@ type PersonConfig struct {
 	// (e.g., ["person.nugget", "person.dan"]). Each entry must begin
 	// with "person.". An empty list disables person tracking.
 	Track []string `yaml:"track"`
+
+	// Devices maps tracked person entity IDs to their wireless device
+	// MAC addresses. Used by the UniFi poller to determine which person
+	// a wireless client belongs to for room-level presence.
+	Devices map[string][]DeviceMapping `yaml:"devices"`
+
+	// APRooms maps AP names (e.g., "ap-hor-office") to human-readable
+	// room names (e.g., "office"). Only APs listed here contribute to
+	// room presence; unlisted APs are ignored.
+	APRooms map[string]string `yaml:"ap_rooms"`
+}
+
+// DeviceMapping maps a MAC address to a tracked person's wireless device.
+type DeviceMapping struct {
+	// MAC is the device's MAC address (e.g., "AA:BB:CC:DD:EE:FF").
+	// Case-insensitive; normalized to lowercase at startup.
+	MAC string `yaml:"mac"`
+}
+
+// UnifiConfig configures the UniFi network controller connection for
+// room-level presence detection via AP client associations.
+type UnifiConfig struct {
+	// URL is the base URL of the UniFi controller
+	// (e.g., "https://192.168.1.1").
+	URL string `yaml:"url"`
+
+	// APIKey is the API key for UniFi controller authentication.
+	// Sent as X-API-KEY header.
+	APIKey string `yaml:"api_key"`
+
+	// PollIntervalSec is how often (in seconds) to poll for wireless
+	// client station data. Default: 30. Minimum: 10.
+	PollIntervalSec int `yaml:"poll_interval"`
+}
+
+// Configured reports whether both URL and APIKey are set, indicating
+// the UniFi integration should be enabled.
+func (c UnifiConfig) Configured() bool {
+	return c.URL != "" && c.APIKey != ""
 }
 
 // ShellExecConfig configures the agent's ability to execute shell
@@ -624,6 +667,10 @@ func (c *Config) applyDefaults() {
 		c.MQTT.PublishIntervalSec = 60
 	}
 
+	if c.Unifi.PollIntervalSec == 0 {
+		c.Unifi.PollIntervalSec = 30
+	}
+
 	if c.Episodic.LookbackDays == 0 {
 		c.Episodic.LookbackDays = 2
 	}
@@ -726,6 +773,26 @@ func (c *Config) Validate() error {
 		if !strings.HasPrefix(id, "person.") {
 			return fmt.Errorf("person.track[%d] %q must start with \"person.\"", i, id)
 		}
+	}
+	// Validate person.devices references only tracked entities.
+	tracked := make(map[string]bool, len(c.Person.Track))
+	for _, id := range c.Person.Track {
+		tracked[id] = true
+	}
+	for entityID := range c.Person.Devices {
+		if !tracked[entityID] {
+			return fmt.Errorf("person.devices references untracked entity %q", entityID)
+		}
+	}
+	for entityID, devs := range c.Person.Devices {
+		for i, d := range devs {
+			if d.MAC == "" {
+				return fmt.Errorf("person.devices[%s][%d].mac must not be empty", entityID, i)
+			}
+		}
+	}
+	if c.Unifi.Configured() && c.Unifi.PollIntervalSec < 10 {
+		return fmt.Errorf("unifi.poll_interval %d too low (minimum 10 seconds)", c.Unifi.PollIntervalSec)
 	}
 	return nil
 }

@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -149,5 +150,74 @@ func TestAgentConfig_NoDefaultsWhenDisabled(t *testing.T) {
 
 	if len(cfg.Agent.Iter0Tools) != 0 {
 		t.Errorf("iter0_tools should be empty when delegation_required is false, got %v", cfg.Agent.Iter0Tools)
+	}
+}
+
+func TestValidate_PersonDevicesUntrackedEntity(t *testing.T) {
+	cfg := Default()
+	cfg.Person.Track = []string{"person.alice"}
+	cfg.Person.Devices = map[string][]DeviceMapping{
+		"person.bob": {{MAC: "aa:bb:cc:dd:ee:ff"}}, // bob is not tracked
+	}
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected error for untracked entity in person.devices")
+	}
+	if !strings.Contains(err.Error(), "person.bob") {
+		t.Errorf("error should mention person.bob, got: %v", err)
+	}
+}
+
+func TestValidate_PersonDevicesEmptyMAC(t *testing.T) {
+	cfg := Default()
+	cfg.Person.Track = []string{"person.alice"}
+	cfg.Person.Devices = map[string][]DeviceMapping{
+		"person.alice": {{MAC: ""}},
+	}
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected error for empty MAC address")
+	}
+	if !strings.Contains(err.Error(), "mac must not be empty") {
+		t.Errorf("error should mention empty mac, got: %v", err)
+	}
+}
+
+func TestValidate_UnifiPollIntervalTooLow(t *testing.T) {
+	cfg := Default()
+	cfg.Unifi = UnifiConfig{
+		URL:             "https://192.168.1.1",
+		APIKey:          "test-key",
+		PollIntervalSec: 5, // below minimum of 10
+	}
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected error for poll_interval below 10")
+	}
+	if !strings.Contains(err.Error(), "unifi.poll_interval") {
+		t.Errorf("error should mention unifi.poll_interval, got: %v", err)
+	}
+}
+
+func TestApplyDefaults_UnifiPollInterval(t *testing.T) {
+	cfg := Default()
+	if cfg.Unifi.PollIntervalSec != 30 {
+		t.Errorf("expected default poll_interval 30, got %d", cfg.Unifi.PollIntervalSec)
+	}
+}
+
+func TestValidate_PersonDevicesValid(t *testing.T) {
+	cfg := Default()
+	cfg.Person.Track = []string{"person.alice"}
+	cfg.Person.Devices = map[string][]DeviceMapping{
+		"person.alice": {{MAC: "aa:bb:cc:dd:ee:ff"}},
+	}
+
+	err := cfg.Validate()
+	if err != nil {
+		t.Fatalf("unexpected validation error: %v", err)
 	}
 }
