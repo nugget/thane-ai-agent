@@ -1283,12 +1283,14 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// Optional: publishes HA MQTT discovery messages and periodic sensor
 	// state updates so Thane appears as a native HA device.
 	var mqttPub *mqtt.Publisher
+	var mqttInstanceID string
 	if cfg.MQTT.Configured() {
-		instanceID, err := mqtt.LoadOrCreateInstanceID(cfg.DataDir)
+		var err error
+		mqttInstanceID, err = mqtt.LoadOrCreateInstanceID(cfg.DataDir)
 		if err != nil {
 			return fmt.Errorf("load mqtt instance id: %w", err)
 		}
-		logger.Info("mqtt instance ID loaded", "instance_id", instanceID)
+		logger.Info("mqtt instance ID loaded", "instance_id", mqttInstanceID)
 
 		// Timezone for midnight token counter reset.
 		var tokenLoc *time.Location
@@ -1303,7 +1305,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 			server: server,
 		}
 
-		mqttPub = mqtt.New(cfg.MQTT, instanceID, dailyTokens, statsAdapter, logger)
+		mqttPub = mqtt.New(cfg.MQTT, mqttInstanceID, dailyTokens, statsAdapter, logger)
 		go func() {
 			if err := mqttPub.Start(ctx); err != nil {
 				logger.Error("mqtt publisher failed", "error", err)
@@ -1329,6 +1331,70 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		)
 	} else {
 		logger.Info("mqtt publishing disabled (not configured)")
+	}
+
+	// --- MQTT AP presence sensors ---
+	// When both MQTT and UniFi room presence are active, register a
+	// per-person AP sensor with the MQTT publisher and observe room
+	// changes so state is published only when the AP actually changes.
+	if mqttPub != nil && personTracker != nil && cfg.Unifi.Configured() {
+		var apSensors []mqtt.DynamicSensor
+		for _, entityID := range cfg.Person.Track {
+			shortName := entityID
+			if idx := strings.IndexByte(entityID, '.'); idx >= 0 {
+				shortName = entityID[idx+1:]
+			}
+			suffix := shortName + "_ap"
+
+			apSensors = append(apSensors, mqtt.DynamicSensor{
+				EntitySuffix: suffix,
+				Config: mqtt.SensorConfig{
+					Name:                person.TitleCase(shortName) + " AP",
+					ObjectID:            suffix,
+					HasEntityName:       true,
+					UniqueID:            mqttInstanceID + "_" + suffix,
+					StateTopic:          "thane/" + cfg.MQTT.DeviceName + "/" + suffix + "/state",
+					JsonAttributesTopic: "thane/" + cfg.MQTT.DeviceName + "/" + suffix + "/attributes",
+					AvailabilityTopic:   "thane/" + cfg.MQTT.DeviceName + "/availability",
+					Device:              mqttPub.Device(),
+					Icon:                "mdi:access-point",
+				},
+			})
+		}
+
+		mqttPub.RegisterSensors(apSensors)
+
+		// Route room changes from person tracker to MQTT publishes.
+		personTracker.OnRoomChange(func(entityID, room, source string) {
+			shortName := entityID
+			if idx := strings.IndexByte(entityID, '.'); idx >= 0 {
+				shortName = entityID[idx+1:]
+			}
+			suffix := shortName + "_ap"
+
+			attrs, err := json.Marshal(map[string]string{
+				"ap_name":      source,
+				"last_changed": time.Now().Format(time.RFC3339),
+			})
+			if err != nil {
+				logger.Warn("mqtt AP attributes marshal failed",
+					"entity_id", entityID, "error", err)
+				return
+			}
+
+			pubCtx, pubCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer pubCancel()
+
+			if err := mqttPub.PublishDynamicState(pubCtx, suffix, room, attrs); err != nil {
+				logger.Warn("mqtt AP presence publish failed",
+					"entity_id", entityID, "room", room, "error", err)
+			} else {
+				logger.Debug("mqtt AP presence published",
+					"entity_id", entityID, "room", room, "source", source)
+			}
+		})
+
+		logger.Info("mqtt AP presence sensors registered", "count", len(apSensors))
 	}
 
 	// --- Signal handling and graceful shutdown ---

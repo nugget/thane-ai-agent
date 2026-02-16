@@ -1,6 +1,7 @@
 package mqtt
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -231,6 +232,110 @@ func TestPublisher_SetMessageHandler(t *testing.T) {
 	}
 	if string(gotPayload) != "hello" {
 		t.Errorf("payload = %q, want %q", gotPayload, "hello")
+	}
+}
+
+func TestPublisher_RegisterSensors(t *testing.T) {
+	cfg := config.MQTTConfig{
+		Broker:             "mqtt://localhost:1883",
+		DeviceName:         "test-thane",
+		DiscoveryPrefix:    "homeassistant",
+		PublishIntervalSec: 60,
+	}
+	p := New(cfg, "instance-123", NewDailyTokens(time.UTC), nil, nil)
+
+	// No dynamic sensors initially.
+	staticCount := len(p.sensorDefinitions())
+
+	p.RegisterSensors([]DynamicSensor{
+		{
+			EntitySuffix: "nugget_ap",
+			Config: SensorConfig{
+				Name:     "Nugget AP",
+				UniqueID: "instance-123_nugget_ap",
+			},
+		},
+		{
+			EntitySuffix: "dan_ap",
+			Config: SensorConfig{
+				Name:     "Dan AP",
+				UniqueID: "instance-123_dan_ap",
+			},
+		},
+	})
+
+	p.mu.Lock()
+	dynCount := len(p.dynamicSensors)
+	p.mu.Unlock()
+
+	if dynCount != 2 {
+		t.Errorf("dynamicSensors count = %d, want 2", dynCount)
+	}
+
+	// Static sensors should be unaffected.
+	if got := len(p.sensorDefinitions()); got != staticCount {
+		t.Errorf("static sensor count changed: got %d, want %d", got, staticCount)
+	}
+}
+
+func TestPublisher_AttributesTopic(t *testing.T) {
+	cfg := config.MQTTConfig{
+		Broker:          "mqtt://localhost:1883",
+		DeviceName:      "aimee-thane",
+		DiscoveryPrefix: "homeassistant",
+	}
+	p := New(cfg, "test-id", NewDailyTokens(time.UTC), nil, nil)
+
+	got := p.attributesTopic("nugget_ap")
+	want := "thane/aimee-thane/nugget_ap/attributes"
+	if got != want {
+		t.Errorf("attributesTopic() = %q, want %q", got, want)
+	}
+}
+
+func TestPublisher_DeviceGetter(t *testing.T) {
+	cfg := config.MQTTConfig{
+		Broker:          "mqtt://localhost:1883",
+		DeviceName:      "test-device",
+		DiscoveryPrefix: "homeassistant",
+	}
+	p := New(cfg, "instance-abc", NewDailyTokens(time.UTC), nil, nil)
+
+	dev := p.Device()
+	if dev.Name != "test-device" {
+		t.Errorf("Device().Name = %q, want %q", dev.Name, "test-device")
+	}
+	if len(dev.Identifiers) != 1 || dev.Identifiers[0] != "instance-abc" {
+		t.Errorf("Device().Identifiers = %v, want [instance-abc]", dev.Identifiers)
+	}
+}
+
+func TestSensorConfig_JsonAttributesTopic(t *testing.T) {
+	// With JsonAttributesTopic set.
+	cfg := SensorConfig{
+		Name:                "Test",
+		UniqueID:            "test_1",
+		StateTopic:          "thane/test/state",
+		AvailabilityTopic:   "thane/test/availability",
+		JsonAttributesTopic: "thane/test/attributes",
+		Device:              DeviceInfo{Identifiers: []string{"id"}, Name: "d"},
+	}
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("Marshal error: %v", err)
+	}
+	if !strings.Contains(string(data), `"json_attributes_topic"`) {
+		t.Errorf("expected json_attributes_topic in JSON:\n%s", data)
+	}
+
+	// Without JsonAttributesTopic — omitempty should exclude it.
+	cfg.JsonAttributesTopic = ""
+	data, err = json.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("Marshal error: %v", err)
+	}
+	if strings.Contains(string(data), `"json_attributes_topic"`) {
+		t.Errorf("json_attributes_topic should be omitted when empty:\n%s", data)
 	}
 }
 
