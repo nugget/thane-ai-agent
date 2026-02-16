@@ -1129,14 +1129,18 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		limiter := homeassistant.NewEntityRateLimiter(cfg.HomeAssistant.Subscribe.RateLimitPerMinute)
 		cooldown := time.Duration(cfg.HomeAssistant.Subscribe.CooldownMinutes) * time.Minute
 
-		bridge := NewWakeBridge(WakeBridgeConfig{
+		wakeCfg := WakeBridgeConfig{
 			Store:    anticipationStore,
 			Runner:   loop,
 			Provider: anticipationProvider,
 			Logger:   logger,
 			Ctx:      ctx,
 			Cooldown: cooldown,
-		})
+		}
+		if ha != nil {
+			wakeCfg.HA = ha
+		}
+		bridge := NewWakeBridge(wakeCfg)
 
 		// Compose handler: person tracker and wake bridge both see
 		// every state change that passes the filter and rate limiter.

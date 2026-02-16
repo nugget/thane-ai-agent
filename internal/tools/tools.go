@@ -898,13 +898,13 @@ func (r *Registry) handleGetState(ctx context.Context, args map[string]any) (str
 		return "", err
 	}
 
-	return formatEntityState(state), nil
+	return FormatEntityState(state), nil
 }
 
-// formatEntityState formats a Home Assistant entity state for LLM
-// consumption. Used by both get_state and the post-action verification
-// in control_device.
-func formatEntityState(state *homeassistant.State) string {
+// FormatEntityState formats a Home Assistant entity state for LLM
+// consumption. Used by get_state, control_device post-action verification,
+// and anticipation wake context injection.
+func FormatEntityState(state *homeassistant.State) string {
 	result := fmt.Sprintf("Entity: %s\nState: %s\n", state.EntityID, state.State)
 
 	if name, ok := state.Attributes["friendly_name"].(string); ok {
@@ -1126,7 +1126,7 @@ func (r *Registry) handleControlDevice(ctx context.Context, args map[string]any)
 		result += fmt.Sprintf("\n(Could not verify state: %v)", err)
 		return result, nil
 	}
-	result += "\nPost-action state:\n" + formatEntityState(state)
+	result += "\nPost-action state:\n" + FormatEntityState(state)
 
 	return result, nil
 }

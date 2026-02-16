@@ -306,6 +306,82 @@ func TestFormatMatchedContext(t *testing.T) {
 	}
 }
 
+func TestContextEntities_RoundTrip(t *testing.T) {
+	store := setupTestStore(t)
+
+	entities := []string{"sensor.temperature", "light.kitchen", "binary_sensor.front_door"}
+	a := &Anticipation{
+		Description:     "Dan arrives home",
+		Context:         "Check door and lights",
+		ContextEntities: entities,
+		Trigger:         Trigger{EntityID: "person.dan", EntityState: "home"},
+	}
+
+	if err := store.Create(a); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	got, err := store.Get(a.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+
+	if len(got.ContextEntities) != len(entities) {
+		t.Fatalf("context_entities length = %d, want %d", len(got.ContextEntities), len(entities))
+	}
+	for i, want := range entities {
+		if got.ContextEntities[i] != want {
+			t.Errorf("context_entities[%d] = %q, want %q", i, got.ContextEntities[i], want)
+		}
+	}
+}
+
+func TestContextEntities_Empty(t *testing.T) {
+	store := setupTestStore(t)
+
+	a := &Anticipation{
+		Description: "No entities",
+		Context:     "Plain anticipation",
+		Trigger:     Trigger{Zone: "home"},
+	}
+
+	if err := store.Create(a); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	got, err := store.Get(a.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+
+	if len(got.ContextEntities) != 0 {
+		t.Errorf("context_entities = %v, want empty", got.ContextEntities)
+	}
+}
+
+func TestContextEntities_Active(t *testing.T) {
+	store := setupTestStore(t)
+
+	entities := []string{"sensor.temp"}
+	store.Create(&Anticipation{
+		Description:     "With entities",
+		Context:         "Check temp",
+		ContextEntities: entities,
+		Trigger:         Trigger{EntityID: "person.dan", EntityState: "home"},
+	})
+
+	active, err := store.Active()
+	if err != nil {
+		t.Fatalf("active: %v", err)
+	}
+	if len(active) != 1 {
+		t.Fatalf("active count = %d, want 1", len(active))
+	}
+	if len(active[0].ContextEntities) != 1 || active[0].ContextEntities[0] != "sensor.temp" {
+		t.Errorf("active context_entities = %v, want [sensor.temp]", active[0].ContextEntities)
+	}
+}
+
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsAt(s, substr))
 }

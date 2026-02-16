@@ -13,14 +13,15 @@ import (
 
 // Anticipation represents something the agent is expecting/waiting for.
 type Anticipation struct {
-	ID          string            `json:"id"`
-	Description string            `json:"description"` // Human-readable: "Dan's flight arriving"
-	Context     string            `json:"context"`     // Injected on match: instructions/reasoning
-	Trigger     Trigger           `json:"trigger"`     // When this anticipation activates
-	CreatedAt   time.Time         `json:"created_at"`
-	ExpiresAt   *time.Time        `json:"expires_at,omitempty"` // nil = no expiration
-	ResolvedAt  *time.Time        `json:"resolved_at,omitempty"`
-	Metadata    map[string]string `json:"metadata,omitempty"` // Arbitrary k/v for matching
+	ID              string            `json:"id"`
+	Description     string            `json:"description"`                // Human-readable: "Dan's flight arriving"
+	Context         string            `json:"context"`                    // Injected on match: instructions/reasoning
+	ContextEntities []string          `json:"context_entities,omitempty"` // Entity IDs to snapshot on wake
+	Trigger         Trigger           `json:"trigger"`                    // When this anticipation activates
+	CreatedAt       time.Time         `json:"created_at"`
+	ExpiresAt       *time.Time        `json:"expires_at,omitempty"` // nil = no expiration
+	ResolvedAt      *time.Time        `json:"resolved_at,omitempty"`
+	Metadata        map[string]string `json:"metadata,omitempty"` // Arbitrary k/v for matching
 }
 
 // Trigger defines conditions for when an anticipation activates.
@@ -70,10 +71,20 @@ func (s *Store) migrate() error {
 			resolved_at TIMESTAMP,
 			deleted_at TIMESTAMP
 		);
-		CREATE INDEX IF NOT EXISTS idx_anticipations_active 
+		CREATE INDEX IF NOT EXISTS idx_anticipations_active
 			ON anticipations(resolved_at, deleted_at, expires_at);
 	`)
-	return err
+	if err != nil {
+		return err
+	}
+
+	// Additive migration: context_entities_json stores a JSON array of
+	// entity IDs to fetch when this anticipation fires. ALTER TABLE ADD
+	// COLUMN fails harmlessly when the column already exists, so the
+	// error is intentionally discarded.
+	_, _ = s.db.Exec(`ALTER TABLE anticipations ADD COLUMN context_entities_json TEXT`)
+
+	return nil
 }
 
 // Create adds a new anticipation.
@@ -95,10 +106,15 @@ func (s *Store) Create(a *Anticipation) error {
 		metadataJSON, _ = json.Marshal(a.Metadata)
 	}
 
+	var contextEntitiesJSON []byte
+	if len(a.ContextEntities) > 0 {
+		contextEntitiesJSON, _ = json.Marshal(a.ContextEntities)
+	}
+
 	_, err = s.db.Exec(`
-		INSERT INTO anticipations (id, description, context, trigger_json, metadata_json, created_at, expires_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
-	`, a.ID, a.Description, a.Context, string(triggerJSON), string(metadataJSON), a.CreatedAt, a.ExpiresAt)
+		INSERT INTO anticipations (id, description, context, trigger_json, metadata_json, context_entities_json, created_at, expires_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	`, a.ID, a.Description, a.Context, string(triggerJSON), string(metadataJSON), string(contextEntitiesJSON), a.CreatedAt, a.ExpiresAt)
 
 	return err
 }
@@ -106,9 +122,9 @@ func (s *Store) Create(a *Anticipation) error {
 // Active returns all non-resolved, non-expired, non-deleted anticipations.
 func (s *Store) Active() ([]*Anticipation, error) {
 	rows, err := s.db.Query(`
-		SELECT id, description, context, trigger_json, metadata_json, created_at, expires_at
+		SELECT id, description, context, trigger_json, metadata_json, context_entities_json, created_at, expires_at
 		FROM anticipations
-		WHERE resolved_at IS NULL 
+		WHERE resolved_at IS NULL
 		  AND deleted_at IS NULL
 		  AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
 		ORDER BY created_at ASC
@@ -124,17 +140,17 @@ func (s *Store) Active() ([]*Anticipation, error) {
 // Get retrieves a single anticipation by ID.
 func (s *Store) Get(id string) (*Anticipation, error) {
 	row := s.db.QueryRow(`
-		SELECT id, description, context, trigger_json, metadata_json, created_at, expires_at, resolved_at
+		SELECT id, description, context, trigger_json, metadata_json, context_entities_json, created_at, expires_at, resolved_at
 		FROM anticipations
 		WHERE id = ? AND deleted_at IS NULL
 	`, id)
 
 	a := &Anticipation{}
-	var triggerJSON, metadataJSON sql.NullString
+	var triggerJSON, metadataJSON, contextEntitiesJSON sql.NullString
 	var expiresAt, resolvedAt sql.NullTime
 
 	err := row.Scan(&a.ID, &a.Description, &a.Context, &triggerJSON, &metadataJSON,
-		&a.CreatedAt, &expiresAt, &resolvedAt)
+		&contextEntitiesJSON, &a.CreatedAt, &expiresAt, &resolvedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -147,6 +163,9 @@ func (s *Store) Get(id string) (*Anticipation, error) {
 	}
 	if metadataJSON.Valid && metadataJSON.String != "" {
 		_ = json.Unmarshal([]byte(metadataJSON.String), &a.Metadata)
+	}
+	if contextEntitiesJSON.Valid && contextEntitiesJSON.String != "" {
+		_ = json.Unmarshal([]byte(contextEntitiesJSON.String), &a.ContextEntities)
 	}
 	if expiresAt.Valid {
 		a.ExpiresAt = &expiresAt.Time
@@ -178,11 +197,11 @@ func (s *Store) scanAnticipations(rows *sql.Rows) ([]*Anticipation, error) {
 	var result []*Anticipation
 	for rows.Next() {
 		a := &Anticipation{}
-		var triggerJSON, metadataJSON sql.NullString
+		var triggerJSON, metadataJSON, contextEntitiesJSON sql.NullString
 		var expiresAt sql.NullTime
 
 		err := rows.Scan(&a.ID, &a.Description, &a.Context, &triggerJSON, &metadataJSON,
-			&a.CreatedAt, &expiresAt)
+			&contextEntitiesJSON, &a.CreatedAt, &expiresAt)
 		if err != nil {
 			return nil, err
 		}
@@ -192,6 +211,9 @@ func (s *Store) scanAnticipations(rows *sql.Rows) ([]*Anticipation, error) {
 		}
 		if metadataJSON.Valid && metadataJSON.String != "" {
 			_ = json.Unmarshal([]byte(metadataJSON.String), &a.Metadata)
+		}
+		if contextEntitiesJSON.Valid && contextEntitiesJSON.String != "" {
+			_ = json.Unmarshal([]byte(contextEntitiesJSON.String), &a.ContextEntities)
 		}
 		if expiresAt.Valid {
 			a.ExpiresAt = &expiresAt.Time
