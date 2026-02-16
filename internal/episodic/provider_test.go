@@ -404,12 +404,88 @@ func TestNoMetadata(t *testing.T) {
 	})
 
 	got := p.getRecentHistory()
-	if got == "" {
-		t.Fatal("expected some output for session without metadata")
+	if got != "" {
+		t.Errorf("expected empty output for session without metadata, got:\n%s", got)
 	}
-	// Should contain the transcript since it's session 0.
-	if !strings.Contains(got, "Test message") {
-		t.Error("expected transcript excerpt for most recent session")
+}
+
+func TestEmptySessionsSkipped(t *testing.T) {
+	now := time.Now().UTC()
+
+	archive := &mockArchive{
+		sessions: []*memory.Session{
+			// Most recent: has title → should be included.
+			{
+				ID:        "s1",
+				StartedAt: timeAt(now, 1),
+				EndedAt:   ptrTime(timeAt(now, 0.5)),
+				Title:     "Useful session",
+			},
+			// Second: empty delegate → should be skipped.
+			{
+				ID:        "s2",
+				StartedAt: timeAt(now, 2),
+				EndedAt:   ptrTime(timeAt(now, 1.5)),
+			},
+			// Third: has summary → should be included.
+			{
+				ID:        "s3",
+				StartedAt: timeAt(now, 3),
+				EndedAt:   ptrTime(timeAt(now, 2.5)),
+				Summary:   "Earlier session with content.",
+			},
+			// Fourth: another empty delegate → should be skipped.
+			{
+				ID:        "s4",
+				StartedAt: timeAt(now, 4),
+				EndedAt:   ptrTime(timeAt(now, 3.5)),
+			},
+		},
+		transcripts: map[string][]memory.ArchivedMessage{
+			"s1": {{Role: "user", Content: "Hello", Timestamp: timeAt(now, 1)}},
+		},
+	}
+
+	p := NewProvider(archive, slog.Default(), Config{
+		HistoryTokens:     4000,
+		SessionGapMinutes: 30,
+	})
+
+	got := p.getRecentHistory()
+
+	if !strings.Contains(got, "Useful session") {
+		t.Error("expected session with title to appear")
+	}
+	if !strings.Contains(got, "Earlier session with content.") {
+		t.Error("expected session with summary to appear")
+	}
+	if strings.Contains(got, "(no summary)") {
+		t.Error("empty sessions should not produce '(no summary)' entries")
+	}
+}
+
+func TestSessionHasContent(t *testing.T) {
+	tests := []struct {
+		name    string
+		session *memory.Session
+		want    bool
+	}{
+		{"title only", &memory.Session{Title: "A title"}, true},
+		{"summary only", &memory.Session{Summary: "A summary"}, true},
+		{"metadata oneliner", &memory.Session{Metadata: &memory.SessionMetadata{OneLiner: "short"}}, true},
+		{"metadata paragraph", &memory.Session{Metadata: &memory.SessionMetadata{Paragraph: "long"}}, true},
+		{"empty metadata", &memory.Session{Metadata: &memory.SessionMetadata{}}, false},
+		{"nil metadata", &memory.Session{}, false},
+		{"completely empty", &memory.Session{}, false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := sessionHasContent(tc.session)
+			if got != tc.want {
+				t.Errorf("sessionHasContent() = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 
