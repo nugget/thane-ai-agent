@@ -49,8 +49,9 @@ type WakeBridge struct {
 
 	cooldown time.Duration
 
-	mu       sync.Mutex
-	lastFire map[string]time.Time // anticipation ID → last trigger time
+	mu          sync.Mutex
+	lastFire    map[string]time.Time // anticipation ID → last trigger time
+	lastCleanup time.Time            // last time stale entries were evicted
 }
 
 // NewWakeBridge creates a wake bridge with the given configuration.
@@ -74,11 +75,17 @@ func NewWakeBridge(cfg WakeBridgeConfig) *WakeBridge {
 	}
 }
 
+// cleanupInterval controls how often stale cooldown entries are evicted.
+const cleanupInterval = 10 * time.Minute
+
 // HandleStateChange is a homeassistant.StateWatchHandler. It builds a
 // WakeContext from the state change, updates the anticipation provider
 // for system prompt injection, queries the anticipation store for
 // matches, and fires async agent runs for each match not on cooldown.
 func (b *WakeBridge) HandleStateChange(entityID, oldState, newState string) {
+	// Periodically evict stale cooldown entries to prevent unbounded map growth.
+	b.maybeCleanup()
+
 	wakeCtx := anticipation.WakeContext{
 		Time:        time.Now(),
 		EventType:   "state_change",
@@ -131,10 +138,17 @@ func (b *WakeBridge) HandleStateChange(entityID, oldState, newState string) {
 	}
 }
 
+// wakeTimeout bounds how long a single anticipation wake may run.
+const wakeTimeout = 5 * time.Minute
+
 // runWake executes a single agent wake for a matched anticipation.
-// Errors are logged but never propagated — the state watcher must
-// not be disrupted by agent failures.
+// Each wake runs with a bounded timeout so a stuck LLM call cannot
+// leak a goroutine. Errors are logged but never propagated — the
+// state watcher must not be disrupted by agent failures.
 func (b *WakeBridge) runWake(anticipationID, description, message string) {
+	ctx, cancel := context.WithTimeout(b.ctx, wakeTimeout)
+	defer cancel()
+
 	req := &agent.Request{
 		Messages: []agent.Message{{Role: "user", Content: message}},
 		Hints: map[string]string{
@@ -146,7 +160,7 @@ func (b *WakeBridge) runWake(anticipationID, description, message string) {
 		},
 	}
 
-	resp, err := b.runner.Run(b.ctx, req, nil)
+	resp, err := b.runner.Run(ctx, req, nil)
 	if err != nil {
 		b.logger.Error("anticipation wake failed",
 			"anticipation_id", anticipationID,
@@ -179,6 +193,26 @@ func (b *WakeBridge) markTriggered(id string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.lastFire[id] = time.Now()
+}
+
+// maybeCleanup evicts stale cooldown entries if enough time has passed
+// since the last cleanup. Called on every HandleStateChange to bound
+// map growth without requiring a separate goroutine.
+func (b *WakeBridge) maybeCleanup() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if time.Since(b.lastCleanup) < cleanupInterval {
+		return
+	}
+	b.lastCleanup = time.Now()
+
+	threshold := 2 * b.cooldown
+	for id, t := range b.lastFire {
+		if time.Since(t) > threshold {
+			delete(b.lastFire, id)
+		}
+	}
 }
 
 // formatWakeMessage builds the user-facing message for an anticipation

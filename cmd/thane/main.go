@@ -1024,11 +1024,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	if haWS != nil {
 		filter := homeassistant.NewEntityFilter(cfg.HomeAssistant.Subscribe.EntityGlobs, logger)
 		limiter := homeassistant.NewEntityRateLimiter(cfg.HomeAssistant.Subscribe.RateLimitPerMinute)
-
-		cooldown := 5 * time.Minute
-		if cfg.HomeAssistant.Subscribe.CooldownMinutes > 0 {
-			cooldown = time.Duration(cfg.HomeAssistant.Subscribe.CooldownMinutes) * time.Minute
-		}
+		cooldown := time.Duration(cfg.HomeAssistant.Subscribe.CooldownMinutes) * time.Minute
 
 		bridge := NewWakeBridge(WakeBridgeConfig{
 			Store:    anticipationStore,

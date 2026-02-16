@@ -210,7 +210,7 @@ type SubscribeConfig struct {
 
 	// CooldownMinutes is the per-anticipation cooldown period in minutes.
 	// After an anticipation triggers a wake, it cannot trigger again until
-	// this interval elapses. Zero defaults to 5 minutes.
+	// this interval elapses. Defaults to 5 minutes via applyDefaults.
 	CooldownMinutes int `yaml:"cooldown_minutes"`
 }
 
@@ -619,6 +619,10 @@ func (c *Config) applyDefaults() {
 			"session_working_memory",
 			"archive_search",
 		}
+	}
+
+	if c.HomeAssistant.Subscribe.CooldownMinutes == 0 {
+		c.HomeAssistant.Subscribe.CooldownMinutes = 5
 	}
 
 	for i := range c.Models.Available {
