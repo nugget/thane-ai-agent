@@ -171,10 +171,12 @@ func TestPublisher_SensorDefinitions(t *testing.T) {
 				d.entitySuffix, d.config.UniqueID, "instance-123_")
 		}
 
-		// ObjectID must match entitySuffix so HA derives clean entity IDs.
-		if d.config.ObjectID != d.entitySuffix {
+		// ObjectID must include device name prefix so HA derives
+		// entity IDs like sensor.test_thane_uptime (not sensor.uptime).
+		wantObjID := p.ObjectIDPrefix() + d.entitySuffix
+		if d.config.ObjectID != wantObjID {
 			t.Errorf("sensor %s: ObjectID = %q, want %q",
-				d.entitySuffix, d.config.ObjectID, d.entitySuffix)
+				d.entitySuffix, d.config.ObjectID, wantObjID)
 		}
 
 		// HasEntityName must be true so HA treats the sensor Name as
@@ -307,6 +309,28 @@ func TestPublisher_DeviceGetter(t *testing.T) {
 	}
 	if len(dev.Identifiers) != 1 || dev.Identifiers[0] != "instance-abc" {
 		t.Errorf("Device().Identifiers = %v, want [instance-abc]", dev.Identifiers)
+	}
+}
+
+func TestPublisher_ObjectIDPrefix(t *testing.T) {
+	tests := []struct {
+		deviceName string
+		want       string
+	}{
+		{"aimee-thane", "aimee_thane_"},
+		{"simple", "simple_"},
+		{"multi-hyphen-name", "multi_hyphen_name_"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.deviceName, func(t *testing.T) {
+			p := New(config.MQTTConfig{
+				Broker:     "mqtt://localhost:1883",
+				DeviceName: tt.deviceName,
+			}, "id", NewDailyTokens(time.UTC), nil, nil)
+			if got := p.ObjectIDPrefix(); got != tt.want {
+				t.Errorf("ObjectIDPrefix() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 

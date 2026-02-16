@@ -1354,7 +1354,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 				EntitySuffix: suffix,
 				Config: mqtt.SensorConfig{
 					Name:                person.TitleCase(shortName) + " AP",
-					ObjectID:            suffix,
+					ObjectID:            mqttPub.ObjectIDPrefix() + suffix,
 					HasEntityName:       true,
 					UniqueID:            mqttInstanceID + "_" + suffix,
 					StateTopic:          mqttPub.StateTopic(suffix),
