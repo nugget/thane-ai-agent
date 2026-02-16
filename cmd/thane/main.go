@@ -28,6 +28,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -49,12 +50,14 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/mcp"
 	"github.com/nugget/thane-ai-agent/internal/memory"
 	"github.com/nugget/thane-ai-agent/internal/mqtt"
+	"github.com/nugget/thane-ai-agent/internal/person"
 	"github.com/nugget/thane-ai-agent/internal/prompts"
 	"github.com/nugget/thane-ai-agent/internal/router"
 	"github.com/nugget/thane-ai-agent/internal/scheduler"
 	"github.com/nugget/thane-ai-agent/internal/search"
 	"github.com/nugget/thane-ai-agent/internal/talents"
 	"github.com/nugget/thane-ai-agent/internal/tools"
+	"github.com/nugget/thane-ai-agent/internal/unifi"
 
 	_ "github.com/mattn/go-sqlite3" // SQLite driver for database/sql
 )
@@ -375,6 +378,13 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	connMgr := connwatch.NewManager(logger)
 	defer connMgr.Stop()
 
+	// Forward-declare personTracker so the connwatch OnReady callback
+	// can reference it. The closure captures by pointer; the tracker
+	// is constructed later and also calls Initialize immediately after
+	// construction to cover the case where HA connected first.
+	var personTracker *person.Tracker
+
+	var subscribeOnce sync.Once
 	if ha != nil {
 		haWatcher := connMgr.Watch(ctx, connwatch.WatcherConfig{
 			Name:    "homeassistant",
@@ -398,6 +408,30 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 					defer wsCancel()
 					if err := haWS.Reconnect(wsCtx); err != nil {
 						logger.Error("WebSocket reconnect failed", "error", err)
+					}
+
+					// Subscribe to state_changed events on first connection.
+					// Subsequent reconnects restore subscriptions automatically
+					// via WSClient.restoreSubscriptions.
+					subscribeOnce.Do(func() {
+						subCtx, subCancel := context.WithTimeout(context.Background(), 30*time.Second)
+						defer subCancel()
+						if err := haWS.Subscribe(subCtx, "state_changed"); err != nil {
+							logger.Error("subscribe to state_changed failed", "error", err)
+						} else {
+							logger.Info("subscribed to state_changed events")
+						}
+					})
+				}
+
+				// Initialize (or refresh) person tracker from current HA state.
+				if personTracker != nil {
+					initCtx, initCancel := context.WithTimeout(context.Background(), 10*time.Second)
+					defer initCancel()
+					if err := personTracker.Initialize(initCtx, ha); err != nil {
+						logger.Warn("person tracker initialization incomplete", "error", err)
+					} else {
+						logger.Info("person tracker initialized")
 					}
 				}
 			},
@@ -618,13 +652,13 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	}
 	defer schedStore.Close()
 
+	// Forward-declare `loop` so the executeTask closure can reference it.
+	// The closure captures by reference; by the time any task fires, loop
+	// is fully initialized.
+	var loop *agent.Loop
+
 	executeTask := func(ctx context.Context, task *scheduler.Task, exec *scheduler.Execution) error {
-		logger.Info("task executed",
-			"task_id", task.ID,
-			"task_name", task.Name,
-			"payload_kind", task.Payload.Kind,
-		)
-		return nil
+		return runScheduledTask(ctx, task, exec, loop, logger)
 	}
 
 	sched := scheduler.New(logger, schedStore, executeTask)
@@ -639,8 +673,9 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// into it.
 	defaultContextWindow := cfg.ContextWindowForModel(cfg.Models.Default, 200000)
 
-	loop := agent.NewLoop(logger, mem, compactor, rtr, ha, sched, llmClient, cfg.Models.Default, talentContent, personaContent, defaultContextWindow)
+	loop = agent.NewLoop(logger, mem, compactor, rtr, ha, sched, llmClient, cfg.Models.Default, talentContent, personaContent, defaultContextWindow)
 	loop.SetTimezone(cfg.Timezone)
+	loop.SetDebugConfig(cfg.Debug)
 	loop.SetArchiver(archiveAdapter)
 
 	// --- Static context injection ---
@@ -993,11 +1028,135 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	wmProvider := memory.NewWorkingMemoryProvider(wmStore, tools.ConversationIDFromContext)
 	contextProvider.Add(wmProvider)
 
+	// --- Person tracker ---
+	// Tracks configured household members' presence state and injects
+	// it into the system prompt, eliminating tool calls for "who is
+	// home?" queries. State updates arrive via the state watcher.
+	//
+	// Initialization from HA state happens in the connwatch OnReady
+	// callback on each reconnect. However, if HA was already connected
+	// before this tracker was constructed, OnReady would have skipped
+	// initialization (personTracker was nil). Catch up immediately
+	// after construction when HA is available. Initialize is idempotent,
+	// so a redundant call from OnReady is harmless.
+	if len(cfg.Person.Track) > 0 {
+		personTracker = person.NewTracker(cfg.Person.Track, cfg.Timezone, logger)
+		contextProvider.Add(personTracker)
+
+		// Configure device MAC addresses from config.
+		for entityID, devices := range cfg.Person.Devices {
+			macs := make([]string, len(devices))
+			for i, d := range devices {
+				macs[i] = strings.ToLower(d.MAC)
+			}
+			personTracker.SetDeviceMACs(entityID, macs)
+		}
+
+		logger.Info("person tracking enabled", "entities", cfg.Person.Track)
+
+		if ha != nil {
+			initCtx, initCancel := context.WithTimeout(ctx, 10*time.Second)
+			if err := personTracker.Initialize(initCtx, ha); err != nil {
+				logger.Warn("person tracker initial sync incomplete", "error", err)
+			}
+			initCancel()
+		}
+	}
+
+	// --- UniFi room presence ---
+	// Optional: polls UniFi controller for wireless client associations
+	// and pushes room-level presence into the person tracker. Requires
+	// both person.track and unifi config to be set.
+	if cfg.Unifi.Configured() && personTracker != nil {
+		unifiClient := unifi.NewClient(cfg.Unifi.URL, cfg.Unifi.APIKey, logger)
+
+		// Build MAC → entity_id mapping from config.
+		deviceOwners := make(map[string]string)
+		for entityID, devices := range cfg.Person.Devices {
+			for _, d := range devices {
+				deviceOwners[strings.ToLower(d.MAC)] = entityID
+			}
+		}
+
+		pollInterval := time.Duration(cfg.Unifi.PollIntervalSec) * time.Second
+		poller := unifi.NewPoller(unifi.PollerConfig{
+			Locator:      unifiClient,
+			Updater:      personTracker,
+			PollInterval: pollInterval,
+			DeviceOwners: deviceOwners,
+			APRooms:      cfg.Person.APRooms,
+			Logger:       logger,
+		})
+
+		go poller.Start(ctx)
+
+		// Register UniFi with connwatch for health endpoint visibility.
+		connMgr.Watch(ctx, connwatch.WatcherConfig{
+			Name:    "unifi",
+			Probe:   func(pCtx context.Context) error { return unifiClient.Ping(pCtx) },
+			Backoff: connwatch.DefaultBackoffConfig(),
+			Logger:  logger,
+		})
+
+		logger.Info("unifi room presence enabled",
+			"url", cfg.Unifi.URL,
+			"poll_interval", pollInterval,
+			"tracked_macs", len(deviceOwners),
+			"ap_rooms", len(cfg.Person.APRooms),
+		)
+	} else if cfg.Unifi.Configured() && personTracker == nil {
+		logger.Warn("unifi configured but person tracking disabled (no person.track entries)")
+	}
+
 	loop.SetContextProvider(contextProvider)
 	logger.Info("context providers initialized",
 		"episodic_daily_dir", cfg.Episodic.DailyDir,
 		"episodic_history_tokens", cfg.Episodic.HistoryTokens,
 	)
+
+	// --- State watcher ---
+	// Consumes state_changed events from the HA WebSocket, bridges them
+	// to the anticipation system via WakeContext, and triggers agent wakes
+	// when an active anticipation matches the state change. Person entity
+	// IDs are auto-merged into entity globs so the person tracker
+	// receives state changes regardless of the user's subscribe config.
+	if haWS != nil {
+		globs := append([]string(nil), cfg.HomeAssistant.Subscribe.EntityGlobs...)
+		if personTracker != nil {
+			globs = append(globs, personTracker.EntityIDs()...)
+		}
+		filter := homeassistant.NewEntityFilter(globs, logger)
+		limiter := homeassistant.NewEntityRateLimiter(cfg.HomeAssistant.Subscribe.RateLimitPerMinute)
+		cooldown := time.Duration(cfg.HomeAssistant.Subscribe.CooldownMinutes) * time.Minute
+
+		bridge := NewWakeBridge(WakeBridgeConfig{
+			Store:    anticipationStore,
+			Runner:   loop,
+			Provider: anticipationProvider,
+			Logger:   logger,
+			Ctx:      ctx,
+			Cooldown: cooldown,
+		})
+
+		// Compose handler: person tracker and wake bridge both see
+		// every state change that passes the filter and rate limiter.
+		var handler homeassistant.StateWatchHandler = bridge.HandleStateChange
+		if personTracker != nil {
+			bridgeHandler := handler
+			handler = func(entityID, oldState, newState string) {
+				personTracker.HandleStateChange(entityID, oldState, newState)
+				bridgeHandler(entityID, oldState, newState)
+			}
+		}
+
+		watcher := homeassistant.NewStateWatcher(haWS.Events(), filter, limiter, handler, logger)
+		go watcher.Run(ctx)
+		logger.Info("state watcher started",
+			"entity_globs", globs,
+			"rate_limit_per_minute", cfg.HomeAssistant.Subscribe.RateLimitPerMinute,
+			"cooldown", cooldown,
+		)
+	}
 
 	// --- API server ---
 	// The primary HTTP server exposing the OpenAI-compatible chat API,

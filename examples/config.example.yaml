@@ -81,6 +81,34 @@ models:
 #     - topic: homeassistant/+/+/state   # HA entity state changes
 #     - topic: frigate/events            # Frigate camera events
 
+# Person presence tracking (optional)
+# Injects a "People & Presence" section into the system prompt with
+# home/away status and optional room-level presence via UniFi.
+# person:
+#   track:
+#     - person.nugget
+#     - person.monica
+#     - person.dan
+#   devices:                          # MAC → person mapping for room presence
+#     person.nugget:
+#       - mac: "AA:BB:CC:DD:EE:FF"    # iPhone
+#       - mac: "11:22:33:44:55:66"    # MacBook
+#     person.monica:
+#       - mac: "77:88:99:AA:BB:CC"
+#   ap_rooms:                         # AP name → room name mapping
+#     ap-hor-office: office
+#     ap-hor-bedroom: bedroom
+#     ap-hor-guest: guest room
+#     ap-sta-living: stable apartment
+
+# UniFi controller (optional — for room-level presence)
+# Polls wireless client associations to determine which room each person
+# is in based on AP connectivity. Requires person.track and person.devices.
+# unifi:
+#   url: https://192.168.1.1
+#   api_key: your-unifi-api-key
+#   poll_interval: 30                 # seconds, default 30, minimum 10
+
 # Storage paths
 data_dir: ./db
 talents_dir: ./talents
@@ -147,6 +175,14 @@ embeddings:
 # Use a cheap/local model for this async task.
 # archive:
 #   metadata_model: qwen2.5-coder:32b  # Defaults to models.default
+
+# Debug options — diagnostic tools for system prompt visibility.
+# When dump_system_prompt is true, the fully assembled system prompt is
+# written to {dump_dir}/system-prompt-latest.txt on every LLM call,
+# with section markers and character counts per section.
+# debug:
+#   dump_system_prompt: true
+#   dump_dir: ./debug          # default
 
 # Logging level: trace, debug, info (default), warn, error
 # - info: normal operation (loop start/end, failover, compaction)

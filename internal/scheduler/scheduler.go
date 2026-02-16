@@ -276,7 +276,11 @@ func (s *Scheduler) executeTask(ctx context.Context, task *Task, scheduledAt tim
 		exec.Result = execErr.Error()
 	} else {
 		exec.Status = StatusCompleted
-		exec.Result = "success"
+		// Preserve any result the callback set (e.g., agent response text).
+		// Only default to "success" if the callback left Result empty.
+		if exec.Result == "" {
+			exec.Result = "success"
+		}
 	}
 
 	if err := s.store.UpdateExecution(exec); err != nil {

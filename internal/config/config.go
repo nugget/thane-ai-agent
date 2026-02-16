@@ -21,7 +21,9 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/search"
@@ -38,6 +40,11 @@ import (
 //   - /config/config.yaml (container convention)
 //   - /usr/local/etc/thane/config.yaml (macOS/BSD local sysconfig)
 //   - /etc/thane/config.yaml (system-wide)
+
+// searchPathsFunc is the function used to generate search paths.
+// Overridden in tests to avoid finding real config files on the host.
+var searchPathsFunc = DefaultSearchPaths
+
 func DefaultSearchPaths() []string {
 	paths := []string{"config.yaml"}
 
@@ -64,7 +71,7 @@ func FindConfig(explicit string) (string, error) {
 		return explicit, nil
 	}
 
-	for _, p := range DefaultSearchPaths() {
+	for _, p := range searchPathsFunc() {
 		if _, err := os.Stat(p); err == nil {
 			return p, nil
 		}
@@ -144,6 +151,20 @@ type Config struct {
 	// set, Thane connects to the broker and registers as an HA device.
 	MQTT MQTTConfig `yaml:"mqtt"`
 
+	// Person configures household member presence tracking. When Track
+	// contains entity IDs, the agent receives a "People & Presence"
+	// section in its system prompt on every wake, eliminating tool
+	// calls for basic presence questions.
+	Person PersonConfig `yaml:"person"`
+
+	// Unifi configures the UniFi network controller connection for
+	// room-level presence detection via wireless AP client associations.
+	Unifi UnifiConfig `yaml:"unifi"`
+
+	// Debug configures diagnostic options for inspecting the assembled
+	// system prompt and other internal state.
+	Debug DebugConfig `yaml:"debug"`
+
 	// Timezone is the IANA timezone for the household (e.g.,
 	// "America/Chicago"). Used in the Current Conditions system prompt
 	// section so the agent reasons about local time. If empty, the
@@ -186,6 +207,31 @@ type OllamaAPIConfig struct {
 type HomeAssistantConfig struct {
 	URL   string `yaml:"url"`
 	Token string `yaml:"token"`
+
+	// Subscribe configures WebSocket event subscriptions for real-time
+	// state change monitoring. When entity_globs is non-empty, only
+	// matching entities are processed; when empty, all state changes
+	// are accepted.
+	Subscribe SubscribeConfig `yaml:"subscribe"`
+}
+
+// SubscribeConfig configures entity-level filtering and rate limiting
+// for Home Assistant WebSocket state_changed event subscriptions.
+type SubscribeConfig struct {
+	// EntityGlobs is a list of glob patterns (using path.Match syntax)
+	// that select which entity IDs to process. Examples: "person.*",
+	// "binary_sensor.*door*", "light.living_room". An empty list
+	// means all entities are accepted.
+	EntityGlobs []string `yaml:"entity_globs"`
+
+	// RateLimitPerMinute caps how many state changes per entity are
+	// forwarded per minute. Zero means no rate limiting.
+	RateLimitPerMinute int `yaml:"rate_limit_per_minute"`
+
+	// CooldownMinutes is the per-anticipation cooldown period in minutes.
+	// After an anticipation triggers a wake, it cannot trigger again until
+	// this interval elapses. Defaults to 5 minutes via applyDefaults.
+	CooldownMinutes int `yaml:"cooldown_minutes"`
 }
 
 // Configured reports whether both URL and Token are set. A partial
@@ -418,6 +464,70 @@ func (c MQTTConfig) Configured() bool {
 	return c.Broker != "" && c.DeviceName != ""
 }
 
+// PersonConfig configures household member presence tracking. When
+// Track contains entity IDs, the person tracker maintains in-memory
+// state from Home Assistant and injects a presence summary into the
+// agent's system prompt on every wake.
+type PersonConfig struct {
+	// Track is a list of Home Assistant person entity IDs to monitor
+	// (e.g., ["person.nugget", "person.dan"]). Each entry must begin
+	// with "person.". An empty list disables person tracking.
+	Track []string `yaml:"track"`
+
+	// Devices maps tracked person entity IDs to their wireless device
+	// MAC addresses. Used by the UniFi poller to determine which person
+	// a wireless client belongs to for room-level presence.
+	Devices map[string][]DeviceMapping `yaml:"devices"`
+
+	// APRooms maps AP names (e.g., "ap-hor-office") to human-readable
+	// room names (e.g., "office"). Only APs listed here contribute to
+	// room presence; unlisted APs are ignored.
+	APRooms map[string]string `yaml:"ap_rooms"`
+}
+
+// DeviceMapping maps a MAC address to a tracked person's wireless device.
+type DeviceMapping struct {
+	// MAC is the device's MAC address (e.g., "AA:BB:CC:DD:EE:FF").
+	// Case-insensitive; normalized to lowercase at startup.
+	MAC string `yaml:"mac"`
+}
+
+// UnifiConfig configures the UniFi network controller connection for
+// room-level presence detection via AP client associations.
+type UnifiConfig struct {
+	// URL is the base URL of the UniFi controller
+	// (e.g., "https://192.168.1.1").
+	URL string `yaml:"url"`
+
+	// APIKey is the API key for UniFi controller authentication.
+	// Sent as X-API-KEY header.
+	APIKey string `yaml:"api_key"`
+
+	// PollIntervalSec is how often (in seconds) to poll for wireless
+	// client station data. Default: 30. Minimum: 10.
+	PollIntervalSec int `yaml:"poll_interval"`
+}
+
+// Configured reports whether both URL and APIKey are set, indicating
+// the UniFi integration should be enabled.
+func (c UnifiConfig) Configured() bool {
+	return c.URL != "" && c.APIKey != ""
+}
+
+// DebugConfig configures diagnostic options for inspecting the
+// assembled system prompt and other internal state.
+type DebugConfig struct {
+	// DumpSystemPrompt enables writing the fully assembled system
+	// prompt to disk on every LLM call, with section markers and
+	// size annotations. The file is overwritten each call so it
+	// always reflects the most recent prompt.
+	DumpSystemPrompt bool `yaml:"dump_system_prompt"`
+
+	// DumpDir is the directory where debug output files are written.
+	// Created automatically on first write. Default: "./debug".
+	DumpDir string `yaml:"dump_dir"`
+}
+
 // ShellExecConfig configures the agent's ability to execute shell
 // commands on the host. Disabled by default for safety. When enabled,
 // commands are filtered through allow and deny lists before execution.
@@ -575,6 +685,10 @@ func (c *Config) applyDefaults() {
 		c.MQTT.PublishIntervalSec = 60
 	}
 
+	if c.Unifi.PollIntervalSec == 0 {
+		c.Unifi.PollIntervalSec = 30
+	}
+
 	if c.Episodic.LookbackDays == 0 {
 		c.Episodic.LookbackDays = 2
 	}
@@ -585,6 +699,10 @@ func (c *Config) applyDefaults() {
 		c.Episodic.SessionGapMinutes = 30
 	}
 
+	if c.Debug.DumpSystemPrompt && c.Debug.DumpDir == "" {
+		c.Debug.DumpDir = "./debug"
+	}
+
 	if c.Agent.DelegationRequired && len(c.Agent.Iter0Tools) == 0 {
 		c.Agent.Iter0Tools = []string{
 			"thane_delegate",
@@ -593,6 +711,10 @@ func (c *Config) applyDefaults() {
 			"session_working_memory",
 			"archive_search",
 		}
+	}
+
+	if c.HomeAssistant.Subscribe.CooldownMinutes == 0 {
+		c.HomeAssistant.Subscribe.CooldownMinutes = 5
 	}
 
 	for i := range c.Models.Available {
@@ -654,6 +776,9 @@ func (c *Config) Validate() error {
 			}
 		}
 	}
+	if err := c.validateSubscribe(); err != nil {
+		return err
+	}
 	if err := c.validateMCP(); err != nil {
 		return err
 	}
@@ -665,6 +790,31 @@ func (c *Config) Validate() error {
 	}
 	if c.Episodic.SessionGapMinutes < 0 {
 		return fmt.Errorf("episodic.session_gap_minutes %d must be non-negative", c.Episodic.SessionGapMinutes)
+	}
+	for i, id := range c.Person.Track {
+		if !strings.HasPrefix(id, "person.") {
+			return fmt.Errorf("person.track[%d] %q must start with \"person.\"", i, id)
+		}
+	}
+	// Validate person.devices references only tracked entities.
+	tracked := make(map[string]bool, len(c.Person.Track))
+	for _, id := range c.Person.Track {
+		tracked[id] = true
+	}
+	for entityID := range c.Person.Devices {
+		if !tracked[entityID] {
+			return fmt.Errorf("person.devices references untracked entity %q", entityID)
+		}
+	}
+	for entityID, devs := range c.Person.Devices {
+		for i, d := range devs {
+			if d.MAC == "" {
+				return fmt.Errorf("person.devices[%s][%d].mac must not be empty", entityID, i)
+			}
+		}
+	}
+	if c.Unifi.Configured() && c.Unifi.PollIntervalSec < 10 {
+		return fmt.Errorf("unifi.poll_interval %d too low (minimum 10 seconds)", c.Unifi.PollIntervalSec)
 	}
 	return nil
 }
@@ -697,6 +847,20 @@ func (c *Config) validateMCP() error {
 		if len(srv.IncludeTools) > 0 && len(srv.ExcludeTools) > 0 {
 			return fmt.Errorf("mcp.servers[%d] (%s): cannot set both include_tools and exclude_tools", i, srv.Name)
 		}
+	}
+	return nil
+}
+
+// validateSubscribe checks the Home Assistant subscribe configuration
+// for consistency.
+func (c *Config) validateSubscribe() error {
+	for i, glob := range c.HomeAssistant.Subscribe.EntityGlobs {
+		if _, err := path.Match(glob, ""); err != nil {
+			return fmt.Errorf("homeassistant.subscribe.entity_globs[%d] %q: invalid glob pattern: %w", i, glob, err)
+		}
+	}
+	if c.HomeAssistant.Subscribe.RateLimitPerMinute < 0 {
+		return fmt.Errorf("homeassistant.subscribe.rate_limit_per_minute %d must be non-negative", c.HomeAssistant.Subscribe.RateLimitPerMinute)
 	}
 	return nil
 }
