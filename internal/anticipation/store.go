@@ -79,10 +79,14 @@ func (s *Store) migrate() error {
 	}
 
 	// Additive migration: context_entities_json stores a JSON array of
-	// entity IDs to fetch when this anticipation fires. ALTER TABLE ADD
-	// COLUMN fails harmlessly when the column already exists, so the
-	// error is intentionally discarded.
-	_, _ = s.db.Exec(`ALTER TABLE anticipations ADD COLUMN context_entities_json TEXT`)
+	// entity IDs to fetch when this anticipation fires. The column may
+	// already exist from a previous run; only that specific error is
+	// ignored — other failures (locked/corrupt DB) surface immediately.
+	if _, err := s.db.Exec(`ALTER TABLE anticipations ADD COLUMN context_entities_json TEXT`); err != nil {
+		if !strings.Contains(err.Error(), "duplicate column name") {
+			return fmt.Errorf("migrate context_entities_json: %w", err)
+		}
+	}
 
 	return nil
 }

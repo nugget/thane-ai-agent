@@ -1357,9 +1357,9 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 					ObjectID:            suffix,
 					HasEntityName:       true,
 					UniqueID:            mqttInstanceID + "_" + suffix,
-					StateTopic:          "thane/" + cfg.MQTT.DeviceName + "/" + suffix + "/state",
-					JsonAttributesTopic: "thane/" + cfg.MQTT.DeviceName + "/" + suffix + "/attributes",
-					AvailabilityTopic:   "thane/" + cfg.MQTT.DeviceName + "/availability",
+					StateTopic:          mqttPub.StateTopic(suffix),
+					JsonAttributesTopic: mqttPub.AttributesTopic(suffix),
+					AvailabilityTopic:   mqttPub.AvailabilityTopic(),
 					Device:              mqttPub.Device(),
 					Icon:                "mdi:access-point",
 				},
@@ -1386,7 +1386,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 				return
 			}
 
-			pubCtx, pubCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			pubCtx, pubCancel := context.WithTimeout(ctx, 5*time.Second)
 			defer pubCancel()
 
 			if err := mqttPub.PublishDynamicState(pubCtx, suffix, room, attrs); err != nil {

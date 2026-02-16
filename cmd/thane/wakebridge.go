@@ -243,14 +243,18 @@ func (b *WakeBridge) fetchEntityContext(a *anticipation.Anticipation, triggerEnt
 	}
 
 	// Build deduplicated entity list: context entities + trigger entity.
+	// Empty/whitespace-only IDs are skipped defensively.
 	seen := make(map[string]bool, len(a.ContextEntities)+1)
 	var entities []string
 	for _, id := range a.ContextEntities {
-		if !seen[id] {
-			seen[id] = true
-			entities = append(entities, id)
+		id = strings.TrimSpace(id)
+		if id == "" || seen[id] {
+			continue
 		}
+		seen[id] = true
+		entities = append(entities, id)
 	}
+	triggerEntityID = strings.TrimSpace(triggerEntityID)
 	if triggerEntityID != "" && !seen[triggerEntityID] {
 		entities = append(entities, triggerEntityID)
 	}

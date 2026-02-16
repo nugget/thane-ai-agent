@@ -108,12 +108,13 @@ func (p *Publisher) Device() DeviceInfo {
 // for a dynamically registered sensor entity. Safe for concurrent use
 // from any goroutine.
 func (p *Publisher) PublishDynamicState(ctx context.Context, entitySuffix, state string, attrJSON []byte) error {
-	if p.cm == nil {
+	cm := p.getCM()
+	if cm == nil {
 		return fmt.Errorf("mqtt publisher not started")
 	}
 
-	if _, err := p.cm.Publish(ctx, &paho.Publish{
-		Topic:   p.stateTopic(entitySuffix),
+	if _, err := cm.Publish(ctx, &paho.Publish{
+		Topic:   p.StateTopic(entitySuffix),
 		Payload: []byte(state),
 		QoS:     0,
 		Retain:  true,
@@ -122,8 +123,8 @@ func (p *Publisher) PublishDynamicState(ctx context.Context, entitySuffix, state
 	}
 
 	if len(attrJSON) > 0 {
-		if _, err := p.cm.Publish(ctx, &paho.Publish{
-			Topic:   p.attributesTopic(entitySuffix),
+		if _, err := cm.Publish(ctx, &paho.Publish{
+			Topic:   p.AttributesTopic(entitySuffix),
 			Payload: attrJSON,
 			QoS:     0,
 			Retain:  true,
@@ -152,7 +153,7 @@ func (p *Publisher) Start(ctx context.Context) error {
 		return fmt.Errorf("parse mqtt broker URL: %w", err)
 	}
 
-	availTopic := p.availabilityTopic()
+	availTopic := p.AvailabilityTopic()
 
 	pahoCfg := autopaho.ClientConfig{
 		ServerUrls:      []*url.URL{brokerURL},
@@ -192,7 +193,7 @@ func (p *Publisher) Start(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("mqtt connect: %w", err)
 	}
-	p.cm = cm
+	p.setCM(cm)
 
 	// Wire inbound message handler if subscriptions are configured.
 	if len(p.cfg.Subscriptions) > 0 {
@@ -254,21 +255,43 @@ func (p *Publisher) AwaitConnection(ctx context.Context) error {
 	return p.cm.AwaitConnection(ctx)
 }
 
+// getCM returns the connection manager under the mutex, safe for
+// concurrent reads from PublishDynamicState while Start initializes.
+func (p *Publisher) getCM() *autopaho.ConnectionManager {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.cm
+}
+
+// setCM stores the connection manager under the mutex.
+func (p *Publisher) setCM(cm *autopaho.ConnectionManager) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.cm = cm
+}
+
 // --- Topic helpers ---
 
 func (p *Publisher) baseTopic() string {
 	return "thane/" + p.cfg.DeviceName
 }
 
-func (p *Publisher) availabilityTopic() string {
+// AvailabilityTopic returns the MQTT availability topic for this
+// publisher's device. Useful for callers building [DynamicSensor]
+// configs that need to reference the shared availability topic.
+func (p *Publisher) AvailabilityTopic() string {
 	return p.baseTopic() + "/availability"
 }
 
-func (p *Publisher) stateTopic(entity string) string {
+// StateTopic returns the MQTT state topic for the given entity suffix.
+// Useful for callers building [DynamicSensor] configs.
+func (p *Publisher) StateTopic(entity string) string {
 	return p.baseTopic() + "/" + entity + "/state"
 }
 
-func (p *Publisher) attributesTopic(entity string) string {
+// AttributesTopic returns the MQTT JSON attributes topic for the given
+// entity suffix. Useful for callers building [DynamicSensor] configs.
+func (p *Publisher) AttributesTopic(entity string) string {
 	return p.baseTopic() + "/" + entity + "/attributes"
 }
 
@@ -284,7 +307,7 @@ type sensorDef struct {
 }
 
 func (p *Publisher) sensorDefinitions() []sensorDef {
-	avail := p.availabilityTopic()
+	avail := p.AvailabilityTopic()
 	return []sensorDef{
 		{
 			entitySuffix: "uptime",
@@ -293,7 +316,7 @@ func (p *Publisher) sensorDefinitions() []sensorDef {
 				ObjectID:          "uptime",
 				HasEntityName:     true,
 				UniqueID:          p.instanceID + "_uptime",
-				StateTopic:        p.stateTopic("uptime"),
+				StateTopic:        p.StateTopic("uptime"),
 				AvailabilityTopic: avail,
 				Device:            p.device,
 				Icon:              "mdi:clock-outline",
@@ -307,7 +330,7 @@ func (p *Publisher) sensorDefinitions() []sensorDef {
 				ObjectID:          "version",
 				HasEntityName:     true,
 				UniqueID:          p.instanceID + "_version",
-				StateTopic:        p.stateTopic("version"),
+				StateTopic:        p.StateTopic("version"),
 				AvailabilityTopic: avail,
 				Device:            p.device,
 				Icon:              "mdi:tag",
@@ -321,7 +344,7 @@ func (p *Publisher) sensorDefinitions() []sensorDef {
 				ObjectID:          "tokens_today",
 				HasEntityName:     true,
 				UniqueID:          p.instanceID + "_tokens_today",
-				StateTopic:        p.stateTopic("tokens_today"),
+				StateTopic:        p.StateTopic("tokens_today"),
 				AvailabilityTopic: avail,
 				Device:            p.device,
 				Icon:              "mdi:counter",
@@ -336,7 +359,7 @@ func (p *Publisher) sensorDefinitions() []sensorDef {
 				ObjectID:          "last_request",
 				HasEntityName:     true,
 				UniqueID:          p.instanceID + "_last_request",
-				StateTopic:        p.stateTopic("last_request"),
+				StateTopic:        p.StateTopic("last_request"),
 				AvailabilityTopic: avail,
 				Device:            p.device,
 				Icon:              "mdi:clock-check",
@@ -350,7 +373,7 @@ func (p *Publisher) sensorDefinitions() []sensorDef {
 				ObjectID:          "default_model",
 				HasEntityName:     true,
 				UniqueID:          p.instanceID + "_default_model",
-				StateTopic:        p.stateTopic("default_model"),
+				StateTopic:        p.StateTopic("default_model"),
 				AvailabilityTopic: avail,
 				Device:            p.device,
 				Icon:              "mdi:brain",
@@ -402,7 +425,7 @@ func (p *Publisher) publishSensorDiscovery(ctx context.Context, cm *autopaho.Con
 
 func (p *Publisher) publishAvailability(ctx context.Context, cm *autopaho.ConnectionManager, status string) {
 	if _, err := cm.Publish(ctx, &paho.Publish{
-		Topic:   p.availabilityTopic(),
+		Topic:   p.AvailabilityTopic(),
 		Payload: []byte(status),
 		QoS:     1,
 		Retain:  true,
@@ -494,7 +517,7 @@ func (p *Publisher) publishStates(ctx context.Context) {
 
 	for entity, value := range states {
 		if _, err := p.cm.Publish(ctx, &paho.Publish{
-			Topic:   p.stateTopic(entity),
+			Topic:   p.StateTopic(entity),
 			Payload: []byte(value),
 			QoS:     0,
 			Retain:  true,
