@@ -18,18 +18,19 @@ type DeviceInfo struct {
 // message. It is published (retained) to the discovery topic on every
 // broker (re-)connect.
 type SensorConfig struct {
-	Name              string     `json:"name"`
-	ObjectID          string     `json:"object_id,omitempty"`
-	HasEntityName     bool       `json:"has_entity_name,omitempty"`
-	UniqueID          string     `json:"unique_id"`
-	StateTopic        string     `json:"state_topic"`
-	AvailabilityTopic string     `json:"availability_topic"`
-	Device            DeviceInfo `json:"device"`
-	Icon              string     `json:"icon,omitempty"`
-	UnitOfMeasurement string     `json:"unit_of_measurement,omitempty"`
-	StateClass        string     `json:"state_class,omitempty"`
-	ValueTemplate     string     `json:"value_template,omitempty"`
-	EntityCategory    string     `json:"entity_category,omitempty"`
+	Name                string     `json:"name"`
+	ObjectID            string     `json:"object_id,omitempty"`
+	HasEntityName       bool       `json:"has_entity_name,omitempty"`
+	UniqueID            string     `json:"unique_id"`
+	StateTopic          string     `json:"state_topic"`
+	AvailabilityTopic   string     `json:"availability_topic"`
+	JsonAttributesTopic string     `json:"json_attributes_topic,omitempty"`
+	Device              DeviceInfo `json:"device"`
+	Icon                string     `json:"icon,omitempty"`
+	UnitOfMeasurement   string     `json:"unit_of_measurement,omitempty"`
+	StateClass          string     `json:"state_class,omitempty"`
+	ValueTemplate       string     `json:"value_template,omitempty"`
+	EntityCategory      string     `json:"entity_category,omitempty"`
 }
 
 // NewDeviceInfo creates a DeviceInfo from the persistent instance ID

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/url"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/eclipse/paho.golang/autopaho"
@@ -29,19 +30,35 @@ type StatsSource interface {
 	LastRequestTime() time.Time
 }
 
+// DynamicSensor defines a sensor that is registered at runtime and
+// published via MQTT discovery alongside the built-in static sensors.
+// External packages create DynamicSensor values and register them with
+// [Publisher.RegisterSensors].
+type DynamicSensor struct {
+	// EntitySuffix is the unique suffix used in topic paths and
+	// entity IDs (e.g., "nugget_ap" produces state topic
+	// thane/{device}/nugget_ap/state).
+	EntitySuffix string
+
+	// Config is the HA MQTT discovery payload for this sensor.
+	Config SensorConfig
+}
+
 // Publisher manages the MQTT connection, publishes HA discovery config
 // messages on (re-)connect, subscribes to configured topics, and runs
 // a periodic loop that pushes sensor state updates to the broker.
 type Publisher struct {
-	cfg         config.MQTTConfig
-	instanceID  string
-	device      DeviceInfo
-	tokens      *DailyTokens
-	stats       StatsSource
-	logger      *slog.Logger
-	cm          *autopaho.ConnectionManager
-	handler     MessageHandler
-	rateLimiter *messageRateLimiter
+	cfg            config.MQTTConfig
+	instanceID     string
+	device         DeviceInfo
+	tokens         *DailyTokens
+	stats          StatsSource
+	logger         *slog.Logger
+	cm             *autopaho.ConnectionManager
+	handler        MessageHandler
+	rateLimiter    *messageRateLimiter
+	mu             sync.Mutex
+	dynamicSensors []DynamicSensor
 }
 
 // New creates a Publisher but does not connect. Call [Publisher.Start]
@@ -68,6 +85,54 @@ func New(cfg config.MQTTConfig, instanceID string, tokens *DailyTokens, stats St
 // is used when subscriptions are configured.
 func (p *Publisher) SetMessageHandler(h MessageHandler) {
 	p.handler = h
+}
+
+// RegisterSensors adds dynamic sensor definitions that are published
+// via MQTT discovery alongside the built-in static sensors. Must be
+// called before [Publisher.Start]. Calling after Start has no effect on
+// already-published discovery messages until the next reconnect.
+func (p *Publisher) RegisterSensors(sensors []DynamicSensor) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.dynamicSensors = append(p.dynamicSensors, sensors...)
+}
+
+// Device returns the HA device info shared across all sensors published
+// by this publisher instance. Useful for callers building [DynamicSensor]
+// configs that reference the same HA device.
+func (p *Publisher) Device() DeviceInfo {
+	return p.device
+}
+
+// PublishDynamicState publishes the state and optional JSON attributes
+// for a dynamically registered sensor entity. Safe for concurrent use
+// from any goroutine.
+func (p *Publisher) PublishDynamicState(ctx context.Context, entitySuffix, state string, attrJSON []byte) error {
+	if p.cm == nil {
+		return fmt.Errorf("mqtt publisher not started")
+	}
+
+	if _, err := p.cm.Publish(ctx, &paho.Publish{
+		Topic:   p.stateTopic(entitySuffix),
+		Payload: []byte(state),
+		QoS:     0,
+		Retain:  true,
+	}); err != nil {
+		return fmt.Errorf("publish state for %s: %w", entitySuffix, err)
+	}
+
+	if len(attrJSON) > 0 {
+		if _, err := p.cm.Publish(ctx, &paho.Publish{
+			Topic:   p.attributesTopic(entitySuffix),
+			Payload: attrJSON,
+			QoS:     0,
+			Retain:  true,
+		}); err != nil {
+			return fmt.Errorf("publish attributes for %s: %w", entitySuffix, err)
+		}
+	}
+
+	return nil
 }
 
 // Start connects to the MQTT broker and begins the periodic publish
@@ -203,6 +268,10 @@ func (p *Publisher) stateTopic(entity string) string {
 	return p.baseTopic() + "/" + entity + "/state"
 }
 
+func (p *Publisher) attributesTopic(entity string) string {
+	return p.baseTopic() + "/" + entity + "/attributes"
+}
+
 func (p *Publisher) discoveryTopic(component, entity string) string {
 	return p.cfg.DiscoveryPrefix + "/" + component + "/" + p.cfg.DeviceName + "/" + entity + "/config"
 }
@@ -292,27 +361,42 @@ func (p *Publisher) sensorDefinitions() []sensorDef {
 }
 
 func (p *Publisher) publishDiscovery(ctx context.Context, cm *autopaho.ConnectionManager) {
+	// Static (built-in) sensors.
 	for _, s := range p.sensorDefinitions() {
-		topic := p.discoveryTopic("sensor", s.entitySuffix)
-		payload, err := json.Marshal(s.config)
-		if err != nil {
-			p.logger.Error("mqtt marshal discovery payload",
-				"entity", s.entitySuffix, "error", err)
-			continue
-		}
+		p.publishSensorDiscovery(ctx, cm, s.entitySuffix, s.config)
+	}
 
-		if _, err := cm.Publish(ctx, &paho.Publish{
-			Topic:   topic,
-			Payload: payload,
-			QoS:     1,
-			Retain:  true,
-		}); err != nil {
-			p.logger.Warn("mqtt discovery publish failed",
-				"entity", s.entitySuffix, "topic", topic, "error", err)
-		} else {
-			p.logger.Debug("mqtt discovery published",
-				"entity", s.entitySuffix, "topic", topic)
-		}
+	// Dynamic sensors registered by external packages.
+	p.mu.Lock()
+	dynCopy := make([]DynamicSensor, len(p.dynamicSensors))
+	copy(dynCopy, p.dynamicSensors)
+	p.mu.Unlock()
+
+	for _, ds := range dynCopy {
+		p.publishSensorDiscovery(ctx, cm, ds.EntitySuffix, ds.Config)
+	}
+}
+
+func (p *Publisher) publishSensorDiscovery(ctx context.Context, cm *autopaho.ConnectionManager, entitySuffix string, cfg SensorConfig) {
+	topic := p.discoveryTopic("sensor", entitySuffix)
+	payload, err := json.Marshal(cfg)
+	if err != nil {
+		p.logger.Error("mqtt marshal discovery payload",
+			"entity", entitySuffix, "error", err)
+		return
+	}
+
+	if _, err := cm.Publish(ctx, &paho.Publish{
+		Topic:   topic,
+		Payload: payload,
+		QoS:     1,
+		Retain:  true,
+	}); err != nil {
+		p.logger.Warn("mqtt discovery publish failed",
+			"entity", entitySuffix, "topic", topic, "error", err)
+	} else {
+		p.logger.Debug("mqtt discovery published",
+			"entity", entitySuffix, "topic", topic)
 	}
 }
 

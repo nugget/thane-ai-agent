@@ -37,17 +37,24 @@ type StateGetter interface {
 	GetState(ctx context.Context, entityID string) (*homeassistant.State, error)
 }
 
+// RoomObserver is called when a tracked person's room changes.
+// Parameters are the person's entity ID, the new room name (may be
+// empty when cleared), and the AP or source name that determined
+// the room. Observers are called outside the tracker's lock.
+type RoomObserver func(entityID, room, source string)
+
 // Tracker maintains in-memory presence state for configured person
 // entities and provides a context block for system prompt injection.
 // It implements both the StateWatchHandler function signature (for
 // receiving WebSocket state changes) and the agent.ContextProvider
 // interface (for context injection).
 type Tracker struct {
-	people map[string]*Person // entity_id → Person
-	order  []string           // insertion order for deterministic output
-	mu     sync.RWMutex
-	loc    *time.Location
-	logger *slog.Logger
+	people    map[string]*Person // entity_id → Person
+	order     []string           // insertion order for deterministic output
+	observers []RoomObserver     // called on room changes
+	mu        sync.RWMutex
+	loc       *time.Location
+	logger    *slog.Logger
 }
 
 // NewTracker creates a person tracker for the given entity IDs. All
@@ -204,7 +211,7 @@ func (t *Tracker) GetContext(_ context.Context, _ string) (string, error) {
 
 	for _, id := range t.order {
 		p := t.people[id]
-		displayName := titleCase(p.FriendlyName)
+		displayName := TitleCase(p.FriendlyName)
 
 		fmt.Fprintf(&sb, "- **%s**:\n", displayName)
 
@@ -226,21 +233,36 @@ func (t *Tracker) GetContext(_ context.Context, _ string) (string, error) {
 	return sb.String(), nil
 }
 
+// OnRoomChange registers a callback that fires whenever a tracked
+// person's room changes. Observers are called outside the tracker's
+// lock so they may perform blocking I/O (e.g., MQTT publishes).
+// Must be called before the poller starts.
+func (t *Tracker) OnRoomChange(fn RoomObserver) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.observers = append(t.observers, fn)
+}
+
 // UpdateRoom sets the room for a tracked person. If the room is
 // unchanged, no update occurs. When a person transitions to not_home,
 // HandleStateChange clears room data automatically; callers may also
 // pass an empty room to clear it explicitly. The source is the AP name
 // or other identifier that determined the room.
+//
+// Registered [RoomObserver] callbacks are invoked after the state
+// update, outside the lock, so they may perform blocking operations.
 func (t *Tracker) UpdateRoom(entityID, room, source string) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
+	var notify bool
 
+	t.mu.Lock()
 	p, ok := t.people[entityID]
 	if !ok {
+		t.mu.Unlock()
 		return
 	}
 
 	if p.Room == room {
+		t.mu.Unlock()
 		return
 	}
 
@@ -258,6 +280,19 @@ func (t *Tracker) UpdateRoom(entityID, room, source string) {
 		p.RoomSince = time.Now()
 	} else {
 		p.RoomSince = time.Time{}
+	}
+
+	notify = len(t.observers) > 0
+	// Copy observer slice reference under lock. The slice is append-only
+	// and only grows before the poller starts, so reading it after unlock
+	// is safe.
+	obs := t.observers
+	t.mu.Unlock()
+
+	if notify {
+		for _, fn := range obs {
+			fn(entityID, room, source)
+		}
 	}
 }
 
@@ -297,11 +332,11 @@ func formatState(state string) string {
 	if strings.EqualFold(state, "not_home") {
 		return "Away"
 	}
-	return titleCase(state)
+	return TitleCase(state)
 }
 
-// titleCase capitalizes the first rune of a string.
-func titleCase(s string) string {
+// TitleCase capitalizes the first rune of a string.
+func TitleCase(s string) string {
 	if s == "" {
 		return s
 	}

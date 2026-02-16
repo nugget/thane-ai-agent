@@ -559,9 +559,9 @@ func TestTitleCase(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			got := titleCase(tt.input)
+			got := TitleCase(tt.input)
 			if got != tt.want {
-				t.Errorf("titleCase(%q) = %q, want %q", tt.input, got, tt.want)
+				t.Errorf("TitleCase(%q) = %q, want %q", tt.input, got, tt.want)
 			}
 		})
 	}
@@ -585,5 +585,84 @@ func TestFriendlyNameFromEntityID(t *testing.T) {
 				t.Errorf("friendlyNameFromEntityID(%q) = %q, want %q", tt.input, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestTracker_RoomObserver(t *testing.T) {
+	tracker := NewTracker([]string{"person.alice"}, "", nil)
+
+	var gotEntity, gotRoom, gotSource string
+	var callCount int
+	tracker.OnRoomChange(func(entityID, room, source string) {
+		gotEntity = entityID
+		gotRoom = room
+		gotSource = source
+		callCount++
+	})
+
+	tracker.UpdateRoom("person.alice", "office", "ap-hor-office")
+
+	if callCount != 1 {
+		t.Fatalf("observer called %d times, want 1", callCount)
+	}
+	if gotEntity != "person.alice" {
+		t.Errorf("entityID = %q, want %q", gotEntity, "person.alice")
+	}
+	if gotRoom != "office" {
+		t.Errorf("room = %q, want %q", gotRoom, "office")
+	}
+	if gotSource != "ap-hor-office" {
+		t.Errorf("source = %q, want %q", gotSource, "ap-hor-office")
+	}
+}
+
+func TestTracker_RoomObserverNotCalledOnNoOp(t *testing.T) {
+	tracker := NewTracker([]string{"person.alice"}, "", nil)
+
+	var callCount int
+	tracker.OnRoomChange(func(_, _, _ string) {
+		callCount++
+	})
+
+	// Set initial room.
+	tracker.UpdateRoom("person.alice", "office", "ap-hor-office")
+	if callCount != 1 {
+		t.Fatalf("observer called %d times after first update, want 1", callCount)
+	}
+
+	// Same room — observer should not fire again.
+	tracker.UpdateRoom("person.alice", "office", "ap-hor-office")
+	if callCount != 1 {
+		t.Errorf("observer called %d times after no-op update, want 1", callCount)
+	}
+
+	// Different room — observer should fire.
+	tracker.UpdateRoom("person.alice", "bedroom", "ap-hor-bedroom")
+	if callCount != 2 {
+		t.Errorf("observer called %d times after room change, want 2", callCount)
+	}
+}
+
+func TestTracker_RoomObserverCalledOutsideLock(t *testing.T) {
+	tracker := NewTracker([]string{"person.alice"}, "", nil)
+
+	// Register an observer that calls GetContext (which takes a read lock).
+	// If observers were called under the write lock this would deadlock.
+	tracker.OnRoomChange(func(_, _, _ string) {
+		_, _ = tracker.GetContext(context.Background(), "")
+	})
+
+	// Should complete without deadlock.
+	done := make(chan struct{})
+	go func() {
+		tracker.UpdateRoom("person.alice", "kitchen", "ap-hor-kitchen")
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// success
+	case <-time.After(2 * time.Second):
+		t.Fatal("UpdateRoom deadlocked — observer is likely called under the write lock")
 	}
 }
