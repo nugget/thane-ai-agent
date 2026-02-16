@@ -14,9 +14,11 @@ If you have Home Assistant, Thane drops in as a native conversation agent and bl
 
 **Memory that persists.** Thane remembers facts about your home, your preferences, and your routines. It learns over time. Tell it once that you like the lights dim after 10pm and it just... knows.
 
-**Local-first.** Runs entirely on Ollama. Your conversations, your data, your hardware. Cloud models available as fallback, never required.
+**Local-first.** Can run entirely on Ollama. Your conversations, your data, your hardware. Cloud models available as fallback, never required.
 
 **Single binary.** Written in Go. No Python environments, no dependency hell. One command: `thane`.
+
+📖 **[Your First Thane](docs/guide.md)** — Complete guide for HA users: hardware, models, deployment, and building a relationship with your agent.
 
 📐 **[ARCHITECTURE.md](ARCHITECTURE.md)** — Full system design, component overview, and roadmap.
 
@@ -54,14 +56,17 @@ See [docs/getting-started.md](docs/getting-started.md) for detailed setup and de
 
 ## Features
 
-- **Full Home Assistant integration** — entity discovery, state queries, service calls, WebSocket events
+- **Full Home Assistant integration** — entity discovery, state queries, service calls, real-time WebSocket event subscriptions
 - **Smart device control** — natural language to action with fuzzy entity matching
+- **MCP tool integration** — extends capabilities via Model Context Protocol servers (e.g., ha-mcp for 90+ HA tools)
+- **Delegation system** — primary model orchestrates, local models execute tool-heavy tasks at zero API cost
 - **Semantic memory** — learns and recalls facts with embeddings-based search
 - **Web search** — SearXNG and Brave Search providers with pluggable architecture
 - **Web fetch** — extract readable content from any URL
 - **Shell execution** — run commands on the host (configurable safety guardrails)
 - **Talent system** — customize agent behavior with markdown files
-- **Model routing** — selects the right model for each task (speed vs. quality vs. cost)
+- **Model routing** — intent-based profiles select the right model for each task (speed vs. quality vs. cost)
+- **Proactive awareness** — HA WebSocket subscriptions for state changes, MQTT for Frigate events, anticipation system for event-driven triggers
 - **Checkpoint/restore** — survives restarts without losing context
 - **Dual-port architecture** — native API + Ollama-compatible API simultaneously
 - **Structured logging** — text or JSON format (`log_format` in config)
@@ -69,15 +74,24 @@ See [docs/getting-started.md](docs/getting-started.md) for detailed setup and de
 ## Architecture
 
 ```
+                    ┌─────────────────────┐
+                    │    Event Sources     │
+                    │  HA WebSocket │ MQTT │
+                    └────────┬────────────┘
+                             ▼
 User ──→ API Server ──→ Agent Loop ──→ Response
                            │
               ┌────────────┼────────────┐
               ↓            ↓            ↓
-           Memory     Model Router   HA Client
-           (SQLite)    (Ollama)      (REST/WS)
+           Memory     Model Router   Integrations
+           (SQLite)   (profiles)     (HA, MCP, shell)
+                           │
+                           ↓
+                       Delegates
+                    (local models)
 ```
 
-Thane's agent loop receives a request, assembles context from memory and home state, plans tool calls, executes them (in parallel where possible), and shapes a response.
+Thane's agent loop receives a request — from a user or an event trigger — assembles context from memory and home state, plans tool calls, delegates tool-heavy work to local models, and shapes a response. The primary model orchestrates; delegates execute.
 
 ## CLI
 
@@ -102,9 +116,9 @@ Config is auto-discovered from: `./config.yaml`, `~/Thane/config.yaml`, `~/.conf
 
 ## Roadmap
 
-**Working today:** Conversation agent, HA integration, device control, semantic memory, checkpoints, shell exec, web search (SearXNG + Brave), web fetch, web chat UI, dual-port APIs, Anthropic + Ollama model routing.
+**Working today:** Conversation agent, HA integration (REST + WebSocket), MCP tool hosting, delegation system, device control, semantic memory, checkpoints, shell exec, web search (SearXNG + Brave), web fetch, web chat UI, dual-port APIs, intent-based model routing, MQTT publishing + Frigate event subscriptions, anticipation system, task scheduler.
 
-**Next up:** Email (IMAP/SMTP), TTS, cron scheduling, proactive event-driven triggers, voice pipeline integration.
+**Next up:** HA WebSocket state subscriptions (#176), scheduler→agent wiring (#173), email (IMAP/SMTP), TTS, voice pipeline integration.
 
 **Longer term:** HA Add-on packaging, Apple ecosystem integration, multi-instance deployment, identity system.
 
