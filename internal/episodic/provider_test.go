@@ -648,9 +648,10 @@ func TestSessionHeaderRFC3339(t *testing.T) {
 
 	got := p.getRecentHistory()
 
-	// Session header should use RFC3339 format, not "Jan 2 15:04".
-	if !strings.Contains(got, "2026-02-15T21:04:00-06:00") {
-		t.Errorf("expected RFC3339 in session header, got:\n%s", got)
+	// Match the full header pattern so message timestamps alone can't
+	// satisfy this assertion.
+	if !strings.Contains(got, "**[2026-02-15T21:04:00-06:00 — RFC3339 header test]**") {
+		t.Errorf("expected RFC3339-formatted session header, got:\n%s", got)
 	}
 	// Should NOT contain old-style "Feb 15 21:04".
 	if strings.Contains(got, "Feb 15 21:04") {

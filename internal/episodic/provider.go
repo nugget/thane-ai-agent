@@ -17,6 +17,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/nugget/thane-ai-agent/internal/memory"
+	"github.com/nugget/thane-ai-agent/internal/prompts"
 )
 
 // ArchiveReader is the subset of [memory.ArchiveStore] needed by the
@@ -177,7 +178,8 @@ func (p *Provider) getRecentHistory() string {
 		return ""
 	}
 
-	budget := p.historyTokens
+	framing := prompts.EpisodicHistoryFraming() + "\n\n"
+	budget := p.historyTokens - estimateTokens(framing)
 	var entries []string
 
 	for i, sess := range sessions {
@@ -230,7 +232,7 @@ func (p *Provider) getRecentHistory() string {
 	}
 
 	var sb strings.Builder
-	sb.WriteString("⚠️ **ARCHIVED HISTORY** — The messages below are from PAST sessions, NOT the current conversation. Timestamps and time references within these messages reflect when they were originally said, not the current time. Current time is in the \"Current Conditions\" block above.\n\n")
+	sb.WriteString(framing)
 	for _, e := range entries {
 		sb.WriteString(e)
 		if !strings.HasSuffix(e, "\n") {
