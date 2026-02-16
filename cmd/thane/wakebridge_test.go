@@ -120,6 +120,37 @@ func TestWakeBridge_MatchTriggersRun(t *testing.T) {
 	}
 }
 
+func TestWakeBridge_SameStateSuppressed(t *testing.T) {
+	matcher := &mockMatcher{
+		matched: []*anticipation.Anticipation{{
+			ID:          "ant-suppress",
+			Description: "Should not fire",
+		}},
+	}
+	runner := &chanRunner{
+		calls: make(chan *agent.Request, 1),
+		resp:  &agent.Response{Content: "ok"},
+	}
+	bridge, provider := newTestBridge(matcher, runner, time.Hour)
+
+	// Same old and new state — should be suppressed entirely.
+	bridge.HandleStateChange("person.nugget", "home", "home")
+
+	time.Sleep(50 * time.Millisecond)
+
+	select {
+	case <-runner.calls:
+		t.Error("runner should not be called when state hasn't changed")
+	default:
+		// Expected: no call.
+	}
+
+	// Provider should NOT be updated for no-change events.
+	if provider.called {
+		t.Error("provider.SetWakeContext should not be called when state hasn't changed")
+	}
+}
+
 func TestWakeBridge_NoMatchNoRun(t *testing.T) {
 	matcher := &mockMatcher{matched: nil}
 	runner := &chanRunner{
