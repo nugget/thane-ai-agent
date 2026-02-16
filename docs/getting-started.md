@@ -144,6 +144,6 @@ The systemd unit includes comprehensive sandboxing: `ProtectSystem=strict`, `NoN
 
 ## Next Steps
 
-- [Home Assistant Integration](homeassistant.md) — Connect Thane as your HA conversation agent
+- [Thane + Home Assistant](homeassistant.md) — Connect Thane as your HA conversation agent
 - [ARCHITECTURE.md](../ARCHITECTURE.md) — Understand how Thane works under the hood
 - [config.example.yaml](../examples/config.example.yaml) — Full configuration reference
