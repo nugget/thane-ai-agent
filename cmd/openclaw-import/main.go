@@ -424,15 +424,29 @@ func importSession(store *memory.ArchiveStore, sess parsedSession, logger *slog.
 		return fmt.Errorf("create session: %w", err)
 	}
 
-	// Archive messages
-	if len(sess.messages) > 0 {
-		// Fix session IDs to point to our new session
-		for i := range sess.messages {
-			sess.messages[i].SessionID = archiveSess.ID
-		}
-		if err := store.ArchiveMessages(sess.messages); err != nil {
-			return fmt.Errorf("archive messages: %w", err)
-		}
+	// Inject environment preamble so future searches carry provenance context.
+	// This helps the agent discount tool calls, file paths, and environment
+	// details that reflect the OpenClaw runtime, not the current one.
+	preamble := memory.ArchivedMessage{
+		ID:             fmt.Sprintf("preamble-%s", archiveSess.ID),
+		ConversationID: "openclaw-import",
+		SessionID:      archiveSess.ID,
+		Role:           "system",
+		Content: "This conversation occurred in the OpenClaw runtime (Docker on Linux arm64). " +
+			"Tool calls, file paths (/home/aimee/.openclaw/workspace/), and environment " +
+			"details reflect that specific environment and may not apply to the current runtime.",
+		Timestamp:     sess.startedAt,
+		TokenCount:    50,
+		ArchiveReason: "import",
+	}
+
+	// Archive messages with preamble prepended
+	allMessages := append([]memory.ArchivedMessage{preamble}, sess.messages...)
+	for i := range allMessages {
+		allMessages[i].SessionID = archiveSess.ID
+	}
+	if err := store.ArchiveMessages(allMessages); err != nil {
+		return fmt.Errorf("archive messages: %w", err)
 	}
 
 	// Archive tool calls
@@ -465,8 +479,8 @@ func importSession(store *memory.ArchiveStore, sess parsedSession, logger *slog.
 		return fmt.Errorf("end session: %w", err)
 	}
 
-	// Set message count and summary
-	_ = store.SetSessionMessageCount(archiveSess.ID, len(sess.messages))
+	// Set message count (includes preamble) and summary
+	_ = store.SetSessionMessageCount(archiveSess.ID, len(sess.messages)+1)
 
 	summary := fmt.Sprintf("[Imported from OpenClaw session %s]", memory.ShortID(sess.id))
 	_ = store.SetSessionSummary(archiveSess.ID, summary)
