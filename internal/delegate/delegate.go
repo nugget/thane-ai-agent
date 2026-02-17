@@ -163,11 +163,12 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 	defer cancel()
 
 	// Safety net: log if Execute returns without recording completion.
-	// With the context deadline fix this should never fire, but it
-	// guards against unforeseen code paths.
+	// With the context deadline fix this should rarely fire, but it
+	// guards against unforeseen code paths. Context cancellation
+	// (including timeouts) is an expected exit and should not log.
 	var completed bool
 	defer func() {
-		if !completed {
+		if !completed && ctx.Err() == nil {
 			e.logger.Error("delegate terminated without completion record",
 				"delegate_id", did,
 				"profile", profileName,
@@ -302,6 +303,12 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 					ExhaustReason: ExhaustWallClock,
 				}, nil
 			}
+			// External cancellation — use consistent error form.
+			if errors.Is(ctx.Err(), context.Canceled) {
+				completed = true
+				return nil, fmt.Errorf("delegate cancelled: %w", ctx.Err())
+			}
+			completed = true
 			return nil, fmt.Errorf("delegate llm call failed (iter %d): %w", i, err)
 		}
 
@@ -464,46 +471,49 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 			toolCtx := tools.WithConversationID(ctx, "delegate")
 			result, err := reg.Execute(toolCtx, tc.Function.Name, argsJSON)
 			if err != nil {
-				// If our context deadline fired, stop executing remaining
-				// tool calls and return an exhaustion result immediately.
-				// External cancellation (context.Canceled) falls through to
-				// the normal tool error path and is caught at the next
-				// iteration boundary.
-				if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-					e.logger.Warn("delegate context deadline exceeded during tool exec",
-						"delegate_id", did,
-						"profile", profile.Name,
-						"tool", tc.Function.Name,
-						"elapsed", time.Since(startTime).Round(time.Millisecond),
-					)
+				// If context is done (our deadline or external cancellation),
+				// stop executing remaining tool calls immediately.
+				if ctx.Err() != nil {
+					if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+						e.logger.Warn("delegate context deadline exceeded during tool exec",
+							"delegate_id", did,
+							"profile", profile.Name,
+							"tool", tc.Function.Name,
+							"elapsed", time.Since(startTime).Round(time.Millisecond),
+						)
+						completed = true
+						e.recordCompletion(&completionRecord{
+							delegateID:     did,
+							conversationID: tools.ConversationIDFromContext(ctx),
+							task:           task,
+							guidance:       guidance,
+							profileName:    profile.Name,
+							model:          model,
+							totalIter:      i + 1,
+							maxIter:        maxIter,
+							totalInput:     totalInput,
+							totalOutput:    totalOutput,
+							exhausted:      true,
+							exhaustReason:  ExhaustWallClock,
+							startTime:      startTime,
+							messages:       messages,
+							resultContent:  "Delegate was unable to complete the task within its time limit.",
+							errMsg:         err.Error(),
+						})
+						return &Result{
+							Content:       "Delegate was unable to complete the task within its time limit.",
+							Model:         model,
+							Iterations:    i + 1,
+							InputTokens:   totalInput,
+							OutputTokens:  totalOutput,
+							Exhausted:     true,
+							ExhaustReason: ExhaustWallClock,
+						}, nil
+					}
+					// External cancellation — stop tool execution and
+					// propagate as error.
 					completed = true
-					e.recordCompletion(&completionRecord{
-						delegateID:     did,
-						conversationID: tools.ConversationIDFromContext(ctx),
-						task:           task,
-						guidance:       guidance,
-						profileName:    profile.Name,
-						model:          model,
-						totalIter:      i + 1,
-						maxIter:        maxIter,
-						totalInput:     totalInput,
-						totalOutput:    totalOutput,
-						exhausted:      true,
-						exhaustReason:  ExhaustWallClock,
-						startTime:      startTime,
-						messages:       messages,
-						resultContent:  "Delegate was unable to complete the task within its time limit.",
-						errMsg:         err.Error(),
-					})
-					return &Result{
-						Content:       "Delegate was unable to complete the task within its time limit.",
-						Model:         model,
-						Iterations:    i + 1,
-						InputTokens:   totalInput,
-						OutputTokens:  totalOutput,
-						Exhausted:     true,
-						ExhaustReason: ExhaustWallClock,
-					}, nil
+					return nil, fmt.Errorf("delegate cancelled: %w", ctx.Err())
 				}
 				result = "Error: " + err.Error()
 				e.logger.Error("delegate tool exec failed",
