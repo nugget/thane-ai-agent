@@ -22,6 +22,7 @@ import (
 	"strings"
 	"time"
 
+	_ "github.com/mattn/go-sqlite3" // SQLite driver with FTS5 support
 	"github.com/nugget/thane-ai-agent/internal/memory"
 )
 
