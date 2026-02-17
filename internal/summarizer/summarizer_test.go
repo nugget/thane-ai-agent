@@ -299,6 +299,70 @@ func TestWorker_LLMFailureContinues(t *testing.T) {
 	}
 }
 
+func TestWorker_ClosesOrphanedSessions(t *testing.T) {
+	store := newTestStore(t)
+	mock := &mockLLMClient{}
+	rtr := newTestRouter()
+
+	// Create a session with messages but don't end it — simulates a crash.
+	sess, err := store.StartSession("conv-orphan")
+	if err != nil {
+		t.Fatal(err)
+	}
+	msgs := []memory.ArchivedMessage{
+		{
+			ID:             fmt.Sprintf("msg-%s", sess.ID),
+			ConversationID: "conv-orphan",
+			SessionID:      sess.ID,
+			Role:           "user",
+			Content:        "This session was orphaned by a crash.",
+			Timestamp:      time.Now(),
+			ArchiveReason:  "test",
+		},
+	}
+	if err := store.ArchiveMessages(msgs); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.IncrementSessionCount(sess.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := Config{
+		Interval:     time.Hour,
+		Timeout:      10 * time.Second,
+		PauseBetween: 1 * time.Millisecond,
+		BatchSize:    10,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	w := New(store, mock, rtr, slog.Default(), cfg)
+	// Set startTime to the future so the orphaned session qualifies.
+	w.startTime = time.Now().Add(time.Minute)
+	w.Start(ctx)
+
+	// The worker should close the orphaned session and then summarize it.
+	waitFor(t, 5*time.Second, func() bool {
+		return mock.calls.Load() >= 1
+	})
+
+	cancel()
+	w.Stop()
+
+	// Verify the session was closed with crash_recovery.
+	got, err := store.GetSession(sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.EndReason != "crash_recovery" {
+		t.Errorf("end_reason = %q, want %q", got.EndReason, "crash_recovery")
+	}
+
+	// Verify it was summarized.
+	if got.Title == "" {
+		t.Error("orphaned session should have been summarized after recovery")
+	}
+}
+
 func TestBuildTranscript(t *testing.T) {
 	messages := []memory.ArchivedMessage{
 		{Role: "system", Content: "You are a helpful assistant.", Timestamp: time.Now()},

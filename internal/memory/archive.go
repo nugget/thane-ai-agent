@@ -784,6 +784,22 @@ func (s *ArchiveStore) EndSessionAt(sessionID string, reason string, endedAt tim
 	return err
 }
 
+// CloseOrphanedSessions ends any sessions that are still open (ended_at IS NULL)
+// but were started before the given cutoff time. This recovers sessions orphaned
+// by crashes (SIGKILL, OOM, panics) where EndSession was never called. Returns
+// the number of sessions closed.
+func (s *ArchiveStore) CloseOrphanedSessions(before time.Time) (int64, error) {
+	result, err := s.db.Exec(`
+		UPDATE sessions
+		SET ended_at = ?, end_reason = 'crash_recovery'
+		WHERE ended_at IS NULL AND started_at < ?
+	`, time.Now().UTC().Format(time.RFC3339Nano), before.UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return 0, fmt.Errorf("close orphaned sessions: %w", err)
+	}
+	return result.RowsAffected()
+}
+
 // SetSessionSummary updates only the summary text for a session.
 // For richer metadata, use SetSessionMetadata.
 func (s *ArchiveStore) SetSessionSummary(sessionID string, summary string) error {

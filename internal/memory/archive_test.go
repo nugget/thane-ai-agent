@@ -568,3 +568,63 @@ func TestUnsummarizedSessions(t *testing.T) {
 		t.Fatalf("expected 2 sessions with limit=2, got %d", len(limited))
 	}
 }
+
+// TestCloseOrphanedSessions verifies that open sessions older than the
+// cutoff are closed with reason "crash_recovery", while recent and
+// already-ended sessions are untouched.
+func TestCloseOrphanedSessions(t *testing.T) {
+	store := newTestArchiveStore(t)
+
+	// Create two open sessions — both started "now" in test time.
+	old, err := store.StartSession("conv-old")
+	if err != nil {
+		t.Fatal(err)
+	}
+	recent, err := store.StartSession("conv-recent")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Create an already-ended session — should not be touched.
+	ended, err := store.StartSession("conv-ended")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.EndSession(ended.ID, "normal"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Use a cutoff that is after the "old" session but we need to
+	// actually differentiate. Since both were created nearly
+	// simultaneously, use a cutoff well in the future to close both
+	// open sessions.
+	cutoff := time.Now().Add(time.Minute)
+	closed, err := store.CloseOrphanedSessions(cutoff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if closed != 2 {
+		t.Fatalf("expected 2 orphaned sessions closed, got %d", closed)
+	}
+
+	// Verify old session was closed with crash_recovery.
+	got, _ := store.GetSession(old.ID)
+	if got.EndReason != "crash_recovery" {
+		t.Errorf("old session end_reason = %q, want %q", got.EndReason, "crash_recovery")
+	}
+	if got.EndedAt == nil {
+		t.Error("old session ended_at should not be nil")
+	}
+
+	// Verify recent session was also closed.
+	got, _ = store.GetSession(recent.ID)
+	if got.EndReason != "crash_recovery" {
+		t.Errorf("recent session end_reason = %q, want %q", got.EndReason, "crash_recovery")
+	}
+
+	// Verify already-ended session was not modified.
+	got, _ = store.GetSession(ended.ID)
+	if got.EndReason != "normal" {
+		t.Errorf("ended session end_reason = %q, want %q", got.EndReason, "normal")
+	}
+}

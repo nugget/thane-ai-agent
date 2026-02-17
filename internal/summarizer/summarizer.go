@@ -81,6 +81,7 @@ type Worker struct {
 	router    *router.Router
 	logger    *slog.Logger
 	config    Config
+	startTime time.Time // process start time — sessions older than this are orphan candidates
 
 	cancel context.CancelFunc
 	done   chan struct{}
@@ -95,6 +96,7 @@ func New(store *memory.ArchiveStore, llmClient llm.Client, rtr *router.Router, l
 		router:    rtr,
 		logger:    logger.With("component", "summarizer"),
 		config:    cfg,
+		startTime: time.Now().UTC(),
 		done:      make(chan struct{}),
 	}
 }
@@ -118,6 +120,19 @@ func (w *Worker) Stop() {
 
 func (w *Worker) run(ctx context.Context) {
 	defer close(w.done)
+
+	// Phase 0: close orphaned sessions from prior crashes.
+	// If the process was killed (SIGKILL, OOM, panic), EndSession never
+	// ran and ended_at stays NULL. Close any session started before this
+	// process so it becomes eligible for summarization.
+	closed, err := w.store.CloseOrphanedSessions(w.startTime)
+	if err != nil {
+		w.logger.Error("failed to close orphaned sessions", "error", err)
+	} else if closed > 0 {
+		w.logger.Warn("closed orphaned sessions from prior crash",
+			"count", closed,
+		)
+	}
 
 	// Phase 1: startup catch-up scan.
 	w.logger.Info("summarizer starting, scanning for unsummarized sessions")
