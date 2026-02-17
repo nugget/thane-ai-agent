@@ -784,6 +784,22 @@ func (s *ArchiveStore) EndSessionAt(sessionID string, reason string, endedAt tim
 	return err
 }
 
+// CloseOrphanedSessions ends any sessions that are still open (ended_at IS NULL)
+// but were started before the given cutoff time. This recovers sessions orphaned
+// by crashes (SIGKILL, OOM, panics) where EndSession was never called. Returns
+// the number of sessions closed.
+func (s *ArchiveStore) CloseOrphanedSessions(before time.Time) (int64, error) {
+	result, err := s.db.Exec(`
+		UPDATE sessions
+		SET ended_at = ?, end_reason = 'crash_recovery'
+		WHERE ended_at IS NULL AND started_at < ?
+	`, time.Now().UTC().Format(time.RFC3339Nano), before.UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return 0, fmt.Errorf("close orphaned sessions: %w", err)
+	}
+	return result.RowsAffected()
+}
+
 // SetSessionSummary updates only the summary text for a session.
 // For richer metadata, use SetSessionMetadata.
 func (s *ArchiveStore) SetSessionSummary(sessionID string, summary string) error {
@@ -897,6 +913,42 @@ func (s *ArchiveStore) ListSessions(conversationID string, limit int) ([]*Sessio
 	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list sessions: %w", err)
+	}
+	defer rows.Close()
+
+	var sessions []*Session
+	for rows.Next() {
+		sess, err := s.scanSessionRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		sessions = append(sessions, sess)
+	}
+
+	return sessions, rows.Err()
+}
+
+// UnsummarizedSessions returns ended sessions that have no metadata yet,
+// ordered oldest-first for catch-up processing. Only sessions with at
+// least one message are returned to avoid wasting LLM calls on empty
+// sessions.
+func (s *ArchiveStore) UnsummarizedSessions(limit int) ([]*Session, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+
+	rows, err := s.db.Query(`
+		SELECT id, conversation_id, started_at, ended_at, end_reason,
+		       message_count, summary, title, tags, metadata
+		FROM sessions
+		WHERE ended_at IS NOT NULL
+		  AND (title IS NULL OR title = '')
+		  AND message_count > 0
+		ORDER BY ended_at ASC
+		LIMIT ?
+	`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("unsummarized sessions: %w", err)
 	}
 	defer rows.Close()
 

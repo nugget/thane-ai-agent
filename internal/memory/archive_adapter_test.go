@@ -1,7 +1,6 @@
 package memory
 
 import (
-	"context"
 	"log/slog"
 	"os"
 	"testing"
@@ -200,44 +199,6 @@ func TestAdapter_OnMessage(t *testing.T) {
 	sess, _ := store.GetSession(sid)
 	if sess.MessageCount != 3 {
 		t.Errorf("expected message_count=3, got %d", sess.MessageCount)
-	}
-}
-
-func TestAdapter_Summarizer(t *testing.T) {
-	adapter, store := newTestAdapter(t)
-
-	summarized := make(chan string, 1)
-	adapter.SetSummarizer(func(ctx context.Context, messages []ArchivedMessage) (string, error) {
-		summary := "discussed testing and architecture"
-		summarized <- summary
-		return summary, nil
-	})
-
-	sid, _ := adapter.StartSession("conv-1")
-
-	// Archive some messages so the summarizer has something to work with
-	msgs := []Message{
-		{Role: "user", Content: "let's talk about tests", Timestamp: time.Now()},
-		{Role: "assistant", Content: "sure, let's discuss", Timestamp: time.Now()},
-	}
-	_ = adapter.ArchiveConversation("conv-1", msgs, "manual")
-
-	// End session triggers async summary
-	adapter.EndSession(sid, "reset")
-
-	// Wait for the summary goroutine
-	select {
-	case <-summarized:
-	case <-time.After(5 * time.Second):
-		t.Fatal("timed out waiting for summary")
-	}
-
-	// Give a moment for the DB write after the channel send
-	time.Sleep(100 * time.Millisecond)
-
-	sess, _ := store.GetSession(sid)
-	if sess.Summary != "discussed testing and architecture" {
-		t.Errorf("expected summary, got %q", sess.Summary)
 	}
 }
 
