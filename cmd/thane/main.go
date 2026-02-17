@@ -55,6 +55,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/router"
 	"github.com/nugget/thane-ai-agent/internal/scheduler"
 	"github.com/nugget/thane-ai-agent/internal/search"
+	sessionsummarizer "github.com/nugget/thane-ai-agent/internal/summarizer"
 	"github.com/nugget/thane-ai-agent/internal/talents"
 	"github.com/nugget/thane-ai-agent/internal/tools"
 	"github.com/nugget/thane-ai-agent/internal/unifi"
@@ -479,82 +480,6 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	archiveAdapter := memory.NewArchiveAdapter(archiveStore, logger)
 	archiveAdapter.SetToolCallSource(mem)
 
-	// Choose which model generates session metadata — async, latency doesn't matter.
-	metadataModel := cfg.Archive.MetadataModel
-	if metadataModel == "" {
-		metadataModel = cfg.Models.Default
-	}
-	logger.Info("archive metadata model configured", "model", metadataModel)
-
-	archiveAdapter.SetMetadataGenerator(func(ctx context.Context, messages []memory.ArchivedMessage, toolCalls []memory.ArchivedToolCall) (*memory.SessionMetadata, string, []string, error) {
-		// Build a condensed transcript for the LLM
-		var transcript strings.Builder
-		for _, m := range messages {
-			if m.Role == "system" {
-				continue
-			}
-			transcript.WriteString(fmt.Sprintf("[%s] %s: %s\n",
-				m.Timestamp.Format("15:04"), m.Role, m.Content))
-			if transcript.Len() > 8000 {
-				transcript.WriteString("\n... (truncated)\n")
-				break
-			}
-		}
-
-		// Build tool usage summary
-		toolUsage := make(map[string]int)
-		for _, tc := range toolCalls {
-			toolUsage[tc.ToolName]++
-		}
-
-		prompt := prompts.MetadataPrompt(transcript.String())
-
-		msgs := []llm.Message{{Role: "user", Content: prompt}}
-		resp, err := llmClient.Chat(ctx, metadataModel, msgs, nil)
-		if err != nil {
-			return nil, "", nil, err
-		}
-
-		// Parse the LLM response as JSON
-		content := resp.Message.Content
-		// Strip markdown code fences if present
-		content = strings.TrimPrefix(content, "```json\n")
-		content = strings.TrimPrefix(content, "```\n")
-		content = strings.TrimSuffix(content, "\n```")
-		content = strings.TrimSpace(content)
-
-		var result struct {
-			Title        string   `json:"title"`
-			Tags         []string `json:"tags"`
-			OneLiner     string   `json:"one_liner"`
-			Paragraph    string   `json:"paragraph"`
-			Detailed     string   `json:"detailed"`
-			KeyDecisions []string `json:"key_decisions"`
-			Participants []string `json:"participants"`
-			SessionType  string   `json:"session_type"`
-		}
-		if err := json.Unmarshal([]byte(content), &result); err != nil {
-			// If JSON parsing fails, fall back to using the raw text as a summary
-			logger.Warn("session metadata JSON parse failed, using raw summary",
-				"error", err,
-			)
-			meta := &memory.SessionMetadata{Paragraph: resp.Message.Content}
-			return meta, "", nil, nil
-		}
-
-		meta := &memory.SessionMetadata{
-			OneLiner:     result.OneLiner,
-			Paragraph:    result.Paragraph,
-			Detailed:     result.Detailed,
-			KeyDecisions: result.KeyDecisions,
-			Participants: result.Participants,
-			SessionType:  result.SessionType,
-			ToolsUsed:    toolUsage,
-		}
-
-		return meta, result.Title, result.Tags, nil
-	})
-
 	// --- Conversation compactor ---
 	// When a conversation grows too long, the compactor summarizes older
 	// messages to stay within the model's context window. Uses the default
@@ -642,6 +567,21 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		"default", routerCfg.DefaultModel,
 		"local_first", routerCfg.LocalFirst,
 	)
+
+	// --- Session metadata summarizer ---
+	// Background worker that generates titles, tags, and summaries for
+	// sessions that ended without metadata (e.g., during shutdown).
+	// Runs immediately on startup to catch up, then periodically.
+	summarizerCfg := sessionsummarizer.Config{
+		Interval:        time.Duration(cfg.Archive.SummarizeInterval) * time.Second,
+		Timeout:         time.Duration(cfg.Archive.SummarizeTimeout) * time.Second,
+		PauseBetween:    5 * time.Second,
+		BatchSize:       10,
+		ModelPreference: cfg.Archive.MetadataModel,
+	}
+	summaryWorker := sessionsummarizer.New(archiveStore, llmClient, rtr, logger, summarizerCfg)
+	summaryWorker.Start(ctx)
+	defer summaryWorker.Stop()
 
 	// --- Scheduler ---
 	// Persistent task scheduler for deferred and recurring work (e.g.,

@@ -486,3 +486,85 @@ func TestSetSessionMetadata(t *testing.T) {
 		t.Errorf("key_decisions: got %v", got.Metadata.KeyDecisions)
 	}
 }
+
+// TestUnsummarizedSessions verifies the query returns ended sessions
+// without metadata, respects filters, and orders oldest-first.
+func TestUnsummarizedSessions(t *testing.T) {
+	store := newTestArchiveStore(t)
+
+	// Create 3 ended sessions with messages but no metadata.
+	var unsummarized []string
+	for i := 0; i < 3; i++ {
+		sess, err := store.StartSession(fmt.Sprintf("conv-%d", i))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := store.IncrementSessionCount(sess.ID); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.EndSession(sess.ID, "reset"); err != nil {
+			t.Fatal(err)
+		}
+		unsummarized = append(unsummarized, sess.ID)
+	}
+
+	// Create an ended session WITH metadata — should be excluded.
+	summarized, err := store.StartSession("conv-summarized")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.IncrementSessionCount(summarized.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.EndSession(summarized.ID, "reset"); err != nil {
+		t.Fatal(err)
+	}
+	meta := &SessionMetadata{OneLiner: "Already summarized"}
+	if err := store.SetSessionMetadata(summarized.ID, meta, "Has Title", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a still-active session — should be excluded.
+	active, err := store.StartSession("conv-active")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.IncrementSessionCount(active.ID); err != nil {
+		t.Fatal(err)
+	}
+	_ = active
+
+	// Create an ended session with zero messages — should be excluded.
+	empty, err := store.StartSession("conv-empty")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.EndSession(empty.ID, "reset"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Query: should return only the 3 unsummarized sessions.
+	sessions, err := store.UnsummarizedSessions(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 3 {
+		t.Fatalf("expected 3 unsummarized sessions, got %d", len(sessions))
+	}
+
+	// Verify oldest-first order (by ended_at ASC).
+	for i, sess := range sessions {
+		if sess.ID != unsummarized[i] {
+			t.Errorf("session[%d] = %s, want %s", i, ShortID(sess.ID), ShortID(unsummarized[i]))
+		}
+	}
+
+	// Verify limit is respected.
+	limited, err := store.UnsummarizedSessions(2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(limited) != 2 {
+		t.Fatalf("expected 2 sessions with limit=2, got %d", len(limited))
+	}
+}

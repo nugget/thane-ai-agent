@@ -326,11 +326,20 @@ type ContextConfig struct {
 
 // ArchiveConfig configures session archive behavior.
 type ArchiveConfig struct {
-	// MetadataModel is the LLM model used for generating session metadata
-	// (title, tags, summaries) on session close. This is an asynchronous
-	// operation where latency doesn't matter — ideal for local/free models.
-	// Default: uses the default model.
+	// MetadataModel is a soft preference for the LLM model used when
+	// generating session metadata (title, tags, summaries). Passed as a
+	// hint to the model router; the router has final say. This is a
+	// background operation where latency doesn't matter — ideal for
+	// local/free models. Default: uses the default model.
 	MetadataModel string `yaml:"metadata_model"`
+
+	// SummarizeInterval is how often (in seconds) the background
+	// summarizer scans for unsummarized sessions. Default: 300 (5 min).
+	SummarizeInterval int `yaml:"summarize_interval"`
+
+	// SummarizeTimeout is the max seconds for a single session's
+	// metadata LLM call. Default: 60.
+	SummarizeTimeout int `yaml:"summarize_timeout"`
 }
 
 // ExtractionConfig configures automatic fact extraction from conversations.
@@ -667,6 +676,12 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Archive.MetadataModel == "" {
 		c.Archive.MetadataModel = c.Models.Default
+	}
+	if c.Archive.SummarizeInterval == 0 {
+		c.Archive.SummarizeInterval = 300
+	}
+	if c.Archive.SummarizeTimeout == 0 {
+		c.Archive.SummarizeTimeout = 60
 	}
 	if c.Extraction.Model == "" {
 		c.Extraction.Model = c.Archive.MetadataModel

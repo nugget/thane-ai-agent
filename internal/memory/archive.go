@@ -912,6 +912,42 @@ func (s *ArchiveStore) ListSessions(conversationID string, limit int) ([]*Sessio
 	return sessions, rows.Err()
 }
 
+// UnsummarizedSessions returns ended sessions that have no metadata yet,
+// ordered oldest-first for catch-up processing. Only sessions with at
+// least one message are returned to avoid wasting LLM calls on empty
+// sessions.
+func (s *ArchiveStore) UnsummarizedSessions(limit int) ([]*Session, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+
+	rows, err := s.db.Query(`
+		SELECT id, conversation_id, started_at, ended_at, end_reason,
+		       message_count, summary, title, tags, metadata
+		FROM sessions
+		WHERE ended_at IS NOT NULL
+		  AND (title IS NULL OR title = '')
+		  AND message_count > 0
+		ORDER BY ended_at ASC
+		LIMIT ?
+	`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("unsummarized sessions: %w", err)
+	}
+	defer rows.Close()
+
+	var sessions []*Session
+	for rows.Next() {
+		sess, err := s.scanSessionRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		sessions = append(sessions, sess)
+	}
+
+	return sessions, rows.Err()
+}
+
 // GetSessionTranscript returns all archived messages for a session in chronological order.
 func (s *ArchiveStore) GetSessionTranscript(sessionID string) ([]ArchivedMessage, error) {
 	rows, err := s.db.Query(`
