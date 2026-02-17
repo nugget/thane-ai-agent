@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -308,13 +309,13 @@ func TestBuildTranscript(t *testing.T) {
 	transcript := buildTranscript(messages)
 
 	// System message should be excluded.
-	if contains(transcript, "helpful assistant") {
+	if strings.Contains(transcript, "helpful assistant") {
 		t.Error("transcript should exclude system messages")
 	}
-	if !contains(transcript, "Hello") {
+	if !strings.Contains(transcript, "Hello") {
 		t.Error("transcript should contain user message")
 	}
-	if !contains(transcript, "Hi there!") {
+	if !strings.Contains(transcript, "Hi there!") {
 		t.Error("transcript should contain assistant message")
 	}
 }
@@ -333,10 +334,10 @@ func TestBuildTranscript_Truncation(t *testing.T) {
 
 	transcript := buildTranscript(messages)
 
-	if !contains(transcript, "... (truncated)") {
+	if !strings.Contains(transcript, "... (truncated)") {
 		t.Error("transcript should be truncated")
 	}
-	if contains(transcript, "Should not appear") {
+	if strings.Contains(transcript, "Should not appear") {
 		t.Error("second message should be excluded after truncation")
 	}
 }
@@ -397,19 +398,6 @@ func TestParseMetadataResponse_InvalidJSON(t *testing.T) {
 	if meta.Paragraph != "Not valid JSON at all" {
 		t.Errorf("paragraph should be raw content on parse failure, got %q", meta.Paragraph)
 	}
-}
-
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsStr(s, substr))
-}
-
-func containsStr(s, sub string) bool {
-	for i := 0; i <= len(s)-len(sub); i++ {
-		if s[i:i+len(sub)] == sub {
-			return true
-		}
-	}
-	return false
 }
 
 func waitFor(t *testing.T, timeout time.Duration, condition func() bool) {
