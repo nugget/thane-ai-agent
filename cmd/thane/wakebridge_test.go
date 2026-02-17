@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -61,6 +62,28 @@ func (s *stubStateGetter) GetState(_ context.Context, entityID string) (*homeass
 		return st, nil
 	}
 	return nil, fmt.Errorf("entity not found: %s", entityID)
+}
+
+// mockResolver records Resolve calls (thread-safe).
+type mockResolver struct {
+	mu       sync.Mutex
+	resolved []string
+	err      error
+}
+
+func (r *mockResolver) Resolve(id string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.resolved = append(r.resolved, id)
+	return r.err
+}
+
+func (r *mockResolver) getResolved() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	cp := make([]string, len(r.resolved))
+	copy(cp, r.resolved)
+	return cp
 }
 
 func newTestBridge(matcher anticipationMatcher, runner agentRunner, cooldown time.Duration) (*WakeBridge, *mockProvider) {
@@ -121,11 +144,19 @@ func TestWakeBridge_MatchTriggersRun(t *testing.T) {
 		if req.Hints[router.HintLocalOnly] != "true" {
 			t.Errorf("hint local_only = %q, want %q", req.Hints[router.HintLocalOnly], "true")
 		}
-		if req.Hints[router.HintQualityFloor] != "5" {
-			t.Errorf("hint quality_floor = %q, want %q", req.Hints[router.HintQualityFloor], "5")
+		if req.Hints[router.HintQualityFloor] != "6" {
+			t.Errorf("hint quality_floor = %q, want %q", req.Hints[router.HintQualityFloor], "6")
 		}
 		if req.Hints[router.HintMission] != "anticipation" {
 			t.Errorf("hint mission = %q, want %q", req.Hints[router.HintMission], "anticipation")
+		}
+		if req.Hints[router.HintDelegationGating] != "disabled" {
+			t.Errorf("hint delegation_gating = %q, want %q", req.Hints[router.HintDelegationGating], "disabled")
+		}
+
+		// Wake runs should use an isolated conversation ID.
+		if req.ConversationID != "wake-ant-1" {
+			t.Errorf("ConversationID = %q, want %q", req.ConversationID, "wake-ant-1")
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("runner.Run was not called within timeout")
@@ -577,5 +608,170 @@ func TestFetchEntityContext_NoEntities(t *testing.T) {
 	result := b.fetchEntityContext(a, "")
 	if result != "" {
 		t.Errorf("expected empty string with no entities, got %q", result)
+	}
+}
+
+func TestWakeBridge_UnavailableStateSuppressed(t *testing.T) {
+	matcher := &mockMatcher{
+		matched: []*anticipation.Anticipation{{
+			ID:          "ant-unavail",
+			Description: "Should not fire",
+		}},
+	}
+	runner := &chanRunner{
+		calls: make(chan *agent.Request, 1),
+		resp:  &agent.Response{Content: "ok"},
+	}
+	bridge, provider := newTestBridge(matcher, runner, time.Hour)
+
+	// Transition to "unavailable" — should be suppressed.
+	bridge.HandleStateChange("sensor.temp", "72", "unavailable")
+
+	time.Sleep(50 * time.Millisecond)
+	select {
+	case <-runner.calls:
+		t.Error("runner should not be called for transition to unavailable")
+	default:
+	}
+	if provider.called {
+		t.Error("provider should not be called for transition to unavailable")
+	}
+
+	// Transition from "unavailable" — also suppressed.
+	bridge.HandleStateChange("sensor.temp", "unavailable", "72")
+
+	time.Sleep(50 * time.Millisecond)
+	select {
+	case <-runner.calls:
+		t.Error("runner should not be called for transition from unavailable")
+	default:
+	}
+}
+
+func TestWakeBridge_OneShotAutoResolves(t *testing.T) {
+	resolver := &mockResolver{}
+	matcher := &mockMatcher{
+		matched: []*anticipation.Anticipation{{
+			ID:          "ant-oneshot",
+			Description: "One-shot event",
+			Context:     "Do something once.",
+			Recurring:   false,
+		}},
+	}
+	runner := &chanRunner{
+		calls: make(chan *agent.Request, 1),
+		resp:  &agent.Response{Content: "Done."},
+	}
+	provider := &mockProvider{}
+	bridge := NewWakeBridge(WakeBridgeConfig{
+		Store:    matcher,
+		Resolver: resolver,
+		Runner:   runner,
+		Provider: provider,
+		Logger:   slog.Default(),
+		Ctx:      context.Background(),
+		Cooldown: time.Hour,
+	})
+
+	bridge.HandleStateChange("light.kitchen", "off", "on")
+
+	select {
+	case req := <-runner.calls:
+		// One-shot: should not have ExcludeTools set.
+		if len(req.ExcludeTools) != 0 {
+			t.Errorf("one-shot wake should not exclude tools, got %v", req.ExcludeTools)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("runner.Run was not called within timeout")
+	}
+
+	// Give goroutine time to resolve.
+	time.Sleep(100 * time.Millisecond)
+
+	resolved := resolver.getResolved()
+	if len(resolved) != 1 {
+		t.Fatalf("expected 1 resolve call, got %d", len(resolved))
+	}
+	if resolved[0] != "ant-oneshot" {
+		t.Errorf("resolved ID = %q, want %q", resolved[0], "ant-oneshot")
+	}
+}
+
+func TestWakeBridge_RecurringExcludesLifecycleTools(t *testing.T) {
+	resolver := &mockResolver{}
+	matcher := &mockMatcher{
+		matched: []*anticipation.Anticipation{{
+			ID:          "ant-recurring",
+			Description: "Recurring event",
+			Context:     "Do something every time.",
+			Recurring:   true,
+		}},
+	}
+	runner := &chanRunner{
+		calls: make(chan *agent.Request, 1),
+		resp:  &agent.Response{Content: "Done."},
+	}
+	provider := &mockProvider{}
+	bridge := NewWakeBridge(WakeBridgeConfig{
+		Store:    matcher,
+		Resolver: resolver,
+		Runner:   runner,
+		Provider: provider,
+		Logger:   slog.Default(),
+		Ctx:      context.Background(),
+		Cooldown: time.Hour,
+	})
+
+	bridge.HandleStateChange("light.kitchen", "off", "on")
+
+	select {
+	case req := <-runner.calls:
+		// Recurring: should exclude lifecycle tools.
+		if len(req.ExcludeTools) != 2 {
+			t.Fatalf("recurring wake should exclude 2 lifecycle tools, got %v", req.ExcludeTools)
+		}
+		excluded := map[string]bool{}
+		for _, name := range req.ExcludeTools {
+			excluded[name] = true
+		}
+		if !excluded["resolve_anticipation"] {
+			t.Error("missing resolve_anticipation in ExcludeTools")
+		}
+		if !excluded["cancel_anticipation"] {
+			t.Error("missing cancel_anticipation in ExcludeTools")
+		}
+
+		// Recurring message should mention recurring.
+		if !strings.Contains(req.Messages[0].Content, "recurring anticipation") {
+			t.Errorf("recurring wake message should mention recurring: %q", req.Messages[0].Content)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("runner.Run was not called within timeout")
+	}
+
+	// Give goroutine time — recurring should NOT auto-resolve.
+	time.Sleep(100 * time.Millisecond)
+
+	if resolved := resolver.getResolved(); len(resolved) != 0 {
+		t.Errorf("recurring wake should not auto-resolve, got %v", resolved)
+	}
+}
+
+func TestFormatWakeMessage_RecurringNote(t *testing.T) {
+	a := &anticipation.Anticipation{
+		Description: "Test recurring",
+		Context:     "Some instructions.",
+		Recurring:   true,
+	}
+	msg := formatWakeMessage(a, "light.kitchen", "off", "on", "")
+	if !strings.Contains(msg, "recurring anticipation") {
+		t.Errorf("recurring message should contain recurring note: %q", msg)
+	}
+
+	// Non-recurring should NOT contain the recurring note.
+	a.Recurring = false
+	msg = formatWakeMessage(a, "light.kitchen", "off", "on", "")
+	if strings.Contains(msg, "recurring anticipation") {
+		t.Errorf("non-recurring message should not contain recurring note: %q", msg)
 	}
 }

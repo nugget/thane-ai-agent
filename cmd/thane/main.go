@@ -1131,6 +1131,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 
 		wakeCfg := WakeBridgeConfig{
 			Store:    anticipationStore,
+			Resolver: anticipationStore,
 			Runner:   loop,
 			Provider: anticipationProvider,
 			Logger:   logger,

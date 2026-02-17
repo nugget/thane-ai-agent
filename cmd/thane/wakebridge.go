@@ -34,9 +34,16 @@ type wakeStateGetter interface {
 	GetState(ctx context.Context, entityID string) (*homeassistant.State, error)
 }
 
+// wakeResolver resolves (marks as handled) an anticipation by ID.
+// Satisfied by anticipation.Store.
+type wakeResolver interface {
+	Resolve(id string) error
+}
+
 // WakeBridgeConfig holds configuration for creating a WakeBridge.
 type WakeBridgeConfig struct {
 	Store    anticipationMatcher
+	Resolver wakeResolver // used to auto-resolve one-shot anticipations
 	Runner   agentRunner
 	Provider wakeContextSetter
 	Logger   *slog.Logger
@@ -51,6 +58,7 @@ type WakeBridgeConfig struct {
 // frequent state changes.
 type WakeBridge struct {
 	store    anticipationMatcher
+	resolver wakeResolver
 	runner   agentRunner
 	provider wakeContextSetter
 	ha       wakeStateGetter
@@ -76,6 +84,7 @@ func NewWakeBridge(cfg WakeBridgeConfig) *WakeBridge {
 	}
 	return &WakeBridge{
 		store:    cfg.Store,
+		resolver: cfg.Resolver,
 		runner:   cfg.Runner,
 		provider: cfg.Provider,
 		ha:       cfg.HA,
@@ -98,6 +107,12 @@ func (b *WakeBridge) HandleStateChange(entityID, oldState, newState string) {
 	// itself hasn't changed. Skip these to avoid log noise and
 	// unnecessary anticipation matching.
 	if oldState == newState {
+		return
+	}
+
+	// Ignore transitions to/from "unavailable" — these are HA restarts
+	// or entity connectivity issues, not meaningful state changes.
+	if oldState == "unavailable" || newState == "unavailable" {
 		return
 	}
 
@@ -153,45 +168,75 @@ func (b *WakeBridge) HandleStateChange(entityID, oldState, newState string) {
 		)
 
 		// Run in a separate goroutine so the state watcher is not blocked.
-		go b.runWake(a.ID, a.Description, msg)
+		go b.runWake(a, msg)
 	}
 }
 
 // wakeTimeout bounds how long a single anticipation wake may run.
 const wakeTimeout = 5 * time.Minute
 
+// wakeLifecycleTools are the anticipation lifecycle tools excluded from
+// recurring wake runs. The creating model decides recurring vs one-shot;
+// the wake model should focus on executing the action.
+var wakeLifecycleTools = []string{"resolve_anticipation", "cancel_anticipation"}
+
 // runWake executes a single agent wake for a matched anticipation.
 // Each wake runs with a bounded timeout so a stuck LLM call cannot
 // leak a goroutine. Errors are logged but never propagated — the
 // state watcher must not be disrupted by agent failures.
-func (b *WakeBridge) runWake(anticipationID, description, message string) {
+//
+// Lifecycle: recurring anticipations keep firing; one-shot anticipations
+// are auto-resolved after a successful wake.
+func (b *WakeBridge) runWake(a *anticipation.Anticipation, message string) {
 	ctx, cancel := context.WithTimeout(b.ctx, wakeTimeout)
 	defer cancel()
 
 	req := &agent.Request{
-		Messages: []agent.Message{{Role: "user", Content: message}},
+		// Each anticipation gets its own conversation so wake history
+		// is isolated from interactive chat (prevents context bloat).
+		ConversationID: fmt.Sprintf("wake-%s", a.ID),
+		Messages:       []agent.Message{{Role: "user", Content: message}},
 		Hints: map[string]string{
-			"source":                "anticipation",
-			"anticipation_id":       anticipationID,
-			router.HintLocalOnly:    "true",
-			router.HintQualityFloor: "5",
-			router.HintMission:      "anticipation",
+			"source":                    "anticipation",
+			"anticipation_id":           a.ID,
+			router.HintLocalOnly:        "true",
+			router.HintQualityFloor:     "6", // floor is inclusive; excludes quality≤5 models
+			router.HintMission:          "anticipation",
+			router.HintDelegationGating: "disabled", // full tool access, no delegation indirection
 		},
+	}
+
+	// Recurring wakes should not have lifecycle tools — the creating
+	// model decided this anticipation should persist across wakes.
+	if a.Recurring {
+		req.ExcludeTools = wakeLifecycleTools
 	}
 
 	resp, err := b.runner.Run(ctx, req, nil)
 	if err != nil {
 		b.logger.Error("anticipation wake failed",
-			"anticipation_id", anticipationID,
+			"anticipation_id", a.ID,
 			"error", err,
 		)
 		return
 	}
 	b.logger.Info("anticipation wake completed",
-		"anticipation_id", anticipationID,
-		"anticipation", description,
+		"anticipation_id", a.ID,
+		"anticipation", a.Description,
+		"recurring", a.Recurring,
 		"result_len", len(resp.Content),
 	)
+
+	// Auto-resolve one-shot anticipations after successful wake.
+	if !a.Recurring && b.resolver != nil {
+		if err := b.resolver.Resolve(a.ID); err != nil {
+			b.logger.Warn("failed to auto-resolve anticipation",
+				"anticipation_id", a.ID, "error", err)
+		} else {
+			b.logger.Info("anticipation auto-resolved",
+				"anticipation_id", a.ID, "anticipation", a.Description)
+		}
+	}
 }
 
 // onCooldown reports whether the anticipation has fired too recently.
@@ -297,6 +342,9 @@ func formatWakeMessage(a *anticipation.Anticipation, entityID, oldState, newStat
 	if entityContext != "" {
 		sb.WriteString("\nRelevant entity states:\n")
 		sb.WriteString(entityContext)
+	}
+	if a.Recurring {
+		sb.WriteString("\nThis is a recurring anticipation — it will continue to fire on future matches. Focus on executing the action, not managing the anticipation.\n")
 	}
 	return sb.String()
 }

@@ -38,6 +38,7 @@ type Request struct {
 	ConversationID string            `json:"conversation_id,omitempty"`
 	Hints          map[string]string `json:"hints,omitempty"` // Routing hints (channel, mission, etc.)
 	SkipContext    bool              `json:"-"`               // Skip memory, tools, and context injection (for lightweight completions)
+	ExcludeTools   []string          `json:"-"`               // Tool names to exclude from this run (e.g., lifecycle tools for recurring wakes)
 }
 
 // StreamEvent is a single event in a streaming response.
@@ -627,6 +628,14 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		log.Info("tool gating active", "tools", l.iter0Tools)
 	}
 
+	// Build the effective tool registry, excluding any tools the caller
+	// requested to hide (e.g., lifecycle tools stripped from recurring wakes).
+	effectiveTools := l.tools
+	if len(req.ExcludeTools) > 0 {
+		effectiveTools = l.tools.FilteredCopyExcluding(req.ExcludeTools)
+		log.Info("tools excluded from run", "excluded", req.ExcludeTools)
+	}
+
 	startTime := time.Now()
 
 	// Agent loop - may iterate if tool calls are needed
@@ -649,9 +658,9 @@ iterLoop:
 		// orchestrator mode across all iterations.
 		var toolDefs []map[string]any
 		if gatingActive {
-			toolDefs = l.tools.FilteredCopy(l.iter0Tools).List()
+			toolDefs = effectiveTools.FilteredCopy(l.iter0Tools).List()
 		} else {
-			toolDefs = l.tools.List()
+			toolDefs = effectiveTools.List()
 		}
 
 		// Estimate total message size for this iteration

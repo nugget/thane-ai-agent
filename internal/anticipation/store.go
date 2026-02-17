@@ -17,6 +17,7 @@ type Anticipation struct {
 	Description     string            `json:"description"`                // Human-readable: "Dan's flight arriving"
 	Context         string            `json:"context"`                    // Injected on match: instructions/reasoning
 	ContextEntities []string          `json:"context_entities,omitempty"` // Entity IDs to snapshot on wake
+	Recurring       bool              `json:"recurring,omitempty"`        // true = keep firing; false = auto-resolve after wake
 	Trigger         Trigger           `json:"trigger"`                    // When this anticipation activates
 	CreatedAt       time.Time         `json:"created_at"`
 	ExpiresAt       *time.Time        `json:"expires_at,omitempty"` // nil = no expiration
@@ -78,13 +79,20 @@ func (s *Store) migrate() error {
 		return err
 	}
 
-	// Additive migration: context_entities_json stores a JSON array of
-	// entity IDs to fetch when this anticipation fires. The column may
-	// already exist from a previous run; only that specific error is
-	// ignored — other failures (locked/corrupt DB) surface immediately.
-	if _, err := s.db.Exec(`ALTER TABLE anticipations ADD COLUMN context_entities_json TEXT`); err != nil {
-		if !strings.Contains(err.Error(), "duplicate column name") {
-			return fmt.Errorf("migrate context_entities_json: %w", err)
+	// Additive migrations: each column may already exist from a previous
+	// run. Only the "duplicate column name" error is ignored — other
+	// failures (locked/corrupt DB) surface immediately.
+	for _, stmt := range []struct {
+		sql  string
+		desc string
+	}{
+		{`ALTER TABLE anticipations ADD COLUMN context_entities_json TEXT`, "context_entities_json"},
+		{`ALTER TABLE anticipations ADD COLUMN recurring BOOLEAN DEFAULT 0`, "recurring"},
+	} {
+		if _, err := s.db.Exec(stmt.sql); err != nil {
+			if !strings.Contains(err.Error(), "duplicate column name") {
+				return fmt.Errorf("migrate %s: %w", stmt.desc, err)
+			}
 		}
 	}
 
@@ -116,9 +124,9 @@ func (s *Store) Create(a *Anticipation) error {
 	}
 
 	_, err = s.db.Exec(`
-		INSERT INTO anticipations (id, description, context, trigger_json, metadata_json, context_entities_json, created_at, expires_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-	`, a.ID, a.Description, a.Context, string(triggerJSON), string(metadataJSON), string(contextEntitiesJSON), a.CreatedAt, a.ExpiresAt)
+		INSERT INTO anticipations (id, description, context, trigger_json, metadata_json, context_entities_json, recurring, created_at, expires_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, a.ID, a.Description, a.Context, string(triggerJSON), string(metadataJSON), string(contextEntitiesJSON), a.Recurring, a.CreatedAt, a.ExpiresAt)
 
 	return err
 }
@@ -126,7 +134,7 @@ func (s *Store) Create(a *Anticipation) error {
 // Active returns all non-resolved, non-expired, non-deleted anticipations.
 func (s *Store) Active() ([]*Anticipation, error) {
 	rows, err := s.db.Query(`
-		SELECT id, description, context, trigger_json, metadata_json, context_entities_json, created_at, expires_at
+		SELECT id, description, context, trigger_json, metadata_json, context_entities_json, recurring, created_at, expires_at
 		FROM anticipations
 		WHERE resolved_at IS NULL
 		  AND deleted_at IS NULL
@@ -144,7 +152,7 @@ func (s *Store) Active() ([]*Anticipation, error) {
 // Get retrieves a single anticipation by ID.
 func (s *Store) Get(id string) (*Anticipation, error) {
 	row := s.db.QueryRow(`
-		SELECT id, description, context, trigger_json, metadata_json, context_entities_json, created_at, expires_at, resolved_at
+		SELECT id, description, context, trigger_json, metadata_json, context_entities_json, recurring, created_at, expires_at, resolved_at
 		FROM anticipations
 		WHERE id = ? AND deleted_at IS NULL
 	`, id)
@@ -154,7 +162,7 @@ func (s *Store) Get(id string) (*Anticipation, error) {
 	var expiresAt, resolvedAt sql.NullTime
 
 	err := row.Scan(&a.ID, &a.Description, &a.Context, &triggerJSON, &metadataJSON,
-		&contextEntitiesJSON, &a.CreatedAt, &expiresAt, &resolvedAt)
+		&contextEntitiesJSON, &a.Recurring, &a.CreatedAt, &expiresAt, &resolvedAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -205,7 +213,7 @@ func (s *Store) scanAnticipations(rows *sql.Rows) ([]*Anticipation, error) {
 		var expiresAt sql.NullTime
 
 		err := rows.Scan(&a.ID, &a.Description, &a.Context, &triggerJSON, &metadataJSON,
-			&contextEntitiesJSON, &a.CreatedAt, &expiresAt)
+			&contextEntitiesJSON, &a.Recurring, &a.CreatedAt, &expiresAt)
 		if err != nil {
 			return nil, err
 		}
