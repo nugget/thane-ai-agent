@@ -3,6 +3,7 @@ package delegate
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -154,13 +155,74 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 		maxDuration = defaultMaxDuration
 	}
 
+	// Enforce wall clock as a context deadline so in-flight HTTP calls
+	// are cancelled when time expires. Without this, a blocking
+	// ChatStream call bypasses the manual wall clock checks (which only
+	// run at iteration boundaries). See issue #219.
+	ctx, cancel := context.WithTimeout(ctx, maxDuration)
+	defer cancel()
+
+	// Safety net: log if Execute returns without recording completion.
+	// With the context deadline fix this should never fire, but it
+	// guards against unforeseen code paths.
+	var completed bool
+	defer func() {
+		if !completed {
+			e.logger.Error("delegate terminated without completion record",
+				"delegate_id", did,
+				"profile", profileName,
+				"elapsed", time.Since(startTime).Round(time.Millisecond),
+			)
+		}
+	}()
+
 	for i := range maxIter {
-		// Check context cancellation at iteration boundary.
+		// Check context at iteration boundary. External cancellation
+		// (caller cancelled) returns an error; our own deadline
+		// (wall clock enforcement) returns an exhaustion result.
 		if err := ctx.Err(); err != nil {
+			if errors.Is(err, context.DeadlineExceeded) {
+				e.logger.Warn("delegate context deadline at iteration boundary",
+					"delegate_id", did,
+					"profile", profile.Name,
+					"iter", i,
+					"elapsed", time.Since(startTime).Round(time.Millisecond),
+				)
+				completed = true
+				e.recordCompletion(&completionRecord{
+					delegateID:     did,
+					conversationID: tools.ConversationIDFromContext(ctx),
+					task:           task,
+					guidance:       guidance,
+					profileName:    profile.Name,
+					model:          model,
+					totalIter:      i,
+					maxIter:        maxIter,
+					totalInput:     totalInput,
+					totalOutput:    totalOutput,
+					exhausted:      true,
+					exhaustReason:  ExhaustWallClock,
+					startTime:      startTime,
+					messages:       messages,
+					resultContent:  "Delegate was unable to complete the task within its time limit.",
+					errMsg:         err.Error(),
+				})
+				return &Result{
+					Content:       "Delegate was unable to complete the task within its time limit.",
+					Model:         model,
+					Iterations:    i,
+					InputTokens:   totalInput,
+					OutputTokens:  totalOutput,
+					Exhausted:     true,
+					ExhaustReason: ExhaustWallClock,
+				}, nil
+			}
+			// External cancellation — propagate as error.
 			return nil, fmt.Errorf("delegate cancelled: %w", err)
 		}
 
-		// Check wall clock limit.
+		// Check wall clock limit (may fire before context deadline due
+		// to scheduling jitter).
 		if time.Since(startTime) > maxDuration {
 			e.logger.Warn("delegate wall clock exceeded",
 				"delegate_id", did,
@@ -168,6 +230,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 				"elapsed", time.Since(startTime).Round(time.Millisecond),
 				"max_duration", maxDuration,
 			)
+			completed = true
 			return e.forceTextResponse(ctx, model, messages, &completionRecord{
 				delegateID:     did,
 				conversationID: tools.ConversationIDFromContext(ctx),
@@ -198,6 +261,47 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 
 		resp, err := e.llm.ChatStream(ctx, model, messages, toolDefs, nil)
 		if err != nil {
+			// If our context deadline fired (wall clock enforcement),
+			// return an exhaustion result instead of an opaque error.
+			// Cannot call forceTextResponse — context is already cancelled.
+			// External cancellation (context.Canceled) is propagated as an error.
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				e.logger.Warn("delegate context deadline exceeded during llm call",
+					"delegate_id", did,
+					"profile", profile.Name,
+					"iter", i,
+					"elapsed", time.Since(startTime).Round(time.Millisecond),
+					"max_duration", maxDuration,
+				)
+				completed = true
+				e.recordCompletion(&completionRecord{
+					delegateID:     did,
+					conversationID: tools.ConversationIDFromContext(ctx),
+					task:           task,
+					guidance:       guidance,
+					profileName:    profile.Name,
+					model:          model,
+					totalIter:      i + 1,
+					maxIter:        maxIter,
+					totalInput:     totalInput,
+					totalOutput:    totalOutput,
+					exhausted:      true,
+					exhaustReason:  ExhaustWallClock,
+					startTime:      startTime,
+					messages:       messages,
+					resultContent:  "Delegate was unable to complete the task within its time limit.",
+					errMsg:         err.Error(),
+				})
+				return &Result{
+					Content:       "Delegate was unable to complete the task within its time limit.",
+					Model:         model,
+					Iterations:    i + 1,
+					InputTokens:   totalInput,
+					OutputTokens:  totalOutput,
+					Exhausted:     true,
+					ExhaustReason: ExhaustWallClock,
+				}, nil
+			}
 			return nil, fmt.Errorf("delegate llm call failed (iter %d): %w", i, err)
 		}
 
@@ -213,6 +317,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 				"max_duration", maxDuration,
 			)
 			messages = append(messages, resp.Message)
+			completed = true
 			return e.forceTextResponse(ctx, model, messages, &completionRecord{
 				delegateID:     did,
 				conversationID: tools.ConversationIDFromContext(ctx),
@@ -255,6 +360,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 					"profile", profile.Name,
 					"iter", i+1,
 				)
+				completed = true
 				e.recordCompletion(&completionRecord{
 					delegateID:     did,
 					conversationID: tools.ConversationIDFromContext(ctx),
@@ -283,6 +389,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 				}, nil
 			}
 
+			completed = true
 			e.recordCompletion(&completionRecord{
 				delegateID:     did,
 				conversationID: tools.ConversationIDFromContext(ctx),
@@ -317,6 +424,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 				"cumul_output", totalOutput,
 				"max_tokens", maxTokens,
 			)
+			completed = true
 			return e.forceTextResponse(ctx, model, messages, &completionRecord{
 				delegateID:     did,
 				conversationID: tools.ConversationIDFromContext(ctx),
@@ -356,6 +464,47 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 			toolCtx := tools.WithConversationID(ctx, "delegate")
 			result, err := reg.Execute(toolCtx, tc.Function.Name, argsJSON)
 			if err != nil {
+				// If our context deadline fired, stop executing remaining
+				// tool calls and return an exhaustion result immediately.
+				// External cancellation (context.Canceled) falls through to
+				// the normal tool error path and is caught at the next
+				// iteration boundary.
+				if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+					e.logger.Warn("delegate context deadline exceeded during tool exec",
+						"delegate_id", did,
+						"profile", profile.Name,
+						"tool", tc.Function.Name,
+						"elapsed", time.Since(startTime).Round(time.Millisecond),
+					)
+					completed = true
+					e.recordCompletion(&completionRecord{
+						delegateID:     did,
+						conversationID: tools.ConversationIDFromContext(ctx),
+						task:           task,
+						guidance:       guidance,
+						profileName:    profile.Name,
+						model:          model,
+						totalIter:      i + 1,
+						maxIter:        maxIter,
+						totalInput:     totalInput,
+						totalOutput:    totalOutput,
+						exhausted:      true,
+						exhaustReason:  ExhaustWallClock,
+						startTime:      startTime,
+						messages:       messages,
+						resultContent:  "Delegate was unable to complete the task within its time limit.",
+						errMsg:         err.Error(),
+					})
+					return &Result{
+						Content:       "Delegate was unable to complete the task within its time limit.",
+						Model:         model,
+						Iterations:    i + 1,
+						InputTokens:   totalInput,
+						OutputTokens:  totalOutput,
+						Exhausted:     true,
+						ExhaustReason: ExhaustWallClock,
+					}, nil
+				}
 				result = "Error: " + err.Error()
 				e.logger.Error("delegate tool exec failed",
 					"delegate_id", did,
@@ -388,6 +537,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 				"elapsed", time.Since(startTime).Round(time.Millisecond),
 				"max_duration", maxDuration,
 			)
+			completed = true
 			return e.forceTextResponse(ctx, model, messages, &completionRecord{
 				delegateID:     did,
 				conversationID: tools.ConversationIDFromContext(ctx),
@@ -413,6 +563,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 		"profile", profile.Name,
 		"max_iter", maxIter,
 	)
+	completed = true
 	return e.forceTextResponse(ctx, model, messages, &completionRecord{
 		delegateID:     did,
 		conversationID: tools.ConversationIDFromContext(ctx),

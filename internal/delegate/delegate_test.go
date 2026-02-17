@@ -28,8 +28,8 @@ type mockCall struct {
 	Tools    []map[string]any
 }
 
-func (m *mockLLMClient) Chat(_ context.Context, model string, messages []llm.Message, toolDefs []map[string]any) (*llm.ChatResponse, error) {
-	return m.ChatStream(context.Background(), model, messages, toolDefs, nil)
+func (m *mockLLMClient) Chat(ctx context.Context, model string, messages []llm.Message, toolDefs []map[string]any) (*llm.ChatResponse, error) {
+	return m.ChatStream(ctx, model, messages, toolDefs, nil)
 }
 
 func (m *mockLLMClient) ChatStream(_ context.Context, model string, messages []llm.Message, toolDefs []map[string]any, _ llm.StreamCallback) (*llm.ChatResponse, error) {
@@ -630,16 +630,21 @@ type slowLLMClient struct {
 	calls          int
 }
 
-func (m *slowLLMClient) Chat(_ context.Context, model string, messages []llm.Message, toolDefs []map[string]any) (*llm.ChatResponse, error) {
-	return m.ChatStream(context.Background(), model, messages, toolDefs, nil)
+func (m *slowLLMClient) Chat(ctx context.Context, model string, messages []llm.Message, toolDefs []map[string]any) (*llm.ChatResponse, error) {
+	return m.ChatStream(ctx, model, messages, toolDefs, nil)
 }
 
-func (m *slowLLMClient) ChatStream(_ context.Context, _ string, _ []llm.Message, toolDefs []map[string]any, _ llm.StreamCallback) (*llm.ChatResponse, error) {
+func (m *slowLLMClient) ChatStream(ctx context.Context, _ string, _ []llm.Message, toolDefs []map[string]any, _ llm.StreamCallback) (*llm.ChatResponse, error) {
 	m.mu.Lock()
 	m.calls++
 	m.mu.Unlock()
 
-	time.Sleep(m.delay)
+	// Respect context cancellation during the delay.
+	select {
+	case <-time.After(m.delay):
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 
 	// tools=nil means forced text response.
 	if toolDefs == nil {
@@ -649,6 +654,55 @@ func (m *slowLLMClient) ChatStream(_ context.Context, _ string, _ []llm.Message,
 }
 
 func (m *slowLLMClient) Ping(_ context.Context) error { return nil }
+
+// blockingLLMClient blocks on ChatStream until the context is cancelled,
+// simulating a hanging LLM provider (e.g. Ollama dropping a connection).
+type blockingLLMClient struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func (m *blockingLLMClient) Chat(ctx context.Context, model string, messages []llm.Message, toolDefs []map[string]any) (*llm.ChatResponse, error) {
+	return m.ChatStream(ctx, model, messages, toolDefs, nil)
+}
+
+func (m *blockingLLMClient) ChatStream(ctx context.Context, _ string, _ []llm.Message, _ []map[string]any, _ llm.StreamCallback) (*llm.ChatResponse, error) {
+	m.mu.Lock()
+	m.calls++
+	m.mu.Unlock()
+
+	// Block until context is cancelled (simulating a hanging LLM).
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (m *blockingLLMClient) Ping(_ context.Context) error { return nil }
+
+func TestExecute_ContextDeadlineCancelsBlockingLLM(t *testing.T) {
+	mock := &blockingLLMClient{}
+
+	exec := NewExecutor(slog.Default(), mock, nil, newTestRegistry(), "test-model")
+	exec.profiles["general"].MaxDuration = 100 * time.Millisecond
+
+	start := time.Now()
+	result, err := exec.Execute(context.Background(), "Blocking task", "general", "")
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("Execute() returned error: %v (should return exhausted result)", err)
+	}
+	if !result.Exhausted {
+		t.Error("Exhausted = false, want true")
+	}
+	if result.ExhaustReason != ExhaustWallClock {
+		t.Errorf("ExhaustReason = %q, want %q", result.ExhaustReason, ExhaustWallClock)
+	}
+	// The key assertion: execution completed within a reasonable multiple
+	// of MaxDuration, not the 5-minute HTTP timeout or indefinitely.
+	if elapsed > 2*time.Second {
+		t.Errorf("Execute took %v, want < 2s (context deadline should have fired at ~100ms)", elapsed)
+	}
+}
 
 func TestExecute_ExhaustReasonMaxIterations(t *testing.T) {
 	toolCallResp := &llm.ChatResponse{
