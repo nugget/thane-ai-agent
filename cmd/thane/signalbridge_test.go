@@ -110,7 +110,7 @@ func TestSignalBridge_MessageRoutesToAgent(t *testing.T) {
 	}
 }
 
-func TestSignalBridge_DefaultRoutingHints(t *testing.T) {
+func TestSignalBridge_ZeroValueRoutingConfig(t *testing.T) {
 	msg := signalMessage{
 		SenderID: "+15551234567",
 		Message:  "Hello",
@@ -122,7 +122,10 @@ func TestSignalBridge_DefaultRoutingHints(t *testing.T) {
 		resp: &agent.Response{Content: "Hi!"},
 	}
 
-	// No explicit routing config — defaults should flow through.
+	// Construct bridge without config.Load() / applyDefaults() —
+	// zero-value SignalRoutingConfig means all routing fields are empty.
+	// In production, applyDefaults() populates QualityFloor, Mission,
+	// and DelegationGating before the bridge sees them.
 	bridge := NewSignalBridge(SignalBridgeConfig{
 		MCP:         mcpMock,
 		Runner:      runner,
@@ -136,14 +139,11 @@ func TestSignalBridge_DefaultRoutingHints(t *testing.T) {
 	if req == nil {
 		t.Fatal("runner.Run was not called")
 	}
-	// Default routing hints come from zero-value SignalRoutingConfig
-	// which has empty strings — the config defaults are applied by
-	// applyDefaults() during Load(), not by the bridge itself.
 	if req.Hints["quality_floor"] != "" {
-		t.Errorf("quality_floor hint = %q, want empty (no config defaults)", req.Hints["quality_floor"])
+		t.Errorf("quality_floor hint = %q, want empty (zero-value config)", req.Hints["quality_floor"])
 	}
 	if req.Model != "" {
-		t.Errorf("Model = %q, want empty (router decides)", req.Model)
+		t.Errorf("Model = %q, want empty (zero-value config)", req.Model)
 	}
 }
 
