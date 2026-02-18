@@ -27,6 +27,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -982,6 +983,72 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 				Routing:   cfg.Signal.Routing,
 			})
 			go bridge.Start(ctx)
+
+			// Register signal_send_reaction tool so the agent can
+			// react to Signal messages with emoji.
+			loop.Tools().Register(&tools.Tool{
+				Name:        "signal_send_reaction",
+				Description: "React to a Signal message with an emoji. Use this to acknowledge messages or express reactions. The target_timestamp identifies which message to react to — use the [ts:...] value from the message, or \"latest\" to react to the most recent message from the recipient.",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"recipient": map[string]any{
+							"type":        "string",
+							"description": "Phone number including country code (e.g., +15551234567)",
+						},
+						"emoji": map[string]any{
+							"type":        "string",
+							"description": "Reaction emoji (e.g., 👍, ❤️, 😂)",
+						},
+						"target_author": map[string]any{
+							"type":        "string",
+							"description": "Phone number of the message author to react to",
+						},
+						"target_timestamp": map[string]any{
+							"type":        "string",
+							"description": "Timestamp of the message to react to (from [ts:...] tag) as a numeric string, or \"latest\" for the most recent inbound message from the recipient",
+						},
+					},
+					"required": []string{"recipient", "emoji", "target_author", "target_timestamp"},
+				},
+				Handler: func(toolCtx context.Context, args map[string]any) (string, error) {
+					recipient, _ := args["recipient"].(string)
+					emoji, _ := args["emoji"].(string)
+					targetAuthor, _ := args["target_author"].(string)
+
+					if recipient == "" || emoji == "" || targetAuthor == "" {
+						return "", fmt.Errorf("recipient, emoji, and target_author are required")
+					}
+
+					var targetTS int64
+					switch v := args["target_timestamp"].(type) {
+					case string:
+						if v == "latest" {
+							ts, ok := bridge.LastInboundTimestamp(recipient)
+							if !ok {
+								return "", fmt.Errorf("no recent inbound message from %s to react to", recipient)
+							}
+							targetTS = ts
+						} else {
+							// Accept numeric strings (LLMs often serialize large ints as strings).
+							n, err := strconv.ParseInt(v, 10, 64)
+							if err != nil {
+								return "", fmt.Errorf("target_timestamp must be a numeric string or \"latest\", got %q", v)
+							}
+							targetTS = n
+						}
+					case float64:
+						targetTS = int64(v)
+					default:
+						return "", fmt.Errorf("target_timestamp must be a string (numeric or \"latest\")")
+					}
+
+					if err := signalClient.SendReaction(toolCtx, recipient, emoji, targetAuthor, targetTS, false); err != nil {
+						return "", err
+					}
+					return fmt.Sprintf("Reacted with %s to message from %s", emoji, targetAuthor), nil
+				},
+			})
 
 			connMgr.Watch(ctx, connwatch.WatcherConfig{
 				Name:    "signal",
