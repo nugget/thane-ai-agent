@@ -970,3 +970,98 @@ func TestToolHandler_FailedHeaderNoOutput(t *testing.T) {
 		t.Errorf("failed result should not contain 'SUCCEEDED', got: %s", result)
 	}
 }
+
+func TestExecute_ToolTimeoutRecovery(t *testing.T) {
+	// Register a tool that blocks longer than the per-tool timeout.
+	reg := tools.NewEmptyRegistry()
+	reg.Register(&tools.Tool{
+		Name:        "slow_tool",
+		Description: "A tool that blocks",
+		Parameters: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{},
+		},
+		Handler: func(ctx context.Context, _ map[string]any) (string, error) {
+			// Block until context cancels (simulating a hanging tool).
+			<-ctx.Done()
+			return "", ctx.Err()
+		},
+	})
+
+	mock := &mockLLMClient{
+		responses: []*llm.ChatResponse{
+			// Iter 0: LLM calls the slow tool.
+			{
+				Model: "test-model",
+				Message: llm.Message{
+					Role: "assistant",
+					ToolCalls: []llm.ToolCall{
+						{
+							ID: "call-slow",
+							Function: struct {
+								Name      string         `json:"name"`
+								Arguments map[string]any `json:"arguments"`
+							}{
+								Name:      "slow_tool",
+								Arguments: map[string]any{},
+							},
+						},
+					},
+				},
+				InputTokens:  100,
+				OutputTokens: 20,
+			},
+			// Iter 1: LLM sees the timeout error and responds with text.
+			{
+				Model:        "test-model",
+				Message:      llm.Message{Role: "assistant", Content: "The tool timed out, here are partial results."},
+				InputTokens:  200,
+				OutputTokens: 30,
+			},
+		},
+	}
+
+	exec := NewExecutor(slog.Default(), mock, nil, reg, "test-model")
+	// Set a very short per-tool timeout so the test completes quickly.
+	exec.profiles["general"].ToolTimeout = 50 * time.Millisecond
+	// Keep wall clock long enough that the per-tool timeout fires first.
+	exec.profiles["general"].MaxDuration = 5 * time.Second
+
+	start := time.Now()
+	result, err := exec.Execute(context.Background(), "Run the slow tool", "general", "")
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("Execute() error = %v (should recover from tool timeout)", err)
+	}
+	if result.Content != "The tool timed out, here are partial results." {
+		t.Errorf("Content = %q, want recovery message", result.Content)
+	}
+	if result.Exhausted {
+		t.Error("Exhausted = true, want false (tool timeout is not exhaustion)")
+	}
+	if result.Iterations != 2 {
+		t.Errorf("Iterations = %d, want 2", result.Iterations)
+	}
+	// The key assertion: execution completed quickly, not blocked for 5s.
+	if elapsed > 2*time.Second {
+		t.Errorf("Execute took %v, want < 2s (per-tool timeout should fire at ~50ms)", elapsed)
+	}
+
+	// Verify the LLM received the timeout error as a tool result.
+	if len(mock.calls) < 2 {
+		t.Fatalf("expected at least 2 LLM calls, got %d", len(mock.calls))
+	}
+	lastCall := mock.calls[1]
+	// The second call's messages should include the tool result with timeout error.
+	found := false
+	for _, msg := range lastCall.Messages {
+		if msg.Role == "tool" && strings.Contains(msg.Content, "timed out") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("LLM did not receive tool timeout error in messages")
+	}
+}

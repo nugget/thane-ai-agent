@@ -469,11 +469,27 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 			)
 
 			toolCtx := tools.WithConversationID(ctx, "delegate")
+			toolTimeout := profile.ToolTimeout
+			if toolTimeout == 0 {
+				toolTimeout = defaultToolTimeout
+			}
+			toolCtx, toolCancel := context.WithTimeout(toolCtx, toolTimeout)
 			result, err := reg.Execute(toolCtx, tc.Function.Name, argsJSON)
+			toolCancel()
 			if err != nil {
-				// If context is done (our deadline or external cancellation),
-				// stop executing remaining tool calls immediately.
-				if ctx.Err() != nil {
+				// Per-tool timeout fired but parent context is still alive —
+				// report as a tool error so the LLM can adapt.
+				if toolCtx.Err() != nil && ctx.Err() == nil {
+					e.logger.Warn("delegate tool exec timed out",
+						"delegate_id", did,
+						"profile", profile.Name,
+						"tool", tc.Function.Name,
+						"timeout", toolTimeout,
+					)
+					result = fmt.Sprintf("Error: tool %s timed out after %s", tc.Function.Name, toolTimeout)
+				} else if ctx.Err() != nil {
+					// Parent context is done (our deadline or external
+					// cancellation) — stop executing remaining tool calls.
 					if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 						e.logger.Warn("delegate context deadline exceeded during tool exec",
 							"delegate_id", did,
@@ -514,14 +530,16 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 					// propagate as error.
 					completed = true
 					return nil, fmt.Errorf("delegate cancelled: %w", ctx.Err())
+				} else {
+					// Generic tool error — report to LLM and continue.
+					result = "Error: " + err.Error()
+					e.logger.Error("delegate tool exec failed",
+						"delegate_id", did,
+						"profile", profile.Name,
+						"tool", tc.Function.Name,
+						"error", err,
+					)
 				}
-				result = "Error: " + err.Error()
-				e.logger.Error("delegate tool exec failed",
-					"delegate_id", did,
-					"profile", profile.Name,
-					"tool", tc.Function.Name,
-					"error", err,
-				)
 			} else {
 				e.logger.Debug("delegate tool exec done",
 					"delegate_id", did,
