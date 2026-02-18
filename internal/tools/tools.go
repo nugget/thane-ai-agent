@@ -893,7 +893,7 @@ func (r *Registry) handleGetState(ctx context.Context, args map[string]any) (str
 		return "", fmt.Errorf("entity_id is required")
 	}
 
-	state, err := r.ha.GetState(context.Background(), entityID)
+	state, err := r.ha.GetState(ctx, entityID)
 	if err != nil {
 		return "", err
 	}
@@ -941,7 +941,7 @@ func (r *Registry) handleListEntities(ctx context.Context, args map[string]any) 
 		limit = int(l)
 	}
 
-	states, err := r.ha.GetStates(context.Background())
+	states, err := r.ha.GetStates(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -995,7 +995,7 @@ func (r *Registry) handleCallService(ctx context.Context, args map[string]any) (
 		}
 	}
 
-	if err := r.ha.CallService(context.Background(), domain, service, data); err != nil {
+	if err := r.ha.CallService(ctx, domain, service, data); err != nil {
 		return "", err
 	}
 
@@ -1036,7 +1036,7 @@ func (r *Registry) handleControlDevice(ctx context.Context, args map[string]any)
 	}
 
 	// Find the entity
-	entities, err := r.ha.GetEntities(context.Background(), domain)
+	entities, err := r.ha.GetEntities(ctx, domain)
 	if err != nil {
 		return "", fmt.Errorf("failed to get entities: %w", err)
 	}
@@ -1085,7 +1085,7 @@ func (r *Registry) handleControlDevice(ctx context.Context, args map[string]any)
 	}
 
 	// Execute the service call
-	if err := r.ha.CallService(context.Background(), domain, service, data); err != nil {
+	if err := r.ha.CallService(ctx, domain, service, data); err != nil {
 		return "", fmt.Errorf("failed to control %s: %w", foundName, err)
 	}
 
