@@ -161,6 +161,10 @@ type Config struct {
 	// reception and response routing via a signal-mcp MCP server.
 	Signal SignalConfig `yaml:"signal"`
 
+	// StateWindow configures the rolling window of recent Home Assistant
+	// state changes injected into the agent's system prompt on every run.
+	StateWindow StateWindowConfig `yaml:"state_window"`
+
 	// Unifi configures the UniFi network controller connection for
 	// room-level presence detection via wireless AP client associations.
 	Unifi UnifiConfig `yaml:"unifi"`
@@ -665,6 +669,21 @@ func (c SignalConfig) Configured() bool {
 	return c.Enabled && c.MCPServer != ""
 }
 
+// StateWindowConfig configures the rolling window of recent Home
+// Assistant state changes that is injected into the agent's system
+// prompt on every run. The window provides ambient awareness of
+// recent state transitions without requiring tool calls.
+type StateWindowConfig struct {
+	// MaxEntries is the circular buffer capacity. When the buffer is
+	// full, the oldest entry is overwritten. Default: 50.
+	MaxEntries int `yaml:"max_entries"`
+
+	// MaxAgeMinutes controls how long entries remain visible. Entries
+	// older than this are excluded from the context output at read
+	// time. Default: 30.
+	MaxAgeMinutes int `yaml:"max_age_minutes"`
+}
+
 // Load reads a YAML configuration file, expands environment variables,
 // applies defaults for any unset fields, and validates the result.
 //
@@ -806,6 +825,13 @@ func (c *Config) applyDefaults() {
 		c.Signal.Routing.DelegationGating = "disabled"
 	}
 
+	if c.StateWindow.MaxEntries == 0 {
+		c.StateWindow.MaxEntries = 50
+	}
+	if c.StateWindow.MaxAgeMinutes == 0 {
+		c.StateWindow.MaxAgeMinutes = 30
+	}
+
 	for i := range c.Models.Available {
 		if c.Models.Available[i].Provider == "" {
 			c.Models.Available[i].Provider = "ollama"
@@ -907,6 +933,12 @@ func (c *Config) Validate() error {
 	}
 	if err := c.validateSignal(); err != nil {
 		return err
+	}
+	if c.StateWindow.MaxEntries < 1 {
+		return fmt.Errorf("state_window.max_entries %d must be positive", c.StateWindow.MaxEntries)
+	}
+	if c.StateWindow.MaxAgeMinutes < 1 {
+		return fmt.Errorf("state_window.max_age_minutes %d must be positive", c.StateWindow.MaxAgeMinutes)
 	}
 	return nil
 }
