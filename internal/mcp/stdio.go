@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
-	"sync"
 	"time"
 )
 
@@ -33,11 +32,13 @@ type StdioConfig struct {
 
 // StdioTransport communicates with an MCP server running as a
 // subprocess. JSON-RPC messages are newline-delimited on stdin/stdout.
+// Access is serialized by a channel-based semaphore so that callers
+// whose context expires while waiting do not kill the subprocess.
 type StdioTransport struct {
 	config StdioConfig
 	logger *slog.Logger
 
-	mu     sync.Mutex
+	sem    chan struct{} // capacity-1 semaphore; replaces sync.Mutex
 	cmd    *exec.Cmd
 	stdin  io.WriteCloser
 	reader *bufio.Reader
@@ -53,13 +54,14 @@ func NewStdioTransport(cfg StdioConfig) *StdioTransport {
 	return &StdioTransport{
 		config: cfg,
 		logger: logger,
+		sem:    make(chan struct{}, 1),
 	}
 }
 
 // start launches the subprocess if it is not already running. The
 // subprocess lifecycle is independent of call contexts — it survives
 // individual request timeouts and is only terminated by explicit
-// cleanup() or stop() calls. Caller must hold t.mu.
+// cleanup() or stop() calls. Caller must hold the semaphore.
 func (t *StdioTransport) start(_ context.Context) error {
 	if t.cmd != nil && t.cmd.ProcessState == nil {
 		// Process is still running.
@@ -126,13 +128,45 @@ type readResult struct {
 	err  error
 }
 
+// acquire attempts to take the transport semaphore, respecting context
+// cancellation. Returns nil on success or ctx.Err() if the context
+// expired before the semaphore became available. Unlike a sync.Mutex,
+// this prevents a timed-out caller from killing a subprocess that is
+// busy serving another request.
+func (t *StdioTransport) acquire(ctx context.Context) error {
+	select {
+	case t.sem <- struct{}{}:
+		// Double-check: if the context expired at the same instant the
+		// semaphore became available, select may have chosen the send.
+		// Release and bail so the caller never enters Send/Notify with
+		// a dead context.
+		if err := ctx.Err(); err != nil {
+			t.release()
+			return err
+		}
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// release returns the semaphore token. Must be called exactly once
+// after a successful acquire.
+func (t *StdioTransport) release() {
+	<-t.sem
+}
+
 // Send sends a JSON-RPC request over stdin and reads the response from
-// stdout. The mutex serializes access since stdio is inherently sequential.
+// stdout. The semaphore serializes access since stdio is inherently
+// sequential. If the caller's context expires while waiting for the
+// semaphore, Send returns immediately without touching the subprocess.
 // The read is performed in a goroutine so that context cancellation can
 // interrupt a blocking read.
 func (t *StdioTransport) Send(ctx context.Context, req *Request) (*Response, error) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
+	if err := t.acquire(ctx); err != nil {
+		return nil, err
+	}
+	defer t.release()
 
 	if err := t.start(ctx); err != nil {
 		return nil, err
@@ -194,8 +228,10 @@ func (t *StdioTransport) Send(ctx context.Context, req *Request) (*Response, err
 
 // Notify sends a JSON-RPC notification over stdin. No response is expected.
 func (t *StdioTransport) Notify(ctx context.Context, notif *Notification) error {
-	t.mu.Lock()
-	defer t.mu.Unlock()
+	if err := t.acquire(ctx); err != nil {
+		return err
+	}
+	defer t.release()
 
 	if err := t.start(ctx); err != nil {
 		return err
@@ -214,15 +250,17 @@ func (t *StdioTransport) Notify(ctx context.Context, notif *Notification) error 
 	return nil
 }
 
-// Close terminates the subprocess and releases resources.
+// Close terminates the subprocess and releases resources. It blocks
+// until the semaphore is available (matching the previous mutex
+// behavior) because shutdown must wait for in-flight operations.
 func (t *StdioTransport) Close() error {
-	t.mu.Lock()
-	defer t.mu.Unlock()
+	t.sem <- struct{}{}
+	defer t.release()
 
 	return t.stop()
 }
 
-// stop terminates the subprocess. Caller must hold t.mu.
+// stop terminates the subprocess. Caller must hold the semaphore.
 func (t *StdioTransport) stop() error {
 	if t.cmd == nil || t.cmd.Process == nil {
 		return nil
@@ -254,7 +292,7 @@ func (t *StdioTransport) stop() error {
 	}
 }
 
-// cleanup resets the process state after a failure. Caller must hold t.mu.
+// cleanup resets the process state after a failure. Caller must hold the semaphore.
 func (t *StdioTransport) cleanup() {
 	if t.stdin != nil {
 		t.stdin.Close()
