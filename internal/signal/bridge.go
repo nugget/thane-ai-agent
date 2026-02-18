@@ -124,10 +124,12 @@ func (b *Bridge) Start(ctx context.Context) {
 				continue
 			}
 
-			// Track the most recent inbound timestamp for this
-			// sender (even for non-text messages like attachments)
-			// so the signal_send_reaction tool can resolve "latest".
-			if env.DataMessage != nil {
+			// For non-text DataMessages (attachments, etc.) that won't
+			// reach handleMessage, track the signal timestamp here so
+			// the reaction tool's "latest" resolution still works.
+			// Text messages update lastInboundTS inside handleMessage
+			// (after the idle rotation check).
+			if env.DataMessage != nil && env.DataMessage.Message == "" {
 				ts := env.Timestamp
 				if env.DataMessage.Timestamp != 0 {
 					ts = env.DataMessage.Timestamp
@@ -208,6 +210,20 @@ func (b *Bridge) handleMessage(ctx context.Context, env *Envelope) {
 			}
 		}
 	}
+
+	// Update lastInboundTS *after* the idle check so the check
+	// reads the previous message's wall-clock time, not the current
+	// one. This also serves the reaction tool's "latest" resolution.
+	ts := env.Timestamp
+	if env.DataMessage != nil && env.DataMessage.Timestamp != 0 {
+		ts = env.DataMessage.Timestamp
+	}
+	b.mu.Lock()
+	b.lastInboundTS[sender] = lastMessage{
+		signalTS:   ts,
+		receivedAt: time.Now(),
+	}
+	b.mu.Unlock()
 
 	// Send typing indicator before agent processing.
 	if err := b.client.SendTyping(ctx, sender, false); err != nil {

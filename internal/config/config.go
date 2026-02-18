@@ -641,8 +641,8 @@ type SignalConfig struct {
 	// rotation. When a new Signal message arrives and the last message
 	// from that sender was more than this many minutes ago, the
 	// previous session is ended (triggering background summarization)
-	// and a fresh one begins on the next agent loop call. Zero
-	// disables idle rotation. Default: 30.
+	// and a fresh one begins on the next agent loop call. Zero or
+	// omitted disables idle rotation.
 	SessionIdleMinutes int `yaml:"session_idle_minutes"`
 
 	// Routing configures how Signal messages are routed to LLM models.
@@ -819,10 +819,8 @@ func (c *Config) applyDefaults() {
 		c.HomeAssistant.Subscribe.CooldownMinutes = 5
 	}
 
-	// Signal session idle timeout: default 30 minutes.
-	if c.Signal.SessionIdleMinutes == 0 {
-		c.Signal.SessionIdleMinutes = 30
-	}
+	// Signal session idle timeout: 0 disables idle rotation (no default override).
+	// Users who want idle rotation must set a positive value explicitly.
 
 	// Signal rate limit: 0 means unlimited (no default override).
 	// Users who want limiting must set a positive value explicitly.
