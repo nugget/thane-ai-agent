@@ -157,6 +157,10 @@ type Config struct {
 	// calls for basic presence questions.
 	Person PersonConfig `yaml:"person"`
 
+	// Signal configures the Signal message bridge for inbound message
+	// reception and response routing via a signal-mcp MCP server.
+	Signal SignalConfig `yaml:"signal"`
+
 	// Unifi configures the UniFi network controller connection for
 	// room-level presence detection via wireless AP client associations.
 	Unifi UnifiConfig `yaml:"unifi"`
@@ -607,6 +611,33 @@ type MCPServerConfig struct {
 	ExcludeTools []string `yaml:"exclude_tools"`
 }
 
+// SignalConfig configures the Signal message bridge for inbound
+// message reception and response routing via the signal-mcp server.
+type SignalConfig struct {
+	// Enabled controls whether the Signal bridge starts polling.
+	Enabled bool `yaml:"enabled"`
+
+	// MCPServer is the name of the MCP server entry that provides
+	// the Signal tools. Must match an mcp.servers[].name value.
+	MCPServer string `yaml:"mcp_server"`
+
+	// PollTimeoutSec is the timeout in seconds passed to the
+	// receive_message tool for long-polling. Capped at 300 by the
+	// signal-mcp server. Default: 30.
+	PollTimeoutSec int `yaml:"poll_timeout"`
+
+	// RateLimitPerMinute caps how many inbound messages per sender
+	// are processed per minute. Zero disables rate limiting.
+	// Default: 10.
+	RateLimitPerMinute int `yaml:"rate_limit_per_minute"`
+}
+
+// Configured reports whether the Signal bridge has the minimum
+// required configuration (enabled with an MCP server name).
+func (c SignalConfig) Configured() bool {
+	return c.Enabled && c.MCPServer != ""
+}
+
 // Load reads a YAML configuration file, expands environment variables,
 // applies defaults for any unset fields, and validates the result.
 //
@@ -732,6 +763,13 @@ func (c *Config) applyDefaults() {
 		c.HomeAssistant.Subscribe.CooldownMinutes = 5
 	}
 
+	if c.Signal.PollTimeoutSec == 0 {
+		c.Signal.PollTimeoutSec = 30
+	}
+	if c.Signal.RateLimitPerMinute == 0 && c.Signal.Enabled {
+		c.Signal.RateLimitPerMinute = 10
+	}
+
 	for i := range c.Models.Available {
 		if c.Models.Available[i].Provider == "" {
 			c.Models.Available[i].Provider = "ollama"
@@ -831,6 +869,9 @@ func (c *Config) Validate() error {
 	if c.Unifi.Configured() && c.Unifi.PollIntervalSec < 10 {
 		return fmt.Errorf("unifi.poll_interval %d too low (minimum 10 seconds)", c.Unifi.PollIntervalSec)
 	}
+	if err := c.validateSignal(); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -876,6 +917,30 @@ func (c *Config) validateSubscribe() error {
 	}
 	if c.HomeAssistant.Subscribe.RateLimitPerMinute < 0 {
 		return fmt.Errorf("homeassistant.subscribe.rate_limit_per_minute %d must be non-negative", c.HomeAssistant.Subscribe.RateLimitPerMinute)
+	}
+	return nil
+}
+
+// validateSignal checks the Signal bridge configuration for consistency.
+func (c *Config) validateSignal() error {
+	if !c.Signal.Configured() {
+		return nil
+	}
+	if c.Signal.PollTimeoutSec < 1 || c.Signal.PollTimeoutSec > 300 {
+		return fmt.Errorf("signal.poll_timeout %d out of range (1-300)", c.Signal.PollTimeoutSec)
+	}
+	if c.Signal.RateLimitPerMinute < 0 {
+		return fmt.Errorf("signal.rate_limit_per_minute %d must be non-negative", c.Signal.RateLimitPerMinute)
+	}
+	found := false
+	for _, srv := range c.MCP.Servers {
+		if srv.Name == c.Signal.MCPServer {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return fmt.Errorf("signal.mcp_server %q not found in mcp.servers", c.Signal.MCPServer)
 	}
 	return nil
 }
