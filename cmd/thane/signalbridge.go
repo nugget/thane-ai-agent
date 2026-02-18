@@ -152,13 +152,38 @@ func (b *SignalBridge) Start(ctx context.Context) {
 			continue
 		}
 
-		go b.handleMessage(ctx, msg)
+		// Acknowledge receipt before the potentially long agent loop.
+		// Best-effort — failure does not prevent message processing.
+		if _, err := b.mcp.CallTool(ctx, "send_read_receipt", map[string]any{
+			"recipient": msg.SenderID,
+		}); err != nil {
+			b.logger.Warn("signal read receipt failed",
+				"sender", msg.SenderID,
+				"error", err,
+			)
+		}
+
+		// Wait for message handling (including reply send) to complete
+		// before resuming the poll. The stdio transport mutex is
+		// single-threaded; re-entering receive_message before the reply
+		// send would starve send_message_to_user.
+		done := make(chan struct{})
+		go b.handleMessage(ctx, msg, done)
+		select {
+		case <-done:
+		case <-ctx.Done():
+			return
+		}
 	}
 }
 
 // handleMessage processes a single inbound Signal message: runs it
 // through the agent loop and sends the response back to the sender.
-func (b *SignalBridge) handleMessage(ctx context.Context, msg signalMessage) {
+// The done channel is closed when the function returns, signalling the
+// poll loop that the transport mutex is free.
+func (b *SignalBridge) handleMessage(ctx context.Context, msg signalMessage, done chan<- struct{}) {
+	defer close(done)
+
 	ctx, cancel := context.WithTimeout(ctx, signalHandleTimeout)
 	defer cancel()
 
@@ -206,6 +231,12 @@ func (b *SignalBridge) handleMessage(ctx context.Context, msg signalMessage) {
 		return
 	}
 
+	b.logger.Info("signal sending reply",
+		"sender", msg.SenderID,
+		"conversation_id", convID,
+		"response_len", len(resp.Content),
+	)
+
 	_, err = b.mcp.CallTool(ctx, "send_message_to_user", map[string]any{
 		"recipient": msg.SenderID,
 		"message":   resp.Content,
@@ -213,9 +244,16 @@ func (b *SignalBridge) handleMessage(ctx context.Context, msg signalMessage) {
 	if err != nil {
 		b.logger.Error("signal reply send failed",
 			"sender", msg.SenderID,
+			"conversation_id", convID,
 			"error", err,
 		)
+		return
 	}
+
+	b.logger.Info("signal reply sent",
+		"sender", msg.SenderID,
+		"conversation_id", convID,
+	)
 }
 
 // allowSender checks whether the sender is within the per-minute rate

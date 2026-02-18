@@ -71,6 +71,13 @@ func (r *signalTestRunner) getLastReq() *agent.Request {
 	return r.lastReq
 }
 
+// callHandleMessage is a test helper that invokes handleMessage
+// synchronously, providing the done channel the production code expects.
+func callHandleMessage(b *SignalBridge, ctx context.Context, msg signalMessage) {
+	done := make(chan struct{})
+	b.handleMessage(ctx, msg, done)
+}
+
 func TestSignalBridge_MessageRoutesToAgent(t *testing.T) {
 	msg := signalMessage{
 		SenderID: "+15551234567",
@@ -90,7 +97,7 @@ func TestSignalBridge_MessageRoutesToAgent(t *testing.T) {
 		PollTimeout: 1,
 	})
 
-	bridge.handleMessage(context.Background(), msg)
+	callHandleMessage(bridge, context.Background(), msg)
 
 	req := runner.getLastReq()
 	if req == nil {
@@ -133,7 +140,7 @@ func TestSignalBridge_ZeroValueRoutingConfig(t *testing.T) {
 		PollTimeout: 1,
 	})
 
-	bridge.handleMessage(context.Background(), msg)
+	callHandleMessage(bridge, context.Background(), msg)
 
 	req := runner.getLastReq()
 	if req == nil {
@@ -172,7 +179,7 @@ func TestSignalBridge_CustomRoutingConfig(t *testing.T) {
 		},
 	})
 
-	bridge.handleMessage(context.Background(), msg)
+	callHandleMessage(bridge, context.Background(), msg)
 
 	req := runner.getLastReq()
 	if req == nil {
@@ -210,7 +217,7 @@ func TestSignalBridge_ResponseSentBack(t *testing.T) {
 		PollTimeout: 1,
 	})
 
-	bridge.handleMessage(context.Background(), msg)
+	callHandleMessage(bridge, context.Background(), msg)
 
 	calls := mcpMock.getCalls()
 	var sendCall *mcpCall
@@ -249,7 +256,7 @@ func TestSignalBridge_EmptyResponseNoReply(t *testing.T) {
 		PollTimeout: 1,
 	})
 
-	bridge.handleMessage(context.Background(), msg)
+	callHandleMessage(bridge, context.Background(), msg)
 
 	calls := mcpMock.getCalls()
 	for _, c := range calls {
@@ -278,7 +285,7 @@ func TestSignalBridge_GroupMessageIncludesGroupName(t *testing.T) {
 		PollTimeout: 1,
 	})
 
-	bridge.handleMessage(context.Background(), msg)
+	callHandleMessage(bridge, context.Background(), msg)
 
 	req := runner.getLastReq()
 	if req == nil {
@@ -419,6 +426,87 @@ func TestSignalBridge_ContextCancellation(t *testing.T) {
 		// Clean exit.
 	case <-time.After(2 * time.Second):
 		t.Fatal("Start did not return after context cancellation")
+	}
+}
+
+func TestSignalBridge_ReadReceiptSentBeforeHandle(t *testing.T) {
+	msg := signalMessage{
+		SenderID: "+15551234567",
+		Message:  "Hello",
+	}
+	msgJSON, _ := json.Marshal(msg)
+
+	mcpMock := &mockMCPCaller{recvResp: string(msgJSON)}
+	runner := &signalTestRunner{
+		resp: &agent.Response{Content: "Hi!"},
+	}
+
+	bridge := NewSignalBridge(SignalBridgeConfig{
+		MCP:         mcpMock,
+		Runner:      runner,
+		Logger:      slog.Default(),
+		PollTimeout: 1,
+	})
+
+	// Use Start with a context that cancels after one poll cycle.
+	// The mock returns a valid message on first poll, then we cancel.
+	ctx, cancel := context.WithCancel(context.Background())
+	started := make(chan struct{})
+	go func() {
+		close(started)
+		bridge.Start(ctx)
+	}()
+	<-started
+
+	// Give the bridge time to process one message cycle.
+	time.Sleep(200 * time.Millisecond)
+	cancel()
+
+	calls := mcpMock.getCalls()
+	var order []string
+	for _, c := range calls {
+		switch c.Name {
+		case "receive_message", "send_read_receipt", "send_message_to_user":
+			order = append(order, c.Name)
+		}
+	}
+
+	// Expect: receive_message → send_read_receipt → send_message_to_user
+	if len(order) < 3 {
+		t.Fatalf("expected at least 3 MCP calls, got %d: %v", len(order), order)
+	}
+	if order[0] != "receive_message" {
+		t.Errorf("first call = %q, want receive_message", order[0])
+	}
+	if order[1] != "send_read_receipt" {
+		t.Errorf("second call = %q, want send_read_receipt", order[1])
+	}
+	if order[2] != "send_message_to_user" {
+		t.Errorf("third call = %q, want send_message_to_user", order[2])
+	}
+}
+
+func TestSignalBridge_DoneChannelClosedOnCompletion(t *testing.T) {
+	msg := signalMessage{
+		SenderID: "+15551234567",
+		Message:  "Hello",
+	}
+
+	bridge := NewSignalBridge(SignalBridgeConfig{
+		MCP:         &mockMCPCaller{},
+		Runner:      &signalTestRunner{resp: &agent.Response{Content: "Hi!"}},
+		Logger:      slog.Default(),
+		PollTimeout: 1,
+	})
+
+	done := make(chan struct{})
+	go bridge.handleMessage(context.Background(), msg, done)
+
+	select {
+	case <-done:
+		// Channel closed as expected.
+	case <-time.After(5 * time.Second):
+		t.Fatal("done channel was not closed after handleMessage returned")
 	}
 }
 
