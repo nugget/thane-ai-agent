@@ -118,8 +118,9 @@ func (s *Store) Create(a *Anticipation) error {
 		utc := a.ExpiresAt.UTC()
 		a.ExpiresAt = &utc
 	}
-	if !a.Trigger.AfterTime.IsZero() {
-		a.Trigger.AfterTime = a.Trigger.AfterTime.UTC()
+	if a.Trigger.AfterTime != nil {
+		utc := a.Trigger.AfterTime.UTC()
+		a.Trigger.AfterTime = &utc
 	}
 
 	triggerJSON, err := json.Marshal(a.Trigger)
