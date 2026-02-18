@@ -928,6 +928,38 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		}
 	}()
 
+	// --- Signal message bridge ---
+	// Polls the signal-mcp server for incoming messages and routes them
+	// through the agent loop, sending responses back via Signal.
+	if cfg.Signal.Configured() {
+		var signalClient *mcp.Client
+		for _, c := range mcpClients {
+			if c.Name() == cfg.Signal.MCPServer {
+				signalClient = c
+				break
+			}
+		}
+		if signalClient == nil {
+			logger.Error("signal bridge: configured MCP server not found",
+				"mcp_server", cfg.Signal.MCPServer,
+			)
+		} else {
+			signalBridge := NewSignalBridge(SignalBridgeConfig{
+				MCP:         signalClient,
+				Runner:      loop,
+				Logger:      logger,
+				PollTimeout: cfg.Signal.PollTimeoutSec,
+				RateLimit:   cfg.Signal.RateLimitPerMinute,
+			})
+			go signalBridge.Start(ctx)
+			logger.Info("signal bridge started",
+				"mcp_server", cfg.Signal.MCPServer,
+				"poll_timeout", cfg.Signal.PollTimeoutSec,
+				"rate_limit", cfg.Signal.RateLimitPerMinute,
+			)
+		}
+	}
+
 	// --- Delegation ---
 	// Register thane_delegate tool AFTER all other tools so the delegate
 	// executor's parent registry snapshot includes the full tool set.

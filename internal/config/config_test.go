@@ -254,3 +254,122 @@ func TestValidate_PersonDevicesValid(t *testing.T) {
 		t.Fatalf("unexpected validation error: %v", err)
 	}
 }
+
+func TestValidate_SignalPollTimeoutOutOfRange(t *testing.T) {
+	tests := []struct {
+		name    string
+		timeout int
+	}{
+		{"zero", 0},
+		{"negative", -1},
+		{"too_high", 301},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Default()
+			cfg.Signal = SignalConfig{
+				Enabled:        true,
+				MCPServer:      "signal",
+				PollTimeoutSec: tt.timeout,
+			}
+			cfg.MCP.Servers = []MCPServerConfig{
+				{Name: "signal", Transport: "stdio", Command: "signal-mcp"},
+			}
+
+			err := cfg.Validate()
+			if err == nil {
+				t.Fatal("expected validation error for out-of-range poll_timeout")
+			}
+			if !strings.Contains(err.Error(), "signal.poll_timeout") {
+				t.Errorf("error should mention signal.poll_timeout, got: %v", err)
+			}
+		})
+	}
+}
+
+func TestValidate_SignalRateLimitNegative(t *testing.T) {
+	cfg := Default()
+	cfg.Signal = SignalConfig{
+		Enabled:            true,
+		MCPServer:          "signal",
+		PollTimeoutSec:     30,
+		RateLimitPerMinute: -1,
+	}
+	cfg.MCP.Servers = []MCPServerConfig{
+		{Name: "signal", Transport: "stdio", Command: "signal-mcp"},
+	}
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected validation error for negative rate_limit_per_minute")
+	}
+	if !strings.Contains(err.Error(), "signal.rate_limit_per_minute") {
+		t.Errorf("error should mention signal.rate_limit_per_minute, got: %v", err)
+	}
+}
+
+func TestValidate_SignalMCPServerNotFound(t *testing.T) {
+	cfg := Default()
+	cfg.Signal = SignalConfig{
+		Enabled:        true,
+		MCPServer:      "nonexistent",
+		PollTimeoutSec: 30,
+	}
+	cfg.MCP.Servers = []MCPServerConfig{
+		{Name: "other", Transport: "stdio", Command: "other-mcp"},
+	}
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected validation error for missing MCP server")
+	}
+	if !strings.Contains(err.Error(), "nonexistent") {
+		t.Errorf("error should mention missing server name, got: %v", err)
+	}
+}
+
+func TestValidate_SignalValid(t *testing.T) {
+	cfg := Default()
+	cfg.Signal = SignalConfig{
+		Enabled:            true,
+		MCPServer:          "signal",
+		PollTimeoutSec:     30,
+		RateLimitPerMinute: 10,
+	}
+	cfg.MCP.Servers = []MCPServerConfig{
+		{Name: "signal", Transport: "stdio", Command: "signal-mcp"},
+	}
+
+	err := cfg.Validate()
+	if err != nil {
+		t.Fatalf("unexpected validation error: %v", err)
+	}
+}
+
+func TestValidate_SignalDisabledSkipsValidation(t *testing.T) {
+	cfg := Default()
+	cfg.Signal = SignalConfig{
+		Enabled:        false,
+		MCPServer:      "nonexistent",
+		PollTimeoutSec: 999, // would be invalid if enabled
+	}
+
+	err := cfg.Validate()
+	if err != nil {
+		t.Fatalf("disabled signal should skip validation, got: %v", err)
+	}
+}
+
+func TestApplyDefaults_SignalRateLimit(t *testing.T) {
+	cfg := Default()
+	if cfg.Signal.RateLimitPerMinute != 10 {
+		t.Errorf("expected default rate_limit_per_minute 10, got %d", cfg.Signal.RateLimitPerMinute)
+	}
+}
+
+func TestApplyDefaults_SignalPollTimeout(t *testing.T) {
+	cfg := Default()
+	if cfg.Signal.PollTimeoutSec != 30 {
+		t.Errorf("expected default poll_timeout 30, got %d", cfg.Signal.PollTimeoutSec)
+	}
+}
