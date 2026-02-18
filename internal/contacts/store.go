@@ -23,17 +23,17 @@ const (
 
 // Contact represents a person, company, or organization.
 type Contact struct {
-	ID              uuid.UUID         `json:"id"`
-	Name            string            `json:"name"`
-	Kind            string            `json:"kind"`                   // person, company, organization
-	Relationship    string            `json:"relationship,omitempty"` // friend, colleague, family, vendor
-	Summary         string            `json:"summary,omitempty"`      // one-line context
-	Details         string            `json:"details,omitempty"`      // markdown blob
-	Embedding       []float32         `json:"embedding,omitempty"`    // vector for semantic search
-	LastInteraction time.Time         `json:"last_interaction,omitempty"`
-	CreatedAt       time.Time         `json:"created_at"`
-	UpdatedAt       time.Time         `json:"updated_at"`
-	Facts           map[string]string `json:"facts,omitempty"` // populated by GetWithFacts
+	ID              uuid.UUID           `json:"id"`
+	Name            string              `json:"name"`
+	Kind            string              `json:"kind"`                   // person, company, organization
+	Relationship    string              `json:"relationship,omitempty"` // friend, colleague, family, vendor
+	Summary         string              `json:"summary,omitempty"`      // one-line context
+	Details         string              `json:"details,omitempty"`      // markdown blob
+	Embedding       []float32           `json:"embedding,omitempty"`    // vector for semantic search
+	LastInteraction time.Time           `json:"last_interaction,omitempty"`
+	CreatedAt       time.Time           `json:"created_at"`
+	UpdatedAt       time.Time           `json:"updated_at"`
+	Facts           map[string][]string `json:"facts,omitempty"` // populated by GetWithFacts
 }
 
 // Store manages contact persistence in SQLite.
@@ -78,24 +78,81 @@ func (s *Store) migrate() error {
 		CREATE INDEX IF NOT EXISTS idx_contacts_name ON contacts(name);
 		CREATE INDEX IF NOT EXISTS idx_contacts_kind ON contacts(kind);
 		CREATE INDEX IF NOT EXISTS idx_contacts_deleted ON contacts(deleted_at);
-
-		CREATE TABLE IF NOT EXISTS contact_facts (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			contact_id TEXT NOT NULL REFERENCES contacts(id),
-			key TEXT NOT NULL,
-			value TEXT NOT NULL,
-			updated_at TEXT NOT NULL,
-			UNIQUE(contact_id, key)
-		);
-
-		CREATE INDEX IF NOT EXISTS idx_contact_facts_contact_id ON contact_facts(contact_id);
 	`)
 	if err != nil {
 		return err
 	}
 
+	// Enforce active name uniqueness (case-insensitive). Allows soft-deleted
+	// duplicates but prevents two active contacts with the same name.
+	_, _ = s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_contacts_name_active ON contacts(LOWER(name)) WHERE deleted_at IS NULL`)
+
+	// contact_facts supports multiple values per key (e.g., two phone
+	// numbers). If the table was created with the old UNIQUE(contact_id, key)
+	// constraint, rebuild it without the constraint.
+	s.migrateContactFacts()
+
 	s.tryEnableFTS()
 	return nil
+}
+
+// migrateContactFacts creates or migrates the contact_facts table.
+// Older schema had UNIQUE(contact_id, key); the new schema allows
+// multiple values per key.
+func (s *Store) migrateContactFacts() {
+	// Try creating the table. If it already exists this is a no-op.
+	_, err := s.db.Exec(`
+		CREATE TABLE IF NOT EXISTS contact_facts (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			contact_id TEXT NOT NULL REFERENCES contacts(id),
+			key TEXT NOT NULL,
+			value TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)
+	`)
+	if err != nil {
+		s.logger.Warn("failed to create contact_facts table", "error", err)
+		return
+	}
+
+	// Check if the old unique constraint exists and migrate away from it.
+	var uniqueCount int
+	_ = s.db.QueryRow(`SELECT COUNT(*) FROM pragma_index_list('contact_facts') WHERE "unique" = 1 AND origin = 'u'`).Scan(&uniqueCount)
+	if uniqueCount > 0 {
+		s.logger.Info("migrating contact_facts to multi-value schema")
+		tx, err := s.db.Begin()
+		if err != nil {
+			s.logger.Warn("contact_facts migration failed", "error", err)
+			return
+		}
+		defer func() { _ = tx.Rollback() }()
+
+		stmts := []string{
+			`ALTER TABLE contact_facts RENAME TO contact_facts_old`,
+			`CREATE TABLE contact_facts (
+				id INTEGER PRIMARY KEY AUTOINCREMENT,
+				contact_id TEXT NOT NULL REFERENCES contacts(id),
+				key TEXT NOT NULL,
+				value TEXT NOT NULL,
+				updated_at TEXT NOT NULL
+			)`,
+			`INSERT INTO contact_facts (contact_id, key, value, updated_at) SELECT contact_id, key, value, updated_at FROM contact_facts_old`,
+			`DROP TABLE contact_facts_old`,
+		}
+		for _, stmt := range stmts {
+			if _, err := tx.Exec(stmt); err != nil {
+				s.logger.Warn("contact_facts migration step failed", "error", err, "stmt", stmt)
+				return
+			}
+		}
+		if err := tx.Commit(); err != nil {
+			s.logger.Warn("contact_facts migration commit failed", "error", err)
+			return
+		}
+		s.logger.Info("contact_facts migration complete")
+	}
+
+	_, _ = s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_contact_facts_contact_id ON contact_facts(contact_id)`)
 }
 
 // tryEnableFTS creates the FTS5 virtual table for full-text search.
@@ -141,12 +198,15 @@ func (s *Store) Upsert(c *Contact) (*Contact, error) {
 
 	if c.ID == uuid.Nil {
 		// New contact.
-		id, _ := uuid.NewV7()
+		id, err := uuid.NewV7()
+		if err != nil {
+			return nil, fmt.Errorf("generate id: %w", err)
+		}
 		c.ID = id
 		c.CreatedAt = now
 		c.UpdatedAt = now
 
-		_, err := s.db.Exec(`
+		_, err = s.db.Exec(`
 			INSERT INTO contacts (id, name, kind, relationship, summary, details, last_interaction, created_at, updated_at)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 		`, c.ID.String(), c.Name, c.Kind, nullStr(c.Relationship), nullStr(c.Summary),
@@ -301,45 +361,103 @@ func (s *Store) DeleteByName(name string) error {
 	return s.Delete(c.ID)
 }
 
-// SetFact creates or updates a structured attribute on a contact.
+// SetFact adds a structured attribute to a contact. If the exact
+// (contact_id, key, value) triple already exists, this is a no-op.
+// Multiple values per key are supported (e.g., two phone numbers).
 func (s *Store) SetFact(contactID uuid.UUID, key, value string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
-	_, err := s.db.Exec(`
-		INSERT INTO contact_facts (contact_id, key, value, updated_at)
-		VALUES (?, ?, ?, ?)
-		ON CONFLICT(contact_id, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
-	`, contactID.String(), key, value, now)
+
+	var exists int
+	err := s.db.QueryRow(
+		`SELECT COUNT(*) FROM contact_facts WHERE contact_id = ? AND key = ? AND value = ?`,
+		contactID.String(), key, value).Scan(&exists)
+	if err != nil {
+		return fmt.Errorf("check existing fact: %w", err)
+	}
+	if exists > 0 {
+		return nil
+	}
+
+	_, err = s.db.Exec(
+		`INSERT INTO contact_facts (contact_id, key, value, updated_at) VALUES (?, ?, ?, ?)`,
+		contactID.String(), key, value, now)
 	if err != nil {
 		return fmt.Errorf("set fact: %w", err)
 	}
 	return nil
 }
 
-// GetFacts returns all structured attributes for a contact.
-func (s *Store) GetFacts(contactID uuid.UUID) (map[string]string, error) {
+// ReplaceFact replaces all values for a key with a single new value.
+// Use this for "update phone number" semantics where only one value
+// should exist per key.
+func (s *Store) ReplaceFact(contactID uuid.UUID, key, value string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	_, err = tx.Exec(
+		`DELETE FROM contact_facts WHERE contact_id = ? AND key = ?`,
+		contactID.String(), key)
+	if err != nil {
+		return fmt.Errorf("delete old facts: %w", err)
+	}
+
+	_, err = tx.Exec(
+		`INSERT INTO contact_facts (contact_id, key, value, updated_at) VALUES (?, ?, ?, ?)`,
+		contactID.String(), key, value, now)
+	if err != nil {
+		return fmt.Errorf("insert fact: %w", err)
+	}
+
+	return tx.Commit()
+}
+
+// DeleteFact removes a specific fact value from a contact.
+func (s *Store) DeleteFact(contactID uuid.UUID, key, value string) error {
+	result, err := s.db.Exec(
+		`DELETE FROM contact_facts WHERE contact_id = ? AND key = ? AND value = ?`,
+		contactID.String(), key, value)
+	if err != nil {
+		return fmt.Errorf("delete fact: %w", err)
+	}
+	affected, _ := result.RowsAffected()
+	if affected == 0 {
+		return fmt.Errorf("fact not found: %s=%s", key, value)
+	}
+	return nil
+}
+
+// GetFacts returns all structured attributes for a contact. Multiple
+// values per key are returned as a string slice.
+func (s *Store) GetFacts(contactID uuid.UUID) (map[string][]string, error) {
 	rows, err := s.db.Query(
-		`SELECT key, value FROM contact_facts WHERE contact_id = ? ORDER BY key`,
+		`SELECT key, value FROM contact_facts WHERE contact_id = ? ORDER BY key, value`,
 		contactID.String())
 	if err != nil {
 		return nil, fmt.Errorf("query: %w", err)
 	}
 	defer rows.Close()
 
-	facts := make(map[string]string)
+	facts := make(map[string][]string)
 	for rows.Next() {
 		var key, value string
 		if err := rows.Scan(&key, &value); err != nil {
 			return nil, fmt.Errorf("scan: %w", err)
 		}
-		facts[key] = value
+		facts[key] = append(facts[key], value)
 	}
 	return facts, rows.Err()
 }
 
 // FindByFact returns contacts that have a matching key-value attribute.
+// The value is matched with LIKE for partial matching.
 func (s *Store) FindByFact(key, value string) ([]*Contact, error) {
 	rows, err := s.db.Query(`
-		SELECT `+qualifiedContactColumns+`
+		SELECT DISTINCT `+qualifiedContactColumns+`
 		FROM contacts
 		JOIN contact_facts ON contacts.id = contact_facts.contact_id
 		WHERE contacts.`+activeFilter+` AND contact_facts.key = ? AND contact_facts.value LIKE ?
@@ -362,6 +480,10 @@ func (s *Store) SetEmbedding(id uuid.UUID, embedding []float32) error {
 
 // SemanticSearch finds contacts similar to the query embedding.
 func (s *Store) SemanticSearch(queryEmbedding []float32, limit int) ([]*Contact, []float32, error) {
+	if limit <= 0 {
+		return nil, nil, nil
+	}
+
 	rows, err := s.db.Query(
 		`SELECT ` + contactColumnsWithEmbed + ` FROM contacts WHERE ` + activeFilter + ` AND embedding IS NOT NULL`)
 	if err != nil {
@@ -461,17 +583,7 @@ func (s *Store) scanContact(row *sql.Row) (*Contact, error) {
 		return nil, err
 	}
 
-	c.ID, _ = uuid.Parse(idStr)
-	c.Relationship = relationship.String
-	c.Summary = summary.String
-	c.Details = details.String
-	if lastInteraction.Valid {
-		c.LastInteraction, _ = time.Parse(time.RFC3339, lastInteraction.String)
-	}
-	c.CreatedAt, _ = time.Parse(time.RFC3339, createdStr)
-	c.UpdatedAt, _ = time.Parse(time.RFC3339, updatedStr)
-
-	return &c, nil
+	return populateContact(&c, idStr, relationship, summary, details, lastInteraction, createdStr, updatedStr)
 }
 
 func (s *Store) scanContactRow(rows *sql.Rows) (*Contact, error) {
@@ -486,17 +598,7 @@ func (s *Store) scanContactRow(rows *sql.Rows) (*Contact, error) {
 		return nil, err
 	}
 
-	c.ID, _ = uuid.Parse(idStr)
-	c.Relationship = relationship.String
-	c.Summary = summary.String
-	c.Details = details.String
-	if lastInteraction.Valid {
-		c.LastInteraction, _ = time.Parse(time.RFC3339, lastInteraction.String)
-	}
-	c.CreatedAt, _ = time.Parse(time.RFC3339, createdStr)
-	c.UpdatedAt, _ = time.Parse(time.RFC3339, updatedStr)
-
-	return &c, nil
+	return populateContact(&c, idStr, relationship, summary, details, lastInteraction, createdStr, updatedStr)
 }
 
 func (s *Store) scanContactWithEmbedding(rows *sql.Rows) (*Contact, error) {
@@ -512,18 +614,37 @@ func (s *Store) scanContactWithEmbedding(rows *sql.Rows) (*Contact, error) {
 		return nil, err
 	}
 
-	c.ID, _ = uuid.Parse(idStr)
+	c.Embedding = decodeEmbedding(embeddingBlob)
+	return populateContact(&c, idStr, relationship, summary, details, lastInteraction, createdStr, updatedStr)
+}
+
+// populateContact fills parsed fields into a Contact, returning errors
+// for corrupt UUID or timestamp data.
+func populateContact(c *Contact, idStr string, relationship, summary, details, lastInteraction sql.NullString, createdStr, updatedStr string) (*Contact, error) {
+	var err error
+	c.ID, err = uuid.Parse(idStr)
+	if err != nil {
+		return nil, fmt.Errorf("parse contact id: %w", err)
+	}
+
 	c.Relationship = relationship.String
 	c.Summary = summary.String
 	c.Details = details.String
-	c.Embedding = decodeEmbedding(embeddingBlob)
+
 	if lastInteraction.Valid {
 		c.LastInteraction, _ = time.Parse(time.RFC3339, lastInteraction.String)
 	}
-	c.CreatedAt, _ = time.Parse(time.RFC3339, createdStr)
-	c.UpdatedAt, _ = time.Parse(time.RFC3339, updatedStr)
 
-	return &c, nil
+	c.CreatedAt, err = time.Parse(time.RFC3339, createdStr)
+	if err != nil {
+		return nil, fmt.Errorf("parse created_at: %w", err)
+	}
+	c.UpdatedAt, err = time.Parse(time.RFC3339, updatedStr)
+	if err != nil {
+		return nil, fmt.Errorf("parse updated_at: %w", err)
+	}
+
+	return c, nil
 }
 
 func (s *Store) scanContacts(rows *sql.Rows) ([]*Contact, error) {

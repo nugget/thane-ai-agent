@@ -28,6 +28,15 @@ type SessionRotator interface {
 	RotateIdleSession(conversationID string) bool
 }
 
+// ContactResolver resolves a phone number to a contact name. The bridge
+// uses this to inject a sender_name hint into agent requests so the
+// channel provider can greet users by name.
+type ContactResolver interface {
+	// ResolvePhone returns the contact name for the given phone number.
+	// Returns ("", false) if no matching contact is found.
+	ResolvePhone(phone string) (name string, ok bool)
+}
+
 // handleTimeout bounds how long a single inbound message may be
 // processed (agent loop + response send).
 const handleTimeout = 5 * time.Minute
@@ -55,6 +64,7 @@ type BridgeConfig struct {
 	Routing     config.SignalRoutingConfig // model selection and routing hints
 	Rotator     SessionRotator             // nil disables idle session rotation
 	IdleTimeout time.Duration              // 0 disables idle session rotation
+	Resolver    ContactResolver            // nil disables phone→name resolution
 }
 
 // Bridge receives Signal messages from the signal-cli client, routes
@@ -67,6 +77,7 @@ type Bridge struct {
 	routing     config.SignalRoutingConfig
 	rotator     SessionRotator
 	idleTimeout time.Duration
+	resolver    ContactResolver
 
 	mu            sync.Mutex
 	senderTimes   map[string][]time.Time
@@ -88,6 +99,7 @@ func NewBridge(cfg BridgeConfig) *Bridge {
 		routing:       cfg.Routing,
 		rotator:       cfg.Rotator,
 		idleTimeout:   cfg.IdleTimeout,
+		resolver:      cfg.Resolver,
 		senderTimes:   make(map[string][]time.Time),
 		lastInboundTS: make(map[string]lastMessage),
 	}
@@ -230,17 +242,26 @@ func (b *Bridge) handleMessage(ctx context.Context, env *Envelope) {
 		b.logger.Debug("signal typing indicator failed", "error", err)
 	}
 
+	hints := map[string]string{
+		"source":                    "signal",
+		"sender":                    sender,
+		router.HintQualityFloor:     b.routing.QualityFloor,
+		router.HintMission:          b.routing.Mission,
+		router.HintDelegationGating: b.routing.DelegationGating,
+	}
+
+	// Resolve sender phone number to a contact name when available.
+	if b.resolver != nil {
+		if name, ok := b.resolver.ResolvePhone(sender); ok {
+			hints["sender_name"] = name
+		}
+	}
+
 	req := &agent.Request{
 		ConversationID: convID,
 		Messages:       []agent.Message{{Role: "user", Content: content}},
 		Model:          b.routing.Model,
-		Hints: map[string]string{
-			"source":                    "signal",
-			"sender":                    sender,
-			router.HintQualityFloor:     b.routing.QualityFloor,
-			router.HintMission:          b.routing.Mission,
-			router.HintDelegationGating: b.routing.DelegationGating,
-		},
+		Hints:          hints,
 	}
 
 	resp, err := b.runner.Run(ctx, req, nil)

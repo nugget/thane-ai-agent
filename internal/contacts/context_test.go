@@ -137,3 +137,23 @@ func TestContextProvider_MaxContacts(t *testing.T) {
 		t.Errorf("expected 2 contacts in output, got %d (result: %q)", boldCount, result)
 	}
 }
+
+func TestSetMaxContacts_ClampsToMin(t *testing.T) {
+	store := newTestStore(t)
+	cp := NewContextProvider(store, nil)
+
+	cp.SetMaxContacts(0)
+	if cp.maxContacts != 1 {
+		t.Errorf("SetMaxContacts(0) = %d, want 1", cp.maxContacts)
+	}
+
+	cp.SetMaxContacts(-5)
+	if cp.maxContacts != 1 {
+		t.Errorf("SetMaxContacts(-5) = %d, want 1", cp.maxContacts)
+	}
+
+	cp.SetMaxContacts(10)
+	if cp.maxContacts != 10 {
+		t.Errorf("SetMaxContacts(10) = %d, want 10", cp.maxContacts)
+	}
+}

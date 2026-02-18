@@ -20,8 +20,8 @@ func (r *Registry) registerContactTools() {
 	}
 
 	r.Register(&Tool{
-		Name:        "remember_contact",
-		Description: "Store or update a person or organization in the contact directory. Use for people, companies, or organizations you interact with. Supports structured attributes like email, phone, role, etc.",
+		Name:        "save_contact",
+		Description: "Store or update a person or organization in the contact directory. Use for people, companies, or organizations you interact with. Supports structured attributes like email, phone, role, etc. When updating an existing contact, only non-empty fields are overwritten.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -47,8 +47,9 @@ func (r *Registry) registerContactTools() {
 					"description": "Extended notes or context about this contact",
 				},
 				"facts": map[string]any{
-					"type":        "object",
-					"description": "Structured attributes as key-value pairs (e.g., {\"email\": \"alice@example.com\", \"phone\": \"555-1234\"})",
+					"type":                 "object",
+					"description":          "Structured attributes as key-value pairs (e.g., {\"email\": \"alice@example.com\", \"phone\": \"555-1234\"})",
+					"additionalProperties": map[string]any{"type": "string"},
 				},
 			},
 			"required": []string{"name"},
@@ -58,12 +59,12 @@ func (r *Registry) registerContactTools() {
 			if err != nil {
 				return "", fmt.Errorf("failed to serialize arguments: %w", err)
 			}
-			return r.contactTools.RememberContact(string(argsJSON))
+			return r.contactTools.SaveContact(string(argsJSON))
 		},
 	})
 
 	r.Register(&Tool{
-		Name:        "recall_contact",
+		Name:        "lookup_contact",
 		Description: "Look up contacts from the directory. Search by name, query, kind, or structured attributes. With no arguments, returns directory statistics.",
 		Parameters: map[string]any{
 			"type": "object",
@@ -96,7 +97,7 @@ func (r *Registry) registerContactTools() {
 			if err != nil {
 				return "", fmt.Errorf("failed to serialize arguments: %w", err)
 			}
-			return r.contactTools.RecallContact(string(argsJSON))
+			return r.contactTools.LookupContact(string(argsJSON))
 		},
 	})
 
@@ -123,32 +124,28 @@ func (r *Registry) registerContactTools() {
 	})
 
 	r.Register(&Tool{
-		Name:        "update_contact_fact",
-		Description: "Set or update a structured attribute on a contact (e.g., email, phone, role, employer).",
+		Name:        "list_contacts",
+		Description: "List contacts from the directory. Optionally filter by kind and limit the number of results.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"name": map[string]any{
+				"kind": map[string]any{
 					"type":        "string",
-					"description": "Name of the contact",
+					"enum":        []string{"person", "company", "organization"},
+					"description": "Filter by contact type",
 				},
-				"key": map[string]any{
-					"type":        "string",
-					"description": "Attribute key (e.g., email, phone, role, employer, ha_entity)",
-				},
-				"value": map[string]any{
-					"type":        "string",
-					"description": "Attribute value",
+				"limit": map[string]any{
+					"type":        "integer",
+					"description": "Maximum number of contacts to return",
 				},
 			},
-			"required": []string{"name", "key", "value"},
 		},
 		Handler: func(ctx context.Context, args map[string]any) (string, error) {
 			argsJSON, err := json.Marshal(args)
 			if err != nil {
 				return "", fmt.Errorf("failed to serialize arguments: %w", err)
 			}
-			return r.contactTools.UpdateContactFact(string(argsJSON))
+			return r.contactTools.ListContacts(string(argsJSON))
 		},
 	})
 }

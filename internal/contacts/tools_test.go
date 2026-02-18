@@ -22,18 +22,18 @@ func newTestTools(t *testing.T) *Tools {
 	return NewTools(store)
 }
 
-func TestRememberContact_New(t *testing.T) {
+func TestSaveContact_New(t *testing.T) {
 	tools := newTestTools(t)
 
-	result, err := tools.RememberContact(`{"name":"Alice Johnson","kind":"person","relationship":"colleague","summary":"Works at Anthropic"}`)
+	result, err := tools.SaveContact(`{"name":"Alice Johnson","kind":"person","relationship":"colleague","summary":"Works at Anthropic"}`)
 	if err != nil {
-		t.Fatalf("RememberContact() error = %v", err)
+		t.Fatalf("SaveContact() error = %v", err)
 	}
 	if !strings.Contains(result, "Alice Johnson") {
 		t.Errorf("result = %q, want to contain 'Alice Johnson'", result)
 	}
-	if !strings.Contains(result, "Remembered new contact") {
-		t.Errorf("result = %q, want to contain 'Remembered new contact'", result)
+	if !strings.Contains(result, "Saved new contact") {
+		t.Errorf("result = %q, want to contain 'Saved new contact'", result)
 	}
 
 	// Verify stored.
@@ -46,17 +46,17 @@ func TestRememberContact_New(t *testing.T) {
 	}
 }
 
-func TestRememberContact_Update(t *testing.T) {
+func TestSaveContact_Update(t *testing.T) {
 	tools := newTestTools(t)
 
 	// Create.
-	_, err := tools.RememberContact(`{"name":"Bob Smith","kind":"person","summary":"Original"}`)
+	_, err := tools.SaveContact(`{"name":"Bob Smith","kind":"person","summary":"Original"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Update.
-	result, err := tools.RememberContact(`{"name":"Bob Smith","relationship":"friend","summary":"Updated"}`)
+	result, err := tools.SaveContact(`{"name":"Bob Smith","relationship":"friend","summary":"Updated"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,10 +76,10 @@ func TestRememberContact_Update(t *testing.T) {
 	}
 }
 
-func TestRememberContact_WithFacts(t *testing.T) {
+func TestSaveContact_WithFacts(t *testing.T) {
 	tools := newTestTools(t)
 
-	_, err := tools.RememberContact(`{"name":"Charlie Facts","kind":"person","facts":{"email":"charlie@example.com","phone":"555-9999"}}`)
+	_, err := tools.SaveContact(`{"name":"Charlie Facts","kind":"person","facts":{"email":"charlie@example.com","phone":"555-9999"}}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,19 +93,19 @@ func TestRememberContact_WithFacts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if facts["email"] != "charlie@example.com" {
-		t.Errorf("email = %q, want %q", facts["email"], "charlie@example.com")
+	if len(facts["email"]) != 1 || facts["email"][0] != "charlie@example.com" {
+		t.Errorf("email = %v, want [charlie@example.com]", facts["email"])
 	}
-	if facts["phone"] != "555-9999" {
-		t.Errorf("phone = %q, want %q", facts["phone"], "555-9999")
+	if len(facts["phone"]) != 1 || facts["phone"][0] != "555-9999" {
+		t.Errorf("phone = %v, want [555-9999]", facts["phone"])
 	}
 }
 
-func TestRememberContact_WithEmbedding(t *testing.T) {
+func TestSaveContact_WithEmbedding(t *testing.T) {
 	tools := newTestTools(t)
 	tools.SetEmbeddingClient(&fakeEmbedder{embedding: []float32{0.1, 0.2, 0.3}})
 
-	_, err := tools.RememberContact(`{"name":"Embedded Eve","kind":"person","summary":"Has embedding"}`)
+	_, err := tools.SaveContact(`{"name":"Embedded Eve","kind":"person","summary":"Has embedding"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,26 +124,26 @@ func TestRememberContact_WithEmbedding(t *testing.T) {
 	}
 }
 
-func TestRememberContact_NameRequired(t *testing.T) {
+func TestSaveContact_NameRequired(t *testing.T) {
 	tools := newTestTools(t)
 
-	_, err := tools.RememberContact(`{"kind":"person"}`)
+	_, err := tools.SaveContact(`{"kind":"person"}`)
 	if err == nil {
 		t.Error("expected error for missing name")
 	}
 }
 
-func TestRecallContact_ByName(t *testing.T) {
+func TestLookupContact_ByName(t *testing.T) {
 	tools := newTestTools(t)
 
-	_, err := tools.RememberContact(`{"name":"Dana Recall","kind":"person","relationship":"friend","summary":"Test recall"}`)
+	_, err := tools.SaveContact(`{"name":"Dana Recall","kind":"person","relationship":"friend","summary":"Test recall"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	result, err := tools.RecallContact(`{"name":"Dana Recall"}`)
+	result, err := tools.LookupContact(`{"name":"Dana Recall"}`)
 	if err != nil {
-		t.Fatalf("RecallContact() error = %v", err)
+		t.Fatalf("LookupContact() error = %v", err)
 	}
 	if !strings.Contains(result, "Dana Recall") {
 		t.Errorf("result = %q, want to contain 'Dana Recall'", result)
@@ -153,10 +153,10 @@ func TestRecallContact_ByName(t *testing.T) {
 	}
 }
 
-func TestRecallContact_ByName_NotFound(t *testing.T) {
+func TestLookupContact_ByName_NotFound(t *testing.T) {
 	tools := newTestTools(t)
 
-	result, err := tools.RecallContact(`{"name":"Nobody"}`)
+	result, err := tools.LookupContact(`{"name":"Nobody"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -165,15 +165,15 @@ func TestRecallContact_ByName_NotFound(t *testing.T) {
 	}
 }
 
-func TestRecallContact_ByQuery(t *testing.T) {
+func TestLookupContact_ByQuery(t *testing.T) {
 	tools := newTestTools(t)
 
-	_, err := tools.RememberContact(`{"name":"Eve Search","kind":"person","summary":"Backend developer"}`)
+	_, err := tools.SaveContact(`{"name":"Eve Search","kind":"person","summary":"Backend developer"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	result, err := tools.RecallContact(`{"query":"developer"}`)
+	result, err := tools.LookupContact(`{"query":"developer"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -182,13 +182,13 @@ func TestRecallContact_ByQuery(t *testing.T) {
 	}
 }
 
-func TestRecallContact_ByKind(t *testing.T) {
+func TestLookupContact_ByKind(t *testing.T) {
 	tools := newTestTools(t)
 
-	_, _ = tools.RememberContact(`{"name":"PersonA","kind":"person"}`)
-	_, _ = tools.RememberContact(`{"name":"CompanyA","kind":"company"}`)
+	_, _ = tools.SaveContact(`{"name":"PersonA","kind":"person"}`)
+	_, _ = tools.SaveContact(`{"name":"CompanyA","kind":"company"}`)
 
-	result, err := tools.RecallContact(`{"kind":"company"}`)
+	result, err := tools.LookupContact(`{"kind":"company"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,12 +200,12 @@ func TestRecallContact_ByKind(t *testing.T) {
 	}
 }
 
-func TestRecallContact_ByFact(t *testing.T) {
+func TestLookupContact_ByFact(t *testing.T) {
 	tools := newTestTools(t)
 
-	_, _ = tools.RememberContact(`{"name":"Frank Fact","kind":"person","facts":{"email":"frank@example.com"}}`)
+	_, _ = tools.SaveContact(`{"name":"Frank Fact","kind":"person","facts":{"email":"frank@example.com"}}`)
 
-	result, err := tools.RecallContact(`{"key":"email","value":"frank@example.com"}`)
+	result, err := tools.LookupContact(`{"key":"email","value":"frank@example.com"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -214,14 +214,14 @@ func TestRecallContact_ByFact(t *testing.T) {
 	}
 }
 
-func TestRecallContact_Stats(t *testing.T) {
+func TestLookupContact_Stats(t *testing.T) {
 	tools := newTestTools(t)
 
-	_, _ = tools.RememberContact(`{"name":"P1","kind":"person"}`)
-	_, _ = tools.RememberContact(`{"name":"P2","kind":"person"}`)
-	_, _ = tools.RememberContact(`{"name":"C1","kind":"company"}`)
+	_, _ = tools.SaveContact(`{"name":"P1","kind":"person"}`)
+	_, _ = tools.SaveContact(`{"name":"P2","kind":"person"}`)
+	_, _ = tools.SaveContact(`{"name":"C1","kind":"company"}`)
 
-	result, err := tools.RecallContact(`{}`)
+	result, err := tools.LookupContact(`{}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,7 +233,7 @@ func TestRecallContact_Stats(t *testing.T) {
 func TestForgetContact(t *testing.T) {
 	tools := newTestTools(t)
 
-	_, _ = tools.RememberContact(`{"name":"Grace Forget","kind":"person"}`)
+	_, _ = tools.SaveContact(`{"name":"Grace Forget","kind":"person"}`)
 
 	result, err := tools.ForgetContact(`{"name":"Grace Forget"}`)
 	if err != nil {
@@ -244,7 +244,7 @@ func TestForgetContact(t *testing.T) {
 	}
 
 	// Verify deleted.
-	recall, err := tools.RecallContact(`{"name":"Grace Forget"}`)
+	recall, err := tools.LookupContact(`{"name":"Grace Forget"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -269,42 +269,68 @@ func TestForgetContact_NotFound(t *testing.T) {
 	}
 }
 
-func TestUpdateContactFact(t *testing.T) {
+func TestListContacts_All(t *testing.T) {
 	tools := newTestTools(t)
 
-	_, _ = tools.RememberContact(`{"name":"Hank Update","kind":"person"}`)
+	_, _ = tools.SaveContact(`{"name":"Alpha","kind":"person"}`)
+	_, _ = tools.SaveContact(`{"name":"Beta","kind":"company"}`)
+	_, _ = tools.SaveContact(`{"name":"Gamma","kind":"person"}`)
 
-	result, err := tools.UpdateContactFact(`{"name":"Hank Update","key":"role","value":"Engineer"}`)
+	result, err := tools.ListContacts(`{}`)
 	if err != nil {
-		t.Fatalf("UpdateContactFact() error = %v", err)
+		t.Fatal(err)
 	}
-	if !strings.Contains(result, "role") {
-		t.Errorf("result = %q, want to contain 'role'", result)
+	if !strings.Contains(result, "3 contact(s)") {
+		t.Errorf("result = %q, want to contain '3 contact(s)'", result)
 	}
-
-	// Verify fact was set.
-	c, _ := tools.store.FindByName("Hank Update")
-	facts, _ := tools.store.GetFacts(c.ID)
-	if facts["role"] != "Engineer" {
-		t.Errorf("role = %q, want %q", facts["role"], "Engineer")
+	if !strings.Contains(result, "Alpha") || !strings.Contains(result, "Beta") || !strings.Contains(result, "Gamma") {
+		t.Errorf("result should contain all contacts, got %q", result)
 	}
 }
 
-func TestUpdateContactFact_MissingArgs(t *testing.T) {
+func TestListContacts_ByKind(t *testing.T) {
 	tools := newTestTools(t)
 
-	_, err := tools.UpdateContactFact(`{"name":"Someone"}`)
-	if err == nil {
-		t.Error("expected error for missing key/value")
+	_, _ = tools.SaveContact(`{"name":"PersonX","kind":"person"}`)
+	_, _ = tools.SaveContact(`{"name":"CompanyX","kind":"company"}`)
+
+	result, err := tools.ListContacts(`{"kind":"company"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result, "CompanyX") {
+		t.Errorf("result = %q, want to contain 'CompanyX'", result)
+	}
+	if strings.Contains(result, "PersonX") {
+		t.Errorf("result should not contain 'PersonX'")
 	}
 }
 
-func TestUpdateContactFact_ContactNotFound(t *testing.T) {
+func TestListContacts_WithLimit(t *testing.T) {
 	tools := newTestTools(t)
 
-	_, err := tools.UpdateContactFact(`{"name":"Nobody","key":"email","value":"test@example.com"}`)
-	if err == nil {
-		t.Error("expected error for non-existent contact")
+	_, _ = tools.SaveContact(`{"name":"A1","kind":"person"}`)
+	_, _ = tools.SaveContact(`{"name":"A2","kind":"person"}`)
+	_, _ = tools.SaveContact(`{"name":"A3","kind":"person"}`)
+
+	result, err := tools.ListContacts(`{"limit":2}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result, "2 contact(s)") {
+		t.Errorf("result = %q, want to contain '2 contact(s)'", result)
+	}
+}
+
+func TestListContacts_Empty(t *testing.T) {
+	tools := newTestTools(t)
+
+	result, err := tools.ListContacts(`{}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result, "No contacts") {
+		t.Errorf("result = %q, want 'No contacts'", result)
 	}
 }
 
@@ -312,9 +338,9 @@ func TestGenerateMissingEmbeddings(t *testing.T) {
 	tools := newTestTools(t)
 	tools.SetEmbeddingClient(&fakeEmbedder{embedding: []float32{0.5, 0.5}})
 
-	_, _ = tools.RememberContact(`{"name":"NeedsEmbed","kind":"person","summary":"No embed yet"}`)
+	_, _ = tools.SaveContact(`{"name":"NeedsEmbed","kind":"person","summary":"No embed yet"}`)
 
-	// The remember already generates an embedding, so clear it for test.
+	// The save already generates an embedding, so clear it for test.
 	c, _ := tools.store.FindByName("NeedsEmbed")
 	_ = tools.store.SetEmbedding(c.ID, nil)
 

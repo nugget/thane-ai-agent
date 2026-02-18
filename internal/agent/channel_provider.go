@@ -2,18 +2,10 @@ package agent
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/nugget/thane-ai-agent/internal/tools"
 )
-
-// channelNotes maps source hint values to system prompt context notes.
-// Each note describes the channel's characteristics so the agent can
-// adjust its communication style accordingly.
-var channelNotes = map[string]string{
-	"signal": "[Source: Signal \u2014 mobile messaging from Nugget. " +
-		"Terse input is normal; typing on mobile devices is slow " +
-		"and brevity is not an indicator of emotional state.]",
-}
 
 // ChannelProvider is a ContextProvider that injects channel-specific
 // notes into the system prompt based on the "source" routing hint
@@ -27,15 +19,29 @@ func NewChannelProvider() *ChannelProvider {
 }
 
 // GetContext returns a channel-specific note if the request context
-// carries a "source" hint that matches a known channel. Returns an
-// empty string otherwise.
+// carries a "source" hint that matches a known channel. For Signal,
+// the sender name is resolved dynamically from the sender_name hint
+// (populated by the bridge's ContactResolver). Returns an empty
+// string for unrecognized sources.
 func (p *ChannelProvider) GetContext(ctx context.Context, _ string) (string, error) {
 	hints := tools.HintsFromContext(ctx)
 	if hints == nil {
 		return "", nil
 	}
-	if note, ok := channelNotes[hints["source"]]; ok {
-		return note, nil
+
+	switch hints["source"] {
+	case "signal":
+		name := hints["sender_name"]
+		if name == "" {
+			name = hints["sender"]
+		}
+		if name == "" {
+			name = "unknown sender"
+		}
+		return fmt.Sprintf("[Source: Signal — mobile messaging from %s. "+
+			"Terse input is normal; typing on mobile devices is slow "+
+			"and brevity is not an indicator of emotional state.]", name), nil
+	default:
+		return "", nil
 	}
-	return "", nil
 }

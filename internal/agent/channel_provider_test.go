@@ -8,10 +8,12 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/tools"
 )
 
-func TestChannelProvider_SignalSource(t *testing.T) {
+func TestChannelProvider_SignalWithSenderName(t *testing.T) {
 	p := NewChannelProvider()
 	ctx := tools.WithHints(context.Background(), map[string]string{
-		"source": "signal",
+		"source":      "signal",
+		"sender":      "+15551234567",
+		"sender_name": "Nugget (David McNett)",
 	})
 
 	got, err := p.GetContext(ctx, "hello")
@@ -21,11 +23,45 @@ func TestChannelProvider_SignalSource(t *testing.T) {
 	if !strings.Contains(got, "Signal") {
 		t.Errorf("expected Signal mention, got %q", got)
 	}
-	if !strings.Contains(got, "Nugget") {
-		t.Errorf("expected Nugget mention, got %q", got)
+	if !strings.Contains(got, "Nugget (David McNett)") {
+		t.Errorf("expected resolved sender name, got %q", got)
 	}
 	if !strings.Contains(got, "mobile") {
 		t.Errorf("expected mobile mention, got %q", got)
+	}
+}
+
+func TestChannelProvider_SignalFallbackToPhone(t *testing.T) {
+	p := NewChannelProvider()
+	ctx := tools.WithHints(context.Background(), map[string]string{
+		"source": "signal",
+		"sender": "+15551234567",
+	})
+
+	got, err := p.GetContext(ctx, "hello")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "+15551234567") {
+		t.Errorf("expected phone number fallback, got %q", got)
+	}
+	if !strings.Contains(got, "mobile") {
+		t.Errorf("expected mobile mention, got %q", got)
+	}
+}
+
+func TestChannelProvider_SignalNoSenderInfo(t *testing.T) {
+	p := NewChannelProvider()
+	ctx := tools.WithHints(context.Background(), map[string]string{
+		"source": "signal",
+	})
+
+	got, err := p.GetContext(ctx, "hello")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "unknown sender") {
+		t.Errorf("expected 'unknown sender' fallback, got %q", got)
 	}
 }
 

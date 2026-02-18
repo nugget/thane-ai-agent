@@ -2,7 +2,9 @@ package contacts
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 )
@@ -28,8 +30,8 @@ func (t *Tools) SetEmbeddingClient(client EmbeddingClient) {
 	t.embeddings = client
 }
 
-// RememberContactArgs are arguments for the remember_contact tool.
-type RememberContactArgs struct {
+// SaveContactArgs are arguments for the save_contact tool.
+type SaveContactArgs struct {
 	Name         string            `json:"name"`
 	Kind         string            `json:"kind,omitempty"`         // person, company, organization
 	Relationship string            `json:"relationship,omitempty"` // friend, colleague, family, vendor
@@ -38,9 +40,11 @@ type RememberContactArgs struct {
 	Facts        map[string]string `json:"facts,omitempty"` // key-value attributes (email, phone, etc.)
 }
 
-// RememberContact creates or updates a contact.
-func (t *Tools) RememberContact(argsJSON string) (string, error) {
-	var args RememberContactArgs
+// SaveContact creates or updates a contact. When a contact with the
+// given name already exists, only non-empty fields are overwritten.
+// Facts are additive (use ReplaceFact for replacement semantics).
+func (t *Tools) SaveContact(argsJSON string) (string, error) {
+	var args SaveContactArgs
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 		return "", fmt.Errorf("parse args: %w", err)
 	}
@@ -51,7 +55,11 @@ func (t *Tools) RememberContact(argsJSON string) (string, error) {
 
 	// Look for existing contact by name.
 	existing, err := t.store.FindByName(args.Name)
-	if err == nil {
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return "", fmt.Errorf("find contact: %w", err)
+	}
+
+	if existing != nil {
 		// Update existing contact.
 		if args.Kind != "" {
 			existing.Kind = args.Kind
@@ -105,11 +113,11 @@ func (t *Tools) RememberContact(argsJSON string) (string, error) {
 
 	t.generateEmbedding(created, args.Facts)
 
-	return fmt.Sprintf("Remembered new contact: **%s** (%s)", created.Name, created.Kind), nil
+	return fmt.Sprintf("Saved new contact: **%s** (%s)", created.Name, created.Kind), nil
 }
 
-// RecallContactArgs are arguments for the recall_contact tool.
-type RecallContactArgs struct {
+// LookupContactArgs are arguments for the lookup_contact tool.
+type LookupContactArgs struct {
 	Name  string `json:"name,omitempty"`
 	Query string `json:"query,omitempty"`
 	Kind  string `json:"kind,omitempty"`
@@ -117,9 +125,9 @@ type RecallContactArgs struct {
 	Value string `json:"value,omitempty"` // fact value filter
 }
 
-// RecallContact retrieves contacts from the directory.
-func (t *Tools) RecallContact(argsJSON string) (string, error) {
-	var args RecallContactArgs
+// LookupContact retrieves contacts from the directory.
+func (t *Tools) LookupContact(argsJSON string) (string, error) {
+	var args LookupContactArgs
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 		return "", fmt.Errorf("parse args: %w", err)
 	}
@@ -127,8 +135,11 @@ func (t *Tools) RecallContact(argsJSON string) (string, error) {
 	// Name lookup.
 	if args.Name != "" {
 		c, err := t.store.FindByName(args.Name)
-		if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
 			return fmt.Sprintf("No contact found named %q", args.Name), nil
+		}
+		if err != nil {
+			return "", fmt.Errorf("find contact: %w", err)
 		}
 		c, err = t.store.GetWithFacts(c.ID)
 		if err != nil {
@@ -209,34 +220,44 @@ func (t *Tools) ForgetContact(argsJSON string) (string, error) {
 	return fmt.Sprintf("Forgot contact: %s", args.Name), nil
 }
 
-// UpdateContactFactArgs are arguments for the update_contact_fact tool.
-type UpdateContactFactArgs struct {
-	Name  string `json:"name"`
-	Key   string `json:"key"`
-	Value string `json:"value"`
+// ListContactsArgs are arguments for the list_contacts tool.
+type ListContactsArgs struct {
+	Kind  string `json:"kind,omitempty"`
+	Limit int    `json:"limit,omitempty"`
 }
 
-// UpdateContactFact sets a structured attribute on a contact.
-func (t *Tools) UpdateContactFact(argsJSON string) (string, error) {
-	var args UpdateContactFactArgs
+// ListContacts returns contacts from the directory, optionally filtered
+// by kind and capped by a limit.
+func (t *Tools) ListContacts(argsJSON string) (string, error) {
+	var args ListContactsArgs
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 		return "", fmt.Errorf("parse args: %w", err)
 	}
 
-	if args.Name == "" || args.Key == "" || args.Value == "" {
-		return "", fmt.Errorf("name, key, and value are required")
-	}
+	var contacts []*Contact
+	var err error
 
-	c, err := t.store.FindByName(args.Name)
+	if args.Kind != "" {
+		contacts, err = t.store.ListByKind(args.Kind)
+	} else {
+		contacts, err = t.store.ListAll()
+	}
 	if err != nil {
-		return "", fmt.Errorf("find contact %q: %w", args.Name, err)
+		return "", fmt.Errorf("list contacts: %w", err)
 	}
 
-	if err := t.store.SetFact(c.ID, args.Key, args.Value); err != nil {
-		return "", fmt.Errorf("set fact: %w", err)
+	if args.Limit > 0 && len(contacts) > args.Limit {
+		contacts = contacts[:args.Limit]
 	}
 
-	return fmt.Sprintf("Updated %s for %s: %s", args.Key, c.Name, args.Value), nil
+	if len(contacts) == 0 {
+		if args.Kind != "" {
+			return fmt.Sprintf("No %s contacts found", args.Kind), nil
+		}
+		return "No contacts in directory", nil
+	}
+
+	return formatContactList(contacts), nil
 }
 
 // GenerateMissingEmbeddings creates embeddings for contacts that don't have them.
@@ -277,10 +298,10 @@ func (t *Tools) generateEmbedding(c *Contact, extraFacts map[string]string) {
 	// Merge stored facts with any just-provided ones.
 	facts, _ := t.store.GetFacts(c.ID)
 	if facts == nil {
-		facts = make(map[string]string)
+		facts = make(map[string][]string)
 	}
 	for k, v := range extraFacts {
-		facts[k] = v
+		facts[k] = []string{v}
 	}
 
 	embText := buildEmbeddingText(c, facts)
@@ -292,7 +313,7 @@ func (t *Tools) generateEmbedding(c *Contact, extraFacts map[string]string) {
 }
 
 // buildEmbeddingText creates text for embedding from a contact and its facts.
-func buildEmbeddingText(c *Contact, facts map[string]string) string {
+func buildEmbeddingText(c *Contact, facts map[string][]string) string {
 	var sb strings.Builder
 	sb.WriteString(c.Name)
 	if c.Kind != "" {
@@ -307,8 +328,8 @@ func buildEmbeddingText(c *Contact, facts map[string]string) string {
 	if c.Details != "" {
 		sb.WriteString("\n" + c.Details)
 	}
-	for k, v := range facts {
-		sb.WriteString(fmt.Sprintf("\n%s: %s", k, v))
+	for k, vals := range facts {
+		sb.WriteString(fmt.Sprintf("\n%s: %s", k, strings.Join(vals, ", ")))
 	}
 	return sb.String()
 }
@@ -331,8 +352,8 @@ func formatContact(c *Contact) string {
 
 	if len(c.Facts) > 0 {
 		sb.WriteString("\n")
-		for k, v := range c.Facts {
-			sb.WriteString(fmt.Sprintf("  %s: %s\n", k, v))
+		for k, vals := range c.Facts {
+			sb.WriteString(fmt.Sprintf("  %s: %s\n", k, strings.Join(vals, ", ")))
 		}
 	}
 

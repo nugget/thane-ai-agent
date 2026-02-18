@@ -1009,6 +1009,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 				Routing:     cfg.Signal.Routing,
 				Rotator:     signalRotator,
 				IdleTimeout: idleTimeout,
+				Resolver:    &contactPhoneResolver{store: contactStore},
 			})
 			go bridge.Start(ctx)
 
@@ -1758,4 +1759,21 @@ func (r *signalSessionRotator) RotateIdleSession(conversationID string) bool {
 		return false
 	}
 	return true
+}
+
+// contactPhoneResolver resolves phone numbers to contact names via the
+// contact directory's fact store. It looks up contacts with a "phone"
+// fact matching the given phone number.
+type contactPhoneResolver struct {
+	store *contacts.Store
+}
+
+// ResolvePhone returns the name of the contact whose phone fact matches
+// the given phone number. Returns ("", false) if no match is found.
+func (r *contactPhoneResolver) ResolvePhone(phone string) (string, bool) {
+	matches, err := r.store.FindByFact("phone", phone)
+	if err != nil || len(matches) == 0 {
+		return "", false
+	}
+	return matches[0].Name, true
 }

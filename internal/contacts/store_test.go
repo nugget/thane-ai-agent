@@ -344,29 +344,28 @@ func TestSetFact_GetFacts(t *testing.T) {
 	if len(facts) != 2 {
 		t.Fatalf("GetFacts() returned %d facts, want 2", len(facts))
 	}
-	if facts["email"] != "ivy@example.com" {
-		t.Errorf("email = %q, want %q", facts["email"], "ivy@example.com")
+	if len(facts["email"]) != 1 || facts["email"][0] != "ivy@example.com" {
+		t.Errorf("email = %v, want [ivy@example.com]", facts["email"])
 	}
-	if facts["phone"] != "555-1234" {
-		t.Errorf("phone = %q, want %q", facts["phone"], "555-1234")
+	if len(facts["phone"]) != 1 || facts["phone"][0] != "555-1234" {
+		t.Errorf("phone = %v, want [555-1234]", facts["phone"])
 	}
 }
 
-func TestSetFact_Upsert(t *testing.T) {
+func TestSetFact_MultiValue(t *testing.T) {
 	store := newTestStore(t)
 
-	c := &Contact{Name: "Jack Updater", Kind: "person"}
+	c := &Contact{Name: "Jack MultiPhone", Kind: "person"}
 	created, err := store.Upsert(c)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if err := store.SetFact(created.ID, "role", "Engineer"); err != nil {
+	// SetFact adds multiple values for the same key.
+	if err := store.SetFact(created.ID, "phone", "555-1111"); err != nil {
 		t.Fatal(err)
 	}
-
-	// Upsert same key with new value.
-	if err := store.SetFact(created.ID, "role", "Senior Engineer"); err != nil {
+	if err := store.SetFact(created.ID, "phone", "555-2222"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -374,11 +373,100 @@ func TestSetFact_Upsert(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if facts["role"] != "Senior Engineer" {
-		t.Errorf("role = %q, want %q", facts["role"], "Senior Engineer")
+	if len(facts["phone"]) != 2 {
+		t.Errorf("expected 2 phone values, got %d: %v", len(facts["phone"]), facts["phone"])
 	}
-	if len(facts) != 1 {
-		t.Errorf("expected 1 fact after upsert, got %d", len(facts))
+}
+
+func TestSetFact_Idempotent(t *testing.T) {
+	store := newTestStore(t)
+
+	c := &Contact{Name: "Jack Idempotent", Kind: "person"}
+	created, err := store.Upsert(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Setting the same triple twice should be a no-op.
+	if err := store.SetFact(created.ID, "email", "jack@example.com"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetFact(created.ID, "email", "jack@example.com"); err != nil {
+		t.Fatal(err)
+	}
+
+	facts, err := store.GetFacts(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(facts["email"]) != 1 {
+		t.Errorf("expected 1 email value after duplicate SetFact, got %d", len(facts["email"]))
+	}
+}
+
+func TestReplaceFact(t *testing.T) {
+	store := newTestStore(t)
+
+	c := &Contact{Name: "Replace Tester", Kind: "person"}
+	created, err := store.Upsert(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Add two phone numbers then replace with one.
+	_ = store.SetFact(created.ID, "phone", "555-1111")
+	_ = store.SetFact(created.ID, "phone", "555-2222")
+
+	if err := store.ReplaceFact(created.ID, "phone", "555-3333"); err != nil {
+		t.Fatal(err)
+	}
+
+	facts, err := store.GetFacts(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(facts["phone"]) != 1 || facts["phone"][0] != "555-3333" {
+		t.Errorf("phone = %v, want [555-3333]", facts["phone"])
+	}
+}
+
+func TestDeleteFact(t *testing.T) {
+	store := newTestStore(t)
+
+	c := &Contact{Name: "Delete Fact Tester", Kind: "person"}
+	created, err := store.Upsert(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_ = store.SetFact(created.ID, "phone", "555-1111")
+	_ = store.SetFact(created.ID, "phone", "555-2222")
+
+	if err := store.DeleteFact(created.ID, "phone", "555-1111"); err != nil {
+		t.Fatal(err)
+	}
+
+	facts, err := store.GetFacts(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(facts["phone"]) != 1 || facts["phone"][0] != "555-2222" {
+		t.Errorf("phone = %v, want [555-2222]", facts["phone"])
+	}
+}
+
+func TestDeleteFact_NotFound(t *testing.T) {
+	store := newTestStore(t)
+
+	c := &Contact{Name: "No Such Fact", Kind: "person"}
+	created, err := store.Upsert(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = store.DeleteFact(created.ID, "phone", "nonexistent")
+	if err == nil {
+		t.Error("expected error deleting nonexistent fact")
 	}
 }
 
@@ -401,8 +489,8 @@ func TestGetWithFacts(t *testing.T) {
 	if got.Name != "Kelly Complete" {
 		t.Errorf("Name = %q, want %q", got.Name, "Kelly Complete")
 	}
-	if got.Facts["employer"] != "Widgets Inc" {
-		t.Errorf("Facts[employer] = %q, want %q", got.Facts["employer"], "Widgets Inc")
+	if len(got.Facts["employer"]) != 1 || got.Facts["employer"][0] != "Widgets Inc" {
+		t.Errorf("Facts[employer] = %v, want [Widgets Inc]", got.Facts["employer"])
 	}
 }
 
@@ -758,5 +846,58 @@ func TestFTS5Enabled(t *testing.T) {
 	store := newTestStore(t)
 	if !store.ftsEnabled {
 		t.Skip("FTS5 not available in test environment")
+	}
+}
+
+func TestSemanticSearch_ZeroLimit(t *testing.T) {
+	store := newTestStore(t)
+
+	c := &Contact{Name: "Limit Zero", Kind: "person"}
+	created, err := store.Upsert(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetEmbedding(created.ID, []float32{1.0, 0.0, 0.0}); err != nil {
+		t.Fatal(err)
+	}
+
+	contacts, scores, err := store.SemanticSearch([]float32{1.0, 0.0, 0.0}, 0)
+	if err != nil {
+		t.Fatalf("SemanticSearch(limit=0) error = %v", err)
+	}
+	if contacts != nil {
+		t.Errorf("expected nil contacts for limit=0, got %d", len(contacts))
+	}
+	if scores != nil {
+		t.Errorf("expected nil scores for limit=0, got %d", len(scores))
+	}
+
+	// Negative limit should also return empty.
+	contacts, scores, err = store.SemanticSearch([]float32{1.0, 0.0, 0.0}, -5)
+	if err != nil {
+		t.Fatalf("SemanticSearch(limit=-5) error = %v", err)
+	}
+	if contacts != nil {
+		t.Errorf("expected nil contacts for limit=-5, got %d", len(contacts))
+	}
+	if scores != nil {
+		t.Errorf("expected nil scores for limit=-5, got %d", len(scores))
+	}
+}
+
+func TestUpsert_DuplicateActiveName(t *testing.T) {
+	store := newTestStore(t)
+
+	c1 := &Contact{Name: "Unique Person", Kind: "person"}
+	if _, err := store.Upsert(c1); err != nil {
+		t.Fatal(err)
+	}
+
+	// Inserting a second contact with the same name (case-insensitive)
+	// should fail due to the unique index on active contacts.
+	c2 := &Contact{Name: "unique person", Kind: "person"}
+	_, err := store.Upsert(c2)
+	if err == nil {
+		t.Error("expected error inserting duplicate active name, got nil")
 	}
 }

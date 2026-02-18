@@ -25,8 +25,12 @@ func NewContextProvider(store *Store, embeddings EmbeddingClient) *ContextProvid
 	}
 }
 
-// SetMaxContacts configures how many contacts to include.
+// SetMaxContacts configures how many contacts to include. Values less
+// than 1 are clamped to 1.
 func (p *ContextProvider) SetMaxContacts(n int) {
+	if n < 1 {
+		n = 1
+	}
 	p.maxContacts = n
 }
 
@@ -81,8 +85,8 @@ func (p *ContextProvider) GetContext(ctx context.Context, userMessage string) (s
 
 		if len(facts) > 0 {
 			parts := make([]string, 0, len(facts))
-			for k, v := range facts {
-				parts = append(parts, fmt.Sprintf("%s: %s", k, v))
+			for k, vals := range facts {
+				parts = append(parts, fmt.Sprintf("%s: %s", k, strings.Join(vals, ", ")))
 			}
 			sb.WriteString("  " + strings.Join(parts, " | ") + "\n")
 		}
