@@ -950,6 +950,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 				Logger:      logger,
 				PollTimeout: cfg.Signal.PollTimeoutSec,
 				RateLimit:   cfg.Signal.RateLimitPerMinute,
+				Routing:     cfg.Signal.Routing,
 			})
 			go signalBridge.Start(ctx)
 			logger.Info("signal bridge started",
@@ -988,6 +989,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// current state (e.g., pending anticipations) before each LLM call.
 	anticipationProvider := anticipation.NewProvider(anticipationStore)
 	contextProvider := agent.NewCompositeContextProvider(anticipationProvider)
+	contextProvider.Add(agent.NewChannelProvider())
 
 	episodicProvider := episodic.NewProvider(archiveStore, logger, episodic.Config{
 		Timezone:          cfg.Timezone,

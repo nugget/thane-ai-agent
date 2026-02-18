@@ -56,10 +56,11 @@ func NewStdioTransport(cfg StdioConfig) *StdioTransport {
 	}
 }
 
-// start launches the subprocess if it is not already running.
-// The context is used for exec.CommandContext so that context cancellation
-// kills the subprocess. Caller must hold t.mu.
-func (t *StdioTransport) start(ctx context.Context) error {
+// start launches the subprocess if it is not already running. The
+// subprocess lifecycle is independent of call contexts — it survives
+// individual request timeouts and is only terminated by explicit
+// cleanup() or stop() calls. Caller must hold t.mu.
+func (t *StdioTransport) start(_ context.Context) error {
 	if t.cmd != nil && t.cmd.ProcessState == nil {
 		// Process is still running.
 		return nil
@@ -70,7 +71,7 @@ func (t *StdioTransport) start(ctx context.Context) error {
 		"args", t.config.Args,
 	)
 
-	cmd := exec.CommandContext(ctx, t.config.Command, t.config.Args...)
+	cmd := exec.Command(t.config.Command, t.config.Args...)
 	cmd.Env = append(os.Environ(), t.config.Env...)
 
 	stdin, err := cmd.StdinPipe()

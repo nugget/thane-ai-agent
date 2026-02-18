@@ -630,6 +630,33 @@ type SignalConfig struct {
 	// are processed per minute. Zero disables rate limiting.
 	// Default: 10.
 	RateLimitPerMinute int `yaml:"rate_limit_per_minute"`
+
+	// Routing configures how Signal messages are routed to LLM models.
+	// All fields are optional; defaults preserve the original hardcoded
+	// behavior (quality_floor=6, mission=conversation, delegation_gating=disabled).
+	Routing SignalRoutingConfig `yaml:"routing"`
+}
+
+// SignalRoutingConfig controls model selection for Signal messages.
+// When Model is set, the router is bypassed entirely and the named
+// model handles every Signal message. The remaining fields are passed
+// as routing hints when the router is active.
+type SignalRoutingConfig struct {
+	// Model sets an explicit model for Signal messages. When non-empty,
+	// the router is bypassed entirely. Empty means use the router with
+	// the hint-based defaults below.
+	Model string `yaml:"model"`
+
+	// QualityFloor is the minimum model quality rating (1-10) passed
+	// to the router. Default: "6".
+	QualityFloor string `yaml:"quality_floor"`
+
+	// Mission describes the task context for routing. Default: "conversation".
+	Mission string `yaml:"mission"`
+
+	// DelegationGating controls whether delegation-first tool gating
+	// is active. Default: "disabled".
+	DelegationGating string `yaml:"delegation_gating"`
 }
 
 // Configured reports whether the Signal bridge has the minimum
@@ -768,6 +795,15 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Signal.RateLimitPerMinute == 0 {
 		c.Signal.RateLimitPerMinute = 10
+	}
+	if c.Signal.Routing.QualityFloor == "" {
+		c.Signal.Routing.QualityFloor = "6"
+	}
+	if c.Signal.Routing.Mission == "" {
+		c.Signal.Routing.Mission = "conversation"
+	}
+	if c.Signal.Routing.DelegationGating == "" {
+		c.Signal.Routing.DelegationGating = "disabled"
 	}
 
 	for i := range c.Models.Available {

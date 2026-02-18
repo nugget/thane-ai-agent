@@ -549,7 +549,9 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 
 	// Build messages for LLM. Enrich ctx with conversation ID so that
 	// context providers (e.g. working memory) can scope their output.
+	// Propagate request hints so channel-aware providers can adapt.
 	promptCtx := tools.WithConversationID(ctx, convID)
+	promptCtx = tools.WithHints(promptCtx, req.Hints)
 
 	var llmMessages []llm.Message
 	llmMessages = append(llmMessages, llm.Message{

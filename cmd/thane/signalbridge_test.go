@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/agent"
+	"github.com/nugget/thane-ai-agent/internal/config"
 )
 
 // mockMCPCaller records CallTool invocations and returns canned responses.
@@ -106,6 +107,88 @@ func TestSignalBridge_MessageRoutesToAgent(t *testing.T) {
 	}
 	if !strings.Contains(req.Messages[0].Content, "What's the weather?") {
 		t.Errorf("message content missing user text: %q", req.Messages[0].Content)
+	}
+}
+
+func TestSignalBridge_DefaultRoutingHints(t *testing.T) {
+	msg := signalMessage{
+		SenderID: "+15551234567",
+		Message:  "Hello",
+	}
+	msgJSON, _ := json.Marshal(msg)
+
+	mcpMock := &mockMCPCaller{recvResp: string(msgJSON)}
+	runner := &signalTestRunner{
+		resp: &agent.Response{Content: "Hi!"},
+	}
+
+	// No explicit routing config — defaults should flow through.
+	bridge := NewSignalBridge(SignalBridgeConfig{
+		MCP:         mcpMock,
+		Runner:      runner,
+		Logger:      slog.Default(),
+		PollTimeout: 1,
+	})
+
+	bridge.handleMessage(context.Background(), msg)
+
+	req := runner.getLastReq()
+	if req == nil {
+		t.Fatal("runner.Run was not called")
+	}
+	// Default routing hints come from zero-value SignalRoutingConfig
+	// which has empty strings — the config defaults are applied by
+	// applyDefaults() during Load(), not by the bridge itself.
+	if req.Hints["quality_floor"] != "" {
+		t.Errorf("quality_floor hint = %q, want empty (no config defaults)", req.Hints["quality_floor"])
+	}
+	if req.Model != "" {
+		t.Errorf("Model = %q, want empty (router decides)", req.Model)
+	}
+}
+
+func TestSignalBridge_CustomRoutingConfig(t *testing.T) {
+	msg := signalMessage{
+		SenderID: "+15551234567",
+		Message:  "Use Opus",
+	}
+	msgJSON, _ := json.Marshal(msg)
+
+	mcpMock := &mockMCPCaller{recvResp: string(msgJSON)}
+	runner := &signalTestRunner{
+		resp: &agent.Response{Content: "ok"},
+	}
+
+	bridge := NewSignalBridge(SignalBridgeConfig{
+		MCP:         mcpMock,
+		Runner:      runner,
+		Logger:      slog.Default(),
+		PollTimeout: 1,
+		Routing: config.SignalRoutingConfig{
+			Model:            "claude-sonnet-4-20250514",
+			QualityFloor:     "8",
+			Mission:          "conversation",
+			DelegationGating: "disabled",
+		},
+	})
+
+	bridge.handleMessage(context.Background(), msg)
+
+	req := runner.getLastReq()
+	if req == nil {
+		t.Fatal("runner.Run was not called")
+	}
+	if req.Model != "claude-sonnet-4-20250514" {
+		t.Errorf("Model = %q, want %q", req.Model, "claude-sonnet-4-20250514")
+	}
+	if req.Hints["quality_floor"] != "8" {
+		t.Errorf("quality_floor = %q, want %q", req.Hints["quality_floor"], "8")
+	}
+	if req.Hints["mission"] != "conversation" {
+		t.Errorf("mission = %q, want %q", req.Hints["mission"], "conversation")
+	}
+	if req.Hints["delegation_gating"] != "disabled" {
+		t.Errorf("delegation_gating = %q, want %q", req.Hints["delegation_gating"], "disabled")
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/agent"
+	"github.com/nugget/thane-ai-agent/internal/config"
 	"github.com/nugget/thane-ai-agent/internal/router"
 )
 
@@ -41,8 +42,9 @@ type SignalBridgeConfig struct {
 	MCP         signalMCPCaller
 	Runner      agentRunner
 	Logger      *slog.Logger
-	PollTimeout int // seconds, passed to receive_message
-	RateLimit   int // per sender per minute; 0 = unlimited
+	PollTimeout int                        // seconds, passed to receive_message
+	RateLimit   int                        // per sender per minute; 0 = unlimited
+	Routing     config.SignalRoutingConfig // model selection and routing hints
 }
 
 // SignalBridge polls the signal-mcp receive_message tool for incoming
@@ -54,6 +56,7 @@ type SignalBridge struct {
 	logger      *slog.Logger
 	pollTimeout int
 	rateLimit   int
+	routing     config.SignalRoutingConfig
 
 	mu          sync.Mutex
 	senderTimes map[string][]time.Time
@@ -82,6 +85,7 @@ func NewSignalBridge(cfg SignalBridgeConfig) *SignalBridge {
 		logger:      logger,
 		pollTimeout: cfg.PollTimeout,
 		rateLimit:   cfg.RateLimit,
+		routing:     cfg.Routing,
 		senderTimes: make(map[string][]time.Time),
 	}
 }
@@ -171,12 +175,13 @@ func (b *SignalBridge) handleMessage(ctx context.Context, msg signalMessage) {
 	req := &agent.Request{
 		ConversationID: convID,
 		Messages:       []agent.Message{{Role: "user", Content: content}},
+		Model:          b.routing.Model,
 		Hints: map[string]string{
 			"source":                    "signal",
 			"sender":                    msg.SenderID,
-			router.HintQualityFloor:     "6",
-			router.HintMission:          "conversation",
-			router.HintDelegationGating: "disabled",
+			router.HintQualityFloor:     b.routing.QualityFloor,
+			router.HintMission:          b.routing.Mission,
+			router.HintDelegationGating: b.routing.DelegationGating,
 		},
 	}
 
