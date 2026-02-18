@@ -449,6 +449,217 @@ func TestRecurring_Active(t *testing.T) {
 	}
 }
 
+func TestCooldownSeconds_RoundTrip(t *testing.T) {
+	store := setupTestStore(t)
+
+	tests := []struct {
+		name     string
+		cooldown int
+	}{
+		{"zero (global default)", 0},
+		{"30 seconds", 30},
+		{"300 seconds (5m)", 300},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			a := &Anticipation{
+				Description:     "Cooldown test " + tt.name,
+				Context:         "Test context",
+				CooldownSeconds: tt.cooldown,
+				Recurring:       true,
+				Trigger:         Trigger{EntityID: "sensor.test"},
+			}
+			if err := store.Create(a); err != nil {
+				t.Fatalf("create: %v", err)
+			}
+
+			got, err := store.Get(a.ID)
+			if err != nil {
+				t.Fatalf("get: %v", err)
+			}
+			if got.CooldownSeconds != tt.cooldown {
+				t.Errorf("cooldown_seconds = %d, want %d", got.CooldownSeconds, tt.cooldown)
+			}
+		})
+	}
+}
+
+func TestCooldownSeconds_Active(t *testing.T) {
+	store := setupTestStore(t)
+
+	store.Create(&Anticipation{
+		Description:     "With cooldown",
+		Context:         "Check",
+		CooldownSeconds: 60,
+		Recurring:       true,
+		Trigger:         Trigger{EntityID: "sensor.a"},
+	})
+
+	active, err := store.Active()
+	if err != nil {
+		t.Fatalf("active: %v", err)
+	}
+	if len(active) != 1 {
+		t.Fatalf("active count = %d, want 1", len(active))
+	}
+	if active[0].CooldownSeconds != 60 {
+		t.Errorf("active cooldown_seconds = %d, want 60", active[0].CooldownSeconds)
+	}
+}
+
+func TestMarkFired_SetsLastFiredAt(t *testing.T) {
+	store := setupTestStore(t)
+
+	a := &Anticipation{
+		Description: "Fire test",
+		Context:     "Test",
+		Trigger:     Trigger{EntityID: "sensor.a"},
+	}
+	if err := store.Create(a); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	// Before firing, LastFiredAt should be nil.
+	got, _ := store.Get(a.ID)
+	if got.LastFiredAt != nil {
+		t.Error("expected nil LastFiredAt before MarkFired")
+	}
+
+	if err := store.MarkFired(a.ID); err != nil {
+		t.Fatalf("mark fired: %v", err)
+	}
+
+	got, _ = store.Get(a.ID)
+	if got.LastFiredAt == nil {
+		t.Fatal("expected non-nil LastFiredAt after MarkFired")
+	}
+	if time.Since(*got.LastFiredAt) > 5*time.Second {
+		t.Errorf("LastFiredAt too old: %v", got.LastFiredAt)
+	}
+}
+
+func TestOnCooldown_NeverFired(t *testing.T) {
+	store := setupTestStore(t)
+
+	a := &Anticipation{
+		Description: "Never fired",
+		Context:     "Test",
+		Trigger:     Trigger{EntityID: "sensor.a"},
+	}
+	store.Create(a)
+
+	onCooldown, err := store.OnCooldown(a.ID, 5*time.Minute)
+	if err != nil {
+		t.Fatalf("OnCooldown: %v", err)
+	}
+	if onCooldown {
+		t.Error("expected not on cooldown when never fired")
+	}
+}
+
+func TestOnCooldown_RecentlyFired(t *testing.T) {
+	store := setupTestStore(t)
+
+	a := &Anticipation{
+		Description: "Recently fired",
+		Context:     "Test",
+		Trigger:     Trigger{EntityID: "sensor.a"},
+	}
+	store.Create(a)
+	store.MarkFired(a.ID)
+
+	// Just fired — should be on cooldown with a 5-minute window.
+	onCooldown, err := store.OnCooldown(a.ID, 5*time.Minute)
+	if err != nil {
+		t.Fatalf("OnCooldown: %v", err)
+	}
+	if !onCooldown {
+		t.Error("expected on cooldown immediately after MarkFired")
+	}
+}
+
+func TestOnCooldown_PerAnticipationOverridesGlobal(t *testing.T) {
+	store := setupTestStore(t)
+
+	a := &Anticipation{
+		Description:     "Per-anticipation cooldown",
+		Context:         "Test",
+		CooldownSeconds: 3600, // 1 hour
+		Recurring:       true,
+		Trigger:         Trigger{EntityID: "sensor.a"},
+	}
+	store.Create(a)
+	store.MarkFired(a.ID)
+
+	// Global default is 1 second (would have expired), but per-anticipation
+	// is 1 hour — should still be on cooldown.
+	onCooldown, err := store.OnCooldown(a.ID, 1*time.Second)
+	if err != nil {
+		t.Fatalf("OnCooldown: %v", err)
+	}
+	if !onCooldown {
+		t.Error("expected on cooldown — per-anticipation 1h should override 1s global")
+	}
+}
+
+func TestOnCooldown_ZeroCooldownUsesGlobal(t *testing.T) {
+	store := setupTestStore(t)
+
+	a := &Anticipation{
+		Description:     "Global fallback",
+		Context:         "Test",
+		CooldownSeconds: 0, // use global
+		Trigger:         Trigger{EntityID: "sensor.a"},
+	}
+	store.Create(a)
+	store.MarkFired(a.ID)
+
+	// Global default is 1 hour — should be on cooldown.
+	onCooldown, err := store.OnCooldown(a.ID, time.Hour)
+	if err != nil {
+		t.Fatalf("OnCooldown: %v", err)
+	}
+	if !onCooldown {
+		t.Error("expected on cooldown with 0 cooldown_seconds and 1h global default")
+	}
+}
+
+func TestOnCooldown_NonExistentID(t *testing.T) {
+	store := setupTestStore(t)
+
+	onCooldown, err := store.OnCooldown("nonexistent", 5*time.Minute)
+	if err != nil {
+		t.Fatalf("OnCooldown: %v", err)
+	}
+	if onCooldown {
+		t.Error("expected not on cooldown for nonexistent ID")
+	}
+}
+
+func TestLastFiredAt_Active(t *testing.T) {
+	store := setupTestStore(t)
+
+	a := &Anticipation{
+		Description: "Track firing",
+		Context:     "Test",
+		Trigger:     Trigger{EntityID: "sensor.a"},
+	}
+	store.Create(a)
+	store.MarkFired(a.ID)
+
+	active, err := store.Active()
+	if err != nil {
+		t.Fatalf("active: %v", err)
+	}
+	if len(active) != 1 {
+		t.Fatalf("active count = %d, want 1", len(active))
+	}
+	if active[0].LastFiredAt == nil {
+		t.Error("expected LastFiredAt in Active() results")
+	}
+}
+
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsAt(s, substr))
 }

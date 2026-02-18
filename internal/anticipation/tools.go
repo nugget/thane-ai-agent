@@ -73,6 +73,10 @@ func (t *Tools) ToolDefinitions() []map[string]any {
 							"type":        "string",
 							"description": "Duration until expiration (e.g., '2h', '24h', '7d'). Omit for no expiration.",
 						},
+						"cooldown": map[string]any{
+							"type":        "string",
+							"description": "Cooldown period between re-fires for recurring anticipations (e.g., '30s', '5m', '1h'). Omit to use the global default. Only meaningful for recurring anticipations.",
+						},
 					},
 					"required": []string{"description", "context"},
 				},
@@ -197,6 +201,15 @@ func (t *Tools) createAnticipation(args map[string]any) (string, error) {
 		}
 	}
 
+	// Parse cooldown
+	if v, ok := args["cooldown"].(string); ok && v != "" {
+		dur, err := parseDuration(v)
+		if err != nil {
+			return "", fmt.Errorf("invalid cooldown: %w", err)
+		}
+		a.CooldownSeconds = int(dur.Seconds())
+	}
+
 	// Parse expiration
 	if v, ok := args["expires_in"].(string); ok && v != "" {
 		dur, err := parseDuration(v)
@@ -222,6 +235,9 @@ func (t *Tools) createAnticipation(args map[string]any) (string, error) {
 		result += "Lifecycle: recurring (keeps firing on matches)\n"
 	} else {
 		result += "Lifecycle: one-shot (auto-resolved after first wake)\n"
+	}
+	if a.CooldownSeconds > 0 {
+		result += fmt.Sprintf("Cooldown: %s\n", (time.Duration(a.CooldownSeconds) * time.Second).String())
 	}
 	if a.ExpiresAt != nil {
 		result += fmt.Sprintf("Expires: %s\n", a.ExpiresAt.Format(time.RFC3339))
@@ -269,6 +285,9 @@ func (t *Tools) listAnticipations() (string, error) {
 		result += fmt.Sprintf("**%s** (ID: %s)\n", a.Description, a.ID)
 		if a.Recurring {
 			result += "  Lifecycle: recurring\n"
+			if a.CooldownSeconds > 0 {
+				result += fmt.Sprintf("  Cooldown: %s\n", (time.Duration(a.CooldownSeconds) * time.Second).String())
+			}
 		}
 		result += fmt.Sprintf("  Created: %s\n", a.CreatedAt.Format("2006-01-02 15:04"))
 		if a.ExpiresAt != nil {

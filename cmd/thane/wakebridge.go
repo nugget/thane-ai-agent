@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/agent"
@@ -20,6 +19,8 @@ import (
 // real database.
 type anticipationMatcher interface {
 	Match(ctx anticipation.WakeContext) ([]*anticipation.Anticipation, error)
+	OnCooldown(id string, globalDefault time.Duration) (bool, error)
+	MarkFired(id string) error
 }
 
 // wakeContextSetter sets the wake context for system prompt injection.
@@ -48,14 +49,13 @@ type WakeBridgeConfig struct {
 	Provider wakeContextSetter
 	Logger   *slog.Logger
 	Ctx      context.Context
-	Cooldown time.Duration   // per-anticipation cooldown; zero defaults to 5m
+	Cooldown time.Duration   // global default cooldown; per-anticipation overrides in DB; zero defaults to 5m
 	HA       wakeStateGetter // optional; nil disables entity context injection
 }
 
 // WakeBridge connects state change events to the anticipation store and
-// triggers agent wakes when an active anticipation matches. It enforces
-// per-anticipation cooldowns to prevent rapid re-triggering from
-// frequent state changes.
+// triggers agent wakes when an active anticipation matches. Per-anticipation
+// cooldowns are stored in SQLite and checked via the store interface.
 type WakeBridge struct {
 	store    anticipationMatcher
 	resolver wakeResolver
@@ -65,11 +65,7 @@ type WakeBridge struct {
 	logger   *slog.Logger
 	ctx      context.Context
 
-	cooldown time.Duration
-
-	mu          sync.Mutex
-	lastFire    map[string]time.Time // anticipation ID → last trigger time
-	lastCleanup time.Time            // last time stale entries were evicted
+	cooldown time.Duration // global default when per-anticipation cooldown is 0
 }
 
 // NewWakeBridge creates a wake bridge with the given configuration.
@@ -91,12 +87,8 @@ func NewWakeBridge(cfg WakeBridgeConfig) *WakeBridge {
 		logger:   logger,
 		ctx:      cfg.Ctx,
 		cooldown: cooldown,
-		lastFire: make(map[string]time.Time),
 	}
 }
-
-// cleanupInterval controls how often stale cooldown entries are evicted.
-const cleanupInterval = 10 * time.Minute
 
 // HandleStateChange is a homeassistant.StateWatchHandler. It builds a
 // WakeContext from the state change, updates the anticipation provider
@@ -115,9 +107,6 @@ func (b *WakeBridge) HandleStateChange(entityID, oldState, newState string) {
 	if oldState == "unavailable" || newState == "unavailable" {
 		return
 	}
-
-	// Periodically evict stale cooldown entries to prevent unbounded map growth.
-	b.maybeCleanup()
 
 	wakeCtx := anticipation.WakeContext{
 		Time:        time.Now(),
@@ -148,14 +137,28 @@ func (b *WakeBridge) HandleStateChange(entityID, oldState, newState string) {
 	}
 
 	for _, a := range matched {
-		if b.onCooldown(a.ID) {
+		onCooldown, err := b.store.OnCooldown(a.ID, b.cooldown)
+		if err != nil {
+			b.logger.Error("failed to check anticipation cooldown, skipping",
+				"anticipation_id", a.ID,
+				"error", err,
+			)
+			continue
+		}
+		if onCooldown {
 			b.logger.Debug("anticipation on cooldown, skipping",
 				"anticipation_id", a.ID,
 				"entity_id", entityID,
 			)
 			continue
 		}
-		b.markTriggered(a.ID)
+		if err := b.store.MarkFired(a.ID); err != nil {
+			b.logger.Error("failed to mark anticipation fired, skipping",
+				"anticipation_id", a.ID,
+				"error", err,
+			)
+			continue
+		}
 
 		entityCtx := b.fetchEntityContext(a, entityID)
 		msg := formatWakeMessage(a, entityID, oldState, newState, entityCtx)
@@ -235,46 +238,6 @@ func (b *WakeBridge) runWake(a *anticipation.Anticipation, message string) {
 		} else {
 			b.logger.Info("anticipation auto-resolved",
 				"anticipation_id", a.ID, "anticipation", a.Description)
-		}
-	}
-}
-
-// onCooldown reports whether the anticipation has fired too recently.
-func (b *WakeBridge) onCooldown(id string) bool {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	last, ok := b.lastFire[id]
-	if !ok {
-		return false
-	}
-	return time.Since(last) < b.cooldown
-}
-
-// markTriggered records the current time as the last trigger for the
-// given anticipation ID.
-func (b *WakeBridge) markTriggered(id string) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.lastFire[id] = time.Now()
-}
-
-// maybeCleanup evicts stale cooldown entries if enough time has passed
-// since the last cleanup. Called on every HandleStateChange to bound
-// map growth without requiring a separate goroutine.
-func (b *WakeBridge) maybeCleanup() {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	if time.Since(b.lastCleanup) < cleanupInterval {
-		return
-	}
-	b.lastCleanup = time.Now()
-
-	threshold := 2 * b.cooldown
-	for id, t := range b.lastFire {
-		if time.Since(t) > threshold {
-			delete(b.lastFire, id)
 		}
 	}
 }

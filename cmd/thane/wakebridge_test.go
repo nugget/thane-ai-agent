@@ -16,14 +16,30 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/router"
 )
 
-// mockMatcher records Match calls and returns canned results.
+// mockMatcher records Match calls and returns canned results. It also
+// implements OnCooldown and MarkFired for the updated anticipationMatcher
+// interface. By default, nothing is on cooldown.
 type mockMatcher struct {
-	matched []*anticipation.Anticipation
-	err     error
+	matched    []*anticipation.Anticipation
+	err        error
+	onCooldown map[string]bool // anticipation ID → on cooldown
+	fired      []string        // IDs passed to MarkFired
 }
 
 func (m *mockMatcher) Match(_ anticipation.WakeContext) ([]*anticipation.Anticipation, error) {
 	return m.matched, m.err
+}
+
+func (m *mockMatcher) OnCooldown(id string, _ time.Duration) (bool, error) {
+	if m.onCooldown == nil {
+		return false, nil
+	}
+	return m.onCooldown[id], nil
+}
+
+func (m *mockMatcher) MarkFired(id string) error {
+	m.fired = append(m.fired, id)
+	return nil
 }
 
 // chanRunner is a goroutine-safe mock runner that sends received
@@ -229,14 +245,15 @@ func TestWakeBridge_CooldownPreventsRetrigger(t *testing.T) {
 			ID:          "ant-cool",
 			Description: "Test cooldown",
 		}},
+		onCooldown: map[string]bool{},
 	}
 	runner := &chanRunner{
 		calls: make(chan *agent.Request, 2),
 		resp:  &agent.Response{Content: "ok"},
 	}
-	bridge, _ := newTestBridge(matcher, runner, time.Hour) // Long cooldown
+	bridge, _ := newTestBridge(matcher, runner, time.Hour)
 
-	// First call should trigger.
+	// First call should trigger (not on cooldown).
 	bridge.HandleStateChange("light.a", "off", "on")
 	select {
 	case <-runner.calls:
@@ -244,6 +261,9 @@ func TestWakeBridge_CooldownPreventsRetrigger(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("first call should trigger runner")
 	}
+
+	// Simulate cooldown being active in the store.
+	matcher.onCooldown["ant-cool"] = true
 
 	// Second call within cooldown should NOT trigger.
 	bridge.HandleStateChange("light.a", "on", "off")
@@ -263,14 +283,15 @@ func TestWakeBridge_CooldownExpires(t *testing.T) {
 			ID:          "ant-expire",
 			Description: "Test expiry",
 		}},
+		onCooldown: map[string]bool{},
 	}
 	runner := &chanRunner{
 		calls: make(chan *agent.Request, 2),
 		resp:  &agent.Response{Content: "ok"},
 	}
-	bridge, _ := newTestBridge(matcher, runner, 50*time.Millisecond) // Short cooldown
+	bridge, _ := newTestBridge(matcher, runner, time.Hour)
 
-	// First call.
+	// First call — not on cooldown.
 	bridge.HandleStateChange("light.a", "off", "on")
 	select {
 	case <-runner.calls:
@@ -278,15 +299,48 @@ func TestWakeBridge_CooldownExpires(t *testing.T) {
 		t.Fatal("first call should trigger runner")
 	}
 
-	// Wait for cooldown to expire.
-	time.Sleep(60 * time.Millisecond)
-
-	// Second call should trigger after cooldown expires.
+	// Simulate cooldown active, then expired.
+	matcher.onCooldown["ant-expire"] = true
 	bridge.HandleStateChange("light.a", "on", "off")
+	time.Sleep(50 * time.Millisecond)
+	select {
+	case <-runner.calls:
+		t.Error("should not trigger while on cooldown")
+	default:
+	}
+
+	// Cooldown expired.
+	matcher.onCooldown["ant-expire"] = false
+	bridge.HandleStateChange("light.a", "off", "on")
 	select {
 	case <-runner.calls:
 	case <-time.After(2 * time.Second):
 		t.Fatal("second call after cooldown should trigger runner")
+	}
+}
+
+func TestWakeBridge_MarkFiredCalled(t *testing.T) {
+	matcher := &mockMatcher{
+		matched: []*anticipation.Anticipation{{
+			ID:          "ant-fire",
+			Description: "Test fire tracking",
+		}},
+	}
+	runner := &chanRunner{
+		calls: make(chan *agent.Request, 1),
+		resp:  &agent.Response{Content: "ok"},
+	}
+	bridge, _ := newTestBridge(matcher, runner, time.Hour)
+
+	bridge.HandleStateChange("light.a", "off", "on")
+	select {
+	case <-runner.calls:
+	case <-time.After(2 * time.Second):
+		t.Fatal("should trigger runner")
+	}
+
+	if len(matcher.fired) != 1 || matcher.fired[0] != "ant-fire" {
+		t.Errorf("MarkFired calls = %v, want [ant-fire]", matcher.fired)
 	}
 }
 
