@@ -161,6 +161,87 @@ func TestExpiration(t *testing.T) {
 	}
 }
 
+func TestExpiration_TimezoneNormalization(t *testing.T) {
+	store := setupTestStore(t)
+
+	// Simulate the real-world bug: create an anticipation with ExpiresAt
+	// in a non-UTC timezone (e.g., CST = UTC-6). Before the fix, SQLite's
+	// string comparison would see "16:07" < "22:07" (CURRENT_TIMESTAMP in
+	// UTC) and incorrectly mark the anticipation as expired even though
+	// the offset-adjusted time is still in the future.
+	loc := time.FixedZone("CST", -6*3600)
+	future := time.Now().In(loc).Add(2 * time.Hour)
+	a := &Anticipation{
+		Description: "Future expiry in non-UTC timezone",
+		Context:     "Should still be active",
+		Trigger:     Trigger{Zone: "home"},
+		ExpiresAt:   &future,
+	}
+	if err := store.Create(a); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	// Verify ExpiresAt was normalized to UTC by Create.
+	got, err := store.Get(a.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.ExpiresAt == nil {
+		t.Fatal("expected non-nil ExpiresAt")
+	}
+	if got.ExpiresAt.Location() != time.UTC {
+		t.Errorf("ExpiresAt location = %v, want UTC", got.ExpiresAt.Location())
+	}
+
+	// The anticipation is 2 hours in the future — must appear in Active().
+	active, err := store.Active()
+	if err != nil {
+		t.Fatalf("active: %v", err)
+	}
+	if len(active) != 1 {
+		t.Errorf("expected 1 active anticipation, got %d", len(active))
+	}
+}
+
+func TestCreate_NormalizesTimestampsToUTC(t *testing.T) {
+	store := setupTestStore(t)
+
+	loc := time.FixedZone("EST", -5*3600)
+	localNow := time.Now().In(loc)
+	future := localNow.Add(time.Hour)
+
+	a := &Anticipation{
+		Description: "UTC normalization check",
+		Context:     "Test",
+		Trigger:     Trigger{Zone: "work"},
+		CreatedAt:   localNow,
+		ExpiresAt:   &future,
+	}
+	if err := store.Create(a); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	// Verify the struct was mutated to UTC.
+	if a.CreatedAt.Location() != time.UTC {
+		t.Errorf("CreatedAt location = %v, want UTC", a.CreatedAt.Location())
+	}
+	if a.ExpiresAt.Location() != time.UTC {
+		t.Errorf("ExpiresAt location = %v, want UTC", a.ExpiresAt.Location())
+	}
+
+	// Round-trip through the database should also be UTC.
+	got, err := store.Get(a.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.ExpiresAt == nil {
+		t.Fatal("expected non-nil ExpiresAt")
+	}
+	if got.ExpiresAt.Location() != time.UTC {
+		t.Errorf("retrieved ExpiresAt location = %v, want UTC", got.ExpiresAt.Location())
+	}
+}
+
 func TestMatch_TimeOnly(t *testing.T) {
 	store := setupTestStore(t)
 

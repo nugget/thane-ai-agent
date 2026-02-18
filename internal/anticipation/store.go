@@ -110,7 +110,17 @@ func (s *Store) Create(a *Anticipation) error {
 		a.ID = fmt.Sprintf("ant_%d", time.Now().UnixNano())
 	}
 	if a.CreatedAt.IsZero() {
-		a.CreatedAt = time.Now()
+		a.CreatedAt = time.Now().UTC()
+	} else {
+		a.CreatedAt = a.CreatedAt.UTC()
+	}
+	if a.ExpiresAt != nil {
+		utc := a.ExpiresAt.UTC()
+		a.ExpiresAt = &utc
+	}
+	if a.Trigger.AfterTime != nil {
+		utc := a.Trigger.AfterTime.UTC()
+		a.Trigger.AfterTime = &utc
 	}
 
 	triggerJSON, err := json.Marshal(a.Trigger)
@@ -138,14 +148,15 @@ func (s *Store) Create(a *Anticipation) error {
 
 // Active returns all non-resolved, non-expired, non-deleted anticipations.
 func (s *Store) Active() ([]*Anticipation, error) {
+	now := time.Now().UTC()
 	rows, err := s.db.Query(`
 		SELECT id, description, context, trigger_json, metadata_json, context_entities_json, recurring, cooldown_seconds, created_at, expires_at, last_fired_at
 		FROM anticipations
 		WHERE resolved_at IS NULL
 		  AND deleted_at IS NULL
-		  AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
+		  AND (expires_at IS NULL OR expires_at > ?)
 		ORDER BY created_at ASC
-	`)
+	`, now)
 	if err != nil {
 		return nil, err
 	}
@@ -199,17 +210,19 @@ func (s *Store) Get(id string) (*Anticipation, error) {
 
 // Resolve marks an anticipation as resolved (it happened).
 func (s *Store) Resolve(id string) error {
+	now := time.Now().UTC()
 	_, err := s.db.Exec(`
-		UPDATE anticipations SET resolved_at = CURRENT_TIMESTAMP WHERE id = ?
-	`, id)
+		UPDATE anticipations SET resolved_at = ? WHERE id = ?
+	`, now, id)
 	return err
 }
 
 // Delete soft-deletes an anticipation.
 func (s *Store) Delete(id string) error {
+	now := time.Now().UTC()
 	_, err := s.db.Exec(`
-		UPDATE anticipations SET deleted_at = CURRENT_TIMESTAMP WHERE id = ?
-	`, id)
+		UPDATE anticipations SET deleted_at = ? WHERE id = ?
+	`, now, id)
 	return err
 }
 
@@ -217,9 +230,10 @@ func (s *Store) Delete(id string) error {
 // anticipation. This persists across restarts unlike the previous
 // in-memory tracking.
 func (s *Store) MarkFired(id string) error {
+	now := time.Now().UTC()
 	_, err := s.db.Exec(`
-		UPDATE anticipations SET last_fired_at = CURRENT_TIMESTAMP WHERE id = ?
-	`, id)
+		UPDATE anticipations SET last_fired_at = ? WHERE id = ?
+	`, now, id)
 	return err
 }
 
