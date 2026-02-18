@@ -543,7 +543,10 @@ func TestBridge_LastInboundTimestamp(t *testing.T) {
 
 	// Simulate storing a timestamp (as Start() would do).
 	bridge.mu.Lock()
-	bridge.lastInboundTS["+15551234567"] = 1700000000000
+	bridge.lastInboundTS["+15551234567"] = lastMessage{
+		signalTS:   1700000000000,
+		receivedAt: time.Now(),
+	}
 	bridge.mu.Unlock()
 
 	ts, ok := bridge.LastInboundTimestamp("+15551234567")
@@ -562,7 +565,10 @@ func TestBridge_LastInboundTimestamp(t *testing.T) {
 
 	// Update overwrites previous value.
 	bridge.mu.Lock()
-	bridge.lastInboundTS["+15551234567"] = 1700000001000
+	bridge.lastInboundTS["+15551234567"] = lastMessage{
+		signalTS:   1700000001000,
+		receivedAt: time.Now(),
+	}
 	bridge.mu.Unlock()
 
 	ts, ok = bridge.LastInboundTimestamp("+15551234567")

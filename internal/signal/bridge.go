@@ -30,6 +30,13 @@ const rateWindow = time.Minute
 // evicted.
 const cleanupInterval = 10 * time.Minute
 
+// lastMessage tracks a sender's most recent inbound message timestamp
+// along with when we received it, for bounded cleanup.
+type lastMessage struct {
+	signalTS   int64     // signal-cli message timestamp
+	receivedAt time.Time // wall clock when we stored it
+}
+
 // BridgeConfig holds the dependencies for a Bridge.
 type BridgeConfig struct {
 	Client    *Client
@@ -51,7 +58,7 @@ type Bridge struct {
 	mu            sync.Mutex
 	senderTimes   map[string][]time.Time
 	lastCleanup   time.Time
-	lastInboundTS map[string]int64 // most recent message timestamp per sender
+	lastInboundTS map[string]lastMessage // most recent message per sender
 }
 
 // NewBridge creates a Signal message bridge.
@@ -67,7 +74,7 @@ func NewBridge(cfg BridgeConfig) *Bridge {
 		rateLimit:     cfg.RateLimit,
 		routing:       cfg.Routing,
 		senderTimes:   make(map[string][]time.Time),
-		lastInboundTS: make(map[string]int64),
+		lastInboundTS: make(map[string]lastMessage),
 	}
 }
 
@@ -77,8 +84,8 @@ func NewBridge(cfg BridgeConfig) *Bridge {
 func (b *Bridge) LastInboundTimestamp(sender string) (int64, bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	ts, ok := b.lastInboundTS[sender]
-	return ts, ok
+	lm, ok := b.lastInboundTS[sender]
+	return lm.signalTS, ok
 }
 
 // Start receives messages from the signal-cli client and routes them
@@ -97,15 +104,31 @@ func (b *Bridge) Start(ctx context.Context) {
 				return
 			}
 
+			if env.Source == "" {
+				b.logger.Debug("signal ignoring envelope with empty source")
+				continue
+			}
+
+			// Track the most recent inbound timestamp for this
+			// sender (even for non-text messages like attachments)
+			// so the signal_send_reaction tool can resolve "latest".
+			if env.DataMessage != nil {
+				ts := env.Timestamp
+				if env.DataMessage.Timestamp != 0 {
+					ts = env.DataMessage.Timestamp
+				}
+				b.mu.Lock()
+				b.lastInboundTS[env.Source] = lastMessage{
+					signalTS:   ts,
+					receivedAt: time.Now(),
+				}
+				b.mu.Unlock()
+			}
+
 			if env.DataMessage == nil || env.DataMessage.Message == "" {
 				b.logger.Debug("signal ignoring non-text envelope",
 					"sender", env.Source,
 				)
-				continue
-			}
-
-			if env.Source == "" {
-				b.logger.Debug("signal ignoring envelope with empty source")
 				continue
 			}
 
@@ -124,11 +147,6 @@ func (b *Bridge) Start(ctx context.Context) {
 			if env.DataMessage != nil && env.DataMessage.Timestamp != 0 {
 				receiptTS = env.DataMessage.Timestamp
 			}
-			// Track the most recent inbound timestamp for this sender
-			// so the signal_send_reaction tool can resolve "latest".
-			b.mu.Lock()
-			b.lastInboundTS[env.Source] = receiptTS
-			b.mu.Unlock()
 
 			if err := b.client.SendReceipt(ctx, env.Source, receiptTS); err != nil {
 				b.logger.Warn("signal read receipt failed",
@@ -287,6 +305,16 @@ func (b *Bridge) maybeCleanupLocked(now time.Time) {
 		}
 		if timestamps[len(timestamps)-1].Before(cutoff) {
 			delete(b.senderTimes, sender)
+		}
+	}
+
+	// Evict stale lastInboundTS entries to prevent unbounded growth.
+	// Entries older than 2× the cleanup interval are unlikely to be
+	// useful reaction targets.
+	tsCutoff := now.Add(-2 * cleanupInterval)
+	for sender, lm := range b.lastInboundTS {
+		if lm.receivedAt.Before(tsCutoff) {
+			delete(b.lastInboundTS, sender)
 		}
 	}
 }

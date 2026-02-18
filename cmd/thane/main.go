@@ -27,6 +27,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -1004,7 +1005,8 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 							"description": "Phone number of the message author to react to",
 						},
 						"target_timestamp": map[string]any{
-							"description": "Timestamp of the message to react to (from [ts:...] tag), or \"latest\" for the most recent inbound message",
+							"type":        "string",
+							"description": "Timestamp of the message to react to (from [ts:...] tag) as a numeric string, or \"latest\" for the most recent inbound message from the recipient",
 						},
 					},
 					"required": []string{"recipient", "emoji", "target_author", "target_timestamp"},
@@ -1028,18 +1030,17 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 							}
 							targetTS = ts
 						} else {
-							return "", fmt.Errorf("target_timestamp must be a number or \"latest\"")
+							// Accept numeric strings (LLMs often serialize large ints as strings).
+							n, err := strconv.ParseInt(v, 10, 64)
+							if err != nil {
+								return "", fmt.Errorf("target_timestamp must be a numeric string or \"latest\", got %q", v)
+							}
+							targetTS = n
 						}
 					case float64:
 						targetTS = int64(v)
-					case json.Number:
-						n, err := v.Int64()
-						if err != nil {
-							return "", fmt.Errorf("invalid target_timestamp: %w", err)
-						}
-						targetTS = n
 					default:
-						return "", fmt.Errorf("target_timestamp must be a number or \"latest\"")
+						return "", fmt.Errorf("target_timestamp must be a string (numeric or \"latest\")")
 					}
 
 					if err := signalClient.SendReaction(toolCtx, recipient, emoji, targetAuthor, targetTS, false); err != nil {
