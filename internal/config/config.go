@@ -615,20 +615,22 @@ type MCPServerConfig struct {
 	ExcludeTools []string `yaml:"exclude_tools"`
 }
 
-// SignalConfig configures the Signal message bridge for inbound
-// message reception and response routing via the signal-mcp server.
+// SignalConfig configures the native Signal message bridge using
+// signal-cli's jsonRpc mode over stdin/stdout.
 type SignalConfig struct {
-	// Enabled controls whether the Signal bridge starts polling.
+	// Enabled controls whether the Signal bridge starts.
 	Enabled bool `yaml:"enabled"`
 
-	// MCPServer is the name of the MCP server entry that provides
-	// the Signal tools. Must match an mcp.servers[].name value.
-	MCPServer string `yaml:"mcp_server"`
+	// Command is the signal-cli executable path (e.g., "signal-cli").
+	Command string `yaml:"command"`
 
-	// PollTimeoutSec is the timeout in seconds passed to the
-	// receive_message tool for long-polling. Capped at 300 by the
-	// signal-mcp server. Default: 30.
-	PollTimeoutSec int `yaml:"poll_timeout"`
+	// Account is the phone number to use (e.g., "+15124232707").
+	// Passed as the -a flag to signal-cli.
+	Account string `yaml:"account"`
+
+	// Args are additional command-line arguments appended after the
+	// standard "-a ACCOUNT jsonRpc" arguments.
+	Args []string `yaml:"args"`
 
 	// RateLimitPerMinute caps how many inbound messages per sender
 	// are processed per minute. Zero disables rate limiting.
@@ -664,9 +666,9 @@ type SignalRoutingConfig struct {
 }
 
 // Configured reports whether the Signal bridge has the minimum
-// required configuration (enabled with an MCP server name).
+// required configuration (enabled with a command and account).
 func (c SignalConfig) Configured() bool {
-	return c.Enabled && c.MCPServer != ""
+	return c.Enabled && c.Command != "" && c.Account != ""
 }
 
 // StateWindowConfig configures the rolling window of recent Home
@@ -809,12 +811,8 @@ func (c *Config) applyDefaults() {
 		c.HomeAssistant.Subscribe.CooldownMinutes = 5
 	}
 
-	if c.Signal.PollTimeoutSec == 0 {
-		c.Signal.PollTimeoutSec = 30
-	}
-	if c.Signal.RateLimitPerMinute == 0 {
-		c.Signal.RateLimitPerMinute = 10
-	}
+	// Signal rate limit: 0 means unlimited (no default override).
+	// Users who want limiting must set a positive value explicitly.
 	if c.Signal.Routing.QualityFloor == "" {
 		c.Signal.Routing.QualityFloor = "6"
 	}
@@ -991,24 +989,17 @@ func (c *Config) validateSubscribe() error {
 
 // validateSignal checks the Signal bridge configuration for consistency.
 func (c *Config) validateSignal() error {
-	if !c.Signal.Configured() {
+	if !c.Signal.Enabled {
 		return nil
 	}
-	if c.Signal.PollTimeoutSec < 1 || c.Signal.PollTimeoutSec > 300 {
-		return fmt.Errorf("signal.poll_timeout %d out of range (1-300)", c.Signal.PollTimeoutSec)
+	if c.Signal.Command == "" {
+		return fmt.Errorf("signal.command is required when signal.enabled is true")
+	}
+	if c.Signal.Account == "" {
+		return fmt.Errorf("signal.account is required when signal.enabled is true")
 	}
 	if c.Signal.RateLimitPerMinute < 0 {
 		return fmt.Errorf("signal.rate_limit_per_minute %d must be non-negative", c.Signal.RateLimitPerMinute)
-	}
-	found := false
-	for _, srv := range c.MCP.Servers {
-		if srv.Name == c.Signal.MCPServer {
-			found = true
-			break
-		}
-	}
-	if !found {
-		return fmt.Errorf("signal.mcp_server %q not found in mcp.servers", c.Signal.MCPServer)
 	}
 	return nil
 }

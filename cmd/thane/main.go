@@ -55,6 +55,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/router"
 	"github.com/nugget/thane-ai-agent/internal/scheduler"
 	"github.com/nugget/thane-ai-agent/internal/search"
+	sigcli "github.com/nugget/thane-ai-agent/internal/signal"
 	"github.com/nugget/thane-ai-agent/internal/statewindow"
 	sessionsummarizer "github.com/nugget/thane-ai-agent/internal/summarizer"
 	"github.com/nugget/thane-ai-agent/internal/talents"
@@ -930,33 +931,68 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	}()
 
 	// --- Signal message bridge ---
-	// Polls the signal-mcp server for incoming messages and routes them
-	// through the agent loop, sending responses back via Signal.
+	// Launches a native signal-cli jsonRpc subprocess and receives
+	// messages event-driven, routing them through the agent loop.
 	if cfg.Signal.Configured() {
-		var signalClient *mcp.Client
-		for _, c := range mcpClients {
-			if c.Name() == cfg.Signal.MCPServer {
-				signalClient = c
-				break
-			}
-		}
-		if signalClient == nil {
-			logger.Error("signal bridge: configured MCP server not found",
-				"mcp_server", cfg.Signal.MCPServer,
-			)
+		signalArgs := append([]string{"-a", cfg.Signal.Account, "jsonRpc"}, cfg.Signal.Args...)
+		signalClient := sigcli.NewClient(cfg.Signal.Command, signalArgs, logger)
+		if err := signalClient.Start(ctx); err != nil {
+			logger.Error("signal-cli start failed", "error", err)
 		} else {
-			signalBridge := NewSignalBridge(SignalBridgeConfig{
-				MCP:         signalClient,
-				Runner:      loop,
-				Logger:      logger,
-				PollTimeout: cfg.Signal.PollTimeoutSec,
-				RateLimit:   cfg.Signal.RateLimitPerMinute,
-				Routing:     cfg.Signal.Routing,
+			defer signalClient.Close()
+
+			// Register signal_send_message tool so the agent can
+			// send messages during its tool loop.
+			loop.Tools().Register(&tools.Tool{
+				Name:        "signal_send_message",
+				Description: "Send a Signal message to a phone number. Use this to reply to the user's Signal message or initiate a new Signal conversation.",
+				Parameters: map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"recipient": map[string]any{
+							"type":        "string",
+							"description": "Phone number including country code (e.g., +15551234567)",
+						},
+						"message": map[string]any{
+							"type":        "string",
+							"description": "Message text to send",
+						},
+					},
+					"required": []string{"recipient", "message"},
+				},
+				Handler: func(toolCtx context.Context, args map[string]any) (string, error) {
+					recipient, _ := args["recipient"].(string)
+					message, _ := args["message"].(string)
+					if recipient == "" || message == "" {
+						return "", fmt.Errorf("recipient and message are required")
+					}
+					_, err := signalClient.Send(toolCtx, recipient, message)
+					if err != nil {
+						return "", err
+					}
+					return fmt.Sprintf("Message sent to %s", recipient), nil
+				},
 			})
-			go signalBridge.Start(ctx)
+
+			bridge := sigcli.NewBridge(sigcli.BridgeConfig{
+				Client:    signalClient,
+				Runner:    loop,
+				Logger:    logger,
+				RateLimit: cfg.Signal.RateLimitPerMinute,
+				Routing:   cfg.Signal.Routing,
+			})
+			go bridge.Start(ctx)
+
+			connMgr.Watch(ctx, connwatch.WatcherConfig{
+				Name:    "signal",
+				Probe:   func(pCtx context.Context) error { return signalClient.Ping(pCtx) },
+				Backoff: connwatch.DefaultBackoffConfig(),
+				Logger:  logger,
+			})
+
 			logger.Info("signal bridge started",
-				"mcp_server", cfg.Signal.MCPServer,
-				"poll_timeout", cfg.Signal.PollTimeoutSec,
+				"command", cfg.Signal.Command,
+				"account", cfg.Signal.Account,
 				"rate_limit", cfg.Signal.RateLimitPerMinute,
 			)
 		}
