@@ -55,6 +55,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/router"
 	"github.com/nugget/thane-ai-agent/internal/scheduler"
 	"github.com/nugget/thane-ai-agent/internal/search"
+	"github.com/nugget/thane-ai-agent/internal/statewindow"
 	sessionsummarizer "github.com/nugget/thane-ai-agent/internal/summarizer"
 	"github.com/nugget/thane-ai-agent/internal/talents"
 	"github.com/nugget/thane-ai-agent/internal/tools"
@@ -1024,6 +1025,23 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 
 	loop.Tools().SetWatchlistStore(watchlistStore)
 
+	// --- State change window ---
+	// Maintains a rolling buffer of recent HA state changes, injected
+	// into the system prompt on every agent run for ambient awareness.
+	stateWindowLoc := time.Local
+	if cfg.Timezone != "" {
+		if parsed, err := time.LoadLocation(cfg.Timezone); err == nil {
+			stateWindowLoc = parsed
+		}
+	}
+	stateWindowProvider := statewindow.NewProvider(
+		cfg.StateWindow.MaxEntries,
+		time.Duration(cfg.StateWindow.MaxAgeMinutes)*time.Minute,
+		stateWindowLoc,
+		logger,
+	)
+	contextProvider.Add(stateWindowProvider)
+
 	// --- Person tracker ---
 	// Tracks configured household members' presence state and injects
 	// it into the system prompt, eliminating tool calls for "who is
@@ -1139,14 +1157,21 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		}
 		bridge := NewWakeBridge(wakeCfg)
 
-		// Compose handler: person tracker and wake bridge both see
-		// every state change that passes the filter and rate limiter.
+		// Compose handler: state window, person tracker, and wake bridge
+		// all see every state change that passes the filter and rate limiter.
 		var handler homeassistant.StateWatchHandler = bridge.HandleStateChange
 		if personTracker != nil {
 			bridgeHandler := handler
 			handler = func(entityID, oldState, newState string) {
 				personTracker.HandleStateChange(entityID, oldState, newState)
 				bridgeHandler(entityID, oldState, newState)
+			}
+		}
+		{
+			prevHandler := handler
+			handler = func(entityID, oldState, newState string) {
+				stateWindowProvider.HandleStateChange(entityID, oldState, newState)
+				prevHandler(entityID, oldState, newState)
 			}
 		}
 
