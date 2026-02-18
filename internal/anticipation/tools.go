@@ -216,7 +216,7 @@ func (t *Tools) createAnticipation(args map[string]any) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("invalid expires_in: %w", err)
 		}
-		exp := time.Now().Add(dur)
+		exp := time.Now().UTC().Add(dur)
 		a.ExpiresAt = &exp
 	}
 
