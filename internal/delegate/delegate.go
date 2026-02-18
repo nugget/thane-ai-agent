@@ -479,7 +479,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 			if err != nil {
 				// Per-tool timeout fired but parent context is still alive —
 				// report as a tool error so the LLM can adapt.
-				if toolCtx.Err() != nil && ctx.Err() == nil {
+				if errors.Is(toolCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil {
 					e.logger.Warn("delegate tool exec timed out",
 						"delegate_id", did,
 						"profile", profile.Name,
