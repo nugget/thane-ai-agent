@@ -106,7 +106,13 @@ func (b *Bridge) Start(ctx context.Context) {
 
 			// Acknowledge receipt before the potentially long agent
 			// loop. Best-effort — failure does not prevent processing.
-			if err := b.client.SendReceipt(ctx, env.Source, env.Timestamp); err != nil {
+			// Prefer the data message timestamp when available; fall
+			// back to the envelope timestamp.
+			receiptTS := env.Timestamp
+			if env.DataMessage != nil && env.DataMessage.Timestamp != 0 {
+				receiptTS = env.DataMessage.Timestamp
+			}
+			if err := b.client.SendReceipt(ctx, env.Source, receiptTS); err != nil {
 				b.logger.Warn("signal read receipt failed",
 					"sender", env.Source,
 					"error", err,
@@ -154,8 +160,12 @@ func (b *Bridge) handleMessage(ctx context.Context, env *Envelope) {
 
 	resp, err := b.runner.Run(ctx, req, nil)
 
-	// Stop typing indicator regardless of outcome.
-	if typErr := b.client.SendTyping(ctx, sender, true); typErr != nil {
+	// Stop typing indicator regardless of outcome. Use a fresh
+	// background context so this best-effort cleanup runs even if
+	// the handler context has timed out or been cancelled.
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer stopCancel()
+	if typErr := b.client.SendTyping(stopCtx, sender, true); typErr != nil {
 		b.logger.Debug("signal typing stop failed", "error", typErr)
 	}
 
@@ -304,11 +314,12 @@ func agentAlreadySent(toolsUsed map[string]int) bool {
 	return false
 }
 
-// truncate returns s truncated to maxLen characters with an ellipsis if
-// it exceeds the limit.
+// truncate returns s truncated to maxLen runes with an ellipsis if it
+// exceeds the limit.
 func truncate(s string, maxLen int) string {
-	if len(s) <= maxLen {
+	runes := []rune(s)
+	if len(runes) <= maxLen {
 		return s
 	}
-	return s[:maxLen] + "..."
+	return string(runes[:maxLen]) + "..."
 }

@@ -288,6 +288,38 @@ func TestValidate_SignalValid(t *testing.T) {
 	}
 }
 
+func TestValidate_SignalEnabledMissingCommand(t *testing.T) {
+	cfg := Default()
+	cfg.Signal = SignalConfig{
+		Enabled: true,
+		Account: "+15551234567",
+	}
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected validation error for missing command")
+	}
+	if !strings.Contains(err.Error(), "signal.command") {
+		t.Errorf("error should mention signal.command, got: %v", err)
+	}
+}
+
+func TestValidate_SignalEnabledMissingAccount(t *testing.T) {
+	cfg := Default()
+	cfg.Signal = SignalConfig{
+		Enabled: true,
+		Command: "signal-cli",
+	}
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected validation error for missing account")
+	}
+	if !strings.Contains(err.Error(), "signal.account") {
+		t.Errorf("error should mention signal.account, got: %v", err)
+	}
+}
+
 func TestValidate_SignalDisabledSkipsValidation(t *testing.T) {
 	cfg := Default()
 	cfg.Signal = SignalConfig{
@@ -323,7 +355,9 @@ func TestSignalConfig_Configured(t *testing.T) {
 
 func TestApplyDefaults_SignalRateLimit(t *testing.T) {
 	cfg := Default()
-	if cfg.Signal.RateLimitPerMinute != 10 {
-		t.Errorf("expected default rate_limit_per_minute 10, got %d", cfg.Signal.RateLimitPerMinute)
+	// Zero means unlimited — no default override so users can disable
+	// rate limiting by omitting the field.
+	if cfg.Signal.RateLimitPerMinute != 0 {
+		t.Errorf("expected default rate_limit_per_minute 0 (unlimited), got %d", cfg.Signal.RateLimitPerMinute)
 	}
 }

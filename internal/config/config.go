@@ -811,9 +811,8 @@ func (c *Config) applyDefaults() {
 		c.HomeAssistant.Subscribe.CooldownMinutes = 5
 	}
 
-	if c.Signal.RateLimitPerMinute == 0 {
-		c.Signal.RateLimitPerMinute = 10
-	}
+	// Signal rate limit: 0 means unlimited (no default override).
+	// Users who want limiting must set a positive value explicitly.
 	if c.Signal.Routing.QualityFloor == "" {
 		c.Signal.Routing.QualityFloor = "6"
 	}
@@ -990,8 +989,14 @@ func (c *Config) validateSubscribe() error {
 
 // validateSignal checks the Signal bridge configuration for consistency.
 func (c *Config) validateSignal() error {
-	if !c.Signal.Configured() {
+	if !c.Signal.Enabled {
 		return nil
+	}
+	if c.Signal.Command == "" {
+		return fmt.Errorf("signal.command is required when signal.enabled is true")
+	}
+	if c.Signal.Account == "" {
+		return fmt.Errorf("signal.account is required when signal.enabled is true")
 	}
 	if c.Signal.RateLimitPerMinute < 0 {
 		return fmt.Errorf("signal.rate_limit_per_minute %d must be non-negative", c.Signal.RateLimitPerMinute)

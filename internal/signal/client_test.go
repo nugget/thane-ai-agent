@@ -34,6 +34,7 @@ func pipeClient(t *testing.T) (*Client, io.Writer, io.Reader) {
 		pending:  make(map[int64]chan rpcResponse),
 		messages: make(chan *Envelope, 64),
 		done:     make(chan struct{}),
+		waitErr:  make(chan error, 1),
 	}
 
 	go c.readLoop()

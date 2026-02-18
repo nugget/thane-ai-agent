@@ -72,6 +72,7 @@ type Client struct {
 
 	messages chan *Envelope // inbound message notifications
 	done     chan struct{}  // closed when reader goroutine exits
+	waitErr  chan error     // receives cmd.Wait result (exactly once)
 }
 
 // NewClient creates a signal-cli JSON-RPC client. Call Start to launch
@@ -87,6 +88,7 @@ func NewClient(command string, args []string, logger *slog.Logger) *Client {
 		pending:  make(map[int64]chan rpcResponse),
 		messages: make(chan *Envelope, 64),
 		done:     make(chan struct{}),
+		waitErr:  make(chan error, 1),
 	}
 }
 
@@ -129,6 +131,15 @@ func (c *Client) Start(ctx context.Context) error {
 
 	go c.drainStderr(stderrPipe)
 	go c.readLoop()
+	go func() {
+		err := cmd.Wait()
+		if err != nil {
+			c.logger.Error("signal-cli subprocess exited with error", "error", err)
+		} else {
+			c.logger.Info("signal-cli subprocess exited")
+		}
+		c.waitErr <- err
+	}()
 
 	c.logger.Info("signal-cli subprocess started", "pid", cmd.Process.Pid)
 	return nil
@@ -195,6 +206,8 @@ func (c *Client) Ping(ctx context.Context) error {
 
 // Close shuts down the signal-cli subprocess gracefully. It closes
 // stdin to signal exit, waits briefly, then force-kills if needed.
+// The waiter goroutine started by Start() owns cmd.Wait(); Close
+// reads its result via waitErr.
 func (c *Client) Close() error {
 	if c.cmd == nil || c.cmd.Process == nil {
 		return nil
@@ -207,19 +220,17 @@ func (c *Client) Close() error {
 		c.stdin.Close()
 	}
 
-	// Wait for graceful exit or force kill.
-	done := make(chan error, 1)
-	go func() { done <- c.cmd.Wait() }()
-
+	// Wait for the waiter goroutine to deliver the exit status, or
+	// force-kill after a timeout.
 	select {
-	case err := <-done:
+	case err := <-c.waitErr:
 		return err
 	case <-time.After(5 * time.Second):
 		c.logger.Warn("signal-cli did not exit gracefully, killing",
 			"pid", c.cmd.Process.Pid,
 		)
 		_ = c.cmd.Process.Kill()
-		<-done
+		<-c.waitErr
 		return nil
 	}
 }
@@ -359,5 +370,8 @@ func (c *Client) drainStderr(r io.Reader) {
 	scanner.Buffer(make([]byte, 0, 64*1024), 256*1024)
 	for scanner.Scan() {
 		c.logger.Debug("signal-cli stderr", "line", scanner.Text())
+	}
+	if err := scanner.Err(); err != nil {
+		c.logger.Warn("signal-cli stderr scan error", "error", err)
 	}
 }
