@@ -272,7 +272,7 @@ func (b *SignalBridge) maybeCleanupLocked(now time.Time) {
 func sanitizePhone(phone string) string {
 	var sb strings.Builder
 	for _, r := range phone {
-		if r >= '0' && r <= '9' || r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' {
+		if (r >= '0' && r <= '9') || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') {
 			sb.WriteRune(r)
 		}
 	}

@@ -766,7 +766,7 @@ func (c *Config) applyDefaults() {
 	if c.Signal.PollTimeoutSec == 0 {
 		c.Signal.PollTimeoutSec = 30
 	}
-	if c.Signal.RateLimitPerMinute == 0 && c.Signal.Enabled {
+	if c.Signal.RateLimitPerMinute == 0 {
 		c.Signal.RateLimitPerMinute = 10
 	}
 
