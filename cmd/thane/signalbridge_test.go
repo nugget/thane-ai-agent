@@ -230,8 +230,8 @@ func TestSignalBridge_ResponseSentBack(t *testing.T) {
 	if sendCall == nil {
 		t.Fatal("send_message_to_user was not called")
 	}
-	if sendCall.Args["recipient"] != "+15551234567" {
-		t.Errorf("recipient = %v, want %q", sendCall.Args["recipient"], "+15551234567")
+	if sendCall.Args["user_id"] != "+15551234567" {
+		t.Errorf("user_id = %v, want %q", sendCall.Args["user_id"], "+15551234567")
 	}
 	if sendCall.Args["message"] != "Hi there!" {
 		t.Errorf("message = %v, want %q", sendCall.Args["message"], "Hi there!")
@@ -431,8 +431,9 @@ func TestSignalBridge_ContextCancellation(t *testing.T) {
 
 func TestSignalBridge_ReadReceiptSentBeforeHandle(t *testing.T) {
 	msg := signalMessage{
-		SenderID: "+15551234567",
-		Message:  "Hello",
+		SenderID:  "+15551234567",
+		Message:   "Hello",
+		Timestamp: 1700000000000,
 	}
 	msgJSON, _ := json.Marshal(msg)
 
@@ -484,6 +485,32 @@ func TestSignalBridge_ReadReceiptSentBeforeHandle(t *testing.T) {
 	if order[2] != "send_message_to_user" {
 		t.Errorf("third call = %q, want send_message_to_user", order[2])
 	}
+
+	// Verify read receipt parameters.
+	var receiptCall *mcpCall
+	for i := range calls {
+		if calls[i].Name == "send_read_receipt" {
+			receiptCall = &calls[i]
+			break
+		}
+	}
+	if receiptCall == nil {
+		t.Fatal("send_read_receipt was not called")
+	}
+	if receiptCall.Args["user_id"] != "+15551234567" {
+		t.Errorf("read receipt user_id = %v, want %q", receiptCall.Args["user_id"], "+15551234567")
+	}
+	ts, ok := receiptCall.Args["timestamps"]
+	if !ok {
+		t.Fatal("read receipt missing timestamps field")
+	}
+	tsSlice, ok := ts.([]int64)
+	if !ok {
+		t.Fatalf("timestamps type = %T, want []int64", ts)
+	}
+	if len(tsSlice) != 1 || tsSlice[0] != 1700000000000 {
+		t.Errorf("timestamps = %v, want [1700000000000]", tsSlice)
+	}
 }
 
 func TestSignalBridge_DoneChannelClosedOnCompletion(t *testing.T) {
@@ -507,6 +534,98 @@ func TestSignalBridge_DoneChannelClosedOnCompletion(t *testing.T) {
 		// Channel closed as expected.
 	case <-time.After(5 * time.Second):
 		t.Fatal("done channel was not closed after handleMessage returned")
+	}
+}
+
+func TestSignalBridge_AgentAlreadySentSkipsDuplicateReply(t *testing.T) {
+	msg := signalMessage{
+		SenderID: "+15551234567",
+		Message:  "Send me a message",
+	}
+
+	mcpMock := &mockMCPCaller{}
+	runner := &signalTestRunner{
+		resp: &agent.Response{
+			Content: "Already sent via tool",
+			ToolsUsed: map[string]int{
+				"mcp_signal_send_message_to_user": 1,
+			},
+		},
+	}
+
+	bridge := NewSignalBridge(SignalBridgeConfig{
+		MCP:         mcpMock,
+		Runner:      runner,
+		Logger:      slog.Default(),
+		PollTimeout: 1,
+	})
+
+	callHandleMessage(bridge, context.Background(), msg)
+
+	// The bridge should NOT call send_message_to_user because the agent
+	// already did it during its tool loop.
+	calls := mcpMock.getCalls()
+	for _, c := range calls {
+		if c.Name == "send_message_to_user" {
+			t.Error("send_message_to_user should not be called when agent already sent")
+		}
+	}
+}
+
+func TestSignalBridge_NoToolsUsedSendsNormally(t *testing.T) {
+	msg := signalMessage{
+		SenderID: "+15551234567",
+		Message:  "Hello",
+	}
+
+	mcpMock := &mockMCPCaller{}
+	runner := &signalTestRunner{
+		resp: &agent.Response{
+			Content:   "Hi there!",
+			ToolsUsed: map[string]int{"some_other_tool": 2},
+		},
+	}
+
+	bridge := NewSignalBridge(SignalBridgeConfig{
+		MCP:         mcpMock,
+		Runner:      runner,
+		Logger:      slog.Default(),
+		PollTimeout: 1,
+	})
+
+	callHandleMessage(bridge, context.Background(), msg)
+
+	calls := mcpMock.getCalls()
+	var found bool
+	for _, c := range calls {
+		if c.Name == "send_message_to_user" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("send_message_to_user should be called when agent did not send")
+	}
+}
+
+func TestAgentAlreadySent(t *testing.T) {
+	tests := []struct {
+		name      string
+		toolsUsed map[string]int
+		want      bool
+	}{
+		{"nil map", nil, false},
+		{"empty map", map[string]int{}, false},
+		{"unrelated tools", map[string]int{"web_search": 1}, false},
+		{"exact match", map[string]int{"send_message_to_user": 1}, true},
+		{"prefixed match", map[string]int{"mcp_signal_send_message_to_user": 1}, true},
+		{"zero count", map[string]int{"mcp_signal_send_message_to_user": 0}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := agentAlreadySent(tt.toolsUsed); got != tt.want {
+				t.Errorf("agentAlreadySent(%v) = %v, want %v", tt.toolsUsed, got, tt.want)
+			}
+		})
 	}
 }
 

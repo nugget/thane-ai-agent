@@ -155,7 +155,8 @@ func (b *SignalBridge) Start(ctx context.Context) {
 		// Acknowledge receipt before the potentially long agent loop.
 		// Best-effort — failure does not prevent message processing.
 		if _, err := b.mcp.CallTool(ctx, "send_read_receipt", map[string]any{
-			"recipient": msg.SenderID,
+			"user_id":    msg.SenderID,
+			"timestamps": []int64{msg.Timestamp},
 		}); err != nil {
 			b.logger.Warn("signal read receipt failed",
 				"sender", msg.SenderID,
@@ -234,6 +235,16 @@ func (b *SignalBridge) handleMessage(ctx context.Context, msg signalMessage, don
 		"model", resp.Model,
 	)
 
+	// If the agent already called send_message_to_user during its tool
+	// loop, skip the bridge-level send to avoid duplicate messages.
+	if agentAlreadySent(resp.ToolsUsed) {
+		b.logger.Info("signal reply already sent by agent tool call",
+			"sender", msg.SenderID,
+			"conversation_id", convID,
+		)
+		return
+	}
+
 	if resp.Content == "" {
 		return
 	}
@@ -245,8 +256,8 @@ func (b *SignalBridge) handleMessage(ctx context.Context, msg signalMessage, don
 	)
 
 	_, err = b.mcp.CallTool(ctx, "send_message_to_user", map[string]any{
-		"recipient": msg.SenderID,
-		"message":   resp.Content,
+		"user_id": msg.SenderID,
+		"message": resp.Content,
 	})
 	if err != nil {
 		b.logger.Error("signal reply send failed",
@@ -340,6 +351,19 @@ func formatSignalMessage(msg signalMessage) string {
 	}
 	sb.WriteString(msg.Message)
 	return sb.String()
+}
+
+// agentAlreadySent reports whether the agent invoked a
+// send_message_to_user tool during its loop. The MCP bridge prefixes
+// tool names (e.g. "mcp_signal_send_message_to_user"), so we match on
+// the suffix.
+func agentAlreadySent(toolsUsed map[string]int) bool {
+	for name, count := range toolsUsed {
+		if count > 0 && strings.HasSuffix(name, "send_message_to_user") {
+			return true
+		}
+	}
+	return false
 }
 
 // truncate returns s truncated to maxLen characters with an ellipsis if
