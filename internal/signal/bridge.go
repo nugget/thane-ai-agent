@@ -19,6 +19,15 @@ type AgentRunner interface {
 	Run(ctx context.Context, req *agent.Request, stream agent.StreamCallback) (*agent.Response, error)
 }
 
+// SessionRotator ends the active session for a conversation, triggering
+// background summarization. The agent loop's EnsureSession call creates
+// a fresh session on the next message automatically.
+type SessionRotator interface {
+	// RotateIdleSession ends the active session for conversationID.
+	// Returns true if a session was ended. No-op if no active session.
+	RotateIdleSession(conversationID string) bool
+}
+
 // handleTimeout bounds how long a single inbound message may be
 // processed (agent loop + response send).
 const handleTimeout = 5 * time.Minute
@@ -39,21 +48,25 @@ type lastMessage struct {
 
 // BridgeConfig holds the dependencies for a Bridge.
 type BridgeConfig struct {
-	Client    *Client
-	Runner    AgentRunner
-	Logger    *slog.Logger
-	RateLimit int                        // per sender per minute; 0 = unlimited
-	Routing   config.SignalRoutingConfig // model selection and routing hints
+	Client      *Client
+	Runner      AgentRunner
+	Logger      *slog.Logger
+	RateLimit   int                        // per sender per minute; 0 = unlimited
+	Routing     config.SignalRoutingConfig // model selection and routing hints
+	Rotator     SessionRotator             // nil disables idle session rotation
+	IdleTimeout time.Duration              // 0 disables idle session rotation
 }
 
 // Bridge receives Signal messages from the signal-cli client, routes
 // them through the agent loop, and sends responses back via Signal.
 type Bridge struct {
-	client    *Client
-	runner    AgentRunner
-	logger    *slog.Logger
-	rateLimit int
-	routing   config.SignalRoutingConfig
+	client      *Client
+	runner      AgentRunner
+	logger      *slog.Logger
+	rateLimit   int
+	routing     config.SignalRoutingConfig
+	rotator     SessionRotator
+	idleTimeout time.Duration
 
 	mu            sync.Mutex
 	senderTimes   map[string][]time.Time
@@ -73,6 +86,8 @@ func NewBridge(cfg BridgeConfig) *Bridge {
 		logger:        logger,
 		rateLimit:     cfg.RateLimit,
 		routing:       cfg.Routing,
+		rotator:       cfg.Rotator,
+		idleTimeout:   cfg.IdleTimeout,
 		senderTimes:   make(map[string][]time.Time),
 		lastInboundTS: make(map[string]lastMessage),
 	}
@@ -109,10 +124,12 @@ func (b *Bridge) Start(ctx context.Context) {
 				continue
 			}
 
-			// Track the most recent inbound timestamp for this
-			// sender (even for non-text messages like attachments)
-			// so the signal_send_reaction tool can resolve "latest".
-			if env.DataMessage != nil {
+			// For non-text DataMessages (attachments, etc.) that won't
+			// reach handleMessage, track the signal timestamp here so
+			// the reaction tool's "latest" resolution still works.
+			// Text messages update lastInboundTS inside handleMessage
+			// (after the idle rotation check).
+			if env.DataMessage != nil && env.DataMessage.Message == "" {
 				ts := env.Timestamp
 				if env.DataMessage.Timestamp != 0 {
 					ts = env.DataMessage.Timestamp
@@ -175,6 +192,38 @@ func (b *Bridge) handleMessage(ctx context.Context, env *Envelope) {
 		"conversation_id", convID,
 		"message_len", len(env.DataMessage.Message),
 	)
+
+	// Rotate the session if the sender has been idle longer than
+	// the configured timeout. The agent loop's deferred
+	// EnsureSession call will create a fresh session automatically.
+	if b.idleTimeout > 0 && b.rotator != nil {
+		b.mu.Lock()
+		lm, exists := b.lastInboundTS[sender]
+		b.mu.Unlock()
+		if exists && time.Since(lm.receivedAt) > b.idleTimeout {
+			if b.rotator.RotateIdleSession(convID) {
+				b.logger.Info("signal session rotated (idle)",
+					"sender", sender,
+					"conversation_id", convID,
+					"idle_duration", time.Since(lm.receivedAt).Round(time.Second),
+				)
+			}
+		}
+	}
+
+	// Update lastInboundTS *after* the idle check so the check
+	// reads the previous message's wall-clock time, not the current
+	// one. This also serves the reaction tool's "latest" resolution.
+	ts := env.Timestamp
+	if env.DataMessage != nil && env.DataMessage.Timestamp != 0 {
+		ts = env.DataMessage.Timestamp
+	}
+	b.mu.Lock()
+	b.lastInboundTS[sender] = lastMessage{
+		signalTS:   ts,
+		receivedAt: time.Now(),
+	}
+	b.mu.Unlock()
 
 	// Send typing indicator before agent processing.
 	if err := b.client.SendTyping(ctx, sender, false); err != nil {

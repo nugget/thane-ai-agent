@@ -975,12 +975,23 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 				},
 			})
 
+			idleTimeout := time.Duration(cfg.Signal.SessionIdleMinutes) * time.Minute
+			var signalRotator sigcli.SessionRotator
+			if idleTimeout > 0 {
+				signalRotator = &signalSessionRotator{
+					archiver: archiveAdapter,
+					logger:   logger,
+				}
+			}
+
 			bridge := sigcli.NewBridge(sigcli.BridgeConfig{
-				Client:    signalClient,
-				Runner:    loop,
-				Logger:    logger,
-				RateLimit: cfg.Signal.RateLimitPerMinute,
-				Routing:   cfg.Signal.Routing,
+				Client:      signalClient,
+				Runner:      loop,
+				Logger:      logger,
+				RateLimit:   cfg.Signal.RateLimitPerMinute,
+				Routing:     cfg.Signal.Routing,
+				Rotator:     signalRotator,
+				IdleTimeout: idleTimeout,
 			})
 			go bridge.Start(ctx)
 
@@ -1061,6 +1072,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 				"command", cfg.Signal.Command,
 				"account", cfg.Signal.Account,
 				"rate_limit", cfg.Signal.RateLimitPerMinute,
+				"session_idle_timeout", idleTimeout,
 			)
 		}
 	}
@@ -1696,3 +1708,28 @@ func (a *mqttStatsAdapter) Uptime() time.Duration      { return buildinfo.Uptime
 func (a *mqttStatsAdapter) Version() string            { return buildinfo.Version }
 func (a *mqttStatsAdapter) DefaultModel() string       { return a.model }
 func (a *mqttStatsAdapter) LastRequestTime() time.Time { return a.server.LastRequest() }
+
+// signalSessionRotator implements [sigcli.SessionRotator] by ending the
+// active session via the archive adapter. The agent loop's EnsureSession
+// call creates a new session on the next message automatically.
+type signalSessionRotator struct {
+	archiver agent.SessionArchiver
+	logger   *slog.Logger
+}
+
+// RotateIdleSession ends the active session for the conversation.
+func (r *signalSessionRotator) RotateIdleSession(conversationID string) bool {
+	sid := r.archiver.ActiveSessionID(conversationID)
+	if sid == "" {
+		return false
+	}
+	if err := r.archiver.EndSession(sid, "idle"); err != nil {
+		r.logger.Warn("idle session rotation failed",
+			"conversation_id", conversationID,
+			"session_id", sid,
+			"error", err,
+		)
+		return false
+	}
+	return true
+}
