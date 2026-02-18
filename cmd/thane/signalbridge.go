@@ -133,6 +133,11 @@ func (b *SignalBridge) Start(ctx context.Context) {
 			continue
 		}
 
+		b.logger.Debug("signal receive_message raw response",
+			"result", truncate(result, 500),
+			"parsed_timestamp", msg.Timestamp,
+		)
+
 		if msg.Error != "" {
 			b.logger.Warn("signal receive_message error",
 				"error", msg.Error,
@@ -155,7 +160,7 @@ func (b *SignalBridge) Start(ctx context.Context) {
 		// Acknowledge receipt before the potentially long agent loop.
 		// Best-effort — failure does not prevent message processing.
 		if _, err := b.mcp.CallTool(ctx, "send_read_receipt", map[string]any{
-			"user_id":    msg.SenderID,
+			"recipient":  msg.SenderID,
 			"timestamps": []int64{msg.Timestamp},
 		}); err != nil {
 			b.logger.Warn("signal read receipt failed",
