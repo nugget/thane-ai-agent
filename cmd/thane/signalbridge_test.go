@@ -497,8 +497,8 @@ func TestSignalBridge_ReadReceiptSentBeforeHandle(t *testing.T) {
 	if receiptCall == nil {
 		t.Fatal("send_read_receipt was not called")
 	}
-	if receiptCall.Args["user_id"] != "+15551234567" {
-		t.Errorf("read receipt user_id = %v, want %q", receiptCall.Args["user_id"], "+15551234567")
+	if receiptCall.Args["recipient"] != "+15551234567" {
+		t.Errorf("read receipt recipient = %v, want %q", receiptCall.Args["recipient"], "+15551234567")
 	}
 	ts, ok := receiptCall.Args["timestamps"]
 	if !ok {
