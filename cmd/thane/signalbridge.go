@@ -163,6 +163,13 @@ func (b *SignalBridge) Start(ctx context.Context) {
 			)
 		}
 
+		// If the context was cancelled during read receipt, shut down
+		// without launching a redundant handler goroutine.
+		if ctx.Err() != nil {
+			b.logger.Info("signal bridge shutting down", "error", ctx.Err())
+			return
+		}
+
 		// Wait for message handling (including reply send) to complete
 		// before resuming the poll. The stdio transport mutex is
 		// single-threaded; re-entering receive_message before the reply
