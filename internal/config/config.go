@@ -151,6 +151,11 @@ type Config struct {
 	// set, Thane connects to the broker and registers as an HA device.
 	MQTT MQTTConfig `yaml:"mqtt"`
 
+	// Notifications configures the send_message tool's delivery target.
+	// When Service is set, the agent can proactively send notifications
+	// via a Home Assistant service (e.g., notify/mobile_app_nugget).
+	Notifications NotificationConfig `yaml:"notifications"`
+
 	// Person configures household member presence tracking. When Track
 	// contains entity IDs, the agent receives a "People & Presence"
 	// section in its system prompt on every wake, eliminating tool
@@ -473,6 +478,20 @@ func (c MQTTConfig) Configured() bool {
 	return c.Broker != "" && c.DeviceName != ""
 }
 
+// NotificationConfig configures the send_message tool's delivery
+// target. When Service is set, the agent can proactively send
+// notifications via a Home Assistant service call.
+type NotificationConfig struct {
+	// Service is the HA service target in "domain/service" format
+	// (e.g., "notify/mobile_app_nugget", "persistent_notification/create").
+	// When empty, the send_message tool is not registered.
+	Service string `yaml:"service"`
+
+	// Title is the default notification title. Can be overridden per
+	// send_message call. Default: "Thane".
+	Title string `yaml:"title"`
+}
+
 // PersonConfig configures household member presence tracking. When
 // Track contains entity IDs, the person tracker maintains in-memory
 // state from Home Assistant and injects a presence summary into the
@@ -698,6 +717,10 @@ func (c *Config) applyDefaults() {
 	}
 	if c.MQTT.PublishIntervalSec == 0 {
 		c.MQTT.PublishIntervalSec = 60
+	}
+
+	if c.Notifications.Title == "" {
+		c.Notifications.Title = "Thane"
 	}
 
 	if c.Unifi.PollIntervalSec == 0 {

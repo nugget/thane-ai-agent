@@ -835,6 +835,14 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// extracts readable text content.
 	loop.Tools().SetFetcher(fetch.New())
 
+	// --- Notifications ---
+	// When configured, gives the agent the ability to proactively send
+	// messages to the user via a Home Assistant notification service.
+	if cfg.Notifications.Service != "" {
+		loop.Tools().SetNotificationConfig(cfg.Notifications.Service, cfg.Notifications.Title)
+		logger.Info("send_message tool enabled", "service", cfg.Notifications.Service)
+	}
+
 	// --- Archive tools ---
 	// Gives the agent the ability to search and recall past conversations.
 	loop.Tools().SetArchiveStore(archiveStore)

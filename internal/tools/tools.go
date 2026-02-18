@@ -34,6 +34,8 @@ type Registry struct {
 	anticipationTools *anticipation.Tools
 	fileTools         *FileTools
 	shellExec         *ShellExec
+	notifyService     string // HA service in "domain/service" format
+	notifyTitle       string // default notification title
 }
 
 // NewEmptyRegistry creates an empty tool registry with no built-in tools.
@@ -96,6 +98,15 @@ func (r *Registry) SetFetcher(f *fetch.Fetcher) {
 		Parameters:  fetch.ToolDefinition(),
 		Handler:     fetch.ToolHandler(f),
 	})
+}
+
+// SetNotificationConfig enables the send_message tool with the given
+// HA service target and default title. The service must be in
+// "domain/service" format (e.g., "notify/mobile_app_nugget").
+func (r *Registry) SetNotificationConfig(service, title string) {
+	r.notifyService = service
+	r.notifyTitle = title
+	r.registerSendMessage()
 }
 
 func (r *Registry) registerFactTools() {
@@ -1360,4 +1371,72 @@ func parseHumanDuration(s string) (time.Duration, error) {
 	default:
 		return 0, fmt.Errorf("unknown unit: %s", unit)
 	}
+}
+
+func (r *Registry) registerSendMessage() {
+	if r.notifyService == "" {
+		return
+	}
+	r.Register(&Tool{
+		Name: "send_message",
+		Description: "Send a notification message to the user via Home Assistant. " +
+			"Use this when you need to proactively inform the user about something " +
+			"(e.g., alerts, reminders, status updates from anticipation wakes or scheduled tasks).",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"message": map[string]any{
+					"type":        "string",
+					"description": "The notification text to send to the user",
+				},
+				"title": map[string]any{
+					"type":        "string",
+					"description": "Optional title for the notification (defaults to configured title)",
+				},
+			},
+			"required": []string{"message"},
+		},
+		Handler: r.handleSendMessage,
+	})
+}
+
+func (r *Registry) handleSendMessage(ctx context.Context, args map[string]any) (string, error) {
+	if r.notifyService == "" {
+		return "", fmt.Errorf("send_message not configured — set notifications.service in config")
+	}
+	if r.ha == nil {
+		return "", fmt.Errorf("send_message requires Home Assistant connection")
+	}
+
+	message, _ := args["message"].(string)
+	if message == "" {
+		return "", fmt.Errorf("message is required")
+	}
+
+	title, _ := args["title"].(string)
+	if title == "" {
+		title = r.notifyTitle
+	}
+
+	parts := strings.SplitN(r.notifyService, "/", 2)
+	if len(parts) != 2 {
+		return "", fmt.Errorf("invalid notification service format %q — expected domain/service", r.notifyService)
+	}
+	domain, service := parts[0], parts[1]
+
+	data := map[string]any{
+		"message": message,
+		"title":   title,
+	}
+
+	// For persistent notifications, add a unique ID so they don't stack.
+	if domain == "persistent_notification" {
+		data["notification_id"] = fmt.Sprintf("thane_%d", time.Now().UnixMilli())
+	}
+
+	if err := r.ha.CallService(ctx, domain, service, data); err != nil {
+		return "", fmt.Errorf("send notification: %w", err)
+	}
+
+	return fmt.Sprintf("Notification sent via %s/%s: %s", domain, service, message), nil
 }
