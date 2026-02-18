@@ -15,6 +15,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/scheduler"
 	"github.com/nugget/thane-ai-agent/internal/search"
+	"github.com/nugget/thane-ai-agent/internal/watchlist"
 )
 
 // Tool represents a callable tool.
@@ -34,6 +35,7 @@ type Registry struct {
 	anticipationTools *anticipation.Tools
 	fileTools         *FileTools
 	shellExec         *ShellExec
+	watchlistStore    *watchlist.Store
 }
 
 // NewEmptyRegistry creates an empty tool registry with no built-in tools.

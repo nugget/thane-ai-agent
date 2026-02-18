@@ -59,6 +59,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/talents"
 	"github.com/nugget/thane-ai-agent/internal/tools"
 	"github.com/nugget/thane-ai-agent/internal/unifi"
+	"github.com/nugget/thane-ai-agent/internal/watchlist"
 
 	_ "github.com/mattn/go-sqlite3" // SQLite driver for database/sql
 )
@@ -967,6 +968,29 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 
 	wmProvider := memory.NewWorkingMemoryProvider(wmStore, tools.ConversationIDFromContext)
 	contextProvider.Add(wmProvider)
+
+	// --- Entity watchlist ---
+	// Allows the agent to dynamically add HA entities to a watched list
+	// whose live state is injected into context each turn. Persisted in
+	// SQLite so the watchlist survives restarts.
+	watchlistDB, err := sql.Open("sqlite3", cfg.DataDir+"/watchlist.db")
+	if err != nil {
+		return fmt.Errorf("open watchlist db: %w", err)
+	}
+	defer watchlistDB.Close()
+
+	watchlistStore, err := watchlist.NewStore(watchlistDB)
+	if err != nil {
+		return fmt.Errorf("watchlist store: %w", err)
+	}
+
+	if ha != nil {
+		watchlistProvider := watchlist.NewProvider(watchlistStore, ha, logger)
+		contextProvider.Add(watchlistProvider)
+		logger.Info("entity watchlist context enabled")
+	}
+
+	loop.Tools().SetWatchlistStore(watchlistStore)
 
 	// --- Person tracker ---
 	// Tracks configured household members' presence state and injects
