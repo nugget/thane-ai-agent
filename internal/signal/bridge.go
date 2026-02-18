@@ -48,9 +48,10 @@ type Bridge struct {
 	rateLimit int
 	routing   config.SignalRoutingConfig
 
-	mu          sync.Mutex
-	senderTimes map[string][]time.Time
-	lastCleanup time.Time
+	mu            sync.Mutex
+	senderTimes   map[string][]time.Time
+	lastCleanup   time.Time
+	lastInboundTS map[string]int64 // most recent message timestamp per sender
 }
 
 // NewBridge creates a Signal message bridge.
@@ -60,13 +61,24 @@ func NewBridge(cfg BridgeConfig) *Bridge {
 		logger = slog.Default()
 	}
 	return &Bridge{
-		client:      cfg.Client,
-		runner:      cfg.Runner,
-		logger:      logger,
-		rateLimit:   cfg.RateLimit,
-		routing:     cfg.Routing,
-		senderTimes: make(map[string][]time.Time),
+		client:        cfg.Client,
+		runner:        cfg.Runner,
+		logger:        logger,
+		rateLimit:     cfg.RateLimit,
+		routing:       cfg.Routing,
+		senderTimes:   make(map[string][]time.Time),
+		lastInboundTS: make(map[string]int64),
 	}
+}
+
+// LastInboundTimestamp returns the most recent message timestamp
+// received from the given sender. The tool handler uses this to
+// resolve the "latest" sentinel for reactions.
+func (b *Bridge) LastInboundTimestamp(sender string) (int64, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	ts, ok := b.lastInboundTS[sender]
+	return ts, ok
 }
 
 // Start receives messages from the signal-cli client and routes them
@@ -112,6 +124,12 @@ func (b *Bridge) Start(ctx context.Context) {
 			if env.DataMessage != nil && env.DataMessage.Timestamp != 0 {
 				receiptTS = env.DataMessage.Timestamp
 			}
+			// Track the most recent inbound timestamp for this sender
+			// so the signal_send_reaction tool can resolve "latest".
+			b.mu.Lock()
+			b.lastInboundTS[env.Source] = receiptTS
+			b.mu.Unlock()
+
 			if err := b.client.SendReceipt(ctx, env.Source, receiptTS); err != nil {
 				b.logger.Warn("signal read receipt failed",
 					"sender", env.Source,
@@ -286,7 +304,8 @@ func sanitizePhone(phone string) string {
 }
 
 // formatMessage builds the user-facing message content for the agent
-// loop from a received Signal envelope.
+// loop from a received Signal envelope. The [ts:...] tag provides the
+// message timestamp so the agent can reference it for reactions.
 func formatMessage(env *Envelope) string {
 	var sb strings.Builder
 	sender := env.Source
@@ -294,10 +313,17 @@ func formatMessage(env *Envelope) string {
 		sender = fmt.Sprintf("%s (%s)", env.SourceName, env.Source)
 	}
 
+	// Use the data message timestamp when available; fall back to
+	// the envelope timestamp.
+	ts := env.Timestamp
+	if env.DataMessage != nil && env.DataMessage.Timestamp != 0 {
+		ts = env.DataMessage.Timestamp
+	}
+
 	if env.DataMessage.GroupInfo != nil {
-		fmt.Fprintf(&sb, "Signal message from %s in group %s:\n\n", sender, env.DataMessage.GroupInfo.GroupID)
+		fmt.Fprintf(&sb, "Signal message from %s in group %s [ts:%d]:\n\n", sender, env.DataMessage.GroupInfo.GroupID, ts)
 	} else {
-		fmt.Fprintf(&sb, "Signal message from %s:\n\n", sender)
+		fmt.Fprintf(&sb, "Signal message from %s [ts:%d]:\n\n", sender, ts)
 	}
 	sb.WriteString(env.DataMessage.Message)
 	return sb.String()

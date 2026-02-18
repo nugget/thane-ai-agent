@@ -200,6 +200,119 @@ func TestClient_SendMessage(t *testing.T) {
 	wg.Wait()
 }
 
+func TestClient_SendReaction(t *testing.T) {
+	client, stdout, stdin := pipeClient(t)
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+
+	go func() {
+		defer wg.Done()
+		reader := bufio.NewReader(stdin)
+		line, err := reader.ReadBytes('\n')
+		if err != nil {
+			t.Errorf("read request: %v", err)
+			return
+		}
+
+		var req rpcRequest
+		if err := json.Unmarshal(line, &req); err != nil {
+			t.Errorf("unmarshal request: %v", err)
+			return
+		}
+
+		if req.Method != "sendReaction" {
+			t.Errorf("method = %q, want sendReaction", req.Method)
+		}
+
+		params, _ := json.Marshal(req.Params)
+		var p map[string]any
+		json.Unmarshal(params, &p)
+
+		if p["recipient"] != "+15551234567" {
+			t.Errorf("recipient = %v, want +15551234567", p["recipient"])
+		}
+		if p["emoji"] != "👍" {
+			t.Errorf("emoji = %v, want 👍", p["emoji"])
+		}
+		if p["targetAuthor"] != "+15559999999" {
+			t.Errorf("targetAuthor = %v, want +15559999999", p["targetAuthor"])
+		}
+		if p["targetTimestamp"] != float64(1631458508784) {
+			t.Errorf("targetTimestamp = %v, want 1631458508784", p["targetTimestamp"])
+		}
+		// remove should not be present when false
+		if _, ok := p["remove"]; ok {
+			t.Error("remove should not be present when false")
+		}
+
+		resp := fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"result":{}}`, req.ID) + "\n"
+		if _, err := io.WriteString(stdout, resp); err != nil {
+			t.Errorf("write response: %v", err)
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err := client.SendReaction(ctx, "+15551234567", "👍", "+15559999999", 1631458508784, false)
+	if err != nil {
+		t.Fatalf("SendReaction: %v", err)
+	}
+
+	wg.Wait()
+}
+
+func TestClient_SendReactionRemove(t *testing.T) {
+	client, stdout, stdin := pipeClient(t)
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+
+	go func() {
+		defer wg.Done()
+		reader := bufio.NewReader(stdin)
+		line, err := reader.ReadBytes('\n')
+		if err != nil {
+			t.Errorf("read request: %v", err)
+			return
+		}
+
+		var req rpcRequest
+		if err := json.Unmarshal(line, &req); err != nil {
+			t.Errorf("unmarshal request: %v", err)
+			return
+		}
+
+		if req.Method != "sendReaction" {
+			t.Errorf("method = %q, want sendReaction", req.Method)
+		}
+
+		params, _ := json.Marshal(req.Params)
+		var p map[string]any
+		json.Unmarshal(params, &p)
+
+		if p["remove"] != true {
+			t.Errorf("remove = %v, want true", p["remove"])
+		}
+
+		resp := fmt.Sprintf(`{"jsonrpc":"2.0","id":%d,"result":{}}`, req.ID) + "\n"
+		if _, err := io.WriteString(stdout, resp); err != nil {
+			t.Errorf("write response: %v", err)
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err := client.SendReaction(ctx, "+15551234567", "👍", "+15559999999", 1631458508784, true)
+	if err != nil {
+		t.Fatalf("SendReaction remove: %v", err)
+	}
+
+	wg.Wait()
+}
+
 func TestClient_ContextCancellation(t *testing.T) {
 	client, _, _ := pipeClient(t)
 

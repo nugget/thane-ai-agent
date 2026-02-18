@@ -409,8 +409,12 @@ func TestSanitizePhone(t *testing.T) {
 
 func TestFormatMessage_DirectMessage(t *testing.T) {
 	env := &Envelope{
-		Source:      "+15551234567",
-		DataMessage: &DataMessage{Message: "Hello Thane"},
+		Source:    "+15551234567",
+		Timestamp: 1700000000000,
+		DataMessage: &DataMessage{
+			Timestamp: 1700000000000,
+			Message:   "Hello Thane",
+		},
 	}
 	got := formatMessage(env)
 	if !strings.Contains(got, "+15551234567") {
@@ -421,6 +425,9 @@ func TestFormatMessage_DirectMessage(t *testing.T) {
 	}
 	if strings.Contains(got, "group") {
 		t.Error("should not contain group reference for DM")
+	}
+	if !strings.Contains(got, "[ts:1700000000000]") {
+		t.Errorf("should contain timestamp tag, got: %q", got)
 	}
 }
 
@@ -441,8 +448,10 @@ func TestFormatMessage_WithSourceName(t *testing.T) {
 
 func TestFormatMessage_GroupMessage(t *testing.T) {
 	env := &Envelope{
-		Source: "+15551234567",
+		Source:    "+15551234567",
+		Timestamp: 1700000000000,
 		DataMessage: &DataMessage{
+			Timestamp: 1700000000000,
 			Message:   "Group update",
 			GroupInfo: &GroupInfo{GroupID: "family-group-id"},
 		},
@@ -453,6 +462,9 @@ func TestFormatMessage_GroupMessage(t *testing.T) {
 	}
 	if !strings.Contains(got, "in group") {
 		t.Error("should say 'in group'")
+	}
+	if !strings.Contains(got, "[ts:1700000000000]") {
+		t.Errorf("should contain timestamp tag, got: %q", got)
 	}
 }
 
@@ -484,5 +496,80 @@ func TestTruncate(t *testing.T) {
 	}
 	if got := truncate("long string here", 4); got != "long..." {
 		t.Errorf("truncate long = %q", got)
+	}
+}
+
+func TestFormatMessage_PrefersDataMessageTimestamp(t *testing.T) {
+	env := &Envelope{
+		Source:    "+15551234567",
+		Timestamp: 1000,
+		DataMessage: &DataMessage{
+			Timestamp: 2000,
+			Message:   "Hello",
+		},
+	}
+	got := formatMessage(env)
+	if !strings.Contains(got, "[ts:2000]") {
+		t.Errorf("should prefer DataMessage.Timestamp, got: %q", got)
+	}
+	if strings.Contains(got, "[ts:1000]") {
+		t.Error("should not use envelope timestamp when DataMessage.Timestamp is set")
+	}
+}
+
+func TestFormatMessage_FallsBackToEnvelopeTimestamp(t *testing.T) {
+	env := &Envelope{
+		Source:    "+15551234567",
+		Timestamp: 3000,
+		DataMessage: &DataMessage{
+			Timestamp: 0, // zero — should fall back
+			Message:   "Hello",
+		},
+	}
+	got := formatMessage(env)
+	if !strings.Contains(got, "[ts:3000]") {
+		t.Errorf("should fall back to envelope timestamp, got: %q", got)
+	}
+}
+
+func TestBridge_LastInboundTimestamp(t *testing.T) {
+	bridge, _, _, _ := bridgeHelper(t)
+
+	// Initially no timestamps tracked.
+	_, ok := bridge.LastInboundTimestamp("+15551234567")
+	if ok {
+		t.Error("expected no timestamp before any messages")
+	}
+
+	// Simulate storing a timestamp (as Start() would do).
+	bridge.mu.Lock()
+	bridge.lastInboundTS["+15551234567"] = 1700000000000
+	bridge.mu.Unlock()
+
+	ts, ok := bridge.LastInboundTimestamp("+15551234567")
+	if !ok {
+		t.Fatal("expected timestamp to be tracked")
+	}
+	if ts != 1700000000000 {
+		t.Errorf("timestamp = %d, want 1700000000000", ts)
+	}
+
+	// Different sender should not have a timestamp.
+	_, ok = bridge.LastInboundTimestamp("+15559999999")
+	if ok {
+		t.Error("expected no timestamp for different sender")
+	}
+
+	// Update overwrites previous value.
+	bridge.mu.Lock()
+	bridge.lastInboundTS["+15551234567"] = 1700000001000
+	bridge.mu.Unlock()
+
+	ts, ok = bridge.LastInboundTimestamp("+15551234567")
+	if !ok {
+		t.Fatal("expected timestamp after update")
+	}
+	if ts != 1700000001000 {
+		t.Errorf("timestamp = %d, want 1700000001000", ts)
 	}
 }

@@ -197,6 +197,25 @@ func (c *Client) SendTyping(ctx context.Context, recipient string, stop bool) er
 	return nil
 }
 
+// SendReaction sends or removes an emoji reaction on a specific
+// message identified by author and timestamp.
+func (c *Client) SendReaction(ctx context.Context, recipient, emoji, targetAuthor string, targetTimestamp int64, remove bool) error {
+	params := map[string]any{
+		"recipient":       recipient,
+		"emoji":           emoji,
+		"targetAuthor":    targetAuthor,
+		"targetTimestamp": targetTimestamp,
+	}
+	if remove {
+		params["remove"] = true
+	}
+	_, err := c.call(ctx, "sendReaction", params)
+	if err != nil {
+		return fmt.Errorf("signal sendReaction: %w", err)
+	}
+	return nil
+}
+
 // Ping checks that the signal-cli subprocess is responsive by
 // requesting its version. Suitable as a connwatch probe.
 func (c *Client) Ping(ctx context.Context) error {
