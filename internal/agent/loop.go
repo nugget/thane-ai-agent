@@ -59,11 +59,12 @@ const (
 
 // Response represents the agent's response.
 type Response struct {
-	Content      string `json:"content"`
-	Model        string `json:"model"`
-	FinishReason string `json:"finish_reason"`
-	InputTokens  int    `json:"input_tokens,omitempty"`
-	OutputTokens int    `json:"output_tokens,omitempty"`
+	Content      string         `json:"content"`
+	Model        string         `json:"model"`
+	FinishReason string         `json:"finish_reason"`
+	InputTokens  int            `json:"input_tokens,omitempty"`
+	OutputTokens int            `json:"output_tokens,omitempty"`
+	ToolsUsed    map[string]int `json:"tools_used,omitempty"` // tool name → call count
 }
 
 // MemoryStore is the interface for memory storage.
@@ -649,6 +650,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 
 	// Track tool call repetitions to detect loops
 	toolCallCounts := make(map[string]int) // "toolName:argsHash" → count
+	toolsUsed := make(map[string]int)      // tool name → total call count (exposed on Response)
 	const maxToolRepeat = 3                // Break if same tool+args called this many times
 
 	maxIterations := 50   // Tool call budget; final text response always gets one extra call
@@ -809,6 +811,7 @@ iterLoop:
 
 				toolCtx := tools.WithConversationID(ctx, convID)
 				result, err := l.tools.Execute(toolCtx, toolName, argsJSON)
+				toolsUsed[toolName]++
 				errMsg := ""
 				if err != nil {
 					errMsg = err.Error()
@@ -890,6 +893,7 @@ iterLoop:
 			FinishReason: "stop",
 			InputTokens:  totalInputTokens,
 			OutputTokens: totalOutputTokens,
+			ToolsUsed:    toolsUsed,
 		}
 
 		// Store response in memory
@@ -976,6 +980,7 @@ iterLoop:
 				FinishReason: "max_iterations",
 				InputTokens:  totalInputTokens,
 				OutputTokens: totalOutputTokens,
+				ToolsUsed:    toolsUsed,
 			}, nil
 		}
 
@@ -998,6 +1003,7 @@ iterLoop:
 			FinishReason: "stop",
 			InputTokens:  totalInputTokens,
 			OutputTokens: totalOutputTokens,
+			ToolsUsed:    toolsUsed,
 		}
 
 		if err := l.memory.AddMessage(convID, "assistant", resp.Content); err != nil {
@@ -1026,6 +1032,7 @@ iterLoop:
 		FinishReason: "max_iterations",
 		InputTokens:  totalInputTokens,
 		OutputTokens: totalOutputTokens,
+		ToolsUsed:    toolsUsed,
 	}, nil
 }
 
