@@ -57,8 +57,9 @@ func NewStdioTransport(cfg StdioConfig) *StdioTransport {
 }
 
 // start launches the subprocess if it is not already running.
-// Caller must hold t.mu.
-func (t *StdioTransport) start() error {
+// The context is used for exec.CommandContext so that context cancellation
+// kills the subprocess. Caller must hold t.mu.
+func (t *StdioTransport) start(ctx context.Context) error {
 	if t.cmd != nil && t.cmd.ProcessState == nil {
 		// Process is still running.
 		return nil
@@ -69,7 +70,7 @@ func (t *StdioTransport) start() error {
 		"args", t.config.Args,
 	)
 
-	cmd := exec.Command(t.config.Command, t.config.Args...)
+	cmd := exec.CommandContext(ctx, t.config.Command, t.config.Args...)
 	cmd.Env = append(os.Environ(), t.config.Env...)
 
 	stdin, err := cmd.StdinPipe()
@@ -132,7 +133,7 @@ func (t *StdioTransport) Send(ctx context.Context, req *Request) (*Response, err
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	if err := t.start(); err != nil {
+	if err := t.start(ctx); err != nil {
 		return nil, err
 	}
 
@@ -195,7 +196,7 @@ func (t *StdioTransport) Notify(ctx context.Context, notif *Notification) error 
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	if err := t.start(); err != nil {
+	if err := t.start(ctx); err != nil {
 		return err
 	}
 

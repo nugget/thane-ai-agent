@@ -35,12 +35,17 @@ type Profile struct {
 
 	// MaxDuration is the maximum wall clock time for the delegation loop.
 	MaxDuration time.Duration
+
+	// ToolTimeout is the maximum time a single tool call may run before
+	// being cancelled. Zero means defaultToolTimeout.
+	ToolTimeout time.Duration
 }
 
 const (
 	defaultMaxIter     = 15
 	defaultMaxTokens   = 25000
 	defaultMaxDuration = 90 * time.Second
+	defaultToolTimeout = 30 * time.Second
 )
 
 // builtinProfiles returns the MVP delegation profiles.
@@ -57,6 +62,7 @@ func builtinProfiles() map[string]*Profile {
 			MaxIter:     defaultMaxIter,
 			MaxTokens:   defaultMaxTokens,
 			MaxDuration: defaultMaxDuration,
+			ToolTimeout: defaultToolTimeout,
 		},
 		"ha": {
 			Name:        "ha",
@@ -76,6 +82,7 @@ func builtinProfiles() map[string]*Profile {
 			MaxIter:     defaultMaxIter,
 			MaxTokens:   defaultMaxTokens,
 			MaxDuration: defaultMaxDuration,
+			ToolTimeout: defaultToolTimeout,
 		},
 	}
 }
