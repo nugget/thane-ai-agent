@@ -532,6 +532,154 @@ func TestFormatMessage_FallsBackToEnvelopeTimestamp(t *testing.T) {
 	}
 }
 
+// mockRotator records RotateIdleSession calls for testing.
+type mockRotator struct {
+	mu    sync.Mutex
+	calls []string // conversation IDs
+	ret   bool     // return value
+}
+
+func (m *mockRotator) RotateIdleSession(conversationID string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.calls = append(m.calls, conversationID)
+	return m.ret
+}
+
+func (m *mockRotator) getCalls() []string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := make([]string, len(m.calls))
+	copy(out, m.calls)
+	return out
+}
+
+func TestBridge_IdleSessionRotation(t *testing.T) {
+	rotator := &mockRotator{ret: true}
+	bridge, stdout, stdin, _ := bridgeHelper(t, func(cfg *BridgeConfig) {
+		cfg.Rotator = rotator
+		cfg.IdleTimeout = 30 * time.Minute
+	})
+	go drainRPCRequests(t, stdin, stdout)
+
+	// Seed a message from 45 minutes ago.
+	bridge.mu.Lock()
+	bridge.lastInboundTS["+15551234567"] = lastMessage{
+		signalTS:   1700000000000,
+		receivedAt: time.Now().Add(-45 * time.Minute),
+	}
+	bridge.mu.Unlock()
+
+	env := &Envelope{
+		Source:      "+15551234567",
+		Timestamp:   1700000045000,
+		DataMessage: &DataMessage{Message: "Hello after break"},
+	}
+	bridge.handleMessage(context.Background(), env)
+
+	calls := rotator.getCalls()
+	if len(calls) != 1 {
+		t.Fatalf("expected 1 rotation call, got %d", len(calls))
+	}
+	if calls[0] != "signal-15551234567" {
+		t.Errorf("rotation convID = %q, want %q", calls[0], "signal-15551234567")
+	}
+}
+
+func TestBridge_NoRotationWithinTimeout(t *testing.T) {
+	rotator := &mockRotator{ret: true}
+	bridge, stdout, stdin, _ := bridgeHelper(t, func(cfg *BridgeConfig) {
+		cfg.Rotator = rotator
+		cfg.IdleTimeout = 30 * time.Minute
+	})
+	go drainRPCRequests(t, stdin, stdout)
+
+	// Seed a message from 5 minutes ago — within timeout.
+	bridge.mu.Lock()
+	bridge.lastInboundTS["+15551234567"] = lastMessage{
+		signalTS:   1700000000000,
+		receivedAt: time.Now().Add(-5 * time.Minute),
+	}
+	bridge.mu.Unlock()
+
+	env := &Envelope{
+		Source:      "+15551234567",
+		Timestamp:   1700000005000,
+		DataMessage: &DataMessage{Message: "Quick follow-up"},
+	}
+	bridge.handleMessage(context.Background(), env)
+
+	if len(rotator.getCalls()) != 0 {
+		t.Error("should not rotate when within timeout")
+	}
+}
+
+func TestBridge_NoRotationFirstMessage(t *testing.T) {
+	rotator := &mockRotator{ret: true}
+	bridge, stdout, stdin, _ := bridgeHelper(t, func(cfg *BridgeConfig) {
+		cfg.Rotator = rotator
+		cfg.IdleTimeout = 30 * time.Minute
+	})
+	go drainRPCRequests(t, stdin, stdout)
+
+	// No seeded lastInboundTS — first message from this sender.
+	env := &Envelope{
+		Source:      "+15559999999",
+		Timestamp:   1700000000000,
+		DataMessage: &DataMessage{Message: "First message ever"},
+	}
+	bridge.handleMessage(context.Background(), env)
+
+	if len(rotator.getCalls()) != 0 {
+		t.Error("should not rotate on first message from sender")
+	}
+}
+
+func TestBridge_NoRotationWhenDisabled(t *testing.T) {
+	// Case 1: nil rotator with non-zero timeout.
+	bridge1, stdout1, stdin1, _ := bridgeHelper(t, func(cfg *BridgeConfig) {
+		cfg.IdleTimeout = 30 * time.Minute
+		// Rotator intentionally nil.
+	})
+	go drainRPCRequests(t, stdin1, stdout1)
+
+	bridge1.mu.Lock()
+	bridge1.lastInboundTS["+15551234567"] = lastMessage{
+		signalTS:   1700000000000,
+		receivedAt: time.Now().Add(-45 * time.Minute),
+	}
+	bridge1.mu.Unlock()
+
+	env := &Envelope{
+		Source:      "+15551234567",
+		Timestamp:   1700000045000,
+		DataMessage: &DataMessage{Message: "Hello"},
+	}
+	bridge1.handleMessage(context.Background(), env)
+	// No panic — pass.
+
+	// Case 2: rotator set but zero timeout.
+	rotator := &mockRotator{ret: true}
+	bridge2, stdout2, stdin2, _ := bridgeHelper(t, func(cfg *BridgeConfig) {
+		cfg.Rotator = rotator
+		cfg.IdleTimeout = 0
+	})
+	go drainRPCRequests(t, stdin2, stdout2)
+
+	bridge2.mu.Lock()
+	bridge2.lastInboundTS["+15551234567"] = lastMessage{
+		signalTS:   1700000000000,
+		receivedAt: time.Now().Add(-45 * time.Minute),
+	}
+	bridge2.mu.Unlock()
+
+	bridge2.handleMessage(context.Background(), env)
+
+	if len(rotator.getCalls()) != 0 {
+		t.Error("should not rotate when idle timeout is 0")
+	}
+}
+
 func TestBridge_LastInboundTimestamp(t *testing.T) {
 	bridge, _, _, _ := bridgeHelper(t)
 
