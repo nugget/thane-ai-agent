@@ -1099,35 +1099,13 @@ func (l *Loop) GetContextWindow() int {
 
 // ResetConversation archives and then clears the conversation history.
 func (l *Loop) ResetConversation(conversationID string) error {
-	// Archive before destroying — get ALL messages including compacted ones
-	if l.archiver != nil {
-		var messages []memory.Message
-		if full, ok := l.memory.(interface {
-			GetAllMessages(string) []memory.Message
-		}); ok {
-			messages = full.GetAllMessages(conversationID)
-		} else {
-			messages = l.memory.GetMessages(conversationID)
-		}
-		if len(messages) > 0 {
-			if err := l.archiver.ArchiveConversation(conversationID, messages, "reset"); err != nil {
-				l.logger.Error("failed to archive before reset", "error", err)
-				// Don't block the reset — log and continue
-			}
-		}
-		// End the current session
-		if sid := l.archiver.ActiveSessionID(conversationID); sid != "" {
-			if err := l.archiver.EndSession(sid, "reset"); err != nil {
-				l.logger.Error("failed to end session", "error", err)
-			}
-		}
-	}
+	l.archiveAndEndSession(conversationID, "reset")
 
 	if err := l.memory.Clear(conversationID); err != nil {
 		return err
 	}
 
-	// Start a fresh session
+	// Start a fresh session.
 	if l.archiver != nil {
 		if _, err := l.archiver.StartSession(conversationID); err != nil {
 			l.logger.Error("failed to start new session after reset", "error", err)
@@ -1137,31 +1115,196 @@ func (l *Loop) ResetConversation(conversationID string) error {
 	return nil
 }
 
-// ShutdownArchive archives the current conversation state before shutdown.
-func (l *Loop) ShutdownArchive(conversationID string) {
+// CloseSession gracefully closes the current session, archives messages,
+// injects a carry-forward handoff into the new session, and starts a
+// fresh session. Unlike ResetConversation, the carry-forward summary
+// provides continuity across the session boundary.
+func (l *Loop) CloseSession(conversationID, reason, carryForward string) error {
+	if reason == "" {
+		reason = "close"
+	}
+
+	// Archive and end current session (same pattern as ResetConversation).
+	l.archiveAndEndSession(conversationID, reason)
+
+	if err := l.memory.Clear(conversationID); err != nil {
+		return fmt.Errorf("clear memory: %w", err)
+	}
+
+	// Start a fresh session.
+	if l.archiver != nil {
+		if _, err := l.archiver.StartSession(conversationID); err != nil {
+			l.logger.Error("failed to start new session after close", "error", err)
+		}
+	}
+
+	// Inject carry-forward into the new session as a system message.
+	if carryForward != "" {
+		if cs, ok := l.memory.(interface {
+			AddCompactionSummary(string, string) error
+		}); ok {
+			if err := cs.AddCompactionSummary(conversationID, "[Session Handoff]\n"+carryForward); err != nil {
+				l.logger.Error("failed to inject carry-forward", "error", err)
+			}
+		}
+	}
+
+	l.logger.Info("session closed",
+		"conversation", conversationID,
+		"reason", reason,
+		"carry_forward_len", len(carryForward),
+	)
+	return nil
+}
+
+// CheckpointSession archives a snapshot of the current conversation state
+// without ending the session. The active session continues uninterrupted.
+func (l *Loop) CheckpointSession(conversationID, label string) error {
+	if l.archiver == nil {
+		return fmt.Errorf("no archiver configured")
+	}
+
+	messages := l.getAllMessages(conversationID)
+	if len(messages) == 0 {
+		return fmt.Errorf("no messages to checkpoint")
+	}
+
+	reason := "checkpoint"
+	if label != "" {
+		reason = "checkpoint:" + label
+	}
+
+	if err := l.archiver.ArchiveConversation(conversationID, messages, reason); err != nil {
+		return fmt.Errorf("archive checkpoint: %w", err)
+	}
+
+	l.logger.Info("session checkpoint created",
+		"conversation", conversationID,
+		"label", label,
+		"messages", len(messages),
+	)
+	return nil
+}
+
+// SplitSession retroactively splits the current session at a past message
+// boundary. Messages before the split point are archived as a completed
+// session; messages at and after the split point are retained as the
+// current session. Exactly one of atIndex (negative offset from end) or
+// atMessage (substring match) must be non-zero.
+func (l *Loop) SplitSession(conversationID string, atIndex int, atMessage string) error {
+	if l.archiver == nil {
+		return fmt.Errorf("no archiver configured")
+	}
+
+	messages := l.getAllMessages(conversationID)
+	if len(messages) == 0 {
+		return fmt.Errorf("no messages to split")
+	}
+
+	splitIdx, err := findSplitPoint(messages, atIndex, atMessage)
+	if err != nil {
+		return err
+	}
+
+	preSplit := messages[:splitIdx]
+	postSplit := messages[splitIdx:]
+
+	// Archive pre-split messages.
+	if err := l.archiver.ArchiveConversation(conversationID, preSplit, "split"); err != nil {
+		return fmt.Errorf("archive pre-split messages: %w", err)
+	}
+
+	// End the current session at the split-point timestamp.
+	if sid := l.archiver.ActiveSessionID(conversationID); sid != "" {
+		if err := l.archiver.EndSession(sid, "split"); err != nil {
+			l.logger.Error("failed to end session at split point", "error", err)
+		}
+	}
+
+	// Start a new session for the post-split messages.
+	if _, err := l.archiver.StartSession(conversationID); err != nil {
+		l.logger.Error("failed to start new session after split", "error", err)
+	}
+
+	// Rebuild working memory with only the post-split messages.
+	if err := l.memory.Clear(conversationID); err != nil {
+		return fmt.Errorf("clear memory for split: %w", err)
+	}
+	for _, m := range postSplit {
+		if err := l.memory.AddMessage(conversationID, m.Role, m.Content); err != nil {
+			l.logger.Error("failed to re-add post-split message", "error", err, "role", m.Role)
+		}
+	}
+
+	l.logger.Info("session split",
+		"conversation", conversationID,
+		"pre_split_msgs", len(preSplit),
+		"post_split_msgs", len(postSplit),
+	)
+	return nil
+}
+
+// getAllMessages retrieves all messages for a conversation, preferring the
+// full-fidelity GetAllMessages when available.
+func (l *Loop) getAllMessages(conversationID string) []memory.Message {
+	if full, ok := l.memory.(interface {
+		GetAllMessages(string) []memory.Message
+	}); ok {
+		return full.GetAllMessages(conversationID)
+	}
+	return l.memory.GetMessages(conversationID)
+}
+
+// archiveAndEndSession archives all messages and ends the active session.
+// Errors are logged but not propagated — callers should not be blocked by
+// archive failures.
+func (l *Loop) archiveAndEndSession(conversationID, reason string) {
 	if l.archiver == nil {
 		return
 	}
 
-	var messages []memory.Message
-	if full, ok := l.memory.(interface {
-		GetAllMessages(string) []memory.Message
-	}); ok {
-		messages = full.GetAllMessages(conversationID)
-	} else {
-		messages = l.memory.GetMessages(conversationID)
-	}
+	messages := l.getAllMessages(conversationID)
 	if len(messages) > 0 {
-		if err := l.archiver.ArchiveConversation(conversationID, messages, "shutdown"); err != nil {
-			l.logger.Error("failed to archive on shutdown", "error", err)
+		if err := l.archiver.ArchiveConversation(conversationID, messages, reason); err != nil {
+			l.logger.Error("failed to archive conversation", "error", err)
 		}
 	}
 
 	if sid := l.archiver.ActiveSessionID(conversationID); sid != "" {
-		if err := l.archiver.EndSession(sid, "shutdown"); err != nil {
-			l.logger.Error("failed to end session on shutdown", "error", err)
+		if err := l.archiver.EndSession(sid, reason); err != nil {
+			l.logger.Error("failed to end session", "error", err)
 		}
 	}
+}
+
+// findSplitPoint determines the message index at which to split. Exactly
+// one of atIndex (negative offset from the end) or atMessage (substring
+// match) must be provided. Returns the index of the first post-split message.
+func findSplitPoint(messages []memory.Message, atIndex int, atMessage string) (int, error) {
+	if atIndex != 0 {
+		// Negative offset from end: -1 = last message, -5 = five from end.
+		idx := len(messages) + atIndex
+		if idx <= 0 || idx >= len(messages) {
+			return 0, fmt.Errorf("at_index %d out of range for %d messages", atIndex, len(messages))
+		}
+		return idx, nil
+	}
+
+	// Substring match — find the first message containing the string.
+	for i, m := range messages {
+		if i == 0 {
+			continue // Splitting before the first message is a no-op.
+		}
+		if strings.Contains(m.Content, atMessage) {
+			return i, nil
+		}
+	}
+	return 0, fmt.Errorf("no message found containing %q", atMessage)
+}
+
+// ShutdownArchive archives the current conversation state before shutdown.
+func (l *Loop) ShutdownArchive(conversationID string) {
+	l.archiveAndEndSession(conversationID, "shutdown")
 }
 
 // TriggerCompaction manually triggers conversation compaction.

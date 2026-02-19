@@ -813,6 +813,7 @@ func (c *Config) applyDefaults() {
 			"save_contact",
 			"lookup_contact",
 			"session_working_memory",
+			"session_close",
 			"archive_search",
 		}
 	}
