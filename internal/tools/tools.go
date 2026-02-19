@@ -246,6 +246,19 @@ func (r *Registry) registerAnticipationTools() {
 					"type":        "string",
 					"description": "Duration until expiration (e.g., '2h', '24h', '7d'). Omit for no expiration.",
 				},
+				"cooldown": map[string]any{
+					"type":        "string",
+					"description": "Minimum time between wake firings for this anticipation (e.g., '5m', '1h'). Omit to use the global default.",
+				},
+				"recurring": map[string]any{
+					"type":        "boolean",
+					"description": "If true, the anticipation persists after firing (keeps firing on matches, subject to cooldown). If false (default), auto-resolved after the first wake.",
+				},
+				"context_entities": map[string]any{
+					"type":        "array",
+					"items":       map[string]any{"type": "string"},
+					"description": "Entity IDs to fetch and inject as context when this anticipation fires (max 10). The triggering entity is auto-included.",
+				},
 			},
 			"required": []string{"description", "context"},
 		},
