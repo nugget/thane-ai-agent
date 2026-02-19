@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/nugget/thane-ai-agent/internal/agent"
@@ -38,7 +41,7 @@ func TestRunScheduledTask_WakePayload(t *testing.T) {
 	}
 	exec := &scheduler.Execution{}
 
-	err := runScheduledTask(context.Background(), task, exec, runner, slog.Default())
+	err := runScheduledTask(context.Background(), task, exec, runner, slog.Default(), "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -105,7 +108,7 @@ func TestRunScheduledTask_DefaultMessage(t *testing.T) {
 	}
 	exec := &scheduler.Execution{}
 
-	err := runScheduledTask(context.Background(), task, exec, runner, slog.Default())
+	err := runScheduledTask(context.Background(), task, exec, runner, slog.Default(), "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -130,7 +133,7 @@ func TestRunScheduledTask_NilData(t *testing.T) {
 	}
 	exec := &scheduler.Execution{}
 
-	err := runScheduledTask(context.Background(), task, exec, runner, slog.Default())
+	err := runScheduledTask(context.Background(), task, exec, runner, slog.Default(), "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -152,7 +155,7 @@ func TestRunScheduledTask_UnsupportedPayload(t *testing.T) {
 	}
 	exec := &scheduler.Execution{}
 
-	err := runScheduledTask(context.Background(), task, exec, runner, slog.Default())
+	err := runScheduledTask(context.Background(), task, exec, runner, slog.Default(), "")
 	if err != nil {
 		t.Fatalf("unsupported payload should return nil, got %v", err)
 	}
@@ -178,11 +181,111 @@ func TestRunScheduledTask_RunnerError(t *testing.T) {
 	}
 	exec := &scheduler.Execution{}
 
-	err := runScheduledTask(context.Background(), task, exec, runner, slog.Default())
+	err := runScheduledTask(context.Background(), task, exec, runner, slog.Default(), "")
 	if err == nil {
 		t.Fatal("expected error when runner fails")
 	}
 	if !errors.Is(err, runner.err) {
 		t.Errorf("error = %v, want wrapped %v", err, runner.err)
+	}
+}
+
+func TestRunScheduledTask_PeriodicReflection(t *testing.T) {
+	// Create a workspace with an ego.md file.
+	workspace := t.TempDir()
+	egoContent := "# My Reflections\n\nI notice the lights change at sunset."
+	if err := os.WriteFile(filepath.Join(workspace, "ego.md"), []byte(egoContent), 0644); err != nil {
+		t.Fatalf("write ego.md: %v", err)
+	}
+
+	runner := &mockRunner{
+		resp: &agent.Response{Content: "Updated ego.md"},
+	}
+
+	task := &scheduler.Task{
+		ID:   "task-reflect",
+		Name: periodicReflectionTaskName,
+		Payload: scheduler.Payload{
+			Kind: scheduler.PayloadWake,
+			Data: map[string]any{"message": "periodic_reflection"},
+		},
+	}
+	exec := &scheduler.Execution{}
+
+	err := runScheduledTask(context.Background(), task, exec, runner, slog.Default(), workspace)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// The message should contain the reflection prompt with ego.md content.
+	msg := runner.req.Messages[0].Content
+	if !strings.Contains(msg, "periodic reflection") {
+		t.Error("message should contain reflection prompt text")
+	}
+	if !strings.Contains(msg, egoContent) {
+		t.Error("message should contain current ego.md content")
+	}
+	if strings.Contains(msg, "does not exist yet") {
+		t.Error("message should not contain first-run placeholder when ego.md exists")
+	}
+}
+
+func TestRunScheduledTask_PeriodicReflection_NoEgoFile(t *testing.T) {
+	// Workspace exists but ego.md does not.
+	workspace := t.TempDir()
+
+	runner := &mockRunner{
+		resp: &agent.Response{Content: "Created ego.md"},
+	}
+
+	task := &scheduler.Task{
+		ID:   "task-reflect-new",
+		Name: periodicReflectionTaskName,
+		Payload: scheduler.Payload{
+			Kind: scheduler.PayloadWake,
+			Data: map[string]any{"message": "periodic_reflection"},
+		},
+	}
+	exec := &scheduler.Execution{}
+
+	err := runScheduledTask(context.Background(), task, exec, runner, slog.Default(), workspace)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	msg := runner.req.Messages[0].Content
+	if !strings.Contains(msg, "does not exist yet") {
+		t.Error("message should contain first-run placeholder when ego.md is missing")
+	}
+	if !strings.Contains(msg, "periodic reflection") {
+		t.Error("message should still contain reflection prompt text")
+	}
+}
+
+func TestRunScheduledTask_PeriodicReflection_NoWorkspace(t *testing.T) {
+	// No workspace path — falls through to raw payload message.
+	runner := &mockRunner{
+		resp: &agent.Response{Content: "ok"},
+	}
+
+	task := &scheduler.Task{
+		ID:   "task-reflect-nows",
+		Name: periodicReflectionTaskName,
+		Payload: scheduler.Payload{
+			Kind: scheduler.PayloadWake,
+			Data: map[string]any{"message": "periodic_reflection"},
+		},
+	}
+	exec := &scheduler.Execution{}
+
+	err := runScheduledTask(context.Background(), task, exec, runner, slog.Default(), "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Without a workspace, the raw message should be used.
+	msg := runner.req.Messages[0].Content
+	if msg != "periodic_reflection" {
+		t.Errorf("message = %q, want raw payload %q", msg, "periodic_reflection")
 	}
 }

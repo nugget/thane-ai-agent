@@ -603,7 +603,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	var loop *agent.Loop
 
 	executeTask := func(ctx context.Context, task *scheduler.Task, exec *scheduler.Execution) error {
-		return runScheduledTask(ctx, task, exec, loop, logger)
+		return runScheduledTask(ctx, task, exec, loop, logger, cfg.Workspace.Path)
 	}
 
 	sched := scheduler.New(logger, schedStore, executeTask)
@@ -611,6 +611,47 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		return fmt.Errorf("start scheduler: %w", err)
 	}
 	defer sched.Stop()
+
+	// --- Periodic reflection ---
+	// Register the self-reflection task if it doesn't already exist.
+	// Requires a workspace so the agent can write ego.md via file tools.
+	if cfg.Workspace.Path != "" {
+		existing, err := schedStore.GetTaskByName(periodicReflectionTaskName)
+		if err != nil {
+			logger.Error("failed to check for periodic_reflection task", "error", err)
+		} else if existing == nil {
+			interval := 15 * time.Minute
+			reflectionTask := &scheduler.Task{
+				Name: periodicReflectionTaskName,
+				Schedule: scheduler.Schedule{
+					Kind:  scheduler.ScheduleEvery,
+					Every: &scheduler.Duration{Duration: interval},
+				},
+				Payload: scheduler.Payload{
+					Kind: scheduler.PayloadWake,
+					Data: map[string]any{
+						"message": "periodic_reflection",
+					},
+				},
+				Enabled:   true,
+				CreatedBy: "system",
+			}
+			if err := sched.CreateTask(reflectionTask); err != nil {
+				logger.Error("failed to create periodic_reflection task", "error", err)
+			} else {
+				logger.Info("periodic_reflection task registered", "interval", interval)
+			}
+		} else if !existing.Enabled {
+			existing.Enabled = true
+			if err := sched.UpdateTask(existing); err != nil {
+				logger.Error("failed to re-enable periodic_reflection task", "error", err)
+			} else {
+				logger.Info("periodic_reflection task re-enabled")
+			}
+		} else {
+			logger.Debug("periodic_reflection task already registered", "id", existing.ID)
+		}
+	}
 
 	// --- Agent loop ---
 	// The core conversation engine. Receives messages, manages context,

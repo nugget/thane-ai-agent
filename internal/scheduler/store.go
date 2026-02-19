@@ -3,6 +3,7 @@ package scheduler
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -121,6 +122,21 @@ func (s *Store) GetTask(id string) (*Task, error) {
 	`, id)
 
 	return s.scanTask(row)
+}
+
+// GetTaskByName retrieves a task by its human-readable name.
+// Returns nil, nil when no task with the given name exists.
+func (s *Store) GetTaskByName(name string) (*Task, error) {
+	row := s.db.QueryRow(`
+		SELECT id, name, schedule_json, payload_json, enabled, created_at, created_by, updated_at
+		FROM tasks WHERE name = ? LIMIT 1
+	`, name)
+
+	t, err := s.scanTask(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	return t, err
 }
 
 // ListTasks returns all tasks, optionally filtered by enabled status.
