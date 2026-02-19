@@ -727,3 +727,88 @@ func TestBridge_LastInboundTimestamp(t *testing.T) {
 		t.Errorf("timestamp = %d, want 1700000001000", ts)
 	}
 }
+
+// mockResolver resolves phone numbers to contact names for testing.
+type mockResolver struct {
+	contacts map[string]string // phone → name
+}
+
+func (m *mockResolver) ResolvePhone(phone string) (string, bool) {
+	name, ok := m.contacts[phone]
+	return name, ok
+}
+
+func TestBridge_ContactResolution(t *testing.T) {
+	resolver := &mockResolver{contacts: map[string]string{
+		"+15551234567": "Alice Smith",
+	}}
+	bridge, stdout, stdin, runner := bridgeHelper(t, func(cfg *BridgeConfig) {
+		cfg.Resolver = resolver
+	})
+	go drainRPCRequests(t, stdin, stdout)
+
+	env := &Envelope{
+		Source:      "+15551234567",
+		Timestamp:   1700000000000,
+		DataMessage: &DataMessage{Message: "Hello"},
+	}
+
+	bridge.handleMessage(context.Background(), env)
+
+	req := runner.getLastReq()
+	if req == nil {
+		t.Fatal("runner.Run was not called")
+	}
+	if req.Hints["sender_name"] != "Alice Smith" {
+		t.Errorf("sender_name hint = %q, want %q", req.Hints["sender_name"], "Alice Smith")
+	}
+}
+
+func TestBridge_ContactResolution_Unknown(t *testing.T) {
+	resolver := &mockResolver{contacts: map[string]string{
+		"+15559999999": "Known Person",
+	}}
+	bridge, stdout, stdin, runner := bridgeHelper(t, func(cfg *BridgeConfig) {
+		cfg.Resolver = resolver
+	})
+	go drainRPCRequests(t, stdin, stdout)
+
+	// This sender is not in the resolver.
+	env := &Envelope{
+		Source:      "+15551234567",
+		Timestamp:   1700000000000,
+		DataMessage: &DataMessage{Message: "Hello"},
+	}
+
+	bridge.handleMessage(context.Background(), env)
+
+	req := runner.getLastReq()
+	if req == nil {
+		t.Fatal("runner.Run was not called")
+	}
+	if _, exists := req.Hints["sender_name"]; exists {
+		t.Errorf("sender_name hint should not be set for unknown sender, got %q", req.Hints["sender_name"])
+	}
+}
+
+func TestBridge_ContactResolution_NilResolver(t *testing.T) {
+	// Resolver is nil by default — should not panic.
+	bridge, stdout, stdin, runner := bridgeHelper(t)
+	go drainRPCRequests(t, stdin, stdout)
+
+	env := &Envelope{
+		Source:      "+15551234567",
+		Timestamp:   1700000000000,
+		DataMessage: &DataMessage{Message: "Hello"},
+	}
+
+	bridge.handleMessage(context.Background(), env)
+
+	req := runner.getLastReq()
+	if req == nil {
+		t.Fatal("runner.Run was not called")
+	}
+	if _, exists := req.Hints["sender_name"]; exists {
+		t.Errorf("sender_name hint should not be set with nil resolver, got %q", req.Hints["sender_name"])
+	}
+}

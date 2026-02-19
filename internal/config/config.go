@@ -810,6 +810,8 @@ func (c *Config) applyDefaults() {
 			"thane_delegate",
 			"recall_fact",
 			"remember_fact",
+			"save_contact",
+			"lookup_contact",
 			"session_working_memory",
 			"archive_search",
 		}
