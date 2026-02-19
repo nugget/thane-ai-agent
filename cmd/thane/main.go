@@ -826,6 +826,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	if cfg.Workspace.Path != "" {
 		fileTools := tools.NewFileTools(cfg.Workspace.Path, cfg.Workspace.ReadOnlyDirs)
 		loop.Tools().SetFileTools(fileTools)
+		loop.SetEgoFile(filepath.Join(cfg.Workspace.Path, "ego.md"))
 		logger.Info("file tools enabled", "workspace", cfg.Workspace.Path)
 	} else {
 		logger.Info("file tools disabled (no workspace path configured)")
