@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -328,8 +329,13 @@ func buildEmbeddingText(c *Contact, facts map[string][]string) string {
 	if c.Details != "" {
 		sb.WriteString("\n" + c.Details)
 	}
-	for k, vals := range facts {
-		sb.WriteString(fmt.Sprintf("\n%s: %s", k, strings.Join(vals, ", ")))
+	keys := make([]string, 0, len(facts))
+	for k := range facts {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		sb.WriteString(fmt.Sprintf("\n%s: %s", k, strings.Join(facts[k], ", ")))
 	}
 	return sb.String()
 }
@@ -352,8 +358,13 @@ func formatContact(c *Contact) string {
 
 	if len(c.Facts) > 0 {
 		sb.WriteString("\n")
-		for k, vals := range c.Facts {
-			sb.WriteString(fmt.Sprintf("  %s: %s\n", k, strings.Join(vals, ", ")))
+		fkeys := make([]string, 0, len(c.Facts))
+		for k := range c.Facts {
+			fkeys = append(fkeys, k)
+		}
+		sort.Strings(fkeys)
+		for _, k := range fkeys {
+			sb.WriteString(fmt.Sprintf("  %s: %s\n", k, strings.Join(c.Facts[k], ", ")))
 		}
 	}
 

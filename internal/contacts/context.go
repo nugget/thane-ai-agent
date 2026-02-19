@@ -3,6 +3,7 @@ package contacts
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -84,9 +85,14 @@ func (p *ContextProvider) GetContext(ctx context.Context, userMessage string) (s
 		sb.WriteString("\n")
 
 		if len(facts) > 0 {
-			parts := make([]string, 0, len(facts))
-			for k, vals := range facts {
-				parts = append(parts, fmt.Sprintf("%s: %s", k, strings.Join(vals, ", ")))
+			keys := make([]string, 0, len(facts))
+			for k := range facts {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+			parts := make([]string, 0, len(keys))
+			for _, k := range keys {
+				parts = append(parts, fmt.Sprintf("%s: %s", k, strings.Join(facts[k], ", ")))
 			}
 			sb.WriteString("  " + strings.Join(parts, " | ") + "\n")
 		}

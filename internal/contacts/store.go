@@ -85,7 +85,9 @@ func (s *Store) migrate() error {
 
 	// Enforce active name uniqueness (case-insensitive). Allows soft-deleted
 	// duplicates but prevents two active contacts with the same name.
-	_, _ = s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_contacts_name_active ON contacts(LOWER(name)) WHERE deleted_at IS NULL`)
+	if _, err := s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_contacts_name_active ON contacts(LOWER(name)) WHERE deleted_at IS NULL`); err != nil {
+		s.logger.Warn("unique active name index not created; name uniqueness may not be enforced", "error", err)
+	}
 
 	// contact_facts supports multiple values per key (e.g., two phone
 	// numbers). If the table was created with the old UNIQUE(contact_id, key)
@@ -311,7 +313,7 @@ func (s *Store) searchLIKE(query string) ([]*Contact, error) {
 // ListByKind returns all active contacts of the given kind.
 func (s *Store) ListByKind(kind string) ([]*Contact, error) {
 	rows, err := s.db.Query(
-		`SELECT `+contactColumns+` FROM contacts WHERE `+activeFilter+` AND kind = ? ORDER BY name`,
+		`SELECT `+contactColumns+` FROM contacts WHERE `+activeFilter+` AND kind = ? ORDER BY name LIMIT 100`,
 		kind)
 	if err != nil {
 		return nil, fmt.Errorf("query: %w", err)
@@ -324,7 +326,7 @@ func (s *Store) ListByKind(kind string) ([]*Contact, error) {
 // ListAll returns all active contacts.
 func (s *Store) ListAll() ([]*Contact, error) {
 	rows, err := s.db.Query(
-		`SELECT ` + contactColumns + ` FROM contacts WHERE ` + activeFilter + ` ORDER BY name`)
+		`SELECT ` + contactColumns + ` FROM contacts WHERE ` + activeFilter + ` ORDER BY name LIMIT 100`)
 	if err != nil {
 		return nil, fmt.Errorf("query: %w", err)
 	}
@@ -462,6 +464,7 @@ func (s *Store) FindByFact(key, value string) ([]*Contact, error) {
 		JOIN contact_facts ON contacts.id = contact_facts.contact_id
 		WHERE contacts.`+activeFilter+` AND contact_facts.key = ? AND contact_facts.value LIKE ?
 		ORDER BY contacts.name
+		LIMIT 50
 	`, key, "%"+value+"%")
 	if err != nil {
 		return nil, fmt.Errorf("query: %w", err)
