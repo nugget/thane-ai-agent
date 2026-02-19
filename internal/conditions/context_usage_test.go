@@ -7,9 +7,6 @@ import (
 )
 
 func TestFormatContextUsage(t *testing.T) {
-	// Fixed reference time for deterministic session duration.
-	sessionStart := time.Now().Add(-47 * time.Minute)
-
 	tests := []struct {
 		name     string
 		info     ContextUsageInfo
@@ -24,7 +21,7 @@ func TestFormatContextUsage(t *testing.T) {
 				TokenCount:      31200,
 				ContextWindow:   200000,
 				MessageCount:    34,
-				SessionStart:    sessionStart,
+				SessionAge:      47 * time.Minute,
 				CompactionCount: 0,
 			},
 			contains: []string{
@@ -60,7 +57,7 @@ func TestFormatContextUsage(t *testing.T) {
 			excludes: []string{"tokens"},
 		},
 		{
-			name: "zero session start omits session",
+			name: "zero session age omits session",
 			info: ContextUsageInfo{
 				Model:         "test-model",
 				ContextWindow: 100000,
@@ -126,11 +123,32 @@ func TestFormatContextUsage(t *testing.T) {
 			},
 			contains: []string{"95.0%"},
 		},
+		{
+			name:     "empty info returns empty string",
+			info:     ContextUsageInfo{},
+			contains: []string{},
+			excludes: []string{"**Context:**", "compaction"},
+		},
+		{
+			name: "long session duration",
+			info: ContextUsageInfo{
+				Model:      "test-model",
+				SessionAge: 2*24*time.Hour + 5*time.Hour,
+			},
+			contains: []string{"session 2d 5h"},
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := FormatContextUsage(tt.info)
+
+			if tt.name == "empty info returns empty string" {
+				if got != "" {
+					t.Errorf("expected empty string, got: %q", got)
+				}
+				return
+			}
 
 			for _, want := range tt.contains {
 				if !strings.Contains(got, want) {

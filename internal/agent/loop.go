@@ -262,7 +262,7 @@ type promptSection struct {
 	end   int
 }
 
-func (l *Loop) buildSystemPrompt(ctx context.Context, userMessage string) string {
+func (l *Loop) buildSystemPrompt(ctx context.Context, userMessage string, history []memory.Message) string {
 	var sb strings.Builder
 
 	// Track section boundaries for debug dump.
@@ -295,23 +295,29 @@ func (l *Loop) buildSystemPrompt(ctx context.Context, userMessage string) string
 	sb.WriteString(conditions.CurrentConditions(l.timezone))
 
 	// Context usage — gives the agent awareness of resource consumption
-	// on every turn without requiring a tool call.
+	// on every turn without requiring a tool call. Derives message count
+	// and compaction count from the already-fetched history slice to avoid
+	// a redundant database query.
+	//
+	// Model/ContextWindow reflect the default model. The "(routed)" suffix
+	// signals that the router may select a different model for this turn.
 	convID := tools.ConversationIDFromContext(ctx)
 	usageInfo := conditions.ContextUsageInfo{
 		Model:         l.model,
 		Routed:        l.router != nil,
 		TokenCount:    l.memory.GetTokenCount(convID),
 		ContextWindow: l.contextWindow,
+		MessageCount:  len(history),
 	}
-	msgs := l.memory.GetMessages(convID)
-	usageInfo.MessageCount = len(msgs)
-	for _, m := range msgs {
+	for _, m := range history {
 		if m.Role == "system" && strings.HasPrefix(m.Content, "[Conversation Summary]") {
 			usageInfo.CompactionCount++
 		}
 	}
 	if l.archiver != nil {
-		usageInfo.SessionStart = l.archiver.ActiveSessionStartedAt(convID)
+		if started := l.archiver.ActiveSessionStartedAt(convID); !started.IsZero() {
+			usageInfo.SessionAge = time.Since(started)
+		}
 	}
 	if line := conditions.FormatContextUsage(usageInfo); line != "" {
 		sb.WriteString("\n")
@@ -584,7 +590,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	var llmMessages []llm.Message
 	llmMessages = append(llmMessages, llm.Message{
 		Role:    "system",
-		Content: l.buildSystemPrompt(promptCtx, userMessage),
+		Content: l.buildSystemPrompt(promptCtx, userMessage, history),
 	})
 
 	// Add history

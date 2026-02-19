@@ -7,9 +7,13 @@ import (
 )
 
 // ContextUsageInfo holds the data needed to render the context usage line
-// in the Current Conditions system prompt section.
+// in the Current Conditions system prompt section. All fields are
+// pre-computed by the caller so that formatting is deterministic
+// and free of I/O.
 type ContextUsageInfo struct {
 	// Model is the default model name (e.g., "claude-opus-4-20250514").
+	// The "(routed)" suffix is appended when Routed is true, signaling
+	// that the router may select a different model for this turn.
 	Model string
 	// Routed indicates whether a router is configured (actual model may differ).
 	Routed bool
@@ -19,15 +23,16 @@ type ContextUsageInfo struct {
 	ContextWindow int
 	// MessageCount is the number of messages in the active conversation.
 	MessageCount int
-	// SessionStart is when the current session began. Zero value means unknown.
-	SessionStart time.Time
+	// SessionAge is how long the current session has been active.
+	// Zero means unknown or no active session.
+	SessionAge time.Duration
 	// CompactionCount is the number of compaction summaries in the conversation.
 	CompactionCount int
 }
 
 // FormatContextUsage renders a single-line context usage string for the
 // system prompt. Each segment is conditionally included based on available
-// data. Returns an empty string only if no data is available at all.
+// data. Returns an empty string when no data fields are populated.
 func FormatContextUsage(info ContextUsageInfo) string {
 	var parts []string
 
@@ -55,18 +60,21 @@ func FormatContextUsage(info ContextUsageInfo) string {
 	}
 
 	// Session duration.
-	if !info.SessionStart.IsZero() {
-		parts = append(parts, "session "+formatUptime(time.Since(info.SessionStart)))
+	if info.SessionAge > 0 {
+		parts = append(parts, "session "+formatUptime(info.SessionAge))
 	}
 
-	// Compaction status.
-	switch info.CompactionCount {
-	case 0:
-		parts = append(parts, "no compaction")
-	case 1:
-		parts = append(parts, "1 compaction")
-	default:
-		parts = append(parts, fmt.Sprintf("%d compactions", info.CompactionCount))
+	// Compaction status — only shown when at least one other segment
+	// contributed data, so a completely empty info struct returns "".
+	if len(parts) > 0 {
+		switch info.CompactionCount {
+		case 0:
+			parts = append(parts, "no compaction")
+		case 1:
+			parts = append(parts, "1 compaction")
+		default:
+			parts = append(parts, fmt.Sprintf("%d compactions", info.CompactionCount))
+		}
 	}
 
 	if len(parts) == 0 {
