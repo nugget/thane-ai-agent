@@ -3,6 +3,7 @@ package memory
 import (
 	"log/slog"
 	"sync"
+	"time"
 )
 
 // ToolCallSource provides tool call records for archiving.
@@ -186,6 +187,20 @@ func (a *ArchiveAdapter) EnsureSession(conversationID string) string {
 		return ""
 	}
 	return sid
+}
+
+// ActiveSessionStartedAt returns when the active session for a conversation
+// began, or the zero time if there is no active session.
+func (a *ArchiveAdapter) ActiveSessionStartedAt(conversationID string) time.Time {
+	sid := a.ActiveSessionID(conversationID)
+	if sid == "" {
+		return time.Time{}
+	}
+	sess, err := a.store.GetSession(sid)
+	if err != nil || sess == nil {
+		return time.Time{}
+	}
+	return sess.StartedAt
 }
 
 // Store returns the underlying ArchiveStore for direct access (API endpoints, etc.)

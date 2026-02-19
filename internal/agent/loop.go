@@ -117,6 +117,9 @@ type SessionArchiver interface {
 	EnsureSession(conversationID string) string
 	// OnMessage is called after each message to track session stats.
 	OnMessage(conversationID string)
+	// ActiveSessionStartedAt returns when the active session began,
+	// or the zero time if there is no active session.
+	ActiveSessionStartedAt(conversationID string) time.Time
 }
 
 // Loop is the core agent execution loop.
@@ -290,6 +293,30 @@ func (l *Loop) buildSystemPrompt(ctx context.Context, userMessage string) string
 	mark("CURRENT CONDITIONS")
 	sb.WriteString("\n\n")
 	sb.WriteString(conditions.CurrentConditions(l.timezone))
+
+	// Context usage — gives the agent awareness of resource consumption
+	// on every turn without requiring a tool call.
+	convID := tools.ConversationIDFromContext(ctx)
+	usageInfo := conditions.ContextUsageInfo{
+		Model:         l.model,
+		Routed:        l.router != nil,
+		TokenCount:    l.memory.GetTokenCount(convID),
+		ContextWindow: l.contextWindow,
+	}
+	msgs := l.memory.GetMessages(convID)
+	usageInfo.MessageCount = len(msgs)
+	for _, m := range msgs {
+		if m.Role == "system" && strings.HasPrefix(m.Content, "[Conversation Summary]") {
+			usageInfo.CompactionCount++
+		}
+	}
+	if l.archiver != nil {
+		usageInfo.SessionStart = l.archiver.ActiveSessionStartedAt(convID)
+	}
+	if line := conditions.FormatContextUsage(usageInfo); line != "" {
+		sb.WriteString("\n")
+		sb.WriteString(line)
+	}
 	seal()
 
 	// 4. Talents (behavior — how should I act)
