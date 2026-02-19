@@ -109,7 +109,7 @@ func TestAgentConfig_DefaultIter0Tools(t *testing.T) {
 		t.Fatal("expected delegation_required to be true")
 	}
 
-	want := []string{"thane_delegate", "recall_fact", "remember_fact", "save_contact", "lookup_contact", "session_working_memory", "archive_search"}
+	want := []string{"thane_delegate", "recall_fact", "remember_fact", "save_contact", "lookup_contact", "session_working_memory", "session_close", "archive_search"}
 	if len(cfg.Agent.Iter0Tools) != len(want) {
 		t.Fatalf("iter0_tools length = %d, want %d; got %v", len(cfg.Agent.Iter0Tools), len(want), cfg.Agent.Iter0Tools)
 	}

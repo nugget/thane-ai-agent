@@ -857,6 +857,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// Gives the agent the ability to search and recall past conversations.
 	loop.Tools().SetArchiveStore(archiveStore)
 	loop.Tools().SetConversationResetter(loop)
+	loop.Tools().SetSessionManager(loop)
 	logger.Info("web fetch enabled")
 
 	// --- Embeddings ---
