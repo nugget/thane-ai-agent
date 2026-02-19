@@ -294,35 +294,6 @@ func (l *Loop) buildSystemPrompt(ctx context.Context, userMessage string, histor
 	sb.WriteString("\n\n")
 	sb.WriteString(conditions.CurrentConditions(l.timezone))
 
-	// Context usage — gives the agent awareness of resource consumption
-	// on every turn without requiring a tool call. Derives message count
-	// and compaction count from the already-fetched history slice to avoid
-	// a redundant database query.
-	//
-	// Model/ContextWindow reflect the default model. The "(routed)" suffix
-	// signals that the router may select a different model for this turn.
-	convID := tools.ConversationIDFromContext(ctx)
-	usageInfo := conditions.ContextUsageInfo{
-		Model:         l.model,
-		Routed:        l.router != nil,
-		TokenCount:    l.memory.GetTokenCount(convID),
-		ContextWindow: l.contextWindow,
-		MessageCount:  len(history),
-	}
-	for _, m := range history {
-		if m.Role == "system" && strings.HasPrefix(m.Content, "[Conversation Summary]") {
-			usageInfo.CompactionCount++
-		}
-	}
-	if l.archiver != nil {
-		if started := l.archiver.ActiveSessionStartedAt(convID); !started.IsZero() {
-			usageInfo.SessionAge = time.Since(started)
-		}
-	}
-	if line := conditions.FormatContextUsage(usageInfo); line != "" {
-		sb.WriteString("\n")
-		sb.WriteString(line)
-	}
 	seal()
 
 	// 4. Talents (behavior — how should I act)
@@ -587,10 +558,47 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	promptCtx := tools.WithConversationID(ctx, convID)
 	promptCtx = tools.WithHints(promptCtx, req.Hints)
 
+	systemPrompt := l.buildSystemPrompt(promptCtx, userMessage, history)
+
+	// Context usage — appended to the system prompt after all sections
+	// are assembled so the token estimate includes the full prompt
+	// (persona, talents, dynamic context), not just conversation history.
+	//
+	// Model/ContextWindow reflect the default model. The "(routed)"
+	// suffix signals that the router may select a different model.
+	totalChars := len(systemPrompt)
+	for _, m := range history {
+		totalChars += len(m.Content)
+	}
+	for _, m := range req.Messages {
+		totalChars += len(m.Content)
+	}
+
+	usageInfo := conditions.ContextUsageInfo{
+		Model:         l.model,
+		Routed:        l.router != nil,
+		TokenCount:    totalChars / 4, // rough char-to-token estimate
+		ContextWindow: l.contextWindow,
+		MessageCount:  len(history),
+	}
+	for _, m := range history {
+		if m.Role == "system" && strings.HasPrefix(m.Content, "[Conversation Summary]") {
+			usageInfo.CompactionCount++
+		}
+	}
+	if l.archiver != nil {
+		if started := l.archiver.ActiveSessionStartedAt(convID); !started.IsZero() {
+			usageInfo.SessionAge = time.Since(started)
+		}
+	}
+	if line := conditions.FormatContextUsage(usageInfo); line != "" {
+		systemPrompt += "\n" + line
+	}
+
 	var llmMessages []llm.Message
 	llmMessages = append(llmMessages, llm.Message{
 		Role:    "system",
-		Content: l.buildSystemPrompt(promptCtx, userMessage, history),
+		Content: systemPrompt,
 	})
 
 	// Add history
