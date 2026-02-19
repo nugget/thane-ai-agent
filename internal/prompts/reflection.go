@@ -22,7 +22,7 @@ If something interesting surfaces, chase it. Quality of thought matters more
 than covering everything.
 
 Entities you mention in ego.md may influence your watched entity list.
-Focus areas you describe may influence wake prioritisation.
+Focus areas you describe may influence wake prioritization.
 This file is yours to evolve.
 
 ## Current ego.md

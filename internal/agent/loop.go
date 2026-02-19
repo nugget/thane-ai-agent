@@ -57,6 +57,10 @@ const (
 	KindDone          = llm.KindDone
 )
 
+// maxEgoBytes is the maximum size of ego.md content injected into the
+// system prompt. Content beyond this limit is truncated with a marker.
+const maxEgoBytes = 16 * 1024
+
 // Response represents the agent's response.
 type Response struct {
 	Content      string         `json:"content"`
@@ -291,7 +295,12 @@ func (l *Loop) buildSystemPrompt(ctx context.Context, userMessage string, histor
 		if data, err := os.ReadFile(l.egoFile); err == nil && len(data) > 0 {
 			mark("EGO")
 			sb.WriteString("\n\n## Self-Reflection (ego.md)\n\n")
-			sb.WriteString(string(data))
+			if len(data) > maxEgoBytes {
+				sb.WriteString(string(data[:maxEgoBytes]))
+				sb.WriteString("\n\n[ego.md truncated — exceeded 16 KB limit]")
+			} else {
+				sb.WriteString(string(data))
+			}
 			seal()
 		}
 	}

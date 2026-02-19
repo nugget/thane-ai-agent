@@ -64,6 +64,29 @@ func TestBuildSystemPrompt_EgoFileEmpty(t *testing.T) {
 	}
 }
 
+func TestBuildSystemPrompt_EgoFileTruncated(t *testing.T) {
+	dir := t.TempDir()
+	egoPath := filepath.Join(dir, "ego.md")
+
+	// Create content larger than maxEgoBytes (16 KB).
+	big := strings.Repeat("x", maxEgoBytes+1000)
+	if err := os.WriteFile(egoPath, []byte(big), 0644); err != nil {
+		t.Fatalf("write ego.md: %v", err)
+	}
+
+	l := newMinimalLoop()
+	l.SetEgoFile(egoPath)
+
+	prompt := l.buildSystemPrompt(context.Background(), "hello", nil)
+
+	if !strings.Contains(prompt, "truncated") {
+		t.Error("system prompt should contain truncation marker for oversized ego.md")
+	}
+	if strings.Contains(prompt, big) {
+		t.Error("system prompt should not contain full oversized content")
+	}
+}
+
 func TestBuildSystemPrompt_NoEgoFile(t *testing.T) {
 	l := newMinimalLoop()
 	// egoFile not set — default empty string

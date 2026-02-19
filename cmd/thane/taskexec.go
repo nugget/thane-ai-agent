@@ -84,8 +84,13 @@ func runScheduledTask(ctx context.Context, task *scheduler.Task, exec *scheduler
 	return nil
 }
 
+// maxEgoBytes is the maximum ego.md content passed to the reflection
+// prompt. Content beyond this limit is truncated with a marker.
+const maxEgoBytes = 16 * 1024
+
 // readEgoMD reads the ego.md file from the workspace. Returns an empty
 // string if the file does not exist (first reflection creates it).
+// Content is capped at maxEgoBytes to bound prompt size.
 func readEgoMD(workspacePath string, logger *slog.Logger) string {
 	egoPath := filepath.Join(workspacePath, "ego.md")
 	data, err := os.ReadFile(egoPath)
@@ -97,6 +102,9 @@ func readEgoMD(workspacePath string, logger *slog.Logger) string {
 			)
 		}
 		return ""
+	}
+	if len(data) > maxEgoBytes {
+		return string(data[:maxEgoBytes]) + "\n\n[ego.md truncated — exceeded 16 KB limit]"
 	}
 	return string(data)
 }

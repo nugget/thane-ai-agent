@@ -3,6 +3,7 @@ package scheduler
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -108,6 +109,32 @@ func TestGetTaskByName_MultipleTasksReturnsCorrectOne(t *testing.T) {
 	// Verify alpha is not returned when querying for beta.
 	if got.Name != "beta" {
 		t.Errorf("Name = %q, want %q", got.Name, "beta")
+	}
+}
+
+func TestGetTaskByName_DuplicateNamesReturnsError(t *testing.T) {
+	s := newTestStore(t)
+
+	// Create two tasks with the same name (shouldn't happen in practice).
+	for i := range 2 {
+		task := &Task{
+			Name:      "duplicate",
+			Schedule:  Schedule{Kind: ScheduleEvery, Every: &Duration{Duration: time.Duration(i+1) * time.Minute}},
+			Payload:   Payload{Kind: PayloadWake},
+			Enabled:   true,
+			CreatedBy: "test",
+		}
+		if err := s.CreateTask(task); err != nil {
+			t.Fatalf("CreateTask(%d): %v", i, err)
+		}
+	}
+
+	_, err := s.GetTaskByName("duplicate")
+	if err == nil {
+		t.Fatal("expected error for duplicate task names, got nil")
+	}
+	if !strings.Contains(err.Error(), "multiple tasks found") {
+		t.Errorf("unexpected error: %v", err)
 	}
 }
 
