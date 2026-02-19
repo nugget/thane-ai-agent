@@ -3,11 +3,19 @@ package memory
 import (
 	"log/slog"
 	"sync"
+	"time"
 )
 
 // ToolCallSource provides tool call records for archiving.
 type ToolCallSource interface {
 	GetToolCalls(conversationID string, limit int) []ToolCall
+}
+
+// sessionEntry caches an active session's ID and start time to avoid
+// repeated database lookups on the per-turn hot path.
+type sessionEntry struct {
+	id        string
+	startedAt time.Time
 }
 
 // ArchiveAdapter bridges the ArchiveStore to the agent.SessionArchiver interface.
@@ -17,9 +25,9 @@ type ArchiveAdapter struct {
 	logger     *slog.Logger
 	toolSource ToolCallSource // optional — archives tool calls alongside messages
 
-	// Track active session IDs in memory for fast lookup
+	// Track active sessions in memory for fast lookup
 	mu       sync.RWMutex
-	sessions map[string]string // conversationID -> sessionID
+	sessions map[string]sessionEntry // conversationID -> cached session
 }
 
 // NewArchiveAdapter creates an adapter that implements agent.SessionArchiver.
@@ -27,7 +35,7 @@ func NewArchiveAdapter(store *ArchiveStore, logger *slog.Logger) *ArchiveAdapter
 	return &ArchiveAdapter{
 		store:    store,
 		logger:   logger,
-		sessions: make(map[string]string),
+		sessions: make(map[string]sessionEntry),
 	}
 }
 
@@ -105,7 +113,7 @@ func (a *ArchiveAdapter) StartSession(conversationID string) (string, error) {
 	}
 
 	a.mu.Lock()
-	a.sessions[conversationID] = sess.ID
+	a.sessions[conversationID] = sessionEntry{id: sess.ID, startedAt: sess.StartedAt}
 	a.mu.Unlock()
 
 	a.logger.Info("session started",
@@ -125,8 +133,8 @@ func (a *ArchiveAdapter) EndSession(sessionID string, reason string) error {
 
 	// Remove from active cache
 	a.mu.Lock()
-	for conv, sid := range a.sessions {
-		if sid == sessionID {
+	for conv, entry := range a.sessions {
+		if entry.id == sessionID {
 			delete(a.sessions, conv)
 			break
 		}
@@ -143,11 +151,11 @@ func (a *ArchiveAdapter) EndSession(sessionID string, reason string) error {
 // ActiveSessionID returns the current session ID for a conversation, or empty.
 func (a *ArchiveAdapter) ActiveSessionID(conversationID string) string {
 	a.mu.RLock()
-	sid := a.sessions[conversationID]
+	entry := a.sessions[conversationID]
 	a.mu.RUnlock()
 
-	if sid != "" {
-		return sid
+	if entry.id != "" {
+		return entry.id
 	}
 
 	// Fall back to database lookup
@@ -158,7 +166,7 @@ func (a *ArchiveAdapter) ActiveSessionID(conversationID string) string {
 
 	// Cache it
 	a.mu.Lock()
-	a.sessions[conversationID] = sess.ID
+	a.sessions[conversationID] = sessionEntry{id: sess.ID, startedAt: sess.StartedAt}
 	a.mu.Unlock()
 
 	return sess.ID
@@ -186,6 +194,32 @@ func (a *ArchiveAdapter) EnsureSession(conversationID string) string {
 		return ""
 	}
 	return sid
+}
+
+// ActiveSessionStartedAt returns when the active session for a conversation
+// began, or the zero time if there is no active session. Uses the in-memory
+// cache populated by StartSession and ActiveSessionID to avoid per-turn
+// database lookups.
+func (a *ArchiveAdapter) ActiveSessionStartedAt(conversationID string) time.Time {
+	a.mu.RLock()
+	entry := a.sessions[conversationID]
+	a.mu.RUnlock()
+
+	if entry.id != "" {
+		return entry.startedAt
+	}
+
+	// Fall back to database lookup and cache the result.
+	sess, err := a.store.ActiveSession(conversationID)
+	if err != nil || sess == nil {
+		return time.Time{}
+	}
+
+	a.mu.Lock()
+	a.sessions[conversationID] = sessionEntry{id: sess.ID, startedAt: sess.StartedAt}
+	a.mu.Unlock()
+
+	return sess.StartedAt
 }
 
 // Store returns the underlying ArchiveStore for direct access (API endpoints, etc.)
