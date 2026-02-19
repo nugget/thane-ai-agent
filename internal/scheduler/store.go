@@ -60,6 +60,7 @@ func (s *Store) migrate() error {
 		FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
 	);
 
+	CREATE INDEX IF NOT EXISTS idx_tasks_name ON tasks(name);
 	CREATE INDEX IF NOT EXISTS idx_executions_task_id ON executions(task_id);
 	CREATE INDEX IF NOT EXISTS idx_executions_status ON executions(status);
 	CREATE INDEX IF NOT EXISTS idx_executions_scheduled_at ON executions(scheduled_at);
@@ -121,6 +122,36 @@ func (s *Store) GetTask(id string) (*Task, error) {
 	`, id)
 
 	return s.scanTask(row)
+}
+
+// GetTaskByName retrieves a task by its human-readable name.
+// Returns nil, nil when no task with the given name exists.
+// If multiple tasks share the same name (which should not happen),
+// returns an error to surface the data integrity problem.
+func (s *Store) GetTaskByName(name string) (*Task, error) {
+	rows, err := s.db.Query(`
+		SELECT id, name, schedule_json, payload_json, enabled, created_at, created_by, updated_at
+		FROM tasks WHERE name = ? ORDER BY updated_at DESC
+	`, name)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	if !rows.Next() {
+		return nil, rows.Err()
+	}
+
+	t, err := s.scanTaskRow(rows)
+	if err != nil {
+		return nil, err
+	}
+
+	if rows.Next() {
+		return nil, fmt.Errorf("multiple tasks found with name %q", name)
+	}
+
+	return t, rows.Err()
 }
 
 // ListTasks returns all tasks, optionally filtered by enabled status.

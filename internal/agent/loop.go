@@ -57,6 +57,10 @@ const (
 	KindDone          = llm.KindDone
 )
 
+// maxEgoBytes is the maximum size of ego.md content injected into the
+// system prompt. Content beyond this limit is truncated with a marker.
+const maxEgoBytes = 16 * 1024
+
 // Response represents the agent's response.
 type Response struct {
 	Content      string         `json:"content"`
@@ -133,6 +137,7 @@ type Loop struct {
 	model           string
 	talents         string // Combined talent content for system prompt
 	persona         string // Persona content (replaces base system prompt if set)
+	egoFile         string // Path to ego.md — read fresh each turn for system prompt
 	injectedContext string // Static context from inject_files, loaded at startup
 	timezone        string // IANA timezone for Current Conditions (e.g., "America/Chicago")
 	contextWindow   int    // Context window size of default model
@@ -178,6 +183,12 @@ func (l *Loop) SetArchiver(archiver SessionArchiver) {
 // SetExtractor configures the automatic fact extractor.
 func (l *Loop) SetExtractor(e *memory.Extractor) {
 	l.extractor = e
+}
+
+// SetEgoFile sets the path to ego.md. When set, the file is read fresh
+// on each turn and its content is injected into the system prompt.
+func (l *Loop) SetEgoFile(path string) {
+	l.egoFile = path
 }
 
 // SetInjectedContext sets static context to include in every system prompt.
@@ -279,7 +290,22 @@ func (l *Loop) buildSystemPrompt(ctx context.Context, userMessage string, histor
 	}
 	seal()
 
-	// 2. Injected context (knowledge — what do I know)
+	// 2. Ego (self-reflection — what have I been noticing/thinking)
+	if l.egoFile != "" {
+		if data, err := os.ReadFile(l.egoFile); err == nil && len(data) > 0 {
+			mark("EGO")
+			sb.WriteString("\n\n## Self-Reflection (ego.md)\n\n")
+			if len(data) > maxEgoBytes {
+				sb.WriteString(string(data[:maxEgoBytes]))
+				sb.WriteString("\n\n[ego.md truncated — exceeded 16 KB limit]")
+			} else {
+				sb.WriteString(string(data))
+			}
+			seal()
+		}
+	}
+
+	// 3. Injected context (knowledge — what do I know)
 	if l.injectedContext != "" {
 		mark("INJECTED CONTEXT")
 		sb.WriteString("\n\n## Injected Context\n\n")
@@ -287,7 +313,7 @@ func (l *Loop) buildSystemPrompt(ctx context.Context, userMessage string, histor
 		seal()
 	}
 
-	// 3. Current Conditions (environment — where/when am I)
+	// 4. Current Conditions (environment — where/when am I)
 	// Placed early because models attend more strongly to content near
 	// the beginning. Uses H1 heading to signal operational importance.
 	mark("CURRENT CONDITIONS")
@@ -296,7 +322,7 @@ func (l *Loop) buildSystemPrompt(ctx context.Context, userMessage string, histor
 
 	seal()
 
-	// 4. Talents (behavior — how should I act)
+	// 5. Talents (behavior — how should I act)
 	if l.talents != "" {
 		mark("TALENTS")
 		sb.WriteString("\n\n## Behavioral Guidance\n\n")
@@ -304,7 +330,7 @@ func (l *Loop) buildSystemPrompt(ctx context.Context, userMessage string, histor
 		seal()
 	}
 
-	// 5. Dynamic context (facts, anticipations — what's relevant right now)
+	// 6. Dynamic context (facts, anticipations — what's relevant right now)
 	if l.contextProvider != nil {
 		dynCtx, err := l.contextProvider.GetContext(ctx, userMessage)
 		if err != nil {
