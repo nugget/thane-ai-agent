@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 
 	"github.com/nugget/thane-ai-agent/internal/agent"
-	"github.com/nugget/thane-ai-agent/internal/email"
 	"github.com/nugget/thane-ai-agent/internal/prompts"
 	"github.com/nugget/thane-ai-agent/internal/router"
 	"github.com/nugget/thane-ai-agent/internal/scheduler"
@@ -32,6 +31,12 @@ type agentRunner interface {
 	Run(ctx context.Context, req *agent.Request, stream agent.StreamCallback) (*agent.Response, error)
 }
 
+// emailChecker abstracts email polling for task execution testing.
+// Implemented by *email.Poller.
+type emailChecker interface {
+	CheckNewMessages(ctx context.Context) (string, error)
+}
+
 // taskExecDeps holds all dependencies needed by the scheduled task
 // executor. Using a struct avoids a growing parameter list as more
 // task types are added.
@@ -39,7 +44,7 @@ type taskExecDeps struct {
 	runner        agentRunner
 	logger        *slog.Logger
 	workspacePath string
-	emailPoller   *email.Poller // nil when email polling is not configured
+	emailPoller   emailChecker // nil when email polling is not configured
 }
 
 // runScheduledTask handles execution of a scheduled task by dispatching

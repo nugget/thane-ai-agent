@@ -27,6 +27,9 @@ type Poller struct {
 // NewPoller creates an email poller that checks all accounts managed by
 // the given Manager and tracks state in the provided opstate store.
 func NewPoller(manager *Manager, state *opstate.Store, logger *slog.Logger) *Poller {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &Poller{
 		manager: manager,
 		state:   state,
@@ -85,71 +88,81 @@ func (p *Poller) checkAccount(ctx context.Context, accountName string) (string, 
 
 	stateKey := accountName + ":INBOX"
 
-	// Fetch recent messages (not just unseen — we track by UID, not flags).
-	envelopes, err := client.ListMessages(ctx, ListOptions{
-		Folder: "INBOX",
-		Limit:  50,
-	})
-	if err != nil {
-		return "", fmt.Errorf("list messages %q: %w", accountName, err)
-	}
-
-	if len(envelopes) == 0 {
-		return "", nil
-	}
-
-	// Find the highest UID in this batch (envelopes are newest-first).
-	highestUID := envelopes[0].UID
-
 	// Load the stored high-water mark.
 	storedStr, err := p.state.Get(pollNamespace, stateKey)
 	if err != nil {
 		return "", fmt.Errorf("get high-water mark %q: %w", stateKey, err)
 	}
 
-	// First run: seed the high-water mark without reporting.
-	if storedStr == "" {
+	var storedUID uint64
+	switch storedStr {
+	case "":
+		// First run: fetch recent messages to seed the high-water mark.
+		envelopes, err := client.ListMessages(ctx, ListOptions{
+			Folder: "INBOX",
+			Limit:  1,
+		})
+		if err != nil {
+			return "", fmt.Errorf("seed list %q: %w", accountName, err)
+		}
+		if len(envelopes) == 0 {
+			return "", nil // empty mailbox, nothing to seed
+		}
+		seedUID := envelopes[0].UID
 		p.logger.Info("email poll first run, seeding high-water mark",
 			"account", accountName,
-			"uid", highestUID,
+			"uid", seedUID,
 		)
-		if err := p.state.Set(pollNamespace, stateKey, strconv.FormatUint(uint64(highestUID), 10)); err != nil {
+		if err := p.state.Set(pollNamespace, stateKey, strconv.FormatUint(uint64(seedUID), 10)); err != nil {
 			return "", fmt.Errorf("seed high-water mark %q: %w", stateKey, err)
 		}
 		return "", nil
+
+	default:
+		parsed, err := strconv.ParseUint(storedStr, 10, 32)
+		if err != nil {
+			// Corrupted state — reseed using recent messages.
+			p.logger.Warn("corrupt high-water mark, reseeding",
+				"account", accountName,
+				"stored", storedStr,
+			)
+			envelopes, err := client.ListMessages(ctx, ListOptions{
+				Folder: "INBOX",
+				Limit:  1,
+			})
+			if err != nil {
+				return "", fmt.Errorf("reseed list %q: %w", accountName, err)
+			}
+			if len(envelopes) > 0 {
+				if err := p.state.Set(pollNamespace, stateKey, strconv.FormatUint(uint64(envelopes[0].UID), 10)); err != nil {
+					return "", fmt.Errorf("reseed high-water mark %q: %w", stateKey, err)
+				}
+			}
+			return "", nil
+		}
+		storedUID = parsed
 	}
 
-	storedUID, err := strconv.ParseUint(storedStr, 10, 32)
+	// Fetch all messages with UIDs > storedUID (no limit — we want
+	// every new message regardless of how many arrived between polls).
+	newMessages, err := client.ListMessages(ctx, ListOptions{
+		Folder:   "INBOX",
+		SinceUID: uint32(storedUID),
+	})
 	if err != nil {
-		// Corrupted state — reseed.
-		p.logger.Warn("corrupt high-water mark, reseeding",
-			"account", accountName,
-			"stored", storedStr,
-		)
-		if err := p.state.Set(pollNamespace, stateKey, strconv.FormatUint(uint64(highestUID), 10)); err != nil {
-			return "", fmt.Errorf("reseed high-water mark %q: %w", stateKey, err)
-		}
-		return "", nil
-	}
-
-	// Collect messages newer than the high-water mark.
-	var newMessages []Envelope
-	for _, env := range envelopes {
-		if uint64(env.UID) > storedUID {
-			newMessages = append(newMessages, env)
-		}
+		return "", fmt.Errorf("list messages %q: %w", accountName, err)
 	}
 
 	if len(newMessages) == 0 {
 		return "", nil
 	}
 
-	// Update the high-water mark.
+	// Update the high-water mark to the highest UID (newest-first order).
+	highestUID := newMessages[0].UID
 	if err := p.state.Set(pollNamespace, stateKey, strconv.FormatUint(uint64(highestUID), 10)); err != nil {
 		return "", fmt.Errorf("update high-water mark %q: %w", stateKey, err)
 	}
 
-	// Format the wake section for this account.
 	return formatPollSection(accountName, newMessages), nil
 }
 

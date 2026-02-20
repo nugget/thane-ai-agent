@@ -401,3 +401,130 @@ func TestRunScheduledTask_EmailPoll_NilPoller(t *testing.T) {
 		t.Errorf("message = %q, want raw payload", runner.req.Messages[0].Content)
 	}
 }
+
+// mockEmailPoller implements emailChecker for testing.
+type mockEmailPoller struct {
+	msg string
+	err error
+}
+
+func (m *mockEmailPoller) CheckNewMessages(_ context.Context) (string, error) {
+	return m.msg, m.err
+}
+
+func TestRunScheduledTask_EmailPoll_NewMessages(t *testing.T) {
+	// When the poller finds new messages, the agent should wake with
+	// the poller's formatted message.
+	runner := &mockRunner{
+		resp: &agent.Response{Content: "triaged email"},
+	}
+	poller := &mockEmailPoller{msg: "New email detected:\n\nAccount: work (INBOX)\n  From: alice@example.com\n  Subject: Hello\n"}
+
+	task := &scheduler.Task{
+		ID:   "task-email-new",
+		Name: emailPollTaskName,
+		Payload: scheduler.Payload{
+			Kind: scheduler.PayloadWake,
+			Data: map[string]any{
+				"message":    "Check for new email",
+				"local_only": "false",
+			},
+		},
+	}
+	exec := &scheduler.Execution{}
+
+	err := runScheduledTask(context.Background(), task, exec, taskExecDeps{
+		runner:      runner,
+		logger:      slog.Default(),
+		emailPoller: poller,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if runner.req == nil {
+		t.Fatal("runner.Run should have been called")
+	}
+	if runner.req.Messages[0].Content != poller.msg {
+		t.Errorf("message = %q, want poller message", runner.req.Messages[0].Content)
+	}
+	if exec.Result != "triaged email" {
+		t.Errorf("exec.Result = %q, want %q", exec.Result, "triaged email")
+	}
+}
+
+func TestRunScheduledTask_EmailPoll_NoNewMessages(t *testing.T) {
+	// When the poller returns empty string, no LLM wake should happen.
+	runner := &mockRunner{
+		resp: &agent.Response{Content: "should not be called"},
+	}
+	poller := &mockEmailPoller{msg: ""}
+
+	task := &scheduler.Task{
+		ID:   "task-email-empty",
+		Name: emailPollTaskName,
+		Payload: scheduler.Payload{
+			Kind: scheduler.PayloadWake,
+			Data: map[string]any{
+				"message": "Check for new email",
+			},
+		},
+	}
+	exec := &scheduler.Execution{}
+
+	err := runScheduledTask(context.Background(), task, exec, taskExecDeps{
+		runner:      runner,
+		logger:      slog.Default(),
+		emailPoller: poller,
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Runner should NOT have been called — no new messages.
+	if runner.req != nil {
+		t.Error("runner.Run should not be called when no new messages")
+	}
+	if exec.Result != "no new messages" {
+		t.Errorf("exec.Result = %q, want %q", exec.Result, "no new messages")
+	}
+}
+
+func TestRunScheduledTask_EmailPoll_Error(t *testing.T) {
+	// When the poller returns an error, it should be logged and return nil
+	// (best-effort — next cycle catches up).
+	runner := &mockRunner{
+		resp: &agent.Response{Content: "should not be called"},
+	}
+	poller := &mockEmailPoller{err: errors.New("IMAP connection refused")}
+
+	task := &scheduler.Task{
+		ID:   "task-email-err",
+		Name: emailPollTaskName,
+		Payload: scheduler.Payload{
+			Kind: scheduler.PayloadWake,
+			Data: map[string]any{
+				"message": "Check for new email",
+			},
+		},
+	}
+	exec := &scheduler.Execution{}
+
+	err := runScheduledTask(context.Background(), task, exec, taskExecDeps{
+		runner:      runner,
+		logger:      slog.Default(),
+		emailPoller: poller,
+	})
+	if err != nil {
+		t.Fatalf("expected nil error for best-effort poll, got %v", err)
+	}
+
+	// Runner should NOT have been called — error path returns early.
+	if runner.req != nil {
+		t.Error("runner.Run should not be called when poll errors")
+	}
+	// exec.Result should be empty (no result set on error path).
+	if exec.Result != "" {
+		t.Errorf("exec.Result = %q, want empty", exec.Result)
+	}
+}
