@@ -150,8 +150,18 @@ type Loop struct {
 	debugCfg        config.DebugConfig // Debug options (system prompt dump, etc.)
 
 	// Capability tags — per-session tool/talent filtering.
+	//
+	// activeTags is scoped to the Loop instance. In the current
+	// architecture each conversation channel (Signal, API, wake) runs
+	// through the same Loop, so active tags are effectively global.
+	// Per-conversation tag isolation will be added in Phase 2 when
+	// channel-pinned tags and delegate tag scoping land.
+	//
+	// Concurrency: the agent loop is single-threaded per Run() call.
+	// If Phase 2 introduces concurrent access (e.g., delegate
+	// spawning in a goroutine), activeTags will need a mutex.
 	capTags       map[string]config.CapabilityTagConfig // tag definitions from config
-	activeTags    map[string]bool                       // currently active tags
+	activeTags    map[string]bool                       // currently active tags (see scoping note above)
 	parsedTalents []talents.Talent                      // pre-loaded talent structs for tag filtering
 }
 

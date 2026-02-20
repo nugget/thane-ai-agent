@@ -29,6 +29,11 @@ type CapabilityManifest struct {
 // SetCapabilityTools adds request_capability and drop_capability tools
 // to the registry. These tools let the agent dynamically activate or
 // deactivate capability tags mid-session.
+//
+// These tools are intentionally not assigned to any tag group. They
+// live in the base registry and survive all tag filtering, ensuring the
+// agent can always request or shed capabilities regardless of which
+// tags are currently active.
 func (r *Registry) SetCapabilityTools(mgr CapabilityManager, manifest []CapabilityManifest) {
 	// Index manifest by tag for fast lookup in handlers.
 	tagManifest := make(map[string]CapabilityManifest, len(manifest))

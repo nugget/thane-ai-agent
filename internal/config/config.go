@@ -440,6 +440,20 @@ type CapabilityTagConfig struct {
 	AlwaysActive bool `yaml:"always_active"`
 }
 
+// Validate checks that the capability tag configuration is internally
+// consistent. It ensures a description is present and the tools list is
+// non-empty. Tag names are validated by the caller since they are map
+// keys in the parent Config struct.
+func (c CapabilityTagConfig) Validate(tagName string) error {
+	if strings.TrimSpace(c.Description) == "" {
+		return fmt.Errorf("capability_tags.%s.description must not be empty", tagName)
+	}
+	if len(c.Tools) == 0 {
+		return fmt.Errorf("capability_tags.%s.tools must not be empty", tagName)
+	}
+	return nil
+}
+
 // WorkspaceConfig configures the agent's sandboxed file system access.
 // When Path is set, the agent can read and write files within that
 // directory. All paths passed to file tools are resolved relative to
@@ -932,6 +946,11 @@ func (c *Config) Validate() error {
 	}
 	if err := c.validateMCP(); err != nil {
 		return err
+	}
+	for tagName, tagCfg := range c.CapabilityTags {
+		if err := tagCfg.Validate(tagName); err != nil {
+			return err
+		}
 	}
 	if c.Episodic.LookbackDays < 0 {
 		return fmt.Errorf("episodic.lookback_days %d must be non-negative", c.Episodic.LookbackDays)
