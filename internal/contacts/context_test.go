@@ -79,6 +79,9 @@ func TestContextProvider_ReturnsRelevant(t *testing.T) {
 	if !strings.Contains(result, "email") {
 		t.Errorf("result should contain fact 'email', got %q", result)
 	}
+	if !strings.Contains(result, "[known]") {
+		t.Errorf("result should contain trust zone tag '[known]', got %q", result)
+	}
 	if strings.Contains(result, "Bob Irrelevant") {
 		t.Errorf("result should not contain 'Bob Irrelevant'")
 	}
@@ -135,6 +138,26 @@ func TestContextProvider_MaxContacts(t *testing.T) {
 	}
 	if boldCount != 2 {
 		t.Errorf("expected 2 contacts in output, got %d (result: %q)", boldCount, result)
+	}
+}
+
+func TestContextProvider_TrustZoneTag(t *testing.T) {
+	store := newTestStore(t)
+
+	c := &Contact{Name: "Trusted Alice", Kind: "person", TrustZone: "trusted", Summary: "A trusted friend"}
+	created, _ := store.Upsert(c)
+	_ = store.SetEmbedding(created.ID, []float32{0.9, 0.1, 0.0})
+
+	emb := &fakeEmbedder{embedding: []float32{1.0, 0.0, 0.0}}
+	cp := NewContextProvider(store, emb)
+	cp.SetMinScore(0.1)
+
+	result, err := cp.GetContext(context.Background(), "Alice")
+	if err != nil {
+		t.Fatalf("GetContext() error = %v", err)
+	}
+	if !strings.Contains(result, "[trusted]") {
+		t.Errorf("result should contain '[trusted]' tag, got %q", result)
 	}
 }
 

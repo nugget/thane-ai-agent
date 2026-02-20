@@ -82,6 +82,9 @@ func (p *ContextProvider) GetContext(ctx context.Context, userMessage string) (s
 		if c.Summary != "" {
 			sb.WriteString(fmt.Sprintf(" — %s", c.Summary))
 		}
+		if c.TrustZone != "" {
+			sb.WriteString(fmt.Sprintf(" [%s]", c.TrustZone))
+		}
 		sb.WriteString("\n")
 
 		if len(facts) > 0 {

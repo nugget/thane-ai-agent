@@ -15,17 +15,25 @@ import (
 
 // SQL fragments for query building.
 const (
-	contactColumns          = "id, name, kind, relationship, summary, details, last_interaction, created_at, updated_at"
-	qualifiedContactColumns = "contacts.id, contacts.name, contacts.kind, contacts.relationship, contacts.summary, contacts.details, contacts.last_interaction, contacts.created_at, contacts.updated_at"
-	contactColumnsWithEmbed = "id, name, kind, relationship, summary, details, embedding, last_interaction, created_at, updated_at"
+	contactColumns          = "id, name, kind, trust_zone, relationship, summary, details, last_interaction, created_at, updated_at"
+	qualifiedContactColumns = "contacts.id, contacts.name, contacts.kind, contacts.trust_zone, contacts.relationship, contacts.summary, contacts.details, contacts.last_interaction, contacts.created_at, contacts.updated_at"
+	contactColumnsWithEmbed = "id, name, kind, trust_zone, relationship, summary, details, embedding, last_interaction, created_at, updated_at"
 	activeFilter            = "deleted_at IS NULL"
 )
+
+// ValidTrustZones is the set of allowed trust zone values.
+var ValidTrustZones = map[string]bool{
+	"owner":   true,
+	"trusted": true,
+	"known":   true,
+}
 
 // Contact represents a person, company, or organization.
 type Contact struct {
 	ID              uuid.UUID           `json:"id"`
 	Name            string              `json:"name"`
 	Kind            string              `json:"kind"`                   // person, company, organization
+	TrustZone       string              `json:"trust_zone,omitempty"`   // owner, trusted, known
 	Relationship    string              `json:"relationship,omitempty"` // friend, colleague, family, vendor
 	Summary         string              `json:"summary,omitempty"`      // one-line context
 	Details         string              `json:"details,omitempty"`      // markdown blob
@@ -88,6 +96,12 @@ func (s *Store) migrate() error {
 	if _, err := s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_contacts_name_active ON contacts(LOWER(name)) WHERE deleted_at IS NULL`); err != nil {
 		s.logger.Warn("unique active name index not created; name uniqueness may not be enforced", "error", err)
 	}
+
+	// Add trust_zone column for contacts that predate #293.
+	s.addColumnIfMissing("contacts", "trust_zone", "TEXT NOT NULL DEFAULT 'known'")
+
+	// Migrate freeform trust_level facts to the structured trust_zone column.
+	s.migrateTrustLevelFacts()
 
 	// contact_facts supports multiple values per key (e.g., two phone
 	// numbers). If the table was created with the old UNIQUE(contact_id, key)
@@ -157,6 +171,92 @@ func (s *Store) migrateContactFacts() {
 	_, _ = s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_contact_facts_contact_id ON contact_facts(contact_id)`)
 }
 
+// addColumnIfMissing adds a column to a table if it does not already exist.
+func (s *Store) addColumnIfMissing(table, column, typedef string) {
+	rows, err := s.db.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
+	if err != nil {
+		s.logger.Warn("failed to check table schema", "table", table, "error", err)
+		return
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var cid int
+		var name, colType string
+		var notNull, pk int
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &colType, &notNull, &dflt, &pk); err != nil {
+			continue
+		}
+		if name == column {
+			return // column already exists
+		}
+	}
+
+	stmt := fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, column, typedef)
+	if _, err := s.db.Exec(stmt); err != nil {
+		s.logger.Warn("failed to add column", "table", table, "column", column, "error", err)
+		return
+	}
+	s.logger.Info("added column", "table", table, "column", column)
+}
+
+// migrateTrustLevelFacts promotes freeform trust_level contact_facts into
+// the structured trust_zone column. Values containing "friend"
+// (case-insensitive) are mapped to "trusted". This is idempotent —
+// contacts already at "trusted" are unaffected.
+func (s *Store) migrateTrustLevelFacts() {
+	rows, err := s.db.Query(`
+		SELECT cf.contact_id, cf.value
+		FROM contact_facts cf
+		JOIN contacts c ON c.id = cf.contact_id
+		WHERE cf.key = 'trust_level' AND c.trust_zone = 'known'
+	`)
+	if err != nil {
+		// Table may not have trust_zone column yet on first run
+		// before addColumnIfMissing; silently skip.
+		return
+	}
+
+	// Collect all rows before closing the cursor to avoid holding a
+	// read lock while executing UPDATE statements (SQLite limitation).
+	type pending struct{ contactID, value string }
+	var updates []pending
+	for rows.Next() {
+		var p pending
+		if err := rows.Scan(&p.contactID, &p.value); err != nil {
+			continue
+		}
+		updates = append(updates, p)
+	}
+	rows.Close()
+
+	for _, p := range updates {
+		zone := mapTrustLevelToZone(p.value)
+		if zone == "known" {
+			continue // already the default
+		}
+		if _, err := s.db.Exec(`UPDATE contacts SET trust_zone = ? WHERE id = ?`, zone, p.contactID); err != nil {
+			s.logger.Warn("failed to migrate trust_level fact",
+				"contact_id", p.contactID, "value", p.value, "error", err)
+			continue
+		}
+		s.logger.Info("migrated trust_level fact to trust_zone",
+			"contact_id", p.contactID, "from", p.value, "to", zone)
+	}
+}
+
+// mapTrustLevelToZone converts a freeform trust_level string to a
+// structured trust zone value.
+func mapTrustLevelToZone(value string) string {
+	lower := strings.ToLower(value)
+	if strings.Contains(lower, "friend") || strings.Contains(lower, "trusted") ||
+		strings.Contains(lower, "close") || strings.Contains(lower, "family") {
+		return "trusted"
+	}
+	return "known"
+}
+
 // tryEnableFTS creates the FTS5 virtual table for full-text search.
 // Falls back to LIKE-based search when FTS5 is not available.
 func (s *Store) tryEnableFTS() {
@@ -197,6 +297,12 @@ func (s *Store) Upsert(c *Contact) (*Contact, error) {
 	if c.Kind == "" {
 		c.Kind = "person"
 	}
+	if c.TrustZone == "" {
+		c.TrustZone = "known"
+	}
+	if !ValidTrustZones[c.TrustZone] {
+		return nil, fmt.Errorf("invalid trust zone %q (valid: owner, trusted, known)", c.TrustZone)
+	}
 
 	if c.ID == uuid.Nil {
 		// New contact.
@@ -209,9 +315,9 @@ func (s *Store) Upsert(c *Contact) (*Contact, error) {
 		c.UpdatedAt = now
 
 		_, err = s.db.Exec(`
-			INSERT INTO contacts (id, name, kind, relationship, summary, details, last_interaction, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-		`, c.ID.String(), c.Name, c.Kind, nullStr(c.Relationship), nullStr(c.Summary),
+			INSERT INTO contacts (id, name, kind, trust_zone, relationship, summary, details, last_interaction, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, c.ID.String(), c.Name, c.Kind, c.TrustZone, nullStr(c.Relationship), nullStr(c.Summary),
 			nullStr(c.Details), nullTime(c.LastInteraction),
 			now.Format(time.RFC3339), now.Format(time.RFC3339))
 		if err != nil {
@@ -224,10 +330,10 @@ func (s *Store) Upsert(c *Contact) (*Contact, error) {
 	// Update existing (resurrect if soft-deleted).
 	c.UpdatedAt = now
 	_, err := s.db.Exec(`
-		UPDATE contacts SET name = ?, kind = ?, relationship = ?, summary = ?, details = ?,
+		UPDATE contacts SET name = ?, kind = ?, trust_zone = ?, relationship = ?, summary = ?, details = ?,
 			last_interaction = ?, updated_at = ?, deleted_at = NULL
 		WHERE id = ?
-	`, c.Name, c.Kind, nullStr(c.Relationship), nullStr(c.Summary),
+	`, c.Name, c.Kind, c.TrustZone, nullStr(c.Relationship), nullStr(c.Summary),
 		nullStr(c.Details), nullTime(c.LastInteraction),
 		now.Format(time.RFC3339), c.ID.String())
 	if err != nil {
@@ -474,6 +580,19 @@ func (s *Store) FindByFact(key, value string) ([]*Contact, error) {
 	return s.scanContacts(rows)
 }
 
+// FindByTrustZone returns all active contacts in the given trust zone.
+func (s *Store) FindByTrustZone(zone string) ([]*Contact, error) {
+	rows, err := s.db.Query(
+		`SELECT `+contactColumns+` FROM contacts WHERE `+activeFilter+` AND trust_zone = ? ORDER BY name`,
+		zone)
+	if err != nil {
+		return nil, fmt.Errorf("query: %w", err)
+	}
+	defer rows.Close()
+
+	return s.scanContacts(rows)
+}
+
 // SetEmbedding updates a contact's embedding vector.
 func (s *Store) SetEmbedding(id uuid.UUID, embedding []float32) error {
 	blob := encodeEmbedding(embedding)
@@ -580,7 +699,7 @@ func (s *Store) scanContact(row *sql.Row) (*Contact, error) {
 	var relationship, summary, details, lastInteraction sql.NullString
 	var createdStr, updatedStr string
 
-	err := row.Scan(&idStr, &c.Name, &c.Kind, &relationship, &summary,
+	err := row.Scan(&idStr, &c.Name, &c.Kind, &c.TrustZone, &relationship, &summary,
 		&details, &lastInteraction, &createdStr, &updatedStr)
 	if err != nil {
 		return nil, err
@@ -595,7 +714,7 @@ func (s *Store) scanContactRow(rows *sql.Rows) (*Contact, error) {
 	var relationship, summary, details, lastInteraction sql.NullString
 	var createdStr, updatedStr string
 
-	err := rows.Scan(&idStr, &c.Name, &c.Kind, &relationship, &summary,
+	err := rows.Scan(&idStr, &c.Name, &c.Kind, &c.TrustZone, &relationship, &summary,
 		&details, &lastInteraction, &createdStr, &updatedStr)
 	if err != nil {
 		return nil, err
@@ -611,7 +730,7 @@ func (s *Store) scanContactWithEmbedding(rows *sql.Rows) (*Contact, error) {
 	var createdStr, updatedStr string
 	var embeddingBlob []byte
 
-	err := rows.Scan(&idStr, &c.Name, &c.Kind, &relationship, &summary,
+	err := rows.Scan(&idStr, &c.Name, &c.Kind, &c.TrustZone, &relationship, &summary,
 		&details, &embeddingBlob, &lastInteraction, &createdStr, &updatedStr)
 	if err != nil {
 		return nil, err

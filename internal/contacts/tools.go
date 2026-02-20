@@ -36,6 +36,7 @@ func (t *Tools) SetEmbeddingClient(client EmbeddingClient) {
 type SaveContactArgs struct {
 	Name         string            `json:"name"`
 	Kind         string            `json:"kind,omitempty"`         // person, company, organization
+	TrustZone    string            `json:"trust_zone,omitempty"`   // owner, trusted, known
 	Relationship string            `json:"relationship,omitempty"` // friend, colleague, family, vendor
 	Summary      string            `json:"summary,omitempty"`
 	Details      string            `json:"details,omitempty"`
@@ -46,7 +47,7 @@ type SaveContactArgs struct {
 // recognizes. Any other top-level string values are rescued into the Facts map
 // so models that flatten email, phone, etc. don't lose data silently.
 var saveContactKnownFields = map[string]bool{
-	"name": true, "kind": true, "relationship": true,
+	"name": true, "kind": true, "trust_zone": true, "relationship": true,
 	"summary": true, "details": true, "facts": true,
 }
 
@@ -108,6 +109,9 @@ func (t *Tools) SaveContact(argsJSON string) (string, error) {
 		if args.Kind != "" {
 			existing.Kind = args.Kind
 		}
+		if args.TrustZone != "" {
+			existing.TrustZone = args.TrustZone
+		}
 		if args.Relationship != "" {
 			existing.Relationship = args.Relationship
 		}
@@ -139,6 +143,7 @@ func (t *Tools) SaveContact(argsJSON string) (string, error) {
 	c := &Contact{
 		Name:         args.Name,
 		Kind:         args.Kind,
+		TrustZone:    args.TrustZone,
 		Relationship: args.Relationship,
 		Summary:      args.Summary,
 		Details:      args.Details,
@@ -394,6 +399,9 @@ func formatContact(c *Contact) string {
 		sb.WriteString(fmt.Sprintf(" — %s", c.Summary))
 	}
 	sb.WriteString(fmt.Sprintf("\nKind: %s", c.Kind))
+	if c.TrustZone != "" {
+		sb.WriteString(fmt.Sprintf(" | Trust: %s", c.TrustZone))
+	}
 
 	if c.Details != "" {
 		sb.WriteString(fmt.Sprintf("\nDetails: %s", c.Details))

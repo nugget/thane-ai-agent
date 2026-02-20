@@ -501,6 +501,109 @@ func TestListContacts_Empty(t *testing.T) {
 	}
 }
 
+func TestSaveContact_TrustZone(t *testing.T) {
+	tools := newTestTools(t)
+
+	_, err := tools.SaveContact(`{"name":"Trusted Pal","kind":"person","trust_zone":"trusted"}`)
+	if err != nil {
+		t.Fatalf("SaveContact() error = %v", err)
+	}
+
+	c, err := tools.store.FindByName("Trusted Pal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.TrustZone != "trusted" {
+		t.Errorf("TrustZone = %q, want %q", c.TrustZone, "trusted")
+	}
+}
+
+func TestSaveContact_TrustZoneUpdate(t *testing.T) {
+	tools := newTestTools(t)
+
+	// Create with default trust zone.
+	_, err := tools.SaveContact(`{"name":"Zone Updater","kind":"person"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	c, err := tools.store.FindByName("Zone Updater")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.TrustZone != "known" {
+		t.Fatalf("initial TrustZone = %q, want %q", c.TrustZone, "known")
+	}
+
+	// Update to trusted.
+	_, err = tools.SaveContact(`{"name":"Zone Updater","trust_zone":"trusted"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	c, err = tools.store.FindByName("Zone Updater")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.TrustZone != "trusted" {
+		t.Errorf("updated TrustZone = %q, want %q", c.TrustZone, "trusted")
+	}
+
+	// Update with empty trust_zone should preserve the existing value.
+	_, err = tools.SaveContact(`{"name":"Zone Updater","summary":"New summary"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	c, err = tools.store.FindByName("Zone Updater")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.TrustZone != "trusted" {
+		t.Errorf("TrustZone after empty update = %q, want %q (should be preserved)", c.TrustZone, "trusted")
+	}
+}
+
+func TestSaveContact_TrustZoneNotRescuedAsFact(t *testing.T) {
+	tools := newTestTools(t)
+
+	_, err := tools.SaveContact(`{"name":"Zone Not Fact","trust_zone":"owner"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	c, err := tools.store.FindByName("Zone Not Fact")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	facts, err := tools.store.GetFacts(c.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, exists := facts["trust_zone"]; exists {
+		t.Error("trust_zone should not be rescued as a fact")
+	}
+	if c.TrustZone != "owner" {
+		t.Errorf("TrustZone = %q, want %q", c.TrustZone, "owner")
+	}
+}
+
+func TestFormatContact_TrustZone(t *testing.T) {
+	c := &Contact{
+		Name:      "Test Person",
+		Kind:      "person",
+		TrustZone: "trusted",
+		Facts:     map[string][]string{},
+	}
+
+	result := formatContact(c)
+	if !strings.Contains(result, "Kind: person | Trust: trusted") {
+		t.Errorf("formatContact() = %q, want to contain 'Kind: person | Trust: trusted'", result)
+	}
+}
+
 func TestGenerateMissingEmbeddings(t *testing.T) {
 	tools := newTestTools(t)
 	tools.SetEmbeddingClient(&fakeEmbedder{embedding: []float32{0.5, 0.5}})
