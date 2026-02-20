@@ -28,15 +28,24 @@ const (
 	ExhaustNoOutput      = "no_output"
 )
 
+// ToolCallOutcome records the name and success/failure of a single tool
+// invocation during delegate execution.
+type ToolCallOutcome struct {
+	Name    string `json:"name"`
+	Success bool   `json:"success"`
+}
+
 // Result is the outcome of a delegated task execution.
 type Result struct {
-	Content       string `json:"content"`
-	Model         string `json:"model"`
-	Iterations    int    `json:"iterations"`
-	InputTokens   int    `json:"input_tokens"`
-	OutputTokens  int    `json:"output_tokens"`
-	Exhausted     bool   `json:"exhausted"`
-	ExhaustReason string `json:"exhaust_reason,omitempty"`
+	Content       string            `json:"content"`
+	Model         string            `json:"model"`
+	Iterations    int               `json:"iterations"`
+	InputTokens   int               `json:"input_tokens"`
+	OutputTokens  int               `json:"output_tokens"`
+	Exhausted     bool              `json:"exhausted"`
+	ExhaustReason string            `json:"exhaust_reason,omitempty"`
+	ToolCalls     []ToolCallOutcome `json:"tool_calls,omitempty"`
+	Duration      time.Duration     `json:"duration"`
 }
 
 // Executor runs delegated tasks using a lightweight iteration loop.
@@ -141,6 +150,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 
 	startTime := time.Now()
 	var totalInput, totalOutput int
+	var toolCalls []ToolCallOutcome
 
 	maxIter := profile.MaxIter
 	if maxIter <= 0 {
@@ -207,6 +217,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 					messages:       messages,
 					resultContent:  "Delegate was unable to complete the task within its time limit.",
 					errMsg:         err.Error(),
+					toolCalls:      toolCalls,
 				})
 				return &Result{
 					Content:       "Delegate was unable to complete the task within its time limit.",
@@ -216,6 +227,8 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 					OutputTokens:  totalOutput,
 					Exhausted:     true,
 					ExhaustReason: ExhaustWallClock,
+					ToolCalls:     toolCalls,
+					Duration:      time.Since(startTime),
 				}, nil
 			}
 			// External cancellation — propagate as error.
@@ -247,6 +260,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 				exhaustReason:  ExhaustWallClock,
 				startTime:      startTime,
 				messages:       messages,
+				toolCalls:      toolCalls,
 			})
 		}
 
@@ -292,6 +306,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 					messages:       messages,
 					resultContent:  "Delegate was unable to complete the task within its time limit.",
 					errMsg:         err.Error(),
+					toolCalls:      toolCalls,
 				})
 				return &Result{
 					Content:       "Delegate was unable to complete the task within its time limit.",
@@ -301,6 +316,8 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 					OutputTokens:  totalOutput,
 					Exhausted:     true,
 					ExhaustReason: ExhaustWallClock,
+					ToolCalls:     toolCalls,
+					Duration:      time.Since(startTime),
 				}, nil
 			}
 			// External cancellation — use consistent error form.
@@ -340,6 +357,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 				exhaustReason:  ExhaustWallClock,
 				startTime:      startTime,
 				messages:       messages,
+				toolCalls:      toolCalls,
 			})
 		}
 
@@ -384,6 +402,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 					startTime:      startTime,
 					messages:       messages,
 					resultContent:  "",
+					toolCalls:      toolCalls,
 				})
 				return &Result{
 					Content:       "",
@@ -393,6 +412,8 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 					OutputTokens:  totalOutput,
 					Exhausted:     true,
 					ExhaustReason: ExhaustNoOutput,
+					ToolCalls:     toolCalls,
+					Duration:      time.Since(startTime),
 				}, nil
 			}
 
@@ -412,6 +433,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 				startTime:      startTime,
 				messages:       messages,
 				resultContent:  content,
+				toolCalls:      toolCalls,
 			})
 			return &Result{
 				Content:      content,
@@ -420,6 +442,8 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 				InputTokens:  totalInput,
 				OutputTokens: totalOutput,
 				Exhausted:    false,
+				ToolCalls:    toolCalls,
+				Duration:     time.Since(startTime),
 			}, nil
 		}
 
@@ -447,6 +471,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 				exhaustReason:  ExhaustTokenBudget,
 				startTime:      startTime,
 				messages:       messages,
+				toolCalls:      toolCalls,
 			})
 		}
 
@@ -476,6 +501,12 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 			toolCtx, toolCancel := context.WithTimeout(toolCtx, toolTimeout)
 			result, err := reg.Execute(toolCtx, tc.Function.Name, argsJSON)
 			toolCancel()
+
+			toolCalls = append(toolCalls, ToolCallOutcome{
+				Name:    tc.Function.Name,
+				Success: err == nil,
+			})
+
 			if err != nil {
 				// Per-tool timeout fired but parent context is still alive —
 				// report as a tool error so the LLM can adapt.
@@ -515,6 +546,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 							messages:       messages,
 							resultContent:  "Delegate was unable to complete the task within its time limit.",
 							errMsg:         err.Error(),
+							toolCalls:      toolCalls,
 						})
 						return &Result{
 							Content:       "Delegate was unable to complete the task within its time limit.",
@@ -524,6 +556,8 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 							OutputTokens:  totalOutput,
 							Exhausted:     true,
 							ExhaustReason: ExhaustWallClock,
+							ToolCalls:     toolCalls,
+							Duration:      time.Since(startTime),
 						}, nil
 					}
 					// External cancellation — stop tool execution and
@@ -581,6 +615,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 				exhaustReason:  ExhaustWallClock,
 				startTime:      startTime,
 				messages:       messages,
+				toolCalls:      toolCalls,
 			})
 		}
 	}
@@ -607,6 +642,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 		exhaustReason:  ExhaustMaxIterations,
 		startTime:      startTime,
 		messages:       messages,
+		toolCalls:      toolCalls,
 	})
 }
 
@@ -625,6 +661,8 @@ func (e *Executor) forceTextResponse(ctx context.Context, model string, messages
 			OutputTokens:  rec.totalOutput,
 			Exhausted:     true,
 			ExhaustReason: rec.exhaustReason,
+			ToolCalls:     rec.toolCalls,
+			Duration:      time.Since(rec.startTime),
 		}, nil
 	}
 
@@ -642,6 +680,8 @@ func (e *Executor) forceTextResponse(ctx context.Context, model string, messages
 		OutputTokens:  rec.totalOutput,
 		Exhausted:     true,
 		ExhaustReason: rec.exhaustReason,
+		ToolCalls:     rec.toolCalls,
+		Duration:      time.Since(rec.startTime),
 	}, nil
 }
 
@@ -691,6 +731,7 @@ type completionRecord struct {
 	messages       []llm.Message
 	resultContent  string
 	errMsg         string
+	toolCalls      []ToolCallOutcome
 }
 
 // recordCompletion logs and optionally persists a delegate execution.

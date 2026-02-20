@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/prompts"
 )
@@ -57,6 +58,8 @@ func ToolHandler(exec *Executor) func(ctx context.Context, args map[string]any) 
 			return fmt.Sprintf("[Delegate error: profile=%s] %s", profileName, err.Error()), nil
 		}
 
+		summary := formatExecSummary(result)
+
 		// Format the result with explicit success/failure headers so the
 		// calling model can distinguish outcomes unambiguously.
 		if !result.Exhausted {
@@ -64,12 +67,12 @@ func ToolHandler(exec *Executor) func(ctx context.Context, args map[string]any) 
 				// Safety net — should be rare after delegate.go now flags
 				// empty-after-tool-calls as ExhaustNoOutput.
 				return fmt.Sprintf("[Delegate FAILED: profile=%s, model=%s, reason=no_output, iter=%d]"+
-					"\n\nDelegate completed without producing results.",
-					profileName, result.Model, result.Iterations), nil
+					"\n\nDelegate completed without producing results.\n\n%s",
+					profileName, result.Model, result.Iterations, summary), nil
 			}
 			header := fmt.Sprintf("[Delegate SUCCEEDED: profile=%s, model=%s, iter=%d, tokens=%s]",
 				profileName, result.Model, result.Iterations, formatTokens(result.OutputTokens))
-			return header + "\n\n" + result.Content, nil
+			return header + "\n\n" + result.Content + "\n\n" + summary, nil
 		}
 
 		// Exhausted delegation — provide actionable context for retry.
@@ -99,7 +102,50 @@ func ToolHandler(exec *Executor) func(ctx context.Context, args map[string]any) 
 			out.WriteString(" If retrying, provide more specific guidance to narrow the scope — ")
 			out.WriteString("e.g., exact file paths, entity IDs, or which step to focus on.")
 		}
-		out.WriteString("]")
+		out.WriteString("]\n\n")
+		out.WriteString(summary)
 		return out.String(), nil
 	}
+}
+
+// formatExecSummary produces a structured execution summary block from a
+// delegate [Result]. The format is designed for the orchestrator model to
+// learn which tools were called and whether they succeeded.
+func formatExecSummary(r *Result) string {
+	var sb strings.Builder
+	sb.WriteString("--- execution summary ---\n")
+	sb.WriteString(fmt.Sprintf("iterations: %d\n", r.Iterations))
+	sb.WriteString(fmt.Sprintf("duration: %s\n", formatDuration(r.Duration)))
+
+	if len(r.ToolCalls) == 0 {
+		sb.WriteString("tool_calls: (none)\n")
+		sb.WriteString("errors: 0\n")
+	} else {
+		var errs int
+		parts := make([]string, len(r.ToolCalls))
+		for i, tc := range r.ToolCalls {
+			tag := "ok"
+			if !tc.Success {
+				tag = "err"
+				errs++
+			}
+			parts[i] = fmt.Sprintf("%s(%s)", tc.Name, tag)
+		}
+		sb.WriteString(fmt.Sprintf("tool_calls: %s\n", strings.Join(parts, " → ")))
+		sb.WriteString(fmt.Sprintf("errors: %d\n", errs))
+	}
+
+	return sb.String()
+}
+
+// formatDuration renders a duration as a compact human-readable string
+// (e.g. "8.2s", "1m12s").
+func formatDuration(d time.Duration) string {
+	if d < time.Second {
+		return fmt.Sprintf("%dms", d.Milliseconds())
+	}
+	if d < time.Minute {
+		return fmt.Sprintf("%.1fs", d.Seconds())
+	}
+	return fmt.Sprintf("%dm%ds", int(d.Minutes()), int(d.Seconds())%60)
 }
