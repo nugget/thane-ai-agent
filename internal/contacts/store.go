@@ -100,6 +100,11 @@ func (s *Store) migrate() error {
 	// Add trust_zone column for contacts that predate #293.
 	s.addColumnIfMissing("contacts", "trust_zone", "TEXT NOT NULL DEFAULT 'known'")
 
+	// Index trust_zone to optimize queries that filter by trust zone.
+	if _, err := s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_contacts_trust_zone ON contacts(trust_zone)`); err != nil {
+		s.logger.Warn("trust_zone index not created; queries by trust_zone may be slow", "error", err)
+	}
+
 	// Migrate freeform trust_level facts to the structured trust_zone column.
 	s.migrateTrustLevelFacts()
 
