@@ -1166,7 +1166,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// current state (e.g., pending anticipations) before each LLM call.
 	anticipationProvider := anticipation.NewProvider(anticipationStore)
 	contextProvider := agent.NewCompositeContextProvider(anticipationProvider)
-	contextProvider.Add(agent.NewChannelProvider())
+	contextProvider.Add(agent.NewChannelProvider(&contactNameLookup{store: contactStore}))
 
 	episodicProvider := episodic.NewProvider(archiveStore, logger, episodic.Config{
 		Timezone:          cfg.Timezone,
@@ -1819,4 +1819,26 @@ func (r *contactPhoneResolver) ResolvePhone(phone string) (string, bool) {
 		return "", false
 	}
 	return matches[0].Name, true
+}
+
+// contactNameLookup resolves contact names to summaries for channel
+// context injection. Implements agent.ContactLookup.
+type contactNameLookup struct {
+	store *contacts.Store
+}
+
+// LookupContactByName returns a contact summary for the given name, or
+// nil if no matching contact is found.
+func (r *contactNameLookup) LookupContactByName(name string) *agent.ContactSummary {
+	c, err := r.store.FindByName(name)
+	if err != nil {
+		return nil
+	}
+	facts, _ := r.store.GetFacts(c.ID)
+	return &agent.ContactSummary{
+		Name:         c.Name,
+		Relationship: c.Relationship,
+		Summary:      c.Summary,
+		Facts:        facts,
+	}
 }
