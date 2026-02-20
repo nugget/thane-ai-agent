@@ -847,8 +847,11 @@ func (c *Config) applyDefaults() {
 	}
 
 	// Backward compat: migrate deprecated iter0_tools → orchestrator_tools.
-	if len(c.Agent.OrchestratorTools) == 0 && len(c.Agent.DeprecatedIter0Tools) > 0 {
-		c.Agent.OrchestratorTools = c.Agent.DeprecatedIter0Tools
+	// Always clear the deprecated field; only copy if the new field is empty.
+	if len(c.Agent.DeprecatedIter0Tools) > 0 {
+		if len(c.Agent.OrchestratorTools) == 0 {
+			c.Agent.OrchestratorTools = c.Agent.DeprecatedIter0Tools
+		}
 		c.Agent.DeprecatedIter0Tools = nil
 	}
 
