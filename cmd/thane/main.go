@@ -1166,7 +1166,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// current state (e.g., pending anticipations) before each LLM call.
 	anticipationProvider := anticipation.NewProvider(anticipationStore)
 	contextProvider := agent.NewCompositeContextProvider(anticipationProvider)
-	contextProvider.Add(agent.NewChannelProvider())
+	contextProvider.Add(agent.NewChannelProvider(&contactNameLookup{store: contactStore}))
 
 	episodicProvider := episodic.NewProvider(archiveStore, logger, episodic.Config{
 		Timezone:          cfg.Timezone,
@@ -1819,4 +1819,41 @@ func (r *contactPhoneResolver) ResolvePhone(phone string) (string, bool) {
 		return "", false
 	}
 	return matches[0].Name, true
+}
+
+// contactNameLookup resolves contact names to summaries for channel
+// context injection. Implements agent.ContactLookup.
+type contactNameLookup struct {
+	store *contacts.Store
+}
+
+// LookupContactByName returns a contact summary for the given name, or
+// nil if no matching contact is found. Database errors other than "not
+// found" are logged so operational issues don't silently disable
+// contact context injection.
+func (r *contactNameLookup) LookupContactByName(name string) *agent.ContactSummary {
+	if r == nil || r.store == nil {
+		return nil
+	}
+
+	c, err := r.store.FindByName(name)
+	if err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			slog.Error("failed to look up contact by name", "name", name, "error", err)
+		}
+		return nil
+	}
+
+	facts, err := r.store.GetFacts(c.ID)
+	if err != nil {
+		slog.Error("failed to get facts for contact", "contact_id", c.ID, "name", c.Name, "error", err)
+		facts = nil
+	}
+
+	return &agent.ContactSummary{
+		Name:         c.Name,
+		Relationship: c.Relationship,
+		Summary:      c.Summary,
+		Facts:        facts,
+	}
 }
