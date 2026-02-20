@@ -36,14 +36,21 @@ func SendMail(ctx context.Context, cfg SMTPConfig, from string, recipients []str
 
 	if !cfg.StartTLS {
 		// Implicit TLS (port 465): connect over TLS from the start.
+		// Use DialContext + tls.Client instead of tls.DialWithDialer so
+		// the connection respects context cancellation during the dial.
 		tlsCfg := &tls.Config{ServerName: cfg.Host}
-		conn, dialErr := tls.DialWithDialer(dialer, "tcp", addr, tlsCfg)
+		conn, dialErr := dialer.DialContext(ctx, "tcp", addr)
 		if dialErr != nil {
 			return fmt.Errorf("dial SMTPS %s: %w", addr, dialErr)
 		}
-		client, err = smtp.NewClient(conn, cfg.Host)
+		tlsConn := tls.Client(conn, tlsCfg)
+		if hsErr := tlsConn.Handshake(); hsErr != nil {
+			tlsConn.Close()
+			return fmt.Errorf("TLS handshake with %s: %w", addr, hsErr)
+		}
+		client, err = smtp.NewClient(tlsConn, cfg.Host)
 		if err != nil {
-			conn.Close()
+			tlsConn.Close()
 			return fmt.Errorf("create SMTP client on %s: %w", addr, err)
 		}
 	} else {

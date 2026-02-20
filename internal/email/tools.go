@@ -387,14 +387,18 @@ func (t *Tools) sendEmail(ctx context.Context, account string, to, cc []string, 
 	// Store a copy in the configured Sent folder via IMAP APPEND.
 	if acctCfg.SentFolder != "" {
 		client, err := t.manager.Account(account)
-		if err == nil {
-			if appendErr := client.AppendMessage(ctx, acctCfg.SentFolder, msg); appendErr != nil {
-				slog.Warn("failed to store sent message in IMAP folder",
-					"folder", acctCfg.SentFolder,
-					"account", acctCfg.Name,
-					"error", appendErr,
-				)
-			}
+		if err != nil {
+			slog.Warn("failed to retrieve account for storing sent message",
+				"folder", acctCfg.SentFolder,
+				"account", acctCfg.Name,
+				"error", err,
+			)
+		} else if appendErr := client.AppendMessage(ctx, acctCfg.SentFolder, msg); appendErr != nil {
+			slog.Warn("failed to store sent message in IMAP folder",
+				"folder", acctCfg.SentFolder,
+				"account", acctCfg.Name,
+				"error", appendErr,
+			)
 		}
 	}
 
