@@ -35,7 +35,9 @@ func TestPeriodicReflectionPrompt_ContainsKeyPhrases(t *testing.T) {
 		"periodic reflection",
 		"ego.md",
 		"Current ego.md",
-		"curiosity",
+		"should contain",
+		"should NOT contain",
+		"self-reflection, not a status report",
 	}
 	for _, phrase := range phrases {
 		if !strings.Contains(got, phrase) {
