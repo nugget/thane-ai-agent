@@ -531,6 +531,17 @@ func (s *SQLiteStore) GetToolCalls(conversationID string, limit int) []ToolCall 
 	return calls
 }
 
+// ClearToolCalls deletes tool call records for a conversation from the
+// working store. Called after archiving to prevent re-archival on the
+// next session split.
+func (s *SQLiteStore) ClearToolCalls(conversationID string) error {
+	if conversationID == "" {
+		return fmt.Errorf("conversation ID required for ClearToolCalls")
+	}
+	_, err := s.db.Exec(`DELETE FROM tool_calls WHERE conversation_id = ?`, conversationID)
+	return err
+}
+
 // GetToolCallsByName retrieves tool calls filtered by tool name.
 func (s *SQLiteStore) GetToolCallsByName(toolName string, limit int) []ToolCall {
 	if limit <= 0 {
