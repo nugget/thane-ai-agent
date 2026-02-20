@@ -57,7 +57,9 @@ func builtinProfiles() map[string]*Profile {
 			AllowedTools: nil, // all tools minus thane_delegate
 			SystemPrompt: generalSystemPrompt,
 			RouterHints: map[string]string{
-				router.HintLocalOnly: "true",
+				router.HintLocalOnly:    "true",
+				router.HintQualityFloor: "5",
+				router.HintPreferSpeed:  "true",
 			},
 			MaxIter:     defaultMaxIter,
 			MaxTokens:   defaultMaxTokens,
@@ -76,8 +78,10 @@ func builtinProfiles() map[string]*Profile {
 			},
 			SystemPrompt: haSystemPrompt,
 			RouterHints: map[string]string{
-				router.HintLocalOnly: "true",
-				router.HintMission:   "device_control",
+				router.HintLocalOnly:    "true",
+				router.HintMission:      "device_control",
+				router.HintQualityFloor: "4",
+				router.HintPreferSpeed:  "true",
 			},
 			MaxIter:     defaultMaxIter,
 			MaxTokens:   defaultMaxTokens,

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"time"
 
@@ -194,19 +195,36 @@ func (b *WakeBridge) runWake(a *anticipation.Anticipation, message string) {
 	ctx, cancel := context.WithTimeout(b.ctx, wakeTimeout)
 	defer cancel()
 
+	// Build routing hints from the anticipation's stored preferences,
+	// falling back to defaults when not set.
+	localOnly := "true"
+	if a.LocalOnly != nil && !*a.LocalOnly {
+		localOnly = "false"
+	}
+
+	qualityFloor := "6"
+	if a.QualityFloor > 0 {
+		qualityFloor = strconv.Itoa(a.QualityFloor)
+	}
+
+	hints := map[string]string{
+		"source":                    "anticipation",
+		"anticipation_id":           a.ID,
+		router.HintLocalOnly:        localOnly,
+		router.HintQualityFloor:     qualityFloor,
+		router.HintMission:          "anticipation",
+		router.HintDelegationGating: "disabled", // full tool access, no delegation indirection
+	}
+	if a.Model != "" {
+		hints[router.HintModelPreference] = a.Model
+	}
+
 	req := &agent.Request{
 		// Each anticipation gets its own conversation so wake history
 		// is isolated from interactive chat (prevents context bloat).
 		ConversationID: fmt.Sprintf("wake-%s", a.ID),
 		Messages:       []agent.Message{{Role: "user", Content: message}},
-		Hints: map[string]string{
-			"source":                    "anticipation",
-			"anticipation_id":           a.ID,
-			router.HintLocalOnly:        "true",
-			router.HintQualityFloor:     "6", // floor is inclusive; excludes quality≤5 models
-			router.HintMission:          "anticipation",
-			router.HintDelegationGating: "disabled", // full tool access, no delegation indirection
-		},
+		Hints:          hints,
 	}
 
 	// Recurring wakes should not have lifecycle tools — the creating

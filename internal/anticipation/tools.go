@@ -77,6 +77,18 @@ func (t *Tools) ToolDefinitions() []map[string]any {
 							"type":        "string",
 							"description": "Cooldown period between re-fires for recurring anticipations (e.g., '30s', '5m', '1h'). Omit to use the global default. Only meaningful for recurring anticipations.",
 						},
+						"model": map[string]any{
+							"type":        "string",
+							"description": "Soft model preference for wake execution (e.g., 'claude-sonnet-4-20250514'). Omit to let the router choose.",
+						},
+						"local_only": map[string]any{
+							"type":        "boolean",
+							"description": "If false, allows cloud models for wake execution. Default is true (local models only).",
+						},
+						"quality_floor": map[string]any{
+							"type":        "integer",
+							"description": "Minimum model quality rating (1-10) for wake execution. Default is 6. Set higher for tasks requiring stronger reasoning.",
+						},
 					},
 					"required": []string{"description", "context"},
 				},
@@ -218,6 +230,21 @@ func (t *Tools) createAnticipation(args map[string]any) (string, error) {
 		}
 		exp := time.Now().UTC().Add(dur)
 		a.ExpiresAt = &exp
+	}
+
+	// Parse routing hints for wake execution.
+	if v, ok := args["model"].(string); ok {
+		a.Model = v
+	}
+	if v, ok := args["local_only"].(bool); ok {
+		a.LocalOnly = &v
+	}
+	if v, ok := args["quality_floor"].(float64); ok {
+		q := int(v)
+		if q < 1 || q > 10 {
+			return "", fmt.Errorf("quality_floor must be between 1 and 10, got %d", q)
+		}
+		a.QualityFloor = q
 	}
 
 	// Validate: must have at least one trigger

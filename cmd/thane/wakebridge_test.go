@@ -811,6 +811,90 @@ func TestWakeBridge_RecurringExcludesLifecycleTools(t *testing.T) {
 	}
 }
 
+func TestWakeBridge_AnticipationRoutingHints(t *testing.T) {
+	localOnly := false
+	matcher := &mockMatcher{
+		matched: []*anticipation.Anticipation{{
+			ID:           "ant-hints",
+			Description:  "Custom routed wake",
+			Context:      "Use specific model.",
+			Model:        "claude-sonnet-4-20250514",
+			LocalOnly:    &localOnly,
+			QualityFloor: 8,
+		}},
+	}
+	runner := &chanRunner{
+		calls: make(chan *agent.Request, 1),
+		resp:  &agent.Response{Content: "Done."},
+	}
+	bridge, _ := newTestBridge(matcher, runner, time.Hour)
+
+	bridge.HandleStateChange("sensor.temp", "70", "80")
+
+	select {
+	case req := <-runner.calls:
+		// Verify per-anticipation routing hints override defaults.
+		if req.Hints[router.HintLocalOnly] != "false" {
+			t.Errorf("hint local_only = %q, want %q", req.Hints[router.HintLocalOnly], "false")
+		}
+		if req.Hints[router.HintQualityFloor] != "8" {
+			t.Errorf("hint quality_floor = %q, want %q", req.Hints[router.HintQualityFloor], "8")
+		}
+		if req.Hints[router.HintModelPreference] != "claude-sonnet-4-20250514" {
+			t.Errorf("hint model_preference = %q, want %q",
+				req.Hints[router.HintModelPreference], "claude-sonnet-4-20250514")
+		}
+		// Standard hints should still be present.
+		if req.Hints["source"] != "anticipation" {
+			t.Errorf("hint source = %q, want %q", req.Hints["source"], "anticipation")
+		}
+		if req.Hints[router.HintMission] != "anticipation" {
+			t.Errorf("hint mission = %q, want %q", req.Hints[router.HintMission], "anticipation")
+		}
+		if req.Hints[router.HintDelegationGating] != "disabled" {
+			t.Errorf("hint delegation_gating = %q, want %q",
+				req.Hints[router.HintDelegationGating], "disabled")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("runner.Run was not called within timeout")
+	}
+}
+
+func TestWakeBridge_DefaultRoutingHints(t *testing.T) {
+	// Anticipation with zero-value routing fields should use defaults:
+	// local_only=true, quality_floor=6, no model_preference.
+	matcher := &mockMatcher{
+		matched: []*anticipation.Anticipation{{
+			ID:          "ant-defaults",
+			Description: "Default routed wake",
+			Context:     "Use default routing.",
+		}},
+	}
+	runner := &chanRunner{
+		calls: make(chan *agent.Request, 1),
+		resp:  &agent.Response{Content: "Done."},
+	}
+	bridge, _ := newTestBridge(matcher, runner, time.Hour)
+
+	bridge.HandleStateChange("light.kitchen", "off", "on")
+
+	select {
+	case req := <-runner.calls:
+		if req.Hints[router.HintLocalOnly] != "true" {
+			t.Errorf("hint local_only = %q, want %q (default)", req.Hints[router.HintLocalOnly], "true")
+		}
+		if req.Hints[router.HintQualityFloor] != "6" {
+			t.Errorf("hint quality_floor = %q, want %q (default)", req.Hints[router.HintQualityFloor], "6")
+		}
+		if _, hasModel := req.Hints[router.HintModelPreference]; hasModel {
+			t.Errorf("hint model_preference should not be set for default routing, got %q",
+				req.Hints[router.HintModelPreference])
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("runner.Run was not called within timeout")
+	}
+}
+
 func TestFormatWakeMessage_RecurringNote(t *testing.T) {
 	a := &anticipation.Anticipation{
 		Description: "Test recurring",
