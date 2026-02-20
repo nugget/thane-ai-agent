@@ -32,7 +32,7 @@ The frontier model used ~62K input tokens for orchestration ($0.96). The local m
 
 When delegation is enabled (`delegation_required: true`), tools are partitioned:
 
-**Primary model (iteration 0) sees:**
+**Orchestrator (primary model) sees:**
 - `thane_delegate` — delegate tasks to local models
 - `remember_fact` / `recall_fact` — memory operations
 - `session_working_memory` — session scratchpad
@@ -43,7 +43,7 @@ When delegation is enabled (`delegation_required: true`), tools are partitioned:
 - MCP tools (`mcp_home_assistant_ha_*`)
 - File operations, shell exec, web search/fetch
 
-The `thane:ops` profile disables gating — the primary model sees everything directly. Use it when you need the frontier model's judgment on tool results, not just orchestration.
+The `thane:ops` profile disables orchestrator gating — the primary model sees everything directly. Use it when you need the frontier model's judgment on tool results, not just orchestration.
 
 ## Talents as Knowledge Bridge
 

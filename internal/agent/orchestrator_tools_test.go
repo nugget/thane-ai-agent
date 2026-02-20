@@ -116,12 +116,12 @@ func buildTestLoop(mock *mockLLM, extraNames []string) *Loop {
 
 func TestToolGating_RestrictedAllIterations(t *testing.T) {
 	// With gating active, ALL iterations should see only the restricted
-	// tool set — not just iter-0. The mock returns a tool call on iter-0
-	// (triggering iter-1) and a text response on iter-1 so we can
-	// inspect both calls.
+	// orchestrator tool set. The mock returns a tool call on the first
+	// iteration (triggering a second) and a text response on the second
+	// so we can inspect both calls.
 	mock := &mockLLM{
 		responses: []*llm.ChatResponse{
-			// Iter-0: model calls thane_delegate
+			// First iteration: model calls thane_delegate
 			{
 				Model: "test-model",
 				Message: llm.Message{
@@ -140,7 +140,7 @@ func TestToolGating_RestrictedAllIterations(t *testing.T) {
 				InputTokens:  100,
 				OutputTokens: 10,
 			},
-			// Iter-1: text response
+			// Second iteration: text response
 			{
 				Model:        "test-model",
 				Message:      llm.Message{Role: "assistant", Content: "Done."},
@@ -151,7 +151,7 @@ func TestToolGating_RestrictedAllIterations(t *testing.T) {
 	}
 
 	loop := buildTestLoop(mock, []string{"thane_delegate", "recall_fact", "web_search"})
-	loop.SetIter0Tools([]string{"thane_delegate", "recall_fact"})
+	loop.SetOrchestratorTools([]string{"thane_delegate", "recall_fact"})
 
 	_, err := loop.Run(context.Background(), &Request{
 		Messages: []Message{{Role: "user", Content: "check the lights"}},
@@ -187,7 +187,7 @@ func TestToolGating_RestrictedAcrossMultipleToolCalls(t *testing.T) {
 	// calls — the model never sees the full tool set.
 	mock := &mockLLM{
 		responses: []*llm.ChatResponse{
-			// Iter-0: delegate call
+			// First iteration: delegate call
 			{
 				Model: "test-model",
 				Message: llm.Message{
@@ -204,7 +204,7 @@ func TestToolGating_RestrictedAcrossMultipleToolCalls(t *testing.T) {
 					}},
 				},
 			},
-			// Iter-1: another delegate call (re-delegation)
+			// Second iteration: another delegate call (re-delegation)
 			{
 				Model: "test-model",
 				Message: llm.Message{
@@ -221,7 +221,7 @@ func TestToolGating_RestrictedAcrossMultipleToolCalls(t *testing.T) {
 					}},
 				},
 			},
-			// Iter-2: text response
+			// Third iteration: text response
 			{
 				Model:   "test-model",
 				Message: llm.Message{Role: "assistant", Content: "Done."},
@@ -230,7 +230,7 @@ func TestToolGating_RestrictedAcrossMultipleToolCalls(t *testing.T) {
 	}
 
 	loop := buildTestLoop(mock, []string{"thane_delegate", "recall_fact", "get_state", "web_search"})
-	loop.SetIter0Tools([]string{"thane_delegate"})
+	loop.SetOrchestratorTools([]string{"thane_delegate"})
 
 	_, err := loop.Run(context.Background(), &Request{
 		Messages: []Message{{Role: "user", Content: "test"}},
@@ -258,9 +258,9 @@ func TestToolGating_RestrictedAcrossMultipleToolCalls(t *testing.T) {
 	}
 }
 
-func TestIter0ToolGating_DisabledWhenNoDelegation(t *testing.T) {
-	// When iter0Tools is set but thane_delegate is NOT in the registry,
-	// gating should be auto-disabled — all tools visible on iter-0.
+func TestOrchestratorToolGating_DisabledWhenNoDelegation(t *testing.T) {
+	// When orchestratorTools is set but thane_delegate is NOT in the
+	// registry, gating should be auto-disabled — all tools visible.
 	mock := &mockLLM{
 		responses: []*llm.ChatResponse{
 			{
@@ -273,7 +273,7 @@ func TestIter0ToolGating_DisabledWhenNoDelegation(t *testing.T) {
 	// Note: thane_delegate is NOT in the registry (not in extraNames).
 	loop := buildTestLoop(mock, []string{"recall_fact"})
 	fullToolCount := len(loop.tools.List())
-	loop.SetIter0Tools([]string{"thane_delegate", "recall_fact"})
+	loop.SetOrchestratorTools([]string{"thane_delegate", "recall_fact"})
 
 	_, err := loop.Run(context.Background(), &Request{
 		Messages: []Message{{Role: "user", Content: "test"}},
@@ -289,12 +289,12 @@ func TestIter0ToolGating_DisabledWhenNoDelegation(t *testing.T) {
 	// All tools should be visible because gating is disabled (no thane_delegate).
 	names := toolNames(mock.calls[0].Tools)
 	if len(names) != fullToolCount {
-		t.Errorf("iter-0 tool count = %d, want %d (gating should be disabled); tools: %v", len(names), fullToolCount, names)
+		t.Errorf("tool count = %d, want %d (gating should be disabled); tools: %v", len(names), fullToolCount, names)
 	}
 }
 
-func TestIter0ToolGating_DisabledWhenEmpty(t *testing.T) {
-	// When iter0Tools is nil/empty, all tools should be available on iter-0.
+func TestOrchestratorToolGating_DisabledWhenEmpty(t *testing.T) {
+	// When orchestratorTools is nil/empty, all tools should be available.
 	mock := &mockLLM{
 		responses: []*llm.ChatResponse{
 			{
@@ -306,7 +306,7 @@ func TestIter0ToolGating_DisabledWhenEmpty(t *testing.T) {
 
 	loop := buildTestLoop(mock, []string{"thane_delegate", "recall_fact"})
 	fullToolCount := len(loop.tools.List())
-	// Don't call SetIter0Tools — leave nil.
+	// Don't call SetOrchestratorTools — leave nil.
 
 	_, err := loop.Run(context.Background(), &Request{
 		Messages: []Message{{Role: "user", Content: "test"}},
@@ -317,14 +317,14 @@ func TestIter0ToolGating_DisabledWhenEmpty(t *testing.T) {
 
 	names := toolNames(mock.calls[0].Tools)
 	if len(names) != fullToolCount {
-		t.Errorf("iter-0 tool count = %d, want %d; tools: %v", len(names), fullToolCount, names)
+		t.Errorf("tool count = %d, want %d; tools: %v", len(names), fullToolCount, names)
 	}
 }
 
 func TestToolGating_DisabledByDelegationGatingHint(t *testing.T) {
 	// When the delegation_gating hint is "disabled" (thane:ops profile),
-	// gating should be bypassed even when iter0Tools and thane_delegate
-	// are both present.
+	// gating should be bypassed even when orchestratorTools and
+	// thane_delegate are both present.
 	mock := &mockLLM{
 		responses: []*llm.ChatResponse{
 			{
@@ -336,7 +336,7 @@ func TestToolGating_DisabledByDelegationGatingHint(t *testing.T) {
 
 	loop := buildTestLoop(mock, []string{"thane_delegate", "recall_fact", "web_search"})
 	fullToolCount := len(loop.tools.List())
-	loop.SetIter0Tools([]string{"thane_delegate", "recall_fact"})
+	loop.SetOrchestratorTools([]string{"thane_delegate", "recall_fact"})
 
 	_, err := loop.Run(context.Background(), &Request{
 		Messages: []Message{{Role: "user", Content: "deploy the update"}},
@@ -353,6 +353,6 @@ func TestToolGating_DisabledByDelegationGatingHint(t *testing.T) {
 	// All tools should be visible because gating is disabled via hint.
 	names := toolNames(mock.calls[0].Tools)
 	if len(names) != fullToolCount {
-		t.Errorf("iter-0 tool count = %d, want %d (gating should be disabled by hint); tools: %v", len(names), fullToolCount, names)
+		t.Errorf("tool count = %d, want %d (gating should be disabled by hint); tools: %v", len(names), fullToolCount, names)
 	}
 }

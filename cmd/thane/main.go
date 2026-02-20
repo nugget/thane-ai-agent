@@ -1152,13 +1152,13 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	})
 	logger.Info("delegation enabled", "profiles", delegateExec.ProfileNames())
 
-	// --- Iter-0 tool gating ---
-	// When delegation_required is true, the first LLM iteration only sees
+	// --- Orchestrator tool gating ---
+	// When delegation_required is true, the agent loop only sees
 	// lightweight tools (delegate + memory), steering the primary model
 	// toward delegation instead of direct tool use.
 	if cfg.Agent.DelegationRequired {
-		loop.SetIter0Tools(cfg.Agent.Iter0Tools)
-		logger.Info("iter-0 tool gating enabled", "tools", cfg.Agent.Iter0Tools)
+		loop.SetOrchestratorTools(cfg.Agent.OrchestratorTools)
+		logger.Info("orchestrator tool gating enabled", "tools", cfg.Agent.OrchestratorTools)
 	}
 
 	// --- Capability tags ---

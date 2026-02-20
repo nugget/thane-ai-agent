@@ -136,8 +136,8 @@ type Config struct {
 	// memory files and recent conversation history).
 	Episodic EpisodicConfig `yaml:"episodic"`
 
-	// Agent configures agent loop behavior, including iter-0 tool
-	// gating for delegation-first architecture.
+	// Agent configures agent loop behavior, including orchestrator
+	// tool gating for delegation-first architecture.
 	Agent AgentConfig `yaml:"agent"`
 
 	// CapabilityTags defines named groups of tools and talents that
@@ -408,17 +408,20 @@ type EpisodicConfig struct {
 }
 
 // AgentConfig configures agent loop behavior. When DelegationRequired
-// is true, the first iteration of the agent loop only advertises the
-// tools listed in Iter0Tools, steering the primary model toward
-// delegation instead of direct tool use. Subsequent iterations unlock
-// the full tool set as an escape hatch.
+// is true, the agent loop only advertises the tools listed in
+// OrchestratorTools, steering the primary model toward delegation
+// instead of direct tool use.
 type AgentConfig struct {
-	// Iter0Tools lists tool names to advertise on iteration 0 when
+	// OrchestratorTools lists tool names to advertise when
 	// DelegationRequired is true. If empty, a sensible default set
 	// is applied (thane_delegate plus lightweight memory tools).
-	Iter0Tools []string `yaml:"iter0_tools"`
+	OrchestratorTools []string `yaml:"orchestrator_tools"`
 
-	// DelegationRequired enables iter-0 tool gating. When false
+	// DeprecatedIter0Tools is the legacy name for OrchestratorTools.
+	// Kept for backward compatibility with existing config files.
+	DeprecatedIter0Tools []string `yaml:"iter0_tools"`
+
+	// DelegationRequired enables orchestrator tool gating. When false
 	// (the default), all tools are available on every iteration.
 	DelegationRequired bool `yaml:"delegation_required"`
 }
@@ -843,8 +846,14 @@ func (c *Config) applyDefaults() {
 		c.Debug.DumpDir = "./debug"
 	}
 
-	if c.Agent.DelegationRequired && len(c.Agent.Iter0Tools) == 0 {
-		c.Agent.Iter0Tools = []string{
+	// Backward compat: migrate deprecated iter0_tools → orchestrator_tools.
+	if len(c.Agent.OrchestratorTools) == 0 && len(c.Agent.DeprecatedIter0Tools) > 0 {
+		c.Agent.OrchestratorTools = c.Agent.DeprecatedIter0Tools
+		c.Agent.DeprecatedIter0Tools = nil
+	}
+
+	if c.Agent.DelegationRequired && len(c.Agent.OrchestratorTools) == 0 {
+		c.Agent.OrchestratorTools = []string{
 			"thane_delegate",
 			"recall_fact",
 			"remember_fact",
