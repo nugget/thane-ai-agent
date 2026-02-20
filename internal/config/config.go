@@ -328,14 +328,14 @@ type EmbeddingsConfig struct {
 	BaseURL string `yaml:"baseurl"` // Ollama URL for embeddings. Default: models.ollama_url
 }
 
-// ContextConfig configures static context injection into the system prompt.
-// Files listed in InjectFiles are read at session start and appended to the
-// system prompt, giving the agent immediate access to key knowledge without
-// spending tool call iterations reading files.
+// ContextConfig configures context injection into the system prompt.
+// Files listed in InjectFiles are re-read on every agent turn so that
+// external edits (e.g. MEMORY.md updated by another runtime) are
+// visible without restart. Paths are resolved once at startup.
 type ContextConfig struct {
-	// InjectFiles is a list of file paths to read and inject into the
-	// system prompt. Paths support ~ expansion. Missing or unreadable
-	// files are skipped with a warning.
+	// InjectFiles is a list of file paths to re-read and inject into
+	// the system prompt on every turn. Paths support ~ expansion.
+	// Missing or unreadable files are silently skipped at read time.
 	InjectFiles []string `yaml:"inject_files"`
 }
 

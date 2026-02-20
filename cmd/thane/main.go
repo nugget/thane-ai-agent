@@ -664,10 +664,13 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	loop.SetDebugConfig(cfg.Debug)
 	loop.SetArchiver(archiveAdapter)
 
-	// --- Static context injection ---
+	// --- Context injection ---
+	// Resolve inject_file paths at startup (tilde expansion, existence
+	// check) but defer reading to each agent turn so external edits
+	// (e.g. MEMORY.md updated by another runtime) are visible without
+	// restart.
 	if len(cfg.Context.InjectFiles) > 0 {
-		var ctxBuf strings.Builder
-		var injectedCount int
+		var resolved []string
 		for _, path := range cfg.Context.InjectFiles {
 			// Expand ~ to the user's home directory.
 			if strings.HasPrefix(path, "~") {
@@ -680,28 +683,19 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 					}
 				}
 			}
-			data, err := os.ReadFile(path)
-			if err != nil {
+			if _, err := os.Stat(path); err != nil {
 				if errors.Is(err, fs.ErrNotExist) {
 					logger.Warn("context inject file not found", "path", path)
 				} else {
 					logger.Warn("context inject file unreadable", "path", path, "error", err)
 				}
-				continue
+				// Still include the path — the file may appear later.
 			}
-			logger.Debug("context file injected", "path", path, "size", len(data))
-			injectedCount++
-			if ctxBuf.Len() > 0 {
-				ctxBuf.WriteString("\n\n---\n\n")
-			}
-			ctxBuf.WriteString(string(data))
+			resolved = append(resolved, path)
+			logger.Debug("context inject file registered", "path", path)
 		}
-		if injectedCount > 0 {
-			logger.Info("context injected", "files", injectedCount, "total_bytes", ctxBuf.Len())
-		}
-		if ctxBuf.Len() > 0 {
-			loop.SetInjectedContext(ctxBuf.String())
-		}
+		loop.SetInjectFiles(resolved)
+		logger.Info("context inject files registered", "files", len(resolved))
 	}
 
 	// Start initial session

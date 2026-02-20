@@ -136,12 +136,12 @@ type Loop struct {
 	llm               llm.Client
 	tools             *tools.Registry
 	model             string
-	talents           string // Combined talent content for system prompt
-	persona           string // Persona content (replaces base system prompt if set)
-	egoFile           string // Path to ego.md — read fresh each turn for system prompt
-	injectedContext   string // Static context from inject_files, loaded at startup
-	timezone          string // IANA timezone for Current Conditions (e.g., "America/Chicago")
-	contextWindow     int    // Context window size of default model
+	talents           string   // Combined talent content for system prompt
+	persona           string   // Persona content (replaces base system prompt if set)
+	egoFile           string   // Path to ego.md — read fresh each turn for system prompt
+	injectFiles       []string // Paths to context files — re-read each turn
+	timezone          string   // IANA timezone for Current Conditions (e.g., "America/Chicago")
+	contextWindow     int      // Context window size of default model
 	failoverHandler   FailoverHandler
 	contextProvider   ContextProvider
 	archiver          SessionArchiver
@@ -207,9 +207,12 @@ func (l *Loop) SetEgoFile(path string) {
 	l.egoFile = path
 }
 
-// SetInjectedContext sets static context to include in every system prompt.
-func (l *Loop) SetInjectedContext(ctx string) {
-	l.injectedContext = ctx
+// SetInjectFiles sets the file paths whose content is re-read and
+// injected into the system prompt on every turn. Paths should already
+// have tilde expansion applied. Missing or unreadable files are
+// silently skipped at read time.
+func (l *Loop) SetInjectFiles(paths []string) {
+	l.injectFiles = paths
 }
 
 // SetTimezone configures the IANA timezone for the Current Conditions
@@ -390,11 +393,26 @@ func (l *Loop) buildSystemPrompt(ctx context.Context, userMessage string, histor
 	}
 
 	// 3. Injected context (knowledge — what do I know)
-	if l.injectedContext != "" {
-		mark("INJECTED CONTEXT")
-		sb.WriteString("\n\n## Injected Context\n\n")
-		sb.WriteString(l.injectedContext)
-		seal()
+	// Re-read inject_files each turn so external changes (e.g. MEMORY.md
+	// updated by another runtime) are visible without restart.
+	if len(l.injectFiles) > 0 {
+		var ctxBuf strings.Builder
+		for _, path := range l.injectFiles {
+			data, err := os.ReadFile(path)
+			if err != nil {
+				continue
+			}
+			if ctxBuf.Len() > 0 {
+				ctxBuf.WriteString("\n\n---\n\n")
+			}
+			ctxBuf.Write(data)
+		}
+		if ctxBuf.Len() > 0 {
+			mark("INJECTED CONTEXT")
+			sb.WriteString("\n\n## Injected Context\n\n")
+			sb.WriteString(ctxBuf.String())
+			seal()
+		}
 	}
 
 	// 4. Current Conditions (environment — where/when am I)
