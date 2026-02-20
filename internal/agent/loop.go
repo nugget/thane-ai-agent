@@ -129,25 +129,25 @@ type SessionArchiver interface {
 
 // Loop is the core agent execution loop.
 type Loop struct {
-	logger          *slog.Logger
-	memory          MemoryStore
-	compactor       Compactor
-	router          *router.Router
-	llm             llm.Client
-	tools           *tools.Registry
-	model           string
-	talents         string // Combined talent content for system prompt
-	persona         string // Persona content (replaces base system prompt if set)
-	egoFile         string // Path to ego.md — read fresh each turn for system prompt
-	injectedContext string // Static context from inject_files, loaded at startup
-	timezone        string // IANA timezone for Current Conditions (e.g., "America/Chicago")
-	contextWindow   int    // Context window size of default model
-	failoverHandler FailoverHandler
-	contextProvider ContextProvider
-	archiver        SessionArchiver
-	extractor       *memory.Extractor
-	iter0Tools      []string           // Restricted tool set for orchestrator mode (nil = all tools)
-	debugCfg        config.DebugConfig // Debug options (system prompt dump, etc.)
+	logger            *slog.Logger
+	memory            MemoryStore
+	compactor         Compactor
+	router            *router.Router
+	llm               llm.Client
+	tools             *tools.Registry
+	model             string
+	talents           string // Combined talent content for system prompt
+	persona           string // Persona content (replaces base system prompt if set)
+	egoFile           string // Path to ego.md — read fresh each turn for system prompt
+	injectedContext   string // Static context from inject_files, loaded at startup
+	timezone          string // IANA timezone for Current Conditions (e.g., "America/Chicago")
+	contextWindow     int    // Context window size of default model
+	failoverHandler   FailoverHandler
+	contextProvider   ContextProvider
+	archiver          SessionArchiver
+	extractor         *memory.Extractor
+	orchestratorTools []string           // Restricted tool set for orchestrator mode (nil = all tools)
+	debugCfg          config.DebugConfig // Debug options (system prompt dump, etc.)
 
 	// Capability tags — per-session tool/talent filtering.
 	//
@@ -218,14 +218,15 @@ func (l *Loop) SetTimezone(tz string) {
 	l.timezone = tz
 }
 
-// SetIter0Tools configures the restricted tool set for all iterations
-// of the agent loop. When set, only the named tools are advertised on
-// every LLM call, keeping the primary model in orchestrator mode and
-// steering it toward delegation. If thane_delegate is not registered
-// in the tool registry, gating is silently disabled to avoid leaving
-// the agent without actionable tools.
-func (l *Loop) SetIter0Tools(names []string) {
-	l.iter0Tools = names
+// SetOrchestratorTools configures the restricted tool set for all
+// iterations of the agent loop. When set, only the named tools are
+// advertised on every LLM call, keeping the primary model in
+// orchestrator mode and steering it toward delegation. If
+// thane_delegate is not registered in the tool registry, gating is
+// silently disabled to avoid leaving the agent without actionable
+// tools.
+func (l *Loop) SetOrchestratorTools(names []string) {
+	l.orchestratorTools = names
 }
 
 // SetDebugConfig configures debug options for the agent loop.
@@ -782,12 +783,12 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	// restricted set would leave the agent unable to act. The thane:ops
 	// profile disables gating via the delegation_gating hint to give the
 	// model direct access to all tools.
-	gatingActive := len(l.iter0Tools) > 0 && l.tools.Get("thane_delegate") != nil
+	gatingActive := len(l.orchestratorTools) > 0 && l.tools.Get("thane_delegate") != nil
 	if req.Hints[router.HintDelegationGating] == "disabled" {
 		gatingActive = false
 	}
 	if gatingActive {
-		log.Info("tool gating active", "tools", l.iter0Tools)
+		log.Info("orchestrator tool gating active", "tools", l.orchestratorTools)
 	}
 
 	// Build the effective tool registry. When capability tagging is active,
@@ -830,7 +831,7 @@ iterLoop:
 		// orchestrator mode across all iterations.
 		var toolDefs []map[string]any
 		if gatingActive {
-			toolDefs = effectiveTools.FilteredCopy(l.iter0Tools).List()
+			toolDefs = effectiveTools.FilteredCopy(l.orchestratorTools).List()
 		} else {
 			toolDefs = effectiveTools.List()
 		}

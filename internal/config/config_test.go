@@ -95,7 +95,7 @@ func TestLoad_InlineSecrets(t *testing.T) {
 	}
 }
 
-func TestAgentConfig_DefaultIter0Tools(t *testing.T) {
+func TestAgentConfig_DefaultOrchestratorTools(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
 	os.WriteFile(path, []byte("agent:\n  delegation_required: true\n"), 0600)
@@ -110,17 +110,35 @@ func TestAgentConfig_DefaultIter0Tools(t *testing.T) {
 	}
 
 	want := []string{"thane_delegate", "recall_fact", "remember_fact", "save_contact", "lookup_contact", "session_working_memory", "session_close", "archive_search"}
-	if len(cfg.Agent.Iter0Tools) != len(want) {
-		t.Fatalf("iter0_tools length = %d, want %d; got %v", len(cfg.Agent.Iter0Tools), len(want), cfg.Agent.Iter0Tools)
+	if len(cfg.Agent.OrchestratorTools) != len(want) {
+		t.Fatalf("orchestrator_tools length = %d, want %d; got %v", len(cfg.Agent.OrchestratorTools), len(want), cfg.Agent.OrchestratorTools)
 	}
 	for i, name := range want {
-		if cfg.Agent.Iter0Tools[i] != name {
-			t.Errorf("iter0_tools[%d] = %q, want %q", i, cfg.Agent.Iter0Tools[i], name)
+		if cfg.Agent.OrchestratorTools[i] != name {
+			t.Errorf("orchestrator_tools[%d] = %q, want %q", i, cfg.Agent.OrchestratorTools[i], name)
 		}
 	}
 }
 
-func TestAgentConfig_CustomIter0Tools(t *testing.T) {
+func TestAgentConfig_CustomOrchestratorTools(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	os.WriteFile(path, []byte("agent:\n  delegation_required: true\n  orchestrator_tools:\n    - thane_delegate\n    - recall_fact\n"), 0600)
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load error: %v", err)
+	}
+
+	if len(cfg.Agent.OrchestratorTools) != 2 {
+		t.Fatalf("orchestrator_tools length = %d, want 2; got %v", len(cfg.Agent.OrchestratorTools), cfg.Agent.OrchestratorTools)
+	}
+	if cfg.Agent.OrchestratorTools[0] != "thane_delegate" || cfg.Agent.OrchestratorTools[1] != "recall_fact" {
+		t.Errorf("orchestrator_tools = %v, want [thane_delegate recall_fact]", cfg.Agent.OrchestratorTools)
+	}
+}
+
+func TestAgentConfig_BackwardCompatIter0Tools(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
 	os.WriteFile(path, []byte("agent:\n  delegation_required: true\n  iter0_tools:\n    - thane_delegate\n    - recall_fact\n"), 0600)
@@ -130,11 +148,16 @@ func TestAgentConfig_CustomIter0Tools(t *testing.T) {
 		t.Fatalf("Load error: %v", err)
 	}
 
-	if len(cfg.Agent.Iter0Tools) != 2 {
-		t.Fatalf("iter0_tools length = %d, want 2; got %v", len(cfg.Agent.Iter0Tools), cfg.Agent.Iter0Tools)
+	// The deprecated iter0_tools key should be migrated to OrchestratorTools.
+	if len(cfg.Agent.OrchestratorTools) != 2 {
+		t.Fatalf("orchestrator_tools length = %d, want 2; got %v", len(cfg.Agent.OrchestratorTools), cfg.Agent.OrchestratorTools)
 	}
-	if cfg.Agent.Iter0Tools[0] != "thane_delegate" || cfg.Agent.Iter0Tools[1] != "recall_fact" {
-		t.Errorf("iter0_tools = %v, want [thane_delegate recall_fact]", cfg.Agent.Iter0Tools)
+	if cfg.Agent.OrchestratorTools[0] != "thane_delegate" || cfg.Agent.OrchestratorTools[1] != "recall_fact" {
+		t.Errorf("orchestrator_tools = %v, want [thane_delegate recall_fact]", cfg.Agent.OrchestratorTools)
+	}
+	// The deprecated field should be cleared after migration.
+	if len(cfg.Agent.DeprecatedIter0Tools) != 0 {
+		t.Errorf("deprecated iter0_tools should be cleared after migration, got %v", cfg.Agent.DeprecatedIter0Tools)
 	}
 }
 
@@ -148,8 +171,8 @@ func TestAgentConfig_NoDefaultsWhenDisabled(t *testing.T) {
 		t.Fatalf("Load error: %v", err)
 	}
 
-	if len(cfg.Agent.Iter0Tools) != 0 {
-		t.Errorf("iter0_tools should be empty when delegation_required is false, got %v", cfg.Agent.Iter0Tools)
+	if len(cfg.Agent.OrchestratorTools) != 0 {
+		t.Errorf("orchestrator_tools should be empty when delegation_required is false, got %v", cfg.Agent.OrchestratorTools)
 	}
 }
 
