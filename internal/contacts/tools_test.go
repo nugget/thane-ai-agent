@@ -101,6 +101,173 @@ func TestSaveContact_WithFacts(t *testing.T) {
 	}
 }
 
+func TestSaveContact_TopLevelFieldsRescued(t *testing.T) {
+	tools := newTestTools(t)
+
+	// Simulate what models actually send: email, phone, notes as top-level keys.
+	result, err := tools.SaveContact(`{
+		"name": "James Harren",
+		"email": "shaded123@gmail.com",
+		"phone": "555-1234",
+		"notes": "First Thane beta tester candidate"
+	}`)
+	if err != nil {
+		t.Fatalf("SaveContact() error = %v", err)
+	}
+	if !strings.Contains(result, "Saved new contact") {
+		t.Errorf("result = %q, want 'Saved new contact'", result)
+	}
+
+	c, err := tools.store.FindByName("James Harren")
+	if err != nil {
+		t.Fatal(err)
+	}
+	facts, err := tools.store.GetFacts(c.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	checks := map[string]string{
+		"email": "shaded123@gmail.com",
+		"phone": "555-1234",
+		"notes": "First Thane beta tester candidate",
+	}
+	for key, want := range checks {
+		vals := facts[key]
+		if len(vals) != 1 || vals[0] != want {
+			t.Errorf("fact %q = %v, want [%s]", key, vals, want)
+		}
+	}
+}
+
+func TestSaveContact_TopLevelFieldsMergeWithExplicitFacts(t *testing.T) {
+	tools := newTestTools(t)
+
+	// Both explicit facts and top-level fields present — both should be saved.
+	_, err := tools.SaveContact(`{
+		"name": "Mixed Fields",
+		"email": "mixed@example.com",
+		"facts": {"timezone": "America/Chicago"}
+	}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	c, err := tools.store.FindByName("Mixed Fields")
+	if err != nil {
+		t.Fatal(err)
+	}
+	facts, err := tools.store.GetFacts(c.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(facts["email"]) != 1 || facts["email"][0] != "mixed@example.com" {
+		t.Errorf("email = %v, want [mixed@example.com]", facts["email"])
+	}
+	if len(facts["timezone"]) != 1 || facts["timezone"][0] != "America/Chicago" {
+		t.Errorf("timezone = %v, want [America/Chicago]", facts["timezone"])
+	}
+}
+
+func TestSaveContact_ExplicitFactsTakePrecedence(t *testing.T) {
+	tools := newTestTools(t)
+
+	// When the same key appears both top-level and in facts, the explicit
+	// facts value must win — rescue should not overwrite it.
+	_, err := tools.SaveContact(`{
+		"name": "Conflict Fields",
+		"email": "top-level@example.com",
+		"facts": {"email": "explicit@example.com"}
+	}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	c, err := tools.store.FindByName("Conflict Fields")
+	if err != nil {
+		t.Fatal(err)
+	}
+	facts, err := tools.store.GetFacts(c.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(facts["email"]) != 1 || facts["email"][0] != "explicit@example.com" {
+		t.Errorf("email = %v, want [explicit@example.com] (explicit facts should win)", facts["email"])
+	}
+}
+
+func TestSaveContact_TopLevelFieldsIgnoreNonString(t *testing.T) {
+	tools := newTestTools(t)
+
+	// Non-string top-level values should be ignored (not rescued).
+	_, err := tools.SaveContact(`{
+		"name": "Typed Fields",
+		"email": "typed@example.com",
+		"count": 42,
+		"active": true
+	}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	c, err := tools.store.FindByName("Typed Fields")
+	if err != nil {
+		t.Fatal(err)
+	}
+	facts, err := tools.store.GetFacts(c.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// email is a string — should be rescued.
+	if len(facts["email"]) != 1 {
+		t.Errorf("email should be rescued, got %v", facts["email"])
+	}
+	// count and active are not strings — should not be rescued.
+	if _, exists := facts["count"]; exists {
+		t.Error("non-string field 'count' should not be rescued")
+	}
+	if _, exists := facts["active"]; exists {
+		t.Error("non-string field 'active' should not be rescued")
+	}
+}
+
+func TestSaveContact_TopLevelFieldsOnUpdate(t *testing.T) {
+	tools := newTestTools(t)
+
+	// Create first.
+	_, err := tools.SaveContact(`{"name": "Update Target", "kind": "person"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Update with top-level fields.
+	result, err := tools.SaveContact(`{
+		"name": "Update Target",
+		"organization": "Acme Corp"
+	}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result, "Updated contact") {
+		t.Errorf("result = %q, want 'Updated contact'", result)
+	}
+
+	c, err := tools.store.FindByName("Update Target")
+	if err != nil {
+		t.Fatal(err)
+	}
+	facts, err := tools.store.GetFacts(c.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(facts["organization"]) != 1 || facts["organization"][0] != "Acme Corp" {
+		t.Errorf("organization = %v, want [Acme Corp]", facts["organization"])
+	}
+}
+
 func TestSaveContact_WithEmbedding(t *testing.T) {
 	tools := newTestTools(t)
 	tools.SetEmbeddingClient(&fakeEmbedder{embedding: []float32{0.1, 0.2, 0.3}})
