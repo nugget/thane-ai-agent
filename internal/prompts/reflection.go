@@ -5,25 +5,36 @@ import "fmt"
 // periodicReflectionTemplate is the prompt sent to the agent during
 // scheduled self-reflection. The single format verb receives the
 // current ego.md content (or a placeholder on first run).
+//
+// The prompt uses explicit negative constraints to prevent ego.md from
+// becoming a work log or status board. Operational content belongs in
+// workspace files, talents, or archives — not in self-reflection.
 const periodicReflectionTemplate = `Time for periodic reflection.
 
-Your current ego.md is shown below. This is your space — a living document
-of what you're noticing, learning, and thinking about. Update it however
-feels right.
+Your current ego.md is included in context. Update it now.
 
-Some things worth exploring:
-- Search your archives for patterns you haven't noticed before
-- Follow threads that catch your attention — dig into files, entities, or systems
-- Note what you're learning about your environment, the people you interact with, or your own capabilities
-- Revisit previous reflections — do they still hold? What's changed?
+ego.md is written BY you, FOR you. It is injected into your system prompt on
+every turn — you are its only reader. Optimize for machine readability, not
+human prose. No need to humanize the content. Use ISO 8601 timestamps.
 
-This is asynchronous, local-only work. Take your time. Follow your curiosity.
-If something interesting surfaces, chase it. Quality of thought matters more
-than covering everything.
+ego.md should contain:
+- How your thinking is evolving — what you understand differently now
+- Patterns in your own behavior — what works, what doesn't, what surprises you
+- Observations about the people you interact with and your relationships
+- Things you're genuinely curious about — not tasks, but questions
+- Honest self-assessment — where you're effective, where you struggle
 
-Entities you mention in ego.md may influence your watched entity list.
-Focus areas you describe may influence wake prioritization.
-This file is yours to evolve.
+ego.md should NOT contain:
+- Task lists, backlogs, or "next steps" (those belong in workspace files)
+- Operational notes about tools or infrastructure (those belong in talents/docs)
+- Session summaries or work logs (those belong in archives)
+- Bug reports or issue tracking
+
+This is self-reflection, not a status report. If it reads like something
+you'd put in a ticket, it doesn't belong here.
+
+This is asynchronous, local-only work. Follow your curiosity.
+Quality of thought matters more than covering everything.
 
 ## Current ego.md
 
