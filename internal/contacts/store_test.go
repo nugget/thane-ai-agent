@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"math"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -882,6 +883,177 @@ func TestSemanticSearch_ZeroLimit(t *testing.T) {
 	}
 	if scores != nil {
 		t.Errorf("expected nil scores for limit=-5, got %d", len(scores))
+	}
+}
+
+func TestUpsert_TrustZoneDefault(t *testing.T) {
+	store := newTestStore(t)
+
+	c := &Contact{Name: "No Zone Set", Kind: "person"}
+	created, err := store.Upsert(c)
+	if err != nil {
+		t.Fatalf("Upsert() error = %v", err)
+	}
+	if created.TrustZone != "known" {
+		t.Errorf("TrustZone = %q, want %q", created.TrustZone, "known")
+	}
+
+	got, err := store.Get(created.ID)
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if got.TrustZone != "known" {
+		t.Errorf("Get().TrustZone = %q, want %q", got.TrustZone, "known")
+	}
+}
+
+func TestUpsert_TrustZoneSet(t *testing.T) {
+	store := newTestStore(t)
+
+	c := &Contact{Name: "Trusted Friend", Kind: "person", TrustZone: "trusted"}
+	created, err := store.Upsert(c)
+	if err != nil {
+		t.Fatalf("Upsert() error = %v", err)
+	}
+	if created.TrustZone != "trusted" {
+		t.Errorf("TrustZone = %q, want %q", created.TrustZone, "trusted")
+	}
+
+	got, err := store.Get(created.ID)
+	if err != nil {
+		t.Fatalf("Get() error = %v", err)
+	}
+	if got.TrustZone != "trusted" {
+		t.Errorf("Get().TrustZone = %q, want %q", got.TrustZone, "trusted")
+	}
+}
+
+func TestUpsert_TrustZoneValidation(t *testing.T) {
+	store := newTestStore(t)
+
+	c := &Contact{Name: "Bad Zone", Kind: "person", TrustZone: "superadmin"}
+	_, err := store.Upsert(c)
+	if err == nil {
+		t.Error("expected error for invalid trust zone, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid trust zone") {
+		t.Errorf("error = %q, want to contain 'invalid trust zone'", err.Error())
+	}
+}
+
+func TestUpsert_TrustZoneOwner(t *testing.T) {
+	store := newTestStore(t)
+
+	c := &Contact{Name: "The Owner", Kind: "person", TrustZone: "owner"}
+	created, err := store.Upsert(c)
+	if err != nil {
+		t.Fatalf("Upsert() error = %v", err)
+	}
+	if created.TrustZone != "owner" {
+		t.Errorf("TrustZone = %q, want %q", created.TrustZone, "owner")
+	}
+}
+
+func TestFindByTrustZone(t *testing.T) {
+	store := newTestStore(t)
+
+	contacts := []*Contact{
+		{Name: "Owner A", Kind: "person", TrustZone: "owner"},
+		{Name: "Trusted B", Kind: "person", TrustZone: "trusted"},
+		{Name: "Trusted C", Kind: "person", TrustZone: "trusted"},
+		{Name: "Known D", Kind: "person", TrustZone: "known"},
+	}
+	for _, c := range contacts {
+		if _, err := store.Upsert(c); err != nil {
+			t.Fatalf("Upsert(%q) error = %v", c.Name, err)
+		}
+	}
+
+	tests := []struct {
+		zone string
+		want int
+	}{
+		{"owner", 1},
+		{"trusted", 2},
+		{"known", 1},
+		{"unknown", 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.zone, func(t *testing.T) {
+			results, err := store.FindByTrustZone(tt.zone)
+			if err != nil {
+				t.Fatalf("FindByTrustZone(%q) error = %v", tt.zone, err)
+			}
+			if len(results) != tt.want {
+				t.Errorf("FindByTrustZone(%q) returned %d, want %d", tt.zone, len(results), tt.want)
+			}
+		})
+	}
+}
+
+func TestMigrate_TrustLevelFacts(t *testing.T) {
+	// Create a store, manually insert a contact with trust_level fact,
+	// then trigger migration and verify the trust_zone was set.
+	store := newTestStore(t)
+
+	c := &Contact{Name: "Legacy Friend", Kind: "person"}
+	created, err := store.Upsert(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Manually insert a trust_level fact (simulating legacy data).
+	_, err = store.db.Exec(
+		`INSERT INTO contact_facts (contact_id, key, value, updated_at) VALUES (?, 'trust_level', 'Close friend', ?)`,
+		created.ID.String(), "2025-01-01T00:00:00Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify the contact starts at "known".
+	got, err := store.Get(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.TrustZone != "known" {
+		t.Fatalf("TrustZone before migration = %q, want %q", got.TrustZone, "known")
+	}
+
+	// Run migration again.
+	store.migrateTrustLevelFacts()
+
+	got, err = store.Get(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.TrustZone != "trusted" {
+		t.Errorf("TrustZone after migration = %q, want %q", got.TrustZone, "trusted")
+	}
+}
+
+func TestMapTrustLevelToZone(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"Close friend", "trusted"},
+		{"trusted ally", "trusted"},
+		{"family member", "trusted"},
+		{"close collaborator", "trusted"},
+		{"TRUSTED FRIEND", "trusted"},
+		{"acquaintance", "known"},
+		{"vendor", "known"},
+		{"random person", "known"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := mapTrustLevelToZone(tt.input)
+			if got != tt.want {
+				t.Errorf("mapTrustLevelToZone(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
 	}
 }
 
