@@ -37,9 +37,11 @@ const (
 	// on every iteration (used by thane:ops).
 	HintDelegationGating = "delegation_gating"
 	// HintPreferSpeed indicates the caller benefits from faster response
-	// times over higher quality. When "true", models with Speed >= 7
-	// receive a scoring bonus. Use for background/delegation tasks where
-	// latency and resource efficiency matter more than maximum output quality.
+	// times over higher quality. When "true", any model with Speed >= 7
+	// receives a scoring bonus regardless of cost tier or provider. Can be
+	// decisive among similarly priced options. Use for background/delegation
+	// tasks where latency and resource efficiency matter more than maximum
+	// output quality.
 	HintPreferSpeed = "prefer_speed"
 )
 
@@ -327,13 +329,13 @@ func (r *Router) selectModel(req Request, decision *Decision) string {
 		}
 		if decision.Complexity == ComplexitySimple && m.Speed >= 7 {
 			score += 15 // Prefer fast for simple
-			decision.RulesMatched = append(decision.RulesMatched, "speed_bonus_"+m.Name)
+			rulesMatched = append(rulesMatched, "speed_bonus_"+m.Name)
 		}
 		if decision.Complexity == ComplexityComplex {
 			// Scale bonus with quality: quality 8 = +16, quality 10 = +20
 			if m.Quality >= 7 {
 				score += m.Quality * 2
-				decision.RulesMatched = append(decision.RulesMatched, "quality_bonus_"+m.Name)
+				rulesMatched = append(rulesMatched, "quality_bonus_"+m.Name)
 			}
 		}
 
@@ -345,20 +347,20 @@ func (r *Router) selectModel(req Request, decision *Decision) string {
 			switch decision.Complexity {
 			case ComplexitySimple:
 				score -= m.CostTier * 15 // e.g. tier 3 = -45
-				decision.RulesMatched = append(decision.RulesMatched, "cost_penalty_simple_"+m.Name)
+				rulesMatched = append(rulesMatched, "cost_penalty_simple_"+m.Name)
 			case ComplexityModerate:
 				score -= m.CostTier * 8 // e.g. tier 3 = -24
-				decision.RulesMatched = append(decision.RulesMatched, "cost_penalty_moderate_"+m.Name)
+				rulesMatched = append(rulesMatched, "cost_penalty_moderate_"+m.Name)
 			case ComplexityComplex:
 				score -= m.CostTier * 3 // e.g. tier 3 = -9
-				decision.RulesMatched = append(decision.RulesMatched, "cost_penalty_complex_"+m.Name)
+				rulesMatched = append(rulesMatched, "cost_penalty_complex_"+m.Name)
 			}
 		}
 
 		// Free/local models get a bonus for non-complex tasks
 		if m.CostTier == 0 && decision.Complexity < ComplexityComplex {
 			score += 15
-			decision.RulesMatched = append(decision.RulesMatched, "free_model_bonus_"+m.Name)
+			rulesMatched = append(rulesMatched, "free_model_bonus_"+m.Name)
 		}
 
 		// --- Context size penalty for small models ---
@@ -366,30 +368,30 @@ func (r *Router) selectModel(req Request, decision *Decision) string {
 		if contextRatio > 0.3 {
 			if m.Quality < 7 {
 				score -= 30
-				decision.RulesMatched = append(decision.RulesMatched, "context_penalty_"+m.Name)
+				rulesMatched = append(rulesMatched, "context_penalty_"+m.Name)
 			}
 		}
 		if contextRatio > 0.5 && m.Quality >= 7 {
 			score += 10
-			decision.RulesMatched = append(decision.RulesMatched, "context_bonus_"+m.Name)
+			rulesMatched = append(rulesMatched, "context_bonus_"+m.Name)
 		}
 
 		// --- Tool count consideration ---
 		if req.ToolCount > 4 && m.Quality < 7 {
 			score -= 20
-			decision.RulesMatched = append(decision.RulesMatched, "tools_penalty_"+m.Name)
+			rulesMatched = append(rulesMatched, "tools_penalty_"+m.Name)
 		}
 
 		// --- Local preference ---
 		if r.config.LocalFirst && m.CostTier == 0 {
 			score += 10
-			decision.RulesMatched = append(decision.RulesMatched, "local_first_"+m.Name)
+			rulesMatched = append(rulesMatched, "local_first_"+m.Name)
 		}
 
 		// --- Interactive needs speed ---
 		if req.Priority == PriorityInteractive && m.Speed >= 7 {
 			score += 10
-			decision.RulesMatched = append(decision.RulesMatched, "interactive_speed_"+m.Name)
+			rulesMatched = append(rulesMatched, "interactive_speed_"+m.Name)
 		}
 
 		// --- Hint-based adjustments ---
@@ -403,11 +405,11 @@ func (r *Router) selectModel(req Request, decision *Decision) string {
 				// HA/voice: strongly prefer fast and cheap
 				if m.CostTier == 0 {
 					score += 20
-					decision.RulesMatched = append(decision.RulesMatched, "channel_ha_bonus_"+m.Name)
+					rulesMatched = append(rulesMatched, "channel_ha_bonus_"+m.Name)
 				}
 				if m.Speed >= 7 {
 					score += 10
-					decision.RulesMatched = append(decision.RulesMatched, "channel_ha_speed_"+m.Name)
+					rulesMatched = append(rulesMatched, "channel_ha_speed_"+m.Name)
 				}
 			}
 
@@ -415,7 +417,7 @@ func (r *Router) selectModel(req Request, decision *Decision) string {
 			if floor, ok := req.Hints[HintQualityFloor]; ok {
 				if floorInt, err := strconv.Atoi(floor); err == nil && m.Quality < floorInt {
 					score -= 100 // effectively disqualify
-					decision.RulesMatched = append(decision.RulesMatched, "below_quality_floor_"+m.Name)
+					rulesMatched = append(rulesMatched, "below_quality_floor_"+m.Name)
 				}
 			}
 
@@ -425,27 +427,28 @@ func (r *Router) selectModel(req Request, decision *Decision) string {
 			if mission := req.Hints[HintMission]; mission == "background" || mission == "anticipation" {
 				if m.CostTier == 0 {
 					score += 20
-					decision.RulesMatched = append(decision.RulesMatched, "mission_background_bonus_"+m.Name)
+					rulesMatched = append(rulesMatched, "mission_background_bonus_"+m.Name)
 				}
 			}
 
 			// Model preference: soft boost for suggested model
 			if pref, ok := req.Hints[HintModelPreference]; ok && pref == m.Name {
 				score += 25
-				decision.RulesMatched = append(decision.RulesMatched, "model_preference_"+m.Name)
+				rulesMatched = append(rulesMatched, "model_preference_"+m.Name)
 			}
 
 			// Local only: heavily penalize paid models
 			if req.Hints[HintLocalOnly] == "true" && m.CostTier > 0 {
 				score -= 200
-				decision.RulesMatched = append(decision.RulesMatched, "local_only_penalty_"+m.Name)
+				rulesMatched = append(rulesMatched, "local_only_penalty_"+m.Name)
 			}
 
 			// Speed preference: bonus for fast models when caller values
-			// latency over maximum quality. Decisive among same-cost locals.
+			// latency over maximum quality. Can be decisive among similarly
+			// priced options.
 			if req.Hints[HintPreferSpeed] == "true" && m.Speed >= 7 {
 				score += 15
-				decision.RulesMatched = append(decision.RulesMatched, "prefer_speed_bonus_"+m.Name)
+				rulesMatched = append(rulesMatched, "prefer_speed_bonus_"+m.Name)
 			}
 		}
 

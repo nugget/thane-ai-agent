@@ -166,8 +166,8 @@ func TestMaxQuality_NoModels(t *testing.T) {
 
 func TestRoute_PreferSpeedHint(t *testing.T) {
 	// Two local models with the same cost tier: a fast+lower-quality model
-	// and a slow+higher-quality model. Without HintPreferSpeed the slow
-	// model wins on quality bonuses; with the hint the fast model wins.
+	// and a slow+higher-quality model. Use a moderate-complexity query so
+	// the built-in simple-complexity speed bonus doesn't interfere.
 	r := NewRouter(slog.Default(), Config{
 		DefaultModel: "fast-local",
 		Models: []Model{
@@ -177,8 +177,26 @@ func TestRoute_PreferSpeedHint(t *testing.T) {
 		MaxAuditLog: 10,
 	})
 
-	model, decision := r.Route(context.Background(), Request{
-		Query:      "check the lights",
+	query := "what is the current status of the lights"
+
+	// Without prefer_speed, the higher-quality slow model should win.
+	modelWithout, decisionWithout := r.Route(context.Background(), Request{
+		Query:      query,
+		NeedsTools: true,
+		ToolCount:  3,
+		Priority:   PriorityBackground,
+		Hints: map[string]string{
+			HintLocalOnly: "true",
+		},
+	})
+
+	if modelWithout != "slow-local" {
+		t.Fatalf("Route() without prefer_speed hint selected %q, want %q", modelWithout, "slow-local")
+	}
+
+	// With prefer_speed, the fast model should win.
+	modelWith, decisionWith := r.Route(context.Background(), Request{
+		Query:      query,
 		NeedsTools: true,
 		ToolCount:  3,
 		Priority:   PriorityBackground,
@@ -188,16 +206,17 @@ func TestRoute_PreferSpeedHint(t *testing.T) {
 		},
 	})
 
-	if model != "fast-local" {
-		t.Errorf("Route() with prefer_speed hint selected %q, want %q", model, "fast-local")
+	if modelWith != "fast-local" {
+		t.Errorf("Route() with prefer_speed hint selected %q, want %q", modelWith, "fast-local")
 	}
 
-	// Verify the fast model scored higher due to the speed bonus.
-	fastScore := decision.Scores["fast-local"]
-	slowScore := decision.Scores["slow-local"]
-	if fastScore <= slowScore {
-		t.Errorf("fast-local score (%d) should be higher than slow-local (%d) with prefer_speed hint",
-			fastScore, slowScore)
+	// Verify the scoring delta: fast model score should be higher with
+	// the hint than without.
+	fastWithHint := decisionWith.Scores["fast-local"]
+	fastWithoutHint := decisionWithout.Scores["fast-local"]
+	if fastWithHint <= fastWithoutHint {
+		t.Errorf("fast-local score with hint (%d) should exceed without hint (%d)",
+			fastWithHint, fastWithoutHint)
 	}
 }
 

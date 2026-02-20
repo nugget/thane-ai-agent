@@ -240,7 +240,11 @@ func (t *Tools) createAnticipation(args map[string]any) (string, error) {
 		a.LocalOnly = &v
 	}
 	if v, ok := args["quality_floor"].(float64); ok {
-		a.QualityFloor = int(v)
+		q := int(v)
+		if q < 1 || q > 10 {
+			return "", fmt.Errorf("quality_floor must be between 1 and 10, got %d", q)
+		}
+		a.QualityFloor = q
 	}
 
 	// Validate: must have at least one trigger

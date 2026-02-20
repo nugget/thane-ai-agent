@@ -810,14 +810,16 @@ func TestRoutingHints_Active(t *testing.T) {
 	store := setupTestStore(t)
 
 	localOnly := true
-	store.Create(&Anticipation{
+	if err := store.Create(&Anticipation{
 		Description:  "With routing hints",
 		Context:      "Check",
 		Model:        "test-model",
 		LocalOnly:    &localOnly,
 		QualityFloor: 7,
 		Trigger:      Trigger{EntityID: "sensor.a"},
-	})
+	}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
 
 	active, err := store.Active()
 	if err != nil {
