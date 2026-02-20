@@ -741,6 +741,128 @@ func TestLastFiredAt_Active(t *testing.T) {
 	}
 }
 
+func TestRoutingHints_RoundTrip(t *testing.T) {
+	store := setupTestStore(t)
+
+	localOnly := false
+	a := &Anticipation{
+		Description:  "High-quality wake",
+		Context:      "Need strong reasoning for this.",
+		Model:        "claude-sonnet-4-20250514",
+		LocalOnly:    &localOnly,
+		QualityFloor: 8,
+		Trigger:      Trigger{EntityID: "person.dan", EntityState: "home"},
+	}
+
+	if err := store.Create(a); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	got, err := store.Get(a.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+
+	if got.Model != "claude-sonnet-4-20250514" {
+		t.Errorf("model = %q, want %q", got.Model, "claude-sonnet-4-20250514")
+	}
+	if got.LocalOnly == nil {
+		t.Fatal("local_only = nil, want non-nil")
+	}
+	if *got.LocalOnly != false {
+		t.Errorf("local_only = %v, want false", *got.LocalOnly)
+	}
+	if got.QualityFloor != 8 {
+		t.Errorf("quality_floor = %d, want 8", got.QualityFloor)
+	}
+}
+
+func TestRoutingHints_Defaults(t *testing.T) {
+	store := setupTestStore(t)
+
+	a := &Anticipation{
+		Description: "Default routing",
+		Context:     "Use default hints.",
+		Trigger:     Trigger{EntityID: "sensor.temp"},
+	}
+
+	if err := store.Create(a); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	got, err := store.Get(a.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+
+	if got.Model != "" {
+		t.Errorf("model = %q, want empty", got.Model)
+	}
+	if got.LocalOnly != nil {
+		t.Errorf("local_only = %v, want nil", got.LocalOnly)
+	}
+	if got.QualityFloor != 0 {
+		t.Errorf("quality_floor = %d, want 0", got.QualityFloor)
+	}
+}
+
+func TestRoutingHints_Active(t *testing.T) {
+	store := setupTestStore(t)
+
+	localOnly := true
+	store.Create(&Anticipation{
+		Description:  "With routing hints",
+		Context:      "Check",
+		Model:        "test-model",
+		LocalOnly:    &localOnly,
+		QualityFloor: 7,
+		Trigger:      Trigger{EntityID: "sensor.a"},
+	})
+
+	active, err := store.Active()
+	if err != nil {
+		t.Fatalf("active: %v", err)
+	}
+	if len(active) != 1 {
+		t.Fatalf("active count = %d, want 1", len(active))
+	}
+	if active[0].Model != "test-model" {
+		t.Errorf("active model = %q, want %q", active[0].Model, "test-model")
+	}
+	if active[0].LocalOnly == nil || !*active[0].LocalOnly {
+		t.Errorf("active local_only = %v, want true", active[0].LocalOnly)
+	}
+	if active[0].QualityFloor != 7 {
+		t.Errorf("active quality_floor = %d, want 7", active[0].QualityFloor)
+	}
+}
+
+func TestRoutingHints_LocalOnlyExplicitTrue(t *testing.T) {
+	store := setupTestStore(t)
+
+	localOnly := true
+	a := &Anticipation{
+		Description: "Explicit local only",
+		Context:     "Stay local.",
+		LocalOnly:   &localOnly,
+		Trigger:     Trigger{EntityID: "sensor.a"},
+	}
+	if err := store.Create(a); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	got, err := store.Get(a.ID)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.LocalOnly == nil {
+		t.Fatal("local_only = nil, want non-nil")
+	}
+	if !*got.LocalOnly {
+		t.Error("local_only = false, want true")
+	}
+}
+
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsAt(s, substr))
 }

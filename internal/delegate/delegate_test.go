@@ -462,6 +462,14 @@ func TestBuiltinProfiles_GeneralForcesLocalOnly(t *testing.T) {
 		t.Errorf("general profile HintLocalOnly = %q, want %q",
 			general.RouterHints[router.HintLocalOnly], "true")
 	}
+	if general.RouterHints[router.HintQualityFloor] != "5" {
+		t.Errorf("general profile HintQualityFloor = %q, want %q",
+			general.RouterHints[router.HintQualityFloor], "5")
+	}
+	if general.RouterHints[router.HintPreferSpeed] != "true" {
+		t.Errorf("general profile HintPreferSpeed = %q, want %q",
+			general.RouterHints[router.HintPreferSpeed], "true")
+	}
 }
 
 func TestBuiltinProfiles_HAForcesLocalOnly(t *testing.T) {
@@ -478,6 +486,14 @@ func TestBuiltinProfiles_HAForcesLocalOnly(t *testing.T) {
 	if ha.RouterHints[router.HintMission] != "device_control" {
 		t.Errorf("ha profile HintMission = %q, want %q",
 			ha.RouterHints[router.HintMission], "device_control")
+	}
+	if ha.RouterHints[router.HintQualityFloor] != "4" {
+		t.Errorf("ha profile HintQualityFloor = %q, want %q",
+			ha.RouterHints[router.HintQualityFloor], "4")
+	}
+	if ha.RouterHints[router.HintPreferSpeed] != "true" {
+		t.Errorf("ha profile HintPreferSpeed = %q, want %q",
+			ha.RouterHints[router.HintPreferSpeed], "true")
 	}
 }
 

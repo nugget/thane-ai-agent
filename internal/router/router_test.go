@@ -163,3 +163,83 @@ func TestMaxQuality_NoModels(t *testing.T) {
 		t.Errorf("MaxQuality() with no models = %d, want 10 (safe default)", got)
 	}
 }
+
+func TestRoute_PreferSpeedHint(t *testing.T) {
+	// Two local models with the same cost tier: a fast+lower-quality model
+	// and a slow+higher-quality model. Without HintPreferSpeed the slow
+	// model wins on quality bonuses; with the hint the fast model wins.
+	r := NewRouter(slog.Default(), Config{
+		DefaultModel: "fast-local",
+		Models: []Model{
+			{Name: "fast-local", Provider: "ollama", SupportsTools: true, Speed: 8, Quality: 5, CostTier: 0, ContextWindow: 8192},
+			{Name: "slow-local", Provider: "ollama", SupportsTools: true, Speed: 4, Quality: 8, CostTier: 0, ContextWindow: 8192},
+		},
+		MaxAuditLog: 10,
+	})
+
+	model, decision := r.Route(context.Background(), Request{
+		Query:      "check the lights",
+		NeedsTools: true,
+		ToolCount:  3,
+		Priority:   PriorityBackground,
+		Hints: map[string]string{
+			HintLocalOnly:   "true",
+			HintPreferSpeed: "true",
+		},
+	})
+
+	if model != "fast-local" {
+		t.Errorf("Route() with prefer_speed hint selected %q, want %q", model, "fast-local")
+	}
+
+	// Verify the fast model scored higher due to the speed bonus.
+	fastScore := decision.Scores["fast-local"]
+	slowScore := decision.Scores["slow-local"]
+	if fastScore <= slowScore {
+		t.Errorf("fast-local score (%d) should be higher than slow-local (%d) with prefer_speed hint",
+			fastScore, slowScore)
+	}
+}
+
+func TestRoute_PreferSpeedWithQualityFloor(t *testing.T) {
+	// Quality floor should still disqualify low-quality models even when
+	// prefer_speed is set. fast-local has quality 5 and should be blocked
+	// by a quality_floor of 6.
+	r := NewRouter(slog.Default(), Config{
+		DefaultModel: "fast-local",
+		Models: []Model{
+			{Name: "fast-local", Provider: "ollama", SupportsTools: true, Speed: 8, Quality: 5, CostTier: 0, ContextWindow: 8192},
+			{Name: "slow-local", Provider: "ollama", SupportsTools: true, Speed: 4, Quality: 8, CostTier: 0, ContextWindow: 8192},
+		},
+		MaxAuditLog: 10,
+	})
+
+	model, decision := r.Route(context.Background(), Request{
+		Query:      "summarize the conversation",
+		NeedsTools: false,
+		Priority:   PriorityBackground,
+		Hints: map[string]string{
+			HintLocalOnly:    "true",
+			HintPreferSpeed:  "true",
+			HintQualityFloor: "6",
+		},
+	})
+
+	if model != "slow-local" {
+		t.Errorf("Route() with quality_floor=6 + prefer_speed selected %q, want %q", model, "slow-local")
+	}
+
+	// fast-local should have the below_quality_floor penalty.
+	fastScore, ok := decision.Scores["fast-local"]
+	if !ok {
+		t.Fatal("fast-local score missing from decision.Scores")
+	}
+	slowScore, ok := decision.Scores["slow-local"]
+	if !ok {
+		t.Fatal("slow-local score missing from decision.Scores")
+	}
+	if fastScore >= slowScore {
+		t.Errorf("fast-local score (%d) should be below slow-local (%d) with quality_floor penalty",
+			fastScore, slowScore)
+	}
+}

@@ -36,6 +36,11 @@ const (
 	// active. Set to "disabled" to give the model direct access to all tools
 	// on every iteration (used by thane:ops).
 	HintDelegationGating = "delegation_gating"
+	// HintPreferSpeed indicates the caller benefits from faster response
+	// times over higher quality. When "true", models with Speed >= 7
+	// receive a scoring bonus. Use for background/delegation tasks where
+	// latency and resource efficiency matter more than maximum output quality.
+	HintPreferSpeed = "prefer_speed"
 )
 
 // Priority indicates latency requirements.
@@ -434,6 +439,13 @@ func (r *Router) selectModel(req Request, decision *Decision) string {
 			if req.Hints[HintLocalOnly] == "true" && m.CostTier > 0 {
 				score -= 200
 				decision.RulesMatched = append(decision.RulesMatched, "local_only_penalty_"+m.Name)
+			}
+
+			// Speed preference: bonus for fast models when caller values
+			// latency over maximum quality. Decisive among same-cost locals.
+			if req.Hints[HintPreferSpeed] == "true" && m.Speed >= 7 {
+				score += 15
+				decision.RulesMatched = append(decision.RulesMatched, "prefer_speed_bonus_"+m.Name)
 			}
 		}
 

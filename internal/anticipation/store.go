@@ -20,6 +20,9 @@ type Anticipation struct {
 	ContextEntities []string          `json:"context_entities,omitempty"` // Entity IDs to snapshot on wake
 	Recurring       bool              `json:"recurring,omitempty"`        // true = keep firing; false = auto-resolve after wake
 	CooldownSeconds int               `json:"cooldown_seconds,omitempty"` // 0 = use global default
+	Model           string            `json:"model,omitempty"`            // Soft model preference for wake execution
+	LocalOnly       *bool             `json:"local_only,omitempty"`       // nil = use default (true); explicit false allows cloud
+	QualityFloor    int               `json:"quality_floor,omitempty"`    // 0 = use wake default (6)
 	Trigger         Trigger           `json:"trigger"`                    // When this anticipation activates
 	CreatedAt       time.Time         `json:"created_at"`
 	ExpiresAt       *time.Time        `json:"expires_at,omitempty"` // nil = no expiration
@@ -93,6 +96,9 @@ func (s *Store) migrate() error {
 		{`ALTER TABLE anticipations ADD COLUMN recurring BOOLEAN DEFAULT 0`, "recurring"},
 		{`ALTER TABLE anticipations ADD COLUMN cooldown_seconds INTEGER DEFAULT 0`, "cooldown_seconds"},
 		{`ALTER TABLE anticipations ADD COLUMN last_fired_at TIMESTAMP`, "last_fired_at"},
+		{`ALTER TABLE anticipations ADD COLUMN model TEXT DEFAULT ''`, "model"},
+		{`ALTER TABLE anticipations ADD COLUMN local_only INTEGER`, "local_only"},
+		{`ALTER TABLE anticipations ADD COLUMN quality_floor INTEGER DEFAULT 0`, "quality_floor"},
 	} {
 		if _, err := s.db.Exec(stmt.sql); err != nil {
 			if !strings.Contains(err.Error(), "duplicate column name") {
@@ -138,10 +144,26 @@ func (s *Store) Create(a *Anticipation) error {
 		contextEntitiesJSON, _ = json.Marshal(a.ContextEntities)
 	}
 
+	// Convert *bool to sql-friendly value: nil → NULL, true → 1, false → 0.
+	var localOnlyVal any
+	if a.LocalOnly != nil {
+		if *a.LocalOnly {
+			localOnlyVal = 1
+		} else {
+			localOnlyVal = 0
+		}
+	}
+
 	_, err = s.db.Exec(`
-		INSERT INTO anticipations (id, description, context, trigger_json, metadata_json, context_entities_json, recurring, cooldown_seconds, created_at, expires_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, a.ID, a.Description, a.Context, string(triggerJSON), string(metadataJSON), string(contextEntitiesJSON), a.Recurring, a.CooldownSeconds, a.CreatedAt, a.ExpiresAt)
+		INSERT INTO anticipations (id, description, context, trigger_json, metadata_json,
+			context_entities_json, recurring, cooldown_seconds,
+			model, local_only, quality_floor,
+			created_at, expires_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, a.ID, a.Description, a.Context, string(triggerJSON), string(metadataJSON),
+		string(contextEntitiesJSON), a.Recurring, a.CooldownSeconds,
+		a.Model, localOnlyVal, a.QualityFloor,
+		a.CreatedAt, a.ExpiresAt)
 
 	return err
 }
@@ -150,7 +172,9 @@ func (s *Store) Create(a *Anticipation) error {
 func (s *Store) Active() ([]*Anticipation, error) {
 	now := time.Now().UTC()
 	rows, err := s.db.Query(`
-		SELECT id, description, context, trigger_json, metadata_json, context_entities_json, recurring, cooldown_seconds, created_at, expires_at, last_fired_at
+		SELECT id, description, context, trigger_json, metadata_json, context_entities_json,
+			recurring, cooldown_seconds, model, local_only, quality_floor,
+			created_at, expires_at, last_fired_at
 		FROM anticipations
 		WHERE resolved_at IS NULL
 		  AND deleted_at IS NULL
@@ -168,17 +192,22 @@ func (s *Store) Active() ([]*Anticipation, error) {
 // Get retrieves a single anticipation by ID.
 func (s *Store) Get(id string) (*Anticipation, error) {
 	row := s.db.QueryRow(`
-		SELECT id, description, context, trigger_json, metadata_json, context_entities_json, recurring, cooldown_seconds, created_at, expires_at, resolved_at, last_fired_at
+		SELECT id, description, context, trigger_json, metadata_json, context_entities_json,
+			recurring, cooldown_seconds, model, local_only, quality_floor,
+			created_at, expires_at, resolved_at, last_fired_at
 		FROM anticipations
 		WHERE id = ? AND deleted_at IS NULL
 	`, id)
 
 	a := &Anticipation{}
 	var triggerJSON, metadataJSON, contextEntitiesJSON sql.NullString
+	var localOnly sql.NullInt64
 	var expiresAt, resolvedAt, lastFiredAt sql.NullTime
 
 	err := row.Scan(&a.ID, &a.Description, &a.Context, &triggerJSON, &metadataJSON,
-		&contextEntitiesJSON, &a.Recurring, &a.CooldownSeconds, &a.CreatedAt, &expiresAt, &resolvedAt, &lastFiredAt)
+		&contextEntitiesJSON, &a.Recurring, &a.CooldownSeconds,
+		&a.Model, &localOnly, &a.QualityFloor,
+		&a.CreatedAt, &expiresAt, &resolvedAt, &lastFiredAt)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -194,6 +223,10 @@ func (s *Store) Get(id string) (*Anticipation, error) {
 	}
 	if contextEntitiesJSON.Valid && contextEntitiesJSON.String != "" {
 		_ = json.Unmarshal([]byte(contextEntitiesJSON.String), &a.ContextEntities)
+	}
+	if localOnly.Valid {
+		v := localOnly.Int64 != 0
+		a.LocalOnly = &v
 	}
 	if expiresAt.Valid {
 		a.ExpiresAt = &expiresAt.Time
@@ -272,10 +305,13 @@ func (s *Store) scanAnticipations(rows *sql.Rows) ([]*Anticipation, error) {
 	for rows.Next() {
 		a := &Anticipation{}
 		var triggerJSON, metadataJSON, contextEntitiesJSON sql.NullString
+		var localOnly sql.NullInt64
 		var expiresAt, lastFiredAt sql.NullTime
 
 		err := rows.Scan(&a.ID, &a.Description, &a.Context, &triggerJSON, &metadataJSON,
-			&contextEntitiesJSON, &a.Recurring, &a.CooldownSeconds, &a.CreatedAt, &expiresAt, &lastFiredAt)
+			&contextEntitiesJSON, &a.Recurring, &a.CooldownSeconds,
+			&a.Model, &localOnly, &a.QualityFloor,
+			&a.CreatedAt, &expiresAt, &lastFiredAt)
 		if err != nil {
 			return nil, err
 		}
@@ -288,6 +324,10 @@ func (s *Store) scanAnticipations(rows *sql.Rows) ([]*Anticipation, error) {
 		}
 		if contextEntitiesJSON.Valid && contextEntitiesJSON.String != "" {
 			_ = json.Unmarshal([]byte(contextEntitiesJSON.String), &a.ContextEntities)
+		}
+		if localOnly.Valid {
+			v := localOnly.Int64 != 0
+			a.LocalOnly = &v
 		}
 		if expiresAt.Valid {
 			a.ExpiresAt = &expiresAt.Time

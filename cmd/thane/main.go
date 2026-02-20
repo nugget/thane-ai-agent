@@ -486,31 +486,6 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	archiveAdapter := memory.NewArchiveAdapter(archiveStore, logger)
 	archiveAdapter.SetToolCallSource(mem)
 
-	// --- Conversation compactor ---
-	// When a conversation grows too long, the compactor summarizes older
-	// messages to stay within the model's context window. Uses the default
-	// LLM model to generate summaries.
-	compactionConfig := memory.CompactionConfig{
-		MaxTokens:            8000,
-		TriggerRatio:         0.7, // Compact at 70% of MaxTokens
-		KeepRecent:           10,  // Preserve the last 10 messages verbatim
-		MinMessagesToCompact: 15,  // Don't bother compacting tiny conversations
-	}
-
-	summarizeFunc := func(ctx context.Context, prompt string) (string, error) {
-		msgs := []llm.Message{{Role: "user", Content: prompt}}
-		resp, err := llmClient.Chat(ctx, cfg.Models.Default, msgs, nil)
-		if err != nil {
-			return "", err
-		}
-		return resp.Message.Content, nil
-	}
-
-	summarizer := memory.NewLLMSummarizer(summarizeFunc)
-	compactor := memory.NewCompactor(mem, compactionConfig, summarizer, logger)
-	compactor.SetArchiver(archiveStore)
-	compactor.SetWorkingMemoryStore(wmStore)
-
 	// --- Talents ---
 	// Talents are markdown files that extend the system prompt with
 	// domain-specific knowledge and instructions.
@@ -573,6 +548,40 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		"default", routerCfg.DefaultModel,
 		"local_first", routerCfg.LocalFirst,
 	)
+
+	// --- Conversation compactor ---
+	// When a conversation grows too long, the compactor summarizes older
+	// messages to stay within the model's context window. Routes through
+	// the model router for quality-aware model selection.
+	compactionConfig := memory.CompactionConfig{
+		MaxTokens:            8000,
+		TriggerRatio:         0.7, // Compact at 70% of MaxTokens
+		KeepRecent:           10,  // Preserve the last 10 messages verbatim
+		MinMessagesToCompact: 15,  // Don't bother compacting tiny conversations
+	}
+
+	summarizeFunc := func(ctx context.Context, prompt string) (string, error) {
+		model, _ := rtr.Route(ctx, router.Request{
+			Query:    "conversation compaction",
+			Priority: router.PriorityBackground,
+			Hints: map[string]string{
+				router.HintMission:      "background",
+				router.HintLocalOnly:    "true",
+				router.HintQualityFloor: "7",
+			},
+		})
+		msgs := []llm.Message{{Role: "user", Content: prompt}}
+		resp, err := llmClient.Chat(ctx, model, msgs, nil)
+		if err != nil {
+			return "", err
+		}
+		return resp.Message.Content, nil
+	}
+
+	compactSummarizer := memory.NewLLMSummarizer(summarizeFunc)
+	compactor := memory.NewCompactor(mem, compactionConfig, compactSummarizer, logger)
+	compactor.SetArchiver(archiveStore)
+	compactor.SetWorkingMemoryStore(wmStore)
 
 	// --- Session metadata summarizer ---
 	// Background worker that generates titles, tags, and summaries for

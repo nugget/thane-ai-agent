@@ -185,8 +185,9 @@ func (w *Worker) summarizeSession(ctx context.Context, sess *memory.Session) {
 
 	// Route model selection through the router.
 	hints := map[string]string{
-		router.HintMission:   "background",
-		router.HintLocalOnly: "true",
+		router.HintMission:      "background",
+		router.HintLocalOnly:    "true",
+		router.HintQualityFloor: "7",
 	}
 	if w.config.ModelPreference != "" {
 		hints[router.HintModelPreference] = w.config.ModelPreference
