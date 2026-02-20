@@ -67,6 +67,9 @@ func TestRequestCapability(t *testing.T) {
 	if !strings.Contains(result, "activated") {
 		t.Errorf("result = %q, want to contain 'activated'", result)
 	}
+	if !strings.Contains(result, "get_state") {
+		t.Errorf("result = %q, want to list tools like 'get_state'", result)
+	}
 	if !mgr.activeTags["ha"] {
 		t.Error("ha tag should be active after request")
 	}
@@ -83,8 +86,13 @@ func TestDropCapability(t *testing.T) {
 	mgr.activeTags["ha"] = true
 	mgr.activeTags["search"] = true
 
+	manifest := []CapabilityManifest{
+		{Tag: "ha", Description: "Home Assistant", Tools: []string{"get_state", "call_service"}, AlwaysActive: false},
+		{Tag: "search", Description: "Web search", Tools: []string{"web_search"}, AlwaysActive: false},
+	}
+
 	reg := NewEmptyRegistry()
-	reg.SetCapabilityTools(mgr, nil)
+	reg.SetCapabilityTools(mgr, manifest)
 
 	tool := reg.Get("drop_capability")
 	if tool == nil {
@@ -98,6 +106,9 @@ func TestDropCapability(t *testing.T) {
 	}
 	if !strings.Contains(result, "deactivated") {
 		t.Errorf("result = %q, want to contain 'deactivated'", result)
+	}
+	if !strings.Contains(result, "get_state") {
+		t.Errorf("result = %q, want to list removed tools like 'get_state'", result)
 	}
 	if mgr.activeTags["ha"] {
 		t.Error("ha tag should be inactive after drop")

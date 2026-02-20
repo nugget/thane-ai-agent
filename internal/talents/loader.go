@@ -229,8 +229,9 @@ func GenerateManifest(entries []ManifestEntry) *Talent {
 
 	var sb strings.Builder
 	sb.WriteString("### Available Capabilities\n\n")
-	sb.WriteString("You have a dynamic capability system. Use `request_capability` to activate a tag ")
-	sb.WriteString("and gain its tools. Use `drop_capability` when done.\n\n")
+	sb.WriteString("Activate with `request_capability(\"tag\")` for sustained work, or ")
+	sb.WriteString("`delegate(task, tags: [\"tag\"])` for one-off tasks. ")
+	sb.WriteString("Use `drop_capability` when you no longer need a capability's tools.\n\n")
 
 	for _, e := range entries {
 		status := "available"

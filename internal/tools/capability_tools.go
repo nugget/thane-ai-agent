@@ -30,12 +30,17 @@ type CapabilityManifest struct {
 // to the registry. These tools let the agent dynamically activate or
 // deactivate capability tags mid-session.
 func (r *Registry) SetCapabilityTools(mgr CapabilityManager, manifest []CapabilityManifest) {
-	r.registerRequestCapability(mgr, manifest)
-	r.registerDropCapability(mgr)
+	// Index manifest by tag for fast lookup in handlers.
+	tagManifest := make(map[string]CapabilityManifest, len(manifest))
+	for _, m := range manifest {
+		tagManifest[m.Tag] = m
+	}
+	r.registerRequestCapability(mgr, manifest, tagManifest)
+	r.registerDropCapability(mgr, tagManifest)
 }
 
 // registerRequestCapability registers the request_capability tool.
-func (r *Registry) registerRequestCapability(mgr CapabilityManager, manifest []CapabilityManifest) {
+func (r *Registry) registerRequestCapability(mgr CapabilityManager, manifest []CapabilityManifest, tagManifest map[string]CapabilityManifest) {
 	// Build the available tags list for the description.
 	var availableDesc strings.Builder
 	availableDesc.WriteString("Activate a capability tag to gain access to additional tools. ")
@@ -72,13 +77,19 @@ func (r *Registry) registerRequestCapability(mgr CapabilityManager, manifest []C
 				return "", err
 			}
 
-			return fmt.Sprintf("Capability **%s** activated. Tools for this tag are now available.", tag), nil
+			// List the tools now available from this tag.
+			var result strings.Builder
+			fmt.Fprintf(&result, "Capability **%s** activated.", tag)
+			if m, ok := tagManifest[tag]; ok && len(m.Tools) > 0 {
+				fmt.Fprintf(&result, " Tools now available: %s.", strings.Join(m.Tools, ", "))
+			}
+			return result.String(), nil
 		},
 	})
 }
 
 // registerDropCapability registers the drop_capability tool.
-func (r *Registry) registerDropCapability(mgr CapabilityManager) {
+func (r *Registry) registerDropCapability(mgr CapabilityManager, tagManifest map[string]CapabilityManifest) {
 	r.Register(&Tool{
 		Name:        "drop_capability",
 		Description: "Deactivate a capability tag to remove its tools from the active set. Always-active tags cannot be dropped. Use when you no longer need a capability's tools to keep the tool set focused.",
@@ -102,7 +113,13 @@ func (r *Registry) registerDropCapability(mgr CapabilityManager) {
 				return "", err
 			}
 
-			return fmt.Sprintf("Capability **%s** deactivated. Its tools are no longer available.", tag), nil
+			// List the tools that were unloaded.
+			var result strings.Builder
+			fmt.Fprintf(&result, "Capability **%s** deactivated.", tag)
+			if m, ok := tagManifest[tag]; ok && len(m.Tools) > 0 {
+				fmt.Fprintf(&result, " Tools removed: %s.", strings.Join(m.Tools, ", "))
+			}
+			return result.String(), nil
 		},
 	})
 }

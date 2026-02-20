@@ -269,6 +269,9 @@ func TestGenerateManifest(t *testing.T) {
 	if !strings.Contains(talent.Content, "request_capability") {
 		t.Error("manifest should mention request_capability tool")
 	}
+	if !strings.Contains(talent.Content, "delegate") {
+		t.Error("manifest should mention delegate as alternative")
+	}
 }
 
 func TestGenerateManifest_Empty(t *testing.T) {

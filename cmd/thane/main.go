@@ -1172,6 +1172,18 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 			return fmt.Errorf("load talents for capability tags: %w", err)
 		}
 
+		// Warn about tools referenced in config but not registered.
+		// This catches typos, missing MCP servers, and tools gated by config
+		// (e.g., shell_exec disabled). Non-fatal: skip the missing tool.
+		for tag, tagCfg := range cfg.CapabilityTags {
+			for _, toolName := range tagCfg.Tools {
+				if loop.Tools().Get(toolName) == nil {
+					logger.Warn("capability tag references unregistered tool",
+						"tag", tag, "tool", toolName)
+				}
+			}
+		}
+
 		// Build manifest entries for the capability tools description.
 		tagIndex := make(map[string][]string, len(cfg.CapabilityTags))
 		descriptions := make(map[string]string, len(cfg.CapabilityTags))
