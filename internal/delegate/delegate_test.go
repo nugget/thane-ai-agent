@@ -115,6 +115,12 @@ func TestExecute_SimpleTextResponse(t *testing.T) {
 	if result.Exhausted {
 		t.Error("Exhausted = true, want false")
 	}
+	if len(result.ToolCalls) != 0 {
+		t.Errorf("ToolCalls len = %d, want 0 (no tool calls)", len(result.ToolCalls))
+	}
+	if result.Duration <= 0 {
+		t.Errorf("Duration = %v, want > 0", result.Duration)
+	}
 }
 
 func TestExecute_WithToolCalls(t *testing.T) {
@@ -166,6 +172,20 @@ func TestExecute_WithToolCalls(t *testing.T) {
 	}
 	if result.OutputTokens != 55 {
 		t.Errorf("OutputTokens = %d, want 55", result.OutputTokens)
+	}
+
+	// Verify tool call outcomes are tracked.
+	if len(result.ToolCalls) != 1 {
+		t.Fatalf("ToolCalls len = %d, want 1", len(result.ToolCalls))
+	}
+	if result.ToolCalls[0].Name != "get_state" {
+		t.Errorf("ToolCalls[0].Name = %q, want %q", result.ToolCalls[0].Name, "get_state")
+	}
+	if !result.ToolCalls[0].Success {
+		t.Error("ToolCalls[0].Success = false, want true")
+	}
+	if result.Duration <= 0 {
+		t.Errorf("Duration = %v, want > 0", result.Duration)
 	}
 }
 
@@ -915,6 +935,12 @@ func TestToolHandler_SucceededHeader(t *testing.T) {
 	if strings.Contains(result, "FAILED") {
 		t.Errorf("successful result should not contain 'FAILED', got: %s", result)
 	}
+	if !strings.Contains(result, "--- execution summary ---") {
+		t.Errorf("result missing execution summary, got: %s", result)
+	}
+	if !strings.Contains(result, "iterations: 1") {
+		t.Errorf("result missing iteration count, got: %s", result)
+	}
 }
 
 func TestToolHandler_FailedHeaderNoOutput(t *testing.T) {
@@ -1046,6 +1072,17 @@ func TestExecute_ToolTimeoutRecovery(t *testing.T) {
 	// The key assertion: execution completed quickly, not blocked for 5s.
 	if elapsed > 2*time.Second {
 		t.Errorf("Execute took %v, want < 2s (per-tool timeout should fire at ~50ms)", elapsed)
+	}
+
+	// Verify tool call outcome records the timeout as a failure.
+	if len(result.ToolCalls) != 1 {
+		t.Fatalf("ToolCalls len = %d, want 1", len(result.ToolCalls))
+	}
+	if result.ToolCalls[0].Name != "slow_tool" {
+		t.Errorf("ToolCalls[0].Name = %q, want %q", result.ToolCalls[0].Name, "slow_tool")
+	}
+	if result.ToolCalls[0].Success {
+		t.Error("ToolCalls[0].Success = true, want false (tool timed out)")
 	}
 
 	// Verify the LLM received the timeout error as a tool result.
