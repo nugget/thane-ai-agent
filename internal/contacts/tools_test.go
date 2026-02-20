@@ -170,6 +170,34 @@ func TestSaveContact_TopLevelFieldsMergeWithExplicitFacts(t *testing.T) {
 	}
 }
 
+func TestSaveContact_ExplicitFactsTakePrecedence(t *testing.T) {
+	tools := newTestTools(t)
+
+	// When the same key appears both top-level and in facts, the explicit
+	// facts value must win — rescue should not overwrite it.
+	_, err := tools.SaveContact(`{
+		"name": "Conflict Fields",
+		"email": "top-level@example.com",
+		"facts": {"email": "explicit@example.com"}
+	}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	c, err := tools.store.FindByName("Conflict Fields")
+	if err != nil {
+		t.Fatal(err)
+	}
+	facts, err := tools.store.GetFacts(c.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(facts["email"]) != 1 || facts["email"][0] != "explicit@example.com" {
+		t.Errorf("email = %v, want [explicit@example.com] (explicit facts should win)", facts["email"])
+	}
+}
+
 func TestSaveContact_TopLevelFieldsIgnoreNonString(t *testing.T) {
 	tools := newTestTools(t)
 

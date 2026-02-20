@@ -77,6 +77,10 @@ func (t *Tools) SaveContact(argsJSON string) (string, error) {
 			if saveContactKnownFields[k] {
 				continue
 			}
+			// Do not overwrite facts that were explicitly provided.
+			if _, exists := args.Facts[k]; exists {
+				continue
+			}
 			if s, ok := v.(string); ok && s != "" {
 				args.Facts[k] = s
 				rescued = append(rescued, k)
@@ -84,7 +88,7 @@ func (t *Tools) SaveContact(argsJSON string) (string, error) {
 		}
 		if len(rescued) > 0 {
 			sort.Strings(rescued)
-			slog.Warn("rescued top-level fields as facts",
+			slog.Debug("rescued top-level fields as facts",
 				"name", args.Name, "fields", rescued)
 		}
 	}
