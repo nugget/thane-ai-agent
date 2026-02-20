@@ -1161,6 +1161,56 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		logger.Info("iter-0 tool gating enabled", "tools", cfg.Agent.Iter0Tools)
 	}
 
+	// --- Capability tags ---
+	// Tag-driven tool and talent filtering. When configured, tools and
+	// talents are grouped into named capabilities that can be activated
+	// per-session via request_capability/drop_capability tools.
+	if len(cfg.CapabilityTags) > 0 {
+		// Load parsed talents for tag-aware filtering.
+		parsedTalents, err := talentLoader.LoadAll()
+		if err != nil {
+			return fmt.Errorf("load talents for capability tags: %w", err)
+		}
+
+		// Build manifest entries for the capability tools description.
+		tagIndex := make(map[string][]string, len(cfg.CapabilityTags))
+		descriptions := make(map[string]string, len(cfg.CapabilityTags))
+		alwaysActive := make(map[string]bool, len(cfg.CapabilityTags))
+		for tag, tagCfg := range cfg.CapabilityTags {
+			tagIndex[tag] = tagCfg.Tools
+			descriptions[tag] = tagCfg.Description
+			alwaysActive[tag] = tagCfg.AlwaysActive
+		}
+		manifest := tools.BuildCapabilityManifest(tagIndex, descriptions, alwaysActive)
+
+		// Generate the capability manifest talent and prepend it.
+		manifestEntries := make([]talents.ManifestEntry, len(manifest))
+		for i, m := range manifest {
+			manifestEntries[i] = talents.ManifestEntry{
+				Tag:          m.Tag,
+				Description:  m.Description,
+				Tools:        m.Tools,
+				AlwaysActive: m.AlwaysActive,
+			}
+		}
+		if manifestTalent := talents.GenerateManifest(manifestEntries); manifestTalent != nil {
+			parsedTalents = append([]talents.Talent{*manifestTalent}, parsedTalents...)
+		}
+
+		loop.SetCapabilityTags(cfg.CapabilityTags, parsedTalents)
+		loop.Tools().SetCapabilityTools(loop, manifest)
+
+		var activeTags []string
+		for tag := range loop.ActiveTags() {
+			activeTags = append(activeTags, tag)
+		}
+		logger.Info("capability tags enabled",
+			"tags", len(cfg.CapabilityTags),
+			"always_active", activeTags,
+			"talents", len(parsedTalents),
+		)
+	}
+
 	// --- Context providers ---
 	// Dynamic system prompt injection. Providers add context based on
 	// current state (e.g., pending anticipations) before each LLM call.
