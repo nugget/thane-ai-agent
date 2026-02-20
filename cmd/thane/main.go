@@ -42,6 +42,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/connwatch"
 	"github.com/nugget/thane-ai-agent/internal/contacts"
 	"github.com/nugget/thane-ai-agent/internal/delegate"
+	"github.com/nugget/thane-ai-agent/internal/email"
 	"github.com/nugget/thane-ai-agent/internal/embeddings"
 	"github.com/nugget/thane-ai-agent/internal/episodic"
 	"github.com/nugget/thane-ai-agent/internal/facts"
@@ -747,6 +748,33 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	contactTools := contacts.NewTools(contactStore)
 	loop.Tools().SetContactTools(contactTools)
 	logger.Info("contact store initialized", "path", cfg.DataDir+"/contacts.db")
+
+	// --- Email ---
+	// Native IMAP email access. Replaces the MCP email server approach
+	// with direct IMAP connections, supporting multiple accounts.
+	if cfg.Email.Configured() {
+		emailMgr := email.NewManager(cfg.Email, logger)
+		defer emailMgr.Close()
+
+		emailTools := email.NewTools(emailMgr)
+		loop.Tools().SetEmailTools(emailTools)
+
+		// Register each account with connwatch for health monitoring.
+		for _, name := range emailMgr.AccountNames() {
+			acctName := name // capture for closure
+			acct, _ := emailMgr.Account(acctName)
+			connMgr.Watch(ctx, connwatch.WatcherConfig{
+				Name:    "email-" + acctName,
+				Probe:   func(pCtx context.Context) error { return acct.Ping(pCtx) },
+				Backoff: connwatch.DefaultBackoffConfig(),
+				Logger:  logger,
+			})
+		}
+
+		logger.Info("email enabled", "accounts", emailMgr.AccountNames())
+	} else {
+		logger.Info("email disabled (not configured)")
+	}
 
 	// --- Working memory tool ---
 	// Gives the agent a read/write scratchpad for experiential context
