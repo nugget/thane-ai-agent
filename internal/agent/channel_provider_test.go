@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -257,7 +258,80 @@ func TestChannelProvider_EmptySource(t *testing.T) {
 	}
 }
 
-func TestSortedFactKeys(t *testing.T) {
+func TestChannelProvider_SanitizesFields(t *testing.T) {
+	lookup := &mockContactLookup{
+		contacts: map[string]*ContactSummary{
+			"Eve": {
+				Name:         "Eve\nEvil",
+				Relationship: "colleague\nwith\nnewlines",
+				Summary:      "Has a multi\nline summary",
+				Facts: map[string][]string{
+					"note": {"contains\nnewline"},
+				},
+			},
+		},
+	}
+	p := NewChannelProvider(lookup)
+	ctx := tools.WithHints(context.Background(), map[string]string{
+		"source":      "signal",
+		"sender_name": "Eve",
+	})
+
+	got, err := p.GetContext(ctx, "hello")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Newlines within fields should be collapsed to spaces.
+	if strings.Contains(got, "Eve\n") {
+		t.Errorf("expected newlines in name to be sanitized, got:\n%s", got)
+	}
+	if strings.Contains(got, "colleague\n") {
+		t.Errorf("expected newlines in relationship to be sanitized, got:\n%s", got)
+	}
+	if !strings.Contains(got, "Eve Evil") {
+		t.Errorf("expected collapsed name, got:\n%s", got)
+	}
+	if !strings.Contains(got, "contains newline") {
+		t.Errorf("expected collapsed fact value, got:\n%s", got)
+	}
+}
+
+func TestChannelProvider_FactKeyCap(t *testing.T) {
+	facts := make(map[string][]string)
+	for i := 0; i < 20; i++ {
+		facts[fmt.Sprintf("key_%02d", i)] = []string{"val"}
+	}
+	lookup := &mockContactLookup{
+		contacts: map[string]*ContactSummary{
+			"Many": {
+				Name:  "Many Facts",
+				Facts: facts,
+			},
+		},
+	}
+	p := NewChannelProvider(lookup)
+	ctx := tools.WithHints(context.Background(), map[string]string{
+		"source":      "signal",
+		"sender_name": "Many",
+	})
+
+	got, err := p.GetContext(ctx, "hello")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Should only render maxFactKeys (10) fact lines.
+	factLines := 0
+	for _, line := range strings.Split(got, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "- key_") {
+			factLines++
+		}
+	}
+	if factLines > 10 {
+		t.Errorf("expected at most 10 fact lines, got %d:\n%s", factLines, got)
+	}
+}
+
+func TestChannelProvider_SortedFactKeys(t *testing.T) {
 	tests := []struct {
 		name  string
 		facts map[string][]string

@@ -1828,13 +1828,28 @@ type contactNameLookup struct {
 }
 
 // LookupContactByName returns a contact summary for the given name, or
-// nil if no matching contact is found.
+// nil if no matching contact is found. Database errors other than "not
+// found" are logged so operational issues don't silently disable
+// contact context injection.
 func (r *contactNameLookup) LookupContactByName(name string) *agent.ContactSummary {
-	c, err := r.store.FindByName(name)
-	if err != nil {
+	if r == nil || r.store == nil {
 		return nil
 	}
-	facts, _ := r.store.GetFacts(c.ID)
+
+	c, err := r.store.FindByName(name)
+	if err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			slog.Error("failed to look up contact by name", "name", name, "error", err)
+		}
+		return nil
+	}
+
+	facts, err := r.store.GetFacts(c.ID)
+	if err != nil {
+		slog.Error("failed to get facts for contact", "contact_id", c.ID, "name", c.Name, "error", err)
+		facts = nil
+	}
+
 	return &agent.ContactSummary{
 		Name:         c.Name,
 		Relationship: c.Relationship,

@@ -3,10 +3,20 @@ package agent
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/nugget/thane-ai-agent/internal/tools"
 )
+
+// maxFactKeys caps the number of contact fact keys rendered into the
+// channel context block. This prevents large contact records from
+// bloating the system prompt.
+const maxFactKeys = 10
+
+// maxFieldLen caps the length of individual text fields (name,
+// relationship, summary, fact values) injected into the prompt.
+const maxFieldLen = 200
 
 // ContactSummary holds the subset of contact information injected into
 // the channel context block. This is intentionally a small struct to
@@ -86,18 +96,24 @@ func (p *ChannelProvider) GetContext(ctx context.Context, _ string) (string, err
 
 	if contact != nil {
 		// Known contact — rich context.
-		sb.WriteString(fmt.Sprintf("- **Participant:** %s", contact.Name))
+		sb.WriteString(fmt.Sprintf("- **Participant:** %s", sanitizeField(contact.Name)))
 		if contact.Relationship != "" {
-			sb.WriteString(fmt.Sprintf(" (%s)", contact.Relationship))
+			sb.WriteString(fmt.Sprintf(" (%s)", sanitizeField(contact.Relationship)))
 		}
 		sb.WriteString("\n")
 		if contact.Summary != "" {
-			sb.WriteString(fmt.Sprintf("  - Context: %s\n", contact.Summary))
+			sb.WriteString(fmt.Sprintf("  - Context: %s\n", sanitizeField(contact.Summary)))
 		}
-		// Include relevant facts (timezone, preferences, etc.).
-		for _, key := range sortedFactKeys(contact.Facts) {
+		// Include relevant facts (timezone, preferences, etc.),
+		// capped to avoid bloating the system prompt.
+		keys := sortedFactKeys(contact.Facts)
+		if len(keys) > maxFactKeys {
+			keys = keys[:maxFactKeys]
+		}
+		for _, key := range keys {
 			values := contact.Facts[key]
-			sb.WriteString(fmt.Sprintf("  - %s: %s\n", key, strings.Join(values, ", ")))
+			joined := sanitizeField(strings.Join(values, ", "))
+			sb.WriteString(fmt.Sprintf("  - %s: %s\n", sanitizeField(key), joined))
 		}
 	} else {
 		// Unknown contact — minimal context.
@@ -108,7 +124,7 @@ func (p *ChannelProvider) GetContext(ctx context.Context, _ string) (string, err
 		if displayName == "" {
 			displayName = "unknown sender"
 		}
-		sb.WriteString(fmt.Sprintf("- **Participant:** %s (unknown contact)\n", displayName))
+		sb.WriteString(fmt.Sprintf("- **Participant:** %s (unknown contact)\n", sanitizeField(displayName)))
 	}
 
 	if channelNote != "" {
@@ -132,6 +148,18 @@ func formatSourceName(source string) string {
 	}
 }
 
+// sanitizeField normalizes a string for safe system prompt injection.
+// It collapses newlines and excessive whitespace into single spaces and
+// truncates to maxFieldLen to prevent prompt bloat.
+func sanitizeField(s string) string {
+	// Collapse any whitespace runs (including newlines) to a single space.
+	s = strings.Join(strings.Fields(s), " ")
+	if len(s) > maxFieldLen {
+		return s[:maxFieldLen] + "…"
+	}
+	return s
+}
+
 // sortedFactKeys returns fact keys in deterministic order for stable output.
 func sortedFactKeys(facts map[string][]string) []string {
 	if len(facts) == 0 {
@@ -141,11 +169,6 @@ func sortedFactKeys(facts map[string][]string) []string {
 	for k := range facts {
 		keys = append(keys, k)
 	}
-	// Simple insertion sort — fact maps are small.
-	for i := 1; i < len(keys); i++ {
-		for j := i; j > 0 && keys[j] < keys[j-1]; j-- {
-			keys[j], keys[j-1] = keys[j-1], keys[j]
-		}
-	}
+	sort.Strings(keys)
 	return keys
 }
