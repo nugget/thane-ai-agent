@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 )
@@ -41,13 +42,51 @@ type SaveContactArgs struct {
 	Facts        map[string]string `json:"facts,omitempty"` // key-value attributes (email, phone, etc.)
 }
 
+// saveContactKnownFields lists the top-level JSON keys that SaveContactArgs
+// recognizes. Any other top-level string values are rescued into the Facts map
+// so models that flatten email, phone, etc. don't lose data silently.
+var saveContactKnownFields = map[string]bool{
+	"name": true, "kind": true, "relationship": true,
+	"summary": true, "details": true, "facts": true,
+}
+
 // SaveContact creates or updates a contact. When a contact with the
 // given name already exists, only non-empty fields are overwritten.
 // Facts are additive (use ReplaceFact for replacement semantics).
+//
+// Top-level string fields that don't match known SaveContactArgs keys
+// (e.g., "email", "phone", "notes") are automatically rescued into the
+// Facts map, since models frequently flatten them instead of nesting
+// under "facts".
 func (t *Tools) SaveContact(argsJSON string) (string, error) {
 	var args SaveContactArgs
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 		return "", fmt.Errorf("parse args: %w", err)
+	}
+
+	// Rescue top-level string fields that should be facts.
+	// Models frequently pass email, phone, notes, etc. as top-level
+	// keys instead of nesting them under the "facts" map.
+	var raw map[string]any
+	if err := json.Unmarshal([]byte(argsJSON), &raw); err == nil {
+		if args.Facts == nil {
+			args.Facts = make(map[string]string)
+		}
+		var rescued []string
+		for k, v := range raw {
+			if saveContactKnownFields[k] {
+				continue
+			}
+			if s, ok := v.(string); ok && s != "" {
+				args.Facts[k] = s
+				rescued = append(rescued, k)
+			}
+		}
+		if len(rescued) > 0 {
+			sort.Strings(rescued)
+			slog.Warn("rescued top-level fields as facts",
+				"name", args.Name, "fields", rescued)
+		}
 	}
 
 	if args.Name == "" {
