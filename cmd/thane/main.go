@@ -53,6 +53,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/mcp"
 	"github.com/nugget/thane-ai-agent/internal/memory"
 	"github.com/nugget/thane-ai-agent/internal/mqtt"
+	"github.com/nugget/thane-ai-agent/internal/opstate"
 	"github.com/nugget/thane-ai-agent/internal/person"
 	"github.com/nugget/thane-ai-agent/internal/prompts"
 	"github.com/nugget/thane-ai-agent/internal/router"
@@ -607,13 +608,26 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	}
 	defer schedStore.Close()
 
-	// Forward-declare `loop` so the executeTask closure can reference it.
-	// The closure captures by reference; by the time any task fires, loop
-	// is fully initialized.
+	// --- Operational state ---
+	// Generic KV store for persistent operational state (poller
+	// high-water marks, feature toggles, session preferences).
+	opStore, err := opstate.NewStore(cfg.DataDir + "/opstate.db")
+	if err != nil {
+		return fmt.Errorf("open operational state database: %w", err)
+	}
+	defer opStore.Close()
+
+	// Forward-declare task execution dependencies so the executeTask
+	// closure can reference them. All fields are populated before the
+	// scheduler fires its first task.
 	var loop *agent.Loop
+	var deps taskExecDeps
+	deps.logger = logger
+	deps.workspacePath = cfg.Workspace.Path
 
 	executeTask := func(ctx context.Context, task *scheduler.Task, exec *scheduler.Execution) error {
-		return runScheduledTask(ctx, task, exec, loop, logger, cfg.Workspace.Path)
+		deps.runner = loop // captured by reference, set before first fire
+		return runScheduledTask(ctx, task, exec, deps)
 	}
 
 	sched := scheduler.New(logger, schedStore, executeTask)
@@ -781,7 +795,55 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 			})
 		}
 
-		logger.Info("email enabled", "accounts", emailMgr.AccountNames())
+		// --- Email polling ---
+		// Periodic IMAP check for new messages. Runs via the scheduler;
+		// the poller checks UIDs against a high-water mark and only
+		// wakes the agent when something new arrives.
+		if cfg.Email.PollIntervalSec > 0 {
+			poller := email.NewPoller(emailMgr, opStore, logger)
+			deps.emailPoller = poller
+
+			pollInterval := time.Duration(cfg.Email.PollIntervalSec) * time.Second
+			existing, err := schedStore.GetTaskByName(emailPollTaskName)
+			if err != nil {
+				logger.Error("failed to check for email_poll task", "error", err)
+			} else if existing == nil {
+				pollTask := &scheduler.Task{
+					Name: emailPollTaskName,
+					Schedule: scheduler.Schedule{
+						Kind:  scheduler.ScheduleEvery,
+						Every: &scheduler.Duration{Duration: pollInterval},
+					},
+					Payload: scheduler.Payload{
+						Kind: scheduler.PayloadWake,
+						Data: map[string]any{
+							"message":       "Check for new email across all accounts.",
+							"local_only":    "false",
+							"quality_floor": "5",
+						},
+					},
+					Enabled:   true,
+					CreatedBy: "system",
+				}
+				if err := sched.CreateTask(pollTask); err != nil {
+					logger.Error("failed to create email_poll task", "error", err)
+				} else {
+					logger.Info("email_poll task registered", "interval", pollInterval)
+				}
+			} else {
+				// Update interval if config changed.
+				if existing.Schedule.Every != nil && existing.Schedule.Every.Duration != pollInterval {
+					existing.Schedule.Every.Duration = pollInterval
+					if err := sched.UpdateTask(existing); err != nil {
+						logger.Error("failed to update email_poll task", "error", err)
+					} else {
+						logger.Info("email_poll task updated", "interval", pollInterval)
+					}
+				}
+			}
+		}
+
+		logger.Info("email enabled", "accounts", emailMgr.AccountNames(), "poll_interval", cfg.Email.PollIntervalSec)
 	} else {
 		logger.Info("email disabled (not configured)")
 	}

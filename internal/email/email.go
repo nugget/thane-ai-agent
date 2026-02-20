@@ -97,7 +97,15 @@ type ListOptions struct {
 	Folder string
 
 	// Limit is the maximum number of messages to return. Default: 20.
+	// When SinceUID is set, Limit is ignored and all matching
+	// messages are returned.
 	Limit int
+
+	// SinceUID restricts the listing to messages with UIDs strictly
+	// greater than this value. When set, Limit is ignored and all
+	// matching messages are returned. This is used by the email
+	// poller to fetch only messages newer than the high-water mark.
+	SinceUID uint32
 
 	// Unseen restricts the listing to unseen messages only.
 	Unseen bool

@@ -15,31 +15,54 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/scheduler"
 )
 
-// periodicReflectionTaskName is the well-known name for the self-reflection
-// scheduled task. Used for startup registration and context injection.
-const periodicReflectionTaskName = "periodic_reflection"
+const (
+	// periodicReflectionTaskName is the well-known name for the self-reflection
+	// scheduled task. Used for startup registration and context injection.
+	periodicReflectionTaskName = "periodic_reflection"
+
+	// emailPollTaskName is the well-known name for the email polling
+	// scheduled task. When it fires, the poller checks IMAP accounts
+	// for new messages and wakes the agent only if something arrived.
+	emailPollTaskName = "email_poll"
+)
 
 // agentRunner abstracts the agent loop for task execution testing.
 type agentRunner interface {
 	Run(ctx context.Context, req *agent.Request, stream agent.StreamCallback) (*agent.Response, error)
 }
 
+// emailChecker abstracts email polling for task execution testing.
+// Implemented by *email.Poller.
+type emailChecker interface {
+	CheckNewMessages(ctx context.Context) (string, error)
+}
+
+// taskExecDeps holds all dependencies needed by the scheduled task
+// executor. Using a struct avoids a growing parameter list as more
+// task types are added.
+type taskExecDeps struct {
+	runner        agentRunner
+	logger        *slog.Logger
+	workspacePath string
+	emailPoller   emailChecker // nil when email polling is not configured
+}
+
 // runScheduledTask handles execution of a scheduled task by dispatching
 // PayloadWake tasks to the agent loop. Unsupported payload kinds are
 // logged and silently ignored (returning nil, not an error).
 //
-// workspacePath is the agent's sandboxed file system root. When non-empty
-// and the task is periodic_reflection, the current ego.md is read from
-// the workspace and injected into the reflection prompt.
-func runScheduledTask(ctx context.Context, task *scheduler.Task, exec *scheduler.Execution, runner agentRunner, logger *slog.Logger, workspacePath string) error {
-	logger.Debug("task executing",
+// For email_poll tasks, the poller checks IMAP accounts for new messages
+// and only wakes the agent if something new arrived — avoiding LLM token
+// spend on empty poll cycles.
+func runScheduledTask(ctx context.Context, task *scheduler.Task, exec *scheduler.Execution, deps taskExecDeps) error {
+	deps.logger.Debug("task executing",
 		"task_id", task.ID,
 		"task_name", task.Name,
 		"payload_kind", task.Payload.Kind,
 	)
 
 	if task.Payload.Kind != scheduler.PayloadWake {
-		logger.Warn("unsupported task payload kind", "kind", task.Payload.Kind)
+		deps.logger.Warn("unsupported task payload kind", "kind", task.Payload.Kind)
 		return nil
 	}
 
@@ -48,10 +71,24 @@ func runScheduledTask(ctx context.Context, task *scheduler.Task, exec *scheduler
 		msg = "Scheduled wake: " + task.Name
 	}
 
+	// Email poll: run the poller and only wake the agent if new mail arrived.
+	if task.Name == emailPollTaskName && deps.emailPoller != nil {
+		wakeMsg, err := deps.emailPoller.CheckNewMessages(ctx)
+		if err != nil {
+			deps.logger.Warn("email poll failed", "error", err)
+			return nil // best-effort — next cycle will catch up
+		}
+		if wakeMsg == "" {
+			exec.Result = "no new messages"
+			return nil // nothing new, skip the LLM wake
+		}
+		msg = wakeMsg
+	}
+
 	// Context injection for periodic_reflection: read ego.md and build
 	// the reflection prompt with its current contents.
-	if task.Name == periodicReflectionTaskName && workspacePath != "" {
-		egoContent := readEgoMD(workspacePath, logger)
+	if task.Name == periodicReflectionTaskName && deps.workspacePath != "" {
+		egoContent := readEgoMD(deps.workspacePath, deps.logger)
 		msg = prompts.PeriodicReflectionPrompt(egoContent)
 	}
 
@@ -85,13 +122,13 @@ func runScheduledTask(ctx context.Context, task *scheduler.Task, exec *scheduler
 		},
 	}
 
-	resp, err := runner.Run(ctx, req, nil)
+	resp, err := deps.runner.Run(ctx, req, nil)
 	if err != nil {
 		return fmt.Errorf("scheduled task %q: %w", task.Name, err)
 	}
 	exec.Result = resp.Content
 
-	logger.Debug("task completed",
+	deps.logger.Debug("task completed",
 		"task_id", task.ID,
 		"task_name", task.Name,
 		"result_len", len(resp.Content),

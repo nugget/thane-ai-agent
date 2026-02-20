@@ -11,6 +11,10 @@ import (
 // ListMessages returns recent messages from the specified folder.
 // Messages are returned newest-first. When opts.Unseen is true, only
 // messages without the \Seen flag are returned.
+//
+// When opts.SinceUID is set, only messages with UIDs strictly greater
+// than that value are returned (ignoring Limit). This enables
+// efficient polling without missing messages between cycles.
 func (c *Client) ListMessages(ctx context.Context, opts ListOptions) ([]Envelope, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -37,6 +41,12 @@ func (c *Client) ListMessages(ctx context.Context, opts ListOptions) ([]Envelope
 	if opts.Unseen {
 		criteria.NotFlag = append(criteria.NotFlag, imap.FlagSeen)
 	}
+	// UID-range filter: restrict to UIDs > SinceUID.
+	if opts.SinceUID > 0 {
+		criteria.UID = []imap.UIDSet{
+			{imap.UIDRange{Start: imap.UID(opts.SinceUID + 1), Stop: 0}},
+		}
+	}
 
 	searchCmd := c.client.UIDSearch(criteria, nil)
 	searchData, err := searchCmd.Wait()
@@ -49,12 +59,16 @@ func (c *Client) ListMessages(ctx context.Context, opts ListOptions) ([]Envelope
 		return nil, nil
 	}
 
-	// Take the most recent N UIDs (highest UIDs = newest).
-	start := 0
-	if len(allUIDs) > limit {
-		start = len(allUIDs) - limit
+	// When SinceUID is set, return all matching UIDs (no limit).
+	// Otherwise take the most recent N UIDs (highest UIDs = newest).
+	recentUIDs := allUIDs
+	if opts.SinceUID == 0 {
+		start := 0
+		if len(allUIDs) > limit {
+			start = len(allUIDs) - limit
+		}
+		recentUIDs = allUIDs[start:]
 	}
-	recentUIDs := allUIDs[start:]
 
 	// Build UID set for fetch.
 	uidSet := imap.UIDSet{}
