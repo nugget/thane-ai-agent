@@ -169,8 +169,11 @@ func TestComposeMessage_WithCcBcc(t *testing.T) {
 	if !strings.Contains(s, "Cc:") {
 		t.Error("message should contain Cc header")
 	}
-	if !strings.Contains(s, "Bcc:") {
-		t.Error("message should contain Bcc header")
+	// Bcc recipients are intentionally omitted from message headers to
+	// prevent leaking blind-copy information. They are included only in
+	// the SMTP envelope (RCPT TO).
+	if strings.Contains(s, "Bcc:") {
+		t.Error("message must not contain Bcc header (blind-copy leak)")
 	}
 }
 

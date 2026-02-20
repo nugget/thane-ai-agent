@@ -129,10 +129,20 @@ func TestConfig_Validate(t *testing.T) {
 			cfg: Config{Accounts: []AccountConfig{{
 				Name:        "test",
 				IMAP:        IMAPConfig{Host: "imap.gmail.com", Port: 993, Username: "user"},
-				SMTP:        SMTPConfig{Host: "smtp.gmail.com", Port: 587, Username: "user"},
+				SMTP:        SMTPConfig{Host: "smtp.gmail.com", Port: 587, Username: "user", Password: "pass"},
 				DefaultFrom: "User <user@gmail.com>",
 			}}},
 			wantErr: false,
+		},
+		{
+			name: "smtp missing password",
+			cfg: Config{Accounts: []AccountConfig{{
+				Name:        "test",
+				IMAP:        IMAPConfig{Host: "imap.gmail.com", Port: 993, Username: "user"},
+				SMTP:        SMTPConfig{Host: "smtp.gmail.com", Port: 587, Username: "user"},
+				DefaultFrom: "User <user@gmail.com>",
+			}}},
+			wantErr: true,
 		},
 		{
 			name: "smtp missing username",
@@ -149,7 +159,7 @@ func TestConfig_Validate(t *testing.T) {
 			cfg: Config{Accounts: []AccountConfig{{
 				Name: "test",
 				IMAP: IMAPConfig{Host: "imap.gmail.com", Port: 993, Username: "user"},
-				SMTP: SMTPConfig{Host: "smtp.gmail.com", Port: 587, Username: "user"},
+				SMTP: SMTPConfig{Host: "smtp.gmail.com", Port: 587, Username: "user", Password: "pass"},
 			}}},
 			wantErr: true,
 		},
@@ -158,7 +168,7 @@ func TestConfig_Validate(t *testing.T) {
 			cfg: Config{Accounts: []AccountConfig{{
 				Name:        "test",
 				IMAP:        IMAPConfig{Host: "imap.gmail.com", Port: 993, Username: "user"},
-				SMTP:        SMTPConfig{Host: "smtp.gmail.com", Port: 0, Username: "user"},
+				SMTP:        SMTPConfig{Host: "smtp.gmail.com", Port: 0, Username: "user", Password: "pass"},
 				DefaultFrom: "User <user@gmail.com>",
 			}}},
 			wantErr: true,
@@ -243,6 +253,22 @@ func TestAccountConfig_SMTPConfigured(t *testing.T) {
 				t.Errorf("SMTPConfigured() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestAccountConfig_SentFolder(t *testing.T) {
+	acct := AccountConfig{
+		Name:       "test",
+		SentFolder: "[Gmail]/Sent Mail",
+	}
+	if acct.SentFolder != "[Gmail]/Sent Mail" {
+		t.Errorf("SentFolder = %q, want %q", acct.SentFolder, "[Gmail]/Sent Mail")
+	}
+
+	// Empty SentFolder means no IMAP APPEND after send.
+	empty := AccountConfig{Name: "test"}
+	if empty.SentFolder != "" {
+		t.Errorf("SentFolder should default to empty, got %q", empty.SentFolder)
 	}
 }
 

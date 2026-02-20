@@ -80,6 +80,9 @@ func (c Config) Validate() error {
 			if a.SMTP.Username == "" {
 				return fmt.Errorf("email.accounts[%d] (%s): smtp.username is required when smtp.host is set", i, a.Name)
 			}
+			if a.SMTP.Password == "" {
+				return fmt.Errorf("email.accounts[%d] (%s): smtp.password is required when smtp.host is set", i, a.Name)
+			}
 			if a.SMTP.Port < 1 || a.SMTP.Port > 65535 {
 				return fmt.Errorf("email.accounts[%d] (%s): smtp.port %d out of range (1-65535)", i, a.Name, a.SMTP.Port)
 			}
@@ -109,6 +112,11 @@ type AccountConfig struct {
 	// account (e.g., "Aimée <user@gmail.com>"). Required when SMTP
 	// is configured.
 	DefaultFrom string `yaml:"default_from"`
+
+	// SentFolder is the IMAP folder where copies of sent messages are
+	// stored after successful SMTP delivery (e.g., "Sent", "[Gmail]/Sent Mail").
+	// When empty, sent messages are not stored via IMAP APPEND.
+	SentFolder string `yaml:"sent_folder"`
 }
 
 // SMTPConfigured reports whether this account has SMTP send capability.

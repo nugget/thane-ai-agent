@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapclient"
@@ -128,4 +129,35 @@ func (c *Client) selectFolder(folder string) (*imap.SelectData, error) {
 		return nil, fmt.Errorf("select %s: %w", folder, err)
 	}
 	return data, nil
+}
+
+// AppendMessage stores a complete RFC 5322 message in the specified IMAP
+// folder. This is used after SMTP delivery to keep a copy in the account's
+// Sent Items folder. The message is stored with the \Seen flag and the
+// current timestamp.
+func (c *Client) AppendMessage(ctx context.Context, folder string, msg []byte) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	if err := c.ensureConnected(ctx); err != nil {
+		return err
+	}
+
+	opts := &imap.AppendOptions{
+		Flags: []imap.Flag{imap.FlagSeen},
+		Time:  time.Now(),
+	}
+
+	appendCmd := c.client.Append(folder, int64(len(msg)), opts)
+	if _, err := appendCmd.Write(msg); err != nil {
+		return fmt.Errorf("write to %s: %w", folder, err)
+	}
+	if err := appendCmd.Close(); err != nil {
+		return fmt.Errorf("close APPEND to %s: %w", folder, err)
+	}
+	if _, err := appendCmd.Wait(); err != nil {
+		return fmt.Errorf("APPEND to %s: %w", folder, err)
+	}
+
+	return nil
 }
