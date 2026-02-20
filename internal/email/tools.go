@@ -330,19 +330,12 @@ func (t *Tools) sendEmail(ctx context.Context, account string, to, cc []string, 
 		return "", fmt.Errorf("SMTP not configured for account %q", acctCfg.Name)
 	}
 
-	// Trust zone gating: check all recipients.
-	allRecipients := slices.Concat(to, cc)
-	trust := CheckRecipientTrust(t.contacts, allRecipients)
-	if trust.HasIssues() {
-		return trust.FormatIssues(), nil
-	}
-
 	// Auto-Bcc owner if configured.
 	var bcc []string
 	if owner := t.manager.BccOwner(); owner != "" {
 		ownerBare := extractAddress(owner)
 		alreadyRecipient := false
-		for _, addr := range allRecipients {
+		for _, addr := range slices.Concat(to, cc) {
 			if extractAddress(addr) == ownerBare {
 				alreadyRecipient = true
 				break
@@ -351,6 +344,13 @@ func (t *Tools) sendEmail(ctx context.Context, account string, to, cc []string, 
 		if !alreadyRecipient {
 			bcc = append(bcc, owner)
 		}
+	}
+
+	// Trust zone gating: check all recipients including auto-Bcc.
+	allRecipients := slices.Concat(to, cc, bcc)
+	trust := CheckRecipientTrust(t.contacts, allRecipients)
+	if trust.HasIssues() {
+		return "", fmt.Errorf("recipient trust issues: %s", trust.FormatIssues())
 	}
 
 	// Compose the MIME message.
@@ -373,7 +373,7 @@ func (t *Tools) sendEmail(ctx context.Context, account string, to, cc []string, 
 
 	// Send via SMTP.
 	fromAddr := extractAddress(acctCfg.DefaultFrom)
-	if err := SendMail(acctCfg.SMTP, fromAddr, smtpRecipients, msg); err != nil {
+	if err := SendMail(ctx, acctCfg.SMTP, fromAddr, smtpRecipients, msg); err != nil {
 		return "", fmt.Errorf("send email: %w", err)
 	}
 
@@ -383,6 +383,24 @@ func (t *Tools) sendEmail(ctx context.Context, account string, to, cc []string, 
 		"subject", subject,
 		"account", acctCfg.Name,
 	)
+
+	// Store a copy in the configured Sent folder via IMAP APPEND.
+	if acctCfg.SentFolder != "" {
+		client, err := t.manager.Account(account)
+		if err != nil {
+			slog.Warn("failed to retrieve account for storing sent message",
+				"folder", acctCfg.SentFolder,
+				"account", acctCfg.Name,
+				"error", err,
+			)
+		} else if appendErr := client.AppendMessage(ctx, acctCfg.SentFolder, msg); appendErr != nil {
+			slog.Warn("failed to store sent message in IMAP folder",
+				"folder", acctCfg.SentFolder,
+				"account", acctCfg.Name,
+				"error", appendErr,
+			)
+		}
+	}
 
 	return fmt.Sprintf("Email sent to %s — subject: %s", strings.Join(to, ", "), subject), nil
 }

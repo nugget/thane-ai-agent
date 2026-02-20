@@ -1,23 +1,69 @@
 package email
 
 import (
+	"context"
 	"crypto/tls"
 	"fmt"
 	"net"
 	"net/smtp"
+	"time"
 )
+
+// smtpDialTimeout is the maximum time to establish an SMTP connection.
+const smtpDialTimeout = 30 * time.Second
 
 // SendMail connects to the SMTP server, authenticates, and delivers the
 // given message. Connections are ephemeral — each call opens and closes
 // its own connection. The msg parameter should be a complete RFC 5322
-// message (as returned by ComposeMessage).
-func SendMail(cfg SMTPConfig, from string, recipients []string, msg []byte) error {
+// message (as returned by ComposeMessage). The context controls the
+// overall deadline for the entire send operation.
+func SendMail(ctx context.Context, cfg SMTPConfig, from string, recipients []string, msg []byte) error {
 	addr := net.JoinHostPort(cfg.Host, fmt.Sprintf("%d", cfg.Port))
 
-	// Connect to SMTP server.
-	client, err := smtp.Dial(addr)
-	if err != nil {
-		return fmt.Errorf("dial SMTP %s: %w", addr, err)
+	// Use context deadline for the dial timeout, falling back to the
+	// package default.
+	dialTimeout := smtpDialTimeout
+	if deadline, ok := ctx.Deadline(); ok {
+		if remaining := time.Until(deadline); remaining < dialTimeout {
+			dialTimeout = remaining
+		}
+	}
+
+	dialer := &net.Dialer{Timeout: dialTimeout}
+
+	var client *smtp.Client
+	var err error
+
+	if !cfg.StartTLS {
+		// Implicit TLS (port 465): connect over TLS from the start.
+		// Use DialContext + tls.Client instead of tls.DialWithDialer so
+		// the connection respects context cancellation during the dial.
+		tlsCfg := &tls.Config{ServerName: cfg.Host}
+		conn, dialErr := dialer.DialContext(ctx, "tcp", addr)
+		if dialErr != nil {
+			return fmt.Errorf("dial SMTPS %s: %w", addr, dialErr)
+		}
+		tlsConn := tls.Client(conn, tlsCfg)
+		if hsErr := tlsConn.Handshake(); hsErr != nil {
+			tlsConn.Close()
+			return fmt.Errorf("TLS handshake with %s: %w", addr, hsErr)
+		}
+		client, err = smtp.NewClient(tlsConn, cfg.Host)
+		if err != nil {
+			tlsConn.Close()
+			return fmt.Errorf("create SMTP client on %s: %w", addr, err)
+		}
+	} else {
+		// STARTTLS (port 587): connect plain, then upgrade.
+		conn, dialErr := dialer.DialContext(ctx, "tcp", addr)
+		if dialErr != nil {
+			return fmt.Errorf("dial SMTP %s: %w", addr, dialErr)
+		}
+		client, err = smtp.NewClient(conn, cfg.Host)
+		if err != nil {
+			conn.Close()
+			return fmt.Errorf("create SMTP client on %s: %w", addr, err)
+		}
 	}
 	defer client.Close()
 
@@ -26,7 +72,7 @@ func SendMail(cfg SMTPConfig, from string, recipients []string, msg []byte) erro
 		return fmt.Errorf("EHLO: %w", err)
 	}
 
-	// Upgrade to TLS if configured.
+	// Upgrade to TLS if using STARTTLS.
 	if cfg.StartTLS {
 		tlsCfg := &tls.Config{ServerName: cfg.Host}
 		if err := client.StartTLS(tlsCfg); err != nil {
@@ -34,10 +80,12 @@ func SendMail(cfg SMTPConfig, from string, recipients []string, msg []byte) erro
 		}
 	}
 
-	// Authenticate.
-	auth := smtp.PlainAuth("", cfg.Username, cfg.Password, cfg.Host)
-	if err := client.Auth(auth); err != nil {
-		return fmt.Errorf("AUTH: %w", err)
+	// Authenticate if credentials are provided.
+	if cfg.Username != "" && cfg.Password != "" {
+		auth := smtp.PlainAuth("", cfg.Username, cfg.Password, cfg.Host)
+		if err := client.Auth(auth); err != nil {
+			return fmt.Errorf("AUTH: %w", err)
+		}
 	}
 
 	// Set the sender.

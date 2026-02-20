@@ -75,13 +75,9 @@ func ComposeMessage(opts ComposeOptions) ([]byte, error) {
 		h.SetAddressList("Cc", ccAddrs)
 	}
 
-	if len(opts.Bcc) > 0 {
-		bccAddrs, err := parseAddressList(opts.Bcc)
-		if err != nil {
-			return nil, fmt.Errorf("parse bcc addresses: %w", err)
-		}
-		h.SetAddressList("Bcc", bccAddrs)
-	}
+	// Note: Bcc recipients are intentionally omitted from message headers
+	// to avoid leaking blind-copy information. Callers include Bcc
+	// addresses only in the SMTP envelope (RCPT TO).
 
 	// Threading headers for replies.
 	if opts.InReplyTo != "" {
