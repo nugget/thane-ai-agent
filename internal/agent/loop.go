@@ -22,6 +22,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/prompts"
 	"github.com/nugget/thane-ai-agent/internal/router"
 	"github.com/nugget/thane-ai-agent/internal/scheduler"
+	"github.com/nugget/thane-ai-agent/internal/talents"
 	"github.com/nugget/thane-ai-agent/internal/tools"
 )
 
@@ -147,6 +148,21 @@ type Loop struct {
 	extractor       *memory.Extractor
 	iter0Tools      []string           // Restricted tool set for orchestrator mode (nil = all tools)
 	debugCfg        config.DebugConfig // Debug options (system prompt dump, etc.)
+
+	// Capability tags — per-session tool/talent filtering.
+	//
+	// activeTags is scoped to the Loop instance. In the current
+	// architecture each conversation channel (Signal, API, wake) runs
+	// through the same Loop, so active tags are effectively global.
+	// Per-conversation tag isolation will be added in Phase 2 when
+	// channel-pinned tags and delegate tag scoping land.
+	//
+	// Concurrency: the agent loop is single-threaded per Run() call.
+	// If Phase 2 introduces concurrent access (e.g., delegate
+	// spawning in a goroutine), activeTags will need a mutex.
+	capTags       map[string]config.CapabilityTagConfig // tag definitions from config
+	activeTags    map[string]bool                       // currently active tags (see scoping note above)
+	parsedTalents []talents.Talent                      // pre-loaded talent structs for tag filtering
 }
 
 // NewLoop creates a new agent loop.
@@ -215,6 +231,73 @@ func (l *Loop) SetIter0Tools(names []string) {
 // SetDebugConfig configures debug options for the agent loop.
 func (l *Loop) SetDebugConfig(cfg config.DebugConfig) {
 	l.debugCfg = cfg
+}
+
+// SetCapabilityTags configures tag-driven tool and talent filtering.
+// Tags marked always_active are activated immediately. The method also
+// builds the tool registry's tag index and stores parsed talents for
+// per-run filtering. When capTags is nil or empty, capability tagging
+// is disabled and all tools/talents load unconditionally.
+func (l *Loop) SetCapabilityTags(capTags map[string]config.CapabilityTagConfig, parsedTalents []talents.Talent) {
+	if len(capTags) == 0 {
+		return
+	}
+	l.capTags = capTags
+	l.parsedTalents = parsedTalents
+
+	// Build tag index for tool filtering.
+	tagIndex := make(map[string][]string, len(capTags))
+	for tag, cfg := range capTags {
+		tagIndex[tag] = cfg.Tools
+	}
+	l.tools.SetTagIndex(tagIndex)
+
+	// Activate always_active tags.
+	l.activeTags = make(map[string]bool)
+	for tag, cfg := range capTags {
+		if cfg.AlwaysActive {
+			l.activeTags[tag] = true
+		}
+	}
+}
+
+// ActiveTags returns the set of currently active capability tags.
+// Returns nil when capability tagging is not configured.
+func (l *Loop) ActiveTags() map[string]bool {
+	return l.activeTags
+}
+
+// RequestCapability activates a capability tag for the current session.
+// Returns an error if the tag is unknown.
+func (l *Loop) RequestCapability(tag string) error {
+	if l.capTags == nil {
+		return fmt.Errorf("capability tags not configured")
+	}
+	if _, ok := l.capTags[tag]; !ok {
+		return fmt.Errorf("unknown capability tag: %q", tag)
+	}
+	l.activeTags[tag] = true
+	l.logger.Info("capability activated", "tag", tag)
+	return nil
+}
+
+// DropCapability deactivates a capability tag for the current session.
+// Always-active tags cannot be dropped. Returns an error if the tag is
+// unknown or always active.
+func (l *Loop) DropCapability(tag string) error {
+	if l.capTags == nil {
+		return fmt.Errorf("capability tags not configured")
+	}
+	cfg, ok := l.capTags[tag]
+	if !ok {
+		return fmt.Errorf("unknown capability tag: %q", tag)
+	}
+	if cfg.AlwaysActive {
+		return fmt.Errorf("cannot drop always-active tag: %q", tag)
+	}
+	delete(l.activeTags, tag)
+	l.logger.Info("capability deactivated", "tag", tag)
+	return nil
 }
 
 // Tools returns the tool registry for adding additional tools.
@@ -323,10 +406,16 @@ func (l *Loop) buildSystemPrompt(ctx context.Context, userMessage string, histor
 	seal()
 
 	// 5. Talents (behavior — how should I act)
-	if l.talents != "" {
+	// When capability tagging is configured, filter talents by active tags.
+	// Otherwise, use the pre-combined static string.
+	talentContent := l.talents
+	if l.parsedTalents != nil {
+		talentContent = talents.FilterByTags(l.parsedTalents, l.activeTags)
+	}
+	if talentContent != "" {
 		mark("TALENTS")
 		sb.WriteString("\n\n## Behavioral Guidance\n\n")
-		sb.WriteString(l.talents)
+		sb.WriteString(talentContent)
 		seal()
 	}
 
@@ -701,11 +790,20 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		log.Info("tool gating active", "tools", l.iter0Tools)
 	}
 
-	// Build the effective tool registry, excluding any tools the caller
-	// requested to hide (e.g., lifecycle tools stripped from recurring wakes).
+	// Build the effective tool registry. When capability tagging is active,
+	// only tools belonging to active tags are included. Request-level
+	// exclusions (e.g., lifecycle tools stripped from recurring wakes) are
+	// applied on top.
 	effectiveTools := l.tools
+	if l.activeTags != nil {
+		activeTags := make([]string, 0, len(l.activeTags))
+		for tag := range l.activeTags {
+			activeTags = append(activeTags, tag)
+		}
+		effectiveTools = l.tools.FilterByTags(activeTags)
+	}
 	if len(req.ExcludeTools) > 0 {
-		effectiveTools = l.tools.FilteredCopyExcluding(req.ExcludeTools)
+		effectiveTools = effectiveTools.FilteredCopyExcluding(req.ExcludeTools)
 		log.Info("tools excluded from run", "excluded", req.ExcludeTools)
 	}
 

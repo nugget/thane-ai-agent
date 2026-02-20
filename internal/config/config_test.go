@@ -353,6 +353,49 @@ func TestSignalConfig_Configured(t *testing.T) {
 	}
 }
 
+func TestValidate_CapabilityTagEmptyDescription(t *testing.T) {
+	cfg := Default()
+	cfg.CapabilityTags = map[string]CapabilityTagConfig{
+		"ha": {Description: "", Tools: []string{"get_state"}},
+	}
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected validation error for empty description")
+	}
+	if !strings.Contains(err.Error(), "capability_tags.ha.description") {
+		t.Errorf("error should mention capability_tags.ha.description, got: %v", err)
+	}
+}
+
+func TestValidate_CapabilityTagEmptyTools(t *testing.T) {
+	cfg := Default()
+	cfg.CapabilityTags = map[string]CapabilityTagConfig{
+		"search": {Description: "Web search", Tools: nil},
+	}
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected validation error for empty tools")
+	}
+	if !strings.Contains(err.Error(), "capability_tags.search.tools") {
+		t.Errorf("error should mention capability_tags.search.tools, got: %v", err)
+	}
+}
+
+func TestValidate_CapabilityTagValid(t *testing.T) {
+	cfg := Default()
+	cfg.CapabilityTags = map[string]CapabilityTagConfig{
+		"ha":  {Description: "Home Assistant", Tools: []string{"get_state"}, AlwaysActive: true},
+		"web": {Description: "Web search", Tools: []string{"web_search"}},
+	}
+
+	err := cfg.Validate()
+	if err != nil {
+		t.Fatalf("unexpected validation error: %v", err)
+	}
+}
+
 func TestApplyDefaults_SignalRateLimit(t *testing.T) {
 	cfg := Default()
 	// Zero means unlimited — no default override so users can disable

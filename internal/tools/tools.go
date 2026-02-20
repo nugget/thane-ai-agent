@@ -30,6 +30,7 @@ type Tool struct {
 // Registry holds available tools.
 type Registry struct {
 	tools             map[string]*Tool
+	tagIndex          map[string][]string // tag → tool names
 	ha                *homeassistant.Client
 	scheduler         *scheduler.Scheduler
 	factTools         *facts.Tools
@@ -876,6 +877,55 @@ func (r *Registry) FilteredCopyExcluding(exclude []string) *Registry {
 		}
 	}
 	return filtered
+}
+
+// SetTagIndex builds the tag-to-tool mapping from config. Each tag
+// name maps to a list of tool names. Tools not found in the registry
+// are silently skipped (they may not be registered yet or the MCP
+// server may be down).
+func (r *Registry) SetTagIndex(tags map[string][]string) {
+	r.tagIndex = make(map[string][]string, len(tags))
+	for tag, toolNames := range tags {
+		r.tagIndex[tag] = toolNames
+	}
+}
+
+// FilterByTags creates a new Registry containing only the tools that
+// belong to at least one of the given tags. If tags is empty or the
+// tag index is nil, returns a copy of the full registry.
+func (r *Registry) FilterByTags(tags []string) *Registry {
+	if len(tags) == 0 || r.tagIndex == nil {
+		// No filtering — return a shallow copy with all tools.
+		filtered := &Registry{tools: make(map[string]*Tool, len(r.tools))}
+		for name, t := range r.tools {
+			filtered.tools[name] = t
+		}
+		return filtered
+	}
+
+	allowed := make(map[string]bool)
+	for _, tag := range tags {
+		for _, name := range r.tagIndex[tag] {
+			allowed[name] = true
+		}
+	}
+
+	filtered := &Registry{tools: make(map[string]*Tool, len(allowed))}
+	for name := range allowed {
+		if t := r.tools[name]; t != nil {
+			filtered.tools[name] = t
+		}
+	}
+	return filtered
+}
+
+// TaggedToolNames returns the tool names belonging to a tag. Returns
+// nil for unknown tags.
+func (r *Registry) TaggedToolNames(tag string) []string {
+	if r.tagIndex == nil {
+		return nil
+	}
+	return r.tagIndex[tag]
 }
 
 // Execute runs a tool by name with given arguments.

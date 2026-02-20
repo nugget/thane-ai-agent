@@ -140,6 +140,13 @@ type Config struct {
 	// gating for delegation-first architecture.
 	Agent AgentConfig `yaml:"agent"`
 
+	// CapabilityTags defines named groups of tools and talents that
+	// can be activated or deactivated per session. Tags marked
+	// always_active are loaded unconditionally. Other tags are
+	// activated via request_capability/drop_capability tools or
+	// channel-pinned configuration.
+	CapabilityTags map[string]CapabilityTagConfig `yaml:"capability_tags"`
+
 	// MCP configures external MCP (Model Context Protocol) server
 	// connections for tool discovery. Each server provides additional
 	// tools that are discovered dynamically and bridged into the
@@ -414,6 +421,37 @@ type AgentConfig struct {
 	// DelegationRequired enables iter-0 tool gating. When false
 	// (the default), all tools are available on every iteration.
 	DelegationRequired bool `yaml:"delegation_required"`
+}
+
+// CapabilityTagConfig defines a named group of tools (and optionally
+// talents) that can be loaded together. Tags marked AlwaysActive are
+// included in every session unconditionally.
+type CapabilityTagConfig struct {
+	// Description is a human-readable summary shown in the capability
+	// manifest so the agent knows what activating this tag provides.
+	Description string `yaml:"description"`
+
+	// Tools lists the tool names belonging to this tag. A tool can
+	// appear in multiple tags; it loads when any of its tags is active.
+	Tools []string `yaml:"tools"`
+
+	// AlwaysActive tags cannot be deactivated. They are included in
+	// every session regardless of channel or agent requests.
+	AlwaysActive bool `yaml:"always_active"`
+}
+
+// Validate checks that the capability tag configuration is internally
+// consistent. It ensures a description is present and the tools list is
+// non-empty. Tag names are validated by the caller since they are map
+// keys in the parent Config struct.
+func (c CapabilityTagConfig) Validate(tagName string) error {
+	if strings.TrimSpace(c.Description) == "" {
+		return fmt.Errorf("capability_tags.%s.description must not be empty", tagName)
+	}
+	if len(c.Tools) == 0 {
+		return fmt.Errorf("capability_tags.%s.tools must not be empty", tagName)
+	}
+	return nil
 }
 
 // WorkspaceConfig configures the agent's sandboxed file system access.
@@ -908,6 +946,11 @@ func (c *Config) Validate() error {
 	}
 	if err := c.validateMCP(); err != nil {
 		return err
+	}
+	for tagName, tagCfg := range c.CapabilityTags {
+		if err := tagCfg.Validate(tagName); err != nil {
+			return err
+		}
 	}
 	if c.Episodic.LookbackDays < 0 {
 		return fmt.Errorf("episodic.lookback_days %d must be non-negative", c.Episodic.LookbackDays)
