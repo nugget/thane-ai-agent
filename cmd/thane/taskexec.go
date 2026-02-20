@@ -55,16 +55,31 @@ func runScheduledTask(ctx context.Context, task *scheduler.Task, exec *scheduler
 		msg = prompts.PeriodicReflectionPrompt(egoContent)
 	}
 
-	// Use trigger-profile hints: cheapest local model, full tool access.
+	// Extract optional routing overrides from payload data.
+	// Tasks can specify model, local_only, and quality_floor to
+	// override the defaults (local-only, cheapest model).
+	model, _ := task.Payload.Data["model"].(string)
+
+	localOnly := "true"
+	if lo, ok := task.Payload.Data["local_only"].(string); ok {
+		localOnly = lo
+	}
+
+	qualityFloor := "1"
+	if qf, ok := task.Payload.Data["quality_floor"].(string); ok {
+		qualityFloor = qf
+	}
+
 	// Each task gets its own conversation to isolate from interactive chat.
 	req := &agent.Request{
 		ConversationID: fmt.Sprintf("sched-%s", task.ID),
+		Model:          model,
 		Messages:       []agent.Message{{Role: "user", Content: msg}},
 		Hints: map[string]string{
 			"source":                    "scheduler",
 			"task":                      task.Name,
-			router.HintLocalOnly:        "true",
-			router.HintQualityFloor:     "1",
+			router.HintLocalOnly:        localOnly,
+			router.HintQualityFloor:     qualityFloor,
 			router.HintMission:          "automation",
 			router.HintDelegationGating: "disabled", // full tool access, no delegation indirection
 		},

@@ -615,41 +615,62 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// --- Periodic reflection ---
 	// Register the self-reflection task if it doesn't already exist.
 	// Requires a workspace so the agent can write ego.md via file tools.
+	// Uses a cloud model (Sonnet) for higher-quality reflection output.
 	if cfg.Workspace.Path != "" {
+		reflectionInterval := 24 * time.Hour
+		reflectionPayload := scheduler.Payload{
+			Kind: scheduler.PayloadWake,
+			Data: map[string]any{
+				"message":       "periodic_reflection",
+				"model":         "claude-sonnet-4-20250514",
+				"local_only":    "false",
+				"quality_floor": "7",
+			},
+		}
+
 		existing, err := schedStore.GetTaskByName(periodicReflectionTaskName)
 		if err != nil {
 			logger.Error("failed to check for periodic_reflection task", "error", err)
 		} else if existing == nil {
-			interval := 15 * time.Minute
 			reflectionTask := &scheduler.Task{
 				Name: periodicReflectionTaskName,
 				Schedule: scheduler.Schedule{
 					Kind:  scheduler.ScheduleEvery,
-					Every: &scheduler.Duration{Duration: interval},
+					Every: &scheduler.Duration{Duration: reflectionInterval},
 				},
-				Payload: scheduler.Payload{
-					Kind: scheduler.PayloadWake,
-					Data: map[string]any{
-						"message": "periodic_reflection",
-					},
-				},
+				Payload:   reflectionPayload,
 				Enabled:   true,
 				CreatedBy: "system",
 			}
 			if err := sched.CreateTask(reflectionTask); err != nil {
 				logger.Error("failed to create periodic_reflection task", "error", err)
 			} else {
-				logger.Info("periodic_reflection task registered", "interval", interval)
-			}
-		} else if !existing.Enabled {
-			existing.Enabled = true
-			if err := sched.UpdateTask(existing); err != nil {
-				logger.Error("failed to re-enable periodic_reflection task", "error", err)
-			} else {
-				logger.Info("periodic_reflection task re-enabled")
+				logger.Info("periodic_reflection task registered", "interval", reflectionInterval)
 			}
 		} else {
-			logger.Debug("periodic_reflection task already registered", "id", existing.ID)
+			// Migrate existing tasks from 15min/local-only to daily/Sonnet.
+			needsUpdate := false
+			if existing.Schedule.Every != nil && existing.Schedule.Every.Duration < reflectionInterval {
+				existing.Schedule.Every.Duration = reflectionInterval
+				needsUpdate = true
+			}
+			if existing.Payload.Data["model"] == nil {
+				existing.Payload = reflectionPayload
+				needsUpdate = true
+			}
+			if !existing.Enabled {
+				existing.Enabled = true
+				needsUpdate = true
+			}
+			if needsUpdate {
+				if err := sched.UpdateTask(existing); err != nil {
+					logger.Error("failed to update periodic_reflection task", "error", err)
+				} else {
+					logger.Info("periodic_reflection task updated", "interval", reflectionInterval)
+				}
+			} else {
+				logger.Debug("periodic_reflection task already registered", "id", existing.ID)
+			}
 		}
 	}
 

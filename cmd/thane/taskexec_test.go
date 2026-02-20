@@ -289,3 +289,77 @@ func TestRunScheduledTask_PeriodicReflection_NoWorkspace(t *testing.T) {
 		t.Errorf("message = %q, want raw payload %q", msg, "periodic_reflection")
 	}
 }
+
+func TestRunScheduledTask_PayloadModelOverride(t *testing.T) {
+	runner := &mockRunner{
+		resp: &agent.Response{Content: "reflected"},
+	}
+
+	task := &scheduler.Task{
+		ID:   "task-model",
+		Name: "ModelOverride",
+		Payload: scheduler.Payload{
+			Kind: scheduler.PayloadWake,
+			Data: map[string]any{
+				"message":       "think deeply",
+				"model":         "claude-sonnet-4-20250514",
+				"local_only":    "false",
+				"quality_floor": "7",
+			},
+		},
+	}
+	exec := &scheduler.Execution{}
+
+	err := runScheduledTask(context.Background(), task, exec, runner, slog.Default(), "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if runner.req.Model != "claude-sonnet-4-20250514" {
+		t.Errorf("model = %q, want %q", runner.req.Model, "claude-sonnet-4-20250514")
+	}
+	if runner.req.Hints[router.HintLocalOnly] != "false" {
+		t.Errorf("hint local_only = %q, want %q", runner.req.Hints[router.HintLocalOnly], "false")
+	}
+	if runner.req.Hints[router.HintQualityFloor] != "7" {
+		t.Errorf("hint quality_floor = %q, want %q", runner.req.Hints[router.HintQualityFloor], "7")
+	}
+}
+
+func TestRunScheduledTask_PayloadPartialOverride(t *testing.T) {
+	runner := &mockRunner{
+		resp: &agent.Response{Content: "ok"},
+	}
+
+	task := &scheduler.Task{
+		ID:   "task-partial",
+		Name: "PartialOverride",
+		Payload: scheduler.Payload{
+			Kind: scheduler.PayloadWake,
+			Data: map[string]any{
+				"message":       "check something",
+				"quality_floor": "5",
+				// model and local_only not set — should use defaults
+			},
+		},
+	}
+	exec := &scheduler.Execution{}
+
+	err := runScheduledTask(context.Background(), task, exec, runner, slog.Default(), "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Model should be empty (no override).
+	if runner.req.Model != "" {
+		t.Errorf("model = %q, want empty", runner.req.Model)
+	}
+	// local_only should default to "true".
+	if runner.req.Hints[router.HintLocalOnly] != "true" {
+		t.Errorf("hint local_only = %q, want %q", runner.req.Hints[router.HintLocalOnly], "true")
+	}
+	// quality_floor should use the override.
+	if runner.req.Hints[router.HintQualityFloor] != "5" {
+		t.Errorf("hint quality_floor = %q, want %q", runner.req.Hints[router.HintQualityFloor], "5")
+	}
+}
