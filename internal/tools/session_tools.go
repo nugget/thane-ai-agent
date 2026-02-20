@@ -98,12 +98,24 @@ func (r *Registry) registerSessionClose(mgr SessionManager) {
 				reason = "session close"
 			}
 			carryForward, _ := args["carry_forward"].(string)
+			if carryForward == "" {
+				// Models frequently use natural aliases for the parameter name.
+				for _, alias := range []string{"handoff_note", "handoff", "summary", "handoff_summary", "note", "context"} {
+					if v, ok := args[alias].(string); ok && v != "" {
+						carryForward = v
+						break
+					}
+				}
+			}
 
 			if err := mgr.CloseSession(convID, reason, carryForward); err != nil {
 				return "", fmt.Errorf("close session: %w", err)
 			}
 
-			return fmt.Sprintf("Session closed (%s). New session started with carry-forward context injected.", reason), nil
+			if carryForward != "" {
+				return fmt.Sprintf("Session closed (%s). Carry-forward injected into new session (%d chars).", reason, len(carryForward)), nil
+			}
+			return fmt.Sprintf("Session closed (%s). WARNING: No carry-forward content received — new session has no prior context.", reason), nil
 		},
 	})
 }

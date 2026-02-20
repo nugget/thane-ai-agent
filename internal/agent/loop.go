@@ -601,11 +601,14 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	}
 
 	usageInfo := conditions.ContextUsageInfo{
-		Model:         l.model,
-		Routed:        l.router != nil,
-		TokenCount:    totalChars / 4, // rough char-to-token estimate
-		ContextWindow: l.contextWindow,
-		MessageCount:  len(history),
+		Model:          l.model,
+		Routed:         l.router != nil,
+		TokenCount:     totalChars / 4, // rough char-to-token estimate
+		ContextWindow:  l.contextWindow,
+		MessageCount:   len(history),
+		ConversationID: convID,
+		SessionID:      sessionTag, // already truncated to 8 chars
+		RequestID:      requestID,
 	}
 	for _, m := range history {
 		if m.Role == "system" && strings.HasPrefix(m.Content, "[Conversation Summary]") {

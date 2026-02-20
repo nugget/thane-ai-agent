@@ -14,7 +14,7 @@ func TestFormatContextUsage(t *testing.T) {
 		excludes []string // substrings that must NOT appear
 	}{
 		{
-			name: "full info routed",
+			name: "full info routed with IDs",
 			info: ContextUsageInfo{
 				Model:           "claude-opus-4-20250514",
 				Routed:          true,
@@ -23,6 +23,9 @@ func TestFormatContextUsage(t *testing.T) {
 				MessageCount:    34,
 				SessionAge:      47 * time.Minute,
 				CompactionCount: 0,
+				ConversationID:  "owu-9da7e5cb-1234-5678-abcd-ef0123456789",
+				SessionID:       "019c741c",
+				RequestID:       "r_8fc3d7bd",
 			},
 			contains: []string{
 				"**Context:**",
@@ -32,6 +35,10 @@ func TestFormatContextUsage(t *testing.T) {
 				"34 msgs",
 				"session 47m",
 				"no compaction",
+				"**IDs:**",
+				"conv:23456789",
+				"session:019c741c",
+				"req:r_8fc3d7bd",
 			},
 		},
 		{
@@ -137,6 +144,25 @@ func TestFormatContextUsage(t *testing.T) {
 			},
 			contains: []string{"session 2d 5h"},
 		},
+		{
+			name: "no IDs omits IDs line",
+			info: ContextUsageInfo{
+				Model:         "test-model",
+				ContextWindow: 100000,
+			},
+			contains: []string{"**Context:**"},
+			excludes: []string{"**IDs:**"},
+		},
+		{
+			name: "short conversation ID not truncated",
+			info: ContextUsageInfo{
+				Model:          "test-model",
+				ContextWindow:  100000,
+				ConversationID: "default",
+				RequestID:      "abc123",
+			},
+			contains: []string{"conv:default", "req:abc123"},
+		},
 	}
 
 	for _, tt := range tests {
@@ -183,6 +209,27 @@ func TestFormatNumber(t *testing.T) {
 		t.Run(tt.want, func(t *testing.T) {
 			if got := formatNumber(tt.input); got != tt.want {
 				t.Errorf("formatNumber(%d) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestTruncateID(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"", ""},
+		{"abc", "abc"},
+		{"12345678", "12345678"},
+		{"019c741c-abcd-ef01", "bcd-ef01"},
+		{"owu-9da7e5cb-1234-5678-abcd-ef0123456789", "23456789"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			if got := truncateID(tt.input); got != tt.want {
+				t.Errorf("truncateID(%q) = %q, want %q", tt.input, got, tt.want)
 			}
 		})
 	}

@@ -28,6 +28,12 @@ type ContextUsageInfo struct {
 	SessionAge time.Duration
 	// CompactionCount is the number of compaction summaries in the conversation.
 	CompactionCount int
+	// ConversationID is the active conversation identifier.
+	ConversationID string
+	// SessionID is the active session identifier (short form, 8 chars).
+	SessionID string
+	// RequestID is the per-turn request identifier.
+	RequestID string
 }
 
 // FormatContextUsage renders a single-line context usage string for the
@@ -80,7 +86,34 @@ func FormatContextUsage(info ContextUsageInfo) string {
 	if len(parts) == 0 {
 		return ""
 	}
-	return "**Context:** " + strings.Join(parts, " | ")
+
+	result := "**Context:** " + strings.Join(parts, " | ")
+
+	// Append IDs line when at least one identifier is available.
+	var ids []string
+	if info.ConversationID != "" {
+		ids = append(ids, "conv:"+truncateID(info.ConversationID))
+	}
+	if info.SessionID != "" {
+		ids = append(ids, "session:"+truncateID(info.SessionID))
+	}
+	if info.RequestID != "" {
+		ids = append(ids, "req:"+info.RequestID)
+	}
+	if len(ids) > 0 {
+		result += "\n**IDs:** " + strings.Join(ids, " | ")
+	}
+
+	return result
+}
+
+// truncateID returns the last 8 characters of an ID for display.
+// Returns the full ID if shorter than 8 characters.
+func truncateID(id string) string {
+	if len(id) <= 8 {
+		return id
+	}
+	return id[len(id)-8:]
 }
 
 // formatNumber formats an integer with comma separators (e.g., 200000 → "200,000").
