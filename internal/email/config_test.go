@@ -56,6 +56,32 @@ func TestConfig_ApplyDefaults(t *testing.T) {
 	if !cfg.Accounts[0].IMAP.TLS {
 		t.Error("default TLS should be true")
 	}
+	if cfg.PollIntervalSec != 300 {
+		t.Errorf("default poll interval = %d, want 300", cfg.PollIntervalSec)
+	}
+}
+
+func TestConfig_ApplyDefaults_PollIntervalExplicit(t *testing.T) {
+	cfg := Config{
+		PollIntervalSec: 60,
+		Accounts: []AccountConfig{
+			{Name: "test", IMAP: IMAPConfig{Host: "imap.example.com", Username: "user"}},
+		},
+	}
+	cfg.ApplyDefaults()
+
+	if cfg.PollIntervalSec != 60 {
+		t.Errorf("explicit poll interval = %d, want 60 (should not be overwritten)", cfg.PollIntervalSec)
+	}
+}
+
+func TestConfig_ApplyDefaults_NoPollWhenUnconfigured(t *testing.T) {
+	cfg := Config{} // No accounts configured.
+	cfg.ApplyDefaults()
+
+	if cfg.PollIntervalSec != 0 {
+		t.Errorf("poll interval = %d for unconfigured email, want 0", cfg.PollIntervalSec)
+	}
 }
 
 func TestConfig_ApplyDefaults_Port143(t *testing.T) {

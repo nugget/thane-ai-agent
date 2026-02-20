@@ -41,7 +41,7 @@ func TestRunScheduledTask_WakePayload(t *testing.T) {
 	}
 	exec := &scheduler.Execution{}
 
-	err := runScheduledTask(context.Background(), task, exec, runner, slog.Default(), "")
+	err := runScheduledTask(context.Background(), task, exec, taskExecDeps{runner: runner, logger: slog.Default()})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -108,7 +108,7 @@ func TestRunScheduledTask_DefaultMessage(t *testing.T) {
 	}
 	exec := &scheduler.Execution{}
 
-	err := runScheduledTask(context.Background(), task, exec, runner, slog.Default(), "")
+	err := runScheduledTask(context.Background(), task, exec, taskExecDeps{runner: runner, logger: slog.Default()})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -133,7 +133,7 @@ func TestRunScheduledTask_NilData(t *testing.T) {
 	}
 	exec := &scheduler.Execution{}
 
-	err := runScheduledTask(context.Background(), task, exec, runner, slog.Default(), "")
+	err := runScheduledTask(context.Background(), task, exec, taskExecDeps{runner: runner, logger: slog.Default()})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -155,7 +155,7 @@ func TestRunScheduledTask_UnsupportedPayload(t *testing.T) {
 	}
 	exec := &scheduler.Execution{}
 
-	err := runScheduledTask(context.Background(), task, exec, runner, slog.Default(), "")
+	err := runScheduledTask(context.Background(), task, exec, taskExecDeps{runner: runner, logger: slog.Default()})
 	if err != nil {
 		t.Fatalf("unsupported payload should return nil, got %v", err)
 	}
@@ -181,7 +181,7 @@ func TestRunScheduledTask_RunnerError(t *testing.T) {
 	}
 	exec := &scheduler.Execution{}
 
-	err := runScheduledTask(context.Background(), task, exec, runner, slog.Default(), "")
+	err := runScheduledTask(context.Background(), task, exec, taskExecDeps{runner: runner, logger: slog.Default()})
 	if err == nil {
 		t.Fatal("expected error when runner fails")
 	}
@@ -212,7 +212,7 @@ func TestRunScheduledTask_PeriodicReflection(t *testing.T) {
 	}
 	exec := &scheduler.Execution{}
 
-	err := runScheduledTask(context.Background(), task, exec, runner, slog.Default(), workspace)
+	err := runScheduledTask(context.Background(), task, exec, taskExecDeps{runner: runner, logger: slog.Default(), workspacePath: workspace})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -248,7 +248,7 @@ func TestRunScheduledTask_PeriodicReflection_NoEgoFile(t *testing.T) {
 	}
 	exec := &scheduler.Execution{}
 
-	err := runScheduledTask(context.Background(), task, exec, runner, slog.Default(), workspace)
+	err := runScheduledTask(context.Background(), task, exec, taskExecDeps{runner: runner, logger: slog.Default(), workspacePath: workspace})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -278,7 +278,7 @@ func TestRunScheduledTask_PeriodicReflection_NoWorkspace(t *testing.T) {
 	}
 	exec := &scheduler.Execution{}
 
-	err := runScheduledTask(context.Background(), task, exec, runner, slog.Default(), "")
+	err := runScheduledTask(context.Background(), task, exec, taskExecDeps{runner: runner, logger: slog.Default()})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -310,7 +310,7 @@ func TestRunScheduledTask_PayloadModelOverride(t *testing.T) {
 	}
 	exec := &scheduler.Execution{}
 
-	err := runScheduledTask(context.Background(), task, exec, runner, slog.Default(), "")
+	err := runScheduledTask(context.Background(), task, exec, taskExecDeps{runner: runner, logger: slog.Default()})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -345,7 +345,7 @@ func TestRunScheduledTask_PayloadPartialOverride(t *testing.T) {
 	}
 	exec := &scheduler.Execution{}
 
-	err := runScheduledTask(context.Background(), task, exec, runner, slog.Default(), "")
+	err := runScheduledTask(context.Background(), task, exec, taskExecDeps{runner: runner, logger: slog.Default()})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -361,5 +361,43 @@ func TestRunScheduledTask_PayloadPartialOverride(t *testing.T) {
 	// quality_floor should use the override.
 	if runner.req.Hints[router.HintQualityFloor] != "5" {
 		t.Errorf("hint quality_floor = %q, want %q", runner.req.Hints[router.HintQualityFloor], "5")
+	}
+}
+
+func TestRunScheduledTask_EmailPoll_NilPoller(t *testing.T) {
+	// When emailPoller is nil, the email_poll task should fall through
+	// to a normal wake with the payload message.
+	runner := &mockRunner{
+		resp: &agent.Response{Content: "checked email"},
+	}
+
+	task := &scheduler.Task{
+		ID:   "task-email",
+		Name: emailPollTaskName,
+		Payload: scheduler.Payload{
+			Kind: scheduler.PayloadWake,
+			Data: map[string]any{
+				"message":    "Check for new email",
+				"local_only": "false",
+			},
+		},
+	}
+	exec := &scheduler.Execution{}
+
+	err := runScheduledTask(context.Background(), task, exec, taskExecDeps{
+		runner: runner,
+		logger: slog.Default(),
+		// emailPoller intentionally nil
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// With nil poller, it should fall through to normal wake.
+	if runner.req == nil {
+		t.Fatal("runner.Run should have been called")
+	}
+	if runner.req.Messages[0].Content != "Check for new email" {
+		t.Errorf("message = %q, want raw payload", runner.req.Messages[0].Content)
 	}
 }

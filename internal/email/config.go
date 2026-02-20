@@ -10,6 +10,11 @@ type Config struct {
 	// provides an audit trail of agent-sent email.
 	BccOwner string `yaml:"bcc_owner"`
 
+	// PollIntervalSec is how often (in seconds) to check for new
+	// messages across all configured accounts. Default: 300 (5 min).
+	// Set to 0 to disable email polling.
+	PollIntervalSec int `yaml:"poll_interval"`
+
 	// Accounts lists the email accounts to connect to at startup.
 	Accounts []AccountConfig `yaml:"accounts"`
 }
@@ -28,6 +33,10 @@ func (c Config) Configured() bool {
 // ApplyDefaults fills zero-value fields with sensible defaults.
 // Called by the parent config's applyDefaults method.
 func (c *Config) ApplyDefaults() {
+	if c.PollIntervalSec == 0 && c.Configured() {
+		c.PollIntervalSec = 300 // 5 minutes
+	}
+
 	for i := range c.Accounts {
 		if c.Accounts[i].IMAP.Port == 0 {
 			c.Accounts[i].IMAP.Port = 993
