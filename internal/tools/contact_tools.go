@@ -21,7 +21,7 @@ func (r *Registry) registerContactTools() {
 
 	r.Register(&Tool{
 		Name:        "save_contact",
-		Description: "Store or update a person or organization in the contact directory. Use for people, companies, or organizations you interact with. Supports structured attributes like email, phone, role, etc. When updating an existing contact, only non-empty fields are overwritten.",
+		Description: "Store or update a person or organization in the contact directory. Contact facts should be personal attributes only: relationship notes, communication preferences, trust levels, aliases, and contact info (email, phone, role). Do NOT store project knowledge, design philosophy, technical insights, or collaboration patterns here — use remember_fact or workspace files instead. When updating an existing contact, only non-empty fields are overwritten.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -48,7 +48,7 @@ func (r *Registry) registerContactTools() {
 				},
 				"facts": map[string]any{
 					"type":                 "object",
-					"description":          "Structured attributes as key-value pairs (e.g., {\"email\": \"alice@example.com\", \"phone\": \"555-1234\"})",
+					"description":          "Personal attributes as key-value pairs (e.g., {\"email\": \"alice@example.com\", \"phone\": \"555-1234\", \"preferred_name\": \"Ali\"}). Only store contact info and personal traits — not project knowledge or technical notes.",
 					"additionalProperties": map[string]any{"type": "string"},
 				},
 			},
