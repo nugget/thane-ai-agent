@@ -215,12 +215,87 @@ func TestAdapter_ActiveSessionID_DBFallback(t *testing.T) {
 	}
 }
 
+func TestAdapter_ArchiveConversation_ClearsToolCalls(t *testing.T) {
+	adapter, store := newTestAdapter(t)
+
+	mockSource := &mockToolCallSource{
+		calls: map[string][]ToolCall{
+			"conv-1": {
+				{
+					ID:             "tc-1",
+					ConversationID: "conv-1",
+					ToolName:       "get_state",
+					Arguments:      `{"entity_id":"light.office"}`,
+					Result:         `{"state":"on"}`,
+					StartedAt:      time.Now(),
+				},
+				{
+					ID:             "tc-2",
+					ConversationID: "conv-1",
+					ToolName:       "call_service",
+					Arguments:      `{"domain":"light","service":"turn_off"}`,
+					Result:         "ok",
+					StartedAt:      time.Now(),
+				},
+			},
+		},
+	}
+	adapter.SetToolCallSource(mockSource)
+
+	// First archive (simulating a session split)
+	sid1, _ := adapter.StartSession("conv-1")
+	msgs1 := []Message{
+		{Role: "user", Content: "turn off the lights", Timestamp: time.Now()},
+		{Role: "assistant", Content: "done", Timestamp: time.Now()},
+	}
+	if err := adapter.ArchiveConversation("conv-1", msgs1, "split"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify tool calls were archived
+	calls1, _ := store.GetSessionToolCalls(sid1)
+	if len(calls1) != 2 {
+		t.Fatalf("first archive: expected 2 tool calls, got %d", len(calls1))
+	}
+
+	// Verify ClearToolCalls was called
+	if mockSource.cleared["conv-1"] != 1 {
+		t.Fatalf("expected ClearToolCalls called once, got %d", mockSource.cleared["conv-1"])
+	}
+
+	// Second archive (simulating next session split) — should have zero
+	// tool calls since they were cleared after the first archive.
+	adapter.EndSession(sid1, "split")
+	sid2, _ := adapter.StartSession("conv-1")
+	msgs2 := []Message{
+		{Role: "user", Content: "what's the weather?", Timestamp: time.Now()},
+	}
+	if err := adapter.ArchiveConversation("conv-1", msgs2, "split"); err != nil {
+		t.Fatal(err)
+	}
+
+	calls2, _ := store.GetSessionToolCalls(sid2)
+	if len(calls2) != 0 {
+		t.Errorf("second archive: expected 0 tool calls (cleared), got %d", len(calls2))
+	}
+}
+
 // --- mocks ---
 
 type mockToolCallSource struct {
-	calls map[string][]ToolCall
+	calls   map[string][]ToolCall
+	cleared map[string]int // tracks ClearToolCalls call count per conversation
 }
 
 func (m *mockToolCallSource) GetToolCalls(conversationID string, limit int) []ToolCall {
 	return m.calls[conversationID]
+}
+
+func (m *mockToolCallSource) ClearToolCalls(conversationID string) error {
+	if m.cleared == nil {
+		m.cleared = make(map[string]int)
+	}
+	m.cleared[conversationID]++
+	delete(m.calls, conversationID)
+	return nil
 }

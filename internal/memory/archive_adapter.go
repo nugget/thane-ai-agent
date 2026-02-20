@@ -9,6 +9,7 @@ import (
 // ToolCallSource provides tool call records for archiving.
 type ToolCallSource interface {
 	GetToolCalls(conversationID string, limit int) []ToolCall
+	ClearToolCalls(conversationID string) error
 }
 
 // sessionEntry caches an active session's ID and start time to avoid
@@ -92,6 +93,14 @@ func (a *ArchiveAdapter) ArchiveConversation(conversationID string, messages []M
 				// Don't fail the whole archive for tool calls
 			} else {
 				toolCallCount = len(archivedCalls)
+				// Clear archived tool calls from the working store so they
+				// aren't re-archived on the next session boundary (#271).
+				if err := a.toolSource.ClearToolCalls(conversationID); err != nil {
+					a.logger.Warn("failed to clear tool calls after archiving",
+						"conversation", conversationID,
+						"error", err,
+					)
+				}
 			}
 		}
 	}

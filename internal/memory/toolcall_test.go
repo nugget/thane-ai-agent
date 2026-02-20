@@ -209,6 +209,65 @@ func TestToolCallStats(t *testing.T) {
 	}
 }
 
+func TestClearToolCalls(t *testing.T) {
+	tmpFile, err := os.CreateTemp("", "thane-test-*.db")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	defer os.Remove(tmpFile.Name())
+	tmpFile.Close()
+
+	store, err := NewSQLiteStore(tmpFile.Name(), 100)
+	if err != nil {
+		t.Fatalf("failed to create store: %v", err)
+	}
+	defer store.Close()
+
+	store.GetOrCreateConversation("conv-1")
+	store.GetOrCreateConversation("conv-2")
+
+	store.RecordToolCall("conv-1", "", "c1", "tool_a", "{}")
+	store.RecordToolCall("conv-1", "", "c2", "tool_b", "{}")
+	store.RecordToolCall("conv-2", "", "c3", "tool_c", "{}")
+
+	// Clear conv-1 only
+	if err := store.ClearToolCalls("conv-1"); err != nil {
+		t.Fatalf("ClearToolCalls: %v", err)
+	}
+
+	// conv-1 should be empty
+	calls1 := store.GetToolCalls("conv-1", 10)
+	if len(calls1) != 0 {
+		t.Errorf("expected 0 tool calls in conv-1 after clear, got %d", len(calls1))
+	}
+
+	// conv-2 should be untouched
+	calls2 := store.GetToolCalls("conv-2", 10)
+	if len(calls2) != 1 {
+		t.Errorf("expected 1 tool call in conv-2 (untouched), got %d", len(calls2))
+	}
+}
+
+func TestClearToolCalls_EmptyConversationID(t *testing.T) {
+	tmpFile, err := os.CreateTemp("", "thane-test-*.db")
+	if err != nil {
+		t.Fatalf("failed to create temp file: %v", err)
+	}
+	defer os.Remove(tmpFile.Name())
+	tmpFile.Close()
+
+	store, err := NewSQLiteStore(tmpFile.Name(), 100)
+	if err != nil {
+		t.Fatalf("failed to create store: %v", err)
+	}
+	defer store.Close()
+
+	err = store.ClearToolCalls("")
+	if err == nil {
+		t.Error("expected error for empty conversation ID")
+	}
+}
+
 func TestToolCallLimitCap(t *testing.T) {
 	tmpFile, err := os.CreateTemp("", "thane-test-*.db")
 	if err != nil {
