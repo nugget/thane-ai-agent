@@ -77,11 +77,19 @@ func (c *Client) ReadMessage(ctx context.Context, folder string, uid uint32) (*M
 			if data.Envelope != nil {
 				result.Date = data.Envelope.Date
 				result.Subject = data.Envelope.Subject
+				result.MessageID = data.Envelope.MessageID
+				result.InReplyTo = data.Envelope.InReplyTo
 				if len(data.Envelope.From) > 0 {
 					result.From = formatAddress(data.Envelope.From[0])
 				}
 				for _, addr := range data.Envelope.To {
 					result.To = append(result.To, formatAddress(addr))
+				}
+				for _, addr := range data.Envelope.Cc {
+					result.Cc = append(result.Cc, formatAddress(addr))
+				}
+				if len(data.Envelope.ReplyTo) > 0 {
+					result.ReplyTo = formatAddress(data.Envelope.ReplyTo[0])
 				}
 			}
 		case imapclient.FetchItemDataBodySection:
@@ -103,11 +111,19 @@ func (c *Client) ReadMessage(ctx context.Context, folder string, uid uint32) (*M
 	return result, nil
 }
 
-// parseBody walks the MIME structure and extracts text content.
+// parseBody walks the MIME structure and extracts text content and
+// the References header (not available from the IMAP Envelope).
 func (c *Client) parseBody(msg *Message, r io.Reader) error {
 	mailReader, err := mail.CreateReader(r)
 	if err != nil {
 		return fmt.Errorf("create mail reader: %w", err)
+	}
+
+	// Extract References from the top-level mail header.
+	// This is not available in the IMAP ENVELOPE; it must be parsed
+	// from the raw message.
+	if refs, err := mailReader.Header.MsgIDList("References"); err == nil && len(refs) > 0 {
+		msg.References = refs
 	}
 
 	for {

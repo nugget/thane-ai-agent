@@ -123,7 +123,9 @@ func TestFormatMessage(t *testing.T) {
 			Flags:   []string{`\Seen`, `\Flagged`},
 			Size:    2048,
 		},
-		TextBody: "Hello, this is the body.",
+		Cc:        []string{"dave@example.com"},
+		MessageID: "abc123@example.com",
+		TextBody:  "Hello, this is the body.",
 	}
 
 	result := formatMessage(msg)
@@ -133,6 +135,12 @@ func TestFormatMessage(t *testing.T) {
 	}
 	if !strings.Contains(result, "bob@example.com, carol@example.com") {
 		t.Error("should contain all To recipients")
+	}
+	if !strings.Contains(result, "Cc: dave@example.com") {
+		t.Error("should contain Cc header")
+	}
+	if !strings.Contains(result, "Message-ID: abc123@example.com") {
+		t.Error("should contain Message-ID header")
 	}
 	if !strings.Contains(result, "Test Subject") {
 		t.Error("should contain subject")
@@ -145,6 +153,27 @@ func TestFormatMessage(t *testing.T) {
 	}
 	if !strings.Contains(result, `\Seen`) {
 		t.Error("should contain flags")
+	}
+}
+
+func TestFormatMessage_NoCcNoMessageID(t *testing.T) {
+	msg := &Message{
+		Envelope: Envelope{
+			UID:     10,
+			From:    "sender@example.com",
+			Subject: "Simple",
+			Date:    time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
+		},
+		TextBody: "body",
+	}
+
+	result := formatMessage(msg)
+
+	if strings.Contains(result, "Cc:") {
+		t.Error("should not contain Cc header when empty")
+	}
+	if strings.Contains(result, "Message-ID:") {
+		t.Error("should not contain Message-ID header when empty")
 	}
 }
 
@@ -226,5 +255,66 @@ func TestFormatFolderList_Empty(t *testing.T) {
 	result := formatFolderList(nil)
 	if !strings.Contains(result, "Found 0 folder(s)") {
 		t.Error("should handle nil folder slice")
+	}
+}
+
+func TestStringSliceArg(t *testing.T) {
+	tests := []struct {
+		name string
+		args map[string]any
+		key  string
+		want []string
+	}{
+		{
+			"json array",
+			map[string]any{"to": []any{"a@example.com", "b@example.com"}},
+			"to",
+			[]string{"a@example.com", "b@example.com"},
+		},
+		{
+			"single string",
+			map[string]any{"to": "a@example.com"},
+			"to",
+			[]string{"a@example.com"},
+		},
+		{
+			"empty string",
+			map[string]any{"to": ""},
+			"to",
+			nil,
+		},
+		{
+			"missing key",
+			map[string]any{},
+			"to",
+			nil,
+		},
+		{
+			"wrong type",
+			map[string]any{"to": 42},
+			"to",
+			nil,
+		},
+		{
+			"mixed types in array",
+			map[string]any{"to": []any{"a@example.com", 42, "b@example.com"}},
+			"to",
+			[]string{"a@example.com", "b@example.com"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := stringSliceArg(tt.args, tt.key)
+			if len(got) != len(tt.want) {
+				t.Errorf("stringSliceArg() = %v, want %v", got, tt.want)
+				return
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Errorf("stringSliceArg()[%d] = %q, want %q", i, got[i], tt.want[i])
+				}
+			}
+		})
 	}
 }

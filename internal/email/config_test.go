@@ -124,6 +124,45 @@ func TestConfig_Validate(t *testing.T) {
 			}}},
 			wantErr: true,
 		},
+		{
+			name: "valid with SMTP",
+			cfg: Config{Accounts: []AccountConfig{{
+				Name:        "test",
+				IMAP:        IMAPConfig{Host: "imap.gmail.com", Port: 993, Username: "user"},
+				SMTP:        SMTPConfig{Host: "smtp.gmail.com", Port: 587, Username: "user"},
+				DefaultFrom: "User <user@gmail.com>",
+			}}},
+			wantErr: false,
+		},
+		{
+			name: "smtp missing username",
+			cfg: Config{Accounts: []AccountConfig{{
+				Name:        "test",
+				IMAP:        IMAPConfig{Host: "imap.gmail.com", Port: 993, Username: "user"},
+				SMTP:        SMTPConfig{Host: "smtp.gmail.com", Port: 587},
+				DefaultFrom: "User <user@gmail.com>",
+			}}},
+			wantErr: true,
+		},
+		{
+			name: "smtp missing default_from",
+			cfg: Config{Accounts: []AccountConfig{{
+				Name: "test",
+				IMAP: IMAPConfig{Host: "imap.gmail.com", Port: 993, Username: "user"},
+				SMTP: SMTPConfig{Host: "smtp.gmail.com", Port: 587, Username: "user"},
+			}}},
+			wantErr: true,
+		},
+		{
+			name: "smtp invalid port",
+			cfg: Config{Accounts: []AccountConfig{{
+				Name:        "test",
+				IMAP:        IMAPConfig{Host: "imap.gmail.com", Port: 993, Username: "user"},
+				SMTP:        SMTPConfig{Host: "smtp.gmail.com", Port: 0, Username: "user"},
+				DefaultFrom: "User <user@gmail.com>",
+			}}},
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -133,5 +172,92 @@ func TestConfig_Validate(t *testing.T) {
 				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestConfig_ApplyDefaults_SMTP(t *testing.T) {
+	cfg := Config{
+		Accounts: []AccountConfig{
+			{
+				Name: "test",
+				IMAP: IMAPConfig{Host: "imap.example.com", Username: "user"},
+				SMTP: SMTPConfig{Host: "smtp.example.com", Username: "user"},
+			},
+		},
+	}
+	cfg.ApplyDefaults()
+
+	if cfg.Accounts[0].SMTP.Port != 587 {
+		t.Errorf("default SMTP port = %d, want 587", cfg.Accounts[0].SMTP.Port)
+	}
+	if !cfg.Accounts[0].SMTP.StartTLS {
+		t.Error("default SMTP StartTLS should be true")
+	}
+}
+
+func TestConfig_ApplyDefaults_SMTP_Port465(t *testing.T) {
+	cfg := Config{
+		Accounts: []AccountConfig{
+			{
+				Name: "test",
+				IMAP: IMAPConfig{Host: "imap.example.com", Username: "user"},
+				SMTP: SMTPConfig{Host: "smtp.example.com", Username: "user", Port: 465},
+			},
+		},
+	}
+	cfg.ApplyDefaults()
+
+	if cfg.Accounts[0].SMTP.StartTLS {
+		t.Error("SMTP StartTLS should remain false for port 465 (implicit TLS)")
+	}
+}
+
+func TestConfig_ApplyDefaults_NoSMTP(t *testing.T) {
+	cfg := Config{
+		Accounts: []AccountConfig{
+			{Name: "test", IMAP: IMAPConfig{Host: "imap.example.com", Username: "user"}},
+		},
+	}
+	cfg.ApplyDefaults()
+
+	// SMTP defaults should not be applied when host is empty.
+	if cfg.Accounts[0].SMTP.Port != 0 {
+		t.Errorf("SMTP port should remain 0 when host is empty, got %d", cfg.Accounts[0].SMTP.Port)
+	}
+}
+
+func TestAccountConfig_SMTPConfigured(t *testing.T) {
+	tests := []struct {
+		name string
+		acct AccountConfig
+		want bool
+	}{
+		{"no smtp", AccountConfig{}, false},
+		{"host only", AccountConfig{SMTP: SMTPConfig{Host: "smtp.example.com"}}, false},
+		{"host and username", AccountConfig{SMTP: SMTPConfig{Host: "smtp.example.com", Username: "user"}}, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.acct.SMTPConfigured(); got != tt.want {
+				t.Errorf("SMTPConfigured() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestConfig_BccOwner(t *testing.T) {
+	cfg := Config{
+		BccOwner: "owner@example.com",
+		Accounts: []AccountConfig{
+			{Name: "test", IMAP: IMAPConfig{Host: "imap.example.com", Username: "user"}},
+		},
+	}
+
+	if cfg.BccOwner != "owner@example.com" {
+		t.Errorf("BccOwner = %q, want %q", cfg.BccOwner, "owner@example.com")
+	}
+	if !cfg.Configured() {
+		t.Error("Configured() should be true when BccOwner is set with valid account")
 	}
 }

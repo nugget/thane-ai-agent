@@ -750,13 +750,14 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	logger.Info("contact store initialized", "path", cfg.DataDir+"/contacts.db")
 
 	// --- Email ---
-	// Native IMAP email access. Replaces the MCP email server approach
-	// with direct IMAP connections, supporting multiple accounts.
+	// Native IMAP/SMTP email. Replaces the MCP email server approach
+	// with direct IMAP connections for reading and SMTP for sending,
+	// supporting multiple accounts with trust zone gating.
 	if cfg.Email.Configured() {
 		emailMgr := email.NewManager(cfg.Email, logger)
 		defer emailMgr.Close()
 
-		emailTools := email.NewTools(emailMgr)
+		emailTools := email.NewTools(emailMgr, &emailContactResolver{store: contactStore})
 		loop.Tools().SetEmailTools(emailTools)
 
 		// Register each account with connwatch for health monitoring.
@@ -1907,6 +1908,25 @@ func (r *signalSessionRotator) RotateIdleSession(conversationID string) bool {
 		return false
 	}
 	return true
+}
+
+// emailContactResolver resolves email addresses to trust zone levels
+// for the email package's send gating. Implements email.ContactResolver.
+type emailContactResolver struct {
+	store *contacts.Store
+}
+
+// ResolveTrustZone returns the trust zone for the contact matching the
+// given email address. Returns ("", false, nil) if no contact is found.
+func (r *emailContactResolver) ResolveTrustZone(addr string) (string, bool, error) {
+	matches, err := r.store.FindByFact("email", addr)
+	if err != nil {
+		return "", false, err
+	}
+	if len(matches) == 0 {
+		return "", false, nil
+	}
+	return matches[0].TrustZone, true, nil
 }
 
 // contactPhoneResolver resolves phone numbers to contact names via the

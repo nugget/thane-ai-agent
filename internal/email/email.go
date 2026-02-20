@@ -1,7 +1,8 @@
-// Package email provides native IMAP email access for the Thane agent.
+// Package email provides native IMAP and SMTP email for the Thane agent.
 // It replaces the previous MCP email server approach with direct IMAP
-// connections, supporting multiple accounts, folder navigation, search,
-// and flag management.
+// connections for reading and SMTP for sending, supporting multiple
+// accounts, folder navigation, search, flag management, and
+// markdown-to-MIME message composition.
 package email
 
 import (
@@ -50,6 +51,21 @@ type Envelope struct {
 // the MIME structure.
 type Message struct {
 	Envelope
+
+	// MessageID is the Message-ID header value (without angle brackets).
+	MessageID string
+
+	// InReplyTo contains Message-IDs this message is a reply to.
+	InReplyTo []string
+
+	// References contains the full References chain for threading.
+	References []string
+
+	// Cc is the list of CC recipients.
+	Cc []string
+
+	// ReplyTo is the Reply-To address, if different from From.
+	ReplyTo string
 
 	// TextBody is the plain-text body content. Preferred over HTMLBody
 	// for LLM consumption.
@@ -144,4 +160,58 @@ var validFlags = map[string]string{
 func ValidFlag(name string) (string, bool) {
 	f, ok := validFlags[name]
 	return f, ok
+}
+
+// SendOptions describes an outbound email message. The Body field
+// contains markdown that the compose layer converts to both
+// text/plain and text/html MIME parts.
+type SendOptions struct {
+	// To is the list of recipient addresses (required).
+	To []string
+
+	// Cc is the list of CC addresses.
+	Cc []string
+
+	// Subject is the email subject line (required).
+	Subject string
+
+	// Body is the message body in markdown format (required).
+	Body string
+
+	// Account is the account name. Empty uses the primary account.
+	Account string
+}
+
+// ReplyOptions describes a reply to an existing message. The tool
+// fetches the original message for threading headers.
+type ReplyOptions struct {
+	// UID is the IMAP UID of the message being replied to (required).
+	UID uint32
+
+	// Folder is the folder containing the original message. Default: "INBOX".
+	Folder string
+
+	// Body is the reply body in markdown format (required).
+	Body string
+
+	// ReplyAll sends the reply to all original recipients.
+	ReplyAll bool
+
+	// Account is the account name. Empty uses the primary account.
+	Account string
+}
+
+// MoveOptions describes an IMAP message move operation.
+type MoveOptions struct {
+	// UIDs is the list of message UIDs to move (required).
+	UIDs []uint32
+
+	// Folder is the source folder. Default: "INBOX".
+	Folder string
+
+	// Destination is the target folder (required).
+	Destination string
+
+	// Account is the account name. Empty uses the primary account.
+	Account string
 }

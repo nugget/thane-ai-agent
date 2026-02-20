@@ -60,3 +60,74 @@ func TestMessage_Embeds_Envelope(t *testing.T) {
 		t.Errorf("TextBody = %q, want %q", msg.TextBody, "Hello")
 	}
 }
+
+func TestMessage_ThreadingFields(t *testing.T) {
+	msg := Message{
+		MessageID:  "abc123@example.com",
+		InReplyTo:  []string{"parent@example.com"},
+		References: []string{"root@example.com", "parent@example.com"},
+		Cc:         []string{"cc@example.com"},
+		ReplyTo:    "reply@example.com",
+	}
+	if msg.MessageID != "abc123@example.com" {
+		t.Errorf("MessageID = %q, want %q", msg.MessageID, "abc123@example.com")
+	}
+	if len(msg.InReplyTo) != 1 {
+		t.Errorf("InReplyTo length = %d, want 1", len(msg.InReplyTo))
+	}
+	if len(msg.References) != 2 {
+		t.Errorf("References length = %d, want 2", len(msg.References))
+	}
+	if len(msg.Cc) != 1 {
+		t.Errorf("Cc length = %d, want 1", len(msg.Cc))
+	}
+	if msg.ReplyTo != "reply@example.com" {
+		t.Errorf("ReplyTo = %q, want %q", msg.ReplyTo, "reply@example.com")
+	}
+}
+
+func TestSendOptions(t *testing.T) {
+	opts := SendOptions{
+		To:      []string{"to@example.com"},
+		Cc:      []string{"cc@example.com"},
+		Subject: "Test",
+		Body:    "Hello",
+		Account: "personal",
+	}
+	if len(opts.To) != 1 {
+		t.Errorf("To length = %d, want 1", len(opts.To))
+	}
+	if len(opts.Cc) != 1 {
+		t.Errorf("Cc length = %d, want 1", len(opts.Cc))
+	}
+	if opts.Subject != "Test" {
+		t.Errorf("Subject = %q, want %q", opts.Subject, "Test")
+	}
+	if opts.Body != "Hello" {
+		t.Errorf("Body = %q, want %q", opts.Body, "Hello")
+	}
+	if opts.Account != "personal" {
+		t.Errorf("Account = %q, want %q", opts.Account, "personal")
+	}
+}
+
+func TestMoveOptions(t *testing.T) {
+	opts := MoveOptions{
+		UIDs:        []uint32{100, 200},
+		Folder:      "INBOX",
+		Destination: "Archive",
+		Account:     "work",
+	}
+	if len(opts.UIDs) != 2 {
+		t.Errorf("UIDs length = %d, want 2", len(opts.UIDs))
+	}
+	if opts.Folder != "INBOX" {
+		t.Errorf("Folder = %q, want %q", opts.Folder, "INBOX")
+	}
+	if opts.Destination != "Archive" {
+		t.Errorf("Destination = %q, want %q", opts.Destination, "Archive")
+	}
+	if opts.Account != "work" {
+		t.Errorf("Account = %q, want %q", opts.Account, "work")
+	}
+}
