@@ -165,4 +165,105 @@ func (r *Registry) registerEmailTools() {
 			return r.emailTools.HandleMark(ctx, args)
 		},
 	})
+
+	r.Register(&Tool{
+		Name:        "email_send",
+		Description: "Compose and send a new email. The body is written in markdown and automatically converted to both plain text and HTML. All recipients must have a contact record with appropriate trust zone.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"to": map[string]any{
+					"type":        "array",
+					"items":       map[string]any{"type": "string"},
+					"description": "Recipient email addresses",
+				},
+				"cc": map[string]any{
+					"type":        "array",
+					"items":       map[string]any{"type": "string"},
+					"description": "CC email addresses",
+				},
+				"subject": map[string]any{
+					"type":        "string",
+					"description": "Email subject line",
+				},
+				"body": map[string]any{
+					"type":        "string",
+					"description": "Email body in markdown format. Will be converted to text/plain and text/html automatically.",
+				},
+				"account": map[string]any{
+					"type":        "string",
+					"description": "Email account name (default: primary account)",
+				},
+			},
+			"required": []string{"to", "subject", "body"},
+		},
+		Handler: func(ctx context.Context, args map[string]any) (string, error) {
+			return r.emailTools.HandleSend(ctx, args)
+		},
+	})
+
+	r.Register(&Tool{
+		Name:        "email_reply",
+		Description: "Reply to an existing email. Preserves threading headers (In-Reply-To, References) for proper conversation threading. The body is written in markdown. Use reply_all to include all original recipients.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"uid": map[string]any{
+					"type":        "integer",
+					"description": "UID of the message to reply to (from email_list or email_read)",
+				},
+				"folder": map[string]any{
+					"type":        "string",
+					"description": "Folder containing the original message (default: INBOX)",
+				},
+				"body": map[string]any{
+					"type":        "string",
+					"description": "Reply body in markdown format",
+				},
+				"reply_all": map[string]any{
+					"type":        "boolean",
+					"description": "Reply to all original recipients (default: false)",
+				},
+				"account": map[string]any{
+					"type":        "string",
+					"description": "Email account name (default: primary account)",
+				},
+			},
+			"required": []string{"uid", "body"},
+		},
+		Handler: func(ctx context.Context, args map[string]any) (string, error) {
+			return r.emailTools.HandleReply(ctx, args)
+		},
+	})
+
+	r.Register(&Tool{
+		Name:        "email_move",
+		Description: "Move email messages between folders. Useful for archiving messages after reading or replying.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"uids": map[string]any{
+					"type":        "array",
+					"items":       map[string]any{"type": "integer"},
+					"description": "Message UIDs to move",
+				},
+				"folder": map[string]any{
+					"type":        "string",
+					"description": "Source folder (default: INBOX)",
+				},
+				"destination": map[string]any{
+					"type":        "string",
+					"description": "Destination folder (e.g., Archive, Trash)",
+				},
+				"account": map[string]any{
+					"type":        "string",
+					"description": "Email account name (default: primary account)",
+				},
+			},
+			"required": []string{"uids", "destination"},
+		},
+		Handler: func(ctx context.Context, args map[string]any) (string, error) {
+			return r.emailTools.HandleMove(ctx, args)
+		},
+	})
 }

@@ -89,3 +89,72 @@ func TestManager_EmptyConfig(t *testing.T) {
 		t.Error("Account('') on empty manager should return error")
 	}
 }
+
+func TestManager_AccountConfig(t *testing.T) {
+	cfg := Config{
+		Accounts: []AccountConfig{
+			{
+				Name:        "personal",
+				IMAP:        IMAPConfig{Host: "imap.personal.com", Port: 993, Username: "user1"},
+				SMTP:        SMTPConfig{Host: "smtp.personal.com", Port: 587, Username: "user1"},
+				DefaultFrom: "User One <user1@personal.com>",
+			},
+			{
+				Name: "work",
+				IMAP: IMAPConfig{Host: "imap.work.com", Port: 993, Username: "user2"},
+			},
+		},
+	}
+
+	mgr := NewManager(cfg, slog.Default())
+
+	// Named account config lookup.
+	acctCfg, err := mgr.AccountConfig("personal")
+	if err != nil {
+		t.Fatalf("AccountConfig(personal) error: %v", err)
+	}
+	if acctCfg.DefaultFrom != "User One <user1@personal.com>" {
+		t.Errorf("DefaultFrom = %q, want %q", acctCfg.DefaultFrom, "User One <user1@personal.com>")
+	}
+	if acctCfg.SMTP.Host != "smtp.personal.com" {
+		t.Errorf("SMTP.Host = %q, want %q", acctCfg.SMTP.Host, "smtp.personal.com")
+	}
+
+	// Empty name returns primary config.
+	primaryCfg, err := mgr.AccountConfig("")
+	if err != nil {
+		t.Fatalf("AccountConfig('') error: %v", err)
+	}
+	if primaryCfg.Name != "personal" {
+		t.Errorf("primary config Name = %q, want %q", primaryCfg.Name, "personal")
+	}
+
+	// Unknown account returns error.
+	_, err = mgr.AccountConfig("nonexistent")
+	if err == nil {
+		t.Error("AccountConfig(nonexistent) should return error")
+	}
+}
+
+func TestManager_BccOwner(t *testing.T) {
+	cfg := Config{
+		BccOwner: "owner@example.com",
+		Accounts: []AccountConfig{
+			{Name: "test", IMAP: IMAPConfig{Host: "imap.example.com", Port: 993, Username: "user"}},
+		},
+	}
+
+	mgr := NewManager(cfg, slog.Default())
+
+	if got := mgr.BccOwner(); got != "owner@example.com" {
+		t.Errorf("BccOwner() = %q, want %q", got, "owner@example.com")
+	}
+}
+
+func TestManager_BccOwner_Empty(t *testing.T) {
+	mgr := NewManager(Config{}, slog.Default())
+
+	if got := mgr.BccOwner(); got != "" {
+		t.Errorf("BccOwner() = %q, want empty", got)
+	}
+}

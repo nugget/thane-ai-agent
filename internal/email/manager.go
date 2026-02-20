@@ -9,9 +9,11 @@ import (
 // to the appropriate account. The first configured account becomes the
 // primary (default) account.
 type Manager struct {
-	clients map[string]*Client
-	primary string
-	logger  *slog.Logger
+	clients  map[string]*Client
+	configs  map[string]AccountConfig
+	bccOwner string
+	primary  string
+	logger   *slog.Logger
 }
 
 // NewManager creates a manager from the email configuration. Each
@@ -19,13 +21,16 @@ type Manager struct {
 // becomes the primary.
 func NewManager(cfg Config, logger *slog.Logger) *Manager {
 	m := &Manager{
-		clients: make(map[string]*Client, len(cfg.Accounts)),
-		logger:  logger,
+		clients:  make(map[string]*Client, len(cfg.Accounts)),
+		configs:  make(map[string]AccountConfig, len(cfg.Accounts)),
+		bccOwner: cfg.BccOwner,
+		logger:   logger,
 	}
 
 	for i, acct := range cfg.Accounts {
 		client := NewClient(acct.IMAP, logger.With("email_account", acct.Name))
 		m.clients[acct.Name] = client
+		m.configs[acct.Name] = acct
 		if i == 0 {
 			m.primary = acct.Name
 		}
@@ -45,6 +50,26 @@ func (m *Manager) Account(name string) (*Client, error) {
 		return nil, fmt.Errorf("email account %q not found", name)
 	}
 	return client, nil
+}
+
+// AccountConfig returns the full configuration for the named account,
+// or the primary account if name is empty. This includes SMTP settings
+// and the default From address needed for sending.
+func (m *Manager) AccountConfig(name string) (AccountConfig, error) {
+	if name == "" {
+		name = m.primary
+	}
+	cfg, ok := m.configs[name]
+	if !ok {
+		return AccountConfig{}, fmt.Errorf("email account %q not found", name)
+	}
+	return cfg, nil
+}
+
+// BccOwner returns the configured auto-Bcc address for outbound email.
+// Returns empty if no Bcc owner is configured.
+func (m *Manager) BccOwner() string {
+	return m.bccOwner
 }
 
 // Primary returns the default account name.

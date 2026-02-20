@@ -3,6 +3,8 @@ package email
 import (
 	"context"
 	"fmt"
+	"log/slog"
+	"slices"
 	"strings"
 	"time"
 )
@@ -11,12 +13,15 @@ import (
 // argument map from the tool registry and returns formatted text for
 // the LLM.
 type Tools struct {
-	manager *Manager
+	manager  *Manager
+	contacts ContactResolver
 }
 
-// NewTools creates email tools backed by the given manager.
-func NewTools(mgr *Manager) *Tools {
-	return &Tools{manager: mgr}
+// NewTools creates email tools backed by the given manager and optional
+// contact resolver for trust zone gating. Pass nil for contacts to
+// disable trust zone checks on outbound email.
+func NewTools(mgr *Manager, contacts ContactResolver) *Tools {
+	return &Tools{manager: mgr, contacts: contacts}
 }
 
 // HandleList lists recent emails in a folder.
@@ -175,6 +180,213 @@ func (t *Tools) HandleMark(ctx context.Context, args map[string]any) (string, er
 	return fmt.Sprintf("%s %q flag on %d message(s)", verb, action.Flag, len(action.UIDs)), nil
 }
 
+// HandleSend composes and sends a new email.
+func (t *Tools) HandleSend(ctx context.Context, args map[string]any) (string, error) {
+	opts := SendOptions{
+		To:      stringSliceArg(args, "to"),
+		Cc:      stringSliceArg(args, "cc"),
+		Subject: stringArg(args, "subject"),
+		Body:    stringArg(args, "body"),
+		Account: stringArg(args, "account"),
+	}
+
+	if len(opts.To) == 0 {
+		return "", fmt.Errorf("to is required")
+	}
+	if opts.Subject == "" {
+		return "", fmt.Errorf("subject is required")
+	}
+	if opts.Body == "" {
+		return "", fmt.Errorf("body is required")
+	}
+
+	return t.sendEmail(ctx, opts.Account, opts.To, opts.Cc, opts.Subject, opts.Body, "", nil)
+}
+
+// HandleReply replies to an existing message with threading headers.
+func (t *Tools) HandleReply(ctx context.Context, args map[string]any) (string, error) {
+	opts := ReplyOptions{
+		UID:      uint32(intArg(args, "uid")),
+		Folder:   stringArg(args, "folder"),
+		Body:     stringArg(args, "body"),
+		ReplyAll: boolArg(args, "reply_all"),
+		Account:  stringArg(args, "account"),
+	}
+
+	if opts.UID == 0 {
+		return "", fmt.Errorf("uid is required")
+	}
+	if opts.Body == "" {
+		return "", fmt.Errorf("body is required")
+	}
+
+	// Fetch the original message for threading info.
+	client, err := t.manager.Account(opts.Account)
+	if err != nil {
+		return "", err
+	}
+
+	original, err := client.ReadMessage(ctx, opts.Folder, opts.UID)
+	if err != nil {
+		return "", fmt.Errorf("fetch original message: %w", err)
+	}
+
+	// Build reply subject.
+	subject := original.Subject
+	if !strings.HasPrefix(strings.ToLower(subject), "re:") {
+		subject = "Re: " + subject
+	}
+
+	// Build recipient list.
+	var to []string
+	if original.ReplyTo != "" {
+		to = []string{original.ReplyTo}
+	} else {
+		to = []string{original.From}
+	}
+
+	var cc []string
+	if opts.ReplyAll {
+		// Add original To and Cc, excluding our own address.
+		acctCfg, err := t.manager.AccountConfig(opts.Account)
+		if err != nil {
+			return "", err
+		}
+		ownAddr := extractAddress(acctCfg.DefaultFrom)
+		for _, addr := range original.To {
+			if extractAddress(addr) != ownAddr {
+				to = append(to, addr)
+			}
+		}
+		for _, addr := range original.Cc {
+			if extractAddress(addr) != ownAddr {
+				cc = append(cc, addr)
+			}
+		}
+	}
+
+	// Build threading references.
+	var refs []string
+	refs = append(refs, original.References...)
+	if original.MessageID != "" {
+		refs = append(refs, original.MessageID)
+	}
+
+	return t.sendEmail(ctx, opts.Account, to, cc, subject, opts.Body, original.MessageID, refs)
+}
+
+// HandleMove moves messages between folders.
+func (t *Tools) HandleMove(ctx context.Context, args map[string]any) (string, error) {
+	opts := MoveOptions{
+		Folder:      stringArg(args, "folder"),
+		Destination: stringArg(args, "destination"),
+		Account:     stringArg(args, "account"),
+	}
+
+	// Parse UIDs from array or single value.
+	switch v := args["uids"].(type) {
+	case []any:
+		for _, u := range v {
+			if n, ok := u.(float64); ok {
+				opts.UIDs = append(opts.UIDs, uint32(n))
+			}
+		}
+	case float64:
+		opts.UIDs = append(opts.UIDs, uint32(v))
+	}
+
+	if len(opts.UIDs) == 0 {
+		return "", fmt.Errorf("uids is required")
+	}
+	if opts.Destination == "" {
+		return "", fmt.Errorf("destination is required")
+	}
+
+	client, err := t.manager.Account(opts.Account)
+	if err != nil {
+		return "", err
+	}
+
+	if err := client.MoveMessages(ctx, opts); err != nil {
+		return "", err
+	}
+
+	folder := opts.Folder
+	if folder == "" {
+		folder = "INBOX"
+	}
+	return fmt.Sprintf("Moved %d message(s) from %s to %s", len(opts.UIDs), folder, opts.Destination), nil
+}
+
+// sendEmail is the shared send path for HandleSend and HandleReply.
+// It handles trust zone gating, auto-Bcc, message composition, and SMTP delivery.
+func (t *Tools) sendEmail(ctx context.Context, account string, to, cc []string, subject, body, inReplyTo string, references []string) (string, error) {
+	acctCfg, err := t.manager.AccountConfig(account)
+	if err != nil {
+		return "", err
+	}
+
+	if !acctCfg.SMTPConfigured() {
+		return "", fmt.Errorf("SMTP not configured for account %q", acctCfg.Name)
+	}
+
+	// Trust zone gating: check all recipients.
+	allRecipients := slices.Concat(to, cc)
+	trust := CheckRecipientTrust(t.contacts, allRecipients)
+	if trust.HasIssues() {
+		return trust.FormatIssues(), nil
+	}
+
+	// Auto-Bcc owner if configured.
+	var bcc []string
+	if owner := t.manager.BccOwner(); owner != "" {
+		ownerBare := extractAddress(owner)
+		alreadyRecipient := false
+		for _, addr := range allRecipients {
+			if extractAddress(addr) == ownerBare {
+				alreadyRecipient = true
+				break
+			}
+		}
+		if !alreadyRecipient {
+			bcc = append(bcc, owner)
+		}
+	}
+
+	// Compose the MIME message.
+	msg, err := ComposeMessage(ComposeOptions{
+		From:       acctCfg.DefaultFrom,
+		To:         to,
+		Cc:         cc,
+		Bcc:        bcc,
+		Subject:    subject,
+		Body:       body,
+		InReplyTo:  inReplyTo,
+		References: references,
+	})
+	if err != nil {
+		return "", fmt.Errorf("compose message: %w", err)
+	}
+
+	// Collect all SMTP recipients (To + Cc + Bcc).
+	smtpRecipients := collectRecipients(to, cc, bcc)
+
+	// Send via SMTP.
+	fromAddr := extractAddress(acctCfg.DefaultFrom)
+	if err := SendMail(acctCfg.SMTP, fromAddr, smtpRecipients, msg); err != nil {
+		return "", fmt.Errorf("send email: %w", err)
+	}
+
+	slog.Info("email sent",
+		"from", acctCfg.DefaultFrom,
+		"to", to,
+		"subject", subject,
+		"account", acctCfg.Name,
+	)
+
+	return fmt.Sprintf("Email sent to %s — subject: %s", strings.Join(to, ", "), subject), nil
+}
+
 // --- Formatting helpers ---
 
 func formatEnvelopeList(envelopes []Envelope) string {
@@ -202,10 +414,16 @@ func formatMessage(msg *Message) string {
 
 	sb.WriteString(fmt.Sprintf("From: %s\n", msg.From))
 	sb.WriteString(fmt.Sprintf("To: %s\n", strings.Join(msg.To, ", ")))
+	if len(msg.Cc) > 0 {
+		sb.WriteString(fmt.Sprintf("Cc: %s\n", strings.Join(msg.Cc, ", ")))
+	}
 	sb.WriteString(fmt.Sprintf("Subject: %s\n", msg.Subject))
 	sb.WriteString(fmt.Sprintf("Date: %s\n", msg.Date.Format("2006-01-02 15:04 MST")))
 	if len(msg.Flags) > 0 {
 		sb.WriteString(fmt.Sprintf("Flags: %s\n", strings.Join(msg.Flags, ", ")))
+	}
+	if msg.MessageID != "" {
+		sb.WriteString(fmt.Sprintf("Message-ID: %s\n", msg.MessageID))
 	}
 	sb.WriteString(fmt.Sprintf("UID: %d | Size: %d bytes\n", msg.UID, msg.Size))
 	sb.WriteString("\n---\n\n")
@@ -258,4 +476,24 @@ func boolArg(args map[string]any, key string) bool {
 		return v
 	}
 	return false
+}
+
+// stringSliceArg extracts a string slice from args. The value may be
+// a []any (from JSON) or a single string.
+func stringSliceArg(args map[string]any, key string) []string {
+	switch v := args[key].(type) {
+	case []any:
+		result := make([]string, 0, len(v))
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				result = append(result, s)
+			}
+		}
+		return result
+	case string:
+		if v != "" {
+			return []string{v}
+		}
+	}
+	return nil
 }
