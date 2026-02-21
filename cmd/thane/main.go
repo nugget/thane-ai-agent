@@ -52,6 +52,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/llm"
 	"github.com/nugget/thane-ai-agent/internal/mcp"
 	"github.com/nugget/thane-ai-agent/internal/memory"
+	"github.com/nugget/thane-ai-agent/internal/metacognitive"
 	"github.com/nugget/thane-ai-agent/internal/mqtt"
 	"github.com/nugget/thane-ai-agent/internal/opstate"
 	"github.com/nugget/thane-ai-agent/internal/person"
@@ -1822,6 +1823,36 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		})
 
 		logger.Info("mqtt AP presence sensors registered", "count", len(apSensors))
+	}
+
+	// --- Metacognitive loop ---
+	// Perpetual self-regulating attention loop. Runs in a background
+	// goroutine, reading persistent state, reasoning via LLM, and
+	// adapting its own sleep cycle. Requires workspace for state file.
+	if cfg.Metacognitive.Enabled {
+		metacogCfg, err := metacognitive.ParseConfig(cfg.Metacognitive)
+		if err != nil {
+			return fmt.Errorf("metacognitive config: %w", err)
+		}
+
+		metacogLoop := metacognitive.New(metacogCfg, metacognitive.Deps{
+			Runner:        loop,
+			Logger:        logger,
+			WorkspacePath: cfg.Workspace.Path,
+		})
+		metacogLoop.RegisterTools(loop.Tools())
+
+		if err := metacogLoop.Start(ctx); err != nil {
+			return fmt.Errorf("start metacognitive loop: %w", err)
+		}
+		defer metacogLoop.Stop()
+
+		logger.Info("metacognitive loop enabled",
+			"state_file", cfg.Metacognitive.StateFile,
+			"min_sleep", cfg.Metacognitive.MinSleep,
+			"max_sleep", cfg.Metacognitive.MaxSleep,
+			"supervisor_probability", cfg.Metacognitive.SupervisorProbability,
+		)
 	}
 
 	// --- Signal handling and graceful shutdown ---

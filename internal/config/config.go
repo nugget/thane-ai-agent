@@ -182,6 +182,11 @@ type Config struct {
 	// room-level presence detection via wireless AP client associations.
 	Unifi UnifiConfig `yaml:"unifi"`
 
+	// Metacognitive configures the perpetual metacognitive attention loop.
+	// When enabled, a background goroutine monitors the environment,
+	// reasons via LLM, and adapts its own sleep cycle between iterations.
+	Metacognitive MetacognitiveConfig `yaml:"metacognitive"`
+
 	// Debug configures diagnostic options for inspecting the assembled
 	// system prompt and other internal state.
 	Debug DebugConfig `yaml:"debug"`
@@ -741,6 +746,59 @@ func (c SignalConfig) Configured() bool {
 // Assistant state changes that is injected into the agent's system
 // prompt on every run. The window provides ambient awareness of
 // recent state transitions without requiring tool calls.
+// MetacognitiveConfig configures the self-regulating metacognitive loop.
+// The loop runs perpetually in a background goroutine, using LLM calls to
+// reason about the environment and self-determine its sleep duration
+// between iterations. See issue #319.
+type MetacognitiveConfig struct {
+	// Enabled controls whether the metacognitive loop starts. Default: false.
+	Enabled bool `yaml:"enabled"`
+
+	// StateFile is the path to the persistent state file, relative to
+	// the workspace root. Default: "metacognitive.md".
+	StateFile string `yaml:"state_file"`
+
+	// MinSleep is the minimum allowed sleep duration between iterations.
+	// The LLM cannot request a shorter sleep via set_next_sleep.
+	// Default: "2m". Parsed as a Go duration string.
+	MinSleep string `yaml:"min_sleep"`
+
+	// MaxSleep is the maximum allowed sleep duration between iterations.
+	// Default: "30m".
+	MaxSleep string `yaml:"max_sleep"`
+
+	// DefaultSleep is used when the LLM does not call set_next_sleep.
+	// Default: "10m".
+	DefaultSleep string `yaml:"default_sleep"`
+
+	// Jitter is the sleep randomization factor (0.0–1.0). A value of
+	// 0.2 means the actual sleep varies by ±20% of the computed
+	// duration. Default: 0.2. Set to 0.0 for deterministic timing.
+	Jitter float64 `yaml:"jitter"`
+
+	// SupervisorProbability is the chance (0.0–1.0) that each wake
+	// uses a frontier model with supervisor-augmented prompt.
+	// Default: 0.1. Set to 0.0 to disable supervisor iterations.
+	SupervisorProbability float64 `yaml:"supervisor_probability"`
+
+	// Router configures model routing for normal (non-supervisor)
+	// iterations.
+	Router MetacognitiveRouterConfig `yaml:"router"`
+
+	// SupervisorRouter configures model routing for supervisor
+	// iterations (frontier model with augmented prompt).
+	SupervisorRouter MetacognitiveRouterConfig `yaml:"supervisor_router"`
+}
+
+// MetacognitiveRouterConfig holds routing hints for metacognitive iterations.
+type MetacognitiveRouterConfig struct {
+	// QualityFloor is the minimum quality rating (1–10) for model
+	// selection. Default: 3 for normal iterations, 8 for supervisor.
+	QualityFloor int `yaml:"quality_floor"`
+}
+
+// StateWindowConfig configures the rolling window of recent Home Assistant
+// state changes injected into the agent's system prompt.
 type StateWindowConfig struct {
 	// MaxEntries is the circular buffer capacity. When the buffer is
 	// full, the oldest entry is overwritten. Default: 50.
@@ -869,6 +927,32 @@ func (c *Config) applyDefaults() {
 			"claude-sonnet-4-20250514": {InputPerMillion: 3.0, OutputPerMillion: 15.0},
 			"claude-haiku-3-20240307":  {InputPerMillion: 0.25, OutputPerMillion: 1.25},
 		}
+	}
+
+	// Metacognitive loop defaults.
+	if c.Metacognitive.StateFile == "" {
+		c.Metacognitive.StateFile = "metacognitive.md"
+	}
+	if c.Metacognitive.MinSleep == "" {
+		c.Metacognitive.MinSleep = "2m"
+	}
+	if c.Metacognitive.MaxSleep == "" {
+		c.Metacognitive.MaxSleep = "30m"
+	}
+	if c.Metacognitive.DefaultSleep == "" {
+		c.Metacognitive.DefaultSleep = "10m"
+	}
+	if c.Metacognitive.Jitter == 0 {
+		c.Metacognitive.Jitter = 0.2
+	}
+	if c.Metacognitive.SupervisorProbability == 0 {
+		c.Metacognitive.SupervisorProbability = 0.1
+	}
+	if c.Metacognitive.Router.QualityFloor == 0 {
+		c.Metacognitive.Router.QualityFloor = 3
+	}
+	if c.Metacognitive.SupervisorRouter.QualityFloor == 0 {
+		c.Metacognitive.SupervisorRouter.QualityFloor = 8
 	}
 
 	// Backward compat: migrate deprecated iter0_tools → orchestrator_tools.
@@ -1038,6 +1122,46 @@ func (c *Config) Validate() error {
 	}
 	if c.StateWindow.MaxAgeMinutes < 1 {
 		return fmt.Errorf("state_window.max_age_minutes %d must be positive", c.StateWindow.MaxAgeMinutes)
+	}
+	if err := c.validateMetacognitive(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateMetacognitive checks metacognitive loop configuration for
+// consistency. Only checked when the loop is enabled.
+func (c *Config) validateMetacognitive() error {
+	if !c.Metacognitive.Enabled {
+		return nil
+	}
+	if c.Workspace.Path == "" {
+		return fmt.Errorf("metacognitive requires workspace.path (state file lives there)")
+	}
+	minSleep, err := time.ParseDuration(c.Metacognitive.MinSleep)
+	if err != nil {
+		return fmt.Errorf("metacognitive.min_sleep %q: %w", c.Metacognitive.MinSleep, err)
+	}
+	maxSleep, err := time.ParseDuration(c.Metacognitive.MaxSleep)
+	if err != nil {
+		return fmt.Errorf("metacognitive.max_sleep %q: %w", c.Metacognitive.MaxSleep, err)
+	}
+	defaultSleep, err := time.ParseDuration(c.Metacognitive.DefaultSleep)
+	if err != nil {
+		return fmt.Errorf("metacognitive.default_sleep %q: %w", c.Metacognitive.DefaultSleep, err)
+	}
+	if minSleep > maxSleep {
+		return fmt.Errorf("metacognitive.min_sleep (%s) exceeds max_sleep (%s)", minSleep, maxSleep)
+	}
+	if defaultSleep < minSleep || defaultSleep > maxSleep {
+		return fmt.Errorf("metacognitive.default_sleep (%s) must be between min_sleep (%s) and max_sleep (%s)",
+			defaultSleep, minSleep, maxSleep)
+	}
+	if c.Metacognitive.Jitter < 0 || c.Metacognitive.Jitter > 1.0 {
+		return fmt.Errorf("metacognitive.jitter %.2f must be in [0.0, 1.0]", c.Metacognitive.Jitter)
+	}
+	if c.Metacognitive.SupervisorProbability < 0 || c.Metacognitive.SupervisorProbability > 1.0 {
+		return fmt.Errorf("metacognitive.supervisor_probability %.2f must be in [0.0, 1.0]", c.Metacognitive.SupervisorProbability)
 	}
 	return nil
 }
