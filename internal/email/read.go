@@ -8,6 +8,7 @@ import (
 
 	"github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapclient"
+	"github.com/emersion/go-message"
 	"github.com/emersion/go-message/mail"
 )
 
@@ -113,10 +114,25 @@ func (c *Client) ReadMessage(ctx context.Context, folder string, uid uint32) (*M
 
 // parseBody walks the MIME structure and extracts text content and
 // the References header (not available from the IMAP Envelope).
+//
+// The go-message library's mail.CreateReader and NextPart may return
+// both a valid reader/part AND an error when the message uses an
+// unknown charset or transfer encoding. We treat those as non-fatal
+// and continue parsing — the content may be slightly garbled but is
+// still useful for triage.
 func (c *Client) parseBody(msg *Message, r io.Reader) error {
 	mailReader, err := mail.CreateReader(r)
-	if err != nil {
+	if err != nil && !message.IsUnknownCharset(err) {
 		return fmt.Errorf("create mail reader: %w", err)
+	}
+	if mailReader == nil {
+		if err != nil {
+			return fmt.Errorf("create mail reader returned nil: %w", err)
+		}
+		return fmt.Errorf("create mail reader returned nil")
+	}
+	if err != nil {
+		c.logger.Debug("mail reader created with charset warning", "error", err)
 	}
 
 	// Extract References from the top-level mail header.
@@ -131,8 +147,14 @@ func (c *Client) parseBody(msg *Message, r io.Reader) error {
 		if err == io.EOF {
 			break
 		}
-		if err != nil {
+		if err != nil && !message.IsUnknownCharset(err) {
 			return fmt.Errorf("next part: %w", err)
+		}
+		if part == nil {
+			continue
+		}
+		if err != nil {
+			c.logger.Debug("part has charset warning", "error", err)
 		}
 
 		// Determine content type by checking the header type.
