@@ -225,9 +225,16 @@ func (l *Loop) run(ctx context.Context) {
 func (l *Loop) iterate(ctx context.Context, isSupervisor bool) error {
 	stateContent, err := l.readStateFile()
 	if err != nil {
-		l.deps.Logger.Info("metacognitive state file not found, starting fresh",
-			"path", l.stateFilePath(),
-		)
+		if errors.Is(err, fs.ErrNotExist) {
+			l.deps.Logger.Info("metacognitive state file not found, starting fresh",
+				"path", l.stateFilePath(),
+			)
+		} else {
+			l.deps.Logger.Warn("metacognitive state file read failed, starting with empty state",
+				"error", err,
+				"path", l.stateFilePath(),
+			)
+		}
 		stateContent = ""
 	}
 

@@ -797,6 +797,8 @@ type MetacognitiveRouterConfig struct {
 	QualityFloor int `yaml:"quality_floor"`
 }
 
+// StateWindowConfig configures the rolling window of recent Home Assistant
+// state changes injected into the agent's system prompt.
 type StateWindowConfig struct {
 	// MaxEntries is the circular buffer capacity. When the buffer is
 	// full, the oldest entry is overwritten. Default: 50.
@@ -939,6 +941,12 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Metacognitive.DefaultSleep == "" {
 		c.Metacognitive.DefaultSleep = "10m"
+	}
+	if c.Metacognitive.Jitter == 0 {
+		c.Metacognitive.Jitter = 0.2
+	}
+	if c.Metacognitive.SupervisorProbability == 0 {
+		c.Metacognitive.SupervisorProbability = 0.1
 	}
 	if c.Metacognitive.Router.QualityFloor == 0 {
 		c.Metacognitive.Router.QualityFloor = 3
@@ -1138,11 +1146,16 @@ func (c *Config) validateMetacognitive() error {
 	if err != nil {
 		return fmt.Errorf("metacognitive.max_sleep %q: %w", c.Metacognitive.MaxSleep, err)
 	}
-	if _, err := time.ParseDuration(c.Metacognitive.DefaultSleep); err != nil {
+	defaultSleep, err := time.ParseDuration(c.Metacognitive.DefaultSleep)
+	if err != nil {
 		return fmt.Errorf("metacognitive.default_sleep %q: %w", c.Metacognitive.DefaultSleep, err)
 	}
 	if minSleep > maxSleep {
 		return fmt.Errorf("metacognitive.min_sleep (%s) exceeds max_sleep (%s)", minSleep, maxSleep)
+	}
+	if defaultSleep < minSleep || defaultSleep > maxSleep {
+		return fmt.Errorf("metacognitive.default_sleep (%s) must be between min_sleep (%s) and max_sleep (%s)",
+			defaultSleep, minSleep, maxSleep)
 	}
 	if c.Metacognitive.Jitter < 0 || c.Metacognitive.Jitter > 1.0 {
 		return fmt.Errorf("metacognitive.jitter %.2f must be in [0.0, 1.0]", c.Metacognitive.Jitter)
