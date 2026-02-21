@@ -947,6 +947,22 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		logger.Info("file tools disabled (no workspace path configured)")
 	}
 
+	// --- Temp file store ---
+	// Provides create_temp_file tool for orchestrator-delegate data passing.
+	// Files are stored in the workspace's .tmp subdirectory and cleaned up
+	// when conversations end. Requires both workspace and opstate.
+	if cfg.Workspace.Path != "" {
+		tempFileStore := tools.NewTempFileStore(
+			filepath.Join(cfg.Workspace.Path, ".tmp"),
+			opStore,
+			logger,
+		)
+		loop.Tools().SetTempFileStore(tempFileStore)
+		logger.Info("temp file store enabled",
+			"base_dir", filepath.Join(cfg.Workspace.Path, ".tmp"),
+		)
+	}
+
 	// --- Shell exec ---
 	// Optional and disabled by default. When enabled, the agent can
 	// execute shell commands on the host, subject to allow/deny lists.
@@ -1259,6 +1275,9 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	delegateExec := delegate.NewExecutor(logger, llmClient, rtr, loop.Tools(), cfg.Models.Default)
 	delegateExec.SetTimezone(cfg.Timezone)
 	delegateExec.SetStore(delegationStore)
+	if tfs := loop.Tools().TempFileStore(); tfs != nil {
+		delegateExec.SetTempFileStore(tfs)
+	}
 	loop.Tools().Register(&tools.Tool{
 		Name:        "thane_delegate",
 		Description: delegate.ToolDescription,
