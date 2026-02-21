@@ -115,10 +115,11 @@ func TestSummaryByModel(t *testing.T) {
 		t.Fatalf("got %d groups, want 2", len(result))
 	}
 
-	opus := result["opus"]
-	if opus == nil {
-		t.Fatal("missing 'opus' group")
+	// Results are ordered by cost DESC, so opus (cost 3.0) comes first.
+	if result[0].Key != "opus" {
+		t.Errorf("first group key = %q, want %q", result[0].Key, "opus")
 	}
+	opus := result[0].Summary
 	if opus.TotalRecords != 2 {
 		t.Errorf("opus.TotalRecords = %d, want 2", opus.TotalRecords)
 	}
@@ -129,12 +130,11 @@ func TestSummaryByModel(t *testing.T) {
 		t.Errorf("opus.TotalCostUSD = %f, want 3.0", opus.TotalCostUSD)
 	}
 
-	sonnet := result["sonnet"]
-	if sonnet == nil {
-		t.Fatal("missing 'sonnet' group")
+	if result[1].Key != "sonnet" {
+		t.Errorf("second group key = %q, want %q", result[1].Key, "sonnet")
 	}
-	if sonnet.TotalRecords != 1 {
-		t.Errorf("sonnet.TotalRecords = %d, want 1", sonnet.TotalRecords)
+	if result[1].Summary.TotalRecords != 1 {
+		t.Errorf("sonnet.TotalRecords = %d, want 1", result[1].Summary.TotalRecords)
 	}
 }
 
@@ -165,14 +165,16 @@ func TestSummaryByRole(t *testing.T) {
 		t.Fatalf("got %d groups, want 3", len(result))
 	}
 
-	for _, role := range []string{"interactive", "delegate", "scheduled"} {
-		if result[role] == nil {
-			t.Errorf("missing '%s' group", role)
+	// Ordered by cost DESC: scheduled (3.0), delegate (2.0), interactive (1.0).
+	wantOrder := []string{"scheduled", "delegate", "interactive"}
+	for i, want := range wantOrder {
+		if result[i].Key != want {
+			t.Errorf("result[%d].Key = %q, want %q", i, result[i].Key, want)
 		}
 	}
 
-	if result["scheduled"].TotalCostUSD != 3.0 {
-		t.Errorf("scheduled cost = %f, want 3.0", result["scheduled"].TotalCostUSD)
+	if result[0].Summary.TotalCostUSD != 3.0 {
+		t.Errorf("scheduled cost = %f, want 3.0", result[0].Summary.TotalCostUSD)
 	}
 }
 
@@ -204,24 +206,35 @@ func TestSummaryByTask(t *testing.T) {
 		t.Fatalf("got %d groups, want 3", len(result))
 	}
 
-	emailPoll := result["email_poll"]
+	// Ordered by cost DESC: email_poll (3.0), periodic_reflection (3.0), "" (0.5).
+	// Find email_poll group by key.
+	var emailPoll *GroupedSummary
+	var noTask *GroupedSummary
+	for i := range result {
+		switch result[i].Key {
+		case "email_poll":
+			emailPoll = &result[i]
+		case "":
+			noTask = &result[i]
+		}
+	}
+
 	if emailPoll == nil {
 		t.Fatal("missing 'email_poll' group")
 	}
-	if emailPoll.TotalRecords != 2 {
-		t.Errorf("email_poll.TotalRecords = %d, want 2", emailPoll.TotalRecords)
+	if emailPoll.Summary.TotalRecords != 2 {
+		t.Errorf("email_poll.TotalRecords = %d, want 2", emailPoll.Summary.TotalRecords)
 	}
-	if emailPoll.TotalCostUSD != 3.0 {
-		t.Errorf("email_poll.TotalCostUSD = %f, want 3.0", emailPoll.TotalCostUSD)
+	if emailPoll.Summary.TotalCostUSD != 3.0 {
+		t.Errorf("email_poll.TotalCostUSD = %f, want 3.0", emailPoll.Summary.TotalCostUSD)
 	}
 
 	// Records with no task_name are grouped under "".
-	noTask := result[""]
 	if noTask == nil {
 		t.Fatal("missing empty-string task group")
 	}
-	if noTask.TotalRecords != 1 {
-		t.Errorf("empty task TotalRecords = %d, want 1", noTask.TotalRecords)
+	if noTask.Summary.TotalRecords != 1 {
+		t.Errorf("empty task TotalRecords = %d, want 1", noTask.Summary.TotalRecords)
 	}
 }
 
@@ -284,9 +297,6 @@ func TestSummaryByModel_EmptyDB(t *testing.T) {
 	result, err := s.SummaryByModel(start, end)
 	if err != nil {
 		t.Fatalf("SummaryByModel: %v", err)
-	}
-	if result == nil {
-		t.Fatal("SummaryByModel returned nil, want empty map")
 	}
 	if len(result) != 0 {
 		t.Errorf("got %d groups, want 0", len(result))
@@ -358,5 +368,28 @@ func TestNewStore_InvalidPath(t *testing.T) {
 	_, err := NewStore("/nonexistent/path/usage.db")
 	if err == nil {
 		t.Error("NewStore() should fail for invalid path")
+	}
+}
+
+func TestResolveProvider(t *testing.T) {
+	tests := []struct {
+		model string
+		want  string
+	}{
+		{"claude-opus-4-20250514", "anthropic"},
+		{"claude-sonnet-4-20250514", "anthropic"},
+		{"claude-haiku-3-20240307", "anthropic"},
+		{"llama3.2:latest", "ollama"},
+		{"qwen2.5:7b", "ollama"},
+		{"", "ollama"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.model, func(t *testing.T) {
+			got := ResolveProvider(tt.model)
+			if got != tt.want {
+				t.Errorf("ResolveProvider(%q) = %q, want %q", tt.model, got, tt.want)
+			}
+		})
 	}
 }

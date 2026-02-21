@@ -1561,7 +1561,7 @@ func (l *Loop) recordUsage(ctx context.Context, req *Request, model string, tota
 		SessionID:      sessionTag,
 		ConversationID: convID,
 		Model:          model,
-		Provider:       resolveProvider(model),
+		Provider:       usage.ResolveProvider(model),
 		InputTokens:    totalIn,
 		OutputTokens:   totalOut,
 		CostUSD:        cost,
@@ -1575,14 +1575,4 @@ func (l *Loop) recordUsage(ctx context.Context, req *Request, model string, tota
 			"request_id", requestID,
 		)
 	}
-}
-
-// resolveProvider infers the LLM provider from the model name. Models
-// starting with "claude-" are Anthropic; everything else is assumed to
-// be Ollama (local).
-func resolveProvider(model string) string {
-	if strings.HasPrefix(model, "claude-") {
-		return "anthropic"
-	}
-	return "ollama"
 }

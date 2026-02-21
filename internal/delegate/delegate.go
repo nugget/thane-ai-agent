@@ -831,7 +831,7 @@ func (e *Executor) recordCompletion(rec *completionRecord) {
 			RequestID:      rec.delegateID,
 			ConversationID: rec.conversationID,
 			Model:          rec.model,
-			Provider:       resolveProvider(rec.model),
+			Provider:       usage.ResolveProvider(rec.model),
 			InputTokens:    rec.totalInput,
 			OutputTokens:   rec.totalOutput,
 			CostUSD:        cost,
@@ -845,14 +845,6 @@ func (e *Executor) recordCompletion(rec *completionRecord) {
 			)
 		}
 	}
-}
-
-// resolveProvider infers the LLM provider from the model name.
-func resolveProvider(model string) string {
-	if strings.HasPrefix(model, "claude-") {
-		return "anthropic"
-	}
-	return "ollama"
 }
 
 // formatTokens formats a token count as a human-readable string (e.g., "1.2K").

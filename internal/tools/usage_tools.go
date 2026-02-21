@@ -60,15 +60,15 @@ func (r *Registry) registerCostSummary() {
 				}
 				if len(grouped) > 0 {
 					sb.WriteString(fmt.Sprintf("\nBy %s:\n", groupLabel))
-					for key, sum := range grouped {
-						display := key
+					for _, gs := range grouped {
+						display := gs.Key
 						if display == "" {
 							display = "(none)"
 						}
 						sb.WriteString(fmt.Sprintf("  %s: $%.4f (%d requests, %s in / %s out)\n",
-							display, sum.TotalCostUSD, sum.TotalRecords,
-							formatTokenCount(sum.TotalInputTokens),
-							formatTokenCount(sum.TotalOutputTokens),
+							display, gs.Summary.TotalCostUSD, gs.Summary.TotalRecords,
+							formatTokenCount(gs.Summary.TotalInputTokens),
+							formatTokenCount(gs.Summary.TotalOutputTokens),
 						))
 					}
 				}
@@ -80,8 +80,8 @@ func (r *Registry) registerCostSummary() {
 }
 
 // queryGrouped dispatches the grouped summary query based on the
-// group_by parameter.
-func queryGrouped(store *usage.Store, groupBy string, start, end time.Time) (map[string]*usage.Summary, string, error) {
+// group_by parameter. Results are ordered by cost descending.
+func queryGrouped(store *usage.Store, groupBy string, start, end time.Time) ([]usage.GroupedSummary, string, error) {
 	switch groupBy {
 	case "model":
 		result, err := store.SummaryByModel(start, end)

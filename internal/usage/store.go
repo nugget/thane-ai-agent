@@ -7,6 +7,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -36,6 +37,14 @@ type Summary struct {
 	TotalInputTokens  int64
 	TotalOutputTokens int64
 	TotalCostUSD      float64
+}
+
+// GroupedSummary pairs a grouping key (model name, role, task name)
+// with its aggregated usage totals. Slices of GroupedSummary preserve
+// the SQL ordering (highest cost first).
+type GroupedSummary struct {
+	Key     string
+	Summary Summary
 }
 
 // Store is an append-only SQLite store for token usage records. All
@@ -145,23 +154,26 @@ func (s *Store) Summary(start, end time.Time) (*Summary, error) {
 	return &sum, nil
 }
 
-// SummaryByModel returns per-model aggregated totals for records within [start, end).
-func (s *Store) SummaryByModel(start, end time.Time) (map[string]*Summary, error) {
+// SummaryByModel returns per-model aggregated totals for records within
+// [start, end), ordered by cost descending.
+func (s *Store) SummaryByModel(start, end time.Time) ([]GroupedSummary, error) {
 	return s.summaryGroupedBy("model", start, end)
 }
 
-// SummaryByRole returns per-role aggregated totals for records within [start, end).
-func (s *Store) SummaryByRole(start, end time.Time) (map[string]*Summary, error) {
+// SummaryByRole returns per-role aggregated totals for records within
+// [start, end), ordered by cost descending.
+func (s *Store) SummaryByRole(start, end time.Time) ([]GroupedSummary, error) {
 	return s.summaryGroupedBy("role", start, end)
 }
 
-// SummaryByTask returns per-task aggregated totals for records within [start, end).
-// Records with empty task_name are grouped under the key "".
-func (s *Store) SummaryByTask(start, end time.Time) (map[string]*Summary, error) {
+// SummaryByTask returns per-task aggregated totals for records within
+// [start, end), ordered by cost descending. Records with empty
+// task_name are grouped under the key "".
+func (s *Store) SummaryByTask(start, end time.Time) ([]GroupedSummary, error) {
 	return s.summaryGroupedBy("task_name", start, end)
 }
 
-func (s *Store) summaryGroupedBy(column string, start, end time.Time) (map[string]*Summary, error) {
+func (s *Store) summaryGroupedBy(column string, start, end time.Time) ([]GroupedSummary, error) {
 	// column is always a compile-time constant from our own methods,
 	// never user input, so embedding it directly is safe.
 	query := fmt.Sprintf(
@@ -182,16 +194,25 @@ func (s *Store) summaryGroupedBy(column string, start, end time.Time) (map[strin
 	}
 	defer rows.Close()
 
-	result := make(map[string]*Summary)
+	var result []GroupedSummary
 	for rows.Next() {
-		var key string
-		var sum Summary
-		if err := rows.Scan(&key, &sum.TotalRecords, &sum.TotalInputTokens, &sum.TotalOutputTokens, &sum.TotalCostUSD); err != nil {
+		var gs GroupedSummary
+		if err := rows.Scan(&gs.Key, &gs.Summary.TotalRecords, &gs.Summary.TotalInputTokens, &gs.Summary.TotalOutputTokens, &gs.Summary.TotalCostUSD); err != nil {
 			return nil, fmt.Errorf("scan usage by %s: %w", column, err)
 		}
-		result[key] = &sum
+		result = append(result, gs)
 	}
 	return result, rows.Err()
+}
+
+// ResolveProvider infers the LLM provider from the model name. Models
+// starting with "claude-" are Anthropic; everything else is assumed to
+// be Ollama (local).
+func ResolveProvider(model string) string {
+	if strings.HasPrefix(model, "claude-") {
+		return "anthropic"
+	}
+	return "ollama"
 }
 
 // ComputeCost calculates the USD cost for a model's token usage based
