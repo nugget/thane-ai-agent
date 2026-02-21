@@ -59,6 +59,10 @@ Agent personality and behavioral guidance live in markdown files (`talents/`). T
 
 Talents are **tag-filtered** — each talent can declare which capability tags it requires (via YAML frontmatter). A talent tagged `[email]` only loads when the `email` tag is active, keeping context lean.
 
+### Contact Directory
+
+Thane maintains a persistent contact database — every person the agent interacts with gets a record. Contacts store names, communication addresses, relationship context, and a **trust zone** classification. The agent can create, update, and query contacts through dedicated tools. This is the foundation for personalized behavior: Thane knows who it's talking to and adjusts accordingly.
+
 ### Trust Zones
 
 Every contact has a trust zone: `owner`, `trusted`, or `known`. Trust zones are the universal router — they gate:
