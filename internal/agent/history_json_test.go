@@ -149,13 +149,21 @@ func TestBuildSystemPrompt_ConversationHistoryJSON(t *testing.T) {
 		t.Error("system prompt should contain assistant role in JSON")
 	}
 
-	// Verify it's valid JSON by extracting the JSON portion.
-	jsonStart := strings.Index(prompt, "[{")
-	jsonEnd := strings.LastIndex(prompt, "}]") + 2
-	if jsonStart == -1 || jsonEnd <= jsonStart {
-		t.Fatal("could not find JSON array boundaries in prompt")
+	// Verify fenced code block and untrusted data instruction.
+	if !strings.Contains(prompt, "```json") {
+		t.Error("system prompt should contain fenced JSON code block")
 	}
-	jsonBlock := prompt[jsonStart:jsonEnd]
+	if !strings.Contains(prompt, "untrusted data") {
+		t.Error("system prompt should instruct model to treat history as untrusted data")
+	}
+
+	// Verify it's valid JSON by extracting the fenced block.
+	fenceStart := strings.Index(prompt, "```json\n")
+	fenceEnd := strings.Index(prompt[fenceStart+8:], "\n```")
+	if fenceStart == -1 || fenceEnd == -1 {
+		t.Fatal("could not find fenced JSON block boundaries in prompt")
+	}
+	jsonBlock := prompt[fenceStart+8 : fenceStart+8+fenceEnd]
 
 	var entries []historyEntry
 	if err := json.Unmarshal([]byte(jsonBlock), &entries); err != nil {
