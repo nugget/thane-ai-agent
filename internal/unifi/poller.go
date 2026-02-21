@@ -166,7 +166,7 @@ func (p *Poller) poll(ctx context.Context) {
 		pend.count++
 		if pend.count >= debounceThreshold {
 			p.cfg.Updater.UpdateRoom(entityID, best.room, best.source)
-			p.cfg.Logger.Debug("room update committed",
+			p.cfg.Logger.Log(ctx, slog.Level(-8), "room update committed", // config.LevelTrace
 				"entity_id", entityID,
 				"room", best.room,
 				"source", best.source,

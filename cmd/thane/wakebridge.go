@@ -10,6 +10,7 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/agent"
 	"github.com/nugget/thane-ai-agent/internal/anticipation"
+	"github.com/nugget/thane-ai-agent/internal/config"
 	"github.com/nugget/thane-ai-agent/internal/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/router"
 	"github.com/nugget/thane-ai-agent/internal/tools"
@@ -129,7 +130,7 @@ func (b *WakeBridge) HandleStateChange(entityID, oldState, newState string) {
 	}
 
 	if len(matched) == 0 {
-		b.logger.Debug("state change, no anticipation match",
+		b.logger.Log(b.ctx, config.LevelTrace, "state change, no anticipation match",
 			"entity_id", entityID,
 			"old_state", oldState,
 			"new_state", newState,
