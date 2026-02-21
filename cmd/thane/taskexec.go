@@ -107,9 +107,11 @@ func runScheduledTask(ctx context.Context, task *scheduler.Task, exec *scheduler
 		qualityFloor = qf
 	}
 
-	// Each task gets its own conversation to isolate from interactive chat.
+	// Each execution gets a fresh conversation so prior poll/wake context
+	// doesn't accumulate across cycles. The execution ID (UUIDv7) ensures
+	// uniqueness while the task ID prefix aids log correlation.
 	req := &agent.Request{
-		ConversationID: fmt.Sprintf("sched-%s", task.ID),
+		ConversationID: fmt.Sprintf("sched-%s-%s", task.ID, exec.ID),
 		Model:          model,
 		Messages:       []agent.Message{{Role: "user", Content: msg}},
 		Hints: map[string]string{
