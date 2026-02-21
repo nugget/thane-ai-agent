@@ -393,8 +393,15 @@ func TestWorker_EmptyTranscriptMarkedSummarized(t *testing.T) {
 	w := New(store, mock, rtr, slog.Default(), cfg)
 	w.Start(ctx)
 
-	// Give startup scan time to process.
-	time.Sleep(100 * time.Millisecond)
+	// Wait for the startup scan to mark the session, rather than a
+	// fixed sleep that can be flaky under load.
+	waitFor(t, 5*time.Second, func() bool {
+		remaining, err := store.UnsummarizedSessions(10)
+		if err != nil {
+			return false
+		}
+		return len(remaining) == 0
+	})
 
 	cancel()
 	w.Stop()
@@ -404,22 +411,22 @@ func TestWorker_EmptyTranscriptMarkedSummarized(t *testing.T) {
 		t.Errorf("expected 0 LLM calls for empty-transcript session, got %d", mock.calls.Load())
 	}
 
-	// Session should be marked as summarized (has a title now).
-	remaining, err := store.UnsummarizedSessions(10)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(remaining) != 0 {
-		t.Errorf("expected 0 unsummarized sessions, got %d", len(remaining))
-	}
-
-	// Verify the placeholder metadata was stored.
+	// Verify the placeholder title and metadata were stored.
 	got, err := store.GetSession(sess.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got.Title != "(empty session)" {
 		t.Errorf("title = %q, want %q", got.Title, "(empty session)")
+	}
+	if got.Metadata == nil {
+		t.Fatal("metadata should not be nil for empty session")
+	}
+	if got.Metadata.SessionType != "empty" {
+		t.Errorf("session_type = %q, want %q", got.Metadata.SessionType, "empty")
+	}
+	if got.Metadata.OneLiner != "Empty session (no transcript)" {
+		t.Errorf("one_liner = %q, want %q", got.Metadata.OneLiner, "Empty session (no transcript)")
 	}
 }
 
