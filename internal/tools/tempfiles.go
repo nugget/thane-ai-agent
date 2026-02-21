@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/nugget/thane-ai-agent/internal/opstate"
@@ -120,8 +121,19 @@ func (s *TempFileStore) ExpandLabels(convID, text string) string {
 		return text
 	}
 
-	for label, path := range mappings {
-		text = strings.ReplaceAll(text, "temp:"+label, path)
+	// Sort labels by descending length so longer labels are replaced
+	// first. This prevents a short label from matching a prefix of a
+	// longer one (e.g., "temp:a" matching inside "temp:ab").
+	labels := make([]string, 0, len(mappings))
+	for label := range mappings {
+		labels = append(labels, label)
+	}
+	sort.Slice(labels, func(i, j int) bool {
+		return len(labels[i]) > len(labels[j])
+	})
+
+	for _, label := range labels {
+		text = strings.ReplaceAll(text, "temp:"+label, mappings[label])
 	}
 	return text
 }

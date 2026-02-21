@@ -178,6 +178,22 @@ func TestTempFileStore_ExpandLabels(t *testing.T) {
 	}
 }
 
+func TestTempFileStore_ExpandLabels_OverlappingLabels(t *testing.T) {
+	tfs, state := testTempFileStore(t)
+
+	// Store labels where one is a prefix of the other.
+	ns := tempfileNamespace("conv-1")
+	_ = state.Set(ns, "a", "/path/to/a.md")
+	_ = state.Set(ns, "ab", "/path/to/ab.md")
+
+	// "temp:ab" must expand to the longer label's path, not "temp:a"+"b".
+	got := tfs.ExpandLabels("conv-1", "Read temp:ab and also temp:a")
+	want := "Read /path/to/ab.md and also /path/to/a.md"
+	if got != want {
+		t.Errorf("ExpandLabels with overlapping labels:\n  got:  %q\n  want: %q", got, want)
+	}
+}
+
 func TestTempFileStore_ExpandLabels_NoLabels(t *testing.T) {
 	tfs, _ := testTempFileStore(t)
 

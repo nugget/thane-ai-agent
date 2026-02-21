@@ -148,12 +148,17 @@ func (r *Registry) registerTempFileTool() {
 		},
 		Handler: func(ctx context.Context, args map[string]any) (string, error) {
 			label, _ := args["label"].(string)
-			content, _ := args["content"].(string)
 			if label == "" {
 				return "", fmt.Errorf("label is required")
 			}
-			if content == "" {
+
+			rawContent, ok := args["content"]
+			if !ok {
 				return "", fmt.Errorf("content is required")
+			}
+			content, ok := rawContent.(string)
+			if !ok {
+				return "", fmt.Errorf("content must be a string")
 			}
 
 			convID := ConversationIDFromContext(ctx)
