@@ -538,6 +538,6 @@ func (p *Publisher) publishStates(ctx context.Context) {
 		}
 	}
 
-	p.logger.Debug("mqtt sensor states published",
+	p.logger.Log(ctx, config.LevelTrace, "mqtt sensor states published",
 		"entities", len(states))
 }
