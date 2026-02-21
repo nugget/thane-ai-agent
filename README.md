@@ -58,40 +58,52 @@ See [docs/getting-started.md](docs/getting-started.md) for detailed setup and de
 
 - **Full Home Assistant integration** — entity discovery, state queries, service calls, real-time WebSocket event subscriptions
 - **Smart device control** — natural language to action with fuzzy entity matching
+- **Native email** — IMAP read/search + SMTP send/reply with markdown-to-MIME conversion, trust zone gating, and auto-Bcc audit trail
+- **Email polling** — scheduled IMAP checks with high-water mark tracking, wakes agent only when new messages arrive
+- **Contact directory** — persistent contacts with trust zones (owner/trusted/known) for access control across email, messaging, and compute routing
 - **MCP tool integration** — extends capabilities via Model Context Protocol servers (e.g., ha-mcp for 90+ HA tools)
-- **Delegation system** — primary model orchestrates, local models execute tool-heavy tasks at zero API cost
+- **Capability tag system** — dynamic tool loading based on semantic tags; agents start lightweight and activate tools on demand
+- **Delegation system** — orchestrator model plans, local models execute tool-heavy tasks at zero API cost, with execution summaries
+- **Model routing** — quality/speed/cost scoring with explicit hints (quality_floor, prefer_speed, local_only) across all code paths
 - **Semantic memory** — learns and recalls facts with embeddings-based search
+- **Self-reflection** — periodic ego.md analysis for personality development and behavioral pattern consolidation
+- **Session management** — close, checkpoint, and split sessions with carry-forward context
+- **Anticipation engine** — event-driven triggers with per-anticipation model routing
+- **Task scheduler** — cron-style scheduling with model/routing overrides
 - **Web search** — SearXNG and Brave Search providers with pluggable architecture
 - **Web fetch** — extract readable content from any URL
 - **Shell execution** — run commands on the host (configurable safety guardrails)
-- **Talent system** — customize agent behavior with markdown files
-- **Model routing** — intent-based profiles select the right model for each task (speed vs. quality vs. cost)
-- **Proactive awareness** — HA WebSocket subscriptions for state changes, MQTT for Frigate events, anticipation system for event-driven triggers
+- **Talent system** — customize agent behavior with tag-filtered markdown files
 - **Checkpoint/restore** — survives restarts without losing context
 - **Dual-port architecture** — native API + Ollama-compatible API simultaneously
+- **Operational state store** — generic KV persistence for poller cursors, feature flags, session preferences
+- **MQTT telemetry** — publishes agent state as HA-discoverable entities
 - **Structured logging** — text or JSON format (`log_format` in config)
 
 ## Architecture
 
 ```
-                    ┌─────────────────────┐
-                    │    Event Sources     │
-                    │  HA WebSocket │ MQTT │
-                    └────────┬────────────┘
-                             ▼
+                    ┌─────────────────────────┐
+                    │      Event Sources       │
+                    │  HA WS │ MQTT │ Email    │
+                    │  Scheduler │ Anticipations│
+                    └──────────┬──────────────┘
+                               ▼
 User ──→ API Server ──→ Agent Loop ──→ Response
-                           │
-              ┌────────────┼────────────┐
-              ↓            ↓            ↓
-           Memory     Model Router   Integrations
-           (SQLite)   (profiles)     (HA, MCP, shell)
-                           │
-                           ↓
-                       Delegates
-                    (local models)
+              │            │
+              │   ┌────────┼────────────┐
+              │   ↓        ↓            ↓
+              │ Memory  Model Router  Integrations
+              │ (SQLite) (scoring)   (HA, Email, MCP, shell)
+              │            │
+              │            ↓
+              │        Delegates
+              │     (local models)
+              │
+              └──→ Web Chat UI
 ```
 
-Thane's agent loop receives a request — from a user or an event trigger — assembles context from memory and home state, plans tool calls, delegates tool-heavy work to local models, and shapes a response. The primary model orchestrates; delegates execute.
+Thane's agent loop receives a request — from a user, event trigger, or scheduled task — assembles context from memory, contacts, and home state, activates capability tags for the task, plans tool calls, delegates tool-heavy work to local models, and shapes a response. The orchestrator model plans; delegates execute.
 
 ## CLI
 
@@ -114,13 +126,26 @@ Flags:
 
 Config is auto-discovered from: `./config.yaml`, `~/Thane/config.yaml`, `~/.config/thane/config.yaml`, `/config/config.yaml`, `/usr/local/etc/thane/config.yaml`, `/etc/thane/config.yaml`
 
+## Documentation
+
+| Document | Description |
+|----------|-------------|
+| [ARCHITECTURE.md](ARCHITECTURE.md) | System design and component overview |
+| [docs/guide.md](docs/guide.md) | Complete getting-started guide for HA users |
+| [docs/getting-started.md](docs/getting-started.md) | Setup and deployment |
+| [docs/homeassistant.md](docs/homeassistant.md) | Home Assistant integration |
+| [docs/delegation.md](docs/delegation.md) | Delegation system deep dive |
+| [docs/memory.md](docs/memory.md) | Memory architecture |
+| [docs/routing-profiles.md](docs/routing-profiles.md) | Model routing and profiles |
+| [docs/context-layers.md](docs/context-layers.md) | Context assembly layers |
+
 ## Roadmap
 
-**Working today:** Conversation agent, HA integration (REST + WebSocket), MCP tool hosting, delegation system, device control, semantic memory, checkpoints, shell exec, web search (SearXNG + Brave), web fetch, web chat UI, dual-port APIs, intent-based model routing, MQTT publishing + Frigate event subscriptions, anticipation system, task scheduler.
+**Working today:** Conversation agent, HA integration (REST + WebSocket + MCP), delegation with execution summaries, capability tag system, native email (IMAP/SMTP), email polling, contact directory with trust zones, model routing with quality/speed hints, semantic memory, self-reflection, session management, anticipation engine, task scheduler, MQTT telemetry, web search/fetch, shell exec, web chat UI, operational state store.
 
-**Next up:** HA WebSocket state subscriptions (#176), scheduler→agent wiring (#173), email (IMAP/SMTP), TTS, voice pipeline integration.
+**Next up:** Web dashboard for operational visibility (#294), dynamic model registry (#93), email trust-zone triage on poll, IMAP IDLE for push notifications, TTS, voice pipeline integration.
 
-**Longer term:** HA Add-on packaging, Apple ecosystem integration, multi-instance deployment, identity system.
+**Longer term:** HA Add-on packaging, Apple ecosystem integration, git-backed identity store (#43), multi-instance deployment.
 
 See [GitHub Issues](https://github.com/nugget/thane-ai-agent/issues) for the full backlog.
 
