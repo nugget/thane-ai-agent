@@ -24,6 +24,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/scheduler"
 	"github.com/nugget/thane-ai-agent/internal/talents"
 	"github.com/nugget/thane-ai-agent/internal/tools"
+	"github.com/nugget/thane-ai-agent/internal/usage"
 )
 
 // Message represents a chat message.
@@ -146,8 +147,10 @@ type Loop struct {
 	contextProvider   ContextProvider
 	archiver          SessionArchiver
 	extractor         *memory.Extractor
-	orchestratorTools []string           // Restricted tool set for orchestrator mode (nil = all tools)
-	debugCfg          config.DebugConfig // Debug options (system prompt dump, etc.)
+	orchestratorTools []string                       // Restricted tool set for orchestrator mode (nil = all tools)
+	debugCfg          config.DebugConfig             // Debug options (system prompt dump, etc.)
+	usageStore        *usage.Store                   // nil = no usage recording
+	pricing           map[string]config.PricingEntry // model→cost for usage recording
 
 	// Capability tags — per-session tool/talent filtering.
 	//
@@ -263,6 +266,14 @@ func (l *Loop) SetCapabilityTags(capTags map[string]config.CapabilityTagConfig, 
 			l.activeTags[tag] = true
 		}
 	}
+}
+
+// SetUsageRecorder configures persistent token usage recording. When
+// set, every LLM completion in the agent loop is persisted for cost
+// attribution and analysis.
+func (l *Loop) SetUsageRecorder(store *usage.Store, pricing map[string]config.PricingEntry) {
+	l.usageStore = store
+	l.pricing = pricing
 }
 
 // ActiveTags returns the set of currently active capability tags.
@@ -676,6 +687,8 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			"output_tokens", llmResp.OutputTokens,
 			"elapsed", time.Since(startTime).Round(time.Millisecond),
 		)
+
+		l.recordUsage(ctx, req, llmResp.Model, llmResp.InputTokens, llmResp.OutputTokens, convID, sessionTag, requestID)
 
 		return &Response{
 			Content:      llmResp.Message.Content,
@@ -1148,6 +1161,8 @@ iterLoop:
 			"context_tokens", l.memory.GetTokenCount(convID),
 		)
 
+		l.recordUsage(ctx, req, model, totalInputTokens, totalOutputTokens, convID, sessionTag, requestID)
+
 		return resp, nil
 	}
 
@@ -1205,6 +1220,8 @@ iterLoop:
 			"output_tokens", totalOutputTokens,
 			"elapsed", elapsed.Round(time.Millisecond),
 		)
+
+		l.recordUsage(ctx, req, model, totalInputTokens, totalOutputTokens, convID, sessionTag, requestID)
 
 		return resp, nil
 	}
@@ -1515,4 +1532,57 @@ func recentSlice(msgs []memory.Message, n int) []memory.Message {
 		return msgs
 	}
 	return msgs[len(msgs)-n:]
+}
+
+// recordUsage persists a usage record for a completed LLM interaction.
+// No-op when usage recording is not configured. Errors are logged but
+// do not affect the caller.
+func (l *Loop) recordUsage(ctx context.Context, req *Request, model string, totalIn, totalOut int, convID, sessionTag, requestID string) {
+	if l.usageStore == nil {
+		return
+	}
+
+	role := "interactive"
+	taskName := ""
+	if req.SkipContext {
+		role = "auxiliary"
+	}
+	if req.Hints != nil {
+		if req.Hints["source"] == "scheduler" {
+			role = "scheduled"
+			taskName = req.Hints["task"]
+		}
+	}
+
+	cost := usage.ComputeCost(model, totalIn, totalOut, l.pricing)
+	rec := usage.Record{
+		Timestamp:      time.Now(),
+		RequestID:      requestID,
+		SessionID:      sessionTag,
+		ConversationID: convID,
+		Model:          model,
+		Provider:       resolveProvider(model),
+		InputTokens:    totalIn,
+		OutputTokens:   totalOut,
+		CostUSD:        cost,
+		Role:           role,
+		TaskName:       taskName,
+	}
+
+	if err := l.usageStore.Record(ctx, rec); err != nil {
+		l.logger.Warn("failed to record usage",
+			"error", err,
+			"request_id", requestID,
+		)
+	}
+}
+
+// resolveProvider infers the LLM provider from the model name. Models
+// starting with "claude-" are Anthropic; everything else is assumed to
+// be Ollama (local).
+func resolveProvider(model string) string {
+	if strings.HasPrefix(model, "claude-") {
+		return "anthropic"
+	}
+	return "ollama"
 }

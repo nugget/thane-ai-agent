@@ -192,6 +192,11 @@ type Config struct {
 	// system's local timezone is used.
 	Timezone string `yaml:"timezone"`
 
+	// Pricing maps model names to their per-million-token costs (USD).
+	// When empty, built-in defaults for known Anthropic models are applied.
+	// Local/Ollama models not listed here default to $0.
+	Pricing map[string]PricingEntry `yaml:"pricing"`
+
 	// LogLevel sets the minimum log level. Valid values: trace, debug,
 	// info, warn, error. Default: info. See [ParseLogLevel].
 	LogLevel string `yaml:"log_level"`
@@ -200,6 +205,12 @@ type Config struct {
 	// Default: text. Text is human-readable; JSON enables structured
 	// log aggregation (Loki, Datadog, jq, etc.).
 	LogFormat string `yaml:"log_format"`
+}
+
+// PricingEntry defines per-million-token costs for a model in USD.
+type PricingEntry struct {
+	InputPerMillion  float64 `yaml:"input_per_million"`
+	OutputPerMillion float64 `yaml:"output_per_million"`
 }
 
 // ListenConfig configures an HTTP server's bind address and port.
@@ -850,6 +861,14 @@ func (c *Config) applyDefaults() {
 
 	if c.Debug.DumpSystemPrompt && c.Debug.DumpDir == "" {
 		c.Debug.DumpDir = "./debug"
+	}
+
+	if c.Pricing == nil {
+		c.Pricing = map[string]PricingEntry{
+			"claude-opus-4-20250514":   {InputPerMillion: 15.0, OutputPerMillion: 75.0},
+			"claude-sonnet-4-20250514": {InputPerMillion: 3.0, OutputPerMillion: 15.0},
+			"claude-haiku-3-20240307":  {InputPerMillion: 0.25, OutputPerMillion: 1.25},
+		}
 	}
 
 	// Backward compat: migrate deprecated iter0_tools → orchestrator_tools.

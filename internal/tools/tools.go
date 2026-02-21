@@ -17,6 +17,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/scheduler"
 	"github.com/nugget/thane-ai-agent/internal/search"
+	"github.com/nugget/thane-ai-agent/internal/usage"
 	"github.com/nugget/thane-ai-agent/internal/watchlist"
 )
 
@@ -42,6 +43,7 @@ type Registry struct {
 	shellExec         *ShellExec
 	watchlistStore    *watchlist.Store
 	tempFileStore     *TempFileStore
+	usageStore        *usage.Store
 }
 
 // NewEmptyRegistry creates an empty tool registry with no built-in tools.
@@ -118,6 +120,13 @@ func (r *Registry) SetTempFileStore(tfs *TempFileStore) {
 // loop for cleanup.
 func (r *Registry) TempFileStore() *TempFileStore {
 	return r.tempFileStore
+}
+
+// SetUsageStore adds the cost_summary tool to the registry so the agent
+// can query its own token usage and API costs.
+func (r *Registry) SetUsageStore(store *usage.Store) {
+	r.usageStore = store
+	r.registerCostSummary()
 }
 
 func (r *Registry) registerTempFileTool() {

@@ -65,6 +65,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/talents"
 	"github.com/nugget/thane-ai-agent/internal/tools"
 	"github.com/nugget/thane-ai-agent/internal/unifi"
+	"github.com/nugget/thane-ai-agent/internal/usage"
 	"github.com/nugget/thane-ai-agent/internal/watchlist"
 
 	_ "github.com/mattn/go-sqlite3" // SQLite driver for database/sql
@@ -617,6 +618,16 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	}
 	defer opStore.Close()
 
+	// --- Usage tracking ---
+	// Persistent token usage and cost recording for attribution and
+	// analysis. Append-only SQLite store, queried via the cost_summary tool.
+	usageStore, err := usage.NewStore(filepath.Join(cfg.DataDir, "usage.db"))
+	if err != nil {
+		return fmt.Errorf("open usage database: %w", err)
+	}
+	defer usageStore.Close()
+	logger.Info("usage store initialized", "path", filepath.Join(cfg.DataDir, "usage.db"))
+
 	// Forward-declare task execution dependencies so the executeTask
 	// closure can reference them. All fields are populated before the
 	// scheduler fires its first task.
@@ -963,6 +974,12 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		)
 	}
 
+	// --- Usage recording ---
+	// Wire persistent token usage recording into the agent loop and
+	// register the cost_summary tool so the agent can query its own spend.
+	loop.SetUsageRecorder(usageStore, cfg.Pricing)
+	loop.Tools().SetUsageStore(usageStore)
+
 	// --- Shell exec ---
 	// Optional and disabled by default. When enabled, the agent can
 	// execute shell commands on the host, subject to allow/deny lists.
@@ -1275,6 +1292,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	delegateExec := delegate.NewExecutor(logger, llmClient, rtr, loop.Tools(), cfg.Models.Default)
 	delegateExec.SetTimezone(cfg.Timezone)
 	delegateExec.SetStore(delegationStore)
+	delegateExec.SetUsageRecorder(usageStore, cfg.Pricing)
 	if tfs := loop.Tools().TempFileStore(); tfs != nil {
 		delegateExec.SetTempFileStore(tfs)
 	}
@@ -1570,7 +1588,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// --- API server ---
 	// The primary HTTP server exposing the OpenAI-compatible chat API,
 	// health endpoint, router introspection, and the web UI.
-	server := api.NewServer(cfg.Listen.Address, cfg.Listen.Port, loop, rtr, logger)
+	server := api.NewServer(cfg.Listen.Address, cfg.Listen.Port, loop, rtr, cfg.Pricing, logger)
 	server.SetMemoryStore(mem)
 	server.SetArchiveStore(archiveStore)
 	server.SetConnManager(func() map[string]api.DependencyStatus {
