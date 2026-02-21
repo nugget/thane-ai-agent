@@ -82,7 +82,7 @@ func runScheduledTask(ctx context.Context, task *scheduler.Task, exec *scheduler
 			exec.Result = "no new messages"
 			return nil // nothing new, skip the LLM wake
 		}
-		msg = wakeMsg
+		msg = prompts.EmailPollWakePrompt(wakeMsg)
 	}
 
 	// Context injection for periodic_reflection: read ego.md and build

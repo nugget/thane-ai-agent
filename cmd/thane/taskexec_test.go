@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/nugget/thane-ai-agent/internal/agent"
+	"github.com/nugget/thane-ai-agent/internal/prompts"
 	"github.com/nugget/thane-ai-agent/internal/router"
 	"github.com/nugget/thane-ai-agent/internal/scheduler"
 )
@@ -445,8 +446,9 @@ func TestRunScheduledTask_EmailPoll_NewMessages(t *testing.T) {
 	if runner.req == nil {
 		t.Fatal("runner.Run should have been called")
 	}
-	if runner.req.Messages[0].Content != poller.msg {
-		t.Errorf("message = %q, want poller message", runner.req.Messages[0].Content)
+	wantMsg := prompts.EmailPollWakePrompt(poller.msg)
+	if runner.req.Messages[0].Content != wantMsg {
+		t.Errorf("message = %q, want wrapped poller message", runner.req.Messages[0].Content)
 	}
 	if exec.Result != "triaged email" {
 		t.Errorf("exec.Result = %q, want %q", exec.Result, "triaged email")

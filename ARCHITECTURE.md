@@ -48,12 +48,28 @@ Memory isn't bolted on — it's foundational:
 - **Semantic facts** — Learned knowledge with embeddings for natural language recall
 - **Conversations** — Context that persists across sessions
 - **Checkpoints** — Full state snapshots for crash recovery
+- **Archives** — Searchable conversation history with tool call preservation
+- **Episodic summaries** — Post-session analysis for long-term memory consolidation
 
 Memory is queryable: the agent can ask "what do I know about the garage?" and get structured answers through semantic search.
 
 ### Talent-Driven Behavior
 
 Agent personality and behavioral guidance live in markdown files (`talents/`). This keeps behavior transparent, editable, and version-controlled. Natural language is the configuration mechanism — it carries nuance that structured config cannot.
+
+Talents are **tag-filtered** — each talent can declare which capability tags it requires (via YAML frontmatter). A talent tagged `[email]` only loads when the `email` tag is active, keeping context lean.
+
+### Contact Directory
+
+Thane maintains a persistent contact database — every person the agent interacts with gets a record. Contacts store names, communication addresses, relationship context, and a **trust zone** classification. The agent can create, update, and query contacts through dedicated tools. This is the foundation for personalized behavior: Thane knows who it's talking to and adjusts accordingly.
+
+### Trust Zones
+
+Every contact has a trust zone: `owner`, `trusted`, or `known`. Trust zones are the universal router — they gate:
+
+- **Email send** — owner/trusted send freely, known requires confirmation, unknown blocked
+- **Compute allocation** — owner/trusted get frontier models, others get local triage first
+- **Proactive behavior** — how much initiative the agent takes depends on who's asking
 
 ### Dual-Port Architecture
 
@@ -73,32 +89,37 @@ This means Thane works with HA out of the box — no custom integration needed.
 │                                                                    │
 │  ┌──────────────┐  ┌──────────────┐  ┌─────────────────────────┐  │
 │  │  Native API  │  │ Ollama-Compat│  │     Event Sources       │  │
-│  │  (port 8080) │  │ (port 11434) │  │  HA WebSocket │ MQTT    │  │
-│  └──────┬───────┘  └──────┬───────┘  │  (state_changed)│(Frigate)│ │
+│  │  (port 8080) │  │ (port 11434) │  │  HA WS │ MQTT │ Email  │  │
+│  └──────┬───────┘  └──────┬───────┘  │  Scheduler │ Anticip.  │  │
 │         │                 │          └────────┬────────────────┘  │
 │         └─────────────────┼───────────────────┘                   │
 │                           ▼                                        │
 │  ┌─────────────────────────────────────────────────────────────┐  │
 │  │                      Agent Loop                              │  │
 │  │                                                              │  │
-│  │  Context Assembly → Planning → Delegation → Response         │  │
-│  │        ↑                          │                          │  │
-│  │    Talents &                 ┌────┴─────┐                    │  │
-│  │    Memory                    ↓          ↓                    │  │
-│  │                         Direct      Delegate                 │  │
-│  │                        (primary)   (local model)             │  │
+│  │  Context Assembly → Tag Activation → Planning → Delegation   │  │
+│  │        ↑                                  │                  │  │
+│  │    Talents &                          ┌───┴────┐             │  │
+│  │    Memory &                           ↓        ↓             │  │
+│  │    Contacts                      Direct    Delegate          │  │
+│  │                                (orchestr.) (local model)     │  │
 │  └─────────────────────────────────────────────────────────────┘  │
 │         │                │                    │                     │
 │         ▼                ▼                    ▼                     │
 │  ┌─────────────┐  ┌────────────┐  ┌───────────────────────────┐  │
 │  │   Memory    │  │   Model    │  │      Integrations         │  │
 │  │   Store     │  │   Router   │  │  HA (REST/WS) │ MCP Host  │  │
-│  │  (SQLite)   │  │ (profiles) │  │  Shell │ Files │ Search   │  │
+│  │  (SQLite)   │  │ (scoring)  │  │  Email (IMAP/SMTP)        │  │
+│  └─────────────┘  └────────────┘  │  Shell │ Files │ Search   │  │
+│                                    └───────────────────────────┘  │
+│  ┌─────────────┐  ┌────────────┐  ┌───────────────────────────┐  │
+│  │ Anticipation│  │  Scheduler │  │      Contacts &           │  │
+│  │   Engine    │  │  (cron)    │  │     Trust Zones           │  │
 │  └─────────────┘  └────────────┘  └───────────────────────────┘  │
 │                                                                    │
 │  ┌─────────────┐  ┌────────────┐  ┌───────────────────────────┐  │
-│  │ Anticipation│  │  Scheduler │  │   MQTT Publisher          │  │
-│  │   Engine    │  │  (cron)    │  │   (sensor telemetry)      │  │
+│  │   OpState   │  │    MQTT    │  │    Self-Reflection        │  │
+│  │  (KV store) │  │ Publisher  │  │    (ego.md)               │  │
 │  └─────────────┘  └────────────┘  └───────────────────────────┘  │
 │                                                                    │
 └───────────────────────────────────────────────────────────────────┘
@@ -110,49 +131,144 @@ This means Thane works with HA out of the box — no custom integration needed.
 
 The core reasoning cycle:
 
-1. **Context Assembly** — Gather relevant memory, talents, and the current request
-2. **Planning** — Determine what information or actions are needed
-3. **Delegation** — Primary model orchestrates; tool-heavy work is delegated to local models
-4. **Tool Execution** — Run tool calls (parallel where possible), via native tools or MCP
-5. **Response Shaping** — Format output for the requesting interface
+1. **Context Assembly** — Gather relevant memory, talents, contacts, and the current request. Inject context usage line showing token consumption.
+2. **Tag Activation** — Determine which capability tags are active for this session. Tags control which tools and talents are visible.
+3. **Planning** — Determine what information or actions are needed
+4. **Delegation** — Orchestrator model plans; tool-heavy work is delegated to local models with execution summaries
+5. **Tool Execution** — Run tool calls (parallel where possible), via native tools or MCP
+6. **Response Shaping** — Format output for the requesting interface
+
+### Capability Tag System
+
+Tools and talents are organized by **semantic tags** (`ha`, `email`, `signal`, `github`, `web`, etc.). Sessions start with a minimal set of `always_active` tags (core tools like memory, files, planning). Additional tags are activated on demand — either by the agent, the user, or automatically by the channel.
+
+This creates **delegation pressure by architecture**: the orchestrator model starts with ~15-20 tools instead of 60+, naturally reaching for `thane_delegate` when it needs capabilities outside its active set.
+
+Tags are defined in config:
+```yaml
+capability_tags:
+  ha:
+    description: "Home Assistant device control and monitoring"
+    tools: [control_device, find_entity, get_state, list_entities, call_service]
+  email:
+    description: "Email reading, sending, and management"
+    tools: [email_list, email_read, email_search, email_folders, email_mark, email_send, email_reply, email_move]
+  memory:
+    description: "Fact storage and recall"
+    tools: [remember_fact, recall_fact, forget_fact]
+    always_active: true
+```
 
 ### Delegation System
 
-The primary model (cloud or large local) focuses on reasoning and orchestration. When tool-heavy work is needed — HA queries, file operations, shell commands — it delegates to smaller, faster local models that execute the task and return results.
+The orchestrator model (cloud or large local) focuses on reasoning and orchestration. When tool-heavy work is needed — HA queries, file operations, shell commands — it delegates to smaller, faster local models that execute the task and return structured execution summaries (iteration count, tool call trace, errors, duration).
 
-This creates a cost/performance sweet spot: frontier-model intelligence for planning, local-model efficiency for execution. A 20B parameter model running locally can search HA entities, call services, and verify results at zero API cost.
+Delegate profiles control routing hints:
+- **general** — quality_floor=5, prefer_speed=true (fast local models for file checks, web searches)
+- **ha** — quality_floor=4, prefer_speed=true (device control needs speed, not deep reasoning)
 
-Delegation is guided by **talents** — markdown files that teach the primary model how to write effective delegation prompts, which tools are available to delegates, and what patterns to follow (e.g., search → act → verify for HA device control).
+Delegation is guided by **talents** — markdown files that teach the orchestrator how to write effective delegation prompts, which tools are available to delegates, and what patterns to follow.
+
+### Contact Directory & Trust Zones
+
+Persistent contacts database (`contacts.db`) with:
+
+- **Trust zones** — `owner`, `trusted`, `known` (validated, with migration from freeform facts)
+- **Contact facts** — flexible key-value pairs per contact (email, phone, role, preferences)
+- **Context injection** — contacts with `[trusted]` tag injected into system prompt for active channels
+- **`FindByTrustZone`** — query method for bulk operations (email triage, compute routing)
+- **`FindByFact`** — lookup contacts by email address, phone number, or any fact key
+
+Trust zones gate behavior across the system — email send permissions, model selection for inbound messages, and proactive behavior thresholds.
+
+### Native Email
+
+Full IMAP/SMTP email support (`internal/email/`):
+
+**Read-side (IMAP):**
+- `email_list` — browse messages with unseen filtering
+- `email_read` — fetch full message with MIME body parsing (handles nested multipart, unknown charsets)
+- `email_search` — server-side IMAP search
+- `email_folders` — list available mailboxes
+- `email_mark` — flag/unflag, mark read/unread
+- `email_move` — move messages between folders (uses IMAP MOVE extension with COPY+DELETE fallback)
+
+**Write-side (SMTP):**
+- `email_send` — compose new email with markdown-to-MIME conversion (multipart/alternative: text/plain + text/html via goldmark)
+- `email_reply` — reply with proper threading headers (In-Reply-To, References)
+
+**Infrastructure:**
+- Multi-account support with lazy IMAP connections and connwatch health monitoring
+- Trust zone gating on all outbound recipients
+- Auto-Bcc owner for audit trail
+- Sent folder storage via IMAP APPEND
+- Email polling via scheduler with opstate high-water marks
 
 ### Tools
 
 **Native Tools:**
 
-| Tool | Description |
-|------|-------------|
-| `control_device` | Natural language device control with fuzzy entity matching |
-| `find_entity` | Smart entity discovery across all HA domains |
-| `get_state` | Current state of any entity (returns 404 for nonexistent entities) |
-| `list_entities` | Browse entities by domain or pattern |
-| `call_service` | Direct HA service invocation |
-| `thane_delegate` | Delegate tool-heavy tasks to local models |
-| `remember_fact` | Store knowledge with semantic embeddings |
-| `recall_fact` | Retrieve knowledge by category or natural language |
-| `forget_fact` | Remove stored knowledge |
-| `archive_search` | Full-text search across conversation history |
-| `session_working_memory` | Read/write scratchpad for active session context |
-| `schedule_task` | Time-based future actions |
-| `create_anticipation` | Event-based triggers |
-| `web_search` | Search the web via SearXNG or Brave Search |
-| `web_fetch` | Fetch and extract readable content from a URL |
-| `exec` | Host shell command execution (configurable safety) |
-| `read_file` / `write_file` / `edit_file` | Workspace file operations |
+| Tool | Tag | Description |
+|------|-----|-------------|
+| `control_device` | ha | Natural language device control with fuzzy matching |
+| `find_entity` | ha | Smart entity discovery across all HA domains |
+| `get_state` | ha | Current state of any entity |
+| `list_entities` | ha | Browse entities by domain or pattern |
+| `call_service` | ha | Direct HA service invocation |
+| `email_list` | email | List messages in a folder |
+| `email_read` | email | Read message with full body |
+| `email_search` | email | Server-side IMAP search |
+| `email_folders` | email | List available mailboxes |
+| `email_mark` | email | Flag/unflag messages |
+| `email_send` | email | Compose and send (markdown → MIME) |
+| `email_reply` | email | Reply with threading |
+| `email_move` | email | Move messages between folders |
+| `thane_delegate` | always | Delegate tasks to local models |
+| `remember_fact` | memory | Store knowledge with embeddings |
+| `recall_fact` | memory | Retrieve knowledge by category or search |
+| `forget_fact` | memory | Remove stored knowledge |
+| `save_contact` | contacts | Create or update contacts |
+| `get_contact` | contacts | Look up contact details |
+| `archive_search` | always | Full-text search across conversation history |
+| `session_working_memory` | always | Read/write scratchpad for active session |
+| `session_close` | always | Close session with carry-forward context |
+| `session_checkpoint` | always | Save current session state |
+| `schedule_task` | planning | Time-based future actions |
+| `create_anticipation` | planning | Event-based triggers with routing hints |
+| `activate_tags` | always | Enable capability tags for current session |
+| `web_search` | web | Search via SearXNG or Brave |
+| `web_fetch` | web | Extract readable content from URLs |
+| `exec` | shell | Host shell command execution |
+| `read_file` / `write_file` / `edit_file` | files | Workspace file operations |
 
 **MCP Tools (via Model Context Protocol):**
 
-Thane hosts MCP servers as subprocesses, bridging their tools into the agent loop. Example: [ha-mcp](https://github.com/karimkhaleel/ha-mcp) provides 90+ Home Assistant tools — search, state queries, service calls, camera images, automation traces, and more.
+Thane hosts MCP servers as subprocesses, bridging their tools into the agent loop. Example: [ha-mcp](https://github.com/karimkhaleel/ha-mcp) provides 90+ Home Assistant tools. MCP tools are filtered via `include_tools` and assigned to capability tags.
 
-MCP tools are filtered via `include_tools` to keep delegate context manageable. Tool gating controls which tools are visible at each stage: the primary model sees orchestration tools (delegate, memory, archive); delegates see all execution tools (native + MCP).
+### Model Router
+
+Score-based routing that selects the right model for each task. Models are scored on quality (1-10), speed (1-10), and cost tier (1-5). Routing hints control selection:
+
+| Hint | Effect |
+|------|--------|
+| `quality_floor` | Minimum quality score (excludes cheaper models) |
+| `prefer_speed` | +15 scoring bonus for models with speed ≥ 7 |
+| `local_only` | Restrict to Ollama models (no cloud API calls) |
+| `model_preference` | Soft preference for a specific model |
+| `mission` | Task category for future routing policies |
+
+**Routing by code path:**
+
+| Path | Quality Floor | Speed Pref | Local Only | Rationale |
+|------|:---:|:---:|:---:|-----------|
+| Orchestrator (interactive) | — | — | — | User-facing, uses configured default |
+| Delegate (general) | 5 | ✓ | ✓ | File checks, web searches — speed matters |
+| Delegate (ha) | 4 | ✓ | ✓ | Device control — fast and cheap |
+| Session summarizer | 7 | — | ✓ | Long-term memory — quality matters |
+| Compaction summarizer | 7 | — | ✓ | In-conversation summaries — routed through router |
+| Self-reflection | 7 | — | — | Personality development — allows cloud |
+| Anticipation wake | 6 | — | ✓ | Event responses — per-anticipation overrides |
+| Scheduled tasks | — | — | — | Per-task model/routing overrides |
 
 ### Memory Store
 
@@ -161,71 +277,71 @@ SQLite-backed with optional vector search:
 - **Facts** — Categorized knowledge (user, home, device, routine, preference) with embeddings
 - **Conversations** — Full history with tool calls
 - **Checkpoints** — Compressed state snapshots triggered by message count, shutdown, or manual request
+- **Archives** — Searchable conversation history with full-text search
+- **Working Memory** — Per-session scratchpad cleared on session close
+- **Episodic Summaries** — Post-session analysis for long-term memory consolidation
 
-### Model Router
+### Self-Reflection
 
-Intent-based routing profiles select the right model for each task:
+Periodic scheduled task that analyzes recent interactions and updates `ego.md` — a machine-readable YAML file tracking behavioral patterns, personality traits, and growth areas. Runs daily on a quality-floor=7 model (typically Sonnet-class) to ensure nuanced self-analysis.
 
-| Profile | Intent | Typical Model |
-|---------|--------|---------------|
-| `latest` | Default conversation | Best local model |
-| `premium` | Complex reasoning, orchestration | Frontier cloud model |
-| `command` | Direct tool execution | Fast local model |
-| `trigger` | Event-driven responses | Fast local model |
-| `ops` | Infrastructure tasks (all tools visible) | Frontier cloud model |
-| `peer` | Cross-agent communication | Local model |
-| `local` | Force local-only | Best local model |
+Reflection is constrained to observation, not action: it reads files and memory tags but doesn't execute tools or interact with external systems.
 
-Profile names are vendor-neutral — they describe intent, not model names. The router maps profiles to specific models based on configured quality/speed scores, with automatic failover and checkpoint before model switch.
+### Operational State Store
+
+Generic namespaced KV store (`internal/opstate/`) for lightweight persistent state:
+
+- Email polling high-water marks (`email_poll/primary:INBOX`)
+- Future: feature flags, session preferences, poller cursors
+
+Schema: `(namespace, key, value, updated_at)` with namespace+key primary key. Not for structured domain data — those get their own stores.
+
+### Session Management
+
+Sessions can be explicitly managed by the agent:
+
+- **session_close** — End current session with a `carry_forward` note for the next session
+- **session_checkpoint** — Save state without closing (crash recovery)
+- **session_split** — Fork the session (post-split messages stay in memory)
+
+Context usage is injected into the system prompt so the agent can monitor its own token consumption and make informed decisions about when to checkpoint or close.
 
 ### Thane + Home Assistant (optional)
 
 When configured, deep HA integration via multiple protocols:
 
 - **REST API** — State queries, service calls, template rendering
-- **WebSocket API** — Persistent connection for real-time `state_changed` events, area/device/entity registry access. Client-side filtering by entity glob patterns (e.g., `person.*`, `binary_sensor.*door*`). This is the official HA event bus — the same mechanism used by the HA frontend and mobile apps.
-- **MCP** — [ha-mcp](https://github.com/karimkhaleel/ha-mcp) server provides 90+ tools for comprehensive HA interaction, bridged into the agent loop via stdio transport
-- **MQTT** — Thane publishes its own sensor telemetry (uptime, token usage, model info) as HA-discoverable MQTT entities. Also subscribes to Frigate events for NVR-driven triggers.
-
-**Protocol separation principle:** Each protocol is used for what it does best. WebSocket for HA state subscriptions (real-time, official API, no config changes to HA). MQTT for Frigate (publishes natively) and Thane's own telemetry. MCP for rich HA tool access. REST for simple queries.
-
-### Talent System
-
-Markdown files in `talents/` that guide agent behavior:
-
-- `conversational.md` — Tone and style
-- `time-awareness.md` — Timezone handling, natural time formatting
-- `spatial-reasoning.md` — Understanding home layout
-- `proactive-curiosity.md` — When to explore vs. wait
-- `channel-awareness.md` — Adapting to context (voice vs. text vs. chat)
-
-Talents are injected into the system prompt. Instance-specific talents can layer on top of upstream defaults.
+- **WebSocket API** — Persistent connection for real-time `state_changed` events, area/device/entity registry access. Client-side filtering by entity glob patterns.
+- **MCP** — [ha-mcp](https://github.com/karimkhaleel/ha-mcp) server provides 90+ tools for comprehensive HA interaction
+- **MQTT** — Thane publishes its own sensor telemetry as HA-discoverable entities. Subscribes to Frigate events for NVR-driven triggers.
 
 ### Anticipation Engine
 
-The anticipation system enables event-driven behavior. Rather than polling, Thane creates **anticipations** — conditions it's watching for — and resolves them when matching events arrive.
+Event-driven behavior through **anticipations** — conditions the agent watches for:
 
-- **Anticipations** are stored in SQLite with trigger conditions (entity patterns, state transitions)
-- **Event sources** feed the matcher: HA WebSocket `state_changed` events, MQTT messages (Frigate), scheduled wakes
-- **Resolution** triggers an agent loop run with context about what happened and why Thane was watching for it
-
-Example: Thane notices you left home (person tracker → `not_home`). It creates an anticipation for your return. When the person entity changes back to `home`, the anticipation fires, and Thane can welcome you back, report what happened while you were away, or adjust the house.
+- Stored in SQLite with trigger conditions (entity patterns, state transitions)
+- **Per-anticipation routing hints** — model, local_only, quality_floor stored at creation time
+- Event sources: HA WebSocket, MQTT, scheduled wakes
+- Resolution triggers an agent loop run with context about what happened and why
 
 ### Scheduler
 
-Time-based task execution with cron-style scheduling. Tasks can fire into the agent loop as wake events, enabling periodic behavior (heartbeat checks, memory consolidation, proactive notifications).
+Time-based task execution with cron-style scheduling. Tasks support:
+
+- **Model overrides** — specify which model handles the wake
+- **Routing hints** — quality_floor, local_only per task
+- **Wake payloads** — message string injected into agent context
+- Built-in tasks: `periodic_reflection`, `email_poll`
 
 ### MQTT Publisher
 
-Thane publishes its own operational telemetry as HA-discoverable MQTT entities:
+Thane publishes operational telemetry as HA-discoverable MQTT entities:
 
 - `sensor.aimee_thane_uptime` — service uptime
 - `sensor.aimee_thane_tokens_today` — daily token consumption
 - `sensor.aimee_thane_default_model` — current routing model
 - `sensor.aimee_thane_last_request` — timestamp of last interaction
 - `sensor.aimee_thane_version` — running version
-
-These appear automatically in HA via MQTT discovery, enabling dashboards and automations based on Thane's own state.
 
 ## Technology Choices
 
@@ -236,6 +352,9 @@ These appear automatically in HA via MQTT discovery, enabling dashboards and aut
 | **YAML** | Human-readable config with env var substitution |
 | **OpenAI-compatible API** | Broad ecosystem compatibility |
 | **Markdown talents** | Transparent, editable, version-controlled behavior |
+| **goldmark** | Markdown → HTML for email MIME conversion |
+| **go-message** | RFC 5322 MIME parsing and composition |
+| **go-imap/v2** | Modern IMAP client with extension support |
 
 ## Deployment
 
@@ -268,21 +387,18 @@ See [README.md](README.md) for detailed deployment instructions.
 ### Phase 2: Intelligence ✅
 - WebSocket client, model routing, checkpoint/restore, semantic memory, control_device, shell exec, web search (SearXNG + Brave), web fetch, Anthropic provider, httpkit networking layer
 
-### Phase 3: Autonomy 🚧
-- ✅ MCP host support ([ha-mcp](https://github.com/karimkhaleel/ha-mcp), extensible)
-- ✅ Delegation system (primary orchestrates, local models execute)
-- ✅ Intent-based routing profiles
-- ✅ MQTT publishing (Thane telemetry as HA entities)
-- ✅ Anticipation engine (event-driven triggers)
-- ✅ Task scheduler
-- ✅ Session archive with full-text search
-- ✅ Session working memory
-- 🚧 HA WebSocket state subscriptions (#176)
-- 🚧 Scheduler → agent loop wiring (#173)
-- ⬜ Email (IMAP/SMTP), TTS, voice pipeline integration
+### Phase 3: Autonomy ✅
+- MCP host support, delegation system with execution summaries, capability tag system, intent-based routing with quality/speed hints, MQTT publishing, anticipation engine with per-anticipation routing, task scheduler with model overrides, session archive with full-text search, session management tools, session working memory, self-reflection (ego.md), contact directory with trust zones, native email (IMAP read + SMTP send/reply/move), email polling with opstate KV store, context usage injection, inject_files hot-reload
 
-### Phase 4: Ecosystem
-- HA Add-on packaging, Apple ecosystem integration, multi-instance deployment, identity system
+### Phase 4: Visibility & Intelligence 🚧
+- ⬜ Web dashboard for operational visibility (#294)
+- ⬜ Dynamic model registry — hot-reloadable, no restart (#93)
+- ⬜ Email trust-zone triage on poll wake
+- ⬜ TTS, voice pipeline integration
+- ⬜ Git-backed identity store with cryptographic integrity (#43)
+
+### Phase 5: Ecosystem
+- HA Add-on packaging, Apple ecosystem integration, multi-instance deployment
 
 ## License
 
