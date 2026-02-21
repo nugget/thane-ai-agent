@@ -39,7 +39,7 @@ func TestRunScheduledTask_WakePayload(t *testing.T) {
 			Data: map[string]any{"message": "Check sensors and report."},
 		},
 	}
-	exec := &scheduler.Execution{}
+	exec := &scheduler.Execution{ID: "exec-aaa"}
 
 	err := runScheduledTask(context.Background(), task, exec, taskExecDeps{runner: runner, logger: slog.Default()})
 	if err != nil {
@@ -82,9 +82,9 @@ func TestRunScheduledTask_WakePayload(t *testing.T) {
 		t.Errorf("hint delegation_gating = %q, want %q", runner.req.Hints[router.HintDelegationGating], "disabled")
 	}
 
-	// Scheduled tasks should use an isolated conversation ID.
-	if runner.req.ConversationID != "sched-task-1" {
-		t.Errorf("ConversationID = %q, want %q", runner.req.ConversationID, "sched-task-1")
+	// Each execution should get a unique conversation ID (task + exec).
+	if runner.req.ConversationID != "sched-task-1-exec-aaa" {
+		t.Errorf("ConversationID = %q, want %q", runner.req.ConversationID, "sched-task-1-exec-aaa")
 	}
 
 	// Verify execution result was populated.
