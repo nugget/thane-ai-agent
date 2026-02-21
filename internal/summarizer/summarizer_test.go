@@ -363,6 +363,66 @@ func TestWorker_ClosesOrphanedSessions(t *testing.T) {
 	}
 }
 
+func TestWorker_EmptyTranscriptMarkedSummarized(t *testing.T) {
+	store := newTestStore(t)
+	mock := &mockLLMClient{}
+	rtr := newTestRouter()
+
+	// Create an ended session with message_count > 0 but no archived
+	// messages — simulates scheduler/delegate sessions that bump the
+	// counter without producing a user-visible transcript.
+	sess, err := store.StartSession("conv-empty")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.IncrementSessionCount(sess.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.EndSession(sess.ID, "test"); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := Config{
+		Interval:     time.Hour,
+		Timeout:      10 * time.Second,
+		PauseBetween: 1 * time.Millisecond,
+		BatchSize:    10,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	w := New(store, mock, rtr, slog.Default(), cfg)
+	w.Start(ctx)
+
+	// Give startup scan time to process.
+	time.Sleep(100 * time.Millisecond)
+
+	cancel()
+	w.Stop()
+
+	// LLM should never have been called — no transcript to summarize.
+	if mock.calls.Load() != 0 {
+		t.Errorf("expected 0 LLM calls for empty-transcript session, got %d", mock.calls.Load())
+	}
+
+	// Session should be marked as summarized (has a title now).
+	remaining, err := store.UnsummarizedSessions(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(remaining) != 0 {
+		t.Errorf("expected 0 unsummarized sessions, got %d", len(remaining))
+	}
+
+	// Verify the placeholder metadata was stored.
+	got, err := store.GetSession(sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Title != "(empty session)" {
+		t.Errorf("title = %q, want %q", got.Title, "(empty session)")
+	}
+}
+
 func TestBuildTranscript(t *testing.T) {
 	messages := []memory.ArchivedMessage{
 		{Role: "system", Content: "You are a helpful assistant.", Timestamp: time.Now()},

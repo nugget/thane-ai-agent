@@ -183,6 +183,24 @@ func (w *Worker) summarizeSession(ctx context.Context, sess *memory.Session) {
 	ctx, cancel := context.WithTimeout(ctx, w.config.Timeout)
 	defer cancel()
 
+	// Fetch transcript before routing a model — avoids wasting a router
+	// call on sessions that have no content to summarize.
+	messages, err := w.store.GetSessionTranscript(sess.ID)
+	if err != nil {
+		w.logger.Warn("failed to fetch transcript",
+			"session", memory.ShortID(sess.ID),
+			"error", err,
+		)
+		return
+	}
+	if len(messages) == 0 {
+		// Empty-transcript sessions (scheduler tasks, empty delegates)
+		// must be marked as summarized so they don't re-enter the queue
+		// on every scan cycle.
+		w.markEmpty(sess.ID)
+		return
+	}
+
 	// Route model selection through the router.
 	hints := map[string]string{
 		router.HintMission:      "background",
@@ -198,16 +216,6 @@ func (w *Worker) summarizeSession(ctx context.Context, sess *memory.Session) {
 		Priority: router.PriorityBackground,
 		Hints:    hints,
 	})
-
-	// Fetch transcript.
-	messages, err := w.store.GetSessionTranscript(sess.ID)
-	if err != nil || len(messages) == 0 {
-		w.logger.Warn("no transcript for session",
-			"session", memory.ShortID(sess.ID),
-			"error", err,
-		)
-		return
-	}
 
 	// Fetch tool calls (optional — not fatal if unavailable).
 	toolCalls, err := w.store.GetSessionToolCalls(sess.ID)
@@ -252,6 +260,26 @@ func (w *Worker) summarizeSession(ctx context.Context, sess *memory.Session) {
 		"title", title,
 		"model", model,
 		"tags", len(tags),
+	)
+}
+
+// markEmpty marks a session with no transcript as summarized so it is
+// excluded from future scans. A placeholder title and session type are
+// stored so the session is distinguishable from real summaries.
+func (w *Worker) markEmpty(sessionID string) {
+	meta := &memory.SessionMetadata{
+		OneLiner:    "Empty session (no transcript)",
+		SessionType: "empty",
+	}
+	if err := w.store.SetSessionMetadata(sessionID, meta, "(empty session)", nil); err != nil {
+		w.logger.Warn("failed to mark empty session",
+			"session", memory.ShortID(sessionID),
+			"error", err,
+		)
+		return
+	}
+	w.logger.Info("marked empty session as summarized",
+		"session", memory.ShortID(sessionID),
 	)
 }
 
