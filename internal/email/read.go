@@ -1,6 +1,7 @@
 package email
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -15,6 +16,13 @@ import (
 // maxBodySize is the maximum body size to include in a message.
 // Larger bodies are truncated with a note.
 const maxBodySize = 32 * 1024
+
+// maxRawMessageSize is the maximum raw RFC822 message size to buffer
+// when reading from the IMAP literal. Messages larger than this (e.g.
+// with huge attachments) are truncated — the remainder of the literal
+// is drained to keep the IMAP stream in sync. The parsed text body
+// is further truncated at maxBodySize by parseBody.
+const maxRawMessageSize = 5 * 1024 * 1024
 
 // ReadMessage fetches and parses a single message by UID from the
 // specified folder. The MIME structure is walked to extract text/plain
@@ -57,7 +65,7 @@ func (c *Client) ReadMessage(ctx context.Context, folder string, uid uint32) (*M
 	}
 
 	result := &Message{}
-	var bodyReader imap.LiteralReader
+	var rawBody []byte
 
 	for {
 		item := msg.Next()
@@ -94,13 +102,28 @@ func (c *Client) ReadMessage(ctx context.Context, folder string, uid uint32) (*M
 				}
 			}
 		case imapclient.FetchItemDataBodySection:
-			bodyReader = data.Literal
+			// Consume the literal immediately. go-imap/v2 streams
+			// data from the IMAP connection; msg.Next() advances
+			// past unread literals, so deferring the read would
+			// lose the body data.
+			if data.Literal == nil {
+				c.logger.Debug("nil body literal", "uid", uid)
+				continue
+			}
+			var readErr error
+			rawBody, readErr = io.ReadAll(io.LimitReader(data.Literal, maxRawMessageSize))
+			// Drain any remaining data so the IMAP stream stays in sync.
+			_, _ = io.Copy(io.Discard, data.Literal)
+			if readErr != nil {
+				c.logger.Debug("error reading body literal", "uid", uid, "error", readErr)
+				rawBody = nil
+			}
 		}
 	}
 
-	// Parse the message body.
-	if bodyReader != nil {
-		if err := c.parseBody(result, bodyReader); err != nil {
+	// Parse the message body from the buffered bytes.
+	if rawBody != nil {
+		if err := c.parseBody(result, bytes.NewReader(rawBody)); err != nil {
 			c.logger.Debug("body parse error", "uid", uid, "error", err)
 		}
 	}
