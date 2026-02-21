@@ -41,6 +41,7 @@ type Registry struct {
 	fileTools         *FileTools
 	shellExec         *ShellExec
 	watchlistStore    *watchlist.Store
+	tempFileStore     *TempFileStore
 }
 
 // NewEmptyRegistry creates an empty tool registry with no built-in tools.
@@ -102,6 +103,67 @@ func (r *Registry) SetFetcher(f *fetch.Fetcher) {
 		Description: "Fetch a web page and extract its readable text content. Use to read articles, documentation, or any web page. Complements web_search.",
 		Parameters:  fetch.ToolDefinition(),
 		Handler:     fetch.ToolHandler(f),
+	})
+}
+
+// SetTempFileStore adds the create_temp_file tool to the registry and
+// stores the reference for label expansion and cleanup.
+func (r *Registry) SetTempFileStore(tfs *TempFileStore) {
+	r.tempFileStore = tfs
+	r.registerTempFileTool()
+}
+
+// TempFileStore returns the temp file store, or nil if not configured.
+// Used by the delegate executor for label expansion and by the agent
+// loop for cleanup.
+func (r *Registry) TempFileStore() *TempFileStore {
+	return r.tempFileStore
+}
+
+func (r *Registry) registerTempFileTool() {
+	if r.tempFileStore == nil {
+		return
+	}
+
+	r.Register(&Tool{
+		Name: "create_temp_file",
+		Description: "Create a temporary file for passing structured content to delegates. " +
+			"Returns a semantic label (not a path). Reference the label as 'temp:LABEL' in " +
+			"delegate task descriptions — the system expands labels to actual paths before " +
+			"the delegate runs. Use this instead of file_write when passing data to delegates " +
+			"to keep conversation history clean.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"label": map[string]any{
+					"type":        "string",
+					"description": "Semantic label for the temp file (e.g., 'issue_body', 'review_comments'). Alphanumeric, underscore, and hyphen only.",
+				},
+				"content": map[string]any{
+					"type":        "string",
+					"description": "Content to write to the temp file. Written as-is — no encoding needed.",
+				},
+			},
+			"required": []string{"label", "content"},
+		},
+		Handler: func(ctx context.Context, args map[string]any) (string, error) {
+			label, _ := args["label"].(string)
+			content, _ := args["content"].(string)
+			if label == "" {
+				return "", fmt.Errorf("label is required")
+			}
+			if content == "" {
+				return "", fmt.Errorf("content is required")
+			}
+
+			convID := ConversationIDFromContext(ctx)
+			result, err := r.tempFileStore.Create(ctx, convID, label, content)
+			if err != nil {
+				return "", err
+			}
+
+			return fmt.Sprintf("Temp file created with label '%s' (%d bytes written). Reference it as 'temp:%s' in delegate task descriptions.", result, len(content), result), nil
+		},
 	})
 }
 

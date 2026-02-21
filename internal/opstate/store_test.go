@@ -197,6 +197,52 @@ func TestStore_PersistAcrossReopen(t *testing.T) {
 	}
 }
 
+func TestDeleteNamespace(t *testing.T) {
+	s := testStore(t)
+
+	// Populate two namespaces.
+	if err := s.Set("target", "a", "1"); err != nil {
+		t.Fatalf("Set(target/a): %v", err)
+	}
+	if err := s.Set("target", "b", "2"); err != nil {
+		t.Fatalf("Set(target/b): %v", err)
+	}
+	if err := s.Set("other", "c", "3"); err != nil {
+		t.Fatalf("Set(other/c): %v", err)
+	}
+
+	if err := s.DeleteNamespace("target"); err != nil {
+		t.Fatalf("DeleteNamespace: %v", err)
+	}
+
+	// Target namespace should be empty.
+	targetEntries, err := s.List("target")
+	if err != nil {
+		t.Fatalf("List(target): %v", err)
+	}
+	if len(targetEntries) != 0 {
+		t.Errorf("target namespace has %d entries after delete, want 0", len(targetEntries))
+	}
+
+	// Other namespace should be untouched.
+	otherVal, err := s.Get("other", "c")
+	if err != nil {
+		t.Fatalf("Get(other/c): %v", err)
+	}
+	if otherVal != "3" {
+		t.Errorf("other/c = %q, want %q (should be untouched)", otherVal, "3")
+	}
+}
+
+func TestDeleteNamespace_Empty(t *testing.T) {
+	s := testStore(t)
+
+	// Deleting a non-existent namespace should not error.
+	if err := s.DeleteNamespace("nonexistent"); err != nil {
+		t.Errorf("DeleteNamespace(empty): %v", err)
+	}
+}
+
 func TestNewStore_InvalidPath_NoDir(t *testing.T) {
 	// Use a path where the parent directory doesn't exist.
 	dbPath := filepath.Join(t.TempDir(), "subdir", "nested", "db.sqlite")

@@ -48,6 +48,12 @@ type Result struct {
 	Duration      time.Duration     `json:"duration"`
 }
 
+// labelExpander expands temp file labels in task descriptions. Defined
+// as an interface to avoid a circular import between delegate and tools.
+type labelExpander interface {
+	ExpandLabels(convID, text string) string
+}
+
 // Executor runs delegated tasks using a lightweight iteration loop.
 type Executor struct {
 	logger       *slog.Logger
@@ -58,6 +64,7 @@ type Executor struct {
 	timezone     string
 	defaultModel string
 	store        *DelegationStore
+	tempFiles    labelExpander
 }
 
 // NewExecutor creates a delegate executor.
@@ -82,6 +89,16 @@ func (e *Executor) SetTimezone(tz string) {
 // [Executor.Execute] completion is recorded for replay and evaluation.
 func (e *Executor) SetStore(s *DelegationStore) {
 	e.store = s
+}
+
+// SetTempFileStore configures temp file label expansion for delegate
+// task descriptions. When set, occurrences of "temp:LABEL" in the task
+// and guidance strings are replaced with actual file paths before the
+// delegate LLM sees the message.
+func (e *Executor) SetTempFileStore(tfs interface {
+	ExpandLabels(convID, text string) string
+}) {
+	e.tempFiles = tfs
 }
 
 // ProfileNames returns the names of all registered profiles.
@@ -131,6 +148,15 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 	sb.WriteString(profile.SystemPrompt)
 	sb.WriteString("\n\n")
 	sb.WriteString(conditions.CurrentConditions(e.timezone))
+
+	// Expand temp file labels so the delegate sees real paths.
+	if e.tempFiles != nil {
+		convID := tools.ConversationIDFromContext(ctx)
+		task = e.tempFiles.ExpandLabels(convID, task)
+		if guidance != "" {
+			guidance = e.tempFiles.ExpandLabels(convID, guidance)
+		}
+	}
 
 	// Build user message.
 	var userMsg strings.Builder

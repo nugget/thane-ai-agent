@@ -1247,6 +1247,18 @@ func (l *Loop) GetContextWindow() int {
 func (l *Loop) ResetConversation(conversationID string) error {
 	l.archiveAndEndSession(conversationID, "reset")
 
+	// Clean up temp files for this conversation.
+	if l.tools != nil {
+		if tfs := l.tools.TempFileStore(); tfs != nil {
+			if err := tfs.Cleanup(conversationID); err != nil {
+				l.logger.Error("failed to clean up temp files on reset",
+					"conversation", conversationID,
+					"error", err,
+				)
+			}
+		}
+	}
+
 	if err := l.memory.Clear(conversationID); err != nil {
 		return err
 	}
@@ -1272,6 +1284,18 @@ func (l *Loop) CloseSession(conversationID, reason, carryForward string) error {
 
 	// Archive and end current session (same pattern as ResetConversation).
 	l.archiveAndEndSession(conversationID, reason)
+
+	// Clean up temp files for this conversation.
+	if l.tools != nil {
+		if tfs := l.tools.TempFileStore(); tfs != nil {
+			if err := tfs.Cleanup(conversationID); err != nil {
+				l.logger.Error("failed to clean up temp files on close",
+					"conversation", conversationID,
+					"error", err,
+				)
+			}
+		}
+	}
 
 	if err := l.memory.Clear(conversationID); err != nil {
 		return fmt.Errorf("clear memory: %w", err)

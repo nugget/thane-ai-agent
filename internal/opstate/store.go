@@ -101,6 +101,19 @@ func (s *Store) Delete(namespace, key string) error {
 	return nil
 }
 
+// DeleteNamespace removes all entries for a namespace. No error is
+// returned if the namespace has no entries.
+func (s *Store) DeleteNamespace(namespace string) error {
+	_, err := s.db.Exec(
+		`DELETE FROM operational_state WHERE namespace = ?`,
+		namespace,
+	)
+	if err != nil {
+		return fmt.Errorf("delete namespace %s: %w", namespace, err)
+	}
+	return nil
+}
+
 // List returns all key/value pairs for a namespace. Returns an empty
 // (non-nil) map if the namespace has no entries.
 func (s *Store) List(namespace string) (map[string]string, error) {
