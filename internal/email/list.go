@@ -43,11 +43,16 @@ func (c *Client) ListMessages(ctx context.Context, opts ListOptions) ([]Envelope
 	if opts.Unseen {
 		criteria.NotFlag = append(criteria.NotFlag, imap.FlagSeen)
 	}
-	// NOTE: We intentionally do NOT use IMAP UID-range search (UID X:*)
-	// because RFC 9051 §6.4.4 specifies that * resolves to the highest
-	// existing UID. When Start > highest UID, the range is swapped and
-	// the highest UID is always returned — even when there are no new
-	// messages. Instead, we search all UIDs and filter client-side.
+	// When SinceUID is set, use a server-side UID range to narrow the
+	// search (avoids transferring every UID in large mailboxes). The
+	// IMAP UID X:* range always matches at least the highest UID per
+	// RFC 9051 §6.4.4 (when Start > highest, the range is swapped), so
+	// we also filter client-side to exclude UIDs ≤ the threshold.
+	if opts.SinceUID > 0 {
+		criteria.UID = []imap.UIDSet{
+			{imap.UIDRange{Start: imap.UID(opts.SinceUID + 1), Stop: 0}},
+		}
+	}
 
 	searchCmd := c.client.UIDSearch(criteria, nil)
 	searchData, err := searchCmd.Wait()
@@ -67,9 +72,11 @@ func (c *Client) ListMessages(ctx context.Context, opts ListOptions) ([]Envelope
 		return cmp.Compare(a, b)
 	})
 
-	// When SinceUID is set, filter client-side to UIDs strictly greater
-	// than the threshold, then return all matches (no limit).
-	// Otherwise take the most recent N UIDs (highest UIDs = newest).
+	// When SinceUID is set, apply a client-side filter as well. The
+	// server-side UID X:* range narrows results efficiently, but per
+	// RFC 9051 §6.4.4 it always includes at least the highest UID even
+	// when no truly new messages exist. This filter removes that phantom.
+	// Without SinceUID, take the most recent N UIDs (highest = newest).
 	var recentUIDs []imap.UID
 	if opts.SinceUID > 0 {
 		threshold := imap.UID(opts.SinceUID)
@@ -84,6 +91,10 @@ func (c *Client) ListMessages(ctx context.Context, opts ListOptions) ([]Envelope
 			start = len(allUIDs) - limit
 		}
 		recentUIDs = allUIDs[start:]
+	}
+
+	if len(recentUIDs) == 0 {
+		return nil, nil
 	}
 
 	// Build UID set for fetch.

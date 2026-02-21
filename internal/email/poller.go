@@ -159,7 +159,9 @@ func (p *Poller) checkAccount(ctx context.Context, accountName string) (string, 
 
 	// Always advance the high-water mark based on ALL fetched messages
 	// (before filtering) so self-sent messages don't re-appear.
-	p.advanceHighWaterMark(accountName, stateKey, storedUID, newMessages)
+	if err := p.advanceHighWaterMark(accountName, stateKey, storedUID, newMessages); err != nil {
+		return "", err
+	}
 
 	// Filter out self-sent messages so the agent doesn't triage its
 	// own replies. Compare the From address against the account's
@@ -199,12 +201,13 @@ func (p *Poller) filterSelfSent(accountName string, messages []Envelope) []Envel
 }
 
 // advanceHighWaterMark updates the stored high-water mark to the highest
-// UID in the result set, but never decreases it. Messages are in
-// newest-first order, so index 0 has the highest UID.
-func (p *Poller) advanceHighWaterMark(accountName, stateKey string, currentMark uint64, allNew []Envelope) {
+// UID found in the result set, but never decreases it. The function
+// scans all messages to determine the maximum UID rather than relying
+// on any particular ordering of the input slice.
+func (p *Poller) advanceHighWaterMark(accountName, stateKey string, currentMark uint64, allNew []Envelope) error {
 	// Find the highest UID across all fetched messages (including
-	// self-sent ones that were filtered). We scan all rather than
-	// trusting sort order as a defensive measure.
+	// self-sent ones that will be filtered later). We scan all rather
+	// than trusting sort order as a defensive measure.
 	var highest uint64
 	for _, env := range allNew {
 		if uint64(env.UID) > highest {
@@ -215,7 +218,7 @@ func (p *Poller) advanceHighWaterMark(accountName, stateKey string, currentMark 
 	// Never decrease — UIDs can disappear when messages are moved/deleted
 	// but the mark must only advance.
 	if highest <= currentMark {
-		return
+		return nil
 	}
 
 	p.logger.Debug("advancing high-water mark",
@@ -225,11 +228,9 @@ func (p *Poller) advanceHighWaterMark(accountName, stateKey string, currentMark 
 	)
 
 	if err := p.state.Set(pollNamespace, stateKey, strconv.FormatUint(highest, 10)); err != nil {
-		p.logger.Warn("failed to update high-water mark",
-			"account", accountName,
-			"error", err,
-		)
+		return fmt.Errorf("update high-water mark %q: %w", stateKey, err)
 	}
+	return nil
 }
 
 // formatPollSection builds a wake message section for new messages on

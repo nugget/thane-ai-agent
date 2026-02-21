@@ -168,10 +168,12 @@ func TestAdvanceHighWaterMark_Increases(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	p.advanceHighWaterMark("test", "test:INBOX", 100, []Envelope{
+	if err := p.advanceHighWaterMark("test", "test:INBOX", 100, []Envelope{
 		{UID: 105},
 		{UID: 103},
-	})
+	}); err != nil {
+		t.Fatalf("advanceHighWaterMark: %v", err)
+	}
 
 	val, _ := state.Get(pollNamespace, "test:INBOX")
 	if val != "105" {
@@ -189,10 +191,12 @@ func TestAdvanceHighWaterMark_NeverDecreases(t *testing.T) {
 
 	// Simulate messages with lower UIDs (e.g., after moves/deletes
 	// changed what's in INBOX).
-	p.advanceHighWaterMark("test", "test:INBOX", 391, []Envelope{
+	if err := p.advanceHighWaterMark("test", "test:INBOX", 391, []Envelope{
 		{UID: 286},
 		{UID: 200},
-	})
+	}); err != nil {
+		t.Fatalf("advanceHighWaterMark: %v", err)
+	}
 
 	val, _ := state.Get(pollNamespace, "test:INBOX")
 	if val != "391" {
@@ -209,7 +213,9 @@ func TestAdvanceHighWaterMark_EmptyMessages(t *testing.T) {
 	}
 
 	// Empty message list should not change the mark.
-	p.advanceHighWaterMark("test", "test:INBOX", 100, nil)
+	if err := p.advanceHighWaterMark("test", "test:INBOX", 100, nil); err != nil {
+		t.Fatalf("advanceHighWaterMark: %v", err)
+	}
 
 	val, _ := state.Get(pollNamespace, "test:INBOX")
 	if val != "100" {
