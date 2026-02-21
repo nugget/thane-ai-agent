@@ -126,6 +126,9 @@ func (c *Client) parseBody(msg *Message, r io.Reader) error {
 		return fmt.Errorf("create mail reader: %w", err)
 	}
 	if mailReader == nil {
+		if err != nil {
+			return fmt.Errorf("create mail reader returned nil: %w", err)
+		}
 		return fmt.Errorf("create mail reader returned nil")
 	}
 	if err != nil {
