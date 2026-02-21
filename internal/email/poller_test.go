@@ -1,6 +1,7 @@
 package email
 
 import (
+	"log/slog"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -156,5 +157,123 @@ func TestNewPoller(t *testing.T) {
 	p := NewPoller(nil, state, nil)
 	if p == nil {
 		t.Error("NewPoller returned nil")
+	}
+}
+
+func TestAdvanceHighWaterMark_Increases(t *testing.T) {
+	state := testOpstate(t)
+	p := NewPoller(nil, state, nil)
+
+	if err := state.Set(pollNamespace, "test:INBOX", "100"); err != nil {
+		t.Fatal(err)
+	}
+
+	p.advanceHighWaterMark("test", "test:INBOX", 100, []Envelope{
+		{UID: 105},
+		{UID: 103},
+	})
+
+	val, _ := state.Get(pollNamespace, "test:INBOX")
+	if val != "105" {
+		t.Errorf("high-water mark = %q, want %q", val, "105")
+	}
+}
+
+func TestAdvanceHighWaterMark_NeverDecreases(t *testing.T) {
+	state := testOpstate(t)
+	p := NewPoller(nil, state, nil)
+
+	if err := state.Set(pollNamespace, "test:INBOX", "391"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate messages with lower UIDs (e.g., after moves/deletes
+	// changed what's in INBOX).
+	p.advanceHighWaterMark("test", "test:INBOX", 391, []Envelope{
+		{UID: 286},
+		{UID: 200},
+	})
+
+	val, _ := state.Get(pollNamespace, "test:INBOX")
+	if val != "391" {
+		t.Errorf("high-water mark should not decrease: got %q, want %q", val, "391")
+	}
+}
+
+func TestAdvanceHighWaterMark_EmptyMessages(t *testing.T) {
+	state := testOpstate(t)
+	p := NewPoller(nil, state, nil)
+
+	if err := state.Set(pollNamespace, "test:INBOX", "100"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Empty message list should not change the mark.
+	p.advanceHighWaterMark("test", "test:INBOX", 100, nil)
+
+	val, _ := state.Get(pollNamespace, "test:INBOX")
+	if val != "100" {
+		t.Errorf("high-water mark should not change with empty messages: got %q, want %q", val, "100")
+	}
+}
+
+func TestFilterSelfSent(t *testing.T) {
+	// Create a minimal manager with a configured account for testing.
+	cfg := Config{
+		Accounts: []AccountConfig{
+			{
+				Name:        "work",
+				IMAP:        IMAPConfig{Host: "imap.test.com", Port: 993, Username: "user"},
+				SMTP:        SMTPConfig{Host: "smtp.test.com", Port: 587, Username: "user", Password: "pass"},
+				DefaultFrom: "Thane Agent <thane@example.com>",
+			},
+		},
+	}
+	mgr := NewManager(cfg, slog.Default())
+
+	p := NewPoller(mgr, nil, nil)
+
+	messages := []Envelope{
+		{UID: 105, From: "alice@example.com", Subject: "Hello"},
+		{UID: 106, From: "Thane Agent <thane@example.com>", Subject: "Re: Hello"},
+		{UID: 107, From: "bob@example.com", Subject: "Meeting"},
+		{UID: 108, From: "thane@example.com", Subject: "Re: Meeting"},
+	}
+
+	filtered := p.filterSelfSent("work", messages)
+
+	if len(filtered) != 2 {
+		t.Fatalf("expected 2 messages after filtering, got %d", len(filtered))
+	}
+	if filtered[0].UID != 105 {
+		t.Errorf("first message UID = %d, want 105", filtered[0].UID)
+	}
+	if filtered[1].UID != 107 {
+		t.Errorf("second message UID = %d, want 107", filtered[1].UID)
+	}
+}
+
+func TestFilterSelfSent_NoDefaultFrom(t *testing.T) {
+	// When DefaultFrom is empty (no SMTP configured), all messages pass through.
+	cfg := Config{
+		Accounts: []AccountConfig{
+			{
+				Name: "readonly",
+				IMAP: IMAPConfig{Host: "imap.test.com", Port: 993, Username: "user"},
+				// No SMTP, no DefaultFrom.
+			},
+		},
+	}
+	mgr := NewManager(cfg, slog.Default())
+
+	p := NewPoller(mgr, nil, nil)
+
+	messages := []Envelope{
+		{UID: 100, From: "anyone@example.com"},
+	}
+
+	filtered := p.filterSelfSent("readonly", messages)
+	if len(filtered) != 1 {
+		t.Fatalf("expected 1 message (no filtering without DefaultFrom), got %d", len(filtered))
 	}
 }

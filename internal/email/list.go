@@ -1,8 +1,10 @@
 package email
 
 import (
+	"cmp"
 	"context"
 	"fmt"
+	"slices"
 
 	"github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapclient"
@@ -41,12 +43,11 @@ func (c *Client) ListMessages(ctx context.Context, opts ListOptions) ([]Envelope
 	if opts.Unseen {
 		criteria.NotFlag = append(criteria.NotFlag, imap.FlagSeen)
 	}
-	// UID-range filter: restrict to UIDs > SinceUID.
-	if opts.SinceUID > 0 {
-		criteria.UID = []imap.UIDSet{
-			{imap.UIDRange{Start: imap.UID(opts.SinceUID + 1), Stop: 0}},
-		}
-	}
+	// NOTE: We intentionally do NOT use IMAP UID-range search (UID X:*)
+	// because RFC 9051 §6.4.4 specifies that * resolves to the highest
+	// existing UID. When Start > highest UID, the range is swapped and
+	// the highest UID is always returned — even when there are no new
+	// messages. Instead, we search all UIDs and filter client-side.
 
 	searchCmd := c.client.UIDSearch(criteria, nil)
 	searchData, err := searchCmd.Wait()
@@ -59,10 +60,25 @@ func (c *Client) ListMessages(ctx context.Context, opts ListOptions) ([]Envelope
 		return nil, nil
 	}
 
-	// When SinceUID is set, return all matching UIDs (no limit).
+	// Sort UIDs ascending. Most IMAP servers return UIDs in ascending
+	// order, but the protocol doesn't guarantee it. Sorting defensively
+	// ensures the "take last N" logic below always picks the newest.
+	slices.SortFunc(allUIDs, func(a, b imap.UID) int {
+		return cmp.Compare(a, b)
+	})
+
+	// When SinceUID is set, filter client-side to UIDs strictly greater
+	// than the threshold, then return all matches (no limit).
 	// Otherwise take the most recent N UIDs (highest UIDs = newest).
-	recentUIDs := allUIDs
-	if opts.SinceUID == 0 {
+	var recentUIDs []imap.UID
+	if opts.SinceUID > 0 {
+		threshold := imap.UID(opts.SinceUID)
+		for _, uid := range allUIDs {
+			if uid > threshold {
+				recentUIDs = append(recentUIDs, uid)
+			}
+		}
+	} else {
 		start := 0
 		if len(allUIDs) > limit {
 			start = len(allUIDs) - limit
