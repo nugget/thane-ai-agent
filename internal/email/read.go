@@ -1,6 +1,7 @@
 package email
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -57,7 +58,7 @@ func (c *Client) ReadMessage(ctx context.Context, folder string, uid uint32) (*M
 	}
 
 	result := &Message{}
-	var bodyReader imap.LiteralReader
+	var rawBody []byte
 
 	for {
 		item := msg.Next()
@@ -94,13 +95,22 @@ func (c *Client) ReadMessage(ctx context.Context, folder string, uid uint32) (*M
 				}
 			}
 		case imapclient.FetchItemDataBodySection:
-			bodyReader = data.Literal
+			// Consume the literal immediately. go-imap/v2 streams
+			// data from the IMAP connection; msg.Next() advances
+			// past unread literals, so deferring the read would
+			// lose the body data.
+			var readErr error
+			rawBody, readErr = io.ReadAll(data.Literal)
+			if readErr != nil {
+				c.logger.Debug("error reading body literal", "uid", uid, "error", readErr)
+				rawBody = nil
+			}
 		}
 	}
 
-	// Parse the message body.
-	if bodyReader != nil {
-		if err := c.parseBody(result, bodyReader); err != nil {
+	// Parse the message body from the buffered bytes.
+	if rawBody != nil {
+		if err := c.parseBody(result, bytes.NewReader(rawBody)); err != nil {
 			c.logger.Debug("body parse error", "uid", uid, "error", err)
 		}
 	}
