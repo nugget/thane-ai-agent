@@ -1,8 +1,10 @@
 package email
 
 import (
+	"cmp"
 	"context"
 	"fmt"
+	"slices"
 
 	"github.com/emersion/go-imap/v2"
 	"github.com/emersion/go-imap/v2/imapclient"
@@ -41,7 +43,11 @@ func (c *Client) ListMessages(ctx context.Context, opts ListOptions) ([]Envelope
 	if opts.Unseen {
 		criteria.NotFlag = append(criteria.NotFlag, imap.FlagSeen)
 	}
-	// UID-range filter: restrict to UIDs > SinceUID.
+	// When SinceUID is set, use a server-side UID range to narrow the
+	// search (avoids transferring every UID in large mailboxes). The
+	// IMAP UID X:* range always matches at least the highest UID per
+	// RFC 9051 §6.4.4 (when Start > highest, the range is swapped), so
+	// we also filter client-side to exclude UIDs ≤ the threshold.
 	if opts.SinceUID > 0 {
 		criteria.UID = []imap.UIDSet{
 			{imap.UIDRange{Start: imap.UID(opts.SinceUID + 1), Stop: 0}},
@@ -59,15 +65,36 @@ func (c *Client) ListMessages(ctx context.Context, opts ListOptions) ([]Envelope
 		return nil, nil
 	}
 
-	// When SinceUID is set, return all matching UIDs (no limit).
-	// Otherwise take the most recent N UIDs (highest UIDs = newest).
-	recentUIDs := allUIDs
-	if opts.SinceUID == 0 {
+	// Sort UIDs ascending. Most IMAP servers return UIDs in ascending
+	// order, but the protocol doesn't guarantee it. Sorting defensively
+	// ensures the "take last N" logic below always picks the newest.
+	slices.SortFunc(allUIDs, func(a, b imap.UID) int {
+		return cmp.Compare(a, b)
+	})
+
+	// When SinceUID is set, apply a client-side filter as well. The
+	// server-side UID X:* range narrows results efficiently, but per
+	// RFC 9051 §6.4.4 it always includes at least the highest UID even
+	// when no truly new messages exist. This filter removes that phantom.
+	// Without SinceUID, take the most recent N UIDs (highest = newest).
+	var recentUIDs []imap.UID
+	if opts.SinceUID > 0 {
+		threshold := imap.UID(opts.SinceUID)
+		for _, uid := range allUIDs {
+			if uid > threshold {
+				recentUIDs = append(recentUIDs, uid)
+			}
+		}
+	} else {
 		start := 0
 		if len(allUIDs) > limit {
 			start = len(allUIDs) - limit
 		}
 		recentUIDs = allUIDs[start:]
+	}
+
+	if len(recentUIDs) == 0 {
+		return nil, nil
 	}
 
 	// Build UID set for fetch.

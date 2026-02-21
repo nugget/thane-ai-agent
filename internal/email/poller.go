@@ -157,13 +157,80 @@ func (p *Poller) checkAccount(ctx context.Context, accountName string) (string, 
 		return "", nil
 	}
 
-	// Update the high-water mark to the highest UID (newest-first order).
-	highestUID := newMessages[0].UID
-	if err := p.state.Set(pollNamespace, stateKey, strconv.FormatUint(uint64(highestUID), 10)); err != nil {
-		return "", fmt.Errorf("update high-water mark %q: %w", stateKey, err)
+	// Always advance the high-water mark based on ALL fetched messages
+	// (before filtering) so self-sent messages don't re-appear.
+	if err := p.advanceHighWaterMark(accountName, stateKey, storedUID, newMessages); err != nil {
+		return "", err
+	}
+
+	// Filter out self-sent messages so the agent doesn't triage its
+	// own replies. Compare the From address against the account's
+	// configured default_from (if SMTP is set up).
+	newMessages = p.filterSelfSent(accountName, newMessages)
+	if len(newMessages) == 0 {
+		return "", nil
 	}
 
 	return formatPollSection(accountName, newMessages), nil
+}
+
+// filterSelfSent removes messages where From matches the account's
+// default_from address. This prevents the agent from triaging its own
+// outbound replies that appear in INBOX (Bcc-to-self, server-side copies).
+func (p *Poller) filterSelfSent(accountName string, messages []Envelope) []Envelope {
+	acctCfg, err := p.manager.AccountConfig(accountName)
+	if err != nil || acctCfg.DefaultFrom == "" {
+		return messages // can't filter without a configured From address
+	}
+
+	ownAddr := strings.ToLower(extractAddress(acctCfg.DefaultFrom))
+	filtered := make([]Envelope, 0, len(messages))
+	for _, env := range messages {
+		fromAddr := strings.ToLower(extractAddress(env.From))
+		if fromAddr == ownAddr {
+			p.logger.Debug("skipping self-sent message",
+				"account", accountName,
+				"uid", env.UID,
+				"subject", env.Subject,
+			)
+			continue
+		}
+		filtered = append(filtered, env)
+	}
+	return filtered
+}
+
+// advanceHighWaterMark updates the stored high-water mark to the highest
+// UID found in the result set, but never decreases it. The function
+// scans all messages to determine the maximum UID rather than relying
+// on any particular ordering of the input slice.
+func (p *Poller) advanceHighWaterMark(accountName, stateKey string, currentMark uint64, allNew []Envelope) error {
+	// Find the highest UID across all fetched messages (including
+	// self-sent ones that will be filtered later). We scan all rather
+	// than trusting sort order as a defensive measure.
+	var highest uint64
+	for _, env := range allNew {
+		if uint64(env.UID) > highest {
+			highest = uint64(env.UID)
+		}
+	}
+
+	// Never decrease — UIDs can disappear when messages are moved/deleted
+	// but the mark must only advance.
+	if highest <= currentMark {
+		return nil
+	}
+
+	p.logger.Debug("advancing high-water mark",
+		"account", accountName,
+		"old_uid", currentMark,
+		"new_uid", highest,
+	)
+
+	if err := p.state.Set(pollNamespace, stateKey, strconv.FormatUint(highest, 10)); err != nil {
+		return fmt.Errorf("update high-water mark %q: %w", stateKey, err)
+	}
+	return nil
 }
 
 // formatPollSection builds a wake message section for new messages on
