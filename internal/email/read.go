@@ -52,7 +52,7 @@ func (c *Client) ReadMessage(ctx context.Context, folder string, uid uint32) (*M
 		Flags:      true,
 		RFC822Size: true,
 		BodySection: []*imap.FetchItemBodySection{
-			{Peek: true}, // Fetch full body without marking as \Seen.
+			{Peek: false}, // Mark as \Seen — reading means read.
 		},
 	}
 
