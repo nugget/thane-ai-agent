@@ -12,9 +12,11 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nugget/thane-ai-agent/internal/conditions"
+	"github.com/nugget/thane-ai-agent/internal/config"
 	"github.com/nugget/thane-ai-agent/internal/llm"
 	"github.com/nugget/thane-ai-agent/internal/router"
 	"github.com/nugget/thane-ai-agent/internal/tools"
+	"github.com/nugget/thane-ai-agent/internal/usage"
 )
 
 // delegateToolName is the tool name excluded from delegate registries to prevent recursion.
@@ -65,6 +67,8 @@ type Executor struct {
 	defaultModel string
 	store        *DelegationStore
 	tempFiles    labelExpander
+	usageStore   *usage.Store
+	pricing      map[string]config.PricingEntry
 }
 
 // NewExecutor creates a delegate executor.
@@ -99,6 +103,14 @@ func (e *Executor) SetTempFileStore(tfs interface {
 	ExpandLabels(convID, text string) string
 }) {
 	e.tempFiles = tfs
+}
+
+// SetUsageRecorder configures persistent token usage recording for
+// delegate executions. When set, every delegate completion is persisted
+// for cost attribution.
+func (e *Executor) SetUsageRecorder(store *usage.Store, pricing map[string]config.PricingEntry) {
+	e.usageStore = store
+	e.pricing = pricing
 }
 
 // ProfileNames returns the names of all registered profiles.
@@ -808,6 +820,30 @@ func (e *Executor) recordCompletion(rec *completionRecord) {
 			"delegate_id", rec.delegateID,
 			"error", err,
 		)
+	}
+
+	// Record usage for cost tracking. Uses context.Background() because
+	// the delegate's context may be cancelled (e.g., wall-clock exhaustion).
+	if e.usageStore != nil {
+		cost := usage.ComputeCost(rec.model, rec.totalInput, rec.totalOutput, e.pricing)
+		usageRec := usage.Record{
+			Timestamp:      now,
+			RequestID:      rec.delegateID,
+			ConversationID: rec.conversationID,
+			Model:          rec.model,
+			Provider:       usage.ResolveProvider(rec.model),
+			InputTokens:    rec.totalInput,
+			OutputTokens:   rec.totalOutput,
+			CostUSD:        cost,
+			Role:           "delegate",
+			TaskName:       rec.profileName,
+		}
+		if err := e.usageStore.Record(context.Background(), usageRec); err != nil {
+			e.logger.Warn("failed to record delegate usage",
+				"delegate_id", rec.delegateID,
+				"error", err,
+			)
+		}
 	}
 }
 

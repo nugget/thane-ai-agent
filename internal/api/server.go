@@ -15,8 +15,10 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/agent"
 	"github.com/nugget/thane-ai-agent/internal/buildinfo"
 	"github.com/nugget/thane-ai-agent/internal/checkpoint"
+	"github.com/nugget/thane-ai-agent/internal/config"
 	"github.com/nugget/thane-ai-agent/internal/memory"
 	"github.com/nugget/thane-ai-agent/internal/router"
+	"github.com/nugget/thane-ai-agent/internal/usage"
 	"github.com/nugget/thane-ai-agent/internal/web"
 )
 
@@ -91,17 +93,12 @@ type SessionStats struct {
 	ReportedBalance   float64   `json:"reported_balance_usd,omitempty"`
 	BalanceSetAt      string    `json:"balance_set_at,omitempty"`
 	LastRequestAt     time.Time `json:"-"` // Used by MQTT publisher, not exposed in JSON.
+	pricing           map[string]config.PricingEntry
 	mu                sync.Mutex
 }
 
-// Model pricing per million tokens (USD)
-var modelPricing = map[string][2]float64{
-	// [input_per_1M, output_per_1M]
-	"claude-opus-4-20250514":   {15.0, 75.0},
-	"claude-sonnet-4-20250514": {3.0, 15.0},
-	"claude-haiku-3-20240307":  {0.25, 1.25},
-}
-
+// Record accumulates token usage and cost for a model. Cost is computed
+// from the config-driven pricing table.
 func (s *SessionStats) Record(model string, inputTokens, outputTokens int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -109,13 +106,7 @@ func (s *SessionStats) Record(model string, inputTokens, outputTokens int) {
 	s.TotalOutputTokens += int64(outputTokens)
 	s.TotalRequests++
 	s.LastRequestAt = time.Now()
-
-	pricing, ok := modelPricing[model]
-	if !ok {
-		pricing = [2]float64{15.0, 75.0} // default to Opus pricing
-	}
-	s.EstimatedCostUSD += float64(inputTokens) / 1_000_000.0 * pricing[0]
-	s.EstimatedCostUSD += float64(outputTokens) / 1_000_000.0 * pricing[1]
+	s.EstimatedCostUSD += usage.ComputeCost(model, inputTokens, outputTokens, s.pricing)
 }
 
 // LastRequest returns when the most recent LLM request completed.
@@ -170,15 +161,16 @@ func (s *SessionStats) Snapshot() SessionStatsSnapshot {
 	}
 }
 
-// NewServer creates a new API server.
-func NewServer(address string, port int, loop *agent.Loop, rtr *router.Router, logger *slog.Logger) *Server {
+// NewServer creates a new API server. The pricing map drives cost
+// estimation in session stats; pass nil for zero-cost defaults.
+func NewServer(address string, port int, loop *agent.Loop, rtr *router.Router, pricing map[string]config.PricingEntry, logger *slog.Logger) *Server {
 	return &Server{
 		address: address,
 		port:    port,
 		loop:    loop,
 		router:  rtr,
 		logger:  logger,
-		stats:   &SessionStats{},
+		stats:   &SessionStats{pricing: pricing},
 	}
 }
 
