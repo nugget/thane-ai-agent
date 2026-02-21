@@ -363,6 +363,73 @@ func TestWorker_ClosesOrphanedSessions(t *testing.T) {
 	}
 }
 
+func TestWorker_EmptyTranscriptMarkedSummarized(t *testing.T) {
+	store := newTestStore(t)
+	mock := &mockLLMClient{}
+	rtr := newTestRouter()
+
+	// Create an ended session with message_count > 0 but no archived
+	// messages — simulates scheduler/delegate sessions that bump the
+	// counter without producing a user-visible transcript.
+	sess, err := store.StartSession("conv-empty")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.IncrementSessionCount(sess.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.EndSession(sess.ID, "test"); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := Config{
+		Interval:     time.Hour,
+		Timeout:      10 * time.Second,
+		PauseBetween: 1 * time.Millisecond,
+		BatchSize:    10,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	w := New(store, mock, rtr, slog.Default(), cfg)
+	w.Start(ctx)
+
+	// Wait for the startup scan to mark the session, rather than a
+	// fixed sleep that can be flaky under load.
+	waitFor(t, 5*time.Second, func() bool {
+		remaining, err := store.UnsummarizedSessions(10)
+		if err != nil {
+			return false
+		}
+		return len(remaining) == 0
+	})
+
+	cancel()
+	w.Stop()
+
+	// LLM should never have been called — no transcript to summarize.
+	if mock.calls.Load() != 0 {
+		t.Errorf("expected 0 LLM calls for empty-transcript session, got %d", mock.calls.Load())
+	}
+
+	// Verify the placeholder title and metadata were stored.
+	got, err := store.GetSession(sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Title != "(empty session)" {
+		t.Errorf("title = %q, want %q", got.Title, "(empty session)")
+	}
+	if got.Metadata == nil {
+		t.Fatal("metadata should not be nil for empty session")
+	}
+	if got.Metadata.SessionType != "empty" {
+		t.Errorf("session_type = %q, want %q", got.Metadata.SessionType, "empty")
+	}
+	if got.Metadata.OneLiner != "Empty session (no transcript)" {
+		t.Errorf("one_liner = %q, want %q", got.Metadata.OneLiner, "Empty session (no transcript)")
+	}
+}
+
 func TestBuildTranscript(t *testing.T) {
 	messages := []memory.ArchivedMessage{
 		{Role: "system", Content: "You are a helpful assistant.", Timestamp: time.Now()},
