@@ -319,6 +319,14 @@ func (r *Router) selectModel(req Request, decision *Decision) string {
 	//   - Simple tasks should prefer fast/cheap models
 	//   - Complex tasks earn expensive models
 	//   - Cost is always a factor, never free
+	// When local_only is explicitly "false", the caller wants the router
+	// to consider cloud/paid models without local bias. This disables
+	// free_model_bonus, local_first, and mission-based cheap-model
+	// bonuses so quality-based scoring can dominate. Supervisor
+	// iterations in the metacognitive loop depend on this to reach
+	// frontier models.
+	explicitlyNotLocal := req.Hints != nil && req.Hints[HintLocalOnly] == "false"
+
 	scores := make(map[string]int)
 	for _, m := range candidates {
 		score := 0
@@ -358,7 +366,8 @@ func (r *Router) selectModel(req Request, decision *Decision) string {
 		}
 
 		// Free/local models get a bonus for non-complex tasks
-		if m.CostTier == 0 && decision.Complexity < ComplexityComplex {
+		// (unless caller explicitly opted out of local preference)
+		if m.CostTier == 0 && decision.Complexity < ComplexityComplex && !explicitlyNotLocal {
 			score += 15
 			rulesMatched = append(rulesMatched, "free_model_bonus_"+m.Name)
 		}
@@ -383,7 +392,8 @@ func (r *Router) selectModel(req Request, decision *Decision) string {
 		}
 
 		// --- Local preference ---
-		if r.config.LocalFirst && m.CostTier == 0 {
+		// (unless caller explicitly opted out of local preference)
+		if r.config.LocalFirst && m.CostTier == 0 && !explicitlyNotLocal {
 			score += 10
 			rulesMatched = append(rulesMatched, "local_first_"+m.Name)
 		}
@@ -421,10 +431,11 @@ func (r *Router) selectModel(req Request, decision *Decision) string {
 				}
 			}
 
-			// Mission hint: background/anticipation tasks prefer cheap.
+			// Mission hint: background/anticipation/metacognitive tasks prefer cheap
+			// (unless caller explicitly opted out of local preference).
 			// Note: "conversation" mission no longer gets a quality bonus —
 			// thane:thinking sets quality_floor for that purpose. See issue #107.
-			if mission := req.Hints[HintMission]; mission == "background" || mission == "anticipation" {
+			if mission := req.Hints[HintMission]; (mission == "background" || mission == "anticipation" || mission == "metacognitive") && !explicitlyNotLocal {
 				if m.CostTier == 0 {
 					score += 20
 					rulesMatched = append(rulesMatched, "mission_background_bonus_"+m.Name)

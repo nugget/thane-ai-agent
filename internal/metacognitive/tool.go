@@ -3,14 +3,21 @@ package metacognitive
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/tools"
 )
 
+// minStateContentLen is the minimum content length for
+// update_metacognitive_state. Rejects trivially short updates.
+const minStateContentLen = 50
+
 // RegisterTools registers metacognitive-specific tools on the given
-// registry. Currently only set_next_sleep, which the LLM calls to
-// control the loop's next sleep duration.
+// registry: set_next_sleep and update_metacognitive_state. The LLM
+// calls these during iterations to control sleep timing and persist
+// its state file.
 //
 // The handler captures the [Loop] pointer via closure so it can
 // communicate the chosen duration back to the loop goroutine. This
@@ -40,6 +47,12 @@ func (l *Loop) RegisterTools(registry *tools.Registry) {
 		Handler: func(_ context.Context, args map[string]any) (string, error) {
 			durStr, _ := args["duration"].(string)
 			if durStr == "" {
+				// Local models often pass integers meaning minutes.
+				if numVal, ok := args["duration"].(float64); ok {
+					durStr = fmt.Sprintf("%dm", int(numVal))
+				}
+			}
+			if durStr == "" {
 				return "", fmt.Errorf("duration is required")
 			}
 
@@ -66,6 +79,67 @@ func (l *Loop) RegisterTools(registry *tools.Registry) {
 
 			return fmt.Sprintf("Next sleep set to %s (bounds: %s–%s).",
 				d, l.config.MinSleep, l.config.MaxSleep), nil
+		},
+	})
+
+	registry.Register(&tools.Tool{
+		Name: "update_metacognitive_state",
+		Description: "Write the metacognitive state file (metacognitive.md). " +
+			"Call this each iteration with your complete updated observations, " +
+			"active concerns, recent actions, and sleep reasoning. " +
+			"This is the ONLY way to persist state between iterations — " +
+			"each iteration is a fresh conversation.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"content": map[string]any{
+					"type":        "string",
+					"description": "Full markdown content for the state file. Must be at least 50 characters.",
+				},
+			},
+			"required": []string{"content"},
+		},
+		Handler: func(_ context.Context, args map[string]any) (string, error) {
+			content, _ := args["content"].(string)
+			if len(content) < minStateContentLen {
+				return "", fmt.Errorf("content too short (%d chars, minimum %d)", len(content), minStateContentLen)
+			}
+
+			statePath := l.stateFilePath()
+
+			// Save previous version as .prev backup.
+			if existing, err := os.ReadFile(statePath); err == nil {
+				prevPath := statePath + ".prev"
+				if writeErr := os.WriteFile(prevPath, existing, 0o644); writeErr != nil {
+					l.deps.Logger.Warn("failed to save previous state file",
+						"error", writeErr,
+						"path", prevPath,
+					)
+				}
+			}
+
+			// Append metadata footer.
+			convID := l.getCurrentConvID()
+			footer := fmt.Sprintf("\n\n<!-- metacognitive: iteration=%s updated=%s -->\n",
+				convID, time.Now().UTC().Format(time.RFC3339))
+			fullContent := content + footer
+
+			// Ensure parent directory exists.
+			if err := os.MkdirAll(filepath.Dir(statePath), 0o755); err != nil {
+				return "", fmt.Errorf("create state directory: %w", err)
+			}
+
+			if err := os.WriteFile(statePath, []byte(fullContent), 0o644); err != nil {
+				return "", fmt.Errorf("write state file: %w", err)
+			}
+
+			l.deps.Logger.Info("metacognitive state updated",
+				"path", statePath,
+				"bytes", len(fullContent),
+				"conversation_id", convID,
+			)
+
+			return fmt.Sprintf("State file updated (%d bytes) at %s.", len(fullContent), statePath), nil
 		},
 	})
 }

@@ -126,6 +126,52 @@ func TestRoute_LocalOnlyHint(t *testing.T) {
 	}
 }
 
+func TestRoute_LocalOnlyFalseDisablesLocalBias(t *testing.T) {
+	r := NewRouter(slog.Default(), Config{
+		DefaultModel: "local-model",
+		LocalFirst:   true, // normally gives local +10
+		Models: []Model{
+			{Name: "local-model", Provider: "ollama", SupportsTools: true, Speed: 8, Quality: 5, CostTier: 0, ContextWindow: 8192},
+			{Name: "cloud-model", Provider: "anthropic", SupportsTools: true, Speed: 6, Quality: 10, CostTier: 3, ContextWindow: 200000},
+		},
+		MaxAuditLog: 10,
+	})
+
+	// With local_only=false and a high quality_floor, cloud model should win
+	// because local bias bonuses (free_model_bonus, local_first, mission) are
+	// suppressed and the local model is below the quality floor.
+	model, decision := r.Route(context.Background(), Request{
+		Query:      "analyze patterns in the data",
+		NeedsTools: true,
+		ToolCount:  3,
+		Priority:   PriorityBackground,
+		Hints: map[string]string{
+			HintLocalOnly:    "false",
+			HintQualityFloor: "8",
+			HintMission:      "metacognitive",
+		},
+	})
+
+	if model != "cloud-model" {
+		t.Errorf("Route() with local_only=false + quality_floor=8 selected %q, want %q", model, "cloud-model")
+		t.Logf("Scores: %+v", decision.Scores)
+		t.Logf("Rules: %v", decision.RulesMatched)
+	}
+
+	// Verify local model's score is penalized by quality floor.
+	localScore, ok := decision.Scores["local-model"]
+	if !ok {
+		t.Fatalf("local-model score missing from decision.Scores: %#v", decision.Scores)
+	}
+	cloudScore, ok := decision.Scores["cloud-model"]
+	if !ok {
+		t.Fatalf("cloud-model score missing from decision.Scores: %#v", decision.Scores)
+	}
+	if cloudScore <= localScore {
+		t.Errorf("cloud-model score (%d) should beat local-model score (%d) when local_only=false", cloudScore, localScore)
+	}
+}
+
 func TestMaxQuality(t *testing.T) {
 	r := NewRouter(slog.Default(), Config{
 		DefaultModel: "local-model",
