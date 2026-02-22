@@ -44,8 +44,8 @@ func TestMetacognitivePrompt_EmptyState(t *testing.T) {
 	if !strings.Contains(result, "does not exist yet") {
 		t.Error("empty state should produce first-iteration placeholder")
 	}
-	if !strings.Contains(result, "file_write") {
-		t.Error("first-iteration placeholder should mention file_write")
+	if !strings.Contains(result, "update_metacognitive_state") {
+		t.Error("first-iteration placeholder should mention update_metacognitive_state")
 	}
 }
 
@@ -54,5 +54,16 @@ func TestMetacognitivePrompt_SetNextSleepMentioned(t *testing.T) {
 
 	if !strings.Contains(result, "set_next_sleep") {
 		t.Error("prompt should mention set_next_sleep tool")
+	}
+}
+
+func TestMetacognitivePrompt_MentionsUpdateTool(t *testing.T) {
+	result := MetacognitivePrompt("some state", false)
+
+	if !strings.Contains(result, "update_metacognitive_state") {
+		t.Error("prompt should mention update_metacognitive_state tool")
+	}
+	if strings.Contains(result, "file_write") {
+		t.Error("prompt should not mention file_write (replaced by update_metacognitive_state)")
 	}
 }

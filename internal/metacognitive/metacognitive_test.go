@@ -353,7 +353,7 @@ func TestIterate_NormalHints(t *testing.T) {
 	deps := testDeps(t, runner)
 	l := New(testConfig(), deps)
 
-	if err := l.iterate(context.Background(), false); err != nil {
+	if err := l.iterate(context.Background(), false, "test-conv-1"); err != nil {
 		t.Fatalf("iterate: %v", err)
 	}
 
@@ -378,8 +378,8 @@ func TestIterate_NormalHints(t *testing.T) {
 	if req.Hints["mission"] != "metacognitive" {
 		t.Errorf("mission hint = %q, want %q", req.Hints["mission"], "metacognitive")
 	}
-	if !strings.HasPrefix(req.ConversationID, "metacog-") {
-		t.Errorf("ConversationID = %q, want prefix metacog-", req.ConversationID)
+	if req.ConversationID != "test-conv-1" {
+		t.Errorf("ConversationID = %q, want %q", req.ConversationID, "test-conv-1")
 	}
 }
 
@@ -391,7 +391,7 @@ func TestIterate_SupervisorHints(t *testing.T) {
 	deps := testDeps(t, runner)
 	l := New(testConfig(), deps)
 
-	if err := l.iterate(context.Background(), true); err != nil {
+	if err := l.iterate(context.Background(), true, "test-conv-supv"); err != nil {
 		t.Fatalf("iterate: %v", err)
 	}
 
@@ -421,7 +421,7 @@ func TestIterate_NoStateFile(t *testing.T) {
 	l := New(testConfig(), deps)
 
 	// No state file exists in the temp dir.
-	if err := l.iterate(context.Background(), false); err != nil {
+	if err := l.iterate(context.Background(), false, "test-conv-1"); err != nil {
 		t.Fatalf("iterate with no state file: %v", err)
 	}
 
@@ -451,7 +451,7 @@ func TestIterate_WithStateFile(t *testing.T) {
 
 	l := New(testConfig(), deps)
 
-	if err := l.iterate(context.Background(), false); err != nil {
+	if err := l.iterate(context.Background(), false, "test-conv-1"); err != nil {
 		t.Fatalf("iterate: %v", err)
 	}
 
@@ -470,7 +470,7 @@ func TestIterate_RunnerError(t *testing.T) {
 	deps := testDeps(t, runner)
 	l := New(testConfig(), deps)
 
-	err := l.iterate(context.Background(), false)
+	err := l.iterate(context.Background(), false, "test-conv-1")
 	if err == nil {
 		t.Fatal("iterate should return error when runner fails")
 	}
@@ -495,7 +495,7 @@ func TestIterate_StateFileTruncated(t *testing.T) {
 
 	l := New(testConfig(), deps)
 
-	if err := l.iterate(context.Background(), false); err != nil {
+	if err := l.iterate(context.Background(), false, "test-conv-1"); err != nil {
 		t.Fatalf("iterate: %v", err)
 	}
 
@@ -601,5 +601,225 @@ func TestSetNextSleep_MissingDuration(t *testing.T) {
 	_, err := tool.Handler(context.Background(), map[string]any{})
 	if err == nil {
 		t.Fatal("handler should fail when duration is missing")
+	}
+}
+
+func TestSetNextSleep_IntegerMinutes(t *testing.T) {
+	l := New(testConfig(), testDeps(t, nil))
+
+	reg := tools.NewRegistry(nil, nil)
+	l.RegisterTools(reg)
+
+	tool := reg.Get("set_next_sleep")
+
+	// Local models often pass integers meaning minutes (JSON numbers
+	// unmarshal to float64).
+	result, err := tool.Handler(context.Background(), map[string]any{
+		"duration": float64(8),
+	})
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if !strings.Contains(result, "8m") {
+		t.Errorf("result = %q, want mention of 8m", result)
+	}
+
+	got := l.computeSleep()
+	if got != 8*time.Minute {
+		t.Errorf("computeSleep = %v, want 8m", got)
+	}
+}
+
+// --- ExcludeTools tests ---
+
+func TestIterate_ExcludesTools(t *testing.T) {
+	runner := &mockRunner{
+		resp: &agent.Response{Content: "ok", Model: "llama3"},
+	}
+
+	deps := testDeps(t, runner)
+	l := New(testConfig(), deps)
+
+	if err := l.iterate(context.Background(), false, "test-exclude"); err != nil {
+		t.Fatalf("iterate: %v", err)
+	}
+
+	reqs := runner.getRequests()
+	if len(reqs) != 1 {
+		t.Fatalf("got %d requests, want 1", len(reqs))
+	}
+
+	req := reqs[0]
+	if len(req.ExcludeTools) == 0 {
+		t.Fatal("ExcludeTools should be populated")
+	}
+
+	// Verify key dangerous tools are excluded.
+	excluded := make(map[string]bool)
+	for _, name := range req.ExcludeTools {
+		excluded[name] = true
+	}
+	for _, want := range []string{"file_grep", "file_write", "exec", "file_search"} {
+		if !excluded[want] {
+			t.Errorf("expected %q in ExcludeTools, got %v", want, req.ExcludeTools)
+		}
+	}
+}
+
+// --- update_metacognitive_state tool tests ---
+
+func TestUpdateMetacognitiveState_Valid(t *testing.T) {
+	deps := testDeps(t, nil)
+	l := New(testConfig(), deps)
+	l.setCurrentConvID("test-conv-42")
+
+	reg := tools.NewRegistry(nil, nil)
+	l.RegisterTools(reg)
+
+	tool := reg.Get("update_metacognitive_state")
+	if tool == nil {
+		t.Fatal("update_metacognitive_state tool not registered")
+	}
+
+	content := "## Current Sense\nEverything is calm. Garage closed. Nobody home. Monitoring continues."
+	result, err := tool.Handler(context.Background(), map[string]any{
+		"content": content,
+	})
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if !strings.Contains(result, "updated") {
+		t.Errorf("result = %q, want confirmation", result)
+	}
+
+	// Verify file was written.
+	statePath := filepath.Join(deps.WorkspacePath, "metacognitive.md")
+	data, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatalf("read state file: %v", err)
+	}
+	if !strings.Contains(string(data), "Everything is calm") {
+		t.Error("state file should contain the written content")
+	}
+}
+
+func TestUpdateMetacognitiveState_MetadataFooter(t *testing.T) {
+	deps := testDeps(t, nil)
+	l := New(testConfig(), deps)
+	l.setCurrentConvID("metacog-123456")
+
+	reg := tools.NewRegistry(nil, nil)
+	l.RegisterTools(reg)
+
+	tool := reg.Get("update_metacognitive_state")
+	content := "## Current Sense\nAll systems nominal. Nothing to report. Sleeping for a while."
+
+	_, err := tool.Handler(context.Background(), map[string]any{
+		"content": content,
+	})
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+
+	statePath := filepath.Join(deps.WorkspacePath, "metacognitive.md")
+	data, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatalf("read state file: %v", err)
+	}
+
+	s := string(data)
+	if !strings.Contains(s, "<!-- metacognitive: iteration=metacog-123456") {
+		t.Error("state file should contain metadata footer with conversation ID")
+	}
+	if !strings.Contains(s, "updated=") {
+		t.Error("state file should contain updated timestamp in footer")
+	}
+}
+
+func TestUpdateMetacognitiveState_PrevFile(t *testing.T) {
+	deps := testDeps(t, nil)
+	l := New(testConfig(), deps)
+	l.setCurrentConvID("test-prev")
+
+	// Write an initial state file.
+	statePath := filepath.Join(deps.WorkspacePath, "metacognitive.md")
+	original := "## Original Content\nThis was here before the update."
+	if err := os.WriteFile(statePath, []byte(original), 0o644); err != nil {
+		t.Fatalf("write initial state: %v", err)
+	}
+
+	reg := tools.NewRegistry(nil, nil)
+	l.RegisterTools(reg)
+
+	tool := reg.Get("update_metacognitive_state")
+	newContent := "## Updated Content\nNew observations from the latest iteration of monitoring."
+
+	_, err := tool.Handler(context.Background(), map[string]any{
+		"content": newContent,
+	})
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+
+	// Verify .prev backup exists with original content.
+	prevPath := statePath + ".prev"
+	prevData, err := os.ReadFile(prevPath)
+	if err != nil {
+		t.Fatalf("read .prev file: %v", err)
+	}
+	if string(prevData) != original {
+		t.Errorf(".prev content = %q, want original content", string(prevData))
+	}
+}
+
+func TestUpdateMetacognitiveState_EmptyRejected(t *testing.T) {
+	l := New(testConfig(), testDeps(t, nil))
+
+	reg := tools.NewRegistry(nil, nil)
+	l.RegisterTools(reg)
+
+	tool := reg.Get("update_metacognitive_state")
+
+	tests := []struct {
+		name    string
+		content string
+	}{
+		{"empty", ""},
+		{"too_short", "Short."},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := tool.Handler(context.Background(), map[string]any{
+				"content": tt.content,
+			})
+			if err == nil {
+				t.Error("handler should reject short/empty content")
+			}
+		})
+	}
+}
+
+// --- ConvID propagation test ---
+
+func TestIterate_PassesConvID(t *testing.T) {
+	runner := &mockRunner{
+		resp: &agent.Response{Content: "ok", Model: "llama3"},
+	}
+
+	deps := testDeps(t, runner)
+	l := New(testConfig(), deps)
+
+	convID := "metacog-9999999"
+	if err := l.iterate(context.Background(), false, convID); err != nil {
+		t.Fatalf("iterate: %v", err)
+	}
+
+	reqs := runner.getRequests()
+	if len(reqs) != 1 {
+		t.Fatalf("got %d requests, want 1", len(reqs))
+	}
+	if reqs[0].ConversationID != convID {
+		t.Errorf("ConversationID = %q, want %q", reqs[0].ConversationID, convID)
 	}
 }

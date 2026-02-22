@@ -110,11 +110,12 @@ type Loop struct {
 	config Config
 	deps   Deps
 
-	mu        sync.Mutex
-	started   bool
-	cancel    context.CancelFunc
-	done      chan struct{}
-	nextSleep time.Duration // set by set_next_sleep tool handler
+	mu            sync.Mutex
+	started       bool
+	cancel        context.CancelFunc
+	done          chan struct{}
+	nextSleep     time.Duration // set by set_next_sleep tool handler
+	currentConvID string        // set before each iterate(), read by tool handlers
 }
 
 // New creates a metacognitive loop. Call [Loop.Start] to launch the
@@ -189,18 +190,29 @@ func (l *Loop) run(ctx context.Context) {
 		// Roll dice for model selection.
 		isSupervisor := l.rollDice()
 
+		// Generate a conversation ID for this iteration.
+		convID := fmt.Sprintf("metacog-%d", time.Now().UnixMilli())
+		l.setCurrentConvID(convID)
+
 		iterStart := time.Now()
-		if err := l.iterate(ctx, isSupervisor); err != nil {
+		logger.Info("metacognitive iteration starting",
+			"conversation_id", convID,
+			"supervisor", isSupervisor,
+		)
+
+		if err := l.iterate(ctx, isSupervisor, convID); err != nil {
 			if ctx.Err() != nil {
 				logger.Info("metacognitive loop stopped")
 				return
 			}
 			logger.Warn("metacognitive iteration failed",
 				"error", err,
+				"conversation_id", convID,
 				"supervisor", isSupervisor,
 			)
 		} else {
 			logger.Info("metacognitive iteration complete",
+				"conversation_id", convID,
 				"supervisor", isSupervisor,
 				"elapsed", time.Since(iterStart).Round(time.Millisecond),
 			)
@@ -210,6 +222,7 @@ func (l *Loop) run(ctx context.Context) {
 		sleep := l.computeSleep()
 		logger.Info("metacognitive sleeping",
 			"duration", sleep,
+			"conversation_id", convID,
 			"supervisor", isSupervisor,
 		)
 
@@ -220,18 +233,33 @@ func (l *Loop) run(ctx context.Context) {
 	}
 }
 
+// metacogExcludeTools lists tools that the metacognitive loop should not
+// have access to. File tools are replaced by update_metacognitive_state,
+// exec is unnecessary and dangerous, session management is for interactive
+// use only.
+var metacogExcludeTools = []string{
+	"file_read", "file_write", "file_edit", "file_list",
+	"file_search", "file_grep", "file_stat", "file_tree",
+	"exec",
+	"conversation_reset", "session_close", "session_split", "session_checkpoint",
+	"create_temp_file",
+	"request_capability", "drop_capability",
+}
+
 // iterate performs a single metacognitive iteration: read state, build
 // prompt, and run the LLM via the agent runner.
-func (l *Loop) iterate(ctx context.Context, isSupervisor bool) error {
+func (l *Loop) iterate(ctx context.Context, isSupervisor bool, convID string) error {
 	stateContent, err := l.readStateFile()
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			l.deps.Logger.Info("metacognitive state file not found, starting fresh",
+				"conversation_id", convID,
 				"path", l.stateFilePath(),
 			)
 		} else {
 			l.deps.Logger.Warn("metacognitive state file read failed, starting with empty state",
 				"error", err,
+				"conversation_id", convID,
 				"path", l.stateFilePath(),
 			)
 		}
@@ -249,8 +277,9 @@ func (l *Loop) iterate(ctx context.Context, isSupervisor bool) error {
 	}
 
 	req := &agent.Request{
-		ConversationID: fmt.Sprintf("metacog-%d", time.Now().UnixMilli()),
+		ConversationID: convID,
 		Messages:       []agent.Message{{Role: "user", Content: promptText}},
+		ExcludeTools:   metacogExcludeTools,
 		Hints: map[string]string{
 			"source":                    "metacognitive",
 			"supervisor":                strconv.FormatBool(isSupervisor),
@@ -269,6 +298,7 @@ func (l *Loop) iterate(ctx context.Context, isSupervisor bool) error {
 	l.deps.Logger.Debug("metacognitive iteration result",
 		"result_len", len(resp.Content),
 		"model", resp.Model,
+		"conversation_id", convID,
 		"supervisor", isSupervisor,
 	)
 
@@ -345,6 +375,21 @@ func (l *Loop) resetNextSleep() {
 	l.mu.Lock()
 	l.nextSleep = 0
 	l.mu.Unlock()
+}
+
+// setCurrentConvID stores the conversation ID for the current iteration
+// so tool handlers can include it in metadata.
+func (l *Loop) setCurrentConvID(id string) {
+	l.mu.Lock()
+	l.currentConvID = id
+	l.mu.Unlock()
+}
+
+// getCurrentConvID returns the conversation ID for the current iteration.
+func (l *Loop) getCurrentConvID() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.currentConvID
 }
 
 // readStateFile reads the metacognitive state file from the workspace.

@@ -25,8 +25,8 @@ last time. Read it carefully — it IS your continuity.
 2. **Act if warranted** — Create anticipations, send messages, or use any
    available tool if the situation calls for it.
 3. **Update metacognitive.md** — Rewrite your state file with current
-   observations, active concerns, recent actions, and sleep reasoning. Use
-   file_write to save it.
+   observations, active concerns, recent actions, and sleep reasoning. Call
+   update_metacognitive_state with your updated content.
 4. **Set your sleep** — Call set_next_sleep with your chosen duration and
    reasoning. Short (2–5m) for active situations. Long (15–30m) for quiet
    periods.
@@ -71,7 +71,7 @@ cheaper model's consistent blind spots miss.`
 // instructions are appended for frontier-model iterations.
 func MetacognitivePrompt(currentState string, isSupervisor bool) string {
 	if currentState == "" {
-		currentState = "(metacognitive.md does not exist yet — this is your first iteration. Create it with file_write.)"
+		currentState = "(metacognitive.md does not exist yet — this is your first iteration. Call update_metacognitive_state to create it.)"
 	}
 	prompt := fmt.Sprintf(metacognitiveBaseTemplate, currentState)
 	if isSupervisor {
