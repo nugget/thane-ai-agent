@@ -370,8 +370,13 @@ func sessionParagraph(sess *memory.Session) string {
 
 // sessionHasContent reports whether a session has any meaningful content
 // worth including in the episodic history. Delegate sessions typically
-// have no title, summary, or metadata and should be skipped.
+// have no title, summary, or metadata and should be skipped. Sessions
+// explicitly marked as empty by the summarizer (SessionType "empty")
+// are also excluded — they have metadata but no real transcript.
 func sessionHasContent(sess *memory.Session) bool {
+	if sess.Metadata != nil && sess.Metadata.SessionType == "empty" {
+		return false
+	}
 	if sess.Title != "" {
 		return true
 	}

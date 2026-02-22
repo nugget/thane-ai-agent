@@ -440,6 +440,14 @@ func TestEmptySessionsSkipped(t *testing.T) {
 				StartedAt: timeAt(now, 4),
 				EndedAt:   ptrTime(timeAt(now, 3.5)),
 			},
+			// Fifth: empty session marked by summarizer → should be skipped.
+			{
+				ID:        "s5",
+				StartedAt: timeAt(now, 5),
+				EndedAt:   ptrTime(timeAt(now, 4.5)),
+				Title:     "(empty session)",
+				Metadata:  &memory.SessionMetadata{SessionType: "empty", OneLiner: "Empty session (no transcript)"},
+			},
 		},
 		transcripts: map[string][]memory.ArchivedMessage{
 			"s1": {{Role: "user", Content: "Hello", Timestamp: timeAt(now, 1)}},
@@ -462,6 +470,9 @@ func TestEmptySessionsSkipped(t *testing.T) {
 	if strings.Contains(got, "(no summary)") {
 		t.Error("empty sessions should not produce '(no summary)' entries")
 	}
+	if strings.Contains(got, "empty session") {
+		t.Error("sessions with SessionType 'empty' should not appear in history")
+	}
 }
 
 func TestSessionHasContent(t *testing.T) {
@@ -478,6 +489,10 @@ func TestSessionHasContent(t *testing.T) {
 		{"empty metadata", &memory.Session{Metadata: &memory.SessionMetadata{}}, false},
 		{"nil metadata", &memory.Session{}, false},
 		{"completely empty", &memory.Session{}, false},
+		{"empty session type", &memory.Session{
+			Title:    "(empty session)",
+			Metadata: &memory.SessionMetadata{SessionType: "empty", OneLiner: "Empty session (no transcript)"},
+		}, false},
 	}
 
 	for _, tc := range tests {
