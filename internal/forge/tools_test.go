@@ -1476,7 +1476,7 @@ func TestHandlePRReviewComment(t *testing.T) {
 func sliceEqual(a, b []string) bool {
 	if len(a) == 0 && len(b) == 0 {
 		// Treat nil and empty as equivalent for test comparisons.
-		return (a == nil) == (b == nil)
+		return true
 	}
 	if len(a) != len(b) {
 		return false

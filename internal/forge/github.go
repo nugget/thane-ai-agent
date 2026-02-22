@@ -346,8 +346,12 @@ func (g *GitHub) ListPRCommits(ctx context.Context, repo string, number int) ([]
 
 	commits := make([]*Commit, 0, len(ghCommits))
 	for _, c := range ghCommits {
+		sha := c.GetSHA()
+		if len(sha) > 7 {
+			sha = sha[:7]
+		}
 		commit := &Commit{
-			SHA:     c.GetSHA()[:7],
+			SHA:     sha,
 			Message: c.GetCommit().GetMessage(),
 		}
 		if c.GetCommit().GetAuthor() != nil {
@@ -658,8 +662,12 @@ func (g *GitHub) Search(ctx context.Context, query string, kind SearchKind, limi
 			if c.Commit != nil {
 				msg = truncate(c.Commit.GetMessage(), 200)
 			}
+			sha := c.GetSHA()
+			if len(sha) > 7 {
+				sha = sha[:7]
+			}
 			results = append(results, SearchResult{
-				Title: c.GetSHA()[:7],
+				Title: sha,
 				URL:   c.GetHTMLURL(),
 				Body:  msg,
 			})
