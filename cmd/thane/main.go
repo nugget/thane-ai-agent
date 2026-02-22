@@ -47,6 +47,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/episodic"
 	"github.com/nugget/thane-ai-agent/internal/facts"
 	"github.com/nugget/thane-ai-agent/internal/fetch"
+	"github.com/nugget/thane-ai-agent/internal/forge"
 	"github.com/nugget/thane-ai-agent/internal/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/ingest"
 	"github.com/nugget/thane-ai-agent/internal/llm"
@@ -858,6 +859,28 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		logger.Info("email enabled", "accounts", emailMgr.AccountNames(), "poll_interval", cfg.Email.PollIntervalSec)
 	} else {
 		logger.Info("email disabled (not configured)")
+	}
+
+	// --- Forge integration ---
+	// Native GitHub (and future Gitea/GitLab) integration. Replaces the
+	// MCP github server with direct API calls via go-github.
+	if cfg.Forge.Configured() {
+		forgeMgr, err := forge.NewManager(cfg.Forge, logger)
+		if err != nil {
+			return fmt.Errorf("create forge manager: %w", err)
+		}
+
+		var tempResolver forge.TempFileResolver
+		if tfs := loop.Tools().TempFileStore(); tfs != nil {
+			tempResolver = tfs
+		}
+
+		forgeTools := forge.NewTools(forgeMgr, tempResolver, tools.ConversationIDFromContext, logger)
+		loop.Tools().SetForgeTools(forgeTools)
+
+		logger.Info("forge enabled", "accounts", len(cfg.Forge.Accounts))
+	} else {
+		logger.Info("forge disabled (not configured)")
 	}
 
 	// --- Working memory tool ---

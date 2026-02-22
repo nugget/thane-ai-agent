@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/email"
+	"github.com/nugget/thane-ai-agent/internal/forge"
 	"github.com/nugget/thane-ai-agent/internal/search"
 	"gopkg.in/yaml.v3"
 )
@@ -168,6 +169,11 @@ type Config struct {
 	// Signal configures the Signal message bridge for inbound message
 	// reception and response routing via a signal-mcp MCP server.
 	Signal SignalConfig `yaml:"signal"`
+
+	// Forge configures code forge integrations (GitHub, Gitea). When
+	// configured, Thane can interact with issues, pull requests, and
+	// code review directly without an MCP forge server subprocess.
+	Forge forge.Config `yaml:"forge"`
 
 	// Email configures native IMAP email access. When configured, Thane
 	// can list, read, search, and manage email directly without an MCP
@@ -996,6 +1002,8 @@ func (c *Config) applyDefaults() {
 		c.Signal.Routing.DelegationGating = "disabled"
 	}
 
+	c.Forge.ApplyDefaults()
+
 	c.Email.ApplyDefaults()
 
 	if c.StateWindow.MaxEntries == 0 {
@@ -1111,6 +1119,11 @@ func (c *Config) Validate() error {
 	}
 	if err := c.validateSignal(); err != nil {
 		return err
+	}
+	if c.Forge.Configured() {
+		if err := c.Forge.Validate(); err != nil {
+			return err
+		}
 	}
 	if c.Email.Configured() {
 		if err := c.Email.Validate(); err != nil {

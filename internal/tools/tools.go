@@ -39,6 +39,7 @@ type Registry struct {
 	contactTools      *contacts.Tools
 	anticipationTools *anticipation.Tools
 	emailTools        *email.Tools
+	forgeTools        forgeHandler
 	fileTools         *FileTools
 	shellExec         *ShellExec
 	watchlistStore    *watchlist.Store
