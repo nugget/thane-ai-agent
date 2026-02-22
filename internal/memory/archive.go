@@ -930,8 +930,8 @@ func (s *ArchiveStore) ListSessions(conversationID string, limit int) ([]*Sessio
 
 // UnsummarizedSessions returns ended sessions that have no metadata yet,
 // ordered oldest-first for catch-up processing. Only sessions with at
-// least one message are returned to avoid wasting LLM calls on empty
-// sessions.
+// least one archived message are returned — this checks actual rows in
+// archive_messages rather than the stale message_count counter.
 func (s *ArchiveStore) UnsummarizedSessions(limit int) ([]*Session, error) {
 	if limit <= 0 {
 		limit = 50
@@ -943,7 +943,7 @@ func (s *ArchiveStore) UnsummarizedSessions(limit int) ([]*Session, error) {
 		FROM sessions
 		WHERE ended_at IS NOT NULL
 		  AND (title IS NULL OR title = '')
-		  AND message_count > 0
+		  AND EXISTS (SELECT 1 FROM archive_messages WHERE session_id = sessions.id LIMIT 1)
 		ORDER BY ended_at ASC
 		LIMIT ?
 	`, limit)

@@ -289,7 +289,7 @@ func TestSessionLifecycle(t *testing.T) {
 func TestListSessions(t *testing.T) {
 	store := newTestArchiveStore(t)
 
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		sess, err := store.StartSession("conv-1")
 		if err != nil {
 			t.Fatal(err)
@@ -492,14 +492,25 @@ func TestSetSessionMetadata(t *testing.T) {
 func TestUnsummarizedSessions(t *testing.T) {
 	store := newTestArchiveStore(t)
 
-	// Create 3 ended sessions with messages but no metadata.
+	// Create 3 ended sessions with actual archived messages but no metadata.
 	var unsummarized []string
-	for i := 0; i < 3; i++ {
-		sess, err := store.StartSession(fmt.Sprintf("conv-%d", i))
+	for i := range 3 {
+		convID := fmt.Sprintf("conv-%d", i)
+		sess, err := store.StartSession(convID)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := store.IncrementSessionCount(sess.ID); err != nil {
+		// Archive a real message so the EXISTS subquery finds it.
+		err = store.ArchiveMessages([]ArchivedMessage{{
+			ID:             fmt.Sprintf("msg-%d", i),
+			ConversationID: convID,
+			SessionID:      sess.ID,
+			Role:           "user",
+			Content:        "hello",
+			Timestamp:      time.Now(),
+			ArchiveReason:  "test",
+		}})
+		if err != nil {
 			t.Fatal(err)
 		}
 		if err := store.EndSession(sess.ID, "reset"); err != nil {
@@ -513,7 +524,16 @@ func TestUnsummarizedSessions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.IncrementSessionCount(summarized.ID); err != nil {
+	err = store.ArchiveMessages([]ArchivedMessage{{
+		ID:             "msg-summarized",
+		ConversationID: "conv-summarized",
+		SessionID:      summarized.ID,
+		Role:           "user",
+		Content:        "hello",
+		Timestamp:      time.Now(),
+		ArchiveReason:  "test",
+	}})
+	if err != nil {
 		t.Fatal(err)
 	}
 	if err := store.EndSession(summarized.ID, "reset"); err != nil {
@@ -529,7 +549,16 @@ func TestUnsummarizedSessions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.IncrementSessionCount(active.ID); err != nil {
+	err = store.ArchiveMessages([]ArchivedMessage{{
+		ID:             "msg-active",
+		ConversationID: "conv-active",
+		SessionID:      active.ID,
+		Role:           "user",
+		Content:        "hello",
+		Timestamp:      time.Now(),
+		ArchiveReason:  "test",
+	}})
+	if err != nil {
 		t.Fatal(err)
 	}
 	_ = active
@@ -540,6 +569,19 @@ func TestUnsummarizedSessions(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := store.EndSession(empty.ID, "reset"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create an ended session with stale message_count > 0 but NO actual
+	// archived messages (the bug case from issue #341). Should be excluded.
+	stale, err := store.StartSession("conv-stale")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.IncrementSessionCount(stale.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.EndSession(stale.ID, "reset"); err != nil {
 		t.Fatal(err)
 	}
 
