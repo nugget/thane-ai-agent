@@ -188,6 +188,11 @@ type Config struct {
 	// room-level presence detection via wireless AP client associations.
 	Unifi UnifiConfig `yaml:"unifi"`
 
+	// Prewarm configures context pre-warming for cold-start loops.
+	// When enabled, subject-keyed facts are injected into the system
+	// prompt before the model sees the triggering event.
+	Prewarm PrewarmConfig `yaml:"prewarm"`
+
 	// Metacognitive configures the perpetual metacognitive attention loop.
 	// When enabled, a background goroutine monitors the environment,
 	// reasons via LLM, and adapts its own sleep cycle between iterations.
@@ -748,10 +753,21 @@ func (c SignalConfig) Configured() bool {
 	return c.Enabled && c.Command != "" && c.Account != ""
 }
 
-// StateWindowConfig configures the rolling window of recent Home
-// Assistant state changes that is injected into the agent's system
-// prompt on every run. The window provides ambient awareness of
-// recent state transitions without requiring tool calls.
+// PrewarmConfig configures context pre-warming for cold-start loops.
+// When enabled, subject-keyed facts are injected into the system prompt
+// before the model sees the triggering event. This reduces wasted
+// iterations where the model discovers facts it should already have.
+// See issue #338.
+type PrewarmConfig struct {
+	// Enabled controls whether subject-keyed fact injection is active.
+	// Default: false.
+	Enabled bool `yaml:"enabled"`
+
+	// MaxFacts caps the number of subject-matched facts injected per
+	// wake. Default: 10.
+	MaxFacts int `yaml:"max_facts"`
+}
+
 // MetacognitiveConfig configures the self-regulating metacognitive loop.
 // The loop runs perpetually in a background goroutine, using LLM calls to
 // reason about the environment and self-determine its sleep duration
@@ -933,6 +949,11 @@ func (c *Config) applyDefaults() {
 			"claude-sonnet-4-20250514": {InputPerMillion: 3.0, OutputPerMillion: 15.0},
 			"claude-haiku-3-20240307":  {InputPerMillion: 0.25, OutputPerMillion: 1.25},
 		}
+	}
+
+	// Pre-warm defaults.
+	if c.Prewarm.MaxFacts == 0 {
+		c.Prewarm.MaxFacts = 10
 	}
 
 	// Metacognitive loop defaults.
@@ -1135,6 +1156,9 @@ func (c *Config) Validate() error {
 	}
 	if c.StateWindow.MaxAgeMinutes < 1 {
 		return fmt.Errorf("state_window.max_age_minutes %d must be positive", c.StateWindow.MaxAgeMinutes)
+	}
+	if c.Prewarm.Enabled && c.Prewarm.MaxFacts < 1 {
+		return fmt.Errorf("prewarm.max_facts %d must be positive when prewarm is enabled", c.Prewarm.MaxFacts)
 	}
 	if err := c.validateMetacognitive(); err != nil {
 		return err

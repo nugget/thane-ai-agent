@@ -30,10 +30,11 @@ func (t *Tools) SetEmbeddingClient(client EmbeddingClient) {
 
 // RememberArgs are arguments for the remember_fact tool.
 type RememberArgs struct {
-	Category string `json:"category"`         // user, home, device, routine, preference
-	Key      string `json:"key"`              // Unique identifier within category
-	Value    string `json:"value"`            // The information to remember
-	Source   string `json:"source,omitempty"` // Where this came from
+	Category string   `json:"category"`           // user, home, device, routine, preference
+	Key      string   `json:"key"`                // Unique identifier within category
+	Value    string   `json:"value"`              // The information to remember
+	Source   string   `json:"source,omitempty"`   // Where this came from
+	Subjects []string `json:"subjects,omitempty"` // Subject keys (e.g., "entity:foo", "zone:bar")
 }
 
 // Remember stores a fact for later recall.
@@ -54,7 +55,7 @@ func (t *Tools) Remember(argsJSON string) (string, error) {
 	}
 
 	cat := Category(args.Category)
-	fact, err := t.store.Set(cat, args.Key, args.Value, args.Source, 1.0)
+	fact, err := t.store.Set(cat, args.Key, args.Value, args.Source, 1.0, args.Subjects)
 	if err != nil {
 		return "", fmt.Errorf("store fact: %w", err)
 	}
@@ -233,6 +234,13 @@ func (t *Tools) GetDefinitions() []map[string]any {
 						"source": map[string]any{
 							"type":        "string",
 							"description": "Where this information came from (e.g., 'user stated', 'observed')",
+						},
+						"subjects": map[string]any{
+							"type": "array",
+							"items": map[string]any{
+								"type": "string",
+							},
+							"description": "Subject keys this fact relates to. Prefix with type: entity:, contact:, phone:, zone:, camera:, location:. Example: [\"entity:binary_sensor.driveway\", \"zone:driveway\"]",
 						},
 					},
 					"required": []string{"key", "value"},

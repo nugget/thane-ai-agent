@@ -125,8 +125,8 @@ func TestGenerateMissingEmbeddings(t *testing.T) {
 	tools := NewTools(store)
 
 	// Add facts without embeddings
-	_, _ = store.Set(CategoryUser, "key1", "value1", "test", 1.0)
-	_, _ = store.Set(CategoryUser, "key2", "value2", "test", 1.0)
+	_, _ = store.Set(CategoryUser, "key1", "value1", "test", 1.0, nil)
+	_, _ = store.Set(CategoryUser, "key2", "value2", "test", 1.0, nil)
 
 	// Verify no embeddings initially
 	without, _ := store.GetFactsWithoutEmbeddings()

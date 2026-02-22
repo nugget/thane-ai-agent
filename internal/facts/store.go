@@ -4,6 +4,7 @@ package facts
 import (
 	"database/sql"
 	"encoding/binary"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"math"
@@ -28,9 +29,9 @@ const (
 // SQL fragments for query building.
 const (
 	// Base columns for fact queries (without embedding).
-	factColumns = "id, category, key, value, source, confidence, created_at, updated_at, accessed_at"
+	factColumns = "id, category, key, value, source, confidence, subjects, created_at, updated_at, accessed_at"
 	// Columns including embedding.
-	factColumnsWithEmbed = "id, category, key, value, source, confidence, embedding, created_at, updated_at, accessed_at"
+	factColumnsWithEmbed = "id, category, key, value, source, confidence, subjects, embedding, created_at, updated_at, accessed_at"
 	// Filter for active facts (currently: not soft-deleted).
 	activeFilter = "deleted_at IS NULL"
 )
@@ -43,6 +44,7 @@ type Fact struct {
 	Value      string    `json:"value"`                // The actual information
 	Source     string    `json:"source,omitempty"`     // Where we learned this
 	Confidence float64   `json:"confidence,omitempty"` // 0-1, how certain
+	Subjects   []string  `json:"subjects,omitempty"`   // Subject keys (e.g., "entity:foo", "zone:bar")
 	Embedding  []float32 `json:"embedding,omitempty"`  // Vector embedding for semantic search
 	CreatedAt  time.Time `json:"created_at"`
 	UpdatedAt  time.Time `json:"updated_at"`
@@ -110,6 +112,7 @@ func (s *Store) migrate() error {
 	// Add columns if they don't exist (migrations for existing DBs)
 	_, _ = s.db.Exec(`ALTER TABLE facts ADD COLUMN embedding BLOB`)
 	_, _ = s.db.Exec(`ALTER TABLE facts ADD COLUMN deleted_at TEXT`)
+	_, _ = s.db.Exec(`ALTER TABLE facts ADD COLUMN subjects TEXT`)
 
 	s.tryEnableFTS()
 
@@ -150,8 +153,20 @@ func (s *Store) Close() error {
 }
 
 // Set creates or updates a fact. Resurrects soft-deleted facts if they exist.
-func (s *Store) Set(category Category, key, value, source string, confidence float64) (*Fact, error) {
+// Subjects is an optional list of subject keys (e.g., "entity:foo",
+// "zone:bar") stored as a JSON array. Pass nil to leave subjects unset.
+func (s *Store) Set(category Category, key, value, source string, confidence float64, subjects []string) (*Fact, error) {
 	now := time.Now().UTC()
+
+	var subjectsJSON *string
+	if len(subjects) > 0 {
+		b, err := json.Marshal(subjects)
+		if err != nil {
+			return nil, fmt.Errorf("marshal subjects: %w", err)
+		}
+		s := string(b)
+		subjectsJSON = &s
+	}
 
 	// Check if exists (including soft-deleted)
 	var existingID string
@@ -168,15 +183,16 @@ func (s *Store) Set(category Category, key, value, source string, confidence flo
 			Value:      value,
 			Source:     source,
 			Confidence: confidence,
+			Subjects:   subjects,
 			CreatedAt:  now,
 			UpdatedAt:  now,
 			AccessedAt: now,
 		}
 
 		_, err = s.db.Exec(`
-			INSERT INTO facts (id, category, key, value, source, confidence, created_at, updated_at, accessed_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-		`, id.String(), category, key, value, source, confidence,
+			INSERT INTO facts (id, category, key, value, source, confidence, subjects, created_at, updated_at, accessed_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, id.String(), category, key, value, source, confidence, subjectsJSON,
 			now.Format(time.RFC3339), now.Format(time.RFC3339), now.Format(time.RFC3339))
 		if err != nil {
 			return nil, fmt.Errorf("insert: %w", err)
@@ -189,9 +205,9 @@ func (s *Store) Set(category Category, key, value, source string, confidence flo
 
 	// Update existing (resurrect if soft-deleted)
 	_, err = s.db.Exec(`
-		UPDATE facts SET value = ?, source = ?, confidence = ?, updated_at = ?, accessed_at = ?, deleted_at = NULL
+		UPDATE facts SET value = ?, source = ?, confidence = ?, subjects = ?, updated_at = ?, accessed_at = ?, deleted_at = NULL
 		WHERE category = ? AND key = ?
-	`, value, source, confidence, now.Format(time.RFC3339), now.Format(time.RFC3339), category, key)
+	`, value, source, confidence, subjectsJSON, now.Format(time.RFC3339), now.Format(time.RFC3339), category, key)
 	if err != nil {
 		return nil, fmt.Errorf("update: %w", err)
 	}
@@ -205,6 +221,7 @@ func (s *Store) Set(category Category, key, value, source string, confidence flo
 		Value:      value,
 		Source:     source,
 		Confidence: confidence,
+		Subjects:   subjects,
 		UpdatedAt:  now,
 		AccessedAt: now,
 	}, nil
@@ -254,6 +271,44 @@ func (s *Store) GetAll() ([]*Fact, error) {
 		`SELECT ` + factColumns + ` FROM facts WHERE ` + activeFilter + ` ORDER BY category, key`)
 	if err != nil {
 		return nil, fmt.Errorf("query: %w", err)
+	}
+	defer rows.Close()
+
+	var facts []*Fact
+	for rows.Next() {
+		fact, err := s.scanFactRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		facts = append(facts, fact)
+	}
+	return facts, rows.Err()
+}
+
+// GetBySubjects retrieves all active facts associated with any of the
+// given subject keys. Subjects are stored as JSON arrays and queried
+// using SQLite's json_each() function. Returns nil when no subjects are
+// provided or no facts match.
+func (s *Store) GetBySubjects(subjects []string) ([]*Fact, error) {
+	if len(subjects) == 0 {
+		return nil, nil
+	}
+
+	// Build query with IN clause for json_each matching.
+	placeholders := make([]string, len(subjects))
+	args := make([]any, len(subjects))
+	for i, sub := range subjects {
+		placeholders[i] = "?"
+		args[i] = sub
+	}
+
+	query := `SELECT ` + factColumns + ` FROM facts WHERE ` + activeFilter + ` AND subjects IS NOT NULL AND EXISTS (
+		SELECT 1 FROM json_each(facts.subjects) WHERE value IN (` + strings.Join(placeholders, ",") + `)
+	) ORDER BY updated_at DESC`
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query by subjects: %w", err)
 	}
 	defer rows.Close()
 
@@ -423,9 +478,9 @@ func (s *Store) Stats() map[string]any {
 func (s *Store) scanFact(row *sql.Row) (*Fact, error) {
 	var f Fact
 	var idStr, catStr, createdStr, updatedStr, accessedStr string
-	var source sql.NullString
+	var source, subjectsRaw sql.NullString
 
-	err := row.Scan(&idStr, &catStr, &f.Key, &f.Value, &source, &f.Confidence, &createdStr, &updatedStr, &accessedStr)
+	err := row.Scan(&idStr, &catStr, &f.Key, &f.Value, &source, &f.Confidence, &subjectsRaw, &createdStr, &updatedStr, &accessedStr)
 	if err != nil {
 		return nil, err
 	}
@@ -434,6 +489,9 @@ func (s *Store) scanFact(row *sql.Row) (*Fact, error) {
 	f.Category = Category(catStr)
 	if source.Valid {
 		f.Source = source.String
+	}
+	if subjectsRaw.Valid {
+		_ = json.Unmarshal([]byte(subjectsRaw.String), &f.Subjects)
 	}
 	f.CreatedAt, _ = time.Parse(time.RFC3339, createdStr)
 	f.UpdatedAt, _ = time.Parse(time.RFC3339, updatedStr)
@@ -445,9 +503,9 @@ func (s *Store) scanFact(row *sql.Row) (*Fact, error) {
 func (s *Store) scanFactRow(rows *sql.Rows) (*Fact, error) {
 	var f Fact
 	var idStr, catStr, createdStr, updatedStr, accessedStr string
-	var source sql.NullString
+	var source, subjectsRaw sql.NullString
 
-	err := rows.Scan(&idStr, &catStr, &f.Key, &f.Value, &source, &f.Confidence, &createdStr, &updatedStr, &accessedStr)
+	err := rows.Scan(&idStr, &catStr, &f.Key, &f.Value, &source, &f.Confidence, &subjectsRaw, &createdStr, &updatedStr, &accessedStr)
 	if err != nil {
 		return nil, err
 	}
@@ -456,6 +514,9 @@ func (s *Store) scanFactRow(rows *sql.Rows) (*Fact, error) {
 	f.Category = Category(catStr)
 	if source.Valid {
 		f.Source = source.String
+	}
+	if subjectsRaw.Valid {
+		_ = json.Unmarshal([]byte(subjectsRaw.String), &f.Subjects)
 	}
 	f.CreatedAt, _ = time.Parse(time.RFC3339, createdStr)
 	f.UpdatedAt, _ = time.Parse(time.RFC3339, updatedStr)
@@ -560,10 +621,10 @@ func (s *Store) GetFactsWithoutEmbeddings() ([]*Fact, error) {
 func (s *Store) scanFactWithEmbedding(rows *sql.Rows) (*Fact, error) {
 	var f Fact
 	var idStr, catStr, createdStr, updatedStr, accessedStr string
-	var source sql.NullString
+	var source, subjectsRaw sql.NullString
 	var embeddingBlob []byte
 
-	err := rows.Scan(&idStr, &catStr, &f.Key, &f.Value, &source, &f.Confidence, &embeddingBlob, &createdStr, &updatedStr, &accessedStr)
+	err := rows.Scan(&idStr, &catStr, &f.Key, &f.Value, &source, &f.Confidence, &subjectsRaw, &embeddingBlob, &createdStr, &updatedStr, &accessedStr)
 	if err != nil {
 		return nil, err
 	}
@@ -572,6 +633,9 @@ func (s *Store) scanFactWithEmbedding(rows *sql.Rows) (*Fact, error) {
 	f.Category = Category(catStr)
 	if source.Valid {
 		f.Source = source.String
+	}
+	if subjectsRaw.Valid {
+		_ = json.Unmarshal([]byte(subjectsRaw.String), &f.Subjects)
 	}
 	f.Embedding = decodeEmbedding(embeddingBlob)
 	f.CreatedAt, _ = time.Parse(time.RFC3339, createdStr)
