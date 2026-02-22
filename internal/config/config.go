@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/email"
+	"github.com/nugget/thane-ai-agent/internal/forge"
 	"github.com/nugget/thane-ai-agent/internal/search"
 	"gopkg.in/yaml.v3"
 )
@@ -173,6 +174,11 @@ type Config struct {
 	// can list, read, search, and manage email directly without an MCP
 	// email server subprocess.
 	Email email.Config `yaml:"email"`
+
+	// Forge configures native code forge (GitHub) access. When configured,
+	// Thane can create and manage issues, review pull requests, and search
+	// repositories without an MCP forge server subprocess.
+	Forge forge.Config `yaml:"forge"`
 
 	// StateWindow configures the rolling window of recent Home Assistant
 	// state changes injected into the agent's system prompt on every run.
@@ -997,6 +1003,7 @@ func (c *Config) applyDefaults() {
 	}
 
 	c.Email.ApplyDefaults()
+	c.Forge.ApplyDefaults()
 
 	if c.StateWindow.MaxEntries == 0 {
 		c.StateWindow.MaxEntries = 50
@@ -1114,6 +1121,11 @@ func (c *Config) Validate() error {
 	}
 	if c.Email.Configured() {
 		if err := c.Email.Validate(); err != nil {
+			return err
+		}
+	}
+	if c.Forge.Configured() {
+		if err := c.Forge.Validate(); err != nil {
 			return err
 		}
 	}

@@ -47,6 +47,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/episodic"
 	"github.com/nugget/thane-ai-agent/internal/facts"
 	"github.com/nugget/thane-ai-agent/internal/fetch"
+	"github.com/nugget/thane-ai-agent/internal/forge"
 	"github.com/nugget/thane-ai-agent/internal/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/ingest"
 	"github.com/nugget/thane-ai-agent/internal/llm"
@@ -858,6 +859,22 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		logger.Info("email enabled", "accounts", emailMgr.AccountNames(), "poll_interval", cfg.Email.PollIntervalSec)
 	} else {
 		logger.Info("email disabled (not configured)")
+	}
+
+	// --- Forge ---
+	// Native GitHub API integration. Replaces the MCP GitHub server approach
+	// for issue/PR management and code search.
+	if cfg.Forge.Configured() {
+		forgeRegistry, err := forge.NewRegistry(cfg.Forge, nil)
+		if err != nil {
+			logger.Warn("forge registry init failed", "error", err)
+		} else {
+			forgeTools := forge.NewTools(forgeRegistry, loop.Tools().TempFileStore())
+			loop.Tools().SetForgeTools(forgeTools)
+			logger.Info("forge enabled", "accounts", len(cfg.Forge.Accounts))
+		}
+	} else {
+		logger.Info("forge disabled (not configured)")
 	}
 
 	// --- Working memory tool ---
