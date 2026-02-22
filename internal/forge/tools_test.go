@@ -641,8 +641,8 @@ func TestHandleIssueList(t *testing.T) {
 		mp := &mockProvider{
 			name: "test",
 			listIssuesResult: []*Issue{
-				{Number: 1, Title: "First", State: "open", Author: "alice", Labels: []string{"bug"}, Comments: 3},
-				{Number: 2, Title: "Second", State: "closed", Author: "bob", Comments: 0},
+				{Number: 1, Title: "First", State: "open", Author: "alice", Labels: []string{"bug"}, CommentCount: 3},
+				{Number: 2, Title: "Second", State: "closed", Author: "bob", CommentCount: 0},
 			},
 		}
 		tools := newTestTools(mp, "owner")

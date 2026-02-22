@@ -14,142 +14,235 @@ const (
 	SearchCommits SearchKind = "commits"
 )
 
-// Issue represents a forge issue.
+// Issue represents a forge issue or pull request issue entry.
 type Issue struct {
-	Number    int       `json:"number"`
-	Title     string    `json:"title"`
-	Body      string    `json:"body"`
-	State     string    `json:"state"` // "open" or "closed"
-	Labels    []string  `json:"labels,omitempty"`
-	Assignees []string  `json:"assignees,omitempty"`
-	Author    string    `json:"author"`
-	URL       string    `json:"url"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
-	Comments  int       `json:"comments"`
+	// Number is the issue number (e.g., #42).
+	Number int
+	// Title is the issue title.
+	Title string
+	// Body is the full issue body in markdown.
+	Body string
+	// State is the issue lifecycle state: "open" or "closed".
+	State string
+	// Labels lists the label names applied to this issue.
+	Labels []string
+	// Assignees lists the usernames assigned to this issue.
+	Assignees []string
+	// Author is the username who created the issue.
+	Author string
+	// URL is the web URL for the issue.
+	URL string
+	// CreatedAt is when the issue was created.
+	CreatedAt time.Time
+	// UpdatedAt is when the issue was last modified.
+	UpdatedAt time.Time
+	// CommentCount is the number of comments on the issue.
+	CommentCount int
 }
 
 // IssueUpdate holds fields for updating an issue. Pointer fields
-// distinguish "not provided" (nil) from "set to empty". When Body is
-// non-nil it REPLACES the entire issue body — it does not append.
+// distinguish "not provided" (nil) from "set to empty value".
 type IssueUpdate struct {
-	Title     *string   `json:"title,omitempty"`
-	Body      *string   `json:"body,omitempty"`
-	State     *string   `json:"state,omitempty"`
-	Labels    *[]string `json:"labels,omitempty"`
-	Assignees *[]string `json:"assignees,omitempty"`
+	// Title replaces the issue title when non-nil.
+	Title *string
+	// Body REPLACES the entire issue body when non-nil — it does not
+	// append. Leave nil to keep the existing body unchanged.
+	Body *string
+	// State changes the issue state when non-nil: "open" or "closed".
+	State *string
+	// Labels REPLACES all labels when non-nil. Pass an empty slice to
+	// remove all labels.
+	Labels *[]string
+	// Assignees REPLACES all assignees when non-nil.
+	Assignees *[]string
 }
 
 // PullRequest represents a forge pull request.
 type PullRequest struct {
-	Number       int       `json:"number"`
-	Title        string    `json:"title"`
-	Body         string    `json:"body"`
-	State        string    `json:"state"`
-	Author       string    `json:"author"`
-	Head         string    `json:"head"`
-	Base         string    `json:"base"`
-	Mergeable    *bool     `json:"mergeable,omitempty"`
-	ReviewState  string    `json:"review_state,omitempty"`
-	Additions    int       `json:"additions"`
-	Deletions    int       `json:"deletions"`
-	ChangedFiles int       `json:"changed_files"`
-	URL          string    `json:"url"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	// Number is the PR number (e.g., #99).
+	Number int
+	// Title is the PR title.
+	Title string
+	// Body is the full PR description in markdown.
+	Body string
+	// State is the PR lifecycle state: "open", "closed", or "merged".
+	State string
+	// Author is the username who opened the PR.
+	Author string
+	// Head is the source branch name.
+	Head string
+	// Base is the target branch name.
+	Base string
+	// Mergeable indicates whether the PR can be merged cleanly. Nil
+	// means the mergeability check has not completed yet.
+	Mergeable *bool
+	// ReviewState is the aggregate review status (e.g., "approved").
+	ReviewState string
+	// Additions is the total lines added across all files.
+	Additions int
+	// Deletions is the total lines removed across all files.
+	Deletions int
+	// ChangedFiles is the number of files modified.
+	ChangedFiles int
+	// URL is the web URL for the PR.
+	URL string
+	// CreatedAt is when the PR was opened.
+	CreatedAt time.Time
+	// UpdatedAt is when the PR was last modified.
+	UpdatedAt time.Time
 }
 
 // Comment represents a comment on an issue or pull request.
 type Comment struct {
-	ID        int64     `json:"id"`
-	Body      string    `json:"body"`
-	Author    string    `json:"author"`
-	URL       string    `json:"url"`
-	CreatedAt time.Time `json:"created_at"`
+	// ID is the forge-assigned comment identifier.
+	ID int64
+	// Body is the comment text in markdown.
+	Body string
+	// Author is the username who posted the comment.
+	Author string
+	// URL is the web URL for the comment.
+	URL string
+	// CreatedAt is when the comment was posted.
+	CreatedAt time.Time
 }
 
 // ChangedFile represents a file changed in a pull request.
 type ChangedFile struct {
-	Filename  string `json:"filename"`
-	Status    string `json:"status"` // "added", "modified", "removed", "renamed"
-	Additions int    `json:"additions"`
-	Deletions int    `json:"deletions"`
-	Patch     string `json:"patch,omitempty"`
+	// Filename is the path of the changed file.
+	Filename string
+	// Status describes the change type: "added", "modified", "removed",
+	// or "renamed".
+	Status string
+	// Additions is the number of lines added in this file.
+	Additions int
+	// Deletions is the number of lines removed in this file.
+	Deletions int
+	// Patch is the unified diff patch for this file, if available.
+	Patch string
 }
 
-// Commit represents a single commit.
+// Commit represents a single commit in a pull request.
 type Commit struct {
-	SHA     string    `json:"sha"`
-	Message string    `json:"message"`
-	Author  string    `json:"author"`
-	Date    time.Time `json:"date"`
+	// SHA is the abbreviated commit hash (typically 7 characters).
+	SHA string
+	// Message is the full commit message.
+	Message string
+	// Author is the commit author name.
+	Author string
+	// Date is when the commit was authored.
+	Date time.Time
 }
 
 // Review represents a pull request review with optional inline comments.
 type Review struct {
-	ID             int64            `json:"id"`
-	Author         string           `json:"author"`
-	State          string           `json:"state"` // "APPROVED", "CHANGES_REQUESTED", "COMMENTED", "DISMISSED"
-	Body           string           `json:"body"`
-	SubmittedAt    time.Time        `json:"submitted_at"`
-	InlineComments []*ReviewComment `json:"inline_comments,omitempty"`
+	// ID is the forge-assigned review identifier.
+	ID int64
+	// Author is the username who submitted the review.
+	Author string
+	// State is the review verdict: "APPROVED", "CHANGES_REQUESTED",
+	// "COMMENTED", or "DISMISSED".
+	State string
+	// Body is the review summary text.
+	Body string
+	// SubmittedAt is when the review was submitted.
+	SubmittedAt time.Time
+	// InlineComments are line-level comments attached to this review.
+	InlineComments []*ReviewComment
 }
 
 // ReviewSubmission holds the parameters for submitting a new review.
 type ReviewSubmission struct {
-	Event string `json:"event"` // "APPROVE", "COMMENT", "REQUEST_CHANGES"
-	Body  string `json:"body"`
+	// Event is the review action: "APPROVE", "COMMENT", or
+	// "REQUEST_CHANGES".
+	Event string
+	// Body is the review summary text.
+	Body string
 }
 
 // ReviewComment represents an inline comment on a pull request diff.
 type ReviewComment struct {
-	ID   int64  `json:"id,omitempty"`
-	Body string `json:"body"`
-	Path string `json:"path"`
-	Line int    `json:"line"`
-	Side string `json:"side,omitempty"` // "LEFT" or "RIGHT"
+	// ID is the forge-assigned comment identifier (zero for new comments).
+	ID int64
+	// Body is the comment text.
+	Body string
+	// Path is the file path in the diff.
+	Path string
+	// Line is the line number in the diff.
+	Line int
+	// Side selects the diff side: "LEFT" or "RIGHT" (default "RIGHT").
+	Side string
 }
 
 // CheckRun represents a CI check run on a pull request.
 type CheckRun struct {
-	Name        string     `json:"name"`
-	Status      string     `json:"status"`     // "queued", "in_progress", "completed"
-	Conclusion  string     `json:"conclusion"` // "success", "failure", "neutral", etc.
-	StartedAt   *time.Time `json:"started_at,omitempty"`
-	CompletedAt *time.Time `json:"completed_at,omitempty"`
-	DetailsURL  string     `json:"details_url,omitempty"`
+	// Name is the check run name (e.g., "CI / lint").
+	Name string
+	// Status is the check lifecycle: "queued", "in_progress", or
+	// "completed".
+	Status string
+	// Conclusion is the outcome when completed: "success", "failure",
+	// "neutral", "cancelled", "skipped", "timed_out", or
+	// "action_required".
+	Conclusion string
+	// StartedAt is when the check run started, if available.
+	StartedAt *time.Time
+	// CompletedAt is when the check run finished, if available.
+	CompletedAt *time.Time
+	// DetailsURL links to the full check run output.
+	DetailsURL string
 }
 
 // MergeOptions controls how a pull request is merged.
 type MergeOptions struct {
-	Method        string `json:"method,omitempty"` // "squash" (default), "merge", "rebase"
-	CommitTitle   string `json:"commit_title,omitempty"`
-	CommitMessage string `json:"commit_message,omitempty"`
+	// Method is the merge strategy: "squash" (default), "merge", or
+	// "rebase".
+	Method string
+	// CommitTitle overrides the merge commit title.
+	CommitTitle string
+	// CommitMessage overrides the merge commit body. Supports
+	// temp:LABEL references.
+	CommitMessage string
 }
 
 // MergeResult reports the outcome of a pull request merge.
 type MergeResult struct {
-	SHA     string `json:"sha"`
-	Message string `json:"message"`
+	// SHA is the merge commit hash.
+	SHA string
+	// Message is the merge result message from the forge.
+	Message string
 }
 
 // ListOptions controls pagination and filtering for list operations.
 type ListOptions struct {
-	State     string `json:"state,omitempty"`  // "open", "closed", "all"
-	Labels    string `json:"labels,omitempty"` // comma-separated label filter
-	Assignee  string `json:"assignee,omitempty"`
-	Base      string `json:"base,omitempty"`      // PR filter: base branch
-	Head      string `json:"head,omitempty"`      // PR filter: head branch
-	Sort      string `json:"sort,omitempty"`      // "created", "updated", "comments"
-	Direction string `json:"direction,omitempty"` // "asc", "desc"
-	Limit     int    `json:"limit,omitempty"`
-	Page      int    `json:"page,omitempty"`
+	// State filters by lifecycle state: "open", "closed", or "all".
+	State string
+	// Labels is a comma-separated label filter for issues.
+	Labels string
+	// Assignee filters issues by assignee username.
+	Assignee string
+	// Base filters PRs by target branch.
+	Base string
+	// Head filters PRs by source branch.
+	Head string
+	// Sort controls result ordering: "created", "updated", or
+	// "comments".
+	Sort string
+	// Direction controls sort direction: "asc" or "desc".
+	Direction string
+	// Limit caps the number of results per page (default 30, max 100).
+	Limit int
+	// Page selects the result page (1-indexed, default 1).
+	Page int
 }
 
 // SearchResult represents a single search result from a forge.
 type SearchResult struct {
-	Number int    `json:"number,omitempty"` // for issues/PRs
-	Title  string `json:"title"`
-	URL    string `json:"url"`
-	Body   string `json:"body,omitempty"` // snippet for code, description for issues
+	// Number is the issue or PR number (zero for non-issue results).
+	Number int
+	// Title is the result title or abbreviated SHA for commits.
+	Title string
+	// URL is the web URL for the result.
+	URL string
+	// Body is a snippet for code results or description for issues.
+	Body string
 }

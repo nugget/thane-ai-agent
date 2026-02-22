@@ -269,7 +269,7 @@ func (t *Tools) HandleIssueList(ctx context.Context, args map[string]any) (strin
 			labels = " [" + strings.Join(i.Labels, ", ") + "]"
 		}
 		fmt.Fprintf(&sb, "#%d %s (%s)%s — %s, %d comments\n",
-			i.Number, i.Title, i.State, labels, i.Author, i.Comments)
+			i.Number, i.Title, i.State, labels, i.Author, i.CommentCount)
 	}
 
 	return sb.String(), nil

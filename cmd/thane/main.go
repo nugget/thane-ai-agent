@@ -864,8 +864,8 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// --- Forge integration ---
 	// Native GitHub (and future Gitea/GitLab) integration. Replaces the
 	// MCP github server with direct API calls via go-github.
-	if cfg.Forges.Configured() {
-		forgeMgr, err := forge.NewManager(cfg.Forges, logger)
+	if cfg.Forge.Configured() {
+		forgeMgr, err := forge.NewManager(cfg.Forge, logger)
 		if err != nil {
 			return fmt.Errorf("create forge manager: %w", err)
 		}
@@ -878,7 +878,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		forgeTools := forge.NewTools(forgeMgr, tempResolver, tools.ConversationIDFromContext, logger)
 		loop.Tools().SetForgeTools(forgeTools)
 
-		logger.Info("forge enabled", "accounts", len(cfg.Forges.Accounts))
+		logger.Info("forge enabled", "accounts", len(cfg.Forge.Accounts))
 	} else {
 		logger.Info("forge disabled (not configured)")
 	}

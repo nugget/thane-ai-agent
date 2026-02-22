@@ -683,15 +683,15 @@ func (g *GitHub) Search(ctx context.Context, query string, kind SearchKind, limi
 
 func mapGitHubIssue(gi *github.Issue) *Issue {
 	issue := &Issue{
-		Number:    gi.GetNumber(),
-		Title:     gi.GetTitle(),
-		Body:      gi.GetBody(),
-		State:     gi.GetState(),
-		Author:    gi.GetUser().GetLogin(),
-		URL:       gi.GetHTMLURL(),
-		CreatedAt: gi.GetCreatedAt().Time,
-		UpdatedAt: gi.GetUpdatedAt().Time,
-		Comments:  gi.GetComments(),
+		Number:       gi.GetNumber(),
+		Title:        gi.GetTitle(),
+		Body:         gi.GetBody(),
+		State:        gi.GetState(),
+		Author:       gi.GetUser().GetLogin(),
+		URL:          gi.GetHTMLURL(),
+		CreatedAt:    gi.GetCreatedAt().Time,
+		UpdatedAt:    gi.GetUpdatedAt().Time,
+		CommentCount: gi.GetComments(),
 	}
 	for _, l := range gi.Labels {
 		issue.Labels = append(issue.Labels, l.GetName())

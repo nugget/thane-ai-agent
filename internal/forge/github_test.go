@@ -69,8 +69,8 @@ func TestGitHubGetIssue(t *testing.T) {
 	if issue.Author != "alice" {
 		t.Errorf("Author = %q, want %q", issue.Author, "alice")
 	}
-	if issue.Comments != 3 {
-		t.Errorf("Comments = %d, want 3", issue.Comments)
+	if issue.CommentCount != 3 {
+		t.Errorf("CommentCount = %d, want 3", issue.CommentCount)
 	}
 	if len(issue.Labels) != 2 || issue.Labels[0] != "bug" || issue.Labels[1] != "urgent" {
 		t.Errorf("Labels = %v, want [bug urgent]", issue.Labels)
