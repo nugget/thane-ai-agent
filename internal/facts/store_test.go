@@ -123,15 +123,15 @@ func TestFTS5_SearchByKeyword(t *testing.T) {
 	}
 
 	// Insert test facts.
-	_, err := store.Set(CategoryHome, "living_room_layout", "Large room with sectional sofa facing the TV", "user", 1.0)
+	_, err := store.Set(CategoryHome, "living_room_layout", "Large room with sectional sofa facing the TV", "user", 1.0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = store.Set(CategoryDevice, "office_light", "Hue Go lamp on the desk", "observation", 1.0)
+	_, err = store.Set(CategoryDevice, "office_light", "Hue Go lamp on the desk", "observation", 1.0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = store.Set(CategoryPreference, "music_volume", "Prefers volume at 40% during work hours", "user", 1.0)
+	_, err = store.Set(CategoryPreference, "music_volume", "Prefers volume at 40% during work hours", "user", 1.0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,7 +198,7 @@ func TestFTS5_SearchExcludesDeleted(t *testing.T) {
 		t.Skip("FTS5 not available")
 	}
 
-	_, err := store.Set(CategoryDevice, "garage_sensor", "Temperature sensor in the garage", "observation", 1.0)
+	_, err := store.Set(CategoryDevice, "garage_sensor", "Temperature sensor in the garage", "observation", 1.0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,13 +233,13 @@ func TestFTS5_SearchAfterUpdate(t *testing.T) {
 		t.Skip("FTS5 not available")
 	}
 
-	_, err := store.Set(CategoryPreference, "color_temp", "Prefers warm white lights", "user", 1.0)
+	_, err := store.Set(CategoryPreference, "color_temp", "Prefers warm white lights", "user", 1.0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Update the value.
-	_, err = store.Set(CategoryPreference, "color_temp", "Prefers cool daylight during work hours", "user", 1.0)
+	_, err = store.Set(CategoryPreference, "color_temp", "Prefers cool daylight during work hours", "user", 1.0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -293,7 +293,7 @@ func TestFTS5_LIKEFallbackPath(t *testing.T) {
 	// Test the LIKE search path directly (independent of FTS5 availability).
 	store := newTestStore(t)
 
-	_, err := store.Set(CategoryHome, "bedroom_size", "Master bedroom is 14x16 feet", "user", 1.0)
+	_, err := store.Set(CategoryHome, "bedroom_size", "Master bedroom is 14x16 feet", "user", 1.0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -210,6 +210,13 @@ func (r *Registry) registerFactTools() {
 					"type":        "string",
 					"description": "Where this information came from",
 				},
+				"subjects": map[string]any{
+					"type": "array",
+					"items": map[string]any{
+						"type": "string",
+					},
+					"description": "Subject keys this fact relates to. Prefix with type: entity:, contact:, phone:, zone:, camera:, location:. Example: [\"entity:binary_sensor.driveway\", \"zone:driveway\"]",
+				},
 			},
 			"required": []string{"key", "value"},
 		},

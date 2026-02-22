@@ -1547,6 +1547,17 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	}
 	contextProvider.Add(contacts.NewContextProvider(contactStore, contactEmbedder))
 
+	// Subject-keyed fact injection — pre-warm cold-start loops with
+	// facts keyed to specific entities, contacts, zones, etc.
+	if cfg.Prewarm.Enabled {
+		subjectProvider := facts.NewSubjectContextProvider(factStore, logger)
+		if cfg.Prewarm.MaxFacts > 0 {
+			subjectProvider.SetMaxFacts(cfg.Prewarm.MaxFacts)
+		}
+		contextProvider.Add(subjectProvider)
+		logger.Info("context pre-warming enabled", "max_facts", cfg.Prewarm.MaxFacts)
+	}
+
 	loop.SetContextProvider(contextProvider)
 	logger.Info("context providers initialized",
 		"episodic_daily_dir", cfg.Episodic.DailyDir,
@@ -2029,7 +2040,7 @@ func (f *factSetterFunc) SetFact(category, key, value, source string, confidence
 		}
 	}
 
-	_, err = f.store.Set(facts.Category(category), key, value, source, confidence)
+	_, err = f.store.Set(facts.Category(category), key, value, source, confidence, nil)
 	return err
 }
 
