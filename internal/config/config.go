@@ -753,10 +753,6 @@ func (c SignalConfig) Configured() bool {
 	return c.Enabled && c.Command != "" && c.Account != ""
 }
 
-// StateWindowConfig configures the rolling window of recent Home
-// Assistant state changes that is injected into the agent's system
-// prompt on every run. The window provides ambient awareness of
-// recent state transitions without requiring tool calls.
 // PrewarmConfig configures context pre-warming for cold-start loops.
 // When enabled, subject-keyed facts are injected into the system prompt
 // before the model sees the triggering event. This reduces wasted
@@ -1160,6 +1156,9 @@ func (c *Config) Validate() error {
 	}
 	if c.StateWindow.MaxAgeMinutes < 1 {
 		return fmt.Errorf("state_window.max_age_minutes %d must be positive", c.StateWindow.MaxAgeMinutes)
+	}
+	if c.Prewarm.Enabled && c.Prewarm.MaxFacts < 1 {
+		return fmt.Errorf("prewarm.max_facts %d must be positive when prewarm is enabled", c.Prewarm.MaxFacts)
 	}
 	if err := c.validateMetacognitive(); err != nil {
 		return err
