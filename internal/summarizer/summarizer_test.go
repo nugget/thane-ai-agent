@@ -363,7 +363,7 @@ func TestWorker_ClosesOrphanedSessions(t *testing.T) {
 	}
 }
 
-func TestWorker_EmptyTranscriptMarkedSummarized(t *testing.T) {
+func TestWorker_StaleCountSessionExcluded(t *testing.T) {
 	store := newTestStore(t)
 	mock := &mockLLMClient{}
 	rtr := newTestRouter()
@@ -371,7 +371,9 @@ func TestWorker_EmptyTranscriptMarkedSummarized(t *testing.T) {
 	// Create an ended session with message_count > 0 but no archived
 	// messages — simulates scheduler/delegate sessions that bump the
 	// counter without producing a user-visible transcript.
-	sess, err := store.StartSession("conv-empty")
+	// With the EXISTS-based query (issue #341), this session is excluded
+	// from UnsummarizedSessions entirely rather than fetched-then-marked.
+	sess, err := store.StartSession("conv-stale")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -380,6 +382,15 @@ func TestWorker_EmptyTranscriptMarkedSummarized(t *testing.T) {
 	}
 	if err := store.EndSession(sess.ID, "test"); err != nil {
 		t.Fatal(err)
+	}
+
+	// The session should not appear in the unsummarized list at all.
+	remaining, err := store.UnsummarizedSessions(10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(remaining) != 0 {
+		t.Errorf("expected 0 unsummarized sessions (stale count excluded), got %d", len(remaining))
 	}
 
 	cfg := Config{
@@ -393,40 +404,24 @@ func TestWorker_EmptyTranscriptMarkedSummarized(t *testing.T) {
 	w := New(store, mock, rtr, slog.Default(), cfg)
 	w.Start(ctx)
 
-	// Wait for the startup scan to mark the session, rather than a
-	// fixed sleep that can be flaky under load.
-	waitFor(t, 5*time.Second, func() bool {
-		remaining, err := store.UnsummarizedSessions(10)
-		if err != nil {
-			return false
-		}
-		return len(remaining) == 0
-	})
+	// Give the worker one scan cycle.
+	time.Sleep(50 * time.Millisecond)
 
 	cancel()
 	w.Stop()
 
-	// LLM should never have been called — no transcript to summarize.
+	// LLM should never have been called — session was never fetched.
 	if mock.calls.Load() != 0 {
-		t.Errorf("expected 0 LLM calls for empty-transcript session, got %d", mock.calls.Load())
+		t.Errorf("expected 0 LLM calls, got %d", mock.calls.Load())
 	}
 
-	// Verify the placeholder title and metadata were stored.
+	// Session should remain untouched (no title, no metadata).
 	got, err := store.GetSession(sess.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Title != "(empty session)" {
-		t.Errorf("title = %q, want %q", got.Title, "(empty session)")
-	}
-	if got.Metadata == nil {
-		t.Fatal("metadata should not be nil for empty session")
-	}
-	if got.Metadata.SessionType != "empty" {
-		t.Errorf("session_type = %q, want %q", got.Metadata.SessionType, "empty")
-	}
-	if got.Metadata.OneLiner != "Empty session (no transcript)" {
-		t.Errorf("one_liner = %q, want %q", got.Metadata.OneLiner, "Empty session (no transcript)")
+	if got.Title != "" {
+		t.Errorf("title = %q, want empty (session should be untouched)", got.Title)
 	}
 }
 
