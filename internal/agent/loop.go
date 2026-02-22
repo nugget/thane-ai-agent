@@ -873,6 +873,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 
 	maxIterations := 50   // Tool call budget; final text response always gets one extra call
 	emptyRetried := false // Track whether we've already nudged after an empty response
+	deferredText := ""    // Text from a mixed (text + tool_call) response, deferred for later use
 iterLoop:
 	for i := 0; i < maxIterations; i++ {
 		// Select tool definitions for this iteration. With gating active,
@@ -958,7 +959,16 @@ iterLoop:
 		// Check for tool calls
 		if len(llmResp.Message.ToolCalls) > 0 {
 
-			// Add assistant message with tool calls
+			// When the model returns text alongside tool calls, defer the
+			// text for later use and strip it from the message context.
+			// This prevents the model from seeing its own text and restating
+			// it after tool execution (issue #347).
+			if llmResp.Message.Content != "" {
+				deferredText = llmResp.Message.Content
+				llmResp.Message.Content = ""
+			}
+
+			// Add assistant message with tool calls (text stripped)
 			llmMessages = append(llmMessages, llmResp.Message)
 
 			// Execute each tool call
@@ -1080,11 +1090,27 @@ iterLoop:
 			)
 		}
 
-		// Guard against empty responses after tool calls (#167).
+		// If the model produced fresh text after tool execution, discard
+		// any deferred text — the model is providing a new response
+		// informed by tool results.
+		if llmResp.Message.Content != "" && deferredText != "" {
+			deferredText = ""
+		}
+
+		// Guard against empty responses after tool calls (#167, #347).
 		// The model sometimes returns stop tokens with no content after
-		// spending iterations on tool calls. Nudge it once to respond.
+		// spending iterations on tool calls. If text was already produced
+		// (and streamed) alongside earlier tool calls, use that deferred
+		// text instead of nudging — nudging causes the model to restate
+		// the same content, producing duplicated output.
 		if llmResp.Message.Content == "" && i > 0 {
-			if !emptyRetried {
+			if deferredText != "" {
+				log.Info("using deferred text from prior iteration",
+					"iter", i,
+					"deferred_len", len(deferredText),
+				)
+				llmResp.Message.Content = deferredText
+			} else if !emptyRetried {
 				log.Warn("empty response after tool calls, nudging model",
 					"iter", i,
 					"input_tokens", totalInputTokens,
@@ -1096,13 +1122,14 @@ iterLoop:
 				})
 				emptyRetried = true
 				continue
+			} else {
+				log.Error("empty response after nudge, returning fallback",
+					"iter", i,
+					"input_tokens", totalInputTokens,
+					"output_tokens", totalOutputTokens,
+				)
+				llmResp.Message.Content = prompts.EmptyResponseFallback
 			}
-			log.Error("empty response after nudge, returning fallback",
-				"iter", i,
-				"input_tokens", totalInputTokens,
-				"output_tokens", totalOutputTokens,
-			)
-			llmResp.Message.Content = prompts.EmptyResponseFallback
 		}
 
 		resp := &Response{
