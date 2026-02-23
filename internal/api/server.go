@@ -16,6 +16,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/buildinfo"
 	"github.com/nugget/thane-ai-agent/internal/checkpoint"
 	"github.com/nugget/thane-ai-agent/internal/config"
+	"github.com/nugget/thane-ai-agent/internal/events"
 	"github.com/nugget/thane-ai-agent/internal/memory"
 	"github.com/nugget/thane-ai-agent/internal/router"
 	"github.com/nugget/thane-ai-agent/internal/usage"
@@ -60,6 +61,7 @@ type Server struct {
 	archiveStore  *memory.ArchiveStore
 	healthDeps    HealthStatusFunc
 	tokenObserver TokenObserver
+	eventBus      *events.Bus
 	logger        *slog.Logger
 	server        *http.Server
 	stats         *SessionStats
@@ -75,6 +77,11 @@ func (s *Server) SetConnManager(fn HealthStatusFunc) {
 // by the MQTT publisher's daily token accumulator.
 func (s *Server) SetTokenObserver(obs TokenObserver) {
 	s.tokenObserver = obs
+}
+
+// SetEventBus configures the event bus for the WebSocket event stream.
+func (s *Server) SetEventBus(bus *events.Bus) {
+	s.eventBus = bus
 }
 
 // LastRequest returns when the most recent LLM request completed.
