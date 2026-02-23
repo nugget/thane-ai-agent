@@ -1,0 +1,160 @@
+/* Thane Dashboard — dark theme */
+:root {
+    --bg: #0d1117;
+    --bg-card: #161b22;
+    --border: #30363d;
+    --text: #e6edf3;
+    --text-muted: #8b949e;
+    --teal: rgb(0, 200, 180);
+    --teal-dim: rgba(0, 200, 180, 0.15);
+    --red: #f85149;
+    --red-dim: rgba(248, 81, 73, 0.15);
+    --green: #3fb950;
+    --green-dim: rgba(63, 185, 80, 0.15);
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+body {
+    margin: 0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.5;
+}
+
+/* --- Nav --- */
+.nav {
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+    padding: 0.75rem 1.5rem;
+    background: var(--bg-card);
+    border-bottom: 1px solid var(--border);
+    position: sticky;
+    top: 0;
+    z-index: 100;
+}
+.nav-brand {
+    font-weight: 700;
+    font-size: 1.1rem;
+    color: var(--teal);
+}
+.nav-links { display: flex; gap: 0.25rem; }
+.nav-link {
+    padding: 0.4rem 0.75rem;
+    border-radius: 6px;
+    color: var(--text-muted);
+    text-decoration: none;
+    font-size: 0.875rem;
+    transition: background 0.15s, color 0.15s;
+}
+.nav-link:hover { background: var(--teal-dim); color: var(--text); }
+.nav-link.active { background: var(--teal-dim); color: var(--teal); }
+
+/* --- Main / Dashboard --- */
+main { max-width: 72rem; margin: 0 auto; padding: 1.5rem; }
+
+.dashboard h1 {
+    font-size: 1.5rem;
+    margin: 0 0 1.25rem;
+    font-weight: 600;
+}
+
+/* --- Card grid --- */
+.card-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+    gap: 1rem;
+    margin-bottom: 1.25rem;
+}
+.card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 1.25rem;
+    margin-bottom: 1.25rem;
+}
+.card-grid .card { margin-bottom: 0; }
+.card h2 {
+    font-size: 0.875rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+    margin: 0 0 0.75rem;
+    font-weight: 600;
+}
+
+/* --- Stat lists --- */
+.stat-list { margin: 0; padding: 0; }
+.stat-list dt {
+    color: var(--text-muted);
+    font-size: 0.8125rem;
+    margin-top: 0.5rem;
+}
+.stat-list dt:first-child { margin-top: 0; }
+.stat-list dd {
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 500;
+}
+
+/* --- Tables --- */
+.table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.875rem;
+}
+.table th {
+    text-align: left;
+    color: var(--text-muted);
+    font-weight: 600;
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid var(--border);
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+.table td {
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid var(--border);
+}
+.table tbody tr:last-child td { border-bottom: none; }
+
+/* --- Badges --- */
+.badge {
+    display: inline-block;
+    padding: 0.125rem 0.5rem;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    font-weight: 500;
+}
+.badge-ok { background: var(--green-dim); color: var(--green); }
+.badge-err { background: var(--red-dim); color: var(--red); }
+.badge-muted { background: rgba(139, 148, 158, 0.15); color: var(--text-muted); }
+
+/* --- Progress bar --- */
+.progress-bar {
+    height: 6px;
+    background: var(--border);
+    border-radius: 3px;
+    overflow: hidden;
+    margin-top: 0.25rem;
+}
+.progress-fill {
+    height: 100%;
+    background: var(--teal);
+    border-radius: 3px;
+    transition: width 0.3s ease;
+}
+
+/* --- Utilities --- */
+.mono { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace; font-size: 0.8125rem; }
+.text-muted { color: var(--text-muted); }
+
+/* --- Responsive --- */
+@media (max-width: 640px) {
+    .nav { padding: 0.5rem 1rem; }
+    main { padding: 1rem; }
+    .card-grid { grid-template-columns: 1fr; }
+}

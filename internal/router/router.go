@@ -555,6 +555,14 @@ func (r *Router) GetStats() Stats {
 	return r.stats
 }
 
+// GetModels returns a copy of the configured model list. The returned
+// slice is safe to mutate without affecting the router.
+func (r *Router) GetModels() []Model {
+	out := make([]Model, len(r.config.Models))
+	copy(out, r.config.Models)
+	return out
+}
+
 // Explain returns details about why a specific decision was made.
 func (r *Router) Explain(requestID string) *Decision {
 	r.mu.RLock()

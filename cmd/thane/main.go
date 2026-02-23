@@ -73,6 +73,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/unifi"
 	"github.com/nugget/thane-ai-agent/internal/usage"
 	"github.com/nugget/thane-ai-agent/internal/watchlist"
+	"github.com/nugget/thane-ai-agent/internal/web"
 
 	_ "github.com/mattn/go-sqlite3" // SQLite driver for database/sql
 )
@@ -1759,6 +1760,45 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		}
 		return result
 	})
+
+	// --- Web dashboard ---
+	ws := web.NewWebServer(web.Config{
+		StatsFunc: func() web.StatsSnapshot {
+			snap := server.DashboardSnapshot()
+			return web.StatsSnapshot{
+				TotalInputTokens:  snap.TotalInputTokens,
+				TotalOutputTokens: snap.TotalOutputTokens,
+				TotalRequests:     snap.TotalRequests,
+				EstimatedCostUSD:  snap.EstimatedCostUSD,
+				ReportedBalance:   snap.ReportedBalance,
+				BalanceSetAt:      snap.BalanceSetAt,
+				ContextTokens:     snap.ContextTokens,
+				ContextWindow:     snap.ContextWindow,
+				MessageCount:      snap.MessageCount,
+				Build:             snap.Build,
+			}
+		},
+		RouterFunc: func() web.RouterInfo {
+			return web.RouterInfo{
+				Stats:  rtr.GetStats(),
+				Models: rtr.GetModels(),
+			}
+		},
+		HealthFunc: func() map[string]web.HealthStatus {
+			status := connMgr.Status()
+			result := make(map[string]web.HealthStatus, len(status))
+			for name, s := range status {
+				result[name] = web.HealthStatus{
+					Connected: s.Ready,
+					Since:     s.LastCheck,
+					LastError: s.LastError,
+				}
+			}
+			return result
+		},
+		Logger: logger,
+	})
+	server.SetWebServer(ws)
 
 	// --- Checkpointer ---
 	// Periodically snapshots application state (conversations, facts,

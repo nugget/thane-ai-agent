@@ -1,0 +1,142 @@
+{{define "title"}}Thane - Runtime Overview{{end}}
+
+{{define "content"}}
+<div class="dashboard">
+    <h1>Runtime Overview</h1>
+
+    {{/* --- Build / Uptime --- */}}
+    <section class="card-grid">
+        <div class="card">
+            <h2>System</h2>
+            <dl class="stat-list">
+                <dt>Version</dt>
+                <dd>{{index .Stats.Build "version"}}</dd>
+                <dt>Uptime</dt>
+                <dd>{{formatDuration .Uptime}}</dd>
+                <dt>Go</dt>
+                <dd>{{index .Stats.Build "go_version"}}</dd>
+                <dt>Commit</dt>
+                <dd class="mono">{{index .Stats.Build "git_commit"}}</dd>
+            </dl>
+        </div>
+
+        {{/* --- Session Stats --- */}}
+        <div class="card">
+            <h2>Session</h2>
+            <dl class="stat-list">
+                <dt>Requests</dt>
+                <dd>{{.Stats.TotalRequests}}</dd>
+                <dt>Input tokens</dt>
+                <dd>{{formatTokens .Stats.TotalInputTokens}}</dd>
+                <dt>Output tokens</dt>
+                <dd>{{formatTokens .Stats.TotalOutputTokens}}</dd>
+                <dt>Cost</dt>
+                <dd>{{formatCost .Stats.EstimatedCostUSD}}</dd>
+            </dl>
+        </div>
+
+        {{/* --- Context Window --- */}}
+        <div class="card">
+            <h2>Context</h2>
+            <dl class="stat-list">
+                <dt>Messages</dt>
+                <dd>{{.Stats.MessageCount}}</dd>
+                <dt>Tokens</dt>
+                <dd>{{formatTokens (int64 .Stats.ContextTokens)}} / {{formatTokens (int64 .Stats.ContextWindow)}}</dd>
+                <dt>Usage</dt>
+                <dd>
+                    <div class="progress-bar">
+                        <div class="progress-fill" style="width: {{pct .Stats.ContextTokens .Stats.ContextWindow}}%"></div>
+                    </div>
+                    <span class="text-muted">{{pct .Stats.ContextTokens .Stats.ContextWindow}}%</span>
+                </dd>
+            </dl>
+        </div>
+    </section>
+
+    {{/* --- Dependencies --- */}}
+    {{if .Health}}
+    <section class="card">
+        <h2>Dependencies</h2>
+        <table class="table">
+            <thead>
+                <tr>
+                    <th>Service</th>
+                    <th>Status</th>
+                    <th>Error</th>
+                </tr>
+            </thead>
+            <tbody>
+                {{range $name, $h := .Health}}
+                <tr>
+                    <td>{{$name}}</td>
+                    <td>
+                        {{if $h.Connected}}
+                            <span class="badge badge-ok">connected</span>
+                        {{else}}
+                            <span class="badge badge-err">disconnected</span>
+                        {{end}}
+                    </td>
+                    <td class="text-muted">{{$h.LastError}}</td>
+                </tr>
+                {{end}}
+            </tbody>
+        </table>
+    </section>
+    {{end}}
+
+    {{/* --- Model Roster --- */}}
+    {{if .Router.Models}}
+    <section class="card">
+        <h2>Model Roster</h2>
+        <table class="table">
+            <thead>
+                <tr>
+                    <th>Model</th>
+                    <th>Provider</th>
+                    <th>Quality</th>
+                    <th>Speed</th>
+                    <th>Cost</th>
+                    <th>Context</th>
+                    <th>Tools</th>
+                </tr>
+            </thead>
+            <tbody>
+                {{range .Router.Models}}
+                <tr>
+                    <td class="mono">{{.Name}}</td>
+                    <td>{{.Provider}}</td>
+                    <td>{{.Quality}}/10</td>
+                    <td>{{.Speed}}/10</td>
+                    <td>tier {{.CostTier}}</td>
+                    <td>{{formatTokens (int64 .ContextWindow)}}</td>
+                    <td>{{if .SupportsTools}}<span class="badge badge-ok">yes</span>{{else}}<span class="badge badge-muted">no</span>{{end}}</td>
+                </tr>
+                {{end}}
+            </tbody>
+        </table>
+    </section>
+    {{end}}
+
+    {{/* --- Routing Stats --- */}}
+    <section class="card">
+        <h2>Routing</h2>
+        <dl class="stat-list">
+            <dt>Total routed</dt>
+            <dd>{{.Router.Stats.TotalRequests}}</dd>
+        </dl>
+        {{if .Router.Stats.ModelCounts}}
+        <table class="table">
+            <thead>
+                <tr><th>Model</th><th>Count</th></tr>
+            </thead>
+            <tbody>
+                {{range $model, $count := .Router.Stats.ModelCounts}}
+                <tr><td class="mono">{{$model}}</td><td>{{$count}}</td></tr>
+                {{end}}
+            </tbody>
+        </table>
+        {{end}}
+    </section>
+</div>
+{{end}}
