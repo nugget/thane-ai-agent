@@ -518,7 +518,7 @@ func (s *ArchiveStore) scanToolCalls(rows *sql.Rows) ([]ArchivedToolCall, error)
 
 // Search performs a full-text search with gap-aware context expansion.
 func (s *ArchiveStore) Search(opts SearchOptions) ([]SearchResult, error) {
-	if opts.Query == "" {
+	if strings.TrimSpace(opts.Query) == "" {
 		return nil, fmt.Errorf("query is required")
 	}
 	if opts.Limit <= 0 {
@@ -1370,18 +1370,21 @@ func nullString(s string) any {
 }
 
 // sanitizeFTS5Query wraps each search term in double quotes to prevent FTS5
-// syntax errors from special characters like periods, colons, and parentheses.
-// E.g., "models.yaml config" becomes `"models.yaml" "config"`.
+// syntax errors from special characters like periods, colons, and parentheses,
+// then joins terms with OR so that broader recall is possible. BM25 ranking
+// ensures messages matching more terms score higher.
+//
+// E.g., "consciousness hard problem" becomes `"consciousness" OR "hard" OR "problem"`.
 func sanitizeFTS5Query(query string) string {
 	words := strings.Fields(query)
 	if len(words) == 0 {
-		return query
+		return ""
 	}
 	quoted := make([]string, len(words))
 	for i, w := range words {
-		// Escape any existing double quotes in the term
+		// Escape any existing double quotes in the term.
 		w = strings.ReplaceAll(w, `"`, `""`)
 		quoted[i] = `"` + w + `"`
 	}
-	return strings.Join(quoted, " ")
+	return strings.Join(quoted, " OR ")
 }

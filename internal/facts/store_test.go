@@ -273,10 +273,11 @@ func TestSanitizeFTS5Query(t *testing.T) {
 		want  string
 	}{
 		{"simple word", "hello", `"hello"`},
-		{"two words", "pool heater", `"pool" "heater"`},
-		{"special chars", "models.yaml config", `"models.yaml" "config"`},
+		{"two words", "pool heater", `"pool" OR "heater"`},
+		{"special chars", "models.yaml config", `"models.yaml" OR "config"`},
 		{"empty", "", ""},
-		{"with quotes", `say "hello"`, `"say" """hello"""`},
+		{"whitespace only", "   \t\n  ", ""},
+		{"with quotes", `say "hello"`, `"say" OR """hello"""`},
 	}
 
 	for _, tt := range tests {
