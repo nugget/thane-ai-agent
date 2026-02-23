@@ -1233,16 +1233,25 @@ func TestProcessAttachments_PathTraversal(t *testing.T) {
 		t.Fatalf("expected 1 description, got %d", len(descs))
 	}
 
-	// File should be written inside destDir only, not outside it.
+	// File should be written inside destDir with basename only.
 	destPath := filepath.Join(destDir, "passwd")
-	if _, err := os.Stat(destPath); err != nil {
+	got, err := os.ReadFile(destPath)
+	if err != nil {
 		t.Fatalf("file should be saved with sanitized name in dest dir: %v", err)
 	}
+	if string(got) != "data" {
+		t.Errorf("copied content = %q, want %q", got, "data")
+	}
 
-	// Nothing should have been written outside destDir.
-	outsidePath := filepath.Join(destDir, "..", "..", "..", "etc", "passwd")
-	if _, err := os.Stat(outsidePath); err == nil {
-		t.Error("path traversal should have been prevented")
+	// Description should reference the sanitized dest path inside
+	// destDir, not a traversal path outside it.
+	if !strings.Contains(descs[0], destPath) {
+		t.Errorf("description should reference dest path %q, got: %q", destPath, descs[0])
+	}
+	// The saved path component (after " — ") must not contain "..".
+	parts := strings.SplitN(descs[0], " — ", 2)
+	if len(parts) == 2 && strings.Contains(parts[1], "..") {
+		t.Errorf("saved path should not contain traversal components: %q", parts[1])
 	}
 }
 
