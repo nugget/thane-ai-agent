@@ -1487,6 +1487,25 @@ func (l *Loop) getAllMessages(conversationID string) []memory.Message {
 	return l.memory.GetMessages(conversationID)
 }
 
+// ConversationTranscript returns a formatted text transcript of the
+// current in-memory conversation for the given ID. System and tool
+// messages are excluded to focus on user/assistant dialogue. Returns
+// empty string if no messages exist.
+func (l *Loop) ConversationTranscript(conversationID string) string {
+	messages := l.getAllMessages(conversationID)
+	if len(messages) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for _, m := range messages {
+		if m.Role == "system" || m.Role == "tool" {
+			continue
+		}
+		fmt.Fprintf(&b, "[%s] %s: %s\n", m.Timestamp.Format("15:04"), m.Role, m.Content)
+	}
+	return b.String()
+}
+
 // archiveAndEndSession archives all messages and ends the active session.
 // Errors are logged but not propagated — callers should not be blocked by
 // archive failures.

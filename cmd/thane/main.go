@@ -1262,8 +1262,12 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 			var signalRotator sigcli.SessionRotator
 			if idleTimeout > 0 {
 				signalRotator = &signalSessionRotator{
-					archiver: archiveAdapter,
-					logger:   logger,
+					loop:      loop,
+					llmClient: llmClient,
+					router:    rtr,
+					sender:    &signalChannelSender{client: signalClient},
+					archiver:  archiveAdapter,
+					logger:    logger,
 				}
 			}
 
@@ -2114,29 +2118,135 @@ func (a *mqttStatsAdapter) Version() string            { return buildinfo.Versio
 func (a *mqttStatsAdapter) DefaultModel() string       { return a.model }
 func (a *mqttStatsAdapter) LastRequestTime() time.Time { return a.server.LastRequest() }
 
-// signalSessionRotator implements [sigcli.SessionRotator] by ending the
-// active session via the archive adapter. The agent loop's EnsureSession
-// call creates a new session on the next message automatically.
+// signalSessionRotator implements [sigcli.SessionRotator] with
+// carry-forward context and farewell message generation. When a session
+// is rotated, the rotator generates a farewell message via LLM, sends
+// it to the originating channel, and closes the session with a
+// carry-forward summary injected into the next session.
 type signalSessionRotator struct {
-	archiver agent.SessionArchiver
-	logger   *slog.Logger
+	loop      *agent.Loop
+	llmClient llm.Client
+	router    *router.Router
+	sender    sigcli.ChannelSender
+	archiver  agent.SessionArchiver
+	logger    *slog.Logger
 }
 
-// RotateIdleSession ends the active session for the conversation.
-func (r *signalSessionRotator) RotateIdleSession(conversationID string) bool {
+// RotateIdleSession generates a farewell message and carry-forward
+// summary, sends the farewell to the sender, then gracefully closes
+// the session with carry-forward injected into the next session.
+func (r *signalSessionRotator) RotateIdleSession(ctx context.Context, conversationID, sender string) bool {
 	sid := r.archiver.ActiveSessionID(conversationID)
 	if sid == "" {
 		return false
 	}
-	if err := r.archiver.EndSession(sid, "idle"); err != nil {
-		r.logger.Warn("idle session rotation failed",
+
+	// Get conversation transcript for farewell generation.
+	transcript := r.loop.ConversationTranscript(conversationID)
+
+	// Generate farewell + carry-forward if there's a transcript.
+	var farewell, carryForward string
+	if transcript != "" {
+		farewell, carryForward = r.generateFarewell(ctx, conversationID, transcript)
+	}
+
+	// Send farewell before closing the session.
+	if farewell != "" && r.sender != nil {
+		sendCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		if err := r.sender.SendMessage(sendCtx, sender, farewell); err != nil {
+			r.logger.Warn("failed to send farewell message",
+				"conversation_id", conversationID,
+				"error", err,
+			)
+		}
+	}
+
+	// Close session with carry-forward (archive + end + clear + new session + inject).
+	if err := r.loop.CloseSession(conversationID, "idle", carryForward); err != nil {
+		r.logger.Warn("idle session close failed",
 			"conversation_id", conversationID,
-			"session_id", sid,
 			"error", err,
 		)
 		return false
 	}
+
+	r.logger.Info("signal session rotated (idle)",
+		"conversation_id", conversationID,
+		"farewell_sent", farewell != "",
+		"carry_forward_len", len(carryForward),
+	)
 	return true
+}
+
+// generateFarewell calls the LLM to produce a farewell message and
+// carry-forward summary from the conversation transcript.
+func (r *signalSessionRotator) generateFarewell(ctx context.Context, conversationID, transcript string) (farewell, carryForward string) {
+	genCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+
+	// Compute session stats.
+	startedAt := r.archiver.ActiveSessionStartedAt(conversationID)
+	stats := "unknown duration"
+	if !startedAt.IsZero() {
+		stats = fmt.Sprintf("duration: %s", time.Since(startedAt).Round(time.Minute))
+	}
+
+	// Route model selection for background generation.
+	model, _ := r.router.Route(genCtx, router.Request{
+		Query:    "session farewell generation",
+		Priority: router.PriorityBackground,
+		Hints: map[string]string{
+			router.HintMission:      "background",
+			router.HintQualityFloor: "5",
+		},
+	})
+
+	prompt := prompts.FarewellPrompt("idle timeout", stats, transcript)
+	msgs := []llm.Message{{Role: "user", Content: prompt}}
+
+	resp, err := r.llmClient.Chat(genCtx, model, msgs, nil)
+	if err != nil {
+		r.logger.Warn("farewell generation failed",
+			"conversation_id", conversationID,
+			"model", model,
+			"error", err,
+		)
+		return "", ""
+	}
+
+	farewell, carryForward = parseFarewellResponse(resp.Message.Content)
+	return farewell, carryForward
+}
+
+// parseFarewellResponse extracts farewell and carry_forward fields from
+// the LLM's JSON response. Returns empty strings if parsing fails.
+func parseFarewellResponse(content string) (string, string) {
+	content = strings.TrimPrefix(content, "```json\n")
+	content = strings.TrimPrefix(content, "```\n")
+	content = strings.TrimSuffix(content, "\n```")
+	content = strings.TrimSpace(content)
+
+	var result struct {
+		Farewell     string `json:"farewell"`
+		CarryForward string `json:"carry_forward"`
+	}
+	if err := json.Unmarshal([]byte(content), &result); err != nil {
+		return "", ""
+	}
+	return result.Farewell, result.CarryForward
+}
+
+// signalChannelSender wraps a [sigcli.Client] as a [sigcli.ChannelSender]
+// for delivering farewell messages during session rotation.
+type signalChannelSender struct {
+	client *sigcli.Client
+}
+
+// SendMessage delivers a text message to the given recipient via Signal.
+func (s *signalChannelSender) SendMessage(ctx context.Context, recipient, message string) error {
+	_, err := s.client.Send(ctx, recipient, message)
+	return err
 }
 
 // emailContactResolver resolves email addresses to trust zone levels

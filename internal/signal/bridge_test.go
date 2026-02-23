@@ -541,7 +541,7 @@ type mockRotator struct {
 	ret   bool     // return value
 }
 
-func (m *mockRotator) RotateIdleSession(conversationID string) bool {
+func (m *mockRotator) RotateIdleSession(_ context.Context, conversationID, _ string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.calls = append(m.calls, conversationID)
