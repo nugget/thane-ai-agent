@@ -46,6 +46,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/email"
 	"github.com/nugget/thane-ai-agent/internal/embeddings"
 	"github.com/nugget/thane-ai-agent/internal/episodic"
+	"github.com/nugget/thane-ai-agent/internal/events"
 	"github.com/nugget/thane-ai-agent/internal/facts"
 	"github.com/nugget/thane-ai-agent/internal/fetch"
 	"github.com/nugget/thane-ai-agent/internal/forge"
@@ -352,6 +353,13 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	if err := os.MkdirAll(cfg.DataDir, 0755); err != nil {
 		return fmt.Errorf("create data directory %s: %w", cfg.DataDir, err)
 	}
+
+	// --- Event bus ---
+	// Process-wide publish/subscribe for operational observability.
+	// Components publish structured events; the dashboard WebSocket
+	// handler (and future metrics/alerting consumers) subscribe.
+	// Zero cost when nobody subscribes.
+	eventBus := events.New()
 
 	// --- Memory store ---
 	// SQLite-backed conversation memory. Persists across restarts so the
@@ -1686,6 +1694,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	server := api.NewServer(cfg.Listen.Address, cfg.Listen.Port, loop, rtr, cfg.Pricing, logger)
 	server.SetMemoryStore(mem)
 	server.SetArchiveStore(archiveStore)
+	server.SetEventBus(eventBus)
 	server.SetConnManager(func() map[string]api.DependencyStatus {
 		status := connMgr.Status()
 		result := make(map[string]api.DependencyStatus, len(status))
