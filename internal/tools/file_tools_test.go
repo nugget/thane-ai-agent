@@ -938,3 +938,85 @@ func TestFileTools_SearchVisitedLimit(t *testing.T) {
 		t.Errorf("expected visited-limit warning in result:\n%s", result)
 	}
 }
+
+func TestResolvePath_KBPrefix(t *testing.T) {
+	workspace, err := os.MkdirTemp("", "thane-file-test-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(workspace)
+
+	// Create a kb directory inside workspace.
+	kbDir := filepath.Join(workspace, "kb")
+	if err := os.MkdirAll(filepath.Join(kbDir, "dossiers"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	// Create a test file.
+	testFile := filepath.Join(kbDir, "dossiers", "cat.md")
+	if err := os.WriteFile(testFile, []byte("# Cat\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	ft := NewFileTools(workspace, nil)
+	ft.SetKnowledgeBasePath(kbDir)
+
+	resolved, readOnly, err := ft.resolvePath("kb:dossiers/cat.md")
+	if err != nil {
+		t.Fatalf("resolvePath(kb:dossiers/cat.md): %v", err)
+	}
+	if readOnly {
+		t.Error("expected read-write, got read-only")
+	}
+	// EvalSymlinks resolves /var → /private/var on macOS. Normalize
+	// the expected path so the comparison works on all platforms.
+	wantFile, _ := filepath.EvalSymlinks(testFile)
+	if resolved != wantFile {
+		t.Errorf("resolved = %q, want %q", resolved, wantFile)
+	}
+}
+
+func TestResolvePath_KBPrefix_NotConfigured(t *testing.T) {
+	workspace, err := os.MkdirTemp("", "thane-file-test-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(workspace)
+
+	ft := NewFileTools(workspace, nil)
+	// No SetKnowledgeBasePath call.
+
+	_, _, err = ft.resolvePath("kb:dossiers/cat.md")
+	if err == nil {
+		t.Fatal("expected error for kb: prefix without configured path")
+	}
+	if !strings.Contains(err.Error(), "knowledge base not configured") {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestResolvePath_KBPrefix_ReadViaFileRead(t *testing.T) {
+	workspace, err := os.MkdirTemp("", "thane-file-test-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(workspace)
+
+	kbDir := filepath.Join(workspace, "kb")
+	if err := os.MkdirAll(kbDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(kbDir, "test.md"), []byte("hello kb"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	ft := NewFileTools(workspace, nil)
+	ft.SetKnowledgeBasePath(kbDir)
+
+	content, err := ft.Read(context.Background(), "kb:test.md", 0, 0)
+	if err != nil {
+		t.Fatalf("Read(kb:test.md): %v", err)
+	}
+	if !strings.Contains(content, "hello kb") {
+		t.Errorf("expected 'hello kb' in content, got: %s", content)
+	}
+}

@@ -35,6 +35,7 @@ type RememberArgs struct {
 	Value    string   `json:"value"`              // The information to remember
 	Source   string   `json:"source,omitempty"`   // Where this came from
 	Subjects []string `json:"subjects,omitempty"` // Subject keys (e.g., "entity:foo", "zone:bar")
+	Ref      string   `json:"ref,omitempty"`      // KB-relative path (e.g., "dossiers/openclawssy.md")
 }
 
 // Remember stores a fact for later recall.
@@ -55,7 +56,7 @@ func (t *Tools) Remember(argsJSON string) (string, error) {
 	}
 
 	cat := Category(args.Category)
-	fact, err := t.store.Set(cat, args.Key, args.Value, args.Source, 1.0, args.Subjects)
+	fact, err := t.store.Set(cat, args.Key, args.Value, args.Source, 1.0, args.Subjects, args.Ref)
 	if err != nil {
 		return "", fmt.Errorf("store fact: %w", err)
 	}
@@ -91,8 +92,12 @@ func (t *Tools) Recall(argsJSON string) (string, error) {
 		if err != nil {
 			return "Not found", nil
 		}
-		return fmt.Sprintf("[%s] %s = %s (confidence: %.1f)",
-			fact.Category, fact.Key, fact.Value, fact.Confidence), nil
+		result := fmt.Sprintf("[%s] %s = %s (confidence: %.1f)",
+			fact.Category, fact.Key, fact.Value, fact.Confidence)
+		if fact.Ref != "" {
+			result += fmt.Sprintf("\n  → kb:%s", fact.Ref)
+		}
+		return result, nil
 	}
 
 	// Category listing
@@ -242,6 +247,10 @@ func (t *Tools) GetDefinitions() []map[string]any {
 							},
 							"description": "Subject keys this fact relates to. Prefix with type: entity:, contact:, phone:, zone:, camera:, location:. Example: [\"entity:binary_sensor.driveway\", \"zone:driveway\"]",
 						},
+						"ref": map[string]any{
+							"type":        "string",
+							"description": "Knowledge-base-relative path to a detailed page (e.g., 'dossiers/openclawssy.md'). Stored as-is; resolved via kb: prefix in file tools.",
+						},
 					},
 					"required": []string{"key", "value"},
 				},
@@ -320,6 +329,9 @@ func formatFacts(facts []*Fact) string {
 	var sb strings.Builder
 	for _, f := range facts {
 		sb.WriteString(fmt.Sprintf("[%s] %s = %s\n", f.Category, f.Key, f.Value))
+		if f.Ref != "" {
+			sb.WriteString(fmt.Sprintf("  → kb:%s\n", f.Ref))
+		}
 	}
 	return sb.String()
 }

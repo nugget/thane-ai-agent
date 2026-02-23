@@ -123,15 +123,15 @@ func TestFTS5_SearchByKeyword(t *testing.T) {
 	}
 
 	// Insert test facts.
-	_, err := store.Set(CategoryHome, "living_room_layout", "Large room with sectional sofa facing the TV", "user", 1.0, nil)
+	_, err := store.Set(CategoryHome, "living_room_layout", "Large room with sectional sofa facing the TV", "user", 1.0, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = store.Set(CategoryDevice, "office_light", "Hue Go lamp on the desk", "observation", 1.0, nil)
+	_, err = store.Set(CategoryDevice, "office_light", "Hue Go lamp on the desk", "observation", 1.0, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = store.Set(CategoryPreference, "music_volume", "Prefers volume at 40% during work hours", "user", 1.0, nil)
+	_, err = store.Set(CategoryPreference, "music_volume", "Prefers volume at 40% during work hours", "user", 1.0, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,7 +198,7 @@ func TestFTS5_SearchExcludesDeleted(t *testing.T) {
 		t.Skip("FTS5 not available")
 	}
 
-	_, err := store.Set(CategoryDevice, "garage_sensor", "Temperature sensor in the garage", "observation", 1.0, nil)
+	_, err := store.Set(CategoryDevice, "garage_sensor", "Temperature sensor in the garage", "observation", 1.0, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,13 +233,13 @@ func TestFTS5_SearchAfterUpdate(t *testing.T) {
 		t.Skip("FTS5 not available")
 	}
 
-	_, err := store.Set(CategoryPreference, "color_temp", "Prefers warm white lights", "user", 1.0, nil)
+	_, err := store.Set(CategoryPreference, "color_temp", "Prefers warm white lights", "user", 1.0, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	// Update the value.
-	_, err = store.Set(CategoryPreference, "color_temp", "Prefers cool daylight during work hours", "user", 1.0, nil)
+	_, err = store.Set(CategoryPreference, "color_temp", "Prefers cool daylight during work hours", "user", 1.0, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -294,7 +294,7 @@ func TestFTS5_LIKEFallbackPath(t *testing.T) {
 	// Test the LIKE search path directly (independent of FTS5 availability).
 	store := newTestStore(t)
 
-	_, err := store.Set(CategoryHome, "bedroom_size", "Master bedroom is 14x16 feet", "user", 1.0, nil)
+	_, err := store.Set(CategoryHome, "bedroom_size", "Master bedroom is 14x16 feet", "user", 1.0, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -308,5 +308,71 @@ func TestFTS5_LIKEFallbackPath(t *testing.T) {
 	}
 	if results[0].Key != "bedroom_size" {
 		t.Errorf("unexpected key: %s", results[0].Key)
+	}
+}
+
+func TestSet_WithRef(t *testing.T) {
+	store := newTestStore(t)
+
+	fact, err := store.Set(CategoryDevice, "openclawssy", "Black cat, shy but curious", "user", 1.0, nil, "dossiers/openclawssy.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if fact.Ref != "dossiers/openclawssy.md" {
+		t.Errorf("Set returned fact with ref %q, want %q", fact.Ref, "dossiers/openclawssy.md")
+	}
+
+	// Retrieve and verify ref persists.
+	got, err := store.Get(CategoryDevice, "openclawssy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Ref != "dossiers/openclawssy.md" {
+		t.Errorf("Get returned fact with ref %q, want %q", got.Ref, "dossiers/openclawssy.md")
+	}
+}
+
+func TestSet_WithoutRef_EmptyPreserved(t *testing.T) {
+	store := newTestStore(t)
+
+	_, err := store.Set(CategoryPreference, "theme", "dark mode", "user", 1.0, nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := store.Get(CategoryPreference, "theme")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Ref != "" {
+		t.Errorf("expected empty ref, got %q", got.Ref)
+	}
+}
+
+func TestSet_UpdateRef(t *testing.T) {
+	store := newTestStore(t)
+
+	// Create with ref.
+	_, err := store.Set(CategoryDevice, "sensor_data", "Temperature sensor info", "test", 1.0, nil, "sensors/temp.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Update with new ref.
+	_, err = store.Set(CategoryDevice, "sensor_data", "Updated sensor info", "test", 1.0, nil, "sensors/temp_v2.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := store.Get(CategoryDevice, "sensor_data")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Value != "Updated sensor info" {
+		t.Errorf("value not updated: %s", got.Value)
+	}
+	if got.Ref != "sensors/temp_v2.md" {
+		t.Errorf("ref not updated: got %q, want %q", got.Ref, "sensors/temp_v2.md")
 	}
 }
