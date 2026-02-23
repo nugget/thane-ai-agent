@@ -2147,7 +2147,7 @@ func (r *signalSessionRotator) RotateIdleSession(ctx context.Context, conversati
 	// Generate farewell + carry-forward if there's a transcript.
 	var farewell, carryForward string
 	if transcript != "" {
-		farewell, carryForward = r.generateFarewell(ctx, conversationID, transcript)
+		farewell, carryForward = r.generateFarewell(ctx, conversationID, transcript, "idle timeout")
 	}
 
 	// Send farewell before closing the session.
@@ -2180,16 +2180,24 @@ func (r *signalSessionRotator) RotateIdleSession(ctx context.Context, conversati
 }
 
 // generateFarewell calls the LLM to produce a farewell message and
-// carry-forward summary from the conversation transcript.
-func (r *signalSessionRotator) generateFarewell(ctx context.Context, conversationID, transcript string) (farewell, carryForward string) {
+// carry-forward summary from the conversation transcript. The reason
+// parameter describes why the session is closing (e.g., "idle timeout").
+func (r *signalSessionRotator) generateFarewell(ctx context.Context, conversationID, transcript, reason string) (farewell, carryForward string) {
 	genCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	// Compute session stats.
+	// Compute session stats: duration and approximate message count.
+	var parts []string
 	startedAt := r.archiver.ActiveSessionStartedAt(conversationID)
-	stats := "unknown duration"
 	if !startedAt.IsZero() {
-		stats = fmt.Sprintf("duration: %s", time.Since(startedAt).Round(time.Minute))
+		parts = append(parts, fmt.Sprintf("duration: %s", time.Since(startedAt).Round(time.Minute)))
+	}
+	if msgCount := strings.Count(transcript, "\n"); msgCount > 0 {
+		parts = append(parts, fmt.Sprintf("~%d messages", msgCount))
+	}
+	stats := "unknown"
+	if len(parts) > 0 {
+		stats = strings.Join(parts, ", ")
 	}
 
 	// Route model selection for background generation.
@@ -2202,7 +2210,7 @@ func (r *signalSessionRotator) generateFarewell(ctx context.Context, conversatio
 		},
 	})
 
-	prompt := prompts.FarewellPrompt("idle timeout", stats, transcript)
+	prompt := prompts.FarewellPrompt(reason, stats, transcript)
 	msgs := []llm.Message{{Role: "user", Content: prompt}}
 
 	resp, err := r.llmClient.Chat(genCtx, model, msgs, nil)
