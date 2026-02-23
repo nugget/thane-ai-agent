@@ -196,6 +196,8 @@ func (c *Client) runYtDlp(ctx context.Context, rawURL, language, tmpDir string) 
 		"--write-sub",
 		"--write-auto-sub",
 		"--sub-lang", language,
+		"--sub-format", "vtt",
+		"--convert-subs", "vtt",
 		"--skip-download",
 		"--print-json",
 		"--no-warnings",
@@ -235,29 +237,52 @@ func (c *Client) runYtDlp(ctx context.Context, rawURL, language, tmpDir string) 
 }
 
 // findAndCleanSubtitles looks for VTT subtitle files in the temp directory,
-// preferring manual subs over auto-generated ones.
-func (c *Client) findAndCleanSubtitles(tmpDir, videoID, _ string) (string, error) {
-	// yt-dlp names files like: {id}.{lang}.vtt (manual) or {id}.{lang}.vtt (auto)
-	// With both --write-sub and --write-auto-sub, manual subs take the plain
-	// name and auto-subs may not be written if manual exists.
+// preferring manual subs in the requested language over auto-generated ones.
+func (c *Client) findAndCleanSubtitles(tmpDir, videoID, language string) (string, error) {
+	// yt-dlp names subtitle files with predictable patterns:
+	//   {id}.{lang}.vtt            — manual subtitles
+	//   {id}.{lang}.auto.vtt       — auto-generated (some versions)
+	// When both --write-sub and --write-auto-sub are used, manual subs
+	// take the plain name; auto-subs may include extra suffixes.
 	entries, err := os.ReadDir(tmpDir)
 	if err != nil {
 		return "", fmt.Errorf("read temp dir: %w", err)
 	}
 
-	var vttFiles []string
+	// Classify VTT files by match quality.
+	var manualLang, autoLang, otherVTT []string
+	langSuffix := "." + language + ".vtt"
 	for _, e := range entries {
-		if strings.HasSuffix(e.Name(), ".vtt") {
-			vttFiles = append(vttFiles, filepath.Join(tmpDir, e.Name()))
+		name := e.Name()
+		if !strings.HasSuffix(name, ".vtt") {
+			continue
+		}
+		path := filepath.Join(tmpDir, name)
+		switch {
+		case strings.Contains(name, ".auto.") && strings.Contains(name, "."+language+"."):
+			autoLang = append(autoLang, path)
+		case strings.HasSuffix(name, langSuffix):
+			manualLang = append(manualLang, path)
+		default:
+			otherVTT = append(otherVTT, path)
 		}
 	}
 
-	if len(vttFiles) == 0 {
+	// Pick the best available file: manual in requested language first,
+	// then auto-generated in requested language, then any VTT as fallback.
+	var chosen string
+	switch {
+	case len(manualLang) > 0:
+		chosen = manualLang[0]
+	case len(autoLang) > 0:
+		chosen = autoLang[0]
+	case len(otherVTT) > 0:
+		chosen = otherVTT[0]
+	default:
 		return "", fmt.Errorf("no .vtt files found for %s", videoID)
 	}
 
-	// Read the first VTT file (yt-dlp prefers manual when available).
-	raw, err := os.ReadFile(vttFiles[0])
+	raw, err := os.ReadFile(chosen)
 	if err != nil {
 		return "", fmt.Errorf("read subtitle file: %w", err)
 	}
@@ -266,6 +291,12 @@ func (c *Client) findAndCleanSubtitles(tmpDir, videoID, _ string) (string, error
 	if strings.TrimSpace(cleaned) == "" {
 		return "", fmt.Errorf("subtitle file empty after cleaning")
 	}
+
+	c.logger.Debug("selected subtitle file",
+		"file", filepath.Base(chosen),
+		"video_id", videoID,
+		"language", language,
+	)
 
 	return cleaned, nil
 }
