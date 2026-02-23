@@ -830,6 +830,7 @@ func TestSanitizeFTS5Query(t *testing.T) {
 		{"two words", "Alice Johnson", `"Alice" OR "Johnson"`},
 		{"special chars", "o'brien", `"o'brien"`},
 		{"empty", "", ""},
+		{"whitespace only", "   \t\n  ", ""},
 		{"with quotes", `say "hello"`, `"say" OR """hello"""`},
 	}
 

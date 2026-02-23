@@ -518,7 +518,7 @@ func (s *ArchiveStore) scanToolCalls(rows *sql.Rows) ([]ArchivedToolCall, error)
 
 // Search performs a full-text search with gap-aware context expansion.
 func (s *ArchiveStore) Search(opts SearchOptions) ([]SearchResult, error) {
-	if opts.Query == "" {
+	if strings.TrimSpace(opts.Query) == "" {
 		return nil, fmt.Errorf("query is required")
 	}
 	if opts.Limit <= 0 {
@@ -1378,7 +1378,7 @@ func nullString(s string) any {
 func sanitizeFTS5Query(query string) string {
 	words := strings.Fields(query)
 	if len(words) == 0 {
-		return query
+		return ""
 	}
 	quoted := make([]string, len(words))
 	for i, w := range words {

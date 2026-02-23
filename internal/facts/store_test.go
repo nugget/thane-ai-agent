@@ -276,6 +276,7 @@ func TestSanitizeFTS5Query(t *testing.T) {
 		{"two words", "pool heater", `"pool" OR "heater"`},
 		{"special chars", "models.yaml config", `"models.yaml" OR "config"`},
 		{"empty", "", ""},
+		{"whitespace only", "   \t\n  ", ""},
 		{"with quotes", `say "hello"`, `"say" OR """hello"""`},
 	}
 
