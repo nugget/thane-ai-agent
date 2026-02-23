@@ -311,6 +311,7 @@ func (l *Loop) iterate(ctx context.Context, isSupervisor bool, convID string) (*
 		ConversationID: convID,
 		Messages:       []agent.Message{{Role: "user", Content: promptText}},
 		ExcludeTools:   metacogExcludeTools,
+		SkipTagFilter:  true,
 		Hints: map[string]string{
 			"source":                    "metacognitive",
 			"supervisor":                strconv.FormatBool(isSupervisor),

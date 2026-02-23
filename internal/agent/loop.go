@@ -41,6 +41,7 @@ type Request struct {
 	Hints          map[string]string `json:"hints,omitempty"` // Routing hints (channel, mission, etc.)
 	SkipContext    bool              `json:"-"`               // Skip memory, tools, and context injection (for lightweight completions)
 	ExcludeTools   []string          `json:"-"`               // Tool names to exclude from this run (e.g., lifecycle tools for recurring wakes)
+	SkipTagFilter  bool              `json:"-"`               // Bypass capability tag filtering (for self-scoping contexts like metacognitive)
 }
 
 // StreamEvent is a single event in a streaming response.
@@ -903,7 +904,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	// exclusions (e.g., lifecycle tools stripped from recurring wakes) are
 	// applied on top.
 	effectiveTools := l.tools
-	if l.activeTags != nil {
+	if l.activeTags != nil && !req.SkipTagFilter {
 		activeTags := make([]string, 0, len(l.activeTags))
 		for tag := range l.activeTags {
 			activeTags = append(activeTags, tag)
