@@ -139,7 +139,11 @@ func (r *Registry) registerEmailTools() {
 				"uids": map[string]any{
 					"type":        "array",
 					"items":       map[string]any{"type": "integer"},
-					"description": "Message UIDs to modify",
+					"description": "Message UIDs to modify (array of integers)",
+				},
+				"uid": map[string]any{
+					"type":        "integer",
+					"description": "Single message UID to modify (convenience alternative to uids)",
 				},
 				"flag": map[string]any{
 					"type":        "string",
@@ -159,7 +163,7 @@ func (r *Registry) registerEmailTools() {
 					"description": "Email account name (default: primary account)",
 				},
 			},
-			"required": []string{"uids", "flag"},
+			"required": []string{"flag"},
 		},
 		Handler: func(ctx context.Context, args map[string]any) (string, error) {
 			return r.emailTools.HandleMark(ctx, args)
@@ -238,29 +242,33 @@ func (r *Registry) registerEmailTools() {
 
 	r.Register(&Tool{
 		Name:        "email_move",
-		Description: "Move email messages between folders. Useful for archiving messages after reading or replying.",
+		Description: "Move email messages between folders. Useful for archiving messages after reading or replying. Pass the target folder as 'destination'. If only 'folder' is provided (without 'destination'), it is treated as the destination.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"uids": map[string]any{
 					"type":        "array",
 					"items":       map[string]any{"type": "integer"},
-					"description": "Message UIDs to move",
+					"description": "Message UIDs to move (array of integers)",
+				},
+				"uid": map[string]any{
+					"type":        "integer",
+					"description": "Single message UID to move (convenience alternative to uids)",
 				},
 				"folder": map[string]any{
 					"type":        "string",
-					"description": "Source folder (default: INBOX)",
+					"description": "Source folder (default: INBOX). If destination is omitted, folder is treated as the destination instead.",
 				},
 				"destination": map[string]any{
 					"type":        "string",
-					"description": "Destination folder (e.g., Archive, Trash)",
+					"description": "Target folder to move messages to (e.g., Archive, Trash)",
 				},
 				"account": map[string]any{
 					"type":        "string",
 					"description": "Email account name (default: primary account)",
 				},
 			},
-			"required": []string{"uids", "destination"},
+			// destination is validated by the handler (folder accepted as alias).
 		},
 		Handler: func(ctx context.Context, args map[string]any) (string, error) {
 			return r.emailTools.HandleMove(ctx, args)

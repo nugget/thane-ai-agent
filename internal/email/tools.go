@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -145,16 +146,12 @@ func (t *Tools) HandleMark(ctx context.Context, args map[string]any) (string, er
 		Account: stringArg(args, "account"),
 	}
 
-	// Parse UIDs from array or single value.
-	switch v := args["uids"].(type) {
-	case []any:
-		for _, u := range v {
-			if n, ok := u.(float64); ok {
-				action.UIDs = append(action.UIDs, uint32(n))
-			}
+	// Parse UIDs — accept "uids" array or singular "uid".
+	action.UIDs = uint32SliceArg(args, "uids")
+	if len(action.UIDs) == 0 {
+		if uid := uint32(intArg(args, "uid")); uid != 0 {
+			action.UIDs = []uint32{uid}
 		}
-	case float64:
-		action.UIDs = append(action.UIDs, uint32(v))
 	}
 
 	if len(action.UIDs) == 0 {
@@ -283,16 +280,23 @@ func (t *Tools) HandleMove(ctx context.Context, args map[string]any) (string, er
 		Account:     stringArg(args, "account"),
 	}
 
-	// Parse UIDs from array or single value.
-	switch v := args["uids"].(type) {
-	case []any:
-		for _, u := range v {
-			if n, ok := u.(float64); ok {
-				opts.UIDs = append(opts.UIDs, uint32(n))
-			}
+	// Models sometimes pass "folder" meaning the destination (e.g.,
+	// "Trash") without providing "destination". When the destination
+	// key is truly absent and folder is set, promote folder to
+	// destination and let the source default to INBOX. An explicitly
+	// empty destination still triggers the required-field error.
+	_, hasDestination := args["destination"]
+	if !hasDestination && opts.Destination == "" && opts.Folder != "" {
+		opts.Destination = opts.Folder
+		opts.Folder = ""
+	}
+
+	// Parse UIDs — accept "uids" array or singular "uid".
+	opts.UIDs = uint32SliceArg(args, "uids")
+	if len(opts.UIDs) == 0 {
+		if uid := uint32(intArg(args, "uid")); uid != 0 {
+			opts.UIDs = []uint32{uid}
 		}
-	case float64:
-		opts.UIDs = append(opts.UIDs, uint32(v))
 	}
 
 	if len(opts.UIDs) == 0 {
@@ -482,9 +486,22 @@ func stringArg(args map[string]any, key string) string {
 	return ""
 }
 
+// intArg extracts an integer from args. JSON numbers arrive as float64,
+// but LLMs sometimes send numeric strings ("395") or Go-native ints.
+// Non-numeric strings log a warning and return 0.
 func intArg(args map[string]any, key string) int {
-	if v, ok := args[key].(float64); ok {
+	switch v := args[key].(type) {
+	case float64:
 		return int(v)
+	case int:
+		return v
+	case string:
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			slog.Warn("failed to parse int argument", "key", key, "value", v)
+			return 0
+		}
+		return n
 	}
 	return 0
 }
@@ -495,6 +512,58 @@ func boolArg(args map[string]any, key string) bool {
 	}
 	return false
 }
+
+// uint32SliceArg extracts a slice of uint32 values from args. Handles
+// JSON arrays (elements may be float64, int, or string) and single
+// values. This consolidates the UID parsing that was duplicated across
+// HandleMark and HandleMove. Invalid or out-of-range elements are
+// logged and skipped.
+func uint32SliceArg(args map[string]any, key string) []uint32 {
+	switch v := args[key].(type) {
+	case []any:
+		var out []uint32
+		for _, el := range v {
+			if uid, ok := coerceUint32(el); ok {
+				out = append(out, uid)
+			} else {
+				slog.Warn("skipped invalid UID element", "key", key, "value", el)
+			}
+		}
+		return out
+	default:
+		if uid, ok := coerceUint32(v); ok {
+			return []uint32{uid}
+		}
+	}
+	return nil
+}
+
+// coerceUint32 attempts to convert a value to a valid uint32 UID.
+// Returns (0, false) for nil, negative, non-integer, or out-of-range values.
+func coerceUint32(v any) (uint32, bool) {
+	switch n := v.(type) {
+	case float64:
+		if n != float64(int64(n)) || n < 1 || n > float64(maxUint32) {
+			return 0, false
+		}
+		return uint32(n), true
+	case int:
+		if n < 1 || int64(n) > int64(maxUint32) {
+			return 0, false
+		}
+		return uint32(n), true
+	case string:
+		parsed, err := strconv.Atoi(n)
+		if err != nil || parsed < 1 || int64(parsed) > int64(maxUint32) {
+			return 0, false
+		}
+		return uint32(parsed), true
+	}
+	return 0, false
+}
+
+// maxUint32 is the largest valid uint32 value, used for range checks.
+const maxUint32 = 1<<32 - 1
 
 // stringSliceArg extracts a string slice from args. The value may be
 // a []any (from JSON) or a single string.
