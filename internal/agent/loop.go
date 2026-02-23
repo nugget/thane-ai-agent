@@ -1038,7 +1038,20 @@ iterLoop:
 				}
 
 				toolCtx := tools.WithConversationID(ctx, convID)
-				result, err := l.tools.Execute(toolCtx, toolName, argsJSON)
+
+				// Enforce tool availability: only tools present in the
+				// effective registry (after capability tag filtering and
+				// request-level exclusions) may execute. This prevents
+				// models from calling tools that were intentionally
+				// withheld from the tool definitions.
+				var result string
+				var err error
+				if effectiveTools.Get(toolName) == nil {
+					err = fmt.Errorf("tool %q is not available in this context", toolName)
+					log.Warn("blocked call to unavailable tool", "tool", toolName)
+				} else {
+					result, err = l.tools.Execute(toolCtx, toolName, argsJSON)
+				}
 				toolsUsed[toolName]++
 				errMsg := ""
 				if err != nil {
