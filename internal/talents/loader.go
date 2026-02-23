@@ -215,6 +215,7 @@ type ManifestEntry struct {
 	Tag          string
 	Description  string
 	Tools        []string
+	Context      []string // resolved context file paths
 	AlwaysActive bool
 }
 
@@ -241,6 +242,13 @@ func GenerateManifest(entries []ManifestEntry) *Talent {
 		sb.WriteString(fmt.Sprintf("- **%s** (%s): %s\n", e.Tag, status, e.Description))
 		if len(e.Tools) > 0 {
 			sb.WriteString(fmt.Sprintf("  Tools: %s\n", strings.Join(e.Tools, ", ")))
+		}
+		if len(e.Context) > 0 {
+			fileWord := "files"
+			if len(e.Context) == 1 {
+				fileWord = "file"
+			}
+			sb.WriteString(fmt.Sprintf("  Context: %d knowledge %s loaded when active\n", len(e.Context), fileWord))
 		}
 	}
 

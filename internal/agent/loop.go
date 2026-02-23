@@ -63,6 +63,11 @@ const (
 // system prompt. Content beyond this limit is truncated with a marker.
 const maxEgoBytes = 16 * 1024
 
+// maxTagContextBytes is the aggregate size limit for all tag context
+// files injected into the system prompt. Individual files exceeding
+// this threshold are truncated with a marker.
+const maxTagContextBytes = 64 * 1024
+
 // Response represents the agent's response.
 type Response struct {
 	Content      string         `json:"content"`
@@ -422,6 +427,59 @@ func (l *Loop) buildSystemPrompt(ctx context.Context, userMessage string, histor
 			mark("INJECTED CONTEXT")
 			sb.WriteString("\n\n## Injected Context\n\n")
 			sb.WriteString(ctxBuf.String())
+			seal()
+		}
+	}
+
+	// 3b. Tag context (capability knowledge — what does my active role need)
+	// When capability tags are active, inject their associated context files
+	// into the system prompt. Files are re-read each turn (matching the
+	// inject_files freshness pattern) so external changes are visible.
+	if l.capTags != nil && l.activeTags != nil {
+		seen := make(map[string]bool)
+		var tagCtxBuf strings.Builder
+		for tag, active := range l.activeTags {
+			if !active {
+				continue
+			}
+			cfg, ok := l.capTags[tag]
+			if !ok {
+				continue
+			}
+			for _, path := range cfg.Context {
+				if seen[path] {
+					continue
+				}
+				seen[path] = true
+				data, err := os.ReadFile(path)
+				if err != nil {
+					l.logger.Warn("failed to read tag context file",
+						"tag", tag, "path", path, "error", err)
+					continue
+				}
+				if tagCtxBuf.Len() > 0 {
+					tagCtxBuf.WriteString("\n\n---\n\n")
+				}
+				remaining := maxTagContextBytes - tagCtxBuf.Len()
+				if remaining <= 0 {
+					l.logger.Warn("tag context aggregate limit reached, skipping remaining files",
+						"tag", tag, "path", path, "limit_bytes", maxTagContextBytes)
+					break
+				}
+				if len(data) > remaining {
+					tagCtxBuf.Write(data[:remaining])
+					tagCtxBuf.WriteString("\n\n[tag context truncated — exceeded aggregate 64 KB limit]")
+					l.logger.Warn("tag context truncated to fit aggregate limit",
+						"tag", tag, "path", path, "file_bytes", len(data), "limit_bytes", maxTagContextBytes)
+				} else {
+					tagCtxBuf.Write(data)
+				}
+			}
+		}
+		if tagCtxBuf.Len() > 0 {
+			mark("TAG CONTEXT")
+			sb.WriteString("\n\n## Capability Context\n\n")
+			sb.WriteString(tagCtxBuf.String())
 			seal()
 		}
 	}

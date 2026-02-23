@@ -755,25 +755,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	if len(cfg.Context.InjectFiles) > 0 {
 		var resolved []string
 		for _, path := range cfg.Context.InjectFiles {
-			// Resolve registered prefixes (kb:notes.md → /vault/notes.md).
-			if resolver != nil {
-				if r, err := resolver.Resolve(path); err != nil {
-					logger.Warn("inject file prefix resolution failed", "path", path, "error", err)
-				} else {
-					path = r
-				}
-			}
-			// Expand ~ to the user's home directory.
-			if strings.HasPrefix(path, "~") {
-				if home, err := os.UserHomeDir(); err == nil {
-					switch {
-					case path == "~":
-						path = home
-					case strings.HasPrefix(path, "~/") || strings.HasPrefix(path, "~"+string(filepath.Separator)):
-						path = filepath.Join(home, path[2:])
-					}
-				}
-			}
+			path = resolvePath(path, resolver)
 			if _, err := os.Stat(path); err != nil {
 				if errors.Is(err, fs.ErrNotExist) {
 					logger.Warn("context inject file not found", "path", path)
@@ -1463,16 +1445,46 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 			}
 		}
 
+		// Resolve context file paths in capability tags.
+		// Same pattern as inject_files: resolve kb: prefixes and ~ at
+		// startup, re-read per turn. Missing files are warned but kept
+		// (may appear later).
+		for tag, tagCfg := range cfg.CapabilityTags {
+			if len(tagCfg.Context) == 0 {
+				continue
+			}
+			resolved := make([]string, 0, len(tagCfg.Context))
+			for _, ctxPath := range tagCfg.Context {
+				ctxPath = resolvePath(ctxPath, resolver)
+				if _, err := os.Stat(ctxPath); err != nil {
+					if errors.Is(err, fs.ErrNotExist) {
+						logger.Warn("capability tag context file not found",
+							"tag", tag, "path", ctxPath)
+					} else {
+						logger.Warn("capability tag context file unreadable",
+							"tag", tag, "path", ctxPath, "error", err)
+					}
+				}
+				resolved = append(resolved, ctxPath)
+			}
+			tagCfg.Context = resolved
+			cfg.CapabilityTags[tag] = tagCfg
+			logger.Debug("capability tag context files resolved",
+				"tag", tag, "files", len(resolved))
+		}
+
 		// Build manifest entries for the capability tools description.
 		tagIndex := make(map[string][]string, len(cfg.CapabilityTags))
 		descriptions := make(map[string]string, len(cfg.CapabilityTags))
 		alwaysActive := make(map[string]bool, len(cfg.CapabilityTags))
+		contextFiles := make(map[string][]string, len(cfg.CapabilityTags))
 		for tag, tagCfg := range cfg.CapabilityTags {
 			tagIndex[tag] = tagCfg.Tools
 			descriptions[tag] = tagCfg.Description
 			alwaysActive[tag] = tagCfg.AlwaysActive
+			contextFiles[tag] = tagCfg.Context
 		}
-		manifest := tools.BuildCapabilityManifest(tagIndex, descriptions, alwaysActive)
+		manifest := tools.BuildCapabilityManifest(tagIndex, descriptions, alwaysActive, contextFiles)
 
 		// Generate the capability manifest talent and prepend it.
 		manifestEntries := make([]talents.ManifestEntry, len(manifest))
@@ -1481,6 +1493,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 				Tag:          m.Tag,
 				Description:  m.Description,
 				Tools:        m.Tools,
+				Context:      m.Context,
 				AlwaysActive: m.AlwaysActive,
 			}
 		}
@@ -2036,6 +2049,28 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 
 	logger.Info("Thane stopped")
 	return nil
+}
+
+// resolvePath expands a configuration path using prefix resolution (kb: etc.)
+// and home-directory tilde expansion. It returns the resolved absolute path.
+// The resolver may be nil if no prefixes are configured.
+func resolvePath(p string, resolver *paths.Resolver) string {
+	if resolver != nil {
+		if r, err := resolver.Resolve(p); err == nil {
+			p = r
+		}
+	}
+	if strings.HasPrefix(p, "~") {
+		if home, err := os.UserHomeDir(); err == nil {
+			switch {
+			case p == "~":
+				p = home
+			case strings.HasPrefix(p, "~/") || strings.HasPrefix(p, "~"+string(filepath.Separator)):
+				p = filepath.Join(home, p[2:])
+			}
+		}
+	}
+	return p
 }
 
 // newLogger creates a structured logger that writes to w at the given level

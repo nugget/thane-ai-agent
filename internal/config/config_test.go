@@ -419,6 +419,41 @@ func TestValidate_CapabilityTagValid(t *testing.T) {
 	}
 }
 
+func TestValidate_CapabilityTagWithContext(t *testing.T) {
+	cfg := Default()
+	cfg.CapabilityTags = map[string]CapabilityTagConfig{
+		"forge": {
+			Description: "Code generation",
+			Tools:       []string{"forge_run"},
+			Context:     []string{"kb:architecture.md", "kb:style-guide.md"},
+		},
+	}
+
+	err := cfg.Validate()
+	if err != nil {
+		t.Fatalf("unexpected validation error for tag with context: %v", err)
+	}
+}
+
+func TestValidate_CapabilityTagContextNoTools(t *testing.T) {
+	cfg := Default()
+	cfg.CapabilityTags = map[string]CapabilityTagConfig{
+		"docs": {
+			Description: "Documentation context",
+			Tools:       nil, // tools are required even with context
+			Context:     []string{"kb:docs.md"},
+		},
+	}
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected validation error for tag with context but no tools")
+	}
+	if !strings.Contains(err.Error(), "capability_tags.docs.tools") {
+		t.Errorf("error should mention capability_tags.docs.tools, got: %v", err)
+	}
+}
+
 func TestApplyDefaults_SignalRateLimit(t *testing.T) {
 	cfg := Default()
 	// Zero means unlimited — no default override so users can disable

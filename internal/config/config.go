@@ -491,6 +491,13 @@ type CapabilityTagConfig struct {
 	// appear in multiple tags; it loads when any of its tags is active.
 	Tools []string `yaml:"tools"`
 
+	// Context lists file paths to read into the system prompt when
+	// this tag is active. Paths support kb: prefix resolution and ~
+	// expansion, resolved at startup. Files are re-read on every agent
+	// turn so external edits are visible without restart. Missing
+	// files are logged as warnings and skipped.
+	Context []string `yaml:"context"`
+
 	// AlwaysActive tags cannot be deactivated. They are included in
 	// every session regardless of channel or agent requests.
 	AlwaysActive bool `yaml:"always_active"`
