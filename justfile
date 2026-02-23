@@ -67,9 +67,15 @@ fmt-check:
 lint: generate
     golangci-lint run ./...
 
+# Check go.mod/go.sum are tidy
+[group('test')]
+mod-tidy-check:
+    go mod tidy
+    @test -z "$(git diff --name-only go.mod go.sum)" || (echo "go.mod/go.sum not tidy — run 'go mod tidy'" && git diff go.mod go.sum && exit 1)
+
 # CI: format check, lint, and tests
 [group('test')]
-ci: fmt-check lint test
+ci: fmt-check mod-tidy-check lint test
 
 # --- Install ---
 
