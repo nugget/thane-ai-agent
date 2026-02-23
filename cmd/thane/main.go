@@ -1463,16 +1463,63 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 			}
 		}
 
+		// Resolve context file paths in capability tags.
+		// Same pattern as inject_files: resolve kb: prefixes and ~ at
+		// startup, re-read per turn. Missing files are warned but kept
+		// (may appear later).
+		for tag, tagCfg := range cfg.CapabilityTags {
+			if len(tagCfg.Context) == 0 {
+				continue
+			}
+			resolved := make([]string, 0, len(tagCfg.Context))
+			for _, ctxPath := range tagCfg.Context {
+				if resolver != nil {
+					if r, err := resolver.Resolve(ctxPath); err != nil {
+						logger.Warn("capability tag context path resolution failed",
+							"tag", tag, "path", ctxPath, "error", err)
+					} else {
+						ctxPath = r
+					}
+				}
+				if strings.HasPrefix(ctxPath, "~") {
+					if home, err := os.UserHomeDir(); err == nil {
+						switch {
+						case ctxPath == "~":
+							ctxPath = home
+						case strings.HasPrefix(ctxPath, "~/") || strings.HasPrefix(ctxPath, "~"+string(filepath.Separator)):
+							ctxPath = filepath.Join(home, ctxPath[2:])
+						}
+					}
+				}
+				if _, err := os.Stat(ctxPath); err != nil {
+					if errors.Is(err, fs.ErrNotExist) {
+						logger.Warn("capability tag context file not found",
+							"tag", tag, "path", ctxPath)
+					} else {
+						logger.Warn("capability tag context file unreadable",
+							"tag", tag, "path", ctxPath, "error", err)
+					}
+				}
+				resolved = append(resolved, ctxPath)
+			}
+			tagCfg.Context = resolved
+			cfg.CapabilityTags[tag] = tagCfg
+			logger.Debug("capability tag context files resolved",
+				"tag", tag, "files", len(resolved))
+		}
+
 		// Build manifest entries for the capability tools description.
 		tagIndex := make(map[string][]string, len(cfg.CapabilityTags))
 		descriptions := make(map[string]string, len(cfg.CapabilityTags))
 		alwaysActive := make(map[string]bool, len(cfg.CapabilityTags))
+		contextFiles := make(map[string][]string, len(cfg.CapabilityTags))
 		for tag, tagCfg := range cfg.CapabilityTags {
 			tagIndex[tag] = tagCfg.Tools
 			descriptions[tag] = tagCfg.Description
 			alwaysActive[tag] = tagCfg.AlwaysActive
+			contextFiles[tag] = tagCfg.Context
 		}
-		manifest := tools.BuildCapabilityManifest(tagIndex, descriptions, alwaysActive)
+		manifest := tools.BuildCapabilityManifest(tagIndex, descriptions, alwaysActive, contextFiles)
 
 		// Generate the capability manifest talent and prepend it.
 		manifestEntries := make([]talents.ManifestEntry, len(manifest))
@@ -1481,6 +1528,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 				Tag:          m.Tag,
 				Description:  m.Description,
 				Tools:        m.Tools,
+				Context:      m.Context,
 				AlwaysActive: m.AlwaysActive,
 			}
 		}

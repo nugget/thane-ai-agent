@@ -426,6 +426,46 @@ func (l *Loop) buildSystemPrompt(ctx context.Context, userMessage string, histor
 		}
 	}
 
+	// 3b. Tag context (capability knowledge — what does my active role need)
+	// When capability tags are active, inject their associated context files
+	// into the system prompt. Files are re-read each turn (matching the
+	// inject_files freshness pattern) so external changes are visible.
+	if l.capTags != nil && l.activeTags != nil {
+		seen := make(map[string]bool)
+		var tagCtxBuf strings.Builder
+		for tag, active := range l.activeTags {
+			if !active {
+				continue
+			}
+			cfg, ok := l.capTags[tag]
+			if !ok {
+				continue
+			}
+			for _, path := range cfg.Context {
+				if seen[path] {
+					continue
+				}
+				seen[path] = true
+				data, err := os.ReadFile(path)
+				if err != nil {
+					l.logger.Warn("failed to read tag context file",
+						"tag", tag, "path", path, "error", err)
+					continue
+				}
+				if tagCtxBuf.Len() > 0 {
+					tagCtxBuf.WriteString("\n\n---\n\n")
+				}
+				tagCtxBuf.Write(data)
+			}
+		}
+		if tagCtxBuf.Len() > 0 {
+			mark("TAG CONTEXT")
+			sb.WriteString("\n\n## Capability Context\n\n")
+			sb.WriteString(tagCtxBuf.String())
+			seal()
+		}
+	}
+
 	// 4. Current Conditions (environment — where/when am I)
 	// Placed early because models attend more strongly to content near
 	// the beginning. Uses H1 heading to signal operational importance.
