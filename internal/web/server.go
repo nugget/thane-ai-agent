@@ -17,18 +17,11 @@ import (
 //go:embed static/*
 var staticFiles embed.FS
 
-// StatsSnapshot mirrors api.SessionStatsSnapshot without importing api.
+// StatsSnapshot holds runtime info for the dashboard. Currently only
+// build metadata is needed; per-conversation stats were removed because
+// they are misleading in Thane's multi-conversation architecture.
 type StatsSnapshot struct {
-	TotalInputTokens  int64             `json:"total_input_tokens"`
-	TotalOutputTokens int64             `json:"total_output_tokens"`
-	TotalRequests     int64             `json:"total_requests"`
-	EstimatedCostUSD  float64           `json:"estimated_cost_usd"`
-	ReportedBalance   float64           `json:"reported_balance_usd,omitempty"`
-	BalanceSetAt      string            `json:"balance_set_at,omitempty"`
-	ContextTokens     int               `json:"context_tokens"`
-	ContextWindow     int               `json:"context_window"`
-	MessageCount      int               `json:"message_count"`
-	Build             map[string]string `json:"build,omitempty"`
+	Build map[string]string `json:"build,omitempty"`
 }
 
 // RouterInfo combines routing stats and the model roster.
@@ -55,6 +48,7 @@ type HealthFunc func() map[string]HealthStatus
 
 // Config holds the dependencies needed to construct a WebServer.
 type Config struct {
+	BrandName  string // Display name in the nav bar. Defaults to "Thane".
 	StatsFunc  StatsFunc
 	RouterFunc RouterFunc
 	HealthFunc HealthFunc
@@ -63,6 +57,7 @@ type Config struct {
 
 // WebServer serves the web dashboard and chat UI.
 type WebServer struct {
+	brandName  string
 	statsFunc  StatsFunc
 	routerFunc RouterFunc
 	healthFunc HealthFunc
@@ -77,7 +72,12 @@ func NewWebServer(cfg Config) *WebServer {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	brandName := cfg.BrandName
+	if brandName == "" {
+		brandName = "Thane"
+	}
 	s := &WebServer{
+		brandName:  brandName,
 		statsFunc:  cfg.StatsFunc,
 		routerFunc: cfg.RouterFunc,
 		healthFunc: cfg.HealthFunc,
@@ -95,17 +95,16 @@ func (s *WebServer) RegisterRoutes(mux *http.ServeMux) {
 	// Static assets (htmx, CSS)
 	mux.HandleFunc("GET /static/", s.handleStatic)
 
-	// Chat UI
-	mux.HandleFunc("GET /chat", func(w http.ResponseWriter, r *http.Request) {
-		serveFile(w, r, "index.html")
-	})
+	// Chat UI (rendered through the shared layout template)
+	mux.HandleFunc("GET /chat", s.handleChat)
 	mux.HandleFunc("GET /chat/{path...}", func(w http.ResponseWriter, r *http.Request) {
-		path := r.PathValue("path")
-		if path == "" {
-			serveFile(w, r, "index.html")
+		p := r.PathValue("path")
+		if p == "" {
+			s.handleChat(w, r)
 			return
 		}
-		serveFile(w, r, path)
+		// Serve sub-path assets from the old static dir (future-proofing)
+		serveFile(w, r, p)
 	})
 
 	// PWA manifest

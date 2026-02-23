@@ -1,4 +1,4 @@
-{{define "title"}}Thane - Runtime Overview{{end}}
+{{define "title"}}{{.BrandName}} - Runtime Overview{{end}}
 
 {{define "content"}}
 <div class="dashboard">
@@ -17,39 +17,6 @@
                 <dd>{{index .Stats.Build "go_version"}}</dd>
                 <dt>Commit</dt>
                 <dd class="mono">{{index .Stats.Build "git_commit"}}</dd>
-            </dl>
-        </div>
-
-        {{/* --- Session Stats --- */}}
-        <div class="card">
-            <h2>Session</h2>
-            <dl class="stat-list">
-                <dt>Requests</dt>
-                <dd>{{.Stats.TotalRequests}}</dd>
-                <dt>Input tokens</dt>
-                <dd>{{formatTokens .Stats.TotalInputTokens}}</dd>
-                <dt>Output tokens</dt>
-                <dd>{{formatTokens .Stats.TotalOutputTokens}}</dd>
-                <dt>Cost</dt>
-                <dd>{{formatCost .Stats.EstimatedCostUSD}}</dd>
-            </dl>
-        </div>
-
-        {{/* --- Context Window --- */}}
-        <div class="card">
-            <h2>Context</h2>
-            <dl class="stat-list">
-                <dt>Messages</dt>
-                <dd>{{.Stats.MessageCount}}</dd>
-                <dt>Tokens</dt>
-                <dd>{{formatTokens (int64 .Stats.ContextTokens)}} / {{formatTokens (int64 .Stats.ContextWindow)}}</dd>
-                <dt>Usage</dt>
-                <dd>
-                    <div class="progress-bar">
-                        <div class="progress-fill" style="width: {{pct .Stats.ContextTokens .Stats.ContextWindow}}%"></div>
-                    </div>
-                    <span class="text-muted">{{pct .Stats.ContextTokens .Stats.ContextWindow}}%</span>
-                </dd>
             </dl>
         </div>
     </section>

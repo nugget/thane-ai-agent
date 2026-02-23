@@ -1764,18 +1764,8 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// --- Web dashboard ---
 	ws := web.NewWebServer(web.Config{
 		StatsFunc: func() web.StatsSnapshot {
-			snap := server.DashboardSnapshot()
 			return web.StatsSnapshot{
-				TotalInputTokens:  snap.TotalInputTokens,
-				TotalOutputTokens: snap.TotalOutputTokens,
-				TotalRequests:     snap.TotalRequests,
-				EstimatedCostUSD:  snap.EstimatedCostUSD,
-				ReportedBalance:   snap.ReportedBalance,
-				BalanceSetAt:      snap.BalanceSetAt,
-				ContextTokens:     snap.ContextTokens,
-				ContextWindow:     snap.ContextWindow,
-				MessageCount:      snap.MessageCount,
-				Build:             snap.Build,
+				Build: buildinfo.RuntimeInfo(),
 			}
 		},
 		RouterFunc: func() web.RouterInfo {
