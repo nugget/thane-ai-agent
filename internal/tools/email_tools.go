@@ -268,7 +268,7 @@ func (r *Registry) registerEmailTools() {
 					"description": "Email account name (default: primary account)",
 				},
 			},
-			"required": []string{"destination"},
+			// destination is validated by the handler (folder accepted as alias).
 		},
 		Handler: func(ctx context.Context, args map[string]any) (string, error) {
 			return r.emailTools.HandleMove(ctx, args)

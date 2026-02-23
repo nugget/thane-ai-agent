@@ -281,10 +281,12 @@ func (t *Tools) HandleMove(ctx context.Context, args map[string]any) (string, er
 	}
 
 	// Models sometimes pass "folder" meaning the destination (e.g.,
-	// "Trash") without providing "destination". When destination is
-	// empty, promote folder to destination and let the source default
-	// to INBOX.
-	if opts.Destination == "" && opts.Folder != "" {
+	// "Trash") without providing "destination". When the destination
+	// key is truly absent and folder is set, promote folder to
+	// destination and let the source default to INBOX. An explicitly
+	// empty destination still triggers the required-field error.
+	_, hasDestination := args["destination"]
+	if !hasDestination && opts.Destination == "" && opts.Folder != "" {
 		opts.Destination = opts.Folder
 		opts.Folder = ""
 	}
@@ -486,6 +488,7 @@ func stringArg(args map[string]any, key string) string {
 
 // intArg extracts an integer from args. JSON numbers arrive as float64,
 // but LLMs sometimes send numeric strings ("395") or Go-native ints.
+// Non-numeric strings log a warning and return 0.
 func intArg(args map[string]any, key string) int {
 	switch v := args[key].(type) {
 	case float64:
@@ -493,7 +496,11 @@ func intArg(args map[string]any, key string) int {
 	case int:
 		return v
 	case string:
-		n, _ := strconv.Atoi(v)
+		n, err := strconv.Atoi(v)
+		if err != nil {
+			slog.Warn("failed to parse int argument", "key", key, "value", v)
+			return 0
+		}
 		return n
 	}
 	return 0
@@ -509,35 +516,54 @@ func boolArg(args map[string]any, key string) bool {
 // uint32SliceArg extracts a slice of uint32 values from args. Handles
 // JSON arrays (elements may be float64, int, or string) and single
 // values. This consolidates the UID parsing that was duplicated across
-// HandleMark and HandleMove.
+// HandleMark and HandleMove. Invalid or out-of-range elements are
+// logged and skipped.
 func uint32SliceArg(args map[string]any, key string) []uint32 {
 	switch v := args[key].(type) {
 	case []any:
 		var out []uint32
 		for _, el := range v {
-			switch n := el.(type) {
-			case float64:
-				out = append(out, uint32(n))
-			case int:
-				out = append(out, uint32(n))
-			case string:
-				if parsed, err := strconv.Atoi(n); err == nil {
-					out = append(out, uint32(parsed))
-				}
+			if uid, ok := coerceUint32(el); ok {
+				out = append(out, uid)
+			} else {
+				slog.Warn("skipped invalid UID element", "key", key, "value", el)
 			}
 		}
 		return out
-	case float64:
-		return []uint32{uint32(v)}
-	case int:
-		return []uint32{uint32(v)}
-	case string:
-		if n, err := strconv.Atoi(v); err == nil {
-			return []uint32{uint32(n)}
+	default:
+		if uid, ok := coerceUint32(v); ok {
+			return []uint32{uid}
 		}
 	}
 	return nil
 }
+
+// coerceUint32 attempts to convert a value to a valid uint32 UID.
+// Returns (0, false) for nil, negative, non-integer, or out-of-range values.
+func coerceUint32(v any) (uint32, bool) {
+	switch n := v.(type) {
+	case float64:
+		if n != float64(int64(n)) || n < 1 || n > float64(maxUint32) {
+			return 0, false
+		}
+		return uint32(n), true
+	case int:
+		if n < 1 || int64(n) > int64(maxUint32) {
+			return 0, false
+		}
+		return uint32(n), true
+	case string:
+		parsed, err := strconv.Atoi(n)
+		if err != nil || parsed < 1 || int64(parsed) > int64(maxUint32) {
+			return 0, false
+		}
+		return uint32(parsed), true
+	}
+	return 0, false
+}
+
+// maxUint32 is the largest valid uint32 value, used for range checks.
+const maxUint32 = 1<<32 - 1
 
 // stringSliceArg extracts a string slice from args. The value may be
 // a []any (from JSON) or a single string.

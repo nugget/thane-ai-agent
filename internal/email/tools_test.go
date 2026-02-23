@@ -54,70 +54,107 @@ func TestIntArg(t *testing.T) {
 
 func TestUint32SliceArg(t *testing.T) {
 	tests := []struct {
-		name string
-		args map[string]any
-		key  string
-		want []uint32
+		name    string
+		args    map[string]any
+		key     string
+		want    []uint32
+		wantNil bool // true when we expect nil specifically (not empty slice)
 	}{
 		{
-			"float64 array",
-			map[string]any{"uids": []any{float64(1), float64(2), float64(3)}},
-			"uids",
-			[]uint32{1, 2, 3},
+			name: "float64 array",
+			args: map[string]any{"uids": []any{float64(1), float64(2), float64(3)}},
+			key:  "uids",
+			want: []uint32{1, 2, 3},
 		},
 		{
-			"string array",
-			map[string]any{"uids": []any{"100", "200"}},
-			"uids",
-			[]uint32{100, 200},
+			name: "string array",
+			args: map[string]any{"uids": []any{"100", "200"}},
+			key:  "uids",
+			want: []uint32{100, 200},
 		},
 		{
-			"mixed array",
-			map[string]any{"uids": []any{float64(1), "2", int(3)}},
-			"uids",
-			[]uint32{1, 2, 3},
+			name: "mixed array",
+			args: map[string]any{"uids": []any{float64(1), "2", int(3)}},
+			key:  "uids",
+			want: []uint32{1, 2, 3},
 		},
 		{
-			"single float64",
-			map[string]any{"uids": float64(42)},
-			"uids",
-			[]uint32{42},
+			name: "single float64",
+			args: map[string]any{"uids": float64(42)},
+			key:  "uids",
+			want: []uint32{42},
 		},
 		{
-			"single int",
-			map[string]any{"uids": int(99)},
-			"uids",
-			[]uint32{99},
+			name: "single int",
+			args: map[string]any{"uids": int(99)},
+			key:  "uids",
+			want: []uint32{99},
 		},
 		{
-			"single string",
-			map[string]any{"uids": "395"},
-			"uids",
-			[]uint32{395},
+			name: "single string",
+			args: map[string]any{"uids": "395"},
+			key:  "uids",
+			want: []uint32{395},
 		},
 		{
-			"missing key",
-			map[string]any{},
-			"uids",
-			nil,
+			name:    "missing key",
+			args:    map[string]any{},
+			key:     "uids",
+			wantNil: true,
 		},
 		{
-			"invalid string",
-			map[string]any{"uids": "abc"},
-			"uids",
-			nil,
+			name:    "invalid string",
+			args:    map[string]any{"uids": "abc"},
+			key:     "uids",
+			wantNil: true,
 		},
 		{
-			"array with invalid strings skipped",
-			map[string]any{"uids": []any{float64(1), "bad", float64(3)}},
-			"uids",
-			[]uint32{1, 3},
+			name: "array with invalid strings skipped",
+			args: map[string]any{"uids": []any{float64(1), "bad", float64(3)}},
+			key:  "uids",
+			want: []uint32{1, 3},
+		},
+		{
+			name:    "negative float64 rejected",
+			args:    map[string]any{"uids": float64(-1)},
+			key:     "uids",
+			wantNil: true,
+		},
+		{
+			name:    "zero rejected",
+			args:    map[string]any{"uids": float64(0)},
+			key:     "uids",
+			wantNil: true,
+		},
+		{
+			name:    "non-integer float64 rejected",
+			args:    map[string]any{"uids": float64(1.5)},
+			key:     "uids",
+			wantNil: true,
+		},
+		{
+			name:    "negative int rejected",
+			args:    map[string]any{"uids": int(-5)},
+			key:     "uids",
+			wantNil: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := uint32SliceArg(tt.args, tt.key)
+
+			if tt.wantNil {
+				if got != nil {
+					t.Errorf("uint32SliceArg() = %v, want nil", got)
+				}
+				return
+			}
+
+			if got == nil {
+				t.Errorf("uint32SliceArg() = nil, want %v", tt.want)
+				return
+			}
 			if len(got) != len(tt.want) {
 				t.Errorf("uint32SliceArg() = %v, want %v", got, tt.want)
 				return
