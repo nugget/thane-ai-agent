@@ -22,13 +22,25 @@ type AgentRunner interface {
 	Run(ctx context.Context, req *agent.Request, stream agent.StreamCallback) (*agent.Response, error)
 }
 
-// SessionRotator ends the active session for a conversation, triggering
-// background summarization. The agent loop's EnsureSession call creates
-// a fresh session on the next message automatically.
+// SessionRotator gracefully closes the active session for a
+// conversation, optionally generating a farewell message and
+// carry-forward context. The agent loop's EnsureSession call creates a
+// fresh session on the next message automatically.
 type SessionRotator interface {
-	// RotateIdleSession ends the active session for conversationID.
-	// Returns true if a session was ended. No-op if no active session.
-	RotateIdleSession(conversationID string) bool
+	// RotateIdleSession closes the active session for conversationID,
+	// generating a farewell message for sender and injecting
+	// carry-forward context into the next session. Returns true if a
+	// session was ended. No-op if no active session.
+	RotateIdleSession(ctx context.Context, conversationID string, sender string) bool
+}
+
+// ChannelSender can send a text message to a recipient on the
+// originating channel. Used by the session rotator to deliver farewell
+// messages before closing a session.
+type ChannelSender interface {
+	// SendMessage delivers a text message to recipient. The recipient
+	// format is channel-specific (e.g., phone number for Signal).
+	SendMessage(ctx context.Context, recipient, message string) error
 }
 
 // ContactResolver resolves a phone number to a contact name. The bridge
@@ -275,7 +287,7 @@ func (b *Bridge) handleMessage(ctx context.Context, env *Envelope) {
 		lm, exists := b.lastInboundTS[sender]
 		b.mu.Unlock()
 		if exists && time.Since(lm.receivedAt) > b.idleTimeout {
-			if b.rotator.RotateIdleSession(convID) {
+			if b.rotator.RotateIdleSession(ctx, convID, sender) {
 				b.logger.Info("signal session rotated (idle)",
 					"sender", sender,
 					"conversation_id", convID,

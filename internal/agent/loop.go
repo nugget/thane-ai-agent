@@ -1487,6 +1487,36 @@ func (l *Loop) getAllMessages(conversationID string) []memory.Message {
 	return l.memory.GetMessages(conversationID)
 }
 
+// maxTranscriptBytes caps the transcript size returned by
+// ConversationTranscript to avoid generating oversized LLM prompts.
+const maxTranscriptBytes = 32 * 1024
+
+// ConversationTranscript returns a formatted text transcript of the
+// current in-memory conversation for the given ID. System and tool
+// messages are excluded to focus on user/assistant dialogue. Returns
+// an empty string if no user/assistant messages exist after filtering
+// (for example, when there are no messages or only system/tool
+// messages). The output is capped at [maxTranscriptBytes] to keep
+// downstream LLM prompts within reasonable context limits.
+func (l *Loop) ConversationTranscript(conversationID string) string {
+	messages := l.getAllMessages(conversationID)
+	if len(messages) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for _, m := range messages {
+		if m.Role == "system" || m.Role == "tool" {
+			continue
+		}
+		fmt.Fprintf(&b, "[%s] %s: %s\n", m.Timestamp.Format("15:04"), m.Role, m.Content)
+		if b.Len() > maxTranscriptBytes {
+			b.WriteString("\n... (truncated)\n")
+			break
+		}
+	}
+	return b.String()
+}
+
 // archiveAndEndSession archives all messages and ends the active session.
 // Errors are logged but not propagated — callers should not be blocked by
 // archive failures.
