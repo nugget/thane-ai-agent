@@ -434,12 +434,29 @@ func (l *Loop) getCurrentConvID() string {
 // file after a successful iteration. Old logs beyond
 // [iterationLogRetention] are pruned. This is best-effort: errors are
 // logged but never disrupt the loop.
+//
+// Unlike [Loop.readStateFile], this reads the full file without the
+// maxStateBytes cap to avoid silently truncating user/model state on
+// rewrite.
 func (l *Loop) appendIterationLog(result *iterationResult, convID string, sleep time.Duration) {
-	content, err := l.readStateFile()
+	statePath := l.stateFilePath()
+
+	// Read the full file (uncapped) to avoid truncation on rewrite.
+	var content string
+	data, err := os.ReadFile(statePath)
 	if err != nil {
-		// State file may not exist if the model didn't call
-		// update_metacognitive_state on the first iteration.
+		if !errors.Is(err, fs.ErrNotExist) {
+			// Non-trivial read error — abort to avoid data loss.
+			l.deps.Logger.Warn("failed to read state file for iteration log, skipping append",
+				"error", err,
+				"conversation_id", convID,
+			)
+			return
+		}
+		// File doesn't exist yet — start with empty content.
 		content = ""
+	} else {
+		content = string(data)
 	}
 
 	// Prune old iteration logs before appending.
@@ -466,7 +483,16 @@ func (l *Loop) appendIterationLog(result *iterationResult, convID string, sleep 
 	)
 
 	fullContent := content + logBlock
-	if err := os.WriteFile(l.stateFilePath(), []byte(fullContent), 0o644); err != nil {
+
+	// Ensure the parent directory exists (state file may be in a subdir).
+	if err := os.MkdirAll(filepath.Dir(statePath), 0o755); err != nil {
+		l.deps.Logger.Warn("failed to create directory for iteration log",
+			"error", err,
+			"conversation_id", convID,
+		)
+		return
+	}
+	if err := os.WriteFile(statePath, []byte(fullContent), 0o644); err != nil {
 		l.deps.Logger.Warn("failed to append iteration log",
 			"error", err,
 			"conversation_id", convID,
@@ -501,8 +527,9 @@ func formatToolsUsed(tools map[string]int) string {
 }
 
 // pruneIterationLogs removes old iteration log blocks from content,
-// keeping the last keepN blocks. Returns the pruned content. This is a
-// pure function for easy testing.
+// keeping the last keepN blocks. Each block is removed individually so
+// any non-log content interleaved between blocks is preserved. Returns
+// the pruned content. This is a pure function for easy testing.
 func pruneIterationLogs(content string, keepN int) string {
 	// Find all iteration log block positions.
 	var positions []int
@@ -520,35 +547,39 @@ func pruneIterationLogs(content string, keepN int) string {
 		return content
 	}
 
-	// Remove blocks from oldest (first) up to len-keepN.
-	// Each block starts at its prefix and ends at "-->\n".
+	// Remove the oldest blocks individually, preserving content between them.
 	removeCount := len(positions) - keepN
 	var result strings.Builder
+	currentPos := 0
 
-	// Content before the first block to remove.
-	firstRemovePos := positions[0]
-	// Find the start of the block including its preceding newline.
-	blockStart := firstRemovePos
-	if blockStart > 0 && content[blockStart-1] == '\n' {
-		blockStart--
-	}
-	result.WriteString(content[:blockStart])
-
-	// Skip removed blocks, keep the rest.
-	lastRemovedEnd := 0
 	for i := 0; i < removeCount; i++ {
 		blockPos := positions[i]
-		// Find the end of this block: "-->\n"
+
+		// Include a preceding newline in the removal if present.
+		blockStart := blockPos
+		if blockStart > 0 && content[blockStart-1] == '\n' {
+			blockStart--
+		}
+
+		// Write any content between the previous position and this block.
+		if currentPos < blockStart {
+			result.WriteString(content[currentPos:blockStart])
+		}
+
+		// Find the end of this block: "-->\n".
 		endMarker := strings.Index(content[blockPos:], "-->\n")
 		if endMarker < 0 {
-			// Malformed block — skip to end of content.
-			lastRemovedEnd = len(content)
+			// Malformed block — treat as running to end of content.
+			currentPos = len(content)
 			break
 		}
-		lastRemovedEnd = blockPos + endMarker + len("-->\n")
+		currentPos = blockPos + endMarker + len("-->\n")
 	}
 
-	result.WriteString(content[lastRemovedEnd:])
+	// Append any remaining content after the last removed block.
+	if currentPos < len(content) {
+		result.WriteString(content[currentPos:])
+	}
 	return result.String()
 }
 
