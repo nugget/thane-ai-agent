@@ -15,6 +15,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/facts"
 	"github.com/nugget/thane-ai-agent/internal/fetch"
 	"github.com/nugget/thane-ai-agent/internal/homeassistant"
+	"github.com/nugget/thane-ai-agent/internal/media"
 	"github.com/nugget/thane-ai-agent/internal/scheduler"
 	"github.com/nugget/thane-ai-agent/internal/search"
 	"github.com/nugget/thane-ai-agent/internal/usage"
@@ -106,6 +107,16 @@ func (r *Registry) SetFetcher(f *fetch.Fetcher) {
 		Description: "Fetch a web page and extract its readable text content. Use to read articles, documentation, or any web page. Complements web_search.",
 		Parameters:  fetch.ToolDefinition(),
 		Handler:     fetch.ToolHandler(f),
+	})
+}
+
+// SetMediaClient adds the media_transcript tool to the registry.
+func (r *Registry) SetMediaClient(c *media.Client) {
+	r.Register(&Tool{
+		Name:        "media_transcript",
+		Description: "Retrieve the transcript of a video or podcast episode. Supports YouTube, Vimeo, and other sources via yt-dlp. Returns metadata and cleaned transcript text. Transcripts are saved to disk for future reference.",
+		Parameters:  media.ToolDefinition(),
+		Handler:     media.ToolHandler(c),
 	})
 }
 

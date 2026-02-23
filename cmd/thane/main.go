@@ -25,6 +25,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strconv"
@@ -52,6 +53,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/ingest"
 	"github.com/nugget/thane-ai-agent/internal/llm"
 	"github.com/nugget/thane-ai-agent/internal/mcp"
+	"github.com/nugget/thane-ai-agent/internal/media"
 	"github.com/nugget/thane-ai-agent/internal/memory"
 	"github.com/nugget/thane-ai-agent/internal/metacognitive"
 	"github.com/nugget/thane-ai-agent/internal/mqtt"
@@ -1066,6 +1068,55 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// Always available — no configuration needed. Fetches web pages and
 	// extracts readable text content.
 	loop.Tools().SetFetcher(fetch.New())
+
+	// --- Media transcript ---
+	// Wraps yt-dlp for on-demand transcript retrieval from YouTube,
+	// Vimeo, podcasts, and other supported sources.
+	ytdlpPath := cfg.Media.YtDlpPath
+	if ytdlpPath == "" {
+		ytdlpPath, _ = exec.LookPath("yt-dlp")
+	}
+	if ytdlpPath != "" {
+		mc := media.New(media.Config{
+			YtDlpPath:          ytdlpPath,
+			CookiesFile:        cfg.Media.CookiesFile,
+			SubtitleLanguage:   cfg.Media.SubtitleLanguage,
+			MaxTranscriptChars: cfg.Media.MaxTranscriptChars,
+			WhisperModel:       cfg.Media.WhisperModel,
+			TranscriptDir:      cfg.Media.TranscriptDir,
+			OllamaURL:          cfg.Models.OllamaURL,
+		}, logger)
+
+		// Wire up LLM summarization for map-reduce transcript processing.
+		// Uses a local model via router for chunk summarization.
+		mc.SetSummarizer(func(ctx context.Context, prompt string) (string, error) {
+			hints := map[string]string{
+				router.HintMission:      "background",
+				router.HintLocalOnly:    "true",
+				router.HintQualityFloor: "3",
+				router.HintPreferSpeed:  "true",
+			}
+			if cfg.Media.SummarizeModel != "" {
+				hints[router.HintModelPreference] = cfg.Media.SummarizeModel
+			}
+			model, _ := rtr.Route(ctx, router.Request{
+				Query:    "transcript summarization",
+				Priority: router.PriorityBackground,
+				Hints:    hints,
+			})
+			msgs := []llm.Message{{Role: "user", Content: prompt}}
+			resp, err := llmClient.Chat(ctx, model, msgs, nil)
+			if err != nil {
+				return "", err
+			}
+			return resp.Message.Content, nil
+		})
+
+		loop.Tools().SetMediaClient(mc)
+		logger.Info("media_transcript enabled", "yt_dlp", ytdlpPath)
+	} else {
+		logger.Warn("media_transcript disabled (yt-dlp not found)")
+	}
 
 	// --- Archive tools ---
 	// Gives the agent the ability to search and recall past conversations.
