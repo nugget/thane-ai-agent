@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -145,16 +146,12 @@ func (t *Tools) HandleMark(ctx context.Context, args map[string]any) (string, er
 		Account: stringArg(args, "account"),
 	}
 
-	// Parse UIDs from array or single value.
-	switch v := args["uids"].(type) {
-	case []any:
-		for _, u := range v {
-			if n, ok := u.(float64); ok {
-				action.UIDs = append(action.UIDs, uint32(n))
-			}
+	// Parse UIDs — accept "uids" array or singular "uid".
+	action.UIDs = uint32SliceArg(args, "uids")
+	if len(action.UIDs) == 0 {
+		if uid := uint32(intArg(args, "uid")); uid != 0 {
+			action.UIDs = []uint32{uid}
 		}
-	case float64:
-		action.UIDs = append(action.UIDs, uint32(v))
 	}
 
 	if len(action.UIDs) == 0 {
@@ -283,16 +280,21 @@ func (t *Tools) HandleMove(ctx context.Context, args map[string]any) (string, er
 		Account:     stringArg(args, "account"),
 	}
 
-	// Parse UIDs from array or single value.
-	switch v := args["uids"].(type) {
-	case []any:
-		for _, u := range v {
-			if n, ok := u.(float64); ok {
-				opts.UIDs = append(opts.UIDs, uint32(n))
-			}
+	// Models sometimes pass "folder" meaning the destination (e.g.,
+	// "Trash") without providing "destination". When destination is
+	// empty, promote folder to destination and let the source default
+	// to INBOX.
+	if opts.Destination == "" && opts.Folder != "" {
+		opts.Destination = opts.Folder
+		opts.Folder = ""
+	}
+
+	// Parse UIDs — accept "uids" array or singular "uid".
+	opts.UIDs = uint32SliceArg(args, "uids")
+	if len(opts.UIDs) == 0 {
+		if uid := uint32(intArg(args, "uid")); uid != 0 {
+			opts.UIDs = []uint32{uid}
 		}
-	case float64:
-		opts.UIDs = append(opts.UIDs, uint32(v))
 	}
 
 	if len(opts.UIDs) == 0 {
@@ -482,9 +484,17 @@ func stringArg(args map[string]any, key string) string {
 	return ""
 }
 
+// intArg extracts an integer from args. JSON numbers arrive as float64,
+// but LLMs sometimes send numeric strings ("395") or Go-native ints.
 func intArg(args map[string]any, key string) int {
-	if v, ok := args[key].(float64); ok {
+	switch v := args[key].(type) {
+	case float64:
 		return int(v)
+	case int:
+		return v
+	case string:
+		n, _ := strconv.Atoi(v)
+		return n
 	}
 	return 0
 }
@@ -494,6 +504,39 @@ func boolArg(args map[string]any, key string) bool {
 		return v
 	}
 	return false
+}
+
+// uint32SliceArg extracts a slice of uint32 values from args. Handles
+// JSON arrays (elements may be float64, int, or string) and single
+// values. This consolidates the UID parsing that was duplicated across
+// HandleMark and HandleMove.
+func uint32SliceArg(args map[string]any, key string) []uint32 {
+	switch v := args[key].(type) {
+	case []any:
+		var out []uint32
+		for _, el := range v {
+			switch n := el.(type) {
+			case float64:
+				out = append(out, uint32(n))
+			case int:
+				out = append(out, uint32(n))
+			case string:
+				if parsed, err := strconv.Atoi(n); err == nil {
+					out = append(out, uint32(parsed))
+				}
+			}
+		}
+		return out
+	case float64:
+		return []uint32{uint32(v)}
+	case int:
+		return []uint32{uint32(v)}
+	case string:
+		if n, err := strconv.Atoi(v); err == nil {
+			return []uint32{uint32(n)}
+		}
+	}
+	return nil
 }
 
 // stringSliceArg extracts a string slice from args. The value may be

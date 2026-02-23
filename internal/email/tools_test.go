@@ -35,15 +35,97 @@ func TestIntArg(t *testing.T) {
 		key  string
 		want int
 	}{
-		{"present", map[string]any{"limit": float64(10)}, "limit", 10},
-		{"missing", map[string]any{}, "limit", 0},
-		{"wrong type", map[string]any{"limit": "ten"}, "limit", 0},
+		{"float64", map[string]any{"uid": float64(10)}, "uid", 10},
+		{"int", map[string]any{"uid": int(42)}, "uid", 42},
+		{"string numeric", map[string]any{"uid": "395"}, "uid", 395},
+		{"string non-numeric", map[string]any{"uid": "abc"}, "uid", 0},
+		{"missing", map[string]any{}, "uid", 0},
+		{"wrong type", map[string]any{"uid": true}, "uid", 0},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := intArg(tt.args, tt.key); got != tt.want {
 				t.Errorf("intArg() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestUint32SliceArg(t *testing.T) {
+	tests := []struct {
+		name string
+		args map[string]any
+		key  string
+		want []uint32
+	}{
+		{
+			"float64 array",
+			map[string]any{"uids": []any{float64(1), float64(2), float64(3)}},
+			"uids",
+			[]uint32{1, 2, 3},
+		},
+		{
+			"string array",
+			map[string]any{"uids": []any{"100", "200"}},
+			"uids",
+			[]uint32{100, 200},
+		},
+		{
+			"mixed array",
+			map[string]any{"uids": []any{float64(1), "2", int(3)}},
+			"uids",
+			[]uint32{1, 2, 3},
+		},
+		{
+			"single float64",
+			map[string]any{"uids": float64(42)},
+			"uids",
+			[]uint32{42},
+		},
+		{
+			"single int",
+			map[string]any{"uids": int(99)},
+			"uids",
+			[]uint32{99},
+		},
+		{
+			"single string",
+			map[string]any{"uids": "395"},
+			"uids",
+			[]uint32{395},
+		},
+		{
+			"missing key",
+			map[string]any{},
+			"uids",
+			nil,
+		},
+		{
+			"invalid string",
+			map[string]any{"uids": "abc"},
+			"uids",
+			nil,
+		},
+		{
+			"array with invalid strings skipped",
+			map[string]any{"uids": []any{float64(1), "bad", float64(3)}},
+			"uids",
+			[]uint32{1, 3},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := uint32SliceArg(tt.args, tt.key)
+			if len(got) != len(tt.want) {
+				t.Errorf("uint32SliceArg() = %v, want %v", got, tt.want)
+				return
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Errorf("uint32SliceArg()[%d] = %d, want %d", i, got[i], tt.want[i])
+				}
 			}
 		})
 	}
