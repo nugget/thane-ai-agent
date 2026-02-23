@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -416,7 +418,7 @@ func TestFormatMessage_DirectMessage(t *testing.T) {
 			Message:   "Hello Thane",
 		},
 	}
-	got := formatMessage(env)
+	got := formatMessage(env, nil)
 	if !strings.Contains(got, "+15551234567") {
 		t.Error("should contain sender number")
 	}
@@ -437,7 +439,7 @@ func TestFormatMessage_WithSourceName(t *testing.T) {
 		SourceName:  "Alice",
 		DataMessage: &DataMessage{Message: "Hello"},
 	}
-	got := formatMessage(env)
+	got := formatMessage(env, nil)
 	if !strings.Contains(got, "Alice") {
 		t.Error("should contain source name")
 	}
@@ -456,7 +458,7 @@ func TestFormatMessage_GroupMessage(t *testing.T) {
 			GroupInfo: &GroupInfo{GroupID: "family-group-id"},
 		},
 	}
-	got := formatMessage(env)
+	got := formatMessage(env, nil)
 	if !strings.Contains(got, "family-group-id") {
 		t.Error("should contain group ID")
 	}
@@ -508,7 +510,7 @@ func TestFormatMessage_PrefersDataMessageTimestamp(t *testing.T) {
 			Message:   "Hello",
 		},
 	}
-	got := formatMessage(env)
+	got := formatMessage(env, nil)
 	if !strings.Contains(got, "[ts:2000]") {
 		t.Errorf("should prefer DataMessage.Timestamp, got: %q", got)
 	}
@@ -526,7 +528,7 @@ func TestFormatMessage_FallsBackToEnvelopeTimestamp(t *testing.T) {
 			Message:   "Hello",
 		},
 	}
-	got := formatMessage(env)
+	got := formatMessage(env, nil)
 	if !strings.Contains(got, "[ts:3000]") {
 		t.Errorf("should fall back to envelope timestamp, got: %q", got)
 	}
@@ -810,5 +812,540 @@ func TestBridge_ContactResolution_NilResolver(t *testing.T) {
 	}
 	if _, exists := req.Hints["sender_name"]; exists {
 		t.Errorf("sender_name hint should not be set with nil resolver, got %q", req.Hints["sender_name"])
+	}
+}
+
+// --- Issue #357: Typing Indicator Refresh ---
+
+func TestStartTypingRefresh_CancelsCleanly(t *testing.T) {
+	bridge, _, stdin, _ := bridgeHelper(t)
+
+	// Drain RPC requests so the client doesn't block on pipe writes.
+	go func() {
+		reader := bufio.NewReader(stdin)
+		for {
+			if _, err := reader.ReadBytes('\n'); err != nil {
+				return
+			}
+		}
+	}()
+
+	ctx, ctxCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer ctxCancel()
+
+	cancel := bridge.startTypingRefresh(ctx, "+15551234567")
+
+	// Let the goroutine start and potentially fire.
+	time.Sleep(50 * time.Millisecond)
+
+	// Cancel should not panic or block.
+	cancel()
+
+	// Brief wait to confirm no further activity.
+	time.Sleep(50 * time.Millisecond)
+}
+
+// --- Issue #358: Reaction Handling ---
+
+func TestBridge_ReactionWakesAgent(t *testing.T) {
+	bridge, stdout, stdin, runner := bridgeHelper(t)
+	go drainRPCRequests(t, stdin, stdout)
+
+	env := &Envelope{
+		Source:     "+15551234567",
+		SourceName: "Alice",
+		Timestamp:  1700000000000,
+		DataMessage: &DataMessage{
+			Timestamp: 1700000000000,
+			Reaction: &Reaction{
+				Emoji:               "❤️",
+				TargetAuthor:        "+15559999999",
+				TargetSentTimestamp: 1700000099000,
+				IsRemove:            false,
+			},
+		},
+	}
+
+	bridge.handleReaction(context.Background(), env)
+
+	req := runner.getLastReq()
+	if req == nil {
+		t.Fatal("runner.Run was not called for reaction")
+	}
+	if req.Hints["event_type"] != "reaction" {
+		t.Errorf("event_type hint = %q, want %q", req.Hints["event_type"], "reaction")
+	}
+	if req.Hints["reaction_emoji"] != "❤️" {
+		t.Errorf("reaction_emoji hint = %q, want %q", req.Hints["reaction_emoji"], "❤️")
+	}
+	if req.Hints["target_sent_timestamp"] != "1700000099000" {
+		t.Errorf("target_sent_timestamp hint = %q, want %q", req.Hints["target_sent_timestamp"], "1700000099000")
+	}
+	if req.Hints["source"] != "signal" {
+		t.Errorf("source hint = %q, want %q", req.Hints["source"], "signal")
+	}
+	if req.ConversationID != "signal-15551234567" {
+		t.Errorf("ConversationID = %q, want %q", req.ConversationID, "signal-15551234567")
+	}
+}
+
+func TestBridge_ReactionRemovalIgnored(t *testing.T) {
+	bridge, stdout, stdin, runner := bridgeHelper(t)
+	go drainRPCRequests(t, stdin, stdout)
+
+	env := &Envelope{
+		Source:    "+15551234567",
+		Timestamp: 1700000000000,
+		DataMessage: &DataMessage{
+			Reaction: &Reaction{
+				Emoji:               "❤️",
+				TargetAuthor:        "+15559999999",
+				TargetSentTimestamp: 1700000099000,
+				IsRemove:            true,
+			},
+		},
+	}
+
+	bridge.handleReaction(context.Background(), env)
+
+	if runner.getLastReq() != nil {
+		t.Error("runner.Run should not be called for reaction removal")
+	}
+}
+
+func TestFormatReaction(t *testing.T) {
+	tests := []struct {
+		name       string
+		env        *Envelope
+		wantEmoji  string
+		wantSender string
+		wantTS     string
+	}{
+		{
+			name: "with source name",
+			env: &Envelope{
+				Source:     "+15551234567",
+				SourceName: "Alice",
+				DataMessage: &DataMessage{
+					Reaction: &Reaction{
+						Emoji:               "👍",
+						TargetAuthor:        "+15559999999",
+						TargetSentTimestamp: 1700000099000,
+					},
+				},
+			},
+			wantEmoji:  "👍",
+			wantSender: "Alice (+15551234567)",
+			wantTS:     "[ts:1700000099000]",
+		},
+		{
+			name: "without source name",
+			env: &Envelope{
+				Source: "+15551234567",
+				DataMessage: &DataMessage{
+					Reaction: &Reaction{
+						Emoji:               "🎉",
+						TargetAuthor:        "+15559999999",
+						TargetSentTimestamp: 1700000050000,
+					},
+				},
+			},
+			wantEmoji:  "🎉",
+			wantSender: "+15551234567",
+			wantTS:     "[ts:1700000050000]",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := formatReaction(tt.env)
+			if !strings.Contains(got, tt.wantEmoji) {
+				t.Errorf("should contain emoji %q, got: %q", tt.wantEmoji, got)
+			}
+			if !strings.Contains(got, tt.wantSender) {
+				t.Errorf("should contain sender %q, got: %q", tt.wantSender, got)
+			}
+			if !strings.Contains(got, tt.wantTS) {
+				t.Errorf("should contain timestamp %q, got: %q", tt.wantTS, got)
+			}
+		})
+	}
+}
+
+func TestBridge_ReactionRateLimited(t *testing.T) {
+	bridge, _, _, runner := bridgeHelper(t, func(cfg *BridgeConfig) {
+		cfg.RateLimit = 1
+	})
+
+	// Use up the rate limit.
+	bridge.allowSender("+15551234567")
+
+	// Reaction should be rate-limited — handleReaction should not be called
+	// (we test via allowSender directly since the Start loop is hard to
+	// drive in unit tests).
+	if bridge.allowSender("+15551234567") {
+		t.Error("second message should be rate-limited")
+	}
+
+	// Runner should not have been called.
+	if runner.getLastReq() != nil {
+		t.Error("runner should not be called when rate-limited")
+	}
+}
+
+// --- Issue #359: Attachment Handling ---
+
+func TestBridge_AttachmentOnlyMessageProcessed(t *testing.T) {
+	bridge, stdout, stdin, runner := bridgeHelper(t)
+	go drainRPCRequests(t, stdin, stdout)
+
+	env := &Envelope{
+		Source:    "+15551234567",
+		Timestamp: 1700000000000,
+		DataMessage: &DataMessage{
+			Timestamp: 1700000000000,
+			Message:   "", // no text
+			Attachments: []Attachment{
+				{ContentType: "image/jpeg", Filename: "photo.jpg", ID: "abc123", Size: 245760},
+			},
+		},
+	}
+
+	bridge.handleMessage(context.Background(), env)
+
+	req := runner.getLastReq()
+	if req == nil {
+		t.Fatal("runner.Run was not called for attachment-only message")
+	}
+	if !strings.Contains(req.Messages[0].Content, "image/jpeg") {
+		t.Errorf("message should describe attachment, got: %q", req.Messages[0].Content)
+	}
+}
+
+func TestBridge_AttachmentWithText(t *testing.T) {
+	bridge, stdout, stdin, runner := bridgeHelper(t)
+	go drainRPCRequests(t, stdin, stdout)
+
+	env := &Envelope{
+		Source:    "+15551234567",
+		Timestamp: 1700000000000,
+		DataMessage: &DataMessage{
+			Timestamp: 1700000000000,
+			Message:   "Check this out",
+			Attachments: []Attachment{
+				{ContentType: "image/png", Filename: "screenshot.png", ID: "def456", Size: 100000},
+			},
+		},
+	}
+
+	bridge.handleMessage(context.Background(), env)
+
+	req := runner.getLastReq()
+	if req == nil {
+		t.Fatal("runner.Run was not called")
+	}
+	content := req.Messages[0].Content
+	if !strings.Contains(content, "image/png") {
+		t.Errorf("should contain attachment type, got: %q", content)
+	}
+	if !strings.Contains(content, "Check this out") {
+		t.Errorf("should contain message text, got: %q", content)
+	}
+}
+
+func TestDescribeAttachment(t *testing.T) {
+	tests := []struct {
+		name       string
+		attachment Attachment
+		pathOrNote string
+		wantParts  []string
+	}{
+		{
+			name:       "image with dimensions",
+			attachment: Attachment{ContentType: "image/jpeg", Filename: "photo.jpg", Size: 245760, Width: 1920, Height: 1080},
+			pathOrNote: "/tmp/photo.jpg",
+			wantParts:  []string{"image/jpeg", `filename="photo.jpg"`, "245760 bytes", "1920x1080", "/tmp/photo.jpg"},
+		},
+		{
+			name:       "document without dimensions",
+			attachment: Attachment{ContentType: "application/pdf", Filename: "report.pdf", Size: 50000},
+			pathOrNote: "",
+			wantParts:  []string{"application/pdf", `filename="report.pdf"`, "50000 bytes"},
+		},
+		{
+			name:       "file not available",
+			attachment: Attachment{ContentType: "audio/ogg", ID: "abc", Size: 30000},
+			pathOrNote: "file not available",
+			wantParts:  []string{"audio/ogg", "30000 bytes", "file not available"},
+		},
+		{
+			name:       "exceeds size limit",
+			attachment: Attachment{ContentType: "video/mp4", Filename: "big.mp4", Size: 99999999},
+			pathOrNote: "exceeds size limit",
+			wantParts:  []string{"video/mp4", "exceeds size limit"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := describeAttachment(tt.attachment, tt.pathOrNote)
+			for _, part := range tt.wantParts {
+				if !strings.Contains(got, part) {
+					t.Errorf("description should contain %q, got: %q", part, got)
+				}
+			}
+			if !strings.HasPrefix(got, "[Attachment:") {
+				t.Errorf("should start with [Attachment:, got: %q", got)
+			}
+			if !strings.HasSuffix(got, "]") {
+				t.Errorf("should end with ], got: %q", got)
+			}
+		})
+	}
+}
+
+func TestProcessAttachments_CopiesFile(t *testing.T) {
+	srcDir := t.TempDir()
+	destDir := t.TempDir()
+
+	// Create a fake attachment file.
+	attachmentID := "test-attachment-123"
+	content := []byte("fake image data")
+	if err := os.WriteFile(filepath.Join(srcDir, attachmentID), content, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	bridge, _, _, _ := bridgeHelper(t, func(cfg *BridgeConfig) {
+		cfg.Attachments = AttachmentConfig{
+			SourceDir: srcDir,
+			DestDir:   destDir,
+		}
+	})
+
+	attachments := []Attachment{
+		{ContentType: "image/jpeg", Filename: "photo.jpg", ID: attachmentID, Size: int64(len(content))},
+	}
+
+	descs := bridge.processAttachments(attachments)
+	if len(descs) != 1 {
+		t.Fatalf("expected 1 description, got %d", len(descs))
+	}
+
+	// Verify file was copied.
+	destPath := filepath.Join(destDir, "photo.jpg")
+	copied, err := os.ReadFile(destPath)
+	if err != nil {
+		t.Fatalf("attachment not copied to %s: %v", destPath, err)
+	}
+	if string(copied) != string(content) {
+		t.Errorf("copied content mismatch: got %q, want %q", copied, content)
+	}
+
+	// Description should reference the destination path.
+	if !strings.Contains(descs[0], destPath) {
+		t.Errorf("description should contain dest path %q, got: %q", destPath, descs[0])
+	}
+}
+
+func TestProcessAttachments_MissingFile(t *testing.T) {
+	srcDir := t.TempDir()
+	destDir := t.TempDir()
+
+	bridge, _, _, _ := bridgeHelper(t, func(cfg *BridgeConfig) {
+		cfg.Attachments = AttachmentConfig{
+			SourceDir: srcDir,
+			DestDir:   destDir,
+		}
+	})
+
+	attachments := []Attachment{
+		{ContentType: "image/jpeg", ID: "nonexistent", Size: 1000},
+	}
+
+	descs := bridge.processAttachments(attachments)
+	if len(descs) != 1 {
+		t.Fatalf("expected 1 description, got %d", len(descs))
+	}
+	if !strings.Contains(descs[0], "file not available") {
+		t.Errorf("should indicate file not available, got: %q", descs[0])
+	}
+}
+
+func TestProcessAttachments_ExceedsMaxSize(t *testing.T) {
+	bridge, _, _, _ := bridgeHelper(t, func(cfg *BridgeConfig) {
+		cfg.Attachments = AttachmentConfig{
+			SourceDir: t.TempDir(),
+			DestDir:   t.TempDir(),
+			MaxSize:   1000,
+		}
+	})
+
+	attachments := []Attachment{
+		{ContentType: "video/mp4", Filename: "big.mp4", ID: "abc", Size: 50000},
+	}
+
+	descs := bridge.processAttachments(attachments)
+	if len(descs) != 1 {
+		t.Fatalf("expected 1 description, got %d", len(descs))
+	}
+	if !strings.Contains(descs[0], "exceeds size limit") {
+		t.Errorf("should indicate size exceeded, got: %q", descs[0])
+	}
+}
+
+func TestProcessAttachments_NoDirsConfigured(t *testing.T) {
+	bridge, _, _, _ := bridgeHelper(t)
+
+	attachments := []Attachment{
+		{ContentType: "image/jpeg", Filename: "photo.jpg", ID: "abc", Size: 1000},
+	}
+
+	descs := bridge.processAttachments(attachments)
+	if len(descs) != 1 {
+		t.Fatalf("expected 1 description, got %d", len(descs))
+	}
+	// Should describe the attachment without a path note.
+	if !strings.Contains(descs[0], "image/jpeg") {
+		t.Errorf("should contain content type, got: %q", descs[0])
+	}
+}
+
+func TestProcessAttachments_PathTraversal(t *testing.T) {
+	srcDir := t.TempDir()
+	destDir := t.TempDir()
+
+	// Create a fake attachment file.
+	if err := os.WriteFile(filepath.Join(srcDir, "malicious"), []byte("data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	bridge, _, _, _ := bridgeHelper(t, func(cfg *BridgeConfig) {
+		cfg.Attachments = AttachmentConfig{
+			SourceDir: srcDir,
+			DestDir:   destDir,
+		}
+	})
+
+	attachments := []Attachment{
+		{ContentType: "image/jpeg", Filename: "../../../etc/passwd", ID: "malicious", Size: 4},
+	}
+
+	descs := bridge.processAttachments(attachments)
+	if len(descs) != 1 {
+		t.Fatalf("expected 1 description, got %d", len(descs))
+	}
+
+	// File should be written inside destDir with basename only.
+	destPath := filepath.Join(destDir, "passwd")
+	got, err := os.ReadFile(destPath)
+	if err != nil {
+		t.Fatalf("file should be saved with sanitized name in dest dir: %v", err)
+	}
+	if string(got) != "data" {
+		t.Errorf("copied content = %q, want %q", got, "data")
+	}
+
+	// Description should reference the sanitized dest path inside
+	// destDir, not a traversal path outside it.
+	if !strings.Contains(descs[0], destPath) {
+		t.Errorf("description should reference dest path %q, got: %q", destPath, descs[0])
+	}
+	// The saved path component (after " — ") must not contain "..".
+	parts := strings.SplitN(descs[0], " — ", 2)
+	if len(parts) == 2 && strings.Contains(parts[1], "..") {
+		t.Errorf("saved path should not contain traversal components: %q", parts[1])
+	}
+}
+
+func TestProcessAttachments_FilenameCollision(t *testing.T) {
+	srcDir := t.TempDir()
+	destDir := t.TempDir()
+
+	// Create two fake attachment files with different IDs.
+	if err := os.WriteFile(filepath.Join(srcDir, "abc"), []byte("first"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "def"), []byte("second"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	bridge, _, _, _ := bridgeHelper(t, func(cfg *BridgeConfig) {
+		cfg.Attachments = AttachmentConfig{
+			SourceDir: srcDir,
+			DestDir:   destDir,
+		}
+	})
+
+	// Process first attachment.
+	descs1 := bridge.processAttachments([]Attachment{
+		{ContentType: "image/jpeg", Filename: "photo.jpg", ID: "abc", Size: 5},
+	})
+	if len(descs1) != 1 {
+		t.Fatalf("expected 1 description, got %d", len(descs1))
+	}
+
+	// Process second attachment with same filename — should not overwrite.
+	descs2 := bridge.processAttachments([]Attachment{
+		{ContentType: "image/jpeg", Filename: "photo.jpg", ID: "def", Size: 6},
+	})
+	if len(descs2) != 1 {
+		t.Fatalf("expected 1 description, got %d", len(descs2))
+	}
+
+	// Both descriptions should reference dest paths.
+	if !strings.Contains(descs1[0], filepath.Join(destDir, "photo.jpg")) {
+		t.Errorf("first should use original name, got: %q", descs1[0])
+	}
+	// Second should have a different path (timestamp suffix).
+	if descs1[0] == descs2[0] {
+		t.Error("second attachment should have a different dest path than first")
+	}
+
+	// Verify both files exist and have correct contents.
+	first, err := os.ReadFile(filepath.Join(destDir, "photo.jpg"))
+	if err != nil {
+		t.Fatalf("first file missing: %v", err)
+	}
+	if string(first) != "first" {
+		t.Errorf("first file content = %q, want %q", first, "first")
+	}
+}
+
+func TestFormatMessage_WithAttachments(t *testing.T) {
+	env := &Envelope{
+		Source:    "+15551234567",
+		Timestamp: 1700000000000,
+		DataMessage: &DataMessage{
+			Timestamp: 1700000000000,
+			Message:   "Look at this",
+		},
+	}
+	descs := []string{"[Attachment: image/jpeg, 1000 bytes]"}
+	got := formatMessage(env, descs)
+
+	if !strings.Contains(got, "[Attachment: image/jpeg") {
+		t.Errorf("should contain attachment description, got: %q", got)
+	}
+	if !strings.Contains(got, "Look at this") {
+		t.Errorf("should contain message text, got: %q", got)
+	}
+}
+
+func TestFormatMessage_AttachmentOnlyNoText(t *testing.T) {
+	env := &Envelope{
+		Source:    "+15551234567",
+		Timestamp: 1700000000000,
+		DataMessage: &DataMessage{
+			Timestamp: 1700000000000,
+			Message:   "",
+		},
+	}
+	descs := []string{"[Attachment: audio/ogg, 5000 bytes]"}
+	got := formatMessage(env, descs)
+
+	if !strings.Contains(got, "[Attachment: audio/ogg") {
+		t.Errorf("should contain attachment description, got: %q", got)
+	}
+	// Should not have a double newline between attachment desc and empty text.
+	if strings.HasSuffix(got, "\n\n") {
+		t.Errorf("should not end with double newline for attachment-only, got: %q", got)
 	}
 }

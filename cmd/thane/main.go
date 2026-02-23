@@ -1276,6 +1276,11 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 				Rotator:     signalRotator,
 				IdleTimeout: idleTimeout,
 				Resolver:    &contactPhoneResolver{store: contactStore},
+				Attachments: sigcli.AttachmentConfig{
+					SourceDir: cfg.Signal.AttachmentSourceDir,
+					DestDir:   cfg.Signal.AttachmentDir,
+					MaxSize:   cfg.Signal.MaxAttachmentSize,
+				},
 			})
 			go bridge.Start(ctx)
 

@@ -19,6 +19,7 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
 	"net/url"
 	"os"
 	"path"
@@ -728,6 +729,21 @@ type SignalConfig struct {
 	// All fields are optional; defaults preserve the original hardcoded
 	// behavior (quality_floor=6, mission=conversation, delegation_gating=disabled).
 	Routing SignalRoutingConfig `yaml:"routing"`
+
+	// AttachmentSourceDir is the directory where signal-cli stores
+	// downloaded attachments. Defaults to
+	// ~/.local/share/signal-cli/attachments when empty.
+	AttachmentSourceDir string `yaml:"attachment_source_dir"`
+
+	// AttachmentDir is the workspace subdirectory where received
+	// attachments are copied for agent access. Defaults to
+	// {workspace}/signal-attachments when empty and workspace is set.
+	AttachmentDir string `yaml:"attachment_dir"`
+
+	// MaxAttachmentSize is the maximum attachment size in bytes that
+	// will be processed. Attachments exceeding this are described but
+	// not copied. Zero means no limit.
+	MaxAttachmentSize int64 `yaml:"max_attachment_size"`
 }
 
 // SignalRoutingConfig controls model selection for Signal messages.
@@ -1070,6 +1086,19 @@ func (c *Config) applyDefaults() {
 	if c.Signal.Routing.DelegationGating == "" {
 		c.Signal.Routing.DelegationGating = "disabled"
 	}
+	if c.Signal.AttachmentSourceDir == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			slog.Warn("unable to determine home directory for signal attachment source; set signal.attachment_source_dir explicitly",
+				"error", err,
+			)
+		} else {
+			c.Signal.AttachmentSourceDir = filepath.Join(home, ".local", "share", "signal-cli", "attachments")
+		}
+	}
+	if c.Signal.AttachmentDir == "" && c.Workspace.Path != "" {
+		c.Signal.AttachmentDir = filepath.Join(c.Workspace.Path, "signal-attachments")
+	}
 
 	c.Forge.ApplyDefaults()
 
@@ -1313,6 +1342,9 @@ func (c *Config) validateSignal() error {
 	}
 	if c.Signal.SessionIdleMinutes < 0 {
 		return fmt.Errorf("signal.session_idle_minutes %d must be non-negative", c.Signal.SessionIdleMinutes)
+	}
+	if c.Signal.MaxAttachmentSize < 0 {
+		return fmt.Errorf("signal.max_attachment_size %d must be non-negative", c.Signal.MaxAttachmentSize)
 	}
 	return nil
 }
