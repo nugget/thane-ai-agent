@@ -1086,6 +1086,7 @@ func TestHasPrefixColon(t *testing.T) {
 		{"C:\\windows\\path", false}, // Windows drive letter
 		{":", false},                 // bare colon
 		{"a:", false},                // bare prefix (no suffix after colon)
+		{"kb:", true},                // multi-character bare prefix
 	}
 
 	for _, tt := range tests {

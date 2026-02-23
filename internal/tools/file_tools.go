@@ -693,12 +693,12 @@ func (ft *FileTools) renderTree(buf *strings.Builder, dir, prefix string, maxDep
 }
 
 // hasPrefixColon detects paths that look like named prefix references
-// (e.g., "kb:foo") but are not absolute paths or Windows drive letters.
-// Single-character prefixes are excluded to avoid matching drive letters
-// like "C:\".
+// (e.g., "kb:foo" or "kb:") but are not absolute paths or Windows drive
+// letters. Single-character prefixes are excluded to avoid matching drive
+// letters like "C:\".
 func hasPrefixColon(path string) bool {
 	i := strings.IndexByte(path, ':')
-	return i > 1 && i < len(path)-1 && !strings.ContainsAny(path[:i], "/\\")
+	return i > 1 && !strings.ContainsAny(path[:i], "/\\")
 }
 
 // humanSize formats a byte count into a human-readable string.
