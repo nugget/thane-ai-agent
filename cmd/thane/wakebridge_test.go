@@ -12,6 +12,7 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/agent"
 	"github.com/nugget/thane-ai-agent/internal/anticipation"
+	"github.com/nugget/thane-ai-agent/internal/facts"
 	"github.com/nugget/thane-ai-agent/internal/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/router"
 )
@@ -53,6 +54,18 @@ type chanRunner struct {
 func (r *chanRunner) Run(_ context.Context, req *agent.Request, _ agent.StreamCallback) (*agent.Response, error) {
 	r.calls <- req
 	return r.resp, r.err
+}
+
+// ctxCaptureRunner captures the context passed to Run for subject
+// verification. Thread-safe via channel synchronization.
+type ctxCaptureRunner struct {
+	ctxCh chan context.Context
+	resp  *agent.Response
+}
+
+func (r *ctxCaptureRunner) Run(ctx context.Context, _ *agent.Request, _ agent.StreamCallback) (*agent.Response, error) {
+	r.ctxCh <- ctx
+	return r.resp, nil
 }
 
 // mockProvider records SetWakeContext calls.
@@ -911,5 +924,95 @@ func TestFormatWakeMessage_RecurringNote(t *testing.T) {
 	msg = formatWakeMessage(a, "light.kitchen", "off", "on", "")
 	if strings.Contains(msg, "recurring anticipation") {
 		t.Errorf("non-recurring message should not contain recurring note: %q", msg)
+	}
+}
+
+func TestWakeBridge_SubjectsInjected(t *testing.T) {
+	matcher := &mockMatcher{
+		matched: []*anticipation.Anticipation{{
+			ID:          "ant-subj",
+			Description: "Driveway motion",
+		}},
+	}
+	runner := &ctxCaptureRunner{
+		ctxCh: make(chan context.Context, 1),
+		resp:  &agent.Response{Content: "Noted."},
+	}
+	provider := &mockProvider{}
+	bridge := NewWakeBridge(WakeBridgeConfig{
+		Store:    matcher,
+		Runner:   runner,
+		Provider: provider,
+		Logger:   slog.Default(),
+		Ctx:      context.Background(),
+		Cooldown: time.Hour,
+	})
+
+	bridge.HandleStateChange("binary_sensor.driveway_occupancy", "off", "on")
+
+	select {
+	case ctx := <-runner.ctxCh:
+		subjects := facts.SubjectsFromContext(ctx)
+		if len(subjects) == 0 {
+			t.Fatal("expected subjects in context, got none")
+		}
+		want := "entity:binary_sensor.driveway_occupancy"
+		found := false
+		for _, s := range subjects {
+			if s == want {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("subjects = %v, want to contain %q", subjects, want)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("runner.Run was not called within timeout")
+	}
+}
+
+func TestWakeBridge_SubjectsIncludeContextEntities(t *testing.T) {
+	matcher := &mockMatcher{
+		matched: []*anticipation.Anticipation{{
+			ID:              "ant-ctx-subj",
+			Description:     "Door opened",
+			ContextEntities: []string{"person.dan", "sensor.alarm"},
+		}},
+	}
+	runner := &ctxCaptureRunner{
+		ctxCh: make(chan context.Context, 1),
+		resp:  &agent.Response{Content: "Checked."},
+	}
+	provider := &mockProvider{}
+	bridge := NewWakeBridge(WakeBridgeConfig{
+		Store:    matcher,
+		Runner:   runner,
+		Provider: provider,
+		Logger:   slog.Default(),
+		Ctx:      context.Background(),
+		Cooldown: time.Hour,
+	})
+
+	bridge.HandleStateChange("binary_sensor.front_door", "off", "on")
+
+	select {
+	case ctx := <-runner.ctxCh:
+		subjects := facts.SubjectsFromContext(ctx)
+		want := map[string]bool{
+			"entity:binary_sensor.front_door": true,
+			"entity:person.dan":               true,
+			"entity:sensor.alarm":             true,
+		}
+		if len(subjects) != len(want) {
+			t.Fatalf("subjects = %v, want %d entries", subjects, len(want))
+		}
+		for _, s := range subjects {
+			if !want[s] {
+				t.Errorf("unexpected subject %q in %v", s, subjects)
+			}
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("runner.Run was not called within timeout")
 	}
 }

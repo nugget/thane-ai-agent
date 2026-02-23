@@ -11,6 +11,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/agent"
 	"github.com/nugget/thane-ai-agent/internal/anticipation"
 	"github.com/nugget/thane-ai-agent/internal/config"
+	"github.com/nugget/thane-ai-agent/internal/facts"
 	"github.com/nugget/thane-ai-agent/internal/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/router"
 	"github.com/nugget/thane-ai-agent/internal/tools"
@@ -173,7 +174,7 @@ func (b *WakeBridge) HandleStateChange(entityID, oldState, newState string) {
 		)
 
 		// Run in a separate goroutine so the state watcher is not blocked.
-		go b.runWake(a, msg)
+		go b.runWake(a, msg, entityID)
 	}
 }
 
@@ -192,9 +193,18 @@ var wakeLifecycleTools = []string{"resolve_anticipation", "cancel_anticipation"}
 //
 // Lifecycle: recurring anticipations keep firing; one-shot anticipations
 // are auto-resolved after a successful wake.
-func (b *WakeBridge) runWake(a *anticipation.Anticipation, message string) {
+func (b *WakeBridge) runWake(a *anticipation.Anticipation, message, entityID string) {
 	ctx, cancel := context.WithTimeout(b.ctx, wakeTimeout)
 	defer cancel()
+
+	// Inject entity subjects for context pre-warming. SubjectContextProvider
+	// (registered as a ContextProvider) picks these up and injects matching
+	// facts into the system prompt automatically.
+	subjects := []string{"entity:" + entityID}
+	for _, ce := range a.ContextEntities {
+		subjects = append(subjects, "entity:"+ce)
+	}
+	ctx = facts.WithSubjects(ctx, subjects)
 
 	// Build routing hints from the anticipation's stored preferences,
 	// falling back to defaults when not set.
