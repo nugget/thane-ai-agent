@@ -98,7 +98,7 @@ func TestExecute_SimpleTextResponse(t *testing.T) {
 	}
 
 	exec := NewExecutor(slog.Default(), mock, nil, newTestRegistry(), "test-model")
-	result, err := exec.Execute(context.Background(), "Check the office light", "general", "")
+	result, err := exec.Execute(context.Background(), "Check the office light", "general", "", nil)
 
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
@@ -156,7 +156,7 @@ func TestExecute_WithToolCalls(t *testing.T) {
 	}
 
 	exec := NewExecutor(slog.Default(), mock, nil, newTestRegistry(), "test-model")
-	result, err := exec.Execute(context.Background(), "Check the office light", "ha", "")
+	result, err := exec.Execute(context.Background(), "Check the office light", "ha", "", nil)
 
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
@@ -227,7 +227,7 @@ func TestExecute_MaxIterationsExhausted(t *testing.T) {
 
 	mock := &mockLLMClient{responses: responses}
 	exec := NewExecutor(slog.Default(), mock, nil, newTestRegistry(), "test-model")
-	result, err := exec.Execute(context.Background(), "Do something complex", "general", "")
+	result, err := exec.Execute(context.Background(), "Do something complex", "general", "", nil)
 
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
@@ -272,7 +272,7 @@ func TestExecute_TokenBudgetExhausted(t *testing.T) {
 
 	mock := &mockLLMClient{responses: []*llm.ChatResponse{toolCallResp, forcedText}}
 	exec := NewExecutor(slog.Default(), mock, nil, newTestRegistry(), "test-model")
-	result, err := exec.Execute(context.Background(), "Expensive task", "general", "")
+	result, err := exec.Execute(context.Background(), "Expensive task", "general", "", nil)
 
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
@@ -284,7 +284,7 @@ func TestExecute_TokenBudgetExhausted(t *testing.T) {
 
 func TestExecute_EmptyTask(t *testing.T) {
 	exec := NewExecutor(slog.Default(), &mockLLMClient{}, nil, newTestRegistry(), "test-model")
-	_, err := exec.Execute(context.Background(), "", "general", "")
+	_, err := exec.Execute(context.Background(), "", "general", "", nil)
 
 	if err == nil {
 		t.Fatal("Execute() with empty task should return error")
@@ -304,7 +304,7 @@ func TestExecute_UnknownProfileDefaultsToGeneral(t *testing.T) {
 	}
 
 	exec := NewExecutor(slog.Default(), mock, nil, newTestRegistry(), "test-model")
-	result, err := exec.Execute(context.Background(), "Do something", "nonexistent_profile", "")
+	result, err := exec.Execute(context.Background(), "Do something", "nonexistent_profile", "", nil)
 
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
@@ -319,7 +319,7 @@ func TestExecute_ContextCancellation(t *testing.T) {
 	cancel() // Cancel immediately
 
 	exec := NewExecutor(slog.Default(), &mockLLMClient{}, nil, newTestRegistry(), "test-model")
-	_, err := exec.Execute(ctx, "Do something", "general", "")
+	_, err := exec.Execute(ctx, "Do something", "general", "", nil)
 
 	if err == nil {
 		t.Fatal("Execute() with cancelled context should return error")
@@ -363,7 +363,7 @@ func TestExecute_HAProfileExcludesNonHATools(t *testing.T) {
 	}
 
 	exec := NewExecutor(slog.Default(), mock, nil, newTestRegistry(), "test-model")
-	result, err := exec.Execute(context.Background(), "Search the web", "ha", "")
+	result, err := exec.Execute(context.Background(), "Search the web", "ha", "", nil)
 
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
@@ -521,7 +521,7 @@ func TestExecute_GeneralProfileSelectsLocalModel(t *testing.T) {
 	}
 
 	exec := NewExecutor(slog.Default(), mock, rtr, newTestRegistry(), "local-model")
-	result, err := exec.Execute(context.Background(), "search IRC archives for distributed.net history", "general", "")
+	result, err := exec.Execute(context.Background(), "search IRC archives for distributed.net history", "general", "", nil)
 
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
@@ -643,7 +643,7 @@ func TestExecute_WallClockExhausted(t *testing.T) {
 	// Override the general profile with a tiny MaxDuration.
 	exec.profiles["general"].MaxDuration = 30 * time.Millisecond
 
-	result, err := exec.Execute(context.Background(), "Slow task", "general", "")
+	result, err := exec.Execute(context.Background(), "Slow task", "general", "", nil)
 
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
@@ -721,7 +721,7 @@ func TestExecute_ContextDeadlineCancelsBlockingLLM(t *testing.T) {
 	exec.profiles["general"].MaxDuration = 100 * time.Millisecond
 
 	start := time.Now()
-	result, err := exec.Execute(context.Background(), "Blocking task", "general", "")
+	result, err := exec.Execute(context.Background(), "Blocking task", "general", "", nil)
 	elapsed := time.Since(start)
 
 	if err != nil {
@@ -775,7 +775,7 @@ func TestExecute_ExhaustReasonMaxIterations(t *testing.T) {
 
 	mock := &mockLLMClient{responses: responses}
 	exec := NewExecutor(slog.Default(), mock, nil, newTestRegistry(), "test-model")
-	result, err := exec.Execute(context.Background(), "Loop task", "general", "")
+	result, err := exec.Execute(context.Background(), "Loop task", "general", "", nil)
 
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
@@ -819,7 +819,7 @@ func TestExecute_ExhaustReasonTokenBudget(t *testing.T) {
 
 	mock := &mockLLMClient{responses: []*llm.ChatResponse{toolCallResp, forcedText}}
 	exec := NewExecutor(slog.Default(), mock, nil, newTestRegistry(), "test-model")
-	result, err := exec.Execute(context.Background(), "Expensive task", "general", "")
+	result, err := exec.Execute(context.Background(), "Expensive task", "general", "", nil)
 
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
@@ -879,7 +879,7 @@ func TestExecute_EmptyResultAfterToolCalls(t *testing.T) {
 	}
 
 	exec := NewExecutor(slog.Default(), mock, nil, newTestRegistry(), "test-model")
-	result, err := exec.Execute(context.Background(), "Check the office light", "general", "")
+	result, err := exec.Execute(context.Background(), "Check the office light", "general", "", nil)
 
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
@@ -913,7 +913,7 @@ func TestExecute_EmptyResultFirstIter(t *testing.T) {
 	}
 
 	exec := NewExecutor(slog.Default(), mock, nil, newTestRegistry(), "test-model")
-	result, err := exec.Execute(context.Background(), "Do something", "general", "")
+	result, err := exec.Execute(context.Background(), "Do something", "general", "", nil)
 
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
@@ -1070,7 +1070,7 @@ func TestExecute_ToolTimeoutRecovery(t *testing.T) {
 	exec.profiles["general"].MaxDuration = 5 * time.Second
 
 	start := time.Now()
-	result, err := exec.Execute(context.Background(), "Run the slow tool", "general", "")
+	result, err := exec.Execute(context.Background(), "Run the slow tool", "general", "", nil)
 	elapsed := time.Since(start)
 
 	if err != nil {
@@ -1116,5 +1116,156 @@ func TestExecute_ToolTimeoutRecovery(t *testing.T) {
 	}
 	if !found {
 		t.Error("LLM did not receive tool timeout error in messages")
+	}
+}
+
+func TestExecute_TagScoping(t *testing.T) {
+	// When tags are provided, the delegate should only see tools from
+	// those tags (plus always-active tags), not the full profile toolset.
+	mock := &mockLLMClient{
+		responses: []*llm.ChatResponse{
+			{
+				Model:        "test-model",
+				Message:      llm.Message{Role: "assistant", Content: "Searched the web."},
+				InputTokens:  100,
+				OutputTokens: 20,
+			},
+		},
+	}
+
+	reg := tools.NewEmptyRegistry()
+	reg.Register(&tools.Tool{
+		Name:        "web_search",
+		Description: "Search the web",
+		Parameters:  map[string]any{"type": "object", "properties": map[string]any{}},
+		Handler: func(_ context.Context, _ map[string]any) (string, error) {
+			return "results", nil
+		},
+	})
+	reg.Register(&tools.Tool{
+		Name:        "web_fetch",
+		Description: "Fetch a page",
+		Parameters:  map[string]any{"type": "object", "properties": map[string]any{}},
+		Handler: func(_ context.Context, _ map[string]any) (string, error) {
+			return "page", nil
+		},
+	})
+	reg.Register(&tools.Tool{
+		Name:        "get_state",
+		Description: "HA state",
+		Parameters:  map[string]any{"type": "object", "properties": map[string]any{}},
+		Handler: func(_ context.Context, _ map[string]any) (string, error) {
+			return "on", nil
+		},
+	})
+	reg.Register(&tools.Tool{
+		Name:        "recall_fact",
+		Description: "Recall a fact",
+		Parameters:  map[string]any{"type": "object", "properties": map[string]any{}},
+		Handler: func(_ context.Context, _ map[string]any) (string, error) {
+			return "fact", nil
+		},
+	})
+	reg.Register(&tools.Tool{
+		Name:        "thane_delegate",
+		Description: "Delegate",
+		Parameters:  map[string]any{},
+		Handler: func(_ context.Context, _ map[string]any) (string, error) {
+			return "should not be called", nil
+		},
+	})
+
+	// Set up tag index: "web" includes web_search + web_fetch,
+	// "memory" includes recall_fact (always-active).
+	reg.SetTagIndex(map[string][]string{
+		"web":    {"web_search", "web_fetch"},
+		"memory": {"recall_fact"},
+	})
+
+	exec := NewExecutor(slog.Default(), mock, nil, reg, "test-model")
+	exec.SetAlwaysActiveTags([]string{"memory"})
+
+	result, err := exec.Execute(context.Background(), "Search for something", "general", "", []string{"web"})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if result.Content != "Searched the web." {
+		t.Errorf("Content = %q, want %q", result.Content, "Searched the web.")
+	}
+
+	// Verify the LLM received only web + memory tools (not get_state or thane_delegate).
+	if len(mock.calls) < 1 {
+		t.Fatal("expected at least 1 LLM call")
+	}
+	toolDefs := mock.calls[0].Tools
+	toolNames := make(map[string]bool)
+	for _, td := range toolDefs {
+		fn, _ := td["function"].(map[string]any)
+		if fn != nil {
+			name, _ := fn["name"].(string)
+			toolNames[name] = true
+		}
+	}
+
+	// Should include: web_search, web_fetch (from "web" tag), recall_fact (from "memory" always-active tag).
+	for _, want := range []string{"web_search", "web_fetch", "recall_fact"} {
+		if !toolNames[want] {
+			t.Errorf("expected tool %q in definitions, got %v", want, toolNames)
+		}
+	}
+	// Should NOT include: get_state (no matching tag), thane_delegate (always excluded).
+	for _, unwanted := range []string{"get_state", "thane_delegate"} {
+		if toolNames[unwanted] {
+			t.Errorf("tool %q should not appear in tag-scoped definitions, got %v", unwanted, toolNames)
+		}
+	}
+}
+
+func TestExecute_TagScoping_NilPreservesProfile(t *testing.T) {
+	// When tags is nil, profile-based filtering should apply (existing behavior).
+	mock := &mockLLMClient{
+		responses: []*llm.ChatResponse{
+			{
+				Model:        "test-model",
+				Message:      llm.Message{Role: "assistant", Content: "HA result."},
+				InputTokens:  100,
+				OutputTokens: 20,
+			},
+		},
+	}
+
+	exec := NewExecutor(slog.Default(), mock, nil, newTestRegistry(), "test-model")
+	result, err := exec.Execute(context.Background(), "Check the light", "ha", "", nil)
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if result.Content != "HA result." {
+		t.Errorf("Content = %q, want %q", result.Content, "HA result.")
+	}
+
+	// The HA profile has a fixed AllowedTools list. Verify only those appear.
+	if len(mock.calls) < 1 {
+		t.Fatal("expected at least 1 LLM call")
+	}
+	toolDefs := mock.calls[0].Tools
+	toolNames := make(map[string]bool)
+	for _, td := range toolDefs {
+		fn, _ := td["function"].(map[string]any)
+		if fn != nil {
+			name, _ := fn["name"].(string)
+			toolNames[name] = true
+		}
+	}
+
+	// web_search and thane_delegate should NOT be in HA profile.
+	if toolNames["web_search"] {
+		t.Error("web_search should not appear in HA profile tool definitions")
+	}
+	if toolNames["thane_delegate"] {
+		t.Error("thane_delegate should not appear in HA profile tool definitions")
+	}
+	// get_state should be in HA profile.
+	if !toolNames["get_state"] {
+		t.Error("get_state should appear in HA profile tool definitions")
 	}
 }

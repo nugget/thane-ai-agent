@@ -58,17 +58,18 @@ type labelExpander interface {
 
 // Executor runs delegated tasks using a lightweight iteration loop.
 type Executor struct {
-	logger       *slog.Logger
-	llm          llm.Client
-	router       *router.Router
-	parentReg    *tools.Registry
-	profiles     map[string]*Profile
-	timezone     string
-	defaultModel string
-	store        *DelegationStore
-	tempFiles    labelExpander
-	usageStore   *usage.Store
-	pricing      map[string]config.PricingEntry
+	logger           *slog.Logger
+	llm              llm.Client
+	router           *router.Router
+	parentReg        *tools.Registry
+	profiles         map[string]*Profile
+	timezone         string
+	defaultModel     string
+	store            *DelegationStore
+	tempFiles        labelExpander
+	usageStore       *usage.Store
+	pricing          map[string]config.PricingEntry
+	alwaysActiveTags []string
 }
 
 // NewExecutor creates a delegate executor.
@@ -113,6 +114,14 @@ func (e *Executor) SetUsageRecorder(store *usage.Store, pricing map[string]confi
 	e.pricing = pricing
 }
 
+// SetAlwaysActiveTags configures the capability tags that are
+// automatically included in every tag-scoped delegation, regardless
+// of which tags the caller requests. This mirrors the agent loop's
+// always_active tag behavior.
+func (e *Executor) SetAlwaysActiveTags(tags []string) {
+	e.alwaysActiveTags = tags
+}
+
 // ProfileNames returns the names of all registered profiles.
 func (e *Executor) ProfileNames() []string {
 	names := make([]string, 0, len(e.profiles))
@@ -123,7 +132,11 @@ func (e *Executor) ProfileNames() []string {
 }
 
 // Execute runs a delegated task with the given profile and guidance.
-func (e *Executor) Execute(ctx context.Context, task, profileName, guidance string) (*Result, error) {
+// When tags is non-empty, the delegate's tool registry is scoped to
+// only tools belonging to the given capability tags (plus any
+// always-active tags). When tags is nil, the profile's AllowedTools
+// controls tool selection (existing behavior).
+func (e *Executor) Execute(ctx context.Context, task, profileName, guidance string, tags []string) (*Result, error) {
 	if task == "" {
 		return nil, fmt.Errorf("task is required")
 	}
@@ -137,9 +150,14 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 		profile = e.profiles["general"]
 	}
 
-	// Build filtered tool registry.
+	// Build filtered tool registry. Tag-scoped delegations take
+	// precedence over the profile's AllowedTools list.
 	var reg *tools.Registry
-	if len(profile.AllowedTools) > 0 {
+	if len(tags) > 0 {
+		merged := append(tags, e.alwaysActiveTags...)
+		reg = e.parentReg.FilterByTags(merged)
+		reg = reg.FilteredCopyExcluding([]string{delegateToolName})
+	} else if len(profile.AllowedTools) > 0 {
 		reg = e.parentReg.FilteredCopy(profile.AllowedTools)
 	} else {
 		reg = e.parentReg.FilteredCopyExcluding([]string{delegateToolName})
@@ -152,6 +170,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 		"task", truncate(task, 200),
 		"profile", profile.Name,
 		"guidance", truncate(guidance, 200),
+		"tags", tags,
 		"tools_available", len(toolDefs),
 	)
 

@@ -1385,6 +1385,15 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	delegateExec.SetTimezone(cfg.Timezone)
 	delegateExec.SetStore(delegationStore)
 	delegateExec.SetUsageRecorder(usageStore, cfg.Pricing)
+	var alwaysActiveTags []string
+	for tag, tagCfg := range cfg.CapabilityTags {
+		if tagCfg.AlwaysActive {
+			alwaysActiveTags = append(alwaysActiveTags, tag)
+		}
+	}
+	if len(alwaysActiveTags) > 0 {
+		delegateExec.SetAlwaysActiveTags(alwaysActiveTags)
+	}
 	if tfs := loop.Tools().TempFileStore(); tfs != nil {
 		delegateExec.SetTempFileStore(tfs)
 	}

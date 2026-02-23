@@ -28,6 +28,13 @@ func ToolDefinition() map[string]any {
 				"type":        "string",
 				"description": "Optional hints to steer execution (entity names, what to focus on, output format preferences)",
 			},
+			"tags": map[string]any{
+				"type":  "array",
+				"items": map[string]any{"type": "string"},
+				"description": "Optional capability tags to scope the delegate's tools. " +
+					"When provided, the delegate only sees tools from these tags " +
+					"(plus always-active tags). Omit to use the profile's default toolset.",
+			},
 		},
 		"required": []string{"task"},
 	}
@@ -53,7 +60,16 @@ func ToolHandler(exec *Executor) func(ctx context.Context, args map[string]any) 
 
 		guidance, _ := args["guidance"].(string)
 
-		result, err := exec.Execute(ctx, task, profileName, guidance)
+		var tags []string
+		if rawTags, ok := args["tags"].([]any); ok {
+			for _, rt := range rawTags {
+				if s, ok := rt.(string); ok {
+					tags = append(tags, s)
+				}
+			}
+		}
+
+		result, err := exec.Execute(ctx, task, profileName, guidance, tags)
 		if err != nil {
 			return fmt.Sprintf("[Delegate error: profile=%s] %s", profileName, err.Error()), nil
 		}
