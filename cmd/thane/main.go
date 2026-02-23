@@ -1086,6 +1086,32 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 			TranscriptDir:      cfg.Media.TranscriptDir,
 			OllamaURL:          cfg.Models.OllamaURL,
 		}, logger)
+
+		// Wire up LLM summarization for map-reduce transcript processing.
+		// Uses a local model via router for chunk summarization.
+		mc.SetSummarizer(func(ctx context.Context, prompt string) (string, error) {
+			hints := map[string]string{
+				router.HintMission:      "background",
+				router.HintLocalOnly:    "true",
+				router.HintQualityFloor: "3",
+				router.HintPreferSpeed:  "true",
+			}
+			if cfg.Media.SummarizeModel != "" {
+				hints[router.HintModelPreference] = cfg.Media.SummarizeModel
+			}
+			model, _ := rtr.Route(ctx, router.Request{
+				Query:    "transcript summarization",
+				Priority: router.PriorityBackground,
+				Hints:    hints,
+			})
+			msgs := []llm.Message{{Role: "user", Content: prompt}}
+			resp, err := llmClient.Chat(ctx, model, msgs, nil)
+			if err != nil {
+				return "", err
+			}
+			return resp.Message.Content, nil
+		})
+
 		loop.Tools().SetMediaClient(mc)
 		logger.Info("media_transcript enabled", "yt_dlp", ytdlpPath)
 	} else {

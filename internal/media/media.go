@@ -50,9 +50,10 @@ type Config struct {
 
 // Client retrieves and cleans media transcripts.
 type Client struct {
-	cfg    Config
-	logger *slog.Logger
-	http   *http.Client
+	cfg       Config
+	logger    *slog.Logger
+	http      *http.Client
+	summarize SummarizeFunc
 }
 
 // Result holds the fetched transcript and associated metadata.
@@ -67,6 +68,9 @@ type Result struct {
 	ID             string `json:"id"`
 	TranscriptPath string `json:"transcript_path,omitempty"`
 	Truncated      bool   `json:"truncated,omitempty"`
+	Summarized     bool   `json:"summarized,omitempty"`
+	DetailLevel    string `json:"detail_level,omitempty"`
+	Focus          string `json:"focus,omitempty"`
 }
 
 // New creates a media transcript client. The yt-dlp binary path is
@@ -98,6 +102,13 @@ func New(cfg Config, logger *slog.Logger) *Client {
 	}
 }
 
+// SetSummarizer configures the LLM summarization function used for
+// map-reduce transcript processing. When nil, the client returns raw
+// transcripts regardless of the requested detail level.
+func (c *Client) SetSummarizer(fn SummarizeFunc) {
+	c.summarize = fn
+}
+
 // ytdlpJSON is the subset of yt-dlp --print-json output we parse.
 type ytdlpJSON struct {
 	ID          string  `json:"id"`
@@ -113,12 +124,20 @@ type ytdlpJSON struct {
 // GetTranscript fetches the transcript for the given media URL.
 // It prefers manual subtitles over auto-generated, and falls back to
 // Whisper transcription via Ollama when no subtitles are available.
-func (c *Client) GetTranscript(ctx context.Context, rawURL, language string) (*Result, error) {
+//
+// The focus parameter, when non-empty, guides summarization to emphasize
+// content related to the topic. The detail parameter controls processing:
+// DetailFull returns the raw transcript, DetailSummary produces a map-reduce
+// summary, and DetailBrief produces an aggressive ~500-char summary.
+func (c *Client) GetTranscript(ctx context.Context, rawURL, language, focus string, detail DetailLevel) (*Result, error) {
 	if rawURL == "" {
 		return nil, fmt.Errorf("media_transcript: url is required")
 	}
 	if language == "" {
 		language = c.cfg.SubtitleLanguage
+	}
+	if detail == "" {
+		detail = DetailFull
 	}
 	if c.cfg.YtDlpPath == "" {
 		return nil, fmt.Errorf("media_transcript: yt-dlp not found (install yt-dlp or set media.yt_dlp_path)")
@@ -169,15 +188,12 @@ func (c *Client) GetTranscript(ctx context.Context, rawURL, language string) (*R
 		ID:          id,
 	}
 
-	// Truncate transcript if needed.
-	if len(transcript) > c.cfg.MaxTranscriptChars {
-		transcript = transcript[:c.cfg.MaxTranscriptChars]
-		result.Truncated = true
-	}
-	result.Transcript = transcript
-
-	// Save transcript to disk if configured.
+	// Save the raw transcript to disk before any truncation or
+	// summarization so durable storage always has the full text.
+	rawTranscript := transcript
 	if c.cfg.TranscriptDir != "" {
+		// Temporarily set transcript for saving.
+		result.Transcript = rawTranscript
 		path, saveErr := c.saveTranscript(result, rawURL)
 		if saveErr != nil {
 			c.logger.Warn("failed to save transcript",
@@ -186,6 +202,33 @@ func (c *Client) GetTranscript(ctx context.Context, rawURL, language string) (*R
 			result.TranscriptPath = path
 		}
 	}
+
+	// Apply summarization or truncation based on detail level.
+	needsSummary := (detail == DetailSummary || detail == DetailBrief) && c.summarize != nil
+	if needsSummary {
+		summary, sumErr := c.summarizeTranscript(ctx, rawTranscript, focus, detail)
+		if sumErr != nil {
+			c.logger.Warn("summarization failed, returning truncated transcript",
+				"error", sumErr, "url", rawURL, "detail", string(detail))
+			// Fall through to truncation.
+		} else {
+			result.Transcript = summary
+			result.Summarized = true
+			result.DetailLevel = string(detail)
+			if focus != "" {
+				result.Focus = focus
+			}
+			return result, nil
+		}
+	}
+
+	// Full detail or summarization unavailable/failed: truncate for
+	// context window safety.
+	if len(rawTranscript) > c.cfg.MaxTranscriptChars {
+		rawTranscript = rawTranscript[:c.cfg.MaxTranscriptChars]
+		result.Truncated = true
+	}
+	result.Transcript = rawTranscript
 
 	return result, nil
 }

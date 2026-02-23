@@ -799,6 +799,11 @@ type MediaConfig struct {
 	// Each transcript is saved as a markdown file with YAML frontmatter.
 	// If empty, transcripts are returned in-context only (not persisted).
 	TranscriptDir string `yaml:"transcript_dir"`
+
+	// SummarizeModel is the preferred model for transcript summarization.
+	// When set, it is passed as a routing hint (soft preference, not
+	// override). If empty, the router selects an appropriate local model.
+	SummarizeModel string `yaml:"summarize_model"`
 }
 
 // MetacognitiveConfig configures the self-regulating metacognitive loop.

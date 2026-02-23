@@ -16,8 +16,22 @@ func ToolHandler(c *Client) func(ctx context.Context, args map[string]any) (stri
 		}
 
 		language, _ := args["language"].(string)
+		focus, _ := args["focus"].(string)
+		detailStr, _ := args["detail"].(string)
 
-		result, err := c.GetTranscript(ctx, rawURL, language)
+		var detail DetailLevel
+		switch detailStr {
+		case "summary":
+			detail = DetailSummary
+		case "brief":
+			detail = DetailBrief
+		case "", "full":
+			detail = DetailFull
+		default:
+			return "", fmt.Errorf("media_transcript: invalid detail level %q (use full, summary, or brief)", detailStr)
+		}
+
+		result, err := c.GetTranscript(ctx, rawURL, language, focus, detail)
 		if err != nil {
 			return "", err
 		}
@@ -44,6 +58,15 @@ func ToolDefinition() map[string]any {
 			"language": map[string]any{
 				"type":        "string",
 				"description": "Subtitle language code (default: \"en\").",
+			},
+			"focus": map[string]any{
+				"type":        "string",
+				"description": "Optional focus topic for the summary. When provided, the summary emphasizes content related to this topic. Only used with detail \"summary\" or \"brief\".",
+			},
+			"detail": map[string]any{
+				"type":        "string",
+				"enum":        []string{"full", "summary", "brief"},
+				"description": "Detail level: \"full\" returns the raw transcript (default), \"summary\" produces a map-reduce summary (~2-3K chars), \"brief\" produces a very concise summary (~500 chars).",
 			},
 		},
 		"required": []string{"url"},
