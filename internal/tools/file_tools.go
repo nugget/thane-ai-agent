@@ -49,9 +49,10 @@ var skipDirs = map[string]bool{
 
 // FileTools provides file read/write/edit capabilities within a workspace.
 type FileTools struct {
-	workspacePath string
-	readOnlyDirs  []string // Additional read-only directories
-	maxVisited    int      // Traversal entry cap; 0 uses defaultMaxVisited
+	workspacePath     string
+	readOnlyDirs      []string // Additional read-only directories
+	knowledgeBasePath string   // Root dir for kb: prefix resolution
+	maxVisited        int      // Traversal entry cap; 0 uses defaultMaxVisited
 }
 
 // NewFileTools creates a new FileTools instance.
@@ -79,11 +80,26 @@ func (ft *FileTools) WorkspacePath() string {
 	return ft.workspacePath
 }
 
+// SetKnowledgeBasePath configures the root directory for kb: prefix
+// resolution. When set, paths like "kb:dossiers/foo.md" resolve to
+// files within this directory.
+func (ft *FileTools) SetKnowledgeBasePath(path string) {
+	ft.knowledgeBasePath = path
+}
+
 // resolvePath converts a relative path to an absolute path within allowed directories.
 // Returns the resolved path and whether it's read-only.
 func (ft *FileTools) resolvePath(path string) (string, bool, error) {
 	if ft.workspacePath == "" {
 		return "", false, fmt.Errorf("workspace not configured")
+	}
+
+	// Resolve kb: prefix to knowledge base directory
+	if strings.HasPrefix(path, "kb:") {
+		if ft.knowledgeBasePath == "" {
+			return "", false, fmt.Errorf("knowledge base not configured")
+		}
+		path = filepath.Join(ft.knowledgeBasePath, strings.TrimPrefix(path, "kb:"))
 	}
 
 	// Expand ~ to home directory

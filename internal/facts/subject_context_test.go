@@ -3,6 +3,7 @@ package facts
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"testing"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -135,7 +136,7 @@ func TestSubjectContextProvider_GetContext(t *testing.T) {
 
 			// Populate facts.
 			for _, f := range tt.facts {
-				_, err := store.Set(f.category, f.key, f.value, "test", 1.0, f.subjects)
+				_, err := store.Set(f.category, f.key, f.value, "test", 1.0, f.subjects, "")
 				if err != nil {
 					t.Fatalf("Set(%s/%s): %v", f.category, f.key, err)
 				}
@@ -201,16 +202,16 @@ func TestGetBySubjects(t *testing.T) {
 
 	// Create facts with different subjects.
 	_, err := store.Set(CategoryDevice, "driveway_cam", "Captures road traffic", "test", 1.0,
-		[]string{"entity:binary_sensor.driveway", "camera:driveway_3040"})
+		[]string{"entity:binary_sensor.driveway", "camera:driveway_3040"}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
 	_, err = store.Set(CategoryHome, "dan_info", "Lives in stable apartment", "test", 1.0,
-		[]string{"contact:dan@example.com", "location:stable"})
+		[]string{"contact:dan@example.com", "location:stable"}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = store.Set(CategoryPreference, "general_pref", "Prefers dark mode", "test", 1.0, nil)
+	_, err = store.Set(CategoryPreference, "general_pref", "Prefers dark mode", "test", 1.0, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -280,7 +281,7 @@ func TestSetWithSubjects_RoundTrip(t *testing.T) {
 	store := newTestStore(t)
 
 	subjects := []string{"entity:light.office", "zone:office"}
-	fact, err := store.Set(CategoryDevice, "office_light", "Hue desk lamp", "test", 1.0, subjects)
+	fact, err := store.Set(CategoryDevice, "office_light", "Hue desk lamp", "test", 1.0, subjects, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -306,7 +307,7 @@ func TestSetWithSubjects_RoundTrip(t *testing.T) {
 func TestSetWithoutSubjects_NilPreserved(t *testing.T) {
 	store := newTestStore(t)
 
-	_, err := store.Set(CategoryPreference, "timezone", "America/Chicago", "test", 1.0, nil)
+	_, err := store.Set(CategoryPreference, "timezone", "America/Chicago", "test", 1.0, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -318,5 +319,52 @@ func TestSetWithoutSubjects_NilPreserved(t *testing.T) {
 
 	if got.Subjects != nil {
 		t.Errorf("expected nil subjects, got %v", got.Subjects)
+	}
+}
+
+func TestGetContext_WithRef(t *testing.T) {
+	store := newTestStore(t)
+
+	subjects := []string{"entity:light.office"}
+	_, err := store.Set(CategoryDevice, "office_light", "Hue desk lamp", "test", 1.0, subjects, "devices/office_light.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	provider := NewSubjectContextProvider(store, slog.Default())
+	ctx := WithSubjects(context.Background(), []string{"entity:light.office"})
+
+	got, err := provider.GetContext(ctx, "ignored")
+	if err != nil {
+		t.Fatalf("GetContext: %v", err)
+	}
+
+	if !strings.Contains(got, "kb:devices/office_light.md") {
+		t.Errorf("expected ref annotation in context output, got:\n%s", got)
+	}
+	if !strings.Contains(got, "📎 Full details:") {
+		t.Errorf("expected '📎 Full details:' prefix in context output, got:\n%s", got)
+	}
+}
+
+func TestGetContext_WithoutRef_NoAnnotation(t *testing.T) {
+	store := newTestStore(t)
+
+	subjects := []string{"entity:light.office"}
+	_, err := store.Set(CategoryDevice, "office_light", "Hue desk lamp", "test", 1.0, subjects, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	provider := NewSubjectContextProvider(store, slog.Default())
+	ctx := WithSubjects(context.Background(), []string{"entity:light.office"})
+
+	got, err := provider.GetContext(ctx, "ignored")
+	if err != nil {
+		t.Fatalf("GetContext: %v", err)
+	}
+
+	if strings.Contains(got, "📎") {
+		t.Errorf("expected no ref annotation for fact without ref, got:\n%s", got)
 	}
 }

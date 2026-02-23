@@ -70,6 +70,7 @@ func (m *MarkdownIngester) ingestChunks(ctx context.Context, chunks []Chunk) (in
 			m.source,
 			1.0,
 			nil,
+			"",
 		)
 		if err != nil {
 			continue // Skip failures

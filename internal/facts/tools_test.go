@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"strings"
 	"testing"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -125,8 +126,8 @@ func TestGenerateMissingEmbeddings(t *testing.T) {
 	tools := NewTools(store)
 
 	// Add facts without embeddings
-	_, _ = store.Set(CategoryUser, "key1", "value1", "test", 1.0, nil)
-	_, _ = store.Set(CategoryUser, "key2", "value2", "test", 1.0, nil)
+	_, _ = store.Set(CategoryUser, "key1", "value1", "test", 1.0, nil, "")
+	_, _ = store.Set(CategoryUser, "key2", "value2", "test", 1.0, nil, "")
 
 	// Verify no embeddings initially
 	without, _ := store.GetFactsWithoutEmbeddings()
@@ -181,5 +182,82 @@ func TestGenerateMissingEmbeddingsNoClient(t *testing.T) {
 	_, err = tools.GenerateMissingEmbeddings()
 	if err == nil {
 		t.Error("expected error when no embedding client configured")
+	}
+}
+
+func TestRemember_WithRef(t *testing.T) {
+	tmpFile, err := os.CreateTemp("", "facts-test-*.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(tmpFile.Name())
+	tmpFile.Close()
+
+	store, err := NewStore(tmpFile.Name(), slog.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	tools := NewTools(store)
+
+	result, err := tools.Remember(`{
+		"category": "device",
+		"key": "openclawssy",
+		"value": "Black cat, shy but curious",
+		"source": "user stated",
+		"ref": "dossiers/openclawssy.md"
+	}`)
+	if err != nil {
+		t.Fatalf("Remember with ref: %v", err)
+	}
+	if result == "" {
+		t.Error("expected non-empty result")
+	}
+
+	// Verify ref was stored.
+	got, err := store.Get(CategoryDevice, "openclawssy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Ref != "dossiers/openclawssy.md" {
+		t.Errorf("ref = %q, want %q", got.Ref, "dossiers/openclawssy.md")
+	}
+}
+
+func TestRecall_ShowsRef(t *testing.T) {
+	tmpFile, err := os.CreateTemp("", "facts-test-*.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(tmpFile.Name())
+	tmpFile.Close()
+
+	store, err := NewStore(tmpFile.Name(), slog.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	tools := NewTools(store)
+
+	// Store a fact with ref via Remember.
+	_, err = tools.Remember(`{
+		"category": "device",
+		"key": "openclawssy",
+		"value": "Black cat",
+		"ref": "dossiers/openclawssy.md"
+	}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Recall specific key — should include ref.
+	result, err := tools.Recall(`{"category":"device","key":"openclawssy"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result, "kb:dossiers/openclawssy.md") {
+		t.Errorf("Recall result should contain ref annotation, got: %s", result)
 	}
 }

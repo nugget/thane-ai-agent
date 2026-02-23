@@ -95,6 +95,9 @@ func (p *SubjectContextProvider) GetContext(ctx context.Context, _ string) (stri
 		}
 		sb.WriteString("\n")
 		sb.WriteString(f.Value)
+		if f.Ref != "" {
+			sb.WriteString(fmt.Sprintf("\n📎 Full details: kb:%s", f.Ref))
+		}
 	}
 
 	p.logger.Debug("subject context injected",

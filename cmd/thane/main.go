@@ -985,6 +985,10 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// files within that directory. All paths are sandboxed.
 	if cfg.Workspace.Path != "" {
 		fileTools := tools.NewFileTools(cfg.Workspace.Path, cfg.Workspace.ReadOnlyDirs)
+		if cfg.KnowledgeBase.Path != "" {
+			fileTools.SetKnowledgeBasePath(cfg.KnowledgeBase.Path)
+			logger.Info("knowledge base path configured", "path", cfg.KnowledgeBase.Path)
+		}
 		loop.Tools().SetFileTools(fileTools)
 		loop.SetEgoFile(filepath.Join(cfg.Workspace.Path, "ego.md"))
 		logger.Info("file tools enabled", "workspace", cfg.Workspace.Path)
@@ -2118,7 +2122,7 @@ func (f *factSetterFunc) SetFact(category, key, value, source string, confidence
 		}
 	}
 
-	_, err = f.store.Set(facts.Category(category), key, value, source, confidence, nil)
+	_, err = f.store.Set(facts.Category(category), key, value, source, confidence, nil, "")
 	return err
 }
 

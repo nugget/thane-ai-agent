@@ -108,6 +108,10 @@ type Config struct {
 	// Workspace configures the agent's sandboxed file system access.
 	Workspace WorkspaceConfig `yaml:"workspace"`
 
+	// KnowledgeBase configures the knowledge base directory for
+	// long-form reference documents linked from facts.
+	KnowledgeBase KnowledgeBaseConfig `yaml:"knowledge_base"`
+
 	// ShellExec configures the agent's ability to run shell commands.
 	ShellExec ShellExecConfig `yaml:"shell_exec"`
 
@@ -509,6 +513,17 @@ type WorkspaceConfig struct {
 	// but not write to. Useful for giving the agent access to reference
 	// material outside its workspace.
 	ReadOnlyDirs []string `yaml:"read_only_dirs"`
+}
+
+// KnowledgeBaseConfig configures the knowledge base directory for
+// long-form reference documents. Facts can link to KB pages via the
+// ref field, and file tools resolve kb: prefixed paths against this
+// directory.
+type KnowledgeBaseConfig struct {
+	// Path is the root directory for knowledge base files. When set,
+	// file tools resolve "kb:foo.md" to files in this directory.
+	// Should be within the workspace for write access.
+	Path string `yaml:"path"`
 }
 
 // MQTTConfig configures the MQTT connection for Home Assistant device
