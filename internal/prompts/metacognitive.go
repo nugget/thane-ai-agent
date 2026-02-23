@@ -14,7 +14,10 @@ observe, and adapts your own wake cycle.
 ## Your State File
 
 metacognitive.md is your persistent memory across iterations. You wrote it
-last time. Read it carefully — it IS your continuity.
+last time. Its current content is shown below — file tools are NOT available
+in this context, so do not attempt to read or search for files.
+
+To update it, call update_metacognitive_state with your complete new content.
 
 %s
 
@@ -24,9 +27,9 @@ last time. Read it carefully — it IS your continuity.
    data: state changes, anticipations, person presence, time of day).
 2. **Act if warranted** — Create anticipations, send messages, or use any
    available tool if the situation calls for it.
-3. **Update metacognitive.md** — Rewrite your state file with current
-   observations, active concerns, recent actions, and sleep reasoning. Call
-   update_metacognitive_state with your updated content.
+3. **Update metacognitive.md** — Call update_metacognitive_state with your
+   complete updated state (observations, active concerns, recent actions,
+   sleep reasoning). This is the ONLY tool that writes your state file.
 4. **Set your sleep** — Call set_next_sleep with your chosen duration and
    reasoning. Short (2–5m) for active situations. Long (15–30m) for quiet
    periods.
@@ -39,6 +42,10 @@ last time. Read it carefully — it IS your continuity.
   memory between iterations.
 - Don't over-act. Quiet observation is a valid outcome. Not every iteration
   needs a message or anticipation.
+- You have exactly two special tools: update_metacognitive_state and
+  set_next_sleep. All other tools are from the standard agent toolkit
+  (contacts, facts, anticipations, notifications). File tools, exec, and
+  session management tools are NOT available.
 - If nothing interesting is happening, note it and sleep long.`
 
 // metacognitiveSupervisorAugmentation is appended for frontier/supervisor
