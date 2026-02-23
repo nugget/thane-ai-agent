@@ -1,6 +1,7 @@
 package web
 
 import (
+	"bytes"
 	"embed"
 	"fmt"
 	"html/template"
@@ -40,9 +41,11 @@ func loadTemplates() map[string]*template.Template {
 	return result
 }
 
-// render executes a named template. If the request has the HX-Request
-// header (htmx partial), only the "content" block is rendered. Otherwise
-// the full layout is rendered.
+// render executes a named template into a buffer and writes the result
+// only on success. If the request has the HX-Request header (htmx
+// partial), only the "content" block is rendered. Otherwise the full
+// layout is rendered. Buffering prevents partial HTML from being sent
+// to the client when a template error occurs.
 func (s *WebServer) render(w http.ResponseWriter, r *http.Request, name string, data any) {
 	t, ok := s.templates[name]
 	if !ok {
@@ -50,16 +53,20 @@ func (s *WebServer) render(w http.ResponseWriter, r *http.Request, name string, 
 		return
 	}
 
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-
 	block := "layout.html"
 	if r.Header.Get("HX-Request") == "true" {
 		block = "content"
 	}
 
-	if err := t.ExecuteTemplate(w, block, data); err != nil {
+	var buf bytes.Buffer
+	if err := t.ExecuteTemplate(&buf, block, data); err != nil {
 		s.logger.Error("template render failed", "template", name, "block", block, "error", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
 	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = buf.WriteTo(w)
 }
 
 // formatDuration renders a time.Duration as a human-readable string.
@@ -100,11 +107,18 @@ func formatTokens(n int64) string {
 	return fmt.Sprintf("%.1fM", float64(n)/1_000_000)
 }
 
-// pct computes a percentage from a numerator and denominator. Returns 0
-// when the denominator is zero to avoid division by zero.
+// pct computes a percentage from a numerator and denominator, clamped
+// to the range [0, 100]. Returns 0 when the denominator is zero.
 func pct(num, denom int) int {
 	if denom == 0 {
 		return 0
 	}
-	return num * 100 / denom
+	v := num * 100 / denom
+	if v < 0 {
+		return 0
+	}
+	if v > 100 {
+		return 100
+	}
+	return v
 }

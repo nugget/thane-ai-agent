@@ -178,6 +178,23 @@ func TestChatUnchanged(t *testing.T) {
 	}
 }
 
+func TestStatic_BlocksChatHTML(t *testing.T) {
+	ws := newTestServer()
+	mux := http.NewServeMux()
+	ws.RegisterRoutes(mux)
+
+	// index.html exists in static/ but should not be served via /static/
+	for _, path := range []string{"/static/index.html", "/static/manifest.json", "/static/"} {
+		req := httptest.NewRequest("GET", path, nil)
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+
+		if w.Code != http.StatusNotFound {
+			t.Errorf("GET %s status = %d, want %d", path, w.Code, http.StatusNotFound)
+		}
+	}
+}
+
 func TestDashboard_NilProviders(t *testing.T) {
 	// WebServer with nil function providers should not panic.
 	ws := NewWebServer(Config{Logger: slog.Default()})

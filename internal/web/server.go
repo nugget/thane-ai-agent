@@ -7,6 +7,8 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"path"
+	"strings"
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/router"
@@ -132,9 +134,30 @@ func RegisterRoutes(mux *http.ServeMux) {
 	})
 }
 
-// handleStatic serves files from the embedded static directory.
+// dashboardStaticExts lists file extensions allowed through /static/.
+// This prevents the chat UI's index.html and manifest.json from being
+// served at /static/index.html, keeping them exclusively at /chat.
+var dashboardStaticExts = map[string]bool{
+	".css":   true,
+	".js":    true,
+	".svg":   true,
+	".png":   true,
+	".ico":   true,
+	".woff2": true,
+}
+
+// handleStatic serves dashboard assets (CSS, JS, images, fonts) from
+// the embedded static directory. Files that are not dashboard assets
+// (e.g., index.html, manifest.json) are rejected to avoid exposing the
+// chat UI at an unintended path.
 func (s *WebServer) handleStatic(w http.ResponseWriter, r *http.Request) {
-	// Strip "/static/" prefix and serve from embedded FS
+	// Only allow known dashboard asset extensions.
+	ext := strings.ToLower(path.Ext(r.URL.Path))
+	if !dashboardStaticExts[ext] {
+		http.NotFound(w, r)
+		return
+	}
+
 	subFS, err := fs.Sub(staticFiles, "static")
 	if err != nil {
 		http.NotFound(w, r)
