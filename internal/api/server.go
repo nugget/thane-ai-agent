@@ -23,6 +23,14 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/web"
 )
 
+// WebServerRegistrar is implemented by types that can register HTTP
+// routes on a ServeMux. It decouples the API server from the concrete
+// web.WebServer type so that the web package can be wired in without a
+// circular import.
+type WebServerRegistrar interface {
+	RegisterRoutes(mux *http.ServeMux)
+}
+
 // writeJSON encodes v as JSON to w, logging any errors at debug level.
 // Errors here typically mean the client disconnected mid-response,
 // which is not actionable but worth tracking for debugging.
@@ -62,6 +70,7 @@ type Server struct {
 	healthDeps    HealthStatusFunc
 	tokenObserver TokenObserver
 	eventBus      *events.Bus
+	webServer     WebServerRegistrar
 	logger        *slog.Logger
 	server        *http.Server
 	stats         *SessionStats
@@ -82,6 +91,27 @@ func (s *Server) SetTokenObserver(obs TokenObserver) {
 // SetEventBus configures the event bus for the WebSocket event stream.
 func (s *Server) SetEventBus(bus *events.Bus) {
 	s.eventBus = bus
+}
+
+// SetWebServer configures the web dashboard. When set, the dashboard
+// serves HTML at "/" and the old JSON root handler becomes a fallback.
+func (s *Server) SetWebServer(ws WebServerRegistrar) {
+	s.webServer = ws
+}
+
+// DashboardSnapshot returns a copy of the current session stats
+// enriched with context window, message count, and build information.
+// This is used by the web dashboard to display runtime overview data.
+func (s *Server) DashboardSnapshot() SessionStatsSnapshot {
+	snap := s.stats.Snapshot()
+	memStats := s.loop.MemoryStats()
+	if msgs, ok := memStats["messages"].(int); ok {
+		snap.MessageCount = msgs
+	}
+	snap.ContextTokens = s.loop.GetTokenCount("default")
+	snap.ContextWindow = s.loop.GetContextWindow()
+	snap.Build = buildinfo.RuntimeInfo()
+	return snap
 }
 
 // LastRequest returns when the most recent LLM request completed.
@@ -210,7 +240,6 @@ func (s *Server) Start(ctx context.Context) error {
 	// Health endpoints
 	mux.HandleFunc("GET /v1/version", s.handleVersion)
 	mux.HandleFunc("GET /health", s.handleHealth)
-	mux.HandleFunc("GET /", s.handleRoot)
 
 	// Router introspection endpoints
 	mux.HandleFunc("GET /v1/router/stats", s.handleRouterStats)
@@ -245,8 +274,15 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("GET /v1/archive/messages", s.handleArchiveMessages)
 	mux.HandleFunc("GET /v1/archive/stats", s.handleArchiveStats)
 
-	// Chat web UI
-	web.RegisterRoutes(mux)
+	// Web dashboard and chat UI. When the WebServer is wired in, it
+	// owns "/" (HTML dashboard), "/chat", "/static/", and "/manifest.json".
+	// Otherwise, fall back to the JSON root handler and legacy chat routes.
+	if s.webServer != nil {
+		s.webServer.RegisterRoutes(mux)
+	} else {
+		mux.HandleFunc("GET /", s.handleRoot)
+		web.RegisterRoutes(mux)
+	}
 
 	// Note: Ollama-compatible API is served on a separate port via OllamaServer
 	// when ollama_api.enabled is true in config. Use RegisterOllamaRoutes()
@@ -930,20 +966,8 @@ func (s *Server) handleToolStats(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleSessionStats(w http.ResponseWriter, r *http.Request) {
-	snap := s.stats.Snapshot()
-
-	// Enrich with context window info from memory
-	memStats := s.loop.MemoryStats()
-	if msgs, ok := memStats["messages"].(int); ok {
-		snap.MessageCount = msgs
-	}
-	// Estimate context tokens from the "default" conversation
-	snap.ContextTokens = s.loop.GetTokenCount("default")
-	snap.ContextWindow = s.loop.GetContextWindow()
-	snap.Build = buildinfo.RuntimeInfo()
-
 	w.Header().Set("Content-Type", "application/json")
-	writeJSON(w, snap, s.logger)
+	writeJSON(w, s.DashboardSnapshot(), s.logger)
 }
 
 func (s *Server) handleSetBalance(w http.ResponseWriter, r *http.Request) {

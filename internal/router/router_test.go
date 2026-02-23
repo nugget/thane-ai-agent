@@ -266,6 +266,42 @@ func TestRoute_PreferSpeedHint(t *testing.T) {
 	}
 }
 
+func TestGetModels(t *testing.T) {
+	models := []Model{
+		{Name: "fast-local", Provider: "ollama", Speed: 8, Quality: 5},
+		{Name: "cloud-model", Provider: "anthropic", Speed: 6, Quality: 10},
+	}
+	r := NewRouter(slog.Default(), Config{
+		DefaultModel: "fast-local",
+		Models:       models,
+	})
+
+	got := r.GetModels()
+	if len(got) != len(models) {
+		t.Fatalf("GetModels() returned %d models, want %d", len(got), len(models))
+	}
+	for i, m := range got {
+		if m.Name != models[i].Name {
+			t.Errorf("GetModels()[%d].Name = %q, want %q", i, m.Name, models[i].Name)
+		}
+	}
+
+	// Mutating the returned slice should not affect the router.
+	got[0].Name = "mutated"
+	fresh := r.GetModels()
+	if fresh[0].Name != "fast-local" {
+		t.Errorf("GetModels() returned mutated data: got %q, want %q", fresh[0].Name, "fast-local")
+	}
+}
+
+func TestGetModels_Empty(t *testing.T) {
+	r := NewRouter(slog.Default(), Config{DefaultModel: "fallback"})
+	got := r.GetModels()
+	if len(got) != 0 {
+		t.Errorf("GetModels() returned %d models, want 0", len(got))
+	}
+}
+
 func TestRoute_PreferSpeedWithQualityFloor(t *testing.T) {
 	// Quality floor should still disqualify low-quality models even when
 	// prefer_speed is set. fast-local has quality 5 and should be blocked

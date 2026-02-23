@@ -1,0 +1,22 @@
+{{define "layout.html"}}<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{block "title" .}}Thane Dashboard{{end}}</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="/static/htmx.min.js"></script>
+</head>
+<body>
+    <nav class="nav">
+        <div class="nav-brand">Thane</div>
+        <div class="nav-links">
+            <a href="/" class="nav-link{{if eq .ActiveNav "overview"}} active{{end}}" hx-get="/" hx-target="#content" hx-push-url="true">Overview</a>
+            <a href="/chat" class="nav-link{{if eq .ActiveNav "chat"}} active{{end}}">Chat</a>
+        </div>
+    </nav>
+    <main id="content">
+        {{block "content" .}}{{end}}
+    </main>
+</body>
+</html>{{end}}
