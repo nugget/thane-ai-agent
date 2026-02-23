@@ -63,6 +63,11 @@ const (
 // system prompt. Content beyond this limit is truncated with a marker.
 const maxEgoBytes = 16 * 1024
 
+// maxTagContextBytes is the aggregate size limit for all tag context
+// files injected into the system prompt. Individual files exceeding
+// this threshold are truncated with a marker.
+const maxTagContextBytes = 64 * 1024
+
 // Response represents the agent's response.
 type Response struct {
 	Content      string         `json:"content"`
@@ -455,7 +460,20 @@ func (l *Loop) buildSystemPrompt(ctx context.Context, userMessage string, histor
 				if tagCtxBuf.Len() > 0 {
 					tagCtxBuf.WriteString("\n\n---\n\n")
 				}
-				tagCtxBuf.Write(data)
+				remaining := maxTagContextBytes - tagCtxBuf.Len()
+				if remaining <= 0 {
+					l.logger.Warn("tag context aggregate limit reached, skipping remaining files",
+						"tag", tag, "path", path, "limit_bytes", maxTagContextBytes)
+					break
+				}
+				if len(data) > remaining {
+					tagCtxBuf.Write(data[:remaining])
+					tagCtxBuf.WriteString("\n\n[tag context truncated — exceeded aggregate 64 KB limit]")
+					l.logger.Warn("tag context truncated to fit aggregate limit",
+						"tag", tag, "path", path, "file_bytes", len(data), "limit_bytes", maxTagContextBytes)
+				} else {
+					tagCtxBuf.Write(data)
+				}
 			}
 		}
 		if tagCtxBuf.Len() > 0 {

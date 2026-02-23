@@ -56,8 +56,12 @@ func (r *Registry) registerRequestCapability(mgr CapabilityManager, manifest []C
 			continue // Don't list always-active tags — they can't be toggled.
 		}
 		if len(m.Context) > 0 {
-			availableDesc.WriteString(fmt.Sprintf("- **%s**: %s (tools: %s, context: %d files)\n",
-				m.Tag, m.Description, strings.Join(m.Tools, ", "), len(m.Context)))
+			fileWord := "files"
+			if len(m.Context) == 1 {
+				fileWord = "file"
+			}
+			availableDesc.WriteString(fmt.Sprintf("- **%s**: %s (tools: %s, context: %d %s)\n",
+				m.Tag, m.Description, strings.Join(m.Tools, ", "), len(m.Context), fileWord))
 		} else {
 			availableDesc.WriteString(fmt.Sprintf("- **%s**: %s (tools: %s)\n",
 				m.Tag, m.Description, strings.Join(m.Tools, ", ")))
@@ -96,7 +100,11 @@ func (r *Registry) registerRequestCapability(mgr CapabilityManager, manifest []C
 					fmt.Fprintf(&result, " Tools now available: %s.", strings.Join(m.Tools, ", "))
 				}
 				if len(m.Context) > 0 {
-					fmt.Fprintf(&result, " Context loaded: %d files.", len(m.Context))
+					fileWord := "files"
+					if len(m.Context) == 1 {
+						fileWord = "file"
+					}
+					fmt.Fprintf(&result, " Context loaded: %d %s.", len(m.Context), fileWord)
 				}
 			}
 			return result.String(), nil

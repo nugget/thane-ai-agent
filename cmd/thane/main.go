@@ -755,25 +755,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	if len(cfg.Context.InjectFiles) > 0 {
 		var resolved []string
 		for _, path := range cfg.Context.InjectFiles {
-			// Resolve registered prefixes (kb:notes.md → /vault/notes.md).
-			if resolver != nil {
-				if r, err := resolver.Resolve(path); err != nil {
-					logger.Warn("inject file prefix resolution failed", "path", path, "error", err)
-				} else {
-					path = r
-				}
-			}
-			// Expand ~ to the user's home directory.
-			if strings.HasPrefix(path, "~") {
-				if home, err := os.UserHomeDir(); err == nil {
-					switch {
-					case path == "~":
-						path = home
-					case strings.HasPrefix(path, "~/") || strings.HasPrefix(path, "~"+string(filepath.Separator)):
-						path = filepath.Join(home, path[2:])
-					}
-				}
-			}
+			path = resolvePath(path, resolver)
 			if _, err := os.Stat(path); err != nil {
 				if errors.Is(err, fs.ErrNotExist) {
 					logger.Warn("context inject file not found", "path", path)
@@ -1473,24 +1455,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 			}
 			resolved := make([]string, 0, len(tagCfg.Context))
 			for _, ctxPath := range tagCfg.Context {
-				if resolver != nil {
-					if r, err := resolver.Resolve(ctxPath); err != nil {
-						logger.Warn("capability tag context path resolution failed",
-							"tag", tag, "path", ctxPath, "error", err)
-					} else {
-						ctxPath = r
-					}
-				}
-				if strings.HasPrefix(ctxPath, "~") {
-					if home, err := os.UserHomeDir(); err == nil {
-						switch {
-						case ctxPath == "~":
-							ctxPath = home
-						case strings.HasPrefix(ctxPath, "~/") || strings.HasPrefix(ctxPath, "~"+string(filepath.Separator)):
-							ctxPath = filepath.Join(home, ctxPath[2:])
-						}
-					}
-				}
+				ctxPath = resolvePath(ctxPath, resolver)
 				if _, err := os.Stat(ctxPath); err != nil {
 					if errors.Is(err, fs.ErrNotExist) {
 						logger.Warn("capability tag context file not found",
@@ -2084,6 +2049,28 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 
 	logger.Info("Thane stopped")
 	return nil
+}
+
+// resolvePath expands a configuration path using prefix resolution (kb: etc.)
+// and home-directory tilde expansion. It returns the resolved absolute path.
+// The resolver may be nil if no prefixes are configured.
+func resolvePath(p string, resolver *paths.Resolver) string {
+	if resolver != nil {
+		if r, err := resolver.Resolve(p); err == nil {
+			p = r
+		}
+	}
+	if strings.HasPrefix(p, "~") {
+		if home, err := os.UserHomeDir(); err == nil {
+			switch {
+			case p == "~":
+				p = home
+			case strings.HasPrefix(p, "~/") || strings.HasPrefix(p, "~"+string(filepath.Separator)):
+				p = filepath.Join(home, p[2:])
+			}
+		}
+	}
+	return p
 }
 
 // newLogger creates a structured logger that writes to w at the given level

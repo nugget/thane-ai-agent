@@ -264,8 +264,8 @@ func TestRequestCapability_DescriptionShowsContext(t *testing.T) {
 	reg.SetCapabilityTools(mgr, manifest)
 
 	tool := reg.Get("request_capability")
-	if !strings.Contains(tool.Description, "context: 1 files") {
-		t.Errorf("description should mention context files: %s", tool.Description)
+	if !strings.Contains(tool.Description, "context: 1 file") {
+		t.Errorf("description should mention context file: %s", tool.Description)
 	}
 }
 

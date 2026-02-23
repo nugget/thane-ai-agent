@@ -244,7 +244,11 @@ func GenerateManifest(entries []ManifestEntry) *Talent {
 			sb.WriteString(fmt.Sprintf("  Tools: %s\n", strings.Join(e.Tools, ", ")))
 		}
 		if len(e.Context) > 0 {
-			sb.WriteString(fmt.Sprintf("  Context: %d knowledge files loaded when active\n", len(e.Context)))
+			fileWord := "files"
+			if len(e.Context) == 1 {
+				fileWord = "file"
+			}
+			sb.WriteString(fmt.Sprintf("  Context: %d knowledge %s loaded when active\n", len(e.Context), fileWord))
 		}
 	}
 
