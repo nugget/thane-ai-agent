@@ -2,6 +2,7 @@ package metacognitive
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -353,7 +354,7 @@ func TestIterate_NormalHints(t *testing.T) {
 	deps := testDeps(t, runner)
 	l := New(testConfig(), deps)
 
-	if err := l.iterate(context.Background(), false, "test-conv-1"); err != nil {
+	if _, err := l.iterate(context.Background(), false, "test-conv-1"); err != nil {
 		t.Fatalf("iterate: %v", err)
 	}
 
@@ -391,7 +392,7 @@ func TestIterate_SupervisorHints(t *testing.T) {
 	deps := testDeps(t, runner)
 	l := New(testConfig(), deps)
 
-	if err := l.iterate(context.Background(), true, "test-conv-supv"); err != nil {
+	if _, err := l.iterate(context.Background(), true, "test-conv-supv"); err != nil {
 		t.Fatalf("iterate: %v", err)
 	}
 
@@ -421,7 +422,7 @@ func TestIterate_NoStateFile(t *testing.T) {
 	l := New(testConfig(), deps)
 
 	// No state file exists in the temp dir.
-	if err := l.iterate(context.Background(), false, "test-conv-1"); err != nil {
+	if _, err := l.iterate(context.Background(), false, "test-conv-1"); err != nil {
 		t.Fatalf("iterate with no state file: %v", err)
 	}
 
@@ -451,7 +452,7 @@ func TestIterate_WithStateFile(t *testing.T) {
 
 	l := New(testConfig(), deps)
 
-	if err := l.iterate(context.Background(), false, "test-conv-1"); err != nil {
+	if _, err := l.iterate(context.Background(), false, "test-conv-1"); err != nil {
 		t.Fatalf("iterate: %v", err)
 	}
 
@@ -470,9 +471,12 @@ func TestIterate_RunnerError(t *testing.T) {
 	deps := testDeps(t, runner)
 	l := New(testConfig(), deps)
 
-	err := l.iterate(context.Background(), false, "test-conv-1")
+	result, err := l.iterate(context.Background(), false, "test-conv-1")
 	if err == nil {
 		t.Fatal("iterate should return error when runner fails")
+	}
+	if result != nil {
+		t.Error("iterate should return nil result on error")
 	}
 	if !strings.Contains(err.Error(), "metacognitive LLM call") {
 		t.Errorf("error = %v, want wrapped metacognitive LLM call error", err)
@@ -495,7 +499,7 @@ func TestIterate_StateFileTruncated(t *testing.T) {
 
 	l := New(testConfig(), deps)
 
-	if err := l.iterate(context.Background(), false, "test-conv-1"); err != nil {
+	if _, err := l.iterate(context.Background(), false, "test-conv-1"); err != nil {
 		t.Fatalf("iterate: %v", err)
 	}
 
@@ -640,7 +644,7 @@ func TestIterate_ExcludesTools(t *testing.T) {
 	deps := testDeps(t, runner)
 	l := New(testConfig(), deps)
 
-	if err := l.iterate(context.Background(), false, "test-exclude"); err != nil {
+	if _, err := l.iterate(context.Background(), false, "test-exclude"); err != nil {
 		t.Fatalf("iterate: %v", err)
 	}
 
@@ -811,7 +815,7 @@ func TestIterate_PassesConvID(t *testing.T) {
 	l := New(testConfig(), deps)
 
 	convID := "metacog-9999999"
-	if err := l.iterate(context.Background(), false, convID); err != nil {
+	if _, err := l.iterate(context.Background(), false, convID); err != nil {
 		t.Fatalf("iterate: %v", err)
 	}
 
@@ -821,5 +825,231 @@ func TestIterate_PassesConvID(t *testing.T) {
 	}
 	if reqs[0].ConversationID != convID {
 		t.Errorf("ConversationID = %q, want %q", reqs[0].ConversationID, convID)
+	}
+}
+
+// --- iterationResult tests ---
+
+func TestIterate_ReturnsResult(t *testing.T) {
+	runner := &mockRunner{
+		resp: &agent.Response{
+			Content:      "observed something",
+			Model:        "llama3:8b",
+			InputTokens:  5000,
+			OutputTokens: 200,
+			ToolsUsed:    map[string]int{"update_metacognitive_state": 1, "set_next_sleep": 1},
+		},
+	}
+
+	deps := testDeps(t, runner)
+	l := New(testConfig(), deps)
+
+	result, err := l.iterate(context.Background(), true, "test-result")
+	if err != nil {
+		t.Fatalf("iterate: %v", err)
+	}
+
+	if result.Model != "llama3:8b" {
+		t.Errorf("Model = %q, want %q", result.Model, "llama3:8b")
+	}
+	if result.InputTokens != 5000 {
+		t.Errorf("InputTokens = %d, want 5000", result.InputTokens)
+	}
+	if result.OutputTokens != 200 {
+		t.Errorf("OutputTokens = %d, want 200", result.OutputTokens)
+	}
+	if result.ToolsUsed["update_metacognitive_state"] != 1 {
+		t.Errorf("ToolsUsed[update_metacognitive_state] = %d, want 1", result.ToolsUsed["update_metacognitive_state"])
+	}
+	if !result.Supervisor {
+		t.Error("Supervisor should be true when isSupervisor=true")
+	}
+	if result.Elapsed <= 0 {
+		t.Error("Elapsed should be positive")
+	}
+}
+
+// --- appendIterationLog tests ---
+
+func TestAppendIterationLog(t *testing.T) {
+	deps := testDeps(t, nil)
+	l := New(testConfig(), deps)
+
+	// Write an initial state file.
+	statePath := filepath.Join(deps.WorkspacePath, "metacognitive.md")
+	initial := "## Current Sense\nAll quiet.\n"
+	if err := os.WriteFile(statePath, []byte(initial), 0o644); err != nil {
+		t.Fatalf("write state: %v", err)
+	}
+
+	result := &iterationResult{
+		Model:        "llama3:8b",
+		InputTokens:  12000,
+		OutputTokens: 500,
+		ToolsUsed:    map[string]int{"get_state": 3, "update_metacognitive_state": 1},
+		Elapsed:      3*time.Minute + 12*time.Second,
+		Supervisor:   false,
+	}
+
+	l.appendIterationLog(result, "metacog-12345", 8*time.Minute)
+
+	data, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatalf("read state: %v", err)
+	}
+	s := string(data)
+
+	// Verify the original content is preserved.
+	if !strings.Contains(s, "All quiet.") {
+		t.Error("original content should be preserved")
+	}
+
+	// Verify log block fields.
+	if !strings.Contains(s, "<!-- iteration_log:") {
+		t.Error("should contain iteration_log prefix")
+	}
+	if !strings.Contains(s, "conversation=metacog-12345") {
+		t.Error("should contain conversation ID")
+	}
+	if !strings.Contains(s, "model=llama3:8b") {
+		t.Error("should contain model name")
+	}
+	if !strings.Contains(s, "supervisor=false") {
+		t.Error("should contain supervisor flag")
+	}
+	if !strings.Contains(s, "tokens_in=12000") {
+		t.Error("should contain input tokens")
+	}
+	if !strings.Contains(s, "tokens_out=500") {
+		t.Error("should contain output tokens")
+	}
+	if !strings.Contains(s, "sleep_set=8m0s") {
+		t.Error("should contain sleep duration")
+	}
+	if !strings.Contains(s, "get_state x3") {
+		t.Error("should contain tools with counts")
+	}
+	if !strings.Contains(s, "update_metacognitive_state") {
+		t.Error("should contain tool names")
+	}
+	if !strings.Contains(s, "elapsed=3m12s") {
+		t.Error("should contain elapsed time")
+	}
+}
+
+func TestAppendIterationLog_NoStateFile(t *testing.T) {
+	deps := testDeps(t, nil)
+	l := New(testConfig(), deps)
+
+	result := &iterationResult{
+		Model:        "test-model",
+		InputTokens:  100,
+		OutputTokens: 50,
+		Elapsed:      time.Second,
+	}
+
+	l.appendIterationLog(result, "metacog-first", 5*time.Minute)
+
+	statePath := filepath.Join(deps.WorkspacePath, "metacognitive.md")
+	data, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatalf("read state: %v", err)
+	}
+	s := string(data)
+
+	if !strings.Contains(s, "<!-- iteration_log:") {
+		t.Error("log block should be written even when no state file existed")
+	}
+	if !strings.Contains(s, "conversation=metacog-first") {
+		t.Error("should contain conversation ID")
+	}
+}
+
+// --- pruneIterationLogs tests ---
+
+func TestPruneIterationLogs_NoLogs(t *testing.T) {
+	content := "## Current Sense\nAll quiet.\n\n<!-- metacognitive: iteration=x updated=y -->\n"
+	got := pruneIterationLogs(content, 5)
+	if got != content {
+		t.Errorf("content with no iteration logs should be unchanged\ngot: %q\nwant: %q", got, content)
+	}
+}
+
+func TestPruneIterationLogs_UnderLimit(t *testing.T) {
+	var sb strings.Builder
+	sb.WriteString("## State\n")
+	for i := 0; i < 3; i++ {
+		fmt.Fprintf(&sb, "\n<!-- iteration_log: conversation=c%d model=m supervisor=false\n     tokens_in=100 tokens_out=50 -->\n", i)
+	}
+	content := sb.String()
+
+	got := pruneIterationLogs(content, 5)
+	if got != content {
+		t.Error("content with fewer logs than limit should be unchanged")
+	}
+}
+
+func TestPruneIterationLogs_AtLimit(t *testing.T) {
+	var sb strings.Builder
+	sb.WriteString("## State\n")
+	for i := 0; i < 5; i++ {
+		fmt.Fprintf(&sb, "\n<!-- iteration_log: conversation=c%d model=m supervisor=false\n     tokens_in=100 tokens_out=50 -->\n", i)
+	}
+	content := sb.String()
+
+	got := pruneIterationLogs(content, 5)
+	if got != content {
+		t.Error("content with exactly limit logs should be unchanged")
+	}
+}
+
+func TestPruneIterationLogs_OverLimit(t *testing.T) {
+	var sb strings.Builder
+	sb.WriteString("## State\nSome content.\n")
+	for i := 0; i < 8; i++ {
+		fmt.Fprintf(&sb, "\n<!-- iteration_log: conversation=c%d model=m supervisor=false\n     tokens_in=100 tokens_out=50 -->\n", i)
+	}
+	content := sb.String()
+
+	got := pruneIterationLogs(content, 5)
+
+	// Should contain last 5 (c3..c7) but not first 3 (c0..c2).
+	for i := 0; i < 3; i++ {
+		if strings.Contains(got, fmt.Sprintf("conversation=c%d", i)) {
+			t.Errorf("pruned content should not contain conversation=c%d", i)
+		}
+	}
+	for i := 3; i < 8; i++ {
+		if !strings.Contains(got, fmt.Sprintf("conversation=c%d", i)) {
+			t.Errorf("pruned content should contain conversation=c%d", i)
+		}
+	}
+
+	// Original non-log content should be preserved.
+	if !strings.Contains(got, "Some content.") {
+		t.Error("non-log content should be preserved")
+	}
+}
+
+// --- formatToolsUsed tests ---
+
+func TestFormatToolsUsed_Empty(t *testing.T) {
+	got := formatToolsUsed(nil)
+	if got != "[]" {
+		t.Errorf("formatToolsUsed(nil) = %q, want %q", got, "[]")
+	}
+}
+
+func TestFormatToolsUsed_Sorted(t *testing.T) {
+	tools := map[string]int{
+		"set_next_sleep":             1,
+		"get_state":                  3,
+		"update_metacognitive_state": 1,
+	}
+	got := formatToolsUsed(tools)
+
+	// Should be sorted alphabetically.
+	if got != "[get_state x3, set_next_sleep, update_metacognitive_state]" {
+		t.Errorf("formatToolsUsed = %q, want sorted with counts", got)
 	}
 }

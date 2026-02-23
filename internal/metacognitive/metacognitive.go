@@ -20,7 +20,9 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -33,6 +35,25 @@ import (
 // maxStateBytes is the maximum metacognitive.md content read per
 // iteration. Content beyond this limit is truncated with a marker.
 const maxStateBytes = 16 * 1024
+
+// iterationLogRetention is the number of iteration log blocks to keep
+// when pruning. Oldest beyond this limit are removed.
+const iterationLogRetention = 5
+
+// iterationLogPrefix is the HTML comment prefix used for iteration log
+// blocks. Used for scanning/pruning.
+const iterationLogPrefix = "<!-- iteration_log:"
+
+// iterationResult holds data returned from a single metacognitive
+// iteration, used to build the auto-appended summary log.
+type iterationResult struct {
+	Model        string
+	InputTokens  int
+	OutputTokens int
+	ToolsUsed    map[string]int // tool name → call count
+	Elapsed      time.Duration
+	Supervisor   bool
+}
 
 // agentRunner abstracts the agent loop for LLM calls. Satisfied by
 // *agent.Loop. Matches the interface in cmd/thane/taskexec.go.
@@ -194,13 +215,13 @@ func (l *Loop) run(ctx context.Context) {
 		convID := fmt.Sprintf("metacog-%d", time.Now().UnixMilli())
 		l.setCurrentConvID(convID)
 
-		iterStart := time.Now()
 		logger.Info("metacognitive iteration starting",
 			"conversation_id", convID,
 			"supervisor", isSupervisor,
 		)
 
-		if err := l.iterate(ctx, isSupervisor, convID); err != nil {
+		result, err := l.iterate(ctx, isSupervisor, convID)
+		if err != nil {
 			if ctx.Err() != nil {
 				logger.Info("metacognitive loop stopped")
 				return
@@ -214,12 +235,18 @@ func (l *Loop) run(ctx context.Context) {
 			logger.Info("metacognitive iteration complete",
 				"conversation_id", convID,
 				"supervisor", isSupervisor,
-				"elapsed", time.Since(iterStart).Round(time.Millisecond),
+				"elapsed", result.Elapsed.Round(time.Millisecond),
 			)
 		}
 
 		// Compute and apply sleep.
 		sleep := l.computeSleep()
+
+		// Auto-append iteration summary on success.
+		if result != nil {
+			l.appendIterationLog(result, convID, sleep)
+		}
+
 		logger.Info("metacognitive sleeping",
 			"duration", sleep,
 			"conversation_id", convID,
@@ -247,8 +274,12 @@ var metacogExcludeTools = []string{
 }
 
 // iterate performs a single metacognitive iteration: read state, build
-// prompt, and run the LLM via the agent runner.
-func (l *Loop) iterate(ctx context.Context, isSupervisor bool, convID string) error {
+// prompt, and run the LLM via the agent runner. Returns an
+// [iterationResult] with model, token, and tool data for the
+// auto-appended summary log.
+func (l *Loop) iterate(ctx context.Context, isSupervisor bool, convID string) (*iterationResult, error) {
+	iterStart := time.Now()
+
 	stateContent, err := l.readStateFile()
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -292,7 +323,7 @@ func (l *Loop) iterate(ctx context.Context, isSupervisor bool, convID string) er
 
 	resp, err := l.deps.Runner.Run(ctx, req, nil)
 	if err != nil {
-		return fmt.Errorf("metacognitive LLM call: %w", err)
+		return nil, fmt.Errorf("metacognitive LLM call: %w", err)
 	}
 
 	l.deps.Logger.Debug("metacognitive iteration result",
@@ -302,7 +333,14 @@ func (l *Loop) iterate(ctx context.Context, isSupervisor bool, convID string) er
 		"supervisor", isSupervisor,
 	)
 
-	return nil
+	return &iterationResult{
+		Model:        resp.Model,
+		InputTokens:  resp.InputTokens,
+		OutputTokens: resp.OutputTokens,
+		ToolsUsed:    resp.ToolsUsed,
+		Elapsed:      time.Since(iterStart),
+		Supervisor:   isSupervisor,
+	}, nil
 }
 
 // rollDice determines whether this iteration uses a frontier supervisor
@@ -390,6 +428,159 @@ func (l *Loop) getCurrentConvID() string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.currentConvID
+}
+
+// appendIterationLog appends an HTML comment summary block to the state
+// file after a successful iteration. Old logs beyond
+// [iterationLogRetention] are pruned. This is best-effort: errors are
+// logged but never disrupt the loop.
+//
+// Unlike [Loop.readStateFile], this reads the full file without the
+// maxStateBytes cap to avoid silently truncating user/model state on
+// rewrite.
+func (l *Loop) appendIterationLog(result *iterationResult, convID string, sleep time.Duration) {
+	statePath := l.stateFilePath()
+
+	// Read the full file (uncapped) to avoid truncation on rewrite.
+	var content string
+	data, err := os.ReadFile(statePath)
+	if err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			// Non-trivial read error — abort to avoid data loss.
+			l.deps.Logger.Warn("failed to read state file for iteration log, skipping append",
+				"error", err,
+				"conversation_id", convID,
+			)
+			return
+		}
+		// File doesn't exist yet — start with empty content.
+		content = ""
+	} else {
+		content = string(data)
+	}
+
+	// Prune old iteration logs before appending.
+	content = pruneIterationLogs(content, iterationLogRetention)
+
+	// Format tools_called as "[tool_a x3, tool_b x1]".
+	toolsList := formatToolsUsed(result.ToolsUsed)
+
+	logBlock := fmt.Sprintf(
+		"\n%s conversation=%s model=%s supervisor=%v\n"+
+			"     timestamp=%s elapsed=%s\n"+
+			"     tools_called=%s\n"+
+			"     tokens_in=%d tokens_out=%d sleep_set=%s -->\n",
+		iterationLogPrefix,
+		convID,
+		result.Model,
+		result.Supervisor,
+		time.Now().UTC().Format(time.RFC3339),
+		result.Elapsed.Round(time.Millisecond),
+		toolsList,
+		result.InputTokens,
+		result.OutputTokens,
+		sleep.Round(time.Second),
+	)
+
+	fullContent := content + logBlock
+
+	// Ensure the parent directory exists (state file may be in a subdir).
+	if err := os.MkdirAll(filepath.Dir(statePath), 0o755); err != nil {
+		l.deps.Logger.Warn("failed to create directory for iteration log",
+			"error", err,
+			"conversation_id", convID,
+		)
+		return
+	}
+	if err := os.WriteFile(statePath, []byte(fullContent), 0o644); err != nil {
+		l.deps.Logger.Warn("failed to append iteration log",
+			"error", err,
+			"conversation_id", convID,
+		)
+	}
+}
+
+// formatToolsUsed formats a map[string]int as "[tool_a x3, tool_b]".
+// Tools with a count of 1 omit the multiplier.
+func formatToolsUsed(tools map[string]int) string {
+	if len(tools) == 0 {
+		return "[]"
+	}
+
+	// Sort for deterministic output.
+	names := make([]string, 0, len(tools))
+	for name := range tools {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	var parts []string
+	for _, name := range names {
+		count := tools[name]
+		if count > 1 {
+			parts = append(parts, fmt.Sprintf("%s x%d", name, count))
+		} else {
+			parts = append(parts, name)
+		}
+	}
+	return "[" + strings.Join(parts, ", ") + "]"
+}
+
+// pruneIterationLogs removes old iteration log blocks from content,
+// keeping the last keepN blocks. Each block is removed individually so
+// any non-log content interleaved between blocks is preserved. Returns
+// the pruned content. This is a pure function for easy testing.
+func pruneIterationLogs(content string, keepN int) string {
+	// Find all iteration log block positions.
+	var positions []int
+	searchFrom := 0
+	for {
+		idx := strings.Index(content[searchFrom:], iterationLogPrefix)
+		if idx < 0 {
+			break
+		}
+		positions = append(positions, searchFrom+idx)
+		searchFrom += idx + len(iterationLogPrefix)
+	}
+
+	if len(positions) <= keepN {
+		return content
+	}
+
+	// Remove the oldest blocks individually, preserving content between them.
+	removeCount := len(positions) - keepN
+	var result strings.Builder
+	currentPos := 0
+
+	for i := 0; i < removeCount; i++ {
+		blockPos := positions[i]
+
+		// Include a preceding newline in the removal if present.
+		blockStart := blockPos
+		if blockStart > 0 && content[blockStart-1] == '\n' {
+			blockStart--
+		}
+
+		// Write any content between the previous position and this block.
+		if currentPos < blockStart {
+			result.WriteString(content[currentPos:blockStart])
+		}
+
+		// Find the end of this block: "-->\n".
+		endMarker := strings.Index(content[blockPos:], "-->\n")
+		if endMarker < 0 {
+			// Malformed block — treat as running to end of content.
+			currentPos = len(content)
+			break
+		}
+		currentPos = blockPos + endMarker + len("-->\n")
+	}
+
+	// Append any remaining content after the last removed block.
+	if currentPos < len(content) {
+		result.WriteString(content[currentPos:])
+	}
+	return result.String()
 }
 
 // readStateFile reads the metacognitive state file from the workspace.

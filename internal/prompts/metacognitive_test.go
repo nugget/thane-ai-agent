@@ -67,3 +67,33 @@ func TestMetacognitivePrompt_MentionsUpdateTool(t *testing.T) {
 		t.Error("prompt should not mention file_write (replaced by update_metacognitive_state)")
 	}
 }
+
+func TestMetacognitivePrompt_FileToolsNotAvailable(t *testing.T) {
+	result := MetacognitivePrompt("some state", false)
+
+	if !strings.Contains(result, "file tools are NOT available") {
+		t.Error("prompt should explicitly state file tools are not available")
+	}
+	if strings.Contains(result, "Read it carefully") {
+		t.Error("prompt should not contain ambiguous 'Read it carefully' phrasing")
+	}
+}
+
+func TestMetacognitivePrompt_ToolBoundary(t *testing.T) {
+	result := MetacognitivePrompt("some state", false)
+
+	if !strings.Contains(result, "exactly two special tools") {
+		t.Error("prompt should state the two special tools available")
+	}
+	if !strings.Contains(result, "File tools, exec, and") {
+		t.Error("prompt should explicitly list unavailable tool categories")
+	}
+}
+
+func TestMetacognitivePrompt_OnlyWriteMechanism(t *testing.T) {
+	result := MetacognitivePrompt("some state", false)
+
+	if !strings.Contains(result, "ONLY tool that writes your state file") {
+		t.Error("prompt should clarify update_metacognitive_state is the only write mechanism")
+	}
+}
