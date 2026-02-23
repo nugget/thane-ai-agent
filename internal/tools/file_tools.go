@@ -13,6 +13,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/nugget/thane-ai-agent/internal/paths"
 )
 
 // errResultLimit is a sentinel returned from WalkDir callbacks to stop
@@ -49,10 +51,10 @@ var skipDirs = map[string]bool{
 
 // FileTools provides file read/write/edit capabilities within a workspace.
 type FileTools struct {
-	workspacePath     string
-	readOnlyDirs      []string // Additional read-only directories
-	knowledgeBasePath string   // Root dir for kb: prefix resolution
-	maxVisited        int      // Traversal entry cap; 0 uses defaultMaxVisited
+	workspacePath string
+	readOnlyDirs  []string        // Additional read-only directories
+	resolver      *paths.Resolver // Shared prefix resolver (kb:, scratchpad:, etc.)
+	maxVisited    int             // Traversal entry cap; 0 uses defaultMaxVisited
 }
 
 // NewFileTools creates a new FileTools instance.
@@ -80,11 +82,12 @@ func (ft *FileTools) WorkspacePath() string {
 	return ft.workspacePath
 }
 
-// SetKnowledgeBasePath configures the root directory for kb: prefix
-// resolution. When set, paths like "kb:dossiers/foo.md" resolve to
-// files within this directory.
-func (ft *FileTools) SetKnowledgeBasePath(path string) {
-	ft.knowledgeBasePath = path
+// SetResolver configures the shared path prefix resolver for
+// directory-based prefixes (kb:, scratchpad:, etc.). When set, prefixed
+// paths are expanded to their configured directories before sandbox
+// checks.
+func (ft *FileTools) SetResolver(r *paths.Resolver) {
+	ft.resolver = r
 }
 
 // resolvePath converts a relative path to an absolute path within allowed directories.
@@ -94,12 +97,15 @@ func (ft *FileTools) resolvePath(path string) (string, bool, error) {
 		return "", false, fmt.Errorf("workspace not configured")
 	}
 
-	// Resolve kb: prefix to knowledge base directory
-	if strings.HasPrefix(path, "kb:") {
-		if ft.knowledgeBasePath == "" {
-			return "", false, fmt.Errorf("knowledge base not configured")
+	// Resolve registered prefixes (kb:, scratchpad:, etc.)
+	if ft.resolver != nil {
+		resolved, err := ft.resolver.Resolve(path)
+		if err != nil {
+			return "", false, fmt.Errorf("resolve prefix: %w", err)
 		}
-		path = filepath.Join(ft.knowledgeBasePath, strings.TrimPrefix(path, "kb:"))
+		path = resolved
+	} else if hasPrefixColon(path) {
+		return "", false, fmt.Errorf("no path resolver configured for prefixed path: %s", path)
 	}
 
 	// Expand ~ to home directory
@@ -684,6 +690,15 @@ func (ft *FileTools) renderTree(buf *strings.Builder, dir, prefix string, maxDep
 		}
 	}
 	return nil
+}
+
+// hasPrefixColon detects paths that look like named prefix references
+// (e.g., "kb:foo") but are not absolute paths or Windows drive letters.
+// Single-character prefixes are excluded to avoid matching drive letters
+// like "C:\".
+func hasPrefixColon(path string) bool {
+	i := strings.IndexByte(path, ':')
+	return i > 1 && i < len(path)-1 && !strings.ContainsAny(path[:i], "/\\")
 }
 
 // humanSize formats a byte count into a human-readable string.

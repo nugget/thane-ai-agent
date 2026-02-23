@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/nugget/thane-ai-agent/internal/paths"
 )
 
 func TestFileTools_ResolvePath(t *testing.T) {
@@ -958,7 +960,8 @@ func TestResolvePath_KBPrefix(t *testing.T) {
 	}
 
 	ft := NewFileTools(workspace, nil)
-	ft.SetKnowledgeBasePath(kbDir)
+	resolver := paths.New(map[string]string{"kb": kbDir})
+	ft.SetResolver(resolver)
 
 	resolved, readOnly, err := ft.resolvePath("kb:dossiers/cat.md")
 	if err != nil {
@@ -975,7 +978,7 @@ func TestResolvePath_KBPrefix(t *testing.T) {
 	}
 }
 
-func TestResolvePath_KBPrefix_NotConfigured(t *testing.T) {
+func TestResolvePath_PrefixNoResolver(t *testing.T) {
 	workspace, err := os.MkdirTemp("", "thane-file-test-*")
 	if err != nil {
 		t.Fatal(err)
@@ -983,13 +986,13 @@ func TestResolvePath_KBPrefix_NotConfigured(t *testing.T) {
 	defer os.RemoveAll(workspace)
 
 	ft := NewFileTools(workspace, nil)
-	// No SetKnowledgeBasePath call.
+	// No SetResolver call.
 
 	_, _, err = ft.resolvePath("kb:dossiers/cat.md")
 	if err == nil {
-		t.Fatal("expected error for kb: prefix without configured path")
+		t.Fatal("expected error for prefixed path without resolver")
 	}
-	if !strings.Contains(err.Error(), "knowledge base not configured") {
+	if !strings.Contains(err.Error(), "no path resolver configured") {
 		t.Errorf("unexpected error: %v", err)
 	}
 }
@@ -1010,7 +1013,8 @@ func TestResolvePath_KBPrefix_ReadViaFileRead(t *testing.T) {
 	}
 
 	ft := NewFileTools(workspace, nil)
-	ft.SetKnowledgeBasePath(kbDir)
+	resolver := paths.New(map[string]string{"kb": kbDir})
+	ft.SetResolver(resolver)
 
 	content, err := ft.Read(context.Background(), "kb:test.md", 0, 0)
 	if err != nil {
@@ -1018,5 +1022,77 @@ func TestResolvePath_KBPrefix_ReadViaFileRead(t *testing.T) {
 	}
 	if !strings.Contains(content, "hello kb") {
 		t.Errorf("expected 'hello kb' in content, got: %s", content)
+	}
+}
+
+func TestResolvePath_MultiplePrefixes(t *testing.T) {
+	workspace, err := os.MkdirTemp("", "thane-file-test-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(workspace)
+
+	kbDir := filepath.Join(workspace, "kb")
+	scratchDir := filepath.Join(workspace, "scratch")
+	for _, d := range []string{kbDir, scratchDir} {
+		if err := os.MkdirAll(d, 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(kbDir, "doc.md"), []byte("kb doc"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(scratchDir, "notes.txt"), []byte("scratch notes"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	ft := NewFileTools(workspace, nil)
+	resolver := paths.New(map[string]string{
+		"kb":         kbDir,
+		"scratchpad": scratchDir,
+	})
+	ft.SetResolver(resolver)
+
+	ctx := context.Background()
+
+	content, err := ft.Read(ctx, "kb:doc.md", 0, 0)
+	if err != nil {
+		t.Fatalf("Read(kb:doc.md): %v", err)
+	}
+	if !strings.Contains(content, "kb doc") {
+		t.Errorf("expected 'kb doc', got: %s", content)
+	}
+
+	content, err = ft.Read(ctx, "scratchpad:notes.txt", 0, 0)
+	if err != nil {
+		t.Fatalf("Read(scratchpad:notes.txt): %v", err)
+	}
+	if !strings.Contains(content, "scratch notes") {
+		t.Errorf("expected 'scratch notes', got: %s", content)
+	}
+}
+
+func TestHasPrefixColon(t *testing.T) {
+	tests := []struct {
+		path string
+		want bool
+	}{
+		{"kb:foo.md", true},
+		{"scratchpad:dev-status", true},
+		{"/absolute/path", false},
+		{"relative/path", false},
+		{"", false},
+		{"~/notes.md", false},
+		{"C:\\windows\\path", false}, // Windows drive letter
+		{":", false},                 // bare colon
+		{"a:", false},                // bare prefix (no suffix after colon)
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			if got := hasPrefixColon(tt.path); got != tt.want {
+				t.Errorf("hasPrefixColon(%q) = %v, want %v", tt.path, got, tt.want)
+			}
+		})
 	}
 }
