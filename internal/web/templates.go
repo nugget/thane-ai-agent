@@ -15,9 +15,7 @@ var templateFiles embed.FS
 // templateFuncs provides helper functions available in all templates.
 var templateFuncs = template.FuncMap{
 	"formatDuration": formatDuration,
-	"formatCost":     formatCost,
 	"formatTokens":   formatTokens,
-	"pct":            pct,
 	"int64":          func(n int) int64 { return int64(n) },
 }
 
@@ -29,7 +27,7 @@ func loadTemplates() map[string]*template.Template {
 		template.New("layout.html").Funcs(templateFuncs).ParseFS(templateFiles, "templates/layout.html"),
 	)
 
-	pages := []string{"dashboard.html"}
+	pages := []string{"dashboard.html", "chat.html"}
 	result := make(map[string]*template.Template, len(pages))
 
 	for _, page := range pages {
@@ -85,17 +83,6 @@ func formatDuration(d time.Duration) string {
 	return fmt.Sprintf("%dd %dh", days, hours)
 }
 
-// formatCost renders a USD cost value with appropriate precision.
-func formatCost(cost float64) string {
-	if cost == 0 {
-		return "$0.00"
-	}
-	if cost < 0.01 {
-		return fmt.Sprintf("$%.4f", cost)
-	}
-	return fmt.Sprintf("$%.2f", cost)
-}
-
 // formatTokens renders a token count with thousands separators.
 func formatTokens(n int64) string {
 	if n < 1000 {
@@ -105,20 +92,4 @@ func formatTokens(n int64) string {
 		return fmt.Sprintf("%.1fK", float64(n)/1000)
 	}
 	return fmt.Sprintf("%.1fM", float64(n)/1_000_000)
-}
-
-// pct computes a percentage from a numerator and denominator, clamped
-// to the range [0, 100]. Returns 0 when the denominator is zero.
-func pct(num, denom int) int {
-	if denom == 0 {
-		return 0
-	}
-	v := num * 100 / denom
-	if v < 0 {
-		return 0
-	}
-	if v > 100 {
-		return 100
-	}
-	return v
 }

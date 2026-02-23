@@ -3,13 +3,14 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{{block "title" .}}Thane Dashboard{{end}}</title>
+    <title>{{block "title" .}}{{.BrandName}} Dashboard{{end}}</title>
     <link rel="stylesheet" href="/static/style.css">
     <script src="/static/htmx.min.js"></script>
+    {{block "head" .}}{{end}}
 </head>
 <body>
     <nav class="nav">
-        <div class="nav-brand">Thane</div>
+        <a href="/" class="nav-brand">{{.BrandName}}</a>
         <div class="nav-links">
             <a href="/" class="nav-link{{if eq .ActiveNav "overview"}} active{{end}}" hx-get="/" hx-target="#content" hx-push-url="true">Overview</a>
             <a href="/chat" class="nav-link{{if eq .ActiveNav "chat"}} active{{end}}">Chat</a>

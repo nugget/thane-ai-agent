@@ -16,13 +16,6 @@ func newTestServer() *WebServer {
 	return NewWebServer(Config{
 		StatsFunc: func() StatsSnapshot {
 			return StatsSnapshot{
-				TotalInputTokens:  12345,
-				TotalOutputTokens: 6789,
-				TotalRequests:     42,
-				EstimatedCostUSD:  1.23,
-				ContextTokens:     5000,
-				ContextWindow:     200000,
-				MessageCount:      10,
 				Build: map[string]string{
 					"version":    "test-v1.0.0",
 					"git_commit": "abc1234",
@@ -74,8 +67,8 @@ func TestDashboard_FullPage(t *testing.T) {
 
 	body := w.Body.String()
 
-	// Full page should include DOCTYPE and nav
-	for _, want := range []string{"<!DOCTYPE html>", "<nav", "test-v1.0.0", "abc1234"} {
+	// Full page should include DOCTYPE, nav, brand name, and build info
+	for _, want := range []string{"<!DOCTYPE html>", "<nav", "Thane", "test-v1.0.0", "abc1234"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("GET / response missing %q", want)
 		}
@@ -164,7 +157,7 @@ func TestStaticCSS(t *testing.T) {
 	}
 }
 
-func TestChatUnchanged(t *testing.T) {
+func TestChat_RendersInLayout(t *testing.T) {
 	ws := newTestServer()
 	mux := http.NewServeMux()
 	ws.RegisterRoutes(mux)
@@ -175,6 +168,20 @@ func TestChatUnchanged(t *testing.T) {
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("GET /chat status = %d, want %d", w.Code, http.StatusOK)
+	}
+
+	body := w.Body.String()
+
+	// Chat page should be rendered inside the shared layout with nav
+	for _, want := range []string{"<!DOCTYPE html>", "<nav", "Thane", "Message Thane..."} {
+		if !strings.Contains(body, want) {
+			t.Errorf("GET /chat response missing %q", want)
+		}
+	}
+
+	// Chat nav link should be active
+	if !strings.Contains(body, `class="nav-link active"`) {
+		t.Error("GET /chat should have an active nav link")
 	}
 }
 
@@ -207,5 +214,37 @@ func TestDashboard_NilProviders(t *testing.T) {
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("GET / (nil providers) status = %d, want %d", w.Code, http.StatusOK)
+	}
+}
+
+func TestBrandName_Custom(t *testing.T) {
+	ws := NewWebServer(Config{
+		BrandName: "TestBot",
+		Logger:    slog.Default(),
+	})
+	mux := http.NewServeMux()
+	ws.RegisterRoutes(mux)
+
+	// Dashboard should use custom brand name
+	req := httptest.NewRequest("GET", "/", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	body := w.Body.String()
+	if !strings.Contains(body, "TestBot") {
+		t.Error("dashboard should contain custom brand name")
+	}
+
+	// Chat should also use custom brand name
+	req = httptest.NewRequest("GET", "/chat", nil)
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	body = w.Body.String()
+	if !strings.Contains(body, "TestBot") {
+		t.Error("chat page should contain custom brand name")
+	}
+	if !strings.Contains(body, "Message TestBot...") {
+		t.Error("chat placeholder should contain custom brand name")
 	}
 }

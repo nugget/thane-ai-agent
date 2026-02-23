@@ -7,13 +7,20 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/buildinfo"
 )
 
+// PageData contains fields shared by all page templates. Every template
+// data struct should embed this so the layout can render the nav bar.
+type PageData struct {
+	BrandName string
+	ActiveNav string
+}
+
 // DashboardData is the template context for the runtime overview page.
 type DashboardData struct {
-	ActiveNav string
-	Stats     StatsSnapshot
-	Router    RouterInfo
-	Health    map[string]HealthStatus
-	Uptime    time.Duration
+	PageData
+	Stats  StatsSnapshot
+	Router RouterInfo
+	Health map[string]HealthStatus
+	Uptime time.Duration
 }
 
 // handleDashboard renders the runtime overview page at "/". Only exact
@@ -25,8 +32,11 @@ func (s *WebServer) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := DashboardData{
-		ActiveNav: "overview",
-		Uptime:    buildinfo.Uptime(),
+		PageData: PageData{
+			BrandName: s.brandName,
+			ActiveNav: "overview",
+		},
+		Uptime: buildinfo.Uptime(),
 	}
 
 	if s.statsFunc != nil {
