@@ -193,6 +193,11 @@ type Config struct {
 	// prompt before the model sees the triggering event.
 	Prewarm PrewarmConfig `yaml:"prewarm"`
 
+	// Media configures the media transcript retrieval tool. When yt-dlp
+	// is available, the agent can fetch transcripts from YouTube, Vimeo,
+	// podcasts, and other sources supported by yt-dlp.
+	Media MediaConfig `yaml:"media"`
+
 	// Metacognitive configures the perpetual metacognitive attention loop.
 	// When enabled, a background goroutine monitors the environment,
 	// reasons via LLM, and adapts its own sleep cycle between iterations.
@@ -768,6 +773,34 @@ type PrewarmConfig struct {
 	MaxFacts int `yaml:"max_facts"`
 }
 
+// MediaConfig configures the media transcript retrieval tool.
+type MediaConfig struct {
+	// YtDlpPath is the explicit path to the yt-dlp binary. If empty,
+	// the binary is located via exec.LookPath at startup.
+	YtDlpPath string `yaml:"yt_dlp_path"`
+
+	// CookiesFile is an optional path to a Netscape-format cookie file
+	// for accessing auth-required content (e.g., age-restricted videos).
+	CookiesFile string `yaml:"cookies_file"`
+
+	// SubtitleLanguage is the preferred subtitle language code.
+	// Default: "en".
+	SubtitleLanguage string `yaml:"subtitle_language"`
+
+	// MaxTranscriptChars limits the transcript text returned in-context.
+	// Longer transcripts are truncated. Default: 50000.
+	MaxTranscriptChars int `yaml:"max_transcript_chars"`
+
+	// WhisperModel is the Ollama model name for audio transcription
+	// fallback when no subtitles are available. Default: "large-v3".
+	WhisperModel string `yaml:"whisper_model"`
+
+	// TranscriptDir is the directory for durable transcript storage.
+	// Each transcript is saved as a markdown file with YAML frontmatter.
+	// If empty, transcripts are returned in-context only (not persisted).
+	TranscriptDir string `yaml:"transcript_dir"`
+}
+
 // MetacognitiveConfig configures the self-regulating metacognitive loop.
 // The loop runs perpetually in a background goroutine, using LLM calls to
 // reason about the environment and self-determine its sleep duration
@@ -927,6 +960,16 @@ func (c *Config) applyDefaults() {
 
 	if c.Unifi.PollIntervalSec == 0 {
 		c.Unifi.PollIntervalSec = 30
+	}
+
+	if c.Media.SubtitleLanguage == "" {
+		c.Media.SubtitleLanguage = "en"
+	}
+	if c.Media.MaxTranscriptChars == 0 {
+		c.Media.MaxTranscriptChars = 50000
+	}
+	if c.Media.WhisperModel == "" {
+		c.Media.WhisperModel = "large-v3"
 	}
 
 	if c.Episodic.LookbackDays == 0 {
