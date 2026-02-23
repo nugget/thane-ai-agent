@@ -827,10 +827,10 @@ func TestSanitizeFTS5Query(t *testing.T) {
 		want  string
 	}{
 		{"simple word", "hello", `"hello"`},
-		{"two words", "Alice Johnson", `"Alice" "Johnson"`},
+		{"two words", "Alice Johnson", `"Alice" OR "Johnson"`},
 		{"special chars", "o'brien", `"o'brien"`},
 		{"empty", "", ""},
-		{"with quotes", `say "hello"`, `"say" """hello"""`},
+		{"with quotes", `say "hello"`, `"say" OR """hello"""`},
 	}
 
 	for _, tt := range tests {

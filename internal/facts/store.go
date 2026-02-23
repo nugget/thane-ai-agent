@@ -32,6 +32,10 @@ const (
 	factColumns = "id, category, key, value, source, confidence, subjects, created_at, updated_at, accessed_at"
 	// Columns including embedding.
 	factColumnsWithEmbed = "id, category, key, value, source, confidence, subjects, embedding, created_at, updated_at, accessed_at"
+	// Qualified columns for FTS5 JOIN queries where facts and facts_fts
+	// share column names (key, value, source). Without table prefixes,
+	// SQLite raises "ambiguous column name" errors.
+	factColumnsFTS = "facts.id, facts.category, facts.key, facts.value, facts.source, facts.confidence, facts.subjects, facts.created_at, facts.updated_at, facts.accessed_at"
 	// Filter for active facts (currently: not soft-deleted).
 	activeFilter = "deleted_at IS NULL"
 )
@@ -340,10 +344,10 @@ func (s *Store) searchFTS(query string) ([]*Fact, error) {
 	}
 
 	rows, err := s.db.Query(`
-		SELECT `+factColumns+`
+		SELECT `+factColumnsFTS+`
 		FROM facts_fts
 		JOIN facts ON facts_fts.rowid = facts.rowid
-		WHERE facts_fts MATCH ? AND `+activeFilter+`
+		WHERE facts_fts MATCH ? AND facts.`+activeFilter+`
 		ORDER BY rank
 		LIMIT 50
 	`, sanitized)
@@ -409,7 +413,9 @@ func (s *Store) rebuildFTS() {
 }
 
 // sanitizeFTS5Query wraps each search term in double quotes to prevent FTS5
-// syntax errors from special characters like periods, colons, and parentheses.
+// syntax errors from special characters, then joins terms with OR so that
+// broader recall is possible. BM25 ranking ensures results matching more
+// terms score higher.
 func sanitizeFTS5Query(query string) string {
 	words := strings.Fields(query)
 	if len(words) == 0 {
@@ -420,7 +426,7 @@ func sanitizeFTS5Query(query string) string {
 		w = strings.ReplaceAll(w, `"`, `""`)
 		quoted[i] = `"` + w + `"`
 	}
-	return strings.Join(quoted, " ")
+	return strings.Join(quoted, " OR ")
 }
 
 // Delete soft-deletes a fact (sets deleted_at timestamp).

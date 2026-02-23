@@ -391,10 +391,10 @@ func (s *Store) searchFTS(query string) ([]*Contact, error) {
 	}
 
 	rows, err := s.db.Query(`
-		SELECT `+contactColumns+`
+		SELECT `+qualifiedContactColumns+`
 		FROM contacts_fts
 		JOIN contacts ON contacts_fts.rowid = contacts.rowid
-		WHERE contacts_fts MATCH ? AND `+activeFilter+`
+		WHERE contacts_fts MATCH ? AND contacts.`+activeFilter+`
 		ORDER BY rank
 		LIMIT 50
 	`, sanitized)
@@ -797,6 +797,10 @@ func (s *Store) rebuildFTS() {
 	}
 }
 
+// sanitizeFTS5Query wraps each search term in double quotes to prevent FTS5
+// syntax errors from special characters, then joins terms with OR so that
+// broader recall is possible. BM25 ranking ensures results matching more
+// terms score higher.
 func sanitizeFTS5Query(query string) string {
 	words := strings.Fields(query)
 	if len(words) == 0 {
@@ -807,7 +811,7 @@ func sanitizeFTS5Query(query string) string {
 		w = strings.ReplaceAll(w, `"`, `""`)
 		quoted[i] = `"` + w + `"`
 	}
-	return strings.Join(quoted, " ")
+	return strings.Join(quoted, " OR ")
 }
 
 // --- embedding helpers ---
