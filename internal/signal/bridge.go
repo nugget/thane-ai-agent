@@ -119,7 +119,7 @@ func NewBridge(cfg BridgeConfig) *Bridge {
 		logger = slog.Default()
 	}
 	if cfg.Attachments.DestDir != "" {
-		if err := os.MkdirAll(cfg.Attachments.DestDir, 0750); err != nil {
+		if err := os.MkdirAll(cfg.Attachments.DestDir, 0o750); err != nil {
 			logger.Warn("signal attachment dest dir creation failed",
 				"dir", cfg.Attachments.DestDir,
 				"error", err,
@@ -475,7 +475,13 @@ func (b *Bridge) handleReaction(ctx context.Context, env *Envelope) {
 			"conversation_id", convID,
 			"error", err,
 		)
+		return
 	}
+
+	b.logger.Info("signal reply sent (reaction)",
+		"sender", sender,
+		"conversation_id", convID,
+	)
 }
 
 // startTypingRefresh sends a typing indicator immediately, then
@@ -486,7 +492,7 @@ func (b *Bridge) startTypingRefresh(ctx context.Context, recipient string) conte
 	refreshCtx, cancel := context.WithCancel(ctx)
 
 	// Send initial typing indicator.
-	if err := b.client.SendTyping(ctx, recipient, false); err != nil {
+	if err := b.client.SendTyping(refreshCtx, recipient, false); err != nil {
 		b.logger.Debug("signal typing indicator failed", "error", err)
 	}
 
@@ -666,11 +672,22 @@ func (b *Bridge) processAttachments(attachments []Attachment) []string {
 		}
 
 		// Use the original filename if available; fall back to ID.
+		// Sanitize with filepath.Base to prevent path traversal.
 		destName := a.ID
 		if a.Filename != "" {
-			destName = a.Filename
+			destName = filepath.Base(a.Filename)
 		}
 		destPath := filepath.Join(b.attachments.DestDir, destName)
+
+		// Avoid overwriting an existing file with the same name by
+		// appending a timestamp suffix when a collision is detected.
+		if _, err := os.Stat(destPath); err == nil {
+			ext := filepath.Ext(destName)
+			base := strings.TrimSuffix(destName, ext)
+			suffix := time.Now().Format("20060102-150405.000000000")
+			destName = fmt.Sprintf("%s-%s%s", base, suffix, ext)
+			destPath = filepath.Join(b.attachments.DestDir, destName)
+		}
 
 		if err := copyFile(srcPath, destPath); err != nil {
 			b.logger.Warn("signal attachment copy failed",
@@ -715,7 +732,7 @@ func describeAttachment(a Attachment, pathOrNote string) string {
 }
 
 // copyFile copies src to dst. The destination file is created with
-// mode 0644. Existing files are overwritten.
+// mode 0640. On failure, the partial destination file is removed.
 func copyFile(src, dst string) error {
 	in, err := os.Open(src)
 	if err != nil {
@@ -723,13 +740,14 @@ func copyFile(src, dst string) error {
 	}
 	defer in.Close()
 
-	out, err := os.Create(dst)
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o640)
 	if err != nil {
 		return err
 	}
-	defer out.Close()
 
 	if _, err := io.Copy(out, in); err != nil {
+		out.Close()
+		os.Remove(dst)
 		return err
 	}
 	return out.Close()

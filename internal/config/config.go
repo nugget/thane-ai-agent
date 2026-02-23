@@ -19,6 +19,7 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
 	"net/url"
 	"os"
 	"path"
@@ -1086,7 +1087,12 @@ func (c *Config) applyDefaults() {
 		c.Signal.Routing.DelegationGating = "disabled"
 	}
 	if c.Signal.AttachmentSourceDir == "" {
-		if home, err := os.UserHomeDir(); err == nil {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			slog.Warn("unable to determine home directory for signal attachment source; set signal.attachment_source_dir explicitly",
+				"error", err,
+			)
+		} else {
 			c.Signal.AttachmentSourceDir = filepath.Join(home, ".local", "share", "signal-cli", "attachments")
 		}
 	}

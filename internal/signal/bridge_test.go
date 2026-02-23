@@ -1208,6 +1208,98 @@ func TestProcessAttachments_NoDirsConfigured(t *testing.T) {
 	}
 }
 
+func TestProcessAttachments_PathTraversal(t *testing.T) {
+	srcDir := t.TempDir()
+	destDir := t.TempDir()
+
+	// Create a fake attachment file.
+	if err := os.WriteFile(filepath.Join(srcDir, "malicious"), []byte("data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	bridge, _, _, _ := bridgeHelper(t, func(cfg *BridgeConfig) {
+		cfg.Attachments = AttachmentConfig{
+			SourceDir: srcDir,
+			DestDir:   destDir,
+		}
+	})
+
+	attachments := []Attachment{
+		{ContentType: "image/jpeg", Filename: "../../../etc/passwd", ID: "malicious", Size: 4},
+	}
+
+	descs := bridge.processAttachments(attachments)
+	if len(descs) != 1 {
+		t.Fatalf("expected 1 description, got %d", len(descs))
+	}
+
+	// File should be written inside destDir only, not outside it.
+	destPath := filepath.Join(destDir, "passwd")
+	if _, err := os.Stat(destPath); err != nil {
+		t.Fatalf("file should be saved with sanitized name in dest dir: %v", err)
+	}
+
+	// Nothing should have been written outside destDir.
+	outsidePath := filepath.Join(destDir, "..", "..", "..", "etc", "passwd")
+	if _, err := os.Stat(outsidePath); err == nil {
+		t.Error("path traversal should have been prevented")
+	}
+}
+
+func TestProcessAttachments_FilenameCollision(t *testing.T) {
+	srcDir := t.TempDir()
+	destDir := t.TempDir()
+
+	// Create two fake attachment files with different IDs.
+	if err := os.WriteFile(filepath.Join(srcDir, "abc"), []byte("first"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(srcDir, "def"), []byte("second"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	bridge, _, _, _ := bridgeHelper(t, func(cfg *BridgeConfig) {
+		cfg.Attachments = AttachmentConfig{
+			SourceDir: srcDir,
+			DestDir:   destDir,
+		}
+	})
+
+	// Process first attachment.
+	descs1 := bridge.processAttachments([]Attachment{
+		{ContentType: "image/jpeg", Filename: "photo.jpg", ID: "abc", Size: 5},
+	})
+	if len(descs1) != 1 {
+		t.Fatalf("expected 1 description, got %d", len(descs1))
+	}
+
+	// Process second attachment with same filename — should not overwrite.
+	descs2 := bridge.processAttachments([]Attachment{
+		{ContentType: "image/jpeg", Filename: "photo.jpg", ID: "def", Size: 6},
+	})
+	if len(descs2) != 1 {
+		t.Fatalf("expected 1 description, got %d", len(descs2))
+	}
+
+	// Both descriptions should reference dest paths.
+	if !strings.Contains(descs1[0], filepath.Join(destDir, "photo.jpg")) {
+		t.Errorf("first should use original name, got: %q", descs1[0])
+	}
+	// Second should have a different path (timestamp suffix).
+	if descs1[0] == descs2[0] {
+		t.Error("second attachment should have a different dest path than first")
+	}
+
+	// Verify both files exist and have correct contents.
+	first, err := os.ReadFile(filepath.Join(destDir, "photo.jpg"))
+	if err != nil {
+		t.Fatalf("first file missing: %v", err)
+	}
+	if string(first) != "first" {
+		t.Errorf("first file content = %q, want %q", first, "first")
+	}
+}
+
 func TestFormatMessage_WithAttachments(t *testing.T) {
 	env := &Envelope{
 		Source:    "+15551234567",
