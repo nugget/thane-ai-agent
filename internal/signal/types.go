@@ -20,11 +20,35 @@ type Envelope struct {
 
 // DataMessage is a normal text or media message.
 type DataMessage struct {
-	Timestamp        int64      `json:"timestamp"`
-	Message          string     `json:"message"`
-	ExpiresInSeconds int        `json:"expiresInSeconds"`
-	ViewOnce         bool       `json:"viewOnce"`
-	GroupInfo        *GroupInfo `json:"groupInfo,omitempty"`
+	Timestamp        int64        `json:"timestamp"`
+	Message          string       `json:"message"`
+	ExpiresInSeconds int          `json:"expiresInSeconds"`
+	ViewOnce         bool         `json:"viewOnce"`
+	GroupInfo        *GroupInfo   `json:"groupInfo,omitempty"`
+	Reaction         *Reaction    `json:"reaction,omitempty"`
+	Attachments      []Attachment `json:"attachments,omitempty"`
+}
+
+// Reaction represents an emoji reaction to a message. signal-cli sends
+// reactions inside the dataMessage envelope, not as a top-level field.
+type Reaction struct {
+	Emoji               string `json:"emoji"`
+	TargetAuthor        string `json:"targetAuthor"`
+	TargetSentTimestamp int64  `json:"targetSentTimestamp"`
+	IsRemove            bool   `json:"isRemove"`
+}
+
+// Attachment describes a file attached to a Signal data message.
+// signal-cli populates these fields when the remote sender includes
+// media. The ID corresponds to a file in signal-cli's attachment
+// storage directory.
+type Attachment struct {
+	ContentType string `json:"contentType"`
+	Filename    string `json:"filename,omitempty"`
+	ID          string `json:"id"`
+	Size        int64  `json:"size"`
+	Width       int    `json:"width,omitempty"`
+	Height      int    `json:"height,omitempty"`
 }
 
 // GroupInfo identifies the group a message was sent to.

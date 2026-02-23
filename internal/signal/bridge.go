@@ -3,7 +3,10 @@ package signal
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -48,11 +51,33 @@ const rateWindow = time.Minute
 // evicted.
 const cleanupInterval = 10 * time.Minute
 
+// typingRefreshInterval is how often the typing indicator is re-sent
+// during long-running agent processing. Signal's typing indicator
+// times out after ~15 seconds, so 10 seconds keeps it alive.
+const typingRefreshInterval = 10 * time.Second
+
 // lastMessage tracks a sender's most recent inbound message timestamp
 // along with when we received it, for bounded cleanup.
 type lastMessage struct {
 	signalTS   int64     // signal-cli message timestamp
 	receivedAt time.Time // wall clock when we stored it
+}
+
+// AttachmentConfig configures how the bridge handles received
+// attachments from Signal.
+type AttachmentConfig struct {
+	// SourceDir is the directory where signal-cli stores downloaded
+	// attachments (e.g., "~/.local/share/signal-cli/attachments").
+	SourceDir string
+
+	// DestDir is the workspace subdirectory where attachments are
+	// copied for agent access.
+	DestDir string
+
+	// MaxSize is the maximum attachment size in bytes that will be
+	// copied. Attachments exceeding this are noted but not copied.
+	// Zero means no limit.
+	MaxSize int64
 }
 
 // BridgeConfig holds the dependencies for a Bridge.
@@ -65,6 +90,7 @@ type BridgeConfig struct {
 	Rotator     SessionRotator             // nil disables idle session rotation
 	IdleTimeout time.Duration              // 0 disables idle session rotation
 	Resolver    ContactResolver            // nil disables phone→name resolution
+	Attachments AttachmentConfig           // attachment storage configuration
 }
 
 // Bridge receives Signal messages from the signal-cli client, routes
@@ -78,6 +104,7 @@ type Bridge struct {
 	rotator     SessionRotator
 	idleTimeout time.Duration
 	resolver    ContactResolver
+	attachments AttachmentConfig
 
 	mu            sync.Mutex
 	senderTimes   map[string][]time.Time
@@ -91,6 +118,14 @@ func NewBridge(cfg BridgeConfig) *Bridge {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	if cfg.Attachments.DestDir != "" {
+		if err := os.MkdirAll(cfg.Attachments.DestDir, 0750); err != nil {
+			logger.Warn("signal attachment dest dir creation failed",
+				"dir", cfg.Attachments.DestDir,
+				"error", err,
+			)
+		}
+	}
 	return &Bridge{
 		client:        cfg.Client,
 		runner:        cfg.Runner,
@@ -100,6 +135,7 @@ func NewBridge(cfg BridgeConfig) *Bridge {
 		rotator:       cfg.Rotator,
 		idleTimeout:   cfg.IdleTimeout,
 		resolver:      cfg.Resolver,
+		attachments:   cfg.Attachments,
 		senderTimes:   make(map[string][]time.Time),
 		lastInboundTS: make(map[string]lastMessage),
 	}
@@ -136,12 +172,27 @@ func (b *Bridge) Start(ctx context.Context) {
 				continue
 			}
 
-			// For non-text DataMessages (attachments, etc.) that won't
-			// reach handleMessage, track the signal timestamp here so
-			// the reaction tool's "latest" resolution still works.
-			// Text messages update lastInboundTS inside handleMessage
-			// (after the idle rotation check).
-			if env.DataMessage != nil && env.DataMessage.Message == "" {
+			// Reactions are carried inside dataMessage but have no
+			// text. Intercept them before the content filter.
+			if env.DataMessage != nil && env.DataMessage.Reaction != nil {
+				if !b.allowSender(env.Source) {
+					b.logger.Warn("signal reaction rate-limited",
+						"sender", env.Source,
+					)
+					continue
+				}
+				b.handleReaction(ctx, env)
+				continue
+			}
+
+			// For DataMessages with neither text nor attachments,
+			// track the signal timestamp so the reaction tool's
+			// "latest" resolution still works. Messages with content
+			// update lastInboundTS inside handleMessage (after the
+			// idle rotation check).
+			hasContent := env.DataMessage != nil &&
+				(env.DataMessage.Message != "" || len(env.DataMessage.Attachments) > 0)
+			if env.DataMessage != nil && !hasContent {
 				ts := env.Timestamp
 				if env.DataMessage.Timestamp != 0 {
 					ts = env.DataMessage.Timestamp
@@ -154,8 +205,8 @@ func (b *Bridge) Start(ctx context.Context) {
 				b.mu.Unlock()
 			}
 
-			if env.DataMessage == nil || env.DataMessage.Message == "" {
-				b.logger.Debug("signal ignoring non-text envelope",
+			if !hasContent {
+				b.logger.Debug("signal ignoring envelope without content",
 					"sender", env.Source,
 				)
 				continue
@@ -197,12 +248,23 @@ func (b *Bridge) handleMessage(ctx context.Context, env *Envelope) {
 
 	sender := env.Source
 	convID := fmt.Sprintf("signal-%s", sanitizePhone(sender))
-	content := formatMessage(env)
+
+	// Process attachments before formatting the message.
+	var attachmentDescs []string
+	if len(env.DataMessage.Attachments) > 0 {
+		if env.DataMessage.ViewOnce {
+			attachmentDescs = []string{"[View-once attachment — not available]"}
+		} else {
+			attachmentDescs = b.processAttachments(env.DataMessage.Attachments)
+		}
+	}
+	content := formatMessage(env, attachmentDescs)
 
 	b.logger.Info("signal message received",
 		"sender", sender,
 		"conversation_id", convID,
 		"message_len", len(env.DataMessage.Message),
+		"attachments", len(env.DataMessage.Attachments),
 	)
 
 	// Rotate the session if the sender has been idle longer than
@@ -237,10 +299,10 @@ func (b *Bridge) handleMessage(ctx context.Context, env *Envelope) {
 	}
 	b.mu.Unlock()
 
-	// Send typing indicator before agent processing.
-	if err := b.client.SendTyping(ctx, sender, false); err != nil {
-		b.logger.Debug("signal typing indicator failed", "error", err)
-	}
+	// Start typing indicator refresh loop. The goroutine sends an
+	// initial indicator and then re-sends every 10s to keep it
+	// visible during long agent processing.
+	stopTyping := b.startTypingRefresh(ctx, sender)
 
 	hints := map[string]string{
 		"source":                    "signal",
@@ -266,9 +328,11 @@ func (b *Bridge) handleMessage(ctx context.Context, env *Envelope) {
 
 	resp, err := b.runner.Run(ctx, req, nil)
 
-	// Stop typing indicator regardless of outcome. Use a fresh
-	// background context so this best-effort cleanup runs even if
-	// the handler context has timed out or been cancelled.
+	// Stop the typing refresh goroutine, then send a definitive
+	// typing stop. Use a fresh background context so this
+	// best-effort cleanup runs even if the handler context has
+	// timed out or been cancelled.
+	stopTyping()
 	stopCtx, stopCancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer stopCancel()
 	if typErr := b.client.SendTyping(stopCtx, sender, true); typErr != nil {
@@ -324,6 +388,124 @@ func (b *Bridge) handleMessage(ctx context.Context, env *Envelope) {
 		"sender", sender,
 		"conversation_id", convID,
 	)
+}
+
+// handleReaction processes an inbound emoji reaction. Reaction
+// removals are logged but do not wake the agent. Non-removal
+// reactions are forwarded to the agent loop with contextual hints.
+func (b *Bridge) handleReaction(ctx context.Context, env *Envelope) {
+	ctx, cancel := context.WithTimeout(ctx, handleTimeout)
+	defer cancel()
+
+	sender := env.Source
+	reaction := env.DataMessage.Reaction
+	convID := fmt.Sprintf("signal-%s", sanitizePhone(sender))
+
+	if reaction.IsRemove {
+		b.logger.Info("signal reaction removed",
+			"sender", sender,
+			"emoji", reaction.Emoji,
+			"target_author", reaction.TargetAuthor,
+			"target_timestamp", reaction.TargetSentTimestamp,
+		)
+		return
+	}
+
+	b.logger.Info("signal reaction received",
+		"sender", sender,
+		"emoji", reaction.Emoji,
+		"target_author", reaction.TargetAuthor,
+		"target_timestamp", reaction.TargetSentTimestamp,
+		"conversation_id", convID,
+	)
+
+	stopTyping := b.startTypingRefresh(ctx, sender)
+
+	content := formatReaction(env)
+
+	hints := map[string]string{
+		"source":                    "signal",
+		"sender":                    sender,
+		"event_type":                "reaction",
+		"reaction_emoji":            reaction.Emoji,
+		"target_sent_timestamp":     fmt.Sprintf("%d", reaction.TargetSentTimestamp),
+		router.HintQualityFloor:     b.routing.QualityFloor,
+		router.HintMission:          b.routing.Mission,
+		router.HintDelegationGating: b.routing.DelegationGating,
+	}
+
+	if b.resolver != nil {
+		if name, ok := b.resolver.ResolvePhone(sender); ok {
+			hints["sender_name"] = name
+		}
+	}
+
+	req := &agent.Request{
+		ConversationID: convID,
+		Messages:       []agent.Message{{Role: "user", Content: content}},
+		Model:          b.routing.Model,
+		Hints:          hints,
+	}
+
+	resp, err := b.runner.Run(ctx, req, nil)
+
+	stopTyping()
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer stopCancel()
+	if typErr := b.client.SendTyping(stopCtx, sender, true); typErr != nil {
+		b.logger.Debug("signal typing stop failed", "error", typErr)
+	}
+
+	if err != nil {
+		b.logger.Error("signal agent run failed (reaction)",
+			"sender", sender,
+			"conversation_id", convID,
+			"error", err,
+		)
+		return
+	}
+
+	if agentAlreadySent(resp.ToolsUsed) || resp.Content == "" {
+		return
+	}
+
+	if _, err := b.client.Send(ctx, sender, resp.Content); err != nil {
+		b.logger.Error("signal reply send failed (reaction)",
+			"sender", sender,
+			"conversation_id", convID,
+			"error", err,
+		)
+	}
+}
+
+// startTypingRefresh sends a typing indicator immediately, then
+// refreshes it on a ticker until the returned cancel function is
+// called. The caller must call the cancel function when processing
+// is complete.
+func (b *Bridge) startTypingRefresh(ctx context.Context, recipient string) context.CancelFunc {
+	refreshCtx, cancel := context.WithCancel(ctx)
+
+	// Send initial typing indicator.
+	if err := b.client.SendTyping(ctx, recipient, false); err != nil {
+		b.logger.Debug("signal typing indicator failed", "error", err)
+	}
+
+	go func() {
+		ticker := time.NewTicker(typingRefreshInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-refreshCtx.Done():
+				return
+			case <-ticker.C:
+				if err := b.client.SendTyping(refreshCtx, recipient, false); err != nil {
+					b.logger.Debug("signal typing refresh failed", "error", err)
+				}
+			}
+		}
+	}()
+
+	return cancel
 }
 
 // allowSender checks whether the sender is within the per-minute rate
@@ -404,7 +586,8 @@ func sanitizePhone(phone string) string {
 // formatMessage builds the user-facing message content for the agent
 // loop from a received Signal envelope. The [ts:...] tag provides the
 // message timestamp so the agent can reference it for reactions.
-func formatMessage(env *Envelope) string {
+// Attachment descriptions are prepended before the message text.
+func formatMessage(env *Envelope, attachmentDescs []string) string {
 	var sb strings.Builder
 	sender := env.Source
 	if env.SourceName != "" {
@@ -423,8 +606,133 @@ func formatMessage(env *Envelope) string {
 	} else {
 		fmt.Fprintf(&sb, "Signal message from %s [ts:%d]:\n\n", sender, ts)
 	}
+
+	for _, desc := range attachmentDescs {
+		sb.WriteString(desc)
+		sb.WriteString("\n")
+	}
+	if len(attachmentDescs) > 0 && env.DataMessage.Message != "" {
+		sb.WriteString("\n")
+	}
+
 	sb.WriteString(env.DataMessage.Message)
 	return sb.String()
+}
+
+// formatReaction builds the user-facing message content for a
+// reaction envelope. The output identifies the sender, the emoji,
+// and the target message timestamp.
+func formatReaction(env *Envelope) string {
+	var sb strings.Builder
+	sender := env.Source
+	if env.SourceName != "" {
+		sender = fmt.Sprintf("%s (%s)", env.SourceName, env.Source)
+	}
+	fmt.Fprintf(&sb, "Signal reaction from %s: %s on message [ts:%d] from %s",
+		sender,
+		env.DataMessage.Reaction.Emoji,
+		env.DataMessage.Reaction.TargetSentTimestamp,
+		env.DataMessage.Reaction.TargetAuthor,
+	)
+	return sb.String()
+}
+
+// processAttachments copies received attachments from signal-cli's
+// storage to the workspace and returns a human-readable description
+// of each attachment. Files that cannot be copied (missing, too
+// large) are described but marked as unavailable.
+func (b *Bridge) processAttachments(attachments []Attachment) []string {
+	descs := make([]string, 0, len(attachments))
+	for _, a := range attachments {
+		if b.attachments.MaxSize > 0 && a.Size > b.attachments.MaxSize {
+			descs = append(descs, describeAttachment(a, "exceeds size limit"))
+			continue
+		}
+
+		if b.attachments.SourceDir == "" || b.attachments.DestDir == "" {
+			descs = append(descs, describeAttachment(a, ""))
+			continue
+		}
+
+		srcPath := filepath.Join(b.attachments.SourceDir, a.ID)
+		if _, err := os.Stat(srcPath); err != nil {
+			b.logger.Warn("signal attachment not found",
+				"id", a.ID,
+				"path", srcPath,
+				"error", err,
+			)
+			descs = append(descs, describeAttachment(a, "file not available"))
+			continue
+		}
+
+		// Use the original filename if available; fall back to ID.
+		destName := a.ID
+		if a.Filename != "" {
+			destName = a.Filename
+		}
+		destPath := filepath.Join(b.attachments.DestDir, destName)
+
+		if err := copyFile(srcPath, destPath); err != nil {
+			b.logger.Warn("signal attachment copy failed",
+				"src", srcPath,
+				"dest", destPath,
+				"error", err,
+			)
+			descs = append(descs, describeAttachment(a, "copy failed"))
+			continue
+		}
+
+		b.logger.Info("signal attachment saved",
+			"id", a.ID,
+			"dest", destPath,
+			"size", a.Size,
+			"content_type", a.ContentType,
+		)
+		descs = append(descs, describeAttachment(a, destPath))
+	}
+	return descs
+}
+
+// describeAttachment builds a human-readable description of a single
+// attachment for inclusion in the agent wake message.
+func describeAttachment(a Attachment, pathOrNote string) string {
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "[Attachment: %s", a.ContentType)
+	if a.Filename != "" {
+		fmt.Fprintf(&sb, ", filename=%q", a.Filename)
+	}
+	if a.Size > 0 {
+		fmt.Fprintf(&sb, ", %d bytes", a.Size)
+	}
+	if a.Width > 0 && a.Height > 0 {
+		fmt.Fprintf(&sb, ", %dx%d", a.Width, a.Height)
+	}
+	if pathOrNote != "" {
+		fmt.Fprintf(&sb, " — %s", pathOrNote)
+	}
+	sb.WriteString("]")
+	return sb.String()
+}
+
+// copyFile copies src to dst. The destination file is created with
+// mode 0644. Existing files are overwritten.
+func copyFile(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+
+	out, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+
+	if _, err := io.Copy(out, in); err != nil {
+		return err
+	}
+	return out.Close()
 }
 
 // agentAlreadySent reports whether the agent invoked a
