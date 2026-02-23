@@ -59,6 +59,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/metacognitive"
 	"github.com/nugget/thane-ai-agent/internal/mqtt"
 	"github.com/nugget/thane-ai-agent/internal/opstate"
+	"github.com/nugget/thane-ai-agent/internal/paths"
 	"github.com/nugget/thane-ai-agent/internal/person"
 	"github.com/nugget/thane-ai-agent/internal/prompts"
 	"github.com/nugget/thane-ai-agent/internal/router"
@@ -737,9 +738,31 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// check) but defer reading to each agent turn so external edits
 	// (e.g. MEMORY.md updated by another runtime) are visible without
 	// restart.
+	// --- Shared path prefix resolver ---
+	// Build a resolver from the paths: config map. This handles kb:,
+	// scratchpad:, and any future directory-based prefixes. The
+	// resolver expands ~ in base directories at construction time.
+	var resolver *paths.Resolver
+	if len(cfg.Paths) > 0 {
+		resolver = paths.New(cfg.Paths)
+		logger.Info("path prefixes registered", "prefixes", resolver.Prefixes())
+	}
+	if cfg.KnowledgeBase.Path != "" { //nolint:staticcheck // intentional reference for deprecation warning
+		logger.Warn("knowledge_base.path is deprecated; migrate to paths: { kb: \"...\" }",
+			"path", cfg.KnowledgeBase.Path) //nolint:staticcheck // intentional reference for deprecation warning
+	}
+
 	if len(cfg.Context.InjectFiles) > 0 {
 		var resolved []string
 		for _, path := range cfg.Context.InjectFiles {
+			// Resolve registered prefixes (kb:notes.md → /vault/notes.md).
+			if resolver != nil {
+				if r, err := resolver.Resolve(path); err != nil {
+					logger.Warn("inject file prefix resolution failed", "path", path, "error", err)
+				} else {
+					path = r
+				}
+			}
 			// Expand ~ to the user's home directory.
 			if strings.HasPrefix(path, "~") {
 				if home, err := os.UserHomeDir(); err == nil {
@@ -985,9 +1008,8 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// files within that directory. All paths are sandboxed.
 	if cfg.Workspace.Path != "" {
 		fileTools := tools.NewFileTools(cfg.Workspace.Path, cfg.Workspace.ReadOnlyDirs)
-		if cfg.KnowledgeBase.Path != "" {
-			fileTools.SetKnowledgeBasePath(cfg.KnowledgeBase.Path)
-			logger.Info("knowledge base path configured", "path", cfg.KnowledgeBase.Path)
+		if resolver != nil {
+			fileTools.SetResolver(resolver)
 		}
 		loop.Tools().SetFileTools(fileTools)
 		loop.SetEgoFile(filepath.Join(cfg.Workspace.Path, "ego.md"))

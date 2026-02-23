@@ -110,7 +110,17 @@ type Config struct {
 
 	// KnowledgeBase configures the knowledge base directory for
 	// long-form reference documents linked from facts.
+	//
+	// Deprecated: Use Paths instead. This field is migrated to
+	// Paths["kb"] in applyDefaults and will be removed in a future
+	// release.
 	KnowledgeBase KnowledgeBaseConfig `yaml:"knowledge_base"`
+
+	// Paths maps named prefixes to directory paths for file resolution.
+	// Each entry creates a prefix (e.g., "kb" → kb:path resolves to
+	// the configured directory). Supports ~ expansion at resolver
+	// construction time.
+	Paths map[string]string `yaml:"paths"`
 
 	// ShellExec configures the agent's ability to run shell commands.
 	ShellExec ShellExecConfig `yaml:"shell_exec"`
@@ -1068,6 +1078,14 @@ func (c *Config) applyDefaults() {
 			c.Agent.OrchestratorTools = c.Agent.DeprecatedIter0Tools
 		}
 		c.Agent.DeprecatedIter0Tools = nil
+	}
+
+	// Backward compat: migrate deprecated knowledge_base.path → paths["kb"].
+	if c.KnowledgeBase.Path != "" && (c.Paths == nil || c.Paths["kb"] == "") {
+		if c.Paths == nil {
+			c.Paths = make(map[string]string)
+		}
+		c.Paths["kb"] = c.KnowledgeBase.Path
 	}
 
 	if c.Agent.DelegationRequired && len(c.Agent.OrchestratorTools) == 0 {
