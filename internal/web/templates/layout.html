@@ -13,6 +13,10 @@
         <a href="/" class="nav-brand">{{.BrandName}}</a>
         <div class="nav-links">
             <a href="/" class="nav-link{{if eq .ActiveNav "overview"}} active{{end}}" hx-get="/" hx-target="#content" hx-push-url="true">Overview</a>
+            <a href="/contacts" class="nav-link{{if eq .ActiveNav "contacts"}} active{{end}}" hx-get="/contacts" hx-target="#content" hx-push-url="true">Contacts</a>
+            <a href="/facts" class="nav-link{{if eq .ActiveNav "facts"}} active{{end}}" hx-get="/facts" hx-target="#content" hx-push-url="true">Facts</a>
+            <a href="/tasks" class="nav-link{{if eq .ActiveNav "tasks"}} active{{end}}" hx-get="/tasks" hx-target="#content" hx-push-url="true">Tasks</a>
+            <a href="/anticipations" class="nav-link{{if eq .ActiveNav "anticipations"}} active{{end}}" hx-get="/anticipations" hx-target="#content" hx-push-url="true">Anticipations</a>
             <a href="/chat" class="nav-link{{if eq .ActiveNav "chat"}} active{{end}}">Chat</a>
         </div>
     </nav>

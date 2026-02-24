@@ -1,0 +1,64 @@
+{{define "title"}}{{.BrandName}} - Anticipations{{end}}
+
+{{define "content"}}
+<div class="browser">
+    <h1>Anticipations</h1>
+
+    <div class="toolbar">
+        <div class="filter-tabs">
+            <a class="filter-tab{{if eq .Filter "active"}} active{{end}}"
+               hx-get="/anticipations?filter=active" hx-target="#anticipations-tbody">Active</a>
+            <a class="filter-tab{{if eq .Filter "all"}} active{{end}}"
+               hx-get="/anticipations?filter=all" hx-target="#anticipations-tbody">All</a>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="table-scroll">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Description</th>
+                        <th>Trigger</th>
+                        <th>Recurring</th>
+                        <th>Cooldown</th>
+                        <th>Status</th>
+                        <th>Created</th>
+                        <th>Last Fired</th>
+                    </tr>
+                </thead>
+                <tbody id="anticipations-tbody">
+                {{template "anticipations-tbody" .}}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{{end}}
+
+{{define "anticipations-tbody"}}
+{{if .Anticipations}}
+{{range .Anticipations}}
+<tr>
+    <td><strong>{{truncate .Description 60}}</strong></td>
+    <td class="text-muted" style="font-size:0.8125rem">{{.Trigger}}</td>
+    <td>
+        {{if .Recurring}}<span class="badge badge-teal">recurring</span>
+        {{else}}<span class="badge badge-muted">one-shot</span>
+        {{end}}
+    </td>
+    <td class="text-muted mono">{{if .Cooldown}}{{.Cooldown}}{{else}}—{{end}}</td>
+    <td>
+        {{if eq .Status "active"}}<span class="badge badge-ok">active</span>
+        {{else if eq .Status "resolved"}}<span class="badge badge-muted">resolved</span>
+        {{else if eq .Status "expired"}}<span class="badge badge-warn">expired</span>
+        {{end}}
+    </td>
+    <td class="text-muted">{{.CreatedAt}}</td>
+    <td class="text-muted">{{if .LastFiredAt}}{{.LastFiredAt}}{{else}}—{{end}}</td>
+</tr>
+{{end}}
+{{else}}
+<tr><td colspan="7" class="empty-state">No anticipations found.</td></tr>
+{{end}}
+{{end}}

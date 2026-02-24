@@ -5,7 +5,9 @@ import (
 	"embed"
 	"fmt"
 	"html/template"
+	"math"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -17,6 +19,12 @@ var templateFuncs = template.FuncMap{
 	"formatDuration": formatDuration,
 	"formatTokens":   formatTokens,
 	"int64":          func(n int) int64 { return int64(n) },
+	"formatTime":     formatTime,
+	"timeAgo":        timeAgo,
+	"truncate":       truncate,
+	"joinStrings":    joinStrings,
+	"confidence":     confidence,
+	"lower":          strings.ToLower,
 }
 
 // loadTemplates parses the layout and each page template. Each page
@@ -27,7 +35,16 @@ func loadTemplates() map[string]*template.Template {
 		template.New("layout.html").Funcs(templateFuncs).ParseFS(templateFiles, "templates/layout.html"),
 	)
 
-	pages := []string{"dashboard.html", "chat.html"}
+	pages := []string{
+		"dashboard.html",
+		"chat.html",
+		"contacts.html",
+		"contact_detail.html",
+		"facts.html",
+		"tasks.html",
+		"task_detail.html",
+		"anticipations.html",
+	}
 	result := make(map[string]*template.Template, len(pages))
 
 	for _, page := range pages {
@@ -67,6 +84,31 @@ func (s *WebServer) render(w http.ResponseWriter, r *http.Request, name string, 
 	_, _ = buf.WriteTo(w)
 }
 
+// renderBlock renders a specific named template block (e.g., a tbody
+// partial for htmx table updates). Returns false if the block is not
+// found so the caller can fall back to full-page rendering.
+func (s *WebServer) renderBlock(w http.ResponseWriter, name, block string, data any) bool {
+	t, ok := s.templates[name]
+	if !ok {
+		return false
+	}
+	// Check if the block exists by looking it up.
+	if t.Lookup(block) == nil {
+		return false
+	}
+
+	var buf bytes.Buffer
+	if err := t.ExecuteTemplate(&buf, block, data); err != nil {
+		s.logger.Error("template block render failed", "template", name, "block", block, "error", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return true // error was handled
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	_, _ = buf.WriteTo(w)
+	return true
+}
+
 // formatDuration renders a time.Duration as a human-readable string.
 func formatDuration(d time.Duration) string {
 	if d < time.Minute {
@@ -92,4 +134,69 @@ func formatTokens(n int64) string {
 		return fmt.Sprintf("%.1fK", float64(n)/1000)
 	}
 	return fmt.Sprintf("%.1fM", float64(n)/1_000_000)
+}
+
+// formatTime renders a time as "2006-01-02 15:04". It accepts both
+// time.Time and *time.Time for template convenience.
+func formatTime(v any) string {
+	switch t := v.(type) {
+	case time.Time:
+		if t.IsZero() {
+			return "—"
+		}
+		return t.Format("2006-01-02 15:04")
+	case *time.Time:
+		if t == nil || t.IsZero() {
+			return "—"
+		}
+		return t.Format("2006-01-02 15:04")
+	default:
+		return "—"
+	}
+}
+
+// timeAgo renders a relative time string like "3h ago" or "2d ago".
+func timeAgo(t time.Time) string {
+	if t.IsZero() {
+		return "—"
+	}
+	d := time.Since(t)
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	default:
+		days := int(math.Round(d.Hours() / 24))
+		if days == 1 {
+			return "1d ago"
+		}
+		return fmt.Sprintf("%dd ago", days)
+	}
+}
+
+// truncate shortens a string to n characters, adding "..." if truncated.
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	if n <= 3 {
+		return s[:n]
+	}
+	return s[:n-3] + "..."
+}
+
+// joinStrings joins a string slice with the given separator.
+func joinStrings(ss []string, sep string) string {
+	return strings.Join(ss, sep)
+}
+
+// confidence formats a float64 (0-1) as a percentage string like "85%".
+func confidence(f float64) string {
+	if f <= 0 {
+		return "—"
+	}
+	return fmt.Sprintf("%.0f%%", f*100)
 }

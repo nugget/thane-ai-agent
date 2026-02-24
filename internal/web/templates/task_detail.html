@@ -1,0 +1,96 @@
+{{define "title"}}{{.BrandName}} - Task: {{.Task.Name}}{{end}}
+
+{{define "content"}}
+<div class="browser">
+    <div class="detail-header">
+        <a href="/tasks" class="detail-back" hx-get="/tasks" hx-target="#content" hx-push-url="true">&larr; Tasks</a>
+        <h1>{{.Task.Name}}</h1>
+        {{if .Task.Enabled}}<span class="badge badge-ok">enabled</span>
+        {{else}}<span class="badge badge-muted">disabled</span>
+        {{end}}
+    </div>
+
+    <div class="detail-grid">
+        <div class="card">
+            <h2>Schedule</h2>
+            <dl class="stat-list">
+                <dt>Kind</dt>
+                <dd>{{.Task.Schedule.Kind}}</dd>
+                {{if .Task.Schedule.At}}
+                <dt>At</dt>
+                <dd>{{formatTime .Task.Schedule.At}}</dd>
+                {{end}}
+                {{if .Task.Schedule.Every}}
+                <dt>Every</dt>
+                <dd>{{.Task.Schedule.Every}}</dd>
+                {{end}}
+                {{if .Task.Schedule.Cron}}
+                <dt>Cron</dt>
+                <dd class="mono">{{.Task.Schedule.Cron}}</dd>
+                {{end}}
+                {{if .Task.Schedule.Timezone}}
+                <dt>Timezone</dt>
+                <dd>{{.Task.Schedule.Timezone}}</dd>
+                {{end}}
+                <dt>Next Fire</dt>
+                <dd>{{.NextFire}}</dd>
+            </dl>
+        </div>
+
+        <div class="card">
+            <h2>Payload</h2>
+            <dl class="stat-list">
+                <dt>Kind</dt>
+                <dd>{{.Task.Payload.Kind}}</dd>
+                {{if .Task.Payload.Target}}
+                <dt>Target</dt>
+                <dd class="mono">{{.Task.Payload.Target}}</dd>
+                {{end}}
+                <dt>Created By</dt>
+                <dd class="mono">{{.Task.CreatedBy}}</dd>
+                <dt>Created</dt>
+                <dd>{{formatTime .Task.CreatedAt}}</dd>
+                <dt>Updated</dt>
+                <dd>{{formatTime .Task.UpdatedAt}}</dd>
+            </dl>
+        </div>
+    </div>
+
+    {{if .Executions}}
+    <div class="card">
+        <h2>Recent Executions</h2>
+        <div class="table-scroll">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Scheduled</th>
+                        <th>Started</th>
+                        <th>Completed</th>
+                        <th>Status</th>
+                        <th>Result</th>
+                    </tr>
+                </thead>
+                <tbody>
+                {{range .Executions}}
+                <tr>
+                    <td>{{formatTime .ScheduledAt}}</td>
+                    <td>{{if .StartedAt}}{{formatTime .StartedAt}}{{else}}—{{end}}</td>
+                    <td>{{if .CompletedAt}}{{formatTime .CompletedAt}}{{else}}—{{end}}</td>
+                    <td>
+                        {{if eq (printf "%s" .Status) "completed"}}<span class="badge badge-ok">completed</span>
+                        {{else if eq (printf "%s" .Status) "failed"}}<span class="badge badge-err">failed</span>
+                        {{else if eq (printf "%s" .Status) "running"}}<span class="badge badge-teal">running</span>
+                        {{else if eq (printf "%s" .Status) "skipped"}}<span class="badge badge-warn">skipped</span>
+                        {{else}}<span class="badge badge-muted">{{.Status}}</span>
+                        {{end}}
+                    </td>
+                    <td class="text-muted">{{if .Result}}{{truncate .Result 60}}{{else}}—{{end}}</td>
+                </tr>
+                {{end}}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {{end}}
+</div>
+{{end}}
