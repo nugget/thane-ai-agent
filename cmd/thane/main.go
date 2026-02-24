@@ -892,12 +892,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 			return fmt.Errorf("create forge manager: %w", err)
 		}
 
-		var tempResolver forge.TempFileResolver
-		if tfs := loop.Tools().TempFileStore(); tfs != nil {
-			tempResolver = tfs
-		}
-
-		forgeTools := forge.NewTools(forgeMgr, tempResolver, tools.ConversationIDFromContext, logger)
+		forgeTools := forge.NewTools(forgeMgr, logger)
 		loop.Tools().SetForgeTools(forgeTools)
 
 		logger.Info("forge enabled", "accounts", len(cfg.Forge.Accounts))
@@ -1021,6 +1016,18 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		logger.Info("temp file store enabled",
 			"base_dir", filepath.Join(cfg.Workspace.Path, ".tmp"),
 		)
+	}
+
+	// --- Universal content resolution ---
+	// Wire prefix-to-content resolution into the tool registry so that bare
+	// prefix references (temp:LABEL, kb:file.md, etc.) in any tool's string
+	// arguments are automatically replaced with file content before the
+	// handler runs. File tools opt out via SkipContentResolve (they need
+	// the path, not the content).
+	cr := tools.NewContentResolver(resolver, loop.Tools().TempFileStore(), logger)
+	if cr != nil {
+		loop.Tools().SetContentResolver(cr)
+		logger.Info("content resolver enabled for tool arguments")
 	}
 
 	// --- Usage recording ---

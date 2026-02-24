@@ -24,11 +24,12 @@ import (
 
 // Tool represents a callable tool.
 type Tool struct {
-	Name            string                                                         `json:"name"`
-	Description     string                                                         `json:"description"`
-	Parameters      map[string]any                                                 `json:"parameters"`
-	Handler         func(ctx context.Context, args map[string]any) (string, error) `json:"-"`
-	AlwaysAvailable bool                                                           `json:"-"` // Survives capability tag filtering.
+	Name               string                                                         `json:"name"`
+	Description        string                                                         `json:"description"`
+	Parameters         map[string]any                                                 `json:"parameters"`
+	Handler            func(ctx context.Context, args map[string]any) (string, error) `json:"-"`
+	AlwaysAvailable    bool                                                           `json:"-"` // Survives capability tag filtering.
+	SkipContentResolve bool                                                           `json:"-"` // Exempt from prefix-to-content resolution.
 }
 
 // Registry holds available tools.
@@ -47,6 +48,7 @@ type Registry struct {
 	watchlistStore    *watchlist.Store
 	tempFileStore     *TempFileStore
 	usageStore        *usage.Store
+	contentResolver   *ContentResolver
 }
 
 // NewEmptyRegistry creates an empty tool registry with no built-in tools.
@@ -140,6 +142,14 @@ func (r *Registry) TempFileStore() *TempFileStore {
 func (r *Registry) SetUsageStore(store *usage.Store) {
 	r.usageStore = store
 	r.registerCostSummary()
+}
+
+// SetContentResolver configures universal prefix-to-content resolution
+// for tool arguments. When set, string arguments matching a registered
+// prefix (temp:, kb:, scratchpad:, etc.) are replaced with file content
+// before the handler runs. Tools with SkipContentResolve=true are exempt.
+func (r *Registry) SetContentResolver(cr *ContentResolver) {
+	r.contentResolver = cr
 }
 
 func (r *Registry) registerTempFileTool() {
@@ -421,8 +431,9 @@ func (r *Registry) registerFileTools() {
 	}
 
 	r.Register(&Tool{
-		Name:        "file_read",
-		Description: "Read the contents of a file from the workspace. Use for accessing configuration, memory files, documentation, or any text file.",
+		Name:               "file_read",
+		SkipContentResolve: true,
+		Description:        "Read the contents of a file from the workspace. Use for accessing configuration, memory files, documentation, or any text file.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -456,8 +467,9 @@ func (r *Registry) registerFileTools() {
 	})
 
 	r.Register(&Tool{
-		Name:        "file_write",
-		Description: "Write content to a file in the workspace. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories.",
+		Name:               "file_write",
+		SkipContentResolve: true,
+		Description:        "Write content to a file in the workspace. Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -483,8 +495,9 @@ func (r *Registry) registerFileTools() {
 	})
 
 	r.Register(&Tool{
-		Name:        "file_edit",
-		Description: "Edit a file by replacing exact text. The old text must match exactly (including whitespace). Use this for precise, surgical edits.",
+		Name:               "file_edit",
+		SkipContentResolve: true,
+		Description:        "Edit a file by replacing exact text. The old text must match exactly (including whitespace). Use this for precise, surgical edits.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -515,8 +528,9 @@ func (r *Registry) registerFileTools() {
 	})
 
 	r.Register(&Tool{
-		Name:        "file_list",
-		Description: "List files and directories in a workspace path.",
+		Name:               "file_list",
+		SkipContentResolve: true,
+		Description:        "List files and directories in a workspace path.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -544,8 +558,9 @@ func (r *Registry) registerFileTools() {
 	})
 
 	r.Register(&Tool{
-		Name:        "file_search",
-		Description: "Search for files by name using glob patterns. Recursively searches a directory tree and returns matching file paths. Useful for finding configuration files, specific file types, or files with certain naming patterns.",
+		Name:               "file_search",
+		SkipContentResolve: true,
+		Description:        "Search for files by name using glob patterns. Recursively searches a directory tree and returns matching file paths. Useful for finding configuration files, specific file types, or files with certain naming patterns.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -579,8 +594,9 @@ func (r *Registry) registerFileTools() {
 	})
 
 	r.Register(&Tool{
-		Name:        "file_grep",
-		Description: "Search file contents for a regular expression pattern. Recursively searches files and returns matching lines with file paths and line numbers. Skips binary files and files larger than 1MB.",
+		Name:               "file_grep",
+		SkipContentResolve: true,
+		Description:        "Search file contents for a regular expression pattern. Recursively searches files and returns matching lines with file paths and line numbers. Skips binary files and files larger than 1MB.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -622,8 +638,9 @@ func (r *Registry) registerFileTools() {
 	})
 
 	r.Register(&Tool{
-		Name:        "file_stat",
-		Description: "Get detailed information about one or more files or directories. Returns type, size, permissions, and modification time. Supports batch queries with comma-separated paths.",
+		Name:               "file_stat",
+		SkipContentResolve: true,
+		Description:        "Get detailed information about one or more files or directories. Returns type, size, permissions, and modification time. Supports batch queries with comma-separated paths.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -641,8 +658,9 @@ func (r *Registry) registerFileTools() {
 	})
 
 	r.Register(&Tool{
-		Name:        "file_tree",
-		Description: "Display a directory tree structure with indentation. Shows the hierarchy of files and directories with a summary count. Useful for understanding project layout.",
+		Name:               "file_tree",
+		SkipContentResolve: true,
+		Description:        "Display a directory tree structure with indentation. Shows the hierarchy of files and directories with a summary count. Useful for understanding project layout.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -952,7 +970,10 @@ func (r *Registry) AllToolNames() []string {
 // Tools not found in the source are silently skipped. The returned
 // registry shares tool handlers with the source but has its own map.
 func (r *Registry) FilteredCopy(names []string) *Registry {
-	filtered := &Registry{tools: make(map[string]*Tool, len(names))}
+	filtered := &Registry{
+		tools:           make(map[string]*Tool, len(names)),
+		contentResolver: r.contentResolver,
+	}
 	for _, name := range names {
 		if t := r.tools[name]; t != nil {
 			filtered.tools[name] = t
@@ -968,7 +989,10 @@ func (r *Registry) FilteredCopyExcluding(exclude []string) *Registry {
 	for _, name := range exclude {
 		skip[name] = true
 	}
-	filtered := &Registry{tools: make(map[string]*Tool, len(r.tools))}
+	filtered := &Registry{
+		tools:           make(map[string]*Tool, len(r.tools)),
+		contentResolver: r.contentResolver,
+	}
 	for name, t := range r.tools {
 		if !skip[name] {
 			filtered.tools[name] = t
@@ -995,7 +1019,10 @@ func (r *Registry) SetTagIndex(tags map[string][]string) {
 func (r *Registry) FilterByTags(tags []string) *Registry {
 	if len(tags) == 0 || r.tagIndex == nil {
 		// No filtering — return a shallow copy with all tools.
-		filtered := &Registry{tools: make(map[string]*Tool, len(r.tools))}
+		filtered := &Registry{
+			tools:           make(map[string]*Tool, len(r.tools)),
+			contentResolver: r.contentResolver,
+		}
 		for name, t := range r.tools {
 			filtered.tools[name] = t
 		}
@@ -1009,7 +1036,10 @@ func (r *Registry) FilterByTags(tags []string) *Registry {
 		}
 	}
 
-	filtered := &Registry{tools: make(map[string]*Tool, len(allowed))}
+	filtered := &Registry{
+		tools:           make(map[string]*Tool, len(allowed)),
+		contentResolver: r.contentResolver,
+	}
 	for name, t := range r.tools {
 		if allowed[name] || t.AlwaysAvailable {
 			filtered.tools[name] = t
@@ -1039,6 +1069,13 @@ func (r *Registry) Execute(ctx context.Context, name string, argsJSON string) (s
 		if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 			return "", fmt.Errorf("invalid arguments: %w", err)
 		}
+	}
+
+	// Universal prefix-to-content resolution. Bare prefix references
+	// (temp:LABEL, kb:file.md, etc.) in string arguments are replaced
+	// with the file's content before the handler runs.
+	if !tool.SkipContentResolve && r.contentResolver != nil && args != nil {
+		r.contentResolver.ResolveArgs(ctx, args)
 	}
 
 	return tool.Handler(ctx, args)
