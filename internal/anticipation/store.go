@@ -174,7 +174,7 @@ func (s *Store) Active() ([]*Anticipation, error) {
 	rows, err := s.db.Query(`
 		SELECT id, description, context, trigger_json, metadata_json, context_entities_json,
 			recurring, cooldown_seconds, model, local_only, quality_floor,
-			created_at, expires_at, last_fired_at
+			created_at, expires_at, resolved_at, last_fired_at
 		FROM anticipations
 		WHERE resolved_at IS NULL
 		  AND deleted_at IS NULL
@@ -186,7 +186,7 @@ func (s *Store) Active() ([]*Anticipation, error) {
 	}
 	defer rows.Close()
 
-	return s.scanAnticipations(rows)
+	return s.scanRows(rows)
 }
 
 // All returns all non-deleted anticipations, including resolved and expired.
@@ -205,13 +205,12 @@ func (s *Store) All() ([]*Anticipation, error) {
 	}
 	defer rows.Close()
 
-	return s.scanAnticipationsWithResolved(rows)
+	return s.scanRows(rows)
 }
 
-// scanAnticipationsWithResolved scans rows that include the resolved_at column.
-// This is separate from scanAnticipations because Active() deliberately omits
-// resolved_at from its SELECT (it only returns non-resolved rows).
-func (s *Store) scanAnticipationsWithResolved(rows *sql.Rows) ([]*Anticipation, error) {
+// scanRows scans anticipation rows that include the resolved_at column.
+// All SELECT queries include the same column set for consistency.
+func (s *Store) scanRows(rows *sql.Rows) ([]*Anticipation, error) {
 	var result []*Anticipation
 	for rows.Next() {
 		a := &Anticipation{}
@@ -364,47 +363,6 @@ func (s *Store) OnCooldown(id string, globalDefault time.Duration) (bool, error)
 		cooldown = time.Duration(cooldownSec) * time.Second
 	}
 	return time.Since(lastFired.Time) < cooldown, nil
-}
-
-func (s *Store) scanAnticipations(rows *sql.Rows) ([]*Anticipation, error) {
-	var result []*Anticipation
-	for rows.Next() {
-		a := &Anticipation{}
-		var triggerJSON, metadataJSON, contextEntitiesJSON sql.NullString
-		var localOnly sql.NullInt64
-		var expiresAt, lastFiredAt sql.NullTime
-
-		err := rows.Scan(&a.ID, &a.Description, &a.Context, &triggerJSON, &metadataJSON,
-			&contextEntitiesJSON, &a.Recurring, &a.CooldownSeconds,
-			&a.Model, &localOnly, &a.QualityFloor,
-			&a.CreatedAt, &expiresAt, &lastFiredAt)
-		if err != nil {
-			return nil, err
-		}
-
-		if triggerJSON.Valid {
-			_ = json.Unmarshal([]byte(triggerJSON.String), &a.Trigger)
-		}
-		if metadataJSON.Valid && metadataJSON.String != "" {
-			_ = json.Unmarshal([]byte(metadataJSON.String), &a.Metadata)
-		}
-		if contextEntitiesJSON.Valid && contextEntitiesJSON.String != "" {
-			_ = json.Unmarshal([]byte(contextEntitiesJSON.String), &a.ContextEntities)
-		}
-		if localOnly.Valid {
-			v := localOnly.Int64 != 0
-			a.LocalOnly = &v
-		}
-		if expiresAt.Valid {
-			a.ExpiresAt = &expiresAt.Time
-		}
-		if lastFiredAt.Valid {
-			a.LastFiredAt = &lastFiredAt.Time
-		}
-
-		result = append(result, a)
-	}
-	return result, rows.Err()
 }
 
 // WakeContext represents the current state when the agent wakes.

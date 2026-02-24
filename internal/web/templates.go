@@ -177,15 +177,16 @@ func timeAgo(t time.Time) string {
 	}
 }
 
-// truncate shortens a string to n characters, adding "..." if truncated.
+// truncate shortens a string to n runes, adding "..." if truncated.
 func truncate(s string, n int) string {
-	if len(s) <= n {
+	runes := []rune(s)
+	if len(runes) <= n {
 		return s
 	}
 	if n <= 3 {
-		return s[:n]
+		return string(runes[:n])
 	}
-	return s[:n-3] + "..."
+	return string(runes[:n-3]) + "..."
 }
 
 // joinStrings joins a string slice with the given separator.

@@ -76,6 +76,8 @@ func (s *WebServer) handleTasks(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Fetch last execution for status badge.
+		// N+1: issues one query per task. Fine for small counts but should
+		// be replaced with a batch query if the task list grows large.
 		execs, err := s.taskStore.GetTaskExecutions(t.ID, 1)
 		if err == nil && len(execs) > 0 {
 			row.LastExecStatus = string(execs[0].Status)

@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"github.com/google/uuid"
+	"github.com/nugget/thane-ai-agent/internal/contacts"
 )
 
 // ContactsData is the template context for the contacts list page.
@@ -62,81 +63,43 @@ func (s *WebServer) handleContacts(w http.ResponseWriter, r *http.Request) {
 		Kind:      kind,
 	}
 
-	var err error
+	var (
+		cc  []*contacts.Contact
+		err error
+	)
+
 	switch {
 	case query != "":
-		contacts, searchErr := s.contactStore.Search(query)
-		if searchErr != nil {
-			s.logger.Error("contact search failed", "query", query, "error", searchErr)
+		cc, err = s.contactStore.Search(query)
+		if err != nil {
+			s.logger.Error("contact search failed", "query", query, "error", err)
 			http.Error(w, "search failed", http.StatusInternalServerError)
 			return
 		}
-		for _, c := range contacts {
-			data.Contacts = append(data.Contacts, &contactRow{
-				ID:              c.ID,
-				Name:            c.Name,
-				Kind:            c.Kind,
-				TrustZone:       c.TrustZone,
-				Relationship:    c.Relationship,
-				Summary:         c.Summary,
-				LastInteraction: timeAgo(c.LastInteraction),
-			})
-		}
 	case trustZone != "":
-		contacts, tzErr := s.contactStore.FindByTrustZone(trustZone)
-		if tzErr != nil {
-			s.logger.Error("contact trust zone filter failed", "trust_zone", trustZone, "error", tzErr)
+		cc, err = s.contactStore.FindByTrustZone(trustZone)
+		if err != nil {
+			s.logger.Error("contact trust zone filter failed", "trust_zone", trustZone, "error", err)
 			http.Error(w, "filter failed", http.StatusInternalServerError)
 			return
-		}
-		for _, c := range contacts {
-			data.Contacts = append(data.Contacts, &contactRow{
-				ID:              c.ID,
-				Name:            c.Name,
-				Kind:            c.Kind,
-				TrustZone:       c.TrustZone,
-				Relationship:    c.Relationship,
-				Summary:         c.Summary,
-				LastInteraction: timeAgo(c.LastInteraction),
-			})
 		}
 	case kind != "":
-		contacts, kindErr := s.contactStore.ListByKind(kind)
-		if kindErr != nil {
-			s.logger.Error("contact kind filter failed", "kind", kind, "error", kindErr)
+		cc, err = s.contactStore.ListByKind(kind)
+		if err != nil {
+			s.logger.Error("contact kind filter failed", "kind", kind, "error", err)
 			http.Error(w, "filter failed", http.StatusInternalServerError)
 			return
 		}
-		for _, c := range contacts {
-			data.Contacts = append(data.Contacts, &contactRow{
-				ID:              c.ID,
-				Name:            c.Name,
-				Kind:            c.Kind,
-				TrustZone:       c.TrustZone,
-				Relationship:    c.Relationship,
-				Summary:         c.Summary,
-				LastInteraction: timeAgo(c.LastInteraction),
-			})
-		}
 	default:
-		contacts, listErr := s.contactStore.ListAll()
-		if listErr != nil {
-			s.logger.Error("contact list failed", "error", listErr)
+		cc, err = s.contactStore.ListAll()
+		if err != nil {
+			s.logger.Error("contact list failed", "error", err)
 			http.Error(w, "list failed", http.StatusInternalServerError)
 			return
 		}
-		for _, c := range contacts {
-			data.Contacts = append(data.Contacts, &contactRow{
-				ID:              c.ID,
-				Name:            c.Name,
-				Kind:            c.Kind,
-				TrustZone:       c.TrustZone,
-				Relationship:    c.Relationship,
-				Summary:         c.Summary,
-				LastInteraction: timeAgo(c.LastInteraction),
-			})
-		}
 	}
+
+	data.Contacts = contactsToRows(cc)
 
 	// For htmx table-body-only updates, render just the rows.
 	if r.Header.Get("HX-Request") == "true" && r.Header.Get("HX-Target") == "contacts-tbody" {
@@ -145,8 +108,23 @@ func (s *WebServer) handleContacts(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	_ = err
 	s.render(w, r, "contacts.html", data)
+}
+
+func contactsToRows(cc []*contacts.Contact) []*contactRow {
+	rows := make([]*contactRow, 0, len(cc))
+	for _, c := range cc {
+		rows = append(rows, &contactRow{
+			ID:              c.ID,
+			Name:            c.Name,
+			Kind:            c.Kind,
+			TrustZone:       c.TrustZone,
+			Relationship:    c.Relationship,
+			Summary:         c.Summary,
+			LastInteraction: timeAgo(c.LastInteraction),
+		})
+	}
+	return rows
 }
 
 // handleContactDetail renders the detail view for a single contact.
