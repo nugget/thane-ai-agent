@@ -88,6 +88,194 @@ func TestChunkTranscript(t *testing.T) {
 	}
 }
 
+func TestChunkTranscript_SentenceFallback(t *testing.T) {
+	// Dense transcript with no paragraph breaks but clear sentence boundaries.
+	// Each sentence is ~50 chars. With targetSize=100, paragraph splitting
+	// produces 1 oversized chunk (~250 chars, > 2×100), triggering sentence
+	// fallback which should produce ~3 chunks.
+	transcript := "The quick brown fox jumped over the lazy dog. " +
+		"A second sentence follows the first one here. " +
+		"Third sentence has some more content to read. " +
+		"Fourth sentence completes the dense transcript. " +
+		"Final sentence wraps up the whole thing here."
+
+	chunks := chunkTranscript(transcript, 100)
+	if len(chunks) < 2 {
+		t.Fatalf("expected multiple chunks from sentence fallback, got %d: %v", len(chunks), chunks)
+	}
+	for i, c := range chunks {
+		if len(c) > 200 { // 2x target
+			t.Errorf("chunk[%d] len=%d exceeds 2x target (200)", i, len(c))
+		}
+	}
+	// Verify no content lost.
+	joined := strings.Join(chunks, " ")
+	if !strings.Contains(joined, "quick brown fox") {
+		t.Error("sentence fallback lost content from beginning")
+	}
+	if !strings.Contains(joined, "wraps up") {
+		t.Error("sentence fallback lost content from end")
+	}
+}
+
+func TestChunkTranscript_WordFallback(t *testing.T) {
+	// Transcript with no paragraph breaks and no sentence boundaries
+	// (no period/question/exclamation followed by uppercase).
+	// Word splitting should produce multiple chunks.
+	words := make([]string, 100)
+	for i := range words {
+		words[i] = "word"
+	}
+	transcript := strings.Join(words, " ") // 100 words × 5 chars = ~499 chars
+
+	chunks := chunkTranscript(transcript, 50)
+	if len(chunks) < 2 {
+		t.Fatalf("expected multiple chunks from word fallback, got %d", len(chunks))
+	}
+	for i, c := range chunks {
+		if len(c) > 100 { // 2x target
+			t.Errorf("chunk[%d] len=%d exceeds 2x target (100)", i, len(c))
+		}
+	}
+}
+
+func TestChunkTranscript_DenseTranscript(t *testing.T) {
+	// Integration: simulate a 50K char dense transcript with no paragraph
+	// breaks. chunkTranscript must produce multiple chunks, none > 2×5000.
+	sentence := "This is a typical transcript sentence from a video. "
+	repeats := 50000 / len(sentence)
+	transcript := strings.Repeat(sentence, repeats)
+
+	chunks := chunkTranscript(transcript, 5000)
+	if len(chunks) < 2 {
+		t.Fatalf("50K dense transcript should produce multiple chunks, got %d", len(chunks))
+	}
+	for i, c := range chunks {
+		if len(c) > 10000 {
+			t.Errorf("chunk[%d] len=%d exceeds 2x default target (10000)", i, len(c))
+		}
+	}
+	// Verify total content is preserved (within whitespace normalization).
+	totalLen := 0
+	for _, c := range chunks {
+		totalLen += len(c)
+	}
+	// Account for spaces between chunks that become intra-chunk spaces.
+	if totalLen < len(transcript)/2 {
+		t.Errorf("chunks total %d chars, expected close to %d", totalLen, len(transcript))
+	}
+}
+
+func TestSplitOnSentences(t *testing.T) {
+	tests := []struct {
+		name       string
+		transcript string
+		targetSize int
+		wantMin    int // minimum expected chunks
+		wantMax    int // maximum expected chunks
+	}{
+		{
+			name:       "no sentence boundaries",
+			transcript: "just some words without any ending punctuation",
+			targetSize: 100,
+			wantMin:    1,
+			wantMax:    1,
+		},
+		{
+			name:       "period boundary",
+			transcript: "First sentence here. Second sentence here.",
+			targetSize: 25,
+			wantMin:    2,
+			wantMax:    2,
+		},
+		{
+			name:       "question mark boundary",
+			transcript: "What is this? Another sentence follows.",
+			targetSize: 20,
+			wantMin:    2,
+			wantMax:    2,
+		},
+		{
+			name:       "exclamation boundary",
+			transcript: "Wow that is great! Next sentence here.",
+			targetSize: 25,
+			wantMin:    2,
+			wantMax:    2,
+		},
+		{
+			name:       "multiple sentences accumulate",
+			transcript: "One. Two. Three. Four. Five.",
+			targetSize: 100,
+			wantMin:    1,
+			wantMax:    1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			chunks := splitOnSentences(tt.transcript, tt.targetSize)
+			if len(chunks) < tt.wantMin || len(chunks) > tt.wantMax {
+				t.Errorf("got %d chunks, want %d-%d; chunks: %v",
+					len(chunks), tt.wantMin, tt.wantMax, chunks)
+			}
+		})
+	}
+}
+
+func TestSplitOnWords(t *testing.T) {
+	tests := []struct {
+		name       string
+		transcript string
+		targetSize int
+		wantCount  int
+	}{
+		{
+			name:       "empty input",
+			transcript: "   ",
+			targetSize: 100,
+			wantCount:  0,
+		},
+		{
+			name:       "single word",
+			transcript: "hello",
+			targetSize: 100,
+			wantCount:  1,
+		},
+		{
+			name:       "words fit in one chunk",
+			transcript: "hello world foo bar",
+			targetSize: 100,
+			wantCount:  1,
+		},
+		{
+			name:       "words split across chunks",
+			transcript: "aaa bbb ccc ddd eee",
+			targetSize: 8,
+			wantCount:  3, // "aaa bbb"=7, "ccc ddd"=7, "eee"=3
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			chunks := splitOnWords(tt.transcript, tt.targetSize)
+			if len(chunks) != tt.wantCount {
+				t.Fatalf("got %d chunks, want %d; chunks: %v",
+					len(chunks), tt.wantCount, chunks)
+			}
+			// Verify no chunk exceeds target (unless single word).
+			for i, c := range chunks {
+				if len(c) > tt.targetSize && !strings.Contains(c, " ") {
+					continue // single oversized word is OK
+				}
+				if len(c) > tt.targetSize {
+					t.Errorf("chunk[%d] len=%d exceeds target %d: %q",
+						i, len(c), tt.targetSize, c)
+				}
+			}
+		})
+	}
+}
+
 func TestChunkTranscript_PreservesOrder(t *testing.T) {
 	transcript := "Para1\n\nPara2\n\nPara3\n\nPara4\n\nPara5"
 	chunks := chunkTranscript(transcript, 10)
