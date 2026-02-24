@@ -24,6 +24,12 @@ const (
 	// scheduled task. When it fires, the poller checks IMAP accounts
 	// for new messages and wakes the agent only if something arrived.
 	emailPollTaskName = "email_poll"
+
+	// mediaFeedPollTaskName is the well-known name for the media feed
+	// polling scheduled task. When it fires, the poller checks all
+	// followed RSS/Atom feeds for new entries and wakes the agent only
+	// if new content was detected.
+	mediaFeedPollTaskName = "media_feed_poll"
 )
 
 // agentRunner abstracts the agent loop for task execution testing.
@@ -37,14 +43,21 @@ type emailChecker interface {
 	CheckNewMessages(ctx context.Context) (string, error)
 }
 
+// feedChecker abstracts media feed polling for task execution testing.
+// Implemented by *media.FeedPoller.
+type feedChecker interface {
+	CheckFeeds(ctx context.Context) (string, error)
+}
+
 // taskExecDeps holds all dependencies needed by the scheduled task
 // executor. Using a struct avoids a growing parameter list as more
 // task types are added.
 type taskExecDeps struct {
-	runner        agentRunner
-	logger        *slog.Logger
-	workspacePath string
-	emailPoller   emailChecker // nil when email polling is not configured
+	runner          agentRunner
+	logger          *slog.Logger
+	workspacePath   string
+	emailPoller     emailChecker // nil when email polling is not configured
+	mediaFeedPoller feedChecker  // nil when feed polling is not configured
 }
 
 // runScheduledTask handles execution of a scheduled task by dispatching
@@ -52,8 +65,9 @@ type taskExecDeps struct {
 // logged and silently ignored (returning nil, not an error).
 //
 // For email_poll tasks, the poller checks IMAP accounts for new messages
-// and only wakes the agent if something new arrived — avoiding LLM token
-// spend on empty poll cycles.
+// and only wakes the agent if something new arrived. For media_feed_poll
+// tasks, the poller checks RSS/Atom feeds for new entries. Both avoid
+// LLM token spend on empty poll cycles.
 func runScheduledTask(ctx context.Context, task *scheduler.Task, exec *scheduler.Execution, deps taskExecDeps) error {
 	deps.logger.Debug("task executing",
 		"task_id", task.ID,
@@ -83,6 +97,20 @@ func runScheduledTask(ctx context.Context, task *scheduler.Task, exec *scheduler
 			return nil // nothing new, skip the LLM wake
 		}
 		msg = prompts.EmailPollWakePrompt(wakeMsg)
+	}
+
+	// Media feed poll: check RSS/Atom feeds and only wake if new content found.
+	if task.Name == mediaFeedPollTaskName && deps.mediaFeedPoller != nil {
+		wakeMsg, err := deps.mediaFeedPoller.CheckFeeds(ctx)
+		if err != nil {
+			deps.logger.Warn("media feed poll failed", "error", err)
+			return nil // best-effort — next cycle will catch up
+		}
+		if wakeMsg == "" {
+			exec.Result = "no new content"
+			return nil // nothing new, skip the LLM wake
+		}
+		msg = prompts.MediaFeedPollWakePrompt(wakeMsg)
 	}
 
 	// Context injection for periodic_reflection: read ego.md and build
