@@ -164,6 +164,13 @@ type Config struct {
 	// channel-pinned configuration.
 	CapabilityTags map[string]CapabilityTagConfig `yaml:"capability_tags"`
 
+	// ChannelTags maps conversation source channels (e.g., "signal",
+	// "email") to lists of capability tag names that are automatically
+	// activated when a message arrives on that channel. This is
+	// additive to always-active tags and any tags the agent requests
+	// at runtime. Tag names must reference entries in [CapabilityTags].
+	ChannelTags map[string][]string `yaml:"channel_tags"`
+
 	// MCP configures external MCP (Model Context Protocol) server
 	// connections for tool discovery. Each server provides additional
 	// tools that are discovered dynamically and bridged into the
@@ -1219,6 +1226,13 @@ func (c *Config) Validate() error {
 	for tagName, tagCfg := range c.CapabilityTags {
 		if err := tagCfg.Validate(tagName); err != nil {
 			return err
+		}
+	}
+	for channel, tagNames := range c.ChannelTags {
+		for _, tagName := range tagNames {
+			if _, ok := c.CapabilityTags[tagName]; !ok {
+				return fmt.Errorf("channel_tags.%s references undefined capability tag %q", channel, tagName)
+			}
 		}
 	}
 	if c.Episodic.LookbackDays < 0 {

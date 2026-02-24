@@ -454,6 +454,55 @@ func TestValidate_CapabilityTagContextNoTools(t *testing.T) {
 	}
 }
 
+func TestValidate_ChannelTagsUndefinedTag(t *testing.T) {
+	cfg := Default()
+	cfg.CapabilityTags = map[string]CapabilityTagConfig{
+		"signal": {Description: "Signal messaging", Tools: []string{"signal_send_reaction"}},
+	}
+	cfg.ChannelTags = map[string][]string{
+		"signal": {"signal", "nonexistent"},
+	}
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected validation error for undefined capability tag reference")
+	}
+	if !strings.Contains(err.Error(), "channel_tags.signal") || !strings.Contains(err.Error(), "nonexistent") {
+		t.Errorf("error should mention channel_tags.signal and nonexistent, got: %v", err)
+	}
+}
+
+func TestValidate_ChannelTagsValid(t *testing.T) {
+	cfg := Default()
+	cfg.CapabilityTags = map[string]CapabilityTagConfig{
+		"signal": {Description: "Signal messaging", Tools: []string{"signal_send_reaction"}},
+		"email":  {Description: "Email tools", Tools: []string{"email_send"}},
+	}
+	cfg.ChannelTags = map[string][]string{
+		"signal": {"signal"},
+		"email":  {"email"},
+		"web":    {},
+	}
+
+	err := cfg.Validate()
+	if err != nil {
+		t.Fatalf("unexpected validation error: %v", err)
+	}
+}
+
+func TestValidate_ChannelTagsEmptyIsValid(t *testing.T) {
+	cfg := Default()
+	cfg.CapabilityTags = map[string]CapabilityTagConfig{
+		"ha": {Description: "Home Assistant", Tools: []string{"get_state"}},
+	}
+	// ChannelTags left nil
+
+	err := cfg.Validate()
+	if err != nil {
+		t.Fatalf("unexpected validation error with nil ChannelTags: %v", err)
+	}
+}
+
 func TestApplyDefaults_SignalRateLimit(t *testing.T) {
 	cfg := Default()
 	// Zero means unlimited — no default override so users can disable
