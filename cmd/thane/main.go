@@ -1522,6 +1522,11 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		)
 	}
 
+	if len(cfg.ChannelTags) > 0 {
+		loop.SetChannelTags(cfg.ChannelTags)
+		logger.Info("channel tags configured", "channels", len(cfg.ChannelTags))
+	}
+
 	// --- Context providers ---
 	// Dynamic system prompt injection. Providers add context based on
 	// current state (e.g., pending anticipations) before each LLM call.

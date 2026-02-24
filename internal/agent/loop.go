@@ -172,6 +172,7 @@ type Loop struct {
 	capTags       map[string]config.CapabilityTagConfig // tag definitions from config
 	activeTags    map[string]bool                       // currently active tags (see scoping note above)
 	parsedTalents []talents.Talent                      // pre-loaded talent structs for tag filtering
+	channelTags   map[string][]string                   // channel name → tag names (auto-activated per Run)
 
 	// haInject resolves <!-- ha-inject: ... --> directives in tag context files.
 	haInject homeassistant.StateFetcher
@@ -283,6 +284,16 @@ func (l *Loop) SetCapabilityTags(capTags map[string]config.CapabilityTagConfig, 
 func (l *Loop) SetUsageRecorder(store *usage.Store, pricing map[string]config.PricingEntry) {
 	l.usageStore = store
 	l.pricing = pricing
+}
+
+// SetChannelTags configures channel-pinned tag activation. When a
+// Run() request carries a "source" hint matching a key in channelTags,
+// the listed capability tags are activated for that run in addition to
+// any always-active or agent-requested tags. Tags are merged
+// non-destructively — the persistent activeTags set is restored after
+// each Run() call.
+func (l *Loop) SetChannelTags(ct map[string][]string) {
+	l.channelTags = ct
 }
 
 // SetHAInject configures the HA entity state resolver for tag context
@@ -793,6 +804,36 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			OutputTokens: llmResp.OutputTokens,
 		}, nil
 	}
+
+	// Activate channel-pinned tags for this Run() call. Look up the
+	// request's source channel and merge matching capability tags into
+	// activeTags. Only tags that weren't already active are tracked,
+	// and they are removed on return to prevent cross-channel bleed.
+	// Run() is single-threaded, so direct map mutation is safe.
+	var channelActivatedTags []string
+	if l.channelTags != nil && l.activeTags != nil {
+		if source := req.Hints["source"]; source != "" {
+			if pinnedTags, ok := l.channelTags[source]; ok {
+				for _, tag := range pinnedTags {
+					if !l.activeTags[tag] {
+						l.activeTags[tag] = true
+						channelActivatedTags = append(channelActivatedTags, tag)
+					}
+				}
+				if len(channelActivatedTags) > 0 {
+					log.Info("channel tags activated",
+						"source", source,
+						"pinned_tags", channelActivatedTags,
+					)
+				}
+			}
+		}
+	}
+	defer func() {
+		for _, tag := range channelActivatedTags {
+			delete(l.activeTags, tag)
+		}
+	}()
 
 	// Build messages for LLM. Enrich ctx with conversation ID so that
 	// context providers (e.g. working memory) can scope their output.
