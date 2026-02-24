@@ -306,43 +306,52 @@ func TestBuildQuery(t *testing.T) {
 	p := NewArchiveContextProvider(nil, 3, 4000, nil)
 
 	tests := []struct {
-		name     string
-		subjects []string
-		message  string
-		want     string
+		name       string
+		subjects   []string
+		message    string
+		wantQuery  string
+		wantSource string
 	}{
 		{
-			name:     "subjects_only",
-			subjects: []string{"entity:light.office", "zone:kitchen"},
-			want:     "light.office kitchen",
+			name:       "subjects_only",
+			subjects:   []string{"entity:light.office", "zone:kitchen"},
+			wantQuery:  "light.office kitchen",
+			wantSource: "subjects",
 		},
 		{
-			name:    "message_fallback",
-			message: "check the heater",
-			want:    "check the heater",
+			name:       "message_fallback",
+			message:    "check the heater",
+			wantQuery:  "check the heater",
+			wantSource: "message_fallback",
 		},
 		{
-			name:     "subjects_take_priority",
-			subjects: []string{"entity:heater"},
-			message:  "check the heater",
-			want:     "heater",
+			name:       "subjects_take_priority",
+			subjects:   []string{"entity:heater"},
+			message:    "check the heater",
+			wantQuery:  "heater",
+			wantSource: "subjects",
 		},
 		{
-			name: "empty_everything",
-			want: "",
+			name:       "empty_everything",
+			wantQuery:  "",
+			wantSource: "",
 		},
 		{
-			name:     "no_prefix_subject",
-			subjects: []string{"bare_subject"},
-			want:     "bare_subject",
+			name:       "no_prefix_subject",
+			subjects:   []string{"bare_subject"},
+			wantQuery:  "bare_subject",
+			wantSource: "subjects",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := p.buildQuery(tt.subjects, tt.message)
-			if got != tt.want {
-				t.Errorf("buildQuery() = %q, want %q", got, tt.want)
+			gotQuery, gotSource := p.buildQuery(tt.subjects, tt.message)
+			if gotQuery != tt.wantQuery {
+				t.Errorf("buildQuery() query = %q, want %q", gotQuery, tt.wantQuery)
+			}
+			if gotSource != tt.wantSource {
+				t.Errorf("buildQuery() source = %q, want %q", gotSource, tt.wantSource)
 			}
 		})
 	}

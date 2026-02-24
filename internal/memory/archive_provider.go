@@ -55,33 +55,58 @@ func NewArchiveContextProvider(store ArchiveSearcher, maxResults, maxBytes int, 
 func (p *ArchiveContextProvider) GetContext(ctx context.Context, userMessage string) (string, error) {
 	subjects := facts.SubjectsFromContext(ctx)
 
-	query := p.buildQuery(subjects, userMessage)
+	query, querySource := p.buildQuery(subjects, userMessage)
 	if query == "" {
+		p.logger.Debug("archive pre-warm: no searchable query",
+			"subjects_count", len(subjects),
+			"message_len", len(userMessage),
+		)
 		return "", nil
 	}
 
+	p.logger.Debug("archive pre-warm: query constructed",
+		"subjects", subjects,
+		"query", query,
+		"source", querySource,
+	)
+
+	start := time.Now()
 	results, err := p.store.Search(SearchOptions{
 		Query: query,
 		Limit: p.maxResults,
 	})
+	elapsed := time.Since(start)
+
 	if err != nil {
 		p.logger.Warn("archive pre-warm search failed",
 			"query", query,
 			"error", err,
-		)
-		return "", nil
-	}
-	if len(results) == 0 {
-		p.logger.Debug("archive pre-warm: no results",
-			"query", query,
+			"took_ms", elapsed.Milliseconds(),
 		)
 		return "", nil
 	}
 
-	p.logger.Debug("archive pre-warm: injecting results",
+	p.logger.Debug("archive pre-warm: search completed",
 		"query", query,
 		"results", len(results),
+		"took_ms", elapsed.Milliseconds(),
 	)
+
+	if len(results) == 0 {
+		return "", nil
+	}
+
+	for i, r := range results {
+		p.logger.Debug("archive pre-warm: result",
+			"index", i,
+			"session_id", r.SessionID,
+			"match_role", r.Match.Role,
+			"match_preview", truncateContent(r.Match.Content),
+			"context_before", len(r.ContextBefore),
+			"context_after", len(r.ContextAfter),
+		)
+	}
+
 	return p.formatResults(results), nil
 }
 
@@ -92,7 +117,10 @@ const maxUserMessageLen = 100
 // buildQuery constructs a search query from subjects and/or the user
 // message. Subject prefixes (entity:, zone:, etc.) are stripped to
 // leave raw identifiers that match conversational references.
-func (p *ArchiveContextProvider) buildQuery(subjects []string, userMessage string) string {
+//
+// Returns the query string and a source label ("subjects" or
+// "message_fallback") for logging.
+func (p *ArchiveContextProvider) buildQuery(subjects []string, userMessage string) (string, string) {
 	seen := make(map[string]bool)
 	var terms []string
 
@@ -104,17 +132,21 @@ func (p *ArchiveContextProvider) buildQuery(subjects []string, userMessage strin
 		}
 	}
 
+	if len(terms) > 0 {
+		return strings.Join(terms, " "), "subjects"
+	}
+
 	// Fall back to user message when no subjects are available.
 	// Only use short, single-line messages — long content produces
 	// noisy queries.
-	if len(terms) == 0 && userMessage != "" {
+	if userMessage != "" {
 		msg := strings.TrimSpace(userMessage)
 		if len(msg) <= maxUserMessageLen && !strings.ContainsAny(msg, "\n\r") {
-			return msg
+			return msg, "message_fallback"
 		}
 	}
 
-	return strings.Join(terms, " ")
+	return "", ""
 }
 
 // stripSubjectPrefix removes the type prefix from a subject string.
@@ -149,6 +181,12 @@ func (p *ArchiveContextProvider) formatResults(results []SearchResult) string {
 		// append a truncation notice only if that itself fits.
 		if sb.Len()+block.Len() > p.maxBytes {
 			remaining := len(results) - included
+			p.logger.Debug("archive pre-warm: byte budget truncation",
+				"included", included,
+				"total", len(results),
+				"budget", p.maxBytes,
+				"used", sb.Len(),
+			)
 			truncationMsg := fmt.Sprintf(
 				"*(%d additional result(s) omitted — byte budget reached)*\n",
 				remaining,
