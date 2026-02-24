@@ -1073,9 +1073,13 @@ func (r *Registry) Execute(ctx context.Context, name string, argsJSON string) (s
 
 	// Universal prefix-to-content resolution. Bare prefix references
 	// (temp:LABEL, kb:file.md, etc.) in string arguments are replaced
-	// with the file's content before the handler runs.
+	// with the file's content before the handler runs. temp: failures
+	// are errors (intentional references); path prefix failures pass
+	// through silently.
 	if !tool.SkipContentResolve && r.contentResolver != nil && args != nil {
-		r.contentResolver.ResolveArgs(ctx, args)
+		if err := r.contentResolver.ResolveArgs(ctx, args); err != nil {
+			return "", fmt.Errorf("%s: %w", name, err)
+		}
 	}
 
 	return tool.Handler(ctx, args)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/nugget/thane-ai-agent/internal/opstate"
@@ -43,7 +44,9 @@ func TestContentResolver_ResolveArgs(t *testing.T) {
 		}
 
 		args := map[string]any{"body": "temp:draft"}
-		cr.ResolveArgs(ctx, args)
+		if err := cr.ResolveArgs(ctx, args); err != nil {
+			t.Fatalf("ResolveArgs: %v", err)
+		}
 
 		if got := args["body"].(string); got != "Hello from temp file" {
 			t.Errorf("body = %q, want %q", got, "Hello from temp file")
@@ -60,7 +63,9 @@ func TestContentResolver_ResolveArgs(t *testing.T) {
 		}
 
 		args := map[string]any{"body": "kb:notes.md"}
-		cr.ResolveArgs(ctx, args)
+		if err := cr.ResolveArgs(ctx, args); err != nil {
+			t.Fatalf("ResolveArgs: %v", err)
+		}
 
 		if got := args["body"].(string); got != content {
 			t.Errorf("body = %q, want %q", got, content)
@@ -78,28 +83,34 @@ func TestContentResolver_ResolveArgs(t *testing.T) {
 
 		// Bare reference resolves.
 		args := map[string]any{"body": "temp:label"}
-		cr.ResolveArgs(ctx, args)
+		if err := cr.ResolveArgs(ctx, args); err != nil {
+			t.Fatalf("ResolveArgs: %v", err)
+		}
 		if got := args["body"].(string); got != "resolved" {
 			t.Errorf("bare ref: body = %q, want %q", got, "resolved")
 		}
 
-		// String with spaces does NOT resolve.
+		// String with spaces does NOT resolve (not a bare reference).
 		args = map[string]any{"body": "see temp:label for details"}
-		cr.ResolveArgs(ctx, args)
+		if err := cr.ResolveArgs(ctx, args); err != nil {
+			t.Fatalf("ResolveArgs: %v", err)
+		}
 		if got := args["body"].(string); got != "see temp:label for details" {
 			t.Errorf("spaced ref: body = %q, want original unchanged", got)
 		}
 	})
 
-	t.Run("missing_file_passthrough", func(t *testing.T) {
+	t.Run("missing_temp_label_errors", func(t *testing.T) {
 		cr, _, _ := testContentResolver(t)
 		ctx := WithConversationID(context.Background(), "conv-1")
 
 		args := map[string]any{"body": "temp:nonexistent"}
-		cr.ResolveArgs(ctx, args)
-
-		if got := args["body"].(string); got != "temp:nonexistent" {
-			t.Errorf("body = %q, want original unchanged", got)
+		err := cr.ResolveArgs(ctx, args)
+		if err == nil {
+			t.Fatal("expected error for unknown temp label")
+		}
+		if !strings.Contains(err.Error(), "unknown temp label") {
+			t.Errorf("error = %q, want it to contain 'unknown temp label'", err.Error())
 		}
 	})
 
@@ -108,7 +119,9 @@ func TestContentResolver_ResolveArgs(t *testing.T) {
 		ctx := WithConversationID(context.Background(), "conv-1")
 
 		args := map[string]any{"body": "kb:does_not_exist.md"}
-		cr.ResolveArgs(ctx, args)
+		if err := cr.ResolveArgs(ctx, args); err != nil {
+			t.Fatalf("ResolveArgs should not error for missing kb file: %v", err)
+		}
 
 		if got := args["body"].(string); got != "kb:does_not_exist.md" {
 			t.Errorf("body = %q, want original unchanged", got)
@@ -123,7 +136,9 @@ func TestContentResolver_ResolveArgs(t *testing.T) {
 			"count":   float64(42),
 			"enabled": true,
 		}
-		cr.ResolveArgs(ctx, args)
+		if err := cr.ResolveArgs(ctx, args); err != nil {
+			t.Fatalf("ResolveArgs: %v", err)
+		}
 
 		if args["count"] != float64(42) {
 			t.Errorf("count changed")
@@ -138,7 +153,9 @@ func TestContentResolver_ResolveArgs(t *testing.T) {
 		ctx := WithConversationID(context.Background(), "conv-1")
 
 		args := map[string]any{"body": "temp:label"}
-		cr.ResolveArgs(ctx, args) // should not panic
+		if err := cr.ResolveArgs(ctx, args); err != nil {
+			t.Fatalf("nil ResolveArgs should not error: %v", err)
+		}
 
 		if got := args["body"].(string); got != "temp:label" {
 			t.Errorf("body = %q, want original unchanged", got)
@@ -162,7 +179,9 @@ func TestContentResolver_ResolveArgs(t *testing.T) {
 			"message": "kb:info.md",
 			"title":   "plain text",
 		}
-		cr.ResolveArgs(ctx, args)
+		if err := cr.ResolveArgs(ctx, args); err != nil {
+			t.Fatalf("ResolveArgs: %v", err)
+		}
 
 		if got := args["body"].(string); got != "temp content" {
 			t.Errorf("body = %q, want %q", got, "temp content")
@@ -180,7 +199,9 @@ func TestContentResolver_ResolveArgs(t *testing.T) {
 		ctx := WithConversationID(context.Background(), "conv-1")
 
 		args := map[string]any{"body": ""}
-		cr.ResolveArgs(ctx, args)
+		if err := cr.ResolveArgs(ctx, args); err != nil {
+			t.Fatalf("ResolveArgs: %v", err)
+		}
 
 		if got := args["body"].(string); got != "" {
 			t.Errorf("body = %q, want empty", got)
@@ -191,9 +212,11 @@ func TestContentResolver_ResolveArgs(t *testing.T) {
 		cr, _, _ := testContentResolver(t)
 		ctx := WithConversationID(context.Background(), "conv-1")
 
-		// "temp:" with no label should not resolve.
+		// "temp:" with no label should not resolve or error.
 		args := map[string]any{"body": "temp:"}
-		cr.ResolveArgs(ctx, args)
+		if err := cr.ResolveArgs(ctx, args); err != nil {
+			t.Fatalf("ResolveArgs: %v", err)
+		}
 
 		if got := args["body"].(string); got != "temp:" {
 			t.Errorf("body = %q, want original unchanged", got)
@@ -262,6 +285,34 @@ func TestContentResolver_Execute_Integration(t *testing.T) {
 		}
 		if receivedBody != "temp:body_text" {
 			t.Errorf("handler got body = %q, want original prefix string", receivedBody)
+		}
+	})
+
+	t.Run("unknown_temp_label_errors_through_execute", func(t *testing.T) {
+		cr, _, _ := testContentResolver(t)
+		ctx := WithConversationID(context.Background(), "conv-1")
+
+		reg := NewEmptyRegistry()
+		reg.SetContentResolver(cr)
+		reg.Register(&Tool{
+			Name:        "test_tool",
+			Description: "test",
+			Parameters:  map[string]any{"type": "object"},
+			Handler: func(_ context.Context, _ map[string]any) (string, error) {
+				t.Fatal("handler should not be called when content resolution fails")
+				return "", nil
+			},
+		})
+
+		_, err := reg.Execute(ctx, "test_tool", `{"body":"temp:typo_label"}`)
+		if err == nil {
+			t.Fatal("expected error for unknown temp label")
+		}
+		if !strings.Contains(err.Error(), "unknown temp label") {
+			t.Errorf("error = %q, want it to contain 'unknown temp label'", err.Error())
+		}
+		if !strings.Contains(err.Error(), "test_tool") {
+			t.Errorf("error = %q, want it to contain tool name 'test_tool'", err.Error())
 		}
 	})
 }
