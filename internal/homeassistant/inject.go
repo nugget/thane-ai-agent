@@ -1,13 +1,4 @@
-// Package hainject resolves Home Assistant entity references embedded in
-// knowledge base documents. Documents declare dependencies on HA entities
-// using HTML comment directives:
-//
-//	<!-- ha-inject: input_boolean.burn_ban, sensor.pool_temp -->
-//
-// When [Resolve] processes a document, it scans for these directives,
-// fetches current entity state, and prepends a live-state block so the
-// model has up-to-date values without spending a tool call.
-package hainject
+package homeassistant
 
 import (
 	"context"
@@ -27,20 +18,35 @@ type EntityState struct {
 }
 
 // StateFetcher retrieves entity state from Home Assistant.
-// Typically implemented by thin adapters over homeassistant.Client.
+// [Client] satisfies this interface via its [Client.FetchState] method.
 type StateFetcher interface {
 	// FetchState returns the current state string for an entity.
 	FetchState(ctx context.Context, entityID string) (string, error)
 }
 
-// Resolve scans content for ha-inject directives, fetches current entity
-// state from Home Assistant, and prepends a live-state summary block.
+// FetchState returns the current state string for an entity, satisfying
+// the [StateFetcher] interface.
+func (c *Client) FetchState(ctx context.Context, entityID string) (string, error) {
+	state, err := c.GetState(ctx, entityID)
+	if err != nil {
+		return "", err
+	}
+	return state.State, nil
+}
+
+// ResolveInject scans content for ha-inject directives, fetches current
+// entity state from Home Assistant, and prepends a live-state summary block.
 //
-// The caller controls the deadline via ctx; Resolve does not apply its own
-// timeout. Returns content unchanged when no directives are found, fetcher
-// is nil, or every entity ID list is empty. Gracefully degrades when HA is
-// unreachable: includes a warning note and the original document.
-func Resolve(ctx context.Context, content []byte, fetcher StateFetcher, logger *slog.Logger) []byte {
+// Documents declare dependencies on HA entities using HTML comment
+// directives:
+//
+//	<!-- ha-inject: input_boolean.burn_ban, sensor.pool_temp -->
+//
+// The caller controls the deadline via ctx; ResolveInject does not apply
+// its own timeout. Returns content unchanged when no directives are found,
+// fetcher is nil, or every entity ID list is empty. Gracefully degrades
+// when HA is unreachable: includes a warning note and the original document.
+func ResolveInject(ctx context.Context, content []byte, fetcher StateFetcher, logger *slog.Logger) []byte {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -76,7 +82,7 @@ func Resolve(ctx context.Context, content []byte, fetcher StateFetcher, logger *
 		succeeded = append(succeeded, EntityState{EntityID: id, State: state})
 	}
 
-	return formatResult(succeeded, failed, content)
+	return formatInjectResult(succeeded, failed, content)
 }
 
 // parseDirectives extracts deduplicated entity IDs from all ha-inject
@@ -103,8 +109,8 @@ func parseDirectives(content []byte) []string {
 	return ids
 }
 
-// formatResult builds the augmented document with a state block prepended.
-func formatResult(succeeded []EntityState, failed []string, content []byte) []byte {
+// formatInjectResult builds the augmented document with a state block prepended.
+func formatInjectResult(succeeded []EntityState, failed []string, content []byte) []byte {
 	if len(succeeded) == 0 && len(failed) == 0 {
 		return content
 	}

@@ -1,4 +1,4 @@
-package hainject
+package homeassistant
 
 import (
 	"context"
@@ -27,7 +27,7 @@ func (m *mockFetcher) FetchState(_ context.Context, entityID string) (string, er
 	return state, nil
 }
 
-func TestResolve(t *testing.T) {
+func TestResolveInject(t *testing.T) {
 	logger := slog.Default()
 
 	tests := []struct {
@@ -156,7 +156,7 @@ func TestResolve(t *testing.T) {
 			if tt.name == "nil logger does not panic" {
 				lgr = nil
 			}
-			result := Resolve(context.Background(), []byte(tt.content), tt.fetcher, lgr)
+			result := ResolveInject(context.Background(), []byte(tt.content), tt.fetcher, lgr)
 			got := string(result)
 
 			if tt.wantSame {
@@ -233,8 +233,8 @@ func TestParseDirectives(t *testing.T) {
 	}
 }
 
-func TestResolve_CanceledContext(t *testing.T) {
-	// When the context is already canceled, Resolve should mark all
+func TestResolveInject_CanceledContext(t *testing.T) {
+	// When the context is already canceled, ResolveInject should mark all
 	// entities as failed without calling FetchState.
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // immediately canceled
@@ -245,7 +245,7 @@ func TestResolve_CanceledContext(t *testing.T) {
 		"sensor.b": "2",
 	}}
 
-	result := string(Resolve(ctx, []byte(content), fetcher, nil))
+	result := string(ResolveInject(ctx, []byte(content), fetcher, nil))
 
 	if !strings.Contains(result, "⚠️ HA entity state unavailable") {
 		t.Errorf("expected unavailable warning, got:\n%s", result)

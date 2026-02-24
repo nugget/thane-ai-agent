@@ -219,7 +219,7 @@ func TestBuildSystemPrompt_TagContextOrderAfterInjected(t *testing.T) {
 	}
 }
 
-// mockStateFetcher implements hainject.StateFetcher for agent-level tests.
+// mockStateFetcher implements homeassistant.StateFetcher for agent-level tests.
 type mockStateFetcher struct {
 	states map[string]string
 }

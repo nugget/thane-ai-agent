@@ -16,7 +16,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/nugget/thane-ai-agent/internal/conditions"
 	"github.com/nugget/thane-ai-agent/internal/config"
-	"github.com/nugget/thane-ai-agent/internal/hainject"
 	"github.com/nugget/thane-ai-agent/internal/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/llm"
 	"github.com/nugget/thane-ai-agent/internal/memory"
@@ -175,7 +174,7 @@ type Loop struct {
 	parsedTalents []talents.Talent                      // pre-loaded talent structs for tag filtering
 
 	// haInject resolves <!-- ha-inject: ... --> directives in tag context files.
-	haInject hainject.StateFetcher
+	haInject homeassistant.StateFetcher
 }
 
 // NewLoop creates a new agent loop.
@@ -289,7 +288,7 @@ func (l *Loop) SetUsageRecorder(store *usage.Store, pricing map[string]config.Pr
 // SetHAInject configures the HA entity state resolver for tag context
 // documents. When set, <!-- ha-inject: ... --> directives in context
 // files are resolved to live entity state on each turn.
-func (l *Loop) SetHAInject(fetcher hainject.StateFetcher) {
+func (l *Loop) SetHAInject(fetcher homeassistant.StateFetcher) {
 	l.haInject = fetcher
 }
 
@@ -478,7 +477,7 @@ func (l *Loop) buildSystemPrompt(ctx context.Context, userMessage string, histor
 					continue
 				}
 				// Resolve <!-- ha-inject: ... --> directives to live HA state.
-				data = hainject.Resolve(haCtx, data, l.haInject, l.logger)
+				data = homeassistant.ResolveInject(haCtx, data, l.haInject, l.logger)
 				if tagCtxBuf.Len() > 0 {
 					tagCtxBuf.WriteString("\n\n---\n\n")
 				}
