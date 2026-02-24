@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -160,17 +161,17 @@ type Loop struct {
 
 	// Capability tags — per-session tool/talent filtering.
 	//
-	// activeTags is scoped to the Loop instance. In the current
-	// architecture each conversation channel (Signal, API, wake) runs
-	// through the same Loop, so active tags are effectively global.
-	// Per-conversation tag isolation will be added in Phase 2 when
-	// channel-pinned tags and delegate tag scoping land.
+	// activeTags is scoped to the Loop instance. All conversation
+	// channels (Signal, API, wake) share the same Loop, so active
+	// tags are effectively global. Channel-pinned tags are merged
+	// per-Run and removed on return to avoid cross-channel bleed.
 	//
-	// Concurrency: the agent loop is single-threaded per Run() call.
-	// If Phase 2 introduces concurrent access (e.g., delegate
-	// spawning in a goroutine), activeTags will need a mutex.
+	// tagMu serializes all reads and writes to activeTags. Multiple
+	// HTTP handlers can call Run() concurrently, so every access
+	// must hold the lock.
+	tagMu         sync.Mutex
 	capTags       map[string]config.CapabilityTagConfig // tag definitions from config
-	activeTags    map[string]bool                       // currently active tags (see scoping note above)
+	activeTags    map[string]bool                       // currently active tags
 	parsedTalents []talents.Talent                      // pre-loaded talent structs for tag filtering
 	channelTags   map[string][]string                   // channel name → tag names (auto-activated per Run)
 
@@ -270,12 +271,14 @@ func (l *Loop) SetCapabilityTags(capTags map[string]config.CapabilityTagConfig, 
 	l.tools.SetTagIndex(tagIndex)
 
 	// Activate always_active tags.
+	l.tagMu.Lock()
 	l.activeTags = make(map[string]bool)
 	for tag, cfg := range capTags {
 		if cfg.AlwaysActive {
 			l.activeTags[tag] = true
 		}
 	}
+	l.tagMu.Unlock()
 }
 
 // SetUsageRecorder configures persistent token usage recording. When
@@ -289,9 +292,9 @@ func (l *Loop) SetUsageRecorder(store *usage.Store, pricing map[string]config.Pr
 // SetChannelTags configures channel-pinned tag activation. When a
 // Run() request carries a "source" hint matching a key in channelTags,
 // the listed capability tags are activated for that run in addition to
-// any always-active or agent-requested tags. Tags are merged
-// non-destructively — the persistent activeTags set is restored after
-// each Run() call.
+// any always-active or agent-requested tags. Channel-specific tags are
+// added at the start of Run() and removed on return via defer, so
+// concurrent Run() calls on different channels don't interfere.
 func (l *Loop) SetChannelTags(ct map[string][]string) {
 	l.channelTags = ct
 }
@@ -303,10 +306,27 @@ func (l *Loop) SetHAInject(fetcher homeassistant.StateFetcher) {
 	l.haInject = fetcher
 }
 
-// ActiveTags returns the set of currently active capability tags.
-// Returns nil when capability tagging is not configured.
+// ActiveTags returns a snapshot of the currently active capability tags.
+// Returns nil when capability tagging is not configured. The returned
+// map is a copy — callers may read it without holding any lock.
 func (l *Loop) ActiveTags() map[string]bool {
-	return l.activeTags
+	return l.snapshotActiveTags()
+}
+
+// snapshotActiveTags returns a copy of activeTags under the lock.
+// Used by read paths that need a consistent view without holding
+// the lock for the duration of their work.
+func (l *Loop) snapshotActiveTags() map[string]bool {
+	l.tagMu.Lock()
+	defer l.tagMu.Unlock()
+	if l.activeTags == nil {
+		return nil
+	}
+	snap := make(map[string]bool, len(l.activeTags))
+	for k, v := range l.activeTags {
+		snap[k] = v
+	}
+	return snap
 }
 
 // RequestCapability activates a capability tag for the current session.
@@ -318,7 +338,9 @@ func (l *Loop) RequestCapability(tag string) error {
 	if _, ok := l.capTags[tag]; !ok {
 		return fmt.Errorf("unknown capability tag: %q", tag)
 	}
+	l.tagMu.Lock()
 	l.activeTags[tag] = true
+	l.tagMu.Unlock()
 	l.logger.Info("capability activated", "tag", tag)
 	return nil
 }
@@ -337,7 +359,9 @@ func (l *Loop) DropCapability(tag string) error {
 	if cfg.AlwaysActive {
 		return fmt.Errorf("cannot drop always-active tag: %q", tag)
 	}
+	l.tagMu.Lock()
 	delete(l.activeTags, tag)
+	l.tagMu.Unlock()
 	l.logger.Info("capability deactivated", "tag", tag)
 	return nil
 }
@@ -401,6 +425,10 @@ type promptSection struct {
 func (l *Loop) buildSystemPrompt(ctx context.Context, userMessage string, history []memory.Message) string {
 	var sb strings.Builder
 
+	// Snapshot active tags once for the duration of prompt assembly.
+	// This avoids holding tagMu across file I/O, HA fetches, etc.
+	tags := l.snapshotActiveTags()
+
 	// Track section boundaries for debug dump.
 	var sections []promptSection
 	mark := func(name string) { sections = append(sections, promptSection{name: name, start: sb.Len()}) }
@@ -462,13 +490,13 @@ func (l *Loop) buildSystemPrompt(ctx context.Context, userMessage string, histor
 	// every context file in this turn. Individual Resolve calls share
 	// the same deadline so a slow HA cannot stall prompt assembly
 	// beyond 2 s total.
-	if l.capTags != nil && l.activeTags != nil {
+	if l.capTags != nil && tags != nil {
 		haCtx, haCancel := context.WithTimeout(ctx, 2*time.Second)
 		defer haCancel()
 
 		seen := make(map[string]bool)
 		var tagCtxBuf strings.Builder
-		for tag, active := range l.activeTags {
+		for tag, active := range tags {
 			if !active {
 				continue
 			}
@@ -530,7 +558,7 @@ func (l *Loop) buildSystemPrompt(ctx context.Context, userMessage string, histor
 	// Otherwise, use the pre-combined static string.
 	talentContent := l.talents
 	if l.parsedTalents != nil {
-		talentContent = talents.FilterByTags(l.parsedTalents, l.activeTags)
+		talentContent = talents.FilterByTags(l.parsedTalents, tags)
 	}
 	if talentContent != "" {
 		mark("TALENTS")
@@ -809,8 +837,10 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	// request's source channel and merge matching capability tags into
 	// activeTags. Only tags that weren't already active are tracked,
 	// and they are removed on return to prevent cross-channel bleed.
-	// Run() is single-threaded, so direct map mutation is safe.
+	// All activeTags mutations are serialized by tagMu since multiple
+	// HTTP handlers can call Run() concurrently.
 	var channelActivatedTags []string
+	l.tagMu.Lock()
 	if l.channelTags != nil && l.activeTags != nil {
 		if source := req.Hints["source"]; source != "" {
 			if pinnedTags, ok := l.channelTags[source]; ok {
@@ -820,19 +850,22 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 						channelActivatedTags = append(channelActivatedTags, tag)
 					}
 				}
-				if len(channelActivatedTags) > 0 {
-					log.Info("channel tags activated",
-						"source", source,
-						"pinned_tags", channelActivatedTags,
-					)
-				}
 			}
 		}
 	}
+	l.tagMu.Unlock()
+	if len(channelActivatedTags) > 0 {
+		log.Info("channel tags activated",
+			"source", req.Hints["source"],
+			"pinned_tags", channelActivatedTags,
+		)
+	}
 	defer func() {
+		l.tagMu.Lock()
 		for _, tag := range channelActivatedTags {
 			delete(l.activeTags, tag)
 		}
+		l.tagMu.Unlock()
 	}()
 
 	// Build messages for LLM. Enrich ctx with conversation ID so that
@@ -963,11 +996,12 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	// Build the effective tool registry. When capability tagging is active,
 	// only tools belonging to active tags are included. Request-level
 	// exclusions (e.g., lifecycle tools stripped from recurring wakes) are
-	// applied on top.
+	// applied on top. We snapshot activeTags under the lock to avoid
+	// holding it while FilterByTags builds the registry copy.
 	effectiveTools := l.tools
-	if l.activeTags != nil && !req.SkipTagFilter {
-		activeTags := make([]string, 0, len(l.activeTags))
-		for tag := range l.activeTags {
+	if tagSnap := l.snapshotActiveTags(); tagSnap != nil && !req.SkipTagFilter {
+		activeTags := make([]string, 0, len(tagSnap))
+		for tag := range tagSnap {
 			activeTags = append(activeTags, tag)
 		}
 		effectiveTools = l.tools.FilterByTags(activeTags)
