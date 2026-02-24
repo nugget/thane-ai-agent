@@ -24,10 +24,11 @@ import (
 
 // Tool represents a callable tool.
 type Tool struct {
-	Name        string                                                         `json:"name"`
-	Description string                                                         `json:"description"`
-	Parameters  map[string]any                                                 `json:"parameters"`
-	Handler     func(ctx context.Context, args map[string]any) (string, error) `json:"-"`
+	Name            string                                                         `json:"name"`
+	Description     string                                                         `json:"description"`
+	Parameters      map[string]any                                                 `json:"parameters"`
+	Handler         func(ctx context.Context, args map[string]any) (string, error) `json:"-"`
+	AlwaysAvailable bool                                                           `json:"-"` // Survives capability tag filtering.
 }
 
 // Registry holds available tools.
@@ -988,8 +989,9 @@ func (r *Registry) SetTagIndex(tags map[string][]string) {
 }
 
 // FilterByTags creates a new Registry containing only the tools that
-// belong to at least one of the given tags. If tags is empty or the
-// tag index is nil, returns a copy of the full registry.
+// belong to at least one of the given tags, plus any tools marked as
+// AlwaysAvailable. If tags is empty or the tag index is nil, returns a
+// copy of the full registry.
 func (r *Registry) FilterByTags(tags []string) *Registry {
 	if len(tags) == 0 || r.tagIndex == nil {
 		// No filtering — return a shallow copy with all tools.
@@ -1008,8 +1010,8 @@ func (r *Registry) FilterByTags(tags []string) *Registry {
 	}
 
 	filtered := &Registry{tools: make(map[string]*Tool, len(allowed))}
-	for name := range allowed {
-		if t := r.tools[name]; t != nil {
+	for name, t := range r.tools {
+		if allowed[name] || t.AlwaysAvailable {
 			filtered.tools[name] = t
 		}
 	}
