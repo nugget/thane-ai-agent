@@ -85,6 +85,46 @@ func TestParseFeed_RSS(t *testing.T) {
 	}
 }
 
+func TestParseFeed_AtomMultipleLinks(t *testing.T) {
+	xml := `<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Multi-Link Feed</title>
+  <entry>
+    <id>entry-1</id><title>Entry</title>
+    <link rel="self" href="https://example.com/self"/>
+    <link rel="alternate" href="https://example.com/content"/>
+    <link rel="edit" href="https://example.com/edit"/>
+    <published>2026-02-20T12:00:00Z</published>
+  </entry></feed>`
+
+	feed, err := parseFeed([]byte(xml))
+	if err != nil {
+		t.Fatalf("parseFeed() error: %v", err)
+	}
+	// Should pick rel="alternate" over others.
+	if feed.Entries[0].Link != "https://example.com/content" {
+		t.Errorf("Link = %q, want alternate link", feed.Entries[0].Link)
+	}
+}
+
+func TestParseFeed_AtomNoID(t *testing.T) {
+	xml := `<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom">
+  <title>No ID Feed</title>
+  <entry>
+    <title>Entry Without ID</title>
+    <link href="https://example.com/fallback"/>
+    <published>2026-02-20T12:00:00Z</published>
+  </entry></feed>`
+
+	feed, err := parseFeed([]byte(xml))
+	if err != nil {
+		t.Fatalf("parseFeed() error: %v", err)
+	}
+	// ID should fall back to Link when <id> is absent.
+	if feed.Entries[0].ID != "https://example.com/fallback" {
+		t.Errorf("ID = %q, want link as fallback", feed.Entries[0].ID)
+	}
+}
+
 func TestParseFeed_RSSNoGUID(t *testing.T) {
 	xml := `<rss version="2.0"><channel><title>T</title>
 	<item><title>Ep</title><link>https://example.com/ep1</link></item>

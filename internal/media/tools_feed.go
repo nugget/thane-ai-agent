@@ -222,27 +222,39 @@ func (ft *FeedTools) FeedsHandler() func(ctx context.Context, args map[string]an
 			URL         string `json:"url"`
 			LastChecked string `json:"last_checked,omitempty"`
 			LatestEntry string `json:"latest_entry,omitempty"`
-			Notify      string `json:"notify"`
+			Notify      bool   `json:"notify"`
 		}
 
 		feeds := make([]feedInfo, 0, len(ids))
 		for _, id := range ids {
-			url, _ := ft.state.Get(feedNamespace, feedKeyURL(id))
-			name, _ := ft.state.Get(feedNamespace, feedKeyName(id))
-			lastChecked, _ := ft.state.Get(feedNamespace, feedKeyLastChecked(id))
-			latestTitle, _ := ft.state.Get(feedNamespace, feedKeyLatestTitle(id))
-			notify, _ := ft.state.Get(feedNamespace, feedKeyNotify(id))
-			if notify == "" {
-				notify = "true"
+			feedURL, err := ft.state.Get(feedNamespace, feedKeyURL(id))
+			if err != nil {
+				return "", fmt.Errorf("media_feeds: read url for %s: %w", id, err)
+			}
+			name, err := ft.state.Get(feedNamespace, feedKeyName(id))
+			if err != nil {
+				return "", fmt.Errorf("media_feeds: read name for %s: %w", id, err)
+			}
+			lastChecked, err := ft.state.Get(feedNamespace, feedKeyLastChecked(id))
+			if err != nil {
+				return "", fmt.Errorf("media_feeds: read last_checked for %s: %w", id, err)
+			}
+			latestTitle, err := ft.state.Get(feedNamespace, feedKeyLatestTitle(id))
+			if err != nil {
+				return "", fmt.Errorf("media_feeds: read latest_title for %s: %w", id, err)
+			}
+			notifyStr, err := ft.state.Get(feedNamespace, feedKeyNotify(id))
+			if err != nil {
+				return "", fmt.Errorf("media_feeds: read notify for %s: %w", id, err)
 			}
 
 			feeds = append(feeds, feedInfo{
 				FeedID:      id,
 				Name:        name,
-				URL:         url,
+				URL:         feedURL,
 				LastChecked: lastChecked,
 				LatestEntry: latestTitle,
-				Notify:      notify,
+				Notify:      notifyStr != "false",
 			})
 		}
 

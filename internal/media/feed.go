@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -54,14 +55,15 @@ type atomFeed struct {
 }
 
 type atomEntry struct {
-	ID        string   `xml:"id"`
-	Title     string   `xml:"title"`
-	Link      atomLink `xml:"link"`
-	Published string   `xml:"published"`
+	ID        string     `xml:"id"`
+	Title     string     `xml:"title"`
+	Links     []atomLink `xml:"link"`
+	Published string     `xml:"published"`
 }
 
 type atomLink struct {
 	Href string `xml:"href,attr"`
+	Rel  string `xml:"rel,attr"`
 }
 
 // parseFeed parses XML data as either an Atom or RSS feed, returning
@@ -83,18 +85,40 @@ func parseFeed(data []byte) (*Feed, error) {
 }
 
 // atomToFeed converts a parsed Atom feed to the normalized Feed type.
+// When multiple <link> elements exist, the one with rel="alternate" is
+// preferred. If no rel is specified, the first link is used. Entry IDs
+// fall back to the link href when <id> is absent.
 func atomToFeed(af *atomFeed) *Feed {
 	f := &Feed{Title: af.Title}
 	for _, e := range af.Entries {
 		pub, _ := time.Parse(time.RFC3339, e.Published)
+		link := atomBestLink(e.Links)
+		id := e.ID
+		if id == "" {
+			id = link
+		}
 		f.Entries = append(f.Entries, FeedEntry{
-			ID:        e.ID,
+			ID:        id,
 			Title:     e.Title,
-			Link:      e.Link.Href,
+			Link:      link,
 			Published: pub,
 		})
 	}
 	return f
+}
+
+// atomBestLink selects the most appropriate link from an Atom entry's
+// link list. Prefers rel="alternate"; falls back to the first link.
+func atomBestLink(links []atomLink) string {
+	if len(links) == 0 {
+		return ""
+	}
+	for _, l := range links {
+		if l.Rel == "alternate" || l.Rel == "" {
+			return l.Href
+		}
+	}
+	return links[0].Href
 }
 
 // rssToFeed converts a parsed RSS 2.0 feed to the normalized Feed type.
@@ -152,31 +176,46 @@ var ytChannelIDRe = regexp.MustCompile(`"channelId"\s*:\s*"(UC[a-zA-Z0-9_-]+)"`)
 // ytCanonicalRe matches canonical URLs with channel IDs.
 var ytCanonicalRe = regexp.MustCompile(`<link\s+rel="canonical"\s+href="https://www\.youtube\.com/channel/(UC[a-zA-Z0-9_-]+)"`)
 
+// isYouTubeHost reports whether host is a known YouTube hostname.
+func isYouTubeHost(host string) bool {
+	switch strings.ToLower(host) {
+	case "youtube.com", "www.youtube.com", "m.youtube.com":
+		return true
+	}
+	return false
+}
+
 // resolveYouTubeFeed converts a YouTube channel URL to the corresponding
 // Atom feed URL. Accepts @handle or /channel/ URLs. Returns the original
 // URL unchanged if it's already a feed URL or not a YouTube channel.
+// The hostname is validated to prevent unintended fetches on non-YouTube
+// domains that happen to contain similar path patterns.
 func resolveYouTubeFeed(ctx context.Context, httpClient *http.Client, rawURL string) (string, error) {
 	// Already a feed URL — return as-is.
 	if strings.Contains(rawURL, "/feeds/videos.xml") {
 		return rawURL, nil
 	}
 
-	// Only resolve YouTube channel URLs.
-	if !strings.Contains(rawURL, "youtube.com/@") && !strings.Contains(rawURL, "youtube.com/channel/") {
+	// Parse and validate hostname before doing any YouTube-specific resolution.
+	parsed, err := url.Parse(rawURL)
+	if err != nil || !isYouTubeHost(parsed.Hostname()) {
 		return rawURL, nil
 	}
 
 	// /channel/UCXXXX → construct directly.
-	if strings.Contains(rawURL, "/channel/UC") {
-		parts := strings.Split(rawURL, "/channel/")
+	if strings.HasPrefix(parsed.Path, "/channel/UC") {
+		parts := strings.SplitN(parsed.Path, "/channel/", 2)
 		if len(parts) == 2 {
 			channelID := strings.Split(parts[1], "/")[0]
-			channelID = strings.Split(channelID, "?")[0]
 			return "https://www.youtube.com/feeds/videos.xml?channel_id=" + channelID, nil
 		}
 	}
 
 	// @handle → fetch page and extract channel_id.
+	if !strings.HasPrefix(parsed.Path, "/@") {
+		return rawURL, nil
+	}
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return "", fmt.Errorf("create request: %w", err)

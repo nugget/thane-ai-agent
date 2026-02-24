@@ -1196,6 +1196,19 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		}
 		logger.Info("media feed polling enabled", "interval", pollInterval, "max_feeds", cfg.Media.MaxFeeds)
 	} else {
+		// Ensure any existing media_feed_poll task is disabled so it does not
+		// continue waking the agent when polling is configured off.
+		existing, err := schedStore.GetTaskByName(mediaFeedPollTaskName)
+		if err != nil {
+			logger.Error("failed to check for media_feed_poll task while disabling polling", "error", err)
+		} else if existing != nil && existing.Enabled {
+			existing.Enabled = false
+			if err := sched.UpdateTask(existing); err != nil {
+				logger.Error("failed to disable media_feed_poll task", "error", err)
+			} else {
+				logger.Info("media_feed_poll task disabled because feed polling is disabled")
+			}
+		}
 		logger.Info("media feed polling disabled (feed_check_interval=0)")
 	}
 

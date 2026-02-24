@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -226,5 +225,41 @@ func TestCheckFeeds_MultipleNewEntries(t *testing.T) {
 	}
 }
 
-// Ensure the test file compiles even when other test files import os.
-var _ = os.DevNull
+func TestCheckFeeds_ReseedOnMissingHighWaterMark(t *testing.T) {
+	// Feed no longer contains the previous high-water mark entry (feed
+	// dropped old items). The poller should reseed without reporting entries.
+	atomXML := `<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom">
+	<title>Ch</title>
+	<entry><id>vid-10</id><title>Newest</title>
+	<link href="https://example.com/10"/>
+	<published>2026-02-24T12:00:00Z</published></entry>
+	<entry><id>vid-9</id><title>Previous</title>
+	<link href="https://example.com/9"/>
+	<published>2026-02-23T12:00:00Z</published></entry></feed>`
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte(atomXML))
+	}))
+	defer srv.Close()
+
+	store := newTestStore(t)
+	saveFeedIndex(store, []string{"f1"})
+	store.Set(feedNamespace, feedKeyURL("f1"), srv.URL)
+	store.Set(feedNamespace, feedKeyName("f1"), "Ch")
+	store.Set(feedNamespace, feedKeyLastEntryID("f1"), "vid-1") // no longer in feed
+
+	poller := NewFeedPoller(store, nil)
+	msg, err := poller.CheckFeeds(context.Background())
+	if err != nil {
+		t.Fatalf("CheckFeeds() error: %v", err)
+	}
+	if msg != "" {
+		t.Errorf("reseed should not report entries, got %q", msg)
+	}
+
+	// High-water mark should be reseeded to latest.
+	hwm, _ := store.Get(feedNamespace, feedKeyLastEntryID("f1"))
+	if hwm != "vid-10" {
+		t.Errorf("high-water mark = %q, want %q (reseeded)", hwm, "vid-10")
+	}
+}

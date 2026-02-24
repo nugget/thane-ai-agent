@@ -862,8 +862,9 @@ type MediaConfig struct {
 	SummarizeModel string `yaml:"summarize_model"`
 
 	// FeedCheckInterval is how often (in seconds) to poll followed RSS/Atom
-	// feeds for new entries. Default: 3600 (1 hour). Set to 0 to disable
-	// feed polling.
+	// feeds for new entries. Set to a positive value to enable polling (e.g.,
+	// 3600 for hourly). Default: 0 (disabled). No default is applied —
+	// users must opt in by setting a positive interval.
 	FeedCheckInterval int `yaml:"feed_check_interval"`
 
 	// MaxFeeds limits the number of feeds that can be followed.
@@ -1041,9 +1042,9 @@ func (c *Config) applyDefaults() {
 	if c.Media.WhisperModel == "" {
 		c.Media.WhisperModel = "large-v3"
 	}
-	if c.Media.FeedCheckInterval == 0 {
-		c.Media.FeedCheckInterval = 3600 // 1 hour
-	}
+	// FeedCheckInterval is intentionally not defaulted — 0 means disabled.
+	// Users must opt in by setting a positive value.
+
 	if c.Media.MaxFeeds == 0 {
 		c.Media.MaxFeeds = 50
 	}

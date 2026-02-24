@@ -146,11 +146,30 @@ func (p *FeedPoller) checkFeed(ctx context.Context, feedID string) (string, erro
 
 	// Collect new entries (entries newer than the high-water mark).
 	var newEntries []FeedEntry
+	foundLast := false
 	for _, entry := range feed.Entries {
 		if entry.ID == lastEntryID {
+			foundLast = true
 			break
 		}
 		newEntries = append(newEntries, entry)
+	}
+
+	// If the previous high-water mark is no longer present in the feed
+	// (common when feeds drop older items), reseed the mark to the latest
+	// entry without reporting. This avoids misreporting a large batch of
+	// "new" entries that are actually old.
+	if !foundLast {
+		if err := p.state.Set(feedNamespace, feedKeyLastEntryID(feedID), feed.Entries[0].ID); err != nil {
+			p.logger.Warn("failed to reseed high-water mark", "feed_id", feedID, "error", err)
+		} else {
+			p.logger.Info("feed high-water mark reseeded after missing last_entry_id",
+				"feed_id", feedID,
+				"feed_name", feedName,
+				"latest_entry", feed.Entries[0].Title,
+			)
+		}
+		return "", nil
 	}
 
 	if len(newEntries) == 0 {
