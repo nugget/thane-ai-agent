@@ -1892,7 +1892,11 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 			}
 			return result
 		},
-		Logger: logger,
+		ContactStore:      contactStore,
+		FactStore:         factStore,
+		TaskStore:         sched,
+		AnticipationStore: anticipationStore,
+		Logger:            logger,
 	})
 	server.SetWebServer(ws)
 

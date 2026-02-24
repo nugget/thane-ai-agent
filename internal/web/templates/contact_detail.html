@@ -1,0 +1,62 @@
+{{define "title"}}{{.BrandName}} - {{.Name}}{{end}}
+
+{{define "content"}}
+<div class="browser">
+    <div class="detail-header">
+        <a href="/contacts" class="detail-back" hx-get="/contacts" hx-target="#content" hx-push-url="true">&larr; Contacts</a>
+        <h1>{{.Name}}</h1>
+    </div>
+
+    <div class="detail-grid">
+        <div class="card">
+            <h2>Info</h2>
+            <dl class="stat-list">
+                <dt>Kind</dt>
+                <dd>{{.Kind}}</dd>
+                {{if .TrustZone}}
+                <dt>Trust Zone</dt>
+                <dd>
+                    {{if eq .TrustZone "owner"}}<span class="badge badge-teal">owner</span>
+                    {{else if eq .TrustZone "trusted"}}<span class="badge badge-ok">trusted</span>
+                    {{else}}<span class="badge badge-muted">{{.TrustZone}}</span>
+                    {{end}}
+                </dd>
+                {{end}}
+                {{if .Relationship}}
+                <dt>Relationship</dt>
+                <dd>{{.Relationship}}</dd>
+                {{end}}
+                {{if .Summary}}
+                <dt>Summary</dt>
+                <dd>{{.Summary}}</dd>
+                {{end}}
+                <dt>Created</dt>
+                <dd>{{.CreatedAt}}</dd>
+                <dt>Updated</dt>
+                <dd>{{.UpdatedAt}}</dd>
+            </dl>
+        </div>
+
+        {{if .Details}}
+        <div class="card">
+            <h2>Details</h2>
+            <p style="white-space: pre-wrap; font-size: 0.875rem;">{{.Details}}</p>
+        </div>
+        {{end}}
+    </div>
+
+    {{if .Facts}}
+    <div class="card">
+        <h2>Facts</h2>
+        <ul class="fact-list">
+            {{range $key, $values := .Facts}}
+            <li>
+                <span class="fact-key mono">{{$key}}</span>
+                <span>{{joinStrings $values ", "}}</span>
+            </li>
+            {{end}}
+        </ul>
+    </div>
+    {{end}}
+</div>
+{{end}}

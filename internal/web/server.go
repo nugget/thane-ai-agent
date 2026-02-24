@@ -11,7 +11,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/nugget/thane-ai-agent/internal/anticipation"
+	"github.com/nugget/thane-ai-agent/internal/contacts"
+	"github.com/nugget/thane-ai-agent/internal/facts"
 	"github.com/nugget/thane-ai-agent/internal/router"
+	"github.com/nugget/thane-ai-agent/internal/scheduler"
 )
 
 //go:embed static/*
@@ -46,23 +51,61 @@ type RouterFunc func() RouterInfo
 // HealthFunc returns dependency health keyed by service name.
 type HealthFunc func() map[string]HealthStatus
 
+// ContactStore is the subset of contacts.Store used by the dashboard.
+type ContactStore interface {
+	ListAll() ([]*contacts.Contact, error)
+	Search(query string) ([]*contacts.Contact, error)
+	GetWithFacts(id uuid.UUID) (*contacts.Contact, error)
+	FindByTrustZone(zone string) ([]*contacts.Contact, error)
+	ListByKind(kind string) ([]*contacts.Contact, error)
+}
+
+// FactStore is the subset of facts.Store used by the dashboard.
+type FactStore interface {
+	GetAll() ([]*facts.Fact, error)
+	GetByCategory(category facts.Category) ([]*facts.Fact, error)
+	Search(query string) ([]*facts.Fact, error)
+}
+
+// TaskStore is the subset of scheduler.Scheduler used by the dashboard.
+type TaskStore interface {
+	ListTasks(enabledOnly bool) ([]*scheduler.Task, error)
+	GetTask(id string) (*scheduler.Task, error)
+	GetTaskExecutions(taskID string, limit int) ([]*scheduler.Execution, error)
+}
+
+// AnticipationStore is the subset of anticipation.Store used by the dashboard.
+type AnticipationStore interface {
+	Active() ([]*anticipation.Anticipation, error)
+	All() ([]*anticipation.Anticipation, error)
+	Get(id string) (*anticipation.Anticipation, error)
+}
+
 // Config holds the dependencies needed to construct a WebServer.
 type Config struct {
-	BrandName  string // Display name in the nav bar. Defaults to "Thane".
-	StatsFunc  StatsFunc
-	RouterFunc RouterFunc
-	HealthFunc HealthFunc
-	Logger     *slog.Logger
+	BrandName         string // Display name in the nav bar. Defaults to "Thane".
+	StatsFunc         StatsFunc
+	RouterFunc        RouterFunc
+	HealthFunc        HealthFunc
+	ContactStore      ContactStore
+	FactStore         FactStore
+	TaskStore         TaskStore
+	AnticipationStore AnticipationStore
+	Logger            *slog.Logger
 }
 
 // WebServer serves the web dashboard and chat UI.
 type WebServer struct {
-	brandName  string
-	statsFunc  StatsFunc
-	routerFunc RouterFunc
-	healthFunc HealthFunc
-	templates  map[string]*template.Template
-	logger     *slog.Logger
+	brandName         string
+	statsFunc         StatsFunc
+	routerFunc        RouterFunc
+	healthFunc        HealthFunc
+	contactStore      ContactStore
+	factStore         FactStore
+	taskStore         TaskStore
+	anticipationStore AnticipationStore
+	templates         map[string]*template.Template
+	logger            *slog.Logger
 }
 
 // NewWebServer creates a WebServer with parsed templates. It panics if
@@ -77,11 +120,15 @@ func NewWebServer(cfg Config) *WebServer {
 		brandName = "Thane"
 	}
 	s := &WebServer{
-		brandName:  brandName,
-		statsFunc:  cfg.StatsFunc,
-		routerFunc: cfg.RouterFunc,
-		healthFunc: cfg.HealthFunc,
-		logger:     logger,
+		brandName:         brandName,
+		statsFunc:         cfg.StatsFunc,
+		routerFunc:        cfg.RouterFunc,
+		healthFunc:        cfg.HealthFunc,
+		contactStore:      cfg.ContactStore,
+		factStore:         cfg.FactStore,
+		taskStore:         cfg.TaskStore,
+		anticipationStore: cfg.AnticipationStore,
+		logger:            logger,
 	}
 	s.templates = loadTemplates()
 	return s
@@ -94,6 +141,14 @@ func (s *WebServer) RegisterRoutes(mux *http.ServeMux) {
 
 	// Static assets (htmx, CSS)
 	mux.HandleFunc("GET /static/", s.handleStatic)
+
+	// Data browsers
+	mux.HandleFunc("GET /contacts", s.handleContacts)
+	mux.HandleFunc("GET /contacts/{id}", s.handleContactDetail)
+	mux.HandleFunc("GET /facts", s.handleFacts)
+	mux.HandleFunc("GET /tasks", s.handleTasks)
+	mux.HandleFunc("GET /tasks/{id}", s.handleTaskDetail)
+	mux.HandleFunc("GET /anticipations", s.handleAnticipations)
 
 	// Chat UI (rendered through the shared layout template)
 	mux.HandleFunc("GET /chat", s.handleChat)

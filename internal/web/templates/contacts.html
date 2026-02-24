@@ -1,0 +1,76 @@
+{{define "title"}}{{.BrandName}} - Contacts{{end}}
+
+{{define "content"}}
+<div class="browser">
+    <h1>Contacts</h1>
+
+    <div class="toolbar">
+        <input type="search" class="search-input" placeholder="Search contacts..."
+               name="q" value="{{.Query}}"
+               hx-get="/contacts" hx-trigger="keyup changed delay:300ms"
+               hx-target="#contacts-tbody" hx-include="closest .toolbar">
+
+        <div class="filter-tabs">
+            <a class="filter-tab{{if eq .TrustZone ""}} active{{end}}"
+               hx-get="/contacts" hx-target="#contacts-tbody">All</a>
+            <a class="filter-tab{{if eq .TrustZone "owner"}} active{{end}}"
+               hx-get="/contacts?trust_zone=owner" hx-target="#contacts-tbody">Owner</a>
+            <a class="filter-tab{{if eq .TrustZone "trusted"}} active{{end}}"
+               hx-get="/contacts?trust_zone=trusted" hx-target="#contacts-tbody">Trusted</a>
+            <a class="filter-tab{{if eq .TrustZone "known"}} active{{end}}"
+               hx-get="/contacts?trust_zone=known" hx-target="#contacts-tbody">Known</a>
+        </div>
+
+        <div class="filter-tabs">
+            <a class="filter-tab{{if eq .Kind ""}} active{{end}}"
+               hx-get="/contacts" hx-target="#contacts-tbody">All kinds</a>
+            <a class="filter-tab{{if eq .Kind "person"}} active{{end}}"
+               hx-get="/contacts?kind=person" hx-target="#contacts-tbody">Person</a>
+            <a class="filter-tab{{if eq .Kind "company"}} active{{end}}"
+               hx-get="/contacts?kind=company" hx-target="#contacts-tbody">Company</a>
+            <a class="filter-tab{{if eq .Kind "organization"}} active{{end}}"
+               hx-get="/contacts?kind=organization" hx-target="#contacts-tbody">Org</a>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="table-scroll">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>Kind</th>
+                        <th>Trust Zone</th>
+                        <th>Relationship</th>
+                        <th>Last Interaction</th>
+                    </tr>
+                </thead>
+                <tbody id="contacts-tbody">
+                {{template "contacts-tbody" .}}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{{end}}
+
+{{define "contacts-tbody"}}
+{{if .Contacts}}
+{{range .Contacts}}
+<tr hx-get="/contacts/{{.ID}}" hx-target="#content" hx-push-url="true">
+    <td><strong>{{.Name}}</strong>{{if .Summary}}<br><span class="text-muted" style="font-size:0.8125rem">{{truncate .Summary 60}}</span>{{end}}</td>
+    <td>{{.Kind}}</td>
+    <td>
+        {{if eq .TrustZone "owner"}}<span class="badge badge-teal">owner</span>
+        {{else if eq .TrustZone "trusted"}}<span class="badge badge-ok">trusted</span>
+        {{else if .TrustZone}}<span class="badge badge-muted">{{.TrustZone}}</span>
+        {{end}}
+    </td>
+    <td>{{.Relationship}}</td>
+    <td class="text-muted">{{.LastInteraction}}</td>
+</tr>
+{{end}}
+{{else}}
+<tr><td colspan="5" class="empty-state">No contacts found.</td></tr>
+{{end}}
+{{end}}

@@ -1,0 +1,52 @@
+{{define "title"}}{{.BrandName}} - Scheduled Tasks{{end}}
+
+{{define "content"}}
+<div class="browser">
+    <h1>Scheduled Tasks</h1>
+
+    <div class="card">
+        <div class="table-scroll">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Name</th>
+                        <th>Schedule</th>
+                        <th>Next Fire</th>
+                        <th>Last Status</th>
+                        <th>Enabled</th>
+                        <th>Created By</th>
+                    </tr>
+                </thead>
+                <tbody>
+                {{if .Tasks}}
+                {{range .Tasks}}
+                <tr hx-get="/tasks/{{.ID}}" hx-target="#content" hx-push-url="true">
+                    <td><strong>{{.Name}}</strong></td>
+                    <td class="text-muted">{{.ScheduleDesc}}</td>
+                    <td>{{.NextFire}}</td>
+                    <td>
+                        {{if eq .LastExecStatus "completed"}}<span class="badge badge-ok">completed</span>
+                        {{else if eq .LastExecStatus "failed"}}<span class="badge badge-err">failed</span>
+                        {{else if eq .LastExecStatus "running"}}<span class="badge badge-teal">running</span>
+                        {{else if eq .LastExecStatus "skipped"}}<span class="badge badge-warn">skipped</span>
+                        {{else if .LastExecStatus}}<span class="badge badge-muted">{{.LastExecStatus}}</span>
+                        {{else}}<span class="text-muted">—</span>
+                        {{end}}
+                    </td>
+                    <td>
+                        {{if .Enabled}}<span class="badge badge-ok">enabled</span>
+                        {{else}}<span class="badge badge-muted">disabled</span>
+                        {{end}}
+                    </td>
+                    <td class="text-muted mono">{{truncate .CreatedBy 20}}</td>
+                </tr>
+                {{end}}
+                {{else}}
+                <tr><td colspan="6" class="empty-state">No scheduled tasks.</td></tr>
+                {{end}}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{{end}}

@@ -1,0 +1,70 @@
+{{define "title"}}{{.BrandName}} - Facts{{end}}
+
+{{define "content"}}
+<div class="browser">
+    <h1>Facts</h1>
+
+    <div class="toolbar">
+        <input type="search" class="search-input" placeholder="Search facts..."
+               name="q" value="{{.Query}}"
+               hx-get="/facts" hx-trigger="keyup changed delay:300ms"
+               hx-target="#facts-tbody" hx-include="closest .toolbar">
+
+        <div class="filter-tabs">
+            <a class="filter-tab{{if eq .Category ""}} active{{end}}"
+               hx-get="/facts" hx-target="#facts-tbody">All</a>
+            <a class="filter-tab{{if eq .Category "user"}} active{{end}}"
+               hx-get="/facts?category=user" hx-target="#facts-tbody">User</a>
+            <a class="filter-tab{{if eq .Category "home"}} active{{end}}"
+               hx-get="/facts?category=home" hx-target="#facts-tbody">Home</a>
+            <a class="filter-tab{{if eq .Category "device"}} active{{end}}"
+               hx-get="/facts?category=device" hx-target="#facts-tbody">Device</a>
+            <a class="filter-tab{{if eq .Category "routine"}} active{{end}}"
+               hx-get="/facts?category=routine" hx-target="#facts-tbody">Routine</a>
+            <a class="filter-tab{{if eq .Category "preference"}} active{{end}}"
+               hx-get="/facts?category=preference" hx-target="#facts-tbody">Preference</a>
+            <a class="filter-tab{{if eq .Category "architecture"}} active{{end}}"
+               hx-get="/facts?category=architecture" hx-target="#facts-tbody">Architecture</a>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="table-scroll">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Category</th>
+                        <th>Key</th>
+                        <th>Value</th>
+                        <th>Subjects</th>
+                        <th>Confidence</th>
+                        <th>Source</th>
+                        <th>Updated</th>
+                    </tr>
+                </thead>
+                <tbody id="facts-tbody">
+                {{template "facts-tbody" .}}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{{end}}
+
+{{define "facts-tbody"}}
+{{if .Facts}}
+{{range .Facts}}
+<tr>
+    <td><span class="badge badge-teal">{{.Category}}</span></td>
+    <td class="mono">{{.Key}}</td>
+    <td><span class="text-truncate" style="display:inline-block">{{truncate .Value 80}}</span></td>
+    <td class="text-muted" style="font-size:0.8125rem">{{if .Subjects}}{{joinStrings .Subjects ", "}}{{end}}</td>
+    <td>{{confidence .Confidence}}</td>
+    <td class="text-muted">{{truncate .Source 30}}</td>
+    <td class="text-muted">{{.UpdatedAt}}</td>
+</tr>
+{{end}}
+{{else}}
+<tr><td colspan="7" class="empty-state">No facts found.</td></tr>
+{{end}}
+{{end}}
