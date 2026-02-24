@@ -141,11 +141,22 @@ func TestResolve(t *testing.T) {
 			fetcher:  &mockFetcher{states: map[string]string{}},
 			wantSame: true,
 		},
+		{
+			name:     "nil logger does not panic",
+			content:  "<!-- ha-inject: sensor.temp -->\n# Doc",
+			fetcher:  &mockFetcher{states: map[string]string{"sensor.temp": "72"}},
+			wantIn:   []string{"- sensor.temp: 72"},
+			wantSame: false,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := Resolve(context.Background(), []byte(tt.content), tt.fetcher, logger)
+			lgr := logger
+			if tt.name == "nil logger does not panic" {
+				lgr = nil
+			}
+			result := Resolve(context.Background(), []byte(tt.content), tt.fetcher, lgr)
 			got := string(result)
 
 			if tt.wantSame {
@@ -219,5 +230,30 @@ func TestParseDirectives(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestResolve_CanceledContext(t *testing.T) {
+	// When the context is already canceled, Resolve should mark all
+	// entities as failed without calling FetchState.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // immediately canceled
+
+	content := "<!-- ha-inject: sensor.a, sensor.b -->\n# Doc"
+	fetcher := &mockFetcher{states: map[string]string{
+		"sensor.a": "1",
+		"sensor.b": "2",
+	}}
+
+	result := string(Resolve(ctx, []byte(content), fetcher, nil))
+
+	if !strings.Contains(result, "⚠️ HA entity state unavailable") {
+		t.Errorf("expected unavailable warning, got:\n%s", result)
+	}
+	if strings.Contains(result, "## Current HA State") {
+		t.Errorf("should not have state block when all fail, got:\n%s", result)
+	}
+	if !strings.Contains(result, "# Doc") {
+		t.Errorf("original content should be preserved, got:\n%s", result)
 	}
 }

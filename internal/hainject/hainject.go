@@ -15,11 +15,7 @@ import (
 	"log/slog"
 	"regexp"
 	"strings"
-	"time"
 )
-
-// fetchTimeout limits how long entity state resolution can take.
-const fetchTimeout = 2 * time.Second
 
 // directiveRe matches <!-- ha-inject: entity_id, ... --> directives.
 var directiveRe = regexp.MustCompile(`<!--\s*ha-inject:\s*(.*?)\s*-->`)
@@ -31,7 +27,7 @@ type EntityState struct {
 }
 
 // StateFetcher retrieves entity state from Home Assistant.
-// Satisfied by [homeassistant.Client] via a thin adapter (see [ClientAdapter]).
+// Typically implemented by thin adapters over homeassistant.Client.
 type StateFetcher interface {
 	// FetchState returns the current state string for an entity.
 	FetchState(ctx context.Context, entityID string) (string, error)
@@ -40,10 +36,14 @@ type StateFetcher interface {
 // Resolve scans content for ha-inject directives, fetches current entity
 // state from Home Assistant, and prepends a live-state summary block.
 //
-// Returns content unchanged when no directives are found, fetcher is nil,
-// or every entity ID list is empty. Gracefully degrades when HA is
+// The caller controls the deadline via ctx; Resolve does not apply its own
+// timeout. Returns content unchanged when no directives are found, fetcher
+// is nil, or every entity ID list is empty. Gracefully degrades when HA is
 // unreachable: includes a warning note and the original document.
 func Resolve(ctx context.Context, content []byte, fetcher StateFetcher, logger *slog.Logger) []byte {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	if fetcher == nil {
 		return content
 	}
@@ -53,14 +53,20 @@ func Resolve(ctx context.Context, content []byte, fetcher StateFetcher, logger *
 		return content
 	}
 
-	fetchCtx, cancel := context.WithTimeout(ctx, fetchTimeout)
-	defer cancel()
-
 	var succeeded []EntityState
 	var failed []string
 
 	for _, id := range entities {
-		state, err := fetcher.FetchState(fetchCtx, id)
+		// If the context is already done (deadline exceeded or canceled),
+		// mark all remaining entities as failed and stop fetching.
+		if ctx.Err() != nil {
+			logger.Warn("ha-inject: context expired, skipping remaining entities",
+				"remaining", len(entities)-len(succeeded)-len(failed),
+				"error", ctx.Err())
+			failed = append(failed, id)
+			continue
+		}
+		state, err := fetcher.FetchState(ctx, id)
 		if err != nil {
 			logger.Warn("ha-inject: failed to fetch entity state",
 				"entity_id", id, "error", err)

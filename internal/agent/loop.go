@@ -447,7 +447,15 @@ func (l *Loop) buildSystemPrompt(ctx context.Context, userMessage string, histor
 	// When capability tags are active, inject their associated context files
 	// into the system prompt. Files are re-read each turn (matching the
 	// inject_files freshness pattern) so external changes are visible.
+	//
+	// A shared 2-second timeout bounds all HA entity resolution across
+	// every context file in this turn. Individual Resolve calls share
+	// the same deadline so a slow HA cannot stall prompt assembly
+	// beyond 2 s total.
 	if l.capTags != nil && l.activeTags != nil {
+		haCtx, haCancel := context.WithTimeout(ctx, 2*time.Second)
+		defer haCancel()
+
 		seen := make(map[string]bool)
 		var tagCtxBuf strings.Builder
 		for tag, active := range l.activeTags {
@@ -470,7 +478,7 @@ func (l *Loop) buildSystemPrompt(ctx context.Context, userMessage string, histor
 					continue
 				}
 				// Resolve <!-- ha-inject: ... --> directives to live HA state.
-				data = hainject.Resolve(ctx, data, l.haInject, l.logger)
+				data = hainject.Resolve(haCtx, data, l.haInject, l.logger)
 				if tagCtxBuf.Len() > 0 {
 					tagCtxBuf.WriteString("\n\n---\n\n")
 				}
