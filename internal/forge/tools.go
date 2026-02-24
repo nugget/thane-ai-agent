@@ -4,41 +4,24 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"os"
 	"strings"
 )
 
-// TempFileResolver resolves temp:LABEL references to filesystem paths.
-// The tools package's TempFileStore satisfies this interface.
-type TempFileResolver interface {
-	Resolve(convID, label string) string
-}
-
-// ConversationIDFunc extracts the conversation ID from the context.
-// Injected at wiring time to avoid importing the tools package.
-type ConversationIDFunc func(ctx context.Context) string
-
 // Tools holds forge tool dependencies. Each Handle* method takes the
 // raw argument map from the tool registry and returns formatted text
-// for the LLM.
+// for the LLM. Prefix resolution (temp:LABEL, kb:file.md, etc.) is
+// handled universally by the tool registry's ContentResolver before
+// handlers run — individual handlers receive already-resolved content.
 type Tools struct {
-	manager        *Manager
-	tempFiles      TempFileResolver
-	conversationID ConversationIDFunc
-	logger         *slog.Logger
+	manager *Manager
+	logger  *slog.Logger
 }
 
-// NewTools creates forge tools backed by the given manager and optional
-// temp file resolver for temp:LABEL expansion in body parameters. The
-// convIDFunc extracts the conversation ID from context (typically
-// tools.ConversationIDFromContext); pass nil if temp file resolution
-// is not needed.
-func NewTools(mgr *Manager, tempFiles TempFileResolver, convIDFunc ConversationIDFunc, logger *slog.Logger) *Tools {
+// NewTools creates forge tools backed by the given manager.
+func NewTools(mgr *Manager, logger *slog.Logger) *Tools {
 	return &Tools{
-		manager:        mgr,
-		tempFiles:      tempFiles,
-		conversationID: convIDFunc,
-		logger:         logger,
+		manager: mgr,
+		logger:  logger,
 	}
 }
 
@@ -74,34 +57,6 @@ func stringSliceArg(args map[string]any, key string) []string {
 	default:
 		return nil
 	}
-}
-
-// --- Temp label resolution ---
-
-// resolveBody checks if value starts with "temp:" and returns the file
-// contents if so. Otherwise returns value as-is.
-func (t *Tools) resolveBody(ctx context.Context, value string) (string, error) {
-	if !strings.HasPrefix(value, "temp:") {
-		return value, nil
-	}
-	if t.tempFiles == nil {
-		return "", fmt.Errorf("temp file resolution not available")
-	}
-	label := strings.TrimPrefix(value, "temp:")
-	convIDFunc := t.conversationID
-	if convIDFunc == nil {
-		return "", fmt.Errorf("temp file resolution requires conversation ID function")
-	}
-	convID := convIDFunc(ctx)
-	path := t.tempFiles.Resolve(convID, label)
-	if path == "" {
-		return "", fmt.Errorf("unknown temp label %q", label)
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return "", fmt.Errorf("read temp file %q: %w", label, err)
-	}
-	return string(data), nil
 }
 
 // --- Common helpers ---
@@ -143,10 +98,6 @@ func (t *Tools) HandleIssueCreate(ctx context.Context, args map[string]any) (str
 	}
 
 	body := stringArg(args, "body")
-	body, err = t.resolveBody(ctx, body)
-	if err != nil {
-		return "", err
-	}
 
 	issue, err := provider.CreateIssue(ctx, repo, &Issue{
 		Title:     title,
@@ -179,11 +130,7 @@ func (t *Tools) HandleIssueUpdate(ctx context.Context, args map[string]any) (str
 		update.Title = &v
 	}
 	if v, ok := args["body"].(string); ok {
-		resolved, err := t.resolveBody(ctx, v)
-		if err != nil {
-			return "", err
-		}
-		update.Body = &resolved
+		update.Body = &v
 	}
 	if v, ok := args["state"].(string); ok && v != "" {
 		update.State = &v
@@ -291,11 +238,6 @@ func (t *Tools) HandleIssueComment(ctx context.Context, args map[string]any) (st
 	if body == "" {
 		return "", fmt.Errorf("body is required")
 	}
-	body, err = t.resolveBody(ctx, body)
-	if err != nil {
-		return "", err
-	}
-
 	comment, err := provider.AddComment(ctx, repo, number, body)
 	if err != nil {
 		return "", err
@@ -539,11 +481,6 @@ func (t *Tools) HandlePRReview(ctx context.Context, args map[string]any) (string
 	if body == "" {
 		return "", fmt.Errorf("body is required")
 	}
-	body, err = t.resolveBody(ctx, body)
-	if err != nil {
-		return "", err
-	}
-
 	review, err := provider.SubmitReview(ctx, repo, number, &ReviewSubmission{
 		Event: event,
 		Body:  body,
@@ -571,11 +508,6 @@ func (t *Tools) HandlePRReviewComment(ctx context.Context, args map[string]any) 
 	if body == "" {
 		return "", fmt.Errorf("body is required")
 	}
-	body, err = t.resolveBody(ctx, body)
-	if err != nil {
-		return "", err
-	}
-
 	path := stringArg(args, "path")
 	if path == "" {
 		return "", fmt.Errorf("path is required")
@@ -652,13 +584,6 @@ func (t *Tools) HandlePRMerge(ctx context.Context, args map[string]any) (string,
 		Method:        stringArg(args, "method"),
 		CommitTitle:   stringArg(args, "commit_title"),
 		CommitMessage: stringArg(args, "commit_message"),
-	}
-	if opts.CommitMessage != "" {
-		resolved, err := t.resolveBody(ctx, opts.CommitMessage)
-		if err != nil {
-			return "", err
-		}
-		opts.CommitMessage = resolved
 	}
 
 	result, err := provider.MergePR(ctx, repo, number, opts)

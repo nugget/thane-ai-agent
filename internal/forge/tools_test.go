@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -159,16 +157,6 @@ func (m *mockProvider) Search(_ context.Context, query string, kind SearchKind, 
 	return m.searchResult, m.searchErr
 }
 
-// --- Mock temp file resolver ---
-
-type mockTempFiles struct {
-	files map[string]string // key: "convID:label" → value: path
-}
-
-func (m *mockTempFiles) Resolve(convID, label string) string {
-	return m.files[convID+":"+label]
-}
-
 // --- Test helper ---
 
 func newTestTools(provider ForgeProvider, owner string) *Tools {
@@ -299,82 +287,6 @@ func TestArgHelpers(t *testing.T) {
 					t.Errorf("stringSliceArg(%v, %q) = %v, want %v", tt.args, tt.key, got, tt.want)
 				}
 			})
-		}
-	})
-}
-
-// --- resolveBody tests ---
-
-func TestResolveBody(t *testing.T) {
-	t.Run("plain_text_passthrough", func(t *testing.T) {
-		tools := newTestTools(&mockProvider{name: "test"}, "owner")
-		got, err := tools.resolveBody(context.Background(), "hello world")
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if got != "hello world" {
-			t.Errorf("resolveBody() = %q, want %q", got, "hello world")
-		}
-	})
-
-	t.Run("temp_prefix_no_resolver", func(t *testing.T) {
-		tools := newTestTools(&mockProvider{name: "test"}, "owner")
-		// tempFiles is nil by default in newTestTools.
-		_, err := tools.resolveBody(context.Background(), "temp:draft")
-		if err == nil {
-			t.Fatal("expected error for temp: with nil resolver")
-		}
-		if !strings.Contains(err.Error(), "not available") {
-			t.Errorf("error = %q, want it to contain 'not available'", err.Error())
-		}
-	})
-
-	t.Run("temp_prefix_no_convID_func", func(t *testing.T) {
-		tools := newTestTools(&mockProvider{name: "test"}, "owner")
-		tools.tempFiles = &mockTempFiles{}
-		// conversationID is nil by default.
-		_, err := tools.resolveBody(context.Background(), "temp:draft")
-		if err == nil {
-			t.Fatal("expected error for temp: with nil conversation ID func")
-		}
-		if !strings.Contains(err.Error(), "conversation ID") {
-			t.Errorf("error = %q, want it to contain 'conversation ID'", err.Error())
-		}
-	})
-
-	t.Run("temp_prefix_unknown_label", func(t *testing.T) {
-		tools := newTestTools(&mockProvider{name: "test"}, "owner")
-		tools.tempFiles = &mockTempFiles{files: map[string]string{}}
-		tools.conversationID = func(_ context.Context) string { return "conv1" }
-
-		_, err := tools.resolveBody(context.Background(), "temp:nonexistent")
-		if err == nil {
-			t.Fatal("expected error for unknown temp label")
-		}
-		if !strings.Contains(err.Error(), "unknown temp label") {
-			t.Errorf("error = %q, want it to contain 'unknown temp label'", err.Error())
-		}
-	})
-
-	t.Run("temp_prefix_resolves_file", func(t *testing.T) {
-		dir := t.TempDir()
-		tmpFile := filepath.Join(dir, "draft.md")
-		if err := os.WriteFile(tmpFile, []byte("resolved content"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-
-		tools := newTestTools(&mockProvider{name: "test"}, "owner")
-		tools.tempFiles = &mockTempFiles{
-			files: map[string]string{"conv1:draft": tmpFile},
-		}
-		tools.conversationID = func(_ context.Context) string { return "conv1" }
-
-		got, err := tools.resolveBody(context.Background(), "temp:draft")
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if got != "resolved content" {
-			t.Errorf("resolveBody() = %q, want %q", got, "resolved content")
 		}
 	})
 }
