@@ -826,6 +826,29 @@ type PrewarmConfig struct {
 	// MaxFacts caps the number of subject-matched facts injected per
 	// wake. Default: 10.
 	MaxFacts int `yaml:"max_facts"`
+
+	// Archive configures Phase 2 pre-warming: injecting relevant past
+	// conversation excerpts alongside Layer 1 facts. See issue #404.
+	Archive ArchivePrewarmConfig `yaml:"archive"`
+}
+
+// ArchivePrewarmConfig configures archive retrieval injection for
+// cold-start wakes. When enabled, relevant past conversation excerpts
+// are injected into the system prompt so the model has experiential
+// judgment — not just knowledge — before responding.
+type ArchivePrewarmConfig struct {
+	// Enabled controls whether archive injection is active.
+	// Requires the parent Prewarm.Enabled to also be true.
+	// Default: false.
+	Enabled bool `yaml:"enabled"`
+
+	// MaxResults caps the number of archive search results injected.
+	// Default: 3.
+	MaxResults int `yaml:"max_results"`
+
+	// MaxBytes caps the formatted output in bytes to prevent context
+	// flooding. Default: 4000 (~1000 tokens).
+	MaxBytes int `yaml:"max_bytes"`
 }
 
 // MediaConfig configures the media transcript retrieval tool and
@@ -1075,6 +1098,12 @@ func (c *Config) applyDefaults() {
 	if c.Prewarm.MaxFacts == 0 {
 		c.Prewarm.MaxFacts = 10
 	}
+	if c.Prewarm.Archive.MaxResults == 0 {
+		c.Prewarm.Archive.MaxResults = 3
+	}
+	if c.Prewarm.Archive.MaxBytes == 0 {
+		c.Prewarm.Archive.MaxBytes = 4000
+	}
 
 	// Metacognitive loop defaults.
 	if c.Metacognitive.StateFile == "" {
@@ -1307,6 +1336,14 @@ func (c *Config) Validate() error {
 	}
 	if c.Prewarm.Enabled && c.Prewarm.MaxFacts < 1 {
 		return fmt.Errorf("prewarm.max_facts %d must be positive when prewarm is enabled", c.Prewarm.MaxFacts)
+	}
+	if c.Prewarm.Enabled && c.Prewarm.Archive.Enabled {
+		if c.Prewarm.Archive.MaxResults < 1 {
+			return fmt.Errorf("prewarm.archive.max_results %d must be positive when archive pre-warming is enabled", c.Prewarm.Archive.MaxResults)
+		}
+		if c.Prewarm.Archive.MaxBytes < 500 {
+			return fmt.Errorf("prewarm.archive.max_bytes %d must be at least 500 when archive pre-warming is enabled", c.Prewarm.Archive.MaxBytes)
+		}
 	}
 	if err := c.validateMetacognitive(); err != nil {
 		return err
