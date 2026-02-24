@@ -145,13 +145,17 @@ func (p *ArchiveContextProvider) formatResults(results []SearchResult) string {
 			block.WriteByte('\n')
 		}
 
-		// Check byte budget before adding this block.
+		// Check byte budget before adding this block. If it won't fit,
+		// append a truncation notice only if that itself fits.
 		if sb.Len()+block.Len() > p.maxBytes {
 			remaining := len(results) - included
-			sb.WriteString(fmt.Sprintf(
+			truncationMsg := fmt.Sprintf(
 				"*(%d additional result(s) omitted — byte budget reached)*\n",
 				remaining,
-			))
+			)
+			if sb.Len()+len(truncationMsg) <= p.maxBytes {
+				sb.WriteString(truncationMsg)
+			}
 			break
 		}
 
