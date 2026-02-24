@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -1133,6 +1134,7 @@ iterLoop:
 				convID = "default"
 			}
 
+			var illegalCall bool
 			for _, tc := range llmResp.Message.ToolCalls {
 				toolName := tc.Function.Name
 				toolCallID, _ := uuid.NewV7()
@@ -1201,7 +1203,7 @@ iterLoop:
 				var result string
 				var err error
 				if effectiveTools.Get(toolName) == nil {
-					err = fmt.Errorf("tool %q is not available in this context", toolName)
+					err = &tools.ErrToolUnavailable{ToolName: toolName}
 					log.Warn("blocked call to unavailable tool", "tool", toolName)
 				} else {
 					result, err = l.tools.Execute(toolCtx, toolName, argsJSON)
@@ -1210,8 +1212,18 @@ iterLoop:
 				errMsg := ""
 				if err != nil {
 					errMsg = err.Error()
-					result = "Error: " + errMsg
-					log.Error("tool exec failed", "tool", toolName, "error", err)
+					// Distinguish illegal calls (tool unavailable) from
+					// transient failures. Illegal calls get a directive
+					// message and will break the loop after this batch.
+					var unavail *tools.ErrToolUnavailable
+					if errors.As(err, &unavail) {
+						illegalCall = true
+						result = fmt.Sprintf(prompts.IllegalToolMessage, toolName)
+						log.Warn("illegal tool call", "tool", toolName, "iter", i)
+					} else {
+						result = "Error: " + errMsg
+						log.Error("tool exec failed", "tool", toolName, "error", err)
+					}
 				} else {
 					log.Debug("tool exec done", "tool", toolName, "result_len", len(result))
 				}
@@ -1239,6 +1251,15 @@ iterLoop:
 					Content:    result,
 					ToolCallID: tc.ID, // Required by Anthropic for tool_result correlation
 				})
+			}
+
+			// If any tool call was illegal (tool unavailable), break the
+			// loop and force a text response. All tool results have been
+			// appended so the model has context. The post-loop recovery
+			// code handles the final tools=nil LLM call.
+			if illegalCall {
+				log.Warn("breaking loop due to illegal tool call", "iter", i)
+				break iterLoop
 			}
 
 			// Continue loop to get final response
