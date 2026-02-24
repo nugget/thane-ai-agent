@@ -1764,6 +1764,23 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		logger.Info("context pre-warming enabled", "max_facts", cfg.Prewarm.MaxFacts)
 	}
 
+	// Archive retrieval injection — pre-warm cold-start loops with
+	// relevant past conversation excerpts so the model has experiential
+	// judgment alongside Layer 1 facts. See issue #404.
+	if cfg.Prewarm.Enabled && cfg.Prewarm.Archive.Enabled {
+		archiveProvider := memory.NewArchiveContextProvider(
+			archiveStore,
+			cfg.Prewarm.Archive.MaxResults,
+			cfg.Prewarm.Archive.MaxBytes,
+			logger,
+		)
+		contextProvider.Add(archiveProvider)
+		logger.Info("archive pre-warming enabled",
+			"max_results", cfg.Prewarm.Archive.MaxResults,
+			"max_bytes", cfg.Prewarm.Archive.MaxBytes,
+		)
+	}
+
 	loop.SetContextProvider(contextProvider)
 	logger.Info("context providers initialized",
 		"episodic_daily_dir", cfg.Episodic.DailyDir,
