@@ -20,9 +20,11 @@ type ContentResolver struct {
 }
 
 // NewContentResolver creates a ContentResolver backed by the given path
-// resolver and temp file store. Either dependency may be nil — resolution
-// for that prefix type is silently skipped. Returns nil if both
-// dependencies are nil (no resolution possible).
+// resolver and temp file store. The path resolver may be nil — resolution
+// for path-based prefixes is silently skipped. If the temp file store is
+// nil, any temp: references will return an error (they are always
+// intentional). Returns nil if both dependencies are nil (no resolution
+// possible).
 func NewContentResolver(pr *paths.Resolver, tfs *TempFileStore, logger *slog.Logger) *ContentResolver {
 	if pr == nil && tfs == nil {
 		return nil
@@ -37,15 +39,16 @@ func NewContentResolver(pr *paths.Resolver, tfs *TempFileStore, logger *slog.Log
 	}
 }
 
-// ResolveArgs walks all top-level string values in args and replaces bare
-// prefix references with file content. A "bare" reference is one where the
-// entire string value is the prefix reference — no surrounding whitespace
-// or text.
+// ResolveArgs recursively walks all values in args and replaces bare prefix
+// references with file content. A "bare" reference is one where the entire
+// string value is the prefix reference — no surrounding whitespace or text.
+// Nested maps and arrays are traversed.
 //
-// For temp: references, resolution failures are treated as errors — these
-// are always intentional and a missing label likely indicates a typo or
-// stale reference. For path prefixes (kb:, scratchpad:, etc.), missing
-// files pass through silently since a nonexistent file is valid state.
+// For temp: references, resolution failures are always treated as errors —
+// these are intentional and a missing label (or unconfigured store) likely
+// indicates a typo, stale reference, or misconfiguration. For path prefixes
+// (kb:, scratchpad:, etc.), missing files pass through silently since a
+// nonexistent file is valid state.
 //
 // The method modifies args in place.
 func (cr *ContentResolver) ResolveArgs(ctx context.Context, args map[string]any) error {
@@ -54,54 +57,88 @@ func (cr *ContentResolver) ResolveArgs(ctx context.Context, args map[string]any)
 	}
 	convID := ConversationIDFromContext(ctx)
 	for key, val := range args {
-		s, ok := val.(string)
-		if !ok || s == "" {
-			continue
-		}
-		// Only resolve bare references — the entire string must be the
-		// prefix reference with no whitespace (spaces, tabs, newlines).
-		if strings.ContainsAny(s, " \t\n\r") {
-			continue
-		}
-		resolved, err := cr.resolveToContent(convID, s)
+		resolved, err := cr.resolveArgValue(convID, val)
 		if err != nil {
-			return fmt.Errorf("resolve %q in parameter %q: %w", s, key, err)
+			return fmt.Errorf("resolve parameter %q: %w", key, err)
 		}
-		if resolved != "" {
-			args[key] = resolved
-		}
+		args[key] = resolved
 	}
 	return nil
 }
 
+// resolveArgValue recursively resolves prefix references in a single
+// argument value. Strings are checked for bare prefix references; maps
+// and slices are traversed recursively; other types pass through.
+func (cr *ContentResolver) resolveArgValue(convID string, val any) (any, error) {
+	switch v := val.(type) {
+	case string:
+		if v == "" || strings.ContainsAny(v, " \t\n\r") {
+			return v, nil
+		}
+		resolved, didResolve, err := cr.resolveToContent(convID, v)
+		if err != nil {
+			return nil, err
+		}
+		if didResolve {
+			return resolved, nil
+		}
+		return v, nil
+	case map[string]any:
+		for key, elem := range v {
+			resolved, err := cr.resolveArgValue(convID, elem)
+			if err != nil {
+				return nil, fmt.Errorf("key %q: %w", key, err)
+			}
+			v[key] = resolved
+		}
+		return v, nil
+	case []any:
+		for i, elem := range v {
+			resolved, err := cr.resolveArgValue(convID, elem)
+			if err != nil {
+				return nil, fmt.Errorf("index %d: %w", i, err)
+			}
+			v[i] = resolved
+		}
+		return v, nil
+	default:
+		return v, nil
+	}
+}
+
 // resolveToContent attempts to resolve a bare prefix reference to file
-// content.
+// content. Returns (content, true, nil) on successful resolution,
+// ("", false, nil) for non-matching strings, and ("", false, error)
+// on failures.
 //
-// For temp: prefixes, failures return an error (label not found or file
-// unreadable). For path prefixes, failures pass through silently (returns
-// empty string, nil error). Returns ("", nil) for strings that don't
-// match any registered prefix.
-func (cr *ContentResolver) resolveToContent(convID, value string) (string, error) {
+// For temp: prefixes, failures always return an error — even if no
+// TempFileStore is configured, since the caller clearly intended a
+// temp: reference. For path prefixes, failures pass through silently
+// (returns empty string, false, nil).
+func (cr *ContentResolver) resolveToContent(convID, value string) (string, bool, error) {
 	// Try temp: first (most specific, per-conversation).
-	// Failures here are errors — temp labels are intentional references.
-	if strings.HasPrefix(value, "temp:") && cr.tempFileStore != nil {
+	// Failures here are always errors — temp labels are intentional references.
+	if strings.HasPrefix(value, "temp:") {
 		label := strings.TrimPrefix(value, "temp:")
 		if label == "" {
-			return "", nil
+			return "", false, nil
+		}
+		if cr.tempFileStore == nil {
+			return "", false, fmt.Errorf("unknown temp label %q (temp file store not configured)", label)
 		}
 		path := cr.tempFileStore.Resolve(convID, label)
 		if path == "" {
-			return "", fmt.Errorf("unknown temp label %q", label)
+			return "", false, fmt.Errorf("unknown temp label %q", label)
 		}
 		data, err := os.ReadFile(path)
 		if err != nil {
-			return "", fmt.Errorf("read temp file %q: %w", label, err)
+			return "", false, fmt.Errorf("read temp file %q: %w", label, err)
 		}
 		cr.logger.Debug("resolved temp: prefix to content",
 			"label", label,
 			"bytes", len(data),
 		)
-		return string(data), nil
+		return string(data), true, nil
 	}
 
 	// Try path prefixes (kb:, scratchpad:, etc.).
@@ -113,7 +150,7 @@ func (cr *ContentResolver) resolveToContent(convID, value string) (string, error
 				"value", value,
 				"error", err,
 			)
-			return "", nil
+			return "", false, nil
 		}
 		data, err := os.ReadFile(absPath)
 		if err != nil {
@@ -122,15 +159,15 @@ func (cr *ContentResolver) resolveToContent(convID, value string) (string, error
 				"path", absPath,
 				"error", err,
 			)
-			return "", nil
+			return "", false, nil
 		}
 		cr.logger.Debug("resolved path prefix to content",
 			"value", value,
 			"path", absPath,
 			"bytes", len(data),
 		)
-		return string(data), nil
+		return string(data), true, nil
 	}
 
-	return "", nil
+	return "", false, nil
 }

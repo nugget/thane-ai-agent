@@ -1072,10 +1072,10 @@ func (r *Registry) Execute(ctx context.Context, name string, argsJSON string) (s
 	}
 
 	// Universal prefix-to-content resolution. Bare prefix references
-	// (temp:LABEL, kb:file.md, etc.) in string arguments are replaced
-	// with the file's content before the handler runs. temp: failures
-	// are errors (intentional references); path prefix failures pass
-	// through silently.
+	// (temp:LABEL, kb:file.md, etc.) in argument values are recursively
+	// resolved to file content before the handler runs. temp: references
+	// always error on failure (missing label or unconfigured store);
+	// path prefix failures pass through silently.
 	if !tool.SkipContentResolve && r.contentResolver != nil && args != nil {
 		if err := r.contentResolver.ResolveArgs(ctx, args); err != nil {
 			return "", fmt.Errorf("%s: %w", name, err)

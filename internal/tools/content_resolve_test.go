@@ -222,6 +222,101 @@ func TestContentResolver_ResolveArgs(t *testing.T) {
 			t.Errorf("body = %q, want original unchanged", got)
 		}
 	})
+
+	t.Run("empty_file_content_resolved", func(t *testing.T) {
+		cr, tfs, _ := testContentResolver(t)
+		ctx := WithConversationID(context.Background(), "conv-1")
+
+		// Create a temp file with empty content.
+		_, err := tfs.Create(ctx, "conv-1", "empty", "")
+		if err != nil {
+			t.Fatalf("Create temp: %v", err)
+		}
+
+		args := map[string]any{"body": "temp:empty"}
+		if err := cr.ResolveArgs(ctx, args); err != nil {
+			t.Fatalf("ResolveArgs: %v", err)
+		}
+
+		// Empty content should still be substituted (didResolve = true).
+		if got := args["body"].(string); got != "" {
+			t.Errorf("body = %q, want empty string from resolved file", got)
+		}
+	})
+
+	t.Run("nested_map_resolved", func(t *testing.T) {
+		cr, tfs, _ := testContentResolver(t)
+		ctx := WithConversationID(context.Background(), "conv-1")
+
+		_, err := tfs.Create(ctx, "conv-1", "nested_val", "resolved nested")
+		if err != nil {
+			t.Fatalf("Create temp: %v", err)
+		}
+
+		args := map[string]any{
+			"config": map[string]any{
+				"body": "temp:nested_val",
+				"name": "plain",
+			},
+		}
+		if err := cr.ResolveArgs(ctx, args); err != nil {
+			t.Fatalf("ResolveArgs: %v", err)
+		}
+
+		config := args["config"].(map[string]any)
+		if got := config["body"].(string); got != "resolved nested" {
+			t.Errorf("nested body = %q, want %q", got, "resolved nested")
+		}
+		if got := config["name"].(string); got != "plain" {
+			t.Errorf("nested name = %q, want %q", got, "plain")
+		}
+	})
+
+	t.Run("nested_array_resolved", func(t *testing.T) {
+		cr, tfs, _ := testContentResolver(t)
+		ctx := WithConversationID(context.Background(), "conv-1")
+
+		_, err := tfs.Create(ctx, "conv-1", "item", "array item content")
+		if err != nil {
+			t.Fatalf("Create temp: %v", err)
+		}
+
+		args := map[string]any{
+			"items": []any{"temp:item", "plain text"},
+		}
+		if err := cr.ResolveArgs(ctx, args); err != nil {
+			t.Fatalf("ResolveArgs: %v", err)
+		}
+
+		items := args["items"].([]any)
+		if got := items[0].(string); got != "array item content" {
+			t.Errorf("items[0] = %q, want %q", got, "array item content")
+		}
+		if got := items[1].(string); got != "plain text" {
+			t.Errorf("items[1] = %q, want %q", got, "plain text")
+		}
+	})
+
+	t.Run("temp_with_nil_store_errors", func(t *testing.T) {
+		// ContentResolver with path resolver but no temp file store.
+		kbDir := filepath.Join(t.TempDir(), "kb")
+		if err := os.MkdirAll(kbDir, 0o755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+		pr := paths.New(map[string]string{"kb": kbDir})
+		cr := NewContentResolver(pr, nil, nil)
+
+		ctx := WithConversationID(context.Background(), "conv-1")
+
+		args := map[string]any{"body": "temp:some_label"}
+		err := cr.ResolveArgs(ctx, args)
+		if err == nil {
+			t.Fatal("expected error for temp: with nil TempFileStore")
+		}
+		if !strings.Contains(err.Error(), "temp file store not configured") {
+			t.Errorf("error = %q, want it to contain 'temp file store not configured'", err.Error())
+		}
+	})
 }
 
 func TestContentResolver_Execute_Integration(t *testing.T) {
