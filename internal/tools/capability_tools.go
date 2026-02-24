@@ -70,8 +70,9 @@ func (r *Registry) registerRequestCapability(mgr CapabilityManager, manifest []C
 	availableDesc.WriteString("Use drop_capability to deactivate a tag when you no longer need those tools.")
 
 	r.Register(&Tool{
-		Name:        "request_capability",
-		Description: availableDesc.String(),
+		Name:            "request_capability",
+		AlwaysAvailable: true,
+		Description:     availableDesc.String(),
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -115,8 +116,9 @@ func (r *Registry) registerRequestCapability(mgr CapabilityManager, manifest []C
 // registerDropCapability registers the drop_capability tool.
 func (r *Registry) registerDropCapability(mgr CapabilityManager, tagManifest map[string]CapabilityManifest) {
 	r.Register(&Tool{
-		Name:        "drop_capability",
-		Description: "Deactivate a capability tag to remove its tools from the active set. Always-active tags cannot be dropped. Use when you no longer need a capability's tools to keep the tool set focused.",
+		Name:            "drop_capability",
+		AlwaysAvailable: true,
+		Description:     "Deactivate a capability tag to remove its tools from the active set. Always-active tags cannot be dropped. Use when you no longer need a capability's tools to keep the tool set focused.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -137,11 +139,19 @@ func (r *Registry) registerDropCapability(mgr CapabilityManager, tagManifest map
 				return "", err
 			}
 
-			// List the tools that were unloaded.
+			// List the tools that were unloaded and the remaining active tags.
 			var result strings.Builder
 			fmt.Fprintf(&result, "Capability **%s** deactivated.", tag)
 			if m, ok := tagManifest[tag]; ok && len(m.Tools) > 0 {
 				fmt.Fprintf(&result, " Tools removed: %s.", strings.Join(m.Tools, ", "))
+			}
+			if remaining := mgr.ActiveTags(); len(remaining) > 0 {
+				tags := make([]string, 0, len(remaining))
+				for t := range remaining {
+					tags = append(tags, t)
+				}
+				sort.Strings(tags)
+				fmt.Fprintf(&result, " Active tags: %s.", strings.Join(tags, ", "))
 			}
 			return result.String(), nil
 		},

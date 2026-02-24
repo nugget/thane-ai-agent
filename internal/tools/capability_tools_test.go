@@ -114,6 +114,11 @@ func TestDropCapability(t *testing.T) {
 		t.Error("ha tag should be inactive after drop")
 	}
 
+	// Response should list remaining active tags.
+	if !strings.Contains(result, "Active tags: search") {
+		t.Errorf("result = %q, want to list remaining active tags", result)
+	}
+
 	// search should still be active.
 	if !mgr.activeTags["search"] {
 		t.Error("search tag should still be active")
@@ -317,10 +322,73 @@ func TestRegistryFilterByTags(t *testing.T) {
 			wantOut: []string{"remember_fact"},
 		},
 		{
-			name:    "unknown tag returns empty",
+			name:    "unknown tag filters to tagged-only",
 			tags:    []string{"nonexistent"},
-			wantIn:  nil,
 			wantOut: []string{"get_state", "call_service", "web_search", "remember_fact"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			filtered := reg.FilterByTags(tt.tags)
+			for _, name := range tt.wantIn {
+				if filtered.Get(name) == nil {
+					t.Errorf("filtered registry missing %q", name)
+				}
+			}
+			for _, name := range tt.wantOut {
+				if filtered.Get(name) != nil {
+					t.Errorf("filtered registry should not contain %q", name)
+				}
+			}
+		})
+	}
+}
+
+func TestRegistryFilterByTags_AlwaysAvailable(t *testing.T) {
+	reg := NewEmptyRegistry()
+	// Tagged tools
+	reg.Register(&Tool{Name: "get_state", Description: "HA state"})
+	reg.Register(&Tool{Name: "web_search", Description: "Search"})
+	// AlwaysAvailable meta-tools (like request_capability, drop_capability)
+	reg.Register(&Tool{Name: "request_capability", Description: "Activate a tag", AlwaysAvailable: true})
+	reg.Register(&Tool{Name: "drop_capability", Description: "Deactivate a tag", AlwaysAvailable: true})
+	// Untagged tool WITHOUT AlwaysAvailable — should be filtered out
+	reg.Register(&Tool{Name: "plain_untagged", Description: "Not tagged, not meta"})
+
+	reg.SetTagIndex(map[string][]string{
+		"ha":     {"get_state"},
+		"search": {"web_search"},
+	})
+
+	tests := []struct {
+		name    string
+		tags    []string
+		wantIn  []string
+		wantOut []string
+	}{
+		{
+			name:    "always-available tools survive ha-only filter",
+			tags:    []string{"ha"},
+			wantIn:  []string{"get_state", "request_capability", "drop_capability"},
+			wantOut: []string{"web_search", "plain_untagged"},
+		},
+		{
+			name:    "always-available tools survive search-only filter",
+			tags:    []string{"search"},
+			wantIn:  []string{"web_search", "request_capability", "drop_capability"},
+			wantOut: []string{"get_state", "plain_untagged"},
+		},
+		{
+			name:    "always-available tools survive unknown-tag filter",
+			tags:    []string{"nonexistent"},
+			wantIn:  []string{"request_capability", "drop_capability"},
+			wantOut: []string{"get_state", "web_search", "plain_untagged"},
+		},
+		{
+			name:   "nil tags returns everything",
+			tags:   nil,
+			wantIn: []string{"get_state", "web_search", "request_capability", "drop_capability", "plain_untagged"},
 		},
 	}
 
