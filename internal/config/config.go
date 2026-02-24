@@ -828,7 +828,8 @@ type PrewarmConfig struct {
 	MaxFacts int `yaml:"max_facts"`
 }
 
-// MediaConfig configures the media transcript retrieval tool.
+// MediaConfig configures the media transcript retrieval tool and
+// RSS/Atom feed monitoring.
 type MediaConfig struct {
 	// YtDlpPath is the explicit path to the yt-dlp binary. If empty,
 	// the binary is located via exec.LookPath at startup.
@@ -859,6 +860,16 @@ type MediaConfig struct {
 	// When set, it is passed as a routing hint (soft preference, not
 	// override). If empty, the router selects an appropriate local model.
 	SummarizeModel string `yaml:"summarize_model"`
+
+	// FeedCheckInterval is how often (in seconds) to poll followed RSS/Atom
+	// feeds for new entries. Set to a positive value to enable polling (e.g.,
+	// 3600 for hourly). Default: 0 (disabled). No default is applied —
+	// users must opt in by setting a positive interval.
+	FeedCheckInterval int `yaml:"feed_check_interval"`
+
+	// MaxFeeds limits the number of feeds that can be followed.
+	// Default: 50.
+	MaxFeeds int `yaml:"max_feeds"`
 }
 
 // MetacognitiveConfig configures the self-regulating metacognitive loop.
@@ -1030,6 +1041,12 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Media.WhisperModel == "" {
 		c.Media.WhisperModel = "large-v3"
+	}
+	// FeedCheckInterval is intentionally not defaulted — 0 means disabled.
+	// Users must opt in by setting a positive value.
+
+	if c.Media.MaxFeeds == 0 {
+		c.Media.MaxFeeds = 50
 	}
 
 	if c.Episodic.LookbackDays == 0 {
