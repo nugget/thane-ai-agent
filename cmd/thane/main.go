@@ -253,6 +253,9 @@ func runAsk(ctx context.Context, stdout io.Writer, stderr io.Writer, configPath 
 	// Minimal loop: no router, no scheduler, no compactor. The default
 	// model handles everything for CLI one-shots.
 	loop := agent.NewLoop(logger, mem, nil, nil, ha, nil, llmClient, cfg.Models.Default, talentContent, "", 0)
+	if ha != nil {
+		loop.SetHAInject(&haStateFetcher{client: ha})
+	}
 
 	response, err := loop.Process(ctx, "cli-test", question)
 	if err != nil {
@@ -733,6 +736,9 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	loop.SetTimezone(cfg.Timezone)
 	loop.SetDebugConfig(cfg.Debug)
 	loop.SetArchiver(archiveAdapter)
+	if ha != nil {
+		loop.SetHAInject(&haStateFetcher{client: ha})
+	}
 
 	// --- Context injection ---
 	// Resolve inject_file paths at startup (tilde expansion, existence
@@ -2447,4 +2453,19 @@ func (r *contactNameLookup) LookupContactByName(name string) *agent.ContactSumma
 		Summary:      c.Summary,
 		Facts:        facts,
 	}
+}
+
+// haStateFetcher adapts homeassistant.Client to the hainject.StateFetcher
+// interface by extracting the state string from the full State response.
+type haStateFetcher struct {
+	client *homeassistant.Client
+}
+
+// FetchState returns the current state string for an HA entity.
+func (f *haStateFetcher) FetchState(ctx context.Context, entityID string) (string, error) {
+	state, err := f.client.GetState(ctx, entityID)
+	if err != nil {
+		return "", err
+	}
+	return state.State, nil
 }
