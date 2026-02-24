@@ -172,6 +172,9 @@ type Loop struct {
 	capTags       map[string]config.CapabilityTagConfig // tag definitions from config
 	activeTags    map[string]bool                       // currently active tags (see scoping note above)
 	parsedTalents []talents.Talent                      // pre-loaded talent structs for tag filtering
+
+	// haInject resolves <!-- ha-inject: ... --> directives in tag context files.
+	haInject homeassistant.StateFetcher
 }
 
 // NewLoop creates a new agent loop.
@@ -280,6 +283,13 @@ func (l *Loop) SetCapabilityTags(capTags map[string]config.CapabilityTagConfig, 
 func (l *Loop) SetUsageRecorder(store *usage.Store, pricing map[string]config.PricingEntry) {
 	l.usageStore = store
 	l.pricing = pricing
+}
+
+// SetHAInject configures the HA entity state resolver for tag context
+// documents. When set, <!-- ha-inject: ... --> directives in context
+// files are resolved to live entity state on each turn.
+func (l *Loop) SetHAInject(fetcher homeassistant.StateFetcher) {
+	l.haInject = fetcher
 }
 
 // ActiveTags returns the set of currently active capability tags.
@@ -436,7 +446,15 @@ func (l *Loop) buildSystemPrompt(ctx context.Context, userMessage string, histor
 	// When capability tags are active, inject their associated context files
 	// into the system prompt. Files are re-read each turn (matching the
 	// inject_files freshness pattern) so external changes are visible.
+	//
+	// A shared 2-second timeout bounds all HA entity resolution across
+	// every context file in this turn. Individual Resolve calls share
+	// the same deadline so a slow HA cannot stall prompt assembly
+	// beyond 2 s total.
 	if l.capTags != nil && l.activeTags != nil {
+		haCtx, haCancel := context.WithTimeout(ctx, 2*time.Second)
+		defer haCancel()
+
 		seen := make(map[string]bool)
 		var tagCtxBuf strings.Builder
 		for tag, active := range l.activeTags {
@@ -458,6 +476,8 @@ func (l *Loop) buildSystemPrompt(ctx context.Context, userMessage string, histor
 						"tag", tag, "path", path, "error", err)
 					continue
 				}
+				// Resolve <!-- ha-inject: ... --> directives to live HA state.
+				data = homeassistant.ResolveInject(haCtx, data, l.haInject, l.logger)
 				if tagCtxBuf.Len() > 0 {
 					tagCtxBuf.WriteString("\n\n---\n\n")
 				}

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -215,5 +216,101 @@ func TestBuildSystemPrompt_TagContextOrderAfterInjected(t *testing.T) {
 	}
 	if tagCtxIdx > conditionsIdx {
 		t.Error("tag context should appear before current conditions")
+	}
+}
+
+// mockStateFetcher implements homeassistant.StateFetcher for agent-level tests.
+type mockStateFetcher struct {
+	states map[string]string
+}
+
+func (m *mockStateFetcher) FetchState(_ context.Context, entityID string) (string, error) {
+	v, ok := m.states[entityID]
+	if !ok {
+		return "", fmt.Errorf("entity %q not found", entityID)
+	}
+	return v, nil
+}
+
+func TestBuildSystemPrompt_HAInjectResolved(t *testing.T) {
+	dir := t.TempDir()
+	f := filepath.Join(dir, "pool.md")
+	os.WriteFile(f, []byte("<!-- ha-inject: sensor.pool_temp -->\n# Pool Status\nRefer to live state above."), 0644)
+
+	l := newTagTestLoop()
+	l.SetCapabilityTags(map[string]config.CapabilityTagConfig{
+		"pool": {
+			Description:  "Pool management",
+			Tools:        []string{"pool_tool"},
+			Context:      []string{f},
+			AlwaysActive: true,
+		},
+	}, nil)
+	l.SetHAInject(&mockStateFetcher{states: map[string]string{
+		"sensor.pool_temp": "84.2",
+	}})
+
+	prompt := l.buildSystemPrompt(context.Background(), "hello", nil)
+
+	if !strings.Contains(prompt, "## Current HA State (live)") {
+		t.Error("prompt should contain live state header")
+	}
+	if !strings.Contains(prompt, "- sensor.pool_temp: 84.2") {
+		t.Error("prompt should contain resolved entity state")
+	}
+	if !strings.Contains(prompt, "# Pool Status") {
+		t.Error("prompt should preserve the original document content")
+	}
+}
+
+func TestBuildSystemPrompt_HAInjectNilFetcher(t *testing.T) {
+	dir := t.TempDir()
+	f := filepath.Join(dir, "doc.md")
+	os.WriteFile(f, []byte("<!-- ha-inject: sensor.temp -->\n# Doc"), 0644)
+
+	l := newTagTestLoop()
+	l.SetCapabilityTags(map[string]config.CapabilityTagConfig{
+		"test": {
+			Description:  "Test",
+			Tools:        []string{"test_tool"},
+			Context:      []string{f},
+			AlwaysActive: true,
+		},
+	}, nil)
+	// haInject not set — should pass through without resolving
+
+	prompt := l.buildSystemPrompt(context.Background(), "hello", nil)
+
+	if strings.Contains(prompt, "## Current HA State") {
+		t.Error("prompt should not contain state block when haInject is nil")
+	}
+	if !strings.Contains(prompt, "# Doc") {
+		t.Error("original document content should be preserved")
+	}
+}
+
+func TestBuildSystemPrompt_HAInjectFetchFailure(t *testing.T) {
+	dir := t.TempDir()
+	f := filepath.Join(dir, "doc.md")
+	os.WriteFile(f, []byte("<!-- ha-inject: sensor.missing -->\n# Doc"), 0644)
+
+	l := newTagTestLoop()
+	l.SetCapabilityTags(map[string]config.CapabilityTagConfig{
+		"test": {
+			Description:  "Test",
+			Tools:        []string{"test_tool"},
+			Context:      []string{f},
+			AlwaysActive: true,
+		},
+	}, nil)
+	l.SetHAInject(&mockStateFetcher{states: map[string]string{}})
+
+	prompt := l.buildSystemPrompt(context.Background(), "hello", nil)
+
+	if !strings.Contains(prompt, "⚠️ HA entity state unavailable") {
+		t.Error("prompt should contain unavailability warning when all fetches fail")
+	}
+	if !strings.Contains(prompt, "# Doc") {
+		t.Error("original document content should be preserved on failure")
 	}
 }
