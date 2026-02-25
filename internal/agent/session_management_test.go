@@ -63,7 +63,7 @@ func (m *mockArchiver) EnsureSession(convID string) string {
 
 func (m *mockArchiver) ArchiveIterations([]memory.ArchivedIteration) error { return nil }
 
-func (m *mockArchiver) LinkToolCallsToIteration(string, int, []string) error { return nil }
+func (m *mockArchiver) LinkPendingIterationToolCalls(string) error { return nil }
 
 func (m *mockArchiver) OnMessage(string) {}
 

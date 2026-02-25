@@ -82,8 +82,7 @@ type AnticipationStore interface {
 	Get(id string) (*anticipation.Anticipation, error)
 }
 
-// SessionStore is the subset of memory.ArchiveStore used by the session inspector.
-// SessionStore is the subset of memory.ArchiveStore used by the web dashboard.
+// SessionStore is the subset of memory.ArchiveStore used by the web dashboard's session inspector.
 type SessionStore interface {
 	ListSessions(conversationID string, limit int) ([]*memory.Session, error)
 	ListChildSessions(parentSessionID string) ([]*memory.Session, error)

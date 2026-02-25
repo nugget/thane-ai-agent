@@ -798,6 +798,7 @@ func TestArchiveIterations_RoundTrip(t *testing.T) {
 			InputTokens:    1000,
 			OutputTokens:   200,
 			ToolCallCount:  2,
+			ToolCallIDs:    []string{"tc-a", "tc-b"},
 			StartedAt:      now,
 			DurationMs:     350,
 			HasToolCalls:   true,
@@ -844,6 +845,9 @@ func TestArchiveIterations_RoundTrip(t *testing.T) {
 	if !got[0].HasToolCalls {
 		t.Error("iter[0] has_tool_calls should be true")
 	}
+	if len(got[0].ToolCallIDs) != 2 || got[0].ToolCallIDs[0] != "tc-a" {
+		t.Errorf("iter[0] tool_call_ids = %v, want [tc-a tc-b]", got[0].ToolCallIDs)
+	}
 
 	// Verify second iteration.
 	if got[1].IterationIndex != 1 {
@@ -854,6 +858,54 @@ func TestArchiveIterations_RoundTrip(t *testing.T) {
 	}
 	if got[1].HasToolCalls {
 		t.Error("iter[1] has_tool_calls should be false")
+	}
+
+	// Archive a second batch (simulating a second turn in the same session).
+	// Both iterations start at index 0 locally, but should be offset to 2 and 3.
+	batch2 := []ArchivedIteration{
+		{
+			SessionID:      sess.ID,
+			IterationIndex: 0,
+			Model:          "claude-haiku",
+			InputTokens:    500,
+			OutputTokens:   50,
+			ToolCallCount:  1,
+			ToolCallIDs:    []string{"tc-c"},
+			StartedAt:      now.Add(2 * time.Second),
+			DurationMs:     100,
+			HasToolCalls:   true,
+		},
+		{
+			SessionID:      sess.ID,
+			IterationIndex: 1,
+			Model:          "claude-haiku",
+			InputTokens:    600,
+			OutputTokens:   75,
+			StartedAt:      now.Add(3 * time.Second),
+			DurationMs:     80,
+		},
+	}
+
+	if err := store.ArchiveIterations(batch2); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err = store.GetSessionIterations(sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 4 {
+		t.Fatalf("expected 4 iterations after second batch, got %d", len(got))
+	}
+	// Second batch should be offset: 0→2, 1→3.
+	if got[2].IterationIndex != 2 {
+		t.Errorf("iter[2] index = %d, want 2 (offset)", got[2].IterationIndex)
+	}
+	if got[2].Model != "claude-haiku" {
+		t.Errorf("iter[2] model = %q, want %q", got[2].Model, "claude-haiku")
+	}
+	if got[3].IterationIndex != 3 {
+		t.Errorf("iter[3] index = %d, want 3 (offset)", got[3].IterationIndex)
 	}
 }
 

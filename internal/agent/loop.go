@@ -131,9 +131,9 @@ type SessionArchiver interface {
 	EnsureSession(conversationID string) string
 	// ArchiveIterations copies iteration records to the immutable archive.
 	ArchiveIterations(iterations []memory.ArchivedIteration) error
-	// LinkToolCallsToIteration sets the iteration_index on archived tool calls
-	// belonging to a specific iteration.
-	LinkToolCallsToIteration(sessionID string, iterationIndex int, toolCallIDs []string) error
+	// LinkPendingIterationToolCalls links archived tool calls to their
+	// parent iterations using stored tool_call_ids.
+	LinkPendingIterationToolCalls(sessionID string) error
 	// OnMessage is called after each message to track session stats.
 	OnMessage(conversationID string)
 	// ActiveSessionStartedAt returns when the active session began,
@@ -1583,6 +1583,7 @@ func toArchivedIterations(sessionID string, iters []iterationRecord) []memory.Ar
 			InputTokens:    iter.inputTokens,
 			OutputTokens:   iter.outputTokens,
 			ToolCallCount:  len(iter.toolCallIDs),
+			ToolCallIDs:    iter.toolCallIDs,
 			StartedAt:      iter.startedAt,
 			DurationMs:     iter.durationMs,
 			HasToolCalls:   iter.hasToolCalls,
@@ -1592,26 +1593,22 @@ func toArchivedIterations(sessionID string, iters []iterationRecord) []memory.Ar
 	return archived
 }
 
-// archiveIterations persists iteration records and links tool calls to
-// their iterations. Errors are logged but not returned.
+// archiveIterations persists iteration records. Tool call linkage happens
+// later in ArchiveConversation when tool calls are moved to the archive.
+// Errors are logged but not returned.
 func (l *Loop) archiveIterations(log *slog.Logger, convID string, iterations []iterationRecord) {
 	if l.archiver == nil || len(iterations) == 0 {
 		return
 	}
-	sessionID := l.archiver.ActiveSessionID(convID)
+	// Ensure a session exists so first-turn iterations are not lost.
+	sessionID := l.archiver.EnsureSession(convID)
 	if sessionID == "" {
+		log.Warn("no active session for iteration archive", "conversation_id", convID)
 		return
 	}
 	archived := toArchivedIterations(sessionID, iterations)
 	if err := l.archiver.ArchiveIterations(archived); err != nil {
 		log.Warn("failed to archive iterations", "error", err)
-	}
-	for _, iter := range iterations {
-		if len(iter.toolCallIDs) > 0 {
-			if err := l.archiver.LinkToolCallsToIteration(sessionID, iter.index, iter.toolCallIDs); err != nil {
-				log.Warn("failed to link tool calls to iteration", "error", err)
-			}
-		}
 	}
 }
 

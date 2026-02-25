@@ -105,6 +105,19 @@ func (a *ArchiveAdapter) ArchiveConversation(conversationID string, messages []M
 		}
 	}
 
+	// Now that tool calls are in the archive, link any that belong to
+	// previously-archived iterations (stored tool_call_ids on the iteration
+	// rows). This closes the gap where iterations are archived per-turn
+	// but tool calls are only archived at session compaction time.
+	if sessionID != "" {
+		if err := a.store.LinkPendingIterationToolCalls(sessionID); err != nil {
+			a.logger.Warn("failed to link tool calls to iterations",
+				"conversation", conversationID,
+				"error", err,
+			)
+		}
+	}
+
 	a.logger.Info("conversation archived",
 		"conversation", conversationID,
 		"messages", len(messages),
@@ -236,9 +249,10 @@ func (a *ArchiveAdapter) ArchiveIterations(iterations []ArchivedIteration) error
 	return a.store.ArchiveIterations(iterations)
 }
 
-// LinkToolCallsToIteration associates tool calls with their parent iteration.
-func (a *ArchiveAdapter) LinkToolCallsToIteration(sessionID string, iterationIndex int, toolCallIDs []string) error {
-	return a.store.LinkToolCallsToIteration(sessionID, iterationIndex, toolCallIDs)
+// LinkPendingIterationToolCalls links archived tool calls to their parent
+// iterations using the tool_call_ids stored on the iteration records.
+func (a *ArchiveAdapter) LinkPendingIterationToolCalls(sessionID string) error {
+	return a.store.LinkPendingIterationToolCalls(sessionID)
 }
 
 // Store returns the underlying ArchiveStore for direct access (API endpoints, etc.)

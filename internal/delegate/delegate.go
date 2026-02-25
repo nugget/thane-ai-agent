@@ -1108,6 +1108,7 @@ func (e *Executor) archiveSession(rec *completionRecord, now time.Time) {
 				InputTokens:    iter.inputTokens,
 				OutputTokens:   iter.outputTokens,
 				ToolCallCount:  len(iter.toolCallIDs),
+				ToolCallIDs:    iter.toolCallIDs,
 				StartedAt:      iter.startedAt,
 				DurationMs:     iter.durationMs,
 				HasToolCalls:   iter.hasToolCalls,
@@ -1121,16 +1122,12 @@ func (e *Executor) archiveSession(rec *completionRecord, now time.Time) {
 				"error", err,
 			)
 		}
-		for _, iter := range rec.iterations {
-			if len(iter.toolCallIDs) > 0 {
-				if err := e.archiver.LinkToolCallsToIteration(sessionID, iter.index, iter.toolCallIDs); err != nil {
-					e.logger.Warn("failed to link delegate tool calls to iteration",
-						"delegate_id", rec.delegateID,
-						"session_id", sessionID,
-						"error", err,
-					)
-				}
-			}
+		if err := e.archiver.LinkPendingIterationToolCalls(sessionID); err != nil {
+			e.logger.Warn("failed to link delegate tool calls to iterations",
+				"delegate_id", rec.delegateID,
+				"session_id", sessionID,
+				"error", err,
+			)
 		}
 	}
 

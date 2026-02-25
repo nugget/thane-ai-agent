@@ -159,6 +159,7 @@ type ArchivedIteration struct {
 	InputTokens    int       `json:"input_tokens"`
 	OutputTokens   int       `json:"output_tokens"`
 	ToolCallCount  int       `json:"tool_call_count"`
+	ToolCallIDs    []string  `json:"tool_call_ids,omitempty"`
 	StartedAt      time.Time `json:"started_at"`
 	DurationMs     int64     `json:"duration_ms"`
 	HasToolCalls   bool      `json:"has_tool_calls"`
@@ -315,6 +316,7 @@ func (s *ArchiveStore) migrate() error {
 			input_tokens INTEGER NOT NULL DEFAULT 0,
 			output_tokens INTEGER NOT NULL DEFAULT 0,
 			tool_call_count INTEGER NOT NULL DEFAULT 0,
+			tool_call_ids TEXT,
 			started_at TIMESTAMP NOT NULL,
 			duration_ms INTEGER NOT NULL DEFAULT 0,
 			has_tool_calls BOOLEAN NOT NULL DEFAULT FALSE,
@@ -409,6 +411,7 @@ func (s *ArchiveStore) migrateSchema() {
 			input_tokens INTEGER NOT NULL DEFAULT 0,
 			output_tokens INTEGER NOT NULL DEFAULT 0,
 			tool_call_count INTEGER NOT NULL DEFAULT 0,
+			tool_call_ids TEXT,
 			started_at TIMESTAMP NOT NULL,
 			duration_ms INTEGER NOT NULL DEFAULT 0,
 			has_tool_calls BOOLEAN NOT NULL DEFAULT FALSE,
@@ -417,6 +420,12 @@ func (s *ArchiveStore) migrateSchema() {
 		)
 	`)
 	_, _ = s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_archive_iter_session ON archive_iterations(session_id, iteration_index)`)
+
+	// Add tool_call_ids column for existing archive_iterations tables.
+	_, err = s.db.Exec("SELECT tool_call_ids FROM archive_iterations LIMIT 0")
+	if err != nil {
+		_, _ = s.db.Exec("ALTER TABLE archive_iterations ADD COLUMN tool_call_ids TEXT")
+	}
 }
 
 // tryEnableFTS attempts to create the FTS5 virtual table.
@@ -609,10 +618,15 @@ func (s *ArchiveStore) scanToolCalls(rows *sql.Rows) ([]ArchivedToolCall, error)
 }
 
 // ArchiveIterations copies iteration records to the immutable archive.
+// Iteration indices are automatically offset so that sessions spanning
+// multiple Run() calls never collide on the (session_id, iteration_index)
+// primary key.
 func (s *ArchiveStore) ArchiveIterations(iterations []ArchivedIteration) error {
 	if len(iterations) == 0 {
 		return nil
 	}
+
+	sessionID := iterations[0].SessionID
 
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -620,26 +634,46 @@ func (s *ArchiveStore) ArchiveIterations(iterations []ArchivedIteration) error {
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	// Determine offset: continue from the highest existing index + 1.
+	var maxIdx int
+	err = tx.QueryRow(
+		`SELECT COALESCE(MAX(iteration_index), -1) FROM archive_iterations WHERE session_id = ?`,
+		sessionID,
+	).Scan(&maxIdx)
+	if err != nil {
+		return fmt.Errorf("query max iteration index: %w", err)
+	}
+	offset := maxIdx + 1
+
 	stmt, err := tx.Prepare(`
 		INSERT OR REPLACE INTO archive_iterations
 			(session_id, iteration_index, model, input_tokens, output_tokens,
-			 tool_call_count, started_at, duration_ms, has_tool_calls, break_reason)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			 tool_call_count, tool_call_ids, started_at, duration_ms, has_tool_calls, break_reason)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`)
 	if err != nil {
 		return fmt.Errorf("prepare: %w", err)
 	}
 	defer stmt.Close()
 
-	for _, iter := range iterations {
+	for i := range iterations {
+		iterations[i].IterationIndex += offset
+
+		var toolCallIDsJSON any
+		if len(iterations[i].ToolCallIDs) > 0 {
+			b, _ := json.Marshal(iterations[i].ToolCallIDs)
+			toolCallIDsJSON = string(b)
+		}
+
 		_, err := stmt.Exec(
-			iter.SessionID, iter.IterationIndex, iter.Model,
-			iter.InputTokens, iter.OutputTokens, iter.ToolCallCount,
-			iter.StartedAt.Format(time.RFC3339Nano), iter.DurationMs,
-			iter.HasToolCalls, nullString(iter.BreakReason),
+			iterations[i].SessionID, iterations[i].IterationIndex, iterations[i].Model,
+			iterations[i].InputTokens, iterations[i].OutputTokens, iterations[i].ToolCallCount,
+			toolCallIDsJSON,
+			iterations[i].StartedAt.Format(time.RFC3339Nano), iterations[i].DurationMs,
+			iterations[i].HasToolCalls, nullString(iterations[i].BreakReason),
 		)
 		if err != nil {
-			return fmt.Errorf("insert iteration %d: %w", iter.IterationIndex, err)
+			return fmt.Errorf("insert iteration %d: %w", iterations[i].IterationIndex, err)
 		}
 	}
 
@@ -651,7 +685,7 @@ func (s *ArchiveStore) ArchiveIterations(iterations []ArchivedIteration) error {
 func (s *ArchiveStore) GetSessionIterations(sessionID string) ([]ArchivedIteration, error) {
 	rows, err := s.db.Query(`
 		SELECT session_id, iteration_index, model, input_tokens, output_tokens,
-		       tool_call_count, started_at, duration_ms, has_tool_calls, break_reason
+		       tool_call_count, tool_call_ids, started_at, duration_ms, has_tool_calls, break_reason
 		FROM archive_iterations
 		WHERE session_id = ?
 		ORDER BY iteration_index ASC
@@ -666,10 +700,12 @@ func (s *ArchiveStore) GetSessionIterations(sessionID string) ([]ArchivedIterati
 		var iter ArchivedIteration
 		var startStr string
 		var breakReason sql.NullString
+		var toolCallIDsJSON sql.NullString
 
 		err := rows.Scan(
 			&iter.SessionID, &iter.IterationIndex, &iter.Model,
 			&iter.InputTokens, &iter.OutputTokens, &iter.ToolCallCount,
+			&toolCallIDsJSON,
 			&startStr, &iter.DurationMs, &iter.HasToolCalls, &breakReason,
 		)
 		if err != nil {
@@ -679,6 +715,9 @@ func (s *ArchiveStore) GetSessionIterations(sessionID string) ([]ArchivedIterati
 		iter.StartedAt, _ = time.Parse(time.RFC3339Nano, startStr)
 		if breakReason.Valid {
 			iter.BreakReason = breakReason.String
+		}
+		if toolCallIDsJSON.Valid {
+			_ = json.Unmarshal([]byte(toolCallIDsJSON.String), &iter.ToolCallIDs)
 		}
 
 		iters = append(iters, iter)
@@ -715,6 +754,25 @@ func (s *ArchiveStore) LinkToolCallsToIteration(sessionID string, iterationIndex
 	}
 
 	return tx.Commit()
+}
+
+// LinkPendingIterationToolCalls reads iterations for a session, and for
+// each iteration with stored tool_call_ids, updates the corresponding
+// archive_tool_calls rows. Call this after tool calls have been archived
+// so the UPDATE finds matching rows.
+func (s *ArchiveStore) LinkPendingIterationToolCalls(sessionID string) error {
+	iters, err := s.GetSessionIterations(sessionID)
+	if err != nil {
+		return fmt.Errorf("get iterations for linking: %w", err)
+	}
+	for _, iter := range iters {
+		if len(iter.ToolCallIDs) > 0 {
+			if err := s.LinkToolCallsToIteration(sessionID, iter.IterationIndex, iter.ToolCallIDs); err != nil {
+				return fmt.Errorf("link iteration %d: %w", iter.IterationIndex, err)
+			}
+		}
+	}
+	return nil
 }
 
 // Search performs a full-text search with gap-aware context expansion.
