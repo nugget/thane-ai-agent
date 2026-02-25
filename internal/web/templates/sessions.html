@@ -1,0 +1,60 @@
+{{define "title"}}{{.BrandName}} - Sessions{{end}}
+
+{{define "content"}}
+<div class="browser">
+    <h1>Sessions</h1>
+
+    <div class="toolbar">
+        <input type="search" class="search-input" placeholder="Filter by conversation ID..."
+               name="conversation_id" value="{{.ConversationID}}"
+               hx-get="/sessions" hx-trigger="keyup changed delay:300ms"
+               hx-target="#sessions-tbody" hx-include="closest .toolbar">
+    </div>
+
+    <div class="card">
+        <div class="table-scroll">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Session</th>
+                        <th>Conversation</th>
+                        <th>Type</th>
+                        <th>Messages</th>
+                        <th>Started</th>
+                        <th>Duration</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody id="sessions-tbody">
+                {{template "sessions-tbody" .}}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{{end}}
+
+{{define "sessions-tbody"}}
+{{if .Sessions}}
+{{range .Sessions}}
+<tr hx-get="/sessions/{{.ID}}" hx-target="#content" hx-push-url="true">
+    <td>
+        <strong>{{if .Title}}{{truncate .Title 50}}{{else}}{{.ShortID}}{{end}}</strong>
+        {{if .OneLiner}}<br><span class="text-muted" style="font-size:0.8125rem">{{truncate .OneLiner 60}}</span>{{end}}
+    </td>
+    <td class="mono">{{.ShortConvID}}</td>
+    <td>{{if .SessionType}}<span class="badge badge-muted">{{.SessionType}}</span>{{else}}<span class="text-muted">—</span>{{end}}</td>
+    <td>{{.MessageCount}}</td>
+    <td class="text-muted">{{.StartedAt}}</td>
+    <td class="text-muted">{{.Duration}}</td>
+    <td>
+        {{if eq .Status "active"}}<span class="badge badge-teal">active</span>
+        {{else}}<span class="badge badge-ok">completed</span>
+        {{end}}
+    </td>
+</tr>
+{{end}}
+{{else}}
+<tr><td colspan="7" class="empty-state">No sessions found.</td></tr>
+{{end}}
+{{end}}

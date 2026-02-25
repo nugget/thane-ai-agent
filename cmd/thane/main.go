@@ -1896,6 +1896,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		FactStore:         factStore,
 		TaskStore:         sched,
 		AnticipationStore: anticipationStore,
+		SessionStore:      archiveStore,
 		Logger:            logger,
 	})
 	server.SetWebServer(ws)
