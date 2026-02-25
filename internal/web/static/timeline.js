@@ -168,6 +168,11 @@
         ),
       );
       stats.appendChild(el("span", null, fmtMs(iter.duration_ms)));
+      if (iter.tools_offered && iter.tools_offered.length) {
+        stats.appendChild(
+          el("span", "text-muted", iter.tools_offered.length + " offered"),
+        );
+      }
       box.appendChild(stats);
 
       // Tool badges.
@@ -301,6 +306,22 @@
       detail.appendChild(
         el("p", "text-muted", "No tool calls in this iteration."),
       );
+    }
+
+    // Tools offered.
+    if (iter.tools_offered && iter.tools_offered.length > 0) {
+      var offered = el("div", "iter-tools-offered");
+      offered.appendChild(
+        el(
+          "span",
+          "text-muted",
+          iter.tools_offered.length + " tools offered: ",
+        ),
+      );
+      for (var o = 0; o < iter.tools_offered.length; o++) {
+        offered.appendChild(el("span", "badge badge-muted", iter.tools_offered[o]));
+      }
+      detail.appendChild(offered);
     }
 
     // Link to full session detail.

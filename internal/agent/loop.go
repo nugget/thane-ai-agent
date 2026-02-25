@@ -1142,6 +1142,7 @@ iterLoop:
 			model:        llmResp.Model,
 			inputTokens:  llmResp.InputTokens,
 			outputTokens: llmResp.OutputTokens,
+			toolsOffered: toolDefsNames(toolDefs),
 			startedAt:    iterStart,
 			durationMs:   time.Since(iterStart).Milliseconds(),
 			hasToolCalls: len(llmResp.Message.ToolCalls) > 0,
@@ -1566,6 +1567,7 @@ type iterationRecord struct {
 	inputTokens  int
 	outputTokens int
 	toolCallIDs  []string
+	toolsOffered []string
 	startedAt    time.Time
 	durationMs   int64
 	hasToolCalls bool
@@ -1584,6 +1586,7 @@ func toArchivedIterations(sessionID string, iters []iterationRecord) []memory.Ar
 			OutputTokens:   iter.outputTokens,
 			ToolCallCount:  len(iter.toolCallIDs),
 			ToolCallIDs:    iter.toolCallIDs,
+			ToolsOffered:   iter.toolsOffered,
 			StartedAt:      iter.startedAt,
 			DurationMs:     iter.durationMs,
 			HasToolCalls:   iter.hasToolCalls,
@@ -1591,6 +1594,20 @@ func toArchivedIterations(sessionID string, iters []iterationRecord) []memory.Ar
 		}
 	}
 	return archived
+}
+
+// toolDefsNames extracts tool names from the []map[string]any format
+// returned by Registry.List().
+func toolDefsNames(defs []map[string]any) []string {
+	names := make([]string, 0, len(defs))
+	for _, def := range defs {
+		if fn, ok := def["function"].(map[string]any); ok {
+			if name, ok := fn["name"].(string); ok {
+				names = append(names, name)
+			}
+		}
+	}
+	return names
 }
 
 // archiveIterations persists iteration records. Tool call linkage happens

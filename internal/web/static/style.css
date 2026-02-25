@@ -380,6 +380,15 @@ main { max-width: 72rem; margin: 0 auto; padding: 1.5rem; }
     flex-wrap: wrap;
 }
 .iter-box .iter-tools .badge { font-size: 0.625rem; }
+.iter-tools-offered {
+    display: flex;
+    gap: 0.25rem;
+    flex-wrap: wrap;
+    align-items: center;
+    margin-top: 0.5rem;
+    font-size: 0.75rem;
+}
+.iter-tools-offered .badge { font-size: 0.625rem; }
 
 /* Connector between iterations */
 .iter-connector {

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"sort"
 	"strings"
 	"time"
 
@@ -201,6 +202,8 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 	}
 
 	toolDefs := reg.List()
+	toolNames := reg.AllToolNames()
+	sort.Strings(toolNames)
 
 	e.logger.Info("delegate started",
 		"delegate_id", did,
@@ -447,6 +450,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 				model:        model,
 				inputTokens:  resp.InputTokens,
 				outputTokens: resp.OutputTokens,
+				toolsOffered: toolNames,
 				startedAt:    iterStart,
 				durationMs:   time.Since(iterStart).Milliseconds(),
 				hasToolCalls: len(resp.Message.ToolCalls) > 0,
@@ -491,6 +495,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 			model:        resp.Model,
 			inputTokens:  resp.InputTokens,
 			outputTokens: resp.OutputTokens,
+			toolsOffered: toolNames,
 			startedAt:    iterStart,
 			durationMs:   time.Since(iterStart).Milliseconds(),
 			hasToolCalls: len(resp.Message.ToolCalls) > 0,
@@ -915,6 +920,7 @@ type iterationRecord struct {
 	inputTokens  int
 	outputTokens int
 	toolCallIDs  []string
+	toolsOffered []string
 	startedAt    time.Time
 	durationMs   int64
 	hasToolCalls bool
@@ -1109,6 +1115,7 @@ func (e *Executor) archiveSession(rec *completionRecord, now time.Time) {
 				OutputTokens:   iter.outputTokens,
 				ToolCallCount:  len(iter.toolCallIDs),
 				ToolCallIDs:    iter.toolCallIDs,
+				ToolsOffered:   iter.toolsOffered,
 				StartedAt:      iter.startedAt,
 				DurationMs:     iter.durationMs,
 				HasToolCalls:   iter.hasToolCalls,

@@ -51,6 +51,7 @@ type iterationRow struct {
 	OutputTokens int
 	ToolCalls    []*toolCallRow
 	ToolCount    int
+	ToolsOffered []string
 	StartedAt    string
 	DurationMs   int64
 	HasToolCalls bool
@@ -407,6 +408,7 @@ func buildIterationRows(iterations []memory.ArchivedIteration, toolCalls []memor
 			OutputTokens: iter.OutputTokens,
 			ToolCalls:    matched,
 			ToolCount:    toolCount,
+			ToolsOffered: iter.ToolsOffered,
 			StartedAt:    iter.StartedAt.Format("15:04:05"),
 			DurationMs:   iter.DurationMs,
 			HasToolCalls: len(matched) > 0,
@@ -449,6 +451,7 @@ type timelineIteration struct {
 	DurationMs    int64              `json:"duration_ms"`
 	HasToolCalls  bool               `json:"has_tool_calls"`
 	ToolCallCount int                `json:"tool_call_count"`
+	ToolsOffered  []string           `json:"tools_offered,omitempty"`
 	BreakReason   string             `json:"break_reason,omitempty"`
 	ToolCalls     []timelineToolCall `json:"tool_calls,omitempty"`
 }
@@ -571,6 +574,7 @@ func buildTimelineResponse(
 			BreakReason:   iter.BreakReason,
 			ToolCalls:     matched,
 			ToolCallCount: iter.ToolCallCount,
+			ToolsOffered:  iter.ToolsOffered,
 		})
 	}
 

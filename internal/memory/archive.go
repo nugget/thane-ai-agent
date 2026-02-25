@@ -160,6 +160,7 @@ type ArchivedIteration struct {
 	OutputTokens   int       `json:"output_tokens"`
 	ToolCallCount  int       `json:"tool_call_count"`
 	ToolCallIDs    []string  `json:"tool_call_ids,omitempty"`
+	ToolsOffered   []string  `json:"tools_offered,omitempty"`
 	StartedAt      time.Time `json:"started_at"`
 	DurationMs     int64     `json:"duration_ms"`
 	HasToolCalls   bool      `json:"has_tool_calls"`
@@ -317,6 +318,7 @@ func (s *ArchiveStore) migrate() error {
 			output_tokens INTEGER NOT NULL DEFAULT 0,
 			tool_call_count INTEGER NOT NULL DEFAULT 0,
 			tool_call_ids TEXT,
+			tools_offered TEXT,
 			started_at TIMESTAMP NOT NULL,
 			duration_ms INTEGER NOT NULL DEFAULT 0,
 			has_tool_calls BOOLEAN NOT NULL DEFAULT FALSE,
@@ -412,6 +414,7 @@ func (s *ArchiveStore) migrateSchema() {
 			output_tokens INTEGER NOT NULL DEFAULT 0,
 			tool_call_count INTEGER NOT NULL DEFAULT 0,
 			tool_call_ids TEXT,
+			tools_offered TEXT,
 			started_at TIMESTAMP NOT NULL,
 			duration_ms INTEGER NOT NULL DEFAULT 0,
 			has_tool_calls BOOLEAN NOT NULL DEFAULT FALSE,
@@ -425,6 +428,12 @@ func (s *ArchiveStore) migrateSchema() {
 	_, err = s.db.Exec("SELECT tool_call_ids FROM archive_iterations LIMIT 0")
 	if err != nil {
 		_, _ = s.db.Exec("ALTER TABLE archive_iterations ADD COLUMN tool_call_ids TEXT")
+	}
+
+	// Add tools_offered column for existing archive_iterations tables.
+	_, err = s.db.Exec("SELECT tools_offered FROM archive_iterations LIMIT 0")
+	if err != nil {
+		_, _ = s.db.Exec("ALTER TABLE archive_iterations ADD COLUMN tools_offered TEXT")
 	}
 }
 
@@ -648,8 +657,8 @@ func (s *ArchiveStore) ArchiveIterations(iterations []ArchivedIteration) error {
 	stmt, err := tx.Prepare(`
 		INSERT OR REPLACE INTO archive_iterations
 			(session_id, iteration_index, model, input_tokens, output_tokens,
-			 tool_call_count, tool_call_ids, started_at, duration_ms, has_tool_calls, break_reason)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			 tool_call_count, tool_call_ids, tools_offered, started_at, duration_ms, has_tool_calls, break_reason)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`)
 	if err != nil {
 		return fmt.Errorf("prepare: %w", err)
@@ -665,10 +674,16 @@ func (s *ArchiveStore) ArchiveIterations(iterations []ArchivedIteration) error {
 			toolCallIDsJSON = string(b)
 		}
 
+		var toolsOfferedJSON any
+		if len(iterations[i].ToolsOffered) > 0 {
+			b, _ := json.Marshal(iterations[i].ToolsOffered)
+			toolsOfferedJSON = string(b)
+		}
+
 		_, err := stmt.Exec(
 			iterations[i].SessionID, iterations[i].IterationIndex, iterations[i].Model,
 			iterations[i].InputTokens, iterations[i].OutputTokens, iterations[i].ToolCallCount,
-			toolCallIDsJSON,
+			toolCallIDsJSON, toolsOfferedJSON,
 			iterations[i].StartedAt.Format(time.RFC3339Nano), iterations[i].DurationMs,
 			iterations[i].HasToolCalls, nullString(iterations[i].BreakReason),
 		)
@@ -685,7 +700,8 @@ func (s *ArchiveStore) ArchiveIterations(iterations []ArchivedIteration) error {
 func (s *ArchiveStore) GetSessionIterations(sessionID string) ([]ArchivedIteration, error) {
 	rows, err := s.db.Query(`
 		SELECT session_id, iteration_index, model, input_tokens, output_tokens,
-		       tool_call_count, tool_call_ids, started_at, duration_ms, has_tool_calls, break_reason
+		       tool_call_count, tool_call_ids, tools_offered,
+		       started_at, duration_ms, has_tool_calls, break_reason
 		FROM archive_iterations
 		WHERE session_id = ?
 		ORDER BY iteration_index ASC
@@ -701,11 +717,12 @@ func (s *ArchiveStore) GetSessionIterations(sessionID string) ([]ArchivedIterati
 		var startStr string
 		var breakReason sql.NullString
 		var toolCallIDsJSON sql.NullString
+		var toolsOfferedJSON sql.NullString
 
 		err := rows.Scan(
 			&iter.SessionID, &iter.IterationIndex, &iter.Model,
 			&iter.InputTokens, &iter.OutputTokens, &iter.ToolCallCount,
-			&toolCallIDsJSON,
+			&toolCallIDsJSON, &toolsOfferedJSON,
 			&startStr, &iter.DurationMs, &iter.HasToolCalls, &breakReason,
 		)
 		if err != nil {
@@ -718,6 +735,9 @@ func (s *ArchiveStore) GetSessionIterations(sessionID string) ([]ArchivedIterati
 		}
 		if toolCallIDsJSON.Valid {
 			_ = json.Unmarshal([]byte(toolCallIDsJSON.String), &iter.ToolCallIDs)
+		}
+		if toolsOfferedJSON.Valid {
+			_ = json.Unmarshal([]byte(toolsOfferedJSON.String), &iter.ToolsOffered)
 		}
 
 		iters = append(iters, iter)

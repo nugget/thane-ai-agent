@@ -220,6 +220,14 @@
                 {{end}}
                 {{if .BreakReason}}<span class="badge badge-warn">{{.BreakReason}}</span>{{end}}
             </div>
+            {{if .ToolsOffered}}
+            <details style="margin-bottom:0.5rem">
+                <summary class="text-muted" style="font-size:0.8125rem;cursor:pointer">{{len .ToolsOffered}} tools offered</summary>
+                <div style="margin-top:0.25rem">
+                    {{range .ToolsOffered}}<span class="badge badge-muted" style="font-size:0.6875rem">{{.}}</span> {{end}}
+                </div>
+            </details>
+            {{end}}
             {{if .ToolCalls}}
             <div class="table-scroll">
                 <table class="table" style="margin:0">
