@@ -52,6 +52,7 @@ func (a *ArchiveAdapter) ArchiveConversation(conversationID string, messages []M
 	archived := make([]ArchivedMessage, len(messages))
 	for i, m := range messages {
 		archived[i] = ArchivedMessage{
+			ID:             m.ID,
 			ConversationID: conversationID,
 			SessionID:      sessionID,
 			Role:           m.Role,
