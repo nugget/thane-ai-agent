@@ -31,13 +31,29 @@ type sessionRow struct {
 	EndReason      string
 }
 
-// SessionDetailData is the template context for a single session.
+// SessionDetailData is the template context for the session detail page.
 type SessionDetailData struct {
 	PageData
-	Session     *sessionDetailView
-	Messages    []*messageRow
-	ToolCalls   []*toolCallRow
-	ToolSummary []*toolSummaryRow
+	Session               *sessionDetailView
+	Messages              []*messageRow
+	ToolCalls             []*toolCallRow
+	ToolSummary           []*toolSummaryRow
+	Iterations            []*iterationRow
+	UnattributedToolCalls []*toolCallRow
+}
+
+// iterationRow is a display-friendly wrapper for an iteration in the detail view.
+type iterationRow struct {
+	Index        int
+	Model        string
+	InputTokens  int
+	OutputTokens int
+	ToolCalls    []*toolCallRow
+	ToolCount    int
+	StartedAt    string
+	DurationMs   int64
+	HasToolCalls bool
+	BreakReason  string
 }
 
 // sessionDetailView holds the rich session data for the detail page.
@@ -156,6 +172,11 @@ func (s *WebServer) handleSessionDetail(w http.ResponseWriter, r *http.Request) 
 		s.logger.Error("session tool calls failed", "id", id, "error", err)
 	}
 
+	iterations, err := s.sessionStore.GetSessionIterations(id)
+	if err != nil {
+		s.logger.Error("session iterations failed", "id", id, "error", err)
+	}
+
 	detail := buildSessionDetailView(sess)
 
 	// Populate parent link if this is a child session.
@@ -173,14 +194,17 @@ func (s *WebServer) handleSessionDetail(w http.ResponseWriter, r *http.Request) 
 		detail.ChildSessions = sessionsToRows(children)
 	}
 
+	iterRows, unattributed := buildIterationRows(iterations, toolCalls)
 	data := SessionDetailData{
 		PageData: PageData{
 			BrandName: s.brandName,
 			ActiveNav: "sessions",
 		},
-		Session:   detail,
-		Messages:  messagesToRows(messages),
-		ToolCalls: toolCallsToRows(toolCalls),
+		Session:               detail,
+		Messages:              messagesToRows(messages),
+		ToolCalls:             toolCallsToRows(toolCalls),
+		Iterations:            iterRows,
+		UnattributedToolCalls: unattributed,
 	}
 
 	if sess.Metadata != nil && len(sess.Metadata.ToolsUsed) > 0 {
@@ -308,6 +332,52 @@ func toolsUsedToSummary(toolsUsed map[string]int) []*toolSummaryRow {
 		return rows[i].Count > rows[j].Count
 	})
 	return rows
+}
+
+// buildIterationRows groups iteration data with their nested tool calls.
+// Tool calls are matched to iterations by IterationIndex. Unattributed
+// tool calls (those without an IterationIndex) are returned separately.
+func buildIterationRows(iterations []memory.ArchivedIteration, toolCalls []memory.ArchivedToolCall) ([]*iterationRow, []*toolCallRow) {
+	if len(iterations) == 0 {
+		return nil, nil
+	}
+
+	// Index tool calls by iteration; collect unattributed ones.
+	byIter := make(map[int][]*toolCallRow)
+	var unattributed []*toolCallRow
+	for _, c := range toolCalls {
+		row := &toolCallRow{
+			ToolName:   c.ToolName,
+			Arguments:  c.Arguments,
+			Result:     c.Result,
+			Error:      c.Error,
+			StartedAt:  c.StartedAt.Format("15:04:05"),
+			DurationMs: c.DurationMs,
+			HasError:   c.Error != "",
+		}
+		if c.IterationIndex == nil {
+			unattributed = append(unattributed, row)
+		} else {
+			byIter[*c.IterationIndex] = append(byIter[*c.IterationIndex], row)
+		}
+	}
+
+	rows := make([]*iterationRow, 0, len(iterations))
+	for _, iter := range iterations {
+		rows = append(rows, &iterationRow{
+			Index:        iter.IterationIndex,
+			Model:        iter.Model,
+			InputTokens:  iter.InputTokens,
+			OutputTokens: iter.OutputTokens,
+			ToolCalls:    byIter[iter.IterationIndex],
+			ToolCount:    iter.ToolCallCount,
+			StartedAt:    iter.StartedAt.Format("15:04:05"),
+			DurationMs:   iter.DurationMs,
+			HasToolCalls: iter.HasToolCalls,
+			BreakReason:  iter.BreakReason,
+		})
+	}
+	return rows, unattributed
 }
 
 // sessionStatus derives a display status from session state.

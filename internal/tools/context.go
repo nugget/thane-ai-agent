@@ -7,6 +7,7 @@ type contextKey string
 const conversationIDKey contextKey = "conversation_id"
 const sessionIDKey contextKey = "session_id"
 const toolCallIDKey contextKey = "tool_call_id"
+const iterationIndexKey contextKey = "iteration_index"
 const hintsKey contextKey = "hints"
 
 // WithConversationID adds the conversation ID to the context.
@@ -52,6 +53,20 @@ func ToolCallIDFromContext(ctx context.Context) string {
 		return id
 	}
 	return ""
+}
+
+// WithIterationIndex adds the current loop iteration index to the context.
+func WithIterationIndex(ctx context.Context, idx int) context.Context {
+	return context.WithValue(ctx, iterationIndexKey, idx)
+}
+
+// IterationIndexFromContext extracts the loop iteration index from the
+// context. Returns -1 and false if not set.
+func IterationIndexFromContext(ctx context.Context) (int, bool) {
+	if idx, ok := ctx.Value(iterationIndexKey).(int); ok {
+		return idx, true
+	}
+	return -1, false
 }
 
 // WithHints adds routing hints to the context. Nil hints are ignored

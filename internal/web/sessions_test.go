@@ -16,6 +16,7 @@ type mockSessionStore struct {
 	sessions   []*memory.Session
 	transcript []memory.ArchivedMessage
 	toolCalls  []memory.ArchivedToolCall
+	iterations []memory.ArchivedIteration
 }
 
 func (m *mockSessionStore) ListSessions(conversationID string, limit int) ([]*memory.Session, error) {
@@ -46,6 +47,10 @@ func (m *mockSessionStore) GetSessionTranscript(sessionID string) ([]memory.Arch
 
 func (m *mockSessionStore) GetSessionToolCalls(sessionID string) ([]memory.ArchivedToolCall, error) {
 	return m.toolCalls, nil
+}
+
+func (m *mockSessionStore) GetSessionIterations(sessionID string) ([]memory.ArchivedIteration, error) {
+	return m.iterations, nil
 }
 
 func (m *mockSessionStore) ListChildSessions(parentSessionID string) ([]*memory.Session, error) {
@@ -408,6 +413,98 @@ func TestSessionStatus(t *testing.T) {
 				t.Errorf("sessionStatus() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestSessionDetail_WithIterations(t *testing.T) {
+	now := time.Now()
+	iter0 := 0
+	iter1 := 1
+	store := &mockSessionStore{
+		sessions: []*memory.Session{
+			{
+				ID:             "sess-iter-001",
+				ConversationID: "conv-iter",
+				StartedAt:      now.Add(-1 * time.Hour),
+				MessageCount:   5,
+				Title:          "Iteration test session",
+			},
+		},
+		transcript: testTranscript(),
+		toolCalls: []memory.ArchivedToolCall{
+			{
+				ToolName:       "shell_exec",
+				Arguments:      `{"cmd":"ls"}`,
+				Result:         "output",
+				StartedAt:      now,
+				DurationMs:     100,
+				IterationIndex: &iter0,
+			},
+			{
+				ToolName:       "web_search",
+				Arguments:      `{"q":"test"}`,
+				Result:         "results",
+				StartedAt:      now,
+				DurationMs:     200,
+				IterationIndex: &iter1,
+			},
+		},
+		iterations: []memory.ArchivedIteration{
+			{
+				SessionID:      "sess-iter-001",
+				IterationIndex: 0,
+				Model:          "claude-sonnet",
+				InputTokens:    500,
+				OutputTokens:   100,
+				ToolCallCount:  1,
+				StartedAt:      now,
+				DurationMs:     350,
+				HasToolCalls:   true,
+			},
+			{
+				SessionID:      "sess-iter-001",
+				IterationIndex: 1,
+				Model:          "claude-sonnet",
+				InputTokens:    600,
+				OutputTokens:   50,
+				ToolCallCount:  1,
+				StartedAt:      now.Add(time.Second),
+				DurationMs:     200,
+				HasToolCalls:   true,
+				BreakReason:    "max_iterations",
+			},
+		},
+	}
+	ws := newSessionTestServer(store)
+	mux := http.NewServeMux()
+	ws.RegisterRoutes(mux)
+
+	req := httptest.NewRequest("GET", "/sessions/sess-iter-001", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /sessions/sess-iter-001 status = %d, want %d", w.Code, http.StatusOK)
+	}
+
+	body := w.Body.String()
+	for _, want := range []string{
+		"Execution Trace", // section heading
+		"Iteration 0",     // first iteration
+		"Iteration 1",     // second iteration
+		"claude-sonnet",   // model name
+		"max_iterations",  // break reason
+		"shell_exec",      // tool call nested in iteration
+		"web_search",      // tool call nested in iteration
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("iteration detail response missing %q", want)
+		}
+	}
+
+	// Should NOT show the flat "Tool Calls" section since iterations exist.
+	if strings.Contains(body, "<h2>Tool Calls</h2>") {
+		t.Error("should show Execution Trace instead of flat Tool Calls when iterations exist")
 	}
 }
 

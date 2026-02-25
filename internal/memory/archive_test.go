@@ -780,3 +780,221 @@ func TestListChildSessions(t *testing.T) {
 		t.Errorf("ListChildSessions(nonexistent) returned %d, want 0", len(noChildren))
 	}
 }
+
+func TestArchiveIterations_RoundTrip(t *testing.T) {
+	store := newTestArchiveStore(t)
+
+	sess, err := store.StartSession("conv-iter")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Now().Truncate(time.Millisecond)
+	iters := []ArchivedIteration{
+		{
+			SessionID:      sess.ID,
+			IterationIndex: 0,
+			Model:          "claude-sonnet",
+			InputTokens:    1000,
+			OutputTokens:   200,
+			ToolCallCount:  2,
+			ToolCallIDs:    []string{"tc-a", "tc-b"},
+			StartedAt:      now,
+			DurationMs:     350,
+			HasToolCalls:   true,
+		},
+		{
+			SessionID:      sess.ID,
+			IterationIndex: 1,
+			Model:          "claude-sonnet",
+			InputTokens:    1200,
+			OutputTokens:   100,
+			ToolCallCount:  0,
+			StartedAt:      now.Add(time.Second),
+			DurationMs:     150,
+			HasToolCalls:   false,
+			BreakReason:    "max_iterations",
+		},
+	}
+
+	if err := store.ArchiveIterations(iters); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := store.GetSessionIterations(sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected 2 iterations, got %d", len(got))
+	}
+
+	// Verify first iteration.
+	if got[0].IterationIndex != 0 {
+		t.Errorf("iter[0] index = %d, want 0", got[0].IterationIndex)
+	}
+	if got[0].Model != "claude-sonnet" {
+		t.Errorf("iter[0] model = %q, want %q", got[0].Model, "claude-sonnet")
+	}
+	if got[0].InputTokens != 1000 {
+		t.Errorf("iter[0] input_tokens = %d, want 1000", got[0].InputTokens)
+	}
+	if got[0].ToolCallCount != 2 {
+		t.Errorf("iter[0] tool_call_count = %d, want 2", got[0].ToolCallCount)
+	}
+	if !got[0].HasToolCalls {
+		t.Error("iter[0] has_tool_calls should be true")
+	}
+	if len(got[0].ToolCallIDs) != 2 || got[0].ToolCallIDs[0] != "tc-a" {
+		t.Errorf("iter[0] tool_call_ids = %v, want [tc-a tc-b]", got[0].ToolCallIDs)
+	}
+
+	// Verify second iteration.
+	if got[1].IterationIndex != 1 {
+		t.Errorf("iter[1] index = %d, want 1", got[1].IterationIndex)
+	}
+	if got[1].BreakReason != "max_iterations" {
+		t.Errorf("iter[1] break_reason = %q, want %q", got[1].BreakReason, "max_iterations")
+	}
+	if got[1].HasToolCalls {
+		t.Error("iter[1] has_tool_calls should be false")
+	}
+
+	// Archive a second batch (simulating a second turn in the same session).
+	// Both iterations start at index 0 locally, but should be offset to 2 and 3.
+	batch2 := []ArchivedIteration{
+		{
+			SessionID:      sess.ID,
+			IterationIndex: 0,
+			Model:          "claude-haiku",
+			InputTokens:    500,
+			OutputTokens:   50,
+			ToolCallCount:  1,
+			ToolCallIDs:    []string{"tc-c"},
+			StartedAt:      now.Add(2 * time.Second),
+			DurationMs:     100,
+			HasToolCalls:   true,
+		},
+		{
+			SessionID:      sess.ID,
+			IterationIndex: 1,
+			Model:          "claude-haiku",
+			InputTokens:    600,
+			OutputTokens:   75,
+			StartedAt:      now.Add(3 * time.Second),
+			DurationMs:     80,
+		},
+	}
+
+	if err := store.ArchiveIterations(batch2); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err = store.GetSessionIterations(sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 4 {
+		t.Fatalf("expected 4 iterations after second batch, got %d", len(got))
+	}
+	// Second batch should be offset: 0→2, 1→3.
+	if got[2].IterationIndex != 2 {
+		t.Errorf("iter[2] index = %d, want 2 (offset)", got[2].IterationIndex)
+	}
+	if got[2].Model != "claude-haiku" {
+		t.Errorf("iter[2] model = %q, want %q", got[2].Model, "claude-haiku")
+	}
+	if got[3].IterationIndex != 3 {
+		t.Errorf("iter[3] index = %d, want 3 (offset)", got[3].IterationIndex)
+	}
+}
+
+func TestArchiveIterations_EmptySession(t *testing.T) {
+	store := newTestArchiveStore(t)
+
+	got, err := store.GetSessionIterations("nonexistent-session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 0 {
+		t.Errorf("expected 0 iterations for nonexistent session, got %d", len(got))
+	}
+}
+
+func TestLinkToolCallsToIteration(t *testing.T) {
+	store := newTestArchiveStore(t)
+
+	sess, err := store.StartSession("conv-link")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Archive some tool calls.
+	calls := []ArchivedToolCall{
+		{
+			ID:             "call-1",
+			ConversationID: "conv-link",
+			SessionID:      sess.ID,
+			ToolName:       "shell_exec",
+			Arguments:      `{"cmd":"ls"}`,
+			Result:         "file1.go",
+			StartedAt:      time.Now(),
+		},
+		{
+			ID:             "call-2",
+			ConversationID: "conv-link",
+			SessionID:      sess.ID,
+			ToolName:       "web_search",
+			Arguments:      `{"q":"test"}`,
+			Result:         "results",
+			StartedAt:      time.Now(),
+		},
+		{
+			ID:             "call-3",
+			ConversationID: "conv-link",
+			SessionID:      sess.ID,
+			ToolName:       "shell_exec",
+			Arguments:      `{"cmd":"pwd"}`,
+			Result:         "/home",
+			StartedAt:      time.Now(),
+		},
+	}
+
+	if err := store.ArchiveToolCalls(calls); err != nil {
+		t.Fatal(err)
+	}
+
+	// Link first two calls to iteration 0, third to iteration 1.
+	if err := store.LinkToolCallsToIteration(sess.ID, 0, []string{"call-1", "call-2"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.LinkToolCallsToIteration(sess.ID, 1, []string{"call-3"}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify iteration_index is set on retrieved tool calls.
+	got, err := store.GetSessionToolCalls(sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("expected 3 tool calls, got %d", len(got))
+	}
+
+	for _, tc := range got {
+		if tc.IterationIndex == nil {
+			t.Errorf("tool call %q should have iteration_index set", tc.ID)
+			continue
+		}
+		switch tc.ID {
+		case "call-1", "call-2":
+			if *tc.IterationIndex != 0 {
+				t.Errorf("tool call %q iteration_index = %d, want 0", tc.ID, *tc.IterationIndex)
+			}
+		case "call-3":
+			if *tc.IterationIndex != 1 {
+				t.Errorf("tool call %q iteration_index = %d, want 1", tc.ID, *tc.IterationIndex)
+			}
+		}
+	}
+}

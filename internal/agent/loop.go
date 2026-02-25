@@ -129,6 +129,11 @@ type SessionArchiver interface {
 	ActiveSessionID(conversationID string) string
 	// EnsureSession starts a session if none is active, returns the session ID.
 	EnsureSession(conversationID string) string
+	// ArchiveIterations copies iteration records to the immutable archive.
+	ArchiveIterations(iterations []memory.ArchivedIteration) error
+	// LinkPendingIterationToolCalls links archived tool calls to their
+	// parent iterations using stored tool_call_ids.
+	LinkPendingIterationToolCalls(sessionID string) error
 	// OnMessage is called after each message to track session stats.
 	OnMessage(conversationID string)
 	// ActiveSessionStartedAt returns when the active session began,
@@ -1044,6 +1049,11 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	emptyRetried := false // Track whether we've already nudged after an empty response
 	deferredText := ""    // Text from a mixed (text + tool_call) response, deferred for later use
 	breakReason := ""     // Why the loop exited early ("" = max iterations, "illegal_tool" = unavailable tool)
+
+	// Iteration-level execution trace: records are collected in memory
+	// and batch-archived on all exit paths.
+	var iterations []iterationRecord
+
 iterLoop:
 	for i := 0; i < maxIterations; i++ {
 		// Select tool definitions for this iteration. With gating active,
@@ -1126,6 +1136,17 @@ iterLoop:
 			}(),
 		)
 
+		// Record this iteration for the execution trace.
+		iterRec := iterationRecord{
+			index:        i,
+			model:        llmResp.Model,
+			inputTokens:  llmResp.InputTokens,
+			outputTokens: llmResp.OutputTokens,
+			startedAt:    iterStart,
+			durationMs:   time.Since(iterStart).Milliseconds(),
+			hasToolCalls: len(llmResp.Message.ToolCalls) > 0,
+		}
+
 		// Check for tool calls
 		if len(llmResp.Message.ToolCalls) > 0 {
 
@@ -1155,6 +1176,9 @@ iterLoop:
 				toolCallID, _ := uuid.NewV7()
 				toolCallIDStr := toolCallID.String()
 
+				// Track tool call ID for iteration linkage.
+				iterRec.toolCallIDs = append(iterRec.toolCallIDs, toolCallIDStr)
+
 				// Convert arguments map to JSON string for Execute
 				argsJSON := ""
 				if tc.Function.Arguments != nil {
@@ -1174,6 +1198,9 @@ iterLoop:
 						Role:    "tool",
 						Content: fmt.Sprintf("Error: tool '%s' has been called %d times with the same arguments. Stop calling tools and provide your response to the user.", toolName, toolCallCounts[callKey]),
 					})
+					iterRec.breakReason = "tool_loop"
+					iterRec.durationMs = time.Since(iterStart).Milliseconds()
+					iterations = append(iterations, iterRec)
 					continue iterLoop
 				}
 
@@ -1215,6 +1242,7 @@ iterLoop:
 					}
 				}
 				toolCtx = tools.WithToolCallID(toolCtx, toolCallIDStr)
+				toolCtx = tools.WithIterationIndex(toolCtx, i)
 
 				// Enforce tool availability: only tools present in the
 				// effective registry (after capability tag filtering and
@@ -1281,14 +1309,22 @@ iterLoop:
 			if illegalCall {
 				log.Warn("breaking loop due to illegal tool call", "iter", i)
 				breakReason = "illegal_tool"
+				iterRec.breakReason = "illegal_tool"
+				iterRec.durationMs = time.Since(iterStart).Milliseconds()
+				iterations = append(iterations, iterRec)
 				break iterLoop
 			}
 
-			// Continue loop to get final response
+			// Finalize iteration timing after tool execution and continue
+			// to the next iteration for the model's follow-up.
+			iterRec.durationMs = time.Since(iterStart).Milliseconds()
+			iterations = append(iterations, iterRec)
 			continue
 		}
 
-		// No tool calls - we have the final response
+		// No tool calls - we have the final response (text-only iteration).
+		iterRec.durationMs = time.Since(iterStart).Milliseconds()
+		iterations = append(iterations, iterRec)
 		// Log when we expected tool calls but got text (first iteration = no tool use)
 		if i == 0 && len(llmResp.Message.Content) > 0 {
 			preview := llmResp.Message.Content
@@ -1417,6 +1453,7 @@ iterLoop:
 		)
 
 		l.recordUsage(ctx, req, model, totalInputTokens, totalOutputTokens, convID, sessionTag, requestID)
+		l.archiveIterations(log, convID, iterations)
 
 		return resp, nil
 	}
@@ -1438,9 +1475,11 @@ iterLoop:
 			"max_iter", maxIterations,
 		)
 
+		recoveryStart := time.Now()
 		llmResp, err := l.llm.ChatStream(ctx, model, llmMessages, nil, stream) // nil tools = no more tool calls
 		if err != nil {
 			log.Error("final LLM call failed", "error", err, "model", model, "reason", finishReason)
+			l.archiveIterations(log, convID, iterations)
 			return &Response{
 				Content:      "I found the information but couldn't compose a response. Please try again.",
 				Model:        model,
@@ -1453,6 +1492,18 @@ iterLoop:
 
 		totalInputTokens += llmResp.InputTokens
 		totalOutputTokens += llmResp.OutputTokens
+
+		// Record the recovery LLM call as its own iteration.
+		iterations = append(iterations, iterationRecord{
+			index:        len(iterations),
+			model:        llmResp.Model,
+			inputTokens:  llmResp.InputTokens,
+			outputTokens: llmResp.OutputTokens,
+			startedAt:    recoveryStart,
+			durationMs:   time.Since(recoveryStart).Milliseconds(),
+			hasToolCalls: false,
+			breakReason:  finishReason,
+		})
 
 		content := llmResp.Message.Content
 		if content == "" {
@@ -1487,6 +1538,7 @@ iterLoop:
 		)
 
 		l.recordUsage(ctx, req, model, totalInputTokens, totalOutputTokens, convID, sessionTag, requestID)
+		l.archiveIterations(log, convID, iterations)
 
 		return resp, nil
 	}
@@ -1495,6 +1547,7 @@ iterLoop:
 		"reason", finishReason,
 		"model", model,
 	)
+	l.archiveIterations(log, convID, iterations)
 	return &Response{
 		Content:      "I wasn't able to complete that request. Please try again.",
 		Model:        model,
@@ -1503,6 +1556,60 @@ iterLoop:
 		OutputTokens: totalOutputTokens,
 		ToolsUsed:    toolsUsed,
 	}, nil
+}
+
+// iterationRecord collects per-iteration data during a Run() for
+// batch archiving after the loop completes.
+type iterationRecord struct {
+	index        int
+	model        string
+	inputTokens  int
+	outputTokens int
+	toolCallIDs  []string
+	startedAt    time.Time
+	durationMs   int64
+	hasToolCalls bool
+	breakReason  string
+}
+
+// toArchivedIterations converts local iteration records to archive-ready structs.
+func toArchivedIterations(sessionID string, iters []iterationRecord) []memory.ArchivedIteration {
+	archived := make([]memory.ArchivedIteration, len(iters))
+	for i, iter := range iters {
+		archived[i] = memory.ArchivedIteration{
+			SessionID:      sessionID,
+			IterationIndex: iter.index,
+			Model:          iter.model,
+			InputTokens:    iter.inputTokens,
+			OutputTokens:   iter.outputTokens,
+			ToolCallCount:  len(iter.toolCallIDs),
+			ToolCallIDs:    iter.toolCallIDs,
+			StartedAt:      iter.startedAt,
+			DurationMs:     iter.durationMs,
+			HasToolCalls:   iter.hasToolCalls,
+			BreakReason:    iter.breakReason,
+		}
+	}
+	return archived
+}
+
+// archiveIterations persists iteration records. Tool call linkage happens
+// later in ArchiveConversation when tool calls are moved to the archive.
+// Errors are logged but not returned.
+func (l *Loop) archiveIterations(log *slog.Logger, convID string, iterations []iterationRecord) {
+	if l.archiver == nil || len(iterations) == 0 {
+		return
+	}
+	// Ensure a session exists so first-turn iterations are not lost.
+	sessionID := l.archiver.EnsureSession(convID)
+	if sessionID == "" {
+		log.Warn("no active session for iteration archive", "conversation_id", convID)
+		return
+	}
+	archived := toArchivedIterations(sessionID, iterations)
+	if err := l.archiver.ArchiveIterations(archived); err != nil {
+		log.Warn("failed to archive iterations", "error", err)
+	}
 }
 
 // MemoryStats returns current memory statistics.
