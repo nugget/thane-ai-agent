@@ -179,6 +179,15 @@
           tools.appendChild(el("span", cls, tc.name));
         }
         box.appendChild(tools);
+      } else if (iter.tool_call_count > 0) {
+        var tools = el("div", "iter-tools");
+        var label =
+          iter.tool_call_count +
+          " tool" +
+          (iter.tool_call_count !== 1 ? "s" : "") +
+          " (unlinked)";
+        tools.appendChild(el("span", "badge badge-muted", label));
+        box.appendChild(tools);
       }
 
       // Click handler — expand detail below.
@@ -277,6 +286,17 @@
         list.appendChild(li);
       }
       detail.appendChild(list);
+    } else if (iter.tool_call_count > 0) {
+      detail.appendChild(
+        el(
+          "p",
+          "text-muted",
+          iter.tool_call_count +
+            " tool call" +
+            (iter.tool_call_count !== 1 ? "s" : "") +
+            " recorded but not yet linked to this iteration.",
+        ),
+      );
     } else {
       detail.appendChild(
         el("p", "text-muted", "No tool calls in this iteration."),

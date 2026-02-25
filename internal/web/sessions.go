@@ -395,16 +395,21 @@ func buildIterationRows(iterations []memory.ArchivedIteration, toolCalls []memor
 
 	rows := make([]*iterationRow, 0, len(iterations))
 	for _, iter := range iterations {
+		matched := byIter[iter.IterationIndex]
+		toolCount := len(matched)
+		if toolCount == 0 {
+			toolCount = iter.ToolCallCount // fallback to stored count
+		}
 		rows = append(rows, &iterationRow{
 			Index:        iter.IterationIndex,
 			Model:        iter.Model,
 			InputTokens:  iter.InputTokens,
 			OutputTokens: iter.OutputTokens,
-			ToolCalls:    byIter[iter.IterationIndex],
-			ToolCount:    iter.ToolCallCount,
+			ToolCalls:    matched,
+			ToolCount:    toolCount,
 			StartedAt:    iter.StartedAt.Format("15:04:05"),
 			DurationMs:   iter.DurationMs,
-			HasToolCalls: iter.HasToolCalls,
+			HasToolCalls: len(matched) > 0,
 			BreakReason:  iter.BreakReason,
 		})
 	}
@@ -437,14 +442,15 @@ type timelineSession struct {
 
 // timelineIteration is a single iteration for the timeline API.
 type timelineIteration struct {
-	Index        int                `json:"index"`
-	Model        string             `json:"model"`
-	InputTokens  int                `json:"input_tokens"`
-	OutputTokens int                `json:"output_tokens"`
-	DurationMs   int64              `json:"duration_ms"`
-	HasToolCalls bool               `json:"has_tool_calls"`
-	BreakReason  string             `json:"break_reason,omitempty"`
-	ToolCalls    []timelineToolCall `json:"tool_calls,omitempty"`
+	Index         int                `json:"index"`
+	Model         string             `json:"model"`
+	InputTokens   int                `json:"input_tokens"`
+	OutputTokens  int                `json:"output_tokens"`
+	DurationMs    int64              `json:"duration_ms"`
+	HasToolCalls  bool               `json:"has_tool_calls"`
+	ToolCallCount int                `json:"tool_call_count"`
+	BreakReason   string             `json:"break_reason,omitempty"`
+	ToolCalls     []timelineToolCall `json:"tool_calls,omitempty"`
 }
 
 // timelineToolCall is a compact tool call for the timeline API.
@@ -554,15 +560,17 @@ func buildTimelineResponse(
 	// Build iteration list.
 	resp.Iterations = make([]timelineIteration, 0, len(iterations))
 	for _, iter := range iterations {
+		matched := byIter[iter.IterationIndex]
 		resp.Iterations = append(resp.Iterations, timelineIteration{
-			Index:        iter.IterationIndex,
-			Model:        iter.Model,
-			InputTokens:  iter.InputTokens,
-			OutputTokens: iter.OutputTokens,
-			DurationMs:   iter.DurationMs,
-			HasToolCalls: iter.HasToolCalls,
-			BreakReason:  iter.BreakReason,
-			ToolCalls:    byIter[iter.IterationIndex],
+			Index:         iter.IterationIndex,
+			Model:         iter.Model,
+			InputTokens:   iter.InputTokens,
+			OutputTokens:  iter.OutputTokens,
+			DurationMs:    iter.DurationMs,
+			HasToolCalls:  len(matched) > 0,
+			BreakReason:   iter.BreakReason,
+			ToolCalls:     matched,
+			ToolCallCount: iter.ToolCallCount,
 		})
 	}
 

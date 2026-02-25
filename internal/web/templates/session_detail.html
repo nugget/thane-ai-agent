@@ -215,7 +215,9 @@
                 <span class="text-muted" style="font-size:0.8125rem">{{.StartedAt}}</span>
                 <span class="text-muted" style="font-size:0.8125rem">{{.DurationMs}}ms</span>
                 <span class="text-muted" style="font-size:0.8125rem">{{.InputTokens}}→{{.OutputTokens}} tok</span>
-                {{if .HasToolCalls}}<span class="badge badge-teal">{{.ToolCount}} tool{{if ne .ToolCount 1}}s{{end}}</span>{{end}}
+                {{if .HasToolCalls}}<span class="badge badge-teal">{{.ToolCount}} tool{{if ne .ToolCount 1}}s{{end}}</span>
+                {{else if .ToolCount}}<span class="badge badge-muted">{{.ToolCount}} tool{{if ne .ToolCount 1}}s{{end}} (unlinked)</span>
+                {{end}}
                 {{if .BreakReason}}<span class="badge badge-warn">{{.BreakReason}}</span>{{end}}
             </div>
             {{if .ToolCalls}}
