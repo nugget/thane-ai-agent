@@ -48,6 +48,16 @@ func (m *mockSessionStore) GetSessionToolCalls(sessionID string) ([]memory.Archi
 	return m.toolCalls, nil
 }
 
+func (m *mockSessionStore) ListChildSessions(parentSessionID string) ([]*memory.Session, error) {
+	var children []*memory.Session
+	for _, s := range m.sessions {
+		if s.ParentSessionID == parentSessionID {
+			children = append(children, s)
+		}
+	}
+	return children, nil
+}
+
 func newSessionTestServer(store SessionStore) *WebServer {
 	return NewWebServer(Config{
 		SessionStore: store,
@@ -291,6 +301,82 @@ func TestSessionDetail_NilStore(t *testing.T) {
 
 	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("GET /sessions/{id} (nil store) status = %d, want %d", w.Code, http.StatusServiceUnavailable)
+	}
+}
+
+func TestSessionDetail_ParentChildLinks(t *testing.T) {
+	now := time.Now()
+	ended := now.Add(-1 * time.Hour)
+	childEnded := now.Add(-30 * time.Minute)
+
+	parentSession := &memory.Session{
+		ID:             "parent-session-00000001",
+		ConversationID: "conv-main",
+		StartedAt:      now.Add(-2 * time.Hour),
+		EndedAt:        &ended,
+		EndReason:      "reset",
+		MessageCount:   10,
+		Title:          "Parent session",
+	}
+	childSession := &memory.Session{
+		ID:               "child-session-00000001",
+		ConversationID:   "delegate-abcd1234",
+		StartedAt:        now.Add(-1 * time.Hour),
+		EndedAt:          &childEnded,
+		EndReason:        "completed",
+		MessageCount:     5,
+		Title:            "Delegate task",
+		ParentSessionID:  "parent-session-00000001",
+		ParentToolCallID: "call_abc123",
+	}
+
+	store := &mockSessionStore{
+		sessions: []*memory.Session{parentSession, childSession},
+	}
+	ws := newSessionTestServer(store)
+	mux := http.NewServeMux()
+	ws.RegisterRoutes(mux)
+
+	// Child session should show parent link
+	req := httptest.NewRequest("GET", "/sessions/child-session-00000001", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /sessions/child status = %d, want %d", w.Code, http.StatusOK)
+	}
+
+	body := w.Body.String()
+	for _, want := range []string{
+		"Delegate task",
+		"Parent Session",                    // dt label
+		"parent-s",                          // short parent ID (8 chars)
+		"/sessions/parent-session-00000001", // parent link
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("child session detail missing %q", want)
+		}
+	}
+
+	// Parent session should show child sessions table
+	req = httptest.NewRequest("GET", "/sessions/parent-session-00000001", nil)
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET /sessions/parent status = %d, want %d", w.Code, http.StatusOK)
+	}
+
+	body = w.Body.String()
+	for _, want := range []string{
+		"Parent session",
+		"Child Sessions",                   // section heading
+		"Delegate task",                    // child title
+		"/sessions/child-session-00000001", // child link
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("parent session detail missing %q", want)
+		}
 	}
 }
 

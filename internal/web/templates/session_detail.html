@@ -45,6 +45,14 @@
                 <dt>Models</dt>
                 <dd>{{joinStrings .Session.Models ", "}}</dd>
                 {{end}}
+                {{if .Session.ParentSessionID}}
+                <dt>Parent Session</dt>
+                <dd class="mono">
+                    <a href="/sessions/{{.Session.ParentSessionID}}"
+                       hx-get="/sessions/{{.Session.ParentSessionID}}"
+                       hx-target="#content" hx-push-url="true">{{.Session.ParentShortID}}</a>
+                </dd>
+                {{end}}
             </dl>
         </div>
 
@@ -102,6 +110,41 @@
                 <tr>
                     <td class="mono">{{.Name}}</td>
                     <td>{{.Count}}</td>
+                </tr>
+                {{end}}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {{end}}
+
+    {{if .Session.ChildSessions}}
+    <div class="card">
+        <h2>Child Sessions</h2>
+        <div class="table-scroll">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Session</th>
+                        <th>Messages</th>
+                        <th>Duration</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody>
+                {{range .Session.ChildSessions}}
+                <tr hx-get="/sessions/{{.ID}}" hx-target="#content" hx-push-url="true">
+                    <td>
+                        <strong>{{if .Title}}{{truncate .Title 50}}{{else}}{{.ShortID}}{{end}}</strong>
+                        {{if .OneLiner}}<br><span class="text-muted" style="font-size:0.8125rem">{{truncate .OneLiner 60}}</span>{{end}}
+                    </td>
+                    <td>{{.MessageCount}}</td>
+                    <td class="text-muted">{{.Duration}}</td>
+                    <td>
+                        {{if eq .Status "active"}}<span class="badge badge-teal">active</span>
+                        {{else}}<span class="badge badge-ok">completed</span>
+                        {{end}}
+                    </td>
                 </tr>
                 {{end}}
                 </tbody>

@@ -1195,6 +1195,12 @@ iterLoop:
 				}
 
 				toolCtx := tools.WithConversationID(ctx, convID)
+				if l.archiver != nil {
+					if sid := l.archiver.ActiveSessionID(convID); sid != "" {
+						toolCtx = tools.WithSessionID(toolCtx, sid)
+					}
+				}
+				toolCtx = tools.WithToolCallID(toolCtx, toolCallIDStr)
 
 				// Enforce tool availability: only tools present in the
 				// effective registry (after capability tag filtering and
