@@ -61,6 +61,10 @@ func (m *mockArchiver) EnsureSession(convID string) string {
 	return id
 }
 
+func (m *mockArchiver) ArchiveIterations([]memory.ArchivedIteration) error { return nil }
+
+func (m *mockArchiver) LinkToolCallsToIteration(string, int, []string) error { return nil }
+
 func (m *mockArchiver) OnMessage(string) {}
 
 func (m *mockArchiver) ActiveSessionStartedAt(string) time.Time {

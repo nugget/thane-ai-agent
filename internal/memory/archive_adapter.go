@@ -231,6 +231,16 @@ func (a *ArchiveAdapter) ActiveSessionStartedAt(conversationID string) time.Time
 	return sess.StartedAt
 }
 
+// ArchiveIterations persists a batch of iteration records to the archive store.
+func (a *ArchiveAdapter) ArchiveIterations(iterations []ArchivedIteration) error {
+	return a.store.ArchiveIterations(iterations)
+}
+
+// LinkToolCallsToIteration associates tool calls with their parent iteration.
+func (a *ArchiveAdapter) LinkToolCallsToIteration(sessionID string, iterationIndex int, toolCallIDs []string) error {
+	return a.store.LinkToolCallsToIteration(sessionID, iterationIndex, toolCallIDs)
+}
+
 // Store returns the underlying ArchiveStore for direct access (API endpoints, etc.)
 func (a *ArchiveAdapter) Store() *ArchiveStore {
 	return a.store

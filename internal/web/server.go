@@ -83,12 +83,14 @@ type AnticipationStore interface {
 }
 
 // SessionStore is the subset of memory.ArchiveStore used by the session inspector.
+// SessionStore is the subset of memory.ArchiveStore used by the web dashboard.
 type SessionStore interface {
 	ListSessions(conversationID string, limit int) ([]*memory.Session, error)
 	ListChildSessions(parentSessionID string) ([]*memory.Session, error)
 	GetSession(sessionID string) (*memory.Session, error)
 	GetSessionTranscript(sessionID string) ([]memory.ArchivedMessage, error)
 	GetSessionToolCalls(sessionID string) ([]memory.ArchivedToolCall, error)
+	GetSessionIterations(sessionID string) ([]memory.ArchivedIteration, error)
 }
 
 // Config holds the dependencies needed to construct a WebServer.

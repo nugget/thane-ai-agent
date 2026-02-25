@@ -100,6 +100,28 @@ func TestHintsFromContext(t *testing.T) {
 	}
 }
 
+func TestIterationIndexFromContext(t *testing.T) {
+	tests := []struct {
+		name    string
+		ctx     context.Context
+		want    int
+		wantSet bool
+	}{
+		{"unset returns -1/false", context.Background(), -1, false},
+		{"round trip zero", WithIterationIndex(context.Background(), 0), 0, true},
+		{"round trip positive", WithIterationIndex(context.Background(), 5), 5, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := IterationIndexFromContext(tt.ctx)
+			if got != tt.want || ok != tt.wantSet {
+				t.Errorf("IterationIndexFromContext() = (%d, %v), want (%d, %v)", got, ok, tt.want, tt.wantSet)
+			}
+		})
+	}
+}
+
 func TestContextKeysIndependent(t *testing.T) {
 	// Verify that setting one key doesn't interfere with another.
 	ctx := context.Background()

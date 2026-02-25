@@ -38,6 +38,21 @@ type SessionDetailData struct {
 	Messages    []*messageRow
 	ToolCalls   []*toolCallRow
 	ToolSummary []*toolSummaryRow
+	Iterations  []*iterationRow
+}
+
+// iterationRow is a display-friendly wrapper for an iteration in the detail view.
+type iterationRow struct {
+	Index        int
+	Model        string
+	InputTokens  int
+	OutputTokens int
+	ToolCalls    []*toolCallRow
+	ToolCount    int
+	StartedAt    string
+	DurationMs   int64
+	HasToolCalls bool
+	BreakReason  string
 }
 
 // sessionDetailView holds the rich session data for the detail page.
@@ -156,6 +171,11 @@ func (s *WebServer) handleSessionDetail(w http.ResponseWriter, r *http.Request) 
 		s.logger.Error("session tool calls failed", "id", id, "error", err)
 	}
 
+	iterations, err := s.sessionStore.GetSessionIterations(id)
+	if err != nil {
+		s.logger.Error("session iterations failed", "id", id, "error", err)
+	}
+
 	detail := buildSessionDetailView(sess)
 
 	// Populate parent link if this is a child session.
@@ -178,9 +198,10 @@ func (s *WebServer) handleSessionDetail(w http.ResponseWriter, r *http.Request) 
 			BrandName: s.brandName,
 			ActiveNav: "sessions",
 		},
-		Session:   detail,
-		Messages:  messagesToRows(messages),
-		ToolCalls: toolCallsToRows(toolCalls),
+		Session:    detail,
+		Messages:   messagesToRows(messages),
+		ToolCalls:  toolCallsToRows(toolCalls),
+		Iterations: buildIterationRows(iterations, toolCalls),
 	}
 
 	if sess.Metadata != nil && len(sess.Metadata.ToolsUsed) > 0 {
@@ -307,6 +328,49 @@ func toolsUsedToSummary(toolsUsed map[string]int) []*toolSummaryRow {
 	sort.Slice(rows, func(i, j int) bool {
 		return rows[i].Count > rows[j].Count
 	})
+	return rows
+}
+
+// buildIterationRows groups iteration data with their nested tool calls.
+// Tool calls are matched to iterations by IterationIndex; tool calls
+// without an iteration index remain in the flat ToolCalls list only.
+func buildIterationRows(iterations []memory.ArchivedIteration, toolCalls []memory.ArchivedToolCall) []*iterationRow {
+	if len(iterations) == 0 {
+		return nil
+	}
+
+	// Index tool calls by iteration.
+	byIter := make(map[int][]*toolCallRow)
+	for _, c := range toolCalls {
+		if c.IterationIndex == nil {
+			continue
+		}
+		byIter[*c.IterationIndex] = append(byIter[*c.IterationIndex], &toolCallRow{
+			ToolName:   c.ToolName,
+			Arguments:  c.Arguments,
+			Result:     c.Result,
+			Error:      c.Error,
+			StartedAt:  c.StartedAt.Format("15:04:05"),
+			DurationMs: c.DurationMs,
+			HasError:   c.Error != "",
+		})
+	}
+
+	rows := make([]*iterationRow, 0, len(iterations))
+	for _, iter := range iterations {
+		rows = append(rows, &iterationRow{
+			Index:        iter.IterationIndex,
+			Model:        iter.Model,
+			InputTokens:  iter.InputTokens,
+			OutputTokens: iter.OutputTokens,
+			ToolCalls:    byIter[iter.IterationIndex],
+			ToolCount:    iter.ToolCallCount,
+			StartedAt:    iter.StartedAt.Format("15:04:05"),
+			DurationMs:   iter.DurationMs,
+			HasToolCalls: iter.HasToolCalls,
+			BreakReason:  iter.BreakReason,
+		})
+	}
 	return rows
 }
 

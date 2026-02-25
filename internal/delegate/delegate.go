@@ -245,6 +245,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 	startTime := time.Now()
 	var totalInput, totalOutput int
 	var toolCalls []ToolCallOutcome
+	var iterations []iterationRecord
 
 	maxIter := profile.MaxIter
 	if maxIter <= 0 {
@@ -313,6 +314,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 					resultContent:    "Delegate was unable to complete the task within its time limit.",
 					errMsg:           err.Error(),
 					toolCalls:        toolCalls,
+					iterations:       iterations,
 				})
 				return &Result{
 					Content:       "Delegate was unable to complete the task within its time limit.",
@@ -357,6 +359,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 				startTime:        startTime,
 				messages:         messages,
 				toolCalls:        toolCalls,
+				iterations:       iterations,
 			})
 		}
 
@@ -404,6 +407,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 					resultContent:    "Delegate was unable to complete the task within its time limit.",
 					errMsg:           err.Error(),
 					toolCalls:        toolCalls,
+					iterations:       iterations,
 				})
 				return &Result{
 					Content:       "Delegate was unable to complete the task within its time limit.",
@@ -438,6 +442,16 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 				"max_duration", maxDuration,
 			)
 			messages = append(messages, resp.Message)
+			iterations = append(iterations, iterationRecord{
+				index:        i,
+				model:        model,
+				inputTokens:  resp.InputTokens,
+				outputTokens: resp.OutputTokens,
+				startedAt:    iterStart,
+				durationMs:   time.Since(iterStart).Milliseconds(),
+				hasToolCalls: len(resp.Message.ToolCalls) > 0,
+				breakReason:  ExhaustWallClock,
+			})
 			completed = true
 			return e.forceTextResponse(ctx, model, messages, &completionRecord{
 				delegateID:       did,
@@ -456,6 +470,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 				startTime:        startTime,
 				messages:         messages,
 				toolCalls:        toolCalls,
+				iterations:       iterations,
 			})
 		}
 
@@ -470,10 +485,22 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 			"elapsed", time.Since(iterStart).Round(time.Millisecond),
 		)
 
+		// Record this iteration for the execution trace.
+		iterRec := iterationRecord{
+			index:        i,
+			model:        resp.Model,
+			inputTokens:  resp.InputTokens,
+			outputTokens: resp.OutputTokens,
+			startedAt:    iterStart,
+			durationMs:   time.Since(iterStart).Milliseconds(),
+			hasToolCalls: len(resp.Message.ToolCalls) > 0,
+		}
+
 		// No tool calls — we have the final response.
 		if len(resp.Message.ToolCalls) == 0 {
 			content := resp.Message.Content
 			messages = append(messages, resp.Message)
+			iterations = append(iterations, iterRec)
 
 			// Empty content after tool-call iterations is a silent failure.
 			// The model completed its tool work but never produced text output.
@@ -502,6 +529,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 					messages:         messages,
 					resultContent:    "",
 					toolCalls:        toolCalls,
+					iterations:       iterations,
 				})
 				return &Result{
 					Content:       "",
@@ -534,6 +562,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 				messages:         messages,
 				resultContent:    content,
 				toolCalls:        toolCalls,
+				iterations:       iterations,
 			})
 			return &Result{
 				Content:      content,
@@ -555,6 +584,9 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 				"cumul_output", totalOutput,
 				"max_tokens", maxTokens,
 			)
+			iterRec.breakReason = ExhaustTokenBudget
+			iterRec.durationMs = time.Since(iterStart).Milliseconds()
+			iterations = append(iterations, iterRec)
 			completed = true
 			return e.forceTextResponse(ctx, model, messages, &completionRecord{
 				delegateID:       did,
@@ -573,6 +605,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 				startTime:        startTime,
 				messages:         messages,
 				toolCalls:        toolCalls,
+				iterations:       iterations,
 			})
 		}
 
@@ -580,6 +613,9 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 		messages = append(messages, resp.Message)
 		var illegalCall bool
 		for _, tc := range resp.Message.ToolCalls {
+			// Track tool call ID for iteration linkage.
+			iterRec.toolCallIDs = append(iterRec.toolCallIDs, tc.ID)
+
 			argsJSON := ""
 			if tc.Function.Arguments != nil {
 				argsBytes, _ := json.Marshal(tc.Function.Arguments)
@@ -640,6 +676,9 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 							"tool", tc.Function.Name,
 							"elapsed", time.Since(startTime).Round(time.Millisecond),
 						)
+						iterRec.breakReason = ExhaustWallClock
+						iterRec.durationMs = time.Since(iterStart).Milliseconds()
+						iterations = append(iterations, iterRec)
 						completed = true
 						e.recordCompletion(&completionRecord{
 							delegateID:       did,
@@ -660,6 +699,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 							resultContent:    "Delegate was unable to complete the task within its time limit.",
 							errMsg:           err.Error(),
 							toolCalls:        toolCalls,
+							iterations:       iterations,
 						})
 						return &Result{
 							Content:       "Delegate was unable to complete the task within its time limit.",
@@ -710,6 +750,9 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 				"delegate_id", did,
 				"profile", profile.Name,
 			)
+			iterRec.breakReason = ExhaustIllegalTool
+			iterRec.durationMs = time.Since(iterStart).Milliseconds()
+			iterations = append(iterations, iterRec)
 			completed = true
 			return e.forceTextResponse(ctx, model, messages, &completionRecord{
 				delegateID:       did,
@@ -728,6 +771,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 				startTime:        startTime,
 				messages:         messages,
 				toolCalls:        toolCalls,
+				iterations:       iterations,
 			})
 		}
 
@@ -739,6 +783,9 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 				"elapsed", time.Since(startTime).Round(time.Millisecond),
 				"max_duration", maxDuration,
 			)
+			iterRec.breakReason = ExhaustWallClock
+			iterRec.durationMs = time.Since(iterStart).Milliseconds()
+			iterations = append(iterations, iterRec)
 			completed = true
 			return e.forceTextResponse(ctx, model, messages, &completionRecord{
 				delegateID:       did,
@@ -757,8 +804,13 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 				startTime:        startTime,
 				messages:         messages,
 				toolCalls:        toolCalls,
+				iterations:       iterations,
 			})
 		}
+
+		// Normal end of tool-call iteration — finalize and continue.
+		iterRec.durationMs = time.Since(iterStart).Milliseconds()
+		iterations = append(iterations, iterRec)
 	}
 
 	// Max iterations exhausted — force a text response.
@@ -785,6 +837,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 		startTime:        startTime,
 		messages:         messages,
 		toolCalls:        toolCalls,
+		iterations:       iterations,
 	})
 }
 
@@ -854,6 +907,20 @@ func (e *Executor) selectModel(ctx context.Context, delegateID, task string, pro
 	return e.defaultModel
 }
 
+// iterationRecord collects per-iteration data during delegate execution
+// for batch archiving after completion.
+type iterationRecord struct {
+	index        int
+	model        string
+	inputTokens  int
+	outputTokens int
+	toolCallIDs  []string
+	startedAt    time.Time
+	durationMs   int64
+	hasToolCalls bool
+	breakReason  string
+}
+
 // completionRecord carries all data for logging and persistence of a
 // delegate execution.
 type completionRecord struct {
@@ -875,6 +942,7 @@ type completionRecord struct {
 	resultContent    string
 	errMsg           string
 	toolCalls        []ToolCallOutcome
+	iterations       []iterationRecord
 }
 
 // recordCompletion logs and optionally persists a delegate execution.
@@ -1027,6 +1095,43 @@ func (e *Executor) archiveSession(rec *completionRecord, now time.Time) {
 			"session_id", sessionID,
 			"error", err,
 		)
+	}
+
+	// Archive iteration records and link tool calls to their iterations.
+	if len(rec.iterations) > 0 {
+		archived := make([]memory.ArchivedIteration, len(rec.iterations))
+		for i, iter := range rec.iterations {
+			archived[i] = memory.ArchivedIteration{
+				SessionID:      sessionID,
+				IterationIndex: iter.index,
+				Model:          iter.model,
+				InputTokens:    iter.inputTokens,
+				OutputTokens:   iter.outputTokens,
+				ToolCallCount:  len(iter.toolCallIDs),
+				StartedAt:      iter.startedAt,
+				DurationMs:     iter.durationMs,
+				HasToolCalls:   iter.hasToolCalls,
+				BreakReason:    iter.breakReason,
+			}
+		}
+		if err := e.archiver.ArchiveIterations(archived); err != nil {
+			e.logger.Warn("failed to archive delegate iterations",
+				"delegate_id", rec.delegateID,
+				"session_id", sessionID,
+				"error", err,
+			)
+		}
+		for _, iter := range rec.iterations {
+			if len(iter.toolCallIDs) > 0 {
+				if err := e.archiver.LinkToolCallsToIteration(sessionID, iter.index, iter.toolCallIDs); err != nil {
+					e.logger.Warn("failed to link delegate tool calls to iteration",
+						"delegate_id", rec.delegateID,
+						"session_id", sessionID,
+						"error", err,
+					)
+				}
+			}
+		}
 	}
 
 	// Set message count and end the session.

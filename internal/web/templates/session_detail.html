@@ -184,7 +184,70 @@
     </div>
     {{end}}
 
-    {{if .ToolCalls}}
+    {{if .Iterations}}
+    <div class="card">
+        <h2>Execution Trace</h2>
+        {{range .Iterations}}
+        <div style="margin-bottom:1rem;padding:0.75rem;border:1px solid var(--border);border-radius:6px">
+            <div style="display:flex;gap:1rem;align-items:center;margin-bottom:0.5rem;flex-wrap:wrap">
+                <strong>Iteration {{.Index}}</strong>
+                <span class="text-muted mono" style="font-size:0.8125rem">{{.Model}}</span>
+                <span class="text-muted" style="font-size:0.8125rem">{{.StartedAt}}</span>
+                <span class="text-muted" style="font-size:0.8125rem">{{.DurationMs}}ms</span>
+                <span class="text-muted" style="font-size:0.8125rem">{{.InputTokens}}→{{.OutputTokens}} tok</span>
+                {{if .HasToolCalls}}<span class="badge badge-teal">{{.ToolCount}} tool{{if ne .ToolCount 1}}s{{end}}</span>{{end}}
+                {{if .BreakReason}}<span class="badge badge-warn">{{.BreakReason}}</span>{{end}}
+            </div>
+            {{if .ToolCalls}}
+            <div class="table-scroll">
+                <table class="table" style="margin:0">
+                    <thead>
+                        <tr>
+                            <th>Tool</th>
+                            <th>Time</th>
+                            <th>Duration</th>
+                            <th>Status</th>
+                            <th>Details</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    {{range .ToolCalls}}
+                    <tr>
+                        <td class="mono">{{.ToolName}}</td>
+                        <td class="text-muted mono">{{.StartedAt}}</td>
+                        <td class="text-muted">{{if .DurationMs}}{{.DurationMs}}ms{{else}}—{{end}}</td>
+                        <td>
+                            {{if .HasError}}<span class="badge badge-err">error</span>
+                            {{else}}<span class="badge badge-ok">ok</span>
+                            {{end}}
+                        </td>
+                        <td>
+                            {{if .Arguments}}
+                            <details>
+                                <summary class="text-muted" style="font-size:0.8125rem;cursor:pointer">args</summary>
+                                <pre class="mono" style="font-size:0.75rem;white-space:pre-wrap;max-height:200px;overflow:auto">{{.Arguments}}</pre>
+                            </details>
+                            {{end}}
+                            {{if .Result}}
+                            <details>
+                                <summary class="text-muted" style="font-size:0.8125rem;cursor:pointer">result</summary>
+                                <pre class="mono" style="font-size:0.75rem;white-space:pre-wrap;max-height:200px;overflow:auto">{{.Result}}</pre>
+                            </details>
+                            {{end}}
+                            {{if .Error}}
+                            <pre class="mono" style="font-size:0.75rem;color:var(--red)">{{truncate .Error 200}}</pre>
+                            {{end}}
+                        </td>
+                    </tr>
+                    {{end}}
+                    </tbody>
+                </table>
+            </div>
+            {{end}}
+        </div>
+        {{end}}
+    </div>
+    {{else if .ToolCalls}}
     <div class="card">
         <h2>Tool Calls</h2>
         <div class="table-scroll">
