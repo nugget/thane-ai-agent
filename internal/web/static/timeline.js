@@ -77,7 +77,7 @@
     detail.innerHTML = "";
     selectedIterIndex = null;
 
-    // Session info header.
+    // Session info header with link to full detail page.
     var title = data.session.title || data.session.id.substring(0, 8);
     var statusBadge =
       data.session.status === "active" ? "badge-teal" : "badge-ok";
@@ -87,10 +87,19 @@
       '">' +
       data.session.status +
       "</span> " +
+      '<a href="/sessions/' +
+      encodeURIComponent(data.session.id) +
+      '" hx-get="/sessions/' +
+      encodeURIComponent(data.session.id) +
+      '" hx-target="#content" hx-push-url="true">' +
       escapeHTML(title) +
+      "</a>" +
       ' <span class="text-muted">' +
       escapeHTML(data.session.duration) +
       "</span>";
+
+    // Let HTMX discover the dynamically-added hx-* attributes.
+    if (typeof htmx !== "undefined") htmx.process(info);
 
     if (!data.iterations || data.iterations.length === 0) {
       empty.textContent = "No iterations recorded for this session.";
