@@ -1,6 +1,7 @@
 {{define "title"}}{{.BrandName}} - Session: {{if .Session.Title}}{{.Session.Title}}{{else}}{{.Session.ShortID}}{{end}}{{end}}
 
 {{define "content"}}
+<script src="/static/timeline.js"></script>
 <div class="browser">
     <div class="detail-header">
         <a href="/sessions" class="detail-back" hx-get="/sessions" hx-target="#content" hx-push-url="true">&larr; Sessions</a>
@@ -9,6 +10,25 @@
         {{else}}<span class="badge badge-ok">completed</span>
         {{end}}
     </div>
+
+    {{/* ── NLE Timeline ── */}}
+    {{if .Iterations}}
+    <div class="card timeline-panel" id="timeline-panel">
+        <div class="timeline-header" id="timeline-header">
+            <h2>Execution Timeline</h2>
+            <span class="text-muted" id="timeline-session-info"></span>
+        </div>
+        <div class="timeline-track-wrap" id="timeline-track-wrap">
+            <div class="empty-state" id="timeline-empty" style="display:none"></div>
+            <div class="timeline-track" id="timeline-track" style="display:none"></div>
+        </div>
+        <div id="timeline-detail" style="display:none"></div>
+    </div>
+    <script>
+        // Auto-load timeline for this session.
+        if (window.timeline) { window.timeline.load("{{.Session.ID}}"); }
+    </script>
+    {{end}}
 
     <div class="detail-grid">
         <div class="card">
