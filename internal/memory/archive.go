@@ -351,6 +351,9 @@ func (s *ArchiveStore) migrateSchema() {
 			}
 		}
 	}
+
+	// Index for ListChildSessions query performance.
+	_, _ = s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_sessions_parent ON sessions(parent_session_id, started_at)`)
 }
 
 // tryEnableFTS attempts to create the FTS5 virtual table.

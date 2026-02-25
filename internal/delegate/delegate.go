@@ -1001,7 +1001,7 @@ func (e *Executor) archiveSession(rec *completionRecord, now time.Time) {
 			for _, rm := range rec.messages {
 				if rm.Role == "tool" && rm.ToolCallID == tc.ID {
 					if strings.HasPrefix(rm.Content, "Error: ") {
-						errStr = rm.Content
+						errStr = strings.TrimSpace(strings.TrimPrefix(rm.Content, "Error: "))
 					} else {
 						result = rm.Content
 					}
@@ -1010,6 +1010,7 @@ func (e *Executor) archiveSession(rec *completionRecord, now time.Time) {
 			}
 
 			archivedCalls = append(archivedCalls, memory.ArchivedToolCall{
+				ID:             tc.ID,
 				ConversationID: convID,
 				SessionID:      sessionID,
 				ToolName:       tc.Function.Name,
