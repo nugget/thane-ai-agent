@@ -1,0 +1,78 @@
+{{define "title"}}{{.BrandName}} - Timeline{{end}}
+
+{{define "head"}}
+<script src="/static/timeline.js" defer></script>
+{{end}}
+
+{{define "content"}}
+<div class="browser timeline-page">
+    <h1>Session Timeline</h1>
+
+    {{/* ── Top panel: timeline visualization ── */}}
+    <div class="card timeline-panel" id="timeline-panel">
+        <div class="timeline-header" id="timeline-header">
+            <h2>Execution Timeline</h2>
+            <span class="text-muted" id="timeline-session-info"></span>
+        </div>
+        <div class="timeline-track-wrap" id="timeline-track-wrap">
+            <div class="empty-state" id="timeline-empty">Select a session below to view its execution timeline.</div>
+            <div class="timeline-track" id="timeline-track" style="display:none"></div>
+        </div>
+        <div id="timeline-detail" style="display:none"></div>
+    </div>
+
+    {{/* ── Bottom panel: session list ── */}}
+    <div class="card">
+        <h2>Sessions</h2>
+        <div class="toolbar">
+            <input type="search" class="search-input" placeholder="Filter by conversation ID..."
+                   name="conversation_id" value="{{.ConversationID}}"
+                   hx-get="/sessions/timeline" hx-trigger="keyup changed delay:300ms"
+                   hx-target="#timeline-sessions-tbody" hx-include="closest .toolbar">
+        </div>
+        <div class="table-scroll">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Session</th>
+                        <th>Conversation</th>
+                        <th>Type</th>
+                        <th>Messages</th>
+                        <th>Started</th>
+                        <th>Duration</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody id="timeline-sessions-tbody">
+                {{template "timeline-sessions-tbody" .}}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{{end}}
+
+{{define "timeline-sessions-tbody"}}
+{{if .Sessions}}
+{{range .Sessions}}
+<tr class="timeline-session-row" data-session-id="{{.ID}}" onclick="window.timeline.load('{{.ID}}')">
+    <td>
+        <strong>{{if .Title}}{{truncate .Title 50}}{{else}}{{.ShortID}}{{end}}</strong>
+        {{if .OneLiner}}<br><span class="text-muted" style="font-size:0.8125rem">{{truncate .OneLiner 60}}</span>{{end}}
+    </td>
+    <td class="mono">{{.ShortConvID}}</td>
+    <td>{{if .SessionType}}<span class="badge badge-muted">{{.SessionType}}</span>{{else}}<span class="text-muted">—</span>{{end}}</td>
+    <td>{{.MessageCount}}</td>
+    <td class="text-muted">{{.StartedAt}}</td>
+    <td class="text-muted">{{.Duration}}</td>
+    <td>
+        {{if eq .Status "active"}}<span class="badge badge-teal">active</span>
+        {{else}}<span class="badge badge-ok">completed</span>
+        {{end}}
+    </td>
+</tr>
+{{end}}
+{{else}}
+<tr><td colspan="7" class="empty-state">No sessions found.</td></tr>
+{{end}}
+{{end}}

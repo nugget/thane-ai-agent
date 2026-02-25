@@ -47,6 +47,7 @@ func loadTemplates() map[string]*template.Template {
 		"anticipations.html",
 		"sessions.html",
 		"session_detail.html",
+		"session_timeline.html",
 	}
 	result := make(map[string]*template.Template, len(pages))
 
