@@ -127,6 +127,7 @@ func (c *Compactor) Compact(ctx context.Context, conversationID string) error {
 		archived := make([]ArchivedMessage, len(messages))
 		for i, m := range messages {
 			archived[i] = ArchivedMessage{
+				ID:             m.ID,
 				ConversationID: conversationID,
 				SessionID:      sessionID,
 				Role:           m.Role,

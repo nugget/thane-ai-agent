@@ -15,8 +15,11 @@
 package memory
 
 import (
+	"fmt"
 	"sync"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // Store is the interface for memory storage.
@@ -30,6 +33,7 @@ type MemoryStore interface {
 
 // Message represents a conversation message.
 type Message struct {
+	ID         string    `json:"id"`   // Stable UUIDv7 assigned at creation time
 	Role       string    `json:"role"` // system, user, assistant, tool
 	Content    string    `json:"content"`
 	Timestamp  time.Time `json:"timestamp"`
@@ -113,7 +117,12 @@ func (s *Store) AddMessage(conversationID string, role, content string) error {
 		s.conversations[conversationID] = conv
 	}
 
+	msgID, err := uuid.NewV7()
+	if err != nil {
+		return fmt.Errorf("generate message ID: %w", err)
+	}
 	conv.Messages = append(conv.Messages, Message{
+		ID:        msgID.String(),
 		Role:      role,
 		Content:   content,
 		Timestamp: time.Now(),

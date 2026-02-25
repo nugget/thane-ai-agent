@@ -148,10 +148,13 @@ func (s *SQLiteStore) GetOrCreateConversation(id string) (*Conversation, error) 
 // AddMessage adds a message to a conversation.
 func (s *SQLiteStore) AddMessage(conversationID, role, content string) error {
 	now := time.Now()
-	msgID, _ := uuid.NewV7()
+	msgID, err := uuid.NewV7()
+	if err != nil {
+		return fmt.Errorf("generate message ID: %w", err)
+	}
 
 	// Ensure conversation exists
-	_, err := s.GetOrCreateConversation(conversationID)
+	_, err = s.GetOrCreateConversation(conversationID)
 	if err != nil {
 		return err
 	}
@@ -179,7 +182,7 @@ func (s *SQLiteStore) AddMessage(conversationID, role, content string) error {
 // GetMessages retrieves messages for a conversation.
 func (s *SQLiteStore) GetMessages(conversationID string) []Message {
 	rows, err := s.db.Query(`
-		SELECT role, content, timestamp
+		SELECT id, role, content, timestamp
 		FROM messages
 		WHERE conversation_id = ? AND compacted = FALSE
 		ORDER BY timestamp ASC
@@ -193,7 +196,7 @@ func (s *SQLiteStore) GetMessages(conversationID string) []Message {
 	var messages []Message
 	for rows.Next() {
 		var m Message
-		if err := rows.Scan(&m.Role, &m.Content, &m.Timestamp); err != nil {
+		if err := rows.Scan(&m.ID, &m.Role, &m.Content, &m.Timestamp); err != nil {
 			continue
 		}
 		messages = append(messages, m)
@@ -288,7 +291,7 @@ func (s *SQLiteStore) GetAllConversations() []*Conversation {
 // Includes tool call data for full-fidelity archiving — never lose primary sources.
 func (s *SQLiteStore) GetAllMessages(conversationID string) []Message {
 	rows, err := s.db.Query(`
-		SELECT role, content, timestamp, tool_calls, tool_call_id
+		SELECT id, role, content, timestamp, tool_calls, tool_call_id
 		FROM messages
 		WHERE conversation_id = ?
 		ORDER BY timestamp ASC
@@ -302,7 +305,7 @@ func (s *SQLiteStore) GetAllMessages(conversationID string) []Message {
 	for rows.Next() {
 		var m Message
 		var toolCalls, toolCallID sql.NullString
-		if err := rows.Scan(&m.Role, &m.Content, &m.Timestamp, &toolCalls, &toolCallID); err != nil {
+		if err := rows.Scan(&m.ID, &m.Role, &m.Content, &m.Timestamp, &toolCalls, &toolCallID); err != nil {
 			continue
 		}
 		if toolCalls.Valid {
@@ -366,8 +369,7 @@ func (s *SQLiteStore) GetMessagesForCompaction(conversationID string, keep int) 
 	var messages []Message
 	for rows.Next() {
 		var m Message
-		var id string
-		if err := rows.Scan(&id, &m.Role, &m.Content, &m.Timestamp); err != nil {
+		if err := rows.Scan(&m.ID, &m.Role, &m.Content, &m.Timestamp); err != nil {
 			continue
 		}
 		messages = append(messages, m)
