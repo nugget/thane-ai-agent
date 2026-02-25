@@ -1269,3 +1269,52 @@ func TestExecute_TagScoping_NilPreservesProfile(t *testing.T) {
 		t.Error("get_state should appear in HA profile tool definitions")
 	}
 }
+
+func TestExecute_ExhaustReasonIllegalTool(t *testing.T) {
+	// The model calls a tool that is NOT in the registry.
+	// The delegate should detect ErrToolUnavailable and force a text response.
+	illegalToolCallResp := &llm.ChatResponse{
+		Model: "test-model",
+		Message: llm.Message{
+			Role: "assistant",
+			ToolCalls: []llm.ToolCall{
+				{
+					ID: "call-illegal",
+					Function: struct {
+						Name      string         `json:"name"`
+						Arguments map[string]any `json:"arguments"`
+					}{
+						Name:      "nonexistent_tool",
+						Arguments: map[string]any{},
+					},
+				},
+			},
+		},
+		InputTokens:  50,
+		OutputTokens: 20,
+	}
+
+	forcedTextResp := &llm.ChatResponse{
+		Model:        "test-model",
+		Message:      llm.Message{Role: "assistant", Content: "I cannot do that."},
+		InputTokens:  100,
+		OutputTokens: 30,
+	}
+
+	mock := &mockLLMClient{responses: []*llm.ChatResponse{illegalToolCallResp, forcedTextResp}}
+	exec := NewExecutor(slog.Default(), mock, nil, newTestRegistry(), "test-model")
+	result, err := exec.Execute(context.Background(), "Do something illegal", "general", "", nil)
+
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if !result.Exhausted {
+		t.Error("Exhausted = false, want true")
+	}
+	if result.ExhaustReason != ExhaustIllegalTool {
+		t.Errorf("ExhaustReason = %q, want %q", result.ExhaustReason, ExhaustIllegalTool)
+	}
+	if result.Iterations != 1 {
+		t.Errorf("Iterations = %d, want 1 (should break after first iteration)", result.Iterations)
+	}
+}

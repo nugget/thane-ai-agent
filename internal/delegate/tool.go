@@ -111,6 +111,8 @@ func ToolHandler(exec *Executor) func(ctx context.Context, args map[string]any) 
 			out.WriteString("The delegate exceeded its wall clock time limit before completing the task.")
 		case ExhaustTokenBudget:
 			out.WriteString("The delegate exceeded its output token budget before completing the task.")
+		case ExhaustIllegalTool:
+			out.WriteString("The delegate attempted to call a tool it does not have access to and was stopped.")
 		default:
 			out.WriteString("The delegate used all available iterations before completing the task.")
 		}

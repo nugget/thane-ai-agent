@@ -14,6 +14,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/conditions"
 	"github.com/nugget/thane-ai-agent/internal/config"
 	"github.com/nugget/thane-ai-agent/internal/llm"
+	"github.com/nugget/thane-ai-agent/internal/prompts"
 	"github.com/nugget/thane-ai-agent/internal/router"
 	"github.com/nugget/thane-ai-agent/internal/tools"
 	"github.com/nugget/thane-ai-agent/internal/usage"
@@ -28,6 +29,7 @@ const (
 	ExhaustTokenBudget   = "token_budget"
 	ExhaustWallClock     = "wall_clock"
 	ExhaustNoOutput      = "no_output"
+	ExhaustIllegalTool   = "illegal_tool"
 )
 
 // ToolCallOutcome records the name and success/failure of a single tool
@@ -534,6 +536,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 
 		// Execute tool calls.
 		messages = append(messages, resp.Message)
+		var illegalCall bool
 		for _, tc := range resp.Message.ToolCalls {
 			argsJSON := ""
 			if tc.Function.Arguments != nil {
@@ -565,9 +568,19 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 			})
 
 			if err != nil {
-				// Per-tool timeout fired but parent context is still alive —
-				// report as a tool error so the LLM can adapt.
-				if errors.Is(toolCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil {
+				// Illegal tool call — tool not in delegate's registry.
+				var unavail *tools.ErrToolUnavailable
+				if errors.As(err, &unavail) {
+					illegalCall = true
+					result = fmt.Sprintf(prompts.IllegalToolMessage, tc.Function.Name)
+					e.logger.Warn("delegate illegal tool call",
+						"delegate_id", did,
+						"profile", profile.Name,
+						"tool", tc.Function.Name,
+					)
+				} else if errors.Is(toolCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil {
+					// Per-tool timeout fired but parent context is still alive —
+					// report as a tool error so the LLM can adapt.
 					e.logger.Warn("delegate tool exec timed out",
 						"delegate_id", did,
 						"profile", profile.Name,
@@ -645,6 +658,32 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 				Role:       "tool",
 				Content:    result,
 				ToolCallID: tc.ID,
+			})
+		}
+
+		// If any tool call was illegal, force a text response immediately.
+		if illegalCall {
+			e.logger.Warn("delegate illegal tool call, forcing text response",
+				"delegate_id", did,
+				"profile", profile.Name,
+			)
+			completed = true
+			return e.forceTextResponse(ctx, model, messages, &completionRecord{
+				delegateID:     did,
+				conversationID: tools.ConversationIDFromContext(ctx),
+				task:           task,
+				guidance:       guidance,
+				profileName:    profile.Name,
+				model:          model,
+				totalIter:      i + 1,
+				maxIter:        maxIter,
+				totalInput:     totalInput,
+				totalOutput:    totalOutput,
+				exhausted:      true,
+				exhaustReason:  ExhaustIllegalTool,
+				startTime:      startTime,
+				messages:       messages,
+				toolCalls:      toolCalls,
 			})
 		}
 

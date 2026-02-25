@@ -1061,7 +1061,7 @@ func (r *Registry) TaggedToolNames(tag string) []string {
 func (r *Registry) Execute(ctx context.Context, name string, argsJSON string) (string, error) {
 	tool := r.tools[name]
 	if tool == nil {
-		return "", fmt.Errorf("unknown tool: %s", name)
+		return "", &ErrToolUnavailable{ToolName: name}
 	}
 
 	var args map[string]any

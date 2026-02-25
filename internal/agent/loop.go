@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -1028,6 +1029,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	maxIterations := 50   // Tool call budget; final text response always gets one extra call
 	emptyRetried := false // Track whether we've already nudged after an empty response
 	deferredText := ""    // Text from a mixed (text + tool_call) response, deferred for later use
+	breakReason := ""     // Why the loop exited early ("" = max iterations, "illegal_tool" = unavailable tool)
 iterLoop:
 	for i := 0; i < maxIterations; i++ {
 		// Select tool definitions for this iteration. With gating active,
@@ -1133,6 +1135,7 @@ iterLoop:
 				convID = "default"
 			}
 
+			var illegalCall bool
 			for _, tc := range llmResp.Message.ToolCalls {
 				toolName := tc.Function.Name
 				toolCallID, _ := uuid.NewV7()
@@ -1201,7 +1204,7 @@ iterLoop:
 				var result string
 				var err error
 				if effectiveTools.Get(toolName) == nil {
-					err = fmt.Errorf("tool %q is not available in this context", toolName)
+					err = &tools.ErrToolUnavailable{ToolName: toolName}
 					log.Warn("blocked call to unavailable tool", "tool", toolName)
 				} else {
 					result, err = l.tools.Execute(toolCtx, toolName, argsJSON)
@@ -1210,8 +1213,18 @@ iterLoop:
 				errMsg := ""
 				if err != nil {
 					errMsg = err.Error()
-					result = "Error: " + errMsg
-					log.Error("tool exec failed", "tool", toolName, "error", err)
+					// Distinguish illegal calls (tool unavailable) from
+					// transient failures. Illegal calls get a directive
+					// message and will break the loop after this batch.
+					var unavail *tools.ErrToolUnavailable
+					if errors.As(err, &unavail) {
+						illegalCall = true
+						result = fmt.Sprintf(prompts.IllegalToolMessage, toolName)
+						log.Warn("illegal tool call", "tool", toolName, "iter", i)
+					} else {
+						result = "Error: " + errMsg
+						log.Error("tool exec failed", "tool", toolName, "error", err)
+					}
 				} else {
 					log.Debug("tool exec done", "tool", toolName, "result_len", len(result))
 				}
@@ -1239,6 +1252,16 @@ iterLoop:
 					Content:    result,
 					ToolCallID: tc.ID, // Required by Anthropic for tool_result correlation
 				})
+			}
+
+			// If any tool call was illegal (tool unavailable), break the
+			// loop and force a text response. All tool results have been
+			// appended so the model has context. The post-loop recovery
+			// code handles the final tools=nil LLM call.
+			if illegalCall {
+				log.Warn("breaking loop due to illegal tool call", "iter", i)
+				breakReason = "illegal_tool"
+				break iterLoop
 			}
 
 			// Continue loop to get final response
@@ -1378,20 +1401,30 @@ iterLoop:
 		return resp, nil
 	}
 
-	// Max iterations exhausted. If the last message is a tool result,
-	// make one final LLM call with tools disabled to generate a response.
+	// Loop exited — either max iterations exhausted or an early break
+	// (e.g., illegal tool call). Determine the exit classification.
+	finishReason := "max_iterations"
+	exitLabel := "max iterations recovery"
+	if breakReason != "" {
+		finishReason = breakReason
+		exitLabel = breakReason
+	}
+
+	// If the last message is a tool result, make one final LLM call
+	// with tools disabled to generate a text response.
 	if len(llmMessages) > 0 && llmMessages[len(llmMessages)-1].Role == "tool" {
-		log.Warn("max iterations reached with pending tool results, making final LLM call",
+		log.Warn("loop ended with pending tool results, making final LLM call",
+			"reason", finishReason,
 			"max_iter", maxIterations,
 		)
 
 		llmResp, err := l.llm.ChatStream(ctx, model, llmMessages, nil, stream) // nil tools = no more tool calls
 		if err != nil {
-			log.Error("final LLM call failed after max iterations", "error", err, "model", model, "max_iter", maxIterations)
+			log.Error("final LLM call failed", "error", err, "model", model, "reason", finishReason)
 			return &Response{
 				Content:      "I found the information but couldn't compose a response. Please try again.",
 				Model:        model,
-				FinishReason: "max_iterations",
+				FinishReason: finishReason,
 				InputTokens:  totalInputTokens,
 				OutputTokens: totalOutputTokens,
 				ToolsUsed:    toolsUsed,
@@ -1403,8 +1436,8 @@ iterLoop:
 
 		content := llmResp.Message.Content
 		if content == "" {
-			log.Error("empty response in max-iterations recovery",
-				"max_iter", maxIterations,
+			log.Error("empty response in loop recovery",
+				"reason", finishReason,
 				"input_tokens", totalInputTokens,
 				"output_tokens", totalOutputTokens,
 			)
@@ -1425,9 +1458,9 @@ iterLoop:
 		}
 
 		elapsed := time.Since(startTime)
-		log.Info("agent loop completed (max iterations recovery)",
+		log.Info("agent loop completed ("+exitLabel+")",
 			"model", model,
-			"max_iter", maxIterations,
+			"reason", finishReason,
 			"input_tokens", totalInputTokens,
 			"output_tokens", totalOutputTokens,
 			"elapsed", elapsed.Round(time.Millisecond),
@@ -1438,14 +1471,14 @@ iterLoop:
 		return resp, nil
 	}
 
-	log.Error("max iterations reached without tool results or response",
-		"max_iter", maxIterations,
+	log.Error("loop ended without tool results or response",
+		"reason", finishReason,
 		"model", model,
 	)
 	return &Response{
 		Content:      "I wasn't able to complete that request. Please try again.",
 		Model:        model,
-		FinishReason: "max_iterations",
+		FinishReason: finishReason,
 		InputTokens:  totalInputTokens,
 		OutputTokens: totalOutputTokens,
 		ToolsUsed:    toolsUsed,

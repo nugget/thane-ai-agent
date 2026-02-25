@@ -1,11 +1,57 @@
 package tools
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/nugget/thane-ai-agent/internal/homeassistant"
 )
+
+func TestExecute_UnknownToolReturnsErrToolUnavailable(t *testing.T) {
+	reg := &Registry{tools: make(map[string]*Tool)}
+	reg.Register(&Tool{
+		Name:        "known_tool",
+		Description: "a tool that exists",
+		Handler: func(_ context.Context, _ map[string]any) (string, error) {
+			return "ok", nil
+		},
+	})
+
+	// Calling an unknown tool should return ErrToolUnavailable.
+	_, err := reg.Execute(context.Background(), "nonexistent_tool", "")
+	if err == nil {
+		t.Fatal("Execute on unknown tool should return error")
+	}
+
+	var unavail *ErrToolUnavailable
+	if !errors.As(err, &unavail) {
+		t.Fatalf("error type = %T, want *ErrToolUnavailable", err)
+	}
+	if unavail.ToolName != "nonexistent_tool" {
+		t.Errorf("ToolName = %q, want %q", unavail.ToolName, "nonexistent_tool")
+	}
+}
+
+func TestExecute_KnownToolDoesNotReturnErrToolUnavailable(t *testing.T) {
+	reg := &Registry{tools: make(map[string]*Tool)}
+	reg.Register(&Tool{
+		Name:        "good_tool",
+		Description: "a tool that works",
+		Handler: func(_ context.Context, _ map[string]any) (string, error) {
+			return "result", nil
+		},
+	})
+
+	result, err := reg.Execute(context.Background(), "good_tool", "")
+	if err != nil {
+		t.Fatalf("Execute on known tool returned unexpected error: %v", err)
+	}
+	if result != "result" {
+		t.Errorf("result = %q, want %q", result, "result")
+	}
+}
 
 func TestFormatEntityState(t *testing.T) {
 	tests := []struct {
