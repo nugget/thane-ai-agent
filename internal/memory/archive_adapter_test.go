@@ -11,7 +11,7 @@ func newTestAdapter(t *testing.T) (*ArchiveAdapter, *ArchiveStore) {
 	t.Helper()
 
 	dbPath := t.TempDir() + "/test-adapter.db"
-	store, err := NewArchiveStore(dbPath, nil, nil)
+	store, err := NewArchiveStore(dbPath, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -10,7 +10,7 @@ func newTestArchiveStore(t *testing.T) *ArchiveStore {
 	t.Helper()
 
 	dbPath := t.TempDir() + "/test-archive.db"
-	store, err := NewArchiveStore(dbPath, nil, nil)
+	store, err := NewArchiveStore(dbPath, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -78,7 +78,7 @@ func newTestRouter() *router.Router {
 func newTestStore(t *testing.T) *memory.ArchiveStore {
 	t.Helper()
 	dbPath := t.TempDir() + "/test-archive.db"
-	store, err := memory.NewArchiveStore(dbPath, nil, nil)
+	store, err := memory.NewArchiveStore(dbPath, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

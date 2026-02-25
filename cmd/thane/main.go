@@ -474,16 +474,6 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	})
 	ollamaClient.SetWatcher(ollamaWatcher)
 
-	// --- Session archive ---
-	// Immutable archive of all conversation transcripts. Messages are
-	// archived before compaction, reset, or shutdown — primary source data
-	// is never discarded.
-	archiveStore, err := memory.NewArchiveStore(cfg.DataDir+"/archive.db", nil, logger)
-	if err != nil {
-		return fmt.Errorf("open archive store: %w", err)
-	}
-	defer archiveStore.Close()
-
 	// --- Unify message storage ---
 	// Merge archived messages from archive.db into the working thane.db so
 	// all messages live in a single table with lifecycle status. This is
@@ -491,7 +481,16 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	if err := memory.MigrateUnifyMessages(mem.DB(), cfg.DataDir+"/archive.db", logger); err != nil {
 		return fmt.Errorf("unify messages migration: %w", err)
 	}
-	archiveStore.SetMessagesDB(mem.DB())
+
+	// --- Session archive ---
+	// Immutable archive of all conversation transcripts. Messages are read
+	// from the unified working DB; sessions/iterations/tool_calls live in
+	// archive.db until PR 3 consolidates everything.
+	archiveStore, err := memory.NewArchiveStore(cfg.DataDir+"/archive.db", mem.DB(), nil, logger)
+	if err != nil {
+		return fmt.Errorf("open archive store: %w", err)
+	}
+	defer archiveStore.Close()
 
 	// --- Working memory ---
 	// Persists free-form experiential context per conversation. Shares

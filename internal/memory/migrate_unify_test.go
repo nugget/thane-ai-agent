@@ -96,7 +96,7 @@ func TestMigrateUnifyMessages_MergesArchive(t *testing.T) {
 	}
 
 	// Create archive store with different messages.
-	archiveStore, err := NewArchiveStore(archivePath, nil, nil)
+	archiveStore, err := NewArchiveStore(archivePath, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +164,7 @@ func TestMigrateUnifyMessages_UpsertPreservesSessionID(t *testing.T) {
 	}
 
 	// Create archive with the same message ID but with session_id.
-	archiveStore, err := NewArchiveStore(archivePath, nil, nil)
+	archiveStore, err := NewArchiveStore(archivePath, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -212,7 +212,7 @@ func TestMigrateUnifyMessages_Idempotent(t *testing.T) {
 	}
 	defer workingStore.Close()
 
-	archiveStore, err := NewArchiveStore(archivePath, nil, nil)
+	archiveStore, err := NewArchiveStore(archivePath, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -267,16 +267,15 @@ func TestUnifiedMode_GetSessionTranscript(t *testing.T) {
 	}
 	defer workingStore.Close()
 
-	// Create archive store and point it at the working DB for messages.
-	archiveStore, err := NewArchiveStore(tmpDir+"/archive.db", nil, nil)
+	// Run migration to add lifecycle columns.
+	MigrateUnifyMessages(workingStore.DB(), "", slog.Default())
+
+	// Create archive store in unified mode (messages from working DB).
+	archiveStore, err := NewArchiveStore(tmpDir+"/archive.db", workingStore.DB(), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer archiveStore.Close()
-
-	// Run migration to add lifecycle columns.
-	MigrateUnifyMessages(workingStore.DB(), "", slog.Default())
-	archiveStore.SetMessagesDB(workingStore.DB())
 
 	// Start a session.
 	sess, _ := archiveStore.StartSession("conv-1")
@@ -372,14 +371,13 @@ func TestUnifiedMode_SessionMessageCount(t *testing.T) {
 	}
 	defer workingStore.Close()
 
-	archiveStore, err := NewArchiveStore(tmpDir+"/archive.db", nil, nil)
+	MigrateUnifyMessages(workingStore.DB(), "", slog.Default())
+
+	archiveStore, err := NewArchiveStore(tmpDir+"/archive.db", workingStore.DB(), nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer archiveStore.Close()
-
-	MigrateUnifyMessages(workingStore.DB(), "", slog.Default())
-	archiveStore.SetMessagesDB(workingStore.DB())
 
 	sess, _ := archiveStore.StartSession("conv-1")
 

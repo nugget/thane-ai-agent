@@ -26,11 +26,13 @@ type ArchiveStore struct {
 	db     *sql.DB
 	logger *slog.Logger
 
-	// messagesDB is the working database connection for unified message
-	// queries. When set (via SetMessagesDB), message reads use this
-	// connection against the unified messages table instead of
-	// archive_messages. Session/iteration queries still use the archive db.
-	messagesDB *sql.DB
+	// Message storage routing. In unified mode (messagesDB != nil), message
+	// queries go to the working DB against the "messages" table. In legacy
+	// mode (messagesDB == nil), they go to archive.db's "archive_messages".
+	// Set once at construction time — never changes.
+	messagesDB   *sql.DB
+	msgTableName string // "messages" or "archive_messages"
+	msgFTSName   string // "messages_fts" or "archive_fts"
 
 	// Whether FTS5 is available
 	ftsEnabled bool
@@ -196,7 +198,11 @@ type SearchOptions struct {
 // NewArchiveStore creates a new archive store at the given database path.
 // Pass nil for cfg to use DefaultArchiveConfig().
 // Pass nil for logger to suppress startup logging.
-func NewArchiveStore(dbPath string, cfg *ArchiveConfig, logger *slog.Logger) (*ArchiveStore, error) {
+//
+// When messagesDB is non-nil (unified mode), message queries use that
+// connection against the "messages" table. When nil (legacy mode), message
+// queries use the archive database's "archive_messages" table.
+func NewArchiveStore(dbPath string, messagesDB *sql.DB, cfg *ArchiveConfig, logger *slog.Logger) (*ArchiveStore, error) {
 	if cfg == nil {
 		defaults := DefaultArchiveConfig()
 		cfg = &defaults
@@ -210,9 +216,19 @@ func NewArchiveStore(dbPath string, cfg *ArchiveConfig, logger *slog.Logger) (*A
 	s := &ArchiveStore{
 		db:                      db,
 		logger:                  logger,
+		messagesDB:              messagesDB,
 		defaultSilenceThreshold: cfg.SilenceThreshold,
 		defaultMaxMessages:      cfg.MaxContextMessages,
 		defaultMaxDuration:      cfg.MaxContextDuration,
+	}
+
+	// Set message routing based on mode.
+	if messagesDB != nil {
+		s.msgTableName = "messages"
+		s.msgFTSName = "messages_fts"
+	} else {
+		s.msgTableName = "archive_messages"
+		s.msgFTSName = "archive_fts"
 	}
 
 	if err := s.migrate(); err != nil {
@@ -231,6 +247,7 @@ func NewArchiveStore(dbPath string, cfg *ArchiveConfig, logger *slog.Logger) (*A
 			logger.Info("session archive initialized",
 				"path", dbPath,
 				"fts5", true,
+				"unified", messagesDB != nil,
 				"silence_threshold", cfg.SilenceThreshold.String(),
 				"max_context_messages", cfg.MaxContextMessages,
 				"max_context_duration", cfg.MaxContextDuration.String(),
@@ -240,6 +257,7 @@ func NewArchiveStore(dbPath string, cfg *ArchiveConfig, logger *slog.Logger) (*A
 				"Rebuild SQLite with FTS5 enabled for full-text search capability.",
 				"path", dbPath,
 				"fts5", false,
+				"unified", messagesDB != nil,
 				"silence_threshold", cfg.SilenceThreshold.String(),
 				"max_context_messages", cfg.MaxContextMessages,
 				"max_context_duration", cfg.MaxContextDuration.String(),
@@ -267,35 +285,12 @@ func (s *ArchiveStore) Close() error {
 	return s.db.Close()
 }
 
-// SetMessagesDB configures the working database for unified message queries.
-// When set, message reads use this connection against the unified messages
-// table instead of archive_messages in the archive database.
-func (s *ArchiveStore) SetMessagesDB(db *sql.DB) {
-	s.messagesDB = db
-}
-
 // msgDB returns the database connection to use for message queries.
 func (s *ArchiveStore) msgDB() *sql.DB {
 	if s.messagesDB != nil {
 		return s.messagesDB
 	}
 	return s.db
-}
-
-// msgTable returns the table name for message queries.
-func (s *ArchiveStore) msgTable() string {
-	if s.messagesDB != nil {
-		return "messages"
-	}
-	return "archive_messages"
-}
-
-// msgFTS returns the FTS table name for message searches.
-func (s *ArchiveStore) msgFTS() string {
-	if s.messagesDB != nil {
-		return "messages_fts"
-	}
-	return "archive_fts"
 }
 
 // msgSelectCols returns the SELECT column list for message queries.
@@ -318,7 +313,7 @@ func (s *ArchiveStore) msgSelectCols() string {
 func (s *ArchiveStore) countSessionMessages(sessionID string) int {
 	var count int
 	_ = s.msgDB().QueryRow(
-		fmt.Sprintf(`SELECT COUNT(*) FROM %s WHERE session_id = ?`, s.msgTable()),
+		fmt.Sprintf(`SELECT COUNT(*) FROM %s WHERE session_id = ?`, s.msgTableName),
 		sessionID,
 	).Scan(&count)
 	return count
@@ -350,7 +345,7 @@ func (s *ArchiveStore) populateMessageCounts(sessions []*Session) {
 
 	query := fmt.Sprintf(
 		`SELECT session_id, COUNT(*) FROM %s WHERE session_id IN (%s) GROUP BY session_id`,
-		s.msgTable(),
+		s.msgTableName,
 		strings.Join(placeholders, ","),
 	)
 
@@ -559,8 +554,8 @@ func (s *ArchiveStore) migrateSchema() {
 // tryEnableFTS attempts to create the FTS5 virtual table.
 // Returns true if FTS5 is available, false otherwise.
 func (s *ArchiveStore) tryEnableFTS() bool {
-	ftsTable := s.msgFTS()
-	contentTable := s.msgTable()
+	ftsTable := s.msgFTSName
+	contentTable := s.msgTableName
 	db := s.msgDB()
 
 	_, err := db.Exec(fmt.Sprintf(`
@@ -946,8 +941,8 @@ func (s *ArchiveStore) Search(opts SearchOptions) ([]SearchResult, error) {
 	var query string
 	var args []any
 
-	ftsTable := s.msgFTS()
-	msgTable := s.msgTable()
+	ftsTable := s.msgFTSName
+	msgTable := s.msgTableName
 	cols := s.msgSelectCols()
 
 	if s.ftsEnabled {
@@ -1069,7 +1064,7 @@ func (s *ArchiveStore) expandContext(
 	var boundary time.Time
 
 	cols := s.msgSelectCols()
-	table := s.msgTable()
+	table := s.msgTableName
 
 	if backward {
 		boundary = from.Add(-opts.MaxDuration)
@@ -1467,7 +1462,7 @@ func (s *ArchiveStore) GetSessionTranscript(sessionID string) ([]ArchivedMessage
 		FROM %s
 		WHERE session_id = ?
 		ORDER BY timestamp ASC
-	`, s.msgSelectCols(), s.msgTable())
+	`, s.msgSelectCols(), s.msgTableName)
 
 	rows, err := s.msgDB().Query(query, sessionID)
 	if err != nil {
@@ -1485,7 +1480,7 @@ func (s *ArchiveStore) GetMessagesByTimeRange(from, to time.Time, conversationID
 	}
 
 	cols := s.msgSelectCols()
-	table := s.msgTable()
+	table := s.msgTableName
 	var query string
 	var args []any
 
@@ -1613,7 +1608,7 @@ func (s *ArchiveStore) Stats() (map[string]any, error) {
 	stats := make(map[string]any)
 
 	msgDB := s.msgDB()
-	table := s.msgTable()
+	table := s.msgTableName
 
 	var msgCount, sessionCount, toolCallCount int
 	var oldestStr, newestStr sql.NullString
@@ -1847,7 +1842,7 @@ func (s *ArchiveStore) PurgeImported(sourceType string) (int, error) {
 	}
 
 	// Delete messages from the appropriate table.
-	msgTable := s.msgTable()
+	msgTable := s.msgTableName
 	for _, sid := range sessionIDs {
 		if _, err := tx.Exec(fmt.Sprintf(`DELETE FROM %s WHERE session_id = ?`, msgTable), sid); err != nil {
 			return 0, fmt.Errorf("delete messages for session %s: %w", ShortID(sid), err)
@@ -1861,7 +1856,7 @@ func (s *ArchiveStore) PurgeImported(sourceType string) (int, error) {
 	}
 
 	// Rebuild FTS index if enabled
-	ftsTable := s.msgFTS()
+	ftsTable := s.msgFTSName
 	if s.ftsEnabled {
 		if _, err := tx.Exec(fmt.Sprintf(`INSERT INTO %s(%s) VALUES('rebuild')`, ftsTable, ftsTable)); err != nil {
 			return 0, fmt.Errorf("rebuild FTS: %w", err)

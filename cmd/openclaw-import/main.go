@@ -124,7 +124,7 @@ func main() {
 	}
 
 	archivePath := filepath.Join(*dataDir, "archive.db")
-	store, err := memory.NewArchiveStore(archivePath, nil, logger)
+	store, err := memory.NewArchiveStore(archivePath, nil, nil, logger)
 	if err != nil {
 		logger.Error("failed to open archive store", "error", err)
 		os.Exit(1)

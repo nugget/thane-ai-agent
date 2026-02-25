@@ -115,7 +115,13 @@ func backfillStatus(db *sql.DB, logger *slog.Logger) error {
 }
 
 // mergeArchiveMessages copies archived messages from archive.db into the
-// unified messages table using ATTACH DATABASE. Deduplicates by message ID.
+// unified messages table using UPSERT. For messages that already exist in
+// the working DB, the archive's richer metadata (session_id, archived_at,
+// archive_reason) is preserved via ON CONFLICT.
+//
+// SQLite supports UPSERT only with VALUES (not INSERT...SELECT), so we
+// stage archive data in a temp table, read rows in Go, and UPSERT each
+// row with a prepared statement in a transaction.
 func mergeArchiveMessages(workingDB *sql.DB, archiveDBPath string, logger *slog.Logger) error {
 	// Check if we already have archived messages (migration already ran).
 	var archivedCount int
@@ -131,14 +137,12 @@ func mergeArchiveMessages(workingDB *sql.DB, archiveDBPath string, logger *slog.
 		logger.Info("no archive database to merge", "path", archiveDBPath, "error", err)
 		return nil
 	}
-	defer func() {
-		_, _ = workingDB.Exec(`DETACH DATABASE archive`)
-	}()
 
 	// Check if archive has the archive_messages table.
 	var tableExists int
 	err = workingDB.QueryRow(`SELECT COUNT(*) FROM archive.sqlite_master WHERE type='table' AND name='archive_messages'`).Scan(&tableExists)
 	if err != nil || tableExists == 0 {
+		_, _ = workingDB.Exec(`DETACH DATABASE archive`)
 		logger.Info("archive database has no archive_messages table")
 		return nil
 	}
@@ -147,6 +151,7 @@ func mergeArchiveMessages(workingDB *sql.DB, archiveDBPath string, logger *slog.
 	var sourceCount int
 	_ = workingDB.QueryRow(`SELECT COUNT(*) FROM archive.archive_messages`).Scan(&sourceCount)
 	if sourceCount == 0 {
+		_, _ = workingDB.Exec(`DETACH DATABASE archive`)
 		logger.Info("archive database has no messages to merge")
 		return nil
 	}
@@ -163,53 +168,115 @@ func mergeArchiveMessages(workingDB *sql.DB, archiveDBPath string, logger *slog.
 		GROUP BY conversation_id
 	`)
 	if err != nil {
+		_, _ = workingDB.Exec(`DETACH DATABASE archive`)
 		return fmt.Errorf("ensure conversations: %w", err)
 	}
 
-	// Step A: INSERT OR IGNORE new messages from the archive. Messages that
-	// already exist in the working DB are skipped (no duplicates).
-	result, err := workingDB.Exec(`
-		INSERT OR IGNORE INTO messages
-			(id, conversation_id, session_id, role, content, timestamp,
-			 token_count, tool_calls, tool_call_id,
-			 compacted, status, archived_at, archive_reason)
-		SELECT
-			id, conversation_id, session_id, role, content, timestamp,
-			token_count, tool_calls, tool_call_id,
-			FALSE, 'archived', archived_at, archive_reason
+	// Stage archive data into a temp table so we can detach the archive DB
+	// before the UPSERT loop.
+	_, err = workingDB.Exec(`
+		CREATE TEMP TABLE _archive_import AS
+		SELECT id, conversation_id, session_id, role, content, timestamp,
+		       token_count, tool_calls, tool_call_id, archived_at, archive_reason
 		FROM archive.archive_messages
 	`)
 	if err != nil {
-		return fmt.Errorf("merge archive messages: %w", err)
+		_, _ = workingDB.Exec(`DETACH DATABASE archive`)
+		return fmt.Errorf("stage archive data: %w", err)
 	}
-	inserted, _ := result.RowsAffected()
+	_, _ = workingDB.Exec(`DETACH DATABASE archive`)
 
-	// Step B: For messages that already existed in the working DB (skipped
-	// by INSERT OR IGNORE above), backfill the session_id and archive
-	// metadata from the archive copy. The archive has richer metadata
-	// (session_id, archived_at, archive_reason) that the working copy lacks.
-	_, err = workingDB.Exec(`
-		UPDATE messages SET
-			session_id = COALESCE(messages.session_id,
-				(SELECT session_id FROM archive.archive_messages WHERE archive.archive_messages.id = messages.id)),
-			status = 'archived',
-			archived_at = COALESCE(messages.archived_at,
-				(SELECT archived_at FROM archive.archive_messages WHERE archive.archive_messages.id = messages.id)),
-			archive_reason = COALESCE(messages.archive_reason,
-				(SELECT archive_reason FROM archive.archive_messages WHERE archive.archive_messages.id = messages.id))
-		WHERE messages.id IN (SELECT id FROM archive.archive_messages)
-		  AND messages.status != 'archived'
-	`)
+	// Read staged rows and UPSERT each one. SQLite only supports ON CONFLICT
+	// with VALUES (not INSERT...SELECT), so we iterate in Go with a prepared
+	// statement inside a transaction. ~115K rows takes <1s in WAL mode.
+	affected, err := upsertFromTemp(workingDB)
 	if err != nil {
-		return fmt.Errorf("backfill archive metadata: %w", err)
+		_, _ = workingDB.Exec(`DROP TABLE IF EXISTS _archive_import`)
+		return fmt.Errorf("upsert archive messages: %w", err)
 	}
+
+	_, _ = workingDB.Exec(`DROP TABLE IF EXISTS _archive_import`)
 
 	logger.Info("archive messages merged",
-		"rows_affected", inserted,
+		"rows_affected", affected,
 		"duration", time.Since(start).Round(time.Millisecond),
 	)
 
 	return nil
+}
+
+// upsertFromTemp reads rows from _archive_import and UPSERTs each into the
+// messages table within a transaction. Returns the number of rows processed.
+func upsertFromTemp(db *sql.DB) (int64, error) {
+	rows, err := db.Query(`
+		SELECT id, conversation_id, session_id, role, content, timestamp,
+		       token_count, tool_calls, tool_call_id, archived_at, archive_reason
+		FROM _archive_import
+	`)
+	if err != nil {
+		return 0, fmt.Errorf("read staged data: %w", err)
+	}
+	defer rows.Close()
+
+	// Collect rows before starting the transaction (SQLite can't have
+	// concurrent readers and writers on the same connection).
+	type archiveRow struct {
+		id, convID, sessID, role, content, ts string
+		tokenCount                            int
+		toolCalls, toolCallID                 sql.NullString
+		archivedAt, archiveReason             sql.NullString
+	}
+	var staged []archiveRow
+	for rows.Next() {
+		var r archiveRow
+		if err := rows.Scan(&r.id, &r.convID, &r.sessID, &r.role, &r.content,
+			&r.ts, &r.tokenCount, &r.toolCalls, &r.toolCallID,
+			&r.archivedAt, &r.archiveReason); err != nil {
+			return 0, fmt.Errorf("scan staged row: %w", err)
+		}
+		staged = append(staged, r)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("iterate staged rows: %w", err)
+	}
+	rows.Close()
+
+	tx, err := db.Begin()
+	if err != nil {
+		return 0, fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	stmt, err := tx.Prepare(`
+		INSERT INTO messages
+			(id, conversation_id, session_id, role, content, timestamp,
+			 token_count, tool_calls, tool_call_id,
+			 compacted, status, archived_at, archive_reason)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, FALSE, 'archived', ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			session_id = COALESCE(excluded.session_id, messages.session_id),
+			status = 'archived',
+			archived_at = COALESCE(excluded.archived_at, messages.archived_at),
+			archive_reason = COALESCE(excluded.archive_reason, messages.archive_reason)
+	`)
+	if err != nil {
+		return 0, fmt.Errorf("prepare upsert: %w", err)
+	}
+	defer stmt.Close()
+
+	for _, r := range staged {
+		if _, err := stmt.Exec(r.id, r.convID, r.sessID, r.role, r.content,
+			r.ts, r.tokenCount, r.toolCalls, r.toolCallID,
+			r.archivedAt, r.archiveReason); err != nil {
+			return 0, fmt.Errorf("upsert row %s: %w", r.id, err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit: %w", err)
+	}
+
+	return int64(len(staged)), nil
 }
 
 // rebuildUnifiedFTS creates or rebuilds the FTS5 index on the unified

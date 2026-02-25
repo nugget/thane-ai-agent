@@ -19,7 +19,7 @@ func TestCompaction_ArchivesBeforeCompacting(t *testing.T) {
 	defer memStore.Close()
 
 	// Set up archive store
-	archiveStore, err := NewArchiveStore(t.TempDir()+"/archive.db", nil, nil)
+	archiveStore, err := NewArchiveStore(t.TempDir()+"/archive.db", nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
