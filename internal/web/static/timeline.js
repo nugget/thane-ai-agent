@@ -1,10 +1,13 @@
 // timeline.js — NLE-style session timeline renderer for the Thane dashboard.
 // Fetches iteration data from the JSON API and renders proportionally-sized
 // iteration boxes in the timeline track.
+//
+// Idempotent: safe to re-execute on HTMX content swaps.
 (function () {
   "use strict";
 
-  var activeSessionID = null;
+  // Preserve state across re-executions (HTMX navigates away and back).
+  var activeSessionID = (window.timeline && window.timeline._activeID) || null;
   var selectedIterIndex = null;
 
   // modelClass maps a model string to a CSS class for color coding.
@@ -329,6 +332,17 @@
       });
   }
 
-  // Expose API.
-  window.timeline = { load: load };
+  // Expose API. _activeID lets the next execution restore state.
+  window.timeline = {
+    load: load,
+    get _activeID() {
+      return activeSessionID;
+    },
+  };
+
+  // If returning to the timeline page with a previously-selected session,
+  // re-render it automatically.
+  if (activeSessionID && document.getElementById("timeline-track")) {
+    load(activeSessionID);
+  }
 })();
