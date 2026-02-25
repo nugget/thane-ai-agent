@@ -389,13 +389,6 @@ func sessionStatus(sess *memory.Session) string {
 	return "completed"
 }
 
-// TimelineData is the template context for the split-panel timeline page.
-type TimelineData struct {
-	PageData
-	Sessions       []*sessionRow
-	ConversationID string
-}
-
 // timelineResponse is the JSON API response for a session's timeline data.
 type timelineResponse struct {
 	Session    timelineSession     `json:"session"`
@@ -436,40 +429,6 @@ type timelineChild struct {
 	ID     string `json:"id"`
 	Title  string `json:"title"`
 	Status string `json:"status"`
-}
-
-// handleSessionTimeline renders the split-panel timeline page.
-func (s *WebServer) handleSessionTimeline(w http.ResponseWriter, r *http.Request) {
-	if s.sessionStore == nil {
-		http.Error(w, "session store not configured", http.StatusServiceUnavailable)
-		return
-	}
-
-	conversationID := r.URL.Query().Get("conversation_id")
-
-	sessions, err := s.sessionStore.ListSessions(conversationID, 100)
-	if err != nil {
-		s.logger.Error("timeline session list failed", "error", err)
-		http.Error(w, "list failed", http.StatusInternalServerError)
-		return
-	}
-
-	data := TimelineData{
-		PageData: PageData{
-			BrandName: s.brandName,
-			ActiveNav: "timeline",
-		},
-		ConversationID: conversationID,
-		Sessions:       sessionsToRows(sessions),
-	}
-
-	if r.Header.Get("HX-Request") == "true" && r.Header.Get("HX-Target") == "timeline-sessions-tbody" {
-		if s.renderBlock(w, "session_timeline.html", "timeline-sessions-tbody", data) {
-			return
-		}
-	}
-
-	s.render(w, r, "session_timeline.html", data)
 }
 
 // handleTimelineAPI returns JSON timeline data for a single session.

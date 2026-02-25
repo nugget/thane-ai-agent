@@ -166,7 +166,6 @@ func (s *WebServer) RegisterRoutes(mux *http.ServeMux) {
 
 	// Session inspector
 	mux.HandleFunc("GET /sessions", s.handleSessions)
-	mux.HandleFunc("GET /sessions/timeline", s.handleSessionTimeline)
 	mux.HandleFunc("GET /sessions/{id}/timeline.json", s.handleTimelineAPI)
 	mux.HandleFunc("GET /sessions/{id}", s.handleSessionDetail)
 
