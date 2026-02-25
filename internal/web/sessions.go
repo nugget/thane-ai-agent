@@ -168,6 +168,13 @@ func (s *WebServer) handleSessionDetail(w http.ResponseWriter, r *http.Request) 
 		s.logger.Error("session transcript failed", "id", id, "error", err)
 	}
 
+	// For active sessions with no archived messages, fall back to live
+	// working memory so the dashboard can show the current transcript.
+	var liveRows []*messageRow
+	if len(messages) == 0 && sess.EndedAt == nil && s.liveMessages != nil {
+		liveRows = liveMessagesToRows(s.liveMessages.GetMessages(sess.ConversationID))
+	}
+
 	toolCalls, err := s.sessionStore.GetSessionToolCalls(id)
 	if err != nil {
 		s.logger.Error("session tool calls failed", "id", id, "error", err)
@@ -202,7 +209,7 @@ func (s *WebServer) handleSessionDetail(w http.ResponseWriter, r *http.Request) 
 			ActiveNav: "sessions",
 		},
 		Session:               detail,
-		Messages:              messagesToRows(messages),
+		Messages:              messageRowsWithFallback(messagesToRows(messages), liveRows),
 		ToolCalls:             toolCallsToRows(toolCalls),
 		Iterations:            iterRows,
 		UnattributedToolCalls: unattributed,
@@ -306,6 +313,29 @@ func messagesToRows(messages []memory.ArchivedMessage) []*messageRow {
 		})
 	}
 	return rows
+}
+
+// liveMessagesToRows converts live working-memory messages to display rows.
+func liveMessagesToRows(messages []memory.Message) []*messageRow {
+	rows := make([]*messageRow, 0, len(messages))
+	for _, m := range messages {
+		rows = append(rows, &messageRow{
+			Role:       m.Role,
+			Content:    m.Content,
+			Timestamp:  m.Timestamp.Format("15:04:05"),
+			ToolCallID: m.ToolCallID,
+			Long:       len(m.Content) > 500,
+		})
+	}
+	return rows
+}
+
+// messageRowsWithFallback returns archived rows if non-empty, otherwise live rows.
+func messageRowsWithFallback(archived, live []*messageRow) []*messageRow {
+	if len(archived) > 0 {
+		return archived
+	}
+	return live
 }
 
 func toolCallsToRows(calls []memory.ArchivedToolCall) []*toolCallRow {

@@ -92,6 +92,12 @@ type SessionStore interface {
 	GetSessionIterations(sessionID string) ([]memory.ArchivedIteration, error)
 }
 
+// LiveMessageSource provides access to live (unarchived) conversation messages.
+// Used as a fallback for active sessions whose messages haven't been archived yet.
+type LiveMessageSource interface {
+	GetMessages(conversationID string) []memory.Message
+}
+
 // Config holds the dependencies needed to construct a WebServer.
 type Config struct {
 	BrandName         string // Display name in the nav bar. Defaults to "Thane".
@@ -103,6 +109,7 @@ type Config struct {
 	TaskStore         TaskStore
 	AnticipationStore AnticipationStore
 	SessionStore      SessionStore
+	LiveMessageSource LiveMessageSource // Optional: live messages for active sessions.
 	Logger            *slog.Logger
 }
 
@@ -117,6 +124,7 @@ type WebServer struct {
 	taskStore         TaskStore
 	anticipationStore AnticipationStore
 	sessionStore      SessionStore
+	liveMessages      LiveMessageSource
 	templates         map[string]*template.Template
 	logger            *slog.Logger
 }
@@ -142,6 +150,7 @@ func NewWebServer(cfg Config) *WebServer {
 		taskStore:         cfg.TaskStore,
 		anticipationStore: cfg.AnticipationStore,
 		sessionStore:      cfg.SessionStore,
+		liveMessages:      cfg.LiveMessageSource,
 		logger:            logger,
 	}
 	s.templates = loadTemplates()
