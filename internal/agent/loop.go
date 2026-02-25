@@ -170,11 +170,12 @@ type Loop struct {
 	// tagMu serializes all reads and writes to activeTags. Multiple
 	// HTTP handlers can call Run() concurrently, so every access
 	// must hold the lock.
-	tagMu         sync.Mutex
-	capTags       map[string]config.CapabilityTagConfig // tag definitions from config
-	activeTags    map[string]bool                       // currently active tags
-	parsedTalents []talents.Talent                      // pre-loaded talent structs for tag filtering
-	channelTags   map[string][]string                   // channel name → tag names (auto-activated per Run)
+	tagMu             sync.Mutex
+	capTags           map[string]config.CapabilityTagConfig // tag definitions from config
+	activeTags        map[string]bool                       // currently active tags
+	channelPinnedTags map[string]int                        // ref-counted channel-pinned tags (per concurrent Run)
+	parsedTalents     []talents.Talent                      // pre-loaded talent structs for tag filtering
+	channelTags       map[string][]string                   // channel name → tag names (auto-activated per Run)
 
 	// haInject resolves <!-- ha-inject: ... --> directives in tag context files.
 	haInject homeassistant.StateFetcher
@@ -183,16 +184,17 @@ type Loop struct {
 // NewLoop creates a new agent loop.
 func NewLoop(logger *slog.Logger, mem MemoryStore, compactor Compactor, rtr *router.Router, ha *homeassistant.Client, sched *scheduler.Scheduler, llmClient llm.Client, defaultModel, talents, persona string, contextWindow int) *Loop {
 	return &Loop{
-		logger:        logger,
-		memory:        mem,
-		compactor:     compactor,
-		router:        rtr,
-		llm:           llmClient,
-		tools:         tools.NewRegistry(ha, sched),
-		model:         defaultModel,
-		talents:       talents,
-		persona:       persona,
-		contextWindow: contextWindow,
+		logger:            logger,
+		memory:            mem,
+		compactor:         compactor,
+		router:            rtr,
+		llm:               llmClient,
+		tools:             tools.NewRegistry(ha, sched),
+		model:             defaultModel,
+		talents:           talents,
+		persona:           persona,
+		contextWindow:     contextWindow,
+		channelPinnedTags: make(map[string]int),
 	}
 }
 
@@ -293,11 +295,14 @@ func (l *Loop) SetUsageRecorder(store *usage.Store, pricing map[string]config.Pr
 // SetChannelTags configures channel-pinned tag activation. When a
 // Run() request carries a "source" hint matching a key in channelTags,
 // the listed capability tags are activated for that run in addition to
-// any always-active or agent-requested tags. Channel-specific tags are
-// added at the start of Run() and removed on return via defer, so
-// concurrent Run() calls on different channels don't interfere.
+// any always-active or agent-requested tags. Channel-pinned tags are
+// ref-counted per concurrent Run() call and cannot be dropped via
+// DropCapability. They are removed on return to prevent cross-channel bleed.
 func (l *Loop) SetChannelTags(ct map[string][]string) {
 	l.channelTags = ct
+	if l.channelPinnedTags == nil {
+		l.channelPinnedTags = make(map[string]int)
+	}
 }
 
 // SetHAInject configures the HA entity state resolver for tag context
@@ -347,8 +352,9 @@ func (l *Loop) RequestCapability(tag string) error {
 }
 
 // DropCapability deactivates a capability tag for the current session.
-// Always-active tags cannot be dropped. Returns an error if the tag is
-// unknown or always active.
+// Always-active and channel-pinned tags cannot be dropped. Returns an
+// error if the tag is unknown, always active, or pinned by the current
+// channel.
 func (l *Loop) DropCapability(tag string) error {
 	if l.capTags == nil {
 		return fmt.Errorf("capability tags not configured")
@@ -361,6 +367,10 @@ func (l *Loop) DropCapability(tag string) error {
 		return fmt.Errorf("cannot drop always-active tag: %q", tag)
 	}
 	l.tagMu.Lock()
+	if l.channelPinnedTags[tag] > 0 {
+		l.tagMu.Unlock()
+		return fmt.Errorf("cannot drop channel-pinned tag %q (active for current channel)", tag)
+	}
 	delete(l.activeTags, tag)
 	l.tagMu.Unlock()
 	l.logger.Info("capability deactivated", "tag", tag)
@@ -836,20 +846,20 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 
 	// Activate channel-pinned tags for this Run() call. Look up the
 	// request's source channel and merge matching capability tags into
-	// activeTags. Only tags that weren't already active are tracked,
-	// and they are removed on return to prevent cross-channel bleed.
-	// All activeTags mutations are serialized by tagMu since multiple
-	// HTTP handlers can call Run() concurrently.
+	// activeTags. Tags are ref-counted in channelPinnedTags so that
+	// concurrent Run() calls from the same channel don't clobber each
+	// other, and DropCapability can reject attempts to shed them.
 	var channelActivatedTags []string
 	l.tagMu.Lock()
 	if l.channelTags != nil && l.activeTags != nil {
 		if source := req.Hints["source"]; source != "" {
 			if pinnedTags, ok := l.channelTags[source]; ok {
 				for _, tag := range pinnedTags {
+					l.channelPinnedTags[tag]++
 					if !l.activeTags[tag] {
 						l.activeTags[tag] = true
-						channelActivatedTags = append(channelActivatedTags, tag)
 					}
+					channelActivatedTags = append(channelActivatedTags, tag)
 				}
 			}
 		}
@@ -864,7 +874,14 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	defer func() {
 		l.tagMu.Lock()
 		for _, tag := range channelActivatedTags {
-			delete(l.activeTags, tag)
+			l.channelPinnedTags[tag]--
+			if l.channelPinnedTags[tag] <= 0 {
+				delete(l.channelPinnedTags, tag)
+				// Only remove from activeTags if not always-active.
+				if cfg, ok := l.capTags[tag]; !ok || !cfg.AlwaysActive {
+					delete(l.activeTags, tag)
+				}
+			}
 		}
 		l.tagMu.Unlock()
 	}()

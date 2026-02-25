@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/nugget/thane-ai-agent/internal/config"
@@ -276,5 +277,86 @@ func TestChannelTags_UnknownChannel(t *testing.T) {
 	}
 	if !hasName(names, "base_tool") {
 		t.Errorf("base_tool (always-active) should still be available: %v", names)
+	}
+}
+
+func TestChannelTags_DropPinnedTagRejected(t *testing.T) {
+	// Channel-pinned tags cannot be dropped via DropCapability.
+	// Simulate the state that Run() creates when a channel source is set.
+	loop := buildTestLoop(&mockLLM{}, nil)
+	loop.SetCapabilityTags(map[string]config.CapabilityTagConfig{
+		"signal": {
+			Description: "Signal messaging",
+			Tools:       []string{"signal_tool"},
+		},
+		"extra": {
+			Description: "Extra tools",
+			Tools:       []string{"extra_tool"},
+		},
+	}, nil)
+	loop.SetChannelTags(map[string][]string{
+		"signal": {"signal"},
+	})
+
+	// Simulate what Run() does: activate the channel tag and ref-count it.
+	loop.tagMu.Lock()
+	loop.activeTags["signal"] = true
+	loop.channelPinnedTags["signal"] = 1
+	// Also activate "extra" as an agent-requested tag (not channel-pinned).
+	loop.activeTags["extra"] = true
+	loop.tagMu.Unlock()
+
+	// Dropping the channel-pinned tag should fail.
+	err := loop.DropCapability("signal")
+	if err == nil {
+		t.Fatal("expected error when dropping channel-pinned tag")
+	}
+	if !strings.Contains(err.Error(), "channel-pinned") {
+		t.Errorf("error should mention channel-pinned: %v", err)
+	}
+
+	// The tag should still be active.
+	active := loop.ActiveTags()
+	if !active["signal"] {
+		t.Error("signal tag should still be active after rejected drop")
+	}
+}
+
+func TestChannelTags_DropNonPinnedTagAllowed(t *testing.T) {
+	// Tags that are active but not channel-pinned can still be dropped.
+	loop := buildTestLoop(&mockLLM{}, nil)
+	loop.SetCapabilityTags(map[string]config.CapabilityTagConfig{
+		"signal": {
+			Description: "Signal messaging",
+			Tools:       []string{"signal_tool"},
+		},
+		"extra": {
+			Description: "Extra tools",
+			Tools:       []string{"extra_tool"},
+		},
+	}, nil)
+	loop.SetChannelTags(map[string][]string{
+		"signal": {"signal"},
+	})
+
+	// Simulate: "signal" is channel-pinned, "extra" is agent-requested.
+	loop.tagMu.Lock()
+	loop.activeTags["signal"] = true
+	loop.channelPinnedTags["signal"] = 1
+	loop.activeTags["extra"] = true
+	loop.tagMu.Unlock()
+
+	// Dropping the non-pinned tag should succeed.
+	err := loop.DropCapability("extra")
+	if err != nil {
+		t.Fatalf("unexpected error dropping non-pinned tag: %v", err)
+	}
+
+	active := loop.ActiveTags()
+	if active["extra"] {
+		t.Error("extra tag should no longer be active after drop")
+	}
+	if !active["signal"] {
+		t.Error("signal tag should still be active (channel-pinned)")
 	}
 }
