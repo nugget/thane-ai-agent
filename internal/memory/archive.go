@@ -1811,15 +1811,13 @@ func (s *ArchiveStore) IsImported(sourceID, sourceType string) (bool, error) {
 // PurgeImported removes all archive data that was imported from a given source type.
 // This deletes sessions, messages, tool calls, and import metadata — a clean slate
 // so the import can be re-run with improved logic.
+//
+// In unified mode, messages live in a different database than sessions and metadata.
+// The method handles this by deleting messages from the messages DB first, then
+// cleaning up sessions and metadata from the archive DB in a transaction.
 func (s *ArchiveStore) PurgeImported(sourceType string) (int, error) {
-	tx, err := s.db.Begin()
-	if err != nil {
-		return 0, fmt.Errorf("begin tx: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	// Get all archive session IDs for this source type
-	rows, err := tx.Query(`
+	// Query session IDs outside a transaction so we can use them across DBs.
+	rows, err := s.db.Query(`
 		SELECT archive_session_id FROM import_metadata WHERE source_type = ?
 	`, sourceType)
 	if err != nil {
@@ -1841,11 +1839,32 @@ func (s *ArchiveStore) PurgeImported(sourceType string) (int, error) {
 		return 0, nil
 	}
 
-	// Delete messages from the appropriate table.
+	// In unified mode, messages live in s.messagesDB — delete them there first.
+	// FTS triggers (if present) handle the FTS cleanup automatically on DELETE.
+	msgDB := s.msgDB()
 	msgTable := s.msgTableName
+	if s.messagesDB != nil {
+		for _, sid := range sessionIDs {
+			if _, err := msgDB.Exec(fmt.Sprintf(`DELETE FROM %s WHERE session_id = ?`, msgTable), sid); err != nil {
+				return 0, fmt.Errorf("delete messages for session %s: %w", ShortID(sid), err)
+			}
+		}
+	}
+
+	// Delete sessions, tool calls, and metadata from archive.db.
+	// In legacy mode, messages also live here.
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
 	for _, sid := range sessionIDs {
-		if _, err := tx.Exec(fmt.Sprintf(`DELETE FROM %s WHERE session_id = ?`, msgTable), sid); err != nil {
-			return 0, fmt.Errorf("delete messages for session %s: %w", ShortID(sid), err)
+		// In legacy mode (messagesDB == nil), messages are in the archive DB.
+		if s.messagesDB == nil {
+			if _, err := tx.Exec(fmt.Sprintf(`DELETE FROM %s WHERE session_id = ?`, msgTable), sid); err != nil {
+				return 0, fmt.Errorf("delete messages for session %s: %w", ShortID(sid), err)
+			}
 		}
 		if _, err := tx.Exec(`DELETE FROM archive_tool_calls WHERE session_id = ?`, sid); err != nil {
 			return 0, fmt.Errorf("delete tool calls for session %s: %w", ShortID(sid), err)
@@ -1855,15 +1874,15 @@ func (s *ArchiveStore) PurgeImported(sourceType string) (int, error) {
 		}
 	}
 
-	// Rebuild FTS index if enabled
-	ftsTable := s.msgFTSName
-	if s.ftsEnabled {
+	// In legacy mode, rebuild FTS since we deleted directly (no triggers).
+	if s.messagesDB == nil && s.ftsEnabled {
+		ftsTable := s.msgFTSName
 		if _, err := tx.Exec(fmt.Sprintf(`INSERT INTO %s(%s) VALUES('rebuild')`, ftsTable, ftsTable)); err != nil {
 			return 0, fmt.Errorf("rebuild FTS: %w", err)
 		}
 	}
 
-	// Remove all import metadata for this source type
+	// Remove all import metadata for this source type.
 	if _, err := tx.Exec(`DELETE FROM import_metadata WHERE source_type = ?`, sourceType); err != nil {
 		return 0, fmt.Errorf("delete import metadata: %w", err)
 	}

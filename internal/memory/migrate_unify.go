@@ -280,7 +280,7 @@ func upsertFromTemp(db *sql.DB) (int64, error) {
 }
 
 // rebuildUnifiedFTS creates or rebuilds the FTS5 index on the unified
-// messages table.
+// messages table and installs triggers to keep it in sync.
 func rebuildUnifiedFTS(db *sql.DB, logger *slog.Logger) error {
 	// Try creating the FTS table. If FTS5 isn't available, skip silently.
 	_, err := db.Exec(`
@@ -295,7 +295,28 @@ func rebuildUnifiedFTS(db *sql.DB, logger *slog.Logger) error {
 		return nil
 	}
 
-	// Rebuild the index to pick up all messages.
+	// Install triggers to keep messages_fts in sync with the messages table.
+	// External-content FTS5 tables require explicit sync via these triggers;
+	// without them, rows inserted after the initial rebuild won't be searchable.
+	triggers := []string{
+		`CREATE TRIGGER IF NOT EXISTS messages_fts_ai AFTER INSERT ON messages BEGIN
+			INSERT INTO messages_fts(rowid, content) VALUES (new.rowid, new.content);
+		END`,
+		`CREATE TRIGGER IF NOT EXISTS messages_fts_ad AFTER DELETE ON messages BEGIN
+			INSERT INTO messages_fts(messages_fts, rowid, content) VALUES('delete', old.rowid, old.content);
+		END`,
+		`CREATE TRIGGER IF NOT EXISTS messages_fts_au AFTER UPDATE ON messages BEGIN
+			INSERT INTO messages_fts(messages_fts, rowid, content) VALUES('delete', old.rowid, old.content);
+			INSERT INTO messages_fts(rowid, content) VALUES (new.rowid, new.content);
+		END`,
+	}
+	for _, trigger := range triggers {
+		if _, err := db.Exec(trigger); err != nil {
+			return fmt.Errorf("create FTS trigger: %w", err)
+		}
+	}
+
+	// Rebuild the index to pick up all existing messages.
 	_, err = db.Exec(`INSERT INTO messages_fts(messages_fts) VALUES('rebuild')`)
 	if err != nil {
 		return fmt.Errorf("rebuild messages_fts: %w", err)
