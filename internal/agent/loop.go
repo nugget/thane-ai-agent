@@ -300,9 +300,6 @@ func (l *Loop) SetUsageRecorder(store *usage.Store, pricing map[string]config.Pr
 // DropCapability. They are removed on return to prevent cross-channel bleed.
 func (l *Loop) SetChannelTags(ct map[string][]string) {
 	l.channelTags = ct
-	if l.channelPinnedTags == nil {
-		l.channelPinnedTags = make(map[string]int)
-	}
 }
 
 // SetHAInject configures the HA entity state resolver for tag context
