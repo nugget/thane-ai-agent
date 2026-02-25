@@ -192,9 +192,15 @@ func TestAdapter_OnMessage(t *testing.T) {
 
 	sid, _ := adapter.StartSession("conv-1")
 
-	adapter.OnMessage("conv-1")
-	adapter.OnMessage("conv-1")
-	adapter.OnMessage("conv-1")
+	// Archive real messages so the computed count works.
+	now := time.Now()
+	if err := store.ArchiveMessages([]ArchivedMessage{
+		{ID: "m1", ConversationID: "conv-1", SessionID: sid, Role: "user", Content: "a", Timestamp: now, ArchivedAt: now, ArchiveReason: "test"},
+		{ID: "m2", ConversationID: "conv-1", SessionID: sid, Role: "assistant", Content: "b", Timestamp: now, ArchivedAt: now, ArchiveReason: "test"},
+		{ID: "m3", ConversationID: "conv-1", SessionID: sid, Role: "user", Content: "c", Timestamp: now, ArchivedAt: now, ArchiveReason: "test"},
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	sess, _ := store.GetSession(sid)
 	if sess.MessageCount != 3 {

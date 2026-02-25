@@ -1153,7 +1153,8 @@ func (s *ArchiveStore) SetSessionMessageCount(sessionID string, count int) error
 // ActiveSession returns the most recent unclosed session for a conversation, if any.
 func (s *ArchiveStore) ActiveSession(conversationID string) (*Session, error) {
 	row := s.db.QueryRow(`
-		SELECT id, conversation_id, started_at, ended_at, end_reason, message_count,
+		SELECT id, conversation_id, started_at, ended_at, end_reason,
+		       (SELECT COUNT(*) FROM archive_messages WHERE session_id = sessions.id) AS message_count,
 		       summary, title, tags, metadata, parent_session_id, parent_tool_call_id
 		FROM sessions
 		WHERE conversation_id = ? AND ended_at IS NULL
@@ -1167,7 +1168,8 @@ func (s *ArchiveStore) ActiveSession(conversationID string) (*Session, error) {
 // GetSession retrieves a session by ID.
 func (s *ArchiveStore) GetSession(sessionID string) (*Session, error) {
 	row := s.db.QueryRow(`
-		SELECT id, conversation_id, started_at, ended_at, end_reason, message_count,
+		SELECT id, conversation_id, started_at, ended_at, end_reason,
+		       (SELECT COUNT(*) FROM archive_messages WHERE session_id = sessions.id) AS message_count,
 		       summary, title, tags, metadata, parent_session_id, parent_tool_call_id
 		FROM sessions WHERE id = ?
 	`, sessionID)
@@ -1186,7 +1188,8 @@ func (s *ArchiveStore) ListSessions(conversationID string, limit int) ([]*Sessio
 
 	if conversationID != "" {
 		query = `
-			SELECT id, conversation_id, started_at, ended_at, end_reason, message_count,
+			SELECT id, conversation_id, started_at, ended_at, end_reason,
+			       (SELECT COUNT(*) FROM archive_messages WHERE session_id = sessions.id) AS message_count,
 			       summary, title, tags, metadata, parent_session_id, parent_tool_call_id
 			FROM sessions WHERE conversation_id = ?
 			ORDER BY started_at DESC LIMIT ?
@@ -1194,7 +1197,8 @@ func (s *ArchiveStore) ListSessions(conversationID string, limit int) ([]*Sessio
 		args = []any{conversationID, limit}
 	} else {
 		query = `
-			SELECT id, conversation_id, started_at, ended_at, end_reason, message_count,
+			SELECT id, conversation_id, started_at, ended_at, end_reason,
+			       (SELECT COUNT(*) FROM archive_messages WHERE session_id = sessions.id) AS message_count,
 			       summary, title, tags, metadata, parent_session_id, parent_tool_call_id
 			FROM sessions
 			ORDER BY started_at DESC LIMIT ?
@@ -1225,7 +1229,8 @@ func (s *ArchiveStore) ListSessions(conversationID string, limit int) ([]*Sessio
 // to show delegate sub-sessions.
 func (s *ArchiveStore) ListChildSessions(parentSessionID string) ([]*Session, error) {
 	rows, err := s.db.Query(`
-		SELECT id, conversation_id, started_at, ended_at, end_reason, message_count,
+		SELECT id, conversation_id, started_at, ended_at, end_reason,
+		       (SELECT COUNT(*) FROM archive_messages WHERE session_id = sessions.id) AS message_count,
 		       summary, title, tags, metadata, parent_session_id, parent_tool_call_id
 		FROM sessions WHERE parent_session_id = ?
 		ORDER BY started_at ASC
@@ -1258,7 +1263,8 @@ func (s *ArchiveStore) UnsummarizedSessions(limit int) ([]*Session, error) {
 
 	rows, err := s.db.Query(`
 		SELECT id, conversation_id, started_at, ended_at, end_reason,
-		       message_count, summary, title, tags, metadata,
+		       (SELECT COUNT(*) FROM archive_messages WHERE session_id = sessions.id) AS message_count,
+		       summary, title, tags, metadata,
 		       parent_session_id, parent_tool_call_id
 		FROM sessions
 		WHERE ended_at IS NOT NULL

@@ -250,11 +250,11 @@ func TestSessionLifecycle(t *testing.T) {
 		t.Errorf("active session ID mismatch: %s != %s", active.ID, sess.ID)
 	}
 
-	// Increment count
-	if err := store.IncrementSessionCount(sess.ID); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.IncrementSessionCount(sess.ID); err != nil {
+	// Archive real messages so the computed count works.
+	if err := store.ArchiveMessages([]ArchivedMessage{
+		{ID: "msg-1", ConversationID: "conv-1", SessionID: sess.ID, Role: "user", Content: "hello", Timestamp: time.Now(), ArchivedAt: time.Now(), ArchiveReason: "test"},
+		{ID: "msg-2", ConversationID: "conv-1", SessionID: sess.ID, Role: "assistant", Content: "hi", Timestamp: time.Now(), ArchivedAt: time.Now(), ArchiveReason: "test"},
+	}); err != nil {
 		t.Fatal(err)
 	}
 
