@@ -110,9 +110,6 @@ func createUnsummarizedSession(t *testing.T, store *memory.ArchiveStore, convID 
 		t.Fatal(err)
 	}
 
-	if err := store.IncrementSessionCount(sess.ID); err != nil {
-		t.Fatal(err)
-	}
 	if err := store.EndSession(sess.ID, "test"); err != nil {
 		t.Fatal(err)
 	}
@@ -323,9 +320,6 @@ func TestWorker_ClosesOrphanedSessions(t *testing.T) {
 	if err := store.ArchiveMessages(msgs); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.IncrementSessionCount(sess.ID); err != nil {
-		t.Fatal(err)
-	}
 
 	cfg := Config{
 		Interval:     time.Hour,
@@ -375,9 +369,6 @@ func TestWorker_StaleCountSessionExcluded(t *testing.T) {
 	// from UnsummarizedSessions entirely rather than fetched-then-marked.
 	sess, err := store.StartSession("conv-stale")
 	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.IncrementSessionCount(sess.ID); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.EndSession(sess.ID, "test"); err != nil {

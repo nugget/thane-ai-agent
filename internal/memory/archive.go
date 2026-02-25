@@ -1134,22 +1134,6 @@ func (s *ArchiveStore) SetSessionMetadata(sessionID string, meta *SessionMetadat
 	return err
 }
 
-// IncrementSessionCount bumps the message count for a session.
-func (s *ArchiveStore) IncrementSessionCount(sessionID string) error {
-	_, err := s.db.Exec(`
-		UPDATE sessions SET message_count = message_count + 1 WHERE id = ?
-	`, sessionID)
-	return err
-}
-
-// SetSessionMessageCount sets the message count for a session directly.
-func (s *ArchiveStore) SetSessionMessageCount(sessionID string, count int) error {
-	_, err := s.db.Exec(`
-		UPDATE sessions SET message_count = ? WHERE id = ?
-	`, count, sessionID)
-	return err
-}
-
 // ActiveSession returns the most recent unclosed session for a conversation, if any.
 func (s *ArchiveStore) ActiveSession(conversationID string) (*Session, error) {
 	row := s.db.QueryRow(`

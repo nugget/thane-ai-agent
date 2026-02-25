@@ -465,9 +465,6 @@ func importSession(store *memory.ArchiveStore, sess parsedSession, logger *slog.
 		return fmt.Errorf("end session: %w", err)
 	}
 
-	// Set message count and summary
-	_ = store.SetSessionMessageCount(archiveSess.ID, len(sess.messages))
-
 	summary := fmt.Sprintf("[Imported from OpenClaw session %s]", memory.ShortID(sess.id))
 	_ = store.SetSessionSummary(archiveSess.ID, summary)
 

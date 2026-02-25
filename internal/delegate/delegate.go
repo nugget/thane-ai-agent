@@ -1131,14 +1131,6 @@ func (e *Executor) archiveSession(rec *completionRecord, now time.Time) {
 		}
 	}
 
-	// Set message count and end the session.
-	if err := e.archiver.SetSessionMessageCount(sessionID, len(archived)); err != nil {
-		e.logger.Warn("failed to set delegate session message count",
-			"delegate_id", rec.delegateID,
-			"error", err,
-		)
-	}
-
 	endReason := "completed"
 	if rec.exhausted && rec.exhaustReason != "" {
 		endReason = rec.exhaustReason

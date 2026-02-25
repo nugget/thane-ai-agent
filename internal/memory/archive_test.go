@@ -572,13 +572,9 @@ func TestUnsummarizedSessions(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Create an ended session with stale message_count > 0 but NO actual
-	// archived messages (the bug case from issue #341). Should be excluded.
+	// Create an ended session with NO actual archived messages — should be excluded.
 	stale, err := store.StartSession("conv-stale")
 	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.IncrementSessionCount(stale.ID); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.EndSession(stale.ID, "reset"); err != nil {

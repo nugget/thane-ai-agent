@@ -195,15 +195,9 @@ func (a *ArchiveAdapter) ActiveSessionID(conversationID string) string {
 	return sess.ID
 }
 
-// OnMessage tracks message count for the active session.
-func (a *ArchiveAdapter) OnMessage(conversationID string) {
-	sid := a.ActiveSessionID(conversationID)
-	if sid == "" {
-		return
-	}
-	// Best-effort — don't propagate errors for a counter
-	_ = a.store.IncrementSessionCount(sid)
-}
+// OnMessage is a no-op retained for interface compatibility. Session
+// message counts are now computed from archive_messages rows.
+func (a *ArchiveAdapter) OnMessage(_ string) {}
 
 // EnsureSession starts a session if none is active for the conversation.
 func (a *ArchiveAdapter) EnsureSession(conversationID string) string {
