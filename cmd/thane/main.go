@@ -1477,6 +1477,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	delegateExec := delegate.NewExecutor(logger, llmClient, rtr, loop.Tools(), cfg.Models.Default)
 	delegateExec.SetTimezone(cfg.Timezone)
 	delegateExec.SetStore(delegationStore)
+	delegateExec.SetArchiver(archiveStore)
 	delegateExec.SetUsageRecorder(usageStore, cfg.Pricing)
 	var alwaysActiveTags []string
 	for tag, tagCfg := range cfg.CapabilityTags {

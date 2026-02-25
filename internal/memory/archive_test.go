@@ -670,3 +670,113 @@ func TestCloseOrphanedSessions(t *testing.T) {
 		t.Errorf("ended session end_reason = %q, want %q", got.EndReason, "normal")
 	}
 }
+
+func TestStartSessionWithOptions_ParentFields(t *testing.T) {
+	store := newTestArchiveStore(t)
+
+	// Create a parent session first.
+	parent, err := store.StartSession("conv-main")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a child session with parent linkage.
+	child, err := store.StartSessionWithOptions("delegate-abc",
+		WithParentSession(parent.ID),
+		WithParentToolCall("call_xyz"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if child.ParentSessionID != parent.ID {
+		t.Errorf("ParentSessionID = %q, want %q", child.ParentSessionID, parent.ID)
+	}
+	if child.ParentToolCallID != "call_xyz" {
+		t.Errorf("ParentToolCallID = %q, want %q", child.ParentToolCallID, "call_xyz")
+	}
+
+	// Fetch from DB and verify persistence.
+	fetched, err := store.GetSession(child.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fetched.ParentSessionID != parent.ID {
+		t.Errorf("fetched ParentSessionID = %q, want %q", fetched.ParentSessionID, parent.ID)
+	}
+	if fetched.ParentToolCallID != "call_xyz" {
+		t.Errorf("fetched ParentToolCallID = %q, want %q", fetched.ParentToolCallID, "call_xyz")
+	}
+}
+
+func TestStartSessionWithOptions_NoParent(t *testing.T) {
+	store := newTestArchiveStore(t)
+
+	// Without options, parent fields should be empty.
+	sess, err := store.StartSessionWithOptions("conv-basic")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if sess.ParentSessionID != "" {
+		t.Errorf("ParentSessionID = %q, want empty", sess.ParentSessionID)
+	}
+	if sess.ParentToolCallID != "" {
+		t.Errorf("ParentToolCallID = %q, want empty", sess.ParentToolCallID)
+	}
+}
+
+func TestListChildSessions(t *testing.T) {
+	store := newTestArchiveStore(t)
+
+	parent, err := store.StartSession("conv-main")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Create two child sessions.
+	child1, err := store.StartSessionWithOptions("delegate-1",
+		WithParentSession(parent.ID),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	child2, err := store.StartSessionWithOptions("delegate-2",
+		WithParentSession(parent.ID),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Also create an unrelated session.
+	_, err = store.StartSession("conv-other")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	children, err := store.ListChildSessions(parent.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(children) != 2 {
+		t.Fatalf("ListChildSessions returned %d, want 2", len(children))
+	}
+
+	// Should be ordered by started_at ASC.
+	if children[0].ID != child1.ID {
+		t.Errorf("first child ID = %q, want %q", children[0].ID, child1.ID)
+	}
+	if children[1].ID != child2.ID {
+		t.Errorf("second child ID = %q, want %q", children[1].ID, child2.ID)
+	}
+
+	// Parent with no children should return empty slice.
+	noChildren, err := store.ListChildSessions("nonexistent")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(noChildren) != 0 {
+		t.Errorf("ListChildSessions(nonexistent) returned %d, want 0", len(noChildren))
+	}
+}

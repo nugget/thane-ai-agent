@@ -76,16 +76,33 @@ type ArchivedMessage struct {
 
 // Session represents a conversation session with boundaries.
 type Session struct {
-	ID             string           `json:"id"`
-	ConversationID string           `json:"conversation_id"`
-	StartedAt      time.Time        `json:"started_at"`
-	EndedAt        *time.Time       `json:"ended_at,omitempty"`
-	EndReason      string           `json:"end_reason,omitempty"`
-	MessageCount   int              `json:"message_count"`
-	Summary        string           `json:"summary,omitempty"`
-	Title          string           `json:"title,omitempty"`
-	Tags           []string         `json:"tags,omitempty"`
-	Metadata       *SessionMetadata `json:"metadata,omitempty"`
+	ID               string           `json:"id"`
+	ConversationID   string           `json:"conversation_id"`
+	StartedAt        time.Time        `json:"started_at"`
+	EndedAt          *time.Time       `json:"ended_at,omitempty"`
+	EndReason        string           `json:"end_reason,omitempty"`
+	MessageCount     int              `json:"message_count"`
+	Summary          string           `json:"summary,omitempty"`
+	Title            string           `json:"title,omitempty"`
+	Tags             []string         `json:"tags,omitempty"`
+	Metadata         *SessionMetadata `json:"metadata,omitempty"`
+	ParentSessionID  string           `json:"parent_session_id,omitempty"`
+	ParentToolCallID string           `json:"parent_tool_call_id,omitempty"`
+}
+
+// SessionOption configures optional fields when starting a session.
+type SessionOption func(*Session)
+
+// WithParentSession sets the parent session ID for a child session
+// (e.g. a delegate spawned from a parent session).
+func WithParentSession(id string) SessionOption {
+	return func(s *Session) { s.ParentSessionID = id }
+}
+
+// WithParentToolCall sets the tool call ID that triggered this child
+// session (e.g. the thane_delegate tool call in the parent).
+func WithParentToolCall(id string) SessionOption {
+	return func(s *Session) { s.ParentToolCallID = id }
 }
 
 // SessionMetadata holds rich, LLM-generated metadata for human-oriented
@@ -310,6 +327,7 @@ func (s *ArchiveStore) migrate() error {
 // migrateSchema applies incremental migrations for existing databases.
 func (s *ArchiveStore) migrateSchema() {
 	// v2: add title, tags, metadata columns to sessions table
+	// v3: add parent_session_id, parent_tool_call_id for delegate linkage
 	migrations := []struct {
 		column string
 		sql    string
@@ -317,6 +335,8 @@ func (s *ArchiveStore) migrateSchema() {
 		{"title", "ALTER TABLE sessions ADD COLUMN title TEXT"},
 		{"tags", "ALTER TABLE sessions ADD COLUMN tags TEXT"},
 		{"metadata", "ALTER TABLE sessions ADD COLUMN metadata TEXT"},
+		{"parent_session_id", "ALTER TABLE sessions ADD COLUMN parent_session_id TEXT"},
+		{"parent_tool_call_id", "ALTER TABLE sessions ADD COLUMN parent_tool_call_id TEXT"},
 	}
 
 	for _, m := range migrations {
@@ -331,6 +351,9 @@ func (s *ArchiveStore) migrateSchema() {
 			}
 		}
 	}
+
+	// Index for ListChildSessions query performance.
+	_, _ = s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_sessions_parent ON sessions(parent_session_id, started_at)`)
 }
 
 // tryEnableFTS attempts to create the FTS5 virtual table.
@@ -771,6 +794,35 @@ func (s *ArchiveStore) StartSessionAt(conversationID string, startedAt time.Time
 	return sess, nil
 }
 
+// StartSessionWithOptions creates a new session record with optional
+// parent linkage. Use [WithParentSession] and [WithParentToolCall] to
+// set parent fields for delegate sessions.
+func (s *ArchiveStore) StartSessionWithOptions(conversationID string, opts ...SessionOption) (*Session, error) {
+	id, err := uuid.NewV7()
+	if err != nil {
+		return nil, fmt.Errorf("generate UUID: %w", err)
+	}
+
+	sess := &Session{
+		ID:             id.String(),
+		ConversationID: conversationID,
+		StartedAt:      time.Now().UTC(),
+	}
+	for _, opt := range opts {
+		opt(sess)
+	}
+
+	if _, err = s.db.Exec(`
+		INSERT INTO sessions (id, conversation_id, started_at, message_count, parent_session_id, parent_tool_call_id)
+		VALUES (?, ?, ?, 0, ?, ?)
+	`, sess.ID, conversationID, sess.StartedAt.Format(time.RFC3339Nano),
+		nullString(sess.ParentSessionID), nullString(sess.ParentToolCallID)); err != nil {
+		return nil, fmt.Errorf("insert session: %w", err)
+	}
+
+	return sess, nil
+}
+
 // EndSession marks a session as ended at the current time.
 func (s *ArchiveStore) EndSession(sessionID string, reason string) error {
 	return s.EndSessionAt(sessionID, reason, time.Now().UTC())
@@ -865,7 +917,8 @@ func (s *ArchiveStore) SetSessionMessageCount(sessionID string, count int) error
 // ActiveSession returns the most recent unclosed session for a conversation, if any.
 func (s *ArchiveStore) ActiveSession(conversationID string) (*Session, error) {
 	row := s.db.QueryRow(`
-		SELECT id, conversation_id, started_at, ended_at, end_reason, message_count, summary, title, tags, metadata
+		SELECT id, conversation_id, started_at, ended_at, end_reason, message_count,
+		       summary, title, tags, metadata, parent_session_id, parent_tool_call_id
 		FROM sessions
 		WHERE conversation_id = ? AND ended_at IS NULL
 		ORDER BY started_at DESC
@@ -878,7 +931,8 @@ func (s *ArchiveStore) ActiveSession(conversationID string) (*Session, error) {
 // GetSession retrieves a session by ID.
 func (s *ArchiveStore) GetSession(sessionID string) (*Session, error) {
 	row := s.db.QueryRow(`
-		SELECT id, conversation_id, started_at, ended_at, end_reason, message_count, summary, title, tags, metadata
+		SELECT id, conversation_id, started_at, ended_at, end_reason, message_count,
+		       summary, title, tags, metadata, parent_session_id, parent_tool_call_id
 		FROM sessions WHERE id = ?
 	`, sessionID)
 
@@ -896,14 +950,16 @@ func (s *ArchiveStore) ListSessions(conversationID string, limit int) ([]*Sessio
 
 	if conversationID != "" {
 		query = `
-			SELECT id, conversation_id, started_at, ended_at, end_reason, message_count, summary, title, tags, metadata
+			SELECT id, conversation_id, started_at, ended_at, end_reason, message_count,
+			       summary, title, tags, metadata, parent_session_id, parent_tool_call_id
 			FROM sessions WHERE conversation_id = ?
 			ORDER BY started_at DESC LIMIT ?
 		`
 		args = []any{conversationID, limit}
 	} else {
 		query = `
-			SELECT id, conversation_id, started_at, ended_at, end_reason, message_count, summary, title, tags, metadata
+			SELECT id, conversation_id, started_at, ended_at, end_reason, message_count,
+			       summary, title, tags, metadata, parent_session_id, parent_tool_call_id
 			FROM sessions
 			ORDER BY started_at DESC LIMIT ?
 		`
@@ -913,6 +969,33 @@ func (s *ArchiveStore) ListSessions(conversationID string, limit int) ([]*Sessio
 	rows, err := s.db.Query(query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list sessions: %w", err)
+	}
+	defer rows.Close()
+
+	var sessions []*Session
+	for rows.Next() {
+		sess, err := s.scanSessionRow(rows)
+		if err != nil {
+			return nil, err
+		}
+		sessions = append(sessions, sess)
+	}
+
+	return sessions, rows.Err()
+}
+
+// ListChildSessions returns sessions whose parent_session_id matches
+// the given ID, ordered chronologically. Used by the session inspector
+// to show delegate sub-sessions.
+func (s *ArchiveStore) ListChildSessions(parentSessionID string) ([]*Session, error) {
+	rows, err := s.db.Query(`
+		SELECT id, conversation_id, started_at, ended_at, end_reason, message_count,
+		       summary, title, tags, metadata, parent_session_id, parent_tool_call_id
+		FROM sessions WHERE parent_session_id = ?
+		ORDER BY started_at ASC
+	`, parentSessionID)
+	if err != nil {
+		return nil, fmt.Errorf("list child sessions: %w", err)
 	}
 	defer rows.Close()
 
@@ -939,7 +1022,8 @@ func (s *ArchiveStore) UnsummarizedSessions(limit int) ([]*Session, error) {
 
 	rows, err := s.db.Query(`
 		SELECT id, conversation_id, started_at, ended_at, end_reason,
-		       message_count, summary, title, tags, metadata
+		       message_count, summary, title, tags, metadata,
+		       parent_session_id, parent_tool_call_id
 		FROM sessions
 		WHERE ended_at IS NOT NULL
 		  AND (title IS NULL OR title = '')
@@ -1174,10 +1258,11 @@ func (s *ArchiveStore) scanSession(row *sql.Row) (*Session, error) {
 	var sess Session
 	var startStr string
 	var endStr, endReason, summary, title, tagsJSON, metaJSON sql.NullString
+	var parentSessionID, parentToolCallID sql.NullString
 
 	err := row.Scan(&sess.ID, &sess.ConversationID, &startStr,
 		&endStr, &endReason, &sess.MessageCount, &summary,
-		&title, &tagsJSON, &metaJSON)
+		&title, &tagsJSON, &metaJSON, &parentSessionID, &parentToolCallID)
 	if err != nil {
 		if err == sql.ErrNoRows {
 			return nil, nil
@@ -1185,7 +1270,7 @@ func (s *ArchiveStore) scanSession(row *sql.Row) (*Session, error) {
 		return nil, err
 	}
 
-	populateSession(&sess, startStr, endStr, endReason, summary, title, tagsJSON, metaJSON, s.logger)
+	populateSession(&sess, startStr, endStr, endReason, summary, title, tagsJSON, metaJSON, parentSessionID, parentToolCallID, s.logger)
 	return &sess, nil
 }
 
@@ -1193,20 +1278,21 @@ func (s *ArchiveStore) scanSessionRow(rows *sql.Rows) (*Session, error) {
 	var sess Session
 	var startStr string
 	var endStr, endReason, summary, title, tagsJSON, metaJSON sql.NullString
+	var parentSessionID, parentToolCallID sql.NullString
 
 	err := rows.Scan(&sess.ID, &sess.ConversationID, &startStr,
 		&endStr, &endReason, &sess.MessageCount, &summary,
-		&title, &tagsJSON, &metaJSON)
+		&title, &tagsJSON, &metaJSON, &parentSessionID, &parentToolCallID)
 	if err != nil {
 		return nil, err
 	}
 
-	populateSession(&sess, startStr, endStr, endReason, summary, title, tagsJSON, metaJSON, s.logger)
+	populateSession(&sess, startStr, endStr, endReason, summary, title, tagsJSON, metaJSON, parentSessionID, parentToolCallID, s.logger)
 	return &sess, nil
 }
 
 // populateSession fills parsed fields from nullable database columns.
-func populateSession(sess *Session, startStr string, endStr, endReason, summary, title, tagsJSON, metaJSON sql.NullString, logger *slog.Logger) {
+func populateSession(sess *Session, startStr string, endStr, endReason, summary, title, tagsJSON, metaJSON, parentSessionID, parentToolCallID sql.NullString, logger *slog.Logger) {
 	sess.StartedAt, _ = time.Parse(time.RFC3339Nano, startStr)
 	if endStr.Valid {
 		t, _ := time.Parse(time.RFC3339Nano, endStr.String)
@@ -1235,6 +1321,12 @@ func populateSession(sess *Session, startStr string, endStr, endReason, summary,
 		} else {
 			sess.Metadata = &meta
 		}
+	}
+	if parentSessionID.Valid {
+		sess.ParentSessionID = parentSessionID.String
+	}
+	if parentToolCallID.Valid {
+		sess.ParentToolCallID = parentToolCallID.String
 	}
 }
 

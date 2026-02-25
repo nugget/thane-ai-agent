@@ -42,25 +42,28 @@ type SessionDetailData struct {
 
 // sessionDetailView holds the rich session data for the detail page.
 type sessionDetailView struct {
-	ID             string
-	ShortID        string
-	ConversationID string
-	ShortConvID    string
-	Title          string
-	Summary        string
-	Detailed       string
-	SessionType    string
-	Status         string
-	EndReason      string
-	StartedAt      string
-	EndedAt        string
-	Duration       string
-	MessageCount   int
-	Tags           []string
-	KeyDecisions   []string
-	Participants   []string
-	FilesTouched   []string
-	Models         []string
+	ID              string
+	ShortID         string
+	ConversationID  string
+	ShortConvID     string
+	Title           string
+	Summary         string
+	Detailed        string
+	SessionType     string
+	Status          string
+	EndReason       string
+	StartedAt       string
+	EndedAt         string
+	Duration        string
+	MessageCount    int
+	Tags            []string
+	KeyDecisions    []string
+	Participants    []string
+	FilesTouched    []string
+	Models          []string
+	ParentSessionID string
+	ParentShortID   string
+	ChildSessions   []*sessionRow
 }
 
 // messageRow is a display-friendly wrapper around an archived message.
@@ -153,12 +156,29 @@ func (s *WebServer) handleSessionDetail(w http.ResponseWriter, r *http.Request) 
 		s.logger.Error("session tool calls failed", "id", id, "error", err)
 	}
 
+	detail := buildSessionDetailView(sess)
+
+	// Populate parent link if this is a child session.
+	if sess.ParentSessionID != "" {
+		detail.ParentSessionID = sess.ParentSessionID
+		detail.ParentShortID = shortID(sess.ParentSessionID)
+	}
+
+	// Fetch child sessions for parent→child navigation.
+	children, err := s.sessionStore.ListChildSessions(id)
+	if err != nil {
+		s.logger.Error("session children failed", "id", id, "error", err)
+	}
+	if len(children) > 0 {
+		detail.ChildSessions = sessionsToRows(children)
+	}
+
 	data := SessionDetailData{
 		PageData: PageData{
 			BrandName: s.brandName,
 			ActiveNav: "sessions",
 		},
-		Session:   buildSessionDetailView(sess),
+		Session:   detail,
 		Messages:  messagesToRows(messages),
 		ToolCalls: toolCallsToRows(toolCalls),
 	}

@@ -14,6 +14,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/conditions"
 	"github.com/nugget/thane-ai-agent/internal/config"
 	"github.com/nugget/thane-ai-agent/internal/llm"
+	"github.com/nugget/thane-ai-agent/internal/memory"
 	"github.com/nugget/thane-ai-agent/internal/prompts"
 	"github.com/nugget/thane-ai-agent/internal/router"
 	"github.com/nugget/thane-ai-agent/internal/tools"
@@ -68,6 +69,7 @@ type Executor struct {
 	timezone         string
 	defaultModel     string
 	store            *DelegationStore
+	archiver         *memory.ArchiveStore
 	tempFiles        labelExpander
 	usageStore       *usage.Store
 	pricing          map[string]config.PricingEntry
@@ -96,6 +98,14 @@ func (e *Executor) SetTimezone(tz string) {
 // [Executor.Execute] completion is recorded for replay and evaluation.
 func (e *Executor) SetStore(s *DelegationStore) {
 	e.store = s
+}
+
+// SetArchiver configures the archive store for session lifecycle
+// tracking. When set, each [Executor.Execute] call creates a first-class
+// archive session with parent linkage, and archives its messages and
+// tool calls for inspection in the web dashboard.
+func (e *Executor) SetArchiver(a *memory.ArchiveStore) {
+	e.archiver = a
 }
 
 // SetTempFileStore configures temp file label expansion for delegate
@@ -146,6 +156,31 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 	// Generate a unique delegate ID for log correlation.
 	delegateID, _ := uuid.NewV7()
 	did := delegateID.String()
+
+	// Create an archive session for this delegate execution so it
+	// appears in the session inspector alongside user conversations.
+	convID := "delegate-" + did[:8]
+	var archiveSessionID string
+	if e.archiver != nil {
+		parentSessionID := tools.SessionIDFromContext(ctx)
+		parentToolCallID := tools.ToolCallIDFromContext(ctx)
+
+		var opts []memory.SessionOption
+		if parentSessionID != "" {
+			opts = append(opts, memory.WithParentSession(parentSessionID))
+		}
+		if parentToolCallID != "" {
+			opts = append(opts, memory.WithParentToolCall(parentToolCallID))
+		}
+
+		sess, err := e.archiver.StartSessionWithOptions(convID, opts...)
+		if err != nil {
+			e.logger.Warn("failed to create archive session for delegate",
+				"delegate_id", did, "error", err)
+		} else {
+			archiveSessionID = sess.ID
+		}
+	}
 
 	profile := e.profiles[profileName]
 	if profile == nil {
@@ -260,23 +295,24 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 				)
 				completed = true
 				e.recordCompletion(&completionRecord{
-					delegateID:     did,
-					conversationID: tools.ConversationIDFromContext(ctx),
-					task:           task,
-					guidance:       guidance,
-					profileName:    profile.Name,
-					model:          model,
-					totalIter:      i,
-					maxIter:        maxIter,
-					totalInput:     totalInput,
-					totalOutput:    totalOutput,
-					exhausted:      true,
-					exhaustReason:  ExhaustWallClock,
-					startTime:      startTime,
-					messages:       messages,
-					resultContent:  "Delegate was unable to complete the task within its time limit.",
-					errMsg:         err.Error(),
-					toolCalls:      toolCalls,
+					delegateID:       did,
+					conversationID:   convID,
+					archiveSessionID: archiveSessionID,
+					task:             task,
+					guidance:         guidance,
+					profileName:      profile.Name,
+					model:            model,
+					totalIter:        i,
+					maxIter:          maxIter,
+					totalInput:       totalInput,
+					totalOutput:      totalOutput,
+					exhausted:        true,
+					exhaustReason:    ExhaustWallClock,
+					startTime:        startTime,
+					messages:         messages,
+					resultContent:    "Delegate was unable to complete the task within its time limit.",
+					errMsg:           err.Error(),
+					toolCalls:        toolCalls,
 				})
 				return &Result{
 					Content:       "Delegate was unable to complete the task within its time limit.",
@@ -305,21 +341,22 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 			)
 			completed = true
 			return e.forceTextResponse(ctx, model, messages, &completionRecord{
-				delegateID:     did,
-				conversationID: tools.ConversationIDFromContext(ctx),
-				task:           task,
-				guidance:       guidance,
-				profileName:    profile.Name,
-				model:          model,
-				totalIter:      i,
-				maxIter:        maxIter,
-				totalInput:     totalInput,
-				totalOutput:    totalOutput,
-				exhausted:      true,
-				exhaustReason:  ExhaustWallClock,
-				startTime:      startTime,
-				messages:       messages,
-				toolCalls:      toolCalls,
+				delegateID:       did,
+				conversationID:   convID,
+				archiveSessionID: archiveSessionID,
+				task:             task,
+				guidance:         guidance,
+				profileName:      profile.Name,
+				model:            model,
+				totalIter:        i,
+				maxIter:          maxIter,
+				totalInput:       totalInput,
+				totalOutput:      totalOutput,
+				exhausted:        true,
+				exhaustReason:    ExhaustWallClock,
+				startTime:        startTime,
+				messages:         messages,
+				toolCalls:        toolCalls,
 			})
 		}
 
@@ -349,23 +386,24 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 				)
 				completed = true
 				e.recordCompletion(&completionRecord{
-					delegateID:     did,
-					conversationID: tools.ConversationIDFromContext(ctx),
-					task:           task,
-					guidance:       guidance,
-					profileName:    profile.Name,
-					model:          model,
-					totalIter:      i + 1,
-					maxIter:        maxIter,
-					totalInput:     totalInput,
-					totalOutput:    totalOutput,
-					exhausted:      true,
-					exhaustReason:  ExhaustWallClock,
-					startTime:      startTime,
-					messages:       messages,
-					resultContent:  "Delegate was unable to complete the task within its time limit.",
-					errMsg:         err.Error(),
-					toolCalls:      toolCalls,
+					delegateID:       did,
+					conversationID:   convID,
+					archiveSessionID: archiveSessionID,
+					task:             task,
+					guidance:         guidance,
+					profileName:      profile.Name,
+					model:            model,
+					totalIter:        i + 1,
+					maxIter:          maxIter,
+					totalInput:       totalInput,
+					totalOutput:      totalOutput,
+					exhausted:        true,
+					exhaustReason:    ExhaustWallClock,
+					startTime:        startTime,
+					messages:         messages,
+					resultContent:    "Delegate was unable to complete the task within its time limit.",
+					errMsg:           err.Error(),
+					toolCalls:        toolCalls,
 				})
 				return &Result{
 					Content:       "Delegate was unable to complete the task within its time limit.",
@@ -402,21 +440,22 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 			messages = append(messages, resp.Message)
 			completed = true
 			return e.forceTextResponse(ctx, model, messages, &completionRecord{
-				delegateID:     did,
-				conversationID: tools.ConversationIDFromContext(ctx),
-				task:           task,
-				guidance:       guidance,
-				profileName:    profile.Name,
-				model:          model,
-				totalIter:      i + 1,
-				maxIter:        maxIter,
-				totalInput:     totalInput,
-				totalOutput:    totalOutput,
-				exhausted:      true,
-				exhaustReason:  ExhaustWallClock,
-				startTime:      startTime,
-				messages:       messages,
-				toolCalls:      toolCalls,
+				delegateID:       did,
+				conversationID:   convID,
+				archiveSessionID: archiveSessionID,
+				task:             task,
+				guidance:         guidance,
+				profileName:      profile.Name,
+				model:            model,
+				totalIter:        i + 1,
+				maxIter:          maxIter,
+				totalInput:       totalInput,
+				totalOutput:      totalOutput,
+				exhausted:        true,
+				exhaustReason:    ExhaustWallClock,
+				startTime:        startTime,
+				messages:         messages,
+				toolCalls:        toolCalls,
 			})
 		}
 
@@ -446,22 +485,23 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 				)
 				completed = true
 				e.recordCompletion(&completionRecord{
-					delegateID:     did,
-					conversationID: tools.ConversationIDFromContext(ctx),
-					task:           task,
-					guidance:       guidance,
-					profileName:    profile.Name,
-					model:          model,
-					totalIter:      i + 1,
-					maxIter:        maxIter,
-					totalInput:     totalInput,
-					totalOutput:    totalOutput,
-					exhausted:      true,
-					exhaustReason:  ExhaustNoOutput,
-					startTime:      startTime,
-					messages:       messages,
-					resultContent:  "",
-					toolCalls:      toolCalls,
+					delegateID:       did,
+					conversationID:   convID,
+					archiveSessionID: archiveSessionID,
+					task:             task,
+					guidance:         guidance,
+					profileName:      profile.Name,
+					model:            model,
+					totalIter:        i + 1,
+					maxIter:          maxIter,
+					totalInput:       totalInput,
+					totalOutput:      totalOutput,
+					exhausted:        true,
+					exhaustReason:    ExhaustNoOutput,
+					startTime:        startTime,
+					messages:         messages,
+					resultContent:    "",
+					toolCalls:        toolCalls,
 				})
 				return &Result{
 					Content:       "",
@@ -478,21 +518,22 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 
 			completed = true
 			e.recordCompletion(&completionRecord{
-				delegateID:     did,
-				conversationID: tools.ConversationIDFromContext(ctx),
-				task:           task,
-				guidance:       guidance,
-				profileName:    profile.Name,
-				model:          model,
-				totalIter:      i + 1,
-				maxIter:        maxIter,
-				totalInput:     totalInput,
-				totalOutput:    totalOutput,
-				exhausted:      false,
-				startTime:      startTime,
-				messages:       messages,
-				resultContent:  content,
-				toolCalls:      toolCalls,
+				delegateID:       did,
+				conversationID:   convID,
+				archiveSessionID: archiveSessionID,
+				task:             task,
+				guidance:         guidance,
+				profileName:      profile.Name,
+				model:            model,
+				totalIter:        i + 1,
+				maxIter:          maxIter,
+				totalInput:       totalInput,
+				totalOutput:      totalOutput,
+				exhausted:        false,
+				startTime:        startTime,
+				messages:         messages,
+				resultContent:    content,
+				toolCalls:        toolCalls,
 			})
 			return &Result{
 				Content:      content,
@@ -516,21 +557,22 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 			)
 			completed = true
 			return e.forceTextResponse(ctx, model, messages, &completionRecord{
-				delegateID:     did,
-				conversationID: tools.ConversationIDFromContext(ctx),
-				task:           task,
-				guidance:       guidance,
-				profileName:    profile.Name,
-				model:          model,
-				totalIter:      i + 1,
-				maxIter:        maxIter,
-				totalInput:     totalInput,
-				totalOutput:    totalOutput,
-				exhausted:      true,
-				exhaustReason:  ExhaustTokenBudget,
-				startTime:      startTime,
-				messages:       messages,
-				toolCalls:      toolCalls,
+				delegateID:       did,
+				conversationID:   convID,
+				archiveSessionID: archiveSessionID,
+				task:             task,
+				guidance:         guidance,
+				profileName:      profile.Name,
+				model:            model,
+				totalIter:        i + 1,
+				maxIter:          maxIter,
+				totalInput:       totalInput,
+				totalOutput:      totalOutput,
+				exhausted:        true,
+				exhaustReason:    ExhaustTokenBudget,
+				startTime:        startTime,
+				messages:         messages,
+				toolCalls:        toolCalls,
 			})
 		}
 
@@ -553,7 +595,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 				"tool", tc.Function.Name,
 			)
 
-			toolCtx := tools.WithConversationID(ctx, "delegate")
+			toolCtx := tools.WithConversationID(ctx, convID)
 			toolTimeout := profile.ToolTimeout
 			if toolTimeout == 0 {
 				toolTimeout = defaultToolTimeout
@@ -600,23 +642,24 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 						)
 						completed = true
 						e.recordCompletion(&completionRecord{
-							delegateID:     did,
-							conversationID: tools.ConversationIDFromContext(ctx),
-							task:           task,
-							guidance:       guidance,
-							profileName:    profile.Name,
-							model:          model,
-							totalIter:      i + 1,
-							maxIter:        maxIter,
-							totalInput:     totalInput,
-							totalOutput:    totalOutput,
-							exhausted:      true,
-							exhaustReason:  ExhaustWallClock,
-							startTime:      startTime,
-							messages:       messages,
-							resultContent:  "Delegate was unable to complete the task within its time limit.",
-							errMsg:         err.Error(),
-							toolCalls:      toolCalls,
+							delegateID:       did,
+							conversationID:   convID,
+							archiveSessionID: archiveSessionID,
+							task:             task,
+							guidance:         guidance,
+							profileName:      profile.Name,
+							model:            model,
+							totalIter:        i + 1,
+							maxIter:          maxIter,
+							totalInput:       totalInput,
+							totalOutput:      totalOutput,
+							exhausted:        true,
+							exhaustReason:    ExhaustWallClock,
+							startTime:        startTime,
+							messages:         messages,
+							resultContent:    "Delegate was unable to complete the task within its time limit.",
+							errMsg:           err.Error(),
+							toolCalls:        toolCalls,
 						})
 						return &Result{
 							Content:       "Delegate was unable to complete the task within its time limit.",
@@ -669,21 +712,22 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 			)
 			completed = true
 			return e.forceTextResponse(ctx, model, messages, &completionRecord{
-				delegateID:     did,
-				conversationID: tools.ConversationIDFromContext(ctx),
-				task:           task,
-				guidance:       guidance,
-				profileName:    profile.Name,
-				model:          model,
-				totalIter:      i + 1,
-				maxIter:        maxIter,
-				totalInput:     totalInput,
-				totalOutput:    totalOutput,
-				exhausted:      true,
-				exhaustReason:  ExhaustIllegalTool,
-				startTime:      startTime,
-				messages:       messages,
-				toolCalls:      toolCalls,
+				delegateID:       did,
+				conversationID:   convID,
+				archiveSessionID: archiveSessionID,
+				task:             task,
+				guidance:         guidance,
+				profileName:      profile.Name,
+				model:            model,
+				totalIter:        i + 1,
+				maxIter:          maxIter,
+				totalInput:       totalInput,
+				totalOutput:      totalOutput,
+				exhausted:        true,
+				exhaustReason:    ExhaustIllegalTool,
+				startTime:        startTime,
+				messages:         messages,
+				toolCalls:        toolCalls,
 			})
 		}
 
@@ -697,21 +741,22 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 			)
 			completed = true
 			return e.forceTextResponse(ctx, model, messages, &completionRecord{
-				delegateID:     did,
-				conversationID: tools.ConversationIDFromContext(ctx),
-				task:           task,
-				guidance:       guidance,
-				profileName:    profile.Name,
-				model:          model,
-				totalIter:      i + 1,
-				maxIter:        maxIter,
-				totalInput:     totalInput,
-				totalOutput:    totalOutput,
-				exhausted:      true,
-				exhaustReason:  ExhaustWallClock,
-				startTime:      startTime,
-				messages:       messages,
-				toolCalls:      toolCalls,
+				delegateID:       did,
+				conversationID:   convID,
+				archiveSessionID: archiveSessionID,
+				task:             task,
+				guidance:         guidance,
+				profileName:      profile.Name,
+				model:            model,
+				totalIter:        i + 1,
+				maxIter:          maxIter,
+				totalInput:       totalInput,
+				totalOutput:      totalOutput,
+				exhausted:        true,
+				exhaustReason:    ExhaustWallClock,
+				startTime:        startTime,
+				messages:         messages,
+				toolCalls:        toolCalls,
 			})
 		}
 	}
@@ -724,21 +769,22 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 	)
 	completed = true
 	return e.forceTextResponse(ctx, model, messages, &completionRecord{
-		delegateID:     did,
-		conversationID: tools.ConversationIDFromContext(ctx),
-		task:           task,
-		guidance:       guidance,
-		profileName:    profile.Name,
-		model:          model,
-		totalIter:      maxIter,
-		maxIter:        maxIter,
-		totalInput:     totalInput,
-		totalOutput:    totalOutput,
-		exhausted:      true,
-		exhaustReason:  ExhaustMaxIterations,
-		startTime:      startTime,
-		messages:       messages,
-		toolCalls:      toolCalls,
+		delegateID:       did,
+		conversationID:   convID,
+		archiveSessionID: archiveSessionID,
+		task:             task,
+		guidance:         guidance,
+		profileName:      profile.Name,
+		model:            model,
+		totalIter:        maxIter,
+		maxIter:          maxIter,
+		totalInput:       totalInput,
+		totalOutput:      totalOutput,
+		exhausted:        true,
+		exhaustReason:    ExhaustMaxIterations,
+		startTime:        startTime,
+		messages:         messages,
+		toolCalls:        toolCalls,
 	})
 }
 
@@ -811,23 +857,24 @@ func (e *Executor) selectModel(ctx context.Context, delegateID, task string, pro
 // completionRecord carries all data for logging and persistence of a
 // delegate execution.
 type completionRecord struct {
-	delegateID     string
-	conversationID string
-	task           string
-	guidance       string
-	profileName    string
-	model          string
-	totalIter      int
-	maxIter        int
-	totalInput     int
-	totalOutput    int
-	exhausted      bool
-	exhaustReason  string
-	startTime      time.Time
-	messages       []llm.Message
-	resultContent  string
-	errMsg         string
-	toolCalls      []ToolCallOutcome
+	delegateID       string
+	conversationID   string
+	archiveSessionID string
+	task             string
+	guidance         string
+	profileName      string
+	model            string
+	totalIter        int
+	maxIter          int
+	totalInput       int
+	totalOutput      int
+	exhausted        bool
+	exhaustReason    string
+	startTime        time.Time
+	messages         []llm.Message
+	resultContent    string
+	errMsg           string
+	toolCalls        []ToolCallOutcome
 }
 
 // recordCompletion logs and optionally persists a delegate execution.
@@ -847,37 +894,41 @@ func (e *Executor) recordCompletion(rec *completionRecord) {
 		"elapsed", elapsed.Round(time.Millisecond),
 	)
 
-	if e.store == nil {
-		return
+	if e.store != nil {
+		dr := &DelegationRecord{
+			ID:             rec.delegateID,
+			ConversationID: rec.conversationID,
+			Task:           rec.task,
+			Guidance:       rec.guidance,
+			Profile:        rec.profileName,
+			Model:          rec.model,
+			Iterations:     rec.totalIter,
+			MaxIterations:  rec.maxIter,
+			InputTokens:    rec.totalInput,
+			OutputTokens:   rec.totalOutput,
+			Exhausted:      rec.exhausted,
+			ExhaustReason:  rec.exhaustReason,
+			ToolsCalled:    ExtractToolsCalled(rec.messages),
+			Messages:       rec.messages,
+			ResultContent:  rec.resultContent,
+			StartedAt:      rec.startTime,
+			CompletedAt:    now,
+			DurationMs:     elapsed.Milliseconds(),
+			Error:          rec.errMsg,
+		}
+
+		if err := e.store.Record(dr); err != nil {
+			e.logger.Warn("failed to persist delegation record",
+				"delegate_id", rec.delegateID,
+				"error", err,
+			)
+		}
 	}
 
-	dr := &DelegationRecord{
-		ID:             rec.delegateID,
-		ConversationID: rec.conversationID,
-		Task:           rec.task,
-		Guidance:       rec.guidance,
-		Profile:        rec.profileName,
-		Model:          rec.model,
-		Iterations:     rec.totalIter,
-		MaxIterations:  rec.maxIter,
-		InputTokens:    rec.totalInput,
-		OutputTokens:   rec.totalOutput,
-		Exhausted:      rec.exhausted,
-		ExhaustReason:  rec.exhaustReason,
-		ToolsCalled:    ExtractToolsCalled(rec.messages),
-		Messages:       rec.messages,
-		ResultContent:  rec.resultContent,
-		StartedAt:      rec.startTime,
-		CompletedAt:    now,
-		DurationMs:     elapsed.Milliseconds(),
-		Error:          rec.errMsg,
-	}
-
-	if err := e.store.Record(dr); err != nil {
-		e.logger.Warn("failed to persist delegation record",
-			"delegate_id", rec.delegateID,
-			"error", err,
-		)
+	// Archive session lifecycle: end the session and persist messages
+	// and tool calls so they appear in the session inspector.
+	if e.archiver != nil && rec.archiveSessionID != "" {
+		e.archiveSession(rec, now)
 	}
 
 	// Record usage for cost tracking. Uses context.Background() because
@@ -902,6 +953,100 @@ func (e *Executor) recordCompletion(rec *completionRecord) {
 				"error", err,
 			)
 		}
+	}
+}
+
+// archiveSession persists the delegate's messages, tool calls, and ends
+// the archive session so the execution is visible in the session inspector.
+func (e *Executor) archiveSession(rec *completionRecord, now time.Time) {
+	sessionID := rec.archiveSessionID
+	convID := rec.conversationID
+
+	// Archive messages from the LLM conversation.
+	var archived []memory.ArchivedMessage
+	for i, m := range rec.messages {
+		archived = append(archived, memory.ArchivedMessage{
+			ConversationID: convID,
+			SessionID:      sessionID,
+			Role:           m.Role,
+			Content:        m.Content,
+			Timestamp:      rec.startTime.Add(time.Duration(i) * time.Millisecond),
+			ToolCallID:     m.ToolCallID,
+			ArchiveReason:  "delegate",
+		})
+	}
+	if err := e.archiver.ArchiveMessages(archived); err != nil {
+		e.logger.Warn("failed to archive delegate messages",
+			"delegate_id", rec.delegateID,
+			"session_id", sessionID,
+			"error", err,
+		)
+	}
+
+	// Archive tool calls extracted from assistant messages.
+	var archivedCalls []memory.ArchivedToolCall
+	for _, m := range rec.messages {
+		if m.Role != "assistant" || len(m.ToolCalls) == 0 {
+			continue
+		}
+		for _, tc := range m.ToolCalls {
+			argsJSON := ""
+			if tc.Function.Arguments != nil {
+				argsBytes, _ := json.Marshal(tc.Function.Arguments)
+				argsJSON = string(argsBytes)
+			}
+
+			// Find the matching tool result message for this call.
+			var result, errStr string
+			for _, rm := range rec.messages {
+				if rm.Role == "tool" && rm.ToolCallID == tc.ID {
+					if strings.HasPrefix(rm.Content, "Error: ") {
+						errStr = strings.TrimSpace(strings.TrimPrefix(rm.Content, "Error: "))
+					} else {
+						result = rm.Content
+					}
+					break
+				}
+			}
+
+			archivedCalls = append(archivedCalls, memory.ArchivedToolCall{
+				ID:             tc.ID,
+				ConversationID: convID,
+				SessionID:      sessionID,
+				ToolName:       tc.Function.Name,
+				Arguments:      argsJSON,
+				Result:         result,
+				Error:          errStr,
+				StartedAt:      now, // approximate
+			})
+		}
+	}
+	if err := e.archiver.ArchiveToolCalls(archivedCalls); err != nil {
+		e.logger.Warn("failed to archive delegate tool calls",
+			"delegate_id", rec.delegateID,
+			"session_id", sessionID,
+			"error", err,
+		)
+	}
+
+	// Set message count and end the session.
+	if err := e.archiver.SetSessionMessageCount(sessionID, len(archived)); err != nil {
+		e.logger.Warn("failed to set delegate session message count",
+			"delegate_id", rec.delegateID,
+			"error", err,
+		)
+	}
+
+	endReason := "completed"
+	if rec.exhausted && rec.exhaustReason != "" {
+		endReason = rec.exhaustReason
+	}
+	if err := e.archiver.EndSessionAt(sessionID, endReason, now); err != nil {
+		e.logger.Warn("failed to end delegate archive session",
+			"delegate_id", rec.delegateID,
+			"session_id", sessionID,
+			"error", err,
+		)
 	}
 }
 
