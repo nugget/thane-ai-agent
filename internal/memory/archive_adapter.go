@@ -12,6 +12,11 @@ type ToolCallSource interface {
 	ClearToolCalls(conversationID string) error
 }
 
+// MessageArchiver sets lifecycle status on messages in the unified table.
+type MessageArchiver interface {
+	ArchiveMessages(conversationID, sessionID, reason string) (int64, error)
+}
+
 // sessionEntry caches an active session's ID and start time to avoid
 // repeated database lookups on the per-turn hot path.
 type sessionEntry struct {
@@ -20,11 +25,13 @@ type sessionEntry struct {
 }
 
 // ArchiveAdapter bridges the ArchiveStore to the agent.SessionArchiver interface.
-// It manages session lifecycle and converts between memory and archive message types.
+// It manages session lifecycle and coordinates message archival in the unified
+// messages table.
 type ArchiveAdapter struct {
 	store      *ArchiveStore
 	logger     *slog.Logger
-	toolSource ToolCallSource // optional — archives tool calls alongside messages
+	toolSource ToolCallSource  // optional — archives tool calls alongside messages
+	msgStore   MessageArchiver // optional — sets status='archived' in unified table
 
 	// Track active sessions in memory for fast lookup
 	mu       sync.RWMutex
@@ -45,10 +52,41 @@ func (a *ArchiveAdapter) SetToolCallSource(source ToolCallSource) {
 	a.toolSource = source
 }
 
+// SetMessageStore configures the unified message store for status-based
+// archival. When set, ArchiveConversation uses UPDATE (status='archived')
+// instead of cross-DB INSERT.
+func (a *ArchiveAdapter) SetMessageStore(store MessageArchiver) {
+	a.msgStore = store
+}
+
 // ArchiveConversation archives all messages from a conversation.
+//
+// In unified mode (msgStore set): updates message status to 'archived' in
+// the unified table. Messages already exist — no cross-DB copy.
+//
+// In legacy mode: copies messages to archive_messages in archive.db.
 func (a *ArchiveAdapter) ArchiveConversation(conversationID string, messages []Message, reason string) error {
 	sessionID := a.ActiveSessionID(conversationID)
 
+	// Unified mode: UPDATE status in the same table.
+	if a.msgStore != nil {
+		affected, err := a.msgStore.ArchiveMessages(conversationID, sessionID, reason)
+		if err != nil {
+			return err
+		}
+
+		a.archiveToolCalls(conversationID, sessionID)
+		a.linkIterations(conversationID, sessionID)
+
+		a.logger.Info("conversation archived",
+			"conversation", conversationID,
+			"messages", affected,
+			"reason", reason,
+		)
+		return nil
+	}
+
+	// Legacy mode: INSERT into archive_messages.
 	archived := make([]ArchivedMessage, len(messages))
 	for i, m := range messages {
 		archived[i] = ArchivedMessage{
@@ -69,63 +107,71 @@ func (a *ArchiveAdapter) ArchiveConversation(conversationID string, messages []M
 		return err
 	}
 
-	// Archive associated tool calls if a source is configured
-	toolCallCount := 0
-	if a.toolSource != nil {
-		calls := a.toolSource.GetToolCalls(conversationID, 10000)
-		if len(calls) > 0 {
-			archivedCalls := make([]ArchivedToolCall, len(calls))
-			for i, tc := range calls {
-				archivedCalls[i] = ArchivedToolCall{
-					ID:             tc.ID,
-					ConversationID: tc.ConversationID,
-					SessionID:      sessionID,
-					ToolName:       tc.ToolName,
-					Arguments:      tc.Arguments,
-					Result:         tc.Result,
-					Error:          tc.Error,
-					StartedAt:      tc.StartedAt,
-					CompletedAt:    tc.CompletedAt,
-					DurationMs:     tc.DurationMs,
-				}
-			}
-			if err := a.store.ArchiveToolCalls(archivedCalls); err != nil {
-				a.logger.Error("failed to archive tool calls", "error", err)
-				// Don't fail the whole archive for tool calls
-			} else {
-				toolCallCount = len(archivedCalls)
-				// Clear archived tool calls from the working store so they
-				// aren't re-archived on the next session boundary (#271).
-				if err := a.toolSource.ClearToolCalls(conversationID); err != nil {
-					a.logger.Warn("failed to clear tool calls after archiving",
-						"conversation", conversationID,
-						"error", err,
-					)
-				}
-			}
-		}
-	}
-
-	// Now that tool calls are in the archive, link any that belong to
-	// previously-archived iterations (stored tool_call_ids on the iteration
-	// rows). This closes the gap where iterations are archived per-turn
-	// but tool calls are only archived at session compaction time.
-	if sessionID != "" {
-		if err := a.store.LinkPendingIterationToolCalls(sessionID); err != nil {
-			a.logger.Warn("failed to link tool calls to iterations",
-				"conversation", conversationID,
-				"error", err,
-			)
-		}
-	}
+	a.archiveToolCalls(conversationID, sessionID)
+	a.linkIterations(conversationID, sessionID)
 
 	a.logger.Info("conversation archived",
 		"conversation", conversationID,
 		"messages", len(messages),
-		"tool_calls", toolCallCount,
 		"reason", reason,
 	)
 	return nil
+}
+
+// archiveToolCalls copies tool calls from the working store to the archive.
+// Tool call unification happens in PR 2; for now we still copy.
+func (a *ArchiveAdapter) archiveToolCalls(conversationID, sessionID string) {
+	if a.toolSource == nil {
+		return
+	}
+
+	calls := a.toolSource.GetToolCalls(conversationID, 10000)
+	if len(calls) == 0 {
+		return
+	}
+
+	archivedCalls := make([]ArchivedToolCall, len(calls))
+	for i, tc := range calls {
+		archivedCalls[i] = ArchivedToolCall{
+			ID:             tc.ID,
+			ConversationID: tc.ConversationID,
+			SessionID:      sessionID,
+			ToolName:       tc.ToolName,
+			Arguments:      tc.Arguments,
+			Result:         tc.Result,
+			Error:          tc.Error,
+			StartedAt:      tc.StartedAt,
+			CompletedAt:    tc.CompletedAt,
+			DurationMs:     tc.DurationMs,
+		}
+	}
+
+	if err := a.store.ArchiveToolCalls(archivedCalls); err != nil {
+		a.logger.Error("failed to archive tool calls", "error", err)
+		return
+	}
+
+	// Clear archived tool calls from the working store so they
+	// aren't re-archived on the next session boundary (#271).
+	if err := a.toolSource.ClearToolCalls(conversationID); err != nil {
+		a.logger.Warn("failed to clear tool calls after archiving",
+			"conversation", conversationID,
+			"error", err,
+		)
+	}
+}
+
+// linkIterations links archived tool calls to their parent iterations.
+func (a *ArchiveAdapter) linkIterations(conversationID, sessionID string) {
+	if sessionID == "" {
+		return
+	}
+	if err := a.store.LinkPendingIterationToolCalls(sessionID); err != nil {
+		a.logger.Warn("failed to link tool calls to iterations",
+			"conversation", conversationID,
+			"error", err,
+		)
+	}
 }
 
 // StartSession begins a new session and returns its ID.
@@ -196,7 +242,7 @@ func (a *ArchiveAdapter) ActiveSessionID(conversationID string) string {
 }
 
 // OnMessage is a no-op retained for interface compatibility. Session
-// message counts are now computed from archive_messages rows.
+// message counts are now computed from the unified messages table.
 func (a *ArchiveAdapter) OnMessage(_ string) {}
 
 // EnsureSession starts a session if none is active for the conversation.

@@ -484,6 +484,15 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	}
 	defer archiveStore.Close()
 
+	// --- Unify message storage ---
+	// Merge archived messages from archive.db into the working thane.db so
+	// all messages live in a single table with lifecycle status. This is
+	// idempotent and safe to run on every startup. See issue #434.
+	if err := memory.MigrateUnifyMessages(mem.DB(), cfg.DataDir+"/archive.db", logger); err != nil {
+		return fmt.Errorf("unify messages migration: %w", err)
+	}
+	archiveStore.SetMessagesDB(mem.DB())
+
 	// --- Working memory ---
 	// Persists free-form experiential context per conversation. Shares
 	// the archive database so it participates in the same backup/lifecycle.
@@ -504,6 +513,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 
 	archiveAdapter := memory.NewArchiveAdapter(archiveStore, logger)
 	archiveAdapter.SetToolCallSource(mem)
+	archiveAdapter.SetMessageStore(mem)
 
 	// --- Talents ---
 	// Talents are markdown files that extend the system prompt with
