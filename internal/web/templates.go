@@ -205,10 +205,11 @@ func confidence(f float64) string {
 	return fmt.Sprintf("%.0f%%", f*100)
 }
 
-// shortID truncates an ID string to 8 characters for compact display.
+// shortID truncates an ID string to 8 runes for compact display.
 func shortID(id string) string {
-	if len(id) <= 8 {
+	runes := []rune(id)
+	if len(runes) <= 8 {
 		return id
 	}
-	return id[:8]
+	return string(runes[:8])
 }

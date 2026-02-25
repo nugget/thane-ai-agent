@@ -229,8 +229,14 @@ func buildSessionDetailView(sess *memory.Session) *sessionDetailView {
 		v.Duration = formatDuration(now.Sub(sess.StartedAt))
 	}
 
+	// Fall back to the top-level summary for older sessions that lack metadata.
+	if sess.Summary != "" {
+		v.Summary = sess.Summary
+	}
 	if sess.Metadata != nil {
-		v.Summary = sess.Metadata.Paragraph
+		if sess.Metadata.Paragraph != "" {
+			v.Summary = sess.Metadata.Paragraph
+		}
 		v.Detailed = sess.Metadata.Detailed
 		v.SessionType = sess.Metadata.SessionType
 		v.KeyDecisions = sess.Metadata.KeyDecisions

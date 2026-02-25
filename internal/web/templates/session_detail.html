@@ -48,7 +48,7 @@
             </dl>
         </div>
 
-        {{if or .Session.Summary .Session.KeyDecisions .Session.Participants .Session.Tags}}
+        {{if or .Session.Summary .Session.KeyDecisions .Session.Participants .Session.Tags .Session.FilesTouched}}
         <div class="card">
             <h2>Summary</h2>
             {{if .Session.Summary}}
@@ -171,6 +171,12 @@
                         <details>
                             <summary class="text-muted" style="font-size:0.8125rem;cursor:pointer">args</summary>
                             <pre class="mono" style="font-size:0.75rem;white-space:pre-wrap;max-height:200px;overflow:auto">{{.Arguments}}</pre>
+                        </details>
+                        {{end}}
+                        {{if .Result}}
+                        <details>
+                            <summary class="text-muted" style="font-size:0.8125rem;cursor:pointer">result</summary>
+                            <pre class="mono" style="font-size:0.75rem;white-space:pre-wrap;max-height:200px;overflow:auto">{{.Result}}</pre>
                         </details>
                         {{end}}
                         {{if .Error}}
