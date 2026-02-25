@@ -53,7 +53,10 @@
 {{range .Sessions}}
 <tr class="timeline-session-row" data-session-id="{{.ID}}" onclick="window.timeline.load('{{.ID}}')">
     <td>
-        <strong>{{if .Title}}{{truncate .Title 50}}{{else}}{{.ShortID}}{{end}}</strong>
+        <a href="/sessions/{{.ID}}" hx-get="/sessions/{{.ID}}" hx-target="#content" hx-push-url="true"
+           onclick="event.stopPropagation()" class="session-title-link">
+            <strong>{{if .Title}}{{truncate .Title 50}}{{else}}{{.ShortID}}{{end}}</strong>
+        </a>
         {{if .OneLiner}}<br><span class="text-muted" style="font-size:0.8125rem">{{truncate .OneLiner 60}}</span>{{end}}
     </td>
     <td class="mono">{{.ShortConvID}}</td>

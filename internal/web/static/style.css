@@ -308,6 +308,8 @@ main { max-width: 72rem; margin: 0 auto; padding: 1.5rem; }
     margin-bottom: 0.75rem;
 }
 .timeline-header h2 { margin: 0; }
+.timeline-header a { color: var(--teal); text-decoration: none; }
+.timeline-header a:hover { text-decoration: underline; }
 
 .timeline-track-wrap {
     overflow-x: auto;
@@ -439,6 +441,8 @@ main { max-width: 72rem; margin: 0 auto; padding: 1.5rem; }
 .timeline-session-row { cursor: pointer; }
 .timeline-session-row:hover td { background: rgba(255, 255, 255, 0.03); }
 .timeline-session-row.active td { background: var(--teal-dim); }
+.session-title-link { color: var(--teal); text-decoration: none; }
+.session-title-link:hover { text-decoration: underline; }
 
 /* Children indicator */
 .timeline-children {
