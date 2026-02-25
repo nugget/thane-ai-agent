@@ -326,7 +326,7 @@
 
     // Link to full session detail.
     var link = el("a", "text-muted");
-    link.href = "/sessions/" + activeSessionID;
+    link.href = "/sessions/" + encodeURIComponent(activeSessionID);
     link.textContent = "View full session detail \u2192";
     link.style.display = "block";
     link.style.marginTop = "0.5rem";
@@ -367,7 +367,7 @@
     empty.style.display = "";
     document.getElementById("timeline-track").style.display = "none";
 
-    fetch("/sessions/" + sessionID + "/timeline.json")
+    fetch("/sessions/" + encodeURIComponent(sessionID) + "/timeline.json")
       .then(function (resp) {
         if (!resp.ok) throw new Error("HTTP " + resp.status);
         return resp.json();

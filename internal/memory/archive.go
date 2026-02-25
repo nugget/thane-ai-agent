@@ -325,10 +325,58 @@ func (s *ArchiveStore) countSessionMessages(sessionID string) int {
 }
 
 // populateMessageCounts fills the MessageCount field on a slice of sessions
-// by querying the appropriate messages table.
+// using a single grouped query to avoid the N+1 query pattern.
 func (s *ArchiveStore) populateMessageCounts(sessions []*Session) {
+	if len(sessions) == 0 {
+		return
+	}
+
+	ids := make([]string, 0, len(sessions))
 	for _, sess := range sessions {
-		sess.MessageCount = s.countSessionMessages(sess.ID)
+		if sess != nil {
+			ids = append(ids, sess.ID)
+		}
+	}
+	if len(ids) == 0 {
+		return
+	}
+
+	placeholders := make([]string, len(ids))
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+
+	query := fmt.Sprintf(
+		`SELECT session_id, COUNT(*) FROM %s WHERE session_id IN (%s) GROUP BY session_id`,
+		s.msgTable(),
+		strings.Join(placeholders, ","),
+	)
+
+	rows, err := s.msgDB().Query(query, args...)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	counts := make(map[string]int, len(ids))
+	for rows.Next() {
+		var sessionID string
+		var count int
+		if err := rows.Scan(&sessionID, &count); err != nil {
+			return
+		}
+		counts[sessionID] = count
+	}
+
+	for _, sess := range sessions {
+		if sess == nil {
+			continue
+		}
+		if c, ok := counts[sess.ID]; ok {
+			sess.MessageCount = c
+		}
 	}
 }
 
@@ -1395,10 +1443,12 @@ func (s *ArchiveStore) UnsummarizedSessions(limit int) ([]*Session, error) {
 		return nil, err
 	}
 
+	// Batch-fetch message counts for all candidates in one query.
+	s.populateMessageCounts(candidates)
+
 	// Filter to sessions with at least one message and apply limit.
 	var sessions []*Session
 	for _, sess := range candidates {
-		sess.MessageCount = s.countSessionMessages(sess.ID)
 		if sess.MessageCount > 0 {
 			sessions = append(sessions, sess)
 			if len(sessions) >= limit {

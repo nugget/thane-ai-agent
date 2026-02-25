@@ -48,6 +48,7 @@ func NewArchiveAdapter(store *ArchiveStore, logger *slog.Logger) *ArchiveAdapter
 }
 
 // SetToolCallSource configures a source for tool call records to archive.
+// Must be called during initialization before any concurrent access.
 func (a *ArchiveAdapter) SetToolCallSource(source ToolCallSource) {
 	a.toolSource = source
 }
@@ -55,6 +56,7 @@ func (a *ArchiveAdapter) SetToolCallSource(source ToolCallSource) {
 // SetMessageStore configures the unified message store for status-based
 // archival. When set, ArchiveConversation uses UPDATE (status='archived')
 // instead of cross-DB INSERT.
+// Must be called during initialization before any concurrent access.
 func (a *ArchiveAdapter) SetMessageStore(store MessageArchiver) {
 	a.msgStore = store
 }

@@ -52,7 +52,7 @@ func addLifecycleColumns(db *sql.DB, logger *slog.Logger) error {
 		sql  string
 	}{
 		{"session_id", "ALTER TABLE messages ADD COLUMN session_id TEXT"},
-		{"status", "ALTER TABLE messages ADD COLUMN status TEXT DEFAULT 'active'"},
+		{"status", "ALTER TABLE messages ADD COLUMN status TEXT DEFAULT 'active' CHECK (status IN ('active', 'compacted', 'archived'))"},
 		{"archived_at", "ALTER TABLE messages ADD COLUMN archived_at TIMESTAMP"},
 		{"archive_reason", "ALTER TABLE messages ADD COLUMN archive_reason TEXT"},
 		{"iteration_index", "ALTER TABLE messages ADD COLUMN iteration_index INTEGER"},
@@ -239,8 +239,27 @@ func rebuildUnifiedFTS(db *sql.DB, logger *slog.Logger) error {
 }
 
 // hasColumn checks whether a column exists on the given table.
+// Both table and column must be valid SQL identifiers (alphanumeric + underscore).
 func hasColumn(db *sql.DB, table, column string) bool {
+	if !isValidIdentifier(table) || !isValidIdentifier(column) {
+		return false
+	}
 	// Use a lightweight SELECT to probe for the column.
 	_, err := db.Exec("SELECT " + column + " FROM " + table + " LIMIT 0")
 	return err == nil
+}
+
+// isValidIdentifier returns true if s is a safe SQL identifier
+// (non-empty, only ASCII letters, digits, and underscores).
+func isValidIdentifier(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, c := range s {
+		isAlpha := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+		if !isAlpha && c != '_' && (c < '0' || c > '9') {
+			return false
+		}
+	}
+	return true
 }
