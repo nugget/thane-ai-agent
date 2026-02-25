@@ -15,6 +15,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/anticipation"
 	"github.com/nugget/thane-ai-agent/internal/contacts"
 	"github.com/nugget/thane-ai-agent/internal/facts"
+	"github.com/nugget/thane-ai-agent/internal/memory"
 	"github.com/nugget/thane-ai-agent/internal/router"
 	"github.com/nugget/thane-ai-agent/internal/scheduler"
 )
@@ -81,6 +82,14 @@ type AnticipationStore interface {
 	Get(id string) (*anticipation.Anticipation, error)
 }
 
+// SessionStore is the subset of memory.ArchiveStore used by the session inspector.
+type SessionStore interface {
+	ListSessions(conversationID string, limit int) ([]*memory.Session, error)
+	GetSession(sessionID string) (*memory.Session, error)
+	GetSessionTranscript(sessionID string) ([]memory.ArchivedMessage, error)
+	GetSessionToolCalls(sessionID string) ([]memory.ArchivedToolCall, error)
+}
+
 // Config holds the dependencies needed to construct a WebServer.
 type Config struct {
 	BrandName         string // Display name in the nav bar. Defaults to "Thane".
@@ -91,6 +100,7 @@ type Config struct {
 	FactStore         FactStore
 	TaskStore         TaskStore
 	AnticipationStore AnticipationStore
+	SessionStore      SessionStore
 	Logger            *slog.Logger
 }
 
@@ -104,6 +114,7 @@ type WebServer struct {
 	factStore         FactStore
 	taskStore         TaskStore
 	anticipationStore AnticipationStore
+	sessionStore      SessionStore
 	templates         map[string]*template.Template
 	logger            *slog.Logger
 }
@@ -128,6 +139,7 @@ func NewWebServer(cfg Config) *WebServer {
 		factStore:         cfg.FactStore,
 		taskStore:         cfg.TaskStore,
 		anticipationStore: cfg.AnticipationStore,
+		sessionStore:      cfg.SessionStore,
 		logger:            logger,
 	}
 	s.templates = loadTemplates()
@@ -149,6 +161,10 @@ func (s *WebServer) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /tasks", s.handleTasks)
 	mux.HandleFunc("GET /tasks/{id}", s.handleTaskDetail)
 	mux.HandleFunc("GET /anticipations", s.handleAnticipations)
+
+	// Session inspector
+	mux.HandleFunc("GET /sessions", s.handleSessions)
+	mux.HandleFunc("GET /sessions/{id}", s.handleSessionDetail)
 
 	// Chat UI (rendered through the shared layout template)
 	mux.HandleFunc("GET /chat", s.handleChat)

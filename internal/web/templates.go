@@ -25,6 +25,7 @@ var templateFuncs = template.FuncMap{
 	"joinStrings":    joinStrings,
 	"confidence":     confidence,
 	"lower":          strings.ToLower,
+	"shortID":        shortID,
 }
 
 // loadTemplates parses the layout and each page template. Each page
@@ -44,6 +45,8 @@ func loadTemplates() map[string]*template.Template {
 		"tasks.html",
 		"task_detail.html",
 		"anticipations.html",
+		"sessions.html",
+		"session_detail.html",
 	}
 	result := make(map[string]*template.Template, len(pages))
 
@@ -200,4 +203,13 @@ func confidence(f float64) string {
 		return "—"
 	}
 	return fmt.Sprintf("%.0f%%", f*100)
+}
+
+// shortID truncates an ID string to 8 runes for compact display.
+func shortID(id string) string {
+	runes := []rune(id)
+	if len(runes) <= 8 {
+		return id
+	}
+	return string(runes[:8])
 }

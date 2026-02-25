@@ -1,0 +1,194 @@
+{{define "title"}}{{.BrandName}} - Session: {{if .Session.Title}}{{.Session.Title}}{{else}}{{.Session.ShortID}}{{end}}{{end}}
+
+{{define "content"}}
+<div class="browser">
+    <div class="detail-header">
+        <a href="/sessions" class="detail-back" hx-get="/sessions" hx-target="#content" hx-push-url="true">&larr; Sessions</a>
+        <h1>{{if .Session.Title}}{{.Session.Title}}{{else}}Session {{.Session.ShortID}}{{end}}</h1>
+        {{if eq .Session.Status "active"}}<span class="badge badge-teal">active</span>
+        {{else}}<span class="badge badge-ok">completed</span>
+        {{end}}
+    </div>
+
+    <div class="detail-grid">
+        <div class="card">
+            <h2>Session Info</h2>
+            <dl class="stat-list">
+                <dt>Session ID</dt>
+                <dd class="mono">{{.Session.ID}}</dd>
+                <dt>Conversation</dt>
+                <dd class="mono">
+                    <a href="/sessions?conversation_id={{.Session.ConversationID}}"
+                       hx-get="/sessions?conversation_id={{.Session.ConversationID}}"
+                       hx-target="#content" hx-push-url="true">{{.Session.ConversationID}}</a>
+                </dd>
+                {{if .Session.SessionType}}
+                <dt>Type</dt>
+                <dd>{{.Session.SessionType}}</dd>
+                {{end}}
+                <dt>Status</dt>
+                <dd>
+                    {{if eq .Session.Status "active"}}<span class="badge badge-teal">active</span>
+                    {{else}}<span class="badge badge-ok">completed</span>
+                    {{end}}
+                    {{if .Session.EndReason}} <span class="text-muted">({{.Session.EndReason}})</span>{{end}}
+                </dd>
+                <dt>Started</dt>
+                <dd>{{.Session.StartedAt}}</dd>
+                <dt>Ended</dt>
+                <dd>{{.Session.EndedAt}}</dd>
+                <dt>Duration</dt>
+                <dd>{{.Session.Duration}}</dd>
+                <dt>Messages</dt>
+                <dd>{{.Session.MessageCount}}</dd>
+                {{if .Session.Models}}
+                <dt>Models</dt>
+                <dd>{{joinStrings .Session.Models ", "}}</dd>
+                {{end}}
+            </dl>
+        </div>
+
+        {{if or .Session.Summary .Session.KeyDecisions .Session.Participants .Session.Tags .Session.FilesTouched}}
+        <div class="card">
+            <h2>Summary</h2>
+            {{if .Session.Summary}}
+            <p>{{.Session.Summary}}</p>
+            {{end}}
+            {{if .Session.KeyDecisions}}
+            <h3>Key Decisions</h3>
+            <ul>
+                {{range .Session.KeyDecisions}}
+                <li>{{.}}</li>
+                {{end}}
+            </ul>
+            {{end}}
+            {{if .Session.Participants}}
+            <h3>Participants</h3>
+            <p>{{joinStrings .Session.Participants ", "}}</p>
+            {{end}}
+            {{if .Session.Tags}}
+            <h3>Tags</h3>
+            <div>
+                {{range .Session.Tags}}
+                <span class="badge badge-muted">{{.}}</span>
+                {{end}}
+            </div>
+            {{end}}
+            {{if .Session.FilesTouched}}
+            <h3>Files Touched</h3>
+            <ul class="mono" style="font-size:0.8125rem">
+                {{range .Session.FilesTouched}}
+                <li>{{.}}</li>
+                {{end}}
+            </ul>
+            {{end}}
+        </div>
+        {{end}}
+    </div>
+
+    {{if .ToolSummary}}
+    <div class="card">
+        <h2>Tool Usage</h2>
+        <div class="table-scroll">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Tool</th>
+                        <th>Calls</th>
+                    </tr>
+                </thead>
+                <tbody>
+                {{range .ToolSummary}}
+                <tr>
+                    <td class="mono">{{.Name}}</td>
+                    <td>{{.Count}}</td>
+                </tr>
+                {{end}}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {{end}}
+
+    {{if .Messages}}
+    <div class="card">
+        <h2>Transcript</h2>
+        <ul class="transcript">
+            {{range .Messages}}
+            <li class="transcript-msg" data-role="{{.Role}}">
+                <div class="transcript-meta">
+                    {{if eq .Role "user"}}<span class="badge badge-teal">user</span>
+                    {{else if eq .Role "assistant"}}<span class="badge badge-ok">assistant</span>
+                    {{else if eq .Role "system"}}<span class="badge badge-muted">system</span>
+                    {{else if eq .Role "tool"}}<span class="badge badge-warn">tool</span>
+                    {{else}}<span class="badge badge-muted">{{.Role}}</span>
+                    {{end}}
+                    <span class="text-muted mono">{{.Timestamp}}</span>
+                    {{if .TokenCount}}<span class="text-muted">{{.TokenCount}} tokens</span>{{end}}
+                    {{if .ToolCallID}}<span class="text-muted mono">{{shortID .ToolCallID}}</span>{{end}}
+                </div>
+                {{if .Long}}
+                <details class="transcript-content">
+                    <summary>{{truncate .Content 120}}</summary>
+                    <pre>{{.Content}}</pre>
+                </details>
+                {{else}}
+                <div class="transcript-content">{{.Content}}</div>
+                {{end}}
+            </li>
+            {{end}}
+        </ul>
+    </div>
+    {{end}}
+
+    {{if .ToolCalls}}
+    <div class="card">
+        <h2>Tool Calls</h2>
+        <div class="table-scroll">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Tool</th>
+                        <th>Time</th>
+                        <th>Duration</th>
+                        <th>Status</th>
+                        <th>Details</th>
+                    </tr>
+                </thead>
+                <tbody>
+                {{range .ToolCalls}}
+                <tr>
+                    <td class="mono">{{.ToolName}}</td>
+                    <td class="text-muted mono">{{.StartedAt}}</td>
+                    <td class="text-muted">{{if .DurationMs}}{{.DurationMs}}ms{{else}}—{{end}}</td>
+                    <td>
+                        {{if .HasError}}<span class="badge badge-err">error</span>
+                        {{else}}<span class="badge badge-ok">ok</span>
+                        {{end}}
+                    </td>
+                    <td>
+                        {{if .Arguments}}
+                        <details>
+                            <summary class="text-muted" style="font-size:0.8125rem;cursor:pointer">args</summary>
+                            <pre class="mono" style="font-size:0.75rem;white-space:pre-wrap;max-height:200px;overflow:auto">{{.Arguments}}</pre>
+                        </details>
+                        {{end}}
+                        {{if .Result}}
+                        <details>
+                            <summary class="text-muted" style="font-size:0.8125rem;cursor:pointer">result</summary>
+                            <pre class="mono" style="font-size:0.75rem;white-space:pre-wrap;max-height:200px;overflow:auto">{{.Result}}</pre>
+                        </details>
+                        {{end}}
+                        {{if .Error}}
+                        <pre class="mono" style="font-size:0.75rem;color:var(--red)">{{truncate .Error 200}}</pre>
+                        {{end}}
+                    </td>
+                </tr>
+                {{end}}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {{end}}
+</div>
+{{end}}
