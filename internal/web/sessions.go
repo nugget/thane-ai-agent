@@ -1,6 +1,7 @@
 package web
 
 import (
+	"encoding/json"
 	"net/http"
 	"sort"
 	"time"
@@ -50,6 +51,7 @@ type iterationRow struct {
 	OutputTokens int
 	ToolCalls    []*toolCallRow
 	ToolCount    int
+	ToolsOffered []string
 	StartedAt    string
 	DurationMs   int64
 	HasToolCalls bool
@@ -167,6 +169,13 @@ func (s *WebServer) handleSessionDetail(w http.ResponseWriter, r *http.Request) 
 		s.logger.Error("session transcript failed", "id", id, "error", err)
 	}
 
+	// For active sessions with no archived messages, fall back to live
+	// working memory so the dashboard can show the current transcript.
+	var liveRows []*messageRow
+	if len(messages) == 0 && sess.EndedAt == nil && s.liveMessages != nil {
+		liveRows = liveMessagesToRows(s.liveMessages.GetMessages(sess.ConversationID))
+	}
+
 	toolCalls, err := s.sessionStore.GetSessionToolCalls(id)
 	if err != nil {
 		s.logger.Error("session tool calls failed", "id", id, "error", err)
@@ -201,7 +210,7 @@ func (s *WebServer) handleSessionDetail(w http.ResponseWriter, r *http.Request) 
 			ActiveNav: "sessions",
 		},
 		Session:               detail,
-		Messages:              messagesToRows(messages),
+		Messages:              messageRowsWithFallback(messagesToRows(messages), liveRows),
 		ToolCalls:             toolCallsToRows(toolCalls),
 		Iterations:            iterRows,
 		UnattributedToolCalls: unattributed,
@@ -307,6 +316,29 @@ func messagesToRows(messages []memory.ArchivedMessage) []*messageRow {
 	return rows
 }
 
+// liveMessagesToRows converts live working-memory messages to display rows.
+func liveMessagesToRows(messages []memory.Message) []*messageRow {
+	rows := make([]*messageRow, 0, len(messages))
+	for _, m := range messages {
+		rows = append(rows, &messageRow{
+			Role:       m.Role,
+			Content:    m.Content,
+			Timestamp:  m.Timestamp.Format("15:04:05"),
+			ToolCallID: m.ToolCallID,
+			Long:       len(m.Content) > 500,
+		})
+	}
+	return rows
+}
+
+// messageRowsWithFallback returns archived rows if non-empty, otherwise live rows.
+func messageRowsWithFallback(archived, live []*messageRow) []*messageRow {
+	if len(archived) > 0 {
+		return archived
+	}
+	return live
+}
+
 func toolCallsToRows(calls []memory.ArchivedToolCall) []*toolCallRow {
 	rows := make([]*toolCallRow, 0, len(calls))
 	for _, c := range calls {
@@ -364,16 +396,22 @@ func buildIterationRows(iterations []memory.ArchivedIteration, toolCalls []memor
 
 	rows := make([]*iterationRow, 0, len(iterations))
 	for _, iter := range iterations {
+		matched := byIter[iter.IterationIndex]
+		toolCount := len(matched)
+		if toolCount == 0 {
+			toolCount = iter.ToolCallCount // fallback to stored count
+		}
 		rows = append(rows, &iterationRow{
 			Index:        iter.IterationIndex,
 			Model:        iter.Model,
 			InputTokens:  iter.InputTokens,
 			OutputTokens: iter.OutputTokens,
-			ToolCalls:    byIter[iter.IterationIndex],
-			ToolCount:    iter.ToolCallCount,
+			ToolCalls:    matched,
+			ToolCount:    toolCount,
+			ToolsOffered: iter.ToolsOffered,
 			StartedAt:    iter.StartedAt.Format("15:04:05"),
 			DurationMs:   iter.DurationMs,
-			HasToolCalls: iter.HasToolCalls,
+			HasToolCalls: len(matched) > 0,
 			BreakReason:  iter.BreakReason,
 		})
 	}
@@ -386,4 +424,173 @@ func sessionStatus(sess *memory.Session) string {
 		return "active"
 	}
 	return "completed"
+}
+
+// timelineResponse is the JSON API response for a session's timeline data.
+type timelineResponse struct {
+	Session    timelineSession     `json:"session"`
+	Iterations []timelineIteration `json:"iterations"`
+	Children   []timelineChild     `json:"children"`
+}
+
+// timelineSession is a compact session summary for the timeline API.
+type timelineSession struct {
+	ID        string `json:"id"`
+	Title     string `json:"title"`
+	Status    string `json:"status"`
+	StartedAt string `json:"started_at"`
+	Duration  string `json:"duration"`
+}
+
+// timelineIteration is a single iteration for the timeline API.
+type timelineIteration struct {
+	Index         int                `json:"index"`
+	Model         string             `json:"model"`
+	InputTokens   int                `json:"input_tokens"`
+	OutputTokens  int                `json:"output_tokens"`
+	DurationMs    int64              `json:"duration_ms"`
+	HasToolCalls  bool               `json:"has_tool_calls"`
+	ToolCallCount int                `json:"tool_call_count"`
+	ToolsOffered  []string           `json:"tools_offered,omitempty"`
+	BreakReason   string             `json:"break_reason,omitempty"`
+	ToolCalls     []timelineToolCall `json:"tool_calls,omitempty"`
+}
+
+// timelineToolCall is a compact tool call for the timeline API.
+type timelineToolCall struct {
+	Name       string `json:"name"`
+	DurationMs int64  `json:"duration_ms"`
+	HasError   bool   `json:"has_error"`
+}
+
+// timelineChild is a compact child session reference for the timeline API.
+type timelineChild struct {
+	ID     string `json:"id"`
+	Title  string `json:"title"`
+	Status string `json:"status"`
+}
+
+// handleTimelineAPI returns JSON timeline data for a single session.
+func (s *WebServer) handleTimelineAPI(w http.ResponseWriter, r *http.Request) {
+	if s.sessionStore == nil {
+		http.Error(w, "session store not configured", http.StatusServiceUnavailable)
+		return
+	}
+
+	id := r.PathValue("id")
+	sess, err := s.sessionStore.GetSession(id)
+	if err != nil {
+		s.logger.Error("timeline API session failed", "id", id, "error", err)
+		http.Error(w, "load failed", http.StatusInternalServerError)
+		return
+	}
+	if sess == nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	iterations, err := s.sessionStore.GetSessionIterations(id)
+	if err != nil {
+		s.logger.Error("timeline API iterations failed", "id", id, "error", err)
+		http.Error(w, "iterations failed", http.StatusInternalServerError)
+		return
+	}
+
+	toolCalls, err := s.sessionStore.GetSessionToolCalls(id)
+	if err != nil {
+		s.logger.Error("timeline API tool calls failed", "id", id, "error", err)
+		// Non-fatal: continue without tool calls.
+	}
+
+	children, err := s.sessionStore.ListChildSessions(id)
+	if err != nil {
+		s.logger.Error("timeline API children failed", "id", id, "error", err)
+		// Non-fatal: continue without children.
+	}
+
+	resp := buildTimelineResponse(sess, iterations, toolCalls, children)
+
+	w.Header().Set("Content-Type", "application/json")
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		s.logger.Error("timeline API encode failed", "id", id, "error", err)
+	}
+}
+
+// buildTimelineResponse assembles the JSON timeline payload from raw data.
+func buildTimelineResponse(
+	sess *memory.Session,
+	iterations []memory.ArchivedIteration,
+	toolCalls []memory.ArchivedToolCall,
+	children []*memory.Session,
+) timelineResponse {
+	now := time.Now()
+
+	// Session summary.
+	title := sess.Title
+	if title == "" && sess.Metadata != nil {
+		title = sess.Metadata.OneLiner
+	}
+	duration := ""
+	if sess.EndedAt != nil {
+		duration = formatDuration(sess.EndedAt.Sub(sess.StartedAt))
+	} else {
+		duration = formatDuration(now.Sub(sess.StartedAt))
+	}
+
+	resp := timelineResponse{
+		Session: timelineSession{
+			ID:        sess.ID,
+			Title:     title,
+			Status:    sessionStatus(sess),
+			StartedAt: formatTime(sess.StartedAt),
+			Duration:  duration,
+		},
+	}
+
+	// Index tool calls by iteration.
+	byIter := make(map[int][]timelineToolCall)
+	for _, tc := range toolCalls {
+		entry := timelineToolCall{
+			Name:       tc.ToolName,
+			DurationMs: tc.DurationMs,
+			HasError:   tc.Error != "",
+		}
+		if tc.IterationIndex != nil {
+			byIter[*tc.IterationIndex] = append(byIter[*tc.IterationIndex], entry)
+		}
+	}
+
+	// Build iteration list.
+	resp.Iterations = make([]timelineIteration, 0, len(iterations))
+	for _, iter := range iterations {
+		matched := byIter[iter.IterationIndex]
+		resp.Iterations = append(resp.Iterations, timelineIteration{
+			Index:         iter.IterationIndex,
+			Model:         iter.Model,
+			InputTokens:   iter.InputTokens,
+			OutputTokens:  iter.OutputTokens,
+			DurationMs:    iter.DurationMs,
+			HasToolCalls:  len(matched) > 0,
+			BreakReason:   iter.BreakReason,
+			ToolCalls:     matched,
+			ToolCallCount: iter.ToolCallCount,
+			ToolsOffered:  iter.ToolsOffered,
+		})
+	}
+
+	// Build children list.
+	resp.Children = make([]timelineChild, 0, len(children))
+	for _, child := range children {
+		childTitle := child.Title
+		if childTitle == "" && child.Metadata != nil {
+			childTitle = child.Metadata.OneLiner
+		}
+		resp.Children = append(resp.Children, timelineChild{
+			ID:     child.ID,
+			Title:  childTitle,
+			Status: sessionStatus(child),
+		})
+	}
+
+	return resp
 }

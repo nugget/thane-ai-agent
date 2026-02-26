@@ -26,6 +26,14 @@ type ArchiveStore struct {
 	db     *sql.DB
 	logger *slog.Logger
 
+	// Message storage routing. In unified mode (messagesDB != nil), message
+	// queries go to the working DB against the "messages" table. In legacy
+	// mode (messagesDB == nil), they go to archive.db's "archive_messages".
+	// Set once at construction time — never changes.
+	messagesDB   *sql.DB
+	msgTableName string // "messages" or "archive_messages"
+	msgFTSName   string // "messages_fts" or "archive_fts"
+
 	// Whether FTS5 is available
 	ftsEnabled bool
 
@@ -160,6 +168,7 @@ type ArchivedIteration struct {
 	OutputTokens   int       `json:"output_tokens"`
 	ToolCallCount  int       `json:"tool_call_count"`
 	ToolCallIDs    []string  `json:"tool_call_ids,omitempty"`
+	ToolsOffered   []string  `json:"tools_offered,omitempty"`
 	StartedAt      time.Time `json:"started_at"`
 	DurationMs     int64     `json:"duration_ms"`
 	HasToolCalls   bool      `json:"has_tool_calls"`
@@ -189,7 +198,11 @@ type SearchOptions struct {
 // NewArchiveStore creates a new archive store at the given database path.
 // Pass nil for cfg to use DefaultArchiveConfig().
 // Pass nil for logger to suppress startup logging.
-func NewArchiveStore(dbPath string, cfg *ArchiveConfig, logger *slog.Logger) (*ArchiveStore, error) {
+//
+// When messagesDB is non-nil (unified mode), message queries use that
+// connection against the "messages" table. When nil (legacy mode), message
+// queries use the archive database's "archive_messages" table.
+func NewArchiveStore(dbPath string, messagesDB *sql.DB, cfg *ArchiveConfig, logger *slog.Logger) (*ArchiveStore, error) {
 	if cfg == nil {
 		defaults := DefaultArchiveConfig()
 		cfg = &defaults
@@ -203,9 +216,19 @@ func NewArchiveStore(dbPath string, cfg *ArchiveConfig, logger *slog.Logger) (*A
 	s := &ArchiveStore{
 		db:                      db,
 		logger:                  logger,
+		messagesDB:              messagesDB,
 		defaultSilenceThreshold: cfg.SilenceThreshold,
 		defaultMaxMessages:      cfg.MaxContextMessages,
 		defaultMaxDuration:      cfg.MaxContextDuration,
+	}
+
+	// Set message routing based on mode.
+	if messagesDB != nil {
+		s.msgTableName = "messages"
+		s.msgFTSName = "messages_fts"
+	} else {
+		s.msgTableName = "archive_messages"
+		s.msgFTSName = "archive_fts"
 	}
 
 	if err := s.migrate(); err != nil {
@@ -224,6 +247,7 @@ func NewArchiveStore(dbPath string, cfg *ArchiveConfig, logger *slog.Logger) (*A
 			logger.Info("session archive initialized",
 				"path", dbPath,
 				"fts5", true,
+				"unified", messagesDB != nil,
 				"silence_threshold", cfg.SilenceThreshold.String(),
 				"max_context_messages", cfg.MaxContextMessages,
 				"max_context_duration", cfg.MaxContextDuration.String(),
@@ -233,6 +257,7 @@ func NewArchiveStore(dbPath string, cfg *ArchiveConfig, logger *slog.Logger) (*A
 				"Rebuild SQLite with FTS5 enabled for full-text search capability.",
 				"path", dbPath,
 				"fts5", false,
+				"unified", messagesDB != nil,
 				"silence_threshold", cfg.SilenceThreshold.String(),
 				"max_context_messages", cfg.MaxContextMessages,
 				"max_context_duration", cfg.MaxContextDuration.String(),
@@ -258,6 +283,96 @@ func (s *ArchiveStore) DB() *sql.DB {
 // Close closes the underlying database connection.
 func (s *ArchiveStore) Close() error {
 	return s.db.Close()
+}
+
+// msgDB returns the database connection to use for message queries.
+func (s *ArchiveStore) msgDB() *sql.DB {
+	if s.messagesDB != nil {
+		return s.messagesDB
+	}
+	return s.db
+}
+
+// msgSelectCols returns the SELECT column list for message queries.
+// In unified mode, archived_at and archive_reason may be NULL for active
+// messages, so COALESCE is used for safe scanning.
+func (s *ArchiveStore) msgSelectCols() string {
+	if s.messagesDB != nil {
+		return `id, conversation_id, COALESCE(session_id, '') as session_id,
+			role, content, timestamp, token_count, tool_calls, tool_call_id,
+			COALESCE(archived_at, '') as archived_at,
+			COALESCE(archive_reason, '') as archive_reason`
+	}
+	return `id, conversation_id, session_id, role, content, timestamp,
+		token_count, tool_calls, tool_call_id, archived_at, archive_reason`
+}
+
+// countSessionMessages returns the message count for a session from the
+// appropriate messages table. Used to populate MessageCount on Session
+// structs without a correlated subquery that would fail across databases.
+func (s *ArchiveStore) countSessionMessages(sessionID string) int {
+	var count int
+	_ = s.msgDB().QueryRow(
+		fmt.Sprintf(`SELECT COUNT(*) FROM %s WHERE session_id = ?`, s.msgTableName),
+		sessionID,
+	).Scan(&count)
+	return count
+}
+
+// populateMessageCounts fills the MessageCount field on a slice of sessions
+// using a single grouped query to avoid the N+1 query pattern.
+func (s *ArchiveStore) populateMessageCounts(sessions []*Session) {
+	if len(sessions) == 0 {
+		return
+	}
+
+	ids := make([]string, 0, len(sessions))
+	for _, sess := range sessions {
+		if sess != nil {
+			ids = append(ids, sess.ID)
+		}
+	}
+	if len(ids) == 0 {
+		return
+	}
+
+	placeholders := make([]string, len(ids))
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+
+	query := fmt.Sprintf(
+		`SELECT session_id, COUNT(*) FROM %s WHERE session_id IN (%s) GROUP BY session_id`,
+		s.msgTableName,
+		strings.Join(placeholders, ","),
+	)
+
+	rows, err := s.msgDB().Query(query, args...)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	counts := make(map[string]int, len(ids))
+	for rows.Next() {
+		var sessionID string
+		var count int
+		if err := rows.Scan(&sessionID, &count); err != nil {
+			return
+		}
+		counts[sessionID] = count
+	}
+
+	for _, sess := range sessions {
+		if sess == nil {
+			continue
+		}
+		if c, ok := counts[sess.ID]; ok {
+			sess.MessageCount = c
+		}
+	}
 }
 
 func (s *ArchiveStore) migrate() error {
@@ -317,6 +432,7 @@ func (s *ArchiveStore) migrate() error {
 			output_tokens INTEGER NOT NULL DEFAULT 0,
 			tool_call_count INTEGER NOT NULL DEFAULT 0,
 			tool_call_ids TEXT,
+			tools_offered TEXT,
 			started_at TIMESTAMP NOT NULL,
 			duration_ms INTEGER NOT NULL DEFAULT 0,
 			has_tool_calls BOOLEAN NOT NULL DEFAULT FALSE,
@@ -412,6 +528,7 @@ func (s *ArchiveStore) migrateSchema() {
 			output_tokens INTEGER NOT NULL DEFAULT 0,
 			tool_call_count INTEGER NOT NULL DEFAULT 0,
 			tool_call_ids TEXT,
+			tools_offered TEXT,
 			started_at TIMESTAMP NOT NULL,
 			duration_ms INTEGER NOT NULL DEFAULT 0,
 			has_tool_calls BOOLEAN NOT NULL DEFAULT FALSE,
@@ -426,24 +543,40 @@ func (s *ArchiveStore) migrateSchema() {
 	if err != nil {
 		_, _ = s.db.Exec("ALTER TABLE archive_iterations ADD COLUMN tool_call_ids TEXT")
 	}
+
+	// Add tools_offered column for existing archive_iterations tables.
+	_, err = s.db.Exec("SELECT tools_offered FROM archive_iterations LIMIT 0")
+	if err != nil {
+		_, _ = s.db.Exec("ALTER TABLE archive_iterations ADD COLUMN tools_offered TEXT")
+	}
 }
 
 // tryEnableFTS attempts to create the FTS5 virtual table.
 // Returns true if FTS5 is available, false otherwise.
 func (s *ArchiveStore) tryEnableFTS() bool {
-	_, err := s.db.Exec(`
-		CREATE VIRTUAL TABLE IF NOT EXISTS archive_fts USING fts5(
+	ftsTable := s.msgFTSName
+	contentTable := s.msgTableName
+	db := s.msgDB()
+
+	_, err := db.Exec(fmt.Sprintf(`
+		CREATE VIRTUAL TABLE IF NOT EXISTS %s USING fts5(
 			content,
-			content=archive_messages,
+			content=%s,
 			content_rowid=rowid
-		);
-	`)
+		)
+	`, ftsTable, contentTable))
 	return err == nil
 }
 
 // ArchiveMessages copies messages to the immutable archive.
 // This is the core "never throw data away" operation.
+//
+// In unified mode (messagesDB set), this is a no-op — messages already live
+// in the unified table and are archived via status UPDATE by SQLiteStore.
 func (s *ArchiveStore) ArchiveMessages(messages []ArchivedMessage) error {
+	if s.messagesDB != nil {
+		return nil // Unified mode: archival is a status UPDATE, not a cross-DB copy.
+	}
 	if len(messages) == 0 {
 		return nil
 	}
@@ -648,8 +781,8 @@ func (s *ArchiveStore) ArchiveIterations(iterations []ArchivedIteration) error {
 	stmt, err := tx.Prepare(`
 		INSERT OR REPLACE INTO archive_iterations
 			(session_id, iteration_index, model, input_tokens, output_tokens,
-			 tool_call_count, tool_call_ids, started_at, duration_ms, has_tool_calls, break_reason)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			 tool_call_count, tool_call_ids, tools_offered, started_at, duration_ms, has_tool_calls, break_reason)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`)
 	if err != nil {
 		return fmt.Errorf("prepare: %w", err)
@@ -665,10 +798,16 @@ func (s *ArchiveStore) ArchiveIterations(iterations []ArchivedIteration) error {
 			toolCallIDsJSON = string(b)
 		}
 
+		var toolsOfferedJSON any
+		if len(iterations[i].ToolsOffered) > 0 {
+			b, _ := json.Marshal(iterations[i].ToolsOffered)
+			toolsOfferedJSON = string(b)
+		}
+
 		_, err := stmt.Exec(
 			iterations[i].SessionID, iterations[i].IterationIndex, iterations[i].Model,
 			iterations[i].InputTokens, iterations[i].OutputTokens, iterations[i].ToolCallCount,
-			toolCallIDsJSON,
+			toolCallIDsJSON, toolsOfferedJSON,
 			iterations[i].StartedAt.Format(time.RFC3339Nano), iterations[i].DurationMs,
 			iterations[i].HasToolCalls, nullString(iterations[i].BreakReason),
 		)
@@ -685,7 +824,8 @@ func (s *ArchiveStore) ArchiveIterations(iterations []ArchivedIteration) error {
 func (s *ArchiveStore) GetSessionIterations(sessionID string) ([]ArchivedIteration, error) {
 	rows, err := s.db.Query(`
 		SELECT session_id, iteration_index, model, input_tokens, output_tokens,
-		       tool_call_count, tool_call_ids, started_at, duration_ms, has_tool_calls, break_reason
+		       tool_call_count, tool_call_ids, tools_offered,
+		       started_at, duration_ms, has_tool_calls, break_reason
 		FROM archive_iterations
 		WHERE session_id = ?
 		ORDER BY iteration_index ASC
@@ -701,11 +841,12 @@ func (s *ArchiveStore) GetSessionIterations(sessionID string) ([]ArchivedIterati
 		var startStr string
 		var breakReason sql.NullString
 		var toolCallIDsJSON sql.NullString
+		var toolsOfferedJSON sql.NullString
 
 		err := rows.Scan(
 			&iter.SessionID, &iter.IterationIndex, &iter.Model,
 			&iter.InputTokens, &iter.OutputTokens, &iter.ToolCallCount,
-			&toolCallIDsJSON,
+			&toolCallIDsJSON, &toolsOfferedJSON,
 			&startStr, &iter.DurationMs, &iter.HasToolCalls, &breakReason,
 		)
 		if err != nil {
@@ -718,6 +859,9 @@ func (s *ArchiveStore) GetSessionIterations(sessionID string) ([]ArchivedIterati
 		}
 		if toolCallIDsJSON.Valid {
 			_ = json.Unmarshal([]byte(toolCallIDsJSON.String), &iter.ToolCallIDs)
+		}
+		if toolsOfferedJSON.Valid {
+			_ = json.Unmarshal([]byte(toolsOfferedJSON.String), &iter.ToolsOffered)
 		}
 
 		iters = append(iters, iter)
@@ -797,20 +941,23 @@ func (s *ArchiveStore) Search(opts SearchOptions) ([]SearchResult, error) {
 	var query string
 	var args []any
 
+	ftsTable := s.msgFTSName
+	msgTable := s.msgTableName
+	cols := s.msgSelectCols()
+
 	if s.ftsEnabled {
-		query = `
-			SELECT am.id, am.conversation_id, am.session_id, am.role, am.content,
-			       am.timestamp, am.token_count, am.tool_calls, am.tool_call_id,
-			       am.archived_at, am.archive_reason,
-			       snippet(archive_fts, 0, '**', '**', '...', 64) as highlight
-			FROM archive_fts
-			JOIN archive_messages am ON archive_fts.rowid = am.rowid
-		`
+		query = fmt.Sprintf(`
+			SELECT %s,
+			       snippet(%s, 0, '**', '**', '...', 64) as highlight
+			FROM %s
+			JOIN %s am ON %s.rowid = am.rowid
+		`, "am.id, am.conversation_id, COALESCE(am.session_id, '') as session_id, am.role, am.content, am.timestamp, am.token_count, am.tool_calls, am.tool_call_id, COALESCE(am.archived_at, '') as archived_at, COALESCE(am.archive_reason, '') as archive_reason",
+			ftsTable, ftsTable, msgTable, ftsTable)
 		// Sanitize query for FTS5: wrap each term in double quotes to prevent
 		// syntax errors from special characters (periods, colons, etc.)
 		sanitized := sanitizeFTS5Query(opts.Query)
 		args = []any{sanitized}
-		conditions := []string{"archive_fts MATCH ?"}
+		conditions := []string{ftsTable + " MATCH ?"}
 
 		if opts.ConversationID != "" {
 			conditions = append(conditions, "am.conversation_id = ?")
@@ -822,13 +969,11 @@ func (s *ArchiveStore) Search(opts SearchOptions) ([]SearchResult, error) {
 		args = append(args, opts.Limit)
 	} else {
 		// LIKE fallback — less precise but functional
-		query = `
-			SELECT id, conversation_id, session_id, role, content,
-			       timestamp, token_count, tool_calls, tool_call_id,
-			       archived_at, archive_reason,
+		query = fmt.Sprintf(`
+			SELECT %s,
 			       '' as highlight
-			FROM archive_messages
-		`
+			FROM %s
+		`, cols, msgTable)
 		args = []any{"%" + opts.Query + "%"}
 		conditions := []string{"content LIKE ?"}
 
@@ -842,7 +987,7 @@ func (s *ArchiveStore) Search(opts SearchOptions) ([]SearchResult, error) {
 		args = append(args, opts.Limit)
 	}
 
-	rows, err := s.db.Query(query, args...)
+	rows, err := s.msgDB().Query(query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("search: %w", err)
 	}
@@ -918,32 +1063,33 @@ func (s *ArchiveStore) expandContext(
 	var query string
 	var boundary time.Time
 
+	cols := s.msgSelectCols()
+	table := s.msgTableName
+
 	if backward {
 		boundary = from.Add(-opts.MaxDuration)
-		query = `
-			SELECT id, conversation_id, session_id, role, content, timestamp,
-			       token_count, tool_calls, tool_call_id, archived_at, archive_reason
-			FROM archive_messages
+		query = fmt.Sprintf(`
+			SELECT %s
+			FROM %s
 			WHERE conversation_id = ? AND timestamp < ? AND timestamp > ?
 			ORDER BY timestamp DESC
 			LIMIT ?
-		`
+		`, cols, table)
 	} else {
 		boundary = from.Add(opts.MaxDuration)
-		query = `
-			SELECT id, conversation_id, session_id, role, content, timestamp,
-			       token_count, tool_calls, tool_call_id, archived_at, archive_reason
-			FROM archive_messages
+		query = fmt.Sprintf(`
+			SELECT %s
+			FROM %s
 			WHERE conversation_id = ? AND timestamp > ? AND timestamp < ?
 			ORDER BY timestamp ASC
 			LIMIT ?
-		`
+		`, cols, table)
 	}
 
 	fromStr := from.Format(time.RFC3339Nano)
 	boundaryStr := boundary.Format(time.RFC3339Nano)
 
-	rows, err := s.db.Query(query, conversationID, fromStr, boundaryStr, opts.MaxMessages)
+	rows, err := s.msgDB().Query(query, conversationID, fromStr, boundaryStr, opts.MaxMessages)
 	if err != nil {
 		return nil
 	}
@@ -1134,26 +1280,11 @@ func (s *ArchiveStore) SetSessionMetadata(sessionID string, meta *SessionMetadat
 	return err
 }
 
-// IncrementSessionCount bumps the message count for a session.
-func (s *ArchiveStore) IncrementSessionCount(sessionID string) error {
-	_, err := s.db.Exec(`
-		UPDATE sessions SET message_count = message_count + 1 WHERE id = ?
-	`, sessionID)
-	return err
-}
-
-// SetSessionMessageCount sets the message count for a session directly.
-func (s *ArchiveStore) SetSessionMessageCount(sessionID string, count int) error {
-	_, err := s.db.Exec(`
-		UPDATE sessions SET message_count = ? WHERE id = ?
-	`, count, sessionID)
-	return err
-}
-
 // ActiveSession returns the most recent unclosed session for a conversation, if any.
 func (s *ArchiveStore) ActiveSession(conversationID string) (*Session, error) {
 	row := s.db.QueryRow(`
-		SELECT id, conversation_id, started_at, ended_at, end_reason, message_count,
+		SELECT id, conversation_id, started_at, ended_at, end_reason,
+		       0 AS message_count,
 		       summary, title, tags, metadata, parent_session_id, parent_tool_call_id
 		FROM sessions
 		WHERE conversation_id = ? AND ended_at IS NULL
@@ -1161,18 +1292,27 @@ func (s *ArchiveStore) ActiveSession(conversationID string) (*Session, error) {
 		LIMIT 1
 	`, conversationID)
 
-	return s.scanSession(row)
+	sess, err := s.scanSession(row)
+	if sess != nil {
+		sess.MessageCount = s.countSessionMessages(sess.ID)
+	}
+	return sess, err
 }
 
 // GetSession retrieves a session by ID.
 func (s *ArchiveStore) GetSession(sessionID string) (*Session, error) {
 	row := s.db.QueryRow(`
-		SELECT id, conversation_id, started_at, ended_at, end_reason, message_count,
+		SELECT id, conversation_id, started_at, ended_at, end_reason,
+		       0 AS message_count,
 		       summary, title, tags, metadata, parent_session_id, parent_tool_call_id
 		FROM sessions WHERE id = ?
 	`, sessionID)
 
-	return s.scanSession(row)
+	sess, err := s.scanSession(row)
+	if sess != nil {
+		sess.MessageCount = s.countSessionMessages(sess.ID)
+	}
+	return sess, err
 }
 
 // ListSessions returns sessions, newest first.
@@ -1186,7 +1326,8 @@ func (s *ArchiveStore) ListSessions(conversationID string, limit int) ([]*Sessio
 
 	if conversationID != "" {
 		query = `
-			SELECT id, conversation_id, started_at, ended_at, end_reason, message_count,
+			SELECT id, conversation_id, started_at, ended_at, end_reason,
+			       0 AS message_count,
 			       summary, title, tags, metadata, parent_session_id, parent_tool_call_id
 			FROM sessions WHERE conversation_id = ?
 			ORDER BY started_at DESC LIMIT ?
@@ -1194,7 +1335,8 @@ func (s *ArchiveStore) ListSessions(conversationID string, limit int) ([]*Sessio
 		args = []any{conversationID, limit}
 	} else {
 		query = `
-			SELECT id, conversation_id, started_at, ended_at, end_reason, message_count,
+			SELECT id, conversation_id, started_at, ended_at, end_reason,
+			       0 AS message_count,
 			       summary, title, tags, metadata, parent_session_id, parent_tool_call_id
 			FROM sessions
 			ORDER BY started_at DESC LIMIT ?
@@ -1216,8 +1358,12 @@ func (s *ArchiveStore) ListSessions(conversationID string, limit int) ([]*Sessio
 		}
 		sessions = append(sessions, sess)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 
-	return sessions, rows.Err()
+	s.populateMessageCounts(sessions)
+	return sessions, nil
 }
 
 // ListChildSessions returns sessions whose parent_session_id matches
@@ -1225,7 +1371,8 @@ func (s *ArchiveStore) ListSessions(conversationID string, limit int) ([]*Sessio
 // to show delegate sub-sessions.
 func (s *ArchiveStore) ListChildSessions(parentSessionID string) ([]*Session, error) {
 	rows, err := s.db.Query(`
-		SELECT id, conversation_id, started_at, ended_at, end_reason, message_count,
+		SELECT id, conversation_id, started_at, ended_at, end_reason,
+		       0 AS message_count,
 		       summary, title, tags, metadata, parent_session_id, parent_tool_call_id
 		FROM sessions WHERE parent_session_id = ?
 		ORDER BY started_at ASC
@@ -1243,56 +1390,81 @@ func (s *ArchiveStore) ListChildSessions(parentSessionID string) ([]*Session, er
 		}
 		sessions = append(sessions, sess)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 
-	return sessions, rows.Err()
+	s.populateMessageCounts(sessions)
+	return sessions, nil
 }
 
 // UnsummarizedSessions returns ended sessions that have no metadata yet,
 // ordered oldest-first for catch-up processing. Only sessions with at
-// least one archived message are returned — this checks actual rows in
-// archive_messages rather than the stale message_count counter.
+// least one message are returned — the message count is checked via a
+// post-query filter because messages may live in a different database
+// than sessions in unified mode.
 func (s *ArchiveStore) UnsummarizedSessions(limit int) ([]*Session, error) {
 	if limit <= 0 {
 		limit = 50
 	}
 
+	// Over-fetch candidates, then filter by message count. This avoids a
+	// cross-DB EXISTS subquery that would fail in unified mode.
 	rows, err := s.db.Query(`
 		SELECT id, conversation_id, started_at, ended_at, end_reason,
-		       message_count, summary, title, tags, metadata,
+		       0 AS message_count,
+		       summary, title, tags, metadata,
 		       parent_session_id, parent_tool_call_id
 		FROM sessions
 		WHERE ended_at IS NOT NULL
 		  AND (title IS NULL OR title = '')
-		  AND EXISTS (SELECT 1 FROM archive_messages WHERE session_id = sessions.id LIMIT 1)
 		ORDER BY ended_at ASC
 		LIMIT ?
-	`, limit)
+	`, limit*3) // over-fetch to account for sessions with no messages
 	if err != nil {
 		return nil, fmt.Errorf("unsummarized sessions: %w", err)
 	}
 	defer rows.Close()
 
-	var sessions []*Session
+	var candidates []*Session
 	for rows.Next() {
 		sess, err := s.scanSessionRow(rows)
 		if err != nil {
 			return nil, err
 		}
-		sessions = append(sessions, sess)
+		candidates = append(candidates, sess)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 
-	return sessions, rows.Err()
+	// Batch-fetch message counts for all candidates in one query.
+	s.populateMessageCounts(candidates)
+
+	// Filter to sessions with at least one message and apply limit.
+	var sessions []*Session
+	for _, sess := range candidates {
+		if sess.MessageCount > 0 {
+			sessions = append(sessions, sess)
+			if len(sessions) >= limit {
+				break
+			}
+		}
+	}
+
+	return sessions, nil
 }
 
 // GetSessionTranscript returns all archived messages for a session in chronological order.
 func (s *ArchiveStore) GetSessionTranscript(sessionID string) ([]ArchivedMessage, error) {
-	rows, err := s.db.Query(`
-		SELECT id, conversation_id, session_id, role, content, timestamp,
-		       token_count, tool_calls, tool_call_id, archived_at, archive_reason
-		FROM archive_messages
+	query := fmt.Sprintf(`
+		SELECT %s
+		FROM %s
 		WHERE session_id = ?
 		ORDER BY timestamp ASC
-	`, sessionID)
+	`, s.msgSelectCols(), s.msgTableName)
+
+	rows, err := s.msgDB().Query(query, sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("get transcript: %w", err)
 	}
@@ -1307,32 +1479,32 @@ func (s *ArchiveStore) GetMessagesByTimeRange(from, to time.Time, conversationID
 		limit = 500
 	}
 
+	cols := s.msgSelectCols()
+	table := s.msgTableName
 	var query string
 	var args []any
 
 	if conversationID != "" {
-		query = `
-			SELECT id, conversation_id, session_id, role, content, timestamp,
-			       token_count, tool_calls, tool_call_id, archived_at, archive_reason
-			FROM archive_messages
+		query = fmt.Sprintf(`
+			SELECT %s
+			FROM %s
 			WHERE conversation_id = ? AND timestamp >= ? AND timestamp <= ?
 			ORDER BY timestamp ASC
 			LIMIT ?
-		`
+		`, cols, table)
 		args = []any{conversationID, from.Format(time.RFC3339Nano), to.Format(time.RFC3339Nano), limit}
 	} else {
-		query = `
-			SELECT id, conversation_id, session_id, role, content, timestamp,
-			       token_count, tool_calls, tool_call_id, archived_at, archive_reason
-			FROM archive_messages
+		query = fmt.Sprintf(`
+			SELECT %s
+			FROM %s
 			WHERE timestamp >= ? AND timestamp <= ?
 			ORDER BY timestamp ASC
 			LIMIT ?
-		`
+		`, cols, table)
 		args = []any{from.Format(time.RFC3339Nano), to.Format(time.RFC3339Nano), limit}
 	}
 
-	rows, err := s.db.Query(query, args...)
+	rows, err := s.msgDB().Query(query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("query by time range: %w", err)
 	}
@@ -1435,14 +1607,17 @@ func (s *ArchiveStore) ExportSessionMarkdown(sessionID string) (string, error) {
 func (s *ArchiveStore) Stats() (map[string]any, error) {
 	stats := make(map[string]any)
 
+	msgDB := s.msgDB()
+	table := s.msgTableName
+
 	var msgCount, sessionCount, toolCallCount int
 	var oldestStr, newestStr sql.NullString
 
-	_ = s.db.QueryRow(`SELECT COUNT(*) FROM archive_messages`).Scan(&msgCount)
+	_ = msgDB.QueryRow(fmt.Sprintf(`SELECT COUNT(*) FROM %s`, table)).Scan(&msgCount)
 	_ = s.db.QueryRow(`SELECT COUNT(*) FROM sessions`).Scan(&sessionCount)
 	_ = s.db.QueryRow(`SELECT COUNT(*) FROM archive_tool_calls`).Scan(&toolCallCount)
-	_ = s.db.QueryRow(`SELECT MIN(timestamp) FROM archive_messages`).Scan(&oldestStr)
-	_ = s.db.QueryRow(`SELECT MAX(timestamp) FROM archive_messages`).Scan(&newestStr)
+	_ = msgDB.QueryRow(fmt.Sprintf(`SELECT MIN(timestamp) FROM %s`, table)).Scan(&oldestStr)
+	_ = msgDB.QueryRow(fmt.Sprintf(`SELECT MAX(timestamp) FROM %s`, table)).Scan(&newestStr)
 
 	stats["total_messages"] = msgCount
 	stats["total_sessions"] = sessionCount
@@ -1457,7 +1632,7 @@ func (s *ArchiveStore) Stats() (map[string]any, error) {
 
 	// Messages by role
 	byRole := make(map[string]int)
-	rows, err := s.db.Query(`SELECT role, COUNT(*) FROM archive_messages GROUP BY role`)
+	rows, err := msgDB.Query(fmt.Sprintf(`SELECT role, COUNT(*) FROM %s GROUP BY role`, table))
 	if err == nil {
 		defer rows.Close()
 		for rows.Next() {
@@ -1470,20 +1645,37 @@ func (s *ArchiveStore) Stats() (map[string]any, error) {
 	}
 	stats["by_role"] = byRole
 
-	// Messages by reason
-	byReason := make(map[string]int)
-	rows2, err := s.db.Query(`SELECT archive_reason, COUNT(*) FROM archive_messages GROUP BY archive_reason`)
-	if err == nil {
-		defer rows2.Close()
-		for rows2.Next() {
-			var reason string
-			var count int
-			if err := rows2.Scan(&reason, &count); err == nil {
-				byReason[reason] = count
+	// Messages by reason/status
+	if s.messagesDB != nil {
+		// Unified mode: group by status instead of archive_reason
+		byStatus := make(map[string]int)
+		rows2, err := msgDB.Query(`SELECT COALESCE(status, 'unknown'), COUNT(*) FROM messages GROUP BY status`)
+		if err == nil {
+			defer rows2.Close()
+			for rows2.Next() {
+				var status string
+				var count int
+				if err := rows2.Scan(&status, &count); err == nil {
+					byStatus[status] = count
+				}
 			}
 		}
+		stats["by_status"] = byStatus
+	} else {
+		byReason := make(map[string]int)
+		rows2, err := s.db.Query(`SELECT archive_reason, COUNT(*) FROM archive_messages GROUP BY archive_reason`)
+		if err == nil {
+			defer rows2.Close()
+			for rows2.Next() {
+				var reason string
+				var count int
+				if err := rows2.Scan(&reason, &count); err == nil {
+					byReason[reason] = count
+				}
+			}
+		}
+		stats["by_reason"] = byReason
 	}
-	stats["by_reason"] = byReason
 
 	return stats, nil
 }
@@ -1619,15 +1811,13 @@ func (s *ArchiveStore) IsImported(sourceID, sourceType string) (bool, error) {
 // PurgeImported removes all archive data that was imported from a given source type.
 // This deletes sessions, messages, tool calls, and import metadata — a clean slate
 // so the import can be re-run with improved logic.
+//
+// In unified mode, messages live in a different database than sessions and metadata.
+// The method handles this by deleting messages from the messages DB first, then
+// cleaning up sessions and metadata from the archive DB in a transaction.
 func (s *ArchiveStore) PurgeImported(sourceType string) (int, error) {
-	tx, err := s.db.Begin()
-	if err != nil {
-		return 0, fmt.Errorf("begin tx: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	// Get all archive session IDs for this source type
-	rows, err := tx.Query(`
+	// Query session IDs outside a transaction so we can use them across DBs.
+	rows, err := s.db.Query(`
 		SELECT archive_session_id FROM import_metadata WHERE source_type = ?
 	`, sourceType)
 	if err != nil {
@@ -1649,10 +1839,32 @@ func (s *ArchiveStore) PurgeImported(sourceType string) (int, error) {
 		return 0, nil
 	}
 
-	// Delete in dependency order: messages, tool calls, FTS, sessions, metadata
+	// In unified mode, messages live in s.messagesDB — delete them there first.
+	// FTS triggers (if present) handle the FTS cleanup automatically on DELETE.
+	msgDB := s.msgDB()
+	msgTable := s.msgTableName
+	if s.messagesDB != nil {
+		for _, sid := range sessionIDs {
+			if _, err := msgDB.Exec(fmt.Sprintf(`DELETE FROM %s WHERE session_id = ?`, msgTable), sid); err != nil {
+				return 0, fmt.Errorf("delete messages for session %s: %w", ShortID(sid), err)
+			}
+		}
+	}
+
+	// Delete sessions, tool calls, and metadata from archive.db.
+	// In legacy mode, messages also live here.
+	tx, err := s.db.Begin()
+	if err != nil {
+		return 0, fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
 	for _, sid := range sessionIDs {
-		if _, err := tx.Exec(`DELETE FROM archive_messages WHERE session_id = ?`, sid); err != nil {
-			return 0, fmt.Errorf("delete messages for session %s: %w", ShortID(sid), err)
+		// In legacy mode (messagesDB == nil), messages are in the archive DB.
+		if s.messagesDB == nil {
+			if _, err := tx.Exec(fmt.Sprintf(`DELETE FROM %s WHERE session_id = ?`, msgTable), sid); err != nil {
+				return 0, fmt.Errorf("delete messages for session %s: %w", ShortID(sid), err)
+			}
 		}
 		if _, err := tx.Exec(`DELETE FROM archive_tool_calls WHERE session_id = ?`, sid); err != nil {
 			return 0, fmt.Errorf("delete tool calls for session %s: %w", ShortID(sid), err)
@@ -1662,14 +1874,15 @@ func (s *ArchiveStore) PurgeImported(sourceType string) (int, error) {
 		}
 	}
 
-	// Rebuild FTS index if enabled
-	if s.ftsEnabled {
-		if _, err := tx.Exec(`INSERT INTO archive_fts(archive_fts) VALUES('rebuild')`); err != nil {
+	// In legacy mode, rebuild FTS since we deleted directly (no triggers).
+	if s.messagesDB == nil && s.ftsEnabled {
+		ftsTable := s.msgFTSName
+		if _, err := tx.Exec(fmt.Sprintf(`INSERT INTO %s(%s) VALUES('rebuild')`, ftsTable, ftsTable)); err != nil {
 			return 0, fmt.Errorf("rebuild FTS: %w", err)
 		}
 	}
 
-	// Remove all import metadata for this source type
+	// Remove all import metadata for this source type.
 	if _, err := tx.Exec(`DELETE FROM import_metadata WHERE source_type = ?`, sourceType); err != nil {
 		return 0, fmt.Errorf("delete import metadata: %w", err)
 	}

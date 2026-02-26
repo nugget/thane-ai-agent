@@ -124,7 +124,7 @@ func main() {
 	}
 
 	archivePath := filepath.Join(*dataDir, "archive.db")
-	store, err := memory.NewArchiveStore(archivePath, nil, logger)
+	store, err := memory.NewArchiveStore(archivePath, nil, nil, logger)
 	if err != nil {
 		logger.Error("failed to open archive store", "error", err)
 		os.Exit(1)
@@ -464,9 +464,6 @@ func importSession(store *memory.ArchiveStore, sess parsedSession, logger *slog.
 	if err := store.EndSessionAt(archiveSess.ID, "import", sess.endedAt); err != nil {
 		return fmt.Errorf("end session: %w", err)
 	}
-
-	// Set message count and summary
-	_ = store.SetSessionMessageCount(archiveSess.ID, len(sess.messages))
 
 	summary := fmt.Sprintf("[Imported from OpenClaw session %s]", memory.ShortID(sess.id))
 	_ = store.SetSessionSummary(archiveSess.ID, summary)

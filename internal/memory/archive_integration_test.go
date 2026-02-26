@@ -2,6 +2,7 @@ package memory
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"testing"
 	"time"
@@ -18,7 +19,7 @@ func TestCompaction_ArchivesBeforeCompacting(t *testing.T) {
 	defer memStore.Close()
 
 	// Set up archive store
-	archiveStore, err := NewArchiveStore(t.TempDir()+"/archive.db", nil, nil)
+	archiveStore, err := NewArchiveStore(t.TempDir()+"/archive.db", nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,18 +145,29 @@ func TestEndSessionAt_PreservesTimestamp(t *testing.T) {
 	}
 }
 
-// TestSetSessionMessageCount sets message count directly.
-func TestSetSessionMessageCount(t *testing.T) {
+// TestSessionMessageCount verifies that GetSession returns the actual
+// count of archived messages rather than the stale counter column.
+func TestSessionMessageCount(t *testing.T) {
 	store := newTestArchiveStore(t)
 
 	sess, _ := store.StartSession("conv-1")
-	if err := store.SetSessionMessageCount(sess.ID, 42); err != nil {
+
+	// Archive 3 messages.
+	msgs := make([]ArchivedMessage, 3)
+	for i := range msgs {
+		msgs[i] = ArchivedMessage{
+			ID: fmt.Sprintf("msg-%d", i), ConversationID: "conv-1", SessionID: sess.ID,
+			Role: "user", Content: fmt.Sprintf("msg %d", i),
+			Timestamp: time.Now(), ArchivedAt: time.Now(), ArchiveReason: "test",
+		}
+	}
+	if err := store.ArchiveMessages(msgs); err != nil {
 		t.Fatal(err)
 	}
 
 	got, _ := store.GetSession(sess.ID)
-	if got.MessageCount != 42 {
-		t.Errorf("expected message_count=42, got %d", got.MessageCount)
+	if got.MessageCount != 3 {
+		t.Errorf("expected message_count=3, got %d", got.MessageCount)
 	}
 }
 

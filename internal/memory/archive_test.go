@@ -10,7 +10,7 @@ func newTestArchiveStore(t *testing.T) *ArchiveStore {
 	t.Helper()
 
 	dbPath := t.TempDir() + "/test-archive.db"
-	store, err := NewArchiveStore(dbPath, nil, nil)
+	store, err := NewArchiveStore(dbPath, nil, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -250,11 +250,11 @@ func TestSessionLifecycle(t *testing.T) {
 		t.Errorf("active session ID mismatch: %s != %s", active.ID, sess.ID)
 	}
 
-	// Increment count
-	if err := store.IncrementSessionCount(sess.ID); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.IncrementSessionCount(sess.ID); err != nil {
+	// Archive real messages so the computed count works.
+	if err := store.ArchiveMessages([]ArchivedMessage{
+		{ID: "msg-1", ConversationID: "conv-1", SessionID: sess.ID, Role: "user", Content: "hello", Timestamp: time.Now(), ArchivedAt: time.Now(), ArchiveReason: "test"},
+		{ID: "msg-2", ConversationID: "conv-1", SessionID: sess.ID, Role: "assistant", Content: "hi", Timestamp: time.Now(), ArchivedAt: time.Now(), ArchiveReason: "test"},
+	}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -572,13 +572,9 @@ func TestUnsummarizedSessions(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Create an ended session with stale message_count > 0 but NO actual
-	// archived messages (the bug case from issue #341). Should be excluded.
+	// Create an ended session with NO actual archived messages — should be excluded.
 	stale, err := store.StartSession("conv-stale")
 	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.IncrementSessionCount(stale.ID); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.EndSession(stale.ID, "reset"); err != nil {

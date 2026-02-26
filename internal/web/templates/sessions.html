@@ -1,17 +1,31 @@
 {{define "title"}}{{.BrandName}} - Sessions{{end}}
 
 {{define "content"}}
+<script src="/static/timeline.js"></script>
 <div class="browser">
     <h1>Sessions</h1>
 
-    <div class="toolbar">
-        <input type="search" class="search-input" placeholder="Filter by conversation ID..."
-               name="conversation_id" value="{{.ConversationID}}"
-               hx-get="/sessions" hx-trigger="keyup changed delay:300ms"
-               hx-target="#sessions-tbody" hx-include="closest .toolbar">
+    {{/* ── Timeline panel ── */}}
+    <div class="card timeline-panel" id="timeline-panel">
+        <div class="timeline-header" id="timeline-header">
+            <h2>Execution Timeline</h2>
+            <span class="text-muted" id="timeline-session-info"></span>
+        </div>
+        <div class="timeline-track-wrap" id="timeline-track-wrap">
+            <div class="empty-state" id="timeline-empty">Select a session below to view its execution timeline.</div>
+            <div class="timeline-track" id="timeline-track" style="display:none"></div>
+        </div>
+        <div id="timeline-detail" style="display:none"></div>
     </div>
 
+    {{/* ── Session list ── */}}
     <div class="card">
+        <div class="toolbar">
+            <input type="search" class="search-input" placeholder="Filter by conversation ID..."
+                   name="conversation_id" value="{{.ConversationID}}"
+                   hx-get="/sessions" hx-trigger="keyup changed delay:300ms"
+                   hx-target="#sessions-tbody" hx-include="closest .toolbar">
+        </div>
         <div class="table-scroll">
             <table class="table">
                 <thead>
@@ -37,9 +51,12 @@
 {{define "sessions-tbody"}}
 {{if .Sessions}}
 {{range .Sessions}}
-<tr hx-get="/sessions/{{.ID}}" hx-target="#content" hx-push-url="true">
+<tr class="timeline-session-row" data-session-id="{{.ID}}" onclick="window.timeline.load('{{.ID}}')">
     <td>
-        <strong>{{if .Title}}{{truncate .Title 50}}{{else}}{{.ShortID}}{{end}}</strong>
+        <a href="/sessions/{{.ID}}" hx-get="/sessions/{{.ID}}" hx-target="#content" hx-push-url="true"
+           onclick="event.stopPropagation()" class="session-title-link">
+            <strong>{{if .Title}}{{truncate .Title 50}}{{else}}{{.ShortID}}{{end}}</strong>
+        </a>
         {{if .OneLiner}}<br><span class="text-muted" style="font-size:0.8125rem">{{truncate .OneLiner 60}}</span>{{end}}
     </td>
     <td class="mono">{{.ShortConvID}}</td>

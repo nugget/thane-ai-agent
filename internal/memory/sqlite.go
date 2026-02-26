@@ -120,6 +120,12 @@ func (s *SQLiteStore) migrate() error {
 	return err
 }
 
+// DB returns the underlying database connection for use by the unification
+// migration and by ArchiveStore when reading from the unified messages table.
+func (s *SQLiteStore) DB() *sql.DB {
+	return s.db
+}
+
 // Close closes the database connection.
 func (s *SQLiteStore) Close() error {
 	return s.db.Close()
@@ -184,7 +190,7 @@ func (s *SQLiteStore) GetMessages(conversationID string) []Message {
 	rows, err := s.db.Query(`
 		SELECT id, role, content, timestamp
 		FROM messages
-		WHERE conversation_id = ? AND compacted = FALSE
+		WHERE conversation_id = ? AND status = 'active'
 		ORDER BY timestamp ASC
 		LIMIT ?
 	`, conversationID, s.maxMessages)
@@ -246,8 +252,8 @@ func (s *SQLiteStore) Stats() map[string]any {
 	var convCount, msgCount, tokenCount int
 
 	_ = s.db.QueryRow(`SELECT COUNT(*) FROM conversations`).Scan(&convCount)
-	_ = s.db.QueryRow(`SELECT COUNT(*) FROM messages WHERE compacted = FALSE`).Scan(&msgCount)
-	_ = s.db.QueryRow(`SELECT COALESCE(SUM(token_count), 0) FROM messages WHERE compacted = FALSE`).Scan(&tokenCount)
+	_ = s.db.QueryRow(`SELECT COUNT(*) FROM messages WHERE status = 'active'`).Scan(&msgCount)
+	_ = s.db.QueryRow(`SELECT COALESCE(SUM(token_count), 0) FROM messages WHERE status = 'active'`).Scan(&tokenCount)
 
 	return map[string]any{
 		"conversations": convCount,
@@ -324,9 +330,9 @@ func (s *SQLiteStore) GetAllMessages(conversationID string) []Message {
 func (s *SQLiteStore) GetTokenCount(conversationID string) int {
 	var count int
 	_ = s.db.QueryRow(`
-		SELECT COALESCE(SUM(token_count), 0) 
-		FROM messages 
-		WHERE conversation_id = ? AND compacted = FALSE
+		SELECT COALESCE(SUM(token_count), 0)
+		FROM messages
+		WHERE conversation_id = ? AND status = 'active'
 	`, conversationID).Scan(&count)
 	return count
 }
@@ -342,8 +348,8 @@ func (s *SQLiteStore) GetMessagesForCompaction(conversationID string, keep int) 
 	// Get total count
 	var total int
 	_ = s.db.QueryRow(`
-		SELECT COUNT(*) FROM messages 
-		WHERE conversation_id = ? AND compacted = FALSE AND role != 'system'
+		SELECT COUNT(*) FROM messages
+		WHERE conversation_id = ? AND status = 'active' AND role != 'system'
 	`, conversationID).Scan(&total)
 
 	if total <= keep {
@@ -357,7 +363,7 @@ func (s *SQLiteStore) GetMessagesForCompaction(conversationID string, keep int) 
 	rows, err := s.db.Query(`
 		SELECT id, role, content, timestamp
 		FROM messages
-		WHERE conversation_id = ? AND compacted = FALSE AND role != 'system'
+		WHERE conversation_id = ? AND status = 'active' AND role != 'system'
 		ORDER BY timestamp ASC
 		LIMIT ? OFFSET ?
 	`, conversationID, limit, offset)
@@ -381,9 +387,9 @@ func (s *SQLiteStore) GetMessagesForCompaction(conversationID string, keep int) 
 // MarkCompacted marks messages as compacted.
 func (s *SQLiteStore) MarkCompacted(conversationID string, before time.Time) error {
 	_, err := s.db.Exec(`
-		UPDATE messages 
-		SET compacted = TRUE 
-		WHERE conversation_id = ? AND timestamp < ? AND role != 'system'
+		UPDATE messages
+		SET status = 'compacted'
+		WHERE conversation_id = ? AND timestamp < ? AND status = 'active' AND role != 'system'
 	`, conversationID, before)
 	return err
 }
@@ -394,8 +400,8 @@ func (s *SQLiteStore) AddCompactionSummary(conversationID, summary string) error
 	msgID, _ := uuid.NewV7()
 
 	_, err := s.db.Exec(`
-		INSERT INTO messages (id, conversation_id, role, content, timestamp, token_count, compacted)
-		VALUES (?, ?, 'system', ?, ?, ?, FALSE)
+		INSERT INTO messages (id, conversation_id, role, content, timestamp, token_count, compacted, status)
+		VALUES (?, ?, 'system', ?, ?, ?, FALSE, 'active')
 	`, msgID.String(), conversationID, summary, now, estimateTokens(summary))
 
 	return err
@@ -599,6 +605,24 @@ func (s *SQLiteStore) GetToolCallsByName(toolName string, limit int) []ToolCall 
 	}
 
 	return calls
+}
+
+// ArchiveMessages updates messages in the unified table to archived status.
+// This replaces the cross-DB copy that the legacy archive flow used.
+func (s *SQLiteStore) ArchiveMessages(conversationID, sessionID, reason string) (int64, error) {
+	now := time.Now().UTC()
+	result, err := s.db.Exec(`
+		UPDATE messages
+		SET session_id = COALESCE(session_id, ?),
+		    status = 'archived',
+		    archived_at = ?,
+		    archive_reason = ?
+		WHERE conversation_id = ? AND status IN ('active', 'compacted')
+	`, sessionID, now.Format(time.RFC3339Nano), reason, conversationID)
+	if err != nil {
+		return 0, fmt.Errorf("archive messages: %w", err)
+	}
+	return result.RowsAffected()
 }
 
 // ToolCallStats returns statistics about tool usage.
