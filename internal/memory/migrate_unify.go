@@ -841,7 +841,7 @@ func createConsolidationTargets(db *sql.DB) error {
 
 	for _, stmt := range stmts {
 		if _, err := db.Exec(stmt); err != nil {
-			return fmt.Errorf("exec %q: %w", stmt[:40], err)
+			return fmt.Errorf("exec %q: %w", stmt[:min(40, len(stmt))], err)
 		}
 	}
 	return nil
