@@ -513,10 +513,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	}
 	logger.Info("delegation store initialized")
 
-	archiveAdapter := memory.NewArchiveAdapter(archiveStore, logger)
-	archiveAdapter.SetToolCallSource(mem)
-	archiveAdapter.SetMessageStore(mem)
-	archiveAdapter.SetToolCallStore(mem)
+	archiveAdapter := memory.NewArchiveAdapter(archiveStore, mem, mem, logger)
 
 	// --- Talents ---
 	// Talents are markdown files that extend the system prompt with
@@ -612,7 +609,6 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 
 	compactSummarizer := memory.NewLLMSummarizer(summarizeFunc)
 	compactor := memory.NewCompactor(mem, compactionConfig, compactSummarizer, logger)
-	compactor.SetArchiver(archiveStore)
 	compactor.SetWorkingMemoryStore(wmStore)
 
 	// --- Session metadata summarizer ---

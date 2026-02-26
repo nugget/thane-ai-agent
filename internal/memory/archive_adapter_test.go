@@ -7,29 +7,46 @@ import (
 	"time"
 )
 
-func newTestAdapter(t *testing.T) (*ArchiveAdapter, *ArchiveStore) {
+// newTestAdapter creates a consolidated-mode adapter for testing.
+func newTestAdapter(t *testing.T) (*ArchiveAdapter, *ArchiveStore, *SQLiteStore) {
 	t.Helper()
 
-	dbPath := t.TempDir() + "/test-adapter.db"
-	store, err := NewArchiveStore(dbPath, nil, nil, nil)
+	tmpDir := t.TempDir()
+	workingStore, err := NewSQLiteStore(tmpDir+"/working.db", 100)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { store.Close() })
+	t.Cleanup(func() { workingStore.Close() })
+
+	MigrateUnifyMessages(workingStore.DB(), "", nil)
+	MigrateUnifyToolCalls(workingStore.DB(), "", nil)
+
+	archiveStore, err := NewArchiveStoreFromDB(workingStore.DB(), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-	adapter := NewArchiveAdapter(store, logger)
+	adapter := NewArchiveAdapter(archiveStore, workingStore, workingStore, logger)
 
-	return adapter, store
+	return adapter, archiveStore, workingStore
 }
 
 func TestAdapter_ArchiveConversation(t *testing.T) {
-	adapter, store := newTestAdapter(t)
+	adapter, archiveStore, workingStore := newTestAdapter(t)
 
-	// Start a session first
+	// Start a session first.
 	sid, err := adapter.StartSession("conv-1")
 	if err != nil {
 		t.Fatal(err)
+	}
+
+	// Add active messages to the unified table.
+	workingStore.GetOrCreateConversation("conv-1")
+	for _, content := range []string{"hello", "hi there!"} {
+		if err := workingStore.AddMessage("conv-1", "user", content); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	msgs := []Message{
@@ -41,112 +58,80 @@ func TestAdapter_ArchiveConversation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Verify messages are in the archive
-	transcript, err := store.GetSessionTranscript(sid)
+	// Verify messages were archived (status='archived') in the unified table.
+	var archivedCount int
+	_ = workingStore.DB().QueryRow(
+		`SELECT COUNT(*) FROM messages WHERE conversation_id = 'conv-1' AND status = 'archived'`,
+	).Scan(&archivedCount)
+	if archivedCount != 2 {
+		t.Errorf("expected 2 archived messages, got %d", archivedCount)
+	}
+
+	// Verify session_id was set.
+	var sessionID string
+	_ = workingStore.DB().QueryRow(
+		`SELECT session_id FROM messages WHERE conversation_id = 'conv-1' AND status = 'archived' LIMIT 1`,
+	).Scan(&sessionID)
+	if sessionID != sid {
+		t.Errorf("expected session_id=%s, got %s", sid, sessionID)
+	}
+
+	// Verify messages are readable from the archive store.
+	transcript, err := archiveStore.GetSessionTranscript(sid)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(transcript) != 2 {
-		t.Fatalf("expected 2 archived messages, got %d", len(transcript))
-	}
-	if transcript[0].ArchiveReason != "reset" {
-		t.Errorf("expected reason=reset, got %s", transcript[0].ArchiveReason)
+		t.Fatalf("expected 2 messages in transcript, got %d", len(transcript))
 	}
 }
 
 func TestAdapter_ArchiveConversation_WithToolCalls(t *testing.T) {
-	adapter, store := newTestAdapter(t)
+	adapter, _, workingStore := newTestAdapter(t)
 
-	// Create a mock tool call source
-	mockSource := &mockToolCallSource{
-		calls: map[string][]ToolCall{
-			"conv-1": {
-				{
-					ID:             "tc-1",
-					ConversationID: "conv-1",
-					ToolName:       "web_search",
-					Arguments:      `{"query":"test"}`,
-					Result:         "search results here",
-					StartedAt:      time.Now(),
-				},
-			},
-		},
-	}
-	adapter.SetToolCallSource(mockSource)
-	adapter.StartSession("conv-1")
+	sid, _ := adapter.StartSession("conv-1")
+
+	// Add messages and tool calls to the unified tables.
+	workingStore.GetOrCreateConversation("conv-1")
+	workingStore.AddMessage("conv-1", "user", "search for test")
+	workingStore.RecordToolCall("conv-1", "", "tc-1", "web_search", `{"query":"test"}`)
+	workingStore.CompleteToolCall("tc-1", "search results", "")
 
 	msgs := []Message{
 		{Role: "user", Content: "search for test", Timestamp: time.Now()},
-		{Role: "assistant", Content: "let me search", Timestamp: time.Now()},
 	}
 
 	if err := adapter.ArchiveConversation("conv-1", msgs, "reset"); err != nil {
 		t.Fatal(err)
 	}
 
-	// Verify tool calls were archived
-	sid := adapter.ActiveSessionID("conv-1")
-	if sid == "" {
-		// Session was ended by ArchiveConversation via reset flow — check the store directly
-		sessions, _ := store.ListSessions("conv-1", 1)
-		if len(sessions) == 0 {
-			t.Fatal("no sessions found")
-		}
-		sid = sessions[0].ID
-	}
-
-	calls, err := store.GetSessionToolCalls(sid)
+	// Verify tool call was archived via status UPDATE.
+	var status string
+	err := workingStore.DB().QueryRow(`SELECT status FROM tool_calls WHERE id = 'tc-1'`).Scan(&status)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(calls) != 1 {
-		t.Fatalf("expected 1 tool call, got %d", len(calls))
-	}
-	if calls[0].ToolName != "web_search" {
-		t.Errorf("expected tool=web_search, got %s", calls[0].ToolName)
-	}
-}
-
-func TestAdapter_ArchiveConversation_WithToolCallFields(t *testing.T) {
-	adapter, store := newTestAdapter(t)
-	sid, _ := adapter.StartSession("conv-1")
-
-	now := time.Now()
-	msgs := []Message{
-		{Role: "user", Content: "do something", Timestamp: now},
-		{Role: "assistant", Content: "calling tool", Timestamp: now.Add(time.Second),
-			ToolCalls: `[{"id":"tc-1","name":"test_tool"}]`},
-		{Role: "tool", Content: "tool result", Timestamp: now.Add(2 * time.Second),
-			ToolCallID: "tc-1"},
+	if status != "archived" {
+		t.Errorf("expected status=archived, got %s", status)
 	}
 
-	if err := adapter.ArchiveConversation("conv-1", msgs, "manual"); err != nil {
-		t.Fatal(err)
-	}
-
-	transcript, _ := store.GetSessionTranscript(sid)
-	if len(transcript) != 3 {
-		t.Fatalf("expected 3 messages, got %d", len(transcript))
-	}
-
-	// Check tool call fields carried through
-	if transcript[1].ToolCalls != `[{"id":"tc-1","name":"test_tool"}]` {
-		t.Errorf("tool_calls not preserved: %s", transcript[1].ToolCalls)
-	}
-	if transcript[2].ToolCallID != "tc-1" {
-		t.Errorf("tool_call_id not preserved: %s", transcript[2].ToolCallID)
+	// Verify session_id was set on tool call.
+	var sessionID string
+	_ = workingStore.DB().QueryRow(`SELECT session_id FROM tool_calls WHERE id = 'tc-1'`).Scan(&sessionID)
+	if sessionID != sid {
+		t.Errorf("expected session_id=%s, got %s", sid, sessionID)
 	}
 }
 
 func TestAdapter_SessionLifecycle(t *testing.T) {
-	adapter, _ := newTestAdapter(t)
+	adapter, _, _ := newTestAdapter(t)
 
-	// No active session initially
+	// No active session initially.
 	if sid := adapter.ActiveSessionID("conv-1"); sid != "" {
 		t.Errorf("expected no active session, got %s", sid)
 	}
 
-	// Start session
+	// Start session.
 	sid, err := adapter.StartSession("conv-1")
 	if err != nil {
 		t.Fatal(err)
@@ -155,32 +140,32 @@ func TestAdapter_SessionLifecycle(t *testing.T) {
 		t.Fatal("expected non-empty session ID")
 	}
 
-	// Active session should match
+	// Active session should match.
 	if got := adapter.ActiveSessionID("conv-1"); got != sid {
 		t.Errorf("active session mismatch: %s != %s", got, sid)
 	}
 
-	// End session
+	// End session.
 	if err := adapter.EndSession(sid, "reset"); err != nil {
 		t.Fatal(err)
 	}
 
-	// No longer active
+	// No longer active.
 	if got := adapter.ActiveSessionID("conv-1"); got != "" {
 		t.Errorf("expected no active session after end, got %s", got)
 	}
 }
 
 func TestAdapter_EnsureSession(t *testing.T) {
-	adapter, _ := newTestAdapter(t)
+	adapter, _, _ := newTestAdapter(t)
 
-	// EnsureSession should create one
+	// EnsureSession should create one.
 	sid1 := adapter.EnsureSession("conv-1")
 	if sid1 == "" {
 		t.Fatal("expected session to be created")
 	}
 
-	// EnsureSession again should return the same one
+	// EnsureSession again should return the same one.
 	sid2 := adapter.EnsureSession("conv-1")
 	if sid2 != sid1 {
 		t.Errorf("expected same session, got %s != %s", sid1, sid2)
@@ -188,194 +173,63 @@ func TestAdapter_EnsureSession(t *testing.T) {
 }
 
 func TestAdapter_OnMessage(t *testing.T) {
-	adapter, store := newTestAdapter(t)
+	adapter, archiveStore, workingStore := newTestAdapter(t)
 
 	sid, _ := adapter.StartSession("conv-1")
 
-	// Archive real messages so the computed count works.
+	// Insert archived messages into the unified table.
 	now := time.Now()
-	if err := store.ArchiveMessages([]ArchivedMessage{
-		{ID: "m1", ConversationID: "conv-1", SessionID: sid, Role: "user", Content: "a", Timestamp: now, ArchivedAt: now, ArchiveReason: "test"},
-		{ID: "m2", ConversationID: "conv-1", SessionID: sid, Role: "assistant", Content: "b", Timestamp: now, ArchivedAt: now, ArchiveReason: "test"},
-		{ID: "m3", ConversationID: "conv-1", SessionID: sid, Role: "user", Content: "c", Timestamp: now, ArchivedAt: now, ArchiveReason: "test"},
-	}); err != nil {
-		t.Fatal(err)
+	for i, content := range []string{"a", "b", "c"} {
+		_, _ = workingStore.DB().Exec(`
+			INSERT INTO messages (id, conversation_id, session_id, role, content,
+			    timestamp, token_count, status, archived_at, archive_reason)
+			VALUES (?, 'conv-1', ?, 'user', ?, ?, 5, 'archived', ?, 'test')
+		`, "m"+string(rune('1'+i)), sid, content,
+			now.Add(time.Duration(i)*time.Second).Format(time.RFC3339Nano),
+			now.Format(time.RFC3339Nano))
 	}
 
-	sess, _ := store.GetSession(sid)
+	sess, _ := archiveStore.GetSession(sid)
 	if sess.MessageCount != 3 {
 		t.Errorf("expected message_count=3, got %d", sess.MessageCount)
 	}
 }
 
 func TestAdapter_ActiveSessionID_DBFallback(t *testing.T) {
-	adapter, store := newTestAdapter(t)
+	adapter, archiveStore, _ := newTestAdapter(t)
 
-	// Create a session directly in the store (bypassing adapter cache)
-	sess, _ := store.StartSession("conv-1")
+	// Create a session directly in the store (bypassing adapter cache).
+	sess, _ := archiveStore.StartSession("conv-1")
 
-	// Adapter cache doesn't know about it — should fall back to DB
+	// Adapter cache doesn't know about it — should fall back to DB.
 	got := adapter.ActiveSessionID("conv-1")
 	if got != sess.ID {
 		t.Errorf("expected DB fallback to find session %s, got %s", sess.ID[:8], got)
 	}
 }
 
-func TestAdapter_ArchiveConversation_ClearsToolCalls(t *testing.T) {
-	adapter, store := newTestAdapter(t)
+func TestAdapter_ActiveSessionStartedAt(t *testing.T) {
+	adapter, _, _ := newTestAdapter(t)
 
-	mockSource := &mockToolCallSource{
-		calls: map[string][]ToolCall{
-			"conv-1": {
-				{
-					ID:             "tc-1",
-					ConversationID: "conv-1",
-					ToolName:       "get_state",
-					Arguments:      `{"entity_id":"light.office"}`,
-					Result:         `{"state":"on"}`,
-					StartedAt:      time.Now(),
-				},
-				{
-					ID:             "tc-2",
-					ConversationID: "conv-1",
-					ToolName:       "call_service",
-					Arguments:      `{"domain":"light","service":"turn_off"}`,
-					Result:         "ok",
-					StartedAt:      time.Now(),
-				},
-			},
-		},
-	}
-	adapter.SetToolCallSource(mockSource)
-
-	// First archive (simulating a session split)
-	sid1, _ := adapter.StartSession("conv-1")
-	msgs1 := []Message{
-		{Role: "user", Content: "turn off the lights", Timestamp: time.Now()},
-		{Role: "assistant", Content: "done", Timestamp: time.Now()},
-	}
-	if err := adapter.ArchiveConversation("conv-1", msgs1, "split"); err != nil {
-		t.Fatal(err)
+	// No active session — should return zero time.
+	if got := adapter.ActiveSessionStartedAt("conv-1"); !got.IsZero() {
+		t.Errorf("expected zero time, got %v", got)
 	}
 
-	// Verify tool calls were archived
-	calls1, _ := store.GetSessionToolCalls(sid1)
-	if len(calls1) != 2 {
-		t.Fatalf("first archive: expected 2 tool calls, got %d", len(calls1))
-	}
-
-	// Verify ClearToolCalls was called
-	if mockSource.cleared["conv-1"] != 1 {
-		t.Fatalf("expected ClearToolCalls called once, got %d", mockSource.cleared["conv-1"])
-	}
-
-	// Second archive (simulating next session split) — should have zero
-	// tool calls since they were cleared after the first archive.
-	adapter.EndSession(sid1, "split")
-	sid2, _ := adapter.StartSession("conv-1")
-	msgs2 := []Message{
-		{Role: "user", Content: "what's the weather?", Timestamp: time.Now()},
-	}
-	if err := adapter.ArchiveConversation("conv-1", msgs2, "split"); err != nil {
-		t.Fatal(err)
-	}
-
-	calls2, _ := store.GetSessionToolCalls(sid2)
-	if len(calls2) != 0 {
-		t.Errorf("second archive: expected 0 tool calls (cleared), got %d", len(calls2))
-	}
-}
-
-// TestAdapter_UnifiedMode_ArchiveToolCalls verifies that when tcStore is set,
-// archiveToolCalls uses UPDATE (status='archived') instead of copy+clear.
-func TestAdapter_UnifiedMode_ArchiveToolCalls(t *testing.T) {
-	tmpDir := t.TempDir()
-
-	// Create working store.
-	workingStore, err := NewSQLiteStore(tmpDir+"/working.db", 100)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer workingStore.Close()
-
-	MigrateUnifyMessages(workingStore.DB(), "", slog.Default())
-
-	// Create archive store in unified mode.
-	archiveStore, err := NewArchiveStore(tmpDir+"/archive.db", workingStore.DB(), nil, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer archiveStore.Close()
-
-	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
-	adapter := NewArchiveAdapter(archiveStore, logger)
-
-	// Set up a mock tool call source (still needed for the nil check).
-	mockSource := &mockToolCallSource{
-		calls: map[string][]ToolCall{
-			"conv-1": {{ID: "tc-1", ConversationID: "conv-1", ToolName: "get_state",
-				Arguments: `{}`, StartedAt: time.Now()}},
-		},
-	}
-	adapter.SetToolCallSource(mockSource)
-	// Set the unified tool call store — this activates the UPDATE path.
-	adapter.SetToolCallStore(workingStore)
-
-	// Start session and record a tool call in the working store.
+	// Start session.
 	sid, _ := adapter.StartSession("conv-1")
-	workingStore.GetOrCreateConversation("conv-1")
-	workingStore.RecordToolCall("conv-1", "", "tc-1", "get_state", `{}`)
 
-	// Archive.
-	msgs := []Message{
-		{Role: "user", Content: "test", Timestamp: time.Now()},
-	}
-	adapter.SetMessageStore(workingStore)
-	workingStore.AddMessage("conv-1", "user", "test")
-	if err := adapter.ArchiveConversation("conv-1", msgs, "reset"); err != nil {
-		t.Fatal(err)
+	// Should return non-zero start time.
+	got := adapter.ActiveSessionStartedAt("conv-1")
+	if got.IsZero() {
+		t.Error("expected non-zero start time for active session")
 	}
 
-	// Verify tool call was archived via UPDATE (not copy+clear).
-	var status string
-	err = workingStore.DB().QueryRow(`SELECT status FROM tool_calls WHERE id = 'tc-1'`).Scan(&status)
-	if err != nil {
-		t.Fatal(err)
+	// End session — clear cache.
+	adapter.EndSession(sid, "reset")
+
+	// Should return zero again.
+	if got := adapter.ActiveSessionStartedAt("conv-1"); !got.IsZero() {
+		t.Errorf("expected zero time after session end, got %v", got)
 	}
-	if status != "archived" {
-		t.Errorf("expected status=archived, got %s", status)
-	}
-
-	// Verify session_id was set.
-	var sessionID string
-	_ = workingStore.DB().QueryRow(`SELECT session_id FROM tool_calls WHERE id = 'tc-1'`).Scan(&sessionID)
-	if sessionID != sid {
-		t.Errorf("expected session_id=%s, got %s", sid, sessionID)
-	}
-
-	// ClearToolCalls should NOT have been called (unified mode doesn't clear).
-	if mockSource.cleared["conv-1"] != 0 {
-		t.Errorf("expected ClearToolCalls not called in unified mode, got %d calls",
-			mockSource.cleared["conv-1"])
-	}
-}
-
-// --- mocks ---
-
-type mockToolCallSource struct {
-	calls   map[string][]ToolCall
-	cleared map[string]int // tracks ClearToolCalls call count per conversation
-}
-
-func (m *mockToolCallSource) GetToolCalls(conversationID string, limit int) []ToolCall {
-	return m.calls[conversationID]
-}
-
-func (m *mockToolCallSource) ClearToolCalls(conversationID string) error {
-	if m.cleared == nil {
-		m.cleared = make(map[string]int)
-	}
-	m.cleared[conversationID]++
-	delete(m.calls, conversationID)
-	return nil
 }

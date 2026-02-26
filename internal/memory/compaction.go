@@ -36,12 +36,6 @@ type CompactableStore interface {
 	AddCompactionSummary(conversationID, summary string) error
 }
 
-// Archiver is the interface for archiving messages before destructive operations.
-type Archiver interface {
-	ArchiveMessages(messages []ArchivedMessage) error
-	ActiveSession(conversationID string) (*Session, error)
-}
-
 // WorkingMemoryReader is the subset of WorkingMemoryStore needed by the
 // compactor. Defined as an interface for testability and to avoid coupling
 // the compactor to the concrete store type.
@@ -54,7 +48,6 @@ type Compactor struct {
 	store         CompactableStore
 	config        CompactionConfig
 	summarizer    Summarizer
-	archiver      Archiver            // optional — archive before compaction
 	workingMemory WorkingMemoryReader // optional — include in compaction prompt
 	logger        *slog.Logger
 }
@@ -74,11 +67,6 @@ func NewCompactor(store CompactableStore, config CompactionConfig, summarizer Su
 		summarizer: summarizer,
 		logger:     logger,
 	}
-}
-
-// SetArchiver configures an archiver for preserving messages before compaction.
-func (c *Compactor) SetArchiver(a Archiver) {
-	c.archiver = a
 }
 
 // SetWorkingMemoryStore configures a working memory store so that the
@@ -117,30 +105,9 @@ func (c *Compactor) Compact(ctx context.Context, conversationID string) error {
 		return nil // Not enough to bother
 	}
 
-	// Archive messages before compaction (never lose primary sources)
-	if c.archiver != nil {
-		sessionID := ""
-		if sess, err := c.archiver.ActiveSession(conversationID); err == nil && sess != nil {
-			sessionID = sess.ID
-		}
-
-		archived := make([]ArchivedMessage, len(messages))
-		for i, m := range messages {
-			archived[i] = ArchivedMessage{
-				ID:             m.ID,
-				ConversationID: conversationID,
-				SessionID:      sessionID,
-				Role:           m.Role,
-				Content:        m.Content,
-				Timestamp:      m.Timestamp,
-				TokenCount:     estimateTokens(m.Content),
-				ArchiveReason:  string(ArchiveReasonCompaction),
-			}
-		}
-		if err := c.archiver.ArchiveMessages(archived); err != nil {
-			return fmt.Errorf("archive before compaction: %w", err)
-		}
-	}
+	// Messages persist in the unified table with lifecycle status.
+	// Compaction marks them as 'compacted' — they're never deleted and
+	// remain searchable in the archive. No separate archive step needed.
 
 	// Find the cutoff time (last message being compacted)
 	var cutoffTime time.Time

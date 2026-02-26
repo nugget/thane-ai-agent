@@ -8,27 +8,15 @@ import (
 	"time"
 )
 
-// TestCompaction_ArchivesBeforeCompacting verifies that the compactor
-// archives messages before marking them compacted.
-func TestCompaction_ArchivesBeforeCompacting(t *testing.T) {
-	// Set up SQLite memory store
+// TestCompaction_PreservesMessages verifies that compacted messages persist
+// in the unified table with status='compacted' (they are never deleted).
+func TestCompaction_PreservesMessages(t *testing.T) {
 	memStore, err := NewSQLiteStore(t.TempDir()+"/mem.db", 100)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer memStore.Close()
 
-	// Set up archive store
-	archiveStore, err := NewArchiveStore(t.TempDir()+"/archive.db", nil, nil, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer archiveStore.Close()
-
-	// Create a session so archived messages have a session ID
-	archiveStore.StartSession("test-conv")
-
-	// Set up compactor with archive
 	summarizer := &SimpleSummarizer{}
 	cfg := CompactionConfig{
 		MaxTokens:            200,
@@ -37,9 +25,8 @@ func TestCompaction_ArchivesBeforeCompacting(t *testing.T) {
 		MinMessagesToCompact: 5,
 	}
 	compactor := NewCompactor(memStore, cfg, summarizer, slog.Default())
-	compactor.SetArchiver(archiveStore)
 
-	// Add enough messages to trigger compaction
+	// Add enough messages to trigger compaction.
 	for i := 0; i < 20; i++ {
 		msg := "This is a test message with some content for token counting purposes."
 		if err := memStore.AddMessage("test-conv", "user", msg); err != nil {
@@ -47,24 +34,34 @@ func TestCompaction_ArchivesBeforeCompacting(t *testing.T) {
 		}
 	}
 
-	// Verify compaction is needed
 	if !compactor.NeedsCompaction("test-conv") {
 		t.Skip("not enough tokens to trigger compaction")
 	}
 
-	// Compact
+	// Count messages before compaction.
+	var totalBefore int
+	_ = memStore.DB().QueryRow(`SELECT COUNT(*) FROM messages WHERE conversation_id = 'test-conv'`).Scan(&totalBefore)
+
 	if err := compactor.Compact(context.Background(), "test-conv"); err != nil {
 		t.Fatal(err)
 	}
 
-	// Check that messages were archived
-	stats, _ := archiveStore.Stats()
-	archivedCount := stats["total_messages"].(int)
-	if archivedCount == 0 {
-		t.Error("expected messages to be archived before compaction, got 0")
+	// Messages should still exist (compacted, not deleted).
+	var totalAfter int
+	_ = memStore.DB().QueryRow(`SELECT COUNT(*) FROM messages WHERE conversation_id = 'test-conv'`).Scan(&totalAfter)
+	// totalAfter should be totalBefore + 1 (the summary message)
+	if totalAfter < totalBefore {
+		t.Errorf("messages should be preserved after compaction: before=%d, after=%d", totalBefore, totalAfter)
 	}
 
-	t.Logf("archived %d messages before compaction", archivedCount)
+	// Verify some messages are marked as compacted.
+	var compactedCount int
+	_ = memStore.DB().QueryRow(`SELECT COUNT(*) FROM messages WHERE conversation_id = 'test-conv' AND compacted = TRUE`).Scan(&compactedCount)
+	if compactedCount == 0 {
+		t.Error("expected some messages to be marked as compacted")
+	}
+
+	t.Logf("compacted %d messages, total: %d -> %d", compactedCount, totalBefore, totalAfter)
 }
 
 // TestSearch_NoContext verifies the NoContext flag disables context expansion.
