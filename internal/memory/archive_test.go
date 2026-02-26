@@ -905,6 +905,192 @@ func TestArchiveIterations_RoundTrip(t *testing.T) {
 	}
 }
 
+// --- Phase 3: Consolidated-mode (NewArchiveStoreFromDB) tests ---
+
+// TestNewArchiveStoreFromDB verifies that creating an ArchiveStore from a
+// shared *sql.DB works and session CRUD operates correctly.
+func TestNewArchiveStoreFromDB(t *testing.T) {
+	workingStore, err := NewSQLiteStore(t.TempDir()+"/working.db", 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer workingStore.Close()
+
+	MigrateUnifyMessages(workingStore.DB(), "", nil)
+	MigrateUnifyToolCalls(workingStore.DB(), "", nil)
+
+	archiveStore, err := NewArchiveStoreFromDB(workingStore.DB(), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Session lifecycle.
+	sess, err := archiveStore.StartSession("conv-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sess.ID == "" {
+		t.Fatal("expected non-empty session ID")
+	}
+
+	got, err := archiveStore.GetSession(sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ConversationID != "conv-1" {
+		t.Errorf("conversation_id = %q, want conv-1", got.ConversationID)
+	}
+
+	if err := archiveStore.EndSession(sess.ID, "reset"); err != nil {
+		t.Fatal(err)
+	}
+
+	ended, err := archiveStore.GetSession(sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ended.EndReason != "reset" {
+		t.Errorf("end_reason = %q, want reset", ended.EndReason)
+	}
+}
+
+// TestNewArchiveStoreFromDB_CloseIsNoop verifies that Close on a consolidated
+// store does not close the shared connection.
+func TestNewArchiveStoreFromDB_CloseIsNoop(t *testing.T) {
+	workingStore, err := NewSQLiteStore(t.TempDir()+"/working.db", 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer workingStore.Close()
+
+	MigrateUnifyMessages(workingStore.DB(), "", nil)
+
+	archiveStore, err := NewArchiveStoreFromDB(workingStore.DB(), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Close should be a no-op.
+	if err := archiveStore.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	// The working store should still be usable.
+	if err := workingStore.AddMessage("conv-1", "user", "after close"); err != nil {
+		t.Fatalf("working store should still work after archive close: %v", err)
+	}
+}
+
+// TestConsolidatedMode_FullLifecycle exercises the complete flow: session
+// start → archive messages → get transcript → archive iterations → get
+// iterations → search → end session, all in consolidated (single-DB) mode.
+func TestConsolidatedMode_FullLifecycle(t *testing.T) {
+	workingStore, err := NewSQLiteStore(t.TempDir()+"/working.db", 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer workingStore.Close()
+
+	MigrateUnifyMessages(workingStore.DB(), "", nil)
+	MigrateUnifyToolCalls(workingStore.DB(), "", nil)
+
+	archiveStore, err := NewArchiveStoreFromDB(workingStore.DB(), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Start session.
+	sess, err := archiveStore.StartSession("conv-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Archive messages by inserting into the unified table.
+	now := time.Now().UTC()
+	for i, msg := range []struct {
+		role, content string
+	}{
+		{"user", "what is the weather today?"},
+		{"assistant", "let me check that for you"},
+		{"user", "thanks!"},
+	} {
+		_, err := workingStore.DB().Exec(`
+			INSERT INTO messages (id, conversation_id, session_id, role, content,
+			    timestamp, token_count, status, archived_at, archive_reason)
+			VALUES (?, 'conv-1', ?, ?, ?, ?, 10, 'archived', ?, 'reset')
+		`, fmt.Sprintf("msg-%d", i), sess.ID, msg.role, msg.content,
+			now.Add(time.Duration(i)*time.Second).Format(time.RFC3339Nano),
+			now.Format(time.RFC3339Nano))
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Get transcript.
+	transcript, err := archiveStore.GetSessionTranscript(sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(transcript) != 3 {
+		t.Fatalf("expected 3 messages, got %d", len(transcript))
+	}
+	if transcript[0].Content != "what is the weather today?" {
+		t.Errorf("first message = %q", transcript[0].Content)
+	}
+
+	// Archive iterations.
+	if err := archiveStore.ArchiveIterations([]ArchivedIteration{
+		{
+			SessionID: sess.ID, IterationIndex: 0, Model: "claude-sonnet",
+			InputTokens: 1000, OutputTokens: 200, ToolCallCount: 1,
+			StartedAt: now, DurationMs: 350, HasToolCalls: true,
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	iters, err := archiveStore.GetSessionIterations(sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(iters) != 1 {
+		t.Fatalf("expected 1 iteration, got %d", len(iters))
+	}
+	if iters[0].Model != "claude-sonnet" {
+		t.Errorf("iteration model = %q, want claude-sonnet", iters[0].Model)
+	}
+
+	// Search.
+	results, err := archiveStore.Search(SearchOptions{
+		Query:     "weather",
+		Limit:     5,
+		NoContext: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) == 0 {
+		t.Error("expected at least 1 search result for 'weather'")
+	}
+
+	// End session.
+	if err := archiveStore.EndSession(sess.ID, "reset"); err != nil {
+		t.Fatal(err)
+	}
+
+	// List sessions.
+	sessions, err := archiveStore.ListSessions("conv-1", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("expected 1 session, got %d", len(sessions))
+	}
+	if sessions[0].EndReason != "reset" {
+		t.Errorf("end_reason = %q, want reset", sessions[0].EndReason)
+	}
+}
+
 func TestArchiveIterations_EmptySession(t *testing.T) {
 	store := newTestArchiveStore(t)
 

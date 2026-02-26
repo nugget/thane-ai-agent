@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"log/slog"
+	"os"
 	"time"
 )
 
@@ -578,6 +579,281 @@ func hasColumn(db *sql.DB, table, column string) bool {
 	}
 	// Use a lightweight SELECT to probe for the column.
 	_, err := db.Exec("SELECT " + column + " FROM " + table + " LIMIT 0")
+	return err == nil
+}
+
+// MigrateConsolidateDB copies session-related tables from archive.db into the
+// working database (thane.db) so all data lives in a single file. This is the
+// third step of the storage unification (issue #434): after messages and tool
+// calls were unified in phases 1+2, this phase moves sessions,
+// archive_iterations, import_metadata, working_memory, and delegations.
+//
+// The migration is idempotent: it checks for existing rows in the sessions
+// table as a sentinel. If archive.db does not exist, it returns nil (fresh
+// install). Safe to call on every startup.
+func MigrateConsolidateDB(workingDB *sql.DB, archiveDBPath string, logger *slog.Logger) error {
+	if logger == nil {
+		logger = slog.Default()
+	}
+
+	// Step 1: Create target tables in workingDB (idempotent).
+	if err := createConsolidationTargets(workingDB); err != nil {
+		return fmt.Errorf("create consolidation targets: %w", err)
+	}
+
+	// Step 2: Sentinel — if sessions already exist, we've already consolidated.
+	var sessionCount int
+	_ = workingDB.QueryRow(`SELECT COUNT(*) FROM sessions`).Scan(&sessionCount)
+	if sessionCount > 0 {
+		logger.Debug("consolidation already complete", "sessions", sessionCount)
+		return nil
+	}
+
+	// Step 3: Check if archive.db exists on disk.
+	if _, err := os.Stat(archiveDBPath); os.IsNotExist(err) {
+		logger.Debug("no archive.db to consolidate", "path", archiveDBPath)
+		return nil
+	}
+
+	// Step 4: Attach archive.db and copy data.
+	_, err := workingDB.Exec(`ATTACH DATABASE ? AS archive`, archiveDBPath)
+	if err != nil {
+		logger.Info("could not attach archive database", "path", archiveDBPath, "error", err)
+		return nil
+	}
+	defer func() { _, _ = workingDB.Exec(`DETACH DATABASE archive`) }()
+
+	start := time.Now()
+
+	// Step 5: Copy each table that exists in archive.db.
+	tables := []struct {
+		name    string
+		copySQL string
+	}{
+		{
+			"sessions",
+			`INSERT OR IGNORE INTO sessions
+				(id, conversation_id, started_at, ended_at, end_reason,
+				 message_count, summary, title, tags, metadata,
+				 parent_session_id, parent_tool_call_id)
+			SELECT id, conversation_id, started_at, ended_at, end_reason,
+				message_count, summary, title, tags, metadata,
+				parent_session_id, parent_tool_call_id
+			FROM archive.sessions`,
+		},
+		{
+			"archive_iterations",
+			`INSERT OR IGNORE INTO archive_iterations
+				(session_id, iteration_index, model, input_tokens, output_tokens,
+				 tool_call_count, tool_call_ids, tools_offered, started_at,
+				 duration_ms, has_tool_calls, break_reason)
+			SELECT session_id, iteration_index, model, input_tokens, output_tokens,
+				tool_call_count, tool_call_ids, tools_offered, started_at,
+				duration_ms, has_tool_calls, break_reason
+			FROM archive.archive_iterations`,
+		},
+		{
+			"import_metadata",
+			`INSERT OR IGNORE INTO import_metadata (source_id, source_type, archive_session_id, imported_at)
+			SELECT source_id, source_type, archive_session_id, imported_at
+			FROM archive.import_metadata`,
+		},
+		{
+			"working_memory",
+			`INSERT OR IGNORE INTO working_memory (conversation_id, content, updated_at)
+			SELECT conversation_id, content, updated_at
+			FROM archive.working_memory`,
+		},
+		{
+			"delegations",
+			`INSERT OR IGNORE INTO delegations
+				(id, conversation_id, task, guidance, profile, model,
+				 iterations, max_iterations, input_tokens, output_tokens,
+				 exhausted, exhaust_reason, tools_called, messages,
+				 result_content, started_at, completed_at, duration_ms, error)
+			SELECT id, conversation_id, task, guidance, profile, model,
+				iterations, max_iterations, input_tokens, output_tokens,
+				exhausted, COALESCE(exhaust_reason, ''), tools_called, messages,
+				result_content, started_at, completed_at, duration_ms, error
+			FROM archive.delegations`,
+		},
+	}
+
+	for _, tbl := range tables {
+		// Check table exists in archive.
+		var exists int
+		_ = workingDB.QueryRow(
+			`SELECT COUNT(*) FROM archive.sqlite_master WHERE type='table' AND name=?`,
+			tbl.name,
+		).Scan(&exists)
+		if exists == 0 {
+			logger.Debug("archive table not found, skipping", "table", tbl.name)
+			continue
+		}
+
+		// Handle missing columns gracefully — old archive.db schemas may
+		// not have all columns. Check for optional columns and fall back.
+		copySQL := tbl.copySQL
+		if tbl.name == "sessions" {
+			// title, tags, metadata were added in v2; parent_* in v3.
+			// Build the column list based on what exists in archive.
+			hasTitle := archiveHasColumn(workingDB, "sessions", "title")
+			hasParent := archiveHasColumn(workingDB, "sessions", "parent_session_id")
+
+			switch {
+			case hasParent:
+				// Full schema — use default copySQL.
+			case hasTitle:
+				// v2 schema: has title/tags/metadata but no parent columns.
+				copySQL = `INSERT OR IGNORE INTO sessions
+					(id, conversation_id, started_at, ended_at, end_reason,
+					 message_count, summary, title, tags, metadata)
+				SELECT id, conversation_id, started_at, ended_at, end_reason,
+					message_count, summary,
+					COALESCE(title, ''), COALESCE(tags, ''), COALESCE(metadata, '')
+				FROM archive.sessions`
+			default:
+				// Pre-v2 schema: only base columns.
+				copySQL = `INSERT OR IGNORE INTO sessions
+					(id, conversation_id, started_at, ended_at, end_reason,
+					 message_count, summary)
+				SELECT id, conversation_id, started_at, ended_at, end_reason,
+					message_count, COALESCE(summary, '')
+				FROM archive.sessions`
+			}
+		}
+		if tbl.name == "archive_iterations" {
+			// tool_call_ids and tools_offered were added later.
+			if !archiveHasColumn(workingDB, "archive_iterations", "tool_call_ids") {
+				copySQL = `INSERT OR IGNORE INTO archive_iterations
+					(session_id, iteration_index, model, input_tokens, output_tokens,
+					 tool_call_count, started_at, duration_ms, has_tool_calls, break_reason)
+				SELECT session_id, iteration_index, model, input_tokens, output_tokens,
+					tool_call_count, started_at, duration_ms, has_tool_calls, break_reason
+				FROM archive.archive_iterations`
+			}
+		}
+
+		result, err := workingDB.Exec(copySQL)
+		if err != nil {
+			return fmt.Errorf("copy %s: %w", tbl.name, err)
+		}
+		copied, _ := result.RowsAffected()
+		if copied > 0 {
+			logger.Info("consolidated table from archive",
+				"table", tbl.name,
+				"rows", copied,
+			)
+		}
+	}
+
+	logger.Info("database consolidation complete",
+		"duration", time.Since(start).Round(time.Millisecond),
+	)
+
+	return nil
+}
+
+// createConsolidationTargets creates the tables that Phase 3 consolidation
+// copies into. All statements are idempotent (CREATE TABLE IF NOT EXISTS).
+func createConsolidationTargets(db *sql.DB) error {
+	stmts := []string{
+		// sessions
+		`CREATE TABLE IF NOT EXISTS sessions (
+			id TEXT PRIMARY KEY,
+			conversation_id TEXT NOT NULL,
+			started_at TIMESTAMP NOT NULL,
+			ended_at TIMESTAMP,
+			end_reason TEXT,
+			message_count INTEGER DEFAULT 0,
+			summary TEXT,
+			title TEXT,
+			tags TEXT,
+			metadata TEXT,
+			parent_session_id TEXT,
+			parent_tool_call_id TEXT
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_sessions_conversation ON sessions(conversation_id, started_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_sessions_started ON sessions(started_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_sessions_parent ON sessions(parent_session_id, started_at)`,
+
+		// archive_iterations (keep name to avoid churn; rename in Phase 4)
+		`CREATE TABLE IF NOT EXISTS archive_iterations (
+			session_id TEXT NOT NULL,
+			iteration_index INTEGER NOT NULL,
+			model TEXT NOT NULL,
+			input_tokens INTEGER NOT NULL DEFAULT 0,
+			output_tokens INTEGER NOT NULL DEFAULT 0,
+			tool_call_count INTEGER NOT NULL DEFAULT 0,
+			tool_call_ids TEXT,
+			tools_offered TEXT,
+			started_at TIMESTAMP NOT NULL,
+			duration_ms INTEGER NOT NULL DEFAULT 0,
+			has_tool_calls BOOLEAN NOT NULL DEFAULT FALSE,
+			break_reason TEXT,
+			PRIMARY KEY (session_id, iteration_index)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_archive_iter_session ON archive_iterations(session_id, iteration_index)`,
+
+		// import_metadata
+		`CREATE TABLE IF NOT EXISTS import_metadata (
+			source_id TEXT NOT NULL,
+			source_type TEXT NOT NULL,
+			archive_session_id TEXT NOT NULL,
+			imported_at TIMESTAMP NOT NULL,
+			PRIMARY KEY (source_id, source_type)
+		)`,
+
+		// working_memory
+		`CREATE TABLE IF NOT EXISTS working_memory (
+			conversation_id TEXT NOT NULL PRIMARY KEY,
+			content TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`,
+
+		// delegations
+		`CREATE TABLE IF NOT EXISTS delegations (
+			id              TEXT PRIMARY KEY,
+			conversation_id TEXT NOT NULL,
+			task            TEXT NOT NULL,
+			guidance        TEXT,
+			profile         TEXT NOT NULL,
+			model           TEXT NOT NULL,
+			iterations      INTEGER NOT NULL,
+			max_iterations  INTEGER NOT NULL,
+			input_tokens    INTEGER NOT NULL,
+			output_tokens   INTEGER NOT NULL,
+			exhausted       BOOLEAN NOT NULL DEFAULT 0,
+			exhaust_reason  TEXT,
+			tools_called    TEXT,
+			messages        TEXT,
+			result_content  TEXT,
+			started_at      TEXT NOT NULL,
+			completed_at    TEXT NOT NULL,
+			duration_ms     INTEGER NOT NULL,
+			error           TEXT
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_delegations_conversation ON delegations(conversation_id, started_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_delegations_profile ON delegations(profile)`,
+		`CREATE INDEX IF NOT EXISTS idx_delegations_started ON delegations(started_at DESC)`,
+		`CREATE INDEX IF NOT EXISTS idx_delegations_model ON delegations(model)`,
+	}
+
+	for _, stmt := range stmts {
+		if _, err := db.Exec(stmt); err != nil {
+			return fmt.Errorf("exec %q: %w", stmt[:min(40, len(stmt))], err)
+		}
+	}
+	return nil
+}
+
+// archiveHasColumn checks whether a column exists on a table in the attached
+// archive database. The table must already be confirmed to exist.
+func archiveHasColumn(db *sql.DB, table, column string) bool {
+	if !isValidIdentifier(table) || !isValidIdentifier(column) {
+		return false
+	}
+	_, err := db.Exec("SELECT " + column + " FROM archive." + table + " LIMIT 0")
 	return err == nil
 }
 
