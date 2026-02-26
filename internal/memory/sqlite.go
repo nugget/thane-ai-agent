@@ -71,6 +71,7 @@ func (s *SQLiteStore) migrate() error {
 		id TEXT PRIMARY KEY,
 		message_id TEXT,
 		conversation_id TEXT NOT NULL,
+		session_id TEXT,
 		tool_name TEXT NOT NULL,
 		arguments TEXT NOT NULL,
 		result TEXT,
@@ -78,12 +79,17 @@ func (s *SQLiteStore) migrate() error {
 		started_at TIMESTAMP NOT NULL,
 		completed_at TIMESTAMP,
 		duration_ms INTEGER,
+		status TEXT DEFAULT 'active' CHECK (status IN ('active', 'archived')),
+		archived_at TIMESTAMP,
+		iteration_index INTEGER,
 		FOREIGN KEY (message_id) REFERENCES messages(id) ON DELETE SET NULL,
 		FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
 	);
 	CREATE INDEX IF NOT EXISTS idx_tool_calls_conversation ON tool_calls(conversation_id, started_at);
 	CREATE INDEX IF NOT EXISTS idx_tool_calls_tool ON tool_calls(tool_name);
 	CREATE INDEX IF NOT EXISTS idx_tool_calls_message ON tool_calls(message_id);
+	CREATE INDEX IF NOT EXISTS idx_tool_calls_session ON tool_calls(session_id, started_at);
+	CREATE INDEX IF NOT EXISTS idx_tool_calls_status ON tool_calls(conversation_id, status);
 
 	-- Entity facts (for Phase 3)
 	CREATE TABLE IF NOT EXISTS entity_facts (
@@ -482,19 +488,20 @@ func (s *SQLiteStore) GetToolCalls(conversationID string, limit int) []ToolCall 
 
 	if conversationID != "" {
 		rows, err = s.db.Query(`
-			SELECT id, message_id, conversation_id, tool_name, arguments, 
+			SELECT id, message_id, conversation_id, tool_name, arguments,
 			       result, error, started_at, completed_at, duration_ms
 			FROM tool_calls
-			WHERE conversation_id = ?
+			WHERE conversation_id = ? AND status = 'active'
 			ORDER BY started_at DESC
 			LIMIT ?
 		`, conversationID, limit)
 	} else {
-		// No filter - get all recent
+		// No filter - get all recent active tool calls.
 		rows, err = s.db.Query(`
-			SELECT id, message_id, conversation_id, tool_name, arguments, 
+			SELECT id, message_id, conversation_id, tool_name, arguments,
 			       result, error, started_at, completed_at, duration_ms
 			FROM tool_calls
+			WHERE status = 'active'
 			ORDER BY started_at DESC
 			LIMIT ?
 		`, limit)
@@ -563,7 +570,7 @@ func (s *SQLiteStore) GetToolCallsByName(toolName string, limit int) []ToolCall 
 		SELECT id, message_id, conversation_id, tool_name, arguments,
 		       result, error, started_at, completed_at, duration_ms
 		FROM tool_calls
-		WHERE tool_name = ?
+		WHERE tool_name = ? AND status = 'active'
 		ORDER BY started_at DESC
 		LIMIT ?
 	`, toolName, limit)
@@ -605,6 +612,23 @@ func (s *SQLiteStore) GetToolCallsByName(toolName string, limit int) []ToolCall 
 	}
 
 	return calls
+}
+
+// ArchiveToolCalls updates tool calls in the unified table to archived status.
+// This replaces the cross-DB copy that the legacy archive flow used.
+func (s *SQLiteStore) ArchiveToolCalls(conversationID, sessionID string) (int64, error) {
+	now := time.Now().UTC()
+	result, err := s.db.Exec(`
+		UPDATE tool_calls
+		SET session_id = COALESCE(session_id, ?),
+		    status = 'archived',
+		    archived_at = ?
+		WHERE conversation_id = ? AND status = 'active'
+	`, sessionID, now.Format(time.RFC3339Nano), conversationID)
+	if err != nil {
+		return 0, fmt.Errorf("archive tool calls: %w", err)
+	}
+	return result.RowsAffected()
 }
 
 // ArchiveMessages updates messages in the unified table to archived status.

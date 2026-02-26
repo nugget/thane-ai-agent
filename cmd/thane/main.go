@@ -474,18 +474,22 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	})
 	ollamaClient.SetWatcher(ollamaWatcher)
 
-	// --- Unify message storage ---
-	// Merge archived messages from archive.db into the working thane.db so
-	// all messages live in a single table with lifecycle status. This is
-	// idempotent and safe to run on every startup. See issue #434.
+	// --- Unify storage ---
+	// Merge archived messages and tool calls from archive.db into the working
+	// thane.db so all data lives in unified tables with lifecycle status.
+	// Both migrations are idempotent and safe to run on every startup.
+	// See issue #434.
 	if err := memory.MigrateUnifyMessages(mem.DB(), cfg.DataDir+"/archive.db", logger); err != nil {
 		return fmt.Errorf("unify messages migration: %w", err)
 	}
+	if err := memory.MigrateUnifyToolCalls(mem.DB(), cfg.DataDir+"/archive.db", logger); err != nil {
+		return fmt.Errorf("unify tool calls migration: %w", err)
+	}
 
 	// --- Session archive ---
-	// Immutable archive of all conversation transcripts. Messages are read
-	// from the unified working DB; sessions/iterations/tool_calls live in
-	// archive.db until PR 3 consolidates everything.
+	// Immutable archive of all conversation transcripts. Messages and tool
+	// calls are read from the unified working DB; sessions/iterations live
+	// in archive.db until PR 3 consolidates everything.
 	archiveStore, err := memory.NewArchiveStore(cfg.DataDir+"/archive.db", mem.DB(), nil, logger)
 	if err != nil {
 		return fmt.Errorf("open archive store: %w", err)
@@ -513,6 +517,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	archiveAdapter := memory.NewArchiveAdapter(archiveStore, logger)
 	archiveAdapter.SetToolCallSource(mem)
 	archiveAdapter.SetMessageStore(mem)
+	archiveAdapter.SetToolCallStore(mem)
 
 	// --- Talents ---
 	// Talents are markdown files that extend the system prompt with
