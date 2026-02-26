@@ -326,6 +326,250 @@ func rebuildUnifiedFTS(db *sql.DB, logger *slog.Logger) error {
 	return nil
 }
 
+// MigrateUnifyToolCalls adds lifecycle columns to the working tool_calls table
+// and copies archived tool calls from archive.db into the unified table. This
+// is the second step of the storage unification (issue #434).
+//
+// The migration is idempotent: it detects whether it has already run by
+// checking for the status column and skips the archive merge if archive data
+// is already present. Safe to call on every startup.
+func MigrateUnifyToolCalls(workingDB *sql.DB, archiveDBPath string, logger *slog.Logger) error {
+	if logger == nil {
+		logger = slog.Default()
+	}
+
+	// Step 1: Add lifecycle columns if they don't exist.
+	if err := addToolCallLifecycleColumns(workingDB, logger); err != nil {
+		return fmt.Errorf("add tool call lifecycle columns: %w", err)
+	}
+
+	// Step 2: Backfill status for existing rows.
+	if err := backfillToolCallStatus(workingDB, logger); err != nil {
+		return fmt.Errorf("backfill tool call status: %w", err)
+	}
+
+	// Step 3: Merge archive data if archive.db exists and has data.
+	if archiveDBPath != "" {
+		if err := mergeArchiveToolCalls(workingDB, archiveDBPath, logger); err != nil {
+			return fmt.Errorf("merge archive tool calls: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// addToolCallLifecycleColumns adds session_id, status, archived_at, and
+// iteration_index to the tool_calls table if they don't already exist.
+func addToolCallLifecycleColumns(db *sql.DB, logger *slog.Logger) error {
+	columns := []struct {
+		name string
+		sql  string
+	}{
+		{"session_id", "ALTER TABLE tool_calls ADD COLUMN session_id TEXT"},
+		{"status", "ALTER TABLE tool_calls ADD COLUMN status TEXT DEFAULT 'active' CHECK (status IN ('active', 'archived'))"},
+		{"archived_at", "ALTER TABLE tool_calls ADD COLUMN archived_at TIMESTAMP"},
+		{"iteration_index", "ALTER TABLE tool_calls ADD COLUMN iteration_index INTEGER"},
+	}
+
+	for _, col := range columns {
+		if hasColumn(db, "tool_calls", col.name) {
+			continue
+		}
+		if _, err := db.Exec(col.sql); err != nil {
+			return fmt.Errorf("add column %s: %w", col.name, err)
+		}
+		logger.Info("added column to tool_calls", "column", col.name)
+	}
+
+	indexes := []string{
+		"CREATE INDEX IF NOT EXISTS idx_tool_calls_session ON tool_calls(session_id, started_at)",
+		"CREATE INDEX IF NOT EXISTS idx_tool_calls_status ON tool_calls(conversation_id, status)",
+	}
+	for _, idx := range indexes {
+		if _, err := db.Exec(idx); err != nil {
+			return fmt.Errorf("create index: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// backfillToolCallStatus sets status = 'active' on any tool_calls rows where
+// status is NULL (pre-migration rows). Tool calls have no compacted state.
+func backfillToolCallStatus(db *sql.DB, logger *slog.Logger) error {
+	result, err := db.Exec(`UPDATE tool_calls SET status = 'active' WHERE status IS NULL`)
+	if err != nil {
+		return fmt.Errorf("set active status: %w", err)
+	}
+	activated, _ := result.RowsAffected()
+	if activated > 0 {
+		logger.Info("backfilled tool call status", "active", activated)
+	}
+	return nil
+}
+
+// mergeArchiveToolCalls copies archived tool calls from archive.db into the
+// unified tool_calls table using UPSERT. For tool calls that already exist in
+// the working DB, the archive's metadata (session_id, archived_at,
+// iteration_index) is preserved via ON CONFLICT.
+func mergeArchiveToolCalls(workingDB *sql.DB, archiveDBPath string, logger *slog.Logger) error {
+	// Check if we already have archived tool calls (migration already ran).
+	var archivedCount int
+	_ = workingDB.QueryRow(`SELECT COUNT(*) FROM tool_calls WHERE status = 'archived'`).Scan(&archivedCount)
+	if archivedCount > 0 {
+		logger.Debug("archive tool calls already merged", "count", archivedCount)
+		return nil
+	}
+
+	// Check if archive DB exists by trying to attach it.
+	_, err := workingDB.Exec(`ATTACH DATABASE ? AS archive`, archiveDBPath)
+	if err != nil {
+		logger.Info("no archive database to merge tool calls", "path", archiveDBPath, "error", err)
+		return nil
+	}
+
+	// Check if archive has the archive_tool_calls table.
+	var tableExists int
+	err = workingDB.QueryRow(`SELECT COUNT(*) FROM archive.sqlite_master WHERE type='table' AND name='archive_tool_calls'`).Scan(&tableExists)
+	if err != nil || tableExists == 0 {
+		_, _ = workingDB.Exec(`DETACH DATABASE archive`)
+		logger.Info("archive database has no archive_tool_calls table")
+		return nil
+	}
+
+	// Count source rows for logging.
+	var sourceCount int
+	_ = workingDB.QueryRow(`SELECT COUNT(*) FROM archive.archive_tool_calls`).Scan(&sourceCount)
+	if sourceCount == 0 {
+		_, _ = workingDB.Exec(`DETACH DATABASE archive`)
+		logger.Info("archive database has no tool calls to merge")
+		return nil
+	}
+
+	logger.Info("merging archive tool calls into unified table", "source_count", sourceCount)
+	start := time.Now()
+
+	// Ensure the conversations referenced by archive tool calls exist in the
+	// working DB (they may not if the working DB was cleared).
+	_, err = workingDB.Exec(`
+		INSERT OR IGNORE INTO conversations (id, created_at, updated_at)
+		SELECT DISTINCT conversation_id, MIN(started_at), MAX(started_at)
+		FROM archive.archive_tool_calls
+		GROUP BY conversation_id
+	`)
+	if err != nil {
+		_, _ = workingDB.Exec(`DETACH DATABASE archive`)
+		return fmt.Errorf("ensure conversations: %w", err)
+	}
+
+	// Stage archive data into a temp table so we can detach the archive DB
+	// before the UPSERT loop.
+	_, err = workingDB.Exec(`
+		CREATE TEMP TABLE _archive_tc_import AS
+		SELECT id, conversation_id, session_id, tool_name, arguments,
+		       result, error, started_at, completed_at, duration_ms,
+		       archived_at, iteration_index
+		FROM archive.archive_tool_calls
+	`)
+	if err != nil {
+		_, _ = workingDB.Exec(`DETACH DATABASE archive`)
+		return fmt.Errorf("stage archive tool call data: %w", err)
+	}
+	_, _ = workingDB.Exec(`DETACH DATABASE archive`)
+
+	// Read staged rows and UPSERT each one.
+	affected, err := upsertToolCallsFromTemp(workingDB)
+	if err != nil {
+		_, _ = workingDB.Exec(`DROP TABLE IF EXISTS _archive_tc_import`)
+		return fmt.Errorf("upsert archive tool calls: %w", err)
+	}
+
+	_, _ = workingDB.Exec(`DROP TABLE IF EXISTS _archive_tc_import`)
+
+	logger.Info("archive tool calls merged",
+		"rows_affected", affected,
+		"duration", time.Since(start).Round(time.Millisecond),
+	)
+
+	return nil
+}
+
+// upsertToolCallsFromTemp reads rows from _archive_tc_import and UPSERTs
+// each into the tool_calls table within a transaction.
+func upsertToolCallsFromTemp(db *sql.DB) (int64, error) {
+	rows, err := db.Query(`
+		SELECT id, conversation_id, session_id, tool_name, arguments,
+		       result, error, started_at, completed_at, duration_ms,
+		       archived_at, iteration_index
+		FROM _archive_tc_import
+	`)
+	if err != nil {
+		return 0, fmt.Errorf("read staged data: %w", err)
+	}
+	defer rows.Close()
+
+	type tcRow struct {
+		id, convID, sessID, toolName, arguments string
+		result, errMsg                          sql.NullString
+		startedAt                               string
+		completedAt                             sql.NullString
+		durationMs                              sql.NullInt64
+		archivedAt                              sql.NullString
+		iterationIndex                          sql.NullInt64
+	}
+	var staged []tcRow
+	for rows.Next() {
+		var r tcRow
+		if err := rows.Scan(&r.id, &r.convID, &r.sessID, &r.toolName, &r.arguments,
+			&r.result, &r.errMsg, &r.startedAt, &r.completedAt, &r.durationMs,
+			&r.archivedAt, &r.iterationIndex); err != nil {
+			return 0, fmt.Errorf("scan staged row: %w", err)
+		}
+		staged = append(staged, r)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("iterate staged rows: %w", err)
+	}
+	rows.Close()
+
+	tx, err := db.Begin()
+	if err != nil {
+		return 0, fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	stmt, err := tx.Prepare(`
+		INSERT INTO tool_calls
+			(id, message_id, conversation_id, session_id, tool_name, arguments,
+			 result, error, started_at, completed_at, duration_ms,
+			 status, archived_at, iteration_index)
+		VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'archived', ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			session_id = COALESCE(excluded.session_id, tool_calls.session_id),
+			status = 'archived',
+			archived_at = COALESCE(excluded.archived_at, tool_calls.archived_at),
+			iteration_index = COALESCE(excluded.iteration_index, tool_calls.iteration_index)
+	`)
+	if err != nil {
+		return 0, fmt.Errorf("prepare upsert: %w", err)
+	}
+	defer stmt.Close()
+
+	for _, r := range staged {
+		if _, err := stmt.Exec(r.id, r.convID, r.sessID, r.toolName, r.arguments,
+			r.result, r.errMsg, r.startedAt, r.completedAt, r.durationMs,
+			r.archivedAt, r.iterationIndex); err != nil {
+			return 0, fmt.Errorf("upsert row %s: %w", r.id, err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("commit: %w", err)
+	}
+
+	return int64(len(staged)), nil
+}
+
 // hasColumn checks whether a column exists on the given table.
 // Both table and column must be valid SQL identifiers (alphanumeric + underscore).
 func hasColumn(db *sql.DB, table, column string) bool {

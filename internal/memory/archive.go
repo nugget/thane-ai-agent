@@ -34,6 +34,11 @@ type ArchiveStore struct {
 	msgTableName string // "messages" or "archive_messages"
 	msgFTSName   string // "messages_fts" or "archive_fts"
 
+	// Tool call storage routing. Follows the same pattern as messages.
+	// In unified mode, tool call queries use the working DB's "tool_calls"
+	// table. In legacy mode, they use archive.db's "archive_tool_calls".
+	tcTableName string // "tool_calls" or "archive_tool_calls"
+
 	// Whether FTS5 is available
 	ftsEnabled bool
 
@@ -222,13 +227,15 @@ func NewArchiveStore(dbPath string, messagesDB *sql.DB, cfg *ArchiveConfig, logg
 		defaultMaxDuration:      cfg.MaxContextDuration,
 	}
 
-	// Set message routing based on mode.
+	// Set storage routing based on mode.
 	if messagesDB != nil {
 		s.msgTableName = "messages"
 		s.msgFTSName = "messages_fts"
+		s.tcTableName = "tool_calls"
 	} else {
 		s.msgTableName = "archive_messages"
 		s.msgFTSName = "archive_fts"
+		s.tcTableName = "archive_tool_calls"
 	}
 
 	if err := s.migrate(); err != nil {
@@ -647,7 +654,13 @@ func (s *ArchiveStore) ArchiveMessages(messages []ArchivedMessage) error {
 }
 
 // ArchiveToolCalls copies tool call records to the immutable archive.
+//
+// In unified mode (messagesDB set), this is a no-op — tool call archival
+// is handled via status UPDATE by SQLiteStore.ArchiveToolCalls.
 func (s *ArchiveStore) ArchiveToolCalls(calls []ArchivedToolCall) error {
+	if s.messagesDB != nil {
+		return nil // Unified mode: archival is a status UPDATE, not a cross-DB copy.
+	}
 	if len(calls) == 0 {
 		return nil
 	}
@@ -692,14 +705,15 @@ func (s *ArchiveStore) ArchiveToolCalls(calls []ArchivedToolCall) error {
 
 // GetSessionToolCalls returns archived tool calls for a session in chronological order.
 func (s *ArchiveStore) GetSessionToolCalls(sessionID string) ([]ArchivedToolCall, error) {
-	rows, err := s.db.Query(`
+	rows, err := s.msgDB().Query(fmt.Sprintf(`
 		SELECT id, conversation_id, session_id, tool_name, arguments,
-		       result, error, started_at, completed_at, duration_ms, archived_at,
+		       result, error, started_at, completed_at, duration_ms,
+		       COALESCE(archived_at, '') as archived_at,
 		       iteration_index
-		FROM archive_tool_calls
+		FROM %s
 		WHERE session_id = ?
 		ORDER BY started_at ASC
-	`, sessionID)
+	`, s.tcTableName), sessionID)
 	if err != nil {
 		return nil, fmt.Errorf("get tool calls: %w", err)
 	}
@@ -869,23 +883,25 @@ func (s *ArchiveStore) GetSessionIterations(sessionID string) ([]ArchivedIterati
 	return iters, rows.Err()
 }
 
-// LinkToolCallsToIteration sets the iteration_index on archived tool calls
-// that belong to a specific iteration within a session.
+// LinkToolCallsToIteration sets the iteration_index on tool calls that
+// belong to a specific iteration within a session. In unified mode, this
+// updates the working DB's tool_calls table.
 func (s *ArchiveStore) LinkToolCallsToIteration(sessionID string, iterationIndex int, toolCallIDs []string) error {
 	if len(toolCallIDs) == 0 {
 		return nil
 	}
 
-	tx, err := s.db.Begin()
+	db := s.msgDB() // tool calls live in the same DB as messages
+	tx, err := db.Begin()
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	stmt, err := tx.Prepare(`
-		UPDATE archive_tool_calls SET iteration_index = ?
+	stmt, err := tx.Prepare(fmt.Sprintf(`
+		UPDATE %s SET iteration_index = ?
 		WHERE id = ? AND session_id = ?
-	`)
+	`, s.tcTableName))
 	if err != nil {
 		return fmt.Errorf("prepare: %w", err)
 	}
@@ -1615,7 +1631,7 @@ func (s *ArchiveStore) Stats() (map[string]any, error) {
 
 	_ = msgDB.QueryRow(fmt.Sprintf(`SELECT COUNT(*) FROM %s`, table)).Scan(&msgCount)
 	_ = s.db.QueryRow(`SELECT COUNT(*) FROM sessions`).Scan(&sessionCount)
-	_ = s.db.QueryRow(`SELECT COUNT(*) FROM archive_tool_calls`).Scan(&toolCallCount)
+	_ = s.msgDB().QueryRow(fmt.Sprintf(`SELECT COUNT(*) FROM %s`, s.tcTableName)).Scan(&toolCallCount)
 	_ = msgDB.QueryRow(fmt.Sprintf(`SELECT MIN(timestamp) FROM %s`, table)).Scan(&oldestStr)
 	_ = msgDB.QueryRow(fmt.Sprintf(`SELECT MAX(timestamp) FROM %s`, table)).Scan(&newestStr)
 
@@ -1839,20 +1855,23 @@ func (s *ArchiveStore) PurgeImported(sourceType string) (int, error) {
 		return 0, nil
 	}
 
-	// In unified mode, messages live in s.messagesDB — delete them there first.
+	// In unified mode, messages and tool calls live in s.messagesDB — delete
+	// them there first, outside the archive.db transaction.
 	// FTS triggers (if present) handle the FTS cleanup automatically on DELETE.
-	msgDB := s.msgDB()
-	msgTable := s.msgTableName
 	if s.messagesDB != nil {
+		wdb := s.msgDB()
 		for _, sid := range sessionIDs {
-			if _, err := msgDB.Exec(fmt.Sprintf(`DELETE FROM %s WHERE session_id = ?`, msgTable), sid); err != nil {
+			if _, err := wdb.Exec(fmt.Sprintf(`DELETE FROM %s WHERE session_id = ?`, s.msgTableName), sid); err != nil {
 				return 0, fmt.Errorf("delete messages for session %s: %w", ShortID(sid), err)
+			}
+			if _, err := wdb.Exec(fmt.Sprintf(`DELETE FROM %s WHERE session_id = ?`, s.tcTableName), sid); err != nil {
+				return 0, fmt.Errorf("delete tool calls for session %s: %w", ShortID(sid), err)
 			}
 		}
 	}
 
-	// Delete sessions, tool calls, and metadata from archive.db.
-	// In legacy mode, messages also live here.
+	// Delete sessions and metadata from archive.db.
+	// In legacy mode, messages and tool calls also live here.
 	tx, err := s.db.Begin()
 	if err != nil {
 		return 0, fmt.Errorf("begin tx: %w", err)
@@ -1860,14 +1879,14 @@ func (s *ArchiveStore) PurgeImported(sourceType string) (int, error) {
 	defer func() { _ = tx.Rollback() }()
 
 	for _, sid := range sessionIDs {
-		// In legacy mode (messagesDB == nil), messages are in the archive DB.
+		// In legacy mode (messagesDB == nil), messages and tool calls are in archive.db.
 		if s.messagesDB == nil {
-			if _, err := tx.Exec(fmt.Sprintf(`DELETE FROM %s WHERE session_id = ?`, msgTable), sid); err != nil {
+			if _, err := tx.Exec(fmt.Sprintf(`DELETE FROM %s WHERE session_id = ?`, s.msgTableName), sid); err != nil {
 				return 0, fmt.Errorf("delete messages for session %s: %w", ShortID(sid), err)
 			}
-		}
-		if _, err := tx.Exec(`DELETE FROM archive_tool_calls WHERE session_id = ?`, sid); err != nil {
-			return 0, fmt.Errorf("delete tool calls for session %s: %w", ShortID(sid), err)
+			if _, err := tx.Exec(fmt.Sprintf(`DELETE FROM %s WHERE session_id = ?`, s.tcTableName), sid); err != nil {
+				return 0, fmt.Errorf("delete tool calls for session %s: %w", ShortID(sid), err)
+			}
 		}
 		if _, err := tx.Exec(`DELETE FROM sessions WHERE id = ?`, sid); err != nil {
 			return 0, fmt.Errorf("delete session %s: %w", ShortID(sid), err)

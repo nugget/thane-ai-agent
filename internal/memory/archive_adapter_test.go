@@ -286,6 +286,80 @@ func TestAdapter_ArchiveConversation_ClearsToolCalls(t *testing.T) {
 	}
 }
 
+// TestAdapter_UnifiedMode_ArchiveToolCalls verifies that when tcStore is set,
+// archiveToolCalls uses UPDATE (status='archived') instead of copy+clear.
+func TestAdapter_UnifiedMode_ArchiveToolCalls(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	// Create working store.
+	workingStore, err := NewSQLiteStore(tmpDir+"/working.db", 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer workingStore.Close()
+
+	MigrateUnifyMessages(workingStore.DB(), "", slog.Default())
+
+	// Create archive store in unified mode.
+	archiveStore, err := NewArchiveStore(tmpDir+"/archive.db", workingStore.DB(), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer archiveStore.Close()
+
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	adapter := NewArchiveAdapter(archiveStore, logger)
+
+	// Set up a mock tool call source (still needed for the nil check).
+	mockSource := &mockToolCallSource{
+		calls: map[string][]ToolCall{
+			"conv-1": {{ID: "tc-1", ConversationID: "conv-1", ToolName: "get_state",
+				Arguments: `{}`, StartedAt: time.Now()}},
+		},
+	}
+	adapter.SetToolCallSource(mockSource)
+	// Set the unified tool call store — this activates the UPDATE path.
+	adapter.SetToolCallStore(workingStore)
+
+	// Start session and record a tool call in the working store.
+	sid, _ := adapter.StartSession("conv-1")
+	workingStore.GetOrCreateConversation("conv-1")
+	workingStore.RecordToolCall("conv-1", "", "tc-1", "get_state", `{}`)
+
+	// Archive.
+	msgs := []Message{
+		{Role: "user", Content: "test", Timestamp: time.Now()},
+	}
+	adapter.SetMessageStore(workingStore)
+	workingStore.AddMessage("conv-1", "user", "test")
+	if err := adapter.ArchiveConversation("conv-1", msgs, "reset"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify tool call was archived via UPDATE (not copy+clear).
+	var status string
+	err = workingStore.DB().QueryRow(`SELECT status FROM tool_calls WHERE id = 'tc-1'`).Scan(&status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status != "archived" {
+		t.Errorf("expected status=archived, got %s", status)
+	}
+
+	// Verify session_id was set.
+	var sessionID string
+	_ = workingStore.DB().QueryRow(`SELECT session_id FROM tool_calls WHERE id = 'tc-1'`).Scan(&sessionID)
+	if sessionID != sid {
+		t.Errorf("expected session_id=%s, got %s", sid, sessionID)
+	}
+
+	// ClearToolCalls should NOT have been called (unified mode doesn't clear).
+	if mockSource.cleared["conv-1"] != 0 {
+		t.Errorf("expected ClearToolCalls not called in unified mode, got %d calls",
+			mockSource.cleared["conv-1"])
+	}
+}
+
 // --- mocks ---
 
 type mockToolCallSource struct {
