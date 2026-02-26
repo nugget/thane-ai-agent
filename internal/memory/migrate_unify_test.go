@@ -719,6 +719,276 @@ func TestUnifiedMode_GetSessionToolCalls(t *testing.T) {
 	}
 }
 
+// --- Phase 3: Consolidation migration tests ---
+
+// TestMigrateConsolidateDB_CopiesAllTables verifies that sessions,
+// archive_iterations, import_metadata, working_memory, and delegations
+// are copied from archive.db into the working database.
+func TestMigrateConsolidateDB_CopiesAllTables(t *testing.T) {
+	tmpDir := t.TempDir()
+	workingPath := tmpDir + "/working.db"
+	archivePath := tmpDir + "/archive.db"
+
+	// Create working store.
+	workingStore, err := NewSQLiteStore(workingPath, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer workingStore.Close()
+
+	// Create archive store and populate all tables.
+	archiveStore, err := NewArchiveStore(archivePath, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Sessions + iterations.
+	sess, _ := archiveStore.StartSession("conv-1")
+	archiveStore.ArchiveIterations([]ArchivedIteration{
+		{
+			SessionID: sess.ID, IterationIndex: 0, Model: "claude-sonnet",
+			InputTokens: 1000, OutputTokens: 200, ToolCallCount: 1,
+			StartedAt: time.Now(), DurationMs: 350, HasToolCalls: true,
+		},
+	})
+	archiveStore.EndSession(sess.ID, "reset")
+
+	// Import metadata.
+	archiveStore.RecordImport("src-1", "claude_export", sess.ID)
+
+	// Working memory — insert directly.
+	_, _ = archiveStore.DB().Exec(`
+		CREATE TABLE IF NOT EXISTS working_memory (
+			conversation_id TEXT NOT NULL PRIMARY KEY,
+			content TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`)
+	_, _ = archiveStore.DB().Exec(`INSERT INTO working_memory VALUES ('conv-1', 'some context', '2026-01-01T00:00:00Z')`)
+
+	// Delegations — insert directly.
+	_, _ = archiveStore.DB().Exec(`
+		CREATE TABLE IF NOT EXISTS delegations (
+			id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL,
+			task TEXT NOT NULL, guidance TEXT, profile TEXT NOT NULL,
+			model TEXT NOT NULL, iterations INTEGER NOT NULL,
+			max_iterations INTEGER NOT NULL, input_tokens INTEGER NOT NULL,
+			output_tokens INTEGER NOT NULL, exhausted BOOLEAN NOT NULL DEFAULT 0,
+			exhaust_reason TEXT, tools_called TEXT, messages TEXT,
+			result_content TEXT, started_at TEXT NOT NULL,
+			completed_at TEXT NOT NULL, duration_ms INTEGER NOT NULL,
+			error TEXT
+		)`)
+	_, _ = archiveStore.DB().Exec(`
+		INSERT INTO delegations (id, conversation_id, task, profile, model,
+			iterations, max_iterations, input_tokens, output_tokens, exhausted,
+			started_at, completed_at, duration_ms)
+		VALUES ('del-1', 'conv-1', 'check weather', 'research', 'claude-haiku',
+			2, 5, 500, 100, 0, '2026-01-01T00:00:00Z', '2026-01-01T00:00:01Z', 1000)
+	`)
+
+	archiveStore.Close()
+
+	// Run consolidation.
+	if err := MigrateConsolidateDB(workingStore.DB(), archivePath, slog.Default()); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify sessions.
+	var sessionCount int
+	_ = workingStore.DB().QueryRow(`SELECT COUNT(*) FROM sessions`).Scan(&sessionCount)
+	if sessionCount != 1 {
+		t.Errorf("expected 1 session, got %d", sessionCount)
+	}
+
+	// Verify iterations.
+	var iterCount int
+	_ = workingStore.DB().QueryRow(`SELECT COUNT(*) FROM archive_iterations`).Scan(&iterCount)
+	if iterCount != 1 {
+		t.Errorf("expected 1 iteration, got %d", iterCount)
+	}
+
+	// Verify import_metadata.
+	var importCount int
+	_ = workingStore.DB().QueryRow(`SELECT COUNT(*) FROM import_metadata`).Scan(&importCount)
+	if importCount != 1 {
+		t.Errorf("expected 1 import, got %d", importCount)
+	}
+
+	// Verify working_memory.
+	var wmCount int
+	_ = workingStore.DB().QueryRow(`SELECT COUNT(*) FROM working_memory`).Scan(&wmCount)
+	if wmCount != 1 {
+		t.Errorf("expected 1 working memory entry, got %d", wmCount)
+	}
+
+	// Verify delegations.
+	var delCount int
+	_ = workingStore.DB().QueryRow(`SELECT COUNT(*) FROM delegations`).Scan(&delCount)
+	if delCount != 1 {
+		t.Errorf("expected 1 delegation, got %d", delCount)
+	}
+}
+
+// TestMigrateConsolidateDB_Idempotent verifies that running the migration
+// twice does not duplicate data or produce errors.
+func TestMigrateConsolidateDB_Idempotent(t *testing.T) {
+	tmpDir := t.TempDir()
+	workingPath := tmpDir + "/working.db"
+	archivePath := tmpDir + "/archive.db"
+
+	workingStore, err := NewSQLiteStore(workingPath, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer workingStore.Close()
+
+	archiveStore, err := NewArchiveStore(archivePath, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess, _ := archiveStore.StartSession("conv-1")
+	archiveStore.EndSession(sess.ID, "reset")
+	archiveStore.Close()
+
+	// First run.
+	if err := MigrateConsolidateDB(workingStore.DB(), archivePath, slog.Default()); err != nil {
+		t.Fatal(err)
+	}
+	var count1 int
+	_ = workingStore.DB().QueryRow(`SELECT COUNT(*) FROM sessions`).Scan(&count1)
+
+	// Second run — should be a no-op (sentinel detects existing sessions).
+	if err := MigrateConsolidateDB(workingStore.DB(), archivePath, slog.Default()); err != nil {
+		t.Fatal(err)
+	}
+	var count2 int
+	_ = workingStore.DB().QueryRow(`SELECT COUNT(*) FROM sessions`).Scan(&count2)
+
+	if count1 != count2 {
+		t.Errorf("idempotency violated: first run %d rows, second run %d rows", count1, count2)
+	}
+}
+
+// TestMigrateConsolidateDB_NoArchiveDB verifies that the migration succeeds
+// gracefully when archive.db does not exist (fresh install).
+func TestMigrateConsolidateDB_NoArchiveDB(t *testing.T) {
+	store := newTestWorkingDB(t)
+
+	if err := MigrateConsolidateDB(store.DB(), "/nonexistent/archive.db", slog.Default()); err != nil {
+		t.Fatalf("expected no error for missing archive, got: %v", err)
+	}
+
+	// Tables should still be created (for consolidated mode to use).
+	var sessionCount int
+	err := store.DB().QueryRow(`SELECT COUNT(*) FROM sessions`).Scan(&sessionCount)
+	if err != nil {
+		t.Errorf("sessions table should exist: %v", err)
+	}
+}
+
+// TestMigrateConsolidateDB_EmptyArchive verifies that consolidation handles
+// an archive.db that exists but has no data.
+func TestMigrateConsolidateDB_EmptyArchive(t *testing.T) {
+	tmpDir := t.TempDir()
+	workingPath := tmpDir + "/working.db"
+	archivePath := tmpDir + "/archive.db"
+
+	workingStore, err := NewSQLiteStore(workingPath, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer workingStore.Close()
+
+	// Create empty archive.
+	archiveStore, err := NewArchiveStore(archivePath, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archiveStore.Close()
+
+	if err := MigrateConsolidateDB(workingStore.DB(), archivePath, slog.Default()); err != nil {
+		t.Fatalf("expected no error for empty archive, got: %v", err)
+	}
+
+	// No sessions should have been copied.
+	var count int
+	_ = workingStore.DB().QueryRow(`SELECT COUNT(*) FROM sessions`).Scan(&count)
+	if count != 0 {
+		t.Errorf("expected 0 sessions from empty archive, got %d", count)
+	}
+}
+
+// TestMigrateConsolidateDB_OldArchiveSchema verifies that consolidation
+// handles an archive.db that predates column additions (no parent_session_id,
+// no tool_call_ids, etc.).
+func TestMigrateConsolidateDB_OldArchiveSchema(t *testing.T) {
+	tmpDir := t.TempDir()
+	workingPath := tmpDir + "/working.db"
+	archivePath := tmpDir + "/archive.db"
+
+	workingStore, err := NewSQLiteStore(workingPath, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer workingStore.Close()
+
+	// Create a minimal archive with old-style schema (no parent columns).
+	archDB, err := sql.Open("sqlite3", archivePath+"?_journal_mode=WAL")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = archDB.Exec(`
+		CREATE TABLE sessions (
+			id TEXT PRIMARY KEY,
+			conversation_id TEXT NOT NULL,
+			started_at TIMESTAMP NOT NULL,
+			ended_at TIMESTAMP,
+			end_reason TEXT,
+			message_count INTEGER DEFAULT 0,
+			summary TEXT
+		);
+		CREATE TABLE archive_iterations (
+			session_id TEXT NOT NULL,
+			iteration_index INTEGER NOT NULL,
+			model TEXT NOT NULL,
+			input_tokens INTEGER NOT NULL DEFAULT 0,
+			output_tokens INTEGER NOT NULL DEFAULT 0,
+			tool_call_count INTEGER NOT NULL DEFAULT 0,
+			started_at TIMESTAMP NOT NULL,
+			duration_ms INTEGER NOT NULL DEFAULT 0,
+			has_tool_calls BOOLEAN NOT NULL DEFAULT FALSE,
+			break_reason TEXT,
+			PRIMARY KEY (session_id, iteration_index)
+		);
+		INSERT INTO sessions (id, conversation_id, started_at, ended_at, end_reason)
+		VALUES ('old-sess', 'old-conv', '2025-01-01T00:00:00Z', '2025-01-01T01:00:00Z', 'reset');
+		INSERT INTO archive_iterations (session_id, iteration_index, model, input_tokens, output_tokens, started_at, duration_ms)
+		VALUES ('old-sess', 0, 'claude-2', 500, 100, '2025-01-01T00:00:00Z', 200);
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archDB.Close()
+
+	if err := MigrateConsolidateDB(workingStore.DB(), archivePath, slog.Default()); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify session was copied.
+	var convID string
+	_ = workingStore.DB().QueryRow(`SELECT conversation_id FROM sessions WHERE id = 'old-sess'`).Scan(&convID)
+	if convID != "old-conv" {
+		t.Errorf("expected conversation_id=old-conv, got %q", convID)
+	}
+
+	// Verify iteration was copied.
+	var model string
+	_ = workingStore.DB().QueryRow(`SELECT model FROM archive_iterations WHERE session_id = 'old-sess'`).Scan(&model)
+	if model != "claude-2" {
+		t.Errorf("expected model=claude-2, got %q", model)
+	}
+}
+
 // TestUnifiedMode_LinkToolCallsToIteration verifies that
 // LinkToolCallsToIteration updates iteration_index in the unified table.
 func TestUnifiedMode_LinkToolCallsToIteration(t *testing.T) {

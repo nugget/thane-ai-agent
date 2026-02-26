@@ -475,31 +475,31 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	ollamaClient.SetWatcher(ollamaWatcher)
 
 	// --- Unify storage ---
-	// Merge archived messages and tool calls from archive.db into the working
-	// thane.db so all data lives in unified tables with lifecycle status.
-	// Both migrations are idempotent and safe to run on every startup.
-	// See issue #434.
-	if err := memory.MigrateUnifyMessages(mem.DB(), cfg.DataDir+"/archive.db", logger); err != nil {
+	// Phases 1-3 of storage unification (issue #434). All migrations are
+	// idempotent and safe to run on every startup.
+	archivePath := cfg.DataDir + "/archive.db"
+	if err := memory.MigrateUnifyMessages(mem.DB(), archivePath, logger); err != nil {
 		return fmt.Errorf("unify messages migration: %w", err)
 	}
-	if err := memory.MigrateUnifyToolCalls(mem.DB(), cfg.DataDir+"/archive.db", logger); err != nil {
+	if err := memory.MigrateUnifyToolCalls(mem.DB(), archivePath, logger); err != nil {
 		return fmt.Errorf("unify tool calls migration: %w", err)
+	}
+	if err := memory.MigrateConsolidateDB(mem.DB(), archivePath, logger); err != nil {
+		return fmt.Errorf("consolidate database: %w", err)
 	}
 
 	// --- Session archive ---
-	// Immutable archive of all conversation transcripts. Messages and tool
-	// calls are read from the unified working DB; sessions/iterations live
-	// in archive.db until PR 3 consolidates everything.
-	archiveStore, err := memory.NewArchiveStore(cfg.DataDir+"/archive.db", mem.DB(), nil, logger)
+	// All data (sessions, iterations, messages, tool calls) lives in
+	// thane.db. The archive store borrows the working DB connection.
+	archiveStore, err := memory.NewArchiveStoreFromDB(mem.DB(), nil, logger)
 	if err != nil {
 		return fmt.Errorf("open archive store: %w", err)
 	}
-	defer archiveStore.Close()
+	defer archiveStore.Close() // no-op — connection owned by mem
 
 	// --- Working memory ---
-	// Persists free-form experiential context per conversation. Shares
-	// the archive database so it participates in the same backup/lifecycle.
-	wmStore, err := memory.NewWorkingMemoryStore(archiveStore.DB())
+	// Persists free-form experiential context per conversation.
+	wmStore, err := memory.NewWorkingMemoryStore(mem.DB())
 	if err != nil {
 		return fmt.Errorf("create working memory store: %w", err)
 	}
@@ -507,8 +507,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 
 	// --- Delegation persistence ---
 	// Stores every thane_delegate execution for replay and model evaluation.
-	// Shares the archive database alongside working memory.
-	delegationStore, err := delegate.NewDelegationStore(archiveStore.DB())
+	delegationStore, err := delegate.NewDelegationStore(mem.DB())
 	if err != nil {
 		return fmt.Errorf("create delegation store: %w", err)
 	}

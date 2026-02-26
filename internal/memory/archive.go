@@ -39,6 +39,11 @@ type ArchiveStore struct {
 	// table. In legacy mode, they use archive.db's "archive_tool_calls".
 	tcTableName string // "tool_calls" or "archive_tool_calls"
 
+	// ownsDB controls whether Close() closes the DB connection. When the
+	// store is constructed via NewArchiveStoreFromDB with a shared
+	// connection, ownsDB is false and Close() is a no-op.
+	ownsDB bool
+
 	// Whether FTS5 is available
 	ftsEnabled bool
 
@@ -222,6 +227,7 @@ func NewArchiveStore(dbPath string, messagesDB *sql.DB, cfg *ArchiveConfig, logg
 		db:                      db,
 		logger:                  logger,
 		messagesDB:              messagesDB,
+		ownsDB:                  true,
 		defaultSilenceThreshold: cfg.SilenceThreshold,
 		defaultMaxMessages:      cfg.MaxContextMessages,
 		defaultMaxDuration:      cfg.MaxContextDuration,
@@ -275,6 +281,102 @@ func NewArchiveStore(dbPath string, messagesDB *sql.DB, cfg *ArchiveConfig, logg
 	return s, nil
 }
 
+// NewArchiveStoreFromDB creates an ArchiveStore backed by an existing database
+// connection (typically the main thane.db). The store does NOT own the
+// connection and Close will not close it. All session, iteration, message,
+// and tool-call queries go to the shared connection. This is the
+// "consolidated" mode where archive.db no longer exists.
+func NewArchiveStoreFromDB(db *sql.DB, cfg *ArchiveConfig, logger *slog.Logger) (*ArchiveStore, error) {
+	if cfg == nil {
+		defaults := DefaultArchiveConfig()
+		cfg = &defaults
+	}
+
+	s := &ArchiveStore{
+		db:                      db,
+		logger:                  logger,
+		messagesDB:              db, // same connection — fully unified
+		ownsDB:                  false,
+		defaultSilenceThreshold: cfg.SilenceThreshold,
+		defaultMaxMessages:      cfg.MaxContextMessages,
+		defaultMaxDuration:      cfg.MaxContextDuration,
+		// Consolidated routing — all tables in one DB.
+		msgTableName: "messages",
+		msgFTSName:   "messages_fts",
+		tcTableName:  "tool_calls",
+	}
+
+	if err := s.migrateSessionTables(); err != nil {
+		return nil, fmt.Errorf("session table migration: %w", err)
+	}
+
+	s.migrateSchema()
+	s.ftsEnabled = s.tryEnableFTS()
+
+	if logger != nil {
+		logger.Info("session archive initialized (consolidated)",
+			"fts5", s.ftsEnabled,
+		)
+	}
+
+	return s, nil
+}
+
+// migrateSessionTables creates only the session-related tables needed in
+// consolidated mode. Unlike migrate(), it does NOT create archive_messages,
+// archive_tool_calls, or archive_fts — those live in the unified messages
+// and tool_calls tables.
+func (s *ArchiveStore) migrateSessionTables() error {
+	_, err := s.db.Exec(`
+		CREATE TABLE IF NOT EXISTS sessions (
+			id TEXT PRIMARY KEY,
+			conversation_id TEXT NOT NULL,
+			started_at TIMESTAMP NOT NULL,
+			ended_at TIMESTAMP,
+			end_reason TEXT,
+			message_count INTEGER DEFAULT 0,
+			summary TEXT,
+			title TEXT,
+			tags TEXT,
+			metadata TEXT
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_sessions_conversation
+			ON sessions(conversation_id, started_at DESC);
+		CREATE INDEX IF NOT EXISTS idx_sessions_started
+			ON sessions(started_at DESC);
+
+		CREATE TABLE IF NOT EXISTS archive_iterations (
+			session_id TEXT NOT NULL,
+			iteration_index INTEGER NOT NULL,
+			model TEXT NOT NULL,
+			input_tokens INTEGER NOT NULL DEFAULT 0,
+			output_tokens INTEGER NOT NULL DEFAULT 0,
+			tool_call_count INTEGER NOT NULL DEFAULT 0,
+			tool_call_ids TEXT,
+			tools_offered TEXT,
+			started_at TIMESTAMP NOT NULL,
+			duration_ms INTEGER NOT NULL DEFAULT 0,
+			has_tool_calls BOOLEAN NOT NULL DEFAULT FALSE,
+			break_reason TEXT,
+			PRIMARY KEY (session_id, iteration_index)
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_archive_iter_session
+			ON archive_iterations(session_id, iteration_index);
+
+		CREATE TABLE IF NOT EXISTS import_metadata (
+			source_id TEXT NOT NULL,
+			source_type TEXT NOT NULL,
+			archive_session_id TEXT NOT NULL,
+			imported_at TIMESTAMP NOT NULL,
+			PRIMARY KEY (source_id, source_type),
+			FOREIGN KEY (archive_session_id) REFERENCES sessions(id)
+		);
+	`)
+	return err
+}
+
 // FTSEnabled returns whether FTS5 full-text search is available.
 func (s *ArchiveStore) FTSEnabled() bool {
 	return s.ftsEnabled
@@ -287,8 +389,13 @@ func (s *ArchiveStore) DB() *sql.DB {
 	return s.db
 }
 
-// Close closes the underlying database connection.
+// Close closes the underlying database connection. If the store was
+// created via NewArchiveStoreFromDB with a shared connection, Close
+// is a no-op — the caller owns the connection lifetime.
 func (s *ArchiveStore) Close() error {
+	if !s.ownsDB {
+		return nil
+	}
 	return s.db.Close()
 }
 
@@ -516,11 +623,17 @@ func (s *ArchiveStore) migrateSchema() {
 	_, _ = s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_sessions_parent ON sessions(parent_session_id, started_at)`)
 
 	// v4: add iteration_index column to archive_tool_calls for iteration linkage.
-	_, err := s.db.Exec("SELECT iteration_index FROM archive_tool_calls LIMIT 0")
-	if err != nil {
-		if _, err := s.db.Exec("ALTER TABLE archive_tool_calls ADD COLUMN iteration_index INTEGER"); err != nil {
-			if s.logger != nil {
-				s.logger.Warn("migration failed", "column", "iteration_index", "error", err)
+	// In consolidated mode, the archive_tool_calls table doesn't exist (tool calls
+	// live in the unified tool_calls table), so guard with a table-existence check.
+	var atcExists int
+	_ = s.db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='archive_tool_calls'`).Scan(&atcExists)
+	if atcExists > 0 {
+		_, err := s.db.Exec("SELECT iteration_index FROM archive_tool_calls LIMIT 0")
+		if err != nil {
+			if _, err := s.db.Exec("ALTER TABLE archive_tool_calls ADD COLUMN iteration_index INTEGER"); err != nil {
+				if s.logger != nil {
+					s.logger.Warn("migration failed", "column", "iteration_index", "error", err)
+				}
 			}
 		}
 	}
@@ -546,14 +659,12 @@ func (s *ArchiveStore) migrateSchema() {
 	_, _ = s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_archive_iter_session ON archive_iterations(session_id, iteration_index)`)
 
 	// Add tool_call_ids column for existing archive_iterations tables.
-	_, err = s.db.Exec("SELECT tool_call_ids FROM archive_iterations LIMIT 0")
-	if err != nil {
+	if _, err := s.db.Exec("SELECT tool_call_ids FROM archive_iterations LIMIT 0"); err != nil {
 		_, _ = s.db.Exec("ALTER TABLE archive_iterations ADD COLUMN tool_call_ids TEXT")
 	}
 
 	// Add tools_offered column for existing archive_iterations tables.
-	_, err = s.db.Exec("SELECT tools_offered FROM archive_iterations LIMIT 0")
-	if err != nil {
+	if _, err := s.db.Exec("SELECT tools_offered FROM archive_iterations LIMIT 0"); err != nil {
 		_, _ = s.db.Exec("ALTER TABLE archive_iterations ADD COLUMN tools_offered TEXT")
 	}
 }
