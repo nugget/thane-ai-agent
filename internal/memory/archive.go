@@ -151,6 +151,38 @@ type SessionMetadata struct {
 	Models []string `json:"models,omitempty"`
 }
 
+// IdleSessionInfo holds an active session's identity and last activity time
+// for idle timeout evaluation by the summarizer worker.
+type IdleSessionInfo struct {
+	SessionID      string
+	ConversationID string
+	LastActivity   time.Time
+}
+
+// timestampFormats lists formats tried when parsing SQLite timestamp strings,
+// ordered from most specific to least. The mattn/go-sqlite3 driver stores
+// time.Time as RFC3339Nano by default, but other paths (or direct SQL
+// inserts) may produce different layouts.
+var timestampFormats = []string{
+	time.RFC3339Nano,
+	time.RFC3339,
+	"2006-01-02 15:04:05.999999999-07:00",
+	"2006-01-02 15:04:05.999999999",
+	"2006-01-02 15:04:05",
+}
+
+// parseTimestamp attempts to parse a SQLite timestamp string using the
+// known formats in timestampFormats. Returns zero time and false if none
+// match.
+func parseTimestamp(s string) (time.Time, bool) {
+	for _, layout := range timestampFormats {
+		if t, err := time.Parse(layout, s); err == nil {
+			return t, true
+		}
+	}
+	return time.Time{}, false
+}
+
 // ArchivedToolCall represents a tool call preserved in the archive.
 type ArchivedToolCall struct {
 	ID             string     `json:"id"`
@@ -1345,6 +1377,44 @@ func (s *ArchiveStore) EndSessionAt(sessionID string, reason string, endedAt tim
 	return err
 }
 
+// ClaimActiveMessages stamps session_id on active messages for a conversation
+// so they become retrievable by GetSessionTranscript. This is needed when the
+// summarizer's idle backstop closes a session — active messages in the unified
+// table have session_id=NULL until archival, so without this step the
+// transcript query returns nothing and the session is marked empty.
+//
+// In legacy mode (archive_messages), session_id is always set at insert time,
+// so this is a no-op. In unified mode, the status column distinguishes active
+// messages from compacted/archived ones.
+func (s *ArchiveStore) ClaimActiveMessages(conversationID, sessionID string) (int64, error) {
+	if s.messagesDB == nil {
+		// Legacy mode: session_id is always set. Nothing to claim.
+		return 0, nil
+	}
+	db := s.msgDB()
+	result, err := db.Exec(
+		fmt.Sprintf(`UPDATE %s SET session_id = ? WHERE conversation_id = ? AND session_id IS NULL AND status = 'active'`,
+			s.msgTableName),
+		sessionID, conversationID,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("claim active messages: %w", err)
+	}
+
+	// Also claim any active tool calls so GetSessionToolCalls can find
+	// them after the session is closed and summarized.
+	_, err = db.Exec(
+		fmt.Sprintf(`UPDATE %s SET session_id = ? WHERE conversation_id = ? AND session_id IS NULL AND status = 'active'`,
+			s.tcTableName),
+		sessionID, conversationID,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("claim active tool calls: %w", err)
+	}
+
+	return result.RowsAffected()
+}
+
 // CloseOrphanedSessions ends any sessions that are still open (ended_at IS NULL)
 // but were started before the given cutoff time. This recovers sessions orphaned
 // by crashes (SIGKILL, OOM, panics) where EndSession was never called. Returns
@@ -1424,6 +1494,82 @@ func (s *ArchiveStore) ActiveSession(conversationID string) (*Session, error) {
 		sess.MessageCount = s.countSessionMessages(sess.ID)
 	}
 	return sess, err
+}
+
+// ActiveSessionsWithLastActivity returns all unclosed sessions and the
+// timestamp of the most recent message in each. Sessions with no messages
+// use the session's started_at as the last activity time. This powers the
+// summarizer's idle session detection — it survives crashes because it reads
+// from the database rather than relying on in-memory state.
+func (s *ArchiveStore) ActiveSessionsWithLastActivity() ([]IdleSessionInfo, error) {
+	rows, err := s.db.Query(`
+		SELECT id, conversation_id, started_at
+		FROM sessions
+		WHERE ended_at IS NULL
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("query active sessions: %w", err)
+	}
+	defer rows.Close()
+
+	// Per-session queries below look like an N+1 problem, but sessions
+	// and messages can live in different databases (legacy mode), so a
+	// single JOIN isn't possible. Active session count is typically
+	// small (1-5), so the extra round-trips are negligible.
+	db := s.msgDB()
+	var results []IdleSessionInfo
+	for rows.Next() {
+		var info IdleSessionInfo
+		var startedAtStr string
+		if err := rows.Scan(&info.SessionID, &info.ConversationID, &startedAtStr); err != nil {
+			return nil, fmt.Errorf("scan active session: %w", err)
+		}
+
+		startedAt, ok := parseTimestamp(startedAtStr)
+		if !ok {
+			// Skip sessions with unparseable timestamps rather than
+			// risk closing them due to a zero-time default.
+			continue
+		}
+		info.LastActivity = startedAt // default: session start time
+
+		// Query most recent message timestamp from the messages DB.
+		// In unified mode (messagesDB != nil), active messages have
+		// session_id=NULL until archival, so also match on
+		// conversation_id + status='active'. In legacy mode
+		// (archive_messages table), session_id is always set and
+		// there's no status column.
+		var maxTS sql.NullString
+		var err error
+		if s.messagesDB != nil {
+			err = db.QueryRow(
+				fmt.Sprintf(`SELECT MAX(timestamp) FROM %s
+					WHERE session_id = ?
+					   OR (session_id IS NULL AND conversation_id = ? AND status = 'active')`,
+					s.msgTableName),
+				info.SessionID, info.ConversationID,
+			).Scan(&maxTS)
+		} else {
+			err = db.QueryRow(
+				fmt.Sprintf(`SELECT MAX(timestamp) FROM %s WHERE session_id = ?`,
+					s.msgTableName),
+				info.SessionID,
+			).Scan(&maxTS)
+		}
+
+		if err != nil && err != sql.ErrNoRows {
+			return nil, fmt.Errorf("query last activity for session %s: %w", ShortID(info.SessionID), err)
+		}
+
+		if maxTS.Valid {
+			if parsed, ok := parseTimestamp(maxTS.String); ok {
+				info.LastActivity = parsed
+			}
+		}
+
+		results = append(results, info)
+	}
+	return results, rows.Err()
 }
 
 // GetSession retrieves a session by ID.

@@ -615,12 +615,17 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// Background worker that generates titles, tags, and summaries for
 	// sessions that ended without metadata (e.g., during shutdown).
 	// Runs immediately on startup to catch up, then periodically.
+	var idleTimeoutMinutes int
+	if cfg.Archive.SessionIdleMinutes != nil {
+		idleTimeoutMinutes = *cfg.Archive.SessionIdleMinutes
+	}
 	summarizerCfg := sessionsummarizer.Config{
 		Interval:        time.Duration(cfg.Archive.SummarizeInterval) * time.Second,
 		Timeout:         time.Duration(cfg.Archive.SummarizeTimeout) * time.Second,
 		PauseBetween:    5 * time.Second,
 		BatchSize:       10,
 		ModelPreference: cfg.Archive.MetadataModel,
+		IdleTimeout:     time.Duration(idleTimeoutMinutes) * time.Minute,
 	}
 	summaryWorker := sessionsummarizer.New(archiveStore, llmClient, rtr, logger, summarizerCfg)
 	summaryWorker.Start(ctx)

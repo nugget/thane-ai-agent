@@ -415,6 +415,18 @@ type ArchiveConfig struct {
 	// SummarizeTimeout is the max seconds for a single session's
 	// metadata LLM call. Default: 60.
 	SummarizeTimeout int `yaml:"summarize_timeout"`
+
+	// SessionIdleMinutes is the backstop idle timeout for the
+	// summarizer worker. Active sessions with no message activity
+	// for this many minutes are silently closed and become eligible
+	// for summarization. This complements the channel-specific idle
+	// check (e.g. signal.session_idle_minutes) which sends farewell
+	// messages.
+	//
+	// Pointer type distinguishes "omitted" (nil → inherit from
+	// signal.session_idle_minutes) from "explicitly set to 0"
+	// (disabled). A positive value overrides the inherited default.
+	SessionIdleMinutes *int `yaml:"session_idle_minutes"`
 }
 
 // ExtractionConfig configures automatic fact extraction from conversations.
@@ -1035,6 +1047,15 @@ func (c *Config) applyDefaults() {
 	if c.Archive.SummarizeTimeout == 0 {
 		c.Archive.SummarizeTimeout = 60
 	}
+	// The archive idle timeout is a crash-recovery backstop (silent close
+	// via DB timestamps). The signal idle timeout is the interactive path
+	// (farewell message on next inbound). Inherit when omitted (nil) so
+	// users only need to set signal.session_idle_minutes for both to work.
+	// Explicit 0 disables the backstop without affecting the signal path.
+	if c.Archive.SessionIdleMinutes == nil && c.Signal.SessionIdleMinutes > 0 {
+		v := c.Signal.SessionIdleMinutes
+		c.Archive.SessionIdleMinutes = &v
+	}
 	if c.Extraction.Model == "" {
 		c.Extraction.Model = c.Archive.MetadataModel
 	}
@@ -1289,6 +1310,9 @@ func (c *Config) Validate() error {
 	}
 	if c.Episodic.SessionGapMinutes < 0 {
 		return fmt.Errorf("episodic.session_gap_minutes %d must be non-negative", c.Episodic.SessionGapMinutes)
+	}
+	if c.Archive.SessionIdleMinutes != nil && *c.Archive.SessionIdleMinutes < 0 {
+		return fmt.Errorf("archive.session_idle_minutes %d must be non-negative", *c.Archive.SessionIdleMinutes)
 	}
 	for i, id := range c.Person.Track {
 		if !strings.HasPrefix(id, "person.") {
