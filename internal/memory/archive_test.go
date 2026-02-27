@@ -1180,3 +1180,150 @@ func TestLinkToolCallsToIteration(t *testing.T) {
 		}
 	}
 }
+
+func TestActiveSessionsWithLastActivity(t *testing.T) {
+	store := newTestArchiveStore(t)
+
+	// Create session 1 with a message.
+	sess1, err := store.StartSession("conv-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	msgTime := time.Now().UTC().Add(-1 * time.Hour)
+	msgs := []ArchivedMessage{
+		{
+			ID:             "msg-1",
+			ConversationID: "conv-1",
+			SessionID:      sess1.ID,
+			Role:           "user",
+			Content:        "test message",
+			Timestamp:      msgTime,
+			ArchiveReason:  "test",
+		},
+	}
+	if err := store.ArchiveMessages(msgs); err != nil {
+		t.Fatal(err)
+	}
+
+	// Create session 2 with no messages (should fall back to started_at).
+	sess2, err := store.StartSession("conv-2")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Create session 3 and end it (should not appear).
+	sess3, err := store.StartSession("conv-3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.EndSession(sess3.ID, "test"); err != nil {
+		t.Fatal(err)
+	}
+
+	results, err := store.ActiveSessionsWithLastActivity()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(results) != 2 {
+		t.Fatalf("expected 2 active sessions, got %d", len(results))
+	}
+
+	// Build a map for easier assertions.
+	byConv := make(map[string]IdleSessionInfo)
+	for _, r := range results {
+		byConv[r.ConversationID] = r
+	}
+
+	// Session 1: last activity should be the message timestamp.
+	info1, ok := byConv["conv-1"]
+	if !ok {
+		t.Fatal("conv-1 not found in results")
+	}
+	if info1.SessionID != sess1.ID {
+		t.Errorf("conv-1 session ID = %s, want %s", info1.SessionID, sess1.ID)
+	}
+	if diff := info1.LastActivity.Sub(msgTime).Abs(); diff > time.Second {
+		t.Errorf("conv-1 last activity = %v, want ~%v (diff = %v)", info1.LastActivity, msgTime, diff)
+	}
+
+	// Session 2: last activity should be near started_at.
+	info2, ok := byConv["conv-2"]
+	if !ok {
+		t.Fatal("conv-2 not found in results")
+	}
+	if info2.SessionID != sess2.ID {
+		t.Errorf("conv-2 session ID = %s, want %s", info2.SessionID, sess2.ID)
+	}
+	// started_at was set by StartSession just now; should be within a second of now.
+	if time.Since(info2.LastActivity) > 5*time.Second {
+		t.Errorf("conv-2 last activity too old: %v ago", time.Since(info2.LastActivity))
+	}
+
+	// Session 3 (ended) should not appear.
+	if _, ok := byConv["conv-3"]; ok {
+		t.Error("ended session conv-3 should not appear in active sessions")
+	}
+}
+
+// TestActiveSessionsWithLastActivity_Unified exercises the idle-session
+// query in consolidated mode where active messages have session_id=NULL
+// and live in the unified messages table. The query must pick up activity
+// from those NULL-session_id rows via conversation_id + status='active'.
+func TestActiveSessionsWithLastActivity_Unified(t *testing.T) {
+	workingStore, err := NewSQLiteStore(t.TempDir()+"/working.db", 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer workingStore.Close()
+
+	MigrateUnifyMessages(workingStore.DB(), "", nil)
+	MigrateUnifyToolCalls(workingStore.DB(), "", nil)
+
+	store, err := NewArchiveStoreFromDB(workingStore.DB(), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Start a session.
+	sess, err := store.StartSession("conv-unified")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Insert an active message the way AddMessage does — session_id is NULL,
+	// status is 'active'. This simulates a message written through the normal
+	// interactive flow that hasn't been archived yet.
+	msgTime := time.Now().UTC().Add(-45 * time.Minute)
+	_, err = workingStore.DB().Exec(`
+		INSERT INTO messages (id, conversation_id, role, content, timestamp, token_count, status)
+		VALUES (?, 'conv-unified', 'user', 'hello from unified', ?, 5, 'active')
+	`, "msg-unified-1", msgTime.Format(time.RFC3339Nano))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	results, err := store.ActiveSessionsWithLastActivity()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(results) != 1 {
+		t.Fatalf("expected 1 active session, got %d", len(results))
+	}
+
+	info := results[0]
+	if info.SessionID != sess.ID {
+		t.Errorf("session ID = %s, want %s", info.SessionID, sess.ID)
+	}
+
+	// LastActivity should come from the message timestamp, not started_at.
+	// The message is ~45 min old; started_at is ~now. If the query missed
+	// the NULL-session_id message and fell back to started_at, the
+	// difference would be near zero.
+	diff := info.LastActivity.Sub(msgTime).Abs()
+	if diff > time.Second {
+		t.Errorf("LastActivity = %v, want ~%v (diff = %v); query may have missed NULL-session_id message",
+			info.LastActivity, msgTime, diff)
+	}
+}

@@ -42,6 +42,14 @@ type Config struct {
 	// Passed as HintModelPreference to the router. If empty, the router
 	// picks freely based on other hints.
 	ModelPreference string
+
+	// IdleTimeout is the duration of inactivity after which an open
+	// session is silently closed by the summarizer as a backstop.
+	// Zero disables idle session closing. This complements the
+	// interactive idle check in the channel bridge, which sends
+	// farewell messages. The summarizer-based check recovers from
+	// crashes where in-memory state was lost.
+	IdleTimeout time.Duration
 }
 
 // DefaultConfig returns sensible defaults for the summarizer worker.
@@ -134,6 +142,10 @@ func (w *Worker) run(ctx context.Context) {
 		)
 	}
 
+	// Phase 0.5: close sessions idle beyond the timeout. On startup this
+	// catches sessions that went idle while the process was down.
+	w.closeIdleSessions(ctx)
+
 	// Phase 1: startup catch-up scan.
 	w.logger.Info("summarizer starting, scanning for unsummarized sessions")
 	w.scan(ctx)
@@ -148,7 +160,63 @@ func (w *Worker) run(ctx context.Context) {
 			w.logger.Info("summarizer stopped")
 			return
 		case <-ticker.C:
+			w.closeIdleSessions(ctx)
 			w.scan(ctx)
+		}
+	}
+}
+
+// closeIdleSessions silently ends any active sessions whose last activity
+// is older than the configured idle timeout. Closed sessions become eligible
+// for summarization on the next scan cycle. This is a crash-recovery backstop
+// — the interactive idle check in the channel bridge handles the normal case
+// with farewell messages.
+func (w *Worker) closeIdleSessions(ctx context.Context) {
+	if w.config.IdleTimeout <= 0 {
+		return
+	}
+
+	sessions, err := w.store.ActiveSessionsWithLastActivity()
+	if err != nil {
+		w.logger.Error("failed to query active sessions for idle check", "error", err)
+		return
+	}
+
+	cutoff := time.Now().UTC().Add(-w.config.IdleTimeout)
+	for _, s := range sessions {
+		if ctx.Err() != nil {
+			return
+		}
+		if s.LastActivity.Before(cutoff) {
+			// Stamp session_id on active messages so GetSessionTranscript
+			// can find them. Active messages have session_id=NULL until
+			// the normal archive flow runs; without this the summarizer
+			// would see an empty transcript and mark the session as empty.
+			if _, err := w.store.ClaimActiveMessages(s.ConversationID, s.SessionID); err != nil {
+				w.logger.Warn("failed to claim messages for idle session, skipping close",
+					"session", memory.ShortID(s.SessionID),
+					"conversation_id", s.ConversationID,
+					"error", err,
+				)
+				// Don't close the session — unclaimed messages would be
+				// orphaned (session_id=NULL) and the summarizer would see
+				// an empty transcript. Retry next tick.
+				continue
+			}
+
+			if err := w.store.EndSession(s.SessionID, "idle_timeout"); err != nil {
+				w.logger.Warn("failed to close idle session",
+					"session", memory.ShortID(s.SessionID),
+					"conversation_id", s.ConversationID,
+					"error", err,
+				)
+				continue
+			}
+			w.logger.Info("closed idle session (backstop)",
+				"session", memory.ShortID(s.SessionID),
+				"conversation_id", s.ConversationID,
+				"idle_duration", time.Since(s.LastActivity).Round(time.Second),
+			)
 		}
 	}
 }

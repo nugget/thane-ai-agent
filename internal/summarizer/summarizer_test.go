@@ -517,6 +517,175 @@ func TestParseMetadataResponse_InvalidJSON(t *testing.T) {
 	}
 }
 
+func TestWorker_ClosesIdleSessions(t *testing.T) {
+	store := newTestStore(t)
+	mock := &mockLLMClient{}
+	rtr := newTestRouter()
+
+	// Create a session with a message timestamped 2 hours ago.
+	sess, err := store.StartSession("conv-idle")
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldTime := time.Now().Add(-2 * time.Hour)
+	msgs := []memory.ArchivedMessage{
+		{
+			ID:             fmt.Sprintf("msg-%s", sess.ID),
+			ConversationID: "conv-idle",
+			SessionID:      sess.ID,
+			Role:           "user",
+			Content:        "Hello from 2 hours ago.",
+			Timestamp:      oldTime,
+			ArchiveReason:  "test",
+		},
+	}
+	if err := store.ArchiveMessages(msgs); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := Config{
+		Interval:     time.Hour,
+		Timeout:      10 * time.Second,
+		PauseBetween: 1 * time.Millisecond,
+		BatchSize:    10,
+		IdleTimeout:  30 * time.Minute, // 30 min — session is 2h old
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	w := New(store, mock, rtr, slog.Default(), cfg)
+	// Set startTime far in the past so CloseOrphanedSessions doesn't
+	// interfere — we want closeIdleSessions to handle this one.
+	w.startTime = time.Now().Add(-24 * time.Hour)
+	w.Start(ctx)
+
+	// The worker should close the idle session and then summarize it.
+	waitFor(t, 5*time.Second, func() bool {
+		return mock.calls.Load() >= 1
+	})
+
+	cancel()
+	w.Stop()
+
+	got, err := store.GetSession(sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.EndReason != "idle_timeout" {
+		t.Errorf("end_reason = %q, want %q", got.EndReason, "idle_timeout")
+	}
+	if got.Title == "" {
+		t.Error("idle session should have been summarized after closing")
+	}
+}
+
+func TestWorker_SkipsActiveSessionsWithinTimeout(t *testing.T) {
+	store := newTestStore(t)
+	mock := &mockLLMClient{}
+	rtr := newTestRouter()
+
+	// Create a session with a very recent message.
+	sess, err := store.StartSession("conv-active")
+	if err != nil {
+		t.Fatal(err)
+	}
+	msgs := []memory.ArchivedMessage{
+		{
+			ID:             fmt.Sprintf("msg-%s", sess.ID),
+			ConversationID: "conv-active",
+			SessionID:      sess.ID,
+			Role:           "user",
+			Content:        "Hello just now.",
+			Timestamp:      time.Now(),
+			ArchiveReason:  "test",
+		},
+	}
+	if err := store.ArchiveMessages(msgs); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := Config{
+		Interval:     time.Hour,
+		Timeout:      10 * time.Second,
+		PauseBetween: 1 * time.Millisecond,
+		BatchSize:    10,
+		IdleTimeout:  30 * time.Minute,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	w := New(store, mock, rtr, slog.Default(), cfg)
+	w.startTime = time.Now().Add(-24 * time.Hour)
+	w.Start(ctx)
+
+	// Give the startup scan time to run.
+	time.Sleep(100 * time.Millisecond)
+
+	cancel()
+	w.Stop()
+
+	// Session should still be open (not idle).
+	got, err := store.GetSession(sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.EndedAt != nil {
+		t.Errorf("session should still be open, but ended_at = %v", got.EndedAt)
+	}
+}
+
+func TestWorker_IdleTimeoutDisabledWhenZero(t *testing.T) {
+	store := newTestStore(t)
+	mock := &mockLLMClient{}
+	rtr := newTestRouter()
+
+	// Create an old session that would be idle if timeout were enabled.
+	sess, err := store.StartSession("conv-old")
+	if err != nil {
+		t.Fatal(err)
+	}
+	msgs := []memory.ArchivedMessage{
+		{
+			ID:             fmt.Sprintf("msg-%s", sess.ID),
+			ConversationID: "conv-old",
+			SessionID:      sess.ID,
+			Role:           "user",
+			Content:        "Ancient message.",
+			Timestamp:      time.Now().Add(-24 * time.Hour),
+			ArchiveReason:  "test",
+		},
+	}
+	if err := store.ArchiveMessages(msgs); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := Config{
+		Interval:     time.Hour,
+		Timeout:      10 * time.Second,
+		PauseBetween: 1 * time.Millisecond,
+		BatchSize:    10,
+		IdleTimeout:  0, // Disabled
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	w := New(store, mock, rtr, slog.Default(), cfg)
+	w.startTime = time.Now().Add(-24 * time.Hour)
+	w.Start(ctx)
+
+	// Give the startup scan time to run.
+	time.Sleep(100 * time.Millisecond)
+
+	cancel()
+	w.Stop()
+
+	// Session should still be open.
+	got, err := store.GetSession(sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.EndedAt != nil {
+		t.Error("session should not be closed when idle timeout is 0")
+	}
+}
+
 func waitFor(t *testing.T, timeout time.Duration, condition func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
