@@ -88,8 +88,6 @@ func (s *SQLiteStore) migrate() error {
 	CREATE INDEX IF NOT EXISTS idx_tool_calls_conversation ON tool_calls(conversation_id, started_at);
 	CREATE INDEX IF NOT EXISTS idx_tool_calls_tool ON tool_calls(tool_name);
 	CREATE INDEX IF NOT EXISTS idx_tool_calls_message ON tool_calls(message_id);
-	CREATE INDEX IF NOT EXISTS idx_tool_calls_session ON tool_calls(session_id, started_at);
-	CREATE INDEX IF NOT EXISTS idx_tool_calls_status ON tool_calls(conversation_id, status);
 
 	-- Entity facts (for Phase 3)
 	CREATE TABLE IF NOT EXISTS entity_facts (
