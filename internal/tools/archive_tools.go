@@ -317,7 +317,7 @@ func formatSearchResults(results []memory.SearchResult) string {
 	return sb.String()
 }
 
-func formatArchiveMessage(m memory.ArchivedMessage) string {
+func formatArchiveMessage(m memory.Message) string {
 	return fmt.Sprintf("    [%s] %s: %s\n",
 		m.Timestamp.Format("15:04:05"),
 		m.Role,

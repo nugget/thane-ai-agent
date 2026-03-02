@@ -16,7 +16,7 @@ import (
 // mockArchive implements ArchiveReader for testing.
 type mockArchive struct {
 	sessions      []*memory.Session
-	transcripts   map[string][]memory.ArchivedMessage
+	transcripts   map[string][]memory.Message
 	listErr       error
 	transcriptErr error
 }
@@ -28,7 +28,7 @@ func (m *mockArchive) ListSessions(_ string, _ int) ([]*memory.Session, error) {
 	return m.sessions, nil
 }
 
-func (m *mockArchive) GetSessionTranscript(sessionID string) ([]memory.ArchivedMessage, error) {
+func (m *mockArchive) GetSessionTranscript(sessionID string) ([]memory.Message, error) {
 	if m.transcriptErr != nil {
 		return nil, m.transcriptErr
 	}
@@ -109,7 +109,7 @@ func TestGetContext_HistoryOnly(t *testing.T) {
 				},
 			},
 		},
-		transcripts: map[string][]memory.ArchivedMessage{
+		transcripts: map[string][]memory.Message{
 			"s1": {
 				{Role: "user", Content: "How does delegation work?", Timestamp: timeAt(now, 1)},
 				{Role: "assistant", Content: "Delegation uses profiles to filter tools.", Timestamp: timeAt(now, 0.9)},
@@ -163,7 +163,7 @@ func TestGetContext_Combined(t *testing.T) {
 				Metadata:  &memory.SessionMetadata{OneLiner: "Quick chat"},
 			},
 		},
-		transcripts: map[string][]memory.ArchivedMessage{
+		transcripts: map[string][]memory.Message{
 			"s1": {
 				{Role: "user", Content: "Hello", Timestamp: timeAt(now, 2)},
 				{Role: "assistant", Content: "Hi there!", Timestamp: timeAt(now, 1.9)},
@@ -242,7 +242,7 @@ func TestRecencyGradient(t *testing.T) {
 	now := time.Now().UTC()
 
 	sessions := make([]*memory.Session, 6)
-	transcripts := make(map[string][]memory.ArchivedMessage)
+	transcripts := make(map[string][]memory.Message)
 
 	for i := range 6 {
 		id := fmt.Sprintf("s%d", i)
@@ -257,7 +257,7 @@ func TestRecencyGradient(t *testing.T) {
 				Paragraph: fmt.Sprintf("Paragraph summary for session %d with more detail.", i),
 			},
 		}
-		transcripts[id] = []memory.ArchivedMessage{
+		transcripts[id] = []memory.Message{
 			{Role: "user", Content: fmt.Sprintf("User message in session %d", i), Timestamp: timeAt(now, float64(i)+1)},
 			{Role: "assistant", Content: fmt.Sprintf("Assistant reply in session %d", i), Timestamp: timeAt(now, float64(i)+0.9)},
 		}
@@ -314,7 +314,7 @@ func TestTokenBudget(t *testing.T) {
 
 	archive := &mockArchive{
 		sessions: sessions,
-		transcripts: map[string][]memory.ArchivedMessage{
+		transcripts: map[string][]memory.Message{
 			"s0": {
 				{Role: "user", Content: "Hello", Timestamp: timeAt(now, 1)},
 				{Role: "assistant", Content: "Hi!", Timestamp: timeAt(now, 0.9)},
@@ -360,7 +360,7 @@ func TestGapDetection(t *testing.T) {
 				Metadata:  &memory.SessionMetadata{OneLiner: "Earlier session"},
 			},
 		},
-		transcripts: map[string][]memory.ArchivedMessage{
+		transcripts: map[string][]memory.Message{
 			"s0": {{Role: "user", Content: "Hey", Timestamp: timeAt(now, 1)}},
 		},
 	}
@@ -391,7 +391,7 @@ func TestNoMetadata(t *testing.T) {
 				// No Title, no Metadata, no Summary.
 			},
 		},
-		transcripts: map[string][]memory.ArchivedMessage{
+		transcripts: map[string][]memory.Message{
 			"s0": {
 				{Role: "user", Content: "Test message", Timestamp: timeAt(now, 1)},
 			},
@@ -449,7 +449,7 @@ func TestEmptySessionsSkipped(t *testing.T) {
 				Metadata:  &memory.SessionMetadata{SessionType: "empty", OneLiner: "Empty session (no transcript)"},
 			},
 		},
-		transcripts: map[string][]memory.ArchivedMessage{
+		transcripts: map[string][]memory.Message{
 			"s1": {{Role: "user", Content: "Hello", Timestamp: timeAt(now, 1)}},
 		},
 	}
@@ -687,7 +687,7 @@ func TestMessageTimestamps(t *testing.T) {
 				Metadata:  &memory.SessionMetadata{OneLiner: "Testing timestamps"},
 			},
 		},
-		transcripts: map[string][]memory.ArchivedMessage{
+		transcripts: map[string][]memory.Message{
 			"s1": {
 				{Role: "user", Content: "what time is it", Timestamp: msgTime},
 				{Role: "assistant", Content: "It's 8:50 PM", Timestamp: msgTime.Add(5 * time.Second)},
@@ -725,7 +725,7 @@ func TestSessionHeaderRFC3339(t *testing.T) {
 				Metadata:  &memory.SessionMetadata{OneLiner: "Testing header format"},
 			},
 		},
-		transcripts: map[string][]memory.ArchivedMessage{
+		transcripts: map[string][]memory.Message{
 			"s1": {
 				{Role: "user", Content: "Hello", Timestamp: base},
 			},

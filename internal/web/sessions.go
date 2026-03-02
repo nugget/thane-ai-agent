@@ -301,7 +301,7 @@ func buildSessionDetailView(sess *memory.Session) *sessionDetailView {
 	return v
 }
 
-func messagesToRows(messages []memory.ArchivedMessage) []*messageRow {
+func messagesToRows(messages []memory.Message) []*messageRow {
 	rows := make([]*messageRow, 0, len(messages))
 	for _, m := range messages {
 		rows = append(rows, &messageRow{

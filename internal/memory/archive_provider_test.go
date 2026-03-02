@@ -32,7 +32,7 @@ func TestArchiveContextProvider_GetContext(t *testing.T) {
 	makeResult := func(sessionID, role, content string) SearchResult {
 		return SearchResult{
 			SessionID: sessionID,
-			Match: ArchivedMessage{
+			Match: Message{
 				Role:      role,
 				Content:   content,
 				Timestamp: ts,
@@ -40,10 +40,10 @@ func TestArchiveContextProvider_GetContext(t *testing.T) {
 		}
 	}
 
-	makeResultWithContext := func(sessionID, matchRole, matchContent string, before, after []ArchivedMessage) SearchResult {
+	makeResultWithContext := func(sessionID, matchRole, matchContent string, before, after []Message) SearchResult {
 		return SearchResult{
 			SessionID:     sessionID,
-			Match:         ArchivedMessage{Role: matchRole, Content: matchContent, Timestamp: ts},
+			Match:         Message{Role: matchRole, Content: matchContent, Timestamp: ts},
 			ContextBefore: before,
 			ContextAfter:  after,
 		}
@@ -259,10 +259,10 @@ func TestArchiveContextProvider_GetContext(t *testing.T) {
 		mock := &mockArchiveSearcher{
 			results: []SearchResult{
 				makeResultWithContext("sess-ctx", "assistant", "The answer is 42.",
-					[]ArchivedMessage{
+					[]Message{
 						{Role: "user", Content: "What is the answer?", Timestamp: ts.Add(-time.Minute)},
 					},
-					[]ArchivedMessage{
+					[]Message{
 						{Role: "user", Content: "Thanks!", Timestamp: ts.Add(time.Minute)},
 					},
 				),

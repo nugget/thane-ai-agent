@@ -87,7 +87,7 @@ type SessionStore interface {
 	ListSessions(conversationID string, limit int) ([]*memory.Session, error)
 	ListChildSessions(parentSessionID string) ([]*memory.Session, error)
 	GetSession(sessionID string) (*memory.Session, error)
-	GetSessionTranscript(sessionID string) ([]memory.ArchivedMessage, error)
+	GetSessionTranscript(sessionID string) ([]memory.Message, error)
 	GetSessionToolCalls(sessionID string) ([]memory.ArchivedToolCall, error)
 	GetSessionIterations(sessionID string) ([]memory.ArchivedIteration, error)
 }

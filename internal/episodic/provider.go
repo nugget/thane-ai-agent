@@ -29,7 +29,7 @@ type ArchiveReader interface {
 
 	// GetSessionTranscript returns all archived messages for a session
 	// in chronological order.
-	GetSessionTranscript(sessionID string) ([]memory.ArchivedMessage, error)
+	GetSessionTranscript(sessionID string) ([]memory.Message, error)
 }
 
 // Config holds configuration for the episodic memory provider.

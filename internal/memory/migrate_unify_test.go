@@ -102,7 +102,7 @@ func TestMigrateUnifyMessages_MergesArchive(t *testing.T) {
 	}
 
 	sess, _ := archiveStore.StartSession("conv-1")
-	if err := archiveStore.ArchiveMessages([]ArchivedMessage{
+	if err := archiveStore.ArchiveMessages([]Message{
 		{ID: "arch-1", ConversationID: "conv-1", SessionID: sess.ID,
 			Role: "user", Content: "archived msg 1",
 			Timestamp: time.Now(), ArchiveReason: "reset"},
@@ -170,7 +170,7 @@ func TestMigrateUnifyMessages_UpsertPreservesSessionID(t *testing.T) {
 	}
 
 	sess, _ := archiveStore.StartSession("conv-1")
-	if err := archiveStore.ArchiveMessages([]ArchivedMessage{
+	if err := archiveStore.ArchiveMessages([]Message{
 		{ID: "shared-msg", ConversationID: "conv-1", SessionID: sess.ID,
 			Role: "user", Content: "hello",
 			Timestamp: time.Now(), ArchiveReason: "reset"},
@@ -217,7 +217,7 @@ func TestMigrateUnifyMessages_Idempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 	sess, _ := archiveStore.StartSession("conv-1")
-	archiveStore.ArchiveMessages([]ArchivedMessage{
+	archiveStore.ArchiveMessages([]Message{
 		{ID: "m1", ConversationID: "conv-1", SessionID: sess.ID,
 			Role: "user", Content: "hello",
 			Timestamp: time.Now(), ArchiveReason: "reset"},
