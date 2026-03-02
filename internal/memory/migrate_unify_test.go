@@ -40,9 +40,16 @@ func TestMigrateUnifyMessages_AddsLifecycleColumns(t *testing.T) {
 }
 
 // TestMigrateUnifyMessages_BackfillsStatus verifies that existing messages
-// get their status column set from the compacted boolean.
+// get their status column set from the compacted boolean. The compacted
+// column was dropped from the schema (#444), so we add it manually to
+// simulate a pre-migration database.
 func TestMigrateUnifyMessages_BackfillsStatus(t *testing.T) {
 	store := newTestWorkingDB(t)
+
+	// Re-add the legacy compacted column to simulate a pre-#444 database.
+	if _, err := store.DB().Exec(`ALTER TABLE messages ADD COLUMN compacted BOOLEAN DEFAULT FALSE`); err != nil {
+		t.Fatal(err)
+	}
 
 	// Add some messages — they start with compacted=FALSE.
 	for i := 0; i < 5; i++ {

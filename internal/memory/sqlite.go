@@ -36,7 +36,23 @@ func NewSQLiteStore(dbPath string, maxMessages int) (*SQLiteStore, error) {
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
 
+	store.migrateDropCompacted()
+
 	return store, nil
+}
+
+// migrateDropCompacted removes the legacy compacted boolean column and its
+// index. The status lifecycle column superseded compacted in #434; the
+// backfill migration (MigrateUnifyMessages) copies compacted=TRUE →
+// status='compacted' before this runs, so no data is lost.
+func (s *SQLiteStore) migrateDropCompacted() {
+	// Check if column still exists.
+	if _, err := s.db.Exec("SELECT compacted FROM messages LIMIT 0"); err != nil {
+		return // Already dropped — nothing to do.
+	}
+
+	_, _ = s.db.Exec("DROP INDEX IF EXISTS idx_messages_compacted")
+	_, _ = s.db.Exec("ALTER TABLE messages DROP COLUMN compacted")
 }
 
 // migrate creates the database schema.
@@ -58,13 +74,11 @@ func (s *SQLiteStore) migrate() error {
 		content TEXT NOT NULL,
 		timestamp TIMESTAMP NOT NULL,
 		token_count INTEGER DEFAULT 0,
-		compacted BOOLEAN DEFAULT FALSE,
 		tool_calls TEXT,
 		tool_call_id TEXT,
 		FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
 	);
 	CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id, timestamp);
-	CREATE INDEX IF NOT EXISTS idx_messages_compacted ON messages(conversation_id, compacted);
 
 	-- Tool calls (structured, queryable)
 	CREATE TABLE IF NOT EXISTS tool_calls (

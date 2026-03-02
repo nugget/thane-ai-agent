@@ -84,19 +84,25 @@ func addLifecycleColumns(db *sql.DB, logger *slog.Logger) error {
 }
 
 // backfillStatus sets the status column from the compacted boolean for
-// existing rows that have status NULL (not yet migrated).
+// existing rows that have status NULL (not yet migrated). If the legacy
+// compacted column has already been dropped (#444), the boolean-based
+// backfill is skipped — only the NULL→active catch-all runs.
 func backfillStatus(db *sql.DB, logger *slog.Logger) error {
-	// Only backfill rows where status hasn't been set yet.
-	result, err := db.Exec(`
-		UPDATE messages SET status = 'compacted'
-		WHERE compacted = TRUE AND (status IS NULL OR status = 'active')
-	`)
-	if err != nil {
-		return fmt.Errorf("set compacted status: %w", err)
+	// Only attempt the compacted→status backfill if the column exists.
+	// After #444 drops the column, this branch is skipped.
+	var compacted int64
+	if _, err := db.Exec("SELECT compacted FROM messages LIMIT 0"); err == nil {
+		result, err := db.Exec(`
+			UPDATE messages SET status = 'compacted'
+			WHERE compacted = TRUE AND (status IS NULL OR status = 'active')
+		`)
+		if err != nil {
+			return fmt.Errorf("set compacted status: %w", err)
+		}
+		compacted, _ = result.RowsAffected()
 	}
-	compacted, _ := result.RowsAffected()
 
-	result, err = db.Exec(`
+	result, err := db.Exec(`
 		UPDATE messages SET status = 'active'
 		WHERE status IS NULL
 	`)
@@ -252,8 +258,8 @@ func upsertFromTemp(db *sql.DB) (int64, error) {
 		INSERT INTO messages
 			(id, conversation_id, session_id, role, content, timestamp,
 			 token_count, tool_calls, tool_call_id,
-			 compacted, status, archived_at, archive_reason)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, FALSE, 'archived', ?, ?)
+			 status, archived_at, archive_reason)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'archived', ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			session_id = COALESCE(excluded.session_id, messages.session_id),
 			status = 'archived',

@@ -54,11 +54,11 @@ func TestCompaction_PreservesMessages(t *testing.T) {
 		t.Errorf("messages should be preserved after compaction: before=%d, after=%d", totalBefore, totalAfter)
 	}
 
-	// Verify some messages are marked as compacted.
+	// Verify some messages are marked as compacted via the status column.
 	var compactedCount int
-	_ = memStore.DB().QueryRow(`SELECT COUNT(*) FROM messages WHERE conversation_id = 'test-conv' AND compacted = TRUE`).Scan(&compactedCount)
+	_ = memStore.DB().QueryRow(`SELECT COUNT(*) FROM messages WHERE conversation_id = 'test-conv' AND status = 'compacted'`).Scan(&compactedCount)
 	if compactedCount == 0 {
-		t.Error("expected some messages to be marked as compacted")
+		t.Error("expected some messages to have status='compacted'")
 	}
 
 	t.Logf("compacted %d messages, total: %d -> %d", compactedCount, totalBefore, totalAfter)
