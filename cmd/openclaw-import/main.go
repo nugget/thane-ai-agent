@@ -1,14 +1,13 @@
-// Command openclaw-import migrates OpenClaw session data into Thane's archive.
+// Command openclaw-import migrates OpenClaw session data into Thane's
+// conversation archive.
 //
 // This is a one-time migration tool — the last thing we run on OpenClaw
-// before switching to Thane for real.
+// before switching to Thane for real. Sessions are imported directly into
+// thane.db (the unified conversation database).
 //
 // Usage:
 //
 //	openclaw-import -openclaw /path/to/.openclaw -data /path/to/thane/data
-//
-// It reads JSONL session files from OpenClaw's session directory, converts
-// them to Thane's archive format, and writes them to Thane's archive.db.
 package main
 
 import (
@@ -29,7 +28,7 @@ const sourceType = "openclaw"
 
 func main() {
 	openclawDir := flag.String("openclaw", "", "Path to .openclaw directory")
-	dataDir := flag.String("data", "", "Path to Thane data directory (where archive.db will be created)")
+	dataDir := flag.String("data", "", "Path to Thane data directory (containing thane.db)")
 	dryRun := flag.Bool("dry-run", false, "Parse and report without writing to database")
 	purge := flag.Bool("purge", false, "Remove all previously imported OpenClaw data and re-import")
 	verbose := flag.Bool("verbose", false, "Verbose output")
@@ -117,19 +116,45 @@ func main() {
 		return
 	}
 
-	// Create archive store
+	// Open the unified database (thane.db) and ensure schema is ready.
 	if err := os.MkdirAll(*dataDir, 0755); err != nil {
 		logger.Error("failed to create data directory", "error", err)
 		os.Exit(1)
 	}
 
-	archivePath := filepath.Join(*dataDir, "archive.db")
-	store, err := memory.NewArchiveStore(archivePath, nil, nil, logger)
+	thanePath := filepath.Join(*dataDir, "thane.db")
+	workingStore, err := memory.NewSQLiteStore(thanePath, 1000)
+	if err != nil {
+		logger.Error("failed to open working store", "error", err)
+		os.Exit(1)
+	}
+	defer workingStore.Close()
+
+	// Run unification migrations so the unified schema (status column,
+	// lifecycle indexes) exists before importing.
+	if err := memory.MigrateUnifyMessages(workingStore.DB(), "", nil); err != nil {
+		logger.Error("unify messages migration failed", "error", err)
+		os.Exit(1)
+	}
+	if err := memory.MigrateUnifyToolCalls(workingStore.DB(), "", nil); err != nil {
+		logger.Error("unify tool calls migration failed", "error", err)
+		os.Exit(1)
+	}
+
+	store, err := memory.NewArchiveStoreFromDB(workingStore.DB(), nil, logger)
 	if err != nil {
 		logger.Error("failed to open archive store", "error", err)
 		os.Exit(1)
 	}
-	defer store.Close()
+	defer store.Close() // no-op — connection owned by workingStore
+
+	// Ensure the conversation record exists so imported messages have a
+	// valid parent. FK constraints are currently disabled, but this
+	// future-proofs against enabling them.
+	if _, err := workingStore.GetOrCreateConversation("openclaw-import"); err != nil {
+		logger.Error("failed to create conversation", "error", err)
+		os.Exit(1)
+	}
 
 	// Purge previously imported data if requested
 	if *purge {
@@ -168,13 +193,13 @@ func main() {
 		"imported", imported,
 		"skipped", skipped,
 		"failed", len(allSessions)-imported-skipped,
-		"archive_path", archivePath,
+		"database", thanePath,
 	)
 
 	// Print stats
 	stats, _ := store.Stats()
 	fmt.Printf("\n=== Import Complete ===\n")
-	fmt.Printf("Archive: %s\n", archivePath)
+	fmt.Printf("Database: %s\n", thanePath)
 	fmt.Printf("Sessions imported: %d / %d\n", imported, len(allSessions))
 	fmt.Printf("Total archived messages: %v\n", stats["total_messages"])
 	fmt.Printf("Total archived tool calls: %v\n", stats["total_tool_calls"])
@@ -424,18 +449,18 @@ func importSession(store *memory.ArchiveStore, sess parsedSession, logger *slog.
 		return fmt.Errorf("create session: %w", err)
 	}
 
-	// Archive messages
+	// Import messages
 	if len(sess.messages) > 0 {
 		// Fix session IDs to point to our new session
 		for i := range sess.messages {
 			sess.messages[i].SessionID = archiveSess.ID
 		}
-		if err := store.ArchiveMessages(sess.messages); err != nil {
-			return fmt.Errorf("archive messages: %w", err)
+		if err := store.ImportMessages(sess.messages); err != nil {
+			return fmt.Errorf("import messages: %w", err)
 		}
 	}
 
-	// Archive tool calls
+	// Import tool calls
 	if len(sess.toolCalls) > 0 {
 		for i := range sess.toolCalls {
 			sess.toolCalls[i].SessionID = archiveSess.ID
@@ -455,8 +480,8 @@ func importSession(store *memory.ArchiveStore, sess parsedSession, logger *slog.
 			}
 		}
 
-		if err := store.ArchiveToolCalls(sess.toolCalls); err != nil {
-			return fmt.Errorf("archive tool calls: %w", err)
+		if err := store.ImportToolCalls(sess.toolCalls); err != nil {
+			return fmt.Errorf("import tool calls: %w", err)
 		}
 	}
 

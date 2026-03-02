@@ -846,6 +846,130 @@ func (s *ArchiveStore) ArchiveToolCalls(calls []ArchivedToolCall) error {
 	return tx.Commit()
 }
 
+// ImportMessages inserts externally-sourced messages (e.g. from openclaw-import)
+// into the archive. Unlike ArchiveMessages, which is a no-op in unified mode
+// (since archival is a status UPDATE on existing rows), ImportMessages performs
+// real INSERTs in both modes — the data doesn't already exist in any table.
+//
+// In legacy mode, this delegates to ArchiveMessages. In unified mode, rows are
+// inserted directly into the messages table with status='archived'. FTS triggers
+// keep the full-text index in sync automatically.
+func (s *ArchiveStore) ImportMessages(messages []ArchivedMessage) error {
+	if s.messagesDB == nil {
+		return s.ArchiveMessages(messages)
+	}
+	if len(messages) == 0 {
+		return nil
+	}
+
+	db := s.msgDB()
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	stmt, err := tx.Prepare(fmt.Sprintf(`
+		INSERT OR IGNORE INTO %s
+			(id, conversation_id, session_id, role, content, timestamp,
+			 token_count, tool_calls, tool_call_id,
+			 status, archived_at, archive_reason)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'archived', ?, ?)
+	`, s.msgTableName))
+	if err != nil {
+		return fmt.Errorf("prepare: %w", err)
+	}
+	defer stmt.Close()
+
+	for _, m := range messages {
+		if m.ID == "" {
+			id, err := uuid.NewV7()
+			if err != nil {
+				return fmt.Errorf("generate UUID: %w", err)
+			}
+			m.ID = id.String()
+		}
+		if m.ArchivedAt.IsZero() {
+			m.ArchivedAt = time.Now().UTC()
+		}
+
+		if _, err := stmt.Exec(
+			m.ID, m.ConversationID, m.SessionID, m.Role, m.Content,
+			m.Timestamp.Format(time.RFC3339Nano),
+			m.TokenCount, nullString(m.ToolCalls), nullString(m.ToolCallID),
+			m.ArchivedAt.Format(time.RFC3339Nano), m.ArchiveReason,
+		); err != nil {
+			return fmt.Errorf("insert message %s: %w", m.ID, err)
+		}
+	}
+
+	return tx.Commit()
+}
+
+// ImportToolCalls inserts externally-sourced tool calls (e.g. from
+// openclaw-import) into the archive. Like ImportMessages, this performs real
+// INSERTs in both modes rather than being a no-op in unified mode.
+func (s *ArchiveStore) ImportToolCalls(calls []ArchivedToolCall) error {
+	if s.messagesDB == nil {
+		return s.ArchiveToolCalls(calls)
+	}
+	if len(calls) == 0 {
+		return nil
+	}
+
+	db := s.msgDB()
+	tx, err := db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	stmt, err := tx.Prepare(fmt.Sprintf(`
+		INSERT OR IGNORE INTO %s
+			(id, conversation_id, session_id, tool_name, arguments,
+			 result, error, started_at, completed_at, duration_ms,
+			 status, archived_at, iteration_index)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'archived', ?, ?)
+	`, s.tcTableName))
+	if err != nil {
+		return fmt.Errorf("prepare: %w", err)
+	}
+	defer stmt.Close()
+
+	now := time.Now().UTC()
+	for _, tc := range calls {
+		if tc.ID == "" {
+			id, err := uuid.NewV7()
+			if err != nil {
+				return fmt.Errorf("generate UUID: %w", err)
+			}
+			tc.ID = id.String()
+		}
+
+		archivedAt := now
+		if !tc.ArchivedAt.IsZero() {
+			archivedAt = tc.ArchivedAt
+		}
+
+		var completedAt any
+		if tc.CompletedAt != nil {
+			completedAt = tc.CompletedAt.Format(time.RFC3339Nano)
+		}
+
+		if _, err := stmt.Exec(
+			tc.ID, tc.ConversationID, tc.SessionID, tc.ToolName, tc.Arguments,
+			nullString(tc.Result), nullString(tc.Error),
+			tc.StartedAt.Format(time.RFC3339Nano), completedAt,
+			tc.DurationMs, archivedAt.Format(time.RFC3339Nano),
+			tc.IterationIndex,
+		); err != nil {
+			return fmt.Errorf("insert tool call %s: %w", tc.ID, err)
+		}
+	}
+
+	return tx.Commit()
+}
+
 // GetSessionToolCalls returns archived tool calls for a session in chronological order.
 func (s *ArchiveStore) GetSessionToolCalls(sessionID string) ([]ArchivedToolCall, error) {
 	rows, err := s.msgDB().Query(fmt.Sprintf(`

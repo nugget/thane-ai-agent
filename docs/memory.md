@@ -40,12 +40,12 @@ Working memory bridges the gap between ephemeral conversation context and perman
 
 Complete, immutable transcripts of all conversations with full-text search:
 
-- **Storage:** SQLite FTS5 for fast text search
+- **Storage:** Unified `messages` table in thane.db with lifecycle `status` column (`active` → `compacted` → `archived`). FTS5 index for fast text search.
 - **Tool:** `archive_search` — search across all historical conversations
 - **Import:** OpenClaw session import tool (migrates external conversation history)
 - **Use:** "What did we discuss about MQTT last week?" → searches across all sessions
 
-The archive is never modified after writing — it's a permanent record.
+Archived messages are never modified after writing — they're a permanent record.
 
 ### Checkpoints
 
@@ -72,11 +72,12 @@ All memory lives in SQLite databases under `data_dir`:
 
 ```
 ~/Thane/data/
-├── thane.db          # Conversations, messages, checkpoints
+├── thane.db          # Conversations, messages, sessions, tool calls, checkpoints
 ├── facts.db          # Semantic facts with embeddings
-├── anticipations.db  # Event-driven triggers
-└── archive.db        # Immutable session transcripts (FTS5)
+└── anticipations.db  # Event-driven triggers
 ```
+
+Active and archived messages share the `messages` table, differentiated by a lifecycle `status` column. FTS5 triggers keep the full-text index in sync automatically.
 
 ## Integration with Agent Loop
 
