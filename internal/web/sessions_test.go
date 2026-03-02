@@ -14,7 +14,7 @@ import (
 // mockSessionStore is a test double for SessionStore.
 type mockSessionStore struct {
 	sessions   []*memory.Session
-	transcript []memory.ArchivedMessage
+	transcript []memory.Message
 	toolCalls  []memory.ArchivedToolCall
 	iterations []memory.ArchivedIteration
 }
@@ -41,7 +41,7 @@ func (m *mockSessionStore) GetSession(sessionID string) (*memory.Session, error)
 	return nil, nil
 }
 
-func (m *mockSessionStore) GetSessionTranscript(sessionID string) ([]memory.ArchivedMessage, error) {
+func (m *mockSessionStore) GetSessionTranscript(sessionID string) ([]memory.Message, error) {
 	return m.transcript, nil
 }
 
@@ -105,9 +105,9 @@ func testSessions() []*memory.Session {
 	}
 }
 
-func testTranscript() []memory.ArchivedMessage {
+func testTranscript() []memory.Message {
 	now := time.Now()
-	return []memory.ArchivedMessage{
+	return []memory.Message{
 		{
 			Role:      "user",
 			Content:   "Hello, can you help me debug this?",

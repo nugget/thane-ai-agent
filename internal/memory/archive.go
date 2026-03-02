@@ -77,21 +77,6 @@ func DefaultArchiveConfig() ArchiveConfig {
 	}
 }
 
-// ArchivedMessage represents a message preserved in the archive.
-type ArchivedMessage struct {
-	ID             string    `json:"id"`
-	ConversationID string    `json:"conversation_id"`
-	SessionID      string    `json:"session_id"`
-	Role           string    `json:"role"`
-	Content        string    `json:"content"`
-	Timestamp      time.Time `json:"timestamp"`
-	TokenCount     int       `json:"token_count,omitempty"`
-	ToolCalls      string    `json:"tool_calls,omitempty"`
-	ToolCallID     string    `json:"tool_call_id,omitempty"`
-	ArchivedAt     time.Time `json:"archived_at"`
-	ArchiveReason  string    `json:"archive_reason"`
-}
-
 // Session represents a conversation session with boundaries.
 type Session struct {
 	ID               string           `json:"id"`
@@ -219,11 +204,11 @@ type ArchivedIteration struct {
 
 // SearchResult represents a search hit with surrounding context.
 type SearchResult struct {
-	Match         ArchivedMessage   `json:"match"`
-	SessionID     string            `json:"session_id"`
-	ContextBefore []ArchivedMessage `json:"context_before"`
-	ContextAfter  []ArchivedMessage `json:"context_after"`
-	Highlight     string            `json:"highlight,omitempty"`
+	Match         Message   `json:"match"`
+	SessionID     string    `json:"session_id"`
+	ContextBefore []Message `json:"context_before"`
+	ContextAfter  []Message `json:"context_after"`
+	Highlight     string    `json:"highlight,omitempty"`
 }
 
 // SearchOptions configures a search query.
@@ -723,7 +708,7 @@ func (s *ArchiveStore) tryEnableFTS() bool {
 //
 // In unified mode (messagesDB set), this is a no-op — messages already live
 // in the unified table and are archived via status UPDATE by SQLiteStore.
-func (s *ArchiveStore) ArchiveMessages(messages []ArchivedMessage) error {
+func (s *ArchiveStore) ArchiveMessages(messages []Message) error {
 	if s.messagesDB != nil {
 		return nil // Unified mode: archival is a status UPDATE, not a cross-DB copy.
 	}
@@ -854,7 +839,7 @@ func (s *ArchiveStore) ArchiveToolCalls(calls []ArchivedToolCall) error {
 // In legacy mode, this delegates to ArchiveMessages. In unified mode, rows are
 // inserted directly into the messages table with status='archived'. FTS triggers
 // keep the full-text index in sync automatically.
-func (s *ArchiveStore) ImportMessages(messages []ArchivedMessage) error {
+func (s *ArchiveStore) ImportMessages(messages []Message) error {
 	if s.messagesDB == nil {
 		return s.ArchiveMessages(messages)
 	}
@@ -1279,13 +1264,13 @@ func (s *ArchiveStore) Search(opts SearchOptions) ([]SearchResult, error) {
 	// Collect all matches first (must close rows before doing context expansion
 	// queries, since SQLite may not support concurrent readers on same connection)
 	type matchWithHighlight struct {
-		msg       ArchivedMessage
+		msg       Message
 		highlight string
 	}
 	var matches []matchWithHighlight
 
 	for rows.Next() {
-		var m ArchivedMessage
+		var m Message
 		var highlight string
 		var tsStr, archivedStr string
 		var toolCalls, toolCallID sql.NullString
@@ -1318,7 +1303,7 @@ func (s *ArchiveStore) Search(opts SearchOptions) ([]SearchResult, error) {
 	// Now expand context for each match (safe to query again)
 	var results []SearchResult
 	for _, mh := range matches {
-		var before, after []ArchivedMessage
+		var before, after []Message
 		if !opts.NoContext {
 			before = s.expandContext(mh.msg.ConversationID, mh.msg.Timestamp, true, opts)
 			after = s.expandContext(mh.msg.ConversationID, mh.msg.Timestamp, false, opts)
@@ -1342,7 +1327,7 @@ func (s *ArchiveStore) expandContext(
 	from time.Time,
 	backward bool,
 	opts SearchOptions,
-) []ArchivedMessage {
+) []Message {
 	var query string
 	var boundary time.Time
 
@@ -1378,11 +1363,11 @@ func (s *ArchiveStore) expandContext(
 	}
 	defer rows.Close()
 
-	var messages []ArchivedMessage
+	var messages []Message
 	prevTime := from
 
 	for rows.Next() {
-		var m ArchivedMessage
+		var m Message
 		var tsStr, archivedStr string
 		var toolCalls, toolCallID sql.NullString
 
@@ -1853,7 +1838,7 @@ func (s *ArchiveStore) UnsummarizedSessions(limit int) ([]*Session, error) {
 }
 
 // GetSessionTranscript returns all archived messages for a session in chronological order.
-func (s *ArchiveStore) GetSessionTranscript(sessionID string) ([]ArchivedMessage, error) {
+func (s *ArchiveStore) GetSessionTranscript(sessionID string) ([]Message, error) {
 	query := fmt.Sprintf(`
 		SELECT %s
 		FROM %s
@@ -1871,7 +1856,7 @@ func (s *ArchiveStore) GetSessionTranscript(sessionID string) ([]ArchivedMessage
 }
 
 // GetMessagesByTimeRange returns archived messages within a time range.
-func (s *ArchiveStore) GetMessagesByTimeRange(from, to time.Time, conversationID string, limit int) ([]ArchivedMessage, error) {
+func (s *ArchiveStore) GetMessagesByTimeRange(from, to time.Time, conversationID string, limit int) ([]Message, error) {
 	if limit <= 0 {
 		limit = 500
 	}
@@ -2155,10 +2140,10 @@ func populateSession(sess *Session, startStr string, endStr, endReason, summary,
 	}
 }
 
-func (s *ArchiveStore) scanMessages(rows *sql.Rows) ([]ArchivedMessage, error) {
-	var messages []ArchivedMessage
+func (s *ArchiveStore) scanMessages(rows *sql.Rows) ([]Message, error) {
+	var messages []Message
 	for rows.Next() {
-		var m ArchivedMessage
+		var m Message
 		var tsStr, archivedStr string
 		var toolCalls, toolCallID sql.NullString
 

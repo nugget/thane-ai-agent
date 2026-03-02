@@ -31,14 +31,22 @@ type MemoryStore interface {
 	Stats() map[string]any
 }
 
-// Message represents a conversation message.
+// Message represents a conversation message. This is the unified type for
+// both active working-memory messages and archived session transcripts.
+// Archive-specific fields (ConversationID, SessionID, TokenCount, ArchivedAt,
+// ArchiveReason) are zero-valued for active messages.
 type Message struct {
-	ID         string    `json:"id"`   // Stable UUIDv7 assigned at creation time
-	Role       string    `json:"role"` // system, user, assistant, tool
-	Content    string    `json:"content"`
-	Timestamp  time.Time `json:"timestamp"`
-	ToolCalls  string    `json:"tool_calls,omitempty"`   // JSON array of tool calls (assistant messages)
-	ToolCallID string    `json:"tool_call_id,omitempty"` // Tool call ID (tool response messages)
+	ID             string    `json:"id"`                        // Stable UUIDv7 assigned at creation time
+	ConversationID string    `json:"conversation_id,omitempty"` // Set for archived messages
+	SessionID      string    `json:"session_id,omitempty"`      // Set for archived messages
+	Role           string    `json:"role"`                      // system, user, assistant, tool
+	Content        string    `json:"content"`
+	Timestamp      time.Time `json:"timestamp"`
+	TokenCount     int       `json:"token_count,omitempty"`    // Estimated token count
+	ToolCalls      string    `json:"tool_calls,omitempty"`     // JSON array of tool calls (assistant messages)
+	ToolCallID     string    `json:"tool_call_id,omitempty"`   // Tool call ID (tool response messages)
+	ArchivedAt     time.Time `json:"archived_at,omitzero"`     // When the message was archived
+	ArchiveReason  string    `json:"archive_reason,omitempty"` // Why: compaction, reset, shutdown, import
 }
 
 // Conversation holds the state of a single conversation.

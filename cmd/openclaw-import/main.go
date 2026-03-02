@@ -211,7 +211,7 @@ type parsedSession struct {
 	id        string
 	startedAt time.Time
 	endedAt   time.Time
-	messages  []memory.ArchivedMessage
+	messages  []memory.Message
 	toolCalls []memory.ArchivedToolCall
 }
 
@@ -300,16 +300,16 @@ func parseSessionFile(path string, logger *slog.Logger) (parsedSession, error) {
 	return sess, nil
 }
 
-func convertMessage(entry openclawLine, sessionID string, ts time.Time) ([]memory.ArchivedMessage, []memory.ArchivedToolCall) {
+func convertMessage(entry openclawLine, sessionID string, ts time.Time) ([]memory.Message, []memory.ArchivedToolCall) {
 	msg := entry.Message
-	var messages []memory.ArchivedMessage
+	var messages []memory.Message
 	var toolCalls []memory.ArchivedToolCall
 
 	switch msg.Role {
 	case "user":
 		text := extractText(msg.Content)
 		if text != "" {
-			messages = append(messages, memory.ArchivedMessage{
+			messages = append(messages, memory.Message{
 				ID:             entry.ID,
 				ConversationID: "openclaw-import",
 				SessionID:      sessionID,
@@ -326,7 +326,7 @@ func convertMessage(entry openclawLine, sessionID string, ts time.Time) ([]memor
 		text, tcs := extractAssistantContent(msg.Content)
 
 		if text != "" {
-			messages = append(messages, memory.ArchivedMessage{
+			messages = append(messages, memory.Message{
 				ID:             entry.ID,
 				ConversationID: "openclaw-import",
 				SessionID:      sessionID,
@@ -357,7 +357,7 @@ func convertMessage(entry openclawLine, sessionID string, ts time.Time) ([]memor
 	case "toolResult":
 		text := extractText(msg.Content)
 
-		messages = append(messages, memory.ArchivedMessage{
+		messages = append(messages, memory.Message{
 			ID:             entry.ID,
 			ConversationID: "openclaw-import",
 			SessionID:      sessionID,

@@ -22,7 +22,7 @@ func newTestArchiveStore(t *testing.T) *ArchiveStore {
 func TestArchiveMessages_BasicInsert(t *testing.T) {
 	store := newTestArchiveStore(t)
 
-	msgs := []ArchivedMessage{
+	msgs := []Message{
 		{
 			ID: "msg-1", ConversationID: "conv-1", SessionID: "sess-1",
 			Role: "user", Content: "hello there",
@@ -60,7 +60,7 @@ func TestArchiveMessages_BasicInsert(t *testing.T) {
 func TestArchiveMessages_Deduplication(t *testing.T) {
 	store := newTestArchiveStore(t)
 
-	msg := ArchivedMessage{
+	msg := Message{
 		ID: "msg-1", ConversationID: "conv-1", SessionID: "sess-1",
 		Role: "user", Content: "hello",
 		Timestamp:     time.Date(2026, 2, 12, 10, 0, 0, 0, time.UTC),
@@ -68,10 +68,10 @@ func TestArchiveMessages_Deduplication(t *testing.T) {
 	}
 
 	// Insert twice — should not error or duplicate
-	if err := store.ArchiveMessages([]ArchivedMessage{msg}); err != nil {
+	if err := store.ArchiveMessages([]Message{msg}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.ArchiveMessages([]ArchivedMessage{msg}); err != nil {
+	if err := store.ArchiveMessages([]Message{msg}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -87,7 +87,7 @@ func TestArchiveMessages_Deduplication(t *testing.T) {
 func TestSearch_BasicFTS(t *testing.T) {
 	store := newTestArchiveStore(t)
 
-	msgs := []ArchivedMessage{
+	msgs := []Message{
 		{
 			ID: "msg-1", ConversationID: "conv-1", SessionID: "sess-1",
 			Role: "user", Content: "what about the pool heater timer",
@@ -135,7 +135,7 @@ func TestSearch_SilenceGapContextExpansion(t *testing.T) {
 
 	base := time.Date(2026, 2, 12, 10, 0, 0, 0, time.UTC)
 
-	msgs := []ArchivedMessage{
+	msgs := []Message{
 		// Conversation cluster 1: rapid fire
 		{ID: "m1", ConversationID: "c1", SessionID: "s1", Role: "user",
 			Content: "starting topic A", Timestamp: base,
@@ -251,7 +251,7 @@ func TestSessionLifecycle(t *testing.T) {
 	}
 
 	// Archive real messages so the computed count works.
-	if err := store.ArchiveMessages([]ArchivedMessage{
+	if err := store.ArchiveMessages([]Message{
 		{ID: "msg-1", ConversationID: "conv-1", SessionID: sess.ID, Role: "user", Content: "hello", Timestamp: time.Now(), ArchivedAt: time.Now(), ArchiveReason: "test"},
 		{ID: "msg-2", ConversationID: "conv-1", SessionID: sess.ID, Role: "assistant", Content: "hi", Timestamp: time.Now(), ArchivedAt: time.Now(), ArchiveReason: "test"},
 	}); err != nil {
@@ -310,9 +310,9 @@ func TestGetMessagesByTimeRange(t *testing.T) {
 	store := newTestArchiveStore(t)
 
 	base := time.Date(2026, 2, 12, 10, 0, 0, 0, time.UTC)
-	msgs := make([]ArchivedMessage, 10)
+	msgs := make([]Message, 10)
 	for i := range msgs {
-		msgs[i] = ArchivedMessage{
+		msgs[i] = Message{
 			ID: fmt.Sprintf("msg-%d", i), ConversationID: "conv-1", SessionID: "sess-1",
 			Role: "user", Content: fmt.Sprintf("message %d", i),
 			Timestamp:     base.Add(time.Duration(i) * time.Minute),
@@ -342,7 +342,7 @@ func TestExportSessionMarkdown(t *testing.T) {
 
 	sess, _ := store.StartSession("conv-1")
 
-	msgs := []ArchivedMessage{
+	msgs := []Message{
 		{ID: "m1", ConversationID: "conv-1", SessionID: sess.ID, Role: "user",
 			Content: "hello", Timestamp: time.Date(2026, 2, 12, 10, 0, 0, 0, time.UTC),
 			ArchiveReason: "manual"},
@@ -373,7 +373,7 @@ func TestExportSessionMarkdown(t *testing.T) {
 func TestArchiveStats(t *testing.T) {
 	store := newTestArchiveStore(t)
 
-	msgs := []ArchivedMessage{
+	msgs := []Message{
 		{ID: "m1", ConversationID: "c1", SessionID: "s1", Role: "user",
 			Content: "hello", Timestamp: time.Now(), ArchiveReason: "reset"},
 		{ID: "m2", ConversationID: "c1", SessionID: "s1", Role: "assistant",
@@ -501,7 +501,7 @@ func TestUnsummarizedSessions(t *testing.T) {
 			t.Fatal(err)
 		}
 		// Archive a real message so the EXISTS subquery finds it.
-		err = store.ArchiveMessages([]ArchivedMessage{{
+		err = store.ArchiveMessages([]Message{{
 			ID:             fmt.Sprintf("msg-%d", i),
 			ConversationID: convID,
 			SessionID:      sess.ID,
@@ -524,7 +524,7 @@ func TestUnsummarizedSessions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = store.ArchiveMessages([]ArchivedMessage{{
+	err = store.ArchiveMessages([]Message{{
 		ID:             "msg-summarized",
 		ConversationID: "conv-summarized",
 		SessionID:      summarized.ID,
@@ -549,7 +549,7 @@ func TestUnsummarizedSessions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = store.ArchiveMessages([]ArchivedMessage{{
+	err = store.ArchiveMessages([]Message{{
 		ID:             "msg-active",
 		ConversationID: "conv-active",
 		SessionID:      active.ID,
@@ -1198,7 +1198,7 @@ func TestActiveSessionsWithLastActivity(t *testing.T) {
 		t.Fatal(err)
 	}
 	msgTime := time.Now().UTC().Add(-1 * time.Hour)
-	msgs := []ArchivedMessage{
+	msgs := []Message{
 		{
 			ID:             "msg-1",
 			ConversationID: "conv-1",
@@ -1348,7 +1348,7 @@ func TestImportMessages_Legacy(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	msgs := []ArchivedMessage{
+	msgs := []Message{
 		{
 			ID:             "imp-msg-1",
 			ConversationID: "conv-import",
@@ -1401,7 +1401,7 @@ func TestImportMessages_Unified(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	msgs := []ArchivedMessage{
+	msgs := []Message{
 		{
 			ID:             "imp-msg-u1",
 			ConversationID: "conv-import",

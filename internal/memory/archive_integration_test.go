@@ -69,7 +69,7 @@ func TestSearch_NoContext(t *testing.T) {
 	store := newTestArchiveStore(t)
 
 	base := time.Date(2026, 2, 12, 10, 0, 0, 0, time.UTC)
-	msgs := []ArchivedMessage{
+	msgs := []Message{
 		{ID: "m1", ConversationID: "c1", SessionID: "s1", Role: "user",
 			Content: "before the match", Timestamp: base,
 			ArchiveReason: "reset"},
@@ -150,9 +150,9 @@ func TestSessionMessageCount(t *testing.T) {
 	sess, _ := store.StartSession("conv-1")
 
 	// Archive 3 messages.
-	msgs := make([]ArchivedMessage, 3)
+	msgs := make([]Message, 3)
 	for i := range msgs {
-		msgs[i] = ArchivedMessage{
+		msgs[i] = Message{
 			ID: fmt.Sprintf("msg-%d", i), ConversationID: "conv-1", SessionID: sess.ID,
 			Role: "user", Content: fmt.Sprintf("msg %d", i),
 			Timestamp: time.Now(), ArchivedAt: time.Now(), ArchiveReason: "test",
@@ -321,7 +321,7 @@ func TestPurgeImported(t *testing.T) {
 	sess1, _ := store.StartSessionAt("imported", time.Date(2026, 2, 1, 10, 0, 0, 0, time.UTC))
 	sess2, _ := store.StartSessionAt("imported", time.Date(2026, 2, 2, 10, 0, 0, 0, time.UTC))
 
-	msgs := []ArchivedMessage{
+	msgs := []Message{
 		{ID: "m1", ConversationID: "imported", SessionID: sess1.ID,
 			Role: "user", Content: "hello from session 1",
 			Timestamp: time.Now(), ArchiveReason: "import"},
@@ -342,7 +342,7 @@ func TestPurgeImported(t *testing.T) {
 
 	// Also create a non-imported session that should survive the purge
 	nativeSess, _ := store.StartSession("native")
-	store.ArchiveMessages([]ArchivedMessage{
+	store.ArchiveMessages([]Message{
 		{ID: "m3", ConversationID: "native", SessionID: nativeSess.ID,
 			Role: "user", Content: "native message",
 			Timestamp: time.Now(), ArchiveReason: "reset"},

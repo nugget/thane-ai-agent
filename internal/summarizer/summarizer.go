@@ -353,7 +353,7 @@ func (w *Worker) markEmpty(sessionID string) {
 
 // buildTranscript creates a condensed transcript from archived messages,
 // truncated at maxTranscriptBytes.
-func buildTranscript(messages []memory.ArchivedMessage) string {
+func buildTranscript(messages []memory.Message) string {
 	var b strings.Builder
 	for _, m := range messages {
 		if m.Role == "system" {

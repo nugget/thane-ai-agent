@@ -1037,9 +1037,9 @@ func (e *Executor) archiveSession(rec *completionRecord, now time.Time) {
 	convID := rec.conversationID
 
 	// Archive messages from the LLM conversation.
-	var archived []memory.ArchivedMessage
+	var archived []memory.Message
 	for i, m := range rec.messages {
-		archived = append(archived, memory.ArchivedMessage{
+		archived = append(archived, memory.Message{
 			ConversationID: convID,
 			SessionID:      sessionID,
 			Role:           m.Role,

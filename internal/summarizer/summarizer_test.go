@@ -95,7 +95,7 @@ func createUnsummarizedSession(t *testing.T, store *memory.ArchiveStore, convID 
 	}
 
 	// Archive a message so the transcript is non-empty.
-	msgs := []memory.ArchivedMessage{
+	msgs := []memory.Message{
 		{
 			ID:             fmt.Sprintf("msg-%s", sess.ID),
 			ConversationID: convID,
@@ -306,7 +306,7 @@ func TestWorker_ClosesOrphanedSessions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	msgs := []memory.ArchivedMessage{
+	msgs := []memory.Message{
 		{
 			ID:             fmt.Sprintf("msg-%s", sess.ID),
 			ConversationID: "conv-orphan",
@@ -417,7 +417,7 @@ func TestWorker_StaleCountSessionExcluded(t *testing.T) {
 }
 
 func TestBuildTranscript(t *testing.T) {
-	messages := []memory.ArchivedMessage{
+	messages := []memory.Message{
 		{Role: "system", Content: "You are a helpful assistant.", Timestamp: time.Now()},
 		{Role: "user", Content: "Hello", Timestamp: time.Now()},
 		{Role: "assistant", Content: "Hi there!", Timestamp: time.Now()},
@@ -444,7 +444,7 @@ func TestBuildTranscript_Truncation(t *testing.T) {
 		longContent[i] = 'x'
 	}
 
-	messages := []memory.ArchivedMessage{
+	messages := []memory.Message{
 		{Role: "user", Content: string(longContent), Timestamp: time.Now()},
 		{Role: "assistant", Content: "Should not appear", Timestamp: time.Now()},
 	}
@@ -528,7 +528,7 @@ func TestWorker_ClosesIdleSessions(t *testing.T) {
 		t.Fatal(err)
 	}
 	oldTime := time.Now().Add(-2 * time.Hour)
-	msgs := []memory.ArchivedMessage{
+	msgs := []memory.Message{
 		{
 			ID:             fmt.Sprintf("msg-%s", sess.ID),
 			ConversationID: "conv-idle",
@@ -588,7 +588,7 @@ func TestWorker_SkipsActiveSessionsWithinTimeout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	msgs := []memory.ArchivedMessage{
+	msgs := []memory.Message{
 		{
 			ID:             fmt.Sprintf("msg-%s", sess.ID),
 			ConversationID: "conv-active",
@@ -642,7 +642,7 @@ func TestWorker_IdleTimeoutDisabledWhenZero(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	msgs := []memory.ArchivedMessage{
+	msgs := []memory.Message{
 		{
 			ID:             fmt.Sprintf("msg-%s", sess.ID),
 			ConversationID: "conv-old",
