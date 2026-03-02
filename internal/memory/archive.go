@@ -134,6 +134,28 @@ type SessionMetadata struct {
 
 	// Model(s) used, if known.
 	Models []string `json:"models,omitempty"`
+
+	// Legacy delegation execution details, preserved from the delegations
+	// table migration (#446). Only populated for imported delegation records.
+	Delegation *DelegationMetadata `json:"delegation,omitempty"`
+}
+
+// DelegationMetadata holds delegation-specific fields preserved from the
+// legacy delegations table during migration (#446).
+type DelegationMetadata struct {
+	Task          string `json:"task"`
+	Guidance      string `json:"guidance,omitempty"`
+	Profile       string `json:"profile"`
+	Model         string `json:"model"`
+	Iterations    int    `json:"iterations"`
+	MaxIterations int    `json:"max_iterations"`
+	InputTokens   int    `json:"input_tokens"`
+	OutputTokens  int    `json:"output_tokens"`
+	Exhausted     bool   `json:"exhausted"`
+	ExhaustReason string `json:"exhaust_reason,omitempty"`
+	ResultContent string `json:"result_content,omitempty"`
+	DurationMs    int64  `json:"duration_ms"`
+	Error         string `json:"error,omitempty"`
 }
 
 // IdleSessionInfo holds an active session's identity and last activity time

@@ -2,6 +2,7 @@ package memory
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -586,7 +587,7 @@ func hasColumn(db *sql.DB, table, column string) bool {
 // working database (thane.db) so all data lives in a single file. This is the
 // third step of the storage unification (issue #434): after messages and tool
 // calls were unified in phases 1+2, this phase moves sessions,
-// archive_iterations, import_metadata, working_memory, and delegations.
+// archive_iterations, import_metadata, and working_memory.
 //
 // The migration is idempotent: it checks for existing rows in the sessions
 // table as a sentinel. If archive.db does not exist, it returns nil (fresh
@@ -663,19 +664,6 @@ func MigrateConsolidateDB(workingDB *sql.DB, archiveDBPath string, logger *slog.
 			`INSERT OR IGNORE INTO working_memory (conversation_id, content, updated_at)
 			SELECT conversation_id, content, updated_at
 			FROM archive.working_memory`,
-		},
-		{
-			"delegations",
-			`INSERT OR IGNORE INTO delegations
-				(id, conversation_id, task, guidance, profile, model,
-				 iterations, max_iterations, input_tokens, output_tokens,
-				 exhausted, exhaust_reason, tools_called, messages,
-				 result_content, started_at, completed_at, duration_ms, error)
-			SELECT id, conversation_id, task, guidance, profile, model,
-				iterations, max_iterations, input_tokens, output_tokens,
-				exhausted, COALESCE(exhaust_reason, ''), tools_called, messages,
-				result_content, started_at, completed_at, duration_ms, error
-			FROM archive.delegations`,
 		},
 	}
 
@@ -810,33 +798,6 @@ func createConsolidationTargets(db *sql.DB) error {
 			content TEXT NOT NULL,
 			updated_at TEXT NOT NULL
 		)`,
-
-		// delegations
-		`CREATE TABLE IF NOT EXISTS delegations (
-			id              TEXT PRIMARY KEY,
-			conversation_id TEXT NOT NULL,
-			task            TEXT NOT NULL,
-			guidance        TEXT,
-			profile         TEXT NOT NULL,
-			model           TEXT NOT NULL,
-			iterations      INTEGER NOT NULL,
-			max_iterations  INTEGER NOT NULL,
-			input_tokens    INTEGER NOT NULL,
-			output_tokens   INTEGER NOT NULL,
-			exhausted       BOOLEAN NOT NULL DEFAULT 0,
-			exhaust_reason  TEXT,
-			tools_called    TEXT,
-			messages        TEXT,
-			result_content  TEXT,
-			started_at      TEXT NOT NULL,
-			completed_at    TEXT NOT NULL,
-			duration_ms     INTEGER NOT NULL,
-			error           TEXT
-		)`,
-		`CREATE INDEX IF NOT EXISTS idx_delegations_conversation ON delegations(conversation_id, started_at DESC)`,
-		`CREATE INDEX IF NOT EXISTS idx_delegations_profile ON delegations(profile)`,
-		`CREATE INDEX IF NOT EXISTS idx_delegations_started ON delegations(started_at DESC)`,
-		`CREATE INDEX IF NOT EXISTS idx_delegations_model ON delegations(model)`,
 	}
 
 	for _, stmt := range stmts {
@@ -870,4 +831,150 @@ func isValidIdentifier(s string) bool {
 		}
 	}
 	return true
+}
+
+// MigrateDelegationsToSessions converts legacy delegation records into
+// sessions and drops the delegations table. Each delegation becomes a
+// session with end_reason="import_delegation" and delegation-specific
+// fields preserved in the session metadata JSON.
+//
+// The migration is idempotent: it checks whether the delegations table
+// exists and uses INSERT OR IGNORE so re-runs are safe. Once all rows
+// are migrated the table is dropped.
+func MigrateDelegationsToSessions(db *sql.DB, logger *slog.Logger) error {
+	if logger == nil {
+		logger = slog.Default()
+	}
+
+	// Check if delegations table exists.
+	var exists int
+	_ = db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='delegations'`).Scan(&exists)
+	if exists == 0 {
+		return nil // Fresh install or already migrated.
+	}
+
+	// Read all delegation rows. COALESCE handles nullable TEXT columns
+	// so we can scan into plain Go strings.
+	rows, err := db.Query(`
+		SELECT id, conversation_id, task,
+			COALESCE(guidance, ''), profile, model,
+			iterations, max_iterations, input_tokens, output_tokens,
+			exhausted, COALESCE(exhaust_reason, ''),
+			COALESCE(tools_called, ''),
+			COALESCE(result_content, ''),
+			started_at, completed_at, duration_ms,
+			COALESCE(error, '')
+		FROM delegations
+	`)
+	if err != nil {
+		return fmt.Errorf("query delegations: %w", err)
+	}
+	defer rows.Close()
+
+	var migrated int
+	for rows.Next() {
+		var (
+			id, convID, task, guidance, profile, model string
+			iterations, maxIterations                  int
+			inputTokens, outputTokens                  int
+			exhausted                                  bool
+			exhaustReason, toolsCalledJSON             string
+			resultContent                              string
+			startedAtStr, completedAtStr               string
+			durationMs                                 int64
+			errStr                                     string
+		)
+
+		if err := rows.Scan(
+			&id, &convID, &task, &guidance, &profile, &model,
+			&iterations, &maxIterations, &inputTokens, &outputTokens,
+			&exhausted, &exhaustReason, &toolsCalledJSON,
+			&resultContent, &startedAtStr, &completedAtStr, &durationMs,
+			&errStr,
+		); err != nil {
+			return fmt.Errorf("scan delegation row: %w", err)
+		}
+
+		// Parse timestamps.
+		startedAt, _ := parseTimestamp(startedAtStr)
+		completedAt, _ := parseTimestamp(completedAtStr)
+
+		// Parse tools_called JSON into map for SessionMetadata.
+		var toolsUsed map[string]int
+		if toolsCalledJSON != "" {
+			_ = json.Unmarshal([]byte(toolsCalledJSON), &toolsUsed)
+		}
+
+		// Build title from task (truncated).
+		title := task
+		if len(title) > 80 {
+			title = title[:80] + "…"
+		}
+
+		// Build session metadata.
+		meta := &SessionMetadata{
+			SessionType: "delegation",
+			OneLiner:    task,
+			ToolsUsed:   toolsUsed,
+			Models:      []string{model},
+			Delegation: &DelegationMetadata{
+				Task:          task,
+				Guidance:      guidance,
+				Profile:       profile,
+				Model:         model,
+				Iterations:    iterations,
+				MaxIterations: maxIterations,
+				InputTokens:   inputTokens,
+				OutputTokens:  outputTokens,
+				Exhausted:     exhausted,
+				ExhaustReason: exhaustReason,
+				ResultContent: resultContent,
+				DurationMs:    durationMs,
+				Error:         errStr,
+			},
+		}
+
+		metaJSON, err := json.Marshal(meta)
+		if err != nil {
+			return fmt.Errorf("marshal metadata for delegation %s: %w", id, err)
+		}
+
+		_, err = db.Exec(`
+			INSERT OR IGNORE INTO sessions
+				(id, conversation_id, started_at, ended_at, end_reason,
+				 message_count, title, metadata)
+			VALUES (?, ?, ?, ?, 'import_delegation', 0, ?, ?)`,
+			id, convID,
+			startedAt.Format(time.RFC3339Nano),
+			completedAt.Format(time.RFC3339Nano),
+			title, string(metaJSON),
+		)
+		if err != nil {
+			return fmt.Errorf("insert session for delegation %s: %w", id, err)
+		}
+		migrated++
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate delegations: %w", err)
+	}
+
+	// Drop the legacy table and its indexes.
+	for _, stmt := range []string{
+		"DROP INDEX IF EXISTS idx_delegations_conversation",
+		"DROP INDEX IF EXISTS idx_delegations_profile",
+		"DROP INDEX IF EXISTS idx_delegations_started",
+		"DROP INDEX IF EXISTS idx_delegations_model",
+		"DROP TABLE IF EXISTS delegations",
+	} {
+		if _, err := db.Exec(stmt); err != nil {
+			return fmt.Errorf("drop delegations: %w", err)
+		}
+	}
+
+	if migrated > 0 {
+		logger.Info("migrated legacy delegations to sessions",
+			"migrated", migrated,
+		)
+	}
+	return nil
 }

@@ -2,6 +2,7 @@ package memory
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"testing"
@@ -722,8 +723,8 @@ func TestUnifiedMode_GetSessionToolCalls(t *testing.T) {
 // --- Phase 3: Consolidation migration tests ---
 
 // TestMigrateConsolidateDB_CopiesAllTables verifies that sessions,
-// archive_iterations, import_metadata, working_memory, and delegations
-// are copied from archive.db into the working database.
+// archive_iterations, import_metadata, and working_memory are copied
+// from archive.db into the working database.
 func TestMigrateConsolidateDB_CopiesAllTables(t *testing.T) {
 	tmpDir := t.TempDir()
 	workingPath := tmpDir + "/working.db"
@@ -765,27 +766,6 @@ func TestMigrateConsolidateDB_CopiesAllTables(t *testing.T) {
 		)`)
 	_, _ = archiveStore.DB().Exec(`INSERT INTO working_memory VALUES ('conv-1', 'some context', '2026-01-01T00:00:00Z')`)
 
-	// Delegations — insert directly.
-	_, _ = archiveStore.DB().Exec(`
-		CREATE TABLE IF NOT EXISTS delegations (
-			id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL,
-			task TEXT NOT NULL, guidance TEXT, profile TEXT NOT NULL,
-			model TEXT NOT NULL, iterations INTEGER NOT NULL,
-			max_iterations INTEGER NOT NULL, input_tokens INTEGER NOT NULL,
-			output_tokens INTEGER NOT NULL, exhausted BOOLEAN NOT NULL DEFAULT 0,
-			exhaust_reason TEXT, tools_called TEXT, messages TEXT,
-			result_content TEXT, started_at TEXT NOT NULL,
-			completed_at TEXT NOT NULL, duration_ms INTEGER NOT NULL,
-			error TEXT
-		)`)
-	_, _ = archiveStore.DB().Exec(`
-		INSERT INTO delegations (id, conversation_id, task, profile, model,
-			iterations, max_iterations, input_tokens, output_tokens, exhausted,
-			started_at, completed_at, duration_ms)
-		VALUES ('del-1', 'conv-1', 'check weather', 'research', 'claude-haiku',
-			2, 5, 500, 100, 0, '2026-01-01T00:00:00Z', '2026-01-01T00:00:01Z', 1000)
-	`)
-
 	archiveStore.Close()
 
 	// Run consolidation.
@@ -821,12 +801,6 @@ func TestMigrateConsolidateDB_CopiesAllTables(t *testing.T) {
 		t.Errorf("expected 1 working memory entry, got %d", wmCount)
 	}
 
-	// Verify delegations.
-	var delCount int
-	_ = workingStore.DB().QueryRow(`SELECT COUNT(*) FROM delegations`).Scan(&delCount)
-	if delCount != 1 {
-		t.Errorf("expected 1 delegation, got %d", delCount)
-	}
 }
 
 // TestMigrateConsolidateDB_Idempotent verifies that running the migration
@@ -1072,5 +1046,209 @@ func TestUnifiedMode_SessionMessageCount(t *testing.T) {
 	}
 	if got.MessageCount != 5 {
 		t.Errorf("expected message_count=5, got %d", got.MessageCount)
+	}
+}
+
+// TestMigrateDelegationsToSessions verifies that legacy delegation records
+// are converted into sessions with correct metadata and the delegations
+// table is dropped.
+func TestMigrateDelegationsToSessions(t *testing.T) {
+	store := newTestWorkingDB(t)
+	db := store.DB()
+
+	// Create the sessions table (normally done by archive store).
+	_, err := db.Exec(`
+		CREATE TABLE IF NOT EXISTS sessions (
+			id TEXT PRIMARY KEY,
+			conversation_id TEXT NOT NULL,
+			started_at TEXT NOT NULL,
+			ended_at TEXT,
+			end_reason TEXT,
+			message_count INTEGER DEFAULT 0,
+			summary TEXT,
+			title TEXT,
+			tags TEXT,
+			metadata TEXT,
+			parent_session_id TEXT,
+			parent_tool_call_id TEXT
+		)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Create the legacy delegations table and insert test rows.
+	_, err = db.Exec(`
+		CREATE TABLE IF NOT EXISTS delegations (
+			id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL,
+			task TEXT NOT NULL, guidance TEXT, profile TEXT NOT NULL,
+			model TEXT NOT NULL, iterations INTEGER NOT NULL,
+			max_iterations INTEGER NOT NULL, input_tokens INTEGER NOT NULL,
+			output_tokens INTEGER NOT NULL, exhausted BOOLEAN NOT NULL DEFAULT 0,
+			exhaust_reason TEXT, tools_called TEXT, messages TEXT,
+			result_content TEXT, started_at TEXT NOT NULL,
+			completed_at TEXT NOT NULL, duration_ms INTEGER NOT NULL,
+			error TEXT
+		)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`CREATE INDEX IF NOT EXISTS idx_delegations_conversation ON delegations(conversation_id)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Insert two delegation records.
+	_, err = db.Exec(`
+		INSERT INTO delegations (id, conversation_id, task, guidance, profile, model,
+			iterations, max_iterations, input_tokens, output_tokens, exhausted,
+			exhaust_reason, tools_called, result_content,
+			started_at, completed_at, duration_ms)
+		VALUES
+			('del-1', 'conv-1', 'check weather', 'use weather tool', 'research', 'claude-haiku',
+			 2, 5, 500, 100, 0, '', '{"weather_check":2}', 'It is sunny.',
+			 '2026-01-01T10:00:00Z', '2026-01-01T10:00:05Z', 5000),
+			('del-2', 'conv-1', 'turn on lights', '', 'ha', 'qwen3:4b',
+			 3, 8, 1500, 200, 1, 'max_iterations', '{"call_service":1,"get_state":2}', 'Done.',
+			 '2026-01-01T11:00:00Z', '2026-01-01T11:00:10Z', 10000)
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Run migration.
+	if err := MigrateDelegationsToSessions(db, slog.Default()); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify delegations table is gone.
+	var tableExists int
+	_ = db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='delegations'`).Scan(&tableExists)
+	if tableExists != 0 {
+		t.Error("delegations table should have been dropped")
+	}
+
+	// Verify sessions were created.
+	var sessionCount int
+	_ = db.QueryRow(`SELECT COUNT(*) FROM sessions WHERE end_reason = 'import_delegation'`).Scan(&sessionCount)
+	if sessionCount != 2 {
+		t.Errorf("expected 2 imported sessions, got %d", sessionCount)
+	}
+
+	// Verify first session metadata.
+	var metaJSON string
+	var title, endReason string
+	err = db.QueryRow(`SELECT title, end_reason, metadata FROM sessions WHERE id = 'del-1'`).Scan(&title, &endReason, &metaJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if title != "check weather" {
+		t.Errorf("title = %q, want %q", title, "check weather")
+	}
+	if endReason != "import_delegation" {
+		t.Errorf("end_reason = %q, want %q", endReason, "import_delegation")
+	}
+
+	var meta SessionMetadata
+	if err := json.Unmarshal([]byte(metaJSON), &meta); err != nil {
+		t.Fatal(err)
+	}
+	if meta.SessionType != "delegation" {
+		t.Errorf("session_type = %q, want %q", meta.SessionType, "delegation")
+	}
+	if meta.Delegation == nil {
+		t.Fatal("delegation metadata is nil")
+	}
+	if meta.Delegation.Profile != "research" {
+		t.Errorf("delegation.profile = %q, want %q", meta.Delegation.Profile, "research")
+	}
+	if meta.Delegation.Iterations != 2 {
+		t.Errorf("delegation.iterations = %d, want 2", meta.Delegation.Iterations)
+	}
+	if meta.ToolsUsed["weather_check"] != 2 {
+		t.Errorf("tools_used[weather_check] = %d, want 2", meta.ToolsUsed["weather_check"])
+	}
+
+	// Verify second session has exhausted info.
+	err = db.QueryRow(`SELECT metadata FROM sessions WHERE id = 'del-2'`).Scan(&metaJSON)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var meta2 SessionMetadata
+	if err := json.Unmarshal([]byte(metaJSON), &meta2); err != nil {
+		t.Fatal(err)
+	}
+	if !meta2.Delegation.Exhausted {
+		t.Error("delegation.exhausted should be true for del-2")
+	}
+	if meta2.Delegation.ExhaustReason != "max_iterations" {
+		t.Errorf("delegation.exhaust_reason = %q, want %q", meta2.Delegation.ExhaustReason, "max_iterations")
+	}
+}
+
+// TestMigrateDelegationsToSessions_Idempotent verifies that running the
+// migration twice is safe — the second run is a no-op because the table
+// was dropped.
+func TestMigrateDelegationsToSessions_Idempotent(t *testing.T) {
+	store := newTestWorkingDB(t)
+	db := store.DB()
+
+	// Create sessions table.
+	_, _ = db.Exec(`
+		CREATE TABLE IF NOT EXISTS sessions (
+			id TEXT PRIMARY KEY,
+			conversation_id TEXT NOT NULL,
+			started_at TEXT NOT NULL,
+			ended_at TEXT,
+			end_reason TEXT,
+			message_count INTEGER DEFAULT 0,
+			summary TEXT, title TEXT, tags TEXT, metadata TEXT,
+			parent_session_id TEXT, parent_tool_call_id TEXT
+		)`)
+
+	// Create and populate delegations table.
+	_, _ = db.Exec(`
+		CREATE TABLE IF NOT EXISTS delegations (
+			id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL,
+			task TEXT NOT NULL, guidance TEXT, profile TEXT NOT NULL,
+			model TEXT NOT NULL, iterations INTEGER NOT NULL,
+			max_iterations INTEGER NOT NULL, input_tokens INTEGER NOT NULL,
+			output_tokens INTEGER NOT NULL, exhausted BOOLEAN NOT NULL DEFAULT 0,
+			exhaust_reason TEXT, tools_called TEXT, messages TEXT,
+			result_content TEXT, started_at TEXT NOT NULL,
+			completed_at TEXT NOT NULL, duration_ms INTEGER NOT NULL,
+			error TEXT
+		)`)
+	_, _ = db.Exec(`
+		INSERT INTO delegations (id, conversation_id, task, profile, model,
+			iterations, max_iterations, input_tokens, output_tokens, exhausted,
+			started_at, completed_at, duration_ms)
+		VALUES ('del-1', 'conv-1', 'test task', 'general', 'test-model',
+			1, 5, 100, 50, 0, '2026-01-01T00:00:00Z', '2026-01-01T00:00:01Z', 1000)
+	`)
+
+	// First run.
+	if err := MigrateDelegationsToSessions(db, slog.Default()); err != nil {
+		t.Fatal(err)
+	}
+
+	// Second run — should be a no-op (table already dropped).
+	if err := MigrateDelegationsToSessions(db, slog.Default()); err != nil {
+		t.Fatalf("second run should be no-op, got error: %v", err)
+	}
+
+	// Verify sessions still exist.
+	var count int
+	_ = db.QueryRow(`SELECT COUNT(*) FROM sessions WHERE end_reason = 'import_delegation'`).Scan(&count)
+	if count != 1 {
+		t.Errorf("expected 1 imported session, got %d", count)
+	}
+}
+
+// TestMigrateDelegationsToSessions_NoTable verifies that the migration
+// is a no-op on fresh databases without a delegations table.
+func TestMigrateDelegationsToSessions_NoTable(t *testing.T) {
+	store := newTestWorkingDB(t)
+	if err := MigrateDelegationsToSessions(store.DB(), slog.Default()); err != nil {
+		t.Fatalf("expected no-op on fresh DB, got error: %v", err)
 	}
 }
