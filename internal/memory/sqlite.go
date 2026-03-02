@@ -36,23 +36,7 @@ func NewSQLiteStore(dbPath string, maxMessages int) (*SQLiteStore, error) {
 		return nil, fmt.Errorf("migrate: %w", err)
 	}
 
-	store.migrateDropCompacted()
-
 	return store, nil
-}
-
-// migrateDropCompacted removes the legacy compacted boolean column and its
-// index. The status lifecycle column superseded compacted in #434; the
-// backfill migration (MigrateUnifyMessages) copies compacted=TRUE →
-// status='compacted' before this runs, so no data is lost.
-func (s *SQLiteStore) migrateDropCompacted() {
-	// Check if column still exists.
-	if _, err := s.db.Exec("SELECT compacted FROM messages LIMIT 0"); err != nil {
-		return // Already dropped — nothing to do.
-	}
-
-	_, _ = s.db.Exec("DROP INDEX IF EXISTS idx_messages_compacted")
-	_, _ = s.db.Exec("ALTER TABLE messages DROP COLUMN compacted")
 }
 
 // migrate creates the database schema.
@@ -420,8 +404,8 @@ func (s *SQLiteStore) AddCompactionSummary(conversationID, summary string) error
 	msgID, _ := uuid.NewV7()
 
 	_, err := s.db.Exec(`
-		INSERT INTO messages (id, conversation_id, role, content, timestamp, token_count, compacted, status)
-		VALUES (?, ?, 'system', ?, ?, ?, FALSE, 'active')
+		INSERT INTO messages (id, conversation_id, role, content, timestamp, token_count, status)
+		VALUES (?, ?, 'system', ?, ?, ?, 'active')
 	`, msgID.String(), conversationID, summary, now, estimateTokens(summary))
 
 	return err

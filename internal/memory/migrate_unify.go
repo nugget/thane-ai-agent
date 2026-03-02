@@ -30,6 +30,11 @@ func MigrateUnifyMessages(workingDB *sql.DB, archiveDBPath string, logger *slog.
 		return fmt.Errorf("backfill status: %w", err)
 	}
 
+	// Step 2.5: Drop legacy compacted column now that backfill is complete.
+	if err := dropCompactedColumn(workingDB, logger); err != nil {
+		return fmt.Errorf("drop compacted column: %w", err)
+	}
+
 	// Step 3: Merge archive data if archive.db exists and has data.
 	if archiveDBPath != "" {
 		if err := mergeArchiveMessages(workingDB, archiveDBPath, logger); err != nil {
@@ -118,6 +123,28 @@ func backfillStatus(db *sql.DB, logger *slog.Logger) error {
 		)
 	}
 
+	return nil
+}
+
+// dropCompactedColumn removes the legacy compacted boolean column and its
+// index from the messages table. The status lifecycle column superseded
+// compacted in #434. This runs after backfillStatus so that compacted=TRUE
+// values have already been migrated to status='compacted'.
+func dropCompactedColumn(db *sql.DB, logger *slog.Logger) error {
+	// Check if the legacy column still exists; if not, nothing to do.
+	if _, err := db.Exec("SELECT compacted FROM messages LIMIT 0"); err != nil {
+		return nil
+	}
+
+	if _, err := db.Exec("DROP INDEX IF EXISTS idx_messages_compacted"); err != nil {
+		return fmt.Errorf("drop compacted index: %w", err)
+	}
+
+	if _, err := db.Exec("ALTER TABLE messages DROP COLUMN compacted"); err != nil {
+		return fmt.Errorf("drop compacted column: %w", err)
+	}
+
+	logger.Info("dropped legacy compacted column from messages")
 	return nil
 }
 
