@@ -31,6 +31,11 @@ func MigrateUnifyMessages(workingDB *sql.DB, archiveDBPath string, logger *slog.
 		return fmt.Errorf("backfill status: %w", err)
 	}
 
+	// Step 2.5: Drop legacy compacted column now that backfill is complete.
+	if err := dropCompactedColumn(workingDB, logger); err != nil {
+		return fmt.Errorf("drop compacted column: %w", err)
+	}
+
 	// Step 3: Merge archive data if archive.db exists and has data.
 	if archiveDBPath != "" {
 		if err := mergeArchiveMessages(workingDB, archiveDBPath, logger); err != nil {
@@ -85,19 +90,25 @@ func addLifecycleColumns(db *sql.DB, logger *slog.Logger) error {
 }
 
 // backfillStatus sets the status column from the compacted boolean for
-// existing rows that have status NULL (not yet migrated).
+// existing rows that have status NULL (not yet migrated). If the legacy
+// compacted column has already been dropped (#444), the boolean-based
+// backfill is skipped — only the NULL→active catch-all runs.
 func backfillStatus(db *sql.DB, logger *slog.Logger) error {
-	// Only backfill rows where status hasn't been set yet.
-	result, err := db.Exec(`
-		UPDATE messages SET status = 'compacted'
-		WHERE compacted = TRUE AND (status IS NULL OR status = 'active')
-	`)
-	if err != nil {
-		return fmt.Errorf("set compacted status: %w", err)
+	// Only attempt the compacted→status backfill if the column exists.
+	// After #444 drops the column, this branch is skipped.
+	var compacted int64
+	if _, err := db.Exec("SELECT compacted FROM messages LIMIT 0"); err == nil {
+		result, err := db.Exec(`
+			UPDATE messages SET status = 'compacted'
+			WHERE compacted = TRUE AND (status IS NULL OR status = 'active')
+		`)
+		if err != nil {
+			return fmt.Errorf("set compacted status: %w", err)
+		}
+		compacted, _ = result.RowsAffected()
 	}
-	compacted, _ := result.RowsAffected()
 
-	result, err = db.Exec(`
+	result, err := db.Exec(`
 		UPDATE messages SET status = 'active'
 		WHERE status IS NULL
 	`)
@@ -113,6 +124,28 @@ func backfillStatus(db *sql.DB, logger *slog.Logger) error {
 		)
 	}
 
+	return nil
+}
+
+// dropCompactedColumn removes the legacy compacted boolean column and its
+// index from the messages table. The status lifecycle column superseded
+// compacted in #434. This runs after backfillStatus so that compacted=TRUE
+// values have already been migrated to status='compacted'.
+func dropCompactedColumn(db *sql.DB, logger *slog.Logger) error {
+	// Check if the legacy column still exists; if not, nothing to do.
+	if _, err := db.Exec("SELECT compacted FROM messages LIMIT 0"); err != nil {
+		return nil
+	}
+
+	if _, err := db.Exec("DROP INDEX IF EXISTS idx_messages_compacted"); err != nil {
+		return fmt.Errorf("drop compacted index: %w", err)
+	}
+
+	if _, err := db.Exec("ALTER TABLE messages DROP COLUMN compacted"); err != nil {
+		return fmt.Errorf("drop compacted column: %w", err)
+	}
+
+	logger.Info("dropped legacy compacted column from messages")
 	return nil
 }
 
@@ -253,8 +286,8 @@ func upsertFromTemp(db *sql.DB) (int64, error) {
 		INSERT INTO messages
 			(id, conversation_id, session_id, role, content, timestamp,
 			 token_count, tool_calls, tool_call_id,
-			 compacted, status, archived_at, archive_reason)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, FALSE, 'archived', ?, ?)
+			 status, archived_at, archive_reason)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'archived', ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			session_id = COALESCE(excluded.session_id, messages.session_id),
 			status = 'archived',

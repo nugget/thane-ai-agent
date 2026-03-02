@@ -58,13 +58,11 @@ func (s *SQLiteStore) migrate() error {
 		content TEXT NOT NULL,
 		timestamp TIMESTAMP NOT NULL,
 		token_count INTEGER DEFAULT 0,
-		compacted BOOLEAN DEFAULT FALSE,
 		tool_calls TEXT,
 		tool_call_id TEXT,
 		FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
 	);
 	CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id, timestamp);
-	CREATE INDEX IF NOT EXISTS idx_messages_compacted ON messages(conversation_id, compacted);
 
 	-- Tool calls (structured, queryable)
 	CREATE TABLE IF NOT EXISTS tool_calls (
@@ -406,8 +404,8 @@ func (s *SQLiteStore) AddCompactionSummary(conversationID, summary string) error
 	msgID, _ := uuid.NewV7()
 
 	_, err := s.db.Exec(`
-		INSERT INTO messages (id, conversation_id, role, content, timestamp, token_count, compacted, status)
-		VALUES (?, ?, 'system', ?, ?, ?, FALSE, 'active')
+		INSERT INTO messages (id, conversation_id, role, content, timestamp, token_count, status)
+		VALUES (?, ?, 'system', ?, ?, ?, 'active')
 	`, msgID.String(), conversationID, summary, now, estimateTokens(summary))
 
 	return err
