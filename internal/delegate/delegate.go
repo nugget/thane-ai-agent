@@ -69,7 +69,6 @@ type Executor struct {
 	profiles         map[string]*Profile
 	timezone         string
 	defaultModel     string
-	store            *DelegationStore
 	archiver         *memory.ArchiveStore
 	tempFiles        labelExpander
 	usageStore       *usage.Store
@@ -93,12 +92,6 @@ func NewExecutor(logger *slog.Logger, llmClient llm.Client, rtr *router.Router, 
 // in the delegate system prompt.
 func (e *Executor) SetTimezone(tz string) {
 	e.timezone = tz
-}
-
-// SetStore configures the delegation persistence store. When set, every
-// [Executor.Execute] completion is recorded for replay and evaluation.
-func (e *Executor) SetStore(s *DelegationStore) {
-	e.store = s
 }
 
 // SetArchiver configures the archive store for session lifecycle
@@ -967,37 +960,6 @@ func (e *Executor) recordCompletion(rec *completionRecord) {
 		"exhaust_reason", rec.exhaustReason,
 		"elapsed", elapsed.Round(time.Millisecond),
 	)
-
-	if e.store != nil {
-		dr := &DelegationRecord{
-			ID:             rec.delegateID,
-			ConversationID: rec.conversationID,
-			Task:           rec.task,
-			Guidance:       rec.guidance,
-			Profile:        rec.profileName,
-			Model:          rec.model,
-			Iterations:     rec.totalIter,
-			MaxIterations:  rec.maxIter,
-			InputTokens:    rec.totalInput,
-			OutputTokens:   rec.totalOutput,
-			Exhausted:      rec.exhausted,
-			ExhaustReason:  rec.exhaustReason,
-			ToolsCalled:    ExtractToolsCalled(rec.messages),
-			Messages:       rec.messages,
-			ResultContent:  rec.resultContent,
-			StartedAt:      rec.startTime,
-			CompletedAt:    now,
-			DurationMs:     elapsed.Milliseconds(),
-			Error:          rec.errMsg,
-		}
-
-		if err := e.store.Record(dr); err != nil {
-			e.logger.Warn("failed to persist delegation record",
-				"delegate_id", rec.delegateID,
-				"error", err,
-			)
-		}
-	}
 
 	// Archive session lifecycle: end the session and persist messages
 	// and tool calls so they appear in the session inspector.

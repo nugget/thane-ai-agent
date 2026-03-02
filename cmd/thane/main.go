@@ -487,6 +487,9 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	if err := memory.MigrateConsolidateDB(mem.DB(), archivePath, logger); err != nil {
 		return fmt.Errorf("consolidate database: %w", err)
 	}
+	if err := memory.MigrateDelegationsToSessions(mem.DB(), logger); err != nil {
+		return fmt.Errorf("migrate delegations to sessions: %w", err)
+	}
 
 	// --- Session archive ---
 	// All data (sessions, iterations, messages, tool calls) lives in
@@ -504,14 +507,6 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		return fmt.Errorf("create working memory store: %w", err)
 	}
 	logger.Info("working memory store initialized")
-
-	// --- Delegation persistence ---
-	// Stores every thane_delegate execution for replay and model evaluation.
-	delegationStore, err := delegate.NewDelegationStore(mem.DB())
-	if err != nil {
-		return fmt.Errorf("create delegation store: %w", err)
-	}
-	logger.Info("delegation store initialized")
 
 	archiveAdapter := memory.NewArchiveAdapter(archiveStore, mem, mem, logger)
 
@@ -1490,7 +1485,6 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// executor's parent registry snapshot includes the full tool set.
 	delegateExec := delegate.NewExecutor(logger, llmClient, rtr, loop.Tools(), cfg.Models.Default)
 	delegateExec.SetTimezone(cfg.Timezone)
-	delegateExec.SetStore(delegationStore)
 	delegateExec.SetArchiver(archiveStore)
 	delegateExec.SetUsageRecorder(usageStore, cfg.Pricing)
 	var alwaysActiveTags []string
