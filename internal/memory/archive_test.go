@@ -916,8 +916,12 @@ func TestNewArchiveStoreFromDB(t *testing.T) {
 	}
 	defer workingStore.Close()
 
-	MigrateUnifyMessages(workingStore.DB(), "", nil)
-	MigrateUnifyToolCalls(workingStore.DB(), "", nil)
+	if err := MigrateUnifyMessages(workingStore.DB(), "", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := MigrateUnifyToolCalls(workingStore.DB(), "", nil); err != nil {
+		t.Fatal(err)
+	}
 
 	archiveStore, err := NewArchiveStoreFromDB(workingStore.DB(), nil, nil)
 	if err != nil {
@@ -991,8 +995,12 @@ func TestConsolidatedMode_FullLifecycle(t *testing.T) {
 	}
 	defer workingStore.Close()
 
-	MigrateUnifyMessages(workingStore.DB(), "", nil)
-	MigrateUnifyToolCalls(workingStore.DB(), "", nil)
+	if err := MigrateUnifyMessages(workingStore.DB(), "", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := MigrateUnifyToolCalls(workingStore.DB(), "", nil); err != nil {
+		t.Fatal(err)
+	}
 
 	archiveStore, err := NewArchiveStoreFromDB(workingStore.DB(), nil, nil)
 	if err != nil {
@@ -1277,8 +1285,12 @@ func TestActiveSessionsWithLastActivity_Unified(t *testing.T) {
 	}
 	defer workingStore.Close()
 
-	MigrateUnifyMessages(workingStore.DB(), "", nil)
-	MigrateUnifyToolCalls(workingStore.DB(), "", nil)
+	if err := MigrateUnifyMessages(workingStore.DB(), "", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := MigrateUnifyToolCalls(workingStore.DB(), "", nil); err != nil {
+		t.Fatal(err)
+	}
 
 	store, err := NewArchiveStoreFromDB(workingStore.DB(), nil, nil)
 	if err != nil {
@@ -1325,5 +1337,173 @@ func TestActiveSessionsWithLastActivity_Unified(t *testing.T) {
 	if diff > time.Second {
 		t.Errorf("LastActivity = %v, want ~%v (diff = %v); query may have missed NULL-session_id message",
 			info.LastActivity, msgTime, diff)
+	}
+}
+
+func TestImportMessages_Legacy(t *testing.T) {
+	store := newTestArchiveStore(t)
+
+	sess, err := store.StartSession("conv-import")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	msgs := []ArchivedMessage{
+		{
+			ID:             "imp-msg-1",
+			ConversationID: "conv-import",
+			SessionID:      sess.ID,
+			Role:           "user",
+			Content:        "imported message",
+			Timestamp:      time.Now().UTC(),
+			ArchiveReason:  "import",
+		},
+	}
+
+	if err := store.ImportMessages(msgs); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify the message is retrievable via transcript.
+	transcript, err := store.GetSessionTranscript(sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(transcript) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(transcript))
+	}
+	if transcript[0].Content != "imported message" {
+		t.Errorf("content = %q, want %q", transcript[0].Content, "imported message")
+	}
+}
+
+func TestImportMessages_Unified(t *testing.T) {
+	workingStore, err := NewSQLiteStore(t.TempDir()+"/working.db", 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer workingStore.Close()
+
+	if err := MigrateUnifyMessages(workingStore.DB(), "", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := MigrateUnifyToolCalls(workingStore.DB(), "", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := NewArchiveStoreFromDB(workingStore.DB(), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sess, err := store.StartSession("conv-import")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	msgs := []ArchivedMessage{
+		{
+			ID:             "imp-msg-u1",
+			ConversationID: "conv-import",
+			SessionID:      sess.ID,
+			Role:           "user",
+			Content:        "unified import",
+			Timestamp:      time.Now().UTC(),
+			ArchiveReason:  "import",
+		},
+	}
+
+	if err := store.ImportMessages(msgs); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify the message landed in the messages table with status='archived'.
+	var status string
+	err = workingStore.DB().QueryRow(
+		`SELECT status FROM messages WHERE id = ?`, "imp-msg-u1",
+	).Scan(&status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status != "archived" {
+		t.Errorf("status = %q, want %q", status, "archived")
+	}
+
+	// Verify transcript retrieval works.
+	transcript, err := store.GetSessionTranscript(sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(transcript) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(transcript))
+	}
+	if transcript[0].Content != "unified import" {
+		t.Errorf("content = %q, want %q", transcript[0].Content, "unified import")
+	}
+}
+
+func TestImportToolCalls_Unified(t *testing.T) {
+	workingStore, err := NewSQLiteStore(t.TempDir()+"/working.db", 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer workingStore.Close()
+
+	if err := MigrateUnifyMessages(workingStore.DB(), "", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := MigrateUnifyToolCalls(workingStore.DB(), "", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := NewArchiveStoreFromDB(workingStore.DB(), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sess, err := store.StartSession("conv-import")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Now().UTC()
+	calls := []ArchivedToolCall{
+		{
+			ID:             "imp-tc-1",
+			ConversationID: "conv-import",
+			SessionID:      sess.ID,
+			ToolName:       "get_state",
+			Arguments:      `{"entity_id":"light.test"}`,
+			Result:         "on",
+			StartedAt:      now,
+		},
+	}
+
+	if err := store.ImportToolCalls(calls); err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify tool call is retrievable.
+	got, err := store.GetSessionToolCalls(sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected 1 tool call, got %d", len(got))
+	}
+	if got[0].ToolName != "get_state" {
+		t.Errorf("tool_name = %q, want %q", got[0].ToolName, "get_state")
+	}
+
+	// Verify status='archived' in the database.
+	var status string
+	err = workingStore.DB().QueryRow(
+		`SELECT status FROM tool_calls WHERE id = ?`, "imp-tc-1",
+	).Scan(&status)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status != "archived" {
+		t.Errorf("status = %q, want %q", status, "archived")
 	}
 }
