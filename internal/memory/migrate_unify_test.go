@@ -1097,18 +1097,21 @@ func TestMigrateDelegationsToSessions(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Insert two delegation records.
+	// Insert two delegation records (del-1 has messages, del-2 has NULL messages).
 	_, err = db.Exec(`
 		INSERT INTO delegations (id, conversation_id, task, guidance, profile, model,
 			iterations, max_iterations, input_tokens, output_tokens, exhausted,
-			exhaust_reason, tools_called, result_content,
+			exhaust_reason, tools_called, messages, result_content,
 			started_at, completed_at, duration_ms)
 		VALUES
 			('del-1', 'conv-1', 'check weather', 'use weather tool', 'research', 'claude-haiku',
-			 2, 5, 500, 100, 0, '', '{"weather_check":2}', 'It is sunny.',
+			 2, 5, 500, 100, 0, '', '{"weather_check":2}',
+			 '[{"role":"user","content":"check the weather"}]',
+			 'It is sunny.',
 			 '2026-01-01T10:00:00Z', '2026-01-01T10:00:05Z', 5000),
 			('del-2', 'conv-1', 'turn on lights', '', 'ha', 'qwen3:4b',
-			 3, 8, 1500, 200, 1, 'max_iterations', '{"call_service":1,"get_state":2}', 'Done.',
+			 3, 8, 1500, 200, 1, 'max_iterations', '{"call_service":1,"get_state":2}',
+			 NULL, 'Done.',
 			 '2026-01-01T11:00:00Z', '2026-01-01T11:00:10Z', 10000)
 	`)
 	if err != nil {
@@ -1167,6 +1170,9 @@ func TestMigrateDelegationsToSessions(t *testing.T) {
 	if meta.ToolsUsed["weather_check"] != 2 {
 		t.Errorf("tools_used[weather_check] = %d, want 2", meta.ToolsUsed["weather_check"])
 	}
+	if meta.Delegation.Messages != `[{"role":"user","content":"check the weather"}]` {
+		t.Errorf("delegation.messages = %q, want preserved JSON", meta.Delegation.Messages)
+	}
 
 	// Verify second session has exhausted info.
 	err = db.QueryRow(`SELECT metadata FROM sessions WHERE id = 'del-2'`).Scan(&metaJSON)
@@ -1182,6 +1188,9 @@ func TestMigrateDelegationsToSessions(t *testing.T) {
 	}
 	if meta2.Delegation.ExhaustReason != "max_iterations" {
 		t.Errorf("delegation.exhaust_reason = %q, want %q", meta2.Delegation.ExhaustReason, "max_iterations")
+	}
+	if meta2.Delegation.Messages != "" {
+		t.Errorf("delegation.messages should be empty for NULL, got %q", meta2.Delegation.Messages)
 	}
 }
 

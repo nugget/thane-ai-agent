@@ -156,6 +156,11 @@ type DelegationMetadata struct {
 	ResultContent string `json:"result_content,omitempty"`
 	DurationMs    int64  `json:"duration_ms"`
 	Error         string `json:"error,omitempty"`
+
+	// Messages is the raw JSON-serialized conversation history from the
+	// legacy delegations table. Preserved to avoid data loss — these
+	// messages predate the per-message storage in the messages table.
+	Messages string `json:"messages,omitempty"`
 }
 
 // IdleSessionInfo holds an active session's identity and last activity time

@@ -854,13 +854,16 @@ func MigrateDelegationsToSessions(db *sql.DB, logger *slog.Logger) error {
 	}
 
 	// Read all delegation rows. COALESCE handles nullable TEXT columns
-	// so we can scan into plain Go strings.
+	// so we can scan into plain Go strings. The messages column contains
+	// the full JSON-serialized conversation history and is preserved in
+	// session metadata to avoid data loss.
 	rows, err := db.Query(`
 		SELECT id, conversation_id, task,
 			COALESCE(guidance, ''), profile, model,
 			iterations, max_iterations, input_tokens, output_tokens,
 			exhausted, COALESCE(exhaust_reason, ''),
 			COALESCE(tools_called, ''),
+			COALESCE(messages, ''),
 			COALESCE(result_content, ''),
 			started_at, completed_at, duration_ms,
 			COALESCE(error, '')
@@ -879,7 +882,7 @@ func MigrateDelegationsToSessions(db *sql.DB, logger *slog.Logger) error {
 			inputTokens, outputTokens                  int
 			exhausted                                  bool
 			exhaustReason, toolsCalledJSON             string
-			resultContent                              string
+			messagesJSON, resultContent                string
 			startedAtStr, completedAtStr               string
 			durationMs                                 int64
 			errStr                                     string
@@ -889,26 +892,37 @@ func MigrateDelegationsToSessions(db *sql.DB, logger *slog.Logger) error {
 			&id, &convID, &task, &guidance, &profile, &model,
 			&iterations, &maxIterations, &inputTokens, &outputTokens,
 			&exhausted, &exhaustReason, &toolsCalledJSON,
-			&resultContent, &startedAtStr, &completedAtStr, &durationMs,
+			&messagesJSON, &resultContent,
+			&startedAtStr, &completedAtStr, &durationMs,
 			&errStr,
 		); err != nil {
 			return fmt.Errorf("scan delegation row: %w", err)
 		}
 
-		// Parse timestamps.
-		startedAt, _ := parseTimestamp(startedAtStr)
-		completedAt, _ := parseTimestamp(completedAtStr)
+		// Parse timestamps. Abort if either fails — we must not write
+		// zero-value timestamps and then drop the source table.
+		startedAt, ok := parseTimestamp(startedAtStr)
+		if !ok {
+			return fmt.Errorf("parse delegation %s started_at: %q", id, startedAtStr)
+		}
+		completedAt, ok := parseTimestamp(completedAtStr)
+		if !ok {
+			return fmt.Errorf("parse delegation %s completed_at: %q", id, completedAtStr)
+		}
 
 		// Parse tools_called JSON into map for SessionMetadata.
 		var toolsUsed map[string]int
 		if toolsCalledJSON != "" {
-			_ = json.Unmarshal([]byte(toolsCalledJSON), &toolsUsed)
+			if err := json.Unmarshal([]byte(toolsCalledJSON), &toolsUsed); err != nil {
+				return fmt.Errorf("unmarshal tools_called for delegation %s: %w", id, err)
+			}
 		}
 
-		// Build title from task (truncated).
+		// Build title from task, truncated by runes to avoid splitting
+		// multi-byte UTF-8 characters.
 		title := task
-		if len(title) > 80 {
-			title = title[:80] + "…"
+		if runes := []rune(title); len(runes) > 80 {
+			title = string(runes[:80]) + "…"
 		}
 
 		// Build session metadata.
@@ -931,6 +945,7 @@ func MigrateDelegationsToSessions(db *sql.DB, logger *slog.Logger) error {
 				ResultContent: resultContent,
 				DurationMs:    durationMs,
 				Error:         errStr,
+				Messages:      messagesJSON,
 			},
 		}
 
