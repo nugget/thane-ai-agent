@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/nugget/thane-ai-agent/internal/conditions"
+	"github.com/nugget/thane-ai-agent/internal/awareness"
 	"github.com/nugget/thane-ai-agent/internal/config"
 	"github.com/nugget/thane-ai-agent/internal/llm"
 	"github.com/nugget/thane-ai-agent/internal/memory"
@@ -211,7 +211,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 	var sb strings.Builder
 	sb.WriteString(profile.SystemPrompt)
 	sb.WriteString("\n\n")
-	sb.WriteString(conditions.CurrentConditions(e.timezone))
+	sb.WriteString(awareness.CurrentConditions(e.timezone))
 
 	// Expand temp file labels so the delegate sees real paths.
 	if e.tempFiles != nil {

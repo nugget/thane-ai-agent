@@ -3,7 +3,7 @@ package tools
 import (
 	"context"
 
-	"github.com/nugget/thane-ai-agent/internal/email"
+	"github.com/nugget/thane-ai-agent/internal/channels/email"
 )
 
 // SetEmailTools adds email tools to the registry.

@@ -36,7 +36,7 @@ func (f ConversationProviderFunc) GetConversations() ([]Conversation, error) {
 	return f()
 }
 
-// FactProviderFunc is a function that provides facts.
+// FactProviderFunc is a function that provides knowledge.
 type FactProviderFunc func() ([]Fact, error)
 
 // GetFacts implements FactProvider.

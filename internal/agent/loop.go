@@ -16,7 +16,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/nugget/thane-ai-agent/internal/conditions"
+	"github.com/nugget/thane-ai-agent/internal/awareness"
 	"github.com/nugget/thane-ai-agent/internal/config"
 	"github.com/nugget/thane-ai-agent/internal/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/llm"
@@ -113,7 +113,7 @@ type FailoverHandler interface {
 // ContextProvider supplies dynamic context for the system prompt.
 type ContextProvider interface {
 	// GetContext returns context to inject into the system prompt.
-	// The userMessage is provided to enable semantic search for relevant facts.
+	// The userMessage is provided to enable semantic search for relevant knowledge.
 	GetContext(ctx context.Context, userMessage string) (string, error)
 }
 
@@ -562,7 +562,7 @@ func (l *Loop) buildSystemPrompt(ctx context.Context, userMessage string, histor
 	// the beginning. Uses H1 heading to signal operational importance.
 	mark("CURRENT CONDITIONS")
 	sb.WriteString("\n\n")
-	sb.WriteString(conditions.CurrentConditions(l.timezone))
+	sb.WriteString(awareness.CurrentConditions(l.timezone))
 
 	seal()
 
@@ -909,7 +909,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		totalChars += len(m.Content)
 	}
 
-	usageInfo := conditions.ContextUsageInfo{
+	usageInfo := awareness.ContextUsageInfo{
 		Model:          l.model,
 		Routed:         l.router != nil,
 		TokenCount:     totalChars / 4, // rough char-to-token estimate
@@ -929,7 +929,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			usageInfo.SessionAge = time.Since(started)
 		}
 	}
-	if line := conditions.FormatContextUsage(usageInfo); line != "" {
+	if line := awareness.FormatContextUsage(usageInfo); line != "" {
 		systemPrompt += "\n" + line
 	}
 

@@ -29,7 +29,7 @@ const workingMemorySection = `
 %s
 
 Preserve the experiential texture from working memory in your summary — emotional
-tone, relationship dynamics, and unresolved threads matter as much as facts.`
+tone, relationship dynamics, and unresolved threads matter as much as knowledge.`
 
 // CompactionPrompt returns the fully interpolated prompt for conversation
 // compaction. The caller passes the formatted conversation text (role: content

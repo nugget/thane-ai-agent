@@ -9,27 +9,27 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/agent"
-	"github.com/nugget/thane-ai-agent/internal/anticipation"
 	"github.com/nugget/thane-ai-agent/internal/config"
-	"github.com/nugget/thane-ai-agent/internal/facts"
 	"github.com/nugget/thane-ai-agent/internal/homeassistant"
+	"github.com/nugget/thane-ai-agent/internal/knowledge"
 	"github.com/nugget/thane-ai-agent/internal/router"
+	"github.com/nugget/thane-ai-agent/internal/scheduler"
 	"github.com/nugget/thane-ai-agent/internal/tools"
 )
 
-// anticipationMatcher is the subset of anticipation.Store needed by the
+// anticipationMatcher is the subset of scheduler.AnticipationStore needed by the
 // wake bridge. Using an interface keeps the bridge testable without a
 // real database.
 type anticipationMatcher interface {
-	Match(ctx anticipation.WakeContext) ([]*anticipation.Anticipation, error)
+	Match(ctx scheduler.WakeContext) ([]*scheduler.Anticipation, error)
 	OnCooldown(id string, globalDefault time.Duration) (bool, error)
 	MarkFired(id string) error
 }
 
 // wakeContextSetter sets the wake context for system prompt injection.
-// anticipation.Provider satisfies this interface.
+// scheduler.AnticipationProvider satisfies this interface.
 type wakeContextSetter interface {
-	SetWakeContext(ctx anticipation.WakeContext)
+	SetWakeContext(ctx scheduler.WakeContext)
 }
 
 // wakeStateGetter fetches entity state from Home Assistant. Satisfied
@@ -39,7 +39,7 @@ type wakeStateGetter interface {
 }
 
 // wakeResolver resolves (marks as handled) an anticipation by ID.
-// Satisfied by anticipation.Store.
+// Satisfied by scheduler.AnticipationStore.
 type wakeResolver interface {
 	Resolve(id string) error
 }
@@ -111,7 +111,7 @@ func (b *WakeBridge) HandleStateChange(entityID, oldState, newState string) {
 		return
 	}
 
-	wakeCtx := anticipation.WakeContext{
+	wakeCtx := scheduler.WakeContext{
 		Time:        time.Now(),
 		EventType:   "state_change",
 		EntityID:    entityID,
@@ -193,7 +193,7 @@ var wakeLifecycleTools = []string{"resolve_anticipation", "cancel_anticipation"}
 //
 // Lifecycle: recurring anticipations keep firing; one-shot anticipations
 // are auto-resolved after a successful wake.
-func (b *WakeBridge) runWake(a *anticipation.Anticipation, message, entityID string) {
+func (b *WakeBridge) runWake(a *scheduler.Anticipation, message, entityID string) {
 	ctx, cancel := context.WithTimeout(b.ctx, wakeTimeout)
 	defer cancel()
 
@@ -204,7 +204,7 @@ func (b *WakeBridge) runWake(a *anticipation.Anticipation, message, entityID str
 	for _, ce := range a.ContextEntities {
 		subjects = append(subjects, "entity:"+ce)
 	}
-	ctx = facts.WithSubjects(ctx, subjects)
+	ctx = knowledge.WithSubjects(ctx, subjects)
 
 	// Build routing hints from the anticipation's stored preferences,
 	// falling back to defaults when not set.
@@ -274,7 +274,7 @@ func (b *WakeBridge) runWake(a *anticipation.Anticipation, message, entityID str
 // fetchEntityContext fetches and formats the states of entities listed
 // in the anticipation's ContextEntities plus the triggering entity. It
 // is best-effort: fetch failures are logged but do not prevent the wake.
-func (b *WakeBridge) fetchEntityContext(a *anticipation.Anticipation, triggerEntityID string) string {
+func (b *WakeBridge) fetchEntityContext(a *scheduler.Anticipation, triggerEntityID string) string {
 	if b.ha == nil {
 		return ""
 	}
@@ -322,7 +322,7 @@ func (b *WakeBridge) fetchEntityContext(a *anticipation.Anticipation, triggerEnt
 // wake. It includes the anticipation description, its stored context
 // (instructions for the agent), the entity state change details, and
 // optional entity state context.
-func formatWakeMessage(a *anticipation.Anticipation, entityID, oldState, newState, entityContext string) string {
+func formatWakeMessage(a *scheduler.Anticipation, entityID, oldState, newState, entityContext string) string {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("Anticipation matched: %q\n\n", a.Description))
 	sb.WriteString(fmt.Sprintf("Entity %s changed from %q to %q.\n\n", entityID, oldState, newState))

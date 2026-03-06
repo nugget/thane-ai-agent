@@ -6,11 +6,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nugget/thane-ai-agent/internal/watchlist"
+	"github.com/nugget/thane-ai-agent/internal/awareness"
 	_ "modernc.org/sqlite"
 )
 
-func setupWatchlistRegistry(t *testing.T) (*Registry, *watchlist.Store) {
+func setupWatchlistRegistry(t *testing.T) (*Registry, *awareness.WatchlistStore) {
 	t.Helper()
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -18,7 +18,7 @@ func setupWatchlistRegistry(t *testing.T) (*Registry, *watchlist.Store) {
 	}
 	t.Cleanup(func() { db.Close() })
 
-	store, err := watchlist.NewStore(db)
+	store, err := awareness.NewWatchlistStore(db)
 	if err != nil {
 		t.Fatalf("new store: %v", err)
 	}

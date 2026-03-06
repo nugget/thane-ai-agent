@@ -65,7 +65,7 @@ func (t *Tools) SaveContact(argsJSON string) (string, error) {
 		return "", fmt.Errorf("parse args: %w", err)
 	}
 
-	// Rescue top-level string fields that should be facts.
+	// Rescue top-level string fields that should be knowledge.
 	// Models frequently pass email, phone, notes, etc. as top-level
 	// keys instead of nesting them under the "facts" map.
 	var raw map[string]any
@@ -127,7 +127,7 @@ func (t *Tools) SaveContact(argsJSON string) (string, error) {
 			return "", fmt.Errorf("update contact: %w", err)
 		}
 
-		// Set any facts.
+		// Set any knowledge.
 		for k, v := range args.Facts {
 			if err := t.store.SetFact(updated.ID, k, v); err != nil {
 				return "", fmt.Errorf("set fact %q: %w", k, err)
@@ -361,7 +361,7 @@ func (t *Tools) generateEmbedding(c *Contact, extraFacts map[string]string) {
 	_ = t.store.SetEmbedding(c.ID, emb)
 }
 
-// buildEmbeddingText creates text for embedding from a contact and its facts.
+// buildEmbeddingText creates text for embedding from a contact and its knowledge.
 func buildEmbeddingText(c *Contact, facts map[string][]string) string {
 	var sb strings.Builder
 	sb.WriteString(c.Name)

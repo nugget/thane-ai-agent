@@ -22,7 +22,7 @@ type ConversationProvider interface {
 	GetConversations() ([]Conversation, error)
 }
 
-// FactProvider provides memory facts.
+// FactProvider provides memory knowledge.
 type FactProvider interface {
 	GetFacts() ([]Fact, error)
 }

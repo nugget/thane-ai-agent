@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nugget/thane-ai-agent/internal/facts"
+	"github.com/nugget/thane-ai-agent/internal/knowledge"
 )
 
 // ArchiveSearcher abstracts archive search for testing. ArchiveStore
@@ -53,7 +53,7 @@ func NewArchiveContextProvider(store ArchiveSearcher, maxResults, maxBytes int, 
 // are found. Errors from the archive store are logged and swallowed —
 // archive injection should never block a wake.
 func (p *ArchiveContextProvider) GetContext(ctx context.Context, userMessage string) (string, error) {
-	subjects := facts.SubjectsFromContext(ctx)
+	subjects := knowledge.SubjectsFromContext(ctx)
 
 	query, querySource := p.buildQuery(subjects, userMessage)
 	if query == "" {

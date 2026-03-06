@@ -50,7 +50,7 @@ func TestContextProvider_NoContacts(t *testing.T) {
 func TestContextProvider_ReturnsRelevant(t *testing.T) {
 	store := newTestStore(t)
 
-	// Seed contacts with embeddings.
+	// Seed contacts with knowledge.
 	c1 := &Contact{Name: "Alice Relevant", Kind: "person", Relationship: "friend", Summary: "Works at TechCo"}
 	created1, _ := store.Upsert(c1)
 	_ = store.SetEmbedding(created1.ID, []float32{0.9, 0.1, 0.0})

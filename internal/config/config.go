@@ -27,7 +27,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nugget/thane-ai-agent/internal/email"
+	"github.com/nugget/thane-ai-agent/internal/channels/email"
 	"github.com/nugget/thane-ai-agent/internal/forge"
 	"github.com/nugget/thane-ai-agent/internal/search"
 	"gopkg.in/yaml.v3"
@@ -377,7 +377,7 @@ func (c SearchConfig) Configured() bool {
 type EmbeddingsConfig struct {
 	Enabled bool   `yaml:"enabled"`
 	Model   string `yaml:"model"`   // Embedding model name. Default: "nomic-embed-text"
-	BaseURL string `yaml:"baseurl"` // Ollama URL for embeddings. Default: models.ollama_url
+	BaseURL string `yaml:"baseurl"` // Ollama URL for knowledge. Default: models.ollama_url
 }
 
 // ContextConfig configures context injection into the system prompt.
@@ -436,7 +436,7 @@ type ExtractionConfig struct {
 	Model string `yaml:"model"`
 
 	// MinMessages is the minimum conversation length (in messages) before
-	// extraction is attempted. Very short exchanges rarely contain facts.
+	// extraction is attempted. Very short exchanges rarely contain knowledge.
 	// Default: 2.
 	MinMessages int `yaml:"min_messages"`
 
@@ -817,7 +817,7 @@ type PrewarmConfig struct {
 	MaxFacts int `yaml:"max_facts"`
 
 	// Archive configures Phase 2 pre-warming: injecting relevant past
-	// conversation excerpts alongside Layer 1 facts. See issue #404.
+	// conversation excerpts alongside Layer 1 knowledge. See issue #404.
 	Archive ArchivePrewarmConfig `yaml:"archive"`
 }
 

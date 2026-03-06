@@ -35,46 +35,38 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/agent"
-	"github.com/nugget/thane-ai-agent/internal/anticipation"
-	"github.com/nugget/thane-ai-agent/internal/api"
+	"github.com/nugget/thane-ai-agent/internal/awareness"
 	"github.com/nugget/thane-ai-agent/internal/buildinfo"
+	"github.com/nugget/thane-ai-agent/internal/channels/email"
+	"github.com/nugget/thane-ai-agent/internal/channels/mqtt"
+	sigcli "github.com/nugget/thane-ai-agent/internal/channels/signal"
 	"github.com/nugget/thane-ai-agent/internal/checkpoint"
 	"github.com/nugget/thane-ai-agent/internal/config"
 	"github.com/nugget/thane-ai-agent/internal/connwatch"
 	"github.com/nugget/thane-ai-agent/internal/contacts"
 	"github.com/nugget/thane-ai-agent/internal/database"
 	"github.com/nugget/thane-ai-agent/internal/delegate"
-	"github.com/nugget/thane-ai-agent/internal/email"
-	"github.com/nugget/thane-ai-agent/internal/embeddings"
-	"github.com/nugget/thane-ai-agent/internal/episodic"
 	"github.com/nugget/thane-ai-agent/internal/events"
-	"github.com/nugget/thane-ai-agent/internal/facts"
-	"github.com/nugget/thane-ai-agent/internal/fetch"
 	"github.com/nugget/thane-ai-agent/internal/forge"
 	"github.com/nugget/thane-ai-agent/internal/homeassistant"
-	"github.com/nugget/thane-ai-agent/internal/ingest"
+	"github.com/nugget/thane-ai-agent/internal/knowledge"
 	"github.com/nugget/thane-ai-agent/internal/llm"
 	"github.com/nugget/thane-ai-agent/internal/mcp"
 	"github.com/nugget/thane-ai-agent/internal/media"
 	"github.com/nugget/thane-ai-agent/internal/memory"
 	"github.com/nugget/thane-ai-agent/internal/metacognitive"
-	"github.com/nugget/thane-ai-agent/internal/mqtt"
 	"github.com/nugget/thane-ai-agent/internal/opstate"
 	"github.com/nugget/thane-ai-agent/internal/paths"
-	"github.com/nugget/thane-ai-agent/internal/person"
 	"github.com/nugget/thane-ai-agent/internal/prompts"
 	"github.com/nugget/thane-ai-agent/internal/router"
 	"github.com/nugget/thane-ai-agent/internal/scheduler"
 	"github.com/nugget/thane-ai-agent/internal/search"
-	sigcli "github.com/nugget/thane-ai-agent/internal/signal"
-	"github.com/nugget/thane-ai-agent/internal/statewindow"
-	sessionsummarizer "github.com/nugget/thane-ai-agent/internal/summarizer"
+	"github.com/nugget/thane-ai-agent/internal/server/api"
+	"github.com/nugget/thane-ai-agent/internal/server/web"
 	"github.com/nugget/thane-ai-agent/internal/talents"
 	"github.com/nugget/thane-ai-agent/internal/tools"
 	"github.com/nugget/thane-ai-agent/internal/unifi"
 	"github.com/nugget/thane-ai-agent/internal/usage"
-	"github.com/nugget/thane-ai-agent/internal/watchlist"
-	"github.com/nugget/thane-ai-agent/internal/web"
 
 	_ "github.com/mattn/go-sqlite3" // SQLite driver for database/sql
 )
@@ -283,7 +275,7 @@ func runIngest(ctx context.Context, stdout io.Writer, stderr io.Writer, configPa
 		return fmt.Errorf("create data directory: %w", err)
 	}
 
-	factStore, err := facts.NewStore(cfg.DataDir+"/facts.db", logger)
+	factStore, err := knowledge.NewStore(cfg.DataDir+"/knowledge.db", logger)
 	if err != nil {
 		return fmt.Errorf("open fact store: %w", err)
 	}
@@ -291,9 +283,9 @@ func runIngest(ctx context.Context, stdout io.Writer, stderr io.Writer, configPa
 
 	// Embeddings are optional. When enabled, each ingested fact gets a
 	// vector embedding for later semantic search.
-	var embClient facts.EmbeddingClient
+	var embClient knowledge.EmbeddingClient
 	if cfg.Embeddings.Enabled {
-		embClient = embeddings.New(embeddings.Config{
+		embClient = knowledge.New(knowledge.Config{
 			BaseURL: cfg.Embeddings.BaseURL,
 			Model:   cfg.Embeddings.Model,
 		})
@@ -301,7 +293,7 @@ func runIngest(ctx context.Context, stdout io.Writer, stderr io.Writer, configPa
 	}
 
 	source := "file:" + filePath
-	ingester := ingest.NewMarkdownIngester(factStore, embClient, source, facts.CategoryArchitecture)
+	ingester := knowledge.NewMarkdownIngester(factStore, embClient, source, knowledge.CategoryArchitecture)
 
 	count, err := ingester.IngestFile(ctx, filePath)
 	if err != nil {
@@ -409,7 +401,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// can reference it. The closure captures by pointer; the tracker
 	// is constructed later and also calls Initialize immediately after
 	// construction to cover the case where HA connected first.
-	var personTracker *person.Tracker
+	var personTracker *contacts.PresenceTracker
 
 	var subscribeOnce sync.Once
 	if ha != nil {
@@ -598,7 +590,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	if cfg.Archive.SessionIdleMinutes != nil {
 		idleTimeoutMinutes = *cfg.Archive.SessionIdleMinutes
 	}
-	summarizerCfg := sessionsummarizer.Config{
+	summarizerCfg := memory.SummarizerConfig{
 		Interval:        time.Duration(cfg.Archive.SummarizeInterval) * time.Second,
 		Timeout:         time.Duration(cfg.Archive.SummarizeTimeout) * time.Second,
 		PauseBetween:    5 * time.Second,
@@ -606,7 +598,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		ModelPreference: cfg.Archive.MetadataModel,
 		IdleTimeout:     time.Duration(idleTimeoutMinutes) * time.Minute,
 	}
-	summaryWorker := sessionsummarizer.New(archiveStore, llmClient, rtr, logger, summarizerCfg)
+	summaryWorker := memory.NewSummarizerWorker(archiveStore, llmClient, rtr, logger, summarizerCfg)
 	summaryWorker.Start(ctx)
 	defer summaryWorker.Stop()
 
@@ -772,15 +764,15 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// --- Fact store ---
 	// Long-term memory backed by SQLite. Facts are discrete pieces of
 	// knowledge that persist across conversations and restarts.
-	factStore, err := facts.NewStore(cfg.DataDir+"/facts.db", logger)
+	factStore, err := knowledge.NewStore(cfg.DataDir+"/knowledge.db", logger)
 	if err != nil {
 		return fmt.Errorf("open fact store: %w", err)
 	}
 	defer factStore.Close()
 
-	factTools := facts.NewTools(factStore)
+	factTools := knowledge.NewTools(factStore)
 	loop.Tools().SetFactTools(factTools)
-	logger.Info("fact store initialized", "path", cfg.DataDir+"/facts.db")
+	logger.Info("fact store initialized", "path", cfg.DataDir+"/knowledge.db")
 
 	// --- Contact directory ---
 	// Structured storage for people and organizations. Separate database
@@ -966,12 +958,12 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	}
 	defer anticipationDB.Close()
 
-	anticipationStore, err := anticipation.NewStore(anticipationDB)
+	anticipationStore, err := scheduler.NewAnticipationStore(anticipationDB)
 	if err != nil {
 		return fmt.Errorf("create anticipation store: %w", err)
 	}
 
-	anticipationTools := anticipation.NewTools(anticipationStore)
+	anticipationTools := scheduler.NewAnticipationTools(anticipationStore)
 	loop.Tools().SetAnticipationTools(anticipationTools)
 	logger.Info("anticipation store initialized", "path", cfg.DataDir+"/anticipations.db")
 
@@ -1085,7 +1077,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// --- Web Fetch ---
 	// Always available — no configuration needed. Fetches web pages and
 	// extracts readable text content.
-	loop.Tools().SetFetcher(fetch.New())
+	loop.Tools().SetFetcher(search.NewFetcher())
 
 	// --- Media transcript ---
 	// Wraps yt-dlp for on-demand transcript retrieval from YouTube,
@@ -1218,9 +1210,9 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// Optional semantic search over fact and contact stores. When enabled,
 	// records are indexed with vector embeddings generated by a local model.
 	// The client is declared here so it's available to context providers below.
-	var embClient *embeddings.Client
+	var embClient *knowledge.Client
 	if cfg.Embeddings.Enabled {
-		embClient = embeddings.New(embeddings.Config{
+		embClient = knowledge.New(knowledge.Config{
 			BaseURL: cfg.Embeddings.BaseURL,
 			Model:   cfg.Embeddings.Model,
 		})
@@ -1596,11 +1588,11 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// --- Context providers ---
 	// Dynamic system prompt injection. Providers add context based on
 	// current state (e.g., pending anticipations) before each LLM call.
-	anticipationProvider := anticipation.NewProvider(anticipationStore)
+	anticipationProvider := scheduler.NewAnticipationProvider(anticipationStore)
 	contextProvider := agent.NewCompositeContextProvider(anticipationProvider)
 	contextProvider.Add(agent.NewChannelProvider(&contactNameLookup{store: contactStore}))
 
-	episodicProvider := episodic.NewProvider(archiveStore, logger, episodic.Config{
+	episodicProvider := memory.NewEpisodicProvider(archiveStore, logger, memory.EpisodicConfig{
 		Timezone:          cfg.Timezone,
 		DailyDir:          cfg.Episodic.DailyDir,
 		LookbackDays:      cfg.Episodic.LookbackDays,
@@ -1622,13 +1614,13 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	}
 	defer watchlistDB.Close()
 
-	watchlistStore, err := watchlist.NewStore(watchlistDB)
+	watchlistStore, err := awareness.NewWatchlistStore(watchlistDB)
 	if err != nil {
 		return fmt.Errorf("watchlist store: %w", err)
 	}
 
 	if ha != nil {
-		watchlistProvider := watchlist.NewProvider(watchlistStore, ha, logger)
+		watchlistProvider := awareness.NewWatchlistProvider(watchlistStore, ha, logger)
 		contextProvider.Add(watchlistProvider)
 		logger.Info("entity watchlist context enabled")
 	}
@@ -1644,7 +1636,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 			stateWindowLoc = parsed
 		}
 	}
-	stateWindowProvider := statewindow.NewProvider(
+	stateWindowProvider := awareness.NewStateWindowProvider(
 		cfg.StateWindow.MaxEntries,
 		time.Duration(cfg.StateWindow.MaxAgeMinutes)*time.Minute,
 		stateWindowLoc,
@@ -1664,7 +1656,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// after construction when HA is available. Initialize is idempotent,
 	// so a redundant call from OnReady is harmless.
 	if len(cfg.Person.Track) > 0 {
-		personTracker = person.NewTracker(cfg.Person.Track, cfg.Timezone, logger)
+		personTracker = contacts.NewPresenceTracker(cfg.Person.Track, cfg.Timezone, logger)
 		contextProvider.Add(personTracker)
 
 		// Configure device MAC addresses from config.
@@ -1744,7 +1736,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// Subject-keyed fact injection — pre-warm cold-start loops with
 	// facts keyed to specific entities, contacts, zones, etc.
 	if cfg.Prewarm.Enabled {
-		subjectProvider := facts.NewSubjectContextProvider(factStore, logger)
+		subjectProvider := knowledge.NewSubjectContextProvider(factStore, logger)
 		if cfg.Prewarm.MaxFacts > 0 {
 			subjectProvider.SetMaxFacts(cfg.Prewarm.MaxFacts)
 		}
@@ -1754,7 +1746,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 
 	// Archive retrieval injection — pre-warm cold-start loops with
 	// relevant past conversation excerpts so the model has experiential
-	// judgment alongside Layer 1 facts. See issue #404.
+	// judgment alongside Layer 1 knowledge. See issue #404.
 	if cfg.Prewarm.Enabled && cfg.Prewarm.Archive.Enabled {
 		archiveProvider := memory.NewArchiveContextProvider(
 			archiveStore,
@@ -2058,7 +2050,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 			apSensors = append(apSensors, mqtt.DynamicSensor{
 				EntitySuffix: suffix,
 				Config: mqtt.SensorConfig{
-					Name:                person.TitleCase(shortName) + " AP",
+					Name:                contacts.TitleCase(shortName) + " AP",
 					ObjectID:            mqttPub.ObjectIDPrefix() + suffix,
 					HasEntityName:       true,
 					UniqueID:            mqttInstanceID + "_" + suffix,
@@ -2270,18 +2262,18 @@ func createLLMClient(cfg *config.Config, logger *slog.Logger, ollamaClient *llm.
 	return multi
 }
 
-// factSetterFunc adapts facts.Store to the memory.FactSetter interface,
+// factSetterFunc adapts knowledge.Store to the memory.FactSetter interface,
 // adding confidence reinforcement: if a fact already exists, its confidence
 // is bumped by 0.1 (capped at 1.0) rather than overwritten. This rewards
-// the model for re-extracting known facts.
+// the model for re-extracting known knowledge.
 type factSetterFunc struct {
-	store  *facts.Store
+	store  *knowledge.Store
 	logger *slog.Logger
 }
 
 func (f *factSetterFunc) SetFact(category, key, value, source string, confidence float64) error {
 	// Check for existing fact to apply confidence reinforcement.
-	existing, err := f.store.Get(facts.Category(category), key)
+	existing, err := f.store.Get(knowledge.Category(category), key)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		// Real database error (not just "fact doesn't exist yet") — log and bail.
 		f.logger.Warn("failed to check existing fact for reinforcement",
@@ -2309,7 +2301,7 @@ func (f *factSetterFunc) SetFact(category, key, value, source string, confidence
 		}
 	}
 
-	_, err = f.store.Set(facts.Category(category), key, value, source, confidence, nil, "")
+	_, err = f.store.Set(knowledge.Category(category), key, value, source, confidence, nil, "")
 	return err
 }
 

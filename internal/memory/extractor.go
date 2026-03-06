@@ -75,11 +75,11 @@ func (e *Extractor) SetExtractFunc(fn ExtractFunc) {
 }
 
 // ShouldExtract reports whether the given interaction is worth analyzing
-// for facts. It filters out simple device commands, short responses, and
+// for knowledge. It filters out simple device commands, short responses, and
 // auxiliary requests to keep LLM extraction calls to roughly 30–50% of
 // interactions.
 func (e *Extractor) ShouldExtract(userMsg, assistantResp string, messageCount int, skipContext bool) bool {
-	// Auxiliary OWU requests (title/tag gen) never contain facts.
+	// Auxiliary OWU requests (title/tag gen) never contain knowledge.
 	if skipContext {
 		e.logger.Debug("extraction skipped: auxiliary request")
 		return false
@@ -99,7 +99,7 @@ func (e *Extractor) ShouldExtract(userMsg, assistantResp string, messageCount in
 		return false
 	}
 
-	// Simple device commands rarely produce extractable facts.
+	// Simple device commands rarely produce extractable knowledge.
 	if isSimpleCommand(strings.ToLower(userMsg)) {
 		preview := userMsg
 		if len(preview) > 50 {
@@ -144,7 +144,7 @@ func isSimpleCommand(lower string) bool {
 // Extract calls the configured ExtractFunc and persists any discovered
 // facts via the FactSetter. Incomplete facts (missing category, key, or
 // value) are silently skipped. Errors from individual SetFact calls are
-// logged but do not stop processing of remaining facts.
+// logged but do not stop processing of remaining knowledge.
 func (e *Extractor) Extract(ctx context.Context, userMsg, assistantResp string, recentHistory []Message) error {
 	if e.extract == nil {
 		return nil
