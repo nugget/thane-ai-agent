@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/nugget/thane-ai-agent/internal/database"
 	"github.com/nugget/thane-ai-agent/internal/embeddings"
 )
 
@@ -52,7 +53,7 @@ type Store struct {
 
 // NewStore creates a contact store using the given database path.
 func NewStore(dbPath string, logger *slog.Logger) (*Store, error) {
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := database.Open(dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
@@ -97,15 +98,14 @@ func (s *Store) migrate() error {
 	}
 
 	// Add trust_zone column for contacts that predate #293.
-	s.addColumnIfMissing("contacts", "trust_zone", "TEXT NOT NULL DEFAULT 'known'")
+	if err := database.AddColumn(s.db, "contacts", "trust_zone", "TEXT NOT NULL DEFAULT 'known'"); err != nil {
+		return err
+	}
 
 	// Index trust_zone to optimize queries that filter by trust zone.
 	if _, err := s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_contacts_trust_zone ON contacts(trust_zone)`); err != nil {
 		s.logger.Warn("trust_zone index not created; queries by trust_zone may be slow", "error", err)
 	}
-
-	// Migrate freeform trust_level facts to the structured trust_zone column.
-	s.migrateTrustLevelFacts()
 
 	// contact_facts supports multiple values per key (e.g., two phone
 	// numbers). If the table was created with the old UNIQUE(contact_id, key)
@@ -173,92 +173,6 @@ func (s *Store) migrateContactFacts() {
 	}
 
 	_, _ = s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_contact_facts_contact_id ON contact_facts(contact_id)`)
-}
-
-// addColumnIfMissing adds a column to a table if it does not already exist.
-func (s *Store) addColumnIfMissing(table, column, typedef string) {
-	rows, err := s.db.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
-	if err != nil {
-		s.logger.Warn("failed to check table schema", "table", table, "error", err)
-		return
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var cid int
-		var name, colType string
-		var notNull, pk int
-		var dflt sql.NullString
-		if err := rows.Scan(&cid, &name, &colType, &notNull, &dflt, &pk); err != nil {
-			continue
-		}
-		if name == column {
-			return // column already exists
-		}
-	}
-
-	stmt := fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, column, typedef)
-	if _, err := s.db.Exec(stmt); err != nil {
-		s.logger.Warn("failed to add column", "table", table, "column", column, "error", err)
-		return
-	}
-	s.logger.Info("added column", "table", table, "column", column)
-}
-
-// migrateTrustLevelFacts promotes freeform trust_level contact_facts into
-// the structured trust_zone column. Values containing "friend"
-// (case-insensitive) are mapped to "trusted". This is idempotent —
-// contacts already at "trusted" are unaffected.
-func (s *Store) migrateTrustLevelFacts() {
-	rows, err := s.db.Query(`
-		SELECT cf.contact_id, cf.value
-		FROM contact_facts cf
-		JOIN contacts c ON c.id = cf.contact_id
-		WHERE cf.key = 'trust_level' AND c.trust_zone = 'known'
-	`)
-	if err != nil {
-		// Table may not have trust_zone column yet on first run
-		// before addColumnIfMissing; silently skip.
-		return
-	}
-
-	// Collect all rows before closing the cursor to avoid holding a
-	// read lock while executing UPDATE statements (SQLite limitation).
-	type pending struct{ contactID, value string }
-	var updates []pending
-	for rows.Next() {
-		var p pending
-		if err := rows.Scan(&p.contactID, &p.value); err != nil {
-			continue
-		}
-		updates = append(updates, p)
-	}
-	rows.Close()
-
-	for _, p := range updates {
-		zone := mapTrustLevelToZone(p.value)
-		if zone == "known" {
-			continue // already the default
-		}
-		if _, err := s.db.Exec(`UPDATE contacts SET trust_zone = ? WHERE id = ?`, zone, p.contactID); err != nil {
-			s.logger.Warn("failed to migrate trust_level fact",
-				"contact_id", p.contactID, "value", p.value, "error", err)
-			continue
-		}
-		s.logger.Info("migrated trust_level fact to trust_zone",
-			"contact_id", p.contactID, "from", p.value, "to", zone)
-	}
-}
-
-// mapTrustLevelToZone converts a freeform trust_level string to a
-// structured trust zone value.
-func mapTrustLevelToZone(value string) string {
-	lower := strings.ToLower(value)
-	if strings.Contains(lower, "friend") || strings.Contains(lower, "trusted") ||
-		strings.Contains(lower, "close") || strings.Contains(lower, "family") {
-		return "trusted"
-	}
-	return "known"
 }
 
 // tryEnableFTS creates the FTS5 virtual table for full-text search.

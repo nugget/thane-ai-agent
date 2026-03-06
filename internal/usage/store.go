@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/nugget/thane-ai-agent/internal/config"
+	"github.com/nugget/thane-ai-agent/internal/database"
 )
 
 // Record represents a single LLM interaction's token usage and cost.
@@ -56,7 +57,7 @@ type Store struct {
 // NewStore creates a usage store at the given database path. The schema
 // is created automatically on first use.
 func NewStore(dbPath string) (*Store, error) {
-	db, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL&_busy_timeout=5000")
+	db, err := database.Open(dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("open usage database: %w", err)
 	}

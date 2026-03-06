@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/nugget/thane-ai-agent/internal/database"
 	"github.com/nugget/thane-ai-agent/internal/embeddings"
 )
 
@@ -64,7 +65,7 @@ type Store struct {
 
 // NewStore creates a fact store using the given database path.
 func NewStore(dbPath string, logger *slog.Logger) (*Store, error) {
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := database.Open(dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
@@ -113,11 +114,17 @@ func (s *Store) migrate() error {
 		return err
 	}
 
-	// Add columns if they don't exist (migrations for existing DBs)
-	_, _ = s.db.Exec(`ALTER TABLE facts ADD COLUMN embedding BLOB`)
-	_, _ = s.db.Exec(`ALTER TABLE facts ADD COLUMN deleted_at TEXT`)
-	_, _ = s.db.Exec(`ALTER TABLE facts ADD COLUMN subjects TEXT`)
-	_, _ = s.db.Exec(`ALTER TABLE facts ADD COLUMN ref TEXT`)
+	// Add columns if they don't exist (migrations for existing DBs).
+	for _, col := range []struct{ name, typedef string }{
+		{"embedding", "BLOB"},
+		{"deleted_at", "TEXT"},
+		{"subjects", "TEXT"},
+		{"ref", "TEXT"},
+	} {
+		if err := database.AddColumn(s.db, "facts", col.name, col.typedef); err != nil {
+			return err
+		}
+	}
 
 	s.tryEnableFTS()
 

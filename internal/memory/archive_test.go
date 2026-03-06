@@ -916,13 +916,6 @@ func TestNewArchiveStoreFromDB(t *testing.T) {
 	}
 	defer workingStore.Close()
 
-	if err := MigrateUnifyMessages(workingStore.DB(), "", nil); err != nil {
-		t.Fatal(err)
-	}
-	if err := MigrateUnifyToolCalls(workingStore.DB(), "", nil); err != nil {
-		t.Fatal(err)
-	}
-
 	archiveStore, err := NewArchiveStoreFromDB(workingStore.DB(), nil, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -967,8 +960,6 @@ func TestNewArchiveStoreFromDB_CloseIsNoop(t *testing.T) {
 	}
 	defer workingStore.Close()
 
-	MigrateUnifyMessages(workingStore.DB(), "", nil)
-
 	archiveStore, err := NewArchiveStoreFromDB(workingStore.DB(), nil, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -994,13 +985,6 @@ func TestConsolidatedMode_FullLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer workingStore.Close()
-
-	if err := MigrateUnifyMessages(workingStore.DB(), "", nil); err != nil {
-		t.Fatal(err)
-	}
-	if err := MigrateUnifyToolCalls(workingStore.DB(), "", nil); err != nil {
-		t.Fatal(err)
-	}
 
 	archiveStore, err := NewArchiveStoreFromDB(workingStore.DB(), nil, nil)
 	if err != nil {
@@ -1285,13 +1269,6 @@ func TestActiveSessionsWithLastActivity_Unified(t *testing.T) {
 	}
 	defer workingStore.Close()
 
-	if err := MigrateUnifyMessages(workingStore.DB(), "", nil); err != nil {
-		t.Fatal(err)
-	}
-	if err := MigrateUnifyToolCalls(workingStore.DB(), "", nil); err != nil {
-		t.Fatal(err)
-	}
-
 	store, err := NewArchiveStoreFromDB(workingStore.DB(), nil, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -1384,13 +1361,6 @@ func TestImportMessages_Unified(t *testing.T) {
 	}
 	defer workingStore.Close()
 
-	if err := MigrateUnifyMessages(workingStore.DB(), "", nil); err != nil {
-		t.Fatal(err)
-	}
-	if err := MigrateUnifyToolCalls(workingStore.DB(), "", nil); err != nil {
-		t.Fatal(err)
-	}
-
 	store, err := NewArchiveStoreFromDB(workingStore.DB(), nil, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -1448,13 +1418,6 @@ func TestImportToolCalls_Unified(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer workingStore.Close()
-
-	if err := MigrateUnifyMessages(workingStore.DB(), "", nil); err != nil {
-		t.Fatal(err)
-	}
-	if err := MigrateUnifyToolCalls(workingStore.DB(), "", nil); err != nil {
-		t.Fatal(err)
-	}
 
 	store, err := NewArchiveStoreFromDB(workingStore.DB(), nil, nil)
 	if err != nil {
