@@ -52,19 +52,26 @@ func (s *SQLiteStore) migrate() error {
 		metadata TEXT
 	);
 
-	-- Messages
+	-- Messages (includes lifecycle columns from storage unification #434)
 	CREATE TABLE IF NOT EXISTS messages (
 		id TEXT PRIMARY KEY,
 		conversation_id TEXT NOT NULL,
+		session_id TEXT,
 		role TEXT NOT NULL,
 		content TEXT NOT NULL,
 		timestamp TIMESTAMP NOT NULL,
 		token_count INTEGER DEFAULT 0,
 		tool_calls TEXT,
 		tool_call_id TEXT,
+		status TEXT DEFAULT 'active' CHECK (status IN ('active', 'compacted', 'archived')),
+		archived_at TIMESTAMP,
+		archive_reason TEXT,
+		iteration_index INTEGER,
 		FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
 	);
 	CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id, timestamp);
+	CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, timestamp);
+	CREATE INDEX IF NOT EXISTS idx_messages_status ON messages(conversation_id, status);
 
 	-- Tool calls (structured, queryable)
 	CREATE TABLE IF NOT EXISTS tool_calls (
@@ -88,8 +95,8 @@ func (s *SQLiteStore) migrate() error {
 	CREATE INDEX IF NOT EXISTS idx_tool_calls_conversation ON tool_calls(conversation_id, started_at);
 	CREATE INDEX IF NOT EXISTS idx_tool_calls_tool ON tool_calls(tool_name);
 	CREATE INDEX IF NOT EXISTS idx_tool_calls_message ON tool_calls(message_id);
-	-- idx_tool_calls_session and idx_tool_calls_status are created by
-	-- MigrateUnifyToolCalls after the lifecycle columns exist.
+	CREATE INDEX IF NOT EXISTS idx_tool_calls_session ON tool_calls(session_id, started_at);
+	CREATE INDEX IF NOT EXISTS idx_tool_calls_status ON tool_calls(conversation_id, status);
 
 	-- Entity facts (for Phase 3)
 	CREATE TABLE IF NOT EXISTS entity_facts (
@@ -123,7 +130,26 @@ func (s *SQLiteStore) migrate() error {
 	`
 
 	_, err := s.db.Exec(schema)
-	return err
+	if err != nil {
+		return err
+	}
+
+	// Existing databases may lack the lifecycle columns added in #434.
+	// New databases get them from the CREATE TABLE above; this loop
+	// handles the upgrade path for pre-unification schemas.
+	for _, col := range []struct{ table, name, typedef string }{
+		{"messages", "session_id", "TEXT"},
+		{"messages", "status", "TEXT DEFAULT 'active' CHECK (status IN ('active', 'compacted', 'archived'))"},
+		{"messages", "archived_at", "TIMESTAMP"},
+		{"messages", "archive_reason", "TEXT"},
+		{"messages", "iteration_index", "INTEGER"},
+	} {
+		if err := database.AddColumn(s.db, col.table, col.name, col.typedef); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // DB returns the underlying database connection for use by the unification

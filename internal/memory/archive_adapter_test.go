@@ -18,9 +18,6 @@ func newTestAdapter(t *testing.T) (*ArchiveAdapter, *ArchiveStore, *SQLiteStore)
 	}
 	t.Cleanup(func() { workingStore.Close() })
 
-	MigrateUnifyMessages(workingStore.DB(), "", nil)
-	MigrateUnifyToolCalls(workingStore.DB(), "", nil)
-
 	archiveStore, err := NewArchiveStoreFromDB(workingStore.DB(), nil, nil)
 	if err != nil {
 		t.Fatal(err)

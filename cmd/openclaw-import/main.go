@@ -130,17 +130,6 @@ func main() {
 	}
 	defer workingStore.Close()
 
-	// Run unification migrations so the unified schema (status column,
-	// lifecycle indexes) exists before importing.
-	if err := memory.MigrateUnifyMessages(workingStore.DB(), "", nil); err != nil {
-		logger.Error("unify messages migration failed", "error", err)
-		os.Exit(1)
-	}
-	if err := memory.MigrateUnifyToolCalls(workingStore.DB(), "", nil); err != nil {
-		logger.Error("unify tool calls migration failed", "error", err)
-		os.Exit(1)
-	}
-
 	store, err := memory.NewArchiveStoreFromDB(workingStore.DB(), nil, logger)
 	if err != nil {
 		logger.Error("failed to open archive store", "error", err)

@@ -475,23 +475,6 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	})
 	ollamaClient.SetWatcher(ollamaWatcher)
 
-	// --- Unify storage ---
-	// Phases 1-3 of storage unification (issue #434). All migrations are
-	// idempotent and safe to run on every startup.
-	archivePath := cfg.DataDir + "/archive.db"
-	if err := memory.MigrateUnifyMessages(mem.DB(), archivePath, logger); err != nil {
-		return fmt.Errorf("unify messages migration: %w", err)
-	}
-	if err := memory.MigrateUnifyToolCalls(mem.DB(), archivePath, logger); err != nil {
-		return fmt.Errorf("unify tool calls migration: %w", err)
-	}
-	if err := memory.MigrateConsolidateDB(mem.DB(), archivePath, logger); err != nil {
-		return fmt.Errorf("consolidate database: %w", err)
-	}
-	if err := memory.MigrateDelegationsToSessions(mem.DB(), logger); err != nil {
-		return fmt.Errorf("migrate delegations to sessions: %w", err)
-	}
-
 	// --- Session archive ---
 	// All data (sessions, iterations, messages, tool calls) lives in
 	// thane.db. The archive store borrows the working DB connection.
