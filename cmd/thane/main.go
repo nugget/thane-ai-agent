@@ -42,6 +42,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/config"
 	"github.com/nugget/thane-ai-agent/internal/connwatch"
 	"github.com/nugget/thane-ai-agent/internal/contacts"
+	"github.com/nugget/thane-ai-agent/internal/database"
 	"github.com/nugget/thane-ai-agent/internal/delegate"
 	"github.com/nugget/thane-ai-agent/internal/email"
 	"github.com/nugget/thane-ai-agent/internal/embeddings"
@@ -976,7 +977,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// --- Anticipation store ---
 	// Bridges intent to action. The agent can set anticipations ("I expect
 	// X to happen") that trigger context injection when they're fulfilled.
-	anticipationDB, err := sql.Open("sqlite3", cfg.DataDir+"/anticipations.db")
+	anticipationDB, err := database.Open(cfg.DataDir + "/anticipations.db")
 	if err != nil {
 		return fmt.Errorf("open anticipation db: %w", err)
 	}
@@ -1632,7 +1633,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// Allows the agent to dynamically add HA entities to a watched list
 	// whose live state is injected into context each turn. Persisted in
 	// SQLite so the watchlist survives restarts.
-	watchlistDB, err := sql.Open("sqlite3", cfg.DataDir+"/watchlist.db")
+	watchlistDB, err := database.Open(cfg.DataDir + "/watchlist.db")
 	if err != nil {
 		return fmt.Errorf("open watchlist db: %w", err)
 	}
@@ -1910,7 +1911,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// Periodically snapshots application state (conversations, facts,
 	// scheduled tasks) to enable crash recovery. Also creates a snapshot
 	// on clean shutdown and before model failover.
-	checkpointDB, err := sql.Open("sqlite3", cfg.DataDir+"/checkpoints.db")
+	checkpointDB, err := database.Open(cfg.DataDir + "/checkpoints.db")
 	if err != nil {
 		return fmt.Errorf("open checkpoint database: %w", err)
 	}

@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/nugget/thane-ai-agent/internal/database"
 )
 
 // Anticipation represents something the agent is expecting/waiting for.
@@ -85,25 +87,18 @@ func (s *Store) migrate() error {
 		return err
 	}
 
-	// Additive migrations: each column may already exist from a previous
-	// run. Only the "duplicate column name" error is ignored — other
-	// failures (locked/corrupt DB) surface immediately.
-	for _, stmt := range []struct {
-		sql  string
-		desc string
-	}{
-		{`ALTER TABLE anticipations ADD COLUMN context_entities_json TEXT`, "context_entities_json"},
-		{`ALTER TABLE anticipations ADD COLUMN recurring BOOLEAN DEFAULT 0`, "recurring"},
-		{`ALTER TABLE anticipations ADD COLUMN cooldown_seconds INTEGER DEFAULT 0`, "cooldown_seconds"},
-		{`ALTER TABLE anticipations ADD COLUMN last_fired_at TIMESTAMP`, "last_fired_at"},
-		{`ALTER TABLE anticipations ADD COLUMN model TEXT DEFAULT ''`, "model"},
-		{`ALTER TABLE anticipations ADD COLUMN local_only INTEGER`, "local_only"},
-		{`ALTER TABLE anticipations ADD COLUMN quality_floor INTEGER DEFAULT 0`, "quality_floor"},
+	// Additive migrations: each column may already exist from a previous run.
+	for _, col := range []struct{ name, typedef string }{
+		{"context_entities_json", "TEXT"},
+		{"recurring", "BOOLEAN DEFAULT 0"},
+		{"cooldown_seconds", "INTEGER DEFAULT 0"},
+		{"last_fired_at", "TIMESTAMP"},
+		{"model", "TEXT DEFAULT ''"},
+		{"local_only", "INTEGER"},
+		{"quality_floor", "INTEGER DEFAULT 0"},
 	} {
-		if _, err := s.db.Exec(stmt.sql); err != nil {
-			if !strings.Contains(err.Error(), "duplicate column name") {
-				return fmt.Errorf("migrate %s: %w", stmt.desc, err)
-			}
+		if err := database.AddColumn(s.db, "anticipations", col.name, col.typedef); err != nil {
+			return fmt.Errorf("migrate %s: %w", col.name, err)
 		}
 	}
 

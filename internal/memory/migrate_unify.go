@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"os"
 	"time"
+
+	"github.com/nugget/thane-ai-agent/internal/database"
 )
 
 // MigrateUnifyMessages adds lifecycle columns to the working messages table and
@@ -66,7 +68,7 @@ func addLifecycleColumns(db *sql.DB, logger *slog.Logger) error {
 	}
 
 	for _, col := range columns {
-		if hasColumn(db, "messages", col.name) {
+		if database.HasColumn(db, "messages", col.name) {
 			continue
 		}
 		if _, err := db.Exec(col.sql); err != nil {
@@ -407,7 +409,7 @@ func addToolCallLifecycleColumns(db *sql.DB, logger *slog.Logger) error {
 	}
 
 	for _, col := range columns {
-		if hasColumn(db, "tool_calls", col.name) {
+		if database.HasColumn(db, "tool_calls", col.name) {
 			continue
 		}
 		if _, err := db.Exec(col.sql); err != nil {
@@ -603,17 +605,6 @@ func upsertToolCallsFromTemp(db *sql.DB) (int64, error) {
 	}
 
 	return int64(len(staged)), nil
-}
-
-// hasColumn checks whether a column exists on the given table.
-// Both table and column must be valid SQL identifiers (alphanumeric + underscore).
-func hasColumn(db *sql.DB, table, column string) bool {
-	if !isValidIdentifier(table) || !isValidIdentifier(column) {
-		return false
-	}
-	// Use a lightweight SELECT to probe for the column.
-	_, err := db.Exec("SELECT " + column + " FROM " + table + " LIMIT 0")
-	return err == nil
 }
 
 // MigrateConsolidateDB copies session-related tables from archive.db into the

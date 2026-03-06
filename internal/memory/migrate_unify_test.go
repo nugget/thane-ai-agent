@@ -9,6 +9,7 @@ import (
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/nugget/thane-ai-agent/internal/database"
 )
 
 // newTestWorkingDB creates a working SQLiteStore in a temp directory for testing.
@@ -34,7 +35,7 @@ func TestMigrateUnifyMessages_AddsLifecycleColumns(t *testing.T) {
 
 	// Verify all lifecycle columns exist.
 	for _, col := range []string{"session_id", "status", "archived_at", "archive_reason", "iteration_index"} {
-		if !hasColumn(store.DB(), "messages", col) {
+		if !database.HasColumn(store.DB(), "messages", col) {
 			t.Errorf("expected column %q to exist after migration", col)
 		}
 	}
@@ -379,7 +380,7 @@ func TestMigrateUnifyToolCalls_AddsLifecycleColumns(t *testing.T) {
 	}
 
 	for _, col := range []string{"session_id", "status", "archived_at", "iteration_index"} {
-		if !hasColumn(store.DB(), "tool_calls", col) {
+		if !database.HasColumn(store.DB(), "tool_calls", col) {
 			t.Errorf("expected column %q to exist after migration", col)
 		}
 	}

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/nugget/thane-ai-agent/internal/database"
 	"github.com/nugget/thane-ai-agent/internal/embeddings"
 )
 
@@ -52,7 +53,7 @@ type Store struct {
 
 // NewStore creates a contact store using the given database path.
 func NewStore(dbPath string, logger *slog.Logger) (*Store, error) {
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := database.Open(dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
@@ -97,7 +98,9 @@ func (s *Store) migrate() error {
 	}
 
 	// Add trust_zone column for contacts that predate #293.
-	s.addColumnIfMissing("contacts", "trust_zone", "TEXT NOT NULL DEFAULT 'known'")
+	if err := database.AddColumn(s.db, "contacts", "trust_zone", "TEXT NOT NULL DEFAULT 'known'"); err != nil {
+		return err
+	}
 
 	// Index trust_zone to optimize queries that filter by trust zone.
 	if _, err := s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_contacts_trust_zone ON contacts(trust_zone)`); err != nil {
@@ -173,36 +176,6 @@ func (s *Store) migrateContactFacts() {
 	}
 
 	_, _ = s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_contact_facts_contact_id ON contact_facts(contact_id)`)
-}
-
-// addColumnIfMissing adds a column to a table if it does not already exist.
-func (s *Store) addColumnIfMissing(table, column, typedef string) {
-	rows, err := s.db.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
-	if err != nil {
-		s.logger.Warn("failed to check table schema", "table", table, "error", err)
-		return
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var cid int
-		var name, colType string
-		var notNull, pk int
-		var dflt sql.NullString
-		if err := rows.Scan(&cid, &name, &colType, &notNull, &dflt, &pk); err != nil {
-			continue
-		}
-		if name == column {
-			return // column already exists
-		}
-	}
-
-	stmt := fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", table, column, typedef)
-	if _, err := s.db.Exec(stmt); err != nil {
-		s.logger.Warn("failed to add column", "table", table, "column", column, "error", err)
-		return
-	}
-	s.logger.Info("added column", "table", table, "column", column)
 }
 
 // migrateTrustLevelFacts promotes freeform trust_level contact_facts into

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/nugget/thane-ai-agent/internal/database"
 )
 
 // Store is a namespaced key-value store backed by SQLite. All public
@@ -22,7 +23,7 @@ type Store struct {
 // NewStore creates an operational state store at the given database path.
 // The schema is created automatically on first use.
 func NewStore(dbPath string) (*Store, error) {
-	db, err := sql.Open("sqlite3", dbPath)
+	db, err := database.Open(dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
