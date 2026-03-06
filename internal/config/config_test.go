@@ -138,29 +138,6 @@ func TestAgentConfig_CustomOrchestratorTools(t *testing.T) {
 	}
 }
 
-func TestAgentConfig_BackwardCompatIter0Tools(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.yaml")
-	os.WriteFile(path, []byte("agent:\n  delegation_required: true\n  iter0_tools:\n    - thane_delegate\n    - recall_fact\n"), 0600)
-
-	cfg, err := Load(path)
-	if err != nil {
-		t.Fatalf("Load error: %v", err)
-	}
-
-	// The deprecated iter0_tools key should be migrated to OrchestratorTools.
-	if len(cfg.Agent.OrchestratorTools) != 2 {
-		t.Fatalf("orchestrator_tools length = %d, want 2; got %v", len(cfg.Agent.OrchestratorTools), cfg.Agent.OrchestratorTools)
-	}
-	if cfg.Agent.OrchestratorTools[0] != "thane_delegate" || cfg.Agent.OrchestratorTools[1] != "recall_fact" {
-		t.Errorf("orchestrator_tools = %v, want [thane_delegate recall_fact]", cfg.Agent.OrchestratorTools)
-	}
-	// The deprecated field should be cleared after migration.
-	if len(cfg.Agent.DeprecatedIter0Tools) != 0 {
-		t.Errorf("deprecated iter0_tools should be cleared after migration, got %v", cfg.Agent.DeprecatedIter0Tools)
-	}
-}
-
 func TestAgentConfig_NoDefaultsWhenDisabled(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")

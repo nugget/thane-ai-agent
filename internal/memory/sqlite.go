@@ -7,6 +7,7 @@ import (
 
 	"github.com/google/uuid"
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/nugget/thane-ai-agent/internal/llm"
 )
 
 // SQLiteStore is a SQLite-backed memory store.
@@ -173,7 +174,7 @@ func (s *SQLiteStore) AddMessage(conversationID, role, content string) error {
 	_, err = s.db.Exec(`
 		INSERT INTO messages (id, conversation_id, role, content, timestamp, token_count)
 		VALUES (?, ?, ?, ?, ?, ?)
-	`, msgID.String(), conversationID, role, content, now, estimateTokens(content))
+	`, msgID.String(), conversationID, role, content, now, llm.EstimateTokens(content))
 	if err != nil {
 		return fmt.Errorf("insert message: %w", err)
 	}
@@ -406,15 +407,9 @@ func (s *SQLiteStore) AddCompactionSummary(conversationID, summary string) error
 	_, err := s.db.Exec(`
 		INSERT INTO messages (id, conversation_id, role, content, timestamp, token_count, status)
 		VALUES (?, ?, 'system', ?, ?, ?, 'active')
-	`, msgID.String(), conversationID, summary, now, estimateTokens(summary))
+	`, msgID.String(), conversationID, summary, now, llm.EstimateTokens(summary))
 
 	return err
-}
-
-// estimateTokens provides a rough token count estimate.
-// Rule of thumb: ~4 characters per token for English.
-func estimateTokens(text string) int {
-	return len(text) / 4
 }
 
 // ToolCall represents a recorded tool invocation.

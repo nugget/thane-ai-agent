@@ -35,6 +35,18 @@ func TestCosineSimilarity(t *testing.T) {
 			b:        []float32{1, 2},
 			expected: 0.0,
 		},
+		{
+			name:     "zero vector",
+			a:        []float32{0, 0, 0},
+			b:        []float32{1, 2, 3},
+			expected: 0.0,
+		},
+		{
+			name:     "empty",
+			a:        []float32{},
+			b:        []float32{},
+			expected: 0.0,
+		},
 	}
 
 	for _, tc := range tests {

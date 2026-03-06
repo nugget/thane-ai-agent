@@ -564,18 +564,6 @@ func TestSessionFallbackChain(t *testing.T) {
 }
 
 func TestHelpers(t *testing.T) {
-	t.Run("estimateTokens", func(t *testing.T) {
-		if got := estimateTokens("1234"); got != 1 {
-			t.Errorf("got %d, want 1", got)
-		}
-		if got := estimateTokens("12345678"); got != 2 {
-			t.Errorf("got %d, want 2", got)
-		}
-		if got := estimateTokens(""); got != 0 {
-			t.Errorf("got %d, want 0", got)
-		}
-	})
-
 	t.Run("truncateContent", func(t *testing.T) {
 		short := "hello"
 		if got := truncateContent(short, 10); got != "hello" {
@@ -655,21 +643,6 @@ func TestHelpers(t *testing.T) {
 		}
 	})
 
-	t.Run("expandTilde", func(t *testing.T) {
-		home, _ := os.UserHomeDir()
-		if got := expandTilde("~/foo"); got != filepath.Join(home, "foo") {
-			t.Errorf("got %q", got)
-		}
-		if got := expandTilde("/absolute/path"); got != "/absolute/path" {
-			t.Errorf("got %q", got)
-		}
-		if got := expandTilde("~"); got != home {
-			t.Errorf("got %q, want %q", got, home)
-		}
-		if got := expandTilde("relative"); got != "relative" {
-			t.Errorf("got %q", got)
-		}
-	})
 }
 
 func TestMessageTimestamps(t *testing.T) {

@@ -16,7 +16,9 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/nugget/thane-ai-agent/internal/llm"
 	"github.com/nugget/thane-ai-agent/internal/memory"
+	"github.com/nugget/thane-ai-agent/internal/paths"
 	"github.com/nugget/thane-ai-agent/internal/prompts"
 )
 
@@ -113,7 +115,7 @@ func (p *Provider) getDailyMemory() string {
 		return ""
 	}
 
-	dir := expandTilde(p.dailyDir)
+	dir := paths.ExpandHome(p.dailyDir)
 	loc := p.loadLocation()
 	now := p.nowFunc().In(loc)
 
@@ -179,7 +181,7 @@ func (p *Provider) getRecentHistory() string {
 	}
 
 	framing := prompts.EpisodicHistoryFraming() + "\n\n"
-	budget := p.historyTokens - estimateTokens(framing)
+	budget := p.historyTokens - llm.EstimateTokens(framing)
 	var entries []string
 
 	formatted := 0          // Count of sessions actually emitted.
@@ -275,7 +277,7 @@ func (p *Provider) formatTranscriptExcerpt(sess *memory.Session, budget int) (st
 	sb.WriteString(header)
 	sb.WriteString("\n")
 
-	remaining := budget - estimateTokens(header)
+	remaining := budget - llm.EstimateTokens(header)
 
 	// Collect user/assistant messages from the end, capped to avoid
 	// scanning excessively long transcripts.
@@ -290,7 +292,7 @@ func (p *Provider) formatTranscriptExcerpt(sess *memory.Session, budget int) (st
 		}
 		ts := m.Timestamp.In(loc).Format(time.RFC3339)
 		line := fmt.Sprintf("[%s] **%s:** %s", ts, m.Role, truncateContent(m.Content, 200))
-		cost := estimateTokens(line)
+		cost := llm.EstimateTokens(line)
 		if cost > remaining {
 			break
 		}
@@ -309,7 +311,7 @@ func (p *Provider) formatTranscriptExcerpt(sess *memory.Session, budget int) (st
 	}
 
 	result := sb.String()
-	return result, estimateTokens(result)
+	return result, llm.EstimateTokens(result)
 }
 
 // formatParagraph formats a session with its paragraph-level summary.
@@ -317,7 +319,7 @@ func (p *Provider) formatParagraph(sess *memory.Session) (string, int) {
 	header := p.sessionHeader(sess)
 	summary := sessionParagraph(sess)
 	entry := header + summary + "\n"
-	return entry, estimateTokens(entry)
+	return entry, llm.EstimateTokens(entry)
 }
 
 // formatOneLiner formats a session with a single-line summary.
@@ -325,7 +327,7 @@ func (p *Provider) formatOneLiner(sess *memory.Session) (string, int) {
 	header := p.sessionHeader(sess)
 	oneliner := sessionOneLiner(sess)
 	entry := header + oneliner + "\n"
-	return entry, estimateTokens(entry)
+	return entry, llm.EstimateTokens(entry)
 }
 
 // sessionHeader returns a formatted header for a session entry.
@@ -417,30 +419,6 @@ func dayLabel(offset int, day time.Time) string {
 	default:
 		return day.Format("Monday, January 2")
 	}
-}
-
-// estimateTokens returns a rough token estimate for a string. Uses the
-// len/4 heuristic matching the convention in the memory package.
-func estimateTokens(s string) int {
-	return len(s) / 4
-}
-
-// expandTilde replaces a leading ~ with the user's home directory.
-func expandTilde(path string) string {
-	if !strings.HasPrefix(path, "~") {
-		return path
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return path
-	}
-	if path == "~" {
-		return home
-	}
-	if strings.HasPrefix(path, "~/") || strings.HasPrefix(path, "~"+string(filepath.Separator)) {
-		return filepath.Join(home, path[2:])
-	}
-	return path
 }
 
 // truncateContent shortens a string to maxLen runes, appending "..."

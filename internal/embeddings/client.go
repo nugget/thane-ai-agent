@@ -103,7 +103,7 @@ func (c *Client) GenerateBatch(ctx context.Context, texts []string) ([][]float32
 
 // CosineSimilarity computes cosine similarity between two vectors.
 func CosineSimilarity(a, b []float32) float32 {
-	if len(a) != len(b) {
+	if len(a) != len(b) || len(a) == 0 {
 		return 0
 	}
 

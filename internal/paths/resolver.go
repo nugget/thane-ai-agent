@@ -35,7 +35,7 @@ func New(prefixes map[string]string) *Resolver {
 		if !strings.HasSuffix(key, ":") {
 			key += ":"
 		}
-		m[key] = expandHome(dir)
+		m[key] = ExpandHome(dir)
 		sorted = append(sorted, key)
 	}
 	// Sort by descending length so longer prefixes match first.
@@ -94,8 +94,8 @@ func (r *Resolver) Prefixes() []string {
 	return names
 }
 
-// expandHome replaces a leading ~ with the user's home directory.
-func expandHome(path string) string {
+// ExpandHome replaces a leading ~ with the user's home directory.
+func ExpandHome(path string) string {
 	if !strings.HasPrefix(path, "~") {
 		return path
 	}
