@@ -1,6 +1,7 @@
 package main
 
 import (
+	_ "embed"
 	"errors"
 	"fmt"
 	"io"
@@ -9,9 +10,22 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/nugget/thane-ai-agent/internal/defaults"
 	"github.com/nugget/thane-ai-agent/internal/talents"
 )
+
+//go:generate sh -c "cp ../../examples/config.example.yaml . && cp ../../examples/persona.example.md ."
+
+// configExampleYAML is the embedded default configuration file
+// (examples/config.example.yaml), written by thane init.
+//
+//go:embed config.example.yaml
+var configExampleYAML []byte
+
+// personaExampleMD is the embedded default persona file
+// (examples/persona.example.md), written by thane init.
+//
+//go:embed persona.example.md
+var personaExampleMD []byte
 
 // runInit initializes a Thane working directory with bundled defaults.
 // It creates the directory structure and writes default config, persona,
@@ -33,12 +47,12 @@ func runInit(w io.Writer, dir string) error {
 	}
 
 	// Write config.yaml from embedded default (0600 — may contain secrets).
-	if err := writeIfMissing(w, filepath.Join(absDir, "config.yaml"), defaults.ConfigYAML, 0o600); err != nil {
+	if err := writeIfMissing(w, filepath.Join(absDir, "config.yaml"), configExampleYAML, 0o600); err != nil {
 		return err
 	}
 
 	// Write persona.md from embedded default.
-	if err := writeIfMissing(w, filepath.Join(absDir, "persona.md"), defaults.PersonaMD, 0o644); err != nil {
+	if err := writeIfMissing(w, filepath.Join(absDir, "persona.md"), personaExampleMD, 0o644); err != nil {
 		return err
 	}
 

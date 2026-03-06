@@ -21,7 +21,7 @@ default:
 # Copy default files into embeddable positions for go:embed
 [group('build')]
 generate:
-    go generate ./internal/talents/ ./internal/defaults/
+    go generate ./internal/talents/ ./cmd/thane/
 
 # Build a binary into dist/ (defaults to current platform, or specify OS/ARCH)
 [group('build')]
