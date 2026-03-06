@@ -19,7 +19,7 @@ func (m *mockConversationProvider) GetConversations() ([]Conversation, error) {
 	return m.conversations, nil
 }
 
-// mockFactProvider returns test facts.
+// mockFactProvider returns test knowledge.
 type mockFactProvider struct {
 	facts []Fact
 }

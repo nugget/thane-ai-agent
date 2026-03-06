@@ -8,18 +8,16 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nugget/thane-ai-agent/internal/anticipation"
+	"github.com/nugget/thane-ai-agent/internal/awareness"
 	"github.com/nugget/thane-ai-agent/internal/buildinfo"
+	"github.com/nugget/thane-ai-agent/internal/channels/email"
 	"github.com/nugget/thane-ai-agent/internal/contacts"
-	"github.com/nugget/thane-ai-agent/internal/email"
-	"github.com/nugget/thane-ai-agent/internal/facts"
-	"github.com/nugget/thane-ai-agent/internal/fetch"
 	"github.com/nugget/thane-ai-agent/internal/homeassistant"
+	"github.com/nugget/thane-ai-agent/internal/knowledge"
 	"github.com/nugget/thane-ai-agent/internal/media"
 	"github.com/nugget/thane-ai-agent/internal/scheduler"
 	"github.com/nugget/thane-ai-agent/internal/search"
 	"github.com/nugget/thane-ai-agent/internal/usage"
-	"github.com/nugget/thane-ai-agent/internal/watchlist"
 )
 
 // Tool represents a callable tool.
@@ -38,14 +36,14 @@ type Registry struct {
 	tagIndex          map[string][]string // tag → tool names
 	ha                *homeassistant.Client
 	scheduler         *scheduler.Scheduler
-	factTools         *facts.Tools
+	factTools         *knowledge.Tools
 	contactTools      *contacts.Tools
-	anticipationTools *anticipation.Tools
+	anticipationTools *scheduler.AnticipationTools
 	emailTools        *email.Tools
 	forgeTools        forgeHandler
 	fileTools         *FileTools
 	shellExec         *ShellExec
-	watchlistStore    *watchlist.Store
+	watchlistStore    *awareness.WatchlistStore
 	tempFileStore     *TempFileStore
 	usageStore        *usage.Store
 	contentResolver   *ContentResolver
@@ -70,13 +68,13 @@ func NewRegistry(ha *homeassistant.Client, sched *scheduler.Scheduler) *Registry
 }
 
 // SetFactTools adds fact management tools to the registry.
-func (r *Registry) SetFactTools(ft *facts.Tools) {
+func (r *Registry) SetFactTools(ft *knowledge.Tools) {
 	r.factTools = ft
 	r.registerFactTools()
 }
 
 // SetAnticipationTools adds anticipation management tools to the registry.
-func (r *Registry) SetAnticipationTools(at *anticipation.Tools) {
+func (r *Registry) SetAnticipationTools(at *scheduler.AnticipationTools) {
 	r.anticipationTools = at
 	r.registerAnticipationTools()
 }
@@ -104,12 +102,12 @@ func (r *Registry) SetSearchManager(mgr *search.Manager) {
 }
 
 // SetFetcher adds the web_fetch tool to the registry.
-func (r *Registry) SetFetcher(f *fetch.Fetcher) {
+func (r *Registry) SetFetcher(f *search.Fetcher) {
 	r.Register(&Tool{
 		Name:        "web_fetch",
 		Description: "Fetch a web page and extract its readable text content. Use to read articles, documentation, or any web page. Complements web_search.",
-		Parameters:  fetch.ToolDefinition(),
-		Handler:     fetch.ToolHandler(f),
+		Parameters:  search.FetchToolDefinition(),
+		Handler:     search.FetchToolHandler(f),
 	})
 }
 

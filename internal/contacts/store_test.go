@@ -634,7 +634,7 @@ func TestResurrectSoftDeleted(t *testing.T) {
 func TestSemanticSearch(t *testing.T) {
 	store := newTestStore(t)
 
-	// Create contacts and set embeddings.
+	// Create contacts and set knowledge.
 	c1 := &Contact{Name: "Near Match", Kind: "person"}
 	created1, err := store.Upsert(c1)
 	if err != nil {

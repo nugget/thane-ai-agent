@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nugget/thane-ai-agent/internal/facts"
+	"github.com/nugget/thane-ai-agent/internal/knowledge"
 )
 
 // mockArchiveSearcher implements ArchiveSearcher for testing.
@@ -57,7 +57,7 @@ func TestArchiveContextProvider_GetContext(t *testing.T) {
 		}
 		p := NewArchiveContextProvider(mock, 3, 4000, nil)
 
-		ctx := facts.WithSubjects(context.Background(), []string{"entity:switch.pool_heater"})
+		ctx := knowledge.WithSubjects(context.Background(), []string{"entity:switch.pool_heater"})
 		got, err := p.GetContext(ctx, "")
 		if err != nil {
 			t.Fatalf("GetContext: %v", err)
@@ -146,7 +146,7 @@ func TestArchiveContextProvider_GetContext(t *testing.T) {
 		mock := &mockArchiveSearcher{results: nil}
 		p := NewArchiveContextProvider(mock, 3, 4000, nil)
 
-		ctx := facts.WithSubjects(context.Background(), []string{"entity:sensor.fake"})
+		ctx := knowledge.WithSubjects(context.Background(), []string{"entity:sensor.fake"})
 		got, err := p.GetContext(ctx, "")
 		if err != nil {
 			t.Fatalf("GetContext: %v", err)
@@ -160,7 +160,7 @@ func TestArchiveContextProvider_GetContext(t *testing.T) {
 		mock := &mockArchiveSearcher{err: fmt.Errorf("database locked")}
 		p := NewArchiveContextProvider(mock, 3, 4000, nil)
 
-		ctx := facts.WithSubjects(context.Background(), []string{"entity:light.office"})
+		ctx := knowledge.WithSubjects(context.Background(), []string{"entity:light.office"})
 		got, err := p.GetContext(ctx, "")
 		if err != nil {
 			t.Fatalf("expected nil error on soft fail, got: %v", err)
@@ -182,7 +182,7 @@ func TestArchiveContextProvider_GetContext(t *testing.T) {
 		// Very tight budget: only room for heading + ~1 result.
 		p := NewArchiveContextProvider(mock, 5, 200, nil)
 
-		ctx := facts.WithSubjects(context.Background(), []string{"entity:light.office"})
+		ctx := knowledge.WithSubjects(context.Background(), []string{"entity:light.office"})
 		got, err := p.GetContext(ctx, "")
 		if err != nil {
 			t.Fatalf("GetContext: %v", err)
@@ -199,7 +199,7 @@ func TestArchiveContextProvider_GetContext(t *testing.T) {
 		mock := &mockArchiveSearcher{results: nil}
 		p := NewArchiveContextProvider(mock, 3, 4000, nil)
 
-		ctx := facts.WithSubjects(context.Background(), []string{
+		ctx := knowledge.WithSubjects(context.Background(), []string{
 			"entity:light.office",
 			"zone:kitchen",
 			"contact:dan@example.com",
@@ -232,7 +232,7 @@ func TestArchiveContextProvider_GetContext(t *testing.T) {
 		mock := &mockArchiveSearcher{results: nil}
 		p := NewArchiveContextProvider(mock, 3, 4000, nil)
 
-		ctx := facts.WithSubjects(context.Background(), []string{
+		ctx := knowledge.WithSubjects(context.Background(), []string{
 			"entity:light.office",
 			"entity:light.office",
 		})
@@ -247,7 +247,7 @@ func TestArchiveContextProvider_GetContext(t *testing.T) {
 		mock := &mockArchiveSearcher{results: nil}
 		p := NewArchiveContextProvider(mock, 7, 4000, nil)
 
-		ctx := facts.WithSubjects(context.Background(), []string{"entity:foo"})
+		ctx := knowledge.WithSubjects(context.Background(), []string{"entity:foo"})
 		_, _ = p.GetContext(ctx, "")
 
 		if mock.lastLimit != 7 {
@@ -270,7 +270,7 @@ func TestArchiveContextProvider_GetContext(t *testing.T) {
 		}
 		p := NewArchiveContextProvider(mock, 3, 4000, nil)
 
-		ctx := facts.WithSubjects(context.Background(), []string{"entity:meaning.of.life"})
+		ctx := knowledge.WithSubjects(context.Background(), []string{"entity:meaning.of.life"})
 		got, err := p.GetContext(ctx, "")
 		if err != nil {
 			t.Fatalf("GetContext: %v", err)
@@ -294,7 +294,7 @@ func TestArchiveContextProvider_GetContext(t *testing.T) {
 		}
 		p := NewArchiveContextProvider(mock, 3, 4000, nil)
 
-		ctx := facts.WithSubjects(context.Background(), []string{"entity:test"})
+		ctx := knowledge.WithSubjects(context.Background(), []string{"entity:test"})
 		got, _ := p.GetContext(ctx, "")
 		if !strings.Contains(got, "**[assistant] Important finding.**") {
 			t.Errorf("matched message should be bolded, got:\n%s", got)

@@ -10,7 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nugget/thane-ai-agent/internal/database"
-	"github.com/nugget/thane-ai-agent/internal/embeddings"
+	"github.com/nugget/thane-ai-agent/internal/knowledge"
 )
 
 // SQL fragments for query building.
@@ -513,7 +513,7 @@ func (s *Store) FindByTrustZone(zone string) ([]*Contact, error) {
 
 // SetEmbedding updates a contact's embedding vector.
 func (s *Store) SetEmbedding(id uuid.UUID, embedding []float32) error {
-	blob := embeddings.EncodeEmbedding(embedding)
+	blob := knowledge.EncodeEmbedding(embedding)
 	_, err := s.db.Exec(`UPDATE contacts SET embedding = ? WHERE id = ?`, blob, id.String())
 	return err
 }
@@ -543,7 +543,7 @@ func (s *Store) SemanticSearch(queryEmbedding []float32, limit int) ([]*Contact,
 			continue
 		}
 		if len(c.Embedding) > 0 {
-			sim := embeddings.CosineSimilarity(queryEmbedding, c.Embedding)
+			sim := knowledge.CosineSimilarity(queryEmbedding, c.Embedding)
 			scores = append(scores, scored{contact: c, score: sim})
 		}
 	}
@@ -572,7 +572,7 @@ func (s *Store) SemanticSearch(queryEmbedding []float32, limit int) ([]*Contact,
 	return resultContacts, resultScores, nil
 }
 
-// GetContactsWithoutEmbeddings returns contacts that need embeddings.
+// GetContactsWithoutEmbeddings returns contacts that need knowledge.
 func (s *Store) GetContactsWithoutEmbeddings() ([]*Contact, error) {
 	rows, err := s.db.Query(
 		`SELECT ` + contactColumns + ` FROM contacts WHERE ` + activeFilter + ` AND embedding IS NULL`)
@@ -654,7 +654,7 @@ func (s *Store) scanContactWithEmbedding(rows *sql.Rows) (*Contact, error) {
 		return nil, err
 	}
 
-	c.Embedding = embeddings.DecodeEmbedding(embeddingBlob)
+	c.Embedding = knowledge.DecodeEmbedding(embeddingBlob)
 	return populateContact(&c, idStr, relationship, summary, details, lastInteraction, createdStr, updatedStr)
 }
 

@@ -22,27 +22,41 @@ just fmt-check          # gofmt check
 cmd/thane/              Main binary (CLI, server setup, wiring)
 internal/
   agent/                Agent loop (context assembly → planning → tool execution → response)
-  api/                  HTTP API server (OpenAI-compatible + Ollama-compatible)
-  httpkit/              Centralized HTTP client construction (all outbound HTTP goes through here)
-  homeassistant/        HA REST + WebSocket client
-  llm/                  LLM providers (Anthropic, Ollama) and model routing
-  search/               Web search providers (SearXNG, Brave) with pluggable interface
-  fetch/                Web page content extraction
-  memory/               Conversation storage and compaction (SQLite)
-  facts/                Semantic fact store with embeddings
-  checkpoint/           State snapshot and restore
-  conditions/           Current Conditions system prompt section (time, host, version)
-  embeddings/           Embedding generation via Ollama
-  tools/                Tool registry and implementations (HA, shell, files, search, fetch)
-  config/               Configuration loading and validation
-  talents/              Markdown-based agent behavior guidance
-  web/                  Built-in web chat UI
+  awareness/            System prompt context providers (conditions, state window, watchlist)
   buildinfo/            Version injection via ldflags
-  router/               Model selection routing
-  scheduler/            Time-based task scheduling
-  anticipation/         Event-based trigger system
-  ingest/               Markdown document ingestion
+  channels/
+    email/              Email messaging (IMAP/SMTP)
+    mqtt/               MQTT for HA device discovery and sensors
+    signal/             Signal messaging bridge
+  checkpoint/           State snapshot and restore
+  config/               Configuration loading and validation
   connwatch/            Service health monitoring with exponential backoff
+  contacts/             Contact directory and presence tracking
+  database/             SQLite helpers
+  delegate/             Delegate task execution
+  events/               In-process event bus
+  forge/                GitHub/Forgejo integration
+  homeassistant/        HA REST + WebSocket client
+  httpkit/              Centralized HTTP client construction (all outbound HTTP goes through here)
+  knowledge/            Semantic fact store, embeddings, and document ingestion
+  llm/                  LLM providers (Anthropic, Ollama) and model routing
+  mcp/                  MCP client and tool bridge
+  media/                Media transcript extraction and RSS/Atom feed polling
+  memory/               Conversation storage, compaction, episodic memory, session summarizer
+  metacognitive/        Autonomous self-reflection loop
+  opstate/              Operational state KV store
+  paths/                Path resolution
+  prompts/              Prompt templates
+  router/               Model selection routing
+  scheduler/            Time-based task scheduling and anticipation matching
+  search/               Web search providers and page content extraction
+  server/
+    api/                HTTP API server (OpenAI-compatible + Ollama-compatible)
+    web/                Built-in web dashboard and chat UI
+  talents/              Markdown-based agent behavior guidance
+  tools/                Tool registry and implementations
+  unifi/                UniFi network integration
+  usage/                Token usage and cost tracking
 ```
 
 ## Code Conventions

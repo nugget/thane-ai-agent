@@ -11,23 +11,23 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/agent"
-	"github.com/nugget/thane-ai-agent/internal/anticipation"
-	"github.com/nugget/thane-ai-agent/internal/facts"
 	"github.com/nugget/thane-ai-agent/internal/homeassistant"
+	"github.com/nugget/thane-ai-agent/internal/knowledge"
 	"github.com/nugget/thane-ai-agent/internal/router"
+	"github.com/nugget/thane-ai-agent/internal/scheduler"
 )
 
 // mockMatcher records Match calls and returns canned results. It also
 // implements OnCooldown and MarkFired for the updated anticipationMatcher
 // interface. By default, nothing is on cooldown.
 type mockMatcher struct {
-	matched    []*anticipation.Anticipation
+	matched    []*scheduler.Anticipation
 	err        error
 	onCooldown map[string]bool // anticipation ID → on cooldown
 	fired      []string        // IDs passed to MarkFired
 }
 
-func (m *mockMatcher) Match(_ anticipation.WakeContext) ([]*anticipation.Anticipation, error) {
+func (m *mockMatcher) Match(_ scheduler.WakeContext) ([]*scheduler.Anticipation, error) {
 	return m.matched, m.err
 }
 
@@ -70,11 +70,11 @@ func (r *ctxCaptureRunner) Run(ctx context.Context, _ *agent.Request, _ agent.St
 
 // mockProvider records SetWakeContext calls.
 type mockProvider struct {
-	lastCtx anticipation.WakeContext
+	lastCtx scheduler.WakeContext
 	called  bool
 }
 
-func (p *mockProvider) SetWakeContext(ctx anticipation.WakeContext) {
+func (p *mockProvider) SetWakeContext(ctx scheduler.WakeContext) {
 	p.lastCtx = ctx
 	p.called = true
 }
@@ -134,7 +134,7 @@ func discardLogger() *slog.Logger {
 
 func TestWakeBridge_MatchTriggersRun(t *testing.T) {
 	matcher := &mockMatcher{
-		matched: []*anticipation.Anticipation{{
+		matched: []*scheduler.Anticipation{{
 			ID:          "ant-1",
 			Description: "Front door opened",
 			Context:     "Check if anyone is home.",
@@ -202,7 +202,7 @@ func TestWakeBridge_MatchTriggersRun(t *testing.T) {
 
 func TestWakeBridge_SameStateSuppressed(t *testing.T) {
 	matcher := &mockMatcher{
-		matched: []*anticipation.Anticipation{{
+		matched: []*scheduler.Anticipation{{
 			ID:          "ant-suppress",
 			Description: "Should not fire",
 		}},
@@ -254,7 +254,7 @@ func TestWakeBridge_NoMatchNoRun(t *testing.T) {
 
 func TestWakeBridge_CooldownPreventsRetrigger(t *testing.T) {
 	matcher := &mockMatcher{
-		matched: []*anticipation.Anticipation{{
+		matched: []*scheduler.Anticipation{{
 			ID:          "ant-cool",
 			Description: "Test cooldown",
 		}},
@@ -292,7 +292,7 @@ func TestWakeBridge_CooldownPreventsRetrigger(t *testing.T) {
 
 func TestWakeBridge_CooldownExpires(t *testing.T) {
 	matcher := &mockMatcher{
-		matched: []*anticipation.Anticipation{{
+		matched: []*scheduler.Anticipation{{
 			ID:          "ant-expire",
 			Description: "Test expiry",
 		}},
@@ -334,7 +334,7 @@ func TestWakeBridge_CooldownExpires(t *testing.T) {
 
 func TestWakeBridge_MarkFiredCalled(t *testing.T) {
 	matcher := &mockMatcher{
-		matched: []*anticipation.Anticipation{{
+		matched: []*scheduler.Anticipation{{
 			ID:          "ant-fire",
 			Description: "Test fire tracking",
 		}},
@@ -379,7 +379,7 @@ func TestWakeBridge_MatchErrorContinues(t *testing.T) {
 
 func TestWakeBridge_RunnerErrorContinues(t *testing.T) {
 	matcher := &mockMatcher{
-		matched: []*anticipation.Anticipation{{
+		matched: []*scheduler.Anticipation{{
 			ID:          "ant-err",
 			Description: "Runner will fail",
 		}},
@@ -404,7 +404,7 @@ func TestWakeBridge_RunnerErrorContinues(t *testing.T) {
 
 func TestWakeBridge_MultipleMatches(t *testing.T) {
 	matcher := &mockMatcher{
-		matched: []*anticipation.Anticipation{
+		matched: []*scheduler.Anticipation{
 			{ID: "ant-a", Description: "First"},
 			{ID: "ant-b", Description: "Second"},
 		},
@@ -439,7 +439,7 @@ func TestWakeBridge_MultipleMatches(t *testing.T) {
 func TestFormatWakeMessage(t *testing.T) {
 	tests := []struct {
 		name       string
-		ant        *anticipation.Anticipation
+		ant        *scheduler.Anticipation
 		entityID   string
 		oldState   string
 		newState   string
@@ -449,7 +449,7 @@ func TestFormatWakeMessage(t *testing.T) {
 	}{
 		{
 			name: "with context and entity states",
-			ant: &anticipation.Anticipation{
+			ant: &scheduler.Anticipation{
 				Description: "Front door opened after dark",
 				Context:     "Send a notification to Dan.",
 			},
@@ -470,7 +470,7 @@ func TestFormatWakeMessage(t *testing.T) {
 		},
 		{
 			name: "without context",
-			ant: &anticipation.Anticipation{
+			ant: &scheduler.Anticipation{
 				Description: "Dan arrived home",
 				Context:     "",
 			},
@@ -488,7 +488,7 @@ func TestFormatWakeMessage(t *testing.T) {
 		},
 		{
 			name: "with context but no entity states",
-			ant: &anticipation.Anticipation{
+			ant: &scheduler.Anticipation{
 				Description: "Light turned on",
 				Context:     "Check if it's daytime.",
 			},
@@ -550,7 +550,7 @@ func TestFetchEntityContext_WithEntities(t *testing.T) {
 		ctx:    context.Background(),
 	}
 
-	a := &anticipation.Anticipation{
+	a := &scheduler.Anticipation{
 		ContextEntities: []string{"sensor.temp", "light.kitchen"},
 	}
 
@@ -595,7 +595,7 @@ func TestFetchEntityContext_Deduplication(t *testing.T) {
 	}
 
 	// Trigger entity is already in the context entities list.
-	a := &anticipation.Anticipation{
+	a := &scheduler.Anticipation{
 		ContextEntities: []string{"person.dan", "sensor.temp"},
 	}
 
@@ -614,7 +614,7 @@ func TestFetchEntityContext_NilHA(t *testing.T) {
 		ctx:    context.Background(),
 	}
 
-	a := &anticipation.Anticipation{
+	a := &scheduler.Anticipation{
 		ContextEntities: []string{"sensor.temp"},
 	}
 
@@ -642,7 +642,7 @@ func TestFetchEntityContext_FetchError(t *testing.T) {
 	}
 
 	// sensor.missing does not exist in the stub.
-	a := &anticipation.Anticipation{
+	a := &scheduler.Anticipation{
 		ContextEntities: []string{"sensor.temp", "sensor.missing"},
 	}
 
@@ -670,7 +670,7 @@ func TestFetchEntityContext_NoEntities(t *testing.T) {
 		ctx:    context.Background(),
 	}
 
-	a := &anticipation.Anticipation{}
+	a := &scheduler.Anticipation{}
 
 	result := b.fetchEntityContext(a, "")
 	if result != "" {
@@ -680,7 +680,7 @@ func TestFetchEntityContext_NoEntities(t *testing.T) {
 
 func TestWakeBridge_UnavailableStateSuppressed(t *testing.T) {
 	matcher := &mockMatcher{
-		matched: []*anticipation.Anticipation{{
+		matched: []*scheduler.Anticipation{{
 			ID:          "ant-unavail",
 			Description: "Should not fire",
 		}},
@@ -718,7 +718,7 @@ func TestWakeBridge_UnavailableStateSuppressed(t *testing.T) {
 func TestWakeBridge_OneShotAutoResolves(t *testing.T) {
 	resolver := &mockResolver{}
 	matcher := &mockMatcher{
-		matched: []*anticipation.Anticipation{{
+		matched: []*scheduler.Anticipation{{
 			ID:          "ant-oneshot",
 			Description: "One-shot event",
 			Context:     "Do something once.",
@@ -767,7 +767,7 @@ func TestWakeBridge_OneShotAutoResolves(t *testing.T) {
 func TestWakeBridge_RecurringExcludesLifecycleTools(t *testing.T) {
 	resolver := &mockResolver{}
 	matcher := &mockMatcher{
-		matched: []*anticipation.Anticipation{{
+		matched: []*scheduler.Anticipation{{
 			ID:          "ant-recurring",
 			Description: "Recurring event",
 			Context:     "Do something every time.",
@@ -827,7 +827,7 @@ func TestWakeBridge_RecurringExcludesLifecycleTools(t *testing.T) {
 func TestWakeBridge_AnticipationRoutingHints(t *testing.T) {
 	localOnly := false
 	matcher := &mockMatcher{
-		matched: []*anticipation.Anticipation{{
+		matched: []*scheduler.Anticipation{{
 			ID:           "ant-hints",
 			Description:  "Custom routed wake",
 			Context:      "Use specific model.",
@@ -877,7 +877,7 @@ func TestWakeBridge_DefaultRoutingHints(t *testing.T) {
 	// Anticipation with zero-value routing fields should use defaults:
 	// local_only=true, quality_floor=6, no model_preference.
 	matcher := &mockMatcher{
-		matched: []*anticipation.Anticipation{{
+		matched: []*scheduler.Anticipation{{
 			ID:          "ant-defaults",
 			Description: "Default routed wake",
 			Context:     "Use default routing.",
@@ -909,7 +909,7 @@ func TestWakeBridge_DefaultRoutingHints(t *testing.T) {
 }
 
 func TestFormatWakeMessage_RecurringNote(t *testing.T) {
-	a := &anticipation.Anticipation{
+	a := &scheduler.Anticipation{
 		Description: "Test recurring",
 		Context:     "Some instructions.",
 		Recurring:   true,
@@ -929,7 +929,7 @@ func TestFormatWakeMessage_RecurringNote(t *testing.T) {
 
 func TestWakeBridge_SubjectsInjected(t *testing.T) {
 	matcher := &mockMatcher{
-		matched: []*anticipation.Anticipation{{
+		matched: []*scheduler.Anticipation{{
 			ID:          "ant-subj",
 			Description: "Driveway motion",
 		}},
@@ -952,7 +952,7 @@ func TestWakeBridge_SubjectsInjected(t *testing.T) {
 
 	select {
 	case ctx := <-runner.ctxCh:
-		subjects := facts.SubjectsFromContext(ctx)
+		subjects := knowledge.SubjectsFromContext(ctx)
 		if len(subjects) == 0 {
 			t.Fatal("expected subjects in context, got none")
 		}
@@ -974,7 +974,7 @@ func TestWakeBridge_SubjectsInjected(t *testing.T) {
 
 func TestWakeBridge_SubjectsIncludeContextEntities(t *testing.T) {
 	matcher := &mockMatcher{
-		matched: []*anticipation.Anticipation{{
+		matched: []*scheduler.Anticipation{{
 			ID:              "ant-ctx-subj",
 			Description:     "Door opened",
 			ContextEntities: []string{"person.dan", "sensor.alarm"},
@@ -998,7 +998,7 @@ func TestWakeBridge_SubjectsIncludeContextEntities(t *testing.T) {
 
 	select {
 	case ctx := <-runner.ctxCh:
-		subjects := facts.SubjectsFromContext(ctx)
+		subjects := knowledge.SubjectsFromContext(ctx)
 		want := map[string]bool{
 			"entity:binary_sensor.front_door": true,
 			"entity:person.dan":               true,

@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"log/slog"
 
-	"github.com/nugget/thane-ai-agent/internal/watchlist"
+	"github.com/nugget/thane-ai-agent/internal/awareness"
 )
 
 // SetWatchlistStore adds the add_context_entity and remove_context_entity
 // tools to the registry.
-func (r *Registry) SetWatchlistStore(store *watchlist.Store) {
+func (r *Registry) SetWatchlistStore(store *awareness.WatchlistStore) {
 	r.watchlistStore = store
 	r.registerWatchlistTools()
 }
