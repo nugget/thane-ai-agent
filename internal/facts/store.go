@@ -3,15 +3,14 @@ package facts
 
 import (
 	"database/sql"
-	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"math"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/nugget/thane-ai-agent/internal/embeddings"
 )
 
 // Category groups related facts.
@@ -550,7 +549,7 @@ func (s *Store) scanFactRow(rows *sql.Rows) (*Fact, error) {
 
 // SetEmbedding updates a fact's embedding vector.
 func (s *Store) SetEmbedding(id uuid.UUID, embedding []float32) error {
-	blob := encodeEmbedding(embedding)
+	blob := embeddings.EncodeEmbedding(embedding)
 	_, err := s.db.Exec(`UPDATE facts SET embedding = ? WHERE id = ?`, blob, id.String())
 	return err
 }
@@ -594,7 +593,7 @@ func (s *Store) SemanticSearch(queryEmbedding []float32, limit int) ([]*Fact, []
 	scores := make([]scored, 0, len(facts))
 	for _, f := range facts {
 		if len(f.Embedding) > 0 {
-			sim := cosineSimilarity(queryEmbedding, f.Embedding)
+			sim := embeddings.CosineSimilarity(queryEmbedding, f.Embedding)
 			scores = append(scores, scored{fact: f, score: sim})
 		}
 	}
@@ -663,54 +662,10 @@ func (s *Store) scanFactWithEmbedding(rows *sql.Rows) (*Fact, error) {
 	if refRaw.Valid {
 		f.Ref = refRaw.String
 	}
-	f.Embedding = decodeEmbedding(embeddingBlob)
+	f.Embedding = embeddings.DecodeEmbedding(embeddingBlob)
 	f.CreatedAt, _ = time.Parse(time.RFC3339, createdStr)
 	f.UpdatedAt, _ = time.Parse(time.RFC3339, updatedStr)
 	f.AccessedAt, _ = time.Parse(time.RFC3339, accessedStr)
 
 	return &f, nil
-}
-
-// encodeEmbedding converts float32 slice to bytes for storage.
-func encodeEmbedding(embedding []float32) []byte {
-	if len(embedding) == 0 {
-		return nil
-	}
-	buf := make([]byte, len(embedding)*4)
-	for i, v := range embedding {
-		binary.LittleEndian.PutUint32(buf[i*4:], math.Float32bits(v))
-	}
-	return buf
-}
-
-// decodeEmbedding converts bytes back to float32 slice.
-func decodeEmbedding(data []byte) []float32 {
-	if len(data) == 0 {
-		return nil
-	}
-	result := make([]float32, len(data)/4)
-	for i := range result {
-		result[i] = math.Float32frombits(binary.LittleEndian.Uint32(data[i*4:]))
-	}
-	return result
-}
-
-// cosineSimilarity computes similarity between two vectors.
-func cosineSimilarity(a, b []float32) float32 {
-	if len(a) != len(b) || len(a) == 0 {
-		return 0
-	}
-
-	var dotProduct, normA, normB float32
-	for i := range a {
-		dotProduct += a[i] * b[i]
-		normA += a[i] * a[i]
-		normB += b[i] * b[i]
-	}
-
-	if normA == 0 || normB == 0 {
-		return 0
-	}
-
-	return dotProduct / (float32(math.Sqrt(float64(normA))) * float32(math.Sqrt(float64(normB))))
 }

@@ -3,14 +3,13 @@ package contacts
 
 import (
 	"database/sql"
-	"encoding/binary"
 	"fmt"
 	"log/slog"
-	"math"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/nugget/thane-ai-agent/internal/embeddings"
 )
 
 // SQL fragments for query building.
@@ -600,7 +599,7 @@ func (s *Store) FindByTrustZone(zone string) ([]*Contact, error) {
 
 // SetEmbedding updates a contact's embedding vector.
 func (s *Store) SetEmbedding(id uuid.UUID, embedding []float32) error {
-	blob := encodeEmbedding(embedding)
+	blob := embeddings.EncodeEmbedding(embedding)
 	_, err := s.db.Exec(`UPDATE contacts SET embedding = ? WHERE id = ?`, blob, id.String())
 	return err
 }
@@ -630,7 +629,7 @@ func (s *Store) SemanticSearch(queryEmbedding []float32, limit int) ([]*Contact,
 			continue
 		}
 		if len(c.Embedding) > 0 {
-			sim := cosineSimilarity(queryEmbedding, c.Embedding)
+			sim := embeddings.CosineSimilarity(queryEmbedding, c.Embedding)
 			scores = append(scores, scored{contact: c, score: sim})
 		}
 	}
@@ -741,7 +740,7 @@ func (s *Store) scanContactWithEmbedding(rows *sql.Rows) (*Contact, error) {
 		return nil, err
 	}
 
-	c.Embedding = decodeEmbedding(embeddingBlob)
+	c.Embedding = embeddings.DecodeEmbedding(embeddingBlob)
 	return populateContact(&c, idStr, relationship, summary, details, lastInteraction, createdStr, updatedStr)
 }
 
@@ -812,49 +811,6 @@ func sanitizeFTS5Query(query string) string {
 		quoted[i] = `"` + w + `"`
 	}
 	return strings.Join(quoted, " OR ")
-}
-
-// --- embedding helpers ---
-
-func encodeEmbedding(embedding []float32) []byte {
-	if len(embedding) == 0 {
-		return nil
-	}
-	buf := make([]byte, len(embedding)*4)
-	for i, v := range embedding {
-		binary.LittleEndian.PutUint32(buf[i*4:], math.Float32bits(v))
-	}
-	return buf
-}
-
-func decodeEmbedding(data []byte) []float32 {
-	if len(data) == 0 {
-		return nil
-	}
-	result := make([]float32, len(data)/4)
-	for i := range result {
-		result[i] = math.Float32frombits(binary.LittleEndian.Uint32(data[i*4:]))
-	}
-	return result
-}
-
-func cosineSimilarity(a, b []float32) float32 {
-	if len(a) != len(b) || len(a) == 0 {
-		return 0
-	}
-
-	var dotProduct, normA, normB float32
-	for i := range a {
-		dotProduct += a[i] * b[i]
-		normA += a[i] * a[i]
-		normB += b[i] * b[i]
-	}
-
-	if normA == 0 || normB == 0 {
-		return 0
-	}
-
-	return dotProduct / (float32(math.Sqrt(float64(normA))) * float32(math.Sqrt(float64(normB))))
 }
 
 // --- SQL helpers ---

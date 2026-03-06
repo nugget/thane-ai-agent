@@ -108,14 +108,6 @@ type Config struct {
 	// Workspace configures the agent's sandboxed file system access.
 	Workspace WorkspaceConfig `yaml:"workspace"`
 
-	// KnowledgeBase configures the knowledge base directory for
-	// long-form reference documents linked from facts.
-	//
-	// Deprecated: Use Paths instead. This field is migrated to
-	// Paths["kb"] in applyDefaults and will be removed in a future
-	// release.
-	KnowledgeBase KnowledgeBaseConfig `yaml:"knowledge_base"`
-
 	// Paths maps named prefixes to directory paths for file resolution.
 	// Each entry creates a prefix (e.g., "kb" → kb:path resolves to
 	// the configured directory). Supports ~ expansion at resolver
@@ -489,10 +481,6 @@ type AgentConfig struct {
 	// is applied (thane_delegate plus lightweight memory tools).
 	OrchestratorTools []string `yaml:"orchestrator_tools"`
 
-	// DeprecatedIter0Tools is the legacy name for OrchestratorTools.
-	// Kept for backward compatibility with existing config files.
-	DeprecatedIter0Tools []string `yaml:"iter0_tools"`
-
 	// DelegationRequired enables orchestrator tool gating. When false
 	// (the default), all tools are available on every iteration.
 	DelegationRequired bool `yaml:"delegation_required"`
@@ -549,17 +537,6 @@ type WorkspaceConfig struct {
 	// but not write to. Useful for giving the agent access to reference
 	// material outside its workspace.
 	ReadOnlyDirs []string `yaml:"read_only_dirs"`
-}
-
-// KnowledgeBaseConfig configures the knowledge base directory for
-// long-form reference documents. Facts can link to KB pages via the
-// ref field, and file tools resolve kb: prefixed paths against this
-// directory.
-type KnowledgeBaseConfig struct {
-	// Path is the root directory for knowledge base files. When set,
-	// file tools resolve "kb:foo.md" to files in this directory.
-	// Should be within the workspace for write access.
-	Path string `yaml:"path"`
 }
 
 // MQTTConfig configures the MQTT connection for Home Assistant device
@@ -1150,23 +1127,6 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Metacognitive.SupervisorRouter.QualityFloor == 0 {
 		c.Metacognitive.SupervisorRouter.QualityFloor = 8
-	}
-
-	// Backward compat: migrate deprecated iter0_tools → orchestrator_tools.
-	// Always clear the deprecated field; only copy if the new field is empty.
-	if len(c.Agent.DeprecatedIter0Tools) > 0 {
-		if len(c.Agent.OrchestratorTools) == 0 {
-			c.Agent.OrchestratorTools = c.Agent.DeprecatedIter0Tools
-		}
-		c.Agent.DeprecatedIter0Tools = nil
-	}
-
-	// Backward compat: migrate deprecated knowledge_base.path → paths["kb"].
-	if c.KnowledgeBase.Path != "" && (c.Paths == nil || c.Paths["kb"] == "") {
-		if c.Paths == nil {
-			c.Paths = make(map[string]string)
-		}
-		c.Paths["kb"] = c.KnowledgeBase.Path
 	}
 
 	if c.Agent.DelegationRequired && len(c.Agent.OrchestratorTools) == 0 {

@@ -763,11 +763,6 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		resolver = paths.New(cfg.Paths)
 		logger.Info("path prefixes registered", "prefixes", resolver.Prefixes())
 	}
-	if cfg.KnowledgeBase.Path != "" { //nolint:staticcheck // intentional reference for deprecation warning
-		logger.Warn("knowledge_base.path is deprecated; migrate to paths: { kb: \"...\" }",
-			"path", cfg.KnowledgeBase.Path) //nolint:staticcheck // intentional reference for deprecation warning
-	}
-
 	if len(cfg.Context.InjectFiles) > 0 {
 		var resolved []string
 		for _, path := range cfg.Context.InjectFiles {

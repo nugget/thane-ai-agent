@@ -3,7 +3,6 @@ package contacts
 import (
 	"database/sql"
 	"log/slog"
-	"math"
 	"os"
 	"strings"
 	"testing"
@@ -629,64 +628,6 @@ func TestResurrectSoftDeleted(t *testing.T) {
 	}
 	if got.Summary != "Back from the dead" {
 		t.Errorf("Summary = %q, want %q", got.Summary, "Back from the dead")
-	}
-}
-
-func TestEmbeddingEncodeDecode(t *testing.T) {
-	original := []float32{1.5, -2.3, 0.0, 3.14159, -0.001}
-
-	encoded := encodeEmbedding(original)
-	decoded := decodeEmbedding(encoded)
-
-	if len(decoded) != len(original) {
-		t.Fatalf("length mismatch: got %d, want %d", len(decoded), len(original))
-	}
-	for i := range original {
-		if decoded[i] != original[i] {
-			t.Errorf("value %d: got %f, want %f", i, decoded[i], original[i])
-		}
-	}
-}
-
-func TestEmbeddingEncodeEmpty(t *testing.T) {
-	if encoded := encodeEmbedding(nil); encoded != nil {
-		t.Errorf("expected nil for nil input, got %v", encoded)
-	}
-	if encoded := encodeEmbedding([]float32{}); encoded != nil {
-		t.Errorf("expected nil for empty input, got %v", encoded)
-	}
-}
-
-func TestEmbeddingDecodeEmpty(t *testing.T) {
-	if decoded := decodeEmbedding(nil); decoded != nil {
-		t.Errorf("expected nil for nil input, got %v", decoded)
-	}
-	if decoded := decodeEmbedding([]byte{}); decoded != nil {
-		t.Errorf("expected nil for empty input, got %v", decoded)
-	}
-}
-
-func TestCosineSimilarity(t *testing.T) {
-	tests := []struct {
-		name     string
-		a, b     []float32
-		expected float32
-	}{
-		{"identical vectors", []float32{1, 0, 0}, []float32{1, 0, 0}, 1.0},
-		{"orthogonal vectors", []float32{1, 0, 0}, []float32{0, 1, 0}, 0.0},
-		{"opposite vectors", []float32{1, 0, 0}, []float32{-1, 0, 0}, -1.0},
-		{"different lengths", []float32{1, 2}, []float32{1, 2, 3}, 0.0},
-		{"zero vector", []float32{0, 0, 0}, []float32{1, 2, 3}, 0.0},
-		{"empty", []float32{}, []float32{}, 0.0},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got := cosineSimilarity(tc.a, tc.b)
-			if math.Abs(float64(got-tc.expected)) > 0.0001 {
-				t.Errorf("got %f, want %f", got, tc.expected)
-			}
-		})
 	}
 }
 
