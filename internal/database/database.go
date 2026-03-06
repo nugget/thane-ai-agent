@@ -29,7 +29,8 @@ func HasColumn(db *sql.DB, table, column string) bool {
 
 // AddColumn idempotently adds a column to an existing table. If the
 // column already exists the call is a no-op. The typedef parameter is
-// the SQL type and optional constraints (e.g. "TEXT NOT NULL DEFAULT ”").
+// the SQL type and optional constraints, for example "TEXT" or
+// "INTEGER DEFAULT 0".
 func AddColumn(db *sql.DB, table, column, typedef string) error {
 	if HasColumn(db, table, column) {
 		return nil

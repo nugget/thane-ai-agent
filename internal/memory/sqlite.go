@@ -143,6 +143,10 @@ func (s *SQLiteStore) migrate() error {
 		{"messages", "archived_at", "TIMESTAMP"},
 		{"messages", "archive_reason", "TEXT"},
 		{"messages", "iteration_index", "INTEGER"},
+		{"tool_calls", "session_id", "TEXT"},
+		{"tool_calls", "status", "TEXT DEFAULT 'active' CHECK (status IN ('active', 'archived'))"},
+		{"tool_calls", "archived_at", "TIMESTAMP"},
+		{"tool_calls", "iteration_index", "INTEGER"},
 	} {
 		if err := database.AddColumn(s.db, col.table, col.name, col.typedef); err != nil {
 			return err
