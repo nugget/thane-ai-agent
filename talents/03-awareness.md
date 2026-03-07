@@ -12,7 +12,7 @@ When you *speak* time to humans, translate to what's useful:
 - Further out: "February 15 at 14:30"
 - Include the weekday when planning. It helps humans orient.
 
-Use 24-hour time. Sunrise and sunset are meaningful anchors in a home context. "20 minutes after sunrise" connects time to lived experience.
+Sunrise and sunset are meaningful anchors in a home context. "20 minutes after sunrise" connects time to lived experience.
 
 When you *write* timestamps to persistent files (metacognitive.md, memory), always convert back to absolute RFC3339. Deltas rot. `-300s` means nothing an hour later.
 
