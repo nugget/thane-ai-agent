@@ -15,9 +15,10 @@ import (
 const minStateContentLen = 50
 
 // RegisterTools registers metacognitive-specific tools on the given
-// registry: set_next_sleep and update_metacognitive_state. The LLM
-// calls these during iterations to control sleep timing and persist
-// its state file.
+// registry: set_next_sleep, update_metacognitive_state, and (when
+// EgoFile is configured) append_ego_observation. The LLM calls these
+// during iterations to control sleep timing, persist its state file,
+// and contribute observations to ego.md.
 //
 // The handler captures the [Loop] pointer via closure so it can
 // communicate the chosen duration back to the loop goroutine. This
@@ -142,4 +143,67 @@ func (l *Loop) RegisterTools(registry *tools.Registry) {
 			return fmt.Sprintf("State file updated (%d bytes) at %s.", len(fullContent), statePath), nil
 		},
 	})
+
+	// append_ego_observation: append-only shim for ego.md, available
+	// when EgoFile is configured. The metacog loop excludes general
+	// file tools, so this provides controlled write access to
+	// core:ego.md without granting full file_write.
+	if l.deps.EgoFile != "" {
+		registry.Register(&tools.Tool{
+			Name: "append_ego_observation",
+			Description: "Append a metacognitive observation to core:ego.md. " +
+				"Use this when you notice significant behavioral patterns, breakthroughs, " +
+				"or persistent struggles that would matter to long-term self-understanding. " +
+				"Your observation is appended — existing content is never overwritten.",
+			Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"observation": map[string]any{
+						"type":        "string",
+						"description": "The observation to append. Should focus on patterns revealing how the agent is evolving. Must be at least 50 characters.",
+					},
+				},
+				"required": []string{"observation"},
+			},
+			Handler: func(_ context.Context, args map[string]any) (string, error) {
+				observation, _ := args["observation"].(string)
+				if len(observation) < minStateContentLen {
+					return "", fmt.Errorf("observation too short (%d chars, minimum %d)", len(observation), minStateContentLen)
+				}
+
+				egoPath := l.deps.EgoFile
+
+				// Read existing content (empty file is fine).
+				existing, err := os.ReadFile(egoPath)
+				if err != nil && !os.IsNotExist(err) {
+					return "", fmt.Errorf("read ego file: %w", err)
+				}
+
+				// Build the appended block with metadata.
+				convID := l.getCurrentConvID()
+				block := fmt.Sprintf("\n\n### Metacognitive Observation\n"+
+					"<!-- metacognitive: iteration=%s observed=%s -->\n\n%s\n",
+					convID, time.Now().UTC().Format(time.RFC3339), observation)
+
+				fullContent := string(existing) + block
+
+				// Ensure parent directory exists.
+				if err := os.MkdirAll(filepath.Dir(egoPath), 0o755); err != nil {
+					return "", fmt.Errorf("create ego directory: %w", err)
+				}
+
+				if err := os.WriteFile(egoPath, []byte(fullContent), 0o644); err != nil {
+					return "", fmt.Errorf("write ego file: %w", err)
+				}
+
+				l.deps.Logger.Info("ego observation appended",
+					"path", egoPath,
+					"bytes", len(block),
+					"conversation_id", convID,
+				)
+
+				return fmt.Sprintf("Observation appended to core:ego.md (%d bytes).", len(block)), nil
+			},
+		})
+	}
 }

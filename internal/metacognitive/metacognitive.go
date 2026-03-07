@@ -122,6 +122,7 @@ type Deps struct {
 	Runner        agentRunner
 	Logger        *slog.Logger
 	WorkspacePath string
+	EgoFile       string     // absolute path to ego.md; empty disables append_ego_observation tool
 	RandSource    RandSource // nil uses math/rand/v2 default
 }
 

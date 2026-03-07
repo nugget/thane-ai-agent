@@ -735,6 +735,26 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// Build a resolver from the paths: config map. This handles kb:,
 	// scratchpad:, and any future directory-based prefixes. The
 	// resolver expands ~ in base directories at construction time.
+	// Auto-register core: prefix pointing at the workspace root so
+	// models can reference core:ego.md without knowing the filesystem
+	// path. User-defined core: (with or without trailing colon) in
+	// config takes precedence.
+	if cfg.Workspace.Path != "" {
+		if cfg.Paths == nil {
+			cfg.Paths = make(map[string]string)
+		}
+		hasCore := false
+		for k := range cfg.Paths {
+			if strings.TrimSuffix(k, ":") == "core" {
+				hasCore = true
+				break
+			}
+		}
+		if !hasCore {
+			cfg.Paths["core"] = cfg.Workspace.Path
+		}
+	}
+
 	var resolver *paths.Resolver
 	if len(cfg.Paths) > 0 {
 		resolver = paths.New(cfg.Paths)
@@ -986,7 +1006,18 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 			fileTools.SetResolver(resolver)
 		}
 		loop.Tools().SetFileTools(fileTools)
-		loop.SetEgoFile(filepath.Join(cfg.Workspace.Path, "ego.md"))
+		egoPath := filepath.Join(cfg.Workspace.Path, "ego.md")
+		if resolver != nil {
+			if resolved, err := resolver.Resolve("core:ego.md"); err != nil {
+				logger.Warn("failed to resolve core:ego.md, using default",
+					"error", err,
+					"default_path", egoPath,
+				)
+			} else {
+				egoPath = resolved
+			}
+		}
+		loop.SetEgoFile(egoPath)
 		logger.Info("file tools enabled", "workspace", cfg.Workspace.Path)
 	} else {
 		logger.Info("file tools disabled (no workspace path configured)")
@@ -2118,10 +2149,17 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 			return fmt.Errorf("metacognitive config: %w", err)
 		}
 
+		var metacogEgoFile string
+		if resolver != nil {
+			if resolved, err := resolver.Resolve("core:ego.md"); err == nil {
+				metacogEgoFile = resolved
+			}
+		}
 		metacogLoop := metacognitive.New(metacogCfg, metacognitive.Deps{
 			Runner:        loop,
 			Logger:        logger,
 			WorkspacePath: cfg.Workspace.Path,
+			EgoFile:       metacogEgoFile,
 		})
 		metacogLoop.RegisterTools(loop.Tools())
 
