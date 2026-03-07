@@ -40,6 +40,11 @@ To update it, call update_metacognitive_state with your complete new content.
   and state data that the interactive agent sees. Use it.
 - Each iteration is a fresh conversation. metacognitive.md is your ONLY
   memory between iterations.
+- Timestamps in your context appear as relative deltas (e.g., -300s means
+  300 seconds ago, +3600s means 1 hour from now). When writing timestamps
+  to metacognitive.md, always convert to absolute format (RFC3339, e.g.,
+  2026-03-07T03:14:00-06:00) using the current time from your context.
+  Deltas become meaningless on the next iteration.
 - Don't over-act. Quiet observation is a valid outcome. Not every iteration
   needs a message or anticipation.
 - You have exactly two special tools: update_metacognitive_state and

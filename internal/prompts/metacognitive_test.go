@@ -90,6 +90,20 @@ func TestMetacognitivePrompt_ToolBoundary(t *testing.T) {
 	}
 }
 
+func TestMetacognitivePrompt_TimestampConversionGuidance(t *testing.T) {
+	result := MetacognitivePrompt("some state", false)
+
+	if !strings.Contains(result, "relative deltas") {
+		t.Error("prompt should explain that context timestamps are relative deltas")
+	}
+	if !strings.Contains(result, "absolute format (RFC3339") {
+		t.Error("prompt should instruct conversion to absolute RFC3339 format")
+	}
+	if !strings.Contains(result, "Deltas become meaningless") {
+		t.Error("prompt should explain why deltas must not be persisted")
+	}
+}
+
 func TestMetacognitivePrompt_OnlyWriteMechanism(t *testing.T) {
 	result := MetacognitivePrompt("some state", false)
 
