@@ -1,9 +1,11 @@
 package opstate
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func testStore(t *testing.T) *Store {
@@ -252,5 +254,150 @@ func TestNewStore_InvalidPath_NoDir(t *testing.T) {
 	_, err := NewStore(dbPath)
 	if err == nil {
 		t.Error("NewStore() should fail when parent directory doesn't exist")
+	}
+}
+
+// --- TTL tests ---
+
+// insertExpired inserts a row with an expires_at timestamp in the past
+// via raw SQL, avoiding any wall-clock delay in tests.
+func insertExpired(t *testing.T, s *Store, namespace, key, value string, ago time.Duration) {
+	t.Helper()
+	now := time.Now().UTC()
+	_, err := s.db.Exec(
+		`INSERT INTO operational_state (namespace, key, value, updated_at, expires_at)
+		 VALUES (?, ?, ?, ?, ?)`,
+		namespace, key, value,
+		now.Format(time.RFC3339),
+		now.Add(-ago).Format(time.RFC3339),
+	)
+	if err != nil {
+		t.Fatalf("insertExpired(%s/%s): %v", namespace, key, err)
+	}
+}
+
+func TestSetWithTTL_BeforeExpiry(t *testing.T) {
+	s := testStore(t)
+
+	if err := s.SetWithTTL("ns", "key", "val", 1*time.Hour); err != nil {
+		t.Fatalf("SetWithTTL: %v", err)
+	}
+
+	got, err := s.Get("ns", "key")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got != "val" {
+		t.Errorf("Get() = %q, want %q (should be visible before TTL)", got, "val")
+	}
+}
+
+func TestSetWithTTL_AfterExpiry(t *testing.T) {
+	s := testStore(t)
+
+	// Insert a row that expired 1 minute ago.
+	insertExpired(t, s, "ns", "expired-key", "old-val", 1*time.Minute)
+
+	got, err := s.Get("ns", "expired-key")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got != "" {
+		t.Errorf("Get() = %q, want empty (expired key should be invisible)", got)
+	}
+}
+
+func TestSet_NeverExpires(t *testing.T) {
+	s := testStore(t)
+
+	// Plain Set should clear any previous TTL.
+	if err := s.SetWithTTL("ns", "key", "ttl-val", 1*time.Hour); err != nil {
+		t.Fatalf("SetWithTTL: %v", err)
+	}
+
+	// Overwrite with plain Set (no TTL).
+	if err := s.Set("ns", "key", "permanent"); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+
+	// Verify expires_at is NULL.
+	var expiresAt *string
+	err := s.db.QueryRow(
+		`SELECT expires_at FROM operational_state WHERE namespace = ? AND key = ?`,
+		"ns", "key",
+	).Scan(&expiresAt)
+	if err != nil {
+		t.Fatalf("scan expires_at: %v", err)
+	}
+	if expiresAt != nil {
+		t.Errorf("expires_at = %q, want NULL after plain Set()", *expiresAt)
+	}
+
+	got, err := s.Get("ns", "key")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got != "permanent" {
+		t.Errorf("Get() = %q, want %q", got, "permanent")
+	}
+}
+
+func TestDeleteExpired(t *testing.T) {
+	s := testStore(t)
+
+	// Insert a mix: expired, live TTL, and permanent.
+	insertExpired(t, s, "ns", "old1", "v1", 2*time.Hour)
+	insertExpired(t, s, "ns", "old2", "v2", 30*time.Minute)
+	if err := s.SetWithTTL("ns", "fresh", "v3", 1*time.Hour); err != nil {
+		t.Fatalf("SetWithTTL(fresh): %v", err)
+	}
+	if err := s.Set("ns", "permanent", "v4"); err != nil {
+		t.Fatalf("Set(permanent): %v", err)
+	}
+
+	n, err := s.DeleteExpired(context.Background())
+	if err != nil {
+		t.Fatalf("DeleteExpired: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("DeleteExpired() = %d, want 2", n)
+	}
+
+	// Verify only fresh and permanent survive.
+	result, err := s.List("ns")
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(result) != 2 {
+		t.Fatalf("List() returned %d entries, want 2 (fresh + permanent)", len(result))
+	}
+	if result["fresh"] != "v3" {
+		t.Errorf("fresh = %q, want %q", result["fresh"], "v3")
+	}
+	if result["permanent"] != "v4" {
+		t.Errorf("permanent = %q, want %q", result["permanent"], "v4")
+	}
+}
+
+func TestList_FiltersExpired(t *testing.T) {
+	s := testStore(t)
+
+	if err := s.Set("ns", "alive", "yes"); err != nil {
+		t.Fatalf("Set(alive): %v", err)
+	}
+	insertExpired(t, s, "ns", "dead", "no", 5*time.Minute)
+
+	result, err := s.List("ns")
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(result) != 1 {
+		t.Fatalf("List() returned %d entries, want 1", len(result))
+	}
+	if result["alive"] != "yes" {
+		t.Errorf("alive = %q, want %q", result["alive"], "yes")
+	}
+	if _, ok := result["dead"]; ok {
+		t.Error("List() should not include expired key")
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/nugget/thane-ai-agent/internal/contacts"
@@ -52,7 +53,7 @@ func (m *mockContactResolver) GetFacts(_ uuid.UUID) (map[string][]string, error)
 	return m.facts, nil
 }
 
-// mockOpstate records Set calls.
+// mockOpstate records SetWithTTL calls.
 type mockOpstate struct {
 	records map[string]string // key → value
 }
@@ -61,7 +62,7 @@ func newMockOpstate() *mockOpstate {
 	return &mockOpstate{records: make(map[string]string)}
 }
 
-func (m *mockOpstate) Set(_, key, value string) error {
+func (m *mockOpstate) SetWithTTL(_, key, value string, _ time.Duration) error {
 	m.records[key] = value
 	return nil
 }

@@ -29,7 +29,7 @@ type ContactResolver interface {
 
 // OpstateStore is the subset of opstate.Store needed for recording notifications.
 type OpstateStore interface {
-	Set(namespace, key, value string) error
+	SetWithTTL(namespace, key, value string, ttl time.Duration) error
 }
 
 // Notification is a fire-and-forget push notification.
@@ -113,7 +113,13 @@ func (s *Sender) Send(ctx context.Context, n Notification) error {
 	return nil
 }
 
+// notifyRecordTTL is how long notification send records are kept in
+// opstate. Records are only needed for short-term rate-limiting and
+// dedup, not long-term history.
+const notifyRecordTTL = 4 * time.Hour
+
 // recordOpstate writes a send record to opstate for visibility by other loops.
+// Records expire after [notifyRecordTTL].
 func (s *Sender) recordOpstate(n Notification) {
 	if s.opstate == nil {
 		return
@@ -141,7 +147,7 @@ func (s *Sender) recordOpstate(n Notification) {
 		return
 	}
 
-	if err := s.opstate.Set(opstateNamespace, key, string(value)); err != nil {
+	if err := s.opstate.SetWithTTL(opstateNamespace, key, string(value), notifyRecordTTL); err != nil {
 		s.logger.Warn("failed to record notification in opstate", "error", err)
 	}
 }

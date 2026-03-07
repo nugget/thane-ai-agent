@@ -2182,6 +2182,34 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	ctx, cancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
+	// Periodic cleanup of expired opstate keys (issue #457). Expired
+	// keys are already invisible on read; this reclaims storage.
+	// Launched after signal.NotifyContext so the goroutine stops on
+	// SIGINT/SIGTERM before opStore.Close() runs.
+	go func() {
+		const cleanupInterval = 1 * time.Hour
+		ticker := time.NewTicker(cleanupInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				cleanupCtx, cleanupCancel := context.WithTimeout(ctx, 30*time.Second)
+				n, err := opStore.DeleteExpired(cleanupCtx)
+				cleanupCancel()
+				if err != nil {
+					if ctx.Err() != nil {
+						return
+					}
+					logger.Warn("opstate expired cleanup failed", "error", err)
+				} else if n > 0 {
+					logger.Info("opstate expired keys cleaned up", "deleted", n)
+				}
+			}
+		}
+	}()
+
 	go func() {
 		<-ctx.Done()
 		logger.Info("shutdown signal received")
