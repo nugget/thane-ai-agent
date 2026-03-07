@@ -2,6 +2,7 @@ package notifications
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -139,9 +140,18 @@ func TestSend(t *testing.T) {
 			notif: Notification{Recipient: "unknown", Message: "hello"},
 			ha:    &mockHAClient{},
 			resolver: &mockContactResolver{
-				findErr: errors.New("sql: no rows in result set"),
+				findErr: sql.ErrNoRows,
 			},
 			wantErr: `contact "unknown" not found`,
+		},
+		{
+			name:  "contact lookup db error",
+			notif: Notification{Recipient: "nugget", Message: "hello"},
+			ha:    &mockHAClient{},
+			resolver: &mockContactResolver{
+				findErr: errors.New("database locked"),
+			},
+			wantErr: `find contact "nugget"`,
 		},
 		{
 			name:  "facts lookup error",

@@ -3,7 +3,9 @@ package notifications
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -68,7 +70,10 @@ func (s *Sender) Send(ctx context.Context, n Notification) error {
 
 	contact, err := s.contacts.FindByName(n.Recipient)
 	if err != nil {
-		return fmt.Errorf("contact %q not found: %w", n.Recipient, err)
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("contact %q not found", n.Recipient)
+		}
+		return fmt.Errorf("find contact %q: %w", n.Recipient, err)
 	}
 
 	facts, err := s.contacts.GetFacts(contact.ID)
@@ -92,10 +97,10 @@ func (s *Sender) Send(ctx context.Context, n Notification) error {
 		data["data"] = pd
 	}
 
-	service := fmt.Sprintf("notify.%s", entity)
 	s.logger.Info("sending notification",
 		"recipient", n.Recipient,
-		"service", service,
+		"domain", "notify",
+		"service", entity,
 		"priority", n.Priority,
 	)
 
@@ -119,7 +124,7 @@ func (s *Sender) recordOpstate(n Notification) {
 		priority = "normal"
 	}
 
-	ts := time.Now().Unix()
+	ts := time.Now().UnixNano()
 	key := fmt.Sprintf("%s:sent:%d", n.Recipient, ts)
 
 	record := map[string]string{
