@@ -39,8 +39,8 @@ func TestMetacognitivePrompt_Supervisor(t *testing.T) {
 	if !strings.Contains(result, "core:ego.md") {
 		t.Error("supervisor prompt should reference core:ego.md path prefix")
 	}
-	if !strings.Contains(result, "metacognitive observations") {
-		t.Error("supervisor prompt should instruct marking contributions as metacognitive observations")
+	if !strings.Contains(result, "append_ego_observation") {
+		t.Error("supervisor prompt should reference append_ego_observation tool")
 	}
 }
 
@@ -88,8 +88,11 @@ func TestMetacognitivePrompt_FileToolsNotAvailable(t *testing.T) {
 func TestMetacognitivePrompt_ToolBoundary(t *testing.T) {
 	result := MetacognitivePrompt("some state", false)
 
-	if !strings.Contains(result, "exactly two special tools") {
-		t.Error("prompt should state the two special tools available")
+	if !strings.Contains(result, "exactly three special tools") {
+		t.Error("prompt should state the three special tools available")
+	}
+	if !strings.Contains(result, "append_ego_observation") {
+		t.Error("prompt should mention append_ego_observation tool")
 	}
 	if !strings.Contains(result, "File tools, exec, and") {
 		t.Error("prompt should explicitly list unavailable tool categories")

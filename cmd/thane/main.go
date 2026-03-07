@@ -737,12 +737,20 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// resolver expands ~ in base directories at construction time.
 	// Auto-register core: prefix pointing at the workspace root so
 	// models can reference core:ego.md without knowing the filesystem
-	// path. User-defined core: in config takes precedence.
+	// path. User-defined core: (with or without trailing colon) in
+	// config takes precedence.
 	if cfg.Workspace.Path != "" {
 		if cfg.Paths == nil {
 			cfg.Paths = make(map[string]string)
 		}
-		if _, exists := cfg.Paths["core"]; !exists {
+		hasCore := false
+		for k := range cfg.Paths {
+			if strings.TrimSuffix(k, ":") == "core" {
+				hasCore = true
+				break
+			}
+		}
+		if !hasCore {
 			cfg.Paths["core"] = cfg.Workspace.Path
 		}
 	}
@@ -998,7 +1006,17 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 			fileTools.SetResolver(resolver)
 		}
 		loop.Tools().SetFileTools(fileTools)
-		egoPath, _ := resolver.Resolve("core:ego.md")
+		egoPath := filepath.Join(cfg.Workspace.Path, "ego.md")
+		if resolver != nil {
+			if resolved, err := resolver.Resolve("core:ego.md"); err != nil {
+				logger.Warn("failed to resolve core:ego.md, using default",
+					"error", err,
+					"default_path", egoPath,
+				)
+			} else {
+				egoPath = resolved
+			}
+		}
 		loop.SetEgoFile(egoPath)
 		logger.Info("file tools enabled", "workspace", cfg.Workspace.Path)
 	} else {
@@ -2131,10 +2149,17 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 			return fmt.Errorf("metacognitive config: %w", err)
 		}
 
+		var metacogEgoFile string
+		if resolver != nil {
+			if resolved, err := resolver.Resolve("core:ego.md"); err == nil {
+				metacogEgoFile = resolved
+			}
+		}
 		metacogLoop := metacognitive.New(metacogCfg, metacognitive.Deps{
 			Runner:        loop,
 			Logger:        logger,
 			WorkspacePath: cfg.Workspace.Path,
+			EgoFile:       metacogEgoFile,
 		})
 		metacogLoop.RegisterTools(loop.Tools())
 
