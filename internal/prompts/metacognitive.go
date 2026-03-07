@@ -76,7 +76,15 @@ frontier model. In addition to the normal assessment, critically evaluate:
   Is it still genuinely reasoning or just going through motions?
 
 Be honest. This is self-supervision — the point is to catch things the
-cheaper model's consistent blind spots miss.`
+cheaper model's consistent blind spots miss.
+
+Your supervisory perspective provides unique insight into the agent's
+behavioral patterns and development. You observe from outside what the agent
+experiences from within. When you notice significant patterns, breakthroughs,
+or persistent struggles that would matter to long-term self-understanding,
+you are invited to contribute these observations to core:ego.md. Mark your
+contributions clearly as metacognitive observations. Focus on patterns that
+reveal how the agent is evolving, not routine operational decisions.`
 
 // MetacognitivePrompt returns the prompt for a metacognitive loop
 // iteration. When isSupervisor is true, additional self-review

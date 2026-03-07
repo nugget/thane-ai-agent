@@ -735,6 +735,18 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// Build a resolver from the paths: config map. This handles kb:,
 	// scratchpad:, and any future directory-based prefixes. The
 	// resolver expands ~ in base directories at construction time.
+	// Auto-register core: prefix pointing at the workspace root so
+	// models can reference core:ego.md without knowing the filesystem
+	// path. User-defined core: in config takes precedence.
+	if cfg.Workspace.Path != "" {
+		if cfg.Paths == nil {
+			cfg.Paths = make(map[string]string)
+		}
+		if _, exists := cfg.Paths["core"]; !exists {
+			cfg.Paths["core"] = cfg.Workspace.Path
+		}
+	}
+
 	var resolver *paths.Resolver
 	if len(cfg.Paths) > 0 {
 		resolver = paths.New(cfg.Paths)
@@ -986,7 +998,8 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 			fileTools.SetResolver(resolver)
 		}
 		loop.Tools().SetFileTools(fileTools)
-		loop.SetEgoFile(filepath.Join(cfg.Workspace.Path, "ego.md"))
+		egoPath, _ := resolver.Resolve("core:ego.md")
+		loop.SetEgoFile(egoPath)
 		logger.Info("file tools enabled", "workspace", cfg.Workspace.Path)
 	} else {
 		logger.Info("file tools disabled (no workspace path configured)")
