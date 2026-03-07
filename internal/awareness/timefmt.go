@@ -2,7 +2,6 @@ package awareness
 
 import (
 	"fmt"
-	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -12,8 +11,7 @@ import (
 // Past timestamps produce just the delta: "(-3247s)".
 // Future timestamps keep the absolute time and annotate: "2026-03-07T18:00-06:00 (+52143s)".
 func FormatDelta(t time.Time, now time.Time) string {
-	delta := t.Sub(now)
-	secs := int64(math.Round(delta.Seconds()))
+	secs := int64(t.Sub(now).Truncate(time.Second) / time.Second)
 
 	if secs <= 0 {
 		return fmt.Sprintf("(-%ds)", -secs)
@@ -23,8 +21,7 @@ func FormatDelta(t time.Time, now time.Time) string {
 
 // FormatDeltaOnly returns just the signed delta string: "-3247s" or "+3600s".
 func FormatDeltaOnly(t time.Time, now time.Time) string {
-	delta := t.Sub(now)
-	secs := int64(math.Round(delta.Seconds()))
+	secs := int64(t.Sub(now).Truncate(time.Second) / time.Second)
 
 	if secs <= 0 {
 		return fmt.Sprintf("-%ds", -secs)

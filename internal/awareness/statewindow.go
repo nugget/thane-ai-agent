@@ -37,11 +37,11 @@ type StateWindowProvider struct {
 	logger  *slog.Logger
 }
 
-// NewProvider creates a state window provider with the given buffer
-// capacity and maximum entry age. The loc parameter controls the
-// timezone used for ISO 8601 timestamps in the context output; nil
-// falls back to time.Local. Entries older than maxAge are filtered
-// out at read time in GetContext.
+// NewStateWindowProvider creates a state window provider with the given
+// buffer capacity and maximum entry age. The loc parameter controls the
+// timezone used when formatting future-event timestamps in the context
+// output; nil falls back to time.Local. Entries older than maxAge are
+// filtered out at read time in GetContext.
 func NewStateWindowProvider(maxEntries int, maxAge time.Duration, loc *time.Location, logger *slog.Logger) *StateWindowProvider {
 	if maxEntries <= 0 {
 		maxEntries = 50
@@ -109,7 +109,7 @@ func (p *StateWindowProvider) GetContext(_ context.Context, _ string) (string, e
 		if e.Timestamp.Before(cutoff) {
 			continue
 		}
-		delta := FormatDelta(e.Timestamp, now)
+		delta := FormatDelta(e.Timestamp.In(p.loc), now.In(p.loc))
 		lines = append(lines, fmt.Sprintf("- %s: %s → %s %s", e.EntityID, e.OldState, e.NewState, delta))
 	}
 

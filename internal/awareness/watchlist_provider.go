@@ -76,7 +76,7 @@ func (p *WatchlistProvider) GetContext(ctx context.Context, _ string) (string, e
 			stateValue += " " + unit
 		}
 
-		since := FormatDelta(state.LastChanged, now)
+		since := FormatDeltaOnly(state.LastChanged, now)
 		fmt.Fprintf(&sb, "- **%s** (%s): %s (since %s)\n", displayName, id, stateValue, since)
 	}
 

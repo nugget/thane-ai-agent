@@ -10,8 +10,9 @@ import (
 )
 
 func TestConversationTranscript(t *testing.T) {
-	// Use timestamps relative to now so delta format produces small values.
-	now := time.Now()
+	// Fixed reference time for deterministic assertions.
+	now := time.Date(2026, 3, 7, 12, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return now }
 
 	tests := []struct {
 		name     string
@@ -31,9 +32,8 @@ func TestConversationTranscript(t *testing.T) {
 				{Role: "assistant", Content: "hi there", Timestamp: now},
 			},
 			wantSub: []string{
-				"s] user: hello",
-				"s] assistant: hi there",
-				"[-", // delta format uses negative sign for past
+				"[-60s] user: hello",
+				"[-0s] assistant: hi there",
 			},
 		},
 		{
@@ -45,8 +45,8 @@ func TestConversationTranscript(t *testing.T) {
 				{Role: "assistant", Content: "done", Timestamp: now},
 			},
 			wantSub: []string{
-				"user: help me",
-				"assistant: done",
+				"[-120s] user: help me",
+				"[-0s] assistant: done",
 			},
 			wantNot: []string{
 				"you are helpful",
@@ -61,8 +61,9 @@ func TestConversationTranscript(t *testing.T) {
 			mem.msgs["test-conv"] = append(mem.msgs["test-conv"], tt.messages...)
 
 			l := &Loop{
-				logger: slog.Default(),
-				memory: mem,
+				logger:  slog.Default(),
+				memory:  mem,
+				nowFunc: clock,
 			}
 
 			got := l.ConversationTranscript("test-conv")

@@ -184,6 +184,10 @@ type Loop struct {
 
 	// haInject resolves <!-- ha-inject: ... --> directives in tag context files.
 	haInject homeassistant.StateFetcher
+
+	// nowFunc returns the current time. Tests override this for
+	// deterministic output; production code leaves it as time.Now.
+	nowFunc func() time.Time
 }
 
 // NewLoop creates a new agent loop.
@@ -200,6 +204,7 @@ func NewLoop(logger *slog.Logger, mem MemoryStore, compactor Compactor, rtr *rou
 		persona:           persona,
 		contextWindow:     contextWindow,
 		channelPinnedTags: make(map[string]int),
+		nowFunc:           time.Now,
 	}
 }
 
@@ -1821,6 +1826,16 @@ func (l *Loop) SplitSession(conversationID string, atIndex int, atMessage string
 }
 
 // getAllMessages retrieves all messages for a conversation, preferring the
+// now returns the current time via the configurable clock. If nowFunc
+// is nil (e.g., in tests using a bare struct literal), it falls back to
+// time.Now.
+func (l *Loop) now() time.Time {
+	if l.nowFunc != nil {
+		return l.nowFunc()
+	}
+	return time.Now()
+}
+
 // full-fidelity GetAllMessages when available.
 func (l *Loop) getAllMessages(conversationID string) []memory.Message {
 	if full, ok := l.memory.(interface {
@@ -1847,7 +1862,7 @@ func (l *Loop) ConversationTranscript(conversationID string) string {
 	if len(messages) == 0 {
 		return ""
 	}
-	now := time.Now()
+	now := l.now()
 	var b strings.Builder
 	for _, m := range messages {
 		if m.Role == "system" || m.Role == "tool" {

@@ -161,6 +161,8 @@ func (t *AnticipationTools) Execute(name string, args map[string]any) (string, e
 }
 
 func (t *AnticipationTools) createAnticipation(args map[string]any) (string, error) {
+	now := time.Now()
+
 	desc, _ := args["description"].(string)
 	ctx, _ := args["context"].(string)
 
@@ -175,7 +177,7 @@ func (t *AnticipationTools) createAnticipation(args map[string]any) (string, err
 
 	// Parse trigger conditions
 	if v, ok := args["after_time"].(string); ok && v != "" {
-		parsed, err := awareness.ParseTimeOrDelta(v, time.Now())
+		parsed, err := awareness.ParseTimeOrDelta(v, now)
 		if err != nil {
 			return "", fmt.Errorf("invalid after_time format: %w", err)
 		}
@@ -230,7 +232,7 @@ func (t *AnticipationTools) createAnticipation(args map[string]any) (string, err
 		if err != nil {
 			return "", fmt.Errorf("invalid expires_in: %w", err)
 		}
-		exp := time.Now().UTC().Add(dur)
+		exp := now.UTC().Add(dur)
 		a.ExpiresAt = &exp
 	}
 
@@ -268,7 +270,6 @@ func (t *AnticipationTools) createAnticipation(args map[string]any) (string, err
 	if a.CooldownSeconds > 0 {
 		result += fmt.Sprintf("Cooldown: %s\n", (time.Duration(a.CooldownSeconds) * time.Second).String())
 	}
-	now := time.Now()
 	if a.ExpiresAt != nil {
 		result += fmt.Sprintf("Expires: %s\n", awareness.FormatDelta(*a.ExpiresAt, now))
 	}
