@@ -55,6 +55,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/media"
 	"github.com/nugget/thane-ai-agent/internal/memory"
 	"github.com/nugget/thane-ai-agent/internal/metacognitive"
+	"github.com/nugget/thane-ai-agent/internal/notifications"
 	"github.com/nugget/thane-ai-agent/internal/opstate"
 	"github.com/nugget/thane-ai-agent/internal/paths"
 	"github.com/nugget/thane-ai-agent/internal/prompts"
@@ -786,6 +787,15 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	contactTools := contacts.NewTools(contactStore)
 	loop.Tools().SetContactTools(contactTools)
 	logger.Info("contact store initialized", "path", cfg.DataDir+"/contacts.db")
+
+	// --- Notifications ---
+	// Push notifications via HA companion app. Requires both the HA client
+	// and the contact store for recipient → device resolution.
+	if ha != nil {
+		notifSender := notifications.NewSender(ha, contactStore, opStore, logger)
+		loop.Tools().SetHANotifier(notifSender)
+		logger.Info("HA notification sender initialized")
+	}
 
 	// --- Email ---
 	// Native IMAP/SMTP email. Replaces the MCP email server approach

@@ -15,6 +15,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/knowledge"
 	"github.com/nugget/thane-ai-agent/internal/media"
+	"github.com/nugget/thane-ai-agent/internal/notifications"
 	"github.com/nugget/thane-ai-agent/internal/scheduler"
 	"github.com/nugget/thane-ai-agent/internal/search"
 	"github.com/nugget/thane-ai-agent/internal/usage"
@@ -40,6 +41,7 @@ type Registry struct {
 	contactTools      *contacts.Tools
 	anticipationTools *scheduler.AnticipationTools
 	emailTools        *email.Tools
+	notifier          *notifications.Sender
 	forgeTools        forgeHandler
 	fileTools         *FileTools
 	shellExec         *ShellExec
