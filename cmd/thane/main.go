@@ -621,6 +621,27 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	}
 	defer opStore.Close()
 
+	// Periodic cleanup of expired opstate keys (issue #457). Expired
+	// keys are already invisible on read; this reclaims storage.
+	go func() {
+		const cleanupInterval = 1 * time.Hour
+		ticker := time.NewTicker(cleanupInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				n, err := opStore.DeleteExpired()
+				if err != nil {
+					logger.Warn("opstate expired cleanup failed", "error", err)
+				} else if n > 0 {
+					logger.Info("opstate expired keys cleaned up", "deleted", n)
+				}
+			}
+		}
+	}()
+
 	// --- Usage tracking ---
 	// Persistent token usage and cost recording for attribution and
 	// analysis. Append-only SQLite store, queried via the cost_summary tool.

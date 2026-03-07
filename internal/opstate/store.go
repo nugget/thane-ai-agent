@@ -52,17 +52,24 @@ func (s *Store) migrate() error {
 		PRIMARY KEY (namespace, key)
 	);
 	`
-	_, err := s.db.Exec(schema)
-	return err
+	if _, err := s.db.Exec(schema); err != nil {
+		return err
+	}
+
+	// Add expires_at column for TTL support (issue #457).
+	return database.AddColumn(s.db, "operational_state", "expires_at", "TEXT")
 }
 
 // Get returns the stored value for a namespace/key pair. Returns empty
-// string and nil error if the key does not exist.
+// string and nil error if the key does not exist or has expired.
 func (s *Store) Get(namespace, key string) (string, error) {
+	now := time.Now().UTC().Format(time.RFC3339)
 	var value string
 	err := s.db.QueryRow(
-		`SELECT value FROM operational_state WHERE namespace = ? AND key = ?`,
-		namespace, key,
+		`SELECT value FROM operational_state
+		 WHERE namespace = ? AND key = ?
+		   AND (expires_at IS NULL OR expires_at > ?)`,
+		namespace, key, now,
 	).Scan(&value)
 	if err == sql.ErrNoRows {
 		return "", nil
@@ -74,17 +81,38 @@ func (s *Store) Get(namespace, key string) (string, error) {
 }
 
 // Set upserts a namespace/key/value triple. Existing values are
-// overwritten and the updated_at timestamp is refreshed.
+// overwritten and the updated_at timestamp is refreshed. The key
+// never expires (expires_at is cleared on upsert).
 func (s *Store) Set(namespace, key, value string) error {
 	_, err := s.db.Exec(
-		`INSERT INTO operational_state (namespace, key, value, updated_at)
-		 VALUES (?, ?, ?, ?)
+		`INSERT INTO operational_state (namespace, key, value, updated_at, expires_at)
+		 VALUES (?, ?, ?, ?, NULL)
 		 ON CONFLICT (namespace, key) DO UPDATE
-		 SET value = excluded.value, updated_at = excluded.updated_at`,
+		 SET value = excluded.value, updated_at = excluded.updated_at, expires_at = NULL`,
 		namespace, key, value, time.Now().UTC().Format(time.RFC3339),
 	)
 	if err != nil {
 		return fmt.Errorf("set %s/%s: %w", namespace, key, err)
+	}
+	return nil
+}
+
+// SetWithTTL upserts a namespace/key/value triple that expires after
+// the given duration. Expired keys are filtered out by [Get] and
+// [List] and periodically removed by [DeleteExpired].
+func (s *Store) SetWithTTL(namespace, key, value string, ttl time.Duration) error {
+	now := time.Now().UTC()
+	_, err := s.db.Exec(
+		`INSERT INTO operational_state (namespace, key, value, updated_at, expires_at)
+		 VALUES (?, ?, ?, ?, ?)
+		 ON CONFLICT (namespace, key) DO UPDATE
+		 SET value = excluded.value, updated_at = excluded.updated_at, expires_at = excluded.expires_at`,
+		namespace, key, value,
+		now.Format(time.RFC3339),
+		now.Add(ttl).Format(time.RFC3339),
+	)
+	if err != nil {
+		return fmt.Errorf("set %s/%s (ttl=%s): %w", namespace, key, ttl, err)
 	}
 	return nil
 }
@@ -115,12 +143,16 @@ func (s *Store) DeleteNamespace(namespace string) error {
 	return nil
 }
 
-// List returns all key/value pairs for a namespace. Returns an empty
-// (non-nil) map if the namespace has no entries.
+// List returns all non-expired key/value pairs for a namespace.
+// Returns an empty (non-nil) map if the namespace has no live entries.
 func (s *Store) List(namespace string) (map[string]string, error) {
+	now := time.Now().UTC().Format(time.RFC3339)
 	rows, err := s.db.Query(
-		`SELECT key, value FROM operational_state WHERE namespace = ? ORDER BY key`,
-		namespace,
+		`SELECT key, value FROM operational_state
+		 WHERE namespace = ?
+		   AND (expires_at IS NULL OR expires_at > ?)
+		 ORDER BY key`,
+		namespace, now,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("list %s: %w", namespace, err)
@@ -136,4 +168,19 @@ func (s *Store) List(namespace string) (map[string]string, error) {
 		result[k] = v
 	}
 	return result, rows.Err()
+}
+
+// DeleteExpired removes all rows whose expires_at timestamp has passed.
+// Returns the number of rows deleted. This is best-effort cleanup —
+// expired rows are already invisible to [Get] and [List].
+func (s *Store) DeleteExpired() (int64, error) {
+	now := time.Now().UTC().Format(time.RFC3339)
+	result, err := s.db.Exec(
+		`DELETE FROM operational_state WHERE expires_at IS NOT NULL AND expires_at <= ?`,
+		now,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("delete expired: %w", err)
+	}
+	return result.RowsAffected()
 }
