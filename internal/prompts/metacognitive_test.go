@@ -36,6 +36,12 @@ func TestMetacognitivePrompt_Supervisor(t *testing.T) {
 	if !strings.Contains(result, "Drift detection") {
 		t.Error("supervisor prompt should contain drift detection instruction")
 	}
+	if !strings.Contains(result, "contribute these observations to ego.md") {
+		t.Error("supervisor prompt should invite ego.md contributions")
+	}
+	if !strings.Contains(result, "metacognitive observations") {
+		t.Error("supervisor prompt should instruct marking contributions as metacognitive observations")
+	}
 }
 
 func TestMetacognitivePrompt_EmptyState(t *testing.T) {
