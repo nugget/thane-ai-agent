@@ -50,6 +50,8 @@ func (p *WatchlistProvider) GetContext(ctx context.Context, _ string) (string, e
 		return "", nil
 	}
 
+	now := time.Now()
+
 	var sb strings.Builder
 	sb.WriteString("### Watched Entities\n\n")
 
@@ -74,7 +76,7 @@ func (p *WatchlistProvider) GetContext(ctx context.Context, _ string) (string, e
 			stateValue += " " + unit
 		}
 
-		since := state.LastChanged.Format(time.RFC3339)
+		since := FormatDeltaOnly(state.LastChanged, now)
 		fmt.Fprintf(&sb, "- **%s** (%s): %s (since %s)\n", displayName, id, stateValue, since)
 	}
 

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+
+	"github.com/nugget/thane-ai-agent/internal/awareness"
 )
 
 // Tools provides anticipation management tools for the agent.
@@ -159,6 +161,8 @@ func (t *AnticipationTools) Execute(name string, args map[string]any) (string, e
 }
 
 func (t *AnticipationTools) createAnticipation(args map[string]any) (string, error) {
+	now := time.Now()
+
 	desc, _ := args["description"].(string)
 	ctx, _ := args["context"].(string)
 
@@ -173,11 +177,11 @@ func (t *AnticipationTools) createAnticipation(args map[string]any) (string, err
 
 	// Parse trigger conditions
 	if v, ok := args["after_time"].(string); ok && v != "" {
-		t, err := time.Parse(time.RFC3339, v)
+		parsed, err := awareness.ParseTimeOrDelta(v, now)
 		if err != nil {
 			return "", fmt.Errorf("invalid after_time format: %w", err)
 		}
-		a.Trigger.AfterTime = &t
+		a.Trigger.AfterTime = &parsed
 	}
 
 	if v, ok := args["entity_id"].(string); ok {
@@ -228,7 +232,7 @@ func (t *AnticipationTools) createAnticipation(args map[string]any) (string, err
 		if err != nil {
 			return "", fmt.Errorf("invalid expires_in: %w", err)
 		}
-		exp := time.Now().UTC().Add(dur)
+		exp := now.UTC().Add(dur)
 		a.ExpiresAt = &exp
 	}
 
@@ -267,11 +271,11 @@ func (t *AnticipationTools) createAnticipation(args map[string]any) (string, err
 		result += fmt.Sprintf("Cooldown: %s\n", (time.Duration(a.CooldownSeconds) * time.Second).String())
 	}
 	if a.ExpiresAt != nil {
-		result += fmt.Sprintf("Expires: %s\n", a.ExpiresAt.Format(time.RFC3339))
+		result += fmt.Sprintf("Expires: %s\n", awareness.FormatDelta(*a.ExpiresAt, now))
 	}
 	result += "\nTrigger conditions:\n"
 	if a.Trigger.AfterTime != nil {
-		result += fmt.Sprintf("  - After: %s\n", a.Trigger.AfterTime.Format(time.RFC3339))
+		result += fmt.Sprintf("  - After: %s\n", awareness.FormatDelta(*a.Trigger.AfterTime, now))
 	}
 	if a.Trigger.EntityID != "" {
 		result += fmt.Sprintf("  - Entity: %s", a.Trigger.EntityID)
@@ -307,6 +311,7 @@ func (t *AnticipationTools) listAnticipations() (string, error) {
 		return "No active anticipations.", nil
 	}
 
+	now := time.Now()
 	result := fmt.Sprintf("Active anticipations: %d\n\n", len(active))
 	for _, a := range active {
 		result += fmt.Sprintf("**%s** (ID: %s)\n", a.Description, a.ID)
@@ -316,9 +321,9 @@ func (t *AnticipationTools) listAnticipations() (string, error) {
 				result += fmt.Sprintf("  Cooldown: %s\n", (time.Duration(a.CooldownSeconds) * time.Second).String())
 			}
 		}
-		result += fmt.Sprintf("  Created: %s\n", a.CreatedAt.Format("2006-01-02 15:04"))
+		result += fmt.Sprintf("  Created: %s\n", awareness.FormatDeltaOnly(a.CreatedAt, now))
 		if a.ExpiresAt != nil {
-			result += fmt.Sprintf("  Expires: %s\n", a.ExpiresAt.Format("2006-01-02 15:04"))
+			result += fmt.Sprintf("  Expires: %s\n", awareness.FormatDelta(*a.ExpiresAt, now))
 		}
 		if len(a.ContextEntities) > 0 {
 			result += fmt.Sprintf("  Context entities: %v\n", a.ContextEntities)

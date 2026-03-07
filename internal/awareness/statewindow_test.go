@@ -60,8 +60,8 @@ func TestProvider_SingleEntry(t *testing.T) {
 	if !strings.Contains(got, "off → on") {
 		t.Error("missing state transition")
 	}
-	if !strings.Contains(got, "2025-06-15T14:30:00Z") {
-		t.Errorf("missing ISO 8601 timestamp, got:\n%s", got)
+	if !strings.Contains(got, "(-0s)") {
+		t.Errorf("missing delta timestamp, got:\n%s", got)
 	}
 }
 
@@ -171,26 +171,23 @@ func TestProvider_AllExpired(t *testing.T) {
 	}
 }
 
-func TestProvider_ISO8601_Timezone(t *testing.T) {
-	loc, err := time.LoadLocation("America/Chicago")
-	if err != nil {
-		t.Skip("timezone America/Chicago not available")
-	}
-
+func TestProvider_DeltaFormat(t *testing.T) {
 	now := time.Date(2025, 6, 15, 14, 30, 0, 0, time.UTC)
-	p := NewStateWindowProvider(10, 30*time.Minute, loc, nil)
-	p.nowFunc = fixedClock(now)
+	p := NewStateWindowProvider(10, 30*time.Minute, time.UTC, nil)
 
+	// Insert an entry 5 minutes ago.
+	p.nowFunc = fixedClock(now.Add(-5 * time.Minute))
 	p.HandleStateChange("sensor.test", "a", "b")
 
+	// Read at "now" — should show 300 second delta.
+	p.nowFunc = fixedClock(now)
 	got, err := p.GetContext(context.Background(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// 14:30 UTC = 09:30 CDT (UTC-5)
-	if !strings.Contains(got, "2025-06-15T09:30:00-05:00") {
-		t.Errorf("expected Chicago timezone timestamp, got:\n%s", got)
+	if !strings.Contains(got, "(-300s)") {
+		t.Errorf("expected delta (-300s), got:\n%s", got)
 	}
 }
 
