@@ -1847,12 +1847,13 @@ func (l *Loop) ConversationTranscript(conversationID string) string {
 	if len(messages) == 0 {
 		return ""
 	}
+	now := time.Now()
 	var b strings.Builder
 	for _, m := range messages {
 		if m.Role == "system" || m.Role == "tool" {
 			continue
 		}
-		fmt.Fprintf(&b, "[%s] %s: %s\n", m.Timestamp.Format("15:04"), m.Role, m.Content)
+		fmt.Fprintf(&b, "[%s] %s: %s\n", awareness.FormatDeltaOnly(m.Timestamp, now), m.Role, m.Content)
 		if b.Len() > maxTranscriptBytes {
 			b.WriteString("\n... (truncated)\n")
 			break

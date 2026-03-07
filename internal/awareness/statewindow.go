@@ -109,8 +109,8 @@ func (p *StateWindowProvider) GetContext(_ context.Context, _ string) (string, e
 		if e.Timestamp.Before(cutoff) {
 			continue
 		}
-		ts := e.Timestamp.In(p.loc).Format(time.RFC3339)
-		lines = append(lines, fmt.Sprintf("- %s: %s → %s (%s)", e.EntityID, e.OldState, e.NewState, ts))
+		delta := FormatDelta(e.Timestamp, now)
+		lines = append(lines, fmt.Sprintf("- %s: %s → %s %s", e.EntityID, e.OldState, e.NewState, delta))
 	}
 
 	if len(lines) == 0 {

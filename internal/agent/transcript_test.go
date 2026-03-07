@@ -10,7 +10,8 @@ import (
 )
 
 func TestConversationTranscript(t *testing.T) {
-	ts := time.Date(2025, 6, 15, 14, 30, 0, 0, time.UTC)
+	// Use timestamps relative to now so delta format produces small values.
+	now := time.Now()
 
 	tests := []struct {
 		name     string
@@ -24,23 +25,24 @@ func TestConversationTranscript(t *testing.T) {
 			wantLen: -1,
 		},
 		{
-			name: "basic user/assistant dialogue",
+			name: "basic user/assistant dialogue with delta timestamps",
 			messages: []memory.Message{
-				{Role: "user", Content: "hello", Timestamp: ts},
-				{Role: "assistant", Content: "hi there", Timestamp: ts.Add(time.Minute)},
+				{Role: "user", Content: "hello", Timestamp: now.Add(-60 * time.Second)},
+				{Role: "assistant", Content: "hi there", Timestamp: now},
 			},
 			wantSub: []string{
-				"[14:30] user: hello",
-				"[14:31] assistant: hi there",
+				"s] user: hello",
+				"s] assistant: hi there",
+				"[-", // delta format uses negative sign for past
 			},
 		},
 		{
 			name: "system and tool messages excluded",
 			messages: []memory.Message{
-				{Role: "system", Content: "you are helpful", Timestamp: ts},
-				{Role: "user", Content: "help me", Timestamp: ts.Add(time.Minute)},
-				{Role: "tool", Content: `{"result": "ok"}`, Timestamp: ts.Add(2 * time.Minute)},
-				{Role: "assistant", Content: "done", Timestamp: ts.Add(3 * time.Minute)},
+				{Role: "system", Content: "you are helpful", Timestamp: now.Add(-3 * time.Minute)},
+				{Role: "user", Content: "help me", Timestamp: now.Add(-2 * time.Minute)},
+				{Role: "tool", Content: `{"result": "ok"}`, Timestamp: now.Add(-time.Minute)},
+				{Role: "assistant", Content: "done", Timestamp: now},
 			},
 			wantSub: []string{
 				"user: help me",
