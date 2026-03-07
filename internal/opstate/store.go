@@ -6,6 +6,7 @@
 package opstate
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"time"
@@ -172,10 +173,11 @@ func (s *Store) List(namespace string) (map[string]string, error) {
 
 // DeleteExpired removes all rows whose expires_at timestamp has passed.
 // Returns the number of rows deleted. This is best-effort cleanup —
-// expired rows are already invisible to [Get] and [List].
-func (s *Store) DeleteExpired() (int64, error) {
+// expired rows are already invisible to [Get] and [List]. The context
+// allows callers to bound execution time or cancel during shutdown.
+func (s *Store) DeleteExpired(ctx context.Context) (int64, error) {
 	now := time.Now().UTC().Format(time.RFC3339)
-	result, err := s.db.Exec(
+	result, err := s.db.ExecContext(ctx,
 		`DELETE FROM operational_state WHERE expires_at IS NOT NULL AND expires_at <= ?`,
 		now,
 	)

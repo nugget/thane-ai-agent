@@ -1,6 +1,7 @@
 package opstate
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -354,7 +355,7 @@ func TestDeleteExpired(t *testing.T) {
 		t.Fatalf("Set(permanent): %v", err)
 	}
 
-	n, err := s.DeleteExpired()
+	n, err := s.DeleteExpired(context.Background())
 	if err != nil {
 		t.Fatalf("DeleteExpired: %v", err)
 	}
