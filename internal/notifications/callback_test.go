@@ -31,9 +31,11 @@ func (m *mockInjector) IsSessionAlive(_ string) bool {
 	return m.alive
 }
 
-// mockDelegateSpawner records Spawn calls.
+// mockDelegateSpawner records Spawn calls and signals via a channel
+// so tests can wait for the async goroutine in DispatchAction.
 type mockDelegateSpawner struct {
 	spawns []delegateSpawn
+	done   chan struct{}
 }
 
 type delegateSpawn struct {
@@ -41,9 +43,24 @@ type delegateSpawn struct {
 	guidance string
 }
 
+func newMockDelegateSpawner() *mockDelegateSpawner {
+	return &mockDelegateSpawner{done: make(chan struct{}, 10)}
+}
+
 func (m *mockDelegateSpawner) Spawn(_ context.Context, task, guidance string) error {
 	m.spawns = append(m.spawns, delegateSpawn{task, guidance})
+	m.done <- struct{}{}
 	return nil
+}
+
+// waitSpawn blocks until one spawn completes or the timeout elapses.
+func (m *mockDelegateSpawner) waitSpawn(t *testing.T) {
+	t.Helper()
+	select {
+	case <-m.done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for delegate spawn")
+	}
 }
 
 func newTestDispatcher(t *testing.T) (*CallbackDispatcher, *RecordStore, *mockInjector, *mockDelegateSpawner) {
@@ -56,7 +73,7 @@ func newTestDispatcher(t *testing.T) (*CallbackDispatcher, *RecordStore, *mockIn
 	t.Cleanup(func() { store.Close() })
 
 	inj := &mockInjector{alive: true}
-	del := &mockDelegateSpawner{}
+	del := newMockDelegateSpawner()
 	dispatcher := NewCallbackDispatcher(store, inj, del, slog.Default())
 	return dispatcher, store, inj, del
 }
@@ -122,6 +139,8 @@ func TestCallbackDispatcher_DeadSession(t *testing.T) {
 		t.Errorf("Status = %q, want %q", rec.Status, StatusResponded)
 	}
 
+	// Delegate spawn runs in a goroutine — wait for it.
+	del.waitSpawn(t)
 	if len(del.spawns) != 1 {
 		t.Fatalf("expected 1 delegate spawn, got %d", len(del.spawns))
 	}
@@ -179,6 +198,26 @@ func TestCallbackDispatcher_NonThaneAction(t *testing.T) {
 
 	if len(del.spawns) != 0 {
 		t.Errorf("expected 0 delegate spawns for non-THANE action, got %d", len(del.spawns))
+	}
+}
+
+func TestCallbackDispatcher_InvalidActionID(t *testing.T) {
+	dispatcher, store, inj, del := newTestDispatcher(t)
+	inj.alive = true
+	seedRecord(t, store, "01234567-89ab-cdef-0123-456789abcdef", "conv-1")
+
+	// "bogus" is not one of the declared actions (approve, deny).
+	dispatcher.Handle("thane/callbacks", makeCallback("THANE_01234567-89ab-cdef-0123-456789abcdef_bogus"))
+
+	rec, _ := store.Get("01234567-89ab-cdef-0123-456789abcdef")
+	if rec.Status != StatusPending {
+		t.Errorf("Status = %q, want %q (invalid action should not update)", rec.Status, StatusPending)
+	}
+	if len(inj.messages) != 0 {
+		t.Errorf("expected 0 injected messages, got %d", len(inj.messages))
+	}
+	if len(del.spawns) != 0 {
+		t.Errorf("expected 0 delegate spawns, got %d", len(del.spawns))
 	}
 }
 

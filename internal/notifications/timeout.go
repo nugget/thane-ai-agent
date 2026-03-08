@@ -55,9 +55,18 @@ func (w *TimeoutWatcher) check(ctx context.Context) {
 	}
 
 	for _, rec := range expired {
-		if err := w.records.Expire(rec.RequestID); err != nil {
+		didExpire, err := w.records.Expire(rec.RequestID)
+		if err != nil {
 			w.logger.Error("timeout watcher: failed to expire record",
 				"request_id", rec.RequestID, "error", err)
+			continue
+		}
+		if !didExpire {
+			// Record was no longer pending (e.g., user responded)
+			// by the time we tried to expire it — skip timeout
+			// handling to avoid double-processing.
+			w.logger.Debug("timeout watcher: record no longer pending, skipping",
+				"request_id", rec.RequestID)
 			continue
 		}
 
@@ -100,6 +109,13 @@ func (w *TimeoutWatcher) handleTimeoutAction(ctx context.Context, rec *Record) {
 
 	default:
 		// Treat as an action ID — dispatch as if the user chose it.
+		// Record the auto-selected action so downstream auditing can
+		// see what was executed. The record is already expired, so we
+		// use SetResponseAction (not Respond, which requires pending).
+		if err := w.records.SetResponseAction(rec.RequestID, rec.TimeoutAction); err != nil {
+			w.logger.Error("timeout watcher: failed to record auto-executed action",
+				"request_id", rec.RequestID, "error", err)
+		}
 		w.dispatcher.DispatchAction(rec, rec.TimeoutAction)
 	}
 }

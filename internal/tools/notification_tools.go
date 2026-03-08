@@ -125,7 +125,11 @@ func (r *Registry) handleActionableNotify(ctx context.Context, n notifications.N
 		return "", fmt.Errorf("actionable notifications are not configured (notification record store is nil)")
 	}
 
-	requestID := uuid.Must(uuid.NewV7()).String()
+	u, err := uuid.NewV7()
+	if err != nil {
+		return "", fmt.Errorf("generate request ID: %w", err)
+	}
+	requestID := u.String()
 
 	timeout := defaultNotificationTimeout
 	if ts, ok := args["timeout"].(string); ok && ts != "" {
@@ -133,11 +137,28 @@ func (r *Registry) handleActionableNotify(ctx context.Context, n notifications.N
 		if err != nil {
 			return "", fmt.Errorf("invalid timeout %q: %w", ts, err)
 		}
+		if parsed <= 0 {
+			return "", fmt.Errorf("timeout must be positive, got %s", parsed)
+		}
 		timeout = parsed
 	}
 
 	timeoutAction, _ := args["timeout_action"].(string)
 	notifContext, _ := args["context"].(string)
+
+	// Set actionable fields on the notification for sender.
+	n.Actions = actions
+	n.RequestID = requestID
+	n.Timeout = timeout
+	n.TimeoutAction = timeoutAction
+	n.Context = notifContext
+
+	// Send first — if delivery fails, we don't create a dangling
+	// record that could trigger timeout actions even though the user
+	// never received the notification.
+	if err := r.notifier.Send(ctx, n); err != nil {
+		return "", err
+	}
 
 	now := time.Now().UTC()
 	rec := &notifications.Record{
@@ -154,17 +175,6 @@ func (r *Registry) handleActionableNotify(ctx context.Context, n notifications.N
 	}
 	if err := r.notifRecords.Create(rec); err != nil {
 		return "", fmt.Errorf("create notification record: %w", err)
-	}
-
-	// Set actionable fields on the notification for sender.
-	n.Actions = actions
-	n.RequestID = requestID
-	n.Timeout = timeout
-	n.TimeoutAction = timeoutAction
-	n.Context = notifContext
-
-	if err := r.notifier.Send(ctx, n); err != nil {
-		return "", err
 	}
 
 	actionIDs := make([]string, len(actions))

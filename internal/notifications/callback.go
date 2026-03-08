@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 )
 
 // SessionInjector injects a system message into a live conversation.
@@ -91,9 +92,23 @@ func (d *CallbackDispatcher) Handle(_ string, payload []byte) {
 		return
 	}
 
-	if err := d.records.Respond(requestID, actionID); err != nil {
+	// Validate that actionID is one of the declared actions.
+	if !isValidAction(record.Actions, actionID) {
+		d.logger.Warn("callback: unknown action ID for record",
+			"request_id", requestID, "action_id", actionID)
+		return
+	}
+
+	updated, err := d.records.Respond(requestID, actionID)
+	if err != nil {
 		d.logger.Error("callback: failed to mark responded",
 			"request_id", requestID, "error", err)
+		return
+	}
+	if !updated {
+		// Lost the race — another callback or timeout already handled this.
+		d.logger.Debug("callback: record no longer pending after Respond",
+			"request_id", requestID)
 		return
 	}
 
@@ -108,8 +123,10 @@ func (d *CallbackDispatcher) Handle(_ string, payload []byte) {
 
 // DispatchAction routes a notification response to the originating
 // session (via system message injection) or spawns a delegate if the
-// session is no longer alive. This method is also used by the timeout
-// watcher to dispatch auto-fired timeout actions.
+// session is no longer alive. Delegate spawning is offloaded to a
+// goroutine so it does not block the MQTT handler. This method is
+// also used by the timeout watcher to dispatch auto-fired timeout
+// actions.
 func (d *CallbackDispatcher) DispatchAction(record *Record, actionID string) {
 	msg := fmt.Sprintf(
 		"User responded to notification %s: chose %q. Context: %s",
@@ -131,22 +148,27 @@ func (d *CallbackDispatcher) DispatchAction(record *Record, actionID string) {
 		return
 	}
 
-	// Session is gone — spawn a delegate to handle the response.
+	// Session is gone — spawn a delegate in a background goroutine so
+	// the MQTT handler is not blocked by the delegate loop execution.
 	if d.delegate != nil {
 		task := fmt.Sprintf(
 			"Handle notification callback: user chose %q for notification %s to %s.",
 			actionID, record.RequestID, record.Recipient,
 		)
-		if err := d.delegate.Spawn(context.Background(), task, msg); err != nil {
-			d.logger.Error("callback: failed to spawn delegate",
-				"request_id", record.RequestID,
-				"error", err,
-			)
-		} else {
-			d.logger.Info("callback: spawned delegate for expired session",
-				"request_id", record.RequestID,
-			)
-		}
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+			defer cancel()
+			if err := d.delegate.Spawn(ctx, task, msg); err != nil {
+				d.logger.Error("callback: delegate spawn failed",
+					"request_id", record.RequestID,
+					"error", err,
+				)
+			} else {
+				d.logger.Info("callback: delegate completed for expired session",
+					"request_id", record.RequestID,
+				)
+			}
+		}()
 		return
 	}
 
@@ -154,6 +176,17 @@ func (d *CallbackDispatcher) DispatchAction(record *Record, actionID string) {
 		"request_id", record.RequestID,
 		"action_id", actionID,
 	)
+}
+
+// isValidAction reports whether actionID matches one of the record's
+// declared action IDs.
+func isValidAction(actions []Action, actionID string) bool {
+	for _, a := range actions {
+		if a.ID == actionID {
+			return true
+		}
+	}
+	return false
 }
 
 // parseCallbackAction extracts the request ID and action ID from a

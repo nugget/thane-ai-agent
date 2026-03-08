@@ -110,6 +110,9 @@ func (s *Sender) Send(ctx context.Context, n Notification) error {
 		}
 	}
 	if len(n.Actions) > 0 {
+		if n.RequestID == "" {
+			return fmt.Errorf("request_id is required when sending actionable notification")
+		}
 		innerData["actions"] = buildHAActions(n.RequestID, n.Actions)
 	}
 	if len(innerData) > 0 {

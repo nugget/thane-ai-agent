@@ -20,7 +20,7 @@ func newTestTimeoutWatcher(t *testing.T) (*TimeoutWatcher, *RecordStore, *mockIn
 	t.Cleanup(func() { store.Close() })
 
 	inj := &mockInjector{alive: false}
-	del := &mockDelegateSpawner{}
+	del := newMockDelegateSpawner()
 	dispatcher := NewCallbackDispatcher(store, inj, del, slog.Default())
 	watcher := NewTimeoutWatcher(store, dispatcher, nil, 10*time.Millisecond, slog.Default())
 	return watcher, store, inj, del
@@ -120,8 +120,16 @@ func TestTimeoutWatcher_ActionIDDispatch(t *testing.T) {
 	}
 
 	// Should have dispatched a delegate (session is dead in mock).
+	// Delegate spawn runs in a goroutine — wait for it.
+	del.waitSpawn(t)
 	if len(del.spawns) != 1 {
 		t.Fatalf("expected 1 delegate spawn, got %d", len(del.spawns))
+	}
+
+	// Verify the auto-executed action was persisted via SetResponseAction.
+	rec, _ = store.Get("req-auto")
+	if rec.ResponseAction != "deny" {
+		t.Errorf("ResponseAction = %q, want %q (auto-executed)", rec.ResponseAction, "deny")
 	}
 }
 

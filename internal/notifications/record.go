@@ -149,32 +149,62 @@ WHERE request_id = ?`, requestID)
 }
 
 // Respond marks a pending record as responded with the given action
-// ID. If the record is not pending (already responded or expired),
-// this is a no-op.
-func (s *RecordStore) Respond(requestID, actionID string) error {
-	_, err := s.db.Exec(`
+// ID. Returns true if the record was updated (was still pending),
+// false if it was already responded or expired. Callers should check
+// the bool to avoid double-processing in race scenarios.
+func (s *RecordStore) Respond(requestID, actionID string) (bool, error) {
+	res, err := s.db.Exec(`
 UPDATE notification_records
 SET status = 'responded', response_action = ?, responded_at = ?
 WHERE request_id = ? AND status = 'pending'`,
 		actionID, time.Now().UTC(), requestID,
 	)
 	if err != nil {
-		return fmt.Errorf("respond to notification: %w", err)
+		return false, fmt.Errorf("respond to notification: %w", err)
 	}
-	return nil
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("respond rows affected: %w", err)
+	}
+	return n > 0, nil
 }
 
-// Expire marks a pending record as expired. If the record is not
-// pending, this is a no-op.
-func (s *RecordStore) Expire(requestID string) error {
-	_, err := s.db.Exec(`
+// Expire marks a pending record as expired. Returns true if the
+// record was updated (was still pending), false if it was already
+// responded or expired. Callers should check the bool to avoid
+// executing timeout actions on records that were concurrently
+// responded to.
+func (s *RecordStore) Expire(requestID string) (bool, error) {
+	res, err := s.db.Exec(`
 UPDATE notification_records
 SET status = 'expired'
 WHERE request_id = ? AND status = 'pending'`,
 		requestID,
 	)
 	if err != nil {
-		return fmt.Errorf("expire notification: %w", err)
+		return false, fmt.Errorf("expire notification: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("expire rows affected: %w", err)
+	}
+	return n > 0, nil
+}
+
+// SetResponseAction records the action that was executed for an
+// expired record. This is used by the timeout watcher to persist
+// which action was auto-executed on timeout, since the record has
+// already transitioned from pending to expired and Respond cannot
+// update it.
+func (s *RecordStore) SetResponseAction(requestID, actionID string) error {
+	_, err := s.db.Exec(`
+UPDATE notification_records
+SET response_action = ?, responded_at = ?
+WHERE request_id = ?`,
+		actionID, time.Now().UTC(), requestID,
+	)
+	if err != nil {
+		return fmt.Errorf("set response action: %w", err)
 	}
 	return nil
 }

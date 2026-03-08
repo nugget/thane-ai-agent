@@ -247,6 +247,19 @@ func TestHANotify_ActionableInvalidTimeout(t *testing.T) {
 	}
 }
 
+func TestHANotify_ActionableNegativeTimeout(t *testing.T) {
+	reg, _, _ := newTestNotifyRegistryWithRecords(t)
+
+	_, err := reg.Execute(context.Background(), "ha_notify",
+		`{"recipient": "nugget", "message": "test", "actions": [{"id": "ok", "label": "OK"}], "timeout": "-5m"}`)
+	if err == nil {
+		t.Fatal("expected error for negative timeout")
+	}
+	if !strings.Contains(err.Error(), "timeout must be positive") {
+		t.Errorf("error should mention positive, got: %v", err)
+	}
+}
+
 func TestHANotify_ActionableDefaultTimeout(t *testing.T) {
 	reg, _, store := newTestNotifyRegistryWithRecords(t)
 

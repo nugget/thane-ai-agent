@@ -108,8 +108,12 @@ func TestRecordStore_Respond(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	if err := s.Respond("req-002", "approve"); err != nil {
+	updated, err := s.Respond("req-002", "approve")
+	if err != nil {
 		t.Fatalf("Respond: %v", err)
+	}
+	if !updated {
+		t.Error("Respond should return true for pending record")
 	}
 
 	got, err := s.Get("req-002")
@@ -143,13 +147,21 @@ func TestRecordStore_RespondAlreadyResponded(t *testing.T) {
 	}
 
 	// First response.
-	if err := s.Respond("req-003", "approve"); err != nil {
+	updated, err := s.Respond("req-003", "approve")
+	if err != nil {
 		t.Fatalf("Respond: %v", err)
 	}
+	if !updated {
+		t.Error("first Respond should return true")
+	}
 
-	// Second response should be a no-op (not an error).
-	if err := s.Respond("req-003", "deny"); err != nil {
+	// Second response should be a no-op (not an error), returning false.
+	updated, err = s.Respond("req-003", "deny")
+	if err != nil {
 		t.Fatalf("second Respond: %v", err)
+	}
+	if updated {
+		t.Error("second Respond should return false (already responded)")
 	}
 
 	got, err := s.Get("req-003")
@@ -177,8 +189,12 @@ func TestRecordStore_Expire(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	if err := s.Expire("req-004"); err != nil {
+	updated, err := s.Expire("req-004")
+	if err != nil {
 		t.Fatalf("Expire: %v", err)
+	}
+	if !updated {
+		t.Error("Expire should return true for pending record")
 	}
 
 	got, err := s.Get("req-004")
@@ -205,12 +221,20 @@ func TestRecordStore_ExpireAlreadyExpired(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	if err := s.Expire("req-005"); err != nil {
+	updated, err := s.Expire("req-005")
+	if err != nil {
 		t.Fatalf("Expire: %v", err)
 	}
-	// Second expire is a no-op.
-	if err := s.Expire("req-005"); err != nil {
+	if !updated {
+		t.Error("first Expire should return true")
+	}
+	// Second expire is a no-op, returning false.
+	updated, err = s.Expire("req-005")
+	if err != nil {
 		t.Fatalf("second Expire: %v", err)
+	}
+	if updated {
+		t.Error("second Expire should return false (already expired)")
 	}
 
 	got, _ := s.Get("req-005")
@@ -255,7 +279,7 @@ func TestRecordStore_PendingExpired(t *testing.T) {
 		}
 	}
 	// Mark one as responded.
-	if err := s.Respond("req-responded", "ok"); err != nil {
+	if _, err := s.Respond("req-responded", "ok"); err != nil {
 		t.Fatalf("Respond: %v", err)
 	}
 
