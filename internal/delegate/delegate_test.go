@@ -1270,9 +1270,10 @@ func TestExecute_TagScoping_NilPreservesProfile(t *testing.T) {
 	}
 }
 
-func TestExecute_ExhaustReasonIllegalTool(t *testing.T) {
-	// The model calls a tool that is NOT in the registry.
-	// The delegate should detect ErrToolUnavailable and force a text response.
+func TestExecute_IllegalToolRecovery(t *testing.T) {
+	// The model calls a tool that is NOT in the registry. It should
+	// get one recovery iteration with tools enabled so it can
+	// self-correct by choosing a legal tool or responding with text.
 	illegalToolCallResp := &llm.ChatResponse{
 		Model: "test-model",
 		Message: llm.Message{
@@ -1294,14 +1295,97 @@ func TestExecute_ExhaustReasonIllegalTool(t *testing.T) {
 		OutputTokens: 20,
 	}
 
-	forcedTextResp := &llm.ChatResponse{
+	recoveryTextResp := &llm.ChatResponse{
 		Model:        "test-model",
 		Message:      llm.Message{Role: "assistant", Content: "I cannot do that."},
 		InputTokens:  100,
 		OutputTokens: 30,
 	}
 
-	mock := &mockLLMClient{responses: []*llm.ChatResponse{illegalToolCallResp, forcedTextResp}}
+	mock := &mockLLMClient{responses: []*llm.ChatResponse{illegalToolCallResp, recoveryTextResp}}
+	exec := NewExecutor(slog.Default(), mock, nil, newTestRegistry(), "test-model")
+	result, err := exec.Execute(context.Background(), "Do something illegal", "general", "", nil)
+
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	// Single illegal call allows recovery — model responds with text
+	// on the second iteration so the result is NOT exhausted.
+	if result.Exhausted {
+		t.Error("Exhausted = true, want false (single illegal call should allow recovery)")
+	}
+	if result.Iterations != 2 {
+		t.Errorf("Iterations = %d, want 2 (illegal call + recovery)", result.Iterations)
+	}
+	if result.Content != "I cannot do that." {
+		t.Errorf("Content = %q, want %q", result.Content, "I cannot do that.")
+	}
+
+	// The recovery call (index 1) should have tools enabled.
+	if len(mock.calls) < 2 {
+		t.Fatalf("expected at least 2 LLM calls, got %d", len(mock.calls))
+	}
+	if mock.calls[1].Tools == nil {
+		t.Error("recovery call (index 1) had tools=nil; should have tools enabled")
+	}
+}
+
+func TestExecute_ExhaustReasonIllegalTool(t *testing.T) {
+	// If the model calls an unavailable tool twice (on the initial call
+	// AND the recovery iteration), it should be exhausted with
+	// ExhaustIllegalTool and forced to a text-only response.
+	illegalToolCallResp := &llm.ChatResponse{
+		Model: "test-model",
+		Message: llm.Message{
+			Role: "assistant",
+			ToolCalls: []llm.ToolCall{
+				{
+					ID: "call-illegal-1",
+					Function: struct {
+						Name      string         `json:"name"`
+						Arguments map[string]any `json:"arguments"`
+					}{
+						Name:      "nonexistent_tool",
+						Arguments: map[string]any{},
+					},
+				},
+			},
+		},
+		InputTokens:  50,
+		OutputTokens: 20,
+	}
+
+	// Recovery iteration: model repeats the illegal call.
+	secondIllegalResp := &llm.ChatResponse{
+		Model: "test-model",
+		Message: llm.Message{
+			Role: "assistant",
+			ToolCalls: []llm.ToolCall{
+				{
+					ID: "call-illegal-2",
+					Function: struct {
+						Name      string         `json:"name"`
+						Arguments map[string]any `json:"arguments"`
+					}{
+						Name:      "nonexistent_tool",
+						Arguments: map[string]any{},
+					},
+				},
+			},
+		},
+		InputTokens:  100,
+		OutputTokens: 20,
+	}
+
+	forcedTextResp := &llm.ChatResponse{
+		Model:        "test-model",
+		Message:      llm.Message{Role: "assistant", Content: "I cannot do that."},
+		InputTokens:  150,
+		OutputTokens: 30,
+	}
+
+	mock := &mockLLMClient{responses: []*llm.ChatResponse{illegalToolCallResp, secondIllegalResp, forcedTextResp}}
 	exec := NewExecutor(slog.Default(), mock, nil, newTestRegistry(), "test-model")
 	result, err := exec.Execute(context.Background(), "Do something illegal", "general", "", nil)
 
@@ -1314,7 +1398,7 @@ func TestExecute_ExhaustReasonIllegalTool(t *testing.T) {
 	if result.ExhaustReason != ExhaustIllegalTool {
 		t.Errorf("ExhaustReason = %q, want %q", result.ExhaustReason, ExhaustIllegalTool)
 	}
-	if result.Iterations != 1 {
-		t.Errorf("Iterations = %d, want 1 (should break after first iteration)", result.Iterations)
+	if result.Iterations != 2 {
+		t.Errorf("Iterations = %d, want 2 (initial illegal + recovery illegal before break)", result.Iterations)
 	}
 }

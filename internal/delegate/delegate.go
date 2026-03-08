@@ -34,6 +34,11 @@ const (
 	ExhaustIllegalTool   = "illegal_tool"
 )
 
+// maxIllegalStrikes is the number of consecutive iterations containing
+// illegal tool calls before the loop forces a text-only response. The
+// first strike allows the model one recovery iteration to self-correct.
+const maxIllegalStrikes = 2
+
 // ToolCallOutcome records the name and success/failure of a single tool
 // invocation during delegate execution.
 type ToolCallOutcome struct {
@@ -277,6 +282,8 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 			)
 		}
 	}()
+
+	illegalStrikes := 0 // Consecutive iterations with illegal tool calls
 
 	for i := range maxIter {
 		// Check context at iteration boundary. External cancellation
@@ -742,35 +749,48 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 			})
 		}
 
-		// If any tool call was illegal, force a text response immediately.
+		// If any tool call in this batch was illegal (tool unavailable),
+		// give the model one chance to self-correct before forcing text.
+		// The error result is already appended, so the model will see
+		// it on the next iteration and can choose a legal tool or
+		// respond with text. On the second strike, force text-only.
 		if illegalCall {
-			e.logger.Warn("delegate illegal tool call, forcing text response",
+			illegalStrikes++
+			if illegalStrikes >= maxIllegalStrikes {
+				e.logger.Warn("repeated illegal tool calls, forcing text response",
+					"delegate_id", did,
+					"profile", profile.Name,
+					"strikes", illegalStrikes,
+				)
+				iterRec.breakReason = ExhaustIllegalTool
+				iterRec.durationMs = time.Since(iterStart).Milliseconds()
+				iterations = append(iterations, iterRec)
+				completed = true
+				return e.forceTextResponse(ctx, model, messages, &completionRecord{
+					delegateID:       did,
+					conversationID:   convID,
+					archiveSessionID: archiveSessionID,
+					task:             task,
+					guidance:         guidance,
+					profileName:      profile.Name,
+					model:            model,
+					totalIter:        i + 1,
+					maxIter:          maxIter,
+					totalInput:       totalInput,
+					totalOutput:      totalOutput,
+					exhausted:        true,
+					exhaustReason:    ExhaustIllegalTool,
+					startTime:        startTime,
+					messages:         messages,
+					toolCalls:        toolCalls,
+					iterations:       iterations,
+				})
+			}
+			e.logger.Warn("delegate illegal tool call, allowing recovery iteration",
 				"delegate_id", did,
 				"profile", profile.Name,
+				"strikes", illegalStrikes,
 			)
-			iterRec.breakReason = ExhaustIllegalTool
-			iterRec.durationMs = time.Since(iterStart).Milliseconds()
-			iterations = append(iterations, iterRec)
-			completed = true
-			return e.forceTextResponse(ctx, model, messages, &completionRecord{
-				delegateID:       did,
-				conversationID:   convID,
-				archiveSessionID: archiveSessionID,
-				task:             task,
-				guidance:         guidance,
-				profileName:      profile.Name,
-				model:            model,
-				totalIter:        i + 1,
-				maxIter:          maxIter,
-				totalInput:       totalInput,
-				totalOutput:      totalOutput,
-				exhausted:        true,
-				exhaustReason:    ExhaustIllegalTool,
-				startTime:        startTime,
-				messages:         messages,
-				toolCalls:        toolCalls,
-				iterations:       iterations,
-			})
 		}
 
 		// Re-check wall clock after tool execution.
