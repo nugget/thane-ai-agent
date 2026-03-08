@@ -1329,6 +1329,8 @@ iterLoop:
 				}
 				log.Warn("illegal tool call, allowing recovery iteration",
 					"iter", i, "strikes", illegalStrikes)
+			} else {
+				illegalStrikes = 0
 			}
 
 			// Finalize iteration timing after tool execution and continue

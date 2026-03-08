@@ -152,7 +152,7 @@ func TestIllegalToolCall_RepeatedStrikesBreak(t *testing.T) {
 				InputTokens:  100,
 				OutputTokens: 10,
 			},
-			// Iteration 2 (recovery): model calls ANOTHER unavailable tool.
+			// Iteration 2 (recovery): model repeats the same unavailable tool.
 			{
 				Model: "test-model",
 				Message: llm.Message{

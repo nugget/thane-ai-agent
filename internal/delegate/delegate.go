@@ -791,6 +791,8 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 				"profile", profile.Name,
 				"strikes", illegalStrikes,
 			)
+		} else {
+			illegalStrikes = 0
 		}
 
 		// Re-check wall clock after tool execution.
