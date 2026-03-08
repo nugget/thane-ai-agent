@@ -1049,6 +1049,8 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	toolCallCounts := make(map[string]int) // "toolName:argsHash" → count
 	toolsUsed := make(map[string]int)      // tool name → total call count (exposed on Response)
 	const maxToolRepeat = 3                // Break if same tool+args called this many times
+	const maxIllegalStrikes = 2            // Allow 1 recovery iteration before forcing text
+	illegalStrikes := 0                    // Consecutive illegal-tool batches
 
 	maxIterations := 50   // Tool call budget; final text response always gets one extra call
 	emptyRetried := false // Track whether we've already nudged after an empty response
@@ -1308,17 +1310,27 @@ iterLoop:
 				})
 			}
 
-			// If any tool call was illegal (tool unavailable), break the
-			// loop and force a text response. All tool results have been
-			// appended so the model has context. The post-loop recovery
-			// code handles the final tools=nil LLM call.
+			// If any tool call in this batch was illegal (tool unavailable),
+			// give the model one chance to self-correct before breaking.
+			// The error result is already appended, so the model will see
+			// it on the next iteration and can choose a legal tool or
+			// respond with text. On the second strike, break to the
+			// text-only recovery path.
 			if illegalCall {
-				log.Warn("breaking loop due to illegal tool call", "iter", i)
-				breakReason = "illegal_tool"
-				iterRec.breakReason = "illegal_tool"
-				iterRec.durationMs = time.Since(iterStart).Milliseconds()
-				iterations = append(iterations, iterRec)
-				break iterLoop
+				illegalStrikes++
+				if illegalStrikes >= maxIllegalStrikes {
+					log.Warn("repeated illegal tool calls, breaking loop",
+						"iter", i, "strikes", illegalStrikes)
+					breakReason = "illegal_tool"
+					iterRec.breakReason = "illegal_tool"
+					iterRec.durationMs = time.Since(iterStart).Milliseconds()
+					iterations = append(iterations, iterRec)
+					break iterLoop
+				}
+				log.Warn("illegal tool call, allowing recovery iteration",
+					"iter", i, "strikes", illegalStrikes)
+			} else {
+				illegalStrikes = 0
 			}
 
 			// Finalize iteration timing after tool execution and continue
