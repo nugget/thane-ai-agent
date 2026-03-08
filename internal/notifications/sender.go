@@ -32,12 +32,19 @@ type OpstateStore interface {
 	SetWithTTL(namespace, key, value string, ttl time.Duration) error
 }
 
-// Notification is a fire-and-forget push notification.
+// Notification is a push notification. Without Actions it is
+// fire-and-forget (Phase 1). With Actions it creates an actionable
+// notification with callback tracking (Phase 2).
 type Notification struct {
-	Recipient string // contact name (e.g., "nugget")
-	Title     string // notification title (optional)
-	Message   string // notification body (required)
-	Priority  string // "low", "normal" (default), "urgent"
+	Recipient     string        // contact name (e.g., "nugget")
+	Title         string        // notification title (optional)
+	Message       string        // notification body (required)
+	Priority      string        // "low", "normal" (default), "urgent"
+	Actions       []Action      // optional: action buttons (creates tracked notification)
+	RequestID     string        // UUIDv7, set by caller when Actions is non-empty
+	Timeout       time.Duration // how long to wait for response (default: 30m)
+	TimeoutAction string        // action ID to auto-execute on timeout, or "escalate"/"cancel"
+	Context       string        // model-provided context for callback handling
 }
 
 // Sender delivers notifications via Home Assistant companion app push.
@@ -93,16 +100,38 @@ func (s *Sender) Send(ctx context.Context, n Notification) error {
 	if n.Title != "" {
 		data["title"] = n.Title
 	}
+
+	// Build the inner "data" sub-map, merging priority push settings
+	// and action buttons when present.
+	innerData := map[string]any{}
 	if pd := priorityData(n.Priority); pd != nil {
-		data["data"] = pd
+		for k, v := range pd {
+			innerData[k] = v
+		}
+	}
+	if len(n.Actions) > 0 {
+		if n.RequestID == "" {
+			return fmt.Errorf("request_id is required when sending actionable notification")
+		}
+		innerData["actions"] = buildHAActions(n.RequestID, n.Actions)
+	}
+	if len(innerData) > 0 {
+		data["data"] = innerData
 	}
 
-	s.logger.Info("sending notification",
+	logFields := []any{
 		"recipient", n.Recipient,
 		"domain", "notify",
 		"service", entity,
 		"priority", n.Priority,
-	)
+	}
+	if n.RequestID != "" {
+		logFields = append(logFields, "request_id", n.RequestID)
+	}
+	if len(n.Actions) > 0 {
+		logFields = append(logFields, "actions", len(n.Actions))
+	}
+	s.logger.Info("sending notification", logFields...)
 
 	if err := s.ha.CallService(ctx, "notify", entity, data); err != nil {
 		return fmt.Errorf("HA notify call failed: %w", err)
@@ -162,4 +191,18 @@ func priorityData(priority string) map[string]any {
 	default:
 		return nil
 	}
+}
+
+// buildHAActions creates the HA companion app action button definitions.
+// Each action's callback string is formatted as THANE_{requestID}_{actionID}
+// so the callback router can parse it back to the originating record.
+func buildHAActions(requestID string, actions []Action) []map[string]any {
+	haActions := make([]map[string]any, len(actions))
+	for i, a := range actions {
+		haActions[i] = map[string]any{
+			"action": fmt.Sprintf("THANE_%s_%s", requestID, a.ID),
+			"title":  a.Label,
+		}
+	}
+	return haActions
 }

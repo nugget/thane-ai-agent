@@ -42,6 +42,7 @@ type Registry struct {
 	anticipationTools *scheduler.AnticipationTools
 	emailTools        *email.Tools
 	notifier          *notifications.Sender
+	notifRecords      *notifications.RecordStore
 	forgeTools        forgeHandler
 	fileTools         *FileTools
 	shellExec         *ShellExec
@@ -150,6 +151,12 @@ func (r *Registry) SetUsageStore(store *usage.Store) {
 // before the handler runs. Tools with SkipContentResolve=true are exempt.
 func (r *Registry) SetContentResolver(cr *ContentResolver) {
 	r.contentResolver = cr
+}
+
+// SetNotificationRecords configures the notification record store used
+// by the ha_notify tool to track actionable notifications.
+func (r *Registry) SetNotificationRecords(rs *notifications.RecordStore) {
+	r.notifRecords = rs
 }
 
 func (r *Registry) registerTempFileTool() {

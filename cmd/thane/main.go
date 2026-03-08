@@ -811,10 +811,21 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// --- Notifications ---
 	// Push notifications via HA companion app. Requires both the HA client
 	// and the contact store for recipient → device resolution.
+	var notifSender *notifications.Sender
+	var notifRecords *notifications.RecordStore
 	if ha != nil {
-		notifSender := notifications.NewSender(ha, contactStore, opStore, logger)
+		notifSender = notifications.NewSender(ha, contactStore, opStore, logger)
 		loop.Tools().SetHANotifier(notifSender)
 		logger.Info("HA notification sender initialized")
+
+		var nrErr error
+		notifRecords, nrErr = notifications.NewRecordStore(cfg.DataDir+"/notifications.db", logger)
+		if nrErr != nil {
+			return fmt.Errorf("open notification record store: %w", nrErr)
+		}
+		defer notifRecords.Close()
+		loop.Tools().SetNotificationRecords(notifRecords)
+		logger.Info("notification record store initialized", "path", cfg.DataDir+"/notifications.db")
 	}
 
 	// --- Email ---
@@ -1519,6 +1530,26 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	})
 	logger.Info("delegation enabled", "profiles", delegateExec.ProfileNames())
 
+	// --- Notification callback routing ---
+	// Wire up the callback dispatcher and timeout watcher for actionable
+	// notifications. Requires both the notification record store and the
+	// delegate executor (for spawning responses when the session is gone).
+	var notifCallbackDispatcher *notifications.CallbackDispatcher
+	if notifRecords != nil {
+		sessionInj := &notifSessionInjector{mem: mem, archiver: archiveAdapter}
+		delegateSpn := &notifDelegateSpawner{exec: delegateExec}
+		notifCallbackDispatcher = notifications.NewCallbackDispatcher(
+			notifRecords, sessionInj, delegateSpn, logger,
+		)
+
+		timeoutWatcher := notifications.NewTimeoutWatcher(
+			notifRecords, notifCallbackDispatcher, notifSender,
+			30*time.Second, logger,
+		)
+		go timeoutWatcher.Start(ctx)
+		logger.Info("notification callback dispatcher and timeout watcher initialized")
+	}
+
 	// --- Orchestrator tool gating ---
 	// When delegation_required is true, the agent loop only sees
 	// lightweight tools (delegate + memory), steering the primary model
@@ -2047,7 +2078,42 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 			server: server,
 		}
 
+		// Auto-subscribe to the callback topic when actionable
+		// notifications are enabled. The subscription is appended to
+		// the user-configured list so both ambient awareness topics
+		// and the callback topic are active.
+		if notifCallbackDispatcher != nil {
+			const callbackTopic = "thane/callbacks"
+			found := false
+			for _, sub := range cfg.MQTT.Subscriptions {
+				if sub.Topic == callbackTopic {
+					found = true
+					break
+				}
+			}
+			if !found {
+				cfg.MQTT.Subscriptions = append(cfg.MQTT.Subscriptions, config.SubscriptionConfig{
+					Topic: callbackTopic,
+				})
+			}
+		}
+
 		mqttPub = mqtt.New(cfg.MQTT, mqttInstanceID, dailyTokens, statsAdapter, logger)
+
+		// Composite MQTT message handler: routes thane/callbacks to
+		// the notification dispatcher, everything else gets default
+		// debug logging.
+		if notifCallbackDispatcher != nil {
+			dispatcher := notifCallbackDispatcher // capture for closure
+			mqttPub.SetMessageHandler(func(topic string, payload []byte) {
+				if topic == "thane/callbacks" {
+					dispatcher.Handle(topic, payload)
+					return
+				}
+				logger.Debug("mqtt message received", "topic", topic, "size", len(payload))
+			})
+		}
+
 		go func() {
 			if err := mqttPub.Start(ctx); err != nil {
 				logger.Error("mqtt publisher failed", "error", err)
@@ -2605,4 +2671,37 @@ func (r *contactNameLookup) LookupContactByName(name string) *agent.ContactSumma
 		Summary:      c.Summary,
 		Facts:        facts,
 	}
+}
+
+// notifSessionInjector adapts the memory store and archive adapter
+// into a [notifications.SessionInjector]. It avoids importing
+// notifications in the memory package by using this thin adapter in
+// main.go.
+type notifSessionInjector struct {
+	mem      *memory.SQLiteStore
+	archiver *memory.ArchiveAdapter
+}
+
+// InjectSystemMessage adds a system message to the conversation's
+// memory so the agent sees it on the next turn.
+func (n *notifSessionInjector) InjectSystemMessage(conversationID, message string) error {
+	return n.mem.AddMessage(conversationID, "system", message)
+}
+
+// IsSessionAlive reports whether the conversation has an active
+// archive session.
+func (n *notifSessionInjector) IsSessionAlive(conversationID string) bool {
+	return n.archiver.ActiveSessionID(conversationID) != ""
+}
+
+// notifDelegateSpawner adapts the delegate executor into a
+// [notifications.DelegateSpawner].
+type notifDelegateSpawner struct {
+	exec *delegate.Executor
+}
+
+// Spawn executes the task in a lightweight delegate loop.
+func (n *notifDelegateSpawner) Spawn(ctx context.Context, task, guidance string) error {
+	_, err := n.exec.Execute(ctx, task, "", guidance, nil)
+	return err
 }

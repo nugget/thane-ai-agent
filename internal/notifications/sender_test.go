@@ -321,6 +321,124 @@ func TestSend_OpstateNilSafe(t *testing.T) {
 	}
 }
 
+func TestSend_WithActions(t *testing.T) {
+	testID := uuid.New()
+	ha := &mockHAClient{}
+	resolver := &mockContactResolver{
+		contact: &contacts.Contact{ID: testID, Name: "nugget"},
+		facts:   map[string][]string{"ha_companion_app": {"mobile_app_mcphone"}},
+	}
+	s := NewSender(ha, resolver, nil, slog.Default())
+
+	err := s.Send(context.Background(), Notification{
+		Recipient: "nugget",
+		Message:   "Approve this?",
+		RequestID: "req-abc-123",
+		Actions:   []Action{{ID: "approve", Label: "Yes"}, {ID: "deny", Label: "No"}},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(ha.calls) != 1 {
+		t.Fatalf("expected 1 call, got %d", len(ha.calls))
+	}
+
+	call := ha.calls[0]
+	dataMap, ok := call.data["data"].(map[string]any)
+	if !ok {
+		t.Fatal("expected data.data to be map[string]any")
+	}
+	actions, ok := dataMap["actions"].([]map[string]any)
+	if !ok {
+		t.Fatalf("expected data.data.actions to be []map[string]any, got %T", dataMap["actions"])
+	}
+	if len(actions) != 2 {
+		t.Fatalf("expected 2 actions, got %d", len(actions))
+	}
+	if actions[0]["action"] != "THANE_req-abc-123_approve" {
+		t.Errorf("action[0] = %q, want %q", actions[0]["action"], "THANE_req-abc-123_approve")
+	}
+	if actions[1]["title"] != "No" {
+		t.Errorf("action[1].title = %q, want %q", actions[1]["title"], "No")
+	}
+}
+
+func TestSend_ActionsWithPriority(t *testing.T) {
+	testID := uuid.New()
+	ha := &mockHAClient{}
+	resolver := &mockContactResolver{
+		contact: &contacts.Contact{ID: testID, Name: "nugget"},
+		facts:   map[string][]string{"ha_companion_app": {"mobile_app_mcphone"}},
+	}
+	s := NewSender(ha, resolver, nil, slog.Default())
+
+	err := s.Send(context.Background(), Notification{
+		Recipient: "nugget",
+		Message:   "Urgent approval",
+		Priority:  "urgent",
+		RequestID: "req-urgent-1",
+		Actions:   []Action{{ID: "ok", Label: "OK"}},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	call := ha.calls[0]
+	dataMap := call.data["data"].(map[string]any)
+
+	// Both push and actions should coexist.
+	if _, ok := dataMap["push"]; !ok {
+		t.Error("expected push key in data when priority is urgent")
+	}
+	if _, ok := dataMap["actions"]; !ok {
+		t.Error("expected actions key in data when actions present")
+	}
+}
+
+func TestSend_NoActionsBackwardCompat(t *testing.T) {
+	testID := uuid.New()
+	ha := &mockHAClient{}
+	resolver := &mockContactResolver{
+		contact: &contacts.Contact{ID: testID, Name: "nugget"},
+		facts:   map[string][]string{"ha_companion_app": {"mobile_app_mcphone"}},
+	}
+	s := NewSender(ha, resolver, nil, slog.Default())
+
+	err := s.Send(context.Background(), Notification{
+		Recipient: "nugget",
+		Message:   "simple notification",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	call := ha.calls[0]
+	// Without actions or priority, there should be no data sub-map.
+	if _, ok := call.data["data"]; ok {
+		t.Error("expected no data sub-map for simple notification without actions or priority")
+	}
+}
+
+func TestBuildHAActions(t *testing.T) {
+	actions := []Action{
+		{ID: "approve", Label: "Approve"},
+		{ID: "deny", Label: "Deny"},
+	}
+	ha := buildHAActions("req-123", actions)
+	if len(ha) != 2 {
+		t.Fatalf("expected 2 actions, got %d", len(ha))
+	}
+	if ha[0]["action"] != "THANE_req-123_approve" {
+		t.Errorf("action = %q, want %q", ha[0]["action"], "THANE_req-123_approve")
+	}
+	if ha[0]["title"] != "Approve" {
+		t.Errorf("title = %q, want %q", ha[0]["title"], "Approve")
+	}
+	if ha[1]["action"] != "THANE_req-123_deny" {
+		t.Errorf("action = %q, want %q", ha[1]["action"], "THANE_req-123_deny")
+	}
+}
+
 func TestPriorityData(t *testing.T) {
 	tests := []struct {
 		priority string
