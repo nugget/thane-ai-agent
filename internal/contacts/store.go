@@ -182,6 +182,15 @@ func (s *Store) migrate() error {
 		return err
 	}
 
+	// Backfill last_interaction_meta for databases created between #482
+	// (schema v2 baseline) and #485. The column is in the DDL for fresh
+	// databases; this handles existing ones.
+	if _, err := s.db.Exec(`ALTER TABLE contacts ADD COLUMN last_interaction_meta TEXT`); err != nil {
+		if !strings.Contains(err.Error(), "duplicate column") {
+			return fmt.Errorf("add last_interaction_meta column: %w", err)
+		}
+	}
+
 	// Enforce active name uniqueness (case-insensitive).
 	if _, err := s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_contacts_fn_active ON contacts(LOWER(formatted_name)) WHERE deleted_at IS NULL`); err != nil {
 		s.logger.Warn("unique active name index not created", "error", err)
