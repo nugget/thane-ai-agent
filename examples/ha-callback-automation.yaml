@@ -33,13 +33,15 @@ action:
   - variables:
       action_str: "{{ trigger.event.data.action }}"
       # Strip everything from the first UUID segment onward, leaving
-      # only the instance prefix. UUIDv7 starts with 8 hex digits;
-      # match that pattern preceded by an underscore.
-      prefix: >-
+      # only the instance prefix, then convert back to the device-name
+      # form used in MQTT topics. This assumes device_name is a
+      # lowercase hyphenated slug (e.g., "aimee-thane"), which is the
+      # convention enforced by the agent's config loader.
+      device_name: >-
         {{ action_str | regex_replace('_[0-9a-f]{8}-.*$', '') | lower | replace('_', '-') }}
   - service: mqtt.publish
     data:
-      topic: "thane/{{ prefix }}/callbacks"
+      topic: "thane/{{ device_name }}/callbacks"
       payload: >-
         {"action":"{{ action_str }}","timestamp":"{{ now().isoformat() }}"}
 mode: parallel

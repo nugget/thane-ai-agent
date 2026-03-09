@@ -210,6 +210,10 @@ func isValidAction(actions []Action, actionID string) bool {
 // The caller provides the prefix (e.g., "AIMEE_THANE"); this function
 // strips it plus the trailing underscore, then parses the UUID (36
 // characters with hyphens) and the action ID.
+//
+// The prefix check intentionally overlaps with Handle's prefix guard
+// so that parseCallbackAction is self-contained and safe to call from
+// tests or other entry points without relying on prior validation.
 func parseCallbackAction(action, prefix string) (requestID, actionID string, ok bool) {
 	full := prefix + "_"
 	if !strings.HasPrefix(action, full) {
