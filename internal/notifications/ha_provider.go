@@ -1,6 +1,9 @@
 package notifications
 
-import "context"
+import (
+	"context"
+	"fmt"
+)
 
 // HAPushProvider delivers notifications via Home Assistant companion
 // app push by wrapping the existing [Sender].
@@ -19,6 +22,9 @@ func (p *HAPushProvider) Name() string { return "ha_push" }
 
 // Send delivers a fire-and-forget notification via HA push.
 func (p *HAPushProvider) Send(ctx context.Context, req NotificationRequest) error {
+	if p.sender == nil {
+		return fmt.Errorf("ha_push provider: sender is nil")
+	}
 	return p.sender.Send(ctx, Notification{
 		Recipient: req.Recipient,
 		Title:     req.Title,
@@ -31,6 +37,9 @@ func (p *HAPushProvider) Send(ctx context.Context, req NotificationRequest) erro
 // provider only handles delivery; record creation is the router's
 // responsibility.
 func (p *HAPushProvider) SendActionable(ctx context.Context, req ActionableRequest) error {
+	if p.sender == nil {
+		return fmt.Errorf("ha_push provider: sender is nil")
+	}
 	return p.sender.Send(ctx, Notification{
 		Recipient:     req.Recipient,
 		Title:         req.Title,

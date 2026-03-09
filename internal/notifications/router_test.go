@@ -110,6 +110,83 @@ func TestRoute_NoProvider(t *testing.T) {
 	}
 }
 
+func TestRoute_EmptyHACompanionApp(t *testing.T) {
+	testID := uuid.New()
+	resolver := &mockContactResolver{
+		contact: &contacts.Contact{ID: testID, Name: "nugget"},
+		facts:   map[string][]string{"ha_companion_app": {}}, // key present but empty
+	}
+	router, _ := newTestRouter(t, resolver)
+	router.RegisterProvider(&mockProvider{name: "ha_push"})
+
+	_, err := router.Route("nugget")
+	if err == nil {
+		t.Fatal("expected error when ha_companion_app is empty")
+	}
+	if !strings.Contains(err.Error(), "no notification provider") {
+		t.Errorf("error = %q, want to contain 'no notification provider'", err.Error())
+	}
+}
+
+func TestRegisterProvider_Nil(t *testing.T) {
+	router := NewNotificationRouter(nil, nil, slog.Default())
+	// Should not panic.
+	router.RegisterProvider(nil)
+	if len(router.providers) != 0 {
+		t.Errorf("expected 0 providers after registering nil, got %d", len(router.providers))
+	}
+}
+
+func TestSendActionable_NoActions(t *testing.T) {
+	testID := uuid.New()
+	resolver := &mockContactResolver{
+		contact: &contacts.Contact{ID: testID, Name: "nugget"},
+		facts:   map[string][]string{"ha_companion_app": {"mobile_app_mcphone"}},
+	}
+	router, _ := newTestRouter(t, resolver)
+	router.RegisterProvider(&mockProvider{name: "ha_push"})
+
+	_, err := router.SendActionable(context.Background(), ActionableRequest{
+		NotificationRequest: NotificationRequest{Recipient: "nugget", Message: "test"},
+		Timeout:             5 * time.Minute,
+	}, "", "")
+	if err == nil {
+		t.Fatal("expected error for empty actions")
+	}
+	if !strings.Contains(err.Error(), "at least one action") {
+		t.Errorf("error = %q, want to contain 'at least one action'", err.Error())
+	}
+}
+
+func TestSendActionable_ZeroTimeout(t *testing.T) {
+	testID := uuid.New()
+	resolver := &mockContactResolver{
+		contact: &contacts.Contact{ID: testID, Name: "nugget"},
+		facts:   map[string][]string{"ha_companion_app": {"mobile_app_mcphone"}},
+	}
+	router, _ := newTestRouter(t, resolver)
+	router.RegisterProvider(&mockProvider{name: "ha_push"})
+
+	_, err := router.SendActionable(context.Background(), ActionableRequest{
+		NotificationRequest: NotificationRequest{Recipient: "nugget", Message: "test"},
+		Actions:             []Action{{ID: "ok", Label: "OK"}},
+	}, "", "")
+	if err == nil {
+		t.Fatal("expected error for zero timeout")
+	}
+	if !strings.Contains(err.Error(), "positive timeout") {
+		t.Errorf("error = %q, want to contain 'positive timeout'", err.Error())
+	}
+}
+
+func TestNewNotificationRouter_NilLogger(t *testing.T) {
+	// Should not panic when nil logger is passed.
+	router := NewNotificationRouter(nil, nil, nil)
+	if router.logger == nil {
+		t.Fatal("expected non-nil logger after nil was passed")
+	}
+}
+
 func TestRoute_ContactNotFound(t *testing.T) {
 	resolver := &mockContactResolver{
 		findErr: errors.New("contact not found"),

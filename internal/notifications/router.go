@@ -23,8 +23,12 @@ type NotificationRouter struct {
 }
 
 // NewNotificationRouter creates a router with contact resolution and
-// optional record tracking for actionable notifications.
+// optional record tracking for actionable notifications. A nil logger
+// defaults to [slog.Default].
 func NewNotificationRouter(contacts ContactResolver, records *RecordStore, logger *slog.Logger) *NotificationRouter {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &NotificationRouter{
 		providers: make(map[string]NotificationProvider),
 		contacts:  contacts,
@@ -33,9 +37,24 @@ func NewNotificationRouter(contacts ContactResolver, records *RecordStore, logge
 	}
 }
 
-// RegisterProvider adds a notification provider to the router.
+// RegisterProvider adds a notification provider to the router. Nil
+// providers and providers with empty names are rejected. Registering a
+// provider whose name already exists overwrites the previous one and
+// logs a warning.
 func (r *NotificationRouter) RegisterProvider(p NotificationProvider) {
-	r.providers[p.Name()] = p
+	if p == nil {
+		r.logger.Error("attempted to register nil notification provider")
+		return
+	}
+	name := p.Name()
+	if name == "" {
+		r.logger.Error("attempted to register notification provider with empty name")
+		return
+	}
+	if _, exists := r.providers[name]; exists {
+		r.logger.Warn("overwriting existing notification provider", "name", name)
+	}
+	r.providers[name] = p
 }
 
 // Route resolves a recipient to the appropriate provider based on
@@ -65,7 +84,7 @@ func (r *NotificationRouter) Route(recipient string) (NotificationProvider, erro
 	}
 
 	// 2. HA companion app available → route to ha_push.
-	if _, ok := facts["ha_companion_app"]; ok {
+	if apps, ok := facts["ha_companion_app"]; ok && len(apps) > 0 {
 		if p, exists := r.providers["ha_push"]; exists {
 			return p, nil
 		}
@@ -92,6 +111,12 @@ func (r *NotificationRouter) SendNotification(ctx context.Context, req Notificat
 func (r *NotificationRouter) SendActionable(ctx context.Context, req ActionableRequest, sessionID, conversationID string) (string, error) {
 	if r.records == nil {
 		return "", fmt.Errorf("actionable notifications are not configured (record store is nil)")
+	}
+	if len(req.Actions) == 0 {
+		return "", fmt.Errorf("actionable notification requires at least one action")
+	}
+	if req.Timeout <= 0 {
+		return "", fmt.Errorf("actionable notification requires a positive timeout, got %s", req.Timeout)
 	}
 
 	provider, err := r.Route(req.Recipient)

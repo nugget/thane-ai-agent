@@ -202,11 +202,11 @@ func (r *Registry) registerGenericNotificationTools() {
 
 	r.Register(&Tool{
 		Name: "send_notification",
-		Description: "Send a notification to a person. The system automatically selects the " +
-			"best delivery channel based on the recipient's configured preferences and " +
-			"available channels (HA push, Signal, email, etc.). Use this for informing " +
-			"people about events, updates, or anything that needs their attention. " +
-			"This is fire-and-forget — no response tracking.",
+		Description: "Send a notification to a person via the configured delivery channel " +
+			"(currently Home Assistant push; additional channels may be added in the " +
+			"future). The system selects the target using the recipient's contact facts. " +
+			"Use this for informing people about events, updates, or anything that needs " +
+			"their attention. This is fire-and-forget — no response tracking.",
 		AlwaysAvailable: true,
 		Parameters: map[string]any{
 			"type": "object",
@@ -237,9 +237,11 @@ func (r *Registry) registerGenericNotificationTools() {
 	r.Register(&Tool{
 		Name: "request_human_decision",
 		Description: "Request a decision from a person via an actionable notification with " +
-			"response buttons. Creates a tracked request with callback routing — you will " +
-			"receive a callback when they respond or on timeout. The system automatically " +
-			"selects the delivery channel based on the recipient's preferences.",
+			"response buttons (currently delivered via Home Assistant push; additional " +
+			"channels may be added in the future). Creates a tracked request with " +
+			"callback routing — you will receive a callback when they respond or on " +
+			"timeout. The system selects the delivery channel using the recipient's " +
+			"contact facts.",
 		AlwaysAvailable: true,
 		Parameters: map[string]any{
 			"type": "object",

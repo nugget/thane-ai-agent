@@ -16,6 +16,34 @@ func TestHAPushProvider_Name(t *testing.T) {
 	}
 }
 
+func TestHAPushProvider_NilSender_Send(t *testing.T) {
+	p := NewHAPushProvider(nil)
+	err := p.Send(context.Background(), NotificationRequest{
+		Recipient: "nugget",
+		Message:   "test",
+	})
+	if err == nil {
+		t.Fatal("expected error for nil sender")
+	}
+	if err.Error() != "ha_push provider: sender is nil" {
+		t.Errorf("error = %q, want 'ha_push provider: sender is nil'", err.Error())
+	}
+}
+
+func TestHAPushProvider_NilSender_SendActionable(t *testing.T) {
+	p := NewHAPushProvider(nil)
+	err := p.SendActionable(context.Background(), ActionableRequest{
+		NotificationRequest: NotificationRequest{Recipient: "nugget", Message: "test"},
+		Actions:             []Action{{ID: "ok", Label: "OK"}},
+	})
+	if err == nil {
+		t.Fatal("expected error for nil sender")
+	}
+	if err.Error() != "ha_push provider: sender is nil" {
+		t.Errorf("error = %q, want 'ha_push provider: sender is nil'", err.Error())
+	}
+}
+
 func TestHAPushProvider_Send(t *testing.T) {
 	testID := uuid.New()
 	ha := &mockHAClient{}
