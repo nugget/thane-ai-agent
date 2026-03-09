@@ -59,7 +59,10 @@ func (s *WorkingMemoryStore) Get(conversationID string) (string, time.Time, erro
 		return "", time.Time{}, fmt.Errorf("get working memory: %w", err)
 	}
 
-	updatedAt, _ := database.ParseTimestamp(updatedAtStr)
+	updatedAt, err := database.ParseTimestamp(updatedAtStr)
+	if err != nil {
+		return "", time.Time{}, fmt.Errorf("parse working memory updated_at: %w", err)
+	}
 	return content, updatedAt, nil
 }
 

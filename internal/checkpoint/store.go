@@ -217,7 +217,10 @@ func (s *Store) scanFull(row *sql.Row) (*Checkpoint, error) {
 	}
 
 	cp.ID, _ = uuid.Parse(idStr)
-	cp.CreatedAt, _ = database.ParseTimestamp(createdStr)
+	cp.CreatedAt, err = database.ParseTimestamp(createdStr)
+	if err != nil {
+		return nil, fmt.Errorf("parse created_at: %w", err)
+	}
 	cp.Trigger = Trigger(triggerStr)
 	if note.Valid {
 		cp.Note = note.String
@@ -253,7 +256,10 @@ func (s *Store) scanMeta(rows *sql.Rows) (*Checkpoint, error) {
 	}
 
 	cp.ID, _ = uuid.Parse(idStr)
-	cp.CreatedAt, _ = database.ParseTimestamp(createdStr)
+	cp.CreatedAt, err = database.ParseTimestamp(createdStr)
+	if err != nil {
+		return nil, fmt.Errorf("parse created_at: %w", err)
+	}
 	cp.Trigger = Trigger(triggerStr)
 	if note.Valid {
 		cp.Note = note.String

@@ -518,9 +518,15 @@ func (s *Store) scanFact(row *sql.Row) (*Fact, error) {
 	if refRaw.Valid {
 		f.Ref = refRaw.String
 	}
-	f.CreatedAt, _ = database.ParseTimestamp(createdStr)
-	f.UpdatedAt, _ = database.ParseTimestamp(updatedStr)
-	f.AccessedAt, _ = database.ParseTimestamp(accessedStr)
+	if f.CreatedAt, err = database.ParseTimestamp(createdStr); err != nil {
+		return nil, fmt.Errorf("parse created_at: %w", err)
+	}
+	if f.UpdatedAt, err = database.ParseTimestamp(updatedStr); err != nil {
+		return nil, fmt.Errorf("parse updated_at: %w", err)
+	}
+	if f.AccessedAt, err = database.ParseTimestamp(accessedStr); err != nil {
+		return nil, fmt.Errorf("parse accessed_at: %w", err)
+	}
 
 	return &f, nil
 }
@@ -546,9 +552,15 @@ func (s *Store) scanFactRow(rows *sql.Rows) (*Fact, error) {
 	if refRaw.Valid {
 		f.Ref = refRaw.String
 	}
-	f.CreatedAt, _ = database.ParseTimestamp(createdStr)
-	f.UpdatedAt, _ = database.ParseTimestamp(updatedStr)
-	f.AccessedAt, _ = database.ParseTimestamp(accessedStr)
+	if f.CreatedAt, err = database.ParseTimestamp(createdStr); err != nil {
+		return nil, fmt.Errorf("parse created_at: %w", err)
+	}
+	if f.UpdatedAt, err = database.ParseTimestamp(updatedStr); err != nil {
+		return nil, fmt.Errorf("parse updated_at: %w", err)
+	}
+	if f.AccessedAt, err = database.ParseTimestamp(accessedStr); err != nil {
+		return nil, fmt.Errorf("parse accessed_at: %w", err)
+	}
 
 	return &f, nil
 }
@@ -669,9 +681,15 @@ func (s *Store) scanFactWithEmbedding(rows *sql.Rows) (*Fact, error) {
 		f.Ref = refRaw.String
 	}
 	f.Embedding = DecodeEmbedding(embeddingBlob)
-	f.CreatedAt, _ = database.ParseTimestamp(createdStr)
-	f.UpdatedAt, _ = database.ParseTimestamp(updatedStr)
-	f.AccessedAt, _ = database.ParseTimestamp(accessedStr)
+	if f.CreatedAt, err = database.ParseTimestamp(createdStr); err != nil {
+		return nil, fmt.Errorf("parse created_at: %w", err)
+	}
+	if f.UpdatedAt, err = database.ParseTimestamp(updatedStr); err != nil {
+		return nil, fmt.Errorf("parse updated_at: %w", err)
+	}
+	if f.AccessedAt, err = database.ParseTimestamp(accessedStr); err != nil {
+		return nil, fmt.Errorf("parse accessed_at: %w", err)
+	}
 
 	return &f, nil
 }

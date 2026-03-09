@@ -45,6 +45,16 @@ func TestParseTimestamp(t *testing.T) {
 			want:  ref,
 		},
 		{
+			name:  "trailing whitespace",
+			input: "2026-03-09T21:39:58Z\n",
+			want:  ref,
+		},
+		{
+			name:  "leading whitespace",
+			input: "  2026-03-09 21:39:58  ",
+			want:  ref,
+		},
+		{
 			name:    "garbage",
 			input:   "not a date",
 			wantErr: true,
@@ -52,6 +62,11 @@ func TestParseTimestamp(t *testing.T) {
 		{
 			name:    "empty string",
 			input:   "",
+			wantErr: true,
+		},
+		{
+			name:    "whitespace only",
+			input:   "   ",
 			wantErr: true,
 		},
 	}

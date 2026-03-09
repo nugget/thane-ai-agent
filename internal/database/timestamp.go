@@ -2,6 +2,7 @@ package database
 
 import (
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -23,6 +24,10 @@ var timestampLayouts = []string{
 // multiple common formats.  This provides read-side defense against
 // format mismatches — the write side should continue using RFC3339.
 func ParseTimestamp(s string) (time.Time, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return time.Time{}, fmt.Errorf("empty timestamp")
+	}
 	for _, layout := range timestampLayouts {
 		if t, err := time.Parse(layout, s); err == nil {
 			return t, nil

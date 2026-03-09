@@ -321,8 +321,13 @@ func (s *SQLiteStore) GetAllConversations() []*Conversation {
 			ID:       id,
 			Messages: s.GetMessages(id),
 		}
-		conv.CreatedAt, _ = database.ParseTimestamp(createdAt)
-		conv.UpdatedAt, _ = database.ParseTimestamp(updatedAt)
+		var parseErr error
+		if conv.CreatedAt, parseErr = database.ParseTimestamp(createdAt); parseErr != nil {
+			continue
+		}
+		if conv.UpdatedAt, parseErr = database.ParseTimestamp(updatedAt); parseErr != nil {
+			continue
+		}
 
 		convs = append(convs, conv)
 	}
