@@ -24,12 +24,12 @@
         <div class="filter-tabs">
             <a class="filter-tab{{if eq .Kind ""}} active{{end}}"
                hx-get="/contacts" hx-target="#contacts-tbody">All kinds</a>
-            <a class="filter-tab{{if eq .Kind "person"}} active{{end}}"
-               hx-get="/contacts?kind=person" hx-target="#contacts-tbody">Person</a>
-            <a class="filter-tab{{if eq .Kind "company"}} active{{end}}"
-               hx-get="/contacts?kind=company" hx-target="#contacts-tbody">Company</a>
-            <a class="filter-tab{{if eq .Kind "organization"}} active{{end}}"
-               hx-get="/contacts?kind=organization" hx-target="#contacts-tbody">Org</a>
+            <a class="filter-tab{{if eq .Kind "individual"}} active{{end}}"
+               hx-get="/contacts?kind=individual" hx-target="#contacts-tbody">Individual</a>
+            <a class="filter-tab{{if eq .Kind "org"}} active{{end}}"
+               hx-get="/contacts?kind=org" hx-target="#contacts-tbody">Org</a>
+            <a class="filter-tab{{if eq .Kind "group"}} active{{end}}"
+               hx-get="/contacts?kind=group" hx-target="#contacts-tbody">Group</a>
         </div>
     </div>
 
@@ -41,7 +41,7 @@
                         <th>Name</th>
                         <th>Kind</th>
                         <th>Trust Zone</th>
-                        <th>Relationship</th>
+                        <th>Org</th>
                         <th>Last Interaction</th>
                     </tr>
                 </thead>
@@ -58,7 +58,7 @@
 {{if .Contacts}}
 {{range .Contacts}}
 <tr hx-get="/contacts/{{.ID}}" hx-target="#content" hx-push-url="true">
-    <td><strong>{{.Name}}</strong>{{if .Summary}}<br><span class="text-muted" style="font-size:0.8125rem">{{truncate .Summary 60}}</span>{{end}}</td>
+    <td><strong>{{.Name}}</strong>{{if .AISummary}}<br><span class="text-muted" style="font-size:0.8125rem">{{truncate .AISummary 60}}</span>{{end}}</td>
     <td>{{.Kind}}</td>
     <td>
         {{if eq .TrustZone "owner"}}<span class="badge badge-teal">owner</span>
@@ -66,7 +66,7 @@
         {{else if .TrustZone}}<span class="badge badge-muted">{{.TrustZone}}</span>
         {{end}}
     </td>
-    <td>{{.Relationship}}</td>
+    <td>{{.Org}}</td>
     <td class="text-muted">{{.LastInteraction}}</td>
 </tr>
 {{end}}

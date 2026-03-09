@@ -48,7 +48,7 @@ func TestHAPushProvider_Send(t *testing.T) {
 	testID := uuid.New()
 	ha := &mockHAClient{}
 	resolver := &mockContactResolver{
-		contact: &contacts.Contact{ID: testID, Name: "nugget"},
+		contact: &contacts.Contact{ID: testID, FormattedName: "nugget"},
 		facts:   map[string][]string{"ha_companion_app": {"mobile_app_mcphone"}},
 	}
 	sender := NewSender(ha, resolver, nil, "test-thane", slog.Default())
@@ -83,7 +83,7 @@ func TestHAPushProvider_SendActionable(t *testing.T) {
 	testID := uuid.New()
 	ha := &mockHAClient{}
 	resolver := &mockContactResolver{
-		contact: &contacts.Contact{ID: testID, Name: "nugget"},
+		contact: &contacts.Contact{ID: testID, FormattedName: "nugget"},
 		facts:   map[string][]string{"ha_companion_app": {"mobile_app_mcphone"}},
 	}
 	sender := NewSender(ha, resolver, nil, "test-thane", slog.Default())

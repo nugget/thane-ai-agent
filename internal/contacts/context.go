@@ -68,25 +68,36 @@ func (p *ContextProvider) GetContext(ctx context.Context, userMessage string) (s
 			continue
 		}
 
-		// Load facts for this contact.
+		// Load properties and facts for this contact.
+		props, _ := p.store.GetProperties(c.ID)
 		facts, _ := p.store.GetFacts(c.ID)
 
 		if included > 0 {
 			sb.WriteString("\n")
 		}
 
-		sb.WriteString(fmt.Sprintf("**%s**", c.Name))
-		if c.Relationship != "" {
-			sb.WriteString(fmt.Sprintf(" (%s)", c.Relationship))
+		sb.WriteString(fmt.Sprintf("**%s**", c.FormattedName))
+		if c.Org != "" {
+			sb.WriteString(fmt.Sprintf(" (%s)", c.Org))
 		}
-		if c.Summary != "" {
-			sb.WriteString(fmt.Sprintf(" — %s", c.Summary))
+		if c.AISummary != "" {
+			sb.WriteString(fmt.Sprintf(" — %s", c.AISummary))
 		}
 		if c.TrustZone != "" {
 			sb.WriteString(fmt.Sprintf(" [%s]", c.TrustZone))
 		}
 		sb.WriteString("\n")
 
+		// Include properties.
+		for _, prop := range props {
+			label := prop.Property
+			if prop.Type != "" {
+				label += "(" + prop.Type + ")"
+			}
+			sb.WriteString(fmt.Sprintf("  %s: %s\n", label, prop.Value))
+		}
+
+		// Include facts.
 		if len(facts) > 0 {
 			keys := make([]string, 0, len(facts))
 			for k := range facts {

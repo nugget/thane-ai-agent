@@ -25,9 +25,8 @@ func TestChannelProvider_SignalKnownContact(t *testing.T) {
 	lookup := &mockContactLookup{
 		contacts: map[string]*ContactSummary{
 			"Nugget": {
-				Name:         "Nugget (David McNett)",
-				Relationship: "owner",
-				Summary:      "Night owl, prefers explicit explanations, 24h time format",
+				Name:    "Nugget (David McNett)",
+				Summary: "Night owl, prefers explicit explanations, 24h time format",
 				Facts: map[string][]string{
 					"timezone": {"America/Chicago"},
 				},
@@ -53,7 +52,6 @@ func TestChannelProvider_SignalKnownContact(t *testing.T) {
 		{"header", "### Channel Context"},
 		{"source", "Signal"},
 		{"name", "Nugget (David McNett)"},
-		{"relationship", "owner"},
 		{"summary", "Night owl"},
 		{"timezone", "America/Chicago"},
 		{"channel note", "Terse input is normal"},
@@ -136,8 +134,6 @@ func TestChannelProvider_NilContactLookup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// With nil lookup, should still produce output with the sender name
-	// but marked as unknown contact.
 	if !strings.Contains(got, "Nugget") {
 		t.Errorf("expected sender name, got:\n%s", got)
 	}
@@ -150,8 +146,7 @@ func TestChannelProvider_ContactWithMultipleFacts(t *testing.T) {
 	lookup := &mockContactLookup{
 		contacts: map[string]*ContactSummary{
 			"Alice": {
-				Name:         "Alice",
-				Relationship: "friend",
+				Name: "Alice",
 				Facts: map[string][]string{
 					"email":    {"alice@example.com", "alice@work.com"},
 					"timezone": {"Europe/London"},
@@ -262,9 +257,8 @@ func TestChannelProvider_SanitizesFields(t *testing.T) {
 	lookup := &mockContactLookup{
 		contacts: map[string]*ContactSummary{
 			"Eve": {
-				Name:         "Eve\nEvil",
-				Relationship: "colleague\nwith\nnewlines",
-				Summary:      "Has a multi\nline summary",
+				Name:    "Eve\nEvil",
+				Summary: "Has a multi\nline summary",
 				Facts: map[string][]string{
 					"note": {"contains\nnewline"},
 				},
@@ -281,12 +275,8 @@ func TestChannelProvider_SanitizesFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Newlines within fields should be collapsed to spaces.
 	if strings.Contains(got, "Eve\n") {
 		t.Errorf("expected newlines in name to be sanitized, got:\n%s", got)
-	}
-	if strings.Contains(got, "colleague\n") {
-		t.Errorf("expected newlines in relationship to be sanitized, got:\n%s", got)
 	}
 	if !strings.Contains(got, "Eve Evil") {
 		t.Errorf("expected collapsed name, got:\n%s", got)
@@ -319,7 +309,6 @@ func TestChannelProvider_FactKeyCap(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Should only render maxFactKeys (10) fact lines.
 	factLines := 0
 	for _, line := range strings.Split(got, "\n") {
 		if strings.HasPrefix(strings.TrimSpace(line), "- key_") {

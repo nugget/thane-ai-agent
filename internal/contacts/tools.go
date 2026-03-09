@@ -9,6 +9,8 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
+
+	"github.com/google/uuid"
 )
 
 // EmbeddingClient generates embeddings for semantic search.
@@ -34,31 +36,47 @@ func (t *Tools) SetEmbeddingClient(client EmbeddingClient) {
 
 // SaveContactArgs are arguments for the save_contact tool.
 type SaveContactArgs struct {
-	Name         string            `json:"name"`
-	Kind         string            `json:"kind,omitempty"`         // person, company, organization
-	TrustZone    string            `json:"trust_zone,omitempty"`   // owner, trusted, known
-	Relationship string            `json:"relationship,omitempty"` // friend, colleague, family, vendor
-	Summary      string            `json:"summary,omitempty"`
-	Details      string            `json:"details,omitempty"`
-	Facts        map[string]string `json:"facts,omitempty"` // key-value attributes (email, phone, etc.)
+	Name       string            `json:"name"`                  // maps to FormattedName
+	Kind       string            `json:"kind,omitempty"`        // individual, group, org, location
+	TrustZone  string            `json:"trust_zone,omitempty"`  // owner, trusted, known
+	GivenName  string            `json:"given_name,omitempty"`  // vCard N given name
+	FamilyName string            `json:"family_name,omitempty"` // vCard N family name
+	Nickname   string            `json:"nickname,omitempty"`    // vCard NICKNAME
+	Org        string            `json:"org,omitempty"`         // vCard ORG
+	Title      string            `json:"title,omitempty"`       // vCard TITLE
+	Role       string            `json:"role,omitempty"`        // vCard ROLE
+	Note       string            `json:"note,omitempty"`        // vCard NOTE
+	AISummary  string            `json:"ai_summary,omitempty"`  // AI-generated context
+	Facts      map[string]string `json:"facts,omitempty"`       // freeform AI metadata
+}
+
+// propertyKeys lists fact keys that should be stored as vCard properties
+// in contact_properties rather than freeform facts.
+var propertyKeys = map[string]string{
+	"email":  "EMAIL",
+	"phone":  "TEL",
+	"signal": "IMPP",
+	"matrix": "IMPP",
 }
 
 // saveContactKnownFields lists the top-level JSON keys that SaveContactArgs
 // recognizes. Any other top-level string values are rescued into the Facts map
 // so models that flatten email, phone, etc. don't lose data silently.
 var saveContactKnownFields = map[string]bool{
-	"name": true, "kind": true, "trust_zone": true, "relationship": true,
-	"summary": true, "details": true, "facts": true,
+	"name": true, "kind": true, "trust_zone": true,
+	"given_name": true, "family_name": true, "nickname": true,
+	"org": true, "title": true, "role": true,
+	"note": true, "ai_summary": true, "facts": true,
 }
 
 // SaveContact creates or updates a contact. When a contact with the
 // given name already exists, only non-empty fields are overwritten.
-// Facts are additive (use ReplaceFact for replacement semantics).
+// Facts are additive. Email and phone values are stored as vCard
+// properties (EMAIL, TEL) in contact_properties.
 //
 // Top-level string fields that don't match known SaveContactArgs keys
-// (e.g., "email", "phone", "notes") are automatically rescued into the
-// Facts map, since models frequently flatten them instead of nesting
-// under "facts".
+// (e.g., "email", "phone") are automatically rescued into the Facts
+// map or contact_properties, since models frequently flatten them.
 func (t *Tools) SaveContact(argsJSON string) (string, error) {
 	var args SaveContactArgs
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
@@ -66,8 +84,6 @@ func (t *Tools) SaveContact(argsJSON string) (string, error) {
 	}
 
 	// Rescue top-level string fields that should be knowledge.
-	// Models frequently pass email, phone, notes, etc. as top-level
-	// keys instead of nesting them under the "facts" map.
 	var raw map[string]any
 	if err := json.Unmarshal([]byte(argsJSON), &raw); err == nil {
 		if args.Facts == nil {
@@ -78,7 +94,6 @@ func (t *Tools) SaveContact(argsJSON string) (string, error) {
 			if saveContactKnownFields[k] {
 				continue
 			}
-			// Do not overwrite facts that were explicitly provided.
 			if _, exists := args.Facts[k]; exists {
 				continue
 			}
@@ -105,21 +120,36 @@ func (t *Tools) SaveContact(argsJSON string) (string, error) {
 	}
 
 	if existing != nil {
-		// Update existing contact.
+		// Update existing contact — only non-empty fields overwrite.
 		if args.Kind != "" {
 			existing.Kind = args.Kind
 		}
 		if args.TrustZone != "" {
 			existing.TrustZone = args.TrustZone
 		}
-		if args.Relationship != "" {
-			existing.Relationship = args.Relationship
+		if args.GivenName != "" {
+			existing.GivenName = args.GivenName
 		}
-		if args.Summary != "" {
-			existing.Summary = args.Summary
+		if args.FamilyName != "" {
+			existing.FamilyName = args.FamilyName
 		}
-		if args.Details != "" {
-			existing.Details = args.Details
+		if args.Nickname != "" {
+			existing.Nickname = args.Nickname
+		}
+		if args.Org != "" {
+			existing.Org = args.Org
+		}
+		if args.Title != "" {
+			existing.Title = args.Title
+		}
+		if args.Role != "" {
+			existing.Role = args.Role
+		}
+		if args.Note != "" {
+			existing.Note = args.Note
+		}
+		if args.AISummary != "" {
+			existing.AISummary = args.AISummary
 		}
 
 		updated, err := t.store.Upsert(existing)
@@ -127,26 +157,28 @@ func (t *Tools) SaveContact(argsJSON string) (string, error) {
 			return "", fmt.Errorf("update contact: %w", err)
 		}
 
-		// Set any knowledge.
-		for k, v := range args.Facts {
-			if err := t.store.SetFact(updated.ID, k, v); err != nil {
-				return "", fmt.Errorf("set fact %q: %w", k, err)
-			}
+		if err := t.saveFactsAndProperties(updated.ID, args.Facts); err != nil {
+			return "", err
 		}
 
 		t.generateEmbedding(updated, args.Facts)
 
-		return fmt.Sprintf("Updated contact: **%s** (%s)", updated.Name, updated.Kind), nil
+		return fmt.Sprintf("Updated contact: **%s** (%s)", updated.FormattedName, updated.Kind), nil
 	}
 
 	// Create new contact.
 	c := &Contact{
-		Name:         args.Name,
-		Kind:         args.Kind,
-		TrustZone:    args.TrustZone,
-		Relationship: args.Relationship,
-		Summary:      args.Summary,
-		Details:      args.Details,
+		FormattedName: args.Name,
+		Kind:          args.Kind,
+		TrustZone:     args.TrustZone,
+		GivenName:     args.GivenName,
+		FamilyName:    args.FamilyName,
+		Nickname:      args.Nickname,
+		Org:           args.Org,
+		Title:         args.Title,
+		Role:          args.Role,
+		Note:          args.Note,
+		AISummary:     args.AISummary,
 	}
 
 	created, err := t.store.Upsert(c)
@@ -154,15 +186,40 @@ func (t *Tools) SaveContact(argsJSON string) (string, error) {
 		return "", fmt.Errorf("create contact: %w", err)
 	}
 
-	for k, v := range args.Facts {
-		if err := t.store.SetFact(created.ID, k, v); err != nil {
-			return "", fmt.Errorf("set fact %q: %w", k, err)
-		}
+	if err := t.saveFactsAndProperties(created.ID, args.Facts); err != nil {
+		return "", err
 	}
 
 	t.generateEmbedding(created, args.Facts)
 
-	return fmt.Sprintf("Saved new contact: **%s** (%s)", created.Name, created.Kind), nil
+	return fmt.Sprintf("Saved new contact: **%s** (%s)", created.FormattedName, created.Kind), nil
+}
+
+// saveFactsAndProperties routes fact entries to either
+// contact_properties (for vCard property keys like email, phone) or
+// contact_facts (for freeform AI metadata).
+func (t *Tools) saveFactsAndProperties(contactID uuid.UUID, facts map[string]string) error {
+	for k, v := range facts {
+		propName, isProperty := propertyKeys[k]
+		if isProperty {
+			value := v
+			// For IMPP properties, prefix with the protocol scheme.
+			if propName == "IMPP" && !strings.Contains(v, ":") {
+				value = k + ":" + v
+			}
+			if err := t.store.AddProperty(contactID, &Property{
+				Property: propName,
+				Value:    value,
+			}); err != nil {
+				return fmt.Errorf("add property %s: %w", propName, err)
+			}
+		} else {
+			if err := t.store.SetFact(contactID, k, v); err != nil {
+				return fmt.Errorf("set fact %q: %w", k, err)
+			}
+		}
+	}
+	return nil
 }
 
 // LookupContactArgs are arguments for the lookup_contact tool.
@@ -170,8 +227,8 @@ type LookupContactArgs struct {
 	Name  string `json:"name,omitempty"`
 	Query string `json:"query,omitempty"`
 	Kind  string `json:"kind,omitempty"`
-	Key   string `json:"key,omitempty"`   // fact key filter
-	Value string `json:"value,omitempty"` // fact value filter
+	Key   string `json:"key,omitempty"`   // property or fact key filter
+	Value string `json:"value,omitempty"` // property or fact value filter
 }
 
 // LookupContact retrieves contacts from the directory.
@@ -181,7 +238,7 @@ func (t *Tools) LookupContact(argsJSON string) (string, error) {
 		return "", fmt.Errorf("parse args: %w", err)
 	}
 
-	// Name lookup (cascading: exact name → preferred_name → search).
+	// Name lookup (cascading: formatted name → nickname → search).
 	if args.Name != "" {
 		c, err := t.store.ResolveContact(args.Name)
 		if errors.Is(err, sql.ErrNoRows) {
@@ -190,15 +247,38 @@ func (t *Tools) LookupContact(argsJSON string) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("resolve contact: %w", err)
 		}
-		c, err = t.store.GetWithFacts(c.ID)
+		c, err = t.store.GetWithAll(c.ID)
 		if err != nil {
-			return "", fmt.Errorf("get with facts: %w", err)
+			return "", fmt.Errorf("get contact details: %w", err)
 		}
 		return formatContact(c), nil
 	}
 
-	// Fact filter.
+	// Property or fact filter.
 	if args.Key != "" && args.Value != "" {
+		// Check if the key maps to a vCard property.
+		propName, isProperty := propertyKeys[args.Key]
+		if isProperty {
+			contacts, err := t.store.FindByProperty(propName, args.Value)
+			if err != nil {
+				return "", fmt.Errorf("find by property: %w", err)
+			}
+			if len(contacts) == 0 {
+				return fmt.Sprintf("No contacts with %s matching %q", args.Key, args.Value), nil
+			}
+			return formatContactList(contacts), nil
+		}
+		// Search properties directly by uppercase key name.
+		if args.Key == strings.ToUpper(args.Key) {
+			contacts, err := t.store.FindByProperty(args.Key, args.Value)
+			if err != nil {
+				return "", fmt.Errorf("find by property: %w", err)
+			}
+			if len(contacts) > 0 {
+				return formatContactList(contacts), nil
+			}
+		}
+		// Fall back to fact search.
 		contacts, err := t.store.FindByFact(args.Key, args.Value)
 		if err != nil {
 			return "", fmt.Errorf("find by fact: %w", err)
@@ -310,7 +390,6 @@ func (t *Tools) ListContacts(argsJSON string) (string, error) {
 }
 
 // GenerateMissingEmbeddings creates embeddings for contacts that don't have them.
-// Returns count of contacts embedded.
 func (t *Tools) GenerateMissingEmbeddings() (int, error) {
 	if t.embeddings == nil {
 		return 0, fmt.Errorf("embedding client not configured")
@@ -324,7 +403,8 @@ func (t *Tools) GenerateMissingEmbeddings() (int, error) {
 	count := 0
 	for _, c := range contacts {
 		facts, _ := t.store.GetFacts(c.ID)
-		embText := buildEmbeddingText(c, facts)
+		props, _ := t.store.GetProperties(c.ID)
+		embText := buildEmbeddingText(c, facts, props)
 		emb, err := t.embeddings.Generate(context.Background(), embText)
 		if err != nil {
 			continue
@@ -344,7 +424,6 @@ func (t *Tools) generateEmbedding(c *Contact, extraFacts map[string]string) {
 		return
 	}
 
-	// Merge stored facts with any just-provided ones.
 	facts, _ := t.store.GetFacts(c.ID)
 	if facts == nil {
 		facts = make(map[string][]string)
@@ -353,7 +432,8 @@ func (t *Tools) generateEmbedding(c *Contact, extraFacts map[string]string) {
 		facts[k] = []string{v}
 	}
 
-	embText := buildEmbeddingText(c, facts)
+	props, _ := t.store.GetProperties(c.ID)
+	embText := buildEmbeddingText(c, facts, props)
 	emb, err := t.embeddings.Generate(context.Background(), embText)
 	if err != nil {
 		return
@@ -361,22 +441,33 @@ func (t *Tools) generateEmbedding(c *Contact, extraFacts map[string]string) {
 	_ = t.store.SetEmbedding(c.ID, emb)
 }
 
-// buildEmbeddingText creates text for embedding from a contact and its knowledge.
-func buildEmbeddingText(c *Contact, facts map[string][]string) string {
+// buildEmbeddingText creates text for embedding from a contact, its
+// facts, and its properties.
+func buildEmbeddingText(c *Contact, facts map[string][]string, props []Property) string {
 	var sb strings.Builder
-	sb.WriteString(c.Name)
+	sb.WriteString(c.FormattedName)
 	if c.Kind != "" {
 		sb.WriteString(" (" + c.Kind + ")")
 	}
-	if c.Relationship != "" {
-		sb.WriteString(" - " + c.Relationship)
+	if c.Org != "" {
+		sb.WriteString(" - " + c.Org)
 	}
-	if c.Summary != "" {
-		sb.WriteString(": " + c.Summary)
+	if c.Title != "" {
+		sb.WriteString(", " + c.Title)
 	}
-	if c.Details != "" {
-		sb.WriteString("\n" + c.Details)
+	if c.AISummary != "" {
+		sb.WriteString(": " + c.AISummary)
 	}
+	if c.Note != "" {
+		sb.WriteString("\n" + c.Note)
+	}
+
+	// Include properties.
+	for _, p := range props {
+		sb.WriteString(fmt.Sprintf("\n%s: %s", p.Property, p.Value))
+	}
+
+	// Include facts.
 	keys := make([]string, 0, len(facts))
 	for k := range facts {
 		keys = append(keys, k)
@@ -388,23 +479,43 @@ func buildEmbeddingText(c *Contact, facts map[string][]string) string {
 	return sb.String()
 }
 
-// formatContact formats a single contact with facts for display.
+// formatContact formats a single contact with properties and facts for display.
 func formatContact(c *Contact) string {
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("**%s**", c.Name))
-	if c.Relationship != "" {
-		sb.WriteString(fmt.Sprintf(" (%s)", c.Relationship))
+	sb.WriteString(fmt.Sprintf("**%s**", c.FormattedName))
+	if c.Org != "" {
+		sb.WriteString(fmt.Sprintf(" (%s)", c.Org))
 	}
-	if c.Summary != "" {
-		sb.WriteString(fmt.Sprintf(" — %s", c.Summary))
+	if c.AISummary != "" {
+		sb.WriteString(fmt.Sprintf(" — %s", c.AISummary))
 	}
 	sb.WriteString(fmt.Sprintf("\nKind: %s", c.Kind))
 	if c.TrustZone != "" {
 		sb.WriteString(fmt.Sprintf(" | Trust: %s", c.TrustZone))
 	}
+	if c.Nickname != "" {
+		sb.WriteString(fmt.Sprintf(" | Nickname: %s", c.Nickname))
+	}
+	if c.Title != "" {
+		sb.WriteString(fmt.Sprintf("\nTitle: %s", c.Title))
+	}
 
-	if c.Details != "" {
-		sb.WriteString(fmt.Sprintf("\nDetails: %s", c.Details))
+	if c.Note != "" {
+		sb.WriteString(fmt.Sprintf("\nNote: %s", c.Note))
+	}
+
+	if len(c.Properties) > 0 {
+		sb.WriteString("\n")
+		for _, p := range c.Properties {
+			label := p.Property
+			if p.Type != "" {
+				label += " (" + p.Type + ")"
+			}
+			if p.Label != "" {
+				label += " [" + p.Label + "]"
+			}
+			sb.WriteString(fmt.Sprintf("  %s: %s\n", label, p.Value))
+		}
 	}
 
 	if len(c.Facts) > 0 {
@@ -427,12 +538,12 @@ func formatContactList(contacts []*Contact) string {
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("Found %d contact(s):\n\n", len(contacts)))
 	for _, c := range contacts {
-		sb.WriteString(fmt.Sprintf("**%s**", c.Name))
-		if c.Relationship != "" {
-			sb.WriteString(fmt.Sprintf(" (%s)", c.Relationship))
+		sb.WriteString(fmt.Sprintf("**%s**", c.FormattedName))
+		if c.Org != "" {
+			sb.WriteString(fmt.Sprintf(" (%s)", c.Org))
 		}
-		if c.Summary != "" {
-			sb.WriteString(fmt.Sprintf(" — %s", c.Summary))
+		if c.AISummary != "" {
+			sb.WriteString(fmt.Sprintf(" — %s", c.AISummary))
 		}
 		sb.WriteString("\n")
 	}

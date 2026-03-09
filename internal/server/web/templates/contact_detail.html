@@ -22,13 +22,17 @@
                     {{end}}
                 </dd>
                 {{end}}
-                {{if .Relationship}}
-                <dt>Relationship</dt>
-                <dd>{{.Relationship}}</dd>
+                {{if .Org}}
+                <dt>Organization</dt>
+                <dd>{{.Org}}</dd>
                 {{end}}
-                {{if .Summary}}
-                <dt>Summary</dt>
-                <dd>{{.Summary}}</dd>
+                {{if .Title}}
+                <dt>Title</dt>
+                <dd>{{.Title}}</dd>
+                {{end}}
+                {{if .AISummary}}
+                <dt>AI Summary</dt>
+                <dd>{{.AISummary}}</dd>
                 {{end}}
                 <dt>Created</dt>
                 <dd>{{.CreatedAt}}</dd>
@@ -37,10 +41,10 @@
             </dl>
         </div>
 
-        {{if .Details}}
+        {{if .Note}}
         <div class="card">
-            <h2>Details</h2>
-            <p style="white-space: pre-wrap; font-size: 0.875rem;">{{.Details}}</p>
+            <h2>Note</h2>
+            <p style="white-space: pre-wrap; font-size: 0.875rem;">{{.Note}}</p>
         </div>
         {{end}}
     </div>

@@ -52,7 +52,7 @@ func newTestNotifyRegistry() (*Registry, *mockNotifyHA) {
 	testID := uuid.New()
 	ha := &mockNotifyHA{}
 	resolver := &mockNotifyContacts{
-		contact: &contacts.Contact{ID: testID, Name: "nugget"},
+		contact: &contacts.Contact{ID: testID, FormattedName: "nugget"},
 		facts:   map[string][]string{"ha_companion_app": {"mobile_app_mcphone"}},
 	}
 	sender := notifications.NewSender(ha, resolver, nil, "test-thane", slog.Default())
@@ -134,7 +134,7 @@ func TestHANotify_WithTitleAndPriority(t *testing.T) {
 func TestHANotify_SenderError(t *testing.T) {
 	testID := uuid.New()
 	resolver := &mockNotifyContacts{
-		contact: &contacts.Contact{ID: testID, Name: "nugget"},
+		contact: &contacts.Contact{ID: testID, FormattedName: "nugget"},
 		facts:   map[string][]string{},
 	}
 	sender := notifications.NewSender(&mockNotifyHA{}, resolver, nil, "test-thane", slog.Default())
@@ -331,7 +331,7 @@ func newTestNotifyRegistryWithRouter(t *testing.T) (*Registry, *mockRouterProvid
 
 	testID := uuid.New()
 	resolver := &mockNotifyContacts{
-		contact: &contacts.Contact{ID: testID, Name: "nugget"},
+		contact: &contacts.Contact{ID: testID, FormattedName: "nugget"},
 		facts:   map[string][]string{"ha_companion_app": {"mobile_app_mcphone"}},
 	}
 

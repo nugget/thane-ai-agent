@@ -22,10 +22,9 @@ const maxFieldLen = 200
 // the channel context block. This is intentionally a small struct to
 // avoid coupling ChannelProvider to the full contacts package.
 type ContactSummary struct {
-	Name         string
-	Relationship string
-	Summary      string
-	Facts        map[string][]string // key→values, e.g. "timezone"→["America/Chicago"]
+	Name    string
+	Summary string              // AI-generated context summary
+	Facts   map[string][]string // key→values, e.g. "timezone"→["America/Chicago"]
 }
 
 // ContactLookup resolves a contact name to a summary for system prompt
@@ -96,11 +95,7 @@ func (p *ChannelProvider) GetContext(ctx context.Context, _ string) (string, err
 
 	if contact != nil {
 		// Known contact — rich context.
-		sb.WriteString(fmt.Sprintf("- **Participant:** %s", sanitizeField(contact.Name)))
-		if contact.Relationship != "" {
-			sb.WriteString(fmt.Sprintf(" (%s)", sanitizeField(contact.Relationship)))
-		}
-		sb.WriteString("\n")
+		sb.WriteString(fmt.Sprintf("- **Participant:** %s\n", sanitizeField(contact.Name)))
 		if contact.Summary != "" {
 			sb.WriteString(fmt.Sprintf("  - Context: %s\n", sanitizeField(contact.Summary)))
 		}

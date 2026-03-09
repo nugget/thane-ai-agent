@@ -21,39 +21,59 @@ func (r *Registry) registerContactTools() {
 
 	r.Register(&Tool{
 		Name:        "save_contact",
-		Description: "Store or update a person or organization in the contact directory. Contact facts should be personal attributes only: relationship notes, communication preferences, trust levels, aliases, and contact info (email, phone, role). Do NOT store project knowledge, design philosophy, technical insights, or collaboration patterns here — use remember_fact or workspace files instead. When updating an existing contact, only non-empty fields are overwritten.",
+		Description: "Store or update a person, organization, or group in the contact directory. Contact facts should be personal attributes only: communication preferences, trust levels, aliases, and behavioral patterns. Standard contact info (email, phone) is stored as vCard properties automatically. Do NOT store project knowledge, design philosophy, technical insights, or collaboration patterns here — use remember_fact or workspace files instead. When updating an existing contact, only non-empty fields are overwritten.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"name": map[string]any{
 					"type":        "string",
-					"description": "Full name of the person or organization",
+					"description": "Display name of the person or organization (vCard FN)",
 				},
 				"kind": map[string]any{
 					"type":        "string",
-					"enum":        []string{"person", "company", "organization"},
-					"description": "Type of contact (default: person)",
+					"enum":        []string{"individual", "group", "org", "location"},
+					"description": "Type of contact (default: individual)",
 				},
 				"trust_zone": map[string]any{
 					"type":        "string",
 					"enum":        []string{"owner", "trusted", "known"},
 					"description": "Trust level for this contact. Determines communication permissions across all channels. owner=full access, trusted=free communication, known=gated sends.",
 				},
-				"relationship": map[string]any{
+				"given_name": map[string]any{
 					"type":        "string",
-					"description": "Relationship to the user (e.g., friend, colleague, family, vendor)",
+					"description": "First/given name (vCard N given-name component)",
 				},
-				"summary": map[string]any{
+				"family_name": map[string]any{
 					"type":        "string",
-					"description": "One-line summary (e.g., 'Backend engineer at Anthropic')",
+					"description": "Last/family name (vCard N family-name component)",
 				},
-				"details": map[string]any{
+				"nickname": map[string]any{
 					"type":        "string",
-					"description": "Extended notes or context about this contact",
+					"description": "Preferred nickname or alias (vCard NICKNAME). Used in contact resolution.",
+				},
+				"org": map[string]any{
+					"type":        "string",
+					"description": "Organization name (vCard ORG)",
+				},
+				"title": map[string]any{
+					"type":        "string",
+					"description": "Job title (vCard TITLE, e.g., 'Backend Engineer')",
+				},
+				"role": map[string]any{
+					"type":        "string",
+					"description": "Functional role (vCard ROLE, e.g., 'Engineering Lead')",
+				},
+				"note": map[string]any{
+					"type":        "string",
+					"description": "Free-form notes about this contact (vCard NOTE)",
+				},
+				"ai_summary": map[string]any{
+					"type":        "string",
+					"description": "AI-generated one-line context summary (e.g., 'Backend engineer at Anthropic, prefers Signal')",
 				},
 				"facts": map[string]any{
 					"type":                 "object",
-					"description":          "Personal attributes as key-value pairs (e.g., {\"email\": \"alice@example.com\", \"phone\": \"555-1234\", \"preferred_name\": \"Ali\"}). Only store contact info and personal traits — not project knowledge or technical notes.",
+					"description":          "Attributes as key-value pairs. Standard keys like 'email' and 'phone' are stored as vCard properties; other keys are stored as freeform metadata (e.g., {\"email\": \"alice@example.com\", \"phone\": \"555-1234\", \"notification_preference\": \"ha_push\"}).",
 					"additionalProperties": map[string]any{"type": "string"},
 				},
 			},
@@ -70,13 +90,13 @@ func (r *Registry) registerContactTools() {
 
 	r.Register(&Tool{
 		Name:        "lookup_contact",
-		Description: "Look up contacts from the directory. Search by name, query, kind, or structured attributes. With no arguments, returns directory statistics.",
+		Description: "Look up contacts from the directory. Search by name, query, kind, or structured attributes (vCard properties like EMAIL/TEL or freeform facts). With no arguments, returns directory statistics.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"name": map[string]any{
 					"type":        "string",
-					"description": "Exact name to look up (case-insensitive)",
+					"description": "Exact name to look up (case-insensitive, also checks nickname)",
 				},
 				"query": map[string]any{
 					"type":        "string",
@@ -84,16 +104,16 @@ func (r *Registry) registerContactTools() {
 				},
 				"kind": map[string]any{
 					"type":        "string",
-					"enum":        []string{"person", "company", "organization"},
+					"enum":        []string{"individual", "group", "org", "location"},
 					"description": "Filter by contact type",
 				},
 				"key": map[string]any{
 					"type":        "string",
-					"description": "Fact key to filter by (requires value)",
+					"description": "Property or fact key to filter by (e.g., 'email', 'phone', 'EMAIL', 'TEL'). Requires value.",
 				},
 				"value": map[string]any{
 					"type":        "string",
-					"description": "Fact value to match (requires key)",
+					"description": "Value to match for the given key (requires key)",
 				},
 			},
 		},
@@ -136,7 +156,7 @@ func (r *Registry) registerContactTools() {
 			"properties": map[string]any{
 				"kind": map[string]any{
 					"type":        "string",
-					"enum":        []string{"person", "company", "organization"},
+					"enum":        []string{"individual", "group", "org", "location"},
 					"description": "Filter by contact type",
 				},
 				"limit": map[string]any{

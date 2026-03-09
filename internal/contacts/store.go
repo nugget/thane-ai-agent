@@ -1,4 +1,5 @@
-// Package contacts provides structured storage for people and organizations.
+// Package contacts provides vCard-aligned structured storage for people,
+// organizations, groups, and locations.
 package contacts
 
 import (
@@ -14,12 +15,30 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/knowledge"
 )
 
-// SQL fragments for query building.
+// SQL fragments for query building. Column order must match scan helpers.
 const (
-	contactColumns          = "id, name, kind, trust_zone, relationship, summary, details, last_interaction, created_at, updated_at"
-	qualifiedContactColumns = "contacts.id, contacts.name, contacts.kind, contacts.trust_zone, contacts.relationship, contacts.summary, contacts.details, contacts.last_interaction, contacts.created_at, contacts.updated_at"
-	contactColumnsWithEmbed = "id, name, kind, trust_zone, relationship, summary, details, embedding, last_interaction, created_at, updated_at"
-	activeFilter            = "deleted_at IS NULL"
+	contactColumns = `id, kind, formatted_name, family_name, given_name,
+		additional_names, name_prefix, name_suffix, nickname,
+		birthday, anniversary, gender, org, title, role,
+		note, photo_uri, trust_zone, ai_summary, rev, etag,
+		last_interaction, created_at, updated_at`
+
+	qualifiedContactColumns = `contacts.id, contacts.kind, contacts.formatted_name,
+		contacts.family_name, contacts.given_name, contacts.additional_names,
+		contacts.name_prefix, contacts.name_suffix, contacts.nickname,
+		contacts.birthday, contacts.anniversary, contacts.gender,
+		contacts.org, contacts.title, contacts.role,
+		contacts.note, contacts.photo_uri, contacts.trust_zone,
+		contacts.ai_summary, contacts.rev, contacts.etag,
+		contacts.last_interaction, contacts.created_at, contacts.updated_at`
+
+	contactColumnsWithEmbed = `id, kind, formatted_name, family_name, given_name,
+		additional_names, name_prefix, name_suffix, nickname,
+		birthday, anniversary, gender, org, title, role,
+		note, photo_uri, trust_zone, ai_summary, rev, etag,
+		embedding, last_interaction, created_at, updated_at`
+
+	activeFilter = "deleted_at IS NULL"
 )
 
 // ValidTrustZones is the set of allowed trust zone values.
@@ -29,20 +48,62 @@ var ValidTrustZones = map[string]bool{
 	"known":   true,
 }
 
-// Contact represents a person, company, or organization.
+// ValidKinds is the set of allowed contact kind values (vCard KIND).
+var ValidKinds = map[string]bool{
+	"individual": true,
+	"group":      true,
+	"org":        true,
+	"location":   true,
+}
+
+// Contact represents a vCard-aligned contact record. Fields map to
+// vCard 4.0 (RFC 6350) properties unless noted as Thane extensions.
 type Contact struct {
 	ID              uuid.UUID           `json:"id"`
-	Name            string              `json:"name"`
-	Kind            string              `json:"kind"`                   // person, company, organization
-	TrustZone       string              `json:"trust_zone,omitempty"`   // owner, trusted, known
-	Relationship    string              `json:"relationship,omitempty"` // friend, colleague, family, vendor
-	Summary         string              `json:"summary,omitempty"`      // one-line context
-	Details         string              `json:"details,omitempty"`      // markdown blob
-	Embedding       []float32           `json:"embedding,omitempty"`    // vector for semantic search
+	Kind            string              `json:"kind"`                       // vCard KIND: individual, group, org, location
+	FormattedName   string              `json:"formatted_name"`             // vCard FN (display name)
+	FamilyName      string              `json:"family_name,omitempty"`      // vCard N component
+	GivenName       string              `json:"given_name,omitempty"`       // vCard N component
+	AdditionalNames string              `json:"additional_names,omitempty"` // vCard N component
+	NamePrefix      string              `json:"name_prefix,omitempty"`      // vCard N component
+	NameSuffix      string              `json:"name_suffix,omitempty"`      // vCard N component
+	Nickname        string              `json:"nickname,omitempty"`         // vCard NICKNAME
+	Birthday        string              `json:"birthday,omitempty"`         // vCard BDAY (ISO 8601)
+	Anniversary     string              `json:"anniversary,omitempty"`      // vCard ANNIVERSARY
+	Gender          string              `json:"gender,omitempty"`           // vCard GENDER
+	Org             string              `json:"org,omitempty"`              // vCard ORG
+	Title           string              `json:"title,omitempty"`            // vCard TITLE
+	Role            string              `json:"role,omitempty"`             // vCard ROLE
+	Note            string              `json:"note,omitempty"`             // vCard NOTE
+	PhotoURI        string              `json:"photo_uri,omitempty"`        // vCard PHOTO URI
+	TrustZone       string              `json:"trust_zone"`                 // X-THANE-TRUST-ZONE
+	AISummary       string              `json:"ai_summary,omitempty"`       // X-THANE-AI-SUMMARY
+	Rev             string              `json:"rev"`                        // vCard REV (ISO 8601)
+	ETag            string              `json:"etag,omitempty"`             // CardDAV sync
+	Embedding       []float32           `json:"embedding,omitempty"`        // semantic search vector
 	LastInteraction time.Time           `json:"last_interaction,omitempty"`
 	CreatedAt       time.Time           `json:"created_at"`
 	UpdatedAt       time.Time           `json:"updated_at"`
-	Facts           map[string][]string `json:"facts,omitempty"` // populated by GetWithFacts
+	Properties      []Property          `json:"properties,omitempty"` // populated by GetWithProperties
+	Facts           map[string][]string `json:"facts,omitempty"`      // populated by GetWithFacts
+}
+
+// Property represents a structured vCard property on a contact.
+// Repeatable, parameterised properties (EMAIL, TEL, ADR, IMPP, URL,
+// KEY, CATEGORIES, RELATED, MEMBER, etc.) are stored here rather than
+// on the Contact struct directly.
+type Property struct {
+	ID        int64     `json:"id"`
+	ContactID uuid.UUID `json:"contact_id"`
+	Property  string    `json:"property"` // EMAIL, TEL, ADR, IMPP, URL, KEY, etc.
+	Value     string    `json:"value"`
+	Type      string    `json:"type,omitempty"`      // TYPE param: work, home, cell, etc.
+	Pref      int       `json:"pref,omitempty"`      // PREF param: 1-100, 0 = unset
+	Label     string    `json:"label,omitempty"`     // LABEL param
+	MediaType string    `json:"mediatype,omitempty"` // MEDIATYPE param
+	Verified  bool      `json:"verified,omitempty"`  // has Thane verified traffic from this?
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // Store manages contact persistence in SQLite.
@@ -72,11 +133,26 @@ func (s *Store) migrate() error {
 	_, err := s.db.Exec(`
 		CREATE TABLE IF NOT EXISTS contacts (
 			id TEXT PRIMARY KEY,
-			name TEXT NOT NULL,
-			kind TEXT NOT NULL DEFAULT 'person',
-			relationship TEXT,
-			summary TEXT,
-			details TEXT,
+			kind TEXT NOT NULL DEFAULT 'individual',
+			formatted_name TEXT NOT NULL,
+			family_name TEXT,
+			given_name TEXT,
+			additional_names TEXT,
+			name_prefix TEXT,
+			name_suffix TEXT,
+			nickname TEXT,
+			birthday TEXT,
+			anniversary TEXT,
+			gender TEXT,
+			org TEXT,
+			title TEXT,
+			role TEXT,
+			note TEXT,
+			photo_uri TEXT,
+			trust_zone TEXT NOT NULL DEFAULT 'known',
+			ai_summary TEXT,
+			rev TEXT NOT NULL,
+			etag TEXT,
 			embedding BLOB,
 			last_interaction TEXT,
 			created_at TEXT NOT NULL,
@@ -84,96 +160,63 @@ func (s *Store) migrate() error {
 			deleted_at TEXT
 		);
 
-		CREATE INDEX IF NOT EXISTS idx_contacts_name ON contacts(name);
 		CREATE INDEX IF NOT EXISTS idx_contacts_kind ON contacts(kind);
+		CREATE INDEX IF NOT EXISTS idx_contacts_fn ON contacts(formatted_name);
 		CREATE INDEX IF NOT EXISTS idx_contacts_deleted ON contacts(deleted_at);
+		CREATE INDEX IF NOT EXISTS idx_contacts_trust_zone ON contacts(trust_zone);
 	`)
 	if err != nil {
 		return err
 	}
 
-	// Enforce active name uniqueness (case-insensitive). Allows soft-deleted
-	// duplicates but prevents two active contacts with the same name.
-	if _, err := s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_contacts_name_active ON contacts(LOWER(name)) WHERE deleted_at IS NULL`); err != nil {
-		s.logger.Warn("unique active name index not created; name uniqueness may not be enforced", "error", err)
+	// Enforce active name uniqueness (case-insensitive).
+	if _, err := s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_contacts_fn_active ON contacts(LOWER(formatted_name)) WHERE deleted_at IS NULL`); err != nil {
+		s.logger.Warn("unique active name index not created", "error", err)
 	}
 
-	// Add trust_zone column for contacts that predate #293.
-	if err := database.AddColumn(s.db, "contacts", "trust_zone", "TEXT NOT NULL DEFAULT 'known'"); err != nil {
+	// contact_properties: multi-value vCard properties with parameters.
+	_, err = s.db.Exec(`
+		CREATE TABLE IF NOT EXISTS contact_properties (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			contact_id TEXT NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
+			property TEXT NOT NULL,
+			value TEXT NOT NULL,
+			type TEXT,
+			pref INTEGER,
+			label TEXT,
+			mediatype TEXT,
+			verified INTEGER DEFAULT 0,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_cp_contact ON contact_properties(contact_id);
+		CREATE INDEX IF NOT EXISTS idx_cp_property ON contact_properties(property);
+		CREATE INDEX IF NOT EXISTS idx_cp_property_value ON contact_properties(property, value);
+		CREATE INDEX IF NOT EXISTS idx_cp_value ON contact_properties(value);
+	`)
+	if err != nil {
 		return err
 	}
 
-	// Index trust_zone to optimize queries that filter by trust zone.
-	if _, err := s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_contacts_trust_zone ON contacts(trust_zone)`); err != nil {
-		s.logger.Warn("trust_zone index not created; queries by trust_zone may be slow", "error", err)
-	}
-
-	// contact_facts supports multiple values per key (e.g., two phone
-	// numbers). If the table was created with the old UNIQUE(contact_id, key)
-	// constraint, rebuild it without the constraint.
-	s.migrateContactFacts()
-
-	s.tryEnableFTS()
-	return nil
-}
-
-// migrateContactFacts creates or migrates the contact_facts table.
-// Older schema had UNIQUE(contact_id, key); the new schema allows
-// multiple values per key.
-func (s *Store) migrateContactFacts() {
-	// Try creating the table. If it already exists this is a no-op.
-	_, err := s.db.Exec(`
+	// contact_facts: freeform AI-observed metadata only.
+	_, err = s.db.Exec(`
 		CREATE TABLE IF NOT EXISTS contact_facts (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			contact_id TEXT NOT NULL REFERENCES contacts(id),
 			key TEXT NOT NULL,
 			value TEXT NOT NULL,
 			updated_at TEXT NOT NULL
-		)
+		);
+
+		CREATE INDEX IF NOT EXISTS idx_cf_contact ON contact_facts(contact_id);
 	`)
 	if err != nil {
-		s.logger.Warn("failed to create contact_facts table", "error", err)
-		return
+		return err
 	}
 
-	// Check if the old unique constraint exists and migrate away from it.
-	var uniqueCount int
-	_ = s.db.QueryRow(`SELECT COUNT(*) FROM pragma_index_list('contact_facts') WHERE "unique" = 1 AND origin = 'u'`).Scan(&uniqueCount)
-	if uniqueCount > 0 {
-		s.logger.Info("migrating contact_facts to multi-value schema")
-		tx, err := s.db.Begin()
-		if err != nil {
-			s.logger.Warn("contact_facts migration failed", "error", err)
-			return
-		}
-		defer func() { _ = tx.Rollback() }()
-
-		stmts := []string{
-			`ALTER TABLE contact_facts RENAME TO contact_facts_old`,
-			`CREATE TABLE contact_facts (
-				id INTEGER PRIMARY KEY AUTOINCREMENT,
-				contact_id TEXT NOT NULL REFERENCES contacts(id),
-				key TEXT NOT NULL,
-				value TEXT NOT NULL,
-				updated_at TEXT NOT NULL
-			)`,
-			`INSERT INTO contact_facts (contact_id, key, value, updated_at) SELECT contact_id, key, value, updated_at FROM contact_facts_old`,
-			`DROP TABLE contact_facts_old`,
-		}
-		for _, stmt := range stmts {
-			if _, err := tx.Exec(stmt); err != nil {
-				s.logger.Warn("contact_facts migration step failed", "error", err, "stmt", stmt)
-				return
-			}
-		}
-		if err := tx.Commit(); err != nil {
-			s.logger.Warn("contact_facts migration commit failed", "error", err)
-			return
-		}
-		s.logger.Info("contact_facts migration complete")
-	}
-
-	_, _ = s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_contact_facts_contact_id ON contact_facts(contact_id)`)
+	s.tryEnableFTS()
+	return nil
 }
 
 // tryEnableFTS creates the FTS5 virtual table for full-text search.
@@ -181,10 +224,11 @@ func (s *Store) migrateContactFacts() {
 func (s *Store) tryEnableFTS() {
 	_, err := s.db.Exec(`
 		CREATE VIRTUAL TABLE IF NOT EXISTS contacts_fts USING fts5(
-			name,
-			relationship,
-			summary,
-			details,
+			formatted_name,
+			nickname,
+			note,
+			ai_summary,
+			org,
 			content=contacts,
 			content_rowid=rowid
 		)
@@ -209,12 +253,15 @@ func (s *Store) Close() error {
 
 // Upsert creates or updates a contact. If the contact has no ID, a new
 // UUIDv7 is assigned. Soft-deleted contacts with the same ID are
-// resurrected.
+// resurrected. Rev is automatically set to the current timestamp.
 func (s *Store) Upsert(c *Contact) (*Contact, error) {
 	now := time.Now().UTC()
 
 	if c.Kind == "" {
-		c.Kind = "person"
+		c.Kind = "individual"
+	}
+	if !ValidKinds[c.Kind] {
+		return nil, fmt.Errorf("invalid kind %q (valid: individual, group, org, location)", c.Kind)
 	}
 	if c.TrustZone == "" {
 		c.TrustZone = "known"
@@ -222,6 +269,8 @@ func (s *Store) Upsert(c *Contact) (*Contact, error) {
 	if !ValidTrustZones[c.TrustZone] {
 		return nil, fmt.Errorf("invalid trust zone %q (valid: owner, trusted, known)", c.TrustZone)
 	}
+
+	c.Rev = now.Format(time.RFC3339)
 
 	if c.ID == uuid.Nil {
 		// New contact.
@@ -234,10 +283,20 @@ func (s *Store) Upsert(c *Contact) (*Contact, error) {
 		c.UpdatedAt = now
 
 		_, err = s.db.Exec(`
-			INSERT INTO contacts (id, name, kind, trust_zone, relationship, summary, details, last_interaction, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		`, c.ID.String(), c.Name, c.Kind, c.TrustZone, nullStr(c.Relationship), nullStr(c.Summary),
-			nullStr(c.Details), nullTime(c.LastInteraction),
+			INSERT INTO contacts (id, kind, formatted_name, family_name, given_name,
+				additional_names, name_prefix, name_suffix, nickname,
+				birthday, anniversary, gender, org, title, role,
+				note, photo_uri, trust_zone, ai_summary, rev, etag,
+				last_interaction, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		`, c.ID.String(), c.Kind, c.FormattedName,
+			nullStr(c.FamilyName), nullStr(c.GivenName), nullStr(c.AdditionalNames),
+			nullStr(c.NamePrefix), nullStr(c.NameSuffix), nullStr(c.Nickname),
+			nullStr(c.Birthday), nullStr(c.Anniversary), nullStr(c.Gender),
+			nullStr(c.Org), nullStr(c.Title), nullStr(c.Role),
+			nullStr(c.Note), nullStr(c.PhotoURI),
+			c.TrustZone, nullStr(c.AISummary), c.Rev, nullStr(c.ETag),
+			nullTime(c.LastInteraction),
 			now.Format(time.RFC3339), now.Format(time.RFC3339))
 		if err != nil {
 			return nil, fmt.Errorf("insert: %w", err)
@@ -249,12 +308,22 @@ func (s *Store) Upsert(c *Contact) (*Contact, error) {
 	// Update existing (resurrect if soft-deleted).
 	c.UpdatedAt = now
 	_, err := s.db.Exec(`
-		UPDATE contacts SET name = ?, kind = ?, trust_zone = ?, relationship = ?, summary = ?, details = ?,
+		UPDATE contacts SET kind = ?, formatted_name = ?, family_name = ?, given_name = ?,
+			additional_names = ?, name_prefix = ?, name_suffix = ?, nickname = ?,
+			birthday = ?, anniversary = ?, gender = ?, org = ?, title = ?, role = ?,
+			note = ?, photo_uri = ?, trust_zone = ?, ai_summary = ?, rev = ?, etag = ?,
 			last_interaction = ?, updated_at = ?, deleted_at = NULL
 		WHERE id = ?
-	`, c.Name, c.Kind, c.TrustZone, nullStr(c.Relationship), nullStr(c.Summary),
-		nullStr(c.Details), nullTime(c.LastInteraction),
-		now.Format(time.RFC3339), c.ID.String())
+	`, c.Kind, c.FormattedName,
+		nullStr(c.FamilyName), nullStr(c.GivenName), nullStr(c.AdditionalNames),
+		nullStr(c.NamePrefix), nullStr(c.NameSuffix), nullStr(c.Nickname),
+		nullStr(c.Birthday), nullStr(c.Anniversary), nullStr(c.Gender),
+		nullStr(c.Org), nullStr(c.Title), nullStr(c.Role),
+		nullStr(c.Note), nullStr(c.PhotoURI),
+		c.TrustZone, nullStr(c.AISummary), c.Rev, nullStr(c.ETag),
+		nullTime(c.LastInteraction),
+		now.Format(time.RFC3339),
+		c.ID.String())
 	if err != nil {
 		return nil, fmt.Errorf("update: %w", err)
 	}
@@ -263,19 +332,27 @@ func (s *Store) Upsert(c *Contact) (*Contact, error) {
 }
 
 // FindByName returns the first active contact with a case-insensitive
-// name match. Returns sql.ErrNoRows if not found.
+// formatted name match. Returns sql.ErrNoRows if not found.
 func (s *Store) FindByName(name string) (*Contact, error) {
 	return s.scanContact(s.db.QueryRow(
-		`SELECT `+contactColumns+` FROM contacts WHERE `+activeFilter+` AND LOWER(name) = LOWER(?)`,
+		`SELECT `+contactColumns+` FROM contacts WHERE `+activeFilter+` AND LOWER(formatted_name) = LOWER(?)`,
+		name))
+}
+
+// FindByNickname returns the first active contact with a case-insensitive
+// nickname match. Returns sql.ErrNoRows if not found.
+func (s *Store) FindByNickname(name string) (*Contact, error) {
+	return s.scanContact(s.db.QueryRow(
+		`SELECT `+contactColumns+` FROM contacts WHERE `+activeFilter+` AND LOWER(nickname) = LOWER(?)`,
 		name))
 }
 
 // ResolveContact finds a contact by name using cascading resolution
-// strategies: exact name match → preferred_name fact → search fallback.
+// strategies: exact formatted name → nickname → search fallback.
 // Returns [sql.ErrNoRows] if no match is found, or an error listing
 // ambiguous matches if search returns multiple results.
 func (s *Store) ResolveContact(name string) (*Contact, error) {
-	// 1. Exact name match (fast, indexed).
+	// 1. Exact formatted name match (fast, indexed).
 	c, err := s.FindByName(name)
 	if err == nil {
 		return c, nil
@@ -284,13 +361,13 @@ func (s *Store) ResolveContact(name string) (*Contact, error) {
 		return nil, fmt.Errorf("find by name %q: %w", name, err)
 	}
 
-	// 2. preferred_name fact (exact, case-insensitive).
-	matches, err := s.FindByFactExact("preferred_name", name)
-	if err != nil {
-		return nil, fmt.Errorf("find by preferred_name %q: %w", name, err)
+	// 2. Nickname match (direct column query).
+	c, err = s.FindByNickname(name)
+	if err == nil {
+		return c, nil
 	}
-	if len(matches) == 1 {
-		return matches[0], nil
+	if !errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("find by nickname %q: %w", name, err)
 	}
 
 	// 3. Search fallback (FTS or LIKE).
@@ -304,7 +381,7 @@ func (s *Store) ResolveContact(name string) (*Contact, error) {
 	if len(results) > 1 {
 		names := make([]string, len(results))
 		for i, c := range results {
-			names[i] = c.Name
+			names[i] = c.FormattedName
 		}
 		return nil, fmt.Errorf("ambiguous contact %q: matches %v", name, names)
 	}
@@ -324,6 +401,38 @@ func (s *Store) GetWithFacts(id uuid.UUID) (*Contact, error) {
 	c, err := s.Get(id)
 	if err != nil {
 		return nil, err
+	}
+	c.Facts, err = s.GetFacts(id)
+	if err != nil {
+		return nil, fmt.Errorf("get facts: %w", err)
+	}
+	return c, nil
+}
+
+// GetWithProperties retrieves a contact by ID and populates its
+// Properties slice.
+func (s *Store) GetWithProperties(id uuid.UUID) (*Contact, error) {
+	c, err := s.Get(id)
+	if err != nil {
+		return nil, err
+	}
+	c.Properties, err = s.GetProperties(id)
+	if err != nil {
+		return nil, fmt.Errorf("get properties: %w", err)
+	}
+	return c, nil
+}
+
+// GetWithAll retrieves a contact by ID and populates both its
+// Properties slice and Facts map.
+func (s *Store) GetWithAll(id uuid.UUID) (*Contact, error) {
+	c, err := s.Get(id)
+	if err != nil {
+		return nil, err
+	}
+	c.Properties, err = s.GetProperties(id)
+	if err != nil {
+		return nil, fmt.Errorf("get properties: %w", err)
 	}
 	c.Facts, err = s.GetFacts(id)
 	if err != nil {
@@ -367,8 +476,8 @@ func (s *Store) searchLIKE(query string) ([]*Contact, error) {
 	pattern := "%" + query + "%"
 	rows, err := s.db.Query(
 		`SELECT `+contactColumns+` FROM contacts WHERE `+activeFilter+
-			` AND (name LIKE ? OR relationship LIKE ? OR summary LIKE ? OR details LIKE ?) ORDER BY updated_at DESC LIMIT 50`,
-		pattern, pattern, pattern, pattern)
+			` AND (formatted_name LIKE ? OR nickname LIKE ? OR note LIKE ? OR ai_summary LIKE ? OR org LIKE ?) ORDER BY updated_at DESC LIMIT 50`,
+		pattern, pattern, pattern, pattern, pattern)
 	if err != nil {
 		return nil, fmt.Errorf("query: %w", err)
 	}
@@ -380,7 +489,7 @@ func (s *Store) searchLIKE(query string) ([]*Contact, error) {
 // ListByKind returns all active contacts of the given kind.
 func (s *Store) ListByKind(kind string) ([]*Contact, error) {
 	rows, err := s.db.Query(
-		`SELECT `+contactColumns+` FROM contacts WHERE `+activeFilter+` AND kind = ? ORDER BY name LIMIT 100`,
+		`SELECT `+contactColumns+` FROM contacts WHERE `+activeFilter+` AND kind = ? ORDER BY formatted_name LIMIT 100`,
 		kind)
 	if err != nil {
 		return nil, fmt.Errorf("query: %w", err)
@@ -393,7 +502,7 @@ func (s *Store) ListByKind(kind string) ([]*Contact, error) {
 // ListAll returns all active contacts.
 func (s *Store) ListAll() ([]*Contact, error) {
 	rows, err := s.db.Query(
-		`SELECT ` + contactColumns + ` FROM contacts WHERE ` + activeFilter + ` ORDER BY name LIMIT 100`)
+		`SELECT ` + contactColumns + ` FROM contacts WHERE ` + activeFilter + ` ORDER BY formatted_name LIMIT 100`)
 	if err != nil {
 		return nil, fmt.Errorf("query: %w", err)
 	}
@@ -431,9 +540,11 @@ func (s *Store) DeleteByName(name string) error {
 	return s.Delete(c.ID)
 }
 
+// --- Fact CRUD (freeform AI metadata) ---
+
 // SetFact adds a structured attribute to a contact. If the exact
 // (contact_id, key, value) triple already exists, this is a no-op.
-// Multiple values per key are supported (e.g., two phone numbers).
+// Multiple values per key are supported.
 func (s *Store) SetFact(contactID uuid.UUID, key, value string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 
@@ -458,8 +569,6 @@ func (s *Store) SetFact(contactID uuid.UUID, key, value string) error {
 }
 
 // ReplaceFact replaces all values for a key with a single new value.
-// Use this for "update phone number" semantics where only one value
-// should exist per key.
 func (s *Store) ReplaceFact(contactID uuid.UUID, key, value string) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 
@@ -501,8 +610,7 @@ func (s *Store) DeleteFact(contactID uuid.UUID, key, value string) error {
 	return nil
 }
 
-// GetFacts returns all structured attributes for a contact. Multiple
-// values per key are returned as a string slice.
+// GetFacts returns all structured attributes for a contact.
 func (s *Store) GetFacts(contactID uuid.UUID) (map[string][]string, error) {
 	rows, err := s.db.Query(
 		`SELECT key, value FROM contact_facts WHERE contact_id = ? ORDER BY key, value`,
@@ -524,8 +632,7 @@ func (s *Store) GetFacts(contactID uuid.UUID) (map[string][]string, error) {
 }
 
 // FindByFactExact returns contacts with an exact key-value fact match.
-// The value comparison is case-insensitive. Use [FindByFact] for
-// partial (LIKE-based) matching.
+// The value comparison is case-insensitive.
 func (s *Store) FindByFactExact(key, value string) ([]*Contact, error) {
 	rows, err := s.db.Query(`
 		SELECT DISTINCT `+qualifiedContactColumns+`
@@ -534,7 +641,7 @@ func (s *Store) FindByFactExact(key, value string) ([]*Contact, error) {
 		WHERE contacts.`+activeFilter+`
 		  AND contact_facts.key = ?
 		  AND LOWER(contact_facts.value) = LOWER(?)
-		ORDER BY contacts.name
+		ORDER BY contacts.formatted_name
 		LIMIT 50
 	`, key, value)
 	if err != nil {
@@ -545,15 +652,15 @@ func (s *Store) FindByFactExact(key, value string) ([]*Contact, error) {
 	return s.scanContacts(rows)
 }
 
-// FindByFact returns contacts that have a matching key-value attribute.
-// The value is matched with LIKE for partial matching.
+// FindByFact returns contacts that have a matching key-value attribute
+// using LIKE for partial matching.
 func (s *Store) FindByFact(key, value string) ([]*Contact, error) {
 	rows, err := s.db.Query(`
 		SELECT DISTINCT `+qualifiedContactColumns+`
 		FROM contacts
 		JOIN contact_facts ON contacts.id = contact_facts.contact_id
 		WHERE contacts.`+activeFilter+` AND contact_facts.key = ? AND contact_facts.value LIKE ?
-		ORDER BY contacts.name
+		ORDER BY contacts.formatted_name
 		LIMIT 50
 	`, key, "%"+value+"%")
 	if err != nil {
@@ -564,10 +671,125 @@ func (s *Store) FindByFact(key, value string) ([]*Contact, error) {
 	return s.scanContacts(rows)
 }
 
+// --- Property CRUD (vCard structured properties) ---
+
+// AddProperty adds a vCard property to a contact.
+func (s *Store) AddProperty(contactID uuid.UUID, p *Property) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+
+	result, err := s.db.Exec(`
+		INSERT INTO contact_properties (contact_id, property, value, type, pref, label, mediatype, verified, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, contactID.String(), p.Property, p.Value,
+		nullStr(p.Type), nullInt(p.Pref), nullStr(p.Label), nullStr(p.MediaType),
+		boolToInt(p.Verified), now, now)
+	if err != nil {
+		return fmt.Errorf("add property: %w", err)
+	}
+
+	id, _ := result.LastInsertId()
+	p.ID = id
+	p.ContactID = contactID
+	return nil
+}
+
+// GetProperties returns all properties for a contact, ordered by
+// property name then preference.
+func (s *Store) GetProperties(contactID uuid.UUID) ([]Property, error) {
+	rows, err := s.db.Query(`
+		SELECT id, contact_id, property, value, type, pref, label, mediatype, verified, created_at, updated_at
+		FROM contact_properties
+		WHERE contact_id = ?
+		ORDER BY property, pref NULLS LAST, id
+	`, contactID.String())
+	if err != nil {
+		return nil, fmt.Errorf("query: %w", err)
+	}
+	defer rows.Close()
+
+	var props []Property
+	for rows.Next() {
+		p, err := scanProperty(rows)
+		if err != nil {
+			return nil, err
+		}
+		props = append(props, p)
+	}
+	return props, rows.Err()
+}
+
+// FindByPropertyExact returns contacts with an exact property-value
+// match. The value comparison is case-insensitive.
+func (s *Store) FindByPropertyExact(property, value string) ([]*Contact, error) {
+	rows, err := s.db.Query(`
+		SELECT DISTINCT `+qualifiedContactColumns+`
+		FROM contacts
+		JOIN contact_properties ON contacts.id = contact_properties.contact_id
+		WHERE contacts.`+activeFilter+`
+		  AND contact_properties.property = ?
+		  AND LOWER(contact_properties.value) = LOWER(?)
+		ORDER BY contacts.formatted_name
+		LIMIT 50
+	`, property, value)
+	if err != nil {
+		return nil, fmt.Errorf("query: %w", err)
+	}
+	defer rows.Close()
+
+	return s.scanContacts(rows)
+}
+
+// FindByProperty returns contacts with a LIKE-matched property value.
+func (s *Store) FindByProperty(property, value string) ([]*Contact, error) {
+	rows, err := s.db.Query(`
+		SELECT DISTINCT `+qualifiedContactColumns+`
+		FROM contacts
+		JOIN contact_properties ON contacts.id = contact_properties.contact_id
+		WHERE contacts.`+activeFilter+`
+		  AND contact_properties.property = ?
+		  AND contact_properties.value LIKE ?
+		ORDER BY contacts.formatted_name
+		LIMIT 50
+	`, property, "%"+value+"%")
+	if err != nil {
+		return nil, fmt.Errorf("query: %w", err)
+	}
+	defer rows.Close()
+
+	return s.scanContacts(rows)
+}
+
+// DeleteProperty removes a single property row by its ID.
+func (s *Store) DeleteProperty(id int64) error {
+	result, err := s.db.Exec(`DELETE FROM contact_properties WHERE id = ?`, id)
+	if err != nil {
+		return fmt.Errorf("delete property: %w", err)
+	}
+	affected, _ := result.RowsAffected()
+	if affected == 0 {
+		return fmt.Errorf("property not found: %d", id)
+	}
+	return nil
+}
+
+// DeleteContactProperties removes all properties of a given type from
+// a contact.
+func (s *Store) DeleteContactProperties(contactID uuid.UUID, property string) error {
+	_, err := s.db.Exec(
+		`DELETE FROM contact_properties WHERE contact_id = ? AND property = ?`,
+		contactID.String(), property)
+	if err != nil {
+		return fmt.Errorf("delete properties: %w", err)
+	}
+	return nil
+}
+
+// --- Trust zones and filtering ---
+
 // FindByTrustZone returns all active contacts in the given trust zone.
 func (s *Store) FindByTrustZone(zone string) ([]*Contact, error) {
 	rows, err := s.db.Query(
-		`SELECT `+contactColumns+` FROM contacts WHERE `+activeFilter+` AND trust_zone = ? ORDER BY name`,
+		`SELECT `+contactColumns+` FROM contacts WHERE `+activeFilter+` AND trust_zone = ? ORDER BY formatted_name`,
 		zone)
 	if err != nil {
 		return nil, fmt.Errorf("query: %w", err)
@@ -576,6 +798,8 @@ func (s *Store) FindByTrustZone(zone string) ([]*Contact, error) {
 
 	return s.scanContacts(rows)
 }
+
+// --- Embeddings ---
 
 // SetEmbedding updates a contact's embedding vector.
 func (s *Store) SetEmbedding(id uuid.UUID, embedding []float32) error {
@@ -638,7 +862,7 @@ func (s *Store) SemanticSearch(queryEmbedding []float32, limit int) ([]*Contact,
 	return resultContacts, resultScores, nil
 }
 
-// GetContactsWithoutEmbeddings returns contacts that need knowledge.
+// GetContactsWithoutEmbeddings returns contacts that need embeddings.
 func (s *Store) GetContactsWithoutEmbeddings() ([]*Contact, error) {
 	rows, err := s.db.Query(
 		`SELECT ` + contactColumns + ` FROM contacts WHERE ` + activeFilter + ` AND embedding IS NULL`)
@@ -677,80 +901,140 @@ func (s *Store) Stats() map[string]any {
 
 // --- scan helpers ---
 
-func (s *Store) scanContact(row *sql.Row) (*Contact, error) {
-	var c Contact
-	var idStr string
-	var relationship, summary, details, lastInteraction sql.NullString
-	var createdStr, updatedStr string
-
-	err := row.Scan(&idStr, &c.Name, &c.Kind, &c.TrustZone, &relationship, &summary,
-		&details, &lastInteraction, &createdStr, &updatedStr)
-	if err != nil {
-		return nil, err
-	}
-
-	return populateContact(&c, idStr, relationship, summary, details, lastInteraction, createdStr, updatedStr)
+// scanTarget holds intermediate scan destinations for a contact row.
+// Keeps the Scan call sites clean despite 24+ columns.
+type scanTarget struct {
+	idStr           string
+	kind            string
+	formattedName   string
+	familyName      sql.NullString
+	givenName       sql.NullString
+	additionalNames sql.NullString
+	namePrefix      sql.NullString
+	nameSuffix      sql.NullString
+	nickname        sql.NullString
+	birthday        sql.NullString
+	anniversary     sql.NullString
+	gender          sql.NullString
+	org             sql.NullString
+	title           sql.NullString
+	role            sql.NullString
+	note            sql.NullString
+	photoURI        sql.NullString
+	trustZone       string
+	aiSummary       sql.NullString
+	rev             string
+	etag            sql.NullString
+	lastInteraction sql.NullString
+	createdStr      string
+	updatedStr      string
+	embeddingBlob   []byte
 }
 
-func (s *Store) scanContactRow(rows *sql.Rows) (*Contact, error) {
-	var c Contact
-	var idStr string
-	var relationship, summary, details, lastInteraction sql.NullString
-	var createdStr, updatedStr string
-
-	err := rows.Scan(&idStr, &c.Name, &c.Kind, &c.TrustZone, &relationship, &summary,
-		&details, &lastInteraction, &createdStr, &updatedStr)
-	if err != nil {
-		return nil, err
+// dests returns scan destinations matching contactColumns order.
+func (t *scanTarget) dests() []any {
+	return []any{
+		&t.idStr, &t.kind, &t.formattedName,
+		&t.familyName, &t.givenName, &t.additionalNames,
+		&t.namePrefix, &t.nameSuffix, &t.nickname,
+		&t.birthday, &t.anniversary, &t.gender,
+		&t.org, &t.title, &t.role,
+		&t.note, &t.photoURI,
+		&t.trustZone, &t.aiSummary, &t.rev, &t.etag,
+		&t.lastInteraction, &t.createdStr, &t.updatedStr,
 	}
-
-	return populateContact(&c, idStr, relationship, summary, details, lastInteraction, createdStr, updatedStr)
 }
 
-func (s *Store) scanContactWithEmbedding(rows *sql.Rows) (*Contact, error) {
-	var c Contact
-	var idStr string
-	var relationship, summary, details, lastInteraction sql.NullString
-	var createdStr, updatedStr string
-	var embeddingBlob []byte
-
-	err := rows.Scan(&idStr, &c.Name, &c.Kind, &c.TrustZone, &relationship, &summary,
-		&details, &embeddingBlob, &lastInteraction, &createdStr, &updatedStr)
-	if err != nil {
-		return nil, err
+// destsWithEmbedding returns scan destinations matching
+// contactColumnsWithEmbed order (embedding between etag and
+// last_interaction).
+func (t *scanTarget) destsWithEmbedding() []any {
+	return []any{
+		&t.idStr, &t.kind, &t.formattedName,
+		&t.familyName, &t.givenName, &t.additionalNames,
+		&t.namePrefix, &t.nameSuffix, &t.nickname,
+		&t.birthday, &t.anniversary, &t.gender,
+		&t.org, &t.title, &t.role,
+		&t.note, &t.photoURI,
+		&t.trustZone, &t.aiSummary, &t.rev, &t.etag,
+		&t.embeddingBlob,
+		&t.lastInteraction, &t.createdStr, &t.updatedStr,
 	}
-
-	c.Embedding = knowledge.DecodeEmbedding(embeddingBlob)
-	return populateContact(&c, idStr, relationship, summary, details, lastInteraction, createdStr, updatedStr)
 }
 
-// populateContact fills parsed fields into a Contact, returning errors
-// for corrupt UUID or timestamp data.
-func populateContact(c *Contact, idStr string, relationship, summary, details, lastInteraction sql.NullString, createdStr, updatedStr string) (*Contact, error) {
+// toContact converts scanned values into a Contact.
+func (t *scanTarget) toContact() (*Contact, error) {
+	c := &Contact{
+		Kind:            t.kind,
+		FormattedName:   t.formattedName,
+		FamilyName:      t.familyName.String,
+		GivenName:       t.givenName.String,
+		AdditionalNames: t.additionalNames.String,
+		NamePrefix:      t.namePrefix.String,
+		NameSuffix:      t.nameSuffix.String,
+		Nickname:        t.nickname.String,
+		Birthday:        t.birthday.String,
+		Anniversary:     t.anniversary.String,
+		Gender:          t.gender.String,
+		Org:             t.org.String,
+		Title:           t.title.String,
+		Role:            t.role.String,
+		Note:            t.note.String,
+		PhotoURI:        t.photoURI.String,
+		TrustZone:       t.trustZone,
+		AISummary:       t.aiSummary.String,
+		Rev:             t.rev,
+		ETag:            t.etag.String,
+	}
+
 	var err error
-	c.ID, err = uuid.Parse(idStr)
+	c.ID, err = uuid.Parse(t.idStr)
 	if err != nil {
 		return nil, fmt.Errorf("parse contact id: %w", err)
 	}
 
-	c.Relationship = relationship.String
-	c.Summary = summary.String
-	c.Details = details.String
-
-	if lastInteraction.Valid {
-		c.LastInteraction, _ = time.Parse(time.RFC3339, lastInteraction.String)
+	if t.lastInteraction.Valid {
+		c.LastInteraction, _ = time.Parse(time.RFC3339, t.lastInteraction.String)
 	}
 
-	c.CreatedAt, err = time.Parse(time.RFC3339, createdStr)
+	c.CreatedAt, err = time.Parse(time.RFC3339, t.createdStr)
 	if err != nil {
 		return nil, fmt.Errorf("parse created_at: %w", err)
 	}
-	c.UpdatedAt, err = time.Parse(time.RFC3339, updatedStr)
+	c.UpdatedAt, err = time.Parse(time.RFC3339, t.updatedStr)
 	if err != nil {
 		return nil, fmt.Errorf("parse updated_at: %w", err)
 	}
 
+	if len(t.embeddingBlob) > 0 {
+		c.Embedding = knowledge.DecodeEmbedding(t.embeddingBlob)
+	}
+
 	return c, nil
+}
+
+func (s *Store) scanContact(row *sql.Row) (*Contact, error) {
+	var t scanTarget
+	if err := row.Scan(t.dests()...); err != nil {
+		return nil, err
+	}
+	return t.toContact()
+}
+
+func (s *Store) scanContactRow(rows *sql.Rows) (*Contact, error) {
+	var t scanTarget
+	if err := rows.Scan(t.dests()...); err != nil {
+		return nil, err
+	}
+	return t.toContact()
+}
+
+func (s *Store) scanContactWithEmbedding(rows *sql.Rows) (*Contact, error) {
+	var t scanTarget
+	if err := rows.Scan(t.destsWithEmbedding()...); err != nil {
+		return nil, err
+	}
+	return t.toContact()
 }
 
 func (s *Store) scanContacts(rows *sql.Rows) ([]*Contact, error) {
@@ -765,6 +1049,39 @@ func (s *Store) scanContacts(rows *sql.Rows) ([]*Contact, error) {
 	return contacts, rows.Err()
 }
 
+// scanProperty scans a single row from the contact_properties table.
+func scanProperty(rows *sql.Rows) (Property, error) {
+	var p Property
+	var contactIDStr string
+	var typ, label, mediatype sql.NullString
+	var pref sql.NullInt64
+	var verified int
+	var createdStr, updatedStr string
+
+	err := rows.Scan(&p.ID, &contactIDStr, &p.Property, &p.Value,
+		&typ, &pref, &label, &mediatype, &verified,
+		&createdStr, &updatedStr)
+	if err != nil {
+		return Property{}, fmt.Errorf("scan property: %w", err)
+	}
+
+	p.ContactID, err = uuid.Parse(contactIDStr)
+	if err != nil {
+		return Property{}, fmt.Errorf("parse property contact_id: %w", err)
+	}
+	p.Type = typ.String
+	if pref.Valid {
+		p.Pref = int(pref.Int64)
+	}
+	p.Label = label.String
+	p.MediaType = mediatype.String
+	p.Verified = verified != 0
+	p.CreatedAt, _ = time.Parse(time.RFC3339, createdStr)
+	p.UpdatedAt, _ = time.Parse(time.RFC3339, updatedStr)
+
+	return p, nil
+}
+
 // --- FTS helpers ---
 
 func (s *Store) rebuildFTS() {
@@ -776,10 +1093,8 @@ func (s *Store) rebuildFTS() {
 	}
 }
 
-// sanitizeFTS5Query wraps each search term in double quotes to prevent FTS5
-// syntax errors from special characters, then joins terms with OR so that
-// broader recall is possible. BM25 ranking ensures results matching more
-// terms score higher.
+// sanitizeFTS5Query wraps each search term in double quotes to prevent
+// FTS5 syntax errors, then joins with OR for broader recall.
 func sanitizeFTS5Query(query string) string {
 	words := strings.Fields(query)
 	if len(words) == 0 {
@@ -807,4 +1122,18 @@ func nullTime(t time.Time) sql.NullString {
 		return sql.NullString{}
 	}
 	return sql.NullString{String: t.Format(time.RFC3339), Valid: true}
+}
+
+func nullInt(n int) sql.NullInt64 {
+	if n == 0 {
+		return sql.NullInt64{}
+	}
+	return sql.NullInt64{Int64: int64(n), Valid: true}
+}
+
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
