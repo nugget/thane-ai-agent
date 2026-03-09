@@ -470,6 +470,60 @@ func (s *Store) ListAll() ([]*Contact, error) {
 	return s.scanContacts(rows)
 }
 
+// ListAllWithProperties returns all active contacts with their
+// Properties slices populated.  Unlike [ListAll], there is no row
+// limit — this is intended for full-sync use cases like CardDAV.
+func (s *Store) ListAllWithProperties() ([]*Contact, error) {
+	rows, err := s.db.Query(
+		`SELECT ` + contactColumns + ` FROM contacts WHERE ` + activeFilter + ` ORDER BY formatted_name`)
+	if err != nil {
+		return nil, fmt.Errorf("query: %w", err)
+	}
+	defer rows.Close()
+
+	all, err := s.scanContacts(rows)
+	if err != nil {
+		return nil, err
+	}
+	for _, c := range all {
+		c.Properties, err = s.GetProperties(c.ID)
+		if err != nil {
+			return nil, fmt.Errorf("get properties for %s: %w", c.ID, err)
+		}
+	}
+	return all, nil
+}
+
+// CTag returns the collection tag for the address book.  This is the
+// maximum updated_at timestamp across all active contacts, formatted
+// as RFC 3339.  CardDAV clients compare this value to decide whether
+// a full sync is needed.
+func (s *Store) CTag() (string, error) {
+	var ctag sql.NullString
+	err := s.db.QueryRow(
+		`SELECT MAX(updated_at) FROM contacts WHERE ` + activeFilter).Scan(&ctag)
+	if err != nil {
+		return "", fmt.Errorf("ctag query: %w", err)
+	}
+	if !ctag.Valid {
+		return "", nil
+	}
+	return ctag.String, nil
+}
+
+// DeleteAllProperties removes all properties from a contact.  This is
+// used during CardDAV PUT to replace the entire property set
+// atomically.
+func (s *Store) DeleteAllProperties(contactID uuid.UUID) error {
+	_, err := s.db.Exec(
+		`DELETE FROM contact_properties WHERE contact_id = ?`,
+		contactID.String())
+	if err != nil {
+		return fmt.Errorf("delete all properties: %w", err)
+	}
+	return nil
+}
+
 // Delete soft-deletes a contact by ID.
 func (s *Store) Delete(id uuid.UUID) error {
 	now := time.Now().UTC().Format(time.RFC3339)
