@@ -173,4 +173,123 @@ func (r *Registry) registerContactTools() {
 			return r.contactTools.ListContacts(string(argsJSON))
 		},
 	})
+
+	r.Register(&Tool{
+		Name:        "export_vcf",
+		Description: "Export a contact as a vCard (.vcf) file or text. Use name=\"self\" to export the agent's own contact card. When exporting the self-contact, recipient_trust_zone controls which fields are included (e.g., a known contact gets fewer details than a trusted one).",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"name": map[string]any{
+					"type":        "string",
+					"description": "Contact name to export, or \"self\" for the agent's own card",
+				},
+				"recipient_trust_zone": map[string]any{
+					"type":        "string",
+					"enum":        []string{"admin", "household", "trusted", "known", "unknown"},
+					"description": "Trust zone of the recipient (self-contact only). Filters fields based on trust level.",
+				},
+				"format": map[string]any{
+					"type":        "string",
+					"enum":        []string{"file", "text"},
+					"description": "Output format: \"file\" writes a .vcf temp file (default), \"text\" returns vCard inline",
+				},
+			},
+			"required": []string{"name"},
+		},
+		Handler: func(ctx context.Context, args map[string]any) (string, error) {
+			argsJSON, err := json.Marshal(args)
+			if err != nil {
+				return "", fmt.Errorf("failed to serialize arguments: %w", err)
+			}
+			return r.contactTools.ExportVCF(string(argsJSON))
+		},
+	})
+
+	r.Register(&Tool{
+		Name:        "export_all_vcf",
+		Description: "Export all contacts (or a filtered subset) as a multi-vCard .vcf file. Useful for backups or bulk transfer.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"kind": map[string]any{
+					"type":        "string",
+					"enum":        []string{"individual", "group", "org", "location"},
+					"description": "Filter by contact type",
+				},
+				"trust_zone": map[string]any{
+					"type":        "string",
+					"enum":        []string{"admin", "household", "trusted", "known"},
+					"description": "Filter by trust zone",
+				},
+			},
+		},
+		Handler: func(ctx context.Context, args map[string]any) (string, error) {
+			argsJSON, err := json.Marshal(args)
+			if err != nil {
+				return "", fmt.Errorf("failed to serialize arguments: %w", err)
+			}
+			return r.contactTools.ExportAllVCF(string(argsJSON))
+		},
+	})
+
+	r.Register(&Tool{
+		Name:        "import_vcf",
+		Description: "Import contacts from a vCard (.vcf) file or text. Supports single and multi-contact vCards. By default, merges with existing contacts matched by email or name — only empty fields are filled, TrustZone and AISummary are never overwritten. Use dry_run to preview changes.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"path": map[string]any{
+					"type":        "string",
+					"description": "Path to a .vcf file to import",
+				},
+				"text": map[string]any{
+					"type":        "string",
+					"description": "Raw vCard text to import (alternative to path)",
+				},
+				"merge": map[string]any{
+					"type":        "boolean",
+					"description": "Merge with existing contacts (default: true). When false, always creates new contacts.",
+				},
+				"dry_run": map[string]any{
+					"type":        "boolean",
+					"description": "Preview import without writing to database",
+				},
+			},
+		},
+		Handler: func(ctx context.Context, args map[string]any) (string, error) {
+			argsJSON, err := json.Marshal(args)
+			if err != nil {
+				return "", fmt.Errorf("failed to serialize arguments: %w", err)
+			}
+			return r.contactTools.ImportVCF(string(argsJSON))
+		},
+	})
+
+	r.Register(&Tool{
+		Name:        "export_vcf_qr",
+		Description: "Generate a QR code PNG containing a vCard for the named contact. The QR code can be scanned by mobile devices to add the contact. Use recipient_trust_zone to control which fields are included (reduces size for QR capacity).",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"name": map[string]any{
+					"type":        "string",
+					"description": "Contact name to export, or \"self\" for the agent's own card",
+				},
+				"recipient_trust_zone": map[string]any{
+					"type":        "string",
+					"enum":        []string{"admin", "household", "trusted", "known", "unknown"},
+					"description": "Trust zone of the recipient. Filters fields for smaller QR code.",
+				},
+			},
+			"required": []string{"name"},
+		},
+		Handler: func(ctx context.Context, args map[string]any) (string, error) {
+			argsJSON, err := json.Marshal(args)
+			if err != nil {
+				return "", fmt.Errorf("failed to serialize arguments: %w", err)
+			}
+			return r.contactTools.ExportVCFQR(string(argsJSON))
+		},
+	})
 }

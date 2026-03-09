@@ -199,6 +199,10 @@ type Config struct {
 	// email server subprocess.
 	Email email.Config `yaml:"email"`
 
+	// Identity configures the agent's own contact identity for vCard
+	// export and self-referencing operations.
+	Identity IdentityConfig `yaml:"identity"`
+
 	// StateWindow configures the rolling window of recent Home Assistant
 	// state changes injected into the agent's system prompt on every run.
 	StateWindow StateWindowConfig `yaml:"state_window"`
@@ -288,6 +292,16 @@ type CardDAVConfig struct {
 // settings.
 func (c CardDAVConfig) Configured() bool {
 	return c.Enabled && c.Username != "" && c.Password != ""
+}
+
+// IdentityConfig configures the agent's own contact identity. The
+// ContactName must match a contact record in the directory to enable
+// self-referencing operations like vCard export.
+type IdentityConfig struct {
+	// ContactName is the formatted name of the agent's own contact
+	// record. When set, export_vcf name="self" resolves to this
+	// contact.
+	ContactName string `yaml:"contact_name"`
 }
 
 // HomeAssistantConfig configures the connection to a Home Assistant
