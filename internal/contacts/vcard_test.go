@@ -658,6 +658,47 @@ func TestFilterCardForTrustZone_ZonePhoto_UnknownStrips(t *testing.T) {
 	}
 }
 
+func TestCardToContact_SkipsAppleGarbage(t *testing.T) {
+	card := make(vcard.Card)
+	card.SetValue(vcard.FieldVersion, "4.0")
+	card.SetValue(vcard.FieldFormattedName, "Apple User")
+
+	// Legitimate property.
+	card.Add(vcard.FieldEmail, &vcard.Field{
+		Value: "user@example.com",
+	})
+
+	// Apple X-ABLABEL entries (should be skipped).
+	card.Add("X-ABLABEL", &vcard.Field{Value: "_$!<Other>!$_"})
+	card.Add("X-ABLABEL", &vcard.Field{Value: "iCloud"})
+	card.Add("X-ABLABEL", &vcard.Field{Value: "_$!<HomePage>!$_"})
+
+	// PRODID (should be skipped).
+	card.Add("PRODID", &vcard.Field{Value: "-//Apple Inc.//macOS 26.3.1//EN"})
+
+	_, props := CardToContact(card)
+
+	for _, p := range props {
+		if p.Property == "X-ABLABEL" {
+			t.Errorf("X-ABLABEL should be filtered, got value %q", p.Value)
+		}
+		if p.Property == "PRODID" {
+			t.Errorf("PRODID should be filtered, got value %q", p.Value)
+		}
+	}
+
+	// Legitimate EMAIL should still be present.
+	found := false
+	for _, p := range props {
+		if p.Property == "EMAIL" && p.Value == "user@example.com" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("EMAIL property should be preserved")
+	}
+}
+
 // buildTestCard creates a vCard with common fields for filter tests.
 func buildTestCard() vcard.Card {
 	card := make(vcard.Card)
