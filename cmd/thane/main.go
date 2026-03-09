@@ -806,6 +806,9 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	defer contactStore.Close()
 
 	contactTools := contacts.NewTools(contactStore)
+	if cfg.Identity.ContactName != "" {
+		contactTools.SetSelfContactName(cfg.Identity.ContactName)
+	}
 	loop.Tools().SetContactTools(contactTools)
 	logger.Info("contact store initialized", "path", cfg.DataDir+"/contacts.db")
 

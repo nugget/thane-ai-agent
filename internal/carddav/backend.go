@@ -159,7 +159,7 @@ func (b *Backend) PutAddressObject(_ context.Context, path string, card vcard.Ca
 		}
 	}
 
-	contact, props := CardToContact(card)
+	contact, props := contacts.CardToContact(card)
 	contact.ID = id
 
 	upserted, err := b.store.UpsertWithProperties(contact, props)
@@ -208,7 +208,7 @@ func (b *Backend) addressBook() carddav.AddressBook {
 // contactToObject converts a Contact (with properties) to a CardDAV
 // AddressObject.
 func (b *Backend) contactToObject(c *contacts.Contact) *carddav.AddressObject {
-	card := ContactToCard(c)
+	card := contacts.ContactToCard(c)
 	return &carddav.AddressObject{
 		Path:    objectPath(c.ID),
 		ModTime: c.UpdatedAt,

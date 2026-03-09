@@ -1,15 +1,19 @@
 package contacts
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"os"
 	"sort"
 	"strings"
 
+	"github.com/emersion/go-vcard"
 	"github.com/google/uuid"
 )
 
@@ -20,8 +24,9 @@ type EmbeddingClient interface {
 
 // Tools provides contact-related tools for the agent.
 type Tools struct {
-	store      *Store
-	embeddings EmbeddingClient
+	store           *Store
+	embeddings      EmbeddingClient
+	selfContactName string
 }
 
 // NewTools creates contact tools using the given store.
@@ -32,6 +37,12 @@ func NewTools(store *Store) *Tools {
 // SetEmbeddingClient sets the embedding client for semantic search.
 func (t *Tools) SetEmbeddingClient(client EmbeddingClient) {
 	t.embeddings = client
+}
+
+// SetSelfContactName sets the contact name used to resolve name="self"
+// in export operations.
+func (t *Tools) SetSelfContactName(name string) {
+	t.selfContactName = name
 }
 
 // SaveContactArgs are arguments for the save_contact tool.
@@ -439,6 +450,394 @@ func buildEmbeddingText(c *Contact, props []Property) string {
 		sb.WriteString(fmt.Sprintf("\n%s: %s", p.Property, p.Value))
 	}
 	return sb.String()
+}
+
+// ExportVCFArgs are arguments for the export_vcf tool.
+type ExportVCFArgs struct {
+	Name               string `json:"name"`
+	RecipientTrustZone string `json:"recipient_trust_zone,omitempty"`
+	Format             string `json:"format,omitempty"` // "file" (default) or "text"
+}
+
+// ExportVCF exports a single contact as a vCard. When name is "self",
+// it resolves via the configured self-contact name. The optional
+// recipient_trust_zone applies trust-zone field filtering (self-contact
+// only).
+func (t *Tools) ExportVCF(argsJSON string) (string, error) {
+	var args ExportVCFArgs
+	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+		return "", fmt.Errorf("parse args: %w", err)
+	}
+
+	name := args.Name
+	if name == "" {
+		return "", fmt.Errorf("name is required")
+	}
+
+	isSelf := strings.EqualFold(name, "self")
+	if isSelf {
+		if t.selfContactName == "" {
+			return "", fmt.Errorf("self-contact not configured: set identity.contact_name in config")
+		}
+		name = t.selfContactName
+	}
+
+	c, err := t.store.ResolveContact(name)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", fmt.Errorf("contact %q not found", name)
+	}
+	if err != nil {
+		return "", fmt.Errorf("resolve contact: %w", err)
+	}
+
+	c, err = t.store.GetWithProperties(c.ID)
+	if err != nil {
+		return "", fmt.Errorf("get contact details: %w", err)
+	}
+
+	card := ContactToCard(c)
+
+	// Apply trust-zone filtering for self-contact exports.
+	if isSelf && args.RecipientTrustZone != "" {
+		card = FilterCardForTrustZone(card, args.RecipientTrustZone, c.Properties)
+	}
+
+	var buf bytes.Buffer
+	if err := vcard.NewEncoder(&buf).Encode(card); err != nil {
+		return "", fmt.Errorf("encode vcard: %w", err)
+	}
+	text := buf.String()
+
+	if args.Format == "text" {
+		return text, nil
+	}
+
+	// Write to temp file.
+	f, err := os.CreateTemp("", "thane-vcf-*.vcf")
+	if err != nil {
+		return "", fmt.Errorf("create temp file: %w", err)
+	}
+	defer f.Close()
+
+	if _, err := f.WriteString(text); err != nil {
+		return "", fmt.Errorf("write vcf: %w", err)
+	}
+
+	return fmt.Sprintf("Exported vCard to %s", f.Name()), nil
+}
+
+// ExportAllVCFArgs are arguments for the export_all_vcf tool.
+type ExportAllVCFArgs struct {
+	Kind      string `json:"kind,omitempty"`
+	TrustZone string `json:"trust_zone,omitempty"`
+}
+
+// ExportAllVCF exports all contacts (optionally filtered) as a
+// multi-vCard file.
+func (t *Tools) ExportAllVCF(argsJSON string) (string, error) {
+	var args ExportAllVCFArgs
+	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+		return "", fmt.Errorf("parse args: %w", err)
+	}
+
+	var contacts []*Contact
+	var err error
+
+	switch {
+	case args.TrustZone != "" && args.Kind != "":
+		// Both filters: load by trust zone, then filter by kind.
+		contacts, err = t.store.FindByTrustZone(args.TrustZone)
+		if err == nil {
+			filtered := contacts[:0]
+			for _, c := range contacts {
+				if c.Kind == args.Kind {
+					filtered = append(filtered, c)
+				}
+			}
+			contacts = filtered
+		}
+	case args.TrustZone != "":
+		contacts, err = t.store.FindByTrustZone(args.TrustZone)
+	case args.Kind != "":
+		contacts, err = t.store.ListByKind(args.Kind)
+	default:
+		contacts, err = t.store.ListAll()
+	}
+	if err != nil {
+		return "", fmt.Errorf("list contacts: %w", err)
+	}
+
+	if len(contacts) == 0 {
+		return "No contacts to export", nil
+	}
+
+	// Load properties for each contact.
+	var withProps []*Contact
+	for _, c := range contacts {
+		full, err := t.store.GetWithProperties(c.ID)
+		if err != nil {
+			continue
+		}
+		withProps = append(withProps, full)
+	}
+
+	text, err := EncodeVCards(withProps)
+	if err != nil {
+		return "", fmt.Errorf("encode vcards: %w", err)
+	}
+
+	f, err := os.CreateTemp("", "thane-vcf-all-*.vcf")
+	if err != nil {
+		return "", fmt.Errorf("create temp file: %w", err)
+	}
+	defer f.Close()
+
+	if _, err := f.WriteString(text); err != nil {
+		return "", fmt.Errorf("write vcf: %w", err)
+	}
+
+	return fmt.Sprintf("Exported %d contacts to %s", len(withProps), f.Name()), nil
+}
+
+// ImportVCFArgs are arguments for the import_vcf tool.
+type ImportVCFArgs struct {
+	Path   string `json:"path,omitempty"`
+	Text   string `json:"text,omitempty"`
+	Merge  *bool  `json:"merge,omitempty"` // default true
+	DryRun bool   `json:"dry_run,omitempty"`
+}
+
+// ImportVCF imports contacts from a vCard file or text. When merge is
+// true (default), existing contacts are matched by EMAIL then by name,
+// and only empty fields are filled. TrustZone and AISummary are never
+// overwritten during merge. Properties are additive.
+func (t *Tools) ImportVCF(argsJSON string) (string, error) {
+	var args ImportVCFArgs
+	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+		return "", fmt.Errorf("parse args: %w", err)
+	}
+
+	merge := args.Merge == nil || *args.Merge
+
+	var r io.Reader
+	if args.Path != "" {
+		f, err := os.Open(args.Path)
+		if err != nil {
+			return "", fmt.Errorf("open vcf file: %w", err)
+		}
+		defer f.Close()
+		r = f
+	} else if args.Text != "" {
+		r = strings.NewReader(args.Text)
+	} else {
+		return "", fmt.Errorf("one of path or text is required")
+	}
+
+	decoded, allProps, err := DecodeVCards(r)
+	if err != nil {
+		return "", fmt.Errorf("decode vcards: %w", err)
+	}
+
+	var created, updated, skipped int
+	var summary strings.Builder
+
+	for i, incoming := range decoded {
+		props := allProps[i]
+
+		// Try to find existing contact for merge.
+		var existing *Contact
+		if merge {
+			existing = t.findExistingForMerge(incoming, props)
+		}
+
+		if args.DryRun {
+			if existing != nil {
+				summary.WriteString(fmt.Sprintf("Would merge: %s → %s\n", incoming.FormattedName, existing.FormattedName))
+				updated++
+			} else {
+				summary.WriteString(fmt.Sprintf("Would create: %s\n", incoming.FormattedName))
+				created++
+			}
+			continue
+		}
+
+		if existing != nil {
+			// Merge: fill empty scalar fields only.
+			t.mergeContact(existing, incoming)
+			if _, err := t.store.Upsert(existing); err != nil {
+				skipped++
+				continue
+			}
+			// Add properties additively.
+			for _, p := range props {
+				_ = t.store.AddProperty(existing.ID, &p)
+			}
+			t.generateEmbedding(existing)
+			updated++
+		} else {
+			// Create new contact.
+			if incoming.FormattedName == "" {
+				skipped++
+				continue
+			}
+			c, err := t.store.Upsert(incoming)
+			if err != nil {
+				skipped++
+				continue
+			}
+			for _, p := range props {
+				_ = t.store.AddProperty(c.ID, &p)
+			}
+			t.generateEmbedding(c)
+			created++
+		}
+	}
+
+	if args.DryRun {
+		return fmt.Sprintf("Dry run — %d would be created, %d would be merged:\n\n%s",
+			created, updated, summary.String()), nil
+	}
+
+	return fmt.Sprintf("Imported %d contacts: %d created, %d merged, %d skipped",
+		created+updated, created, updated, skipped), nil
+}
+
+// findExistingForMerge looks for an existing contact that matches the
+// incoming contact. It first tries EMAIL matching, then falls back to
+// formatted name.
+func (t *Tools) findExistingForMerge(incoming *Contact, props []Property) *Contact {
+	// Try EMAIL match first (exact, case-insensitive).
+	for _, p := range props {
+		if p.Property == "EMAIL" && p.Value != "" {
+			matches, err := t.store.FindByPropertyExact("EMAIL", p.Value)
+			if err == nil && len(matches) == 1 {
+				full, err := t.store.GetWithProperties(matches[0].ID)
+				if err == nil {
+					return full
+				}
+			}
+		}
+	}
+
+	// Fall back to name match.
+	if incoming.FormattedName != "" {
+		existing, err := t.store.FindByName(incoming.FormattedName)
+		if err == nil && existing != nil {
+			return existing
+		}
+	}
+
+	return nil
+}
+
+// mergeContact fills empty scalar fields on existing from incoming.
+// TrustZone and AISummary are never overwritten.
+func (t *Tools) mergeContact(existing, incoming *Contact) {
+	if existing.Kind == "" && incoming.Kind != "" {
+		existing.Kind = incoming.Kind
+	}
+	// Never overwrite TrustZone.
+	// Never overwrite AISummary.
+	if existing.GivenName == "" && incoming.GivenName != "" {
+		existing.GivenName = incoming.GivenName
+	}
+	if existing.FamilyName == "" && incoming.FamilyName != "" {
+		existing.FamilyName = incoming.FamilyName
+	}
+	if existing.AdditionalNames == "" && incoming.AdditionalNames != "" {
+		existing.AdditionalNames = incoming.AdditionalNames
+	}
+	if existing.NamePrefix == "" && incoming.NamePrefix != "" {
+		existing.NamePrefix = incoming.NamePrefix
+	}
+	if existing.NameSuffix == "" && incoming.NameSuffix != "" {
+		existing.NameSuffix = incoming.NameSuffix
+	}
+	if existing.Nickname == "" && incoming.Nickname != "" {
+		existing.Nickname = incoming.Nickname
+	}
+	if existing.Birthday == "" && incoming.Birthday != "" {
+		existing.Birthday = incoming.Birthday
+	}
+	if existing.Anniversary == "" && incoming.Anniversary != "" {
+		existing.Anniversary = incoming.Anniversary
+	}
+	if existing.Gender == "" && incoming.Gender != "" {
+		existing.Gender = incoming.Gender
+	}
+	if existing.Org == "" && incoming.Org != "" {
+		existing.Org = incoming.Org
+	}
+	if existing.Title == "" && incoming.Title != "" {
+		existing.Title = incoming.Title
+	}
+	if existing.Role == "" && incoming.Role != "" {
+		existing.Role = incoming.Role
+	}
+	if existing.Note == "" && incoming.Note != "" {
+		existing.Note = incoming.Note
+	}
+	if existing.PhotoURI == "" && incoming.PhotoURI != "" {
+		existing.PhotoURI = incoming.PhotoURI
+	}
+}
+
+// ExportVCFQRArgs are arguments for the export_vcf_qr tool.
+type ExportVCFQRArgs struct {
+	Name               string `json:"name"`
+	RecipientTrustZone string `json:"recipient_trust_zone,omitempty"`
+}
+
+// ExportVCFQR generates a QR code PNG containing a vCard for the named
+// contact. Returns the path to the generated PNG file. The vCard text
+// must fit within QR code capacity (~4KB).
+func (t *Tools) ExportVCFQR(argsJSON string) (string, error) {
+	var args ExportVCFQRArgs
+	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+		return "", fmt.Errorf("parse args: %w", err)
+	}
+
+	// Generate the vCard text via ExportVCF in text mode.
+	exportArgs := ExportVCFArgs{
+		Name:               args.Name,
+		RecipientTrustZone: args.RecipientTrustZone,
+		Format:             "text",
+	}
+	exportJSON, err := json.Marshal(exportArgs)
+	if err != nil {
+		return "", fmt.Errorf("marshal export args: %w", err)
+	}
+
+	text, err := t.ExportVCF(string(exportJSON))
+	if err != nil {
+		return "", err
+	}
+
+	// Check QR capacity. QR version 40 at Medium error correction
+	// holds ~2331 bytes of binary data, matching generateQRCode's
+	// use of qrcode.Medium.
+	const maxQRBytes = 2331
+	if len(text) > maxQRBytes {
+		return "", fmt.Errorf("vCard too large for QR code (%d bytes, max %d). "+
+			"Use recipient_trust_zone to reduce fields", len(text), maxQRBytes)
+	}
+
+	png, err := generateQRCode(text)
+	if err != nil {
+		return "", err
+	}
+
+	f, err := os.CreateTemp("", "thane-vcf-qr-*.png")
+	if err != nil {
+		return "", fmt.Errorf("create temp file: %w", err)
+	}
+	defer f.Close()
+
+	if _, err := f.Write(png); err != nil {
+		return "", fmt.Errorf("write qr png: %w", err)
+	}
+
+	return fmt.Sprintf("QR code vCard written to %s", f.Name()), nil
 }
 
 // formatContact formats a single contact with properties and facts for display.
