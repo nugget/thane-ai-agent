@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	_ "github.com/mattn/go-sqlite3"
@@ -1251,6 +1252,82 @@ func TestUpsert_VCardFields(t *testing.T) {
 	}
 	if got.Rev == "" {
 		t.Error("Rev should be set automatically")
+	}
+}
+
+func TestUpdateLastInteraction(t *testing.T) {
+	store := newTestStore(t)
+
+	c := &Contact{FormattedName: "Interaction Test", Kind: "individual"}
+	created, err := store.Upsert(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify initial state: no interaction.
+	got, err := store.Get(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.LastInteraction.IsZero() {
+		t.Errorf("expected zero LastInteraction initially, got %v", got.LastInteraction)
+	}
+	if got.LastInteractionMeta != nil {
+		t.Errorf("expected nil LastInteractionMeta initially, got %v", got.LastInteractionMeta)
+	}
+
+	// Update with metadata.
+	now := time.Now().UTC().Truncate(time.Second)
+	meta := &InteractionMeta{
+		Channel:   "signal",
+		SessionID: "sess-test-123",
+		Topics:    []string{"weather", "schedule"},
+	}
+	if err := store.UpdateLastInteraction(created.ID, now, meta); err != nil {
+		t.Fatalf("UpdateLastInteraction() error = %v", err)
+	}
+
+	got, err = store.Get(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.LastInteraction.IsZero() {
+		t.Error("expected non-zero LastInteraction after update")
+	}
+	if got.LastInteractionMeta == nil {
+		t.Fatal("expected non-nil LastInteractionMeta after update")
+	}
+	if got.LastInteractionMeta.Channel != "signal" {
+		t.Errorf("Channel = %q, want %q", got.LastInteractionMeta.Channel, "signal")
+	}
+	if got.LastInteractionMeta.SessionID != "sess-test-123" {
+		t.Errorf("SessionID = %q, want %q", got.LastInteractionMeta.SessionID, "sess-test-123")
+	}
+	if len(got.LastInteractionMeta.Topics) != 2 || got.LastInteractionMeta.Topics[0] != "weather" {
+		t.Errorf("Topics = %v, want [weather schedule]", got.LastInteractionMeta.Topics)
+	}
+
+	// Update again with nil meta (clear metadata but keep timestamp).
+	later := now.Add(time.Hour)
+	if err := store.UpdateLastInteraction(created.ID, later, nil); err != nil {
+		t.Fatalf("UpdateLastInteraction(nil meta) error = %v", err)
+	}
+
+	got, err = store.Get(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.LastInteractionMeta != nil {
+		t.Errorf("expected nil LastInteractionMeta after nil update, got %v", got.LastInteractionMeta)
+	}
+}
+
+func TestUpdateLastInteraction_NotFound(t *testing.T) {
+	store := newTestStore(t)
+
+	err := store.UpdateLastInteraction(uuid.New(), time.Now(), nil)
+	if err == nil {
+		t.Error("expected error for non-existent contact")
 	}
 }
 

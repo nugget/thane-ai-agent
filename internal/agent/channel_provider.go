@@ -2,35 +2,66 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
-	"sort"
 	"strings"
 
 	"github.com/nugget/thane-ai-agent/internal/tools"
 )
 
-// maxPropertyKeys caps the number of contact property keys rendered into
-// the channel context block. This prevents large contact records from
-// bloating the system prompt.
-const maxPropertyKeys = 10
-
-// maxFieldLen caps the length of individual text fields (name,
-// relationship, summary, fact values) injected into the prompt.
-const maxFieldLen = 200
-
-// ContactSummary holds the subset of contact information injected into
-// the channel context block. This is intentionally a small struct to
-// avoid coupling ChannelProvider to the full contacts package.
-type ContactSummary struct {
-	Name       string
-	Summary    string              // AI-generated context summary
-	Properties map[string][]string // property→values, e.g. "timezone"→["America/Chicago"]
+// ContactContext holds the rich contact profile injected into the system
+// prompt as structured JSON. Fields are populated by the ContactLookup
+// implementation and gated by the contact's trust zone — lower-trust
+// zones receive fewer fields.
+type ContactContext struct {
+	ID              string           `json:"id,omitempty"`
+	Name            string           `json:"name"`
+	GivenName       string           `json:"given_name,omitempty"`
+	FamilyName      string           `json:"family_name,omitempty"`
+	TrustZone       string           `json:"trust_zone"`
+	TrustPolicy     *TrustPolicyView `json:"trust_policy"`
+	Groups          []string         `json:"groups,omitempty"`
+	Org             *string          `json:"org,omitempty"`
+	Title           *string          `json:"title,omitempty"`
+	Role            *string          `json:"role,omitempty"`
+	Summary         string           `json:"summary,omitempty"`
+	Related         []RelatedContact `json:"related,omitempty"`
+	Channels        map[string]any   `json:"channels,omitempty"`
+	LastInteraction *InteractionRef  `json:"last_interaction,omitempty"`
+	ContactSince    string           `json:"contact_since,omitempty"`
 }
 
-// ContactLookup resolves a contact name to a summary for system prompt
-// injection. Returns nil when no matching contact is found.
+// TrustPolicyView is the JSON-serializable view of a trust zone's
+// capability matrix. It exposes the policy dimensions that the agent
+// needs to adapt its behavior.
+type TrustPolicyView struct {
+	FrontierModel     bool   `json:"frontier_model"`
+	ProactiveOutreach string `json:"proactive_outreach"`
+	ToolAccess        string `json:"tool_access"`
+	SendGating        string `json:"send_gating"`
+}
+
+// RelatedContact represents a RELATED vCard entry on a contact.
+type RelatedContact struct {
+	Name string `json:"name"`
+	Type string `json:"type,omitempty"`
+}
+
+// InteractionRef summarizes the contact's most recent interaction for
+// temporal context. AgoSeconds is negative for past interactions.
+type InteractionRef struct {
+	AgoSeconds int64    `json:"ago_seconds"`
+	Channel    string   `json:"channel,omitempty"`
+	SessionID  string   `json:"session_id,omitempty"`
+	Topics     []string `json:"topics,omitempty"`
+}
+
+// ContactLookup resolves a contact name to a rich context profile for
+// system prompt injection. The source parameter identifies the channel
+// (e.g., "signal", "email") so the implementation can gate fields by
+// trust zone. Returns nil when no matching contact is found.
 type ContactLookup interface {
-	LookupContactByName(name string) *ContactSummary
+	LookupContact(name string, source string) *ContactContext
 }
 
 // channelDefaults maps source hint values to channel-specific behavioral
@@ -44,8 +75,8 @@ var channelDefaults = map[string]string{
 // ChannelProvider is a ContextProvider that injects channel-specific
 // context into the system prompt based on the "source" routing hint
 // attached to the request context. When a ContactLookup is configured,
-// it resolves sender names to contact records and injects relationship
-// details, summaries, and relevant facts alongside the channel notes.
+// it resolves sender names to contact records and injects a structured
+// JSON contact profile alongside the channel notes.
 type ChannelProvider struct {
 	contacts ContactLookup
 }
@@ -60,8 +91,9 @@ func NewChannelProvider(contacts ContactLookup) *ChannelProvider {
 // GetContext returns a channel context block if the request context
 // carries a "source" hint that matches a known channel. When a contact
 // lookup is available and the sender resolves to a known contact, the
-// block includes relationship details and context notes. Returns an
-// empty string for unrecognized sources or missing hints.
+// block includes a structured JSON contact profile with trust policy,
+// communication channels, and interaction history. Returns an empty
+// string for unrecognized sources or missing hints.
 func (p *ChannelProvider) GetContext(ctx context.Context, _ string) (string, error) {
 	hints := tools.HintsFromContext(ctx)
 	if hints == nil {
@@ -83,35 +115,14 @@ func (p *ChannelProvider) GetContext(ctx context.Context, _ string) (string, err
 		return "", nil
 	}
 
-	var sb strings.Builder
-	sb.WriteString("### Channel Context\n")
-	sb.WriteString(fmt.Sprintf("- **Source:** %s\n", formatSourceName(source)))
-
 	// Try contact resolution when we have a sender name.
-	var contact *ContactSummary
+	var contactCtx *ContactContext
 	if senderName != "" && p.contacts != nil {
-		contact = p.contacts.LookupContactByName(senderName)
+		contactCtx = p.contacts.LookupContact(senderName, source)
 	}
 
-	if contact != nil {
-		// Known contact — rich context.
-		sb.WriteString(fmt.Sprintf("- **Participant:** %s\n", sanitizeField(contact.Name)))
-		if contact.Summary != "" {
-			sb.WriteString(fmt.Sprintf("  - Context: %s\n", sanitizeField(contact.Summary)))
-		}
-		// Include relevant properties (timezone, preferences, etc.),
-		// capped to avoid bloating the system prompt.
-		keys := sortedPropertyKeys(contact.Properties)
-		if len(keys) > maxPropertyKeys {
-			keys = keys[:maxPropertyKeys]
-		}
-		for _, key := range keys {
-			values := contact.Properties[key]
-			joined := sanitizeField(strings.Join(values, ", "))
-			sb.WriteString(fmt.Sprintf("  - %s: %s\n", sanitizeField(key), joined))
-		}
-	} else {
-		// Unknown contact — minimal context.
+	// Synthesize unknown-sender context when resolution fails.
+	if contactCtx == nil {
 		displayName := senderName
 		if displayName == "" {
 			displayName = senderRaw
@@ -119,12 +130,37 @@ func (p *ChannelProvider) GetContext(ctx context.Context, _ string) (string, err
 		if displayName == "" {
 			displayName = "unknown sender"
 		}
-		sb.WriteString(fmt.Sprintf("- **Participant:** %s (unknown contact)\n", sanitizeField(displayName)))
+		contactCtx = &ContactContext{
+			Name:      displayName,
+			TrustZone: "unknown",
+			TrustPolicy: &TrustPolicyView{
+				FrontierModel:     false,
+				ProactiveOutreach: "none",
+				ToolAccess:        "none",
+				SendGating:        "blocked",
+			},
+		}
 	}
 
+	// Build output: markdown header + channel note + JSON contact block.
+	var sb strings.Builder
+	sb.WriteString("### Channel Context\n")
+	sb.WriteString(fmt.Sprintf("- **Source:** %s\n", formatSourceName(source)))
 	if channelNote != "" {
 		sb.WriteString(fmt.Sprintf("- **Note:** %s\n", channelNote))
 	}
+
+	envelope := map[string]*ContactContext{"contact": contactCtx}
+	jsonBytes, err := json.Marshal(envelope)
+	if err != nil {
+		// Fall back to name-only if JSON fails (shouldn't happen).
+		sb.WriteString(fmt.Sprintf("- **Participant:** %s\n", contactCtx.Name))
+		return sb.String(), nil
+	}
+
+	sb.WriteString("```json\n")
+	sb.Write(jsonBytes)
+	sb.WriteString("\n```\n")
 
 	return sb.String(), nil
 }
@@ -141,29 +177,4 @@ func formatSourceName(source string) string {
 	default:
 		return source
 	}
-}
-
-// sanitizeField normalizes a string for safe system prompt injection.
-// It collapses newlines and excessive whitespace into single spaces and
-// truncates to maxFieldLen to prevent prompt bloat.
-func sanitizeField(s string) string {
-	// Collapse any whitespace runs (including newlines) to a single space.
-	s = strings.Join(strings.Fields(s), " ")
-	if len(s) > maxFieldLen {
-		return s[:maxFieldLen] + "…"
-	}
-	return s
-}
-
-// sortedPropertyKeys returns property keys in deterministic order for stable output.
-func sortedPropertyKeys(props map[string][]string) []string {
-	if len(props) == 0 {
-		return nil
-	}
-	keys := make([]string, 0, len(props))
-	for k := range props {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
 }
