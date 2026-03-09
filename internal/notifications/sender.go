@@ -1,4 +1,5 @@
-// Package notifications delivers push notifications via Home Assistant companion apps.
+// Package notifications provides provider-agnostic notification delivery
+// with routing, callback tracking, and timeout management.
 package notifications
 
 import (

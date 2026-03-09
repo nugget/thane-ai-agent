@@ -826,6 +826,13 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		defer notifRecords.Close()
 		loop.Tools().SetNotificationRecords(notifRecords)
 		logger.Info("notification record store initialized", "path", cfg.DataDir+"/notifications.db")
+
+		// Provider-agnostic notification router — wraps the HA push sender
+		// behind a routing layer that selects delivery channel per recipient.
+		notifRouter := notifications.NewNotificationRouter(contactStore, notifRecords, logger)
+		notifRouter.RegisterProvider(notifications.NewHAPushProvider(notifSender))
+		loop.Tools().SetNotificationRouter(notifRouter)
+		logger.Info("notification router initialized", "providers", "ha_push")
 	}
 
 	// --- Email ---

@@ -43,6 +43,7 @@ type Registry struct {
 	emailTools        *email.Tools
 	notifier          *notifications.Sender
 	notifRecords      *notifications.RecordStore
+	notifRouter       *notifications.NotificationRouter
 	forgeTools        forgeHandler
 	fileTools         *FileTools
 	shellExec         *ShellExec

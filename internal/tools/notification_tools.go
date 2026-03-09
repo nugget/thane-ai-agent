@@ -188,6 +188,204 @@ func (r *Registry) handleActionableNotify(ctx context.Context, n notifications.N
 	), nil
 }
 
+// SetNotificationRouter adds the provider-agnostic send_notification
+// and request_human_decision tools to the registry.
+func (r *Registry) SetNotificationRouter(router *notifications.NotificationRouter) {
+	r.notifRouter = router
+	r.registerGenericNotificationTools()
+}
+
+func (r *Registry) registerGenericNotificationTools() {
+	if r.notifRouter == nil {
+		return
+	}
+
+	r.Register(&Tool{
+		Name: "send_notification",
+		Description: "Send a notification to a person. The system automatically selects the " +
+			"best delivery channel based on the recipient's configured preferences and " +
+			"available channels (HA push, Signal, email, etc.). Use this for informing " +
+			"people about events, updates, or anything that needs their attention. " +
+			"This is fire-and-forget — no response tracking.",
+		AlwaysAvailable: true,
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"recipient": map[string]any{
+					"type":        "string",
+					"description": "Contact name of the notification recipient",
+				},
+				"message": map[string]any{
+					"type":        "string",
+					"description": "Notification body text",
+				},
+				"title": map[string]any{
+					"type":        "string",
+					"description": "Notification title (optional)",
+				},
+				"priority": map[string]any{
+					"type":        "string",
+					"enum":        []string{"low", "normal", "urgent"},
+					"description": "Notification priority: low (passive/FYI), normal (default), urgent (needs attention)",
+				},
+			},
+			"required": []string{"recipient", "message"},
+		},
+		Handler: r.handleSendNotification,
+	})
+
+	r.Register(&Tool{
+		Name: "request_human_decision",
+		Description: "Request a decision from a person via an actionable notification with " +
+			"response buttons. Creates a tracked request with callback routing — you will " +
+			"receive a callback when they respond or on timeout. The system automatically " +
+			"selects the delivery channel based on the recipient's preferences.",
+		AlwaysAvailable: true,
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"recipient": map[string]any{
+					"type":        "string",
+					"description": "Contact name of the notification recipient",
+				},
+				"message": map[string]any{
+					"type":        "string",
+					"description": "Notification body text explaining what decision is needed",
+				},
+				"actions": map[string]any{
+					"type":        "array",
+					"description": "Action buttons presented to the recipient.",
+					"items": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"id":    map[string]any{"type": "string", "description": "Short action identifier (e.g., \"approve\", \"deny\")"},
+							"label": map[string]any{"type": "string", "description": "Button label shown to the user"},
+						},
+						"required": []string{"id", "label"},
+					},
+				},
+				"title": map[string]any{
+					"type":        "string",
+					"description": "Notification title (optional)",
+				},
+				"priority": map[string]any{
+					"type":        "string",
+					"enum":        []string{"low", "normal", "urgent"},
+					"description": "Notification priority: low (passive/FYI), normal (default), urgent (needs attention)",
+				},
+				"timeout": map[string]any{
+					"type":        "string",
+					"description": "How long to wait for a response (Go duration, e.g., \"30m\", \"1h\"). Default: 30m.",
+				},
+				"timeout_action": map[string]any{
+					"type":        "string",
+					"description": "Action to take on timeout: an action ID to auto-execute, \"escalate\" to re-send at urgent priority, or \"cancel\" (default) to do nothing.",
+				},
+				"context": map[string]any{
+					"type":        "string",
+					"description": "Context for the callback handler explaining what to do with the response. Stored with the notification record.",
+				},
+			},
+			"required": []string{"recipient", "message", "actions"},
+		},
+		Handler: r.handleRequestHumanDecision,
+	})
+}
+
+func (r *Registry) handleSendNotification(ctx context.Context, args map[string]any) (string, error) {
+	recipient, _ := args["recipient"].(string)
+	message, _ := args["message"].(string)
+	if recipient == "" {
+		return "", fmt.Errorf("recipient is required")
+	}
+	if message == "" {
+		return "", fmt.Errorf("message is required")
+	}
+
+	req := notifications.NotificationRequest{
+		Recipient: recipient,
+		Message:   message,
+	}
+	if title, ok := args["title"].(string); ok {
+		req.Title = title
+	}
+	if priority, ok := args["priority"].(string); ok {
+		req.Priority = priority
+	}
+
+	if err := r.notifRouter.SendNotification(ctx, req); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("Notification sent to %s", recipient), nil
+}
+
+func (r *Registry) handleRequestHumanDecision(ctx context.Context, args map[string]any) (string, error) {
+	recipient, _ := args["recipient"].(string)
+	message, _ := args["message"].(string)
+	if recipient == "" {
+		return "", fmt.Errorf("recipient is required")
+	}
+	if message == "" {
+		return "", fmt.Errorf("message is required")
+	}
+
+	actions := parseActionsArg(args)
+	if len(actions) == 0 {
+		return "", fmt.Errorf("at least one action is required")
+	}
+
+	timeout := defaultNotificationTimeout
+	if ts, ok := args["timeout"].(string); ok && ts != "" {
+		parsed, err := time.ParseDuration(ts)
+		if err != nil {
+			return "", fmt.Errorf("invalid timeout %q: %w", ts, err)
+		}
+		if parsed <= 0 {
+			return "", fmt.Errorf("timeout must be positive, got %s", parsed)
+		}
+		timeout = parsed
+	}
+
+	timeoutAction, _ := args["timeout_action"].(string)
+	notifContext, _ := args["context"].(string)
+
+	req := notifications.ActionableRequest{
+		NotificationRequest: notifications.NotificationRequest{
+			Recipient: recipient,
+			Message:   message,
+		},
+		Actions:       actions,
+		Timeout:       timeout,
+		TimeoutAction: timeoutAction,
+		Context:       notifContext,
+	}
+	if title, ok := args["title"].(string); ok {
+		req.Title = title
+	}
+	if priority, ok := args["priority"].(string); ok {
+		req.Priority = priority
+	}
+
+	requestID, err := r.notifRouter.SendActionable(
+		ctx, req,
+		SessionIDFromContext(ctx),
+		ConversationIDFromContext(ctx),
+	)
+	if err != nil {
+		return "", err
+	}
+
+	actionIDs := make([]string, len(actions))
+	for i, a := range actions {
+		actionIDs[i] = a.ID
+	}
+
+	return fmt.Sprintf(
+		"Decision requested from %s with options [%s]. Request ID: %s. You will receive a callback when they respond or after %s timeout.",
+		recipient, strings.Join(actionIDs, ", "), requestID, timeout,
+	), nil
+}
+
 // parseActionsArg extracts the actions array from tool arguments.
 // Returns nil if no actions are provided or the format is invalid.
 func parseActionsArg(args map[string]any) []notifications.Action {
