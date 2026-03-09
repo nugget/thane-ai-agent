@@ -27,7 +27,8 @@ const (
 	// ZoneUnknown represents unrecognized senders with no contact
 	// record. This zone is NOT stored on contacts — it is the
 	// implicit zone for messages from addresses that don't match any
-	// contact. No model access, no tools, no outreach, no sends.
+	// contact. Local model access only (for triage), no tools, no
+	// outreach, no sends.
 	ZoneUnknown = "unknown"
 )
 
@@ -105,6 +106,7 @@ var policies = []ZonePolicy{
 	},
 	{
 		Zone:              ZoneUnknown,
+		LocalModelOnly:    true,
 		ProactiveOutreach: "none",
 		ToolAccess:        "none",
 		SendGating:        "blocked",

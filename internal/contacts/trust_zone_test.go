@@ -41,6 +41,7 @@ func TestPolicy_AllZones(t *testing.T) {
 		},
 		{
 			zone:           ZoneUnknown,
+			wantLocalOnly:  true,
 			wantProactive:  "none",
 			wantToolAccess: "none",
 			wantSendGating: "blocked",
