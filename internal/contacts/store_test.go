@@ -934,6 +934,176 @@ func TestFindByTrustZone(t *testing.T) {
 	}
 }
 
+func TestFindByFactExact(t *testing.T) {
+	store := newTestStore(t)
+
+	c1 := &Contact{Name: "Dan Egan", Kind: "person"}
+	created1, err := store.Upsert(c1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetFact(created1.ID, "preferred_name", "Dan"); err != nil {
+		t.Fatal(err)
+	}
+
+	c2 := &Contact{Name: "Daniel Craig", Kind: "person"}
+	created2, err := store.Upsert(c2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetFact(created2.ID, "preferred_name", "Daniel"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Exact match should find only Dan Egan.
+	results, err := store.FindByFactExact("preferred_name", "Dan")
+	if err != nil {
+		t.Fatalf("FindByFactExact() error = %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("FindByFactExact() returned %d results, want 1", len(results))
+	}
+	if results[0].Name != "Dan Egan" {
+		t.Errorf("Name = %q, want %q", results[0].Name, "Dan Egan")
+	}
+
+	// Case-insensitive match.
+	results, err = store.FindByFactExact("preferred_name", "dan")
+	if err != nil {
+		t.Fatalf("FindByFactExact() case-insensitive error = %v", err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("FindByFactExact() case-insensitive returned %d results, want 1", len(results))
+	}
+
+	// No match for partial value (unlike FindByFact which uses LIKE).
+	results, err = store.FindByFactExact("preferred_name", "Da")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 0 {
+		t.Errorf("FindByFactExact() partial match returned %d results, want 0", len(results))
+	}
+}
+
+func TestResolveContact_ExactName(t *testing.T) {
+	store := newTestStore(t)
+
+	c := &Contact{Name: "Alice Johnson", Kind: "person"}
+	if _, err := store.Upsert(c); err != nil {
+		t.Fatal(err)
+	}
+
+	// Exact name match (case-insensitive).
+	got, err := store.ResolveContact("alice johnson")
+	if err != nil {
+		t.Fatalf("ResolveContact() error = %v", err)
+	}
+	if got.Name != "Alice Johnson" {
+		t.Errorf("Name = %q, want %q", got.Name, "Alice Johnson")
+	}
+}
+
+func TestResolveContact_PreferredName(t *testing.T) {
+	store := newTestStore(t)
+
+	c := &Contact{Name: "David McNett", Kind: "person"}
+	created, err := store.Upsert(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetFact(created.ID, "preferred_name", "Nugget"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Should resolve via preferred_name fact.
+	got, err := store.ResolveContact("nugget")
+	if err != nil {
+		t.Fatalf("ResolveContact() error = %v", err)
+	}
+	if got.Name != "David McNett" {
+		t.Errorf("Name = %q, want %q", got.Name, "David McNett")
+	}
+}
+
+func TestResolveContact_SearchFallback(t *testing.T) {
+	store := newTestStore(t)
+
+	c := &Contact{Name: "Eve Engineer", Kind: "person", Summary: "Backend developer"}
+	if _, err := store.Upsert(c); err != nil {
+		t.Fatal(err)
+	}
+
+	// "Eve" should match via search (FTS or LIKE on name).
+	got, err := store.ResolveContact("Eve")
+	if err != nil {
+		t.Fatalf("ResolveContact() error = %v", err)
+	}
+	if got.Name != "Eve Engineer" {
+		t.Errorf("Name = %q, want %q", got.Name, "Eve Engineer")
+	}
+}
+
+func TestResolveContact_Ambiguous(t *testing.T) {
+	store := newTestStore(t)
+
+	contacts := []*Contact{
+		{Name: "Eve Alpha", Kind: "person", Summary: "Eve works on alpha"},
+		{Name: "Eve Beta", Kind: "person", Summary: "Eve works on beta"},
+	}
+	for _, c := range contacts {
+		if _, err := store.Upsert(c); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	_, err := store.ResolveContact("Eve")
+	if err == nil {
+		t.Fatal("expected error for ambiguous contact")
+	}
+	if !strings.Contains(err.Error(), "ambiguous") {
+		t.Errorf("error = %q, want to contain 'ambiguous'", err.Error())
+	}
+}
+
+func TestResolveContact_NotFound(t *testing.T) {
+	store := newTestStore(t)
+
+	_, err := store.ResolveContact("Nobody Here")
+	if err != sql.ErrNoRows {
+		t.Errorf("ResolveContact() non-existent: got err = %v, want sql.ErrNoRows", err)
+	}
+}
+
+func TestResolveContact_PriorityOrder(t *testing.T) {
+	store := newTestStore(t)
+
+	// Create a contact named "Nugget" and a different contact with
+	// preferred_name = "Nugget". The exact name match should win.
+	c1 := &Contact{Name: "Nugget", Kind: "person"}
+	if _, err := store.Upsert(c1); err != nil {
+		t.Fatal(err)
+	}
+
+	c2 := &Contact{Name: "David McNett", Kind: "person"}
+	created2, err := store.Upsert(c2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetFact(created2.ID, "preferred_name", "Nugget"); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := store.ResolveContact("Nugget")
+	if err != nil {
+		t.Fatalf("ResolveContact() error = %v", err)
+	}
+	// Exact name match takes priority over preferred_name.
+	if got.Name != "Nugget" {
+		t.Errorf("Name = %q, want %q (exact match should win)", got.Name, "Nugget")
+	}
+}
+
 func TestUpsert_DuplicateActiveName(t *testing.T) {
 	store := newTestStore(t)
 

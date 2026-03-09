@@ -269,6 +269,40 @@ func (s *Store) FindByName(name string) (*Contact, error) {
 		name))
 }
 
+// ResolveContact finds a contact by name using cascading resolution
+// strategies: exact name match → preferred_name fact → search fallback.
+// Returns [sql.ErrNoRows] if no match is found, or an error listing
+// ambiguous matches if search returns multiple results.
+func (s *Store) ResolveContact(name string) (*Contact, error) {
+	// 1. Exact name match (fast, indexed).
+	if c, err := s.FindByName(name); err == nil {
+		return c, nil
+	}
+
+	// 2. preferred_name fact (exact, case-insensitive).
+	if matches, err := s.FindByFactExact("preferred_name", name); err == nil && len(matches) == 1 {
+		return matches[0], nil
+	}
+
+	// 3. Search fallback (FTS or LIKE).
+	results, err := s.Search(name)
+	if err != nil {
+		return nil, fmt.Errorf("search fallback for %q: %w", name, err)
+	}
+	if len(results) == 1 {
+		return results[0], nil
+	}
+	if len(results) > 1 {
+		names := make([]string, len(results))
+		for i, c := range results {
+			names[i] = c.Name
+		}
+		return nil, fmt.Errorf("ambiguous contact %q: matches %v", name, names)
+	}
+
+	return nil, sql.ErrNoRows
+}
+
 // Get retrieves a contact by ID.
 func (s *Store) Get(id uuid.UUID) (*Contact, error) {
 	return s.scanContact(s.db.QueryRow(
@@ -378,9 +412,10 @@ func (s *Store) Delete(id uuid.UUID) error {
 	return nil
 }
 
-// DeleteByName soft-deletes a contact by case-insensitive name match.
+// DeleteByName soft-deletes a contact by name, using [ResolveContact]
+// for cascading name resolution.
 func (s *Store) DeleteByName(name string) error {
-	c, err := s.FindByName(name)
+	c, err := s.ResolveContact(name)
 	if err != nil {
 		return fmt.Errorf("find contact: %w", err)
 	}
@@ -477,6 +512,28 @@ func (s *Store) GetFacts(contactID uuid.UUID) (map[string][]string, error) {
 		facts[key] = append(facts[key], value)
 	}
 	return facts, rows.Err()
+}
+
+// FindByFactExact returns contacts with an exact key-value fact match.
+// The value comparison is case-insensitive. Use [FindByFact] for
+// partial (LIKE-based) matching.
+func (s *Store) FindByFactExact(key, value string) ([]*Contact, error) {
+	rows, err := s.db.Query(`
+		SELECT DISTINCT `+qualifiedContactColumns+`
+		FROM contacts
+		JOIN contact_facts ON contacts.id = contact_facts.contact_id
+		WHERE contacts.`+activeFilter+`
+		  AND contact_facts.key = ?
+		  AND LOWER(contact_facts.value) = LOWER(?)
+		ORDER BY contacts.name
+		LIMIT 50
+	`, key, value)
+	if err != nil {
+		return nil, fmt.Errorf("query: %w", err)
+	}
+	defer rows.Close()
+
+	return s.scanContacts(rows)
 }
 
 // FindByFact returns contacts that have a matching key-value attribute.

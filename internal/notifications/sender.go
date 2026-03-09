@@ -22,8 +22,10 @@ type HAClient interface {
 }
 
 // ContactResolver resolves a contact name to its record and facts.
+// ResolveContact uses cascading resolution (exact name → preferred_name
+// fact → search) for flexible name matching.
 type ContactResolver interface {
-	FindByName(name string) (*contacts.Contact, error)
+	ResolveContact(name string) (*contacts.Contact, error)
 	GetFacts(contactID uuid.UUID) (map[string][]string, error)
 }
 
@@ -75,12 +77,12 @@ func (s *Sender) Send(ctx context.Context, n Notification) error {
 		return fmt.Errorf("notification recipient is required")
 	}
 
-	contact, err := s.contacts.FindByName(n.Recipient)
+	contact, err := s.contacts.ResolveContact(n.Recipient)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return fmt.Errorf("contact %q not found", n.Recipient)
 		}
-		return fmt.Errorf("find contact %q: %w", n.Recipient, err)
+		return fmt.Errorf("resolve contact %q: %w", n.Recipient, err)
 	}
 
 	facts, err := s.contacts.GetFacts(contact.ID)
