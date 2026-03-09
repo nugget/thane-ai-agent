@@ -21,7 +21,7 @@ func (r *Registry) registerContactTools() {
 
 	r.Register(&Tool{
 		Name:        "save_contact",
-		Description: "Store or update a person, organization, or group in the contact directory. Contact facts should be personal attributes only: communication preferences, trust levels, aliases, and behavioral patterns. Standard contact info (email, phone) is stored as vCard properties automatically. Do NOT store project knowledge, design philosophy, technical insights, or collaboration patterns here — use remember_fact or workspace files instead. When updating an existing contact, only non-empty fields are overwritten.",
+		Description: "Store or update a person, organization, or group in the contact directory. Properties should be personal attributes: communication preferences, trust levels, aliases, and behavioral patterns. Standard contact info (email, phone) is mapped to vCard property names automatically. Do NOT store project knowledge, design philosophy, technical insights, or collaboration patterns here — use remember_fact or workspace files instead. When updating an existing contact, only non-empty fields are overwritten.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -73,7 +73,7 @@ func (r *Registry) registerContactTools() {
 				},
 				"facts": map[string]any{
 					"type":                 "object",
-					"description":          "Attributes as key-value pairs. Standard keys like 'email' and 'phone' are stored as vCard properties; other keys are stored as freeform metadata (e.g., {\"email\": \"alice@example.com\", \"phone\": \"555-1234\", \"notification_preference\": \"ha_push\"}).",
+					"description":          "Attributes as key-value pairs. All entries are stored as contact properties. Standard keys like 'email' and 'phone' are mapped to vCard property names (EMAIL, TEL); others use their key as-is (e.g., {\"email\": \"alice@example.com\", \"phone\": \"555-1234\", \"ha_companion_app\": \"mobile_app_phone\"}).",
 					"additionalProperties": map[string]any{"type": "string"},
 				},
 			},
@@ -90,7 +90,7 @@ func (r *Registry) registerContactTools() {
 
 	r.Register(&Tool{
 		Name:        "lookup_contact",
-		Description: "Look up contacts from the directory. Search by name, query, kind, or structured attributes (vCard properties like EMAIL/TEL or freeform facts). With no arguments, returns directory statistics.",
+		Description: "Look up contacts from the directory. Search by name, query, kind, or property key/value. With no arguments, returns directory statistics.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -109,7 +109,7 @@ func (r *Registry) registerContactTools() {
 				},
 				"key": map[string]any{
 					"type":        "string",
-					"description": "Property or fact key to filter by (e.g., 'email', 'phone', 'EMAIL', 'TEL'). Requires value.",
+					"description": "Property key to filter by (e.g., 'email', 'phone', 'EMAIL', 'TEL', 'ha_companion_app'). Requires value.",
 				},
 				"value": map[string]any{
 					"type":        "string",

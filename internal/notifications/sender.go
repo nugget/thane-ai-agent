@@ -22,12 +22,12 @@ type HAClient interface {
 	CallService(ctx context.Context, domain, service string, data map[string]any) error
 }
 
-// ContactResolver resolves a contact name to its record and facts.
-// ResolveContact uses cascading resolution (exact name → preferred_name
-// fact → search) for flexible name matching.
+// ContactResolver resolves a contact name to its record and properties.
+// ResolveContact uses cascading resolution (exact name → nickname →
+// search) for flexible name matching.
 type ContactResolver interface {
 	ResolveContact(name string) (*contacts.Contact, error)
-	GetFacts(contactID uuid.UUID) (map[string][]string, error)
+	GetPropertiesMap(contactID uuid.UUID) (map[string][]string, error)
 }
 
 // OpstateStore is the subset of opstate.Store needed for recording notifications.
@@ -89,14 +89,14 @@ func (s *Sender) Send(ctx context.Context, n Notification) error {
 		return fmt.Errorf("resolve contact %q: %w", n.Recipient, err)
 	}
 
-	facts, err := s.contacts.GetFacts(contact.ID)
+	props, err := s.contacts.GetPropertiesMap(contact.ID)
 	if err != nil {
-		return fmt.Errorf("lookup facts for %q: %w", n.Recipient, err)
+		return fmt.Errorf("lookup properties for %q: %w", n.Recipient, err)
 	}
 
-	apps, ok := facts["ha_companion_app"]
+	apps, ok := props["ha_companion_app"]
 	if !ok || len(apps) == 0 {
-		return fmt.Errorf("contact %q has no ha_companion_app fact configured", n.Recipient)
+		return fmt.Errorf("contact %q has no ha_companion_app property configured", n.Recipient)
 	}
 	entity := apps[0]
 

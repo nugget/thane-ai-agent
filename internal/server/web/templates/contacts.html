@@ -30,6 +30,8 @@
                hx-get="/contacts?kind=org" hx-target="#contacts-tbody">Org</a>
             <a class="filter-tab{{if eq .Kind "group"}} active{{end}}"
                hx-get="/contacts?kind=group" hx-target="#contacts-tbody">Group</a>
+            <a class="filter-tab{{if eq .Kind "location"}} active{{end}}"
+               hx-get="/contacts?kind=location" hx-target="#contacts-tbody">Location</a>
         </div>
     </div>
 

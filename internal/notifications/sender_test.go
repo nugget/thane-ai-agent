@@ -35,8 +35,8 @@ func (m *mockHAClient) CallService(_ context.Context, domain, service string, da
 type mockContactResolver struct {
 	contact  *contacts.Contact
 	findErr  error
-	facts    map[string][]string
-	factsErr error
+	props    map[string][]string
+	propsErr error
 }
 
 func (m *mockContactResolver) ResolveContact(_ string) (*contacts.Contact, error) {
@@ -46,11 +46,11 @@ func (m *mockContactResolver) ResolveContact(_ string) (*contacts.Contact, error
 	return m.contact, nil
 }
 
-func (m *mockContactResolver) GetFacts(_ uuid.UUID) (map[string][]string, error) {
-	if m.factsErr != nil {
-		return nil, m.factsErr
+func (m *mockContactResolver) GetPropertiesMap(_ uuid.UUID) (map[string][]string, error) {
+	if m.propsErr != nil {
+		return nil, m.propsErr
 	}
-	return m.facts, nil
+	return m.props, nil
 }
 
 // mockOpstate records SetWithTTL calls.
@@ -87,7 +87,7 @@ func TestSend(t *testing.T) {
 			ha: &mockHAClient{},
 			resolver: &mockContactResolver{
 				contact: &contacts.Contact{ID: testID, FormattedName: "nugget"},
-				facts:   map[string][]string{"ha_companion_app": {"mobile_app_mcphone"}},
+				props:   map[string][]string{"ha_companion_app": {"mobile_app_mcphone"}},
 			},
 			wantCalls: 1,
 		},
@@ -102,7 +102,7 @@ func TestSend(t *testing.T) {
 			ha: &mockHAClient{},
 			resolver: &mockContactResolver{
 				contact: &contacts.Contact{ID: testID, FormattedName: "nugget"},
-				facts:   map[string][]string{"ha_companion_app": {"mobile_app_mcphone"}},
+				props:   map[string][]string{"ha_companion_app": {"mobile_app_mcphone"}},
 			},
 			wantCalls: 1,
 		},
@@ -116,7 +116,7 @@ func TestSend(t *testing.T) {
 			ha: &mockHAClient{},
 			resolver: &mockContactResolver{
 				contact: &contacts.Contact{ID: testID, FormattedName: "nugget"},
-				facts:   map[string][]string{"ha_companion_app": {"mobile_app_mcphone"}},
+				props:   map[string][]string{"ha_companion_app": {"mobile_app_mcphone"}},
 			},
 			wantCalls: 1,
 		},
@@ -160,9 +160,9 @@ func TestSend(t *testing.T) {
 			ha:    &mockHAClient{},
 			resolver: &mockContactResolver{
 				contact:  &contacts.Contact{ID: testID, FormattedName: "nugget"},
-				factsErr: errors.New("db error"),
+				propsErr: errors.New("db error"),
 			},
-			wantErr: `lookup facts for "nugget"`,
+			wantErr: `lookup properties for "nugget"`,
 		},
 		{
 			name:  "missing ha_companion_app fact",
@@ -170,9 +170,9 @@ func TestSend(t *testing.T) {
 			ha:    &mockHAClient{},
 			resolver: &mockContactResolver{
 				contact: &contacts.Contact{ID: testID, FormattedName: "nugget"},
-				facts:   map[string][]string{"email": {"test@example.com"}},
+				props:   map[string][]string{"email": {"test@example.com"}},
 			},
-			wantErr: "has no ha_companion_app fact configured",
+			wantErr: "has no ha_companion_app property configured",
 		},
 		{
 			name:  "HA service call fails",
@@ -180,7 +180,7 @@ func TestSend(t *testing.T) {
 			ha:    &mockHAClient{err: errors.New("connection refused")},
 			resolver: &mockContactResolver{
 				contact: &contacts.Contact{ID: testID, FormattedName: "nugget"},
-				facts:   map[string][]string{"ha_companion_app": {"mobile_app_mcphone"}},
+				props:   map[string][]string{"ha_companion_app": {"mobile_app_mcphone"}},
 			},
 			wantErr: "HA notify call failed",
 		},
@@ -215,7 +215,7 @@ func TestSend_CallServiceArgs(t *testing.T) {
 	ha := &mockHAClient{}
 	resolver := &mockContactResolver{
 		contact: &contacts.Contact{ID: testID, FormattedName: "nugget"},
-		facts:   map[string][]string{"ha_companion_app": {"mobile_app_mcphone"}},
+		props:   map[string][]string{"ha_companion_app": {"mobile_app_mcphone"}},
 	}
 	s := NewSender(ha, resolver, newMockOpstate(), "test-thane", slog.Default())
 
@@ -265,7 +265,7 @@ func TestSend_OpstateRecord(t *testing.T) {
 	ops := newMockOpstate()
 	resolver := &mockContactResolver{
 		contact: &contacts.Contact{ID: testID, FormattedName: "nugget"},
-		facts:   map[string][]string{"ha_companion_app": {"mobile_app_mcphone"}},
+		props:   map[string][]string{"ha_companion_app": {"mobile_app_mcphone"}},
 	}
 	s := NewSender(ha, resolver, ops, "test-thane", slog.Default())
 
@@ -308,7 +308,7 @@ func TestSend_OpstateNilSafe(t *testing.T) {
 	ha := &mockHAClient{}
 	resolver := &mockContactResolver{
 		contact: &contacts.Contact{ID: testID, FormattedName: "nugget"},
-		facts:   map[string][]string{"ha_companion_app": {"mobile_app_mcphone"}},
+		props:   map[string][]string{"ha_companion_app": {"mobile_app_mcphone"}},
 	}
 	s := NewSender(ha, resolver, nil, "test-thane", slog.Default())
 
@@ -326,7 +326,7 @@ func TestSend_WithActions(t *testing.T) {
 	ha := &mockHAClient{}
 	resolver := &mockContactResolver{
 		contact: &contacts.Contact{ID: testID, FormattedName: "nugget"},
-		facts:   map[string][]string{"ha_companion_app": {"mobile_app_mcphone"}},
+		props:   map[string][]string{"ha_companion_app": {"mobile_app_mcphone"}},
 	}
 	s := NewSender(ha, resolver, nil, "test-thane", slog.Default())
 
@@ -368,7 +368,7 @@ func TestSend_ActionsWithPriority(t *testing.T) {
 	ha := &mockHAClient{}
 	resolver := &mockContactResolver{
 		contact: &contacts.Contact{ID: testID, FormattedName: "nugget"},
-		facts:   map[string][]string{"ha_companion_app": {"mobile_app_mcphone"}},
+		props:   map[string][]string{"ha_companion_app": {"mobile_app_mcphone"}},
 	}
 	s := NewSender(ha, resolver, nil, "test-thane", slog.Default())
 
@@ -400,7 +400,7 @@ func TestSend_NoActionsBackwardCompat(t *testing.T) {
 	ha := &mockHAClient{}
 	resolver := &mockContactResolver{
 		contact: &contacts.Contact{ID: testID, FormattedName: "nugget"},
-		facts:   map[string][]string{"ha_companion_app": {"mobile_app_mcphone"}},
+		props:   map[string][]string{"ha_companion_app": {"mobile_app_mcphone"}},
 	}
 	s := NewSender(ha, resolver, nil, "test-thane", slog.Default())
 

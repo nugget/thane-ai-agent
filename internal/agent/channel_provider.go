@@ -9,10 +9,10 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/tools"
 )
 
-// maxFactKeys caps the number of contact fact keys rendered into the
-// channel context block. This prevents large contact records from
+// maxPropertyKeys caps the number of contact property keys rendered into
+// the channel context block. This prevents large contact records from
 // bloating the system prompt.
-const maxFactKeys = 10
+const maxPropertyKeys = 10
 
 // maxFieldLen caps the length of individual text fields (name,
 // relationship, summary, fact values) injected into the prompt.
@@ -22,9 +22,9 @@ const maxFieldLen = 200
 // the channel context block. This is intentionally a small struct to
 // avoid coupling ChannelProvider to the full contacts package.
 type ContactSummary struct {
-	Name    string
-	Summary string              // AI-generated context summary
-	Facts   map[string][]string // key→values, e.g. "timezone"→["America/Chicago"]
+	Name       string
+	Summary    string              // AI-generated context summary
+	Properties map[string][]string // property→values, e.g. "timezone"→["America/Chicago"]
 }
 
 // ContactLookup resolves a contact name to a summary for system prompt
@@ -99,14 +99,14 @@ func (p *ChannelProvider) GetContext(ctx context.Context, _ string) (string, err
 		if contact.Summary != "" {
 			sb.WriteString(fmt.Sprintf("  - Context: %s\n", sanitizeField(contact.Summary)))
 		}
-		// Include relevant facts (timezone, preferences, etc.),
+		// Include relevant properties (timezone, preferences, etc.),
 		// capped to avoid bloating the system prompt.
-		keys := sortedFactKeys(contact.Facts)
-		if len(keys) > maxFactKeys {
-			keys = keys[:maxFactKeys]
+		keys := sortedPropertyKeys(contact.Properties)
+		if len(keys) > maxPropertyKeys {
+			keys = keys[:maxPropertyKeys]
 		}
 		for _, key := range keys {
-			values := contact.Facts[key]
+			values := contact.Properties[key]
 			joined := sanitizeField(strings.Join(values, ", "))
 			sb.WriteString(fmt.Sprintf("  - %s: %s\n", sanitizeField(key), joined))
 		}
@@ -155,13 +155,13 @@ func sanitizeField(s string) string {
 	return s
 }
 
-// sortedFactKeys returns fact keys in deterministic order for stable output.
-func sortedFactKeys(facts map[string][]string) []string {
-	if len(facts) == 0 {
+// sortedPropertyKeys returns property keys in deterministic order for stable output.
+func sortedPropertyKeys(props map[string][]string) []string {
+	if len(props) == 0 {
 		return nil
 	}
-	keys := make([]string, 0, len(facts))
-	for k := range facts {
+	keys := make([]string, 0, len(props))
+	for k := range props {
 		keys = append(keys, k)
 	}
 	sort.Strings(keys)

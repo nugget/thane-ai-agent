@@ -2680,16 +2680,16 @@ func (r *contactNameLookup) LookupContactByName(name string) *agent.ContactSumma
 		return nil
 	}
 
-	facts, err := r.store.GetFacts(c.ID)
+	props, err := r.store.GetPropertiesMap(c.ID)
 	if err != nil {
-		slog.Error("failed to get facts for contact", "contact_id", c.ID, "name", c.FormattedName, "error", err)
-		facts = nil
+		slog.Error("failed to get properties for contact", "contact_id", c.ID, "name", c.FormattedName, "error", err)
+		props = nil
 	}
 
 	return &agent.ContactSummary{
-		Name:    c.FormattedName,
-		Summary: c.AISummary,
-		Facts:   facts,
+		Name:       c.FormattedName,
+		Summary:    c.AISummary,
+		Properties: props,
 	}
 }
 

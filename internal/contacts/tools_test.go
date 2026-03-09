@@ -76,7 +76,7 @@ func TestSaveContact_Update(t *testing.T) {
 func TestSaveContact_WithFacts(t *testing.T) {
 	tools := newTestTools(t)
 
-	// email and phone go to contact_properties, timezone stays as a fact.
+	// All entries go to contact_properties.
 	_, err := tools.SaveContact(`{"name":"Charlie Facts","kind":"individual","facts":{"email":"charlie@example.com","phone":"555-9999","timezone":"America/Chicago"}}`)
 	if err != nil {
 		t.Fatal(err)
@@ -87,18 +87,20 @@ func TestSaveContact_WithFacts(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// email and phone should be properties, not facts.
 	props, err := tools.store.GetProperties(c.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	foundEmail, foundTel := false, false
+	foundEmail, foundTel, foundTZ := false, false, false
 	for _, p := range props {
 		if p.Property == "EMAIL" && p.Value == "charlie@example.com" {
 			foundEmail = true
 		}
 		if p.Property == "TEL" && p.Value == "555-9999" {
 			foundTel = true
+		}
+		if p.Property == "timezone" && p.Value == "America/Chicago" {
+			foundTZ = true
 		}
 	}
 	if !foundEmail {
@@ -107,14 +109,8 @@ func TestSaveContact_WithFacts(t *testing.T) {
 	if !foundTel {
 		t.Error("expected TEL property for 555-9999")
 	}
-
-	// timezone should be a fact.
-	facts, err := tools.store.GetFacts(c.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(facts["timezone"]) != 1 || facts["timezone"][0] != "America/Chicago" {
-		t.Errorf("timezone = %v, want [America/Chicago]", facts["timezone"])
+	if !foundTZ {
+		t.Error("expected timezone property for America/Chicago")
 	}
 }
 
@@ -160,13 +156,15 @@ func TestSaveContact_TopLevelFieldsRescued(t *testing.T) {
 		t.Error("expected TEL property for rescued phone")
 	}
 
-	// notes stays as a fact (not a recognized property key).
-	facts, err := tools.store.GetFacts(c.ID)
-	if err != nil {
-		t.Fatal(err)
+	// notes goes to properties (with its key as-is).
+	foundNotes := false
+	for _, p := range props {
+		if p.Property == "notes" && p.Value == "First Thane beta tester candidate" {
+			foundNotes = true
+		}
 	}
-	if len(facts["notes"]) != 1 || facts["notes"][0] != "First Thane beta tester candidate" {
-		t.Errorf("notes = %v, want [First Thane beta tester candidate]", facts["notes"])
+	if !foundNotes {
+		t.Error("expected notes property for rescued notes field")
 	}
 }
 
@@ -202,13 +200,15 @@ func TestSaveContact_TopLevelFieldsMergeWithExplicitFacts(t *testing.T) {
 		t.Error("expected EMAIL property for rescued email")
 	}
 
-	// timezone → fact.
-	facts, err := tools.store.GetFacts(c.ID)
-	if err != nil {
-		t.Fatal(err)
+	// timezone → property.
+	foundTZ := false
+	for _, p := range props {
+		if p.Property == "timezone" && p.Value == "America/Chicago" {
+			foundTZ = true
+		}
 	}
-	if len(facts["timezone"]) != 1 || facts["timezone"][0] != "America/Chicago" {
-		t.Errorf("timezone = %v, want [America/Chicago]", facts["timezone"])
+	if !foundTZ {
+		t.Error("expected timezone property for America/Chicago")
 	}
 }
 
@@ -278,11 +278,11 @@ func TestSaveContact_TopLevelFieldsIgnoreNonString(t *testing.T) {
 	}
 
 	// count and active are not strings — should not be rescued.
-	facts, _ := tools.store.GetFacts(c.ID)
-	if _, exists := facts["count"]; exists {
+	propsMap, _ := tools.store.GetPropertiesMap(c.ID)
+	if _, exists := propsMap["count"]; exists {
 		t.Error("non-string field 'count' should not be rescued")
 	}
-	if _, exists := facts["active"]; exists {
+	if _, exists := propsMap["active"]; exists {
 		t.Error("non-string field 'active' should not be rescued")
 	}
 }
@@ -310,13 +310,13 @@ func TestSaveContact_TopLevelFieldsOnUpdate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// "organization" is not a recognized property key, so it goes to facts.
-	facts, err := tools.store.GetFacts(c.ID)
+	// "organization" is not a recognized vCard key, so it goes to properties with its key as-is.
+	propsMap, err := tools.store.GetPropertiesMap(c.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(facts["organization"]) != 1 || facts["organization"][0] != "Acme Corp" {
-		t.Errorf("organization = %v, want [Acme Corp]", facts["organization"])
+	if len(propsMap["organization"]) != 1 || propsMap["organization"][0] != "Acme Corp" {
+		t.Errorf("organization = %v, want [Acme Corp]", propsMap["organization"])
 	}
 }
 
@@ -419,17 +419,17 @@ func TestLookupContact_ByKind(t *testing.T) {
 	}
 }
 
-func TestLookupContact_ByFact(t *testing.T) {
+func TestLookupContact_ByPropertyKey(t *testing.T) {
 	tools := newTestTools(t)
 
-	_, _ = tools.SaveContact(`{"name":"Frank Fact","kind":"individual","facts":{"timezone":"America/Chicago"}}`)
+	_, _ = tools.SaveContact(`{"name":"Frank Prop","kind":"individual","facts":{"timezone":"America/Chicago"}}`)
 
 	result, err := tools.LookupContact(`{"key":"timezone","value":"America/Chicago"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(result, "Frank Fact") {
-		t.Errorf("result = %q, want to contain 'Frank Fact'", result)
+	if !strings.Contains(result, "Frank Prop") {
+		t.Errorf("result = %q, want to contain 'Frank Prop'", result)
 	}
 }
 
@@ -641,13 +641,13 @@ func TestSaveContact_TrustZoneNotRescuedAsFact(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	facts, err := tools.store.GetFacts(c.ID)
+	propsMap, err := tools.store.GetPropertiesMap(c.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if _, exists := facts["trust_zone"]; exists {
-		t.Error("trust_zone should not be rescued as a fact")
+	if _, exists := propsMap["trust_zone"]; exists {
+		t.Error("trust_zone should not be rescued as a property")
 	}
 	if c.TrustZone != "owner" {
 		t.Errorf("TrustZone = %q, want %q", c.TrustZone, "owner")
@@ -659,7 +659,6 @@ func TestFormatContact_TrustZone(t *testing.T) {
 		FormattedName: "Test Person",
 		Kind:          "individual",
 		TrustZone:     "trusted",
-		Facts:         map[string][]string{},
 	}
 
 	result := formatContact(c)

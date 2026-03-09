@@ -325,7 +325,7 @@ func TestSearch_LIKEFallback(t *testing.T) {
 	}
 }
 
-func TestSetFact_GetFacts(t *testing.T) {
+func TestAddProperty_GetPropertiesMap(t *testing.T) {
 	store := newTestStore(t)
 
 	c := &Contact{FormattedName: "Ivy Info", Kind: "individual"}
@@ -334,29 +334,29 @@ func TestSetFact_GetFacts(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := store.SetFact(created.ID, "timezone", "America/Chicago"); err != nil {
-		t.Fatalf("SetFact(timezone) error = %v", err)
+	if err := store.AddProperty(created.ID, &Property{Property: "timezone", Value: "America/Chicago"}); err != nil {
+		t.Fatalf("AddProperty(timezone) error = %v", err)
 	}
-	if err := store.SetFact(created.ID, "ha_companion_app", "mobile_app_nuggets_iphone"); err != nil {
-		t.Fatalf("SetFact(ha_companion_app) error = %v", err)
+	if err := store.AddProperty(created.ID, &Property{Property: "ha_companion_app", Value: "mobile_app_nuggets_iphone"}); err != nil {
+		t.Fatalf("AddProperty(ha_companion_app) error = %v", err)
 	}
 
-	facts, err := store.GetFacts(created.ID)
+	props, err := store.GetPropertiesMap(created.ID)
 	if err != nil {
-		t.Fatalf("GetFacts() error = %v", err)
+		t.Fatalf("GetPropertiesMap() error = %v", err)
 	}
-	if len(facts) != 2 {
-		t.Fatalf("GetFacts() returned %d facts, want 2", len(facts))
+	if len(props) != 2 {
+		t.Fatalf("GetPropertiesMap() returned %d keys, want 2", len(props))
 	}
-	if len(facts["timezone"]) != 1 || facts["timezone"][0] != "America/Chicago" {
-		t.Errorf("timezone = %v, want [America/Chicago]", facts["timezone"])
+	if len(props["timezone"]) != 1 || props["timezone"][0] != "America/Chicago" {
+		t.Errorf("timezone = %v, want [America/Chicago]", props["timezone"])
 	}
-	if len(facts["ha_companion_app"]) != 1 || facts["ha_companion_app"][0] != "mobile_app_nuggets_iphone" {
-		t.Errorf("ha_companion_app = %v, want [mobile_app_nuggets_iphone]", facts["ha_companion_app"])
+	if len(props["ha_companion_app"]) != 1 || props["ha_companion_app"][0] != "mobile_app_nuggets_iphone" {
+		t.Errorf("ha_companion_app = %v, want [mobile_app_nuggets_iphone]", props["ha_companion_app"])
 	}
 }
 
-func TestSetFact_MultiValue(t *testing.T) {
+func TestAddProperty_MultiValue(t *testing.T) {
 	store := newTestStore(t)
 
 	c := &Contact{FormattedName: "Jack MultiTag", Kind: "individual"}
@@ -365,23 +365,23 @@ func TestSetFact_MultiValue(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := store.SetFact(created.ID, "notification_preference", "urgent_only"); err != nil {
+	if err := store.AddProperty(created.ID, &Property{Property: "notification_preference", Value: "urgent_only"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.SetFact(created.ID, "notification_preference", "no_marketing"); err != nil {
+	if err := store.AddProperty(created.ID, &Property{Property: "notification_preference", Value: "no_marketing"}); err != nil {
 		t.Fatal(err)
 	}
 
-	facts, err := store.GetFacts(created.ID)
+	props, err := store.GetPropertiesMap(created.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(facts["notification_preference"]) != 2 {
-		t.Errorf("expected 2 notification_preference values, got %d: %v", len(facts["notification_preference"]), facts["notification_preference"])
+	if len(props["notification_preference"]) != 2 {
+		t.Errorf("expected 2 notification_preference values, got %d: %v", len(props["notification_preference"]), props["notification_preference"])
 	}
 }
 
-func TestSetFact_Idempotent(t *testing.T) {
+func TestAddProperty_DuplicateGuard(t *testing.T) {
 	store := newTestStore(t)
 
 	c := &Contact{FormattedName: "Jack Idempotent", Kind: "individual"}
@@ -390,151 +390,19 @@ func TestSetFact_Idempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := store.SetFact(created.ID, "timezone", "America/Chicago"); err != nil {
+	if err := store.AddProperty(created.ID, &Property{Property: "timezone", Value: "America/Chicago"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.SetFact(created.ID, "timezone", "America/Chicago"); err != nil {
+	if err := store.AddProperty(created.ID, &Property{Property: "timezone", Value: "America/Chicago"}); err != nil {
 		t.Fatal(err)
 	}
 
-	facts, err := store.GetFacts(created.ID)
+	props, err := store.GetPropertiesMap(created.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(facts["timezone"]) != 1 {
-		t.Errorf("expected 1 timezone value after duplicate SetFact, got %d", len(facts["timezone"]))
-	}
-}
-
-func TestReplaceFact(t *testing.T) {
-	store := newTestStore(t)
-
-	c := &Contact{FormattedName: "Replace Tester", Kind: "individual"}
-	created, err := store.Upsert(c)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	_ = store.SetFact(created.ID, "ha_companion_app", "mobile_app_old_phone")
-	_ = store.SetFact(created.ID, "ha_companion_app", "mobile_app_tablet")
-
-	if err := store.ReplaceFact(created.ID, "ha_companion_app", "mobile_app_new_phone"); err != nil {
-		t.Fatal(err)
-	}
-
-	facts, err := store.GetFacts(created.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(facts["ha_companion_app"]) != 1 || facts["ha_companion_app"][0] != "mobile_app_new_phone" {
-		t.Errorf("ha_companion_app = %v, want [mobile_app_new_phone]", facts["ha_companion_app"])
-	}
-}
-
-func TestDeleteFact(t *testing.T) {
-	store := newTestStore(t)
-
-	c := &Contact{FormattedName: "Delete Fact Tester", Kind: "individual"}
-	created, err := store.Upsert(c)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	_ = store.SetFact(created.ID, "notification_preference", "urgent_only")
-	_ = store.SetFact(created.ID, "notification_preference", "no_marketing")
-
-	if err := store.DeleteFact(created.ID, "notification_preference", "urgent_only"); err != nil {
-		t.Fatal(err)
-	}
-
-	facts, err := store.GetFacts(created.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(facts["notification_preference"]) != 1 || facts["notification_preference"][0] != "no_marketing" {
-		t.Errorf("notification_preference = %v, want [no_marketing]", facts["notification_preference"])
-	}
-}
-
-func TestDeleteFact_NotFound(t *testing.T) {
-	store := newTestStore(t)
-
-	c := &Contact{FormattedName: "No Such Fact", Kind: "individual"}
-	created, err := store.Upsert(c)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	err = store.DeleteFact(created.ID, "timezone", "nonexistent")
-	if err == nil {
-		t.Error("expected error deleting nonexistent fact")
-	}
-}
-
-func TestGetWithFacts(t *testing.T) {
-	store := newTestStore(t)
-
-	c := &Contact{FormattedName: "Kelly Complete", Kind: "individual", AISummary: "Has facts"}
-	created, err := store.Upsert(c)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.SetFact(created.ID, "ha_companion_app", "mobile_app_kellys_phone"); err != nil {
-		t.Fatal(err)
-	}
-
-	got, err := store.GetWithFacts(created.ID)
-	if err != nil {
-		t.Fatalf("GetWithFacts() error = %v", err)
-	}
-	if got.FormattedName != "Kelly Complete" {
-		t.Errorf("FormattedName = %q, want %q", got.FormattedName, "Kelly Complete")
-	}
-	if len(got.Facts["ha_companion_app"]) != 1 || got.Facts["ha_companion_app"][0] != "mobile_app_kellys_phone" {
-		t.Errorf("Facts[ha_companion_app] = %v, want [mobile_app_kellys_phone]", got.Facts["ha_companion_app"])
-	}
-}
-
-func TestFindByFact(t *testing.T) {
-	store := newTestStore(t)
-
-	c1 := &Contact{FormattedName: "Leo Lamp", Kind: "individual"}
-	created1, err := store.Upsert(c1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.SetFact(created1.ID, "ha_companion_app", "mobile_app_leo_phone"); err != nil {
-		t.Fatal(err)
-	}
-
-	c2 := &Contact{FormattedName: "Mia Mirror", Kind: "individual"}
-	created2, err := store.Upsert(c2)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.SetFact(created2.ID, "ha_companion_app", "mobile_app_mia_phone"); err != nil {
-		t.Fatal(err)
-	}
-
-	// Search by partial match.
-	results, err := store.FindByFact("ha_companion_app", "mobile_app")
-	if err != nil {
-		t.Fatalf("FindByFact() error = %v", err)
-	}
-	if len(results) != 2 {
-		t.Fatalf("FindByFact() returned %d results, want 2", len(results))
-	}
-
-	// Search for specific value.
-	results, err = store.FindByFact("ha_companion_app", "mobile_app_leo_phone")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(results) != 1 {
-		t.Fatalf("FindByFact() returned %d results, want 1", len(results))
-	}
-	if results[0].FormattedName != "Leo Lamp" {
-		t.Errorf("FormattedName = %q, want %q", results[0].FormattedName, "Leo Lamp")
+	if len(props["timezone"]) != 1 {
+		t.Errorf("expected 1 timezone value after duplicate AddProperty, got %d", len(props["timezone"]))
 	}
 }
 
@@ -928,7 +796,7 @@ func TestFindByTrustZone(t *testing.T) {
 	}
 }
 
-func TestFindByFactExact(t *testing.T) {
+func TestFindByPropertyExact_HACompanionApp(t *testing.T) {
 	store := newTestStore(t)
 
 	c1 := &Contact{FormattedName: "Dan Egan", Kind: "individual"}
@@ -936,47 +804,43 @@ func TestFindByFactExact(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.SetFact(created1.ID, "ha_companion_app", "mobile_app_dan"); err != nil {
-		t.Fatal(err)
-	}
+	_ = store.AddProperty(created1.ID, &Property{Property: "ha_companion_app", Value: "mobile_app_dan"})
 
 	c2 := &Contact{FormattedName: "Daniel Craig", Kind: "individual"}
 	created2, err := store.Upsert(c2)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.SetFact(created2.ID, "ha_companion_app", "mobile_app_daniel"); err != nil {
-		t.Fatal(err)
-	}
+	_ = store.AddProperty(created2.ID, &Property{Property: "ha_companion_app", Value: "mobile_app_daniel"})
 
 	// Exact match should find only Dan Egan.
-	results, err := store.FindByFactExact("ha_companion_app", "mobile_app_dan")
+	results, err := store.FindByPropertyExact("ha_companion_app", "mobile_app_dan")
 	if err != nil {
-		t.Fatalf("FindByFactExact() error = %v", err)
+		t.Fatalf("FindByPropertyExact() error = %v", err)
 	}
 	if len(results) != 1 {
-		t.Fatalf("FindByFactExact() returned %d results, want 1", len(results))
+		t.Fatalf("FindByPropertyExact() returned %d results, want 1", len(results))
 	}
 	if results[0].FormattedName != "Dan Egan" {
 		t.Errorf("FormattedName = %q, want %q", results[0].FormattedName, "Dan Egan")
 	}
 
 	// Case-insensitive match.
-	results, err = store.FindByFactExact("ha_companion_app", "MOBILE_APP_DAN")
+	results, err = store.FindByPropertyExact("ha_companion_app", "MOBILE_APP_DAN")
 	if err != nil {
-		t.Fatalf("FindByFactExact() case-insensitive error = %v", err)
+		t.Fatalf("FindByPropertyExact() case-insensitive error = %v", err)
 	}
 	if len(results) != 1 {
-		t.Fatalf("FindByFactExact() case-insensitive returned %d results, want 1", len(results))
+		t.Fatalf("FindByPropertyExact() case-insensitive returned %d results, want 1", len(results))
 	}
 
 	// No match for partial value.
-	results, err = store.FindByFactExact("ha_companion_app", "mobile_app_d")
+	results, err = store.FindByPropertyExact("ha_companion_app", "mobile_app_d")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(results) != 0 {
-		t.Errorf("FindByFactExact() partial match returned %d results, want 0", len(results))
+		t.Errorf("FindByPropertyExact() partial match returned %d results, want 0", len(results))
 	}
 }
 
@@ -1272,42 +1136,14 @@ func TestGetWithProperties(t *testing.T) {
 	}
 
 	_ = store.AddProperty(created.ID, &Property{Property: "EMAIL", Value: "full@example.com"})
-	_ = store.SetFact(created.ID, "timezone", "America/Chicago")
+	_ = store.AddProperty(created.ID, &Property{Property: "timezone", Value: "America/Chicago"})
 
 	got, err := store.GetWithProperties(created.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got.Properties) != 1 {
-		t.Errorf("Properties count = %d, want 1", len(got.Properties))
-	}
-	// Facts should not be populated by GetWithProperties.
-	if got.Facts != nil {
-		t.Errorf("Facts should be nil from GetWithProperties, got %v", got.Facts)
-	}
-}
-
-func TestGetWithAll(t *testing.T) {
-	store := newTestStore(t)
-
-	c := &Contact{FormattedName: "Full Contact", Kind: "individual"}
-	created, err := store.Upsert(c)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	_ = store.AddProperty(created.ID, &Property{Property: "EMAIL", Value: "full@example.com"})
-	_ = store.SetFact(created.ID, "timezone", "America/Chicago")
-
-	got, err := store.GetWithAll(created.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got.Properties) != 1 {
-		t.Errorf("Properties count = %d, want 1", len(got.Properties))
-	}
-	if len(got.Facts["timezone"]) != 1 {
-		t.Errorf("Facts[timezone] = %v, want 1 value", got.Facts["timezone"])
+	if len(got.Properties) != 2 {
+		t.Errorf("Properties count = %d, want 2", len(got.Properties))
 	}
 }
 

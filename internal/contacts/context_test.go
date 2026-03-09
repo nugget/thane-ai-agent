@@ -54,7 +54,7 @@ func TestContextProvider_ReturnsRelevant(t *testing.T) {
 	created1, _ := store.Upsert(c1)
 	_ = store.SetEmbedding(created1.ID, []float32{0.9, 0.1, 0.0})
 	_ = store.AddProperty(created1.ID, &Property{Property: "EMAIL", Value: "alice@techco.com"})
-	_ = store.SetFact(created1.ID, "timezone", "America/Chicago")
+	_ = store.AddProperty(created1.ID, &Property{Property: "timezone", Value: "America/Chicago"})
 
 	c2 := &Contact{FormattedName: "Bob Irrelevant", Kind: "individual", AISummary: "Completely unrelated"}
 	created2, _ := store.Upsert(c2)
@@ -79,7 +79,7 @@ func TestContextProvider_ReturnsRelevant(t *testing.T) {
 		t.Errorf("result should contain property 'EMAIL', got %q", result)
 	}
 	if !strings.Contains(result, "timezone") {
-		t.Errorf("result should contain fact 'timezone', got %q", result)
+		t.Errorf("result should contain property 'timezone', got %q", result)
 	}
 	if !strings.Contains(result, "[known]") {
 		t.Errorf("result should contain trust zone tag '[known]', got %q", result)

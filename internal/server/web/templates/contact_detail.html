@@ -49,14 +49,14 @@
         {{end}}
     </div>
 
-    {{if .Facts}}
+    {{if .Properties}}
     <div class="card">
-        <h2>Facts</h2>
+        <h2>Properties</h2>
         <ul class="fact-list">
-            {{range $key, $values := .Facts}}
+            {{range .Properties}}
             <li>
-                <span class="fact-key mono">{{$key}}</span>
-                <span>{{joinStrings $values ", "}}</span>
+                <span class="fact-key mono">{{.Property}}</span>
+                <span>{{.Value}}</span>
             </li>
             {{end}}
         </ul>

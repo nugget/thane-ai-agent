@@ -27,7 +27,7 @@ func TestChannelProvider_SignalKnownContact(t *testing.T) {
 			"Nugget": {
 				Name:    "Nugget (David McNett)",
 				Summary: "Night owl, prefers explicit explanations, 24h time format",
-				Facts: map[string][]string{
+				Properties: map[string][]string{
 					"timezone": {"America/Chicago"},
 				},
 			},
@@ -142,12 +142,12 @@ func TestChannelProvider_NilContactLookup(t *testing.T) {
 	}
 }
 
-func TestChannelProvider_ContactWithMultipleFacts(t *testing.T) {
+func TestChannelProvider_ContactWithMultipleProperties(t *testing.T) {
 	lookup := &mockContactLookup{
 		contacts: map[string]*ContactSummary{
 			"Alice": {
 				Name: "Alice",
-				Facts: map[string][]string{
+				Properties: map[string][]string{
 					"email":    {"alice@example.com", "alice@work.com"},
 					"timezone": {"Europe/London"},
 				},
@@ -168,7 +168,7 @@ func TestChannelProvider_ContactWithMultipleFacts(t *testing.T) {
 		t.Errorf("expected multiple email values, got:\n%s", got)
 	}
 	if !strings.Contains(got, "Europe/London") {
-		t.Errorf("expected timezone fact, got:\n%s", got)
+		t.Errorf("expected timezone property, got:\n%s", got)
 	}
 }
 
@@ -259,7 +259,7 @@ func TestChannelProvider_SanitizesFields(t *testing.T) {
 			"Eve": {
 				Name:    "Eve\nEvil",
 				Summary: "Has a multi\nline summary",
-				Facts: map[string][]string{
+				Properties: map[string][]string{
 					"note": {"contains\nnewline"},
 				},
 			},
@@ -282,20 +282,20 @@ func TestChannelProvider_SanitizesFields(t *testing.T) {
 		t.Errorf("expected collapsed name, got:\n%s", got)
 	}
 	if !strings.Contains(got, "contains newline") {
-		t.Errorf("expected collapsed fact value, got:\n%s", got)
+		t.Errorf("expected collapsed property value, got:\n%s", got)
 	}
 }
 
-func TestChannelProvider_FactKeyCap(t *testing.T) {
-	facts := make(map[string][]string)
+func TestChannelProvider_PropertyKeyCap(t *testing.T) {
+	props := make(map[string][]string)
 	for i := 0; i < 20; i++ {
-		facts[fmt.Sprintf("key_%02d", i)] = []string{"val"}
+		props[fmt.Sprintf("key_%02d", i)] = []string{"val"}
 	}
 	lookup := &mockContactLookup{
 		contacts: map[string]*ContactSummary{
 			"Many": {
-				Name:  "Many Facts",
-				Facts: facts,
+				Name:       "Many Properties",
+				Properties: props,
 			},
 		},
 	}
@@ -309,18 +309,18 @@ func TestChannelProvider_FactKeyCap(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	factLines := 0
+	propLines := 0
 	for _, line := range strings.Split(got, "\n") {
 		if strings.HasPrefix(strings.TrimSpace(line), "- key_") {
-			factLines++
+			propLines++
 		}
 	}
-	if factLines > 10 {
-		t.Errorf("expected at most 10 fact lines, got %d:\n%s", factLines, got)
+	if propLines > 10 {
+		t.Errorf("expected at most 10 property lines, got %d:\n%s", propLines, got)
 	}
 }
 
-func TestChannelProvider_SortedFactKeys(t *testing.T) {
+func TestChannelProvider_SortedPropertyKeys(t *testing.T) {
 	tests := []struct {
 		name  string
 		facts map[string][]string
@@ -334,7 +334,7 @@ func TestChannelProvider_SortedFactKeys(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := sortedFactKeys(tt.facts)
+			got := sortedPropertyKeys(tt.facts)
 			if len(got) != len(tt.want) {
 				t.Fatalf("length mismatch: got %v, want %v", got, tt.want)
 			}

@@ -59,33 +59,32 @@ var ValidKinds = map[string]bool{
 // Contact represents a vCard-aligned contact record. Fields map to
 // vCard 4.0 (RFC 6350) properties unless noted as Thane extensions.
 type Contact struct {
-	ID              uuid.UUID           `json:"id"`
-	Kind            string              `json:"kind"`                       // vCard KIND: individual, group, org, location
-	FormattedName   string              `json:"formatted_name"`             // vCard FN (display name)
-	FamilyName      string              `json:"family_name,omitempty"`      // vCard N component
-	GivenName       string              `json:"given_name,omitempty"`       // vCard N component
-	AdditionalNames string              `json:"additional_names,omitempty"` // vCard N component
-	NamePrefix      string              `json:"name_prefix,omitempty"`      // vCard N component
-	NameSuffix      string              `json:"name_suffix,omitempty"`      // vCard N component
-	Nickname        string              `json:"nickname,omitempty"`         // vCard NICKNAME
-	Birthday        string              `json:"birthday,omitempty"`         // vCard BDAY (ISO 8601)
-	Anniversary     string              `json:"anniversary,omitempty"`      // vCard ANNIVERSARY
-	Gender          string              `json:"gender,omitempty"`           // vCard GENDER
-	Org             string              `json:"org,omitempty"`              // vCard ORG
-	Title           string              `json:"title,omitempty"`            // vCard TITLE
-	Role            string              `json:"role,omitempty"`             // vCard ROLE
-	Note            string              `json:"note,omitempty"`             // vCard NOTE
-	PhotoURI        string              `json:"photo_uri,omitempty"`        // vCard PHOTO URI
-	TrustZone       string              `json:"trust_zone"`                 // X-THANE-TRUST-ZONE
-	AISummary       string              `json:"ai_summary,omitempty"`       // X-THANE-AI-SUMMARY
-	Rev             string              `json:"rev"`                        // vCard REV (ISO 8601)
-	ETag            string              `json:"etag,omitempty"`             // CardDAV sync
-	Embedding       []float32           `json:"embedding,omitempty"`        // semantic search vector
-	LastInteraction time.Time           `json:"last_interaction,omitempty"`
-	CreatedAt       time.Time           `json:"created_at"`
-	UpdatedAt       time.Time           `json:"updated_at"`
-	Properties      []Property          `json:"properties,omitempty"` // populated by GetWithProperties
-	Facts           map[string][]string `json:"facts,omitempty"`      // populated by GetWithFacts
+	ID              uuid.UUID  `json:"id"`
+	Kind            string     `json:"kind"`                       // vCard KIND: individual, group, org, location
+	FormattedName   string     `json:"formatted_name"`             // vCard FN (display name)
+	FamilyName      string     `json:"family_name,omitempty"`      // vCard N component
+	GivenName       string     `json:"given_name,omitempty"`       // vCard N component
+	AdditionalNames string     `json:"additional_names,omitempty"` // vCard N component
+	NamePrefix      string     `json:"name_prefix,omitempty"`      // vCard N component
+	NameSuffix      string     `json:"name_suffix,omitempty"`      // vCard N component
+	Nickname        string     `json:"nickname,omitempty"`         // vCard NICKNAME
+	Birthday        string     `json:"birthday,omitempty"`         // vCard BDAY (ISO 8601)
+	Anniversary     string     `json:"anniversary,omitempty"`      // vCard ANNIVERSARY
+	Gender          string     `json:"gender,omitempty"`           // vCard GENDER
+	Org             string     `json:"org,omitempty"`              // vCard ORG
+	Title           string     `json:"title,omitempty"`            // vCard TITLE
+	Role            string     `json:"role,omitempty"`             // vCard ROLE
+	Note            string     `json:"note,omitempty"`             // vCard NOTE
+	PhotoURI        string     `json:"photo_uri,omitempty"`        // vCard PHOTO URI
+	TrustZone       string     `json:"trust_zone"`                 // X-THANE-TRUST-ZONE
+	AISummary       string     `json:"ai_summary,omitempty"`       // X-THANE-AI-SUMMARY
+	Rev             string     `json:"rev"`                        // vCard REV (ISO 8601)
+	ETag            string     `json:"etag,omitempty"`             // CardDAV sync
+	Embedding       []float32  `json:"embedding,omitempty"`        // semantic search vector
+	LastInteraction time.Time  `json:"last_interaction,omitempty"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
+	Properties      []Property `json:"properties,omitempty"` // populated by GetWithProperties
 }
 
 // Property represents a structured vCard property on a contact.
@@ -194,22 +193,6 @@ func (s *Store) migrate() error {
 		CREATE INDEX IF NOT EXISTS idx_cp_property ON contact_properties(property);
 		CREATE INDEX IF NOT EXISTS idx_cp_property_value ON contact_properties(property, value);
 		CREATE INDEX IF NOT EXISTS idx_cp_value ON contact_properties(value);
-	`)
-	if err != nil {
-		return err
-	}
-
-	// contact_facts: freeform AI-observed metadata only.
-	_, err = s.db.Exec(`
-		CREATE TABLE IF NOT EXISTS contact_facts (
-			id INTEGER PRIMARY KEY AUTOINCREMENT,
-			contact_id TEXT NOT NULL REFERENCES contacts(id),
-			key TEXT NOT NULL,
-			value TEXT NOT NULL,
-			updated_at TEXT NOT NULL
-		);
-
-		CREATE INDEX IF NOT EXISTS idx_cf_contact ON contact_facts(contact_id);
 	`)
 	if err != nil {
 		return err
@@ -396,19 +379,6 @@ func (s *Store) Get(id uuid.UUID) (*Contact, error) {
 		id.String()))
 }
 
-// GetWithFacts retrieves a contact by ID and populates its Facts map.
-func (s *Store) GetWithFacts(id uuid.UUID) (*Contact, error) {
-	c, err := s.Get(id)
-	if err != nil {
-		return nil, err
-	}
-	c.Facts, err = s.GetFacts(id)
-	if err != nil {
-		return nil, fmt.Errorf("get facts: %w", err)
-	}
-	return c, nil
-}
-
 // GetWithProperties retrieves a contact by ID and populates its
 // Properties slice.
 func (s *Store) GetWithProperties(id uuid.UUID) (*Contact, error) {
@@ -419,24 +389,6 @@ func (s *Store) GetWithProperties(id uuid.UUID) (*Contact, error) {
 	c.Properties, err = s.GetProperties(id)
 	if err != nil {
 		return nil, fmt.Errorf("get properties: %w", err)
-	}
-	return c, nil
-}
-
-// GetWithAll retrieves a contact by ID and populates both its
-// Properties slice and Facts map.
-func (s *Store) GetWithAll(id uuid.UUID) (*Contact, error) {
-	c, err := s.Get(id)
-	if err != nil {
-		return nil, err
-	}
-	c.Properties, err = s.GetProperties(id)
-	if err != nil {
-		return nil, fmt.Errorf("get properties: %w", err)
-	}
-	c.Facts, err = s.GetFacts(id)
-	if err != nil {
-		return nil, fmt.Errorf("get facts: %w", err)
 	}
 	return c, nil
 }
@@ -540,141 +492,23 @@ func (s *Store) DeleteByName(name string) error {
 	return s.Delete(c.ID)
 }
 
-// --- Fact CRUD (freeform AI metadata) ---
+// --- Property CRUD ---
 
-// SetFact adds a structured attribute to a contact. If the exact
-// (contact_id, key, value) triple already exists, this is a no-op.
-// Multiple values per key are supported.
-func (s *Store) SetFact(contactID uuid.UUID, key, value string) error {
-	now := time.Now().UTC().Format(time.RFC3339)
-
+// AddProperty adds a vCard property to a contact. If the exact
+// (contact_id, property, value) triple already exists (case-insensitive
+// on value), this is a no-op. Multiple values per property are supported.
+func (s *Store) AddProperty(contactID uuid.UUID, p *Property) error {
 	var exists int
 	err := s.db.QueryRow(
-		`SELECT COUNT(*) FROM contact_facts WHERE contact_id = ? AND key = ? AND value = ?`,
-		contactID.String(), key, value).Scan(&exists)
+		`SELECT COUNT(*) FROM contact_properties WHERE contact_id = ? AND property = ? AND LOWER(value) = LOWER(?)`,
+		contactID.String(), p.Property, p.Value).Scan(&exists)
 	if err != nil {
-		return fmt.Errorf("check existing fact: %w", err)
+		return fmt.Errorf("check existing property: %w", err)
 	}
 	if exists > 0 {
 		return nil
 	}
 
-	_, err = s.db.Exec(
-		`INSERT INTO contact_facts (contact_id, key, value, updated_at) VALUES (?, ?, ?, ?)`,
-		contactID.String(), key, value, now)
-	if err != nil {
-		return fmt.Errorf("set fact: %w", err)
-	}
-	return nil
-}
-
-// ReplaceFact replaces all values for a key with a single new value.
-func (s *Store) ReplaceFact(contactID uuid.UUID, key, value string) error {
-	now := time.Now().UTC().Format(time.RFC3339)
-
-	tx, err := s.db.Begin()
-	if err != nil {
-		return fmt.Errorf("begin tx: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	_, err = tx.Exec(
-		`DELETE FROM contact_facts WHERE contact_id = ? AND key = ?`,
-		contactID.String(), key)
-	if err != nil {
-		return fmt.Errorf("delete old facts: %w", err)
-	}
-
-	_, err = tx.Exec(
-		`INSERT INTO contact_facts (contact_id, key, value, updated_at) VALUES (?, ?, ?, ?)`,
-		contactID.String(), key, value, now)
-	if err != nil {
-		return fmt.Errorf("insert fact: %w", err)
-	}
-
-	return tx.Commit()
-}
-
-// DeleteFact removes a specific fact value from a contact.
-func (s *Store) DeleteFact(contactID uuid.UUID, key, value string) error {
-	result, err := s.db.Exec(
-		`DELETE FROM contact_facts WHERE contact_id = ? AND key = ? AND value = ?`,
-		contactID.String(), key, value)
-	if err != nil {
-		return fmt.Errorf("delete fact: %w", err)
-	}
-	affected, _ := result.RowsAffected()
-	if affected == 0 {
-		return fmt.Errorf("fact not found: %s=%s", key, value)
-	}
-	return nil
-}
-
-// GetFacts returns all structured attributes for a contact.
-func (s *Store) GetFacts(contactID uuid.UUID) (map[string][]string, error) {
-	rows, err := s.db.Query(
-		`SELECT key, value FROM contact_facts WHERE contact_id = ? ORDER BY key, value`,
-		contactID.String())
-	if err != nil {
-		return nil, fmt.Errorf("query: %w", err)
-	}
-	defer rows.Close()
-
-	facts := make(map[string][]string)
-	for rows.Next() {
-		var key, value string
-		if err := rows.Scan(&key, &value); err != nil {
-			return nil, fmt.Errorf("scan: %w", err)
-		}
-		facts[key] = append(facts[key], value)
-	}
-	return facts, rows.Err()
-}
-
-// FindByFactExact returns contacts with an exact key-value fact match.
-// The value comparison is case-insensitive.
-func (s *Store) FindByFactExact(key, value string) ([]*Contact, error) {
-	rows, err := s.db.Query(`
-		SELECT DISTINCT `+qualifiedContactColumns+`
-		FROM contacts
-		JOIN contact_facts ON contacts.id = contact_facts.contact_id
-		WHERE contacts.`+activeFilter+`
-		  AND contact_facts.key = ?
-		  AND LOWER(contact_facts.value) = LOWER(?)
-		ORDER BY contacts.formatted_name
-		LIMIT 50
-	`, key, value)
-	if err != nil {
-		return nil, fmt.Errorf("query: %w", err)
-	}
-	defer rows.Close()
-
-	return s.scanContacts(rows)
-}
-
-// FindByFact returns contacts that have a matching key-value attribute
-// using LIKE for partial matching.
-func (s *Store) FindByFact(key, value string) ([]*Contact, error) {
-	rows, err := s.db.Query(`
-		SELECT DISTINCT `+qualifiedContactColumns+`
-		FROM contacts
-		JOIN contact_facts ON contacts.id = contact_facts.contact_id
-		WHERE contacts.`+activeFilter+` AND contact_facts.key = ? AND contact_facts.value LIKE ?
-		ORDER BY contacts.formatted_name
-		LIMIT 50
-	`, key, "%"+value+"%")
-	if err != nil {
-		return nil, fmt.Errorf("query: %w", err)
-	}
-	defer rows.Close()
-
-	return s.scanContacts(rows)
-}
-
-// --- Property CRUD (vCard structured properties) ---
-
-// AddProperty adds a vCard property to a contact.
-func (s *Store) AddProperty(contactID uuid.UUID, p *Property) error {
 	now := time.Now().UTC().Format(time.RFC3339)
 
 	result, err := s.db.Exec(`
@@ -716,6 +550,29 @@ func (s *Store) GetProperties(contactID uuid.UUID) ([]Property, error) {
 		props = append(props, p)
 	}
 	return props, rows.Err()
+}
+
+// GetPropertiesMap returns all properties for a contact grouped by
+// property name as a map of name→values. This is a convenience view
+// for callers that don't need the full Property metadata.
+func (s *Store) GetPropertiesMap(contactID uuid.UUID) (map[string][]string, error) {
+	rows, err := s.db.Query(
+		`SELECT property, value FROM contact_properties WHERE contact_id = ? ORDER BY property, pref NULLS LAST, id`,
+		contactID.String())
+	if err != nil {
+		return nil, fmt.Errorf("query: %w", err)
+	}
+	defer rows.Close()
+
+	m := make(map[string][]string)
+	for rows.Next() {
+		var prop, val string
+		if err := rows.Scan(&prop, &val); err != nil {
+			return nil, fmt.Errorf("scan: %w", err)
+		}
+		m[prop] = append(m[prop], val)
+	}
+	return m, rows.Err()
 }
 
 // FindByPropertyExact returns contacts with an exact property-value

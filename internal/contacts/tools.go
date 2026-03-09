@@ -157,11 +157,11 @@ func (t *Tools) SaveContact(argsJSON string) (string, error) {
 			return "", fmt.Errorf("update contact: %w", err)
 		}
 
-		if err := t.saveFactsAndProperties(updated.ID, args.Facts); err != nil {
+		if err := t.saveProperties(updated.ID, args.Facts); err != nil {
 			return "", err
 		}
 
-		t.generateEmbedding(updated, args.Facts)
+		t.generateEmbedding(updated)
 
 		return fmt.Sprintf("Updated contact: **%s** (%s)", updated.FormattedName, updated.Kind), nil
 	}
@@ -186,37 +186,35 @@ func (t *Tools) SaveContact(argsJSON string) (string, error) {
 		return "", fmt.Errorf("create contact: %w", err)
 	}
 
-	if err := t.saveFactsAndProperties(created.ID, args.Facts); err != nil {
+	if err := t.saveProperties(created.ID, args.Facts); err != nil {
 		return "", err
 	}
 
-	t.generateEmbedding(created, args.Facts)
+	t.generateEmbedding(created)
 
 	return fmt.Sprintf("Saved new contact: **%s** (%s)", created.FormattedName, created.Kind), nil
 }
 
-// saveFactsAndProperties routes fact entries to either
-// contact_properties (for vCard property keys like email, phone) or
-// contact_facts (for freeform AI metadata).
-func (t *Tools) saveFactsAndProperties(contactID uuid.UUID, facts map[string]string) error {
+// saveProperties stores all fact entries as contact_properties. Known
+// vCard keys (email, phone, signal, matrix) are mapped to their
+// standard property names (EMAIL, TEL, IMPP); all others are stored
+// with their original key as the property name.
+func (t *Tools) saveProperties(contactID uuid.UUID, facts map[string]string) error {
 	for k, v := range facts {
-		propName, isProperty := propertyKeys[k]
-		if isProperty {
-			value := v
-			// For IMPP properties, prefix with the protocol scheme.
-			if propName == "IMPP" && !strings.Contains(v, ":") {
-				value = k + ":" + v
-			}
-			if err := t.store.AddProperty(contactID, &Property{
-				Property: propName,
-				Value:    value,
-			}); err != nil {
-				return fmt.Errorf("add property %s: %w", propName, err)
-			}
-		} else {
-			if err := t.store.SetFact(contactID, k, v); err != nil {
-				return fmt.Errorf("set fact %q: %w", k, err)
-			}
+		propName, isVCard := propertyKeys[k]
+		if !isVCard {
+			propName = k
+		}
+		value := v
+		// For IMPP properties, prefix with the protocol scheme.
+		if propName == "IMPP" && !strings.Contains(v, ":") {
+			value = k + ":" + v
+		}
+		if err := t.store.AddProperty(contactID, &Property{
+			Property: propName,
+			Value:    value,
+		}); err != nil {
+			return fmt.Errorf("add property %s: %w", propName, err)
 		}
 	}
 	return nil
@@ -247,41 +245,23 @@ func (t *Tools) LookupContact(argsJSON string) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("resolve contact: %w", err)
 		}
-		c, err = t.store.GetWithAll(c.ID)
+		c, err = t.store.GetWithProperties(c.ID)
 		if err != nil {
 			return "", fmt.Errorf("get contact details: %w", err)
 		}
 		return formatContact(c), nil
 	}
 
-	// Property or fact filter.
+	// Property filter.
 	if args.Key != "" && args.Value != "" {
-		// Check if the key maps to a vCard property.
-		propName, isProperty := propertyKeys[args.Key]
-		if isProperty {
-			contacts, err := t.store.FindByProperty(propName, args.Value)
-			if err != nil {
-				return "", fmt.Errorf("find by property: %w", err)
-			}
-			if len(contacts) == 0 {
-				return fmt.Sprintf("No contacts with %s matching %q", args.Key, args.Value), nil
-			}
-			return formatContactList(contacts), nil
+		// Map known lowercase keys to their vCard property names.
+		propName, isVCard := propertyKeys[args.Key]
+		if !isVCard {
+			propName = args.Key
 		}
-		// Search properties directly by uppercase key name.
-		if args.Key == strings.ToUpper(args.Key) {
-			contacts, err := t.store.FindByProperty(args.Key, args.Value)
-			if err != nil {
-				return "", fmt.Errorf("find by property: %w", err)
-			}
-			if len(contacts) > 0 {
-				return formatContactList(contacts), nil
-			}
-		}
-		// Fall back to fact search.
-		contacts, err := t.store.FindByFact(args.Key, args.Value)
+		contacts, err := t.store.FindByProperty(propName, args.Value)
 		if err != nil {
-			return "", fmt.Errorf("find by fact: %w", err)
+			return "", fmt.Errorf("find by property: %w", err)
 		}
 		if len(contacts) == 0 {
 			return fmt.Sprintf("No contacts with %s matching %q", args.Key, args.Value), nil
@@ -402,9 +382,8 @@ func (t *Tools) GenerateMissingEmbeddings() (int, error) {
 
 	count := 0
 	for _, c := range contacts {
-		facts, _ := t.store.GetFacts(c.ID)
 		props, _ := t.store.GetProperties(c.ID)
-		embText := buildEmbeddingText(c, facts, props)
+		embText := buildEmbeddingText(c, props)
 		emb, err := t.embeddings.Generate(context.Background(), embText)
 		if err != nil {
 			continue
@@ -419,21 +398,13 @@ func (t *Tools) GenerateMissingEmbeddings() (int, error) {
 }
 
 // generateEmbedding creates and stores an embedding for a contact.
-func (t *Tools) generateEmbedding(c *Contact, extraFacts map[string]string) {
+func (t *Tools) generateEmbedding(c *Contact) {
 	if t.embeddings == nil {
 		return
 	}
 
-	facts, _ := t.store.GetFacts(c.ID)
-	if facts == nil {
-		facts = make(map[string][]string)
-	}
-	for k, v := range extraFacts {
-		facts[k] = []string{v}
-	}
-
 	props, _ := t.store.GetProperties(c.ID)
-	embText := buildEmbeddingText(c, facts, props)
+	embText := buildEmbeddingText(c, props)
 	emb, err := t.embeddings.Generate(context.Background(), embText)
 	if err != nil {
 		return
@@ -441,9 +412,9 @@ func (t *Tools) generateEmbedding(c *Contact, extraFacts map[string]string) {
 	_ = t.store.SetEmbedding(c.ID, emb)
 }
 
-// buildEmbeddingText creates text for embedding from a contact, its
-// facts, and its properties.
-func buildEmbeddingText(c *Contact, facts map[string][]string, props []Property) string {
+// buildEmbeddingText creates text for embedding from a contact and its
+// properties.
+func buildEmbeddingText(c *Contact, props []Property) string {
 	var sb strings.Builder
 	sb.WriteString(c.FormattedName)
 	if c.Kind != "" {
@@ -462,19 +433,8 @@ func buildEmbeddingText(c *Contact, facts map[string][]string, props []Property)
 		sb.WriteString("\n" + c.Note)
 	}
 
-	// Include properties.
 	for _, p := range props {
 		sb.WriteString(fmt.Sprintf("\n%s: %s", p.Property, p.Value))
-	}
-
-	// Include facts.
-	keys := make([]string, 0, len(facts))
-	for k := range facts {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	for _, k := range keys {
-		sb.WriteString(fmt.Sprintf("\n%s: %s", k, strings.Join(facts[k], ", ")))
 	}
 	return sb.String()
 }
@@ -515,18 +475,6 @@ func formatContact(c *Contact) string {
 				label += " [" + p.Label + "]"
 			}
 			sb.WriteString(fmt.Sprintf("  %s: %s\n", label, p.Value))
-		}
-	}
-
-	if len(c.Facts) > 0 {
-		sb.WriteString("\n")
-		fkeys := make([]string, 0, len(c.Facts))
-		for k := range c.Facts {
-			fkeys = append(fkeys, k)
-		}
-		sort.Strings(fkeys)
-		for _, k := range fkeys {
-			sb.WriteString(fmt.Sprintf("  %s: %s\n", k, strings.Join(c.Facts[k], ", ")))
 		}
 	}
 

@@ -30,17 +30,17 @@ type contactRow struct {
 // ContactDetailData is the template context for a single contact.
 type ContactDetailData struct {
 	PageData
-	ID        uuid.UUID
-	Name      string
-	Kind      string
-	TrustZone string
-	Org       string
-	Title     string
-	AISummary string
-	Note      string
-	CreatedAt string
-	UpdatedAt string
-	Facts     map[string][]string
+	ID         uuid.UUID
+	Name       string
+	Kind       string
+	TrustZone  string
+	Org        string
+	Title      string
+	AISummary  string
+	Note       string
+	CreatedAt  string
+	UpdatedAt  string
+	Properties []contacts.Property
 }
 
 // handleContacts renders the contacts list page with optional search and filtering.
@@ -142,7 +142,7 @@ func (s *WebServer) handleContactDetail(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	c, err := s.contactStore.GetWithFacts(id)
+	c, err := s.contactStore.GetWithProperties(id)
 	if err != nil {
 		s.logger.Error("contact detail failed", "id", idStr, "error", err)
 		http.Error(w, "load failed", http.StatusInternalServerError)
@@ -158,17 +158,17 @@ func (s *WebServer) handleContactDetail(w http.ResponseWriter, r *http.Request) 
 			BrandName: s.brandName,
 			ActiveNav: "contacts",
 		},
-		ID:        c.ID,
-		Name:      c.FormattedName,
-		Kind:      c.Kind,
-		TrustZone: c.TrustZone,
-		Org:       c.Org,
-		Title:     c.Title,
-		AISummary: c.AISummary,
-		Note:      c.Note,
-		CreatedAt: formatTime(c.CreatedAt),
-		UpdatedAt: formatTime(c.UpdatedAt),
-		Facts:     c.Facts,
+		ID:         c.ID,
+		Name:       c.FormattedName,
+		Kind:       c.Kind,
+		TrustZone:  c.TrustZone,
+		Org:        c.Org,
+		Title:      c.Title,
+		AISummary:  c.AISummary,
+		Note:       c.Note,
+		CreatedAt:  formatTime(c.CreatedAt),
+		UpdatedAt:  formatTime(c.UpdatedAt),
+		Properties: c.Properties,
 	}
 
 	s.render(w, r, "contact_detail.html", data)

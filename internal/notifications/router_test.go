@@ -50,7 +50,7 @@ func TestRoute_HACompanionApp(t *testing.T) {
 	testID := uuid.New()
 	resolver := &mockContactResolver{
 		contact: &contacts.Contact{ID: testID, FormattedName: "nugget"},
-		facts:   map[string][]string{"ha_companion_app": {"mobile_app_mcphone"}},
+		props:   map[string][]string{"ha_companion_app": {"mobile_app_mcphone"}},
 	}
 	router, _ := newTestRouter(t, resolver)
 
@@ -70,7 +70,7 @@ func TestRoute_NotificationPreference(t *testing.T) {
 	testID := uuid.New()
 	resolver := &mockContactResolver{
 		contact: &contacts.Contact{ID: testID, FormattedName: "nugget"},
-		facts: map[string][]string{
+		props: map[string][]string{
 			"ha_companion_app":        {"mobile_app_mcphone"},
 			"notification_preference": {"signal"},
 		},
@@ -96,7 +96,7 @@ func TestRoute_NoProvider(t *testing.T) {
 	testID := uuid.New()
 	resolver := &mockContactResolver{
 		contact: &contacts.Contact{ID: testID, FormattedName: "nugget"},
-		facts:   map[string][]string{}, // no delivery channel facts
+		props:   map[string][]string{}, // no delivery channel properties
 	}
 	router, _ := newTestRouter(t, resolver)
 	router.RegisterProvider(&mockProvider{name: "ha_push"})
@@ -114,7 +114,7 @@ func TestRoute_EmptyHACompanionApp(t *testing.T) {
 	testID := uuid.New()
 	resolver := &mockContactResolver{
 		contact: &contacts.Contact{ID: testID, FormattedName: "nugget"},
-		facts:   map[string][]string{"ha_companion_app": {}}, // key present but empty
+		props:   map[string][]string{"ha_companion_app": {}}, // key present but empty
 	}
 	router, _ := newTestRouter(t, resolver)
 	router.RegisterProvider(&mockProvider{name: "ha_push"})
@@ -141,7 +141,7 @@ func TestSendActionable_NoActions(t *testing.T) {
 	testID := uuid.New()
 	resolver := &mockContactResolver{
 		contact: &contacts.Contact{ID: testID, FormattedName: "nugget"},
-		facts:   map[string][]string{"ha_companion_app": {"mobile_app_mcphone"}},
+		props:   map[string][]string{"ha_companion_app": {"mobile_app_mcphone"}},
 	}
 	router, _ := newTestRouter(t, resolver)
 	router.RegisterProvider(&mockProvider{name: "ha_push"})
@@ -162,7 +162,7 @@ func TestSendActionable_ZeroTimeout(t *testing.T) {
 	testID := uuid.New()
 	resolver := &mockContactResolver{
 		contact: &contacts.Contact{ID: testID, FormattedName: "nugget"},
-		facts:   map[string][]string{"ha_companion_app": {"mobile_app_mcphone"}},
+		props:   map[string][]string{"ha_companion_app": {"mobile_app_mcphone"}},
 	}
 	router, _ := newTestRouter(t, resolver)
 	router.RegisterProvider(&mockProvider{name: "ha_push"})
@@ -203,7 +203,7 @@ func TestSendNotification_HappyPath(t *testing.T) {
 	testID := uuid.New()
 	resolver := &mockContactResolver{
 		contact: &contacts.Contact{ID: testID, FormattedName: "nugget"},
-		facts:   map[string][]string{"ha_companion_app": {"mobile_app_mcphone"}},
+		props:   map[string][]string{"ha_companion_app": {"mobile_app_mcphone"}},
 	}
 	router, _ := newTestRouter(t, resolver)
 
@@ -230,7 +230,7 @@ func TestSendActionable_HappyPath(t *testing.T) {
 	testID := uuid.New()
 	resolver := &mockContactResolver{
 		contact: &contacts.Contact{ID: testID, FormattedName: "nugget"},
-		facts:   map[string][]string{"ha_companion_app": {"mobile_app_mcphone"}},
+		props:   map[string][]string{"ha_companion_app": {"mobile_app_mcphone"}},
 	}
 	router, records := newTestRouter(t, resolver)
 
@@ -288,7 +288,7 @@ func TestSendActionable_DeliveryFailure(t *testing.T) {
 	testID := uuid.New()
 	resolver := &mockContactResolver{
 		contact: &contacts.Contact{ID: testID, FormattedName: "nugget"},
-		facts:   map[string][]string{"ha_companion_app": {"mobile_app_mcphone"}},
+		props:   map[string][]string{"ha_companion_app": {"mobile_app_mcphone"}},
 	}
 	router, records := newTestRouter(t, resolver)
 
@@ -321,7 +321,7 @@ func TestSendActionable_NoRecordStore(t *testing.T) {
 	testID := uuid.New()
 	resolver := &mockContactResolver{
 		contact: &contacts.Contact{ID: testID, FormattedName: "nugget"},
-		facts:   map[string][]string{"ha_companion_app": {"mobile_app_mcphone"}},
+		props:   map[string][]string{"ha_companion_app": {"mobile_app_mcphone"}},
 	}
 	router := NewNotificationRouter(resolver, nil, slog.Default())
 	router.RegisterProvider(&mockProvider{name: "ha_push"})
@@ -346,7 +346,7 @@ func TestRouter_Send_EscalationSender(t *testing.T) {
 	testID := uuid.New()
 	resolver := &mockContactResolver{
 		contact: &contacts.Contact{ID: testID, FormattedName: "nugget"},
-		facts:   map[string][]string{"ha_companion_app": {"mobile_app_mcphone"}},
+		props:   map[string][]string{"ha_companion_app": {"mobile_app_mcphone"}},
 	}
 	router, _ := newTestRouter(t, resolver)
 

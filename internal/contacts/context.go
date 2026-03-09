@@ -3,7 +3,6 @@ package contacts
 import (
 	"context"
 	"fmt"
-	"sort"
 	"strings"
 )
 
@@ -68,9 +67,8 @@ func (p *ContextProvider) GetContext(ctx context.Context, userMessage string) (s
 			continue
 		}
 
-		// Load properties and facts for this contact.
+		// Load properties for this contact.
 		props, _ := p.store.GetProperties(c.ID)
-		facts, _ := p.store.GetFacts(c.ID)
 
 		if included > 0 {
 			sb.WriteString("\n")
@@ -88,27 +86,12 @@ func (p *ContextProvider) GetContext(ctx context.Context, userMessage string) (s
 		}
 		sb.WriteString("\n")
 
-		// Include properties.
 		for _, prop := range props {
 			label := prop.Property
 			if prop.Type != "" {
-				label += "(" + prop.Type + ")"
+				label += " (" + prop.Type + ")"
 			}
 			sb.WriteString(fmt.Sprintf("  %s: %s\n", label, prop.Value))
-		}
-
-		// Include facts.
-		if len(facts) > 0 {
-			keys := make([]string, 0, len(facts))
-			for k := range facts {
-				keys = append(keys, k)
-			}
-			sort.Strings(keys)
-			parts := make([]string, 0, len(keys))
-			for _, k := range keys {
-				parts = append(parts, fmt.Sprintf("%s: %s", k, strings.Join(facts[k], ", ")))
-			}
-			sb.WriteString("  " + strings.Join(parts, " | ") + "\n")
 		}
 
 		included++

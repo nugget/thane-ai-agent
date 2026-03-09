@@ -58,8 +58,8 @@ func (r *NotificationRouter) RegisterProvider(p NotificationProvider) {
 }
 
 // Route resolves a recipient to the appropriate provider based on
-// contact facts. It checks for an explicit notification_preference
-// fact first, then falls back to checking for known delivery channels.
+// contact properties. It checks for an explicit notification_preference
+// property first, then falls back to checking for known delivery channels.
 func (r *NotificationRouter) Route(recipient string) (NotificationProvider, error) {
 	contact, err := r.contacts.ResolveContact(recipient)
 	if err != nil {
@@ -69,13 +69,13 @@ func (r *NotificationRouter) Route(recipient string) (NotificationProvider, erro
 		return nil, fmt.Errorf("resolve contact %q: %w", recipient, err)
 	}
 
-	facts, err := r.contacts.GetFacts(contact.ID)
+	props, err := r.contacts.GetPropertiesMap(contact.ID)
 	if err != nil {
-		return nil, fmt.Errorf("lookup facts for %q: %w", recipient, err)
+		return nil, fmt.Errorf("lookup properties for %q: %w", recipient, err)
 	}
 
 	// 1. Explicit notification preference.
-	if prefs, ok := facts["notification_preference"]; ok && len(prefs) > 0 {
+	if prefs, ok := props["notification_preference"]; ok && len(prefs) > 0 {
 		if p, exists := r.providers[prefs[0]]; exists {
 			return p, nil
 		}
@@ -84,7 +84,7 @@ func (r *NotificationRouter) Route(recipient string) (NotificationProvider, erro
 	}
 
 	// 2. HA companion app available → route to ha_push.
-	if apps, ok := facts["ha_companion_app"]; ok && len(apps) > 0 {
+	if apps, ok := props["ha_companion_app"]; ok && len(apps) > 0 {
 		if p, exists := r.providers["ha_push"]; exists {
 			return p, nil
 		}
