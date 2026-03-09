@@ -7,9 +7,16 @@ import "fmt"
 // The single format verb receives the poller's content summary.
 const mediaFeedPollWakeTemplate = `New content detected from followed feeds. Review and act on it.
 
+Each entry shows the feed's trust zone in brackets (e.g., [trusted], [known], [unknown]).
+Adapt your analysis depth based on the trust zone:
+
+- **[trusted]**: Extract facts directly with source attribution. Full analysis.
+- **[known]**: Extract as claims requiring corroboration. Summarize key points.
+- **[unknown]**: Topics and high-level insights only. No fact extraction.
+
 For each new entry:
-1. Consider whether the content is interesting or relevant to the owner
-2. If it looks worthwhile, use media_transcript to fetch and summarize it
+1. Check the feed's trust zone shown in brackets after the feed name
+2. If the content looks worthwhile, use media_transcript to fetch and analyze it
 3. Notify the owner about noteworthy new content with a brief summary
 
 Use your judgment — not every new video or podcast episode needs attention.

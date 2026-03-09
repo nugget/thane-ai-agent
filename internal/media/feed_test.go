@@ -270,3 +270,95 @@ func TestResolveYouTubeFeed_NonYouTube(t *testing.T) {
 		t.Errorf("non-YouTube URL should be returned unchanged, got %q", got)
 	}
 }
+
+func TestDiscoverFeedURL_RSS(t *testing.T) {
+	html := `<html><head>
+	<link rel="alternate" type="application/rss+xml" href="https://example.com/feed.xml" title="RSS Feed">
+	</head><body></body></html>`
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.Write([]byte(html))
+	}))
+	defer srv.Close()
+
+	got, err := discoverFeedURL(context.Background(), srv.Client(), srv.URL)
+	if err != nil {
+		t.Fatalf("discoverFeedURL() error: %v", err)
+	}
+	if got != "https://example.com/feed.xml" {
+		t.Errorf("got %q, want %q", got, "https://example.com/feed.xml")
+	}
+}
+
+func TestDiscoverFeedURL_Atom(t *testing.T) {
+	html := `<html><head>
+	<link rel="alternate" type="application/atom+xml" href="/atom.xml">
+	</head><body></body></html>`
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		w.Write([]byte(html))
+	}))
+	defer srv.Close()
+
+	got, err := discoverFeedURL(context.Background(), srv.Client(), srv.URL)
+	if err != nil {
+		t.Fatalf("discoverFeedURL() error: %v", err)
+	}
+	// Relative URL should be resolved against the page URL.
+	want := srv.URL + "/atom.xml"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestDiscoverFeedURL_HrefFirst(t *testing.T) {
+	// Some sites put href before type — the regex must handle both orders.
+	html := `<html><head>
+	<link rel="alternate" href="/rss" type="application/rss+xml">
+	</head><body></body></html>`
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte(html))
+	}))
+	defer srv.Close()
+
+	got, err := discoverFeedURL(context.Background(), srv.Client(), srv.URL)
+	if err != nil {
+		t.Fatalf("discoverFeedURL() error: %v", err)
+	}
+	want := srv.URL + "/rss"
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestDiscoverFeedURL_NoFeedLink(t *testing.T) {
+	html := `<html><head><title>No Feed</title></head><body></body></html>`
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte(html))
+	}))
+	defer srv.Close()
+
+	_, err := discoverFeedURL(context.Background(), srv.Client(), srv.URL)
+	if err == nil {
+		t.Fatal("expected error when no feed link present")
+	}
+	if !strings.Contains(err.Error(), "no RSS/Atom feed link found") {
+		t.Errorf("error %q should mention no feed link found", err.Error())
+	}
+}
+
+func TestDiscoverFeedURL_HTTPError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	_, err := discoverFeedURL(context.Background(), srv.Client(), srv.URL)
+	if err == nil {
+		t.Fatal("expected error for HTTP 500")
+	}
+}
