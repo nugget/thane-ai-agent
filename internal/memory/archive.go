@@ -1422,10 +1422,18 @@ func (s *ArchiveStore) expandContext(
 		}
 
 		if m.Timestamp, err = database.ParseTimestamp(tsStr); err != nil {
-			continue
+			if s.logger != nil {
+				s.logger.Warn("expandContext: invalid message timestamp",
+					"message_id", m.ID, "timestamp", tsStr, "error", err)
+			}
+			continue // Timestamp is required for gap calculation.
 		}
 		if m.ArchivedAt, err = database.ParseTimestamp(archivedStr); err != nil {
-			continue
+			if s.logger != nil {
+				s.logger.Warn("expandContext: invalid archived_at timestamp",
+					"message_id", m.ID, "archived_at", archivedStr, "error", err)
+			}
+			// Keep the message — ArchivedAt is not used for gap logic.
 		}
 		if toolCalls.Valid {
 			m.ToolCalls = toolCalls.String
