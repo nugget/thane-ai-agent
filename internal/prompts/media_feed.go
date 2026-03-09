@@ -2,6 +2,25 @@ package prompts
 
 import "fmt"
 
+// TrustZoneGuidance returns analysis guidance text for a given media
+// trust zone. This is shared between the feed polling wake prompt
+// (where the zone comes from the feed subscription) and one-off
+// media_transcript calls (where the caller passes it explicitly).
+// Returns empty string for unrecognized zones — callers should default
+// to "unknown" before calling.
+func TrustZoneGuidance(trustZone string) string {
+	switch trustZone {
+	case "trusted":
+		return "Extract facts directly with source attribution. Full analysis depth."
+	case "known":
+		return "Extract as claims requiring corroboration. Summarize key points."
+	case "unknown":
+		return "Topics and high-level insights only. No fact extraction."
+	default:
+		return ""
+	}
+}
+
 // mediaFeedPollWakeTemplate is prepended to the feed poller's wake
 // message to give the agent context on how to handle new feed entries.
 // The single format verb receives the poller's content summary.

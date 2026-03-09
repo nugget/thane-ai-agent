@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+
+	"github.com/nugget/thane-ai-agent/internal/prompts"
 )
 
 // ToolHandler returns a function compatible with the tools.Tool Handler
@@ -18,6 +20,11 @@ func ToolHandler(c *Client) func(ctx context.Context, args map[string]any) (stri
 		language, _ := args["language"].(string)
 		focus, _ := args["focus"].(string)
 		detailStr, _ := args["detail"].(string)
+
+		trustZone, _ := args["trust_zone"].(string)
+		if trustZone == "" {
+			trustZone = "unknown"
+		}
 
 		var detail DetailLevel
 		switch detailStr {
@@ -34,6 +41,13 @@ func ToolHandler(c *Client) func(ctx context.Context, args map[string]any) (stri
 		result, err := c.GetTranscript(ctx, rawURL, language, focus, detail)
 		if err != nil {
 			return "", err
+		}
+
+		// Inject trust-zone-aware analysis guidance into the result so
+		// the agent knows how to treat the content (fact extraction vs
+		// claims vs topics-only). Uses the shared guidance function.
+		if guidance := prompts.TrustZoneGuidance(trustZone); guidance != "" {
+			result.AnalysisGuidance = guidance
 		}
 
 		out, err := json.Marshal(result)
@@ -67,6 +81,11 @@ func ToolDefinition() map[string]any {
 				"type":        "string",
 				"enum":        []string{"full", "summary", "brief"},
 				"description": "Detail level: \"full\" returns the raw transcript (default), \"summary\" produces a map-reduce summary (~2-3K chars), \"brief\" produces a very concise summary (~500 chars).",
+			},
+			"trust_zone": map[string]any{
+				"type":        "string",
+				"enum":        []string{"trusted", "known", "unknown"},
+				"description": "Trust level for this content source. Controls analysis guidance: trusted = extract facts directly with source attribution, known = extract as claims requiring corroboration, unknown = topics and insights only (default).",
 			},
 		},
 		"required": []string{"url"},

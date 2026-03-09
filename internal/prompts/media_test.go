@@ -59,6 +59,33 @@ func TestTranscriptChunkSummaryPrompt(t *testing.T) {
 	}
 }
 
+func TestTrustZoneGuidance(t *testing.T) {
+	tests := []struct {
+		zone string
+		want string
+	}{
+		{"trusted", "Extract facts directly"},
+		{"known", "claims requiring corroboration"},
+		{"unknown", "Topics and high-level insights only"},
+		{"", ""},
+		{"admin", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.zone, func(t *testing.T) {
+			got := TrustZoneGuidance(tt.zone)
+			if tt.want == "" {
+				if got != "" {
+					t.Errorf("TrustZoneGuidance(%q) = %q, want empty", tt.zone, got)
+				}
+				return
+			}
+			if !strings.Contains(got, tt.want) {
+				t.Errorf("TrustZoneGuidance(%q) = %q, want to contain %q", tt.zone, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestTranscriptReducePrompt(t *testing.T) {
 	tests := []struct {
 		name        string
