@@ -36,6 +36,15 @@ var coreProperties = map[string]bool{
 	"X-THANE-AI-SUMMARY":     true,
 }
 
+// skipProperties lists vCard properties that should never be stored as
+// contact_properties rows. These are either metadata about the vCard
+// file itself or Apple-specific grouped labels that lose meaning when
+// the group prefix is stripped during parsing.
+var skipProperties = map[string]bool{
+	"X-ABLABEL": true, // Apple grouped label — orphaned without group context
+	"PRODID":    true, // vCard generator identifier, not contact data
+}
+
 // ContactToCard converts a Contact with its Properties into a
 // vcard.Card.  The contact must have Properties populated (via
 // GetWithProperties).
@@ -179,10 +188,10 @@ func CardToContact(card vcard.Card) (*Contact, []Property) {
 
 	c.AISummary = card.PreferredValue("X-THANE-AI-SUMMARY")
 
-	// Multi-value properties: everything not in coreProperties.
+	// Multi-value properties: everything not in coreProperties or skipProperties.
 	var props []Property
 	for name, fields := range card {
-		if coreProperties[name] {
+		if coreProperties[name] || skipProperties[name] {
 			continue
 		}
 		for _, f := range fields {
