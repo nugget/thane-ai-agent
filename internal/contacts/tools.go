@@ -544,6 +544,18 @@ func (t *Tools) ExportAllVCF(argsJSON string) (string, error) {
 	var err error
 
 	switch {
+	case args.TrustZone != "" && args.Kind != "":
+		// Both filters: load by trust zone, then filter by kind.
+		contacts, err = t.store.FindByTrustZone(args.TrustZone)
+		if err == nil {
+			filtered := contacts[:0]
+			for _, c := range contacts {
+				if c.Kind == args.Kind {
+					filtered = append(filtered, c)
+				}
+			}
+			contacts = filtered
+		}
 	case args.TrustZone != "":
 		contacts, err = t.store.FindByTrustZone(args.TrustZone)
 	case args.Kind != "":
@@ -694,10 +706,10 @@ func (t *Tools) ImportVCF(argsJSON string) (string, error) {
 // incoming contact. It first tries EMAIL matching, then falls back to
 // formatted name.
 func (t *Tools) findExistingForMerge(incoming *Contact, props []Property) *Contact {
-	// Try EMAIL match first.
+	// Try EMAIL match first (exact, case-insensitive).
 	for _, p := range props {
 		if p.Property == "EMAIL" && p.Value != "" {
-			matches, err := t.store.FindByProperty("EMAIL", p.Value)
+			matches, err := t.store.FindByPropertyExact("EMAIL", p.Value)
 			if err == nil && len(matches) == 1 {
 				full, err := t.store.GetWithProperties(matches[0].ID)
 				if err == nil {
@@ -801,8 +813,10 @@ func (t *Tools) ExportVCFQR(argsJSON string) (string, error) {
 		return "", err
 	}
 
-	// Check QR capacity (~4KB for alphanumeric, ~3KB for binary).
-	const maxQRBytes = 2953 // QR version 40, error correction level L
+	// Check QR capacity. QR version 40 at Medium error correction
+	// holds ~2331 bytes of binary data, matching generateQRCode's
+	// use of qrcode.Medium.
+	const maxQRBytes = 2331
 	if len(text) > maxQRBytes {
 		return "", fmt.Errorf("vCard too large for QR code (%d bytes, max %d). "+
 			"Use recipient_trust_zone to reduce fields", len(text), maxQRBytes)

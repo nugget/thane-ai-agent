@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/emersion/go-vcard"
 )
@@ -318,10 +319,11 @@ func filterKnown(card vcard.Card, props []Property) vcard.Card {
 		card[vcard.FieldIMPP] = impp[:1]
 	}
 
-	// Truncate NOTE.
-	if notes := card[vcard.FieldNote]; len(notes) > 0 && len(notes[0].Value) > 100 {
+	// Truncate NOTE (rune-safe to avoid splitting multi-byte characters).
+	if notes := card[vcard.FieldNote]; len(notes) > 0 && utf8.RuneCountInString(notes[0].Value) > 100 {
+		runes := []rune(notes[0].Value)
 		card[vcard.FieldNote] = []*vcard.Field{{
-			Value:  notes[0].Value[:100] + "…",
+			Value:  string(runes[:100]) + "…",
 			Params: notes[0].Params,
 		}}
 	}
