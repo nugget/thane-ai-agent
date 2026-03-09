@@ -41,13 +41,6 @@ const (
 	activeFilter = "deleted_at IS NULL"
 )
 
-// ValidTrustZones is the set of allowed trust zone values.
-var ValidTrustZones = map[string]bool{
-	"owner":   true,
-	"trusted": true,
-	"known":   true,
-}
-
 // ValidKinds is the set of allowed contact kind values (vCard KIND).
 var ValidKinds = map[string]bool{
 	"individual": true,
@@ -254,10 +247,10 @@ func (s *Store) Upsert(c *Contact) (*Contact, error) {
 		return nil, fmt.Errorf("invalid kind %q (valid: individual, group, org, location)", c.Kind)
 	}
 	if c.TrustZone == "" {
-		c.TrustZone = "known"
+		c.TrustZone = ZoneKnown
 	}
 	if !ValidTrustZones[c.TrustZone] {
-		return nil, fmt.Errorf("invalid trust zone %q (valid: owner, trusted, known)", c.TrustZone)
+		return nil, fmt.Errorf("invalid trust zone %q (valid: admin, household, trusted, known)", c.TrustZone)
 	}
 
 	c.Rev = now.Format(time.RFC3339)
@@ -574,10 +567,10 @@ func (s *Store) UpsertWithProperties(c *Contact, props []Property) (*Contact, er
 		return nil, fmt.Errorf("invalid kind %q (valid: individual, group, org, location)", c.Kind)
 	}
 	if c.TrustZone == "" {
-		c.TrustZone = "known"
+		c.TrustZone = ZoneKnown
 	}
 	if !ValidTrustZones[c.TrustZone] {
-		return nil, fmt.Errorf("invalid trust zone %q (valid: owner, trusted, known)", c.TrustZone)
+		return nil, fmt.Errorf("invalid trust zone %q (valid: admin, household, trusted, known)", c.TrustZone)
 	}
 
 	c.Rev = now.Format(time.RFC3339)

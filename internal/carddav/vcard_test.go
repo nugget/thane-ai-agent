@@ -268,6 +268,18 @@ func TestCardToContact_InvalidTrustZoneDefaultsToKnown(t *testing.T) {
 	}
 }
 
+func TestCardToContact_LegacyOwnerDefaultsToKnown(t *testing.T) {
+	card := make(vcard.Card)
+	card.SetValue(vcard.FieldVersion, "4.0")
+	card.SetValue(vcard.FieldFormattedName, "Legacy Owner")
+	card.SetValue("X-THANE-TRUST-ZONE", "owner")
+
+	c, _ := CardToContact(card)
+	if c.TrustZone != "known" {
+		t.Errorf("TrustZone = %q, want %q for legacy 'owner' value", c.TrustZone, "known")
+	}
+}
+
 func TestCardToContact_MissingTrustZoneDefaultsToKnown(t *testing.T) {
 	card := make(vcard.Card)
 	card.SetValue(vcard.FieldVersion, "4.0")

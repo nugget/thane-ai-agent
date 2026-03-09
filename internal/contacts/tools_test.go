@@ -631,7 +631,7 @@ func TestSaveContact_TrustZoneUpdate(t *testing.T) {
 func TestSaveContact_TrustZoneNotRescuedAsFact(t *testing.T) {
 	tools := newTestTools(t)
 
-	_, err := tools.SaveContact(`{"name":"Zone Not Fact","trust_zone":"owner"}`)
+	_, err := tools.SaveContact(`{"name":"Zone Not Fact","trust_zone":"admin"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -649,8 +649,8 @@ func TestSaveContact_TrustZoneNotRescuedAsFact(t *testing.T) {
 	if _, exists := propsMap["trust_zone"]; exists {
 		t.Error("trust_zone should not be rescued as a property")
 	}
-	if c.TrustZone != "owner" {
-		t.Errorf("TrustZone = %q, want %q", c.TrustZone, "owner")
+	if c.TrustZone != "admin" {
+		t.Errorf("TrustZone = %q, want %q", c.TrustZone, "admin")
 	}
 }
 

@@ -6,9 +6,9 @@ import "fmt"
 // Implementations wrap a contact store without requiring the email
 // package to import the contacts package directly.
 type ContactResolver interface {
-	// ResolveTrustZone returns the trust zone ("owner", "trusted",
-	// "known") for the given email address. Returns ("", false, nil)
-	// if no matching contact is found.
+	// ResolveTrustZone returns the trust zone ("admin", "household",
+	// "trusted", "known") for the given email address. Returns
+	// ("", false, nil) if no matching contact is found.
 	ResolveTrustZone(email string) (zone string, found bool, err error)
 }
 
@@ -16,7 +16,7 @@ type ContactResolver interface {
 // disposition for outbound email.
 type TrustResult struct {
 	// Allowed contains addresses that can be sent to freely
-	// (trust zone "owner" or "trusted").
+	// (trust zone "admin", "household", or "trusted").
 	Allowed []string
 
 	// Warnings contains human-readable messages for "known" trust
@@ -55,7 +55,7 @@ func CheckRecipientTrust(cr ContactResolver, addresses []string) TrustResult {
 		}
 
 		switch zone {
-		case "owner", "trusted":
+		case "admin", "household", "trusted":
 			result.Allowed = append(result.Allowed, addr)
 		case "known":
 			result.Warnings = append(result.Warnings,

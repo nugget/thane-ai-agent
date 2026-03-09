@@ -35,9 +35,10 @@ func TestCheckRecipientTrust_NilResolver(t *testing.T) {
 func TestCheckRecipientTrust(t *testing.T) {
 	resolver := &mockResolver{
 		zones: map[string]string{
-			"owner@example.com":   "owner",
-			"trusted@example.com": "trusted",
-			"known@example.com":   "known",
+			"admin@example.com":     "admin",
+			"household@example.com": "household",
+			"trusted@example.com":   "trusted",
+			"known@example.com":     "known",
 		},
 	}
 
@@ -49,8 +50,13 @@ func TestCheckRecipientTrust(t *testing.T) {
 		wantBlocked  int
 	}{
 		{
-			name:        "owner allowed",
-			addresses:   []string{"owner@example.com"},
+			name:        "admin allowed",
+			addresses:   []string{"admin@example.com"},
+			wantAllowed: 1,
+		},
+		{
+			name:        "household allowed",
+			addresses:   []string{"household@example.com"},
 			wantAllowed: 1,
 		},
 		{
@@ -70,7 +76,7 @@ func TestCheckRecipientTrust(t *testing.T) {
 		},
 		{
 			name:         "mixed recipients",
-			addresses:    []string{"owner@example.com", "known@example.com", "stranger@example.com"},
+			addresses:    []string{"admin@example.com", "known@example.com", "stranger@example.com"},
 			wantAllowed:  1,
 			wantWarnings: 1,
 			wantBlocked:  1,
