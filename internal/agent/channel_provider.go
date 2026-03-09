@@ -151,7 +151,7 @@ func (p *ChannelProvider) GetContext(ctx context.Context, _ string) (string, err
 	}
 
 	envelope := map[string]*ContactContext{"contact": contactCtx}
-	jsonBytes, err := json.MarshalIndent(envelope, "", "  ")
+	jsonBytes, err := json.Marshal(envelope)
 	if err != nil {
 		// Fall back to name-only if JSON fails (shouldn't happen).
 		sb.WriteString(fmt.Sprintf("- **Participant:** %s\n", contactCtx.Name))

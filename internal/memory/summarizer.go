@@ -345,8 +345,20 @@ func (w *SummarizerWorker) summarizeSession(ctx context.Context, sess *Session) 
 	)
 
 	// Notify the interaction callback so contact history can be updated.
+	// Wrap in a deferred recover to prevent callback panics from crashing
+	// the summarizer loop.
 	if w.interactionCB != nil && sess.EndedAt != nil {
-		w.interactionCB(sess.ConversationID, sess.ID, *sess.EndedAt, tags)
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					w.logger.Error("interaction callback panicked",
+						"session", ShortID(sess.ID),
+						"panic", r,
+					)
+				}
+			}()
+			w.interactionCB(sess.ConversationID, sess.ID, *sess.EndedAt, tags)
+		}()
 	}
 }
 

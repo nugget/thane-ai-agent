@@ -183,9 +183,11 @@ func (s *Store) migrate() error {
 
 	// Add last_interaction_meta column if missing (added in #485).
 	if _, err := s.db.Exec(`ALTER TABLE contacts ADD COLUMN last_interaction_meta TEXT`); err != nil {
-		// Column already exists — expected on subsequent runs.
-		if !strings.Contains(err.Error(), "duplicate column") {
-			s.logger.Debug("last_interaction_meta column already exists or migration skipped", "error", err)
+		if strings.Contains(err.Error(), "duplicate column") {
+			// Column already exists — expected on subsequent runs.
+			s.logger.Debug("last_interaction_meta column already exists")
+		} else {
+			return fmt.Errorf("add last_interaction_meta column: %w", err)
 		}
 	}
 

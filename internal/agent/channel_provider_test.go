@@ -356,13 +356,14 @@ func TestChannelProvider_NullOrgTitleRole(t *testing.T) {
 	}
 
 	// Verify null serialization: org/title/role should be null in JSON.
-	if !strings.Contains(got, `"org": null`) {
+	// Compact JSON has no spaces after colons.
+	if !strings.Contains(got, `"org":null`) {
 		t.Errorf("expected null org in JSON:\n%s", got)
 	}
-	if !strings.Contains(got, `"title": null`) {
+	if !strings.Contains(got, `"title":null`) {
 		t.Errorf("expected null title in JSON:\n%s", got)
 	}
-	if !strings.Contains(got, `"role": null`) {
+	if !strings.Contains(got, `"role":null`) {
 		t.Errorf("expected null role in JSON:\n%s", got)
 	}
 }

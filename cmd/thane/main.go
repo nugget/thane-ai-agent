@@ -602,7 +602,6 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		IdleTimeout:     time.Duration(idleTimeoutMinutes) * time.Minute,
 	}
 	summaryWorker := memory.NewSummarizerWorker(archiveStore, llmClient, rtr, logger, summarizerCfg)
-	summaryWorker.Start(ctx)
 	defer summaryWorker.Stop()
 
 	// --- Scheduler ---
@@ -807,11 +806,12 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	defer contactStore.Close()
 
 	// Wire summarizer → contact interaction tracking now that the
-	// contact store is available. The callback runs asynchronously
-	// when sessions are summarized by the background worker.
+	// contact store is available. Register the callback before Start()
+	// to avoid a race where the startup scan reads the field concurrently.
 	summaryWorker.SetInteractionCallback(func(conversationID, sessionID string, endedAt time.Time, topics []string) {
 		updateContactInteraction(contactStore, logger, conversationID, sessionID, endedAt, topics)
 	})
+	summaryWorker.Start(ctx)
 
 	contactTools := contacts.NewTools(contactStore)
 	if cfg.Identity.ContactName != "" {
@@ -2869,18 +2869,30 @@ func extractRelated(props []contacts.Property) []RelatedContact {
 // builder. We re-export the agent type alias here for clarity.
 type RelatedContact = agent.RelatedContact
 
-// filterChannelsForSource returns only the channel entry matching the
+// filterChannelsForSource returns only channel entries relevant to the
 // source hint. Used for known-zone contacts where only the current
-// communication channel is revealed.
+// communication channel is revealed. For Signal, also includes "tel"
+// since Signal contacts are often identified by phone number even when
+// they lack an explicit IMPP signal: property.
 func filterChannelsForSource(channels map[string]any, source string) map[string]any {
 	if channels == nil {
 		return nil
 	}
-	val, ok := channels[source]
-	if !ok {
+	result := make(map[string]any)
+	if val, ok := channels[source]; ok {
+		result[source] = val
+	}
+	// Signal contacts may only have TEL properties without an IMPP
+	// signal: entry. Include tel so the agent sees their phone number.
+	if source == "signal" {
+		if val, ok := channels["tel"]; ok {
+			result["tel"] = val
+		}
+	}
+	if len(result) == 0 {
 		return nil
 	}
-	return map[string]any{source: val}
+	return result
 }
 
 // updateContactInteraction resolves a contact from a conversation ID
@@ -2919,15 +2931,25 @@ func resolveContactByChannelAddress(store *contacts.Store, channel, address stri
 
 	switch channel {
 	case "signal":
-		// Try IMPP with signal: prefix first.
-		matches, err := store.FindByPropertyExact("IMPP", "signal:"+address)
-		if err == nil && len(matches) == 1 {
-			return matches[0].ID, true
+		// Signal conversation IDs use sanitizePhone which strips the "+"
+		// prefix (e.g., "+15551234567" → "15551234567"), but contact
+		// properties store the canonical form with "+". Try both forms.
+		candidates := []string{address}
+		if address != "" && address[0] != '+' {
+			candidates = append(candidates, "+"+address)
 		}
-		// Fallback to TEL.
-		matches, err = store.FindByPropertyExact("TEL", address)
-		if err == nil && len(matches) == 1 {
-			return matches[0].ID, true
+		for _, addr := range candidates {
+			matches, err := store.FindByPropertyExact("IMPP", "signal:"+addr)
+			if err == nil && len(matches) == 1 {
+				return matches[0].ID, true
+			}
+		}
+		// Fallback to TEL (also try both forms).
+		for _, addr := range candidates {
+			matches, err := store.FindByPropertyExact("TEL", addr)
+			if err == nil && len(matches) == 1 {
+				return matches[0].ID, true
+			}
 		}
 	case "email":
 		matches, err := store.FindByPropertyExact("EMAIL", address)
