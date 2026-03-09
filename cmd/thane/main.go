@@ -2651,10 +2651,10 @@ func (r *contactNameLookup) LookupContactByName(name string) *agent.ContactSumma
 		return nil
 	}
 
-	c, err := r.store.FindByName(name)
+	c, err := r.store.ResolveContact(name)
 	if err != nil {
 		if !errors.Is(err, sql.ErrNoRows) {
-			slog.Error("failed to look up contact by name", "name", name, "error", err)
+			slog.Error("failed to resolve contact by name", "name", name, "error", err)
 		}
 		return nil
 	}

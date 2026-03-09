@@ -37,7 +37,7 @@ type mockNotifyContacts struct {
 	facts   map[string][]string
 }
 
-func (m *mockNotifyContacts) FindByName(_ string) (*contacts.Contact, error) {
+func (m *mockNotifyContacts) ResolveContact(_ string) (*contacts.Contact, error) {
 	if m.findErr != nil {
 		return nil, m.findErr
 	}

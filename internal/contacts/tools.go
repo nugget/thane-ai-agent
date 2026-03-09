@@ -181,14 +181,14 @@ func (t *Tools) LookupContact(argsJSON string) (string, error) {
 		return "", fmt.Errorf("parse args: %w", err)
 	}
 
-	// Name lookup.
+	// Name lookup (cascading: exact name → preferred_name → search).
 	if args.Name != "" {
-		c, err := t.store.FindByName(args.Name)
+		c, err := t.store.ResolveContact(args.Name)
 		if errors.Is(err, sql.ErrNoRows) {
 			return fmt.Sprintf("No contact found named %q", args.Name), nil
 		}
 		if err != nil {
-			return "", fmt.Errorf("find contact: %w", err)
+			return "", fmt.Errorf("resolve contact: %w", err)
 		}
 		c, err = t.store.GetWithFacts(c.ID)
 		if err != nil {

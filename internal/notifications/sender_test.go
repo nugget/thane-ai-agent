@@ -39,7 +39,7 @@ type mockContactResolver struct {
 	factsErr error
 }
 
-func (m *mockContactResolver) FindByName(_ string) (*contacts.Contact, error) {
+func (m *mockContactResolver) ResolveContact(_ string) (*contacts.Contact, error) {
 	if m.findErr != nil {
 		return nil, m.findErr
 	}
@@ -152,7 +152,7 @@ func TestSend(t *testing.T) {
 			resolver: &mockContactResolver{
 				findErr: errors.New("database locked"),
 			},
-			wantErr: `find contact "nugget"`,
+			wantErr: `resolve contact "nugget"`,
 		},
 		{
 			name:  "facts lookup error",
