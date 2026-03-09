@@ -51,7 +51,7 @@ func TestHAPushProvider_Send(t *testing.T) {
 		contact: &contacts.Contact{ID: testID, Name: "nugget"},
 		facts:   map[string][]string{"ha_companion_app": {"mobile_app_mcphone"}},
 	}
-	sender := NewSender(ha, resolver, nil, slog.Default())
+	sender := NewSender(ha, resolver, nil, "test-thane", slog.Default())
 	provider := NewHAPushProvider(sender)
 
 	err := provider.Send(context.Background(), NotificationRequest{
@@ -86,7 +86,7 @@ func TestHAPushProvider_SendActionable(t *testing.T) {
 		contact: &contacts.Contact{ID: testID, Name: "nugget"},
 		facts:   map[string][]string{"ha_companion_app": {"mobile_app_mcphone"}},
 	}
-	sender := NewSender(ha, resolver, nil, slog.Default())
+	sender := NewSender(ha, resolver, nil, "test-thane", slog.Default())
 	provider := NewHAPushProvider(sender)
 
 	err := provider.SendActionable(context.Background(), ActionableRequest{
@@ -119,7 +119,7 @@ func TestHAPushProvider_SendActionable(t *testing.T) {
 	if len(actions) != 2 {
 		t.Fatalf("expected 2 actions, got %d", len(actions))
 	}
-	if actions[0]["action"] != "THANE_test-request-id_approve" {
-		t.Errorf("action[0] = %v, want THANE_test-request-id_approve", actions[0]["action"])
+	if actions[0]["action"] != "TEST_THANE_test-request-id_approve" {
+		t.Errorf("action[0] = %v, want TEST_THANE_test-request-id_approve", actions[0]["action"])
 	}
 }

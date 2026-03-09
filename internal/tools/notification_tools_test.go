@@ -55,7 +55,7 @@ func newTestNotifyRegistry() (*Registry, *mockNotifyHA) {
 		contact: &contacts.Contact{ID: testID, Name: "nugget"},
 		facts:   map[string][]string{"ha_companion_app": {"mobile_app_mcphone"}},
 	}
-	sender := notifications.NewSender(ha, resolver, nil, slog.Default())
+	sender := notifications.NewSender(ha, resolver, nil, "test-thane", slog.Default())
 
 	reg := NewEmptyRegistry()
 	reg.SetHANotifier(sender)
@@ -137,7 +137,7 @@ func TestHANotify_SenderError(t *testing.T) {
 		contact: &contacts.Contact{ID: testID, Name: "nugget"},
 		facts:   map[string][]string{},
 	}
-	sender := notifications.NewSender(&mockNotifyHA{}, resolver, nil, slog.Default())
+	sender := notifications.NewSender(&mockNotifyHA{}, resolver, nil, "test-thane", slog.Default())
 
 	reg := NewEmptyRegistry()
 	reg.SetHANotifier(sender)

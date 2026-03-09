@@ -74,7 +74,7 @@ func newTestDispatcher(t *testing.T) (*CallbackDispatcher, *RecordStore, *mockIn
 
 	inj := &mockInjector{alive: true}
 	del := newMockDelegateSpawner()
-	dispatcher := NewCallbackDispatcher(store, inj, del, slog.Default())
+	dispatcher := NewCallbackDispatcher(store, inj, del, "test-thane", slog.Default())
 	return dispatcher, store, inj, del
 }
 
@@ -106,7 +106,7 @@ func TestCallbackDispatcher_LiveSession(t *testing.T) {
 	inj.alive = true
 	seedRecord(t, store, "01234567-89ab-cdef-0123-456789abcdef", "signal-15551234567")
 
-	dispatcher.Handle("thane/callbacks", makeCallback("THANE_01234567-89ab-cdef-0123-456789abcdef_approve"))
+	dispatcher.Handle("thane/test-thane/callbacks", makeCallback("TEST_THANE_01234567-89ab-cdef-0123-456789abcdef_approve"))
 
 	rec, _ := store.Get("01234567-89ab-cdef-0123-456789abcdef")
 	if rec.Status != StatusResponded {
@@ -132,7 +132,7 @@ func TestCallbackDispatcher_DeadSession(t *testing.T) {
 	inj.alive = false
 	seedRecord(t, store, "01234567-89ab-cdef-0123-456789abcdef", "signal-15551234567")
 
-	dispatcher.Handle("thane/callbacks", makeCallback("THANE_01234567-89ab-cdef-0123-456789abcdef_deny"))
+	dispatcher.Handle("thane/test-thane/callbacks", makeCallback("TEST_THANE_01234567-89ab-cdef-0123-456789abcdef_deny"))
 
 	rec, _ := store.Get("01234567-89ab-cdef-0123-456789abcdef")
 	if rec.Status != StatusResponded {
@@ -152,7 +152,7 @@ func TestCallbackDispatcher_DeadSession(t *testing.T) {
 func TestCallbackDispatcher_UnknownRequestID(t *testing.T) {
 	dispatcher, _, _, del := newTestDispatcher(t)
 
-	dispatcher.Handle("thane/callbacks", makeCallback("THANE_99999999-0000-0000-0000-000000000000_approve"))
+	dispatcher.Handle("thane/test-thane/callbacks", makeCallback("TEST_THANE_99999999-0000-0000-0000-000000000000_approve"))
 
 	if len(del.spawns) != 0 {
 		t.Errorf("expected 0 delegate spawns for unknown ID, got %d", len(del.spawns))
@@ -164,9 +164,9 @@ func TestCallbackDispatcher_AlreadyResponded(t *testing.T) {
 	seedRecord(t, store, "01234567-89ab-cdef-0123-456789abcdef", "conv-1")
 
 	// First callback.
-	dispatcher.Handle("thane/callbacks", makeCallback("THANE_01234567-89ab-cdef-0123-456789abcdef_approve"))
+	dispatcher.Handle("thane/test-thane/callbacks", makeCallback("TEST_THANE_01234567-89ab-cdef-0123-456789abcdef_approve"))
 	// Second callback should be ignored.
-	dispatcher.Handle("thane/callbacks", makeCallback("THANE_01234567-89ab-cdef-0123-456789abcdef_deny"))
+	dispatcher.Handle("thane/test-thane/callbacks", makeCallback("TEST_THANE_01234567-89ab-cdef-0123-456789abcdef_deny"))
 
 	rec, _ := store.Get("01234567-89ab-cdef-0123-456789abcdef")
 	if rec.ResponseAction != "approve" {
@@ -184,20 +184,20 @@ func TestCallbackDispatcher_AlreadyResponded(t *testing.T) {
 func TestCallbackDispatcher_MalformedPayload(t *testing.T) {
 	dispatcher, _, _, del := newTestDispatcher(t)
 
-	dispatcher.Handle("thane/callbacks", []byte("not json"))
+	dispatcher.Handle("thane/test-thane/callbacks", []byte("not json"))
 
 	if len(del.spawns) != 0 {
 		t.Errorf("expected 0 delegate spawns for malformed payload, got %d", len(del.spawns))
 	}
 }
 
-func TestCallbackDispatcher_NonThaneAction(t *testing.T) {
+func TestCallbackDispatcher_WrongPrefix(t *testing.T) {
 	dispatcher, _, _, del := newTestDispatcher(t)
 
-	dispatcher.Handle("thane/callbacks", makeCallback("SOME_OTHER_ACTION"))
+	dispatcher.Handle("thane/test-thane/callbacks", makeCallback("SOME_OTHER_ACTION"))
 
 	if len(del.spawns) != 0 {
-		t.Errorf("expected 0 delegate spawns for non-THANE action, got %d", len(del.spawns))
+		t.Errorf("expected 0 delegate spawns for wrong prefix, got %d", len(del.spawns))
 	}
 }
 
@@ -207,7 +207,7 @@ func TestCallbackDispatcher_InvalidActionID(t *testing.T) {
 	seedRecord(t, store, "01234567-89ab-cdef-0123-456789abcdef", "conv-1")
 
 	// "bogus" is not one of the declared actions (approve, deny).
-	dispatcher.Handle("thane/callbacks", makeCallback("THANE_01234567-89ab-cdef-0123-456789abcdef_bogus"))
+	dispatcher.Handle("thane/test-thane/callbacks", makeCallback("TEST_THANE_01234567-89ab-cdef-0123-456789abcdef_bogus"))
 
 	rec, _ := store.Get("01234567-89ab-cdef-0123-456789abcdef")
 	if rec.Status != StatusPending {
@@ -224,32 +224,35 @@ func TestCallbackDispatcher_InvalidActionID(t *testing.T) {
 func TestParseCallbackAction(t *testing.T) {
 	tests := []struct {
 		input     string
+		prefix    string
 		wantReqID string
 		wantActID string
 		wantOK    bool
 	}{
 		{
-			input:     "THANE_01234567-89ab-cdef-0123-456789abcdef_approve",
+			input:     "TEST_THANE_01234567-89ab-cdef-0123-456789abcdef_approve",
+			prefix:    "TEST_THANE",
 			wantReqID: "01234567-89ab-cdef-0123-456789abcdef",
 			wantActID: "approve",
 			wantOK:    true,
 		},
 		{
-			input:     "THANE_01234567-89ab-cdef-0123-456789abcdef_multi_part_action",
+			input:     "TEST_THANE_01234567-89ab-cdef-0123-456789abcdef_multi_part_action",
+			prefix:    "TEST_THANE",
 			wantReqID: "01234567-89ab-cdef-0123-456789abcdef",
 			wantActID: "multi_part_action",
 			wantOK:    true,
 		},
-		{input: "THANE_short", wantOK: false},
-		{input: "THANE_01234567-89ab-cdef-0123-456789abcdef", wantOK: false},                        // no action ID
-		{input: "THANE_01234567-89ab-cdef-0123-456789abcdefXapprove", wantOK: false},                // no underscore separator
-		{input: "THANE_01234567-89ab-cdef-0123-456789abcdef_", wantOK: false},                       // empty action ID
-		{input: "OTHER_01234567-89ab-cdef-0123-456789abcdef_approve", wantReqID: "", wantOK: false}, // wrong prefix handled by caller
+		{input: "TEST_THANE_short", prefix: "TEST_THANE", wantOK: false},
+		{input: "TEST_THANE_01234567-89ab-cdef-0123-456789abcdef", prefix: "TEST_THANE", wantOK: false},         // no action ID
+		{input: "TEST_THANE_01234567-89ab-cdef-0123-456789abcdefXapprove", prefix: "TEST_THANE", wantOK: false}, // no underscore separator
+		{input: "TEST_THANE_01234567-89ab-cdef-0123-456789abcdef_", prefix: "TEST_THANE", wantOK: false},        // empty action ID
+		{input: "OTHER_01234567-89ab-cdef-0123-456789abcdef_approve", prefix: "TEST_THANE", wantOK: false},      // wrong prefix
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
-			reqID, actID, ok := parseCallbackAction(tt.input)
+			reqID, actID, ok := parseCallbackAction(tt.input, tt.prefix)
 			if ok != tt.wantOK {
 				t.Fatalf("ok = %v, want %v", ok, tt.wantOK)
 			}
@@ -261,6 +264,28 @@ func TestParseCallbackAction(t *testing.T) {
 			}
 			if actID != tt.wantActID {
 				t.Errorf("actionID = %q, want %q", actID, tt.wantActID)
+			}
+		})
+	}
+}
+
+func TestActionPrefix(t *testing.T) {
+	tests := []struct {
+		deviceName string
+		want       string
+	}{
+		{"aimee-thane", "AIMEE_THANE"},
+		{"thane", "THANE"},
+		{"", "THANE"},
+		{"my-long-device-name", "MY_LONG_DEVICE_NAME"},
+		{"ALREADY_UPPER", "ALREADY_UPPER"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.deviceName, func(t *testing.T) {
+			got := ActionPrefix(tt.deviceName)
+			if got != tt.want {
+				t.Errorf("ActionPrefix(%q) = %q, want %q", tt.deviceName, got, tt.want)
 			}
 		})
 	}
