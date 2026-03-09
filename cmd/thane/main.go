@@ -2728,6 +2728,14 @@ func (r *contactNameLookup) LookupContact(name string, source string) *agent.Con
 // buildContactContext assembles a ContactContext from a contact record,
 // its properties, and the applicable trust policy. Fields are gated by
 // trust zone — lower zones receive fewer fields.
+// Size limits for ContactContext fields to prevent prompt bloat.
+const (
+	maxSummaryLen = 300 // characters in ai_summary
+	maxGroups     = 10
+	maxRelated    = 10
+	maxTopics     = 10
+)
+
 func buildContactContext(c *contacts.Contact, props []contacts.Property, policy contacts.ZonePolicy, source string, now time.Time) *agent.ContactContext {
 	ctx := &agent.ContactContext{
 		ID:        c.ID.String(),
@@ -2755,7 +2763,11 @@ func buildContactContext(c *contacts.Contact, props []contacts.Property, policy 
 	// Trusted, household, admin: full profile.
 	ctx.GivenName = c.GivenName
 	ctx.FamilyName = c.FamilyName
-	ctx.Summary = c.AISummary
+	summary := c.AISummary
+	if len(summary) > maxSummaryLen {
+		summary = summary[:maxSummaryLen] + "…"
+	}
+	ctx.Summary = summary
 
 	if c.Org != "" {
 		ctx.Org = &c.Org
@@ -2767,10 +2779,19 @@ func buildContactContext(c *contacts.Contact, props []contacts.Property, policy 
 		ctx.Role = &c.Role
 	}
 
-	// Extract structured data from properties.
+	// Extract structured data from properties, capped to prevent
+	// large contact records from bloating the system prompt.
 	ctx.Channels = extractChannels(props)
-	ctx.Groups = extractGroups(props)
-	ctx.Related = extractRelated(props)
+	if groups := extractGroups(props); len(groups) > maxGroups {
+		ctx.Groups = groups[:maxGroups]
+	} else {
+		ctx.Groups = groups
+	}
+	if related := extractRelated(props); len(related) > maxRelated {
+		ctx.Related = related[:maxRelated]
+	} else {
+		ctx.Related = related
+	}
 
 	// Interaction history (trusted+).
 	if !c.LastInteraction.IsZero() {
@@ -2780,7 +2801,11 @@ func buildContactContext(c *contacts.Contact, props []contacts.Property, policy 
 		if c.LastInteractionMeta != nil {
 			ref.Channel = c.LastInteractionMeta.Channel
 			ref.SessionID = c.LastInteractionMeta.SessionID
-			ref.Topics = c.LastInteractionMeta.Topics
+			topics := c.LastInteractionMeta.Topics
+			if len(topics) > maxTopics {
+				topics = topics[:maxTopics]
+			}
+			ref.Topics = topics
 		}
 		ctx.LastInteraction = ref
 	}
@@ -2897,7 +2922,7 @@ func filterChannelsForSource(channels map[string]any, source string) map[string]
 
 // updateContactInteraction resolves a contact from a conversation ID
 // and updates their last interaction metadata. Conversation IDs follow
-// the pattern "channel-address" (e.g., "signal-+15551234567").
+// the pattern "channel-address" (e.g., "signal-15551234567").
 func updateContactInteraction(store *contacts.Store, logger *slog.Logger, conversationID, sessionID string, endedAt time.Time, topics []string) {
 	channel, address, ok := strings.Cut(conversationID, "-")
 	if !ok || channel == "" || address == "" {

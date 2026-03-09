@@ -14,16 +14,16 @@ import (
 // implementation and gated by the contact's trust zone — lower-trust
 // zones receive fewer fields.
 type ContactContext struct {
-	ID              string           `json:"id"`
+	ID              string           `json:"id,omitempty"`
 	Name            string           `json:"name"`
 	GivenName       string           `json:"given_name,omitempty"`
 	FamilyName      string           `json:"family_name,omitempty"`
 	TrustZone       string           `json:"trust_zone"`
 	TrustPolicy     *TrustPolicyView `json:"trust_policy"`
 	Groups          []string         `json:"groups,omitempty"`
-	Org             *string          `json:"org"`
-	Title           *string          `json:"title"`
-	Role            *string          `json:"role"`
+	Org             *string          `json:"org,omitempty"`
+	Title           *string          `json:"title,omitempty"`
+	Role            *string          `json:"role,omitempty"`
 	Summary         string           `json:"summary,omitempty"`
 	Related         []RelatedContact `json:"related,omitempty"`
 	Channels        map[string]any   `json:"channels,omitempty"`

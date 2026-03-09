@@ -720,7 +720,7 @@ func (s *Store) UpdateLastInteraction(contactID uuid.UUID, t time.Time, meta *In
 	result, err := s.db.Exec(`
 		UPDATE contacts SET last_interaction = ?, last_interaction_meta = ?, updated_at = ?
 		WHERE id = ? AND `+activeFilter,
-		t.Format(time.RFC3339), metaJSON,
+		t.UTC().Format(time.RFC3339), metaJSON,
 		time.Now().UTC().Format(time.RFC3339),
 		contactID.String())
 	if err != nil {

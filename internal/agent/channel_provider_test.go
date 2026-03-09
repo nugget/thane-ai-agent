@@ -355,16 +355,21 @@ func TestChannelProvider_NullOrgTitleRole(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Verify null serialization: org/title/role should be null in JSON.
-	// Compact JSON has no spaces after colons.
-	if !strings.Contains(got, `"org":null`) {
-		t.Errorf("expected null org in JSON:\n%s", got)
+	// With omitempty, nil *string fields are omitted entirely rather
+	// than serialized as null. Verify org/title/role are absent.
+	contact := parseContactJSON(t, got)
+	if contact.Org != nil {
+		t.Errorf("expected nil org, got %q", *contact.Org)
 	}
-	if !strings.Contains(got, `"title":null`) {
-		t.Errorf("expected null title in JSON:\n%s", got)
+	if contact.Title != nil {
+		t.Errorf("expected nil title, got %q", *contact.Title)
 	}
-	if !strings.Contains(got, `"role":null`) {
-		t.Errorf("expected null role in JSON:\n%s", got)
+	if contact.Role != nil {
+		t.Errorf("expected nil role, got %q", *contact.Role)
+	}
+	// Also verify they don't appear in the raw JSON.
+	if strings.Contains(got, `"org"`) {
+		t.Errorf("org should be omitted from JSON:\n%s", got)
 	}
 }
 
