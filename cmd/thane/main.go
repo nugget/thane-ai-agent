@@ -37,6 +37,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/agent"
 	"github.com/nugget/thane-ai-agent/internal/awareness"
 	"github.com/nugget/thane-ai-agent/internal/buildinfo"
+	cdav "github.com/nugget/thane-ai-agent/internal/carddav"
 	"github.com/nugget/thane-ai-agent/internal/channels/email"
 	"github.com/nugget/thane-ai-agent/internal/channels/mqtt"
 	sigcli "github.com/nugget/thane-ai-agent/internal/channels/signal"
@@ -2069,6 +2070,24 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		}()
 	}
 
+	// --- CardDAV server ---
+	// Optional: exposes the contacts store as a CardDAV address book so
+	// native contact apps (macOS Contacts.app, iOS, Thunderbird) can sync.
+	var carddavServer *cdav.Server
+	if cfg.CardDAV.Configured() {
+		carddavBackend := cdav.NewBackend(contactStore, logger)
+		carddavServer = cdav.NewServer(
+			cfg.CardDAV.Listen,
+			cfg.CardDAV.Username,
+			cfg.CardDAV.Password,
+			carddavBackend,
+			logger,
+		)
+		if err := carddavServer.Start(ctx); err != nil {
+			logger.Error("carddav server failed to start", "error", err)
+		}
+	}
+
 	// --- MQTT publisher ---
 	// Optional: publishes HA MQTT discovery messages and periodic sensor
 	// state updates so Thane appears as a native HA device.
@@ -2321,6 +2340,9 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		_ = server.Shutdown(shutdownCtx)
 		if ollamaServer != nil {
 			_ = ollamaServer.Shutdown(shutdownCtx)
+		}
+		if carddavServer != nil {
+			_ = carddavServer.Shutdown(shutdownCtx)
 		}
 	}()
 

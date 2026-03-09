@@ -20,6 +20,7 @@ package config
 import (
 	"fmt"
 	"log/slog"
+	"net"
 	"net/url"
 	"os"
 	"path"
@@ -92,6 +93,10 @@ type Config struct {
 	// OllamaAPI configures the optional Ollama-compatible API server,
 	// used for Home Assistant integration.
 	OllamaAPI OllamaAPIConfig `yaml:"ollama_api"`
+
+	// CardDAV configures the optional CardDAV server for native
+	// contact app sync (macOS Contacts.app, iOS, Thunderbird, etc.).
+	CardDAV CardDAVConfig `yaml:"carddav"`
 
 	// HomeAssistant configures the connection to a Home Assistant instance.
 	HomeAssistant HomeAssistantConfig `yaml:"homeassistant"`
@@ -266,6 +271,23 @@ type OllamaAPIConfig struct {
 	Enabled bool   `yaml:"enabled"`
 	Address string `yaml:"address"` // Bind address; empty = all interfaces
 	Port    int    `yaml:"port"`    // Default: 11434
+}
+
+// CardDAVConfig configures the optional CardDAV server for native
+// contact app sync.  When Enabled is true and credentials are set,
+// Thane exposes a CardDAV endpoint that can be added as an account in
+// macOS Contacts.app, iOS, Thunderbird, or any CardDAV client.
+type CardDAVConfig struct {
+	Enabled  bool     `yaml:"enabled"`
+	Listen   []string `yaml:"listen"`   // e.g. ["127.0.0.1:8843"]
+	Username string   `yaml:"username"` // Basic Auth username
+	Password string   `yaml:"password"` // Basic Auth password
+}
+
+// Configured reports whether the CardDAV server has all required
+// settings.
+func (c CardDAVConfig) Configured() bool {
+	return c.Enabled && c.Username != "" && c.Password != ""
 }
 
 // HomeAssistantConfig configures the connection to a Home Assistant
@@ -1006,6 +1028,9 @@ func (c *Config) applyDefaults() {
 	if c.OllamaAPI.Port == 0 {
 		c.OllamaAPI.Port = 11434
 	}
+	if c.CardDAV.Enabled && len(c.CardDAV.Listen) == 0 {
+		c.CardDAV.Listen = []string{"127.0.0.1:8843"}
+	}
 	if c.Embeddings.Model == "" {
 		c.Embeddings.Model = "nomic-embed-text"
 	}
@@ -1204,6 +1229,22 @@ func (c *Config) Validate() error {
 	}
 	if c.OllamaAPI.Enabled && (c.OllamaAPI.Port < 1 || c.OllamaAPI.Port > 65535) {
 		return fmt.Errorf("ollama_api.port %d out of range (1-65535)", c.OllamaAPI.Port)
+	}
+	if c.CardDAV.Enabled {
+		if c.CardDAV.Username == "" {
+			return fmt.Errorf("carddav.username required when carddav.enabled is true")
+		}
+		if c.CardDAV.Password == "" {
+			return fmt.Errorf("carddav.password required when carddav.enabled is true")
+		}
+		if len(c.CardDAV.Listen) == 0 {
+			return fmt.Errorf("carddav.listen requires at least one address")
+		}
+		for _, addr := range c.CardDAV.Listen {
+			if _, _, err := net.SplitHostPort(addr); err != nil {
+				return fmt.Errorf("carddav.listen %q: %w", addr, err)
+			}
+		}
 	}
 	if c.LogLevel != "" {
 		if _, err := ParseLogLevel(c.LogLevel); err != nil {

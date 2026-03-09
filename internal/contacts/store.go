@@ -470,6 +470,200 @@ func (s *Store) ListAll() ([]*Contact, error) {
 	return s.scanContacts(rows)
 }
 
+// ListAllWithProperties returns all active contacts with their
+// Properties slices populated.  Unlike [ListAll], there is no row
+// limit — this is intended for full-sync use cases like CardDAV.
+//
+// Properties are fetched in a single query and grouped in-memory to
+// avoid N+1 query overhead on larger address books.
+func (s *Store) ListAllWithProperties() ([]*Contact, error) {
+	rows, err := s.db.Query(
+		`SELECT ` + contactColumns + ` FROM contacts WHERE ` + activeFilter + ` ORDER BY formatted_name`)
+	if err != nil {
+		return nil, fmt.Errorf("query contacts: %w", err)
+	}
+	defer rows.Close()
+
+	all, err := s.scanContacts(rows)
+	if err != nil {
+		return nil, err
+	}
+	if len(all) == 0 {
+		return all, nil
+	}
+
+	// Batch-load all properties in one query.
+	propRows, err := s.db.Query(`
+		SELECT id, contact_id, property, value, type, pref, label, mediatype, verified, created_at, updated_at
+		FROM contact_properties
+		WHERE contact_id IN (SELECT id FROM contacts WHERE ` + activeFilter + `)
+		ORDER BY contact_id, property, pref NULLS LAST, id
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("query properties: %w", err)
+	}
+	defer propRows.Close()
+
+	propMap := make(map[string][]Property)
+	for propRows.Next() {
+		p, scanErr := scanProperty(propRows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		propMap[p.ContactID.String()] = append(propMap[p.ContactID.String()], p)
+	}
+	if err := propRows.Err(); err != nil {
+		return nil, fmt.Errorf("scan properties: %w", err)
+	}
+
+	for _, c := range all {
+		c.Properties = propMap[c.ID.String()]
+	}
+	return all, nil
+}
+
+// CTag returns the collection tag for the address book.  This is the
+// maximum updated_at timestamp across all active contacts, formatted
+// as RFC 3339.  CardDAV clients compare this value to decide whether
+// a full sync is needed.
+func (s *Store) CTag() (string, error) {
+	var ctag sql.NullString
+	err := s.db.QueryRow(
+		`SELECT MAX(updated_at) FROM contacts WHERE ` + activeFilter).Scan(&ctag)
+	if err != nil {
+		return "", fmt.Errorf("ctag query: %w", err)
+	}
+	if !ctag.Valid {
+		return "", nil
+	}
+	return ctag.String, nil
+}
+
+// DeleteAllProperties removes all properties from a contact.
+func (s *Store) DeleteAllProperties(contactID uuid.UUID) error {
+	_, err := s.db.Exec(
+		`DELETE FROM contact_properties WHERE contact_id = ?`,
+		contactID.String())
+	if err != nil {
+		return fmt.Errorf("delete all properties: %w", err)
+	}
+	return nil
+}
+
+// UpsertWithProperties creates or updates a contact and replaces all
+// its properties in a single transaction.  This is used by CardDAV
+// PUT to ensure the contact row and property rows are updated
+// atomically — a partial failure rolls back cleanly.
+//
+// Unlike [Upsert], a non-nil ID that does not yet exist in the
+// database is INSERT-ed (enabling CardDAV clients to create contacts
+// by PUTing to a new URL).
+func (s *Store) UpsertWithProperties(c *Contact, props []Property) (*Contact, error) {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return nil, fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // best-effort on defer
+
+	now := time.Now().UTC()
+
+	if c.Kind == "" {
+		c.Kind = "individual"
+	}
+	if !ValidKinds[c.Kind] {
+		return nil, fmt.Errorf("invalid kind %q (valid: individual, group, org, location)", c.Kind)
+	}
+	if c.TrustZone == "" {
+		c.TrustZone = "known"
+	}
+	if !ValidTrustZones[c.TrustZone] {
+		return nil, fmt.Errorf("invalid trust zone %q (valid: owner, trusted, known)", c.TrustZone)
+	}
+
+	c.Rev = now.Format(time.RFC3339)
+	c.UpdatedAt = now
+
+	if c.ID == uuid.Nil {
+		id, idErr := uuid.NewV7()
+		if idErr != nil {
+			return nil, fmt.Errorf("generate id: %w", idErr)
+		}
+		c.ID = id
+	}
+
+	// INSERT or UPDATE via ON CONFLICT so both new and existing IDs
+	// work correctly.
+	c.CreatedAt = now
+	_, err = tx.Exec(`
+		INSERT INTO contacts (id, kind, formatted_name, family_name, given_name,
+			additional_names, name_prefix, name_suffix, nickname,
+			birthday, anniversary, gender, org, title, role,
+			note, photo_uri, trust_zone, ai_summary, rev, etag,
+			last_interaction, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			kind = excluded.kind,
+			formatted_name = excluded.formatted_name,
+			family_name = excluded.family_name,
+			given_name = excluded.given_name,
+			additional_names = excluded.additional_names,
+			name_prefix = excluded.name_prefix,
+			name_suffix = excluded.name_suffix,
+			nickname = excluded.nickname,
+			birthday = excluded.birthday,
+			anniversary = excluded.anniversary,
+			gender = excluded.gender,
+			org = excluded.org,
+			title = excluded.title,
+			role = excluded.role,
+			note = excluded.note,
+			photo_uri = excluded.photo_uri,
+			trust_zone = excluded.trust_zone,
+			ai_summary = excluded.ai_summary,
+			rev = excluded.rev,
+			etag = excluded.etag,
+			last_interaction = excluded.last_interaction,
+			updated_at = excluded.updated_at,
+			deleted_at = NULL
+	`, c.ID.String(), c.Kind, c.FormattedName,
+		nullStr(c.FamilyName), nullStr(c.GivenName), nullStr(c.AdditionalNames),
+		nullStr(c.NamePrefix), nullStr(c.NameSuffix), nullStr(c.Nickname),
+		nullStr(c.Birthday), nullStr(c.Anniversary), nullStr(c.Gender),
+		nullStr(c.Org), nullStr(c.Title), nullStr(c.Role),
+		nullStr(c.Note), nullStr(c.PhotoURI),
+		c.TrustZone, nullStr(c.AISummary), c.Rev, nullStr(c.ETag),
+		nullTime(c.LastInteraction),
+		now.Format(time.RFC3339), now.Format(time.RFC3339))
+	if err != nil {
+		return nil, fmt.Errorf("upsert contact: %w", err)
+	}
+
+	// Replace all properties.
+	if _, err := tx.Exec(
+		`DELETE FROM contact_properties WHERE contact_id = ?`,
+		c.ID.String()); err != nil {
+		return nil, fmt.Errorf("clear properties: %w", err)
+	}
+	for _, p := range props {
+		propNow := now.Format(time.RFC3339)
+		if _, err := tx.Exec(`
+			INSERT INTO contact_properties (contact_id, property, value, type, pref, label, mediatype, verified, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
+		`, c.ID.String(), p.Property, p.Value,
+			nullStr(p.Type), nullInt(p.Pref), nullStr(p.Label), nullStr(p.MediaType),
+			propNow, propNow); err != nil {
+			return nil, fmt.Errorf("add property %s: %w", p.Property, err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit: %w", err)
+	}
+
+	s.rebuildFTS()
+	return c, nil
+}
+
 // Delete soft-deletes a contact by ID.
 func (s *Store) Delete(id uuid.UUID) error {
 	now := time.Now().UTC().Format(time.RFC3339)
