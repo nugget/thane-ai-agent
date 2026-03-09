@@ -248,3 +248,69 @@ func resolveYouTubeFeed(ctx context.Context, httpClient *http.Client, rawURL str
 
 	return "", fmt.Errorf("could not extract channel ID from %s — try the direct RSS URL: https://www.youtube.com/feeds/videos.xml?channel_id=CHANNEL_ID", rawURL)
 }
+
+// feedLinkRe matches <link> elements with RSS or Atom feed types. It
+// captures the type and href attributes in either order to handle the
+// common HTML variations. Only matches application/rss+xml and
+// application/atom+xml types.
+var feedLinkRe = regexp.MustCompile(
+	`(?i)<link\s[^>]*?` +
+		`(?:` +
+		`type\s*=\s*["']application/(?:rss|atom)\+xml["'][^>]*?href\s*=\s*["']([^"']+)["']` +
+		`|` +
+		`href\s*=\s*["']([^"']+)["'][^>]*?type\s*=\s*["']application/(?:rss|atom)\+xml["']` +
+		`)`)
+
+// discoverFeedURL fetches an HTML page and looks for a <link> element with
+// type="application/rss+xml" or type="application/atom+xml". Returns the
+// resolved feed URL on success. This enables following blogs and podcasts
+// by their page URL rather than requiring the user to find the raw feed URL.
+func discoverFeedURL(ctx context.Context, httpClient *http.Client, pageURL string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, pageURL, nil)
+	if err != nil {
+		return "", fmt.Errorf("create request: %w", err)
+	}
+	req.Header.Set("Accept", "text/html")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("fetch page: %w", err)
+	}
+	defer httpkit.DrainAndClose(resp.Body, 1<<20)
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("page returned HTTP %d", resp.StatusCode)
+	}
+
+	// Read only the first 256 KB — feed links are in <head>.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
+	if err != nil {
+		return "", fmt.Errorf("read page body: %w", err)
+	}
+
+	matches := feedLinkRe.FindSubmatch(body)
+	if matches == nil {
+		return "", fmt.Errorf("no RSS/Atom feed link found on %s", pageURL)
+	}
+
+	// The regex has two capture groups — one will be empty depending on
+	// attribute order. Pick whichever matched.
+	href := string(matches[1])
+	if href == "" {
+		href = string(matches[2])
+	}
+	if href == "" {
+		return "", fmt.Errorf("no RSS/Atom feed link found on %s", pageURL)
+	}
+
+	// Resolve relative URLs against the page URL.
+	base, err := url.Parse(pageURL)
+	if err != nil {
+		return href, nil // best-effort: return as-is
+	}
+	ref, err := url.Parse(href)
+	if err != nil {
+		return href, nil
+	}
+	return base.ResolveReference(ref).String(), nil
+}

@@ -58,19 +58,20 @@ type Client struct {
 
 // Result holds the fetched transcript and associated metadata.
 type Result struct {
-	Title          string `json:"title"`
-	Channel        string `json:"channel,omitempty"`
-	Duration       string `json:"duration,omitempty"`
-	UploadDate     string `json:"upload_date,omitempty"`
-	Description    string `json:"description,omitempty"`
-	Transcript     string `json:"transcript"`
-	Source         string `json:"source"`
-	ID             string `json:"id"`
-	TranscriptPath string `json:"transcript_path,omitempty"`
-	Truncated      bool   `json:"truncated,omitempty"`
-	Summarized     bool   `json:"summarized,omitempty"`
-	DetailLevel    string `json:"detail_level,omitempty"`
-	Focus          string `json:"focus,omitempty"`
+	Title            string `json:"title"`
+	Channel          string `json:"channel,omitempty"`
+	Duration         string `json:"duration,omitempty"`
+	UploadDate       string `json:"upload_date,omitempty"`
+	Description      string `json:"description,omitempty"`
+	Transcript       string `json:"transcript"`
+	Source           string `json:"source"`
+	ID               string `json:"id"`
+	TranscriptPath   string `json:"transcript_path,omitempty"`
+	Truncated        bool   `json:"truncated,omitempty"`
+	Summarized       bool   `json:"summarized,omitempty"`
+	DetailLevel      string `json:"detail_level,omitempty"`
+	Focus            string `json:"focus,omitempty"`
+	AnalysisGuidance string `json:"analysis_guidance,omitempty"`
 }
 
 // New creates a media transcript client. The yt-dlp binary path is

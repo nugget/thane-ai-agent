@@ -27,6 +27,16 @@ func feedKeyNotify(id string) string      { return "feed:" + id + ":notify" }
 func feedKeyLastEntryID(id string) string { return "feed:" + id + ":last_entry_id" }
 func feedKeyLastChecked(id string) string { return "feed:" + id + ":last_checked" }
 func feedKeyLatestTitle(id string) string { return "feed:" + id + ":latest_title" }
+func feedKeyTrustZone(id string) string   { return "feed:" + id + ":trust_zone" }
+
+// validFeedTrustZones is the set of trust zones applicable to media feeds.
+// Admin and household zones don't apply to media sources — only the 3-tier
+// model (trusted/known/unknown) is relevant.
+var validFeedTrustZones = map[string]bool{
+	"trusted": true,
+	"known":   true,
+	"unknown": true,
+}
 
 // FeedPoller checks followed RSS/Atom feeds for new entries by
 // comparing entry IDs against a persisted high-water mark. It follows
@@ -109,6 +119,11 @@ func (p *FeedPoller) checkFeed(ctx context.Context, feedID string) (string, erro
 		feedName = feedID
 	}
 
+	trustZone, _ := p.state.Get(feedNamespace, feedKeyTrustZone(feedID))
+	if trustZone == "" {
+		trustZone = "unknown"
+	}
+
 	lastEntryID, _ := p.state.Get(feedNamespace, feedKeyLastEntryID(feedID))
 
 	feed, err := fetchFeed(ctx, p.http, feedURL)
@@ -187,10 +202,11 @@ func (p *FeedPoller) checkFeed(ctx context.Context, feedID string) (string, erro
 		"new_count", len(newEntries),
 	)
 
-	// Format section for wake message.
+	// Format section for wake message. Trust zone is shown in brackets
+	// so the agent can adapt analysis depth per the wake prompt guidance.
 	var sb strings.Builder
 	for _, entry := range newEntries {
-		fmt.Fprintf(&sb, "**%s**: %s\n%s\n", feedName, entry.Title, entry.Link)
+		fmt.Fprintf(&sb, "**%s** [%s]: %s\n%s\n", feedName, trustZone, entry.Title, entry.Link)
 	}
 	return sb.String(), nil
 }

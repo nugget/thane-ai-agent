@@ -54,6 +54,14 @@ func (ft *FeedTools) FollowHandler() func(ctx context.Context, args map[string]a
 		}
 		name, _ := args["name"].(string)
 
+		trustZone, _ := args["trust_zone"].(string)
+		if trustZone == "" {
+			trustZone = "unknown"
+		}
+		if !validFeedTrustZones[trustZone] {
+			return "", fmt.Errorf("media_follow: invalid trust_zone %q (must be trusted, known, or unknown)", trustZone)
+		}
+
 		notify := true
 		if n, ok := args["notify"].(bool); ok {
 			notify = n
@@ -68,14 +76,23 @@ func (ft *FeedTools) FollowHandler() func(ctx context.Context, args map[string]a
 			return "", fmt.Errorf("media_follow: feed limit reached (%d/%d) — unfollow a feed first", len(ids), ft.maxFeeds)
 		}
 
-		// Resolve YouTube channel URLs to RSS.
+		// Resolve URL: YouTube channel → RSS, then try direct fetch,
+		// then fall back to HTML feed auto-discovery for blog/podcast pages.
 		feedURL, err := resolveYouTubeFeed(ctx, ft.http, rawURL)
 		if err != nil {
 			return "", fmt.Errorf("media_follow: resolve URL: %w", err)
 		}
 
-		// Fetch feed to validate and get title.
 		feed, err := fetchFeed(ctx, ft.http, feedURL)
+		if err != nil && feedURL == rawURL {
+			// Direct fetch failed and URL wasn't rewritten by YouTube
+			// resolution — try HTML feed discovery.
+			discovered, discErr := discoverFeedURL(ctx, ft.http, rawURL)
+			if discErr == nil && discovered != "" {
+				feedURL = discovered
+				feed, err = fetchFeed(ctx, ft.http, feedURL)
+			}
+		}
 		if err != nil {
 			return "", fmt.Errorf("media_follow: %w", err)
 		}
@@ -115,6 +132,9 @@ func (ft *FeedTools) FollowHandler() func(ctx context.Context, args map[string]a
 		if err := ft.state.Set(feedNamespace, feedKeyLastChecked(id), now); err != nil {
 			return "", fmt.Errorf("media_follow: store last_checked: %w", err)
 		}
+		if err := ft.state.Set(feedNamespace, feedKeyTrustZone(id), trustZone); err != nil {
+			return "", fmt.Errorf("media_follow: store trust_zone: %w", err)
+		}
 
 		// Set high-water mark to latest entry (don't backfill).
 		latestTitle := ""
@@ -138,12 +158,14 @@ func (ft *FeedTools) FollowHandler() func(ctx context.Context, args map[string]a
 			"feed_id", id,
 			"name", name,
 			"url", feedURL,
+			"trust_zone", trustZone,
 		)
 
 		result := map[string]string{
 			"feed_id":      id,
 			"name":         name,
 			"url":          feedURL,
+			"trust_zone":   trustZone,
 			"latest_entry": latestTitle,
 		}
 		out, _ := json.Marshal(result)
@@ -181,6 +203,7 @@ func (ft *FeedTools) UnfollowHandler() func(ctx context.Context, args map[string
 			feedKeyLastEntryID(id),
 			feedKeyLastChecked(id),
 			feedKeyLatestTitle(id),
+			feedKeyTrustZone(id),
 		} {
 			if err := ft.state.Delete(feedNamespace, key); err != nil {
 				ft.logger.Warn("failed to delete feed key", "key", key, "error", err)
@@ -220,6 +243,7 @@ func (ft *FeedTools) FeedsHandler() func(ctx context.Context, args map[string]an
 			FeedID      string `json:"feed_id"`
 			Name        string `json:"name"`
 			URL         string `json:"url"`
+			TrustZone   string `json:"trust_zone"`
 			LastChecked string `json:"last_checked,omitempty"`
 			LatestEntry string `json:"latest_entry,omitempty"`
 			Notify      bool   `json:"notify"`
@@ -247,11 +271,19 @@ func (ft *FeedTools) FeedsHandler() func(ctx context.Context, args map[string]an
 			if err != nil {
 				return "", fmt.Errorf("media_feeds: read notify for %s: %w", id, err)
 			}
+			trustZone, err := ft.state.Get(feedNamespace, feedKeyTrustZone(id))
+			if err != nil {
+				return "", fmt.Errorf("media_feeds: read trust_zone for %s: %w", id, err)
+			}
+			if trustZone == "" {
+				trustZone = "unknown"
+			}
 
 			feeds = append(feeds, feedInfo{
 				FeedID:      id,
 				Name:        name,
 				URL:         feedURL,
+				TrustZone:   trustZone,
 				LastChecked: lastChecked,
 				LatestEntry: latestTitle,
 				Notify:      notifyStr != "false",
@@ -275,6 +307,11 @@ func FollowDefinition() map[string]any {
 			"name": map[string]any{
 				"type":        "string",
 				"description": "Display name for the feed. If omitted, auto-detected from the feed title.",
+			},
+			"trust_zone": map[string]any{
+				"type":        "string",
+				"enum":        []string{"trusted", "known", "unknown"},
+				"description": "Trust level for content from this feed. Controls analysis depth: trusted = extract facts directly, known = extract as claims requiring corroboration, unknown = topics only. Default: unknown.",
 			},
 			"notify": map[string]any{
 				"type":        "boolean",

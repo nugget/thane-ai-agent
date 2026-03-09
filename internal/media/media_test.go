@@ -1,6 +1,7 @@
 package media
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -251,4 +252,42 @@ func TestResultTruncation(t *testing.T) {
 	if !truncated {
 		t.Error("expected truncated = true")
 	}
+}
+
+func TestResultAnalysisGuidance(t *testing.T) {
+	t.Run("included when set", func(t *testing.T) {
+		r := Result{
+			Title:            "Test Video",
+			Transcript:       "content",
+			Source:           "youtube",
+			ID:               "abc123",
+			AnalysisGuidance: "Extract facts directly with source attribution.",
+		}
+		data, err := json.Marshal(r)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		if !strings.Contains(string(data), `"analysis_guidance"`) {
+			t.Error("JSON should contain analysis_guidance field")
+		}
+		if !strings.Contains(string(data), "Extract facts") {
+			t.Error("JSON should contain guidance text")
+		}
+	})
+
+	t.Run("omitted when empty", func(t *testing.T) {
+		r := Result{
+			Title:      "Test Video",
+			Transcript: "content",
+			Source:     "youtube",
+			ID:         "abc123",
+		}
+		data, err := json.Marshal(r)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		if strings.Contains(string(data), "analysis_guidance") {
+			t.Error("JSON should not contain analysis_guidance when empty")
+		}
+	})
 }

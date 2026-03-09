@@ -77,6 +77,10 @@ func TestCheckFeeds_NewEntries(t *testing.T) {
 	if strings.Contains(msg, "Old Video") {
 		t.Errorf("wake message should not contain old video")
 	}
+	// No trust_zone stored → should default to [unknown].
+	if !strings.Contains(msg, "[unknown]") {
+		t.Errorf("wake message should contain default trust zone [unknown], got: %q", msg)
+	}
 
 	// High-water mark should be updated.
 	hwm, _ := store.Get(feedNamespace, feedKeyLastEntryID("test1"))
@@ -222,6 +226,45 @@ func TestCheckFeeds_MultipleNewEntries(t *testing.T) {
 	}
 	if strings.Contains(msg, "Second") {
 		t.Errorf("should not contain Second (already seen)")
+	}
+}
+
+func TestCheckFeeds_TrustZoneInWakeMessage(t *testing.T) {
+	atomXML := `<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom">
+	<title>Trusted Source</title>
+	<entry><id>ep-2</id><title>New Episode</title>
+	<link href="https://example.com/ep2"/>
+	<published>2026-02-22T12:00:00Z</published></entry>
+	<entry><id>ep-1</id><title>Old Episode</title>
+	<link href="https://example.com/ep1"/>
+	<published>2026-02-20T12:00:00Z</published></entry></feed>`
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Write([]byte(atomXML))
+	}))
+	defer srv.Close()
+
+	store := newTestStore(t)
+	saveFeedIndex(store, []string{"tf1"})
+	store.Set(feedNamespace, feedKeyURL("tf1"), srv.URL)
+	store.Set(feedNamespace, feedKeyName("tf1"), "Trusted Source")
+	store.Set(feedNamespace, feedKeyLastEntryID("tf1"), "ep-1")
+	store.Set(feedNamespace, feedKeyTrustZone("tf1"), "trusted")
+
+	poller := NewFeedPoller(store, nil)
+	msg, err := poller.CheckFeeds(context.Background())
+	if err != nil {
+		t.Fatalf("CheckFeeds() error: %v", err)
+	}
+	if !strings.Contains(msg, "[trusted]") {
+		t.Errorf("wake message should contain [trusted], got: %q", msg)
+	}
+	if !strings.Contains(msg, "Trusted Source") {
+		t.Errorf("wake message should contain feed name, got: %q", msg)
+	}
+	// Verify format: **Name** [zone]: Title
+	if !strings.Contains(msg, "**Trusted Source** [trusted]: New Episode") {
+		t.Errorf("wake message format incorrect, got: %q", msg)
 	}
 }
 
