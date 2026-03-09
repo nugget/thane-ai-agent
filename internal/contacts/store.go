@@ -3,6 +3,7 @@ package contacts
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -275,12 +276,20 @@ func (s *Store) FindByName(name string) (*Contact, error) {
 // ambiguous matches if search returns multiple results.
 func (s *Store) ResolveContact(name string) (*Contact, error) {
 	// 1. Exact name match (fast, indexed).
-	if c, err := s.FindByName(name); err == nil {
+	c, err := s.FindByName(name)
+	if err == nil {
 		return c, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("find by name %q: %w", name, err)
 	}
 
 	// 2. preferred_name fact (exact, case-insensitive).
-	if matches, err := s.FindByFactExact("preferred_name", name); err == nil && len(matches) == 1 {
+	matches, err := s.FindByFactExact("preferred_name", name)
+	if err != nil {
+		return nil, fmt.Errorf("find by preferred_name %q: %w", name, err)
+	}
+	if len(matches) == 1 {
 		return matches[0], nil
 	}
 
