@@ -167,6 +167,7 @@ func (s *Store) migrate() error {
 			etag TEXT,
 			embedding BLOB,
 			last_interaction TEXT,
+			last_interaction_meta TEXT,
 			created_at TEXT NOT NULL,
 			updated_at TEXT NOT NULL,
 			deleted_at TEXT
@@ -179,16 +180,6 @@ func (s *Store) migrate() error {
 	`)
 	if err != nil {
 		return err
-	}
-
-	// Add last_interaction_meta column if missing (added in #485).
-	if _, err := s.db.Exec(`ALTER TABLE contacts ADD COLUMN last_interaction_meta TEXT`); err != nil {
-		if strings.Contains(err.Error(), "duplicate column") {
-			// Column already exists — expected on subsequent runs.
-			s.logger.Debug("last_interaction_meta column already exists")
-		} else {
-			return fmt.Errorf("add last_interaction_meta column: %w", err)
-		}
 	}
 
 	// Enforce active name uniqueness (case-insensitive).
