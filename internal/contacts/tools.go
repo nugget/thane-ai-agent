@@ -206,8 +206,10 @@ func (t *Tools) saveProperties(contactID uuid.UUID, facts map[string]string) err
 			propName = k
 		}
 		value := v
-		// For IMPP properties, prefix with the protocol scheme.
-		if propName == "IMPP" && !strings.Contains(v, ":") {
+		// For IMPP properties, prefix with the protocol scheme if not
+		// already present.  Use HasPrefix rather than Contains so that
+		// Matrix IDs like @user:server.com still get the scheme prepended.
+		if propName == "IMPP" && !strings.HasPrefix(v, k+":") {
 			value = k + ":" + v
 		}
 		if err := t.store.AddProperty(contactID, &Property{

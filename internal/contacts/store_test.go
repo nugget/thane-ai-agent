@@ -1225,3 +1225,23 @@ func TestUpsert_VCardFields(t *testing.T) {
 		t.Error("Rev should be set automatically")
 	}
 }
+
+func TestForeignKeysEnabled(t *testing.T) {
+	store := newTestStore(t)
+
+	var enabled int
+	err := store.db.QueryRow(`PRAGMA foreign_keys`).Scan(&enabled)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if enabled != 1 {
+		t.Errorf("foreign_keys pragma = %d, want 1", enabled)
+	}
+
+	// Inserting a property for a non-existent contact should fail.
+	bogusID := uuid.New()
+	err = store.AddProperty(bogusID, &Property{Property: "EMAIL", Value: "nobody@example.com"})
+	if err == nil {
+		t.Error("expected foreign key violation for bogus contact_id")
+	}
+}

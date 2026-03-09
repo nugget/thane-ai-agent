@@ -119,6 +119,13 @@ func NewStore(dbPath string, logger *slog.Logger) (*Store, error) {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
 
+	// Enable foreign key enforcement so ON DELETE CASCADE on
+	// contact_properties actually fires.
+	if _, err := db.Exec(`PRAGMA foreign_keys = ON`); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("enable foreign keys: %w", err)
+	}
+
 	s := &Store{db: db, logger: logger}
 	if err := s.migrate(); err != nil {
 		db.Close()

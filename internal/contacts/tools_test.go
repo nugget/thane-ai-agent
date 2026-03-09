@@ -722,3 +722,34 @@ func TestSaveContact_IMPPPropertyPrefix(t *testing.T) {
 		t.Errorf("expected IMPP property with signal: prefix, got: %+v", props)
 	}
 }
+
+func TestSaveContact_IMPPMatrixColonHandling(t *testing.T) {
+	tools := newTestTools(t)
+
+	// Matrix IDs contain colons (@user:server.com) — the prefix logic
+	// must not skip them.
+	_, err := tools.SaveContact(`{"name":"Matrix User","kind":"individual","facts":{"matrix":"@alice:matrix.org"}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	c, err := tools.store.FindByName("Matrix User")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	props, err := tools.store.GetProperties(c.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	found := false
+	for _, p := range props {
+		if p.Property == "IMPP" && p.Value == "matrix:@alice:matrix.org" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected IMPP property with matrix: prefix for Matrix ID, got: %+v", props)
+	}
+}
