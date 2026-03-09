@@ -38,7 +38,7 @@ func (t *Tools) SetEmbeddingClient(client EmbeddingClient) {
 type SaveContactArgs struct {
 	Name       string            `json:"name"`                  // maps to FormattedName
 	Kind       string            `json:"kind,omitempty"`        // individual, group, org, location
-	TrustZone  string            `json:"trust_zone,omitempty"`  // owner, trusted, known
+	TrustZone  string            `json:"trust_zone,omitempty"`  // admin, household, trusted, known
 	GivenName  string            `json:"given_name,omitempty"`  // vCard N given name
 	FamilyName string            `json:"family_name,omitempty"` // vCard N family name
 	Nickname   string            `json:"nickname,omitempty"`    // vCard NICKNAME

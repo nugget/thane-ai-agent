@@ -745,16 +745,42 @@ func TestUpsert_TrustZoneValidation(t *testing.T) {
 	}
 }
 
-func TestUpsert_TrustZoneOwner(t *testing.T) {
+func TestUpsert_TrustZoneAdmin(t *testing.T) {
 	store := newTestStore(t)
 
-	c := &Contact{FormattedName: "The Owner", Kind: "individual", TrustZone: "owner"}
+	c := &Contact{FormattedName: "The Admin", Kind: "individual", TrustZone: "admin"}
 	created, err := store.Upsert(c)
 	if err != nil {
 		t.Fatalf("Upsert() error = %v", err)
 	}
-	if created.TrustZone != "owner" {
-		t.Errorf("TrustZone = %q, want %q", created.TrustZone, "owner")
+	if created.TrustZone != "admin" {
+		t.Errorf("TrustZone = %q, want %q", created.TrustZone, "admin")
+	}
+}
+
+func TestUpsert_TrustZoneHousehold(t *testing.T) {
+	store := newTestStore(t)
+
+	c := &Contact{FormattedName: "Family Member", Kind: "individual", TrustZone: "household"}
+	created, err := store.Upsert(c)
+	if err != nil {
+		t.Fatalf("Upsert() error = %v", err)
+	}
+	if created.TrustZone != "household" {
+		t.Errorf("TrustZone = %q, want %q", created.TrustZone, "household")
+	}
+}
+
+func TestUpsert_TrustZoneOwnerRejected(t *testing.T) {
+	store := newTestStore(t)
+
+	c := &Contact{FormattedName: "Legacy Owner", Kind: "individual", TrustZone: "owner"}
+	_, err := store.Upsert(c)
+	if err == nil {
+		t.Error("expected error for legacy 'owner' trust zone, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid trust zone") {
+		t.Errorf("error = %q, want to contain 'invalid trust zone'", err.Error())
 	}
 }
 
@@ -762,10 +788,11 @@ func TestFindByTrustZone(t *testing.T) {
 	store := newTestStore(t)
 
 	contacts := []*Contact{
-		{FormattedName: "Owner A", Kind: "individual", TrustZone: "owner"},
-		{FormattedName: "Trusted B", Kind: "individual", TrustZone: "trusted"},
+		{FormattedName: "Admin A", Kind: "individual", TrustZone: "admin"},
+		{FormattedName: "Household B", Kind: "individual", TrustZone: "household"},
 		{FormattedName: "Trusted C", Kind: "individual", TrustZone: "trusted"},
-		{FormattedName: "Known D", Kind: "individual", TrustZone: "known"},
+		{FormattedName: "Trusted D", Kind: "individual", TrustZone: "trusted"},
+		{FormattedName: "Known E", Kind: "individual", TrustZone: "known"},
 	}
 	for _, c := range contacts {
 		if _, err := store.Upsert(c); err != nil {
@@ -777,7 +804,8 @@ func TestFindByTrustZone(t *testing.T) {
 		zone string
 		want int
 	}{
-		{"owner", 1},
+		{"admin", 1},
+		{"household", 1},
 		{"trusted", 2},
 		{"known", 1},
 		{"unknown", 0},

@@ -36,8 +36,8 @@ func (r *Registry) registerContactTools() {
 				},
 				"trust_zone": map[string]any{
 					"type":        "string",
-					"enum":        []string{"owner", "trusted", "known"},
-					"description": "Trust level for this contact. Determines communication permissions across all channels. owner=full access, trusted=free communication, known=gated sends.",
+					"enum":        []string{"admin", "household", "trusted", "known"},
+					"description": "Trust zone for this contact. Gates model access, tool permissions, and send policy. admin=full access, household=family members, trusted=established relationship, known=default/gated.",
 				},
 				"given_name": map[string]any{
 					"type":        "string",
