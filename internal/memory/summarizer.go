@@ -80,15 +80,21 @@ func (c *SummarizerConfig) applyDefaults() {
 // maxTranscriptBytes is the maximum transcript size sent to the LLM.
 const maxTranscriptBytes = 8000
 
+// InteractionCallback is called after successful session
+// summarization to update the contact's last interaction metadata.
+// Parameters: conversationID, sessionID, endedAt, topics (tags).
+type InteractionCallback func(conversationID string, sessionID string, endedAt time.Time, topics []string)
+
 // Worker periodically scans for unsummarized sessions and generates
 // metadata using an LLM via the model router.
 type SummarizerWorker struct {
-	store     *ArchiveStore
-	llmClient llm.Client
-	router    *router.Router
-	logger    *slog.Logger
-	config    SummarizerConfig
-	startTime time.Time // process start time — sessions older than this are orphan candidates
+	store         *ArchiveStore
+	llmClient     llm.Client
+	router        *router.Router
+	logger        *slog.Logger
+	config        SummarizerConfig
+	startTime     time.Time // process start time — sessions older than this are orphan candidates
+	interactionCB InteractionCallback
 
 	cancel context.CancelFunc
 	done   chan struct{}
@@ -106,6 +112,15 @@ func NewSummarizerWorker(store *ArchiveStore, llmClient llm.Client, rtr *router.
 		startTime: time.Now().UTC(),
 		done:      make(chan struct{}),
 	}
+}
+
+// SetInteractionCallback registers a callback invoked after each
+// successful session summarization. The callback receives the
+// conversation ID, session ID, session end time, and LLM-generated
+// topic tags, allowing callers to update contact interaction history
+// without coupling the memory package to the contacts package.
+func (w *SummarizerWorker) SetInteractionCallback(cb InteractionCallback) {
+	w.interactionCB = cb
 }
 
 // Start begins the background summarization worker. It performs an
@@ -328,6 +343,11 @@ func (w *SummarizerWorker) summarizeSession(ctx context.Context, sess *Session) 
 		"model", model,
 		"tags", len(tags),
 	)
+
+	// Notify the interaction callback so contact history can be updated.
+	if w.interactionCB != nil && sess.EndedAt != nil {
+		w.interactionCB(sess.ConversationID, sess.ID, *sess.EndedAt, tags)
+	}
 }
 
 // markEmpty marks a session with no transcript as summarized so it is

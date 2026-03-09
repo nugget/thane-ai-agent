@@ -34,6 +34,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/nugget/thane-ai-agent/internal/agent"
 	"github.com/nugget/thane-ai-agent/internal/awareness"
 	"github.com/nugget/thane-ai-agent/internal/buildinfo"
@@ -804,6 +805,13 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		return fmt.Errorf("open contact store: %w", err)
 	}
 	defer contactStore.Close()
+
+	// Wire summarizer → contact interaction tracking now that the
+	// contact store is available. The callback runs asynchronously
+	// when sessions are summarized by the background worker.
+	summaryWorker.SetInteractionCallback(func(conversationID, sessionID string, endedAt time.Time, topics []string) {
+		updateContactInteraction(contactStore, logger, conversationID, sessionID, endedAt, topics)
+	})
 
 	contactTools := contacts.NewTools(contactStore)
 	if cfg.Identity.ContactName != "" {
@@ -2682,17 +2690,19 @@ func (r *contactPhoneResolver) ResolvePhone(phone string) (string, bool) {
 	return matches[0].FormattedName, true
 }
 
-// contactNameLookup resolves contact names to summaries for channel
-// context injection. Implements agent.ContactLookup.
+// contactNameLookup resolves contact names to rich context profiles for
+// channel context injection. Implements agent.ContactLookup.
 type contactNameLookup struct {
 	store *contacts.Store
 }
 
-// LookupContactByName returns a contact summary for the given name, or
-// nil if no matching contact is found. Database errors other than "not
-// found" are logged so operational issues don't silently disable
-// contact context injection.
-func (r *contactNameLookup) LookupContactByName(name string) *agent.ContactSummary {
+// LookupContact returns a ContactContext for the given name, or nil if
+// no matching contact is found. The source parameter identifies the
+// channel so fields can be gated by trust zone — known-zone contacts
+// only see the channel matching the current source. Database errors
+// other than "not found" are logged so operational issues don't
+// silently disable contact context injection.
+func (r *contactNameLookup) LookupContact(name string, source string) *agent.ContactContext {
 	if r == nil || r.store == nil {
 		return nil
 	}
@@ -2705,17 +2715,228 @@ func (r *contactNameLookup) LookupContactByName(name string) *agent.ContactSumma
 		return nil
 	}
 
-	props, err := r.store.GetPropertiesMap(c.ID)
+	props, err := r.store.GetProperties(c.ID)
 	if err != nil {
 		slog.Error("failed to get properties for contact", "contact_id", c.ID, "name", c.FormattedName, "error", err)
 		props = nil
 	}
 
-	return &agent.ContactSummary{
-		Name:       c.FormattedName,
-		Summary:    c.AISummary,
-		Properties: props,
+	policy := contacts.Policy(c.TrustZone)
+	return buildContactContext(c, props, policy, source, time.Now())
+}
+
+// buildContactContext assembles a ContactContext from a contact record,
+// its properties, and the applicable trust policy. Fields are gated by
+// trust zone — lower zones receive fewer fields.
+func buildContactContext(c *contacts.Contact, props []contacts.Property, policy contacts.ZonePolicy, source string, now time.Time) *agent.ContactContext {
+	ctx := &agent.ContactContext{
+		ID:        c.ID.String(),
+		Name:      c.FormattedName,
+		TrustZone: c.TrustZone,
+		TrustPolicy: &agent.TrustPolicyView{
+			FrontierModel:     policy.FrontierModelAccess,
+			ProactiveOutreach: policy.ProactiveOutreach,
+			ToolAccess:        policy.ToolAccess,
+			SendGating:        policy.SendGating,
+		},
+		ContactSince: c.CreatedAt.Format("2006-01-02"),
 	}
+
+	// Known zone: minimal fields — name, trust_zone, trust_policy,
+	// current-channel only, contact_since.
+	if c.TrustZone == contacts.ZoneKnown {
+		channels := extractChannels(props)
+		if filtered := filterChannelsForSource(channels, source); len(filtered) > 0 {
+			ctx.Channels = filtered
+		}
+		return ctx
+	}
+
+	// Trusted, household, admin: full profile.
+	ctx.GivenName = c.GivenName
+	ctx.FamilyName = c.FamilyName
+	ctx.Summary = c.AISummary
+
+	if c.Org != "" {
+		ctx.Org = &c.Org
+	}
+	if c.Title != "" {
+		ctx.Title = &c.Title
+	}
+	if c.Role != "" {
+		ctx.Role = &c.Role
+	}
+
+	// Extract structured data from properties.
+	ctx.Channels = extractChannels(props)
+	ctx.Groups = extractGroups(props)
+	ctx.Related = extractRelated(props)
+
+	// Interaction history (trusted+).
+	if !c.LastInteraction.IsZero() {
+		ref := &agent.InteractionRef{
+			AgoSeconds: int64(c.LastInteraction.Sub(now).Truncate(time.Second).Seconds()),
+		}
+		if c.LastInteractionMeta != nil {
+			ref.Channel = c.LastInteractionMeta.Channel
+			ref.SessionID = c.LastInteractionMeta.SessionID
+			ref.Topics = c.LastInteractionMeta.Topics
+		}
+		ctx.LastInteraction = ref
+	}
+
+	return ctx
+}
+
+// extractChannels builds a channels map from EMAIL, TEL, and IMPP
+// properties. IMPP values are split on prefix (e.g., "signal:+1..." →
+// channels["signal"]).
+func extractChannels(props []contacts.Property) map[string]any {
+	channels := make(map[string]any)
+
+	var emails, tels []string
+	imppByScheme := make(map[string][]string)
+
+	for _, p := range props {
+		switch p.Property {
+		case "EMAIL":
+			emails = append(emails, p.Value)
+		case "TEL":
+			tels = append(tels, p.Value)
+		case "IMPP":
+			scheme, addr, ok := strings.Cut(p.Value, ":")
+			if ok {
+				imppByScheme[scheme] = append(imppByScheme[scheme], addr)
+			} else {
+				imppByScheme["other"] = append(imppByScheme["other"], p.Value)
+			}
+		}
+	}
+
+	if len(emails) > 0 {
+		channels["email"] = emails
+	}
+	if len(tels) > 0 {
+		channels["tel"] = tels
+	}
+	for scheme, addrs := range imppByScheme {
+		if len(addrs) == 1 {
+			channels[scheme] = addrs[0]
+		} else {
+			channels[scheme] = addrs
+		}
+	}
+
+	if len(channels) == 0 {
+		return nil
+	}
+	return channels
+}
+
+// extractGroups returns group names from CATEGORIES properties.
+// Each CATEGORIES value may be comma-separated per vCard spec.
+func extractGroups(props []contacts.Property) []string {
+	var groups []string
+	for _, p := range props {
+		if p.Property == "CATEGORIES" {
+			for _, cat := range strings.Split(p.Value, ",") {
+				cat = strings.TrimSpace(cat)
+				if cat != "" {
+					groups = append(groups, cat)
+				}
+			}
+		}
+	}
+	return groups
+}
+
+// extractRelated returns related contacts from RELATED properties.
+func extractRelated(props []contacts.Property) []RelatedContact {
+	var related []RelatedContact
+	for _, p := range props {
+		if p.Property == "RELATED" {
+			rc := RelatedContact{Name: p.Value}
+			if p.Type != "" {
+				rc.Type = p.Type
+			}
+			related = append(related, rc)
+		}
+	}
+	return related
+}
+
+// RelatedContact mirrors agent.RelatedContact for the main package
+// builder. We re-export the agent type alias here for clarity.
+type RelatedContact = agent.RelatedContact
+
+// filterChannelsForSource returns only the channel entry matching the
+// source hint. Used for known-zone contacts where only the current
+// communication channel is revealed.
+func filterChannelsForSource(channels map[string]any, source string) map[string]any {
+	if channels == nil {
+		return nil
+	}
+	val, ok := channels[source]
+	if !ok {
+		return nil
+	}
+	return map[string]any{source: val}
+}
+
+// updateContactInteraction resolves a contact from a conversation ID
+// and updates their last interaction metadata. Conversation IDs follow
+// the pattern "channel-address" (e.g., "signal-+15551234567").
+func updateContactInteraction(store *contacts.Store, logger *slog.Logger, conversationID, sessionID string, endedAt time.Time, topics []string) {
+	channel, address, ok := strings.Cut(conversationID, "-")
+	if !ok || channel == "" || address == "" {
+		return // Not a channel conversation (e.g., API, scheduler).
+	}
+
+	contactID, found := resolveContactByChannelAddress(store, channel, address)
+	if !found {
+		return
+	}
+
+	meta := &contacts.InteractionMeta{
+		Channel:   channel,
+		SessionID: sessionID,
+		Topics:    topics,
+	}
+	if err := store.UpdateLastInteraction(contactID, endedAt, meta); err != nil {
+		logger.Warn("failed to update contact interaction",
+			"contact_id", contactID,
+			"conversation_id", conversationID,
+			"error", err,
+		)
+	}
+}
+
+// resolveContactByChannelAddress finds a contact by their channel
+// address. For Signal, checks IMPP (signal:address) then TEL fallback.
+// For email, checks EMAIL property.
+func resolveContactByChannelAddress(store *contacts.Store, channel, address string) (uuid.UUID, bool) {
+	var nilID uuid.UUID
+
+	switch channel {
+	case "signal":
+		// Try IMPP with signal: prefix first.
+		matches, err := store.FindByPropertyExact("IMPP", "signal:"+address)
+		if err == nil && len(matches) == 1 {
+			return matches[0].ID, true
+		}
+		// Fallback to TEL.
+		matches, err = store.FindByPropertyExact("TEL", address)
+		if err == nil && len(matches) == 1 {
+			return matches[0].ID, true
+		}
+	case "email":
+		matches, err := store.FindByPropertyExact("EMAIL", address)
+		if err == nil && len(matches) == 1 {
+			return matches[0].ID, true
+		}
+	}
+
+	return nilID, false
 }
 
 // notifSessionInjector adapts the memory store and archive adapter

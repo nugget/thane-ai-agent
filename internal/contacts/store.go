@@ -4,6 +4,7 @@ package contacts
 
 import (
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -21,7 +22,7 @@ const (
 		additional_names, name_prefix, name_suffix, nickname,
 		birthday, anniversary, gender, org, title, role,
 		note, photo_uri, trust_zone, ai_summary, rev, etag,
-		last_interaction, created_at, updated_at`
+		last_interaction, last_interaction_meta, created_at, updated_at`
 
 	qualifiedContactColumns = `contacts.id, contacts.kind, contacts.formatted_name,
 		contacts.family_name, contacts.given_name, contacts.additional_names,
@@ -30,13 +31,15 @@ const (
 		contacts.org, contacts.title, contacts.role,
 		contacts.note, contacts.photo_uri, contacts.trust_zone,
 		contacts.ai_summary, contacts.rev, contacts.etag,
-		contacts.last_interaction, contacts.created_at, contacts.updated_at`
+		contacts.last_interaction, contacts.last_interaction_meta,
+		contacts.created_at, contacts.updated_at`
 
 	contactColumnsWithEmbed = `id, kind, formatted_name, family_name, given_name,
 		additional_names, name_prefix, name_suffix, nickname,
 		birthday, anniversary, gender, org, title, role,
 		note, photo_uri, trust_zone, ai_summary, rev, etag,
-		embedding, last_interaction, created_at, updated_at`
+		embedding, last_interaction, last_interaction_meta,
+		created_at, updated_at`
 
 	activeFilter = "deleted_at IS NULL"
 )
@@ -52,32 +55,33 @@ var ValidKinds = map[string]bool{
 // Contact represents a vCard-aligned contact record. Fields map to
 // vCard 4.0 (RFC 6350) properties unless noted as Thane extensions.
 type Contact struct {
-	ID              uuid.UUID  `json:"id"`
-	Kind            string     `json:"kind"`                       // vCard KIND: individual, group, org, location
-	FormattedName   string     `json:"formatted_name"`             // vCard FN (display name)
-	FamilyName      string     `json:"family_name,omitempty"`      // vCard N component
-	GivenName       string     `json:"given_name,omitempty"`       // vCard N component
-	AdditionalNames string     `json:"additional_names,omitempty"` // vCard N component
-	NamePrefix      string     `json:"name_prefix,omitempty"`      // vCard N component
-	NameSuffix      string     `json:"name_suffix,omitempty"`      // vCard N component
-	Nickname        string     `json:"nickname,omitempty"`         // vCard NICKNAME
-	Birthday        string     `json:"birthday,omitempty"`         // vCard BDAY (ISO 8601)
-	Anniversary     string     `json:"anniversary,omitempty"`      // vCard ANNIVERSARY
-	Gender          string     `json:"gender,omitempty"`           // vCard GENDER
-	Org             string     `json:"org,omitempty"`              // vCard ORG
-	Title           string     `json:"title,omitempty"`            // vCard TITLE
-	Role            string     `json:"role,omitempty"`             // vCard ROLE
-	Note            string     `json:"note,omitempty"`             // vCard NOTE
-	PhotoURI        string     `json:"photo_uri,omitempty"`        // vCard PHOTO URI
-	TrustZone       string     `json:"trust_zone"`                 // X-THANE-TRUST-ZONE
-	AISummary       string     `json:"ai_summary,omitempty"`       // X-THANE-AI-SUMMARY
-	Rev             string     `json:"rev"`                        // vCard REV (ISO 8601)
-	ETag            string     `json:"etag,omitempty"`             // CardDAV sync
-	Embedding       []float32  `json:"embedding,omitempty"`        // semantic search vector
-	LastInteraction time.Time  `json:"last_interaction,omitempty"`
-	CreatedAt       time.Time  `json:"created_at"`
-	UpdatedAt       time.Time  `json:"updated_at"`
-	Properties      []Property `json:"properties,omitempty"` // populated by GetWithProperties
+	ID                  uuid.UUID        `json:"id"`
+	Kind                string           `json:"kind"`                       // vCard KIND: individual, group, org, location
+	FormattedName       string           `json:"formatted_name"`             // vCard FN (display name)
+	FamilyName          string           `json:"family_name,omitempty"`      // vCard N component
+	GivenName           string           `json:"given_name,omitempty"`       // vCard N component
+	AdditionalNames     string           `json:"additional_names,omitempty"` // vCard N component
+	NamePrefix          string           `json:"name_prefix,omitempty"`      // vCard N component
+	NameSuffix          string           `json:"name_suffix,omitempty"`      // vCard N component
+	Nickname            string           `json:"nickname,omitempty"`         // vCard NICKNAME
+	Birthday            string           `json:"birthday,omitempty"`         // vCard BDAY (ISO 8601)
+	Anniversary         string           `json:"anniversary,omitempty"`      // vCard ANNIVERSARY
+	Gender              string           `json:"gender,omitempty"`           // vCard GENDER
+	Org                 string           `json:"org,omitempty"`              // vCard ORG
+	Title               string           `json:"title,omitempty"`            // vCard TITLE
+	Role                string           `json:"role,omitempty"`             // vCard ROLE
+	Note                string           `json:"note,omitempty"`             // vCard NOTE
+	PhotoURI            string           `json:"photo_uri,omitempty"`        // vCard PHOTO URI
+	TrustZone           string           `json:"trust_zone"`                 // X-THANE-TRUST-ZONE
+	AISummary           string           `json:"ai_summary,omitempty"`       // X-THANE-AI-SUMMARY
+	Rev                 string           `json:"rev"`                        // vCard REV (ISO 8601)
+	ETag                string           `json:"etag,omitempty"`             // CardDAV sync
+	Embedding           []float32        `json:"embedding,omitempty"`        // semantic search vector
+	LastInteraction     time.Time        `json:"last_interaction,omitempty"`
+	LastInteractionMeta *InteractionMeta `json:"last_interaction_meta,omitempty"`
+	CreatedAt           time.Time        `json:"created_at"`
+	UpdatedAt           time.Time        `json:"updated_at"`
+	Properties          []Property       `json:"properties,omitempty"` // populated by GetWithProperties
 }
 
 // Property represents a structured vCard property on a contact.
@@ -96,6 +100,15 @@ type Property struct {
 	Verified  bool      `json:"verified,omitempty"`  // has Thane verified traffic from this?
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+}
+
+// InteractionMeta holds structured metadata about a contact's most
+// recent interaction. Stored as JSON in the last_interaction_meta
+// column so new fields can be added without schema migrations.
+type InteractionMeta struct {
+	Channel   string   `json:"channel,omitempty"`    // e.g. "signal", "email"
+	SessionID string   `json:"session_id,omitempty"` // session that last interacted
+	Topics    []string `json:"topics,omitempty"`     // LLM-generated session tags
 }
 
 // Store manages contact persistence in SQLite.
@@ -166,6 +179,14 @@ func (s *Store) migrate() error {
 	`)
 	if err != nil {
 		return err
+	}
+
+	// Add last_interaction_meta column if missing (added in #485).
+	if _, err := s.db.Exec(`ALTER TABLE contacts ADD COLUMN last_interaction_meta TEXT`); err != nil {
+		// Column already exists — expected on subsequent runs.
+		if !strings.Contains(err.Error(), "duplicate column") {
+			s.logger.Debug("last_interaction_meta column already exists or migration skipped", "error", err)
+		}
 	}
 
 	// Enforce active name uniqueness (case-insensitive).
@@ -270,8 +291,8 @@ func (s *Store) Upsert(c *Contact) (*Contact, error) {
 				additional_names, name_prefix, name_suffix, nickname,
 				birthday, anniversary, gender, org, title, role,
 				note, photo_uri, trust_zone, ai_summary, rev, etag,
-				last_interaction, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				last_interaction, last_interaction_meta, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		`, c.ID.String(), c.Kind, c.FormattedName,
 			nullStr(c.FamilyName), nullStr(c.GivenName), nullStr(c.AdditionalNames),
 			nullStr(c.NamePrefix), nullStr(c.NameSuffix), nullStr(c.Nickname),
@@ -279,7 +300,7 @@ func (s *Store) Upsert(c *Contact) (*Contact, error) {
 			nullStr(c.Org), nullStr(c.Title), nullStr(c.Role),
 			nullStr(c.Note), nullStr(c.PhotoURI),
 			c.TrustZone, nullStr(c.AISummary), c.Rev, nullStr(c.ETag),
-			nullTime(c.LastInteraction),
+			nullTime(c.LastInteraction), nullInteractionMeta(c.LastInteractionMeta),
 			now.Format(time.RFC3339), now.Format(time.RFC3339))
 		if err != nil {
 			return nil, fmt.Errorf("insert: %w", err)
@@ -295,7 +316,7 @@ func (s *Store) Upsert(c *Contact) (*Contact, error) {
 			additional_names = ?, name_prefix = ?, name_suffix = ?, nickname = ?,
 			birthday = ?, anniversary = ?, gender = ?, org = ?, title = ?, role = ?,
 			note = ?, photo_uri = ?, trust_zone = ?, ai_summary = ?, rev = ?, etag = ?,
-			last_interaction = ?, updated_at = ?, deleted_at = NULL
+			last_interaction = ?, last_interaction_meta = ?, updated_at = ?, deleted_at = NULL
 		WHERE id = ?
 	`, c.Kind, c.FormattedName,
 		nullStr(c.FamilyName), nullStr(c.GivenName), nullStr(c.AdditionalNames),
@@ -304,7 +325,7 @@ func (s *Store) Upsert(c *Contact) (*Contact, error) {
 		nullStr(c.Org), nullStr(c.Title), nullStr(c.Role),
 		nullStr(c.Note), nullStr(c.PhotoURI),
 		c.TrustZone, nullStr(c.AISummary), c.Rev, nullStr(c.ETag),
-		nullTime(c.LastInteraction),
+		nullTime(c.LastInteraction), nullInteractionMeta(c.LastInteractionMeta),
 		now.Format(time.RFC3339),
 		c.ID.String())
 	if err != nil {
@@ -592,8 +613,8 @@ func (s *Store) UpsertWithProperties(c *Contact, props []Property) (*Contact, er
 			additional_names, name_prefix, name_suffix, nickname,
 			birthday, anniversary, gender, org, title, role,
 			note, photo_uri, trust_zone, ai_summary, rev, etag,
-			last_interaction, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			last_interaction, last_interaction_meta, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			kind = excluded.kind,
 			formatted_name = excluded.formatted_name,
@@ -616,6 +637,7 @@ func (s *Store) UpsertWithProperties(c *Contact, props []Property) (*Contact, er
 			rev = excluded.rev,
 			etag = excluded.etag,
 			last_interaction = excluded.last_interaction,
+			last_interaction_meta = excluded.last_interaction_meta,
 			updated_at = excluded.updated_at,
 			deleted_at = NULL
 	`, c.ID.String(), c.Kind, c.FormattedName,
@@ -625,7 +647,7 @@ func (s *Store) UpsertWithProperties(c *Contact, props []Property) (*Contact, er
 		nullStr(c.Org), nullStr(c.Title), nullStr(c.Role),
 		nullStr(c.Note), nullStr(c.PhotoURI),
 		c.TrustZone, nullStr(c.AISummary), c.Rev, nullStr(c.ETag),
-		nullTime(c.LastInteraction),
+		nullTime(c.LastInteraction), nullInteractionMeta(c.LastInteractionMeta),
 		now.Format(time.RFC3339), now.Format(time.RFC3339))
 	if err != nil {
 		return nil, fmt.Errorf("upsert contact: %w", err)
@@ -684,6 +706,39 @@ func (s *Store) DeleteByName(name string) error {
 		return fmt.Errorf("find contact: %w", err)
 	}
 	return s.Delete(c.ID)
+}
+
+// --- Interaction tracking ---
+
+// UpdateLastInteraction updates a contact's last interaction timestamp
+// and metadata without touching any other fields. This is a targeted
+// update for the summarizer callback — it avoids a full Upsert which
+// would require populating all contact fields.
+func (s *Store) UpdateLastInteraction(contactID uuid.UUID, t time.Time, meta *InteractionMeta) error {
+	var metaJSON sql.NullString
+	if meta != nil {
+		b, err := json.Marshal(meta)
+		if err != nil {
+			return fmt.Errorf("marshal interaction meta: %w", err)
+		}
+		metaJSON = sql.NullString{String: string(b), Valid: true}
+	}
+
+	result, err := s.db.Exec(`
+		UPDATE contacts SET last_interaction = ?, last_interaction_meta = ?, updated_at = ?
+		WHERE id = ? AND `+activeFilter,
+		t.Format(time.RFC3339), metaJSON,
+		time.Now().UTC().Format(time.RFC3339),
+		contactID.String())
+	if err != nil {
+		return fmt.Errorf("update last interaction: %w", err)
+	}
+
+	affected, _ := result.RowsAffected()
+	if affected == 0 {
+		return fmt.Errorf("contact not found or deleted: %s", contactID)
+	}
+	return nil
 }
 
 // --- Property CRUD ---
@@ -955,31 +1010,32 @@ func (s *Store) Stats() map[string]any {
 // scanTarget holds intermediate scan destinations for a contact row.
 // Keeps the Scan call sites clean despite 24+ columns.
 type scanTarget struct {
-	idStr           string
-	kind            string
-	formattedName   string
-	familyName      sql.NullString
-	givenName       sql.NullString
-	additionalNames sql.NullString
-	namePrefix      sql.NullString
-	nameSuffix      sql.NullString
-	nickname        sql.NullString
-	birthday        sql.NullString
-	anniversary     sql.NullString
-	gender          sql.NullString
-	org             sql.NullString
-	title           sql.NullString
-	role            sql.NullString
-	note            sql.NullString
-	photoURI        sql.NullString
-	trustZone       string
-	aiSummary       sql.NullString
-	rev             string
-	etag            sql.NullString
-	lastInteraction sql.NullString
-	createdStr      string
-	updatedStr      string
-	embeddingBlob   []byte
+	idStr               string
+	kind                string
+	formattedName       string
+	familyName          sql.NullString
+	givenName           sql.NullString
+	additionalNames     sql.NullString
+	namePrefix          sql.NullString
+	nameSuffix          sql.NullString
+	nickname            sql.NullString
+	birthday            sql.NullString
+	anniversary         sql.NullString
+	gender              sql.NullString
+	org                 sql.NullString
+	title               sql.NullString
+	role                sql.NullString
+	note                sql.NullString
+	photoURI            sql.NullString
+	trustZone           string
+	aiSummary           sql.NullString
+	rev                 string
+	etag                sql.NullString
+	lastInteraction     sql.NullString
+	lastInteractionMeta sql.NullString
+	createdStr          string
+	updatedStr          string
+	embeddingBlob       []byte
 }
 
 // dests returns scan destinations matching contactColumns order.
@@ -992,7 +1048,8 @@ func (t *scanTarget) dests() []any {
 		&t.org, &t.title, &t.role,
 		&t.note, &t.photoURI,
 		&t.trustZone, &t.aiSummary, &t.rev, &t.etag,
-		&t.lastInteraction, &t.createdStr, &t.updatedStr,
+		&t.lastInteraction, &t.lastInteractionMeta,
+		&t.createdStr, &t.updatedStr,
 	}
 }
 
@@ -1009,7 +1066,8 @@ func (t *scanTarget) destsWithEmbedding() []any {
 		&t.note, &t.photoURI,
 		&t.trustZone, &t.aiSummary, &t.rev, &t.etag,
 		&t.embeddingBlob,
-		&t.lastInteraction, &t.createdStr, &t.updatedStr,
+		&t.lastInteraction, &t.lastInteractionMeta,
+		&t.createdStr, &t.updatedStr,
 	}
 }
 
@@ -1046,6 +1104,12 @@ func (t *scanTarget) toContact() (*Contact, error) {
 
 	if t.lastInteraction.Valid {
 		c.LastInteraction, _ = time.Parse(time.RFC3339, t.lastInteraction.String)
+	}
+	if t.lastInteractionMeta.Valid {
+		var meta InteractionMeta
+		if jsonErr := json.Unmarshal([]byte(t.lastInteractionMeta.String), &meta); jsonErr == nil {
+			c.LastInteractionMeta = &meta
+		}
 	}
 
 	c.CreatedAt, err = time.Parse(time.RFC3339, t.createdStr)
@@ -1180,6 +1244,17 @@ func nullInt(n int) sql.NullInt64 {
 		return sql.NullInt64{}
 	}
 	return sql.NullInt64{Int64: int64(n), Valid: true}
+}
+
+func nullInteractionMeta(m *InteractionMeta) sql.NullString {
+	if m == nil {
+		return sql.NullString{}
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		return sql.NullString{}
+	}
+	return sql.NullString{String: string(b), Valid: true}
 }
 
 func boolToInt(b bool) int {
