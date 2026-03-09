@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/nugget/thane-ai-agent/internal/database"
 )
 
 // ArchiveReason describes why messages were archived.
@@ -1018,11 +1019,18 @@ func (s *ArchiveStore) scanToolCalls(rows *sql.Rows) ([]ArchivedToolCall, error)
 			return nil, fmt.Errorf("scan tool call: %w", err)
 		}
 
-		tc.StartedAt, _ = time.Parse(time.RFC3339Nano, startStr)
-		tc.ArchivedAt, _ = time.Parse(time.RFC3339Nano, archivedStr)
+		if tc.StartedAt, err = database.ParseTimestamp(startStr); err != nil {
+			return nil, fmt.Errorf("parse tool_call started_at: %w", err)
+		}
+		if tc.ArchivedAt, err = database.ParseTimestamp(archivedStr); err != nil {
+			return nil, fmt.Errorf("parse tool_call archived_at: %w", err)
+		}
 		if completedStr.Valid {
-			t, _ := time.Parse(time.RFC3339Nano, completedStr.String)
-			tc.CompletedAt = &t
+			ts, tsErr := database.ParseTimestamp(completedStr.String)
+			if tsErr != nil {
+				return nil, fmt.Errorf("parse tool_call completed_at: %w", tsErr)
+			}
+			tc.CompletedAt = &ts
 		}
 		if result.Valid {
 			tc.Result = result.String
@@ -1146,7 +1154,9 @@ func (s *ArchiveStore) GetSessionIterations(sessionID string) ([]ArchivedIterati
 			return nil, fmt.Errorf("scan iteration: %w", err)
 		}
 
-		iter.StartedAt, _ = time.Parse(time.RFC3339Nano, startStr)
+		if iter.StartedAt, err = database.ParseTimestamp(startStr); err != nil {
+			return nil, fmt.Errorf("parse iteration started_at: %w", err)
+		}
 		if breakReason.Valid {
 			iter.BreakReason = breakReason.String
 		}
@@ -1311,8 +1321,12 @@ func (s *ArchiveStore) Search(opts SearchOptions) ([]SearchResult, error) {
 			return nil, fmt.Errorf("scan: %w", err)
 		}
 
-		m.Timestamp, _ = time.Parse(time.RFC3339Nano, tsStr)
-		m.ArchivedAt, _ = time.Parse(time.RFC3339Nano, archivedStr)
+		if m.Timestamp, err = database.ParseTimestamp(tsStr); err != nil {
+			return nil, fmt.Errorf("parse message timestamp: %w", err)
+		}
+		if m.ArchivedAt, err = database.ParseTimestamp(archivedStr); err != nil {
+			return nil, fmt.Errorf("parse message archived_at: %w", err)
+		}
 		if toolCalls.Valid {
 			m.ToolCalls = toolCalls.String
 		}
@@ -1407,8 +1421,20 @@ func (s *ArchiveStore) expandContext(
 			continue
 		}
 
-		m.Timestamp, _ = time.Parse(time.RFC3339Nano, tsStr)
-		m.ArchivedAt, _ = time.Parse(time.RFC3339Nano, archivedStr)
+		if m.Timestamp, err = database.ParseTimestamp(tsStr); err != nil {
+			if s.logger != nil {
+				s.logger.Warn("expandContext: invalid message timestamp",
+					"message_id", m.ID, "timestamp", tsStr, "error", err)
+			}
+			continue // Timestamp is required for gap calculation.
+		}
+		if m.ArchivedAt, err = database.ParseTimestamp(archivedStr); err != nil {
+			if s.logger != nil {
+				s.logger.Warn("expandContext: invalid archived_at timestamp",
+					"message_id", m.ID, "archived_at", archivedStr, "error", err)
+			}
+			// Keep the message — ArchivedAt is not used for gap logic.
+		}
 		if toolCalls.Valid {
 			m.ToolCalls = toolCalls.String
 		}
@@ -2107,7 +2133,9 @@ func (s *ArchiveStore) scanSession(row *sql.Row) (*Session, error) {
 		return nil, err
 	}
 
-	populateSession(&sess, startStr, endStr, endReason, summary, title, tagsJSON, metaJSON, parentSessionID, parentToolCallID, s.logger)
+	if err := populateSession(&sess, startStr, endStr, endReason, summary, title, tagsJSON, metaJSON, parentSessionID, parentToolCallID, s.logger); err != nil {
+		return nil, err
+	}
 	return &sess, nil
 }
 
@@ -2124,16 +2152,24 @@ func (s *ArchiveStore) scanSessionRow(rows *sql.Rows) (*Session, error) {
 		return nil, err
 	}
 
-	populateSession(&sess, startStr, endStr, endReason, summary, title, tagsJSON, metaJSON, parentSessionID, parentToolCallID, s.logger)
+	if err := populateSession(&sess, startStr, endStr, endReason, summary, title, tagsJSON, metaJSON, parentSessionID, parentToolCallID, s.logger); err != nil {
+		return nil, err
+	}
 	return &sess, nil
 }
 
 // populateSession fills parsed fields from nullable database columns.
-func populateSession(sess *Session, startStr string, endStr, endReason, summary, title, tagsJSON, metaJSON, parentSessionID, parentToolCallID sql.NullString, logger *slog.Logger) {
-	sess.StartedAt, _ = time.Parse(time.RFC3339Nano, startStr)
+func populateSession(sess *Session, startStr string, endStr, endReason, summary, title, tagsJSON, metaJSON, parentSessionID, parentToolCallID sql.NullString, logger *slog.Logger) error {
+	var err error
+	if sess.StartedAt, err = database.ParseTimestamp(startStr); err != nil {
+		return fmt.Errorf("parse session started_at: %w", err)
+	}
 	if endStr.Valid {
-		t, _ := time.Parse(time.RFC3339Nano, endStr.String)
-		sess.EndedAt = &t
+		ts, tsErr := database.ParseTimestamp(endStr.String)
+		if tsErr != nil {
+			return fmt.Errorf("parse session ended_at: %w", tsErr)
+		}
+		sess.EndedAt = &ts
 	}
 	if endReason.Valid {
 		sess.EndReason = endReason.String
@@ -2165,6 +2201,7 @@ func populateSession(sess *Session, startStr string, endStr, endReason, summary,
 	if parentToolCallID.Valid {
 		sess.ParentToolCallID = parentToolCallID.String
 	}
+	return nil
 }
 
 func (s *ArchiveStore) scanMessages(rows *sql.Rows) ([]Message, error) {
@@ -2183,8 +2220,12 @@ func (s *ArchiveStore) scanMessages(rows *sql.Rows) ([]Message, error) {
 			return nil, fmt.Errorf("scan message: %w", err)
 		}
 
-		m.Timestamp, _ = time.Parse(time.RFC3339Nano, tsStr)
-		m.ArchivedAt, _ = time.Parse(time.RFC3339Nano, archivedStr)
+		if m.Timestamp, err = database.ParseTimestamp(tsStr); err != nil {
+			return nil, fmt.Errorf("parse message timestamp: %w", err)
+		}
+		if m.ArchivedAt, err = database.ParseTimestamp(archivedStr); err != nil {
+			return nil, fmt.Errorf("parse message archived_at: %w", err)
+		}
 		if toolCalls.Valid {
 			m.ToolCalls = toolCalls.String
 		}

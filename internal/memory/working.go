@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"fmt"
 	"time"
+
+	"github.com/nugget/thane-ai-agent/internal/database"
 )
 
 // WorkingMemoryStore persists free-form working memory per conversation.
@@ -57,7 +59,10 @@ func (s *WorkingMemoryStore) Get(conversationID string) (string, time.Time, erro
 		return "", time.Time{}, fmt.Errorf("get working memory: %w", err)
 	}
 
-	updatedAt, _ := time.Parse(time.RFC3339Nano, updatedAtStr)
+	updatedAt, err := database.ParseTimestamp(updatedAtStr)
+	if err != nil {
+		return "", time.Time{}, fmt.Errorf("parse working memory updated_at: %w", err)
+	}
 	return content, updatedAt, nil
 }
 

@@ -342,8 +342,12 @@ func (s *Store) scanTask(row *sql.Row) (*Task, error) {
 	}
 
 	t.Enabled = enabled == 1
-	t.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdAt)
-	t.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updatedAt)
+	if t.CreatedAt, err = database.ParseTimestamp(createdAt); err != nil {
+		return nil, fmt.Errorf("parse created_at: %w", err)
+	}
+	if t.UpdatedAt, err = database.ParseTimestamp(updatedAt); err != nil {
+		return nil, fmt.Errorf("parse updated_at: %w", err)
+	}
 
 	return &t, nil
 }
@@ -367,8 +371,12 @@ func (s *Store) scanTaskRow(rows *sql.Rows) (*Task, error) {
 	}
 
 	t.Enabled = enabled == 1
-	t.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdAt)
-	t.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updatedAt)
+	if t.CreatedAt, err = database.ParseTimestamp(createdAt); err != nil {
+		return nil, fmt.Errorf("parse created_at: %w", err)
+	}
+	if t.UpdatedAt, err = database.ParseTimestamp(updatedAt); err != nil {
+		return nil, fmt.Errorf("parse updated_at: %w", err)
+	}
 
 	return &t, nil
 }
@@ -383,14 +391,22 @@ func (s *Store) scanExecution(row *sql.Row) (*Execution, error) {
 		return nil, err
 	}
 
-	e.ScheduledAt, _ = time.Parse(time.RFC3339Nano, scheduledAt)
+	if e.ScheduledAt, err = database.ParseTimestamp(scheduledAt); err != nil {
+		return nil, fmt.Errorf("parse scheduled_at: %w", err)
+	}
 	if startedAt.Valid {
-		t, _ := time.Parse(time.RFC3339Nano, startedAt.String)
-		e.StartedAt = &t
+		ts, tsErr := database.ParseTimestamp(startedAt.String)
+		if tsErr != nil {
+			return nil, fmt.Errorf("parse started_at: %w", tsErr)
+		}
+		e.StartedAt = &ts
 	}
 	if completedAt.Valid {
-		t, _ := time.Parse(time.RFC3339Nano, completedAt.String)
-		e.CompletedAt = &t
+		ts, tsErr := database.ParseTimestamp(completedAt.String)
+		if tsErr != nil {
+			return nil, fmt.Errorf("parse completed_at: %w", tsErr)
+		}
+		e.CompletedAt = &ts
 	}
 	if result.Valid {
 		e.Result = result.String
@@ -409,14 +425,22 @@ func (s *Store) scanExecutionRow(rows *sql.Rows) (*Execution, error) {
 		return nil, err
 	}
 
-	e.ScheduledAt, _ = time.Parse(time.RFC3339Nano, scheduledAt)
+	if e.ScheduledAt, err = database.ParseTimestamp(scheduledAt); err != nil {
+		return nil, fmt.Errorf("parse scheduled_at: %w", err)
+	}
 	if startedAt.Valid {
-		t, _ := time.Parse(time.RFC3339Nano, startedAt.String)
-		e.StartedAt = &t
+		ts, tsErr := database.ParseTimestamp(startedAt.String)
+		if tsErr != nil {
+			return nil, fmt.Errorf("parse started_at: %w", tsErr)
+		}
+		e.StartedAt = &ts
 	}
 	if completedAt.Valid {
-		t, _ := time.Parse(time.RFC3339Nano, completedAt.String)
-		e.CompletedAt = &t
+		ts, tsErr := database.ParseTimestamp(completedAt.String)
+		if tsErr != nil {
+			return nil, fmt.Errorf("parse completed_at: %w", tsErr)
+		}
+		e.CompletedAt = &ts
 	}
 	if result.Valid {
 		e.Result = result.String

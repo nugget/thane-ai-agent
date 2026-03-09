@@ -3,6 +3,7 @@ package memory
 import (
 	"database/sql"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
@@ -321,8 +322,18 @@ func (s *SQLiteStore) GetAllConversations() []*Conversation {
 			ID:       id,
 			Messages: s.GetMessages(id),
 		}
-		conv.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
-		conv.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt)
+		if t, err := database.ParseTimestamp(createdAt); err != nil {
+			slog.Warn("GetAllConversations: invalid created_at",
+				"conversation_id", id, "created_at", createdAt, "error", err)
+		} else {
+			conv.CreatedAt = t
+		}
+		if t, err := database.ParseTimestamp(updatedAt); err != nil {
+			slog.Warn("GetAllConversations: invalid updated_at",
+				"conversation_id", id, "updated_at", updatedAt, "error", err)
+		} else {
+			conv.UpdatedAt = t
+		}
 
 		convs = append(convs, conv)
 	}
