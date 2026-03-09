@@ -25,6 +25,9 @@ func ToolHandler(c *Client) func(ctx context.Context, args map[string]any) (stri
 		if trustZone == "" {
 			trustZone = "unknown"
 		}
+		if !validFeedTrustZones[trustZone] {
+			return "", fmt.Errorf("media_transcript: invalid trust_zone %q (use trusted, known, or unknown)", trustZone)
+		}
 
 		var detail DetailLevel
 		switch detailStr {

@@ -59,6 +59,24 @@ func TestTranscriptChunkSummaryPrompt(t *testing.T) {
 	}
 }
 
+func TestMediaFeedPollWakePrompt_UsesSharedGuidance(t *testing.T) {
+	prompt := MediaFeedPollWakePrompt("test content summary")
+
+	// The wake template should include guidance text generated from
+	// TrustZoneGuidance, not hard-coded duplicates.
+	for _, zone := range []string{"trusted", "known", "unknown"} {
+		guidance := TrustZoneGuidance(zone)
+		if !strings.Contains(prompt, guidance) {
+			t.Errorf("wake prompt missing TrustZoneGuidance(%q) text %q", zone, guidance)
+		}
+	}
+
+	// Content summary should be injected.
+	if !strings.Contains(prompt, "test content summary") {
+		t.Error("wake prompt missing content summary")
+	}
+}
+
 func TestTrustZoneGuidance(t *testing.T) {
 	tests := []struct {
 		zone string

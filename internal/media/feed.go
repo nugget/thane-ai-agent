@@ -261,10 +261,10 @@ var feedLinkRe = regexp.MustCompile(
 		`href\s*=\s*["']([^"']+)["'][^>]*?type\s*=\s*["']application/(?:rss|atom)\+xml["']` +
 		`)`)
 
-// discoverFeedURL fetches an HTML page and looks for a <link rel="alternate">
-// element with an RSS or Atom feed type. Returns the resolved feed URL on
-// success. This enables following blogs and podcasts by their page URL
-// rather than requiring the user to find the raw feed URL.
+// discoverFeedURL fetches an HTML page and looks for a <link> element with
+// type="application/rss+xml" or type="application/atom+xml". Returns the
+// resolved feed URL on success. This enables following blogs and podcasts
+// by their page URL rather than requiring the user to find the raw feed URL.
 func discoverFeedURL(ctx context.Context, httpClient *http.Client, pageURL string) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, pageURL, nil)
 	if err != nil {
