@@ -188,7 +188,7 @@ func TestSend(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			s := NewSender(tt.ha, tt.resolver, newMockOpstate(), slog.Default())
+			s := NewSender(tt.ha, tt.resolver, newMockOpstate(), "test-thane", slog.Default())
 			err := s.Send(context.Background(), tt.notif)
 
 			if tt.wantErr != "" {
@@ -217,7 +217,7 @@ func TestSend_CallServiceArgs(t *testing.T) {
 		contact: &contacts.Contact{ID: testID, Name: "nugget"},
 		facts:   map[string][]string{"ha_companion_app": {"mobile_app_mcphone"}},
 	}
-	s := NewSender(ha, resolver, newMockOpstate(), slog.Default())
+	s := NewSender(ha, resolver, newMockOpstate(), "test-thane", slog.Default())
 
 	err := s.Send(context.Background(), Notification{
 		Recipient: "nugget",
@@ -267,7 +267,7 @@ func TestSend_OpstateRecord(t *testing.T) {
 		contact: &contacts.Contact{ID: testID, Name: "nugget"},
 		facts:   map[string][]string{"ha_companion_app": {"mobile_app_mcphone"}},
 	}
-	s := NewSender(ha, resolver, ops, slog.Default())
+	s := NewSender(ha, resolver, ops, "test-thane", slog.Default())
 
 	err := s.Send(context.Background(), Notification{
 		Recipient: "nugget",
@@ -310,7 +310,7 @@ func TestSend_OpstateNilSafe(t *testing.T) {
 		contact: &contacts.Contact{ID: testID, Name: "nugget"},
 		facts:   map[string][]string{"ha_companion_app": {"mobile_app_mcphone"}},
 	}
-	s := NewSender(ha, resolver, nil, slog.Default())
+	s := NewSender(ha, resolver, nil, "test-thane", slog.Default())
 
 	err := s.Send(context.Background(), Notification{
 		Recipient: "nugget",
@@ -328,7 +328,7 @@ func TestSend_WithActions(t *testing.T) {
 		contact: &contacts.Contact{ID: testID, Name: "nugget"},
 		facts:   map[string][]string{"ha_companion_app": {"mobile_app_mcphone"}},
 	}
-	s := NewSender(ha, resolver, nil, slog.Default())
+	s := NewSender(ha, resolver, nil, "test-thane", slog.Default())
 
 	err := s.Send(context.Background(), Notification{
 		Recipient: "nugget",
@@ -355,8 +355,8 @@ func TestSend_WithActions(t *testing.T) {
 	if len(actions) != 2 {
 		t.Fatalf("expected 2 actions, got %d", len(actions))
 	}
-	if actions[0]["action"] != "THANE_req-abc-123_approve" {
-		t.Errorf("action[0] = %q, want %q", actions[0]["action"], "THANE_req-abc-123_approve")
+	if actions[0]["action"] != "TEST_THANE_req-abc-123_approve" {
+		t.Errorf("action[0] = %q, want %q", actions[0]["action"], "TEST_THANE_req-abc-123_approve")
 	}
 	if actions[1]["title"] != "No" {
 		t.Errorf("action[1].title = %q, want %q", actions[1]["title"], "No")
@@ -370,7 +370,7 @@ func TestSend_ActionsWithPriority(t *testing.T) {
 		contact: &contacts.Contact{ID: testID, Name: "nugget"},
 		facts:   map[string][]string{"ha_companion_app": {"mobile_app_mcphone"}},
 	}
-	s := NewSender(ha, resolver, nil, slog.Default())
+	s := NewSender(ha, resolver, nil, "test-thane", slog.Default())
 
 	err := s.Send(context.Background(), Notification{
 		Recipient: "nugget",
@@ -402,7 +402,7 @@ func TestSend_NoActionsBackwardCompat(t *testing.T) {
 		contact: &contacts.Contact{ID: testID, Name: "nugget"},
 		facts:   map[string][]string{"ha_companion_app": {"mobile_app_mcphone"}},
 	}
-	s := NewSender(ha, resolver, nil, slog.Default())
+	s := NewSender(ha, resolver, nil, "test-thane", slog.Default())
 
 	err := s.Send(context.Background(), Notification{
 		Recipient: "nugget",
@@ -424,18 +424,18 @@ func TestBuildHAActions(t *testing.T) {
 		{ID: "approve", Label: "Approve"},
 		{ID: "deny", Label: "Deny"},
 	}
-	ha := buildHAActions("req-123", actions)
+	ha := buildHAActions("TEST_THANE", "req-123", actions)
 	if len(ha) != 2 {
 		t.Fatalf("expected 2 actions, got %d", len(ha))
 	}
-	if ha[0]["action"] != "THANE_req-123_approve" {
-		t.Errorf("action = %q, want %q", ha[0]["action"], "THANE_req-123_approve")
+	if ha[0]["action"] != "TEST_THANE_req-123_approve" {
+		t.Errorf("action = %q, want %q", ha[0]["action"], "TEST_THANE_req-123_approve")
 	}
 	if ha[0]["title"] != "Approve" {
 		t.Errorf("title = %q, want %q", ha[0]["title"], "Approve")
 	}
-	if ha[1]["action"] != "THANE_req-123_deny" {
-		t.Errorf("action = %q, want %q", ha[1]["action"], "THANE_req-123_deny")
+	if ha[1]["action"] != "TEST_THANE_req-123_deny" {
+		t.Errorf("action = %q, want %q", ha[1]["action"], "TEST_THANE_req-123_deny")
 	}
 }
 

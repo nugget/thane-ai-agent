@@ -28,24 +28,38 @@ type DelegateSpawner interface {
 	Spawn(ctx context.Context, task, guidance string) error
 }
 
-// CallbackDispatcher handles MQTT messages on the thane/callbacks
-// topic. It parses THANE_ action strings, looks up the notification
-// record, marks it as responded, and routes the response to the
-// appropriate handler (session injection or delegate).
-type CallbackDispatcher struct {
-	records  *RecordStore
-	injector SessionInjector
-	delegate DelegateSpawner
-	logger   *slog.Logger
+// ActionPrefix returns the action string prefix derived from a device
+// name. Hyphens are replaced with underscores and the result is
+// uppercased, e.g. "aimee-thane" becomes "AIMEE_THANE". An empty
+// deviceName falls back to "THANE".
+func ActionPrefix(deviceName string) string {
+	if deviceName == "" {
+		return "THANE"
+	}
+	return strings.ToUpper(strings.ReplaceAll(deviceName, "-", "_"))
 }
 
-// NewCallbackDispatcher creates a callback dispatcher.
-func NewCallbackDispatcher(records *RecordStore, injector SessionInjector, delegate DelegateSpawner, logger *slog.Logger) *CallbackDispatcher {
+// CallbackDispatcher handles MQTT messages on the instance-specific
+// callbacks topic. It parses action strings with the configured prefix,
+// looks up the notification record, marks it as responded, and routes
+// the response to the appropriate handler (session injection or delegate).
+type CallbackDispatcher struct {
+	records      *RecordStore
+	injector     SessionInjector
+	delegate     DelegateSpawner
+	logger       *slog.Logger
+	actionPrefix string // e.g., "AIMEE_THANE"
+}
+
+// NewCallbackDispatcher creates a callback dispatcher. The deviceName
+// parameter is used to derive the action prefix via [ActionPrefix].
+func NewCallbackDispatcher(records *RecordStore, injector SessionInjector, delegate DelegateSpawner, deviceName string, logger *slog.Logger) *CallbackDispatcher {
 	return &CallbackDispatcher{
-		records:  records,
-		injector: injector,
-		delegate: delegate,
-		logger:   logger,
+		records:      records,
+		injector:     injector,
+		delegate:     delegate,
+		logger:       logger,
+		actionPrefix: ActionPrefix(deviceName),
 	}
 }
 
@@ -65,12 +79,14 @@ func (d *CallbackDispatcher) Handle(_ string, payload []byte) {
 		return
 	}
 
-	if !strings.HasPrefix(p.Action, "THANE_") {
-		d.logger.Debug("callback: ignoring non-THANE action", "action", p.Action)
+	prefix := d.actionPrefix + "_"
+	if !strings.HasPrefix(p.Action, prefix) {
+		d.logger.Debug("callback: ignoring action with wrong prefix",
+			"action", p.Action, "expected_prefix", d.actionPrefix)
 		return
 	}
 
-	requestID, actionID, ok := parseCallbackAction(p.Action)
+	requestID, actionID, ok := parseCallbackAction(p.Action, d.actionPrefix)
 	if !ok {
 		d.logger.Warn("callback: failed to parse action string", "action", p.Action)
 		return
@@ -190,10 +206,20 @@ func isValidAction(actions []Action, actionID string) bool {
 }
 
 // parseCallbackAction extracts the request ID and action ID from a
-// callback action string formatted as THANE_{uuid}_{actionID}.
-// UUIDv7 strings are exactly 36 characters (with hyphens).
-func parseCallbackAction(action string) (requestID, actionID string, ok bool) {
-	rest := strings.TrimPrefix(action, "THANE_")
+// callback action string formatted as {prefix}_{uuid}_{actionID}.
+// The caller provides the prefix (e.g., "AIMEE_THANE"); this function
+// strips it plus the trailing underscore, then parses the UUID (36
+// characters with hyphens) and the action ID.
+//
+// The prefix check intentionally overlaps with Handle's prefix guard
+// so that parseCallbackAction is self-contained and safe to call from
+// tests or other entry points without relying on prior validation.
+func parseCallbackAction(action, prefix string) (requestID, actionID string, ok bool) {
+	full := prefix + "_"
+	if !strings.HasPrefix(action, full) {
+		return "", "", false
+	}
+	rest := action[len(full):]
 	if len(rest) < 38 { // 36 (UUID) + 1 (_) + at least 1 char
 		return "", "", false
 	}

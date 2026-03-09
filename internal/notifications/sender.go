@@ -52,19 +52,22 @@ type Notification struct {
 
 // Sender delivers notifications via Home Assistant companion app push.
 type Sender struct {
-	ha       HAClient
-	contacts ContactResolver
-	opstate  OpstateStore
-	logger   *slog.Logger
+	ha           HAClient
+	contacts     ContactResolver
+	opstate      OpstateStore
+	logger       *slog.Logger
+	actionPrefix string // e.g., "AIMEE_THANE"
 }
 
-// NewSender creates a notification sender.
-func NewSender(ha HAClient, contacts ContactResolver, opstate OpstateStore, logger *slog.Logger) *Sender {
+// NewSender creates a notification sender. The deviceName parameter is
+// used to derive the action callback prefix via [ActionPrefix].
+func NewSender(ha HAClient, contacts ContactResolver, opstate OpstateStore, deviceName string, logger *slog.Logger) *Sender {
 	return &Sender{
-		ha:       ha,
-		contacts: contacts,
-		opstate:  opstate,
-		logger:   logger,
+		ha:           ha,
+		contacts:     contacts,
+		opstate:      opstate,
+		logger:       logger,
+		actionPrefix: ActionPrefix(deviceName),
 	}
 }
 
@@ -116,7 +119,7 @@ func (s *Sender) Send(ctx context.Context, n Notification) error {
 		if n.RequestID == "" {
 			return fmt.Errorf("request_id is required when sending actionable notification")
 		}
-		innerData["actions"] = buildHAActions(n.RequestID, n.Actions)
+		innerData["actions"] = buildHAActions(s.actionPrefix, n.RequestID, n.Actions)
 	}
 	if len(innerData) > 0 {
 		data["data"] = innerData
@@ -197,13 +200,13 @@ func priorityData(priority string) map[string]any {
 }
 
 // buildHAActions creates the HA companion app action button definitions.
-// Each action's callback string is formatted as THANE_{requestID}_{actionID}
+// Each action's callback string is formatted as {prefix}_{requestID}_{actionID}
 // so the callback router can parse it back to the originating record.
-func buildHAActions(requestID string, actions []Action) []map[string]any {
+func buildHAActions(prefix, requestID string, actions []Action) []map[string]any {
 	haActions := make([]map[string]any, len(actions))
 	for i, a := range actions {
 		haActions[i] = map[string]any{
-			"action": fmt.Sprintf("THANE_%s_%s", requestID, a.ID),
+			"action": fmt.Sprintf("%s_%s_%s", prefix, requestID, a.ID),
 			"title":  a.Label,
 		}
 	}

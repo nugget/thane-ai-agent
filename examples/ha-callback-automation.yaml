@@ -1,0 +1,48 @@
+# Home Assistant automation: Agent Callback Router
+#
+# Routes actionable notification callbacks to the correct Thane
+# instance's MQTT topic. Each agent instance embeds its identity in the
+# action string prefix:
+#
+#   {PREFIX}_{requestID}_{actionID}
+#
+# where PREFIX is the uppercased, underscore-delimited form of the
+# device_name from the agent's MQTT config (e.g., device_name
+# "aimee-thane" produces prefix "AIMEE_THANE").
+#
+# This automation extracts the prefix, converts it back to the
+# device-name form, and publishes to thane/{device-name}/callbacks.
+# Adding a new agent instance requires zero automation changes.
+#
+# Action string format:
+#   AIMEE_THANE_01961fee-1234-7000-8000-abcdef012345_approve
+#   ^^^^^^^^^^^ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^  ^^^^^^^
+#     prefix              UUIDv7 request ID           action ID
+#
+# Keep this file in sync with internal/notifications/callback.go
+# (ActionPrefix) and internal/notifications/sender.go (buildHAActions).
+
+alias: "Agent Callback Router"
+description: >-
+  Receives mobile_app_notification_action events and publishes
+  the action payload to the originating agent's MQTT callback topic.
+trigger:
+  - platform: event
+    event_type: mobile_app_notification_action
+action:
+  - variables:
+      action_str: "{{ trigger.event.data.action }}"
+      # Strip everything from the first UUID segment onward, leaving
+      # only the instance prefix, then convert back to the device-name
+      # form used in MQTT topics. This assumes device_name is a
+      # lowercase hyphenated slug (e.g., "aimee-thane"), which is the
+      # convention enforced by the agent's config loader.
+      device_name: >-
+        {{ action_str | regex_replace('_[0-9a-f]{8}-.*$', '') | lower | replace('_', '-') }}
+  - service: mqtt.publish
+    data:
+      topic: "thane/{{ device_name }}/callbacks"
+      payload: >-
+        {"action":"{{ action_str }}","timestamp":"{{ now().isoformat() }}"}
+mode: parallel
+max: 20

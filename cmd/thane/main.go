@@ -815,7 +815,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	var notifRecords *notifications.RecordStore
 	var notifRouter *notifications.NotificationRouter
 	if ha != nil {
-		notifSender = notifications.NewSender(ha, contactStore, opStore, logger)
+		notifSender = notifications.NewSender(ha, contactStore, opStore, cfg.MQTT.DeviceName, logger)
 		loop.Tools().SetHANotifier(notifSender)
 		logger.Info("HA notification sender initialized")
 
@@ -1547,7 +1547,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		sessionInj := &notifSessionInjector{mem: mem, archiver: archiveAdapter}
 		delegateSpn := &notifDelegateSpawner{exec: delegateExec}
 		notifCallbackDispatcher = notifications.NewCallbackDispatcher(
-			notifRecords, sessionInj, delegateSpn, logger,
+			notifRecords, sessionInj, delegateSpn, cfg.MQTT.DeviceName, logger,
 		)
 
 		// Use the router for escalation so timeout_action: "escalate"
@@ -2095,12 +2095,14 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 			server: server,
 		}
 
-		// Auto-subscribe to the callback topic when actionable
-		// notifications are enabled. The subscription is appended to
-		// the user-configured list so both ambient awareness topics
-		// and the callback topic are active.
+		// Auto-subscribe to the instance-specific callback topic when
+		// actionable notifications are enabled. The topic follows the
+		// existing baseTopic convention: thane/{device_name}/callbacks.
+		// The subscription is appended to the user-configured list so
+		// both ambient awareness topics and the callback topic are active.
+		var callbackTopic string
 		if notifCallbackDispatcher != nil {
-			const callbackTopic = "thane/callbacks"
+			callbackTopic = "thane/" + cfg.MQTT.DeviceName + "/callbacks"
 			found := false
 			for _, sub := range cfg.MQTT.Subscriptions {
 				if sub.Topic == callbackTopic {
@@ -2113,17 +2115,19 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 					Topic: callbackTopic,
 				})
 			}
+			logger.Info("notification callback topic configured", "topic", callbackTopic)
 		}
 
 		mqttPub = mqtt.New(cfg.MQTT, mqttInstanceID, dailyTokens, statsAdapter, logger)
 
-		// Composite MQTT message handler: routes thane/callbacks to
-		// the notification dispatcher, everything else gets default
-		// debug logging.
+		// Composite MQTT message handler: routes the instance callback
+		// topic to the notification dispatcher, everything else gets
+		// default debug logging.
 		if notifCallbackDispatcher != nil {
 			dispatcher := notifCallbackDispatcher // capture for closure
+			cbTopic := callbackTopic              // capture for closure
 			mqttPub.SetMessageHandler(func(topic string, payload []byte) {
-				if topic == "thane/callbacks" {
+				if topic == cbTopic {
 					dispatcher.Handle(topic, payload)
 					return
 				}

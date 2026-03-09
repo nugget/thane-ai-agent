@@ -21,7 +21,7 @@ func newTestTimeoutWatcher(t *testing.T) (*TimeoutWatcher, *RecordStore, *mockIn
 
 	inj := &mockInjector{alive: false}
 	del := newMockDelegateSpawner()
-	dispatcher := NewCallbackDispatcher(store, inj, del, slog.Default())
+	dispatcher := NewCallbackDispatcher(store, inj, del, "test-thane", slog.Default())
 	watcher := NewTimeoutWatcher(store, dispatcher, nil, 10*time.Millisecond, slog.Default())
 	return watcher, store, inj, del
 }
