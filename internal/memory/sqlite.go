@@ -321,8 +321,8 @@ func (s *SQLiteStore) GetAllConversations() []*Conversation {
 			ID:       id,
 			Messages: s.GetMessages(id),
 		}
-		conv.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
-		conv.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt)
+		conv.CreatedAt, _ = database.ParseTimestamp(createdAt)
+		conv.UpdatedAt, _ = database.ParseTimestamp(updatedAt)
 
 		convs = append(convs, conv)
 	}

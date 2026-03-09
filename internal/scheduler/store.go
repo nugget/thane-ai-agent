@@ -342,8 +342,8 @@ func (s *Store) scanTask(row *sql.Row) (*Task, error) {
 	}
 
 	t.Enabled = enabled == 1
-	t.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdAt)
-	t.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updatedAt)
+	t.CreatedAt, _ = database.ParseTimestamp(createdAt)
+	t.UpdatedAt, _ = database.ParseTimestamp(updatedAt)
 
 	return &t, nil
 }
@@ -367,8 +367,8 @@ func (s *Store) scanTaskRow(rows *sql.Rows) (*Task, error) {
 	}
 
 	t.Enabled = enabled == 1
-	t.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdAt)
-	t.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updatedAt)
+	t.CreatedAt, _ = database.ParseTimestamp(createdAt)
+	t.UpdatedAt, _ = database.ParseTimestamp(updatedAt)
 
 	return &t, nil
 }
@@ -383,13 +383,13 @@ func (s *Store) scanExecution(row *sql.Row) (*Execution, error) {
 		return nil, err
 	}
 
-	e.ScheduledAt, _ = time.Parse(time.RFC3339Nano, scheduledAt)
+	e.ScheduledAt, _ = database.ParseTimestamp(scheduledAt)
 	if startedAt.Valid {
-		t, _ := time.Parse(time.RFC3339Nano, startedAt.String)
+		t, _ := database.ParseTimestamp(startedAt.String)
 		e.StartedAt = &t
 	}
 	if completedAt.Valid {
-		t, _ := time.Parse(time.RFC3339Nano, completedAt.String)
+		t, _ := database.ParseTimestamp(completedAt.String)
 		e.CompletedAt = &t
 	}
 	if result.Valid {
@@ -409,13 +409,13 @@ func (s *Store) scanExecutionRow(rows *sql.Rows) (*Execution, error) {
 		return nil, err
 	}
 
-	e.ScheduledAt, _ = time.Parse(time.RFC3339Nano, scheduledAt)
+	e.ScheduledAt, _ = database.ParseTimestamp(scheduledAt)
 	if startedAt.Valid {
-		t, _ := time.Parse(time.RFC3339Nano, startedAt.String)
+		t, _ := database.ParseTimestamp(startedAt.String)
 		e.StartedAt = &t
 	}
 	if completedAt.Valid {
-		t, _ := time.Parse(time.RFC3339Nano, completedAt.String)
+		t, _ := database.ParseTimestamp(completedAt.String)
 		e.CompletedAt = &t
 	}
 	if result.Valid {

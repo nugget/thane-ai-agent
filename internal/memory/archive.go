@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/nugget/thane-ai-agent/internal/database"
 )
 
 // ArchiveReason describes why messages were archived.
@@ -1018,10 +1019,10 @@ func (s *ArchiveStore) scanToolCalls(rows *sql.Rows) ([]ArchivedToolCall, error)
 			return nil, fmt.Errorf("scan tool call: %w", err)
 		}
 
-		tc.StartedAt, _ = time.Parse(time.RFC3339Nano, startStr)
-		tc.ArchivedAt, _ = time.Parse(time.RFC3339Nano, archivedStr)
+		tc.StartedAt, _ = database.ParseTimestamp(startStr)
+		tc.ArchivedAt, _ = database.ParseTimestamp(archivedStr)
 		if completedStr.Valid {
-			t, _ := time.Parse(time.RFC3339Nano, completedStr.String)
+			t, _ := database.ParseTimestamp(completedStr.String)
 			tc.CompletedAt = &t
 		}
 		if result.Valid {
@@ -1146,7 +1147,7 @@ func (s *ArchiveStore) GetSessionIterations(sessionID string) ([]ArchivedIterati
 			return nil, fmt.Errorf("scan iteration: %w", err)
 		}
 
-		iter.StartedAt, _ = time.Parse(time.RFC3339Nano, startStr)
+		iter.StartedAt, _ = database.ParseTimestamp(startStr)
 		if breakReason.Valid {
 			iter.BreakReason = breakReason.String
 		}
@@ -1311,8 +1312,8 @@ func (s *ArchiveStore) Search(opts SearchOptions) ([]SearchResult, error) {
 			return nil, fmt.Errorf("scan: %w", err)
 		}
 
-		m.Timestamp, _ = time.Parse(time.RFC3339Nano, tsStr)
-		m.ArchivedAt, _ = time.Parse(time.RFC3339Nano, archivedStr)
+		m.Timestamp, _ = database.ParseTimestamp(tsStr)
+		m.ArchivedAt, _ = database.ParseTimestamp(archivedStr)
 		if toolCalls.Valid {
 			m.ToolCalls = toolCalls.String
 		}
@@ -1407,8 +1408,8 @@ func (s *ArchiveStore) expandContext(
 			continue
 		}
 
-		m.Timestamp, _ = time.Parse(time.RFC3339Nano, tsStr)
-		m.ArchivedAt, _ = time.Parse(time.RFC3339Nano, archivedStr)
+		m.Timestamp, _ = database.ParseTimestamp(tsStr)
+		m.ArchivedAt, _ = database.ParseTimestamp(archivedStr)
 		if toolCalls.Valid {
 			m.ToolCalls = toolCalls.String
 		}
@@ -2130,9 +2131,9 @@ func (s *ArchiveStore) scanSessionRow(rows *sql.Rows) (*Session, error) {
 
 // populateSession fills parsed fields from nullable database columns.
 func populateSession(sess *Session, startStr string, endStr, endReason, summary, title, tagsJSON, metaJSON, parentSessionID, parentToolCallID sql.NullString, logger *slog.Logger) {
-	sess.StartedAt, _ = time.Parse(time.RFC3339Nano, startStr)
+	sess.StartedAt, _ = database.ParseTimestamp(startStr)
 	if endStr.Valid {
-		t, _ := time.Parse(time.RFC3339Nano, endStr.String)
+		t, _ := database.ParseTimestamp(endStr.String)
 		sess.EndedAt = &t
 	}
 	if endReason.Valid {
@@ -2183,8 +2184,8 @@ func (s *ArchiveStore) scanMessages(rows *sql.Rows) ([]Message, error) {
 			return nil, fmt.Errorf("scan message: %w", err)
 		}
 
-		m.Timestamp, _ = time.Parse(time.RFC3339Nano, tsStr)
-		m.ArchivedAt, _ = time.Parse(time.RFC3339Nano, archivedStr)
+		m.Timestamp, _ = database.ParseTimestamp(tsStr)
+		m.ArchivedAt, _ = database.ParseTimestamp(archivedStr)
 		if toolCalls.Valid {
 			m.ToolCalls = toolCalls.String
 		}

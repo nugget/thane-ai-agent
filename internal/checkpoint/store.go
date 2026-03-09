@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/nugget/thane-ai-agent/internal/database"
 )
 
 // Store handles checkpoint persistence.
@@ -216,7 +217,7 @@ func (s *Store) scanFull(row *sql.Row) (*Checkpoint, error) {
 	}
 
 	cp.ID, _ = uuid.Parse(idStr)
-	cp.CreatedAt, _ = time.Parse(time.RFC3339, createdStr)
+	cp.CreatedAt, _ = database.ParseTimestamp(createdStr)
 	cp.Trigger = Trigger(triggerStr)
 	if note.Valid {
 		cp.Note = note.String
@@ -252,7 +253,7 @@ func (s *Store) scanMeta(rows *sql.Rows) (*Checkpoint, error) {
 	}
 
 	cp.ID, _ = uuid.Parse(idStr)
-	cp.CreatedAt, _ = time.Parse(time.RFC3339, createdStr)
+	cp.CreatedAt, _ = database.ParseTimestamp(createdStr)
 	cp.Trigger = Trigger(triggerStr)
 	if note.Valid {
 		cp.Note = note.String

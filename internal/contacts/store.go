@@ -1096,7 +1096,7 @@ func (t *scanTarget) toContact() (*Contact, error) {
 	}
 
 	if t.lastInteraction.Valid {
-		c.LastInteraction, _ = time.Parse(time.RFC3339, t.lastInteraction.String)
+		c.LastInteraction, _ = database.ParseTimestamp(t.lastInteraction.String)
 	}
 	if t.lastInteractionMeta.Valid {
 		var meta InteractionMeta
@@ -1105,11 +1105,11 @@ func (t *scanTarget) toContact() (*Contact, error) {
 		}
 	}
 
-	c.CreatedAt, err = time.Parse(time.RFC3339, t.createdStr)
+	c.CreatedAt, err = database.ParseTimestamp(t.createdStr)
 	if err != nil {
 		return nil, fmt.Errorf("parse created_at: %w", err)
 	}
-	c.UpdatedAt, err = time.Parse(time.RFC3339, t.updatedStr)
+	c.UpdatedAt, err = database.ParseTimestamp(t.updatedStr)
 	if err != nil {
 		return nil, fmt.Errorf("parse updated_at: %w", err)
 	}
@@ -1184,8 +1184,8 @@ func scanProperty(rows *sql.Rows) (Property, error) {
 	p.Label = label.String
 	p.MediaType = mediatype.String
 	p.Verified = verified != 0
-	p.CreatedAt, _ = time.Parse(time.RFC3339, createdStr)
-	p.UpdatedAt, _ = time.Parse(time.RFC3339, updatedStr)
+	p.CreatedAt, _ = database.ParseTimestamp(createdStr)
+	p.UpdatedAt, _ = database.ParseTimestamp(updatedStr)
 
 	return p, nil
 }

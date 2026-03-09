@@ -518,9 +518,9 @@ func (s *Store) scanFact(row *sql.Row) (*Fact, error) {
 	if refRaw.Valid {
 		f.Ref = refRaw.String
 	}
-	f.CreatedAt, _ = time.Parse(time.RFC3339, createdStr)
-	f.UpdatedAt, _ = time.Parse(time.RFC3339, updatedStr)
-	f.AccessedAt, _ = time.Parse(time.RFC3339, accessedStr)
+	f.CreatedAt, _ = database.ParseTimestamp(createdStr)
+	f.UpdatedAt, _ = database.ParseTimestamp(updatedStr)
+	f.AccessedAt, _ = database.ParseTimestamp(accessedStr)
 
 	return &f, nil
 }
@@ -546,9 +546,9 @@ func (s *Store) scanFactRow(rows *sql.Rows) (*Fact, error) {
 	if refRaw.Valid {
 		f.Ref = refRaw.String
 	}
-	f.CreatedAt, _ = time.Parse(time.RFC3339, createdStr)
-	f.UpdatedAt, _ = time.Parse(time.RFC3339, updatedStr)
-	f.AccessedAt, _ = time.Parse(time.RFC3339, accessedStr)
+	f.CreatedAt, _ = database.ParseTimestamp(createdStr)
+	f.UpdatedAt, _ = database.ParseTimestamp(updatedStr)
+	f.AccessedAt, _ = database.ParseTimestamp(accessedStr)
 
 	return &f, nil
 }
@@ -669,9 +669,9 @@ func (s *Store) scanFactWithEmbedding(rows *sql.Rows) (*Fact, error) {
 		f.Ref = refRaw.String
 	}
 	f.Embedding = DecodeEmbedding(embeddingBlob)
-	f.CreatedAt, _ = time.Parse(time.RFC3339, createdStr)
-	f.UpdatedAt, _ = time.Parse(time.RFC3339, updatedStr)
-	f.AccessedAt, _ = time.Parse(time.RFC3339, accessedStr)
+	f.CreatedAt, _ = database.ParseTimestamp(createdStr)
+	f.UpdatedAt, _ = database.ParseTimestamp(updatedStr)
+	f.AccessedAt, _ = database.ParseTimestamp(accessedStr)
 
 	return &f, nil
 }
