@@ -55,7 +55,7 @@ type HealthFunc func() map[string]HealthStatus
 type ContactStore interface {
 	ListAll() ([]*contacts.Contact, error)
 	Search(query string) ([]*contacts.Contact, error)
-	GetWithFacts(id uuid.UUID) (*contacts.Contact, error)
+	GetWithProperties(id uuid.UUID) (*contacts.Contact, error)
 	FindByTrustZone(zone string) ([]*contacts.Contact, error)
 	ListByKind(kind string) ([]*contacts.Contact, error)
 }

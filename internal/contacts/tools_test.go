@@ -25,7 +25,7 @@ func newTestTools(t *testing.T) *Tools {
 func TestSaveContact_New(t *testing.T) {
 	tools := newTestTools(t)
 
-	result, err := tools.SaveContact(`{"name":"Alice Johnson","kind":"person","relationship":"colleague","summary":"Works at Anthropic"}`)
+	result, err := tools.SaveContact(`{"name":"Alice Johnson","kind":"individual","ai_summary":"Works at Anthropic"}`)
 	if err != nil {
 		t.Fatalf("SaveContact() error = %v", err)
 	}
@@ -36,27 +36,24 @@ func TestSaveContact_New(t *testing.T) {
 		t.Errorf("result = %q, want to contain 'Saved new contact'", result)
 	}
 
-	// Verify stored.
 	c, err := tools.store.FindByName("Alice Johnson")
 	if err != nil {
 		t.Fatalf("FindByName() error = %v", err)
 	}
-	if c.Relationship != "colleague" {
-		t.Errorf("Relationship = %q, want %q", c.Relationship, "colleague")
+	if c.AISummary != "Works at Anthropic" {
+		t.Errorf("AISummary = %q, want %q", c.AISummary, "Works at Anthropic")
 	}
 }
 
 func TestSaveContact_Update(t *testing.T) {
 	tools := newTestTools(t)
 
-	// Create.
-	_, err := tools.SaveContact(`{"name":"Bob Smith","kind":"person","summary":"Original"}`)
+	_, err := tools.SaveContact(`{"name":"Bob Smith","kind":"individual","ai_summary":"Original"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// Update.
-	result, err := tools.SaveContact(`{"name":"Bob Smith","relationship":"friend","summary":"Updated"}`)
+	result, err := tools.SaveContact(`{"name":"Bob Smith","note":"Updated note","ai_summary":"Updated"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,18 +65,19 @@ func TestSaveContact_Update(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Summary != "Updated" {
-		t.Errorf("Summary = %q, want %q", c.Summary, "Updated")
+	if c.AISummary != "Updated" {
+		t.Errorf("AISummary = %q, want %q", c.AISummary, "Updated")
 	}
-	if c.Relationship != "friend" {
-		t.Errorf("Relationship = %q, want %q", c.Relationship, "friend")
+	if c.Note != "Updated note" {
+		t.Errorf("Note = %q, want %q", c.Note, "Updated note")
 	}
 }
 
 func TestSaveContact_WithFacts(t *testing.T) {
 	tools := newTestTools(t)
 
-	_, err := tools.SaveContact(`{"name":"Charlie Facts","kind":"person","facts":{"email":"charlie@example.com","phone":"555-9999"}}`)
+	// All entries go to contact_properties.
+	_, err := tools.SaveContact(`{"name":"Charlie Facts","kind":"individual","facts":{"email":"charlie@example.com","phone":"555-9999","timezone":"America/Chicago"}}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,22 +87,36 @@ func TestSaveContact_WithFacts(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	facts, err := tools.store.GetFacts(c.ID)
+	props, err := tools.store.GetProperties(c.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(facts["email"]) != 1 || facts["email"][0] != "charlie@example.com" {
-		t.Errorf("email = %v, want [charlie@example.com]", facts["email"])
+	foundEmail, foundTel, foundTZ := false, false, false
+	for _, p := range props {
+		if p.Property == "EMAIL" && p.Value == "charlie@example.com" {
+			foundEmail = true
+		}
+		if p.Property == "TEL" && p.Value == "555-9999" {
+			foundTel = true
+		}
+		if p.Property == "timezone" && p.Value == "America/Chicago" {
+			foundTZ = true
+		}
 	}
-	if len(facts["phone"]) != 1 || facts["phone"][0] != "555-9999" {
-		t.Errorf("phone = %v, want [555-9999]", facts["phone"])
+	if !foundEmail {
+		t.Error("expected EMAIL property for charlie@example.com")
+	}
+	if !foundTel {
+		t.Error("expected TEL property for 555-9999")
+	}
+	if !foundTZ {
+		t.Error("expected timezone property for America/Chicago")
 	}
 }
 
 func TestSaveContact_TopLevelFieldsRescued(t *testing.T) {
 	tools := newTestTools(t)
 
-	// Simulate what models actually send: email, phone, notes as top-level keys.
 	result, err := tools.SaveContact(`{
 		"name": "James Harren",
 		"email": "shaded123@gmail.com",
@@ -122,28 +134,43 @@ func TestSaveContact_TopLevelFieldsRescued(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	facts, err := tools.store.GetFacts(c.ID)
+
+	// email → EMAIL property, phone → TEL property.
+	props, err := tools.store.GetProperties(c.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	checks := map[string]string{
-		"email": "shaded123@gmail.com",
-		"phone": "555-1234",
-		"notes": "First Thane beta tester candidate",
-	}
-	for key, want := range checks {
-		vals := facts[key]
-		if len(vals) != 1 || vals[0] != want {
-			t.Errorf("fact %q = %v, want [%s]", key, vals, want)
+	foundEmail, foundTel := false, false
+	for _, p := range props {
+		if p.Property == "EMAIL" && p.Value == "shaded123@gmail.com" {
+			foundEmail = true
 		}
+		if p.Property == "TEL" && p.Value == "555-1234" {
+			foundTel = true
+		}
+	}
+	if !foundEmail {
+		t.Error("expected EMAIL property for rescued email")
+	}
+	if !foundTel {
+		t.Error("expected TEL property for rescued phone")
+	}
+
+	// notes goes to properties (with its key as-is).
+	foundNotes := false
+	for _, p := range props {
+		if p.Property == "notes" && p.Value == "First Thane beta tester candidate" {
+			foundNotes = true
+		}
+	}
+	if !foundNotes {
+		t.Error("expected notes property for rescued notes field")
 	}
 }
 
 func TestSaveContact_TopLevelFieldsMergeWithExplicitFacts(t *testing.T) {
 	tools := newTestTools(t)
 
-	// Both explicit facts and top-level fields present — both should be saved.
 	_, err := tools.SaveContact(`{
 		"name": "Mixed Fields",
 		"email": "mixed@example.com",
@@ -157,16 +184,31 @@ func TestSaveContact_TopLevelFieldsMergeWithExplicitFacts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	facts, err := tools.store.GetFacts(c.ID)
+
+	// email → EMAIL property.
+	props, err := tools.store.GetProperties(c.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	if len(facts["email"]) != 1 || facts["email"][0] != "mixed@example.com" {
-		t.Errorf("email = %v, want [mixed@example.com]", facts["email"])
+	foundEmail := false
+	for _, p := range props {
+		if p.Property == "EMAIL" && p.Value == "mixed@example.com" {
+			foundEmail = true
+		}
 	}
-	if len(facts["timezone"]) != 1 || facts["timezone"][0] != "America/Chicago" {
-		t.Errorf("timezone = %v, want [America/Chicago]", facts["timezone"])
+	if !foundEmail {
+		t.Error("expected EMAIL property for rescued email")
+	}
+
+	// timezone → property.
+	foundTZ := false
+	for _, p := range props {
+		if p.Property == "timezone" && p.Value == "America/Chicago" {
+			foundTZ = true
+		}
+	}
+	if !foundTZ {
+		t.Error("expected timezone property for America/Chicago")
 	}
 }
 
@@ -188,20 +230,26 @@ func TestSaveContact_ExplicitFactsTakePrecedence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	facts, err := tools.store.GetFacts(c.ID)
+
+	// The explicit email should be the one stored as a property.
+	props, err := tools.store.GetProperties(c.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	if len(facts["email"]) != 1 || facts["email"][0] != "explicit@example.com" {
-		t.Errorf("email = %v, want [explicit@example.com] (explicit facts should win)", facts["email"])
+	foundExplicit := false
+	for _, p := range props {
+		if p.Property == "EMAIL" && p.Value == "explicit@example.com" {
+			foundExplicit = true
+		}
+	}
+	if !foundExplicit {
+		t.Errorf("expected EMAIL property for explicit@example.com, got props: %+v", props)
 	}
 }
 
 func TestSaveContact_TopLevelFieldsIgnoreNonString(t *testing.T) {
 	tools := newTestTools(t)
 
-	// Non-string top-level values should be ignored (not rescued).
 	_, err := tools.SaveContact(`{
 		"name": "Typed Fields",
 		"email": "typed@example.com",
@@ -216,20 +264,25 @@ func TestSaveContact_TopLevelFieldsIgnoreNonString(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	facts, err := tools.store.GetFacts(c.ID)
-	if err != nil {
-		t.Fatal(err)
+
+	// email → EMAIL property.
+	props, _ := tools.store.GetProperties(c.ID)
+	foundEmail := false
+	for _, p := range props {
+		if p.Property == "EMAIL" {
+			foundEmail = true
+		}
+	}
+	if !foundEmail {
+		t.Error("email should be rescued as EMAIL property")
 	}
 
-	// email is a string — should be rescued.
-	if len(facts["email"]) != 1 {
-		t.Errorf("email should be rescued, got %v", facts["email"])
-	}
 	// count and active are not strings — should not be rescued.
-	if _, exists := facts["count"]; exists {
+	propsMap, _ := tools.store.GetPropertiesMap(c.ID)
+	if _, exists := propsMap["count"]; exists {
 		t.Error("non-string field 'count' should not be rescued")
 	}
-	if _, exists := facts["active"]; exists {
+	if _, exists := propsMap["active"]; exists {
 		t.Error("non-string field 'active' should not be rescued")
 	}
 }
@@ -237,13 +290,11 @@ func TestSaveContact_TopLevelFieldsIgnoreNonString(t *testing.T) {
 func TestSaveContact_TopLevelFieldsOnUpdate(t *testing.T) {
 	tools := newTestTools(t)
 
-	// Create first.
-	_, err := tools.SaveContact(`{"name": "Update Target", "kind": "person"}`)
+	_, err := tools.SaveContact(`{"name": "Update Target", "kind": "individual"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// Update with top-level fields.
 	result, err := tools.SaveContact(`{
 		"name": "Update Target",
 		"organization": "Acme Corp"
@@ -259,12 +310,13 @@ func TestSaveContact_TopLevelFieldsOnUpdate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	facts, err := tools.store.GetFacts(c.ID)
+	// "organization" is not a recognized vCard key, so it goes to properties with its key as-is.
+	propsMap, err := tools.store.GetPropertiesMap(c.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(facts["organization"]) != 1 || facts["organization"][0] != "Acme Corp" {
-		t.Errorf("organization = %v, want [Acme Corp]", facts["organization"])
+	if len(propsMap["organization"]) != 1 || propsMap["organization"][0] != "Acme Corp" {
+		t.Errorf("organization = %v, want [Acme Corp]", propsMap["organization"])
 	}
 }
 
@@ -272,7 +324,7 @@ func TestSaveContact_WithEmbedding(t *testing.T) {
 	tools := newTestTools(t)
 	tools.SetEmbeddingClient(&fakeEmbedder{embedding: []float32{0.1, 0.2, 0.3}})
 
-	_, err := tools.SaveContact(`{"name":"Embedded Eve","kind":"person","summary":"Has embedding"}`)
+	_, err := tools.SaveContact(`{"name":"Embedded Eve","kind":"individual","ai_summary":"Has embedding"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -294,7 +346,7 @@ func TestSaveContact_WithEmbedding(t *testing.T) {
 func TestSaveContact_NameRequired(t *testing.T) {
 	tools := newTestTools(t)
 
-	_, err := tools.SaveContact(`{"kind":"person"}`)
+	_, err := tools.SaveContact(`{"kind":"individual"}`)
 	if err == nil {
 		t.Error("expected error for missing name")
 	}
@@ -303,7 +355,7 @@ func TestSaveContact_NameRequired(t *testing.T) {
 func TestLookupContact_ByName(t *testing.T) {
 	tools := newTestTools(t)
 
-	_, err := tools.SaveContact(`{"name":"Dana Recall","kind":"person","relationship":"friend","summary":"Test recall"}`)
+	_, err := tools.SaveContact(`{"name":"Dana Recall","kind":"individual","ai_summary":"Test recall"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -315,8 +367,8 @@ func TestLookupContact_ByName(t *testing.T) {
 	if !strings.Contains(result, "Dana Recall") {
 		t.Errorf("result = %q, want to contain 'Dana Recall'", result)
 	}
-	if !strings.Contains(result, "friend") {
-		t.Errorf("result = %q, want to contain 'friend'", result)
+	if !strings.Contains(result, "Test recall") {
+		t.Errorf("result = %q, want to contain 'Test recall'", result)
 	}
 }
 
@@ -335,7 +387,7 @@ func TestLookupContact_ByName_NotFound(t *testing.T) {
 func TestLookupContact_ByQuery(t *testing.T) {
 	tools := newTestTools(t)
 
-	_, err := tools.SaveContact(`{"name":"Eve Search","kind":"person","summary":"Backend developer"}`)
+	_, err := tools.SaveContact(`{"name":"Eve Search","kind":"individual","ai_summary":"Backend developer"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -352,41 +404,56 @@ func TestLookupContact_ByQuery(t *testing.T) {
 func TestLookupContact_ByKind(t *testing.T) {
 	tools := newTestTools(t)
 
-	_, _ = tools.SaveContact(`{"name":"PersonA","kind":"person"}`)
-	_, _ = tools.SaveContact(`{"name":"CompanyA","kind":"company"}`)
+	_, _ = tools.SaveContact(`{"name":"IndivA","kind":"individual"}`)
+	_, _ = tools.SaveContact(`{"name":"OrgA","kind":"org"}`)
 
-	result, err := tools.LookupContact(`{"kind":"company"}`)
+	result, err := tools.LookupContact(`{"kind":"org"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(result, "CompanyA") {
-		t.Errorf("result = %q, want to contain 'CompanyA'", result)
+	if !strings.Contains(result, "OrgA") {
+		t.Errorf("result = %q, want to contain 'OrgA'", result)
 	}
-	if strings.Contains(result, "PersonA") {
-		t.Errorf("result should not contain 'PersonA'")
+	if strings.Contains(result, "IndivA") {
+		t.Errorf("result should not contain 'IndivA'")
 	}
 }
 
-func TestLookupContact_ByFact(t *testing.T) {
+func TestLookupContact_ByPropertyKey(t *testing.T) {
 	tools := newTestTools(t)
 
-	_, _ = tools.SaveContact(`{"name":"Frank Fact","kind":"person","facts":{"email":"frank@example.com"}}`)
+	_, _ = tools.SaveContact(`{"name":"Frank Prop","kind":"individual","facts":{"timezone":"America/Chicago"}}`)
 
-	result, err := tools.LookupContact(`{"key":"email","value":"frank@example.com"}`)
+	result, err := tools.LookupContact(`{"key":"timezone","value":"America/Chicago"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(result, "Frank Fact") {
-		t.Errorf("result = %q, want to contain 'Frank Fact'", result)
+	if !strings.Contains(result, "Frank Prop") {
+		t.Errorf("result = %q, want to contain 'Frank Prop'", result)
+	}
+}
+
+func TestLookupContact_ByProperty(t *testing.T) {
+	tools := newTestTools(t)
+
+	_, _ = tools.SaveContact(`{"name":"Prop Person","kind":"individual","facts":{"email":"prop@example.com"}}`)
+
+	// Search by email key — should route to property lookup.
+	result, err := tools.LookupContact(`{"key":"email","value":"prop@example.com"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(result, "Prop Person") {
+		t.Errorf("result = %q, want to contain 'Prop Person'", result)
 	}
 }
 
 func TestLookupContact_Stats(t *testing.T) {
 	tools := newTestTools(t)
 
-	_, _ = tools.SaveContact(`{"name":"P1","kind":"person"}`)
-	_, _ = tools.SaveContact(`{"name":"P2","kind":"person"}`)
-	_, _ = tools.SaveContact(`{"name":"C1","kind":"company"}`)
+	_, _ = tools.SaveContact(`{"name":"P1","kind":"individual"}`)
+	_, _ = tools.SaveContact(`{"name":"P2","kind":"individual"}`)
+	_, _ = tools.SaveContact(`{"name":"C1","kind":"org"}`)
 
 	result, err := tools.LookupContact(`{}`)
 	if err != nil {
@@ -400,7 +467,7 @@ func TestLookupContact_Stats(t *testing.T) {
 func TestForgetContact(t *testing.T) {
 	tools := newTestTools(t)
 
-	_, _ = tools.SaveContact(`{"name":"Grace Forget","kind":"person"}`)
+	_, _ = tools.SaveContact(`{"name":"Grace Forget","kind":"individual"}`)
 
 	result, err := tools.ForgetContact(`{"name":"Grace Forget"}`)
 	if err != nil {
@@ -410,7 +477,6 @@ func TestForgetContact(t *testing.T) {
 		t.Errorf("result = %q, want to contain 'Forgot contact'", result)
 	}
 
-	// Verify deleted.
 	recall, err := tools.LookupContact(`{"name":"Grace Forget"}`)
 	if err != nil {
 		t.Fatal(err)
@@ -439,9 +505,9 @@ func TestForgetContact_NotFound(t *testing.T) {
 func TestListContacts_All(t *testing.T) {
 	tools := newTestTools(t)
 
-	_, _ = tools.SaveContact(`{"name":"Alpha","kind":"person"}`)
-	_, _ = tools.SaveContact(`{"name":"Beta","kind":"company"}`)
-	_, _ = tools.SaveContact(`{"name":"Gamma","kind":"person"}`)
+	_, _ = tools.SaveContact(`{"name":"Alpha","kind":"individual"}`)
+	_, _ = tools.SaveContact(`{"name":"Beta","kind":"org"}`)
+	_, _ = tools.SaveContact(`{"name":"Gamma","kind":"individual"}`)
 
 	result, err := tools.ListContacts(`{}`)
 	if err != nil {
@@ -458,27 +524,27 @@ func TestListContacts_All(t *testing.T) {
 func TestListContacts_ByKind(t *testing.T) {
 	tools := newTestTools(t)
 
-	_, _ = tools.SaveContact(`{"name":"PersonX","kind":"person"}`)
-	_, _ = tools.SaveContact(`{"name":"CompanyX","kind":"company"}`)
+	_, _ = tools.SaveContact(`{"name":"IndivX","kind":"individual"}`)
+	_, _ = tools.SaveContact(`{"name":"OrgX","kind":"org"}`)
 
-	result, err := tools.ListContacts(`{"kind":"company"}`)
+	result, err := tools.ListContacts(`{"kind":"org"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(result, "CompanyX") {
-		t.Errorf("result = %q, want to contain 'CompanyX'", result)
+	if !strings.Contains(result, "OrgX") {
+		t.Errorf("result = %q, want to contain 'OrgX'", result)
 	}
-	if strings.Contains(result, "PersonX") {
-		t.Errorf("result should not contain 'PersonX'")
+	if strings.Contains(result, "IndivX") {
+		t.Errorf("result should not contain 'IndivX'")
 	}
 }
 
 func TestListContacts_WithLimit(t *testing.T) {
 	tools := newTestTools(t)
 
-	_, _ = tools.SaveContact(`{"name":"A1","kind":"person"}`)
-	_, _ = tools.SaveContact(`{"name":"A2","kind":"person"}`)
-	_, _ = tools.SaveContact(`{"name":"A3","kind":"person"}`)
+	_, _ = tools.SaveContact(`{"name":"A1","kind":"individual"}`)
+	_, _ = tools.SaveContact(`{"name":"A2","kind":"individual"}`)
+	_, _ = tools.SaveContact(`{"name":"A3","kind":"individual"}`)
 
 	result, err := tools.ListContacts(`{"limit":2}`)
 	if err != nil {
@@ -504,7 +570,7 @@ func TestListContacts_Empty(t *testing.T) {
 func TestSaveContact_TrustZone(t *testing.T) {
 	tools := newTestTools(t)
 
-	_, err := tools.SaveContact(`{"name":"Trusted Pal","kind":"person","trust_zone":"trusted"}`)
+	_, err := tools.SaveContact(`{"name":"Trusted Pal","kind":"individual","trust_zone":"trusted"}`)
 	if err != nil {
 		t.Fatalf("SaveContact() error = %v", err)
 	}
@@ -521,8 +587,7 @@ func TestSaveContact_TrustZone(t *testing.T) {
 func TestSaveContact_TrustZoneUpdate(t *testing.T) {
 	tools := newTestTools(t)
 
-	// Create with default trust zone.
-	_, err := tools.SaveContact(`{"name":"Zone Updater","kind":"person"}`)
+	_, err := tools.SaveContact(`{"name":"Zone Updater","kind":"individual"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -535,7 +600,6 @@ func TestSaveContact_TrustZoneUpdate(t *testing.T) {
 		t.Fatalf("initial TrustZone = %q, want %q", c.TrustZone, "known")
 	}
 
-	// Update to trusted.
 	_, err = tools.SaveContact(`{"name":"Zone Updater","trust_zone":"trusted"}`)
 	if err != nil {
 		t.Fatal(err)
@@ -550,7 +614,7 @@ func TestSaveContact_TrustZoneUpdate(t *testing.T) {
 	}
 
 	// Update with empty trust_zone should preserve the existing value.
-	_, err = tools.SaveContact(`{"name":"Zone Updater","summary":"New summary"}`)
+	_, err = tools.SaveContact(`{"name":"Zone Updater","ai_summary":"New summary"}`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -577,13 +641,13 @@ func TestSaveContact_TrustZoneNotRescuedAsFact(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	facts, err := tools.store.GetFacts(c.ID)
+	propsMap, err := tools.store.GetPropertiesMap(c.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if _, exists := facts["trust_zone"]; exists {
-		t.Error("trust_zone should not be rescued as a fact")
+	if _, exists := propsMap["trust_zone"]; exists {
+		t.Error("trust_zone should not be rescued as a property")
 	}
 	if c.TrustZone != "owner" {
 		t.Errorf("TrustZone = %q, want %q", c.TrustZone, "owner")
@@ -592,15 +656,14 @@ func TestSaveContact_TrustZoneNotRescuedAsFact(t *testing.T) {
 
 func TestFormatContact_TrustZone(t *testing.T) {
 	c := &Contact{
-		Name:      "Test Person",
-		Kind:      "person",
-		TrustZone: "trusted",
-		Facts:     map[string][]string{},
+		FormattedName: "Test Person",
+		Kind:          "individual",
+		TrustZone:     "trusted",
 	}
 
 	result := formatContact(c)
-	if !strings.Contains(result, "Kind: person | Trust: trusted") {
-		t.Errorf("formatContact() = %q, want to contain 'Kind: person | Trust: trusted'", result)
+	if !strings.Contains(result, "Kind: individual | Trust: trusted") {
+		t.Errorf("formatContact() = %q, want to contain 'Kind: individual | Trust: trusted'", result)
 	}
 }
 
@@ -608,9 +671,8 @@ func TestGenerateMissingEmbeddings(t *testing.T) {
 	tools := newTestTools(t)
 	tools.SetEmbeddingClient(&fakeEmbedder{embedding: []float32{0.5, 0.5}})
 
-	_, _ = tools.SaveContact(`{"name":"NeedsEmbed","kind":"person","summary":"No embed yet"}`)
+	_, _ = tools.SaveContact(`{"name":"NeedsEmbed","kind":"individual","ai_summary":"No embed yet"}`)
 
-	// The save already generates an embedding, so clear it for test.
 	c, _ := tools.store.FindByName("NeedsEmbed")
 	_ = tools.store.SetEmbedding(c.ID, nil)
 
@@ -629,5 +691,65 @@ func TestGenerateMissingEmbeddings_NoClient(t *testing.T) {
 	_, err := tools.GenerateMissingEmbeddings()
 	if err == nil {
 		t.Error("expected error with no embedding client")
+	}
+}
+
+func TestSaveContact_IMPPPropertyPrefix(t *testing.T) {
+	tools := newTestTools(t)
+
+	_, err := tools.SaveContact(`{"name":"Signal User","kind":"individual","facts":{"signal":"+15551234567"}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	c, err := tools.store.FindByName("Signal User")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	props, err := tools.store.GetProperties(c.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	found := false
+	for _, p := range props {
+		if p.Property == "IMPP" && p.Value == "signal:+15551234567" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected IMPP property with signal: prefix, got: %+v", props)
+	}
+}
+
+func TestSaveContact_IMPPMatrixColonHandling(t *testing.T) {
+	tools := newTestTools(t)
+
+	// Matrix IDs contain colons (@user:server.com) — the prefix logic
+	// must not skip them.
+	_, err := tools.SaveContact(`{"name":"Matrix User","kind":"individual","facts":{"matrix":"@alice:matrix.org"}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	c, err := tools.store.FindByName("Matrix User")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	props, err := tools.store.GetProperties(c.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	found := false
+	for _, p := range props {
+		if p.Property == "IMPP" && p.Value == "matrix:@alice:matrix.org" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected IMPP property with matrix: prefix for Matrix ID, got: %+v", props)
 	}
 }

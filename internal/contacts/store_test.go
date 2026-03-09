@@ -32,10 +32,9 @@ func TestCreateAndGet(t *testing.T) {
 	store := newTestStore(t)
 
 	c := &Contact{
-		Name:         "Alice Johnson",
-		Kind:         "person",
-		Relationship: "colleague",
-		Summary:      "Works at Anthropic",
+		FormattedName: "Alice Johnson",
+		Kind:          "individual",
+		AISummary:     "Works at Anthropic",
 	}
 
 	created, err := store.Upsert(c)
@@ -45,8 +44,8 @@ func TestCreateAndGet(t *testing.T) {
 	if created.ID == uuid.Nil {
 		t.Error("expected non-nil UUID")
 	}
-	if created.Name != "Alice Johnson" {
-		t.Errorf("Name = %q, want %q", created.Name, "Alice Johnson")
+	if created.FormattedName != "Alice Johnson" {
+		t.Errorf("FormattedName = %q, want %q", created.FormattedName, "Alice Johnson")
 	}
 	if created.CreatedAt.IsZero() {
 		t.Error("CreatedAt should not be zero")
@@ -56,33 +55,28 @@ func TestCreateAndGet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get() error = %v", err)
 	}
-	if got.Name != "Alice Johnson" {
-		t.Errorf("Get().Name = %q, want %q", got.Name, "Alice Johnson")
+	if got.FormattedName != "Alice Johnson" {
+		t.Errorf("Get().FormattedName = %q, want %q", got.FormattedName, "Alice Johnson")
 	}
-	if got.Kind != "person" {
-		t.Errorf("Get().Kind = %q, want %q", got.Kind, "person")
+	if got.Kind != "individual" {
+		t.Errorf("Get().Kind = %q, want %q", got.Kind, "individual")
 	}
-	if got.Relationship != "colleague" {
-		t.Errorf("Get().Relationship = %q, want %q", got.Relationship, "colleague")
-	}
-	if got.Summary != "Works at Anthropic" {
-		t.Errorf("Get().Summary = %q, want %q", got.Summary, "Works at Anthropic")
+	if got.AISummary != "Works at Anthropic" {
+		t.Errorf("Get().AISummary = %q, want %q", got.AISummary, "Works at Anthropic")
 	}
 }
 
 func TestUpsertByName(t *testing.T) {
 	store := newTestStore(t)
 
-	// Create initial contact.
-	c := &Contact{Name: "Bob Smith", Kind: "person", Summary: "Original summary"}
+	c := &Contact{FormattedName: "Bob Smith", Kind: "individual", AISummary: "Original summary"}
 	created, err := store.Upsert(c)
 	if err != nil {
 		t.Fatalf("Upsert() error = %v", err)
 	}
 
-	// Update by re-using the returned ID.
-	created.Summary = "Updated summary"
-	created.Relationship = "friend"
+	created.AISummary = "Updated summary"
+	created.Note = "Some notes"
 	updated, err := store.Upsert(created)
 	if err != nil {
 		t.Fatalf("Upsert() error = %v", err)
@@ -96,18 +90,18 @@ func TestUpsertByName(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get() error = %v", err)
 	}
-	if got.Summary != "Updated summary" {
-		t.Errorf("Summary = %q, want %q", got.Summary, "Updated summary")
+	if got.AISummary != "Updated summary" {
+		t.Errorf("AISummary = %q, want %q", got.AISummary, "Updated summary")
 	}
-	if got.Relationship != "friend" {
-		t.Errorf("Relationship = %q, want %q", got.Relationship, "friend")
+	if got.Note != "Some notes" {
+		t.Errorf("Note = %q, want %q", got.Note, "Some notes")
 	}
 }
 
 func TestSoftDelete(t *testing.T) {
 	store := newTestStore(t)
 
-	c := &Contact{Name: "Charlie Deleted", Kind: "person"}
+	c := &Contact{FormattedName: "Charlie Deleted", Kind: "individual"}
 	created, err := store.Upsert(c)
 	if err != nil {
 		t.Fatalf("Upsert() error = %v", err)
@@ -117,13 +111,11 @@ func TestSoftDelete(t *testing.T) {
 		t.Fatalf("Delete() error = %v", err)
 	}
 
-	// Get should return not found.
 	_, err = store.Get(created.ID)
 	if err != sql.ErrNoRows {
 		t.Errorf("Get() after delete: got err = %v, want sql.ErrNoRows", err)
 	}
 
-	// FindByName should return not found.
 	_, err = store.FindByName("Charlie Deleted")
 	if err != sql.ErrNoRows {
 		t.Errorf("FindByName() after delete: got err = %v, want sql.ErrNoRows", err)
@@ -142,7 +134,7 @@ func TestSoftDeleteNotFound(t *testing.T) {
 func TestDeleteByName(t *testing.T) {
 	store := newTestStore(t)
 
-	c := &Contact{Name: "Delete Me", Kind: "person"}
+	c := &Contact{FormattedName: "Delete Me", Kind: "individual"}
 	_, err := store.Upsert(c)
 	if err != nil {
 		t.Fatalf("Upsert() error = %v", err)
@@ -161,7 +153,7 @@ func TestDeleteByName(t *testing.T) {
 func TestFindByName_CaseInsensitive(t *testing.T) {
 	store := newTestStore(t)
 
-	c := &Contact{Name: "Dana O'Brien", Kind: "person", Summary: "Data scientist"}
+	c := &Contact{FormattedName: "Dana O'Brien", Kind: "individual", AISummary: "Data scientist"}
 	_, err := store.Upsert(c)
 	if err != nil {
 		t.Fatalf("Upsert() error = %v", err)
@@ -183,8 +175,8 @@ func TestFindByName_CaseInsensitive(t *testing.T) {
 			if err != nil {
 				t.Fatalf("FindByName(%q) error = %v", tt.query, err)
 			}
-			if got.Name != "Dana O'Brien" {
-				t.Errorf("FindByName(%q).Name = %q, want %q", tt.query, got.Name, "Dana O'Brien")
+			if got.FormattedName != "Dana O'Brien" {
+				t.Errorf("FindByName(%q).FormattedName = %q, want %q", tt.query, got.FormattedName, "Dana O'Brien")
 			}
 		})
 	}
@@ -202,13 +194,26 @@ func TestFindByName_NotFound(t *testing.T) {
 func TestDefaultKind(t *testing.T) {
 	store := newTestStore(t)
 
-	c := &Contact{Name: "No Kind Set"}
+	c := &Contact{FormattedName: "No Kind Set"}
 	created, err := store.Upsert(c)
 	if err != nil {
 		t.Fatalf("Upsert() error = %v", err)
 	}
-	if created.Kind != "person" {
-		t.Errorf("Kind = %q, want %q", created.Kind, "person")
+	if created.Kind != "individual" {
+		t.Errorf("Kind = %q, want %q", created.Kind, "individual")
+	}
+}
+
+func TestUpsert_InvalidKind(t *testing.T) {
+	store := newTestStore(t)
+
+	c := &Contact{FormattedName: "Bad Kind", Kind: "person"}
+	_, err := store.Upsert(c)
+	if err == nil {
+		t.Error("expected error for invalid kind, got nil")
+	}
+	if !strings.Contains(err.Error(), "invalid kind") {
+		t.Errorf("error = %q, want to contain 'invalid kind'", err.Error())
 	}
 }
 
@@ -219,13 +224,13 @@ func TestSearch_FTS(t *testing.T) {
 	}
 
 	contacts := []*Contact{
-		{Name: "Eve Engineer", Kind: "person", Relationship: "colleague", Summary: "Backend developer at Acme Corp"},
-		{Name: "Frank Finance", Kind: "person", Relationship: "vendor", Summary: "Financial advisor specializing in tax planning"},
-		{Name: "Acme Corp", Kind: "company", Summary: "Technology company in San Francisco"},
+		{FormattedName: "Eve Engineer", Kind: "individual", Org: "Acme Corp", AISummary: "Backend developer"},
+		{FormattedName: "Frank Finance", Kind: "individual", Note: "Financial advisor specializing in tax planning"},
+		{FormattedName: "Acme Corp", Kind: "org", AISummary: "Technology company in San Francisco"},
 	}
 	for _, c := range contacts {
 		if _, err := store.Upsert(c); err != nil {
-			t.Fatalf("Upsert(%q) error = %v", c.Name, err)
+			t.Fatalf("Upsert(%q) error = %v", c.FormattedName, err)
 		}
 	}
 
@@ -236,9 +241,9 @@ func TestSearch_FTS(t *testing.T) {
 		wantName string
 	}{
 		{"by name", "Eve", 1, "Eve Engineer"},
-		{"by summary word", "tax", 1, "Frank Finance"},
-		{"by company name", "Acme", 1, "Acme Corp"},
-		{"by relationship", "vendor", 1, "Frank Finance"},
+		{"by note word", "tax", 1, "Frank Finance"},
+		{"by org name", "Acme", 1, "Acme Corp"},
+		{"by ai_summary", "developer", 1, "Eve Engineer"},
 		{"no results", "xyznonexistent", 0, ""},
 	}
 
@@ -254,7 +259,7 @@ func TestSearch_FTS(t *testing.T) {
 			if tt.wantName != "" {
 				found := false
 				for _, r := range results {
-					if r.Name == tt.wantName {
+					if r.FormattedName == tt.wantName {
 						found = true
 						break
 					}
@@ -273,7 +278,7 @@ func TestSearch_ExcludesDeleted(t *testing.T) {
 		t.Skip("FTS5 not available")
 	}
 
-	c := &Contact{Name: "Grace Ghosted", Kind: "person", Summary: "Will be deleted soon"}
+	c := &Contact{FormattedName: "Grace Ghosted", Kind: "individual", AISummary: "Will be deleted soon"}
 	created, err := store.Upsert(c)
 	if err != nil {
 		t.Fatal(err)
@@ -303,12 +308,11 @@ func TestSearch_ExcludesDeleted(t *testing.T) {
 func TestSearch_LIKEFallback(t *testing.T) {
 	store := newTestStore(t)
 
-	c := &Contact{Name: "Hank Helper", Kind: "person", Summary: "Friendly handyman"}
+	c := &Contact{FormattedName: "Hank Helper", Kind: "individual", AISummary: "Friendly handyman"}
 	if _, err := store.Upsert(c); err != nil {
 		t.Fatal(err)
 	}
 
-	// Test LIKE path directly regardless of FTS availability.
 	results, err := store.searchLIKE("handyman")
 	if err != nil {
 		t.Fatal(err)
@@ -316,224 +320,89 @@ func TestSearch_LIKEFallback(t *testing.T) {
 	if len(results) != 1 {
 		t.Fatalf("searchLIKE returned %d results, want 1", len(results))
 	}
-	if results[0].Name != "Hank Helper" {
-		t.Errorf("Name = %q, want %q", results[0].Name, "Hank Helper")
+	if results[0].FormattedName != "Hank Helper" {
+		t.Errorf("FormattedName = %q, want %q", results[0].FormattedName, "Hank Helper")
 	}
 }
 
-func TestSetFact_GetFacts(t *testing.T) {
+func TestAddProperty_GetPropertiesMap(t *testing.T) {
 	store := newTestStore(t)
 
-	c := &Contact{Name: "Ivy Info", Kind: "person"}
+	c := &Contact{FormattedName: "Ivy Info", Kind: "individual"}
 	created, err := store.Upsert(c)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if err := store.SetFact(created.ID, "email", "ivy@example.com"); err != nil {
-		t.Fatalf("SetFact(email) error = %v", err)
+	if err := store.AddProperty(created.ID, &Property{Property: "timezone", Value: "America/Chicago"}); err != nil {
+		t.Fatalf("AddProperty(timezone) error = %v", err)
 	}
-	if err := store.SetFact(created.ID, "phone", "555-1234"); err != nil {
-		t.Fatalf("SetFact(phone) error = %v", err)
+	if err := store.AddProperty(created.ID, &Property{Property: "ha_companion_app", Value: "mobile_app_nuggets_iphone"}); err != nil {
+		t.Fatalf("AddProperty(ha_companion_app) error = %v", err)
 	}
 
-	facts, err := store.GetFacts(created.ID)
+	props, err := store.GetPropertiesMap(created.ID)
 	if err != nil {
-		t.Fatalf("GetFacts() error = %v", err)
+		t.Fatalf("GetPropertiesMap() error = %v", err)
 	}
-	if len(facts) != 2 {
-		t.Fatalf("GetFacts() returned %d facts, want 2", len(facts))
+	if len(props) != 2 {
+		t.Fatalf("GetPropertiesMap() returned %d keys, want 2", len(props))
 	}
-	if len(facts["email"]) != 1 || facts["email"][0] != "ivy@example.com" {
-		t.Errorf("email = %v, want [ivy@example.com]", facts["email"])
+	if len(props["timezone"]) != 1 || props["timezone"][0] != "America/Chicago" {
+		t.Errorf("timezone = %v, want [America/Chicago]", props["timezone"])
 	}
-	if len(facts["phone"]) != 1 || facts["phone"][0] != "555-1234" {
-		t.Errorf("phone = %v, want [555-1234]", facts["phone"])
+	if len(props["ha_companion_app"]) != 1 || props["ha_companion_app"][0] != "mobile_app_nuggets_iphone" {
+		t.Errorf("ha_companion_app = %v, want [mobile_app_nuggets_iphone]", props["ha_companion_app"])
 	}
 }
 
-func TestSetFact_MultiValue(t *testing.T) {
+func TestAddProperty_MultiValue(t *testing.T) {
 	store := newTestStore(t)
 
-	c := &Contact{Name: "Jack MultiPhone", Kind: "person"}
+	c := &Contact{FormattedName: "Jack MultiTag", Kind: "individual"}
 	created, err := store.Upsert(c)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// SetFact adds multiple values for the same key.
-	if err := store.SetFact(created.ID, "phone", "555-1111"); err != nil {
+	if err := store.AddProperty(created.ID, &Property{Property: "notification_preference", Value: "urgent_only"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.SetFact(created.ID, "phone", "555-2222"); err != nil {
+	if err := store.AddProperty(created.ID, &Property{Property: "notification_preference", Value: "no_marketing"}); err != nil {
 		t.Fatal(err)
 	}
 
-	facts, err := store.GetFacts(created.ID)
+	props, err := store.GetPropertiesMap(created.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(facts["phone"]) != 2 {
-		t.Errorf("expected 2 phone values, got %d: %v", len(facts["phone"]), facts["phone"])
+	if len(props["notification_preference"]) != 2 {
+		t.Errorf("expected 2 notification_preference values, got %d: %v", len(props["notification_preference"]), props["notification_preference"])
 	}
 }
 
-func TestSetFact_Idempotent(t *testing.T) {
+func TestAddProperty_DuplicateGuard(t *testing.T) {
 	store := newTestStore(t)
 
-	c := &Contact{Name: "Jack Idempotent", Kind: "person"}
+	c := &Contact{FormattedName: "Jack Idempotent", Kind: "individual"}
 	created, err := store.Upsert(c)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// Setting the same triple twice should be a no-op.
-	if err := store.SetFact(created.ID, "email", "jack@example.com"); err != nil {
+	if err := store.AddProperty(created.ID, &Property{Property: "timezone", Value: "America/Chicago"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.SetFact(created.ID, "email", "jack@example.com"); err != nil {
+	if err := store.AddProperty(created.ID, &Property{Property: "timezone", Value: "America/Chicago"}); err != nil {
 		t.Fatal(err)
 	}
 
-	facts, err := store.GetFacts(created.ID)
+	props, err := store.GetPropertiesMap(created.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(facts["email"]) != 1 {
-		t.Errorf("expected 1 email value after duplicate SetFact, got %d", len(facts["email"]))
-	}
-}
-
-func TestReplaceFact(t *testing.T) {
-	store := newTestStore(t)
-
-	c := &Contact{Name: "Replace Tester", Kind: "person"}
-	created, err := store.Upsert(c)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Add two phone numbers then replace with one.
-	_ = store.SetFact(created.ID, "phone", "555-1111")
-	_ = store.SetFact(created.ID, "phone", "555-2222")
-
-	if err := store.ReplaceFact(created.ID, "phone", "555-3333"); err != nil {
-		t.Fatal(err)
-	}
-
-	facts, err := store.GetFacts(created.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(facts["phone"]) != 1 || facts["phone"][0] != "555-3333" {
-		t.Errorf("phone = %v, want [555-3333]", facts["phone"])
-	}
-}
-
-func TestDeleteFact(t *testing.T) {
-	store := newTestStore(t)
-
-	c := &Contact{Name: "Delete Fact Tester", Kind: "person"}
-	created, err := store.Upsert(c)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	_ = store.SetFact(created.ID, "phone", "555-1111")
-	_ = store.SetFact(created.ID, "phone", "555-2222")
-
-	if err := store.DeleteFact(created.ID, "phone", "555-1111"); err != nil {
-		t.Fatal(err)
-	}
-
-	facts, err := store.GetFacts(created.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(facts["phone"]) != 1 || facts["phone"][0] != "555-2222" {
-		t.Errorf("phone = %v, want [555-2222]", facts["phone"])
-	}
-}
-
-func TestDeleteFact_NotFound(t *testing.T) {
-	store := newTestStore(t)
-
-	c := &Contact{Name: "No Such Fact", Kind: "person"}
-	created, err := store.Upsert(c)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	err = store.DeleteFact(created.ID, "phone", "nonexistent")
-	if err == nil {
-		t.Error("expected error deleting nonexistent fact")
-	}
-}
-
-func TestGetWithFacts(t *testing.T) {
-	store := newTestStore(t)
-
-	c := &Contact{Name: "Kelly Complete", Kind: "person", Summary: "Has facts"}
-	created, err := store.Upsert(c)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.SetFact(created.ID, "employer", "Widgets Inc"); err != nil {
-		t.Fatal(err)
-	}
-
-	got, err := store.GetWithFacts(created.ID)
-	if err != nil {
-		t.Fatalf("GetWithFacts() error = %v", err)
-	}
-	if got.Name != "Kelly Complete" {
-		t.Errorf("Name = %q, want %q", got.Name, "Kelly Complete")
-	}
-	if len(got.Facts["employer"]) != 1 || got.Facts["employer"][0] != "Widgets Inc" {
-		t.Errorf("Facts[employer] = %v, want [Widgets Inc]", got.Facts["employer"])
-	}
-}
-
-func TestFindByFact(t *testing.T) {
-	store := newTestStore(t)
-
-	c1 := &Contact{Name: "Leo Lamp", Kind: "person"}
-	created1, err := store.Upsert(c1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.SetFact(created1.ID, "email", "leo@example.com"); err != nil {
-		t.Fatal(err)
-	}
-
-	c2 := &Contact{Name: "Mia Mirror", Kind: "person"}
-	created2, err := store.Upsert(c2)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.SetFact(created2.ID, "email", "mia@example.com"); err != nil {
-		t.Fatal(err)
-	}
-
-	// Search by email domain.
-	results, err := store.FindByFact("email", "example.com")
-	if err != nil {
-		t.Fatalf("FindByFact() error = %v", err)
-	}
-	if len(results) != 2 {
-		t.Fatalf("FindByFact() returned %d results, want 2", len(results))
-	}
-
-	// Search for specific email.
-	results, err = store.FindByFact("email", "leo@example.com")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(results) != 1 {
-		t.Fatalf("FindByFact() returned %d results, want 1", len(results))
-	}
-	if results[0].Name != "Leo Lamp" {
-		t.Errorf("Name = %q, want %q", results[0].Name, "Leo Lamp")
+	if len(props["timezone"]) != 1 {
+		t.Errorf("expected 1 timezone value after duplicate AddProperty, got %d", len(props["timezone"]))
 	}
 }
 
@@ -541,10 +410,10 @@ func TestListByKind(t *testing.T) {
 	store := newTestStore(t)
 
 	contacts := []*Contact{
-		{Name: "PersonA", Kind: "person"},
-		{Name: "PersonB", Kind: "person"},
-		{Name: "CompanyA", Kind: "company"},
-		{Name: "OrgA", Kind: "organization"},
+		{FormattedName: "IndivA", Kind: "individual"},
+		{FormattedName: "IndivB", Kind: "individual"},
+		{FormattedName: "OrgA", Kind: "org"},
+		{FormattedName: "GroupA", Kind: "group"},
 	}
 	for _, c := range contacts {
 		if _, err := store.Upsert(c); err != nil {
@@ -556,10 +425,10 @@ func TestListByKind(t *testing.T) {
 		kind string
 		want int
 	}{
-		{"person", 2},
-		{"company", 1},
-		{"organization", 1},
-		{"other", 0},
+		{"individual", 2},
+		{"org", 1},
+		{"group", 1},
+		{"location", 0},
 	}
 
 	for _, tt := range tests {
@@ -579,9 +448,9 @@ func TestListAll(t *testing.T) {
 	store := newTestStore(t)
 
 	contacts := []*Contact{
-		{Name: "Zara", Kind: "person"},
-		{Name: "Adam", Kind: "person"},
-		{Name: "Mid Corp", Kind: "company"},
+		{FormattedName: "Zara", Kind: "individual"},
+		{FormattedName: "Adam", Kind: "individual"},
+		{FormattedName: "Mid Corp", Kind: "org"},
 	}
 	for _, c := range contacts {
 		if _, err := store.Upsert(c); err != nil {
@@ -596,16 +465,15 @@ func TestListAll(t *testing.T) {
 	if len(results) != 3 {
 		t.Fatalf("ListAll() returned %d, want 3", len(results))
 	}
-	// Should be sorted by name.
-	if results[0].Name != "Adam" {
-		t.Errorf("first contact = %q, want %q", results[0].Name, "Adam")
+	if results[0].FormattedName != "Adam" {
+		t.Errorf("first contact = %q, want %q", results[0].FormattedName, "Adam")
 	}
 }
 
 func TestResurrectSoftDeleted(t *testing.T) {
 	store := newTestStore(t)
 
-	c := &Contact{Name: "Zombie Contact", Kind: "person", Summary: "Will be deleted then resurrected"}
+	c := &Contact{FormattedName: "Zombie Contact", Kind: "individual", AISummary: "Will be deleted then resurrected"}
 	created, err := store.Upsert(c)
 	if err != nil {
 		t.Fatal(err)
@@ -615,8 +483,7 @@ func TestResurrectSoftDeleted(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Resurrect by upserting with same ID.
-	created.Summary = "Back from the dead"
+	created.AISummary = "Back from the dead"
 	_, err = store.Upsert(created)
 	if err != nil {
 		t.Fatalf("Upsert() resurrect error = %v", err)
@@ -626,36 +493,33 @@ func TestResurrectSoftDeleted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get() after resurrect error = %v", err)
 	}
-	if got.Summary != "Back from the dead" {
-		t.Errorf("Summary = %q, want %q", got.Summary, "Back from the dead")
+	if got.AISummary != "Back from the dead" {
+		t.Errorf("AISummary = %q, want %q", got.AISummary, "Back from the dead")
 	}
 }
 
 func TestSemanticSearch(t *testing.T) {
 	store := newTestStore(t)
 
-	// Create contacts and set knowledge.
-	c1 := &Contact{Name: "Near Match", Kind: "person"}
+	c1 := &Contact{FormattedName: "Near Match", Kind: "individual"}
 	created1, err := store.Upsert(c1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Embedding close to query.
 	if err := store.SetEmbedding(created1.ID, []float32{0.9, 0.1, 0.0}); err != nil {
 		t.Fatal(err)
 	}
 
-	c2 := &Contact{Name: "Far Match", Kind: "person"}
+	c2 := &Contact{FormattedName: "Far Match", Kind: "individual"}
 	created2, err := store.Upsert(c2)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Embedding far from query.
 	if err := store.SetEmbedding(created2.ID, []float32{0.0, 0.0, 1.0}); err != nil {
 		t.Fatal(err)
 	}
 
-	c3 := &Contact{Name: "No Embedding", Kind: "person"}
+	c3 := &Contact{FormattedName: "No Embedding", Kind: "individual"}
 	if _, err := store.Upsert(c3); err != nil {
 		t.Fatal(err)
 	}
@@ -669,9 +533,8 @@ func TestSemanticSearch(t *testing.T) {
 		t.Fatalf("SemanticSearch() returned %d contacts, want 2", len(contacts))
 	}
 
-	// First result should be the nearest.
-	if contacts[0].Name != "Near Match" {
-		t.Errorf("first result = %q, want %q", contacts[0].Name, "Near Match")
+	if contacts[0].FormattedName != "Near Match" {
+		t.Errorf("first result = %q, want %q", contacts[0].FormattedName, "Near Match")
 	}
 	if scores[0] < scores[1] {
 		t.Errorf("first score (%f) should be >= second score (%f)", scores[0], scores[1])
@@ -681,7 +544,7 @@ func TestSemanticSearch(t *testing.T) {
 func TestSemanticSearch_ExcludesDeleted(t *testing.T) {
 	store := newTestStore(t)
 
-	c := &Contact{Name: "Deleted Embedded", Kind: "person"}
+	c := &Contact{FormattedName: "Deleted Embedded", Kind: "individual"}
 	created, err := store.Upsert(c)
 	if err != nil {
 		t.Fatal(err)
@@ -705,7 +568,7 @@ func TestSemanticSearch_ExcludesDeleted(t *testing.T) {
 func TestGetContactsWithoutEmbeddings(t *testing.T) {
 	store := newTestStore(t)
 
-	c1 := &Contact{Name: "Has Embedding", Kind: "person"}
+	c1 := &Contact{FormattedName: "Has Embedding", Kind: "individual"}
 	created1, err := store.Upsert(c1)
 	if err != nil {
 		t.Fatal(err)
@@ -714,7 +577,7 @@ func TestGetContactsWithoutEmbeddings(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	c2 := &Contact{Name: "No Embedding", Kind: "person"}
+	c2 := &Contact{FormattedName: "No Embedding", Kind: "individual"}
 	if _, err := store.Upsert(c2); err != nil {
 		t.Fatal(err)
 	}
@@ -726,8 +589,8 @@ func TestGetContactsWithoutEmbeddings(t *testing.T) {
 	if len(contacts) != 1 {
 		t.Fatalf("got %d contacts without embeddings, want 1", len(contacts))
 	}
-	if contacts[0].Name != "No Embedding" {
-		t.Errorf("Name = %q, want %q", contacts[0].Name, "No Embedding")
+	if contacts[0].FormattedName != "No Embedding" {
+		t.Errorf("FormattedName = %q, want %q", contacts[0].FormattedName, "No Embedding")
 	}
 }
 
@@ -735,9 +598,9 @@ func TestStats(t *testing.T) {
 	store := newTestStore(t)
 
 	contacts := []*Contact{
-		{Name: "P1", Kind: "person"},
-		{Name: "P2", Kind: "person"},
-		{Name: "C1", Kind: "company"},
+		{FormattedName: "P1", Kind: "individual"},
+		{FormattedName: "P2", Kind: "individual"},
+		{FormattedName: "C1", Kind: "org"},
 	}
 	for _, c := range contacts {
 		if _, err := store.Upsert(c); err != nil {
@@ -753,11 +616,11 @@ func TestStats(t *testing.T) {
 	if !ok {
 		t.Fatal("kinds not a map[string]int")
 	}
-	if kinds["person"] != 2 {
-		t.Errorf("kinds[person] = %d, want 2", kinds["person"])
+	if kinds["individual"] != 2 {
+		t.Errorf("kinds[individual] = %d, want 2", kinds["individual"])
 	}
-	if kinds["company"] != 1 {
-		t.Errorf("kinds[company] = %d, want 1", kinds["company"])
+	if kinds["org"] != 1 {
+		t.Errorf("kinds[org] = %d, want 1", kinds["org"])
 	}
 }
 
@@ -795,7 +658,7 @@ func TestFTS5Enabled(t *testing.T) {
 func TestSemanticSearch_ZeroLimit(t *testing.T) {
 	store := newTestStore(t)
 
-	c := &Contact{Name: "Limit Zero", Kind: "person"}
+	c := &Contact{FormattedName: "Limit Zero", Kind: "individual"}
 	created, err := store.Upsert(c)
 	if err != nil {
 		t.Fatal(err)
@@ -815,7 +678,6 @@ func TestSemanticSearch_ZeroLimit(t *testing.T) {
 		t.Errorf("expected nil scores for limit=0, got %d", len(scores))
 	}
 
-	// Negative limit should also return empty.
 	contacts, scores, err = store.SemanticSearch([]float32{1.0, 0.0, 0.0}, -5)
 	if err != nil {
 		t.Fatalf("SemanticSearch(limit=-5) error = %v", err)
@@ -831,7 +693,7 @@ func TestSemanticSearch_ZeroLimit(t *testing.T) {
 func TestUpsert_TrustZoneDefault(t *testing.T) {
 	store := newTestStore(t)
 
-	c := &Contact{Name: "No Zone Set", Kind: "person"}
+	c := &Contact{FormattedName: "No Zone Set", Kind: "individual"}
 	created, err := store.Upsert(c)
 	if err != nil {
 		t.Fatalf("Upsert() error = %v", err)
@@ -852,7 +714,7 @@ func TestUpsert_TrustZoneDefault(t *testing.T) {
 func TestUpsert_TrustZoneSet(t *testing.T) {
 	store := newTestStore(t)
 
-	c := &Contact{Name: "Trusted Friend", Kind: "person", TrustZone: "trusted"}
+	c := &Contact{FormattedName: "Trusted Friend", Kind: "individual", TrustZone: "trusted"}
 	created, err := store.Upsert(c)
 	if err != nil {
 		t.Fatalf("Upsert() error = %v", err)
@@ -873,7 +735,7 @@ func TestUpsert_TrustZoneSet(t *testing.T) {
 func TestUpsert_TrustZoneValidation(t *testing.T) {
 	store := newTestStore(t)
 
-	c := &Contact{Name: "Bad Zone", Kind: "person", TrustZone: "superadmin"}
+	c := &Contact{FormattedName: "Bad Zone", Kind: "individual", TrustZone: "superadmin"}
 	_, err := store.Upsert(c)
 	if err == nil {
 		t.Error("expected error for invalid trust zone, got nil")
@@ -886,7 +748,7 @@ func TestUpsert_TrustZoneValidation(t *testing.T) {
 func TestUpsert_TrustZoneOwner(t *testing.T) {
 	store := newTestStore(t)
 
-	c := &Contact{Name: "The Owner", Kind: "person", TrustZone: "owner"}
+	c := &Contact{FormattedName: "The Owner", Kind: "individual", TrustZone: "owner"}
 	created, err := store.Upsert(c)
 	if err != nil {
 		t.Fatalf("Upsert() error = %v", err)
@@ -900,14 +762,14 @@ func TestFindByTrustZone(t *testing.T) {
 	store := newTestStore(t)
 
 	contacts := []*Contact{
-		{Name: "Owner A", Kind: "person", TrustZone: "owner"},
-		{Name: "Trusted B", Kind: "person", TrustZone: "trusted"},
-		{Name: "Trusted C", Kind: "person", TrustZone: "trusted"},
-		{Name: "Known D", Kind: "person", TrustZone: "known"},
+		{FormattedName: "Owner A", Kind: "individual", TrustZone: "owner"},
+		{FormattedName: "Trusted B", Kind: "individual", TrustZone: "trusted"},
+		{FormattedName: "Trusted C", Kind: "individual", TrustZone: "trusted"},
+		{FormattedName: "Known D", Kind: "individual", TrustZone: "known"},
 	}
 	for _, c := range contacts {
 		if _, err := store.Upsert(c); err != nil {
-			t.Fatalf("Upsert(%q) error = %v", c.Name, err)
+			t.Fatalf("Upsert(%q) error = %v", c.FormattedName, err)
 		}
 	}
 
@@ -934,113 +796,103 @@ func TestFindByTrustZone(t *testing.T) {
 	}
 }
 
-func TestFindByFactExact(t *testing.T) {
+func TestFindByPropertyExact_HACompanionApp(t *testing.T) {
 	store := newTestStore(t)
 
-	c1 := &Contact{Name: "Dan Egan", Kind: "person"}
+	c1 := &Contact{FormattedName: "Dan Egan", Kind: "individual"}
 	created1, err := store.Upsert(c1)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.SetFact(created1.ID, "preferred_name", "Dan"); err != nil {
-		t.Fatal(err)
-	}
+	_ = store.AddProperty(created1.ID, &Property{Property: "ha_companion_app", Value: "mobile_app_dan"})
 
-	c2 := &Contact{Name: "Daniel Craig", Kind: "person"}
+	c2 := &Contact{FormattedName: "Daniel Craig", Kind: "individual"}
 	created2, err := store.Upsert(c2)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.SetFact(created2.ID, "preferred_name", "Daniel"); err != nil {
-		t.Fatal(err)
-	}
+	_ = store.AddProperty(created2.ID, &Property{Property: "ha_companion_app", Value: "mobile_app_daniel"})
 
 	// Exact match should find only Dan Egan.
-	results, err := store.FindByFactExact("preferred_name", "Dan")
+	results, err := store.FindByPropertyExact("ha_companion_app", "mobile_app_dan")
 	if err != nil {
-		t.Fatalf("FindByFactExact() error = %v", err)
+		t.Fatalf("FindByPropertyExact() error = %v", err)
 	}
 	if len(results) != 1 {
-		t.Fatalf("FindByFactExact() returned %d results, want 1", len(results))
+		t.Fatalf("FindByPropertyExact() returned %d results, want 1", len(results))
 	}
-	if results[0].Name != "Dan Egan" {
-		t.Errorf("Name = %q, want %q", results[0].Name, "Dan Egan")
+	if results[0].FormattedName != "Dan Egan" {
+		t.Errorf("FormattedName = %q, want %q", results[0].FormattedName, "Dan Egan")
 	}
 
 	// Case-insensitive match.
-	results, err = store.FindByFactExact("preferred_name", "dan")
+	results, err = store.FindByPropertyExact("ha_companion_app", "MOBILE_APP_DAN")
 	if err != nil {
-		t.Fatalf("FindByFactExact() case-insensitive error = %v", err)
+		t.Fatalf("FindByPropertyExact() case-insensitive error = %v", err)
 	}
 	if len(results) != 1 {
-		t.Fatalf("FindByFactExact() case-insensitive returned %d results, want 1", len(results))
+		t.Fatalf("FindByPropertyExact() case-insensitive returned %d results, want 1", len(results))
 	}
 
-	// No match for partial value (unlike FindByFact which uses LIKE).
-	results, err = store.FindByFactExact("preferred_name", "Da")
+	// No match for partial value.
+	results, err = store.FindByPropertyExact("ha_companion_app", "mobile_app_d")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(results) != 0 {
-		t.Errorf("FindByFactExact() partial match returned %d results, want 0", len(results))
+		t.Errorf("FindByPropertyExact() partial match returned %d results, want 0", len(results))
 	}
 }
 
 func TestResolveContact_ExactName(t *testing.T) {
 	store := newTestStore(t)
 
-	c := &Contact{Name: "Alice Johnson", Kind: "person"}
+	c := &Contact{FormattedName: "Alice Johnson", Kind: "individual"}
 	if _, err := store.Upsert(c); err != nil {
 		t.Fatal(err)
 	}
 
-	// Exact name match (case-insensitive).
 	got, err := store.ResolveContact("alice johnson")
 	if err != nil {
 		t.Fatalf("ResolveContact() error = %v", err)
 	}
-	if got.Name != "Alice Johnson" {
-		t.Errorf("Name = %q, want %q", got.Name, "Alice Johnson")
+	if got.FormattedName != "Alice Johnson" {
+		t.Errorf("FormattedName = %q, want %q", got.FormattedName, "Alice Johnson")
 	}
 }
 
-func TestResolveContact_PreferredName(t *testing.T) {
+func TestResolveContact_Nickname(t *testing.T) {
 	store := newTestStore(t)
 
-	c := &Contact{Name: "David McNett", Kind: "person"}
-	created, err := store.Upsert(c)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.SetFact(created.ID, "preferred_name", "Nugget"); err != nil {
+	c := &Contact{FormattedName: "David McNett", Kind: "individual", Nickname: "Nugget"}
+	if _, err := store.Upsert(c); err != nil {
 		t.Fatal(err)
 	}
 
-	// Should resolve via preferred_name fact.
+	// Should resolve via Nickname column.
 	got, err := store.ResolveContact("nugget")
 	if err != nil {
 		t.Fatalf("ResolveContact() error = %v", err)
 	}
-	if got.Name != "David McNett" {
-		t.Errorf("Name = %q, want %q", got.Name, "David McNett")
+	if got.FormattedName != "David McNett" {
+		t.Errorf("FormattedName = %q, want %q", got.FormattedName, "David McNett")
 	}
 }
 
 func TestResolveContact_SearchFallback(t *testing.T) {
 	store := newTestStore(t)
 
-	c := &Contact{Name: "Eve Engineer", Kind: "person", Summary: "Backend developer"}
+	c := &Contact{FormattedName: "Eve Engineer", Kind: "individual", AISummary: "Backend developer"}
 	if _, err := store.Upsert(c); err != nil {
 		t.Fatal(err)
 	}
 
-	// "Eve" should match via search (FTS or LIKE on name).
 	got, err := store.ResolveContact("Eve")
 	if err != nil {
 		t.Fatalf("ResolveContact() error = %v", err)
 	}
-	if got.Name != "Eve Engineer" {
-		t.Errorf("Name = %q, want %q", got.Name, "Eve Engineer")
+	if got.FormattedName != "Eve Engineer" {
+		t.Errorf("FormattedName = %q, want %q", got.FormattedName, "Eve Engineer")
 	}
 }
 
@@ -1048,8 +900,8 @@ func TestResolveContact_Ambiguous(t *testing.T) {
 	store := newTestStore(t)
 
 	contacts := []*Contact{
-		{Name: "Eve Alpha", Kind: "person", Summary: "Eve works on alpha"},
-		{Name: "Eve Beta", Kind: "person", Summary: "Eve works on beta"},
+		{FormattedName: "Eve Alpha", Kind: "individual", AISummary: "Eve works on alpha"},
+		{FormattedName: "Eve Beta", Kind: "individual", AISummary: "Eve works on beta"},
 	}
 	for _, c := range contacts {
 		if _, err := store.Upsert(c); err != nil {
@@ -1079,18 +931,14 @@ func TestResolveContact_PriorityOrder(t *testing.T) {
 	store := newTestStore(t)
 
 	// Create a contact named "Nugget" and a different contact with
-	// preferred_name = "Nugget". The exact name match should win.
-	c1 := &Contact{Name: "Nugget", Kind: "person"}
+	// Nickname = "Nugget". The exact name match should win.
+	c1 := &Contact{FormattedName: "Nugget", Kind: "individual"}
 	if _, err := store.Upsert(c1); err != nil {
 		t.Fatal(err)
 	}
 
-	c2 := &Contact{Name: "David McNett", Kind: "person"}
-	created2, err := store.Upsert(c2)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.SetFact(created2.ID, "preferred_name", "Nugget"); err != nil {
+	c2 := &Contact{FormattedName: "David McNett", Kind: "individual", Nickname: "Nugget"}
+	if _, err := store.Upsert(c2); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1098,25 +946,302 @@ func TestResolveContact_PriorityOrder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveContact() error = %v", err)
 	}
-	// Exact name match takes priority over preferred_name.
-	if got.Name != "Nugget" {
-		t.Errorf("Name = %q, want %q (exact match should win)", got.Name, "Nugget")
+	if got.FormattedName != "Nugget" {
+		t.Errorf("FormattedName = %q, want %q (exact match should win)", got.FormattedName, "Nugget")
 	}
 }
 
 func TestUpsert_DuplicateActiveName(t *testing.T) {
 	store := newTestStore(t)
 
-	c1 := &Contact{Name: "Unique Person", Kind: "person"}
+	c1 := &Contact{FormattedName: "Unique Person", Kind: "individual"}
 	if _, err := store.Upsert(c1); err != nil {
 		t.Fatal(err)
 	}
 
-	// Inserting a second contact with the same name (case-insensitive)
-	// should fail due to the unique index on active contacts.
-	c2 := &Contact{Name: "unique person", Kind: "person"}
+	c2 := &Contact{FormattedName: "unique person", Kind: "individual"}
 	_, err := store.Upsert(c2)
 	if err == nil {
 		t.Error("expected error inserting duplicate active name, got nil")
+	}
+}
+
+// --- Property CRUD tests ---
+
+func TestAddProperty_GetProperties(t *testing.T) {
+	store := newTestStore(t)
+
+	c := &Contact{FormattedName: "Prop Tester", Kind: "individual"}
+	created, err := store.Upsert(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.AddProperty(created.ID, &Property{
+		Property: "EMAIL",
+		Value:    "test@example.com",
+		Type:     "work",
+		Pref:     1,
+	}); err != nil {
+		t.Fatalf("AddProperty(EMAIL) error = %v", err)
+	}
+	if err := store.AddProperty(created.ID, &Property{
+		Property: "TEL",
+		Value:    "+15551234567",
+		Type:     "cell",
+	}); err != nil {
+		t.Fatalf("AddProperty(TEL) error = %v", err)
+	}
+
+	props, err := store.GetProperties(created.ID)
+	if err != nil {
+		t.Fatalf("GetProperties() error = %v", err)
+	}
+	if len(props) != 2 {
+		t.Fatalf("GetProperties() returned %d, want 2", len(props))
+	}
+
+	// Properties are ordered by property name, then pref.
+	email := props[0]
+	if email.Property != "EMAIL" || email.Value != "test@example.com" || email.Type != "work" || email.Pref != 1 {
+		t.Errorf("EMAIL prop = %+v", email)
+	}
+	tel := props[1]
+	if tel.Property != "TEL" || tel.Value != "+15551234567" || tel.Type != "cell" {
+		t.Errorf("TEL prop = %+v", tel)
+	}
+}
+
+func TestFindByPropertyExact(t *testing.T) {
+	store := newTestStore(t)
+
+	c1 := &Contact{FormattedName: "Email Alice", Kind: "individual"}
+	created1, err := store.Upsert(c1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = store.AddProperty(created1.ID, &Property{Property: "EMAIL", Value: "alice@example.com"})
+
+	c2 := &Contact{FormattedName: "Email Bob", Kind: "individual"}
+	created2, err := store.Upsert(c2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = store.AddProperty(created2.ID, &Property{Property: "EMAIL", Value: "bob@example.com"})
+
+	// Exact match.
+	results, err := store.FindByPropertyExact("EMAIL", "alice@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("got %d results, want 1", len(results))
+	}
+	if results[0].FormattedName != "Email Alice" {
+		t.Errorf("FormattedName = %q, want %q", results[0].FormattedName, "Email Alice")
+	}
+
+	// Case-insensitive.
+	results, err = store.FindByPropertyExact("EMAIL", "ALICE@EXAMPLE.COM")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 1 {
+		t.Fatalf("case-insensitive: got %d results, want 1", len(results))
+	}
+}
+
+func TestFindByProperty_LIKE(t *testing.T) {
+	store := newTestStore(t)
+
+	c1 := &Contact{FormattedName: "Tel Alice", Kind: "individual"}
+	created1, err := store.Upsert(c1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = store.AddProperty(created1.ID, &Property{Property: "TEL", Value: "+15551111111"})
+
+	c2 := &Contact{FormattedName: "Tel Bob", Kind: "individual"}
+	created2, err := store.Upsert(c2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = store.AddProperty(created2.ID, &Property{Property: "TEL", Value: "+15552222222"})
+
+	// Partial match should find both.
+	results, err := store.FindByProperty("TEL", "+1555")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("got %d results, want 2", len(results))
+	}
+}
+
+func TestDeleteProperty(t *testing.T) {
+	store := newTestStore(t)
+
+	c := &Contact{FormattedName: "Del Prop", Kind: "individual"}
+	created, err := store.Upsert(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	p := &Property{Property: "EMAIL", Value: "del@example.com"}
+	_ = store.AddProperty(created.ID, p)
+
+	if err := store.DeleteProperty(p.ID); err != nil {
+		t.Fatalf("DeleteProperty() error = %v", err)
+	}
+
+	props, _ := store.GetProperties(created.ID)
+	if len(props) != 0 {
+		t.Errorf("expected 0 properties after delete, got %d", len(props))
+	}
+}
+
+func TestDeleteContactProperties(t *testing.T) {
+	store := newTestStore(t)
+
+	c := &Contact{FormattedName: "Multi Email", Kind: "individual"}
+	created, err := store.Upsert(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_ = store.AddProperty(created.ID, &Property{Property: "EMAIL", Value: "a@example.com"})
+	_ = store.AddProperty(created.ID, &Property{Property: "EMAIL", Value: "b@example.com"})
+	_ = store.AddProperty(created.ID, &Property{Property: "TEL", Value: "+15551234567"})
+
+	if err := store.DeleteContactProperties(created.ID, "EMAIL"); err != nil {
+		t.Fatal(err)
+	}
+
+	props, _ := store.GetProperties(created.ID)
+	if len(props) != 1 {
+		t.Fatalf("expected 1 property after deleting EMAILs, got %d", len(props))
+	}
+	if props[0].Property != "TEL" {
+		t.Errorf("remaining property = %q, want TEL", props[0].Property)
+	}
+}
+
+func TestGetWithProperties(t *testing.T) {
+	store := newTestStore(t)
+
+	c := &Contact{FormattedName: "Full Contact", Kind: "individual"}
+	created, err := store.Upsert(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_ = store.AddProperty(created.ID, &Property{Property: "EMAIL", Value: "full@example.com"})
+	_ = store.AddProperty(created.ID, &Property{Property: "timezone", Value: "America/Chicago"})
+
+	got, err := store.GetWithProperties(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Properties) != 2 {
+		t.Errorf("Properties count = %d, want 2", len(got.Properties))
+	}
+}
+
+func TestFindByNickname(t *testing.T) {
+	store := newTestStore(t)
+
+	c := &Contact{FormattedName: "David McNett", Kind: "individual", Nickname: "Nugget"}
+	if _, err := store.Upsert(c); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := store.FindByNickname("nugget")
+	if err != nil {
+		t.Fatalf("FindByNickname() error = %v", err)
+	}
+	if got.FormattedName != "David McNett" {
+		t.Errorf("FormattedName = %q, want %q", got.FormattedName, "David McNett")
+	}
+
+	_, err = store.FindByNickname("nonexistent")
+	if err != sql.ErrNoRows {
+		t.Errorf("FindByNickname(nonexistent) error = %v, want sql.ErrNoRows", err)
+	}
+}
+
+func TestUpsert_VCardFields(t *testing.T) {
+	store := newTestStore(t)
+
+	c := &Contact{
+		FormattedName: "Dr. Jane Smith Jr.",
+		Kind:          "individual",
+		FamilyName:    "Smith",
+		GivenName:     "Jane",
+		NamePrefix:    "Dr.",
+		NameSuffix:    "Jr.",
+		Nickname:      "Janey",
+		Org:           "Acme Corp",
+		Title:         "VP Engineering",
+		Role:          "Technical Leadership",
+		Note:          "Met at conference",
+		AISummary:     "Leads eng team at Acme",
+	}
+
+	created, err := store.Upsert(c)
+	if err != nil {
+		t.Fatalf("Upsert() error = %v", err)
+	}
+
+	got, err := store.Get(created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if got.FamilyName != "Smith" {
+		t.Errorf("FamilyName = %q, want %q", got.FamilyName, "Smith")
+	}
+	if got.GivenName != "Jane" {
+		t.Errorf("GivenName = %q, want %q", got.GivenName, "Jane")
+	}
+	if got.NamePrefix != "Dr." {
+		t.Errorf("NamePrefix = %q, want %q", got.NamePrefix, "Dr.")
+	}
+	if got.Nickname != "Janey" {
+		t.Errorf("Nickname = %q, want %q", got.Nickname, "Janey")
+	}
+	if got.Org != "Acme Corp" {
+		t.Errorf("Org = %q, want %q", got.Org, "Acme Corp")
+	}
+	if got.Title != "VP Engineering" {
+		t.Errorf("Title = %q, want %q", got.Title, "VP Engineering")
+	}
+	if got.Role != "Technical Leadership" {
+		t.Errorf("Role = %q, want %q", got.Role, "Technical Leadership")
+	}
+	if got.Note != "Met at conference" {
+		t.Errorf("Note = %q, want %q", got.Note, "Met at conference")
+	}
+	if got.Rev == "" {
+		t.Error("Rev should be set automatically")
+	}
+}
+
+func TestForeignKeysEnabled(t *testing.T) {
+	store := newTestStore(t)
+
+	var enabled int
+	err := store.db.QueryRow(`PRAGMA foreign_keys`).Scan(&enabled)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if enabled != 1 {
+		t.Errorf("foreign_keys pragma = %d, want 1", enabled)
+	}
+
+	// Inserting a property for a non-existent contact should fail.
+	bogusID := uuid.New()
+	err = store.AddProperty(bogusID, &Property{Property: "EMAIL", Value: "nobody@example.com"})
+	if err == nil {
+		t.Error("expected foreign key violation for bogus contact_id")
 	}
 }

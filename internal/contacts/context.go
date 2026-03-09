@@ -3,7 +3,6 @@ package contacts
 import (
 	"context"
 	"fmt"
-	"sort"
 	"strings"
 )
 
@@ -68,36 +67,31 @@ func (p *ContextProvider) GetContext(ctx context.Context, userMessage string) (s
 			continue
 		}
 
-		// Load facts for this contact.
-		facts, _ := p.store.GetFacts(c.ID)
+		// Load properties for this contact.
+		props, _ := p.store.GetProperties(c.ID)
 
 		if included > 0 {
 			sb.WriteString("\n")
 		}
 
-		sb.WriteString(fmt.Sprintf("**%s**", c.Name))
-		if c.Relationship != "" {
-			sb.WriteString(fmt.Sprintf(" (%s)", c.Relationship))
+		sb.WriteString(fmt.Sprintf("**%s**", c.FormattedName))
+		if c.Org != "" {
+			sb.WriteString(fmt.Sprintf(" (%s)", c.Org))
 		}
-		if c.Summary != "" {
-			sb.WriteString(fmt.Sprintf(" — %s", c.Summary))
+		if c.AISummary != "" {
+			sb.WriteString(fmt.Sprintf(" — %s", c.AISummary))
 		}
 		if c.TrustZone != "" {
 			sb.WriteString(fmt.Sprintf(" [%s]", c.TrustZone))
 		}
 		sb.WriteString("\n")
 
-		if len(facts) > 0 {
-			keys := make([]string, 0, len(facts))
-			for k := range facts {
-				keys = append(keys, k)
+		for _, prop := range props {
+			label := prop.Property
+			if prop.Type != "" {
+				label += " (" + prop.Type + ")"
 			}
-			sort.Strings(keys)
-			parts := make([]string, 0, len(keys))
-			for _, k := range keys {
-				parts = append(parts, fmt.Sprintf("%s: %s", k, strings.Join(facts[k], ", ")))
-			}
-			sb.WriteString("  " + strings.Join(parts, " | ") + "\n")
+			sb.WriteString(fmt.Sprintf("  %s: %s\n", label, prop.Value))
 		}
 
 		included++

@@ -2630,7 +2630,7 @@ type emailContactResolver struct {
 // ResolveTrustZone returns the trust zone for the contact matching the
 // given email address. Returns ("", false, nil) if no contact is found.
 func (r *emailContactResolver) ResolveTrustZone(addr string) (string, bool, error) {
-	matches, err := r.store.FindByFact("email", addr)
+	matches, err := r.store.FindByPropertyExact("EMAIL", addr)
 	if err != nil {
 		return "", false, err
 	}
@@ -2641,20 +2641,20 @@ func (r *emailContactResolver) ResolveTrustZone(addr string) (string, bool, erro
 }
 
 // contactPhoneResolver resolves phone numbers to contact names via the
-// contact directory's fact store. It looks up contacts with a "phone"
-// fact matching the given phone number.
+// contact directory's property store. It looks up contacts with a TEL
+// property matching the given phone number.
 type contactPhoneResolver struct {
 	store *contacts.Store
 }
 
-// ResolvePhone returns the name of the contact whose phone fact matches
-// the given phone number. Returns ("", false) if no match is found.
+// ResolvePhone returns the name of the contact whose TEL property
+// matches the given phone number. Returns ("", false) if no match.
 func (r *contactPhoneResolver) ResolvePhone(phone string) (string, bool) {
-	matches, err := r.store.FindByFact("phone", phone)
+	matches, err := r.store.FindByPropertyExact("TEL", phone)
 	if err != nil || len(matches) == 0 {
 		return "", false
 	}
-	return matches[0].Name, true
+	return matches[0].FormattedName, true
 }
 
 // contactNameLookup resolves contact names to summaries for channel
@@ -2680,17 +2680,16 @@ func (r *contactNameLookup) LookupContactByName(name string) *agent.ContactSumma
 		return nil
 	}
 
-	facts, err := r.store.GetFacts(c.ID)
+	props, err := r.store.GetPropertiesMap(c.ID)
 	if err != nil {
-		slog.Error("failed to get facts for contact", "contact_id", c.ID, "name", c.Name, "error", err)
-		facts = nil
+		slog.Error("failed to get properties for contact", "contact_id", c.ID, "name", c.FormattedName, "error", err)
+		props = nil
 	}
 
 	return &agent.ContactSummary{
-		Name:         c.Name,
-		Relationship: c.Relationship,
-		Summary:      c.Summary,
-		Facts:        facts,
+		Name:       c.FormattedName,
+		Summary:    c.AISummary,
+		Properties: props,
 	}
 }
 

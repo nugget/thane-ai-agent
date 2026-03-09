@@ -34,7 +34,7 @@ func (m *mockNotifyHA) CallService(_ context.Context, domain, service string, da
 type mockNotifyContacts struct {
 	contact *contacts.Contact
 	findErr error
-	facts   map[string][]string
+	props   map[string][]string
 }
 
 func (m *mockNotifyContacts) ResolveContact(_ string) (*contacts.Contact, error) {
@@ -44,16 +44,16 @@ func (m *mockNotifyContacts) ResolveContact(_ string) (*contacts.Contact, error)
 	return m.contact, nil
 }
 
-func (m *mockNotifyContacts) GetFacts(_ uuid.UUID) (map[string][]string, error) {
-	return m.facts, nil
+func (m *mockNotifyContacts) GetPropertiesMap(_ uuid.UUID) (map[string][]string, error) {
+	return m.props, nil
 }
 
 func newTestNotifyRegistry() (*Registry, *mockNotifyHA) {
 	testID := uuid.New()
 	ha := &mockNotifyHA{}
 	resolver := &mockNotifyContacts{
-		contact: &contacts.Contact{ID: testID, Name: "nugget"},
-		facts:   map[string][]string{"ha_companion_app": {"mobile_app_mcphone"}},
+		contact: &contacts.Contact{ID: testID, FormattedName: "nugget"},
+		props:   map[string][]string{"ha_companion_app": {"mobile_app_mcphone"}},
 	}
 	sender := notifications.NewSender(ha, resolver, nil, "test-thane", slog.Default())
 
@@ -134,8 +134,8 @@ func TestHANotify_WithTitleAndPriority(t *testing.T) {
 func TestHANotify_SenderError(t *testing.T) {
 	testID := uuid.New()
 	resolver := &mockNotifyContacts{
-		contact: &contacts.Contact{ID: testID, Name: "nugget"},
-		facts:   map[string][]string{},
+		contact: &contacts.Contact{ID: testID, FormattedName: "nugget"},
+		props:   map[string][]string{},
 	}
 	sender := notifications.NewSender(&mockNotifyHA{}, resolver, nil, "test-thane", slog.Default())
 
@@ -331,8 +331,8 @@ func newTestNotifyRegistryWithRouter(t *testing.T) (*Registry, *mockRouterProvid
 
 	testID := uuid.New()
 	resolver := &mockNotifyContacts{
-		contact: &contacts.Contact{ID: testID, Name: "nugget"},
-		facts:   map[string][]string{"ha_companion_app": {"mobile_app_mcphone"}},
+		contact: &contacts.Contact{ID: testID, FormattedName: "nugget"},
+		props:   map[string][]string{"ha_companion_app": {"mobile_app_mcphone"}},
 	}
 
 	dbPath := filepath.Join(t.TempDir(), "router-test.db")

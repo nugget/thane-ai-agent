@@ -50,20 +50,19 @@ func TestContextProvider_NoContacts(t *testing.T) {
 func TestContextProvider_ReturnsRelevant(t *testing.T) {
 	store := newTestStore(t)
 
-	// Seed contacts with knowledge.
-	c1 := &Contact{Name: "Alice Relevant", Kind: "person", Relationship: "friend", Summary: "Works at TechCo"}
+	c1 := &Contact{FormattedName: "Alice Relevant", Kind: "individual", AISummary: "Works at TechCo"}
 	created1, _ := store.Upsert(c1)
 	_ = store.SetEmbedding(created1.ID, []float32{0.9, 0.1, 0.0})
-	_ = store.SetFact(created1.ID, "email", "alice@techco.com")
+	_ = store.AddProperty(created1.ID, &Property{Property: "EMAIL", Value: "alice@techco.com"})
+	_ = store.AddProperty(created1.ID, &Property{Property: "timezone", Value: "America/Chicago"})
 
-	c2 := &Contact{Name: "Bob Irrelevant", Kind: "person", Summary: "Completely unrelated"}
+	c2 := &Contact{FormattedName: "Bob Irrelevant", Kind: "individual", AISummary: "Completely unrelated"}
 	created2, _ := store.Upsert(c2)
 	_ = store.SetEmbedding(created2.ID, []float32{0.0, 0.0, 1.0})
 
-	// Query embedding close to Alice.
 	emb := &fakeEmbedder{embedding: []float32{1.0, 0.0, 0.0}}
 	cp := NewContextProvider(store, emb)
-	cp.SetMinScore(0.5) // Only Alice should pass.
+	cp.SetMinScore(0.5)
 
 	result, err := cp.GetContext(context.Background(), "tell me about Alice")
 	if err != nil {
@@ -73,11 +72,14 @@ func TestContextProvider_ReturnsRelevant(t *testing.T) {
 	if !strings.Contains(result, "Alice Relevant") {
 		t.Errorf("result should contain 'Alice Relevant', got %q", result)
 	}
-	if !strings.Contains(result, "friend") {
-		t.Errorf("result should contain 'friend', got %q", result)
+	if !strings.Contains(result, "Works at TechCo") {
+		t.Errorf("result should contain 'Works at TechCo', got %q", result)
 	}
-	if !strings.Contains(result, "email") {
-		t.Errorf("result should contain fact 'email', got %q", result)
+	if !strings.Contains(result, "EMAIL") {
+		t.Errorf("result should contain property 'EMAIL', got %q", result)
+	}
+	if !strings.Contains(result, "timezone") {
+		t.Errorf("result should contain property 'timezone', got %q", result)
 	}
 	if !strings.Contains(result, "[known]") {
 		t.Errorf("result should contain trust zone tag '[known]', got %q", result)
@@ -90,9 +92,8 @@ func TestContextProvider_ReturnsRelevant(t *testing.T) {
 func TestContextProvider_ScoreFiltering(t *testing.T) {
 	store := newTestStore(t)
 
-	c := &Contact{Name: "Low Score Contact", Kind: "person"}
+	c := &Contact{FormattedName: "Low Score Contact", Kind: "individual"}
 	created, _ := store.Upsert(c)
-	// Orthogonal to query — will have ~0 similarity.
 	_ = store.SetEmbedding(created.ID, []float32{0.0, 1.0, 0.0})
 
 	emb := &fakeEmbedder{embedding: []float32{1.0, 0.0, 0.0}}
@@ -111,9 +112,8 @@ func TestContextProvider_ScoreFiltering(t *testing.T) {
 func TestContextProvider_MaxContacts(t *testing.T) {
 	store := newTestStore(t)
 
-	// Create 5 contacts all with same embedding direction.
 	for i := 0; i < 5; i++ {
-		c := &Contact{Name: strings.Repeat("X", i+1), Kind: "person"}
+		c := &Contact{FormattedName: strings.Repeat("X", i+1), Kind: "individual"}
 		created, _ := store.Upsert(c)
 		_ = store.SetEmbedding(created.ID, []float32{0.8, 0.2, 0.0})
 	}
@@ -128,7 +128,6 @@ func TestContextProvider_MaxContacts(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Should only include 2 contacts.
 	lines := strings.Split(strings.TrimSpace(result), "\n")
 	boldCount := 0
 	for _, line := range lines {
@@ -144,7 +143,7 @@ func TestContextProvider_MaxContacts(t *testing.T) {
 func TestContextProvider_TrustZoneTag(t *testing.T) {
 	store := newTestStore(t)
 
-	c := &Contact{Name: "Trusted Alice", Kind: "person", TrustZone: "trusted", Summary: "A trusted friend"}
+	c := &Contact{FormattedName: "Trusted Alice", Kind: "individual", TrustZone: "trusted", AISummary: "A trusted friend"}
 	created, _ := store.Upsert(c)
 	_ = store.SetEmbedding(created.ID, []float32{0.9, 0.1, 0.0})
 
