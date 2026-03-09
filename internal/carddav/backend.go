@@ -2,6 +2,8 @@ package carddav
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -125,9 +127,22 @@ func (b *Backend) PutAddressObject(_ context.Context, path string, card vcard.Ca
 		return nil, err
 	}
 
-	// Check conditional headers for conflict detection.
+	// Validate that the vCard UID (if present) matches the URL path
+	// UUID.  A mismatch would cause the contact to be stored under
+	// one ID but re-emitted with a different UID, confusing clients.
+	if cardUID := card.Value(vcard.FieldUID); cardUID != "" {
+		if cardUID != id.String() {
+			return nil, fmt.Errorf("vCard UID %q does not match object path %s", cardUID, id)
+		}
+	}
+
+	// Check conditional headers for conflict detection.  Distinguish
+	// not-found from real DB errors so we don't mask failures.
 	existing, existErr := b.store.GetWithProperties(id)
 	exists := existErr == nil
+	if existErr != nil && !errors.Is(existErr, sql.ErrNoRows) {
+		return nil, fmt.Errorf("check existing contact: %w", existErr)
+	}
 
 	if opts != nil {
 		if opts.IfNoneMatch.IsSet() && opts.IfNoneMatch.IsWildcard() && exists {
@@ -147,26 +162,9 @@ func (b *Backend) PutAddressObject(_ context.Context, path string, card vcard.Ca
 	contact, props := CardToContact(card)
 	contact.ID = id
 
-	upserted, err := b.store.Upsert(contact)
+	upserted, err := b.store.UpsertWithProperties(contact, props)
 	if err != nil {
 		return nil, fmt.Errorf("upsert contact: %w", err)
-	}
-
-	// Replace all properties atomically.
-	if err := b.store.DeleteAllProperties(upserted.ID); err != nil {
-		return nil, fmt.Errorf("clear properties: %w", err)
-	}
-	for _, p := range props {
-		if err := b.store.AddProperty(upserted.ID, &contacts.Property{
-			Property:  p.Property,
-			Value:     p.Value,
-			Type:      p.Type,
-			Pref:      p.Pref,
-			Label:     p.Label,
-			MediaType: p.MediaType,
-		}); err != nil {
-			return nil, fmt.Errorf("add property %s: %w", p.Property, err)
-		}
 	}
 
 	// Re-read to get the final state with Rev set by Upsert.

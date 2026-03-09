@@ -2,11 +2,13 @@ package carddav
 
 import (
 	"context"
+	"crypto/subtle"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -193,13 +195,21 @@ func (s *Server) buildHandler() http.Handler {
 // the CardDAV endpoint.
 func (s *Server) withAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/.well-known/carddav" {
+		// Serve .well-known discovery without authentication so
+		// clients can find the CardDAV endpoint.  Accept with or
+		// without trailing slash.
+		clean := strings.TrimRight(r.URL.Path, "/")
+		if clean == "/.well-known/carddav" {
 			http.Redirect(w, r, "/carddav/", http.StatusMovedPermanently)
 			return
 		}
 
 		user, pass, ok := r.BasicAuth()
-		if !ok || user != s.username || pass != s.password {
+		// Use constant-time comparison for both username and
+		// password to avoid leaking credential info via timing.
+		userOK := subtle.ConstantTimeCompare([]byte(user), []byte(s.username)) == 1
+		passOK := subtle.ConstantTimeCompare([]byte(pass), []byte(s.password)) == 1
+		if !ok || !userOK || !passOK {
 			w.Header().Set("WWW-Authenticate", `Basic realm="Thane CardDAV"`)
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return

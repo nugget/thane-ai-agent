@@ -8,6 +8,7 @@ import (
 
 	"github.com/emersion/go-vcard"
 	"github.com/emersion/go-webdav/carddav"
+	"github.com/google/uuid"
 	_ "github.com/mattn/go-sqlite3"
 
 	"github.com/nugget/thane-ai-agent/internal/contacts"
@@ -240,6 +241,83 @@ func TestBackend_CreateAddressBookNotSupported(t *testing.T) {
 	err := b.CreateAddressBook(context.Background(), &carddav.AddressBook{})
 	if err == nil {
 		t.Error("expected error for CreateAddressBook")
+	}
+}
+
+func TestBackend_PutCreateNewContact(t *testing.T) {
+	b := newTestBackend(t)
+	ctx := context.Background()
+
+	// PUT to a new UUID that doesn't exist in the store — CardDAV
+	// clients create contacts this way.
+	newID, err := uuid.NewV7()
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := objectPath(newID)
+
+	card := make(vcard.Card)
+	card.SetValue(vcard.FieldVersion, "4.0")
+	card.SetValue(vcard.FieldUID, newID.String())
+	card.SetValue(vcard.FieldFormattedName, "New Contact")
+	card.SetKind(vcard.KindIndividual)
+	card.SetName(&vcard.Name{
+		FamilyName: "Contact",
+		GivenName:  "New",
+	})
+	card.Add(vcard.FieldEmail, &vcard.Field{
+		Value:  "new@example.com",
+		Params: vcard.Params{vcard.ParamType: {"home"}},
+	})
+
+	obj, err := b.PutAddressObject(ctx, path, card, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if obj.ETag == "" {
+		t.Error("expected non-empty ETag")
+	}
+
+	// GET the newly created contact.
+	got, err := b.GetAddressObject(ctx, path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fn := got.Card.Value(vcard.FieldFormattedName); fn != "New Contact" {
+		t.Errorf("FN = %q, want %q", fn, "New Contact")
+	}
+
+	emails := got.Card[vcard.FieldEmail]
+	if len(emails) != 1 || emails[0].Value != "new@example.com" {
+		t.Errorf("EMAIL = %+v", emails)
+	}
+}
+
+func TestBackend_PutUIDMismatch(t *testing.T) {
+	b := newTestBackend(t)
+	ctx := context.Background()
+
+	// Create a contact to get a valid path.
+	c, err := b.store.Upsert(&contacts.Contact{
+		FormattedName: "Mismatch Test",
+		Kind:          "individual",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := objectPath(c.ID)
+
+	// PUT a card with a different UID — should be rejected.
+	otherID, _ := uuid.NewV7()
+	card := make(vcard.Card)
+	card.SetValue(vcard.FieldVersion, "4.0")
+	card.SetValue(vcard.FieldUID, otherID.String())
+	card.SetValue(vcard.FieldFormattedName, "Mismatch")
+	card.SetKind(vcard.KindIndividual)
+
+	_, err = b.PutAddressObject(ctx, path, card, nil)
+	if err == nil {
+		t.Error("expected error for UID mismatch, got nil")
 	}
 }
 
