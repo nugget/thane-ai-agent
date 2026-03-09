@@ -813,6 +813,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// and the contact store for recipient → device resolution.
 	var notifSender *notifications.Sender
 	var notifRecords *notifications.RecordStore
+	var notifRouter *notifications.NotificationRouter
 	if ha != nil {
 		notifSender = notifications.NewSender(ha, contactStore, opStore, logger)
 		loop.Tools().SetHANotifier(notifSender)
@@ -826,6 +827,13 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		defer notifRecords.Close()
 		loop.Tools().SetNotificationRecords(notifRecords)
 		logger.Info("notification record store initialized", "path", cfg.DataDir+"/notifications.db")
+
+		// Provider-agnostic notification router — wraps the HA push sender
+		// behind a routing layer that selects delivery channel per recipient.
+		notifRouter = notifications.NewNotificationRouter(contactStore, notifRecords, logger)
+		notifRouter.RegisterProvider(notifications.NewHAPushProvider(notifSender))
+		loop.Tools().SetNotificationRouter(notifRouter)
+		logger.Info("notification router initialized", "providers", "ha_push")
 	}
 
 	// --- Email ---
@@ -1542,8 +1550,17 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 			notifRecords, sessionInj, delegateSpn, logger,
 		)
 
+		// Use the router for escalation so timeout_action: "escalate"
+		// respects per-recipient routing preferences. Falls back to the
+		// raw HA sender when the router is unavailable.
+		var escalationSender notifications.EscalationSender
+		if notifRouter != nil {
+			escalationSender = notifRouter
+		} else if notifSender != nil {
+			escalationSender = notifSender
+		}
 		timeoutWatcher := notifications.NewTimeoutWatcher(
-			notifRecords, notifCallbackDispatcher, notifSender,
+			notifRecords, notifCallbackDispatcher, escalationSender,
 			30*time.Second, logger,
 		)
 		go timeoutWatcher.Start(ctx)

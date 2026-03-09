@@ -12,15 +12,16 @@ import (
 type TimeoutWatcher struct {
 	records    *RecordStore
 	dispatcher *CallbackDispatcher
-	sender     *Sender
+	sender     EscalationSender
 	interval   time.Duration
 	logger     *slog.Logger
 }
 
 // NewTimeoutWatcher creates a timeout watcher. The sender parameter
 // is optional and only needed for "escalate" timeout actions that
-// re-send a notification at urgent priority.
-func NewTimeoutWatcher(records *RecordStore, dispatcher *CallbackDispatcher, sender *Sender, interval time.Duration, logger *slog.Logger) *TimeoutWatcher {
+// re-send a notification at urgent priority. It accepts any
+// [EscalationSender] (e.g., [*Sender] or [*NotificationRouter]).
+func NewTimeoutWatcher(records *RecordStore, dispatcher *CallbackDispatcher, sender EscalationSender, interval time.Duration, logger *slog.Logger) *TimeoutWatcher {
 	return &TimeoutWatcher{
 		records:    records,
 		dispatcher: dispatcher,

@@ -302,6 +302,251 @@ func TestHANotify_BackwardCompatNoActions(t *testing.T) {
 	}
 }
 
+// --- Router-based tool tests (send_notification, request_human_decision) ---
+
+// mockRouterProvider implements notifications.NotificationProvider for
+// testing the router-based tools.
+type mockRouterProvider struct {
+	name            string
+	sendCalls       []notifications.NotificationRequest
+	actionableCalls []notifications.ActionableRequest
+	sendErr         error
+	actionableErr   error
+}
+
+func (m *mockRouterProvider) Name() string { return m.name }
+
+func (m *mockRouterProvider) Send(_ context.Context, req notifications.NotificationRequest) error {
+	m.sendCalls = append(m.sendCalls, req)
+	return m.sendErr
+}
+
+func (m *mockRouterProvider) SendActionable(_ context.Context, req notifications.ActionableRequest) error {
+	m.actionableCalls = append(m.actionableCalls, req)
+	return m.actionableErr
+}
+
+func newTestNotifyRegistryWithRouter(t *testing.T) (*Registry, *mockRouterProvider, *notifications.RecordStore) {
+	t.Helper()
+
+	testID := uuid.New()
+	resolver := &mockNotifyContacts{
+		contact: &contacts.Contact{ID: testID, Name: "nugget"},
+		facts:   map[string][]string{"ha_companion_app": {"mobile_app_mcphone"}},
+	}
+
+	dbPath := filepath.Join(t.TempDir(), "router-test.db")
+	records, err := notifications.NewRecordStore(dbPath, slog.Default())
+	if err != nil {
+		t.Fatalf("NewRecordStore: %v", err)
+	}
+	t.Cleanup(func() { records.Close() })
+
+	router := notifications.NewNotificationRouter(resolver, records, slog.Default())
+	provider := &mockRouterProvider{name: "ha_push"}
+	router.RegisterProvider(provider)
+
+	reg := NewEmptyRegistry()
+	reg.SetNotificationRouter(router)
+
+	return reg, provider, records
+}
+
+func TestSendNotification_Registered(t *testing.T) {
+	reg, _, _ := newTestNotifyRegistryWithRouter(t)
+	tool := reg.Get("send_notification")
+	if tool == nil {
+		t.Fatal("send_notification tool not registered")
+	}
+	if !tool.AlwaysAvailable {
+		t.Error("send_notification should be AlwaysAvailable")
+	}
+}
+
+func TestRequestHumanDecision_Registered(t *testing.T) {
+	reg, _, _ := newTestNotifyRegistryWithRouter(t)
+	tool := reg.Get("request_human_decision")
+	if tool == nil {
+		t.Fatal("request_human_decision tool not registered")
+	}
+	if !tool.AlwaysAvailable {
+		t.Error("request_human_decision should be AlwaysAvailable")
+	}
+}
+
+func TestSendNotification_HappyPath(t *testing.T) {
+	reg, provider, _ := newTestNotifyRegistryWithRouter(t)
+
+	result, err := reg.Execute(context.Background(), "send_notification",
+		`{"recipient": "nugget", "message": "Hello from router"}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result, "nugget") {
+		t.Errorf("result should mention recipient, got: %s", result)
+	}
+	if len(provider.sendCalls) != 1 {
+		t.Fatalf("expected 1 send call, got %d", len(provider.sendCalls))
+	}
+	if provider.sendCalls[0].Message != "Hello from router" {
+		t.Errorf("message = %q, want %q", provider.sendCalls[0].Message, "Hello from router")
+	}
+}
+
+func TestSendNotification_WithTitleAndPriority(t *testing.T) {
+	reg, provider, _ := newTestNotifyRegistryWithRouter(t)
+
+	_, err := reg.Execute(context.Background(), "send_notification",
+		`{"recipient": "nugget", "message": "urgent alert", "title": "Warning", "priority": "urgent"}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if provider.sendCalls[0].Title != "Warning" {
+		t.Errorf("title = %q, want %q", provider.sendCalls[0].Title, "Warning")
+	}
+	if provider.sendCalls[0].Priority != "urgent" {
+		t.Errorf("priority = %q, want %q", provider.sendCalls[0].Priority, "urgent")
+	}
+}
+
+func TestSendNotification_MissingRecipient(t *testing.T) {
+	reg, _, _ := newTestNotifyRegistryWithRouter(t)
+
+	_, err := reg.Execute(context.Background(), "send_notification",
+		`{"message": "no recipient"}`)
+	if err == nil {
+		t.Fatal("expected error for missing recipient")
+	}
+	if !strings.Contains(err.Error(), "recipient") {
+		t.Errorf("error should mention recipient, got: %v", err)
+	}
+}
+
+func TestSendNotification_MissingMessage(t *testing.T) {
+	reg, _, _ := newTestNotifyRegistryWithRouter(t)
+
+	_, err := reg.Execute(context.Background(), "send_notification",
+		`{"recipient": "nugget"}`)
+	if err == nil {
+		t.Fatal("expected error for missing message")
+	}
+	if !strings.Contains(err.Error(), "message") {
+		t.Errorf("error should mention message, got: %v", err)
+	}
+}
+
+func TestRequestHumanDecision_HappyPath(t *testing.T) {
+	reg, provider, records := newTestNotifyRegistryWithRouter(t)
+
+	ctx := WithConversationID(context.Background(), "conv-router")
+	ctx = WithSessionID(ctx, "sess-router")
+
+	result, err := reg.Execute(ctx, "request_human_decision",
+		`{"recipient": "nugget", "message": "Approve?", "actions": [{"id": "yes", "label": "Yes"}, {"id": "no", "label": "No"}], "context": "test context", "timeout": "10m", "timeout_action": "no"}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !strings.Contains(result, "yes, no") {
+		t.Errorf("result should list action IDs, got: %s", result)
+	}
+	if !strings.Contains(result, "Request ID:") {
+		t.Errorf("result should contain Request ID, got: %s", result)
+	}
+	if !strings.Contains(result, "10m") {
+		t.Errorf("result should mention timeout, got: %s", result)
+	}
+
+	// Provider should have been called.
+	if len(provider.actionableCalls) != 1 {
+		t.Fatalf("expected 1 actionable call, got %d", len(provider.actionableCalls))
+	}
+
+	// Extract request ID from result and verify record.
+	parts := strings.Split(result, "Request ID: ")
+	if len(parts) < 2 {
+		t.Fatal("could not extract request ID from result")
+	}
+	requestID := strings.Split(parts[1], ".")[0]
+
+	rec, err := records.Get(requestID)
+	if err != nil {
+		t.Fatalf("Get record: %v", err)
+	}
+	if rec.OriginConversation != "conv-router" {
+		t.Errorf("OriginConversation = %q, want %q", rec.OriginConversation, "conv-router")
+	}
+	if rec.OriginSession != "sess-router" {
+		t.Errorf("OriginSession = %q, want %q", rec.OriginSession, "sess-router")
+	}
+	if rec.TimeoutAction != "no" {
+		t.Errorf("TimeoutAction = %q, want %q", rec.TimeoutAction, "no")
+	}
+	if rec.Context != "test context" {
+		t.Errorf("Context = %q, want %q", rec.Context, "test context")
+	}
+}
+
+func TestRequestHumanDecision_MissingActions(t *testing.T) {
+	reg, _, _ := newTestNotifyRegistryWithRouter(t)
+
+	_, err := reg.Execute(context.Background(), "request_human_decision",
+		`{"recipient": "nugget", "message": "test"}`)
+	if err == nil {
+		t.Fatal("expected error for missing actions")
+	}
+	if !strings.Contains(err.Error(), "action") {
+		t.Errorf("error should mention action, got: %v", err)
+	}
+}
+
+func TestRequestHumanDecision_MissingRecipient(t *testing.T) {
+	reg, _, _ := newTestNotifyRegistryWithRouter(t)
+
+	_, err := reg.Execute(context.Background(), "request_human_decision",
+		`{"message": "test", "actions": [{"id": "ok", "label": "OK"}]}`)
+	if err == nil {
+		t.Fatal("expected error for missing recipient")
+	}
+	if !strings.Contains(err.Error(), "recipient") {
+		t.Errorf("error should mention recipient, got: %v", err)
+	}
+}
+
+func TestRequestHumanDecision_InvalidTimeout(t *testing.T) {
+	reg, _, _ := newTestNotifyRegistryWithRouter(t)
+
+	_, err := reg.Execute(context.Background(), "request_human_decision",
+		`{"recipient": "nugget", "message": "test", "actions": [{"id": "ok", "label": "OK"}], "timeout": "banana"}`)
+	if err == nil {
+		t.Fatal("expected error for invalid timeout")
+	}
+	if !strings.Contains(err.Error(), "invalid timeout") {
+		t.Errorf("error should mention invalid timeout, got: %v", err)
+	}
+}
+
+func TestRequestHumanDecision_DefaultTimeout(t *testing.T) {
+	reg, _, records := newTestNotifyRegistryWithRouter(t)
+
+	result, err := reg.Execute(context.Background(), "request_human_decision",
+		`{"recipient": "nugget", "message": "test", "actions": [{"id": "ok", "label": "OK"}]}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result, "30m") {
+		t.Errorf("result should mention default 30m timeout, got: %s", result)
+	}
+
+	// Extract request ID and verify timeout_seconds in record.
+	parts := strings.Split(result, "Request ID: ")
+	requestID := strings.Split(parts[1], ".")[0]
+	rec, _ := records.Get(requestID)
+	if rec.TimeoutSeconds != 1800 {
+		t.Errorf("TimeoutSeconds = %d, want 1800", rec.TimeoutSeconds)
+	}
+}
+
 func TestParseActionsArg(t *testing.T) {
 	tests := []struct {
 		name string
