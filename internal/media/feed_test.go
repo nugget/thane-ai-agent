@@ -260,6 +260,54 @@ func TestResolveYouTubeFeed_HandleURL(t *testing.T) {
 	}
 }
 
+func TestResolveYouTubeFeed_PlaylistURL(t *testing.T) {
+	tests := []struct {
+		name string
+		url  string
+		want string
+	}{
+		{
+			name: "standard playlist",
+			url:  "https://www.youtube.com/playlist?list=PL96C35uN7xGLLeET0dOWaKHkAlPsrkcha",
+			want: "https://www.youtube.com/feeds/videos.xml?playlist_id=PL96C35uN7xGLLeET0dOWaKHkAlPsrkcha",
+		},
+		{
+			name: "playlist with extra params",
+			url:  "https://www.youtube.com/playlist?list=PLtest123&si=abcdef",
+			want: "https://www.youtube.com/feeds/videos.xml?playlist_id=PLtest123",
+		},
+		{
+			name: "m.youtube.com playlist",
+			url:  "https://m.youtube.com/playlist?list=PLmobile456",
+			want: "https://www.youtube.com/feeds/videos.xml?playlist_id=PLmobile456",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := resolveYouTubeFeed(context.Background(), http.DefaultClient, tt.url)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestResolveYouTubeFeed_PlaylistMissingList(t *testing.T) {
+	// /playlist without a list param should return the URL unchanged.
+	url := "https://www.youtube.com/playlist"
+	got, err := resolveYouTubeFeed(context.Background(), http.DefaultClient, url)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != url {
+		t.Errorf("got %q, want %q (unchanged)", got, url)
+	}
+}
+
 func TestResolveYouTubeFeed_NonYouTube(t *testing.T) {
 	url := "https://example.com/feed.xml"
 	got, err := resolveYouTubeFeed(context.Background(), http.DefaultClient, url)
