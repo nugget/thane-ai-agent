@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 )
 
 // WorkspaceFile represents a loaded workspace bootstrap file.
@@ -11,13 +12,16 @@ type WorkspaceFile struct {
 	// Name is the filename (e.g., "AGENTS.md").
 	Name string
 
-	// Path is the absolute path to the file on disk.
+	// Path is the path to the file on disk, constructed by joining the
+	// workspace directory and Name. It is absolute only when the directory
+	// passed to LoadWorkspaceFiles is absolute.
 	Path string
 
 	// Content is the file content, possibly truncated.
 	Content string
 
-	// Missing is true when the file does not exist on disk.
+	// Missing is true when the file does not exist on disk or is
+	// effectively missing (empty or whitespace-only content).
 	Missing bool
 }
 
@@ -123,26 +127,55 @@ func loadOneFile(path, name string, maxChars int) WorkspaceFile {
 	}
 }
 
-// TruncateFile truncates content to maxChars using OpenClaw's 70/20
-// head/tail strategy: keep 70% from the start and 20% from the end,
-// with a truncation marker in between (consuming the remaining 10%).
+// TruncateFile truncates content to approximately maxChars (byte count)
+// using OpenClaw's 70/20 head/tail strategy: keep 70% from the start and
+// 20% from the end, with a truncation marker in between (consuming the
+// remaining 10%). Slice points are adjusted to avoid splitting UTF-8 runes.
 func TruncateFile(content string, maxChars int) string {
 	if len(content) <= maxChars {
 		return content
 	}
 
 	const marker = "\n\n[... content truncated ...]\n\n"
-	headChars := maxChars * 70 / 100
-	tailChars := maxChars * 20 / 100
 
-	// Ensure we don't exceed maxChars including the marker.
+	// If maxChars is too small to fit the marker, just return the marker.
 	available := maxChars - len(marker)
-	if headChars+tailChars > available {
-		headChars = available * 7 / 9
-		tailChars = available - headChars
+	if available <= 0 {
+		return marker[:maxChars]
 	}
 
-	head := content[:headChars]
-	tail := content[len(content)-tailChars:]
+	headChars := available * 7 / 9
+	tailChars := available - headChars
+
+	// Adjust slice points to rune boundaries.
+	head := truncateToRuneBoundary(content, headChars)
+	tail := truncateFromRuneBoundary(content, tailChars)
 	return head + marker + tail
+}
+
+// truncateToRuneBoundary returns the longest prefix of s that is at most
+// n bytes and does not split a UTF-8 rune.
+func truncateToRuneBoundary(s string, n int) string {
+	if n >= len(s) {
+		return s
+	}
+	// Walk back from n until we're at the start of a rune.
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n]
+}
+
+// truncateFromRuneBoundary returns the longest suffix of s that is at most
+// n bytes and does not split a UTF-8 rune.
+func truncateFromRuneBoundary(s string, n int) string {
+	if n >= len(s) {
+		return s
+	}
+	start := len(s) - n
+	// Walk forward until we're at the start of a rune.
+	for start < len(s) && !utf8.RuneStart(s[start]) {
+		start++
+	}
+	return s[start:]
 }

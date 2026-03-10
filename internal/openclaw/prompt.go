@@ -78,7 +78,7 @@ func assemblePrompt(files []WorkspaceFile, skills []SkillEntry, subagent bool) s
 	// 5. Project Context — injected workspace files.
 	var contextFiles []WorkspaceFile
 	for _, f := range files {
-		if !f.Missing && f.Content != "" {
+		if f.Content != "" {
 			contextFiles = append(contextFiles, f)
 		}
 	}
@@ -87,10 +87,10 @@ func assemblePrompt(files []WorkspaceFile, skills []SkillEntry, subagent bool) s
 		sb.WriteString("# Project Context\n\n")
 		sb.WriteString("The following project context files have been loaded:\n")
 
-		// Check for SOUL.md presence.
+		// Check for SOUL.md presence (only trigger persona if it exists, not [MISSING]).
 		hasSoul := false
 		for _, f := range contextFiles {
-			if f.Name == "SOUL.md" {
+			if f.Name == "SOUL.md" && !f.Missing {
 				hasSoul = true
 				break
 			}

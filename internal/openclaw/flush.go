@@ -40,5 +40,9 @@ func ShouldFlush(tokenCount, compactionThreshold, softThresholdTokens int) bool 
 	if tokenCount <= 0 || compactionThreshold <= 0 {
 		return false
 	}
-	return tokenCount >= compactionThreshold-softThresholdTokens
+	trigger := compactionThreshold - softThresholdTokens
+	if trigger < 0 {
+		trigger = 0
+	}
+	return tokenCount >= trigger
 }

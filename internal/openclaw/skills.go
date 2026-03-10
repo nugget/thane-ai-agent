@@ -76,6 +76,7 @@ func parseSkillFile(path, dirName string) (SkillEntry, bool) {
 	)
 
 	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), 256*1024) // handle long frontmatter lines
 	lineNum := 0
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -103,6 +104,9 @@ func parseSkillFile(path, dirName string) (SkillEntry, bool) {
 		case "description":
 			description = val
 		}
+	}
+	if scanner.Err() != nil {
+		return SkillEntry{}, false
 	}
 
 	if name == "" {

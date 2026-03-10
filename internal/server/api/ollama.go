@@ -241,9 +241,9 @@ func handleOllamaChatShared(w http.ResponseWriter, r *http.Request, loop *agent.
 	// --- OpenClaw emulation profile ---
 	case "thane:openclaw":
 		model = ""
-		hints[router.HintQualityFloor] = premiumFloor
-		hints[router.HintMission] = "openclaw"
 		if ocCfg := loop.OpenClawConfig(); ocCfg != nil {
+			hints[router.HintQualityFloor] = premiumFloor
+			hints[router.HintMission] = "openclaw"
 			if prompt, err := openclaw.BuildSystemPrompt(ocCfg, false); err == nil {
 				ocSystemPrompt = prompt
 			} else {
