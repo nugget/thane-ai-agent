@@ -271,15 +271,54 @@ func TestResolveYouTubeFeed_NonYouTube(t *testing.T) {
 	}
 }
 
-func TestYTAlternateFeedRe(t *testing.T) {
-	html := `<link rel="alternate" type="application/rss+xml" title="RSS" href="https://www.youtube.com/feeds/videos.xml?channel_id=UCabc123xyz">`
+// ytAlternateFeedMatch extracts the feed URL from a ytAlternateFeedRe match,
+// handling both alternation groups (type-before-href and href-before-type).
+func ytAlternateFeedMatch(html string) string {
 	m := ytAlternateFeedRe.FindStringSubmatch(html)
-	if len(m) != 2 {
-		t.Fatalf("ytAlternateFeedRe did not match; got %d groups", len(m))
+	if m == nil {
+		return ""
 	}
+	if m[1] != "" {
+		return m[1]
+	}
+	return m[2]
+}
+
+func TestYTAlternateFeedRe(t *testing.T) {
 	want := "https://www.youtube.com/feeds/videos.xml?channel_id=UCabc123xyz"
-	if m[1] != want {
-		t.Errorf("got %q, want %q", m[1], want)
+
+	tests := []struct {
+		name string
+		html string
+	}{
+		{
+			name: "type before href, double quotes",
+			html: `<link rel="alternate" type="application/rss+xml" title="RSS" href="https://www.youtube.com/feeds/videos.xml?channel_id=UCabc123xyz">`,
+		},
+		{
+			name: "href before type, double quotes",
+			html: `<link rel="alternate" href="https://www.youtube.com/feeds/videos.xml?channel_id=UCabc123xyz" type="application/rss+xml" title="RSS">`,
+		},
+		{
+			name: "type before href, single quotes",
+			html: `<link rel='alternate' type='application/rss+xml' title='RSS' href='https://www.youtube.com/feeds/videos.xml?channel_id=UCabc123xyz'>`,
+		},
+		{
+			name: "href before type, single quotes",
+			html: `<link rel='alternate' href='https://www.youtube.com/feeds/videos.xml?channel_id=UCabc123xyz' type='application/rss+xml' title='RSS'>`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ytAlternateFeedMatch(tt.html)
+			if got == "" {
+				t.Fatal("ytAlternateFeedRe did not match")
+			}
+			if got != want {
+				t.Errorf("got %q, want %q", got, want)
+			}
+		})
 	}
 }
 
@@ -301,8 +340,8 @@ func TestYTRegexes_LargePageOffset(t *testing.T) {
 		page = page[:limit]
 	}
 
-	if m := ytAlternateFeedRe.FindStringSubmatch(page); len(m) != 2 || m[1] != wantFeed {
-		t.Errorf("ytAlternateFeedRe failed at 600KB offset: got %v", m)
+	if got := ytAlternateFeedMatch(page); got != wantFeed {
+		t.Errorf("ytAlternateFeedRe failed at 600KB offset: got %q", got)
 	}
 	if m := ytCanonicalRe.FindStringSubmatch(page); len(m) != 2 || m[1] != "UCtest600k" {
 		t.Errorf("ytCanonicalRe failed at 600KB offset: got %v", m)
@@ -313,7 +352,7 @@ func TestYTRegexes_LargePageOffset(t *testing.T) {
 
 	// Verify the old 512KB limit would have missed these.
 	truncated := page[:512*1024]
-	if m := ytAlternateFeedRe.FindStringSubmatch(truncated); len(m) != 0 {
+	if got := ytAlternateFeedMatch(truncated); got != "" {
 		t.Error("ytAlternateFeedRe should NOT match within 512KB")
 	}
 	if m := ytCanonicalRe.FindStringSubmatch(truncated); len(m) != 0 {
