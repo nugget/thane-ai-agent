@@ -7,6 +7,7 @@
             hx-include="#log-subsystem-filter"
             style="padding:0.25rem 0.5rem;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--fg);font-size:0.8125rem">
         <option value="">ALL</option>
+        <option value="TRACE" {{if eq .Level "TRACE"}}selected{{end}}>TRACE</option>
         <option value="DEBUG" {{if eq .Level "DEBUG"}}selected{{end}}>DEBUG</option>
         <option value="INFO" {{if eq .Level "INFO"}}selected{{end}}>INFO</option>
         <option value="WARN" {{if eq .Level "WARN"}}selected{{end}}>WARN</option>
@@ -20,10 +21,11 @@
             style="padding:0.25rem 0.5rem;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--fg);font-size:0.8125rem">
         <option value="">ALL</option>
         <option value="agent" {{if eq .Subsystem "agent"}}selected{{end}}>agent</option>
+        <option value="api" {{if eq .Subsystem "api"}}selected{{end}}>api</option>
         <option value="delegate" {{if eq .Subsystem "delegate"}}selected{{end}}>delegate</option>
-        <option value="metacognitive" {{if eq .Subsystem "metacognitive"}}selected{{end}}>metacognitive</option>
-        <option value="tool" {{if eq .Subsystem "tool"}}selected{{end}}>tool</option>
+        <option value="metacog" {{if eq .Subsystem "metacog"}}selected{{end}}>metacog</option>
         <option value="scheduler" {{if eq .Subsystem "scheduler"}}selected{{end}}>scheduler</option>
+        <option value="signal" {{if eq .Subsystem "signal"}}selected{{end}}>signal</option>
     </select>
     <span class="text-muted" style="font-size:0.8125rem">{{len .Entries}} entries</span>
 </div>

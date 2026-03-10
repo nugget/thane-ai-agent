@@ -347,8 +347,8 @@ func (discardWriter) Write(p []byte) (int, error) { return len(p), nil }
 func TestPrune_DebugAndTrace(t *testing.T) {
 	db := openTestDB(t)
 
-	old := time.Now().Add(-100 * 24 * time.Hour).Format(time.RFC3339Nano)
-	recent := time.Now().Add(-1 * time.Hour).Format(time.RFC3339Nano)
+	old := time.Now().UTC().Add(-100 * 24 * time.Hour).Format(time.RFC3339Nano)
+	recent := time.Now().UTC().Add(-1 * time.Hour).Format(time.RFC3339Nano)
 
 	for _, e := range []struct {
 		ts, level, msg string
@@ -389,7 +389,7 @@ func TestPrune_DebugAndTrace(t *testing.T) {
 func TestPrune_WarnMinLevel(t *testing.T) {
 	db := openTestDB(t)
 
-	old := time.Now().Add(-100 * 24 * time.Hour).Format(time.RFC3339Nano)
+	old := time.Now().UTC().Add(-100 * 24 * time.Hour).Format(time.RFC3339Nano)
 
 	for _, e := range []struct {
 		ts, level, msg string
@@ -430,7 +430,7 @@ func TestPrune_WarnMinLevel(t *testing.T) {
 func TestPrune_NothingToPrune(t *testing.T) {
 	db := openTestDB(t)
 
-	recent := time.Now().Add(-1 * time.Hour).Format(time.RFC3339Nano)
+	recent := time.Now().UTC().Add(-1 * time.Hour).Format(time.RFC3339Nano)
 
 	_, err := db.Exec(
 		`INSERT INTO log_entries (timestamp, level, msg) VALUES (?, ?, ?)`,
@@ -472,7 +472,7 @@ func TestNormalizeLevel(t *testing.T) {
 func TestQueryBySession(t *testing.T) {
 	db := openTestDB(t)
 
-	ts := time.Now().Format(time.RFC3339Nano)
+	ts := time.Now().UTC().Format(time.RFC3339Nano)
 	for _, e := range []struct {
 		session, level, subsystem, msg string
 	}{

@@ -394,9 +394,11 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 				defer ticker.Stop()
 				for {
 					if deleted, err := logging.Prune(indexDB, retention, slog.LevelInfo); err != nil {
-						logger.Warn("log index prune failed", "error", err)
+						logger.Warn("log index prune failed", "error", err, "retention", retention)
 					} else if deleted > 0 {
-						logger.Info("pruned log index", "deleted", deleted)
+						logger.Info("pruned log index", "deleted", deleted, "retention", retention)
+					} else {
+						logger.Debug("log index prune ran; nothing to delete", "retention", retention)
 					}
 					select {
 					case <-ctx.Done():

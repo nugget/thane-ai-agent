@@ -264,7 +264,7 @@ func (h *IndexHandler) drain() {
 
 	for e := range h.shared.ch {
 		_, _ = stmt.Exec(
-			e.Timestamp.Format(time.RFC3339Nano),
+			e.Timestamp.UTC().Format(time.RFC3339Nano),
 			e.Level,
 			e.Msg,
 			nullString(e.RequestID),
@@ -403,7 +403,7 @@ func nullInt(n int) sql.NullInt64 {
 // prunes DEBUG and TRACE entries while keeping INFO, WARN, and ERROR.
 // Returns the number of rows deleted.
 func Prune(db *sql.DB, maxAge time.Duration, minKeepLevel slog.Level) (int64, error) {
-	cutoff := time.Now().Add(-maxAge).Format(time.RFC3339Nano)
+	cutoff := time.Now().UTC().Add(-maxAge).Format(time.RFC3339Nano)
 
 	// Build a list of levels to prune (those below minKeepLevel).
 	// Uses normalizeLevel so level strings match the DB values
@@ -455,8 +455,11 @@ type LogEntry struct {
 }
 
 // QueryBySession returns log entries matching the given session ID,
-// ordered by timestamp. The limit caps the result set (0 = no limit).
-// Optional filters narrow by level and/or subsystem.
+// ordered by timestamp ascending (chronological). When limit is
+// positive, only the most recent limit entries are returned — the
+// query selects newest-first and then reverses in Go so callers
+// always receive chronological order. Optional filters narrow by
+// level and/or subsystem.
 func QueryBySession(db *sql.DB, sessionID, level, subsystem string, limit int) ([]LogEntry, error) {
 	query := "SELECT id, timestamp, level, msg, subsystem, tool, model, attrs, source_file, source_line FROM log_entries WHERE session_id = ?"
 	args := []any{sessionID}
@@ -470,7 +473,10 @@ func QueryBySession(db *sql.DB, sessionID, level, subsystem string, limit int) (
 		args = append(args, subsystem)
 	}
 
-	query += " ORDER BY timestamp ASC"
+	// Select newest entries first so LIMIT returns the tail of the
+	// log rather than the head. We reverse in Go below to restore
+	// chronological order.
+	query += " ORDER BY timestamp DESC"
 
 	if limit > 0 {
 		query += fmt.Sprintf(" LIMIT %d", limit)
@@ -493,7 +499,11 @@ func QueryBySession(db *sql.DB, sessionID, level, subsystem string, limit int) (
 			return nil, fmt.Errorf("scan log entry: %w", err)
 		}
 
-		e.Timestamp, _ = time.Parse(time.RFC3339Nano, ts)
+		parsed, parseErr := time.Parse(time.RFC3339Nano, ts)
+		if parseErr != nil {
+			return nil, fmt.Errorf("parse log timestamp %q: %w", ts, parseErr)
+		}
+		e.Timestamp = parsed
 		e.Subsystem = sub.String
 		e.Tool = tool.String
 		e.Model = model.String
@@ -504,5 +514,14 @@ func QueryBySession(db *sql.DB, sessionID, level, subsystem string, limit int) (
 		entries = append(entries, e)
 	}
 
-	return entries, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Reverse to chronological order (oldest first).
+	for i, j := 0, len(entries)-1; i < j; i, j = i+1, j-1 {
+		entries[i], entries[j] = entries[j], entries[i]
+	}
+
+	return entries, nil
 }
