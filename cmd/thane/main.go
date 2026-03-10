@@ -53,6 +53,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/knowledge"
 	"github.com/nugget/thane-ai-agent/internal/llm"
+	"github.com/nugget/thane-ai-agent/internal/logging"
 	"github.com/nugget/thane-ai-agent/internal/mcp"
 	"github.com/nugget/thane-ai-agent/internal/media"
 	"github.com/nugget/thane-ai-agent/internal/memory"
@@ -327,18 +328,32 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		return err
 	}
 
-	// Reconfigure logger now that we know the desired level and format.
-	// The initial Info-level text logger is used only for the startup
-	// banner and config load message; everything after this point uses
-	// the configured level and format.
+	// Reconfigure logger now that we know the desired level, format, and
+	// output destination. The initial Info-level text logger above is used
+	// only for the startup banner and config load message.
 	{
-		level := slog.LevelInfo
-		if cfg.LogLevel != "" {
-			// ParseLogLevel is already validated by config.Validate(), so
-			// this error path should be unreachable in practice.
-			level, _ = config.ParseLogLevel(cfg.LogLevel)
+		level, _ := config.ParseLogLevel(cfg.Logging.Level)
+
+		// Open the log rotator for file output. Logs go to both
+		// stdout (for launchd/systemd capture) and the rotated file.
+		logWriter := stdout
+
+		rotator, err := logging.Open(cfg.Logging.Dir, cfg.Logging.CompressEnabled())
+		if err != nil {
+			// File logging failed — fall back to stdout only.
+			logger.Warn("failed to open log directory, using stdout only",
+				"dir", cfg.Logging.Dir, "error", err)
+		} else {
+			defer rotator.Close()
+			logWriter = io.MultiWriter(stdout, rotator)
 		}
-		logger = newLogger(stdout, level, cfg.LogFormat)
+
+		logger = newLogger(logWriter, level, cfg.Logging.Format)
+	}
+
+	// Warn about deprecated config fields.
+	if depLevel, depFormat := cfg.DeprecatedFieldsUsed(); depLevel || depFormat {
+		logger.Warn("log_level/log_format are deprecated; use logging.level/logging.format instead")
 	}
 
 	logger.Info("config loaded",
@@ -2426,6 +2441,9 @@ func resolvePath(p string, resolver *paths.Resolver) string {
 // and format. Format must be "text" or "json"; any other value defaults to
 // text. All log output in Thane goes through slog; this helper standardizes
 // the handler configuration across subcommands.
+//
+// Every log line carries thane_version and thane_commit for forensics
+// across upgrades.
 func newLogger(w io.Writer, level slog.Level, format string) *slog.Logger {
 	opts := &slog.HandlerOptions{
 		Level:       level,
@@ -2437,7 +2455,10 @@ func newLogger(w io.Writer, level slog.Level, format string) *slog.Logger {
 	} else {
 		handler = slog.NewTextHandler(w, opts)
 	}
-	return slog.New(handler)
+	return slog.New(handler).With(
+		"thane_version", buildinfo.Version,
+		"thane_commit", buildinfo.GitCommit,
+	)
 }
 
 // loadConfig locates and parses the YAML configuration file. If explicit
