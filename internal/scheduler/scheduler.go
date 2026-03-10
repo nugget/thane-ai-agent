@@ -195,7 +195,7 @@ func (s *Scheduler) scheduleTask(task *Task) {
 		"id", task.ID,
 		"name", task.Name,
 		"next", next,
-		"delay", delay,
+		"delay", delay.Round(time.Second),
 	)
 }
 
