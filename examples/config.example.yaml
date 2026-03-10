@@ -277,6 +277,7 @@ embeddings:
 #   level: info             # default: info
 #   format: json            # json (default) or text (human-readable)
 #   compress: true          # gzip rotated files; default: true
+#   retention_days: 7       # prune DEBUG/TRACE index entries older than N days; 0 = keep all
 #
 # DEPRECATED: log_level and log_format are still accepted at the top level
 # for backwards compatibility but will be removed in a future release.

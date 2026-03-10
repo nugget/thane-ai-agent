@@ -481,6 +481,18 @@ Built-in operational visibility interface (`internal/server/web/`):
 
 Served on the same port as the native API (8080). Uses embedded HTML templates and static assets (htmx).
 
+The session detail page includes a **Session Logs** panel that queries the structured log index for entries matching that session's ID, with level and subsystem filters.
+
+### Structured Logging
+
+Three-layer logging infrastructure (`internal/logging/`):
+
+1. **Self-managed rotation** — `Rotator` implements `io.WriteCloser` with daily file rotation and optional gzip compression. No external log rotation tooling needed.
+2. **Context propagation** — `WithLogger`/`FromContext` thread a session-scoped logger through the call chain. Subsystem tags (`agent`, `delegate`, `metacog`, `scheduler`, `signal`, `api`) are attached automatically so every log line carries its origin.
+3. **SQLite index** — `IndexHandler` wraps the primary `slog.Handler` and asynchronously indexes every record into a `log_entries` table. Promoted fields (`session_id`, `conversation_id`, `subsystem`, `tool`, `model`, `level`) get their own indexed columns; remaining attributes go into a JSON catch-all.
+
+The index enables fast queries (by session, level, subsystem, time range) without parsing raw log files. A background pruner removes old DEBUG/TRACE entries based on a configurable retention policy (default: 7 days) while preserving raw log files as the canonical record.
+
 ## Technology Choices
 
 | Choice | Rationale |
