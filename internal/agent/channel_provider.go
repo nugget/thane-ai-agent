@@ -147,14 +147,14 @@ func (p *ChannelProvider) GetContext(ctx context.Context, _ string) (string, err
 	sb.WriteString("### Channel Context\n")
 	fmt.Fprintf(&sb, "- **Source:** %s\n", formatSourceName(source))
 	if channelNote != "" {
-		sb.WriteString(fmt.Sprintf("- **Note:** %s\n", channelNote))
+		fmt.Fprintf(&sb, "- **Note:** %s\n", channelNote)
 	}
 
 	envelope := map[string]*ContactContext{"contact": contactCtx}
 	jsonBytes, err := json.Marshal(envelope)
 	if err != nil {
 		// Fall back to name-only if JSON fails (shouldn't happen).
-		sb.WriteString(fmt.Sprintf("- **Participant:** %s\n", contactCtx.Name))
+		fmt.Fprintf(&sb, "- **Participant:** %s\n", contactCtx.Name)
 		return sb.String(), nil
 	}
 

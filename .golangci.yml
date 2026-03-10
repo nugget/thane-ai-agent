@@ -3,6 +3,11 @@ linters:
   settings:
     errcheck:
       check-type-assertions: true
+    staticcheck:
+      checks:
+        - "all"
+        - "-QF1012"
+        - "-ST1003"
   exclusions:
     generated: lax
     presets:
@@ -14,9 +19,6 @@ linters:
       - linters:
           - errcheck
         path: _test\.go
-      - linters:
-          - staticcheck
-        text: "QF1012"
     paths:
       - third_party$
       - builtin$
