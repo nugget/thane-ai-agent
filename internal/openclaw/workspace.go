@@ -42,7 +42,9 @@ var bootstrapOrder = []bootstrapEntry{
 	{name: "USER.md", mainOnly: true, mustExist: true},
 	{name: "HEARTBEAT.md", mainOnly: true, mustExist: true},
 	{name: "BOOTSTRAP.md", mainOnly: true, mustExist: false},
-	// MEMORY.md is appended separately — only if it exists on disk.
+	// MEMORY.md is appended separately in LoadWorkspaceFiles: only loaded
+	// when it exists on disk, never marked [MISSING]. This matches OC's
+	// treatment of memory as optional bootstrapping context.
 }
 
 // LoadWorkspaceFiles reads OpenClaw bootstrap files from dir in the

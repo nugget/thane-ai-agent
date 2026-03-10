@@ -1377,7 +1377,7 @@ func (c *Config) applyDefaults() {
 			c.OpenClaw.WorkspacePath = "~/Thane/openclaw"
 		}
 		if len(c.OpenClaw.SkillsDirs) == 0 {
-			c.OpenClaw.SkillsDirs = []string{c.OpenClaw.WorkspacePath + "/skills"}
+			c.OpenClaw.SkillsDirs = []string{filepath.Join(c.OpenClaw.WorkspacePath, "skills")}
 		}
 		if c.OpenClaw.MaxFileChars <= 0 {
 			c.OpenClaw.MaxFileChars = 20000
