@@ -241,13 +241,16 @@ type Config struct {
 	// Local/Ollama models not listed here default to $0.
 	Pricing map[string]PricingEntry `yaml:"pricing"`
 
-	// LogLevel sets the minimum log level. Valid values: trace, debug,
-	// info, warn, error. Default: info. See [ParseLogLevel].
+	// Logging configures log output, rotation, and format. Thane manages
+	// its own log files — no external logrotate required.
+	Logging LoggingConfig `yaml:"logging"`
+
+	// LogLevel is deprecated; use Logging.Level instead.
+	// Kept for backwards compatibility — migrated in [Config.applyDefaults].
 	LogLevel string `yaml:"log_level"`
 
-	// LogFormat sets the log output format. Valid values: text, json.
-	// Default: text. Text is human-readable; JSON enables structured
-	// log aggregation (Loki, Datadog, jq, etc.).
+	// LogFormat is deprecated; use Logging.Format instead.
+	// Kept for backwards compatibility — migrated in [Config.applyDefaults].
 	LogFormat string `yaml:"log_format"`
 }
 
@@ -255,6 +258,56 @@ type Config struct {
 type PricingEntry struct {
 	InputPerMillion  float64 `yaml:"input_per_million"`
 	OutputPerMillion float64 `yaml:"output_per_million"`
+}
+
+// LoggingConfig configures Thane's self-managed log output. When Dir is
+// set, Thane writes structured log files directly (no external logrotate
+// needed). Logs are rotated daily; old files are never deleted.
+type LoggingConfig struct {
+	// Dir is the directory for log files. Relative paths are resolved
+	// from the working directory (typically ~/Thane). Defaults to "logs"
+	// when omitted. Set to an explicit empty string (dir: "") to disable
+	// file logging (output goes to stdout only).
+	Dir *string `yaml:"dir"`
+
+	// Level sets the minimum log level. Valid values: trace, debug,
+	// info, warn, error. Default: info.
+	Level string `yaml:"level"`
+
+	// Format sets the log output format. "json" produces one JSON
+	// object per line; "text" produces human-readable key=value pairs.
+	// Default: json.
+	Format string `yaml:"format"`
+
+	// Compress enables gzip compression of rotated log files.
+	// Default: true.
+	Compress *bool `yaml:"compress"`
+}
+
+// DirPath returns the resolved log directory path. When Dir is nil
+// (omitted in YAML), it returns the default "logs". When Dir is an
+// explicit empty string, it returns "" which signals that file logging
+// is disabled.
+func (l LoggingConfig) DirPath() string {
+	if l.Dir == nil {
+		return "logs"
+	}
+	return *l.Dir
+}
+
+// CompressEnabled returns whether rotated log compression is on.
+// Defaults to true when Compress is nil (unset in YAML).
+func (l LoggingConfig) CompressEnabled() bool {
+	if l.Compress == nil {
+		return true
+	}
+	return *l.Compress
+}
+
+// DeprecatedFieldsUsed reports whether the legacy top-level log_level or
+// log_format fields are set. Callers use this to emit deprecation warnings.
+func (c *Config) DeprecatedFieldsUsed() (level, format bool) {
+	return c.LogLevel != "", c.LogFormat != ""
 }
 
 // ListenConfig configures an HTTP server's bind address and port.
@@ -1042,9 +1095,34 @@ func Load(path string) (*Config, error) {
 // Cross-field defaults are resolved here too — for example,
 // Embeddings.BaseURL defaults to Models.OllamaURL when unset.
 func (c *Config) applyDefaults() {
-	if c.LogFormat == "" {
-		c.LogFormat = "text"
+	// --- Logging migration: deprecated top-level fields → Logging struct ---
+	// If the user still has log_level / log_format at the top level and
+	// hasn't set the new Logging.Level / Logging.Format, migrate silently.
+	// The deprecated fields are validated later and warned at startup.
+	if c.Logging.Level == "" && c.LogLevel != "" {
+		c.Logging.Level = c.LogLevel
 	}
+	if c.Logging.Format == "" && c.LogFormat != "" {
+		c.Logging.Format = c.LogFormat
+	}
+
+	// Dir uses a *string — nil defaults to "logs" via DirPath().
+	// Explicit empty string disables file logging.
+	if c.Logging.Level == "" {
+		c.Logging.Level = "info"
+	}
+	if c.Logging.Format == "" {
+		c.Logging.Format = "json"
+	}
+	if c.Logging.Compress == nil {
+		v := true
+		c.Logging.Compress = &v
+	}
+
+	// Note: we intentionally do NOT back-sync Logging.Format → LogFormat.
+	// The deprecated fields are only populated if the user's YAML set them.
+	// DeprecatedFieldsUsed() relies on that to emit warnings accurately.
+
 	if c.Listen.Port == 0 {
 		c.Listen.Port = 8080
 	}
@@ -1280,6 +1358,18 @@ func (c *Config) Validate() error {
 				return fmt.Errorf("carddav.listen %q: %w", addr, err)
 			}
 		}
+	}
+	// Validate logging — both new and deprecated fields.
+	if c.Logging.Level != "" {
+		if _, err := ParseLogLevel(c.Logging.Level); err != nil {
+			return fmt.Errorf("logging.level: %w", err)
+		}
+	}
+	switch c.Logging.Format {
+	case "text", "json", "":
+		// valid
+	default:
+		return fmt.Errorf("logging.format %q invalid (expected text or json)", c.Logging.Format)
 	}
 	if c.LogLevel != "" {
 		if _, err := ParseLogLevel(c.LogLevel); err != nil {

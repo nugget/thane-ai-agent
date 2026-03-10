@@ -139,6 +139,7 @@ service-install: install
     THANE_HOME="{{thane-home}}"
     # Create directory structure
     mkdir -p "$THANE_HOME/db"
+    mkdir -p "$THANE_HOME/logs"
     # Generate plist with absolute paths for this user
     mkdir -p ~/Library/LaunchAgents
     sed -e "s|/usr/local/bin/thane|$THANE_HOME/bin/thane|g" \
@@ -150,7 +151,8 @@ service-install: install
     echo "  Binary:  $THANE_HOME/bin/thane"
     echo "  Config:  $THANE_HOME/config.yaml"
     echo "  Data:    $THANE_HOME/db/"
-    echo "  Logs:    $THANE_HOME/thane.log"
+    echo "  Logs:    $THANE_HOME/logs/thane.log  (rotated daily)"
+    echo "  Crashes: $THANE_HOME/crash.log       (pre-init errors only)"
     echo ""
     echo "Next steps:"
     echo "  1. Copy your config:  cp examples/config.example.yaml $THANE_HOME/config.yaml"
@@ -257,7 +259,7 @@ serve: build
 # Tail live service logs (default: dev workdir)
 [group('operations')]
 logs workdir="./Thane":
-    tail -f {{workdir}}/thane.log
+    tail -f {{workdir}}/logs/thane.log
 
 # --- Release ---
 

@@ -488,3 +488,189 @@ func TestApplyDefaults_SignalRateLimit(t *testing.T) {
 		t.Errorf("expected default rate_limit_per_minute 0 (unlimited), got %d", cfg.Signal.RateLimitPerMinute)
 	}
 }
+
+func TestApplyDefaults_Logging(t *testing.T) {
+	cfg := Default()
+
+	if cfg.Logging.Dir != nil {
+		t.Errorf("Logging.Dir = %v, want nil (defaults via DirPath())", cfg.Logging.Dir)
+	}
+	if got := cfg.Logging.DirPath(); got != "logs" {
+		t.Errorf("Logging.DirPath() = %q, want %q", got, "logs")
+	}
+	if cfg.Logging.Level != "info" {
+		t.Errorf("Logging.Level = %q, want %q", cfg.Logging.Level, "info")
+	}
+	if cfg.Logging.Format != "json" {
+		t.Errorf("Logging.Format = %q, want %q", cfg.Logging.Format, "json")
+	}
+	if !cfg.Logging.CompressEnabled() {
+		t.Error("Logging.CompressEnabled() = false, want true")
+	}
+}
+
+func TestApplyDefaults_LoggingMigration(t *testing.T) {
+	tests := []struct {
+		name      string
+		logLevel  string
+		logFormat string
+		wantLevel string
+		wantFmt   string
+	}{
+		{
+			name:      "legacy log_level migrates",
+			logLevel:  "debug",
+			wantLevel: "debug",
+			wantFmt:   "json", // new default
+		},
+		{
+			name:      "legacy log_format migrates",
+			logFormat: "text",
+			wantLevel: "info",
+			wantFmt:   "text",
+		},
+		{
+			name:      "both legacy fields migrate",
+			logLevel:  "warn",
+			logFormat: "text",
+			wantLevel: "warn",
+			wantFmt:   "text",
+		},
+		{
+			name:      "no legacy fields uses new defaults",
+			wantLevel: "info",
+			wantFmt:   "json",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &Config{
+				LogLevel:  tt.logLevel,
+				LogFormat: tt.logFormat,
+			}
+			cfg.applyDefaults()
+
+			if cfg.Logging.Level != tt.wantLevel {
+				t.Errorf("Logging.Level = %q, want %q", cfg.Logging.Level, tt.wantLevel)
+			}
+			if cfg.Logging.Format != tt.wantFmt {
+				t.Errorf("Logging.Format = %q, want %q", cfg.Logging.Format, tt.wantFmt)
+			}
+		})
+	}
+}
+
+func TestApplyDefaults_LoggingNewFieldsOverrideLegacy(t *testing.T) {
+	// When both new and legacy fields are set, new fields win.
+	cfg := &Config{
+		LogLevel:  "debug",
+		LogFormat: "text",
+		Logging: LoggingConfig{
+			Level:  "warn",
+			Format: "json",
+		},
+	}
+	cfg.applyDefaults()
+
+	if cfg.Logging.Level != "warn" {
+		t.Errorf("Logging.Level = %q, want %q (new field should win)", cfg.Logging.Level, "warn")
+	}
+	if cfg.Logging.Format != "json" {
+		t.Errorf("Logging.Format = %q, want %q (new field should win)", cfg.Logging.Format, "json")
+	}
+}
+
+func TestValidate_LoggingInvalidLevel(t *testing.T) {
+	cfg := Default()
+	cfg.Logging.Level = "bogus"
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected validation error for invalid logging.level")
+	}
+	if !strings.Contains(err.Error(), "logging.level") {
+		t.Errorf("error %q should mention logging.level", err)
+	}
+}
+
+func TestValidate_LoggingInvalidFormat(t *testing.T) {
+	cfg := Default()
+	cfg.Logging.Format = "xml"
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected validation error for invalid logging.format")
+	}
+	if !strings.Contains(err.Error(), "logging.format") {
+		t.Errorf("error %q should mention logging.format", err)
+	}
+}
+
+func TestLoggingConfig_CompressEnabled(t *testing.T) {
+	tests := []struct {
+		name     string
+		compress *bool
+		want     bool
+	}{
+		{"nil defaults to true", nil, true},
+		{"explicit true", boolPtr(true), true},
+		{"explicit false", boolPtr(false), false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lc := LoggingConfig{Compress: tt.compress}
+			if got := lc.CompressEnabled(); got != tt.want {
+				t.Errorf("CompressEnabled() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestLoggingConfig_DirPath(t *testing.T) {
+	tests := []struct {
+		name string
+		dir  *string
+		want string
+	}{
+		{"nil defaults to logs", nil, "logs"},
+		{"explicit empty disables", strPtr(""), ""},
+		{"explicit value used", strPtr("/var/log/thane"), "/var/log/thane"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lc := LoggingConfig{Dir: tt.dir}
+			if got := lc.DirPath(); got != tt.want {
+				t.Errorf("DirPath() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestConfig_DeprecatedFieldsUsed(t *testing.T) {
+	cfg := &Config{LogLevel: "debug"}
+	lvl, fmt := cfg.DeprecatedFieldsUsed()
+	if !lvl {
+		t.Error("expected level=true when LogLevel is set")
+	}
+	if fmt {
+		t.Error("expected format=false when LogFormat is empty")
+	}
+}
+
+func TestConfig_DeprecatedFieldsUsed_FreshConfig(t *testing.T) {
+	// A config with no legacy fields should NOT trigger deprecation warnings,
+	// even after applyDefaults has run.
+	cfg := Default()
+	lvl, format := cfg.DeprecatedFieldsUsed()
+	if lvl {
+		t.Error("expected level=false on fresh config, got true")
+	}
+	if format {
+		t.Error("expected format=false on fresh config, got true")
+	}
+}
+
+func boolPtr(b bool) *bool { return &b }
+
+func strPtr(s string) *string { return &s }

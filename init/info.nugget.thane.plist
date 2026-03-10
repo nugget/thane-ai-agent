@@ -40,11 +40,13 @@
         <integer>65536</integer>
     </dict>
 
-    <key>StandardOutPath</key>
-    <string>/usr/local/var/thane/thane.log</string>
-
+    <!-- Thane manages its own log files under logs/ via the internal
+         rotator. StandardOutPath is intentionally omitted so launchd
+         does not create a competing unbounded log file.
+         StandardErrorPath captures only pre-init panics and fatal
+         errors that occur before the structured logger is ready. -->
     <key>StandardErrorPath</key>
-    <string>/usr/local/var/thane/thane.log</string>
+    <string>/usr/local/var/thane/crash.log</string>
 
     <key>ProcessType</key>
     <string>Standard</string>

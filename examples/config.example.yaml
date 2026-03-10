@@ -264,9 +264,22 @@ embeddings:
 #   dump_system_prompt: true
 #   dump_dir: ./debug          # default
 
-# Logging level: trace, debug, info (default), warn, error
+# Logging: self-managed log files with daily rotation.
+# Logs go to both stdout and the configured directory. Old logs are
+# never deleted — rotate daily and optionally gzip-compress.
+#
+# Level: trace, debug, info (default), warn, error
 # - info: normal operation (loop start/end, failover, compaction)
 # - debug: per-request detail (LLM calls, tool execution, token counts)
 # - trace: wire-level payloads (full JSON requests/responses — VERY verbose)
+# logging:
+#   dir: logs               # relative to working dir; default: "logs"; set to "" to disable
+#   level: info             # default: info
+#   format: json            # json (default) or text (human-readable)
+#   compress: true          # gzip rotated files; default: true
+#
+# DEPRECATED: log_level and log_format are still accepted at the top level
+# for backwards compatibility but will be removed in a future release.
+# Use the logging section above instead.
 # log_level: info
-# log_format: text    # text (human-readable) or json (structured, for log aggregation)
+# log_format: text
