@@ -20,7 +20,6 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/logging"
 	"github.com/nugget/thane-ai-agent/internal/memory"
 	"github.com/nugget/thane-ai-agent/internal/router"
-	"github.com/nugget/thane-ai-agent/internal/server/web"
 	"github.com/nugget/thane-ai-agent/internal/usage"
 )
 
@@ -275,14 +274,12 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("GET /v1/archive/messages", s.handleArchiveMessages)
 	mux.HandleFunc("GET /v1/archive/stats", s.handleArchiveStats)
 
-	// Web dashboard and chat UI. When the WebServer is wired in, it
-	// owns "/" (HTML dashboard), "/chat", "/static/", and "/manifest.json".
-	// Otherwise, fall back to the JSON root handler and legacy chat routes.
+	// When a WebServerRegistrar is wired in, it owns "/" and related
+	// UI routes. Otherwise, fall back to the JSON root handler.
 	if s.webServer != nil {
 		s.webServer.RegisterRoutes(mux)
 	} else {
 		mux.HandleFunc("GET /", s.handleRoot)
-		web.RegisterRoutes(mux)
 	}
 
 	// Note: Ollama-compatible API is served on a separate port via OllamaServer
