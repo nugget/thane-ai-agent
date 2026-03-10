@@ -249,7 +249,7 @@ func (l *Loop) run(ctx context.Context) {
 			l.appendIterationLog(result, convID, sleep)
 		}
 
-		iterLog.Info("metacognitive sleeping", "duration", sleep)
+		iterLog.Info("metacognitive sleeping", "duration", sleep.Round(time.Second))
 
 		if !sleepCtx(ctx, sleep) {
 			logger.Info("metacognitive loop stopped")

@@ -1,5 +1,6 @@
-// Package logging provides self-managed log file rotation and
-// context-propagated structured logging for Thane.
+// Package logging provides self-managed log file rotation,
+// context-propagated structured logging, and a queryable SQLite
+// index for Thane.
 //
 // The [Rotator] implements [io.WriteCloser] and handles daily log
 // rotation with optional gzip compression of previous days' files.
@@ -18,6 +19,14 @@
 //
 // [ShortenSource] strips the module prefix from source file paths
 // when slog's AddSource option is enabled, keeping log lines compact.
+//
+// The [IndexHandler] wraps any [slog.Handler] and simultaneously
+// indexes every log record into a SQLite database. Promoted fields
+// (request_id, session_id, conversation_id, subsystem, tool, model)
+// are extracted into indexed columns for fast queries; remaining
+// attributes go into a JSON catch-all. Use [Prune] to manage index
+// retention while preserving the raw log files as the canonical
+// record.
 package logging
 
 import (

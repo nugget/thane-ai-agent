@@ -319,7 +319,7 @@ func (s *Server) withLogging(next http.Handler) http.Handler {
 		s.logger.Info("request",
 			"method", r.Method,
 			"path", r.URL.Path,
-			"duration", time.Since(start),
+			"duration", time.Since(start).Round(time.Millisecond),
 		)
 	})
 }
