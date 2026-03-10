@@ -3,6 +3,11 @@ linters:
   settings:
     errcheck:
       check-type-assertions: true
+    staticcheck:
+      checks:
+        - "all"
+        - "-QF1012"
+        - "-ST1003"
   exclusions:
     generated: lax
     presets:
