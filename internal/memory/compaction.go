@@ -75,11 +75,15 @@ func (c *Compactor) SetWorkingMemoryStore(wm WorkingMemoryReader) {
 	c.workingMemory = wm
 }
 
+// CompactionThreshold returns the token count at which compaction triggers.
+func (c *Compactor) CompactionThreshold() int {
+	return int(float64(c.config.MaxTokens) * c.config.TriggerRatio)
+}
+
 // NeedsCompaction checks if a conversation needs compaction.
 func (c *Compactor) NeedsCompaction(conversationID string) bool {
 	tokenCount := c.store.GetTokenCount(conversationID)
-	threshold := int(float64(c.config.MaxTokens) * c.config.TriggerRatio)
-	return tokenCount > threshold
+	return tokenCount > c.CompactionThreshold()
 }
 
 // Compact performs compaction on a conversation.
