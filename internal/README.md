@@ -60,5 +60,6 @@ Thane's internal packages, organized by architectural role.
 | `usage/` | LLM token usage and cost tracking |
 | `httpkit/` | Shared HTTP client construction (User-Agent, timeouts) |
 | `connwatch/` | Service health monitoring with exponential backoff |
+| `logging/` | Self-managed log rotation, context-propagated structured logging, and queryable SQLite index |
 | `buildinfo/` | Build metadata injected via ldflags |
 | `paths/` | Named path prefix resolution (e.g., `kb:file.md`) |
