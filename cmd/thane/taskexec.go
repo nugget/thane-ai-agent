@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 
 	"github.com/nugget/thane-ai-agent/internal/agent"
+	"github.com/nugget/thane-ai-agent/internal/logging"
 	"github.com/nugget/thane-ai-agent/internal/prompts"
 	"github.com/nugget/thane-ai-agent/internal/router"
 	"github.com/nugget/thane-ai-agent/internal/scheduler"
@@ -69,9 +70,14 @@ type taskExecDeps struct {
 // tasks, the poller checks RSS/Atom feeds for new entries. Both avoid
 // LLM token spend on empty poll cycles.
 func runScheduledTask(ctx context.Context, task *scheduler.Task, exec *scheduler.Execution, deps taskExecDeps) error {
-	deps.logger.Debug("task executing",
+	log := deps.logger.With(
+		"subsystem", logging.SubsystemScheduler,
 		"task_id", task.ID,
 		"task_name", task.Name,
+	)
+	ctx = logging.WithLogger(ctx, log)
+
+	log.Debug("task executing",
 		"payload_kind", task.Payload.Kind,
 	)
 

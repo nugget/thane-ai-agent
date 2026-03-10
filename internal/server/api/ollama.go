@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/agent"
+	"github.com/nugget/thane-ai-agent/internal/logging"
 	"github.com/nugget/thane-ai-agent/internal/router"
 )
 
@@ -115,6 +116,9 @@ func (s *Server) RegisterOllamaRoutes(mux *http.ServeMux) {
 //   - loop: Agent loop for processing the conversation
 //   - logger: Logger for request tracking and debugging
 func handleOllamaChatShared(w http.ResponseWriter, r *http.Request, loop *agent.Loop, logger *slog.Logger) {
+	// Inject subsystem logger into context for downstream propagation.
+	r = r.WithContext(logging.WithLogger(r.Context(), logger.With("subsystem", logging.SubsystemAPI)))
+
 	start := time.Now()
 
 	// Capture raw request for parsing; headers/body logged at debug level only

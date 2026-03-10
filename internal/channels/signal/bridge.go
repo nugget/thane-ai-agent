@@ -13,6 +13,7 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/agent"
 	"github.com/nugget/thane-ai-agent/internal/config"
+	"github.com/nugget/thane-ai-agent/internal/logging"
 	"github.com/nugget/thane-ai-agent/internal/router"
 )
 
@@ -261,6 +262,15 @@ func (b *Bridge) handleMessage(ctx context.Context, env *Envelope) {
 	sender := env.Source
 	convID := fmt.Sprintf("signal-%s", sanitizePhone(sender))
 
+	// Inject a context logger with Signal-specific trace fields so all
+	// downstream code (agent loop, tools, delegate) inherits them.
+	log := b.logger.With(
+		"subsystem", logging.SubsystemSignal,
+		"conversation_id", convID,
+		"sender", sender,
+	)
+	ctx = logging.WithLogger(ctx, log)
+
 	// Process attachments before formatting the message.
 	var attachmentDescs []string
 	if len(env.DataMessage.Attachments) > 0 {
@@ -272,9 +282,7 @@ func (b *Bridge) handleMessage(ctx context.Context, env *Envelope) {
 	}
 	content := formatMessage(env, attachmentDescs)
 
-	b.logger.Info("signal message received",
-		"sender", sender,
-		"conversation_id", convID,
+	log.Info("signal message received",
 		"message_len", len(env.DataMessage.Message),
 		"attachments", len(env.DataMessage.Attachments),
 	)
@@ -288,9 +296,7 @@ func (b *Bridge) handleMessage(ctx context.Context, env *Envelope) {
 		b.mu.Unlock()
 		if exists && time.Since(lm.receivedAt) > b.idleTimeout {
 			if b.rotator.RotateIdleSession(ctx, convID, sender) {
-				b.logger.Info("signal session rotated (idle)",
-					"sender", sender,
-					"conversation_id", convID,
+				log.Info("signal session rotated (idle)",
 					"idle_duration", time.Since(lm.receivedAt).Round(time.Second),
 				)
 			}
@@ -352,17 +358,11 @@ func (b *Bridge) handleMessage(ctx context.Context, env *Envelope) {
 	}
 
 	if err != nil {
-		b.logger.Error("signal agent run failed",
-			"sender", sender,
-			"conversation_id", convID,
-			"error", err,
-		)
+		log.Error("signal agent run failed", "error", err)
 		return
 	}
 
-	b.logger.Info("signal agent run completed",
-		"sender", sender,
-		"conversation_id", convID,
+	log.Info("signal agent run completed",
 		"response_len", len(resp.Content),
 		"model", resp.Model,
 	)
@@ -370,10 +370,7 @@ func (b *Bridge) handleMessage(ctx context.Context, env *Envelope) {
 	// If the agent already called signal_send_message during its tool
 	// loop, skip the bridge-level send to avoid duplicate messages.
 	if agentAlreadySent(resp.ToolsUsed) {
-		b.logger.Info("signal reply already sent by agent tool call",
-			"sender", sender,
-			"conversation_id", convID,
-		)
+		log.Info("signal reply already sent by agent tool call")
 		return
 	}
 
@@ -381,25 +378,16 @@ func (b *Bridge) handleMessage(ctx context.Context, env *Envelope) {
 		return
 	}
 
-	b.logger.Info("signal sending reply",
-		"sender", sender,
-		"conversation_id", convID,
+	log.Info("signal sending reply",
 		"response_len", len(resp.Content),
 	)
 
 	if _, err := b.client.Send(ctx, sender, resp.Content); err != nil {
-		b.logger.Error("signal reply send failed",
-			"sender", sender,
-			"conversation_id", convID,
-			"error", err,
-		)
+		log.Error("signal reply send failed", "error", err)
 		return
 	}
 
-	b.logger.Info("signal reply sent",
-		"sender", sender,
-		"conversation_id", convID,
-	)
+	log.Info("signal reply sent")
 }
 
 // handleReaction processes an inbound emoji reaction. Reaction

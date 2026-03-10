@@ -20,6 +20,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/config"
 	"github.com/nugget/thane-ai-agent/internal/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/llm"
+	"github.com/nugget/thane-ai-agent/internal/logging"
 	"github.com/nugget/thane-ai-agent/internal/memory"
 	"github.com/nugget/thane-ai-agent/internal/prompts"
 	"github.com/nugget/thane-ai-agent/internal/router"
@@ -726,8 +727,17 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 
 	// Generate a request-scoped ID and logger. Every log line within this
 	// turn carries request_id so you can grep for a single user→response cycle.
+	// The logger is based on the context logger (not l.logger) so upstream
+	// fields from entry points (subsystem=api, sender, task_id) are preserved.
+	// The agent loop overrides subsystem to "agent" for its own log lines.
 	requestID := generateRequestID()
-	log := l.logger.With("request_id", requestID, "session", sessionTag, "conversation", convID)
+	log := logging.Logger(ctx).With(
+		"subsystem", logging.SubsystemAgent,
+		"request_id", requestID,
+		"session", sessionTag,
+		"conversation", convID,
+	)
+	ctx = logging.WithLogger(ctx, log)
 
 	log.Info("agent loop started",
 		"messages", len(req.Messages),
@@ -1055,6 +1065,11 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 
 iterLoop:
 	for i := 0; i < maxIterations; i++ {
+		// Inject iteration index into context so downstream code
+		// (tool implementations, delegates) inherits it automatically.
+		iterLog := log.With("iter", i)
+		iterCtx := logging.WithLogger(ctx, iterLog)
+
 		// Recompute effective tools each iteration so that tags
 		// activated via request_capability are reflected immediately.
 		effectiveTools := baseTools
@@ -1084,8 +1099,7 @@ iterLoop:
 
 		iterStart := time.Now()
 
-		log.Info("llm call",
-			"iter", i,
+		iterLog.Info("llm call",
 			"model", model,
 			"msgs", len(llmMessages),
 			"est_tokens", iterMsgTokens,
@@ -1093,31 +1107,31 @@ iterLoop:
 		)
 
 		// Use streaming to avoid HTTP timeouts on slow models
-		llmResp, err := l.llm.ChatStream(ctx, model, llmMessages, toolDefs, stream)
+		llmResp, err := l.llm.ChatStream(iterCtx, model, llmMessages, toolDefs, stream)
 		if err != nil {
-			log.Error("LLM call failed", "error", err, "iter", i, "model", model)
+			iterLog.Error("LLM call failed", "error", err, "model", model)
 
 			// Try failover to default model if using a routed model
 			if model != l.model {
 				fallbackModel := l.model
-				log.Info("attempting failover", "iter", i, "from", model, "to", fallbackModel)
+				iterLog.Info("attempting failover", "from", model, "to", fallbackModel)
 
 				// Call failover handler if configured (for checkpointing)
 				if l.failoverHandler != nil {
-					if ferr := l.failoverHandler.OnFailover(ctx, model, fallbackModel, err.Error()); ferr != nil {
-						log.Warn("failover handler failed", "error", ferr)
+					if ferr := l.failoverHandler.OnFailover(iterCtx, model, fallbackModel, err.Error()); ferr != nil {
+						iterLog.Warn("failover handler failed", "error", ferr)
 						// Continue with failover anyway
 					}
 				}
 
 				// Retry with fallback model
 				model = fallbackModel
-				llmResp, err = l.llm.ChatStream(ctx, model, llmMessages, toolDefs, stream)
+				llmResp, err = l.llm.ChatStream(iterCtx, model, llmMessages, toolDefs, stream)
 				if err != nil {
-					log.Error("failover also failed", "error", err, "model", model)
+					iterLog.Error("failover also failed", "error", err, "model", model)
 					return nil, err
 				}
-				log.Info("failover successful", "model", model)
+				iterLog.Info("failover successful", "model", model)
 			} else {
 				return nil, err
 			}
@@ -1127,8 +1141,7 @@ iterLoop:
 		totalInputTokens += llmResp.InputTokens
 		totalOutputTokens += llmResp.OutputTokens
 
-		log.Info("llm response",
-			"iter", i,
+		iterLog.Info("llm response",
 			"model", model,
 			"resp_model", llmResp.Model,
 			"input_tokens", llmResp.InputTokens,
@@ -1202,8 +1215,8 @@ iterLoop:
 				callKey := toolName + ":" + argsJSON
 				toolCallCounts[callKey]++
 				if toolCallCounts[callKey] > maxToolRepeat {
-					log.Warn("tool call loop detected, breaking",
-						"iter", i, "tool", toolName, "repeat_count", toolCallCounts[callKey],
+					iterLog.Warn("tool call loop detected, breaking",
+						"tool", toolName, "repeat_count", toolCallCounts[callKey],
 					)
 					// Inject an error message to help the model recover
 					llmMessages = append(llmMessages, llm.Message{
@@ -1216,18 +1229,16 @@ iterLoop:
 					continue iterLoop
 				}
 
-				log.Info("tool exec",
-					"iter", i, "tool", toolName,
-				)
+				iterLog.Info("tool exec", "tool", toolName)
 				// Log arguments at DEBUG to avoid leaking sensitive data
 				// (exec commands, file contents, credentials in paths)
-				if log.Enabled(ctx, slog.LevelDebug) {
+				if iterLog.Enabled(iterCtx, slog.LevelDebug) {
 					argPreview := argsJSON
 					if len(argPreview) > 200 {
 						argPreview = argPreview[:200] + "..."
 					}
-					log.Debug("tool exec args",
-						"iter", i, "tool", toolName,
+					iterLog.Debug("tool exec args",
+						"tool", toolName,
 						"args", argPreview,
 					)
 				}
@@ -1235,7 +1246,7 @@ iterLoop:
 				// Record tool call start (if supported)
 				if hasRecorder {
 					if err := recorder.RecordToolCall(convID, "", toolCallIDStr, toolName, argsJSON); err != nil {
-						log.Warn("failed to record tool call", "error", err)
+						iterLog.Warn("failed to record tool call", "error", err)
 					}
 				}
 
@@ -1247,7 +1258,7 @@ iterLoop:
 					})
 				}
 
-				toolCtx := tools.WithConversationID(ctx, convID)
+				toolCtx := tools.WithConversationID(iterCtx, convID)
 				if l.archiver != nil {
 					if sid := l.archiver.ActiveSessionID(convID); sid != "" {
 						toolCtx = tools.WithSessionID(toolCtx, sid)
@@ -1265,7 +1276,7 @@ iterLoop:
 				var err error
 				if effectiveTools.Get(toolName) == nil {
 					err = &tools.ErrToolUnavailable{ToolName: toolName}
-					log.Warn("blocked call to unavailable tool", "tool", toolName)
+					iterLog.Warn("blocked call to unavailable tool", "tool", toolName)
 				} else {
 					result, err = l.tools.Execute(toolCtx, toolName, argsJSON)
 				}
@@ -1280,13 +1291,13 @@ iterLoop:
 					if errors.As(err, &unavail) {
 						illegalCall = true
 						result = fmt.Sprintf(prompts.IllegalToolMessage, toolName)
-						log.Warn("illegal tool call", "tool", toolName, "iter", i)
+						iterLog.Warn("illegal tool call", "tool", toolName)
 					} else {
 						result = "Error: " + errMsg
-						log.Error("tool exec failed", "tool", toolName, "error", err)
+						iterLog.Error("tool exec failed", "tool", toolName, "error", err)
 					}
 				} else {
-					log.Debug("tool exec done", "tool", toolName, "result_len", len(result))
+					iterLog.Debug("tool exec done", "tool", toolName, "result_len", len(result))
 					// Track whether this batch executed a substantive tool
 					// (not just capability management meta-tools).
 					if toolName != "request_capability" && toolName != "drop_capability" {
@@ -1307,7 +1318,7 @@ iterLoop:
 				// Record tool call completion (if supported)
 				if hasRecorder {
 					if err := recorder.CompleteToolCall(toolCallIDStr, result, errMsg); err != nil {
-						log.Warn("failed to complete tool call record", "error", err)
+						iterLog.Warn("failed to complete tool call record", "error", err)
 					}
 				}
 
@@ -1328,16 +1339,16 @@ iterLoop:
 			if illegalCall {
 				illegalStrikes++
 				if illegalStrikes >= maxIllegalStrikes {
-					log.Warn("repeated illegal tool calls, breaking loop",
-						"iter", i, "strikes", illegalStrikes)
+					iterLog.Warn("repeated illegal tool calls, breaking loop",
+						"strikes", illegalStrikes)
 					breakReason = "illegal_tool"
 					iterRec.breakReason = "illegal_tool"
 					iterRec.durationMs = time.Since(iterStart).Milliseconds()
 					iterations = append(iterations, iterRec)
 					break iterLoop
 				}
-				log.Warn("illegal tool call, allowing recovery iteration",
-					"iter", i, "strikes", illegalStrikes)
+				iterLog.Warn("illegal tool call, allowing recovery iteration",
+					"strikes", illegalStrikes)
 			} else if batchHasNonMetaTool {
 				// Only reset strikes when the batch successfully executed
 				// a substantive tool. Meta-tools (request_capability,
@@ -1362,7 +1373,7 @@ iterLoop:
 			if len(preview) > 300 {
 				preview = preview[:300] + "..."
 			}
-			log.Debug("model responded with text (no tool call)",
+			iterLog.Debug("model responded with text (no tool call)",
 				"content_preview", preview,
 			)
 		}
@@ -1382,14 +1393,12 @@ iterLoop:
 		// the same content, producing duplicated output.
 		if llmResp.Message.Content == "" && i > 0 {
 			if deferredText != "" {
-				log.Info("using deferred text from prior iteration",
-					"iter", i,
+				iterLog.Info("using deferred text from prior iteration",
 					"deferred_len", len(deferredText),
 				)
 				llmResp.Message.Content = deferredText
 			} else if !emptyRetried {
-				log.Warn("empty response after tool calls, nudging model",
-					"iter", i,
+				iterLog.Warn("empty response after tool calls, nudging model",
 					"input_tokens", totalInputTokens,
 					"output_tokens", totalOutputTokens,
 				)
@@ -1400,8 +1409,7 @@ iterLoop:
 				emptyRetried = true
 				continue
 			} else {
-				log.Error("empty response after nudge, returning fallback",
-					"iter", i,
+				iterLog.Error("empty response after nudge, returning fallback",
 					"input_tokens", totalInputTokens,
 					"output_tokens", totalOutputTokens,
 				)
@@ -1420,7 +1428,7 @@ iterLoop:
 
 		// Store response in memory
 		if err := l.memory.AddMessage(convID, "assistant", resp.Content); err != nil {
-			log.Warn("failed to store response", "error", err)
+			iterLog.Warn("failed to store response", "error", err)
 		}
 
 		// Async fact extraction — don't block the response path.
@@ -1443,7 +1451,7 @@ iterLoop:
 		if l.compactor != nil && l.compactor.NeedsCompaction(convID) {
 			preTokens := l.memory.GetTokenCount(convID)
 			preMessages := len(l.memory.GetMessages(convID))
-			log.Info("triggering compaction",
+			iterLog.Info("triggering compaction",
 				"tokens_before", preTokens,
 				"messages_before", preMessages,
 			)
@@ -1474,16 +1482,15 @@ iterLoop:
 		}
 
 		elapsed := time.Since(startTime)
-		log.Info("agent loop completed",
+		iterLog.Info("agent loop completed",
 			"model", model,
-			"iter", i,
 			"input_tokens", totalInputTokens,
 			"output_tokens", totalOutputTokens,
 			"elapsed", elapsed.Round(time.Millisecond),
 			"context_tokens", l.memory.GetTokenCount(convID),
 		)
 
-		l.recordUsage(ctx, req, model, totalInputTokens, totalOutputTokens, convID, sessionTag, requestID)
+		l.recordUsage(iterCtx, req, model, totalInputTokens, totalOutputTokens, convID, sessionTag, requestID)
 		l.archiveIterations(log, convID, iterations)
 
 		return resp, nil

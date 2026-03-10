@@ -12,6 +12,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/config"
 	"github.com/nugget/thane-ai-agent/internal/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/knowledge"
+	"github.com/nugget/thane-ai-agent/internal/logging"
 	"github.com/nugget/thane-ai-agent/internal/router"
 	"github.com/nugget/thane-ai-agent/internal/scheduler"
 	"github.com/nugget/thane-ai-agent/internal/tools"
@@ -196,6 +197,14 @@ var wakeLifecycleTools = []string{"resolve_anticipation", "cancel_anticipation"}
 func (b *WakeBridge) runWake(a *scheduler.Anticipation, message, entityID string) {
 	ctx, cancel := context.WithTimeout(b.ctx, wakeTimeout)
 	defer cancel()
+
+	// Inject context logger with wake-specific trace fields.
+	log := b.logger.With(
+		"subsystem", logging.SubsystemScheduler,
+		"anticipation_id", a.ID,
+		"entity_id", entityID,
+	)
+	ctx = logging.WithLogger(ctx, log)
 
 	// Inject entity subjects for context pre-warming. SubjectContextProvider
 	// (registered as a ContextProvider) picks these up and injects matching

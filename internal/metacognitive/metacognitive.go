@@ -28,6 +28,7 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/agent"
 	"github.com/nugget/thane-ai-agent/internal/config"
+	"github.com/nugget/thane-ai-agent/internal/logging"
 	"github.com/nugget/thane-ai-agent/internal/prompts"
 	"github.com/nugget/thane-ai-agent/internal/router"
 )
@@ -196,7 +197,9 @@ func (l *Loop) Stop() {
 func (l *Loop) run(ctx context.Context) {
 	defer close(l.done)
 
-	logger := l.deps.Logger
+	logger := l.deps.Logger.With("subsystem", logging.SubsystemMetacog)
+	ctx = logging.WithLogger(ctx, logger)
+
 	logger.Info("metacognitive loop started",
 		"min_sleep", l.config.MinSleep,
 		"max_sleep", l.config.MaxSleep,
@@ -216,26 +219,24 @@ func (l *Loop) run(ctx context.Context) {
 		convID := fmt.Sprintf("metacog-%d", time.Now().UnixMilli())
 		l.setCurrentConvID(convID)
 
-		logger.Info("metacognitive iteration starting",
+		// Enrich context with per-iteration fields.
+		iterCtx := logging.WithLogger(ctx, logger.With(
 			"conversation_id", convID,
 			"supervisor", isSupervisor,
-		)
+		))
+		iterLog := logging.Logger(iterCtx)
 
-		result, err := l.iterate(ctx, isSupervisor, convID)
+		iterLog.Info("metacognitive iteration starting")
+
+		result, err := l.iterate(iterCtx, isSupervisor, convID)
 		if err != nil {
 			if ctx.Err() != nil {
 				logger.Info("metacognitive loop stopped")
 				return
 			}
-			logger.Warn("metacognitive iteration failed",
-				"error", err,
-				"conversation_id", convID,
-				"supervisor", isSupervisor,
-			)
+			iterLog.Warn("metacognitive iteration failed", "error", err)
 		} else {
-			logger.Info("metacognitive iteration complete",
-				"conversation_id", convID,
-				"supervisor", isSupervisor,
+			iterLog.Info("metacognitive iteration complete",
 				"elapsed", result.Elapsed.Round(time.Millisecond),
 			)
 		}
@@ -248,11 +249,7 @@ func (l *Loop) run(ctx context.Context) {
 			l.appendIterationLog(result, convID, sleep)
 		}
 
-		logger.Info("metacognitive sleeping",
-			"duration", sleep,
-			"conversation_id", convID,
-			"supervisor", isSupervisor,
-		)
+		iterLog.Info("metacognitive sleeping", "duration", sleep)
 
 		if !sleepCtx(ctx, sleep) {
 			logger.Info("metacognitive loop stopped")
