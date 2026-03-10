@@ -406,3 +406,102 @@ func TestResolveRepo(t *testing.T) {
 		})
 	}
 }
+
+func TestManagerContext(t *testing.T) {
+	t.Parallel()
+
+	cfg := Config{
+		Accounts: []AccountConfig{
+			{Name: "github-primary", Provider: "github", Token: "ghp_secret", URL: "https://api.github.com", Owner: "nugget"},
+			{Name: "forgejo", Provider: "github", Token: "ghp_other", URL: "https://code.example.com", Owner: "aimee"},
+		},
+	}
+
+	m, err := NewManager(cfg, discardLogger())
+	if err != nil {
+		t.Fatalf("NewManager() unexpected error: %v", err)
+	}
+
+	got := m.Context()
+
+	// Must contain account names.
+	if !strings.Contains(got, `"github-primary"`) {
+		t.Error("Context() missing account name github-primary")
+	}
+	if !strings.Contains(got, `"forgejo"`) {
+		t.Error("Context() missing account name forgejo")
+	}
+
+	// Must contain provider type and owners.
+	if !strings.Contains(got, `"github"`) {
+		t.Error("Context() missing provider type github")
+	}
+	if !strings.Contains(got, `"nugget"`) {
+		t.Error("Context() missing default_owner nugget")
+	}
+	if !strings.Contains(got, `"aimee"`) {
+		t.Error("Context() missing default_owner aimee")
+	}
+
+	// Must contain section header.
+	if !strings.Contains(got, "### Forge Accounts") {
+		t.Error("Context() missing section header")
+	}
+
+	// Must never contain tokens.
+	if strings.Contains(got, "ghp_secret") {
+		t.Error("Context() leaked token ghp_secret")
+	}
+	if strings.Contains(got, "ghp_other") {
+		t.Error("Context() leaked token ghp_other")
+	}
+}
+
+func TestManagerContext_Empty(t *testing.T) {
+	t.Parallel()
+
+	m, err := NewManager(Config{}, discardLogger())
+	if err != nil {
+		t.Fatalf("NewManager() unexpected error: %v", err)
+	}
+
+	got := m.Context()
+	if got != "" {
+		t.Errorf("Context() on empty manager = %q, want empty string", got)
+	}
+}
+
+func TestAccountNotFound_ListsAvailable(t *testing.T) {
+	t.Parallel()
+
+	cfg := Config{
+		Accounts: []AccountConfig{
+			{Name: "github-primary", Provider: "github", Token: "tok", URL: "https://api.github.com"},
+			{Name: "forgejo", Provider: "github", Token: "tok2", URL: "https://api.github.com"},
+		},
+	}
+
+	m, err := NewManager(cfg, discardLogger())
+	if err != nil {
+		t.Fatalf("NewManager() unexpected error: %v", err)
+	}
+
+	_, err = m.Account("nonexistent")
+	if err == nil {
+		t.Fatal("Account(\"nonexistent\") expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "github-primary") {
+		t.Errorf("error should list available account github-primary: %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), "forgejo") {
+		t.Errorf("error should list available account forgejo: %q", err.Error())
+	}
+
+	_, err = m.AccountConfig("nonexistent")
+	if err == nil {
+		t.Fatal("AccountConfig(\"nonexistent\") expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "github-primary") {
+		t.Errorf("error should list available account github-primary: %q", err.Error())
+	}
+}

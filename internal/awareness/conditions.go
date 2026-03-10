@@ -57,14 +57,14 @@ func CurrentConditions(timezone string) string {
 		hostname = "unknown"
 	}
 	env := detectEnvironment()
-	sb.WriteString(fmt.Sprintf("**Host:** %s (%s/%s, %s)\n", hostname, runtime.GOOS, runtime.GOARCH, env))
+	fmt.Fprintf(&sb, "**Host:** %s (%s/%s, %s)\n", hostname, runtime.GOOS, runtime.GOARCH, env)
 
 	// Thane — version and commit.
-	sb.WriteString(fmt.Sprintf("**Thane:** %s (%s@%s)\n", buildinfo.Version, buildinfo.GitCommit, buildinfo.GitBranch))
+	fmt.Fprintf(&sb, "**Thane:** %s (%s@%s)\n", buildinfo.Version, buildinfo.GitCommit, buildinfo.GitBranch)
 
 	// Uptime.
 	uptime := buildinfo.Uptime()
-	sb.WriteString(fmt.Sprintf("**Uptime:** %s", formatUptime(uptime)))
+	fmt.Fprintf(&sb, "**Uptime:** %s", formatUptime(uptime))
 
 	return sb.String()
 }

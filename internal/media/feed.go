@@ -144,6 +144,11 @@ func rssToFeed(rf *rssFeed) *Feed {
 	return f
 }
 
+// maxFeedSize is the maximum feed body size we read. Long-running
+// podcasts and prolific YouTube channels routinely produce feeds in
+// the 2-10 MB range (e.g., ATP podcast is ~3 MB with 681 episodes).
+const maxFeedSize = 10 << 20 // 10 MB
+
 // fetchFeed retrieves and parses a feed from the given URL.
 func fetchFeed(ctx context.Context, httpClient *http.Client, feedURL string) (*Feed, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, feedURL, nil)
@@ -156,15 +161,19 @@ func fetchFeed(ctx context.Context, httpClient *http.Client, feedURL string) (*F
 	if err != nil {
 		return nil, fmt.Errorf("fetch feed: %w", err)
 	}
-	defer httpkit.DrainAndClose(resp.Body, 1<<20) // 1 MB limit
+	defer httpkit.DrainAndClose(resp.Body, maxFeedSize)
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("feed returned HTTP %d", resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxFeedSize+1))
 	if err != nil {
 		return nil, fmt.Errorf("read feed body: %w", err)
+	}
+
+	if int64(len(body)) > maxFeedSize {
+		return nil, fmt.Errorf("feed exceeds %d MB size limit", maxFeedSize>>20)
 	}
 
 	return parseFeed(body)
@@ -176,6 +185,19 @@ var ytChannelIDRe = regexp.MustCompile(`"channelId"\s*:\s*"(UC[a-zA-Z0-9_-]+)"`)
 // ytCanonicalRe matches canonical URLs with channel IDs.
 var ytCanonicalRe = regexp.MustCompile(`<link\s+rel="canonical"\s+href="https://www\.youtube\.com/channel/(UC[a-zA-Z0-9_-]+)"`)
 
+// ytAlternateFeedRe matches the RSS alternate link that YouTube embeds
+// in channel pages. Handles both attribute orderings (type before href
+// and href before type) and single/double quotes. Requires rel="alternate"
+// to avoid false matches.
+var ytAlternateFeedRe = regexp.MustCompile(
+	`<link[^>]+rel=['"]alternate['"][^>]+` +
+		`(?:` +
+		`type=['"]application/rss\+xml['"][^>]+href=['"]([^'"]+)['"]` +
+		`|` +
+		`href=['"]([^'"]+)['"][^>]+type=['"]application/rss\+xml['"]` +
+		`)`,
+)
+
 // isYouTubeHost reports whether host is a known YouTube hostname.
 func isYouTubeHost(host string) bool {
 	switch strings.ToLower(host) {
@@ -185,11 +207,11 @@ func isYouTubeHost(host string) bool {
 	return false
 }
 
-// resolveYouTubeFeed converts a YouTube channel URL to the corresponding
-// Atom feed URL. Accepts @handle or /channel/ URLs. Returns the original
-// URL unchanged if it's already a feed URL or not a YouTube channel.
-// The hostname is validated to prevent unintended fetches on non-YouTube
-// domains that happen to contain similar path patterns.
+// resolveYouTubeFeed converts certain YouTube URLs to the corresponding Atom
+// feed URL. It recognizes @handle, /channel/, and /playlist?list= URLs and
+// rewrites only those patterns. For all other inputs — including URLs that
+// are already feed URLs, non-YouTube URLs, and unsupported YouTube URLs
+// such as /watch or /c/ — the original URL is returned unchanged.
 func resolveYouTubeFeed(ctx context.Context, httpClient *http.Client, rawURL string) (string, error) {
 	// Already a feed URL — return as-is.
 	if strings.Contains(rawURL, "/feeds/videos.xml") {
@@ -200,6 +222,14 @@ func resolveYouTubeFeed(ctx context.Context, httpClient *http.Client, rawURL str
 	parsed, err := url.Parse(rawURL)
 	if err != nil || !isYouTubeHost(parsed.Hostname()) {
 		return rawURL, nil
+	}
+
+	// /playlist?list=PLxxxx → construct feed URL directly.
+	if parsed.Path == "/playlist" || parsed.Path == "/playlist/" {
+		if listID := parsed.Query().Get("list"); listID != "" {
+			v := url.Values{"playlist_id": {listID}}
+			return "https://www.youtube.com/feeds/videos.xml?" + v.Encode(), nil
+		}
 	}
 
 	// /channel/UCXXXX → construct directly.
@@ -232,13 +262,30 @@ func resolveYouTubeFeed(ctx context.Context, httpClient *http.Client, rawURL str
 		return "", fmt.Errorf("channel page returned HTTP %d", resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 512*1024))
+	// YouTube @handle pages are ~1.1MB; all channel metadata (canonical
+	// link, alternate feed link, channelId JSON) sits at ~600KB+.
+	// The old 512KB limit silently missed everything.
+	const maxChannelPageBytes = 1 << 20
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxChannelPageBytes+1))
 	if err != nil {
 		return "", fmt.Errorf("read channel page: %w", err)
 	}
+	if len(body) > maxChannelPageBytes {
+		return "", fmt.Errorf("channel page exceeded %d-byte limit; try the direct RSS URL: https://www.youtube.com/feeds/videos.xml?channel_id=CHANNEL_ID", maxChannelPageBytes)
+	}
 	html := string(body)
 
-	// Try canonical link first, then JSON metadata.
+	// Try alternate RSS link first (most direct — contains full feed URL),
+	// then canonical link, then JSON metadata.
+	if m := ytAlternateFeedRe.FindStringSubmatch(html); m != nil {
+		// Two alternation groups — one will be empty depending on attr order.
+		if m[1] != "" {
+			return m[1], nil
+		}
+		if m[2] != "" {
+			return m[2], nil
+		}
+	}
 	if m := ytCanonicalRe.FindStringSubmatch(html); len(m) == 2 {
 		return "https://www.youtube.com/feeds/videos.xml?channel_id=" + m[1], nil
 	}

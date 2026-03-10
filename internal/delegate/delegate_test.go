@@ -1119,6 +1119,99 @@ func TestExecute_ToolTimeoutRecovery(t *testing.T) {
 	}
 }
 
+// TestExecute_NonCooperativeToolTimeout verifies that the delegate
+// recovers from a tool handler that blocks forever without checking
+// ctx.Done(). This was the root cause of issue #508 where delegates
+// hung indefinitely on non-cooperative tools.
+func TestExecute_NonCooperativeToolTimeout(t *testing.T) {
+	// Register a tool that blocks forever and ignores context.
+	// This simulates a hung syscall or HTTP call without context propagation.
+	reg := tools.NewEmptyRegistry()
+	blocked := make(chan struct{}) // closed when test ends
+	reg.Register(&tools.Tool{
+		Name:        "hung_tool",
+		Description: "A tool that never returns",
+		Parameters: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{},
+		},
+		Handler: func(_ context.Context, _ map[string]any) (string, error) {
+			// Block forever without checking ctx.Done().
+			// This is the non-cooperative pattern that caused #508.
+			<-blocked
+			return "never", nil
+		},
+	})
+	defer close(blocked) // unblock goroutine after test
+
+	mock := &mockLLMClient{
+		responses: []*llm.ChatResponse{
+			// Iter 0: LLM calls the hung tool.
+			{
+				Model: "test-model",
+				Message: llm.Message{
+					Role: "assistant",
+					ToolCalls: []llm.ToolCall{{
+						ID: "call-hung",
+						Function: struct {
+							Name      string         `json:"name"`
+							Arguments map[string]any `json:"arguments"`
+						}{
+							Name:      "hung_tool",
+							Arguments: map[string]any{},
+						},
+					}},
+				},
+				InputTokens:  100,
+				OutputTokens: 20,
+			},
+			// Iter 1: LLM responds with text after seeing timeout.
+			{
+				Model:        "test-model",
+				Message:      llm.Message{Role: "assistant", Content: "Tool hung, moving on."},
+				InputTokens:  200,
+				OutputTokens: 30,
+			},
+		},
+	}
+
+	exec := NewExecutor(slog.Default(), mock, nil, reg, "test-model")
+	exec.profiles["general"].ToolTimeout = 100 * time.Millisecond
+	exec.profiles["general"].MaxDuration = 5 * time.Second
+
+	start := time.Now()
+	result, err := exec.Execute(context.Background(), "Run the hung tool", "general", "", nil)
+	elapsed := time.Since(start)
+
+	if err != nil {
+		t.Fatalf("Execute() error = %v (should recover from hung tool)", err)
+	}
+	if elapsed > 2*time.Second {
+		t.Errorf("Execute took %v, want < 2s (timeout should fire at ~100ms)", elapsed)
+	}
+	if result.Content != "Tool hung, moving on." {
+		t.Errorf("Content = %q, want recovery message", result.Content)
+	}
+	if len(result.ToolCalls) != 1 || result.ToolCalls[0].Success {
+		t.Error("expected one failed tool call")
+	}
+
+	// Verify the LLM received the timeout error as a tool result.
+	if len(mock.calls) < 2 {
+		t.Fatalf("expected at least 2 LLM calls, got %d", len(mock.calls))
+	}
+	found := false
+	for _, msg := range mock.calls[1].Messages {
+		if msg.Role == "tool" && strings.Contains(msg.Content, "timed out") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("LLM did not receive tool timeout error in messages")
+	}
+}
+
 func TestExecute_TagScoping(t *testing.T) {
 	// When tags are provided, the delegate should only see tools from
 	// those tags (plus always-active tags), not the full profile toolset.
@@ -1400,5 +1493,69 @@ func TestExecute_ExhaustReasonIllegalTool(t *testing.T) {
 	}
 	if result.Iterations != 2 {
 		t.Errorf("Iterations = %d, want 2 (initial illegal + recovery illegal before break)", result.Iterations)
+	}
+}
+
+func TestExecute_ForgeContextInSystemPrompt(t *testing.T) {
+	forgeCtx := "### Forge Accounts\n```json\n{\"forges\":[{\"account\":\"github-primary\"}]}\n```\n"
+
+	mock := &mockLLMClient{
+		responses: []*llm.ChatResponse{
+			{
+				Model:        "test-model",
+				Message:      llm.Message{Role: "assistant", Content: "Done."},
+				InputTokens:  100,
+				OutputTokens: 20,
+			},
+		},
+	}
+
+	exec := NewExecutor(slog.Default(), mock, nil, newTestRegistry(), "test-model")
+	exec.SetForgeContext(forgeCtx)
+
+	_, err := exec.Execute(context.Background(), "Check forge", "general", "", nil)
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	if len(mock.calls) == 0 {
+		t.Fatal("expected at least one LLM call")
+	}
+
+	systemMsg := mock.calls[0].Messages[0]
+	if systemMsg.Role != "system" {
+		t.Fatalf("first message role = %q, want system", systemMsg.Role)
+	}
+	if !strings.Contains(systemMsg.Content, "github-primary") {
+		t.Error("system prompt should contain forge context with account name")
+	}
+	if !strings.Contains(systemMsg.Content, "### Forge Accounts") {
+		t.Error("system prompt should contain forge accounts header")
+	}
+}
+
+func TestExecute_NoForgeContextWhenUnset(t *testing.T) {
+	mock := &mockLLMClient{
+		responses: []*llm.ChatResponse{
+			{
+				Model:        "test-model",
+				Message:      llm.Message{Role: "assistant", Content: "Done."},
+				InputTokens:  100,
+				OutputTokens: 20,
+			},
+		},
+	}
+
+	exec := NewExecutor(slog.Default(), mock, nil, newTestRegistry(), "test-model")
+	// No SetForgeContext call.
+
+	_, err := exec.Execute(context.Background(), "Check something", "general", "", nil)
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	systemMsg := mock.calls[0].Messages[0]
+	if strings.Contains(systemMsg.Content, "Forge Accounts") {
+		t.Error("system prompt should not contain forge context when unset")
 	}
 }

@@ -2,6 +2,7 @@ package media
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -260,6 +261,54 @@ func TestResolveYouTubeFeed_HandleURL(t *testing.T) {
 	}
 }
 
+func TestResolveYouTubeFeed_PlaylistURL(t *testing.T) {
+	tests := []struct {
+		name string
+		url  string
+		want string
+	}{
+		{
+			name: "standard playlist",
+			url:  "https://www.youtube.com/playlist?list=PL96C35uN7xGLLeET0dOWaKHkAlPsrkcha",
+			want: "https://www.youtube.com/feeds/videos.xml?playlist_id=PL96C35uN7xGLLeET0dOWaKHkAlPsrkcha",
+		},
+		{
+			name: "playlist with extra params",
+			url:  "https://www.youtube.com/playlist?list=PLtest123&si=abcdef",
+			want: "https://www.youtube.com/feeds/videos.xml?playlist_id=PLtest123",
+		},
+		{
+			name: "m.youtube.com playlist",
+			url:  "https://m.youtube.com/playlist?list=PLmobile456",
+			want: "https://www.youtube.com/feeds/videos.xml?playlist_id=PLmobile456",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := resolveYouTubeFeed(context.Background(), http.DefaultClient, tt.url)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestResolveYouTubeFeed_PlaylistMissingList(t *testing.T) {
+	// /playlist without a list param should return the URL unchanged.
+	url := "https://www.youtube.com/playlist"
+	got, err := resolveYouTubeFeed(context.Background(), http.DefaultClient, url)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != url {
+		t.Errorf("got %q, want %q (unchanged)", got, url)
+	}
+}
+
 func TestResolveYouTubeFeed_NonYouTube(t *testing.T) {
 	url := "https://example.com/feed.xml"
 	got, err := resolveYouTubeFeed(context.Background(), http.DefaultClient, url)
@@ -268,6 +317,95 @@ func TestResolveYouTubeFeed_NonYouTube(t *testing.T) {
 	}
 	if got != url {
 		t.Errorf("non-YouTube URL should be returned unchanged, got %q", got)
+	}
+}
+
+// ytAlternateFeedMatch extracts the feed URL from a ytAlternateFeedRe match,
+// handling both alternation groups (type-before-href and href-before-type).
+func ytAlternateFeedMatch(html string) string {
+	m := ytAlternateFeedRe.FindStringSubmatch(html)
+	if m == nil {
+		return ""
+	}
+	if m[1] != "" {
+		return m[1]
+	}
+	return m[2]
+}
+
+func TestYTAlternateFeedRe(t *testing.T) {
+	want := "https://www.youtube.com/feeds/videos.xml?channel_id=UCabc123xyz"
+
+	tests := []struct {
+		name string
+		html string
+	}{
+		{
+			name: "type before href, double quotes",
+			html: `<link rel="alternate" type="application/rss+xml" title="RSS" href="https://www.youtube.com/feeds/videos.xml?channel_id=UCabc123xyz">`,
+		},
+		{
+			name: "href before type, double quotes",
+			html: `<link rel="alternate" href="https://www.youtube.com/feeds/videos.xml?channel_id=UCabc123xyz" type="application/rss+xml" title="RSS">`,
+		},
+		{
+			name: "type before href, single quotes",
+			html: `<link rel='alternate' type='application/rss+xml' title='RSS' href='https://www.youtube.com/feeds/videos.xml?channel_id=UCabc123xyz'>`,
+		},
+		{
+			name: "href before type, single quotes",
+			html: `<link rel='alternate' href='https://www.youtube.com/feeds/videos.xml?channel_id=UCabc123xyz' type='application/rss+xml' title='RSS'>`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ytAlternateFeedMatch(tt.html)
+			if got == "" {
+				t.Fatal("ytAlternateFeedRe did not match")
+			}
+			if got != want {
+				t.Errorf("got %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+func TestYTRegexes_LargePageOffset(t *testing.T) {
+	// YouTube @handle pages place all channel metadata at ~600KB+.
+	// Verify that the regexes match when content sits past the old
+	// 512KB limit — the read limit was bumped to 1MB in #517.
+	wantFeed := "https://www.youtube.com/feeds/videos.xml?channel_id=UCtest600k"
+	padding := strings.Repeat("x", 600*1024)
+	page := "<html><head>" + padding +
+		`<link rel="alternate" type="application/rss+xml" title="RSS" href="` + wantFeed + `">` +
+		`<link rel="canonical" href="https://www.youtube.com/channel/UCtest600k">` +
+		`<script>"channelId":"UCtest600k"</script>` +
+		"</head></html>"
+
+	// Simulate reading up to 1MB (new limit).
+	limit := 1 << 20
+	if len(page) > limit {
+		page = page[:limit]
+	}
+
+	if got := ytAlternateFeedMatch(page); got != wantFeed {
+		t.Errorf("ytAlternateFeedRe failed at 600KB offset: got %q", got)
+	}
+	if m := ytCanonicalRe.FindStringSubmatch(page); len(m) != 2 || m[1] != "UCtest600k" {
+		t.Errorf("ytCanonicalRe failed at 600KB offset: got %v", m)
+	}
+	if m := ytChannelIDRe.FindStringSubmatch(page); len(m) != 2 || m[1] != "UCtest600k" {
+		t.Errorf("ytChannelIDRe failed at 600KB offset: got %v", m)
+	}
+
+	// Verify the old 512KB limit would have missed these.
+	truncated := page[:512*1024]
+	if got := ytAlternateFeedMatch(truncated); got != "" {
+		t.Error("ytAlternateFeedRe should NOT match within 512KB")
+	}
+	if m := ytCanonicalRe.FindStringSubmatch(truncated); len(m) != 0 {
+		t.Error("ytCanonicalRe should NOT match within 512KB")
 	}
 }
 
@@ -348,6 +486,66 @@ func TestDiscoverFeedURL_NoFeedLink(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "no RSS/Atom feed link found") {
 		t.Errorf("error %q should mention no feed link found", err.Error())
+	}
+}
+
+func TestFetchFeed_LargeFeed(t *testing.T) {
+	// Build a valid RSS feed that exceeds 1 MB (old limit) but stays
+	// under 10 MB (new limit). This simulates long-running podcast feeds.
+	var b strings.Builder
+	b.WriteString(`<?xml version="1.0"?><rss version="2.0"><channel><title>Big Podcast</title>`)
+	for i := range 5000 {
+		fmt.Fprintf(&b, `<item><title>Episode %d — A Reasonably Long Title for Padding Purposes to Bulk Up the Feed</title>`+
+			`<link>https://example.com/episodes/%d</link>`+
+			`<guid>ep-%d</guid>`+
+			`<pubDate>Mon, 20 Feb 2026 12:00:00 +0000</pubDate></item>`, i, i, i)
+	}
+	b.WriteString(`</channel></rss>`)
+	feedXML := b.String()
+	if len(feedXML) < 1<<20 {
+		t.Fatalf("test feed too small (%d bytes), expected > 1 MB", len(feedXML))
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/xml")
+		w.Write([]byte(feedXML))
+	}))
+	defer srv.Close()
+
+	feed, err := fetchFeed(context.Background(), srv.Client(), srv.URL)
+	if err != nil {
+		t.Fatalf("fetchFeed() should handle feeds > 1 MB: %v", err)
+	}
+	if feed.Title != "Big Podcast" {
+		t.Errorf("Title = %q, want %q", feed.Title, "Big Podcast")
+	}
+	if len(feed.Entries) != 5000 {
+		t.Errorf("got %d entries, want 5000", len(feed.Entries))
+	}
+}
+
+func TestFetchFeed_ExceedsLimit(t *testing.T) {
+	// Serve a response body that exceeds maxFeedSize. The server streams
+	// the data so we don't need to allocate the full payload in the test.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/xml")
+		// Write a valid XML start so it's clearly not a format problem.
+		w.Write([]byte(`<?xml version="1.0"?><rss version="2.0"><channel><title>Huge</title>`))
+		// Pad with enough items to exceed 10 MB.
+		chunk := []byte(`<item><title>Episode</title><link>https://example.com/ep</link></item>`)
+		for written := 0; written < maxFeedSize; written += len(chunk) {
+			w.Write(chunk)
+		}
+		w.Write([]byte(`</channel></rss>`))
+	}))
+	defer srv.Close()
+
+	_, err := fetchFeed(context.Background(), srv.Client(), srv.URL)
+	if err == nil {
+		t.Fatal("expected error for feed exceeding size limit")
+	}
+	if !strings.Contains(err.Error(), "size limit") {
+		t.Errorf("error %q should mention size limit", err.Error())
 	}
 }
 

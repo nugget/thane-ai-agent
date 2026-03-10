@@ -170,6 +170,57 @@ func TestFilteredCopyExcluding(t *testing.T) {
 	}
 }
 
+func TestFilteredCopy_PreservesTagIndex(t *testing.T) {
+	r := newTestRegistry()
+	r.SetTagIndex(map[string][]string{
+		"group_a": {"alpha"},
+		"group_b": {"beta"},
+	})
+
+	filtered := r.FilteredCopy([]string{"alpha", "beta"})
+
+	// FilterByTags on the filtered copy should respect the inherited
+	// tagIndex. Without tagIndex propagation, FilterByTags returns a
+	// full unfiltered copy (because tagIndex == nil).
+	byTag := filtered.FilterByTags([]string{"group_a"})
+	names := byTag.AllToolNames()
+	if !containsName(names, "alpha") {
+		t.Error("expected alpha in group_a filter result")
+	}
+	if containsName(names, "beta") {
+		t.Error("beta should not be in group_a filter result")
+	}
+}
+
+func TestFilteredCopyExcluding_PreservesTagIndex(t *testing.T) {
+	r := newTestRegistry()
+	r.SetTagIndex(map[string][]string{
+		"group_a": {"alpha"},
+		"group_b": {"beta", "gamma"},
+	})
+
+	filtered := r.FilteredCopyExcluding([]string{"gamma"})
+
+	// FilterByTags on the excluded copy should still work.
+	byTag := filtered.FilterByTags([]string{"group_b"})
+	names := byTag.AllToolNames()
+	if containsName(names, "gamma") {
+		t.Error("gamma should have been excluded")
+	}
+	if !containsName(names, "beta") {
+		t.Error("expected beta in group_b filter result")
+	}
+}
+
+func containsName(names []string, target string) bool {
+	for _, n := range names {
+		if n == target {
+			return true
+		}
+	}
+	return false
+}
+
 func TestFilteredCopy_DoesNotMutateSource(t *testing.T) {
 	r := newTestRegistry()
 	origCount := len(r.AllToolNames())

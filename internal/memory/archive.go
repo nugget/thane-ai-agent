@@ -1022,8 +1022,10 @@ func (s *ArchiveStore) scanToolCalls(rows *sql.Rows) ([]ArchivedToolCall, error)
 		if tc.StartedAt, err = database.ParseTimestamp(startStr); err != nil {
 			return nil, fmt.Errorf("parse tool_call started_at: %w", err)
 		}
-		if tc.ArchivedAt, err = database.ParseTimestamp(archivedStr); err != nil {
-			return nil, fmt.Errorf("parse tool_call archived_at: %w", err)
+		if archivedStr != "" {
+			if tc.ArchivedAt, err = database.ParseTimestamp(archivedStr); err != nil {
+				return nil, fmt.Errorf("parse tool_call archived_at: %w", err)
+			}
 		}
 		if completedStr.Valid {
 			ts, tsErr := database.ParseTimestamp(completedStr.String)
@@ -1161,10 +1163,14 @@ func (s *ArchiveStore) GetSessionIterations(sessionID string) ([]ArchivedIterati
 			iter.BreakReason = breakReason.String
 		}
 		if toolCallIDsJSON.Valid {
-			_ = json.Unmarshal([]byte(toolCallIDsJSON.String), &iter.ToolCallIDs)
+			if unmarshalErr := json.Unmarshal([]byte(toolCallIDsJSON.String), &iter.ToolCallIDs); unmarshalErr != nil && s.logger != nil {
+				s.logger.Debug("failed to unmarshal tool_call_ids", "session_id", iter.SessionID, "error", unmarshalErr)
+			}
 		}
 		if toolsOfferedJSON.Valid {
-			_ = json.Unmarshal([]byte(toolsOfferedJSON.String), &iter.ToolsOffered)
+			if unmarshalErr := json.Unmarshal([]byte(toolsOfferedJSON.String), &iter.ToolsOffered); unmarshalErr != nil && s.logger != nil {
+				s.logger.Debug("failed to unmarshal tools_offered", "session_id", iter.SessionID, "error", unmarshalErr)
+			}
 		}
 
 		iters = append(iters, iter)
@@ -1324,8 +1330,10 @@ func (s *ArchiveStore) Search(opts SearchOptions) ([]SearchResult, error) {
 		if m.Timestamp, err = database.ParseTimestamp(tsStr); err != nil {
 			return nil, fmt.Errorf("parse message timestamp: %w", err)
 		}
-		if m.ArchivedAt, err = database.ParseTimestamp(archivedStr); err != nil {
-			return nil, fmt.Errorf("parse message archived_at: %w", err)
+		if archivedStr != "" {
+			if m.ArchivedAt, err = database.ParseTimestamp(archivedStr); err != nil {
+				return nil, fmt.Errorf("parse message archived_at: %w", err)
+			}
 		}
 		if toolCalls.Valid {
 			m.ToolCalls = toolCalls.String
@@ -1428,12 +1436,14 @@ func (s *ArchiveStore) expandContext(
 			}
 			continue // Timestamp is required for gap calculation.
 		}
-		if m.ArchivedAt, err = database.ParseTimestamp(archivedStr); err != nil {
-			if s.logger != nil {
-				s.logger.Warn("expandContext: invalid archived_at timestamp",
-					"message_id", m.ID, "archived_at", archivedStr, "error", err)
+		if archivedStr != "" {
+			if m.ArchivedAt, err = database.ParseTimestamp(archivedStr); err != nil {
+				if s.logger != nil {
+					s.logger.Warn("expandContext: invalid archived_at timestamp",
+						"message_id", m.ID, "archived_at", archivedStr, "error", err)
+				}
+				// Keep the message — ArchivedAt is not used for gap logic.
 			}
-			// Keep the message — ArchivedAt is not used for gap logic.
 		}
 		if toolCalls.Valid {
 			m.ToolCalls = toolCalls.String
@@ -2223,8 +2233,10 @@ func (s *ArchiveStore) scanMessages(rows *sql.Rows) ([]Message, error) {
 		if m.Timestamp, err = database.ParseTimestamp(tsStr); err != nil {
 			return nil, fmt.Errorf("parse message timestamp: %w", err)
 		}
-		if m.ArchivedAt, err = database.ParseTimestamp(archivedStr); err != nil {
-			return nil, fmt.Errorf("parse message archived_at: %w", err)
+		if archivedStr != "" {
+			if m.ArchivedAt, err = database.ParseTimestamp(archivedStr); err != nil {
+				return nil, fmt.Errorf("parse message archived_at: %w", err)
+			}
 		}
 		if toolCalls.Valid {
 			m.ToolCalls = toolCalls.String

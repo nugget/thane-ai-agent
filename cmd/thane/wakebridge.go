@@ -324,8 +324,8 @@ func (b *WakeBridge) fetchEntityContext(a *scheduler.Anticipation, triggerEntity
 // optional entity state context.
 func formatWakeMessage(a *scheduler.Anticipation, entityID, oldState, newState, entityContext string) string {
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Anticipation matched: %q\n\n", a.Description))
-	sb.WriteString(fmt.Sprintf("Entity %s changed from %q to %q.\n\n", entityID, oldState, newState))
+	fmt.Fprintf(&sb, "Anticipation matched: %q\n\n", a.Description)
+	fmt.Fprintf(&sb, "Entity %s changed from %q to %q.\n\n", entityID, oldState, newState)
 	if a.Context != "" {
 		sb.WriteString("Instructions you left for yourself:\n")
 		sb.WriteString(a.Context)

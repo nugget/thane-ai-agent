@@ -1470,3 +1470,88 @@ func TestImportToolCalls_Unified(t *testing.T) {
 		t.Errorf("status = %q, want %q", status, "archived")
 	}
 }
+
+// TestSearch_UnifiedModeNullArchivedAt verifies that archive search works when
+// the unified messages table contains active messages with NULL archived_at.
+// COALESCE(archived_at, ”) produces an empty string, which ParseTimestamp must
+// tolerate rather than returning a fatal error. Regression test for #501.
+func TestSearch_UnifiedModeNullArchivedAt(t *testing.T) {
+	workingStore, err := NewSQLiteStore(t.TempDir()+"/working.db", 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer workingStore.Close()
+
+	store, err := NewArchiveStoreFromDB(workingStore.DB(), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sess, err := store.StartSession("conv-null-archived")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Now().UTC()
+
+	// Insert an archived message (has archived_at).
+	_, err = workingStore.DB().Exec(`
+		INSERT INTO messages (id, conversation_id, session_id, role, content,
+		    timestamp, token_count, status, archived_at, archive_reason)
+		VALUES (?, 'conv-null-archived', ?, 'user', 'the pool heater is broken again', ?, 10, 'archived', ?, 'reset')
+	`, "msg-archived-1", sess.ID,
+		now.Add(-2*time.Second).Format(time.RFC3339Nano),
+		now.Format(time.RFC3339Nano))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Insert an active message (NULL archived_at — the trigger for #501).
+	_, err = workingStore.DB().Exec(`
+		INSERT INTO messages (id, conversation_id, session_id, role, content,
+		    timestamp, token_count, status)
+		VALUES (?, 'conv-null-archived', ?, 'assistant', 'I can help with the pool heater', ?, 10, 'active')
+	`, "msg-active-1", sess.ID,
+		now.Add(-1*time.Second).Format(time.RFC3339Nano))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Search — this would fail with "parse message archived_at: empty timestamp"
+	// before the fix.
+	results, err := store.Search(SearchOptions{
+		Query:     "pool heater",
+		Limit:     10,
+		NoContext: true,
+	})
+	if err != nil {
+		t.Fatalf("Search failed: %v", err)
+	}
+
+	if len(results) == 0 {
+		t.Fatal("expected at least 1 search result")
+	}
+
+	// Verify the active message (NULL archived_at) has a zero ArchivedAt.
+	for _, r := range results {
+		if r.Match.ID == "msg-active-1" {
+			if !r.Match.ArchivedAt.IsZero() {
+				t.Errorf("active message ArchivedAt = %v, want zero", r.Match.ArchivedAt)
+			}
+		}
+	}
+
+	// Also test with context expansion (exercises expandContext path).
+	resultsCtx, err := store.Search(SearchOptions{
+		Query:            "pool heater",
+		Limit:            10,
+		SilenceThreshold: 10 * time.Minute,
+		MaxMessages:      50,
+	})
+	if err != nil {
+		t.Fatalf("Search with context failed: %v", err)
+	}
+	if len(resultsCtx) == 0 {
+		t.Fatal("expected at least 1 search result with context")
+	}
+}
