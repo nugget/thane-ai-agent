@@ -1,6 +1,7 @@
 package forge
 
 import (
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -134,32 +135,78 @@ func NewManager(cfg Config, logger *slog.Logger) (*Manager, error) {
 // Account returns the forge provider for the named account. If name is
 // empty, the primary (first configured) account is used.
 func (m *Manager) Account(name string) (ForgeProvider, error) {
+	if len(m.order) == 0 {
+		return nil, fmt.Errorf("no forge accounts configured")
+	}
 	if name == "" {
-		if len(m.order) == 0 {
-			return nil, fmt.Errorf("no forge accounts configured")
-		}
 		name = m.order[0]
 	}
 	p, ok := m.providers[name]
 	if !ok {
-		return nil, fmt.Errorf("forge account %q not found", name)
+		return nil, fmt.Errorf("forge account %q not found; available accounts: %s", name, strings.Join(m.order, ", "))
 	}
 	return p, nil
 }
 
 // AccountConfig returns the configuration for the named account.
 func (m *Manager) AccountConfig(name string) (AccountConfig, error) {
+	if len(m.order) == 0 {
+		return AccountConfig{}, fmt.Errorf("no forge accounts configured")
+	}
 	if name == "" {
-		if len(m.order) == 0 {
-			return AccountConfig{}, fmt.Errorf("no forge accounts configured")
-		}
 		name = m.order[0]
 	}
 	cfg, ok := m.configs[name]
 	if !ok {
-		return AccountConfig{}, fmt.Errorf("forge account %q not found", name)
+		return AccountConfig{}, fmt.Errorf("forge account %q not found; available accounts: %s", name, strings.Join(m.order, ", "))
 	}
 	return cfg, nil
+}
+
+// accountView is the JSON-serializable representation of a forge
+// account injected into the system prompt. It deliberately omits
+// secrets (tokens).
+type accountView struct {
+	Account      string `json:"account"`
+	Type         string `json:"type"`
+	URL          string `json:"url"`
+	DefaultOwner string `json:"default_owner,omitempty"`
+}
+
+// Context returns a markdown block describing the configured forge
+// accounts for injection into a system prompt. The output is structured
+// JSON wrapped in a fenced code block so the model can immediately
+// identify available accounts, their types, and default owners without
+// guessing. Returns an empty string when no accounts are configured.
+// Tokens are never included.
+func (m *Manager) Context() string {
+	if len(m.order) == 0 {
+		return ""
+	}
+
+	views := make([]accountView, 0, len(m.order))
+	for _, name := range m.order {
+		cfg := m.configs[name]
+		views = append(views, accountView{
+			Account:      cfg.Name,
+			Type:         cfg.Provider,
+			URL:          cfg.URL,
+			DefaultOwner: cfg.Owner,
+		})
+	}
+
+	data := map[string]any{"forges": views}
+	jsonBytes, err := json.Marshal(data)
+	if err != nil {
+		// Shouldn't happen with simple structs, but degrade gracefully.
+		return ""
+	}
+
+	var sb strings.Builder
+	sb.WriteString("### Forge Accounts\n```json\n")
+	sb.Write(jsonBytes)
+	sb.WriteString("\n```\n")
+	return sb.String()
 }
 
 // ResolveRepo converts a repo parameter into "owner/repo" format. If

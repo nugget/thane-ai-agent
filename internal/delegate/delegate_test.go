@@ -1402,3 +1402,67 @@ func TestExecute_ExhaustReasonIllegalTool(t *testing.T) {
 		t.Errorf("Iterations = %d, want 2 (initial illegal + recovery illegal before break)", result.Iterations)
 	}
 }
+
+func TestExecute_ForgeContextInSystemPrompt(t *testing.T) {
+	forgeCtx := "### Forge Accounts\n```json\n{\"forges\":[{\"account\":\"github-primary\"}]}\n```\n"
+
+	mock := &mockLLMClient{
+		responses: []*llm.ChatResponse{
+			{
+				Model:        "test-model",
+				Message:      llm.Message{Role: "assistant", Content: "Done."},
+				InputTokens:  100,
+				OutputTokens: 20,
+			},
+		},
+	}
+
+	exec := NewExecutor(slog.Default(), mock, nil, newTestRegistry(), "test-model")
+	exec.SetForgeContext(forgeCtx)
+
+	_, err := exec.Execute(context.Background(), "Check forge", "general", "", nil)
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	if len(mock.calls) == 0 {
+		t.Fatal("expected at least one LLM call")
+	}
+
+	systemMsg := mock.calls[0].Messages[0]
+	if systemMsg.Role != "system" {
+		t.Fatalf("first message role = %q, want system", systemMsg.Role)
+	}
+	if !strings.Contains(systemMsg.Content, "github-primary") {
+		t.Error("system prompt should contain forge context with account name")
+	}
+	if !strings.Contains(systemMsg.Content, "### Forge Accounts") {
+		t.Error("system prompt should contain forge accounts header")
+	}
+}
+
+func TestExecute_NoForgeContextWhenUnset(t *testing.T) {
+	mock := &mockLLMClient{
+		responses: []*llm.ChatResponse{
+			{
+				Model:        "test-model",
+				Message:      llm.Message{Role: "assistant", Content: "Done."},
+				InputTokens:  100,
+				OutputTokens: 20,
+			},
+		},
+	}
+
+	exec := NewExecutor(slog.Default(), mock, nil, newTestRegistry(), "test-model")
+	// No SetForgeContext call.
+
+	_, err := exec.Execute(context.Background(), "Check something", "general", "", nil)
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+
+	systemMsg := mock.calls[0].Messages[0]
+	if strings.Contains(systemMsg.Content, "Forge Accounts") {
+		t.Error("system prompt should not contain forge context when unset")
+	}
+}
