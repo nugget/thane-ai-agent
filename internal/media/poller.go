@@ -204,9 +204,11 @@ func (p *FeedPoller) checkFeed(ctx context.Context, feedID string) (string, erro
 
 	// Format section for wake message. Trust zone is shown in brackets
 	// so the agent can adapt analysis depth per the wake prompt guidance.
+	// The feed_id is included so the agent can pass it to media_save_analysis
+	// for per-feed output_path resolution.
 	var sb strings.Builder
 	for _, entry := range newEntries {
-		fmt.Fprintf(&sb, "**%s** [%s]: %s\n%s\n", feedName, trustZone, entry.Title, entry.Link)
+		fmt.Fprintf(&sb, "**%s** [%s] (feed_id: %s): %s\n%s\n", feedName, trustZone, feedID, entry.Title, entry.Link)
 	}
 	return sb.String(), nil
 }

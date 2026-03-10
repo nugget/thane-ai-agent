@@ -62,6 +62,8 @@ func (ft *FeedTools) FollowHandler() func(ctx context.Context, args map[string]a
 			return "", fmt.Errorf("media_follow: invalid trust_zone %q (must be trusted, known, or unknown)", trustZone)
 		}
 
+		outputPath, _ := args["output_path"].(string)
+
 		notify := true
 		if n, ok := args["notify"].(bool); ok {
 			notify = n
@@ -135,6 +137,11 @@ func (ft *FeedTools) FollowHandler() func(ctx context.Context, args map[string]a
 		if err := ft.state.Set(feedNamespace, feedKeyTrustZone(id), trustZone); err != nil {
 			return "", fmt.Errorf("media_follow: store trust_zone: %w", err)
 		}
+		if outputPath != "" {
+			if err := ft.state.Set(feedNamespace, feedKeyOutputPath(id), outputPath); err != nil {
+				return "", fmt.Errorf("media_follow: store output_path: %w", err)
+			}
+		}
 
 		// Set high-water mark to latest entry (don't backfill).
 		latestTitle := ""
@@ -159,6 +166,7 @@ func (ft *FeedTools) FollowHandler() func(ctx context.Context, args map[string]a
 			"name", name,
 			"url", feedURL,
 			"trust_zone", trustZone,
+			"output_path", outputPath,
 		)
 
 		result := map[string]string{
@@ -167,6 +175,9 @@ func (ft *FeedTools) FollowHandler() func(ctx context.Context, args map[string]a
 			"url":          feedURL,
 			"trust_zone":   trustZone,
 			"latest_entry": latestTitle,
+		}
+		if outputPath != "" {
+			result["output_path"] = outputPath
 		}
 		out, _ := json.Marshal(result)
 		return string(out), nil
@@ -204,6 +215,7 @@ func (ft *FeedTools) UnfollowHandler() func(ctx context.Context, args map[string
 			feedKeyLastChecked(id),
 			feedKeyLatestTitle(id),
 			feedKeyTrustZone(id),
+			feedKeyOutputPath(id),
 		} {
 			if err := ft.state.Delete(feedNamespace, key); err != nil {
 				ft.logger.Warn("failed to delete feed key", "key", key, "error", err)
@@ -244,6 +256,7 @@ func (ft *FeedTools) FeedsHandler() func(ctx context.Context, args map[string]an
 			Name        string `json:"name"`
 			URL         string `json:"url"`
 			TrustZone   string `json:"trust_zone"`
+			OutputPath  string `json:"output_path,omitempty"`
 			LastChecked string `json:"last_checked,omitempty"`
 			LatestEntry string `json:"latest_entry,omitempty"`
 			Notify      bool   `json:"notify"`
@@ -278,12 +291,17 @@ func (ft *FeedTools) FeedsHandler() func(ctx context.Context, args map[string]an
 			if trustZone == "" {
 				trustZone = "unknown"
 			}
+			outputPath, err := ft.state.Get(feedNamespace, feedKeyOutputPath(id))
+			if err != nil {
+				return "", fmt.Errorf("media_feeds: read output_path for %s: %w", id, err)
+			}
 
 			feeds = append(feeds, feedInfo{
 				FeedID:      id,
 				Name:        name,
 				URL:         feedURL,
 				TrustZone:   trustZone,
+				OutputPath:  outputPath,
 				LastChecked: lastChecked,
 				LatestEntry: latestTitle,
 				Notify:      notifyStr != "false",
@@ -312,6 +330,10 @@ func FollowDefinition() map[string]any {
 				"type":        "string",
 				"enum":        []string{"trusted", "known", "unknown"},
 				"description": "Trust level for content from this feed. Controls analysis depth: trusted = extract facts directly, known = extract as claims requiring corroboration, unknown = topics only. Default: unknown.",
+			},
+			"output_path": map[string]any{
+				"type":        "string",
+				"description": "Directory path for analysis output from this feed. Overrides the global default_output_path. Supports ~ expansion.",
 			},
 			"notify": map[string]any{
 				"type":        "boolean",

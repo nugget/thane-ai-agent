@@ -1207,6 +1207,27 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	feedTools := media.NewFeedTools(opStore, logger, cfg.Media.MaxFeeds)
 	loop.Tools().SetMediaFeedTools(feedTools)
 
+	// --- Media analysis tools ---
+	// The media_save_analysis tool lets the agent persist structured
+	// analysis to an Obsidian-compatible vault and track engagement.
+	// It requires either a per-feed output_path or the global default.
+	engDBPath := cfg.Media.Analysis.DatabasePath
+	if engDBPath == "" {
+		engDBPath = cfg.DataDir + "/media_engagement.db"
+	}
+	mediaStore, err := media.NewMediaStore(engDBPath, logger)
+	if err != nil {
+		logger.Error("failed to open media engagement store", "error", err)
+	} else {
+		defer mediaStore.Close()
+		vaultWriter := media.NewVaultWriter(logger)
+		analysisTools := media.NewAnalysisTools(
+			opStore, mediaStore, vaultWriter,
+			cfg.Media.Analysis.DefaultOutputPath, logger,
+		)
+		loop.Tools().SetMediaAnalysisTools(analysisTools)
+	}
+
 	// --- Media feed polling ---
 	// Periodic RSS/Atom check for new entries. Follows the same pattern
 	// as email polling — the poller checks feeds against high-water marks

@@ -26,7 +26,7 @@ func TrustZoneGuidance(trustZone string) string {
 // Format verbs: %s (trust zone guidance bullets), %s (content summary).
 const mediaFeedPollWakeTemplate = `New content detected from followed feeds. Review and act on it.
 
-Each entry shows the feed's trust zone in brackets (e.g., [trusted], [known], [unknown]).
+Each entry shows the feed's trust zone in brackets and feed_id in parentheses.
 Adapt your analysis depth based on the trust zone:
 
 %s
@@ -34,7 +34,14 @@ Adapt your analysis depth based on the trust zone:
 For each new entry:
 1. Check the feed's trust zone shown in brackets after the feed name
 2. If the content looks worthwhile, use media_transcript to fetch and analyze it
-3. Notify the owner about noteworthy new content with a brief summary
+3. Analyze the content with depth appropriate to the trust zone:
+   - [trusted]: Extract key facts with source attribution
+   - [known]: Extract claims requiring corroboration, summarize key points
+   - [unknown]: Topics and high-level insights only
+4. Use media_save_analysis to save your analysis to the knowledge vault
+   - Pass the feed_id from the entry listing for proper output routing
+   - Include relevant topic tags for future discovery
+5. Notify the owner about noteworthy new content with a brief summary
 
 Use your judgment — not every new video or podcast episode needs attention.
 Prioritize content that aligns with known interests and preferences.

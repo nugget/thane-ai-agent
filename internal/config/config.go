@@ -918,6 +918,24 @@ type MediaConfig struct {
 	// MaxFeeds limits the number of feeds that can be followed.
 	// Default: 50.
 	MaxFeeds int `yaml:"max_feeds"`
+
+	// Analysis configures the structured media analysis pipeline
+	// that writes analysis output to an Obsidian-compatible vault.
+	Analysis AnalysisConfig `yaml:"analysis"`
+}
+
+// AnalysisConfig configures the media analysis pipeline that produces
+// structured markdown output in an Obsidian-compatible vault. Each feed
+// can override the output path; otherwise the default is used.
+type AnalysisConfig struct {
+	// DefaultOutputPath is the base directory for analysis output when
+	// a feed has no per-feed output_path configured. Supports ~ expansion.
+	// Example: ~/Sync/Aimee/Vault/Media
+	DefaultOutputPath string `yaml:"default_output_path"`
+
+	// DatabasePath is the SQLite database file for engagement tracking.
+	// If empty, defaults to {data_dir}/media_engagement.db at startup.
+	DatabasePath string `yaml:"database_path"`
 }
 
 // MetacognitiveConfig configures the self-regulating metacognitive loop.
