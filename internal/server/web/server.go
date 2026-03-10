@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/nugget/thane-ai-agent/internal/contacts"
 	"github.com/nugget/thane-ai-agent/internal/knowledge"
+	"github.com/nugget/thane-ai-agent/internal/logging"
 	"github.com/nugget/thane-ai-agent/internal/memory"
 	"github.com/nugget/thane-ai-agent/internal/router"
 	"github.com/nugget/thane-ai-agent/internal/scheduler"
@@ -91,6 +92,11 @@ type SessionStore interface {
 	GetSessionIterations(sessionID string) ([]memory.ArchivedIteration, error)
 }
 
+// LogStore queries the structured log index for session-scoped entries.
+type LogStore interface {
+	QueryBySession(sessionID, level, subsystem string, limit int) ([]logging.LogEntry, error)
+}
+
 // LiveMessageSource provides access to live (unarchived) conversation messages.
 // Used as a fallback for active sessions whose messages haven't been archived yet.
 type LiveMessageSource interface {
@@ -108,6 +114,7 @@ type Config struct {
 	TaskStore         TaskStore
 	AnticipationStore AnticipationStore
 	SessionStore      SessionStore
+	LogStore          LogStore          // Optional: structured log index queries.
 	LiveMessageSource LiveMessageSource // Optional: live messages for active sessions.
 	Logger            *slog.Logger
 }
@@ -123,6 +130,7 @@ type WebServer struct {
 	taskStore         TaskStore
 	anticipationStore AnticipationStore
 	sessionStore      SessionStore
+	logStore          LogStore
 	liveMessages      LiveMessageSource
 	templates         map[string]*template.Template
 	logger            *slog.Logger
@@ -149,6 +157,7 @@ func NewWebServer(cfg Config) *WebServer {
 		taskStore:         cfg.TaskStore,
 		anticipationStore: cfg.AnticipationStore,
 		sessionStore:      cfg.SessionStore,
+		logStore:          cfg.LogStore,
 		liveMessages:      cfg.LiveMessageSource,
 		logger:            logger,
 	}
@@ -175,6 +184,7 @@ func (s *WebServer) RegisterRoutes(mux *http.ServeMux) {
 	// Session inspector
 	mux.HandleFunc("GET /sessions", s.handleSessions)
 	mux.HandleFunc("GET /sessions/{id}/timeline.json", s.handleTimelineAPI)
+	mux.HandleFunc("GET /sessions/{id}/logs", s.handleSessionLogs)
 	mux.HandleFunc("GET /sessions/{id}", s.handleSessionDetail)
 
 	// Chat UI (rendered through the shared layout template)

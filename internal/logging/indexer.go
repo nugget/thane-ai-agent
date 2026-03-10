@@ -117,10 +117,13 @@ func (h *IndexHandler) Handle(ctx context.Context, r slog.Record) error {
 		return err
 	}
 
-	// Build the index entry.
+	// Build the index entry. Normalize the level string so custom
+	// levels (e.g., LevelTrace = -8) are stored as "TRACE" rather
+	// than slog's default "DEBUG-4". This keeps the DB consistent
+	// with log output, which uses ReplaceLogLevelNames.
 	entry := indexEntry{
 		Timestamp: r.Time,
-		Level:     r.Level.String(),
+		Level:     normalizeLevel(r.Level),
 		Msg:       r.Message,
 	}
 
@@ -240,48 +243,6 @@ func Migrate(db *sql.DB) error {
 	return nil
 }
 
-// Prune deletes log index entries older than maxAge for levels below
-// minLevel. For example, Prune(db, 90*24*time.Hour, slog.LevelInfo)
-// removes DEBUG and TRACE entries older than 90 days while keeping
-// INFO, WARN, and ERROR entries forever. The canonical raw log files
-// are unaffected — this only trims the queryable index.
-//
-// Returns the number of rows deleted.
-func Prune(db *sql.DB, maxAge time.Duration, minLevel slog.Level) (int64, error) {
-	cutoff := time.Now().Add(-maxAge).Format(time.RFC3339Nano)
-
-	// Collect level strings that should be pruned (levels below minLevel).
-	var levels []string
-	for _, l := range []slog.Level{slog.Level(-8), slog.LevelDebug} { // -8 = TRACE
-		if l < minLevel {
-			levels = append(levels, l.String())
-		}
-	}
-	if len(levels) == 0 {
-		return 0, nil
-	}
-
-	// Build placeholders for the IN clause.
-	placeholders := make([]string, len(levels))
-	args := make([]any, 0, len(levels)+1)
-	for i, l := range levels {
-		placeholders[i] = "?"
-		args = append(args, l)
-	}
-	args = append(args, cutoff)
-
-	query := fmt.Sprintf(
-		"DELETE FROM log_entries WHERE level IN (%s) AND timestamp < ?",
-		strings.Join(placeholders, ", "),
-	)
-
-	result, err := db.Exec(query, args...)
-	if err != nil {
-		return 0, fmt.Errorf("prune log index: %w", err)
-	}
-	return result.RowsAffected()
-}
-
 // drain runs in a goroutine, reading entries from the channel and
 // inserting them into SQLite. It exits when the channel is closed.
 func (h *IndexHandler) drain() {
@@ -303,7 +264,7 @@ func (h *IndexHandler) drain() {
 
 	for e := range h.shared.ch {
 		_, _ = stmt.Exec(
-			e.Timestamp.Format(time.RFC3339Nano),
+			e.Timestamp.UTC().Format(time.RFC3339Nano),
 			e.Level,
 			e.Msg,
 			nullString(e.RequestID),
@@ -399,6 +360,18 @@ func attrValue(a slog.Attr) any {
 	}
 }
 
+// normalizeLevel returns a human-readable level string. Custom levels
+// (like LevelTrace = -8) are mapped to their canonical names rather
+// than slog's default rendering (e.g., "DEBUG-4" → "TRACE").
+func normalizeLevel(l slog.Level) string {
+	switch l {
+	case slog.LevelDebug - 4: // config.LevelTrace
+		return "TRACE"
+	default:
+		return l.String()
+	}
+}
+
 // cloneAttrs returns a shallow copy of the attribute slice.
 func cloneAttrs(attrs []slog.Attr) []slog.Attr {
 	if len(attrs) == 0 {
@@ -423,4 +396,132 @@ func nullInt(n int) sql.NullInt64 {
 		return sql.NullInt64{}
 	}
 	return sql.NullInt64{Int64: int64(n), Valid: true}
+}
+
+// Prune deletes log index entries older than maxAge whose level is
+// strictly below minKeepLevel. For example, passing [slog.LevelInfo]
+// prunes DEBUG and TRACE entries while keeping INFO, WARN, and ERROR.
+// Returns the number of rows deleted.
+func Prune(db *sql.DB, maxAge time.Duration, minKeepLevel slog.Level) (int64, error) {
+	cutoff := time.Now().UTC().Add(-maxAge).Format(time.RFC3339Nano)
+
+	// Build a list of levels to prune (those below minKeepLevel).
+	// Uses normalizeLevel so level strings match the DB values
+	// (e.g., "TRACE" not "DEBUG-4").
+	var pruneLevels []string
+	for _, l := range []slog.Level{slog.LevelDebug - 4, slog.LevelDebug, slog.LevelInfo, slog.LevelWarn, slog.LevelError} {
+		if l < minKeepLevel {
+			pruneLevels = append(pruneLevels, normalizeLevel(l))
+		}
+	}
+	if len(pruneLevels) == 0 {
+		return 0, nil
+	}
+
+	// Build placeholders for the IN clause.
+	placeholders := make([]string, len(pruneLevels))
+	args := make([]any, 0, len(pruneLevels)+1)
+	args = append(args, cutoff)
+	for i, l := range pruneLevels {
+		placeholders[i] = "?"
+		args = append(args, l)
+	}
+
+	query := fmt.Sprintf(
+		"DELETE FROM log_entries WHERE timestamp < ? AND level IN (%s)",
+		strings.Join(placeholders, ", "),
+	)
+
+	res, err := db.Exec(query, args...)
+	if err != nil {
+		return 0, fmt.Errorf("prune log index: %w", err)
+	}
+	return res.RowsAffected()
+}
+
+// LogEntry is an exported representation of a log index row suitable
+// for display in the web dashboard.
+type LogEntry struct {
+	ID         int64
+	Timestamp  time.Time
+	Level      string
+	Msg        string
+	Subsystem  string
+	Tool       string
+	Model      string
+	Attrs      string
+	SourceFile string
+	SourceLine int
+}
+
+// QueryBySession returns log entries matching the given session ID,
+// ordered by timestamp ascending (chronological). When limit is
+// positive, only the most recent limit entries are returned — the
+// query selects newest-first and then reverses in Go so callers
+// always receive chronological order. Optional filters narrow by
+// level and/or subsystem.
+func QueryBySession(db *sql.DB, sessionID, level, subsystem string, limit int) ([]LogEntry, error) {
+	query := "SELECT id, timestamp, level, msg, subsystem, tool, model, attrs, source_file, source_line FROM log_entries WHERE session_id = ?"
+	args := []any{sessionID}
+
+	if level != "" {
+		query += " AND level = ?"
+		args = append(args, level)
+	}
+	if subsystem != "" {
+		query += " AND subsystem = ?"
+		args = append(args, subsystem)
+	}
+
+	// Select newest entries first so LIMIT returns the tail of the
+	// log rather than the head. We reverse in Go below to restore
+	// chronological order.
+	query += " ORDER BY timestamp DESC"
+
+	if limit > 0 {
+		query += fmt.Sprintf(" LIMIT %d", limit)
+	}
+
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query log entries: %w", err)
+	}
+	defer rows.Close()
+
+	var entries []LogEntry
+	for rows.Next() {
+		var e LogEntry
+		var ts string
+		var sub, tool, model, attrs, srcFile sql.NullString
+		var srcLine sql.NullInt64
+
+		if err := rows.Scan(&e.ID, &ts, &e.Level, &e.Msg, &sub, &tool, &model, &attrs, &srcFile, &srcLine); err != nil {
+			return nil, fmt.Errorf("scan log entry: %w", err)
+		}
+
+		parsed, parseErr := time.Parse(time.RFC3339Nano, ts)
+		if parseErr != nil {
+			return nil, fmt.Errorf("parse log timestamp %q: %w", ts, parseErr)
+		}
+		e.Timestamp = parsed
+		e.Subsystem = sub.String
+		e.Tool = tool.String
+		e.Model = model.String
+		e.Attrs = attrs.String
+		e.SourceFile = srcFile.String
+		e.SourceLine = int(srcLine.Int64)
+
+		entries = append(entries, e)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Reverse to chronological order (oldest first).
+	for i, j := 0, len(entries)-1; i < j; i, j = i+1, j-1 {
+		entries[i], entries[j] = entries[j], entries[i]
+	}
+
+	return entries, nil
 }

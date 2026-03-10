@@ -847,7 +847,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			"model", llmResp.Model,
 			"input_tokens", llmResp.InputTokens,
 			"output_tokens", llmResp.OutputTokens,
-			"elapsed", time.Since(startTime).Round(time.Millisecond),
+			"elapsed", time.Since(startTime).Round(time.Second),
 		)
 
 		l.recordUsage(ctx, req, llmResp.Model, llmResp.InputTokens, llmResp.OutputTokens, convID, sessionTag, requestID)
@@ -1149,7 +1149,7 @@ iterLoop:
 			"cumul_in", totalInputTokens,
 			"cumul_out", totalOutputTokens,
 			"tool_calls", len(llmResp.Message.ToolCalls),
-			"elapsed", time.Since(iterStart).Round(time.Millisecond),
+			"elapsed", time.Since(iterStart).Round(time.Second),
 			"tok_per_sec", func() float64 {
 				elapsed := time.Since(iterStart).Seconds()
 				if elapsed > 0 && llmResp.OutputTokens > 0 {
@@ -1469,7 +1469,7 @@ iterLoop:
 						"messages_after", postMessages,
 						"tokens_freed", preTokens-postTokens,
 						"messages_compacted", preMessages-postMessages,
-						"elapsed", time.Since(compactStart).Round(time.Millisecond),
+						"elapsed", time.Since(compactStart).Round(time.Second),
 					)
 				}
 			}()
@@ -1486,7 +1486,7 @@ iterLoop:
 			"model", model,
 			"input_tokens", totalInputTokens,
 			"output_tokens", totalOutputTokens,
-			"elapsed", elapsed.Round(time.Millisecond),
+			"elapsed", elapsed.Round(time.Second),
 			"context_tokens", l.memory.GetTokenCount(convID),
 		)
 
@@ -1572,7 +1572,7 @@ iterLoop:
 			"reason", finishReason,
 			"input_tokens", totalInputTokens,
 			"output_tokens", totalOutputTokens,
-			"elapsed", elapsed.Round(time.Millisecond),
+			"elapsed", elapsed.Round(time.Second),
 		)
 
 		l.recordUsage(ctx, req, model, totalInputTokens, totalOutputTokens, convID, sessionTag, requestID)

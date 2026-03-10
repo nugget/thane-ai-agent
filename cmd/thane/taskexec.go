@@ -93,15 +93,18 @@ func runScheduledTask(ctx context.Context, task *scheduler.Task, exec *scheduler
 
 	// Email poll: run the poller and only wake the agent if new mail arrived.
 	if task.Name == emailPollTaskName && deps.emailPoller != nil {
+		log.Debug("executing email poll")
 		wakeMsg, err := deps.emailPoller.CheckNewMessages(ctx)
 		if err != nil {
-			deps.logger.Warn("email poll failed", "error", err)
+			log.Warn("email poll failed", "error", err)
 			return nil // best-effort — next cycle will catch up
 		}
 		if wakeMsg == "" {
+			log.Debug("email poll: no new messages")
 			exec.Result = "no new messages"
 			return nil // nothing new, skip the LLM wake
 		}
+		log.Debug("email poll: new mail detected", "wake_msg_len", len(wakeMsg))
 		msg = prompts.EmailPollWakePrompt(wakeMsg)
 	}
 

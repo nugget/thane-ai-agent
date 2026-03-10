@@ -331,6 +331,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// Reconfigure logger now that we know the desired level, format, and
 	// output destination. The initial Info-level text logger above is used
 	// only for the startup banner and config load message.
+	var indexDB *sql.DB
 	{
 		level, _ := config.ParseLogLevel(cfg.Logging.Level)
 
@@ -359,14 +360,17 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		// If file logging is disabled (no logDir) or the DB fails to
 		// open, logging continues without indexing.
 		if logDir := cfg.Logging.DirPath(); logDir != "" {
-			indexDB, err := database.Open(filepath.Join(logDir, "logs.db"))
+			var err error
+			indexDB, err = database.Open(filepath.Join(logDir, "logs.db"))
 			if err != nil {
 				logger.Warn("failed to open log index database, indexing disabled",
 					"error", err)
+				indexDB = nil
 			} else if err := logging.Migrate(indexDB); err != nil {
 				logger.Warn("failed to migrate log index schema, indexing disabled",
 					"error", err)
 				indexDB.Close()
+				indexDB = nil
 			} else {
 				indexHandler := logging.NewIndexHandler(handler, indexDB, rotator)
 				defer indexDB.Close()
@@ -379,6 +383,31 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 			"thane_version", buildinfo.Version,
 			"thane_commit", buildinfo.GitCommit,
 		)
+	}
+
+	// Start background log index pruner if retention is configured and
+	// the index database is available.
+	if indexDB != nil {
+		if retention := cfg.Logging.RetentionDaysDuration(); retention > 0 {
+			go func() {
+				ticker := time.NewTicker(24 * time.Hour)
+				defer ticker.Stop()
+				for {
+					if deleted, err := logging.Prune(indexDB, retention, slog.LevelInfo); err != nil {
+						logger.Warn("log index prune failed", "error", err, "retention", retention)
+					} else if deleted > 0 {
+						logger.Info("pruned log index", "deleted", deleted, "retention", retention)
+					} else {
+						logger.Debug("log index prune ran; nothing to delete", "retention", retention)
+					}
+					select {
+					case <-ctx.Done():
+						return
+					case <-ticker.C:
+					}
+				}
+			}()
+		}
 	}
 
 	// Warn about deprecated config fields.
@@ -2054,6 +2083,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		TaskStore:         sched,
 		AnticipationStore: anticipationStore,
 		SessionStore:      archiveStore,
+		LogStore:          newLogStore(indexDB),
 		LiveMessageSource: mem,
 		Logger:            logger,
 	})
@@ -2465,6 +2495,24 @@ func resolvePath(p string, resolver *paths.Resolver) string {
 		}
 	}
 	return p
+}
+
+// logStoreAdapter bridges a raw [*sql.DB] to the [web.LogStore] interface
+// so the web dashboard can query the structured log index.
+type logStoreAdapter struct{ db *sql.DB }
+
+// QueryBySession delegates to [logging.QueryBySession].
+func (a *logStoreAdapter) QueryBySession(sessionID, level, subsystem string, limit int) ([]logging.LogEntry, error) {
+	return logging.QueryBySession(a.db, sessionID, level, subsystem, limit)
+}
+
+// newLogStore returns a [web.LogStore] backed by the given database, or
+// nil when db is nil (log indexing disabled).
+func newLogStore(db *sql.DB) *logStoreAdapter {
+	if db == nil {
+		return nil
+	}
+	return &logStoreAdapter{db: db}
 }
 
 // newHandler creates a structured [slog.Handler] that writes to w at

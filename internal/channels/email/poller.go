@@ -48,11 +48,18 @@ func NewPoller(manager *Manager, state *opstate.Store, logger *slog.Logger) *Pol
 // Network errors are logged and skipped per-account; a failure on one
 // account does not prevent checking others.
 func (p *Poller) CheckNewMessages(ctx context.Context) (string, error) {
-	var sections []string
+	accounts := p.manager.AccountNames()
+	p.logger.Debug("email poll starting", "accounts", len(accounts))
 
-	for _, name := range p.manager.AccountNames() {
+	var sections []string
+	var failed int
+
+	for _, name := range accounts {
+		p.logger.Debug("email poll checking account", "account", name)
+
 		section, err := p.checkAccount(ctx, name)
 		if err != nil {
+			failed++
 			p.logger.Warn("email poll failed for account",
 				"account", name,
 				"error", err,
@@ -63,6 +70,12 @@ func (p *Poller) CheckNewMessages(ctx context.Context) (string, error) {
 			sections = append(sections, section)
 		}
 	}
+
+	p.logger.Debug("email poll complete",
+		"accounts", len(accounts),
+		"accounts_with_new", len(sections),
+		"failed", failed,
+	)
 
 	if len(sections) == 0 {
 		return "", nil
@@ -97,6 +110,7 @@ func (p *Poller) checkAccount(ctx context.Context, accountName string) (string, 
 	var storedUID uint64
 	switch storedStr {
 	case "":
+		p.logger.Debug("email poll first run for account", "account", accountName)
 		// First run: fetch recent messages to seed the high-water mark.
 		envelopes, err := client.ListMessages(ctx, ListOptions{
 			Folder: "INBOX",
@@ -143,6 +157,11 @@ func (p *Poller) checkAccount(ctx context.Context, accountName string) (string, 
 		storedUID = parsed
 	}
 
+	p.logger.Debug("email poll querying IMAP",
+		"account", accountName,
+		"since_uid", storedUID,
+	)
+
 	// Fetch all messages with UIDs > storedUID (no limit — we want
 	// every new message regardless of how many arrived between polls).
 	newMessages, err := client.ListMessages(ctx, ListOptions{
@@ -152,6 +171,11 @@ func (p *Poller) checkAccount(ctx context.Context, accountName string) (string, 
 	if err != nil {
 		return "", fmt.Errorf("list messages %q: %w", accountName, err)
 	}
+
+	p.logger.Debug("email poll IMAP results",
+		"account", accountName,
+		"new_messages", len(newMessages),
+	)
 
 	if len(newMessages) == 0 {
 		return "", nil
@@ -166,10 +190,23 @@ func (p *Poller) checkAccount(ctx context.Context, accountName string) (string, 
 	// Filter out self-sent messages so the agent doesn't triage its
 	// own replies. Compare the From address against the account's
 	// configured default_from (if SMTP is set up).
+	preFilterCount := len(newMessages)
 	newMessages = p.filterSelfSent(accountName, newMessages)
+	if preFilterCount != len(newMessages) {
+		p.logger.Debug("email poll filtered self-sent messages",
+			"account", accountName,
+			"before", preFilterCount,
+			"after", len(newMessages),
+		)
+	}
 	if len(newMessages) == 0 {
 		return "", nil
 	}
+
+	p.logger.Debug("email poll account done",
+		"account", accountName,
+		"new_messages", len(newMessages),
+	)
 
 	return formatPollSection(accountName, newMessages), nil
 }

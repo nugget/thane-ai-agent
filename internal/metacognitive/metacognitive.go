@@ -237,7 +237,7 @@ func (l *Loop) run(ctx context.Context) {
 			iterLog.Warn("metacognitive iteration failed", "error", err)
 		} else {
 			iterLog.Info("metacognitive iteration complete",
-				"elapsed", result.Elapsed.Round(time.Millisecond),
+				"elapsed", result.Elapsed.Round(time.Second),
 			)
 		}
 
@@ -474,7 +474,7 @@ func (l *Loop) appendIterationLog(result *iterationResult, convID string, sleep 
 		result.Model,
 		result.Supervisor,
 		time.Now().UTC().Format(time.RFC3339),
-		result.Elapsed.Round(time.Millisecond),
+		result.Elapsed.Round(time.Second),
 		toolsList,
 		result.InputTokens,
 		result.OutputTokens,

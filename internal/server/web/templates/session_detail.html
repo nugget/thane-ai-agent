@@ -375,5 +375,17 @@
         </div>
     </div>
     {{end}}
+
+    {{if .LogsEnabled}}
+    <div class="card" id="session-logs-card">
+        <h2>Session Logs</h2>
+        <div id="session-logs-content"
+             hx-get="/sessions/{{.Session.ID}}/logs"
+             hx-trigger="load"
+             hx-swap="innerHTML">
+            <span class="text-muted">Loading logs...</span>
+        </div>
+    </div>
+    {{end}}
 </div>
 {{end}}
