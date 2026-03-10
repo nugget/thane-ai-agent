@@ -112,7 +112,7 @@ func (a *ArchiveAdapter) StartSession(conversationID string) (string, error) {
 	a.mu.Unlock()
 
 	a.logger.Info("session started",
-		"session", ShortID(sess.ID),
+		"session_id", sess.ID,
 		"conversation_id", conversationID,
 	)
 	return sess.ID, nil
@@ -137,7 +137,7 @@ func (a *ArchiveAdapter) EndSession(sessionID string, reason string) error {
 	a.mu.Unlock()
 
 	a.logger.Info("session ended",
-		"session", ShortID(sessionID),
+		"session_id", sessionID,
 		"reason", reason,
 	)
 	return nil

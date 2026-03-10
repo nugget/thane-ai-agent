@@ -747,13 +747,13 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 
 	// Get session ID for log correlation. The session ID (UUIDv7 prefix)
 	// is more meaningful than the conversation name (usually "default").
-	sessionTag := convID // fallback if no archiver
+	sessionID := convID // fallback if no archiver
 	if l.archiver != nil {
 		if sid := l.archiver.ActiveSessionID(convID); sid != "" {
-			sessionTag = sid
+			sessionID = sid
 		}
 	}
-	sessionTag = memory.ShortID(sessionTag)
+	sessionTag := memory.ShortID(sessionID) // 8-char display tag for usage records
 
 	// Generate a request-scoped ID and logger. Every log line within this
 	// turn carries request_id so you can grep for a single user→response cycle.
@@ -764,7 +764,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	log := logging.Logger(ctx).With(
 		"subsystem", logging.SubsystemAgent,
 		"request_id", requestID,
-		"session_id", sessionTag,
+		"session_id", sessionID,
 		"conversation_id", convID,
 	)
 	ctx = logging.WithLogger(ctx, log)
