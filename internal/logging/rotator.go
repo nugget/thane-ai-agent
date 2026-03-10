@@ -26,9 +26,10 @@ type Rotator struct {
 	dir      string
 	compress bool
 
-	mu      sync.Mutex
-	file    *os.File
-	curDate string // YYYY-MM-DD of the currently open file
+	mu        sync.Mutex
+	file      *os.File
+	curDate   string // YYYY-MM-DD of the currently open file
+	lineCount int    // lines written to the current active file
 }
 
 // Open creates a [Rotator] that writes to dir/thane.log. The directory
@@ -68,7 +69,26 @@ func (r *Rotator) Write(p []byte) (int, error) {
 		}
 	}
 
-	return r.file.Write(p)
+	n, err := r.file.Write(p)
+	if err == nil {
+		r.lineCount++
+	}
+	return n, err
+}
+
+// LineCount returns the number of lines written to the current active
+// file since it was opened (or last rotated). Caller must hold no lock;
+// the count is read under the internal mutex.
+func (r *Rotator) LineCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.lineCount
+}
+
+// ActiveFile returns the filename (not full path) of the current active
+// log file. This is always [activeLogName] ("thane.log").
+func (r *Rotator) ActiveFile() string {
+	return activeLogName
 }
 
 // Close closes the active log file.
@@ -140,6 +160,7 @@ func (r *Rotator) openActive() error {
 
 	r.file = f
 	r.curDate = nowFunc().Format(time.DateOnly)
+	r.lineCount = 0
 	return nil
 }
 

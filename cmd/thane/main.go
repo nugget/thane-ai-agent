@@ -338,9 +338,11 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		// stdout (for launchd/systemd capture) and the rotated file.
 		// When Dir is empty, file logging is disabled (stdout only).
 		logWriter := stdout
+		var rotator *logging.Rotator
 
 		if logDir := cfg.Logging.DirPath(); logDir != "" {
-			rotator, err := logging.Open(logDir, cfg.Logging.CompressEnabled())
+			var err error
+			rotator, err = logging.Open(logDir, cfg.Logging.CompressEnabled())
 			if err != nil {
 				// File logging failed — fall back to stdout only.
 				logger.Warn("failed to open log directory, using stdout only",
@@ -351,7 +353,32 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 			}
 		}
 
-		logger = newLogger(logWriter, level, cfg.Logging.Format)
+		handler := newHandler(logWriter, level, cfg.Logging.Format)
+
+		// Open the SQLite log index alongside the raw log files.
+		// If file logging is disabled (no logDir) or the DB fails to
+		// open, logging continues without indexing.
+		if logDir := cfg.Logging.DirPath(); logDir != "" {
+			indexDB, err := database.Open(filepath.Join(logDir, "logs.db"))
+			if err != nil {
+				logger.Warn("failed to open log index database, indexing disabled",
+					"error", err)
+			} else if err := logging.Migrate(indexDB); err != nil {
+				logger.Warn("failed to migrate log index schema, indexing disabled",
+					"error", err)
+				indexDB.Close()
+			} else {
+				indexHandler := logging.NewIndexHandler(handler, indexDB, rotator)
+				defer indexHandler.Close()
+				defer indexDB.Close()
+				handler = indexHandler
+			}
+		}
+
+		logger = slog.New(handler).With(
+			"thane_version", buildinfo.Version,
+			"thane_commit", buildinfo.GitCommit,
+		)
 	}
 
 	// Warn about deprecated config fields.
@@ -2440,14 +2467,10 @@ func resolvePath(p string, resolver *paths.Resolver) string {
 	return p
 }
 
-// newLogger creates a structured logger that writes to w at the given level
-// and format. Format must be "text" or "json"; any other value defaults to
-// text. All log output in Thane goes through slog; this helper standardizes
-// the handler configuration across subcommands.
-//
-// Every log line carries thane_version and thane_commit for forensics
-// across upgrades.
-func newLogger(w io.Writer, level slog.Level, format string) *slog.Logger {
+// newHandler creates a structured [slog.Handler] that writes to w at
+// the given level and format. This is the shared handler construction
+// used by [newLogger] and (with optional wrapping) by the serve command.
+func newHandler(w io.Writer, level slog.Level, format string) slog.Handler {
 	opts := &slog.HandlerOptions{
 		Level:     level,
 		AddSource: true,
@@ -2456,13 +2479,21 @@ func newLogger(w io.Writer, level slog.Level, format string) *slog.Logger {
 			logging.ShortenSource,
 		),
 	}
-	var handler slog.Handler
 	if format == "json" {
-		handler = slog.NewJSONHandler(w, opts)
-	} else {
-		handler = slog.NewTextHandler(w, opts)
+		return slog.NewJSONHandler(w, opts)
 	}
-	return slog.New(handler).With(
+	return slog.NewTextHandler(w, opts)
+}
+
+// newLogger creates a structured logger that writes to w at the given level
+// and format. Format must be "text" or "json"; any other value defaults to
+// text. All log output in Thane goes through slog; this helper standardizes
+// the handler configuration across subcommands.
+//
+// Every log line carries thane_version and thane_commit for forensics
+// across upgrades.
+func newLogger(w io.Writer, level slog.Level, format string) *slog.Logger {
+	return slog.New(newHandler(w, level, format)).With(
 		"thane_version", buildinfo.Version,
 		"thane_commit", buildinfo.GitCommit,
 	)
