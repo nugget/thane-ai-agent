@@ -28,6 +28,7 @@ internal/
     email/              Email messaging (IMAP/SMTP)
     mqtt/               MQTT for HA device discovery and sensors
     signal/             Signal messaging bridge
+  carddav/              CardDAV server for native contact app sync
   checkpoint/           State snapshot and restore
   config/               Configuration loading and validation
   connwatch/            Service health monitoring with exponential backoff
@@ -44,6 +45,7 @@ internal/
   media/                Media transcript extraction and RSS/Atom feed polling
   memory/               Conversation storage, compaction, episodic memory, session summarizer
   metacognitive/        Autonomous self-reflection loop
+  notifications/        Provider-agnostic notification delivery and HITL callbacks
   opstate/              Operational state KV store
   paths/                Path resolution
   prompts/              Prompt templates

@@ -33,6 +33,8 @@ Thane's internal packages, organized by architectural role.
 | `channels/mqtt/` | MQTT for Home Assistant device discovery and sensor state publishing |
 | `server/api/` | REST API — OpenAI-compatible and Ollama-compatible endpoints |
 | `server/web/` | Built-in web dashboard and chat UI |
+| `carddav/` | CardDAV server for native contact app sync (macOS Contacts.app, iOS, Thunderbird) |
+| `notifications/` | Provider-agnostic notification routing, actionable HITL callbacks, timeout escalation |
 
 ## Domain integrations
 

@@ -16,11 +16,11 @@ Thane's design philosophy: **enforce in Go, not prompts.** Where we rely on prom
 ### Trust Zones
 **Status: Implemented (#293, #295)**
 
-Every contact has a trust zone: `owner`, `trusted`, `known`, `unknown`. Trust zones are the universal router for cost, priority, and permissions. The zone is stored in the contacts database and validated by `ValidTrustZones` in Go — the model cannot invent new zones or escalate a contact's trust level through conversation.
+Every contact has a trust zone: `admin`, `household`, `trusted`, `known`, `unknown`. Trust zones are the universal router for cost, priority, and permissions. The zone is stored in the contacts database and validated by `ValidTrustZones` in Go — the model cannot invent new zones or escalate a contact's trust level through conversation.
 
 Trust zones determine:
-- Model quality allocation (owner gets frontier, unknown gets local)
-- Email send permission (owner/trusted: send freely, known: gate, unknown: block)
+- Model quality allocation (admin/household gets frontier, unknown gets local)
+- Email send permission (admin/household: send freely, known: gate, unknown: block)
 - Notification priority and rate limits
 - Response depth and effort
 

@@ -109,6 +109,41 @@ models:
 #   api_key: your-unifi-api-key
 #   poll_interval: 30                 # seconds, default 30, minimum 10
 
+# Signal messaging bridge (optional)
+# Connects to signal-cli for Signal messenger integration. Requires
+# signal-cli installed and registered to a phone number.
+# signal:
+#   enabled: true
+#   command: signal-cli               # path to signal-cli binary
+#   account: "+15551234567"           # registered phone number
+#   args: []                          # additional signal-cli arguments
+#   rate_limit_per_minute: 10         # per-sender inbound rate limit
+
+# CardDAV server (optional — for native contact sync)
+# Serves a CardDAV endpoint that macOS Contacts.app, iOS, and Thunderbird
+# can sync with. Contacts are backed by the same store used by the agent.
+# carddav:
+#   enabled: true
+#   listen:
+#     - "127.0.0.1:8843"             # bind addresses (supports multiple)
+#   username: thane                   # Basic Auth credentials
+#   password: your-password
+
+# Agent identity (optional)
+# Maps the agent to its own contact record for vCard self-export.
+# identity:
+#   contact_name: "Thane"            # must match a contact record name
+
+# Forge integration (optional — GitHub/Gitea/Forgejo)
+# Provides 18 native tools for issues, PRs, code review, and search
+# without requiring an MCP subprocess.
+# forge:
+#   providers:
+#     - name: github
+#       base_url: https://api.github.com
+#       token: ghp_...
+#       default_owner: your-username
+
 # Storage paths
 data_dir: ./db
 talents_dir: ./talents
@@ -153,6 +188,35 @@ shell_exec:
   allowed_prefixes: []  # Empty = allow all (subject to denied_patterns)
   default_timeout_sec: 30
 
+# Email (optional — for IMAP/SMTP integration)
+# Full email support: read, search, send, reply, move. Trust zone gating
+# on outbound recipients. Auto-Bcc owner for audit trail.
+# email:
+#   accounts:
+#     - name: primary
+#       imap_host: imap.example.com
+#       imap_port: 993
+#       smtp_host: smtp.example.com
+#       smtp_port: 587
+#       username: thane@example.com
+#       password: your-email-password
+#       from_name: Thane
+#       bcc_owner: true               # auto-Bcc the owner on outbound
+
+# Media transcripts and feeds (optional)
+# When yt-dlp is available, the agent can fetch video/podcast transcripts
+# and follow RSS/Atom feeds. Feed polling runs at the configured interval.
+# media:
+#   yt_dlp_path: ""                   # auto-detected via PATH
+#   cookies_file: ""                  # Netscape cookie file for auth content
+#   subtitle_language: en
+#   max_transcript_chars: 50000
+#   transcript_dir: ""                # empty = in-context only
+#   feed_check_interval: 0            # seconds; 0 = disabled; 3600 = hourly
+#   max_feeds: 50
+#   analysis:
+#     output_dir: ""                  # Obsidian vault path for media analysis
+
 # Web search (optional)
 # Enables the web_search tool. Configure one or more providers.
 # web_fetch is always available (no config needed).
@@ -175,6 +239,15 @@ embeddings:
 # Use a cheap/local model for this async task.
 # archive:
 #   metadata_model: qwen2.5-coder:32b  # Defaults to models.default
+
+# Metacognitive loop (optional)
+# Background attention loop that monitors state and adjusts its own sleep
+# cycle. Runs periodic self-reflection using a quality model.
+# metacognitive:
+#   enabled: false
+#   state_file: ""                    # path to metacognitive state YAML
+#   min_sleep: 60                     # minimum seconds between iterations
+#   max_sleep: 3600                   # maximum seconds between iterations
 
 # Debug options — diagnostic tools for system prompt visibility.
 # When dump_system_prompt is true, the fully assembled system prompt is
