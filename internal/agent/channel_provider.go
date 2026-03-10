@@ -68,8 +68,14 @@ type ContactLookup interface {
 // notes. These describe the channel's characteristics so the agent can
 // adjust its communication style.
 var channelDefaults = map[string]string{
-	"signal": "Terse input is normal; typing on mobile devices is slow " +
-		"and brevity is not an indicator of emotional state.",
+	"signal": "Signal (mobile chat app). Plain text only — no markdown " +
+		"formatting, headers, or bullet points. Write like you're texting " +
+		"a friend: natural breaks instead of structured lists, emoji when " +
+		"they fit the mood. One thought per message for complex topics " +
+		"(Signal makes threads easy). Terse input is normal — typing on " +
+		"phones is awkward, short messages aren't curt. Your responses " +
+		"can be fuller but stay conversational. This is a chat, not a " +
+		"presentation.",
 }
 
 // ChannelProvider is a ContextProvider that injects channel-specific
