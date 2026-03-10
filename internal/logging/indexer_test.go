@@ -343,3 +343,195 @@ func TestMigrate_Idempotent(t *testing.T) {
 type discardWriter struct{}
 
 func (discardWriter) Write(p []byte) (int, error) { return len(p), nil }
+
+func TestPrune_DebugAndTrace(t *testing.T) {
+	db := openTestDB(t)
+
+	old := time.Now().Add(-100 * 24 * time.Hour).Format(time.RFC3339Nano)
+	recent := time.Now().Add(-1 * time.Hour).Format(time.RFC3339Nano)
+
+	for _, e := range []struct {
+		ts, level, msg string
+	}{
+		{old, "TRACE", "old trace"},
+		{old, "DEBUG", "old debug"},
+		{old, "INFO", "old info"},
+		{old, "ERROR", "old error"},
+		{recent, "DEBUG", "recent debug"},
+	} {
+		_, err := db.Exec(
+			`INSERT INTO log_entries (timestamp, level, msg) VALUES (?, ?, ?)`,
+			e.ts, e.level, e.msg,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// minKeepLevel=INFO prunes old TRACE and DEBUG, keeps INFO+.
+	deleted, err := Prune(db, 90*24*time.Hour, slog.LevelInfo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleted != 2 {
+		t.Errorf("deleted = %d, want 2 (old TRACE + old DEBUG)", deleted)
+	}
+
+	var remaining int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM log_entries`).Scan(&remaining); err != nil {
+		t.Fatal(err)
+	}
+	if remaining != 3 {
+		t.Errorf("remaining = %d, want 3 (old INFO, old ERROR, recent DEBUG)", remaining)
+	}
+}
+
+func TestPrune_WarnMinLevel(t *testing.T) {
+	db := openTestDB(t)
+
+	old := time.Now().Add(-100 * 24 * time.Hour).Format(time.RFC3339Nano)
+
+	for _, e := range []struct {
+		ts, level, msg string
+	}{
+		{old, "TRACE", "old trace"},
+		{old, "DEBUG", "old debug"},
+		{old, "INFO", "old info"},
+		{old, "WARN", "old warn"},
+		{old, "ERROR", "old error"},
+	} {
+		_, err := db.Exec(
+			`INSERT INTO log_entries (timestamp, level, msg) VALUES (?, ?, ?)`,
+			e.ts, e.level, e.msg,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// minKeepLevel=WARN prunes old TRACE, DEBUG, and INFO.
+	deleted, err := Prune(db, 90*24*time.Hour, slog.LevelWarn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleted != 3 {
+		t.Errorf("deleted = %d, want 3 (TRACE, DEBUG, INFO)", deleted)
+	}
+
+	var remaining int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM log_entries`).Scan(&remaining); err != nil {
+		t.Fatal(err)
+	}
+	if remaining != 2 {
+		t.Errorf("remaining = %d, want 2 (old WARN, old ERROR)", remaining)
+	}
+}
+
+func TestPrune_NothingToPrune(t *testing.T) {
+	db := openTestDB(t)
+
+	recent := time.Now().Add(-1 * time.Hour).Format(time.RFC3339Nano)
+
+	_, err := db.Exec(
+		`INSERT INTO log_entries (timestamp, level, msg) VALUES (?, ?, ?)`,
+		recent, "DEBUG", "recent debug",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Recent entry should not be pruned.
+	deleted, err := Prune(db, 7*24*time.Hour, slog.LevelInfo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleted != 0 {
+		t.Errorf("deleted = %d, want 0", deleted)
+	}
+}
+
+func TestNormalizeLevel(t *testing.T) {
+	tests := []struct {
+		level slog.Level
+		want  string
+	}{
+		{slog.LevelDebug - 4, "TRACE"},
+		{slog.LevelDebug, "DEBUG"},
+		{slog.LevelInfo, "INFO"},
+		{slog.LevelWarn, "WARN"},
+		{slog.LevelError, "ERROR"},
+	}
+	for _, tt := range tests {
+		got := normalizeLevel(tt.level)
+		if got != tt.want {
+			t.Errorf("normalizeLevel(%d) = %q, want %q", tt.level, got, tt.want)
+		}
+	}
+}
+
+func TestQueryBySession(t *testing.T) {
+	db := openTestDB(t)
+
+	ts := time.Now().Format(time.RFC3339Nano)
+	for _, e := range []struct {
+		session, level, subsystem, msg string
+	}{
+		{"sess-1", "INFO", "agent", "msg1"},
+		{"sess-1", "DEBUG", "agent", "msg2"},
+		{"sess-1", "WARN", "tool", "msg3"},
+		{"sess-2", "INFO", "agent", "other session"},
+	} {
+		_, err := db.Exec(
+			`INSERT INTO log_entries (timestamp, level, msg, session_id, subsystem) VALUES (?, ?, ?, ?, ?)`,
+			ts, e.level, e.msg, e.session, e.subsystem,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// All entries for sess-1.
+	entries, err := QueryBySession(db, "sess-1", "", "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 3 {
+		t.Errorf("got %d entries, want 3", len(entries))
+	}
+
+	// Filter by level.
+	entries, err = QueryBySession(db, "sess-1", "INFO", "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Errorf("level filter: got %d entries, want 1", len(entries))
+	}
+
+	// Filter by subsystem.
+	entries, err = QueryBySession(db, "sess-1", "", "tool", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Errorf("subsystem filter: got %d entries, want 1", len(entries))
+	}
+
+	// Limit.
+	entries, err = QueryBySession(db, "sess-1", "", "", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 {
+		t.Errorf("limit: got %d entries, want 2", len(entries))
+	}
+
+	// No results for unknown session.
+	entries, err = QueryBySession(db, "sess-unknown", "", "", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("unknown session: got %d entries, want 0", len(entries))
+	}
+}

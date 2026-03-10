@@ -117,10 +117,13 @@ func (h *IndexHandler) Handle(ctx context.Context, r slog.Record) error {
 		return err
 	}
 
-	// Build the index entry.
+	// Build the index entry. Normalize the level string so custom
+	// levels (e.g., LevelTrace = -8) are stored as "TRACE" rather
+	// than slog's default "DEBUG-4". This keeps the DB consistent
+	// with log output, which uses ReplaceLogLevelNames.
 	entry := indexEntry{
 		Timestamp: r.Time,
-		Level:     r.Level.String(),
+		Level:     normalizeLevel(r.Level),
 		Msg:       r.Message,
 	}
 
@@ -357,6 +360,18 @@ func attrValue(a slog.Attr) any {
 	}
 }
 
+// normalizeLevel returns a human-readable level string. Custom levels
+// (like LevelTrace = -8) are mapped to their canonical names rather
+// than slog's default rendering (e.g., "DEBUG-4" → "TRACE").
+func normalizeLevel(l slog.Level) string {
+	switch l {
+	case slog.LevelDebug - 4: // config.LevelTrace
+		return "TRACE"
+	default:
+		return l.String()
+	}
+}
+
 // cloneAttrs returns a shallow copy of the attribute slice.
 func cloneAttrs(attrs []slog.Attr) []slog.Attr {
 	if len(attrs) == 0 {
@@ -391,10 +406,12 @@ func Prune(db *sql.DB, maxAge time.Duration, minKeepLevel slog.Level) (int64, er
 	cutoff := time.Now().Add(-maxAge).Format(time.RFC3339Nano)
 
 	// Build a list of levels to prune (those below minKeepLevel).
+	// Uses normalizeLevel so level strings match the DB values
+	// (e.g., "TRACE" not "DEBUG-4").
 	var pruneLevels []string
 	for _, l := range []slog.Level{slog.LevelDebug - 4, slog.LevelDebug, slog.LevelInfo, slog.LevelWarn, slog.LevelError} {
 		if l < minKeepLevel {
-			pruneLevels = append(pruneLevels, l.String())
+			pruneLevels = append(pruneLevels, normalizeLevel(l))
 		}
 	}
 	if len(pruneLevels) == 0 {
