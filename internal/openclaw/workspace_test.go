@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestLoadWorkspaceFiles_MainSession(t *testing.T) {
@@ -182,6 +183,100 @@ func TestTruncateFile_PreservesRatio(t *testing.T) {
 	if len(head) < len(tail) {
 		t.Errorf("head (%d) should be larger than tail (%d)", len(head), len(tail))
 	}
+}
+
+func TestLoadWorkspaceFiles_DailyMemory(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Now()
+	today := now.Format("2006-01-02")
+	yesterday := now.AddDate(0, 0, -1).Format("2006-01-02")
+
+	// Create required bootstrap files so they don't distract.
+	writeFile(t, dir, "AGENTS.md", "# Agents")
+	writeFile(t, dir, "SOUL.md", "# Soul")
+	writeFile(t, dir, "TOOLS.md", "# Tools")
+	writeFile(t, dir, "IDENTITY.md", "# Identity")
+	writeFile(t, dir, "USER.md", "# User")
+	writeFile(t, dir, "HEARTBEAT.md", "# Heartbeat")
+	writeFile(t, dir, "MEMORY.md", "# Long-term memory")
+
+	// Create today's and yesterday's daily memory files.
+	todayName := filepath.Join("memory", today+".md")
+	yesterdayName := filepath.Join("memory", yesterday+".md")
+	writeFile(t, dir, todayName, "# Today's notes\nWorked on issue #531.")
+	writeFile(t, dir, yesterdayName, "# Yesterday's notes\nReviewed PR #528.")
+
+	t.Run("both daily files loaded after MEMORY.md", func(t *testing.T) {
+		files := LoadWorkspaceFiles(dir, false, 20000)
+		got := names(files)
+
+		// Last three should be MEMORY.md, today, yesterday.
+		if len(got) < 3 {
+			t.Fatalf("expected at least 3 files, got %d: %v", len(got), got)
+		}
+		tail := got[len(got)-3:]
+		want := []string{"MEMORY.md", todayName, yesterdayName}
+		for i, name := range want {
+			if tail[i] != name {
+				t.Errorf("tail[%d] = %q, want %q (full list: %v)", i, tail[i], name, got)
+			}
+		}
+
+		// Verify content is loaded correctly.
+		for _, f := range files {
+			if f.Name == todayName && !strings.Contains(f.Content, "issue #531") {
+				t.Errorf("today's daily file content = %q", f.Content)
+			}
+			if f.Name == yesterdayName && !strings.Contains(f.Content, "PR #528") {
+				t.Errorf("yesterday's daily file content = %q", f.Content)
+			}
+		}
+	})
+
+	t.Run("subagent excludes daily files", func(t *testing.T) {
+		files := LoadWorkspaceFiles(dir, true, 20000)
+		for _, f := range files {
+			if strings.HasPrefix(f.Name, "memory/") {
+				t.Errorf("subagent should not load daily memory file %q", f.Name)
+			}
+			if f.Name == "MEMORY.md" {
+				t.Error("subagent should not load MEMORY.md")
+			}
+		}
+	})
+
+	t.Run("missing daily files silently skipped", func(t *testing.T) {
+		dirNoDaily := t.TempDir()
+		writeFile(t, dirNoDaily, "AGENTS.md", "# Agents")
+		writeFile(t, dirNoDaily, "MEMORY.md", "# Memory")
+
+		files := LoadWorkspaceFiles(dirNoDaily, false, 20000)
+		for _, f := range files {
+			if strings.HasPrefix(f.Name, "memory/") {
+				t.Errorf("should not include daily file %q when memory/ dir is absent", f.Name)
+			}
+		}
+	})
+
+	t.Run("only today when yesterday is missing", func(t *testing.T) {
+		dirOneDay := t.TempDir()
+		writeFile(t, dirOneDay, "AGENTS.md", "# Agents")
+		writeFile(t, dirOneDay, todayName, "# Just today")
+
+		files := LoadWorkspaceFiles(dirOneDay, false, 20000)
+		var dailyNames []string
+		for _, f := range files {
+			if strings.HasPrefix(f.Name, "memory/") {
+				dailyNames = append(dailyNames, f.Name)
+			}
+		}
+		if len(dailyNames) != 1 {
+			t.Fatalf("expected 1 daily file, got %d: %v", len(dailyNames), dailyNames)
+		}
+		if dailyNames[0] != todayName {
+			t.Errorf("daily file = %q, want %q", dailyNames[0], todayName)
+		}
+	})
 }
 
 // --- helpers ---
