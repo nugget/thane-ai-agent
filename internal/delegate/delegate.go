@@ -170,9 +170,11 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 	// appears in the session inspector alongside user conversations.
 	convID := "delegate-" + did[:8]
 
-	// Inject a context logger with delegate-specific trace fields so
-	// all downstream code (tool implementations) inherits them.
-	log := e.logger.With(
+	// Context logger inherits upstream fields (request_id, session,
+	// conversation from the agent loop) and adds delegate-specific trace
+	// fields so all downstream code (tool implementations) gets the
+	// full trace chain.
+	log := logging.Logger(ctx).With(
 		"subsystem", logging.SubsystemDelegate,
 		"delegate_id", did,
 	)

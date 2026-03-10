@@ -418,7 +418,8 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 
-	ctx := logging.WithLogger(r.Context(), s.logger.With("subsystem", logging.SubsystemAPI))
+	log := s.logger.With("subsystem", logging.SubsystemAPI)
+	ctx := logging.WithLogger(r.Context(), log)
 
 	if req.Stream {
 		s.handleStreamingCompletion(w, r.WithContext(ctx), agentReq)
@@ -428,7 +429,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	// Non-streaming: run and return complete response
 	resp, err := s.loop.Run(ctx, agentReq, nil)
 	if err != nil {
-		s.logger.Error("agent loop failed", "error", err)
+		log.Error("agent loop failed", "error", err)
 		s.errorResponse(w, http.StatusInternalServerError, "agent error")
 		return
 	}
@@ -496,7 +497,8 @@ func (s *Server) handleSimpleChat(w http.ResponseWriter, r *http.Request) {
 		convID = uuid.New().String()
 	}
 
-	ctx := logging.WithLogger(r.Context(), s.logger.With("subsystem", logging.SubsystemAPI))
+	log := s.logger.With("subsystem", logging.SubsystemAPI)
+	ctx := logging.WithLogger(r.Context(), log)
 
 	agentReq := &agent.Request{
 		Messages: []agent.Message{
@@ -510,7 +512,7 @@ func (s *Server) handleSimpleChat(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := s.loop.Run(ctx, agentReq, nil)
 	if err != nil {
-		s.logger.Error("agent loop failed", "error", err)
+		log.Error("agent loop failed", "error", err)
 		s.errorResponse(w, http.StatusInternalServerError, "agent error: "+err.Error())
 		return
 	}

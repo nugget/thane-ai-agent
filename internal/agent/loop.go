@@ -727,10 +727,11 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 
 	// Generate a request-scoped ID and logger. Every log line within this
 	// turn carries request_id so you can grep for a single user→response cycle.
-	// The logger is also injected into the context so downstream code
-	// (tool implementations, delegates) inherits these fields automatically.
+	// The logger is based on the context logger (not l.logger) so upstream
+	// fields from entry points (subsystem=api, sender, task_id) are preserved.
+	// The agent loop overrides subsystem to "agent" for its own log lines.
 	requestID := generateRequestID()
-	log := l.logger.With(
+	log := logging.Logger(ctx).With(
 		"subsystem", logging.SubsystemAgent,
 		"request_id", requestID,
 		"session", sessionTag,
