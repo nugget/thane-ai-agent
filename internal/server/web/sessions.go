@@ -41,6 +41,7 @@ type SessionDetailData struct {
 	ToolSummary           []*toolSummaryRow
 	Iterations            []*iterationRow
 	UnattributedToolCalls []*toolCallRow
+	HasLogs               bool
 }
 
 // iterationRow is a display-friendly wrapper for an iteration in the detail view.
@@ -214,6 +215,7 @@ func (s *WebServer) handleSessionDetail(w http.ResponseWriter, r *http.Request) 
 		ToolCalls:             toolCallsToRows(toolCalls),
 		Iterations:            iterRows,
 		UnattributedToolCalls: unattributed,
+		HasLogs:               s.logStore != nil,
 	}
 
 	if sess.Metadata != nil && len(sess.Metadata.ToolsUsed) > 0 {

@@ -382,3 +382,110 @@ func nullInt(n int) sql.NullInt64 {
 	}
 	return sql.NullInt64{Int64: int64(n), Valid: true}
 }
+
+// Prune deletes log index entries older than maxAge whose level is
+// strictly below minKeepLevel. For example, passing [slog.LevelInfo]
+// prunes DEBUG and TRACE entries while keeping INFO, WARN, and ERROR.
+// Returns the number of rows deleted.
+func Prune(db *sql.DB, maxAge time.Duration, minKeepLevel slog.Level) (int64, error) {
+	cutoff := time.Now().Add(-maxAge).Format(time.RFC3339Nano)
+
+	// Build a list of levels to prune (those below minKeepLevel).
+	var pruneLevels []string
+	for _, l := range []slog.Level{slog.LevelDebug - 4, slog.LevelDebug, slog.LevelInfo, slog.LevelWarn, slog.LevelError} {
+		if l < minKeepLevel {
+			pruneLevels = append(pruneLevels, l.String())
+		}
+	}
+	if len(pruneLevels) == 0 {
+		return 0, nil
+	}
+
+	// Build placeholders for the IN clause.
+	placeholders := make([]string, len(pruneLevels))
+	args := make([]any, 0, len(pruneLevels)+1)
+	args = append(args, cutoff)
+	for i, l := range pruneLevels {
+		placeholders[i] = "?"
+		args = append(args, l)
+	}
+
+	query := fmt.Sprintf(
+		"DELETE FROM log_entries WHERE timestamp < ? AND level IN (%s)",
+		strings.Join(placeholders, ", "),
+	)
+
+	res, err := db.Exec(query, args...)
+	if err != nil {
+		return 0, fmt.Errorf("prune log index: %w", err)
+	}
+	return res.RowsAffected()
+}
+
+// LogEntry is an exported representation of a log index row suitable
+// for display in the web dashboard.
+type LogEntry struct {
+	ID         int64
+	Timestamp  time.Time
+	Level      string
+	Msg        string
+	Subsystem  string
+	Tool       string
+	Model      string
+	Attrs      string
+	SourceFile string
+	SourceLine int
+}
+
+// QueryBySession returns log entries matching the given session ID,
+// ordered by timestamp. The limit caps the result set (0 = no limit).
+// Optional filters narrow by level and/or subsystem.
+func QueryBySession(db *sql.DB, sessionID, level, subsystem string, limit int) ([]LogEntry, error) {
+	query := "SELECT id, timestamp, level, msg, subsystem, tool, model, attrs, source_file, source_line FROM log_entries WHERE session_id = ?"
+	args := []any{sessionID}
+
+	if level != "" {
+		query += " AND level = ?"
+		args = append(args, level)
+	}
+	if subsystem != "" {
+		query += " AND subsystem = ?"
+		args = append(args, subsystem)
+	}
+
+	query += " ORDER BY timestamp ASC"
+
+	if limit > 0 {
+		query += fmt.Sprintf(" LIMIT %d", limit)
+	}
+
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query log entries: %w", err)
+	}
+	defer rows.Close()
+
+	var entries []LogEntry
+	for rows.Next() {
+		var e LogEntry
+		var ts string
+		var sub, tool, model, attrs, srcFile sql.NullString
+		var srcLine sql.NullInt64
+
+		if err := rows.Scan(&e.ID, &ts, &e.Level, &e.Msg, &sub, &tool, &model, &attrs, &srcFile, &srcLine); err != nil {
+			return nil, fmt.Errorf("scan log entry: %w", err)
+		}
+
+		e.Timestamp, _ = time.Parse(time.RFC3339Nano, ts)
+		e.Subsystem = sub.String
+		e.Tool = tool.String
+		e.Model = model.String
+		e.Attrs = attrs.String
+		e.SourceFile = srcFile.String
+		e.SourceLine = int(srcLine.Int64)
+
+		entries = append(entries, e)
+	}
+
+	return entries, rows.Err()
+}

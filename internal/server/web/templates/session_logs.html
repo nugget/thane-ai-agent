@@ -1,0 +1,69 @@
+{{define "content"}}
+<div style="display:flex;gap:0.75rem;margin-bottom:1rem;flex-wrap:wrap;align-items:center">
+    <label class="text-muted" style="font-size:0.8125rem">Level</label>
+    <select id="log-level-filter" name="level"
+            hx-get="/sessions/{{.SessionID}}/logs"
+            hx-target="#session-logs-content"
+            hx-include="#log-subsystem-filter"
+            style="padding:0.25rem 0.5rem;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--fg);font-size:0.8125rem">
+        <option value="">ALL</option>
+        <option value="DEBUG" {{if eq .Level "DEBUG"}}selected{{end}}>DEBUG</option>
+        <option value="INFO" {{if eq .Level "INFO"}}selected{{end}}>INFO</option>
+        <option value="WARN" {{if eq .Level "WARN"}}selected{{end}}>WARN</option>
+        <option value="ERROR" {{if eq .Level "ERROR"}}selected{{end}}>ERROR</option>
+    </select>
+    <label class="text-muted" style="font-size:0.8125rem">Subsystem</label>
+    <select id="log-subsystem-filter" name="subsystem"
+            hx-get="/sessions/{{.SessionID}}/logs"
+            hx-target="#session-logs-content"
+            hx-include="#log-level-filter"
+            style="padding:0.25rem 0.5rem;border:1px solid var(--border);border-radius:4px;background:var(--bg);color:var(--fg);font-size:0.8125rem">
+        <option value="">ALL</option>
+        <option value="agent" {{if eq .Subsystem "agent"}}selected{{end}}>agent</option>
+        <option value="delegate" {{if eq .Subsystem "delegate"}}selected{{end}}>delegate</option>
+        <option value="metacognitive" {{if eq .Subsystem "metacognitive"}}selected{{end}}>metacognitive</option>
+        <option value="tool" {{if eq .Subsystem "tool"}}selected{{end}}>tool</option>
+        <option value="scheduler" {{if eq .Subsystem "scheduler"}}selected{{end}}>scheduler</option>
+    </select>
+    <span class="text-muted" style="font-size:0.8125rem">{{len .Entries}} entries</span>
+</div>
+
+{{if .Entries}}
+<div class="table-scroll">
+    <table class="table" style="font-size:0.8125rem">
+        <thead>
+            <tr>
+                <th>Time</th>
+                <th>Level</th>
+                <th>Subsystem</th>
+                <th>Message</th>
+                <th>Details</th>
+            </tr>
+        </thead>
+        <tbody>
+        {{range .Entries}}
+            <tr>
+                <td class="mono text-muted" style="white-space:nowrap">{{.Timestamp}}</td>
+                <td><span class="badge {{.LevelClass}}">{{.Level}}</span></td>
+                <td class="mono">{{.Subsystem}}</td>
+                <td>{{.Msg}}</td>
+                <td>
+                    {{if .Attrs}}
+                    <details>
+                        <summary class="text-muted" style="cursor:pointer">attrs</summary>
+                        <pre class="mono" style="font-size:0.75rem;white-space:pre-wrap;max-height:200px;overflow:auto">{{.Attrs}}</pre>
+                    </details>
+                    {{end}}
+                    {{if .Source}}
+                    <span class="text-muted mono" style="font-size:0.75rem">{{.Source}}</span>
+                    {{end}}
+                </td>
+            </tr>
+        {{end}}
+        </tbody>
+    </table>
+</div>
+{{else}}
+<div class="empty-state">No log entries for this session.</div>
+{{end}}
+{{end}}

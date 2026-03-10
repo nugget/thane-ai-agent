@@ -128,6 +128,10 @@ func (c *Client) selectFolder(folder string) (*imap.SelectData, error) {
 	if err != nil {
 		return nil, fmt.Errorf("select %s: %w", folder, err)
 	}
+	c.logger.Debug("IMAP folder selected",
+		"folder", folder,
+		"messages", data.NumMessages,
+	)
 	return data, nil
 }
 

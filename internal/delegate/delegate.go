@@ -301,7 +301,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 	defer func() {
 		if !completed && ctx.Err() == nil {
 			log.Error("delegate terminated without completion record",
-				"elapsed", time.Since(startTime).Round(time.Millisecond),
+				"elapsed", time.Since(startTime).Round(time.Second),
 			)
 		}
 	}()
@@ -320,7 +320,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 		if err := ctx.Err(); err != nil {
 			if errors.Is(err, context.DeadlineExceeded) {
 				iterLog.Warn("delegate context deadline at iteration boundary",
-					"elapsed", time.Since(startTime).Round(time.Millisecond),
+					"elapsed", time.Since(startTime).Round(time.Second),
 				)
 				completed = true
 				e.recordCompletion(&completionRecord{
@@ -364,7 +364,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 		// to scheduling jitter).
 		if time.Since(startTime) > maxDuration {
 			iterLog.Warn("delegate wall clock exceeded",
-				"elapsed", time.Since(startTime).Round(time.Millisecond),
+				"elapsed", time.Since(startTime).Round(time.Second),
 				"max_duration", maxDuration,
 			)
 			completed = true
@@ -404,7 +404,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 			// External cancellation (context.Canceled) is propagated as an error.
 			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 				iterLog.Warn("delegate context deadline exceeded during llm call",
-					"elapsed", time.Since(startTime).Round(time.Millisecond),
+					"elapsed", time.Since(startTime).Round(time.Second),
 					"max_duration", maxDuration,
 				)
 				completed = true
@@ -456,7 +456,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 		// Re-check wall clock after LLM call — it may have taken a while.
 		if time.Since(startTime) > maxDuration {
 			iterLog.Warn("delegate wall clock exceeded after llm call",
-				"elapsed", time.Since(startTime).Round(time.Millisecond),
+				"elapsed", time.Since(startTime).Round(time.Second),
 				"max_duration", maxDuration,
 			)
 			messages = append(messages, resp.Message)
@@ -498,7 +498,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 			"input_tokens", resp.InputTokens,
 			"output_tokens", resp.OutputTokens,
 			"tool_calls", len(resp.Message.ToolCalls),
-			"elapsed", time.Since(iterStart).Round(time.Millisecond),
+			"elapsed", time.Since(iterStart).Round(time.Second),
 		)
 
 		// Record this iteration for the execution trace.
@@ -678,7 +678,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 					if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 						iterLog.Warn("delegate context deadline exceeded during tool exec",
 							"tool", tc.Function.Name,
-							"elapsed", time.Since(startTime).Round(time.Millisecond),
+							"elapsed", time.Since(startTime).Round(time.Second),
 						)
 						iterRec.breakReason = ExhaustWallClock
 						iterRec.durationMs = time.Since(iterStart).Milliseconds()
@@ -733,7 +733,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 				iterLog.Debug("delegate tool exec done",
 					"tool", tc.Function.Name,
 					"result_len", len(result),
-					"elapsed", time.Since(toolStart).Round(time.Millisecond),
+					"elapsed", time.Since(toolStart).Round(time.Second),
 				)
 			}
 
@@ -789,7 +789,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 		// Re-check wall clock after tool execution.
 		if time.Since(startTime) > maxDuration {
 			iterLog.Warn("delegate wall clock exceeded after tool exec",
-				"elapsed", time.Since(startTime).Round(time.Millisecond),
+				"elapsed", time.Since(startTime).Round(time.Second),
 				"max_duration", maxDuration,
 			)
 			iterRec.breakReason = ExhaustWallClock
@@ -967,7 +967,7 @@ func (e *Executor) recordCompletion(rec *completionRecord) {
 		"output_tokens", rec.totalOutput,
 		"exhausted", rec.exhausted,
 		"exhaust_reason", rec.exhaustReason,
-		"elapsed", elapsed.Round(time.Millisecond),
+		"elapsed", elapsed.Round(time.Second),
 	)
 
 	// Archive session lifecycle: end the session and persist messages

@@ -289,6 +289,7 @@ func (s *Scheduler) executeTask(ctx context.Context, task *Task, scheduledAt tim
 
 	s.logger.Info("task execution completed",
 		"task_id", task.ID,
+		"task_name", task.Name,
 		"execution_id", exec.ID,
 		"status", exec.Status,
 		"duration", completed.Sub(*exec.StartedAt),

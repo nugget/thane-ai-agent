@@ -282,6 +282,11 @@ type LoggingConfig struct {
 	// Compress enables gzip compression of rotated log files.
 	// Default: true.
 	Compress *bool `yaml:"compress"`
+
+	// RetentionDays controls how many days DEBUG and TRACE log index
+	// entries are kept. Entries at INFO and above are kept indefinitely.
+	// Default: 7. Set to 0 to disable pruning (keep everything).
+	RetentionDays *int `yaml:"retention_days"`
 }
 
 // DirPath returns the resolved log directory path. When Dir is nil
@@ -293,6 +298,20 @@ func (l LoggingConfig) DirPath() string {
 		return "logs"
 	}
 	return *l.Dir
+}
+
+// RetentionDaysDuration returns the retention period for low-level log
+// index entries. When nil (omitted in YAML), defaults to 7 days. A zero
+// or negative value disables pruning entirely.
+func (l LoggingConfig) RetentionDaysDuration() time.Duration {
+	days := 7
+	if l.RetentionDays != nil {
+		days = *l.RetentionDays
+	}
+	if days <= 0 {
+		return 0
+	}
+	return time.Duration(days) * 24 * time.Hour
 }
 
 // CompressEnabled returns whether rotated log compression is on.

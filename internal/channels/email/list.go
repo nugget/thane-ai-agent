@@ -34,6 +34,13 @@ func (c *Client) ListMessages(ctx context.Context, opts ListOptions) ([]Envelope
 		limit = 20
 	}
 
+	c.logger.Debug("ListMessages",
+		"folder", folder,
+		"since_uid", opts.SinceUID,
+		"unseen", opts.Unseen,
+		"limit", limit,
+	)
+
 	if _, err := c.selectFolder(folder); err != nil {
 		return nil, err
 	}
@@ -61,6 +68,7 @@ func (c *Client) ListMessages(ctx context.Context, opts ListOptions) ([]Envelope
 	}
 
 	allUIDs := searchData.AllUIDs()
+	c.logger.Debug("IMAP search results", "uids", len(allUIDs))
 	if len(allUIDs) == 0 {
 		return nil, nil
 	}
@@ -94,8 +102,11 @@ func (c *Client) ListMessages(ctx context.Context, opts ListOptions) ([]Envelope
 	}
 
 	if len(recentUIDs) == 0 {
+		c.logger.Debug("no new UIDs after client-side filter")
 		return nil, nil
 	}
+
+	c.logger.Debug("fetching envelopes", "count", len(recentUIDs))
 
 	// Build UID set for fetch.
 	uidSet := imap.UIDSet{}
