@@ -74,7 +74,7 @@ func (l *Loop) RegisterTools(registry *tools.Registry) {
 
 			l.setNextSleep(d)
 			l.deps.Logger.Info("metacognitive sleep set",
-				"duration", d,
+				"duration", d.Round(time.Second),
 				"reason", reason,
 			)
 
