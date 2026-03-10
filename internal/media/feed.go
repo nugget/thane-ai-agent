@@ -167,12 +167,12 @@ func fetchFeed(ctx context.Context, httpClient *http.Client, feedURL string) (*F
 		return nil, fmt.Errorf("feed returned HTTP %d", resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, maxFeedSize))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxFeedSize+1))
 	if err != nil {
 		return nil, fmt.Errorf("read feed body: %w", err)
 	}
 
-	if int64(len(body)) >= maxFeedSize {
+	if int64(len(body)) > maxFeedSize {
 		return nil, fmt.Errorf("feed exceeds %d MB size limit", maxFeedSize>>20)
 	}
 
