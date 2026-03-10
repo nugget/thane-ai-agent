@@ -291,7 +291,7 @@ func (s *Scheduler) executeTask(ctx context.Context, task *Task, scheduledAt tim
 		"task_id", task.ID,
 		"execution_id", exec.ID,
 		"status", exec.Status,
-		"duration", completed.Sub(*exec.StartedAt),
+		"duration", completed.Sub(*exec.StartedAt).Round(time.Millisecond),
 	)
 
 	return exec, execErr

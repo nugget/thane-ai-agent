@@ -240,6 +240,48 @@ func Migrate(db *sql.DB) error {
 	return nil
 }
 
+// Prune deletes log index entries older than maxAge for levels below
+// minLevel. For example, Prune(db, 90*24*time.Hour, slog.LevelInfo)
+// removes DEBUG and TRACE entries older than 90 days while keeping
+// INFO, WARN, and ERROR entries forever. The canonical raw log files
+// are unaffected — this only trims the queryable index.
+//
+// Returns the number of rows deleted.
+func Prune(db *sql.DB, maxAge time.Duration, minLevel slog.Level) (int64, error) {
+	cutoff := time.Now().Add(-maxAge).Format(time.RFC3339Nano)
+
+	// Collect level strings that should be pruned (levels below minLevel).
+	var levels []string
+	for _, l := range []slog.Level{slog.Level(-8), slog.LevelDebug} { // -8 = TRACE
+		if l < minLevel {
+			levels = append(levels, l.String())
+		}
+	}
+	if len(levels) == 0 {
+		return 0, nil
+	}
+
+	// Build placeholders for the IN clause.
+	placeholders := make([]string, len(levels))
+	args := make([]any, 0, len(levels)+1)
+	for i, l := range levels {
+		placeholders[i] = "?"
+		args = append(args, l)
+	}
+	args = append(args, cutoff)
+
+	query := fmt.Sprintf(
+		"DELETE FROM log_entries WHERE level IN (%s) AND timestamp < ?",
+		strings.Join(placeholders, ", "),
+	)
+
+	result, err := db.Exec(query, args...)
+	if err != nil {
+		return 0, fmt.Errorf("prune log index: %w", err)
+	}
+	return result.RowsAffected()
+}
+
 // drain runs in a goroutine, reading entries from the channel and
 // inserting them into SQLite. It exits when the channel is closed.
 func (h *IndexHandler) drain() {
