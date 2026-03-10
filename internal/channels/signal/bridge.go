@@ -357,6 +357,12 @@ func (b *Bridge) handleMessage(ctx context.Context, env *Envelope) {
 		b.logger.Debug("signal typing stop failed", "error", typErr)
 	}
 
+	// Enrich the logger with session/request IDs from the agent loop
+	// so post-run log lines correlate with the agent's context.
+	if resp != nil {
+		log = log.With("session_id", resp.SessionID, "request_id", resp.RequestID)
+	}
+
 	if err != nil {
 		log.Error("signal agent run failed", "error", err)
 		return
@@ -449,6 +455,12 @@ func (b *Bridge) handleReaction(ctx context.Context, env *Envelope) {
 
 	resp, err := b.runner.Run(ctx, req, nil)
 
+	// Build a logger with correlation IDs for post-run log lines.
+	rlog := b.logger.With("sender", sender, "conversation_id", convID)
+	if resp != nil {
+		rlog = rlog.With("session_id", resp.SessionID, "request_id", resp.RequestID)
+	}
+
 	stopTyping()
 	stopCtx, stopCancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer stopCancel()
@@ -457,11 +469,7 @@ func (b *Bridge) handleReaction(ctx context.Context, env *Envelope) {
 	}
 
 	if err != nil {
-		b.logger.Error("signal agent run failed (reaction)",
-			"sender", sender,
-			"conversation_id", convID,
-			"error", err,
-		)
+		rlog.Error("signal agent run failed (reaction)", "error", err)
 		return
 	}
 
@@ -470,18 +478,11 @@ func (b *Bridge) handleReaction(ctx context.Context, env *Envelope) {
 	}
 
 	if _, err := b.client.Send(ctx, sender, resp.Content); err != nil {
-		b.logger.Error("signal reply send failed (reaction)",
-			"sender", sender,
-			"conversation_id", convID,
-			"error", err,
-		)
+		rlog.Error("signal reply send failed (reaction)", "error", err)
 		return
 	}
 
-	b.logger.Info("signal reply sent (reaction)",
-		"sender", sender,
-		"conversation_id", convID,
-	)
+	rlog.Info("signal reply sent (reaction)")
 }
 
 // startTypingRefresh sends a typing indicator immediately, then

@@ -440,18 +440,39 @@ func Prune(db *sql.DB, maxAge time.Duration, minKeepLevel slog.Level) (int64, er
 }
 
 // LogEntry is an exported representation of a log index row suitable
-// for display in the web dashboard.
+// for display in the web dashboard and tool queries.
 type LogEntry struct {
-	ID         int64
-	Timestamp  time.Time
-	Level      string
-	Msg        string
-	Subsystem  string
-	Tool       string
-	Model      string
-	Attrs      string
-	SourceFile string
-	SourceLine int
+	ID             int64
+	Timestamp      time.Time
+	Level          string
+	Msg            string
+	RequestID      string
+	SessionID      string
+	ConversationID string
+	Subsystem      string
+	Tool           string
+	Model          string
+	Attrs          string
+	SourceFile     string
+	SourceLine     int
+}
+
+// QueryParams holds filter criteria for querying the log index.
+// All fields are optional — zero values are ignored. Level is treated
+// as a minimum severity: WARN returns WARN and ERROR entries, DEBUG
+// returns everything including TRACE.
+type QueryParams struct {
+	SessionID      string
+	ConversationID string
+	RequestID      string
+	Subsystem      string
+	Tool           string
+	Model          string
+	Level          string    // minimum level: ERROR > WARN > INFO > DEBUG
+	Since          time.Time // zero = no lower bound
+	Until          time.Time // zero = defaults to now
+	Pattern        string    // substring match on msg
+	Limit          int       // default 50, max 200
 }
 
 // QueryBySession returns log entries matching the given session ID,
@@ -461,7 +482,9 @@ type LogEntry struct {
 // always receive chronological order. Optional filters narrow by
 // level and/or subsystem.
 func QueryBySession(db *sql.DB, sessionID, level, subsystem string, limit int) ([]LogEntry, error) {
-	query := "SELECT id, timestamp, level, msg, subsystem, tool, model, attrs, source_file, source_line FROM log_entries WHERE session_id = ?"
+	query := `SELECT id, timestamp, level, msg, request_id, session_id,
+		conversation_id, subsystem, tool, model, attrs, source_file, source_line
+		FROM log_entries WHERE session_id = ?`
 	args := []any{sessionID}
 
 	if level != "" {
@@ -488,33 +511,8 @@ func QueryBySession(db *sql.DB, sessionID, level, subsystem string, limit int) (
 	}
 	defer rows.Close()
 
-	var entries []LogEntry
-	for rows.Next() {
-		var e LogEntry
-		var ts string
-		var sub, tool, model, attrs, srcFile sql.NullString
-		var srcLine sql.NullInt64
-
-		if err := rows.Scan(&e.ID, &ts, &e.Level, &e.Msg, &sub, &tool, &model, &attrs, &srcFile, &srcLine); err != nil {
-			return nil, fmt.Errorf("scan log entry: %w", err)
-		}
-
-		parsed, parseErr := time.Parse(time.RFC3339Nano, ts)
-		if parseErr != nil {
-			return nil, fmt.Errorf("parse log timestamp %q: %w", ts, parseErr)
-		}
-		e.Timestamp = parsed
-		e.Subsystem = sub.String
-		e.Tool = tool.String
-		e.Model = model.String
-		e.Attrs = attrs.String
-		e.SourceFile = srcFile.String
-		e.SourceLine = int(srcLine.Int64)
-
-		entries = append(entries, e)
-	}
-
-	if err := rows.Err(); err != nil {
+	entries, err := scanLogEntries(rows)
+	if err != nil {
 		return nil, err
 	}
 
@@ -524,4 +522,163 @@ func QueryBySession(db *sql.DB, sessionID, level, subsystem string, limit int) (
 	}
 
 	return entries, nil
+}
+
+// Query returns log entries matching the given filter parameters,
+// ordered by timestamp ascending (chronological). The limit defaults
+// to 50 and is capped at 200. Level filtering is "minimum level" —
+// e.g., WARN returns WARN and ERROR entries.
+func Query(db *sql.DB, params QueryParams) ([]LogEntry, error) {
+	query := `SELECT id, timestamp, level, msg, request_id, session_id,
+		conversation_id, subsystem, tool, model, attrs, source_file, source_line
+		FROM log_entries WHERE 1=1`
+	var args []any
+
+	if params.SessionID != "" {
+		query += " AND session_id = ?"
+		args = append(args, params.SessionID)
+	}
+	if params.ConversationID != "" {
+		query += " AND conversation_id = ?"
+		args = append(args, params.ConversationID)
+	}
+	if params.RequestID != "" {
+		query += " AND request_id = ?"
+		args = append(args, params.RequestID)
+	}
+	if params.Subsystem != "" {
+		query += " AND subsystem = ?"
+		args = append(args, params.Subsystem)
+	}
+	if params.Tool != "" {
+		query += " AND tool = ?"
+		args = append(args, params.Tool)
+	}
+	if params.Model != "" {
+		query += " AND model = ?"
+		args = append(args, params.Model)
+	}
+	if params.Level != "" {
+		levels := levelsAtOrAbove(params.Level)
+		if len(levels) > 0 {
+			placeholders := make([]string, len(levels))
+			for i, l := range levels {
+				placeholders[i] = "?"
+				args = append(args, l)
+			}
+			query += " AND level IN (" + strings.Join(placeholders, ", ") + ")"
+		}
+	}
+	if !params.Since.IsZero() {
+		query += " AND timestamp >= ?"
+		args = append(args, params.Since.UTC().Format(time.RFC3339Nano))
+	}
+	until := params.Until
+	if until.IsZero() {
+		until = time.Now()
+	}
+	query += " AND timestamp <= ?"
+	args = append(args, until.UTC().Format(time.RFC3339Nano))
+
+	if params.Pattern != "" {
+		query += " AND msg LIKE '%' || ? || '%'"
+		args = append(args, params.Pattern)
+	}
+
+	// Default and cap limit.
+	limit := params.Limit
+	if limit <= 0 {
+		limit = 50
+	}
+	if limit > 200 {
+		limit = 200
+	}
+
+	// Select newest first so LIMIT returns the most recent entries,
+	// then reverse to chronological order.
+	query += fmt.Sprintf(" ORDER BY timestamp DESC LIMIT %d", limit)
+
+	rows, err := db.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query log entries: %w", err)
+	}
+	defer rows.Close()
+
+	entries, err := scanLogEntries(rows)
+	if err != nil {
+		return nil, err
+	}
+
+	// Reverse to chronological order (oldest first).
+	for i, j := 0, len(entries)-1; i < j; i, j = i+1, j-1 {
+		entries[i], entries[j] = entries[j], entries[i]
+	}
+
+	return entries, nil
+}
+
+// scanLogEntries reads LogEntry rows from a *sql.Rows. The SELECT must
+// return columns in the order: id, timestamp, level, msg, request_id,
+// session_id, conversation_id, subsystem, tool, model, attrs,
+// source_file, source_line.
+func scanLogEntries(rows *sql.Rows) ([]LogEntry, error) {
+	var entries []LogEntry
+	for rows.Next() {
+		var e LogEntry
+		var ts string
+		var reqID, sessID, convID sql.NullString
+		var sub, tool, model, attrs, srcFile sql.NullString
+		var srcLine sql.NullInt64
+
+		if err := rows.Scan(
+			&e.ID, &ts, &e.Level, &e.Msg,
+			&reqID, &sessID, &convID,
+			&sub, &tool, &model, &attrs,
+			&srcFile, &srcLine,
+		); err != nil {
+			return nil, fmt.Errorf("scan log entry: %w", err)
+		}
+
+		parsed, parseErr := time.Parse(time.RFC3339Nano, ts)
+		if parseErr != nil {
+			return nil, fmt.Errorf("parse log timestamp %q: %w", ts, parseErr)
+		}
+		e.Timestamp = parsed
+		e.RequestID = reqID.String
+		e.SessionID = sessID.String
+		e.ConversationID = convID.String
+		e.Subsystem = sub.String
+		e.Tool = tool.String
+		e.Model = model.String
+		e.Attrs = attrs.String
+		e.SourceFile = srcFile.String
+		e.SourceLine = int(srcLine.Int64)
+
+		entries = append(entries, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return entries, nil
+}
+
+// levelsAtOrAbove returns all log level strings at or above the given
+// minimum severity. For example, "WARN" returns ["WARN", "ERROR"].
+// DEBUG includes TRACE. Unknown levels return nil.
+func levelsAtOrAbove(minLevel string) []string {
+	all := []string{"TRACE", "DEBUG", "INFO", "WARN", "ERROR"}
+	switch strings.ToUpper(minLevel) {
+	case "TRACE":
+		return all
+	case "DEBUG":
+		return all // DEBUG includes TRACE
+	case "INFO":
+		return []string{"INFO", "WARN", "ERROR"}
+	case "WARN":
+		return []string{"WARN", "ERROR"}
+	case "ERROR":
+		return []string{"ERROR"}
+	default:
+		return nil
+	}
 }

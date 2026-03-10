@@ -83,6 +83,7 @@ const maxEgoBytes = 16 * 1024
 const maxTagContextBytes = 64 * 1024
 
 // Response represents the agent's response.
+// Response is the result of a single agent Run() call.
 type Response struct {
 	Content      string         `json:"content"`
 	Model        string         `json:"model"`
@@ -90,6 +91,11 @@ type Response struct {
 	InputTokens  int            `json:"input_tokens,omitempty"`
 	OutputTokens int            `json:"output_tokens,omitempty"`
 	ToolsUsed    map[string]int `json:"tools_used,omitempty"` // tool name → call count
+
+	// SessionID and RequestID are set by Run() so callers can
+	// correlate post-run log lines with the agent loop's context.
+	SessionID string `json:"session_id,omitempty"`
+	RequestID string `json:"request_id,omitempty"`
 }
 
 // MemoryStore is the interface for memory storage.
@@ -825,6 +831,8 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			Content:      response,
 			Model:        "greeting-handler",
 			FinishReason: "stop",
+			SessionID:    sessionID,
+			RequestID:    requestID,
 		}, nil
 	}
 
@@ -889,6 +897,8 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			FinishReason: "stop",
 			InputTokens:  llmResp.InputTokens,
 			OutputTokens: llmResp.OutputTokens,
+			SessionID:    sessionID,
+			RequestID:    requestID,
 		}, nil
 	}
 
@@ -1490,6 +1500,8 @@ iterLoop:
 			InputTokens:  totalInputTokens,
 			OutputTokens: totalOutputTokens,
 			ToolsUsed:    toolsUsed,
+			SessionID:    sessionID,
+			RequestID:    requestID,
 		}
 
 		// Store response in memory
@@ -1591,6 +1603,8 @@ iterLoop:
 				InputTokens:  totalInputTokens,
 				OutputTokens: totalOutputTokens,
 				ToolsUsed:    toolsUsed,
+				SessionID:    sessionID,
+				RequestID:    requestID,
 			}, nil
 		}
 
@@ -1626,6 +1640,8 @@ iterLoop:
 			InputTokens:  totalInputTokens,
 			OutputTokens: totalOutputTokens,
 			ToolsUsed:    toolsUsed,
+			SessionID:    sessionID,
+			RequestID:    requestID,
 		}
 
 		if err := l.memory.AddMessage(convID, "assistant", resp.Content); err != nil {
@@ -1659,6 +1675,8 @@ iterLoop:
 		InputTokens:  totalInputTokens,
 		OutputTokens: totalOutputTokens,
 		ToolsUsed:    toolsUsed,
+		SessionID:    sessionID,
+		RequestID:    requestID,
 	}, nil
 }
 

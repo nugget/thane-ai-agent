@@ -1172,6 +1172,13 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	loop.SetUsageRecorder(usageStore, cfg.Pricing)
 	loop.Tools().SetUsageStore(usageStore)
 
+	// --- Log index query ---
+	// Expose the structured log index so the agent can query its own
+	// logs for self-diagnostics and forensics.
+	if indexDB != nil {
+		loop.Tools().SetLogIndexDB(indexDB)
+	}
+
 	// --- Shell exec ---
 	// Optional and disabled by default. When enabled, the agent can
 	// execute shell commands on the host, subject to allow/deny lists.
