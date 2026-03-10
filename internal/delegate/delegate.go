@@ -1165,14 +1165,16 @@ func truncate(s string, maxLen int) string {
 }
 
 // executeWithDeadline runs a tool handler in a separate goroutine and
-// returns when either the handler completes or the context deadline
-// fires, whichever comes first. This prevents non-cooperative handlers
-// (e.g., blocked on a syscall that ignores context cancellation) from
-// blocking the delegate loop indefinitely.
+// returns when either the handler completes or the context is done
+// (due to deadline expiration or cancellation), whichever comes first.
+// This prevents non-cooperative handlers (e.g., blocked on a syscall
+// that ignores context cancellation) from blocking the delegate loop
+// indefinitely.
 //
 // Trade-off: if the handler ignores context cancellation, the goroutine
-// leaks until the handler eventually returns. This is acceptable because
-// the alternative is hanging the entire delegate and its caller forever.
+// leaks until the handler eventually returns. A warning is logged when
+// this happens so leaked goroutines are observable. The alternative is
+// hanging the entire delegate and its caller forever.
 func executeWithDeadline(ctx context.Context, reg *tools.Registry, name, argsJSON string) (string, error) {
 	type result struct {
 		value string
@@ -1187,6 +1189,16 @@ func executeWithDeadline(ctx context.Context, reg *tools.Registry, name, argsJSO
 	case r := <-ch:
 		return r.value, r.err
 	case <-ctx.Done():
-		return "", fmt.Errorf("tool %s timed out: %w", name, ctx.Err())
+		slog.Warn("tool handler did not respect context cancellation; goroutine leaked",
+			"tool", name)
+		err := ctx.Err()
+		reason := "ended due to context error"
+		switch {
+		case errors.Is(err, context.DeadlineExceeded):
+			reason = "timed out"
+		case errors.Is(err, context.Canceled):
+			reason = "canceled"
+		}
+		return "", fmt.Errorf("tool %s %s: %w", name, reason, err)
 	}
 }
