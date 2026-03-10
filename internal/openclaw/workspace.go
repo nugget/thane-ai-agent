@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
@@ -87,6 +88,25 @@ func LoadWorkspaceFiles(dir string, subagent bool, maxChars int) []WorkspaceFile
 				if !wf.Missing {
 					files = append(files, wf)
 					break
+				}
+			}
+		}
+	}
+
+	// Recent daily memory files — inject today and yesterday so the
+	// agent has continuity without needing file tool calls. Matches
+	// OpenClaw's automatic daily file injection. Ordered most-recent
+	// first (today, then yesterday).
+	if !subagent {
+		now := time.Now()
+		for i := range 2 {
+			day := now.AddDate(0, 0, -i)
+			name := filepath.Join("memory", day.Format("2006-01-02")+".md")
+			fp := filepath.Join(dir, name)
+			if _, err := os.Stat(fp); err == nil {
+				wf := loadOneFile(fp, name, maxChars)
+				if !wf.Missing {
+					files = append(files, wf)
 				}
 			}
 		}
