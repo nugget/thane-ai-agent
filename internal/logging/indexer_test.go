@@ -469,6 +469,349 @@ func TestNormalizeLevel(t *testing.T) {
 	}
 }
 
+func TestQuery_Filters(t *testing.T) {
+	db := openTestDB(t)
+
+	now := time.Now().UTC()
+	ts1 := now.Add(-2 * time.Hour).Format(time.RFC3339Nano)
+	ts2 := now.Add(-1 * time.Hour).Format(time.RFC3339Nano)
+	ts3 := now.Add(-30 * time.Minute).Format(time.RFC3339Nano)
+
+	entries := []struct {
+		ts, level, msg, reqID, sessID, convID, subsystem, tool, model string
+	}{
+		{ts1, "INFO", "agent loop started", "r_001", "s_aaa", "c_111", "agent", "", "claude-3-opus"},
+		{ts2, "WARN", "rate limited", "r_001", "s_aaa", "c_111", "agent", "web_search", "claude-3-opus"},
+		{ts3, "ERROR", "connection refused", "r_002", "s_bbb", "c_222", "delegate", "shell_exec", "claude-3-haiku"},
+		{ts3, "DEBUG", "cache hit", "r_003", "s_aaa", "c_111", "metacog", "", ""},
+	}
+	for _, e := range entries {
+		_, err := db.Exec(
+			`INSERT INTO log_entries (timestamp, level, msg, request_id, session_id,
+				conversation_id, subsystem, tool, model) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			e.ts, e.level, e.msg, e.reqID, e.sessID, e.convID, e.subsystem, e.tool, e.model,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	t.Run("session filter", func(t *testing.T) {
+		got, err := Query(db, QueryParams{SessionID: "s_bbb"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != 1 || got[0].Msg != "connection refused" {
+			t.Errorf("got %d entries, want 1 with msg 'connection refused'", len(got))
+		}
+	})
+
+	t.Run("conversation filter", func(t *testing.T) {
+		got, err := Query(db, QueryParams{ConversationID: "c_111"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != 3 {
+			t.Errorf("got %d entries, want 3", len(got))
+		}
+	})
+
+	t.Run("request filter", func(t *testing.T) {
+		got, err := Query(db, QueryParams{RequestID: "r_001"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != 2 {
+			t.Errorf("got %d entries, want 2", len(got))
+		}
+	})
+
+	t.Run("subsystem filter", func(t *testing.T) {
+		got, err := Query(db, QueryParams{Subsystem: "delegate"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != 1 {
+			t.Errorf("got %d entries, want 1", len(got))
+		}
+	})
+
+	t.Run("tool filter", func(t *testing.T) {
+		got, err := Query(db, QueryParams{Tool: "web_search"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != 1 || got[0].Msg != "rate limited" {
+			t.Errorf("got %d entries, want 1 with msg 'rate limited'", len(got))
+		}
+	})
+
+	t.Run("model filter", func(t *testing.T) {
+		got, err := Query(db, QueryParams{Model: "claude-3-haiku"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != 1 {
+			t.Errorf("got %d entries, want 1", len(got))
+		}
+	})
+
+	t.Run("combined filters", func(t *testing.T) {
+		got, err := Query(db, QueryParams{SessionID: "s_aaa", Subsystem: "agent"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != 2 {
+			t.Errorf("got %d entries, want 2", len(got))
+		}
+	})
+
+	t.Run("no results", func(t *testing.T) {
+		got, err := Query(db, QueryParams{SessionID: "nonexistent"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != 0 {
+			t.Errorf("got %d entries, want 0", len(got))
+		}
+	})
+}
+
+func TestQuery_LevelMinimum(t *testing.T) {
+	db := openTestDB(t)
+
+	now := time.Now().UTC()
+	for i, level := range []string{"TRACE", "DEBUG", "INFO", "WARN", "ERROR"} {
+		ts := now.Add(-time.Duration(5-i) * time.Second).Format(time.RFC3339Nano)
+		_, err := db.Exec(
+			`INSERT INTO log_entries (timestamp, level, msg) VALUES (?, ?, ?)`,
+			ts, level, level+" message",
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	tests := []struct {
+		level string
+		want  int
+	}{
+		{"ERROR", 1},
+		{"WARN", 2},
+		{"INFO", 3},
+		{"DEBUG", 5}, // includes TRACE
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.level, func(t *testing.T) {
+			got, err := Query(db, QueryParams{Level: tt.level})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got) != tt.want {
+				t.Errorf("level=%s: got %d entries, want %d", tt.level, len(got), tt.want)
+			}
+		})
+	}
+}
+
+func TestQuery_ChronologicalOrder(t *testing.T) {
+	db := openTestDB(t)
+
+	now := time.Now().UTC()
+	for i := range 5 {
+		ts := now.Add(-time.Duration(5-i) * time.Second).Format(time.RFC3339Nano)
+		_, err := db.Exec(
+			`INSERT INTO log_entries (timestamp, level, msg) VALUES (?, ?, ?)`,
+			ts, "INFO", fmt.Sprintf("msg-%d", i),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, err := Query(db, QueryParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 5 {
+		t.Fatalf("got %d entries, want 5", len(got))
+	}
+
+	// Verify chronological order (oldest first).
+	for i := 1; i < len(got); i++ {
+		if got[i].Timestamp.Before(got[i-1].Timestamp) {
+			t.Errorf("entry %d (%v) is before entry %d (%v)", i, got[i].Timestamp, i-1, got[i-1].Timestamp)
+		}
+	}
+}
+
+func TestQuery_DefaultAndMaxLimit(t *testing.T) {
+	db := openTestDB(t)
+
+	now := time.Now().UTC()
+	for i := range 100 {
+		ts := now.Add(-time.Duration(100-i) * time.Millisecond).Format(time.RFC3339Nano)
+		_, err := db.Exec(
+			`INSERT INTO log_entries (timestamp, level, msg) VALUES (?, ?, ?)`,
+			ts, "INFO", fmt.Sprintf("msg-%d", i),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Default limit is 50.
+	got, err := Query(db, QueryParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 50 {
+		t.Errorf("default limit: got %d entries, want 50", len(got))
+	}
+
+	// Explicit limit of 10.
+	got, err = Query(db, QueryParams{Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 10 {
+		t.Errorf("limit=10: got %d entries, want 10", len(got))
+	}
+
+	// Cap at 200.
+	got, err = Query(db, QueryParams{Limit: 500})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 100 {
+		// Only 100 exist, so we get all of them (200 cap > 100 entries).
+		t.Errorf("limit=500: got %d entries, want 100 (all available)", len(got))
+	}
+}
+
+func TestQuery_PatternMatch(t *testing.T) {
+	db := openTestDB(t)
+
+	now := time.Now().UTC()
+	for i, msg := range []string{"agent loop started", "rate limited", "agent loop completed"} {
+		ts := now.Add(-time.Duration(3-i) * time.Second).Format(time.RFC3339Nano)
+		_, err := db.Exec(
+			`INSERT INTO log_entries (timestamp, level, msg) VALUES (?, ?, ?)`,
+			ts, "INFO", msg,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, err := Query(db, QueryParams{Pattern: "agent loop"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Errorf("got %d entries, want 2", len(got))
+	}
+}
+
+func TestQuery_TimestampRange(t *testing.T) {
+	db := openTestDB(t)
+
+	now := time.Now().UTC()
+	old := now.Add(-48 * time.Hour)
+	mid := now.Add(-1 * time.Hour)
+	recent := now.Add(-5 * time.Minute)
+
+	for _, e := range []struct {
+		ts  time.Time
+		msg string
+	}{
+		{old, "old entry"},
+		{mid, "mid entry"},
+		{recent, "recent entry"},
+	} {
+		_, err := db.Exec(
+			`INSERT INTO log_entries (timestamp, level, msg) VALUES (?, ?, ?)`,
+			e.ts.Format(time.RFC3339Nano), "INFO", e.msg,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Since 2 hours ago should include mid and recent.
+	got, err := Query(db, QueryParams{Since: now.Add(-2 * time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Errorf("since 2h: got %d entries, want 2", len(got))
+	}
+
+	// Until 30 min ago should include old and mid.
+	got, err = Query(db, QueryParams{Until: now.Add(-30 * time.Minute)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Errorf("until 30m: got %d entries, want 2", len(got))
+	}
+}
+
+func TestQuery_ExtendedLogEntry(t *testing.T) {
+	db := openTestDB(t)
+
+	ts := time.Now().UTC().Format(time.RFC3339Nano)
+	_, err := db.Exec(
+		`INSERT INTO log_entries (timestamp, level, msg, request_id, session_id, conversation_id, subsystem)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		ts, "INFO", "test entry", "r_xyz", "s_abc", "c_def", "agent",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := Query(db, QueryParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d entries, want 1", len(got))
+	}
+
+	e := got[0]
+	if e.RequestID != "r_xyz" {
+		t.Errorf("RequestID = %q, want %q", e.RequestID, "r_xyz")
+	}
+	if e.SessionID != "s_abc" {
+		t.Errorf("SessionID = %q, want %q", e.SessionID, "s_abc")
+	}
+	if e.ConversationID != "c_def" {
+		t.Errorf("ConversationID = %q, want %q", e.ConversationID, "c_def")
+	}
+}
+
+func TestLevelsAtOrAbove(t *testing.T) {
+	tests := []struct {
+		level string
+		want  int
+	}{
+		{"ERROR", 1},
+		{"WARN", 2},
+		{"INFO", 3},
+		{"DEBUG", 5},
+		{"TRACE", 5},
+		{"UNKNOWN", 0},
+	}
+
+	for _, tt := range tests {
+		got := levelsAtOrAbove(tt.level)
+		if len(got) != tt.want {
+			t.Errorf("levelsAtOrAbove(%q) = %v (len %d), want len %d", tt.level, got, len(got), tt.want)
+		}
+	}
+}
+
 func TestQueryBySession(t *testing.T) {
 	db := openTestDB(t)
 

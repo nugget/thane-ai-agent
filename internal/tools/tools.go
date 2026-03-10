@@ -3,6 +3,7 @@ package tools
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -50,6 +51,7 @@ type Registry struct {
 	watchlistStore    *awareness.WatchlistStore
 	tempFileStore     *TempFileStore
 	usageStore        *usage.Store
+	logIndexDB        *sql.DB
 	contentResolver   *ContentResolver
 }
 
