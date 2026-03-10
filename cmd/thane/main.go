@@ -927,6 +927,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// --- Forge integration ---
 	// Native GitHub (and future Gitea/GitLab) integration. Replaces the
 	// MCP github server with direct API calls via go-github.
+	var forgeContext string
 	if cfg.Forge.Configured() {
 		forgeMgr, err := forge.NewManager(cfg.Forge, logger)
 		if err != nil {
@@ -935,6 +936,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 
 		forgeTools := forge.NewTools(forgeMgr, logger)
 		loop.Tools().SetForgeTools(forgeTools)
+		forgeContext = forgeMgr.Context()
 
 		logger.Info("forge enabled", "accounts", len(cfg.Forge.Accounts))
 	} else {
@@ -1559,6 +1561,9 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	if len(alwaysActiveTags) > 0 {
 		delegateExec.SetAlwaysActiveTags(alwaysActiveTags)
 	}
+	if forgeContext != "" {
+		delegateExec.SetForgeContext(forgeContext)
+	}
 	if tfs := loop.Tools().TempFileStore(); tfs != nil {
 		delegateExec.SetTempFileStore(tfs)
 	}
@@ -1843,6 +1848,12 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		)
 	} else if cfg.Unifi.Configured() && personTracker == nil {
 		logger.Warn("unifi configured but person tracking disabled (no person.track entries)")
+	}
+
+	// Forge account context — injects configured forge accounts so the
+	// model knows which accounts exist and their default owners.
+	if forgeContext != "" {
+		contextProvider.Add(forge.NewContextProvider(forgeContext))
 	}
 
 	// Contact directory context — injects relevant contacts when the

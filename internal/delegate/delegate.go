@@ -79,6 +79,7 @@ type Executor struct {
 	usageStore       *usage.Store
 	pricing          map[string]config.PricingEntry
 	alwaysActiveTags []string
+	forgeContext     string
 }
 
 // NewExecutor creates a delegate executor.
@@ -123,6 +124,14 @@ func (e *Executor) SetTempFileStore(tfs interface {
 func (e *Executor) SetUsageRecorder(store *usage.Store, pricing map[string]config.PricingEntry) {
 	e.usageStore = store
 	e.pricing = pricing
+}
+
+// SetForgeContext configures the forge account context block that is
+// appended to delegate system prompts. This gives delegates immediate
+// knowledge of configured forge accounts so they don't waste iterations
+// guessing account names.
+func (e *Executor) SetForgeContext(ctx string) {
+	e.forgeContext = ctx
 }
 
 // SetAlwaysActiveTags configures the capability tags that are
@@ -217,6 +226,10 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 	sb.WriteString(profile.SystemPrompt)
 	sb.WriteString("\n\n")
 	sb.WriteString(awareness.CurrentConditions(e.timezone))
+	if e.forgeContext != "" {
+		sb.WriteString("\n\n")
+		sb.WriteString(e.forgeContext)
+	}
 
 	// Expand temp file labels so the delegate sees real paths.
 	if e.tempFiles != nil {
