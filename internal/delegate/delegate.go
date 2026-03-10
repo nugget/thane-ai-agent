@@ -655,7 +655,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 				toolTimeout = defaultToolTimeout
 			}
 			toolCtx, toolCancel := context.WithTimeout(toolCtx, toolTimeout)
-			result, err := reg.Execute(toolCtx, tc.Function.Name, argsJSON)
+			result, err := executeWithDeadline(toolCtx, reg, tc.Function.Name, argsJSON)
 			toolCancel()
 
 			toolCalls = append(toolCalls, ToolCallOutcome{
@@ -1162,4 +1162,31 @@ func truncate(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+// executeWithDeadline runs a tool handler in a separate goroutine and
+// returns when either the handler completes or the context deadline
+// fires, whichever comes first. This prevents non-cooperative handlers
+// (e.g., blocked on a syscall that ignores context cancellation) from
+// blocking the delegate loop indefinitely.
+//
+// Trade-off: if the handler ignores context cancellation, the goroutine
+// leaks until the handler eventually returns. This is acceptable because
+// the alternative is hanging the entire delegate and its caller forever.
+func executeWithDeadline(ctx context.Context, reg *tools.Registry, name, argsJSON string) (string, error) {
+	type result struct {
+		value string
+		err   error
+	}
+	ch := make(chan result, 1)
+	go func() {
+		v, e := reg.Execute(ctx, name, argsJSON)
+		ch <- result{v, e}
+	}()
+	select {
+	case r := <-ch:
+		return r.value, r.err
+	case <-ctx.Done():
+		return "", fmt.Errorf("tool %s timed out: %w", name, ctx.Err())
+	}
 }
