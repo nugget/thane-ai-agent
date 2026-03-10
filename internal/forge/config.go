@@ -135,10 +135,10 @@ func NewManager(cfg Config, logger *slog.Logger) (*Manager, error) {
 // Account returns the forge provider for the named account. If name is
 // empty, the primary (first configured) account is used.
 func (m *Manager) Account(name string) (ForgeProvider, error) {
+	if len(m.order) == 0 {
+		return nil, fmt.Errorf("no forge accounts configured")
+	}
 	if name == "" {
-		if len(m.order) == 0 {
-			return nil, fmt.Errorf("no forge accounts configured")
-		}
 		name = m.order[0]
 	}
 	p, ok := m.providers[name]
@@ -150,10 +150,10 @@ func (m *Manager) Account(name string) (ForgeProvider, error) {
 
 // AccountConfig returns the configuration for the named account.
 func (m *Manager) AccountConfig(name string) (AccountConfig, error) {
+	if len(m.order) == 0 {
+		return AccountConfig{}, fmt.Errorf("no forge accounts configured")
+	}
 	if name == "" {
-		if len(m.order) == 0 {
-			return AccountConfig{}, fmt.Errorf("no forge accounts configured")
-		}
 		name = m.order[0]
 	}
 	cfg, ok := m.configs[name]

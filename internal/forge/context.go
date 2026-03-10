@@ -1,4 +1,3 @@
-// Package forge provides code forge integrations (GitHub, Gitea).
 package forge
 
 import "context"
