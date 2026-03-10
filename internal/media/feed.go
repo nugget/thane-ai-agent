@@ -144,6 +144,11 @@ func rssToFeed(rf *rssFeed) *Feed {
 	return f
 }
 
+// maxFeedSize is the maximum feed body size we read. Long-running
+// podcasts and prolific YouTube channels routinely produce feeds in
+// the 2-10 MB range (e.g., ATP podcast is ~3 MB with 681 episodes).
+const maxFeedSize = 10 << 20 // 10 MB
+
 // fetchFeed retrieves and parses a feed from the given URL.
 func fetchFeed(ctx context.Context, httpClient *http.Client, feedURL string) (*Feed, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, feedURL, nil)
@@ -156,15 +161,19 @@ func fetchFeed(ctx context.Context, httpClient *http.Client, feedURL string) (*F
 	if err != nil {
 		return nil, fmt.Errorf("fetch feed: %w", err)
 	}
-	defer httpkit.DrainAndClose(resp.Body, 1<<20) // 1 MB limit
+	defer httpkit.DrainAndClose(resp.Body, maxFeedSize)
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("feed returned HTTP %d", resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxFeedSize+1))
 	if err != nil {
 		return nil, fmt.Errorf("read feed body: %w", err)
+	}
+
+	if int64(len(body)) > maxFeedSize {
+		return nil, fmt.Errorf("feed exceeds %d MB size limit", maxFeedSize>>20)
 	}
 
 	return parseFeed(body)

@@ -2,6 +2,7 @@ package media
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -348,6 +349,66 @@ func TestDiscoverFeedURL_NoFeedLink(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "no RSS/Atom feed link found") {
 		t.Errorf("error %q should mention no feed link found", err.Error())
+	}
+}
+
+func TestFetchFeed_LargeFeed(t *testing.T) {
+	// Build a valid RSS feed that exceeds 1 MB (old limit) but stays
+	// under 10 MB (new limit). This simulates long-running podcast feeds.
+	var b strings.Builder
+	b.WriteString(`<?xml version="1.0"?><rss version="2.0"><channel><title>Big Podcast</title>`)
+	for i := range 5000 {
+		fmt.Fprintf(&b, `<item><title>Episode %d — A Reasonably Long Title for Padding Purposes to Bulk Up the Feed</title>`+
+			`<link>https://example.com/episodes/%d</link>`+
+			`<guid>ep-%d</guid>`+
+			`<pubDate>Mon, 20 Feb 2026 12:00:00 +0000</pubDate></item>`, i, i, i)
+	}
+	b.WriteString(`</channel></rss>`)
+	feedXML := b.String()
+	if len(feedXML) < 1<<20 {
+		t.Fatalf("test feed too small (%d bytes), expected > 1 MB", len(feedXML))
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/xml")
+		w.Write([]byte(feedXML))
+	}))
+	defer srv.Close()
+
+	feed, err := fetchFeed(context.Background(), srv.Client(), srv.URL)
+	if err != nil {
+		t.Fatalf("fetchFeed() should handle feeds > 1 MB: %v", err)
+	}
+	if feed.Title != "Big Podcast" {
+		t.Errorf("Title = %q, want %q", feed.Title, "Big Podcast")
+	}
+	if len(feed.Entries) != 5000 {
+		t.Errorf("got %d entries, want 5000", len(feed.Entries))
+	}
+}
+
+func TestFetchFeed_ExceedsLimit(t *testing.T) {
+	// Serve a response body that exceeds maxFeedSize. The server streams
+	// the data so we don't need to allocate the full payload in the test.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/xml")
+		// Write a valid XML start so it's clearly not a format problem.
+		w.Write([]byte(`<?xml version="1.0"?><rss version="2.0"><channel><title>Huge</title>`))
+		// Pad with enough items to exceed 10 MB.
+		chunk := []byte(`<item><title>Episode</title><link>https://example.com/ep</link></item>`)
+		for written := 0; written < maxFeedSize; written += len(chunk) {
+			w.Write(chunk)
+		}
+		w.Write([]byte(`</channel></rss>`))
+	}))
+	defer srv.Close()
+
+	_, err := fetchFeed(context.Background(), srv.Client(), srv.URL)
+	if err == nil {
+		t.Fatal("expected error for feed exceeding size limit")
+	}
+	if !strings.Contains(err.Error(), "size limit") {
+		t.Errorf("error %q should mention size limit", err.Error())
 	}
 }
 
