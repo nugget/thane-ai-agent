@@ -87,7 +87,7 @@ func (s *TempFileStore) Create(ctx context.Context, convID, label, content strin
 	}
 
 	s.logger.Info("temp file created",
-		"conversation", convID,
+		"conversation_id", convID,
 		"label", label,
 		"path", absPath,
 		"bytes", len(content),
@@ -112,7 +112,7 @@ func (s *TempFileStore) ExpandLabels(convID, text string) string {
 	mappings, err := s.state.List(ns)
 	if err != nil {
 		s.logger.Warn("failed to list temp file labels",
-			"conversation", convID,
+			"conversation_id", convID,
 			"error", err,
 		)
 		return text
@@ -155,7 +155,7 @@ func (s *TempFileStore) Cleanup(convID string) error {
 	for label, path := range mappings {
 		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 			s.logger.Warn("failed to remove temp file",
-				"conversation", convID,
+				"conversation_id", convID,
 				"label", label,
 				"path", path,
 				"error", err,
@@ -168,7 +168,7 @@ func (s *TempFileStore) Cleanup(convID string) error {
 	}
 
 	s.logger.Info("temp files cleaned up",
-		"conversation", convID,
+		"conversation_id", convID,
 		"count", len(mappings),
 	)
 	return nil

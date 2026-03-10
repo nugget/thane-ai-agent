@@ -64,7 +64,7 @@ func (a *ArchiveAdapter) ArchiveConversation(conversationID string, messages []M
 	a.linkIterations(conversationID, sessionID)
 
 	a.logger.Info("conversation archived",
-		"conversation", conversationID,
+		"conversation_id", conversationID,
 		"messages", affected,
 		"reason", reason,
 	)
@@ -82,7 +82,7 @@ func (a *ArchiveAdapter) archiveToolCalls(conversationID, sessionID string) {
 	if affected > 0 {
 		a.logger.Info("tool calls archived",
 			"count", affected,
-			"conversation", conversationID,
+			"conversation_id", conversationID,
 		)
 	}
 }
@@ -94,7 +94,7 @@ func (a *ArchiveAdapter) linkIterations(conversationID, sessionID string) {
 	}
 	if err := a.store.LinkPendingIterationToolCalls(sessionID); err != nil {
 		a.logger.Warn("failed to link tool calls to iterations",
-			"conversation", conversationID,
+			"conversation_id", conversationID,
 			"error", err,
 		)
 	}
@@ -113,7 +113,7 @@ func (a *ArchiveAdapter) StartSession(conversationID string) (string, error) {
 
 	a.logger.Info("session started",
 		"session", ShortID(sess.ID),
-		"conversation", conversationID,
+		"conversation_id", conversationID,
 	)
 	return sess.ID, nil
 }

@@ -891,7 +891,7 @@ func TestAppendIterationLog(t *testing.T) {
 		Supervisor:   false,
 	}
 
-	l.appendIterationLog(result, "metacog-12345", 8*time.Minute)
+	l.appendIterationLog(deps.Logger, result, "metacog-12345", 8*time.Minute)
 
 	data, err := os.ReadFile(statePath)
 	if err != nil {
@@ -948,7 +948,7 @@ func TestAppendIterationLog_NoStateFile(t *testing.T) {
 		Elapsed:      time.Second,
 	}
 
-	l.appendIterationLog(result, "metacog-first", 5*time.Minute)
+	l.appendIterationLog(deps.Logger, result, "metacog-first", 5*time.Minute)
 
 	statePath := filepath.Join(deps.WorkspacePath, "metacognitive.md")
 	data, err := os.ReadFile(statePath)

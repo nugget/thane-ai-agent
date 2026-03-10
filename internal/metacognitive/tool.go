@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/nugget/thane-ai-agent/internal/logging"
 	"github.com/nugget/thane-ai-agent/internal/tools"
 )
 
@@ -45,7 +46,7 @@ func (l *Loop) RegisterTools(registry *tools.Registry) {
 			},
 			"required": []string{"duration"},
 		},
-		Handler: func(_ context.Context, args map[string]any) (string, error) {
+		Handler: func(ctx context.Context, args map[string]any) (string, error) {
 			durStr, _ := args["duration"].(string)
 			if durStr == "" {
 				// Local models often pass integers meaning minutes.
@@ -73,7 +74,7 @@ func (l *Loop) RegisterTools(registry *tools.Registry) {
 			}
 
 			l.setNextSleep(d)
-			l.deps.Logger.Info("metacognitive sleep set",
+			logging.Logger(ctx).Info("metacognitive sleep set",
 				"duration", d.Round(time.Second),
 				"reason", reason,
 			)
@@ -100,19 +101,20 @@ func (l *Loop) RegisterTools(registry *tools.Registry) {
 			},
 			"required": []string{"content"},
 		},
-		Handler: func(_ context.Context, args map[string]any) (string, error) {
+		Handler: func(ctx context.Context, args map[string]any) (string, error) {
 			content, _ := args["content"].(string)
 			if len(content) < minStateContentLen {
 				return "", fmt.Errorf("content too short (%d chars, minimum %d)", len(content), minStateContentLen)
 			}
 
+			log := logging.Logger(ctx)
 			statePath := l.stateFilePath()
 
 			// Save previous version as .prev backup.
 			if existing, err := os.ReadFile(statePath); err == nil {
 				prevPath := statePath + ".prev"
 				if writeErr := os.WriteFile(prevPath, existing, 0o644); writeErr != nil {
-					l.deps.Logger.Warn("failed to save previous state file",
+					log.Warn("failed to save previous state file",
 						"error", writeErr,
 						"path", prevPath,
 					)
@@ -134,10 +136,9 @@ func (l *Loop) RegisterTools(registry *tools.Registry) {
 				return "", fmt.Errorf("write state file: %w", err)
 			}
 
-			l.deps.Logger.Info("metacognitive state updated",
+			log.Info("metacognitive state updated",
 				"path", statePath,
 				"bytes", len(fullContent),
-				"conversation_id", convID,
 			)
 
 			return fmt.Sprintf("State file updated (%d bytes) at %s.", len(fullContent), statePath), nil
@@ -165,7 +166,7 @@ func (l *Loop) RegisterTools(registry *tools.Registry) {
 				},
 				"required": []string{"observation"},
 			},
-			Handler: func(_ context.Context, args map[string]any) (string, error) {
+			Handler: func(ctx context.Context, args map[string]any) (string, error) {
 				observation, _ := args["observation"].(string)
 				if len(observation) < minStateContentLen {
 					return "", fmt.Errorf("observation too short (%d chars, minimum %d)", len(observation), minStateContentLen)
@@ -196,10 +197,9 @@ func (l *Loop) RegisterTools(registry *tools.Registry) {
 					return "", fmt.Errorf("write ego file: %w", err)
 				}
 
-				l.deps.Logger.Info("ego observation appended",
+				logging.Logger(ctx).Info("ego observation appended",
 					"path", egoPath,
 					"bytes", len(block),
-					"conversation_id", convID,
 				)
 
 				return fmt.Sprintf("Observation appended to core:ego.md (%d bytes).", len(block)), nil
