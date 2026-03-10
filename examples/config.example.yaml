@@ -81,6 +81,12 @@ models:
 #     - topic: homeassistant/+/+/state   # HA entity state changes
 #     - topic: frigate/events            # Frigate camera events
 
+# Notifications / HITL (no separate config needed)
+# When both homeassistant and mqtt are configured, Thane automatically
+# registers an HA push notification provider and subscribes to the MQTT
+# callback topic ({device_name}/notification/callback) for human-in-the-loop
+# decision tracking. No additional config section is required.
+
 # Person presence tracking (optional)
 # Injects a "People & Presence" section into the system prompt with
 # home/away status and optional room-level presence via UniFi.
@@ -138,11 +144,12 @@ models:
 # Provides 18 native tools for issues, PRs, code review, and search
 # without requiring an MCP subprocess.
 # forge:
-#   providers:
+#   accounts:
 #     - name: github
-#       base_url: https://api.github.com
+#       provider: github
+#       url: https://api.github.com    # optional for GitHub (default), required for Gitea
 #       token: ghp_...
-#       default_owner: your-username
+#       owner: your-username           # default repo owner for unqualified references
 
 # Storage paths
 data_dir: ./db

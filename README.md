@@ -111,8 +111,9 @@ User ──→ API Server ──→ Agent Loop ──→ Response
               │        Delegates      Notifications
               │     (local models)   (HITL callbacks)
               │
-              ├──→ Web Dashboard
-              └──→ CardDAV Server
+              └──→ Web Dashboard
+
+CardDAV Server ──→ Contact Store (independent listener)
 ```
 
 Thane's agent loop receives a request — from a user, event trigger, or scheduled task — assembles context from memory, contacts, and home state, activates capability tags for the task, plans tool calls, delegates tool-heavy work to local models, and shapes a response. The orchestrator model plans; delegates execute.
@@ -156,7 +157,7 @@ Config is auto-discovered from: `./config.yaml`, `~/Thane/config.yaml`, `~/.conf
 
 **Working today:** Conversation agent, HA integration (REST + WebSocket + MCP), delegation with execution summaries, capability tag system, native email (IMAP/SMTP), email polling, Signal messaging bridge, vCard-aligned contact directory with trust zones (admin/household/trusted/known), CardDAV server for native contact sync, VCF import/export with QR codes, actionable notifications with HITL callbacks, model routing with quality/speed hints, semantic memory, self-reflection, session management, anticipation engine, task scheduler, RSS/Atom feed monitoring, media analysis vault, web dashboard with data browsers, GitHub/Forgejo integration (18 tools), event bus, MQTT telemetry, web search/fetch, shell exec, operational state store with TTL support, unified database (thane.db), execution tracing.
 
-**Next up:** Egress gate for outbound message control (#336), dynamic model registry (#93), email trust-zone triage on poll, notification channel expansion (Signal delivery).
+**Next up:** Egress gate for outbound message control (#336), dynamic model registry (#93), email trust-zone triage on poll, notification channel expansion (Signal delivery). **Bug fixes landing in 0.8.0:** capability tag refresh (#507), delegate tool timeout (#508), feed size limit (#511).
 
 **Longer term:** HA Add-on packaging, Apple ecosystem integration, git-backed identity store (#43), voice pipeline integration, IMAP IDLE for push notifications, multi-instance deployment.
 
