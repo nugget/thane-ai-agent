@@ -2507,8 +2507,10 @@ func (a *logStoreAdapter) QueryBySession(sessionID, level, subsystem string, lim
 }
 
 // newLogStore returns a [web.LogStore] backed by the given database, or
-// nil when db is nil (log indexing disabled).
-func newLogStore(db *sql.DB) *logStoreAdapter {
+// nil when db is nil (log indexing disabled). The return type is the
+// interface itself so that a nil db produces a true nil interface value
+// rather than a non-nil interface wrapping a nil pointer.
+func newLogStore(db *sql.DB) web.LogStore {
 	if db == nil {
 		return nil
 	}
