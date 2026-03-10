@@ -15,6 +15,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/awareness"
 	"github.com/nugget/thane-ai-agent/internal/config"
 	"github.com/nugget/thane-ai-agent/internal/llm"
+	"github.com/nugget/thane-ai-agent/internal/logging"
 	"github.com/nugget/thane-ai-agent/internal/memory"
 	"github.com/nugget/thane-ai-agent/internal/prompts"
 	"github.com/nugget/thane-ai-agent/internal/router"
@@ -168,6 +169,15 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 	// Create an archive session for this delegate execution so it
 	// appears in the session inspector alongside user conversations.
 	convID := "delegate-" + did[:8]
+
+	// Inject a context logger with delegate-specific trace fields so
+	// all downstream code (tool implementations) inherits them.
+	log := e.logger.With(
+		"subsystem", logging.SubsystemDelegate,
+		"delegate_id", did,
+	)
+	ctx = logging.WithLogger(ctx, log)
+
 	var archiveSessionID string
 	if e.archiver != nil {
 		parentSessionID := tools.SessionIDFromContext(ctx)
@@ -183,8 +193,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 
 		sess, err := e.archiver.StartSessionWithOptions(convID, opts...)
 		if err != nil {
-			e.logger.Warn("failed to create archive session for delegate",
-				"delegate_id", did, "error", err)
+			log.Warn("failed to create archive session for delegate", "error", err)
 		} else {
 			archiveSessionID = sess.ID
 		}
@@ -212,10 +221,11 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 	toolNames := reg.AllToolNames()
 	sort.Strings(toolNames)
 
-	e.logger.Info("delegate started",
-		"delegate_id", did,
+	log = log.With("profile", profile.Name)
+	ctx = logging.WithLogger(ctx, log)
+
+	log.Info("delegate started",
 		"task", truncate(task, 200),
-		"profile", profile.Name,
 		"guidance", truncate(guidance, 200),
 		"tags", tags,
 		"tools_available", len(toolDefs),
@@ -288,9 +298,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 	var completed bool
 	defer func() {
 		if !completed && ctx.Err() == nil {
-			e.logger.Error("delegate terminated without completion record",
-				"delegate_id", did,
-				"profile", profileName,
+			log.Error("delegate terminated without completion record",
 				"elapsed", time.Since(startTime).Round(time.Millisecond),
 			)
 		}
@@ -299,15 +307,17 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 	illegalStrikes := 0 // Consecutive iterations with illegal tool calls
 
 	for i := range maxIter {
+		// Inject iteration index into context so downstream tool
+		// implementations inherit it automatically via logging.Logger(ctx).
+		iterLog := log.With("iter", i)
+		iterCtx := logging.WithLogger(ctx, iterLog)
+
 		// Check context at iteration boundary. External cancellation
 		// (caller cancelled) returns an error; our own deadline
 		// (wall clock enforcement) returns an exhaustion result.
 		if err := ctx.Err(); err != nil {
 			if errors.Is(err, context.DeadlineExceeded) {
-				e.logger.Warn("delegate context deadline at iteration boundary",
-					"delegate_id", did,
-					"profile", profile.Name,
-					"iter", i,
+				iterLog.Warn("delegate context deadline at iteration boundary",
 					"elapsed", time.Since(startTime).Round(time.Millisecond),
 				)
 				completed = true
@@ -351,9 +361,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 		// Check wall clock limit (may fire before context deadline due
 		// to scheduling jitter).
 		if time.Since(startTime) > maxDuration {
-			e.logger.Warn("delegate wall clock exceeded",
-				"delegate_id", did,
-				"profile", profile.Name,
+			iterLog.Warn("delegate wall clock exceeded",
 				"elapsed", time.Since(startTime).Round(time.Millisecond),
 				"max_duration", maxDuration,
 			)
@@ -381,25 +389,19 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 
 		iterStart := time.Now()
 
-		e.logger.Info("delegate llm call",
-			"delegate_id", did,
-			"profile", profile.Name,
-			"iter", i,
+		iterLog.Info("delegate llm call",
 			"model", model,
 			"msgs", len(messages),
 		)
 
-		resp, err := e.llm.ChatStream(ctx, model, messages, toolDefs, nil)
+		resp, err := e.llm.ChatStream(iterCtx, model, messages, toolDefs, nil)
 		if err != nil {
 			// If our context deadline fired (wall clock enforcement),
 			// return an exhaustion result instead of an opaque error.
 			// Cannot call forceTextResponse — context is already cancelled.
 			// External cancellation (context.Canceled) is propagated as an error.
 			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-				e.logger.Warn("delegate context deadline exceeded during llm call",
-					"delegate_id", did,
-					"profile", profile.Name,
-					"iter", i,
+				iterLog.Warn("delegate context deadline exceeded during llm call",
 					"elapsed", time.Since(startTime).Round(time.Millisecond),
 					"max_duration", maxDuration,
 				)
@@ -451,9 +453,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 
 		// Re-check wall clock after LLM call — it may have taken a while.
 		if time.Since(startTime) > maxDuration {
-			e.logger.Warn("delegate wall clock exceeded after llm call",
-				"delegate_id", did,
-				"profile", profile.Name,
+			iterLog.Warn("delegate wall clock exceeded after llm call",
 				"elapsed", time.Since(startTime).Round(time.Millisecond),
 				"max_duration", maxDuration,
 			)
@@ -491,10 +491,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 			})
 		}
 
-		e.logger.Info("delegate llm response",
-			"delegate_id", did,
-			"profile", profile.Name,
-			"iter", i,
+		iterLog.Info("delegate llm response",
 			"model", model,
 			"input_tokens", resp.InputTokens,
 			"output_tokens", resp.OutputTokens,
@@ -523,10 +520,8 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 			// Empty content after tool-call iterations is a silent failure.
 			// The model completed its tool work but never produced text output.
 			if content == "" && i > 0 {
-				e.logger.Warn("delegate produced empty result after tool calls",
-					"delegate_id", did,
-					"profile", profile.Name,
-					"iter", i+1,
+				iterLog.Warn("delegate produced empty result after tool calls",
+					"total_iter", i+1,
 				)
 				completed = true
 				e.recordCompletion(&completionRecord{
@@ -596,9 +591,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 
 		// Check token budget before executing tools.
 		if totalOutput >= maxTokens {
-			e.logger.Warn("delegate token budget exhausted",
-				"delegate_id", did,
-				"profile", profile.Name,
+			iterLog.Warn("delegate token budget exhausted",
 				"cumul_output", totalOutput,
 				"max_tokens", maxTokens,
 			)
@@ -642,14 +635,11 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 
 			toolStart := time.Now()
 
-			e.logger.Info("delegate tool exec",
-				"delegate_id", did,
-				"profile", profile.Name,
-				"iter", i,
+			iterLog.Info("delegate tool exec",
 				"tool", tc.Function.Name,
 			)
 
-			toolCtx := tools.WithConversationID(ctx, convID)
+			toolCtx := tools.WithConversationID(iterCtx, convID)
 			toolTimeout := profile.ToolTimeout
 			if toolTimeout == 0 {
 				toolTimeout = defaultToolTimeout
@@ -669,17 +659,13 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 				if errors.As(err, &unavail) {
 					illegalCall = true
 					result = fmt.Sprintf(prompts.IllegalToolMessage, tc.Function.Name)
-					e.logger.Warn("delegate illegal tool call",
-						"delegate_id", did,
-						"profile", profile.Name,
+					iterLog.Warn("delegate illegal tool call",
 						"tool", tc.Function.Name,
 					)
 				} else if errors.Is(toolCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil {
 					// Per-tool timeout fired but parent context is still alive —
 					// report as a tool error so the LLM can adapt.
-					e.logger.Warn("delegate tool exec timed out",
-						"delegate_id", did,
-						"profile", profile.Name,
+					iterLog.Warn("delegate tool exec timed out",
 						"tool", tc.Function.Name,
 						"timeout", toolTimeout,
 					)
@@ -688,9 +674,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 					// Parent context is done (our deadline or external
 					// cancellation) — stop executing remaining tool calls.
 					if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-						e.logger.Warn("delegate context deadline exceeded during tool exec",
-							"delegate_id", did,
-							"profile", profile.Name,
+						iterLog.Warn("delegate context deadline exceeded during tool exec",
 							"tool", tc.Function.Name,
 							"elapsed", time.Since(startTime).Round(time.Millisecond),
 						)
@@ -738,17 +722,13 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 				} else {
 					// Generic tool error — report to LLM and continue.
 					result = "Error: " + err.Error()
-					e.logger.Error("delegate tool exec failed",
-						"delegate_id", did,
-						"profile", profile.Name,
+					iterLog.Error("delegate tool exec failed",
 						"tool", tc.Function.Name,
 						"error", err,
 					)
 				}
 			} else {
-				e.logger.Debug("delegate tool exec done",
-					"delegate_id", did,
-					"profile", profile.Name,
+				iterLog.Debug("delegate tool exec done",
 					"tool", tc.Function.Name,
 					"result_len", len(result),
 					"elapsed", time.Since(toolStart).Round(time.Millisecond),
@@ -770,9 +750,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 		if illegalCall {
 			illegalStrikes++
 			if illegalStrikes >= maxIllegalStrikes {
-				e.logger.Warn("repeated illegal tool calls, forcing text response",
-					"delegate_id", did,
-					"profile", profile.Name,
+				iterLog.Warn("repeated illegal tool calls, forcing text response",
 					"strikes", illegalStrikes,
 				)
 				iterRec.breakReason = ExhaustIllegalTool
@@ -799,9 +777,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 					iterations:       iterations,
 				})
 			}
-			e.logger.Warn("delegate illegal tool call, allowing recovery iteration",
-				"delegate_id", did,
-				"profile", profile.Name,
+			iterLog.Warn("delegate illegal tool call, allowing recovery iteration",
 				"strikes", illegalStrikes,
 			)
 		} else {
@@ -810,9 +786,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 
 		// Re-check wall clock after tool execution.
 		if time.Since(startTime) > maxDuration {
-			e.logger.Warn("delegate wall clock exceeded after tool exec",
-				"delegate_id", did,
-				"profile", profile.Name,
+			iterLog.Warn("delegate wall clock exceeded after tool exec",
 				"elapsed", time.Since(startTime).Round(time.Millisecond),
 				"max_duration", maxDuration,
 			)
@@ -847,9 +821,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 	}
 
 	// Max iterations exhausted — force a text response.
-	e.logger.Warn("delegate max iterations reached",
-		"delegate_id", did,
-		"profile", profile.Name,
+	log.Warn("delegate max iterations reached",
 		"max_iter", maxIter,
 	)
 	completed = true

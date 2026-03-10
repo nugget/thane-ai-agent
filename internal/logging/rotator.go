@@ -1,18 +1,3 @@
-// Package logging provides self-managed log file rotation for Thane.
-//
-// The [Rotator] implements [io.WriteCloser] and handles daily log rotation
-// with optional gzip compression of previous days' files. It is designed
-// to be used as the output writer for an [slog.Handler], giving Thane
-// control over its own log lifecycle without depending on external tools
-// like logrotate.
-//
-// Log files are organized by date:
-//
-//	logs/
-//	  thane.log                    # current, active
-//	  thane-2026-03-09.log.gz     # rotated daily, compressed
-//	  thane-2026-03-08.log.gz
-//	  ...never deleted...
 package logging
 
 import (

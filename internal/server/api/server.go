@@ -17,6 +17,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/checkpoint"
 	"github.com/nugget/thane-ai-agent/internal/config"
 	"github.com/nugget/thane-ai-agent/internal/events"
+	"github.com/nugget/thane-ai-agent/internal/logging"
 	"github.com/nugget/thane-ai-agent/internal/memory"
 	"github.com/nugget/thane-ai-agent/internal/router"
 	"github.com/nugget/thane-ai-agent/internal/server/web"
@@ -417,13 +418,15 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 
+	ctx := logging.WithLogger(r.Context(), s.logger.With("subsystem", logging.SubsystemAPI))
+
 	if req.Stream {
-		s.handleStreamingCompletion(w, r, agentReq)
+		s.handleStreamingCompletion(w, r.WithContext(ctx), agentReq)
 		return
 	}
 
 	// Non-streaming: run and return complete response
-	resp, err := s.loop.Run(r.Context(), agentReq, nil)
+	resp, err := s.loop.Run(ctx, agentReq, nil)
 	if err != nil {
 		s.logger.Error("agent loop failed", "error", err)
 		s.errorResponse(w, http.StatusInternalServerError, "agent error")
@@ -493,6 +496,8 @@ func (s *Server) handleSimpleChat(w http.ResponseWriter, r *http.Request) {
 		convID = uuid.New().String()
 	}
 
+	ctx := logging.WithLogger(r.Context(), s.logger.With("subsystem", logging.SubsystemAPI))
+
 	agentReq := &agent.Request{
 		Messages: []agent.Message{
 			{Role: "user", Content: req.Message},
@@ -503,7 +508,7 @@ func (s *Server) handleSimpleChat(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 
-	resp, err := s.loop.Run(r.Context(), agentReq, nil)
+	resp, err := s.loop.Run(ctx, agentReq, nil)
 	if err != nil {
 		s.logger.Error("agent loop failed", "error", err)
 		s.errorResponse(w, http.StatusInternalServerError, "agent error: "+err.Error())
@@ -610,7 +615,8 @@ func (s *Server) handleStreamingCompletion(w http.ResponseWriter, r *http.Reques
 		}
 	}
 
-	// Run agent with streaming
+	// Run agent with streaming — context carries the subsystem logger
+	// injected by the calling handler (handleChatCompletions or Ollama).
 	resp, err := s.loop.Run(r.Context(), agentReq, streamCallback)
 	if err != nil {
 		s.logger.Error("agent loop failed", "error", err)

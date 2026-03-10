@@ -2449,8 +2449,12 @@ func resolvePath(p string, resolver *paths.Resolver) string {
 // across upgrades.
 func newLogger(w io.Writer, level slog.Level, format string) *slog.Logger {
 	opts := &slog.HandlerOptions{
-		Level:       level,
-		ReplaceAttr: config.ReplaceLogLevelNames,
+		Level:     level,
+		AddSource: true,
+		ReplaceAttr: logging.ChainReplaceAttr(
+			config.ReplaceLogLevelNames,
+			logging.ShortenSource,
+		),
 	}
 	var handler slog.Handler
 	if format == "json" {
