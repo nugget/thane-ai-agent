@@ -3,6 +3,8 @@ package logging
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
+	"fmt"
 	"log/slog"
 	"testing"
 	"time"
@@ -157,6 +159,74 @@ func TestIndexHandler_NonPromotedGoToAttrs(t *testing.T) {
 	// The attrs JSON should contain both custom fields.
 	if got := attrs.String; got == "" || got == "{}" {
 		t.Errorf("attrs = %q, expected non-empty JSON", got)
+	}
+}
+
+func TestIndexHandler_ErrorValueInAttrs(t *testing.T) {
+	db := openTestDB(t)
+	inner := slog.NewJSONHandler(discardWriter{}, nil)
+	h := NewIndexHandler(inner, db, nil)
+
+	logger := slog.New(h)
+	logger.Info("operation failed", "error", fmt.Errorf("connection refused"))
+	h.Close()
+
+	var attrs sql.NullString
+	err := db.QueryRow(`SELECT attrs FROM log_entries LIMIT 1`).Scan(&attrs)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !attrs.Valid {
+		t.Fatal("attrs should not be null")
+	}
+
+	// The error should be stored as its message string, not "{}".
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(attrs.String), &parsed); err != nil {
+		t.Fatalf("parse attrs JSON: %v", err)
+	}
+	got, ok := parsed["error"]
+	if !ok {
+		t.Fatal("attrs missing 'error' key")
+	}
+	if got != "connection refused" {
+		t.Errorf("error = %v, want %q", got, "connection refused")
+	}
+}
+
+func TestIndexHandler_WithGroupPrefix(t *testing.T) {
+	db := openTestDB(t)
+	inner := slog.NewJSONHandler(discardWriter{}, nil)
+	h := NewIndexHandler(inner, db, nil)
+
+	// Create a handler inside a group.
+	grouped := h.WithGroup("source")
+	logger := slog.New(grouped)
+	logger.Info("grouped entry", "file", "main.go", "line", 42)
+	h.Close()
+
+	var attrs sql.NullString
+	err := db.QueryRow(`SELECT attrs FROM log_entries LIMIT 1`).Scan(&attrs)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !attrs.Valid {
+		t.Fatal("attrs should not be null")
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(attrs.String), &parsed); err != nil {
+		t.Fatalf("parse attrs JSON: %v", err)
+	}
+
+	// Keys should be prefixed with the group name.
+	if _, ok := parsed["source.file"]; !ok {
+		t.Errorf("expected key 'source.file', got attrs: %v", parsed)
+	}
+	if _, ok := parsed["source.line"]; !ok {
+		t.Errorf("expected key 'source.line', got attrs: %v", parsed)
 	}
 }
 

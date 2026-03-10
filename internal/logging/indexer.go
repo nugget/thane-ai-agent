@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 )
@@ -291,17 +292,9 @@ func (h *IndexHandler) classifyAttr(a slog.Attr, entry *indexEntry, extras map[s
 
 	key := a.Key
 
-	// If we're inside a group, promoted keys don't apply (they live at
-	// the top level only). Prefix the key and store in extras.
-	if len(groups) > 0 {
-		for _, g := range groups {
-			key = g + "." + key
-		}
-		extras[key] = a.Value.Any()
-		return
-	}
-
-	// Handle slog.Group attributes (nested key-value pairs).
+	// Handle slog.Group attributes (nested key-value pairs) before
+	// the group-prefix path so that group-valued attrs are always
+	// recursively flattened regardless of the current group depth.
 	if a.Value.Kind() == slog.KindGroup {
 		attrs := a.Value.Group()
 		childGroups := groups
@@ -314,8 +307,14 @@ func (h *IndexHandler) classifyAttr(a slog.Attr, entry *indexEntry, extras map[s
 		return
 	}
 
-	// Promote known keys into dedicated columns.
-	if promotedKeys[key] {
+	// Build the fully qualified key when inside a group.
+	qualifiedKey := key
+	if len(groups) > 0 {
+		qualifiedKey = strings.Join(groups, ".") + "." + key
+	}
+
+	// Promote known keys into dedicated columns (top-level only).
+	if len(groups) == 0 && promotedKeys[key] {
 		v := a.Value.String()
 		switch key {
 		case "request_id":
@@ -340,7 +339,22 @@ func (h *IndexHandler) classifyAttr(a slog.Attr, entry *indexEntry, extras map[s
 		return
 	}
 
-	extras[key] = a.Value.Any()
+	extras[qualifiedKey] = attrValue(a)
+}
+
+// attrValue returns a JSON-friendly representation of the attribute's
+// value. For error and fmt.Stringer types whose underlying struct
+// would marshal as "{}", it returns the string representation instead.
+func attrValue(a slog.Attr) any {
+	v := a.Value.Any()
+	switch tv := v.(type) {
+	case error:
+		return tv.Error()
+	case fmt.Stringer:
+		return tv.String()
+	default:
+		return v
+	}
 }
 
 // cloneAttrs returns a shallow copy of the attribute slice.

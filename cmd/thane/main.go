@@ -369,8 +369,8 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 				indexDB.Close()
 			} else {
 				indexHandler := logging.NewIndexHandler(handler, indexDB, rotator)
-				defer indexHandler.Close()
 				defer indexDB.Close()
+				defer indexHandler.Close() // LIFO: flush pending entries before closing DB
 				handler = indexHandler
 			}
 		}

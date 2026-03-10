@@ -213,6 +213,49 @@ func TestRotator_ConcurrentWrites(t *testing.T) {
 	}
 }
 
+func TestRotator_LineCount(t *testing.T) {
+	dir := t.TempDir()
+
+	r, err := Open(dir, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Fresh file starts at zero.
+	if got := r.LineCount(); got != 0 {
+		t.Errorf("initial LineCount = %d, want 0", got)
+	}
+
+	// Each write with one newline increments by one.
+	for i := 1; i <= 3; i++ {
+		if _, err := r.Write([]byte("line\n")); err != nil {
+			t.Fatal(err)
+		}
+		if got := r.LineCount(); got != i {
+			t.Errorf("after %d writes: LineCount = %d, want %d", i, got, i)
+		}
+	}
+	r.Close()
+
+	// Reopen the same-day file for append — counter should resume.
+	r2, err := Open(dir, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r2.Close()
+
+	if got := r2.LineCount(); got != 3 {
+		t.Errorf("after reopen: LineCount = %d, want 3", got)
+	}
+
+	if _, err := r2.Write([]byte("fourth\n")); err != nil {
+		t.Fatal(err)
+	}
+	if got := r2.LineCount(); got != 4 {
+		t.Errorf("after fourth write: LineCount = %d, want 4", got)
+	}
+}
+
 func TestRotator_CreatesDirIfMissing(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "nested", "logs")
 
