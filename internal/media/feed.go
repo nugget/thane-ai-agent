@@ -176,6 +176,11 @@ var ytChannelIDRe = regexp.MustCompile(`"channelId"\s*:\s*"(UC[a-zA-Z0-9_-]+)"`)
 // ytCanonicalRe matches canonical URLs with channel IDs.
 var ytCanonicalRe = regexp.MustCompile(`<link\s+rel="canonical"\s+href="https://www\.youtube\.com/channel/(UC[a-zA-Z0-9_-]+)"`)
 
+// ytAlternateFeedRe matches the RSS alternate link that YouTube embeds
+// in channel pages. This is the most direct signal — it contains the
+// full feed URL rather than requiring channel ID extraction.
+var ytAlternateFeedRe = regexp.MustCompile(`<link[^>]+type="application/rss\+xml"[^>]+href="([^"]+)"`)
+
 // isYouTubeHost reports whether host is a known YouTube hostname.
 func isYouTubeHost(host string) bool {
 	switch strings.ToLower(host) {
@@ -232,13 +237,20 @@ func resolveYouTubeFeed(ctx context.Context, httpClient *http.Client, rawURL str
 		return "", fmt.Errorf("channel page returned HTTP %d", resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 512*1024))
+	// YouTube @handle pages are ~1.1MB; all channel metadata (canonical
+	// link, alternate feed link, channelId JSON) sits at ~600KB+.
+	// The old 512KB limit silently missed everything.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		return "", fmt.Errorf("read channel page: %w", err)
 	}
 	html := string(body)
 
-	// Try canonical link first, then JSON metadata.
+	// Try alternate RSS link first (most direct — contains full feed URL),
+	// then canonical link, then JSON metadata.
+	if m := ytAlternateFeedRe.FindStringSubmatch(html); len(m) == 2 {
+		return m[1], nil
+	}
 	if m := ytCanonicalRe.FindStringSubmatch(html); len(m) == 2 {
 		return "https://www.youtube.com/feeds/videos.xml?channel_id=" + m[1], nil
 	}
