@@ -1,6 +1,7 @@
 package logging
 
 import (
+	"bytes"
 	"compress/gzip"
 	"fmt"
 	"io"
@@ -26,9 +27,10 @@ type Rotator struct {
 	dir      string
 	compress bool
 
-	mu      sync.Mutex
-	file    *os.File
-	curDate string // YYYY-MM-DD of the currently open file
+	mu        sync.Mutex
+	file      *os.File
+	curDate   string // YYYY-MM-DD of the currently open file
+	lineCount int    // lines written to the current active file
 }
 
 // Open creates a [Rotator] that writes to dir/thane.log. The directory
@@ -68,7 +70,26 @@ func (r *Rotator) Write(p []byte) (int, error) {
 		}
 	}
 
-	return r.file.Write(p)
+	n, err := r.file.Write(p)
+	if err == nil {
+		r.lineCount += bytes.Count(p, []byte{'\n'})
+	}
+	return n, err
+}
+
+// LineCount returns the number of lines written to the current active
+// file since it was opened (or last rotated). Caller must hold no lock;
+// the count is read under the internal mutex.
+func (r *Rotator) LineCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.lineCount
+}
+
+// ActiveFile returns the filename (not full path) of the current active
+// log file. This is always [activeLogName] ("thane.log").
+func (r *Rotator) ActiveFile() string {
+	return activeLogName
 }
 
 // Close closes the active log file.
@@ -130,8 +151,15 @@ func (r *Rotator) rotateLocked() error {
 }
 
 // openActive opens (or creates) thane.log for append and records today's date.
+// If the file already has content (e.g., process restart appending to the
+// same day's log), the line counter is initialized from the existing content
+// so that raw_line back-links remain accurate.
 func (r *Rotator) openActive() error {
 	activePath := filepath.Join(r.dir, activeLogName)
+
+	// Count existing lines before opening for append so the counter
+	// reflects the true line position in the file.
+	r.lineCount = countLines(activePath)
 
 	f, err := os.OpenFile(activePath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
@@ -200,4 +228,14 @@ func (r *Rotator) compressFile(src string, date string) error {
 	}
 
 	return os.Remove(src)
+}
+
+// countLines returns the number of newline characters in the file at
+// path. If the file does not exist or cannot be read, it returns 0.
+func countLines(path string) int {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return 0
+	}
+	return bytes.Count(data, []byte{'\n'})
 }
