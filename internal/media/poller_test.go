@@ -81,6 +81,10 @@ func TestCheckFeeds_NewEntries(t *testing.T) {
 	if !strings.Contains(msg, "[unknown]") {
 		t.Errorf("wake message should contain default trust zone [unknown], got: %q", msg)
 	}
+	// feed_id should be present for output path resolution.
+	if !strings.Contains(msg, "(feed_id: test1)") {
+		t.Errorf("wake message should contain feed_id, got: %q", msg)
+	}
 
 	// High-water mark should be updated.
 	hwm, _ := store.Get(feedNamespace, feedKeyLastEntryID("test1"))
@@ -262,8 +266,8 @@ func TestCheckFeeds_TrustZoneInWakeMessage(t *testing.T) {
 	if !strings.Contains(msg, "Trusted Source") {
 		t.Errorf("wake message should contain feed name, got: %q", msg)
 	}
-	// Verify format: **Name** [zone]: Title
-	if !strings.Contains(msg, "**Trusted Source** [trusted]: New Episode") {
+	// Verify format: **Name** [zone] (feed_id: ID): Title
+	if !strings.Contains(msg, "**Trusted Source** [trusted] (feed_id: tf1): New Episode") {
 		t.Errorf("wake message format incorrect, got: %q", msg)
 	}
 }
