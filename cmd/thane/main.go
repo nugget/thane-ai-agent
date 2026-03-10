@@ -66,7 +66,6 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/scheduler"
 	"github.com/nugget/thane-ai-agent/internal/search"
 	"github.com/nugget/thane-ai-agent/internal/server/api"
-	"github.com/nugget/thane-ai-agent/internal/server/web"
 	"github.com/nugget/thane-ai-agent/internal/talents"
 	"github.com/nugget/thane-ai-agent/internal/tools"
 	"github.com/nugget/thane-ai-agent/internal/unifi"
@@ -2062,42 +2061,6 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		return result
 	})
 
-	// --- Web dashboard ---
-	ws := web.NewWebServer(web.Config{
-		StatsFunc: func() web.StatsSnapshot {
-			return web.StatsSnapshot{
-				Build: buildinfo.RuntimeInfo(),
-			}
-		},
-		RouterFunc: func() web.RouterInfo {
-			return web.RouterInfo{
-				Stats:  rtr.GetStats(),
-				Models: rtr.GetModels(),
-			}
-		},
-		HealthFunc: func() map[string]web.HealthStatus {
-			status := connMgr.Status()
-			result := make(map[string]web.HealthStatus, len(status))
-			for name, s := range status {
-				result[name] = web.HealthStatus{
-					Connected: s.Ready,
-					Since:     s.LastCheck,
-					LastError: s.LastError,
-				}
-			}
-			return result
-		},
-		ContactStore:      contactStore,
-		FactStore:         factStore,
-		TaskStore:         sched,
-		AnticipationStore: anticipationStore,
-		SessionStore:      archiveStore,
-		LogStore:          newLogStore(indexDB),
-		LiveMessageSource: mem,
-		Logger:            logger,
-	})
-	server.SetWebServer(ws)
-
 	// --- Checkpointer ---
 	// Periodically snapshots application state (conversations, facts,
 	// scheduled tasks) to enable crash recovery. Also creates a snapshot
@@ -2504,26 +2467,6 @@ func resolvePath(p string, resolver *paths.Resolver) string {
 		}
 	}
 	return p
-}
-
-// logStoreAdapter bridges a raw [*sql.DB] to the [web.LogStore] interface
-// so the web dashboard can query the structured log index.
-type logStoreAdapter struct{ db *sql.DB }
-
-// QueryBySession delegates to [logging.QueryBySession].
-func (a *logStoreAdapter) QueryBySession(sessionID, level, subsystem string, limit int) ([]logging.LogEntry, error) {
-	return logging.QueryBySession(a.db, sessionID, level, subsystem, limit)
-}
-
-// newLogStore returns a [web.LogStore] backed by the given database, or
-// nil when db is nil (log indexing disabled). The return type is the
-// interface itself so that a nil db produces a true nil interface value
-// rather than a non-nil interface wrapping a nil pointer.
-func newLogStore(db *sql.DB) web.LogStore {
-	if db == nil {
-		return nil
-	}
-	return &logStoreAdapter{db: db}
 }
 
 // newHandler creates a structured [slog.Handler] that writes to w at
