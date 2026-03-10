@@ -9,7 +9,7 @@ func TestShortenSource_StripsModulePrefix(t *testing.T) {
 	src := &slog.Source{
 		File:     "github.com/nugget/thane-ai-agent/internal/agent/loop.go",
 		Line:     730,
-		Function: "Run",
+		Function: "github.com/nugget/thane-ai-agent/internal/agent.(*Loop).Run",
 	}
 	a := slog.Any(slog.SourceKey, src)
 
@@ -19,12 +19,37 @@ func TestShortenSource_StripsModulePrefix(t *testing.T) {
 	if !ok {
 		t.Fatal("expected *slog.Source in result")
 	}
-	want := "internal/agent/loop.go"
-	if gotSrc.File != want {
+	if want := "internal/agent/loop.go"; gotSrc.File != want {
 		t.Errorf("File = %q, want %q", gotSrc.File, want)
+	}
+	if want := "internal/agent.(*Loop).Run"; gotSrc.Function != want {
+		t.Errorf("Function = %q, want %q", gotSrc.Function, want)
 	}
 	if gotSrc.Line != 730 {
 		t.Errorf("Line = %d, want 730", gotSrc.Line)
+	}
+}
+
+func TestShortenSource_AbsolutePathUnchanged(t *testing.T) {
+	// Without -trimpath, Go embeds absolute filesystem paths.
+	// ShortenSource doesn't match these — -trimpath is required.
+	src := &slog.Source{
+		File:     "/Users/nugget/Sync/Projects/thane-ai-agent/internal/agent/loop.go",
+		Line:     730,
+		Function: "github.com/nugget/thane-ai-agent/internal/agent.(*Loop).Run",
+	}
+	a := slog.Any(slog.SourceKey, src)
+
+	got := ShortenSource(nil, a)
+
+	gotSrc := got.Value.Any().(*slog.Source)
+	// File is absolute — no match, passes through unchanged.
+	if gotSrc.File != src.File {
+		t.Errorf("File = %q, should be unchanged for absolute paths", gotSrc.File)
+	}
+	// Function still has module prefix — should be stripped.
+	if want := "internal/agent.(*Loop).Run"; gotSrc.Function != want {
+		t.Errorf("Function = %q, want %q", gotSrc.Function, want)
 	}
 }
 

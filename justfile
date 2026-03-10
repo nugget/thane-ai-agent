@@ -27,7 +27,7 @@ generate:
 [group('build')]
 build target_os=host_os target_arch=host_arch: generate
     @mkdir -p dist
-    GOOS={{target_os}} GOARCH={{target_arch}} go build -tags "sqlite_fts5" -ldflags "{{ldflags}}" -o dist/thane-{{target_os}}-{{target_arch}} ./cmd/thane
+    GOOS={{target_os}} GOARCH={{target_arch}} go build -trimpath -tags "sqlite_fts5" -ldflags "{{ldflags}}" -o dist/thane-{{target_os}}-{{target_arch}} ./cmd/thane
     @# Ad-hoc sign macOS binaries so Gatekeeper doesn't kill them on each rebuild
     @if [ "{{target_os}}" = "darwin" ]; then codesign -s - dist/thane-{{target_os}}-{{target_arch}} 2>/dev/null && echo "Signed dist/thane-{{target_os}}-{{target_arch}}"; fi
     @echo "Built dist/thane-{{target_os}}-{{target_arch}}"
