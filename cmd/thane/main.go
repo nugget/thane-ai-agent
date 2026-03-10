@@ -854,6 +854,15 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		logger.Info("context inject files registered", "files", len(resolved))
 	}
 
+	// --- OpenClaw profile ---
+	if cfg.OpenClaw != nil {
+		loop.SetOpenClawConfig(cfg.OpenClaw)
+		logger.Info("thane:openclaw profile enabled",
+			"workspace", cfg.OpenClaw.WorkspacePath,
+			"skills_dirs", cfg.OpenClaw.SkillsDirs,
+		)
+	}
+
 	// Start initial session
 	archiveAdapter.EnsureSession("default")
 

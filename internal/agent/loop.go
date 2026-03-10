@@ -22,6 +22,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/llm"
 	"github.com/nugget/thane-ai-agent/internal/logging"
 	"github.com/nugget/thane-ai-agent/internal/memory"
+	"github.com/nugget/thane-ai-agent/internal/openclaw"
 	"github.com/nugget/thane-ai-agent/internal/prompts"
 	"github.com/nugget/thane-ai-agent/internal/router"
 	"github.com/nugget/thane-ai-agent/internal/scheduler"
@@ -45,6 +46,15 @@ type Request struct {
 	SkipContext    bool              `json:"-"`               // Skip memory, tools, and context injection (for lightweight completions)
 	ExcludeTools   []string          `json:"-"`               // Tool names to exclude from this run (e.g., lifecycle tools for recurring wakes)
 	SkipTagFilter  bool              `json:"-"`               // Bypass capability tag filtering (for self-scoping contexts like metacognitive)
+
+	// SystemPrompt, when non-empty, replaces the output of
+	// buildSystemPrompt(). Used by profiles that assemble their
+	// own context externally (e.g., thane:openclaw).
+	SystemPrompt string `json:"-"`
+
+	// isFlushTurn is an internal flag that prevents recursive pre-compaction
+	// memory flush turns. Not settable by callers.
+	isFlushTurn bool
 }
 
 // StreamEvent is a single event in a streaming response.
@@ -102,6 +112,10 @@ type ToolCallRecorder interface {
 type Compactor interface {
 	NeedsCompaction(conversationID string) bool
 	Compact(ctx context.Context, conversationID string) error
+	// CompactionThreshold returns the token count at which compaction
+	// triggers. Used by profiles that need to run pre-compaction hooks
+	// (e.g., OpenClaw memory flush).
+	CompactionThreshold() int
 }
 
 // FailoverHandler is called before model failover to allow checkpointing.
@@ -185,6 +199,10 @@ type Loop struct {
 
 	// haInject resolves <!-- ha-inject: ... --> directives in tag context files.
 	haInject homeassistant.StateFetcher
+
+	// openClawConfig holds the OpenClaw workspace configuration.
+	// When non-nil, the thane:openclaw Ollama profile is available.
+	openClawConfig *config.OpenClawConfig
 
 	// nowFunc returns the current time. Tests override this for
 	// deterministic output; production code leaves it as time.Now.
@@ -318,6 +336,18 @@ func (l *Loop) SetChannelTags(ct map[string][]string) {
 // files are resolved to live entity state on each turn.
 func (l *Loop) SetHAInject(fetcher homeassistant.StateFetcher) {
 	l.haInject = fetcher
+}
+
+// SetOpenClawConfig configures the OpenClaw workspace settings. When
+// non-nil, the thane:openclaw Ollama profile becomes available.
+func (l *Loop) SetOpenClawConfig(cfg *config.OpenClawConfig) {
+	l.openClawConfig = cfg
+}
+
+// OpenClawConfig returns the OpenClaw configuration, or nil if the
+// thane:openclaw profile is not configured.
+func (l *Loop) OpenClawConfig() *config.OpenClawConfig {
+	return l.openClawConfig
 }
 
 // ActiveTags returns a snapshot of the currently active capability tags.
@@ -903,13 +933,47 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		l.tagMu.Unlock()
 	}()
 
+	// Pre-compaction memory flush: when the request has a custom system
+	// prompt (OpenClaw profile) and tokens are approaching the compaction
+	// threshold, run a lightweight flush turn so durable memories are
+	// written to disk before compaction erases context. Runs at most once
+	// per compaction cycle per conversation.
+	if req.SystemPrompt != "" && !req.isFlushTurn && l.compactor != nil {
+		tokenCount := l.memory.GetTokenCount(convID)
+		threshold := l.compactor.CompactionThreshold()
+		flushCfg := openclaw.DefaultMemoryFlushConfig()
+		if openclaw.ShouldFlush(tokenCount, threshold, flushCfg.SoftThresholdTokens) {
+			log.Info("running pre-compaction memory flush",
+				"tokens", tokenCount,
+				"threshold", threshold,
+			)
+			flushReq := &Request{
+				Messages:       []Message{{Role: "user", Content: flushCfg.Prompt}},
+				ConversationID: convID,
+				Hints:          req.Hints,
+				SystemPrompt:   req.SystemPrompt + "\n\n" + flushCfg.SystemPromptSuffix,
+				isFlushTurn:    true, // prevent recursive flush
+			}
+			if _, flushErr := l.Run(ctx, flushReq, nil); flushErr != nil {
+				log.Warn("pre-compaction memory flush failed", "error", flushErr)
+			}
+			// Refresh history after flush (may have added messages).
+			history = l.memory.GetMessages(convID)
+		}
+	}
+
 	// Build messages for LLM. Enrich ctx with conversation ID so that
 	// context providers (e.g. working memory) can scope their output.
 	// Propagate request hints so channel-aware providers can adapt.
 	promptCtx := tools.WithConversationID(ctx, convID)
 	promptCtx = tools.WithHints(promptCtx, req.Hints)
 
-	systemPrompt := l.buildSystemPrompt(promptCtx, userMessage, history)
+	var systemPrompt string
+	if req.SystemPrompt != "" {
+		systemPrompt = req.SystemPrompt
+	} else {
+		systemPrompt = l.buildSystemPrompt(promptCtx, userMessage, history)
+	}
 
 	// Context usage — appended to the system prompt after all sections
 	// are assembled so the token estimate includes the full prompt

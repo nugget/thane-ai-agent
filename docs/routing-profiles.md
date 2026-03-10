@@ -63,6 +63,17 @@ For communication between Thane instances or other AI agents. No persona perform
 - **Use when:** Another Thane instance, MCP client, or external agent is calling
 - **Future:** Capability negotiation, trust levels, cross-instance memory
 
+### `thane:openclaw` — OpenClaw Workspace Emulation
+
+Replicates OpenClaw's workspace-aware agent behavior using Thane's agent loop. Injects workspace files (AGENTS.md, SOUL.md, USER.md, etc.), discovers skills, and follows OC's memory conventions. Requires the `openclaw` config section.
+
+- **Model:** Highest quality score (same as premium)
+- **Delegation:** Enabled
+- **Context:** OpenClaw-style system prompt (workspace files, skills, memory recall instructions)
+- **Use when:** You want OpenClaw's workspace-driven behavior without depending on OC infrastructure
+- **Setup:** See [OpenClaw Compatibility](openclaw.md) for workspace layout and configuration
+- **Note:** Only available when `openclaw` is configured in `config.yaml`
+
 ### `thane:local` — Local Models Only
 
 Forces local/free model selection. No paid API calls will be made.

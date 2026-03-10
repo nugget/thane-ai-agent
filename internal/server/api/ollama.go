@@ -19,6 +19,7 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/agent"
 	"github.com/nugget/thane-ai-agent/internal/logging"
+	"github.com/nugget/thane-ai-agent/internal/openclaw"
 	"github.com/nugget/thane-ai-agent/internal/router"
 )
 
@@ -198,6 +199,10 @@ func handleOllamaChatShared(w http.ResponseWriter, r *http.Request, loop *agent.
 		"channel": "ollama",
 	}
 
+	// ocSystemPrompt is set by the thane:openclaw profile to override
+	// the agent loop's default system prompt with OC-style context.
+	var ocSystemPrompt string
+
 	// Derive max quality floor for premium/ops profiles.
 	premiumFloor := "10"
 	if rtr := loop.Router(); rtr != nil {
@@ -232,6 +237,21 @@ func handleOllamaChatShared(w http.ResponseWriter, r *http.Request, loop *agent.
 		hints[router.HintQualityFloor] = "1"
 		hints[router.HintModelPreference] = ""
 		hints[router.HintLocalOnly] = "true"
+
+	// --- OpenClaw emulation profile ---
+	case "thane:openclaw":
+		model = ""
+		if ocCfg := loop.OpenClawConfig(); ocCfg != nil {
+			hints[router.HintQualityFloor] = premiumFloor
+			hints[router.HintMission] = "openclaw"
+			if prompt, err := openclaw.BuildSystemPrompt(ocCfg, false); err == nil {
+				ocSystemPrompt = prompt
+			} else {
+				logger.Warn("openclaw prompt build failed, falling back to default", "error", err)
+			}
+		} else {
+			logger.Warn("thane:openclaw requested but openclaw config not set, using default routing")
+		}
 
 	// --- Deprecated aliases (backward compat) ---
 	case "thane:thinking":
@@ -275,6 +295,7 @@ func handleOllamaChatShared(w http.ResponseWriter, r *http.Request, loop *agent.
 		Hints:          hints,
 		ConversationID: conversationID,
 		SkipContext:    auxiliary,
+		SystemPrompt:   ocSystemPrompt,
 	}
 
 	// Check if streaming was requested. For Ollama compatibility, a nil stream defaults to true.
@@ -525,6 +546,7 @@ func handleOllamaTagsShared(w http.ResponseWriter, r *http.Request, logger *slog
 		{"thane:ops", "operations / direct tool access (no delegation gating)"},
 		{"thane:peer", "agent-to-agent communication"},
 		{"thane:local", "local/free models only"},
+		{"thane:openclaw", "OpenClaw workspace emulation (premium model)"},
 	}
 
 	var models []OllamaModel
