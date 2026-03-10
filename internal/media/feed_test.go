@@ -272,6 +272,95 @@ func TestResolveYouTubeFeed_NonYouTube(t *testing.T) {
 	}
 }
 
+// ytAlternateFeedMatch extracts the feed URL from a ytAlternateFeedRe match,
+// handling both alternation groups (type-before-href and href-before-type).
+func ytAlternateFeedMatch(html string) string {
+	m := ytAlternateFeedRe.FindStringSubmatch(html)
+	if m == nil {
+		return ""
+	}
+	if m[1] != "" {
+		return m[1]
+	}
+	return m[2]
+}
+
+func TestYTAlternateFeedRe(t *testing.T) {
+	want := "https://www.youtube.com/feeds/videos.xml?channel_id=UCabc123xyz"
+
+	tests := []struct {
+		name string
+		html string
+	}{
+		{
+			name: "type before href, double quotes",
+			html: `<link rel="alternate" type="application/rss+xml" title="RSS" href="https://www.youtube.com/feeds/videos.xml?channel_id=UCabc123xyz">`,
+		},
+		{
+			name: "href before type, double quotes",
+			html: `<link rel="alternate" href="https://www.youtube.com/feeds/videos.xml?channel_id=UCabc123xyz" type="application/rss+xml" title="RSS">`,
+		},
+		{
+			name: "type before href, single quotes",
+			html: `<link rel='alternate' type='application/rss+xml' title='RSS' href='https://www.youtube.com/feeds/videos.xml?channel_id=UCabc123xyz'>`,
+		},
+		{
+			name: "href before type, single quotes",
+			html: `<link rel='alternate' href='https://www.youtube.com/feeds/videos.xml?channel_id=UCabc123xyz' type='application/rss+xml' title='RSS'>`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ytAlternateFeedMatch(tt.html)
+			if got == "" {
+				t.Fatal("ytAlternateFeedRe did not match")
+			}
+			if got != want {
+				t.Errorf("got %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+func TestYTRegexes_LargePageOffset(t *testing.T) {
+	// YouTube @handle pages place all channel metadata at ~600KB+.
+	// Verify that the regexes match when content sits past the old
+	// 512KB limit — the read limit was bumped to 1MB in #517.
+	wantFeed := "https://www.youtube.com/feeds/videos.xml?channel_id=UCtest600k"
+	padding := strings.Repeat("x", 600*1024)
+	page := "<html><head>" + padding +
+		`<link rel="alternate" type="application/rss+xml" title="RSS" href="` + wantFeed + `">` +
+		`<link rel="canonical" href="https://www.youtube.com/channel/UCtest600k">` +
+		`<script>"channelId":"UCtest600k"</script>` +
+		"</head></html>"
+
+	// Simulate reading up to 1MB (new limit).
+	limit := 1 << 20
+	if len(page) > limit {
+		page = page[:limit]
+	}
+
+	if got := ytAlternateFeedMatch(page); got != wantFeed {
+		t.Errorf("ytAlternateFeedRe failed at 600KB offset: got %q", got)
+	}
+	if m := ytCanonicalRe.FindStringSubmatch(page); len(m) != 2 || m[1] != "UCtest600k" {
+		t.Errorf("ytCanonicalRe failed at 600KB offset: got %v", m)
+	}
+	if m := ytChannelIDRe.FindStringSubmatch(page); len(m) != 2 || m[1] != "UCtest600k" {
+		t.Errorf("ytChannelIDRe failed at 600KB offset: got %v", m)
+	}
+
+	// Verify the old 512KB limit would have missed these.
+	truncated := page[:512*1024]
+	if got := ytAlternateFeedMatch(truncated); got != "" {
+		t.Error("ytAlternateFeedRe should NOT match within 512KB")
+	}
+	if m := ytCanonicalRe.FindStringSubmatch(truncated); len(m) != 0 {
+		t.Error("ytCanonicalRe should NOT match within 512KB")
+	}
+}
+
 func TestDiscoverFeedURL_RSS(t *testing.T) {
 	html := `<html><head>
 	<link rel="alternate" type="application/rss+xml" href="https://example.com/feed.xml" title="RSS Feed">

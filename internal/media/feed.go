@@ -185,6 +185,19 @@ var ytChannelIDRe = regexp.MustCompile(`"channelId"\s*:\s*"(UC[a-zA-Z0-9_-]+)"`)
 // ytCanonicalRe matches canonical URLs with channel IDs.
 var ytCanonicalRe = regexp.MustCompile(`<link\s+rel="canonical"\s+href="https://www\.youtube\.com/channel/(UC[a-zA-Z0-9_-]+)"`)
 
+// ytAlternateFeedRe matches the RSS alternate link that YouTube embeds
+// in channel pages. Handles both attribute orderings (type before href
+// and href before type) and single/double quotes. Requires rel="alternate"
+// to avoid false matches.
+var ytAlternateFeedRe = regexp.MustCompile(
+	`<link[^>]+rel=['"]alternate['"][^>]+` +
+		`(?:` +
+		`type=['"]application/rss\+xml['"][^>]+href=['"]([^'"]+)['"]` +
+		`|` +
+		`href=['"]([^'"]+)['"][^>]+type=['"]application/rss\+xml['"]` +
+		`)`,
+)
+
 // isYouTubeHost reports whether host is a known YouTube hostname.
 func isYouTubeHost(host string) bool {
 	switch strings.ToLower(host) {
@@ -241,13 +254,30 @@ func resolveYouTubeFeed(ctx context.Context, httpClient *http.Client, rawURL str
 		return "", fmt.Errorf("channel page returned HTTP %d", resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 512*1024))
+	// YouTube @handle pages are ~1.1MB; all channel metadata (canonical
+	// link, alternate feed link, channelId JSON) sits at ~600KB+.
+	// The old 512KB limit silently missed everything.
+	const maxChannelPageBytes = 1 << 20
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxChannelPageBytes+1))
 	if err != nil {
 		return "", fmt.Errorf("read channel page: %w", err)
 	}
+	if len(body) > maxChannelPageBytes {
+		return "", fmt.Errorf("channel page exceeded %d-byte limit; try the direct RSS URL: https://www.youtube.com/feeds/videos.xml?channel_id=CHANNEL_ID", maxChannelPageBytes)
+	}
 	html := string(body)
 
-	// Try canonical link first, then JSON metadata.
+	// Try alternate RSS link first (most direct — contains full feed URL),
+	// then canonical link, then JSON metadata.
+	if m := ytAlternateFeedRe.FindStringSubmatch(html); m != nil {
+		// Two alternation groups — one will be empty depending on attr order.
+		if m[1] != "" {
+			return m[1], nil
+		}
+		if m[2] != "" {
+			return m[2], nil
+		}
+	}
 	if m := ytCanonicalRe.FindStringSubmatch(html); len(m) == 2 {
 		return "https://www.youtube.com/feeds/videos.xml?channel_id=" + m[1], nil
 	}
