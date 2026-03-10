@@ -273,7 +273,7 @@ embeddings:
 # - debug: per-request detail (LLM calls, tool execution, token counts)
 # - trace: wire-level payloads (full JSON requests/responses — VERY verbose)
 # logging:
-#   dir: logs               # relative to working dir; default: "logs"
+#   dir: logs               # relative to working dir; default: "logs"; set to "" to disable
 #   level: info             # default: info
 #   format: json            # json (default) or text (human-readable)
 #   compress: true          # gzip rotated files; default: true

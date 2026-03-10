@@ -492,8 +492,11 @@ func TestApplyDefaults_SignalRateLimit(t *testing.T) {
 func TestApplyDefaults_Logging(t *testing.T) {
 	cfg := Default()
 
-	if cfg.Logging.Dir != "logs" {
-		t.Errorf("Logging.Dir = %q, want %q", cfg.Logging.Dir, "logs")
+	if cfg.Logging.Dir != nil {
+		t.Errorf("Logging.Dir = %v, want nil (defaults via DirPath())", cfg.Logging.Dir)
+	}
+	if got := cfg.Logging.DirPath(); got != "logs" {
+		t.Errorf("Logging.DirPath() = %q, want %q", got, "logs")
 	}
 	if cfg.Logging.Level != "info" {
 		t.Errorf("Logging.Level = %q, want %q", cfg.Logging.Level, "info")
@@ -624,6 +627,26 @@ func TestLoggingConfig_CompressEnabled(t *testing.T) {
 	}
 }
 
+func TestLoggingConfig_DirPath(t *testing.T) {
+	tests := []struct {
+		name string
+		dir  *string
+		want string
+	}{
+		{"nil defaults to logs", nil, "logs"},
+		{"explicit empty disables", strPtr(""), ""},
+		{"explicit value used", strPtr("/var/log/thane"), "/var/log/thane"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lc := LoggingConfig{Dir: tt.dir}
+			if got := lc.DirPath(); got != tt.want {
+				t.Errorf("DirPath() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestConfig_DeprecatedFieldsUsed(t *testing.T) {
 	cfg := &Config{LogLevel: "debug"}
 	lvl, fmt := cfg.DeprecatedFieldsUsed()
@@ -635,4 +658,19 @@ func TestConfig_DeprecatedFieldsUsed(t *testing.T) {
 	}
 }
 
+func TestConfig_DeprecatedFieldsUsed_FreshConfig(t *testing.T) {
+	// A config with no legacy fields should NOT trigger deprecation warnings,
+	// even after applyDefaults has run.
+	cfg := Default()
+	lvl, format := cfg.DeprecatedFieldsUsed()
+	if lvl {
+		t.Error("expected level=false on fresh config, got true")
+	}
+	if format {
+		t.Error("expected format=false on fresh config, got true")
+	}
+}
+
 func boolPtr(b bool) *bool { return &b }
+
+func strPtr(s string) *string { return &s }

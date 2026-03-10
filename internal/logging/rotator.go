@@ -178,10 +178,12 @@ func (r *Rotator) compressFile(src string, date string) error {
 	if err != nil {
 		return fmt.Errorf("open log for compression: %w", err)
 	}
-	defer in.Close()
+	// No defer — we close explicitly before os.Remove so the file
+	// handle is released (required on Windows).
 
 	out, err := os.Create(dst)
 	if err != nil {
+		in.Close()
 		return fmt.Errorf("create compressed log %s: %w", dst, err)
 	}
 
@@ -190,22 +192,27 @@ func (r *Rotator) compressFile(src string, date string) error {
 	if _, err := io.Copy(gz, in); err != nil {
 		_ = gz.Close()
 		_ = out.Close()
+		_ = in.Close()
 		_ = os.Remove(dst)
 		return fmt.Errorf("compress log: %w", err)
 	}
 
 	if err := gz.Close(); err != nil {
 		_ = out.Close()
+		_ = in.Close()
 		_ = os.Remove(dst)
 		return fmt.Errorf("finalize compressed log: %w", err)
 	}
 
 	if err := out.Close(); err != nil {
+		_ = in.Close()
 		_ = os.Remove(dst)
 		return fmt.Errorf("close compressed log: %w", err)
 	}
 
-	// Close the input before removing so Windows is happy too.
-	in.Close()
+	if err := in.Close(); err != nil {
+		return fmt.Errorf("close source log: %w", err)
+	}
+
 	return os.Remove(src)
 }

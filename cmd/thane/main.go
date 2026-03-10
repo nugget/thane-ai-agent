@@ -336,16 +336,19 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 
 		// Open the log rotator for file output. Logs go to both
 		// stdout (for launchd/systemd capture) and the rotated file.
+		// When Dir is empty, file logging is disabled (stdout only).
 		logWriter := stdout
 
-		rotator, err := logging.Open(cfg.Logging.Dir, cfg.Logging.CompressEnabled())
-		if err != nil {
-			// File logging failed — fall back to stdout only.
-			logger.Warn("failed to open log directory, using stdout only",
-				"dir", cfg.Logging.Dir, "error", err)
-		} else {
-			defer rotator.Close()
-			logWriter = io.MultiWriter(stdout, rotator)
+		if logDir := cfg.Logging.DirPath(); logDir != "" {
+			rotator, err := logging.Open(logDir, cfg.Logging.CompressEnabled())
+			if err != nil {
+				// File logging failed — fall back to stdout only.
+				logger.Warn("failed to open log directory, using stdout only",
+					"dir", logDir, "error", err)
+			} else {
+				defer rotator.Close()
+				logWriter = io.MultiWriter(stdout, rotator)
+			}
 		}
 
 		logger = newLogger(logWriter, level, cfg.Logging.Format)

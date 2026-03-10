@@ -265,10 +265,10 @@ type PricingEntry struct {
 // needed). Logs are rotated daily; old files are never deleted.
 type LoggingConfig struct {
 	// Dir is the directory for log files. Relative paths are resolved
-	// from the working directory (typically ~/Thane). An empty string
-	// disables file logging (output goes to stdout only).
-	// Default: "logs".
-	Dir string `yaml:"dir"`
+	// from the working directory (typically ~/Thane). Defaults to "logs"
+	// when omitted. Set to an explicit empty string (dir: "") to disable
+	// file logging (output goes to stdout only).
+	Dir *string `yaml:"dir"`
 
 	// Level sets the minimum log level. Valid values: trace, debug,
 	// info, warn, error. Default: info.
@@ -282,6 +282,17 @@ type LoggingConfig struct {
 	// Compress enables gzip compression of rotated log files.
 	// Default: true.
 	Compress *bool `yaml:"compress"`
+}
+
+// DirPath returns the resolved log directory path. When Dir is nil
+// (omitted in YAML), it returns the default "logs". When Dir is an
+// explicit empty string, it returns "" which signals that file logging
+// is disabled.
+func (l LoggingConfig) DirPath() string {
+	if l.Dir == nil {
+		return "logs"
+	}
+	return *l.Dir
 }
 
 // CompressEnabled returns whether rotated log compression is on.
@@ -1095,9 +1106,8 @@ func (c *Config) applyDefaults() {
 		c.Logging.Format = c.LogFormat
 	}
 
-	if c.Logging.Dir == "" {
-		c.Logging.Dir = "logs"
-	}
+	// Dir uses a *string — nil defaults to "logs" via DirPath().
+	// Explicit empty string disables file logging.
 	if c.Logging.Level == "" {
 		c.Logging.Level = "info"
 	}
@@ -1109,10 +1119,9 @@ func (c *Config) applyDefaults() {
 		c.Logging.Compress = &v
 	}
 
-	// Keep legacy fields in sync so callers that still read them work.
-	if c.LogFormat == "" {
-		c.LogFormat = c.Logging.Format
-	}
+	// Note: we intentionally do NOT back-sync Logging.Format → LogFormat.
+	// The deprecated fields are only populated if the user's YAML set them.
+	// DeprecatedFieldsUsed() relies on that to emit warnings accurately.
 
 	if c.Listen.Port == 0 {
 		c.Listen.Port = 8080
