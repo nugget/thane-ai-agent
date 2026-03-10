@@ -69,7 +69,7 @@ func (s *MediaStore) migrate() error {
 			analyzed_at    TEXT NOT NULL,
 			session_id     TEXT
 		);
-		CREATE INDEX IF NOT EXISTS idx_engagement_url ON media_engagement(entry_url);
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_engagement_url_feed ON media_engagement(entry_url, feed_id);
 		CREATE INDEX IF NOT EXISTS idx_engagement_feed ON media_engagement(feed_id);
 	`)
 	return err

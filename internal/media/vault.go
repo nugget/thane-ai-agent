@@ -45,7 +45,8 @@ func NewVaultWriter(logger *slog.Logger) *VaultWriter {
 }
 
 // WriteAnalysis writes an analysis page to the vault and updates the
-// channel index. Returns the absolute path of the written file.
+// channel index. Returns the path of the written file (absolute if
+// outputPath is absolute).
 //
 // Directory structure:
 //
@@ -69,8 +70,18 @@ func (w *VaultWriter) WriteAnalysis(outputPath string, page *AnalysisPage) (stri
 		return "", fmt.Errorf("create channel directory: %w", err)
 	}
 
-	// Determine date prefix from Published or today.
+	// Determine date prefix from Published or today. Validate the date
+	// to prevent path traversal or malformed filenames.
 	datePrefix := page.Published
+	if datePrefix != "" {
+		if _, err := time.Parse("2006-01-02", datePrefix); err != nil {
+			w.logger.Warn("invalid published date, falling back to today",
+				"published", datePrefix,
+				"error", err,
+			)
+			datePrefix = ""
+		}
+	}
 	if datePrefix == "" {
 		datePrefix = time.Now().UTC().Format("2006-01-02")
 	}
@@ -240,8 +251,8 @@ func slugify(s string) string {
 	return s
 }
 
-// shortHash returns the first 4 hex characters of the SHA-256 hash of s.
+// shortHash returns the first 8 hex characters of the SHA-256 hash of s.
 func shortHash(s string) string {
 	h := sha256.Sum256([]byte(s))
-	return hex.EncodeToString(h[:2]) // 4 hex chars
+	return hex.EncodeToString(h[:4]) // 8 hex chars
 }

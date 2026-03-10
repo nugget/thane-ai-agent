@@ -1211,22 +1211,21 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// The media_save_analysis tool lets the agent persist structured
 	// analysis to an Obsidian-compatible vault and track engagement.
 	// It requires either a per-feed output_path or the global default.
-	engDBPath := cfg.Media.Analysis.DatabasePath
-	if engDBPath == "" {
-		engDBPath = cfg.DataDir + "/media_engagement.db"
-	}
-	mediaStore, err := media.NewMediaStore(engDBPath, logger)
+	// If the engagement store fails to open, the tool is still registered
+	// without engagement tracking (vault writes still work).
+	var mediaStore *media.MediaStore
+	mediaStore, err = media.NewMediaStore(cfg.Media.Analysis.DatabasePath, logger)
 	if err != nil {
-		logger.Error("failed to open media engagement store", "error", err)
+		logger.Warn("media engagement store unavailable; analysis will persist to vault only", "error", err)
 	} else {
 		defer mediaStore.Close()
-		vaultWriter := media.NewVaultWriter(logger)
-		analysisTools := media.NewAnalysisTools(
-			opStore, mediaStore, vaultWriter,
-			cfg.Media.Analysis.DefaultOutputPath, logger,
-		)
-		loop.Tools().SetMediaAnalysisTools(analysisTools)
 	}
+	vaultWriter := media.NewVaultWriter(logger)
+	analysisTools := media.NewAnalysisTools(
+		opStore, mediaStore, vaultWriter,
+		cfg.Media.Analysis.DefaultOutputPath, logger,
+	)
+	loop.Tools().SetMediaAnalysisTools(analysisTools)
 
 	// --- Media feed polling ---
 	// Periodic RSS/Atom check for new entries. Follows the same pattern

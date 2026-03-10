@@ -39,8 +39,8 @@ func TestSlugify(t *testing.T) {
 
 func TestShortHash(t *testing.T) {
 	h := shortHash("https://youtube.com/watch?v=abc123")
-	if len(h) != 4 {
-		t.Errorf("shortHash length = %d, want 4", len(h))
+	if len(h) != 8 {
+		t.Errorf("shortHash length = %d, want 8", len(h))
 	}
 
 	// Same input should produce same hash.
@@ -155,6 +155,10 @@ func TestWriteAnalysis_EmptyPublished(t *testing.T) {
 	tmpDir := t.TempDir()
 	w := NewVaultWriter(nil)
 
+	// Capture today's date before calling WriteAnalysis to avoid a
+	// midnight UTC race between the production code and the assertion.
+	today := time.Now().UTC().Format("2006-01-02")
+
 	page := &AnalysisPage{
 		Title:      "No Date Video",
 		Channel:    "Some Channel",
@@ -171,7 +175,6 @@ func TestWriteAnalysis_EmptyPublished(t *testing.T) {
 	}
 
 	// Filename should start with today's date.
-	today := time.Now().UTC().Format("2006-01-02")
 	base := filepath.Base(path)
 	if !strings.HasPrefix(base, today+"-") {
 		t.Errorf("filename %q doesn't start with today's date %q", base, today)

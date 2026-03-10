@@ -1126,6 +1126,9 @@ func (c *Config) applyDefaults() {
 	if c.Media.MaxFeeds == 0 {
 		c.Media.MaxFeeds = 50
 	}
+	if c.Media.Analysis.DatabasePath == "" {
+		c.Media.Analysis.DatabasePath = filepath.Join(c.DataDir, "media_engagement.db")
+	}
 
 	if c.Episodic.LookbackDays == 0 {
 		c.Episodic.LookbackDays = 2
