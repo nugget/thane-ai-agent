@@ -92,7 +92,7 @@ func (c *Compactor) Compact(ctx context.Context, conversationID string) error {
 	messages := c.store.GetMessagesForCompaction(conversationID, c.config.KeepRecent)
 
 	c.logger.Debug("compaction check",
-		"conversation", conversationID,
+		"conversation_id", conversationID,
 		"eligible_messages", len(messages),
 		"min_required", c.config.MinMessagesToCompact,
 		"keep_recent", c.config.KeepRecent,
@@ -102,7 +102,7 @@ func (c *Compactor) Compact(ctx context.Context, conversationID string) error {
 
 	if len(messages) < c.config.MinMessagesToCompact {
 		c.logger.Debug("compaction skipped: not enough messages",
-			"conversation", conversationID,
+			"conversation_id", conversationID,
 			"eligible", len(messages),
 			"required", c.config.MinMessagesToCompact,
 		)
@@ -125,7 +125,7 @@ func (c *Compactor) Compact(ctx context.Context, conversationID string) error {
 		content, _, err := c.workingMemory.Get(conversationID)
 		if err != nil {
 			c.logger.Warn("failed to read working memory for compaction",
-				"conversation", conversationID, "error", err)
+				"conversation_id", conversationID, "error", err)
 			// Non-fatal — proceed without working memory context.
 		} else {
 			workingMem = content

@@ -747,13 +747,13 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 
 	// Get session ID for log correlation. The session ID (UUIDv7 prefix)
 	// is more meaningful than the conversation name (usually "default").
-	sessionTag := convID // fallback if no archiver
+	sessionID := convID // fallback if no archiver
 	if l.archiver != nil {
 		if sid := l.archiver.ActiveSessionID(convID); sid != "" {
-			sessionTag = sid
+			sessionID = sid
 		}
 	}
-	sessionTag = memory.ShortID(sessionTag)
+	sessionTag := memory.ShortID(sessionID) // 8-char display tag for usage records
 
 	// Generate a request-scoped ID and logger. Every log line within this
 	// turn carries request_id so you can grep for a single user→response cycle.
@@ -764,13 +764,14 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	log := logging.Logger(ctx).With(
 		"subsystem", logging.SubsystemAgent,
 		"request_id", requestID,
-		"session", sessionTag,
-		"conversation", convID,
+		"session_id", sessionID,
+		"conversation_id", convID,
 	)
 	ctx = logging.WithLogger(ctx, log)
 
 	log.Info("agent loop started",
 		"messages", len(req.Messages),
+		"mission", req.Hints["mission"],
 	)
 
 	// Always use Thane's memory as the source of truth.
@@ -946,6 +947,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			log.Info("running pre-compaction memory flush",
 				"tokens", tokenCount,
 				"threshold", threshold,
+				"flush_turn", true,
 			)
 			flushReq := &Request{
 				Messages:       []Message{{Role: "user", Content: flushCfg.Prompt}},
@@ -1759,7 +1761,7 @@ func (l *Loop) ResetConversation(conversationID string) error {
 		if tfs := l.tools.TempFileStore(); tfs != nil {
 			if err := tfs.Cleanup(conversationID); err != nil {
 				l.logger.Error("failed to clean up temp files on reset",
-					"conversation", conversationID,
+					"conversation_id", conversationID,
 					"error", err,
 				)
 			}
@@ -1797,7 +1799,7 @@ func (l *Loop) CloseSession(conversationID, reason, carryForward string) error {
 		if tfs := l.tools.TempFileStore(); tfs != nil {
 			if err := tfs.Cleanup(conversationID); err != nil {
 				l.logger.Error("failed to clean up temp files on close",
-					"conversation", conversationID,
+					"conversation_id", conversationID,
 					"error", err,
 				)
 			}
@@ -1827,7 +1829,7 @@ func (l *Loop) CloseSession(conversationID, reason, carryForward string) error {
 	}
 
 	l.logger.Info("session closed",
-		"conversation", conversationID,
+		"conversation_id", conversationID,
 		"reason", reason,
 		"carry_forward_len", len(carryForward),
 	)
@@ -1856,7 +1858,7 @@ func (l *Loop) CheckpointSession(conversationID, label string) error {
 	}
 
 	l.logger.Info("session checkpoint created",
-		"conversation", conversationID,
+		"conversation_id", conversationID,
 		"label", label,
 		"messages", len(messages),
 	)
@@ -1914,7 +1916,7 @@ func (l *Loop) SplitSession(conversationID string, atIndex int, atMessage string
 	}
 
 	l.logger.Info("session split",
-		"conversation", conversationID,
+		"conversation_id", conversationID,
 		"pre_split_msgs", len(preSplit),
 		"post_split_msgs", len(postSplit),
 	)

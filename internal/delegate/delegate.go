@@ -266,7 +266,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 	}
 
 	// Select model via router.
-	model := e.selectModel(ctx, did, task, profile, len(toolDefs))
+	model := e.selectModel(ctx, task, profile, len(toolDefs))
 
 	startTime := time.Now()
 	var totalInput, totalOutput int
@@ -324,6 +324,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 				)
 				completed = true
 				e.recordCompletion(&completionRecord{
+					log:              log,
 					delegateID:       did,
 					conversationID:   convID,
 					archiveSessionID: archiveSessionID,
@@ -369,6 +370,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 			)
 			completed = true
 			return e.forceTextResponse(ctx, model, messages, &completionRecord{
+				log:              log,
 				delegateID:       did,
 				conversationID:   convID,
 				archiveSessionID: archiveSessionID,
@@ -409,6 +411,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 				)
 				completed = true
 				e.recordCompletion(&completionRecord{
+					log:              log,
 					delegateID:       did,
 					conversationID:   convID,
 					archiveSessionID: archiveSessionID,
@@ -473,6 +476,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 			})
 			completed = true
 			return e.forceTextResponse(ctx, model, messages, &completionRecord{
+				log:              log,
 				delegateID:       did,
 				conversationID:   convID,
 				archiveSessionID: archiveSessionID,
@@ -527,6 +531,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 				)
 				completed = true
 				e.recordCompletion(&completionRecord{
+					log:              log,
 					delegateID:       did,
 					conversationID:   convID,
 					archiveSessionID: archiveSessionID,
@@ -561,6 +566,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 
 			completed = true
 			e.recordCompletion(&completionRecord{
+				log:              log,
 				delegateID:       did,
 				conversationID:   convID,
 				archiveSessionID: archiveSessionID,
@@ -602,6 +608,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 			iterations = append(iterations, iterRec)
 			completed = true
 			return e.forceTextResponse(ctx, model, messages, &completionRecord{
+				log:              log,
 				delegateID:       did,
 				conversationID:   convID,
 				archiveSessionID: archiveSessionID,
@@ -685,6 +692,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 						iterations = append(iterations, iterRec)
 						completed = true
 						e.recordCompletion(&completionRecord{
+							log:              log,
 							delegateID:       did,
 							conversationID:   convID,
 							archiveSessionID: archiveSessionID,
@@ -760,6 +768,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 				iterations = append(iterations, iterRec)
 				completed = true
 				return e.forceTextResponse(ctx, model, messages, &completionRecord{
+					log:              log,
 					delegateID:       did,
 					conversationID:   convID,
 					archiveSessionID: archiveSessionID,
@@ -797,6 +806,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 			iterations = append(iterations, iterRec)
 			completed = true
 			return e.forceTextResponse(ctx, model, messages, &completionRecord{
+				log:              log,
 				delegateID:       did,
 				conversationID:   convID,
 				archiveSessionID: archiveSessionID,
@@ -828,6 +838,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 	)
 	completed = true
 	return e.forceTextResponse(ctx, model, messages, &completionRecord{
+		log:              log,
 		delegateID:       did,
 		conversationID:   convID,
 		archiveSessionID: archiveSessionID,
@@ -888,7 +899,8 @@ func (e *Executor) forceTextResponse(ctx context.Context, model string, messages
 }
 
 // selectModel picks a model for the delegate via the router or falls back to the default.
-func (e *Executor) selectModel(ctx context.Context, delegateID, task string, profile *Profile, toolCount int) string {
+func (e *Executor) selectModel(ctx context.Context, task string, profile *Profile, toolCount int) string {
+	log := logging.Logger(ctx)
 	if e.router != nil {
 		model, _ := e.router.Route(ctx, router.Request{
 			Query:      task,
@@ -898,17 +910,13 @@ func (e *Executor) selectModel(ctx context.Context, delegateID, task string, pro
 			Hints:      profile.RouterHints,
 		})
 		if model != "" {
-			e.logger.Debug("delegate model selected by router",
-				"delegate_id", delegateID,
-				"profile", profile.Name,
+			log.Debug("delegate model selected by router",
 				"model", model,
 			)
 			return model
 		}
 	}
-	e.logger.Debug("delegate using default model",
-		"delegate_id", delegateID,
-		"profile", profile.Name,
+	log.Debug("delegate using default model",
 		"model", e.defaultModel,
 	)
 	return e.defaultModel
@@ -930,8 +938,11 @@ type iterationRecord struct {
 }
 
 // completionRecord carries all data for logging and persistence of a
-// delegate execution.
+// delegate execution. The log field carries the context-enriched logger
+// so recordCompletion and archiveSession inherit trace fields (request_id,
+// session_id, conversation_id, subsystem, delegate_id, profile).
 type completionRecord struct {
+	log              *slog.Logger
 	delegateID       string
 	conversationID   string
 	archiveSessionID string
@@ -958,9 +969,7 @@ func (e *Executor) recordCompletion(rec *completionRecord) {
 	now := time.Now()
 	elapsed := now.Sub(rec.startTime)
 
-	e.logger.Info("delegate completed",
-		"delegate_id", rec.delegateID,
-		"profile", rec.profileName,
+	rec.log.Info("delegate completed",
 		"model", rec.model,
 		"total_iter", rec.totalIter,
 		"input_tokens", rec.totalInput,
@@ -993,10 +1002,7 @@ func (e *Executor) recordCompletion(rec *completionRecord) {
 			TaskName:       rec.profileName,
 		}
 		if err := e.usageStore.Record(context.Background(), usageRec); err != nil {
-			e.logger.Warn("failed to record delegate usage",
-				"delegate_id", rec.delegateID,
-				"error", err,
-			)
+			rec.log.Warn("failed to record delegate usage", "error", err)
 		}
 	}
 }
@@ -1021,8 +1027,7 @@ func (e *Executor) archiveSession(rec *completionRecord, now time.Time) {
 		})
 	}
 	if err := e.archiver.ArchiveMessages(archived); err != nil {
-		e.logger.Warn("failed to archive delegate messages",
-			"delegate_id", rec.delegateID,
+		rec.log.Warn("failed to archive delegate messages",
 			"session_id", sessionID,
 			"error", err,
 		)
@@ -1067,8 +1072,7 @@ func (e *Executor) archiveSession(rec *completionRecord, now time.Time) {
 		}
 	}
 	if err := e.archiver.ArchiveToolCalls(archivedCalls); err != nil {
-		e.logger.Warn("failed to archive delegate tool calls",
-			"delegate_id", rec.delegateID,
+		rec.log.Warn("failed to archive delegate tool calls",
 			"session_id", sessionID,
 			"error", err,
 		)
@@ -1094,15 +1098,13 @@ func (e *Executor) archiveSession(rec *completionRecord, now time.Time) {
 			}
 		}
 		if err := e.archiver.ArchiveIterations(archived); err != nil {
-			e.logger.Warn("failed to archive delegate iterations",
-				"delegate_id", rec.delegateID,
+			rec.log.Warn("failed to archive delegate iterations",
 				"session_id", sessionID,
 				"error", err,
 			)
 		}
 		if err := e.archiver.LinkPendingIterationToolCalls(sessionID); err != nil {
-			e.logger.Warn("failed to link delegate tool calls to iterations",
-				"delegate_id", rec.delegateID,
+			rec.log.Warn("failed to link delegate tool calls to iterations",
 				"session_id", sessionID,
 				"error", err,
 			)
@@ -1114,8 +1116,7 @@ func (e *Executor) archiveSession(rec *completionRecord, now time.Time) {
 		endReason = rec.exhaustReason
 	}
 	if err := e.archiver.EndSessionAt(sessionID, endReason, now); err != nil {
-		e.logger.Warn("failed to end delegate archive session",
-			"delegate_id", rec.delegateID,
+		rec.log.Warn("failed to end delegate archive session",
 			"session_id", sessionID,
 			"error", err,
 		)
@@ -1163,7 +1164,7 @@ func executeWithDeadline(ctx context.Context, reg *tools.Registry, name, argsJSO
 	case r := <-ch:
 		return r.value, r.err
 	case <-ctx.Done():
-		slog.Warn("tool handler did not respect context cancellation; goroutine leaked",
+		logging.Logger(ctx).Warn("tool handler did not respect context cancellation; goroutine leaked",
 			"tool", name)
 		err := ctx.Err()
 		reason := "ended due to context error"

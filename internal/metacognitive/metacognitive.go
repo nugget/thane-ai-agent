@@ -208,6 +208,8 @@ func (l *Loop) run(ctx context.Context) {
 		"supervisor_probability", l.config.SupervisorProbability,
 	)
 
+	var iterCount int
+
 	for {
 		// Reset the tool-provided sleep for this iteration.
 		l.resetNextSleep()
@@ -219,10 +221,13 @@ func (l *Loop) run(ctx context.Context) {
 		convID := fmt.Sprintf("metacog-%d", time.Now().UnixMilli())
 		l.setCurrentConvID(convID)
 
+		iterCount++
+
 		// Enrich context with per-iteration fields.
 		iterCtx := logging.WithLogger(ctx, logger.With(
 			"conversation_id", convID,
 			"supervisor", isSupervisor,
+			"metacog_iter", iterCount,
 		))
 		iterLog := logging.Logger(iterCtx)
 
@@ -246,7 +251,7 @@ func (l *Loop) run(ctx context.Context) {
 
 		// Auto-append iteration summary on success.
 		if result != nil {
-			l.appendIterationLog(result, convID, sleep)
+			l.appendIterationLog(iterLog, result, convID, sleep)
 		}
 
 		iterLog.Info("metacognitive sleeping", "duration", sleep.Round(time.Second))
@@ -278,17 +283,17 @@ var metacogExcludeTools = []string{
 func (l *Loop) iterate(ctx context.Context, isSupervisor bool, convID string) (*iterationResult, error) {
 	iterStart := time.Now()
 
+	log := logging.Logger(ctx)
+
 	stateContent, err := l.readStateFile()
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			l.deps.Logger.Info("metacognitive state file not found, starting fresh",
-				"conversation_id", convID,
+			log.Info("metacognitive state file not found, starting fresh",
 				"path", l.stateFilePath(),
 			)
 		} else {
-			l.deps.Logger.Warn("metacognitive state file read failed, starting with empty state",
+			log.Warn("metacognitive state file read failed, starting with empty state",
 				"error", err,
-				"conversation_id", convID,
 				"path", l.stateFilePath(),
 			)
 		}
@@ -325,11 +330,9 @@ func (l *Loop) iterate(ctx context.Context, isSupervisor bool, convID string) (*
 		return nil, fmt.Errorf("metacognitive LLM call: %w", err)
 	}
 
-	l.deps.Logger.Debug("metacognitive iteration result",
+	log.Debug("metacognitive iteration result",
 		"result_len", len(resp.Content),
 		"model", resp.Model,
-		"conversation_id", convID,
-		"supervisor", isSupervisor,
 	)
 
 	return &iterationResult{
@@ -437,7 +440,7 @@ func (l *Loop) getCurrentConvID() string {
 // Unlike [Loop.readStateFile], this reads the full file without the
 // maxStateBytes cap to avoid silently truncating user/model state on
 // rewrite.
-func (l *Loop) appendIterationLog(result *iterationResult, convID string, sleep time.Duration) {
+func (l *Loop) appendIterationLog(log *slog.Logger, result *iterationResult, convID string, sleep time.Duration) {
 	statePath := l.stateFilePath()
 
 	// Read the full file (uncapped) to avoid truncation on rewrite.
@@ -446,9 +449,8 @@ func (l *Loop) appendIterationLog(result *iterationResult, convID string, sleep 
 	if err != nil {
 		if !errors.Is(err, fs.ErrNotExist) {
 			// Non-trivial read error — abort to avoid data loss.
-			l.deps.Logger.Warn("failed to read state file for iteration log, skipping append",
+			log.Warn("failed to read state file for iteration log, skipping append",
 				"error", err,
-				"conversation_id", convID,
 			)
 			return
 		}
@@ -485,16 +487,14 @@ func (l *Loop) appendIterationLog(result *iterationResult, convID string, sleep 
 
 	// Ensure the parent directory exists (state file may be in a subdir).
 	if err := os.MkdirAll(filepath.Dir(statePath), 0o755); err != nil {
-		l.deps.Logger.Warn("failed to create directory for iteration log",
+		log.Warn("failed to create directory for iteration log",
 			"error", err,
-			"conversation_id", convID,
 		)
 		return
 	}
 	if err := os.WriteFile(statePath, []byte(fullContent), 0o644); err != nil {
-		l.deps.Logger.Warn("failed to append iteration log",
+		log.Warn("failed to append iteration log",
 			"error", err,
-			"conversation_id", convID,
 		)
 	}
 }
