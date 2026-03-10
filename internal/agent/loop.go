@@ -1018,23 +1018,15 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		log.Info("orchestrator tool gating active", "tools", l.orchestratorTools)
 	}
 
-	// Build the effective tool registry. When capability tagging is active,
-	// only tools belonging to active tags are included. Request-level
-	// exclusions (e.g., lifecycle tools stripped from recurring wakes) are
-	// applied on top. We snapshot activeTags under the lock to avoid
-	// holding it while FilterByTags builds the registry copy.
-	effectiveTools := l.tools
-	if tagSnap := l.snapshotActiveTags(); tagSnap != nil && !req.SkipTagFilter {
-		activeTags := make([]string, 0, len(tagSnap))
-		for tag := range tagSnap {
-			activeTags = append(activeTags, tag)
-		}
-		effectiveTools = l.tools.FilterByTags(activeTags)
-	}
+	// Request-level exclusions are static for the run, so compute once.
+	// Tag-based filtering is recomputed each iteration inside the loop
+	// to reflect tags activated via request_capability mid-run.
+	baseTools := l.tools
 	if len(req.ExcludeTools) > 0 {
-		effectiveTools = effectiveTools.FilteredCopyExcluding(req.ExcludeTools)
+		baseTools = l.tools.FilteredCopyExcluding(req.ExcludeTools)
 		log.Info("tools excluded from run", "excluded", req.ExcludeTools)
 	}
+	skipTagFilter := req.SkipTagFilter
 
 	startTime := time.Now()
 
@@ -1063,6 +1055,17 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 
 iterLoop:
 	for i := 0; i < maxIterations; i++ {
+		// Recompute effective tools each iteration so that tags
+		// activated via request_capability are reflected immediately.
+		effectiveTools := baseTools
+		if tagSnap := l.snapshotActiveTags(); tagSnap != nil && !skipTagFilter {
+			activeTags := make([]string, 0, len(tagSnap))
+			for tag := range tagSnap {
+				activeTags = append(activeTags, tag)
+			}
+			effectiveTools = baseTools.FilterByTags(activeTags)
+		}
+
 		// Select tool definitions for this iteration. With gating active,
 		// only advertise the restricted set to keep the primary model in
 		// orchestrator mode across all iterations.
@@ -1179,6 +1182,7 @@ iterLoop:
 			}
 
 			var illegalCall bool
+			var batchHasNonMetaTool bool
 			for _, tc := range llmResp.Message.ToolCalls {
 				toolName := tc.Function.Name
 				toolCallID, _ := uuid.NewV7()
@@ -1283,6 +1287,11 @@ iterLoop:
 					}
 				} else {
 					log.Debug("tool exec done", "tool", toolName, "result_len", len(result))
+					// Track whether this batch executed a substantive tool
+					// (not just capability management meta-tools).
+					if toolName != "request_capability" && toolName != "drop_capability" {
+						batchHasNonMetaTool = true
+					}
 				}
 
 				// Emit tool call done event
@@ -1329,7 +1338,11 @@ iterLoop:
 				}
 				log.Warn("illegal tool call, allowing recovery iteration",
 					"iter", i, "strikes", illegalStrikes)
-			} else {
+			} else if batchHasNonMetaTool {
+				// Only reset strikes when the batch successfully executed
+				// a substantive tool. Meta-tools (request_capability,
+				// drop_capability) alone don't reset the counter, preventing
+				// infinite request→blocked→request loops.
 				illegalStrikes = 0
 			}
 

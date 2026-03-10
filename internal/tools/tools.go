@@ -981,6 +981,7 @@ func (r *Registry) FilteredCopy(names []string) *Registry {
 	filtered := &Registry{
 		tools:           make(map[string]*Tool, len(names)),
 		contentResolver: r.contentResolver,
+		tagIndex:        r.tagIndex,
 	}
 	for _, name := range names {
 		if t := r.tools[name]; t != nil {
@@ -1000,6 +1001,7 @@ func (r *Registry) FilteredCopyExcluding(exclude []string) *Registry {
 	filtered := &Registry{
 		tools:           make(map[string]*Tool, len(r.tools)),
 		contentResolver: r.contentResolver,
+		tagIndex:        r.tagIndex,
 	}
 	for name, t := range r.tools {
 		if !skip[name] {
