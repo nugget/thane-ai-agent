@@ -22,12 +22,14 @@ Every version bump follows this checklist. The version bump PR includes all of t
 - [ ] PR description includes summary of notable changes since last version
 - [ ] GitHub Issues referenced where applicable
 
+## Release Engineering
+
+- [ ] Tag release and create GitHub Release (`just release X.Y.Z`)
+- [ ] Verify release notes on GitHub (edit auto-generated notes as needed)
+
 ## Future Additions
 
 _These will be added to the checklist as the project matures:_
 
 - [ ] Build and publish Docker container image (multi-arch)
-- [ ] Tag release in git (`v0.x.x`)
-- [ ] GitHub Release with binary assets
 - [ ] HA Add-on version bump
-- [ ] Changelog file update

@@ -65,10 +65,11 @@ Thane maintains a persistent contact database — every person the agent interac
 
 ### Trust Zones
 
-Every contact has a trust zone: `owner`, `trusted`, or `known`. Trust zones are the universal router — they gate:
+Every contact has a trust zone: `admin`, `household`, `trusted`, or `known`. Trust zones are the universal router — they gate:
 
-- **Email send** — owner/trusted send freely, known requires confirmation, unknown blocked
-- **Compute allocation** — owner/trusted get frontier models, others get local triage first
+- **Email send** — admin/household send freely, known requires confirmation, unknown blocked
+- **Compute allocation** — admin/household get frontier models, others get local triage first
+- **Notification priority** — trust zone determines urgency levels and rate limits
 - **Proactive behavior** — how much initiative the agent takes depends on who's asking
 
 ### Dual-Port Architecture
@@ -90,8 +91,13 @@ This means Thane works with HA out of the box — no custom integration needed.
 │  ┌──────────────┐  ┌──────────────┐  ┌─────────────────────────┐  │
 │  │  Native API  │  │ Ollama-Compat│  │     Event Sources       │  │
 │  │  (port 8080) │  │ (port 11434) │  │  HA WS │ MQTT │ Email  │  │
+│  │  + Dashboard │  │              │  │  Signal │ RSS Feeds     │  │
 │  └──────┬───────┘  └──────┬───────┘  │  Scheduler │ Anticip.  │  │
 │         │                 │          └────────┬────────────────┘  │
+│  ┌──────┴───────┐         │                   │                   │
+│  │ CardDAV Srvr │         │                   │                   │
+│  │ (port 8843)  │         │                   │                   │
+│  └──────┬───────┘         │                   │                   │
 │         └─────────────────┼───────────────────┘                   │
 │                           ▼                                        │
 │  ┌─────────────────────────────────────────────────────────────┐  │
@@ -109,18 +115,23 @@ This means Thane works with HA out of the box — no custom integration needed.
 │  ┌─────────────┐  ┌────────────┐  ┌───────────────────────────┐  │
 │  │   Memory    │  │   Model    │  │      Integrations         │  │
 │  │   Store     │  │   Router   │  │  HA (REST/WS) │ MCP Host  │  │
-│  │  (SQLite)   │  │ (scoring)  │  │  Email (IMAP/SMTP)        │  │
+│  │  (SQLite)   │  │ (scoring)  │  │  Email │ Signal │ Forge   │  │
 │  └─────────────┘  └────────────┘  │  Shell │ Files │ Search   │  │
 │                                    └───────────────────────────┘  │
 │  ┌─────────────┐  ┌────────────┐  ┌───────────────────────────┐  │
-│  │ Anticipation│  │  Scheduler │  │      Contacts &           │  │
-│  │   Engine    │  │  (cron)    │  │     Trust Zones           │  │
+│  │ Anticipation│  │  Scheduler │  │  Contacts & Trust Zones   │  │
+│  │   Engine    │  │  (cron)    │  │  Notifications (HITL)     │  │
 │  └─────────────┘  └────────────┘  └───────────────────────────┘  │
 │                                                                    │
 │  ┌─────────────┐  ┌────────────┐  ┌───────────────────────────┐  │
 │  │   OpState   │  │    MQTT    │  │    Self-Reflection        │  │
 │  │  (KV store) │  │ Publisher  │  │    (ego.md)               │  │
 │  └─────────────┘  └────────────┘  └───────────────────────────┘  │
+│                                                                    │
+│  ┌─────────────────────────────────────────────────────────────┐  │
+│  │                      Event Bus                               │  │
+│  │  Agent │ Signal │ Delegate │ Email │ Metacog │ Scheduler    │  │
+│  └─────────────────────────────────────────────────────────────┘  │
 │                                                                    │
 └───────────────────────────────────────────────────────────────────┘
 ```
@@ -171,15 +182,16 @@ Delegation is guided by **talents** — markdown files that teach the orchestrat
 
 ### Contact Directory & Trust Zones
 
-Persistent contacts database (`contacts.db`) with:
+Persistent contacts database (`contacts.db`) with vCard-native storage:
 
-- **Trust zones** — `owner`, `trusted`, `known` (validated, with migration from freeform facts)
-- **Contact facts** — flexible key-value pairs per contact (email, phone, role, preferences)
-- **Context injection** — contacts with `[trusted]` tag injected into system prompt for active channels
+- **Trust zones** — `admin`, `household`, `trusted`, `known` (validated by `ValidTrustZones` in Go; `unknown` is implicit for unrecognized senders)
+- **vCard-aligned Properties** — structured contact fields (email, phone, address, Signal handle) stored as typed properties with vCard field names, parameters, and preference ordering
+- **Context injection** — contacts relevant to the active channel injected into system prompt with relationship metadata and last-interaction context
 - **`FindByTrustZone`** — query method for bulk operations (email triage, compute routing)
-- **`FindByFact`** — lookup contacts by email address, phone number, or any fact key
+- **`FindByProperty`** — lookup contacts by email address, phone number, or any property key
+- **`FilterCardForTrustZone`** — trust-aware vCard export for CardDAV (strips sensitive fields for lower trust zones)
 
-Trust zones gate behavior across the system — email send permissions, model selection for inbound messages, and proactive behavior thresholds.
+Trust zones gate behavior across the system — email send permissions, model selection for inbound messages, notification priority, and proactive behavior thresholds.
 
 ### Native Email
 
@@ -206,15 +218,20 @@ Full IMAP/SMTP email support (`internal/email/`):
 
 ### Tools
 
-**Native Tools:**
+**Native Tools (80+):**
 
 | Tool | Tag | Description |
 |------|-----|-------------|
+| **Home Assistant** | | |
 | `control_device` | ha | Natural language device control with fuzzy matching |
 | `find_entity` | ha | Smart entity discovery across all HA domains |
 | `get_state` | ha | Current state of any entity |
 | `list_entities` | ha | Browse entities by domain or pattern |
 | `call_service` | ha | Direct HA service invocation |
+| `add_context_entity` | ha | Add entity to the state watchlist |
+| `remove_context_entity` | ha | Remove entity from the state watchlist |
+| `ha_notify` | ha | HA companion app push notification |
+| **Email** | | |
 | `email_list` | email | List messages in a folder |
 | `email_read` | email | Read message with full body |
 | `email_search` | email | Server-side IMAP search |
@@ -223,23 +240,87 @@ Full IMAP/SMTP email support (`internal/email/`):
 | `email_send` | email | Compose and send (markdown → MIME) |
 | `email_reply` | email | Reply with threading |
 | `email_move` | email | Move messages between folders |
-| `thane_delegate` | always | Delegate tasks to local models |
+| **Contacts** | | |
+| `save_contact` | contacts | Create or update contacts with vCard properties |
+| `lookup_contact` | contacts | Search contacts by name, query, kind, or property |
+| `forget_contact` | contacts | Delete a contact |
+| `list_contacts` | contacts | List and filter contacts |
+| `export_vcf` | contacts | Export contact as vCard |
+| `export_vcf_qr` | contacts | Export contact as vCard QR code |
+| `export_all_vcf` | contacts | Bulk vCard export |
+| `import_vcf` | contacts | Import vCard data |
+| **Notifications** | | |
+| `send_notification` | always | Provider-agnostic fire-and-forget notification |
+| `request_human_decision` | always | Actionable notification with HITL callbacks |
+| **Media & Feeds** | | |
+| `media_transcript` | media | Fetch video/podcast transcript via yt-dlp |
+| `media_follow` | media | Follow an RSS/Atom feed or YouTube channel |
+| `media_unfollow` | media | Stop following a feed |
+| `media_feeds` | media | List followed feeds with status |
+| `media_save_analysis` | media | Save analysis to Obsidian vault |
+| **Memory & Knowledge** | | |
 | `remember_fact` | memory | Store knowledge with embeddings |
 | `recall_fact` | memory | Retrieve knowledge by category or search |
 | `forget_fact` | memory | Remove stored knowledge |
-| `save_contact` | contacts | Create or update contacts |
-| `get_contact` | contacts | Look up contact details |
+| **Archive** | | |
 | `archive_search` | always | Full-text search across conversation history |
+| `archive_sessions` | always | Browse session archive |
+| `archive_session_transcript` | always | Retrieve full session transcript |
+| **Session** | | |
 | `session_working_memory` | always | Read/write scratchpad for active session |
 | `session_close` | always | Close session with carry-forward context |
 | `session_checkpoint` | always | Save current session state |
+| `session_split` | always | Fork the current session |
+| `conversation_reset` | always | Reset conversation context |
+| **Planning** | | |
 | `schedule_task` | planning | Time-based future actions |
+| `list_tasks` | planning | List scheduled tasks |
+| `cancel_task` | planning | Cancel a scheduled task |
 | `create_anticipation` | planning | Event-based triggers with routing hints |
-| `activate_tags` | always | Enable capability tags for current session |
+| `list_anticipations` | planning | List active anticipations |
+| `cancel_anticipation` | planning | Cancel an anticipation |
+| **Capabilities** | | |
+| `request_capability` | always | Activate capability tags for current session |
+| `drop_capability` | always | Deactivate capability tags |
+| **Forge (GitHub/Forgejo)** | | |
+| `forge_issue_create` | forge | Create an issue |
+| `forge_issue_get` | forge | Get issue details |
+| `forge_issue_list` | forge | List issues with filters |
+| `forge_issue_update` | forge | Update issue fields |
+| `forge_issue_comment` | forge | Comment on an issue |
+| `forge_pr_list` | forge | List pull requests |
+| `forge_pr_get` | forge | Get PR details |
+| `forge_pr_diff` | forge | Get PR diff |
+| `forge_pr_files` | forge | List changed files |
+| `forge_pr_commits` | forge | List PR commits |
+| `forge_pr_reviews` | forge | List PR reviews |
+| `forge_pr_review` | forge | Submit a review |
+| `forge_pr_review_comment` | forge | Comment on specific code |
+| `forge_pr_checks` | forge | Get CI check status |
+| `forge_pr_merge` | forge | Merge a PR |
+| `forge_pr_request_review` | forge | Request reviewers |
+| `forge_react` | forge | Add emoji reaction |
+| `forge_search` | forge | Search code and issues |
+| **Web** | | |
 | `web_search` | web | Search via SearXNG or Brave |
 | `web_fetch` | web | Extract readable content from URLs |
+| **Files** | | |
+| `file_read` | files | Read file contents |
+| `file_write` | files | Write file contents |
+| `file_edit` | files | Edit file with diff |
+| `file_list` | files | List directory contents |
+| `file_search` | files | Search for files by name |
+| `file_grep` | files | Search file contents with regex |
+| `file_stat` | files | Get file metadata |
+| `file_tree` | files | Directory tree view |
+| `create_temp_file` | files | Create a temporary file |
+| **Shell** | | |
 | `exec` | shell | Host shell command execution |
-| `read_file` / `write_file` / `edit_file` | files | Workspace file operations |
+| **Delegation** | | |
+| `thane_delegate` | always | Delegate tasks to local models |
+| **Utility** | | |
+| `get_version` | always | Agent version and build info |
+| `cost_summary` | always | Token usage and cost summary |
 
 **MCP Tools (via Model Context Protocol):**
 
@@ -272,7 +353,7 @@ Score-based routing that selects the right model for each task. Models are score
 
 ### Memory Store
 
-SQLite-backed with optional vector search:
+SQLite-backed with optional vector search. Conversations, memory, scheduler state, and anticipations live in a unified `thane.db` (contacts maintain a separate `contacts.db`):
 
 - **Facts** — Categorized knowledge (user, home, device, routine, preference) with embeddings
 - **Conversations** — Full history with tool calls
@@ -343,6 +424,63 @@ Thane publishes operational telemetry as HA-discoverable MQTT entities:
 - `sensor.aimee_thane_last_request` — timestamp of last interaction
 - `sensor.aimee_thane_version` — running version
 
+### Notification System
+
+Provider-agnostic notification delivery with human-in-the-loop (HITL) callback support (`internal/notifications/`):
+
+- **Fire-and-forget** — `send_notification` delivers messages through configured providers (currently HA companion app push)
+- **Actionable notifications** — `request_human_decision` sends notifications with response buttons and tracks callbacks via UUIDv7 request IDs
+- **Timeout handling** — configurable per-request timeouts with auto-execute, escalation (re-send at urgent priority), or cancel behaviors
+- **Provider interface** — `NotificationProvider` abstracts delivery; new channels implement `Send` and `SendActionable`
+- **Contact-aware routing** — recipient resolution through the contact directory; delivery channel selected from contact properties
+- **Callback dispatch** — MQTT-based action button responses route back to the originating session or spawn a delegate task if the session has rotated
+
+### CardDAV Server
+
+Native contact sync via CardDAV protocol (`internal/carddav/`):
+
+- Backed by the contacts store — no separate data source
+- Implements RFC 6352 via `emersion/go-webdav`
+- Enables macOS Contacts.app, iOS, and Thunderbird to sync with Thane's contact directory
+- Basic Auth with configurable credentials
+- Trust zone-aware vCard export (`FilterCardForTrustZone` strips sensitive fields for lower zones)
+- VCF import/export tools for bulk operations (`import_vcf`, `export_vcf`, `export_vcf_qr`, `export_all_vcf`)
+- Dynamic rebind loop for interfaces that appear after startup (Tailscale, VPN)
+
+### Media Feeds & Analysis
+
+RSS/Atom feed monitoring and media content analysis (`internal/media/`):
+
+- **Feed polling** — periodic checks for new entries on followed feeds (RSS, Atom, YouTube channels via yt-dlp URL discovery)
+- **Transcript extraction** — fetches subtitles and transcripts from YouTube, podcasts, and other yt-dlp-supported sources
+- **Analysis vault** — structured analysis output to Obsidian-compatible markdown files with YAML frontmatter
+- **Engagement tracking** — records which content has been analyzed for dedup and follow-up
+- **VTT cleaning** — strips timing lines, HTML tags, and deduplicates rolling captions from auto-generated subtitles
+- **Feed management tools** — `media_follow`, `media_unfollow`, `media_feeds`, `media_transcript`, `media_save_analysis`
+
+### Event Bus
+
+In-process publish/subscribe system for operational observability (`internal/events/`):
+
+- Source-tagged events from agent loop, Signal bridge, delegate, email, metacognitive loop, and scheduler
+- Event kinds: `request_start`, `llm_call`, `llm_response`, `tool_call`, `tool_done`, `request_complete`, and more
+- Nil-safe `Bus` — components publish without guard checks; a nil bus is a no-op
+- Powers the web dashboard's real-time execution view
+
+### Web Dashboard
+
+Built-in operational visibility interface (`internal/server/web/`):
+
+- **Overview** — runtime stats, model router info, dependency health, uptime
+- **Chat** — interactive web chat interface (OpenAI-compatible streaming)
+- **Contacts** — list, search, and inspect contacts with property details
+- **Facts** — browse the semantic knowledge store
+- **Sessions** — list and inspect conversation sessions with full transcripts and timeline view
+- **Tasks** — view scheduled tasks with execution history
+- **Anticipations** — monitor active event-driven triggers
+
+Served on the same port as the native API (8080). Uses embedded HTML templates and static assets (htmx).
+
 ## Technology Choices
 
 | Choice | Rationale |
@@ -355,6 +493,10 @@ Thane publishes operational telemetry as HA-discoverable MQTT entities:
 | **goldmark** | Markdown → HTML for email MIME conversion |
 | **go-message** | RFC 5322 MIME parsing and composition |
 | **go-imap/v2** | Modern IMAP client with extension support |
+| **go-vcard** | vCard parsing and serialization for contact import/export |
+| **go-webdav** | CardDAV server implementation (RFC 6352) |
+| **go-qrcode** | QR code generation for vCard contact sharing |
+| **htmx** | Lightweight frontend interactivity for the web dashboard |
 
 ## Deployment
 
@@ -378,27 +520,6 @@ sudo just install && sudo just service-install
 ```
 
 See [README.md](README.md) for detailed deployment instructions.
-
-## Roadmap
-
-### Phase 1: Foundation ✅
-- OpenAI-compatible API, HA REST client, agent loop, conversation memory, Ollama-compatible dual-port
-
-### Phase 2: Intelligence ✅
-- WebSocket client, model routing, checkpoint/restore, semantic memory, control_device, shell exec, web search (SearXNG + Brave), web fetch, Anthropic provider, httpkit networking layer
-
-### Phase 3: Autonomy ✅
-- MCP host support, delegation system with execution summaries, capability tag system, intent-based routing with quality/speed hints, MQTT publishing, anticipation engine with per-anticipation routing, task scheduler with model overrides, session archive with full-text search, session management tools, session working memory, self-reflection (ego.md), contact directory with trust zones, native email (IMAP read + SMTP send/reply/move), email polling with opstate KV store, context usage injection, inject_files hot-reload
-
-### Phase 4: Visibility & Intelligence 🚧
-- ⬜ Web dashboard for operational visibility (#294)
-- ⬜ Dynamic model registry — hot-reloadable, no restart (#93)
-- ⬜ Email trust-zone triage on poll wake
-- ⬜ TTS, voice pipeline integration
-- ⬜ Git-backed identity store with cryptographic integrity (#43)
-
-### Phase 5: Ecosystem
-- HA Add-on packaging, Apple ecosystem integration, multi-instance deployment
 
 ## License
 
