@@ -185,11 +185,11 @@ func isYouTubeHost(host string) bool {
 	return false
 }
 
-// resolveYouTubeFeed converts a YouTube URL to the corresponding Atom feed
-// URL. Accepts @handle, /channel/, and /playlist?list= URLs. Returns the
-// original URL unchanged if it's already a feed URL or not a YouTube URL.
-// The hostname is validated to prevent unintended fetches on non-YouTube
-// domains that happen to contain similar path patterns.
+// resolveYouTubeFeed converts certain YouTube URLs to the corresponding Atom
+// feed URL. It recognizes @handle, /channel/, and /playlist?list= URLs and
+// rewrites only those patterns. For all other inputs — including URLs that
+// are already feed URLs, non-YouTube URLs, and unsupported YouTube URLs
+// such as /watch or /c/ — the original URL is returned unchanged.
 func resolveYouTubeFeed(ctx context.Context, httpClient *http.Client, rawURL string) (string, error) {
 	// Already a feed URL — return as-is.
 	if strings.Contains(rawURL, "/feeds/videos.xml") {
@@ -203,9 +203,10 @@ func resolveYouTubeFeed(ctx context.Context, httpClient *http.Client, rawURL str
 	}
 
 	// /playlist?list=PLxxxx → construct feed URL directly.
-	if strings.HasPrefix(parsed.Path, "/playlist") {
+	if parsed.Path == "/playlist" || parsed.Path == "/playlist/" {
 		if listID := parsed.Query().Get("list"); listID != "" {
-			return "https://www.youtube.com/feeds/videos.xml?playlist_id=" + listID, nil
+			v := url.Values{"playlist_id": {listID}}
+			return "https://www.youtube.com/feeds/videos.xml?" + v.Encode(), nil
 		}
 	}
 
