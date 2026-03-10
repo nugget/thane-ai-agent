@@ -145,7 +145,7 @@ func (p *ChannelProvider) GetContext(ctx context.Context, _ string) (string, err
 	// Build output: markdown header + channel note + JSON contact block.
 	var sb strings.Builder
 	sb.WriteString("### Channel Context\n")
-	sb.WriteString(fmt.Sprintf("- **Source:** %s\n", formatSourceName(source)))
+	fmt.Fprintf(&sb, "- **Source:** %s\n", formatSourceName(source))
 	if channelNote != "" {
 		sb.WriteString(fmt.Sprintf("- **Note:** %s\n", channelNote))
 	}

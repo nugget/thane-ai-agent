@@ -14,6 +14,9 @@ linters:
       - linters:
           - errcheck
         path: _test\.go
+      - linters:
+          - staticcheck
+        text: "QF1012"
     paths:
       - third_party$
       - builtin$
