@@ -48,6 +48,16 @@
         </dl>
         <div id="detail-supervisor" class="supervisor-bar" hidden></div>
 
+        <!-- Live: in-flight iteration telemetry (shown only during processing) -->
+        <div id="detail-live" class="live-activity" hidden>
+          <h3 class="section-title">Live Activity</h3>
+          <div class="live-header">
+            <span class="live-elapsed" id="detail-elapsed">0s</span>
+            <span class="live-model" id="detail-live-model"></span>
+          </div>
+          <ul class="live-tools" id="detail-live-tools"></ul>
+        </div>
+
         <!-- Last iteration: current context demands (hidden for handler-only loops) -->
         <div id="detail-last-iter" hidden>
           <div id="detail-context" class="context-meter" hidden>

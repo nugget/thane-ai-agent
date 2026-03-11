@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/nugget/thane-ai-agent/internal/agent"
+	"github.com/nugget/thane-ai-agent/internal/events"
 	"github.com/nugget/thane-ai-agent/internal/loop"
 )
 
@@ -17,7 +18,10 @@ type loopAdapter struct {
 }
 
 // Run converts a [loop.RunRequest] to [agent.Request], calls the agent
-// loop, and converts the result back to [loop.RunResponse].
+// loop, and converts the result back to [loop.RunResponse]. When
+// [loop.RunRequest.OnProgress] is set, streaming events from the agent
+// (tool calls, LLM responses) are forwarded through it so the loop
+// infrastructure can publish them on the event bus.
 func (a *loopAdapter) Run(ctx context.Context, req loop.RunRequest, _ loop.StreamCallback) (*loop.RunResponse, error) {
 	// Convert messages.
 	msgs := make([]agent.Message, len(req.Messages))
@@ -33,7 +37,37 @@ func (a *loopAdapter) Run(ctx context.Context, req loop.RunRequest, _ loop.Strea
 		Hints:          req.Hints,
 	}
 
-	resp, err := a.agentLoop.Run(ctx, agentReq, nil)
+	// Build an agent streaming callback that relays tool and LLM
+	// events through the loop's OnProgress callback.
+	var agentStream agent.StreamCallback
+	if req.OnProgress != nil {
+		agentStream = func(e agent.StreamEvent) {
+			switch e.Kind {
+			case agent.KindToolCallStart:
+				if e.ToolCall != nil {
+					req.OnProgress(events.KindLoopToolStart, map[string]any{
+						"tool": e.ToolCall.Function.Name,
+					})
+				}
+			case agent.KindToolCallDone:
+				data := map[string]any{"tool": e.ToolName}
+				if e.ToolError != "" {
+					data["error"] = e.ToolError
+				}
+				req.OnProgress(events.KindLoopToolDone, data)
+			case agent.KindLLMResponse:
+				if e.Response != nil {
+					req.OnProgress(events.KindLoopLLMResponse, map[string]any{
+						"model":         e.Response.Model,
+						"input_tokens":  e.Response.InputTokens,
+						"output_tokens": e.Response.OutputTokens,
+					})
+				}
+			}
+		}
+	}
+
+	resp, err := a.agentLoop.Run(ctx, agentReq, agentStream)
 	if err != nil {
 		return nil, fmt.Errorf("agent loop: %w", err)
 	}

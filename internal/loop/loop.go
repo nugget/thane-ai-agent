@@ -29,6 +29,14 @@ type RunRequest struct {
 	ExcludeTools   []string
 	SkipTagFilter  bool
 	Hints          map[string]string
+
+	// OnProgress is called by the Runner during execution to report
+	// in-flight activity (tool calls, LLM responses). The kind
+	// parameter maps to an [events.Kind] constant; data holds
+	// event-specific fields. The loop automatically injects loop_id
+	// and loop_name into data before publishing. Nil means no
+	// progress reporting.
+	OnProgress func(kind string, data map[string]any) `json:"-"`
 }
 
 // RunMessage is a chat message for the runner.
@@ -649,6 +657,29 @@ func (l *Loop) run(ctx context.Context) {
 	})
 }
 
+// makeProgressFunc returns a callback that publishes in-flight
+// progress events to the event bus with loop context (id, name).
+// Returns nil when there is no event bus, which disables progress
+// reporting in the runner.
+func (l *Loop) makeProgressFunc() func(string, map[string]any) {
+	if l.deps.EventBus == nil {
+		return nil
+	}
+	return func(kind string, data map[string]any) {
+		if data == nil {
+			data = make(map[string]any)
+		}
+		data["loop_id"] = l.id
+		data["loop_name"] = l.config.Name
+		l.deps.EventBus.Publish(events.Event{
+			Timestamp: time.Now(),
+			Source:    events.SourceLoop,
+			Kind:      kind,
+			Data:      data,
+		})
+	}
+}
+
 // iterate performs a single loop iteration: build prompt and run the
 // LLM via the agent runner.
 func (l *Loop) iterate(ctx context.Context, isSupervisor bool, convID string) (*IterationResult, error) {
@@ -701,6 +732,7 @@ func (l *Loop) iterate(ctx context.Context, isSupervisor bool, convID string) (*
 		ExcludeTools:  l.config.ExcludeTools,
 		SkipTagFilter: len(l.config.Tags) == 0,
 		Hints:         hints,
+		OnProgress:    l.makeProgressFunc(),
 	}
 
 	resp, err := l.deps.Runner.Run(ctx, req, nil)

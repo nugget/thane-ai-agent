@@ -133,6 +133,50 @@ function shortID(id) {
 }
 
 // ---------------------------------------------------------------------------
+// Live Telemetry Timers
+// ---------------------------------------------------------------------------
+
+let elapsedTimerId = null;
+
+function startElapsedTimer() {
+  stopElapsedTimer();
+  elapsedTimerId = setInterval(() => {
+    if (!loopData || !loopData._iterStartTs) return;
+    const el = document.getElementById('detail-elapsed');
+    if (el) el.textContent = formatDuration(Date.now() - loopData._iterStartTs);
+  }, 1000);
+}
+
+function stopElapsedTimer() {
+  if (elapsedTimerId) {
+    clearInterval(elapsedTimerId);
+    elapsedTimerId = null;
+  }
+}
+
+function clearLiveTelemetry() {
+  if (loopData) {
+    loopData._iterStartTs = null;
+    loopData._liveTools = [];
+    loopData._liveModel = '';
+  }
+  stopElapsedTimer();
+}
+
+function renderLiveTools() {
+  const ul = $('#detail-live-tools');
+  if (!ul) return;
+  ul.innerHTML = '';
+  const tools = (loopData && loopData._liveTools) || [];
+  for (const entry of tools) {
+    const li = document.createElement('li');
+    li.className = 'live-tool live-tool--' + entry.status;
+    li.textContent = entry.tool;
+    ul.appendChild(li);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Log Rendering (duplicated from app.js)
 // ---------------------------------------------------------------------------
 
@@ -434,6 +478,11 @@ function applyLoopEvent(evt) {
       loopData.attempts = (loopData.attempts || 0) + 1;
       loopData._supervisor = !!d.supervisor;
       loopData._currentConvID = d.conversation_id || loopData._currentConvID;
+      // Reset live telemetry for new iteration.
+      loopData._liveTools = [];
+      loopData._liveModel = '';
+      loopData._iterStartTs = Date.now();
+      startElapsedTimer();
       break;
     case 'loop_iteration_complete':
       loopData.iterations = (loopData.iterations || 0) + 1;
@@ -449,9 +498,12 @@ function applyLoopEvent(evt) {
         loopData.last_output_tokens = d.output_tokens;
       }
       if (d.context_window > 0) loopData.context_window = d.context_window;
+      // Clear live telemetry.
+      clearLiveTelemetry();
       break;
     case 'loop_sleep_start': {
       loopData.state = 'sleeping';
+      clearLiveTelemetry();
       const ms = parseDuration(d.sleep_duration || '');
       if (ms > 0) {
         sleepTimers.set(nodeId, { startedAt: new Date(), durationMs: ms });
@@ -460,16 +512,37 @@ function applyLoopEvent(evt) {
     }
     case 'loop_wait_start':
       loopData.state = 'waiting';
+      clearLiveTelemetry();
       sleepTimers.delete(nodeId);
       break;
     case 'loop_error':
       loopData.last_error = d.error;
+      clearLiveTelemetry();
       break;
     case 'loop_state_change':
       loopData.state = d.to;
+      if (d.to !== 'processing') clearLiveTelemetry();
       break;
     case 'loop_stopped':
       loopData.state = 'stopped';
+      clearLiveTelemetry();
+      break;
+    case 'loop_tool_start':
+      if (!loopData._liveTools) loopData._liveTools = [];
+      loopData._liveTools.push({ tool: d.tool, status: 'running' });
+      break;
+    case 'loop_tool_done':
+      if (loopData._liveTools) {
+        for (let i = loopData._liveTools.length - 1; i >= 0; i--) {
+          if (loopData._liveTools[i].tool === d.tool && loopData._liveTools[i].status === 'running') {
+            loopData._liveTools[i].status = d.error ? 'error' : 'done';
+            break;
+          }
+        }
+      }
+      break;
+    case 'loop_llm_response':
+      loopData._liveModel = d.model || '';
       break;
   }
 }
@@ -511,6 +584,18 @@ function renderLoopDetail() {
   // Supervisor bar.
   renderSupervisorBar();
 
+  // Live activity section (visible only during processing).
+  const liveSection = $('#detail-live');
+  const isProcessing = loopData.state === 'processing' && loopData._iterStartTs;
+  if (isProcessing) {
+    liveSection.hidden = false;
+    $('#detail-elapsed').textContent = formatDuration(Date.now() - loopData._iterStartTs);
+    $('#detail-live-model').textContent = loopData._liveModel || '';
+    renderLiveTools();
+  } else {
+    liveSection.hidden = true;
+  }
+
   // Last-iteration section (LLM loops only, after first completed iteration).
   const hasIterData = loopData._lastModel || loopData.last_input_tokens;
   const lastIterSection = $('#detail-last-iter');
@@ -523,8 +608,9 @@ function renderLoopDetail() {
   } else {
     lastIterSection.hidden = true;
   }
+  const hasLive = !liveSection.hidden;
   const hasLastIter = !lastIterSection.hidden;
-  $('#detail-divider').hidden = !(showForward || hasLastIter);
+  $('#detail-divider').hidden = !(showForward || hasLive || hasLastIter);
 
   // Lifetime metrics.
   $('#detail-iterations').textContent = formatNumber(loopData.iterations || 0);
@@ -665,6 +751,19 @@ function renderEventList() {
         break;
       case 'loop_state_change':
         kind.textContent = evt.data.from + ' -> ' + evt.data.to;
+        break;
+      case 'loop_tool_start':
+        kind.textContent = 'tool';
+        detail.textContent = evt.data.tool || '';
+        break;
+      case 'loop_tool_done':
+        kind.textContent = 'tool done';
+        kind.className += evt.data.error ? ' event-error' : ' event-ok';
+        detail.textContent = evt.data.tool || '';
+        break;
+      case 'loop_llm_response':
+        kind.textContent = 'llm';
+        detail.textContent = evt.data.model || '';
         break;
       case 'loop_started':
         kind.textContent = 'started';

@@ -12,6 +12,7 @@ const state = {
   selected: null,         // id of currently selected loop ('__system__' for system node)
   events: [],             // recent events (newest first, capped)
   sleepTimers: new Map(), // id -> { startedAt: Date, durationMs: number }
+  elapsedTimers: new Map(), // id -> setInterval id for live elapsed display
   system: null,           // system status object from /api/system
   prevIterations: new Map(), // id -> last known iteration count (for flash detection)
   prevErrors: new Map(),     // id -> last known error string (for shake detection)
@@ -311,6 +312,11 @@ function handleLoopEvent(evt) {
         loop._supervisor = !!evt.data.supervisor;
         loop.attempts = evt.data.attempt || loop.attempts;
         loop._currentConvID = evt.data.conversation_id || null;
+        // Reset live telemetry for new iteration.
+        loop._liveTools = [];
+        loop._liveModel = '';
+        loop._iterStartTs = Date.now();
+        startElapsedTimer(loopId);
       }
       break;
 
@@ -328,10 +334,45 @@ function handleLoopEvent(evt) {
         }
         loop.iterations = (loop.iterations || 0) + 1;
         loop._supervisor = false;
+        // Clear live telemetry.
+        loop._iterStartTs = null;
+        loop._liveTools = [];
+        loop._liveModel = '';
+        stopElapsedTimer(loopId);
         // Auto-refresh logs if this loop is selected.
         if (state.selected === loopId) {
           fetchLogs(loopId);
         }
+      }
+      break;
+
+    case 'loop_tool_start':
+      if (loopId && state.loops.has(loopId)) {
+        const loop = state.loops.get(loopId);
+        if (!loop._liveTools) loop._liveTools = [];
+        loop._liveTools.push({ tool: evt.data.tool, status: 'running' });
+      }
+      break;
+
+    case 'loop_tool_done':
+      if (loopId && state.loops.has(loopId)) {
+        const loop = state.loops.get(loopId);
+        if (loop._liveTools) {
+          // Find the last running instance of this tool.
+          for (let i = loop._liveTools.length - 1; i >= 0; i--) {
+            if (loop._liveTools[i].tool === evt.data.tool && loop._liveTools[i].status === 'running') {
+              loop._liveTools[i].status = evt.data.error ? 'error' : 'done';
+              break;
+            }
+          }
+        }
+      }
+      break;
+
+    case 'loop_llm_response':
+      if (loopId && state.loops.has(loopId)) {
+        const loop = state.loops.get(loopId);
+        loop._liveModel = evt.data.model || '';
       }
       break;
 
@@ -344,14 +385,18 @@ function handleLoopEvent(evt) {
           durationMs: durationMs,
         });
         if (state.loops.has(loopId)) {
-          state.loops.get(loopId).state = 'sleeping';
+          const loop = state.loops.get(loopId);
+          loop.state = 'sleeping';
+          clearLiveTelemetry(loop, loopId);
         }
       }
       break;
 
     case 'loop_wait_start':
       if (loopId && state.loops.has(loopId)) {
-        state.loops.get(loopId).state = 'waiting';
+        const loop = state.loops.get(loopId);
+        loop.state = 'waiting';
+        clearLiveTelemetry(loop, loopId);
         // Clear any sleep timer — waiting has no duration.
         state.sleepTimers.delete(loopId);
       }
@@ -363,6 +408,7 @@ function handleLoopEvent(evt) {
         loop.state = 'error';
         loop.last_error = evt.data.error || '';
         loop.consecutive_errors = (loop.consecutive_errors || 0) + 1;
+        clearLiveTelemetry(loop, loopId);
       }
       break;
   }
@@ -953,6 +999,18 @@ function renderDetail() {
     updateSleepDisplay(loop);
   }
 
+  // Live activity section (visible only during processing).
+  const liveSection = $('#detail-live');
+  const isProcessing = loop.state === 'processing' && loop._iterStartTs;
+  if (isProcessing) {
+    liveSection.hidden = false;
+    $('#detail-elapsed').textContent = formatDuration(Date.now() - loop._iterStartTs);
+    $('#detail-live-model').textContent = loop._liveModel || '';
+    renderLiveTools(loop);
+  } else {
+    liveSection.hidden = true;
+  }
+
   // Last-iteration section (LLM loops only, after first completed iteration).
   const hasIterData = loop._lastModel || loop.last_input_tokens;
   const lastIterSection = $('#detail-last-iter');
@@ -965,8 +1023,9 @@ function renderDetail() {
   } else {
     lastIterSection.hidden = true;
   }
+  const hasLive = !liveSection.hidden;
   const hasLastIter = !lastIterSection.hidden;
-  $('#detail-divider').hidden = !(showForward || hasLastIter);
+  $('#detail-divider').hidden = !(showForward || hasLive || hasLastIter);
 
   // Lifetime metrics.
   $('#detail-iterations').textContent = formatNumber(loop.iterations || 0);
@@ -991,6 +1050,18 @@ function renderDetail() {
     }
   } else {
     tagsSection.hidden = true;
+  }
+}
+
+function renderLiveTools(loop) {
+  const ul = $('#detail-live-tools');
+  ul.innerHTML = '';
+  const tools = loop._liveTools || [];
+  for (const entry of tools) {
+    const li = document.createElement('li');
+    li.className = 'live-tool live-tool--' + entry.status;
+    li.textContent = entry.tool;
+    ul.appendChild(li);
   }
 }
 
@@ -1215,6 +1286,19 @@ function renderEventList() {
         break;
       case 'loop_state_change':
         kind.textContent = evt.data.from + ' -> ' + evt.data.to;
+        break;
+      case 'loop_tool_start':
+        kind.textContent = 'tool';
+        detail.textContent = evt.data.tool || '';
+        break;
+      case 'loop_tool_done':
+        kind.textContent = 'tool done';
+        kind.className += evt.data.error ? ' event-error' : ' event-ok';
+        detail.textContent = evt.data.tool || '';
+        break;
+      case 'loop_llm_response':
+        kind.textContent = 'llm';
+        detail.textContent = evt.data.model || '';
         break;
       case 'loop_started':
         kind.textContent = 'started';
@@ -1642,6 +1726,37 @@ function formatDuration(ms) {
   const s = totalSec % 60;
   if (m > 0) return m + 'm ' + s + 's';
   return s + 's';
+}
+
+// ---------------------------------------------------------------------------
+// Live Telemetry Timers
+// ---------------------------------------------------------------------------
+
+function startElapsedTimer(loopId) {
+  stopElapsedTimer(loopId);
+  const tid = setInterval(() => {
+    if (state.selected !== loopId) return;
+    const loop = state.loops.get(loopId);
+    if (!loop || !loop._iterStartTs) return;
+    const el = document.getElementById('detail-elapsed');
+    if (el) el.textContent = formatDuration(Date.now() - loop._iterStartTs);
+  }, 1000);
+  state.elapsedTimers.set(loopId, tid);
+}
+
+function stopElapsedTimer(loopId) {
+  const tid = state.elapsedTimers.get(loopId);
+  if (tid) {
+    clearInterval(tid);
+    state.elapsedTimers.delete(loopId);
+  }
+}
+
+function clearLiveTelemetry(loop, loopId) {
+  loop._iterStartTs = null;
+  loop._liveTools = [];
+  loop._liveModel = '';
+  stopElapsedTimer(loopId);
 }
 
 function formatTime(date) {

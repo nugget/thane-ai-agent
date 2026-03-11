@@ -406,6 +406,71 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
 
 #detail-last-iter[hidden] { display: none; }
 
+/* Live activity section — in-flight iteration telemetry */
+.live-activity { padding: 0.25rem 0 0.5rem; }
+.live-activity[hidden] { display: none; }
+.live-activity .section-title { margin-bottom: 0.25rem; }
+.live-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 0.25rem;
+  font-size: 0.85rem;
+}
+.live-elapsed {
+  font-variant-numeric: tabular-nums;
+  font-family: var(--font-mono);
+  color: var(--accent);
+  font-weight: 600;
+}
+.live-model {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+}
+.live-tools {
+  list-style: none;
+  padding: 0;
+  margin: 0.25rem 0 0;
+  font-size: 0.8rem;
+  font-family: var(--font-mono);
+}
+.live-tool {
+  padding: 2px 0;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--text-secondary);
+}
+.live-tool--running::before {
+  content: '';
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--accent);
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: live-spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+.live-tool--done::before {
+  content: '\2713';
+  color: var(--green);
+  width: 10px;
+  text-align: center;
+  flex-shrink: 0;
+  font-size: 0.75rem;
+}
+.live-tool--error::before {
+  content: '\2717';
+  color: var(--red);
+  width: 10px;
+  text-align: center;
+  flex-shrink: 0;
+  font-size: 0.75rem;
+}
+@keyframes live-spin { to { transform: rotate(360deg); } }
+
 .detail-metrics--iteration dt { color: var(--text-secondary); font-weight: 500; }
 .detail-metrics--iteration dd { color: var(--text-primary); }
 

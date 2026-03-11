@@ -80,6 +80,11 @@ const (
 
 	// KindDone signals the stream is complete. Response carries final metadata.
 	KindDone
+
+	// KindLLMResponse fires when an LLM response is received (before
+	// tool execution begins). Response carries the model name and
+	// token counts at the earliest point they become available.
+	KindLLMResponse
 )
 
 // StreamCallback receives streaming events.

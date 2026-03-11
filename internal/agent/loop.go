@@ -71,6 +71,7 @@ const (
 	KindToolCallStart = llm.KindToolCallStart
 	KindToolCallDone  = llm.KindToolCallDone
 	KindDone          = llm.KindDone
+	KindLLMResponse   = llm.KindLLMResponse
 )
 
 // maxEgoBytes is the maximum size of ego.md content injected into the
@@ -1216,6 +1217,16 @@ iterLoop:
 		// Accumulate token usage
 		totalInputTokens += llmResp.InputTokens
 		totalOutputTokens += llmResp.OutputTokens
+
+		// Emit LLM response event for streaming consumers. Fires
+		// before tool execution so the caller sees model and token
+		// info as early as possible.
+		if stream != nil {
+			stream(llm.StreamEvent{
+				Kind:     llm.KindLLMResponse,
+				Response: llmResp,
+			})
+		}
 
 		iterLog.Info("llm response",
 			"model", model,
