@@ -635,6 +635,58 @@ async function fetchLoopLogs() {
 }
 
 // ---------------------------------------------------------------------------
+// Inspector Sidebar Resize
+// ---------------------------------------------------------------------------
+
+(function initResize() {
+  const handle = document.getElementById('popup-resize');
+  const inspector = document.getElementById('inspector');
+  const mainEl = document.querySelector('.popup-main');
+  let dragging = false;
+
+  handle.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    dragging = true;
+    handle.classList.add('popup-resize--active');
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  });
+
+  document.addEventListener('mousemove', (e) => {
+    if (!dragging) return;
+    e.preventDefault();
+    const mainRect = mainEl.getBoundingClientRect();
+    const isLeft = document.body.classList.contains('inspector-left');
+    let newWidth;
+    if (isLeft) {
+      // Inspector is on the left: width = mouse X relative to main left.
+      newWidth = e.clientX - mainRect.left;
+    } else {
+      // Inspector is on the right: width = main right edge minus mouse X.
+      newWidth = mainRect.right - e.clientX;
+    }
+    const clamped = Math.max(160, Math.min(newWidth, mainRect.width - 200));
+    inspector.style.width = clamped + 'px';
+  });
+
+  document.addEventListener('mouseup', () => {
+    if (!dragging) return;
+    dragging = false;
+    handle.classList.remove('popup-resize--active');
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+  });
+})();
+
+// ---------------------------------------------------------------------------
+// Swap Inspector Side
+// ---------------------------------------------------------------------------
+
+$('#toggle-side').addEventListener('click', () => {
+  document.body.classList.toggle('inspector-left');
+});
+
+// ---------------------------------------------------------------------------
 // Event Bindings
 // ---------------------------------------------------------------------------
 
@@ -652,8 +704,11 @@ $('#log-refresh').addEventListener('click', () => {
 // Boot
 // ---------------------------------------------------------------------------
 
+// Set toolbar title.
 if (nodeType === 'system') {
+  $('#popup-title').textContent = 'Runtime';
   initSystem();
 } else {
+  $('#popup-title').textContent = nodeId ? nodeId.slice(0, 8) + '...' : 'Loop';
   initLoop();
 }

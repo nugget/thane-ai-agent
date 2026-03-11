@@ -12,13 +12,14 @@
       height: 100vh;
       overflow: hidden;
     }
-    .popup-inspector {
+    .popup-main {
+      display: flex;
       flex: 1;
-      overflow-y: auto;
-      padding: 0.75rem;
-      border-bottom: 1px solid var(--border);
       min-height: 0;
+      overflow: hidden;
     }
+    /* Inspector sidebar — right by default, toggleable. */
+    body.inspector-left .popup-main { flex-direction: row-reverse; }
     .popup-logs {
       flex: 1;
       display: flex;
@@ -44,6 +45,36 @@
       color: var(--text-muted);
       font-size: 0.85rem;
     }
+    .popup-resize {
+      width: 4px;
+      flex-shrink: 0;
+      background: var(--border);
+      cursor: col-resize;
+      transition: background 0.15s;
+    }
+    .popup-resize:hover, .popup-resize--active { background: var(--accent); }
+    .popup-inspector {
+      width: 240px;
+      min-width: 160px;
+      flex-shrink: 0;
+      overflow-y: auto;
+      padding: 0.75rem;
+      background: var(--bg-secondary);
+    }
+    .popup-toolbar {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0.3rem 0.75rem;
+      background: var(--bg-secondary);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+    .popup-toolbar .toggle-btn {
+      font-size: 0.65rem;
+      padding: 0.1em 0.5em;
+    }
+    .popup-toolbar .spacer { flex: 1; }
     .popup-status {
       font-size: 0.7rem;
       color: var(--text-muted);
@@ -55,84 +86,97 @@
   </style>
 </head>
 <body>
-  <section class="popup-inspector" id="inspector">
-    <!-- Loop detail (shown for type=loop) -->
-    <div id="loop-detail" hidden>
-      <div class="detail-header">
-        <h2 id="detail-name" class="detail-name"></h2>
-        <span id="detail-state" class="state-badge"></span>
-      </div>
-      <div id="detail-ids" class="detail-ids"></div>
-      <dl id="detail-forward" class="detail-metrics detail-metrics--forward" hidden>
-        <dt id="detail-sleep-label" hidden>Sleep</dt>
-        <dd id="detail-sleep" hidden>-</dd>
-      </dl>
-      <div id="detail-supervisor" class="supervisor-bar" hidden></div>
-      <hr class="detail-divider" id="detail-divider" hidden>
-      <dl class="detail-metrics detail-metrics--history">
-        <dt>Iterations</dt><dd id="detail-iterations">-</dd>
-        <dt>Attempts</dt><dd id="detail-attempts">-</dd>
-        <dt>Input Tokens</dt><dd id="detail-input-tokens">-</dd>
-        <dt>Output Tokens</dt><dd id="detail-output-tokens">-</dd>
-        <dt>Last Model</dt><dd id="detail-model">-</dd>
-        <dt>Last Error</dt><dd id="detail-error" class="detail-error">-</dd>
-        <dt>Started</dt><dd id="detail-started">-</dd>
-      </dl>
-      <h3 class="section-title">Recent Events</h3>
-      <ul id="event-list" class="event-list"></ul>
-    </div>
+  <div class="popup-toolbar">
+    <button id="toggle-side" class="toggle-btn" title="Move inspector to other side">&#x21C4; Swap</button>
+    <span class="spacer"></span>
+    <span id="popup-title" style="font-size:0.75rem;color:var(--text-secondary);font-weight:600;"></span>
+  </div>
 
-    <!-- System detail (shown for type=system) -->
-    <div id="system-detail" hidden>
-      <div class="detail-header">
-        <h2 class="detail-name">Runtime</h2>
-        <span id="system-status" class="state-badge"></span>
+  <div class="popup-main">
+    <!-- Logs take the main area -->
+    <section class="popup-logs" id="logs-section">
+      <div class="log-toolbar">
+        <h3 class="section-title">Logs</h3>
+        <div class="log-filters">
+          <select id="log-level" class="log-select">
+            <option value="">All Levels</option>
+            <option value="ERROR">Error</option>
+            <option value="WARN">Warn+</option>
+            <option value="INFO">Info+</option>
+            <option value="DEBUG">Debug+</option>
+          </select>
+          <button id="log-refresh" class="btn btn--sm">Refresh</button>
+        </div>
       </div>
-      <h3 class="section-title">Services</h3>
-      <div id="system-services" class="system-services"></div>
-      <hr class="detail-divider">
-      <dl class="detail-metrics">
-        <dt>Uptime</dt><dd id="system-uptime">-</dd>
-        <dt>Version</dt><dd id="system-version">-</dd>
-        <dt>Commit</dt><dd id="system-commit">-</dd>
-        <dt>Go</dt><dd id="system-go">-</dd>
-        <dt>Arch</dt><dd id="system-arch">-</dd>
-      </dl>
-    </div>
-  </section>
+      <div id="log-empty" class="log-empty">
+        <p>Loading logs...</p>
+      </div>
+      <div id="log-scroll" class="log-scroll" hidden>
+        <table id="log-table" class="log-table">
+          <thead>
+            <tr>
+              <th class="log-col-time">Time</th>
+              <th class="log-col-level">Level</th>
+              <th class="log-col-subsystem">Sub</th>
+              <th class="log-col-msg">Message</th>
+              <th class="log-col-detail">Detail</th>
+            </tr>
+          </thead>
+          <tbody id="log-body"></tbody>
+        </table>
+      </div>
+    </section>
 
-  <section class="popup-logs" id="logs-section">
-    <div class="log-toolbar">
-      <h3 class="section-title">Logs</h3>
-      <div class="log-filters">
-        <select id="log-level" class="log-select">
-          <option value="">All Levels</option>
-          <option value="ERROR">Error</option>
-          <option value="WARN">Warn+</option>
-          <option value="INFO">Info+</option>
-          <option value="DEBUG">Debug+</option>
-        </select>
-        <button id="log-refresh" class="btn btn--sm">Refresh</button>
+    <!-- Draggable resize handle -->
+    <div class="popup-resize" id="popup-resize"></div>
+
+    <!-- Inspector sidebar (right by default) -->
+    <section class="popup-inspector" id="inspector">
+      <!-- Loop detail (shown for type=loop) -->
+      <div id="loop-detail" hidden>
+        <div class="detail-header">
+          <h2 id="detail-name" class="detail-name"></h2>
+          <span id="detail-state" class="state-badge"></span>
+        </div>
+        <div id="detail-ids" class="detail-ids"></div>
+        <dl id="detail-forward" class="detail-metrics detail-metrics--forward" hidden>
+          <dt id="detail-sleep-label" hidden>Sleep</dt>
+          <dd id="detail-sleep" hidden>-</dd>
+        </dl>
+        <div id="detail-supervisor" class="supervisor-bar" hidden></div>
+        <hr class="detail-divider" id="detail-divider" hidden>
+        <dl class="detail-metrics detail-metrics--history">
+          <dt>Iterations</dt><dd id="detail-iterations">-</dd>
+          <dt>Attempts</dt><dd id="detail-attempts">-</dd>
+          <dt>Input Tokens</dt><dd id="detail-input-tokens">-</dd>
+          <dt>Output Tokens</dt><dd id="detail-output-tokens">-</dd>
+          <dt>Last Model</dt><dd id="detail-model">-</dd>
+          <dt>Last Error</dt><dd id="detail-error" class="detail-error">-</dd>
+          <dt>Started</dt><dd id="detail-started">-</dd>
+        </dl>
+        <h3 class="section-title">Recent Events</h3>
+        <ul id="event-list" class="event-list"></ul>
       </div>
-    </div>
-    <div id="log-empty" class="log-empty">
-      <p>Loading logs...</p>
-    </div>
-    <div id="log-scroll" class="log-scroll" hidden>
-      <table id="log-table" class="log-table">
-        <thead>
-          <tr>
-            <th class="log-col-time">Time</th>
-            <th class="log-col-level">Level</th>
-            <th class="log-col-subsystem">Sub</th>
-            <th class="log-col-msg">Message</th>
-            <th class="log-col-detail">Detail</th>
-          </tr>
-        </thead>
-        <tbody id="log-body"></tbody>
-      </table>
-    </div>
-  </section>
+
+      <!-- System detail (shown for type=system) -->
+      <div id="system-detail" hidden>
+        <div class="detail-header">
+          <h2 class="detail-name">Runtime</h2>
+          <span id="system-status" class="state-badge"></span>
+        </div>
+        <h3 class="section-title">Services</h3>
+        <div id="system-services" class="system-services"></div>
+        <hr class="detail-divider">
+        <dl class="detail-metrics">
+          <dt>Uptime</dt><dd id="system-uptime">-</dd>
+          <dt>Version</dt><dd id="system-version">-</dd>
+          <dt>Commit</dt><dd id="system-commit">-</dd>
+          <dt>Go</dt><dd id="system-go">-</dd>
+          <dt>Arch</dt><dd id="system-arch">-</dd>
+        </dl>
+      </div>
+    </section>
+  </div>
 
   <div class="popup-status" id="popup-status">Connecting...</div>
 
