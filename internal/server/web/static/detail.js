@@ -7,7 +7,37 @@ const $ = (sel) => document.querySelector(sel);
 const logEmpty = $('#log-empty');
 const logScroll = $('#log-scroll');
 const logBody = $('#log-body');
-const statusBar = $('#popup-status');
+const connDot = $('#conn-dot');
+const pollSlider = $('#poll-rate');
+const pollLabel = $('#poll-rate-label');
+
+// ---------------------------------------------------------------------------
+// Connection Status (dot indicator instead of status bar)
+// ---------------------------------------------------------------------------
+
+function setConnStatus(state, detail) {
+  connDot.className = 'conn-dot' + (state === 'ok' ? ' conn-dot--ok' : state === 'err' ? ' conn-dot--err' : '');
+  connDot.title = detail || state;
+}
+
+// ---------------------------------------------------------------------------
+// Dynamic Log Poll Rate
+// ---------------------------------------------------------------------------
+
+let logPollInterval = null;
+
+function startLogPoll() {
+  if (logPollInterval) clearInterval(logPollInterval);
+  const secs = parseInt(pollSlider.value, 10);
+  pollLabel.textContent = secs + 's';
+  const fetchFn = nodeType === 'system' ? fetchSystemLogs : fetchLoopLogs;
+  logPollInterval = setInterval(fetchFn, secs * 1000);
+}
+
+pollSlider.addEventListener('input', () => {
+  pollLabel.textContent = parseInt(pollSlider.value, 10) + 's';
+  startLogPoll();
+});
 
 // Parse URL params.
 const urlParams = new URLSearchParams(window.location.search);
@@ -260,7 +290,7 @@ function initSystem() {
   fetchSystemStatus();
   fetchSystemLogs();
   setInterval(fetchSystemStatus, 10000);
-  setInterval(fetchSystemLogs, 10000);
+  startLogPoll();
   setInterval(updateSystemUptime, 1000);
 }
 
@@ -311,9 +341,9 @@ async function fetchSystemStatus() {
     $('#system-go').textContent = ver.go_version || '-';
     $('#system-arch').textContent = (ver.os || '') + '/' + (ver.arch || '') || '-';
 
-    statusBar.textContent = 'Connected \u2014 last updated ' + formatTime(new Date());
+    setConnStatus('ok', 'Connected \u2014 last updated ' + formatTime(new Date()));
   } catch (err) {
-    statusBar.textContent = 'Error: ' + err.message;
+    setConnStatus('err', 'Error: ' + err.message);
   }
 }
 
@@ -348,7 +378,7 @@ const sleepTimers = new Map();
 
 function initLoop() {
   if (!nodeId) {
-    statusBar.textContent = 'Error: no loop ID specified';
+    setConnStatus('err', 'Error: no loop ID specified');
     return;
   }
 
@@ -356,12 +386,12 @@ function initLoop() {
 
   connectSSE();
   fetchLoopLogs();
-  setInterval(fetchLoopLogs, 10000);
+  startLogPoll();
   setInterval(tickLoop, 1000);
 }
 
 function connectSSE() {
-  statusBar.textContent = 'Connecting...';
+  setConnStatus('connecting', 'Connecting...');
   const es = new EventSource('/api/loops/events');
 
   es.addEventListener('snapshot', (e) => {
@@ -372,7 +402,7 @@ function connectSSE() {
       document.title = 'Thane \u00b7 ' + (match.name || nodeId.slice(0, 8));
       renderLoopDetail();
     }
-    statusBar.textContent = 'Connected \u2014 ' + formatTime(new Date());
+    setConnStatus('ok', 'Connected \u2014 ' + formatTime(new Date()));
   });
 
   es.addEventListener('loop_event', (e) => {
@@ -386,11 +416,11 @@ function connectSSE() {
   });
 
   es.addEventListener('error', () => {
-    statusBar.textContent = 'Disconnected \u2014 reconnecting...';
+    setConnStatus('err', 'Disconnected \u2014 reconnecting...');
   });
 
   es.addEventListener('open', () => {
-    statusBar.textContent = 'Connected';
+    setConnStatus('ok', 'Connected');
   });
 }
 

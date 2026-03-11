@@ -65,17 +65,22 @@
       overflow: hidden;
       background: var(--bg-secondary);
     }
-    .inspector-controls {
+    .inspector-header {
+      flex-shrink: 0;
+      border-bottom: 1px solid var(--border);
+    }
+    .inspector-row {
       display: flex;
       align-items: center;
       gap: 0.35rem;
-      padding: 0.3rem 0.5rem;
-      border-bottom: 1px solid var(--border);
-      flex-shrink: 0;
+      padding: 0.25rem 0.5rem;
     }
-    .inspector-controls .toggle-btn {
-      font-size: 0.6rem;
-      padding: 0.1em 0.4em;
+    .inspector-row + .inspector-row {
+      padding-top: 0;
+    }
+    .inspector-row .toggle-btn {
+      font-size: 0.65rem;
+      padding: 0.15em 0.5em;
     }
     .inspector-title {
       font-size: 0.7rem;
@@ -85,12 +90,48 @@
       overflow: hidden;
       text-overflow: ellipsis;
     }
-    .inspector-controls .spacer { flex: 1; }
-    .inspector-controls .log-select {
+    .inspector-row .spacer { flex: 1; }
+    .conn-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      background: var(--orange);
+      transition: background 0.3s;
+    }
+    .conn-dot--ok { background: var(--green); }
+    .conn-dot--err { background: var(--red); }
+    .poll-label {
+      font-size: 0.6rem;
+      font-family: var(--font-mono);
+      color: var(--text-muted);
+      min-width: 2.2em;
+      text-align: right;
+      flex-shrink: 0;
+    }
+    .poll-slider {
+      flex: 1;
+      min-width: 0;
+      height: 4px;
+      -webkit-appearance: none;
+      appearance: none;
+      background: var(--border);
+      border-radius: 2px;
+      outline: none;
+    }
+    .poll-slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--accent);
+      cursor: pointer;
+    }
+    .inspector-row .log-select {
       font-size: 0.65rem;
       padding: 0.15em 0.3em;
     }
-    .inspector-controls .btn--sm {
+    .inspector-row .btn--sm {
       font-size: 0.65rem;
       padding: 0.1em 0.4em;
     }
@@ -99,14 +140,7 @@
       overflow-y: auto;
       padding: 0.75rem;
     }
-    .popup-status {
-      font-size: 0.7rem;
-      color: var(--text-muted);
-      padding: 0.25rem 0.75rem;
-      background: var(--bg-secondary);
-      border-top: 1px solid var(--border);
-      flex-shrink: 0;
-    }
+    /* (status bar removed — connection state shown via dot in inspector) */
   </style>
 </head>
 <body>
@@ -137,18 +171,25 @@
 
     <!-- Inspector sidebar (right by default) -->
     <section class="popup-inspector" id="inspector">
-      <div class="inspector-controls">
-        <button id="toggle-side" class="toggle-btn" title="Move inspector to other side">&#x21C4;</button>
-        <span id="popup-title" class="inspector-title"></span>
-        <span class="spacer"></span>
-        <select id="log-level" class="log-select">
-          <option value="">All</option>
-          <option value="ERROR">Error</option>
-          <option value="WARN">Warn+</option>
-          <option value="INFO">Info+</option>
-          <option value="DEBUG">Debug+</option>
-        </select>
-        <button id="log-refresh" class="btn btn--sm">Refresh</button>
+      <div class="inspector-header">
+        <div class="inspector-row">
+          <button id="toggle-side" class="toggle-btn" title="Swap inspector side">&#x21C4; Swap</button>
+          <span id="popup-title" class="inspector-title"></span>
+          <span class="spacer"></span>
+          <span id="conn-dot" class="conn-dot" title="Connecting..."></span>
+        </div>
+        <div class="inspector-row">
+          <label class="poll-label" id="poll-rate-label" for="poll-rate">2s</label>
+          <input type="range" id="poll-rate" class="poll-slider" min="1" max="60" value="2">
+          <select id="log-level" class="log-select">
+            <option value="">All</option>
+            <option value="ERROR">Error</option>
+            <option value="WARN">Warn+</option>
+            <option value="INFO">Info+</option>
+            <option value="DEBUG">Debug+</option>
+          </select>
+          <button id="log-refresh" class="btn btn--sm">Refresh</button>
+        </div>
       </div>
 
       <div class="inspector-body">
@@ -202,8 +243,6 @@
       </div>
     </section>
   </div>
-
-  <div class="popup-status" id="popup-status">Connecting...</div>
 
   <script src="/static/detail.js"></script>
 </body>
