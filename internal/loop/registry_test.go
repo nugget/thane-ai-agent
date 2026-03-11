@@ -20,7 +20,7 @@ func TestRegistryRegisterDeregister(t *testing.T) {
 	t.Parallel()
 
 	r := NewRegistry()
-	l := mustNew(t, Config{Name: "test-loop"}, Deps{Runner: &noopRunner{}})
+	l := mustNew(t, Config{Name: "test-loop", Task: "test"}, Deps{Runner: &noopRunner{}})
 
 	if err := r.Register(l); err != nil {
 		t.Fatalf("Register: %v", err)
@@ -49,9 +49,9 @@ func TestRegistryConcurrencyLimit(t *testing.T) {
 	r := NewRegistry(WithMaxLoops(2))
 	runner := &noopRunner{}
 
-	l1 := mustNew(t, Config{Name: "loop-1"}, Deps{Runner: runner})
-	l2 := mustNew(t, Config{Name: "loop-2"}, Deps{Runner: runner})
-	l3 := mustNew(t, Config{Name: "loop-3"}, Deps{Runner: runner})
+	l1 := mustNew(t, Config{Name: "loop-1", Task: "test"}, Deps{Runner: runner})
+	l2 := mustNew(t, Config{Name: "loop-2", Task: "test"}, Deps{Runner: runner})
+	l3 := mustNew(t, Config{Name: "loop-3", Task: "test"}, Deps{Runner: runner})
 
 	if err := r.Register(l1); err != nil {
 		t.Fatalf("Register l1: %v", err)
@@ -74,7 +74,7 @@ func TestRegistryGetAndGetByName(t *testing.T) {
 	t.Parallel()
 
 	r := NewRegistry()
-	l := mustNew(t, Config{Name: "named-loop"}, Deps{Runner: &noopRunner{}})
+	l := mustNew(t, Config{Name: "named-loop", Task: "test"}, Deps{Runner: &noopRunner{}})
 
 	if err := r.Register(l); err != nil {
 		t.Fatalf("Register: %v", err)
@@ -100,8 +100,8 @@ func TestRegistryList(t *testing.T) {
 
 	r := NewRegistry()
 	runner := &noopRunner{}
-	l1 := mustNew(t, Config{Name: "bravo"}, Deps{Runner: runner})
-	l2 := mustNew(t, Config{Name: "alpha"}, Deps{Runner: runner})
+	l1 := mustNew(t, Config{Name: "bravo", Task: "test"}, Deps{Runner: runner})
+	l2 := mustNew(t, Config{Name: "alpha", Task: "test"}, Deps{Runner: runner})
 
 	_ = r.Register(l1)
 	_ = r.Register(l2)
@@ -123,7 +123,7 @@ func TestRegistryStatuses(t *testing.T) {
 	t.Parallel()
 
 	r := NewRegistry()
-	l := mustNew(t, Config{Name: "status-test"}, Deps{Runner: &noopRunner{}})
+	l := mustNew(t, Config{Name: "status-test", Task: "test"}, Deps{Runner: &noopRunner{}})
 	_ = r.Register(l)
 
 	statuses := r.Statuses()
@@ -183,7 +183,7 @@ func TestRegistryShutdownAllWithUnstartedLoops(t *testing.T) {
 	runner := &noopRunner{}
 
 	// Register but don't start.
-	l := mustNew(t, Config{Name: "unstarted"}, Deps{Runner: runner})
+	l := mustNew(t, Config{Name: "unstarted", Task: "test"}, Deps{Runner: runner})
 	_ = r.Register(l)
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

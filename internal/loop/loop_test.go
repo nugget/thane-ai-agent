@@ -2,6 +2,7 @@ package loop
 
 import (
 	"context"
+	"fmt"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -473,6 +474,90 @@ func TestLoopSupervisorDice(t *testing.T) {
 	})
 }
 
+func TestErrorBackoffBehavior(t *testing.T) {
+	t.Parallel()
+
+	// failingRunner errors for failCount calls, then succeeds.
+	var callNum atomic.Int32
+	const failCount = 3
+	runner := &callbackRunner{
+		fn: func(_ context.Context, _ RunRequest) (*RunResponse, error) {
+			n := callNum.Add(1)
+			if n <= failCount {
+				return nil, fmt.Errorf("simulated failure %d", n)
+			}
+			return &RunResponse{
+				Content:      "ok",
+				Model:        "test-model",
+				InputTokens:  10,
+				OutputTokens: 5,
+			}, nil
+		},
+	}
+
+	l, err := New(Config{
+		Name:         "backoff-test",
+		Task:         "test",
+		SleepMin:     1 * time.Millisecond,
+		SleepMax:     100 * time.Millisecond,
+		SleepDefault: 5 * time.Millisecond,
+		Jitter:       Float64Ptr(0),
+		MaxIter:      5, // 3 failures + 2 successes
+	}, Deps{Runner: runner})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	_ = l.Start(context.Background())
+
+	select {
+	case <-l.Done():
+	case <-time.After(10 * time.Second):
+		t.Fatal("loop did not finish within 10s")
+	}
+
+	status := l.Status()
+
+	// We expect 3 failures + 2 successes = 5 attempts, 2 iterations.
+	if status.Attempts != 5 {
+		t.Errorf("attempts = %d, want 5", status.Attempts)
+	}
+	if status.Iterations != 2 {
+		t.Errorf("iterations = %d, want 2", status.Iterations)
+	}
+	// After a success, consecutiveErrors should be reset.
+	if l.consecutiveErrors != 0 {
+		t.Errorf("consecutiveErrors = %d, want 0 (reset after success)", l.consecutiveErrors)
+	}
+	// LastError should be empty after a successful final iteration.
+	if status.LastError != "" {
+		t.Errorf("lastError = %q, want empty", status.LastError)
+	}
+}
+
+func TestBackoffCapsAtSleepMax(t *testing.T) {
+	t.Parallel()
+
+	l := &Loop{
+		config: Config{
+			SleepMin:     1 * time.Second,
+			SleepMax:     10 * time.Second,
+			SleepDefault: 1 * time.Second,
+		},
+		deps: Deps{Rand: fixedRand{0.5}},
+	}
+
+	// With many errors, backoff should never exceed SleepMax.
+	l.consecutiveErrors = 100
+	got := l.computeSleep()
+	if got > l.config.SleepMax {
+		t.Errorf("backoff with 100 errors = %v, exceeds SleepMax %v", got, l.config.SleepMax)
+	}
+	if got != l.config.SleepMax {
+		t.Errorf("backoff with 100 errors = %v, want SleepMax %v", got, l.config.SleepMax)
+	}
+}
+
 func TestDoubleStartIsNoop(t *testing.T) {
 	t.Parallel()
 
@@ -500,10 +585,10 @@ func TestDoubleStartIsNoop(t *testing.T) {
 	<-l.Done()
 }
 
-func TestStopBeforeStartIsNoop(t *testing.T) {
+func TestStopBeforeStartPreventsStart(t *testing.T) {
 	t.Parallel()
 
-	l, err := New(Config{Name: "never-started"}, Deps{Runner: &noopRunner{}})
+	l, err := New(Config{Name: "never-started", Task: "test"}, Deps{Runner: &noopRunner{}})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -512,12 +597,18 @@ func TestStopBeforeStartIsNoop(t *testing.T) {
 	if l.Done() != nil {
 		t.Error("Done() should be nil before Start")
 	}
+
+	// Attempting to start after Stop should fail.
+	err = l.Start(context.Background())
+	if err != ErrLoopStopped {
+		t.Errorf("Start after Stop: got %v, want ErrLoopStopped", err)
+	}
 }
 
 func TestNewRequiresRunner(t *testing.T) {
 	t.Parallel()
 
-	_, err := New(Config{Name: "no-runner"}, Deps{})
+	_, err := New(Config{Name: "no-runner", Task: "test"}, Deps{})
 	if err != ErrNilRunner {
 		t.Errorf("New without runner: got %v, want ErrNilRunner", err)
 	}
@@ -536,10 +627,19 @@ func TestNewValidation(t *testing.T) {
 		}
 	})
 
+	t.Run("empty task", func(t *testing.T) {
+		t.Parallel()
+		_, err := New(Config{Name: "no-task"}, Deps{Runner: runner})
+		if err == nil {
+			t.Error("expected error for empty Task")
+		}
+	})
+
 	t.Run("SleepMax less than SleepMin", func(t *testing.T) {
 		t.Parallel()
 		_, err := New(Config{
 			Name:     "bad-sleep",
+			Task:     "test",
 			SleepMin: 5 * time.Minute,
 			SleepMax: 1 * time.Second,
 		}, Deps{Runner: runner})
@@ -552,6 +652,7 @@ func TestNewValidation(t *testing.T) {
 		t.Parallel()
 		_, err := New(Config{
 			Name:   "bad-jitter",
+			Task:   "test",
 			Jitter: Float64Ptr(1.5),
 		}, Deps{Runner: runner})
 		if err == nil {
@@ -563,6 +664,7 @@ func TestNewValidation(t *testing.T) {
 		t.Parallel()
 		_, err := New(Config{
 			Name:           "bad-prob",
+			Task:           "test",
 			SupervisorProb: 2.0,
 		}, Deps{Runner: runner})
 		if err == nil {
@@ -601,4 +703,13 @@ func (r *inspectingRunner) Run(_ context.Context, req RunRequest, _ StreamCallba
 		InputTokens:  10,
 		OutputTokens: 5,
 	}, nil
+}
+
+// callbackRunner delegates Run to a caller-provided function.
+type callbackRunner struct {
+	fn func(context.Context, RunRequest) (*RunResponse, error)
+}
+
+func (r *callbackRunner) Run(ctx context.Context, req RunRequest, _ StreamCallback) (*RunResponse, error) {
+	return r.fn(ctx, req)
 }

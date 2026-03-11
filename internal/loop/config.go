@@ -165,6 +165,9 @@ func (c *Config) applyDefaults() {
 // validate checks that post-default Config values are internally
 // consistent. Called by [New] after [applyDefaults].
 func (c *Config) validate() error {
+	if c.Task == "" {
+		return fmt.Errorf("loop: Task is required")
+	}
 	if c.SleepMin <= 0 {
 		return fmt.Errorf("loop: SleepMin must be positive, got %v", c.SleepMin)
 	}

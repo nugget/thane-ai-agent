@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"math/rand/v2"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -85,9 +86,15 @@ type Loop struct {
 	mu        sync.Mutex
 	state     State
 	started   bool
+	stopped   bool // set by Stop to prevent Start after Stop
 	cancel    context.CancelFunc
 	done      chan struct{}
 	startedAt time.Time
+
+	// eventSeq is a monotonic counter for state-change events.
+	// Published outside the lock to avoid deadlock if the event bus
+	// blocks, so consumers use the sequence number to reorder.
+	eventSeq atomic.Int64
 
 	// Metrics updated during execution.
 	lastWakeAt        time.Time
@@ -145,13 +152,21 @@ func (l *Loop) ID() string { return l.id }
 // Name returns the loop's configured name.
 func (l *Loop) Name() string { return l.config.Name }
 
+// ErrLoopStopped is returned by [Loop.Start] when the loop has already
+// been stopped. A stopped loop cannot be restarted.
+var ErrLoopStopped = errors.New("loop: cannot start a stopped loop")
+
 // Start launches the background goroutine. Calling Start on an already
-// running loop is a no-op (returns nil). The goroutine runs until ctx is
+// running loop is a no-op (returns nil). Returns [ErrLoopStopped] if
+// [Loop.Stop] was called before Start. The goroutine runs until ctx is
 // cancelled or [Loop.Stop] is called.
 func (l *Loop) Start(ctx context.Context) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
+	if l.stopped {
+		return ErrLoopStopped
+	}
 	if l.started {
 		return nil
 	}
@@ -167,14 +182,19 @@ func (l *Loop) Start(ctx context.Context) error {
 }
 
 // Stop cancels the loop and waits for the goroutine to exit. Safe to
-// call multiple times or before Start. Blocks until the goroutine exits
-// or 10 seconds elapse.
+// call multiple times or before Start. After Stop, [Loop.Start] will
+// return [ErrLoopStopped]. Blocks until the goroutine exits or 10
+// seconds elapse.
 func (l *Loop) Stop() {
-	l.cancel0()
-
 	l.mu.Lock()
+	l.stopped = true
 	done := l.done
+	cancel := l.cancel
 	l.mu.Unlock()
+
+	if cancel != nil {
+		cancel()
+	}
 
 	if done != nil {
 		select {
@@ -561,11 +581,15 @@ func (l *Loop) applyJitter(d time.Duration) time.Duration {
 	return l.clamp(result)
 }
 
-// setState updates the loop's state under lock.
+// setState updates the loop's state under lock. The state-change event
+// is published outside the lock to avoid deadlocking if the event bus
+// blocks. A monotonic sequence number (event_seq) is included so
+// consumers can reorder events that arrive out of sequence.
 func (l *Loop) setState(s State) {
 	l.mu.Lock()
 	prev := l.state
 	l.state = s
+	seq := l.eventSeq.Add(1)
 	l.mu.Unlock()
 
 	if prev != s {
@@ -578,6 +602,7 @@ func (l *Loop) setState(s State) {
 				"loop_name": l.config.Name,
 				"from":      string(prev),
 				"to":        string(s),
+				"event_seq": seq,
 			},
 		})
 	}
