@@ -1,4 +1,4 @@
-// Package web implements the loop visualizer dashboard served at the
+// Package web implements the Cognition Engine dashboard served at the
 // root of the Thane HTTP server. It provides a single-page interface
 // with real-time SSE event streaming, REST endpoints for loop state
 // snapshots, and log drill-down via the SQLite log index.
@@ -58,7 +58,7 @@ type Config struct {
 	Logger *slog.Logger
 }
 
-// WebServer serves the loop visualizer dashboard and its API endpoints.
+// WebServer serves the Cognition Engine dashboard and its API endpoints.
 type WebServer struct {
 	registry   LoopRegistry
 	eventBus   *events.Bus

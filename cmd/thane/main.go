@@ -2365,7 +2365,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 			webCfg.LogQuerier = &logQueryAdapter{db: indexDB}
 		}
 		server.SetWebServer(web.NewWebServer(webCfg))
-		logger.Info("loop visualizer enabled", "url", fmt.Sprintf("http://localhost:%d/", cfg.Listen.Port))
+		logger.Info("cognition engine dashboard enabled", "url", fmt.Sprintf("http://localhost:%d/", cfg.Listen.Port))
 	}
 
 	if cfg.Metacognitive.Enabled {

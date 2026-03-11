@@ -67,8 +67,8 @@ func TestHandleIndex(t *testing.T) {
 	}
 
 	body, _ := io.ReadAll(resp.Body)
-	if !strings.Contains(string(body), "Loop Visualizer") {
-		t.Error("GET / response does not contain 'Loop Visualizer'")
+	if !strings.Contains(string(body), "Cognition Engine") {
+		t.Error("GET / response does not contain 'Cognition Engine'")
 	}
 	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
 		t.Errorf("GET / Content-Type = %q, want text/html", ct)

@@ -1,4 +1,4 @@
-// Loop Visualizer — vanilla JS, no framework, no build step.
+// Cognition Engine — vanilla JS, no framework, no build step.
 // Connects to the SSE event stream and renders loop nodes as SVG.
 
 'use strict';
