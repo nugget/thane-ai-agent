@@ -394,3 +394,56 @@ func TestHandleSystem_Nil(t *testing.T) {
 		t.Errorf("status = %d, want 404 when SystemStatus is nil", w.Code)
 	}
 }
+
+func TestHandleSystemLogs(t *testing.T) {
+	t.Parallel()
+
+	lq := &stubLogQuerier{
+		entries: []logging.LogEntry{
+			{ID: 1, Level: "INFO", Msg: "startup complete", SourceFile: "cmd/thane/main.go"},
+			{ID: 2, Level: "INFO", Msg: "service connected", SourceFile: "cmd/thane/main.go"},
+		},
+	}
+
+	srv := newTestServer(&stubRegistry{}, lq, events.New())
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	req := httptest.NewRequest("GET", "/api/system/logs", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	resp := w.Result()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /api/system/logs status = %d, want 200", resp.StatusCode)
+	}
+
+	var body map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	count, ok := body["count"].(float64)
+	if !ok {
+		t.Fatal("count field missing")
+	}
+	if count != 2 {
+		t.Errorf("count = %v, want 2", count)
+	}
+}
+
+func TestHandleSystemLogs_NoQuerier(t *testing.T) {
+	t.Parallel()
+
+	srv := newTestServer(&stubRegistry{}, nil, events.New())
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	req := httptest.NewRequest("GET", "/api/system/logs", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want 503 when LogQuerier is nil", w.Code)
+	}
+}

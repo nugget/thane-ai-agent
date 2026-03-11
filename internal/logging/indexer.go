@@ -462,17 +462,18 @@ type LogEntry struct {
 // as a minimum severity: WARN returns WARN and ERROR entries, DEBUG
 // returns everything including TRACE.
 type QueryParams struct {
-	SessionID      string
-	ConversationID string
-	RequestID      string
-	Subsystem      string
-	Tool           string
-	Model          string
-	Level          string    // minimum level: ERROR > WARN > INFO > DEBUG
-	Since          time.Time // zero = no lower bound
-	Until          time.Time // zero = defaults to now
-	Pattern        string    // substring match on msg
-	Limit          int       // default 50, max 200
+	SessionID        string
+	ConversationID   string
+	RequestID        string
+	Subsystem        string
+	Tool             string
+	Model            string
+	Level            string    // minimum level: ERROR > WARN > INFO > DEBUG
+	Since            time.Time // zero = no lower bound
+	Until            time.Time // zero = defaults to now
+	Pattern          string    // substring match on msg
+	SourceFilePrefix string    // prefix match on source_file (e.g., "cmd/thane/")
+	Limit            int       // default 50, max 200
 }
 
 // QueryBySession returns log entries matching the given session ID,
@@ -583,6 +584,10 @@ func Query(db *sql.DB, params QueryParams) ([]LogEntry, error) {
 	if params.Pattern != "" {
 		query += " AND msg LIKE '%' || ? || '%'"
 		args = append(args, params.Pattern)
+	}
+	if params.SourceFilePrefix != "" {
+		query += " AND source_file LIKE ? || '%'"
+		args = append(args, params.SourceFilePrefix)
 	}
 
 	// Default and cap limit.

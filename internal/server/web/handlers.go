@@ -107,6 +107,41 @@ func (s *WebServer) handleLoopLogs(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleSystemLogs returns log entries from the runtime (cmd/thane/)
+// source files. This surfaces startup, wiring, and connwatch logs
+// in the system detail panel.
+func (s *WebServer) handleSystemLogs(w http.ResponseWriter, r *http.Request) {
+	if s.logQuerier == nil {
+		http.Error(w, `{"error":"log index not available"}`, http.StatusServiceUnavailable)
+		return
+	}
+
+	// Parse optional query parameters.
+	level := r.URL.Query().Get("level")
+	limit := 100
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 200 {
+			limit = n
+		}
+	}
+
+	entries, err := s.logQuerier.Query(logging.QueryParams{
+		SourceFilePrefix: "cmd/thane/",
+		Level:            level,
+		Limit:            limit,
+	})
+	if err != nil {
+		s.logger.Warn("system log query failed", "error", err)
+		http.Error(w, `{"error":"query failed"}`, http.StatusInternalServerError)
+		return
+	}
+
+	s.writeJSON(w, map[string]any{
+		"entries": entries,
+		"count":   len(entries),
+	})
+}
+
 // loopEvent wraps an [events.Event] for SSE serialization with a
 // top-level kind field for easy client-side dispatch.
 type loopEvent struct {

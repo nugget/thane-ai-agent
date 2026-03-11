@@ -954,14 +954,28 @@ function selectLoop(loopId) {
 function selectSystem() {
   if (state.selected === '__system__') {
     state.selected = null;
+    logEmpty.hidden = false;
+    logEmpty.querySelector('p').textContent = 'Click a loop node to load logs';
+    logScroll.hidden = true;
   } else {
     state.selected = '__system__';
-    // No log drill-down for system node.
-    logEmpty.hidden = false;
-    logEmpty.querySelector('p').textContent = 'System node has no logs';
-    logScroll.hidden = true;
+    fetchSystemLogs();
   }
   renderAll();
+}
+
+async function fetchSystemLogs() {
+  const level = $('#log-level').value;
+  let url = '/api/system/logs?limit=100';
+  if (level) url += '&level=' + encodeURIComponent(level);
+
+  try {
+    const resp = await fetch(url);
+    const data = await resp.json();
+    renderLogs(data.entries || []);
+  } catch (err) {
+    console.warn('Failed to fetch system logs:', err);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -997,13 +1011,16 @@ function tick() {
 // Event Bindings
 // ---------------------------------------------------------------------------
 
-$('#log-level').addEventListener('change', () => {
-  if (state.selected) fetchLogs(state.selected);
-});
+function refreshLogs() {
+  if (state.selected === '__system__') {
+    fetchSystemLogs();
+  } else if (state.selected) {
+    fetchLogs(state.selected);
+  }
+}
 
-$('#log-refresh').addEventListener('click', () => {
-  if (state.selected) fetchLogs(state.selected);
-});
+$('#log-level').addEventListener('change', refreshLogs);
+$('#log-refresh').addEventListener('click', refreshLogs);
 
 // ---------------------------------------------------------------------------
 // Helpers
