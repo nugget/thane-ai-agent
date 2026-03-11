@@ -261,6 +261,15 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
   max-width: 100%;
 }
 
+.id-chip--muted {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.id-chip--muted::after {
+  content: '';
+}
+
 .detail-header {
   display: flex;
   align-items: center;

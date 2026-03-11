@@ -1026,9 +1026,11 @@ function renderDetailIDs(loop) {
     container.appendChild(makeIDRow('conv_id', loop._currentConvID));
   }
 
-  // Recent conversation IDs.
+  // Recent conversation IDs — skip for handler-only loops where the
+  // IDs are just iteration counters with no associated LLM conversation.
   const convs = loop.recent_conv_ids;
-  if (convs && convs.length > 0) {
+  const MAX_VISIBLE_CONVS = 5;
+  if (convs && convs.length > 0 && !loop.handler_only) {
     const row = document.createElement('div');
     row.className = 'id-row';
 
@@ -1039,8 +1041,15 @@ function renderDetailIDs(loop) {
 
     const chips = document.createElement('span');
     chips.className = 'id-convs';
-    for (const cid of convs) {
+    const visible = convs.slice(0, MAX_VISIBLE_CONVS);
+    for (const cid of visible) {
       chips.appendChild(makeIDChip(cid));
+    }
+    if (convs.length > MAX_VISIBLE_CONVS) {
+      const more = document.createElement('span');
+      more.className = 'id-chip id-chip--muted';
+      more.textContent = '+' + (convs.length - MAX_VISIBLE_CONVS);
+      chips.appendChild(more);
     }
     row.appendChild(chips);
     container.appendChild(row);
