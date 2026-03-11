@@ -112,6 +112,7 @@ type Loop struct {
 	totalInputTokens  int
 	totalOutputTokens int
 	lastInputTokens   int
+	lastOutputTokens  int
 	contextWindow     int
 	lastError         string
 
@@ -306,6 +307,7 @@ func (l *Loop) Status() Status {
 		TotalInputTokens:  l.totalInputTokens,
 		TotalOutputTokens: l.totalOutputTokens,
 		LastInputTokens:   l.lastInputTokens,
+		LastOutputTokens:  l.lastOutputTokens,
 		ContextWindow:     l.contextWindow,
 		LastError:         l.lastError,
 		ConsecutiveErrors: l.consecutiveErrors,
@@ -554,6 +556,7 @@ func (l *Loop) run(ctx context.Context) {
 			l.totalInputTokens += result.InputTokens
 			l.totalOutputTokens += result.OutputTokens
 			l.lastInputTokens = result.InputTokens
+			l.lastOutputTokens = result.OutputTokens
 			if result.ContextWindow > 0 {
 				l.contextWindow = result.ContextWindow
 			}

@@ -444,7 +444,10 @@ function applyLoopEvent(evt) {
         loopData.total_input_tokens = (loopData.total_input_tokens || 0) + d.input_tokens;
         loopData.last_input_tokens = d.input_tokens;
       }
-      if (d.output_tokens) loopData.total_output_tokens = (loopData.total_output_tokens || 0) + d.output_tokens;
+      if (d.output_tokens) {
+        loopData.total_output_tokens = (loopData.total_output_tokens || 0) + d.output_tokens;
+        loopData.last_output_tokens = d.output_tokens;
+      }
       if (d.context_window > 0) loopData.context_window = d.context_window;
       break;
     case 'loop_sleep_start': {
@@ -508,17 +511,26 @@ function renderLoopDetail() {
   // Supervisor bar.
   renderSupervisorBar();
 
-  // Context utilization meter.
-  renderContextMeter();
-  const hasContext = !$('#detail-context').hidden;
-  $('#detail-divider').hidden = !(showForward || hasContext);
+  // Last-iteration section (LLM loops only, after first completed iteration).
+  const hasIterData = loopData._lastModel || loopData.last_input_tokens;
+  const lastIterSection = $('#detail-last-iter');
+  if (hasIterData) {
+    lastIterSection.hidden = false;
+    renderContextMeter();
+    $('#detail-model').textContent = loopData._lastModel || '-';
+    $('#detail-iter-input').textContent = loopData.last_input_tokens ? formatTokens(loopData.last_input_tokens) : '—';
+    $('#detail-iter-output').textContent = loopData.last_output_tokens ? formatTokens(loopData.last_output_tokens) : '—';
+  } else {
+    lastIterSection.hidden = true;
+  }
+  const hasLastIter = !lastIterSection.hidden;
+  $('#detail-divider').hidden = !(showForward || hasLastIter);
 
-  // Historical metrics.
+  // Lifetime metrics.
   $('#detail-iterations').textContent = formatNumber(loopData.iterations || 0);
   $('#detail-attempts').textContent = formatNumber(loopData.attempts || 0);
   $('#detail-input-tokens').textContent = loopData.total_input_tokens ? formatTokens(loopData.total_input_tokens) : '—';
   $('#detail-output-tokens').textContent = loopData.total_output_tokens ? formatTokens(loopData.total_output_tokens) : '—';
-  $('#detail-model').textContent = loopData._lastModel || '-';
   $('#detail-error').textContent = loopData.last_error || '-';
   $('#detail-started').textContent = loopData.started_at ? timeAgo(new Date(loopData.started_at)) : '-';
 

@@ -48,28 +48,37 @@
         </dl>
         <div id="detail-supervisor" class="supervisor-bar" hidden></div>
 
-        <div id="detail-context" class="context-meter" hidden>
-          <span class="context-meter__label">Context</span>
-          <div class="context-meter__track">
-            <div class="context-meter__fill" id="detail-context-fill"></div>
+        <!-- Last iteration: current context demands (hidden for handler-only loops) -->
+        <div id="detail-last-iter" hidden>
+          <div id="detail-context" class="context-meter" hidden>
+            <span class="context-meter__label">Context</span>
+            <div class="context-meter__track">
+              <div class="context-meter__fill" id="detail-context-fill"></div>
+            </div>
+            <span class="context-meter__pct" id="detail-context-pct"></span>
           </div>
-          <span class="context-meter__pct" id="detail-context-pct"></span>
+          <dl class="detail-metrics detail-metrics--iteration">
+            <dt>Model</dt>
+            <dd id="detail-model">-</dd>
+            <dt>Input</dt>
+            <dd id="detail-iter-input">-</dd>
+            <dt>Output</dt>
+            <dd id="detail-iter-output">-</dd>
+          </dl>
         </div>
 
         <hr class="detail-divider" id="detail-divider">
 
-        <!-- Historical: what happened -->
+        <!-- Lifetime: cumulative runtime stats -->
         <dl class="detail-metrics detail-metrics--history">
           <dt>Iterations</dt>
           <dd id="detail-iterations">-</dd>
           <dt>Attempts</dt>
           <dd id="detail-attempts">-</dd>
-          <dt>Input Tokens</dt>
+          <dt>Total Input</dt>
           <dd id="detail-input-tokens">-</dd>
-          <dt>Output Tokens</dt>
+          <dt>Total Output</dt>
           <dd id="detail-output-tokens">-</dd>
-          <dt>Last Model</dt>
-          <dd id="detail-model">-</dd>
           <dt>Last Error</dt>
           <dd id="detail-error" class="detail-error">-</dd>
           <dt>Started</dt>

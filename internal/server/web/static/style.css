@@ -404,6 +404,11 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
 .detail-metrics dt[hidden],
 .detail-metrics dd[hidden] { display: none; }
 
+#detail-last-iter[hidden] { display: none; }
+
+.detail-metrics--iteration dt { color: var(--text-secondary); font-weight: 500; }
+.detail-metrics--iteration dd { color: var(--text-primary); }
+
 .detail-metrics--history dt { color: var(--text-muted); }
 .detail-metrics--history dd { color: var(--text-secondary); }
 

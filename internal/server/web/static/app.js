@@ -322,6 +322,7 @@ function handleLoopEvent(evt) {
         loop.total_input_tokens = (loop.total_input_tokens || 0) + (evt.data.input_tokens || 0);
         loop.total_output_tokens = (loop.total_output_tokens || 0) + (evt.data.output_tokens || 0);
         loop.last_input_tokens = evt.data.input_tokens || 0;
+        loop.last_output_tokens = evt.data.output_tokens || 0;
         if (evt.data.context_window > 0) {
           loop.context_window = evt.data.context_window;
         }
@@ -718,6 +719,9 @@ function renderNode(loop, x, y) {
     // Force reflow to restart animation.
     void ring.offsetWidth;
     ring.classList.add('node-ring--flash');
+    ring.addEventListener('animationend', () => {
+      ring.classList.remove('node-ring--flash');
+    }, { once: true });
 
     // Brief green pulse on the shape — guarantees visual feedback for
     // fast handler loops where processing state is too brief to render.
@@ -949,17 +953,26 @@ function renderDetail() {
     updateSleepDisplay(loop);
   }
 
-  // Context utilization meter.
-  renderContextMeter(loop);
-  const hasContext = !$('#detail-context').hidden;
-  $('#detail-divider').hidden = !(showForward || hasContext);
+  // Last-iteration section (LLM loops only, after first completed iteration).
+  const hasIterData = loop._lastModel || loop.last_input_tokens;
+  const lastIterSection = $('#detail-last-iter');
+  if (hasIterData) {
+    lastIterSection.hidden = false;
+    renderContextMeter(loop);
+    $('#detail-model').textContent = loop._lastModel || '-';
+    $('#detail-iter-input').textContent = loop.last_input_tokens ? formatTokens(loop.last_input_tokens) : '—';
+    $('#detail-iter-output').textContent = loop.last_output_tokens ? formatTokens(loop.last_output_tokens) : '—';
+  } else {
+    lastIterSection.hidden = true;
+  }
+  const hasLastIter = !lastIterSection.hidden;
+  $('#detail-divider').hidden = !(showForward || hasLastIter);
 
-  // Historical metrics.
+  // Lifetime metrics.
   $('#detail-iterations').textContent = formatNumber(loop.iterations || 0);
   $('#detail-attempts').textContent = formatNumber(loop.attempts || 0);
   $('#detail-input-tokens').textContent = loop.total_input_tokens ? formatTokens(loop.total_input_tokens) : '—';
   $('#detail-output-tokens').textContent = loop.total_output_tokens ? formatTokens(loop.total_output_tokens) : '—';
-  $('#detail-model').textContent = loop._lastModel || '-';
   $('#detail-error').textContent = loop.last_error || '-';
   $('#detail-started').textContent = loop.started_at ? timeAgo(new Date(loop.started_at)) : '-';
 

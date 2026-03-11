@@ -269,6 +269,8 @@ type Status struct {
 	TotalOutputTokens int `json:"total_output_tokens"`
 	// LastInputTokens is the input token count from the most recent iteration.
 	LastInputTokens int `json:"last_input_tokens,omitempty"`
+	// LastOutputTokens is the output token count from the most recent iteration.
+	LastOutputTokens int `json:"last_output_tokens,omitempty"`
 	// ContextWindow is the maximum context size (in tokens) of the model used.
 	ContextWindow int `json:"context_window,omitempty"`
 	// LastError is the error message from the most recent failed iteration.
