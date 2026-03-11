@@ -762,6 +762,71 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
   animation: pulse-error 2s ease-in-out infinite;
 }
 
+/* === System Node === */
+.system-node { cursor: pointer; }
+.system-node:hover .system-rect { filter: brightness(1.2); }
+
+.system-rect {
+  stroke: rgba(255, 255, 255, 0.15);
+  stroke-width: 2;
+  transition: fill 0.6s ease, filter 0.6s ease;
+}
+
+.system-rect--healthy {
+  fill: var(--green);
+  stroke: var(--green);
+  filter: drop-shadow(0 0 6px var(--green-glow));
+}
+
+.system-rect--degraded {
+  fill: var(--orange);
+  stroke: var(--orange);
+  filter: drop-shadow(0 0 6px var(--orange-glow));
+}
+
+.node-selected .system-rect {
+  stroke: var(--accent);
+  stroke-width: 3;
+}
+
+/* === System Detail Panel === */
+.system-services {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin-bottom: 0.75rem;
+}
+
+.system-svc-row {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.8rem;
+}
+
+.system-svc-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.system-svc-dot--ok { background: var(--green); }
+.system-svc-dot--err { background: var(--orange); }
+
+.system-svc-name {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+.system-svc-error {
+  color: var(--orange);
+  font-size: 0.7rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Progress ring for sleep countdown */
 .sleep-ring {
   fill: none;

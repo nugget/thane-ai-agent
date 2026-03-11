@@ -2359,6 +2359,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		webCfg := web.Config{
 			LoopRegistry: loopRegistry,
 			EventBus:     eventBus,
+			SystemStatus: &systemStatusAdapter{connMgr: connMgr},
 			Logger:       logger,
 		}
 		if indexDB != nil {

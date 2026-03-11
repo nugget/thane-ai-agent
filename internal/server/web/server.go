@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/events"
 	"github.com/nugget/thane-ai-agent/internal/logging"
@@ -46,6 +47,29 @@ type LogQuerier interface {
 	Query(params logging.QueryParams) ([]logging.LogEntry, error)
 }
 
+// SystemStatusProvider exposes runtime health and metadata for the
+// system node on the dashboard canvas. Nil disables the system node.
+type SystemStatusProvider interface {
+	// Health returns the current health state of all watched services.
+	Health() map[string]ServiceHealth
+	// Uptime returns how long the process has been running.
+	Uptime() time.Duration
+	// Version returns build and runtime metadata.
+	Version() map[string]string
+}
+
+// ServiceHealth describes the health of a single watched service.
+type ServiceHealth struct {
+	// Name is the human-readable service name.
+	Name string `json:"name"`
+	// Ready indicates whether the service is currently healthy.
+	Ready bool `json:"ready"`
+	// LastCheck is the RFC3339 timestamp of the last health probe.
+	LastCheck string `json:"last_check,omitempty"`
+	// LastError is the error from the most recent failed probe.
+	LastError string `json:"last_error,omitempty"`
+}
+
 // Config holds dependencies for the web server.
 type Config struct {
 	// LoopRegistry provides loop status snapshots. Required.
@@ -54,16 +78,20 @@ type Config struct {
 	EventBus *events.Bus
 	// LogQuerier enables log drill-down. Nil disables the feature.
 	LogQuerier LogQuerier
+	// SystemStatus provides runtime health for the system canvas node.
+	// Nil disables the system node.
+	SystemStatus SystemStatusProvider
 	// Logger for web server operations. Defaults to slog.Default().
 	Logger *slog.Logger
 }
 
 // WebServer serves the Cognition Engine dashboard and its API endpoints.
 type WebServer struct {
-	registry   LoopRegistry
-	eventBus   *events.Bus
-	logQuerier LogQuerier
-	logger     *slog.Logger
+	registry     LoopRegistry
+	eventBus     *events.Bus
+	logQuerier   LogQuerier
+	systemStatus SystemStatusProvider
+	logger       *slog.Logger
 }
 
 // NewWebServer creates a web server with the given configuration.
@@ -73,10 +101,11 @@ func NewWebServer(cfg Config) *WebServer {
 		logger = slog.Default()
 	}
 	return &WebServer{
-		registry:   cfg.LoopRegistry,
-		eventBus:   cfg.EventBus,
-		logQuerier: cfg.LogQuerier,
-		logger:     logger,
+		registry:     cfg.LoopRegistry,
+		eventBus:     cfg.EventBus,
+		logQuerier:   cfg.LogQuerier,
+		systemStatus: cfg.SystemStatus,
+		logger:       logger,
 	}
 }
 
@@ -85,6 +114,7 @@ func NewWebServer(cfg Config) *WebServer {
 func (s *WebServer) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /", s.handleIndex)
 	mux.HandleFunc("GET /static/{file...}", s.handleStatic)
+	mux.HandleFunc("GET /api/system", s.handleSystem)
 	mux.HandleFunc("GET /api/loops", s.handleLoops)
 	mux.HandleFunc("GET /api/loops/events", s.handleLoopEvents)
 	mux.HandleFunc("GET /api/loops/{id}/logs", s.handleLoopLogs)

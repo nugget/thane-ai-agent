@@ -48,6 +48,17 @@ func newTestServer(reg LoopRegistry, lq LogQuerier, bus *events.Bus) *WebServer 
 	})
 }
 
+// stubSystemStatus implements [SystemStatusProvider] for tests.
+type stubSystemStatus struct {
+	health  map[string]ServiceHealth
+	uptime  time.Duration
+	version map[string]string
+}
+
+func (s *stubSystemStatus) Health() map[string]ServiceHealth { return s.health }
+func (s *stubSystemStatus) Uptime() time.Duration            { return s.uptime }
+func (s *stubSystemStatus) Version() map[string]string       { return s.version }
+
 // --- Tests ---
 
 func TestHandleIndex(t *testing.T) {
@@ -282,5 +293,104 @@ func TestHandleLoopEvents_Snapshot(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("timeout waiting for snapshot event")
+	}
+}
+
+func TestHandleSystem_Healthy(t *testing.T) {
+	t.Parallel()
+
+	sys := &stubSystemStatus{
+		health: map[string]ServiceHealth{
+			"mqtt":          {Name: "MQTT", Ready: true, LastCheck: "2025-01-01T00:00:00Z"},
+			"homeassistant": {Name: "Home Assistant", Ready: true},
+		},
+		uptime:  3*time.Hour + 42*time.Minute,
+		version: map[string]string{"version": "v0.1.0", "git_commit": "abc1234"},
+	}
+
+	srv := NewWebServer(Config{
+		LoopRegistry: &stubRegistry{},
+		EventBus:     events.New(),
+		SystemStatus: sys,
+	})
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	req := httptest.NewRequest("GET", "/api/system", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	resp := w.Result()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /api/system status = %d, want 200", resp.StatusCode)
+	}
+
+	var body map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	if body["status"] != "healthy" {
+		t.Errorf("status = %v, want healthy", body["status"])
+	}
+	if body["uptime"] != "3h42m0s" {
+		t.Errorf("uptime = %v, want 3h42m0s", body["uptime"])
+	}
+	health, ok := body["health"].(map[string]any)
+	if !ok {
+		t.Fatal("health field missing or not a map")
+	}
+	if len(health) != 2 {
+		t.Errorf("got %d services, want 2", len(health))
+	}
+}
+
+func TestHandleSystem_Degraded(t *testing.T) {
+	t.Parallel()
+
+	sys := &stubSystemStatus{
+		health: map[string]ServiceHealth{
+			"mqtt": {Name: "MQTT", Ready: true},
+			"ha":   {Name: "Home Assistant", Ready: false, LastError: "connection refused"},
+		},
+		uptime:  time.Minute,
+		version: map[string]string{"version": "dev"},
+	}
+
+	srv := NewWebServer(Config{
+		LoopRegistry: &stubRegistry{},
+		EventBus:     events.New(),
+		SystemStatus: sys,
+	})
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	req := httptest.NewRequest("GET", "/api/system", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	var body map[string]any
+	if err := json.NewDecoder(w.Result().Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	if body["status"] != "degraded" {
+		t.Errorf("status = %v, want degraded", body["status"])
+	}
+}
+
+func TestHandleSystem_Nil(t *testing.T) {
+	t.Parallel()
+
+	srv := newTestServer(&stubRegistry{}, nil, events.New())
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	req := httptest.NewRequest("GET", "/api/system", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404 when SystemStatus is nil", w.Code)
 	}
 }

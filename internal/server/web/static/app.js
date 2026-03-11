@@ -9,9 +9,10 @@
 
 const state = {
   loops: new Map(),       // id -> loop status object
-  selected: null,         // id of currently selected loop
+  selected: null,         // id of currently selected loop ('__system__' for system node)
   events: [],             // recent events (newest first, capped)
   sleepTimers: new Map(), // id -> { startedAt: Date, durationMs: number }
+  system: null,           // system status object from /api/system
 };
 
 const MAX_EVENTS = 50;
@@ -202,6 +203,20 @@ async function fetchLogs(loopId) {
   }
 }
 
+async function fetchSystemStatus() {
+  try {
+    const resp = await fetch('/api/system');
+    if (resp.status === 404) {
+      state.system = null;
+      return;
+    }
+    state.system = await resp.json();
+    renderAll();
+  } catch (err) {
+    console.warn('Failed to fetch system status:', err);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Rendering — SVG Nodes
 // ---------------------------------------------------------------------------
@@ -214,7 +229,8 @@ function renderAll() {
 
 function renderNodes() {
   const loops = Array.from(state.loops.values());
-  emptyState.hidden = loops.length > 0;
+  const hasSystem = state.system !== null;
+  emptyState.hidden = loops.length > 0 || hasSystem;
 
   // Get canvas dimensions for centering.
   const rect = canvas.getBoundingClientRect();
@@ -239,6 +255,14 @@ function renderNodes() {
     if (!state.loops.has(g.dataset.loopId)) {
       g.remove();
     }
+  }
+
+  // System node — positioned offset from center.
+  if (hasSystem) {
+    renderSystemNode(cx - radius - 100, cy);
+  } else {
+    const existing = canvasWorld.querySelector('.system-node');
+    if (existing) existing.remove();
   }
 }
 
@@ -363,12 +387,118 @@ function updateSleepRing(group, loopId) {
   sleepRing.setAttribute('stroke-dashoffset', offset);
 }
 
+function renderSystemNode(x, y) {
+  const sys = state.system;
+  const w = 72, h = 48, r = 8;
+  let group = canvasWorld.querySelector('.system-node');
+
+  if (!group) {
+    group = createSVG('g', { class: 'system-node' });
+    group.addEventListener('click', () => selectSystem());
+
+    const title = createSVG('title', {});
+    title.textContent = 'Runtime';
+    group.appendChild(title);
+
+    // Rounded rect (as path for rounded corners).
+    const rect = createSVG('rect', {
+      class: 'system-rect',
+      x: -w / 2, y: -h / 2,
+      width: w, height: h,
+      rx: r, ry: r,
+    });
+    group.appendChild(rect);
+
+    const label = createSVG('text', {
+      class: 'node-label',
+      y: h / 2 + 16,
+    });
+    label.textContent = 'runtime';
+    group.appendChild(label);
+
+    canvasWorld.appendChild(group);
+  }
+
+  group.setAttribute('transform', `translate(${x},${y})`);
+
+  // Update health-based fill.
+  const rect = group.querySelector('.system-rect');
+  const cls = sys.status === 'healthy'
+    ? 'system-rect system-rect--healthy'
+    : 'system-rect system-rect--degraded';
+  rect.setAttribute('class', cls);
+
+  // Selection highlight.
+  if (state.selected === '__system__') {
+    group.classList.add('node-selected');
+  } else {
+    group.classList.remove('node-selected');
+  }
+}
+
+function renderSystemDetail() {
+  const sys = state.system;
+  if (!sys) return;
+
+  // Status badge.
+  const badge = $('#system-status');
+  badge.textContent = sys.status || 'unknown';
+  badge.className = 'state-badge state-badge--' +
+    (sys.status === 'healthy' ? 'sleeping' : 'error');
+
+  // Services list.
+  const container = $('#system-services');
+  container.innerHTML = '';
+  const health = sys.health || {};
+  for (const [key, svc] of Object.entries(health)) {
+    const row = document.createElement('div');
+    row.className = 'system-svc-row';
+    const dot = document.createElement('span');
+    dot.className = 'system-svc-dot system-svc-dot--' + (svc.ready ? 'ok' : 'err');
+    row.appendChild(dot);
+    const name = document.createElement('span');
+    name.className = 'system-svc-name';
+    name.textContent = svc.name || key;
+    row.appendChild(name);
+    if (!svc.ready && svc.last_error) {
+      const err = document.createElement('span');
+      err.className = 'system-svc-error';
+      err.textContent = svc.last_error;
+      row.appendChild(err);
+    }
+    container.appendChild(row);
+  }
+
+  // Metrics.
+  $('#system-uptime').textContent = sys.uptime || '-';
+  const ver = sys.version || {};
+  $('#system-version').textContent = ver.version || '-';
+  $('#system-commit').textContent = ver.git_commit ? ver.git_commit.slice(0, 7) : '-';
+  $('#system-go').textContent = ver.go_version || '-';
+  $('#system-arch').textContent = (ver.os || '') + '/' + (ver.arch || '') || '-';
+}
+
 // ---------------------------------------------------------------------------
 // Rendering — Detail Panel
 // ---------------------------------------------------------------------------
 
+const systemDetail = $('#system-detail');
+
 function renderDetail() {
-  if (!state.selected || !state.loops.has(state.selected)) {
+  const isSystem = state.selected === '__system__';
+  const isLoop = state.selected && state.loops.has(state.selected);
+
+  if (isSystem && state.system) {
+    detailPlaceholder.hidden = true;
+    detailContent.hidden = true;
+    systemDetail.hidden = false;
+    renderSystemDetail();
+    return;
+  }
+
+  systemDetail.hidden = true;
+
+  if (!isLoop) {
     detailPlaceholder.hidden = false;
     detailContent.hidden = true;
     return;
@@ -805,6 +935,19 @@ function selectLoop(loopId) {
   renderAll();
 }
 
+function selectSystem() {
+  if (state.selected === '__system__') {
+    state.selected = null;
+  } else {
+    state.selected = '__system__';
+    // No log drill-down for system node.
+    logEmpty.hidden = false;
+    logEmpty.querySelector('p').textContent = 'System node has no logs';
+    logScroll.hidden = true;
+  }
+  renderAll();
+}
+
 // ---------------------------------------------------------------------------
 // Animation Loop (sleep countdowns + progress rings)
 // ---------------------------------------------------------------------------
@@ -1117,6 +1260,9 @@ function applyViewportTransform() {
 
 connect();
 fetchVersionInfo();
+fetchSystemStatus();
 // Refresh uptime display every second.
 setInterval(updateUptime, 1000);
+// Refresh system status every 10s.
+setInterval(fetchSystemStatus, 10000);
 requestAnimationFrame(tick);

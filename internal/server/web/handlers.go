@@ -12,6 +12,33 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/logging"
 )
 
+// handleSystem returns runtime health, uptime, and version info for
+// the system node on the dashboard canvas.
+func (s *WebServer) handleSystem(w http.ResponseWriter, _ *http.Request) {
+	if s.systemStatus == nil {
+		http.NotFound(w, nil)
+		return
+	}
+	health := s.systemStatus.Health()
+	allReady := true
+	for _, h := range health {
+		if !h.Ready {
+			allReady = false
+			break
+		}
+	}
+	status := "healthy"
+	if !allReady {
+		status = "degraded"
+	}
+	s.writeJSON(w, map[string]any{
+		"status":  status,
+		"health":  health,
+		"uptime":  s.systemStatus.Uptime().Truncate(time.Second).String(),
+		"version": s.systemStatus.Version(),
+	})
+}
+
 // handleLoops returns a JSON array of all loop statuses.
 func (s *WebServer) handleLoops(w http.ResponseWriter, _ *http.Request) {
 	statuses := s.registry.Statuses()
