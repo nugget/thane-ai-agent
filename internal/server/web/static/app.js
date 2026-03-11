@@ -379,7 +379,7 @@ function updateSleepDisplay(loop) {
     if (remaining > 0) {
       const wakeAt = new Date(timer.startedAt.getTime() + timer.durationMs);
       const wakeTime = formatTime(wakeAt);
-      el.textContent = 'until ' + wakeTime + ' (' + formatFuzzy(remaining) + ')';
+      el.innerHTML = 'until ' + wakeTime + '<br>' + formatFuzzy(remaining);
     } else {
       el.textContent = 'waking up now...';
     }

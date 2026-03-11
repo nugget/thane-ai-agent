@@ -213,6 +213,8 @@ body {
   margin-bottom: 0.75rem;
 }
 
+.detail-header .state-badge { margin-left: auto; }
+
 .detail-name {
   font-size: 1rem;
   font-weight: 600;
