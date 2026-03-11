@@ -24,6 +24,8 @@ const (
 	SourceMetacog = "metacog"
 	// SourceScheduler identifies events from the task scheduler.
 	SourceScheduler = "scheduler"
+	// SourceLoop identifies events from persistent loop goroutines.
+	SourceLoop = "loop"
 )
 
 // Kind constants describe the type of event within a source.
@@ -87,6 +89,28 @@ const (
 	// KindTaskComplete signals a scheduled task has finished executing.
 	// Data: task_id, task_name, ok, duration_ms.
 	KindTaskComplete = "task_complete"
+
+	// KindLoopStarted signals a loop goroutine has started.
+	// Data: loop_id, loop_name, parent_id.
+	KindLoopStarted = "loop_started"
+	// KindLoopStopped signals a loop goroutine has stopped.
+	// Data: loop_id, loop_name, iterations, attempts.
+	KindLoopStopped = "loop_stopped"
+	// KindLoopIterationStart signals the beginning of a loop iteration.
+	// Data: loop_id, loop_name, conversation_id, supervisor, attempt.
+	KindLoopIterationStart = "loop_iteration_start"
+	// KindLoopIterationComplete signals the end of a loop iteration.
+	// Data: loop_id, loop_name, model, input_tokens, output_tokens, elapsed_ms.
+	KindLoopIterationComplete = "loop_iteration_complete"
+	// KindLoopSleepStart signals a loop has entered its sleep phase.
+	// Data: loop_id, loop_name, sleep_duration.
+	KindLoopSleepStart = "loop_sleep_start"
+	// KindLoopStateChange signals a loop has changed lifecycle state.
+	// Data: loop_id, loop_name, from, to.
+	KindLoopStateChange = "loop_state_change"
+	// KindLoopError signals a loop iteration encountered an error.
+	// Data: loop_id, loop_name, error.
+	KindLoopError = "loop_error"
 )
 
 // Event represents a single operational event published by a component.
