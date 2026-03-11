@@ -696,6 +696,39 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
 .level-badge--DEBUG { background: rgba(139,148,158,0.1); color: var(--text-muted); }
 .level-badge--TRACE { background: rgba(139,148,158,0.05); color: var(--text-muted); }
 
+/* === Scrollbar Styling === */
+.log-scroll,
+.event-list,
+.detail-content {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+.log-scroll::-webkit-scrollbar,
+.event-list::-webkit-scrollbar,
+.detail-content::-webkit-scrollbar {
+  width: 6px;
+}
+
+.log-scroll::-webkit-scrollbar-track,
+.event-list::-webkit-scrollbar-track,
+.detail-content::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.log-scroll::-webkit-scrollbar-thumb,
+.event-list::-webkit-scrollbar-thumb,
+.detail-content::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+
+.log-scroll::-webkit-scrollbar-thumb:hover,
+.event-list::-webkit-scrollbar-thumb:hover,
+.detail-content::-webkit-scrollbar-thumb:hover {
+  background: var(--border-light);
+}
+
 /* Log panel scroll wrapper */
 .log-scroll {
   flex: 1;

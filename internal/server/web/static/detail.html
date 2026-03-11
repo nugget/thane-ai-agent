@@ -131,7 +131,13 @@
       flex: 1;
       overflow-y: auto;
       padding: 0.75rem;
+      scrollbar-width: thin;
+      scrollbar-color: var(--border) transparent;
     }
+    .inspector-body::-webkit-scrollbar { width: 6px; }
+    .inspector-body::-webkit-scrollbar-track { background: transparent; }
+    .inspector-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+    .inspector-body::-webkit-scrollbar-thumb:hover { background: var(--border-light); }
     /* (status bar removed — connection state shown via dot in inspector) */
   </style>
 </head>
