@@ -752,11 +752,8 @@ $('#log-refresh').addEventListener('click', () => {
 // Boot
 // ---------------------------------------------------------------------------
 
-// Set toolbar title.
 if (nodeType === 'system') {
-  $('#popup-title').textContent = nodeName || 'Runtime';
   initSystem();
 } else {
-  $('#popup-title').textContent = nodeName || (nodeId ? nodeId.slice(0, 8) + '...' : 'Loop');
   initLoop();
 }
