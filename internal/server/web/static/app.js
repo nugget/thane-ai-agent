@@ -203,6 +203,8 @@ async function fetchLogs(loopId) {
   }
 }
 
+let systemStartTime = null; // derived from system uptime for local ticking
+
 async function fetchSystemStatus() {
   try {
     const resp = await fetch('/api/system');
@@ -211,6 +213,11 @@ async function fetchSystemStatus() {
       return;
     }
     state.system = await resp.json();
+    // Derive start time so we can tick uptime locally.
+    if (state.system.uptime) {
+      const uptimeMs = parseDuration(state.system.uptime);
+      systemStartTime = Date.now() - uptimeMs;
+    }
     renderAll();
   } catch (err) {
     console.warn('Failed to fetch system status:', err);
@@ -469,13 +476,22 @@ function renderSystemDetail() {
     container.appendChild(row);
   }
 
-  // Metrics.
-  $('#system-uptime').textContent = sys.uptime || '-';
+  // Metrics — uptime is ticked live in tick(), seed it here.
+  updateSystemUptime();
   const ver = sys.version || {};
   $('#system-version').textContent = ver.version || '-';
   $('#system-commit').textContent = ver.git_commit ? ver.git_commit.slice(0, 7) : '-';
   $('#system-go').textContent = ver.go_version || '-';
   $('#system-arch').textContent = (ver.os || '') + '/' + (ver.arch || '') || '-';
+}
+
+function updateSystemUptime() {
+  if (systemStartTime === null) {
+    $('#system-uptime').textContent = state.system ? (state.system.uptime || '-') : '-';
+    return;
+  }
+  const ms = Date.now() - systemStartTime;
+  $('#system-uptime').textContent = formatUptimeLong(ms);
 }
 
 // ---------------------------------------------------------------------------
@@ -961,6 +977,11 @@ function tick() {
     if (loop.started_at) {
       $('#detail-started').textContent = timeAgo(new Date(loop.started_at));
     }
+  }
+
+  // Tick system uptime if system detail is visible.
+  if (state.selected === '__system__' && state.system) {
+    updateSystemUptime();
   }
 
   // Update sleep progress rings on all nodes.
