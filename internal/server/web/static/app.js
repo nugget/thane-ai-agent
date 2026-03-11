@@ -856,6 +856,65 @@ function formatUptimeLong(ms) {
 }
 
 // ---------------------------------------------------------------------------
+// Resizable Panes
+// ---------------------------------------------------------------------------
+
+(function initResize() {
+  const resizeV = document.getElementById('resize-v');
+  const resizeH = document.getElementById('resize-h');
+  const detailPanel = document.getElementById('detail-panel');
+  const logPanel = document.getElementById('log-panel');
+  const mainEl = document.querySelector('.main');
+
+  // Vertical handle: resize detail panel width.
+  let dragging = null;
+
+  resizeV.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    dragging = 'v';
+    resizeV.classList.add('resize-handle--active');
+    document.body.classList.add('resize-col');
+  });
+
+  resizeH.addEventListener('mousedown', (e) => {
+    e.preventDefault();
+    dragging = 'h';
+    resizeH.classList.add('resize-handle--active');
+    document.body.classList.add('resize-row');
+  });
+
+  document.addEventListener('mousemove', (e) => {
+    if (!dragging) return;
+    e.preventDefault();
+
+    if (dragging === 'v') {
+      // Detail panel is on the right — width = distance from mouse to right edge of main.
+      const mainRect = mainEl.getBoundingClientRect();
+      const newWidth = mainRect.right - e.clientX;
+      const clamped = Math.max(200, Math.min(newWidth, mainRect.width - 200));
+      detailPanel.style.width = clamped + 'px';
+    } else if (dragging === 'h') {
+      // Log panel is at the bottom — height = distance from mouse to bottom of body
+      // minus footer height.
+      const footer = document.getElementById('footer');
+      const footerH = footer ? footer.offsetHeight : 0;
+      const bodyH = document.body.offsetHeight;
+      const newHeight = bodyH - e.clientY - footerH;
+      const clamped = Math.max(80, Math.min(newHeight, bodyH - 200));
+      logPanel.style.height = clamped + 'px';
+    }
+  });
+
+  document.addEventListener('mouseup', () => {
+    if (!dragging) return;
+    resizeV.classList.remove('resize-handle--active');
+    resizeH.classList.remove('resize-handle--active');
+    document.body.classList.remove('resize-col', 'resize-row');
+    dragging = null;
+  });
+})();
+
+// ---------------------------------------------------------------------------
 // Boot
 // ---------------------------------------------------------------------------
 

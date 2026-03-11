@@ -88,13 +88,39 @@ body {
   overflow: hidden;
 }
 
+/* === Resize Handles === */
+.resize-handle {
+  flex-shrink: 0;
+  background: var(--border);
+  transition: background 0.15s;
+  z-index: 10;
+}
+
+.resize-handle:hover,
+.resize-handle--active {
+  background: var(--accent);
+}
+
+.resize-handle--v {
+  width: 4px;
+  cursor: col-resize;
+}
+
+.resize-handle--h {
+  height: 4px;
+  cursor: row-resize;
+}
+
+body.resize-col { cursor: col-resize; }
+body.resize-row { cursor: row-resize; }
+body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
+
 /* === Canvas (left) === */
 .canvas-panel {
   flex: 1;
   position: relative;
   background: var(--bg-primary);
-  border-right: 1px solid var(--border);
-  min-width: 300px;
+  min-width: 200px;
 }
 
 .canvas-panel svg {
@@ -120,7 +146,7 @@ body {
   flex-shrink: 0;
   background: var(--bg-secondary);
   overflow-y: auto;
-  border-left: 1px solid var(--border);
+  min-width: 200px;
 }
 
 .detail-placeholder {
@@ -315,10 +341,10 @@ body {
   flex-shrink: 0;
   height: 220px;
   background: var(--bg-secondary);
-  border-top: 1px solid var(--border);
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  min-height: 80px;
 }
 
 .log-toolbar {
@@ -601,15 +627,19 @@ body {
 @media (max-width: 768px) {
   .main { flex-direction: column; }
 
+  .resize-handle--v {
+    width: auto;
+    height: 4px;
+    cursor: row-resize;
+  }
+
   .canvas-panel {
-    border-right: none;
-    border-bottom: 1px solid var(--border);
-    min-height: 250px;
+    min-height: 200px;
   }
 
   .detail-panel {
     width: 100%;
-    border-left: none;
+    min-width: 0;
     max-height: 250px;
   }
 }
