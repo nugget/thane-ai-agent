@@ -488,52 +488,68 @@ function renderNodes() {
     if (existing) existing.remove();
   }
 
-  // Linking line: runtime → metacognitive.
-  renderLinkingLine(hasSystem, sysX, sysY, loops, nodePositions);
+  // Linking lines: runtime → all top-level loops.
+  renderLinkingLines(hasSystem, sysX, sysY, loops, nodePositions);
 }
 
-function renderLinkingLine(hasSystem, sysX, sysY, loops, nodePositions) {
-  let line = canvasWorld.querySelector('.link-line');
+function renderLinkingLines(hasSystem, sysX, sysY, loops, nodePositions) {
+  // Top-level loops are those without a parent_id.
+  const topLevel = loops.filter(l => !l.parent_id && nodePositions.has(l.id));
+  const activeIds = new Set(topLevel.map(l => l.id));
 
-  // Find the metacognitive loop.
-  const metaLoop = loops.find(l => l.name === 'metacognitive');
-
-  if (!hasSystem || !metaLoop || !nodePositions.has(metaLoop.id)) {
-    // No connection to draw — remove existing line.
-    if (line) line.remove();
-    return;
+  // Remove stale link lines for loops that no longer exist or gained a parent.
+  const existing = canvasWorld.querySelectorAll('.link-line');
+  for (const el of existing) {
+    if (!hasSystem || !activeIds.has(el.dataset.targetLoop)) {
+      el.remove();
+    }
   }
 
-  const pos = nodePositions.get(metaLoop.id);
+  if (!hasSystem) return;
 
-  if (!line) {
-    line = createSVG('line', { class: 'link-line' });
-    // Insert before nodes so the line draws behind them.
-    canvasWorld.insertBefore(line, canvasWorld.firstChild);
-  }
+  for (const loop of topLevel) {
+    const pos = nodePositions.get(loop.id);
+    let line = canvasWorld.querySelector(`.link-line[data-target-loop="${loop.id}"]`);
 
-  line.setAttribute('x1', sysX);
-  line.setAttribute('y1', sysY);
-  line.setAttribute('x2', pos.x);
-  line.setAttribute('y2', pos.y);
+    if (!line) {
+      line = createSVG('line', {
+        class: 'link-line',
+        'data-target-loop': loop.id,
+      });
+      // Insert before nodes so lines draw behind them.
+      canvasWorld.insertBefore(line, canvasWorld.firstChild);
+    }
 
-  // State-driven styling: error state turns the line red.
-  if (metaLoop.state === 'error') {
-    line.setAttribute('class', 'link-line link-line--error');
-  } else {
-    line.setAttribute('class', 'link-line');
+    line.setAttribute('x1', sysX);
+    line.setAttribute('y1', sysY);
+    line.setAttribute('x2', pos.x);
+    line.setAttribute('y2', pos.y);
+
+    // State-driven styling: error state turns the line red.
+    if (loop.state === 'error') {
+      line.setAttribute('class', 'link-line link-line--error');
+    } else {
+      line.setAttribute('class', 'link-line');
+    }
+    // Preserve the data attribute after class reset.
+    line.dataset.targetLoop = loop.id;
   }
 }
 
-// Flash the linking line briefly (called on supervisor events).
-function flashLinkingLine() {
-  const line = canvasWorld.querySelector('.link-line');
-  if (!line) return;
-  const baseClass = line.getAttribute('class').replace(' link-line--flash', '');
-  line.setAttribute('class', baseClass + ' link-line--flash');
-  setTimeout(() => {
-    line.setAttribute('class', baseClass);
-  }, 300);
+// Flash a linking line briefly (called on supervisor events).
+// When loopId is provided, only flash that loop's line; otherwise flash all.
+function flashLinkingLine(loopId) {
+  const selector = loopId
+    ? `.link-line[data-target-loop="${loopId}"]`
+    : '.link-line';
+  const lines = canvasWorld.querySelectorAll(selector);
+  for (const line of lines) {
+    const baseClass = line.getAttribute('class').replace(' link-line--flash', '');
+    line.setAttribute('class', baseClass + ' link-line--flash');
+    setTimeout(() => {
+      line.setAttribute('class', baseClass);
+    }, 300);
+  }
 }
 
 function renderNode(loop, x, y) {
@@ -695,7 +711,7 @@ function renderNode(loop, x, y) {
 
     // Flash the linking line if this is the metacognitive loop and a supervisor fired.
     if (loop.name === 'metacognitive' && loop._lastSupervisor) {
-      flashLinkingLine();
+      flashLinkingLine(loopId);
     }
   }
   state.prevIterations.set(loop.id, curIter);
