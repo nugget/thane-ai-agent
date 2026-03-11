@@ -21,6 +21,194 @@ const state = {
 const MAX_EVENTS = 50;
 
 // ---------------------------------------------------------------------------
+// Loop Category + Shape + Model Sizing
+// ---------------------------------------------------------------------------
+
+// Derive a visual category from loop data. Drives which SVG shape is drawn.
+function getLoopCategory(loop) {
+  const hints = loop.config && loop.config.Hints;
+  if (hints && hints.source === 'metacognitive') return 'metacognitive';
+  if (loop.parent_id) return 'delegate';
+  const name = (loop.name || '').toLowerCase();
+  if (/signal|email|mqtt|slack|irc/.test(name)) return 'channel';
+  if (/sched|cron|timer/.test(name)) return 'scheduled';
+  return 'generic';
+}
+
+// Category → shape type mapping (all 1:1 aspect ratio).
+const CATEGORY_SHAPES = {
+  metacognitive: 'circle',
+  channel:       'roundedSquare',
+  delegate:      'diamond',
+  scheduled:     'hexagon',
+  generic:       'octagon',
+};
+
+// Model name → approximate parameter count (billions).
+// Used for area-proportional node sizing with sqrt compression.
+const MODEL_SIZES = {
+  // Anthropic
+  'claude-haiku':        8,
+  'claude-3-haiku':      8,
+  'claude-3-5-haiku':    8,
+  'claude-haiku-4-5':    8,
+  'claude-sonnet':       70,
+  'claude-3-5-sonnet':   70,
+  'claude-sonnet-4':     70,
+  'claude-opus':         300,
+  'claude-opus-4':       300,
+  // Common local models
+  'gemma':               9,
+  'gemma2':              9,
+  'gemma3':              12,
+  'phi':                 4,
+  'phi3':                4,
+  'phi4':                14,
+  'llama3':              8,
+  'llama3.1':            8,
+  'llama3.2':            3,
+  'llama3.3':            70,
+  'mistral':             7,
+  'mixtral':             47,
+  'qwen2':               7,
+  'qwen2.5':             7,
+  'deepseek':            7,
+  'deepseek-r1':         671,
+  'command-r':           35,
+};
+
+// Resolve a model name string to approximate billions of parameters.
+// Tries exact match, then prefix match, then extracts trailing size suffix.
+function getModelParams(modelName) {
+  if (!modelName) return null;
+  const m = modelName.toLowerCase();
+
+  // Exact match.
+  if (MODEL_SIZES[m] !== undefined) return MODEL_SIZES[m];
+
+  // Prefix match (e.g. "claude-sonnet-4-20250514" → "claude-sonnet-4").
+  for (const [key, val] of Object.entries(MODEL_SIZES)) {
+    if (m.startsWith(key)) return val;
+  }
+
+  // Extract trailing size like ":8b", ":70b", ":7b-q4".
+  const sizeMatch = m.match(/:(\d+)b/i);
+  if (sizeMatch) return parseInt(sizeMatch[1], 10);
+
+  return null;
+}
+
+// Compute node radius from model parameters using sqrt compression.
+// Returns a radius in [MIN_NODE_R, MAX_NODE_R].
+const MIN_NODE_R = 22;
+const MAX_NODE_R = 50;
+const DEFAULT_NODE_R = 32;
+
+function getModelRadius(modelName) {
+  const params = getModelParams(modelName);
+  if (params === null) return DEFAULT_NODE_R;
+
+  // sqrt compression: area ∝ sqrt(params).
+  // Calibrated so 8B → MIN_NODE_R, 300B → MAX_NODE_R.
+  const minParams = 3;    // floor (smallest model we'd see)
+  const maxParams = 700;  // ceiling (largest model we'd see)
+  const t = (Math.sqrt(params) - Math.sqrt(minParams)) /
+            (Math.sqrt(maxParams) - Math.sqrt(minParams));
+  const clamped = Math.max(0, Math.min(1, t));
+  return MIN_NODE_R + clamped * (MAX_NODE_R - MIN_NODE_R);
+}
+
+// Create an SVG shape element for a given category at origin, radius r.
+function createNodeShape(category, r) {
+  const shape = CATEGORY_SHAPES[category] || 'octagon';
+  switch (shape) {
+    case 'circle':
+      return createSVG('circle', { class: 'node-shape', r: r });
+
+    case 'roundedSquare': {
+      const rx = r * 0.2;
+      return createSVG('rect', {
+        class: 'node-shape',
+        x: -r, y: -r, width: 2 * r, height: 2 * r, rx: rx, ry: rx,
+      });
+    }
+
+    case 'diamond': {
+      const d = r;
+      const pts = `0,${-d} ${d},0 0,${d} ${-d},0`;
+      return createSVG('polygon', { class: 'node-shape', points: pts });
+    }
+
+    case 'hexagon': {
+      const pts = [];
+      for (let i = 0; i < 6; i++) {
+        const angle = (Math.PI / 3) * i - Math.PI / 2;
+        pts.push(`${(r * Math.cos(angle)).toFixed(1)},${(r * Math.sin(angle)).toFixed(1)}`);
+      }
+      return createSVG('polygon', { class: 'node-shape', points: pts.join(' ') });
+    }
+
+    case 'octagon':
+    default: {
+      const pts = [];
+      for (let i = 0; i < 8; i++) {
+        const angle = (Math.PI / 4) * i - Math.PI / 8;
+        pts.push(`${(r * Math.cos(angle)).toFixed(1)},${(r * Math.sin(angle)).toFixed(1)}`);
+      }
+      return createSVG('polygon', { class: 'node-shape', points: pts.join(' ') });
+    }
+  }
+}
+
+// Update an existing shape element's geometry for a new radius.
+function updateNodeShape(el, category, r) {
+  const shape = CATEGORY_SHAPES[category] || 'octagon';
+  switch (shape) {
+    case 'circle':
+      el.setAttribute('r', r);
+      break;
+
+    case 'roundedSquare': {
+      const rx = r * 0.2;
+      el.setAttribute('x', -r);
+      el.setAttribute('y', -r);
+      el.setAttribute('width', 2 * r);
+      el.setAttribute('height', 2 * r);
+      el.setAttribute('rx', rx);
+      el.setAttribute('ry', rx);
+      break;
+    }
+
+    case 'diamond': {
+      const d = r;
+      el.setAttribute('points', `0,${-d} ${d},0 0,${d} ${-d},0`);
+      break;
+    }
+
+    case 'hexagon': {
+      const pts = [];
+      for (let i = 0; i < 6; i++) {
+        const angle = (Math.PI / 3) * i - Math.PI / 2;
+        pts.push(`${(r * Math.cos(angle)).toFixed(1)},${(r * Math.sin(angle)).toFixed(1)}`);
+      }
+      el.setAttribute('points', pts.join(' '));
+      break;
+    }
+
+    case 'octagon':
+    default: {
+      const pts = [];
+      for (let i = 0; i < 8; i++) {
+        const angle = (Math.PI / 4) * i - Math.PI / 8;
+        pts.push(`${(r * Math.cos(angle)).toFixed(1)},${(r * Math.sin(angle)).toFixed(1)}`);
+      }
+      el.setAttribute('points', pts.join(' '));
+      break;
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // DOM References
 // ---------------------------------------------------------------------------
 
@@ -341,14 +529,16 @@ function flashLinkingLine() {
 }
 
 function renderNode(loop, x, y) {
-  const nodeR = 32;
-  const ringR = 44;
+  const category = getLoopCategory(loop);
+  const nodeR = getModelRadius(loop._lastModel);
+  const ringR = nodeR + 12;
   let group = canvasWorld.querySelector(`[data-loop-id="${loop.id}"]`);
 
   if (!group) {
     group = createSVG('g', {
       class: 'loop-node',
       'data-loop-id': loop.id,
+      'data-category': category,
     });
     group.addEventListener('click', () => selectLoop(loop.id));
     group.addEventListener('contextmenu', (e) => {
@@ -368,7 +558,7 @@ function renderNode(loop, x, y) {
     title.textContent = loop.name || loop.id;
     inner.appendChild(title);
 
-    // Glow ring.
+    // Glow ring (always a circle regardless of shape).
     const ring = createSVG('circle', {
       class: 'node-ring',
       r: ringR,
@@ -377,7 +567,7 @@ function renderNode(loop, x, y) {
       'stroke-width': 2,
     });
 
-    // Sleep progress ring.
+    // Sleep progress ring (always a circle).
     const circumference = 2 * Math.PI * (nodeR + 4);
     const sleepRing = createSVG('circle', {
       class: 'sleep-ring',
@@ -386,13 +576,10 @@ function renderNode(loop, x, y) {
       'stroke-dashoffset': circumference,
     });
 
-    // Main circle.
-    const circle = createSVG('circle', {
-      class: 'node-circle',
-      r: nodeR,
-    });
+    // Main shape — determined by category.
+    const shapeEl = createNodeShape(category, nodeR);
 
-    // Supervisor ring (larger ring outside the node).
+    // Supervisor ring (larger circle outside the node).
     const supDot = createSVG('circle', {
       class: 'supervisor-dot',
       r: nodeR + 10,
@@ -407,7 +594,7 @@ function renderNode(loop, x, y) {
 
     inner.appendChild(ring);
     inner.appendChild(sleepRing);
-    inner.appendChild(circle);
+    inner.appendChild(shapeEl);
     inner.appendChild(supDot);
     inner.appendChild(label);
     group.appendChild(inner);
@@ -430,13 +617,33 @@ function renderNode(loop, x, y) {
   // Update position (smooth reflow via CSS transition on --settled class).
   group.setAttribute('transform', `translate(${x},${y})`);
 
-  // Update state class on main circle — supervisor processing gets its own style.
-  const circle = group.querySelector('.node-circle');
+  // Dynamic resizing — update shape, rings, label when model changes.
+  const prevR = parseFloat(group.dataset.nodeR) || DEFAULT_NODE_R;
+  if (Math.abs(nodeR - prevR) > 0.5) {
+    group.dataset.nodeR = nodeR;
+    const shapeEl = group.querySelector('.node-shape');
+    updateNodeShape(shapeEl, category, nodeR);
+
+    // Update dependent radii.
+    const newRingR = nodeR + 12;
+    group.querySelector('.node-ring').setAttribute('r', newRingR);
+    const sleepRing = group.querySelector('.sleep-ring');
+    const newSleepR = nodeR + 4;
+    sleepRing.setAttribute('r', newSleepR);
+    const circ = 2 * Math.PI * newSleepR;
+    sleepRing.setAttribute('stroke-dasharray', circ);
+    group.querySelector('.supervisor-dot').setAttribute('r', nodeR + 10);
+    group.querySelector('.node-label').setAttribute('y', nodeR + 18);
+  }
+  group.dataset.nodeR = nodeR;
+
+  // Update state class on main shape — supervisor processing gets its own style.
+  const shapeEl = group.querySelector('.node-shape');
   const isSup = loop._supervisor && loop.state === 'processing';
   const stateClass = isSup
-    ? 'node-circle--supervisor'
-    : 'node-circle--' + (loop.state || 'pending');
-  circle.setAttribute('class', 'node-circle ' + stateClass);
+    ? 'node-shape--supervisor'
+    : 'node-shape--' + (loop.state || 'pending');
+  shapeEl.setAttribute('class', 'node-shape ' + stateClass);
 
   // Stroke width represents context utilization percentage.
   const ctxPct = (loop.context_window > 0 && loop.last_input_tokens > 0)
@@ -447,7 +654,7 @@ function renderNode(loop, x, y) {
   const strokeW = ctxPct > 0
     ? minStroke + ctxPct * (maxStroke - minStroke)
     : minStroke;
-  circle.setAttribute('stroke-width', strokeW.toFixed(1));
+  shapeEl.setAttribute('stroke-width', strokeW.toFixed(1));
 
   // Supervisor ring (outer pulsing ring around node).
   const supDot = group.querySelector('.supervisor-dot');
@@ -518,7 +725,7 @@ function updateSleepRing(group, loopId) {
 
 function renderSystemNode(x, y) {
   const sys = state.system;
-  const w = 72, h = 48, r = 8;
+  const s = 48, r = 10; // 1:1 square, s = side length
   let group = canvasWorld.querySelector('.system-node');
 
   if (!group) {
@@ -535,18 +742,18 @@ function renderSystemNode(x, y) {
     title.textContent = 'Runtime';
     group.appendChild(title);
 
-    // Rounded rect (as path for rounded corners).
+    // Rounded square (1:1 aspect ratio).
     const rect = createSVG('rect', {
       class: 'system-rect',
-      x: -w / 2, y: -h / 2,
-      width: w, height: h,
+      x: -s / 2, y: -s / 2,
+      width: s, height: s,
       rx: r, ry: r,
     });
     group.appendChild(rect);
 
     const label = createSVG('text', {
       class: 'node-label',
-      y: h / 2 + 16,
+      y: s / 2 + 16,
     });
     label.textContent = 'runtime';
     group.appendChild(label);
@@ -689,6 +896,23 @@ function renderDetail() {
   $('#detail-model').textContent = loop._lastModel || '-';
   $('#detail-error').textContent = loop.last_error || '-';
   $('#detail-started').textContent = loop.started_at ? timeAgo(new Date(loop.started_at)) : '-';
+
+  // Capabilities (tags from config).
+  const tags = (loop.config && loop.config.Tags) || [];
+  const tagsSection = $('#detail-tags');
+  const tagsList = $('#detail-tags-list');
+  if (tags.length > 0) {
+    tagsSection.hidden = false;
+    tagsList.innerHTML = '';
+    for (const tag of tags) {
+      const chip = document.createElement('span');
+      chip.className = 'tag-chip';
+      chip.textContent = tag;
+      tagsList.appendChild(chip);
+    }
+  } else {
+    tagsSection.hidden = true;
+  }
 }
 
 function updateSleepDisplay(loop) {
@@ -1068,6 +1292,8 @@ function buildLogDetail(td, entry) {
 // ---------------------------------------------------------------------------
 
 function selectLoop(loopId) {
+  clearInterval(systemLogInterval);
+  systemLogInterval = null;
   if (state.selected === loopId) {
     // Deselect.
     state.selected = null;
@@ -1081,7 +1307,11 @@ function selectLoop(loopId) {
   renderAll();
 }
 
+let systemLogInterval = null;
+
 function selectSystem() {
+  clearInterval(systemLogInterval);
+  systemLogInterval = null;
   if (state.selected === '__system__') {
     state.selected = null;
     logEmpty.hidden = false;
@@ -1090,6 +1320,7 @@ function selectSystem() {
   } else {
     state.selected = '__system__';
     fetchSystemLogs();
+    systemLogInterval = setInterval(fetchSystemLogs, 10000);
   }
   renderAll();
 }
@@ -1240,7 +1471,7 @@ function openDetailWindow(type, id) {
   const w = window.open(
     '/static/detail.html' + params + '&name=' + encodeURIComponent(name),
     'detail-' + (id || 'system'),
-    'popup=yes,width=500,height=700'
+    'popup=yes,width=900,height=450'
   );
   // Set title once loaded (cross-origin safe since same origin).
   if (w) {

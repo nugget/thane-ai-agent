@@ -473,6 +473,23 @@ function renderLoopDetail() {
   $('#detail-error').textContent = loopData.last_error || '-';
   $('#detail-started').textContent = loopData.started_at ? timeAgo(new Date(loopData.started_at)) : '-';
 
+  // Capabilities (tags from config).
+  const tags = (loopData.config && loopData.config.Tags) || [];
+  const tagsSection = $('#detail-tags');
+  const tagsList = $('#detail-tags-list');
+  if (tags.length > 0) {
+    tagsSection.hidden = false;
+    tagsList.innerHTML = '';
+    for (const tag of tags) {
+      const chip = document.createElement('span');
+      chip.className = 'tag-chip';
+      chip.textContent = tag;
+      tagsList.appendChild(chip);
+    }
+  } else {
+    tagsSection.hidden = true;
+  }
+
   // Event list.
   renderEventList();
 }

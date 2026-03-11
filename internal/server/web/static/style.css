@@ -367,6 +367,24 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
   word-break: break-word;
 }
 
+/* === Capability Tags === */
+.detail-tags { margin-bottom: 0.75rem; }
+.tag-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+.tag-chip {
+  display: inline-block;
+  font-size: 0.65rem;
+  font-family: var(--font-mono);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0.1em 0.4em;
+}
+
 /* === Section Title === */
 .section-title {
   font-size: 0.75rem;
@@ -668,20 +686,20 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
   transition: opacity 0.3s ease;
 }
 
-/* Main circle */
-.node-circle {
+/* Main shape (circle, rect, polygon — varies by category) */
+.node-shape {
   stroke: rgba(255, 255, 255, 0.15);
   stroke-width: 2;
   transition: fill 0.6s ease, filter 0.6s ease, stroke-width 0.4s ease;
 }
 
 /* State fills — stroke matches fill at higher opacity for context ring */
-.node-circle--sleeping    { fill: var(--blue); stroke: var(--blue); filter: drop-shadow(0 0 6px var(--blue-glow)); }
-.node-circle--processing  { fill: var(--green); stroke: var(--green); filter: drop-shadow(0 0 12px var(--green-glow)); }
-.node-circle--supervisor  { fill: var(--purple); stroke: var(--purple); filter: drop-shadow(0 0 16px rgba(188, 140, 255, 0.6)); }
-.node-circle--error       { fill: var(--orange); stroke: var(--orange); filter: drop-shadow(0 0 8px var(--orange-glow)); }
-.node-circle--stopped     { fill: var(--text-muted); stroke: var(--text-muted); filter: none; }
-.node-circle--pending     { fill: var(--purple); stroke: var(--purple); filter: drop-shadow(0 0 4px var(--purple-dim)); }
+.node-shape--sleeping    { fill: var(--blue); stroke: var(--blue); filter: drop-shadow(0 0 6px var(--blue-glow)); }
+.node-shape--processing  { fill: var(--green); stroke: var(--green); filter: drop-shadow(0 0 12px var(--green-glow)); }
+.node-shape--supervisor  { fill: var(--purple); stroke: var(--purple); filter: drop-shadow(0 0 16px rgba(188, 140, 255, 0.6)); }
+.node-shape--error       { fill: var(--orange); stroke: var(--orange); filter: drop-shadow(0 0 8px var(--orange-glow)); }
+.node-shape--stopped     { fill: var(--text-muted); stroke: var(--text-muted); filter: none; }
+.node-shape--pending     { fill: var(--purple); stroke: var(--purple); filter: drop-shadow(0 0 4px var(--purple-dim)); }
 
 /* Node label */
 .node-label {
@@ -725,40 +743,41 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
 }
 
 /* === Breathing Animations === */
+/* Use transform:scale() instead of r: so they work with all shape types. */
 
 @keyframes breathe-sleeping {
-  0%, 100% { r: 32; opacity: 0.85; }
-  50% { r: 35; opacity: 1; }
+  0%, 100% { transform: scale(1); opacity: 0.85; }
+  50% { transform: scale(1.08); opacity: 1; }
 }
 
 @keyframes breathe-processing {
-  0%, 100% { r: 32; opacity: 0.9; }
-  50% { r: 38; opacity: 1; }
+  0%, 100% { transform: scale(1); opacity: 0.9; }
+  50% { transform: scale(1.15); opacity: 1; }
 }
 
 @keyframes breathe-supervisor {
-  0%, 100% { r: 32; opacity: 0.9; }
-  50% { r: 38; opacity: 1; }
+  0%, 100% { transform: scale(1); opacity: 0.9; }
+  50% { transform: scale(1.15); opacity: 1; }
 }
 
 @keyframes pulse-error {
-  0%, 100% { r: 32; }
-  50% { r: 34; }
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.05); }
 }
 
-.node-circle--sleeping {
+.node-shape--sleeping {
   animation: breathe-sleeping 4s ease-in-out infinite;
 }
 
-.node-circle--processing {
+.node-shape--processing {
   animation: breathe-processing 1.2s ease-in-out infinite;
 }
 
-.node-circle--supervisor {
+.node-shape--supervisor {
   animation: breathe-supervisor 1.2s ease-in-out infinite;
 }
 
-.node-circle--error {
+.node-shape--error {
   animation: pulse-error 2s ease-in-out infinite;
 }
 
