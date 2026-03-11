@@ -13,6 +13,7 @@ const state = {
   events: [],             // recent events (newest first, capped)
   sleepTimers: new Map(), // id -> { startedAt: Date, durationMs: number }
   elapsedTimers: new Map(), // id -> setInterval id for live elapsed display
+  iterationHistory: new Map(), // id -> array of iteration snapshots (newest first)
   system: null,           // system status object from /api/system
   prevIterations: new Map(), // id -> last known iteration count (for flash detection)
   prevErrors: new Map(),     // id -> last known error string (for shake detection)
@@ -20,6 +21,7 @@ const state = {
 };
 
 const MAX_EVENTS = 50;
+const MAX_ITERATION_HISTORY = 10;
 
 // ---------------------------------------------------------------------------
 // Loop Category + Shape + Model Sizing
@@ -237,7 +239,12 @@ function connect() {
   eventSource.addEventListener('snapshot', (e) => {
     const statuses = JSON.parse(e.data);
     state.loops.clear();
+    state.iterationHistory.clear();
     for (const s of statuses) {
+      // Seed iteration history from server-side ring buffer.
+      if (s.recent_iterations && s.recent_iterations.length > 0) {
+        state.iterationHistory.set(s.id, s.recent_iterations.slice());
+      }
       // Seed live telemetry for loops already in processing state
       // so the Live Activity section shows immediately on connect.
       if (s.state === 'processing') {
@@ -341,7 +348,26 @@ function handleLoopEvent(evt) {
           loop.context_window = evt.data.context_window;
         }
         loop.iterations = (loop.iterations || 0) + 1;
+        // Update supervisor tracking.
+        if (loop._supervisor) {
+          loop.last_supervisor_iter = loop.iterations;
+        }
         loop._supervisor = false;
+        // Build iteration snapshot from event + transient state.
+        const snap = {
+          number: loop.iterations,
+          conv_id: evt.data.conversation_id || loop._currentConvID || '',
+          model: evt.data.model || '',
+          input_tokens: evt.data.input_tokens || 0,
+          output_tokens: evt.data.output_tokens || 0,
+          context_window: evt.data.context_window || 0,
+          tools_used: evt.data.tools_used || buildToolCounts(loop._liveTools),
+          elapsed_ms: evt.data.elapsed_ms || 0,
+          supervisor: loop._lastSupervisor || false,
+          started_at: loop._iterStartTs ? new Date(loop._iterStartTs).toISOString() : evt.ts,
+          completed_at: evt.ts,
+        };
+        prependIterationSnapshot(loopId, snap);
         // Clear live telemetry.
         loop._iterStartTs = null;
         loop._liveTools = [];
@@ -402,6 +428,11 @@ function handleLoopEvent(evt) {
           startedAt: new Date(evt.ts),
           durationMs: durationMs,
         });
+        // Annotate most recent snapshot with sleep info.
+        const sleepHist = state.iterationHistory.get(loopId);
+        if (sleepHist && sleepHist.length > 0) {
+          sleepHist[0].sleep_after_ms = durationMs;
+        }
         if (state.loops.has(loopId)) {
           const loop = state.loops.get(loopId);
           loop.state = 'sleeping';
@@ -417,6 +448,11 @@ function handleLoopEvent(evt) {
         clearLiveTelemetry(loop, loopId);
         // Clear any sleep timer — waiting has no duration.
         state.sleepTimers.delete(loopId);
+        // Annotate most recent snapshot.
+        const waitHist = state.iterationHistory.get(loopId);
+        if (waitHist && waitHist.length > 0) {
+          waitHist[0].wait_after = true;
+        }
       }
       break;
 
@@ -426,6 +462,16 @@ function handleLoopEvent(evt) {
         loop.state = 'error';
         loop.last_error = evt.data.error || '';
         loop.consecutive_errors = (loop.consecutive_errors || 0) + 1;
+        // Build error snapshot.
+        const errSnap = {
+          number: 0,
+          error: evt.data.error || '',
+          started_at: loop._iterStartTs ? new Date(loop._iterStartTs).toISOString() : evt.ts,
+          completed_at: evt.ts,
+          elapsed_ms: loop._iterStartTs ? Date.now() - loop._iterStartTs : 0,
+          supervisor: loop._supervisor || false,
+        };
+        prependIterationSnapshot(loopId, errSnap);
         clearLiveTelemetry(loop, loopId);
       }
       break;
@@ -504,7 +550,6 @@ function renderAll() {
     // Each sub-render is isolated so a failure in one doesn't block the rest.
     try { renderNodes(); }      catch (e) { console.error('renderNodes:', e); }
     try { renderDetail(); }     catch (e) { console.error('renderDetail:', e); }
-    try { renderEventList(); }  catch (e) { console.error('renderEventList:', e); }
   });
 }
 
@@ -995,63 +1040,14 @@ function renderDetail() {
   // IDs section.
   renderDetailIDs(loop);
 
-  // Forward-looking section: visible when sleeping, waiting, or has supervisor config.
-  const isSleeping = loop.state === 'sleeping';
-  const isWaiting = loop.state === 'waiting';
-  const hasSupervisor = loop.config && loop.config.Supervisor;
-  const showForward = isSleeping || isWaiting || hasSupervisor;
-  $('#detail-forward').hidden = !showForward;
+  // Aggregate stats bar.
+  renderAggregates(loop);
 
   // Supervisor status bar.
   renderSupervisorBar(loop);
 
-  // Sleep/wait status — show countdown when sleeping, "awaiting event" when waiting.
-  const sleepVisible = isSleeping || isWaiting;
-  $('#detail-sleep-label').hidden = !sleepVisible;
-  $('#detail-sleep').hidden = !sleepVisible;
-  if (isWaiting) {
-    $('#detail-sleep-label').textContent = 'Wait';
-    $('#detail-sleep').textContent = 'awaiting event';
-  } else {
-    $('#detail-sleep-label').textContent = 'Sleep';
-    updateSleepDisplay(loop);
-  }
-
-  // Live activity section (visible only during processing).
-  const liveSection = $('#detail-live');
-  const isProcessing = loop.state === 'processing' && loop._iterStartTs;
-  if (isProcessing) {
-    liveSection.hidden = false;
-    $('#detail-elapsed').textContent = formatDuration(Date.now() - loop._iterStartTs);
-    $('#detail-live-model').textContent = loop._liveModel || '';
-    renderLiveTools(loop);
-  } else {
-    liveSection.hidden = true;
-  }
-
-  // Last-iteration section (LLM loops only, after first completed iteration).
-  const hasIterData = loop._lastModel || loop.last_input_tokens;
-  const lastIterSection = $('#detail-last-iter');
-  if (hasIterData) {
-    lastIterSection.hidden = false;
-    renderContextMeter(loop);
-    $('#detail-model').textContent = loop._lastModel || '-';
-    $('#detail-iter-input').textContent = loop.last_input_tokens ? formatTokens(loop.last_input_tokens) : '—';
-    $('#detail-iter-output').textContent = loop.last_output_tokens ? formatTokens(loop.last_output_tokens) : '—';
-  } else {
-    lastIterSection.hidden = true;
-  }
-  const hasLive = !liveSection.hidden;
-  const hasLastIter = !lastIterSection.hidden;
-  $('#detail-divider').hidden = !(showForward || hasLive || hasLastIter);
-
-  // Lifetime metrics.
-  $('#detail-iterations').textContent = formatNumber(loop.iterations || 0);
-  $('#detail-attempts').textContent = formatNumber(loop.attempts || 0);
-  $('#detail-input-tokens').textContent = loop.total_input_tokens ? formatTokens(loop.total_input_tokens) : '—';
-  $('#detail-output-tokens').textContent = loop.total_output_tokens ? formatTokens(loop.total_output_tokens) : '—';
-  $('#detail-error').textContent = loop.last_error || '-';
-  $('#detail-started').textContent = loop.started_at ? timeAgo(new Date(loop.started_at)) : '-';
+  // Iteration timeline.
+  renderTimeline(loop);
 
   // Capabilities (tags from config).
   const tags = (loop.config && loop.config.Tags) || [];
@@ -1071,53 +1067,266 @@ function renderDetail() {
   }
 }
 
-function renderLiveTools(loop) {
-  const ul = $('#detail-live-tools');
-  ul.innerHTML = '';
-  const tools = loop._liveTools || [];
-  for (const entry of tools) {
-    const li = document.createElement('li');
-    li.className = 'live-tool live-tool--' + entry.status;
-    li.textContent = entry.tool;
-    ul.appendChild(li);
+// ---------------------------------------------------------------------------
+// Rendering — Aggregate Stats Bar
+// ---------------------------------------------------------------------------
+
+function renderAggregates(loop) {
+  const el = $('#detail-aggregates');
+  const parts = [];
+  const iter = loop.iterations || 0;
+  const att = loop.attempts || 0;
+  parts.push(formatNumber(iter) + ' iter');
+  if (att !== iter) parts.push(formatNumber(att) + ' att');
+  const totalTok = (loop.total_input_tokens || 0) + (loop.total_output_tokens || 0);
+  if (totalTok > 0) parts.push(formatTokens(totalTok) + ' tok');
+  if (loop.started_at) parts.push(timeAgo(new Date(loop.started_at)));
+  if (loop.last_error) {
+    parts.push('<span class="agg-error">' + escapeHTML(truncate(loop.last_error, 40)) + '</span>');
   }
+  el.innerHTML = parts.join(' <span class="agg-sep">\u00b7</span> ');
 }
 
-function renderContextMeter(loop) {
-  const container = $('#detail-context');
-  const fill = $('#detail-context-fill');
-  const pctEl = $('#detail-context-pct');
+// ---------------------------------------------------------------------------
+// Rendering — Iteration Timeline
+// ---------------------------------------------------------------------------
 
-  if (!loop.context_window || !loop.last_input_tokens) {
-    container.hidden = true;
-    return;
+function renderTimeline(loop) {
+  const container = $('#detail-timeline');
+  container.innerHTML = '';
+
+  const isProcessing = loop.state === 'processing';
+  const isSleeping = loop.state === 'sleeping';
+  const isWaiting = loop.state === 'waiting';
+  const history = state.iterationHistory.get(loop.id) || [];
+
+  // Live card (shown during processing).
+  if (isProcessing && loop._iterStartTs) {
+    container.appendChild(buildLiveCard(loop));
   }
 
-  const pct = Math.min(100, (loop.last_input_tokens / loop.context_window) * 100);
-  fill.style.width = pct.toFixed(1) + '%';
-  fill.className = 'context-meter__fill'
-    + (pct >= 80 ? ' context-meter__fill--crit' : pct >= 50 ? ' context-meter__fill--warn' : '');
-  pctEl.textContent = Math.round(pct) + '%';
-  container.hidden = false;
-}
+  // Live connector (between live position and first past card).
+  if ((isSleeping || isWaiting) && history.length > 0) {
+    container.appendChild(buildConnector(loop, history[0], true));
+  }
 
-function updateSleepDisplay(loop) {
-  const el = $('#detail-sleep');
-  const timer = state.sleepTimers.get(loop.id);
-  if (timer && timer.durationMs > 0 && loop.state === 'sleeping') {
-    const remaining = timer.durationMs - (Date.now() - timer.startedAt.getTime());
-    if (remaining > 0) {
-      const wakeAt = new Date(timer.startedAt.getTime() + timer.durationMs);
-      const wakeTime = formatTime(wakeAt);
-      el.innerHTML = 'until ' + wakeTime + '<br>' + formatFuzzy(remaining);
-    } else {
-      el.textContent = 'waking up now...';
+  // Past iteration cards with connectors between them.
+  for (let i = 0; i < history.length; i++) {
+    container.appendChild(buildPastCard(history[i], loop.handler_only));
+    if (i < history.length - 1) {
+      container.appendChild(buildConnector(loop, history[i], false));
     }
-  } else if (loop.state === 'processing') {
-    el.textContent = 'active';
-  } else {
-    el.textContent = '-';
   }
+}
+
+function buildLiveCard(loop) {
+  const card = document.createElement('div');
+  card.className = 'iter-card iter-card--live';
+
+  // Header.
+  const header = document.createElement('div');
+  header.className = 'iter-card__header';
+
+  const elapsed = document.createElement('span');
+  elapsed.className = 'iter-card__elapsed';
+  elapsed.id = 'detail-elapsed';
+  elapsed.textContent = loop._iterStartTs ? formatDuration(Date.now() - loop._iterStartTs) : '0s';
+
+  const model = document.createElement('span');
+  model.className = 'iter-card__model';
+  model.textContent = loop._liveModel ? shortModelName(loop._liveModel) : '';
+
+  const liveLabel = document.createElement('span');
+  liveLabel.className = 'iter-card__live-label';
+  liveLabel.textContent = loop._supervisor ? 'SUPERVISOR' : 'LIVE';
+
+  header.appendChild(liveLabel);
+  header.appendChild(elapsed);
+  header.appendChild(model);
+  card.appendChild(header);
+
+  // Context meter (if we have context info).
+  if (loop.context_window && loop.last_input_tokens) {
+    const pct = Math.min(100, (loop.last_input_tokens / loop.context_window) * 100);
+    const meter = document.createElement('div');
+    meter.className = 'context-meter';
+    meter.innerHTML =
+      '<span class="context-meter__label">Context</span>' +
+      '<div class="context-meter__track">' +
+        '<div class="context-meter__fill' +
+        (pct >= 80 ? ' context-meter__fill--crit' : pct >= 50 ? ' context-meter__fill--warn' : '') +
+        '" style="width:' + pct.toFixed(1) + '%"></div>' +
+      '</div>' +
+      '<span class="context-meter__pct">' + Math.round(pct) + '%</span>';
+    card.appendChild(meter);
+  }
+
+  // Live tool list.
+  const tools = loop._liveTools || [];
+  if (tools.length > 0) {
+    const ul = document.createElement('ul');
+    ul.className = 'live-tools';
+    for (const entry of tools) {
+      const li = document.createElement('li');
+      li.className = 'live-tool live-tool--' + entry.status;
+      li.textContent = entry.tool;
+      ul.appendChild(li);
+    }
+    card.appendChild(ul);
+  }
+
+  return card;
+}
+
+function buildPastCard(snap, handlerOnly) {
+  const card = document.createElement('div');
+  const isError = !!snap.error;
+  card.className = 'iter-card iter-card--past' + (isError ? ' iter-card--error' : '');
+
+  // Header (always visible, clickable to expand).
+  const header = document.createElement('div');
+  header.className = 'iter-card__header';
+
+  const num = document.createElement('span');
+  num.className = 'iter-card__number';
+  num.textContent = isError ? '\u2717' : '#' + (snap.number || '?');
+
+  const model = document.createElement('span');
+  model.className = 'iter-card__model';
+  model.textContent = snap.model ? shortModelName(snap.model) : (handlerOnly ? 'handler' : '');
+
+  const dur = document.createElement('span');
+  dur.className = 'iter-card__duration';
+  dur.textContent = snap.elapsed_ms ? formatDuration(snap.elapsed_ms) : '';
+
+  const chevron = document.createElement('span');
+  chevron.className = 'iter-card__chevron';
+  chevron.textContent = '\u25b8';
+
+  header.appendChild(num);
+  header.appendChild(model);
+  const spacer = document.createElement('span');
+  spacer.className = 'iter-card__spacer';
+  header.appendChild(spacer);
+  header.appendChild(dur);
+  header.appendChild(chevron);
+  card.appendChild(header);
+
+  // Body (hidden by default, toggled on click).
+  const body = document.createElement('div');
+  body.className = 'iter-card__body';
+  body.hidden = true;
+
+  // Token info (skip for handler-only).
+  if (!handlerOnly && (snap.input_tokens || snap.output_tokens)) {
+    const tokens = document.createElement('div');
+    tokens.className = 'iter-card__tokens';
+    tokens.textContent = formatTokens(snap.input_tokens || 0) + ' in / ' + formatTokens(snap.output_tokens || 0) + ' out';
+    body.appendChild(tokens);
+  }
+
+  // Tool chips.
+  const toolsUsed = snap.tools_used;
+  if (toolsUsed && Object.keys(toolsUsed).length > 0) {
+    const toolsDiv = document.createElement('div');
+    toolsDiv.className = 'iter-card__tools';
+    for (const [name, count] of Object.entries(toolsUsed)) {
+      const chip = document.createElement('span');
+      chip.className = 'iter-card__tool-item';
+      chip.textContent = name + (count > 1 ? ' \u00d7' + count : '');
+      toolsDiv.appendChild(chip);
+    }
+    body.appendChild(toolsDiv);
+  }
+
+  // Error text.
+  if (snap.error) {
+    const errEl = document.createElement('div');
+    errEl.className = 'iter-card__error';
+    errEl.textContent = snap.error;
+    body.appendChild(errEl);
+  }
+
+  // Supervisor badge.
+  if (snap.supervisor) {
+    const supEl = document.createElement('span');
+    supEl.className = 'iter-card__sup-badge';
+    supEl.textContent = '\u2726 supervisor';
+    body.appendChild(supEl);
+  }
+
+  // Timestamp.
+  if (snap.completed_at) {
+    const ts = document.createElement('div');
+    ts.className = 'iter-card__timestamp';
+    ts.textContent = formatTime(new Date(snap.completed_at));
+    body.appendChild(ts);
+  }
+
+  card.appendChild(body);
+
+  // Toggle expand/collapse on header click.
+  header.addEventListener('click', () => {
+    body.hidden = !body.hidden;
+    chevron.textContent = body.hidden ? '\u25b8' : '\u25be';
+    card.classList.toggle('iter-card--expanded', !body.hidden);
+  });
+
+  return card;
+}
+
+function buildConnector(loop, snap, isLive) {
+  const conn = document.createElement('div');
+  conn.className = 'iter-connector';
+
+  const line = document.createElement('div');
+  line.className = 'iter-connector__line';
+  conn.appendChild(line);
+
+  const label = document.createElement('span');
+  label.className = 'iter-connector__label';
+
+  if (isLive) {
+    // Live connector — show current sleep/wait state.
+    if (loop.state === 'sleeping') {
+      const timer = state.sleepTimers.get(loop.id);
+      if (timer && timer.durationMs > 0) {
+        const remaining = timer.durationMs - (Date.now() - timer.startedAt.getTime());
+        if (remaining > 0) {
+          label.textContent = 'sleeping ' + formatDuration(remaining);
+        } else {
+          label.textContent = 'waking up...';
+        }
+      } else {
+        label.textContent = 'sleeping';
+      }
+    } else if (loop.state === 'waiting') {
+      label.textContent = 'awaiting event';
+    }
+    conn.appendChild(label);
+
+    // Supervisor info on live connector only.
+    const cfg = loop.config || {};
+    if (cfg.Supervisor && cfg.SupervisorProb > 0) {
+      const supLabel = document.createElement('span');
+      supLabel.className = 'iter-connector__sup';
+      const pct = Math.round(cfg.SupervisorProb * 100);
+      const lastSup = loop.last_supervisor_iter || 0;
+      const itersSince = (loop.iterations || 0) - lastSup;
+      supLabel.innerHTML = '&#x2726; ' + pct + '%' + (lastSup > 0 ? ' \u00b7 ' + itersSince + ' iter ago' : '');
+      conn.appendChild(supLabel);
+    }
+  } else {
+    // Historical connector — show how long the sleep was.
+    if (snap.sleep_after_ms) {
+      label.textContent = 'slept ' + formatDuration(snap.sleep_after_ms);
+    } else if (snap.wait_after) {
+      label.textContent = 'waited';
+    }
+    conn.appendChild(label);
+  }
+
+  return conn;
 }
 
 function formatFuzzy(ms) {
@@ -1250,90 +1459,45 @@ function shortID(id) {
 }
 
 // ---------------------------------------------------------------------------
-// Rendering — Event List
+// Timeline Helpers
 // ---------------------------------------------------------------------------
 
-function renderEventList() {
-  const list = $('#event-list');
-  list.innerHTML = '';
+function shortModelName(model) {
+  if (!model) return '';
+  // Strip date suffixes (e.g. "claude-sonnet-4-20250514" → "claude-sonnet-4").
+  const m = model.replace(/-\d{8,}$/, '');
+  // Shorten common prefixes.
+  return m.replace(/^claude-/, '').replace(/^gpt-/, '');
+}
 
-  // Show events for selected loop, or all if none selected.
-  const filtered = state.selected
-    ? state.events.filter(e => e.data && e.data.loop_id === state.selected)
-    : state.events;
-
-  for (const evt of filtered.slice(0, 20)) {
-    const li = document.createElement('li');
-
-    const time = document.createElement('span');
-    time.className = 'event-time';
-    time.textContent = formatTime(new Date(evt.ts));
-
-    const kind = document.createElement('span');
-    kind.className = 'event-kind';
-
-    const detail = document.createElement('span');
-    detail.className = 'event-detail';
-
-    switch (evt.kind) {
-      case 'loop_iteration_start':
-        kind.textContent = evt.data.supervisor ? 'supervisor' : 'iteration';
-        kind.className += evt.data.supervisor ? ' event-supervisor' : '';
-        detail.textContent = '#' + (evt.data.attempt || '?');
-        break;
-      case 'loop_iteration_complete':
-        kind.textContent = 'complete';
-        kind.className += ' event-ok';
-        detail.textContent = evt.data.model || '';
-        break;
-      case 'loop_sleep_start': {
-        kind.textContent = 'sleep';
-        const raw = evt.data.sleep_duration || '';
-        const ms = parseDuration(raw);
-        detail.textContent = ms > 0 ? formatDuration(ms) : raw;
-        break;
-      }
-      case 'loop_wait_start':
-        kind.textContent = 'waiting';
-        detail.textContent = 'awaiting event';
-        break;
-      case 'loop_error':
-        kind.textContent = 'error';
-        kind.className += ' event-error';
-        detail.textContent = evt.data.error || '';
-        break;
-      case 'loop_state_change':
-        kind.textContent = evt.data.from + ' -> ' + evt.data.to;
-        break;
-      case 'loop_tool_start':
-        kind.textContent = 'tool';
-        detail.textContent = evt.data.tool || '';
-        break;
-      case 'loop_tool_done':
-        kind.textContent = 'tool done';
-        kind.className += evt.data.error ? ' event-error' : ' event-ok';
-        detail.textContent = evt.data.tool || '';
-        break;
-      case 'loop_llm_response':
-        kind.textContent = 'llm';
-        detail.textContent = evt.data.model || '';
-        break;
-      case 'loop_started':
-        kind.textContent = 'started';
-        kind.className += ' event-ok';
-        break;
-      case 'loop_stopped':
-        kind.textContent = 'stopped';
-        break;
-      default:
-        kind.textContent = evt.kind;
-    }
-
-    li.appendChild(time);
-    li.appendChild(kind);
-    li.appendChild(detail);
-    list.appendChild(li);
+function prependIterationSnapshot(loopId, snap) {
+  let arr = state.iterationHistory.get(loopId);
+  if (!arr) {
+    arr = [];
+    state.iterationHistory.set(loopId, arr);
   }
+  arr.unshift(snap);
+  if (arr.length > MAX_ITERATION_HISTORY) arr.length = MAX_ITERATION_HISTORY;
+}
+
+function buildToolCounts(liveTools) {
+  if (!liveTools || liveTools.length === 0) return null;
+  const counts = {};
+  for (const t of liveTools) {
+    counts[t.tool] = (counts[t.tool] || 0) + 1;
+  }
+  return counts;
+}
+
+function escapeHTML(s) {
+  const div = document.createElement('div');
+  div.textContent = s;
+  return div.innerHTML;
+}
+
+function truncate(s, max) {
+  if (!s || s.length <= max) return s;
+  return s.slice(0, max) + '\u2026';
 }
 
 // ---------------------------------------------------------------------------
@@ -1555,14 +1719,15 @@ async function fetchSystemLogs() {
 // Animation Loop (sleep countdowns + progress rings)
 // ---------------------------------------------------------------------------
 
+let _lastTickSec = 0;
+
 function tick() {
-  // Update live detail fields for selected loop.
-  if (state.selected && state.loops.has(state.selected)) {
-    const loop = state.loops.get(state.selected);
-    updateSleepDisplay(loop);
-    // Keep "Started" field fresh.
-    if (loop.started_at) {
-      $('#detail-started').textContent = timeAgo(new Date(loop.started_at));
+  // Throttle detail updates to ~1Hz (sleep countdowns don't need 60fps).
+  const nowSec = Math.floor(Date.now() / 1000);
+  if (nowSec !== _lastTickSec) {
+    _lastTickSec = nowSec;
+    if (state.selected && state.loops.has(state.selected)) {
+      try { renderDetail(); } catch (e) { console.error('tick renderDetail:', e); }
     }
   }
 
@@ -1751,23 +1916,14 @@ function formatDuration(ms) {
 // ---------------------------------------------------------------------------
 
 function startElapsedTimer(loopId) {
+  // Elapsed display is now driven by the 1Hz tick() render cycle.
+  // Keep the timer infrastructure for symmetry with stopElapsedTimer
+  // (which clears _iterStartTs), but no separate interval needed.
   stopElapsedTimer(loopId);
-  const tid = setInterval(() => {
-    if (state.selected !== loopId) return;
-    const loop = state.loops.get(loopId);
-    if (!loop || !loop._iterStartTs) return;
-    const el = document.getElementById('detail-elapsed');
-    if (el) el.textContent = formatDuration(Date.now() - loop._iterStartTs);
-  }, 1000);
-  state.elapsedTimers.set(loopId, tid);
 }
 
 function stopElapsedTimer(loopId) {
-  const tid = state.elapsedTimers.get(loopId);
-  if (tid) {
-    clearInterval(tid);
-    state.elapsedTimers.delete(loopId);
-  }
+  state.elapsedTimers.delete(loopId);
 }
 
 function clearLiveTelemetry(loop, loopId) {

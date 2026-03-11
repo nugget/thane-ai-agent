@@ -244,6 +244,45 @@ type IterationResult struct {
 	Sleep time.Duration
 }
 
+// IterationSnapshot is a serializable summary of a completed loop
+// iteration, retained in a ring buffer for the dashboard timeline.
+type IterationSnapshot struct {
+	// Number is the 1-based iteration number (matches the loop's
+	// cumulative iteration counter at the time of completion).
+	Number int `json:"number"`
+	// ConvID is the conversation ID used for this iteration.
+	ConvID string `json:"conv_id,omitempty"`
+	// Model is the LLM model used.
+	Model string `json:"model,omitempty"`
+	// InputTokens consumed by this iteration.
+	InputTokens int `json:"input_tokens,omitempty"`
+	// OutputTokens produced by this iteration.
+	OutputTokens int `json:"output_tokens,omitempty"`
+	// ContextWindow is the model's maximum context size in tokens.
+	ContextWindow int `json:"context_window,omitempty"`
+	// ToolsUsed maps tool names to invocation counts.
+	ToolsUsed map[string]int `json:"tools_used,omitempty"`
+	// ElapsedMs is the wall-clock duration of the iteration in
+	// milliseconds. Stored as int64 (not time.Duration) so the JSON
+	// value is directly usable by the client without nanosecond
+	// conversion.
+	ElapsedMs int64 `json:"elapsed_ms"`
+	// Supervisor indicates whether this was a supervisor iteration.
+	Supervisor bool `json:"supervisor,omitempty"`
+	// Error holds the error message if the iteration failed.
+	Error string `json:"error,omitempty"`
+	// StartedAt is when the iteration began.
+	StartedAt time.Time `json:"started_at"`
+	// CompletedAt is when the iteration finished.
+	CompletedAt time.Time `json:"completed_at"`
+	// SleepAfterMs is the computed sleep duration (in milliseconds)
+	// following this iteration. Zero for WaitFunc-based loops.
+	SleepAfterMs int64 `json:"sleep_after_ms,omitempty"`
+	// WaitAfter is true when the loop entered WaitFunc after this
+	// iteration instead of sleeping.
+	WaitAfter bool `json:"wait_after,omitempty"`
+}
+
 // Status is a snapshot of a loop's current state and metrics,
 // suitable for external inspection via the registry.
 type Status struct {
@@ -287,6 +326,13 @@ type Status struct {
 	// EventDriven is true when the loop uses a WaitFunc instead of
 	// timer-based sleeping.
 	EventDriven bool `json:"event_driven,omitempty"`
+	// RecentIterations holds up to 10 completed iteration snapshots
+	// (newest first), used by the dashboard timeline.
+	RecentIterations []IterationSnapshot `json:"recent_iterations,omitempty"`
+	// LastSupervisorIter is the iteration number of the most recent
+	// successful supervisor iteration. Zero means no supervisor
+	// iteration has completed yet.
+	LastSupervisorIter int `json:"last_supervisor_iter,omitempty"`
 	// Config is a copy of the loop's configuration.
 	Config Config `json:"config"`
 }

@@ -136,43 +136,11 @@ function shortID(id) {
 // Live Telemetry Timers
 // ---------------------------------------------------------------------------
 
-let elapsedTimerId = null;
-
-function startElapsedTimer() {
-  stopElapsedTimer();
-  elapsedTimerId = setInterval(() => {
-    if (!loopData || !loopData._iterStartTs) return;
-    const el = document.getElementById('detail-elapsed');
-    if (el) el.textContent = formatDuration(Date.now() - loopData._iterStartTs);
-  }, 1000);
-}
-
-function stopElapsedTimer() {
-  if (elapsedTimerId) {
-    clearInterval(elapsedTimerId);
-    elapsedTimerId = null;
-  }
-}
-
 function clearLiveTelemetry() {
   if (loopData) {
     loopData._iterStartTs = null;
     loopData._liveTools = [];
     loopData._liveModel = '';
-  }
-  stopElapsedTimer();
-}
-
-function renderLiveTools() {
-  const ul = $('#detail-live-tools');
-  if (!ul) return;
-  ul.innerHTML = '';
-  const tools = (loopData && loopData._liveTools) || [];
-  for (const entry of tools) {
-    const li = document.createElement('li');
-    li.className = 'live-tool live-tool--' + entry.status;
-    li.textContent = entry.tool;
-    ul.appendChild(li);
   }
 }
 
@@ -418,7 +386,9 @@ async function fetchSystemLogs() {
 let loopData = null;
 const events = [];
 const MAX_EVENTS = 50;
+const MAX_ITERATION_HISTORY = 10;
 const sleepTimers = new Map();
+let iterationHistory = [];
 
 function initLoop() {
   if (!nodeId) {
@@ -442,13 +412,17 @@ function connectSSE() {
     const statuses = JSON.parse(e.data);
     const match = statuses.find(s => s.id === nodeId);
     if (match) {
-      // Seed live telemetry for a loop already in processing state
-      // so the Live Activity section shows immediately on connect.
+      // Seed iteration history from server-side ring buffer.
+      if (match.recent_iterations && match.recent_iterations.length > 0) {
+        iterationHistory = match.recent_iterations.slice();
+      } else {
+        iterationHistory = [];
+      }
+      // Seed live telemetry for a loop already in processing state.
       if (match.state === 'processing') {
         match._iterStartTs = match.last_wake_at ? new Date(match.last_wake_at).getTime() : Date.now();
         match._liveTools = [];
         match._liveModel = '';
-        startElapsedTimer();
       }
       loopData = match;
       document.title = 'Thane \u00b7 ' + (match.name || nodeId.slice(0, 8));
@@ -486,16 +460,17 @@ function applyLoopEvent(evt) {
       loopData.attempts = (loopData.attempts || 0) + 1;
       loopData._supervisor = !!d.supervisor;
       loopData._currentConvID = d.conversation_id || loopData._currentConvID;
-      // Reset live telemetry for new iteration.
       loopData._liveTools = [];
       loopData._liveModel = '';
       loopData._iterStartTs = Date.now();
-      startElapsedTimer();
       break;
-    case 'loop_iteration_complete':
+    case 'loop_iteration_complete': {
       loopData.iterations = (loopData.iterations || 0) + 1;
       loopData._lastModel = d.model || loopData._lastModel;
       loopData._lastSupervisor = loopData._supervisor;
+      if (loopData._supervisor) {
+        loopData.last_supervisor_iter = loopData.iterations;
+      }
       loopData._supervisor = false;
       if (d.input_tokens) {
         loopData.total_input_tokens = (loopData.total_input_tokens || 0) + d.input_tokens;
@@ -506,9 +481,25 @@ function applyLoopEvent(evt) {
         loopData.last_output_tokens = d.output_tokens;
       }
       if (d.context_window > 0) loopData.context_window = d.context_window;
-      // Clear live telemetry.
+      // Build iteration snapshot.
+      const snap = {
+        number: loopData.iterations,
+        conv_id: d.conversation_id || loopData._currentConvID || '',
+        model: d.model || '',
+        input_tokens: d.input_tokens || 0,
+        output_tokens: d.output_tokens || 0,
+        context_window: d.context_window || 0,
+        tools_used: d.tools_used || buildToolCounts(loopData._liveTools),
+        elapsed_ms: d.elapsed_ms || 0,
+        supervisor: loopData._lastSupervisor || false,
+        started_at: loopData._iterStartTs ? new Date(loopData._iterStartTs).toISOString() : evt.ts,
+        completed_at: evt.ts,
+      };
+      iterationHistory.unshift(snap);
+      if (iterationHistory.length > MAX_ITERATION_HISTORY) iterationHistory.length = MAX_ITERATION_HISTORY;
       clearLiveTelemetry();
       break;
+    }
     case 'loop_sleep_start': {
       loopData.state = 'sleeping';
       clearLiveTelemetry();
@@ -516,17 +507,34 @@ function applyLoopEvent(evt) {
       if (ms > 0) {
         sleepTimers.set(nodeId, { startedAt: new Date(), durationMs: ms });
       }
+      if (iterationHistory.length > 0) {
+        iterationHistory[0].sleep_after_ms = ms;
+      }
       break;
     }
     case 'loop_wait_start':
       loopData.state = 'waiting';
       clearLiveTelemetry();
       sleepTimers.delete(nodeId);
+      if (iterationHistory.length > 0) {
+        iterationHistory[0].wait_after = true;
+      }
       break;
-    case 'loop_error':
+    case 'loop_error': {
       loopData.last_error = d.error;
+      const errSnap = {
+        number: 0,
+        error: d.error || '',
+        started_at: loopData._iterStartTs ? new Date(loopData._iterStartTs).toISOString() : evt.ts,
+        completed_at: evt.ts,
+        elapsed_ms: loopData._iterStartTs ? Date.now() - loopData._iterStartTs : 0,
+        supervisor: loopData._supervisor || false,
+      };
+      iterationHistory.unshift(errSnap);
+      if (iterationHistory.length > MAX_ITERATION_HISTORY) iterationHistory.length = MAX_ITERATION_HISTORY;
       clearLiveTelemetry();
       break;
+    }
     case 'loop_state_change':
       loopData.state = d.to;
       if (d.to !== 'processing') clearLiveTelemetry();
@@ -537,10 +545,8 @@ function applyLoopEvent(evt) {
       break;
     case 'loop_tool_start':
       if (!loopData._liveTools) loopData._liveTools = [];
-      // Seed _iterStartTs if we missed the iteration_start (e.g. SSE reconnect).
       if (!loopData._iterStartTs) {
         loopData._iterStartTs = Date.now();
-        startElapsedTimer();
       }
       loopData._liveTools.push({ tool: d.tool, status: 'running' });
       break;
@@ -556,10 +562,8 @@ function applyLoopEvent(evt) {
       break;
     case 'loop_llm_response':
       loopData._liveModel = d.model || '';
-      // Seed _iterStartTs if we missed the iteration_start (e.g. SSE reconnect).
       if (!loopData._iterStartTs) {
         loopData._iterStartTs = Date.now();
-        startElapsedTimer();
       }
       break;
   }
@@ -582,61 +586,14 @@ function renderLoopDetail() {
   if (loopData.parent_id) idsContainer.appendChild(makeIDRow('parent_id', loopData.parent_id));
   if (loopData._currentConvID) idsContainer.appendChild(makeIDRow('conv_id', loopData._currentConvID));
 
-  // Forward-looking section.
-  const isSleeping = loopData.state === 'sleeping';
-  const isWaiting = loopData.state === 'waiting';
-  const hasSupervisor = loopData.config && loopData.config.Supervisor;
-  const showForward = isSleeping || isWaiting || hasSupervisor;
-  $('#detail-forward').hidden = !showForward;
-  const sleepVisible = isSleeping || isWaiting;
-  $('#detail-sleep-label').hidden = !sleepVisible;
-  $('#detail-sleep').hidden = !sleepVisible;
-  if (isWaiting) {
-    $('#detail-sleep-label').textContent = 'Wait';
-    $('#detail-sleep').textContent = 'awaiting event';
-  } else {
-    $('#detail-sleep-label').textContent = 'Sleep';
-    updateSleepDisplay();
-  }
+  // Aggregate stats bar.
+  renderAggregates();
 
   // Supervisor bar.
   renderSupervisorBar();
 
-  // Live activity section (visible only during processing).
-  const liveSection = $('#detail-live');
-  const isProcessing = loopData.state === 'processing' && loopData._iterStartTs;
-  if (isProcessing) {
-    liveSection.hidden = false;
-    $('#detail-elapsed').textContent = formatDuration(Date.now() - loopData._iterStartTs);
-    $('#detail-live-model').textContent = loopData._liveModel || '';
-    renderLiveTools();
-  } else {
-    liveSection.hidden = true;
-  }
-
-  // Last-iteration section (LLM loops only, after first completed iteration).
-  const hasIterData = loopData._lastModel || loopData.last_input_tokens;
-  const lastIterSection = $('#detail-last-iter');
-  if (hasIterData) {
-    lastIterSection.hidden = false;
-    renderContextMeter();
-    $('#detail-model').textContent = loopData._lastModel || '-';
-    $('#detail-iter-input').textContent = loopData.last_input_tokens ? formatTokens(loopData.last_input_tokens) : '—';
-    $('#detail-iter-output').textContent = loopData.last_output_tokens ? formatTokens(loopData.last_output_tokens) : '—';
-  } else {
-    lastIterSection.hidden = true;
-  }
-  const hasLive = !liveSection.hidden;
-  const hasLastIter = !lastIterSection.hidden;
-  $('#detail-divider').hidden = !(showForward || hasLive || hasLastIter);
-
-  // Lifetime metrics.
-  $('#detail-iterations').textContent = formatNumber(loopData.iterations || 0);
-  $('#detail-attempts').textContent = formatNumber(loopData.attempts || 0);
-  $('#detail-input-tokens').textContent = loopData.total_input_tokens ? formatTokens(loopData.total_input_tokens) : '—';
-  $('#detail-output-tokens').textContent = loopData.total_output_tokens ? formatTokens(loopData.total_output_tokens) : '—';
-  $('#detail-error').textContent = loopData.last_error || '-';
-  $('#detail-started').textContent = loopData.started_at ? timeAgo(new Date(loopData.started_at)) : '-';
+  // Iteration timeline.
+  renderTimeline();
 
   // Capabilities (tags from config).
   const tags = (loopData.config && loopData.config.Tags) || [];
@@ -654,46 +611,243 @@ function renderLoopDetail() {
   } else {
     tagsSection.hidden = true;
   }
-
-  // Event list.
-  renderEventList();
 }
 
-function renderContextMeter() {
-  const container = $('#detail-context');
-  const fill = $('#detail-context-fill');
-  const pctEl = $('#detail-context-pct');
+function renderAggregates() {
+  const el = $('#detail-aggregates');
+  const parts = [];
+  const iter = loopData.iterations || 0;
+  const att = loopData.attempts || 0;
+  parts.push(formatNumber(iter) + ' iter');
+  if (att !== iter) parts.push(formatNumber(att) + ' att');
+  const totalTok = (loopData.total_input_tokens || 0) + (loopData.total_output_tokens || 0);
+  if (totalTok > 0) parts.push(formatTokens(totalTok) + ' tok');
+  if (loopData.started_at) parts.push(timeAgo(new Date(loopData.started_at)));
+  if (loopData.last_error) {
+    parts.push('<span class="agg-error">' + escapeHTML(truncate(loopData.last_error, 40)) + '</span>');
+  }
+  el.innerHTML = parts.join(' <span class="agg-sep">\u00b7</span> ');
+}
 
-  if (!loopData || !loopData.context_window || !loopData.last_input_tokens) {
-    container.hidden = true;
-    return;
+function renderTimeline() {
+  const container = $('#detail-timeline');
+  container.innerHTML = '';
+
+  const isProcessing = loopData.state === 'processing';
+  const isSleeping = loopData.state === 'sleeping';
+  const isWaiting = loopData.state === 'waiting';
+
+  // Live card.
+  if (isProcessing && loopData._iterStartTs) {
+    container.appendChild(buildLiveCard());
   }
 
-  const pct = Math.min(100, (loopData.last_input_tokens / loopData.context_window) * 100);
-  fill.style.width = pct.toFixed(1) + '%';
-  fill.className = 'context-meter__fill'
-    + (pct >= 80 ? ' context-meter__fill--crit' : pct >= 50 ? ' context-meter__fill--warn' : '');
-  pctEl.textContent = Math.round(pct) + '%';
-  container.hidden = false;
-}
+  // Live connector.
+  if ((isSleeping || isWaiting) && iterationHistory.length > 0) {
+    container.appendChild(buildConnector(iterationHistory[0], true));
+  }
 
-function updateSleepDisplay() {
-  if (!loopData) return;
-  const el = $('#detail-sleep');
-  const timer = sleepTimers.get(nodeId);
-  if (timer && timer.durationMs > 0 && loopData.state === 'sleeping') {
-    const remaining = timer.durationMs - (Date.now() - timer.startedAt.getTime());
-    if (remaining > 0) {
-      const wakeAt = new Date(timer.startedAt.getTime() + timer.durationMs);
-      el.textContent = 'until ' + formatTime(wakeAt);
-    } else {
-      el.textContent = 'waking up now...';
+  // Past iteration cards.
+  for (let i = 0; i < iterationHistory.length; i++) {
+    container.appendChild(buildPastCard(iterationHistory[i], loopData.handler_only));
+    if (i < iterationHistory.length - 1) {
+      container.appendChild(buildConnector(iterationHistory[i], false));
     }
-  } else if (loopData.state === 'processing') {
-    el.textContent = 'active';
-  } else {
-    el.textContent = '-';
   }
+}
+
+function buildLiveCard() {
+  const card = document.createElement('div');
+  card.className = 'iter-card iter-card--live';
+
+  const header = document.createElement('div');
+  header.className = 'iter-card__header';
+
+  const elapsed = document.createElement('span');
+  elapsed.className = 'iter-card__elapsed';
+  elapsed.id = 'detail-elapsed';
+  elapsed.textContent = loopData._iterStartTs ? formatDuration(Date.now() - loopData._iterStartTs) : '0s';
+
+  const model = document.createElement('span');
+  model.className = 'iter-card__model';
+  model.textContent = loopData._liveModel ? shortModelName(loopData._liveModel) : '';
+
+  const liveLabel = document.createElement('span');
+  liveLabel.className = 'iter-card__live-label';
+  liveLabel.textContent = loopData._supervisor ? 'SUPERVISOR' : 'LIVE';
+
+  header.appendChild(liveLabel);
+  header.appendChild(elapsed);
+  header.appendChild(model);
+  card.appendChild(header);
+
+  // Context meter.
+  if (loopData.context_window && loopData.last_input_tokens) {
+    const pct = Math.min(100, (loopData.last_input_tokens / loopData.context_window) * 100);
+    const meter = document.createElement('div');
+    meter.className = 'context-meter';
+    meter.innerHTML =
+      '<span class="context-meter__label">Context</span>' +
+      '<div class="context-meter__track">' +
+        '<div class="context-meter__fill' +
+        (pct >= 80 ? ' context-meter__fill--crit' : pct >= 50 ? ' context-meter__fill--warn' : '') +
+        '" style="width:' + pct.toFixed(1) + '%"></div>' +
+      '</div>' +
+      '<span class="context-meter__pct">' + Math.round(pct) + '%</span>';
+    card.appendChild(meter);
+  }
+
+  // Live tool list.
+  const tools = loopData._liveTools || [];
+  if (tools.length > 0) {
+    const ul = document.createElement('ul');
+    ul.className = 'live-tools';
+    for (const entry of tools) {
+      const li = document.createElement('li');
+      li.className = 'live-tool live-tool--' + entry.status;
+      li.textContent = entry.tool;
+      ul.appendChild(li);
+    }
+    card.appendChild(ul);
+  }
+
+  return card;
+}
+
+function buildPastCard(snap, handlerOnly) {
+  const card = document.createElement('div');
+  const isError = !!snap.error;
+  card.className = 'iter-card iter-card--past' + (isError ? ' iter-card--error' : '');
+
+  const header = document.createElement('div');
+  header.className = 'iter-card__header';
+
+  const num = document.createElement('span');
+  num.className = 'iter-card__number';
+  num.textContent = isError ? '\u2717' : '#' + (snap.number || '?');
+
+  const model = document.createElement('span');
+  model.className = 'iter-card__model';
+  model.textContent = snap.model ? shortModelName(snap.model) : (handlerOnly ? 'handler' : '');
+
+  const dur = document.createElement('span');
+  dur.className = 'iter-card__duration';
+  dur.textContent = snap.elapsed_ms ? formatDuration(snap.elapsed_ms) : '';
+
+  const chevron = document.createElement('span');
+  chevron.className = 'iter-card__chevron';
+  chevron.textContent = '\u25b8';
+
+  header.appendChild(num);
+  header.appendChild(model);
+  const spacer = document.createElement('span');
+  spacer.className = 'iter-card__spacer';
+  header.appendChild(spacer);
+  header.appendChild(dur);
+  header.appendChild(chevron);
+  card.appendChild(header);
+
+  const body = document.createElement('div');
+  body.className = 'iter-card__body';
+  body.hidden = true;
+
+  if (!handlerOnly && (snap.input_tokens || snap.output_tokens)) {
+    const tokens = document.createElement('div');
+    tokens.className = 'iter-card__tokens';
+    tokens.textContent = formatTokens(snap.input_tokens || 0) + ' in / ' + formatTokens(snap.output_tokens || 0) + ' out';
+    body.appendChild(tokens);
+  }
+
+  const toolsUsed = snap.tools_used;
+  if (toolsUsed && Object.keys(toolsUsed).length > 0) {
+    const toolsDiv = document.createElement('div');
+    toolsDiv.className = 'iter-card__tools';
+    for (const [name, count] of Object.entries(toolsUsed)) {
+      const chip = document.createElement('span');
+      chip.className = 'iter-card__tool-item';
+      chip.textContent = name + (count > 1 ? ' \u00d7' + count : '');
+      toolsDiv.appendChild(chip);
+    }
+    body.appendChild(toolsDiv);
+  }
+
+  if (snap.error) {
+    const errEl = document.createElement('div');
+    errEl.className = 'iter-card__error';
+    errEl.textContent = snap.error;
+    body.appendChild(errEl);
+  }
+
+  if (snap.supervisor) {
+    const supEl = document.createElement('span');
+    supEl.className = 'iter-card__sup-badge';
+    supEl.textContent = '\u2726 supervisor';
+    body.appendChild(supEl);
+  }
+
+  if (snap.completed_at) {
+    const ts = document.createElement('div');
+    ts.className = 'iter-card__timestamp';
+    ts.textContent = formatTime(new Date(snap.completed_at));
+    body.appendChild(ts);
+  }
+
+  card.appendChild(body);
+
+  header.addEventListener('click', () => {
+    body.hidden = !body.hidden;
+    chevron.textContent = body.hidden ? '\u25b8' : '\u25be';
+    card.classList.toggle('iter-card--expanded', !body.hidden);
+  });
+
+  return card;
+}
+
+function buildConnector(snap, isLive) {
+  const conn = document.createElement('div');
+  conn.className = 'iter-connector';
+
+  const line = document.createElement('div');
+  line.className = 'iter-connector__line';
+  conn.appendChild(line);
+
+  const label = document.createElement('span');
+  label.className = 'iter-connector__label';
+
+  if (isLive) {
+    if (loopData.state === 'sleeping') {
+      const timer = sleepTimers.get(nodeId);
+      if (timer && timer.durationMs > 0) {
+        const remaining = timer.durationMs - (Date.now() - timer.startedAt.getTime());
+        label.textContent = remaining > 0 ? 'sleeping ' + formatDuration(remaining) : 'waking up...';
+      } else {
+        label.textContent = 'sleeping';
+      }
+    } else if (loopData.state === 'waiting') {
+      label.textContent = 'awaiting event';
+    }
+    conn.appendChild(label);
+
+    const cfg = loopData.config || {};
+    if (cfg.Supervisor && cfg.SupervisorProb > 0) {
+      const supLabel = document.createElement('span');
+      supLabel.className = 'iter-connector__sup';
+      const pct = Math.round(cfg.SupervisorProb * 100);
+      const lastSup = loopData.last_supervisor_iter || 0;
+      const itersSince = (loopData.iterations || 0) - lastSup;
+      supLabel.innerHTML = '&#x2726; ' + pct + '%' + (lastSup > 0 ? ' \u00b7 ' + itersSince + ' iter ago' : '');
+      conn.appendChild(supLabel);
+    }
+  } else {
+    if (snap.sleep_after_ms) {
+      label.textContent = 'slept ' + formatDuration(snap.sleep_after_ms);
+    } else if (snap.wait_after) {
+      label.textContent = 'waited';
+    }
+    conn.appendChild(label);
+  }
+
+  return conn;
 }
 
 function renderSupervisorBar() {
@@ -723,82 +877,30 @@ function renderSupervisorBar() {
   }
 }
 
-function renderEventList() {
-  const list = $('#event-list');
-  list.innerHTML = '';
+function shortModelName(model) {
+  if (!model) return '';
+  const m = model.replace(/-\d{8,}$/, '');
+  return m.replace(/^claude-/, '').replace(/^gpt-/, '');
+}
 
-  for (const evt of events.slice(0, 20)) {
-    const li = document.createElement('li');
-
-    const time = document.createElement('span');
-    time.className = 'event-time';
-    time.textContent = formatTime(new Date(evt.ts));
-
-    const kind = document.createElement('span');
-    kind.className = 'event-kind';
-
-    const detail = document.createElement('span');
-    detail.className = 'event-detail';
-
-    switch (evt.kind) {
-      case 'loop_iteration_start':
-        kind.textContent = evt.data.supervisor ? 'supervisor' : 'iteration';
-        kind.className += evt.data.supervisor ? ' event-supervisor' : '';
-        detail.textContent = '#' + (evt.data.attempt || '?');
-        break;
-      case 'loop_iteration_complete':
-        kind.textContent = 'complete';
-        kind.className += ' event-ok';
-        detail.textContent = evt.data.model || '';
-        break;
-      case 'loop_sleep_start': {
-        kind.textContent = 'sleep';
-        const raw = evt.data.sleep_duration || '';
-        const ms = parseDuration(raw);
-        detail.textContent = ms > 0 ? formatDuration(ms) : raw;
-        break;
-      }
-      case 'loop_wait_start':
-        kind.textContent = 'waiting';
-        detail.textContent = 'awaiting event';
-        break;
-      case 'loop_error':
-        kind.textContent = 'error';
-        kind.className += ' event-error';
-        detail.textContent = evt.data.error || '';
-        break;
-      case 'loop_state_change':
-        kind.textContent = evt.data.from + ' -> ' + evt.data.to;
-        break;
-      case 'loop_tool_start':
-        kind.textContent = 'tool';
-        detail.textContent = evt.data.tool || '';
-        break;
-      case 'loop_tool_done':
-        kind.textContent = 'tool done';
-        kind.className += evt.data.error ? ' event-error' : ' event-ok';
-        detail.textContent = evt.data.tool || '';
-        break;
-      case 'loop_llm_response':
-        kind.textContent = 'llm';
-        detail.textContent = evt.data.model || '';
-        break;
-      case 'loop_started':
-        kind.textContent = 'started';
-        kind.className += ' event-ok';
-        break;
-      case 'loop_stopped':
-        kind.textContent = 'stopped';
-        break;
-      default:
-        kind.textContent = evt.kind;
-    }
-
-    li.appendChild(time);
-    li.appendChild(kind);
-    li.appendChild(detail);
-    list.appendChild(li);
+function buildToolCounts(liveTools) {
+  if (!liveTools || liveTools.length === 0) return null;
+  const counts = {};
+  for (const t of liveTools) {
+    counts[t.tool] = (counts[t.tool] || 0) + 1;
   }
+  return counts;
+}
+
+function escapeHTML(s) {
+  const div = document.createElement('div');
+  div.textContent = s;
+  return div.innerHTML;
+}
+
+function truncate(s, max) {
+  if (!s || s.length <= max) return s;
+  return s.slice(0, max) + '\u2026';
 }
 
 function makeIDRow(label, value) {
@@ -832,10 +934,7 @@ function makeIDChip(fullID) {
 
 function tickLoop() {
   if (loopData) {
-    updateSleepDisplay();
-    if (loopData.started_at) {
-      $('#detail-started').textContent = timeAgo(new Date(loopData.started_at));
-    }
+    renderLoopDetail();
   }
 }
 

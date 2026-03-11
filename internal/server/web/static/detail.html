@@ -177,48 +177,13 @@
             <span id="detail-state" class="state-badge"></span>
           </div>
           <div id="detail-ids" class="detail-ids"></div>
-          <dl id="detail-forward" class="detail-metrics detail-metrics--forward" hidden>
-            <dt id="detail-sleep-label" hidden>Sleep</dt>
-            <dd id="detail-sleep" hidden>-</dd>
-          </dl>
+          <div id="detail-aggregates" class="detail-aggregates"></div>
           <div id="detail-supervisor" class="supervisor-bar" hidden></div>
-          <div id="detail-live" class="live-activity" hidden>
-            <h3 class="section-title">Live Activity</h3>
-            <div class="live-header">
-              <span class="live-elapsed" id="detail-elapsed">0s</span>
-              <span class="live-model" id="detail-live-model"></span>
-            </div>
-            <ul class="live-tools" id="detail-live-tools"></ul>
-          </div>
-          <div id="detail-last-iter" hidden>
-            <div id="detail-context" class="context-meter" hidden>
-              <span class="context-meter__label">Context</span>
-              <div class="context-meter__track">
-                <div class="context-meter__fill" id="detail-context-fill"></div>
-              </div>
-              <span class="context-meter__pct" id="detail-context-pct"></span>
-            </div>
-            <dl class="detail-metrics detail-metrics--iteration">
-              <dt>Model</dt><dd id="detail-model">-</dd>
-              <dt>Input</dt><dd id="detail-iter-input">-</dd>
-              <dt>Output</dt><dd id="detail-iter-output">-</dd>
-            </dl>
-          </div>
-          <hr class="detail-divider" id="detail-divider" hidden>
-          <dl class="detail-metrics detail-metrics--history">
-            <dt>Iterations</dt><dd id="detail-iterations">-</dd>
-            <dt>Attempts</dt><dd id="detail-attempts">-</dd>
-            <dt>Total Input</dt><dd id="detail-input-tokens">-</dd>
-            <dt>Total Output</dt><dd id="detail-output-tokens">-</dd>
-            <dt>Last Error</dt><dd id="detail-error" class="detail-error">-</dd>
-            <dt>Started</dt><dd id="detail-started">-</dd>
-          </dl>
+          <div id="detail-timeline" class="iter-timeline"></div>
           <div id="detail-tags" class="detail-tags" hidden>
             <h3 class="section-title">Capabilities</h3>
             <div id="detail-tags-list" class="tag-list"></div>
           </div>
-          <h3 class="section-title">Recent Events</h3>
-          <ul id="event-list" class="event-list"></ul>
         </div>
 
         <!-- System detail (shown for type=system) -->
