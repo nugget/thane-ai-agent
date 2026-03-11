@@ -63,10 +63,14 @@ function connect() {
 
   eventSource.onopen = () => {
     setConnState('connected');
+    fetchVersionInfo(); // re-sync uptime on reconnect
   };
 }
 
+let connState = 'connecting';
+
 function setConnState(s) {
+  connState = s;
   connBadge.textContent = s;
   connBadge.className = 'conn-badge conn-badge--' + s;
 }
@@ -661,6 +665,7 @@ async function fetchVersionInfo() {
 
 function updateUptime() {
   if (serverStartTime === null) return;
+  if (connState !== 'connected') return;
   const ms = Date.now() - serverStartTime;
   $('#footer-uptime').textContent = 'up ' + formatUptimeLong(ms);
 }
