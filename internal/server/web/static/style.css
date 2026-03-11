@@ -670,16 +670,18 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
 
 /* Main circle */
 .node-circle {
-  transition: fill 0.6s ease, filter 0.6s ease;
+  stroke: rgba(255, 255, 255, 0.15);
+  stroke-width: 2;
+  transition: fill 0.6s ease, filter 0.6s ease, stroke-width 0.4s ease;
 }
 
-/* State fills */
-.node-circle--sleeping    { fill: var(--blue); filter: drop-shadow(0 0 6px var(--blue-glow)); }
-.node-circle--processing  { fill: var(--green); filter: drop-shadow(0 0 12px var(--green-glow)); }
-.node-circle--supervisor  { fill: var(--purple); filter: drop-shadow(0 0 16px rgba(188, 140, 255, 0.6)); }
-.node-circle--error       { fill: var(--orange); filter: drop-shadow(0 0 8px var(--orange-glow)); }
-.node-circle--stopped     { fill: var(--text-muted); filter: none; }
-.node-circle--pending     { fill: var(--purple); filter: drop-shadow(0 0 4px var(--purple-dim)); }
+/* State fills — stroke matches fill at higher opacity for context ring */
+.node-circle--sleeping    { fill: var(--blue); stroke: var(--blue); filter: drop-shadow(0 0 6px var(--blue-glow)); }
+.node-circle--processing  { fill: var(--green); stroke: var(--green); filter: drop-shadow(0 0 12px var(--green-glow)); }
+.node-circle--supervisor  { fill: var(--purple); stroke: var(--purple); filter: drop-shadow(0 0 16px rgba(188, 140, 255, 0.6)); }
+.node-circle--error       { fill: var(--orange); stroke: var(--orange); filter: drop-shadow(0 0 8px var(--orange-glow)); }
+.node-circle--stopped     { fill: var(--text-muted); stroke: var(--text-muted); filter: none; }
+.node-circle--pending     { fill: var(--purple); stroke: var(--purple); filter: drop-shadow(0 0 4px var(--purple-dim)); }
 
 /* Node label */
 .node-label {

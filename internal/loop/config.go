@@ -215,6 +215,8 @@ type IterationResult struct {
 	InputTokens int
 	// OutputTokens is the number of output tokens produced.
 	OutputTokens int
+	// ContextWindow is the maximum context size (in tokens) of the model used.
+	ContextWindow int
 	// ToolsUsed maps tool names to invocation counts.
 	ToolsUsed map[string]int
 	// Elapsed is the wall-clock duration of the iteration.
@@ -248,6 +250,10 @@ type Status struct {
 	TotalInputTokens int `json:"total_input_tokens"`
 	// TotalOutputTokens is the cumulative output tokens across all iterations.
 	TotalOutputTokens int `json:"total_output_tokens"`
+	// LastInputTokens is the input token count from the most recent iteration.
+	LastInputTokens int `json:"last_input_tokens,omitempty"`
+	// ContextWindow is the maximum context size (in tokens) of the model used.
+	ContextWindow int `json:"context_window,omitempty"`
 	// LastError is the error message from the most recent failed iteration.
 	LastError string `json:"last_error,omitempty"`
 	// ConsecutiveErrors is the number of consecutive failed iterations.

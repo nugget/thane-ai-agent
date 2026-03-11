@@ -129,6 +129,10 @@ function handleLoopEvent(evt) {
         loop._lastSupervisor = loop._supervisor || false;
         loop.total_input_tokens = (loop.total_input_tokens || 0) + (evt.data.input_tokens || 0);
         loop.total_output_tokens = (loop.total_output_tokens || 0) + (evt.data.output_tokens || 0);
+        loop.last_input_tokens = evt.data.input_tokens || 0;
+        if (evt.data.context_window > 0) {
+          loop.context_window = evt.data.context_window;
+        }
         loop.iterations = (loop.iterations || 0) + 1;
         loop._supervisor = false;
         // Auto-refresh logs if this loop is selected.
@@ -310,6 +314,17 @@ function renderNode(loop, x, y) {
     ? 'node-circle--supervisor'
     : 'node-circle--' + (loop.state || 'pending');
   circle.setAttribute('class', 'node-circle ' + stateClass);
+
+  // Stroke width represents context utilization percentage.
+  const ctxPct = (loop.context_window > 0 && loop.last_input_tokens > 0)
+    ? Math.min(1, loop.last_input_tokens / loop.context_window)
+    : 0;
+  const minStroke = 2;
+  const maxStroke = 10;
+  const strokeW = ctxPct > 0
+    ? minStroke + ctxPct * (maxStroke - minStroke)
+    : minStroke;
+  circle.setAttribute('stroke-width', strokeW.toFixed(1));
 
   // Supervisor ring (outer pulsing ring around node).
   const supDot = group.querySelector('.supervisor-dot');

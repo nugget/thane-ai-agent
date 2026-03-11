@@ -38,12 +38,14 @@ type RunMessage struct {
 }
 
 // RunResponse mirrors agent.Response fields that loops consume.
+// RunResponse holds the result of an LLM call executed by a [Runner].
 type RunResponse struct {
-	Content      string
-	Model        string
-	InputTokens  int
-	OutputTokens int
-	ToolsUsed    map[string]int
+	Content       string
+	Model         string
+	InputTokens   int
+	OutputTokens  int
+	ContextWindow int
+	ToolsUsed     map[string]int
 }
 
 // StreamCallback receives streaming events. Nil disables streaming.
@@ -106,6 +108,8 @@ type Loop struct {
 	attempts          int // total attempts (including failures)
 	totalInputTokens  int
 	totalOutputTokens int
+	lastInputTokens   int
+	contextWindow     int
 	lastError         string
 
 	// currentConvID is the conversation ID of the in-flight iteration.
@@ -296,6 +300,8 @@ func (l *Loop) Status() Status {
 		Attempts:          l.attempts,
 		TotalInputTokens:  l.totalInputTokens,
 		TotalOutputTokens: l.totalOutputTokens,
+		LastInputTokens:   l.lastInputTokens,
+		ContextWindow:     l.contextWindow,
 		LastError:         l.lastError,
 		ConsecutiveErrors: l.consecutiveErrors,
 		RecentConvIDs:     convIDsCopy,
@@ -450,6 +456,10 @@ func (l *Loop) run(ctx context.Context) {
 			l.iterations++
 			l.totalInputTokens += result.InputTokens
 			l.totalOutputTokens += result.OutputTokens
+			l.lastInputTokens = result.InputTokens
+			if result.ContextWindow > 0 {
+				l.contextWindow = result.ContextWindow
+			}
 			l.lastError = ""
 			l.consecutiveErrors = 0
 			l.mu.Unlock()
@@ -466,12 +476,13 @@ func (l *Loop) run(ctx context.Context) {
 				Source:    events.SourceLoop,
 				Kind:      events.KindLoopIterationComplete,
 				Data: map[string]any{
-					"loop_id":       l.id,
-					"loop_name":     l.config.Name,
-					"model":         result.Model,
-					"input_tokens":  result.InputTokens,
-					"output_tokens": result.OutputTokens,
-					"elapsed_ms":    result.Elapsed.Milliseconds(),
+					"loop_id":        l.id,
+					"loop_name":      l.config.Name,
+					"model":          result.Model,
+					"input_tokens":   result.InputTokens,
+					"output_tokens":  result.OutputTokens,
+					"context_window": result.ContextWindow,
+					"elapsed_ms":     result.Elapsed.Milliseconds(),
 				},
 			})
 		}
@@ -593,12 +604,13 @@ func (l *Loop) iterate(ctx context.Context, isSupervisor bool, convID string) (*
 	}
 
 	return &IterationResult{
-		Model:        resp.Model,
-		InputTokens:  resp.InputTokens,
-		OutputTokens: resp.OutputTokens,
-		ToolsUsed:    resp.ToolsUsed,
-		Elapsed:      time.Since(iterStart),
-		Supervisor:   isSupervisor,
+		Model:         resp.Model,
+		InputTokens:   resp.InputTokens,
+		OutputTokens:  resp.OutputTokens,
+		ContextWindow: resp.ContextWindow,
+		ToolsUsed:     resp.ToolsUsed,
+		Elapsed:       time.Since(iterStart),
+		Supervisor:    isSupervisor,
 	}, nil
 }
 
