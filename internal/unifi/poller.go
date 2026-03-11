@@ -2,6 +2,7 @@ package unifi
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
@@ -73,29 +74,13 @@ func NewPoller(cfg PollerConfig) *Poller {
 	}
 }
 
-// Start runs the polling loop until ctx is cancelled. It blocks.
-func (p *Poller) Start(ctx context.Context) {
-	ticker := time.NewTicker(p.cfg.PollInterval)
-	defer ticker.Stop()
-
-	// Poll immediately on start.
-	p.poll(ctx)
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			p.poll(ctx)
-		}
-	}
-}
-
-func (p *Poller) poll(ctx context.Context) {
+// Poll executes a single poll cycle: query the controller for device
+// locations, apply debounce, and push room updates to the tracker.
+// Returns an error if the device locator fails; all other paths succeed.
+func (p *Poller) Poll(ctx context.Context) error {
 	locations, err := p.cfg.Locator.LocateDevices(ctx)
 	if err != nil {
-		p.cfg.Logger.Warn("unifi poll failed", "error", err)
-		return
+		return fmt.Errorf("locate devices: %w", err)
 	}
 
 	// Build MAC → DeviceLocation index, keeping only tracked MACs.
@@ -181,4 +166,6 @@ func (p *Poller) poll(ctx context.Context) {
 			delete(p.pending, entityID)
 		}
 	}
+
+	return nil
 }

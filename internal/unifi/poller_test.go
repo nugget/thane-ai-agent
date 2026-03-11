@@ -77,14 +77,14 @@ func TestPoller_BasicRoomUpdate(t *testing.T) {
 	})
 
 	// First poll — starts debounce, no update yet.
-	p.poll(context.Background())
+	p.Poll(context.Background())
 	updates := updater.getUpdates()
 	if len(updates) != 0 {
 		t.Fatalf("expected 0 updates after first poll, got %d", len(updates))
 	}
 
 	// Second poll — debounce threshold met, should update.
-	p.poll(context.Background())
+	p.Poll(context.Background())
 	updates = updater.getUpdates()
 	if len(updates) != 1 {
 		t.Fatalf("expected 1 update after second poll, got %d", len(updates))
@@ -117,7 +117,7 @@ func TestPoller_DebouncePreventsSinglePoll(t *testing.T) {
 	})
 
 	// Single poll should not update.
-	p.poll(context.Background())
+	p.Poll(context.Background())
 
 	updates := updater.getUpdates()
 	if len(updates) != 0 {
@@ -142,13 +142,13 @@ func TestPoller_RoomChangeResetsDebounce(t *testing.T) {
 	})
 
 	// First poll on office — starts debounce.
-	p.poll(context.Background())
+	p.Poll(context.Background())
 
 	// Switch to bedroom — resets debounce.
 	locator.setLocations([]DeviceLocation{
 		{MAC: "aa:bb:cc:dd:ee:ff", APName: "ap-bedroom", Signal: -50, LastSeen: 1001},
 	})
-	p.poll(context.Background())
+	p.Poll(context.Background())
 
 	// Should have no updates yet (debounce reset).
 	updates := updater.getUpdates()
@@ -157,7 +157,7 @@ func TestPoller_RoomChangeResetsDebounce(t *testing.T) {
 	}
 
 	// Third poll on bedroom — debounce met.
-	p.poll(context.Background())
+	p.Poll(context.Background())
 	updates = updater.getUpdates()
 	if len(updates) != 1 {
 		t.Fatalf("expected 1 update, got %d", len(updates))
@@ -188,8 +188,8 @@ func TestPoller_MultipleDevices(t *testing.T) {
 	})
 
 	// Two polls to pass debounce.
-	p.poll(context.Background())
-	p.poll(context.Background())
+	p.Poll(context.Background())
+	p.Poll(context.Background())
 
 	updates := updater.getUpdates()
 	if len(updates) != 1 {
@@ -217,8 +217,8 @@ func TestPoller_UnknownAP(t *testing.T) {
 		APRooms:      map[string]string{"ap-office": "office"}, // ap-unknown not listed
 	})
 
-	p.poll(context.Background())
-	p.poll(context.Background())
+	p.Poll(context.Background())
+	p.Poll(context.Background())
 
 	updates := updater.getUpdates()
 	if len(updates) != 0 {
@@ -240,9 +240,13 @@ func TestPoller_LocatorError(t *testing.T) {
 		APRooms:      map[string]string{"ap-office": "office"},
 	})
 
-	// Should not panic or update.
-	p.poll(context.Background())
-	p.poll(context.Background())
+	// Should return error and not update.
+	if err := p.Poll(context.Background()); err == nil {
+		t.Error("expected error from failing locator")
+	}
+	if err := p.Poll(context.Background()); err == nil {
+		t.Error("expected error from failing locator (second call)")
+	}
 
 	updates := updater.getUpdates()
 	if len(updates) != 0 {
@@ -267,7 +271,7 @@ func TestPoller_ClearsPendingWhenDeviceGone(t *testing.T) {
 	})
 
 	// First poll — starts debounce.
-	p.poll(context.Background())
+	p.Poll(context.Background())
 
 	p.mu.Lock()
 	hasPending := len(p.pending) > 0
@@ -278,7 +282,7 @@ func TestPoller_ClearsPendingWhenDeviceGone(t *testing.T) {
 
 	// Device disappears.
 	locator.setLocations(nil)
-	p.poll(context.Background())
+	p.Poll(context.Background())
 
 	p.mu.Lock()
 	hasPending = len(p.pending) > 0

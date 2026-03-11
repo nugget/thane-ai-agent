@@ -437,6 +437,17 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// Zero cost when nobody subscribes.
 	eventBus := events.New()
 
+	// --- Loop registry ---
+	// Tracks all persistent background loops (metacognitive, pollers,
+	// watchers). Created early so component init blocks can register
+	// loops before the web dashboard is wired up.
+	loopRegistry := looppkg.NewRegistry(looppkg.WithRegistryLogger(logger))
+	defer func() {
+		shutCtx, shutCancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer shutCancel()
+		loopRegistry.ShutdownAll(shutCtx)
+	}()
+
 	// --- Memory store ---
 	// SQLite-backed conversation memory. Persists across restarts so the
 	// agent can resume in-progress conversations.
@@ -1921,7 +1932,24 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 			Logger:       logger,
 		})
 
-		go poller.Start(ctx)
+		if _, err := loopRegistry.SpawnLoop(ctx, looppkg.Config{
+			Name:         "unifi-poller",
+			SleepMin:     pollInterval,
+			SleepMax:     pollInterval,
+			SleepDefault: pollInterval,
+			Jitter:       looppkg.Float64Ptr(0),
+			Handler: func(ctx context.Context, _ any) error {
+				return poller.Poll(ctx)
+			},
+			Metadata: map[string]string{
+				"subsystem": "unifi",
+			},
+		}, looppkg.Deps{
+			Logger:   logger,
+			EventBus: eventBus,
+		}); err != nil {
+			return fmt.Errorf("spawn unifi poller loop: %w", err)
+		}
 
 		// Register UniFi with connwatch for health endpoint visibility.
 		connMgr.Watch(ctx, connwatch.WatcherConfig{
@@ -2342,16 +2370,6 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 
 		logger.Info("mqtt AP presence sensors registered", "count", len(apSensors))
 	}
-
-	// --- Loop registry & metacognitive loop ---
-	// The loop registry tracks all persistent background loops.
-	// The metacognitive loop is the first consumer (PID 0).
-	loopRegistry := looppkg.NewRegistry(looppkg.WithRegistryLogger(logger))
-	defer func() {
-		shutCtx, shutCancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer shutCancel()
-		loopRegistry.ShutdownAll(shutCtx)
-	}()
 
 	// --- Loop visualizer ---
 	// Wire the web dashboard now that the loop registry exists.
