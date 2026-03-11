@@ -558,10 +558,13 @@ function renderEventList() {
         kind.className += ' event-ok';
         detail.textContent = evt.data.model || '';
         break;
-      case 'loop_sleep_start':
+      case 'loop_sleep_start': {
         kind.textContent = 'sleep';
-        detail.textContent = evt.data.sleep_duration || '';
+        const raw = evt.data.sleep_duration || '';
+        const ms = parseDuration(raw);
+        detail.textContent = ms > 0 ? formatDuration(ms) : raw;
         break;
+      }
       case 'loop_error':
         kind.textContent = 'error';
         kind.className += ' event-error';
