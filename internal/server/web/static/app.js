@@ -582,16 +582,104 @@ function renderLogs(entries) {
     tdMsg.textContent = entry.Msg || '';
     tdMsg.title = entry.Msg || '';
 
+    const tdDetail = document.createElement('td');
+    tdDetail.className = 'log-detail';
+    buildLogDetail(tdDetail, entry);
+
     tr.appendChild(tdTime);
     tr.appendChild(tdLevel);
     tr.appendChild(tdSub);
     tr.appendChild(tdMsg);
+    tr.appendChild(tdDetail);
     logBody.appendChild(tr);
   }
 
   // Auto-scroll to bottom if user was already at the bottom (live tail).
   if (atBottom) {
     logScroll.scrollTop = logScroll.scrollHeight;
+  }
+}
+
+// Build detail column from promoted fields + parsed Attrs JSON.
+function buildLogDetail(td, entry) {
+  const parts = [];
+
+  if (entry.Model) {
+    parts.push({ key: 'model', val: entry.Model, cls: 'model' });
+  }
+  if (entry.Tool) {
+    parts.push({ key: 'tool', val: entry.Tool, cls: 'tool' });
+  }
+
+  // Parse Attrs JSON for extra instrumentation.
+  let attrs = null;
+  if (entry.Attrs) {
+    try { attrs = JSON.parse(entry.Attrs); } catch (_) { /* ignore */ }
+  }
+  if (attrs) {
+    // Duration fields (various naming conventions).
+    for (const k of ['duration', 'elapsed', 'latency', 'took']) {
+      if (attrs[k] != null) {
+        parts.push({ key: k, val: String(attrs[k]), cls: 'duration' });
+      }
+    }
+    // Token fields.
+    if (attrs.input_tokens != null) {
+      parts.push({ key: 'in', val: formatTokens(attrs.input_tokens), cls: 'tokens' });
+    }
+    if (attrs.output_tokens != null) {
+      parts.push({ key: 'out', val: formatTokens(attrs.output_tokens), cls: 'tokens' });
+    }
+    if (attrs.total_tokens != null && attrs.input_tokens == null) {
+      parts.push({ key: 'tokens', val: formatTokens(attrs.total_tokens), cls: 'tokens' });
+    }
+    // Tool call count.
+    if (attrs.tool_calls != null) {
+      parts.push({ key: 'tools', val: String(attrs.tool_calls), cls: 'tool' });
+    }
+    if (attrs.tool_count != null && attrs.tool_calls == null) {
+      parts.push({ key: 'tools', val: String(attrs.tool_count), cls: 'tool' });
+    }
+    // Catch-all: surface remaining scalar attrs.
+    const shown = new Set([
+      'duration', 'elapsed', 'latency', 'took',
+      'input_tokens', 'output_tokens', 'total_tokens',
+      'tool_calls', 'tool_count',
+    ]);
+    for (const [k, v] of Object.entries(attrs)) {
+      if (shown.has(k)) continue;
+      if (v == null || typeof v === 'object') continue;
+      const s = String(v);
+      if (s.length > 40) continue;
+      parts.push({ key: k, val: s, cls: '' });
+    }
+  }
+
+  // Request ID if present (short form).
+  if (entry.RequestID) {
+    parts.push({ key: 'req', val: shortID(entry.RequestID), cls: '' });
+  }
+
+  for (const p of parts) {
+    const span = document.createElement('span');
+    span.className = 'log-attr';
+
+    const key = document.createElement('span');
+    key.className = 'log-attr-key';
+    key.textContent = p.key + '=';
+
+    const val = document.createElement('span');
+    val.className = 'log-attr-val' + (p.cls ? ' log-attr-val--' + p.cls : '');
+    val.textContent = p.val;
+
+    span.appendChild(key);
+    span.appendChild(val);
+    td.appendChild(span);
+  }
+
+  // Tooltip with full attrs JSON for inspection.
+  if (attrs) {
+    td.title = JSON.stringify(attrs, null, 2);
   }
 }
 

@@ -405,10 +405,11 @@ body {
   white-space: nowrap;
 }
 
-.log-col-time { width: 80px; }
-.log-col-level { width: 70px; }
-.log-col-subsystem { width: 110px; }
+.log-col-time { width: 75px; }
+.log-col-level { width: 65px; }
+.log-col-subsystem { width: 90px; }
 .log-col-msg { /* remaining space */ }
+.log-col-detail { width: 280px; }
 
 .log-table tbody {
   overflow-y: auto;
@@ -429,6 +430,33 @@ body {
 .log-table td.log-msg {
   color: var(--text-primary);
 }
+
+.log-table td.log-detail {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.log-attr {
+  display: inline;
+  white-space: nowrap;
+  margin-right: 0.5em;
+}
+
+.log-attr-key {
+  color: var(--text-muted);
+}
+
+.log-attr-val {
+  color: var(--text-secondary);
+}
+
+.log-attr-val--model { color: var(--purple); }
+.log-attr-val--tool { color: var(--accent); }
+.log-attr-val--duration { color: var(--blue); }
+.log-attr-val--tokens { color: var(--orange); }
 
 /* Level badges */
 .level-badge {
