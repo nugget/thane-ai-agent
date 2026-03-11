@@ -110,12 +110,11 @@ function renderLogs(entries) {
   if (!entries || entries.length === 0) {
     logEmpty.hidden = false;
     logEmpty.querySelector('p').textContent = 'No log entries found';
-    logScroll.hidden = true;
+    logBody.innerHTML = '';
     return;
   }
 
   logEmpty.hidden = true;
-  logScroll.hidden = false;
 
   const atBottom = logScroll.scrollHeight - logScroll.scrollTop - logScroll.clientHeight < 24;
   logBody.innerHTML = '';

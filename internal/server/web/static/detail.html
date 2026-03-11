@@ -18,7 +18,6 @@
       min-height: 0;
       overflow: hidden;
     }
-    /* Inspector sidebar — right by default, toggleable. */
     body.inspector-left .popup-main { flex-direction: row-reverse; }
     .popup-logs {
       flex: 1;
@@ -26,9 +25,7 @@
       flex-direction: column;
       overflow: hidden;
       min-height: 0;
-    }
-    .popup-logs .log-toolbar {
-      flex-shrink: 0;
+      position: relative;
     }
     .popup-logs .log-scroll {
       flex: 1;
@@ -38,12 +35,17 @@
       flex-direction: column;
     }
     .popup-logs .log-empty {
-      flex: 1;
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: 0;
+      bottom: 0;
       display: flex;
       align-items: center;
       justify-content: center;
       color: var(--text-muted);
       font-size: 0.85rem;
+      pointer-events: none;
     }
     .popup-logs .log-empty[hidden] { display: none; }
     .popup-resize {
@@ -58,24 +60,45 @@
       width: 240px;
       min-width: 160px;
       flex-shrink: 0;
-      overflow-y: auto;
-      padding: 0.75rem;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
       background: var(--bg-secondary);
     }
-    .popup-toolbar {
+    .inspector-controls {
       display: flex;
       align-items: center;
-      gap: 0.4rem;
-      padding: 0.3rem 0.75rem;
-      background: var(--bg-secondary);
+      gap: 0.35rem;
+      padding: 0.3rem 0.5rem;
       border-bottom: 1px solid var(--border);
       flex-shrink: 0;
     }
-    .popup-toolbar .toggle-btn {
-      font-size: 0.65rem;
-      padding: 0.1em 0.5em;
+    .inspector-controls .toggle-btn {
+      font-size: 0.6rem;
+      padding: 0.1em 0.4em;
     }
-    .popup-toolbar .spacer { flex: 1; }
+    .inspector-title {
+      font-size: 0.7rem;
+      color: var(--text-secondary);
+      font-weight: 600;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .inspector-controls .spacer { flex: 1; }
+    .inspector-controls .log-select {
+      font-size: 0.65rem;
+      padding: 0.15em 0.3em;
+    }
+    .inspector-controls .btn--sm {
+      font-size: 0.65rem;
+      padding: 0.1em 0.4em;
+    }
+    .inspector-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 0.75rem;
+    }
     .popup-status {
       font-size: 0.7rem;
       color: var(--text-muted);
@@ -87,32 +110,10 @@
   </style>
 </head>
 <body>
-  <div class="popup-toolbar">
-    <button id="toggle-side" class="toggle-btn" title="Move inspector to other side">&#x21C4; Swap</button>
-    <span class="spacer"></span>
-    <span id="popup-title" style="font-size:0.75rem;color:var(--text-secondary);font-weight:600;"></span>
-  </div>
-
   <div class="popup-main">
-    <!-- Logs take the main area -->
+    <!-- Logs take the main area — column headers at the very top -->
     <section class="popup-logs" id="logs-section">
-      <div class="log-toolbar">
-        <h3 class="section-title">Logs</h3>
-        <div class="log-filters">
-          <select id="log-level" class="log-select">
-            <option value="">All Levels</option>
-            <option value="ERROR">Error</option>
-            <option value="WARN">Warn+</option>
-            <option value="INFO">Info+</option>
-            <option value="DEBUG">Debug+</option>
-          </select>
-          <button id="log-refresh" class="btn btn--sm">Refresh</button>
-        </div>
-      </div>
-      <div id="log-empty" class="log-empty">
-        <p>Loading logs...</p>
-      </div>
-      <div id="log-scroll" class="log-scroll" hidden>
+      <div id="log-scroll" class="log-scroll">
         <table id="log-table" class="log-table">
           <thead>
             <tr>
@@ -126,6 +127,9 @@
           <tbody id="log-body"></tbody>
         </table>
       </div>
+      <div id="log-empty" class="log-empty">
+        <p>Loading logs...</p>
+      </div>
     </section>
 
     <!-- Draggable resize handle -->
@@ -133,52 +137,68 @@
 
     <!-- Inspector sidebar (right by default) -->
     <section class="popup-inspector" id="inspector">
-      <!-- Loop detail (shown for type=loop) -->
-      <div id="loop-detail" hidden>
-        <div class="detail-header">
-          <h2 id="detail-name" class="detail-name"></h2>
-          <span id="detail-state" class="state-badge"></span>
-        </div>
-        <div id="detail-ids" class="detail-ids"></div>
-        <dl id="detail-forward" class="detail-metrics detail-metrics--forward" hidden>
-          <dt id="detail-sleep-label" hidden>Sleep</dt>
-          <dd id="detail-sleep" hidden>-</dd>
-        </dl>
-        <div id="detail-supervisor" class="supervisor-bar" hidden></div>
-        <hr class="detail-divider" id="detail-divider" hidden>
-        <dl class="detail-metrics detail-metrics--history">
-          <dt>Iterations</dt><dd id="detail-iterations">-</dd>
-          <dt>Attempts</dt><dd id="detail-attempts">-</dd>
-          <dt>Input Tokens</dt><dd id="detail-input-tokens">-</dd>
-          <dt>Output Tokens</dt><dd id="detail-output-tokens">-</dd>
-          <dt>Last Model</dt><dd id="detail-model">-</dd>
-          <dt>Last Error</dt><dd id="detail-error" class="detail-error">-</dd>
-          <dt>Started</dt><dd id="detail-started">-</dd>
-        </dl>
-        <div id="detail-tags" class="detail-tags" hidden>
-          <h3 class="section-title">Capabilities</h3>
-          <div id="detail-tags-list" class="tag-list"></div>
-        </div>
-        <h3 class="section-title">Recent Events</h3>
-        <ul id="event-list" class="event-list"></ul>
+      <div class="inspector-controls">
+        <button id="toggle-side" class="toggle-btn" title="Move inspector to other side">&#x21C4;</button>
+        <span id="popup-title" class="inspector-title"></span>
+        <span class="spacer"></span>
+        <select id="log-level" class="log-select">
+          <option value="">All</option>
+          <option value="ERROR">Error</option>
+          <option value="WARN">Warn+</option>
+          <option value="INFO">Info+</option>
+          <option value="DEBUG">Debug+</option>
+        </select>
+        <button id="log-refresh" class="btn btn--sm">Refresh</button>
       </div>
 
-      <!-- System detail (shown for type=system) -->
-      <div id="system-detail" hidden>
-        <div class="detail-header">
-          <h2 class="detail-name">Runtime</h2>
-          <span id="system-status" class="state-badge"></span>
+      <div class="inspector-body">
+        <!-- Loop detail (shown for type=loop) -->
+        <div id="loop-detail" hidden>
+          <div class="detail-header">
+            <h2 id="detail-name" class="detail-name"></h2>
+            <span id="detail-state" class="state-badge"></span>
+          </div>
+          <div id="detail-ids" class="detail-ids"></div>
+          <dl id="detail-forward" class="detail-metrics detail-metrics--forward" hidden>
+            <dt id="detail-sleep-label" hidden>Sleep</dt>
+            <dd id="detail-sleep" hidden>-</dd>
+          </dl>
+          <div id="detail-supervisor" class="supervisor-bar" hidden></div>
+          <hr class="detail-divider" id="detail-divider" hidden>
+          <dl class="detail-metrics detail-metrics--history">
+            <dt>Iterations</dt><dd id="detail-iterations">-</dd>
+            <dt>Attempts</dt><dd id="detail-attempts">-</dd>
+            <dt>Input Tokens</dt><dd id="detail-input-tokens">-</dd>
+            <dt>Output Tokens</dt><dd id="detail-output-tokens">-</dd>
+            <dt>Last Model</dt><dd id="detail-model">-</dd>
+            <dt>Last Error</dt><dd id="detail-error" class="detail-error">-</dd>
+            <dt>Started</dt><dd id="detail-started">-</dd>
+          </dl>
+          <div id="detail-tags" class="detail-tags" hidden>
+            <h3 class="section-title">Capabilities</h3>
+            <div id="detail-tags-list" class="tag-list"></div>
+          </div>
+          <h3 class="section-title">Recent Events</h3>
+          <ul id="event-list" class="event-list"></ul>
         </div>
-        <h3 class="section-title">Services</h3>
-        <div id="system-services" class="system-services"></div>
-        <hr class="detail-divider">
-        <dl class="detail-metrics">
-          <dt>Uptime</dt><dd id="system-uptime">-</dd>
-          <dt>Version</dt><dd id="system-version">-</dd>
-          <dt>Commit</dt><dd id="system-commit">-</dd>
-          <dt>Go</dt><dd id="system-go">-</dd>
-          <dt>Arch</dt><dd id="system-arch">-</dd>
-        </dl>
+
+        <!-- System detail (shown for type=system) -->
+        <div id="system-detail" hidden>
+          <div class="detail-header">
+            <h2 class="detail-name">Runtime</h2>
+            <span id="system-status" class="state-badge"></span>
+          </div>
+          <h3 class="section-title">Services</h3>
+          <div id="system-services" class="system-services"></div>
+          <hr class="detail-divider">
+          <dl class="detail-metrics">
+            <dt>Uptime</dt><dd id="system-uptime">-</dd>
+            <dt>Version</dt><dd id="system-version">-</dd>
+            <dt>Commit</dt><dd id="system-commit">-</dd>
+            <dt>Go</dt><dd id="system-go">-</dd>
+            <dt>Arch</dt><dd id="system-arch">-</dd>
+          </dl>
+        </div>
       </div>
     </section>
   </div>
