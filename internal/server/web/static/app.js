@@ -749,9 +749,14 @@ function selectLoop(loopId) {
 // ---------------------------------------------------------------------------
 
 function tick() {
-  // Update sleep countdown in detail panel.
+  // Update live detail fields for selected loop.
   if (state.selected && state.loops.has(state.selected)) {
-    updateSleepDisplay(state.loops.get(state.selected));
+    const loop = state.loops.get(state.selected);
+    updateSleepDisplay(loop);
+    // Keep "Started" field fresh.
+    if (loop.started_at) {
+      $('#detail-started').textContent = timeAgo(new Date(loop.started_at));
+    }
   }
 
   // Update sleep progress rings on all nodes.
