@@ -1724,7 +1724,7 @@ function applyViewportTransform() {
 
   canvas.addEventListener('mousedown', (e) => {
     // Only pan on direct canvas/background clicks, not on nodes.
-    if (e.target !== canvas && !e.target.closest('#canvas-world') === null) return;
+    if (e.target !== canvas && e.target.closest('#canvas-world') !== null) return;
     if (e.target.closest('.loop-node')) return;
     if (e.button !== 0) return;
 

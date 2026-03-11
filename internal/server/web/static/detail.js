@@ -405,7 +405,7 @@ function connectSSE() {
     setConnStatus('ok', 'Connected \u2014 ' + formatTime(new Date()));
   });
 
-  es.addEventListener('loop_event', (e) => {
+  es.addEventListener('loop', (e) => {
     const evt = JSON.parse(e.data);
     if (evt.data && evt.data.loop_id === nodeId) {
       events.unshift(evt);

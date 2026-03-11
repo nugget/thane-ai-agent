@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -14,9 +15,9 @@ import (
 
 // handleSystem returns runtime health, uptime, and version info for
 // the system node on the dashboard canvas.
-func (s *WebServer) handleSystem(w http.ResponseWriter, _ *http.Request) {
+func (s *WebServer) handleSystem(w http.ResponseWriter, r *http.Request) {
 	if s.systemStatus == nil {
-		http.NotFound(w, nil)
+		http.NotFound(w, r)
 		return
 	}
 	health := s.systemStatus.Health()
@@ -96,9 +97,12 @@ func (s *WebServer) handleLoopLogs(w http.ResponseWriter, r *http.Request) {
 		allEntries = append(allEntries, entries...)
 	}
 
-	// Cap total results.
+	// Sort chronologically and keep the most recent entries.
+	sort.Slice(allEntries, func(i, j int) bool {
+		return allEntries[i].Timestamp.Before(allEntries[j].Timestamp)
+	})
 	if len(allEntries) > limit {
-		allEntries = allEntries[:limit]
+		allEntries = allEntries[len(allEntries)-limit:]
 	}
 
 	s.writeJSON(w, map[string]any{
@@ -185,7 +189,9 @@ func (s *WebServer) handleLoopEvents(w http.ResponseWriter, r *http.Request) {
 	}
 
 	_ = rc.SetWriteDeadline(time.Now().Add(30 * time.Second))
-	fmt.Fprintf(w, "event: snapshot\ndata: %s\n\n", snapJSON)
+	if _, err := fmt.Fprintf(w, "event: snapshot\ndata: %s\n\n", snapJSON); err != nil {
+		return
+	}
 	flusher.Flush()
 
 	// Keepalive ticker prevents WriteTimeout and proxy idle disconnects.
@@ -220,12 +226,16 @@ func (s *WebServer) handleLoopEvents(w http.ResponseWriter, r *http.Request) {
 			}
 
 			_ = rc.SetWriteDeadline(time.Now().Add(30 * time.Second))
-			fmt.Fprintf(w, "event: loop\ndata: %s\n\n", data)
+			if _, err := fmt.Fprintf(w, "event: loop\ndata: %s\n\n", data); err != nil {
+				return
+			}
 			flusher.Flush()
 
 		case <-keepalive.C:
 			_ = rc.SetWriteDeadline(time.Now().Add(30 * time.Second))
-			fmt.Fprint(w, ": keepalive\n\n")
+			if _, err := fmt.Fprint(w, ": keepalive\n\n"); err != nil {
+				return
+			}
 			flusher.Flush()
 		}
 	}
