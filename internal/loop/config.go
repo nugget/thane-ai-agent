@@ -99,6 +99,12 @@ type Config struct {
 	// iterations. Zero uses the router default.
 	QualityFloor int
 
+	// SupervisorContext is an optional prompt prepended to the Task
+	// during supervisor iterations. Use it to give the frontier model
+	// review instructions, recent iteration summaries, or oversight
+	// criteria. Empty means supervisor runs the same Task as normal.
+	SupervisorContext string
+
 	// SupervisorQualityFloor is the minimum model quality rating
 	// for supervisor iterations. Zero uses the router default.
 	SupervisorQualityFloor int

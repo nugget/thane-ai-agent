@@ -159,6 +159,47 @@ func TestComputeSleep(t *testing.T) {
 			t.Errorf("computeSleep with override = %v, want 2m", got)
 		}
 	})
+
+	t.Run("exponential backoff on consecutive errors", func(t *testing.T) {
+		t.Parallel()
+		l := &Loop{
+			config: Config{
+				SleepMin:     10 * time.Second,
+				SleepMax:     5 * time.Minute,
+				SleepDefault: 30 * time.Second,
+			},
+			deps: Deps{Rand: fixedRand{0.5}},
+		}
+
+		// No errors → default sleep.
+		if got := l.computeSleep(); got != 30*time.Second {
+			t.Errorf("0 errors: got %v, want 30s", got)
+		}
+
+		// 1 error → 60s.
+		l.consecutiveErrors = 1
+		if got := l.computeSleep(); got != 60*time.Second {
+			t.Errorf("1 error: got %v, want 60s", got)
+		}
+
+		// 2 errors → 120s.
+		l.consecutiveErrors = 2
+		if got := l.computeSleep(); got != 120*time.Second {
+			t.Errorf("2 errors: got %v, want 120s", got)
+		}
+
+		// 3 errors → 240s, but capped at SleepMax (5m=300s).
+		l.consecutiveErrors = 3
+		if got := l.computeSleep(); got != 240*time.Second {
+			t.Errorf("3 errors: got %v, want 240s", got)
+		}
+
+		// 4 errors → 480s, capped at 5m.
+		l.consecutiveErrors = 4
+		if got := l.computeSleep(); got != 5*time.Minute {
+			t.Errorf("4 errors: got %v, want 5m (capped)", got)
+		}
+	})
 }
 
 func TestLoopLifecycle(t *testing.T) {
@@ -462,7 +503,7 @@ func TestDoubleStartIsNoop(t *testing.T) {
 func TestStopBeforeStartIsNoop(t *testing.T) {
 	t.Parallel()
 
-	l, err := New(Config{Name: "never-started"}, Deps{Runner: &blockingRunner{}})
+	l, err := New(Config{Name: "never-started"}, Deps{Runner: &noopRunner{}})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

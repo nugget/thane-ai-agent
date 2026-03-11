@@ -100,6 +100,9 @@ type Loop struct {
 	// nextSleep can be set externally (e.g., by a set_next_sleep
 	// tool handler) to override the default sleep for one cycle.
 	nextSleep time.Duration
+
+	// consecutiveErrors tracks sequential failures for backoff.
+	consecutiveErrors int
 }
 
 // New creates a loop with the given configuration and dependencies.
@@ -160,14 +163,11 @@ func (l *Loop) Start(ctx context.Context) error {
 // call multiple times or before Start. Blocks until the goroutine exits
 // or 10 seconds elapse.
 func (l *Loop) Stop() {
+	l.cancel0()
+
 	l.mu.Lock()
-	cancel := l.cancel
 	done := l.done
 	l.mu.Unlock()
-
-	if cancel != nil {
-		cancel()
-	}
 
 	if done != nil {
 		select {
@@ -178,6 +178,19 @@ func (l *Loop) Stop() {
 				"loop_name", l.config.Name,
 			)
 		}
+	}
+}
+
+// cancel0 fires the loop's context cancellation without waiting for
+// the goroutine to exit. Used by [Registry.ShutdownAll] to cancel all
+// loops in parallel before waiting for them to drain.
+func (l *Loop) cancel0() {
+	l.mu.Lock()
+	cancel := l.cancel
+	l.mu.Unlock()
+
+	if cancel != nil {
+		cancel()
 	}
 }
 
@@ -278,8 +291,9 @@ func (l *Loop) run(ctx context.Context) {
 		// Determine if this is a supervisor iteration.
 		isSupervisor := l.config.Supervisor && l.config.SupervisorProb > 0 && l.deps.Rand.Float64() < l.config.SupervisorProb
 
-		// Generate conversation ID for this iteration.
-		convID := fmt.Sprintf("loop-%s-%d", l.config.Name, time.Now().UnixMilli())
+		// Generate conversation ID for this iteration. Include the
+		// attempt number to avoid collisions in fast iteration loops.
+		convID := fmt.Sprintf("loop-%s-%d-%d", l.config.Name, attemptCount+1, time.Now().UnixMilli())
 
 		iterLog := logger.With(
 			"conversation_id", convID,
@@ -318,6 +332,7 @@ func (l *Loop) run(ctx context.Context) {
 			iterLog.Warn("loop iteration failed", "error", err)
 			l.mu.Lock()
 			l.lastError = err.Error()
+			l.consecutiveErrors++
 			l.mu.Unlock()
 			l.setState(StateError)
 
@@ -337,6 +352,7 @@ func (l *Loop) run(ctx context.Context) {
 			l.totalInputTokens += result.InputTokens
 			l.totalOutputTokens += result.OutputTokens
 			l.lastError = ""
+			l.consecutiveErrors = 0
 			l.mu.Unlock()
 
 			iterLog.Info("loop iteration complete",
@@ -432,10 +448,17 @@ func (l *Loop) iterate(ctx context.Context, isSupervisor bool, convID string) (*
 		hints["local_only"] = "true"
 	}
 
+	// Build the task prompt. Supervisor iterations may prepend
+	// additional context (review instructions, oversight criteria).
+	task := l.config.Task
+	if isSupervisor && l.config.SupervisorContext != "" {
+		task = l.config.SupervisorContext + "\n\n" + task
+	}
+
 	req := RunRequest{
 		ConversationID: convID,
 		Messages: []RunMessage{
-			{Role: "user", Content: l.config.Task},
+			{Role: "user", Content: task},
 		},
 		ExcludeTools:  l.config.ExcludeTools,
 		SkipTagFilter: len(l.config.Tags) == 0,
@@ -459,16 +482,24 @@ func (l *Loop) iterate(ctx context.Context, isSupervisor bool, convID string) (*
 
 // computeSleep returns the sleep duration for the next cycle. If
 // SetNextSleep was called during the iteration, that value is used
-// (clamped to bounds). Otherwise, SleepDefault is used. Jitter is
-// applied to the final value.
+// (clamped to bounds). Otherwise, SleepDefault is used. On
+// consecutive errors, exponential backoff doubles the sleep each
+// failure (capped at SleepMax). Jitter is applied to the final value.
 func (l *Loop) computeSleep() time.Duration {
 	l.mu.Lock()
 	requested := l.nextSleep
+	errCount := l.consecutiveErrors
 	l.mu.Unlock()
 
 	d := l.config.SleepDefault
 	if requested > 0 {
 		d = requested
+	}
+
+	// Exponential backoff on consecutive errors: double for each
+	// failure, capped by SleepMax via clamp.
+	for range errCount {
+		d *= 2
 	}
 
 	d = l.clamp(d)

@@ -162,9 +162,9 @@ func (r *Registry) ShutdownAll(ctx context.Context) int {
 
 	r.logger.Info("shutting down all loops", "count", len(loops))
 
-	// Cancel all loops in parallel.
+	// Fire all cancellations in parallel (non-blocking).
 	for _, l := range loops {
-		l.Stop()
+		l.cancel0()
 	}
 
 	// Wait for each loop to finish, respecting the context deadline.

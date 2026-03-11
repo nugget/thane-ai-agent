@@ -20,7 +20,7 @@ func TestRegistryRegisterDeregister(t *testing.T) {
 	t.Parallel()
 
 	r := NewRegistry()
-	l := mustNew(t, Config{Name: "test-loop"}, Deps{Runner: &blockingRunner{}})
+	l := mustNew(t, Config{Name: "test-loop"}, Deps{Runner: &noopRunner{}})
 
 	if err := r.Register(l); err != nil {
 		t.Fatalf("Register: %v", err)
@@ -47,7 +47,7 @@ func TestRegistryConcurrencyLimit(t *testing.T) {
 	t.Parallel()
 
 	r := NewRegistry(WithMaxLoops(2))
-	runner := &blockingRunner{}
+	runner := &noopRunner{}
 
 	l1 := mustNew(t, Config{Name: "loop-1"}, Deps{Runner: runner})
 	l2 := mustNew(t, Config{Name: "loop-2"}, Deps{Runner: runner})
@@ -74,7 +74,7 @@ func TestRegistryGetAndGetByName(t *testing.T) {
 	t.Parallel()
 
 	r := NewRegistry()
-	l := mustNew(t, Config{Name: "named-loop"}, Deps{Runner: &blockingRunner{}})
+	l := mustNew(t, Config{Name: "named-loop"}, Deps{Runner: &noopRunner{}})
 
 	if err := r.Register(l); err != nil {
 		t.Fatalf("Register: %v", err)
@@ -99,7 +99,7 @@ func TestRegistryList(t *testing.T) {
 	t.Parallel()
 
 	r := NewRegistry()
-	runner := &blockingRunner{}
+	runner := &noopRunner{}
 	l1 := mustNew(t, Config{Name: "bravo"}, Deps{Runner: runner})
 	l2 := mustNew(t, Config{Name: "alpha"}, Deps{Runner: runner})
 
@@ -123,7 +123,7 @@ func TestRegistryStatuses(t *testing.T) {
 	t.Parallel()
 
 	r := NewRegistry()
-	l := mustNew(t, Config{Name: "status-test"}, Deps{Runner: &blockingRunner{}})
+	l := mustNew(t, Config{Name: "status-test"}, Deps{Runner: &noopRunner{}})
 	_ = r.Register(l)
 
 	statuses := r.Statuses()
@@ -142,7 +142,7 @@ func TestRegistryShutdownAll(t *testing.T) {
 	t.Parallel()
 
 	r := NewRegistry()
-	runner := &blockingRunner{}
+	runner := &noopRunner{}
 
 	l1 := mustNew(t, Config{
 		Name:     "shutdown-1",
@@ -180,7 +180,7 @@ func TestRegistryShutdownAllWithUnstartedLoops(t *testing.T) {
 	t.Parallel()
 
 	r := NewRegistry()
-	runner := &blockingRunner{}
+	runner := &noopRunner{}
 
 	// Register but don't start.
 	l := mustNew(t, Config{Name: "unstarted"}, Deps{Runner: runner})
@@ -198,11 +198,11 @@ func TestRegistryShutdownAllWithUnstartedLoops(t *testing.T) {
 	}
 }
 
-// blockingRunner is a mock Runner that returns immediately with minimal
+// noopRunner is a mock Runner that returns immediately with minimal
 // data. Used for lifecycle tests where the LLM response doesn't matter.
-type blockingRunner struct{}
+type noopRunner struct{}
 
-func (r *blockingRunner) Run(_ context.Context, _ RunRequest, _ StreamCallback) (*RunResponse, error) {
+func (r *noopRunner) Run(_ context.Context, _ RunRequest, _ StreamCallback) (*RunResponse, error) {
 	return &RunResponse{
 		Content:      "ok",
 		Model:        "test-model",
