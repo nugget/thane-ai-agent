@@ -441,7 +441,6 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
   width: 100%;
   border-collapse: collapse;
   font-size: 0.75rem;
-  table-layout: fixed;
 }
 
 .log-table thead {
@@ -470,11 +469,11 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
   white-space: nowrap;
 }
 
-.log-col-time { width: 75px; }
-.log-col-level { width: 65px; }
-.log-col-subsystem { width: 90px; }
-.log-col-msg { /* remaining space */ }
-.log-col-detail { width: 280px; }
+.log-col-time { width: 75px; white-space: nowrap; }
+.log-col-level { width: 55px; white-space: nowrap; }
+.log-col-subsystem { width: 80px; white-space: nowrap; }
+.log-col-msg { max-width: 300px; }
+.log-col-detail { /* grows with content */ }
 
 .log-table tbody {
   overflow-y: auto;
