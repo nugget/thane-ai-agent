@@ -1020,57 +1020,49 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
 }
 
 /* === Breathing Animations === */
-/* Use transform:scale() instead of r: so they work with all shape types.
-   Keep amplitudes small and opacity ranges narrow so state transitions
-   (sleeping↔processing↔waiting) blend smoothly rather than popping. */
+/* Only animate transform — never opacity or fill.  Colour/glow changes
+   are driven by CSS transitions on the .node-shape base rule so that
+   state swaps (sleeping↔processing↔waiting) crossfade smoothly à la
+   Gource's linear colour interpolation rather than popping when the
+   keyframe restarts. */
 
-@keyframes breathe-sleeping {
-  0%, 100% { transform: scale(1); opacity: 0.92; }
-  50% { transform: scale(1.04); opacity: 1; }
+@keyframes breathe-idle {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.035); }
 }
 
-@keyframes breathe-waiting {
-  0%, 100% { transform: scale(1); opacity: 0.88; }
-  50% { transform: scale(1.03); opacity: 1; }
+@keyframes breathe-active {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.055); }
 }
 
-@keyframes breathe-processing {
-  0%, 100% { transform: scale(1); opacity: 0.94; }
-  50% { transform: scale(1.06); opacity: 1; }
-}
-
-@keyframes breathe-supervisor {
-  0%, 100% { transform: scale(1); opacity: 0.94; }
-  50% { transform: scale(1.06); opacity: 1; }
-}
-
-@keyframes pulse-error {
-  0%, 100% { transform: scale(1); opacity: 0.92; }
-  50% { transform: scale(1.03); opacity: 1; }
+@keyframes breathe-alert {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.03); }
 }
 
 .node-shape--sleeping {
-  animation: breathe-sleeping 5s cubic-bezier(0.37, 0, 0.63, 1) infinite;
+  animation: breathe-idle 5s cubic-bezier(0.37, 0, 0.63, 1) infinite;
 }
 
 .node-shape--waiting {
-  animation: breathe-waiting 7s cubic-bezier(0.37, 0, 0.63, 1) infinite;
+  animation: breathe-idle 7s cubic-bezier(0.37, 0, 0.63, 1) infinite;
 }
 
 .node-shape--processing {
-  animation: breathe-processing 2s cubic-bezier(0.37, 0, 0.63, 1) infinite;
+  animation: breathe-active 2.4s cubic-bezier(0.37, 0, 0.63, 1) infinite;
 }
 
 .node-shape--supervisor {
-  animation: breathe-supervisor 2s cubic-bezier(0.37, 0, 0.63, 1) infinite;
+  animation: breathe-active 2.4s cubic-bezier(0.37, 0, 0.63, 1) infinite;
 }
 
 .node-shape--error {
-  animation: pulse-error 3s cubic-bezier(0.37, 0, 0.63, 1) infinite;
+  animation: breathe-alert 3s cubic-bezier(0.37, 0, 0.63, 1) infinite;
 }
 
 .node-shape--degraded {
-  animation: pulse-error 3s cubic-bezier(0.37, 0, 0.63, 1) infinite;
+  animation: breathe-alert 3s cubic-bezier(0.37, 0, 0.63, 1) infinite;
 }
 
 /* === System Node === */
