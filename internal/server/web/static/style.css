@@ -243,6 +243,14 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
   flex-wrap: wrap;
   gap: 0.2rem;
   align-items: center;
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+}
+
+.id-convs .id-chip {
+  flex: 0 1 auto;
+  max-width: 100%;
 }
 
 .detail-header {
