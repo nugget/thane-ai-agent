@@ -421,6 +421,14 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
 }
 .iter-card--expanded { opacity: 1; }
 
+/* Supervisor accent — inset left stripe so it layers with live/error borders */
+.iter-card--supervisor {
+  box-shadow: inset 3px 0 0 var(--purple);
+}
+.iter-card--supervisor .iter-card__live-label {
+  color: var(--purple);
+}
+
 /* Error card */
 .iter-card--error {
   border-color: var(--orange);
@@ -544,6 +552,17 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
   margin-bottom: 0.25rem;
 }
 .iter-card__summary-item { white-space: nowrap; }
+
+/* LLM call context (live card enrichment) */
+.iter-card__llm-context {
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  color: var(--text-muted);
+  margin: 0.2rem 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 
 /* --- Connector Lines --- */
 .iter-connector {

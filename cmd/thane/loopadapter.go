@@ -45,9 +45,14 @@ func (a *loopAdapter) Run(ctx context.Context, req loop.RunRequest, _ loop.Strea
 			switch e.Kind {
 			case agent.KindLLMStart:
 				if e.Response != nil {
-					req.OnProgress(events.KindLoopLLMStart, map[string]any{
+					data := map[string]any{
 						"model": e.Response.Model,
-					})
+					}
+					// Forward enrichment data from agent (tokens, tools, router).
+					for k, v := range e.Data {
+						data[k] = v
+					}
+					req.OnProgress(events.KindLoopLLMStart, data)
 				}
 			case agent.KindToolCallStart:
 				if e.ToolCall != nil {

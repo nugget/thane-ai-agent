@@ -150,6 +150,7 @@ function clearLiveTelemetry() {
     loopData._iterStartTs = null;
     loopData._liveTools = [];
     loopData._liveModel = '';
+    loopData._llmContext = null;
   }
 }
 
@@ -432,6 +433,7 @@ function connectSSE() {
         match._iterStartTs = match.last_wake_at ? new Date(match.last_wake_at).getTime() : Date.now();
         match._liveTools = [];
         match._liveModel = '';
+        match._llmContext = null;
       }
       loopData = match;
       document.title = 'Thane \u00b7 ' + (match.name || nodeId.slice(0, 8));
@@ -471,6 +473,7 @@ function applyLoopEvent(evt) {
       loopData._currentConvID = d.conversation_id || loopData._currentConvID;
       loopData._liveTools = [];
       loopData._liveModel = '';
+      loopData._llmContext = null;
       loopData._iterStartTs = Date.now();
       break;
     case 'loop_iteration_complete': {
@@ -572,6 +575,15 @@ function applyLoopEvent(evt) {
       break;
     case 'loop_llm_start':
       loopData._liveModel = d.model || '';
+      loopData._llmContext = {
+        est_tokens: d.est_tokens || 0,
+        messages: d.messages || 0,
+        tools: d.tools || 0,
+        iteration: d.iteration,
+        complexity: d.complexity || '',
+        intent: d.intent || '',
+        reasoning: d.reasoning || '',
+      };
       if (!loopData._iterStartTs) {
         loopData._iterStartTs = Date.now();
       }
@@ -679,7 +691,7 @@ function renderTimeline() {
 
 function buildLiveCard() {
   const card = document.createElement('div');
-  card.className = 'iter-card iter-card--live';
+  card.className = 'iter-card iter-card--live' + (loopData._supervisor ? ' iter-card--supervisor' : '');
 
   const header = document.createElement('div');
   header.className = 'iter-card__header';
@@ -718,6 +730,22 @@ function buildLiveCard() {
     card.appendChild(meter);
   }
 
+  // LLM call context line (from loop_llm_start enrichment).
+  const ctx = loopData._llmContext;
+  if (ctx && (ctx.est_tokens || ctx.messages)) {
+    const info = document.createElement('div');
+    info.className = 'iter-card__llm-context';
+    const parts = [];
+    if (ctx.est_tokens) parts.push('~' + formatTokens(ctx.est_tokens) + ' tokens');
+    if (ctx.messages) parts.push(ctx.messages + ' msgs');
+    if (ctx.tools) parts.push(ctx.tools + ' tools');
+    if (ctx.complexity) parts.push(ctx.complexity);
+    if (ctx.intent) parts.push(ctx.intent.replace(/_/g, ' '));
+    info.textContent = parts.join(' \u00b7 ');
+    if (ctx.reasoning) info.title = ctx.reasoning;
+    card.appendChild(info);
+  }
+
   // Live tool list.
   const tools = loopData._liveTools || [];
   if (tools.length > 0) {
@@ -738,7 +766,7 @@ function buildLiveCard() {
 function buildPastCard(snap, handlerOnly, idx, startExpanded) {
   const card = document.createElement('div');
   const isError = !!snap.error;
-  card.className = 'iter-card iter-card--past' + (isError ? ' iter-card--error' : '') + (startExpanded ? ' iter-card--expanded' : '');
+  card.className = 'iter-card iter-card--past' + (isError ? ' iter-card--error' : '') + (snap.supervisor ? ' iter-card--supervisor' : '') + (startExpanded ? ' iter-card--expanded' : '');
   card.dataset.idx = idx;
 
   const header = document.createElement('div');

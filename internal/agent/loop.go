@@ -1186,9 +1186,23 @@ iterLoop:
 
 		// Notify consumers that an LLM call is starting (model is known).
 		if stream != nil {
+			startData := map[string]any{
+				"est_tokens": iterMsgTokens + systemTokens,
+				"messages":   len(llmMessages),
+				"tools":      len(toolDefs),
+				"iteration":  i,
+			}
+			if routerDecision != nil {
+				startData["complexity"] = routerDecision.Complexity.String()
+				if routerDecision.DetectedIntent != "" {
+					startData["intent"] = routerDecision.DetectedIntent
+				}
+				startData["reasoning"] = routerDecision.Reasoning
+			}
 			stream(llm.StreamEvent{
 				Kind:     llm.KindLLMStart,
 				Response: &llm.ChatResponse{Model: model},
+				Data:     startData,
 			})
 		}
 

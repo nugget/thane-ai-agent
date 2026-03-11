@@ -63,6 +63,11 @@ type StreamEvent struct {
 
 	// Response is set for KindDone events (final summary).
 	Response *ChatResponse
+
+	// Data carries optional extensible metadata for events that need
+	// more than the typed fields above. Used by KindLLMStart to
+	// forward router decisions and context estimates.
+	Data map[string]any
 }
 
 // StreamEventKind identifies the type of stream event.

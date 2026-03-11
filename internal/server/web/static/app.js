@@ -251,6 +251,7 @@ function connect() {
         s._iterStartTs = s.last_wake_at ? new Date(s.last_wake_at).getTime() : Date.now();
         s._liveTools = [];
         s._liveModel = '';
+        s._llmContext = null;
         startElapsedTimer(s.id);
       }
       state.loops.set(s.id, s);
@@ -330,6 +331,7 @@ function handleLoopEvent(evt) {
         // Reset live telemetry for new iteration.
         loop._liveTools = [];
         loop._liveModel = '';
+        loop._llmContext = null;
         loop._iterStartTs = Date.now();
         startElapsedTimer(loopId);
       }
@@ -373,6 +375,7 @@ function handleLoopEvent(evt) {
         loop._iterStartTs = null;
         loop._liveTools = [];
         loop._liveModel = '';
+        loop._llmContext = null;
         stopElapsedTimer(loopId);
         // Auto-refresh logs if this loop is selected.
         if (state.selected === loopId) {
@@ -413,6 +416,16 @@ function handleLoopEvent(evt) {
       if (loopId && state.loops.has(loopId)) {
         const loop = state.loops.get(loopId);
         loop._liveModel = evt.data.model || '';
+        // Stash LLM call context for live card enrichment.
+        loop._llmContext = {
+          est_tokens: evt.data.est_tokens || 0,
+          messages: evt.data.messages || 0,
+          tools: evt.data.tools || 0,
+          iteration: evt.data.iteration,
+          complexity: evt.data.complexity || '',
+          intent: evt.data.intent || '',
+          reasoning: evt.data.reasoning || '',
+        };
         // Seed _iterStartTs if we missed the iteration_start (e.g. SSE reconnect).
         if (!loop._iterStartTs) {
           loop._iterStartTs = Date.now();
@@ -1139,7 +1152,7 @@ function renderTimeline(loop) {
 
 function buildLiveCard(loop) {
   const card = document.createElement('div');
-  card.className = 'iter-card iter-card--live';
+  card.className = 'iter-card iter-card--live' + (loop._supervisor ? ' iter-card--supervisor' : '');
 
   // Header.
   const header = document.createElement('div');
@@ -1179,6 +1192,22 @@ function buildLiveCard(loop) {
     card.appendChild(meter);
   }
 
+  // LLM call context line (from loop_llm_start enrichment).
+  const ctx = loop._llmContext;
+  if (ctx && (ctx.est_tokens || ctx.messages)) {
+    const info = document.createElement('div');
+    info.className = 'iter-card__llm-context';
+    const parts = [];
+    if (ctx.est_tokens) parts.push('~' + formatTokens(ctx.est_tokens) + ' tokens');
+    if (ctx.messages) parts.push(ctx.messages + ' msgs');
+    if (ctx.tools) parts.push(ctx.tools + ' tools');
+    if (ctx.complexity) parts.push(ctx.complexity);
+    if (ctx.intent) parts.push(ctx.intent.replace(/_/g, ' '));
+    info.textContent = parts.join(' \u00b7 ');
+    if (ctx.reasoning) info.title = ctx.reasoning;
+    card.appendChild(info);
+  }
+
   // Live tool list.
   const tools = loop._liveTools || [];
   if (tools.length > 0) {
@@ -1199,7 +1228,7 @@ function buildLiveCard(loop) {
 function buildPastCard(snap, handlerOnly, idx, startExpanded) {
   const card = document.createElement('div');
   const isError = !!snap.error;
-  card.className = 'iter-card iter-card--past' + (isError ? ' iter-card--error' : '') + (startExpanded ? ' iter-card--expanded' : '');
+  card.className = 'iter-card iter-card--past' + (isError ? ' iter-card--error' : '') + (snap.supervisor ? ' iter-card--supervisor' : '') + (startExpanded ? ' iter-card--expanded' : '');
   card.dataset.idx = idx;
 
   // Header (always visible, clickable to expand).
@@ -1937,6 +1966,7 @@ function clearLiveTelemetry(loop, loopId) {
   loop._iterStartTs = null;
   loop._liveTools = [];
   loop._liveModel = '';
+  loop._llmContext = null;
   stopElapsedTimer(loopId);
 }
 
