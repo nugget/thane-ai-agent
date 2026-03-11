@@ -933,7 +933,6 @@ function renderDetail() {
   const hasSupervisor = loop.config && loop.config.Supervisor;
   const showForward = isSleeping || isWaiting || hasSupervisor;
   $('#detail-forward').hidden = !showForward;
-  $('#detail-divider').hidden = !showForward;
 
   // Supervisor status bar.
   renderSupervisorBar(loop);
@@ -949,6 +948,11 @@ function renderDetail() {
     $('#detail-sleep-label').textContent = 'Sleep';
     updateSleepDisplay(loop);
   }
+
+  // Context utilization meter.
+  renderContextMeter(loop);
+  const hasContext = !$('#detail-context').hidden;
+  $('#detail-divider').hidden = !(showForward || hasContext);
 
   // Historical metrics.
   $('#detail-iterations').textContent = formatNumber(loop.iterations || 0);
@@ -975,6 +979,24 @@ function renderDetail() {
   } else {
     tagsSection.hidden = true;
   }
+}
+
+function renderContextMeter(loop) {
+  const container = $('#detail-context');
+  const fill = $('#detail-context-fill');
+  const pctEl = $('#detail-context-pct');
+
+  if (!loop.context_window || !loop.last_input_tokens) {
+    container.hidden = true;
+    return;
+  }
+
+  const pct = Math.min(100, (loop.last_input_tokens / loop.context_window) * 100);
+  fill.style.width = pct.toFixed(1) + '%';
+  fill.className = 'context-meter__fill'
+    + (pct >= 80 ? ' context-meter__fill--crit' : pct >= 50 ? ' context-meter__fill--warn' : '');
+  pctEl.textContent = Math.round(pct) + '%';
+  container.hidden = false;
 }
 
 function updateSleepDisplay(loop) {

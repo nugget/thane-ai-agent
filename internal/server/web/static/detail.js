@@ -440,8 +440,12 @@ function applyLoopEvent(evt) {
       loopData._lastModel = d.model || loopData._lastModel;
       loopData._lastSupervisor = loopData._supervisor;
       loopData._supervisor = false;
-      if (d.input_tokens) loopData.total_input_tokens = (loopData.total_input_tokens || 0) + d.input_tokens;
+      if (d.input_tokens) {
+        loopData.total_input_tokens = (loopData.total_input_tokens || 0) + d.input_tokens;
+        loopData.last_input_tokens = d.input_tokens;
+      }
       if (d.output_tokens) loopData.total_output_tokens = (loopData.total_output_tokens || 0) + d.output_tokens;
+      if (d.context_window > 0) loopData.context_window = d.context_window;
       break;
     case 'loop_sleep_start': {
       loopData.state = 'sleeping';
@@ -490,7 +494,6 @@ function renderLoopDetail() {
   const hasSupervisor = loopData.config && loopData.config.Supervisor;
   const showForward = isSleeping || isWaiting || hasSupervisor;
   $('#detail-forward').hidden = !showForward;
-  $('#detail-divider').hidden = !showForward;
   const sleepVisible = isSleeping || isWaiting;
   $('#detail-sleep-label').hidden = !sleepVisible;
   $('#detail-sleep').hidden = !sleepVisible;
@@ -504,6 +507,11 @@ function renderLoopDetail() {
 
   // Supervisor bar.
   renderSupervisorBar();
+
+  // Context utilization meter.
+  renderContextMeter();
+  const hasContext = !$('#detail-context').hidden;
+  $('#detail-divider').hidden = !(showForward || hasContext);
 
   // Historical metrics.
   $('#detail-iterations').textContent = formatNumber(loopData.iterations || 0);
@@ -533,6 +541,24 @@ function renderLoopDetail() {
 
   // Event list.
   renderEventList();
+}
+
+function renderContextMeter() {
+  const container = $('#detail-context');
+  const fill = $('#detail-context-fill');
+  const pctEl = $('#detail-context-pct');
+
+  if (!loopData || !loopData.context_window || !loopData.last_input_tokens) {
+    container.hidden = true;
+    return;
+  }
+
+  const pct = Math.min(100, (loopData.last_input_tokens / loopData.context_window) * 100);
+  fill.style.width = pct.toFixed(1) + '%';
+  fill.className = 'context-meter__fill'
+    + (pct >= 80 ? ' context-meter__fill--crit' : pct >= 50 ? ' context-meter__fill--warn' : '');
+  pctEl.textContent = Math.round(pct) + '%';
+  container.hidden = false;
 }
 
 function updateSleepDisplay() {
