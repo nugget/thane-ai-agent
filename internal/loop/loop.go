@@ -61,6 +61,10 @@ func (defaultRand) Float64() float64 { return rand.Float64() }
 // ErrNilRunner is returned by [New] when Deps.Runner is nil.
 var ErrNilRunner = errors.New("loop: Runner is required")
 
+// recentConvIDsCap is the maximum number of conversation IDs retained
+// in the ring buffer exposed via [Status.RecentConvIDs].
+const recentConvIDsCap = 10
+
 // Deps holds injected dependencies for a loop. Using a struct avoids a
 // growing parameter list as loops evolve.
 type Deps struct {
@@ -108,6 +112,11 @@ type Loop struct {
 	// Set at the start of each iteration, cleared after. Tool handlers
 	// read it via [Loop.CurrentConvID].
 	currentConvID string
+
+	// recentConvIDs is a ring buffer of conversation IDs from the most
+	// recent iterations (newest first, up to recentConvIDsCap). Used by
+	// the visualizer to query log entries scoped to this loop.
+	recentConvIDs []string
 
 	// nextSleep can be set externally (e.g., by a set_next_sleep
 	// tool handler) to override the default sleep for one cycle.
@@ -269,6 +278,13 @@ func (l *Loop) Status() Status {
 		}
 	}
 
+	// Deep copy recentConvIDs so callers can't mutate internal state.
+	var convIDsCopy []string
+	if len(l.recentConvIDs) > 0 {
+		convIDsCopy = make([]string, len(l.recentConvIDs))
+		copy(convIDsCopy, l.recentConvIDs)
+	}
+
 	return Status{
 		ID:                l.id,
 		Name:              l.config.Name,
@@ -281,6 +297,8 @@ func (l *Loop) Status() Status {
 		TotalInputTokens:  l.totalInputTokens,
 		TotalOutputTokens: l.totalOutputTokens,
 		LastError:         l.lastError,
+		ConsecutiveErrors: l.consecutiveErrors,
+		RecentConvIDs:     convIDsCopy,
 		Config:            cfgCopy,
 	}
 }
@@ -360,6 +378,11 @@ func (l *Loop) run(ctx context.Context) {
 		l.mu.Lock()
 		l.nextSleep = 0
 		l.currentConvID = convID
+		// Prepend to ring buffer (newest first), cap at recentConvIDsCap.
+		l.recentConvIDs = append([]string{convID}, l.recentConvIDs...)
+		if len(l.recentConvIDs) > recentConvIDsCap {
+			l.recentConvIDs = l.recentConvIDs[:recentConvIDsCap]
+		}
 		l.mu.Unlock()
 
 		// Determine if this is a supervisor iteration.

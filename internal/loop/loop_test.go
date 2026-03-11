@@ -1054,6 +1054,63 @@ func (r *inspectingRunner) Run(_ context.Context, req RunRequest, _ StreamCallba
 	}, nil
 }
 
+func TestRecentConvIDs(t *testing.T) {
+	t.Parallel()
+
+	l, err := New(Config{
+		Name:         "convid-ring",
+		Task:         "test",
+		SleepMin:     1 * time.Millisecond,
+		SleepMax:     2 * time.Millisecond,
+		SleepDefault: 1 * time.Millisecond,
+		Jitter:       Float64Ptr(0),
+		MaxIter:      3,
+	}, Deps{Runner: &noopRunner{}})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	_ = l.Start(context.Background())
+	<-l.Done()
+
+	s := l.Status()
+	if len(s.RecentConvIDs) != 3 {
+		t.Fatalf("RecentConvIDs has %d entries, want 3", len(s.RecentConvIDs))
+	}
+
+	// Newest first: index 0 should be the last iteration's convID.
+	for i := 1; i < len(s.RecentConvIDs); i++ {
+		if s.RecentConvIDs[i] == s.RecentConvIDs[i-1] {
+			t.Errorf("RecentConvIDs[%d] == RecentConvIDs[%d] = %q (should be unique)", i, i-1, s.RecentConvIDs[i])
+		}
+	}
+}
+
+func TestRecentConvIDsCap(t *testing.T) {
+	t.Parallel()
+
+	l, err := New(Config{
+		Name:         "convid-cap",
+		Task:         "test",
+		SleepMin:     1 * time.Millisecond,
+		SleepMax:     2 * time.Millisecond,
+		SleepDefault: 1 * time.Millisecond,
+		Jitter:       Float64Ptr(0),
+		MaxIter:      recentConvIDsCap + 5,
+	}, Deps{Runner: &noopRunner{}})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	_ = l.Start(context.Background())
+	<-l.Done()
+
+	s := l.Status()
+	if len(s.RecentConvIDs) != recentConvIDsCap {
+		t.Fatalf("RecentConvIDs has %d entries, want cap %d", len(s.RecentConvIDs), recentConvIDsCap)
+	}
+}
+
 // callbackRunner delegates Run to a caller-provided function.
 type callbackRunner struct {
 	fn func(context.Context, RunRequest) (*RunResponse, error)

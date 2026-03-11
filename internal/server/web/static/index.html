@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Thane - Loop Visualizer</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="header">
+    <div class="header-left">
+      <h1 class="header-title">Thane <span class="header-sep">&middot;</span> Loop Visualizer</h1>
+    </div>
+    <div class="header-right">
+      <span id="conn-status" class="conn-badge conn-badge--connecting">connecting</span>
+    </div>
+  </header>
+
+  <main class="main">
+    <section class="canvas-panel" id="canvas-panel">
+      <svg id="canvas" width="100%" height="100%"></svg>
+      <div id="empty-state" class="empty-state">
+        <p>No loops running</p>
+      </div>
+    </section>
+
+    <aside class="detail-panel" id="detail-panel">
+      <div id="detail-placeholder" class="detail-placeholder">
+        <p>Select a loop to inspect</p>
+      </div>
+      <div id="detail-content" class="detail-content" hidden>
+        <div class="detail-header">
+          <h2 id="detail-name" class="detail-name"></h2>
+          <span id="detail-state" class="state-badge"></span>
+        </div>
+        <dl class="detail-metrics">
+          <dt>Iterations</dt>
+          <dd id="detail-iterations">-</dd>
+          <dt>Attempts</dt>
+          <dd id="detail-attempts">-</dd>
+          <dt>Input Tokens</dt>
+          <dd id="detail-input-tokens">-</dd>
+          <dt>Output Tokens</dt>
+          <dd id="detail-output-tokens">-</dd>
+          <dt>Last Model</dt>
+          <dd id="detail-model">-</dd>
+          <dt>Sleep Remaining</dt>
+          <dd id="detail-sleep">-</dd>
+          <dt>Last Error</dt>
+          <dd id="detail-error" class="detail-error">-</dd>
+          <dt>Started</dt>
+          <dd id="detail-started">-</dd>
+        </dl>
+
+        <h3 class="section-title">Recent Events</h3>
+        <ul id="event-list" class="event-list"></ul>
+      </div>
+    </aside>
+  </main>
+
+  <section class="log-panel" id="log-panel">
+    <div class="log-toolbar">
+      <h3 class="section-title">Logs</h3>
+      <div class="log-filters">
+        <select id="log-level" class="log-select">
+          <option value="">All Levels</option>
+          <option value="ERROR">Error</option>
+          <option value="WARN">Warn+</option>
+          <option value="INFO">Info+</option>
+          <option value="DEBUG">Debug+</option>
+        </select>
+        <button id="log-refresh" class="btn btn--sm">Refresh</button>
+      </div>
+    </div>
+    <div id="log-empty" class="log-empty">
+      <p>Click a loop node to load logs</p>
+    </div>
+    <table id="log-table" class="log-table" hidden>
+      <thead>
+        <tr>
+          <th class="log-col-time">Time</th>
+          <th class="log-col-level">Level</th>
+          <th class="log-col-subsystem">Subsystem</th>
+          <th class="log-col-msg">Message</th>
+        </tr>
+      </thead>
+      <tbody id="log-body"></tbody>
+    </table>
+  </section>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
