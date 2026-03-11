@@ -508,8 +508,8 @@ function renderLoopDetail() {
   // Historical metrics.
   $('#detail-iterations').textContent = formatNumber(loopData.iterations || 0);
   $('#detail-attempts').textContent = formatNumber(loopData.attempts || 0);
-  $('#detail-input-tokens').textContent = formatTokens(loopData.total_input_tokens || 0);
-  $('#detail-output-tokens').textContent = formatTokens(loopData.total_output_tokens || 0);
+  $('#detail-input-tokens').textContent = loopData.total_input_tokens ? formatTokens(loopData.total_input_tokens) : '—';
+  $('#detail-output-tokens').textContent = loopData.total_output_tokens ? formatTokens(loopData.total_output_tokens) : '—';
   $('#detail-model').textContent = loopData._lastModel || '-';
   $('#detail-error').textContent = loopData.last_error || '-';
   $('#detail-started').textContent = loopData.started_at ? timeAgo(new Date(loopData.started_at)) : '-';

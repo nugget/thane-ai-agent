@@ -953,8 +953,8 @@ function renderDetail() {
   // Historical metrics.
   $('#detail-iterations').textContent = formatNumber(loop.iterations || 0);
   $('#detail-attempts').textContent = formatNumber(loop.attempts || 0);
-  $('#detail-input-tokens').textContent = formatTokens(loop.total_input_tokens || 0);
-  $('#detail-output-tokens').textContent = formatTokens(loop.total_output_tokens || 0);
+  $('#detail-input-tokens').textContent = loop.total_input_tokens ? formatTokens(loop.total_input_tokens) : '—';
+  $('#detail-output-tokens').textContent = loop.total_output_tokens ? formatTokens(loop.total_output_tokens) : '—';
   $('#detail-model').textContent = loop._lastModel || '-';
   $('#detail-error').textContent = loop.last_error || '-';
   $('#detail-started').textContent = loop.started_at ? timeAgo(new Date(loop.started_at)) : '-';
