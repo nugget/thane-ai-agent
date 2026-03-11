@@ -128,6 +128,9 @@ func (s *WebServer) handleSystemLogs(w http.ResponseWriter, r *http.Request) {
 	entries, err := s.logQuerier.Query(logging.QueryParams{
 		Level: level,
 		Limit: limit,
+		ExcludeSourcePrefixes: []string{
+			"internal/server/", // Exclude API/web handler logs to avoid feedback loop
+		},
 	})
 	if err != nil {
 		s.logger.Warn("system log query failed", "error", err)
