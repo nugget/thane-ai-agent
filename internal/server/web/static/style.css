@@ -915,6 +915,86 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
   pointer-events: none;
 }
 
+/* === Linking Lines === */
+.link-line {
+  stroke: var(--text-muted);
+  stroke-width: 1.5;
+  fill: none;
+  opacity: 0.4;
+  transition: stroke 0.3s ease, opacity 0.3s ease;
+}
+
+.link-line--error {
+  stroke: var(--red);
+  opacity: 0.6;
+}
+
+.link-line--flash {
+  stroke: var(--accent);
+  opacity: 0.8;
+  stroke-width: 2;
+}
+
+/* === Node Enter/Exit Animations === */
+/* Applied to inner <g class="node-inner"> so scale is around (0,0) which is the
+   node center (children are drawn centered at origin). */
+@keyframes node-enter {
+  0%   { transform: scale(0); opacity: 0; }
+  70%  { transform: scale(1.12); opacity: 1; }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+.node-inner--entering {
+  animation: node-enter 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+}
+
+@keyframes node-exit {
+  0%   { transform: scale(1); opacity: 1; }
+  100% { transform: scale(0); opacity: 0; }
+}
+
+.loop-node--exiting .node-inner {
+  animation: node-exit 0.25s ease-in forwards;
+}
+
+.loop-node--exiting {
+  pointer-events: none;
+}
+
+/* Smooth reflow — nodes glide to new positions on layout changes. */
+.loop-node--settled {
+  transition: transform 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
+
+.system-node--settled {
+  transition: transform 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
+
+/* === Iteration Flash === */
+@keyframes ring-flash {
+  0%   { opacity: 0.7; stroke-width: 3; }
+  100% { opacity: 0; stroke-width: 2; }
+}
+
+.node-ring--flash {
+  opacity: 0.7;
+  stroke-width: 3;
+  animation: ring-flash 0.4s ease-out forwards;
+}
+
+/* === Error Shake === */
+@keyframes node-shake {
+  0%, 100% { transform: translateX(0); }
+  20%      { transform: translateX(-3px); }
+  40%      { transform: translateX(3px); }
+  60%      { transform: translateX(-2px); }
+  80%      { transform: translateX(2px); }
+}
+
+.loop-node--shake .node-inner {
+  animation: node-shake 0.3s ease-in-out;
+}
+
 /* === Responsive === */
 @media (max-width: 768px) {
   .main { flex-direction: column; }

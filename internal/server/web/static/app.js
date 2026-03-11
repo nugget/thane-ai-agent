@@ -13,6 +13,9 @@ const state = {
   events: [],             // recent events (newest first, capped)
   sleepTimers: new Map(), // id -> { startedAt: Date, durationMs: number }
   system: null,           // system status object from /api/system
+  prevIterations: new Map(), // id -> last known iteration count (for flash detection)
+  prevErrors: new Map(),     // id -> last known error string (for shake detection)
+  knownLoopIds: new Set(),   // ids we've rendered before (for enter animation)
 };
 
 const MAX_EVENTS = 50;
@@ -248,29 +251,93 @@ function renderNodes() {
   const count = loops.length;
   const radius = count <= 1 ? 0 : Math.min(rect.width, rect.height) * 0.3;
 
+  // Track current loop ids for exit detection.
+  const currentIds = new Set();
+
+  // Positions map for linking line.
+  const nodePositions = new Map();
+
   for (let i = 0; i < count; i++) {
     const loop = loops[i];
+    currentIds.add(loop.id);
     const angle = (2 * Math.PI * i) / count - Math.PI / 2;
     const x = cx + radius * Math.cos(angle);
     const y = cy + radius * Math.sin(angle);
+    nodePositions.set(loop.id, { x, y });
     renderNode(loop, x, y);
   }
 
-  // Remove nodes for loops that no longer exist.
+  // Remove nodes for loops that no longer exist (with exit animation).
   const existingGroups = canvasWorld.querySelectorAll('.loop-node');
   for (const g of existingGroups) {
-    if (!state.loops.has(g.dataset.loopId)) {
-      g.remove();
+    const id = g.dataset.loopId;
+    if (!state.loops.has(id)) {
+      if (!g.classList.contains('loop-node--exiting')) {
+        g.classList.add('loop-node--exiting');
+        g.addEventListener('animationend', () => g.remove(), { once: true });
+        state.knownLoopIds.delete(id);
+        state.prevIterations.delete(id);
+        state.prevErrors.delete(id);
+      }
     }
   }
 
   // System node — positioned offset from center.
+  const sysX = cx - radius - 100;
+  const sysY = cy;
   if (hasSystem) {
-    renderSystemNode(cx - radius - 100, cy);
+    renderSystemNode(sysX, sysY);
   } else {
     const existing = canvasWorld.querySelector('.system-node');
     if (existing) existing.remove();
   }
+
+  // Linking line: runtime → metacognitive.
+  renderLinkingLine(hasSystem, sysX, sysY, loops, nodePositions);
+}
+
+function renderLinkingLine(hasSystem, sysX, sysY, loops, nodePositions) {
+  let line = canvasWorld.querySelector('.link-line');
+
+  // Find the metacognitive loop.
+  const metaLoop = loops.find(l => l.name === 'metacognitive');
+
+  if (!hasSystem || !metaLoop || !nodePositions.has(metaLoop.id)) {
+    // No connection to draw — remove existing line.
+    if (line) line.remove();
+    return;
+  }
+
+  const pos = nodePositions.get(metaLoop.id);
+
+  if (!line) {
+    line = createSVG('line', { class: 'link-line' });
+    // Insert before nodes so the line draws behind them.
+    canvasWorld.insertBefore(line, canvasWorld.firstChild);
+  }
+
+  line.setAttribute('x1', sysX);
+  line.setAttribute('y1', sysY);
+  line.setAttribute('x2', pos.x);
+  line.setAttribute('y2', pos.y);
+
+  // State-driven styling: error state turns the line red.
+  if (metaLoop.state === 'error') {
+    line.setAttribute('class', 'link-line link-line--error');
+  } else {
+    line.setAttribute('class', 'link-line');
+  }
+}
+
+// Flash the linking line briefly (called on supervisor events).
+function flashLinkingLine() {
+  const line = canvasWorld.querySelector('.link-line');
+  if (!line) return;
+  const baseClass = line.getAttribute('class').replace(' link-line--flash', '');
+  line.setAttribute('class', baseClass + ' link-line--flash');
+  setTimeout(() => {
+    line.setAttribute('class', baseClass);
+  }, 300);
 }
 
 function renderNode(loop, x, y) {
@@ -293,10 +360,13 @@ function renderNode(loop, x, y) {
       ]);
     });
 
+    // Inner group for enter/exit scale animation (children drawn at origin).
+    const inner = createSVG('g', { class: 'node-inner' });
+
     // Native SVG tooltip — instant, no delay.
     const title = createSVG('title', {});
     title.textContent = loop.name || loop.id;
-    group.appendChild(title);
+    inner.appendChild(title);
 
     // Glow ring.
     const ring = createSVG('circle', {
@@ -335,15 +405,29 @@ function renderNode(loop, x, y) {
     });
     label.textContent = loop.name || loop.id.slice(0, 8);
 
-    group.appendChild(ring);
-    group.appendChild(sleepRing);
-    group.appendChild(circle);
-    group.appendChild(supDot);
-    group.appendChild(label);
+    inner.appendChild(ring);
+    inner.appendChild(sleepRing);
+    inner.appendChild(circle);
+    inner.appendChild(supDot);
+    inner.appendChild(label);
+    group.appendChild(inner);
     canvasWorld.appendChild(group);
+
+    // Enter animation for genuinely new loops.
+    const isNew = !state.knownLoopIds.has(loop.id);
+    if (isNew) {
+      inner.classList.add('node-inner--entering');
+      inner.addEventListener('animationend', () => {
+        inner.classList.remove('node-inner--entering');
+      }, { once: true });
+    }
+    state.knownLoopIds.add(loop.id);
+
+    // Enable smooth reflow after first paint.
+    requestAnimationFrame(() => group.classList.add('loop-node--settled'));
   }
 
-  // Update position.
+  // Update position (smooth reflow via CSS transition on --settled class).
   group.setAttribute('transform', `translate(${x},${y})`);
 
   // Update state class on main circle — supervisor processing gets its own style.
@@ -383,6 +467,36 @@ function renderNode(loop, x, y) {
 
   // Sleep progress ring.
   updateSleepRing(group, loop.id);
+
+  // Iteration flash — ring brightens when iteration count changes.
+  const prevIter = state.prevIterations.get(loop.id) || 0;
+  const curIter = loop.iterations || 0;
+  if (curIter > prevIter && prevIter > 0) {
+    const ring = group.querySelector('.node-ring');
+    ring.classList.remove('node-ring--flash');
+    // Force reflow to restart animation.
+    void ring.offsetWidth;
+    ring.classList.add('node-ring--flash');
+
+    // Flash the linking line if this is the metacognitive loop and a supervisor fired.
+    if (loop.name === 'metacognitive' && loop._lastSupervisor) {
+      flashLinkingLine();
+    }
+  }
+  state.prevIterations.set(loop.id, curIter);
+
+  // Error shake — node jitters when a new error appears.
+  const prevError = state.prevErrors.get(loop.id) || '';
+  const curError = loop.last_error || '';
+  if (curError && curError !== prevError) {
+    group.classList.remove('loop-node--shake');
+    void group.offsetWidth;
+    group.classList.add('loop-node--shake');
+    group.addEventListener('animationend', () => {
+      group.classList.remove('loop-node--shake');
+    }, { once: true });
+  }
+  state.prevErrors.set(loop.id, curError);
 }
 
 function updateSleepRing(group, loopId) {
@@ -438,6 +552,8 @@ function renderSystemNode(x, y) {
     group.appendChild(label);
 
     canvasWorld.appendChild(group);
+    // Defer adding settled class so initial render isn't animated.
+    requestAnimationFrame(() => group.classList.add('system-node--settled'));
   }
 
   group.setAttribute('transform', `translate(${x},${y})`);
