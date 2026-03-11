@@ -382,6 +382,30 @@ body {
 
 .log-scroll[hidden] { display: none; }
 
+/* === Footer === */
+.footer {
+  display: flex;
+  align-items: center;
+  gap: 1.2rem;
+  padding: 0.3rem 1rem;
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border);
+  font-size: 0.7rem;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.footer-item { white-space: nowrap; }
+
+.footer-link {
+  margin-left: auto;
+  color: var(--text-secondary);
+  text-decoration: none;
+}
+
+.footer-link:hover { color: var(--accent); }
+
 /* === SVG Node Styles === */
 
 /* Base node group */

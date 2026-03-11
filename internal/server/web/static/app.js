@@ -631,8 +631,60 @@ function parseDuration(s) {
 }
 
 // ---------------------------------------------------------------------------
+// Footer — version & uptime
+// ---------------------------------------------------------------------------
+
+let serverStartTime = null; // derived from uptime snapshot
+
+async function fetchVersionInfo() {
+  try {
+    const resp = await fetch('/v1/version');
+    const info = await resp.json();
+
+    const ver = info.version || 'dev';
+    const commit = (info.git_commit || 'unknown').slice(0, 7);
+    $('#footer-version').textContent = ver + ' (' + commit + ')';
+    $('#footer-arch').textContent = (info.os || '') + '/' + (info.arch || '');
+    $('#footer-go').textContent = info.go_version || '';
+
+    // Derive server start time from uptime string so we can tick locally.
+    if (info.uptime) {
+      const uptimeMs = parseDuration(info.uptime);
+      serverStartTime = Date.now() - uptimeMs;
+    }
+
+    updateUptime();
+  } catch (err) {
+    console.warn('Failed to fetch version info:', err);
+  }
+}
+
+function updateUptime() {
+  if (serverStartTime === null) return;
+  const ms = Date.now() - serverStartTime;
+  $('#footer-uptime').textContent = 'up ' + formatUptimeLong(ms);
+}
+
+function formatUptimeLong(ms) {
+  const sec = Math.floor(ms / 1000);
+  const d = Math.floor(sec / 86400);
+  const h = Math.floor((sec % 86400) / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = sec % 60;
+  const parts = [];
+  if (d > 0) parts.push(d + 'd');
+  if (h > 0) parts.push(h + 'h');
+  if (m > 0) parts.push(m + 'm');
+  parts.push(s + 's');
+  return parts.join(' ');
+}
+
+// ---------------------------------------------------------------------------
 // Boot
 // ---------------------------------------------------------------------------
 
 connect();
+fetchVersionInfo();
+// Refresh uptime display every second.
+setInterval(updateUptime, 1000);
 requestAnimationFrame(tick);
