@@ -335,13 +335,19 @@ function applyLoopEvent(evt) {
       if (!loopData._iterStartTs) {
         loopData._iterStartTs = Date.now();
       }
-      loopData._liveTools.push({ tool: d.tool, status: 'running' });
+      loopData._liveTools.push({
+        tool: d.tool,
+        status: 'running',
+        args: d.args || null,
+      });
       break;
     case 'loop_tool_done':
       if (loopData._liveTools) {
         for (let i = loopData._liveTools.length - 1; i >= 0; i--) {
           if (loopData._liveTools[i].tool === d.tool && loopData._liveTools[i].status === 'running') {
             loopData._liveTools[i].status = d.error ? 'error' : 'done';
+            loopData._liveTools[i].result = d.result || null;
+            loopData._liveTools[i].error = d.error || null;
             break;
           }
         }

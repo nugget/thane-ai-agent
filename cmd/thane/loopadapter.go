@@ -10,6 +10,11 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/router"
 )
 
+// maxToolResultLen is the maximum tool result length forwarded to the
+// dashboard via SSE. Results longer than this are truncated with an
+// ellipsis to keep event payloads bounded.
+const maxToolResultLen = 2000
+
 // loopAdapter bridges [loop.Runner] to [*agent.Loop], converting between
 // the loop package's request/response types and the agent package's
 // types. It lives in cmd/thane to avoid a circular import between the
@@ -58,14 +63,25 @@ func (a *loopAdapter) Run(ctx context.Context, req loop.RunRequest, _ loop.Strea
 				}
 			case agent.KindToolCallStart:
 				if e.ToolCall != nil {
-					req.OnProgress(events.KindLoopToolStart, map[string]any{
+					data := map[string]any{
 						"tool": e.ToolCall.Function.Name,
-					})
+					}
+					if len(e.ToolCall.Function.Arguments) > 0 {
+						data["args"] = e.ToolCall.Function.Arguments
+					}
+					req.OnProgress(events.KindLoopToolStart, data)
 				}
 			case agent.KindToolCallDone:
 				data := map[string]any{"tool": e.ToolName}
 				if e.ToolError != "" {
 					data["error"] = e.ToolError
+				}
+				if e.ToolResult != "" {
+					r := e.ToolResult
+					if len(r) > maxToolResultLen {
+						r = r[:maxToolResultLen] + "…"
+					}
+					data["result"] = r
 				}
 				req.OnProgress(events.KindLoopToolDone, data)
 			case agent.KindLLMResponse:

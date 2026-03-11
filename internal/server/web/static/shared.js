@@ -126,6 +126,29 @@ function truncate(s, max) {
   return s.slice(0, max) + '\u2026';
 }
 
+// formatToolTooltip builds a readable tooltip string for a live tool entry.
+// Fields: tool (name), status ("running"/"done"/"error"), args, result, error.
+function formatToolTooltip(entry) {
+  if (!entry) return '';
+  const lines = [entry.tool || 'unknown tool'];
+  if (entry.args) {
+    try {
+      const s = typeof entry.args === 'string' ? entry.args : JSON.stringify(entry.args, null, 2);
+      lines.push('Args: ' + s);
+    } catch (_) { /* ignore */ }
+  }
+  if (entry.error) {
+    lines.push('Error: ' + entry.error);
+  }
+  if (entry.result) {
+    lines.push('Result: ' + entry.result);
+  }
+  if (entry.status === 'running') {
+    lines.push('(running\u2026)');
+  }
+  return lines.join('\n');
+}
+
 function buildToolCounts(liveTools) {
   if (!liveTools || liveTools.length === 0) return null;
   const counts = {};
@@ -412,6 +435,7 @@ function buildLiveCard(loop) {
       const li = document.createElement('li');
       li.className = 'live-tool live-tool--' + entry.status;
       li.textContent = entry.tool;
+      li.title = formatToolTooltip(entry);
       ul.appendChild(li);
     }
     card.appendChild(ul);

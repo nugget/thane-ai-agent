@@ -398,7 +398,11 @@ function handleLoopEvent(evt) {
           loop._iterStartTs = Date.now();
           startElapsedTimer(loopId);
         }
-        loop._liveTools.push({ tool: evt.data.tool, status: 'running' });
+        loop._liveTools.push({
+          tool: evt.data.tool,
+          status: 'running',
+          args: evt.data.args || null,
+        });
       }
       break;
 
@@ -410,6 +414,8 @@ function handleLoopEvent(evt) {
           for (let i = loop._liveTools.length - 1; i >= 0; i--) {
             if (loop._liveTools[i].tool === evt.data.tool && loop._liveTools[i].status === 'running') {
               loop._liveTools[i].status = evt.data.error ? 'error' : 'done';
+              loop._liveTools[i].result = evt.data.result || null;
+              loop._liveTools[i].error = evt.data.error || null;
               break;
             }
           }
