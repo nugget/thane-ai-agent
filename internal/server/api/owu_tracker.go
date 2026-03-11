@@ -29,6 +29,7 @@ type owuResult struct {
 // per-conversation child loops so that Open WebUI sessions appear on
 // the dashboard with full in-flight event visibility.
 type OWUTracker struct {
+	ctx      context.Context // long-lived context for spawning child loops
 	registry *loop.Registry
 	eventBus *events.Bus
 	runner   *agent.Loop
@@ -44,6 +45,7 @@ type OWUTracker struct {
 // to the agent loop directly).
 func NewOWUTracker(ctx context.Context, registry *loop.Registry, eventBus *events.Bus, runner *agent.Loop, logger *slog.Logger) (*OWUTracker, error) {
 	t := &OWUTracker{
+		ctx:      ctx,
 		registry: registry,
 		eventBus: eventBus,
 		runner:   runner,
@@ -109,7 +111,9 @@ func (t *OWUTracker) Dispatch(ctx context.Context, req *agent.Request, streamCal
 const convChanSize = 4 // allow a small queue of concurrent requests
 
 // ensureConvLoop lazily spawns a per-conversation child loop.
-func (t *OWUTracker) ensureConvLoop(ctx context.Context, convID, displayName string) chan owuWork {
+// Uses the tracker's long-lived context (not the HTTP request context)
+// so the loop survives beyond the first request.
+func (t *OWUTracker) ensureConvLoop(_ context.Context, convID, displayName string) chan owuWork {
 	t.mu.Lock()
 	if ch, ok := t.convChs[convID]; ok {
 		t.mu.Unlock()
@@ -122,7 +126,7 @@ func (t *OWUTracker) ensureConvLoop(ctx context.Context, convID, displayName str
 
 	loopName := "owu/" + displayName
 
-	_, err := t.registry.SpawnLoop(ctx, loop.Config{
+	_, err := t.registry.SpawnLoop(t.ctx, loop.Config{
 		Name: loopName,
 		WaitFunc: func(wCtx context.Context) (any, error) {
 			select {
@@ -171,13 +175,13 @@ func (t *OWUTracker) ensureConvLoop(ctx context.Context, convID, displayName str
 		go func() {
 			for {
 				select {
-				case <-ctx.Done():
+				case <-t.ctx.Done():
 					return
 				case w, ok := <-ch:
 					if !ok {
 						return
 					}
-					resp, err := t.runner.Run(ctx, w.req, w.callback)
+					resp, err := t.runner.Run(t.ctx, w.req, w.callback)
 					w.respCh <- owuResult{resp: resp, err: err}
 				}
 			}
