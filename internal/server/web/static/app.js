@@ -709,6 +709,16 @@ function renderNode(loop, x, y) {
     void ring.offsetWidth;
     ring.classList.add('node-ring--flash');
 
+    // Brief green pulse on the shape — guarantees visual feedback for
+    // fast handler loops where processing state is too brief to render.
+    const shape = group.querySelector('.node-shape');
+    shape.classList.remove('node-shape--iter-pulse');
+    void shape.offsetWidth;
+    shape.classList.add('node-shape--iter-pulse');
+    shape.addEventListener('animationend', () => {
+      shape.classList.remove('node-shape--iter-pulse');
+    }, { once: true });
+
     // Flash the linking line if this is the metacognitive loop and a supervisor fired.
     if (loop.name === 'metacognitive' && loop._lastSupervisor) {
       flashLinkingLine(loopId);

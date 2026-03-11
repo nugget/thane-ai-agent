@@ -1010,6 +1010,18 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
   animation: ring-flash 0.4s ease-out forwards;
 }
 
+/* Brief green pulse on the node shape when an iteration completes.
+   Guarantees visual feedback even for sub-millisecond handler loops
+   where the processing state is too brief to render. */
+@keyframes shape-iter-pulse {
+  0%   { fill: var(--green); opacity: 1; }
+  100% { opacity: 0.8; }
+}
+
+.node-shape--iter-pulse {
+  animation: shape-iter-pulse 0.5s ease-out forwards;
+}
+
 /* === Error Shake === */
 @keyframes node-shake {
   0%, 100% { transform: translateX(0); }
