@@ -27,7 +27,7 @@ const detailPlaceholder = $('#detail-placeholder');
 const detailContent = $('#detail-content');
 const emptyState = $('#empty-state');
 const logEmpty = $('#log-empty');
-const logTable = $('#log-table');
+const logScroll = $('#log-scroll');
 const logBody = $('#log-body');
 
 // ---------------------------------------------------------------------------
@@ -449,12 +449,16 @@ function renderLogs(entries) {
   if (!entries || entries.length === 0) {
     logEmpty.hidden = false;
     logEmpty.querySelector('p').textContent = 'No log entries found';
-    logTable.hidden = true;
+    logScroll.hidden = true;
     return;
   }
 
   logEmpty.hidden = true;
-  logTable.hidden = false;
+  logScroll.hidden = false;
+
+  // Check if already scrolled to bottom before updating content.
+  const atBottom = logScroll.scrollHeight - logScroll.scrollTop - logScroll.clientHeight < 24;
+
   logBody.innerHTML = '';
 
   for (const entry of entries) {
@@ -487,6 +491,11 @@ function renderLogs(entries) {
     tr.appendChild(tdMsg);
     logBody.appendChild(tr);
   }
+
+  // Auto-scroll to bottom if user was already at the bottom (live tail).
+  if (atBottom) {
+    logScroll.scrollTop = logScroll.scrollHeight;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -499,7 +508,7 @@ function selectLoop(loopId) {
     state.selected = null;
     logEmpty.hidden = false;
     logEmpty.querySelector('p').textContent = 'Click a loop node to load logs';
-    logTable.hidden = true;
+    logScroll.hidden = true;
   } else {
     state.selected = loopId;
     fetchLogs(loopId);

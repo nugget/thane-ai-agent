@@ -75,17 +75,19 @@
     <div id="log-empty" class="log-empty">
       <p>Click a loop node to load logs</p>
     </div>
-    <table id="log-table" class="log-table" hidden>
-      <thead>
-        <tr>
-          <th class="log-col-time">Time</th>
-          <th class="log-col-level">Level</th>
-          <th class="log-col-subsystem">Subsystem</th>
-          <th class="log-col-msg">Message</th>
-        </tr>
-      </thead>
-      <tbody id="log-body"></tbody>
-    </table>
+    <div id="log-scroll" class="log-scroll" hidden>
+      <table id="log-table" class="log-table">
+        <thead>
+          <tr>
+            <th class="log-col-time">Time</th>
+            <th class="log-col-level">Level</th>
+            <th class="log-col-subsystem">Subsystem</th>
+            <th class="log-col-msg">Message</th>
+          </tr>
+        </thead>
+        <tbody id="log-body"></tbody>
+      </table>
+    </div>
   </section>
 
   <script src="/static/app.js"></script>

@@ -377,7 +377,10 @@ body {
 .log-scroll {
   flex: 1;
   overflow-y: auto;
+  overflow-x: hidden;
 }
+
+.log-scroll[hidden] { display: none; }
 
 /* === SVG Node Styles === */
 
