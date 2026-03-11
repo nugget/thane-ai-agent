@@ -250,6 +250,11 @@ function renderNode(loop, x, y) {
     });
     group.addEventListener('click', () => selectLoop(loop.id));
 
+    // Native SVG tooltip — instant, no delay.
+    const title = createSVG('title', {});
+    title.textContent = loop.name || loop.id;
+    group.appendChild(title);
+
     // Glow ring.
     const ring = createSVG('circle', {
       class: 'node-ring',
