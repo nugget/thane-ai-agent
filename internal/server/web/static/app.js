@@ -22,6 +22,7 @@ const MAX_EVENTS = 50;
 
 const $ = (sel) => document.querySelector(sel);
 const canvas = $('#canvas');
+const canvasWorld = $('#canvas-world');
 const connBadge = $('#conn-status');
 const detailPlaceholder = $('#detail-placeholder');
 const detailContent = $('#detail-content');
@@ -229,7 +230,7 @@ function renderNodes() {
   }
 
   // Remove nodes for loops that no longer exist.
-  const existingGroups = canvas.querySelectorAll('.loop-node');
+  const existingGroups = canvasWorld.querySelectorAll('.loop-node');
   for (const g of existingGroups) {
     if (!state.loops.has(g.dataset.loopId)) {
       g.remove();
@@ -240,7 +241,7 @@ function renderNodes() {
 function renderNode(loop, x, y) {
   const nodeR = 32;
   const ringR = 44;
-  let group = canvas.querySelector(`[data-loop-id="${loop.id}"]`);
+  let group = canvasWorld.querySelector(`[data-loop-id="${loop.id}"]`);
 
   if (!group) {
     group = createSVG('g', {
@@ -291,7 +292,7 @@ function renderNode(loop, x, y) {
     group.appendChild(circle);
     group.appendChild(supDot);
     group.appendChild(label);
-    canvas.appendChild(group);
+    canvasWorld.appendChild(group);
   }
 
   // Update position.
@@ -378,7 +379,10 @@ function renderDetail() {
   // Supervisor status bar.
   renderSupervisorBar(loop);
 
-  // Sleep countdown.
+  // Sleep countdown — hide the row entirely when not sleeping.
+  const sleepVisible = loop.state === 'sleeping';
+  $('#detail-sleep-label').hidden = !sleepVisible;
+  $('#detail-sleep').hidden = !sleepVisible;
   updateSleepDisplay(loop);
 
   // Historical metrics.
@@ -798,7 +802,7 @@ function tick() {
 
   // Update sleep progress rings on all nodes.
   for (const [loopId] of state.sleepTimers) {
-    const group = canvas.querySelector(`[data-loop-id="${loopId}"]`);
+    const group = canvasWorld.querySelector(`[data-loop-id="${loopId}"]`);
     if (group) updateSleepRing(group, loopId);
   }
 
@@ -999,6 +1003,91 @@ function formatUptimeLong(ms) {
     resizeH.classList.remove('resize-handle--active');
     document.body.classList.remove('resize-col', 'resize-row');
     dragging = null;
+  });
+})();
+
+// ---------------------------------------------------------------------------
+// Canvas Pan & Zoom
+// ---------------------------------------------------------------------------
+
+const viewport = { panX: 0, panY: 0, zoom: 1 };
+const ZOOM_MIN = 0.25;
+const ZOOM_MAX = 4;
+const ZOOM_STEP = 0.1;
+
+function applyViewportTransform() {
+  canvasWorld.setAttribute(
+    'transform',
+    `translate(${viewport.panX},${viewport.panY}) scale(${viewport.zoom})`
+  );
+}
+
+(function initPanZoom() {
+  let isPanning = false;
+  let startX = 0;
+  let startY = 0;
+  let startPanX = 0;
+  let startPanY = 0;
+
+  canvas.addEventListener('mousedown', (e) => {
+    // Only pan on direct canvas/background clicks, not on nodes.
+    if (e.target !== canvas && !e.target.closest('#canvas-world') === null) return;
+    if (e.target.closest('.loop-node')) return;
+    if (e.button !== 0) return;
+
+    isPanning = true;
+    startX = e.clientX;
+    startY = e.clientY;
+    startPanX = viewport.panX;
+    startPanY = viewport.panY;
+    canvas.style.cursor = 'grabbing';
+    e.preventDefault();
+  });
+
+  document.addEventListener('mousemove', (e) => {
+    if (!isPanning) return;
+    viewport.panX = startPanX + (e.clientX - startX);
+    viewport.panY = startPanY + (e.clientY - startY);
+    applyViewportTransform();
+  });
+
+  document.addEventListener('mouseup', () => {
+    if (!isPanning) return;
+    isPanning = false;
+    canvas.style.cursor = '';
+  });
+
+  canvas.addEventListener('wheel', (e) => {
+    e.preventDefault();
+
+    // Zoom toward cursor position.
+    const rect = canvas.getBoundingClientRect();
+    const mouseX = e.clientX - rect.left;
+    const mouseY = e.clientY - rect.top;
+
+    // World coordinates under cursor before zoom.
+    const wx = (mouseX - viewport.panX) / viewport.zoom;
+    const wy = (mouseY - viewport.panY) / viewport.zoom;
+
+    // Apply zoom delta.
+    const delta = e.deltaY > 0 ? -ZOOM_STEP : ZOOM_STEP;
+    const newZoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, viewport.zoom + delta));
+    viewport.zoom = newZoom;
+
+    // Adjust pan so the world point under cursor stays fixed.
+    viewport.panX = mouseX - wx * viewport.zoom;
+    viewport.panY = mouseY - wy * viewport.zoom;
+
+    applyViewportTransform();
+  }, { passive: false });
+
+  // Double-click to reset view.
+  canvas.addEventListener('dblclick', (e) => {
+    if (e.target.closest('.loop-node')) return;
+    viewport.panX = 0;
+    viewport.panY = 0;
+    viewport.zoom = 1;
+    applyViewportTransform();
   });
 })();
 

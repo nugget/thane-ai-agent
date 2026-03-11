@@ -125,6 +125,11 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
 
 .canvas-panel svg {
   display: block;
+  cursor: grab;
+}
+
+.canvas-panel svg:active {
+  cursor: grabbing;
 }
 
 .empty-state {
@@ -339,6 +344,8 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
 
 .detail-divider[hidden] { display: none; }
 .detail-metrics[hidden] { display: none; }
+.detail-metrics dt[hidden],
+.detail-metrics dd[hidden] { display: none; }
 
 .detail-metrics--history dt { color: var(--text-muted); }
 .detail-metrics--history dd { color: var(--text-secondary); }
