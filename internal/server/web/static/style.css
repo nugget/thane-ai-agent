@@ -406,7 +406,7 @@ body {
 }
 
 .log-col-time { width: 80px; }
-.log-col-level { width: 55px; }
+.log-col-level { width: 70px; }
 .log-col-subsystem { width: 110px; }
 .log-col-msg { /* remaining space */ }
 
