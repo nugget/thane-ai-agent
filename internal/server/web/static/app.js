@@ -427,10 +427,20 @@ async function fetchSystemStatus() {
 // Rendering — SVG Nodes
 // ---------------------------------------------------------------------------
 
+let _renderRAF = 0;
+
+// Schedule a render on the next animation frame. Coalesces multiple
+// calls (e.g. SSE event bursts after a background-tab wakeup) into a
+// single paint, preventing DOM thrashing and race conditions.
 function renderAll() {
-  renderNodes();
-  renderDetail();
-  renderEventList();
+  if (_renderRAF) return;          // already scheduled
+  _renderRAF = requestAnimationFrame(() => {
+    _renderRAF = 0;
+    // Each sub-render is isolated so a failure in one doesn't block the rest.
+    try { renderNodes(); }      catch (e) { console.error('renderNodes:', e); }
+    try { renderDetail(); }     catch (e) { console.error('renderDetail:', e); }
+    try { renderEventList(); }  catch (e) { console.error('renderEventList:', e); }
+  });
 }
 
 function renderNodes() {
@@ -721,7 +731,7 @@ function renderNode(loop, x, y) {
 
     // Flash the linking line if this is the metacognitive loop and a supervisor fired.
     if (loop.name === 'metacognitive' && loop._lastSupervisor) {
-      flashLinkingLine(loopId);
+      flashLinkingLine(loop.id);
     }
   }
   state.prevIterations.set(loop.id, curIter);
