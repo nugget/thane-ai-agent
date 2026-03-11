@@ -17,8 +17,11 @@ const (
 	// StateSleeping means the loop is between iterations, waiting for
 	// the next wake.
 	StateSleeping State = "sleeping"
-	// StateProcessing means the loop is actively running an LLM
-	// iteration.
+	// StateWaiting means the loop is blocked on a WaitFunc, waiting
+	// for an external event to trigger the next iteration.
+	StateWaiting State = "waiting"
+	// StateProcessing means the loop is actively running an iteration
+	// (LLM call or Handler execution).
 	StateProcessing State = "processing"
 	// StateError means the loop's last iteration failed. It will
 	// retry on the next sleep cycle.
@@ -127,6 +130,20 @@ type Config struct {
 	// logged but do not count as iteration failures.
 	PostIterate func(ctx context.Context, result IterationResult) error `json:"-"`
 
+	// WaitFunc blocks until an external event arrives. When set, the
+	// loop enters [StateWaiting] and calls WaitFunc instead of
+	// sleeping between iterations. The returned value is passed to
+	// Handler (if set) or discarded for LLM-based loops. If WaitFunc
+	// returns a non-context error, the loop treats it as an iteration
+	// error (backoff + retry).
+	WaitFunc func(ctx context.Context) (any, error) `json:"-"`
+
+	// Handler processes each iteration directly without an LLM call.
+	// When set, [Deps].Runner is not required. Receives the event
+	// from WaitFunc (nil for timer-triggered loops). Handler-only
+	// loops still track iterations, errors, and health.
+	Handler func(ctx context.Context, event any) error `json:"-"`
+
 	// Hints are merged into RunRequest hints for each iteration.
 	// Config hints override loop-generated defaults (e.g., setting
 	// "source" to "metacognitive" instead of "loop").
@@ -186,8 +203,8 @@ func (c *Config) applyDefaults() {
 // validate checks that post-default Config values are internally
 // consistent. Called by [New] after [applyDefaults].
 func (c *Config) validate() error {
-	if c.Task == "" && c.TaskBuilder == nil {
-		return fmt.Errorf("loop: Task or TaskBuilder is required")
+	if c.Handler == nil && c.Task == "" && c.TaskBuilder == nil {
+		return fmt.Errorf("loop: Task, TaskBuilder, or Handler is required")
 	}
 	if c.SleepMin <= 0 {
 		return fmt.Errorf("loop: SleepMin must be positive, got %v", c.SleepMin)
@@ -262,6 +279,12 @@ type Status struct {
 	// (up to 10), newest first. Used by the visualizer to query log entries
 	// scoped to this loop.
 	RecentConvIDs []string `json:"recent_conv_ids,omitempty"`
+	// HandlerOnly is true when the loop uses a Handler instead of LLM
+	// iterations. Handler-only loops have no token metrics.
+	HandlerOnly bool `json:"handler_only,omitempty"`
+	// EventDriven is true when the loop uses a WaitFunc instead of
+	// timer-based sleeping.
+	EventDriven bool `json:"event_driven,omitempty"`
 	// Config is a copy of the loop's configuration.
 	Config Config `json:"config"`
 }

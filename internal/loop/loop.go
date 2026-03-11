@@ -70,7 +70,8 @@ const recentConvIDsCap = 10
 // Deps holds injected dependencies for a loop. Using a struct avoids a
 // growing parameter list as loops evolve.
 type Deps struct {
-	// Runner executes LLM iterations. Required.
+	// Runner executes LLM iterations. Required unless [Config].Handler
+	// is set (Handler-only loops do not call the Runner).
 	Runner Runner
 	// Logger for loop operations. Defaults to slog.Default().
 	Logger *slog.Logger
@@ -81,9 +82,11 @@ type Deps struct {
 	Rand RandSource
 }
 
-// Loop is a persistent background goroutine that iterates on a
-// randomized sleep schedule, running LLM iterations via the agent
-// runner. Create with [New], start with [Start], stop with [Stop].
+// Loop is a persistent background goroutine that iterates on a timer
+// or in response to external events. Each iteration runs an LLM call
+// via the agent runner, or a direct [Config.Handler] function for
+// infrastructure loops that don't need an LLM. Create with [New],
+// start with [Start], stop with [Stop].
 type Loop struct {
 	id     string
 	config Config
@@ -134,7 +137,7 @@ type Loop struct {
 // Returns an error if required fields are missing or invalid.
 // Call [Loop.Start] to launch the background goroutine.
 func New(cfg Config, deps Deps) (*Loop, error) {
-	if deps.Runner == nil {
+	if cfg.Handler == nil && deps.Runner == nil {
 		return nil, ErrNilRunner
 	}
 	if cfg.Name == "" {
@@ -260,6 +263,8 @@ func (l *Loop) Status() Status {
 	cfgCopy := l.config
 	cfgCopy.TaskBuilder = nil
 	cfgCopy.PostIterate = nil
+	cfgCopy.WaitFunc = nil
+	cfgCopy.Handler = nil
 	cfgCopy.Setup = nil
 	if l.config.Tags != nil {
 		cfgCopy.Tags = make([]string, len(l.config.Tags))
@@ -305,6 +310,8 @@ func (l *Loop) Status() Status {
 		LastError:         l.lastError,
 		ConsecutiveErrors: l.consecutiveErrors,
 		RecentConvIDs:     convIDsCopy,
+		HandlerOnly:       l.config.Handler != nil,
+		EventDriven:       l.config.WaitFunc != nil,
 		Config:            cfgCopy,
 	}
 }
@@ -339,7 +346,15 @@ func (l *Loop) run(ctx context.Context) {
 	)
 	ctx = logging.WithLogger(ctx, logger)
 
-	l.setState(StateSleeping)
+	// Initial state depends on whether the loop waits for events or
+	// sleeps on a timer. WaitFunc loops enter StateWaiting immediately
+	// (they block at the top of the loop); timer loops enter
+	// StateSleeping (they process first, then sleep).
+	if l.config.WaitFunc != nil {
+		l.setState(StateWaiting)
+	} else {
+		l.setState(StateSleeping)
+	}
 	l.publishEvent(events.Event{
 		Timestamp: time.Now(),
 		Source:    events.SourceLoop,
@@ -357,6 +372,8 @@ func (l *Loop) run(ctx context.Context) {
 		"max_duration", l.config.MaxDuration,
 		"max_iter", l.config.MaxIter,
 		"supervisor", l.config.Supervisor,
+		"handler_only", l.config.Handler != nil,
+		"event_driven", l.config.WaitFunc != nil,
 	)
 
 	// Apply max duration as a context deadline if configured.
@@ -367,6 +384,8 @@ func (l *Loop) run(ctx context.Context) {
 	}
 
 	for {
+		var event any // payload from WaitFunc; nil for timer-driven loops.
+
 		// Check attempt limit (counts both successes and failures).
 		l.mu.Lock()
 		attemptCount := l.attempts
@@ -379,6 +398,68 @@ func (l *Loop) run(ctx context.Context) {
 			break
 		}
 
+		// --- WAIT PHASE (top of loop, WaitFunc loops only) ---
+		// Event-driven loops block here until an external event
+		// arrives. This runs before the first iteration — no event
+		// has occurred yet, so there is nothing to process.
+		if l.config.WaitFunc != nil {
+			l.setState(StateWaiting)
+			l.publishEvent(events.Event{
+				Timestamp: time.Now(),
+				Source:    events.SourceLoop,
+				Kind:      events.KindLoopWaitStart,
+				Data: map[string]any{
+					"loop_id":   l.id,
+					"loop_name": l.config.Name,
+				},
+			})
+			logger.Debug("loop waiting for event")
+
+			var waitErr error
+			event, waitErr = l.config.WaitFunc(ctx)
+			if waitErr != nil {
+				if ctx.Err() != nil {
+					logger.Info("loop stopped")
+					break
+				}
+				// WaitFunc error (not cancellation) — apply backoff
+				// before retrying. This prevents tight-looping when
+				// the upstream source is temporarily broken.
+				logger.Warn("wait failed", "error", waitErr)
+				l.mu.Lock()
+				l.lastError = waitErr.Error()
+				l.consecutiveErrors++
+				l.mu.Unlock()
+				l.setState(StateError)
+				l.publishEvent(events.Event{
+					Timestamp: time.Now(),
+					Source:    events.SourceLoop,
+					Kind:      events.KindLoopError,
+					Data: map[string]any{
+						"loop_id":   l.id,
+						"loop_name": l.config.Name,
+						"error":     waitErr.Error(),
+						"phase":     "wait",
+					},
+				})
+				backoff := l.computeSleep()
+				if !sleepCtx(ctx, backoff) {
+					logger.Info("loop stopped during wait backoff")
+					break
+				}
+				continue // retry from top
+			}
+			// Successful wait — clear any consecutive errors from
+			// prior wait failures so backoff resets.
+			l.mu.Lock()
+			if l.consecutiveErrors > 0 && l.lastError != "" {
+				l.consecutiveErrors = 0
+				l.lastError = ""
+			}
+			l.mu.Unlock()
+		}
+
+		// --- PROCESSING PHASE ---
 		// Reset tool-provided sleep override and set current conversation ID.
 		convID := fmt.Sprintf("loop-%s-%d-%d", l.config.Name, attemptCount+1, time.Now().UnixMilli())
 		l.mu.Lock()
@@ -422,7 +503,23 @@ func (l *Loop) run(ctx context.Context) {
 
 		iterLog.Info("loop iteration starting")
 
-		result, err := l.iterate(iterCtx, isSupervisor, convID)
+		// Dispatch: Handler runs directly; otherwise use LLM via iterate().
+		var result *IterationResult
+		var err error
+		if l.config.Handler != nil {
+			iterStart := time.Now()
+			if handlerErr := l.config.Handler(iterCtx, event); handlerErr != nil {
+				err = fmt.Errorf("handler: %w", handlerErr)
+			} else {
+				result = &IterationResult{
+					ConvID:     convID,
+					Supervisor: isSupervisor,
+					Elapsed:    time.Since(iterStart),
+				}
+			}
+		} else {
+			result, err = l.iterate(iterCtx, isSupervisor, convID)
+		}
 
 		// Clear current conversation ID after iteration completes.
 		l.mu.Lock()
@@ -510,23 +607,28 @@ func (l *Loop) run(ctx context.Context) {
 			}
 		}
 
-		l.setState(StateSleeping)
-		l.publishEvent(events.Event{
-			Timestamp: time.Now(),
-			Source:    events.SourceLoop,
-			Kind:      events.KindLoopSleepStart,
-			Data: map[string]any{
-				"loop_id":        l.id,
-				"loop_name":      l.config.Name,
-				"sleep_duration": sleep.String(),
-			},
-		})
+		// --- SLEEP PHASE (bottom of loop, timer-driven loops only) ---
+		// WaitFunc loops skip sleep and flow back to the top to wait
+		// for the next event.
+		if l.config.WaitFunc == nil {
+			l.setState(StateSleeping)
+			l.publishEvent(events.Event{
+				Timestamp: time.Now(),
+				Source:    events.SourceLoop,
+				Kind:      events.KindLoopSleepStart,
+				Data: map[string]any{
+					"loop_id":        l.id,
+					"loop_name":      l.config.Name,
+					"sleep_duration": sleep.String(),
+				},
+			})
 
-		iterLog.Info("loop sleeping", "duration", sleep.Round(time.Second))
+			iterLog.Info("loop sleeping", "duration", sleep.Round(time.Second))
 
-		if !sleepCtx(ctx, sleep) {
-			logger.Info("loop stopped")
-			break
+			if !sleepCtx(ctx, sleep) {
+				logger.Info("loop stopped")
+				break
+			}
 		}
 	}
 
