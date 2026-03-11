@@ -13,7 +13,9 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/agent"
 	"github.com/nugget/thane-ai-agent/internal/config"
+	"github.com/nugget/thane-ai-agent/internal/events"
 	"github.com/nugget/thane-ai-agent/internal/logging"
+	"github.com/nugget/thane-ai-agent/internal/loop"
 	"github.com/nugget/thane-ai-agent/internal/router"
 )
 
@@ -69,6 +71,16 @@ const cleanupInterval = 10 * time.Minute
 // times out after ~15 seconds, so 10 seconds keeps it alive.
 const typingRefreshInterval = 10 * time.Second
 
+// senderChanSize is the buffer size for per-sender message channels.
+// A small buffer prevents back-pressure on the parent loop while the
+// child processes a message.
+const senderChanSize = 4
+
+// maxToolResultLen is the maximum tool result length forwarded to the
+// dashboard via SSE. Results longer than this are truncated with an
+// ellipsis to keep event payloads bounded.
+const maxToolResultLen = 2000
+
 // lastMessage tracks a sender's most recent inbound message timestamp
 // along with when we received it, for bounded cleanup.
 type lastMessage struct {
@@ -104,6 +116,8 @@ type BridgeConfig struct {
 	IdleTimeout time.Duration              // 0 disables idle session rotation
 	Resolver    ContactResolver            // nil disables phone→name resolution
 	Attachments AttachmentConfig           // attachment storage configuration
+	Registry    *loop.Registry             // loop registry for dashboard visibility
+	EventBus    *events.Bus                // event bus for in-flight events
 }
 
 // Bridge receives Signal messages from the signal-cli client, routes
@@ -118,11 +132,15 @@ type Bridge struct {
 	idleTimeout time.Duration
 	resolver    ContactResolver
 	attachments AttachmentConfig
+	registry    *loop.Registry
+	eventBus    *events.Bus
 
 	mu            sync.Mutex
 	senderTimes   map[string][]time.Time
 	lastCleanup   time.Time
 	lastInboundTS map[string]lastMessage // most recent message per sender
+	senderChans   map[string]chan *Envelope
+	parentID      string // loop ID of the parent signal node
 }
 
 // NewBridge creates a Signal message bridge.
@@ -149,8 +167,11 @@ func NewBridge(cfg BridgeConfig) *Bridge {
 		idleTimeout:   cfg.IdleTimeout,
 		resolver:      cfg.Resolver,
 		attachments:   cfg.Attachments,
+		registry:      cfg.Registry,
+		eventBus:      cfg.EventBus,
 		senderTimes:   make(map[string][]time.Time),
 		lastInboundTS: make(map[string]lastMessage),
+		senderChans:   make(map[string]chan *Envelope),
 	}
 }
 
@@ -164,8 +185,52 @@ func (b *Bridge) LastInboundTimestamp(sender string) (int64, bool) {
 	return lm.signalTS, ok
 }
 
+// Register spawns the parent signal loop and returns. Inbound messages
+// are received event-driven via the signal-cli client and dispatched
+// to per-sender child loops. Returns an error if the parent loop
+// cannot be started.
+//
+// If no registry is configured, Register falls back to the legacy
+// blocking Start() behavior.
+func (b *Bridge) Register(ctx context.Context) error {
+	if b.registry == nil {
+		go b.Start(ctx)
+		return nil
+	}
+
+	parentID, err := b.registry.SpawnLoop(ctx, loop.Config{
+		Name: "signal",
+		WaitFunc: func(wCtx context.Context) (any, error) {
+			select {
+			case <-wCtx.Done():
+				return nil, wCtx.Err()
+			case env, ok := <-b.client.Messages():
+				if !ok {
+					return nil, fmt.Errorf("signal message channel closed")
+				}
+				return env, nil
+			}
+		},
+		Handler:  b.dispatch,
+		Metadata: map[string]string{"subsystem": "signal", "category": "channel"},
+	}, loop.Deps{Logger: b.logger, EventBus: b.eventBus})
+	if err != nil {
+		return fmt.Errorf("spawn signal parent loop: %w", err)
+	}
+
+	b.mu.Lock()
+	b.parentID = parentID
+	b.mu.Unlock()
+
+	b.logger.Info("signal bridge registered with loop infrastructure",
+		"parent_id", parentID,
+	)
+	return nil
+}
+
 // Start receives messages from the signal-cli client and routes them
-// through the agent loop until ctx is cancelled.
+// through the agent loop until ctx is cancelled. This is the legacy
+// blocking path; prefer Register() for loop-integrated operation.
 func (b *Bridge) Start(ctx context.Context) {
 	b.logger.Info("signal bridge started")
 
@@ -180,82 +245,286 @@ func (b *Bridge) Start(ctx context.Context) {
 				return
 			}
 
-			if env.Source == "" {
-				b.logger.Debug("signal ignoring envelope with empty source")
-				continue
+			if err := b.dispatch(ctx, env); err != nil {
+				b.logger.Error("signal dispatch error", "error", err)
 			}
+		}
+	}
+}
 
-			// Reactions are carried inside dataMessage but have no
-			// text. Intercept them before the content filter.
-			if env.DataMessage != nil && env.DataMessage.Reaction != nil {
-				if !b.allowSender(env.Source) {
-					b.logger.Warn("signal reaction rate-limited",
-						"sender", env.Source,
-					)
-					continue
+// dispatch is the parent loop handler. It filters envelopes
+// (empty source, reactions, no content, rate limits) and fans out
+// valid messages to per-sender child loops.
+func (b *Bridge) dispatch(ctx context.Context, event any) error {
+	env, ok := event.(*Envelope)
+	if !ok {
+		b.logger.Warn("signal dispatch received non-envelope event",
+			"type", fmt.Sprintf("%T", event),
+		)
+		return nil
+	}
+
+	summary := loop.IterationSummary(ctx)
+
+	if env.Source == "" {
+		b.logger.Debug("signal ignoring envelope with empty source")
+		if summary != nil {
+			summary["action"] = "ignored_empty_source"
+		}
+		return nil
+	}
+
+	// Reactions are carried inside dataMessage but have no
+	// text. Intercept them before the content filter.
+	if env.DataMessage != nil && env.DataMessage.Reaction != nil {
+		if !b.allowSender(env.Source) {
+			b.logger.Warn("signal reaction rate-limited",
+				"sender", env.Source,
+			)
+			if summary != nil {
+				summary["action"] = "rate_limited"
+				summary["sender"] = env.Source
+			}
+			return nil
+		}
+		b.handleReaction(ctx, env)
+		if summary != nil {
+			summary["action"] = "reaction"
+			summary["sender"] = env.Source
+			summary["emoji"] = env.DataMessage.Reaction.Emoji
+		}
+		return nil
+	}
+
+	// For DataMessages with neither text nor attachments,
+	// track the signal timestamp so the reaction tool's
+	// "latest" resolution still works. Messages with content
+	// update lastInboundTS inside handleMessage (after the
+	// idle rotation check).
+	hasContent := env.DataMessage != nil &&
+		(env.DataMessage.Message != "" || len(env.DataMessage.Attachments) > 0)
+	if env.DataMessage != nil && !hasContent {
+		ts := env.Timestamp
+		if env.DataMessage.Timestamp != 0 {
+			ts = env.DataMessage.Timestamp
+		}
+		b.mu.Lock()
+		b.lastInboundTS[env.Source] = lastMessage{
+			signalTS:   ts,
+			receivedAt: time.Now(),
+		}
+		b.mu.Unlock()
+	}
+
+	if !hasContent {
+		b.logger.Debug("signal ignoring envelope without content",
+			"sender", env.Source,
+		)
+		if summary != nil {
+			summary["action"] = "ignored_no_content"
+			summary["sender"] = env.Source
+		}
+		return nil
+	}
+
+	if !b.allowSender(env.Source) {
+		b.logger.Warn("signal message rate-limited",
+			"sender", env.Source,
+		)
+		if summary != nil {
+			summary["action"] = "rate_limited"
+			summary["sender"] = env.Source
+		}
+		return nil
+	}
+
+	// Acknowledge receipt before the potentially long agent
+	// loop. Best-effort — failure does not prevent processing.
+	receiptTS := env.Timestamp
+	if env.DataMessage != nil && env.DataMessage.Timestamp != 0 {
+		receiptTS = env.DataMessage.Timestamp
+	}
+
+	if err := b.client.SendReceipt(ctx, env.Source, receiptTS); err != nil {
+		b.logger.Warn("signal read receipt failed",
+			"sender", env.Source,
+			"error", err,
+		)
+	}
+
+	// Fan out to per-sender child loop.
+	b.ensureSenderLoop(ctx, env.Source)
+
+	b.mu.Lock()
+	ch, ok := b.senderChans[env.Source]
+	b.mu.Unlock()
+	if ok {
+		select {
+		case ch <- env:
+		default:
+			b.logger.Warn("signal sender channel full, dropping message",
+				"sender", env.Source,
+			)
+		}
+	}
+
+	if summary != nil {
+		summary["action"] = "dispatched"
+		summary["sender"] = env.Source
+	}
+	return nil
+}
+
+// ensureSenderLoop creates a per-sender child loop if one does not
+// already exist. The child loop blocks on a per-sender channel and
+// processes messages sequentially via handleMessage.
+func (b *Bridge) ensureSenderLoop(ctx context.Context, sender string) {
+	b.mu.Lock()
+	if _, exists := b.senderChans[sender]; exists {
+		b.mu.Unlock()
+		return
+	}
+	ch := make(chan *Envelope, senderChanSize)
+	b.senderChans[sender] = ch
+	parentID := b.parentID
+	b.mu.Unlock()
+
+	// Resolve a display name for the loop node.
+	loopName := "signal/" + sanitizePhone(sender)
+	if b.resolver != nil {
+		if name, ok := b.resolver.ResolvePhone(sender); ok {
+			loopName = "signal/" + name
+		}
+	}
+
+	if b.registry == nil {
+		// No registry — just run the handler inline in a goroutine.
+		go func() {
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case env, ok := <-ch:
+					if !ok {
+						return
+					}
+					b.handleMessage(ctx, env, nil)
 				}
-				b.handleReaction(ctx, env)
-				continue
 			}
+		}()
+		return
+	}
 
-			// For DataMessages with neither text nor attachments,
-			// track the signal timestamp so the reaction tool's
-			// "latest" resolution still works. Messages with content
-			// update lastInboundTS inside handleMessage (after the
-			// idle rotation check).
-			hasContent := env.DataMessage != nil &&
-				(env.DataMessage.Message != "" || len(env.DataMessage.Attachments) > 0)
-			if env.DataMessage != nil && !hasContent {
-				ts := env.Timestamp
-				if env.DataMessage.Timestamp != 0 {
-					ts = env.DataMessage.Timestamp
+	_, err := b.registry.SpawnLoop(ctx, loop.Config{
+		Name: loopName,
+		WaitFunc: func(wCtx context.Context) (any, error) {
+			select {
+			case <-wCtx.Done():
+				return nil, wCtx.Err()
+			case env, ok := <-ch:
+				if !ok {
+					return nil, fmt.Errorf("sender channel closed")
 				}
-				b.mu.Lock()
-				b.lastInboundTS[env.Source] = lastMessage{
-					signalTS:   ts,
-					receivedAt: time.Now(),
+				return env, nil
+			}
+		},
+		Handler: func(hCtx context.Context, event any) error {
+			env, ok := event.(*Envelope)
+			if !ok {
+				return nil
+			}
+			progressFn := loop.ProgressFunc(hCtx)
+			b.handleMessage(hCtx, env, progressFn)
+			return nil
+		},
+		ParentID: parentID,
+		Metadata: map[string]string{
+			"subsystem": "signal",
+			"category":  "channel",
+			"sender":    sender,
+		},
+	}, loop.Deps{Logger: b.logger, EventBus: b.eventBus})
+	if err != nil {
+		b.logger.Error("failed to spawn sender loop",
+			"sender", sender,
+			"error", err,
+		)
+		// Fall back to inline goroutine.
+		go func() {
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case env, ok := <-ch:
+					if !ok {
+						return
+					}
+					b.handleMessage(ctx, env, nil)
 				}
-				b.mu.Unlock()
 			}
+		}()
+	}
+}
 
-			if !hasContent {
-				b.logger.Debug("signal ignoring envelope without content",
-					"sender", env.Source,
-				)
-				continue
+// buildAgentStream converts a loop progress func into an agent
+// StreamCallback that forwards in-flight LLM and tool events to the
+// event bus for dashboard visibility. Returns nil if progressFn is nil.
+func buildAgentStream(progressFn func(string, map[string]any)) agent.StreamCallback {
+	if progressFn == nil {
+		return nil
+	}
+	return func(e agent.StreamEvent) {
+		switch e.Kind {
+		case agent.KindLLMStart:
+			if e.Response != nil {
+				data := map[string]any{
+					"model": e.Response.Model,
+				}
+				for k, v := range e.Data {
+					data[k] = v
+				}
+				progressFn(events.KindLoopLLMStart, data)
 			}
-
-			if !b.allowSender(env.Source) {
-				b.logger.Warn("signal message rate-limited",
-					"sender", env.Source,
-				)
-				continue
+		case agent.KindToolCallStart:
+			if e.ToolCall != nil {
+				data := map[string]any{
+					"tool": e.ToolCall.Function.Name,
+				}
+				if len(e.ToolCall.Function.Arguments) > 0 {
+					data["args"] = e.ToolCall.Function.Arguments
+				}
+				progressFn(events.KindLoopToolStart, data)
 			}
-
-			// Acknowledge receipt before the potentially long agent
-			// loop. Best-effort — failure does not prevent processing.
-			// Prefer the data message timestamp when available; fall
-			// back to the envelope timestamp.
-			receiptTS := env.Timestamp
-			if env.DataMessage != nil && env.DataMessage.Timestamp != 0 {
-				receiptTS = env.DataMessage.Timestamp
+		case agent.KindToolCallDone:
+			data := map[string]any{"tool": e.ToolName}
+			if e.ToolError != "" {
+				data["error"] = e.ToolError
 			}
-
-			if err := b.client.SendReceipt(ctx, env.Source, receiptTS); err != nil {
-				b.logger.Warn("signal read receipt failed",
-					"sender", env.Source,
-					"error", err,
-				)
+			if e.ToolResult != "" {
+				r := e.ToolResult
+				if len(r) > maxToolResultLen {
+					r = r[:maxToolResultLen] + "…"
+				}
+				data["result"] = r
 			}
-
-			b.handleMessage(ctx, env)
+			progressFn(events.KindLoopToolDone, data)
+		case agent.KindLLMResponse:
+			if e.Response != nil {
+				progressFn(events.KindLoopLLMResponse, map[string]any{
+					"model":         e.Response.Model,
+					"input_tokens":  e.Response.InputTokens,
+					"output_tokens": e.Response.OutputTokens,
+				})
+			}
 		}
 	}
 }
 
 // handleMessage processes a single inbound Signal message: runs it
 // through the agent loop and sends the response back to the sender.
-func (b *Bridge) handleMessage(ctx context.Context, env *Envelope) {
+// The progressFn, if non-nil, is used to forward in-flight events
+// to the loop infrastructure for dashboard visibility.
+func (b *Bridge) handleMessage(ctx context.Context, env *Envelope, progressFn func(string, map[string]any)) {
 	ctx, cancel := context.WithTimeout(ctx, handleTimeout)
 	defer cancel()
 
@@ -344,7 +613,8 @@ func (b *Bridge) handleMessage(ctx context.Context, env *Envelope) {
 		Hints:          hints,
 	}
 
-	resp, err := b.runner.Run(ctx, req, nil)
+	stream := buildAgentStream(progressFn)
+	resp, err := b.runner.Run(ctx, req, stream)
 
 	// Stop the typing refresh goroutine, then send a definitive
 	// typing stop. Use a fresh background context so this
@@ -366,6 +636,14 @@ func (b *Bridge) handleMessage(ctx context.Context, env *Envelope) {
 	if err != nil {
 		log.Error("signal agent run failed", "error", err)
 		return
+	}
+
+	// Report iteration stats for the loop dashboard.
+	if summary := loop.IterationSummary(ctx); summary != nil {
+		summary["message_len"] = len(content)
+		summary["response_len"] = len(resp.Content)
+		summary["model"] = resp.Model
+		summary["sender"] = sender
 	}
 
 	log.Info("signal agent run completed",

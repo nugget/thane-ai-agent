@@ -1507,8 +1507,12 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 					DestDir:   cfg.Signal.AttachmentDir,
 					MaxSize:   cfg.Signal.MaxAttachmentSize,
 				},
+				Registry: loopRegistry,
+				EventBus: eventBus,
 			})
-			go bridge.Start(ctx)
+			if err := bridge.Register(ctx); err != nil {
+				logger.Error("signal bridge registration failed", "error", err)
+			}
 
 			// Register signal_send_reaction tool so the agent can
 			// react to Signal messages with emoji.

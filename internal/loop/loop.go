@@ -577,6 +577,7 @@ func (l *Loop) run(ctx context.Context) {
 			iterStart := time.Now()
 			summary := make(map[string]any)
 			handlerCtx := context.WithValue(iterCtx, iterSummaryKey{}, summary)
+			handlerCtx = context.WithValue(handlerCtx, progressFuncKey{}, l.makeProgressFunc())
 			if handlerErr := l.config.Handler(handlerCtx, event); handlerErr != nil {
 				err = fmt.Errorf("handler: %w", handlerErr)
 			} else {

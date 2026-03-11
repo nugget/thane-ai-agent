@@ -120,7 +120,7 @@ func TestBridge_MessageRoutesToAgent(t *testing.T) {
 		DataMessage:  &DataMessage{Message: "What's the weather?"},
 	}
 
-	bridge.handleMessage(context.Background(), env)
+	bridge.handleMessage(context.Background(), env, nil)
 
 	req := runner.getLastReq()
 	if req == nil {
@@ -151,7 +151,7 @@ func TestBridge_MessageIncludesSourceName(t *testing.T) {
 		DataMessage: &DataMessage{Message: "Hello"},
 	}
 
-	bridge.handleMessage(context.Background(), env)
+	bridge.handleMessage(context.Background(), env, nil)
 
 	req := runner.getLastReq()
 	if req == nil {
@@ -172,7 +172,7 @@ func TestBridge_ZeroValueRoutingConfig(t *testing.T) {
 		DataMessage: &DataMessage{Message: "Hello"},
 	}
 
-	bridge.handleMessage(context.Background(), env)
+	bridge.handleMessage(context.Background(), env, nil)
 
 	req := runner.getLastReq()
 	if req == nil {
@@ -203,7 +203,7 @@ func TestBridge_CustomRoutingConfig(t *testing.T) {
 		DataMessage: &DataMessage{Message: "Use Opus"},
 	}
 
-	bridge.handleMessage(context.Background(), env)
+	bridge.handleMessage(context.Background(), env, nil)
 
 	req := runner.getLastReq()
 	if req == nil {
@@ -259,7 +259,7 @@ func TestBridge_EmptyResponseNoReply(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 
-	bridge.handleMessage(ctx, env)
+	bridge.handleMessage(ctx, env, nil)
 
 	// Give a moment for any in-flight writes.
 	time.Sleep(50 * time.Millisecond)
@@ -289,7 +289,7 @@ func TestBridge_GroupMessageIncludesGroupInfo(t *testing.T) {
 		},
 	}
 
-	bridge.handleMessage(context.Background(), env)
+	bridge.handleMessage(context.Background(), env, nil)
 
 	req := runner.getLastReq()
 	if req == nil {
@@ -379,7 +379,7 @@ func TestBridge_AgentAlreadySentSkipsDuplicateReply(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
 
-	bridge.handleMessage(ctx, env)
+	bridge.handleMessage(ctx, env, nil)
 	time.Sleep(50 * time.Millisecond)
 
 	mu.Lock()
@@ -577,7 +577,7 @@ func TestBridge_IdleSessionRotation(t *testing.T) {
 		Timestamp:   1700000045000,
 		DataMessage: &DataMessage{Message: "Hello after break"},
 	}
-	bridge.handleMessage(context.Background(), env)
+	bridge.handleMessage(context.Background(), env, nil)
 
 	calls := rotator.getCalls()
 	if len(calls) != 1 {
@@ -609,7 +609,7 @@ func TestBridge_NoRotationWithinTimeout(t *testing.T) {
 		Timestamp:   1700000005000,
 		DataMessage: &DataMessage{Message: "Quick follow-up"},
 	}
-	bridge.handleMessage(context.Background(), env)
+	bridge.handleMessage(context.Background(), env, nil)
 
 	if len(rotator.getCalls()) != 0 {
 		t.Error("should not rotate when within timeout")
@@ -630,7 +630,7 @@ func TestBridge_NoRotationFirstMessage(t *testing.T) {
 		Timestamp:   1700000000000,
 		DataMessage: &DataMessage{Message: "First message ever"},
 	}
-	bridge.handleMessage(context.Background(), env)
+	bridge.handleMessage(context.Background(), env, nil)
 
 	if len(rotator.getCalls()) != 0 {
 		t.Error("should not rotate on first message from sender")
@@ -657,7 +657,7 @@ func TestBridge_NoRotationWhenDisabled(t *testing.T) {
 		Timestamp:   1700000045000,
 		DataMessage: &DataMessage{Message: "Hello"},
 	}
-	bridge1.handleMessage(context.Background(), env)
+	bridge1.handleMessage(context.Background(), env, nil)
 	// No panic — pass.
 
 	// Case 2: rotator set but zero timeout.
@@ -675,7 +675,7 @@ func TestBridge_NoRotationWhenDisabled(t *testing.T) {
 	}
 	bridge2.mu.Unlock()
 
-	bridge2.handleMessage(context.Background(), env)
+	bridge2.handleMessage(context.Background(), env, nil)
 
 	if len(rotator.getCalls()) != 0 {
 		t.Error("should not rotate when idle timeout is 0")
@@ -755,7 +755,7 @@ func TestBridge_ContactResolution(t *testing.T) {
 		DataMessage: &DataMessage{Message: "Hello"},
 	}
 
-	bridge.handleMessage(context.Background(), env)
+	bridge.handleMessage(context.Background(), env, nil)
 
 	req := runner.getLastReq()
 	if req == nil {
@@ -782,7 +782,7 @@ func TestBridge_ContactResolution_Unknown(t *testing.T) {
 		DataMessage: &DataMessage{Message: "Hello"},
 	}
 
-	bridge.handleMessage(context.Background(), env)
+	bridge.handleMessage(context.Background(), env, nil)
 
 	req := runner.getLastReq()
 	if req == nil {
@@ -804,7 +804,7 @@ func TestBridge_ContactResolution_NilResolver(t *testing.T) {
 		DataMessage: &DataMessage{Message: "Hello"},
 	}
 
-	bridge.handleMessage(context.Background(), env)
+	bridge.handleMessage(context.Background(), env, nil)
 
 	req := runner.getLastReq()
 	if req == nil {
@@ -1010,7 +1010,7 @@ func TestBridge_AttachmentOnlyMessageProcessed(t *testing.T) {
 		},
 	}
 
-	bridge.handleMessage(context.Background(), env)
+	bridge.handleMessage(context.Background(), env, nil)
 
 	req := runner.getLastReq()
 	if req == nil {
@@ -1037,7 +1037,7 @@ func TestBridge_AttachmentWithText(t *testing.T) {
 		},
 	}
 
-	bridge.handleMessage(context.Background(), env)
+	bridge.handleMessage(context.Background(), env, nil)
 
 	req := runner.getLastReq()
 	if req == nil {
