@@ -109,7 +109,10 @@ body {
   justify-content: center;
   color: var(--text-muted);
   font-size: 0.9rem;
+  pointer-events: none;
 }
+
+.empty-state[hidden] { display: none; }
 
 /* === Detail Panel (right) === */
 .detail-panel {
@@ -294,6 +297,8 @@ body {
   color: var(--text-muted);
   font-size: 0.85rem;
 }
+
+.log-empty[hidden] { display: none; }
 
 .log-table {
   width: 100%;
