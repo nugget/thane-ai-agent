@@ -128,10 +128,12 @@ func (h *IndexHandler) Handle(ctx context.Context, r slog.Record) error {
 	}
 
 	// Source location from the record's PC.
+	// Strip the module prefix so stored paths are compact (e.g.
+	// "internal/server/api/server.go" not the full module path).
 	if r.PC != 0 {
 		fs := runtime.CallersFrames([]uintptr{r.PC})
 		f, _ := fs.Next()
-		entry.SourceFile = f.File
+		entry.SourceFile = strings.TrimPrefix(f.File, modulePrefix)
 		entry.SourceLine = f.Line
 	}
 
