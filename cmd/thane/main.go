@@ -2368,7 +2368,6 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		adapter := &loopAdapter{agentLoop: loop}
 		loopCfg := metacognitive.BuildLoopConfig(metacogCfg, metacognitive.Opts{
 			WorkspacePath: cfg.Workspace.Path,
-			EgoFile:       metacogEgoFile,
 		})
 		loopCfg.Setup = func(l *looppkg.Loop) {
 			metacognitive.RegisterTools(loop.Tools(), l, metacogCfg, cfg.Workspace.Path, metacogEgoFile)

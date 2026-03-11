@@ -400,9 +400,6 @@ func (l *Loop) run(ctx context.Context) {
 		l.currentConvID = ""
 		l.mu.Unlock()
 
-		// Compute sleep duration (uses tool-provided override or default + backoff).
-		sleep := l.computeSleep()
-
 		if err != nil {
 			if ctx.Err() != nil {
 				logger.Info("loop stopped")
@@ -454,23 +451,28 @@ func (l *Loop) run(ctx context.Context) {
 					"elapsed_ms":    result.Elapsed.Milliseconds(),
 				},
 			})
+		}
 
-			// Call PostIterate if configured. Errors are logged
-			// but do not count as iteration failures.
-			if l.config.PostIterate != nil {
-				postResult := IterationResult{
-					ConvID:       convID,
-					Model:        result.Model,
-					InputTokens:  result.InputTokens,
-					OutputTokens: result.OutputTokens,
-					ToolsUsed:    result.ToolsUsed,
-					Elapsed:      result.Elapsed,
-					Supervisor:   result.Supervisor,
-					Sleep:        sleep,
-				}
-				if postErr := l.config.PostIterate(ctx, postResult); postErr != nil {
-					iterLog.Warn("PostIterate callback failed", "error", postErr)
-				}
+		// Compute sleep after updating error state so backoff reflects
+		// the outcome of the just-completed iteration.
+		sleep := l.computeSleep()
+
+		// Call PostIterate on success if configured. Errors are logged
+		// but do not count as iteration failures. Uses iterCtx for
+		// per-iteration logger correlation.
+		if err == nil && l.config.PostIterate != nil {
+			postResult := IterationResult{
+				ConvID:       convID,
+				Model:        result.Model,
+				InputTokens:  result.InputTokens,
+				OutputTokens: result.OutputTokens,
+				ToolsUsed:    result.ToolsUsed,
+				Elapsed:      result.Elapsed,
+				Supervisor:   result.Supervisor,
+				Sleep:        sleep,
+			}
+			if postErr := l.config.PostIterate(iterCtx, postResult); postErr != nil {
+				iterLog.Warn("PostIterate callback failed", "error", postErr)
 			}
 		}
 

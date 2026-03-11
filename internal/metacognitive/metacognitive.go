@@ -95,9 +95,6 @@ func ParseConfig(raw config.MetacognitiveConfig) (Config, error) {
 type Opts struct {
 	// WorkspacePath is the absolute path to the workspace directory.
 	WorkspacePath string
-	// EgoFile is the absolute path to ego.md. Empty disables
-	// the append_ego_observation tool.
-	EgoFile string
 }
 
 // BuildLoopConfig returns a [loop.Config] that implements the
