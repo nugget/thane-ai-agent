@@ -7,6 +7,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/agent"
 	"github.com/nugget/thane-ai-agent/internal/events"
 	"github.com/nugget/thane-ai-agent/internal/loop"
+	"github.com/nugget/thane-ai-agent/internal/router"
 )
 
 // loopAdapter bridges [loop.Runner] to [*agent.Loop], converting between
@@ -15,6 +16,7 @@ import (
 // loop and agent packages.
 type loopAdapter struct {
 	agentLoop *agent.Loop
+	router    *router.Router
 }
 
 // Run converts a [loop.RunRequest] to [agent.Request], calls the agent
@@ -83,12 +85,21 @@ func (a *loopAdapter) Run(ctx context.Context, req loop.RunRequest, _ loop.Strea
 		return nil, fmt.Errorf("agent loop: %w", err)
 	}
 
+	// Use the routed model's context window if available, otherwise
+	// fall back to the agent loop's default.
+	ctxWindow := a.agentLoop.GetContextWindow()
+	if a.router != nil && resp.Model != "" {
+		if mw := a.router.ContextWindowForModel(resp.Model); mw > 0 {
+			ctxWindow = mw
+		}
+	}
+
 	return &loop.RunResponse{
 		Content:       resp.Content,
 		Model:         resp.Model,
 		InputTokens:   resp.InputTokens,
 		OutputTokens:  resp.OutputTokens,
-		ContextWindow: a.agentLoop.GetContextWindow(),
+		ContextWindow: ctxWindow,
 		ToolsUsed:     resp.ToolsUsed,
 	}, nil
 }

@@ -2400,7 +2400,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 			}
 		}
 
-		adapter := &loopAdapter{agentLoop: loop}
+		adapter := &loopAdapter{agentLoop: loop, router: rtr}
 		loopCfg := metacognitive.BuildLoopConfig(metacogCfg, metacognitive.Opts{
 			WorkspacePath: cfg.Workspace.Path,
 		})
