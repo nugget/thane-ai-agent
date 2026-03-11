@@ -162,6 +162,8 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
 
 .detail-content {
   padding: 0.75rem;
+  min-width: 0;
+  overflow: hidden;
 }
 
 /* === ID Chips === */
@@ -170,6 +172,7 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
   flex-direction: column;
   gap: 0.3rem;
   margin-bottom: 0.75rem;
+  min-width: 0;
 }
 
 .id-row {
@@ -177,6 +180,7 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
   align-items: center;
   gap: 0.35rem;
   font-size: 0.7rem;
+  min-width: 0;
 }
 
 .id-label {
@@ -189,6 +193,8 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
   display: inline-flex;
   align-items: center;
   gap: 0.25rem;
+  flex: 1;
+  min-width: 0;
   font-family: var(--font-mono);
   font-size: 0.65rem;
   background: var(--bg-tertiary);
@@ -198,7 +204,14 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
   color: var(--text-secondary);
   cursor: pointer;
   transition: background 0.15s, color 0.15s;
-  max-width: 100%;
+}
+
+.id-chip-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 1;
 }
 
 .id-chip:hover {
@@ -453,6 +466,7 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
   width: 100%;
   border-collapse: collapse;
   font-size: 0.75rem;
+  margin-top: auto;
 }
 
 .log-table thead {
@@ -534,6 +548,49 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
 .log-attr-val--duration { color: var(--blue); }
 .log-attr-val--tokens { color: var(--orange); }
 
+/* Log ID chips — copy-clickable, dynamically sized */
+.log-id-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2em;
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0.1em 0.4em;
+  margin-left: 0.4em;
+  color: var(--text-muted);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.log-id-chip:hover {
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+  border-color: var(--border-light);
+}
+
+.log-id-chip::after {
+  content: '\2398';
+  font-size: 0.75em;
+  opacity: 0.4;
+}
+
+.log-id-chip:hover::after { opacity: 0.8; }
+
+.log-id-chip--copied {
+  background: var(--green-dim);
+  color: var(--green);
+  border-color: var(--green);
+}
+
+.log-id-chip--copied::after {
+  content: '\2713';
+  opacity: 1;
+}
+
 /* Level badges */
 .level-badge {
   font-size: 0.65rem;
@@ -554,6 +611,8 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
   flex: 1;
   overflow-y: auto;
   overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 .log-scroll[hidden] { display: none; }

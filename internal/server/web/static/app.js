@@ -117,6 +117,7 @@ function handleLoopEvent(evt) {
         loop.last_wake_at = evt.ts;
         loop._supervisor = !!evt.data.supervisor;
         loop.attempts = evt.data.attempt || loop.attempts;
+        loop._currentConvID = evt.data.conversation_id || null;
       }
       break;
 
@@ -434,6 +435,11 @@ function renderDetailIDs(loop) {
     container.appendChild(makeIDRow('parent_id', loop.parent_id));
   }
 
+  // Active conversation ID (from current iteration).
+  if (loop._currentConvID) {
+    container.appendChild(makeIDRow('conv_id', loop._currentConvID));
+  }
+
   // Recent conversation IDs.
   const convs = loop.recent_conv_ids;
   if (convs && convs.length > 0) {
@@ -442,7 +448,7 @@ function renderDetailIDs(loop) {
 
     const label = document.createElement('span');
     label.className = 'id-label';
-    label.textContent = 'conv_ids';
+    label.textContent = 'recent';
     row.appendChild(label);
 
     const chips = document.createElement('span');
@@ -471,8 +477,11 @@ function makeIDRow(label, value) {
 function makeIDChip(fullID) {
   const chip = document.createElement('span');
   chip.className = 'id-chip';
-  chip.textContent = shortID(fullID);
-  chip.title = fullID;
+  chip.title = 'Click to copy: ' + fullID;
+  const txt = document.createElement('span');
+  txt.className = 'id-chip-text';
+  txt.textContent = fullID;
+  chip.appendChild(txt);
   chip.addEventListener('click', (e) => {
     e.stopPropagation();
     navigator.clipboard.writeText(fullID).then(() => {
@@ -698,7 +707,7 @@ function buildLogDetail(td, entry) {
       'duration', 'elapsed', 'latency', 'took',
       'input_tokens', 'output_tokens', 'total_tokens',
       'tool_calls', 'tool_count',
-      'thane_version', 'thane_commit',
+      'thane_version', 'thane_commit', 'loop_id', 'loop_name',
     ]);
     for (const [k, v] of Object.entries(attrs)) {
       if (shown.has(k)) continue;
@@ -707,11 +716,6 @@ function buildLogDetail(td, entry) {
       if (s.length > 40) continue;
       parts.push({ key: k, val: s, cls: '' });
     }
-  }
-
-  // Request ID if present (short form).
-  if (entry.RequestID) {
-    parts.push({ key: 'req', val: shortID(entry.RequestID), cls: '' });
   }
 
   for (const p of parts) {
@@ -729,6 +733,28 @@ function buildLogDetail(td, entry) {
     span.appendChild(key);
     span.appendChild(val);
     td.appendChild(span);
+  }
+
+  // Copy-clickable ID chips for tracing IDs.
+  const ids = [
+    { label: 'req', full: entry.RequestID },
+    { label: 'conv', full: entry.ConversationID },
+    { label: 'sess', full: entry.SessionID },
+  ];
+  for (const { label, full } of ids) {
+    if (!full) continue;
+    const chip = document.createElement('span');
+    chip.className = 'log-id-chip';
+    chip.textContent = label + ':' + shortID(full);
+    chip.title = label + ' — click to copy\n' + full;
+    chip.addEventListener('click', (e) => {
+      e.stopPropagation();
+      navigator.clipboard.writeText(full).then(() => {
+        chip.classList.add('log-id-chip--copied');
+        setTimeout(() => chip.classList.remove('log-id-chip--copied'), 1200);
+      });
+    });
+    td.appendChild(chip);
   }
 
   // Tooltip with full attrs JSON for inspection.
@@ -961,6 +987,9 @@ function formatUptimeLong(ms) {
       const newHeight = bodyH - e.clientY - footerH;
       const clamped = Math.max(80, Math.min(newHeight, bodyH - 200));
       logPanel.style.height = clamped + 'px';
+      // Keep logs anchored to bottom during resize.
+      const ls = document.getElementById('log-scroll');
+      if (ls) ls.scrollTop = ls.scrollHeight;
     }
   });
 
