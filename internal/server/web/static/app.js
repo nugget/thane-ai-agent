@@ -626,6 +626,14 @@ function renderNodes() {
   // Positions map for linking line.
   const nodePositions = new Map();
 
+  // Detect which loops are new this frame (for staggering).
+  const newIds = new Set();
+  for (const loop of loops) {
+    if (!state.knownLoopIds.has(loop.id)) newIds.add(loop.id);
+  }
+
+  // Compute positions first (needed for stagger calculation).
+  const positionList = [];
   for (let i = 0; i < count; i++) {
     const loop = loops[i];
     currentIds.add(loop.id);
@@ -633,7 +641,59 @@ function renderNodes() {
     const x = cx + radius * Math.cos(angle);
     const y = cy + radius * Math.sin(angle);
     nodePositions.set(loop.id, { x, y });
+    positionList.push({ loop, x, y, angle, index: i });
+  }
+
+  // When nodes are added or removed after the initial load, stagger the
+  // reflow transition-delay so nodes closer to the insertion/removal point
+  // move first. This creates an organic "opening slot" / "closing slot" ripple.
+  const existingNodeCount = canvasWorld.querySelectorAll('.loop-node:not(.loop-node--exiting)').length;
+  const isInitialLoad = existingNodeCount === 0;
+  const hasStructureChange = !isInitialLoad && (newIds.size > 0 || existingNodeCount > count);
+  const staggerMs = hasStructureChange ? 30 : 0; // ms per step
+
+  for (const { loop, x, y, index } of positionList) {
     renderNode(loop, x, y);
+
+    // Apply staggered transition-delay to existing (non-new) nodes.
+    if (hasStructureChange && !newIds.has(loop.id)) {
+      const group = canvasWorld.querySelector(`[data-loop-id="${loop.id}"]`);
+      if (group) {
+        const delay = index * staggerMs;
+        group.style.transitionDelay = delay + 'ms';
+        // Clear the delay after the transition completes to avoid
+        // stale delays on future non-structural updates.
+        setTimeout(() => { group.style.transitionDelay = ''; }, 600 + delay);
+      }
+    }
+  }
+
+  // New nodes: on structural changes, delay entrance so the slot opens first.
+  // On initial load, animate immediately (no existing nodes to stagger around).
+  for (const id of newIds) {
+    const group = canvasWorld.querySelector(`[data-loop-id="${id}"]`);
+    if (!group) continue;
+    const inner = group.querySelector('.node-inner');
+    if (!inner) continue;
+
+    if (hasStructureChange) {
+      // Delay entrance until existing nodes have begun their reflow.
+      const entranceDelay = Math.max(80, (count * staggerMs) / 2);
+      inner.style.opacity = '0';
+      setTimeout(() => {
+        inner.style.opacity = '';
+        inner.classList.add('node-inner--entering');
+        inner.addEventListener('animationend', () => {
+          inner.classList.remove('node-inner--entering');
+        }, { once: true });
+      }, entranceDelay);
+    } else {
+      // Initial load or no reflow needed — animate immediately.
+      inner.classList.add('node-inner--entering');
+      inner.addEventListener('animationend', () => {
+        inner.classList.remove('node-inner--entering');
+      }, { once: true });
+    }
   }
 
   // Remove nodes for loops that no longer exist (with exit animation).
@@ -847,14 +907,8 @@ function renderNode(loop, x, y) {
     group.appendChild(inner);
     canvasWorld.appendChild(group);
 
-    // Enter animation for genuinely new loops.
-    const isNew = !state.knownLoopIds.has(loop.id);
-    if (isNew) {
-      inner.classList.add('node-inner--entering');
-      inner.addEventListener('animationend', () => {
-        inner.classList.remove('node-inner--entering');
-      }, { once: true });
-    }
+    // Mark as known — enter animation is triggered by renderNodes() with
+    // a delay so the slot opens before the node pops in.
     state.knownLoopIds.add(loop.id);
 
     // Enable smooth reflow after first paint.

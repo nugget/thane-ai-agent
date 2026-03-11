@@ -1250,12 +1250,12 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
    node center (children are drawn centered at origin). */
 @keyframes node-enter {
   0%   { transform: scale(0); opacity: 0; }
-  70%  { transform: scale(1.12); opacity: 1; }
+  60%  { transform: scale(1.06); opacity: 1; }
   100% { transform: scale(1); opacity: 1; }
 }
 
 .node-inner--entering {
-  animation: node-enter 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+  animation: node-enter 0.4s cubic-bezier(0.22, 1.2, 0.36, 1) forwards;
 }
 
 @keyframes node-exit {
@@ -1264,20 +1264,21 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
 }
 
 .loop-node--exiting .node-inner {
-  animation: node-exit 0.25s ease-in forwards;
+  animation: node-exit 0.3s cubic-bezier(0.55, 0, 1, 0.45) forwards;
 }
 
 .loop-node--exiting {
   pointer-events: none;
 }
 
-/* Smooth reflow — nodes glide to new positions on layout changes. */
+/* Smooth reflow — nodes glide to new positions on layout changes.
+   transition-delay is set per-node by JS to stagger the cascade. */
 .loop-node--settled {
-  transition: transform 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  transition: transform 0.55s cubic-bezier(0.25, 0.46, 0.45, 0.94);
 }
 
 .system-node--settled {
-  transition: transform 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  transition: transform 0.55s cubic-bezier(0.25, 0.46, 0.45, 0.94);
 }
 
 /* === Iteration Flash === */
