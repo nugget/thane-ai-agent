@@ -687,6 +687,7 @@ function buildLogDetail(td, entry) {
       'duration', 'elapsed', 'latency', 'took',
       'input_tokens', 'output_tokens', 'total_tokens',
       'tool_calls', 'tool_count',
+      'thane_version', 'thane_commit',
     ]);
     for (const [k, v] of Object.entries(attrs)) {
       if (shown.has(k)) continue;
