@@ -45,6 +45,7 @@ const (
 	SubsystemSignal    = "signal"
 	SubsystemScheduler = "scheduler"
 	SubsystemMetacog   = "metacog"
+	SubsystemLoop      = "loop"
 	SubsystemAPI       = "api"
 )
 

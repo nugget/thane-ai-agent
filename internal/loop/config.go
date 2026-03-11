@@ -71,15 +71,17 @@ type Config struct {
 	SleepDefault time.Duration
 
 	// Jitter is the randomization factor applied to sleep durations
-	// to break periodicity. Range [0.0, 1.0]. Default: 0.2.
-	Jitter float64
+	// to break periodicity. Range [0.0, 1.0]. Nil is defaulted to
+	// DefaultJitter (0.2) by applyDefaults. Use Float64Ptr(0) to
+	// explicitly disable jitter.
+	Jitter *float64
 
 	// MaxDuration is the maximum wall-clock time the loop may run.
 	// Zero means unlimited.
 	MaxDuration time.Duration
 
-	// MaxIter is the maximum number of iterations the loop may
-	// execute. Zero means unlimited.
+	// MaxIter is the maximum number of iteration attempts the loop
+	// may make (including failures). Zero means unlimited.
 	MaxIter int
 
 	// Supervisor enables frontier model dice rolls. When true, a
@@ -89,7 +91,8 @@ type Config struct {
 
 	// SupervisorProb is the probability [0.0, 1.0] that a given
 	// iteration uses the supervisor model. Only meaningful when
-	// Supervisor is true. Default: 0.1.
+	// Supervisor is true. Zero means never (use DefaultSupervisorProb
+	// for the recommended default).
 	SupervisorProb float64
 
 	// QualityFloor is the minimum model quality rating for normal
@@ -112,30 +115,41 @@ type Config struct {
 	ParentID string
 }
 
+// Default configuration values. Exported so callers can reference them
+// when building Config values without memorizing magic numbers.
 const (
-	defaultSleepMin     = 30 * time.Second
-	defaultSleepMax     = 5 * time.Minute
-	defaultSleepDefault = 1 * time.Minute
-	defaultJitter       = 0.2
-	defaultSuperProb    = 0.1
+	DefaultSleepMin       = 30 * time.Second
+	DefaultSleepMax       = 5 * time.Minute
+	DefaultSleepDefault   = 1 * time.Minute
+	DefaultJitter         = 0.2
+	DefaultSupervisorProb = 0.1
 )
 
+// Float64Ptr returns a pointer to v. Use it to set optional *float64
+// config fields like [Config.Jitter]:
+//
+//	Config{Jitter: loop.Float64Ptr(0.3)}   // custom jitter
+//	Config{Jitter: loop.Float64Ptr(0)}     // explicitly no jitter
+//	Config{}                                // nil → DefaultJitter
+func Float64Ptr(v float64) *float64 { return &v }
+
 // applyDefaults fills in zero-valued fields with sensible defaults.
+// A nil Jitter is defaulted to DefaultJitter so that jitter is on by
+// default; use Float64Ptr(0) to explicitly disable it.
+// SupervisorProb is intentionally left as-is so that zero means
+// "disabled" — callers opt in explicitly.
 func (c *Config) applyDefaults() {
 	if c.SleepMin == 0 {
-		c.SleepMin = defaultSleepMin
+		c.SleepMin = DefaultSleepMin
 	}
 	if c.SleepMax == 0 {
-		c.SleepMax = defaultSleepMax
+		c.SleepMax = DefaultSleepMax
 	}
 	if c.SleepDefault == 0 {
-		c.SleepDefault = defaultSleepDefault
+		c.SleepDefault = DefaultSleepDefault
 	}
-	if c.Jitter == 0 {
-		c.Jitter = defaultJitter
-	}
-	if c.Supervisor && c.SupervisorProb == 0 {
-		c.SupervisorProb = defaultSuperProb
+	if c.Jitter == nil {
+		c.Jitter = Float64Ptr(DefaultJitter)
 	}
 }
 
@@ -154,8 +168,10 @@ type Status struct {
 	StartedAt time.Time `json:"started_at"`
 	// LastWakeAt is when the loop last began an iteration.
 	LastWakeAt time.Time `json:"last_wake_at,omitempty"`
-	// Iterations is the total number of completed iterations.
+	// Iterations is the total number of completed (successful) iterations.
 	Iterations int `json:"iterations"`
+	// Attempts is the total number of iteration attempts (including failures).
+	Attempts int `json:"attempts"`
 	// TotalInputTokens is the cumulative input tokens across all iterations.
 	TotalInputTokens int `json:"total_input_tokens"`
 	// TotalOutputTokens is the cumulative output tokens across all iterations.

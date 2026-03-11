@@ -6,11 +6,21 @@ import (
 	"time"
 )
 
+// mustNew is a test helper that calls New and fails on error.
+func mustNew(t *testing.T, cfg Config, deps Deps) *Loop {
+	t.Helper()
+	l, err := New(cfg, deps)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	return l
+}
+
 func TestRegistryRegisterDeregister(t *testing.T) {
 	t.Parallel()
 
 	r := NewRegistry()
-	l := New(Config{Name: "test-loop"}, Deps{})
+	l := mustNew(t, Config{Name: "test-loop"}, Deps{Runner: &blockingRunner{}})
 
 	if err := r.Register(l); err != nil {
 		t.Fatalf("Register: %v", err)
@@ -37,10 +47,11 @@ func TestRegistryConcurrencyLimit(t *testing.T) {
 	t.Parallel()
 
 	r := NewRegistry(WithMaxLoops(2))
+	runner := &blockingRunner{}
 
-	l1 := New(Config{Name: "loop-1"}, Deps{})
-	l2 := New(Config{Name: "loop-2"}, Deps{})
-	l3 := New(Config{Name: "loop-3"}, Deps{})
+	l1 := mustNew(t, Config{Name: "loop-1"}, Deps{Runner: runner})
+	l2 := mustNew(t, Config{Name: "loop-2"}, Deps{Runner: runner})
+	l3 := mustNew(t, Config{Name: "loop-3"}, Deps{Runner: runner})
 
 	if err := r.Register(l1); err != nil {
 		t.Fatalf("Register l1: %v", err)
@@ -63,7 +74,7 @@ func TestRegistryGetAndGetByName(t *testing.T) {
 	t.Parallel()
 
 	r := NewRegistry()
-	l := New(Config{Name: "named-loop"}, Deps{})
+	l := mustNew(t, Config{Name: "named-loop"}, Deps{Runner: &blockingRunner{}})
 
 	if err := r.Register(l); err != nil {
 		t.Fatalf("Register: %v", err)
@@ -88,8 +99,9 @@ func TestRegistryList(t *testing.T) {
 	t.Parallel()
 
 	r := NewRegistry()
-	l1 := New(Config{Name: "bravo"}, Deps{})
-	l2 := New(Config{Name: "alpha"}, Deps{})
+	runner := &blockingRunner{}
+	l1 := mustNew(t, Config{Name: "bravo"}, Deps{Runner: runner})
+	l2 := mustNew(t, Config{Name: "alpha"}, Deps{Runner: runner})
 
 	_ = r.Register(l1)
 	_ = r.Register(l2)
@@ -111,7 +123,7 @@ func TestRegistryStatuses(t *testing.T) {
 	t.Parallel()
 
 	r := NewRegistry()
-	l := New(Config{Name: "status-test"}, Deps{})
+	l := mustNew(t, Config{Name: "status-test"}, Deps{Runner: &blockingRunner{}})
 	_ = r.Register(l)
 
 	statuses := r.Statuses()
@@ -130,17 +142,15 @@ func TestRegistryShutdownAll(t *testing.T) {
 	t.Parallel()
 
 	r := NewRegistry()
-
-	// Create a mock runner that blocks until context is cancelled.
 	runner := &blockingRunner{}
 
-	l1 := New(Config{
+	l1 := mustNew(t, Config{
 		Name:     "shutdown-1",
 		Task:     "test",
-		SleepMin: time.Hour, // won't actually sleep this long
+		SleepMin: time.Hour,
 		SleepMax: time.Hour,
 	}, Deps{Runner: runner})
-	l2 := New(Config{
+	l2 := mustNew(t, Config{
 		Name:     "shutdown-2",
 		Task:     "test",
 		SleepMin: time.Hour,
@@ -154,7 +164,7 @@ func TestRegistryShutdownAll(t *testing.T) {
 	_ = l1.Start(ctx)
 	_ = l2.Start(ctx)
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
 	stopped := r.ShutdownAll(shutdownCtx)
@@ -166,12 +176,33 @@ func TestRegistryShutdownAll(t *testing.T) {
 	}
 }
 
+func TestRegistryShutdownAllWithUnstartedLoops(t *testing.T) {
+	t.Parallel()
+
+	r := NewRegistry()
+	runner := &blockingRunner{}
+
+	// Register but don't start.
+	l := mustNew(t, Config{Name: "unstarted"}, Deps{Runner: runner})
+	_ = r.Register(l)
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	stopped := r.ShutdownAll(shutdownCtx)
+	if stopped != 1 {
+		t.Errorf("ShutdownAll stopped %d, want 1 (unstarted loops should be drained immediately)", stopped)
+	}
+	if r.ActiveCount() != 0 {
+		t.Errorf("ActiveCount = %d, want 0", r.ActiveCount())
+	}
+}
+
 // blockingRunner is a mock Runner that returns immediately with minimal
 // data. Used for lifecycle tests where the LLM response doesn't matter.
 type blockingRunner struct{}
 
-func (r *blockingRunner) Run(ctx context.Context, req RunRequest, _ StreamCallback) (*RunResponse, error) {
-	// Return immediately so the loop proceeds to sleep.
+func (r *blockingRunner) Run(_ context.Context, _ RunRequest, _ StreamCallback) (*RunResponse, error) {
 	return &RunResponse{
 		Content:      "ok",
 		Model:        "test-model",

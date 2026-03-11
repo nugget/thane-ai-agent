@@ -45,10 +45,22 @@ func TestClamp(t *testing.T) {
 func TestApplyJitter(t *testing.T) {
 	t.Parallel()
 
+	t.Run("nil jitter returns exact duration", func(t *testing.T) {
+		t.Parallel()
+		l := &Loop{
+			config: Config{SleepMin: 10 * time.Second, SleepMax: 5 * time.Minute},
+			deps:   Deps{Rand: fixedRand{0.5}},
+		}
+		got := l.applyJitter(1 * time.Minute)
+		if got != 1*time.Minute {
+			t.Errorf("applyJitter with nil jitter = %v, want 1m", got)
+		}
+	})
+
 	t.Run("zero jitter returns exact duration", func(t *testing.T) {
 		t.Parallel()
 		l := &Loop{
-			config: Config{SleepMin: 10 * time.Second, SleepMax: 5 * time.Minute, Jitter: 0},
+			config: Config{SleepMin: 10 * time.Second, SleepMax: 5 * time.Minute, Jitter: Float64Ptr(0)},
 			deps:   Deps{Rand: fixedRand{0.5}},
 		}
 		got := l.applyJitter(1 * time.Minute)
@@ -61,7 +73,7 @@ func TestApplyJitter(t *testing.T) {
 		t.Parallel()
 		// Rand=0.5 → factor = 1 + 0.2*(2*0.5-1) = 1 + 0.2*0 = 1.0
 		l := &Loop{
-			config: Config{SleepMin: 10 * time.Second, SleepMax: 5 * time.Minute, Jitter: 0.2},
+			config: Config{SleepMin: 10 * time.Second, SleepMax: 5 * time.Minute, Jitter: Float64Ptr(0.2)},
 			deps:   Deps{Rand: fixedRand{0.5}},
 		}
 		got := l.applyJitter(1 * time.Minute)
@@ -74,7 +86,7 @@ func TestApplyJitter(t *testing.T) {
 		t.Parallel()
 		// Rand=1.0 → factor = 1 + 0.2*(2*1.0-1) = 1 + 0.2*1 = 1.2
 		l := &Loop{
-			config: Config{SleepMin: 10 * time.Second, SleepMax: 5 * time.Minute, Jitter: 0.2},
+			config: Config{SleepMin: 10 * time.Second, SleepMax: 5 * time.Minute, Jitter: Float64Ptr(0.2)},
 			deps:   Deps{Rand: fixedRand{1.0}},
 		}
 		got := l.applyJitter(1 * time.Minute)
@@ -88,7 +100,7 @@ func TestApplyJitter(t *testing.T) {
 		t.Parallel()
 		// Rand=0.0 → factor = 1 + 0.2*(2*0.0-1) = 1 + 0.2*(-1) = 0.8
 		l := &Loop{
-			config: Config{SleepMin: 10 * time.Second, SleepMax: 5 * time.Minute, Jitter: 0.2},
+			config: Config{SleepMin: 10 * time.Second, SleepMax: 5 * time.Minute, Jitter: Float64Ptr(0.2)},
 			deps:   Deps{Rand: fixedRand{0.0}},
 		}
 		got := l.applyJitter(1 * time.Minute)
@@ -102,7 +114,7 @@ func TestApplyJitter(t *testing.T) {
 		t.Parallel()
 		// With large jitter on a duration near min, result should be clamped.
 		l := &Loop{
-			config: Config{SleepMin: 10 * time.Second, SleepMax: 5 * time.Minute, Jitter: 0.5},
+			config: Config{SleepMin: 10 * time.Second, SleepMax: 5 * time.Minute, Jitter: Float64Ptr(0.5)},
 			deps:   Deps{Rand: fixedRand{0.0}}, // factor = 0.5
 		}
 		got := l.applyJitter(15 * time.Second) // 15s * 0.5 = 7.5s < 10s min
@@ -122,7 +134,6 @@ func TestComputeSleep(t *testing.T) {
 				SleepMin:     10 * time.Second,
 				SleepMax:     5 * time.Minute,
 				SleepDefault: 1 * time.Minute,
-				Jitter:       0,
 			},
 			deps: Deps{Rand: fixedRand{0.5}},
 		}
@@ -139,7 +150,6 @@ func TestComputeSleep(t *testing.T) {
 				SleepMin:     10 * time.Second,
 				SleepMax:     5 * time.Minute,
 				SleepDefault: 1 * time.Minute,
-				Jitter:       0,
 			},
 			deps: Deps{Rand: fixedRand{0.5}},
 		}
@@ -157,15 +167,18 @@ func TestLoopLifecycle(t *testing.T) {
 	var iterCount atomic.Int32
 	runner := &countingRunner{count: &iterCount}
 
-	l := New(Config{
+	l, err := New(Config{
 		Name:         "lifecycle-test",
 		Task:         "test iteration",
 		SleepMin:     1 * time.Millisecond,
 		SleepMax:     2 * time.Millisecond,
 		SleepDefault: 1 * time.Millisecond,
-		Jitter:       0,
+		Jitter:       Float64Ptr(0),
 		MaxIter:      3,
 	}, Deps{Runner: runner})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
 
 	if l.Status().State != StatePending {
 		t.Errorf("initial state = %q, want pending", l.Status().State)
@@ -203,14 +216,17 @@ func TestLoopStopCancels(t *testing.T) {
 
 	runner := &countingRunner{count: &atomic.Int32{}}
 
-	l := New(Config{
+	l, err := New(Config{
 		Name:         "stop-test",
 		Task:         "test",
 		SleepMin:     1 * time.Hour, // long sleep so it's sleeping when we stop
 		SleepMax:     1 * time.Hour,
 		SleepDefault: 1 * time.Hour,
-		Jitter:       0,
+		Jitter:       Float64Ptr(0),
 	}, Deps{Runner: runner})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
 
 	ctx := context.Background()
 	_ = l.Start(ctx)
@@ -236,15 +252,18 @@ func TestLoopMaxDuration(t *testing.T) {
 
 	runner := &countingRunner{count: &atomic.Int32{}}
 
-	l := New(Config{
+	l, err := New(Config{
 		Name:         "duration-test",
 		Task:         "test",
 		SleepMin:     1 * time.Millisecond,
 		SleepMax:     2 * time.Millisecond,
 		SleepDefault: 1 * time.Millisecond,
-		Jitter:       0,
+		Jitter:       Float64Ptr(0),
 		MaxDuration:  50 * time.Millisecond,
 	}, Deps{Runner: runner})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
 
 	ctx := context.Background()
 	_ = l.Start(ctx)
@@ -269,15 +288,18 @@ func TestLoopPublishesEvents(t *testing.T) {
 
 	runner := &countingRunner{count: &atomic.Int32{}}
 
-	l := New(Config{
+	l, err := New(Config{
 		Name:         "event-test",
 		Task:         "test",
 		SleepMin:     1 * time.Millisecond,
 		SleepMax:     2 * time.Millisecond,
 		SleepDefault: 1 * time.Millisecond,
-		Jitter:       0,
+		Jitter:       Float64Ptr(0),
 		MaxIter:      1,
 	}, Deps{Runner: runner, EventBus: bus})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
 
 	ctx := context.Background()
 	_ = l.Start(ctx)
@@ -352,16 +374,19 @@ func TestLoopSupervisorDice(t *testing.T) {
 			},
 		}
 
-		l := New(Config{
+		l, err := New(Config{
 			Name:         "no-supervisor",
 			Task:         "test",
 			SleepMin:     1 * time.Millisecond,
 			SleepMax:     2 * time.Millisecond,
 			SleepDefault: 1 * time.Millisecond,
-			Jitter:       0,
+			Jitter:       Float64Ptr(0),
 			MaxIter:      5,
 			Supervisor:   false,
 		}, Deps{Runner: runner, Rand: fixedRand{0.0}}) // would be supervisor if enabled
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
 
 		_ = l.Start(context.Background())
 		<-l.Done()
@@ -383,17 +408,20 @@ func TestLoopSupervisorDice(t *testing.T) {
 			},
 		}
 
-		l := New(Config{
+		l, err := New(Config{
 			Name:           "always-supervisor",
 			Task:           "test",
 			SleepMin:       1 * time.Millisecond,
 			SleepMax:       2 * time.Millisecond,
 			SleepDefault:   1 * time.Millisecond,
-			Jitter:         0,
+			Jitter:         Float64Ptr(0),
 			MaxIter:        3,
 			Supervisor:     true,
 			SupervisorProb: 1.0,
 		}, Deps{Runner: runner, Rand: fixedRand{0.5}})
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
 
 		_ = l.Start(context.Background())
 		<-l.Done()
@@ -408,19 +436,22 @@ func TestDoubleStartIsNoop(t *testing.T) {
 	t.Parallel()
 
 	runner := &countingRunner{count: &atomic.Int32{}}
-	l := New(Config{
+	l, err := New(Config{
 		Name:         "double-start",
 		Task:         "test",
 		SleepMin:     1 * time.Millisecond,
 		SleepMax:     2 * time.Millisecond,
 		SleepDefault: 1 * time.Millisecond,
-		Jitter:       0,
+		Jitter:       Float64Ptr(0),
 		MaxIter:      1,
 	}, Deps{Runner: runner})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
 
 	ctx := context.Background()
 	_ = l.Start(ctx)
-	err := l.Start(ctx) // should be no-op
+	err = l.Start(ctx) // should be no-op
 	if err != nil {
 		t.Errorf("second Start returned error: %v", err)
 	}
@@ -431,11 +462,23 @@ func TestDoubleStartIsNoop(t *testing.T) {
 func TestStopBeforeStartIsNoop(t *testing.T) {
 	t.Parallel()
 
-	l := New(Config{Name: "never-started"}, Deps{})
+	l, err := New(Config{Name: "never-started"}, Deps{Runner: &blockingRunner{}})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
 	l.Stop() // should not panic
 
 	if l.Done() != nil {
 		t.Error("Done() should be nil before Start")
+	}
+}
+
+func TestNewRequiresRunner(t *testing.T) {
+	t.Parallel()
+
+	_, err := New(Config{Name: "no-runner"}, Deps{})
+	if err != ErrNilRunner {
+		t.Errorf("New without runner: got %v, want ErrNilRunner", err)
 	}
 }
 

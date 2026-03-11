@@ -2,6 +2,7 @@ package loop
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
@@ -56,6 +57,9 @@ type defaultRand struct{}
 
 func (defaultRand) Float64() float64 { return rand.Float64() }
 
+// ErrNilRunner is returned by [New] when Deps.Runner is nil.
+var ErrNilRunner = errors.New("loop: Runner is required")
+
 // Deps holds injected dependencies for a loop. Using a struct avoids a
 // growing parameter list as loops evolve.
 type Deps struct {
@@ -87,7 +91,8 @@ type Loop struct {
 
 	// Metrics updated during execution.
 	lastWakeAt        time.Time
-	iterations        int
+	iterations        int // successful iterations
+	attempts          int // total attempts (including failures)
 	totalInputTokens  int
 	totalOutputTokens int
 	lastError         string
@@ -98,8 +103,13 @@ type Loop struct {
 }
 
 // New creates a loop with the given configuration and dependencies.
+// Returns an error if required dependencies are missing (e.g., Runner).
 // Call [Loop.Start] to launch the background goroutine.
-func New(cfg Config, deps Deps) *Loop {
+func New(cfg Config, deps Deps) (*Loop, error) {
+	if deps.Runner == nil {
+		return nil, ErrNilRunner
+	}
+
 	cfg.applyDefaults()
 
 	if deps.Logger == nil {
@@ -116,7 +126,7 @@ func New(cfg Config, deps Deps) *Loop {
 		config: cfg,
 		deps:   deps,
 		state:  StatePending,
-	}
+	}, nil
 }
 
 // ID returns the unique loop identifier.
@@ -147,14 +157,27 @@ func (l *Loop) Start(ctx context.Context) error {
 }
 
 // Stop cancels the loop and waits for the goroutine to exit. Safe to
-// call multiple times or before Start.
+// call multiple times or before Start. Blocks until the goroutine exits
+// or 10 seconds elapse.
 func (l *Loop) Stop() {
 	l.mu.Lock()
 	cancel := l.cancel
+	done := l.done
 	l.mu.Unlock()
 
 	if cancel != nil {
 		cancel()
+	}
+
+	if done != nil {
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			l.deps.Logger.Warn("loop.Stop timed out waiting for goroutine exit",
+				"loop_id", l.id,
+				"loop_name", l.config.Name,
+			)
+		}
 	}
 }
 
@@ -178,6 +201,7 @@ func (l *Loop) Status() Status {
 		StartedAt:         l.startedAt,
 		LastWakeAt:        l.lastWakeAt,
 		Iterations:        l.iterations,
+		Attempts:          l.attempts,
 		TotalInputTokens:  l.totalInputTokens,
 		TotalOutputTokens: l.totalOutputTokens,
 		LastError:         l.lastError,
@@ -200,7 +224,7 @@ func (l *Loop) run(ctx context.Context) {
 	defer close(l.done)
 
 	logger := l.deps.Logger.With(
-		"subsystem", "loop",
+		"subsystem", logging.SubsystemLoop,
 		"loop_id", l.id,
 		"loop_name", l.config.Name,
 	)
@@ -234,13 +258,14 @@ func (l *Loop) run(ctx context.Context) {
 	}
 
 	for {
-		// Check iteration limit.
+		// Check attempt limit (counts both successes and failures).
 		l.mu.Lock()
-		iterCount := l.iterations
+		attemptCount := l.attempts
 		l.mu.Unlock()
-		if l.config.MaxIter > 0 && iterCount >= l.config.MaxIter {
+		if l.config.MaxIter > 0 && attemptCount >= l.config.MaxIter {
 			logger.Info("loop max iterations reached",
 				"max_iter", l.config.MaxIter,
+				"attempts", attemptCount,
 			)
 			break
 		}
@@ -251,7 +276,7 @@ func (l *Loop) run(ctx context.Context) {
 		l.mu.Unlock()
 
 		// Determine if this is a supervisor iteration.
-		isSupervisor := l.config.Supervisor && l.deps.Rand.Float64() < l.config.SupervisorProb
+		isSupervisor := l.config.Supervisor && l.config.SupervisorProb > 0 && l.deps.Rand.Float64() < l.config.SupervisorProb
 
 		// Generate conversation ID for this iteration.
 		convID := fmt.Sprintf("loop-%s-%d", l.config.Name, time.Now().UnixMilli())
@@ -259,13 +284,14 @@ func (l *Loop) run(ctx context.Context) {
 		iterLog := logger.With(
 			"conversation_id", convID,
 			"supervisor", isSupervisor,
-			"iteration", iterCount+1,
+			"attempt", attemptCount+1,
 		)
 		iterCtx := logging.WithLogger(ctx, iterLog)
 
 		l.setState(StateProcessing)
 		l.mu.Lock()
 		l.lastWakeAt = time.Now()
+		l.attempts++
 		l.mu.Unlock()
 
 		l.publishEvent(events.Event{
@@ -277,7 +303,7 @@ func (l *Loop) run(ctx context.Context) {
 				"loop_name":       l.config.Name,
 				"conversation_id": convID,
 				"supervisor":      isSupervisor,
-				"iteration":       iterCount + 1,
+				"attempt":         attemptCount + 1,
 			},
 		})
 
@@ -367,6 +393,7 @@ func (l *Loop) run(ctx context.Context) {
 			"loop_id":    l.id,
 			"loop_name":  l.config.Name,
 			"iterations": l.iterations,
+			"attempts":   l.attempts,
 		},
 	})
 }
@@ -460,12 +487,13 @@ func (l *Loop) clamp(d time.Duration) time.Duration {
 }
 
 // applyJitter adds randomization to break periodicity. The actual sleep
-// varies by +/-Jitter of the base duration.
+// varies by +/-Jitter of the base duration. A nil or non-positive
+// Jitter disables jitter entirely.
 func (l *Loop) applyJitter(d time.Duration) time.Duration {
-	if l.config.Jitter <= 0 {
+	if l.config.Jitter == nil || *l.config.Jitter <= 0 {
 		return d
 	}
-	factor := 1.0 + l.config.Jitter*(2*l.deps.Rand.Float64()-1)
+	factor := 1.0 + *l.config.Jitter*(2*l.deps.Rand.Float64()-1)
 	result := time.Duration(float64(d) * factor)
 	return l.clamp(result)
 }

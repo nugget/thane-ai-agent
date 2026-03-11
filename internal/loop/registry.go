@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"sort"
 	"sync"
-	"time"
 )
 
 // Registry tracks all active loops and provides visibility into what is
@@ -30,10 +29,13 @@ func WithMaxLoops(n int) RegistryOption {
 	}
 }
 
-// WithRegistryLogger sets the logger for registry operations.
+// WithRegistryLogger sets the logger for registry operations. Nil is
+// ignored (keeps slog.Default()).
 func WithRegistryLogger(l *slog.Logger) RegistryOption {
 	return func(r *Registry) {
-		r.logger = l
+		if l != nil {
+			r.logger = l
+		}
 	}
 }
 
@@ -50,14 +52,14 @@ func NewRegistry(opts ...RegistryOption) *Registry {
 }
 
 // Register adds a loop to the registry. Returns an error if the loop's
-// name is already registered or the concurrency limit would be exceeded.
+// ID is already registered or the concurrency limit would be exceeded.
 // The loop is not started — call [Loop.Start] after registering.
 func (r *Registry) Register(l *Loop) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	if _, exists := r.loops[l.id]; exists {
-		return fmt.Errorf("loop %q already registered", l.id)
+		return fmt.Errorf("loop ID %q already registered", l.id)
 	}
 	if r.maxLoops > 0 && len(r.loops) >= r.maxLoops {
 		return fmt.Errorf("concurrency limit reached (%d loops)", r.maxLoops)
@@ -166,10 +168,19 @@ func (r *Registry) ShutdownAll(ctx context.Context) int {
 	}
 
 	// Wait for each loop to finish, respecting the context deadline.
+	// Loops that were never started (Done()==nil) are treated as
+	// already drained.
 	stopped := 0
 	for _, l := range loops {
+		done := l.Done()
+		if done == nil {
+			// Never started — just deregister.
+			stopped++
+			r.Deregister(l.id)
+			continue
+		}
 		select {
-		case <-l.Done():
+		case <-done:
 			stopped++
 			r.Deregister(l.id)
 		case <-ctx.Done():
@@ -189,7 +200,10 @@ func (r *Registry) ShutdownAll(ctx context.Context) int {
 // starts it. This is the primary entry point for creating loops. Returns
 // the loop ID on success.
 func (r *Registry) SpawnLoop(ctx context.Context, cfg Config, deps Deps) (string, error) {
-	l := New(cfg, deps)
+	l, err := New(cfg, deps)
+	if err != nil {
+		return "", fmt.Errorf("create loop %q: %w", cfg.Name, err)
+	}
 
 	if err := r.Register(l); err != nil {
 		return "", err
@@ -203,8 +217,10 @@ func (r *Registry) SpawnLoop(ctx context.Context, cfg Config, deps Deps) (string
 	return l.id, nil
 }
 
-// StopLoop stops a loop by ID and deregisters it. Returns an error if
-// the loop is not found.
+// StopLoop stops a loop by ID and deregisters it once the goroutine
+// has exited. Returns an error if the loop is not found. If the
+// goroutine does not exit within 10 seconds (the Stop timeout), the
+// loop remains registered to avoid orphaning a running goroutine.
 func (r *Registry) StopLoop(id string) error {
 	l := r.Get(id)
 	if l == nil {
@@ -213,13 +229,23 @@ func (r *Registry) StopLoop(id string) error {
 
 	l.Stop()
 
-	// Wait briefly for the loop to finish.
-	select {
-	case <-l.Done():
-	case <-time.After(5 * time.Second):
-		r.logger.Warn("loop did not stop within 5s", "loop_id", id)
+	// Only deregister if the goroutine actually exited. Stop() waits
+	// up to 10s internally; if Done is closed, it exited cleanly.
+	done := l.Done()
+	if done == nil {
+		// Never started — safe to deregister.
+		r.Deregister(id)
+		return nil
 	}
 
-	r.Deregister(id)
+	select {
+	case <-done:
+		r.Deregister(id)
+	default:
+		r.logger.Warn("loop goroutine still running after Stop, keeping registered",
+			"loop_id", id,
+		)
+	}
+
 	return nil
 }
