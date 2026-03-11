@@ -356,6 +356,9 @@ function renderDetail() {
   badge.textContent = loop.state || 'unknown';
   badge.className = 'state-badge state-badge--' + (loop.state || 'pending');
 
+  // IDs section.
+  renderDetailIDs(loop);
+
   $('#detail-iterations').textContent = formatNumber(loop.iterations || 0);
   $('#detail-attempts').textContent = formatNumber(loop.attempts || 0);
   $('#detail-input-tokens').textContent = formatTokens(loop.total_input_tokens || 0);
@@ -376,6 +379,76 @@ function renderDetail() {
   } else {
     $('#detail-sleep').textContent = loop.state === 'processing' ? 'active' : '-';
   }
+}
+
+function renderDetailIDs(loop) {
+  const container = $('#detail-ids');
+  container.innerHTML = '';
+
+  // Loop ID.
+  if (loop.id) {
+    container.appendChild(makeIDRow('loop_id', loop.id));
+  }
+
+  // Parent ID.
+  if (loop.parent_id) {
+    container.appendChild(makeIDRow('parent_id', loop.parent_id));
+  }
+
+  // Recent conversation IDs.
+  const convs = loop.recent_conv_ids;
+  if (convs && convs.length > 0) {
+    const row = document.createElement('div');
+    row.className = 'id-row';
+
+    const label = document.createElement('span');
+    label.className = 'id-label';
+    label.textContent = 'conv_ids';
+    row.appendChild(label);
+
+    const chips = document.createElement('span');
+    chips.className = 'id-convs';
+    for (const cid of convs) {
+      chips.appendChild(makeIDChip(cid));
+    }
+    row.appendChild(chips);
+    container.appendChild(row);
+  }
+}
+
+function makeIDRow(label, value) {
+  const row = document.createElement('div');
+  row.className = 'id-row';
+
+  const lbl = document.createElement('span');
+  lbl.className = 'id-label';
+  lbl.textContent = label;
+  row.appendChild(lbl);
+
+  row.appendChild(makeIDChip(value));
+  return row;
+}
+
+function makeIDChip(fullID) {
+  const chip = document.createElement('span');
+  chip.className = 'id-chip';
+  chip.textContent = shortID(fullID);
+  chip.title = fullID;
+  chip.addEventListener('click', (e) => {
+    e.stopPropagation();
+    navigator.clipboard.writeText(fullID).then(() => {
+      chip.classList.add('id-chip--copied');
+      setTimeout(() => chip.classList.remove('id-chip--copied'), 1200);
+    });
+  });
+  return chip;
+}
+
+function shortID(id) {
+  if (!id) return '';
+  // UUID-like: show first 8 chars.
+  if (id.length > 12) return id.slice(0, 8);
+  return id;
 }
 
 // ---------------------------------------------------------------------------

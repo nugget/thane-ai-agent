@@ -138,6 +138,74 @@ body {
   padding: 0.75rem;
 }
 
+/* === ID Chips === */
+.detail-ids {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin-bottom: 0.75rem;
+}
+
+.id-row {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.7rem;
+}
+
+.id-label {
+  color: var(--text-muted);
+  flex-shrink: 0;
+  min-width: 5.5em;
+}
+
+.id-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0.1em 0.4em;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+  max-width: 100%;
+}
+
+.id-chip:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.id-chip::after {
+  content: '\2398';
+  font-size: 0.75em;
+  opacity: 0.4;
+}
+
+.id-chip:hover::after { opacity: 0.8; }
+
+.id-chip--copied {
+  background: var(--green-dim);
+  color: var(--green);
+  border-color: var(--green);
+}
+
+.id-chip--copied::after {
+  content: '\2713';
+  opacity: 1;
+}
+
+.id-convs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem;
+  align-items: center;
+}
+
 .detail-header {
   display: flex;
   align-items: center;
