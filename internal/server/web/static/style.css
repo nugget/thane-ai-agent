@@ -132,6 +132,8 @@ body {
   font-size: 0.85rem;
 }
 
+.detail-placeholder[hidden] { display: none; }
+
 .detail-content {
   padding: 0.75rem;
 }
