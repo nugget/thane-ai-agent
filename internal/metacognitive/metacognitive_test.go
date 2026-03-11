@@ -7,44 +7,15 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
-	"github.com/nugget/thane-ai-agent/internal/agent"
 	"github.com/nugget/thane-ai-agent/internal/config"
+	"github.com/nugget/thane-ai-agent/internal/loop"
 	"github.com/nugget/thane-ai-agent/internal/tools"
 )
 
 // --- Test helpers ---
-
-// fixedRand returns a deterministic value for testing.
-type fixedRand struct{ value float64 }
-
-func (r *fixedRand) Float64() float64 { return r.value }
-
-// mockRunner captures requests and returns a canned response.
-type mockRunner struct {
-	mu       sync.Mutex
-	requests []*agent.Request
-	resp     *agent.Response
-	err      error
-}
-
-func (m *mockRunner) Run(_ context.Context, req *agent.Request, _ agent.StreamCallback) (*agent.Response, error) {
-	m.mu.Lock()
-	m.requests = append(m.requests, req)
-	m.mu.Unlock()
-	return m.resp, m.err
-}
-
-func (m *mockRunner) getRequests() []*agent.Request {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	out := make([]*agent.Request, len(m.requests))
-	copy(out, m.requests)
-	return out
-}
 
 func testConfig() Config {
 	return Config{
@@ -60,14 +31,26 @@ func testConfig() Config {
 	}
 }
 
-func testDeps(t *testing.T, runner agentRunner) Deps {
+// noopRunner satisfies loop.Runner for tests that don't need real LLM calls.
+type noopRunner struct{}
+
+func (r *noopRunner) Run(_ context.Context, _ loop.RunRequest, _ loop.StreamCallback) (*loop.RunResponse, error) {
+	return &loop.RunResponse{
+		Content:      "ok",
+		Model:        "test-model",
+		InputTokens:  10,
+		OutputTokens: 5,
+	}, nil
+}
+
+// testLoopForTools creates a *loop.Loop suitable for tool handler tests.
+func testLoopForTools(t *testing.T) *loop.Loop {
 	t.Helper()
-	return Deps{
-		Runner:        runner,
-		Logger:        slog.Default(),
-		WorkspacePath: t.TempDir(),
-		RandSource:    &fixedRand{value: 0.5},
+	l, err := loop.New(loop.Config{Name: "test-metacog", Task: "test"}, loop.Deps{Runner: &noopRunner{}})
+	if err != nil {
+		t.Fatalf("loop.New: %v", err)
 	}
+	return l
 }
 
 // --- ParseConfig tests ---
@@ -127,771 +110,77 @@ func TestParseConfig_InvalidDuration(t *testing.T) {
 	}
 }
 
-// --- Dice tests ---
+// --- readStateFile tests ---
 
-func TestRollDice_NeverSupervisor(t *testing.T) {
-	l := New(testConfig(), testDeps(t, nil))
-	// SupervisorProbability is 0.0 by default in testConfig.
-	for range 100 {
-		if l.rollDice() {
-			t.Fatal("rollDice should never return true with probability 0.0")
-		}
+func TestReadStateFile_Missing(t *testing.T) {
+	tmpDir := t.TempDir()
+	_, err := readStateFile(tmpDir, "metacognitive.md")
+	if err == nil {
+		t.Fatal("readStateFile should return error for missing file")
 	}
 }
 
-func TestRollDice_AlwaysSupervisor(t *testing.T) {
-	cfg := testConfig()
-	cfg.SupervisorProbability = 1.0
-	l := New(cfg, testDeps(t, nil))
-
-	for range 100 {
-		if !l.rollDice() {
-			t.Fatal("rollDice should always return true with probability 1.0")
-		}
-	}
-}
-
-func TestRollDice_Deterministic(t *testing.T) {
-	cfg := testConfig()
-	cfg.SupervisorProbability = 0.5
-
-	tests := []struct {
-		name     string
-		randVal  float64
-		wantSupv bool
-	}{
-		{"below_threshold", 0.3, true},  // 0.3 < 0.5
-		{"above_threshold", 0.7, false}, // 0.7 >= 0.5
-		{"at_threshold", 0.5, false},    // 0.5 >= 0.5 (not strictly less)
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			deps := testDeps(t, nil)
-			deps.RandSource = &fixedRand{value: tt.randVal}
-			l := New(cfg, deps)
-
-			got := l.rollDice()
-			if got != tt.wantSupv {
-				t.Errorf("rollDice() = %v, want %v (rand=%f, prob=%f)",
-					got, tt.wantSupv, tt.randVal, cfg.SupervisorProbability)
-			}
-		})
-	}
-}
-
-// --- Sleep computation tests ---
-
-func TestComputeSleep_Default(t *testing.T) {
-	l := New(testConfig(), testDeps(t, nil))
-	// No tool call → uses DefaultSleep.
-	got := l.computeSleep()
-	if got != 10*time.Minute {
-		t.Errorf("computeSleep = %v, want 10m (default)", got)
-	}
-}
-
-func TestComputeSleep_ToolProvided(t *testing.T) {
-	l := New(testConfig(), testDeps(t, nil))
-	l.setNextSleep(5 * time.Minute)
-
-	got := l.computeSleep()
-	if got != 5*time.Minute {
-		t.Errorf("computeSleep = %v, want 5m (tool-provided)", got)
-	}
-}
-
-func TestComputeSleep_ClampMin(t *testing.T) {
-	l := New(testConfig(), testDeps(t, nil))
-	l.setNextSleep(30 * time.Second) // below MinSleep of 2m
-
-	got := l.computeSleep()
-	if got != 2*time.Minute {
-		t.Errorf("computeSleep = %v, want 2m (clamped to min)", got)
-	}
-}
-
-func TestComputeSleep_ClampMax(t *testing.T) {
-	l := New(testConfig(), testDeps(t, nil))
-	l.setNextSleep(1 * time.Hour) // above MaxSleep of 30m
-
-	got := l.computeSleep()
-	if got != 30*time.Minute {
-		t.Errorf("computeSleep = %v, want 30m (clamped to max)", got)
-	}
-}
-
-func TestComputeSleep_ZeroJitter(t *testing.T) {
-	cfg := testConfig()
-	cfg.Jitter = 0.0
-	l := New(cfg, testDeps(t, nil))
-	l.setNextSleep(15 * time.Minute)
-
-	got := l.computeSleep()
-	if got != 15*time.Minute {
-		t.Errorf("computeSleep = %v, want exactly 15m with zero jitter", got)
-	}
-}
-
-func TestComputeSleep_Jitter(t *testing.T) {
-	cfg := testConfig()
-	cfg.Jitter = 0.2 // ±20%
-
-	deps := testDeps(t, nil)
-	deps.RandSource = &fixedRand{value: 0.0} // worst case: factor = 1 + 0.2*(2*0-1) = 0.8
-	l := New(cfg, deps)
-	l.setNextSleep(10 * time.Minute)
-
-	got := l.computeSleep()
-	expected := 8 * time.Minute // 10m * 0.8
-	if got != expected {
-		t.Errorf("computeSleep = %v, want %v (jitter with rand=0.0)", got, expected)
-	}
-}
-
-func TestComputeSleep_JitterClampedToBounds(t *testing.T) {
-	cfg := testConfig()
-	cfg.Jitter = 0.5 // ±50%
-	cfg.MinSleep = 5 * time.Minute
-
-	deps := testDeps(t, nil)
-	deps.RandSource = &fixedRand{value: 0.0} // factor = 1 + 0.5*(0-1) = 0.5
-	l := New(cfg, deps)
-	l.setNextSleep(8 * time.Minute)
-
-	got := l.computeSleep()
-	// 8m * 0.5 = 4m, but clamped to min of 5m.
-	if got != 5*time.Minute {
-		t.Errorf("computeSleep = %v, want 5m (jittered below min, clamped)", got)
-	}
-}
-
-func TestResetNextSleep(t *testing.T) {
-	l := New(testConfig(), testDeps(t, nil))
-	l.setNextSleep(5 * time.Minute)
-	l.resetNextSleep()
-
-	got := l.computeSleep()
-	if got != 10*time.Minute {
-		t.Errorf("after reset, computeSleep = %v, want 10m (default)", got)
-	}
-}
-
-// --- Lifecycle tests ---
-
-func TestStartStop(t *testing.T) {
-	runner := &mockRunner{
-		resp: &agent.Response{Content: "ok"},
-	}
-	cfg := testConfig()
-	cfg.DefaultSleep = 1 * time.Hour // long sleep so the loop doesn't iterate fast
-
-	l := New(cfg, testDeps(t, runner))
-
-	ctx, cancel := context.WithCancel(context.Background())
-
-	if err := l.Start(ctx); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-
-	// Give the goroutine time to start its first iteration.
-	time.Sleep(100 * time.Millisecond)
-
-	cancel()
-	l.Stop()
-	// If Stop() doesn't return, the test deadlocks (caught by -timeout).
-}
-
-func TestDoubleStartNoop(t *testing.T) {
-	runner := &mockRunner{
-		resp: &agent.Response{Content: "ok"},
-	}
-
-	l := New(testConfig(), testDeps(t, runner))
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	if err := l.Start(ctx); err != nil {
-		t.Fatalf("first Start: %v", err)
-	}
-	if err := l.Start(ctx); err != nil {
-		t.Fatalf("second Start should be noop: %v", err)
-	}
-
-	cancel()
-	l.Stop()
-}
-
-func TestDoubleStopNoop(t *testing.T) {
-	runner := &mockRunner{
-		resp: &agent.Response{Content: "ok"},
-	}
-
-	l := New(testConfig(), testDeps(t, runner))
-	ctx, cancel := context.WithCancel(context.Background())
-
-	if err := l.Start(ctx); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-
-	cancel()
-	l.Stop()
-	l.Stop() // second stop should not panic or deadlock
-}
-
-func TestStopBeforeStart(t *testing.T) {
-	l := New(testConfig(), testDeps(t, nil))
-	l.Stop() // should not panic
-}
-
-// --- Iteration tests ---
-
-func TestIterate_NormalHints(t *testing.T) {
-	runner := &mockRunner{
-		resp: &agent.Response{Content: "ok", Model: "llama3"},
-	}
-
-	deps := testDeps(t, runner)
-	l := New(testConfig(), deps)
-
-	if _, err := l.iterate(context.Background(), false, "test-conv-1"); err != nil {
-		t.Fatalf("iterate: %v", err)
-	}
-
-	reqs := runner.getRequests()
-	if len(reqs) != 1 {
-		t.Fatalf("got %d requests, want 1", len(reqs))
-	}
-
-	req := reqs[0]
-	if req.Hints["source"] != "metacognitive" {
-		t.Errorf("source hint = %q, want %q", req.Hints["source"], "metacognitive")
-	}
-	if req.Hints["local_only"] != "true" {
-		t.Errorf("local_only hint = %q, want %q", req.Hints["local_only"], "true")
-	}
-	if req.Hints["quality_floor"] != "3" {
-		t.Errorf("quality_floor hint = %q, want %q", req.Hints["quality_floor"], "3")
-	}
-	if req.Hints["supervisor"] != "false" {
-		t.Errorf("supervisor hint = %q, want %q", req.Hints["supervisor"], "false")
-	}
-	if req.Hints["mission"] != "metacognitive" {
-		t.Errorf("mission hint = %q, want %q", req.Hints["mission"], "metacognitive")
-	}
-	if req.ConversationID != "test-conv-1" {
-		t.Errorf("ConversationID = %q, want %q", req.ConversationID, "test-conv-1")
-	}
-}
-
-func TestIterate_SupervisorHints(t *testing.T) {
-	runner := &mockRunner{
-		resp: &agent.Response{Content: "ok", Model: "claude-opus"},
-	}
-
-	deps := testDeps(t, runner)
-	l := New(testConfig(), deps)
-
-	if _, err := l.iterate(context.Background(), true, "test-conv-supv"); err != nil {
-		t.Fatalf("iterate: %v", err)
-	}
-
-	reqs := runner.getRequests()
-	if len(reqs) != 1 {
-		t.Fatalf("got %d requests, want 1", len(reqs))
-	}
-
-	req := reqs[0]
-	if req.Hints["local_only"] != "false" {
-		t.Errorf("supervisor local_only = %q, want %q", req.Hints["local_only"], "false")
-	}
-	if req.Hints["quality_floor"] != "8" {
-		t.Errorf("supervisor quality_floor = %q, want %q", req.Hints["quality_floor"], "8")
-	}
-	if req.Hints["supervisor"] != "true" {
-		t.Errorf("supervisor hint = %q, want %q", req.Hints["supervisor"], "true")
-	}
-}
-
-func TestIterate_NoStateFile(t *testing.T) {
-	runner := &mockRunner{
-		resp: &agent.Response{Content: "created state file"},
-	}
-
-	deps := testDeps(t, runner)
-	l := New(testConfig(), deps)
-
-	// No state file exists in the temp dir.
-	if _, err := l.iterate(context.Background(), false, "test-conv-1"); err != nil {
-		t.Fatalf("iterate with no state file: %v", err)
-	}
-
-	reqs := runner.getRequests()
-	if len(reqs) != 1 {
-		t.Fatalf("got %d requests, want 1", len(reqs))
-	}
-
-	// The prompt should contain the first-iteration placeholder.
-	msg := reqs[0].Messages[0].Content
-	if !strings.Contains(msg, "does not exist yet") {
-		t.Error("prompt should contain first-iteration placeholder when state file is missing")
-	}
-}
-
-func TestIterate_WithStateFile(t *testing.T) {
-	runner := &mockRunner{
-		resp: &agent.Response{Content: "observed"},
-	}
-
-	deps := testDeps(t, runner)
+func TestReadStateFile_Present(t *testing.T) {
+	tmpDir := t.TempDir()
 	stateContent := "## Current Sense\nEverything is calm."
-	stateFile := filepath.Join(deps.WorkspacePath, "metacognitive.md")
+	stateFile := filepath.Join(tmpDir, "metacognitive.md")
 	if err := os.WriteFile(stateFile, []byte(stateContent), 0644); err != nil {
 		t.Fatalf("write state file: %v", err)
 	}
 
-	l := New(testConfig(), deps)
-
-	if _, err := l.iterate(context.Background(), false, "test-conv-1"); err != nil {
-		t.Fatalf("iterate: %v", err)
+	got, err := readStateFile(tmpDir, "metacognitive.md")
+	if err != nil {
+		t.Fatalf("readStateFile: %v", err)
 	}
-
-	reqs := runner.getRequests()
-	msg := reqs[0].Messages[0].Content
-	if !strings.Contains(msg, "Everything is calm.") {
-		t.Error("prompt should contain state file content")
+	if got != stateContent {
+		t.Errorf("readStateFile = %q, want %q", got, stateContent)
 	}
 }
 
-func TestIterate_RunnerError(t *testing.T) {
-	runner := &mockRunner{
-		err: context.DeadlineExceeded,
-	}
-
-	deps := testDeps(t, runner)
-	l := New(testConfig(), deps)
-
-	result, err := l.iterate(context.Background(), false, "test-conv-1")
-	if err == nil {
-		t.Fatal("iterate should return error when runner fails")
-	}
-	if result != nil {
-		t.Error("iterate should return nil result on error")
-	}
-	if !strings.Contains(err.Error(), "metacognitive LLM call") {
-		t.Errorf("error = %v, want wrapped metacognitive LLM call error", err)
-	}
-}
-
-func TestIterate_StateFileTruncated(t *testing.T) {
-	runner := &mockRunner{
-		resp: &agent.Response{Content: "ok"},
-	}
-
-	deps := testDeps(t, runner)
-
-	// Create a state file larger than maxStateBytes.
+func TestReadStateFile_Truncated(t *testing.T) {
+	tmpDir := t.TempDir()
 	big := strings.Repeat("x", maxStateBytes+1000)
-	stateFile := filepath.Join(deps.WorkspacePath, "metacognitive.md")
+	stateFile := filepath.Join(tmpDir, "metacognitive.md")
 	if err := os.WriteFile(stateFile, []byte(big), 0644); err != nil {
 		t.Fatalf("write state file: %v", err)
 	}
 
-	l := New(testConfig(), deps)
-
-	if _, err := l.iterate(context.Background(), false, "test-conv-1"); err != nil {
-		t.Fatalf("iterate: %v", err)
+	got, err := readStateFile(tmpDir, "metacognitive.md")
+	if err != nil {
+		t.Fatalf("readStateFile: %v", err)
 	}
-
-	reqs := runner.getRequests()
-	msg := reqs[0].Messages[0].Content
-	if !strings.Contains(msg, "truncated") {
+	if !strings.Contains(got, "truncated") {
 		t.Error("oversized state file should be truncated with marker")
 	}
-}
-
-// --- Tool handler tests ---
-
-func TestSetNextSleep_Valid(t *testing.T) {
-	l := New(testConfig(), testDeps(t, nil))
-
-	reg := tools.NewRegistry(nil, nil)
-	l.RegisterTools(reg)
-
-	tool := reg.Get("set_next_sleep")
-	if tool == nil {
-		t.Fatal("set_next_sleep tool not registered")
-	}
-
-	result, err := tool.Handler(context.Background(), map[string]any{
-		"duration": "5m",
-		"reason":   "testing",
-	})
-	if err != nil {
-		t.Fatalf("handler error: %v", err)
-	}
-
-	if !strings.Contains(result, "5m") {
-		t.Errorf("result = %q, want mention of 5m", result)
-	}
-
-	// Verify the loop picked up the duration.
-	got := l.computeSleep()
-	if got != 5*time.Minute {
-		t.Errorf("after tool call, computeSleep = %v, want 5m", got)
-	}
-}
-
-func TestSetNextSleep_Clamped(t *testing.T) {
-	l := New(testConfig(), testDeps(t, nil))
-
-	reg := tools.NewRegistry(nil, nil)
-	l.RegisterTools(reg)
-
-	tool := reg.Get("set_next_sleep")
-
-	// Below minimum.
-	_, err := tool.Handler(context.Background(), map[string]any{
-		"duration": "30s",
-	})
-	if err != nil {
-		t.Fatalf("handler error: %v", err)
-	}
-
-	got := l.computeSleep()
-	if got != 2*time.Minute {
-		t.Errorf("below-min: computeSleep = %v, want 2m", got)
-	}
-
-	// Above maximum.
-	l.resetNextSleep()
-	_, err = tool.Handler(context.Background(), map[string]any{
-		"duration": "1h",
-	})
-	if err != nil {
-		t.Fatalf("handler error: %v", err)
-	}
-
-	got = l.computeSleep()
-	if got != 30*time.Minute {
-		t.Errorf("above-max: computeSleep = %v, want 30m", got)
-	}
-}
-
-func TestSetNextSleep_InvalidFormat(t *testing.T) {
-	l := New(testConfig(), testDeps(t, nil))
-
-	reg := tools.NewRegistry(nil, nil)
-	l.RegisterTools(reg)
-
-	tool := reg.Get("set_next_sleep")
-
-	_, err := tool.Handler(context.Background(), map[string]any{
-		"duration": "not-a-duration",
-	})
-	if err == nil {
-		t.Fatal("handler should fail for invalid duration format")
-	}
-}
-
-func TestSetNextSleep_MissingDuration(t *testing.T) {
-	l := New(testConfig(), testDeps(t, nil))
-
-	reg := tools.NewRegistry(nil, nil)
-	l.RegisterTools(reg)
-
-	tool := reg.Get("set_next_sleep")
-
-	_, err := tool.Handler(context.Background(), map[string]any{})
-	if err == nil {
-		t.Fatal("handler should fail when duration is missing")
-	}
-}
-
-func TestSetNextSleep_IntegerMinutes(t *testing.T) {
-	l := New(testConfig(), testDeps(t, nil))
-
-	reg := tools.NewRegistry(nil, nil)
-	l.RegisterTools(reg)
-
-	tool := reg.Get("set_next_sleep")
-
-	// Local models often pass integers meaning minutes (JSON numbers
-	// unmarshal to float64).
-	result, err := tool.Handler(context.Background(), map[string]any{
-		"duration": float64(8),
-	})
-	if err != nil {
-		t.Fatalf("handler error: %v", err)
-	}
-	if !strings.Contains(result, "8m") {
-		t.Errorf("result = %q, want mention of 8m", result)
-	}
-
-	got := l.computeSleep()
-	if got != 8*time.Minute {
-		t.Errorf("computeSleep = %v, want 8m", got)
-	}
-}
-
-// --- ExcludeTools tests ---
-
-func TestIterate_ExcludesTools(t *testing.T) {
-	runner := &mockRunner{
-		resp: &agent.Response{Content: "ok", Model: "llama3"},
-	}
-
-	deps := testDeps(t, runner)
-	l := New(testConfig(), deps)
-
-	if _, err := l.iterate(context.Background(), false, "test-exclude"); err != nil {
-		t.Fatalf("iterate: %v", err)
-	}
-
-	reqs := runner.getRequests()
-	if len(reqs) != 1 {
-		t.Fatalf("got %d requests, want 1", len(reqs))
-	}
-
-	req := reqs[0]
-	if len(req.ExcludeTools) == 0 {
-		t.Fatal("ExcludeTools should be populated")
-	}
-
-	// Verify key dangerous tools are excluded.
-	excluded := make(map[string]bool)
-	for _, name := range req.ExcludeTools {
-		excluded[name] = true
-	}
-	for _, want := range []string{"file_grep", "file_write", "exec", "file_search"} {
-		if !excluded[want] {
-			t.Errorf("expected %q in ExcludeTools, got %v", want, req.ExcludeTools)
-		}
-	}
-}
-
-// --- update_metacognitive_state tool tests ---
-
-func TestUpdateMetacognitiveState_Valid(t *testing.T) {
-	deps := testDeps(t, nil)
-	l := New(testConfig(), deps)
-	l.setCurrentConvID("test-conv-42")
-
-	reg := tools.NewRegistry(nil, nil)
-	l.RegisterTools(reg)
-
-	tool := reg.Get("update_metacognitive_state")
-	if tool == nil {
-		t.Fatal("update_metacognitive_state tool not registered")
-	}
-
-	content := "## Current Sense\nEverything is calm. Garage closed. Nobody home. Monitoring continues."
-	result, err := tool.Handler(context.Background(), map[string]any{
-		"content": content,
-	})
-	if err != nil {
-		t.Fatalf("handler error: %v", err)
-	}
-	if !strings.Contains(result, "updated") {
-		t.Errorf("result = %q, want confirmation", result)
-	}
-
-	// Verify file was written.
-	statePath := filepath.Join(deps.WorkspacePath, "metacognitive.md")
-	data, err := os.ReadFile(statePath)
-	if err != nil {
-		t.Fatalf("read state file: %v", err)
-	}
-	if !strings.Contains(string(data), "Everything is calm") {
-		t.Error("state file should contain the written content")
-	}
-}
-
-func TestUpdateMetacognitiveState_MetadataFooter(t *testing.T) {
-	deps := testDeps(t, nil)
-	l := New(testConfig(), deps)
-	l.setCurrentConvID("metacog-123456")
-
-	reg := tools.NewRegistry(nil, nil)
-	l.RegisterTools(reg)
-
-	tool := reg.Get("update_metacognitive_state")
-	content := "## Current Sense\nAll systems nominal. Nothing to report. Sleeping for a while."
-
-	_, err := tool.Handler(context.Background(), map[string]any{
-		"content": content,
-	})
-	if err != nil {
-		t.Fatalf("handler error: %v", err)
-	}
-
-	statePath := filepath.Join(deps.WorkspacePath, "metacognitive.md")
-	data, err := os.ReadFile(statePath)
-	if err != nil {
-		t.Fatalf("read state file: %v", err)
-	}
-
-	s := string(data)
-	if !strings.Contains(s, "<!-- metacognitive: iteration=metacog-123456") {
-		t.Error("state file should contain metadata footer with conversation ID")
-	}
-	if !strings.Contains(s, "updated=") {
-		t.Error("state file should contain updated timestamp in footer")
-	}
-}
-
-func TestUpdateMetacognitiveState_PrevFile(t *testing.T) {
-	deps := testDeps(t, nil)
-	l := New(testConfig(), deps)
-	l.setCurrentConvID("test-prev")
-
-	// Write an initial state file.
-	statePath := filepath.Join(deps.WorkspacePath, "metacognitive.md")
-	original := "## Original Content\nThis was here before the update."
-	if err := os.WriteFile(statePath, []byte(original), 0o644); err != nil {
-		t.Fatalf("write initial state: %v", err)
-	}
-
-	reg := tools.NewRegistry(nil, nil)
-	l.RegisterTools(reg)
-
-	tool := reg.Get("update_metacognitive_state")
-	newContent := "## Updated Content\nNew observations from the latest iteration of monitoring."
-
-	_, err := tool.Handler(context.Background(), map[string]any{
-		"content": newContent,
-	})
-	if err != nil {
-		t.Fatalf("handler error: %v", err)
-	}
-
-	// Verify .prev backup exists with original content.
-	prevPath := statePath + ".prev"
-	prevData, err := os.ReadFile(prevPath)
-	if err != nil {
-		t.Fatalf("read .prev file: %v", err)
-	}
-	if string(prevData) != original {
-		t.Errorf(".prev content = %q, want original content", string(prevData))
-	}
-}
-
-func TestUpdateMetacognitiveState_EmptyRejected(t *testing.T) {
-	l := New(testConfig(), testDeps(t, nil))
-
-	reg := tools.NewRegistry(nil, nil)
-	l.RegisterTools(reg)
-
-	tool := reg.Get("update_metacognitive_state")
-
-	tests := []struct {
-		name    string
-		content string
-	}{
-		{"empty", ""},
-		{"too_short", "Short."},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			_, err := tool.Handler(context.Background(), map[string]any{
-				"content": tt.content,
-			})
-			if err == nil {
-				t.Error("handler should reject short/empty content")
-			}
-		})
-	}
-}
-
-// --- ConvID propagation test ---
-
-func TestIterate_PassesConvID(t *testing.T) {
-	runner := &mockRunner{
-		resp: &agent.Response{Content: "ok", Model: "llama3"},
-	}
-
-	deps := testDeps(t, runner)
-	l := New(testConfig(), deps)
-
-	convID := "metacog-9999999"
-	if _, err := l.iterate(context.Background(), false, convID); err != nil {
-		t.Fatalf("iterate: %v", err)
-	}
-
-	reqs := runner.getRequests()
-	if len(reqs) != 1 {
-		t.Fatalf("got %d requests, want 1", len(reqs))
-	}
-	if reqs[0].ConversationID != convID {
-		t.Errorf("ConversationID = %q, want %q", reqs[0].ConversationID, convID)
-	}
-}
-
-// --- iterationResult tests ---
-
-func TestIterate_ReturnsResult(t *testing.T) {
-	runner := &mockRunner{
-		resp: &agent.Response{
-			Content:      "observed something",
-			Model:        "llama3:8b",
-			InputTokens:  5000,
-			OutputTokens: 200,
-			ToolsUsed:    map[string]int{"update_metacognitive_state": 1, "set_next_sleep": 1},
-		},
-	}
-
-	deps := testDeps(t, runner)
-	l := New(testConfig(), deps)
-
-	result, err := l.iterate(context.Background(), true, "test-result")
-	if err != nil {
-		t.Fatalf("iterate: %v", err)
-	}
-
-	if result.Model != "llama3:8b" {
-		t.Errorf("Model = %q, want %q", result.Model, "llama3:8b")
-	}
-	if result.InputTokens != 5000 {
-		t.Errorf("InputTokens = %d, want 5000", result.InputTokens)
-	}
-	if result.OutputTokens != 200 {
-		t.Errorf("OutputTokens = %d, want 200", result.OutputTokens)
-	}
-	if result.ToolsUsed["update_metacognitive_state"] != 1 {
-		t.Errorf("ToolsUsed[update_metacognitive_state] = %d, want 1", result.ToolsUsed["update_metacognitive_state"])
-	}
-	if !result.Supervisor {
-		t.Error("Supervisor should be true when isSupervisor=true")
-	}
-	if result.Elapsed <= 0 {
-		t.Error("Elapsed should be positive")
+	if len(got) <= maxStateBytes {
+		t.Error("truncated content should be roughly maxStateBytes plus marker")
 	}
 }
 
 // --- appendIterationLog tests ---
 
 func TestAppendIterationLog(t *testing.T) {
-	deps := testDeps(t, nil)
-	l := New(testConfig(), deps)
+	tmpDir := t.TempDir()
+	statePath := filepath.Join(tmpDir, "metacognitive.md")
 
 	// Write an initial state file.
-	statePath := filepath.Join(deps.WorkspacePath, "metacognitive.md")
 	initial := "## Current Sense\nAll quiet.\n"
 	if err := os.WriteFile(statePath, []byte(initial), 0o644); err != nil {
 		t.Fatalf("write state: %v", err)
 	}
 
-	result := &iterationResult{
+	result := &loop.IterationResult{
+		ConvID:       "metacog-12345",
 		Model:        "llama3:8b",
 		InputTokens:  12000,
 		OutputTokens: 500,
 		ToolsUsed:    map[string]int{"get_state": 3, "update_metacognitive_state": 1},
 		Elapsed:      3*time.Minute + 12*time.Second,
 		Supervisor:   false,
+		Sleep:        8 * time.Minute,
 	}
 
-	l.appendIterationLog(deps.Logger, result, "metacog-12345", 8*time.Minute)
+	appendIterationLog(slog.Default(), statePath, result)
 
 	data, err := os.ReadFile(statePath)
 	if err != nil {
@@ -938,19 +227,20 @@ func TestAppendIterationLog(t *testing.T) {
 }
 
 func TestAppendIterationLog_NoStateFile(t *testing.T) {
-	deps := testDeps(t, nil)
-	l := New(testConfig(), deps)
+	tmpDir := t.TempDir()
+	statePath := filepath.Join(tmpDir, "metacognitive.md")
 
-	result := &iterationResult{
+	result := &loop.IterationResult{
+		ConvID:       "metacog-first",
 		Model:        "test-model",
 		InputTokens:  100,
 		OutputTokens: 50,
 		Elapsed:      time.Second,
+		Sleep:        5 * time.Minute,
 	}
 
-	l.appendIterationLog(deps.Logger, result, "metacog-first", 5*time.Minute)
+	appendIterationLog(slog.Default(), statePath, result)
 
-	statePath := filepath.Join(deps.WorkspacePath, "metacognitive.md")
 	data, err := os.ReadFile(statePath)
 	if err != nil {
 		t.Fatalf("read state: %v", err)
@@ -1041,15 +331,395 @@ func TestFormatToolsUsed_Empty(t *testing.T) {
 }
 
 func TestFormatToolsUsed_Sorted(t *testing.T) {
-	tools := map[string]int{
+	toolsMap := map[string]int{
 		"set_next_sleep":             1,
 		"get_state":                  3,
 		"update_metacognitive_state": 1,
 	}
-	got := formatToolsUsed(tools)
+	got := formatToolsUsed(toolsMap)
 
 	// Should be sorted alphabetically.
 	if got != "[get_state x3, set_next_sleep, update_metacognitive_state]" {
 		t.Errorf("formatToolsUsed = %q, want sorted with counts", got)
+	}
+}
+
+// --- BuildLoopConfig tests ---
+
+func TestBuildLoopConfig(t *testing.T) {
+	cfg := testConfig()
+	opts := Opts{WorkspacePath: t.TempDir()}
+
+	lc := BuildLoopConfig(cfg, opts)
+
+	if lc.Name != "metacognitive" {
+		t.Errorf("Name = %q, want metacognitive", lc.Name)
+	}
+	if lc.SleepMin != cfg.MinSleep {
+		t.Errorf("SleepMin = %v, want %v", lc.SleepMin, cfg.MinSleep)
+	}
+	if lc.SleepMax != cfg.MaxSleep {
+		t.Errorf("SleepMax = %v, want %v", lc.SleepMax, cfg.MaxSleep)
+	}
+	if lc.SleepDefault != cfg.DefaultSleep {
+		t.Errorf("SleepDefault = %v, want %v", lc.SleepDefault, cfg.DefaultSleep)
+	}
+	if lc.Jitter == nil || *lc.Jitter != cfg.Jitter {
+		t.Errorf("Jitter = %v, want %v", lc.Jitter, cfg.Jitter)
+	}
+	if lc.TaskBuilder == nil {
+		t.Error("TaskBuilder should be set")
+	}
+	if lc.PostIterate == nil {
+		t.Error("PostIterate should be set")
+	}
+	if lc.Hints["source"] != "metacognitive" {
+		t.Errorf("Hints[source] = %q, want metacognitive", lc.Hints["source"])
+	}
+	if lc.Hints["mission"] != "metacognitive" {
+		t.Errorf("Hints[mission] = %q, want metacognitive", lc.Hints["mission"])
+	}
+	if lc.Hints["delegation_gating"] != "disabled" {
+		t.Errorf("Hints[delegation_gating] = %q, want disabled", lc.Hints["delegation_gating"])
+	}
+
+	// Verify ExcludeTools contains key entries.
+	excluded := make(map[string]bool)
+	for _, name := range lc.ExcludeTools {
+		excluded[name] = true
+	}
+	for _, want := range []string{"file_grep", "file_write", "exec"} {
+		if !excluded[want] {
+			t.Errorf("expected %q in ExcludeTools", want)
+		}
+	}
+}
+
+func TestBuildLoopConfig_TaskBuilder(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := testConfig()
+	opts := Opts{WorkspacePath: tmpDir}
+
+	// Write a state file for the TaskBuilder to read.
+	stateContent := "## Current Sense\nAll systems nominal."
+	stateFile := filepath.Join(tmpDir, cfg.StateFile)
+	if err := os.WriteFile(stateFile, []byte(stateContent), 0644); err != nil {
+		t.Fatalf("write state file: %v", err)
+	}
+
+	lc := BuildLoopConfig(cfg, opts)
+	prompt, err := lc.TaskBuilder(context.Background(), false)
+	if err != nil {
+		t.Fatalf("TaskBuilder: %v", err)
+	}
+
+	if !strings.Contains(prompt, "All systems nominal") {
+		t.Error("TaskBuilder prompt should include state file content")
+	}
+}
+
+func TestBuildLoopConfig_TaskBuilderNoState(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := testConfig()
+	opts := Opts{WorkspacePath: tmpDir}
+
+	lc := BuildLoopConfig(cfg, opts)
+	prompt, err := lc.TaskBuilder(context.Background(), false)
+	if err != nil {
+		t.Fatalf("TaskBuilder: %v", err)
+	}
+
+	// With no state file, prompt should contain the first-iteration placeholder.
+	if !strings.Contains(prompt, "does not exist yet") {
+		t.Error("TaskBuilder prompt should contain first-iteration placeholder when state file is missing")
+	}
+}
+
+func TestBuildLoopConfig_PostIterate(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := testConfig()
+	opts := Opts{WorkspacePath: tmpDir}
+
+	lc := BuildLoopConfig(cfg, opts)
+
+	result := loop.IterationResult{
+		ConvID:       "metacog-post-test",
+		Model:        "test-model",
+		InputTokens:  100,
+		OutputTokens: 50,
+		Elapsed:      time.Second,
+		Sleep:        5 * time.Minute,
+	}
+
+	err := lc.PostIterate(context.Background(), result)
+	if err != nil {
+		t.Fatalf("PostIterate: %v", err)
+	}
+
+	// Verify state file was written with iteration log.
+	statePath := filepath.Join(tmpDir, cfg.StateFile)
+	data, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatalf("read state: %v", err)
+	}
+	s := string(data)
+
+	if !strings.Contains(s, "conversation=metacog-post-test") {
+		t.Error("PostIterate should append iteration log with conversation ID")
+	}
+}
+
+// --- Tool handler tests ---
+
+func TestSetNextSleep_Valid(t *testing.T) {
+	cfg := testConfig()
+	workspace := t.TempDir()
+	theLoop := testLoopForTools(t)
+
+	reg := tools.NewRegistry(nil, nil)
+	RegisterTools(reg, theLoop, cfg, workspace, "")
+
+	tool := reg.Get("set_next_sleep")
+	if tool == nil {
+		t.Fatal("set_next_sleep tool not registered")
+	}
+
+	result, err := tool.Handler(context.Background(), map[string]any{
+		"duration": "5m",
+		"reason":   "testing",
+	})
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+
+	if !strings.Contains(result, "5m") {
+		t.Errorf("result = %q, want mention of 5m", result)
+	}
+}
+
+func TestSetNextSleep_Clamped(t *testing.T) {
+	cfg := testConfig()
+	workspace := t.TempDir()
+	theLoop := testLoopForTools(t)
+
+	reg := tools.NewRegistry(nil, nil)
+	RegisterTools(reg, theLoop, cfg, workspace, "")
+
+	tool := reg.Get("set_next_sleep")
+
+	// Below minimum — should succeed but clamp.
+	result, err := tool.Handler(context.Background(), map[string]any{
+		"duration": "30s",
+	})
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if !strings.Contains(result, "2m") {
+		t.Errorf("below-min: result = %q, want clamped to 2m", result)
+	}
+
+	// Above maximum — should succeed but clamp.
+	result, err = tool.Handler(context.Background(), map[string]any{
+		"duration": "1h",
+	})
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if !strings.Contains(result, "30m") {
+		t.Errorf("above-max: result = %q, want clamped to 30m", result)
+	}
+}
+
+func TestSetNextSleep_InvalidFormat(t *testing.T) {
+	cfg := testConfig()
+	workspace := t.TempDir()
+	theLoop := testLoopForTools(t)
+
+	reg := tools.NewRegistry(nil, nil)
+	RegisterTools(reg, theLoop, cfg, workspace, "")
+
+	tool := reg.Get("set_next_sleep")
+
+	_, err := tool.Handler(context.Background(), map[string]any{
+		"duration": "not-a-duration",
+	})
+	if err == nil {
+		t.Fatal("handler should fail for invalid duration format")
+	}
+}
+
+func TestSetNextSleep_MissingDuration(t *testing.T) {
+	cfg := testConfig()
+	workspace := t.TempDir()
+	theLoop := testLoopForTools(t)
+
+	reg := tools.NewRegistry(nil, nil)
+	RegisterTools(reg, theLoop, cfg, workspace, "")
+
+	tool := reg.Get("set_next_sleep")
+
+	_, err := tool.Handler(context.Background(), map[string]any{})
+	if err == nil {
+		t.Fatal("handler should fail when duration is missing")
+	}
+}
+
+func TestSetNextSleep_IntegerMinutes(t *testing.T) {
+	cfg := testConfig()
+	workspace := t.TempDir()
+	theLoop := testLoopForTools(t)
+
+	reg := tools.NewRegistry(nil, nil)
+	RegisterTools(reg, theLoop, cfg, workspace, "")
+
+	tool := reg.Get("set_next_sleep")
+
+	// Local models often pass integers meaning minutes (JSON numbers
+	// unmarshal to float64).
+	result, err := tool.Handler(context.Background(), map[string]any{
+		"duration": float64(8),
+	})
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if !strings.Contains(result, "8m") {
+		t.Errorf("result = %q, want mention of 8m", result)
+	}
+}
+
+// --- update_metacognitive_state tool tests ---
+
+func TestUpdateMetacognitiveState_Valid(t *testing.T) {
+	cfg := testConfig()
+	workspace := t.TempDir()
+	theLoop := testLoopForTools(t)
+
+	reg := tools.NewRegistry(nil, nil)
+	RegisterTools(reg, theLoop, cfg, workspace, "")
+
+	tool := reg.Get("update_metacognitive_state")
+	if tool == nil {
+		t.Fatal("update_metacognitive_state tool not registered")
+	}
+
+	content := "## Current Sense\nEverything is calm. Garage closed. Nobody home. Monitoring continues."
+	result, err := tool.Handler(context.Background(), map[string]any{
+		"content": content,
+	})
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if !strings.Contains(result, "updated") {
+		t.Errorf("result = %q, want confirmation", result)
+	}
+
+	// Verify file was written.
+	statePath := filepath.Join(workspace, "metacognitive.md")
+	data, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatalf("read state file: %v", err)
+	}
+	if !strings.Contains(string(data), "Everything is calm") {
+		t.Error("state file should contain the written content")
+	}
+}
+
+func TestUpdateMetacognitiveState_MetadataFooter(t *testing.T) {
+	cfg := testConfig()
+	workspace := t.TempDir()
+	theLoop := testLoopForTools(t)
+
+	reg := tools.NewRegistry(nil, nil)
+	RegisterTools(reg, theLoop, cfg, workspace, "")
+
+	tool := reg.Get("update_metacognitive_state")
+	content := "## Current Sense\nAll systems nominal. Nothing to report. Sleeping for a while."
+
+	_, err := tool.Handler(context.Background(), map[string]any{
+		"content": content,
+	})
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+
+	statePath := filepath.Join(workspace, "metacognitive.md")
+	data, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatalf("read state file: %v", err)
+	}
+
+	s := string(data)
+	// ConvID will be empty in unit tests (loop not running), but footer should still be present.
+	if !strings.Contains(s, "<!-- metacognitive: iteration=") {
+		t.Error("state file should contain metadata footer")
+	}
+	if !strings.Contains(s, "updated=") {
+		t.Error("state file should contain updated timestamp in footer")
+	}
+}
+
+func TestUpdateMetacognitiveState_PrevFile(t *testing.T) {
+	cfg := testConfig()
+	workspace := t.TempDir()
+	theLoop := testLoopForTools(t)
+
+	// Write an initial state file.
+	statePath := filepath.Join(workspace, "metacognitive.md")
+	original := "## Original Content\nThis was here before the update."
+	if err := os.WriteFile(statePath, []byte(original), 0o644); err != nil {
+		t.Fatalf("write initial state: %v", err)
+	}
+
+	reg := tools.NewRegistry(nil, nil)
+	RegisterTools(reg, theLoop, cfg, workspace, "")
+
+	tool := reg.Get("update_metacognitive_state")
+	newContent := "## Updated Content\nNew observations from the latest iteration of monitoring."
+
+	_, err := tool.Handler(context.Background(), map[string]any{
+		"content": newContent,
+	})
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+
+	// Verify .prev backup exists with original content.
+	prevPath := statePath + ".prev"
+	prevData, err := os.ReadFile(prevPath)
+	if err != nil {
+		t.Fatalf("read .prev file: %v", err)
+	}
+	if string(prevData) != original {
+		t.Errorf(".prev content = %q, want original content", string(prevData))
+	}
+}
+
+func TestUpdateMetacognitiveState_EmptyRejected(t *testing.T) {
+	cfg := testConfig()
+	workspace := t.TempDir()
+	theLoop := testLoopForTools(t)
+
+	reg := tools.NewRegistry(nil, nil)
+	RegisterTools(reg, theLoop, cfg, workspace, "")
+
+	tool := reg.Get("update_metacognitive_state")
+
+	tests := []struct {
+		name    string
+		content string
+	}{
+		{"empty", ""},
+		{"too_short", "Short."},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := tool.Handler(context.Background(), map[string]any{
+				"content": tt.content,
+			})
+			if err == nil {
+				t.Error("handler should reject short/empty content")
+			}
+		})
 	}
 }

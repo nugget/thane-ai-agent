@@ -9,6 +9,11 @@
 // "Dice" randomly select a frontier model for supervisor iterations that
 // review the loop's own behavior, catching blind spots that the cheaper
 // local model's consistent reasoning patterns miss.
+//
+// The loop lifecycle is managed by the [loop] package. This package
+// provides [BuildLoopConfig] to assemble a [loop.Config] with the
+// correct TaskBuilder, PostIterate, and tool exclusions, plus
+// [RegisterTools] for metacog-specific tool handlers.
 package metacognitive
 
 import (
@@ -17,18 +22,15 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
-	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
-	"sync"
 	"time"
 
-	"github.com/nugget/thane-ai-agent/internal/agent"
 	"github.com/nugget/thane-ai-agent/internal/config"
 	"github.com/nugget/thane-ai-agent/internal/logging"
+	"github.com/nugget/thane-ai-agent/internal/loop"
 	"github.com/nugget/thane-ai-agent/internal/prompts"
 	"github.com/nugget/thane-ai-agent/internal/router"
 )
@@ -44,34 +46,6 @@ const iterationLogRetention = 5
 // iterationLogPrefix is the HTML comment prefix used for iteration log
 // blocks. Used for scanning/pruning.
 const iterationLogPrefix = "<!-- iteration_log:"
-
-// iterationResult holds data returned from a single metacognitive
-// iteration, used to build the auto-appended summary log.
-type iterationResult struct {
-	Model        string
-	InputTokens  int
-	OutputTokens int
-	ToolsUsed    map[string]int // tool name → call count
-	Elapsed      time.Duration
-	Supervisor   bool
-}
-
-// agentRunner abstracts the agent loop for LLM calls. Satisfied by
-// *agent.Loop. Matches the interface in cmd/thane/taskexec.go.
-type agentRunner interface {
-	Run(ctx context.Context, req *agent.Request, stream agent.StreamCallback) (*agent.Response, error)
-}
-
-// RandSource abstracts randomness for deterministic testing.
-type RandSource interface {
-	// Float64 returns a pseudo-random float64 in the half-open interval [0.0, 1.0).
-	Float64() float64
-}
-
-// defaultRand uses math/rand/v2's global source.
-type defaultRand struct{}
-
-func (defaultRand) Float64() float64 { return rand.Float64() }
 
 // Config holds the parsed metacognitive loop configuration with
 // time.Duration fields (as opposed to the YAML string representation
@@ -117,149 +91,62 @@ func ParseConfig(raw config.MetacognitiveConfig) (Config, error) {
 	}, nil
 }
 
-// Deps holds injected dependencies for the metacognitive loop. Using a
-// struct avoids a growing parameter list as the loop evolves.
-type Deps struct {
-	Runner        agentRunner
-	Logger        *slog.Logger
+// Opts holds options for [BuildLoopConfig] that are not part of [Config].
+type Opts struct {
+	// WorkspacePath is the absolute path to the workspace directory.
 	WorkspacePath string
-	EgoFile       string     // absolute path to ego.md; empty disables append_ego_observation tool
-	RandSource    RandSource // nil uses math/rand/v2 default
 }
 
-// Loop is the perpetual metacognitive attention loop. Create with [New],
-// start with [Start], stop with [Stop].
-type Loop struct {
-	config Config
-	deps   Deps
+// BuildLoopConfig returns a [loop.Config] that implements the
+// metacognitive loop. The returned config uses TaskBuilder and
+// PostIterate closures to read state, build prompts, and append
+// iteration logs — all previously handled by the old Loop struct.
+func BuildLoopConfig(cfg Config, opts Opts) loop.Config {
+	return loop.Config{
+		Name:         "metacognitive",
+		SleepMin:     cfg.MinSleep,
+		SleepMax:     cfg.MaxSleep,
+		SleepDefault: cfg.DefaultSleep,
+		Jitter:       loop.Float64Ptr(cfg.Jitter),
+		ExcludeTools: metacogExcludeTools,
 
-	mu            sync.Mutex
-	started       bool
-	cancel        context.CancelFunc
-	done          chan struct{}
-	nextSleep     time.Duration // set by set_next_sleep tool handler
-	currentConvID string        // set before each iterate(), read by tool handlers
-}
+		Supervisor:     cfg.SupervisorProbability > 0,
+		SupervisorProb: cfg.SupervisorProbability,
+		QualityFloor:   cfg.QualityFloor,
+		// TaskBuilder handles supervisor augmentation itself via
+		// prompts.MetacognitivePrompt, so SupervisorContext is empty.
+		SupervisorQualityFloor: cfg.SupervisorQualityFloor,
 
-// New creates a metacognitive loop. Call [Loop.Start] to launch the
-// background goroutine.
-func New(cfg Config, deps Deps) *Loop {
-	if deps.Logger == nil {
-		deps.Logger = slog.Default()
-	}
-	if deps.RandSource == nil {
-		deps.RandSource = defaultRand{}
-	}
-	return &Loop{
-		config: cfg,
-		deps:   deps,
-	}
-}
+		Hints: map[string]string{
+			"source":                    "metacognitive",
+			router.HintMission:          "metacognitive",
+			router.HintDelegationGating: "disabled",
+		},
 
-// Start launches the background goroutine. Calling Start on an already
-// running loop is a no-op (returns nil). The goroutine runs until ctx is
-// cancelled or [Loop.Stop] is called.
-func (l *Loop) Start(ctx context.Context) error {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	if l.started {
-		return nil
-	}
-	l.started = true
-
-	loopCtx, cancel := context.WithCancel(ctx)
-	l.cancel = cancel
-	l.done = make(chan struct{})
-
-	go l.run(loopCtx)
-	return nil
-}
-
-// Stop cancels the loop and waits for the goroutine to exit. Safe to
-// call multiple times or before Start.
-func (l *Loop) Stop() {
-	l.mu.Lock()
-	cancel := l.cancel
-	done := l.done
-	l.mu.Unlock()
-
-	if cancel != nil {
-		cancel()
-	}
-	if done != nil {
-		<-done
-	}
-}
-
-// run is the main goroutine body. It iterates perpetually until the
-// context is cancelled.
-func (l *Loop) run(ctx context.Context) {
-	defer close(l.done)
-
-	logger := l.deps.Logger.With("subsystem", logging.SubsystemMetacog)
-	ctx = logging.WithLogger(ctx, logger)
-
-	logger.Info("metacognitive loop started",
-		"min_sleep", l.config.MinSleep,
-		"max_sleep", l.config.MaxSleep,
-		"default_sleep", l.config.DefaultSleep,
-		"jitter", l.config.Jitter,
-		"supervisor_probability", l.config.SupervisorProbability,
-	)
-
-	var iterCount int
-
-	for {
-		// Reset the tool-provided sleep for this iteration.
-		l.resetNextSleep()
-
-		// Roll dice for model selection.
-		isSupervisor := l.rollDice()
-
-		// Generate a conversation ID for this iteration.
-		convID := fmt.Sprintf("metacog-%d", time.Now().UnixMilli())
-		l.setCurrentConvID(convID)
-
-		iterCount++
-
-		// Enrich context with per-iteration fields.
-		iterCtx := logging.WithLogger(ctx, logger.With(
-			"conversation_id", convID,
-			"supervisor", isSupervisor,
-			"metacog_iter", iterCount,
-		))
-		iterLog := logging.Logger(iterCtx)
-
-		iterLog.Info("metacognitive iteration starting")
-
-		result, err := l.iterate(iterCtx, isSupervisor, convID)
-		if err != nil {
-			if ctx.Err() != nil {
-				logger.Info("metacognitive loop stopped")
-				return
+		TaskBuilder: func(ctx context.Context, isSupervisor bool) (string, error) {
+			stateContent, err := readStateFile(opts.WorkspacePath, cfg.StateFile)
+			if err != nil {
+				log := logging.Logger(ctx)
+				if errors.Is(err, fs.ErrNotExist) {
+					log.Info("metacognitive state file not found, starting fresh",
+						"path", stateFilePath(opts.WorkspacePath, cfg.StateFile),
+					)
+				} else {
+					log.Warn("metacognitive state file read failed, starting with empty state",
+						"error", err,
+						"path", stateFilePath(opts.WorkspacePath, cfg.StateFile),
+					)
+				}
+				stateContent = ""
 			}
-			iterLog.Warn("metacognitive iteration failed", "error", err)
-		} else {
-			iterLog.Info("metacognitive iteration complete",
-				"elapsed", result.Elapsed.Round(time.Second),
-			)
-		}
+			return prompts.MetacognitivePrompt(stateContent, isSupervisor), nil
+		},
 
-		// Compute and apply sleep.
-		sleep := l.computeSleep()
-
-		// Auto-append iteration summary on success.
-		if result != nil {
-			l.appendIterationLog(iterLog, result, convID, sleep)
-		}
-
-		iterLog.Info("metacognitive sleeping", "duration", sleep.Round(time.Second))
-
-		if !sleepCtx(ctx, sleep) {
-			logger.Info("metacognitive loop stopped")
-			return
-		}
+		PostIterate: func(ctx context.Context, result loop.IterationResult) error {
+			log := logging.Logger(ctx)
+			appendIterationLog(log, stateFilePath(opts.WorkspacePath, cfg.StateFile), &result)
+			return nil
+		},
 	}
 }
 
@@ -276,160 +163,26 @@ var metacogExcludeTools = []string{
 	"request_capability", "drop_capability",
 }
 
-// iterate performs a single metacognitive iteration: read state, build
-// prompt, and run the LLM via the agent runner. Returns an
-// [iterationResult] with model, token, and tool data for the
-// auto-appended summary log.
-func (l *Loop) iterate(ctx context.Context, isSupervisor bool, convID string) (*iterationResult, error) {
-	iterStart := time.Now()
-
-	log := logging.Logger(ctx)
-
-	stateContent, err := l.readStateFile()
+// readStateFile reads the metacognitive state file from the workspace.
+// Returns an error if the file does not exist (first iteration).
+// Content is capped at [maxStateBytes].
+func readStateFile(workspacePath, stateFile string) (string, error) {
+	data, err := os.ReadFile(stateFilePath(workspacePath, stateFile))
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
-			log.Info("metacognitive state file not found, starting fresh",
-				"path", l.stateFilePath(),
-			)
-		} else {
-			log.Warn("metacognitive state file read failed, starting with empty state",
-				"error", err,
-				"path", l.stateFilePath(),
-			)
+			return "", err
 		}
-		stateContent = ""
+		return "", fmt.Errorf("read state file: %w", err)
 	}
-
-	promptText := prompts.MetacognitivePrompt(stateContent, isSupervisor)
-
-	// Build routing hints.
-	qualityFloor := l.config.QualityFloor
-	localOnly := "true"
-	if isSupervisor {
-		qualityFloor = l.config.SupervisorQualityFloor
-		localOnly = "false"
+	if len(data) > maxStateBytes {
+		return string(data[:maxStateBytes]) + "\n\n[metacognitive.md truncated — exceeded 16 KB limit]", nil
 	}
-
-	req := &agent.Request{
-		ConversationID: convID,
-		Messages:       []agent.Message{{Role: "user", Content: promptText}},
-		ExcludeTools:   metacogExcludeTools,
-		SkipTagFilter:  true,
-		Hints: map[string]string{
-			"source":                    "metacognitive",
-			"supervisor":                strconv.FormatBool(isSupervisor),
-			router.HintLocalOnly:        localOnly,
-			router.HintQualityFloor:     strconv.Itoa(qualityFloor),
-			router.HintMission:          "metacognitive",
-			router.HintDelegationGating: "disabled",
-		},
-	}
-
-	resp, err := l.deps.Runner.Run(ctx, req, nil)
-	if err != nil {
-		return nil, fmt.Errorf("metacognitive LLM call: %w", err)
-	}
-
-	log.Debug("metacognitive iteration result",
-		"result_len", len(resp.Content),
-		"model", resp.Model,
-	)
-
-	return &iterationResult{
-		Model:        resp.Model,
-		InputTokens:  resp.InputTokens,
-		OutputTokens: resp.OutputTokens,
-		ToolsUsed:    resp.ToolsUsed,
-		Elapsed:      time.Since(iterStart),
-		Supervisor:   isSupervisor,
-	}, nil
+	return string(data), nil
 }
 
-// rollDice determines whether this iteration uses a frontier supervisor
-// model. Returns true with probability [Config.SupervisorProbability].
-func (l *Loop) rollDice() bool {
-	if l.config.SupervisorProbability <= 0 {
-		return false
-	}
-	if l.config.SupervisorProbability >= 1.0 {
-		return true
-	}
-	return l.deps.RandSource.Float64() < l.config.SupervisorProbability
-}
-
-// computeSleep returns the sleep duration for the next cycle. If
-// set_next_sleep was called during the iteration, that value is used
-// (clamped to min/max). Otherwise, DefaultSleep is used. Jitter is
-// applied to the final value.
-func (l *Loop) computeSleep() time.Duration {
-	l.mu.Lock()
-	requested := l.nextSleep
-	l.mu.Unlock()
-
-	d := l.config.DefaultSleep
-	if requested > 0 {
-		d = requested
-	}
-
-	// Clamp to bounds.
-	d = l.clamp(d)
-
-	// Apply jitter.
-	return l.applyJitter(d)
-}
-
-// clamp restricts d to the [MinSleep, MaxSleep] range.
-func (l *Loop) clamp(d time.Duration) time.Duration {
-	if d < l.config.MinSleep {
-		d = l.config.MinSleep
-	}
-	if d > l.config.MaxSleep {
-		d = l.config.MaxSleep
-	}
-	return d
-}
-
-// applyJitter adds randomization to break periodicity. The actual sleep
-// varies by ±Jitter of the base duration.
-func (l *Loop) applyJitter(d time.Duration) time.Duration {
-	if l.config.Jitter <= 0 {
-		return d
-	}
-	// Random value in [-jitter, +jitter].
-	factor := 1.0 + l.config.Jitter*(2*l.deps.RandSource.Float64()-1)
-	result := time.Duration(float64(d) * factor)
-	// Re-clamp after jitter to stay within bounds.
-	return l.clamp(result)
-}
-
-// setNextSleep is called by the set_next_sleep tool handler to
-// communicate the LLM's chosen sleep duration back to the loop.
-func (l *Loop) setNextSleep(d time.Duration) {
-	l.mu.Lock()
-	l.nextSleep = d
-	l.mu.Unlock()
-}
-
-// resetNextSleep clears the tool-provided sleep before each iteration.
-func (l *Loop) resetNextSleep() {
-	l.mu.Lock()
-	l.nextSleep = 0
-	l.mu.Unlock()
-}
-
-// setCurrentConvID stores the conversation ID for the current iteration
-// so tool handlers can include it in metadata.
-func (l *Loop) setCurrentConvID(id string) {
-	l.mu.Lock()
-	l.currentConvID = id
-	l.mu.Unlock()
-}
-
-// getCurrentConvID returns the conversation ID for the current iteration.
-func (l *Loop) getCurrentConvID() string {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.currentConvID
+// stateFilePath returns the absolute path to the state file.
+func stateFilePath(workspacePath, stateFile string) string {
+	return filepath.Join(workspacePath, stateFile)
 }
 
 // appendIterationLog appends an HTML comment summary block to the state
@@ -437,12 +190,10 @@ func (l *Loop) getCurrentConvID() string {
 // [iterationLogRetention] are pruned. This is best-effort: errors are
 // logged but never disrupt the loop.
 //
-// Unlike [Loop.readStateFile], this reads the full file without the
+// Unlike [readStateFile], this reads the full file without the
 // maxStateBytes cap to avoid silently truncating user/model state on
 // rewrite.
-func (l *Loop) appendIterationLog(log *slog.Logger, result *iterationResult, convID string, sleep time.Duration) {
-	statePath := l.stateFilePath()
-
+func appendIterationLog(log *slog.Logger, statePath string, result *loop.IterationResult) {
 	// Read the full file (uncapped) to avoid truncation on rewrite.
 	var content string
 	data, err := os.ReadFile(statePath)
@@ -472,7 +223,7 @@ func (l *Loop) appendIterationLog(log *slog.Logger, result *iterationResult, con
 			"     tools_called=%s\n"+
 			"     tokens_in=%d tokens_out=%d sleep_set=%s -->\n",
 		iterationLogPrefix,
-		convID,
+		result.ConvID,
 		result.Model,
 		result.Supervisor,
 		time.Now().UTC().Format(time.RFC3339),
@@ -480,7 +231,7 @@ func (l *Loop) appendIterationLog(log *slog.Logger, result *iterationResult, con
 		toolsList,
 		result.InputTokens,
 		result.OutputTokens,
-		sleep.Round(time.Second),
+		result.Sleep.Round(time.Second),
 	)
 
 	fullContent := content + logBlock
@@ -580,39 +331,4 @@ func pruneIterationLogs(content string, keepN int) string {
 		result.WriteString(content[currentPos:])
 	}
 	return result.String()
-}
-
-// readStateFile reads the metacognitive state file from the workspace.
-// Returns an error if the file does not exist (first iteration).
-// Content is capped at [maxStateBytes].
-func (l *Loop) readStateFile() (string, error) {
-	data, err := os.ReadFile(l.stateFilePath())
-	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return "", err
-		}
-		return "", fmt.Errorf("read state file: %w", err)
-	}
-	if len(data) > maxStateBytes {
-		return string(data[:maxStateBytes]) + "\n\n[metacognitive.md truncated — exceeded 16 KB limit]", nil
-	}
-	return string(data), nil
-}
-
-// stateFilePath returns the absolute path to the state file.
-func (l *Loop) stateFilePath() string {
-	return filepath.Join(l.deps.WorkspacePath, l.config.StateFile)
-}
-
-// sleepCtx sleeps for d or until ctx is cancelled. Returns false if
-// cancelled.
-func sleepCtx(ctx context.Context, d time.Duration) bool {
-	timer := time.NewTimer(d)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return false
-	case <-timer.C:
-		return true
-	}
 }

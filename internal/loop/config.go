@@ -1,6 +1,7 @@
 package loop
 
 import (
+	"context"
 	"fmt"
 	"time"
 )
@@ -116,6 +117,26 @@ type Config struct {
 	// condition fires again while running. Default: RetriggerSingle.
 	OnRetrigger RetriggerMode
 
+	// TaskBuilder is called per-iteration to generate a dynamic prompt.
+	// When set, the static Task field is ignored. The isSupervisor
+	// argument indicates whether this is a supervisor iteration.
+	TaskBuilder func(ctx context.Context, isSupervisor bool) (string, error)
+
+	// PostIterate is called after each successful iteration. Use it
+	// for side effects like appending iteration logs. Errors are
+	// logged but do not count as iteration failures.
+	PostIterate func(ctx context.Context, result IterationResult) error
+
+	// Hints are merged into RunRequest hints for each iteration.
+	// Config hints override loop-generated defaults (e.g., setting
+	// "source" to "metacognitive" instead of "loop").
+	Hints map[string]string
+
+	// Setup is called by [Registry.SpawnLoop] after [New] but before
+	// [Loop.Start]. Use it to register tools or perform other setup
+	// that requires a *Loop reference before the goroutine launches.
+	Setup func(l *Loop)
+
 	// Metadata holds arbitrary key/value pairs for the loop.
 	Metadata map[string]string
 
@@ -165,8 +186,8 @@ func (c *Config) applyDefaults() {
 // validate checks that post-default Config values are internally
 // consistent. Called by [New] after [applyDefaults].
 func (c *Config) validate() error {
-	if c.Task == "" {
-		return fmt.Errorf("loop: Task is required")
+	if c.Task == "" && c.TaskBuilder == nil {
+		return fmt.Errorf("loop: Task or TaskBuilder is required")
 	}
 	if c.SleepMin <= 0 {
 		return fmt.Errorf("loop: SleepMin must be positive, got %v", c.SleepMin)
@@ -181,6 +202,27 @@ func (c *Config) validate() error {
 		return fmt.Errorf("loop: SupervisorProb must be in [0, 1], got %v", c.SupervisorProb)
 	}
 	return nil
+}
+
+// IterationResult holds data from a completed loop iteration, passed
+// to [Config.PostIterate] callbacks.
+type IterationResult struct {
+	// ConvID is the conversation ID for this iteration.
+	ConvID string
+	// Model is the LLM model used for this iteration.
+	Model string
+	// InputTokens is the number of input tokens consumed.
+	InputTokens int
+	// OutputTokens is the number of output tokens produced.
+	OutputTokens int
+	// ToolsUsed maps tool names to invocation counts.
+	ToolsUsed map[string]int
+	// Elapsed is the wall-clock duration of the iteration.
+	Elapsed time.Duration
+	// Supervisor indicates whether this was a supervisor iteration.
+	Supervisor bool
+	// Sleep is the computed sleep duration before the next iteration.
+	Sleep time.Duration
 }
 
 // Status is a snapshot of a loop's current state and metrics,

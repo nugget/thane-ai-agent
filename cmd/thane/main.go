@@ -54,6 +54,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/knowledge"
 	"github.com/nugget/thane-ai-agent/internal/llm"
 	"github.com/nugget/thane-ai-agent/internal/logging"
+	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
 	"github.com/nugget/thane-ai-agent/internal/mcp"
 	"github.com/nugget/thane-ai-agent/internal/media"
 	"github.com/nugget/thane-ai-agent/internal/memory"
@@ -2341,10 +2342,16 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		logger.Info("mqtt AP presence sensors registered", "count", len(apSensors))
 	}
 
-	// --- Metacognitive loop ---
-	// Perpetual self-regulating attention loop. Runs in a background
-	// goroutine, reading persistent state, reasoning via LLM, and
-	// adapting its own sleep cycle. Requires workspace for state file.
+	// --- Loop registry & metacognitive loop ---
+	// The loop registry tracks all persistent background loops.
+	// The metacognitive loop is the first consumer (PID 0).
+	loopRegistry := looppkg.NewRegistry(looppkg.WithRegistryLogger(logger))
+	defer func() {
+		shutCtx, shutCancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer shutCancel()
+		loopRegistry.ShutdownAll(shutCtx)
+	}()
+
 	if cfg.Metacognitive.Enabled {
 		metacogCfg, err := metacognitive.ParseConfig(cfg.Metacognitive)
 		if err != nil {
@@ -2357,18 +2364,22 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 				metacogEgoFile = resolved
 			}
 		}
-		metacogLoop := metacognitive.New(metacogCfg, metacognitive.Deps{
-			Runner:        loop,
-			Logger:        logger,
-			WorkspacePath: cfg.Workspace.Path,
-			EgoFile:       metacogEgoFile,
-		})
-		metacogLoop.RegisterTools(loop.Tools())
 
-		if err := metacogLoop.Start(ctx); err != nil {
-			return fmt.Errorf("start metacognitive loop: %w", err)
+		adapter := &loopAdapter{agentLoop: loop}
+		loopCfg := metacognitive.BuildLoopConfig(metacogCfg, metacognitive.Opts{
+			WorkspacePath: cfg.Workspace.Path,
+		})
+		loopCfg.Setup = func(l *looppkg.Loop) {
+			metacognitive.RegisterTools(loop.Tools(), l, metacogCfg, cfg.Workspace.Path, metacogEgoFile)
 		}
-		defer metacogLoop.Stop()
+
+		if _, err := loopRegistry.SpawnLoop(ctx, loopCfg, looppkg.Deps{
+			Runner:   adapter,
+			Logger:   logger,
+			EventBus: eventBus,
+		}); err != nil {
+			return fmt.Errorf("spawn metacognitive loop: %w", err)
+		}
 
 		logger.Info("metacognitive loop enabled",
 			"state_file", cfg.Metacognitive.StateFile,
