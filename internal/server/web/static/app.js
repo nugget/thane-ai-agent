@@ -726,6 +726,7 @@ function updateSleepRing(group, loopId) {
 function renderSystemNode(x, y) {
   const sys = state.system;
   const s = 48, r = 10; // 1:1 square, s = side length
+  const ringR = s / 2 + 12; // glow ring radius (matches loop node pattern)
   let group = canvasWorld.querySelector('.system-node');
 
   if (!group) {
@@ -741,6 +742,16 @@ function renderSystemNode(x, y) {
     const title = createSVG('title', {});
     title.textContent = 'Runtime';
     group.appendChild(title);
+
+    // Glow/selection ring (same as loop nodes).
+    const ring = createSVG('circle', {
+      class: 'node-ring',
+      r: ringR,
+      fill: 'none',
+      stroke: 'var(--accent)',
+      'stroke-width': 2,
+    });
+    group.appendChild(ring);
 
     // Rounded square (1:1 aspect ratio).
     const rect = createSVG('rect', {
@@ -772,7 +783,7 @@ function renderSystemNode(x, y) {
     : 'system-rect system-rect--degraded';
   rect.setAttribute('class', cls);
 
-  // Selection highlight.
+  // Selection highlight (uses node-ring halo, same as loop nodes).
   if (state.selected === '__system__') {
     group.classList.add('node-selected');
   } else {

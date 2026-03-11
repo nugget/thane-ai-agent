@@ -783,7 +783,7 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
 
 /* === System Node === */
 .system-node { cursor: pointer; }
-.system-node:hover .system-rect { filter: brightness(1.2); }
+.system-node:hover .node-ring { opacity: 0.3; }
 
 .system-rect {
   stroke: rgba(255, 255, 255, 0.15);
@@ -801,11 +801,6 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
   fill: var(--orange);
   stroke: var(--orange);
   filter: drop-shadow(0 0 6px var(--orange-glow));
-}
-
-.node-selected .system-rect {
-  stroke: var(--accent);
-  stroke-width: 3;
 }
 
 /* === System Detail Panel === */
