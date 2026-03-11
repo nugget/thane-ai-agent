@@ -1332,67 +1332,34 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	loop.Tools().SetMediaAnalysisTools(analysisTools)
 
 	// --- Media feed polling ---
-	// Periodic RSS/Atom check for new entries. Follows the same pattern
-	// as email polling — the poller checks feeds against high-water marks
-	// and only wakes the agent when new content is detected.
+	// Periodic RSS/Atom check for new entries via the loop infrastructure.
+	// The handler checks feeds against high-water marks and dispatches an
+	// agent conversation only when new content is detected.
 	if cfg.Media.FeedCheckInterval > 0 {
 		feedPoller := media.NewFeedPoller(opStore, logger)
-		deps.mediaFeedPoller = feedPoller
-
 		pollInterval := time.Duration(cfg.Media.FeedCheckInterval) * time.Second
-		existing, err := schedStore.GetTaskByName(mediaFeedPollTaskName)
-		if err != nil {
-			logger.Error("failed to check for media_feed_poll task", "error", err)
-		} else if existing == nil {
-			pollTask := &scheduler.Task{
-				Name: mediaFeedPollTaskName,
-				Schedule: scheduler.Schedule{
-					Kind:  scheduler.ScheduleEvery,
-					Every: &scheduler.Duration{Duration: pollInterval},
-				},
-				Payload: scheduler.Payload{
-					Kind: scheduler.PayloadWake,
-					Data: map[string]any{
-						"message":       "Check followed feeds for new content.",
-						"local_only":    "false",
-						"quality_floor": "5",
-					},
-				},
-				Enabled:   true,
-				CreatedBy: "system",
-			}
-			if err := sched.CreateTask(pollTask); err != nil {
-				logger.Error("failed to create media_feed_poll task", "error", err)
-			} else {
-				logger.Info("media_feed_poll task registered", "interval", pollInterval)
-			}
-		} else {
-			// Update interval if config changed.
-			if existing.Schedule.Every != nil && existing.Schedule.Every.Duration != pollInterval {
-				existing.Schedule.Every.Duration = pollInterval
-				if err := sched.UpdateTask(existing); err != nil {
-					logger.Error("failed to update media_feed_poll task", "error", err)
-				} else {
-					logger.Info("media_feed_poll task updated", "interval", pollInterval)
-				}
-			}
+
+		if _, err := loopRegistry.SpawnLoop(ctx, looppkg.Config{
+			Name:         "media-feed-poller",
+			SleepMin:     pollInterval,
+			SleepMax:     pollInterval,
+			SleepDefault: pollInterval,
+			Jitter:       looppkg.Float64Ptr(0),
+			Handler:      mediaFeedHandler(feedPoller, loop, logger),
+			Metadata: map[string]string{
+				"subsystem": "media",
+			},
+		}, looppkg.Deps{
+			Logger:   logger,
+			EventBus: eventBus,
+		}); err != nil {
+			return fmt.Errorf("spawn media feed poller loop: %w", err)
 		}
-		logger.Info("media feed polling enabled", "interval", pollInterval, "max_feeds", cfg.Media.MaxFeeds)
-	} else {
-		// Ensure any existing media_feed_poll task is disabled so it does not
-		// continue waking the agent when polling is configured off.
-		existing, err := schedStore.GetTaskByName(mediaFeedPollTaskName)
-		if err != nil {
-			logger.Error("failed to check for media_feed_poll task while disabling polling", "error", err)
-		} else if existing != nil && existing.Enabled {
-			existing.Enabled = false
-			if err := sched.UpdateTask(existing); err != nil {
-				logger.Error("failed to disable media_feed_poll task", "error", err)
-			} else {
-				logger.Info("media_feed_poll task disabled because feed polling is disabled")
-			}
-		}
-		logger.Info("media feed polling disabled (feed_check_interval=0)")
+
+		logger.Info("media feed polling enabled",
+			"interval", pollInterval,
+			"max_feeds", cfg.Media.MaxFeeds,
+		)
 	}
 
 	// --- Archive tools ---
