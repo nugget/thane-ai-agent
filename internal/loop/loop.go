@@ -147,6 +147,13 @@ type Loop struct {
 	// successful supervisor iteration. Zero means none yet.
 	lastSupervisorIter int
 
+	// llmContext holds enrichment data from the most recent
+	// loop_llm_start progress event (model, est_tokens, messages,
+	// tools, complexity, intent, reasoning). Set by makeProgressFunc
+	// during processing, cleared when the iteration ends. Included
+	// in Status() so late-connecting dashboard clients see it.
+	llmContext map[string]any
+
 	// nextSleep can be set externally (e.g., by a set_next_sleep
 	// tool handler) to override the default sleep for one cycle.
 	nextSleep time.Duration
@@ -339,6 +346,15 @@ func (l *Loop) Status() Status {
 		}
 	}
 
+	// Deep copy llmContext for late-connecting dashboard clients.
+	var llmCtxCopy map[string]any
+	if len(l.llmContext) > 0 {
+		llmCtxCopy = make(map[string]any, len(l.llmContext))
+		for k, v := range l.llmContext {
+			llmCtxCopy[k] = v
+		}
+	}
+
 	return Status{
 		ID:                 l.id,
 		Name:               l.config.Name,
@@ -357,6 +373,7 @@ func (l *Loop) Status() Status {
 		ConsecutiveErrors:  l.consecutiveErrors,
 		RecentConvIDs:      convIDsCopy,
 		RecentIterations:   iterCopy,
+		LLMContext:         llmCtxCopy,
 		LastSupervisorIter: l.lastSupervisorIter,
 		HandlerOnly:        l.config.Handler != nil,
 		EventDriven:        l.config.WaitFunc != nil,
@@ -576,9 +593,10 @@ func (l *Loop) run(ctx context.Context) {
 			result, err = l.iterate(iterCtx, isSupervisor, convID)
 		}
 
-		// Clear current conversation ID after iteration completes.
+		// Clear in-flight state after iteration completes.
 		l.mu.Lock()
 		l.currentConvID = ""
+		l.llmContext = nil
 		l.mu.Unlock()
 
 		// Build iteration snapshot for the dashboard timeline.
@@ -773,6 +791,24 @@ func (l *Loop) makeProgressFunc() func(string, map[string]any) {
 		}
 		data["loop_id"] = l.id
 		data["loop_name"] = l.config.Name
+
+		// Capture LLM context so late-connecting dashboard clients
+		// see enrichment data in the initial snapshot.
+		if kind == events.KindLoopLLMStart {
+			ctx := make(map[string]any, len(data))
+			for k, v := range data {
+				// Skip loop infrastructure keys — they're not useful
+				// for dashboard rendering.
+				if k == "loop_id" || k == "loop_name" {
+					continue
+				}
+				ctx[k] = v
+			}
+			l.mu.Lock()
+			l.llmContext = ctx
+			l.mu.Unlock()
+		}
+
 		l.deps.EventBus.Publish(events.Event{
 			Timestamp: time.Now(),
 			Source:    events.SourceLoop,

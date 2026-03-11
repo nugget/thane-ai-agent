@@ -202,7 +202,12 @@ function connectSSE() {
         match._iterStartTs = match.last_wake_at ? new Date(match.last_wake_at).getTime() : Date.now();
         match._liveTools = [];
         match._liveModel = '';
-        match._llmContext = null;
+        // Restore LLM context from snapshot so late-connecting clients
+        // see enrichment data immediately.
+        match._llmContext = match.llm_context || null;
+        if (match._llmContext && match._llmContext.model) {
+          match._liveModel = match._llmContext.model;
+        }
       }
       loopData = match;
       document.title = 'Thane \u00b7 ' + (match.name || nodeId.slice(0, 8));

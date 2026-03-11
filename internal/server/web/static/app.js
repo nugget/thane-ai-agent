@@ -251,7 +251,12 @@ function connect() {
         s._iterStartTs = s.last_wake_at ? new Date(s.last_wake_at).getTime() : Date.now();
         s._liveTools = [];
         s._liveModel = '';
-        s._llmContext = null;
+        // Restore LLM context from snapshot so late-connecting clients
+        // see enrichment data (model, tokens, complexity, etc.) immediately.
+        s._llmContext = s.llm_context || null;
+        if (s._llmContext && s._llmContext.model) {
+          s._liveModel = s._llmContext.model;
+        }
         startElapsedTimer(s.id);
       }
       state.loops.set(s.id, s);

@@ -337,6 +337,12 @@ type Status struct {
 	// successful supervisor iteration. Zero means no supervisor
 	// iteration has completed yet.
 	LastSupervisorIter int `json:"last_supervisor_iter,omitempty"`
+	// LLMContext holds enrichment data from the most recent
+	// loop_llm_start event (model, est_tokens, messages, tools,
+	// complexity, intent, reasoning). Only populated while the loop
+	// is in processing state, so late-connecting dashboard clients
+	// can display it immediately.
+	LLMContext map[string]any `json:"llm_context,omitempty"`
 	// Config is a copy of the loop's configuration.
 	Config Config `json:"config"`
 }
