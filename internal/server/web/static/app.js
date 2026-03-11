@@ -238,6 +238,14 @@ function connect() {
     const statuses = JSON.parse(e.data);
     state.loops.clear();
     for (const s of statuses) {
+      // Seed live telemetry for loops already in processing state
+      // so the Live Activity section shows immediately on connect.
+      if (s.state === 'processing') {
+        s._iterStartTs = s.last_wake_at ? new Date(s.last_wake_at).getTime() : Date.now();
+        s._liveTools = [];
+        s._liveModel = '';
+        startElapsedTimer(s.id);
+      }
       state.loops.set(s.id, s);
     }
     renderAll();
@@ -350,6 +358,11 @@ function handleLoopEvent(evt) {
       if (loopId && state.loops.has(loopId)) {
         const loop = state.loops.get(loopId);
         if (!loop._liveTools) loop._liveTools = [];
+        // Seed _iterStartTs if we missed the iteration_start (e.g. SSE reconnect).
+        if (!loop._iterStartTs) {
+          loop._iterStartTs = Date.now();
+          startElapsedTimer(loopId);
+        }
         loop._liveTools.push({ tool: evt.data.tool, status: 'running' });
       }
       break;
@@ -373,6 +386,11 @@ function handleLoopEvent(evt) {
       if (loopId && state.loops.has(loopId)) {
         const loop = state.loops.get(loopId);
         loop._liveModel = evt.data.model || '';
+        // Seed _iterStartTs if we missed the iteration_start (e.g. SSE reconnect).
+        if (!loop._iterStartTs) {
+          loop._iterStartTs = Date.now();
+          startElapsedTimer(loopId);
+        }
       }
       break;
 

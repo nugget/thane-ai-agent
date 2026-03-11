@@ -442,6 +442,14 @@ function connectSSE() {
     const statuses = JSON.parse(e.data);
     const match = statuses.find(s => s.id === nodeId);
     if (match) {
+      // Seed live telemetry for a loop already in processing state
+      // so the Live Activity section shows immediately on connect.
+      if (match.state === 'processing') {
+        match._iterStartTs = match.last_wake_at ? new Date(match.last_wake_at).getTime() : Date.now();
+        match._liveTools = [];
+        match._liveModel = '';
+        startElapsedTimer();
+      }
       loopData = match;
       document.title = 'Thane \u00b7 ' + (match.name || nodeId.slice(0, 8));
       renderLoopDetail();
@@ -529,6 +537,11 @@ function applyLoopEvent(evt) {
       break;
     case 'loop_tool_start':
       if (!loopData._liveTools) loopData._liveTools = [];
+      // Seed _iterStartTs if we missed the iteration_start (e.g. SSE reconnect).
+      if (!loopData._iterStartTs) {
+        loopData._iterStartTs = Date.now();
+        startElapsedTimer();
+      }
       loopData._liveTools.push({ tool: d.tool, status: 'running' });
       break;
     case 'loop_tool_done':
@@ -543,6 +556,11 @@ function applyLoopEvent(evt) {
       break;
     case 'loop_llm_response':
       loopData._liveModel = d.model || '';
+      // Seed _iterStartTs if we missed the iteration_start (e.g. SSE reconnect).
+      if (!loopData._iterStartTs) {
+        loopData._iterStartTs = Date.now();
+        startElapsedTimer();
+      }
       break;
   }
 }
