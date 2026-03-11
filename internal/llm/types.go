@@ -85,6 +85,11 @@ const (
 	// tool execution begins). Response carries the model name and
 	// token counts at the earliest point they become available.
 	KindLLMResponse
+
+	// KindLLMStart fires immediately before an LLM API call begins.
+	// Response.Model carries the selected model name so consumers
+	// can display it before the call completes.
+	KindLLMStart
 )
 
 // StreamCallback receives streaming events.

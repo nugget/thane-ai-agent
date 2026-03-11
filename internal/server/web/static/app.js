@@ -409,6 +409,18 @@ function handleLoopEvent(evt) {
       }
       break;
 
+    case 'loop_llm_start':
+      if (loopId && state.loops.has(loopId)) {
+        const loop = state.loops.get(loopId);
+        loop._liveModel = evt.data.model || '';
+        // Seed _iterStartTs if we missed the iteration_start (e.g. SSE reconnect).
+        if (!loop._iterStartTs) {
+          loop._iterStartTs = Date.now();
+          startElapsedTimer(loopId);
+        }
+      }
+      break;
+
     case 'loop_llm_response':
       if (loopId && state.loops.has(loopId)) {
         const loop = state.loops.get(loopId);

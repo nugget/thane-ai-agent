@@ -72,6 +72,7 @@ const (
 	KindToolCallDone  = llm.KindToolCallDone
 	KindDone          = llm.KindDone
 	KindLLMResponse   = llm.KindLLMResponse
+	KindLLMStart      = llm.KindLLMStart
 )
 
 // maxEgoBytes is the maximum size of ego.md content injected into the
@@ -1182,6 +1183,14 @@ iterLoop:
 			"est_tokens", iterMsgTokens,
 			"system_tokens", systemTokens,
 		)
+
+		// Notify consumers that an LLM call is starting (model is known).
+		if stream != nil {
+			stream(llm.StreamEvent{
+				Kind:     llm.KindLLMStart,
+				Response: &llm.ChatResponse{Model: model},
+			})
+		}
 
 		// Use streaming to avoid HTTP timeouts on slow models
 		llmResp, err := l.llm.ChatStream(iterCtx, model, llmMessages, toolDefs, stream)

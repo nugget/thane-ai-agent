@@ -121,6 +121,9 @@ const (
 	// KindLoopToolDone signals a tool execution has completed within a
 	// loop iteration. Data: loop_id, loop_name, tool, error (if failed).
 	KindLoopToolDone = "loop_tool_done"
+	// KindLoopLLMStart signals an LLM API call is about to begin during
+	// a loop iteration. Data: loop_id, loop_name, model.
+	KindLoopLLMStart = "loop_llm_start"
 	// KindLoopLLMResponse signals an LLM response was received during a
 	// loop iteration. Data: loop_id, loop_name, model, input_tokens,
 	// output_tokens.

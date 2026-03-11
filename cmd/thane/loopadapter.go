@@ -43,6 +43,12 @@ func (a *loopAdapter) Run(ctx context.Context, req loop.RunRequest, _ loop.Strea
 	if req.OnProgress != nil {
 		agentStream = func(e agent.StreamEvent) {
 			switch e.Kind {
+			case agent.KindLLMStart:
+				if e.Response != nil {
+					req.OnProgress(events.KindLoopLLMStart, map[string]any{
+						"model": e.Response.Model,
+					})
+				}
 			case agent.KindToolCallStart:
 				if e.ToolCall != nil {
 					req.OnProgress(events.KindLoopToolStart, map[string]any{

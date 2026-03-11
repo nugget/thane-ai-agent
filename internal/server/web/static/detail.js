@@ -570,6 +570,12 @@ function applyLoopEvent(evt) {
         }
       }
       break;
+    case 'loop_llm_start':
+      loopData._liveModel = d.model || '';
+      if (!loopData._iterStartTs) {
+        loopData._iterStartTs = Date.now();
+      }
+      break;
     case 'loop_llm_response':
       loopData._liveModel = d.model || '';
       if (!loopData._iterStartTs) {
