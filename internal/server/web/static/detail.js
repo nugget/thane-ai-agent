@@ -685,7 +685,7 @@ function buildLiveCard() {
 
   const model = document.createElement('span');
   model.className = 'iter-card__model';
-  model.textContent = loopData._liveModel ? shortModelName(loopData._liveModel) : '';
+  model.textContent = shortModelName(loopData._liveModel || loopData._lastModel || '');
 
   const liveLabel = document.createElement('span');
   liveLabel.className = 'iter-card__live-label';

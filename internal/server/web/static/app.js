@@ -1140,7 +1140,7 @@ function buildLiveCard(loop) {
 
   const model = document.createElement('span');
   model.className = 'iter-card__model';
-  model.textContent = loop._liveModel ? shortModelName(loop._liveModel) : '';
+  model.textContent = shortModelName(loop._liveModel || loop._lastModel || '');
 
   const liveLabel = document.createElement('span');
   liveLabel.className = 'iter-card__live-label';
