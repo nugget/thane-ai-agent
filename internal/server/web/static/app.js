@@ -833,7 +833,11 @@ function renderNode(loop, x, y) {
       class: 'node-label',
       y: nodeR + 18,
     });
-    label.textContent = loop.name || loop.id.slice(0, 8);
+    // Child loops show just the suffix after "/" since the parent
+    // line makes the hierarchy clear (e.g., "signal/Alice" → "Alice").
+    const displayName = loop.name || loop.id.slice(0, 8);
+    const slash = loop.parent_id ? displayName.indexOf('/') : -1;
+    label.textContent = slash > 0 ? displayName.slice(slash + 1) : displayName;
 
     inner.appendChild(ring);
     inner.appendChild(sleepRing);

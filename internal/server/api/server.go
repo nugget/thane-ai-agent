@@ -70,10 +70,16 @@ type Server struct {
 	healthDeps    HealthStatusFunc
 	tokenObserver TokenObserver
 	eventBus      *events.Bus
+	owuTracker    *OWUTracker
 	webServer     WebServerRegistrar
 	logger        *slog.Logger
 	server        *http.Server
 	stats         *SessionStats
+}
+
+// SetOWUTracker configures the Open WebUI loop tracker for dashboard visibility.
+func (s *Server) SetOWUTracker(t *OWUTracker) {
+	s.owuTracker = t
 }
 
 // SetConnManager sets the dependency health provider for the /health endpoint.

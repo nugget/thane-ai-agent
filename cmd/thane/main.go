@@ -2132,12 +2132,22 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	checkpointer.LogStartupStatus()
 
 	// --- Ollama-compatible API server ---
+	// --- OWU tracker ---
+	// Registers a parent "owu" loop and lazily spawns per-conversation
+	// children so that Open WebUI sessions appear on the dashboard.
+	owuTracker, err := api.NewOWUTracker(ctx, loopRegistry, eventBus, loop, logger)
+	if err != nil {
+		return fmt.Errorf("create owu tracker: %w", err)
+	}
+	server.SetOWUTracker(owuTracker)
+
 	// Optional second HTTP server that speaks the Ollama wire protocol.
 	// Home Assistant's Ollama integration connects here, allowing Thane
 	// to serve as a drop-in replacement for a standalone Ollama instance.
 	var ollamaServer *api.OllamaServer
 	if cfg.OllamaAPI.Enabled {
 		ollamaServer = api.NewOllamaServer(cfg.OllamaAPI.Address, cfg.OllamaAPI.Port, loop, logger)
+		ollamaServer.SetOWUTracker(owuTracker)
 		go func() {
 			if err := ollamaServer.Start(ctx); err != nil {
 				logger.Error("ollama API server failed", "error", err)

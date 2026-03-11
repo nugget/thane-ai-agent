@@ -8,6 +8,7 @@
 package api
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -91,7 +92,7 @@ type OllamaVersionResponse struct {
 // Use this for single-port setups. For dual-port, use OllamaServer instead.
 func (s *Server) RegisterOllamaRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/chat", func(w http.ResponseWriter, r *http.Request) {
-		handleOllamaChatShared(w, r, s.loop, s.logger)
+		handleOllamaChatShared(w, r, s.loop, s.owuTracker, s.logger)
 	})
 	mux.HandleFunc("GET /api/tags", func(w http.ResponseWriter, r *http.Request) {
 		handleOllamaTagsShared(w, r, s.logger)
@@ -116,7 +117,7 @@ func (s *Server) RegisterOllamaRoutes(mux *http.ServeMux) {
 //   - r: HTTP request containing the chat payload
 //   - loop: Agent loop for processing the conversation
 //   - logger: Logger for request tracking and debugging
-func handleOllamaChatShared(w http.ResponseWriter, r *http.Request, loop *agent.Loop, logger *slog.Logger) {
+func handleOllamaChatShared(w http.ResponseWriter, r *http.Request, loop *agent.Loop, tracker *OWUTracker, logger *slog.Logger) {
 	// Inject subsystem logger into context for downstream propagation.
 	r = r.WithContext(logging.WithLogger(r.Context(), logger.With("subsystem", logging.SubsystemAPI)))
 
@@ -298,6 +299,18 @@ func handleOllamaChatShared(w http.ResponseWriter, r *http.Request, loop *agent.
 		SystemPrompt:   ocSystemPrompt,
 	}
 
+	// Derive a short display name for the conversation's dashboard node.
+	displayName := owuDisplayName(messages)
+
+	// runFn dispatches through the OWU tracker when available, falling
+	// back to calling the agent loop directly.
+	runFn := func(ctx context.Context, req *agent.Request, cb agent.StreamCallback) (*agent.Response, error) {
+		if tracker != nil {
+			return tracker.Dispatch(ctx, req, cb, displayName)
+		}
+		return loop.Run(ctx, req, cb)
+	}
+
 	// Check if streaming was requested. For Ollama compatibility, a nil stream defaults to true.
 	stream := true
 	if req.Stream != nil {
@@ -305,12 +318,12 @@ func handleOllamaChatShared(w http.ResponseWriter, r *http.Request, loop *agent.
 	}
 
 	if stream {
-		handleOllamaStreamingChatShared(w, r, agentReq, start, loop, logger)
+		handleOllamaStreamingChatShared(w, r, agentReq, start, runFn, logger)
 		return
 	}
 
 	// Non-streaming response
-	resp, err := loop.Run(r.Context(), agentReq, nil)
+	resp, err := runFn(r.Context(), agentReq, nil)
 	if err != nil {
 		logger.Error("agent loop failed", "error", err)
 		ollamaError(w, http.StatusInternalServerError, "agent error")
@@ -356,7 +369,12 @@ func handleOllamaChatShared(w http.ResponseWriter, r *http.Request, loop *agent.
 //   - start: Request start time for duration tracking
 //   - loop: Agent loop for processing
 //   - logger: Logger for error tracking
-func handleOllamaStreamingChatShared(w http.ResponseWriter, r *http.Request, req *agent.Request, start time.Time, loop *agent.Loop, logger *slog.Logger) {
+//
+// runFunc abstracts the agent dispatch so callers can route through
+// the OWU tracker or call the agent loop directly.
+type runFunc func(ctx context.Context, req *agent.Request, cb agent.StreamCallback) (*agent.Response, error)
+
+func handleOllamaStreamingChatShared(w http.ResponseWriter, r *http.Request, req *agent.Request, start time.Time, run runFunc, logger *slog.Logger) {
 	// Set headers for streaming. Omit "Connection: keep-alive" — it's a
 	// hop-by-hop header forbidden in HTTP/2 (RFC 9113 §8.2.2).
 	w.Header().Set("Content-Type", "application/x-ndjson")
@@ -444,7 +462,7 @@ func handleOllamaStreamingChatShared(w http.ResponseWriter, r *http.Request, req
 	}
 
 	// Run agent with streaming callback
-	resp, err := loop.Run(r.Context(), req, streamCallback)
+	resp, err := run(r.Context(), req, streamCallback)
 	if err != nil {
 		logger.Error("streaming failed", "error", err)
 		// Send error as final message
@@ -742,6 +760,25 @@ func deriveConversationID(messages []agent.Message) string {
 		}
 	}
 	return "default"
+}
+
+// owuDisplayName derives a short label for the dashboard node from the
+// conversation's last user message. Returns at most 24 characters.
+func owuDisplayName(messages []agent.Message) string {
+	// Use the last user message — it's the most relevant for identifying
+	// the conversation's current topic.
+	for i := len(messages) - 1; i >= 0; i-- {
+		if messages[i].Role == "user" && messages[i].Content != "" {
+			s := messages[i].Content
+			if len(s) > 24 {
+				s = s[:24] + "…"
+			}
+			// Replace newlines with spaces for single-line label.
+			s = strings.ReplaceAll(s, "\n", " ")
+			return s
+		}
+	}
+	return "conversation"
 }
 
 // owuAuxiliaryPatterns are substrings found in Open WebUI's auxiliary prompts.
