@@ -368,17 +368,37 @@ function renderDetail() {
   $('#detail-started').textContent = loop.started_at ? timeAgo(new Date(loop.started_at)) : '-';
 
   // Sleep countdown.
-  const timer = state.sleepTimers.get(state.selected);
+  updateSleepDisplay(loop);
+}
+
+function updateSleepDisplay(loop) {
+  const el = $('#detail-sleep');
+  const timer = state.sleepTimers.get(loop.id);
   if (timer && timer.durationMs > 0 && loop.state === 'sleeping') {
     const remaining = timer.durationMs - (Date.now() - timer.startedAt.getTime());
     if (remaining > 0) {
-      $('#detail-sleep').textContent = formatDuration(remaining);
+      const wakeAt = new Date(timer.startedAt.getTime() + timer.durationMs);
+      const wakeTime = formatTime(wakeAt);
+      el.textContent = 'until ' + wakeTime + ' (' + formatFuzzy(remaining) + ')';
     } else {
-      $('#detail-sleep').textContent = 'waking...';
+      el.textContent = 'waking up now...';
     }
+  } else if (loop.state === 'processing') {
+    el.textContent = 'active';
   } else {
-    $('#detail-sleep').textContent = loop.state === 'processing' ? 'active' : '-';
+    el.textContent = '-';
   }
+}
+
+function formatFuzzy(ms) {
+  const sec = Math.round(ms / 1000);
+  if (sec < 5) return 'moments';
+  if (sec < 60) return 'about ' + sec + 's';
+  const min = Math.floor(sec / 60);
+  const remSec = sec % 60;
+  if (min < 2) return 'about a minute';
+  if (remSec < 15) return min + ' min';
+  return min + ' min ' + remSec + 's';
 }
 
 function renderDetailIDs(loop) {
@@ -600,17 +620,7 @@ function selectLoop(loopId) {
 function tick() {
   // Update sleep countdown in detail panel.
   if (state.selected && state.loops.has(state.selected)) {
-    const loop = state.loops.get(state.selected);
-    const timer = state.sleepTimers.get(state.selected);
-    if (timer && loop.state === 'sleeping') {
-      const remaining = timer.durationMs - (Date.now() - timer.startedAt.getTime());
-      const el = $('#detail-sleep');
-      if (remaining > 0) {
-        el.textContent = formatDuration(remaining);
-      } else {
-        el.textContent = 'waking...';
-      }
-    }
+    updateSleepDisplay(state.loops.get(state.selected));
   }
 
   // Update sleep progress rings on all nodes.
