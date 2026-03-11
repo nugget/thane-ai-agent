@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Thane - Detail</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <style>
+    body {
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      overflow: hidden;
+    }
+    .popup-inspector {
+      flex: 1;
+      overflow-y: auto;
+      padding: 0.75rem;
+      border-bottom: 1px solid var(--border);
+      min-height: 0;
+    }
+    .popup-logs {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      min-height: 0;
+    }
+    .popup-logs .log-toolbar {
+      flex-shrink: 0;
+    }
+    .popup-logs .log-scroll {
+      flex: 1;
+      overflow-y: auto;
+      overflow-x: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+    .popup-logs .log-empty {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--text-muted);
+      font-size: 0.85rem;
+    }
+    .popup-status {
+      font-size: 0.7rem;
+      color: var(--text-muted);
+      padding: 0.25rem 0.75rem;
+      background: var(--bg-secondary);
+      border-top: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+  </style>
+</head>
+<body>
+  <section class="popup-inspector" id="inspector">
+    <!-- Loop detail (shown for type=loop) -->
+    <div id="loop-detail" hidden>
+      <div class="detail-header">
+        <h2 id="detail-name" class="detail-name"></h2>
+        <span id="detail-state" class="state-badge"></span>
+      </div>
+      <div id="detail-ids" class="detail-ids"></div>
+      <dl id="detail-forward" class="detail-metrics detail-metrics--forward" hidden>
+        <dt id="detail-sleep-label" hidden>Sleep</dt>
+        <dd id="detail-sleep" hidden>-</dd>
+      </dl>
+      <div id="detail-supervisor" class="supervisor-bar" hidden></div>
+      <hr class="detail-divider" id="detail-divider" hidden>
+      <dl class="detail-metrics detail-metrics--history">
+        <dt>Iterations</dt><dd id="detail-iterations">-</dd>
+        <dt>Attempts</dt><dd id="detail-attempts">-</dd>
+        <dt>Input Tokens</dt><dd id="detail-input-tokens">-</dd>
+        <dt>Output Tokens</dt><dd id="detail-output-tokens">-</dd>
+        <dt>Last Model</dt><dd id="detail-model">-</dd>
+        <dt>Last Error</dt><dd id="detail-error" class="detail-error">-</dd>
+        <dt>Started</dt><dd id="detail-started">-</dd>
+      </dl>
+      <h3 class="section-title">Recent Events</h3>
+      <ul id="event-list" class="event-list"></ul>
+    </div>
+
+    <!-- System detail (shown for type=system) -->
+    <div id="system-detail" hidden>
+      <div class="detail-header">
+        <h2 class="detail-name">Runtime</h2>
+        <span id="system-status" class="state-badge"></span>
+      </div>
+      <h3 class="section-title">Services</h3>
+      <div id="system-services" class="system-services"></div>
+      <hr class="detail-divider">
+      <dl class="detail-metrics">
+        <dt>Uptime</dt><dd id="system-uptime">-</dd>
+        <dt>Version</dt><dd id="system-version">-</dd>
+        <dt>Commit</dt><dd id="system-commit">-</dd>
+        <dt>Go</dt><dd id="system-go">-</dd>
+        <dt>Arch</dt><dd id="system-arch">-</dd>
+      </dl>
+    </div>
+  </section>
+
+  <section class="popup-logs" id="logs-section">
+    <div class="log-toolbar">
+      <h3 class="section-title">Logs</h3>
+      <div class="log-filters">
+        <select id="log-level" class="log-select">
+          <option value="">All Levels</option>
+          <option value="ERROR">Error</option>
+          <option value="WARN">Warn+</option>
+          <option value="INFO">Info+</option>
+          <option value="DEBUG">Debug+</option>
+        </select>
+        <button id="log-refresh" class="btn btn--sm">Refresh</button>
+      </div>
+    </div>
+    <div id="log-empty" class="log-empty">
+      <p>Loading logs...</p>
+    </div>
+    <div id="log-scroll" class="log-scroll" hidden>
+      <table id="log-table" class="log-table">
+        <thead>
+          <tr>
+            <th class="log-col-time">Time</th>
+            <th class="log-col-level">Level</th>
+            <th class="log-col-subsystem">Sub</th>
+            <th class="log-col-msg">Message</th>
+            <th class="log-col-detail">Detail</th>
+          </tr>
+        </thead>
+        <tbody id="log-body"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <div class="popup-status" id="popup-status">Connecting...</div>
+
+  <script src="/static/detail.js"></script>
+</body>
+</html>

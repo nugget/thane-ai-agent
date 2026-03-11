@@ -284,6 +284,14 @@ function renderNode(loop, x, y) {
       'data-loop-id': loop.id,
     });
     group.addEventListener('click', () => selectLoop(loop.id));
+    group.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      showContextMenu(e.clientX, e.clientY, [
+        { label: 'Open in window', action: () => openDetailWindow('loop', loop.id) },
+        { separator: true },
+        { label: 'Copy loop ID', action: () => navigator.clipboard.writeText(loop.id) },
+      ]);
+    });
 
     // Native SVG tooltip — instant, no delay.
     const title = createSVG('title', {});
@@ -402,6 +410,12 @@ function renderSystemNode(x, y) {
   if (!group) {
     group = createSVG('g', { class: 'system-node' });
     group.addEventListener('click', () => selectSystem());
+    group.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      showContextMenu(e.clientX, e.clientY, [
+        { label: 'Open in window', action: () => openDetailWindow('system') },
+      ]);
+    });
 
     const title = createSVG('title', {});
     title.textContent = 'Runtime';
@@ -1021,6 +1035,117 @@ function refreshLogs() {
 
 $('#log-level').addEventListener('change', refreshLogs);
 $('#log-refresh').addEventListener('click', refreshLogs);
+
+// ---------------------------------------------------------------------------
+// Panel Toggle
+// ---------------------------------------------------------------------------
+
+function toggleInspector() {
+  const panel = document.getElementById('detail-panel');
+  const handle = document.getElementById('resize-v');
+  const btn = document.getElementById('toggle-inspector');
+  const visible = !panel.hidden;
+  panel.hidden = visible;
+  handle.hidden = visible;
+  btn.classList.toggle('toggle-btn--active', !visible);
+}
+
+function toggleLogs() {
+  const panel = document.getElementById('log-panel');
+  const handle = document.getElementById('resize-h');
+  const btn = document.getElementById('toggle-logs');
+  const visible = !panel.hidden;
+  panel.hidden = visible;
+  handle.hidden = visible;
+  btn.classList.toggle('toggle-btn--active', !visible);
+}
+
+$('#toggle-inspector').addEventListener('click', toggleInspector);
+$('#toggle-logs').addEventListener('click', toggleLogs);
+
+// ---------------------------------------------------------------------------
+// Context Menu
+// ---------------------------------------------------------------------------
+
+const contextMenu = document.getElementById('context-menu');
+const contextMenuItems = document.getElementById('context-menu-items');
+
+function showContextMenu(clientX, clientY, items) {
+  contextMenuItems.innerHTML = '';
+  for (const item of items) {
+    if (item.separator) {
+      const sep = document.createElement('li');
+      sep.className = 'context-menu-sep';
+      contextMenuItems.appendChild(sep);
+      continue;
+    }
+    const li = document.createElement('li');
+    li.textContent = item.label;
+    li.addEventListener('click', () => {
+      hideContextMenu();
+      item.action();
+    });
+    contextMenuItems.appendChild(li);
+  }
+
+  contextMenu.hidden = false;
+
+  // Position, clamping to viewport.
+  const menuRect = contextMenu.getBoundingClientRect();
+  const x = Math.min(clientX, window.innerWidth - menuRect.width - 4);
+  const y = Math.min(clientY, window.innerHeight - menuRect.height - 4);
+  contextMenu.style.left = Math.max(0, x) + 'px';
+  contextMenu.style.top = Math.max(0, y) + 'px';
+}
+
+function hideContextMenu() {
+  contextMenu.hidden = true;
+}
+
+document.addEventListener('click', (e) => {
+  if (!contextMenu.hidden && !contextMenu.contains(e.target)) {
+    hideContextMenu();
+  }
+});
+
+document.addEventListener('scroll', hideContextMenu, true);
+
+// ---------------------------------------------------------------------------
+// Popup Detail Window
+// ---------------------------------------------------------------------------
+
+function openDetailWindow(type, id) {
+  const params = type === 'system'
+    ? '?type=system'
+    : '?type=loop&id=' + encodeURIComponent(id);
+  window.open(
+    '/static/detail.html' + params,
+    'detail-' + (id || 'system'),
+    'width=500,height=700,menubar=no,toolbar=no,location=no,status=no'
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Keyboard Shortcuts
+// ---------------------------------------------------------------------------
+
+document.addEventListener('keydown', (e) => {
+  // Skip when typing in form elements.
+  const tag = e.target.tagName;
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+
+  switch (e.key.toLowerCase()) {
+    case 'i':
+      toggleInspector();
+      break;
+    case 'l':
+      toggleLogs();
+      break;
+    case 'escape':
+      hideContextMenu();
+      break;
+  }
+});
 
 // ---------------------------------------------------------------------------
 // Helpers

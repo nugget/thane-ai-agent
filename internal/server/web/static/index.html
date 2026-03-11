@@ -12,6 +12,8 @@
       <h1 class="header-title">Thane <span class="header-sep">&middot;</span> Cognition Engine</h1>
     </div>
     <div class="header-right">
+      <button id="toggle-inspector" class="toggle-btn toggle-btn--active" title="Toggle inspector (I)">Inspector</button>
+      <button id="toggle-logs" class="toggle-btn toggle-btn--active" title="Toggle logs (L)">Logs</button>
       <span id="conn-status" class="conn-badge conn-badge--connecting">connecting</span>
     </div>
   </header>
@@ -134,6 +136,10 @@
     <span id="footer-go" class="footer-item"></span>
     <a href="https://github.com/nugget/thane-ai-agent" class="footer-link" target="_blank" rel="noopener">github.com/nugget/thane-ai-agent</a>
   </footer>
+
+  <div id="context-menu" class="context-menu" hidden>
+    <ul id="context-menu-items"></ul>
+  </div>
 
   <script src="/static/app.js"></script>
 </body>

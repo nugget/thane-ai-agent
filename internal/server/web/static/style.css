@@ -839,6 +839,64 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
   transition: stroke-dashoffset 1s linear;
 }
 
+/* === Toggle Buttons === */
+.toggle-btn {
+  font-size: 0.7rem;
+  font-family: var(--font-sans);
+  font-weight: 500;
+  background: var(--bg-tertiary);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.15em 0.6em;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.toggle-btn:hover { background: var(--bg-hover); color: var(--text-secondary); }
+
+.toggle-btn--active {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+/* Panel hidden states */
+.detail-panel[hidden] { display: none; }
+.resize-handle[hidden] { display: none; }
+.log-panel[hidden] { display: none; }
+
+/* === Context Menu === */
+.context-menu {
+  position: fixed;
+  z-index: 100;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.25rem 0;
+  min-width: 160px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
+.context-menu[hidden] { display: none; }
+
+.context-menu li {
+  list-style: none;
+  padding: 0.35rem 0.75rem;
+  font-size: 0.8rem;
+  cursor: pointer;
+  color: var(--text-primary);
+  transition: background 0.1s;
+}
+
+.context-menu li:hover { background: var(--bg-hover); }
+
+.context-menu-sep {
+  border-top: 1px solid var(--border);
+  margin: 0.2rem 0;
+  padding: 0;
+  pointer-events: none;
+}
+
 /* === Responsive === */
 @media (max-width: 768px) {
   .main { flex-direction: column; }
