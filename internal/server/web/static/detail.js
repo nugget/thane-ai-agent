@@ -743,11 +743,6 @@ $('#log-level').addEventListener('change', () => {
   else fetchLoopLogs();
 });
 
-$('#log-refresh').addEventListener('click', () => {
-  if (nodeType === 'system') fetchSystemLogs();
-  else fetchLoopLogs();
-});
-
 // ---------------------------------------------------------------------------
 // Boot
 // ---------------------------------------------------------------------------

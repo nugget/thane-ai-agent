@@ -65,9 +65,9 @@
       overflow: hidden;
       background: var(--bg-secondary);
     }
-    .inspector-header {
+    .inspector-footer {
       flex-shrink: 0;
-      border-bottom: 1px solid var(--border);
+      border-top: 1px solid var(--border);
     }
     .inspector-row {
       display: flex;
@@ -163,26 +163,6 @@
 
     <!-- Inspector sidebar (right by default) -->
     <section class="popup-inspector" id="inspector">
-      <div class="inspector-header">
-        <div class="inspector-row">
-          <button id="toggle-side" class="toggle-btn" title="Swap inspector side">&#x21C4; Swap</button>
-          <span class="spacer"></span>
-          <span id="conn-dot" class="conn-dot" title="Connecting..."></span>
-        </div>
-        <div class="inspector-row">
-          <label class="poll-label" id="poll-rate-label" for="poll-rate">2s</label>
-          <input type="range" id="poll-rate" class="poll-slider" min="1" max="60" value="2">
-          <select id="log-level" class="log-select">
-            <option value="">All</option>
-            <option value="ERROR">Error</option>
-            <option value="WARN">Warn+</option>
-            <option value="INFO">Info+</option>
-            <option value="DEBUG">Debug+</option>
-          </select>
-          <button id="log-refresh" class="btn btn--sm">Refresh</button>
-        </div>
-      </div>
-
       <div class="inspector-body">
         <!-- Loop detail (shown for type=loop) -->
         <div id="loop-detail" hidden>
@@ -230,6 +210,24 @@
             <dt>Go</dt><dd id="system-go">-</dd>
             <dt>Arch</dt><dd id="system-arch">-</dd>
           </dl>
+        </div>
+      </div>
+      <div class="inspector-footer">
+        <div class="inspector-row">
+          <label class="poll-label" id="poll-rate-label" for="poll-rate">2s</label>
+          <input type="range" id="poll-rate" class="poll-slider" min="1" max="60" value="2">
+          <select id="log-level" class="log-select">
+            <option value="">All</option>
+            <option value="ERROR">Error</option>
+            <option value="WARN">Warn+</option>
+            <option value="INFO">Info+</option>
+            <option value="DEBUG">Debug+</option>
+          </select>
+        </div>
+        <div class="inspector-row">
+          <button id="toggle-side" class="toggle-btn" title="Swap inspector side">&#x21C4; Swap</button>
+          <span class="spacer"></span>
+          <span id="conn-dot" class="conn-dot" title="Connecting..."></span>
         </div>
       </div>
     </section>
