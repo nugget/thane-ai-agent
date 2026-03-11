@@ -631,6 +631,14 @@ function renderAggregates() {
 
 function renderTimeline() {
   const container = $('#detail-timeline');
+
+  // Preserve expanded card state across re-renders.
+  const expanded = new Set();
+  container.querySelectorAll('.iter-card--past.iter-card--expanded').forEach(el => {
+    const idx = el.dataset.idx;
+    if (idx != null) expanded.add(idx);
+  });
+
   container.innerHTML = '';
 
   const isProcessing = loopData.state === 'processing';
@@ -649,7 +657,7 @@ function renderTimeline() {
 
   // Past iteration cards.
   for (let i = 0; i < iterationHistory.length; i++) {
-    container.appendChild(buildPastCard(iterationHistory[i], loopData.handler_only));
+    container.appendChild(buildPastCard(iterationHistory[i], loopData.handler_only, i, expanded.has(String(i))));
     if (i < iterationHistory.length - 1) {
       container.appendChild(buildConnector(iterationHistory[i], false));
     }
@@ -714,10 +722,11 @@ function buildLiveCard() {
   return card;
 }
 
-function buildPastCard(snap, handlerOnly) {
+function buildPastCard(snap, handlerOnly, idx, startExpanded) {
   const card = document.createElement('div');
   const isError = !!snap.error;
-  card.className = 'iter-card iter-card--past' + (isError ? ' iter-card--error' : '');
+  card.className = 'iter-card iter-card--past' + (isError ? ' iter-card--error' : '') + (startExpanded ? ' iter-card--expanded' : '');
+  card.dataset.idx = idx;
 
   const header = document.createElement('div');
   header.className = 'iter-card__header';
@@ -736,7 +745,7 @@ function buildPastCard(snap, handlerOnly) {
 
   const chevron = document.createElement('span');
   chevron.className = 'iter-card__chevron';
-  chevron.textContent = '\u25b8';
+  chevron.textContent = startExpanded ? '\u25be' : '\u25b8';
 
   header.appendChild(num);
   header.appendChild(model);
@@ -749,7 +758,7 @@ function buildPastCard(snap, handlerOnly) {
 
   const body = document.createElement('div');
   body.className = 'iter-card__body';
-  body.hidden = true;
+  body.hidden = !startExpanded;
 
   if (!handlerOnly && (snap.input_tokens || snap.output_tokens)) {
     const tokens = document.createElement('div');
