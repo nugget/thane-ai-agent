@@ -451,6 +451,10 @@ function applyLoopEvent(evt) {
       }
       break;
     }
+    case 'loop_wait_start':
+      loopData.state = 'waiting';
+      sleepTimers.delete(nodeId);
+      break;
     case 'loop_error':
       loopData.last_error = d.error;
       break;
@@ -482,13 +486,21 @@ function renderLoopDetail() {
 
   // Forward-looking section.
   const isSleeping = loopData.state === 'sleeping';
+  const isWaiting = loopData.state === 'waiting';
   const hasSupervisor = loopData.config && loopData.config.Supervisor;
-  const showForward = isSleeping || hasSupervisor;
+  const showForward = isSleeping || isWaiting || hasSupervisor;
   $('#detail-forward').hidden = !showForward;
   $('#detail-divider').hidden = !showForward;
-  $('#detail-sleep-label').hidden = !isSleeping;
-  $('#detail-sleep').hidden = !isSleeping;
-  updateSleepDisplay();
+  const sleepVisible = isSleeping || isWaiting;
+  $('#detail-sleep-label').hidden = !sleepVisible;
+  $('#detail-sleep').hidden = !sleepVisible;
+  if (isWaiting) {
+    $('#detail-sleep-label').textContent = 'Wait';
+    $('#detail-sleep').textContent = 'awaiting event';
+  } else {
+    $('#detail-sleep-label').textContent = 'Sleep';
+    updateSleepDisplay();
+  }
 
   // Supervisor bar.
   renderSupervisorBar();
@@ -604,6 +616,10 @@ function renderEventList() {
         detail.textContent = ms > 0 ? formatDuration(ms) : raw;
         break;
       }
+      case 'loop_wait_start':
+        kind.textContent = 'waiting';
+        detail.textContent = 'awaiting event';
+        break;
       case 'loop_error':
         kind.textContent = 'error';
         kind.className += ' event-error';

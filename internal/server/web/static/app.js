@@ -348,6 +348,14 @@ function handleLoopEvent(evt) {
       }
       break;
 
+    case 'loop_wait_start':
+      if (loopId && state.loops.has(loopId)) {
+        state.loops.get(loopId).state = 'waiting';
+        // Clear any sleep timer — waiting has no duration.
+        state.sleepTimers.delete(loopId);
+      }
+      break;
+
     case 'loop_error':
       if (loopId && state.loops.has(loopId)) {
         const loop = state.loops.get(loopId);
@@ -883,21 +891,28 @@ function renderDetail() {
   // IDs section.
   renderDetailIDs(loop);
 
-  // Forward-looking section: visible when sleeping or has supervisor config.
+  // Forward-looking section: visible when sleeping, waiting, or has supervisor config.
   const isSleeping = loop.state === 'sleeping';
+  const isWaiting = loop.state === 'waiting';
   const hasSupervisor = loop.config && loop.config.Supervisor;
-  const showForward = isSleeping || hasSupervisor;
+  const showForward = isSleeping || isWaiting || hasSupervisor;
   $('#detail-forward').hidden = !showForward;
   $('#detail-divider').hidden = !showForward;
 
   // Supervisor status bar.
   renderSupervisorBar(loop);
 
-  // Sleep countdown — hide the row entirely when not sleeping.
-  const sleepVisible = loop.state === 'sleeping';
+  // Sleep/wait status — show countdown when sleeping, "awaiting event" when waiting.
+  const sleepVisible = isSleeping || isWaiting;
   $('#detail-sleep-label').hidden = !sleepVisible;
   $('#detail-sleep').hidden = !sleepVisible;
-  updateSleepDisplay(loop);
+  if (isWaiting) {
+    $('#detail-sleep-label').textContent = 'Wait';
+    $('#detail-sleep').textContent = 'awaiting event';
+  } else {
+    $('#detail-sleep-label').textContent = 'Sleep';
+    updateSleepDisplay(loop);
+  }
 
   // Historical metrics.
   $('#detail-iterations').textContent = formatNumber(loop.iterations || 0);
@@ -1109,6 +1124,10 @@ function renderEventList() {
         detail.textContent = ms > 0 ? formatDuration(ms) : raw;
         break;
       }
+      case 'loop_wait_start':
+        kind.textContent = 'waiting';
+        detail.textContent = 'awaiting event';
+        break;
       case 'loop_error':
         kind.textContent = 'error';
         kind.className += ' event-error';

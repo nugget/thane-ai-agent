@@ -770,11 +770,11 @@ func TestTaskBuilderValidation(t *testing.T) {
 		}
 	})
 
-	t.Run("neither Task nor TaskBuilder fails", func(t *testing.T) {
+	t.Run("neither Task nor TaskBuilder nor Handler fails", func(t *testing.T) {
 		t.Parallel()
 		_, err := New(Config{Name: "neither"}, Deps{Runner: runner})
 		if err == nil {
-			t.Error("expected error when neither Task nor TaskBuilder set")
+			t.Error("expected error when neither Task, TaskBuilder, nor Handler set")
 		}
 	})
 }
@@ -1118,4 +1118,399 @@ type callbackRunner struct {
 
 func (r *callbackRunner) Run(ctx context.Context, req RunRequest, _ StreamCallback) (*RunResponse, error) {
 	return r.fn(ctx, req)
+}
+
+// ---------------------------------------------------------------------------
+// Handler + WaitFunc tests
+// ---------------------------------------------------------------------------
+
+func TestHandlerTimerLoop(t *testing.T) {
+	t.Parallel()
+
+	var calls atomic.Int32
+	var receivedEvents []any
+	var mu sync.Mutex
+
+	l, err := New(Config{
+		Name:         "handler-timer",
+		SleepMin:     1 * time.Millisecond,
+		SleepMax:     2 * time.Millisecond,
+		SleepDefault: 1 * time.Millisecond,
+		Jitter:       Float64Ptr(0),
+		MaxIter:      3,
+		Handler: func(_ context.Context, event any) error {
+			mu.Lock()
+			receivedEvents = append(receivedEvents, event)
+			mu.Unlock()
+			calls.Add(1)
+			return nil
+		},
+	}, Deps{}) // No Runner needed
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	_ = l.Start(context.Background())
+	<-l.Done()
+
+	status := l.Status()
+	if status.Iterations != 3 {
+		t.Errorf("iterations = %d, want 3", status.Iterations)
+	}
+	if status.TotalInputTokens != 0 {
+		t.Errorf("TotalInputTokens = %d, want 0 (handler-only)", status.TotalInputTokens)
+	}
+	if status.TotalOutputTokens != 0 {
+		t.Errorf("TotalOutputTokens = %d, want 0 (handler-only)", status.TotalOutputTokens)
+	}
+	if int(calls.Load()) != 3 {
+		t.Errorf("handler call count = %d, want 3", calls.Load())
+	}
+	if !status.HandlerOnly {
+		t.Error("HandlerOnly = false, want true")
+	}
+	if status.EventDriven {
+		t.Error("EventDriven = true, want false (timer-driven)")
+	}
+
+	// Timer-driven handler loops should receive nil events.
+	mu.Lock()
+	defer mu.Unlock()
+	for i, ev := range receivedEvents {
+		if ev != nil {
+			t.Errorf("receivedEvents[%d] = %v, want nil", i, ev)
+		}
+	}
+}
+
+func TestHandlerError(t *testing.T) {
+	t.Parallel()
+
+	var callNum atomic.Int32
+	l, err := New(Config{
+		Name:         "handler-err",
+		SleepMin:     1 * time.Millisecond,
+		SleepMax:     100 * time.Millisecond,
+		SleepDefault: 1 * time.Millisecond,
+		Jitter:       Float64Ptr(0),
+		MaxIter:      3,
+		Handler: func(_ context.Context, _ any) error {
+			n := callNum.Add(1)
+			if n <= 2 {
+				return fmt.Errorf("fail %d", n)
+			}
+			return nil
+		},
+	}, Deps{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	_ = l.Start(context.Background())
+	<-l.Done()
+
+	status := l.Status()
+	if status.Attempts != 3 {
+		t.Errorf("attempts = %d, want 3", status.Attempts)
+	}
+	if status.Iterations != 1 {
+		t.Errorf("iterations = %d, want 1", status.Iterations)
+	}
+	if status.ConsecutiveErrors != 0 {
+		t.Errorf("consecutiveErrors = %d, want 0 (reset after success)", status.ConsecutiveErrors)
+	}
+	if status.LastError != "" {
+		t.Errorf("lastError = %q, want empty", status.LastError)
+	}
+}
+
+func TestHandlerNoRunnerRequired(t *testing.T) {
+	t.Parallel()
+
+	_, err := New(Config{
+		Name: "handler-no-runner",
+		Handler: func(_ context.Context, _ any) error {
+			return nil
+		},
+	}, Deps{})
+	if err != nil {
+		t.Errorf("expected no error with Handler and no Runner, got: %v", err)
+	}
+}
+
+func TestHandlerNoRunnerNoHandlerFails(t *testing.T) {
+	t.Parallel()
+
+	_, err := New(Config{Name: "no-handler-no-runner", Task: "test"}, Deps{})
+	if err != ErrNilRunner {
+		t.Errorf("expected ErrNilRunner, got: %v", err)
+	}
+}
+
+func TestWaitFuncWithHandler(t *testing.T) {
+	t.Parallel()
+
+	var waitNum atomic.Int32
+	var receivedEvents []any
+	var mu sync.Mutex
+
+	l, err := New(Config{
+		Name:    "wait-handler",
+		MaxIter: 3,
+		WaitFunc: func(ctx context.Context) (any, error) {
+			n := waitNum.Add(1)
+			return fmt.Sprintf("event-%d", n), nil
+		},
+		Handler: func(_ context.Context, event any) error {
+			mu.Lock()
+			receivedEvents = append(receivedEvents, event)
+			mu.Unlock()
+			return nil
+		},
+	}, Deps{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	_ = l.Start(context.Background())
+
+	select {
+	case <-l.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("loop did not finish within 5s")
+	}
+
+	status := l.Status()
+	if status.Iterations != 3 {
+		t.Errorf("iterations = %d, want 3", status.Iterations)
+	}
+	if !status.HandlerOnly {
+		t.Error("HandlerOnly = false, want true")
+	}
+	if !status.EventDriven {
+		t.Error("EventDriven = false, want true")
+	}
+
+	// WaitFunc loops wait-at-top: all 3 iterations should get events.
+	mu.Lock()
+	defer mu.Unlock()
+	if len(receivedEvents) != 3 {
+		t.Fatalf("received %d events, want 3", len(receivedEvents))
+	}
+	for i, ev := range receivedEvents {
+		want := fmt.Sprintf("event-%d", i+1)
+		if ev != want {
+			t.Errorf("receivedEvents[%d] = %v, want %q", i, ev, want)
+		}
+	}
+}
+
+func TestWaitFuncWithTask(t *testing.T) {
+	t.Parallel()
+
+	var waitNum atomic.Int32
+	runner := &countingRunner{count: &atomic.Int32{}}
+
+	l, err := New(Config{
+		Name:    "wait-task",
+		Task:    "test",
+		MaxIter: 3,
+		WaitFunc: func(ctx context.Context) (any, error) {
+			waitNum.Add(1)
+			return "trigger", nil
+		},
+	}, Deps{Runner: runner})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	_ = l.Start(context.Background())
+
+	select {
+	case <-l.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("loop did not finish within 5s")
+	}
+
+	status := l.Status()
+	if status.Iterations != 3 {
+		t.Errorf("iterations = %d, want 3", status.Iterations)
+	}
+	// Runner should have been called for all 3 iterations.
+	if runner.count.Load() != 3 {
+		t.Errorf("runner calls = %d, want 3", runner.count.Load())
+	}
+	// WaitFunc should have been called 3 times (once per iteration,
+	// at the top of the loop).
+	if waitNum.Load() != 3 {
+		t.Errorf("WaitFunc calls = %d, want 3", waitNum.Load())
+	}
+	if status.HandlerOnly {
+		t.Error("HandlerOnly = true, want false")
+	}
+	if !status.EventDriven {
+		t.Error("EventDriven = false, want true")
+	}
+}
+
+func TestWaitFuncError(t *testing.T) {
+	t.Parallel()
+
+	var waitNum atomic.Int32
+	l, err := New(Config{
+		Name:         "wait-err",
+		SleepMin:     1 * time.Millisecond,
+		SleepMax:     2 * time.Millisecond,
+		SleepDefault: 1 * time.Millisecond,
+		Jitter:       Float64Ptr(0),
+		MaxIter:      2,
+		WaitFunc: func(ctx context.Context) (any, error) {
+			n := waitNum.Add(1)
+			if n == 1 {
+				return nil, fmt.Errorf("connection lost")
+			}
+			return "ok", nil
+		},
+		Handler: func(_ context.Context, _ any) error {
+			return nil
+		},
+	}, Deps{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	_ = l.Start(context.Background())
+
+	select {
+	case <-l.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("loop did not finish within 5s")
+	}
+
+	status := l.Status()
+	// First WaitFunc fails (no iteration counted), then succeeds and
+	// handler runs twice (MaxIter=2).
+	if status.Iterations != 2 {
+		t.Errorf("iterations = %d, want 2", status.Iterations)
+	}
+	// After success, errors should be cleared.
+	if status.ConsecutiveErrors != 0 {
+		t.Errorf("consecutiveErrors = %d, want 0", status.ConsecutiveErrors)
+	}
+}
+
+func TestWaitFuncPublishesWaitEvent(t *testing.T) {
+	t.Parallel()
+
+	bus := events.New()
+	ch := bus.Subscribe(64)
+	defer bus.Unsubscribe(ch)
+
+	var waitNum atomic.Int32
+	l, err := New(Config{
+		Name:    "wait-event",
+		MaxIter: 1,
+		WaitFunc: func(ctx context.Context) (any, error) {
+			waitNum.Add(1)
+			return nil, nil
+		},
+		Handler: func(_ context.Context, _ any) error {
+			return nil
+		},
+	}, Deps{EventBus: bus})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	_ = l.Start(context.Background())
+
+	select {
+	case <-l.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("loop did not finish within 5s")
+	}
+
+	// Drain events.
+	var kinds []string
+	for {
+		select {
+		case e := <-ch:
+			if e.Source == events.SourceLoop {
+				kinds = append(kinds, e.Kind)
+			}
+		default:
+			goto done
+		}
+	}
+done:
+
+	hasWaitStart := false
+	hasSleepStart := false
+	for _, k := range kinds {
+		if k == events.KindLoopWaitStart {
+			hasWaitStart = true
+		}
+		if k == events.KindLoopSleepStart {
+			hasSleepStart = true
+		}
+	}
+
+	if !hasWaitStart {
+		t.Error("missing loop_wait_start event")
+	}
+	if hasSleepStart {
+		t.Error("unexpected loop_sleep_start event for WaitFunc loop")
+	}
+}
+
+func TestHandlerPostIterate(t *testing.T) {
+	t.Parallel()
+
+	var results []IterationResult
+	var mu sync.Mutex
+
+	l, err := New(Config{
+		Name:         "handler-post",
+		SleepMin:     1 * time.Millisecond,
+		SleepMax:     2 * time.Millisecond,
+		SleepDefault: 1 * time.Millisecond,
+		Jitter:       Float64Ptr(0),
+		MaxIter:      2,
+		Handler: func(_ context.Context, _ any) error {
+			return nil
+		},
+		PostIterate: func(_ context.Context, result IterationResult) error {
+			mu.Lock()
+			results = append(results, result)
+			mu.Unlock()
+			return nil
+		},
+	}, Deps{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	_ = l.Start(context.Background())
+	<-l.Done()
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	if len(results) != 2 {
+		t.Fatalf("PostIterate called %d times, want 2", len(results))
+	}
+	for i, r := range results {
+		if r.ConvID == "" {
+			t.Errorf("result[%d].ConvID is empty", i)
+		}
+		if r.Model != "" {
+			t.Errorf("result[%d].Model = %q, want empty (handler-only)", i, r.Model)
+		}
+		if r.InputTokens != 0 {
+			t.Errorf("result[%d].InputTokens = %d, want 0", i, r.InputTokens)
+		}
+		if r.Elapsed <= 0 {
+			t.Errorf("result[%d].Elapsed = %v, want positive", i, r.Elapsed)
+		}
+	}
 }

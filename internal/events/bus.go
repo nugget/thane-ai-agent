@@ -105,6 +105,10 @@ const (
 	// KindLoopSleepStart signals a loop has entered its sleep phase.
 	// Data: loop_id, loop_name, sleep_duration.
 	KindLoopSleepStart = "loop_sleep_start"
+	// KindLoopWaitStart signals a loop has entered its wait phase,
+	// blocking on a WaitFunc for an external event.
+	// Data: loop_id, loop_name.
+	KindLoopWaitStart = "loop_wait_start"
 	// KindLoopStateChange signals a loop has changed lifecycle state.
 	// Data: loop_id, loop_name, from, to.
 	KindLoopStateChange = "loop_state_change"
