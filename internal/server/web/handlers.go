@@ -107,9 +107,9 @@ func (s *WebServer) handleLoopLogs(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleSystemLogs returns log entries from the runtime (cmd/thane/)
-// source files. This surfaces startup, wiring, and connwatch logs
-// in the system detail panel.
+// handleSystemLogs returns all log entries across the entire runtime.
+// When the runtime node is selected this acts as a full log tail,
+// replacing the need for a separate terminal window.
 func (s *WebServer) handleSystemLogs(w http.ResponseWriter, r *http.Request) {
 	if s.logQuerier == nil {
 		http.Error(w, `{"error":"log index not available"}`, http.StatusServiceUnavailable)
@@ -126,9 +126,8 @@ func (s *WebServer) handleSystemLogs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	entries, err := s.logQuerier.Query(logging.QueryParams{
-		SourceFilePrefix: "cmd/thane/",
-		Level:            level,
-		Limit:            limit,
+		Level: level,
+		Limit: limit,
 	})
 	if err != nil {
 		s.logger.Warn("system log query failed", "error", err)
