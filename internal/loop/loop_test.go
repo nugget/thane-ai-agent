@@ -3,6 +3,7 @@ package loop
 import (
 	"context"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -671,6 +672,354 @@ func TestNewValidation(t *testing.T) {
 			t.Error("expected error for SupervisorProb > 1")
 		}
 	})
+}
+
+func TestTaskBuilder(t *testing.T) {
+	t.Parallel()
+
+	var callNum atomic.Int32
+	runner := &inspectingRunner{
+		onRun: func(req RunRequest) {
+			// Verify the dynamic prompt is used.
+			n := callNum.Add(1)
+			want := fmt.Sprintf("dynamic prompt %d", n)
+			if len(req.Messages) == 0 || req.Messages[0].Content != want {
+				t.Errorf("iteration %d: got prompt %q, want %q",
+					n, req.Messages[0].Content, want)
+			}
+		},
+	}
+
+	var builderCalls atomic.Int32
+	l, err := New(Config{
+		Name:         "task-builder",
+		SleepMin:     1 * time.Millisecond,
+		SleepMax:     2 * time.Millisecond,
+		SleepDefault: 1 * time.Millisecond,
+		Jitter:       Float64Ptr(0),
+		MaxIter:      3,
+		TaskBuilder: func(_ context.Context, _ bool) (string, error) {
+			n := builderCalls.Add(1)
+			return fmt.Sprintf("dynamic prompt %d", n), nil
+		},
+	}, Deps{Runner: runner})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	_ = l.Start(context.Background())
+	<-l.Done()
+
+	if builderCalls.Load() != 3 {
+		t.Errorf("TaskBuilder called %d times, want 3", builderCalls.Load())
+	}
+}
+
+func TestTaskBuilderError(t *testing.T) {
+	t.Parallel()
+
+	runner := &countingRunner{count: &atomic.Int32{}}
+
+	l, err := New(Config{
+		Name:         "task-builder-err",
+		SleepMin:     1 * time.Millisecond,
+		SleepMax:     2 * time.Millisecond,
+		SleepDefault: 1 * time.Millisecond,
+		Jitter:       Float64Ptr(0),
+		MaxIter:      2,
+		TaskBuilder: func(_ context.Context, _ bool) (string, error) {
+			return "", fmt.Errorf("build failed")
+		},
+	}, Deps{Runner: runner})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	_ = l.Start(context.Background())
+	<-l.Done()
+
+	status := l.Status()
+	// Both iterations should fail (TaskBuilder errors count as failures).
+	if status.Iterations != 0 {
+		t.Errorf("iterations = %d, want 0", status.Iterations)
+	}
+	if status.Attempts != 2 {
+		t.Errorf("attempts = %d, want 2", status.Attempts)
+	}
+	// Runner should never have been called.
+	if runner.count.Load() != 0 {
+		t.Errorf("runner called %d times, want 0", runner.count.Load())
+	}
+}
+
+func TestTaskBuilderValidation(t *testing.T) {
+	t.Parallel()
+
+	runner := &noopRunner{}
+
+	t.Run("TaskBuilder accepted without Task", func(t *testing.T) {
+		t.Parallel()
+		_, err := New(Config{
+			Name: "builder-only",
+			TaskBuilder: func(_ context.Context, _ bool) (string, error) {
+				return "dynamic", nil
+			},
+		}, Deps{Runner: runner})
+		if err != nil {
+			t.Errorf("expected no error with TaskBuilder, got: %v", err)
+		}
+	})
+
+	t.Run("neither Task nor TaskBuilder fails", func(t *testing.T) {
+		t.Parallel()
+		_, err := New(Config{Name: "neither"}, Deps{Runner: runner})
+		if err == nil {
+			t.Error("expected error when neither Task nor TaskBuilder set")
+		}
+	})
+}
+
+func TestPostIterate(t *testing.T) {
+	t.Parallel()
+
+	var results []IterationResult
+	var mu sync.Mutex
+
+	l, err := New(Config{
+		Name:         "post-iterate",
+		Task:         "test",
+		SleepMin:     1 * time.Millisecond,
+		SleepMax:     2 * time.Millisecond,
+		SleepDefault: 1 * time.Millisecond,
+		Jitter:       Float64Ptr(0),
+		MaxIter:      2,
+		PostIterate: func(_ context.Context, result IterationResult) error {
+			mu.Lock()
+			results = append(results, result)
+			mu.Unlock()
+			return nil
+		},
+	}, Deps{Runner: &noopRunner{}})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	_ = l.Start(context.Background())
+	<-l.Done()
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	if len(results) != 2 {
+		t.Fatalf("PostIterate called %d times, want 2", len(results))
+	}
+	for i, r := range results {
+		if r.ConvID == "" {
+			t.Errorf("result[%d].ConvID is empty", i)
+		}
+		if r.Model != "test-model" {
+			t.Errorf("result[%d].Model = %q, want test-model", i, r.Model)
+		}
+		if r.Sleep <= 0 {
+			t.Errorf("result[%d].Sleep = %v, want positive", i, r.Sleep)
+		}
+	}
+}
+
+func TestPostIterateError(t *testing.T) {
+	t.Parallel()
+
+	l, err := New(Config{
+		Name:         "post-iterate-err",
+		Task:         "test",
+		SleepMin:     1 * time.Millisecond,
+		SleepMax:     2 * time.Millisecond,
+		SleepDefault: 1 * time.Millisecond,
+		Jitter:       Float64Ptr(0),
+		MaxIter:      2,
+		PostIterate: func(_ context.Context, _ IterationResult) error {
+			return fmt.Errorf("post-iterate failed")
+		},
+	}, Deps{Runner: &noopRunner{}})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	_ = l.Start(context.Background())
+	<-l.Done()
+
+	status := l.Status()
+	// PostIterate errors should not count as failures.
+	if status.Iterations != 2 {
+		t.Errorf("iterations = %d, want 2 (PostIterate errors shouldn't affect count)", status.Iterations)
+	}
+	if status.LastError != "" {
+		t.Errorf("lastError = %q, want empty", status.LastError)
+	}
+}
+
+func TestHintsMerge(t *testing.T) {
+	t.Parallel()
+
+	var capturedHints map[string]string
+	var mu sync.Mutex
+
+	runner := &inspectingRunner{
+		onRun: func(req RunRequest) {
+			mu.Lock()
+			capturedHints = req.Hints
+			mu.Unlock()
+		},
+	}
+
+	l, err := New(Config{
+		Name:         "hints-merge",
+		Task:         "test",
+		SleepMin:     1 * time.Millisecond,
+		SleepMax:     2 * time.Millisecond,
+		SleepDefault: 1 * time.Millisecond,
+		Jitter:       Float64Ptr(0),
+		MaxIter:      1,
+		Hints: map[string]string{
+			"source":  "metacognitive", // overrides loop default
+			"mission": "reflect",       // new hint
+		},
+	}, Deps{Runner: runner})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	_ = l.Start(context.Background())
+	<-l.Done()
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	if capturedHints == nil {
+		t.Fatal("hints not captured")
+	}
+	// Config hint should override loop default.
+	if capturedHints["source"] != "metacognitive" {
+		t.Errorf("source hint = %q, want metacognitive", capturedHints["source"])
+	}
+	// New hint should be present.
+	if capturedHints["mission"] != "reflect" {
+		t.Errorf("mission hint = %q, want reflect", capturedHints["mission"])
+	}
+	// Loop-generated hints should still be present.
+	if capturedHints["loop_name"] != "hints-merge" {
+		t.Errorf("loop_name hint = %q, want hints-merge", capturedHints["loop_name"])
+	}
+}
+
+func TestCurrentConvID(t *testing.T) {
+	t.Parallel()
+
+	var capturedConvID string
+	var mu sync.Mutex
+
+	runner := &callbackRunner{
+		fn: func(_ context.Context, _ RunRequest) (*RunResponse, error) {
+			// Simulate a tool handler reading CurrentConvID during iteration.
+			// We need to access the loop, so we'll capture it via closure below.
+			return &RunResponse{
+				Content:      "ok",
+				Model:        "test-model",
+				InputTokens:  10,
+				OutputTokens: 5,
+			}, nil
+		},
+	}
+
+	l, err := New(Config{
+		Name:         "conv-id-test",
+		Task:         "test",
+		SleepMin:     1 * time.Millisecond,
+		SleepMax:     2 * time.Millisecond,
+		SleepDefault: 1 * time.Millisecond,
+		Jitter:       Float64Ptr(0),
+		MaxIter:      1,
+	}, Deps{Runner: runner})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	// Replace the runner with one that captures convID from the loop.
+	l.deps.Runner = &callbackRunner{
+		fn: func(_ context.Context, _ RunRequest) (*RunResponse, error) {
+			mu.Lock()
+			capturedConvID = l.CurrentConvID()
+			mu.Unlock()
+			return &RunResponse{
+				Content:      "ok",
+				Model:        "test-model",
+				InputTokens:  10,
+				OutputTokens: 5,
+			}, nil
+		},
+	}
+
+	_ = l.Start(context.Background())
+	<-l.Done()
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	if capturedConvID == "" {
+		t.Error("CurrentConvID was empty during iteration")
+	}
+
+	// After iteration completes, convID should be cleared.
+	if l.CurrentConvID() != "" {
+		t.Errorf("CurrentConvID after done = %q, want empty", l.CurrentConvID())
+	}
+}
+
+func TestSetupCallback(t *testing.T) {
+	t.Parallel()
+
+	r := NewRegistry()
+	var setupCalled bool
+	var setupLoop *Loop
+
+	cfg := Config{
+		Name:         "setup-test",
+		Task:         "test",
+		SleepMin:     1 * time.Millisecond,
+		SleepMax:     2 * time.Millisecond,
+		SleepDefault: 1 * time.Millisecond,
+		Jitter:       Float64Ptr(0),
+		MaxIter:      1,
+		Setup: func(l *Loop) {
+			setupCalled = true
+			setupLoop = l
+		},
+	}
+
+	id, err := r.SpawnLoop(context.Background(), cfg, Deps{Runner: &noopRunner{}})
+	if err != nil {
+		t.Fatalf("SpawnLoop: %v", err)
+	}
+
+	if !setupCalled {
+		t.Error("Setup callback was not called")
+	}
+	if setupLoop == nil {
+		t.Fatal("Setup callback received nil loop")
+	}
+	if setupLoop.ID() != id {
+		t.Errorf("Setup loop ID = %q, want %q", setupLoop.ID(), id)
+	}
+
+	// Wait for loop to finish.
+	l := r.Get(id)
+	if l != nil {
+		select {
+		case <-l.Done():
+		case <-time.After(5 * time.Second):
+			t.Fatal("loop did not finish")
+		}
+	}
 }
 
 // countingRunner counts Run calls and returns minimal responses.

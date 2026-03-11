@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/logging"
+	"github.com/nugget/thane-ai-agent/internal/loop"
 	"github.com/nugget/thane-ai-agent/internal/tools"
 )
 
@@ -17,14 +18,16 @@ const minStateContentLen = 50
 
 // RegisterTools registers metacognitive-specific tools on the given
 // registry: set_next_sleep, update_metacognitive_state, and (when
-// EgoFile is configured) append_ego_observation. The LLM calls these
+// egoFile is non-empty) append_ego_observation. The LLM calls these
 // during iterations to control sleep timing, persist its state file,
 // and contribute observations to ego.md.
 //
-// The handler captures the [Loop] pointer via closure so it can
-// communicate the chosen duration back to the loop goroutine. This
-// follows the same pattern as session_working_memory tools.
-func (l *Loop) RegisterTools(registry *tools.Registry) {
+// Tool handlers capture theLoop via closure to communicate with the
+// running loop goroutine (e.g., setting sleep durations, reading the
+// current conversation ID).
+func RegisterTools(registry *tools.Registry, theLoop *loop.Loop, cfg Config, workspacePath, egoFile string) {
+	statePath := stateFilePath(workspacePath, cfg.StateFile)
+
 	registry.Register(&tools.Tool{
 		Name: "set_next_sleep",
 		Description: "Set how long the metacognitive loop should sleep before the next iteration. " +
@@ -66,21 +69,21 @@ func (l *Loop) RegisterTools(registry *tools.Registry) {
 			reason, _ := args["reason"].(string)
 
 			// Clamp to configured bounds.
-			if d < l.config.MinSleep {
-				d = l.config.MinSleep
+			if d < cfg.MinSleep {
+				d = cfg.MinSleep
 			}
-			if d > l.config.MaxSleep {
-				d = l.config.MaxSleep
+			if d > cfg.MaxSleep {
+				d = cfg.MaxSleep
 			}
 
-			l.setNextSleep(d)
+			theLoop.SetNextSleep(d)
 			logging.Logger(ctx).Info("metacognitive sleep set",
 				"duration", d.Round(time.Second),
 				"reason", reason,
 			)
 
 			return fmt.Sprintf("Next sleep set to %s (bounds: %s–%s).",
-				d, l.config.MinSleep, l.config.MaxSleep), nil
+				d, cfg.MinSleep, cfg.MaxSleep), nil
 		},
 	})
 
@@ -108,7 +111,6 @@ func (l *Loop) RegisterTools(registry *tools.Registry) {
 			}
 
 			log := logging.Logger(ctx)
-			statePath := l.stateFilePath()
 
 			// Save previous version as .prev backup.
 			if existing, err := os.ReadFile(statePath); err == nil {
@@ -122,7 +124,7 @@ func (l *Loop) RegisterTools(registry *tools.Registry) {
 			}
 
 			// Append metadata footer.
-			convID := l.getCurrentConvID()
+			convID := theLoop.CurrentConvID()
 			footer := fmt.Sprintf("\n\n<!-- metacognitive: iteration=%s updated=%s -->\n",
 				convID, time.Now().UTC().Format(time.RFC3339))
 			fullContent := content + footer
@@ -146,10 +148,10 @@ func (l *Loop) RegisterTools(registry *tools.Registry) {
 	})
 
 	// append_ego_observation: append-only shim for ego.md, available
-	// when EgoFile is configured. The metacog loop excludes general
+	// when egoFile is configured. The metacog loop excludes general
 	// file tools, so this provides controlled write access to
 	// core:ego.md without granting full file_write.
-	if l.deps.EgoFile != "" {
+	if egoFile != "" {
 		registry.Register(&tools.Tool{
 			Name: "append_ego_observation",
 			Description: "Append a metacognitive observation to core:ego.md. " +
@@ -172,16 +174,14 @@ func (l *Loop) RegisterTools(registry *tools.Registry) {
 					return "", fmt.Errorf("observation too short (%d chars, minimum %d)", len(observation), minStateContentLen)
 				}
 
-				egoPath := l.deps.EgoFile
-
 				// Read existing content (empty file is fine).
-				existing, err := os.ReadFile(egoPath)
+				existing, err := os.ReadFile(egoFile)
 				if err != nil && !os.IsNotExist(err) {
 					return "", fmt.Errorf("read ego file: %w", err)
 				}
 
 				// Build the appended block with metadata.
-				convID := l.getCurrentConvID()
+				convID := theLoop.CurrentConvID()
 				block := fmt.Sprintf("\n\n### Metacognitive Observation\n"+
 					"<!-- metacognitive: iteration=%s observed=%s -->\n\n%s\n",
 					convID, time.Now().UTC().Format(time.RFC3339), observation)
@@ -189,16 +189,16 @@ func (l *Loop) RegisterTools(registry *tools.Registry) {
 				fullContent := string(existing) + block
 
 				// Ensure parent directory exists.
-				if err := os.MkdirAll(filepath.Dir(egoPath), 0o755); err != nil {
+				if err := os.MkdirAll(filepath.Dir(egoFile), 0o755); err != nil {
 					return "", fmt.Errorf("create ego directory: %w", err)
 				}
 
-				if err := os.WriteFile(egoPath, []byte(fullContent), 0o644); err != nil {
+				if err := os.WriteFile(egoFile, []byte(fullContent), 0o644); err != nil {
 					return "", fmt.Errorf("write ego file: %w", err)
 				}
 
 				logging.Logger(ctx).Info("ego observation appended",
-					"path", egoPath,
+					"path", egoFile,
 					"bytes", len(block),
 				)
 

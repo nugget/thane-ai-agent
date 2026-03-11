@@ -205,6 +205,12 @@ func (r *Registry) SpawnLoop(ctx context.Context, cfg Config, deps Deps) (string
 		return "", fmt.Errorf("create loop %q: %w", cfg.Name, err)
 	}
 
+	// Call Setup before Register/Start so the caller can register
+	// tools or perform other initialization that needs *Loop.
+	if cfg.Setup != nil {
+		cfg.Setup(l)
+	}
+
 	if err := r.Register(l); err != nil {
 		return "", err
 	}

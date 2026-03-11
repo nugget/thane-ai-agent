@@ -104,6 +104,11 @@ type Loop struct {
 	totalOutputTokens int
 	lastError         string
 
+	// currentConvID is the conversation ID of the in-flight iteration.
+	// Set at the start of each iteration, cleared after. Tool handlers
+	// read it via [Loop.CurrentConvID].
+	currentConvID string
+
 	// nextSleep can be set externally (e.g., by a set_next_sleep
 	// tool handler) to override the default sleep for one cycle.
 	nextSleep time.Duration
@@ -237,8 +242,12 @@ func (l *Loop) Status() Status {
 	defer l.mu.Unlock()
 
 	// Deep copy Config to prevent callers from mutating internal state
-	// via shared slices/maps.
+	// via shared slices/maps. Function fields are cleared — they can't
+	// be serialized and shouldn't leak to callers.
 	cfgCopy := l.config
+	cfgCopy.TaskBuilder = nil
+	cfgCopy.PostIterate = nil
+	cfgCopy.Setup = nil
 	if l.config.Tags != nil {
 		cfgCopy.Tags = make([]string, len(l.config.Tags))
 		copy(cfgCopy.Tags, l.config.Tags)
@@ -246,6 +255,12 @@ func (l *Loop) Status() Status {
 	if l.config.ExcludeTools != nil {
 		cfgCopy.ExcludeTools = make([]string, len(l.config.ExcludeTools))
 		copy(cfgCopy.ExcludeTools, l.config.ExcludeTools)
+	}
+	if l.config.Hints != nil {
+		cfgCopy.Hints = make(map[string]string, len(l.config.Hints))
+		for k, v := range l.config.Hints {
+			cfgCopy.Hints[k] = v
+		}
 	}
 	if l.config.Metadata != nil {
 		cfgCopy.Metadata = make(map[string]string, len(l.config.Metadata))
@@ -277,6 +292,15 @@ func (l *Loop) SetNextSleep(d time.Duration) {
 	l.mu.Lock()
 	l.nextSleep = d
 	l.mu.Unlock()
+}
+
+// CurrentConvID returns the conversation ID of the in-flight iteration,
+// or empty string if no iteration is running. Tool handlers use this to
+// tag their outputs with the current conversation.
+func (l *Loop) CurrentConvID() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.currentConvID
 }
 
 // run is the main goroutine body. It iterates until the context is
@@ -331,17 +355,15 @@ func (l *Loop) run(ctx context.Context) {
 			break
 		}
 
-		// Reset tool-provided sleep override.
+		// Reset tool-provided sleep override and set current conversation ID.
+		convID := fmt.Sprintf("loop-%s-%d-%d", l.config.Name, attemptCount+1, time.Now().UnixMilli())
 		l.mu.Lock()
 		l.nextSleep = 0
+		l.currentConvID = convID
 		l.mu.Unlock()
 
 		// Determine if this is a supervisor iteration.
 		isSupervisor := l.config.Supervisor && l.config.SupervisorProb > 0 && l.deps.Rand.Float64() < l.config.SupervisorProb
-
-		// Generate conversation ID for this iteration. Include the
-		// attempt number to avoid collisions in fast iteration loops.
-		convID := fmt.Sprintf("loop-%s-%d-%d", l.config.Name, attemptCount+1, time.Now().UnixMilli())
 
 		iterLog := logger.With(
 			"conversation_id", convID,
@@ -372,6 +394,15 @@ func (l *Loop) run(ctx context.Context) {
 		iterLog.Info("loop iteration starting")
 
 		result, err := l.iterate(iterCtx, isSupervisor, convID)
+
+		// Clear current conversation ID after iteration completes.
+		l.mu.Lock()
+		l.currentConvID = ""
+		l.mu.Unlock()
+
+		// Compute sleep duration (uses tool-provided override or default + backoff).
+		sleep := l.computeSleep()
+
 		if err != nil {
 			if ctx.Err() != nil {
 				logger.Info("loop stopped")
@@ -423,10 +454,25 @@ func (l *Loop) run(ctx context.Context) {
 					"elapsed_ms":    result.Elapsed.Milliseconds(),
 				},
 			})
-		}
 
-		// Compute sleep duration.
-		sleep := l.computeSleep()
+			// Call PostIterate if configured. Errors are logged
+			// but do not count as iteration failures.
+			if l.config.PostIterate != nil {
+				postResult := IterationResult{
+					ConvID:       convID,
+					Model:        result.Model,
+					InputTokens:  result.InputTokens,
+					OutputTokens: result.OutputTokens,
+					ToolsUsed:    result.ToolsUsed,
+					Elapsed:      result.Elapsed,
+					Supervisor:   result.Supervisor,
+					Sleep:        sleep,
+				}
+				if postErr := l.config.PostIterate(ctx, postResult); postErr != nil {
+					iterLog.Warn("PostIterate callback failed", "error", postErr)
+				}
+			}
+		}
 
 		l.setState(StateSleeping)
 		l.publishEvent(events.Event{
@@ -462,19 +508,9 @@ func (l *Loop) run(ctx context.Context) {
 	})
 }
 
-// iterationResult holds data returned from a single loop iteration.
-type iterationResult struct {
-	Model        string
-	InputTokens  int
-	OutputTokens int
-	ToolsUsed    map[string]int
-	Elapsed      time.Duration
-	Supervisor   bool
-}
-
 // iterate performs a single loop iteration: build prompt and run the
 // LLM via the agent runner.
-func (l *Loop) iterate(ctx context.Context, isSupervisor bool, convID string) (*iterationResult, error) {
+func (l *Loop) iterate(ctx context.Context, isSupervisor bool, convID string) (*IterationResult, error) {
 	iterStart := time.Now()
 
 	// Build routing hints.
@@ -496,11 +532,24 @@ func (l *Loop) iterate(ctx context.Context, isSupervisor bool, convID string) (*
 		hints["local_only"] = "true"
 	}
 
-	// Build the task prompt. Supervisor iterations may prepend
-	// additional context (review instructions, oversight criteria).
-	task := l.config.Task
-	if isSupervisor && l.config.SupervisorContext != "" {
-		task = l.config.SupervisorContext + "\n\n" + task
+	// Build the task prompt. TaskBuilder takes priority over static Task.
+	var task string
+	if l.config.TaskBuilder != nil {
+		var buildErr error
+		task, buildErr = l.config.TaskBuilder(ctx, isSupervisor)
+		if buildErr != nil {
+			return nil, fmt.Errorf("TaskBuilder: %w", buildErr)
+		}
+	} else {
+		task = l.config.Task
+		if isSupervisor && l.config.SupervisorContext != "" {
+			task = l.config.SupervisorContext + "\n\n" + task
+		}
+	}
+
+	// Merge config hints over loop-generated defaults.
+	for k, v := range l.config.Hints {
+		hints[k] = v
 	}
 
 	req := RunRequest{
@@ -518,7 +567,7 @@ func (l *Loop) iterate(ctx context.Context, isSupervisor bool, convID string) (*
 		return nil, fmt.Errorf("loop LLM call: %w", err)
 	}
 
-	return &iterationResult{
+	return &IterationResult{
 		Model:        resp.Model,
 		InputTokens:  resp.InputTokens,
 		OutputTokens: resp.OutputTokens,

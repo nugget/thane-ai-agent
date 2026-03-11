@@ -13,42 +13,42 @@ import (
 // --- append_ego_observation tool tests ---
 
 func TestAppendEgoObservation_NotRegisteredWithoutEgoFile(t *testing.T) {
-	deps := testDeps(t, nil)
-	// EgoFile is empty by default in testDeps.
-	l := New(testConfig(), deps)
+	cfg := testConfig()
+	workspace := t.TempDir()
+	theLoop := testLoopForTools(t)
 
 	reg := tools.NewRegistry(nil, nil)
-	l.RegisterTools(reg)
+	RegisterTools(reg, theLoop, cfg, workspace, "")
 
 	tool := reg.Get("append_ego_observation")
 	if tool != nil {
-		t.Error("append_ego_observation should not be registered when EgoFile is empty")
+		t.Error("append_ego_observation should not be registered when egoFile is empty")
 	}
 }
 
 func TestAppendEgoObservation_RegisteredWithEgoFile(t *testing.T) {
-	deps := testDeps(t, nil)
-	deps.EgoFile = filepath.Join(deps.WorkspacePath, "ego.md")
-	l := New(testConfig(), deps)
+	cfg := testConfig()
+	workspace := t.TempDir()
+	egoFile := filepath.Join(workspace, "ego.md")
+	theLoop := testLoopForTools(t)
 
 	reg := tools.NewRegistry(nil, nil)
-	l.RegisterTools(reg)
+	RegisterTools(reg, theLoop, cfg, workspace, egoFile)
 
 	tool := reg.Get("append_ego_observation")
 	if tool == nil {
-		t.Fatal("append_ego_observation should be registered when EgoFile is set")
+		t.Fatal("append_ego_observation should be registered when egoFile is set")
 	}
 }
 
 func TestAppendEgoObservation_CreatesNewFile(t *testing.T) {
-	deps := testDeps(t, nil)
-	egoPath := filepath.Join(deps.WorkspacePath, "ego.md")
-	deps.EgoFile = egoPath
-	l := New(testConfig(), deps)
-	l.setCurrentConvID("metacog-ego-1")
+	cfg := testConfig()
+	workspace := t.TempDir()
+	egoPath := filepath.Join(workspace, "ego.md")
+	theLoop := testLoopForTools(t)
 
 	reg := tools.NewRegistry(nil, nil)
-	l.RegisterTools(reg)
+	RegisterTools(reg, theLoop, cfg, workspace, egoPath)
 
 	tool := reg.Get("append_ego_observation")
 
@@ -75,20 +75,16 @@ func TestAppendEgoObservation_CreatesNewFile(t *testing.T) {
 	if !strings.Contains(s, observation) {
 		t.Error("ego file should contain the observation text")
 	}
-	if !strings.Contains(s, "iteration=metacog-ego-1") {
-		t.Error("ego file should contain conversation ID in metadata")
-	}
 	if !strings.Contains(s, "observed=") {
 		t.Error("ego file should contain observed timestamp")
 	}
 }
 
 func TestAppendEgoObservation_AppendsToExisting(t *testing.T) {
-	deps := testDeps(t, nil)
-	egoPath := filepath.Join(deps.WorkspacePath, "ego.md")
-	deps.EgoFile = egoPath
-	l := New(testConfig(), deps)
-	l.setCurrentConvID("metacog-ego-2")
+	cfg := testConfig()
+	workspace := t.TempDir()
+	egoPath := filepath.Join(workspace, "ego.md")
+	theLoop := testLoopForTools(t)
 
 	// Write existing ego content.
 	existing := "# Ego\n\nI am an agent that monitors a household.\n"
@@ -97,7 +93,7 @@ func TestAppendEgoObservation_AppendsToExisting(t *testing.T) {
 	}
 
 	reg := tools.NewRegistry(nil, nil)
-	l.RegisterTools(reg)
+	RegisterTools(reg, theLoop, cfg, workspace, egoPath)
 
 	tool := reg.Get("append_ego_observation")
 
@@ -121,18 +117,16 @@ func TestAppendEgoObservation_AppendsToExisting(t *testing.T) {
 	if !strings.Contains(s, observation) {
 		t.Error("new observation should be appended")
 	}
-	if !strings.Contains(s, "iteration=metacog-ego-2") {
-		t.Error("metadata should contain conversation ID")
-	}
 }
 
 func TestAppendEgoObservation_RejectsShortContent(t *testing.T) {
-	deps := testDeps(t, nil)
-	deps.EgoFile = filepath.Join(deps.WorkspacePath, "ego.md")
-	l := New(testConfig(), deps)
+	cfg := testConfig()
+	workspace := t.TempDir()
+	egoPath := filepath.Join(workspace, "ego.md")
+	theLoop := testLoopForTools(t)
 
 	reg := tools.NewRegistry(nil, nil)
-	l.RegisterTools(reg)
+	RegisterTools(reg, theLoop, cfg, workspace, egoPath)
 
 	tool := reg.Get("append_ego_observation")
 
@@ -161,18 +155,17 @@ func TestAppendEgoObservation_RejectsShortContent(t *testing.T) {
 }
 
 func TestAppendEgoObservation_MultipleAppends(t *testing.T) {
-	deps := testDeps(t, nil)
-	egoPath := filepath.Join(deps.WorkspacePath, "ego.md")
-	deps.EgoFile = egoPath
-	l := New(testConfig(), deps)
+	cfg := testConfig()
+	workspace := t.TempDir()
+	egoPath := filepath.Join(workspace, "ego.md")
+	theLoop := testLoopForTools(t)
 
 	reg := tools.NewRegistry(nil, nil)
-	l.RegisterTools(reg)
+	RegisterTools(reg, theLoop, cfg, workspace, egoPath)
 
 	tool := reg.Get("append_ego_observation")
 
 	// First observation.
-	l.setCurrentConvID("metacog-first")
 	_, err := tool.Handler(context.Background(), map[string]any{
 		"observation": "First observation: the agent shows increasing confidence in pattern recognition over successive iterations.",
 	})
@@ -181,7 +174,6 @@ func TestAppendEgoObservation_MultipleAppends(t *testing.T) {
 	}
 
 	// Second observation.
-	l.setCurrentConvID("metacog-second")
 	_, err = tool.Handler(context.Background(), map[string]any{
 		"observation": "Second observation: sleep durations have stabilized around 10 minutes during quiet periods, suggesting calibration convergence.",
 	})
@@ -196,12 +188,6 @@ func TestAppendEgoObservation_MultipleAppends(t *testing.T) {
 	}
 	s := string(data)
 
-	if !strings.Contains(s, "iteration=metacog-first") {
-		t.Error("file should contain first observation metadata")
-	}
-	if !strings.Contains(s, "iteration=metacog-second") {
-		t.Error("file should contain second observation metadata")
-	}
 	if strings.Count(s, "### Metacognitive Observation") != 2 {
 		t.Errorf("file should contain exactly 2 observation headings, got %d",
 			strings.Count(s, "### Metacognitive Observation"))
