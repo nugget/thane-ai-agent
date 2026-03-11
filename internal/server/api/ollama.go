@@ -357,10 +357,10 @@ func handleOllamaChatShared(w http.ResponseWriter, r *http.Request, loop *agent.
 //   - loop: Agent loop for processing
 //   - logger: Logger for error tracking
 func handleOllamaStreamingChatShared(w http.ResponseWriter, r *http.Request, req *agent.Request, start time.Time, loop *agent.Loop, logger *slog.Logger) {
-	// Set headers for streaming
+	// Set headers for streaming. Omit "Connection: keep-alive" — it's a
+	// hop-by-hop header forbidden in HTTP/2 (RFC 9113 §8.2.2).
 	w.Header().Set("Content-Type", "application/x-ndjson")
 	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
