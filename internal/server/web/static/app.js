@@ -367,9 +367,20 @@ function renderDetail() {
   // IDs section.
   renderDetailIDs(loop);
 
+  // Forward-looking section: visible when sleeping or has supervisor config.
+  const isSleeping = loop.state === 'sleeping';
+  const hasSupervisor = loop.config && loop.config.Supervisor;
+  const showForward = isSleeping || hasSupervisor;
+  $('#detail-forward').hidden = !showForward;
+  $('#detail-divider').hidden = !showForward;
+
   // Supervisor status bar.
   renderSupervisorBar(loop);
 
+  // Sleep countdown.
+  updateSleepDisplay(loop);
+
+  // Historical metrics.
   $('#detail-iterations').textContent = formatNumber(loop.iterations || 0);
   $('#detail-attempts').textContent = formatNumber(loop.attempts || 0);
   $('#detail-input-tokens').textContent = formatTokens(loop.total_input_tokens || 0);
@@ -377,9 +388,6 @@ function renderDetail() {
   $('#detail-model').textContent = loop._lastModel || '-';
   $('#detail-error').textContent = loop.last_error || '-';
   $('#detail-started').textContent = loop.started_at ? timeAgo(new Date(loop.started_at)) : '-';
-
-  // Sleep countdown.
-  updateSleepDisplay(loop);
 }
 
 function updateSleepDisplay(loop) {

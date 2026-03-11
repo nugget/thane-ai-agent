@@ -37,9 +37,17 @@
 
         <div id="detail-ids" class="detail-ids"></div>
 
+        <!-- Forward-looking: what's next -->
+        <dl id="detail-forward" class="detail-metrics detail-metrics--forward">
+          <dt>Sleep</dt>
+          <dd id="detail-sleep">-</dd>
+        </dl>
         <div id="detail-supervisor" class="supervisor-bar" hidden></div>
 
-        <dl class="detail-metrics">
+        <hr class="detail-divider" id="detail-divider">
+
+        <!-- Historical: what happened -->
+        <dl class="detail-metrics detail-metrics--history">
           <dt>Iterations</dt>
           <dd id="detail-iterations">-</dd>
           <dt>Attempts</dt>
@@ -50,8 +58,6 @@
           <dd id="detail-output-tokens">-</dd>
           <dt>Last Model</dt>
           <dd id="detail-model">-</dd>
-          <dt>Sleep</dt>
-          <dd id="detail-sleep">-</dd>
           <dt>Last Error</dt>
           <dd id="detail-error" class="detail-error">-</dd>
           <dt>Started</dt>

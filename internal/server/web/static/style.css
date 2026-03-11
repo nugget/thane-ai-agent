@@ -310,6 +310,18 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
   margin-bottom: 0.75rem;
 }
 
+.detail-divider {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 0.5rem 0 0.75rem;
+}
+
+.detail-divider[hidden] { display: none; }
+.detail-metrics[hidden] { display: none; }
+
+.detail-metrics--history dt { color: var(--text-muted); }
+.detail-metrics--history dd { color: var(--text-secondary); }
+
 .detail-metrics dt {
   color: var(--text-secondary);
   font-weight: 500;
