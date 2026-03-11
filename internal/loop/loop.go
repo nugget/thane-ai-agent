@@ -38,12 +38,14 @@ type RunMessage struct {
 }
 
 // RunResponse mirrors agent.Response fields that loops consume.
+// RunResponse holds the result of an LLM call executed by a [Runner].
 type RunResponse struct {
-	Content      string
-	Model        string
-	InputTokens  int
-	OutputTokens int
-	ToolsUsed    map[string]int
+	Content       string
+	Model         string
+	InputTokens   int
+	OutputTokens  int
+	ContextWindow int
+	ToolsUsed     map[string]int
 }
 
 // StreamCallback receives streaming events. Nil disables streaming.
@@ -60,6 +62,10 @@ func (defaultRand) Float64() float64 { return rand.Float64() }
 
 // ErrNilRunner is returned by [New] when Deps.Runner is nil.
 var ErrNilRunner = errors.New("loop: Runner is required")
+
+// recentConvIDsCap is the maximum number of conversation IDs retained
+// in the ring buffer exposed via [Status.RecentConvIDs].
+const recentConvIDsCap = 10
 
 // Deps holds injected dependencies for a loop. Using a struct avoids a
 // growing parameter list as loops evolve.
@@ -102,12 +108,19 @@ type Loop struct {
 	attempts          int // total attempts (including failures)
 	totalInputTokens  int
 	totalOutputTokens int
+	lastInputTokens   int
+	contextWindow     int
 	lastError         string
 
 	// currentConvID is the conversation ID of the in-flight iteration.
 	// Set at the start of each iteration, cleared after. Tool handlers
 	// read it via [Loop.CurrentConvID].
 	currentConvID string
+
+	// recentConvIDs is a ring buffer of conversation IDs from the most
+	// recent iterations (newest first, up to recentConvIDsCap). Used by
+	// the visualizer to query log entries scoped to this loop.
+	recentConvIDs []string
 
 	// nextSleep can be set externally (e.g., by a set_next_sleep
 	// tool handler) to override the default sleep for one cycle.
@@ -269,6 +282,13 @@ func (l *Loop) Status() Status {
 		}
 	}
 
+	// Deep copy recentConvIDs so callers can't mutate internal state.
+	var convIDsCopy []string
+	if len(l.recentConvIDs) > 0 {
+		convIDsCopy = make([]string, len(l.recentConvIDs))
+		copy(convIDsCopy, l.recentConvIDs)
+	}
+
 	return Status{
 		ID:                l.id,
 		Name:              l.config.Name,
@@ -280,7 +300,11 @@ func (l *Loop) Status() Status {
 		Attempts:          l.attempts,
 		TotalInputTokens:  l.totalInputTokens,
 		TotalOutputTokens: l.totalOutputTokens,
+		LastInputTokens:   l.lastInputTokens,
+		ContextWindow:     l.contextWindow,
 		LastError:         l.lastError,
+		ConsecutiveErrors: l.consecutiveErrors,
+		RecentConvIDs:     convIDsCopy,
 		Config:            cfgCopy,
 	}
 }
@@ -360,6 +384,11 @@ func (l *Loop) run(ctx context.Context) {
 		l.mu.Lock()
 		l.nextSleep = 0
 		l.currentConvID = convID
+		// Prepend to ring buffer (newest first), cap at recentConvIDsCap.
+		l.recentConvIDs = append([]string{convID}, l.recentConvIDs...)
+		if len(l.recentConvIDs) > recentConvIDsCap {
+			l.recentConvIDs = l.recentConvIDs[:recentConvIDsCap]
+		}
 		l.mu.Unlock()
 
 		// Determine if this is a supervisor iteration.
@@ -427,6 +456,10 @@ func (l *Loop) run(ctx context.Context) {
 			l.iterations++
 			l.totalInputTokens += result.InputTokens
 			l.totalOutputTokens += result.OutputTokens
+			l.lastInputTokens = result.InputTokens
+			if result.ContextWindow > 0 {
+				l.contextWindow = result.ContextWindow
+			}
 			l.lastError = ""
 			l.consecutiveErrors = 0
 			l.mu.Unlock()
@@ -443,12 +476,13 @@ func (l *Loop) run(ctx context.Context) {
 				Source:    events.SourceLoop,
 				Kind:      events.KindLoopIterationComplete,
 				Data: map[string]any{
-					"loop_id":       l.id,
-					"loop_name":     l.config.Name,
-					"model":         result.Model,
-					"input_tokens":  result.InputTokens,
-					"output_tokens": result.OutputTokens,
-					"elapsed_ms":    result.Elapsed.Milliseconds(),
+					"loop_id":        l.id,
+					"loop_name":      l.config.Name,
+					"model":          result.Model,
+					"input_tokens":   result.InputTokens,
+					"output_tokens":  result.OutputTokens,
+					"context_window": result.ContextWindow,
+					"elapsed_ms":     result.Elapsed.Milliseconds(),
 				},
 			})
 		}
@@ -570,12 +604,13 @@ func (l *Loop) iterate(ctx context.Context, isSupervisor bool, convID string) (*
 	}
 
 	return &IterationResult{
-		Model:        resp.Model,
-		InputTokens:  resp.InputTokens,
-		OutputTokens: resp.OutputTokens,
-		ToolsUsed:    resp.ToolsUsed,
-		Elapsed:      time.Since(iterStart),
-		Supervisor:   isSupervisor,
+		Model:         resp.Model,
+		InputTokens:   resp.InputTokens,
+		OutputTokens:  resp.OutputTokens,
+		ContextWindow: resp.ContextWindow,
+		ToolsUsed:     resp.ToolsUsed,
+		Elapsed:       time.Since(iterStart),
+		Supervisor:    isSupervisor,
 	}, nil
 }
 

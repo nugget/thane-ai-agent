@@ -577,6 +577,42 @@ func TestQuery_Filters(t *testing.T) {
 	})
 }
 
+func TestQuery_SourceFilePrefix(t *testing.T) {
+	db := openTestDB(t)
+
+	now := time.Now().UTC()
+	for i, e := range []struct {
+		srcFile, msg string
+	}{
+		{"cmd/thane/main.go", "startup"},
+		{"cmd/thane/main.go", "wiring complete"},
+		{"internal/connwatch/connwatch.go", "service connected"},
+		{"internal/agent/loop.go", "agent iteration"},
+	} {
+		ts := now.Add(-time.Duration(4-i) * time.Second).Format(time.RFC3339Nano)
+		_, err := db.Exec(
+			`INSERT INTO log_entries (timestamp, level, msg, source_file) VALUES (?, ?, ?, ?)`,
+			ts, "INFO", e.msg, e.srcFile,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, err := Query(db, QueryParams{SourceFilePrefix: "cmd/thane/"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Errorf("got %d entries, want 2 from cmd/thane/", len(got))
+	}
+	for _, e := range got {
+		if e.SourceFile != "cmd/thane/main.go" {
+			t.Errorf("unexpected source_file = %q", e.SourceFile)
+		}
+	}
+}
+
 func TestQuery_LevelMinimum(t *testing.T) {
 	db := openTestDB(t)
 

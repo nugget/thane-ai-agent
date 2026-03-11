@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Thane - Detail</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <style>
+    body {
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      overflow: hidden;
+    }
+    .popup-main {
+      display: flex;
+      flex: 1;
+      min-height: 0;
+      overflow: hidden;
+    }
+    body.inspector-left .popup-main { flex-direction: row-reverse; }
+    .popup-logs {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      min-height: 0;
+      position: relative;
+    }
+    .popup-logs .log-scroll {
+      flex: 1;
+      overflow-y: auto;
+      overflow-x: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+    .popup-logs .log-empty {
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: 0;
+      bottom: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--text-muted);
+      font-size: 0.85rem;
+      pointer-events: none;
+    }
+    .popup-logs .log-empty[hidden] { display: none; }
+    .popup-resize {
+      width: 4px;
+      flex-shrink: 0;
+      background: var(--border);
+      cursor: col-resize;
+      transition: background 0.15s;
+    }
+    .popup-resize:hover, .popup-resize--active { background: var(--accent); }
+    .popup-inspector {
+      width: 240px;
+      min-width: 160px;
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      background: var(--bg-secondary);
+    }
+    .inspector-footer {
+      flex-shrink: 0;
+      border-top: 1px solid var(--border);
+    }
+    .inspector-row {
+      display: flex;
+      align-items: center;
+      gap: 0.35rem;
+      padding: 0.25rem 0.5rem;
+    }
+    .inspector-row + .inspector-row {
+      padding-top: 0;
+    }
+    .inspector-row .toggle-btn {
+      font-size: 0.65rem;
+      padding: 0.15em 0.5em;
+    }
+    .inspector-row .spacer { flex: 1; }
+    .conn-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      flex-shrink: 0;
+      background: var(--orange);
+      transition: background 0.3s;
+    }
+    .conn-dot--ok { background: var(--green); }
+    .conn-dot--err { background: var(--red); }
+    .poll-label {
+      font-size: 0.6rem;
+      font-family: var(--font-mono);
+      color: var(--text-muted);
+      min-width: 2.2em;
+      text-align: right;
+      flex-shrink: 0;
+    }
+    .poll-slider {
+      flex: 1;
+      min-width: 0;
+      height: 4px;
+      -webkit-appearance: none;
+      appearance: none;
+      background: var(--border);
+      border-radius: 2px;
+      outline: none;
+    }
+    .poll-slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--accent);
+      cursor: pointer;
+    }
+    .inspector-row .log-select {
+      font-size: 0.65rem;
+      padding: 0.15em 0.3em;
+    }
+    .inspector-row .btn--sm {
+      font-size: 0.65rem;
+      padding: 0.1em 0.4em;
+    }
+    .inspector-body {
+      flex: 1;
+      overflow-y: auto;
+      padding: 0.75rem;
+    }
+    /* (status bar removed — connection state shown via dot in inspector) */
+  </style>
+</head>
+<body>
+  <div class="popup-main">
+    <!-- Logs take the main area — column headers at the very top -->
+    <section class="popup-logs" id="logs-section">
+      <div id="log-scroll" class="log-scroll">
+        <table id="log-table" class="log-table">
+          <thead>
+            <tr>
+              <th class="log-col-time">Time</th>
+              <th class="log-col-level">Level</th>
+              <th class="log-col-subsystem">Sub</th>
+              <th class="log-col-msg">Message</th>
+              <th class="log-col-detail">Detail</th>
+            </tr>
+          </thead>
+          <tbody id="log-body"></tbody>
+        </table>
+      </div>
+      <div id="log-empty" class="log-empty">
+        <p>Loading logs...</p>
+      </div>
+    </section>
+
+    <!-- Draggable resize handle -->
+    <div class="popup-resize" id="popup-resize"></div>
+
+    <!-- Inspector sidebar (right by default) -->
+    <section class="popup-inspector" id="inspector">
+      <div class="inspector-body">
+        <!-- Loop detail (shown for type=loop) -->
+        <div id="loop-detail" hidden>
+          <div class="detail-header">
+            <h2 id="detail-name" class="detail-name"></h2>
+            <span id="detail-state" class="state-badge"></span>
+          </div>
+          <div id="detail-ids" class="detail-ids"></div>
+          <dl id="detail-forward" class="detail-metrics detail-metrics--forward" hidden>
+            <dt id="detail-sleep-label" hidden>Sleep</dt>
+            <dd id="detail-sleep" hidden>-</dd>
+          </dl>
+          <div id="detail-supervisor" class="supervisor-bar" hidden></div>
+          <hr class="detail-divider" id="detail-divider" hidden>
+          <dl class="detail-metrics detail-metrics--history">
+            <dt>Iterations</dt><dd id="detail-iterations">-</dd>
+            <dt>Attempts</dt><dd id="detail-attempts">-</dd>
+            <dt>Input Tokens</dt><dd id="detail-input-tokens">-</dd>
+            <dt>Output Tokens</dt><dd id="detail-output-tokens">-</dd>
+            <dt>Last Model</dt><dd id="detail-model">-</dd>
+            <dt>Last Error</dt><dd id="detail-error" class="detail-error">-</dd>
+            <dt>Started</dt><dd id="detail-started">-</dd>
+          </dl>
+          <div id="detail-tags" class="detail-tags" hidden>
+            <h3 class="section-title">Capabilities</h3>
+            <div id="detail-tags-list" class="tag-list"></div>
+          </div>
+          <h3 class="section-title">Recent Events</h3>
+          <ul id="event-list" class="event-list"></ul>
+        </div>
+
+        <!-- System detail (shown for type=system) -->
+        <div id="system-detail" hidden>
+          <div class="detail-header">
+            <h2 class="detail-name">Runtime</h2>
+            <span id="system-status" class="state-badge"></span>
+          </div>
+          <h3 class="section-title">Services</h3>
+          <div id="system-services" class="system-services"></div>
+          <hr class="detail-divider">
+          <dl class="detail-metrics">
+            <dt>Uptime</dt><dd id="system-uptime">-</dd>
+            <dt>Version</dt><dd id="system-version">-</dd>
+            <dt>Commit</dt><dd id="system-commit">-</dd>
+            <dt>Go</dt><dd id="system-go">-</dd>
+            <dt>Arch</dt><dd id="system-arch">-</dd>
+          </dl>
+        </div>
+      </div>
+      <div class="inspector-footer">
+        <div class="inspector-row">
+          <label class="poll-label" id="poll-rate-label" for="poll-rate">2s</label>
+          <input type="range" id="poll-rate" class="poll-slider" min="1" max="60" value="2">
+          <select id="log-level" class="log-select">
+            <option value="">All</option>
+            <option value="ERROR">Error</option>
+            <option value="WARN">Warn+</option>
+            <option value="INFO">Info+</option>
+            <option value="DEBUG">Debug+</option>
+          </select>
+        </div>
+        <div class="inspector-row">
+          <button id="toggle-side" class="toggle-btn" title="Swap inspector side">&#x21C4; Swap</button>
+          <span class="spacer"></span>
+          <span id="conn-dot" class="conn-dot" title="Connecting..."></span>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <script src="/static/detail.js"></script>
+</body>
+</html>

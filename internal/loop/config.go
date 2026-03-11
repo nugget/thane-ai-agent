@@ -120,12 +120,12 @@ type Config struct {
 	// TaskBuilder is called per-iteration to generate a dynamic prompt.
 	// When set, the static Task field is ignored. The isSupervisor
 	// argument indicates whether this is a supervisor iteration.
-	TaskBuilder func(ctx context.Context, isSupervisor bool) (string, error)
+	TaskBuilder func(ctx context.Context, isSupervisor bool) (string, error) `json:"-"`
 
 	// PostIterate is called after each successful iteration. Use it
 	// for side effects like appending iteration logs. Errors are
 	// logged but do not count as iteration failures.
-	PostIterate func(ctx context.Context, result IterationResult) error
+	PostIterate func(ctx context.Context, result IterationResult) error `json:"-"`
 
 	// Hints are merged into RunRequest hints for each iteration.
 	// Config hints override loop-generated defaults (e.g., setting
@@ -135,7 +135,7 @@ type Config struct {
 	// Setup is called by [Registry.SpawnLoop] after [New] but before
 	// [Loop.Start]. Use it to register tools or perform other setup
 	// that requires a *Loop reference before the goroutine launches.
-	Setup func(l *Loop)
+	Setup func(l *Loop) `json:"-"`
 
 	// Metadata holds arbitrary key/value pairs for the loop.
 	Metadata map[string]string
@@ -215,6 +215,8 @@ type IterationResult struct {
 	InputTokens int
 	// OutputTokens is the number of output tokens produced.
 	OutputTokens int
+	// ContextWindow is the maximum context size (in tokens) of the model used.
+	ContextWindow int
 	// ToolsUsed maps tool names to invocation counts.
 	ToolsUsed map[string]int
 	// Elapsed is the wall-clock duration of the iteration.
@@ -248,8 +250,18 @@ type Status struct {
 	TotalInputTokens int `json:"total_input_tokens"`
 	// TotalOutputTokens is the cumulative output tokens across all iterations.
 	TotalOutputTokens int `json:"total_output_tokens"`
+	// LastInputTokens is the input token count from the most recent iteration.
+	LastInputTokens int `json:"last_input_tokens,omitempty"`
+	// ContextWindow is the maximum context size (in tokens) of the model used.
+	ContextWindow int `json:"context_window,omitempty"`
 	// LastError is the error message from the most recent failed iteration.
 	LastError string `json:"last_error,omitempty"`
+	// ConsecutiveErrors is the number of consecutive failed iterations.
+	ConsecutiveErrors int `json:"consecutive_errors"`
+	// RecentConvIDs holds conversation IDs from the most recent iterations
+	// (up to 10), newest first. Used by the visualizer to query log entries
+	// scoped to this loop.
+	RecentConvIDs []string `json:"recent_conv_ids,omitempty"`
 	// Config is a copy of the loop's configuration.
 	Config Config `json:"config"`
 }

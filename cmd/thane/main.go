@@ -67,6 +67,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/scheduler"
 	"github.com/nugget/thane-ai-agent/internal/search"
 	"github.com/nugget/thane-ai-agent/internal/server/api"
+	"github.com/nugget/thane-ai-agent/internal/server/web"
 	"github.com/nugget/thane-ai-agent/internal/talents"
 	"github.com/nugget/thane-ai-agent/internal/tools"
 	"github.com/nugget/thane-ai-agent/internal/unifi"
@@ -2351,6 +2352,22 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		defer shutCancel()
 		loopRegistry.ShutdownAll(shutCtx)
 	}()
+
+	// --- Loop visualizer ---
+	// Wire the web dashboard now that the loop registry exists.
+	{
+		webCfg := web.Config{
+			LoopRegistry: loopRegistry,
+			EventBus:     eventBus,
+			SystemStatus: &systemStatusAdapter{connMgr: connMgr},
+			Logger:       logger,
+		}
+		if indexDB != nil {
+			webCfg.LogQuerier = &logQueryAdapter{db: indexDB}
+		}
+		server.SetWebServer(web.NewWebServer(webCfg))
+		logger.Info("cognition engine dashboard enabled", "url", fmt.Sprintf("http://localhost:%d/", cfg.Listen.Port))
+	}
 
 	if cfg.Metacognitive.Enabled {
 		metacogCfg, err := metacognitive.ParseConfig(cfg.Metacognitive)

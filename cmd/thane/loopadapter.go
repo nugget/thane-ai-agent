@@ -39,10 +39,11 @@ func (a *loopAdapter) Run(ctx context.Context, req loop.RunRequest, _ loop.Strea
 	}
 
 	return &loop.RunResponse{
-		Content:      resp.Content,
-		Model:        resp.Model,
-		InputTokens:  resp.InputTokens,
-		OutputTokens: resp.OutputTokens,
-		ToolsUsed:    resp.ToolsUsed,
+		Content:       resp.Content,
+		Model:         resp.Model,
+		InputTokens:   resp.InputTokens,
+		OutputTokens:  resp.OutputTokens,
+		ContextWindow: a.agentLoop.GetContextWindow(),
+		ToolsUsed:     resp.ToolsUsed,
 	}, nil
 }

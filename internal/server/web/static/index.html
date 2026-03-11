@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Thane - Cognition Engine</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="header">
+    <div class="header-left">
+      <h1 class="header-title">Thane <span class="header-sep">&middot;</span> Cognition Engine</h1>
+    </div>
+    <div class="header-right">
+      <button id="toggle-inspector" class="toggle-btn toggle-btn--active" title="Toggle inspector panel (I)"><span class="toggle-icon"></span> Inspector</button>
+      <button id="toggle-logs" class="toggle-btn toggle-btn--active" title="Toggle log panel (L)"><span class="toggle-icon"></span> Logs</button>
+      <span id="conn-status" class="conn-badge conn-badge--connecting">connecting</span>
+    </div>
+  </header>
+
+  <main class="main">
+    <section class="canvas-panel" id="canvas-panel">
+      <svg id="canvas" width="100%" height="100%">
+        <g id="canvas-world"></g>
+      </svg>
+      <div id="empty-state" class="empty-state">
+        <p>No loops running</p>
+      </div>
+    </section>
+
+    <div class="resize-handle resize-handle--v" id="resize-v"></div>
+    <aside class="detail-panel" id="detail-panel">
+      <div id="detail-placeholder" class="detail-placeholder">
+        <p>Select a loop to inspect</p>
+      </div>
+      <div id="detail-content" class="detail-content" hidden>
+        <div class="detail-header">
+          <h2 id="detail-name" class="detail-name"></h2>
+          <span id="detail-state" class="state-badge"></span>
+        </div>
+
+        <div id="detail-ids" class="detail-ids"></div>
+
+        <!-- Forward-looking: what's next -->
+        <dl id="detail-forward" class="detail-metrics detail-metrics--forward">
+          <dt id="detail-sleep-label" hidden>Sleep</dt>
+          <dd id="detail-sleep" hidden>-</dd>
+        </dl>
+        <div id="detail-supervisor" class="supervisor-bar" hidden></div>
+
+        <hr class="detail-divider" id="detail-divider">
+
+        <!-- Historical: what happened -->
+        <dl class="detail-metrics detail-metrics--history">
+          <dt>Iterations</dt>
+          <dd id="detail-iterations">-</dd>
+          <dt>Attempts</dt>
+          <dd id="detail-attempts">-</dd>
+          <dt>Input Tokens</dt>
+          <dd id="detail-input-tokens">-</dd>
+          <dt>Output Tokens</dt>
+          <dd id="detail-output-tokens">-</dd>
+          <dt>Last Model</dt>
+          <dd id="detail-model">-</dd>
+          <dt>Last Error</dt>
+          <dd id="detail-error" class="detail-error">-</dd>
+          <dt>Started</dt>
+          <dd id="detail-started">-</dd>
+        </dl>
+
+        <div id="detail-tags" class="detail-tags" hidden>
+          <h3 class="section-title">Capabilities</h3>
+          <div id="detail-tags-list" class="tag-list"></div>
+        </div>
+
+        <h3 class="section-title">Recent Events</h3>
+        <ul id="event-list" class="event-list"></ul>
+      </div>
+      <div id="system-detail" class="detail-content" hidden>
+        <div class="detail-header">
+          <h2 class="detail-name">Runtime</h2>
+          <span id="system-status" class="state-badge"></span>
+        </div>
+        <h3 class="section-title">Services</h3>
+        <div id="system-services" class="system-services"></div>
+        <hr class="detail-divider">
+        <dl class="detail-metrics">
+          <dt>Uptime</dt>
+          <dd id="system-uptime">-</dd>
+          <dt>Version</dt>
+          <dd id="system-version">-</dd>
+          <dt>Commit</dt>
+          <dd id="system-commit">-</dd>
+          <dt>Go</dt>
+          <dd id="system-go">-</dd>
+          <dt>Arch</dt>
+          <dd id="system-arch">-</dd>
+        </dl>
+      </div>
+    </aside>
+  </main>
+
+  <div class="resize-handle resize-handle--h" id="resize-h"></div>
+  <section class="log-panel" id="log-panel">
+    <div class="log-toolbar">
+      <h3 class="section-title">Logs</h3>
+      <div class="log-filters">
+        <select id="log-level" class="log-select">
+          <option value="">All Levels</option>
+          <option value="ERROR">Error</option>
+          <option value="WARN">Warn+</option>
+          <option value="INFO">Info+</option>
+          <option value="DEBUG">Debug+</option>
+        </select>
+        <button id="log-refresh" class="btn btn--sm">Refresh</button>
+      </div>
+    </div>
+    <div id="log-empty" class="log-empty">
+      <p>Click a loop node to load logs</p>
+    </div>
+    <div id="log-scroll" class="log-scroll" hidden>
+      <table id="log-table" class="log-table">
+        <thead>
+          <tr>
+            <th class="log-col-time">Time</th>
+            <th class="log-col-level">Level</th>
+            <th class="log-col-subsystem">Sub</th>
+            <th class="log-col-msg">Message</th>
+            <th class="log-col-detail">Detail</th>
+          </tr>
+        </thead>
+        <tbody id="log-body"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <footer class="footer" id="footer">
+    <span id="footer-version" class="footer-item"></span>
+    <span id="footer-uptime" class="footer-item"></span>
+    <span id="footer-arch" class="footer-item"></span>
+    <span id="footer-go" class="footer-item"></span>
+    <a href="https://github.com/nugget/thane-ai-agent" class="footer-link" target="_blank" rel="noopener">github.com/nugget/thane-ai-agent</a>
+  </footer>
+
+  <div id="context-menu" class="context-menu" hidden>
+    <ul id="context-menu-items"></ul>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
