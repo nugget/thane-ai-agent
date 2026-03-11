@@ -512,8 +512,9 @@ func (l *Loop) run(ctx context.Context) {
 				err = fmt.Errorf("handler: %w", handlerErr)
 			} else {
 				result = &IterationResult{
-					ConvID:  convID,
-					Elapsed: time.Since(iterStart),
+					ConvID:     convID,
+					Supervisor: isSupervisor,
+					Elapsed:    time.Since(iterStart),
 				}
 			}
 		} else {
