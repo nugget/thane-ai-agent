@@ -523,6 +523,54 @@ func TestNewRequiresRunner(t *testing.T) {
 	}
 }
 
+func TestNewValidation(t *testing.T) {
+	t.Parallel()
+
+	runner := &noopRunner{}
+
+	t.Run("empty name", func(t *testing.T) {
+		t.Parallel()
+		_, err := New(Config{}, Deps{Runner: runner})
+		if err == nil {
+			t.Error("expected error for empty Name")
+		}
+	})
+
+	t.Run("SleepMax less than SleepMin", func(t *testing.T) {
+		t.Parallel()
+		_, err := New(Config{
+			Name:     "bad-sleep",
+			SleepMin: 5 * time.Minute,
+			SleepMax: 1 * time.Second,
+		}, Deps{Runner: runner})
+		if err == nil {
+			t.Error("expected error for SleepMax < SleepMin")
+		}
+	})
+
+	t.Run("jitter out of range", func(t *testing.T) {
+		t.Parallel()
+		_, err := New(Config{
+			Name:   "bad-jitter",
+			Jitter: Float64Ptr(1.5),
+		}, Deps{Runner: runner})
+		if err == nil {
+			t.Error("expected error for Jitter > 1")
+		}
+	})
+
+	t.Run("supervisor prob out of range", func(t *testing.T) {
+		t.Parallel()
+		_, err := New(Config{
+			Name:           "bad-prob",
+			SupervisorProb: 2.0,
+		}, Deps{Runner: runner})
+		if err == nil {
+			t.Error("expected error for SupervisorProb > 1")
+		}
+	})
+}
+
 // countingRunner counts Run calls and returns minimal responses.
 type countingRunner struct {
 	count *atomic.Int32

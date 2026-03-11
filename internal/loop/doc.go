@@ -5,7 +5,7 @@
 //
 // Loops are the universal primitive replacing three currently-separate
 // systems (metacognitive loop, anticipations, observers) with a single
-// [SpawnLoop] abstraction. Each loop is a background goroutine that
+// [Registry.SpawnLoop] abstraction. Each loop is a background goroutine that
 // iterates on a randomized bounded sleep schedule, running LLM iterations
 // via the agent runner and optionally writing observations to output
 // targets.

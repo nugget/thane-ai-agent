@@ -214,6 +214,14 @@ func (r *Registry) SpawnLoop(ctx context.Context, cfg Config, deps Deps) (string
 		return "", fmt.Errorf("start loop %q: %w", cfg.Name, err)
 	}
 
+	// Automatically deregister the loop when its goroutine exits so
+	// that naturally completed loops (MaxIter, MaxDuration, context
+	// cancellation) do not consume registry capacity.
+	go func(id string, done <-chan struct{}) {
+		<-done
+		r.Deregister(id)
+	}(l.id, l.Done())
+
 	return l.id, nil
 }
 

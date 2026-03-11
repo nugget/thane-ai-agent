@@ -94,10 +94,10 @@ const (
 	// Data: loop_id, loop_name, parent_id.
 	KindLoopStarted = "loop_started"
 	// KindLoopStopped signals a loop goroutine has stopped.
-	// Data: loop_id, loop_name, iterations.
+	// Data: loop_id, loop_name, iterations, attempts.
 	KindLoopStopped = "loop_stopped"
 	// KindLoopIterationStart signals the beginning of a loop iteration.
-	// Data: loop_id, loop_name, conversation_id, supervisor, iteration.
+	// Data: loop_id, loop_name, conversation_id, supervisor, attempt.
 	KindLoopIterationStart = "loop_iteration_start"
 	// KindLoopIterationComplete signals the end of a loop iteration.
 	// Data: loop_id, loop_name, model, input_tokens, output_tokens, elapsed_ms.

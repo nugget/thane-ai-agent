@@ -1,6 +1,9 @@
 package loop
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 // State represents the lifecycle state of a running loop.
 type State string
@@ -157,6 +160,24 @@ func (c *Config) applyDefaults() {
 	if c.Jitter == nil {
 		c.Jitter = Float64Ptr(DefaultJitter)
 	}
+}
+
+// validate checks that post-default Config values are internally
+// consistent. Called by [New] after [applyDefaults].
+func (c *Config) validate() error {
+	if c.SleepMin <= 0 {
+		return fmt.Errorf("loop: SleepMin must be positive, got %v", c.SleepMin)
+	}
+	if c.SleepMax < c.SleepMin {
+		return fmt.Errorf("loop: SleepMax (%v) must be >= SleepMin (%v)", c.SleepMax, c.SleepMin)
+	}
+	if c.Jitter != nil && (*c.Jitter < 0 || *c.Jitter > 1) {
+		return fmt.Errorf("loop: Jitter must be in [0, 1], got %v", *c.Jitter)
+	}
+	if c.SupervisorProb < 0 || c.SupervisorProb > 1 {
+		return fmt.Errorf("loop: SupervisorProb must be in [0, 1], got %v", c.SupervisorProb)
+	}
+	return nil
 }
 
 // Status is a snapshot of a loop's current state and metrics,

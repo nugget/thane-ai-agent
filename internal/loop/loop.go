@@ -106,14 +106,21 @@ type Loop struct {
 }
 
 // New creates a loop with the given configuration and dependencies.
-// Returns an error if required dependencies are missing (e.g., Runner).
+// Returns an error if required fields are missing or invalid.
 // Call [Loop.Start] to launch the background goroutine.
 func New(cfg Config, deps Deps) (*Loop, error) {
 	if deps.Runner == nil {
 		return nil, ErrNilRunner
 	}
+	if cfg.Name == "" {
+		return nil, errors.New("loop: Name is required")
+	}
 
 	cfg.applyDefaults()
+
+	if err := cfg.validate(); err != nil {
+		return nil, err
+	}
 
 	if deps.Logger == nil {
 		deps.Logger = slog.Default()
@@ -203,9 +210,30 @@ func (l *Loop) Done() <-chan struct{} {
 }
 
 // Status returns a snapshot of the loop's current state and metrics.
+// The returned Config is a deep copy; callers cannot mutate loop state
+// via the snapshot.
 func (l *Loop) Status() Status {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+
+	// Deep copy Config to prevent callers from mutating internal state
+	// via shared slices/maps.
+	cfgCopy := l.config
+	if l.config.Tags != nil {
+		cfgCopy.Tags = make([]string, len(l.config.Tags))
+		copy(cfgCopy.Tags, l.config.Tags)
+	}
+	if l.config.ExcludeTools != nil {
+		cfgCopy.ExcludeTools = make([]string, len(l.config.ExcludeTools))
+		copy(cfgCopy.ExcludeTools, l.config.ExcludeTools)
+	}
+	if l.config.Metadata != nil {
+		cfgCopy.Metadata = make(map[string]string, len(l.config.Metadata))
+		for k, v := range l.config.Metadata {
+			cfgCopy.Metadata[k] = v
+		}
+	}
+
 	return Status{
 		ID:                l.id,
 		Name:              l.config.Name,
@@ -218,7 +246,7 @@ func (l *Loop) Status() Status {
 		TotalInputTokens:  l.totalInputTokens,
 		TotalOutputTokens: l.totalOutputTokens,
 		LastError:         l.lastError,
-		Config:            l.config,
+		Config:            cfgCopy,
 	}
 }
 
@@ -497,8 +525,12 @@ func (l *Loop) computeSleep() time.Duration {
 	}
 
 	// Exponential backoff on consecutive errors: double for each
-	// failure, capped by SleepMax via clamp.
+	// failure, stopping early once we reach SleepMax to avoid
+	// overflow wrapping negative.
 	for range errCount {
+		if d >= l.config.SleepMax {
+			break
+		}
 		d *= 2
 	}
 
