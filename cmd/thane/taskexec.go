@@ -16,26 +16,13 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/scheduler"
 )
 
-const (
-	// periodicReflectionTaskName is the well-known name for the self-reflection
-	// scheduled task. Used for startup registration and context injection.
-	periodicReflectionTaskName = "periodic_reflection"
-
-	// emailPollTaskName is the well-known name for the email polling
-	// scheduled task. When it fires, the poller checks IMAP accounts
-	// for new messages and wakes the agent only if something arrived.
-	emailPollTaskName = "email_poll"
-)
+// periodicReflectionTaskName is the well-known name for the self-reflection
+// scheduled task. Used for startup registration and context injection.
+const periodicReflectionTaskName = "periodic_reflection"
 
 // agentRunner abstracts the agent loop for task execution testing.
 type agentRunner interface {
 	Run(ctx context.Context, req *agent.Request, stream agent.StreamCallback) (*agent.Response, error)
-}
-
-// emailChecker abstracts email polling for task execution testing.
-// Implemented by *email.Poller.
-type emailChecker interface {
-	CheckNewMessages(ctx context.Context) (string, error)
 }
 
 // taskExecDeps holds all dependencies needed by the scheduled task
@@ -45,16 +32,11 @@ type taskExecDeps struct {
 	runner        agentRunner
 	logger        *slog.Logger
 	workspacePath string
-	emailPoller   emailChecker // nil when email polling is not configured
 }
 
 // runScheduledTask handles execution of a scheduled task by dispatching
 // PayloadWake tasks to the agent loop. Unsupported payload kinds are
 // logged and silently ignored (returning nil, not an error).
-//
-// For email_poll tasks, the poller checks IMAP accounts for new messages
-// and only wakes the agent if something new arrived, avoiding LLM token
-// spend on empty poll cycles.
 func runScheduledTask(ctx context.Context, task *scheduler.Task, exec *scheduler.Execution, deps taskExecDeps) error {
 	log := deps.logger.With(
 		"subsystem", logging.SubsystemScheduler,
@@ -75,23 +57,6 @@ func runScheduledTask(ctx context.Context, task *scheduler.Task, exec *scheduler
 	msg, _ := task.Payload.Data["message"].(string)
 	if msg == "" {
 		msg = "Scheduled wake: " + task.Name
-	}
-
-	// Email poll: run the poller and only wake the agent if new mail arrived.
-	if task.Name == emailPollTaskName && deps.emailPoller != nil {
-		log.Debug("executing email poll")
-		wakeMsg, err := deps.emailPoller.CheckNewMessages(ctx)
-		if err != nil {
-			log.Warn("email poll failed", "error", err)
-			return nil // best-effort — next cycle will catch up
-		}
-		if wakeMsg == "" {
-			log.Debug("email poll: no new messages")
-			exec.Result = "no new messages"
-			return nil // nothing new, skip the LLM wake
-		}
-		log.Debug("email poll: new mail detected", "wake_msg_len", len(wakeMsg))
-		msg = prompts.EmailPollWakePrompt(wakeMsg)
 	}
 
 	// Context injection for periodic_reflection: read ego.md and build

@@ -967,50 +967,28 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		}
 
 		// --- Email polling ---
-		// Periodic IMAP check for new messages. Runs via the scheduler;
-		// the poller checks UIDs against a high-water mark and only
-		// wakes the agent when something new arrives.
+		// Periodic IMAP check for new messages via the loop infrastructure.
+		// The handler checks UIDs against a high-water mark and dispatches
+		// an agent conversation only when new mail is detected.
 		if cfg.Email.PollIntervalSec > 0 {
 			poller := email.NewPoller(emailMgr, opStore, logger)
-			deps.emailPoller = poller
-
 			pollInterval := time.Duration(cfg.Email.PollIntervalSec) * time.Second
-			existing, err := schedStore.GetTaskByName(emailPollTaskName)
-			if err != nil {
-				logger.Error("failed to check for email_poll task", "error", err)
-			} else if existing == nil {
-				pollTask := &scheduler.Task{
-					Name: emailPollTaskName,
-					Schedule: scheduler.Schedule{
-						Kind:  scheduler.ScheduleEvery,
-						Every: &scheduler.Duration{Duration: pollInterval},
-					},
-					Payload: scheduler.Payload{
-						Kind: scheduler.PayloadWake,
-						Data: map[string]any{
-							"message":       "Check for new email across all accounts.",
-							"local_only":    "false",
-							"quality_floor": "5",
-						},
-					},
-					Enabled:   true,
-					CreatedBy: "system",
-				}
-				if err := sched.CreateTask(pollTask); err != nil {
-					logger.Error("failed to create email_poll task", "error", err)
-				} else {
-					logger.Info("email_poll task registered", "interval", pollInterval)
-				}
-			} else {
-				// Update interval if config changed.
-				if existing.Schedule.Every != nil && existing.Schedule.Every.Duration != pollInterval {
-					existing.Schedule.Every.Duration = pollInterval
-					if err := sched.UpdateTask(existing); err != nil {
-						logger.Error("failed to update email_poll task", "error", err)
-					} else {
-						logger.Info("email_poll task updated", "interval", pollInterval)
-					}
-				}
+
+			if _, err := loopRegistry.SpawnLoop(ctx, looppkg.Config{
+				Name:         "email-poller",
+				SleepMin:     pollInterval,
+				SleepMax:     pollInterval,
+				SleepDefault: pollInterval,
+				Jitter:       looppkg.Float64Ptr(0),
+				Handler:      emailPollHandler(poller, loop, logger),
+				Metadata: map[string]string{
+					"subsystem": "email",
+				},
+			}, looppkg.Deps{
+				Logger:   logger,
+				EventBus: eventBus,
+			}); err != nil {
+				return fmt.Errorf("spawn email poller loop: %w", err)
 			}
 		}
 
