@@ -841,6 +841,9 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
 
 /* === Toggle Buttons === */
 .toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3em;
   font-size: 0.7rem;
   font-family: var(--font-sans);
   font-weight: 500;
@@ -855,9 +858,24 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
 
 .toggle-btn:hover { background: var(--bg-hover); color: var(--text-secondary); }
 
+.toggle-icon {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-muted);
+  opacity: 0.4;
+  transition: background 0.15s, opacity 0.15s;
+}
+
 .toggle-btn--active {
   color: var(--accent);
   border-color: var(--accent);
+}
+
+.toggle-btn--active .toggle-icon {
+  background: var(--accent);
+  opacity: 1;
 }
 
 /* Panel hidden states */
