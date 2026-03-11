@@ -281,6 +281,10 @@ type IterationSnapshot struct {
 	// WaitAfter is true when the loop entered WaitFunc after this
 	// iteration instead of sleeping.
 	WaitAfter bool `json:"wait_after,omitempty"`
+	// Summary holds handler-reported metrics for this iteration,
+	// written by handlers via [IterationSummary] during execution.
+	// Values should be small scalars (int, string, bool).
+	Summary map[string]any `json:"summary,omitempty"`
 }
 
 // Status is a snapshot of a loop's current state and metrics,

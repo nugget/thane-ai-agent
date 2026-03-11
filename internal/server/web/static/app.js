@@ -366,6 +366,7 @@ function handleLoopEvent(evt) {
           supervisor: loop._lastSupervisor || false,
           started_at: loop._iterStartTs ? new Date(loop._iterStartTs).toISOString() : evt.ts,
           completed_at: evt.ts,
+          summary: evt.data.summary || null,
         };
         prependIterationSnapshot(loopId, snap);
         // Clear live telemetry.
@@ -1043,9 +1044,6 @@ function renderDetail() {
   // Aggregate stats bar.
   renderAggregates(loop);
 
-  // Supervisor status bar.
-  renderSupervisorBar(loop);
-
   // Iteration timeline.
   renderTimeline(loop);
 
@@ -1217,6 +1215,15 @@ function buildPastCard(snap, handlerOnly, idx, startExpanded) {
   const spacer = document.createElement('span');
   spacer.className = 'iter-card__spacer';
   header.appendChild(spacer);
+
+  // Wall-clock timestamp (HH:MM).
+  if (snap.completed_at) {
+    const ts = document.createElement('span');
+    ts.className = 'iter-card__time';
+    ts.textContent = formatTimeShort(new Date(snap.completed_at));
+    header.appendChild(ts);
+  }
+
   header.appendChild(dur);
   header.appendChild(chevron);
   card.appendChild(header);
@@ -1246,6 +1253,19 @@ function buildPastCard(snap, handlerOnly, idx, startExpanded) {
       toolsDiv.appendChild(chip);
     }
     body.appendChild(toolsDiv);
+  }
+
+  // Summary stats (handler-reported metrics).
+  if (snap.summary && Object.keys(snap.summary).length > 0) {
+    const summaryDiv = document.createElement('div');
+    summaryDiv.className = 'iter-card__summary';
+    for (const [key, value] of Object.entries(snap.summary)) {
+      const item = document.createElement('span');
+      item.className = 'iter-card__summary-item';
+      item.textContent = key.replace(/_/g, ' ') + ': ' + value;
+      summaryDiv.appendChild(item);
+    }
+    body.appendChild(summaryDiv);
   }
 
   // Error text.
@@ -1296,35 +1316,32 @@ function buildConnector(loop, snap, isLive) {
   label.className = 'iter-connector__label';
 
   if (isLive) {
-    // Live connector — show current sleep/wait state.
+    // Live connector — single line: sleep/wait state + optional supervisor odds.
+    let sleepText = '';
     if (loop.state === 'sleeping') {
       const timer = state.sleepTimers.get(loop.id);
       if (timer && timer.durationMs > 0) {
         const remaining = timer.durationMs - (Date.now() - timer.startedAt.getTime());
-        if (remaining > 0) {
-          label.textContent = 'sleeping ' + formatDuration(remaining);
-        } else {
-          label.textContent = 'waking up...';
-        }
+        sleepText = remaining > 0 ? 'sleeping ' + formatDuration(remaining) : 'waking up...';
       } else {
-        label.textContent = 'sleeping';
+        sleepText = 'sleeping';
       }
     } else if (loop.state === 'waiting') {
-      label.textContent = 'awaiting event';
+      sleepText = 'awaiting event';
+    }
+    label.appendChild(document.createTextNode(sleepText));
+
+    // Append supervisor odds inline (sleeping LLM loops only).
+    const cfg = loop.config || {};
+    if (loop.state === 'sleeping' && cfg.Supervisor && cfg.SupervisorProb > 0) {
+      const pct = Math.round(cfg.SupervisorProb * 100);
+      label.appendChild(document.createTextNode(' \u00b7 '));
+      const supSpan = document.createElement('span');
+      supSpan.className = 'iter-connector__sup';
+      supSpan.textContent = pct + '% supervisor odds';
+      label.appendChild(supSpan);
     }
     conn.appendChild(label);
-
-    // Supervisor info on live connector only.
-    const cfg = loop.config || {};
-    if (cfg.Supervisor && cfg.SupervisorProb > 0) {
-      const supLabel = document.createElement('span');
-      supLabel.className = 'iter-connector__sup';
-      const pct = Math.round(cfg.SupervisorProb * 100);
-      const lastSup = loop.last_supervisor_iter || 0;
-      const itersSince = (loop.iterations || 0) - lastSup;
-      supLabel.innerHTML = '&#x2726; ' + pct + '%' + (lastSup > 0 ? ' \u00b7 ' + itersSince + ' iter ago' : '');
-      conn.appendChild(supLabel);
-    }
   } else {
     // Historical connector — show how long the sleep was.
     if (snap.sleep_after_ms) {
@@ -1427,37 +1444,6 @@ function makeIDChip(fullID) {
     });
   });
   return chip;
-}
-
-function renderSupervisorBar(loop) {
-  const bar = $('#detail-supervisor');
-  const cfg = loop.config || {};
-
-  // Only show if supervisor mode is configured.
-  if (!cfg.Supervisor) {
-    bar.hidden = true;
-    return;
-  }
-
-  bar.hidden = false;
-  bar.innerHTML = '';
-
-  const prob = cfg.SupervisorProb || 0;
-  const pct = Math.round(prob * 100);
-
-  if (loop._supervisor) {
-    // Currently in a supervisor iteration.
-    bar.className = 'supervisor-bar supervisor-bar--active';
-    bar.innerHTML = '<span class="sup-icon">&#x2726;</span> Supervisor iteration in progress';
-  } else if (loop._lastSupervisor) {
-    // Last iteration was a supervisor.
-    bar.className = 'supervisor-bar supervisor-bar--last';
-    bar.innerHTML = '<span class="sup-icon">&#x2726;</span> Last iteration was supervised';
-  } else {
-    // Idle — show probability of next being a supervisor.
-    bar.className = 'supervisor-bar';
-    bar.innerHTML = '<span class="sup-icon">&#x2726;</span> Supervisor: ' + pct + '% chance next';
-  }
 }
 
 function shortID(id) {
@@ -1948,6 +1934,15 @@ function formatTime(date) {
     hour: '2-digit',
     minute: '2-digit',
     second: '2-digit',
+    hour12: false,
+  });
+}
+
+function formatTimeShort(date) {
+  if (!(date instanceof Date) || isNaN(date)) return '';
+  return date.toLocaleTimeString(undefined, {
+    hour: '2-digit',
+    minute: '2-digit',
     hour12: false,
   });
 }

@@ -1514,3 +1514,48 @@ func TestHandlerPostIterate(t *testing.T) {
 		}
 	}
 }
+
+func TestHandlerSummary(t *testing.T) {
+	t.Parallel()
+
+	l, err := New(Config{
+		Name:         "handler-summary",
+		SleepMin:     1 * time.Millisecond,
+		SleepMax:     2 * time.Millisecond,
+		SleepDefault: 1 * time.Millisecond,
+		Jitter:       Float64Ptr(0),
+		MaxIter:      2,
+		Handler: func(ctx context.Context, _ any) error {
+			summary := IterationSummary(ctx)
+			if summary != nil {
+				summary["devices_located"] = 5
+				summary["rooms_updated"] = 2
+			}
+			return nil
+		},
+	}, Deps{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	_ = l.Start(context.Background())
+	<-l.Done()
+
+	status := l.Status()
+	if len(status.RecentIterations) != 2 {
+		t.Fatalf("RecentIterations = %d, want 2", len(status.RecentIterations))
+	}
+
+	// Most recent iteration is first (ring buffer prepends).
+	for i, snap := range status.RecentIterations {
+		if snap.Summary == nil {
+			t.Fatalf("RecentIterations[%d].Summary is nil", i)
+		}
+		if snap.Summary["devices_located"] != 5 {
+			t.Errorf("RecentIterations[%d].Summary[devices_located] = %v, want 5", i, snap.Summary["devices_located"])
+		}
+		if snap.Summary["rooms_updated"] != 2 {
+			t.Errorf("RecentIterations[%d].Summary[rooms_updated] = %v, want 2", i, snap.Summary["rooms_updated"])
+		}
+	}
+}

@@ -302,44 +302,6 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
 .state-badge--pending     { background: var(--purple-dim); color: var(--purple); }
 .state-badge--supervisor  { background: var(--purple-dim); color: var(--purple); }
 
-/* === Supervisor Bar === */
-.supervisor-bar {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  font-size: 0.72rem;
-  padding: 0.35rem 0.5rem;
-  border-radius: var(--radius);
-  margin-bottom: 0.75rem;
-  background: var(--purple-dim);
-  color: var(--text-secondary);
-  border: 1px solid transparent;
-}
-
-.supervisor-bar[hidden] { display: none; }
-
-.supervisor-bar--active {
-  color: var(--purple);
-  border-color: var(--purple);
-  font-weight: 600;
-  animation: sup-bar-glow 2s ease-in-out infinite;
-}
-
-.supervisor-bar--last {
-  color: var(--purple);
-  opacity: 0.7;
-}
-
-.sup-icon {
-  font-size: 0.9em;
-  color: var(--purple);
-}
-
-@keyframes sup-bar-glow {
-  0%, 100% { background: var(--purple-dim); }
-  50% { background: rgba(188, 140, 255, 0.3); }
-}
-
 /* === Context Utilization Meter === */
 .context-meter {
   display: flex;
@@ -503,6 +465,13 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
   max-width: 120px;
 }
 .iter-card__spacer { flex: 1; }
+.iter-card__time {
+  color: var(--text-muted);
+  font-size: 0.6rem;
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+  margin-right: 0.3rem;
+}
 .iter-card__duration {
   color: var(--text-secondary);
   flex-shrink: 0;
@@ -563,6 +532,18 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
   font-family: var(--font-mono);
   font-size: 0.6rem;
 }
+
+/* Handler summary stats */
+.iter-card__summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.15rem 0.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  color: var(--text-secondary);
+  margin-bottom: 0.25rem;
+}
+.iter-card__summary-item { white-space: nowrap; }
 
 /* --- Connector Lines --- */
 .iter-connector {

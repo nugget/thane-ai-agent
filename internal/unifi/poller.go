@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/nugget/thane-ai-agent/internal/loop"
 )
 
 // RoomUpdater is the interface the person tracker must satisfy for the
@@ -78,6 +80,8 @@ func NewPoller(cfg PollerConfig) *Poller {
 // locations, apply debounce, and push room updates to the tracker.
 // Returns an error if the device locator fails; all other paths succeed.
 func (p *Poller) Poll(ctx context.Context) error {
+	summary := loop.IterationSummary(ctx)
+
 	locations, err := p.cfg.Locator.LocateDevices(ctx)
 	if err != nil {
 		return fmt.Errorf("locate devices: %w", err)
@@ -130,6 +134,7 @@ func (p *Poller) Poll(ctx context.Context) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
+	var roomsUpdated, pendingCount int
 	for entityID, best := range entityBest {
 		pend, exists := p.pending[entityID]
 		if !exists || pend.room != best.room {
@@ -139,6 +144,7 @@ func (p *Poller) Poll(ctx context.Context) error {
 				source: best.source,
 				count:  1,
 			}
+			pendingCount++
 			p.cfg.Logger.Debug("room change candidate",
 				"entity_id", entityID,
 				"candidate_room", best.room,
@@ -151,12 +157,15 @@ func (p *Poller) Poll(ctx context.Context) error {
 		pend.count++
 		if pend.count >= debounceThreshold {
 			p.cfg.Updater.UpdateRoom(entityID, best.room, best.source)
+			roomsUpdated++
 			p.cfg.Logger.Log(ctx, slog.Level(-8), "room update committed", // config.LevelTrace
 				"entity_id", entityID,
 				"room", best.room,
 				"source", best.source,
 				"polls", pend.count,
 			)
+		} else {
+			pendingCount++
 		}
 	}
 
@@ -165,6 +174,13 @@ func (p *Poller) Poll(ctx context.Context) error {
 		if _, hasBest := entityBest[entityID]; !hasBest {
 			delete(p.pending, entityID)
 		}
+	}
+
+	// Report metrics to the loop dashboard.
+	if summary != nil {
+		summary["devices_located"] = len(macIndex)
+		summary["rooms_updated"] = roomsUpdated
+		summary["pending_changes"] = pendingCount
 	}
 
 	return nil

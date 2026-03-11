@@ -329,6 +329,13 @@ func (l *Loop) Status() Status {
 				}
 				iterCopy[i].ToolsUsed = m
 			}
+			if len(snap.Summary) > 0 {
+				s := make(map[string]any, len(snap.Summary))
+				for k, v := range snap.Summary {
+					s[k] = v
+				}
+				iterCopy[i].Summary = s
+			}
 		}
 	}
 
@@ -548,9 +555,12 @@ func (l *Loop) run(ctx context.Context) {
 		// Dispatch: Handler runs directly; otherwise use LLM via iterate().
 		var result *IterationResult
 		var err error
+		var handlerSummary map[string]any
 		if l.config.Handler != nil {
 			iterStart := time.Now()
-			if handlerErr := l.config.Handler(iterCtx, event); handlerErr != nil {
+			summary := make(map[string]any)
+			handlerCtx := context.WithValue(iterCtx, iterSummaryKey{}, summary)
+			if handlerErr := l.config.Handler(handlerCtx, event); handlerErr != nil {
 				err = fmt.Errorf("handler: %w", handlerErr)
 			} else {
 				result = &IterationResult{
@@ -558,6 +568,9 @@ func (l *Loop) run(ctx context.Context) {
 					Supervisor: isSupervisor,
 					Elapsed:    time.Since(iterStart),
 				}
+			}
+			if len(summary) > 0 {
+				handlerSummary = summary
 			}
 		} else {
 			result, err = l.iterate(iterCtx, isSupervisor, convID)
@@ -641,22 +654,26 @@ func (l *Loop) run(ctx context.Context) {
 				"elapsed", result.Elapsed.Round(time.Second),
 			)
 
+			eventData := map[string]any{
+				"loop_id":         l.id,
+				"loop_name":       l.config.Name,
+				"model":           result.Model,
+				"input_tokens":    result.InputTokens,
+				"output_tokens":   result.OutputTokens,
+				"context_window":  result.ContextWindow,
+				"elapsed_ms":      result.Elapsed.Milliseconds(),
+				"tools_used":      result.ToolsUsed,
+				"supervisor":      result.Supervisor,
+				"conversation_id": convID,
+			}
+			if len(handlerSummary) > 0 {
+				eventData["summary"] = handlerSummary
+			}
 			l.publishEvent(events.Event{
 				Timestamp: time.Now(),
 				Source:    events.SourceLoop,
 				Kind:      events.KindLoopIterationComplete,
-				Data: map[string]any{
-					"loop_id":         l.id,
-					"loop_name":       l.config.Name,
-					"model":           result.Model,
-					"input_tokens":    result.InputTokens,
-					"output_tokens":   result.OutputTokens,
-					"context_window":  result.ContextWindow,
-					"elapsed_ms":      result.Elapsed.Milliseconds(),
-					"tools_used":      result.ToolsUsed,
-					"supervisor":      result.Supervisor,
-					"conversation_id": convID,
-				},
+				Data:      eventData,
 			})
 		}
 
@@ -669,6 +686,11 @@ func (l *Loop) run(ctx context.Context) {
 			snap.WaitAfter = true
 		} else {
 			snap.SleepAfterMs = sleep.Milliseconds()
+		}
+
+		// Attach handler summary if available.
+		if len(handlerSummary) > 0 {
+			snap.Summary = handlerSummary
 		}
 
 		// Prepend snapshot to ring buffer (newest first).
