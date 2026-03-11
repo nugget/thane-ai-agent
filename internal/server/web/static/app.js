@@ -1118,11 +1118,20 @@ function openDetailWindow(type, id) {
   const params = type === 'system'
     ? '?type=system'
     : '?type=loop&id=' + encodeURIComponent(id);
-  window.open(
-    '/static/detail.html' + params,
+  const name = type === 'system'
+    ? 'Runtime'
+    : (state.loops.get(id)?.name || id?.slice(0, 8) || 'Loop');
+  const w = window.open(
+    '/static/detail.html' + params + '&name=' + encodeURIComponent(name),
     'detail-' + (id || 'system'),
-    'width=500,height=700,menubar=no,toolbar=no,location=no,status=no'
+    'popup=yes,width=500,height=700'
   );
+  // Set title once loaded (cross-origin safe since same origin).
+  if (w) {
+    w.addEventListener('load', () => {
+      w.document.title = 'Thane \u00b7 ' + name;
+    });
+  }
 }
 
 // ---------------------------------------------------------------------------

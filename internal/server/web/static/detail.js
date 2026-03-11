@@ -13,6 +13,10 @@ const statusBar = $('#popup-status');
 const urlParams = new URLSearchParams(window.location.search);
 const nodeType = urlParams.get('type') || 'loop';
 const nodeId = urlParams.get('id') || '';
+const nodeName = urlParams.get('name') || '';
+
+// Set title immediately from URL param, refined later from SSE data.
+document.title = 'Thane \u00b7 ' + (nodeName || (nodeType === 'system' ? 'Runtime' : nodeId.slice(0, 8)));
 
 // ---------------------------------------------------------------------------
 // Helpers (duplicated from app.js — no module system)
@@ -252,7 +256,6 @@ function buildLogDetail(td, entry) {
 let systemStartTime = null;
 
 function initSystem() {
-  document.title = 'Thane - Runtime';
   $('#system-detail').hidden = false;
 
   fetchSystemStatus();
@@ -350,7 +353,6 @@ function initLoop() {
     return;
   }
 
-  document.title = 'Thane - Loop ' + nodeId.slice(0, 8);
   $('#loop-detail').hidden = false;
 
   connectSSE();
@@ -368,7 +370,7 @@ function connectSSE() {
     const match = statuses.find(s => s.id === nodeId);
     if (match) {
       loopData = match;
-      document.title = 'Thane - ' + (match.name || nodeId.slice(0, 8));
+      document.title = 'Thane \u00b7 ' + (match.name || nodeId.slice(0, 8));
       renderLoopDetail();
     }
     statusBar.textContent = 'Connected \u2014 ' + formatTime(new Date());
@@ -706,9 +708,9 @@ $('#log-refresh').addEventListener('click', () => {
 
 // Set toolbar title.
 if (nodeType === 'system') {
-  $('#popup-title').textContent = 'Runtime';
+  $('#popup-title').textContent = nodeName || 'Runtime';
   initSystem();
 } else {
-  $('#popup-title').textContent = nodeId ? nodeId.slice(0, 8) + '...' : 'Loop';
+  $('#popup-title').textContent = nodeName || (nodeId ? nodeId.slice(0, 8) + '...' : 'Loop');
   initLoop();
 }
