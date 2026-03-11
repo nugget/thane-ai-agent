@@ -124,6 +124,7 @@ function handleLoopEvent(evt) {
       if (loopId && state.loops.has(loopId)) {
         const loop = state.loops.get(loopId);
         loop._lastModel = evt.data.model;
+        loop._lastSupervisor = loop._supervisor || false;
         loop.total_input_tokens = (loop.total_input_tokens || 0) + (evt.data.input_tokens || 0);
         loop.total_output_tokens = (loop.total_output_tokens || 0) + (evt.data.output_tokens || 0);
         loop.iterations = (loop.iterations || 0) + 1;
@@ -271,11 +272,10 @@ function renderNode(loop, x, y) {
       r: nodeR,
     });
 
-    // Supervisor dot.
+    // Supervisor ring (larger ring outside the node).
     const supDot = createSVG('circle', {
       class: 'supervisor-dot',
-      r: 5,
-      cy: -(nodeR + 10),
+      r: nodeR + 10,
     });
 
     // Label.
@@ -296,15 +296,22 @@ function renderNode(loop, x, y) {
   // Update position.
   group.setAttribute('transform', `translate(${x},${y})`);
 
-  // Update state class on main circle.
+  // Update state class on main circle — supervisor processing gets its own style.
   const circle = group.querySelector('.node-circle');
-  const stateClass = 'node-circle--' + (loop.state || 'pending');
+  const isSup = loop._supervisor && loop.state === 'processing';
+  const stateClass = isSup
+    ? 'node-circle--supervisor'
+    : 'node-circle--' + (loop.state || 'pending');
   circle.setAttribute('class', 'node-circle ' + stateClass);
 
-  // Supervisor dot.
+  // Supervisor ring (outer pulsing ring around node).
   const supDot = group.querySelector('.supervisor-dot');
   supDot.setAttribute('class',
-    'supervisor-dot' + (loop._supervisor ? ' supervisor-dot--active' : ''));
+    'supervisor-dot' + (isSup ? ' supervisor-dot--active' : ''));
+  // Also show dimmed ring when last iteration was supervisor (memory).
+  if (!isSup && loop._lastSupervisor) {
+    supDot.setAttribute('class', 'supervisor-dot supervisor-dot--faded');
+  }
 
   // Selection ring.
   if (state.selected === loop.id) {
@@ -353,11 +360,15 @@ function renderDetail() {
   $('#detail-name').textContent = loop.name || loop.id;
 
   const badge = $('#detail-state');
-  badge.textContent = loop.state || 'unknown';
-  badge.className = 'state-badge state-badge--' + (loop.state || 'pending');
+  const isSup = loop._supervisor && loop.state === 'processing';
+  badge.textContent = isSup ? 'supervisor' : (loop.state || 'unknown');
+  badge.className = 'state-badge state-badge--' + (isSup ? 'supervisor' : (loop.state || 'pending'));
 
   // IDs section.
   renderDetailIDs(loop);
+
+  // Supervisor status bar.
+  renderSupervisorBar(loop);
 
   $('#detail-iterations').textContent = formatNumber(loop.iterations || 0);
   $('#detail-attempts').textContent = formatNumber(loop.attempts || 0);
@@ -462,6 +473,37 @@ function makeIDChip(fullID) {
     });
   });
   return chip;
+}
+
+function renderSupervisorBar(loop) {
+  const bar = $('#detail-supervisor');
+  const cfg = loop.config || {};
+
+  // Only show if supervisor mode is configured.
+  if (!cfg.Supervisor) {
+    bar.hidden = true;
+    return;
+  }
+
+  bar.hidden = false;
+  bar.innerHTML = '';
+
+  const prob = cfg.SupervisorProb || 0;
+  const pct = Math.round(prob * 100);
+
+  if (loop._supervisor) {
+    // Currently in a supervisor iteration.
+    bar.className = 'supervisor-bar supervisor-bar--active';
+    bar.innerHTML = '<span class="sup-icon">&#x2726;</span> Supervisor iteration in progress';
+  } else if (loop._lastSupervisor) {
+    // Last iteration was a supervisor.
+    bar.className = 'supervisor-bar supervisor-bar--last';
+    bar.innerHTML = '<span class="sup-icon">&#x2726;</span> Last iteration was supervised';
+  } else {
+    // Idle — show probability of next being a supervisor.
+    bar.className = 'supervisor-bar';
+    bar.innerHTML = '<span class="sup-icon">&#x2726;</span> Supervisor: ' + pct + '% chance next';
+  }
 }
 
 function shortID(id) {
