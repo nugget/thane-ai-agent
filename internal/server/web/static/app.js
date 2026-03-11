@@ -121,6 +121,22 @@ function getModelRadius(modelName) {
   return MIN_NODE_R + clamped * (MAX_NODE_R - MIN_NODE_R);
 }
 
+// Check whether a loop's backing service is degraded (not ready) in
+// the runtime health data. Matches by loop name against service keys.
+function isServiceDegraded(loopName) {
+  if (!state.system || !state.system.health || !loopName) return false;
+  const health = state.system.health;
+  // Direct match: loop name === service key (e.g., "signal" → "signal").
+  if (health[loopName] && !health[loopName].ready) return true;
+  // Prefix match for child loops: "signal/Alice" → check "signal".
+  const slash = loopName.indexOf('/');
+  if (slash > 0) {
+    const prefix = loopName.slice(0, slash);
+    if (health[prefix] && !health[prefix].ready) return true;
+  }
+  return false;
+}
+
 // Create an SVG shape element for a given category at origin, radius r.
 function createNodeShape(category, r) {
   const shape = CATEGORY_SHAPES[category] || 'octagon';
@@ -654,42 +670,88 @@ function renderLinkingLines(hasSystem, sysX, sysY, loops, nodePositions) {
   const topLevel = loops.filter(l => !l.parent_id && nodePositions.has(l.id));
   const activeIds = new Set(topLevel.map(l => l.id));
 
-  // Remove stale link lines for loops that no longer exist or gained a parent.
+  // Child loops are those with a parent_id.
+  const children = loops.filter(l => l.parent_id && nodePositions.has(l.id));
+  const childKeys = new Set(children.map(l => l.id));
+
+  // Build a set of all valid link targets (system→top-level + parent→child).
+  const allValidTargets = new Set([...activeIds, ...childKeys]);
+
+  // Remove stale link lines for loops that no longer exist.
   const existing = canvasWorld.querySelectorAll('.link-line');
   for (const el of existing) {
-    if (!hasSystem || !activeIds.has(el.dataset.targetLoop)) {
+    const target = el.dataset.targetLoop;
+    const isSystemLink = !el.dataset.parentLoop;
+    if (isSystemLink && (!hasSystem || !activeIds.has(target))) {
+      el.remove();
+    } else if (!isSystemLink && !allValidTargets.has(target)) {
       el.remove();
     }
   }
 
-  if (!hasSystem) return;
+  // System → top-level lines.
+  if (hasSystem) {
+    for (const loop of topLevel) {
+      const pos = nodePositions.get(loop.id);
+      let line = canvasWorld.querySelector(`.link-line[data-target-loop="${loop.id}"]:not([data-parent-loop])`);
 
-  for (const loop of topLevel) {
-    const pos = nodePositions.get(loop.id);
-    let line = canvasWorld.querySelector(`.link-line[data-target-loop="${loop.id}"]`);
+      if (!line) {
+        line = createSVG('line', {
+          class: 'link-line',
+          'data-target-loop': loop.id,
+        });
+        // Insert before nodes so lines draw behind them.
+        canvasWorld.insertBefore(line, canvasWorld.firstChild);
+      }
+
+      line.setAttribute('x1', sysX);
+      line.setAttribute('y1', sysY);
+      line.setAttribute('x2', pos.x);
+      line.setAttribute('y2', pos.y);
+
+      // State-driven styling: error or degraded service turns the line orange/red.
+      if (loop.state === 'error') {
+        line.setAttribute('class', 'link-line link-line--error');
+      } else if (isServiceDegraded(loop.name)) {
+        line.setAttribute('class', 'link-line link-line--degraded');
+      } else {
+        line.setAttribute('class', 'link-line');
+      }
+      line.dataset.targetLoop = loop.id;
+    }
+  }
+
+  // Parent → child lines.
+  for (const child of children) {
+    const parentPos = nodePositions.get(child.parent_id);
+    const childPos = nodePositions.get(child.id);
+    if (!parentPos || !childPos) continue;
+
+    const selector = `.link-line[data-target-loop="${child.id}"][data-parent-loop="${child.parent_id}"]`;
+    let line = canvasWorld.querySelector(selector);
 
     if (!line) {
       line = createSVG('line', {
-        class: 'link-line',
-        'data-target-loop': loop.id,
+        class: 'link-line link-line--child',
+        'data-target-loop': child.id,
+        'data-parent-loop': child.parent_id,
       });
-      // Insert before nodes so lines draw behind them.
       canvasWorld.insertBefore(line, canvasWorld.firstChild);
     }
 
-    line.setAttribute('x1', sysX);
-    line.setAttribute('y1', sysY);
-    line.setAttribute('x2', pos.x);
-    line.setAttribute('y2', pos.y);
+    line.setAttribute('x1', parentPos.x);
+    line.setAttribute('y1', parentPos.y);
+    line.setAttribute('x2', childPos.x);
+    line.setAttribute('y2', childPos.y);
 
-    // State-driven styling: error state turns the line red.
-    if (loop.state === 'error') {
-      line.setAttribute('class', 'link-line link-line--error');
-    } else {
-      line.setAttribute('class', 'link-line');
+    // State-driven styling for child lines.
+    let cls = 'link-line link-line--child';
+    if (child.state === 'error') {
+      cls += ' link-line--error';
     }
-    // Preserve the data attribute after class reset.
-    line.dataset.targetLoop = loop.id;
+    line.setAttribute('class', cls);
+    line.dataset.targetLoop = child.id;
+    line.dataset.parentLoop = child.parent_id;
   }
 }
 
@@ -819,11 +881,19 @@ function renderNode(loop, x, y) {
   group.dataset.nodeR = nodeR;
 
   // Update state class on main shape — supervisor processing gets its own style.
+  // If the loop's backing service is degraded, override idle states with the
+  // degraded visual so the canvas reflects connwatch health.
   const shapeEl = group.querySelector('.node-shape');
   const isSup = loop._supervisor && loop.state === 'processing';
-  const stateClass = isSup
-    ? 'node-shape--supervisor'
-    : 'node-shape--' + (loop.state || 'pending');
+  const svcDegraded = isServiceDegraded(loop.name);
+  let stateClass;
+  if (isSup) {
+    stateClass = 'node-shape--supervisor';
+  } else if (svcDegraded && (loop.state === 'sleeping' || loop.state === 'waiting')) {
+    stateClass = 'node-shape--degraded';
+  } else {
+    stateClass = 'node-shape--' + (loop.state || 'pending');
+  }
   shapeEl.setAttribute('class', 'node-shape ' + stateClass);
 
   // Stroke width represents context utilization percentage.
