@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -53,7 +54,7 @@ func NewSSHFileSigner(keyPath string) (*SSHFileSigner, error) {
 		var ppErr *ssh.PassphraseMissingError
 		if errors.As(err, &ppErr) {
 			return nil, fmt.Errorf("provenance: signing key %s is passphrase-protected; "+
-				"use an unencrypted key or configure provenance.passphrase", keyPath)
+				"use an unencrypted key or load via ssh-agent", keyPath)
 		}
 		return nil, fmt.Errorf("provenance: parse signing key: %w", err)
 	}
@@ -119,9 +120,9 @@ type FileHistory struct {
 	// this file.
 	LastModified time.Time
 
-	// LastAuthor is the commit message of the most recent commit
+	// LastMessage is the commit message of the most recent commit
 	// (typically a loop name or conversation ID).
-	LastAuthor string
+	LastMessage string
 
 	// RevisionCount is the total number of commits touching this file.
 	RevisionCount int
@@ -140,7 +141,12 @@ type EditEntry struct {
 // Store wraps a git repository to provide signed, auditable file
 // management. Every [Store.Write] creates a signed git commit. Read and
 // History operations query the repository without modification.
+//
+// Store is safe for concurrent use; a mutex serializes git operations
+// to prevent interleaved add/commit sequences from corrupting the
+// repository.
 type Store struct {
+	mu     sync.Mutex
 	path   string
 	signer Signer
 	logger *slog.Logger
@@ -183,6 +189,9 @@ func (s *Store) Write(ctx context.Context, filename, content, message string) er
 	if err := validateFilename(filename); err != nil {
 		return fmt.Errorf("provenance: %w", err)
 	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
 	absPath := filepath.Join(s.path, filename)
 
@@ -236,6 +245,8 @@ func (s *Store) Read(filename string) (string, error) {
 // History returns git metadata for filename. If the file has no commits
 // yet, History returns a zero-value FileHistory with no error.
 func (s *Store) History(ctx context.Context, filename string) (*FileHistory, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	return s.fileHistory(ctx, filename)
 }
 

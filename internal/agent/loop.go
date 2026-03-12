@@ -705,7 +705,7 @@ func (l *Loop) injectEgoFromProvenance(ctx context.Context, sb *strings.Builder,
 	if hist, err := l.provenanceStore.History(ctx, "ego.md"); err == nil && hist.RevisionCount > 0 {
 		ago := time.Since(hist.LastModified).Truncate(time.Second)
 		sb.WriteString(fmt.Sprintf("(updated %s ago by %s, revision %d)\n",
-			formatDeltaDuration(ago), hist.LastAuthor, hist.RevisionCount))
+			formatDeltaDuration(ago), hist.LastMessage, hist.RevisionCount))
 	}
 
 	sb.WriteString("\n")
