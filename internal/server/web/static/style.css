@@ -1135,7 +1135,7 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
   fill: none;
   stroke: var(--blue);
   stroke-width: 8;
-  opacity: 0.4;
+  opacity: 0.8;
   stroke-linecap: round;
   transform-origin: 0 0;
   transform: rotate(-90deg);
