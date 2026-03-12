@@ -364,7 +364,7 @@ const TRUST_ZONE_COLORS = {
   const svg = canvas;
   const defs = createSVG('defs', {});
   const filter = createSVG('filter', { id: 'trust-blur' });
-  const blur = createSVG('feGaussianBlur', { in: 'SourceGraphic', stdDeviation: '8' });
+  const blur = createSVG('feGaussianBlur', { in: 'SourceGraphic', stdDeviation: '6' });
   filter.appendChild(blur);
   defs.appendChild(filter);
   svg.insertBefore(defs, svg.firstChild);
@@ -443,6 +443,31 @@ function setConnState(s) {
 // Event Handling
 // ---------------------------------------------------------------------------
 
+// extractDelegateCalls pulls thane_delegate entries from _liveTools and
+// parses their args into structured objects for display in iteration cards.
+function extractDelegateCalls(liveTools) {
+  if (!liveTools || liveTools.length === 0) return [];
+  const calls = [];
+  for (const entry of liveTools) {
+    if (entry.tool !== 'thane_delegate') continue;
+    let parsed = {};
+    if (entry.args) {
+      try {
+        parsed = typeof entry.args === 'string' ? JSON.parse(entry.args) : entry.args;
+      } catch (_) { /* ignore */ }
+    }
+    calls.push({
+      task: parsed.task || '',
+      profile: parsed.profile || '',
+      guidance: truncate(parsed.guidance || '', 200),
+      tags: parsed.tags || [],
+      status: entry.status || 'done',
+      error: entry.error || null,
+    });
+  }
+  return calls;
+}
+
 function handleLoopEvent(evt) {
   const loopId = evt.data && evt.data.loop_id;
   const loopName = evt.data && evt.data.loop_name;
@@ -512,6 +537,8 @@ function handleLoopEvent(evt) {
         }
         loop._supervisor = false;
         // Build iteration snapshot from event + transient state.
+        // Extract delegate calls from live tools before they're cleared.
+        const delegateCalls = extractDelegateCalls(loop._liveTools);
         const snap = {
           number: loop.iterations,
           conv_id: evt.data.conversation_id || loop._currentConvID || '',
@@ -525,6 +552,7 @@ function handleLoopEvent(evt) {
           started_at: loop._iterStartTs ? new Date(loop._iterStartTs).toISOString() : evt.ts,
           completed_at: evt.ts,
           summary: evt.data.summary || null,
+          delegate_calls: delegateCalls.length > 0 ? delegateCalls : null,
         };
         prependIterationSnapshot(loopId, snap);
         // Clear live telemetry.
@@ -1037,7 +1065,7 @@ function renderNode(loop) {
     if (trustZone && TRUST_ZONE_COLORS[trustZone]) {
       const glow = createSVG('circle', {
         class: 'trust-glow',
-        r: nodeR + 6,
+        r: nodeR + 3,
         fill: TRUST_ZONE_COLORS[trustZone],
         filter: 'url(#trust-blur)',
       });
@@ -1110,13 +1138,13 @@ function renderNode(loop) {
   if (trustZone && TRUST_ZONE_COLORS[trustZone]) {
     if (glowEl) {
       glowEl.setAttribute('fill', TRUST_ZONE_COLORS[trustZone]);
-      glowEl.setAttribute('r', nodeR + 6);
+      glowEl.setAttribute('r', nodeR + 3);
     } else {
       // Trust zone appeared after initial render — insert glow.
       const inner = group.querySelector('.node-inner');
       const glow = createSVG('circle', {
         class: 'trust-glow',
-        r: nodeR + 6,
+        r: nodeR + 3,
         fill: TRUST_ZONE_COLORS[trustZone],
         filter: 'url(#trust-blur)',
       });

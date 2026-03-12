@@ -149,6 +149,17 @@ function formatToolTooltip(entry) {
   return lines.join('\n');
 }
 
+// parseDelegateArgs extracts task/profile/guidance from a thane_delegate
+// tool call's args (which may be a JSON string or object).
+function parseDelegateArgs(args) {
+  if (!args) return {};
+  try {
+    return typeof args === 'string' ? JSON.parse(args) : args;
+  } catch (_) {
+    return {};
+  }
+}
+
 function buildToolCounts(liveTools) {
   if (!liveTools || liveTools.length === 0) return null;
   const counts = {};
@@ -434,7 +445,27 @@ function buildLiveCard(loop) {
     for (const entry of tools) {
       const li = document.createElement('li');
       li.className = 'live-tool live-tool--' + entry.status;
-      li.textContent = entry.tool;
+      if (entry.tool === 'thane_delegate') {
+        // Show delegate task inline instead of bare tool name.
+        const parsed = parseDelegateArgs(entry.args);
+        li.innerHTML = '';
+        const icon = document.createElement('span');
+        icon.className = 'live-tool__delegate-icon';
+        icon.textContent = '\uD83D\uDD00';
+        li.appendChild(icon);
+        const taskSpan = document.createElement('span');
+        taskSpan.className = 'live-tool__delegate-task';
+        taskSpan.textContent = truncate(parsed.task || 'delegate', 80);
+        li.appendChild(taskSpan);
+        if (parsed.profile) {
+          const prof = document.createElement('span');
+          prof.className = 'live-tool__delegate-profile';
+          prof.textContent = parsed.profile;
+          li.appendChild(prof);
+        }
+      } else {
+        li.textContent = entry.tool;
+      }
       li.title = formatToolTooltip(entry);
       ul.appendChild(li);
     }
@@ -514,6 +545,36 @@ function buildPastCard(snap, handlerOnly, idx, startExpanded) {
       toolsDiv.appendChild(chip);
     }
     body.appendChild(toolsDiv);
+  }
+
+  // Delegate calls (rich inline display for thane_delegate tool uses).
+  if (snap.delegate_calls && snap.delegate_calls.length > 0) {
+    const delDiv = document.createElement('div');
+    delDiv.className = 'iter-card__delegates';
+    for (const dc of snap.delegate_calls) {
+      const item = document.createElement('div');
+      item.className = 'iter-card__delegate-call';
+      const icon = document.createElement('span');
+      icon.className = 'iter-card__delegate-icon';
+      icon.textContent = '\uD83D\uDD00';
+      item.appendChild(icon);
+      const task = document.createElement('span');
+      task.className = 'iter-card__delegate-task';
+      task.textContent = truncate(dc.task || 'delegate', 100);
+      item.appendChild(task);
+      if (dc.profile) {
+        const prof = document.createElement('span');
+        prof.className = 'iter-card__delegate-profile';
+        prof.textContent = dc.profile;
+        item.appendChild(prof);
+      }
+      if (dc.status === 'error' && dc.error) {
+        item.classList.add('iter-card__delegate-call--error');
+        item.title = dc.error;
+      }
+      delDiv.appendChild(item);
+    }
+    body.appendChild(delDiv);
   }
 
   // Summary stats (handler-reported metrics).
