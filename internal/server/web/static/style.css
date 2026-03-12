@@ -1216,7 +1216,7 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
 /* === Linking Lines === */
 .link-line {
   stroke: var(--text-muted);
-  stroke-width: 1.5;
+  stroke-width: 3;
   fill: none;
   opacity: 0.4;
   transition: stroke 0.3s ease, opacity 0.3s ease;
@@ -1234,7 +1234,7 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
 
 .link-line--child {
   stroke: var(--text-muted);
-  stroke-width: 1;
+  stroke-width: 2;
   stroke-dasharray: 4 3;
   opacity: 0.3;
 }
@@ -1242,7 +1242,7 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
 .link-line--flash {
   stroke: var(--accent);
   opacity: 0.8;
-  stroke-width: 2;
+  stroke-width: 4;
 }
 
 /* === Node Enter/Exit Animations === */
