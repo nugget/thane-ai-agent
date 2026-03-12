@@ -65,9 +65,11 @@ function syncPhysicsNodes(cx, cy) {
       if (parent) {
         sx = parent.x + (Math.random() * 20 - 10);
         sy = parent.y + (Math.random() * 20 - 10);
+        console.log('[physics] child', loop.name, 'spawned near parent at', sx.toFixed(0), sy.toFixed(0), 'parent_id=', loop.parent_id);
       } else {
         sx = cx + (Math.random() * 40 - 20);
         sy = cy + (Math.random() * 40 - 20);
+        console.warn('[physics] child', loop.name, 'parent_id=', loop.parent_id, 'NOT found in physics — spawning near center', sx.toFixed(0), sy.toFixed(0));
       }
     } else {
       // Top-level nodes spawn at the spring rest length from center
@@ -113,11 +115,12 @@ function physicsStep(cx, cy) {
 
   // 2. Spring forces — build edge list from loop relationships.
   for (const loop of state.loops.values()) {
+    if (!P.nodes.has(loop.id)) continue;
     if (loop.parent_id && P.nodes.has(loop.parent_id)) {
       // Parent↔child: shorter rest length, stronger spring for tight clusters.
       applySpring(P.nodes.get(loop.parent_id), P.nodes.get(loop.id), P.childSpringStrength, P.childRestLength);
-    } else if (!loop.parent_id && P.nodes.has('__system__')) {
-      // System↔top-level: standard spring.
+    } else if (P.nodes.has('__system__')) {
+      // System↔top-level (or orphaned child fallback): standard spring.
       applySpring(P.nodes.get('__system__'), P.nodes.get(loop.id), P.springStrength, P.springRestLength);
     }
   }
@@ -356,6 +359,9 @@ function connect() {
     state.loops.clear();
     state.iterationHistory.clear();
     for (const s of statuses) {
+      if (s.parent_id) {
+        console.log('[snapshot] child loop:', s.name, 'id=', s.id, 'parent_id=', s.parent_id);
+      }
       // Seed iteration history from server-side ring buffer.
       if (s.recent_iterations && s.recent_iterations.length > 0) {
         state.iterationHistory.set(s.id, s.recent_iterations.slice());
@@ -642,6 +648,10 @@ async function fetchLoops() {
     const statuses = await resp.json();
     state.loops.clear();
     for (const s of statuses) {
+      if (s.parent_id) {
+        console.log('[fetchLoops] child loop:', s.name, 'id=', s.id, 'parent_id=', s.parent_id,
+          'parent_exists=', statuses.some(x => x.id === s.parent_id));
+      }
       state.loops.set(s.id, s);
     }
     renderAll();
