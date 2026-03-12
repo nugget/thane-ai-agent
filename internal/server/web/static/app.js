@@ -24,6 +24,171 @@ const MAX_EVENTS = 50;
 const MAX_ITERATION_HISTORY = 10;
 
 // ---------------------------------------------------------------------------
+// Force-Directed Physics Layout
+// ---------------------------------------------------------------------------
+
+const physics = {
+  nodes: new Map(),  // id -> { x, y, vx, vy, pinned }
+  // Tuning constants — tweak these for feel.
+  centerGravity:    0.0005,
+  springStrength:   0.02,
+  springRestLength: 120,
+  repulsionStrength: 5000,
+  damping:          0.92,
+  maxVelocity:      5,
+};
+
+// Ensure physics.nodes matches the current set of loops + system node.
+// New nodes spawn at their parent position (or center with jitter).
+function syncPhysicsNodes(cx, cy) {
+  // System node — always pinned at center.
+  if (state.system) {
+    const sys = physics.nodes.get('__system__');
+    if (sys) {
+      sys.x = cx; sys.y = cy;
+    } else {
+      physics.nodes.set('__system__', { x: cx, y: cy, vx: 0, vy: 0, pinned: true });
+    }
+  } else {
+    physics.nodes.delete('__system__');
+  }
+
+  // Loop nodes.
+  for (const loop of state.loops.values()) {
+    if (physics.nodes.has(loop.id)) continue;
+    // Spawn at parent position if child, otherwise center + jitter.
+    let sx = cx + (Math.random() * 40 - 20);
+    let sy = cy + (Math.random() * 40 - 20);
+    if (loop.parent_id) {
+      const parent = physics.nodes.get(loop.parent_id);
+      if (parent) { sx = parent.x + (Math.random() * 20 - 10); sy = parent.y + (Math.random() * 20 - 10); }
+    }
+    physics.nodes.set(loop.id, { x: sx, y: sy, vx: 0, vy: 0, pinned: false });
+  }
+
+  // Remove physics nodes for loops that no longer exist (and aren't system).
+  // Exiting nodes stay until their DOM animationend handler cleans them up.
+  for (const id of physics.nodes.keys()) {
+    if (id === '__system__') continue;
+    if (!state.loops.has(id) && !canvasWorld.querySelector(`[data-loop-id="${id}"].loop-node--exiting`)) {
+      physics.nodes.delete(id);
+    }
+  }
+}
+
+// Run one physics simulation step. Applies center gravity, spring
+// attraction (system↔top-level, parent↔child), pairwise repulsion,
+// then integrates velocity and position with damping.
+function physicsStep(cx, cy) {
+  const P = physics;
+  const nodes = Array.from(P.nodes.values());
+  const ids = Array.from(P.nodes.keys());
+  const n = nodes.length;
+  if (n === 0) return;
+
+  // Reset forces.
+  for (const nd of nodes) { nd.fx = 0; nd.fy = 0; }
+
+  // 1. Center gravity — weak pull toward (cx, cy).
+  for (const nd of nodes) {
+    if (nd.pinned) continue;
+    nd.fx += (cx - nd.x) * P.centerGravity;
+    nd.fy += (cy - nd.y) * P.centerGravity;
+  }
+
+  // 2. Spring forces — build edge list from loop relationships.
+  for (const loop of state.loops.values()) {
+    // Parent-child spring.
+    if (loop.parent_id && P.nodes.has(loop.parent_id)) {
+      applySpring(P.nodes.get(loop.parent_id), P.nodes.get(loop.id), P.springStrength, P.springRestLength);
+    }
+    // System-to-top-level spring.
+    if (!loop.parent_id && P.nodes.has('__system__')) {
+      applySpring(P.nodes.get('__system__'), P.nodes.get(loop.id), P.springStrength, P.springRestLength);
+    }
+  }
+
+  // 3. Pairwise repulsion (O(n²), fine for ≤20 nodes).
+  const EPS = 100; // prevents division-by-zero / explosion at overlap
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 1; j < n; j++) {
+      const a = nodes[i], b = nodes[j];
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const distSq = dx * dx + dy * dy + EPS;
+      const force = P.repulsionStrength / distSq;
+      const dist = Math.sqrt(distSq);
+      const fx = (dx / dist) * force;
+      const fy = (dy / dist) * force;
+      a.fx -= fx; a.fy -= fy;
+      b.fx += fx; b.fy += fy;
+    }
+  }
+
+  // 4. Integration + damping.
+  for (const nd of nodes) {
+    if (nd.pinned) continue;
+    nd.vx = (nd.vx + nd.fx) * P.damping;
+    nd.vy = (nd.vy + nd.fy) * P.damping;
+    // Clamp velocity.
+    const speed = Math.sqrt(nd.vx * nd.vx + nd.vy * nd.vy);
+    if (speed > P.maxVelocity) {
+      const scale = P.maxVelocity / speed;
+      nd.vx *= scale;
+      nd.vy *= scale;
+    }
+    nd.x += nd.vx;
+    nd.y += nd.vy;
+  }
+}
+
+// Apply a spring force between two nodes.
+function applySpring(a, b, strength, restLength) {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+  const force = strength * (dist - restLength);
+  const fx = (dx / dist) * force;
+  const fy = (dy / dist) * force;
+  if (!a.pinned) { a.fx += fx; a.fy += fy; }
+  if (!b.pinned) { b.fx -= fx; b.fy -= fy; }
+}
+
+// Write physics positions to DOM — node transforms and linking line endpoints.
+function updateNodePositions() {
+  // System node.
+  const sysP = physics.nodes.get('__system__');
+  if (sysP) {
+    const sysG = canvasWorld.querySelector('.system-node');
+    if (sysG) sysG.setAttribute('transform', `translate(${sysP.x},${sysP.y})`);
+  }
+
+  // Loop nodes.
+  for (const [id, nd] of physics.nodes) {
+    if (id === '__system__') continue;
+    const g = canvasWorld.querySelector(`[data-loop-id="${id}"]`);
+    if (g) g.setAttribute('transform', `translate(${nd.x},${nd.y})`);
+  }
+
+  // Linking line endpoints.
+  const lines = canvasWorld.querySelectorAll('.link-line');
+  for (const line of lines) {
+    const targetId = line.dataset.targetLoop;
+    const parentLoop = line.dataset.parentLoop;
+    // Source is either a parent loop or the system node.
+    const srcId = parentLoop || '__system__';
+    const src = physics.nodes.get(srcId);
+    const tgt = physics.nodes.get(targetId);
+    if (src && tgt) {
+      line.setAttribute('x1', src.x);
+      line.setAttribute('y1', src.y);
+      line.setAttribute('x2', tgt.x);
+      line.setAttribute('y2', tgt.y);
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Loop Category + Shape + Model Sizing
 // ---------------------------------------------------------------------------
 
@@ -611,89 +776,35 @@ function renderNodes() {
   const hasSystem = state.system !== null;
   emptyState.hidden = loops.length > 0 || hasSystem;
 
-  // Get canvas dimensions for centering.
+  // Canvas center — used as gravity anchor and for new-node spawn.
   const rect = canvas.getBoundingClientRect();
   const cx = rect.width / 2;
   const cy = rect.height / 2;
 
-  // For now, lay out nodes in a circle (single node = centered).
-  const count = loops.length;
-  const radius = count <= 1 ? 0 : Math.min(rect.width, rect.height) * 0.3;
+  // Sync physics state with current loops (add new, remove stale).
+  syncPhysicsNodes(cx, cy);
 
-  // Track current loop ids for exit detection.
-  const currentIds = new Set();
-
-  // Positions map for linking line.
-  const nodePositions = new Map();
-
-  // Detect which loops are new this frame (for staggering).
+  // Detect new nodes for enter animation.
   const newIds = new Set();
   for (const loop of loops) {
     if (!state.knownLoopIds.has(loop.id)) newIds.add(loop.id);
   }
 
-  // Compute positions first (needed for stagger calculation).
-  const positionList = [];
-  for (let i = 0; i < count; i++) {
-    const loop = loops[i];
-    currentIds.add(loop.id);
-    const angle = (2 * Math.PI * i) / count - Math.PI / 2;
-    const x = cx + radius * Math.cos(angle);
-    const y = cy + radius * Math.sin(angle);
-    nodePositions.set(loop.id, { x, y });
-    positionList.push({ loop, x, y, angle, index: i });
+  // Create/update DOM nodes (no position-setting — physics handles that).
+  for (const loop of loops) {
+    renderNode(loop);
   }
 
-  // When nodes are added or removed after the initial load, stagger the
-  // reflow transition-delay so nodes closer to the insertion/removal point
-  // move first. This creates an organic "opening slot" / "closing slot" ripple.
-  const existingNodeCount = canvasWorld.querySelectorAll('.loop-node:not(.loop-node--exiting)').length;
-  const isInitialLoad = existingNodeCount === 0;
-  const hasStructureChange = !isInitialLoad && (newIds.size > 0 || existingNodeCount > count);
-  const staggerMs = hasStructureChange ? 30 : 0; // ms per step
-
-  for (const { loop, x, y, index } of positionList) {
-    renderNode(loop, x, y);
-
-    // Apply staggered transition-delay to existing (non-new) nodes.
-    if (hasStructureChange && !newIds.has(loop.id)) {
-      const group = canvasWorld.querySelector(`[data-loop-id="${loop.id}"]`);
-      if (group) {
-        const delay = index * staggerMs;
-        group.style.transitionDelay = delay + 'ms';
-        // Clear the delay after the transition completes to avoid
-        // stale delays on future non-structural updates.
-        setTimeout(() => { group.style.transitionDelay = ''; }, 600 + delay);
-      }
-    }
-  }
-
-  // New nodes: on structural changes, delay entrance so the slot opens first.
-  // On initial load, animate immediately (no existing nodes to stagger around).
+  // Enter animations — physics naturally opens space, so animate immediately.
   for (const id of newIds) {
     const group = canvasWorld.querySelector(`[data-loop-id="${id}"]`);
     if (!group) continue;
     const inner = group.querySelector('.node-inner');
     if (!inner) continue;
-
-    if (hasStructureChange) {
-      // Delay entrance until existing nodes have begun their reflow.
-      const entranceDelay = Math.max(80, (count * staggerMs) / 2);
-      inner.style.opacity = '0';
-      setTimeout(() => {
-        inner.style.opacity = '';
-        inner.classList.add('node-inner--entering');
-        inner.addEventListener('animationend', () => {
-          inner.classList.remove('node-inner--entering');
-        }, { once: true });
-      }, entranceDelay);
-    } else {
-      // Initial load or no reflow needed — animate immediately.
-      inner.classList.add('node-inner--entering');
-      inner.addEventListener('animationend', () => {
-        inner.classList.remove('node-inner--entering');
-      }, { once: true });
-    }
+    inner.classList.add('node-inner--entering');
+    inner.addEventListener('animationend', () => {
+      inner.classList.remove('node-inner--entering');
+    }, { once: true });
   }
 
   // Remove nodes for loops that no longer exist (with exit animation).
@@ -703,7 +814,10 @@ function renderNodes() {
     if (!state.loops.has(id)) {
       if (!g.classList.contains('loop-node--exiting')) {
         g.classList.add('loop-node--exiting');
-        g.addEventListener('animationend', () => g.remove(), { once: true });
+        g.addEventListener('animationend', () => {
+          g.remove();
+          physics.nodes.delete(id);
+        }, { once: true });
         state.knownLoopIds.delete(id);
         state.prevIterations.delete(id);
         state.prevErrors.delete(id);
@@ -711,30 +825,31 @@ function renderNodes() {
     }
   }
 
-  // System node — positioned offset from center.
-  const sysX = cx - radius - 100;
-  const sysY = cy;
+  // System node.
   if (hasSystem) {
-    renderSystemNode(sysX, sysY);
+    renderSystemNode();
   } else {
     const existing = canvasWorld.querySelector('.system-node');
     if (existing) existing.remove();
   }
 
-  // Linking lines: runtime → all top-level loops.
-  renderLinkingLines(hasSystem, sysX, sysY, loops, nodePositions);
+  // Linking lines: create/remove DOM elements and apply state classes.
+  // Position updates (x1/y1/x2/y2) are handled by updateNodePositions().
+  renderLinkingLines(hasSystem, loops);
 }
 
-function renderLinkingLines(hasSystem, sysX, sysY, loops, nodePositions) {
+// Manage linking line DOM lifecycle — create/remove elements and apply
+// state classes. Positions (x1/y1/x2/y2) are set by updateNodePositions().
+function renderLinkingLines(hasSystem, loops) {
   // Top-level loops are those without a parent_id.
-  const topLevel = loops.filter(l => !l.parent_id && nodePositions.has(l.id));
+  const topLevel = loops.filter(l => !l.parent_id);
   const activeIds = new Set(topLevel.map(l => l.id));
 
   // Child loops are those with a parent_id.
-  const children = loops.filter(l => l.parent_id && nodePositions.has(l.id));
+  const children = loops.filter(l => l.parent_id);
   const childKeys = new Set(children.map(l => l.id));
 
-  // Build a set of all valid link targets (system→top-level + parent→child).
+  // Build a set of all valid link targets.
   const allValidTargets = new Set([...activeIds, ...childKeys]);
 
   // Remove stale link lines for loops that no longer exist.
@@ -752,7 +867,6 @@ function renderLinkingLines(hasSystem, sysX, sysY, loops, nodePositions) {
   // System → top-level lines.
   if (hasSystem) {
     for (const loop of topLevel) {
-      const pos = nodePositions.get(loop.id);
       let line = canvasWorld.querySelector(`.link-line[data-target-loop="${loop.id}"]:not([data-parent-loop])`);
 
       if (!line) {
@@ -763,11 +877,6 @@ function renderLinkingLines(hasSystem, sysX, sysY, loops, nodePositions) {
         // Insert before nodes so lines draw behind them.
         canvasWorld.insertBefore(line, canvasWorld.firstChild);
       }
-
-      line.setAttribute('x1', sysX);
-      line.setAttribute('y1', sysY);
-      line.setAttribute('x2', pos.x);
-      line.setAttribute('y2', pos.y);
 
       // State-driven styling: error or degraded service turns the line orange/red.
       if (loop.state === 'error') {
@@ -783,10 +892,6 @@ function renderLinkingLines(hasSystem, sysX, sysY, loops, nodePositions) {
 
   // Parent → child lines.
   for (const child of children) {
-    const parentPos = nodePositions.get(child.parent_id);
-    const childPos = nodePositions.get(child.id);
-    if (!parentPos || !childPos) continue;
-
     const selector = `.link-line[data-target-loop="${child.id}"][data-parent-loop="${child.parent_id}"]`;
     let line = canvasWorld.querySelector(selector);
 
@@ -798,11 +903,6 @@ function renderLinkingLines(hasSystem, sysX, sysY, loops, nodePositions) {
       });
       canvasWorld.insertBefore(line, canvasWorld.firstChild);
     }
-
-    line.setAttribute('x1', parentPos.x);
-    line.setAttribute('y1', parentPos.y);
-    line.setAttribute('x2', childPos.x);
-    line.setAttribute('y2', childPos.y);
 
     // State-driven styling for child lines.
     let cls = 'link-line link-line--child';
@@ -831,7 +931,7 @@ function flashLinkingLine(loopId) {
   }
 }
 
-function renderNode(loop, x, y) {
+function renderNode(loop) {
   const category = getLoopCategory(loop);
   const nodeR = getModelRadius(loop._lastModel);
   const ringR = nodeR + 12;
@@ -907,16 +1007,9 @@ function renderNode(loop, x, y) {
     group.appendChild(inner);
     canvasWorld.appendChild(group);
 
-    // Mark as known — enter animation is triggered by renderNodes() with
-    // a delay so the slot opens before the node pops in.
+    // Mark as known — enter animation is triggered by renderNodes().
     state.knownLoopIds.add(loop.id);
-
-    // Enable smooth reflow after first paint.
-    requestAnimationFrame(() => group.classList.add('loop-node--settled'));
   }
-
-  // Update position (smooth reflow via CSS transition on --settled class).
-  group.setAttribute('transform', `translate(${x},${y})`);
 
   // Dynamic resizing — update shape, rings, label when model changes.
   const prevR = parseFloat(group.dataset.nodeR) || DEFAULT_NODE_R;
@@ -1045,7 +1138,7 @@ function updateSleepRing(group, loopId) {
   sleepRing.setAttribute('stroke-dashoffset', offset);
 }
 
-function renderSystemNode(x, y) {
+function renderSystemNode() {
   const sys = state.system;
   const s = 48, r = 10; // 1:1 square, s = side length
   const ringR = s / 2 + 12; // glow ring radius (matches loop node pattern)
@@ -1092,11 +1185,7 @@ function renderSystemNode(x, y) {
     group.appendChild(label);
 
     canvasWorld.appendChild(group);
-    // Defer adding settled class so initial render isn't animated.
-    requestAnimationFrame(() => group.classList.add('system-node--settled'));
   }
-
-  group.setAttribute('transform', `translate(${x},${y})`);
 
   // Update health-based fill.
   const rect = group.querySelector('.system-rect');
@@ -1430,6 +1519,13 @@ async function fetchSystemLogs() {
 let _lastTickSec = 0;
 
 function tick() {
+  // Physics simulation — run every frame for smooth organic motion.
+  const rect = canvas.getBoundingClientRect();
+  if (rect.width > 0 && rect.height > 0) {
+    physicsStep(rect.width / 2, rect.height / 2);
+    updateNodePositions();
+  }
+
   // Throttle detail updates to ~1Hz (sleep countdowns don't need 60fps).
   const nowSec = Math.floor(Date.now() / 1000);
   if (nowSec !== _lastTickSec) {
