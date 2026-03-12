@@ -216,13 +216,13 @@ function getLoopCategory(loop) {
   return 'generic';
 }
 
-// Category → shape type mapping (all 1:1 aspect ratio).
-const CATEGORY_SHAPES = {
-  metacognitive: 'circle',
-  channel:       'roundedSquare',
-  delegate:      'diamond',
-  scheduled:     'hexagon',
-  generic:       'octagon',
+// Category → icon displayed inside the node circle.
+const CATEGORY_ICONS = {
+  metacognitive: '🧠',
+  channel:       '💬',
+  delegate:      '🔀',
+  scheduled:     '🕐',
+  generic:       '⚙️',
 };
 
 // Model name → approximate parameter count (billions).
@@ -315,94 +315,14 @@ function isServiceDegraded(loopName) {
   return false;
 }
 
-// Create an SVG shape element for a given category at origin, radius r.
+// Create an SVG circle shape element at origin with radius r.
 function createNodeShape(category, r) {
-  const shape = CATEGORY_SHAPES[category] || 'octagon';
-  switch (shape) {
-    case 'circle':
-      return createSVG('circle', { class: 'node-shape', r: r });
-
-    case 'roundedSquare': {
-      const rx = r * 0.2;
-      return createSVG('rect', {
-        class: 'node-shape',
-        x: -r, y: -r, width: 2 * r, height: 2 * r, rx: rx, ry: rx,
-      });
-    }
-
-    case 'diamond': {
-      const d = r;
-      const pts = `0,${-d} ${d},0 0,${d} ${-d},0`;
-      return createSVG('polygon', { class: 'node-shape', points: pts });
-    }
-
-    case 'hexagon': {
-      const pts = [];
-      for (let i = 0; i < 6; i++) {
-        const angle = (Math.PI / 3) * i - Math.PI / 2;
-        pts.push(`${(r * Math.cos(angle)).toFixed(1)},${(r * Math.sin(angle)).toFixed(1)}`);
-      }
-      return createSVG('polygon', { class: 'node-shape', points: pts.join(' ') });
-    }
-
-    case 'octagon':
-    default: {
-      const pts = [];
-      for (let i = 0; i < 8; i++) {
-        const angle = (Math.PI / 4) * i - Math.PI / 8;
-        pts.push(`${(r * Math.cos(angle)).toFixed(1)},${(r * Math.sin(angle)).toFixed(1)}`);
-      }
-      return createSVG('polygon', { class: 'node-shape', points: pts.join(' ') });
-    }
-  }
+  return createSVG('circle', { class: 'node-shape', r: r });
 }
 
-// Update an existing shape element's geometry for a new radius.
+// Update an existing circle shape element's radius.
 function updateNodeShape(el, category, r) {
-  const shape = CATEGORY_SHAPES[category] || 'octagon';
-  switch (shape) {
-    case 'circle':
-      el.setAttribute('r', r);
-      break;
-
-    case 'roundedSquare': {
-      const rx = r * 0.2;
-      el.setAttribute('x', -r);
-      el.setAttribute('y', -r);
-      el.setAttribute('width', 2 * r);
-      el.setAttribute('height', 2 * r);
-      el.setAttribute('rx', rx);
-      el.setAttribute('ry', rx);
-      break;
-    }
-
-    case 'diamond': {
-      const d = r;
-      el.setAttribute('points', `0,${-d} ${d},0 0,${d} ${-d},0`);
-      break;
-    }
-
-    case 'hexagon': {
-      const pts = [];
-      for (let i = 0; i < 6; i++) {
-        const angle = (Math.PI / 3) * i - Math.PI / 2;
-        pts.push(`${(r * Math.cos(angle)).toFixed(1)},${(r * Math.sin(angle)).toFixed(1)}`);
-      }
-      el.setAttribute('points', pts.join(' '));
-      break;
-    }
-
-    case 'octagon':
-    default: {
-      const pts = [];
-      for (let i = 0; i < 8; i++) {
-        const angle = (Math.PI / 4) * i - Math.PI / 8;
-        pts.push(`${(r * Math.cos(angle)).toFixed(1)},${(r * Math.sin(angle)).toFixed(1)}`);
-      }
-      el.setAttribute('points', pts.join(' '));
-      break;
-    }
-  }
+  el.setAttribute('r', r);
 }
 
 // ---------------------------------------------------------------------------
@@ -992,8 +912,17 @@ function renderNode(loop) {
       'stroke-dashoffset': circumference,
     });
 
-    // Main shape — determined by category.
+    // Main shape — always a circle.
     const shapeEl = createNodeShape(category, nodeR);
+
+    // Category icon centered inside the node.
+    const icon = createSVG('text', {
+      class: 'node-icon',
+      'text-anchor': 'middle',
+      'dominant-baseline': 'central',
+      'font-size': Math.round(nodeR * 0.7),
+    });
+    icon.textContent = CATEGORY_ICONS[category] || CATEGORY_ICONS.generic;
 
     // Supervisor ring (larger circle outside the node).
     const supDot = createSVG('circle', {
@@ -1015,6 +944,7 @@ function renderNode(loop) {
     inner.appendChild(ring);
     inner.appendChild(sleepRing);
     inner.appendChild(shapeEl);
+    inner.appendChild(icon);
     inner.appendChild(supDot);
     inner.appendChild(label);
     group.appendChild(inner);
@@ -1040,6 +970,8 @@ function renderNode(loop) {
     const circ = 2 * Math.PI * newSleepR;
     sleepRing.setAttribute('stroke-dasharray', circ);
     group.querySelector('.supervisor-dot').setAttribute('r', nodeR + 10);
+    const iconEl = group.querySelector('.node-icon');
+    if (iconEl) iconEl.setAttribute('font-size', Math.round(nodeR * 0.7));
     group.querySelector('.node-label').setAttribute('y', nodeR + 18);
   }
   group.dataset.nodeR = nodeR;

@@ -979,6 +979,11 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
 .node-shape--pending     { fill: var(--purple); stroke: var(--purple); filter: drop-shadow(0 0 4px var(--purple-dim)); }
 
 /* Node label */
+.node-icon {
+  pointer-events: none;
+  user-select: none;
+}
+
 .node-label {
   fill: var(--text-primary);
   font-family: var(--font-sans);
