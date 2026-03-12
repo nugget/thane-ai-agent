@@ -219,6 +219,21 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
   gap: 0.25rem;
   margin-top: 0.4rem;
 }
+.delegate-result {
+  margin-top: 0.5rem;
+  padding: 0.3rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.72rem;
+  font-weight: 500;
+}
+.delegate-result--ok {
+  background: var(--green-dim);
+  color: var(--green);
+}
+.delegate-result--failed {
+  background: var(--red-dim);
+  color: var(--red);
+}
 
 .id-row {
   display: flex;
@@ -338,6 +353,7 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
 .state-badge--stopped     { background: var(--red-dim);    color: var(--red);    }
 .state-badge--pending     { background: var(--purple-dim); color: var(--purple); }
 .state-badge--supervisor  { background: var(--purple-dim); color: var(--purple); }
+.state-badge--completed  { background: var(--green-dim);  color: var(--green);  }
 
 /* === Context Utilization Meter === */
 .context-meter {
@@ -1318,6 +1334,12 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
 
 .loop-node--exiting {
   pointer-events: none;
+}
+
+/* Completed delegate: fade to translucent but stay clickable */
+.loop-node--fading .node-inner {
+  opacity: 0.35;
+  transition: opacity 1s ease-out;
 }
 
 /* === Iteration Flash === */

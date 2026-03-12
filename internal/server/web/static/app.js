@@ -707,22 +707,60 @@ function handleDelegateEvent(evt) {
       const syntheticId = 'delegate-' + did;
       stopElapsedTimer(syntheticId);
       state.sleepTimers.delete(syntheticId);
-      // Trigger exit animation then remove.
-      const node = canvasWorld.querySelector(`[data-loop-id="${syntheticId}"]`);
-      if (node) {
-        node.classList.add('loop-node--exiting');
-        node.addEventListener('animationend', () => {
-          node.remove();
-          physics.nodes.delete(syntheticId);
-        }, { once: true });
-      } else {
-        physics.nodes.delete(syntheticId);
+
+      // Update state but keep the node around so it's still clickable.
+      const entry = state.loops.get(syntheticId);
+      if (entry) {
+        entry.state = evt.data.exhausted ? 'error' : 'completed';
+        entry._delegateExhausted = !!evt.data.exhausted;
+        entry._delegateExhaustReason = evt.data.exhaust_reason || '';
+        entry._delegateDurationMs = evt.data.duration_ms || 0;
+        entry._delegateIterations = evt.data.iterations || 0;
       }
-      state.loops.delete(syntheticId);
+
+      // Fade to translucent, then remove after a linger period.
+      const node = canvasWorld.querySelector(`[data-loop-id="${syntheticId}"]`);
+      if (node) node.classList.add('loop-node--fading');
+
+      setTimeout(() => {
+        // Don't remove if user has it selected — let them inspect.
+        if (state.selected === syntheticId) {
+          // Re-check after another delay.
+          const recheck = () => {
+            if (state.selected !== syntheticId) {
+              removeDelegateNode(syntheticId);
+            } else {
+              setTimeout(recheck, 5000);
+            }
+          };
+          setTimeout(recheck, 5000);
+        } else {
+          removeDelegateNode(syntheticId);
+        }
+      }, 15000); // linger 15s
+
       renderAll();
       break;
     }
   }
+}
+
+function removeDelegateNode(syntheticId) {
+  const node = canvasWorld.querySelector(`[data-loop-id="${syntheticId}"]`);
+  if (node) {
+    node.classList.add('loop-node--exiting');
+    node.addEventListener('animationend', () => {
+      node.remove();
+      physics.nodes.delete(syntheticId);
+    }, { once: true });
+  } else {
+    physics.nodes.delete(syntheticId);
+  }
+  state.loops.delete(syntheticId);
+  if (state.selected === syntheticId) {
+    state.selected = null;
+  }
+  renderAll();
 }
 
 // ---------------------------------------------------------------------------
@@ -1587,6 +1625,23 @@ function renderDelegateDetail(loop) {
     }
   }
   if (metaRow.children.length > 0) container.appendChild(metaRow);
+
+  // Completion result (shown after delegate finishes).
+  if (loop.state === 'completed' || loop.state === 'error') {
+    const resultEl = document.createElement('div');
+    resultEl.className = 'delegate-result ' + (loop._delegateExhausted ? 'delegate-result--failed' : 'delegate-result--ok');
+
+    const icon = loop._delegateExhausted ? '\u2717' : '\u2713';
+    const status = loop._delegateExhausted
+      ? 'Failed' + (loop._delegateExhaustReason ? ' \u2014 ' + loop._delegateExhaustReason : '')
+      : 'Succeeded';
+
+    const parts = [icon + ' ' + status];
+    if (loop._delegateIterations > 0) parts.push(loop._delegateIterations + ' iter');
+    if (loop._delegateDurationMs > 0) parts.push(formatFuzzy(loop._delegateDurationMs));
+    resultEl.textContent = parts.join(' \u00b7 ');
+    container.appendChild(resultEl);
+  }
 }
 
 // makeIDRow, makeIDChip, shortID, shortModelName, buildToolCounts,
