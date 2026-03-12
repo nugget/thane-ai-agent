@@ -70,6 +70,7 @@ internal/
 - **Context propagation**: Always pass the caller's `ctx` through to downstream calls (HTTP requests, subprocess exec, HA client methods). Never use `context.Background()` inside a handler that receives `ctx` — it breaks cancellation and deadline enforcement. Use `exec.CommandContext(ctx, ...)` for subprocesses.
 - **Error handling**: Always drain response bodies (`httpkit.DrainAndClose`), bound error reads (`httpkit.ReadErrorBody`)
 - **Timestamp parsing**: Use `database.ParseTimestamp()` when reading timestamps from SQLite TEXT columns — it accepts RFC3339, RFC3339Nano, and SQLite's space-separated format. Never use raw `time.Parse` for stored timestamps.
+- **String truncation**: Never truncate strings by byte index (`s[:n]`) — this can split multi-byte UTF-8 characters. Use `[]rune` conversion or the `truncateUTF8` helper in `internal/tools` which backs up to a valid rune boundary.
 - **Go doc comments**: Every exported symbol (function, type, const, var) must have a doc comment that starts with the symbol name and reads as a complete sentence. Every package must have a `// Package foo ...` comment. Follow the [Go Doc Comments](https://go.dev/doc/comment) conventions. Run `go doc ./internal/yourpkg` to verify rendering.
 - **Tests**: Table-driven where possible, always with `-race`
 - **Logging**: Structured via `slog`. Include relevant context fields (method, URL, entity_id, etc.)

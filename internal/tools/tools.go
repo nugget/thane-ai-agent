@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nugget/thane-ai-agent/internal/attachments"
 	"github.com/nugget/thane-ai-agent/internal/awareness"
 	"github.com/nugget/thane-ai-agent/internal/buildinfo"
 	"github.com/nugget/thane-ai-agent/internal/channels/email"
@@ -48,6 +49,7 @@ type Registry struct {
 	forgeTools        forgeHandler
 	fileTools         *FileTools
 	shellExec         *ShellExec
+	attachmentTools   *attachments.Tools
 	watchlistStore    *awareness.WatchlistStore
 	tempFileStore     *TempFileStore
 	usageStore        *usage.Store
@@ -125,6 +127,13 @@ func (r *Registry) SetMediaClient(c *media.Client) {
 		Parameters:  media.ToolDefinition(),
 		Handler:     media.ToolHandler(c),
 	})
+}
+
+// SetAttachmentTools adds attachment query and analysis tools to the
+// registry.
+func (r *Registry) SetAttachmentTools(at *attachments.Tools) {
+	r.attachmentTools = at
+	r.registerAttachmentTools()
 }
 
 // SetTempFileStore adds the create_temp_file tool to the registry and

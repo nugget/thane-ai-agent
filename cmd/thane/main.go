@@ -1186,6 +1186,16 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		)
 	}
 
+	// --- Attachment tools ---
+	// When the attachment store is configured, the agent can list,
+	// search, and describe attachments. Vision analysis is available
+	// when the analyzer is also configured.
+	if attachmentStore != nil {
+		attachmentTools := attachments.NewTools(attachmentStore, visionAnalyzer)
+		loop.Tools().SetAttachmentTools(attachmentTools)
+		logger.Info("attachment tools registered")
+	}
+
 	// --- File tools ---
 	// When a workspace path is configured, the agent can read and write
 	// files within that directory. All paths are sandboxed.

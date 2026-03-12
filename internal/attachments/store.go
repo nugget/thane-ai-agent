@@ -122,6 +122,11 @@ func (s *Store) migrate() error {
 		return fmt.Errorf("create schema: %w", err)
 	}
 
+	// Search index on received_at for ORDER BY in Search queries (added in phase 4).
+	if _, err := s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_attachments_received_at ON attachments(received_at)`); err != nil {
+		return fmt.Errorf("create received_at index: %w", err)
+	}
+
 	// Vision analysis columns (added in phase 3).
 	for _, col := range []struct{ name, typedef string }{
 		{"description", "TEXT NOT NULL DEFAULT ''"},
@@ -328,6 +333,102 @@ func (s *Store) VisionByHash(ctx context.Context, hash string) (description, mod
 		return "", "", false
 	}
 	return description, model, true
+}
+
+// SearchParams controls attachment listing and search queries.
+type SearchParams struct {
+	ConversationID string // filter to a specific conversation
+	Channel        string // filter by channel ("signal", "email")
+	Sender         string // filter by sender identifier
+	ContentType    string // MIME prefix filter (e.g. "image/")
+	Query          string // text search across name, description, sender
+	Limit          int    // max results; 0 → 20, capped at 50
+}
+
+// Search returns attachment records matching the given filters, ordered
+// by received_at descending (newest first). All filter fields are
+// optional; an empty SearchParams returns the most recent attachments.
+func (s *Store) Search(ctx context.Context, params SearchParams) ([]*Record, error) {
+	limit := params.Limit
+	if limit <= 0 {
+		limit = 20
+	}
+	if limit > 50 {
+		limit = 50
+	}
+
+	var conditions []string
+	var args []any
+
+	if params.ConversationID != "" {
+		conditions = append(conditions, "conversation_id = ?")
+		args = append(args, params.ConversationID)
+	}
+	if params.Channel != "" {
+		conditions = append(conditions, "channel = ?")
+		args = append(args, params.Channel)
+	}
+	if params.Sender != "" {
+		conditions = append(conditions, "sender = ?")
+		args = append(args, params.Sender)
+	}
+	if params.ContentType != "" {
+		conditions = append(conditions, "content_type LIKE ?")
+		args = append(args, params.ContentType+"%")
+	}
+	if params.Query != "" {
+		conditions = append(conditions, "(original_name LIKE ? OR description LIKE ? OR sender LIKE ? OR channel LIKE ?)")
+		q := "%" + params.Query + "%"
+		args = append(args, q, q, q, q)
+	}
+
+	query := `SELECT
+		id, hash, store_path, original_name, content_type,
+		size, width, height, channel, sender,
+		conversation_id, received_at,
+		description, analyzed_at, analysis_model
+		FROM attachments`
+	if len(conditions) > 0 {
+		query += " WHERE " + strings.Join(conditions, " AND ")
+	}
+	query += " ORDER BY received_at DESC LIMIT ?"
+	args = append(args, limit)
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("attachments: search: %w", err)
+	}
+	defer rows.Close()
+
+	var records []*Record
+	for rows.Next() {
+		var rec Record
+		var receivedAt, analyzedAt string
+		err := rows.Scan(
+			&rec.ID, &rec.Hash, &rec.StorePath, &rec.OriginalName, &rec.ContentType,
+			&rec.Size, &rec.Width, &rec.Height, &rec.Channel, &rec.Sender,
+			&rec.ConversationID, &receivedAt,
+			&rec.Description, &analyzedAt, &rec.AnalysisModel,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("attachments: scan search result: %w", err)
+		}
+		rec.ReceivedAt, err = database.ParseTimestamp(receivedAt)
+		if err != nil {
+			return nil, fmt.Errorf("attachments: parse received_at %q: %w", receivedAt, err)
+		}
+		if analyzedAt != "" {
+			rec.AnalyzedAt, err = database.ParseTimestamp(analyzedAt)
+			if err != nil {
+				return nil, fmt.Errorf("attachments: parse analyzed_at %q: %w", analyzedAt, err)
+			}
+		}
+		records = append(records, &rec)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("attachments: search rows: %w", err)
+	}
+	return records, nil
 }
 
 // Close closes the underlying database connection.
