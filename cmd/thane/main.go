@@ -28,6 +28,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -328,6 +329,11 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	if err != nil {
 		return err
 	}
+
+	// Augment PATH before any exec.LookPath calls (tool registration,
+	// media client init, etc.) so Homebrew and user-configured binaries
+	// are discoverable.
+	augmentPath(cfg.ExtraPath, logger)
 
 	// Reconfigure logger now that we know the desired level, format, and
 	// output destination. The initial Info-level text logger above is used
@@ -3129,4 +3135,54 @@ type notifDelegateSpawner struct {
 func (n *notifDelegateSpawner) Spawn(ctx context.Context, task, guidance string) error {
 	_, err := n.exec.Execute(ctx, task, "", guidance, nil)
 	return err
+}
+
+// augmentPath prepends directories to the process PATH so that
+// exec.LookPath (used during tool registration) can find binaries
+// installed outside the default system PATH. On macOS, Homebrew
+// directories are added automatically if they exist on disk.
+func augmentPath(extra []string, logger *slog.Logger) {
+	var dirs []string
+
+	// Config entries first (highest priority).
+	for _, d := range extra {
+		if expanded := os.ExpandEnv(d); expanded != "" {
+			dirs = append(dirs, expanded)
+		}
+	}
+
+	// Platform defaults: macOS Homebrew (Apple Silicon).
+	if runtime.GOOS == "darwin" {
+		for _, d := range []string{"/opt/homebrew/bin", "/opt/homebrew/sbin"} {
+			if info, err := os.Stat(d); err == nil && info.IsDir() {
+				dirs = append(dirs, d)
+			}
+		}
+	}
+
+	if len(dirs) == 0 {
+		return
+	}
+
+	// Deduplicate against current PATH.
+	current := os.Getenv("PATH")
+	existing := make(map[string]bool)
+	for _, d := range filepath.SplitList(current) {
+		existing[d] = true
+	}
+
+	var prepend []string
+	for _, d := range dirs {
+		if !existing[d] {
+			prepend = append(prepend, d)
+		}
+	}
+	if len(prepend) == 0 {
+		return
+	}
+
+	newPath := strings.Join(prepend, string(os.PathListSeparator)) +
+		string(os.PathListSeparator) + current
+	os.Setenv("PATH", newPath)
+	logger.Debug("augmented PATH", "prepended", prepend)
 }
