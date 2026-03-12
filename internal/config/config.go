@@ -411,7 +411,34 @@ type AttachmentsConfig struct {
 	// instead of being copied with their original filenames. The
 	// metadata index is stored at {data_dir}/attachments.db.
 	// Supports ~ expansion. Example: ~/Thane/attachments
-	StoreDir string `yaml:"store_dir"`
+	StoreDir string       `yaml:"store_dir"`
+	Vision   VisionConfig `yaml:"vision"`
+}
+
+// VisionConfig configures automatic vision analysis of image
+// attachments. When enabled, images are analyzed on ingest using a
+// vision-capable LLM and the resulting description is cached in the
+// attachment metadata index.
+type VisionConfig struct {
+	Enabled bool   `yaml:"enabled"` // enable auto-analysis on image ingest
+	Model   string `yaml:"model"`   // vision model name (must be in models.available)
+	Prompt  string `yaml:"prompt"`  // custom analysis prompt; empty uses default
+	Timeout string `yaml:"timeout"` // per-image timeout (Go duration); empty → 30s
+}
+
+// ParsedTimeout returns the configured timeout as a [time.Duration],
+// defaulting to 30 seconds when empty. Invalid durations are caught
+// by [Config.Validate]; this method assumes the value is already
+// validated and falls back to the default on any parse error.
+func (v VisionConfig) ParsedTimeout() time.Duration {
+	if v.Timeout == "" {
+		return 30 * time.Second
+	}
+	d, err := time.ParseDuration(v.Timeout)
+	if err != nil {
+		return 30 * time.Second
+	}
+	return d
 }
 
 // ProvenanceConfig configures git-backed file storage with SSH
@@ -1609,6 +1636,19 @@ func (c *Config) Validate() error {
 		for i, d := range devs {
 			if d.MAC == "" {
 				return fmt.Errorf("person.devices[%s][%d].mac must not be empty", entityID, i)
+			}
+		}
+	}
+	if c.Attachments.Vision.Enabled {
+		if c.Attachments.StoreDir == "" {
+			return fmt.Errorf("attachments.store_dir required when attachments.vision.enabled is true")
+		}
+		if c.Attachments.Vision.Model == "" {
+			return fmt.Errorf("attachments.vision.model required when attachments.vision.enabled is true")
+		}
+		if c.Attachments.Vision.Timeout != "" {
+			if _, err := time.ParseDuration(c.Attachments.Vision.Timeout); err != nil {
+				return fmt.Errorf("attachments.vision.timeout %q: %w", c.Attachments.Vision.Timeout, err)
 			}
 		}
 	}

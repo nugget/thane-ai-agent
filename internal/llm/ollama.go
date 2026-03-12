@@ -71,10 +71,40 @@ func NewOllamaClient(baseURL string, logger *slog.Logger) *OllamaClient {
 // ChatRequest is the request format for Ollama chat API.
 type ChatRequest struct {
 	Model    string           `json:"model"`
-	Messages []Message        `json:"messages"`
+	Messages []ollamaMessage  `json:"messages"`
 	Stream   bool             `json:"stream"`
 	Tools    []map[string]any `json:"tools,omitempty"`
 	Options  *Options         `json:"options,omitempty"`
+}
+
+// ollamaMessage is the Ollama wire format for chat messages. Ollama
+// accepts images as a flat array of base64 strings alongside each
+// message, unlike Anthropic which uses typed content blocks.
+type ollamaMessage struct {
+	Role       string     `json:"role"`
+	Content    string     `json:"content"`
+	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string     `json:"tool_call_id,omitempty"`
+	Images     []string   `json:"images,omitempty"`
+}
+
+// toOllamaMessages converts internal Messages to Ollama wire format,
+// extracting [ImageContent] into the flat base64 array Ollama expects.
+func toOllamaMessages(msgs []Message) []ollamaMessage {
+	out := make([]ollamaMessage, len(msgs))
+	for i, m := range msgs {
+		om := ollamaMessage{
+			Role:       m.Role,
+			Content:    m.Content,
+			ToolCalls:  m.ToolCalls,
+			ToolCallID: m.ToolCallID,
+		}
+		for _, img := range m.Images {
+			om.Images = append(om.Images, img.Data)
+		}
+		out[i] = om
+	}
+	return out
 }
 
 // Options are model parameters.
@@ -133,7 +163,7 @@ func (c *OllamaClient) ChatStream(ctx context.Context, model string, messages []
 
 	req := ChatRequest{
 		Model:    model,
-		Messages: messages,
+		Messages: toOllamaMessages(messages),
 		Stream:   stream,
 		Tools:    tools,
 	}

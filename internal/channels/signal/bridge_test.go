@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -1484,6 +1485,96 @@ func TestProcessAttachments_WithStore_Dedup(t *testing.T) {
 	path2 := extractPath(descs2[0])
 	if path1 != path2 {
 		t.Errorf("expected deduplicated attachments to share store path, got %q and %q", path1, path2)
+	}
+}
+
+// mockVisionAnalyzer implements VisionAnalyzer for testing.
+type mockVisionAnalyzer struct {
+	description string
+	err         error
+}
+
+func (m *mockVisionAnalyzer) Analyze(_ context.Context, _ *attachments.Record) (string, error) {
+	return m.description, m.err
+}
+
+func TestProcessAttachments_WithVision(t *testing.T) {
+	dir := t.TempDir()
+	srcDir := filepath.Join(dir, "signal-src")
+	storeDir := filepath.Join(dir, "store")
+	dbPath := filepath.Join(dir, "test.db")
+
+	os.MkdirAll(srcDir, 0o750)
+	os.WriteFile(filepath.Join(srcDir, "att-img"), []byte("fake image"), 0o640)
+
+	store, err := attachments.NewStore(dbPath, storeDir, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	bridge := NewBridge(BridgeConfig{
+		Client: &Client{},
+		Runner: &testRunner{},
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Attachments: AttachmentConfig{
+			SourceDir: srcDir,
+		},
+		AttachmentStore: store,
+		VisionAnalyzer:  &mockVisionAnalyzer{description: "A sunset over mountains"},
+	})
+
+	descs := bridge.processAttachments(context.Background(), []Attachment{
+		{ContentType: "image/jpeg", Filename: "sunset.jpg", ID: "att-img", Size: 10},
+	}, "+15559999999", "conv-vision", time.Now())
+
+	if len(descs) != 1 {
+		t.Fatalf("expected 1 description, got %d", len(descs))
+	}
+	if !strings.Contains(descs[0], "[Vision: A sunset over mountains]") {
+		t.Errorf("expected vision description, got: %q", descs[0])
+	}
+}
+
+func TestProcessAttachments_VisionError(t *testing.T) {
+	dir := t.TempDir()
+	srcDir := filepath.Join(dir, "signal-src")
+	storeDir := filepath.Join(dir, "store")
+	dbPath := filepath.Join(dir, "test.db")
+
+	os.MkdirAll(srcDir, 0o750)
+	os.WriteFile(filepath.Join(srcDir, "att-err"), []byte("error image"), 0o640)
+
+	store, err := attachments.NewStore(dbPath, storeDir, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	bridge := NewBridge(BridgeConfig{
+		Client: &Client{},
+		Runner: &testRunner{},
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Attachments: AttachmentConfig{
+			SourceDir: srcDir,
+		},
+		AttachmentStore: store,
+		VisionAnalyzer:  &mockVisionAnalyzer{err: fmt.Errorf("model unavailable")},
+	})
+
+	descs := bridge.processAttachments(context.Background(), []Attachment{
+		{ContentType: "image/jpeg", ID: "att-err", Size: 11},
+	}, "+15559999999", "conv-err", time.Now())
+
+	if len(descs) != 1 {
+		t.Fatalf("expected 1 description, got %d", len(descs))
+	}
+	// Should still have the attachment description, just no vision.
+	if strings.Contains(descs[0], "[Vision:") {
+		t.Errorf("should not have vision on error, got: %q", descs[0])
+	}
+	if !strings.Contains(descs[0], storeDir) {
+		t.Errorf("should still reference store path, got: %q", descs[0])
 	}
 }
 
