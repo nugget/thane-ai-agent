@@ -149,6 +149,35 @@ function formatToolTooltip(entry) {
   return lines.join('\n');
 }
 
+// parseDelegateArgs extracts task/profile/guidance from a thane_delegate
+// tool call's args (which may be a JSON string or object).
+function parseDelegateArgs(args) {
+  if (!args) return {};
+  try {
+    return typeof args === 'string' ? JSON.parse(args) : args;
+  } catch (_) {
+    return {};
+  }
+}
+
+function extractDelegateCalls(liveTools) {
+  if (!liveTools || liveTools.length === 0) return [];
+  const calls = [];
+  for (const entry of liveTools) {
+    if (entry.tool !== 'thane_delegate') continue;
+    const parsed = parseDelegateArgs(entry.args);
+    calls.push({
+      task: parsed.task || '',
+      profile: parsed.profile || '',
+      guidance: truncate(parsed.guidance || '', 200),
+      tags: parsed.tags || [],
+      status: entry.status || 'done',
+      error: entry.error || null,
+    });
+  }
+  return calls;
+}
+
 function buildToolCounts(liveTools) {
   if (!liveTools || liveTools.length === 0) return null;
   const counts = {};
@@ -434,7 +463,27 @@ function buildLiveCard(loop) {
     for (const entry of tools) {
       const li = document.createElement('li');
       li.className = 'live-tool live-tool--' + entry.status;
-      li.textContent = entry.tool;
+      if (entry.tool === 'thane_delegate') {
+        // Show delegate task inline instead of bare tool name.
+        const parsed = parseDelegateArgs(entry.args);
+        li.innerHTML = '';
+        const icon = document.createElement('span');
+        icon.className = 'live-tool__delegate-icon';
+        icon.textContent = '\uD83D\uDD00';
+        li.appendChild(icon);
+        const taskSpan = document.createElement('span');
+        taskSpan.className = 'live-tool__delegate-task';
+        taskSpan.textContent = truncate(parsed.task || 'delegate', 80);
+        li.appendChild(taskSpan);
+        if (parsed.profile) {
+          const prof = document.createElement('span');
+          prof.className = 'live-tool__delegate-profile';
+          prof.textContent = parsed.profile;
+          li.appendChild(prof);
+        }
+      } else {
+        li.textContent = entry.tool;
+      }
       li.title = formatToolTooltip(entry);
       ul.appendChild(li);
     }
@@ -516,6 +565,36 @@ function buildPastCard(snap, handlerOnly, idx, startExpanded) {
     body.appendChild(toolsDiv);
   }
 
+  // Delegate calls (rich inline display for thane_delegate tool uses).
+  if (snap.delegate_calls && snap.delegate_calls.length > 0) {
+    const delDiv = document.createElement('div');
+    delDiv.className = 'iter-card__delegates';
+    for (const dc of snap.delegate_calls) {
+      const item = document.createElement('div');
+      item.className = 'iter-card__delegate-call';
+      const icon = document.createElement('span');
+      icon.className = 'iter-card__delegate-icon';
+      icon.textContent = '\uD83D\uDD00';
+      item.appendChild(icon);
+      const task = document.createElement('span');
+      task.className = 'iter-card__delegate-task';
+      task.textContent = truncate(dc.task || 'delegate', 100);
+      item.appendChild(task);
+      if (dc.profile) {
+        const prof = document.createElement('span');
+        prof.className = 'iter-card__delegate-profile';
+        prof.textContent = dc.profile;
+        item.appendChild(prof);
+      }
+      if (dc.status === 'error' && dc.error) {
+        item.classList.add('iter-card__delegate-call--error');
+        item.title = dc.error;
+      }
+      delDiv.appendChild(item);
+    }
+    body.appendChild(delDiv);
+  }
+
   // Summary stats (handler-reported metrics).
   if (snap.summary && Object.keys(snap.summary).length > 0) {
     const summaryDiv = document.createElement('div');
@@ -587,7 +666,7 @@ function buildConnector(loop, snap, isLive, sleepTimer) {
     let sleepText = '';
     if (loop.state === 'sleeping') {
       if (sleepTimer && sleepTimer.durationMs > 0) {
-        const remaining = sleepTimer.durationMs - (Date.now() - sleepTimer.startedAt.getTime());
+        const remaining = sleepTimer.durationMs - (Date.now() - sleepTimer.startedAt);
         sleepText = remaining > 0 ? 'sleeping ' + formatDuration(remaining) : 'waking up...';
       } else {
         sleepText = 'sleeping';
@@ -619,4 +698,229 @@ function buildConnector(loop, snap, isLive, sleepTimer) {
   }
 
   return conn;
+}
+
+// ---------------------------------------------------------------------------
+// Shared Constants
+// ---------------------------------------------------------------------------
+
+const MAX_ITERATION_HISTORY = 10;
+
+// ---------------------------------------------------------------------------
+// Shared Loop State Helpers
+// ---------------------------------------------------------------------------
+
+// clearLiveTelemetry resets transient per-iteration state on a loop object.
+function clearLiveTelemetry(loop) {
+  loop._iterStartTs = null;
+  loop._liveTools = [];
+  loop._liveModel = '';
+  loop._llmContext = null;
+}
+
+// ---------------------------------------------------------------------------
+// applyLoopEventToLoop — shared SSE event handler
+// ---------------------------------------------------------------------------
+//
+// Mutates ctx.loop in place based on the SSE event. Manages sleep timers
+// and annotates iteration history. Returns { snapshot } when an iteration
+// or error snapshot was produced, or null otherwise.
+//
+// ctx: { loop, loopId, sleepTimers (Map), history (array, newest-first) }
+function applyLoopEventToLoop(evt, ctx) {
+  const loop = ctx.loop;
+  const d = evt.data || {};
+
+  switch (evt.kind) {
+    case 'loop_stopped':
+      loop.state = 'stopped';
+      loop.iterations = d.iterations || loop.iterations;
+      loop.attempts = d.attempts || loop.attempts;
+      return null;
+
+    case 'loop_state_change':
+      loop.state = d.to;
+      if (d.to !== 'processing') clearLiveTelemetry(loop);
+      return null;
+
+    case 'loop_iteration_start':
+      loop.state = 'processing';
+      loop.last_wake_at = evt.ts;
+      loop._supervisor = !!d.supervisor;
+      loop.attempts = d.attempt || loop.attempts;
+      loop._currentConvID = d.conversation_id || null;
+      ctx.sleepTimers.delete(ctx.loopId);
+      loop._liveTools = [];
+      loop._liveModel = '';
+      loop._llmContext = null;
+      loop._iterStartTs = Date.now();
+      return null;
+
+    case 'loop_iteration_complete': {
+      loop._lastModel = d.model;
+      loop._lastSupervisor = loop._supervisor || false;
+      loop.total_input_tokens = (loop.total_input_tokens || 0) + (d.input_tokens || 0);
+      loop.total_output_tokens = (loop.total_output_tokens || 0) + (d.output_tokens || 0);
+      loop.last_input_tokens = d.input_tokens || 0;
+      loop.last_output_tokens = d.output_tokens || 0;
+      if (d.context_window > 0) loop.context_window = d.context_window;
+      loop.iterations = (loop.iterations || 0) + 1;
+      if (loop._supervisor) loop.last_supervisor_iter = loop.iterations;
+      loop._supervisor = false;
+
+      const delegateCalls = extractDelegateCalls(loop._liveTools);
+      const snap = {
+        number: loop.iterations,
+        conv_id: d.conversation_id || loop._currentConvID || '',
+        model: d.model || '',
+        input_tokens: d.input_tokens || 0,
+        output_tokens: d.output_tokens || 0,
+        context_window: d.context_window || 0,
+        tools_used: d.tools_used || buildToolCounts(loop._liveTools),
+        elapsed_ms: d.elapsed_ms || 0,
+        supervisor: loop._lastSupervisor || false,
+        started_at: loop._iterStartTs ? new Date(loop._iterStartTs).toISOString() : evt.ts,
+        completed_at: evt.ts,
+        summary: d.summary || null,
+        delegate_calls: delegateCalls.length > 0 ? delegateCalls : null,
+      };
+      clearLiveTelemetry(loop);
+      return { snapshot: snap };
+    }
+
+    case 'loop_tool_start':
+      if (!loop._liveTools) loop._liveTools = [];
+      if (!loop._iterStartTs) loop._iterStartTs = Date.now();
+      loop._liveTools.push({ tool: d.tool, status: 'running', args: d.args || null });
+      return null;
+
+    case 'loop_tool_done':
+      if (loop._liveTools) {
+        for (let i = loop._liveTools.length - 1; i >= 0; i--) {
+          if (loop._liveTools[i].tool === d.tool && loop._liveTools[i].status === 'running') {
+            loop._liveTools[i].status = d.error ? 'error' : 'done';
+            loop._liveTools[i].result = d.result || null;
+            loop._liveTools[i].error = d.error || null;
+            break;
+          }
+        }
+      }
+      return null;
+
+    case 'loop_llm_start':
+      loop._liveModel = d.model || '';
+      loop._llmContext = {
+        est_tokens: d.est_tokens || 0,
+        messages: d.messages || 0,
+        tools: d.tools || 0,
+        iteration: d.iteration,
+        complexity: d.complexity || '',
+        intent: d.intent || '',
+        reasoning: d.reasoning || '',
+      };
+      if (!loop._iterStartTs) loop._iterStartTs = Date.now();
+      return null;
+
+    case 'loop_llm_response':
+      loop._liveModel = d.model || '';
+      if (!loop._iterStartTs) loop._iterStartTs = Date.now();
+      return null;
+
+    case 'loop_sleep_start': {
+      loop.state = 'sleeping';
+      clearLiveTelemetry(loop);
+      const ms = parseDuration(d.sleep_duration || '');
+      ctx.sleepTimers.set(ctx.loopId, { startedAt: Date.now(), durationMs: ms });
+      if (ctx.history.length > 0) ctx.history[0].sleep_after_ms = ms;
+      return null;
+    }
+
+    case 'loop_wait_start':
+      loop.state = 'waiting';
+      clearLiveTelemetry(loop);
+      ctx.sleepTimers.delete(ctx.loopId);
+      if (ctx.history.length > 0) ctx.history[0].wait_after = true;
+      return null;
+
+    case 'loop_error': {
+      loop.state = 'error';
+      loop.last_error = d.error || '';
+      loop.consecutive_errors = (loop.consecutive_errors || 0) + 1;
+      const errSnap = {
+        number: 0,
+        error: d.error || '',
+        started_at: loop._iterStartTs ? new Date(loop._iterStartTs).toISOString() : evt.ts,
+        completed_at: evt.ts,
+        elapsed_ms: loop._iterStartTs ? Date.now() - loop._iterStartTs : 0,
+        supervisor: loop._supervisor || false,
+      };
+      clearLiveTelemetry(loop);
+      return { snapshot: errSnap };
+    }
+
+    default:
+      return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Shared Rendering Helpers
+// ---------------------------------------------------------------------------
+
+// renderAggregates builds the one-line stats summary (iterations, tokens,
+// age, last error) into the given DOM element.
+function renderAggregates(loop, el) {
+  const parts = [];
+  const iter = loop.iterations || 0;
+  const att = loop.attempts || 0;
+  parts.push(formatNumber(iter) + ' iter');
+  if (att !== iter) parts.push(formatNumber(att) + ' att');
+  const totalTok = (loop.total_input_tokens || 0) + (loop.total_output_tokens || 0);
+  if (totalTok > 0) parts.push(formatTokens(totalTok) + ' tok');
+  if (loop.started_at) parts.push(timeAgo(new Date(loop.started_at)));
+  if (loop.last_error) {
+    parts.push('<span class="agg-error">' + escapeHTML(truncate(loop.last_error, 40)) + '</span>');
+  }
+  el.innerHTML = parts.join(' <span class="agg-sep">\u00b7</span> ');
+}
+
+// renderTimeline builds the vertical iteration timeline (live card +
+// connectors + past cards) into the given container element.
+//
+//   loop:         loop data object
+//   container:    DOM element to render into
+//   history:      array of iteration snapshots (newest first)
+//   sleepTimerId: key into sleepTimers map
+//   sleepTimers:  Map of id → { startedAt, durationMs }
+function renderTimeline(loop, container, history, sleepTimerId, sleepTimers) {
+  // Preserve expanded card state across re-renders.
+  const expanded = new Set();
+  container.querySelectorAll('.iter-card--past.iter-card--expanded').forEach(el => {
+    const idx = el.dataset.idx;
+    if (idx != null) expanded.add(idx);
+  });
+
+  container.innerHTML = '';
+
+  const isProcessing = loop.state === 'processing';
+  const isSleeping = loop.state === 'sleeping';
+  const isWaiting = loop.state === 'waiting';
+
+  // Live card (shown during processing).
+  if (isProcessing && loop._iterStartTs) {
+    container.appendChild(buildLiveCard(loop));
+  }
+
+  // Live connector (between live position and first past card).
+  if ((isSleeping || isWaiting) && history.length > 0) {
+    container.appendChild(buildConnector(loop, history[0], true, sleepTimers.get(sleepTimerId)));
+  }
+
+  // Past iteration cards with connectors between them.
+  for (let i = 0; i < history.length; i++) {
+    container.appendChild(buildPastCard(history[i], loop.handler_only, i, expanded.has(String(i))));
+    if (i < history.length - 1) {
+      container.appendChild(buildConnector(loop, history[i], false, null));
+    }
+  }
 }

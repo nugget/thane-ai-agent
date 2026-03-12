@@ -69,6 +69,7 @@ func (r *Registry) Register(l *Loop) error {
 	r.logger.Info("loop registered",
 		"loop_id", l.id,
 		"loop_name", l.config.Name,
+		"parent_id", l.config.ParentID,
 		"active_loops", len(r.loops),
 	)
 	return nil

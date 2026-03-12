@@ -735,9 +735,12 @@ type mockResolver struct {
 	contacts map[string]string // phone → name
 }
 
-func (m *mockResolver) ResolvePhone(phone string) (string, bool) {
+func (m *mockResolver) ResolvePhone(phone string) (string, string, bool) {
 	name, ok := m.contacts[phone]
-	return name, ok
+	if !ok {
+		return "", "", false
+	}
+	return name, "known", true
 }
 
 func TestBridge_ContactResolution(t *testing.T) {

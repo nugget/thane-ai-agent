@@ -11,8 +11,7 @@ const state = {
   loops: new Map(),       // id -> loop status object
   selected: null,         // id of currently selected loop ('__system__' for system node)
   events: [],             // recent events (newest first, capped)
-  sleepTimers: new Map(), // id -> { startedAt: Date, durationMs: number }
-  elapsedTimers: new Map(), // id -> setInterval id for live elapsed display
+  sleepTimers: new Map(), // id -> { startedAt: number (ms timestamp), durationMs: number }
   iterationHistory: new Map(), // id -> array of iteration snapshots (newest first)
   system: null,           // system status object from /api/system
   prevIterations: new Map(), // id -> last known iteration count (for flash detection)
@@ -21,7 +20,198 @@ const state = {
 };
 
 const MAX_EVENTS = 50;
-const MAX_ITERATION_HISTORY = 10;
+
+// ---------------------------------------------------------------------------
+// Force-Directed Physics Layout
+// ---------------------------------------------------------------------------
+
+const physics = {
+  nodes: new Map(),  // id -> { x, y, vx, vy, pinned }
+  // Tuning constants — tweak these for feel.
+  centerGravity:      0.002,
+  springStrength:     0.02,
+  springRestLength:   120,    // system ↔ top-level
+  childSpringStrength: 0.06,  // parent ↔ child (3× stronger)
+  childRestLength:    80,     // parent ↔ child (tighter cluster)
+  repulsionStrength:  5000,
+  damping:            0.92,
+  maxVelocity:        5,
+};
+
+// Ensure physics.nodes matches the current set of loops + system node.
+// New nodes spawn at their parent position (or center with jitter).
+function syncPhysicsNodes(cx, cy) {
+  // System node — always pinned at center.
+  if (state.system) {
+    const sys = physics.nodes.get('__system__');
+    if (sys) {
+      sys.x = cx; sys.y = cy;
+    } else {
+      physics.nodes.set('__system__', { x: cx, y: cy, vx: 0, vy: 0, pinned: true });
+    }
+  } else {
+    physics.nodes.delete('__system__');
+  }
+
+  // Loop nodes.
+  for (const loop of state.loops.values()) {
+    if (physics.nodes.has(loop.id)) continue;
+    let sx, sy;
+    if (loop.parent_id) {
+      // Children spawn near their parent.
+      const parent = physics.nodes.get(loop.parent_id);
+      if (parent) {
+        // Spawn at child rest length from parent with random angle
+        // so the spring starts near equilibrium.
+        const a = Math.random() * 2 * Math.PI;
+        sx = parent.x + physics.childRestLength * Math.cos(a);
+        sy = parent.y + physics.childRestLength * Math.sin(a);
+      } else {
+        sx = cx + (Math.random() * 40 - 20);
+        sy = cy + (Math.random() * 40 - 20);
+      }
+    } else {
+      // Top-level nodes spawn at the spring rest length from center
+      // (random angle) so the spring starts near equilibrium instead
+      // of repelling the node outward from inside the rest length.
+      const angle = Math.random() * 2 * Math.PI;
+      const r = physics.springRestLength * (0.8 + Math.random() * 0.4);
+      sx = cx + r * Math.cos(angle);
+      sy = cy + r * Math.sin(angle);
+    }
+    physics.nodes.set(loop.id, { x: sx, y: sy, vx: 0, vy: 0, pinned: false });
+  }
+
+  // Remove physics nodes for loops that no longer exist (and aren't system).
+  // Exiting nodes stay until their DOM animationend handler cleans them up.
+  for (const id of physics.nodes.keys()) {
+    if (id === '__system__') continue;
+    if (!state.loops.has(id) && !canvasWorld.querySelector(`[data-loop-id="${id}"].loop-node--exiting`)) {
+      physics.nodes.delete(id);
+    }
+  }
+}
+
+// Run one physics simulation step. Applies center gravity, spring
+// attraction (system↔top-level, parent↔child), pairwise repulsion,
+// then integrates velocity and position with damping.
+function physicsStep(cx, cy, vw, vh) {
+  const P = physics;
+  const nodes = Array.from(P.nodes.values());
+  const ids = Array.from(P.nodes.keys());
+  const n = nodes.length;
+  if (n === 0) return;
+
+  // Anisotropic gravity — scale per-axis so the node cloud stretches
+  // to fill non-square viewports. On a square viewport the factors
+  // are both 1.0 (no-op). On a 2:1 ultrawide, X gravity drops ~30%
+  // and Y rises ~40%, naturally spreading nodes along the wide axis.
+  const aspect = (vw && vh && vh > 0) ? vw / vh : 1;
+  const sqrtA = Math.sqrt(aspect);
+  const gravX = P.centerGravity / sqrtA;
+  const gravY = P.centerGravity * sqrtA;
+
+  // Reset forces.
+  for (const nd of nodes) { nd.fx = 0; nd.fy = 0; }
+
+  // 1. Center gravity — anisotropic pull toward (cx, cy).
+  for (const nd of nodes) {
+    if (nd.pinned) continue;
+    nd.fx += (cx - nd.x) * gravX;
+    nd.fy += (cy - nd.y) * gravY;
+  }
+
+  // 2. Spring forces — build edge list from loop relationships.
+  for (const loop of state.loops.values()) {
+    if (!P.nodes.has(loop.id)) continue;
+    if (loop.parent_id && P.nodes.has(loop.parent_id)) {
+      // Parent↔child: shorter rest length, stronger spring for tight clusters.
+      applySpring(P.nodes.get(loop.parent_id), P.nodes.get(loop.id), P.childSpringStrength, P.childRestLength);
+    } else if (P.nodes.has('__system__')) {
+      // System↔top-level (or orphaned child fallback): standard spring.
+      applySpring(P.nodes.get('__system__'), P.nodes.get(loop.id), P.springStrength, P.springRestLength);
+    }
+  }
+
+  // 3. Pairwise repulsion (O(n²), fine for ≤20 nodes).
+  const EPS = 100; // prevents division-by-zero / explosion at overlap
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 1; j < n; j++) {
+      const a = nodes[i], b = nodes[j];
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const distSq = dx * dx + dy * dy + EPS;
+      const force = P.repulsionStrength / distSq;
+      const dist = Math.sqrt(distSq);
+      const fx = (dx / dist) * force;
+      const fy = (dy / dist) * force;
+      a.fx -= fx; a.fy -= fy;
+      b.fx += fx; b.fy += fy;
+    }
+  }
+
+  // 4. Integration + damping.
+  for (const nd of nodes) {
+    if (nd.pinned) continue;
+    nd.vx = (nd.vx + nd.fx) * P.damping;
+    nd.vy = (nd.vy + nd.fy) * P.damping;
+    // Clamp velocity.
+    const speed = Math.sqrt(nd.vx * nd.vx + nd.vy * nd.vy);
+    if (speed > P.maxVelocity) {
+      const scale = P.maxVelocity / speed;
+      nd.vx *= scale;
+      nd.vy *= scale;
+    }
+    nd.x += nd.vx;
+    nd.y += nd.vy;
+  }
+}
+
+// Apply a spring force between two nodes.
+function applySpring(a, b, strength, restLength) {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+  const force = strength * (dist - restLength);
+  const fx = (dx / dist) * force;
+  const fy = (dy / dist) * force;
+  if (!a.pinned) { a.fx += fx; a.fy += fy; }
+  if (!b.pinned) { b.fx -= fx; b.fy -= fy; }
+}
+
+// Write physics positions to DOM — node transforms and linking line endpoints.
+function updateNodePositions() {
+  // System node.
+  const sysP = physics.nodes.get('__system__');
+  if (sysP) {
+    const sysG = canvasWorld.querySelector('.system-node');
+    if (sysG) sysG.setAttribute('transform', `translate(${sysP.x},${sysP.y})`);
+  }
+
+  // Loop nodes.
+  for (const [id, nd] of physics.nodes) {
+    if (id === '__system__') continue;
+    const g = canvasWorld.querySelector(`[data-loop-id="${id}"]`);
+    if (g) g.setAttribute('transform', `translate(${nd.x},${nd.y})`);
+  }
+
+  // Linking line endpoints.
+  const lines = canvasWorld.querySelectorAll('.link-line');
+  for (const line of lines) {
+    const targetId = line.dataset.targetLoop;
+    const parentLoop = line.dataset.parentLoop;
+    // Source is either a parent loop or the system node.
+    const srcId = parentLoop || '__system__';
+    const src = physics.nodes.get(srcId);
+    const tgt = physics.nodes.get(targetId);
+    if (src && tgt) {
+      line.setAttribute('x1', src.x);
+      line.setAttribute('y1', src.y);
+      line.setAttribute('x2', tgt.x);
+      line.setAttribute('y2', tgt.y);
+    }
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Loop Category + Shape + Model Sizing
@@ -31,6 +221,8 @@ const MAX_ITERATION_HISTORY = 10;
 function getLoopCategory(loop) {
   const hints = loop.config && loop.config.Hints;
   if (hints && hints.source === 'metacognitive') return 'metacognitive';
+  const meta = loop.config && loop.config.Metadata;
+  if (meta && meta.category) return meta.category;
   if (loop.parent_id) return 'delegate';
   const name = (loop.name || '').toLowerCase();
   if (/signal|email|mqtt|slack|irc/.test(name)) return 'channel';
@@ -38,13 +230,13 @@ function getLoopCategory(loop) {
   return 'generic';
 }
 
-// Category → shape type mapping (all 1:1 aspect ratio).
-const CATEGORY_SHAPES = {
-  metacognitive: 'circle',
-  channel:       'roundedSquare',
-  delegate:      'diamond',
-  scheduled:     'hexagon',
-  generic:       'octagon',
+// Category → icon displayed inside the node circle.
+const CATEGORY_ICONS = {
+  metacognitive: '🧠',
+  channel:       '💬',
+  delegate:      '🔀',
+  scheduled:     '🕐',
+  generic:       '⚙️',
 };
 
 // Model name → approximate parameter count (billions).
@@ -137,94 +329,14 @@ function isServiceDegraded(loopName) {
   return false;
 }
 
-// Create an SVG shape element for a given category at origin, radius r.
+// Create an SVG circle shape element at origin with radius r.
 function createNodeShape(category, r) {
-  const shape = CATEGORY_SHAPES[category] || 'octagon';
-  switch (shape) {
-    case 'circle':
-      return createSVG('circle', { class: 'node-shape', r: r });
-
-    case 'roundedSquare': {
-      const rx = r * 0.2;
-      return createSVG('rect', {
-        class: 'node-shape',
-        x: -r, y: -r, width: 2 * r, height: 2 * r, rx: rx, ry: rx,
-      });
-    }
-
-    case 'diamond': {
-      const d = r;
-      const pts = `0,${-d} ${d},0 0,${d} ${-d},0`;
-      return createSVG('polygon', { class: 'node-shape', points: pts });
-    }
-
-    case 'hexagon': {
-      const pts = [];
-      for (let i = 0; i < 6; i++) {
-        const angle = (Math.PI / 3) * i - Math.PI / 2;
-        pts.push(`${(r * Math.cos(angle)).toFixed(1)},${(r * Math.sin(angle)).toFixed(1)}`);
-      }
-      return createSVG('polygon', { class: 'node-shape', points: pts.join(' ') });
-    }
-
-    case 'octagon':
-    default: {
-      const pts = [];
-      for (let i = 0; i < 8; i++) {
-        const angle = (Math.PI / 4) * i - Math.PI / 8;
-        pts.push(`${(r * Math.cos(angle)).toFixed(1)},${(r * Math.sin(angle)).toFixed(1)}`);
-      }
-      return createSVG('polygon', { class: 'node-shape', points: pts.join(' ') });
-    }
-  }
+  return createSVG('circle', { class: 'node-shape', r: r });
 }
 
-// Update an existing shape element's geometry for a new radius.
+// Update an existing circle shape element's radius.
 function updateNodeShape(el, category, r) {
-  const shape = CATEGORY_SHAPES[category] || 'octagon';
-  switch (shape) {
-    case 'circle':
-      el.setAttribute('r', r);
-      break;
-
-    case 'roundedSquare': {
-      const rx = r * 0.2;
-      el.setAttribute('x', -r);
-      el.setAttribute('y', -r);
-      el.setAttribute('width', 2 * r);
-      el.setAttribute('height', 2 * r);
-      el.setAttribute('rx', rx);
-      el.setAttribute('ry', rx);
-      break;
-    }
-
-    case 'diamond': {
-      const d = r;
-      el.setAttribute('points', `0,${-d} ${d},0 0,${d} ${-d},0`);
-      break;
-    }
-
-    case 'hexagon': {
-      const pts = [];
-      for (let i = 0; i < 6; i++) {
-        const angle = (Math.PI / 3) * i - Math.PI / 2;
-        pts.push(`${(r * Math.cos(angle)).toFixed(1)},${(r * Math.sin(angle)).toFixed(1)}`);
-      }
-      el.setAttribute('points', pts.join(' '));
-      break;
-    }
-
-    case 'octagon':
-    default: {
-      const pts = [];
-      for (let i = 0; i < 8; i++) {
-        const angle = (Math.PI / 4) * i - Math.PI / 8;
-        pts.push(`${(r * Math.cos(angle)).toFixed(1)},${(r * Math.sin(angle)).toFixed(1)}`);
-      }
-      el.setAttribute('points', pts.join(' '));
-      break;
-    }
-  }
+  el.setAttribute('r', r);
 }
 
 // ---------------------------------------------------------------------------
@@ -241,6 +353,29 @@ const emptyState = $('#empty-state');
 const logEmpty = $('#log-empty');
 const logScroll = $('#log-scroll');
 const logBody = $('#log-body');
+
+// ---------------------------------------------------------------------------
+// Trust Zone Underglow
+// ---------------------------------------------------------------------------
+
+const TRUST_ZONE_COLORS = {
+  admin:     '#26a69a',  // teal
+  household: '#e040fb',  // purple
+  trusted:   '#69f0ae',  // green
+  known:     '#ffd740',  // amber
+  unknown:   '#ff5252',  // red — stranger danger
+};
+
+// Inject SVG defs for the Gaussian blur filter used by trust zone underglow.
+(function initTrustGlowFilter() {
+  const svg = canvas;
+  const defs = createSVG('defs', {});
+  const filter = createSVG('filter', { id: 'trust-blur' });
+  const blur = createSVG('feGaussianBlur', { in: 'SourceGraphic', stdDeviation: '6' });
+  filter.appendChild(blur);
+  defs.appendChild(filter);
+  svg.insertBefore(defs, svg.firstChild);
+})();
 
 // ---------------------------------------------------------------------------
 // SSE Connection
@@ -273,7 +408,6 @@ function connect() {
         if (s._llmContext && s._llmContext.model) {
           s._liveModel = s._llmContext.model;
         }
-        startElapsedTimer(s.id);
       }
       state.loops.set(s.id, s);
     }
@@ -284,6 +418,11 @@ function connect() {
   eventSource.addEventListener('loop', (e) => {
     const evt = JSON.parse(e.data);
     handleLoopEvent(evt);
+  });
+
+  eventSource.addEventListener('delegate', (e) => {
+    const evt = JSON.parse(e.data);
+    handleDelegateEvent(evt);
   });
 
   eventSource.onerror = () => {
@@ -310,6 +449,8 @@ function setConnState(s) {
 // Event Handling
 // ---------------------------------------------------------------------------
 
+// extractDelegateCalls is in shared.js.
+
 function handleLoopEvent(evt) {
   const loopId = evt.data && evt.data.loop_id;
   const loopName = evt.data && evt.data.loop_name;
@@ -318,218 +459,128 @@ function handleLoopEvent(evt) {
   state.events.unshift(evt);
   if (state.events.length > MAX_EVENTS) state.events.length = MAX_EVENTS;
 
-  switch (evt.kind) {
-    case 'loop_started':
-      // A new loop appeared. We don't have full status yet — fetch it.
-      fetchLoops();
-      break;
-
-    case 'loop_stopped':
-      if (loopId) {
-        const existing = state.loops.get(loopId);
-        if (existing) {
-          existing.state = 'stopped';
-          existing.iterations = evt.data.iterations || existing.iterations;
-          existing.attempts = evt.data.attempts || existing.attempts;
-        }
-      }
-      break;
-
-    case 'loop_state_change':
-      if (loopId && state.loops.has(loopId)) {
-        state.loops.get(loopId).state = evt.data.to;
-      }
-      break;
-
-    case 'loop_iteration_start':
-      if (loopId && state.loops.has(loopId)) {
-        const loop = state.loops.get(loopId);
-        loop.state = 'processing';
-        loop.last_wake_at = evt.ts;
-        loop._supervisor = !!evt.data.supervisor;
-        loop.attempts = evt.data.attempt || loop.attempts;
-        loop._currentConvID = evt.data.conversation_id || null;
-        // Reset live telemetry for new iteration.
-        loop._liveTools = [];
-        loop._liveModel = '';
-        loop._llmContext = null;
-        loop._iterStartTs = Date.now();
-        startElapsedTimer(loopId);
-      }
-      break;
-
-    case 'loop_iteration_complete':
-      if (loopId && state.loops.has(loopId)) {
-        const loop = state.loops.get(loopId);
-        loop._lastModel = evt.data.model;
-        loop._lastSupervisor = loop._supervisor || false;
-        loop.total_input_tokens = (loop.total_input_tokens || 0) + (evt.data.input_tokens || 0);
-        loop.total_output_tokens = (loop.total_output_tokens || 0) + (evt.data.output_tokens || 0);
-        loop.last_input_tokens = evt.data.input_tokens || 0;
-        loop.last_output_tokens = evt.data.output_tokens || 0;
-        if (evt.data.context_window > 0) {
-          loop.context_window = evt.data.context_window;
-        }
-        loop.iterations = (loop.iterations || 0) + 1;
-        // Update supervisor tracking.
-        if (loop._supervisor) {
-          loop.last_supervisor_iter = loop.iterations;
-        }
-        loop._supervisor = false;
-        // Build iteration snapshot from event + transient state.
-        const snap = {
-          number: loop.iterations,
-          conv_id: evt.data.conversation_id || loop._currentConvID || '',
-          model: evt.data.model || '',
-          input_tokens: evt.data.input_tokens || 0,
-          output_tokens: evt.data.output_tokens || 0,
-          context_window: evt.data.context_window || 0,
-          tools_used: evt.data.tools_used || buildToolCounts(loop._liveTools),
-          elapsed_ms: evt.data.elapsed_ms || 0,
-          supervisor: loop._lastSupervisor || false,
-          started_at: loop._iterStartTs ? new Date(loop._iterStartTs).toISOString() : evt.ts,
-          completed_at: evt.ts,
-          summary: evt.data.summary || null,
-        };
-        prependIterationSnapshot(loopId, snap);
-        // Clear live telemetry.
-        loop._iterStartTs = null;
-        loop._liveTools = [];
-        loop._liveModel = '';
-        loop._llmContext = null;
-        stopElapsedTimer(loopId);
-        // Auto-refresh logs if this loop is selected.
-        if (state.selected === loopId) {
-          fetchLogs(loopId);
-        }
-      }
-      break;
-
-    case 'loop_tool_start':
-      if (loopId && state.loops.has(loopId)) {
-        const loop = state.loops.get(loopId);
-        if (!loop._liveTools) loop._liveTools = [];
-        // Seed _iterStartTs if we missed the iteration_start (e.g. SSE reconnect).
-        if (!loop._iterStartTs) {
-          loop._iterStartTs = Date.now();
-          startElapsedTimer(loopId);
-        }
-        loop._liveTools.push({
-          tool: evt.data.tool,
-          status: 'running',
-          args: evt.data.args || null,
-        });
-      }
-      break;
-
-    case 'loop_tool_done':
-      if (loopId && state.loops.has(loopId)) {
-        const loop = state.loops.get(loopId);
-        if (loop._liveTools) {
-          // Find the last running instance of this tool.
-          for (let i = loop._liveTools.length - 1; i >= 0; i--) {
-            if (loop._liveTools[i].tool === evt.data.tool && loop._liveTools[i].status === 'running') {
-              loop._liveTools[i].status = evt.data.error ? 'error' : 'done';
-              loop._liveTools[i].result = evt.data.result || null;
-              loop._liveTools[i].error = evt.data.error || null;
-              break;
-            }
-          }
-        }
-      }
-      break;
-
-    case 'loop_llm_start':
-      if (loopId && state.loops.has(loopId)) {
-        const loop = state.loops.get(loopId);
-        loop._liveModel = evt.data.model || '';
-        // Stash LLM call context for live card enrichment.
-        loop._llmContext = {
-          est_tokens: evt.data.est_tokens || 0,
-          messages: evt.data.messages || 0,
-          tools: evt.data.tools || 0,
-          iteration: evt.data.iteration,
-          complexity: evt.data.complexity || '',
-          intent: evt.data.intent || '',
-          reasoning: evt.data.reasoning || '',
-        };
-        // Seed _iterStartTs if we missed the iteration_start (e.g. SSE reconnect).
-        if (!loop._iterStartTs) {
-          loop._iterStartTs = Date.now();
-          startElapsedTimer(loopId);
-        }
-      }
-      break;
-
-    case 'loop_llm_response':
-      if (loopId && state.loops.has(loopId)) {
-        const loop = state.loops.get(loopId);
-        loop._liveModel = evt.data.model || '';
-        // Seed _iterStartTs if we missed the iteration_start (e.g. SSE reconnect).
-        if (!loop._iterStartTs) {
-          loop._iterStartTs = Date.now();
-          startElapsedTimer(loopId);
-        }
-      }
-      break;
-
-    case 'loop_sleep_start':
-      if (loopId) {
-        const durationStr = evt.data.sleep_duration || '';
-        const durationMs = parseDuration(durationStr);
-        state.sleepTimers.set(loopId, {
-          startedAt: new Date(evt.ts),
-          durationMs: durationMs,
-        });
-        // Annotate most recent snapshot with sleep info.
-        const sleepHist = state.iterationHistory.get(loopId);
-        if (sleepHist && sleepHist.length > 0) {
-          sleepHist[0].sleep_after_ms = durationMs;
-        }
-        if (state.loops.has(loopId)) {
-          const loop = state.loops.get(loopId);
-          loop.state = 'sleeping';
-          clearLiveTelemetry(loop, loopId);
-        }
-      }
-      break;
-
-    case 'loop_wait_start':
-      if (loopId && state.loops.has(loopId)) {
-        const loop = state.loops.get(loopId);
-        loop.state = 'waiting';
-        clearLiveTelemetry(loop, loopId);
-        // Clear any sleep timer — waiting has no duration.
-        state.sleepTimers.delete(loopId);
-        // Annotate most recent snapshot.
-        const waitHist = state.iterationHistory.get(loopId);
-        if (waitHist && waitHist.length > 0) {
-          waitHist[0].wait_after = true;
-        }
-      }
-      break;
-
-    case 'loop_error':
-      if (loopId && state.loops.has(loopId)) {
-        const loop = state.loops.get(loopId);
-        loop.state = 'error';
-        loop.last_error = evt.data.error || '';
-        loop.consecutive_errors = (loop.consecutive_errors || 0) + 1;
-        // Build error snapshot.
-        const errSnap = {
-          number: 0,
-          error: evt.data.error || '',
-          started_at: loop._iterStartTs ? new Date(loop._iterStartTs).toISOString() : evt.ts,
-          completed_at: evt.ts,
-          elapsed_ms: loop._iterStartTs ? Date.now() - loop._iterStartTs : 0,
-          supervisor: loop._supervisor || false,
-        };
-        prependIterationSnapshot(loopId, errSnap);
-        clearLiveTelemetry(loop, loopId);
-      }
-      break;
+  // loop_started requires a full fetch — not a per-loop mutation.
+  if (evt.kind === 'loop_started') {
+    fetchLoops();
+    renderAll();
+    return;
   }
 
+  if (!loopId || !state.loops.has(loopId)) {
+    renderAll();
+    return;
+  }
+
+  const loop = state.loops.get(loopId);
+  const history = state.iterationHistory.get(loopId) || [];
+  const result = applyLoopEventToLoop(evt, {
+    loop,
+    loopId,
+    sleepTimers: state.sleepTimers,
+    history,
+  });
+
+  if (result && result.snapshot) {
+    prependIterationSnapshot(loopId, result.snapshot);
+    // Auto-refresh logs when the selected loop completes an iteration.
+    if (state.selected === loopId) {
+      fetchLogs(loopId);
+    }
+  }
+
+  renderAll();
+}
+
+// ---------------------------------------------------------------------------
+// Delegate Events → Ephemeral Nodes
+// ---------------------------------------------------------------------------
+
+// Handle delegate lifecycle events from the SSE stream. Spawn creates
+// a synthetic loop entry; complete removes it (triggering exit animation).
+function handleDelegateEvent(evt) {
+  const did = evt.data && evt.data.delegate_id;
+  if (!did) return;
+
+  switch (evt.kind) {
+    case 'spawn': {
+      // Create a synthetic loop entry so the existing rendering
+      // infrastructure (physics, connectors, icons) works unchanged.
+      const syntheticId = 'delegate-' + did;
+      state.loops.set(syntheticId, {
+        id: syntheticId,
+        name: evt.data.name || syntheticId,
+        state: 'processing',
+        parent_id: evt.data.parent_loop_id || null,
+        config: {
+          Metadata: { category: 'delegate' },
+        },
+        _delegate: true,
+        _delegateId: did,
+        _delegateTask: evt.data.task || '',
+        _delegateProfile: evt.data.profile || '',
+        _delegateGuidance: evt.data.guidance || '',
+        _delegateTags: evt.data.tags || [],
+        _iterStartTs: Date.now(),
+      });
+      renderAll();
+      break;
+    }
+    case 'complete': {
+      const syntheticId = 'delegate-' + did;
+      state.sleepTimers.delete(syntheticId);
+
+      // Update state but keep the node around so it's still clickable.
+      const entry = state.loops.get(syntheticId);
+      if (entry) {
+        entry.state = evt.data.exhausted ? 'error' : 'completed';
+        entry._delegateExhausted = !!evt.data.exhausted;
+        entry._delegateExhaustReason = evt.data.exhaust_reason || '';
+        entry._delegateDurationMs = evt.data.duration_ms || 0;
+        entry._delegateIterations = evt.data.iterations || 0;
+      }
+
+      // Fade to translucent, then remove after a linger period.
+      const node = canvasWorld.querySelector(`[data-loop-id="${syntheticId}"]`);
+      if (node) node.classList.add('loop-node--fading');
+
+      setTimeout(() => {
+        // Don't remove if user has it selected — let them inspect.
+        if (state.selected === syntheticId) {
+          // Re-check after another delay.
+          const recheck = () => {
+            if (state.selected !== syntheticId) {
+              removeDelegateNode(syntheticId);
+            } else {
+              setTimeout(recheck, 5000);
+            }
+          };
+          setTimeout(recheck, 5000);
+        } else {
+          removeDelegateNode(syntheticId);
+        }
+      }, 15000); // linger 15s
+
+      renderAll();
+      break;
+    }
+  }
+}
+
+function removeDelegateNode(syntheticId) {
+  const node = canvasWorld.querySelector(`[data-loop-id="${syntheticId}"]`);
+  if (node) {
+    node.classList.add('loop-node--exiting');
+    node.addEventListener('animationend', () => {
+      node.remove();
+      physics.nodes.delete(syntheticId);
+    }, { once: true });
+  } else {
+    physics.nodes.delete(syntheticId);
+  }
+  state.loops.delete(syntheticId);
+  if (state.selected === syntheticId) {
+    state.selected = null;
+  }
   renderAll();
 }
 
@@ -540,6 +591,7 @@ function handleLoopEvent(evt) {
 async function fetchLoops() {
   try {
     const resp = await fetch('/api/loops');
+    if (!resp.ok) return;
     const statuses = await resp.json();
     state.loops.clear();
     for (const s of statuses) {
@@ -553,12 +605,19 @@ async function fetchLoops() {
 
 async function fetchLogs(loopId) {
   if (!loopId) return;
+  // Ephemeral delegate nodes aren't real loops — no logs endpoint.
+  const loop = state.loops.get(loopId);
+  if (loop && loop._delegate) {
+    renderLogs([]);
+    return;
+  }
   const level = $('#log-level').value;
   let url = '/api/loops/' + encodeURIComponent(loopId) + '/logs?limit=100';
   if (level) url += '&level=' + encodeURIComponent(level);
 
   try {
     const resp = await fetch(url);
+    if (!resp.ok) return;
     const data = await resp.json();
     renderLogs(data.entries || []);
   } catch (err) {
@@ -611,89 +670,35 @@ function renderNodes() {
   const hasSystem = state.system !== null;
   emptyState.hidden = loops.length > 0 || hasSystem;
 
-  // Get canvas dimensions for centering.
+  // Canvas center — used as gravity anchor and for new-node spawn.
   const rect = canvas.getBoundingClientRect();
   const cx = rect.width / 2;
   const cy = rect.height / 2;
 
-  // For now, lay out nodes in a circle (single node = centered).
-  const count = loops.length;
-  const radius = count <= 1 ? 0 : Math.min(rect.width, rect.height) * 0.3;
+  // Sync physics state with current loops (add new, remove stale).
+  syncPhysicsNodes(cx, cy);
 
-  // Track current loop ids for exit detection.
-  const currentIds = new Set();
-
-  // Positions map for linking line.
-  const nodePositions = new Map();
-
-  // Detect which loops are new this frame (for staggering).
+  // Detect new nodes for enter animation.
   const newIds = new Set();
   for (const loop of loops) {
     if (!state.knownLoopIds.has(loop.id)) newIds.add(loop.id);
   }
 
-  // Compute positions first (needed for stagger calculation).
-  const positionList = [];
-  for (let i = 0; i < count; i++) {
-    const loop = loops[i];
-    currentIds.add(loop.id);
-    const angle = (2 * Math.PI * i) / count - Math.PI / 2;
-    const x = cx + radius * Math.cos(angle);
-    const y = cy + radius * Math.sin(angle);
-    nodePositions.set(loop.id, { x, y });
-    positionList.push({ loop, x, y, angle, index: i });
+  // Create/update DOM nodes (no position-setting — physics handles that).
+  for (const loop of loops) {
+    renderNode(loop);
   }
 
-  // When nodes are added or removed after the initial load, stagger the
-  // reflow transition-delay so nodes closer to the insertion/removal point
-  // move first. This creates an organic "opening slot" / "closing slot" ripple.
-  const existingNodeCount = canvasWorld.querySelectorAll('.loop-node:not(.loop-node--exiting)').length;
-  const isInitialLoad = existingNodeCount === 0;
-  const hasStructureChange = !isInitialLoad && (newIds.size > 0 || existingNodeCount > count);
-  const staggerMs = hasStructureChange ? 30 : 0; // ms per step
-
-  for (const { loop, x, y, index } of positionList) {
-    renderNode(loop, x, y);
-
-    // Apply staggered transition-delay to existing (non-new) nodes.
-    if (hasStructureChange && !newIds.has(loop.id)) {
-      const group = canvasWorld.querySelector(`[data-loop-id="${loop.id}"]`);
-      if (group) {
-        const delay = index * staggerMs;
-        group.style.transitionDelay = delay + 'ms';
-        // Clear the delay after the transition completes to avoid
-        // stale delays on future non-structural updates.
-        setTimeout(() => { group.style.transitionDelay = ''; }, 600 + delay);
-      }
-    }
-  }
-
-  // New nodes: on structural changes, delay entrance so the slot opens first.
-  // On initial load, animate immediately (no existing nodes to stagger around).
+  // Enter animations — physics naturally opens space, so animate immediately.
   for (const id of newIds) {
     const group = canvasWorld.querySelector(`[data-loop-id="${id}"]`);
     if (!group) continue;
     const inner = group.querySelector('.node-inner');
     if (!inner) continue;
-
-    if (hasStructureChange) {
-      // Delay entrance until existing nodes have begun their reflow.
-      const entranceDelay = Math.max(80, (count * staggerMs) / 2);
-      inner.style.opacity = '0';
-      setTimeout(() => {
-        inner.style.opacity = '';
-        inner.classList.add('node-inner--entering');
-        inner.addEventListener('animationend', () => {
-          inner.classList.remove('node-inner--entering');
-        }, { once: true });
-      }, entranceDelay);
-    } else {
-      // Initial load or no reflow needed — animate immediately.
-      inner.classList.add('node-inner--entering');
-      inner.addEventListener('animationend', () => {
-        inner.classList.remove('node-inner--entering');
-      }, { once: true });
-    }
+    inner.classList.add('node-inner--entering');
+    inner.addEventListener('animationend', () => {
+      inner.classList.remove('node-inner--entering');
+    }, { once: true });
   }
 
   // Remove nodes for loops that no longer exist (with exit animation).
@@ -703,7 +708,10 @@ function renderNodes() {
     if (!state.loops.has(id)) {
       if (!g.classList.contains('loop-node--exiting')) {
         g.classList.add('loop-node--exiting');
-        g.addEventListener('animationend', () => g.remove(), { once: true });
+        g.addEventListener('animationend', () => {
+          g.remove();
+          physics.nodes.delete(id);
+        }, { once: true });
         state.knownLoopIds.delete(id);
         state.prevIterations.delete(id);
         state.prevErrors.delete(id);
@@ -711,30 +719,31 @@ function renderNodes() {
     }
   }
 
-  // System node — positioned offset from center.
-  const sysX = cx - radius - 100;
-  const sysY = cy;
+  // System node.
   if (hasSystem) {
-    renderSystemNode(sysX, sysY);
+    renderSystemNode();
   } else {
     const existing = canvasWorld.querySelector('.system-node');
     if (existing) existing.remove();
   }
 
-  // Linking lines: runtime → all top-level loops.
-  renderLinkingLines(hasSystem, sysX, sysY, loops, nodePositions);
+  // Linking lines: create/remove DOM elements and apply state classes.
+  // Position updates (x1/y1/x2/y2) are handled by updateNodePositions().
+  renderLinkingLines(hasSystem, loops);
 }
 
-function renderLinkingLines(hasSystem, sysX, sysY, loops, nodePositions) {
+// Manage linking line DOM lifecycle — create/remove elements and apply
+// state classes. Positions (x1/y1/x2/y2) are set by updateNodePositions().
+function renderLinkingLines(hasSystem, loops) {
   // Top-level loops are those without a parent_id.
-  const topLevel = loops.filter(l => !l.parent_id && nodePositions.has(l.id));
+  const topLevel = loops.filter(l => !l.parent_id);
   const activeIds = new Set(topLevel.map(l => l.id));
 
   // Child loops are those with a parent_id.
-  const children = loops.filter(l => l.parent_id && nodePositions.has(l.id));
+  const children = loops.filter(l => l.parent_id);
   const childKeys = new Set(children.map(l => l.id));
 
-  // Build a set of all valid link targets (system→top-level + parent→child).
+  // Build a set of all valid link targets.
   const allValidTargets = new Set([...activeIds, ...childKeys]);
 
   // Remove stale link lines for loops that no longer exist.
@@ -752,7 +761,6 @@ function renderLinkingLines(hasSystem, sysX, sysY, loops, nodePositions) {
   // System → top-level lines.
   if (hasSystem) {
     for (const loop of topLevel) {
-      const pos = nodePositions.get(loop.id);
       let line = canvasWorld.querySelector(`.link-line[data-target-loop="${loop.id}"]:not([data-parent-loop])`);
 
       if (!line) {
@@ -763,11 +771,6 @@ function renderLinkingLines(hasSystem, sysX, sysY, loops, nodePositions) {
         // Insert before nodes so lines draw behind them.
         canvasWorld.insertBefore(line, canvasWorld.firstChild);
       }
-
-      line.setAttribute('x1', sysX);
-      line.setAttribute('y1', sysY);
-      line.setAttribute('x2', pos.x);
-      line.setAttribute('y2', pos.y);
 
       // State-driven styling: error or degraded service turns the line orange/red.
       if (loop.state === 'error') {
@@ -783,10 +786,6 @@ function renderLinkingLines(hasSystem, sysX, sysY, loops, nodePositions) {
 
   // Parent → child lines.
   for (const child of children) {
-    const parentPos = nodePositions.get(child.parent_id);
-    const childPos = nodePositions.get(child.id);
-    if (!parentPos || !childPos) continue;
-
     const selector = `.link-line[data-target-loop="${child.id}"][data-parent-loop="${child.parent_id}"]`;
     let line = canvasWorld.querySelector(selector);
 
@@ -798,11 +797,6 @@ function renderLinkingLines(hasSystem, sysX, sysY, loops, nodePositions) {
       });
       canvasWorld.insertBefore(line, canvasWorld.firstChild);
     }
-
-    line.setAttribute('x1', parentPos.x);
-    line.setAttribute('y1', parentPos.y);
-    line.setAttribute('x2', childPos.x);
-    line.setAttribute('y2', childPos.y);
 
     // State-driven styling for child lines.
     let cls = 'link-line link-line--child';
@@ -831,7 +825,7 @@ function flashLinkingLine(loopId) {
   }
 }
 
-function renderNode(loop, x, y) {
+function renderNode(loop) {
   const category = getLoopCategory(loop);
   const nodeR = getModelRadius(loop._lastModel);
   const ringR = nodeR + 12;
@@ -846,11 +840,14 @@ function renderNode(loop, x, y) {
     group.addEventListener('click', () => selectLoop(loop.id));
     group.addEventListener('contextmenu', (e) => {
       e.preventDefault();
-      showContextMenu(e.clientX, e.clientY, [
-        { label: 'Open in window', action: () => openDetailWindow('loop', loop.id) },
-        { separator: true },
-        { label: 'Copy loop ID', action: () => navigator.clipboard.writeText(loop.id) },
-      ]);
+      const items = [];
+      // Synthetic delegate nodes have no backend endpoint — skip detail popup.
+      if (!loop.id.startsWith('delegate-')) {
+        items.push({ label: 'Open in window', action: () => openDetailWindow('loop', loop.id) });
+        items.push({ separator: true });
+      }
+      items.push({ label: 'Copy loop ID', action: () => navigator.clipboard.writeText(loop.id) });
+      showContextMenu(e.clientX, e.clientY, items);
     });
 
     // Inner group for enter/exit scale animation (children drawn at origin).
@@ -860,6 +857,18 @@ function renderNode(loop, x, y) {
     const title = createSVG('title', {});
     title.textContent = loop.name || loop.id;
     inner.appendChild(title);
+
+    // Trust zone underglow — diffused coloured circle behind the node.
+    const trustZone = loop.config && loop.config.Metadata && loop.config.Metadata.trust_zone;
+    if (trustZone && TRUST_ZONE_COLORS[trustZone]) {
+      const glow = createSVG('circle', {
+        class: 'trust-glow',
+        r: nodeR + 3,
+        fill: TRUST_ZONE_COLORS[trustZone],
+        filter: 'url(#trust-blur)',
+      });
+      inner.appendChild(glow);
+    }
 
     // Glow ring (always a circle regardless of shape).
     const ring = createSVG('circle', {
@@ -871,16 +880,25 @@ function renderNode(loop, x, y) {
     });
 
     // Sleep progress ring (always a circle).
-    const circumference = 2 * Math.PI * (nodeR + 4);
+    const circumference = 2 * Math.PI * (nodeR);
     const sleepRing = createSVG('circle', {
       class: 'sleep-ring',
-      r: nodeR + 4,
+      r: nodeR,
       'stroke-dasharray': circumference,
       'stroke-dashoffset': circumference,
     });
 
-    // Main shape — determined by category.
+    // Main shape — always a circle.
     const shapeEl = createNodeShape(category, nodeR);
+
+    // Category icon centered inside the node.
+    const icon = createSVG('text', {
+      class: 'node-icon',
+      'text-anchor': 'middle',
+      'dominant-baseline': 'central',
+      'font-size': Math.round(nodeR * 0.7),
+    });
+    icon.textContent = CATEGORY_ICONS[category] || CATEGORY_ICONS.generic;
 
     // Supervisor ring (larger circle outside the node).
     const supDot = createSVG('circle', {
@@ -902,21 +920,43 @@ function renderNode(loop, x, y) {
     inner.appendChild(ring);
     inner.appendChild(sleepRing);
     inner.appendChild(shapeEl);
+    inner.appendChild(icon);
     inner.appendChild(supDot);
     inner.appendChild(label);
     group.appendChild(inner);
     canvasWorld.appendChild(group);
 
-    // Mark as known — enter animation is triggered by renderNodes() with
-    // a delay so the slot opens before the node pops in.
+    // Mark as known — enter animation is triggered by renderNodes().
     state.knownLoopIds.add(loop.id);
-
-    // Enable smooth reflow after first paint.
-    requestAnimationFrame(() => group.classList.add('loop-node--settled'));
   }
 
-  // Update position (smooth reflow via CSS transition on --settled class).
-  group.setAttribute('transform', `translate(${x},${y})`);
+  // Update trust zone underglow colour if it changed or appeared.
+  const trustZone = loop.config && loop.config.Metadata && loop.config.Metadata.trust_zone;
+  const glowEl = group.querySelector('.trust-glow');
+  if (trustZone && TRUST_ZONE_COLORS[trustZone]) {
+    if (glowEl) {
+      glowEl.setAttribute('fill', TRUST_ZONE_COLORS[trustZone]);
+      glowEl.setAttribute('r', nodeR + 3);
+    } else {
+      // Trust zone appeared after initial render — insert glow.
+      const inner = group.querySelector('.node-inner');
+      const glow = createSVG('circle', {
+        class: 'trust-glow',
+        r: nodeR + 3,
+        fill: TRUST_ZONE_COLORS[trustZone],
+        filter: 'url(#trust-blur)',
+      });
+      // Insert after <title> (first child) so it's behind everything.
+      const title = inner.querySelector('title');
+      if (title && title.nextSibling) {
+        inner.insertBefore(glow, title.nextSibling);
+      } else {
+        inner.appendChild(glow);
+      }
+    }
+  } else if (glowEl) {
+    glowEl.remove();
+  }
 
   // Dynamic resizing — update shape, rings, label when model changes.
   const prevR = parseFloat(group.dataset.nodeR) || DEFAULT_NODE_R;
@@ -929,11 +969,13 @@ function renderNode(loop, x, y) {
     const newRingR = nodeR + 12;
     group.querySelector('.node-ring').setAttribute('r', newRingR);
     const sleepRing = group.querySelector('.sleep-ring');
-    const newSleepR = nodeR + 4;
+    const newSleepR = nodeR;
     sleepRing.setAttribute('r', newSleepR);
     const circ = 2 * Math.PI * newSleepR;
     sleepRing.setAttribute('stroke-dasharray', circ);
     group.querySelector('.supervisor-dot').setAttribute('r', nodeR + 10);
+    const iconEl = group.querySelector('.node-icon');
+    if (iconEl) iconEl.setAttribute('font-size', Math.round(nodeR * 0.7));
     group.querySelector('.node-label').setAttribute('y', nodeR + 18);
   }
   group.dataset.nodeR = nodeR;
@@ -1039,13 +1081,13 @@ function updateSleepRing(group, loopId) {
     return;
   }
 
-  const elapsed = Date.now() - timer.startedAt.getTime();
+  const elapsed = Date.now() - timer.startedAt;
   const progress = Math.min(1, elapsed / timer.durationMs);
   const offset = circumference * (1 - progress);
   sleepRing.setAttribute('stroke-dashoffset', offset);
 }
 
-function renderSystemNode(x, y) {
+function renderSystemNode() {
   const sys = state.system;
   const s = 48, r = 10; // 1:1 square, s = side length
   const ringR = s / 2 + 12; // glow ring radius (matches loop node pattern)
@@ -1092,11 +1134,7 @@ function renderSystemNode(x, y) {
     group.appendChild(label);
 
     canvasWorld.appendChild(group);
-    // Defer adding settled class so initial render isn't animated.
-    requestAnimationFrame(() => group.classList.add('system-node--settled'));
   }
-
-  group.setAttribute('transform', `translate(${x},${y})`);
 
   // Update health-based fill.
   const rect = group.querySelector('.system-rect');
@@ -1205,11 +1243,14 @@ function renderDetail() {
   // IDs section.
   renderDetailIDs(loop);
 
+  // Delegate detail (task, profile, guidance, tags).
+  renderDelegateDetail(loop);
+
   // Aggregate stats bar.
-  renderAggregates(loop);
+  renderAggregates(loop, $('#detail-aggregates'));
 
   // Iteration timeline.
-  renderTimeline(loop);
+  renderTimeline(loop, $('#detail-timeline'), state.iterationHistory.get(loop.id) || [], loop.id, state.sleepTimers);
 
   // Capabilities (tags from config).
   const tags = (loop.config && loop.config.Tags) || [];
@@ -1229,65 +1270,7 @@ function renderDetail() {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Rendering — Aggregate Stats Bar
-// ---------------------------------------------------------------------------
-
-function renderAggregates(loop) {
-  const el = $('#detail-aggregates');
-  const parts = [];
-  const iter = loop.iterations || 0;
-  const att = loop.attempts || 0;
-  parts.push(formatNumber(iter) + ' iter');
-  if (att !== iter) parts.push(formatNumber(att) + ' att');
-  const totalTok = (loop.total_input_tokens || 0) + (loop.total_output_tokens || 0);
-  if (totalTok > 0) parts.push(formatTokens(totalTok) + ' tok');
-  if (loop.started_at) parts.push(timeAgo(new Date(loop.started_at)));
-  if (loop.last_error) {
-    parts.push('<span class="agg-error">' + escapeHTML(truncate(loop.last_error, 40)) + '</span>');
-  }
-  el.innerHTML = parts.join(' <span class="agg-sep">\u00b7</span> ');
-}
-
-// ---------------------------------------------------------------------------
-// Rendering — Iteration Timeline
-// ---------------------------------------------------------------------------
-
-function renderTimeline(loop) {
-  const container = $('#detail-timeline');
-
-  // Preserve expanded card state across re-renders.
-  const expanded = new Set();
-  container.querySelectorAll('.iter-card--past.iter-card--expanded').forEach(el => {
-    const idx = el.dataset.idx;
-    if (idx != null) expanded.add(idx);
-  });
-
-  container.innerHTML = '';
-
-  const isProcessing = loop.state === 'processing';
-  const isSleeping = loop.state === 'sleeping';
-  const isWaiting = loop.state === 'waiting';
-  const history = state.iterationHistory.get(loop.id) || [];
-
-  // Live card (shown during processing).
-  if (isProcessing && loop._iterStartTs) {
-    container.appendChild(buildLiveCard(loop));
-  }
-
-  // Live connector (between live position and first past card).
-  if ((isSleeping || isWaiting) && history.length > 0) {
-    container.appendChild(buildConnector(loop, history[0], true, state.sleepTimers.get(loop.id)));
-  }
-
-  // Past iteration cards with connectors between them.
-  for (let i = 0; i < history.length; i++) {
-    container.appendChild(buildPastCard(history[i], loop.handler_only, i, expanded.has(String(i))));
-    if (i < history.length - 1) {
-      container.appendChild(buildConnector(loop, history[i], false, null));
-    }
-  }
-}
+// renderAggregates, renderTimeline, clearLiveTelemetry are in shared.js.
 
 function formatFuzzy(ms) {
   const sec = Math.round(ms / 1000);
@@ -1346,6 +1329,86 @@ function renderDetailIDs(loop) {
     }
     row.appendChild(chips);
     container.appendChild(row);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Rendering — Delegate Detail
+// ---------------------------------------------------------------------------
+
+function renderDelegateDetail(loop) {
+  const container = $('#detail-delegate');
+  if (!loop._delegate) {
+    container.hidden = true;
+    return;
+  }
+  container.hidden = false;
+  container.innerHTML = '';
+
+  // Task.
+  if (loop._delegateTask) {
+    const taskEl = document.createElement('div');
+    taskEl.className = 'delegate-field';
+    const label = document.createElement('span');
+    label.className = 'delegate-label';
+    label.textContent = 'Task';
+    taskEl.appendChild(label);
+    const val = document.createElement('span');
+    val.className = 'delegate-value delegate-task';
+    val.textContent = loop._delegateTask;
+    taskEl.appendChild(val);
+    container.appendChild(taskEl);
+  }
+
+  // Guidance.
+  if (loop._delegateGuidance) {
+    const guidEl = document.createElement('div');
+    guidEl.className = 'delegate-field';
+    const label = document.createElement('span');
+    label.className = 'delegate-label';
+    label.textContent = 'Guidance';
+    guidEl.appendChild(label);
+    const val = document.createElement('span');
+    val.className = 'delegate-value';
+    val.textContent = loop._delegateGuidance;
+    guidEl.appendChild(val);
+    container.appendChild(guidEl);
+  }
+
+  // Profile + tags row.
+  const metaRow = document.createElement('div');
+  metaRow.className = 'delegate-meta';
+  if (loop._delegateProfile) {
+    const chip = document.createElement('span');
+    chip.className = 'tag-chip';
+    chip.textContent = loop._delegateProfile;
+    metaRow.appendChild(chip);
+  }
+  if (loop._delegateTags && loop._delegateTags.length > 0) {
+    for (const tag of loop._delegateTags) {
+      const chip = document.createElement('span');
+      chip.className = 'tag-chip tag-chip--muted';
+      chip.textContent = tag;
+      metaRow.appendChild(chip);
+    }
+  }
+  if (metaRow.children.length > 0) container.appendChild(metaRow);
+
+  // Completion result (shown after delegate finishes).
+  if (loop.state === 'completed' || loop.state === 'error') {
+    const resultEl = document.createElement('div');
+    resultEl.className = 'delegate-result ' + (loop._delegateExhausted ? 'delegate-result--failed' : 'delegate-result--ok');
+
+    const icon = loop._delegateExhausted ? '\u2717' : '\u2713';
+    const status = loop._delegateExhausted
+      ? 'Failed' + (loop._delegateExhaustReason ? ' \u2014 ' + loop._delegateExhaustReason : '')
+      : 'Succeeded';
+
+    const parts = [icon + ' ' + status];
+    if (loop._delegateIterations > 0) parts.push(loop._delegateIterations + ' iter');
+    if (loop._delegateDurationMs > 0) parts.push(formatFuzzy(loop._delegateDurationMs));
+    resultEl.textContent = parts.join(' \u00b7 ');
+    container.appendChild(resultEl);
   }
 }
 
@@ -1416,6 +1479,7 @@ async function fetchSystemLogs() {
 
   try {
     const resp = await fetch(url);
+    if (!resp.ok) return;
     const data = await resp.json();
     renderLogs(data.entries || []);
   } catch (err) {
@@ -1430,6 +1494,13 @@ async function fetchSystemLogs() {
 let _lastTickSec = 0;
 
 function tick() {
+  // Physics simulation — run every frame for smooth organic motion.
+  const rect = canvas.getBoundingClientRect();
+  if (rect.width > 0 && rect.height > 0) {
+    physicsStep(rect.width / 2, rect.height / 2, rect.width, rect.height);
+    updateNodePositions();
+  }
+
   // Throttle detail updates to ~1Hz (sleep countdowns don't need 60fps).
   const nowSec = Math.floor(Date.now() / 1000);
   if (nowSec !== _lastTickSec) {
@@ -1602,29 +1673,6 @@ function createSVG(tag, attrs) {
 
 // formatNumber, formatTokens, formatDuration, formatTime, formatTimeShort,
 // timeAgo, parseDuration, formatUptimeLong are in shared.js.
-
-// ---------------------------------------------------------------------------
-// Live Telemetry Timers
-// ---------------------------------------------------------------------------
-
-function startElapsedTimer(loopId) {
-  // Elapsed display is now driven by the 1Hz tick() render cycle.
-  // Keep the timer infrastructure for symmetry with stopElapsedTimer
-  // (which clears _iterStartTs), but no separate interval needed.
-  stopElapsedTimer(loopId);
-}
-
-function stopElapsedTimer(loopId) {
-  state.elapsedTimers.delete(loopId);
-}
-
-function clearLiveTelemetry(loop, loopId) {
-  loop._iterStartTs = null;
-  loop._liveTools = [];
-  loop._liveModel = '';
-  loop._llmContext = null;
-  stopElapsedTimer(loopId);
-}
 
 // ---------------------------------------------------------------------------
 // Footer — version & uptime
