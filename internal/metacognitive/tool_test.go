@@ -18,7 +18,7 @@ func TestAppendEgoObservation_NotRegisteredWithoutEgoFile(t *testing.T) {
 	theLoop := testLoopForTools(t)
 
 	reg := tools.NewRegistry(nil, nil)
-	RegisterTools(reg, theLoop, cfg, workspace, "", nil)
+	RegisterTools(reg, theLoop, cfg, filepath.Join(workspace, cfg.StateFile), "", nil)
 
 	tool := reg.Get("append_ego_observation")
 	if tool != nil {
@@ -33,7 +33,7 @@ func TestAppendEgoObservation_RegisteredWithEgoFile(t *testing.T) {
 	theLoop := testLoopForTools(t)
 
 	reg := tools.NewRegistry(nil, nil)
-	RegisterTools(reg, theLoop, cfg, workspace, egoFile, nil)
+	RegisterTools(reg, theLoop, cfg, filepath.Join(workspace, cfg.StateFile), egoFile, nil)
 
 	tool := reg.Get("append_ego_observation")
 	if tool == nil {
@@ -48,7 +48,7 @@ func TestAppendEgoObservation_CreatesNewFile(t *testing.T) {
 	theLoop := testLoopForTools(t)
 
 	reg := tools.NewRegistry(nil, nil)
-	RegisterTools(reg, theLoop, cfg, workspace, egoPath, nil)
+	RegisterTools(reg, theLoop, cfg, filepath.Join(workspace, cfg.StateFile), egoPath, nil)
 
 	tool := reg.Get("append_ego_observation")
 
@@ -93,7 +93,7 @@ func TestAppendEgoObservation_AppendsToExisting(t *testing.T) {
 	}
 
 	reg := tools.NewRegistry(nil, nil)
-	RegisterTools(reg, theLoop, cfg, workspace, egoPath, nil)
+	RegisterTools(reg, theLoop, cfg, filepath.Join(workspace, cfg.StateFile), egoPath, nil)
 
 	tool := reg.Get("append_ego_observation")
 
@@ -126,7 +126,7 @@ func TestAppendEgoObservation_RejectsShortContent(t *testing.T) {
 	theLoop := testLoopForTools(t)
 
 	reg := tools.NewRegistry(nil, nil)
-	RegisterTools(reg, theLoop, cfg, workspace, egoPath, nil)
+	RegisterTools(reg, theLoop, cfg, filepath.Join(workspace, cfg.StateFile), egoPath, nil)
 
 	tool := reg.Get("append_ego_observation")
 
@@ -161,7 +161,7 @@ func TestAppendEgoObservation_MultipleAppends(t *testing.T) {
 	theLoop := testLoopForTools(t)
 
 	reg := tools.NewRegistry(nil, nil)
-	RegisterTools(reg, theLoop, cfg, workspace, egoPath, nil)
+	RegisterTools(reg, theLoop, cfg, filepath.Join(workspace, cfg.StateFile), egoPath, nil)
 
 	tool := reg.Get("append_ego_observation")
 

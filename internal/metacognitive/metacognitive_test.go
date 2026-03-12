@@ -114,7 +114,7 @@ func TestParseConfig_InvalidDuration(t *testing.T) {
 
 func TestReadStateFile_Missing(t *testing.T) {
 	tmpDir := t.TempDir()
-	_, err := readStateFile(tmpDir, "metacognitive.md")
+	_, err := readStateFile(filepath.Join(tmpDir, "metacognitive.md"))
 	if err == nil {
 		t.Fatal("readStateFile should return error for missing file")
 	}
@@ -128,7 +128,7 @@ func TestReadStateFile_Present(t *testing.T) {
 		t.Fatalf("write state file: %v", err)
 	}
 
-	got, err := readStateFile(tmpDir, "metacognitive.md")
+	got, err := readStateFile(stateFile)
 	if err != nil {
 		t.Fatalf("readStateFile: %v", err)
 	}
@@ -145,7 +145,7 @@ func TestReadStateFile_Truncated(t *testing.T) {
 		t.Fatalf("write state file: %v", err)
 	}
 
-	got, err := readStateFile(tmpDir, "metacognitive.md")
+	got, err := readStateFile(stateFile)
 	if err != nil {
 		t.Fatalf("readStateFile: %v", err)
 	}
@@ -180,7 +180,7 @@ func TestAppendIterationLog(t *testing.T) {
 		Sleep:        8 * time.Minute,
 	}
 
-	appendIterationLog(slog.Default(), statePath, result)
+	appendIterationLog(context.Background(), slog.Default(), statePath, nil, "", result)
 
 	data, err := os.ReadFile(statePath)
 	if err != nil {
@@ -239,7 +239,7 @@ func TestAppendIterationLog_NoStateFile(t *testing.T) {
 		Sleep:        5 * time.Minute,
 	}
 
-	appendIterationLog(slog.Default(), statePath, result)
+	appendIterationLog(context.Background(), slog.Default(), statePath, nil, "", result)
 
 	data, err := os.ReadFile(statePath)
 	if err != nil {
@@ -347,8 +347,12 @@ func TestFormatToolsUsed_Sorted(t *testing.T) {
 // --- BuildLoopConfig tests ---
 
 func TestBuildLoopConfig(t *testing.T) {
+	tmpDir := t.TempDir()
 	cfg := testConfig()
-	opts := Opts{WorkspacePath: t.TempDir()}
+	opts := Opts{
+		WorkspacePath: tmpDir,
+		StateFilePath: filepath.Join(tmpDir, cfg.StateFile),
+	}
 
 	lc := BuildLoopConfig(cfg, opts)
 
@@ -398,12 +402,15 @@ func TestBuildLoopConfig(t *testing.T) {
 func TestBuildLoopConfig_TaskBuilder(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := testConfig()
-	opts := Opts{WorkspacePath: tmpDir}
+	statePath := filepath.Join(tmpDir, cfg.StateFile)
+	opts := Opts{
+		WorkspacePath: tmpDir,
+		StateFilePath: statePath,
+	}
 
 	// Write a state file for the TaskBuilder to read.
 	stateContent := "## Current Sense\nAll systems nominal."
-	stateFile := filepath.Join(tmpDir, cfg.StateFile)
-	if err := os.WriteFile(stateFile, []byte(stateContent), 0644); err != nil {
+	if err := os.WriteFile(statePath, []byte(stateContent), 0644); err != nil {
 		t.Fatalf("write state file: %v", err)
 	}
 
@@ -421,7 +428,10 @@ func TestBuildLoopConfig_TaskBuilder(t *testing.T) {
 func TestBuildLoopConfig_TaskBuilderNoState(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := testConfig()
-	opts := Opts{WorkspacePath: tmpDir}
+	opts := Opts{
+		WorkspacePath: tmpDir,
+		StateFilePath: filepath.Join(tmpDir, cfg.StateFile),
+	}
 
 	lc := BuildLoopConfig(cfg, opts)
 	prompt, err := lc.TaskBuilder(context.Background(), false)
@@ -438,7 +448,11 @@ func TestBuildLoopConfig_TaskBuilderNoState(t *testing.T) {
 func TestBuildLoopConfig_PostIterate(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := testConfig()
-	opts := Opts{WorkspacePath: tmpDir}
+	statePath := filepath.Join(tmpDir, cfg.StateFile)
+	opts := Opts{
+		WorkspacePath: tmpDir,
+		StateFilePath: statePath,
+	}
 
 	lc := BuildLoopConfig(cfg, opts)
 
@@ -457,7 +471,6 @@ func TestBuildLoopConfig_PostIterate(t *testing.T) {
 	}
 
 	// Verify state file was written with iteration log.
-	statePath := filepath.Join(tmpDir, cfg.StateFile)
 	data, err := os.ReadFile(statePath)
 	if err != nil {
 		t.Fatalf("read state: %v", err)
@@ -477,7 +490,7 @@ func TestSetNextSleep_Valid(t *testing.T) {
 	theLoop := testLoopForTools(t)
 
 	reg := tools.NewRegistry(nil, nil)
-	RegisterTools(reg, theLoop, cfg, workspace, "", nil)
+	RegisterTools(reg, theLoop, cfg, filepath.Join(workspace, cfg.StateFile), "", nil)
 
 	tool := reg.Get("set_next_sleep")
 	if tool == nil {
@@ -503,7 +516,7 @@ func TestSetNextSleep_Clamped(t *testing.T) {
 	theLoop := testLoopForTools(t)
 
 	reg := tools.NewRegistry(nil, nil)
-	RegisterTools(reg, theLoop, cfg, workspace, "", nil)
+	RegisterTools(reg, theLoop, cfg, filepath.Join(workspace, cfg.StateFile), "", nil)
 
 	tool := reg.Get("set_next_sleep")
 
@@ -536,7 +549,7 @@ func TestSetNextSleep_InvalidFormat(t *testing.T) {
 	theLoop := testLoopForTools(t)
 
 	reg := tools.NewRegistry(nil, nil)
-	RegisterTools(reg, theLoop, cfg, workspace, "", nil)
+	RegisterTools(reg, theLoop, cfg, filepath.Join(workspace, cfg.StateFile), "", nil)
 
 	tool := reg.Get("set_next_sleep")
 
@@ -554,7 +567,7 @@ func TestSetNextSleep_MissingDuration(t *testing.T) {
 	theLoop := testLoopForTools(t)
 
 	reg := tools.NewRegistry(nil, nil)
-	RegisterTools(reg, theLoop, cfg, workspace, "", nil)
+	RegisterTools(reg, theLoop, cfg, filepath.Join(workspace, cfg.StateFile), "", nil)
 
 	tool := reg.Get("set_next_sleep")
 
@@ -570,7 +583,7 @@ func TestSetNextSleep_IntegerMinutes(t *testing.T) {
 	theLoop := testLoopForTools(t)
 
 	reg := tools.NewRegistry(nil, nil)
-	RegisterTools(reg, theLoop, cfg, workspace, "", nil)
+	RegisterTools(reg, theLoop, cfg, filepath.Join(workspace, cfg.StateFile), "", nil)
 
 	tool := reg.Get("set_next_sleep")
 
@@ -595,7 +608,7 @@ func TestUpdateMetacognitiveState_Valid(t *testing.T) {
 	theLoop := testLoopForTools(t)
 
 	reg := tools.NewRegistry(nil, nil)
-	RegisterTools(reg, theLoop, cfg, workspace, "", nil)
+	RegisterTools(reg, theLoop, cfg, filepath.Join(workspace, cfg.StateFile), "", nil)
 
 	tool := reg.Get("update_metacognitive_state")
 	if tool == nil {
@@ -630,7 +643,7 @@ func TestUpdateMetacognitiveState_MetadataFooter(t *testing.T) {
 	theLoop := testLoopForTools(t)
 
 	reg := tools.NewRegistry(nil, nil)
-	RegisterTools(reg, theLoop, cfg, workspace, "", nil)
+	RegisterTools(reg, theLoop, cfg, filepath.Join(workspace, cfg.StateFile), "", nil)
 
 	tool := reg.Get("update_metacognitive_state")
 	content := "## Current Sense\nAll systems nominal. Nothing to report. Sleeping for a while."
@@ -671,7 +684,7 @@ func TestUpdateMetacognitiveState_PrevFile(t *testing.T) {
 	}
 
 	reg := tools.NewRegistry(nil, nil)
-	RegisterTools(reg, theLoop, cfg, workspace, "", nil)
+	RegisterTools(reg, theLoop, cfg, filepath.Join(workspace, cfg.StateFile), "", nil)
 
 	tool := reg.Get("update_metacognitive_state")
 	newContent := "## Updated Content\nNew observations from the latest iteration of monitoring."
@@ -700,7 +713,7 @@ func TestUpdateMetacognitiveState_EmptyRejected(t *testing.T) {
 	theLoop := testLoopForTools(t)
 
 	reg := tools.NewRegistry(nil, nil)
-	RegisterTools(reg, theLoop, cfg, workspace, "", nil)
+	RegisterTools(reg, theLoop, cfg, filepath.Join(workspace, cfg.StateFile), "", nil)
 
 	tool := reg.Get("update_metacognitive_state")
 

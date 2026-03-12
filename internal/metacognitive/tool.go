@@ -9,7 +9,6 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/logging"
 	"github.com/nugget/thane-ai-agent/internal/loop"
-	"github.com/nugget/thane-ai-agent/internal/provenance"
 	"github.com/nugget/thane-ai-agent/internal/tools"
 )
 
@@ -23,6 +22,9 @@ const minStateContentLen = 50
 // during iterations to control sleep timing, persist its state file,
 // and contribute observations to ego.md.
 //
+// stateFilePath is the resolved absolute path to the state file (either
+// inside the provenance store or the workspace, depending on config).
+//
 // When store is non-nil, file writes go through the provenance store
 // (auto-committed with SSH signatures). When nil, files are written
 // directly via os.WriteFile (backward compatible).
@@ -30,8 +32,8 @@ const minStateContentLen = 50
 // Tool handlers capture theLoop via closure to communicate with the
 // running loop goroutine (e.g., setting sleep durations, reading the
 // current conversation ID).
-func RegisterTools(registry *tools.Registry, theLoop *loop.Loop, cfg Config, workspacePath, egoFile string, store *provenance.Store) {
-	statePath := stateFilePath(workspacePath, cfg.StateFile)
+func RegisterTools(registry *tools.Registry, theLoop *loop.Loop, cfg Config, stateFilePath, egoFile string, store ProvenanceWriter) {
+	statePath := stateFilePath
 
 	registry.Register(&tools.Tool{
 		Name: "set_next_sleep",
@@ -125,12 +127,14 @@ func RegisterTools(registry *tools.Registry, theLoop *loop.Loop, cfg Config, wor
 
 			if store != nil {
 				// Write through provenance store — auto-committed
-				// with SSH signature.
-				if err := store.Write(ctx, cfg.StateFile, fullContent, convID); err != nil {
+				// with SSH signature. Use filepath.Base to normalize
+				// paths like "Thane/metacognitive.md" to a flat layout.
+				storeFilename := filepath.Base(cfg.StateFile)
+				if err := store.Write(ctx, storeFilename, fullContent, convID); err != nil {
 					return "", fmt.Errorf("write state via provenance: %w", err)
 				}
 				log.Info("metacognitive state committed to provenance",
-					"file", cfg.StateFile,
+					"file", storeFilename,
 					"bytes", len(fullContent),
 				)
 				return fmt.Sprintf("State file committed (%d bytes) to provenance store.", len(fullContent)), nil
