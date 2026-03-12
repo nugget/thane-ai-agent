@@ -160,6 +160,9 @@ type Config struct {
 	// tool gating for delegation-first architecture.
 	Agent AgentConfig `yaml:"agent"`
 
+	// Delegate configures the thane_delegate tool's split-model execution.
+	Delegate DelegateConfig `yaml:"delegate"`
+
 	// CapabilityTags defines named groups of tools and talents that
 	// can be activated or deactivated per session. Tags marked
 	// always_active are loaded unconditionally. Other tags are
@@ -604,6 +607,37 @@ type AgentConfig struct {
 	// DelegationRequired enables orchestrator tool gating. When false
 	// (the default), all tools are available on every iteration.
 	DelegationRequired bool `yaml:"delegation_required"`
+}
+
+// DelegateConfig configures the thane_delegate tool's split-model
+// execution behavior.
+type DelegateConfig struct {
+	// Profiles contains per-profile overrides. The map key is the
+	// profile name (e.g., "general", "ha"). Only fields that are set
+	// override the builtin defaults — omitted fields keep their
+	// compiled-in values.
+	Profiles map[string]DelegateProfileConfig `yaml:"profiles"`
+}
+
+// DelegateProfileConfig holds configurable overrides for a delegate
+// profile. Zero-value fields are ignored (builtin defaults apply).
+type DelegateProfileConfig struct {
+	// ToolTimeout is the maximum time a single tool call may run
+	// before being cancelled. Accepts Go duration strings (e.g.,
+	// "30s", "3m", "5m"). Zero keeps the builtin default (30s).
+	ToolTimeout time.Duration `yaml:"tool_timeout"`
+
+	// MaxDuration is the maximum wall clock time for the entire
+	// delegation loop. Zero keeps the builtin default (90s).
+	MaxDuration time.Duration `yaml:"max_duration"`
+
+	// MaxIter is the maximum number of tool-calling iterations.
+	// Zero keeps the builtin default (15).
+	MaxIter int `yaml:"max_iter"`
+
+	// MaxTokens is the maximum cumulative output tokens before
+	// budget exhaustion. Zero keeps the builtin default (25000).
+	MaxTokens int `yaml:"max_tokens"`
 }
 
 // CapabilityTagConfig defines a named group of tools (and optionally
