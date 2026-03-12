@@ -72,6 +72,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/server/api"
 	"github.com/nugget/thane-ai-agent/internal/server/web"
 	"github.com/nugget/thane-ai-agent/internal/talents"
+	"github.com/nugget/thane-ai-agent/internal/telemetry"
 	"github.com/nugget/thane-ai-agent/internal/tools"
 	"github.com/nugget/thane-ai-agent/internal/unifi"
 	"github.com/nugget/thane-ai-agent/internal/usage"
@@ -2561,6 +2562,75 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		})
 
 		logger.Info("mqtt AP presence sensors registered", "count", len(apSensors))
+	}
+
+	// --- MQTT telemetry ---
+	// When enabled, a dedicated loop collects operational metrics
+	// (DB sizes, token usage, loop states, sessions, request perf,
+	// attachments) and publishes them as native HA sensors.
+	if mqttPub != nil && cfg.MQTT.Telemetry.Enabled {
+		telBuilder := &telemetry.SensorBuilder{
+			InstanceID:        mqttInstanceID,
+			Prefix:            mqttPub.ObjectIDPrefix(),
+			StateTopicFn:      mqttPub.StateTopic,
+			AttributesTopicFn: mqttPub.AttributesTopic,
+			AvailabilityTopic: mqttPub.AvailabilityTopic(),
+			Device:            mqttPub.Device(),
+		}
+
+		mqttPub.RegisterSensors(telBuilder.StaticSensors())
+
+		dbPaths := map[string]string{
+			"main":  filepath.Join(cfg.DataDir, "thane.db"),
+			"usage": filepath.Join(cfg.DataDir, "usage.db"),
+		}
+		if logDir := cfg.Logging.DirPath(); logDir != "" {
+			dbPaths["logs"] = filepath.Join(logDir, "logs.db")
+		}
+		if cfg.Attachments.StoreDir != "" {
+			dbPaths["attachments"] = filepath.Join(cfg.DataDir, "attachments.db")
+		}
+
+		telSources := telemetry.Sources{
+			LoopRegistry: loopRegistry,
+			UsageStore:   usageStore,
+			ArchiveStore: archiveStore,
+			LogsDB:       indexDB,
+			DBPaths:      dbPaths,
+			Logger:       logger,
+		}
+		if attachmentStore != nil {
+			telSources.AttachmentSource = attachmentStore
+		}
+
+		telCollector := telemetry.NewCollector(telSources)
+		telPub := telemetry.NewPublisher(telCollector, mqttPub, telBuilder, logger)
+
+		telInterval := time.Duration(cfg.MQTT.Telemetry.Interval) * time.Second
+		if _, err := loopRegistry.SpawnLoop(ctx, looppkg.Config{
+			Name:         "mqtt-telemetry",
+			SleepMin:     telInterval,
+			SleepMax:     telInterval,
+			SleepDefault: telInterval,
+			Jitter:       looppkg.Float64Ptr(0),
+			Handler: func(ctx context.Context, _ any) error {
+				return telPub.Publish(ctx)
+			},
+			Metadata: map[string]string{
+				"subsystem": "mqtt",
+				"category":  "telemetry",
+			},
+		}, looppkg.Deps{
+			Logger:   logger,
+			EventBus: eventBus,
+		}); err != nil {
+			return fmt.Errorf("spawn mqtt-telemetry loop: %w", err)
+		}
+
+		logger.Info("mqtt telemetry enabled",
+			"interval", cfg.MQTT.Telemetry.Interval,
+			"db_paths", len(dbPaths),
+		)
 	}
 
 	// --- Loop visualizer ---

@@ -77,6 +77,9 @@ models:
 #   discovery_prefix: homeassistant    # default
 #   device_name: thane-ai-agent        # unique name for this instance
 #   publish_interval: 60               # seconds, default
+#   telemetry:                         # operational metric publishing
+#     enabled: true                    # publish system health, token usage, loops, etc.
+#     interval: 60                     # seconds between telemetry publishes (min 10)
 #   subscriptions:                     # topics to subscribe for ambient awareness
 #     - topic: homeassistant/+/+/state   # HA entity state changes
 #     - topic: frigate/events            # Frigate camera events

@@ -1668,6 +1668,16 @@ func (s *ArchiveStore) ActiveSession(conversationID string) (*Session, error) {
 	return sess, err
 }
 
+// ActiveSessionCount returns the number of unclosed (active) sessions.
+// This is a lightweight query for telemetry dashboards — use
+// [ArchiveStore.ActiveSessionsWithLastActivity] when per-session
+// details are needed.
+func (s *ArchiveStore) ActiveSessionCount() (int, error) {
+	var count int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM sessions WHERE ended_at IS NULL`).Scan(&count)
+	return count, err
+}
+
 // ActiveSessionsWithLastActivity returns all unclosed sessions and the
 // timestamp of the most recent message in each. Sessions with no messages
 // use the session's started_at as the last activity time. This powers the
