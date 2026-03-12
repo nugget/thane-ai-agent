@@ -904,10 +904,10 @@ function renderNode(loop) {
     });
 
     // Sleep progress ring (always a circle).
-    const circumference = 2 * Math.PI * (nodeR + 4);
+    const circumference = 2 * Math.PI * (nodeR);
     const sleepRing = createSVG('circle', {
       class: 'sleep-ring',
-      r: nodeR + 4,
+      r: nodeR,
       'stroke-dasharray': circumference,
       'stroke-dashoffset': circumference,
     });
@@ -965,7 +965,7 @@ function renderNode(loop) {
     const newRingR = nodeR + 12;
     group.querySelector('.node-ring').setAttribute('r', newRingR);
     const sleepRing = group.querySelector('.sleep-ring');
-    const newSleepR = nodeR + 4;
+    const newSleepR = nodeR;
     sleepRing.setAttribute('r', newSleepR);
     const circ = 2 * Math.PI * newSleepR;
     sleepRing.setAttribute('stroke-dasharray', circ);

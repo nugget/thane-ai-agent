@@ -1134,7 +1134,7 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
 .sleep-ring {
   fill: none;
   stroke: var(--blue);
-  stroke-width: 2;
+  stroke-width: 8;
   opacity: 0.4;
   stroke-linecap: round;
   transform-origin: 0 0;
