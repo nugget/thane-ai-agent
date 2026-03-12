@@ -1514,3 +1514,149 @@ func TestHandlerPostIterate(t *testing.T) {
 		}
 	}
 }
+
+func TestHandlerSummary(t *testing.T) {
+	t.Parallel()
+
+	l, err := New(Config{
+		Name:         "handler-summary",
+		SleepMin:     1 * time.Millisecond,
+		SleepMax:     2 * time.Millisecond,
+		SleepDefault: 1 * time.Millisecond,
+		Jitter:       Float64Ptr(0),
+		MaxIter:      2,
+		Handler: func(ctx context.Context, _ any) error {
+			summary := IterationSummary(ctx)
+			if summary != nil {
+				summary["devices_located"] = 5
+				summary["rooms_updated"] = 2
+			}
+			return nil
+		},
+	}, Deps{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	_ = l.Start(context.Background())
+	<-l.Done()
+
+	status := l.Status()
+	if len(status.RecentIterations) != 2 {
+		t.Fatalf("RecentIterations = %d, want 2", len(status.RecentIterations))
+	}
+
+	// Most recent iteration is first (ring buffer prepends).
+	for i, snap := range status.RecentIterations {
+		if snap.Summary == nil {
+			t.Fatalf("RecentIterations[%d].Summary is nil", i)
+		}
+		if snap.Summary["devices_located"] != 5 {
+			t.Errorf("RecentIterations[%d].Summary[devices_located] = %v, want 5", i, snap.Summary["devices_located"])
+		}
+		if snap.Summary["rooms_updated"] != 2 {
+			t.Errorf("RecentIterations[%d].Summary[rooms_updated] = %v, want 2", i, snap.Summary["rooms_updated"])
+		}
+	}
+}
+
+// progressRunner calls OnProgress with a KindLoopLLMStart event, then
+// blocks until released so the test can inspect Status() mid-iteration.
+type progressRunner struct {
+	gate chan struct{} // close to let Run return
+}
+
+func (r *progressRunner) Run(_ context.Context, req RunRequest, _ StreamCallback) (*RunResponse, error) {
+	if req.OnProgress != nil {
+		req.OnProgress(events.KindLoopLLMStart, map[string]any{
+			"model":      "test-model",
+			"est_tokens": 12345,
+			"messages":   3,
+			"tools":      7,
+			"complexity": "moderate",
+			"intent":     "check_status",
+		})
+	}
+	<-r.gate
+	return &RunResponse{
+		Content:      "ok",
+		Model:        "test-model",
+		InputTokens:  100,
+		OutputTokens: 20,
+	}, nil
+}
+
+func TestLLMContextInStatus(t *testing.T) {
+	t.Parallel()
+
+	bus := events.New()
+	gate := make(chan struct{})
+	runner := &progressRunner{gate: gate}
+
+	l, err := New(Config{
+		Name:         "llm-ctx-test",
+		Task:         "test",
+		SleepMin:     1 * time.Millisecond,
+		SleepMax:     2 * time.Millisecond,
+		SleepDefault: 1 * time.Millisecond,
+		Jitter:       Float64Ptr(0),
+		MaxIter:      1,
+	}, Deps{Runner: runner, EventBus: bus})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx := context.Background()
+	_ = l.Start(ctx)
+
+	// Wait until the loop is processing (runner is blocked on gate).
+	deadline := time.After(5 * time.Second)
+	for l.Status().State != StateProcessing {
+		select {
+		case <-deadline:
+			t.Fatal("loop never entered processing state")
+		default:
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+
+	// Give the progress callback a moment to fire.
+	time.Sleep(50 * time.Millisecond)
+
+	// Status should include LLM context while processing.
+	status := l.Status()
+	if status.LLMContext == nil {
+		t.Fatal("Status().LLMContext is nil during processing")
+	}
+	if status.LLMContext["model"] != "test-model" {
+		t.Errorf("LLMContext[model] = %v, want test-model", status.LLMContext["model"])
+	}
+	if status.LLMContext["est_tokens"] != 12345 {
+		t.Errorf("LLMContext[est_tokens] = %v, want 12345", status.LLMContext["est_tokens"])
+	}
+	if status.LLMContext["messages"] != 3 {
+		t.Errorf("LLMContext[messages] = %v, want 3", status.LLMContext["messages"])
+	}
+	if status.LLMContext["complexity"] != "moderate" {
+		t.Errorf("LLMContext[complexity] = %v, want moderate", status.LLMContext["complexity"])
+	}
+
+	// LLMContext should not contain loop infrastructure keys.
+	if _, ok := status.LLMContext["loop_id"]; ok {
+		t.Error("LLMContext should not contain loop_id")
+	}
+
+	// Release the runner so the iteration completes.
+	close(gate)
+	select {
+	case <-l.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("loop did not finish")
+	}
+
+	// After iteration completes, LLMContext should be cleared.
+	status = l.Status()
+	if status.LLMContext != nil {
+		t.Errorf("LLMContext should be nil after iteration, got %v", status.LLMContext)
+	}
+}

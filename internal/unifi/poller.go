@@ -2,10 +2,13 @@ package unifi
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/nugget/thane-ai-agent/internal/loop"
 )
 
 // RoomUpdater is the interface the person tracker must satisfy for the
@@ -73,29 +76,15 @@ func NewPoller(cfg PollerConfig) *Poller {
 	}
 }
 
-// Start runs the polling loop until ctx is cancelled. It blocks.
-func (p *Poller) Start(ctx context.Context) {
-	ticker := time.NewTicker(p.cfg.PollInterval)
-	defer ticker.Stop()
+// Poll executes a single poll cycle: query the controller for device
+// locations, apply debounce, and push room updates to the tracker.
+// Returns an error if the device locator fails; all other paths succeed.
+func (p *Poller) Poll(ctx context.Context) error {
+	summary := loop.IterationSummary(ctx)
 
-	// Poll immediately on start.
-	p.poll(ctx)
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			p.poll(ctx)
-		}
-	}
-}
-
-func (p *Poller) poll(ctx context.Context) {
 	locations, err := p.cfg.Locator.LocateDevices(ctx)
 	if err != nil {
-		p.cfg.Logger.Warn("unifi poll failed", "error", err)
-		return
+		return fmt.Errorf("locate devices: %w", err)
 	}
 
 	// Build MAC → DeviceLocation index, keeping only tracked MACs.
@@ -145,6 +134,7 @@ func (p *Poller) poll(ctx context.Context) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
+	var roomsUpdated, pendingCount int
 	for entityID, best := range entityBest {
 		pend, exists := p.pending[entityID]
 		if !exists || pend.room != best.room {
@@ -154,6 +144,7 @@ func (p *Poller) poll(ctx context.Context) {
 				source: best.source,
 				count:  1,
 			}
+			pendingCount++
 			p.cfg.Logger.Debug("room change candidate",
 				"entity_id", entityID,
 				"candidate_room", best.room,
@@ -166,12 +157,15 @@ func (p *Poller) poll(ctx context.Context) {
 		pend.count++
 		if pend.count >= debounceThreshold {
 			p.cfg.Updater.UpdateRoom(entityID, best.room, best.source)
+			roomsUpdated++
 			p.cfg.Logger.Log(ctx, slog.Level(-8), "room update committed", // config.LevelTrace
 				"entity_id", entityID,
 				"room", best.room,
 				"source", best.source,
 				"polls", pend.count,
 			)
+		} else {
+			pendingCount++
 		}
 	}
 
@@ -181,4 +175,13 @@ func (p *Poller) poll(ctx context.Context) {
 			delete(p.pending, entityID)
 		}
 	}
+
+	// Report metrics to the loop dashboard.
+	if summary != nil {
+		summary["devices_located"] = len(macIndex)
+		summary["rooms_updated"] = roomsUpdated
+		summary["pending_changes"] = pendingCount
+	}
+
+	return nil
 }

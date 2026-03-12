@@ -71,6 +71,8 @@ const (
 	KindToolCallStart = llm.KindToolCallStart
 	KindToolCallDone  = llm.KindToolCallDone
 	KindDone          = llm.KindDone
+	KindLLMResponse   = llm.KindLLMResponse
+	KindLLMStart      = llm.KindLLMStart
 )
 
 // maxEgoBytes is the maximum size of ego.md content injected into the
@@ -1182,6 +1184,28 @@ iterLoop:
 			"system_tokens", systemTokens,
 		)
 
+		// Notify consumers that an LLM call is starting (model is known).
+		if stream != nil {
+			startData := map[string]any{
+				"est_tokens": iterMsgTokens + systemTokens,
+				"messages":   len(llmMessages),
+				"tools":      len(toolDefs),
+				"iteration":  i,
+			}
+			if routerDecision != nil {
+				startData["complexity"] = routerDecision.Complexity.String()
+				if routerDecision.DetectedIntent != "" {
+					startData["intent"] = routerDecision.DetectedIntent
+				}
+				startData["reasoning"] = routerDecision.Reasoning
+			}
+			stream(llm.StreamEvent{
+				Kind:     llm.KindLLMStart,
+				Response: &llm.ChatResponse{Model: model},
+				Data:     startData,
+			})
+		}
+
 		// Use streaming to avoid HTTP timeouts on slow models
 		llmResp, err := l.llm.ChatStream(iterCtx, model, llmMessages, toolDefs, stream)
 		if err != nil {
@@ -1216,6 +1240,16 @@ iterLoop:
 		// Accumulate token usage
 		totalInputTokens += llmResp.InputTokens
 		totalOutputTokens += llmResp.OutputTokens
+
+		// Emit LLM response event for streaming consumers. Fires
+		// before tool execution so the caller sees model and token
+		// info as early as possible.
+		if stream != nil {
+			stream(llm.StreamEvent{
+				Kind:     llm.KindLLMResponse,
+				Response: llmResp,
+			})
+		}
 
 		iterLog.Info("llm response",
 			"model", model,

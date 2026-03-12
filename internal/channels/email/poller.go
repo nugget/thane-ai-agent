@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/nugget/thane-ai-agent/internal/loop"
 	"github.com/nugget/thane-ai-agent/internal/opstate"
 )
 
@@ -53,11 +54,12 @@ func (p *Poller) CheckNewMessages(ctx context.Context) (string, error) {
 
 	var sections []string
 	var failed int
+	var totalNew int
 
 	for _, name := range accounts {
 		p.logger.Debug("email poll checking account", "account", name)
 
-		section, err := p.checkAccount(ctx, name)
+		section, count, err := p.checkAccount(ctx, name)
 		if err != nil {
 			failed++
 			p.logger.Warn("email poll failed for account",
@@ -66,6 +68,7 @@ func (p *Poller) CheckNewMessages(ctx context.Context) (string, error) {
 			)
 			continue
 		}
+		totalNew += count
 		if section != "" {
 			sections = append(sections, section)
 		}
@@ -76,6 +79,15 @@ func (p *Poller) CheckNewMessages(ctx context.Context) (string, error) {
 		"accounts_with_new", len(sections),
 		"failed", failed,
 	)
+
+	// Report iteration summary stats for the loop dashboard.
+	if summary := loop.IterationSummary(ctx); summary != nil {
+		summary["accounts_checked"] = len(accounts)
+		summary["new_messages"] = totalNew
+		if failed > 0 {
+			summary["failed"] = failed
+		}
+	}
 
 	if len(sections) == 0 {
 		return "", nil
@@ -91,12 +103,12 @@ func (p *Poller) CheckNewMessages(ctx context.Context) (string, error) {
 }
 
 // checkAccount checks a single account's INBOX for new messages.
-// Returns a formatted section for the wake message, or empty string
-// if no new messages were found.
-func (p *Poller) checkAccount(ctx context.Context, accountName string) (string, error) {
+// Returns a formatted section for the wake message (or empty string if
+// nothing new), the count of new messages found, and any error.
+func (p *Poller) checkAccount(ctx context.Context, accountName string) (string, int, error) {
 	client, err := p.manager.Account(accountName)
 	if err != nil {
-		return "", fmt.Errorf("get account %q: %w", accountName, err)
+		return "", 0, fmt.Errorf("get account %q: %w", accountName, err)
 	}
 
 	stateKey := accountName + ":INBOX"
@@ -104,7 +116,7 @@ func (p *Poller) checkAccount(ctx context.Context, accountName string) (string, 
 	// Load the stored high-water mark.
 	storedStr, err := p.state.Get(pollNamespace, stateKey)
 	if err != nil {
-		return "", fmt.Errorf("get high-water mark %q: %w", stateKey, err)
+		return "", 0, fmt.Errorf("get high-water mark %q: %w", stateKey, err)
 	}
 
 	var storedUID uint64
@@ -117,10 +129,10 @@ func (p *Poller) checkAccount(ctx context.Context, accountName string) (string, 
 			Limit:  1,
 		})
 		if err != nil {
-			return "", fmt.Errorf("seed list %q: %w", accountName, err)
+			return "", 0, fmt.Errorf("seed list %q: %w", accountName, err)
 		}
 		if len(envelopes) == 0 {
-			return "", nil // empty mailbox, nothing to seed
+			return "", 0, nil // empty mailbox, nothing to seed
 		}
 		seedUID := envelopes[0].UID
 		p.logger.Info("email poll first run, seeding high-water mark",
@@ -128,9 +140,9 @@ func (p *Poller) checkAccount(ctx context.Context, accountName string) (string, 
 			"uid", seedUID,
 		)
 		if err := p.state.Set(pollNamespace, stateKey, strconv.FormatUint(uint64(seedUID), 10)); err != nil {
-			return "", fmt.Errorf("seed high-water mark %q: %w", stateKey, err)
+			return "", 0, fmt.Errorf("seed high-water mark %q: %w", stateKey, err)
 		}
-		return "", nil
+		return "", 0, nil
 
 	default:
 		parsed, err := strconv.ParseUint(storedStr, 10, 32)
@@ -145,14 +157,14 @@ func (p *Poller) checkAccount(ctx context.Context, accountName string) (string, 
 				Limit:  1,
 			})
 			if err != nil {
-				return "", fmt.Errorf("reseed list %q: %w", accountName, err)
+				return "", 0, fmt.Errorf("reseed list %q: %w", accountName, err)
 			}
 			if len(envelopes) > 0 {
 				if err := p.state.Set(pollNamespace, stateKey, strconv.FormatUint(uint64(envelopes[0].UID), 10)); err != nil {
-					return "", fmt.Errorf("reseed high-water mark %q: %w", stateKey, err)
+					return "", 0, fmt.Errorf("reseed high-water mark %q: %w", stateKey, err)
 				}
 			}
-			return "", nil
+			return "", 0, nil
 		}
 		storedUID = parsed
 	}
@@ -169,7 +181,7 @@ func (p *Poller) checkAccount(ctx context.Context, accountName string) (string, 
 		SinceUID: uint32(storedUID),
 	})
 	if err != nil {
-		return "", fmt.Errorf("list messages %q: %w", accountName, err)
+		return "", 0, fmt.Errorf("list messages %q: %w", accountName, err)
 	}
 
 	p.logger.Debug("email poll IMAP results",
@@ -178,13 +190,13 @@ func (p *Poller) checkAccount(ctx context.Context, accountName string) (string, 
 	)
 
 	if len(newMessages) == 0 {
-		return "", nil
+		return "", 0, nil
 	}
 
 	// Always advance the high-water mark based on ALL fetched messages
 	// (before filtering) so self-sent messages don't re-appear.
 	if err := p.advanceHighWaterMark(accountName, stateKey, storedUID, newMessages); err != nil {
-		return "", err
+		return "", 0, err
 	}
 
 	// Filter out self-sent messages so the agent doesn't triage its
@@ -200,7 +212,7 @@ func (p *Poller) checkAccount(ctx context.Context, accountName string) (string, 
 		)
 	}
 	if len(newMessages) == 0 {
-		return "", nil
+		return "", 0, nil
 	}
 
 	p.logger.Debug("email poll account done",
@@ -208,7 +220,7 @@ func (p *Poller) checkAccount(ctx context.Context, accountName string) (string, 
 		"new_messages", len(newMessages),
 	)
 
-	return formatPollSection(accountName, newMessages), nil
+	return formatPollSection(accountName, newMessages), len(newMessages), nil
 }
 
 // filterSelfSent removes messages where From matches the account's

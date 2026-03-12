@@ -131,7 +131,13 @@
       flex: 1;
       overflow-y: auto;
       padding: 0.75rem;
+      scrollbar-width: thin;
+      scrollbar-color: var(--border) transparent;
     }
+    .inspector-body::-webkit-scrollbar { width: 6px; }
+    .inspector-body::-webkit-scrollbar-track { background: transparent; }
+    .inspector-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+    .inspector-body::-webkit-scrollbar-thumb:hover { background: var(--border-light); }
     /* (status bar removed — connection state shown via dot in inspector) */
   </style>
 </head>
@@ -171,27 +177,12 @@
             <span id="detail-state" class="state-badge"></span>
           </div>
           <div id="detail-ids" class="detail-ids"></div>
-          <dl id="detail-forward" class="detail-metrics detail-metrics--forward" hidden>
-            <dt id="detail-sleep-label" hidden>Sleep</dt>
-            <dd id="detail-sleep" hidden>-</dd>
-          </dl>
-          <div id="detail-supervisor" class="supervisor-bar" hidden></div>
-          <hr class="detail-divider" id="detail-divider" hidden>
-          <dl class="detail-metrics detail-metrics--history">
-            <dt>Iterations</dt><dd id="detail-iterations">-</dd>
-            <dt>Attempts</dt><dd id="detail-attempts">-</dd>
-            <dt>Input Tokens</dt><dd id="detail-input-tokens">-</dd>
-            <dt>Output Tokens</dt><dd id="detail-output-tokens">-</dd>
-            <dt>Last Model</dt><dd id="detail-model">-</dd>
-            <dt>Last Error</dt><dd id="detail-error" class="detail-error">-</dd>
-            <dt>Started</dt><dd id="detail-started">-</dd>
-          </dl>
+          <div id="detail-aggregates" class="detail-aggregates"></div>
+          <div id="detail-timeline" class="iter-timeline"></div>
           <div id="detail-tags" class="detail-tags" hidden>
             <h3 class="section-title">Capabilities</h3>
             <div id="detail-tags-list" class="tag-list"></div>
           </div>
-          <h3 class="section-title">Recent Events</h3>
-          <ul id="event-list" class="event-list"></ul>
         </div>
 
         <!-- System detail (shown for type=system) -->
@@ -233,6 +224,7 @@
     </section>
   </div>
 
+  <script src="/static/shared.js"></script>
   <script src="/static/detail.js"></script>
 </body>
 </html>

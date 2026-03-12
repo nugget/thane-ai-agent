@@ -41,40 +41,16 @@
 
         <div id="detail-ids" class="detail-ids"></div>
 
-        <!-- Forward-looking: what's next -->
-        <dl id="detail-forward" class="detail-metrics detail-metrics--forward">
-          <dt id="detail-sleep-label" hidden>Sleep</dt>
-          <dd id="detail-sleep" hidden>-</dd>
-        </dl>
-        <div id="detail-supervisor" class="supervisor-bar" hidden></div>
+        <!-- Aggregate stats (compact, single row) -->
+        <div id="detail-aggregates" class="detail-aggregates"></div>
 
-        <hr class="detail-divider" id="detail-divider">
-
-        <!-- Historical: what happened -->
-        <dl class="detail-metrics detail-metrics--history">
-          <dt>Iterations</dt>
-          <dd id="detail-iterations">-</dd>
-          <dt>Attempts</dt>
-          <dd id="detail-attempts">-</dd>
-          <dt>Input Tokens</dt>
-          <dd id="detail-input-tokens">-</dd>
-          <dt>Output Tokens</dt>
-          <dd id="detail-output-tokens">-</dd>
-          <dt>Last Model</dt>
-          <dd id="detail-model">-</dd>
-          <dt>Last Error</dt>
-          <dd id="detail-error" class="detail-error">-</dd>
-          <dt>Started</dt>
-          <dd id="detail-started">-</dd>
-        </dl>
+        <!-- Iteration timeline (JS-populated) -->
+        <div id="detail-timeline" class="iter-timeline"></div>
 
         <div id="detail-tags" class="detail-tags" hidden>
           <h3 class="section-title">Capabilities</h3>
           <div id="detail-tags-list" class="tag-list"></div>
         </div>
-
-        <h3 class="section-title">Recent Events</h3>
-        <ul id="event-list" class="event-list"></ul>
       </div>
       <div id="system-detail" class="detail-content" hidden>
         <div class="detail-header">
@@ -146,6 +122,7 @@
     <ul id="context-menu-items"></ul>
   </div>
 
+  <script src="/static/shared.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>

@@ -437,6 +437,25 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// Zero cost when nobody subscribes.
 	eventBus := events.New()
 
+	// --- Loop registry ---
+	// Tracks all persistent background loops (metacognitive, pollers,
+	// watchers). Created early so component init blocks can register
+	// loops before the web dashboard is wired up.
+	loopRegistry := looppkg.NewRegistry(looppkg.WithRegistryLogger(logger))
+	defer func() {
+		shutCtx, shutCancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer shutCancel()
+		loopRegistry.ShutdownAll(shutCtx)
+	}()
+
+	// --- Demo loops (debug) ---
+	if cfg.Debug.DemoLoops {
+		if err := looppkg.SpawnDemoLoops(ctx, loopRegistry, eventBus, logger); err != nil {
+			return fmt.Errorf("spawn demo loops: %w", err)
+		}
+		logger.Warn("demo loops enabled — dashboard shows simulated activity")
+	}
+
 	// --- Memory store ---
 	// SQLite-backed conversation memory. Persists across restarts so the
 	// agent can resume in-progress conversations.
@@ -956,50 +975,28 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		}
 
 		// --- Email polling ---
-		// Periodic IMAP check for new messages. Runs via the scheduler;
-		// the poller checks UIDs against a high-water mark and only
-		// wakes the agent when something new arrives.
+		// Periodic IMAP check for new messages via the loop infrastructure.
+		// The handler checks UIDs against a high-water mark and dispatches
+		// an agent conversation only when new mail is detected.
 		if cfg.Email.PollIntervalSec > 0 {
 			poller := email.NewPoller(emailMgr, opStore, logger)
-			deps.emailPoller = poller
-
 			pollInterval := time.Duration(cfg.Email.PollIntervalSec) * time.Second
-			existing, err := schedStore.GetTaskByName(emailPollTaskName)
-			if err != nil {
-				logger.Error("failed to check for email_poll task", "error", err)
-			} else if existing == nil {
-				pollTask := &scheduler.Task{
-					Name: emailPollTaskName,
-					Schedule: scheduler.Schedule{
-						Kind:  scheduler.ScheduleEvery,
-						Every: &scheduler.Duration{Duration: pollInterval},
-					},
-					Payload: scheduler.Payload{
-						Kind: scheduler.PayloadWake,
-						Data: map[string]any{
-							"message":       "Check for new email across all accounts.",
-							"local_only":    "false",
-							"quality_floor": "5",
-						},
-					},
-					Enabled:   true,
-					CreatedBy: "system",
-				}
-				if err := sched.CreateTask(pollTask); err != nil {
-					logger.Error("failed to create email_poll task", "error", err)
-				} else {
-					logger.Info("email_poll task registered", "interval", pollInterval)
-				}
-			} else {
-				// Update interval if config changed.
-				if existing.Schedule.Every != nil && existing.Schedule.Every.Duration != pollInterval {
-					existing.Schedule.Every.Duration = pollInterval
-					if err := sched.UpdateTask(existing); err != nil {
-						logger.Error("failed to update email_poll task", "error", err)
-					} else {
-						logger.Info("email_poll task updated", "interval", pollInterval)
-					}
-				}
+
+			if _, err := loopRegistry.SpawnLoop(ctx, looppkg.Config{
+				Name:         "email-poller",
+				SleepMin:     pollInterval,
+				SleepMax:     pollInterval,
+				SleepDefault: pollInterval,
+				Jitter:       looppkg.Float64Ptr(0),
+				Handler:      emailPollHandler(poller, loop, logger),
+				Metadata: map[string]string{
+					"subsystem": "email",
+				},
+			}, looppkg.Deps{
+				Logger:   logger,
+				EventBus: eventBus,
+			}); err != nil {
+				return fmt.Errorf("spawn email poller loop: %w", err)
 			}
 		}
 
@@ -1321,67 +1318,34 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	loop.Tools().SetMediaAnalysisTools(analysisTools)
 
 	// --- Media feed polling ---
-	// Periodic RSS/Atom check for new entries. Follows the same pattern
-	// as email polling — the poller checks feeds against high-water marks
-	// and only wakes the agent when new content is detected.
+	// Periodic RSS/Atom check for new entries via the loop infrastructure.
+	// The handler checks feeds against high-water marks and dispatches an
+	// agent conversation only when new content is detected.
 	if cfg.Media.FeedCheckInterval > 0 {
 		feedPoller := media.NewFeedPoller(opStore, logger)
-		deps.mediaFeedPoller = feedPoller
-
 		pollInterval := time.Duration(cfg.Media.FeedCheckInterval) * time.Second
-		existing, err := schedStore.GetTaskByName(mediaFeedPollTaskName)
-		if err != nil {
-			logger.Error("failed to check for media_feed_poll task", "error", err)
-		} else if existing == nil {
-			pollTask := &scheduler.Task{
-				Name: mediaFeedPollTaskName,
-				Schedule: scheduler.Schedule{
-					Kind:  scheduler.ScheduleEvery,
-					Every: &scheduler.Duration{Duration: pollInterval},
-				},
-				Payload: scheduler.Payload{
-					Kind: scheduler.PayloadWake,
-					Data: map[string]any{
-						"message":       "Check followed feeds for new content.",
-						"local_only":    "false",
-						"quality_floor": "5",
-					},
-				},
-				Enabled:   true,
-				CreatedBy: "system",
-			}
-			if err := sched.CreateTask(pollTask); err != nil {
-				logger.Error("failed to create media_feed_poll task", "error", err)
-			} else {
-				logger.Info("media_feed_poll task registered", "interval", pollInterval)
-			}
-		} else {
-			// Update interval if config changed.
-			if existing.Schedule.Every != nil && existing.Schedule.Every.Duration != pollInterval {
-				existing.Schedule.Every.Duration = pollInterval
-				if err := sched.UpdateTask(existing); err != nil {
-					logger.Error("failed to update media_feed_poll task", "error", err)
-				} else {
-					logger.Info("media_feed_poll task updated", "interval", pollInterval)
-				}
-			}
+
+		if _, err := loopRegistry.SpawnLoop(ctx, looppkg.Config{
+			Name:         "media-feed-poller",
+			SleepMin:     pollInterval,
+			SleepMax:     pollInterval,
+			SleepDefault: pollInterval,
+			Jitter:       looppkg.Float64Ptr(0),
+			Handler:      mediaFeedHandler(feedPoller, loop, logger),
+			Metadata: map[string]string{
+				"subsystem": "media",
+			},
+		}, looppkg.Deps{
+			Logger:   logger,
+			EventBus: eventBus,
+		}); err != nil {
+			return fmt.Errorf("spawn media feed poller loop: %w", err)
 		}
-		logger.Info("media feed polling enabled", "interval", pollInterval, "max_feeds", cfg.Media.MaxFeeds)
-	} else {
-		// Ensure any existing media_feed_poll task is disabled so it does not
-		// continue waking the agent when polling is configured off.
-		existing, err := schedStore.GetTaskByName(mediaFeedPollTaskName)
-		if err != nil {
-			logger.Error("failed to check for media_feed_poll task while disabling polling", "error", err)
-		} else if existing != nil && existing.Enabled {
-			existing.Enabled = false
-			if err := sched.UpdateTask(existing); err != nil {
-				logger.Error("failed to disable media_feed_poll task", "error", err)
-			} else {
-				logger.Info("media_feed_poll task disabled because feed polling is disabled")
-			}
-		}
-		logger.Info("media feed polling disabled (feed_check_interval=0)")
+
+		logger.Info("media feed polling enabled",
+			"interval", pollInterval,
+			"max_feeds", cfg.Media.MaxFeeds,
+		)
 	}
 
 	// --- Archive tools ---
@@ -1551,8 +1515,12 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 					DestDir:   cfg.Signal.AttachmentDir,
 					MaxSize:   cfg.Signal.MaxAttachmentSize,
 				},
+				Registry: loopRegistry,
+				EventBus: eventBus,
 			})
-			go bridge.Start(ctx)
+			if err := bridge.Register(ctx); err != nil {
+				logger.Error("signal bridge registration failed", "error", err)
+			}
 
 			// Register signal_send_reaction tool so the agent can
 			// react to Signal messages with emoji.
@@ -1921,7 +1889,24 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 			Logger:       logger,
 		})
 
-		go poller.Start(ctx)
+		if _, err := loopRegistry.SpawnLoop(ctx, looppkg.Config{
+			Name:         "unifi-poller",
+			SleepMin:     pollInterval,
+			SleepMax:     pollInterval,
+			SleepDefault: pollInterval,
+			Jitter:       looppkg.Float64Ptr(0),
+			Handler: func(ctx context.Context, _ any) error {
+				return poller.Poll(ctx)
+			},
+			Metadata: map[string]string{
+				"subsystem": "unifi",
+			},
+		}, looppkg.Deps{
+			Logger:   logger,
+			EventBus: eventBus,
+		}); err != nil {
+			return fmt.Errorf("spawn unifi poller loop: %w", err)
+		}
 
 		// Register UniFi with connwatch for health endpoint visibility.
 		connMgr.Watch(ctx, connwatch.WatcherConfig{
@@ -2155,12 +2140,22 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	checkpointer.LogStartupStatus()
 
 	// --- Ollama-compatible API server ---
+	// --- OWU tracker ---
+	// Registers a parent "owu" loop and lazily spawns per-conversation
+	// children so that Open WebUI sessions appear on the dashboard.
+	owuTracker, err := api.NewOWUTracker(ctx, loopRegistry, eventBus, loop, logger)
+	if err != nil {
+		return fmt.Errorf("create owu tracker: %w", err)
+	}
+	server.SetOWUTracker(owuTracker)
+
 	// Optional second HTTP server that speaks the Ollama wire protocol.
 	// Home Assistant's Ollama integration connects here, allowing Thane
 	// to serve as a drop-in replacement for a standalone Ollama instance.
 	var ollamaServer *api.OllamaServer
 	if cfg.OllamaAPI.Enabled {
 		ollamaServer = api.NewOllamaServer(cfg.OllamaAPI.Address, cfg.OllamaAPI.Port, loop, logger)
+		ollamaServer.SetOWUTracker(owuTracker)
 		go func() {
 			if err := ollamaServer.Start(ctx); err != nil {
 				logger.Error("ollama API server failed", "error", err)
@@ -2343,16 +2338,6 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		logger.Info("mqtt AP presence sensors registered", "count", len(apSensors))
 	}
 
-	// --- Loop registry & metacognitive loop ---
-	// The loop registry tracks all persistent background loops.
-	// The metacognitive loop is the first consumer (PID 0).
-	loopRegistry := looppkg.NewRegistry(looppkg.WithRegistryLogger(logger))
-	defer func() {
-		shutCtx, shutCancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer shutCancel()
-		loopRegistry.ShutdownAll(shutCtx)
-	}()
-
 	// --- Loop visualizer ---
 	// Wire the web dashboard now that the loop registry exists.
 	{
@@ -2382,7 +2367,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 			}
 		}
 
-		adapter := &loopAdapter{agentLoop: loop}
+		adapter := &loopAdapter{agentLoop: loop, router: rtr}
 		loopCfg := metacognitive.BuildLoopConfig(metacogCfg, metacognitive.Opts{
 			WorkspacePath: cfg.Workspace.Path,
 		})

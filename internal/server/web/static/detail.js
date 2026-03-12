@@ -48,234 +48,25 @@ const nodeName = urlParams.get('name') || '';
 // Set title immediately from URL param, refined later from SSE data.
 document.title = 'Thane \u00b7 ' + (nodeName || (nodeType === 'system' ? 'Runtime' : nodeId.slice(0, 8)));
 
+// Utility functions (formatTokens, formatDuration, formatTime, etc.),
+// card builders, and log rendering are in shared.js.
+
 // ---------------------------------------------------------------------------
-// Helpers (duplicated from app.js — no module system)
+// Live Telemetry Timers
 // ---------------------------------------------------------------------------
 
-function parseDuration(s) {
-  if (!s) return 0;
-  let ms = 0;
-  const re = /(\d+(?:\.\d+)?)(ns|us|ms|s|m|h)/g;
-  let match;
-  while ((match = re.exec(s)) !== null) {
-    const val = parseFloat(match[1]);
-    switch (match[2]) {
-      case 'h':  ms += val * 3600000; break;
-      case 'm':  ms += val * 60000; break;
-      case 's':  ms += val * 1000; break;
-      case 'ms': ms += val; break;
-      case 'us': ms += val / 1000; break;
-      case 'ns': ms += val / 1000000; break;
-    }
+function clearLiveTelemetry() {
+  if (loopData) {
+    loopData._iterStartTs = null;
+    loopData._liveTools = [];
+    loopData._liveModel = '';
+    loopData._llmContext = null;
   }
-  return ms;
 }
 
-function formatUptimeLong(ms) {
-  const sec = Math.floor(ms / 1000);
-  const d = Math.floor(sec / 86400);
-  const h = Math.floor((sec % 86400) / 3600);
-  const m = Math.floor((sec % 3600) / 60);
-  const s = sec % 60;
-  const parts = [];
-  if (d > 0) parts.push(d + 'd');
-  if (h > 0) parts.push(h + 'h');
-  if (m > 0) parts.push(m + 'm');
-  parts.push(s + 's');
-  return parts.join(' ');
-}
-
-function formatNumber(n) {
-  if (n >= 1000000) return (n / 1000000).toFixed(1) + 'M';
-  if (n >= 1000) return (n / 1000).toFixed(1) + 'k';
-  return String(n);
-}
-
-function formatTokens(n) {
-  if (n >= 1000000) return (n / 1000000).toFixed(2) + 'M';
-  if (n >= 1000) return (n / 1000).toFixed(1) + 'k';
-  return String(n);
-}
-
-function formatDuration(ms) {
-  const totalSec = Math.floor(ms / 1000);
-  const m = Math.floor(totalSec / 60);
-  const s = totalSec % 60;
-  if (m > 0) return m + 'm ' + s + 's';
-  return s + 's';
-}
-
-function formatTime(date) {
-  if (!(date instanceof Date) || isNaN(date)) return '';
-  return date.toLocaleTimeString(undefined, {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false,
-  });
-}
-
-function timeAgo(date) {
-  const diff = Date.now() - date.getTime();
-  const sec = Math.floor(diff / 1000);
-  if (sec < 60) return sec + 's ago';
-  const min = Math.floor(sec / 60);
-  if (min < 60) return min + 'm ago';
-  const hr = Math.floor(min / 60);
-  if (hr < 24) return hr + 'h ago';
-  return Math.floor(hr / 24) + 'd ago';
-}
-
-function shortID(id) {
-  if (!id) return '';
-  if (id.length > 12) return id.slice(0, 8);
-  return id;
-}
-
-// ---------------------------------------------------------------------------
-// Log Rendering (duplicated from app.js)
-// ---------------------------------------------------------------------------
-
+// renderLogRows and buildLogDetail are in shared.js.
 function renderLogs(entries) {
-  if (!entries || entries.length === 0) {
-    logEmpty.hidden = false;
-    logEmpty.querySelector('p').textContent = 'No log entries found';
-    logBody.innerHTML = '';
-    return;
-  }
-
-  logEmpty.hidden = true;
-
-  const atBottom = logScroll.scrollHeight - logScroll.scrollTop - logScroll.clientHeight < 24;
-  logBody.innerHTML = '';
-
-  for (const entry of entries) {
-    const tr = document.createElement('tr');
-
-    const tdTime = document.createElement('td');
-    tdTime.className = 'log-time';
-    tdTime.textContent = entry.Timestamp ? formatTime(new Date(entry.Timestamp)) : '';
-
-    const tdLevel = document.createElement('td');
-    const levelSpan = document.createElement('span');
-    levelSpan.className = 'level-badge level-badge--' + (entry.Level || 'INFO');
-    levelSpan.textContent = entry.Level || '?';
-    tdLevel.appendChild(levelSpan);
-
-    const tdSub = document.createElement('td');
-    tdSub.className = 'log-subsystem';
-    tdSub.textContent = entry.Subsystem || '';
-
-    const tdMsg = document.createElement('td');
-    tdMsg.className = 'log-msg';
-    tdMsg.textContent = entry.Msg || '';
-    tdMsg.title = entry.Msg || '';
-
-    const tdDetail = document.createElement('td');
-    tdDetail.className = 'log-detail';
-    buildLogDetail(tdDetail, entry);
-
-    tr.appendChild(tdTime);
-    tr.appendChild(tdLevel);
-    tr.appendChild(tdSub);
-    tr.appendChild(tdMsg);
-    tr.appendChild(tdDetail);
-    logBody.appendChild(tr);
-  }
-
-  if (atBottom) {
-    logScroll.scrollTop = logScroll.scrollHeight;
-  }
-}
-
-function buildLogDetail(td, entry) {
-  const parts = [];
-
-  if (entry.Model) {
-    parts.push({ key: 'model', val: entry.Model, cls: 'model' });
-  }
-  if (entry.Tool) {
-    parts.push({ key: 'tool', val: entry.Tool, cls: 'tool' });
-  }
-
-  let attrs = null;
-  if (entry.Attrs) {
-    try { attrs = JSON.parse(entry.Attrs); } catch (_) { /* ignore */ }
-  }
-  if (attrs) {
-    for (const k of ['duration', 'elapsed', 'latency', 'took']) {
-      if (attrs[k] != null) {
-        parts.push({ key: k, val: String(attrs[k]), cls: 'duration' });
-      }
-    }
-    if (attrs.input_tokens != null) {
-      parts.push({ key: 'in', val: formatTokens(attrs.input_tokens), cls: 'tokens' });
-    }
-    if (attrs.output_tokens != null) {
-      parts.push({ key: 'out', val: formatTokens(attrs.output_tokens), cls: 'tokens' });
-    }
-    if (attrs.total_tokens != null && attrs.input_tokens == null) {
-      parts.push({ key: 'tokens', val: formatTokens(attrs.total_tokens), cls: 'tokens' });
-    }
-    if (attrs.tool_calls != null) {
-      parts.push({ key: 'tools', val: String(attrs.tool_calls), cls: 'tool' });
-    }
-    if (attrs.tool_count != null && attrs.tool_calls == null) {
-      parts.push({ key: 'tools', val: String(attrs.tool_count), cls: 'tool' });
-    }
-    const shown = new Set([
-      'duration', 'elapsed', 'latency', 'took',
-      'input_tokens', 'output_tokens', 'total_tokens',
-      'tool_calls', 'tool_count',
-      'thane_version', 'thane_commit', 'loop_id', 'loop_name',
-    ]);
-    for (const [k, v] of Object.entries(attrs)) {
-      if (shown.has(k)) continue;
-      if (v == null || typeof v === 'object') continue;
-      const s = String(v);
-      if (s.length > 40) continue;
-      parts.push({ key: k, val: s, cls: '' });
-    }
-  }
-
-  for (const p of parts) {
-    const span = document.createElement('span');
-    span.className = 'log-attr';
-    const key = document.createElement('span');
-    key.className = 'log-attr-key';
-    key.textContent = p.key + '=';
-    const val = document.createElement('span');
-    val.className = 'log-attr-val' + (p.cls ? ' log-attr-val--' + p.cls : '');
-    val.textContent = p.val;
-    span.appendChild(key);
-    span.appendChild(val);
-    td.appendChild(span);
-  }
-
-  const ids = [
-    { label: 'req', full: entry.RequestID },
-    { label: 'conv', full: entry.ConversationID },
-    { label: 'sess', full: entry.SessionID },
-  ];
-  for (const { label, full } of ids) {
-    if (!full) continue;
-    const chip = document.createElement('span');
-    chip.className = 'log-id-chip';
-    chip.textContent = label + ':' + shortID(full);
-    chip.title = label + ' \u2014 click to copy\n' + full;
-    chip.addEventListener('click', (e) => {
-      e.stopPropagation();
-      navigator.clipboard.writeText(full).then(() => {
-        chip.classList.add('log-id-chip--copied');
-        setTimeout(() => chip.classList.remove('log-id-chip--copied'), 1200);
-      });
-    });
-    td.appendChild(chip);
-  }
-
-  if (attrs) {
-    td.title = JSON.stringify(attrs, null, 2);
-  }
+  renderLogRows(entries, { logEmpty, logScroll, logBody });
 }
 
 // ---------------------------------------------------------------------------
@@ -374,7 +165,9 @@ async function fetchSystemLogs() {
 let loopData = null;
 const events = [];
 const MAX_EVENTS = 50;
+const MAX_ITERATION_HISTORY = 10;
 const sleepTimers = new Map();
+let iterationHistory = [];
 
 function initLoop() {
   if (!nodeId) {
@@ -398,6 +191,24 @@ function connectSSE() {
     const statuses = JSON.parse(e.data);
     const match = statuses.find(s => s.id === nodeId);
     if (match) {
+      // Seed iteration history from server-side ring buffer.
+      if (match.recent_iterations && match.recent_iterations.length > 0) {
+        iterationHistory = match.recent_iterations.slice();
+      } else {
+        iterationHistory = [];
+      }
+      // Seed live telemetry for a loop already in processing state.
+      if (match.state === 'processing') {
+        match._iterStartTs = match.last_wake_at ? new Date(match.last_wake_at).getTime() : Date.now();
+        match._liveTools = [];
+        match._liveModel = '';
+        // Restore LLM context from snapshot so late-connecting clients
+        // see enrichment data immediately.
+        match._llmContext = match.llm_context || null;
+        if (match._llmContext && match._llmContext.model) {
+          match._liveModel = match._llmContext.model;
+        }
+      }
       loopData = match;
       document.title = 'Thane \u00b7 ' + (match.name || nodeId.slice(0, 8));
       renderLoopDetail();
@@ -434,35 +245,134 @@ function applyLoopEvent(evt) {
       loopData.attempts = (loopData.attempts || 0) + 1;
       loopData._supervisor = !!d.supervisor;
       loopData._currentConvID = d.conversation_id || loopData._currentConvID;
+      loopData._liveTools = [];
+      loopData._liveModel = '';
+      loopData._llmContext = null;
+      loopData._iterStartTs = Date.now();
       break;
-    case 'loop_iteration_complete':
+    case 'loop_iteration_complete': {
       loopData.iterations = (loopData.iterations || 0) + 1;
       loopData._lastModel = d.model || loopData._lastModel;
       loopData._lastSupervisor = loopData._supervisor;
+      if (loopData._supervisor) {
+        loopData.last_supervisor_iter = loopData.iterations;
+      }
       loopData._supervisor = false;
-      if (d.input_tokens) loopData.total_input_tokens = (loopData.total_input_tokens || 0) + d.input_tokens;
-      if (d.output_tokens) loopData.total_output_tokens = (loopData.total_output_tokens || 0) + d.output_tokens;
+      if (d.input_tokens) {
+        loopData.total_input_tokens = (loopData.total_input_tokens || 0) + d.input_tokens;
+        loopData.last_input_tokens = d.input_tokens;
+      }
+      if (d.output_tokens) {
+        loopData.total_output_tokens = (loopData.total_output_tokens || 0) + d.output_tokens;
+        loopData.last_output_tokens = d.output_tokens;
+      }
+      if (d.context_window > 0) loopData.context_window = d.context_window;
+      // Build iteration snapshot.
+      const snap = {
+        number: loopData.iterations,
+        conv_id: d.conversation_id || loopData._currentConvID || '',
+        model: d.model || '',
+        input_tokens: d.input_tokens || 0,
+        output_tokens: d.output_tokens || 0,
+        context_window: d.context_window || 0,
+        tools_used: d.tools_used || buildToolCounts(loopData._liveTools),
+        elapsed_ms: d.elapsed_ms || 0,
+        supervisor: loopData._lastSupervisor || false,
+        started_at: loopData._iterStartTs ? new Date(loopData._iterStartTs).toISOString() : evt.ts,
+        completed_at: evt.ts,
+        summary: d.summary || null,
+      };
+      iterationHistory.unshift(snap);
+      if (iterationHistory.length > MAX_ITERATION_HISTORY) iterationHistory.length = MAX_ITERATION_HISTORY;
+      clearLiveTelemetry();
       break;
+    }
     case 'loop_sleep_start': {
       loopData.state = 'sleeping';
+      clearLiveTelemetry();
       const ms = parseDuration(d.sleep_duration || '');
       if (ms > 0) {
         sleepTimers.set(nodeId, { startedAt: new Date(), durationMs: ms });
+      }
+      if (iterationHistory.length > 0) {
+        iterationHistory[0].sleep_after_ms = ms;
       }
       break;
     }
     case 'loop_wait_start':
       loopData.state = 'waiting';
+      clearLiveTelemetry();
       sleepTimers.delete(nodeId);
+      if (iterationHistory.length > 0) {
+        iterationHistory[0].wait_after = true;
+      }
       break;
-    case 'loop_error':
+    case 'loop_error': {
       loopData.last_error = d.error;
+      const errSnap = {
+        number: 0,
+        error: d.error || '',
+        started_at: loopData._iterStartTs ? new Date(loopData._iterStartTs).toISOString() : evt.ts,
+        completed_at: evt.ts,
+        elapsed_ms: loopData._iterStartTs ? Date.now() - loopData._iterStartTs : 0,
+        supervisor: loopData._supervisor || false,
+      };
+      iterationHistory.unshift(errSnap);
+      if (iterationHistory.length > MAX_ITERATION_HISTORY) iterationHistory.length = MAX_ITERATION_HISTORY;
+      clearLiveTelemetry();
       break;
+    }
     case 'loop_state_change':
       loopData.state = d.to;
+      if (d.to !== 'processing') clearLiveTelemetry();
       break;
     case 'loop_stopped':
       loopData.state = 'stopped';
+      clearLiveTelemetry();
+      break;
+    case 'loop_tool_start':
+      if (!loopData._liveTools) loopData._liveTools = [];
+      if (!loopData._iterStartTs) {
+        loopData._iterStartTs = Date.now();
+      }
+      loopData._liveTools.push({
+        tool: d.tool,
+        status: 'running',
+        args: d.args || null,
+      });
+      break;
+    case 'loop_tool_done':
+      if (loopData._liveTools) {
+        for (let i = loopData._liveTools.length - 1; i >= 0; i--) {
+          if (loopData._liveTools[i].tool === d.tool && loopData._liveTools[i].status === 'running') {
+            loopData._liveTools[i].status = d.error ? 'error' : 'done';
+            loopData._liveTools[i].result = d.result || null;
+            loopData._liveTools[i].error = d.error || null;
+            break;
+          }
+        }
+      }
+      break;
+    case 'loop_llm_start':
+      loopData._liveModel = d.model || '';
+      loopData._llmContext = {
+        est_tokens: d.est_tokens || 0,
+        messages: d.messages || 0,
+        tools: d.tools || 0,
+        iteration: d.iteration,
+        complexity: d.complexity || '',
+        intent: d.intent || '',
+        reasoning: d.reasoning || '',
+      };
+      if (!loopData._iterStartTs) {
+        loopData._iterStartTs = Date.now();
+      }
+      break;
+    case 'loop_llm_response':
+      loopData._liveModel = d.model || '';
+      if (!loopData._iterStartTs) {
+        loopData._iterStartTs = Date.now();
+      }
       break;
   }
 }
@@ -484,35 +394,11 @@ function renderLoopDetail() {
   if (loopData.parent_id) idsContainer.appendChild(makeIDRow('parent_id', loopData.parent_id));
   if (loopData._currentConvID) idsContainer.appendChild(makeIDRow('conv_id', loopData._currentConvID));
 
-  // Forward-looking section.
-  const isSleeping = loopData.state === 'sleeping';
-  const isWaiting = loopData.state === 'waiting';
-  const hasSupervisor = loopData.config && loopData.config.Supervisor;
-  const showForward = isSleeping || isWaiting || hasSupervisor;
-  $('#detail-forward').hidden = !showForward;
-  $('#detail-divider').hidden = !showForward;
-  const sleepVisible = isSleeping || isWaiting;
-  $('#detail-sleep-label').hidden = !sleepVisible;
-  $('#detail-sleep').hidden = !sleepVisible;
-  if (isWaiting) {
-    $('#detail-sleep-label').textContent = 'Wait';
-    $('#detail-sleep').textContent = 'awaiting event';
-  } else {
-    $('#detail-sleep-label').textContent = 'Sleep';
-    updateSleepDisplay();
-  }
+  // Aggregate stats bar.
+  renderAggregates();
 
-  // Supervisor bar.
-  renderSupervisorBar();
-
-  // Historical metrics.
-  $('#detail-iterations').textContent = formatNumber(loopData.iterations || 0);
-  $('#detail-attempts').textContent = formatNumber(loopData.attempts || 0);
-  $('#detail-input-tokens').textContent = formatTokens(loopData.total_input_tokens || 0);
-  $('#detail-output-tokens').textContent = formatTokens(loopData.total_output_tokens || 0);
-  $('#detail-model').textContent = loopData._lastModel || '-';
-  $('#detail-error').textContent = loopData.last_error || '-';
-  $('#detail-started').textContent = loopData.started_at ? timeAgo(new Date(loopData.started_at)) : '-';
+  // Iteration timeline.
+  renderTimeline();
 
   // Capabilities (tags from config).
   const tags = (loopData.config && loopData.config.Tags) || [];
@@ -530,157 +416,66 @@ function renderLoopDetail() {
   } else {
     tagsSection.hidden = true;
   }
-
-  // Event list.
-  renderEventList();
 }
 
-function updateSleepDisplay() {
-  if (!loopData) return;
-  const el = $('#detail-sleep');
-  const timer = sleepTimers.get(nodeId);
-  if (timer && timer.durationMs > 0 && loopData.state === 'sleeping') {
-    const remaining = timer.durationMs - (Date.now() - timer.startedAt.getTime());
-    if (remaining > 0) {
-      const wakeAt = new Date(timer.startedAt.getTime() + timer.durationMs);
-      el.textContent = 'until ' + formatTime(wakeAt);
-    } else {
-      el.textContent = 'waking up now...';
-    }
-  } else if (loopData.state === 'processing') {
-    el.textContent = 'active';
-  } else {
-    el.textContent = '-';
+function renderAggregates() {
+  const el = $('#detail-aggregates');
+  const parts = [];
+  const iter = loopData.iterations || 0;
+  const att = loopData.attempts || 0;
+  parts.push(formatNumber(iter) + ' iter');
+  if (att !== iter) parts.push(formatNumber(att) + ' att');
+  const totalTok = (loopData.total_input_tokens || 0) + (loopData.total_output_tokens || 0);
+  if (totalTok > 0) parts.push(formatTokens(totalTok) + ' tok');
+  if (loopData.started_at) parts.push(timeAgo(new Date(loopData.started_at)));
+  if (loopData.last_error) {
+    parts.push('<span class="agg-error">' + escapeHTML(truncate(loopData.last_error, 40)) + '</span>');
   }
+  el.innerHTML = parts.join(' <span class="agg-sep">\u00b7</span> ');
 }
 
-function renderSupervisorBar() {
-  if (!loopData) return;
-  const bar = $('#detail-supervisor');
-  const cfg = loopData.config || {};
+function renderTimeline() {
+  const container = $('#detail-timeline');
 
-  if (!cfg.Supervisor) {
-    bar.hidden = true;
-    return;
-  }
-
-  bar.hidden = false;
-  bar.innerHTML = '';
-  const prob = cfg.SupervisorProb || 0;
-  const pct = Math.round(prob * 100);
-
-  if (loopData._supervisor) {
-    bar.className = 'supervisor-bar supervisor-bar--active';
-    bar.innerHTML = '<span class="sup-icon">&#x2726;</span> Supervisor iteration in progress';
-  } else if (loopData._lastSupervisor) {
-    bar.className = 'supervisor-bar supervisor-bar--last';
-    bar.innerHTML = '<span class="sup-icon">&#x2726;</span> Last iteration was supervised';
-  } else {
-    bar.className = 'supervisor-bar';
-    bar.innerHTML = '<span class="sup-icon">&#x2726;</span> Supervisor: ' + pct + '% chance next';
-  }
-}
-
-function renderEventList() {
-  const list = $('#event-list');
-  list.innerHTML = '';
-
-  for (const evt of events.slice(0, 20)) {
-    const li = document.createElement('li');
-
-    const time = document.createElement('span');
-    time.className = 'event-time';
-    time.textContent = formatTime(new Date(evt.ts));
-
-    const kind = document.createElement('span');
-    kind.className = 'event-kind';
-
-    const detail = document.createElement('span');
-    detail.className = 'event-detail';
-
-    switch (evt.kind) {
-      case 'loop_iteration_start':
-        kind.textContent = evt.data.supervisor ? 'supervisor' : 'iteration';
-        kind.className += evt.data.supervisor ? ' event-supervisor' : '';
-        detail.textContent = '#' + (evt.data.attempt || '?');
-        break;
-      case 'loop_iteration_complete':
-        kind.textContent = 'complete';
-        kind.className += ' event-ok';
-        detail.textContent = evt.data.model || '';
-        break;
-      case 'loop_sleep_start': {
-        kind.textContent = 'sleep';
-        const raw = evt.data.sleep_duration || '';
-        const ms = parseDuration(raw);
-        detail.textContent = ms > 0 ? formatDuration(ms) : raw;
-        break;
-      }
-      case 'loop_wait_start':
-        kind.textContent = 'waiting';
-        detail.textContent = 'awaiting event';
-        break;
-      case 'loop_error':
-        kind.textContent = 'error';
-        kind.className += ' event-error';
-        detail.textContent = evt.data.error || '';
-        break;
-      case 'loop_state_change':
-        kind.textContent = evt.data.from + ' -> ' + evt.data.to;
-        break;
-      case 'loop_started':
-        kind.textContent = 'started';
-        kind.className += ' event-ok';
-        break;
-      case 'loop_stopped':
-        kind.textContent = 'stopped';
-        break;
-      default:
-        kind.textContent = evt.kind;
-    }
-
-    li.appendChild(time);
-    li.appendChild(kind);
-    li.appendChild(detail);
-    list.appendChild(li);
-  }
-}
-
-function makeIDRow(label, value) {
-  const row = document.createElement('div');
-  row.className = 'id-row';
-  const lbl = document.createElement('span');
-  lbl.className = 'id-label';
-  lbl.textContent = label;
-  row.appendChild(lbl);
-  row.appendChild(makeIDChip(value));
-  return row;
-}
-
-function makeIDChip(fullID) {
-  const chip = document.createElement('span');
-  chip.className = 'id-chip';
-  chip.title = 'Click to copy: ' + fullID;
-  const txt = document.createElement('span');
-  txt.className = 'id-chip-text';
-  txt.textContent = fullID;
-  chip.appendChild(txt);
-  chip.addEventListener('click', (e) => {
-    e.stopPropagation();
-    navigator.clipboard.writeText(fullID).then(() => {
-      chip.classList.add('id-chip--copied');
-      setTimeout(() => chip.classList.remove('id-chip--copied'), 1200);
-    });
+  // Preserve expanded card state across re-renders.
+  const expanded = new Set();
+  container.querySelectorAll('.iter-card--past.iter-card--expanded').forEach(el => {
+    const idx = el.dataset.idx;
+    if (idx != null) expanded.add(idx);
   });
-  return chip;
+
+  container.innerHTML = '';
+
+  const isProcessing = loopData.state === 'processing';
+  const isSleeping = loopData.state === 'sleeping';
+  const isWaiting = loopData.state === 'waiting';
+
+  // Live card.
+  if (isProcessing && loopData._iterStartTs) {
+    container.appendChild(buildLiveCard(loopData));
+  }
+
+  // Live connector.
+  if ((isSleeping || isWaiting) && iterationHistory.length > 0) {
+    container.appendChild(buildConnector(loopData, iterationHistory[0], true, sleepTimers.get(nodeId)));
+  }
+
+  // Past iteration cards.
+  for (let i = 0; i < iterationHistory.length; i++) {
+    container.appendChild(buildPastCard(iterationHistory[i], loopData.handler_only, i, expanded.has(String(i))));
+    if (i < iterationHistory.length - 1) {
+      container.appendChild(buildConnector(loopData, iterationHistory[i], false, null));
+    }
+  }
 }
+
+// buildLiveCard, buildPastCard, buildConnector, shortModelName,
+// buildToolCounts, escapeHTML, truncate, makeIDRow, makeIDChip
+// are all in shared.js.
 
 function tickLoop() {
   if (loopData) {
-    updateSleepDisplay();
-    if (loopData.started_at) {
-      $('#detail-started').textContent = timeAgo(new Date(loopData.started_at));
-    }
+    renderLoopDetail();
   }
 }
 

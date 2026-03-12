@@ -63,6 +63,11 @@ type StreamEvent struct {
 
 	// Response is set for KindDone events (final summary).
 	Response *ChatResponse
+
+	// Data carries optional extensible metadata for events that need
+	// more than the typed fields above. Used by KindLLMStart to
+	// forward router decisions and context estimates.
+	Data map[string]any
 }
 
 // StreamEventKind identifies the type of stream event.
@@ -80,6 +85,16 @@ const (
 
 	// KindDone signals the stream is complete. Response carries final metadata.
 	KindDone
+
+	// KindLLMResponse fires when an LLM response is received (before
+	// tool execution begins). Response carries the model name and
+	// token counts at the earliest point they become available.
+	KindLLMResponse
+
+	// KindLLMStart fires immediately before an LLM API call begins.
+	// Response.Model carries the selected model name so consumers
+	// can display it before the call completes.
+	KindLLMStart
 )
 
 // StreamCallback receives streaming events.

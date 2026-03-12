@@ -261,6 +261,15 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
   max-width: 100%;
 }
 
+.id-chip--muted {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.id-chip--muted::after {
+  content: '';
+}
+
 .detail-header {
   display: flex;
   align-items: center;
@@ -293,42 +302,48 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
 .state-badge--pending     { background: var(--purple-dim); color: var(--purple); }
 .state-badge--supervisor  { background: var(--purple-dim); color: var(--purple); }
 
-/* === Supervisor Bar === */
-.supervisor-bar {
+/* === Context Utilization Meter === */
+.context-meter {
   display: flex;
   align-items: center;
-  gap: 0.4rem;
-  font-size: 0.72rem;
-  padding: 0.35rem 0.5rem;
-  border-radius: var(--radius);
-  margin-bottom: 0.75rem;
-  background: var(--purple-dim);
+  gap: 0.5rem;
+  margin: 0.5rem 0;
+}
+.context-meter[hidden] { display: none; }
+
+.context-meter__label {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  font-weight: 500;
+  flex-shrink: 0;
+}
+
+.context-meter__track {
+  flex: 1;
+  height: 6px;
+  background: var(--bg-tertiary);
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.context-meter__fill {
+  height: 100%;
+  border-radius: 3px;
+  background: var(--blue);
+  transition: width 0.4s ease, background-color 0.4s ease;
+  width: 0;
+}
+
+.context-meter__fill--warn  { background: var(--orange); }
+.context-meter__fill--crit  { background: var(--red); }
+
+.context-meter__pct {
   color: var(--text-secondary);
-  border: 1px solid transparent;
-}
-
-.supervisor-bar[hidden] { display: none; }
-
-.supervisor-bar--active {
-  color: var(--purple);
-  border-color: var(--purple);
-  font-weight: 600;
-  animation: sup-bar-glow 2s ease-in-out infinite;
-}
-
-.supervisor-bar--last {
-  color: var(--purple);
-  opacity: 0.7;
-}
-
-.sup-icon {
-  font-size: 0.9em;
-  color: var(--purple);
-}
-
-@keyframes sup-bar-glow {
-  0%, 100% { background: var(--purple-dim); }
-  50% { background: rgba(188, 140, 255, 0.3); }
+  font-size: 0.7rem;
+  font-family: var(--font-mono);
+  flex-shrink: 0;
+  min-width: 3.5ch;
+  text-align: right;
 }
 
 /* === Metrics === */
@@ -351,8 +366,273 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
 .detail-metrics dt[hidden],
 .detail-metrics dd[hidden] { display: none; }
 
-.detail-metrics--history dt { color: var(--text-muted); }
-.detail-metrics--history dd { color: var(--text-secondary); }
+#detail-last-iter[hidden] { display: none; }
+
+/* === Aggregate Stats Bar === */
+.detail-aggregates {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.15rem;
+  font-size: 0.7rem;
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+  background: var(--bg-tertiary);
+  border-radius: var(--radius);
+  padding: 0.3rem 0.5rem;
+  margin-bottom: 0.5rem;
+}
+.agg-sep { color: var(--text-muted); margin: 0 0.1rem; }
+.agg-error { color: var(--orange); }
+
+/* === Iteration Timeline === */
+.iter-timeline {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 0.5rem;
+}
+
+/* --- Cards (base) --- */
+.iter-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.4rem 0.5rem;
+  background: var(--bg-tertiary);
+  font-size: 0.75rem;
+}
+
+/* Live card */
+.iter-card--live {
+  border-color: var(--green);
+  background: var(--green-dim);
+}
+
+/* Past card */
+.iter-card--past {
+  opacity: 0.85;
+}
+.iter-card--past .iter-card__header {
+  cursor: pointer;
+}
+.iter-card--past .iter-card__header:hover {
+  background: var(--bg-hover);
+  border-radius: var(--radius);
+  margin: -0.15rem -0.25rem;
+  padding: 0.15rem 0.25rem;
+}
+.iter-card--expanded { opacity: 1; }
+
+/* Supervisor accent — inset left stripe so it layers with live/error borders */
+.iter-card--supervisor {
+  box-shadow: inset 3px 0 0 var(--purple);
+}
+.iter-card--supervisor .iter-card__live-label {
+  color: var(--purple);
+}
+
+/* Error card */
+.iter-card--error {
+  border-color: var(--orange);
+  background: var(--orange-dim);
+}
+
+/* --- Card Header --- */
+.iter-card__header {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+}
+.iter-card__live-label {
+  font-weight: 700;
+  font-size: 0.6rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--green);
+  flex-shrink: 0;
+}
+.iter-card--live .iter-card__live-label { color: var(--green); }
+
+.iter-card__elapsed {
+  font-variant-numeric: tabular-nums;
+  color: var(--green);
+  font-weight: 600;
+  font-size: 0.8rem;
+}
+.iter-card__number {
+  color: var(--text-muted);
+  flex-shrink: 0;
+  font-weight: 600;
+}
+.iter-card--error .iter-card__number { color: var(--orange); }
+.iter-card__model {
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 120px;
+}
+.iter-card__spacer { flex: 1; }
+.iter-card__time {
+  color: var(--text-muted);
+  font-size: 0.6rem;
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+  margin-right: 0.3rem;
+}
+.iter-card__duration {
+  color: var(--text-secondary);
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+.iter-card__chevron {
+  color: var(--text-muted);
+  flex-shrink: 0;
+  font-size: 0.6rem;
+  transition: transform 0.15s;
+}
+.iter-card--expanded .iter-card__chevron {
+  transform: rotate(0deg);
+}
+
+/* --- Card Body (expandable) --- */
+.iter-card__body {
+  padding-top: 0.35rem;
+  margin-top: 0.25rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.7rem;
+}
+.iter-card__body[hidden] { display: none; }
+.iter-card__tokens {
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  margin-bottom: 0.25rem;
+}
+.iter-card__tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem;
+  margin-bottom: 0.25rem;
+}
+.iter-card__tool-item {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0.05em 0.35em;
+}
+.iter-card__error {
+  color: var(--orange);
+  word-break: break-word;
+  margin-bottom: 0.25rem;
+}
+.iter-card__sup-badge {
+  display: inline-block;
+  font-size: 0.6rem;
+  color: var(--purple);
+  margin-bottom: 0.15rem;
+}
+.iter-card__timestamp {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+}
+
+/* Handler summary stats */
+.iter-card__summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.15rem 0.5rem;
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  color: var(--text-secondary);
+  margin-bottom: 0.25rem;
+}
+.iter-card__summary-item { white-space: nowrap; }
+
+/* LLM call context (live card enrichment) */
+.iter-card__llm-context {
+  font-family: var(--font-mono);
+  font-size: 0.6rem;
+  color: var(--text-muted);
+  margin: 0.2rem 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* --- Connector Lines --- */
+.iter-connector {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  padding: 0.25rem 0 0.25rem 1.2rem;
+}
+.iter-connector__line {
+  width: 2px;
+  height: 12px;
+  background: var(--border);
+  margin-left: 0.3rem;
+  margin-bottom: 0.15rem;
+}
+.iter-connector__label {
+  font-size: 0.6rem;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+}
+.iter-connector__sup {
+  font-size: 0.6rem;
+  font-family: var(--font-mono);
+  color: var(--purple);
+  opacity: 0.8;
+}
+
+/* --- Live tools (reused inside live cards) --- */
+.live-tools {
+  list-style: none;
+  padding: 0;
+  margin: 0.25rem 0 0;
+  font-size: 0.75rem;
+  font-family: var(--font-mono);
+}
+.live-tool {
+  padding: 2px 0;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--text-secondary);
+}
+.live-tool--running::before {
+  content: '';
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border: 2px solid var(--accent);
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: live-spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+.live-tool--done::before {
+  content: '\2713';
+  color: var(--green);
+  width: 10px;
+  text-align: center;
+  flex-shrink: 0;
+  font-size: 0.75rem;
+}
+.live-tool--error::before {
+  content: '\2717';
+  color: var(--red);
+  width: 10px;
+  text-align: center;
+  flex-shrink: 0;
+  font-size: 0.75rem;
+}
+@keyframes live-spin { to { transform: rotate(360deg); } }
 
 .detail-metrics dt {
   color: var(--text-secondary);
@@ -398,44 +678,6 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
   letter-spacing: 0.08em;
   margin-bottom: 0.5rem;
 }
-
-/* === Event List === */
-.event-list {
-  list-style: none;
-  font-size: 0.75rem;
-  max-height: 200px;
-  overflow-y: auto;
-}
-
-.event-list li {
-  display: flex;
-  gap: 0.5rem;
-  padding: 0.2rem 0;
-  border-bottom: 1px solid var(--border);
-  align-items: baseline;
-}
-
-.event-time {
-  color: var(--text-muted);
-  font-family: var(--font-mono);
-  font-size: 0.7rem;
-  flex-shrink: 0;
-}
-
-.event-kind {
-  color: var(--text-secondary);
-}
-
-.event-detail {
-  color: var(--text-primary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.event-supervisor { color: var(--purple); }
-.event-error { color: var(--orange); }
-.event-ok { color: var(--green); }
 
 /* === Log Panel (bottom) === */
 .log-panel {
@@ -643,6 +885,34 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
 .level-badge--DEBUG { background: rgba(139,148,158,0.1); color: var(--text-muted); }
 .level-badge--TRACE { background: rgba(139,148,158,0.05); color: var(--text-muted); }
 
+/* === Scrollbar Styling === */
+.log-scroll,
+.detail-content {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border) transparent;
+}
+
+.log-scroll::-webkit-scrollbar,
+.detail-content::-webkit-scrollbar {
+  width: 6px;
+}
+
+.log-scroll::-webkit-scrollbar-track,
+.detail-content::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.log-scroll::-webkit-scrollbar-thumb,
+.detail-content::-webkit-scrollbar-thumb {
+  background: var(--border);
+  border-radius: 3px;
+}
+
+.log-scroll::-webkit-scrollbar-thumb:hover,
+.detail-content::-webkit-scrollbar-thumb:hover {
+  background: var(--border-light);
+}
+
 /* Log panel scroll wrapper */
 .log-scroll {
   flex: 1;
@@ -694,7 +964,8 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
 .node-shape {
   stroke: rgba(255, 255, 255, 0.15);
   stroke-width: 2;
-  transition: fill 0.6s ease, filter 0.6s ease, stroke-width 0.4s ease;
+  transition: fill 0.8s ease, filter 0.8s ease, stroke-width 0.4s ease, opacity 0.6s ease;
+  will-change: transform, opacity;
 }
 
 /* State fills — stroke matches fill at higher opacity for context ring */
@@ -703,6 +974,7 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
 .node-shape--processing  { fill: var(--green); stroke: var(--green); filter: drop-shadow(0 0 12px var(--green-glow)); }
 .node-shape--supervisor  { fill: var(--purple); stroke: var(--purple); filter: drop-shadow(0 0 16px rgba(188, 140, 255, 0.6)); }
 .node-shape--error       { fill: var(--orange); stroke: var(--orange); filter: drop-shadow(0 0 8px var(--orange-glow)); }
+.node-shape--degraded    { fill: var(--orange); stroke: var(--orange); filter: drop-shadow(0 0 8px var(--orange-glow)); }
 .node-shape--stopped     { fill: var(--text-muted); stroke: var(--text-muted); filter: none; }
 .node-shape--pending     { fill: var(--purple); stroke: var(--purple); filter: drop-shadow(0 0 4px var(--purple-dim)); }
 
@@ -748,51 +1020,49 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
 }
 
 /* === Breathing Animations === */
-/* Use transform:scale() instead of r: so they work with all shape types. */
+/* Only animate transform — never opacity or fill.  Colour/glow changes
+   are driven by CSS transitions on the .node-shape base rule so that
+   state swaps (sleeping↔processing↔waiting) crossfade smoothly à la
+   Gource's linear colour interpolation rather than popping when the
+   keyframe restarts. */
 
-@keyframes breathe-sleeping {
-  0%, 100% { transform: scale(1); opacity: 0.85; }
-  50% { transform: scale(1.08); opacity: 1; }
-}
-
-@keyframes breathe-waiting {
-  0%, 100% { transform: scale(1); opacity: 0.6; }
-  50% { transform: scale(1.05); opacity: 1; }
-}
-
-@keyframes breathe-processing {
-  0%, 100% { transform: scale(1); opacity: 0.9; }
-  50% { transform: scale(1.15); opacity: 1; }
-}
-
-@keyframes breathe-supervisor {
-  0%, 100% { transform: scale(1); opacity: 0.9; }
-  50% { transform: scale(1.15); opacity: 1; }
-}
-
-@keyframes pulse-error {
+@keyframes breathe-idle {
   0%, 100% { transform: scale(1); }
-  50% { transform: scale(1.05); }
+  50% { transform: scale(1.035); }
+}
+
+@keyframes breathe-active {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.055); }
+}
+
+@keyframes breathe-alert {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.03); }
 }
 
 .node-shape--sleeping {
-  animation: breathe-sleeping 4s ease-in-out infinite;
+  animation: breathe-idle 5s cubic-bezier(0.37, 0, 0.63, 1) infinite;
 }
 
 .node-shape--waiting {
-  animation: breathe-waiting 6s ease-in-out infinite;
+  animation: breathe-idle 7s cubic-bezier(0.37, 0, 0.63, 1) infinite;
 }
 
 .node-shape--processing {
-  animation: breathe-processing 1.2s ease-in-out infinite;
+  animation: breathe-active 2.4s cubic-bezier(0.37, 0, 0.63, 1) infinite;
 }
 
 .node-shape--supervisor {
-  animation: breathe-supervisor 1.2s ease-in-out infinite;
+  animation: breathe-active 2.4s cubic-bezier(0.37, 0, 0.63, 1) infinite;
 }
 
 .node-shape--error {
-  animation: pulse-error 2s ease-in-out infinite;
+  animation: breathe-alert 3s cubic-bezier(0.37, 0, 0.63, 1) infinite;
+}
+
+.node-shape--degraded {
+  animation: breathe-alert 3s cubic-bezier(0.37, 0, 0.63, 1) infinite;
 }
 
 /* === System Node === */
@@ -946,7 +1216,7 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
 /* === Linking Lines === */
 .link-line {
   stroke: var(--text-muted);
-  stroke-width: 1.5;
+  stroke-width: 3;
   fill: none;
   opacity: 0.4;
   transition: stroke 0.3s ease, opacity 0.3s ease;
@@ -957,10 +1227,22 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
   opacity: 0.6;
 }
 
+.link-line--degraded {
+  stroke: var(--orange);
+  opacity: 0.5;
+}
+
+.link-line--child {
+  stroke: var(--text-muted);
+  stroke-width: 2;
+  stroke-dasharray: 4 3;
+  opacity: 0.3;
+}
+
 .link-line--flash {
   stroke: var(--accent);
   opacity: 0.8;
-  stroke-width: 2;
+  stroke-width: 4;
 }
 
 /* === Node Enter/Exit Animations === */
@@ -968,12 +1250,12 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
    node center (children are drawn centered at origin). */
 @keyframes node-enter {
   0%   { transform: scale(0); opacity: 0; }
-  70%  { transform: scale(1.12); opacity: 1; }
+  60%  { transform: scale(1.06); opacity: 1; }
   100% { transform: scale(1); opacity: 1; }
 }
 
 .node-inner--entering {
-  animation: node-enter 0.35s cubic-bezier(0.34, 1.56, 0.64, 1) forwards;
+  animation: node-enter 0.4s cubic-bezier(0.22, 1.2, 0.36, 1) forwards;
 }
 
 @keyframes node-exit {
@@ -982,20 +1264,21 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
 }
 
 .loop-node--exiting .node-inner {
-  animation: node-exit 0.25s ease-in forwards;
+  animation: node-exit 0.3s cubic-bezier(0.55, 0, 1, 0.45) forwards;
 }
 
 .loop-node--exiting {
   pointer-events: none;
 }
 
-/* Smooth reflow — nodes glide to new positions on layout changes. */
+/* Smooth reflow — nodes glide to new positions on layout changes.
+   transition-delay is set per-node by JS to stagger the cascade. */
 .loop-node--settled {
-  transition: transform 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  transition: transform 0.55s cubic-bezier(0.25, 0.46, 0.45, 0.94);
 }
 
 .system-node--settled {
-  transition: transform 0.4s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  transition: transform 0.55s cubic-bezier(0.25, 0.46, 0.45, 0.94);
 }
 
 /* === Iteration Flash === */
@@ -1008,6 +1291,18 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
   opacity: 0.7;
   stroke-width: 3;
   animation: ring-flash 0.4s ease-out forwards;
+}
+
+/* Brief green pulse on the node shape when an iteration completes.
+   Guarantees visual feedback even for sub-millisecond handler loops
+   where the processing state is too brief to render. */
+@keyframes shape-iter-pulse {
+  0%   { filter: drop-shadow(0 0 14px var(--green-glow)) brightness(1.3); }
+  100% { filter: none; }
+}
+
+.node-shape--iter-pulse {
+  animation: shape-iter-pulse 0.7s ease-out forwards;
 }
 
 /* === Error Shake === */

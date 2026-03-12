@@ -12,6 +12,8 @@ const state = {
   selected: null,         // id of currently selected loop ('__system__' for system node)
   events: [],             // recent events (newest first, capped)
   sleepTimers: new Map(), // id -> { startedAt: Date, durationMs: number }
+  elapsedTimers: new Map(), // id -> setInterval id for live elapsed display
+  iterationHistory: new Map(), // id -> array of iteration snapshots (newest first)
   system: null,           // system status object from /api/system
   prevIterations: new Map(), // id -> last known iteration count (for flash detection)
   prevErrors: new Map(),     // id -> last known error string (for shake detection)
@@ -19,6 +21,7 @@ const state = {
 };
 
 const MAX_EVENTS = 50;
+const MAX_ITERATION_HISTORY = 10;
 
 // ---------------------------------------------------------------------------
 // Loop Category + Shape + Model Sizing
@@ -116,6 +119,22 @@ function getModelRadius(modelName) {
             (Math.sqrt(maxParams) - Math.sqrt(minParams));
   const clamped = Math.max(0, Math.min(1, t));
   return MIN_NODE_R + clamped * (MAX_NODE_R - MIN_NODE_R);
+}
+
+// Check whether a loop's backing service is degraded (not ready) in
+// the runtime health data. Matches by loop name against service keys.
+function isServiceDegraded(loopName) {
+  if (!state.system || !state.system.health || !loopName) return false;
+  const health = state.system.health;
+  // Direct match: loop name === service key (e.g., "signal" → "signal").
+  if (health[loopName] && !health[loopName].ready) return true;
+  // Prefix match for child loops: "signal/Alice" → check "signal".
+  const slash = loopName.indexOf('/');
+  if (slash > 0) {
+    const prefix = loopName.slice(0, slash);
+    if (health[prefix] && !health[prefix].ready) return true;
+  }
+  return false;
 }
 
 // Create an SVG shape element for a given category at origin, radius r.
@@ -236,7 +255,26 @@ function connect() {
   eventSource.addEventListener('snapshot', (e) => {
     const statuses = JSON.parse(e.data);
     state.loops.clear();
+    state.iterationHistory.clear();
     for (const s of statuses) {
+      // Seed iteration history from server-side ring buffer.
+      if (s.recent_iterations && s.recent_iterations.length > 0) {
+        state.iterationHistory.set(s.id, s.recent_iterations.slice());
+      }
+      // Seed live telemetry for loops already in processing state
+      // so the Live Activity section shows immediately on connect.
+      if (s.state === 'processing') {
+        s._iterStartTs = s.last_wake_at ? new Date(s.last_wake_at).getTime() : Date.now();
+        s._liveTools = [];
+        s._liveModel = '';
+        // Restore LLM context from snapshot so late-connecting clients
+        // see enrichment data (model, tokens, complexity, etc.) immediately.
+        s._llmContext = s.llm_context || null;
+        if (s._llmContext && s._llmContext.model) {
+          s._liveModel = s._llmContext.model;
+        }
+        startElapsedTimer(s.id);
+      }
       state.loops.set(s.id, s);
     }
     renderAll();
@@ -311,6 +349,12 @@ function handleLoopEvent(evt) {
         loop._supervisor = !!evt.data.supervisor;
         loop.attempts = evt.data.attempt || loop.attempts;
         loop._currentConvID = evt.data.conversation_id || null;
+        // Reset live telemetry for new iteration.
+        loop._liveTools = [];
+        loop._liveModel = '';
+        loop._llmContext = null;
+        loop._iterStartTs = Date.now();
+        startElapsedTimer(loopId);
       }
       break;
 
@@ -322,14 +366,109 @@ function handleLoopEvent(evt) {
         loop.total_input_tokens = (loop.total_input_tokens || 0) + (evt.data.input_tokens || 0);
         loop.total_output_tokens = (loop.total_output_tokens || 0) + (evt.data.output_tokens || 0);
         loop.last_input_tokens = evt.data.input_tokens || 0;
+        loop.last_output_tokens = evt.data.output_tokens || 0;
         if (evt.data.context_window > 0) {
           loop.context_window = evt.data.context_window;
         }
         loop.iterations = (loop.iterations || 0) + 1;
+        // Update supervisor tracking.
+        if (loop._supervisor) {
+          loop.last_supervisor_iter = loop.iterations;
+        }
         loop._supervisor = false;
+        // Build iteration snapshot from event + transient state.
+        const snap = {
+          number: loop.iterations,
+          conv_id: evt.data.conversation_id || loop._currentConvID || '',
+          model: evt.data.model || '',
+          input_tokens: evt.data.input_tokens || 0,
+          output_tokens: evt.data.output_tokens || 0,
+          context_window: evt.data.context_window || 0,
+          tools_used: evt.data.tools_used || buildToolCounts(loop._liveTools),
+          elapsed_ms: evt.data.elapsed_ms || 0,
+          supervisor: loop._lastSupervisor || false,
+          started_at: loop._iterStartTs ? new Date(loop._iterStartTs).toISOString() : evt.ts,
+          completed_at: evt.ts,
+          summary: evt.data.summary || null,
+        };
+        prependIterationSnapshot(loopId, snap);
+        // Clear live telemetry.
+        loop._iterStartTs = null;
+        loop._liveTools = [];
+        loop._liveModel = '';
+        loop._llmContext = null;
+        stopElapsedTimer(loopId);
         // Auto-refresh logs if this loop is selected.
         if (state.selected === loopId) {
           fetchLogs(loopId);
+        }
+      }
+      break;
+
+    case 'loop_tool_start':
+      if (loopId && state.loops.has(loopId)) {
+        const loop = state.loops.get(loopId);
+        if (!loop._liveTools) loop._liveTools = [];
+        // Seed _iterStartTs if we missed the iteration_start (e.g. SSE reconnect).
+        if (!loop._iterStartTs) {
+          loop._iterStartTs = Date.now();
+          startElapsedTimer(loopId);
+        }
+        loop._liveTools.push({
+          tool: evt.data.tool,
+          status: 'running',
+          args: evt.data.args || null,
+        });
+      }
+      break;
+
+    case 'loop_tool_done':
+      if (loopId && state.loops.has(loopId)) {
+        const loop = state.loops.get(loopId);
+        if (loop._liveTools) {
+          // Find the last running instance of this tool.
+          for (let i = loop._liveTools.length - 1; i >= 0; i--) {
+            if (loop._liveTools[i].tool === evt.data.tool && loop._liveTools[i].status === 'running') {
+              loop._liveTools[i].status = evt.data.error ? 'error' : 'done';
+              loop._liveTools[i].result = evt.data.result || null;
+              loop._liveTools[i].error = evt.data.error || null;
+              break;
+            }
+          }
+        }
+      }
+      break;
+
+    case 'loop_llm_start':
+      if (loopId && state.loops.has(loopId)) {
+        const loop = state.loops.get(loopId);
+        loop._liveModel = evt.data.model || '';
+        // Stash LLM call context for live card enrichment.
+        loop._llmContext = {
+          est_tokens: evt.data.est_tokens || 0,
+          messages: evt.data.messages || 0,
+          tools: evt.data.tools || 0,
+          iteration: evt.data.iteration,
+          complexity: evt.data.complexity || '',
+          intent: evt.data.intent || '',
+          reasoning: evt.data.reasoning || '',
+        };
+        // Seed _iterStartTs if we missed the iteration_start (e.g. SSE reconnect).
+        if (!loop._iterStartTs) {
+          loop._iterStartTs = Date.now();
+          startElapsedTimer(loopId);
+        }
+      }
+      break;
+
+    case 'loop_llm_response':
+      if (loopId && state.loops.has(loopId)) {
+        const loop = state.loops.get(loopId);
+        loop._liveModel = evt.data.model || '';
+        // Seed _iterStartTs if we missed the iteration_start (e.g. SSE reconnect).
+        if (!loop._iterStartTs) {
+          loop._iterStartTs = Date.now();
+          startElapsedTimer(loopId);
         }
       }
       break;
@@ -342,17 +481,31 @@ function handleLoopEvent(evt) {
           startedAt: new Date(evt.ts),
           durationMs: durationMs,
         });
+        // Annotate most recent snapshot with sleep info.
+        const sleepHist = state.iterationHistory.get(loopId);
+        if (sleepHist && sleepHist.length > 0) {
+          sleepHist[0].sleep_after_ms = durationMs;
+        }
         if (state.loops.has(loopId)) {
-          state.loops.get(loopId).state = 'sleeping';
+          const loop = state.loops.get(loopId);
+          loop.state = 'sleeping';
+          clearLiveTelemetry(loop, loopId);
         }
       }
       break;
 
     case 'loop_wait_start':
       if (loopId && state.loops.has(loopId)) {
-        state.loops.get(loopId).state = 'waiting';
+        const loop = state.loops.get(loopId);
+        loop.state = 'waiting';
+        clearLiveTelemetry(loop, loopId);
         // Clear any sleep timer — waiting has no duration.
         state.sleepTimers.delete(loopId);
+        // Annotate most recent snapshot.
+        const waitHist = state.iterationHistory.get(loopId);
+        if (waitHist && waitHist.length > 0) {
+          waitHist[0].wait_after = true;
+        }
       }
       break;
 
@@ -362,6 +515,17 @@ function handleLoopEvent(evt) {
         loop.state = 'error';
         loop.last_error = evt.data.error || '';
         loop.consecutive_errors = (loop.consecutive_errors || 0) + 1;
+        // Build error snapshot.
+        const errSnap = {
+          number: 0,
+          error: evt.data.error || '',
+          started_at: loop._iterStartTs ? new Date(loop._iterStartTs).toISOString() : evt.ts,
+          completed_at: evt.ts,
+          elapsed_ms: loop._iterStartTs ? Date.now() - loop._iterStartTs : 0,
+          supervisor: loop._supervisor || false,
+        };
+        prependIterationSnapshot(loopId, errSnap);
+        clearLiveTelemetry(loop, loopId);
       }
       break;
   }
@@ -427,10 +591,19 @@ async function fetchSystemStatus() {
 // Rendering — SVG Nodes
 // ---------------------------------------------------------------------------
 
+let _renderRAF = 0;
+
+// Schedule a render on the next animation frame. Coalesces multiple
+// calls (e.g. SSE event bursts after a background-tab wakeup) into a
+// single paint, preventing DOM thrashing and race conditions.
 function renderAll() {
-  renderNodes();
-  renderDetail();
-  renderEventList();
+  if (_renderRAF) return;          // already scheduled
+  _renderRAF = requestAnimationFrame(() => {
+    _renderRAF = 0;
+    // Each sub-render is isolated so a failure in one doesn't block the rest.
+    try { renderNodes(); }      catch (e) { console.error('renderNodes:', e); }
+    try { renderDetail(); }     catch (e) { console.error('renderDetail:', e); }
+  });
 }
 
 function renderNodes() {
@@ -453,6 +626,14 @@ function renderNodes() {
   // Positions map for linking line.
   const nodePositions = new Map();
 
+  // Detect which loops are new this frame (for staggering).
+  const newIds = new Set();
+  for (const loop of loops) {
+    if (!state.knownLoopIds.has(loop.id)) newIds.add(loop.id);
+  }
+
+  // Compute positions first (needed for stagger calculation).
+  const positionList = [];
   for (let i = 0; i < count; i++) {
     const loop = loops[i];
     currentIds.add(loop.id);
@@ -460,7 +641,59 @@ function renderNodes() {
     const x = cx + radius * Math.cos(angle);
     const y = cy + radius * Math.sin(angle);
     nodePositions.set(loop.id, { x, y });
+    positionList.push({ loop, x, y, angle, index: i });
+  }
+
+  // When nodes are added or removed after the initial load, stagger the
+  // reflow transition-delay so nodes closer to the insertion/removal point
+  // move first. This creates an organic "opening slot" / "closing slot" ripple.
+  const existingNodeCount = canvasWorld.querySelectorAll('.loop-node:not(.loop-node--exiting)').length;
+  const isInitialLoad = existingNodeCount === 0;
+  const hasStructureChange = !isInitialLoad && (newIds.size > 0 || existingNodeCount > count);
+  const staggerMs = hasStructureChange ? 30 : 0; // ms per step
+
+  for (const { loop, x, y, index } of positionList) {
     renderNode(loop, x, y);
+
+    // Apply staggered transition-delay to existing (non-new) nodes.
+    if (hasStructureChange && !newIds.has(loop.id)) {
+      const group = canvasWorld.querySelector(`[data-loop-id="${loop.id}"]`);
+      if (group) {
+        const delay = index * staggerMs;
+        group.style.transitionDelay = delay + 'ms';
+        // Clear the delay after the transition completes to avoid
+        // stale delays on future non-structural updates.
+        setTimeout(() => { group.style.transitionDelay = ''; }, 600 + delay);
+      }
+    }
+  }
+
+  // New nodes: on structural changes, delay entrance so the slot opens first.
+  // On initial load, animate immediately (no existing nodes to stagger around).
+  for (const id of newIds) {
+    const group = canvasWorld.querySelector(`[data-loop-id="${id}"]`);
+    if (!group) continue;
+    const inner = group.querySelector('.node-inner');
+    if (!inner) continue;
+
+    if (hasStructureChange) {
+      // Delay entrance until existing nodes have begun their reflow.
+      const entranceDelay = Math.max(80, (count * staggerMs) / 2);
+      inner.style.opacity = '0';
+      setTimeout(() => {
+        inner.style.opacity = '';
+        inner.classList.add('node-inner--entering');
+        inner.addEventListener('animationend', () => {
+          inner.classList.remove('node-inner--entering');
+        }, { once: true });
+      }, entranceDelay);
+    } else {
+      // Initial load or no reflow needed — animate immediately.
+      inner.classList.add('node-inner--entering');
+      inner.addEventListener('animationend', () => {
+        inner.classList.remove('node-inner--entering');
+      }, { once: true });
+    }
   }
 
   // Remove nodes for loops that no longer exist (with exit animation).
@@ -488,52 +721,114 @@ function renderNodes() {
     if (existing) existing.remove();
   }
 
-  // Linking line: runtime → metacognitive.
-  renderLinkingLine(hasSystem, sysX, sysY, loops, nodePositions);
+  // Linking lines: runtime → all top-level loops.
+  renderLinkingLines(hasSystem, sysX, sysY, loops, nodePositions);
 }
 
-function renderLinkingLine(hasSystem, sysX, sysY, loops, nodePositions) {
-  let line = canvasWorld.querySelector('.link-line');
+function renderLinkingLines(hasSystem, sysX, sysY, loops, nodePositions) {
+  // Top-level loops are those without a parent_id.
+  const topLevel = loops.filter(l => !l.parent_id && nodePositions.has(l.id));
+  const activeIds = new Set(topLevel.map(l => l.id));
 
-  // Find the metacognitive loop.
-  const metaLoop = loops.find(l => l.name === 'metacognitive');
+  // Child loops are those with a parent_id.
+  const children = loops.filter(l => l.parent_id && nodePositions.has(l.id));
+  const childKeys = new Set(children.map(l => l.id));
 
-  if (!hasSystem || !metaLoop || !nodePositions.has(metaLoop.id)) {
-    // No connection to draw — remove existing line.
-    if (line) line.remove();
-    return;
+  // Build a set of all valid link targets (system→top-level + parent→child).
+  const allValidTargets = new Set([...activeIds, ...childKeys]);
+
+  // Remove stale link lines for loops that no longer exist.
+  const existing = canvasWorld.querySelectorAll('.link-line');
+  for (const el of existing) {
+    const target = el.dataset.targetLoop;
+    const isSystemLink = !el.dataset.parentLoop;
+    if (isSystemLink && (!hasSystem || !activeIds.has(target))) {
+      el.remove();
+    } else if (!isSystemLink && !allValidTargets.has(target)) {
+      el.remove();
+    }
   }
 
-  const pos = nodePositions.get(metaLoop.id);
+  // System → top-level lines.
+  if (hasSystem) {
+    for (const loop of topLevel) {
+      const pos = nodePositions.get(loop.id);
+      let line = canvasWorld.querySelector(`.link-line[data-target-loop="${loop.id}"]:not([data-parent-loop])`);
 
-  if (!line) {
-    line = createSVG('line', { class: 'link-line' });
-    // Insert before nodes so the line draws behind them.
-    canvasWorld.insertBefore(line, canvasWorld.firstChild);
+      if (!line) {
+        line = createSVG('line', {
+          class: 'link-line',
+          'data-target-loop': loop.id,
+        });
+        // Insert before nodes so lines draw behind them.
+        canvasWorld.insertBefore(line, canvasWorld.firstChild);
+      }
+
+      line.setAttribute('x1', sysX);
+      line.setAttribute('y1', sysY);
+      line.setAttribute('x2', pos.x);
+      line.setAttribute('y2', pos.y);
+
+      // State-driven styling: error or degraded service turns the line orange/red.
+      if (loop.state === 'error') {
+        line.setAttribute('class', 'link-line link-line--error');
+      } else if (isServiceDegraded(loop.name)) {
+        line.setAttribute('class', 'link-line link-line--degraded');
+      } else {
+        line.setAttribute('class', 'link-line');
+      }
+      line.dataset.targetLoop = loop.id;
+    }
   }
 
-  line.setAttribute('x1', sysX);
-  line.setAttribute('y1', sysY);
-  line.setAttribute('x2', pos.x);
-  line.setAttribute('y2', pos.y);
+  // Parent → child lines.
+  for (const child of children) {
+    const parentPos = nodePositions.get(child.parent_id);
+    const childPos = nodePositions.get(child.id);
+    if (!parentPos || !childPos) continue;
 
-  // State-driven styling: error state turns the line red.
-  if (metaLoop.state === 'error') {
-    line.setAttribute('class', 'link-line link-line--error');
-  } else {
-    line.setAttribute('class', 'link-line');
+    const selector = `.link-line[data-target-loop="${child.id}"][data-parent-loop="${child.parent_id}"]`;
+    let line = canvasWorld.querySelector(selector);
+
+    if (!line) {
+      line = createSVG('line', {
+        class: 'link-line link-line--child',
+        'data-target-loop': child.id,
+        'data-parent-loop': child.parent_id,
+      });
+      canvasWorld.insertBefore(line, canvasWorld.firstChild);
+    }
+
+    line.setAttribute('x1', parentPos.x);
+    line.setAttribute('y1', parentPos.y);
+    line.setAttribute('x2', childPos.x);
+    line.setAttribute('y2', childPos.y);
+
+    // State-driven styling for child lines.
+    let cls = 'link-line link-line--child';
+    if (child.state === 'error') {
+      cls += ' link-line--error';
+    }
+    line.setAttribute('class', cls);
+    line.dataset.targetLoop = child.id;
+    line.dataset.parentLoop = child.parent_id;
   }
 }
 
-// Flash the linking line briefly (called on supervisor events).
-function flashLinkingLine() {
-  const line = canvasWorld.querySelector('.link-line');
-  if (!line) return;
-  const baseClass = line.getAttribute('class').replace(' link-line--flash', '');
-  line.setAttribute('class', baseClass + ' link-line--flash');
-  setTimeout(() => {
-    line.setAttribute('class', baseClass);
-  }, 300);
+// Flash a linking line briefly (called on supervisor events).
+// When loopId is provided, only flash that loop's line; otherwise flash all.
+function flashLinkingLine(loopId) {
+  const selector = loopId
+    ? `.link-line[data-target-loop="${loopId}"]`
+    : '.link-line';
+  const lines = canvasWorld.querySelectorAll(selector);
+  for (const line of lines) {
+    const baseClass = line.getAttribute('class').replace(' link-line--flash', '');
+    line.setAttribute('class', baseClass + ' link-line--flash');
+    setTimeout(() => {
+      line.setAttribute('class', baseClass);
+    }, 300);
+  }
 }
 
 function renderNode(loop, x, y) {
@@ -598,7 +893,11 @@ function renderNode(loop, x, y) {
       class: 'node-label',
       y: nodeR + 18,
     });
-    label.textContent = loop.name || loop.id.slice(0, 8);
+    // Child loops show just the suffix after "/" since the parent
+    // line makes the hierarchy clear (e.g., "signal/Alice" → "Alice").
+    const displayName = loop.name || loop.id.slice(0, 8);
+    const slash = loop.parent_id ? displayName.indexOf('/') : -1;
+    label.textContent = slash > 0 ? displayName.slice(slash + 1) : displayName;
 
     inner.appendChild(ring);
     inner.appendChild(sleepRing);
@@ -608,14 +907,8 @@ function renderNode(loop, x, y) {
     group.appendChild(inner);
     canvasWorld.appendChild(group);
 
-    // Enter animation for genuinely new loops.
-    const isNew = !state.knownLoopIds.has(loop.id);
-    if (isNew) {
-      inner.classList.add('node-inner--entering');
-      inner.addEventListener('animationend', () => {
-        inner.classList.remove('node-inner--entering');
-      }, { once: true });
-    }
+    // Mark as known — enter animation is triggered by renderNodes() with
+    // a delay so the slot opens before the node pops in.
     state.knownLoopIds.add(loop.id);
 
     // Enable smooth reflow after first paint.
@@ -646,11 +939,19 @@ function renderNode(loop, x, y) {
   group.dataset.nodeR = nodeR;
 
   // Update state class on main shape — supervisor processing gets its own style.
+  // If the loop's backing service is degraded, override idle states with the
+  // degraded visual so the canvas reflects connwatch health.
   const shapeEl = group.querySelector('.node-shape');
   const isSup = loop._supervisor && loop.state === 'processing';
-  const stateClass = isSup
-    ? 'node-shape--supervisor'
-    : 'node-shape--' + (loop.state || 'pending');
+  const svcDegraded = isServiceDegraded(loop.name);
+  let stateClass;
+  if (isSup) {
+    stateClass = 'node-shape--supervisor';
+  } else if (svcDegraded && (loop.state === 'sleeping' || loop.state === 'waiting')) {
+    stateClass = 'node-shape--degraded';
+  } else {
+    stateClass = 'node-shape--' + (loop.state || 'pending');
+  }
   shapeEl.setAttribute('class', 'node-shape ' + stateClass);
 
   // Stroke width represents context utilization percentage.
@@ -692,10 +993,23 @@ function renderNode(loop, x, y) {
     // Force reflow to restart animation.
     void ring.offsetWidth;
     ring.classList.add('node-ring--flash');
+    ring.addEventListener('animationend', () => {
+      ring.classList.remove('node-ring--flash');
+    }, { once: true });
+
+    // Brief green pulse on the shape — guarantees visual feedback for
+    // fast handler loops where processing state is too brief to render.
+    const shape = group.querySelector('.node-shape');
+    shape.classList.remove('node-shape--iter-pulse');
+    void shape.offsetWidth;
+    shape.classList.add('node-shape--iter-pulse');
+    shape.addEventListener('animationend', () => {
+      shape.classList.remove('node-shape--iter-pulse');
+    }, { once: true });
 
     // Flash the linking line if this is the metacognitive loop and a supervisor fired.
     if (loop.name === 'metacognitive' && loop._lastSupervisor) {
-      flashLinkingLine();
+      flashLinkingLine(loop.id);
     }
   }
   state.prevIterations.set(loop.id, curIter);
@@ -891,37 +1205,11 @@ function renderDetail() {
   // IDs section.
   renderDetailIDs(loop);
 
-  // Forward-looking section: visible when sleeping, waiting, or has supervisor config.
-  const isSleeping = loop.state === 'sleeping';
-  const isWaiting = loop.state === 'waiting';
-  const hasSupervisor = loop.config && loop.config.Supervisor;
-  const showForward = isSleeping || isWaiting || hasSupervisor;
-  $('#detail-forward').hidden = !showForward;
-  $('#detail-divider').hidden = !showForward;
+  // Aggregate stats bar.
+  renderAggregates(loop);
 
-  // Supervisor status bar.
-  renderSupervisorBar(loop);
-
-  // Sleep/wait status — show countdown when sleeping, "awaiting event" when waiting.
-  const sleepVisible = isSleeping || isWaiting;
-  $('#detail-sleep-label').hidden = !sleepVisible;
-  $('#detail-sleep').hidden = !sleepVisible;
-  if (isWaiting) {
-    $('#detail-sleep-label').textContent = 'Wait';
-    $('#detail-sleep').textContent = 'awaiting event';
-  } else {
-    $('#detail-sleep-label').textContent = 'Sleep';
-    updateSleepDisplay(loop);
-  }
-
-  // Historical metrics.
-  $('#detail-iterations').textContent = formatNumber(loop.iterations || 0);
-  $('#detail-attempts').textContent = formatNumber(loop.attempts || 0);
-  $('#detail-input-tokens').textContent = formatTokens(loop.total_input_tokens || 0);
-  $('#detail-output-tokens').textContent = formatTokens(loop.total_output_tokens || 0);
-  $('#detail-model').textContent = loop._lastModel || '-';
-  $('#detail-error').textContent = loop.last_error || '-';
-  $('#detail-started').textContent = loop.started_at ? timeAgo(new Date(loop.started_at)) : '-';
+  // Iteration timeline.
+  renderTimeline(loop);
 
   // Capabilities (tags from config).
   const tags = (loop.config && loop.config.Tags) || [];
@@ -941,22 +1229,63 @@ function renderDetail() {
   }
 }
 
-function updateSleepDisplay(loop) {
-  const el = $('#detail-sleep');
-  const timer = state.sleepTimers.get(loop.id);
-  if (timer && timer.durationMs > 0 && loop.state === 'sleeping') {
-    const remaining = timer.durationMs - (Date.now() - timer.startedAt.getTime());
-    if (remaining > 0) {
-      const wakeAt = new Date(timer.startedAt.getTime() + timer.durationMs);
-      const wakeTime = formatTime(wakeAt);
-      el.innerHTML = 'until ' + wakeTime + '<br>' + formatFuzzy(remaining);
-    } else {
-      el.textContent = 'waking up now...';
+// ---------------------------------------------------------------------------
+// Rendering — Aggregate Stats Bar
+// ---------------------------------------------------------------------------
+
+function renderAggregates(loop) {
+  const el = $('#detail-aggregates');
+  const parts = [];
+  const iter = loop.iterations || 0;
+  const att = loop.attempts || 0;
+  parts.push(formatNumber(iter) + ' iter');
+  if (att !== iter) parts.push(formatNumber(att) + ' att');
+  const totalTok = (loop.total_input_tokens || 0) + (loop.total_output_tokens || 0);
+  if (totalTok > 0) parts.push(formatTokens(totalTok) + ' tok');
+  if (loop.started_at) parts.push(timeAgo(new Date(loop.started_at)));
+  if (loop.last_error) {
+    parts.push('<span class="agg-error">' + escapeHTML(truncate(loop.last_error, 40)) + '</span>');
+  }
+  el.innerHTML = parts.join(' <span class="agg-sep">\u00b7</span> ');
+}
+
+// ---------------------------------------------------------------------------
+// Rendering — Iteration Timeline
+// ---------------------------------------------------------------------------
+
+function renderTimeline(loop) {
+  const container = $('#detail-timeline');
+
+  // Preserve expanded card state across re-renders.
+  const expanded = new Set();
+  container.querySelectorAll('.iter-card--past.iter-card--expanded').forEach(el => {
+    const idx = el.dataset.idx;
+    if (idx != null) expanded.add(idx);
+  });
+
+  container.innerHTML = '';
+
+  const isProcessing = loop.state === 'processing';
+  const isSleeping = loop.state === 'sleeping';
+  const isWaiting = loop.state === 'waiting';
+  const history = state.iterationHistory.get(loop.id) || [];
+
+  // Live card (shown during processing).
+  if (isProcessing && loop._iterStartTs) {
+    container.appendChild(buildLiveCard(loop));
+  }
+
+  // Live connector (between live position and first past card).
+  if ((isSleeping || isWaiting) && history.length > 0) {
+    container.appendChild(buildConnector(loop, history[0], true, state.sleepTimers.get(loop.id)));
+  }
+
+  // Past iteration cards with connectors between them.
+  for (let i = 0; i < history.length; i++) {
+    container.appendChild(buildPastCard(history[i], loop.handler_only, i, expanded.has(String(i))));
+    if (i < history.length - 1) {
+      container.appendChild(buildConnector(loop, history[i], false, null));
     }
-  } else if (loop.state === 'processing') {
-    el.textContent = 'active';
-  } else {
-    el.textContent = '-';
   }
 }
 
@@ -990,9 +1319,11 @@ function renderDetailIDs(loop) {
     container.appendChild(makeIDRow('conv_id', loop._currentConvID));
   }
 
-  // Recent conversation IDs.
+  // Recent conversation IDs — skip for handler-only loops where the
+  // IDs are just iteration counters with no associated LLM conversation.
   const convs = loop.recent_conv_ids;
-  if (convs && convs.length > 0) {
+  const MAX_VISIBLE_CONVS = 5;
+  if (convs && convs.length > 0 && !loop.handler_only) {
     const row = document.createElement('div');
     row.className = 'id-row';
 
@@ -1003,318 +1334,41 @@ function renderDetailIDs(loop) {
 
     const chips = document.createElement('span');
     chips.className = 'id-convs';
-    for (const cid of convs) {
+    const visible = convs.slice(0, MAX_VISIBLE_CONVS);
+    for (const cid of visible) {
       chips.appendChild(makeIDChip(cid));
+    }
+    if (convs.length > MAX_VISIBLE_CONVS) {
+      const more = document.createElement('span');
+      more.className = 'id-chip id-chip--muted';
+      more.textContent = '+' + (convs.length - MAX_VISIBLE_CONVS);
+      chips.appendChild(more);
     }
     row.appendChild(chips);
     container.appendChild(row);
   }
 }
 
-function makeIDRow(label, value) {
-  const row = document.createElement('div');
-  row.className = 'id-row';
+// makeIDRow, makeIDChip, shortID, shortModelName, buildToolCounts,
+// escapeHTML, truncate are in shared.js.
 
-  const lbl = document.createElement('span');
-  lbl.className = 'id-label';
-  lbl.textContent = label;
-  row.appendChild(lbl);
-
-  row.appendChild(makeIDChip(value));
-  return row;
-}
-
-function makeIDChip(fullID) {
-  const chip = document.createElement('span');
-  chip.className = 'id-chip';
-  chip.title = 'Click to copy: ' + fullID;
-  const txt = document.createElement('span');
-  txt.className = 'id-chip-text';
-  txt.textContent = fullID;
-  chip.appendChild(txt);
-  chip.addEventListener('click', (e) => {
-    e.stopPropagation();
-    navigator.clipboard.writeText(fullID).then(() => {
-      chip.classList.add('id-chip--copied');
-      setTimeout(() => chip.classList.remove('id-chip--copied'), 1200);
-    });
-  });
-  return chip;
-}
-
-function renderSupervisorBar(loop) {
-  const bar = $('#detail-supervisor');
-  const cfg = loop.config || {};
-
-  // Only show if supervisor mode is configured.
-  if (!cfg.Supervisor) {
-    bar.hidden = true;
-    return;
+function prependIterationSnapshot(loopId, snap) {
+  let arr = state.iterationHistory.get(loopId);
+  if (!arr) {
+    arr = [];
+    state.iterationHistory.set(loopId, arr);
   }
-
-  bar.hidden = false;
-  bar.innerHTML = '';
-
-  const prob = cfg.SupervisorProb || 0;
-  const pct = Math.round(prob * 100);
-
-  if (loop._supervisor) {
-    // Currently in a supervisor iteration.
-    bar.className = 'supervisor-bar supervisor-bar--active';
-    bar.innerHTML = '<span class="sup-icon">&#x2726;</span> Supervisor iteration in progress';
-  } else if (loop._lastSupervisor) {
-    // Last iteration was a supervisor.
-    bar.className = 'supervisor-bar supervisor-bar--last';
-    bar.innerHTML = '<span class="sup-icon">&#x2726;</span> Last iteration was supervised';
-  } else {
-    // Idle — show probability of next being a supervisor.
-    bar.className = 'supervisor-bar';
-    bar.innerHTML = '<span class="sup-icon">&#x2726;</span> Supervisor: ' + pct + '% chance next';
-  }
-}
-
-function shortID(id) {
-  if (!id) return '';
-  // UUID-like: show first 8 chars.
-  if (id.length > 12) return id.slice(0, 8);
-  return id;
-}
-
-// ---------------------------------------------------------------------------
-// Rendering — Event List
-// ---------------------------------------------------------------------------
-
-function renderEventList() {
-  const list = $('#event-list');
-  list.innerHTML = '';
-
-  // Show events for selected loop, or all if none selected.
-  const filtered = state.selected
-    ? state.events.filter(e => e.data && e.data.loop_id === state.selected)
-    : state.events;
-
-  for (const evt of filtered.slice(0, 20)) {
-    const li = document.createElement('li');
-
-    const time = document.createElement('span');
-    time.className = 'event-time';
-    time.textContent = formatTime(new Date(evt.ts));
-
-    const kind = document.createElement('span');
-    kind.className = 'event-kind';
-
-    const detail = document.createElement('span');
-    detail.className = 'event-detail';
-
-    switch (evt.kind) {
-      case 'loop_iteration_start':
-        kind.textContent = evt.data.supervisor ? 'supervisor' : 'iteration';
-        kind.className += evt.data.supervisor ? ' event-supervisor' : '';
-        detail.textContent = '#' + (evt.data.attempt || '?');
-        break;
-      case 'loop_iteration_complete':
-        kind.textContent = 'complete';
-        kind.className += ' event-ok';
-        detail.textContent = evt.data.model || '';
-        break;
-      case 'loop_sleep_start': {
-        kind.textContent = 'sleep';
-        const raw = evt.data.sleep_duration || '';
-        const ms = parseDuration(raw);
-        detail.textContent = ms > 0 ? formatDuration(ms) : raw;
-        break;
-      }
-      case 'loop_wait_start':
-        kind.textContent = 'waiting';
-        detail.textContent = 'awaiting event';
-        break;
-      case 'loop_error':
-        kind.textContent = 'error';
-        kind.className += ' event-error';
-        detail.textContent = evt.data.error || '';
-        break;
-      case 'loop_state_change':
-        kind.textContent = evt.data.from + ' -> ' + evt.data.to;
-        break;
-      case 'loop_started':
-        kind.textContent = 'started';
-        kind.className += ' event-ok';
-        break;
-      case 'loop_stopped':
-        kind.textContent = 'stopped';
-        break;
-      default:
-        kind.textContent = evt.kind;
-    }
-
-    li.appendChild(time);
-    li.appendChild(kind);
-    li.appendChild(detail);
-    list.appendChild(li);
-  }
+  arr.unshift(snap);
+  if (arr.length > MAX_ITERATION_HISTORY) arr.length = MAX_ITERATION_HISTORY;
 }
 
 // ---------------------------------------------------------------------------
 // Rendering — Log Panel
 // ---------------------------------------------------------------------------
 
+// renderLogRows and buildLogDetail are in shared.js.
 function renderLogs(entries) {
-  if (!entries || entries.length === 0) {
-    logEmpty.hidden = false;
-    logEmpty.querySelector('p').textContent = 'No log entries found';
-    logScroll.hidden = true;
-    return;
-  }
-
-  logEmpty.hidden = true;
-  logScroll.hidden = false;
-
-  // Check if already scrolled to bottom before updating content.
-  const atBottom = logScroll.scrollHeight - logScroll.scrollTop - logScroll.clientHeight < 24;
-
-  logBody.innerHTML = '';
-
-  for (const entry of entries) {
-    const tr = document.createElement('tr');
-
-    const tdTime = document.createElement('td');
-    tdTime.className = 'log-time';
-    tdTime.textContent = entry.Timestamp
-      ? formatTime(new Date(entry.Timestamp))
-      : '';
-
-    const tdLevel = document.createElement('td');
-    const levelSpan = document.createElement('span');
-    levelSpan.className = 'level-badge level-badge--' + (entry.Level || 'INFO');
-    levelSpan.textContent = entry.Level || '?';
-    tdLevel.appendChild(levelSpan);
-
-    const tdSub = document.createElement('td');
-    tdSub.className = 'log-subsystem';
-    tdSub.textContent = entry.Subsystem || '';
-
-    const tdMsg = document.createElement('td');
-    tdMsg.className = 'log-msg';
-    tdMsg.textContent = entry.Msg || '';
-    tdMsg.title = entry.Msg || '';
-
-    const tdDetail = document.createElement('td');
-    tdDetail.className = 'log-detail';
-    buildLogDetail(tdDetail, entry);
-
-    tr.appendChild(tdTime);
-    tr.appendChild(tdLevel);
-    tr.appendChild(tdSub);
-    tr.appendChild(tdMsg);
-    tr.appendChild(tdDetail);
-    logBody.appendChild(tr);
-  }
-
-  // Auto-scroll to bottom if user was already at the bottom (live tail).
-  if (atBottom) {
-    logScroll.scrollTop = logScroll.scrollHeight;
-  }
-}
-
-// Build detail column from promoted fields + parsed Attrs JSON.
-function buildLogDetail(td, entry) {
-  const parts = [];
-
-  if (entry.Model) {
-    parts.push({ key: 'model', val: entry.Model, cls: 'model' });
-  }
-  if (entry.Tool) {
-    parts.push({ key: 'tool', val: entry.Tool, cls: 'tool' });
-  }
-
-  // Parse Attrs JSON for extra instrumentation.
-  let attrs = null;
-  if (entry.Attrs) {
-    try { attrs = JSON.parse(entry.Attrs); } catch (_) { /* ignore */ }
-  }
-  if (attrs) {
-    // Duration fields (various naming conventions).
-    for (const k of ['duration', 'elapsed', 'latency', 'took']) {
-      if (attrs[k] != null) {
-        parts.push({ key: k, val: String(attrs[k]), cls: 'duration' });
-      }
-    }
-    // Token fields.
-    if (attrs.input_tokens != null) {
-      parts.push({ key: 'in', val: formatTokens(attrs.input_tokens), cls: 'tokens' });
-    }
-    if (attrs.output_tokens != null) {
-      parts.push({ key: 'out', val: formatTokens(attrs.output_tokens), cls: 'tokens' });
-    }
-    if (attrs.total_tokens != null && attrs.input_tokens == null) {
-      parts.push({ key: 'tokens', val: formatTokens(attrs.total_tokens), cls: 'tokens' });
-    }
-    // Tool call count.
-    if (attrs.tool_calls != null) {
-      parts.push({ key: 'tools', val: String(attrs.tool_calls), cls: 'tool' });
-    }
-    if (attrs.tool_count != null && attrs.tool_calls == null) {
-      parts.push({ key: 'tools', val: String(attrs.tool_count), cls: 'tool' });
-    }
-    // Catch-all: surface remaining scalar attrs.
-    const shown = new Set([
-      'duration', 'elapsed', 'latency', 'took',
-      'input_tokens', 'output_tokens', 'total_tokens',
-      'tool_calls', 'tool_count',
-      'thane_version', 'thane_commit', 'loop_id', 'loop_name',
-    ]);
-    for (const [k, v] of Object.entries(attrs)) {
-      if (shown.has(k)) continue;
-      if (v == null || typeof v === 'object') continue;
-      const s = String(v);
-      if (s.length > 40) continue;
-      parts.push({ key: k, val: s, cls: '' });
-    }
-  }
-
-  for (const p of parts) {
-    const span = document.createElement('span');
-    span.className = 'log-attr';
-
-    const key = document.createElement('span');
-    key.className = 'log-attr-key';
-    key.textContent = p.key + '=';
-
-    const val = document.createElement('span');
-    val.className = 'log-attr-val' + (p.cls ? ' log-attr-val--' + p.cls : '');
-    val.textContent = p.val;
-
-    span.appendChild(key);
-    span.appendChild(val);
-    td.appendChild(span);
-  }
-
-  // Copy-clickable ID chips for tracing IDs.
-  const ids = [
-    { label: 'req', full: entry.RequestID },
-    { label: 'conv', full: entry.ConversationID },
-    { label: 'sess', full: entry.SessionID },
-  ];
-  for (const { label, full } of ids) {
-    if (!full) continue;
-    const chip = document.createElement('span');
-    chip.className = 'log-id-chip';
-    chip.textContent = label + ':' + shortID(full);
-    chip.title = label + ' — click to copy\n' + full;
-    chip.addEventListener('click', (e) => {
-      e.stopPropagation();
-      navigator.clipboard.writeText(full).then(() => {
-        chip.classList.add('log-id-chip--copied');
-        setTimeout(() => chip.classList.remove('log-id-chip--copied'), 1200);
-      });
-    });
-    td.appendChild(chip);
-  }
-
-  // Tooltip with full attrs JSON for inspection.
-  if (attrs) {
-    td.title = JSON.stringify(attrs, null, 2);
-  }
+  renderLogRows(entries, { logEmpty, logScroll, logBody });
 }
 
 // ---------------------------------------------------------------------------
@@ -1373,14 +1427,15 @@ async function fetchSystemLogs() {
 // Animation Loop (sleep countdowns + progress rings)
 // ---------------------------------------------------------------------------
 
+let _lastTickSec = 0;
+
 function tick() {
-  // Update live detail fields for selected loop.
-  if (state.selected && state.loops.has(state.selected)) {
-    const loop = state.loops.get(state.selected);
-    updateSleepDisplay(loop);
-    // Keep "Started" field fresh.
-    if (loop.started_at) {
-      $('#detail-started').textContent = timeAgo(new Date(loop.started_at));
+  // Throttle detail updates to ~1Hz (sleep countdowns don't need 60fps).
+  const nowSec = Math.floor(Date.now() / 1000);
+  if (nowSec !== _lastTickSec) {
+    _lastTickSec = nowSec;
+    if (state.selected && state.loops.has(state.selected)) {
+      try { renderDetail(); } catch (e) { console.error('tick renderDetail:', e); }
     }
   }
 
@@ -1545,65 +1600,30 @@ function createSVG(tag, attrs) {
   return el;
 }
 
-function formatNumber(n) {
-  return n.toLocaleString();
+// formatNumber, formatTokens, formatDuration, formatTime, formatTimeShort,
+// timeAgo, parseDuration, formatUptimeLong are in shared.js.
+
+// ---------------------------------------------------------------------------
+// Live Telemetry Timers
+// ---------------------------------------------------------------------------
+
+function startElapsedTimer(loopId) {
+  // Elapsed display is now driven by the 1Hz tick() render cycle.
+  // Keep the timer infrastructure for symmetry with stopElapsedTimer
+  // (which clears _iterStartTs), but no separate interval needed.
+  stopElapsedTimer(loopId);
 }
 
-function formatTokens(n) {
-  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
-  if (n >= 1_000) return (n / 1_000).toFixed(1) + 'k';
-  return String(n);
+function stopElapsedTimer(loopId) {
+  state.elapsedTimers.delete(loopId);
 }
 
-function formatDuration(ms) {
-  if (ms < 0) return '0s';
-  const totalSec = Math.floor(ms / 1000);
-  const m = Math.floor(totalSec / 60);
-  const s = totalSec % 60;
-  if (m > 0) return m + 'm ' + s + 's';
-  return s + 's';
-}
-
-function formatTime(date) {
-  if (!(date instanceof Date) || isNaN(date)) return '';
-  return date.toLocaleTimeString(undefined, {
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: false,
-  });
-}
-
-function timeAgo(date) {
-  const diff = Date.now() - date.getTime();
-  const sec = Math.floor(diff / 1000);
-  if (sec < 60) return sec + 's ago';
-  const min = Math.floor(sec / 60);
-  if (min < 60) return min + 'm ago';
-  const hr = Math.floor(min / 60);
-  if (hr < 24) return hr + 'h ago';
-  return Math.floor(hr / 24) + 'd ago';
-}
-
-// parseDuration converts a Go-style duration string (e.g., "10m30s",
-// "2h", "500ms") to milliseconds.
-function parseDuration(s) {
-  if (!s) return 0;
-  let ms = 0;
-  const re = /(\d+(?:\.\d+)?)(ns|us|ms|s|m|h)/g;
-  let match;
-  while ((match = re.exec(s)) !== null) {
-    const val = parseFloat(match[1]);
-    switch (match[2]) {
-      case 'h':  ms += val * 3600000; break;
-      case 'm':  ms += val * 60000; break;
-      case 's':  ms += val * 1000; break;
-      case 'ms': ms += val; break;
-      case 'us': ms += val / 1000; break;
-      case 'ns': ms += val / 1000000; break;
-    }
-  }
-  return ms;
+function clearLiveTelemetry(loop, loopId) {
+  loop._iterStartTs = null;
+  loop._liveTools = [];
+  loop._liveModel = '';
+  loop._llmContext = null;
+  stopElapsedTimer(loopId);
 }
 
 // ---------------------------------------------------------------------------
@@ -1640,20 +1660,6 @@ function updateUptime() {
   if (connState !== 'connected') return;
   const ms = Date.now() - serverStartTime;
   $('#footer-uptime').textContent = 'up ' + formatUptimeLong(ms);
-}
-
-function formatUptimeLong(ms) {
-  const sec = Math.floor(ms / 1000);
-  const d = Math.floor(sec / 86400);
-  const h = Math.floor((sec % 86400) / 3600);
-  const m = Math.floor((sec % 3600) / 60);
-  const s = sec % 60;
-  const parts = [];
-  if (d > 0) parts.push(d + 'd');
-  if (h > 0) parts.push(h + 'h');
-  if (m > 0) parts.push(m + 'm');
-  parts.push(s + 's');
-  return parts.join(' ');
 }
 
 // ---------------------------------------------------------------------------

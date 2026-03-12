@@ -115,6 +115,19 @@ const (
 	// KindLoopError signals a loop iteration encountered an error.
 	// Data: loop_id, loop_name, error.
 	KindLoopError = "loop_error"
+	// KindLoopToolStart signals a tool execution has begun within a
+	// loop iteration. Data: loop_id, loop_name, tool.
+	KindLoopToolStart = "loop_tool_start"
+	// KindLoopToolDone signals a tool execution has completed within a
+	// loop iteration. Data: loop_id, loop_name, tool, error (if failed).
+	KindLoopToolDone = "loop_tool_done"
+	// KindLoopLLMStart signals an LLM API call is about to begin during
+	// a loop iteration. Data: loop_id, loop_name, model.
+	KindLoopLLMStart = "loop_llm_start"
+	// KindLoopLLMResponse signals an LLM response was received during a
+	// loop iteration. Data: loop_id, loop_name, model, input_tokens,
+	// output_tokens.
+	KindLoopLLMResponse = "loop_llm_response"
 )
 
 // Event represents a single operational event published by a component.

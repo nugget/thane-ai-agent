@@ -29,6 +29,14 @@ type RunRequest struct {
 	ExcludeTools   []string
 	SkipTagFilter  bool
 	Hints          map[string]string
+
+	// OnProgress is called by the Runner during execution to report
+	// in-flight activity (tool calls, LLM responses). The kind
+	// parameter maps to an [events.Kind] constant; data holds
+	// event-specific fields. The loop automatically injects loop_id
+	// and loop_name into data before publishing. Nil means no
+	// progress reporting.
+	OnProgress func(kind string, data map[string]any) `json:"-"`
 }
 
 // RunMessage is a chat message for the runner.
@@ -66,6 +74,10 @@ var ErrNilRunner = errors.New("loop: Runner is required")
 // recentConvIDsCap is the maximum number of conversation IDs retained
 // in the ring buffer exposed via [Status.RecentConvIDs].
 const recentConvIDsCap = 10
+
+// recentIterationsCap is the maximum number of completed iteration
+// snapshots retained for the dashboard timeline.
+const recentIterationsCap = 10
 
 // Deps holds injected dependencies for a loop. Using a struct avoids a
 // growing parameter list as loops evolve.
@@ -112,6 +124,7 @@ type Loop struct {
 	totalInputTokens  int
 	totalOutputTokens int
 	lastInputTokens   int
+	lastOutputTokens  int
 	contextWindow     int
 	lastError         string
 
@@ -124,6 +137,22 @@ type Loop struct {
 	// recent iterations (newest first, up to recentConvIDsCap). Used by
 	// the visualizer to query log entries scoped to this loop.
 	recentConvIDs []string
+
+	// recentIterations is a ring buffer of completed iteration
+	// snapshots (newest first, up to recentIterationsCap). Used by
+	// the dashboard timeline to show iteration history.
+	recentIterations []IterationSnapshot
+
+	// lastSupervisorIter is the iteration number of the most recent
+	// successful supervisor iteration. Zero means none yet.
+	lastSupervisorIter int
+
+	// llmContext holds enrichment data from the most recent
+	// loop_llm_start progress event (model, est_tokens, messages,
+	// tools, complexity, intent, reasoning). Set by makeProgressFunc
+	// during processing, cleared when the iteration ends. Included
+	// in Status() so late-connecting dashboard clients see it.
+	llmContext map[string]any
 
 	// nextSleep can be set externally (e.g., by a set_next_sleep
 	// tool handler) to override the default sleep for one cycle.
@@ -294,25 +323,61 @@ func (l *Loop) Status() Status {
 		copy(convIDsCopy, l.recentConvIDs)
 	}
 
+	// Deep copy recentIterations (including ToolsUsed maps).
+	var iterCopy []IterationSnapshot
+	if len(l.recentIterations) > 0 {
+		iterCopy = make([]IterationSnapshot, len(l.recentIterations))
+		copy(iterCopy, l.recentIterations)
+		for i, snap := range iterCopy {
+			if len(snap.ToolsUsed) > 0 {
+				m := make(map[string]int, len(snap.ToolsUsed))
+				for k, v := range snap.ToolsUsed {
+					m[k] = v
+				}
+				iterCopy[i].ToolsUsed = m
+			}
+			if len(snap.Summary) > 0 {
+				s := make(map[string]any, len(snap.Summary))
+				for k, v := range snap.Summary {
+					s[k] = v
+				}
+				iterCopy[i].Summary = s
+			}
+		}
+	}
+
+	// Deep copy llmContext for late-connecting dashboard clients.
+	var llmCtxCopy map[string]any
+	if len(l.llmContext) > 0 {
+		llmCtxCopy = make(map[string]any, len(l.llmContext))
+		for k, v := range l.llmContext {
+			llmCtxCopy[k] = v
+		}
+	}
+
 	return Status{
-		ID:                l.id,
-		Name:              l.config.Name,
-		State:             l.state,
-		ParentID:          l.config.ParentID,
-		StartedAt:         l.startedAt,
-		LastWakeAt:        l.lastWakeAt,
-		Iterations:        l.iterations,
-		Attempts:          l.attempts,
-		TotalInputTokens:  l.totalInputTokens,
-		TotalOutputTokens: l.totalOutputTokens,
-		LastInputTokens:   l.lastInputTokens,
-		ContextWindow:     l.contextWindow,
-		LastError:         l.lastError,
-		ConsecutiveErrors: l.consecutiveErrors,
-		RecentConvIDs:     convIDsCopy,
-		HandlerOnly:       l.config.Handler != nil,
-		EventDriven:       l.config.WaitFunc != nil,
-		Config:            cfgCopy,
+		ID:                 l.id,
+		Name:               l.config.Name,
+		State:              l.state,
+		ParentID:           l.config.ParentID,
+		StartedAt:          l.startedAt,
+		LastWakeAt:         l.lastWakeAt,
+		Iterations:         l.iterations,
+		Attempts:           l.attempts,
+		TotalInputTokens:   l.totalInputTokens,
+		TotalOutputTokens:  l.totalOutputTokens,
+		LastInputTokens:    l.lastInputTokens,
+		LastOutputTokens:   l.lastOutputTokens,
+		ContextWindow:      l.contextWindow,
+		LastError:          l.lastError,
+		ConsecutiveErrors:  l.consecutiveErrors,
+		RecentConvIDs:      convIDsCopy,
+		RecentIterations:   iterCopy,
+		LLMContext:         llmCtxCopy,
+		LastSupervisorIter: l.lastSupervisorIter,
+		HandlerOnly:        l.config.Handler != nil,
+		EventDriven:        l.config.WaitFunc != nil,
+		Config:             cfgCopy,
 	}
 }
 
@@ -483,8 +548,9 @@ func (l *Loop) run(ctx context.Context) {
 		iterCtx := logging.WithLogger(ctx, iterLog)
 
 		l.setState(StateProcessing)
+		iterStartTime := time.Now()
 		l.mu.Lock()
-		l.lastWakeAt = time.Now()
+		l.lastWakeAt = iterStartTime
 		l.attempts++
 		l.mu.Unlock()
 
@@ -506,9 +572,13 @@ func (l *Loop) run(ctx context.Context) {
 		// Dispatch: Handler runs directly; otherwise use LLM via iterate().
 		var result *IterationResult
 		var err error
+		var handlerSummary map[string]any
 		if l.config.Handler != nil {
 			iterStart := time.Now()
-			if handlerErr := l.config.Handler(iterCtx, event); handlerErr != nil {
+			summary := make(map[string]any)
+			handlerCtx := context.WithValue(iterCtx, iterSummaryKey{}, summary)
+			handlerCtx = context.WithValue(handlerCtx, progressFuncKey{}, l.makeProgressFunc())
+			if handlerErr := l.config.Handler(handlerCtx, event); handlerErr != nil {
 				err = fmt.Errorf("handler: %w", handlerErr)
 			} else {
 				result = &IterationResult{
@@ -517,14 +587,24 @@ func (l *Loop) run(ctx context.Context) {
 					Elapsed:    time.Since(iterStart),
 				}
 			}
+			if len(summary) > 0 {
+				handlerSummary = summary
+			}
 		} else {
 			result, err = l.iterate(iterCtx, isSupervisor, convID)
 		}
 
-		// Clear current conversation ID after iteration completes.
+		// Clear in-flight state after iteration completes.
 		l.mu.Lock()
 		l.currentConvID = ""
+		l.llmContext = nil
 		l.mu.Unlock()
+
+		// Build iteration snapshot for the dashboard timeline.
+		var snap IterationSnapshot
+		snap.ConvID = convID
+		snap.StartedAt = iterStartTime
+		snap.Supervisor = isSupervisor
 
 		if err != nil {
 			if ctx.Err() != nil {
@@ -537,6 +617,10 @@ func (l *Loop) run(ctx context.Context) {
 			l.consecutiveErrors++
 			l.mu.Unlock()
 			l.setState(StateError)
+
+			snap.Error = err.Error()
+			snap.CompletedAt = time.Now()
+			snap.ElapsedMs = snap.CompletedAt.Sub(iterStartTime).Milliseconds()
 
 			l.publishEvent(events.Event{
 				Timestamp: time.Now(),
@@ -554,12 +638,33 @@ func (l *Loop) run(ctx context.Context) {
 			l.totalInputTokens += result.InputTokens
 			l.totalOutputTokens += result.OutputTokens
 			l.lastInputTokens = result.InputTokens
+			l.lastOutputTokens = result.OutputTokens
 			if result.ContextWindow > 0 {
 				l.contextWindow = result.ContextWindow
 			}
 			l.lastError = ""
 			l.consecutiveErrors = 0
+			if isSupervisor {
+				l.lastSupervisorIter = l.iterations
+			}
+			snap.Number = l.iterations
 			l.mu.Unlock()
+
+			snap.Model = result.Model
+			snap.InputTokens = result.InputTokens
+			snap.OutputTokens = result.OutputTokens
+			snap.ContextWindow = result.ContextWindow
+			snap.ElapsedMs = result.Elapsed.Milliseconds()
+			snap.CompletedAt = time.Now()
+
+			// Deep copy ToolsUsed so the snapshot is independent
+			// of any caller-held references.
+			if len(result.ToolsUsed) > 0 {
+				snap.ToolsUsed = make(map[string]int, len(result.ToolsUsed))
+				for k, v := range result.ToolsUsed {
+					snap.ToolsUsed[k] = v
+				}
+			}
 
 			iterLog.Info("loop iteration complete",
 				"model", result.Model,
@@ -568,25 +673,52 @@ func (l *Loop) run(ctx context.Context) {
 				"elapsed", result.Elapsed.Round(time.Second),
 			)
 
+			eventData := map[string]any{
+				"loop_id":         l.id,
+				"loop_name":       l.config.Name,
+				"model":           result.Model,
+				"input_tokens":    result.InputTokens,
+				"output_tokens":   result.OutputTokens,
+				"context_window":  result.ContextWindow,
+				"elapsed_ms":      result.Elapsed.Milliseconds(),
+				"tools_used":      result.ToolsUsed,
+				"supervisor":      result.Supervisor,
+				"conversation_id": convID,
+			}
+			if len(handlerSummary) > 0 {
+				eventData["summary"] = handlerSummary
+			}
 			l.publishEvent(events.Event{
 				Timestamp: time.Now(),
 				Source:    events.SourceLoop,
 				Kind:      events.KindLoopIterationComplete,
-				Data: map[string]any{
-					"loop_id":        l.id,
-					"loop_name":      l.config.Name,
-					"model":          result.Model,
-					"input_tokens":   result.InputTokens,
-					"output_tokens":  result.OutputTokens,
-					"context_window": result.ContextWindow,
-					"elapsed_ms":     result.Elapsed.Milliseconds(),
-				},
+				Data:      eventData,
 			})
 		}
 
 		// Compute sleep after updating error state so backoff reflects
 		// the outcome of the just-completed iteration.
 		sleep := l.computeSleep()
+
+		// Record sleep/wait info on the snapshot before buffering.
+		if l.config.WaitFunc != nil {
+			snap.WaitAfter = true
+		} else {
+			snap.SleepAfterMs = sleep.Milliseconds()
+		}
+
+		// Attach handler summary if available.
+		if len(handlerSummary) > 0 {
+			snap.Summary = handlerSummary
+		}
+
+		// Prepend snapshot to ring buffer (newest first).
+		l.mu.Lock()
+		l.recentIterations = append([]IterationSnapshot{snap}, l.recentIterations...)
+		if len(l.recentIterations) > recentIterationsCap {
+			l.recentIterations = l.recentIterations[:recentIterationsCap]
+		}
+		l.mu.Unlock()
 
 		// Call PostIterate on success if configured. Errors are logged
 		// but do not count as iteration failures. Uses iterCtx for
@@ -646,6 +778,47 @@ func (l *Loop) run(ctx context.Context) {
 	})
 }
 
+// makeProgressFunc returns a callback that publishes in-flight
+// progress events to the event bus with loop context (id, name).
+// Returns nil when there is no event bus, which disables progress
+// reporting in the runner.
+func (l *Loop) makeProgressFunc() func(string, map[string]any) {
+	if l.deps.EventBus == nil {
+		return nil
+	}
+	return func(kind string, data map[string]any) {
+		if data == nil {
+			data = make(map[string]any)
+		}
+		data["loop_id"] = l.id
+		data["loop_name"] = l.config.Name
+
+		// Capture LLM context so late-connecting dashboard clients
+		// see enrichment data in the initial snapshot.
+		if kind == events.KindLoopLLMStart {
+			ctx := make(map[string]any, len(data))
+			for k, v := range data {
+				// Skip loop infrastructure keys — they're not useful
+				// for dashboard rendering.
+				if k == "loop_id" || k == "loop_name" {
+					continue
+				}
+				ctx[k] = v
+			}
+			l.mu.Lock()
+			l.llmContext = ctx
+			l.mu.Unlock()
+		}
+
+		l.deps.EventBus.Publish(events.Event{
+			Timestamp: time.Now(),
+			Source:    events.SourceLoop,
+			Kind:      kind,
+			Data:      data,
+		})
+	}
+}
+
 // iterate performs a single loop iteration: build prompt and run the
 // LLM via the agent runner.
 func (l *Loop) iterate(ctx context.Context, isSupervisor bool, convID string) (*IterationResult, error) {
@@ -698,6 +871,7 @@ func (l *Loop) iterate(ctx context.Context, isSupervisor bool, convID string) (*
 		ExcludeTools:  l.config.ExcludeTools,
 		SkipTagFilter: len(l.config.Tags) == 0,
 		Hints:         hints,
+		OnProgress:    l.makeProgressFunc(),
 	}
 
 	resp, err := l.deps.Runner.Run(ctx, req, nil)

@@ -159,6 +159,18 @@ func NewRouter(logger *slog.Logger, config Config) *Router {
 	}
 }
 
+// ContextWindowForModel returns the context window size for the named
+// model. If the model is not found in the router's configuration, it
+// returns 0.
+func (r *Router) ContextWindowForModel(name string) int {
+	for _, m := range r.config.Models {
+		if m.Name == name {
+			return m.ContextWindow
+		}
+	}
+	return 0
+}
+
 // MaxQuality returns the highest quality rating among configured models.
 // If no models are configured it returns 10 as a safe default that
 // selects the best available model at runtime.

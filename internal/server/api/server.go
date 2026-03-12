@@ -70,10 +70,16 @@ type Server struct {
 	healthDeps    HealthStatusFunc
 	tokenObserver TokenObserver
 	eventBus      *events.Bus
+	owuTracker    *OWUTracker
 	webServer     WebServerRegistrar
 	logger        *slog.Logger
 	server        *http.Server
 	stats         *SessionStats
+}
+
+// SetOWUTracker configures the Open WebUI loop tracker for dashboard visibility.
+func (s *Server) SetOWUTracker(t *OWUTracker) {
+	s.owuTracker = t
 }
 
 // SetConnManager sets the dependency health provider for the /health endpoint.
@@ -547,10 +553,10 @@ type StreamDelta struct {
 }
 
 func (s *Server) handleStreamingCompletion(w http.ResponseWriter, r *http.Request, agentReq *agent.Request) {
-	// Set SSE headers
+	// Set SSE headers. Omit "Connection: keep-alive" — it's a hop-by-hop
+	// header forbidden in HTTP/2 (RFC 9113 §8.2.2).
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no") // Disable nginx buffering
 
 	flusher, ok := w.(http.Flusher)

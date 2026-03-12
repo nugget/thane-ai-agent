@@ -166,10 +166,11 @@ func (s *WebServer) handleLoopEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Set SSE headers.
+	// Set SSE headers. Omit "Connection: keep-alive" — it's a hop-by-hop
+	// header forbidden in HTTP/2 (RFC 9113 §8.2.2) and can cause
+	// ERR_HTTP2_PROTOCOL_ERROR if a reverse proxy forwards it.
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
 
 	// Manage write deadlines to prevent the server's WriteTimeout from

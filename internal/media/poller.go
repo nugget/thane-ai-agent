@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/httpkit"
+	"github.com/nugget/thane-ai-agent/internal/loop"
 	"github.com/nugget/thane-ai-agent/internal/opstate"
 )
 
@@ -39,9 +40,9 @@ var validFeedTrustZones = map[string]bool{
 }
 
 // FeedPoller checks followed RSS/Atom feeds for new entries by
-// comparing entry IDs against a persisted high-water mark. It follows
-// the same pattern as email.Poller — infrastructure code called by the
-// scheduler task executor.
+// comparing entry IDs against a persisted high-water mark. When run
+// inside the loop infrastructure, it reports per-iteration metrics
+// (feeds_checked, new_entries) via [loop.IterationSummary].
 type FeedPoller struct {
 	state  *opstate.Store
 	logger *slog.Logger
@@ -66,18 +67,24 @@ func NewFeedPoller(state *opstate.Store, logger *slog.Logger) *FeedPoller {
 // nothing new was found. Network errors are logged and skipped
 // per-feed; a failure on one feed does not prevent checking others.
 func (p *FeedPoller) CheckFeeds(ctx context.Context) (string, error) {
+	summary := loop.IterationSummary(ctx)
+
 	ids, err := loadFeedIndex(p.state)
 	if err != nil {
 		return "", fmt.Errorf("load feed index: %w", err)
 	}
 	if len(ids) == 0 {
+		if summary != nil {
+			summary["feeds_checked"] = 0
+		}
 		return "", nil
 	}
 
 	var sections []string
+	newEntryCount := 0
 
 	for _, id := range ids {
-		section, err := p.checkFeed(ctx, id)
+		section, n, err := p.checkFeed(ctx, id)
 		if err != nil {
 			p.logger.Warn("feed poll failed",
 				"feed_id", id,
@@ -85,9 +92,15 @@ func (p *FeedPoller) CheckFeeds(ctx context.Context) (string, error) {
 			)
 			continue
 		}
+		newEntryCount += n
 		if section != "" {
 			sections = append(sections, section)
 		}
+	}
+
+	if summary != nil {
+		summary["feeds_checked"] = len(ids)
+		summary["new_entries"] = newEntryCount
 	}
 
 	if len(sections) == 0 {
@@ -104,14 +117,15 @@ func (p *FeedPoller) CheckFeeds(ctx context.Context) (string, error) {
 }
 
 // checkFeed checks a single feed for new entries. Returns a formatted
-// section for the wake message, or empty string if nothing new.
-func (p *FeedPoller) checkFeed(ctx context.Context, feedID string) (string, error) {
+// section for the wake message (empty if nothing new), the number of
+// new entries found, and any error.
+func (p *FeedPoller) checkFeed(ctx context.Context, feedID string) (string, int, error) {
 	feedURL, err := p.state.Get(feedNamespace, feedKeyURL(feedID))
 	if err != nil {
-		return "", fmt.Errorf("get feed URL: %w", err)
+		return "", 0, fmt.Errorf("get feed URL: %w", err)
 	}
 	if feedURL == "" {
-		return "", fmt.Errorf("feed %q has no URL", feedID)
+		return "", 0, fmt.Errorf("feed %q has no URL", feedID)
 	}
 
 	feedName, _ := p.state.Get(feedNamespace, feedKeyName(feedID))
@@ -128,7 +142,7 @@ func (p *FeedPoller) checkFeed(ctx context.Context, feedID string) (string, erro
 
 	feed, err := fetchFeed(ctx, p.http, feedURL)
 	if err != nil {
-		return "", fmt.Errorf("fetch %q: %w", feedName, err)
+		return "", 0, fmt.Errorf("fetch %q: %w", feedName, err)
 	}
 
 	// Update last_checked timestamp.
@@ -138,7 +152,7 @@ func (p *FeedPoller) checkFeed(ctx context.Context, feedID string) (string, erro
 	}
 
 	if len(feed.Entries) == 0 {
-		return "", nil
+		return "", 0, nil
 	}
 
 	// Update latest title for display purposes.
@@ -156,7 +170,7 @@ func (p *FeedPoller) checkFeed(ctx context.Context, feedID string) (string, erro
 			"feed_name", feedName,
 			"latest_entry", feed.Entries[0].Title,
 		)
-		return "", nil
+		return "", 0, nil
 	}
 
 	// Collect new entries (entries newer than the high-water mark).
@@ -184,11 +198,11 @@ func (p *FeedPoller) checkFeed(ctx context.Context, feedID string) (string, erro
 				"latest_entry", feed.Entries[0].Title,
 			)
 		}
-		return "", nil
+		return "", 0, nil
 	}
 
 	if len(newEntries) == 0 {
-		return "", nil
+		return "", 0, nil
 	}
 
 	// Update high-water mark to the newest entry.
@@ -210,7 +224,7 @@ func (p *FeedPoller) checkFeed(ctx context.Context, feedID string) (string, erro
 	for _, entry := range newEntries {
 		fmt.Fprintf(&sb, "**%s** [%s] (feed_id: %s): %s\n%s\n", feedName, trustZone, feedID, entry.Title, entry.Link)
 	}
-	return sb.String(), nil
+	return sb.String(), len(newEntries), nil
 }
 
 // loadFeedIndex and saveFeedIndex are defined in tools_feed.go as

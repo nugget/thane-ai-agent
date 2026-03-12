@@ -20,11 +20,17 @@ import (
 // port (e.g., for Home Assistant integration). For single-port setups, use
 // Server.RegisterOllamaRoutes instead.
 type OllamaServer struct {
-	address string
-	port    int
-	loop    *agent.Loop
-	logger  *slog.Logger
-	server  *http.Server
+	address    string
+	port       int
+	loop       *agent.Loop
+	owuTracker *OWUTracker
+	logger     *slog.Logger
+	server     *http.Server
+}
+
+// SetOWUTracker configures the Open WebUI loop tracker for dashboard visibility.
+func (s *OllamaServer) SetOWUTracker(t *OWUTracker) {
+	s.owuTracker = t
 }
 
 // NewOllamaServer creates a new Ollama-compatible API server.
@@ -134,7 +140,7 @@ func (s *OllamaServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 // Request format and behavior matches Ollama's chat API.
 func (s *OllamaServer) handleChat(w http.ResponseWriter, r *http.Request) {
 	// Delegate to shared implementation
-	handleOllamaChatShared(w, r, s.loop, s.logger)
+	handleOllamaChatShared(w, r, s.loop, s.owuTracker, s.logger)
 }
 
 // handleGenerate handles POST /api/generate (simple completion).
@@ -142,7 +148,7 @@ func (s *OllamaServer) handleChat(w http.ResponseWriter, r *http.Request) {
 // Currently implemented as a single-turn chat for simplicity.
 func (s *OllamaServer) handleGenerate(w http.ResponseWriter, r *http.Request) {
 	// For now, treat generate like a single-turn chat
-	handleOllamaChatShared(w, r, s.loop, s.logger)
+	handleOllamaChatShared(w, r, s.loop, s.owuTracker, s.logger)
 }
 
 // handleTags handles GET /api/tags (list models).
