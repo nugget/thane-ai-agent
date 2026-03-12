@@ -765,6 +765,11 @@ type DebugConfig struct {
 	// DumpDir is the directory where debug output files are written.
 	// Created automatically on first write. Default: "./debug".
 	DumpDir string `yaml:"dump_dir"`
+
+	// DemoLoops spawns simulated loops covering all visual variants
+	// (categories, parent/child, error states, node churn) so the
+	// dashboard can be iterated on without real service dependencies.
+	DemoLoops bool `yaml:"demo_loops"`
 }
 
 // ShellExecConfig configures the agent's ability to execute shell

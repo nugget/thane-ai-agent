@@ -448,6 +448,14 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		loopRegistry.ShutdownAll(shutCtx)
 	}()
 
+	// --- Demo loops (debug) ---
+	if cfg.Debug.DemoLoops {
+		if err := looppkg.SpawnDemoLoops(ctx, loopRegistry, eventBus, logger); err != nil {
+			return fmt.Errorf("spawn demo loops: %w", err)
+		}
+		logger.Warn("demo loops enabled — dashboard shows simulated activity")
+	}
+
 	// --- Memory store ---
 	// SQLite-backed conversation memory. Persists across restarts so the
 	// agent can resume in-progress conversations.
