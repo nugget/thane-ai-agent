@@ -2056,16 +2056,23 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		// Track last cleanup time for periodic rate-limiter maintenance.
 		lastCleanup := time.Now()
 		const haCleanupInterval = 5 * time.Minute
+		const haBatchWindow = 1 * time.Second
+		const haBatchMax = 100
 
 		events := watcher.Events()
 		if _, err := loopRegistry.SpawnLoop(haLoopCtx, looppkg.Config{
 			Name: "ha-state-watcher",
 			WaitFunc: func(wCtx context.Context) (any, error) {
-				// Use a timer so rate-limiter cleanup runs even
-				// during idle periods with no HA events.
+				// Block until at least one event arrives, then drain
+				// up to haBatchMax events within haBatchWindow. This
+				// debounces high-frequency HA state changes into one
+				// loop iteration per batch.
 				cleanupTimer := time.NewTimer(haCleanupInterval)
 				defer cleanupTimer.Stop()
 
+				var batch []homeassistant.Event
+
+				// Wait for the first event (or cleanup/cancel).
 				select {
 				case <-wCtx.Done():
 					return nil, wCtx.Err()
@@ -2074,19 +2081,39 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 						haLoopCancel()
 						return nil, context.Canceled
 					}
-					return ev, nil
+					batch = append(batch, ev)
 				case <-cleanupTimer.C:
 					watcher.CleanupRateLimiter()
 					lastCleanup = time.Now()
-					// Return a nil event — handler skips nil payloads.
 					return nil, nil
 				}
+
+				// Drain additional events within the batch window.
+				drainTimer := time.NewTimer(haBatchWindow)
+				defer drainTimer.Stop()
+			drain:
+				for len(batch) < haBatchMax {
+					select {
+					case <-wCtx.Done():
+						break drain
+					case ev, ok := <-events:
+						if !ok {
+							break drain
+						}
+						batch = append(batch, ev)
+					case <-drainTimer.C:
+						break drain
+					}
+				}
+
+				return batch, nil
 			},
 			Handler: func(_ context.Context, payload any) error {
-				if ev, ok := payload.(homeassistant.Event); ok {
-					watcher.HandleEvent(ev)
+				if batch, ok := payload.([]homeassistant.Event); ok {
+					for _, ev := range batch {
+						watcher.HandleEvent(ev)
+					}
 				}
-				// Also check inline in case events arrive faster than the timer.
 				if time.Since(lastCleanup) > haCleanupInterval {
 					watcher.CleanupRateLimiter()
 					lastCleanup = time.Now()
