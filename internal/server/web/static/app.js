@@ -741,6 +741,12 @@ async function fetchLoops() {
 
 async function fetchLogs(loopId) {
   if (!loopId) return;
+  // Ephemeral delegate nodes aren't real loops — no logs endpoint.
+  const loop = state.loops.get(loopId);
+  if (loop && loop._delegate) {
+    renderLogs([]);
+    return;
+  }
   const level = $('#log-level').value;
   let url = '/api/loops/' + encodeURIComponent(loopId) + '/logs?limit=100';
   if (level) url += '&level=' + encodeURIComponent(level);

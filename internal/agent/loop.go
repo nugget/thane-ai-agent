@@ -21,6 +21,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/llm"
 	"github.com/nugget/thane-ai-agent/internal/logging"
+	"github.com/nugget/thane-ai-agent/internal/loop"
 	"github.com/nugget/thane-ai-agent/internal/memory"
 	"github.com/nugget/thane-ai-agent/internal/openclaw"
 	"github.com/nugget/thane-ai-agent/internal/prompts"
@@ -1376,7 +1377,13 @@ iterLoop:
 				}
 				toolCtx = tools.WithToolCallID(toolCtx, toolCallIDStr)
 				toolCtx = tools.WithIterationIndex(toolCtx, i)
-				if lid := req.Hints["loop_id"]; lid != "" {
+				// Propagate originating loop ID so downstream tools
+				// (e.g. delegate executor) can discover their parent.
+				// Handler-based loops inject it via loop.LoopIDFromContext;
+				// iterate-based loops set it in the request hints.
+				if lid := loop.LoopIDFromContext(ctx); lid != "" {
+					toolCtx = tools.WithLoopID(toolCtx, lid)
+				} else if lid := req.Hints["loop_id"]; lid != "" {
 					toolCtx = tools.WithLoopID(toolCtx, lid)
 				}
 
