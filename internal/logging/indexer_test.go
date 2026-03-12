@@ -344,6 +344,22 @@ type discardWriter struct{}
 
 func (discardWriter) Write(p []byte) (int, error) { return len(p), nil }
 
+func TestIndexHandler_LogAfterCloseNoPanic(t *testing.T) {
+	db := openTestDB(t)
+	inner := slog.NewJSONHandler(discardWriter{}, nil)
+	h := NewIndexHandler(inner, db, nil)
+
+	logger := slog.New(h)
+	logger.Info("before close")
+	h.Close()
+
+	// Logging after Close must not panic (send on closed channel).
+	// This reproduces the crash in issue #558 where a background
+	// goroutine logs after the indexer channel is closed.
+	logger.Info("after close — should not panic")
+	logger.Debug("another post-close log")
+}
+
 func TestPrune_DebugAndTrace(t *testing.T) {
 	db := openTestDB(t)
 

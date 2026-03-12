@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"log/slog"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -54,10 +56,11 @@ type IndexHandler struct {
 // All handlers derived from the same root via WithAttrs/WithGroup
 // share a single indexShared.
 type indexShared struct {
-	db   *sql.DB
-	ch   chan indexEntry
-	done chan struct{}
-	once sync.Once // guards Close
+	db     *sql.DB
+	ch     chan indexEntry
+	done   chan struct{}
+	closed atomic.Bool // true after Close; guards sends on ch
+	once   sync.Once   // guards Close
 }
 
 // indexEntry is the set of fields written to SQLite for one log record.
@@ -163,11 +166,13 @@ func (h *IndexHandler) Handle(ctx context.Context, r slog.Record) error {
 		entry.Attrs = string(b)
 	}
 
-	// Non-blocking send; drop the entry if the channel is full (better
-	// to lose an index entry than to block a log call).
-	select {
-	case h.shared.ch <- entry:
-	default:
+	// Drop the entry if the handler has been closed or the channel is
+	// full. Never block a log call on database I/O.
+	if !h.shared.closed.Load() {
+		select {
+		case h.shared.ch <- entry:
+		default:
+		}
 	}
 
 	return nil
@@ -193,7 +198,7 @@ func (h *IndexHandler) WithGroup(name string) slog.Handler {
 		inner:    h.inner.WithGroup(name),
 		rotator:  h.rotator,
 		preAttrs: cloneAttrs(h.preAttrs),
-		groups:   append(append([]string(nil), h.groups...), name),
+		groups:   append(slices.Clone(h.groups), name),
 		shared:   h.shared,
 	}
 }
@@ -202,6 +207,7 @@ func (h *IndexHandler) WithGroup(name string) slog.Handler {
 // goroutine. It is safe to call multiple times.
 func (h *IndexHandler) Close() {
 	h.shared.once.Do(func() {
+		h.shared.closed.Store(true)
 		close(h.shared.ch)
 		<-h.shared.done
 	})
@@ -304,7 +310,7 @@ func (h *IndexHandler) classifyAttr(a slog.Attr, entry *indexEntry, extras map[s
 		attrs := a.Value.Group()
 		childGroups := groups
 		if key != "" {
-			childGroups = append(append([]string(nil), groups...), key)
+			childGroups = append(slices.Clone(groups), key)
 		}
 		for _, ga := range attrs {
 			h.classifyAttr(ga, entry, extras, childGroups)
