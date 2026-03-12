@@ -212,6 +212,12 @@ type Config struct {
 	// export and self-referencing operations.
 	Identity IdentityConfig `yaml:"identity"`
 
+	// Attachments configures content-addressed attachment storage.
+	// When StoreDir is set, received attachments (Signal, email, etc.)
+	// are stored by SHA-256 hash with a SQLite metadata index for
+	// deduplication and provenance tracking.
+	Attachments AttachmentsConfig `yaml:"attachments"`
+
 	// Provenance configures git-backed file storage with SSH signature
 	// enforcement. Files written through a provenance store are
 	// automatically committed with cryptographic signatures, providing
@@ -396,6 +402,16 @@ type IdentityConfig struct {
 	// record. When set, export_vcf name="self" resolves to this
 	// contact.
 	ContactName string `yaml:"contact_name"`
+}
+
+// AttachmentsConfig configures content-addressed attachment storage.
+type AttachmentsConfig struct {
+	// StoreDir is the root directory for the content-addressed file
+	// store. When set, received attachments are stored by SHA-256 hash
+	// instead of being copied with their original filenames. The
+	// metadata index is stored at {data_dir}/attachments.db.
+	// Supports ~ expansion. Example: ~/Thane/attachments
+	StoreDir string `yaml:"store_dir"`
 }
 
 // ProvenanceConfig configures git-backed file storage with SSH

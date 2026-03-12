@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/agent"
+	"github.com/nugget/thane-ai-agent/internal/attachments"
 	"github.com/nugget/thane-ai-agent/internal/config"
 	"github.com/nugget/thane-ai-agent/internal/events"
 	"github.com/nugget/thane-ai-agent/internal/logging"
@@ -108,33 +109,35 @@ type AttachmentConfig struct {
 
 // BridgeConfig holds the dependencies for a Bridge.
 type BridgeConfig struct {
-	Client      *Client
-	Runner      AgentRunner
-	Logger      *slog.Logger
-	RateLimit   int                        // per sender per minute; 0 = unlimited
-	Routing     config.SignalRoutingConfig // model selection and routing hints
-	Rotator     SessionRotator             // nil disables idle session rotation
-	IdleTimeout time.Duration              // 0 disables idle session rotation
-	Resolver    ContactResolver            // nil disables phone→name resolution
-	Attachments AttachmentConfig           // attachment storage configuration
-	Registry    *loop.Registry             // loop registry for dashboard visibility
-	EventBus    *events.Bus                // event bus for in-flight events
+	Client          *Client
+	Runner          AgentRunner
+	Logger          *slog.Logger
+	RateLimit       int                        // per sender per minute; 0 = unlimited
+	Routing         config.SignalRoutingConfig // model selection and routing hints
+	Rotator         SessionRotator             // nil disables idle session rotation
+	IdleTimeout     time.Duration              // 0 disables idle session rotation
+	Resolver        ContactResolver            // nil disables phone→name resolution
+	Attachments     AttachmentConfig           // attachment storage configuration
+	AttachmentStore *attachments.Store         // content-addressed store; nil = legacy copy
+	Registry        *loop.Registry             // loop registry for dashboard visibility
+	EventBus        *events.Bus                // event bus for in-flight events
 }
 
 // Bridge receives Signal messages from the signal-cli client, routes
 // them through the agent loop, and sends responses back via Signal.
 type Bridge struct {
-	client      *Client
-	runner      AgentRunner
-	logger      *slog.Logger
-	rateLimit   int
-	routing     config.SignalRoutingConfig
-	rotator     SessionRotator
-	idleTimeout time.Duration
-	resolver    ContactResolver
-	attachments AttachmentConfig
-	registry    *loop.Registry
-	eventBus    *events.Bus
+	client          *Client
+	runner          AgentRunner
+	logger          *slog.Logger
+	rateLimit       int
+	routing         config.SignalRoutingConfig
+	rotator         SessionRotator
+	idleTimeout     time.Duration
+	resolver        ContactResolver
+	attachments     AttachmentConfig
+	attachmentStore *attachments.Store
+	registry        *loop.Registry
+	eventBus        *events.Bus
 
 	mu            sync.Mutex
 	senderTimes   map[string][]time.Time
@@ -159,20 +162,21 @@ func NewBridge(cfg BridgeConfig) *Bridge {
 		}
 	}
 	return &Bridge{
-		client:        cfg.Client,
-		runner:        cfg.Runner,
-		logger:        logger,
-		rateLimit:     cfg.RateLimit,
-		routing:       cfg.Routing,
-		rotator:       cfg.Rotator,
-		idleTimeout:   cfg.IdleTimeout,
-		resolver:      cfg.Resolver,
-		attachments:   cfg.Attachments,
-		registry:      cfg.Registry,
-		eventBus:      cfg.EventBus,
-		senderTimes:   make(map[string][]time.Time),
-		lastInboundTS: make(map[string]lastMessage),
-		senderChans:   make(map[string]chan *Envelope),
+		client:          cfg.Client,
+		runner:          cfg.Runner,
+		logger:          logger,
+		rateLimit:       cfg.RateLimit,
+		routing:         cfg.Routing,
+		rotator:         cfg.Rotator,
+		idleTimeout:     cfg.IdleTimeout,
+		resolver:        cfg.Resolver,
+		attachments:     cfg.Attachments,
+		attachmentStore: cfg.AttachmentStore,
+		registry:        cfg.Registry,
+		eventBus:        cfg.EventBus,
+		senderTimes:     make(map[string][]time.Time),
+		lastInboundTS:   make(map[string]lastMessage),
+		senderChans:     make(map[string]chan *Envelope),
 	}
 }
 
@@ -560,7 +564,15 @@ func (b *Bridge) handleMessage(ctx context.Context, env *Envelope, progressFn fu
 		if env.DataMessage.ViewOnce {
 			attachmentDescs = []string{"[View-once attachment — not available]"}
 		} else {
-			attachmentDescs = b.processAttachments(env.DataMessage.Attachments)
+			// Use the Signal message timestamp for provenance rather than
+			// wall-clock time, so records remain accurate across processing
+			// delays and downtime replays.
+			msgTS := env.Timestamp
+			if env.DataMessage.Timestamp != 0 {
+				msgTS = env.DataMessage.Timestamp
+			}
+			receivedAt := time.UnixMilli(msgTS)
+			attachmentDescs = b.processAttachments(ctx, env.DataMessage.Attachments, sender, convID, receivedAt)
 		}
 	}
 	content := formatMessage(env, attachmentDescs)
@@ -952,18 +964,27 @@ func formatReaction(env *Envelope) string {
 	return sb.String()
 }
 
-// processAttachments copies received attachments from signal-cli's
-// storage to the workspace and returns a human-readable description
-// of each attachment. Files that cannot be copied (missing, too
-// large) are described but marked as unavailable.
-func (b *Bridge) processAttachments(attachments []Attachment) []string {
-	descs := make([]string, 0, len(attachments))
-	for _, a := range attachments {
+// processAttachments stores received attachments and returns a
+// human-readable description of each. When the content-addressed
+// attachment store is configured, files are ingested via [Store.Ingest];
+// otherwise they are copied to the legacy destination directory.
+// Files that cannot be processed (missing, too large) are described
+// but marked as unavailable.
+func (b *Bridge) processAttachments(ctx context.Context, atts []Attachment, sender, convID string, receivedAt time.Time) []string {
+	descs := make([]string, 0, len(atts))
+	for _, a := range atts {
 		if b.attachments.MaxSize > 0 && a.Size > b.attachments.MaxSize {
 			descs = append(descs, describeAttachment(a, "exceeds size limit"))
 			continue
 		}
 
+		// Content-addressed store path.
+		if b.attachmentStore != nil {
+			descs = append(descs, b.ingestAttachment(ctx, a, sender, convID, receivedAt))
+			continue
+		}
+
+		// Legacy copy path.
 		if b.attachments.SourceDir == "" || b.attachments.DestDir == "" {
 			descs = append(descs, describeAttachment(a, ""))
 			continue
@@ -1017,6 +1038,56 @@ func (b *Bridge) processAttachments(attachments []Attachment) []string {
 		descs = append(descs, describeAttachment(a, destPath))
 	}
 	return descs
+}
+
+// ingestAttachment stores a single attachment via the content-addressed
+// store and returns a human-readable description.
+func (b *Bridge) ingestAttachment(ctx context.Context, a Attachment, sender, convID string, receivedAt time.Time) string {
+	if b.attachments.SourceDir == "" {
+		return describeAttachment(a, "source dir not configured")
+	}
+
+	srcPath := filepath.Join(b.attachments.SourceDir, a.ID)
+	f, err := os.Open(srcPath)
+	if err != nil {
+		b.logger.Warn("signal attachment not found",
+			"id", a.ID,
+			"path", srcPath,
+			"error", err,
+		)
+		return describeAttachment(a, "file not available")
+	}
+	defer f.Close()
+
+	rec, err := b.attachmentStore.Ingest(ctx, attachments.IngestParams{
+		Source:         f,
+		OriginalName:   a.Filename,
+		ContentType:    a.ContentType,
+		Size:           a.Size,
+		Width:          a.Width,
+		Height:         a.Height,
+		Channel:        "signal",
+		Sender:         sender,
+		ConversationID: convID,
+		ReceivedAt:     receivedAt,
+	})
+	if err != nil {
+		b.logger.Warn("signal attachment ingest failed",
+			"id", a.ID,
+			"error", err,
+		)
+		return describeAttachment(a, "ingest failed")
+	}
+
+	absPath := b.attachmentStore.AbsPath(rec)
+	b.logger.Info("signal attachment ingested",
+		"id", a.ID,
+		"hash", rec.Hash,
+		"store_path", rec.StorePath,
+		"size", rec.Size,
+		"content_type", rec.ContentType,
+	)
+	return describeAttachment(a, absPath)
 }
 
 // describeAttachment builds a human-readable description of a single

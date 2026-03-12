@@ -3,6 +3,8 @@ package signal
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -14,6 +16,7 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/agent"
+	"github.com/nugget/thane-ai-agent/internal/attachments"
 	"github.com/nugget/thane-ai-agent/internal/config"
 )
 
@@ -1127,7 +1130,7 @@ func TestProcessAttachments_CopiesFile(t *testing.T) {
 		{ContentType: "image/jpeg", Filename: "photo.jpg", ID: attachmentID, Size: int64(len(content))},
 	}
 
-	descs := bridge.processAttachments(attachments)
+	descs := bridge.processAttachments(context.Background(), attachments, "+15551234567", "conv-test", time.Now())
 	if len(descs) != 1 {
 		t.Fatalf("expected 1 description, got %d", len(descs))
 	}
@@ -1163,7 +1166,7 @@ func TestProcessAttachments_MissingFile(t *testing.T) {
 		{ContentType: "image/jpeg", ID: "nonexistent", Size: 1000},
 	}
 
-	descs := bridge.processAttachments(attachments)
+	descs := bridge.processAttachments(context.Background(), attachments, "+15551234567", "conv-test", time.Now())
 	if len(descs) != 1 {
 		t.Fatalf("expected 1 description, got %d", len(descs))
 	}
@@ -1185,7 +1188,7 @@ func TestProcessAttachments_ExceedsMaxSize(t *testing.T) {
 		{ContentType: "video/mp4", Filename: "big.mp4", ID: "abc", Size: 50000},
 	}
 
-	descs := bridge.processAttachments(attachments)
+	descs := bridge.processAttachments(context.Background(), attachments, "+15551234567", "conv-test", time.Now())
 	if len(descs) != 1 {
 		t.Fatalf("expected 1 description, got %d", len(descs))
 	}
@@ -1201,7 +1204,7 @@ func TestProcessAttachments_NoDirsConfigured(t *testing.T) {
 		{ContentType: "image/jpeg", Filename: "photo.jpg", ID: "abc", Size: 1000},
 	}
 
-	descs := bridge.processAttachments(attachments)
+	descs := bridge.processAttachments(context.Background(), attachments, "+15551234567", "conv-test", time.Now())
 	if len(descs) != 1 {
 		t.Fatalf("expected 1 description, got %d", len(descs))
 	}
@@ -1231,7 +1234,7 @@ func TestProcessAttachments_PathTraversal(t *testing.T) {
 		{ContentType: "image/jpeg", Filename: "../../../etc/passwd", ID: "malicious", Size: 4},
 	}
 
-	descs := bridge.processAttachments(attachments)
+	descs := bridge.processAttachments(context.Background(), attachments, "+15551234567", "conv-test", time.Now())
 	if len(descs) != 1 {
 		t.Fatalf("expected 1 description, got %d", len(descs))
 	}
@@ -1278,17 +1281,17 @@ func TestProcessAttachments_FilenameCollision(t *testing.T) {
 	})
 
 	// Process first attachment.
-	descs1 := bridge.processAttachments([]Attachment{
+	descs1 := bridge.processAttachments(context.Background(), []Attachment{
 		{ContentType: "image/jpeg", Filename: "photo.jpg", ID: "abc", Size: 5},
-	})
+	}, "+15551234567", "conv-test", time.Now())
 	if len(descs1) != 1 {
 		t.Fatalf("expected 1 description, got %d", len(descs1))
 	}
 
 	// Process second attachment with same filename — should not overwrite.
-	descs2 := bridge.processAttachments([]Attachment{
+	descs2 := bridge.processAttachments(context.Background(), []Attachment{
 		{ContentType: "image/jpeg", Filename: "photo.jpg", ID: "def", Size: 6},
-	})
+	}, "+15551234567", "conv-test", time.Now())
 	if len(descs2) != 1 {
 		t.Fatalf("expected 1 description, got %d", len(descs2))
 	}
@@ -1309,6 +1312,178 @@ func TestProcessAttachments_FilenameCollision(t *testing.T) {
 	}
 	if string(first) != "first" {
 		t.Errorf("first file content = %q, want %q", first, "first")
+	}
+}
+
+func TestProcessAttachments_WithStore(t *testing.T) {
+	dir := t.TempDir()
+	srcDir := filepath.Join(dir, "signal-src")
+	storeDir := filepath.Join(dir, "store")
+	dbPath := filepath.Join(dir, "test.db")
+
+	os.MkdirAll(srcDir, 0o750)
+	os.WriteFile(filepath.Join(srcDir, "att-001"), []byte("image data"), 0o640)
+
+	store, err := attachments.NewStore(dbPath, storeDir, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	bridge := NewBridge(BridgeConfig{
+		Client: &Client{},
+		Runner: &testRunner{},
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Attachments: AttachmentConfig{
+			SourceDir: srcDir,
+		},
+		AttachmentStore: store,
+	})
+
+	descs := bridge.processAttachments(context.Background(), []Attachment{
+		{ContentType: "image/jpeg", Filename: "photo.jpg", ID: "att-001", Size: 10, Width: 800, Height: 600},
+	}, "+15559999999", "conv-store-001", time.Now())
+
+	if len(descs) != 1 {
+		t.Fatalf("expected 1 description, got %d", len(descs))
+	}
+
+	// Description should reference a path in the store, not the legacy dest.
+	if !strings.Contains(descs[0], storeDir) {
+		t.Errorf("expected store path in description, got: %q", descs[0])
+	}
+
+	// Verify file exists in the content-addressed path.
+	if !strings.Contains(descs[0], ".jpg") {
+		t.Errorf("expected .jpg extension in store path, got: %q", descs[0])
+	}
+
+	// Verify metadata was recorded — compute the expected hash for "image data".
+	h := sha256.Sum256([]byte("image data"))
+	expectedHash := hex.EncodeToString(h[:])
+	rec, err := store.ByHash(context.Background(), expectedHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec == nil {
+		t.Fatal("ByHash returned nil for ingested attachment")
+	}
+	if rec.Channel != "signal" {
+		t.Errorf("Channel = %q, want %q", rec.Channel, "signal")
+	}
+	if rec.Sender != "+15559999999" {
+		t.Errorf("Sender = %q, want %q", rec.Sender, "+15559999999")
+	}
+	if rec.ConversationID != "conv-store-001" {
+		t.Errorf("ConversationID = %q, want %q", rec.ConversationID, "conv-store-001")
+	}
+	if rec.ContentType != "image/jpeg" {
+		t.Errorf("ContentType = %q, want %q", rec.ContentType, "image/jpeg")
+	}
+	if rec.Width != 800 || rec.Height != 600 {
+		t.Errorf("dimensions = %dx%d, want 800x600", rec.Width, rec.Height)
+	}
+}
+
+func TestProcessAttachments_WithStore_MissingSource(t *testing.T) {
+	dir := t.TempDir()
+	srcDir := filepath.Join(dir, "signal-src")
+	storeDir := filepath.Join(dir, "store")
+	dbPath := filepath.Join(dir, "test.db")
+
+	os.MkdirAll(srcDir, 0o750)
+	// Do NOT create the source file — it should be missing.
+
+	store, err := attachments.NewStore(dbPath, storeDir, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	bridge := NewBridge(BridgeConfig{
+		Client: &Client{},
+		Runner: &testRunner{},
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Attachments: AttachmentConfig{
+			SourceDir: srcDir,
+		},
+		AttachmentStore: store,
+	})
+
+	descs := bridge.processAttachments(context.Background(), []Attachment{
+		{ContentType: "image/jpeg", ID: "missing-att", Size: 100},
+	}, "+15559999999", "conv-store-002", time.Now())
+
+	if len(descs) != 1 {
+		t.Fatalf("expected 1 description, got %d", len(descs))
+	}
+	if !strings.Contains(descs[0], "file not available") {
+		t.Errorf("expected 'file not available' in description, got: %q", descs[0])
+	}
+}
+
+func TestProcessAttachments_WithStore_Dedup(t *testing.T) {
+	dir := t.TempDir()
+	srcDir := filepath.Join(dir, "signal-src")
+	storeDir := filepath.Join(dir, "store")
+	dbPath := filepath.Join(dir, "test.db")
+
+	os.MkdirAll(srcDir, 0o750)
+	// Two source files with identical content.
+	os.WriteFile(filepath.Join(srcDir, "att-A"), []byte("same content"), 0o640)
+	os.WriteFile(filepath.Join(srcDir, "att-B"), []byte("same content"), 0o640)
+
+	store, err := attachments.NewStore(dbPath, storeDir, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	bridge := NewBridge(BridgeConfig{
+		Client: &Client{},
+		Runner: &testRunner{},
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+		Attachments: AttachmentConfig{
+			SourceDir: srcDir,
+		},
+		AttachmentStore: store,
+	})
+
+	descs1 := bridge.processAttachments(context.Background(), []Attachment{
+		{ContentType: "text/plain", ID: "att-A", Size: 12},
+	}, "+15551111111", "conv-A", time.Now())
+
+	descs2 := bridge.processAttachments(context.Background(), []Attachment{
+		{ContentType: "text/plain", ID: "att-B", Size: 12},
+	}, "+15552222222", "conv-B", time.Now())
+
+	if len(descs1) != 1 || len(descs2) != 1 {
+		t.Fatal("expected 1 description each")
+	}
+
+	// Both should reference the same store path (same content hash).
+	if !strings.Contains(descs1[0], storeDir) || !strings.Contains(descs2[0], storeDir) {
+		t.Fatal("both should reference the store directory")
+	}
+
+	// Extract the absolute store path from each description and verify
+	// they are identical (true dedup: one file on disk).
+	extractPath := func(desc string) string {
+		// Description format: "[type ...] path-or-note"
+		idx := strings.Index(desc, storeDir)
+		if idx == -1 {
+			return ""
+		}
+		end := strings.IndexAny(desc[idx:], "] ")
+		if end == -1 {
+			return desc[idx:]
+		}
+		return desc[idx : idx+end]
+	}
+	path1 := extractPath(descs1[0])
+	path2 := extractPath(descs2[0])
+	if path1 != path2 {
+		t.Errorf("expected deduplicated attachments to share store path, got %q and %q", path1, path2)
 	}
 }
 
