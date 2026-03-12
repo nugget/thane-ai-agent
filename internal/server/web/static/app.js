@@ -452,6 +452,8 @@ function handleLoopEvent(evt) {
         loop._supervisor = !!evt.data.supervisor;
         loop.attempts = evt.data.attempt || loop.attempts;
         loop._currentConvID = evt.data.conversation_id || null;
+        // Clear sleep timer — loop is awake now.
+        state.sleepTimers.delete(loopId);
         // Reset live telemetry for new iteration.
         loop._liveTools = [];
         loop._liveModel = '';
@@ -581,7 +583,7 @@ function handleLoopEvent(evt) {
         const durationStr = evt.data.sleep_duration || '';
         const durationMs = parseDuration(durationStr);
         state.sleepTimers.set(loopId, {
-          startedAt: new Date(evt.ts),
+          startedAt: Date.now(),
           durationMs: durationMs,
         });
         // Annotate most recent snapshot with sleep info.
@@ -1082,7 +1084,7 @@ function updateSleepRing(group, loopId) {
     return;
   }
 
-  const elapsed = Date.now() - timer.startedAt.getTime();
+  const elapsed = Date.now() - timer.startedAt;
   const progress = Math.min(1, elapsed / timer.durationMs);
   const offset = circumference * (1 - progress);
   sleepRing.setAttribute('stroke-dashoffset', offset);

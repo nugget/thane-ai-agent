@@ -245,6 +245,8 @@ function applyLoopEvent(evt) {
       loopData.attempts = (loopData.attempts || 0) + 1;
       loopData._supervisor = !!d.supervisor;
       loopData._currentConvID = d.conversation_id || loopData._currentConvID;
+      // Clear sleep timer — loop is awake now.
+      sleepTimers.delete(nodeId);
       loopData._liveTools = [];
       loopData._liveModel = '';
       loopData._llmContext = null;
