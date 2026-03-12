@@ -20,7 +20,6 @@ const state = {
 };
 
 const MAX_EVENTS = 50;
-const MAX_ITERATION_HISTORY = 10;
 
 // ---------------------------------------------------------------------------
 // Force-Directed Physics Layout
@@ -478,216 +477,33 @@ function handleLoopEvent(evt) {
   state.events.unshift(evt);
   if (state.events.length > MAX_EVENTS) state.events.length = MAX_EVENTS;
 
-  switch (evt.kind) {
-    case 'loop_started':
-      // A new loop appeared. We don't have full status yet — fetch it.
-      fetchLoops();
-      break;
+  // loop_started requires a full fetch — not a per-loop mutation.
+  if (evt.kind === 'loop_started') {
+    fetchLoops();
+    renderAll();
+    return;
+  }
 
-    case 'loop_stopped':
-      if (loopId) {
-        const existing = state.loops.get(loopId);
-        if (existing) {
-          existing.state = 'stopped';
-          existing.iterations = evt.data.iterations || existing.iterations;
-          existing.attempts = evt.data.attempts || existing.attempts;
-        }
-      }
-      break;
+  if (!loopId || !state.loops.has(loopId)) {
+    renderAll();
+    return;
+  }
 
-    case 'loop_state_change':
-      if (loopId && state.loops.has(loopId)) {
-        state.loops.get(loopId).state = evt.data.to;
-      }
-      break;
+  const loop = state.loops.get(loopId);
+  const history = state.iterationHistory.get(loopId) || [];
+  const result = applyLoopEventToLoop(evt, {
+    loop,
+    loopId,
+    sleepTimers: state.sleepTimers,
+    history,
+  });
 
-    case 'loop_iteration_start':
-      if (loopId && state.loops.has(loopId)) {
-        const loop = state.loops.get(loopId);
-        loop.state = 'processing';
-        loop.last_wake_at = evt.ts;
-        loop._supervisor = !!evt.data.supervisor;
-        loop.attempts = evt.data.attempt || loop.attempts;
-        loop._currentConvID = evt.data.conversation_id || null;
-        // Clear sleep timer — loop is awake now.
-        state.sleepTimers.delete(loopId);
-        // Reset live telemetry for new iteration.
-        loop._liveTools = [];
-        loop._liveModel = '';
-        loop._llmContext = null;
-        loop._iterStartTs = Date.now();
-      }
-      break;
-
-    case 'loop_iteration_complete':
-      if (loopId && state.loops.has(loopId)) {
-        const loop = state.loops.get(loopId);
-        loop._lastModel = evt.data.model;
-        loop._lastSupervisor = loop._supervisor || false;
-        loop.total_input_tokens = (loop.total_input_tokens || 0) + (evt.data.input_tokens || 0);
-        loop.total_output_tokens = (loop.total_output_tokens || 0) + (evt.data.output_tokens || 0);
-        loop.last_input_tokens = evt.data.input_tokens || 0;
-        loop.last_output_tokens = evt.data.output_tokens || 0;
-        if (evt.data.context_window > 0) {
-          loop.context_window = evt.data.context_window;
-        }
-        loop.iterations = (loop.iterations || 0) + 1;
-        // Update supervisor tracking.
-        if (loop._supervisor) {
-          loop.last_supervisor_iter = loop.iterations;
-        }
-        loop._supervisor = false;
-        // Build iteration snapshot from event + transient state.
-        // Extract delegate calls from live tools before they're cleared.
-        const delegateCalls = extractDelegateCalls(loop._liveTools);
-        const snap = {
-          number: loop.iterations,
-          conv_id: evt.data.conversation_id || loop._currentConvID || '',
-          model: evt.data.model || '',
-          input_tokens: evt.data.input_tokens || 0,
-          output_tokens: evt.data.output_tokens || 0,
-          context_window: evt.data.context_window || 0,
-          tools_used: evt.data.tools_used || buildToolCounts(loop._liveTools),
-          elapsed_ms: evt.data.elapsed_ms || 0,
-          supervisor: loop._lastSupervisor || false,
-          started_at: loop._iterStartTs ? new Date(loop._iterStartTs).toISOString() : evt.ts,
-          completed_at: evt.ts,
-          summary: evt.data.summary || null,
-          delegate_calls: delegateCalls.length > 0 ? delegateCalls : null,
-        };
-        prependIterationSnapshot(loopId, snap);
-        // Clear live telemetry.
-        loop._iterStartTs = null;
-        loop._liveTools = [];
-        loop._liveModel = '';
-        loop._llmContext = null;
-        // Auto-refresh logs if this loop is selected.
-        if (state.selected === loopId) {
-          fetchLogs(loopId);
-        }
-      }
-      break;
-
-    case 'loop_tool_start':
-      if (loopId && state.loops.has(loopId)) {
-        const loop = state.loops.get(loopId);
-        if (!loop._liveTools) loop._liveTools = [];
-        // Seed _iterStartTs if we missed the iteration_start (e.g. SSE reconnect).
-        if (!loop._iterStartTs) {
-          loop._iterStartTs = Date.now();
-        }
-        loop._liveTools.push({
-          tool: evt.data.tool,
-          status: 'running',
-          args: evt.data.args || null,
-        });
-      }
-      break;
-
-    case 'loop_tool_done':
-      if (loopId && state.loops.has(loopId)) {
-        const loop = state.loops.get(loopId);
-        if (loop._liveTools) {
-          // Find the last running instance of this tool.
-          for (let i = loop._liveTools.length - 1; i >= 0; i--) {
-            if (loop._liveTools[i].tool === evt.data.tool && loop._liveTools[i].status === 'running') {
-              loop._liveTools[i].status = evt.data.error ? 'error' : 'done';
-              loop._liveTools[i].result = evt.data.result || null;
-              loop._liveTools[i].error = evt.data.error || null;
-              break;
-            }
-          }
-        }
-      }
-      break;
-
-    case 'loop_llm_start':
-      if (loopId && state.loops.has(loopId)) {
-        const loop = state.loops.get(loopId);
-        loop._liveModel = evt.data.model || '';
-        // Stash LLM call context for live card enrichment.
-        loop._llmContext = {
-          est_tokens: evt.data.est_tokens || 0,
-          messages: evt.data.messages || 0,
-          tools: evt.data.tools || 0,
-          iteration: evt.data.iteration,
-          complexity: evt.data.complexity || '',
-          intent: evt.data.intent || '',
-          reasoning: evt.data.reasoning || '',
-        };
-        // Seed _iterStartTs if we missed the iteration_start (e.g. SSE reconnect).
-        if (!loop._iterStartTs) {
-          loop._iterStartTs = Date.now();
-        }
-      }
-      break;
-
-    case 'loop_llm_response':
-      if (loopId && state.loops.has(loopId)) {
-        const loop = state.loops.get(loopId);
-        loop._liveModel = evt.data.model || '';
-        // Seed _iterStartTs if we missed the iteration_start (e.g. SSE reconnect).
-        if (!loop._iterStartTs) {
-          loop._iterStartTs = Date.now();
-        }
-      }
-      break;
-
-    case 'loop_sleep_start':
-      if (loopId) {
-        const durationStr = evt.data.sleep_duration || '';
-        const durationMs = parseDuration(durationStr);
-        state.sleepTimers.set(loopId, {
-          startedAt: Date.now(),
-          durationMs: durationMs,
-        });
-        // Annotate most recent snapshot with sleep info.
-        const sleepHist = state.iterationHistory.get(loopId);
-        if (sleepHist && sleepHist.length > 0) {
-          sleepHist[0].sleep_after_ms = durationMs;
-        }
-        if (state.loops.has(loopId)) {
-          const loop = state.loops.get(loopId);
-          loop.state = 'sleeping';
-          clearLiveTelemetry(loop);
-        }
-      }
-      break;
-
-    case 'loop_wait_start':
-      if (loopId && state.loops.has(loopId)) {
-        const loop = state.loops.get(loopId);
-        loop.state = 'waiting';
-        clearLiveTelemetry(loop);
-        // Clear any sleep timer — waiting has no duration.
-        state.sleepTimers.delete(loopId);
-        // Annotate most recent snapshot.
-        const waitHist = state.iterationHistory.get(loopId);
-        if (waitHist && waitHist.length > 0) {
-          waitHist[0].wait_after = true;
-        }
-      }
-      break;
-
-    case 'loop_error':
-      if (loopId && state.loops.has(loopId)) {
-        const loop = state.loops.get(loopId);
-        loop.state = 'error';
-        loop.last_error = evt.data.error || '';
-        loop.consecutive_errors = (loop.consecutive_errors || 0) + 1;
-        // Build error snapshot.
-        const errSnap = {
-          number: 0,
-          error: evt.data.error || '',
-          started_at: loop._iterStartTs ? new Date(loop._iterStartTs).toISOString() : evt.ts,
-          completed_at: evt.ts,
-          elapsed_ms: loop._iterStartTs ? Date.now() - loop._iterStartTs : 0,
-          supervisor: loop._supervisor || false,
-        };
-        prependIterationSnapshot(loopId, errSnap);
-        clearLiveTelemetry(loop);
-      }
-      break;
+  if (result && result.snapshot) {
+    prependIterationSnapshot(loopId, result.snapshot);
+    // Auto-refresh logs when the selected loop completes an iteration.
+    if (state.selected === loopId) {
+      fetchLogs(loopId);
+    }
   }
 
   renderAll();
@@ -1446,10 +1262,10 @@ function renderDetail() {
   renderDelegateDetail(loop);
 
   // Aggregate stats bar.
-  renderAggregates(loop);
+  renderAggregates(loop, $('#detail-aggregates'));
 
   // Iteration timeline.
-  renderTimeline(loop);
+  renderTimeline(loop, $('#detail-timeline'), state.iterationHistory.get(loop.id) || [], loop.id, state.sleepTimers);
 
   // Capabilities (tags from config).
   const tags = (loop.config && loop.config.Tags) || [];
@@ -1469,65 +1285,7 @@ function renderDetail() {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Rendering — Aggregate Stats Bar
-// ---------------------------------------------------------------------------
-
-function renderAggregates(loop) {
-  const el = $('#detail-aggregates');
-  const parts = [];
-  const iter = loop.iterations || 0;
-  const att = loop.attempts || 0;
-  parts.push(formatNumber(iter) + ' iter');
-  if (att !== iter) parts.push(formatNumber(att) + ' att');
-  const totalTok = (loop.total_input_tokens || 0) + (loop.total_output_tokens || 0);
-  if (totalTok > 0) parts.push(formatTokens(totalTok) + ' tok');
-  if (loop.started_at) parts.push(timeAgo(new Date(loop.started_at)));
-  if (loop.last_error) {
-    parts.push('<span class="agg-error">' + escapeHTML(truncate(loop.last_error, 40)) + '</span>');
-  }
-  el.innerHTML = parts.join(' <span class="agg-sep">\u00b7</span> ');
-}
-
-// ---------------------------------------------------------------------------
-// Rendering — Iteration Timeline
-// ---------------------------------------------------------------------------
-
-function renderTimeline(loop) {
-  const container = $('#detail-timeline');
-
-  // Preserve expanded card state across re-renders.
-  const expanded = new Set();
-  container.querySelectorAll('.iter-card--past.iter-card--expanded').forEach(el => {
-    const idx = el.dataset.idx;
-    if (idx != null) expanded.add(idx);
-  });
-
-  container.innerHTML = '';
-
-  const isProcessing = loop.state === 'processing';
-  const isSleeping = loop.state === 'sleeping';
-  const isWaiting = loop.state === 'waiting';
-  const history = state.iterationHistory.get(loop.id) || [];
-
-  // Live card (shown during processing).
-  if (isProcessing && loop._iterStartTs) {
-    container.appendChild(buildLiveCard(loop));
-  }
-
-  // Live connector (between live position and first past card).
-  if ((isSleeping || isWaiting) && history.length > 0) {
-    container.appendChild(buildConnector(loop, history[0], true, state.sleepTimers.get(loop.id)));
-  }
-
-  // Past iteration cards with connectors between them.
-  for (let i = 0; i < history.length; i++) {
-    container.appendChild(buildPastCard(history[i], loop.handler_only, i, expanded.has(String(i))));
-    if (i < history.length - 1) {
-      container.appendChild(buildConnector(loop, history[i], false, null));
-    }
-  }
-}
+// renderAggregates, renderTimeline, clearLiveTelemetry are in shared.js.
 
 function formatFuzzy(ms) {
   const sec = Math.round(ms / 1000);
@@ -1930,17 +1688,6 @@ function createSVG(tag, attrs) {
 
 // formatNumber, formatTokens, formatDuration, formatTime, formatTimeShort,
 // timeAgo, parseDuration, formatUptimeLong are in shared.js.
-
-// ---------------------------------------------------------------------------
-// Live Telemetry Timers
-// ---------------------------------------------------------------------------
-
-function clearLiveTelemetry(loop) {
-  loop._iterStartTs = null;
-  loop._liveTools = [];
-  loop._liveModel = '';
-  loop._llmContext = null;
-}
 
 // ---------------------------------------------------------------------------
 // Footer — version & uptime
