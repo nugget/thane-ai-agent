@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -54,10 +55,12 @@ type IndexHandler struct {
 // All handlers derived from the same root via WithAttrs/WithGroup
 // share a single indexShared.
 type indexShared struct {
-	db   *sql.DB
-	ch   chan indexEntry
-	done chan struct{}
-	once sync.Once // guards Close
+	db     *sql.DB
+	ch     chan indexEntry
+	done   chan struct{}
+	mu     sync.RWMutex // serializes Handle sends with Close
+	closed bool         // true after Close; protected by mu
+	once   sync.Once    // guards Close
 }
 
 // indexEntry is the set of fields written to SQLite for one log record.
@@ -163,12 +166,19 @@ func (h *IndexHandler) Handle(ctx context.Context, r slog.Record) error {
 		entry.Attrs = string(b)
 	}
 
-	// Non-blocking send; drop the entry if the channel is full (better
-	// to lose an index entry than to block a log call).
-	select {
-	case h.shared.ch <- entry:
-	default:
+	// Non-blocking send under a read lock so Close() cannot close the
+	// channel while we're sending. The closed flag is checked inside
+	// the lock to eliminate the TOCTOU race between checking and
+	// sending. Drop the entry if the channel is full — never block a
+	// log call on database I/O.
+	h.shared.mu.RLock()
+	if !h.shared.closed {
+		select {
+		case h.shared.ch <- entry:
+		default:
+		}
 	}
+	h.shared.mu.RUnlock()
 
 	return nil
 }
@@ -193,7 +203,7 @@ func (h *IndexHandler) WithGroup(name string) slog.Handler {
 		inner:    h.inner.WithGroup(name),
 		rotator:  h.rotator,
 		preAttrs: cloneAttrs(h.preAttrs),
-		groups:   append(append([]string(nil), h.groups...), name),
+		groups:   append(slices.Clone(h.groups), name),
 		shared:   h.shared,
 	}
 }
@@ -202,7 +212,10 @@ func (h *IndexHandler) WithGroup(name string) slog.Handler {
 // goroutine. It is safe to call multiple times.
 func (h *IndexHandler) Close() {
 	h.shared.once.Do(func() {
+		h.shared.mu.Lock()
+		h.shared.closed = true
 		close(h.shared.ch)
+		h.shared.mu.Unlock()
 		<-h.shared.done
 	})
 }
@@ -304,7 +317,7 @@ func (h *IndexHandler) classifyAttr(a slog.Attr, entry *indexEntry, extras map[s
 		attrs := a.Value.Group()
 		childGroups := groups
 		if key != "" {
-			childGroups = append(append([]string(nil), groups...), key)
+			childGroups = append(slices.Clone(groups), key)
 		}
 		for _, ga := range attrs {
 			h.classifyAttr(ga, entry, extras, childGroups)
