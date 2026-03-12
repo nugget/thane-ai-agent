@@ -312,6 +312,9 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 			data["exhausted"] = delegateResult.Exhausted
 			data["exhaust_reason"] = delegateResult.ExhaustReason
 		}
+		if delegateErr != nil {
+			data["error"] = delegateErr.Error()
+		}
 		e.eventBus.Publish(events.Event{
 			Timestamp: time.Now(),
 			Source:    events.SourceDelegate,

@@ -163,8 +163,6 @@ async function fetchSystemLogs() {
 // ---------------------------------------------------------------------------
 
 let loopData = null;
-const events = [];
-const MAX_EVENTS = 50;
 const MAX_ITERATION_HISTORY = 10;
 const sleepTimers = new Map();
 let iterationHistory = [];
@@ -219,8 +217,6 @@ function connectSSE() {
   es.addEventListener('loop', (e) => {
     const evt = JSON.parse(e.data);
     if (evt.data && evt.data.loop_id === nodeId) {
-      events.unshift(evt);
-      if (events.length > MAX_EVENTS) events.pop();
       applyLoopEvent(evt);
       renderLoopDetail();
     }

@@ -228,7 +228,7 @@ func (s *WebServer) handleLoopEvents(w http.ResponseWriter, r *http.Request) {
 			}
 			data, err := json.Marshal(le)
 			if err != nil {
-				s.logger.Debug("failed to marshal event", "error", err)
+				s.logger.Warn("failed to marshal event", "error", err)
 				continue
 			}
 

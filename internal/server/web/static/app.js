@@ -12,7 +12,6 @@ const state = {
   selected: null,         // id of currently selected loop ('__system__' for system node)
   events: [],             // recent events (newest first, capped)
   sleepTimers: new Map(), // id -> { startedAt: Date, durationMs: number }
-  elapsedTimers: new Map(), // id -> setInterval id for live elapsed display
   iterationHistory: new Map(), // id -> array of iteration snapshots (newest first)
   system: null,           // system status object from /api/system
   prevIterations: new Map(), // id -> last known iteration count (for flash detection)
@@ -97,21 +96,30 @@ function syncPhysicsNodes(cx, cy) {
 // Run one physics simulation step. Applies center gravity, spring
 // attraction (system↔top-level, parent↔child), pairwise repulsion,
 // then integrates velocity and position with damping.
-function physicsStep(cx, cy) {
+function physicsStep(cx, cy, vw, vh) {
   const P = physics;
   const nodes = Array.from(P.nodes.values());
   const ids = Array.from(P.nodes.keys());
   const n = nodes.length;
   if (n === 0) return;
 
+  // Anisotropic gravity — scale per-axis so the node cloud stretches
+  // to fill non-square viewports. On a square viewport the factors
+  // are both 1.0 (no-op). On a 2:1 ultrawide, X gravity drops ~30%
+  // and Y rises ~40%, naturally spreading nodes along the wide axis.
+  const aspect = (vw && vh && vh > 0) ? vw / vh : 1;
+  const sqrtA = Math.sqrt(aspect);
+  const gravX = P.centerGravity / sqrtA;
+  const gravY = P.centerGravity * sqrtA;
+
   // Reset forces.
   for (const nd of nodes) { nd.fx = 0; nd.fy = 0; }
 
-  // 1. Center gravity — weak pull toward (cx, cy).
+  // 1. Center gravity — anisotropic pull toward (cx, cy).
   for (const nd of nodes) {
     if (nd.pinned) continue;
-    nd.fx += (cx - nd.x) * P.centerGravity;
-    nd.fy += (cy - nd.y) * P.centerGravity;
+    nd.fx += (cx - nd.x) * gravX;
+    nd.fy += (cy - nd.y) * gravY;
   }
 
   // 2. Spring forces — build edge list from loop relationships.
@@ -401,7 +409,6 @@ function connect() {
         if (s._llmContext && s._llmContext.model) {
           s._liveModel = s._llmContext.model;
         }
-        startElapsedTimer(s.id);
       }
       state.loops.set(s.id, s);
     }
@@ -450,12 +457,7 @@ function extractDelegateCalls(liveTools) {
   const calls = [];
   for (const entry of liveTools) {
     if (entry.tool !== 'thane_delegate') continue;
-    let parsed = {};
-    if (entry.args) {
-      try {
-        parsed = typeof entry.args === 'string' ? JSON.parse(entry.args) : entry.args;
-      } catch (_) { /* ignore */ }
-    }
+    const parsed = parseDelegateArgs(entry.args);
     calls.push({
       task: parsed.task || '',
       profile: parsed.profile || '',
@@ -514,7 +516,6 @@ function handleLoopEvent(evt) {
         loop._liveModel = '';
         loop._llmContext = null;
         loop._iterStartTs = Date.now();
-        startElapsedTimer(loopId);
       }
       break;
 
@@ -560,7 +561,6 @@ function handleLoopEvent(evt) {
         loop._liveTools = [];
         loop._liveModel = '';
         loop._llmContext = null;
-        stopElapsedTimer(loopId);
         // Auto-refresh logs if this loop is selected.
         if (state.selected === loopId) {
           fetchLogs(loopId);
@@ -575,7 +575,6 @@ function handleLoopEvent(evt) {
         // Seed _iterStartTs if we missed the iteration_start (e.g. SSE reconnect).
         if (!loop._iterStartTs) {
           loop._iterStartTs = Date.now();
-          startElapsedTimer(loopId);
         }
         loop._liveTools.push({
           tool: evt.data.tool,
@@ -619,7 +618,6 @@ function handleLoopEvent(evt) {
         // Seed _iterStartTs if we missed the iteration_start (e.g. SSE reconnect).
         if (!loop._iterStartTs) {
           loop._iterStartTs = Date.now();
-          startElapsedTimer(loopId);
         }
       }
       break;
@@ -631,7 +629,6 @@ function handleLoopEvent(evt) {
         // Seed _iterStartTs if we missed the iteration_start (e.g. SSE reconnect).
         if (!loop._iterStartTs) {
           loop._iterStartTs = Date.now();
-          startElapsedTimer(loopId);
         }
       }
       break;
@@ -652,7 +649,7 @@ function handleLoopEvent(evt) {
         if (state.loops.has(loopId)) {
           const loop = state.loops.get(loopId);
           loop.state = 'sleeping';
-          clearLiveTelemetry(loop, loopId);
+          clearLiveTelemetry(loop);
         }
       }
       break;
@@ -661,7 +658,7 @@ function handleLoopEvent(evt) {
       if (loopId && state.loops.has(loopId)) {
         const loop = state.loops.get(loopId);
         loop.state = 'waiting';
-        clearLiveTelemetry(loop, loopId);
+        clearLiveTelemetry(loop);
         // Clear any sleep timer — waiting has no duration.
         state.sleepTimers.delete(loopId);
         // Annotate most recent snapshot.
@@ -688,7 +685,7 @@ function handleLoopEvent(evt) {
           supervisor: loop._supervisor || false,
         };
         prependIterationSnapshot(loopId, errSnap);
-        clearLiveTelemetry(loop, loopId);
+        clearLiveTelemetry(loop);
       }
       break;
   }
@@ -727,13 +724,11 @@ function handleDelegateEvent(evt) {
         _delegateTags: evt.data.tags || [],
         _iterStartTs: Date.now(),
       });
-      startElapsedTimer(syntheticId);
       renderAll();
       break;
     }
     case 'complete': {
       const syntheticId = 'delegate-' + did;
-      stopElapsedTimer(syntheticId);
       state.sleepTimers.delete(syntheticId);
 
       // Update state but keep the node around so it's still clickable.
@@ -798,6 +793,7 @@ function removeDelegateNode(syntheticId) {
 async function fetchLoops() {
   try {
     const resp = await fetch('/api/loops');
+    if (!resp.ok) return;
     const statuses = await resp.json();
     state.loops.clear();
     for (const s of statuses) {
@@ -823,6 +819,7 @@ async function fetchLogs(loopId) {
 
   try {
     const resp = await fetch(url);
+    if (!resp.ok) return;
     const data = await resp.json();
     renderLogs(data.entries || []);
   } catch (err) {
@@ -1739,6 +1736,7 @@ async function fetchSystemLogs() {
 
   try {
     const resp = await fetch(url);
+    if (!resp.ok) return;
     const data = await resp.json();
     renderLogs(data.entries || []);
   } catch (err) {
@@ -1756,7 +1754,7 @@ function tick() {
   // Physics simulation — run every frame for smooth organic motion.
   const rect = canvas.getBoundingClientRect();
   if (rect.width > 0 && rect.height > 0) {
-    physicsStep(rect.width / 2, rect.height / 2);
+    physicsStep(rect.width / 2, rect.height / 2, rect.width, rect.height);
     updateNodePositions();
   }
 
@@ -1937,23 +1935,11 @@ function createSVG(tag, attrs) {
 // Live Telemetry Timers
 // ---------------------------------------------------------------------------
 
-function startElapsedTimer(loopId) {
-  // Elapsed display is now driven by the 1Hz tick() render cycle.
-  // Keep the timer infrastructure for symmetry with stopElapsedTimer
-  // (which clears _iterStartTs), but no separate interval needed.
-  stopElapsedTimer(loopId);
-}
-
-function stopElapsedTimer(loopId) {
-  state.elapsedTimers.delete(loopId);
-}
-
-function clearLiveTelemetry(loop, loopId) {
+function clearLiveTelemetry(loop) {
   loop._iterStartTs = null;
   loop._liveTools = [];
   loop._liveModel = '';
   loop._llmContext = null;
-  stopElapsedTimer(loopId);
 }
 
 // ---------------------------------------------------------------------------
