@@ -1,7 +1,9 @@
 package provenance
 
 import (
+	"context"
 	"crypto/ed25519"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -48,6 +50,11 @@ func NewSSHFileSigner(keyPath string) (*SSHFileSigner, error) {
 
 	signer, err := ssh.ParsePrivateKey(keyBytes)
 	if err != nil {
+		var ppErr *ssh.PassphraseMissingError
+		if errors.As(err, &ppErr) {
+			return nil, fmt.Errorf("provenance: signing key %s is passphrase-protected; "+
+				"use an unencrypted key or configure provenance.passphrase", keyPath)
+		}
 		return nil, fmt.Errorf("provenance: parse signing key: %w", err)
 	}
 
@@ -170,8 +177,13 @@ func (s *Store) Path() string {
 // Write writes content to filename within the store, then creates a
 // signed git commit with the given message. The filename is relative to
 // the store root (e.g., "ego.md", "metacognitive.md"). Parent
-// directories are created automatically.
-func (s *Store) Write(filename, content, message string) error {
+// directories are created automatically. Filenames containing path
+// traversal components (e.g., "..") or absolute paths are rejected.
+func (s *Store) Write(ctx context.Context, filename, content, message string) error {
+	if err := validateFilename(filename); err != nil {
+		return fmt.Errorf("provenance: %w", err)
+	}
+
 	absPath := filepath.Join(s.path, filename)
 
 	// Ensure parent directory exists.
@@ -183,7 +195,7 @@ func (s *Store) Write(filename, content, message string) error {
 		return fmt.Errorf("provenance: write %s: %w", filename, err)
 	}
 
-	if err := s.commitFile(filename, message); err != nil {
+	if err := s.commitFile(ctx, filename, message); err != nil {
 		return fmt.Errorf("provenance: commit %s: %w", filename, err)
 	}
 
@@ -193,6 +205,19 @@ func (s *Store) Write(filename, content, message string) error {
 		"message", message,
 	)
 
+	return nil
+}
+
+// validateFilename rejects filenames that could escape the store root
+// via path traversal or absolute paths.
+func validateFilename(filename string) error {
+	if filepath.IsAbs(filename) {
+		return fmt.Errorf("absolute path not allowed: %s", filename)
+	}
+	cleaned := filepath.Clean(filename)
+	if cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
+		return fmt.Errorf("path traversal not allowed: %s", filename)
+	}
 	return nil
 }
 
@@ -210,8 +235,8 @@ func (s *Store) Read(filename string) (string, error) {
 
 // History returns git metadata for filename. If the file has no commits
 // yet, History returns a zero-value FileHistory with no error.
-func (s *Store) History(filename string) (*FileHistory, error) {
-	return s.fileHistory(filename)
+func (s *Store) History(ctx context.Context, filename string) (*FileHistory, error) {
+	return s.fileHistory(ctx, filename)
 }
 
 // FilePath returns the absolute filesystem path for a file within the

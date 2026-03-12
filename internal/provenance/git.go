@@ -3,6 +3,7 @@ package provenance
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -16,17 +17,24 @@ import (
 // [Store.History].
 const recentEditsCap = 10
 
+// gitTimeout is the default timeout for git operations that don't
+// receive a caller-provided context (e.g., repository initialization).
+const gitTimeout = 30 * time.Second
+
 // ensureRepo initializes the git repository if it doesn't already
 // exist, configures the committer identity, and writes the
 // .allowed_signers file.
 func (s *Store) ensureRepo() error {
+	ctx, cancel := context.WithTimeout(context.Background(), gitTimeout)
+	defer cancel()
+
 	if err := os.MkdirAll(s.path, 0o755); err != nil {
 		return fmt.Errorf("create directory: %w", err)
 	}
 
 	gitDir := filepath.Join(s.path, ".git")
 	if _, err := os.Stat(gitDir); os.IsNotExist(err) {
-		if err := s.git(context.Background(), nil, nil, "init"); err != nil {
+		if err := s.git(ctx, nil, nil, "init"); err != nil {
 			return fmt.Errorf("git init: %w", err)
 		}
 		s.logger.Info("initialized provenance repository", "path", s.path)
@@ -37,7 +45,7 @@ func (s *Store) ensureRepo() error {
 		{"user.name", "Thane"},
 		{"user.email", "thane@provenance.local"},
 	} {
-		if err := s.git(context.Background(), nil, nil, "config", kv[0], kv[1]); err != nil {
+		if err := s.git(ctx, nil, nil, "config", kv[0], kv[1]); err != nil {
 			return fmt.Errorf("git config %s: %w", kv[0], err)
 		}
 	}
@@ -50,7 +58,7 @@ func (s *Store) ensureRepo() error {
 	}
 
 	// Tell git where to find allowed signers for verification.
-	if err := s.git(context.Background(), nil, nil,
+	if err := s.git(ctx, nil, nil,
 		"config", "gpg.ssh.allowedSignersFile", allowedPath); err != nil {
 		return fmt.Errorf("git config allowedSignersFile: %w", err)
 	}
@@ -59,8 +67,7 @@ func (s *Store) ensureRepo() error {
 }
 
 // commitFile stages a file and creates a signed commit.
-func (s *Store) commitFile(filename, message string) error {
-	ctx := context.Background()
+func (s *Store) commitFile(ctx context.Context, filename, message string) error {
 
 	// Stage the file.
 	if err := s.git(ctx, nil, nil, "add", filename); err != nil {
@@ -68,10 +75,17 @@ func (s *Store) commitFile(filename, message string) error {
 	}
 
 	// Check if there are staged changes — skip commit if nothing changed.
-	if err := s.git(ctx, nil, nil, "diff", "--cached", "--quiet"); err == nil {
+	// git diff --cached --quiet exits 1 when there are differences, 0
+	// when clean, and >1 on real errors (corruption, bad args, etc.).
+	diffErr := s.git(ctx, nil, nil, "diff", "--cached", "--quiet")
+	if diffErr == nil {
 		// Exit code 0 means no differences — nothing to commit.
 		s.logger.Debug("no changes to commit", "file", filename)
 		return nil
+	}
+	var exitErr *exec.ExitError
+	if errors.As(diffErr, &exitErr) && exitErr.ExitCode() != 1 {
+		return fmt.Errorf("git diff --cached: %w", diffErr)
 	}
 
 	// Get the tree hash.
@@ -153,8 +167,7 @@ func (s *Store) commitFile(filename, message string) error {
 }
 
 // fileHistory reads git log for a file and returns structured metadata.
-func (s *Store) fileHistory(filename string) (*FileHistory, error) {
-	ctx := context.Background()
+func (s *Store) fileHistory(ctx context.Context, filename string) (*FileHistory, error) {
 
 	// Check if the file has any commits.
 	var countBuf bytes.Buffer
@@ -188,7 +201,12 @@ func (s *Store) fileHistory(filename string) (*FileHistory, error) {
 		if len(parts) != 3 {
 			continue
 		}
-		t, _ := time.Parse(time.RFC3339, parts[2])
+		t, err := time.Parse(time.RFC3339, parts[2])
+		if err != nil {
+			s.logger.Warn("skipping commit with unparseable timestamp",
+				"hash", parts[0], "raw", parts[2], "error", err)
+			continue
+		}
 		edits = append(edits, EditEntry{
 			Hash:      parts[0],
 			Message:   parts[1],

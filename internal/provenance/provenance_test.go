@@ -67,7 +67,7 @@ func TestStoreWriteRead(t *testing.T) {
 	s := testStore(t)
 
 	content := "# Ego\n\nSelf-reflection content here.\n"
-	if err := s.Write("ego.md", content, "test-write"); err != nil {
+	if err := s.Write(t.Context(), "ego.md", content, "test-write"); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
 
@@ -84,7 +84,7 @@ func TestStoreWriteRead(t *testing.T) {
 func TestStoreWriteCreatesSubdirectories(t *testing.T) {
 	s := testStore(t)
 
-	if err := s.Write("sub/dir/file.md", "nested", "test-nested"); err != nil {
+	if err := s.Write(t.Context(), "sub/dir/file.md", "nested", "test-nested"); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
 
@@ -100,16 +100,16 @@ func TestStoreWriteCreatesSubdirectories(t *testing.T) {
 func TestStoreWriteNoChangeSkipsCommit(t *testing.T) {
 	s := testStore(t)
 
-	if err := s.Write("test.md", "content", "first"); err != nil {
+	if err := s.Write(t.Context(), "test.md", "content", "first"); err != nil {
 		t.Fatal(err)
 	}
 
 	// Write identical content — should not create a new commit.
-	if err := s.Write("test.md", "content", "second"); err != nil {
+	if err := s.Write(t.Context(), "test.md", "content", "second"); err != nil {
 		t.Fatal(err)
 	}
 
-	hist, err := s.History("test.md")
+	hist, err := s.History(t.Context(), "test.md")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,14 +125,14 @@ func TestStoreHistory(t *testing.T) {
 	// Create a few revisions.
 	for i, msg := range []string{"first-write", "second-write", "third-write"} {
 		content := "revision " + msg
-		if err := s.Write("state.md", content, msg); err != nil {
+		if err := s.Write(t.Context(), "state.md", content, msg); err != nil {
 			t.Fatalf("Write %d: %v", i, err)
 		}
 		// Small delay so timestamps differ.
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	hist, err := s.History("state.md")
+	hist, err := s.History(t.Context(), "state.md")
 	if err != nil {
 		t.Fatalf("History: %v", err)
 	}
@@ -167,7 +167,7 @@ func TestStoreHistory(t *testing.T) {
 func TestStoreHistoryEmptyRepo(t *testing.T) {
 	s := testStore(t)
 
-	hist, err := s.History("nonexistent.md")
+	hist, err := s.History(t.Context(), "nonexistent.md")
 	if err != nil {
 		t.Fatalf("History: %v", err)
 	}

@@ -512,7 +512,7 @@ func (l *Loop) buildSystemPrompt(ctx context.Context, userMessage string, histor
 	seal()
 
 	// 2. Ego (self-reflection — what have I been noticing/thinking)
-	l.injectEgo(&sb, mark, seal)
+	l.injectEgo(ctx, &sb, mark, seal)
 
 	// 3. Injected context (knowledge — what do I know)
 	// Re-read inject_files each turn so external changes (e.g. MEMORY.md
@@ -665,9 +665,9 @@ func (l *Loop) buildSystemPrompt(ctx context.Context, userMessage string, histor
 // provenance store is configured, delta-relative metadata (time since
 // last modification, revision count) is prepended. Otherwise, the file
 // is read directly from disk.
-func (l *Loop) injectEgo(sb *strings.Builder, mark func(string), seal func()) {
+func (l *Loop) injectEgo(ctx context.Context, sb *strings.Builder, mark func(string), seal func()) {
 	if l.provenanceStore != nil {
-		l.injectEgoFromProvenance(sb, mark, seal)
+		l.injectEgoFromProvenance(ctx, sb, mark, seal)
 		return
 	}
 
@@ -692,7 +692,7 @@ func (l *Loop) injectEgo(sb *strings.Builder, mark func(string), seal func()) {
 
 // injectEgoFromProvenance reads ego.md from the provenance store and
 // prepends delta-relative metadata derived from git history.
-func (l *Loop) injectEgoFromProvenance(sb *strings.Builder, mark func(string), seal func()) {
+func (l *Loop) injectEgoFromProvenance(ctx context.Context, sb *strings.Builder, mark func(string), seal func()) {
 	content, err := l.provenanceStore.Read("ego.md")
 	if err != nil || len(content) == 0 {
 		return
@@ -702,7 +702,7 @@ func (l *Loop) injectEgoFromProvenance(sb *strings.Builder, mark func(string), s
 	sb.WriteString("\n\n## Self-Reflection (ego.md)\n")
 
 	// Inject delta-relative metadata from git history.
-	if hist, err := l.provenanceStore.History("ego.md"); err == nil && hist.RevisionCount > 0 {
+	if hist, err := l.provenanceStore.History(ctx, "ego.md"); err == nil && hist.RevisionCount > 0 {
 		ago := time.Since(hist.LastModified).Truncate(time.Second)
 		sb.WriteString(fmt.Sprintf("(updated %s ago by %s, revision %d)\n",
 			formatDeltaDuration(ago), hist.LastAuthor, hist.RevisionCount))

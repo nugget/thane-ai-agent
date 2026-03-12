@@ -18,7 +18,7 @@ func TestSignedCommitVerifies(t *testing.T) {
 
 	s := testStore(t)
 
-	if err := s.Write("test.md", "signed content", "test-signed"); err != nil {
+	if err := s.Write(t.Context(), "test.md", "signed content", "test-signed"); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
 
@@ -50,7 +50,7 @@ func TestMultipleCommitsVerify(t *testing.T) {
 	s := testStore(t)
 
 	for _, content := range []string{"first", "second", "third"} {
-		if err := s.Write("doc.md", content, "write-"+content); err != nil {
+		if err := s.Write(t.Context(), "doc.md", content, "write-"+content); err != nil {
 			t.Fatalf("Write %q: %v", content, err)
 		}
 	}
@@ -82,7 +82,7 @@ func TestCommitHasCorrectMessage(t *testing.T) {
 
 	s := testStore(t)
 
-	if err := s.Write("file.md", "data", "loop-metacognitive-42"); err != nil {
+	if err := s.Write(t.Context(), "file.md", "data", "loop-metacognitive-42"); err != nil {
 		t.Fatal(err)
 	}
 

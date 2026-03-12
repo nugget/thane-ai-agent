@@ -126,7 +126,7 @@ func RegisterTools(registry *tools.Registry, theLoop *loop.Loop, cfg Config, wor
 			if store != nil {
 				// Write through provenance store — auto-committed
 				// with SSH signature.
-				if err := store.Write(cfg.StateFile, fullContent, convID); err != nil {
+				if err := store.Write(ctx, cfg.StateFile, fullContent, convID); err != nil {
 					return "", fmt.Errorf("write state via provenance: %w", err)
 				}
 				log.Info("metacognitive state committed to provenance",
@@ -208,7 +208,7 @@ func RegisterTools(registry *tools.Registry, theLoop *loop.Loop, cfg Config, wor
 						return "", fmt.Errorf("read ego from provenance: %w", err)
 					}
 					fullContent := existing + block
-					if err := store.Write("ego.md", fullContent, convID); err != nil {
+					if err := store.Write(ctx, "ego.md", fullContent, convID); err != nil {
 						return "", fmt.Errorf("write ego via provenance: %w", err)
 					}
 					logging.Logger(ctx).Info("ego observation committed to provenance",

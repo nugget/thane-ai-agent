@@ -9,6 +9,7 @@
 package provenance
 
 import (
+	"crypto/rand"
 	"crypto/sha512"
 	"encoding/base64"
 	"encoding/binary"
@@ -41,7 +42,7 @@ func sshsigSign(signer ssh.Signer, payload []byte) ([]byte, error) {
 	signedData := marshalSignedData(h[:])
 
 	// Sign the blob.
-	sig, err := signer.Sign(nil, signedData)
+	sig, err := signer.Sign(rand.Reader, signedData)
 	if err != nil {
 		return nil, fmt.Errorf("sshsig: sign: %w", err)
 	}
