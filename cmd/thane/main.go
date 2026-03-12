@@ -2036,7 +2036,62 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		}
 
 		watcher := homeassistant.NewStateWatcher(haWS.Events(), filter, limiter, handler, logger)
-		go watcher.Run(ctx)
+
+		// Derive a cancellable context so the loop exits cleanly
+		// when the HA event channel closes.
+		haLoopCtx, haLoopCancel := context.WithCancel(ctx)
+
+		// Track last cleanup time for periodic rate-limiter maintenance.
+		lastCleanup := time.Now()
+		const haCleanupInterval = 5 * time.Minute
+
+		events := watcher.Events()
+		if _, err := loopRegistry.SpawnLoop(haLoopCtx, looppkg.Config{
+			Name: "ha-state-watcher",
+			WaitFunc: func(wCtx context.Context) (any, error) {
+				// Use a timer so rate-limiter cleanup runs even
+				// during idle periods with no HA events.
+				cleanupTimer := time.NewTimer(haCleanupInterval)
+				defer cleanupTimer.Stop()
+
+				select {
+				case <-wCtx.Done():
+					return nil, wCtx.Err()
+				case ev, ok := <-events:
+					if !ok {
+						haLoopCancel()
+						return nil, context.Canceled
+					}
+					return ev, nil
+				case <-cleanupTimer.C:
+					watcher.CleanupRateLimiter()
+					lastCleanup = time.Now()
+					// Return a nil event — handler skips nil payloads.
+					return nil, nil
+				}
+			},
+			Handler: func(_ context.Context, payload any) error {
+				if ev, ok := payload.(homeassistant.Event); ok {
+					watcher.HandleEvent(ev)
+				}
+				// Also check inline in case events arrive faster than the timer.
+				if time.Since(lastCleanup) > haCleanupInterval {
+					watcher.CleanupRateLimiter()
+					lastCleanup = time.Now()
+				}
+				return nil
+			},
+			Metadata: map[string]string{
+				"subsystem": "homeassistant",
+				"category":  "listener",
+			},
+		}, looppkg.Deps{
+			Logger:   logger,
+			EventBus: eventBus,
+		}); err != nil {
+			return fmt.Errorf("spawn ha-state-watcher loop: %w", err)
+		}
+
 		logger.Info("state watcher started",
 			"entity_globs", globs,
 			"rate_limit_per_minute", cfg.HomeAssistant.Subscribe.RateLimitPerMinute,
@@ -2260,11 +2315,37 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 			})
 		}
 
-		go func() {
-			if err := mqttPub.Start(ctx); err != nil {
-				logger.Error("mqtt publisher failed", "error", err)
+		connectCtx, connectCancel := context.WithTimeout(ctx, 5*time.Second)
+		err = mqttPub.Connect(connectCtx)
+		connectCancel()
+		if err != nil {
+			logger.Error("mqtt publisher connection failed", "error", err)
+		} else {
+			// Publish immediately on connect, then let the loop handle the schedule.
+			mqttPub.PublishStates(ctx)
+
+			mqttInterval := mqttPub.PublishInterval()
+			if _, err := loopRegistry.SpawnLoop(ctx, looppkg.Config{
+				Name:         "mqtt-publisher",
+				SleepMin:     mqttInterval,
+				SleepMax:     mqttInterval,
+				SleepDefault: mqttInterval,
+				Jitter:       looppkg.Float64Ptr(0),
+				Handler: func(ctx context.Context, _ any) error {
+					mqttPub.PublishStates(ctx)
+					return nil
+				},
+				Metadata: map[string]string{
+					"subsystem": "mqtt",
+					"category":  "publisher",
+				},
+			}, looppkg.Deps{
+				Logger:   logger,
+				EventBus: eventBus,
+			}); err != nil {
+				return fmt.Errorf("spawn mqtt-publisher loop: %w", err)
 			}
-		}()
+		}
 
 		// Register with connwatch for health endpoint visibility.
 		connMgr.Watch(ctx, connwatch.WatcherConfig{

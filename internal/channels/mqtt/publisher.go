@@ -137,11 +137,39 @@ func (p *Publisher) PublishDynamicState(ctx context.Context, entitySuffix, state
 	return nil
 }
 
-// Start connects to the MQTT broker and begins the periodic publish
-// loop. It blocks until ctx is cancelled. On every (re-)connect it
-// publishes discovery configs, a birth message, and re-subscribes to
-// configured topics.
-func (p *Publisher) Start(ctx context.Context) error {
+// Connect establishes the MQTT broker connection, publishes discovery
+// configs, and configures subscriptions. It does not start the periodic
+// publish loop — use [Publisher.PublishStates] in a loop infrastructure
+// handler for that. Returns after the connection is established (or
+// after a 30-second timeout, in which case autopaho retries in the
+// background).
+func (p *Publisher) Connect(ctx context.Context) error {
+	return p.connect(ctx)
+}
+
+// PublishStates publishes the current sensor state values to the MQTT
+// broker. Exported for use by loop infrastructure callers that manage
+// their own publish schedule.
+func (p *Publisher) PublishStates(ctx context.Context) {
+	p.publishStates(ctx)
+}
+
+// PublishInterval returns the configured publish interval. Non-positive
+// values are replaced with a 5-second minimum. Exported so callers can
+// configure loop sleep durations to match.
+func (p *Publisher) PublishInterval() time.Duration {
+	const minInterval = 5 * time.Second
+	interval := time.Duration(p.cfg.PublishIntervalSec) * time.Second
+	if interval <= 0 {
+		interval = minInterval
+	}
+	return interval
+}
+
+// connect establishes the MQTT broker connection, publishes discovery
+// configs, configures subscriptions, and waits for initial connection.
+// Shared by both [Connect] and [Start].
+func (p *Publisher) connect(ctx context.Context) error {
 	if p.tokens == nil {
 		return fmt.Errorf("mqtt publisher: tokens must not be nil")
 	}
@@ -231,7 +259,17 @@ func (p *Publisher) Start(ctx context.Context) error {
 		p.logger.Warn("mqtt initial connection timed out, will retry in background", "error", err)
 	}
 
-	// Run the periodic state publish loop until ctx is cancelled.
+	return nil
+}
+
+// Start connects to the MQTT broker and begins the periodic publish
+// loop. It blocks until ctx is cancelled. On every (re-)connect it
+// publishes discovery configs, a birth message, and re-subscribes to
+// configured topics.
+func (p *Publisher) Start(ctx context.Context) error {
+	if err := p.connect(ctx); err != nil {
+		return err
+	}
 	p.runLoop(ctx)
 	return nil
 }
