@@ -30,7 +30,7 @@ const MAX_ITERATION_HISTORY = 10;
 const physics = {
   nodes: new Map(),  // id -> { x, y, vx, vy, pinned }
   // Tuning constants — tweak these for feel.
-  centerGravity:    0.0005,
+  centerGravity:    0.002,
   springStrength:   0.02,
   springRestLength: 120,
   repulsionStrength: 5000,
@@ -56,12 +56,25 @@ function syncPhysicsNodes(cx, cy) {
   // Loop nodes.
   for (const loop of state.loops.values()) {
     if (physics.nodes.has(loop.id)) continue;
-    // Spawn at parent position if child, otherwise center + jitter.
-    let sx = cx + (Math.random() * 40 - 20);
-    let sy = cy + (Math.random() * 40 - 20);
+    let sx, sy;
     if (loop.parent_id) {
+      // Children spawn near their parent.
       const parent = physics.nodes.get(loop.parent_id);
-      if (parent) { sx = parent.x + (Math.random() * 20 - 10); sy = parent.y + (Math.random() * 20 - 10); }
+      if (parent) {
+        sx = parent.x + (Math.random() * 20 - 10);
+        sy = parent.y + (Math.random() * 20 - 10);
+      } else {
+        sx = cx + (Math.random() * 40 - 20);
+        sy = cy + (Math.random() * 40 - 20);
+      }
+    } else {
+      // Top-level nodes spawn at the spring rest length from center
+      // (random angle) so the spring starts near equilibrium instead
+      // of repelling the node outward from inside the rest length.
+      const angle = Math.random() * 2 * Math.PI;
+      const r = physics.springRestLength * (0.8 + Math.random() * 0.4);
+      sx = cx + r * Math.cos(angle);
+      sy = cy + r * Math.sin(angle);
     }
     physics.nodes.set(loop.id, { x: sx, y: sy, vx: 0, vy: 0, pinned: false });
   }
