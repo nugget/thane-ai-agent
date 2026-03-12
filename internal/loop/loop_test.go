@@ -1412,7 +1412,7 @@ func TestWaitFuncPublishesWaitEvent(t *testing.T) {
 		MaxIter: 1,
 		WaitFunc: func(ctx context.Context) (any, error) {
 			waitNum.Add(1)
-			return nil, nil
+			return "event", nil // non-nil payload triggers processing
 		},
 		Handler: func(_ context.Context, _ any) error {
 			return nil
@@ -1460,6 +1460,63 @@ done:
 	}
 	if hasSleepStart {
 		t.Error("unexpected loop_sleep_start event for WaitFunc loop")
+	}
+}
+
+func TestWaitFuncNilPayloadSkipsIteration(t *testing.T) {
+	t.Parallel()
+
+	var handlerCalls atomic.Int32
+	var waitCalls atomic.Int32
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	l, err := New(Config{
+		Name:    "nil-skip",
+		MaxIter: 100, // high limit — we cancel manually
+		WaitFunc: func(wCtx context.Context) (any, error) {
+			n := waitCalls.Add(1)
+			if n <= 3 {
+				// First 3 wakes are no-ops (nil payload).
+				return nil, nil
+			}
+			if n == 4 {
+				// 4th wake returns a real payload.
+				return "real-event", nil
+			}
+			// Subsequent calls block until cancelled.
+			<-wCtx.Done()
+			return nil, wCtx.Err()
+		},
+		Handler: func(_ context.Context, _ any) error {
+			handlerCalls.Add(1)
+			cancel() // stop after first real iteration
+			return nil
+		},
+	}, Deps{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	_ = l.Start(ctx)
+	select {
+	case <-l.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("loop did not finish within 5s")
+	}
+
+	if got := waitCalls.Load(); got < 4 {
+		t.Errorf("expected at least 4 wait calls, got %d", got)
+	}
+	// Handler should only be called once (for the non-nil payload).
+	if got := handlerCalls.Load(); got != 1 {
+		t.Errorf("expected 1 handler call, got %d", got)
+	}
+
+	st := l.Status()
+	if st.Iterations != 1 {
+		t.Errorf("expected 1 iteration, got %d", st.Iterations)
 	}
 }
 

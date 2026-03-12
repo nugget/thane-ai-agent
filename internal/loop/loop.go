@@ -522,6 +522,13 @@ func (l *Loop) run(ctx context.Context) {
 				l.lastError = ""
 			}
 			l.mu.Unlock()
+
+			// A nil payload with no error signals a no-op wake
+			// (e.g. internal housekeeping). Skip the processing
+			// phase so it doesn't count as an iteration in the UI.
+			if event == nil {
+				continue
+			}
 		}
 
 		// --- PROCESSING PHASE ---
