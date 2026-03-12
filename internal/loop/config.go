@@ -136,6 +136,13 @@ type Config struct {
 	// Handler (if set) or discarded for LLM-based loops. If WaitFunc
 	// returns a non-context error, the loop treats it as an iteration
 	// error (backoff + retry).
+	//
+	// A (nil, nil) return is treated as a no-op wake: the loop skips
+	// the processing phase entirely and re-enters the wait state
+	// without counting an iteration. This means nil is a reserved
+	// sentinel payload. Implementations that need to deliver a
+	// meaningful event with no associated data should return a non-nil
+	// sentinel (e.g. a zero-value struct) instead of nil.
 	WaitFunc func(ctx context.Context) (any, error) `json:"-"`
 
 	// Handler processes each iteration directly without an LLM call.

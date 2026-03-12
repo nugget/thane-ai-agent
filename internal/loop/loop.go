@@ -523,9 +523,10 @@ func (l *Loop) run(ctx context.Context) {
 			}
 			l.mu.Unlock()
 
-			// A nil payload with no error signals a no-op wake
-			// (e.g. internal housekeeping). Skip the processing
-			// phase so it doesn't count as an iteration in the UI.
+			// A nil payload with no error is a no-op wake (e.g.
+			// internal housekeeping or metrics tick). Skip the
+			// processing phase so it doesn't count as an iteration.
+			// See Config.WaitFunc for the nil-payload contract.
 			if event == nil {
 				continue
 			}
