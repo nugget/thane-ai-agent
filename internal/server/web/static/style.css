@@ -954,6 +954,12 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
 .loop-node { cursor: pointer; }
 .loop-node:hover .node-ring { opacity: 0.3; }
 
+/* Trust zone underglow — diffused coloured halo behind the node */
+.trust-glow {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
 /* Outer glow ring */
 .node-ring {
   opacity: 0;

@@ -214,6 +214,8 @@ function updateNodePositions() {
 function getLoopCategory(loop) {
   const hints = loop.config && loop.config.Hints;
   if (hints && hints.source === 'metacognitive') return 'metacognitive';
+  const meta = loop.config && loop.config.Metadata;
+  if (meta && meta.category) return meta.category;
   if (loop.parent_id) return 'delegate';
   const name = (loop.name || '').toLowerCase();
   if (/signal|email|mqtt|slack|irc/.test(name)) return 'channel';
@@ -344,6 +346,29 @@ const emptyState = $('#empty-state');
 const logEmpty = $('#log-empty');
 const logScroll = $('#log-scroll');
 const logBody = $('#log-body');
+
+// ---------------------------------------------------------------------------
+// Trust Zone Underglow
+// ---------------------------------------------------------------------------
+
+const TRUST_ZONE_COLORS = {
+  admin:     '#26a69a',  // teal
+  household: '#e040fb',  // purple
+  trusted:   '#69f0ae',  // green
+  known:     '#ffd740',  // amber
+  unknown:   '#ff5252',  // red — stranger danger
+};
+
+// Inject SVG defs for the Gaussian blur filter used by trust zone underglow.
+(function initTrustGlowFilter() {
+  const svg = canvas;
+  const defs = createSVG('defs', {});
+  const filter = createSVG('filter', { id: 'trust-blur' });
+  const blur = createSVG('feGaussianBlur', { in: 'SourceGraphic', stdDeviation: '8' });
+  filter.appendChild(blur);
+  defs.appendChild(filter);
+  svg.insertBefore(defs, svg.firstChild);
+})();
 
 // ---------------------------------------------------------------------------
 // SSE Connection
@@ -901,6 +926,18 @@ function renderNode(loop) {
     title.textContent = loop.name || loop.id;
     inner.appendChild(title);
 
+    // Trust zone underglow — diffused coloured circle behind the node.
+    const trustZone = loop.config && loop.config.Metadata && loop.config.Metadata.trust_zone;
+    if (trustZone && TRUST_ZONE_COLORS[trustZone]) {
+      const glow = createSVG('circle', {
+        class: 'trust-glow',
+        r: nodeR + 6,
+        fill: TRUST_ZONE_COLORS[trustZone],
+        filter: 'url(#trust-blur)',
+      });
+      inner.appendChild(glow);
+    }
+
     // Glow ring (always a circle regardless of shape).
     const ring = createSVG('circle', {
       class: 'node-ring',
@@ -959,6 +996,34 @@ function renderNode(loop) {
 
     // Mark as known — enter animation is triggered by renderNodes().
     state.knownLoopIds.add(loop.id);
+  }
+
+  // Update trust zone underglow colour if it changed or appeared.
+  const trustZone = loop.config && loop.config.Metadata && loop.config.Metadata.trust_zone;
+  const glowEl = group.querySelector('.trust-glow');
+  if (trustZone && TRUST_ZONE_COLORS[trustZone]) {
+    if (glowEl) {
+      glowEl.setAttribute('fill', TRUST_ZONE_COLORS[trustZone]);
+      glowEl.setAttribute('r', nodeR + 6);
+    } else {
+      // Trust zone appeared after initial render — insert glow.
+      const inner = group.querySelector('.node-inner');
+      const glow = createSVG('circle', {
+        class: 'trust-glow',
+        r: nodeR + 6,
+        fill: TRUST_ZONE_COLORS[trustZone],
+        filter: 'url(#trust-blur)',
+      });
+      // Insert after <title> (first child) so it's behind everything.
+      const title = inner.querySelector('title');
+      if (title && title.nextSibling) {
+        inner.insertBefore(glow, title.nextSibling);
+      } else {
+        inner.appendChild(glow);
+      }
+    }
+  } else if (glowEl) {
+    glowEl.remove();
   }
 
   // Dynamic resizing — update shape, rings, label when model changes.

@@ -2792,14 +2792,14 @@ type contactPhoneResolver struct {
 	store *contacts.Store
 }
 
-// ResolvePhone returns the name of the contact whose TEL property
-// matches the given phone number. Returns ("", false) if no match.
-func (r *contactPhoneResolver) ResolvePhone(phone string) (string, bool) {
+// ResolvePhone returns the name and trust zone of the contact whose TEL
+// property matches the given phone number. Returns ("", "", false) if no match.
+func (r *contactPhoneResolver) ResolvePhone(phone string) (string, string, bool) {
 	matches, err := r.store.FindByPropertyExact("TEL", phone)
 	if err != nil || len(matches) == 0 {
-		return "", false
+		return "", "", false
 	}
-	return matches[0].FormattedName, true
+	return matches[0].FormattedName, matches[0].TrustZone, true
 }
 
 // contactNameLookup resolves contact names to rich context profiles for
