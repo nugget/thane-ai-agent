@@ -25,6 +25,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/memory"
 	"github.com/nugget/thane-ai-agent/internal/openclaw"
 	"github.com/nugget/thane-ai-agent/internal/prompts"
+	"github.com/nugget/thane-ai-agent/internal/provenance"
 	"github.com/nugget/thane-ai-agent/internal/router"
 	"github.com/nugget/thane-ai-agent/internal/scheduler"
 	"github.com/nugget/thane-ai-agent/internal/talents"
@@ -174,12 +175,13 @@ type Loop struct {
 	llm               llm.Client
 	tools             *tools.Registry
 	model             string
-	talents           string   // Combined talent content for system prompt
-	persona           string   // Persona content (replaces base system prompt if set)
-	egoFile           string   // Path to ego.md — read fresh each turn for system prompt
-	injectFiles       []string // Paths to context files — re-read each turn
-	timezone          string   // IANA timezone for Current Conditions (e.g., "America/Chicago")
-	contextWindow     int      // Context window size of default model
+	talents           string            // Combined talent content for system prompt
+	persona           string            // Persona content (replaces base system prompt if set)
+	egoFile           string            // Path to ego.md — read fresh each turn for system prompt
+	provenanceStore   *provenance.Store // Optional provenance store for ego.md metadata injection
+	injectFiles       []string          // Paths to context files — re-read each turn
+	timezone          string            // IANA timezone for Current Conditions (e.g., "America/Chicago")
+	contextWindow     int               // Context window size of default model
 	failoverHandler   FailoverHandler
 	contextProvider   ContextProvider
 	archiver          SessionArchiver
@@ -260,6 +262,14 @@ func (l *Loop) SetExtractor(e *memory.Extractor) {
 // on each turn and its content is injected into the system prompt.
 func (l *Loop) SetEgoFile(path string) {
 	l.egoFile = path
+}
+
+// SetProvenanceStore sets the provenance store for ego.md. When set,
+// ego.md content is read from the store and delta-relative metadata
+// (last modified time, revision count) is prepended to the system
+// prompt section.
+func (l *Loop) SetProvenanceStore(store *provenance.Store) {
+	l.provenanceStore = store
 }
 
 // SetInjectFiles sets the file paths whose content is re-read and
@@ -502,19 +512,7 @@ func (l *Loop) buildSystemPrompt(ctx context.Context, userMessage string, histor
 	seal()
 
 	// 2. Ego (self-reflection — what have I been noticing/thinking)
-	if l.egoFile != "" {
-		if data, err := os.ReadFile(l.egoFile); err == nil && len(data) > 0 {
-			mark("EGO")
-			sb.WriteString("\n\n## Self-Reflection (ego.md)\n\n")
-			if len(data) > maxEgoBytes {
-				sb.WriteString(string(data[:maxEgoBytes]))
-				sb.WriteString("\n\n[ego.md truncated — exceeded 16 KB limit]")
-			} else {
-				sb.WriteString(string(data))
-			}
-			seal()
-		}
-	}
+	l.injectEgo(ctx, &sb, mark, seal)
 
 	// 3. Injected context (knowledge — what do I know)
 	// Re-read inject_files each turn so external changes (e.g. MEMORY.md
@@ -661,6 +659,84 @@ func (l *Loop) buildSystemPrompt(ctx context.Context, userMessage string, histor
 	}
 
 	return result
+}
+
+// injectEgo injects the ego.md content into the system prompt. When a
+// provenance store is configured, delta-relative metadata (time since
+// last modification, revision count) is prepended. Otherwise, the file
+// is read directly from disk.
+func (l *Loop) injectEgo(ctx context.Context, sb *strings.Builder, mark func(string), seal func()) {
+	if l.provenanceStore != nil {
+		l.injectEgoFromProvenance(ctx, sb, mark, seal)
+		return
+	}
+
+	// Fallback: direct file read.
+	if l.egoFile == "" {
+		return
+	}
+	data, err := os.ReadFile(l.egoFile)
+	if err != nil || len(data) == 0 {
+		return
+	}
+	mark("EGO")
+	sb.WriteString("\n\n## Self-Reflection (ego.md)\n\n")
+	if len(data) > maxEgoBytes {
+		sb.WriteString(string(data[:maxEgoBytes]))
+		sb.WriteString("\n\n[ego.md truncated — exceeded 16 KB limit]")
+	} else {
+		sb.WriteString(string(data))
+	}
+	seal()
+}
+
+// injectEgoFromProvenance reads ego.md from the provenance store and
+// prepends delta-relative metadata derived from git history.
+func (l *Loop) injectEgoFromProvenance(ctx context.Context, sb *strings.Builder, mark func(string), seal func()) {
+	content, err := l.provenanceStore.Read("ego.md")
+	if err != nil || len(content) == 0 {
+		return
+	}
+
+	mark("EGO")
+	sb.WriteString("\n\n## Self-Reflection (ego.md)\n")
+
+	// Inject delta-relative metadata from git history.
+	if hist, err := l.provenanceStore.History(ctx, "ego.md"); err == nil && hist.RevisionCount > 0 {
+		ago := time.Since(hist.LastModified).Truncate(time.Second)
+		sb.WriteString(fmt.Sprintf("(updated %s ago by %s, revision %d)\n",
+			formatDeltaDuration(ago), hist.LastAuthor, hist.RevisionCount))
+	}
+
+	sb.WriteString("\n")
+	if len(content) > maxEgoBytes {
+		sb.WriteString(content[:maxEgoBytes])
+		sb.WriteString("\n\n[ego.md truncated — exceeded 16 KB limit]")
+	} else {
+		sb.WriteString(content)
+	}
+	seal()
+}
+
+// formatDeltaDuration formats a duration as a human-readable delta
+// string (e.g., "3h", "2d", "45m"). Uses the largest natural unit.
+func formatDeltaDuration(d time.Duration) string {
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds", max(int(d.Seconds()), 1))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 24*time.Hour:
+		h := int(d.Hours())
+		m := int(d.Minutes()) % 60
+		if m == 0 {
+			return fmt.Sprintf("%dh", h)
+		}
+		return fmt.Sprintf("%dh%dm", h, m)
+	default:
+		days := int(d.Hours()) / 24
+		return fmt.Sprintf("%dd", days)
+	}
 }
 
 // dumpSystemPrompt writes the assembled system prompt to disk with

@@ -9,6 +9,7 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/logging"
 	"github.com/nugget/thane-ai-agent/internal/loop"
+	"github.com/nugget/thane-ai-agent/internal/provenance"
 	"github.com/nugget/thane-ai-agent/internal/tools"
 )
 
@@ -22,10 +23,14 @@ const minStateContentLen = 50
 // during iterations to control sleep timing, persist its state file,
 // and contribute observations to ego.md.
 //
+// When store is non-nil, file writes go through the provenance store
+// (auto-committed with SSH signatures). When nil, files are written
+// directly via os.WriteFile (backward compatible).
+//
 // Tool handlers capture theLoop via closure to communicate with the
 // running loop goroutine (e.g., setting sleep durations, reading the
 // current conversation ID).
-func RegisterTools(registry *tools.Registry, theLoop *loop.Loop, cfg Config, workspacePath, egoFile string) {
+func RegisterTools(registry *tools.Registry, theLoop *loop.Loop, cfg Config, workspacePath, egoFile string, store *provenance.Store) {
 	statePath := stateFilePath(workspacePath, cfg.StateFile)
 
 	registry.Register(&tools.Tool{
@@ -111,6 +116,27 @@ func RegisterTools(registry *tools.Registry, theLoop *loop.Loop, cfg Config, wor
 			}
 
 			log := logging.Logger(ctx)
+			convID := theLoop.CurrentConvID()
+
+			// Append metadata footer.
+			footer := fmt.Sprintf("\n\n<!-- metacognitive: iteration=%s updated=%s -->\n",
+				convID, time.Now().UTC().Format(time.RFC3339))
+			fullContent := content + footer
+
+			if store != nil {
+				// Write through provenance store — auto-committed
+				// with SSH signature.
+				if err := store.Write(ctx, cfg.StateFile, fullContent, convID); err != nil {
+					return "", fmt.Errorf("write state via provenance: %w", err)
+				}
+				log.Info("metacognitive state committed to provenance",
+					"file", cfg.StateFile,
+					"bytes", len(fullContent),
+				)
+				return fmt.Sprintf("State file committed (%d bytes) to provenance store.", len(fullContent)), nil
+			}
+
+			// Fallback: direct file I/O (no provenance store configured).
 
 			// Save previous version as .prev backup.
 			if existing, err := os.ReadFile(statePath); err == nil {
@@ -122,12 +148,6 @@ func RegisterTools(registry *tools.Registry, theLoop *loop.Loop, cfg Config, wor
 					)
 				}
 			}
-
-			// Append metadata footer.
-			convID := theLoop.CurrentConvID()
-			footer := fmt.Sprintf("\n\n<!-- metacognitive: iteration=%s updated=%s -->\n",
-				convID, time.Now().UTC().Format(time.RFC3339))
-			fullContent := content + footer
 
 			// Ensure parent directory exists.
 			if err := os.MkdirAll(filepath.Dir(statePath), 0o755); err != nil {
@@ -174,18 +194,35 @@ func RegisterTools(registry *tools.Registry, theLoop *loop.Loop, cfg Config, wor
 					return "", fmt.Errorf("observation too short (%d chars, minimum %d)", len(observation), minStateContentLen)
 				}
 
-				// Read existing content (empty file is fine).
-				existing, err := os.ReadFile(egoFile)
-				if err != nil && !os.IsNotExist(err) {
-					return "", fmt.Errorf("read ego file: %w", err)
-				}
+				convID := theLoop.CurrentConvID()
 
 				// Build the appended block with metadata.
-				convID := theLoop.CurrentConvID()
 				block := fmt.Sprintf("\n\n### Metacognitive Observation\n"+
 					"<!-- metacognitive: iteration=%s observed=%s -->\n\n%s\n",
 					convID, time.Now().UTC().Format(time.RFC3339), observation)
 
+				if store != nil {
+					// Read existing from provenance store, append, write back.
+					existing, err := store.Read("ego.md")
+					if err != nil && !os.IsNotExist(err) {
+						return "", fmt.Errorf("read ego from provenance: %w", err)
+					}
+					fullContent := existing + block
+					if err := store.Write(ctx, "ego.md", fullContent, convID); err != nil {
+						return "", fmt.Errorf("write ego via provenance: %w", err)
+					}
+					logging.Logger(ctx).Info("ego observation committed to provenance",
+						"file", "ego.md",
+						"bytes", len(block),
+					)
+					return fmt.Sprintf("Observation committed to provenance ego.md (%d bytes).", len(block)), nil
+				}
+
+				// Fallback: direct file I/O.
+				existing, err := os.ReadFile(egoFile)
+				if err != nil && !os.IsNotExist(err) {
+					return "", fmt.Errorf("read ego file: %w", err)
+				}
 				fullContent := string(existing) + block
 
 				// Ensure parent directory exists.

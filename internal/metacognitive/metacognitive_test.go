@@ -477,7 +477,7 @@ func TestSetNextSleep_Valid(t *testing.T) {
 	theLoop := testLoopForTools(t)
 
 	reg := tools.NewRegistry(nil, nil)
-	RegisterTools(reg, theLoop, cfg, workspace, "")
+	RegisterTools(reg, theLoop, cfg, workspace, "", nil)
 
 	tool := reg.Get("set_next_sleep")
 	if tool == nil {
@@ -503,7 +503,7 @@ func TestSetNextSleep_Clamped(t *testing.T) {
 	theLoop := testLoopForTools(t)
 
 	reg := tools.NewRegistry(nil, nil)
-	RegisterTools(reg, theLoop, cfg, workspace, "")
+	RegisterTools(reg, theLoop, cfg, workspace, "", nil)
 
 	tool := reg.Get("set_next_sleep")
 
@@ -536,7 +536,7 @@ func TestSetNextSleep_InvalidFormat(t *testing.T) {
 	theLoop := testLoopForTools(t)
 
 	reg := tools.NewRegistry(nil, nil)
-	RegisterTools(reg, theLoop, cfg, workspace, "")
+	RegisterTools(reg, theLoop, cfg, workspace, "", nil)
 
 	tool := reg.Get("set_next_sleep")
 
@@ -554,7 +554,7 @@ func TestSetNextSleep_MissingDuration(t *testing.T) {
 	theLoop := testLoopForTools(t)
 
 	reg := tools.NewRegistry(nil, nil)
-	RegisterTools(reg, theLoop, cfg, workspace, "")
+	RegisterTools(reg, theLoop, cfg, workspace, "", nil)
 
 	tool := reg.Get("set_next_sleep")
 
@@ -570,7 +570,7 @@ func TestSetNextSleep_IntegerMinutes(t *testing.T) {
 	theLoop := testLoopForTools(t)
 
 	reg := tools.NewRegistry(nil, nil)
-	RegisterTools(reg, theLoop, cfg, workspace, "")
+	RegisterTools(reg, theLoop, cfg, workspace, "", nil)
 
 	tool := reg.Get("set_next_sleep")
 
@@ -595,7 +595,7 @@ func TestUpdateMetacognitiveState_Valid(t *testing.T) {
 	theLoop := testLoopForTools(t)
 
 	reg := tools.NewRegistry(nil, nil)
-	RegisterTools(reg, theLoop, cfg, workspace, "")
+	RegisterTools(reg, theLoop, cfg, workspace, "", nil)
 
 	tool := reg.Get("update_metacognitive_state")
 	if tool == nil {
@@ -630,7 +630,7 @@ func TestUpdateMetacognitiveState_MetadataFooter(t *testing.T) {
 	theLoop := testLoopForTools(t)
 
 	reg := tools.NewRegistry(nil, nil)
-	RegisterTools(reg, theLoop, cfg, workspace, "")
+	RegisterTools(reg, theLoop, cfg, workspace, "", nil)
 
 	tool := reg.Get("update_metacognitive_state")
 	content := "## Current Sense\nAll systems nominal. Nothing to report. Sleeping for a while."
@@ -671,7 +671,7 @@ func TestUpdateMetacognitiveState_PrevFile(t *testing.T) {
 	}
 
 	reg := tools.NewRegistry(nil, nil)
-	RegisterTools(reg, theLoop, cfg, workspace, "")
+	RegisterTools(reg, theLoop, cfg, workspace, "", nil)
 
 	tool := reg.Get("update_metacognitive_state")
 	newContent := "## Updated Content\nNew observations from the latest iteration of monitoring."
@@ -700,7 +700,7 @@ func TestUpdateMetacognitiveState_EmptyRejected(t *testing.T) {
 	theLoop := testLoopForTools(t)
 
 	reg := tools.NewRegistry(nil, nil)
-	RegisterTools(reg, theLoop, cfg, workspace, "")
+	RegisterTools(reg, theLoop, cfg, workspace, "", nil)
 
 	tool := reg.Get("update_metacognitive_state")
 

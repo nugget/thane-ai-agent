@@ -16,6 +16,7 @@ require (
 	github.com/mattn/go-sqlite3 v1.14.33
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	github.com/yuin/goldmark v1.4.13
+	golang.org/x/crypto v0.48.0
 	golang.org/x/net v0.50.0
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.45.0
