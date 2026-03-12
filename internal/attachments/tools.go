@@ -5,7 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
+	"unicode/utf8"
 )
+
+// maxToolResultBytes caps JSON tool output to prevent context flooding.
+// Matches the convention used by archive_search (~16KB ≈ 4K tokens).
+const maxToolResultBytes = 16000
 
 // Tools provides agent tool handlers for attachment operations.
 // The analyzer is optional — when nil, describe operations return
@@ -36,9 +42,11 @@ type attachmentSummary struct {
 
 func summarizeRecord(rec *Record) attachmentSummary {
 	desc := rec.Description
-	// Truncate long descriptions in list view.
-	if len(desc) > 200 {
-		desc = desc[:197] + "..."
+	// Truncate long descriptions in list view on rune boundaries
+	// to avoid splitting multi-byte UTF-8 characters.
+	runes := []rune(desc)
+	if len(runes) > 200 {
+		desc = string(runes[:197]) + "..."
 	}
 	return attachmentSummary{
 		ID:          rec.ID,
@@ -47,9 +55,25 @@ func summarizeRecord(rec *Record) attachmentSummary {
 		Size:        rec.Size,
 		Channel:     rec.Channel,
 		Sender:      rec.Sender,
-		ReceivedAt:  rec.ReceivedAt.Format("2006-01-02T15:04:05Z"),
+		ReceivedAt:  rec.ReceivedAt.UTC().Format(time.RFC3339),
 		Description: desc,
 	}
+}
+
+// truncateResultUTF8 truncates s to at most maxBytes, ensuring the
+// result is valid UTF-8, and appends a truncation notice.
+func truncateResultUTF8(s string, maxBytes int) string {
+	if len(s) <= maxBytes {
+		return s
+	}
+	b := maxBytes
+	for b > 0 && !utf8.RuneStart(s[b]) {
+		b--
+	}
+	return s[:b] + fmt.Sprintf(
+		"\n\n[Truncated: %d bytes total, showing first %d bytes. Use attachment_describe for full details on a specific attachment.]",
+		len(s), b,
+	)
 }
 
 // List returns a formatted list of attachments matching the given filters.
@@ -88,7 +112,7 @@ func (t *Tools) List(ctx context.Context, args map[string]any) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("attachment_list: marshal: %w", err)
 	}
-	return string(data), nil
+	return truncateResultUTF8(string(data), maxToolResultBytes), nil
 }
 
 // Describe returns the vision description for an attachment. When the
@@ -191,5 +215,5 @@ func (t *Tools) Search(ctx context.Context, args map[string]any) (string, error)
 	if err != nil {
 		return "", fmt.Errorf("attachment_search: marshal: %w", err)
 	}
-	return string(data), nil
+	return truncateResultUTF8(string(data), maxToolResultBytes), nil
 }

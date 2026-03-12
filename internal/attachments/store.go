@@ -122,6 +122,11 @@ func (s *Store) migrate() error {
 		return fmt.Errorf("create schema: %w", err)
 	}
 
+	// Search index on received_at for ORDER BY in Search queries (added in phase 4).
+	if _, err := s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_attachments_received_at ON attachments(received_at)`); err != nil {
+		return fmt.Errorf("create received_at index: %w", err)
+	}
+
 	// Vision analysis columns (added in phase 3).
 	for _, col := range []struct{ name, typedef string }{
 		{"description", "TEXT NOT NULL DEFAULT ''"},
