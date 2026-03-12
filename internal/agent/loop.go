@@ -1376,6 +1376,9 @@ iterLoop:
 				}
 				toolCtx = tools.WithToolCallID(toolCtx, toolCallIDStr)
 				toolCtx = tools.WithIterationIndex(toolCtx, i)
+				if lid := req.Hints["loop_id"]; lid != "" {
+					toolCtx = tools.WithLoopID(toolCtx, lid)
+				}
 
 				// Enforce tool availability: only tools present in the
 				// effective registry (after capability tag filtering and

@@ -414,6 +414,11 @@ function connect() {
     handleLoopEvent(evt);
   });
 
+  eventSource.addEventListener('delegate', (e) => {
+    const evt = JSON.parse(e.data);
+    handleDelegateEvent(evt);
+  });
+
   eventSource.onerror = () => {
     setConnState('disconnected');
     // EventSource auto-reconnects; the snapshot on reconnect
@@ -661,6 +666,59 @@ function handleLoopEvent(evt) {
   }
 
   renderAll();
+}
+
+// ---------------------------------------------------------------------------
+// Delegate Events → Ephemeral Nodes
+// ---------------------------------------------------------------------------
+
+// Handle delegate lifecycle events from the SSE stream. Spawn creates
+// a synthetic loop entry; complete removes it (triggering exit animation).
+function handleDelegateEvent(evt) {
+  const did = evt.data && evt.data.delegate_id;
+  if (!did) return;
+
+  switch (evt.kind) {
+    case 'spawn': {
+      // Create a synthetic loop entry so the existing rendering
+      // infrastructure (physics, connectors, icons) works unchanged.
+      const syntheticId = 'delegate-' + did;
+      state.loops.set(syntheticId, {
+        id: syntheticId,
+        name: evt.data.name || syntheticId,
+        state: 'processing',
+        parent_id: evt.data.parent_loop_id || null,
+        config: {
+          Metadata: { category: 'delegate' },
+        },
+        _delegate: true,
+        _delegateId: did,
+        _iterStartTs: Date.now(),
+      });
+      startElapsedTimer(syntheticId);
+      renderAll();
+      break;
+    }
+    case 'complete': {
+      const syntheticId = 'delegate-' + did;
+      stopElapsedTimer(syntheticId);
+      state.sleepTimers.delete(syntheticId);
+      // Trigger exit animation then remove.
+      const node = canvasWorld.querySelector(`[data-loop-id="${syntheticId}"]`);
+      if (node) {
+        node.classList.add('loop-node--exiting');
+        node.addEventListener('animationend', () => {
+          node.remove();
+          physics.nodes.delete(syntheticId);
+        }, { once: true });
+      } else {
+        physics.nodes.delete(syntheticId);
+      }
+      state.loops.delete(syntheticId);
+      renderAll();
+      break;
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------

@@ -1611,6 +1611,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	delegateExec.SetTimezone(cfg.Timezone)
 	delegateExec.SetArchiver(archiveStore)
 	delegateExec.SetUsageRecorder(usageStore, cfg.Pricing)
+	delegateExec.SetEventBus(eventBus)
 	var alwaysActiveTags []string
 	for tag, tagCfg := range cfg.CapabilityTags {
 		if tagCfg.AlwaysActive {

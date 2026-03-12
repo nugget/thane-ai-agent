@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/nugget/thane-ai-agent/internal/awareness"
 	"github.com/nugget/thane-ai-agent/internal/config"
+	"github.com/nugget/thane-ai-agent/internal/events"
 	"github.com/nugget/thane-ai-agent/internal/llm"
 	"github.com/nugget/thane-ai-agent/internal/logging"
 	"github.com/nugget/thane-ai-agent/internal/memory"
@@ -81,6 +82,7 @@ type Executor struct {
 	pricing          map[string]config.PricingEntry
 	alwaysActiveTags []string
 	forgeContext     string
+	eventBus         *events.Bus
 }
 
 // NewExecutor creates a delegate executor.
@@ -127,6 +129,13 @@ func (e *Executor) SetUsageRecorder(store *usage.Store, pricing map[string]confi
 	e.pricing = pricing
 }
 
+// SetEventBus configures the event bus for delegate lifecycle events.
+// When set, each Execute call publishes spawn and complete events so
+// the dashboard can render delegates as ephemeral child nodes.
+func (e *Executor) SetEventBus(bus *events.Bus) {
+	e.eventBus = bus
+}
+
 // SetForgeContext configures the forge account context block that is
 // appended to delegate system prompts. This gives delegates immediate
 // knowledge of configured forge accounts so they don't waste iterations
@@ -157,7 +166,7 @@ func (e *Executor) ProfileNames() []string {
 // only tools belonging to the given capability tags (plus any
 // always-active tags). When tags is nil, the profile's AllowedTools
 // controls tool selection (existing behavior).
-func (e *Executor) Execute(ctx context.Context, task, profileName, guidance string, tags []string) (*Result, error) {
+func (e *Executor) Execute(ctx context.Context, task, profileName, guidance string, tags []string) (delegateResult *Result, delegateErr error) {
 	if task == "" {
 		return nil, fmt.Errorf("task is required")
 	}
@@ -233,6 +242,21 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 		"tools_available", len(toolDefs),
 	)
 
+	// Publish spawn event so the dashboard can render an ephemeral child node.
+	parentLoopID := tools.LoopIDFromContext(ctx)
+	e.eventBus.Publish(events.Event{
+		Timestamp: time.Now(),
+		Source:    events.SourceDelegate,
+		Kind:      events.KindSpawn,
+		Data: map[string]any{
+			"delegate_id":    did,
+			"parent_loop_id": parentLoopID,
+			"profile":        profile.Name,
+			"task":           truncate(task, 100),
+			"name":           "delegate-" + did[:8],
+		},
+	})
+
 	// Build system prompt.
 	var sb strings.Builder
 	sb.WriteString(profile.SystemPrompt)
@@ -272,6 +296,27 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 	var totalInput, totalOutput int
 	var toolCalls []ToolCallOutcome
 	var iterations []iterationRecord
+
+	// Publish complete event on all exit paths so the dashboard removes
+	// the ephemeral node. The defer captures the named return delegateResult.
+	defer func() {
+		data := map[string]any{
+			"delegate_id":    did,
+			"parent_loop_id": parentLoopID,
+			"duration_ms":    time.Since(startTime).Milliseconds(),
+		}
+		if delegateResult != nil {
+			data["iterations"] = delegateResult.Iterations
+			data["exhausted"] = delegateResult.Exhausted
+			data["exhaust_reason"] = delegateResult.ExhaustReason
+		}
+		e.eventBus.Publish(events.Event{
+			Timestamp: time.Now(),
+			Source:    events.SourceDelegate,
+			Kind:      events.KindComplete,
+			Data:      data,
+		})
+	}()
 
 	maxIter := profile.MaxIter
 	if maxIter <= 0 {
