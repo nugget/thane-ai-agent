@@ -212,6 +212,13 @@ type Config struct {
 	// export and self-referencing operations.
 	Identity IdentityConfig `yaml:"identity"`
 
+	// Provenance configures git-backed file storage with SSH signature
+	// enforcement. Files written through a provenance store are
+	// automatically committed with cryptographic signatures, providing
+	// tamper detection, audit history, and rollback. Identity files
+	// (ego.md, metacognitive.md) are the primary clients.
+	Provenance ProvenanceConfig `yaml:"provenance"`
+
 	// StateWindow configures the rolling window of recent Home Assistant
 	// state changes injected into the agent's system prompt on every run.
 	StateWindow StateWindowConfig `yaml:"state_window"`
@@ -389,6 +396,27 @@ type IdentityConfig struct {
 	// record. When set, export_vcf name="self" resolves to this
 	// contact.
 	ContactName string `yaml:"contact_name"`
+}
+
+// ProvenanceConfig configures git-backed file storage with SSH
+// signature enforcement. When both Path and SigningKey are set, files
+// are automatically committed with cryptographic signatures on every
+// write.
+type ProvenanceConfig struct {
+	// Path is the directory for the provenance git repository.
+	// Supports ~ expansion. Example: ~/Thane/identity
+	Path string `yaml:"path"`
+
+	// SigningKey is the path to an SSH private key used to sign
+	// commits. The key is loaded at startup and held in memory.
+	// Supports ~ expansion. Example: ~/.ssh/id_ed25519
+	SigningKey string `yaml:"signing_key"`
+}
+
+// Configured reports whether the provenance store has both a path and
+// signing key set.
+func (c ProvenanceConfig) Configured() bool {
+	return c.Path != "" && c.SigningKey != ""
 }
 
 // HomeAssistantConfig configures the connection to a Home Assistant
@@ -1600,6 +1628,12 @@ func (c *Config) Validate() error {
 		if c.Prewarm.Archive.MaxBytes < 500 {
 			return fmt.Errorf("prewarm.archive.max_bytes %d must be at least 500 when archive pre-warming is enabled", c.Prewarm.Archive.MaxBytes)
 		}
+	}
+	if c.Provenance.Path != "" && c.Provenance.SigningKey == "" {
+		return fmt.Errorf("provenance.signing_key is required when provenance.path is set")
+	}
+	if c.Provenance.SigningKey != "" && c.Provenance.Path == "" {
+		return fmt.Errorf("provenance.path is required when provenance.signing_key is set")
 	}
 	if err := c.validateMetacognitive(); err != nil {
 		return err

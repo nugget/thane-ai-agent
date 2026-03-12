@@ -64,6 +64,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/opstate"
 	"github.com/nugget/thane-ai-agent/internal/paths"
 	"github.com/nugget/thane-ai-agent/internal/prompts"
+	"github.com/nugget/thane-ai-agent/internal/provenance"
 	"github.com/nugget/thane-ai-agent/internal/router"
 	"github.com/nugget/thane-ai-agent/internal/scheduler"
 	"github.com/nugget/thane-ai-agent/internal/search"
@@ -1123,6 +1124,28 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	loop.Tools().SetAnticipationTools(anticipationTools)
 	logger.Info("anticipation store initialized", "path", cfg.DataDir+"/anticipations.db")
 
+	// --- Provenance store ---
+	// Git-backed file storage with SSH signature enforcement. When
+	// configured, identity files (ego.md, metacognitive.md) are
+	// auto-committed with cryptographic signatures on every write.
+	var provenanceStore *provenance.Store
+	if cfg.Provenance.Configured() {
+		keyPath := paths.ExpandHome(cfg.Provenance.SigningKey)
+		signer, err := provenance.NewSSHFileSigner(keyPath)
+		if err != nil {
+			return fmt.Errorf("load provenance signing key %s: %w", keyPath, err)
+		}
+		storePath := paths.ExpandHome(cfg.Provenance.Path)
+		provenanceStore, err = provenance.New(storePath, signer, logger)
+		if err != nil {
+			return fmt.Errorf("init provenance store at %s: %w", storePath, err)
+		}
+		logger.Info("provenance store initialized",
+			"path", storePath,
+			"public_key", signer.PublicKey(),
+		)
+	}
+
 	// --- File tools ---
 	// When a workspace path is configured, the agent can read and write
 	// files within that directory. All paths are sandboxed.
@@ -1132,18 +1155,26 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 			fileTools.SetResolver(resolver)
 		}
 		loop.Tools().SetFileTools(fileTools)
-		egoPath := filepath.Join(cfg.Workspace.Path, "ego.md")
-		if resolver != nil {
-			if resolved, err := resolver.Resolve("core:ego.md"); err != nil {
-				logger.Warn("failed to resolve core:ego.md, using default",
-					"error", err,
-					"default_path", egoPath,
-				)
-			} else {
-				egoPath = resolved
+
+		// Ego file: prefer provenance store path, fall back to workspace.
+		if provenanceStore != nil {
+			loop.SetEgoFile(provenanceStore.FilePath("ego.md"))
+			loop.SetProvenanceStore(provenanceStore)
+			logger.Info("ego.md backed by provenance store")
+		} else {
+			egoPath := filepath.Join(cfg.Workspace.Path, "ego.md")
+			if resolver != nil {
+				if resolved, err := resolver.Resolve("core:ego.md"); err != nil {
+					logger.Warn("failed to resolve core:ego.md, using default",
+						"error", err,
+						"default_path", egoPath,
+					)
+				} else {
+					egoPath = resolved
+				}
 			}
+			loop.SetEgoFile(egoPath)
 		}
-		loop.SetEgoFile(egoPath)
 		logger.Info("file tools enabled", "workspace", cfg.Workspace.Path)
 	} else {
 		logger.Info("file tools disabled (no workspace path configured)")
@@ -2503,7 +2534,9 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		}
 
 		var metacogEgoFile string
-		if resolver != nil {
+		if provenanceStore != nil {
+			metacogEgoFile = provenanceStore.FilePath("ego.md")
+		} else if resolver != nil {
 			if resolved, err := resolver.Resolve("core:ego.md"); err == nil {
 				metacogEgoFile = resolved
 			}
@@ -2514,7 +2547,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 			WorkspacePath: cfg.Workspace.Path,
 		})
 		loopCfg.Setup = func(l *looppkg.Loop) {
-			metacognitive.RegisterTools(loop.Tools(), l, metacogCfg, cfg.Workspace.Path, metacogEgoFile)
+			metacognitive.RegisterTools(loop.Tools(), l, metacogCfg, cfg.Workspace.Path, metacogEgoFile, provenanceStore)
 		}
 
 		if _, err := loopRegistry.SpawnLoop(ctx, loopCfg, looppkg.Deps{

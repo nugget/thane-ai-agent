@@ -140,6 +140,14 @@ models:
 # identity:
 #   contact_name: "Thane"            # must match a contact record name
 
+# Provenance store (optional — git-backed file integrity)
+# When configured, identity files (ego.md, metacognitive.md) are
+# auto-committed with SSH signatures on every write, providing
+# tamper detection, audit history, and rollback.
+# provenance:
+#   path: ~/Thane/identity           # git repo for signed files
+#   signing_key: ~/.ssh/id_ed25519   # SSH private key for commit signing
+
 # Forge integration (optional — GitHub/Gitea/Forgejo)
 # Provides 18 native tools for issues, PRs, code review, and search
 # without requiring an MCP subprocess.
