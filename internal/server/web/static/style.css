@@ -1139,7 +1139,8 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
   stroke-linecap: round;
   transform-origin: 0 0;
   transform: rotate(-90deg);
-  transition: stroke-dashoffset 0.5s linear;
+  /* No transition — tick() updates at 60fps for smooth fill,
+     and the reset snap-back is instant between cycles. */
 }
 
 /* === Toggle Buttons === */
