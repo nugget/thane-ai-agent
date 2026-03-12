@@ -9,12 +9,22 @@ import (
 // LevelTrace is below Debug, used for wire-level payload logging.
 const LevelTrace = slog.Level(-8)
 
+// ImageContent holds a base64-encoded image for multimodal messages.
+// Each provider serializes images differently (Ollama uses a flat
+// base64 array, Anthropic uses typed content blocks), so the Images
+// field on [Message] is excluded from default JSON marshaling.
+type ImageContent struct {
+	Data      string // base64-encoded image data (no data URI prefix)
+	MediaType string // MIME type: "image/jpeg", "image/png", etc.
+}
+
 // Message represents a chat message for the LLM.
 type Message struct {
-	Role       string     `json:"role"`
-	Content    string     `json:"content"`
-	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string     `json:"tool_call_id,omitempty"` // For tool responses
+	Role       string         `json:"role"`
+	Content    string         `json:"content"`
+	Images     []ImageContent `json:"-"` // multimodal images; marshaled per-provider
+	ToolCalls  []ToolCall     `json:"tool_calls,omitempty"`
+	ToolCallID string         `json:"tool_call_id,omitempty"` // For tool responses
 }
 
 // ToolCall represents a tool call from the model.

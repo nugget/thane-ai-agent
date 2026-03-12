@@ -146,6 +146,11 @@ models:
 # and provenance tracking across channels.
 # attachments:
 #   store_dir: ~/Thane/attachments   # root dir for content-addressed files
+#   vision:
+#     enabled: true                  # auto-analyze images on ingest
+#     model: llava:latest            # vision-capable model (must be in models.available)
+#     prompt: ""                     # custom prompt; empty uses default
+#     timeout: 30s                   # per-image analysis timeout
 
 # Provenance store (optional — git-backed file integrity)
 # When configured, identity files (ego.md, metacognitive.md) are

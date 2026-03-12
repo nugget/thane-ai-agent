@@ -68,13 +68,22 @@ type anthropicMessage struct {
 }
 
 type anthropicContent struct {
-	Type      string `json:"type"`
-	Text      string `json:"text,omitempty"`
-	ID        string `json:"id,omitempty"`
-	Name      string `json:"name,omitempty"`
-	Input     any    `json:"input,omitempty"`
-	ToolUseID string `json:"tool_use_id,omitempty"`
-	Content   string `json:"content,omitempty"` // for tool_result
+	Type      string                `json:"type"`
+	Text      string                `json:"text,omitempty"`
+	ID        string                `json:"id,omitempty"`
+	Name      string                `json:"name,omitempty"`
+	Input     any                   `json:"input,omitempty"`
+	ToolUseID string                `json:"tool_use_id,omitempty"`
+	Content   string                `json:"content,omitempty"` // for tool_result
+	Source    *anthropicImageSource `json:"source,omitempty"`  // for image content blocks
+}
+
+// anthropicImageSource describes a base64-encoded image for the
+// Anthropic messages API.
+type anthropicImageSource struct {
+	Type      string `json:"type"`       // "base64"
+	MediaType string `json:"media_type"` // "image/jpeg", "image/png", etc.
+	Data      string `json:"data"`       // base64-encoded image data
 }
 
 type anthropicTool struct {
@@ -421,10 +430,35 @@ func convertToAnthropic(messages []Message) ([]anthropicMessage, string) {
 			})
 
 		case "user":
-			result = append(result, anthropicMessage{
-				Role:    "user",
-				Content: msg.Content,
-			})
+			if len(msg.Images) > 0 {
+				// Multimodal: image content blocks followed by text.
+				var blocks []anthropicContent
+				for _, img := range msg.Images {
+					blocks = append(blocks, anthropicContent{
+						Type: "image",
+						Source: &anthropicImageSource{
+							Type:      "base64",
+							MediaType: img.MediaType,
+							Data:      img.Data,
+						},
+					})
+				}
+				if msg.Content != "" {
+					blocks = append(blocks, anthropicContent{
+						Type: "text",
+						Text: msg.Content,
+					})
+				}
+				result = append(result, anthropicMessage{
+					Role:    "user",
+					Content: blocks,
+				})
+			} else {
+				result = append(result, anthropicMessage{
+					Role:    "user",
+					Content: msg.Content,
+				})
+			}
 		}
 	}
 

@@ -107,6 +107,13 @@ type AttachmentConfig struct {
 	MaxSize int64
 }
 
+// VisionAnalyzer describes an optional component that analyzes image
+// attachments using a vision-capable LLM. When non-nil on the bridge,
+// images are analyzed on ingest and descriptions enriched.
+type VisionAnalyzer interface {
+	Analyze(ctx context.Context, rec *attachments.Record) (string, error)
+}
+
 // BridgeConfig holds the dependencies for a Bridge.
 type BridgeConfig struct {
 	Client          *Client
@@ -119,6 +126,7 @@ type BridgeConfig struct {
 	Resolver        ContactResolver            // nil disables phone→name resolution
 	Attachments     AttachmentConfig           // attachment storage configuration
 	AttachmentStore *attachments.Store         // content-addressed store; nil = legacy copy
+	VisionAnalyzer  VisionAnalyzer             // nil disables vision analysis
 	Registry        *loop.Registry             // loop registry for dashboard visibility
 	EventBus        *events.Bus                // event bus for in-flight events
 }
@@ -136,6 +144,7 @@ type Bridge struct {
 	resolver        ContactResolver
 	attachments     AttachmentConfig
 	attachmentStore *attachments.Store
+	visionAnalyzer  VisionAnalyzer
 	registry        *loop.Registry
 	eventBus        *events.Bus
 
@@ -172,6 +181,7 @@ func NewBridge(cfg BridgeConfig) *Bridge {
 		resolver:        cfg.Resolver,
 		attachments:     cfg.Attachments,
 		attachmentStore: cfg.AttachmentStore,
+		visionAnalyzer:  cfg.VisionAnalyzer,
 		registry:        cfg.Registry,
 		eventBus:        cfg.EventBus,
 		senderTimes:     make(map[string][]time.Time),
@@ -1087,7 +1097,26 @@ func (b *Bridge) ingestAttachment(ctx context.Context, a Attachment, sender, con
 		"size", rec.Size,
 		"content_type", rec.ContentType,
 	)
-	return describeAttachment(a, absPath)
+
+	desc := describeAttachment(a, absPath)
+
+	// Vision analysis: analyze images on ingest and enrich the
+	// description with the LLM-generated summary.
+	if b.visionAnalyzer != nil && strings.HasPrefix(a.ContentType, "image/") {
+		visionDesc, err := b.visionAnalyzer.Analyze(ctx, rec)
+		if err != nil {
+			b.logger.Warn("vision analysis failed",
+				"id", a.ID,
+				"hash", rec.Hash,
+				"error", err,
+			)
+		}
+		if visionDesc != "" {
+			desc += "\n[Vision: " + visionDesc + "]"
+		}
+	}
+
+	return desc
 }
 
 // describeAttachment builds a human-readable description of a single

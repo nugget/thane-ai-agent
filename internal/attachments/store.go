@@ -37,6 +37,11 @@ type Record struct {
 	Sender         string    // channel-specific sender identifier
 	ConversationID string    // conversation the attachment belongs to
 	ReceivedAt     time.Time // when the attachment was received
+
+	// Vision analysis fields (populated by Analyzer).
+	Description   string    // vision analysis text (empty = not analyzed)
+	AnalyzedAt    time.Time // when analysis was performed (zero = not analyzed)
+	AnalysisModel string    // model used for analysis
 }
 
 // IngestParams describes an attachment to be ingested into the store.
@@ -116,6 +121,18 @@ func (s *Store) migrate() error {
 	if err != nil {
 		return fmt.Errorf("create schema: %w", err)
 	}
+
+	// Vision analysis columns (added in phase 3).
+	for _, col := range []struct{ name, typedef string }{
+		{"description", "TEXT NOT NULL DEFAULT ''"},
+		{"analyzed_at", "TEXT NOT NULL DEFAULT ''"},
+		{"analysis_model", "TEXT NOT NULL DEFAULT ''"},
+	} {
+		if err := database.AddColumn(s.db, "attachments", col.name, col.typedef); err != nil {
+			return fmt.Errorf("add column %s: %w", col.name, err)
+		}
+	}
+
 	return nil
 }
 
@@ -219,15 +236,21 @@ func (s *Store) Ingest(ctx context.Context, params IngestParams) (*Record, error
 
 // insertRecord writes a metadata record to the database.
 func (s *Store) insertRecord(ctx context.Context, rec *Record) error {
+	analyzedAt := ""
+	if !rec.AnalyzedAt.IsZero() {
+		analyzedAt = rec.AnalyzedAt.UTC().Format(time.RFC3339Nano)
+	}
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO attachments (
 			id, hash, store_path, original_name, content_type,
 			size, width, height, channel, sender,
-			conversation_id, received_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			conversation_id, received_at,
+			description, analyzed_at, analysis_model
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		rec.ID, rec.Hash, rec.StorePath, rec.OriginalName, rec.ContentType,
 		rec.Size, rec.Width, rec.Height, rec.Channel, rec.Sender,
 		rec.ConversationID, rec.ReceivedAt.UTC().Format(time.RFC3339Nano),
+		rec.Description, analyzedAt, rec.AnalysisModel,
 	)
 	if err != nil {
 		return fmt.Errorf("attachments: insert record: %w", err)
@@ -241,7 +264,8 @@ func (s *Store) ByHash(ctx context.Context, hash string) (*Record, error) {
 	return s.queryOne(ctx, `SELECT
 		id, hash, store_path, original_name, content_type,
 		size, width, height, channel, sender,
-		conversation_id, received_at
+		conversation_id, received_at,
+		description, analyzed_at, analysis_model
 		FROM attachments WHERE hash = ? LIMIT 1`, hash)
 }
 
@@ -250,13 +274,47 @@ func (s *Store) ByID(ctx context.Context, id string) (*Record, error) {
 	return s.queryOne(ctx, `SELECT
 		id, hash, store_path, original_name, content_type,
 		size, width, height, channel, sender,
-		conversation_id, received_at
+		conversation_id, received_at,
+		description, analyzed_at, analysis_model
 		FROM attachments WHERE id = ?`, id)
 }
 
 // AbsPath returns the absolute filesystem path for a stored attachment.
 func (s *Store) AbsPath(rec *Record) string {
 	return filepath.Join(s.rootDir, rec.StorePath)
+}
+
+// UpdateVision stores vision analysis results for an attachment record.
+func (s *Store) UpdateVision(ctx context.Context, id, description, model string) error {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE attachments
+		SET description = ?, analyzed_at = ?, analysis_model = ?
+		WHERE id = ?`,
+		description, time.Now().UTC().Format(time.RFC3339Nano), model, id,
+	)
+	if err != nil {
+		return fmt.Errorf("attachments: update vision: %w", err)
+	}
+	return nil
+}
+
+// VisionByHash returns cached vision analysis for any record matching
+// the given content hash. This enables reuse across dedup hits — if
+// the same image was already analyzed for a different sender, the
+// cached description is returned. Returns ok=false if no analyzed
+// record exists for the hash.
+func (s *Store) VisionByHash(ctx context.Context, hash string) (description, model string, ok bool) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT description, analysis_model
+		FROM attachments
+		WHERE hash = ? AND analyzed_at != ''
+		LIMIT 1`, hash)
+
+	err := row.Scan(&description, &model)
+	if err != nil {
+		return "", "", false
+	}
+	return description, model, true
 }
 
 // Close closes the underlying database connection.
@@ -269,12 +327,13 @@ func (s *Store) queryOne(ctx context.Context, query string, args ...any) (*Recor
 	row := s.db.QueryRowContext(ctx, query, args...)
 
 	var rec Record
-	var receivedAt string
+	var receivedAt, analyzedAt string
 
 	err := row.Scan(
 		&rec.ID, &rec.Hash, &rec.StorePath, &rec.OriginalName, &rec.ContentType,
 		&rec.Size, &rec.Width, &rec.Height, &rec.Channel, &rec.Sender,
 		&rec.ConversationID, &receivedAt,
+		&rec.Description, &analyzedAt, &rec.AnalysisModel,
 	)
 	if err == sql.ErrNoRows {
 		return nil, nil
@@ -286,6 +345,12 @@ func (s *Store) queryOne(ctx context.Context, query string, args ...any) (*Recor
 	rec.ReceivedAt, err = database.ParseTimestamp(receivedAt)
 	if err != nil {
 		return nil, fmt.Errorf("attachments: parse received_at %q: %w", receivedAt, err)
+	}
+	if analyzedAt != "" {
+		rec.AnalyzedAt, err = database.ParseTimestamp(analyzedAt)
+		if err != nil {
+			return nil, fmt.Errorf("attachments: parse analyzed_at %q: %w", analyzedAt, err)
+		}
 	}
 
 	return &rec, nil

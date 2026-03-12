@@ -1167,6 +1167,25 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		)
 	}
 
+	// --- Vision analyzer ---
+	// When both the attachment store and vision config are enabled,
+	// images are automatically analyzed on ingest using a vision-capable
+	// LLM. Results are cached in the attachment metadata index.
+	var visionAnalyzer *attachments.Analyzer
+	if attachmentStore != nil && cfg.Attachments.Vision.Enabled {
+		visionAnalyzer = attachments.NewAnalyzer(attachmentStore, attachments.AnalyzerConfig{
+			Client:  llmClient,
+			Model:   cfg.Attachments.Vision.Model,
+			Prompt:  cfg.Attachments.Vision.Prompt,
+			Timeout: cfg.Attachments.Vision.ParsedTimeout(),
+			Logger:  logger,
+		})
+		logger.Info("vision analyzer enabled",
+			"model", cfg.Attachments.Vision.Model,
+			"timeout", cfg.Attachments.Vision.ParsedTimeout(),
+		)
+	}
+
 	// --- File tools ---
 	// When a workspace path is configured, the agent can read and write
 	// files within that directory. All paths are sandboxed.
@@ -1580,6 +1599,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 					MaxSize:   cfg.Signal.MaxAttachmentSize,
 				},
 				AttachmentStore: attachmentStore,
+				VisionAnalyzer:  visionAnalyzer,
 				Registry:        loopRegistry,
 				EventBus:        eventBus,
 			})

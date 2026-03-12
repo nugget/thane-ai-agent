@@ -411,7 +411,32 @@ type AttachmentsConfig struct {
 	// instead of being copied with their original filenames. The
 	// metadata index is stored at {data_dir}/attachments.db.
 	// Supports ~ expansion. Example: ~/Thane/attachments
-	StoreDir string `yaml:"store_dir"`
+	StoreDir string       `yaml:"store_dir"`
+	Vision   VisionConfig `yaml:"vision"`
+}
+
+// VisionConfig configures automatic vision analysis of image
+// attachments. When enabled, images are analyzed on ingest using a
+// vision-capable LLM and the resulting description is cached in the
+// attachment metadata index.
+type VisionConfig struct {
+	Enabled bool   `yaml:"enabled"` // enable auto-analysis on image ingest
+	Model   string `yaml:"model"`   // vision model name (must be in models.available)
+	Prompt  string `yaml:"prompt"`  // custom analysis prompt; empty uses default
+	Timeout string `yaml:"timeout"` // per-image timeout (Go duration); empty → 30s
+}
+
+// ParsedTimeout returns the configured timeout as a [time.Duration],
+// defaulting to 30 seconds when empty or unparseable.
+func (v VisionConfig) ParsedTimeout() time.Duration {
+	if v.Timeout == "" {
+		return 30 * time.Second
+	}
+	d, err := time.ParseDuration(v.Timeout)
+	if err != nil {
+		return 30 * time.Second
+	}
+	return d
 }
 
 // ProvenanceConfig configures git-backed file storage with SSH
