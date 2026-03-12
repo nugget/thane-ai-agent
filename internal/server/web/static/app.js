@@ -66,8 +66,8 @@ function syncPhysicsNodes(cx, cy) {
         // Spawn at child rest length from parent with random angle
         // so the spring starts near equilibrium.
         const a = Math.random() * 2 * Math.PI;
-        sx = parent.x + P.childRestLength * Math.cos(a);
-        sy = parent.y + P.childRestLength * Math.sin(a);
+        sx = parent.x + physics.childRestLength * Math.cos(a);
+        sy = parent.y + physics.childRestLength * Math.sin(a);
       } else {
         sx = cx + (Math.random() * 40 - 20);
         sy = cy + (Math.random() * 40 - 20);
