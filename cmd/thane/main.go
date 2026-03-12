@@ -332,8 +332,9 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 
 	// Augment PATH before any exec.LookPath calls (tool registration,
 	// media client init, etc.) so Homebrew and user-configured binaries
-	// are discoverable.
-	augmentPath(cfg.ExtraPath, logger)
+	// are discoverable. Logging is deferred until the final logger is
+	// configured (the initial logger is Info-level so Debug would be lost).
+	augmentedDirs := augmentPath(cfg.ExtraPath)
 
 	// Reconfigure logger now that we know the desired level, format, and
 	// output destination. The initial Info-level text logger above is used
@@ -390,6 +391,11 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 			"thane_version", buildinfo.Version,
 			"thane_commit", buildinfo.GitCommit,
 		)
+	}
+
+	// Log PATH augmentation now that the final logger is configured.
+	if len(augmentedDirs) > 0 {
+		logger.Debug("augmented PATH", "prepended", augmentedDirs)
 	}
 
 	// Start background log index pruner if retention is configured and
@@ -3142,7 +3148,11 @@ func (n *notifDelegateSpawner) Spawn(ctx context.Context, task, guidance string)
 // exec.LookPath (used during tool registration) can find binaries
 // installed outside the default system PATH. On macOS, Homebrew
 // directories are added automatically if they exist on disk.
-func augmentPath(extra []string, logger *slog.Logger) {
+// augmentPath prepends directories to the process PATH so that
+// exec.LookPath can find binaries installed outside launchd's minimal
+// PATH. Returns the list of directories that were prepended (for
+// deferred logging after the final logger is configured).
+func augmentPath(extra []string) []string {
 	var dirs []string
 
 	// Config entries first (highest priority).
@@ -3162,28 +3172,38 @@ func augmentPath(extra []string, logger *slog.Logger) {
 	}
 
 	if len(dirs) == 0 {
-		return
+		return nil
 	}
 
-	// Deduplicate against current PATH.
+	// Deduplicate against current PATH and within dirs itself.
 	current := os.Getenv("PATH")
-	existing := make(map[string]bool)
+	seen := make(map[string]bool)
 	for _, d := range filepath.SplitList(current) {
-		existing[d] = true
+		seen[d] = true
 	}
 
 	var prepend []string
 	for _, d := range dirs {
-		if !existing[d] {
+		if !seen[d] {
 			prepend = append(prepend, d)
+			seen[d] = true
 		}
 	}
 	if len(prepend) == 0 {
-		return
+		return nil
 	}
 
-	newPath := strings.Join(prepend, string(os.PathListSeparator)) +
-		string(os.PathListSeparator) + current
-	os.Setenv("PATH", newPath)
-	logger.Debug("augmented PATH", "prepended", prepend)
+	sep := string(os.PathListSeparator)
+	var newPath string
+	if current == "" {
+		newPath = strings.Join(prepend, sep)
+	} else {
+		newPath = strings.Join(prepend, sep) + sep + current
+	}
+	if err := os.Setenv("PATH", newPath); err != nil {
+		// Can't log yet (logger not configured), but this should
+		// essentially never fail.
+		return nil
+	}
+	return prepend
 }
