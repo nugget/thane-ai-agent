@@ -47,6 +47,13 @@ const iterationLogRetention = 5
 // blocks. Used for scanning/pruning.
 const iterationLogPrefix = "<!-- iteration_log:"
 
+// ProvenanceWriter is the subset of [provenance.Store] needed by the
+// metacognitive loop for committing state file updates.
+type ProvenanceWriter interface {
+	Read(filename string) (string, error)
+	Write(ctx context.Context, filename, content, message string) error
+}
+
 // Config holds the parsed metacognitive loop configuration with
 // time.Duration fields (as opposed to the YAML string representation
 // in [config.MetacognitiveConfig]).
@@ -94,7 +101,22 @@ func ParseConfig(raw config.MetacognitiveConfig) (Config, error) {
 // Opts holds options for [BuildLoopConfig] that are not part of [Config].
 type Opts struct {
 	// WorkspacePath is the absolute path to the workspace directory.
+	// Used only as a fallback when ProvenanceStore is nil.
 	WorkspacePath string
+
+	// StateFilePath is the resolved absolute path to the state file.
+	// When a provenance store is configured, this points inside the
+	// store; otherwise it falls back to workspace-relative resolution.
+	StateFilePath string
+
+	// ProvenanceStore, when non-nil, is used by the iteration logger
+	// to commit state file updates with SSH signatures.
+	ProvenanceStore ProvenanceWriter
+
+	// StateFileName is the bare filename (e.g. "metacognitive.md") used
+	// for provenance store reads and writes. Ignored when ProvenanceStore
+	// is nil.
+	StateFileName string
 }
 
 // BuildLoopConfig returns a [loop.Config] that implements the
@@ -124,17 +146,17 @@ func BuildLoopConfig(cfg Config, opts Opts) loop.Config {
 		},
 
 		TaskBuilder: func(ctx context.Context, isSupervisor bool) (string, error) {
-			stateContent, err := readStateFile(opts.WorkspacePath, cfg.StateFile)
+			stateContent, err := readStateFile(opts.StateFilePath)
 			if err != nil {
 				log := logging.Logger(ctx)
 				if errors.Is(err, fs.ErrNotExist) {
 					log.Info("metacognitive state file not found, starting fresh",
-						"path", stateFilePath(opts.WorkspacePath, cfg.StateFile),
+						"path", opts.StateFilePath,
 					)
 				} else {
 					log.Warn("metacognitive state file read failed, starting with empty state",
 						"error", err,
-						"path", stateFilePath(opts.WorkspacePath, cfg.StateFile),
+						"path", opts.StateFilePath,
 					)
 				}
 				stateContent = ""
@@ -144,7 +166,7 @@ func BuildLoopConfig(cfg Config, opts Opts) loop.Config {
 
 		PostIterate: func(ctx context.Context, result loop.IterationResult) error {
 			log := logging.Logger(ctx)
-			appendIterationLog(log, stateFilePath(opts.WorkspacePath, cfg.StateFile), &result)
+			appendIterationLog(ctx, log, opts.StateFilePath, opts.ProvenanceStore, opts.StateFileName, &result)
 			return nil
 		},
 	}
@@ -163,11 +185,11 @@ var metacogExcludeTools = []string{
 	"request_capability", "drop_capability",
 }
 
-// readStateFile reads the metacognitive state file from the workspace.
+// readStateFile reads the metacognitive state file from the given path.
 // Returns an error if the file does not exist (first iteration).
 // Content is capped at [maxStateBytes].
-func readStateFile(workspacePath, stateFile string) (string, error) {
-	data, err := os.ReadFile(stateFilePath(workspacePath, stateFile))
+func readStateFile(path string) (string, error) {
+	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return "", err
@@ -180,35 +202,43 @@ func readStateFile(workspacePath, stateFile string) (string, error) {
 	return string(data), nil
 }
 
-// stateFilePath returns the absolute path to the state file.
-func stateFilePath(workspacePath, stateFile string) string {
-	return filepath.Join(workspacePath, stateFile)
-}
-
 // appendIterationLog appends an HTML comment summary block to the state
 // file after a successful iteration. Old logs beyond
 // [iterationLogRetention] are pruned. This is best-effort: errors are
 // logged but never disrupt the loop.
 //
+// When store is non-nil, reads and writes go through the provenance
+// store (committed with SSH signatures). When nil, direct file I/O is
+// used at statePath.
+//
 // Unlike [readStateFile], this reads the full file without the
 // maxStateBytes cap to avoid silently truncating user/model state on
 // rewrite.
-func appendIterationLog(log *slog.Logger, statePath string, result *loop.IterationResult) {
+func appendIterationLog(ctx context.Context, log *slog.Logger, statePath string, store ProvenanceWriter, stateFileName string, result *loop.IterationResult) {
 	// Read the full file (uncapped) to avoid truncation on rewrite.
 	var content string
-	data, err := os.ReadFile(statePath)
-	if err != nil {
-		if !errors.Is(err, fs.ErrNotExist) {
-			// Non-trivial read error — abort to avoid data loss.
-			log.Warn("failed to read state file for iteration log, skipping append",
+	if store != nil {
+		existing, err := store.Read(stateFileName)
+		if err != nil && !os.IsNotExist(err) {
+			log.Warn("failed to read state file from provenance for iteration log, skipping append",
 				"error", err,
 			)
 			return
 		}
-		// File doesn't exist yet — start with empty content.
-		content = ""
+		content = existing
 	} else {
-		content = string(data)
+		data, err := os.ReadFile(statePath)
+		if err != nil {
+			if !errors.Is(err, fs.ErrNotExist) {
+				log.Warn("failed to read state file for iteration log, skipping append",
+					"error", err,
+				)
+				return
+			}
+			// File doesn't exist yet — start with empty content.
+		} else {
+			content = string(data)
+		}
 	}
 
 	// Prune old iteration logs before appending.
@@ -236,6 +266,16 @@ func appendIterationLog(log *slog.Logger, statePath string, result *loop.Iterati
 
 	fullContent := content + logBlock
 
+	if store != nil {
+		if err := store.Write(ctx, stateFileName, fullContent, "iteration-log"); err != nil {
+			log.Warn("failed to commit iteration log to provenance",
+				"error", err,
+			)
+		}
+		return
+	}
+
+	// Fallback: direct file I/O.
 	// Ensure the parent directory exists (state file may be in a subdir).
 	if err := os.MkdirAll(filepath.Dir(statePath), 0o755); err != nil {
 		log.Warn("failed to create directory for iteration log",

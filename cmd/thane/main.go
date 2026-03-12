@@ -2664,12 +2664,26 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 			}
 		}
 
+		// Resolve state file path: provenance store when configured,
+		// workspace-relative otherwise. Uses filepath.Base to normalize
+		// config values like "Thane/metacognitive.md" to flat layout.
+		stateFileName := filepath.Base(metacogCfg.StateFile)
+		var metacogStatePath string
+		if provenanceStore != nil {
+			metacogStatePath = provenanceStore.FilePath(stateFileName)
+		} else {
+			metacogStatePath = filepath.Join(cfg.Workspace.Path, metacogCfg.StateFile)
+		}
+
 		adapter := &loopAdapter{agentLoop: loop, router: rtr}
 		loopCfg := metacognitive.BuildLoopConfig(metacogCfg, metacognitive.Opts{
-			WorkspacePath: cfg.Workspace.Path,
+			WorkspacePath:   cfg.Workspace.Path,
+			StateFilePath:   metacogStatePath,
+			ProvenanceStore: provenanceStore,
+			StateFileName:   stateFileName,
 		})
 		loopCfg.Setup = func(l *looppkg.Loop) {
-			metacognitive.RegisterTools(loop.Tools(), l, metacogCfg, cfg.Workspace.Path, metacogEgoFile, provenanceStore)
+			metacognitive.RegisterTools(loop.Tools(), l, metacogCfg, metacogStatePath, metacogEgoFile, provenanceStore)
 		}
 
 		if _, err := loopRegistry.SpawnLoop(ctx, loopCfg, looppkg.Deps{
