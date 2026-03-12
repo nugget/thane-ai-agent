@@ -141,8 +141,8 @@ func TestStoreHistory(t *testing.T) {
 		t.Errorf("RevisionCount = %d, want 3", hist.RevisionCount)
 	}
 
-	if hist.LastAuthor != "third-write" {
-		t.Errorf("LastAuthor = %q, want %q", hist.LastAuthor, "third-write")
+	if hist.LastMessage != "third-write" {
+		t.Errorf("LastMessage = %q, want %q", hist.LastMessage, "third-write")
 	}
 
 	if hist.LastModified.IsZero() {
