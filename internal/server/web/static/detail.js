@@ -294,7 +294,7 @@ function applyLoopEvent(evt) {
       clearLiveTelemetry();
       const ms = parseDuration(d.sleep_duration || '');
       if (ms > 0) {
-        sleepTimers.set(nodeId, { startedAt: new Date(), durationMs: ms });
+        sleepTimers.set(nodeId, { startedAt: Date.now(), durationMs: ms });
       }
       if (iterationHistory.length > 0) {
         iterationHistory[0].sleep_after_ms = ms;

@@ -587,7 +587,7 @@ function buildConnector(loop, snap, isLive, sleepTimer) {
     let sleepText = '';
     if (loop.state === 'sleeping') {
       if (sleepTimer && sleepTimer.durationMs > 0) {
-        const remaining = sleepTimer.durationMs - (Date.now() - sleepTimer.startedAt.getTime());
+        const remaining = sleepTimer.durationMs - (Date.now() - sleepTimer.startedAt);
         sleepText = remaining > 0 ? 'sleeping ' + formatDuration(remaining) : 'waking up...';
       } else {
         sleepText = 'sleeping';
