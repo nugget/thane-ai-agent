@@ -9,6 +9,7 @@ const sessionIDKey contextKey = "session_id"
 const toolCallIDKey contextKey = "tool_call_id"
 const iterationIndexKey contextKey = "iteration_index"
 const hintsKey contextKey = "hints"
+const loopIDKey contextKey = "loop_id"
 
 // WithConversationID adds the conversation ID to the context.
 func WithConversationID(ctx context.Context, id string) context.Context {
@@ -67,6 +68,25 @@ func IterationIndexFromContext(ctx context.Context) (int, bool) {
 		return idx, true
 	}
 	return -1, false
+}
+
+// WithLoopID adds the calling loop's ID to the context. This allows
+// tool handlers (e.g. delegate executor) to discover which loop
+// invoked them for parent-child relationship tracking.
+func WithLoopID(ctx context.Context, id string) context.Context {
+	if id == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, loopIDKey, id)
+}
+
+// LoopIDFromContext extracts the calling loop's ID from the context.
+// Returns an empty string if not set (e.g. non-loop API requests).
+func LoopIDFromContext(ctx context.Context) string {
+	if id, ok := ctx.Value(loopIDKey).(string); ok {
+		return id
+	}
+	return ""
 }
 
 // WithHints adds routing hints to the context. Nil hints are ignored

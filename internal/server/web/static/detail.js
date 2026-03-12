@@ -51,18 +51,8 @@ document.title = 'Thane \u00b7 ' + (nodeName || (nodeType === 'system' ? 'Runtim
 // Utility functions (formatTokens, formatDuration, formatTime, etc.),
 // card builders, and log rendering are in shared.js.
 
-// ---------------------------------------------------------------------------
-// Live Telemetry Timers
-// ---------------------------------------------------------------------------
-
-function clearLiveTelemetry() {
-  if (loopData) {
-    loopData._iterStartTs = null;
-    loopData._liveTools = [];
-    loopData._liveModel = '';
-    loopData._llmContext = null;
-  }
-}
+// clearLiveTelemetry, renderAggregates, renderTimeline,
+// applyLoopEventToLoop, MAX_ITERATION_HISTORY are in shared.js.
 
 // renderLogRows and buildLogDetail are in shared.js.
 function renderLogs(entries) {
@@ -163,9 +153,6 @@ async function fetchSystemLogs() {
 // ---------------------------------------------------------------------------
 
 let loopData = null;
-const events = [];
-const MAX_EVENTS = 50;
-const MAX_ITERATION_HISTORY = 10;
 const sleepTimers = new Map();
 let iterationHistory = [];
 
@@ -219,8 +206,6 @@ function connectSSE() {
   es.addEventListener('loop', (e) => {
     const evt = JSON.parse(e.data);
     if (evt.data && evt.data.loop_id === nodeId) {
-      events.unshift(evt);
-      if (events.length > MAX_EVENTS) events.pop();
       applyLoopEvent(evt);
       renderLoopDetail();
     }
@@ -237,143 +222,19 @@ function connectSSE() {
 
 function applyLoopEvent(evt) {
   if (!loopData) return;
-  const d = evt.data || {};
 
-  switch (evt.kind) {
-    case 'loop_iteration_start':
-      loopData.state = 'processing';
-      loopData.attempts = (loopData.attempts || 0) + 1;
-      loopData._supervisor = !!d.supervisor;
-      loopData._currentConvID = d.conversation_id || loopData._currentConvID;
-      loopData._liveTools = [];
-      loopData._liveModel = '';
-      loopData._llmContext = null;
-      loopData._iterStartTs = Date.now();
-      break;
-    case 'loop_iteration_complete': {
-      loopData.iterations = (loopData.iterations || 0) + 1;
-      loopData._lastModel = d.model || loopData._lastModel;
-      loopData._lastSupervisor = loopData._supervisor;
-      if (loopData._supervisor) {
-        loopData.last_supervisor_iter = loopData.iterations;
-      }
-      loopData._supervisor = false;
-      if (d.input_tokens) {
-        loopData.total_input_tokens = (loopData.total_input_tokens || 0) + d.input_tokens;
-        loopData.last_input_tokens = d.input_tokens;
-      }
-      if (d.output_tokens) {
-        loopData.total_output_tokens = (loopData.total_output_tokens || 0) + d.output_tokens;
-        loopData.last_output_tokens = d.output_tokens;
-      }
-      if (d.context_window > 0) loopData.context_window = d.context_window;
-      // Build iteration snapshot.
-      const snap = {
-        number: loopData.iterations,
-        conv_id: d.conversation_id || loopData._currentConvID || '',
-        model: d.model || '',
-        input_tokens: d.input_tokens || 0,
-        output_tokens: d.output_tokens || 0,
-        context_window: d.context_window || 0,
-        tools_used: d.tools_used || buildToolCounts(loopData._liveTools),
-        elapsed_ms: d.elapsed_ms || 0,
-        supervisor: loopData._lastSupervisor || false,
-        started_at: loopData._iterStartTs ? new Date(loopData._iterStartTs).toISOString() : evt.ts,
-        completed_at: evt.ts,
-        summary: d.summary || null,
-      };
-      iterationHistory.unshift(snap);
-      if (iterationHistory.length > MAX_ITERATION_HISTORY) iterationHistory.length = MAX_ITERATION_HISTORY;
-      clearLiveTelemetry();
-      break;
+  const result = applyLoopEventToLoop(evt, {
+    loop: loopData,
+    loopId: nodeId,
+    sleepTimers: sleepTimers,
+    history: iterationHistory,
+  });
+
+  if (result && result.snapshot) {
+    iterationHistory.unshift(result.snapshot);
+    if (iterationHistory.length > MAX_ITERATION_HISTORY) {
+      iterationHistory.length = MAX_ITERATION_HISTORY;
     }
-    case 'loop_sleep_start': {
-      loopData.state = 'sleeping';
-      clearLiveTelemetry();
-      const ms = parseDuration(d.sleep_duration || '');
-      if (ms > 0) {
-        sleepTimers.set(nodeId, { startedAt: new Date(), durationMs: ms });
-      }
-      if (iterationHistory.length > 0) {
-        iterationHistory[0].sleep_after_ms = ms;
-      }
-      break;
-    }
-    case 'loop_wait_start':
-      loopData.state = 'waiting';
-      clearLiveTelemetry();
-      sleepTimers.delete(nodeId);
-      if (iterationHistory.length > 0) {
-        iterationHistory[0].wait_after = true;
-      }
-      break;
-    case 'loop_error': {
-      loopData.last_error = d.error;
-      const errSnap = {
-        number: 0,
-        error: d.error || '',
-        started_at: loopData._iterStartTs ? new Date(loopData._iterStartTs).toISOString() : evt.ts,
-        completed_at: evt.ts,
-        elapsed_ms: loopData._iterStartTs ? Date.now() - loopData._iterStartTs : 0,
-        supervisor: loopData._supervisor || false,
-      };
-      iterationHistory.unshift(errSnap);
-      if (iterationHistory.length > MAX_ITERATION_HISTORY) iterationHistory.length = MAX_ITERATION_HISTORY;
-      clearLiveTelemetry();
-      break;
-    }
-    case 'loop_state_change':
-      loopData.state = d.to;
-      if (d.to !== 'processing') clearLiveTelemetry();
-      break;
-    case 'loop_stopped':
-      loopData.state = 'stopped';
-      clearLiveTelemetry();
-      break;
-    case 'loop_tool_start':
-      if (!loopData._liveTools) loopData._liveTools = [];
-      if (!loopData._iterStartTs) {
-        loopData._iterStartTs = Date.now();
-      }
-      loopData._liveTools.push({
-        tool: d.tool,
-        status: 'running',
-        args: d.args || null,
-      });
-      break;
-    case 'loop_tool_done':
-      if (loopData._liveTools) {
-        for (let i = loopData._liveTools.length - 1; i >= 0; i--) {
-          if (loopData._liveTools[i].tool === d.tool && loopData._liveTools[i].status === 'running') {
-            loopData._liveTools[i].status = d.error ? 'error' : 'done';
-            loopData._liveTools[i].result = d.result || null;
-            loopData._liveTools[i].error = d.error || null;
-            break;
-          }
-        }
-      }
-      break;
-    case 'loop_llm_start':
-      loopData._liveModel = d.model || '';
-      loopData._llmContext = {
-        est_tokens: d.est_tokens || 0,
-        messages: d.messages || 0,
-        tools: d.tools || 0,
-        iteration: d.iteration,
-        complexity: d.complexity || '',
-        intent: d.intent || '',
-        reasoning: d.reasoning || '',
-      };
-      if (!loopData._iterStartTs) {
-        loopData._iterStartTs = Date.now();
-      }
-      break;
-    case 'loop_llm_response':
-      loopData._liveModel = d.model || '';
-      if (!loopData._iterStartTs) {
-        loopData._iterStartTs = Date.now();
-      }
-      break;
   }
 }
 
@@ -395,10 +256,10 @@ function renderLoopDetail() {
   if (loopData._currentConvID) idsContainer.appendChild(makeIDRow('conv_id', loopData._currentConvID));
 
   // Aggregate stats bar.
-  renderAggregates();
+  renderAggregates(loopData, $('#detail-aggregates'));
 
   // Iteration timeline.
-  renderTimeline();
+  renderTimeline(loopData, $('#detail-timeline'), iterationHistory, nodeId, sleepTimers);
 
   // Capabilities (tags from config).
   const tags = (loopData.config && loopData.config.Tags) || [];
@@ -418,60 +279,10 @@ function renderLoopDetail() {
   }
 }
 
-function renderAggregates() {
-  const el = $('#detail-aggregates');
-  const parts = [];
-  const iter = loopData.iterations || 0;
-  const att = loopData.attempts || 0;
-  parts.push(formatNumber(iter) + ' iter');
-  if (att !== iter) parts.push(formatNumber(att) + ' att');
-  const totalTok = (loopData.total_input_tokens || 0) + (loopData.total_output_tokens || 0);
-  if (totalTok > 0) parts.push(formatTokens(totalTok) + ' tok');
-  if (loopData.started_at) parts.push(timeAgo(new Date(loopData.started_at)));
-  if (loopData.last_error) {
-    parts.push('<span class="agg-error">' + escapeHTML(truncate(loopData.last_error, 40)) + '</span>');
-  }
-  el.innerHTML = parts.join(' <span class="agg-sep">\u00b7</span> ');
-}
-
-function renderTimeline() {
-  const container = $('#detail-timeline');
-
-  // Preserve expanded card state across re-renders.
-  const expanded = new Set();
-  container.querySelectorAll('.iter-card--past.iter-card--expanded').forEach(el => {
-    const idx = el.dataset.idx;
-    if (idx != null) expanded.add(idx);
-  });
-
-  container.innerHTML = '';
-
-  const isProcessing = loopData.state === 'processing';
-  const isSleeping = loopData.state === 'sleeping';
-  const isWaiting = loopData.state === 'waiting';
-
-  // Live card.
-  if (isProcessing && loopData._iterStartTs) {
-    container.appendChild(buildLiveCard(loopData));
-  }
-
-  // Live connector.
-  if ((isSleeping || isWaiting) && iterationHistory.length > 0) {
-    container.appendChild(buildConnector(loopData, iterationHistory[0], true, sleepTimers.get(nodeId)));
-  }
-
-  // Past iteration cards.
-  for (let i = 0; i < iterationHistory.length; i++) {
-    container.appendChild(buildPastCard(iterationHistory[i], loopData.handler_only, i, expanded.has(String(i))));
-    if (i < iterationHistory.length - 1) {
-      container.appendChild(buildConnector(loopData, iterationHistory[i], false, null));
-    }
-  }
-}
-
-// buildLiveCard, buildPastCard, buildConnector, shortModelName,
-// buildToolCounts, escapeHTML, truncate, makeIDRow, makeIDChip
-// are all in shared.js.
+// buildLiveCard, buildPastCard, buildConnector, renderAggregates,
+// renderTimeline, clearLiveTelemetry, applyLoopEventToLoop,
+// shortModelName, buildToolCounts, escapeHTML, truncate, makeIDRow,
+// makeIDChip, MAX_ITERATION_HISTORY are all in shared.js.
 
 function tickLoop() {
   if (loopData) {

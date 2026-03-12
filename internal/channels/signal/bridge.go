@@ -46,13 +46,14 @@ type ChannelSender interface {
 	SendMessage(ctx context.Context, recipient, message string) error
 }
 
-// ContactResolver resolves a phone number to a contact name. The bridge
-// uses this to inject a sender_name hint into agent requests so the
-// channel provider can greet users by name.
+// ContactResolver resolves a phone number to a contact name and trust
+// zone. The bridge uses this to inject a sender_name hint into agent
+// requests and to propagate trust zone metadata to loop nodes.
 type ContactResolver interface {
-	// ResolvePhone returns the contact name for the given phone number.
-	// Returns ("", false) if no matching contact is found.
-	ResolvePhone(phone string) (name string, ok bool)
+	// ResolvePhone returns the contact name and trust zone for the
+	// given phone number. Returns ("", "", false) if no matching
+	// contact is found.
+	ResolvePhone(phone string) (name string, trustZone string, ok bool)
 }
 
 // handleTimeout bounds how long a single inbound message may be
@@ -399,11 +400,13 @@ func (b *Bridge) ensureSenderLoop(ctx context.Context, sender string) {
 	parentID := b.parentID
 	b.mu.Unlock()
 
-	// Resolve a display name for the loop node.
+	// Resolve a display name and trust zone for the loop node.
 	loopName := "signal/" + sanitizePhone(sender)
+	trustZone := "unknown"
 	if b.resolver != nil {
-		if name, ok := b.resolver.ResolvePhone(sender); ok {
+		if name, zone, ok := b.resolver.ResolvePhone(sender); ok {
 			loopName = "signal/" + sanitizeLoopName(name)
+			trustZone = zone
 		}
 	}
 
@@ -449,9 +452,10 @@ func (b *Bridge) ensureSenderLoop(ctx context.Context, sender string) {
 		},
 		ParentID: parentID,
 		Metadata: map[string]string{
-			"subsystem": "signal",
-			"category":  "channel",
-			"sender":    sender,
+			"subsystem":  "signal",
+			"category":   "channel",
+			"sender":     sender,
+			"trust_zone": trustZone,
 		},
 	}, loop.Deps{Logger: b.logger, EventBus: b.eventBus})
 	if err != nil {
@@ -611,7 +615,7 @@ func (b *Bridge) handleMessage(ctx context.Context, env *Envelope, progressFn fu
 
 	// Resolve sender phone number to a contact name when available.
 	if b.resolver != nil {
-		if name, ok := b.resolver.ResolvePhone(sender); ok {
+		if name, _, ok := b.resolver.ResolvePhone(sender); ok {
 			hints["sender_name"] = name
 		}
 	}
@@ -729,7 +733,7 @@ func (b *Bridge) handleReaction(ctx context.Context, env *Envelope) {
 	}
 
 	if b.resolver != nil {
-		if name, ok := b.resolver.ResolvePhone(sender); ok {
+		if name, _, ok := b.resolver.ResolvePhone(sender); ok {
 			hints["sender_name"] = name
 		}
 	}

@@ -183,6 +183,58 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
   min-width: 0;
 }
 
+/* === Delegate Detail === */
+.detail-delegate {
+  margin-bottom: 0.75rem;
+  padding: 0.5rem 0.6rem;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.delegate-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  margin-bottom: 0.4rem;
+}
+.delegate-field:last-child { margin-bottom: 0; }
+.delegate-label {
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.delegate-value {
+  font-size: 0.78rem;
+  color: var(--text-primary);
+  line-height: 1.35;
+  word-break: break-word;
+}
+.delegate-task {
+  font-style: italic;
+}
+.delegate-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin-top: 0.4rem;
+}
+.delegate-result {
+  margin-top: 0.5rem;
+  padding: 0.3rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.72rem;
+  font-weight: 500;
+}
+.delegate-result--ok {
+  background: var(--green-dim);
+  color: var(--green);
+}
+.delegate-result--failed {
+  background: var(--red-dim);
+  color: var(--red);
+}
+
 .id-row {
   display: flex;
   align-items: center;
@@ -301,6 +353,7 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
 .state-badge--stopped     { background: var(--red-dim);    color: var(--red);    }
 .state-badge--pending     { background: var(--purple-dim); color: var(--purple); }
 .state-badge--supervisor  { background: var(--purple-dim); color: var(--purple); }
+.state-badge--completed  { background: var(--green-dim);  color: var(--green);  }
 
 /* === Context Utilization Meter === */
 .context-meter {
@@ -634,6 +687,62 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
 }
 @keyframes live-spin { to { transform: rotate(360deg); } }
 
+/* Delegate call inline display (live card) */
+.live-tool__delegate-icon {
+  margin-right: 0.25em;
+  font-size: 0.65rem;
+}
+.live-tool__delegate-task {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.live-tool__delegate-profile {
+  font-size: 0.55rem;
+  color: var(--purple);
+  margin-left: 0.5em;
+  flex-shrink: 0;
+}
+
+/* Delegate calls in past iteration cards */
+.iter-card__delegates {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  margin-bottom: 0.25rem;
+}
+.iter-card__delegate-call {
+  display: flex;
+  align-items: baseline;
+  gap: 0.2em;
+  font-size: 0.65rem;
+  color: var(--text-secondary);
+  padding: 0.15em 0.35em;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--purple);
+  border-radius: 3px;
+}
+.iter-card__delegate-icon {
+  font-size: 0.6rem;
+  flex-shrink: 0;
+}
+.iter-card__delegate-task {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.iter-card__delegate-profile {
+  font-size: 0.55rem;
+  color: var(--purple);
+  flex-shrink: 0;
+}
+.iter-card__delegate-call--error {
+  border-left-color: var(--red);
+}
+
 .detail-metrics dt {
   color: var(--text-secondary);
   font-weight: 500;
@@ -667,6 +776,9 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
   border: 1px solid var(--border);
   border-radius: 3px;
   padding: 0.1em 0.4em;
+}
+.tag-chip--muted {
+  opacity: 0.5;
 }
 
 /* === Section Title === */
@@ -954,6 +1066,12 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
 .loop-node { cursor: pointer; }
 .loop-node:hover .node-ring { opacity: 0.3; }
 
+/* Trust zone underglow — diffused coloured halo behind the node */
+.trust-glow {
+  opacity: 0.45;
+  pointer-events: none;
+}
+
 /* Outer glow ring */
 .node-ring {
   opacity: 0;
@@ -979,6 +1097,11 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
 .node-shape--pending     { fill: var(--purple); stroke: var(--purple); filter: drop-shadow(0 0 4px var(--purple-dim)); }
 
 /* Node label */
+.node-icon {
+  pointer-events: none;
+  user-select: none;
+}
+
 .node-label {
   fill: var(--text-primary);
   font-family: var(--font-sans);
@@ -1129,12 +1252,13 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
 .sleep-ring {
   fill: none;
   stroke: var(--blue);
-  stroke-width: 2;
-  opacity: 0.4;
+  stroke-width: 8;
+  opacity: 0.8;
   stroke-linecap: round;
-  transform-origin: center;
+  transform-origin: 0 0;
   transform: rotate(-90deg);
-  transition: stroke-dashoffset 1s linear;
+  /* No transition — tick() updates at 60fps for smooth fill,
+     and the reset snap-back is instant between cycles. */
 }
 
 /* === Toggle Buttons === */
@@ -1234,9 +1358,9 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
 
 .link-line--child {
   stroke: var(--text-muted);
-  stroke-width: 2;
-  stroke-dasharray: 4 3;
-  opacity: 0.3;
+  stroke-width: 2.5;
+  stroke-dasharray: 6 4;
+  opacity: 0.5;
 }
 
 .link-line--flash {
@@ -1271,14 +1395,10 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
   pointer-events: none;
 }
 
-/* Smooth reflow — nodes glide to new positions on layout changes.
-   transition-delay is set per-node by JS to stagger the cascade. */
-.loop-node--settled {
-  transition: transform 0.55s cubic-bezier(0.25, 0.46, 0.45, 0.94);
-}
-
-.system-node--settled {
-  transition: transform 0.55s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+/* Completed delegate: fade to translucent but stay clickable */
+.loop-node--fading .node-inner {
+  opacity: 0.35;
+  transition: opacity 1s ease-out;
 }
 
 /* === Iteration Flash === */

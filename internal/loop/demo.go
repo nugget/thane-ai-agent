@@ -179,7 +179,7 @@ func SpawnDemoLoops(ctx context.Context, registry *Registry, eventBus *events.Bu
 		}
 	}()
 
-	lg.Info("demo loops spawned", "count", 10)
+	lg.Info("demo loops spawned", "count", len(registry.List()))
 	return nil
 }
 

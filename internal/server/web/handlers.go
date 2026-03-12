@@ -210,8 +210,14 @@ func (s *WebServer) handleLoopEvents(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-			// Only forward loop events to the client.
-			if evt.Source != events.SourceLoop {
+			// Forward loop and delegate events to the client.
+			var sseType string
+			switch evt.Source {
+			case events.SourceLoop:
+				sseType = "loop"
+			case events.SourceDelegate:
+				sseType = "delegate"
+			default:
 				continue
 			}
 
@@ -222,12 +228,12 @@ func (s *WebServer) handleLoopEvents(w http.ResponseWriter, r *http.Request) {
 			}
 			data, err := json.Marshal(le)
 			if err != nil {
-				s.logger.Debug("failed to marshal loop event", "error", err)
+				s.logger.Warn("failed to marshal event", "error", err)
 				continue
 			}
 
 			_ = rc.SetWriteDeadline(time.Now().Add(30 * time.Second))
-			if _, err := fmt.Fprintf(w, "event: loop\ndata: %s\n\n", data); err != nil {
+			if _, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", sseType, data); err != nil {
 				return
 			}
 			flusher.Flush()
