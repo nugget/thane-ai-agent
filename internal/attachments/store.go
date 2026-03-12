@@ -9,6 +9,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -66,6 +67,10 @@ func NewStore(dbPath string, rootDir string, logger *slog.Logger) (*Store, error
 	db, err := database.Open(dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("attachments: open database: %w", err)
+	}
+
+	if logger == nil {
+		logger = slog.Default()
 	}
 
 	s := &Store{
@@ -151,19 +156,29 @@ func (s *Store) Ingest(ctx context.Context, params IngestParams) (*Record, error
 	absPath := filepath.Join(s.rootDir, storePath)
 
 	// Check if content already exists on disk (dedup).
+	// Track whether this call created the blob so we can roll it back
+	// if the metadata insert fails without removing pre-existing files.
+	createdBlob := false
 	if _, err := os.Stat(absPath); err == nil {
-		// File already exists — remove temp, reuse existing.
-		os.Remove(tmpPath)
-		cleanup = false
+		// File already exists — let defer clean up the temp file.
 	} else {
 		// New content — move temp into place.
 		if err := os.MkdirAll(filepath.Dir(absPath), 0o750); err != nil {
 			return nil, fmt.Errorf("attachments: create hash dir: %w", err)
 		}
 		if err := os.Rename(tmpPath, absPath); err != nil {
-			return nil, fmt.Errorf("attachments: move to store: %w", err)
+			// Concurrent ingest of identical content: another goroutine
+			// moved a file into place between our Stat and Rename. Treat
+			// as a dedup hit.
+			if errors.Is(err, os.ErrExist) {
+				// Let defer clean up temp file.
+			} else {
+				return nil, fmt.Errorf("attachments: move to store: %w", err)
+			}
+		} else {
+			cleanup = false // temp file successfully renamed; nothing to clean up.
+			createdBlob = true
 		}
-		cleanup = false
 	}
 
 	rec := &Record{
@@ -182,6 +197,11 @@ func (s *Store) Ingest(ctx context.Context, params IngestParams) (*Record, error
 	}
 
 	if err := s.insertRecord(ctx, rec); err != nil {
+		// Roll back newly-created blobs to avoid orphaned files.
+		// Pre-existing blobs (dedup hits) are left alone.
+		if createdBlob {
+			os.Remove(absPath)
+		}
 		return nil, err
 	}
 
@@ -263,7 +283,7 @@ func (s *Store) queryOne(ctx context.Context, query string, args ...any) (*Recor
 		return nil, fmt.Errorf("attachments: scan record: %w", err)
 	}
 
-	rec.ReceivedAt, err = time.Parse(time.RFC3339Nano, receivedAt)
+	rec.ReceivedAt, err = database.ParseTimestamp(receivedAt)
 	if err != nil {
 		return nil, fmt.Errorf("attachments: parse received_at %q: %w", receivedAt, err)
 	}

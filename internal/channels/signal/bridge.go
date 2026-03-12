@@ -564,7 +564,15 @@ func (b *Bridge) handleMessage(ctx context.Context, env *Envelope, progressFn fu
 		if env.DataMessage.ViewOnce {
 			attachmentDescs = []string{"[View-once attachment — not available]"}
 		} else {
-			attachmentDescs = b.processAttachments(ctx, env.DataMessage.Attachments, sender, convID)
+			// Use the Signal message timestamp for provenance rather than
+			// wall-clock time, so records remain accurate across processing
+			// delays and downtime replays.
+			msgTS := env.Timestamp
+			if env.DataMessage.Timestamp != 0 {
+				msgTS = env.DataMessage.Timestamp
+			}
+			receivedAt := time.UnixMilli(msgTS)
+			attachmentDescs = b.processAttachments(ctx, env.DataMessage.Attachments, sender, convID, receivedAt)
 		}
 	}
 	content := formatMessage(env, attachmentDescs)
@@ -962,7 +970,7 @@ func formatReaction(env *Envelope) string {
 // otherwise they are copied to the legacy destination directory.
 // Files that cannot be processed (missing, too large) are described
 // but marked as unavailable.
-func (b *Bridge) processAttachments(ctx context.Context, atts []Attachment, sender, convID string) []string {
+func (b *Bridge) processAttachments(ctx context.Context, atts []Attachment, sender, convID string, receivedAt time.Time) []string {
 	descs := make([]string, 0, len(atts))
 	for _, a := range atts {
 		if b.attachments.MaxSize > 0 && a.Size > b.attachments.MaxSize {
@@ -972,7 +980,7 @@ func (b *Bridge) processAttachments(ctx context.Context, atts []Attachment, send
 
 		// Content-addressed store path.
 		if b.attachmentStore != nil {
-			descs = append(descs, b.ingestAttachment(ctx, a, sender, convID))
+			descs = append(descs, b.ingestAttachment(ctx, a, sender, convID, receivedAt))
 			continue
 		}
 
@@ -1034,7 +1042,7 @@ func (b *Bridge) processAttachments(ctx context.Context, atts []Attachment, send
 
 // ingestAttachment stores a single attachment via the content-addressed
 // store and returns a human-readable description.
-func (b *Bridge) ingestAttachment(ctx context.Context, a Attachment, sender, convID string) string {
+func (b *Bridge) ingestAttachment(ctx context.Context, a Attachment, sender, convID string, receivedAt time.Time) string {
 	if b.attachments.SourceDir == "" {
 		return describeAttachment(a, "source dir not configured")
 	}
@@ -1061,7 +1069,7 @@ func (b *Bridge) ingestAttachment(ctx context.Context, a Attachment, sender, con
 		Channel:        "signal",
 		Sender:         sender,
 		ConversationID: convID,
-		ReceivedAt:     time.Now(),
+		ReceivedAt:     receivedAt,
 	})
 	if err != nil {
 		b.logger.Warn("signal attachment ingest failed",
