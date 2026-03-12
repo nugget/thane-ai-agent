@@ -11,7 +11,7 @@ const state = {
   loops: new Map(),       // id -> loop status object
   selected: null,         // id of currently selected loop ('__system__' for system node)
   events: [],             // recent events (newest first, capped)
-  sleepTimers: new Map(), // id -> { startedAt: Date, durationMs: number }
+  sleepTimers: new Map(), // id -> { startedAt: number (ms timestamp), durationMs: number }
   iterationHistory: new Map(), // id -> array of iteration snapshots (newest first)
   system: null,           // system status object from /api/system
   prevIterations: new Map(), // id -> last known iteration count (for flash detection)
@@ -449,25 +449,7 @@ function setConnState(s) {
 // Event Handling
 // ---------------------------------------------------------------------------
 
-// extractDelegateCalls pulls thane_delegate entries from _liveTools and
-// parses their args into structured objects for display in iteration cards.
-function extractDelegateCalls(liveTools) {
-  if (!liveTools || liveTools.length === 0) return [];
-  const calls = [];
-  for (const entry of liveTools) {
-    if (entry.tool !== 'thane_delegate') continue;
-    const parsed = parseDelegateArgs(entry.args);
-    calls.push({
-      task: parsed.task || '',
-      profile: parsed.profile || '',
-      guidance: truncate(parsed.guidance || '', 200),
-      tags: parsed.tags || [],
-      status: entry.status || 'done',
-      error: entry.error || null,
-    });
-  }
-  return calls;
-}
+// extractDelegateCalls is in shared.js.
 
 function handleLoopEvent(evt) {
   const loopId = evt.data && evt.data.loop_id;
@@ -858,11 +840,14 @@ function renderNode(loop) {
     group.addEventListener('click', () => selectLoop(loop.id));
     group.addEventListener('contextmenu', (e) => {
       e.preventDefault();
-      showContextMenu(e.clientX, e.clientY, [
-        { label: 'Open in window', action: () => openDetailWindow('loop', loop.id) },
-        { separator: true },
-        { label: 'Copy loop ID', action: () => navigator.clipboard.writeText(loop.id) },
-      ]);
+      const items = [];
+      // Synthetic delegate nodes have no backend endpoint — skip detail popup.
+      if (!loop.id.startsWith('delegate-')) {
+        items.push({ label: 'Open in window', action: () => openDetailWindow('loop', loop.id) });
+        items.push({ separator: true });
+      }
+      items.push({ label: 'Copy loop ID', action: () => navigator.clipboard.writeText(loop.id) });
+      showContextMenu(e.clientX, e.clientY, items);
     });
 
     // Inner group for enter/exit scale animation (children drawn at origin).

@@ -160,6 +160,24 @@ function parseDelegateArgs(args) {
   }
 }
 
+function extractDelegateCalls(liveTools) {
+  if (!liveTools || liveTools.length === 0) return [];
+  const calls = [];
+  for (const entry of liveTools) {
+    if (entry.tool !== 'thane_delegate') continue;
+    const parsed = parseDelegateArgs(entry.args);
+    calls.push({
+      task: parsed.task || '',
+      profile: parsed.profile || '',
+      guidance: truncate(parsed.guidance || '', 200),
+      tags: parsed.tags || [],
+      status: entry.status || 'done',
+      error: entry.error || null,
+    });
+  }
+  return calls;
+}
+
 function buildToolCounts(liveTools) {
   if (!liveTools || liveTools.length === 0) return null;
   const counts = {};
