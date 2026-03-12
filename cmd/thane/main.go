@@ -37,6 +37,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nugget/thane-ai-agent/internal/agent"
+	"github.com/nugget/thane-ai-agent/internal/attachments"
 	"github.com/nugget/thane-ai-agent/internal/awareness"
 	"github.com/nugget/thane-ai-agent/internal/buildinfo"
 	cdav "github.com/nugget/thane-ai-agent/internal/carddav"
@@ -1146,6 +1147,26 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		)
 	}
 
+	// --- Attachment store ---
+	// Content-addressed file storage with SHA-256 deduplication.
+	// When configured, channels (Signal, email) store attachments
+	// by content hash with a SQLite metadata index.
+	var attachmentStore *attachments.Store
+	if cfg.Attachments.StoreDir != "" {
+		storeDir := paths.ExpandHome(cfg.Attachments.StoreDir)
+		dbPath := filepath.Join(cfg.DataDir, "attachments.db")
+		var err error
+		attachmentStore, err = attachments.NewStore(dbPath, storeDir, logger)
+		if err != nil {
+			return fmt.Errorf("init attachment store: %w", err)
+		}
+		defer attachmentStore.Close()
+		logger.Info("attachment store initialized",
+			"db", dbPath,
+			"store_dir", storeDir,
+		)
+	}
+
 	// --- File tools ---
 	// When a workspace path is configured, the agent can read and write
 	// files within that directory. All paths are sandboxed.
@@ -1558,8 +1579,9 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 					DestDir:   cfg.Signal.AttachmentDir,
 					MaxSize:   cfg.Signal.MaxAttachmentSize,
 				},
-				Registry: loopRegistry,
-				EventBus: eventBus,
+				AttachmentStore: attachmentStore,
+				Registry:        loopRegistry,
+				EventBus:        eventBus,
 			})
 			if err := bridge.Register(ctx); err != nil {
 				logger.Error("signal bridge registration failed", "error", err)

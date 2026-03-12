@@ -140,6 +140,13 @@ models:
 # identity:
 #   contact_name: "Thane"            # must match a contact record name
 
+# Attachment store (optional — content-addressed storage)
+# When configured, received attachments (Signal, email, etc.) are stored
+# by SHA-256 hash with a SQLite metadata index. Provides deduplication
+# and provenance tracking across channels.
+# attachments:
+#   store_dir: ~/Thane/attachments   # root dir for content-addressed files
+
 # Provenance store (optional — git-backed file integrity)
 # When configured, identity files (ego.md, metacognitive.md) are
 # auto-committed with SSH signatures on every write, providing
