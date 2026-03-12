@@ -221,7 +221,7 @@ func (s *Store) fileHistory(ctx context.Context, filename string) (*FileHistory,
 
 	if len(edits) > 0 {
 		hist.LastModified = edits[0].Timestamp
-		hist.LastAuthor = edits[0].Message
+		hist.LastMessage = edits[0].Message
 	}
 
 	return hist, nil
