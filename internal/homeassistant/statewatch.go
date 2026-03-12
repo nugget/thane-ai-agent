@@ -165,6 +165,30 @@ func NewStateWatcher(events <-chan Event, filter *EntityFilter, limiter *EntityR
 // so checking every 5m keeps overhead negligible while bounding growth.
 const cleanupInterval = 5 * time.Minute
 
+// HandleEvent processes a single event, applying entity filtering and
+// rate limiting before dispatching to the handler. Returns silently
+// if the event is not a state change or is filtered/rate-limited.
+// Exported for use by loop infrastructure callers that manage their
+// own event-reading loop via WaitFunc.
+func (w *StateWatcher) HandleEvent(ev Event) {
+	w.handleEvent(ev)
+}
+
+// CleanupRateLimiter prunes stale rate-limiter counters. Call this
+// periodically to prevent unbounded growth of the counters map when
+// many entities are observed. Exported for use by loop infrastructure
+// callers that manage their own event-reading loop.
+func (w *StateWatcher) CleanupRateLimiter() {
+	w.limiter.Cleanup()
+}
+
+// Events returns the event channel that this watcher reads from.
+// Exported for use by loop infrastructure callers that need to build
+// a WaitFunc around the channel.
+func (w *StateWatcher) Events() <-chan Event {
+	return w.events
+}
+
 // Run reads events from the channel until the context is cancelled or
 // the channel is closed. It blocks the calling goroutine. A background
 // ticker periodically prunes stale rate-limiter counters so the map
