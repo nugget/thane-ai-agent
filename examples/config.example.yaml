@@ -155,6 +155,14 @@ models:
 data_dir: ./db
 talents_dir: ./talents
 
+# Extra PATH directories — prepended to the process PATH at startup so
+# exec.LookPath can find binaries outside launchd's minimal PATH.
+# macOS Homebrew dirs (/opt/homebrew/bin, /opt/homebrew/sbin) are added
+# automatically when they exist. Environment variables are expanded.
+# extra_path:
+#   - $HOME/.local/bin
+#   - /usr/local/go/bin
+
 # Persona file — replaces the default system prompt with custom identity.
 # Copy persona.default.md to persona.md and customize for your instance.
 # persona_file: ./persona.md

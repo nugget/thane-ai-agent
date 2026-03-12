@@ -119,6 +119,12 @@ type Config struct {
 	// construction time.
 	Paths map[string]string `yaml:"paths"`
 
+	// ExtraPath lists additional directories to prepend to the process
+	// PATH at startup, ensuring exec.LookPath finds binaries installed
+	// outside the default system PATH (e.g., /opt/homebrew/bin on macOS).
+	// Environment variables are expanded (e.g., $HOME/bin).
+	ExtraPath []string `yaml:"extra_path"`
+
 	// ShellExec configures the agent's ability to run shell commands.
 	ShellExec ShellExecConfig `yaml:"shell_exec"`
 
