@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/llm"
+	"github.com/nugget/thane-ai-agent/internal/prompts"
 )
 
 // mockLLMClient implements llm.Client for testing.
@@ -297,7 +298,7 @@ func TestNewAnalyzer_Defaults(t *testing.T) {
 		Model:  "test-model",
 	})
 
-	if analyzer.prompt != defaultVisionPrompt {
+	if analyzer.prompt != prompts.DefaultVisionPrompt {
 		t.Errorf("prompt = %q, want default", analyzer.prompt)
 	}
 	if analyzer.timeout != defaultVisionTimeout {

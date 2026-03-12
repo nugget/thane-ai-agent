@@ -10,14 +10,18 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/llm"
+	"github.com/nugget/thane-ai-agent/internal/prompts"
 )
 
 const (
-	// defaultVisionPrompt is used when no custom prompt is configured.
-	defaultVisionPrompt = "Describe this image concisely. Note the key subjects, any visible text, and important details."
-
 	// defaultVisionTimeout bounds individual vision analysis calls.
 	defaultVisionTimeout = 30 * time.Second
+
+	// maxVisionImageSize is the maximum file size (20 MiB) that the
+	// analyzer will read into memory for base64 encoding. Larger
+	// images are skipped with a warning to prevent OOM on very large
+	// attachments.
+	maxVisionImageSize = 20 << 20 // 20 MiB
 )
 
 // Analyzer performs vision analysis on image attachments using an LLM.
@@ -46,7 +50,7 @@ type AnalyzerConfig struct {
 func NewAnalyzer(store *Store, cfg AnalyzerConfig) *Analyzer {
 	prompt := cfg.Prompt
 	if prompt == "" {
-		prompt = defaultVisionPrompt
+		prompt = prompts.DefaultVisionPrompt
 	}
 	timeout := cfg.Timeout
 	if timeout == 0 {
@@ -92,6 +96,17 @@ func (a *Analyzer) Analyze(ctx context.Context, rec *Record) (string, error) {
 			)
 		}
 		return desc, nil
+	}
+
+	// Guard against very large images that would cause high memory
+	// pressure from base64 encoding (~1.33× original size in memory).
+	if rec.Size > maxVisionImageSize {
+		a.logger.Warn("vision: image too large for analysis",
+			"id", rec.ID,
+			"size", rec.Size,
+			"max", maxVisionImageSize,
+		)
+		return "", nil
 	}
 
 	// Read and base64-encode the image file.
@@ -153,6 +168,10 @@ func (a *Analyzer) Reanalyze(ctx context.Context, rec *Record, model string) (st
 
 	if model == "" {
 		model = a.model
+	}
+
+	if rec.Size > maxVisionImageSize {
+		return "", fmt.Errorf("vision: image %s too large (%d bytes, max %d)", rec.ID, rec.Size, maxVisionImageSize)
 	}
 
 	absPath := a.store.AbsPath(rec)

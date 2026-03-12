@@ -427,7 +427,9 @@ type VisionConfig struct {
 }
 
 // ParsedTimeout returns the configured timeout as a [time.Duration],
-// defaulting to 30 seconds when empty or unparseable.
+// defaulting to 30 seconds when empty. Invalid durations are caught
+// by [Config.Validate]; this method assumes the value is already
+// validated and falls back to the default on any parse error.
 func (v VisionConfig) ParsedTimeout() time.Duration {
 	if v.Timeout == "" {
 		return 30 * time.Second
@@ -1634,6 +1636,19 @@ func (c *Config) Validate() error {
 		for i, d := range devs {
 			if d.MAC == "" {
 				return fmt.Errorf("person.devices[%s][%d].mac must not be empty", entityID, i)
+			}
+		}
+	}
+	if c.Attachments.Vision.Enabled {
+		if c.Attachments.StoreDir == "" {
+			return fmt.Errorf("attachments.store_dir required when attachments.vision.enabled is true")
+		}
+		if c.Attachments.Vision.Model == "" {
+			return fmt.Errorf("attachments.vision.model required when attachments.vision.enabled is true")
+		}
+		if c.Attachments.Vision.Timeout != "" {
+			if _, err := time.ParseDuration(c.Attachments.Vision.Timeout); err != nil {
+				return fmt.Errorf("attachments.vision.timeout %q: %w", c.Attachments.Vision.Timeout, err)
 			}
 		}
 	}

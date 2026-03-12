@@ -81,10 +81,11 @@ type ChatRequest struct {
 // accepts images as a flat array of base64 strings alongside each
 // message, unlike Anthropic which uses typed content blocks.
 type ollamaMessage struct {
-	Role      string     `json:"role"`
-	Content   string     `json:"content"`
-	ToolCalls []ToolCall `json:"tool_calls,omitempty"`
-	Images    []string   `json:"images,omitempty"`
+	Role       string     `json:"role"`
+	Content    string     `json:"content"`
+	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string     `json:"tool_call_id,omitempty"`
+	Images     []string   `json:"images,omitempty"`
 }
 
 // toOllamaMessages converts internal Messages to Ollama wire format,
@@ -93,9 +94,10 @@ func toOllamaMessages(msgs []Message) []ollamaMessage {
 	out := make([]ollamaMessage, len(msgs))
 	for i, m := range msgs {
 		om := ollamaMessage{
-			Role:      m.Role,
-			Content:   m.Content,
-			ToolCalls: m.ToolCalls,
+			Role:       m.Role,
+			Content:    m.Content,
+			ToolCalls:  m.ToolCalls,
+			ToolCallID: m.ToolCallID,
 		}
 		for _, img := range m.Images {
 			om.Images = append(om.Images, img.Data)

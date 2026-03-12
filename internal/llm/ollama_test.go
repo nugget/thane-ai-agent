@@ -4,6 +4,66 @@ import (
 	"testing"
 )
 
+func TestToOllamaMessages(t *testing.T) {
+	msgs := []Message{
+		{Role: "user", Content: "hello"},
+		{
+			Role:    "user",
+			Content: "describe this",
+			Images: []ImageContent{
+				{Data: "base64data", MediaType: "image/jpeg"},
+				{Data: "moredata", MediaType: "image/png"},
+			},
+		},
+		{
+			Role:       "tool",
+			Content:    `{"result": "ok"}`,
+			ToolCallID: "call_123",
+		},
+		{
+			Role:    "assistant",
+			Content: "",
+			ToolCalls: []ToolCall{
+				{ID: "call_123", Function: struct {
+					Name      string         `json:"name"`
+					Arguments map[string]any `json:"arguments"`
+				}{Name: "get_state"}},
+			},
+		},
+	}
+
+	out := toOllamaMessages(msgs)
+	if len(out) != 4 {
+		t.Fatalf("expected 4 messages, got %d", len(out))
+	}
+
+	// Plain message — no images, no tool fields.
+	if out[0].Role != "user" || out[0].Content != "hello" {
+		t.Errorf("msg[0] = %+v", out[0])
+	}
+	if len(out[0].Images) != 0 {
+		t.Errorf("msg[0] should have no images")
+	}
+
+	// Image message — images extracted as base64 strings.
+	if len(out[1].Images) != 2 {
+		t.Fatalf("msg[1] images = %d, want 2", len(out[1].Images))
+	}
+	if out[1].Images[0] != "base64data" || out[1].Images[1] != "moredata" {
+		t.Errorf("msg[1] images = %v", out[1].Images)
+	}
+
+	// Tool result — ToolCallID preserved.
+	if out[2].ToolCallID != "call_123" {
+		t.Errorf("msg[2] tool_call_id = %q, want call_123", out[2].ToolCallID)
+	}
+
+	// Assistant with tool calls.
+	if len(out[3].ToolCalls) != 1 || out[3].ToolCalls[0].Function.Name != "get_state" {
+		t.Errorf("msg[3] tool_calls = %+v", out[3].ToolCalls)
+	}
+}
+
 func TestParseTextToolCalls(t *testing.T) {
 	tests := []struct {
 		name       string

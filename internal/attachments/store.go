@@ -285,7 +285,13 @@ func (s *Store) AbsPath(rec *Record) string {
 }
 
 // UpdateVision stores vision analysis results for an attachment record.
+// An empty description is rejected — callers should only store
+// meaningful analysis results. The analyzed_at timestamp is set
+// automatically.
 func (s *Store) UpdateVision(ctx context.Context, id, description, model string) error {
+	if description == "" {
+		return fmt.Errorf("attachments: update vision: empty description")
+	}
 	_, err := s.db.ExecContext(ctx, `
 		UPDATE attachments
 		SET description = ?, analyzed_at = ?, analysis_model = ?
@@ -302,16 +308,23 @@ func (s *Store) UpdateVision(ctx context.Context, id, description, model string)
 // the given content hash. This enables reuse across dedup hits — if
 // the same image was already analyzed for a different sender, the
 // cached description is returned. Returns ok=false if no analyzed
-// record exists for the hash.
+// record exists for the hash. Non-ErrNoRows database errors are
+// logged and treated as cache misses.
 func (s *Store) VisionByHash(ctx context.Context, hash string) (description, model string, ok bool) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT description, analysis_model
 		FROM attachments
-		WHERE hash = ? AND analyzed_at != ''
+		WHERE hash = ? AND analyzed_at != '' AND description != ''
 		LIMIT 1`, hash)
 
 	err := row.Scan(&description, &model)
 	if err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			s.logger.Error("attachments: vision by hash scan failed",
+				"hash", hash,
+				"error", err,
+			)
+		}
 		return "", "", false
 	}
 	return description, model, true
