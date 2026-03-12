@@ -1,6 +1,8 @@
 package telemetry
 
 import (
+	"strings"
+
 	"github.com/nugget/thane-ai-agent/internal/channels/mqtt"
 )
 
@@ -73,11 +75,20 @@ func (b *SensorBuilder) StaticSensors() []mqtt.DynamicSensor {
 	return sensors
 }
 
+// sanitizeLoopName replaces characters that are invalid in MQTT topic
+// segments (/ and +) with underscores to prevent malformed topic paths.
+func sanitizeLoopName(name string) string {
+	r := strings.NewReplacer("/", "_", "+", "_", "#", "_")
+	return r.Replace(name)
+}
+
 // LoopSensors returns sensor definitions for a single named loop.
 // Two sensors per loop: state (enum) and iterations (measurement).
+// Loop names are sanitized to avoid MQTT topic separator conflicts.
 func (b *SensorBuilder) LoopSensors(loopName string) []mqtt.DynamicSensor {
-	stateSuffix := "loop_" + loopName + "_state"
-	iterSuffix := "loop_" + loopName + "_iterations"
+	slug := sanitizeLoopName(loopName)
+	stateSuffix := "loop_" + slug + "_state"
+	iterSuffix := "loop_" + slug + "_iterations"
 
 	return []mqtt.DynamicSensor{
 		b.buildSensor(sensorSpec{

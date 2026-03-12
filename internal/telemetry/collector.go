@@ -9,6 +9,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/nugget/thane-ai-agent/internal/database"
 	"github.com/nugget/thane-ai-agent/internal/loop"
 	"github.com/nugget/thane-ai-agent/internal/usage"
 )
@@ -80,7 +81,10 @@ func (c *Collector) collectDBSizes(m *Metrics) {
 		}
 		info, err := os.Stat(path)
 		if err != nil {
-			// File may not exist yet — normal for optional subsystems.
+			if !os.IsNotExist(err) {
+				c.src.Logger.Warn("telemetry: stat db file failed",
+					"db", name, "path", path, "error", err)
+			}
 			continue
 		}
 		m.DBSizes[name] = info.Size()
@@ -230,8 +234,8 @@ func (c *Collector) collectRequests(ctx context.Context, m *Metrics) {
 		if err := rows.Scan(&reqID, &minTS, &maxTS); err != nil {
 			continue
 		}
-		tMin, err1 := time.Parse(time.RFC3339Nano, minTS)
-		tMax, err2 := time.Parse(time.RFC3339Nano, maxTS)
+		tMin, err1 := database.ParseTimestamp(minTS)
+		tMax, err2 := database.ParseTimestamp(maxTS)
 		if err1 != nil || err2 != nil {
 			continue
 		}

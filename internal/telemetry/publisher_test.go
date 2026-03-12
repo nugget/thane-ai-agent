@@ -205,3 +205,36 @@ func TestLoopSensors(t *testing.T) {
 		t.Errorf("sensor[1].EntitySuffix = %q", sensors[1].EntitySuffix)
 	}
 }
+
+func TestLoopSensors_Sanitization(t *testing.T) {
+	builder := testBuilder()
+
+	// Loop names with MQTT topic separators must be sanitized.
+	sensors := builder.LoopSensors("signal/Alice")
+	if sensors[0].EntitySuffix != "loop_signal_Alice_state" {
+		t.Errorf("sensor[0].EntitySuffix = %q, want loop_signal_Alice_state", sensors[0].EntitySuffix)
+	}
+	if sensors[1].EntitySuffix != "loop_signal_Alice_iterations" {
+		t.Errorf("sensor[1].EntitySuffix = %q, want loop_signal_Alice_iterations", sensors[1].EntitySuffix)
+	}
+}
+
+func TestSanitizeLoopName(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"simple", "simple"},
+		{"signal/Alice", "signal_Alice"},
+		{"a/b/c", "a_b_c"},
+		{"with+plus", "with_plus"},
+		{"with#hash", "with_hash"},
+		{"clean_name", "clean_name"},
+	}
+	for _, tt := range tests {
+		got := sanitizeLoopName(tt.input)
+		if got != tt.want {
+			t.Errorf("sanitizeLoopName(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
