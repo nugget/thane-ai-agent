@@ -538,11 +538,6 @@ func (l *Loop) run(ctx context.Context) {
 		l.mu.Lock()
 		l.nextSleep = 0
 		l.currentConvID = convID
-		// Prepend to ring buffer (newest first), cap at recentConvIDsCap.
-		l.recentConvIDs = append([]string{convID}, l.recentConvIDs...)
-		if len(l.recentConvIDs) > recentConvIDsCap {
-			l.recentConvIDs = l.recentConvIDs[:recentConvIDsCap]
-		}
 		l.mu.Unlock()
 
 		// Determine if this is a supervisor iteration.
@@ -555,27 +550,7 @@ func (l *Loop) run(ctx context.Context) {
 		)
 		iterCtx := logging.WithLogger(ctx, iterLog)
 
-		l.setState(StateProcessing)
 		iterStartTime := time.Now()
-		l.mu.Lock()
-		l.lastWakeAt = iterStartTime
-		l.attempts++
-		l.mu.Unlock()
-
-		l.publishEvent(events.Event{
-			Timestamp: time.Now(),
-			Source:    events.SourceLoop,
-			Kind:      events.KindLoopIterationStart,
-			Data: map[string]any{
-				"loop_id":         l.id,
-				"loop_name":       l.config.Name,
-				"conversation_id": convID,
-				"supervisor":      isSupervisor,
-				"attempt":         attemptCount + 1,
-			},
-		})
-
-		iterLog.Info("loop iteration starting")
 
 		// Dispatch: Handler runs directly; otherwise use LLM via iterate().
 		var result *IterationResult
@@ -605,6 +580,30 @@ func (l *Loop) run(ctx context.Context) {
 				handlerSummary = summary
 			}
 		} else {
+			// LLM-based loops always do meaningful work; commit
+			// bookkeeping and transition to processing state.
+			l.setState(StateProcessing)
+			l.mu.Lock()
+			l.lastWakeAt = iterStartTime
+			l.attempts++
+			l.recentConvIDs = append([]string{convID}, l.recentConvIDs...)
+			if len(l.recentConvIDs) > recentConvIDsCap {
+				l.recentConvIDs = l.recentConvIDs[:recentConvIDsCap]
+			}
+			l.mu.Unlock()
+			l.publishEvent(events.Event{
+				Timestamp: time.Now(),
+				Source:    events.SourceLoop,
+				Kind:      events.KindLoopIterationStart,
+				Data: map[string]any{
+					"loop_id":         l.id,
+					"loop_name":       l.config.Name,
+					"conversation_id": convID,
+					"supervisor":      isSupervisor,
+					"attempt":         attemptCount + 1,
+				},
+			})
+			iterLog.Info("loop iteration starting")
 			result, err = l.iterate(iterCtx, isSupervisor, convID)
 		}
 
@@ -615,16 +614,36 @@ func (l *Loop) run(ctx context.Context) {
 		l.mu.Unlock()
 
 		if noOp {
-			// Handler signaled no meaningful work. Undo pre-iteration
-			// bookkeeping so the no-op doesn't count as an attempt or
-			// appear in the dashboard. See [ErrNoOp].
+			iterLog.Debug("handler returned no-op, skipping iteration accounting")
+		}
+
+		// For handler-based loops, only commit the iteration to
+		// bookkeeping and the event stream when real work occurred.
+		// This keeps the dashboard activity indicator quiet on
+		// filtered-only batches. See [ErrNoOp].
+		if l.config.Handler != nil && !noOp {
+			l.setState(StateProcessing)
 			l.mu.Lock()
-			l.attempts--
-			if len(l.recentConvIDs) > 0 && l.recentConvIDs[0] == convID {
-				l.recentConvIDs = l.recentConvIDs[1:]
+			l.lastWakeAt = iterStartTime
+			l.attempts++
+			l.recentConvIDs = append([]string{convID}, l.recentConvIDs...)
+			if len(l.recentConvIDs) > recentConvIDsCap {
+				l.recentConvIDs = l.recentConvIDs[:recentConvIDsCap]
 			}
 			l.mu.Unlock()
-			iterLog.Debug("handler returned no-op, skipping iteration accounting")
+			l.publishEvent(events.Event{
+				Timestamp: time.Now(),
+				Source:    events.SourceLoop,
+				Kind:      events.KindLoopIterationStart,
+				Data: map[string]any{
+					"loop_id":         l.id,
+					"loop_name":       l.config.Name,
+					"conversation_id": convID,
+					"supervisor":      isSupervisor,
+					"attempt":         attemptCount + 1,
+				},
+			})
+			iterLog.Info("loop iteration starting")
 		}
 
 		// Compute sleep unconditionally so timer-driven loops still

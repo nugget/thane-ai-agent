@@ -9,10 +9,12 @@ import (
 
 // ErrNoOp is returned by a [Config.Handler] to signal that the
 // iteration ran but produced no meaningful work (e.g., all received
-// events were filtered out). The loop undoes pre-iteration bookkeeping
-// and skips accounting, snapshot creation, and event publishing —
-// mirroring the WaitFunc nil-payload contract. ErrNoOp is not counted
-// as an error and does not increment [Status.ConsecutiveErrors].
+// events were filtered out). When returned, the loop never transitions
+// to [StateProcessing], never publishes [events.KindLoopIterationStart],
+// and skips all post-iteration accounting (snapshot, attempt count,
+// recentConvIDs) — so the dashboard activity indicator stays quiet.
+// ErrNoOp is not counted as an error and does not increment
+// [Status.ConsecutiveErrors].
 var ErrNoOp = errors.New("loop: no-op iteration")
 
 // State represents the lifecycle state of a running loop.
