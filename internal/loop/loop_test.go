@@ -1520,6 +1520,105 @@ func TestWaitFuncNilPayloadSkipsIteration(t *testing.T) {
 	}
 }
 
+func TestHandlerNoOpSkipsAccounting(t *testing.T) {
+	t.Parallel()
+
+	var handlerCalls atomic.Int32
+	var waitCalls atomic.Int32
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	l, err := New(Config{
+		Name:    "noop-handler",
+		MaxIter: 100,
+		WaitFunc: func(wCtx context.Context) (any, error) {
+			n := waitCalls.Add(1)
+			if n <= 5 {
+				return "event", nil
+			}
+			<-wCtx.Done()
+			return nil, wCtx.Err()
+		},
+		Handler: func(_ context.Context, _ any) error {
+			n := handlerCalls.Add(1)
+			if n <= 3 {
+				// First 3 calls return no-op.
+				return ErrNoOp
+			}
+			if n == 4 {
+				// 4th call succeeds.
+				return nil
+			}
+			// 5th call succeeds and stops.
+			cancel()
+			return nil
+		},
+	}, Deps{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	_ = l.Start(ctx)
+	select {
+	case <-l.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("loop did not finish within 5s")
+	}
+
+	st := l.Status()
+	// Only the 2 non-no-op handler calls should be counted.
+	if st.Iterations != 2 {
+		t.Errorf("Iterations = %d, want 2", st.Iterations)
+	}
+	if st.Attempts != 2 {
+		t.Errorf("Attempts = %d, want 2", st.Attempts)
+	}
+}
+
+func TestHandlerNoOpNotCountedAsError(t *testing.T) {
+	t.Parallel()
+
+	var waitCalls atomic.Int32
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	l, err := New(Config{
+		Name:    "noop-no-error",
+		MaxIter: 100,
+		WaitFunc: func(wCtx context.Context) (any, error) {
+			if waitCalls.Add(1) > 1 {
+				<-wCtx.Done()
+				return nil, wCtx.Err()
+			}
+			return "event", nil
+		},
+		Handler: func(_ context.Context, _ any) error {
+			cancel()
+			return ErrNoOp
+		},
+	}, Deps{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	_ = l.Start(ctx)
+	select {
+	case <-l.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("loop did not finish within 5s")
+	}
+
+	st := l.Status()
+	if st.ConsecutiveErrors != 0 {
+		t.Errorf("ConsecutiveErrors = %d, want 0", st.ConsecutiveErrors)
+	}
+	if st.LastError != "" {
+		t.Errorf("LastError = %q, want empty", st.LastError)
+	}
+}
+
 func TestHandlerPostIterate(t *testing.T) {
 	t.Parallel()
 

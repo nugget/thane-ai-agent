@@ -166,12 +166,13 @@ func NewStateWatcher(events <-chan Event, filter *EntityFilter, limiter *EntityR
 const cleanupInterval = 5 * time.Minute
 
 // HandleEvent processes a single event, applying entity filtering and
-// rate limiting before dispatching to the handler. Returns silently
-// if the event is not a state change or is filtered/rate-limited.
+// rate limiting before dispatching to the handler. Returns true if the
+// event passed all filters and was dispatched, false if it was filtered
+// out (wrong type, unmatched glob, rate-limited, or entity removal).
 // Exported for use by loop infrastructure callers that manage their
 // own event-reading loop via WaitFunc.
-func (w *StateWatcher) HandleEvent(ev Event) {
-	w.handleEvent(ev)
+func (w *StateWatcher) HandleEvent(ev Event) bool {
+	return w.handleEvent(ev)
 }
 
 // CleanupRateLimiter prunes stale rate-limiter counters. Call this
@@ -215,30 +216,31 @@ func (w *StateWatcher) Run(ctx context.Context) {
 	}
 }
 
-// handleEvent processes a single event from the channel.
-func (w *StateWatcher) handleEvent(ev Event) {
+// handleEvent processes a single event from the channel. Returns true
+// if the event was dispatched to the handler chain, false if filtered.
+func (w *StateWatcher) handleEvent(ev Event) bool {
 	if ev.Type != "state_changed" {
-		return
+		return false
 	}
 
 	var data StateChangedData
 	if err := json.Unmarshal(ev.Data, &data); err != nil {
 		w.logger.Debug("failed to unmarshal state_changed data", "error", err)
-		return
+		return false
 	}
 
 	// Skip entity removals (NewState is nil when an entity is deleted).
 	if data.NewState == nil {
-		return
+		return false
 	}
 
 	if !w.filter.Match(data.EntityID) {
-		return
+		return false
 	}
 
 	if !w.limiter.Allow(data.EntityID) {
 		w.logger.Debug("rate limited state change", "entity_id", data.EntityID)
-		return
+		return false
 	}
 
 	oldState := ""
@@ -247,4 +249,5 @@ func (w *StateWatcher) handleEvent(ev Event) {
 	}
 
 	w.handler(data.EntityID, oldState, data.NewState.State)
+	return true
 }

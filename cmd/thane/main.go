@@ -2108,15 +2108,24 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 
 				return batch, nil
 			},
-			Handler: func(_ context.Context, payload any) error {
+			Handler: func(ctx context.Context, payload any) error {
+				var processed int
 				if batch, ok := payload.([]homeassistant.Event); ok {
 					for _, ev := range batch {
-						watcher.HandleEvent(ev)
+						if watcher.HandleEvent(ev) {
+							processed++
+						}
 					}
 				}
 				if time.Since(lastCleanup) > haCleanupInterval {
 					watcher.CleanupRateLimiter()
 					lastCleanup = time.Now()
+				}
+				if processed == 0 {
+					return looppkg.ErrNoOp
+				}
+				if summary := looppkg.IterationSummary(ctx); summary != nil {
+					summary["events_processed"] = processed
 				}
 				return nil
 			},
