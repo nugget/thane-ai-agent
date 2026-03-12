@@ -1604,6 +1604,9 @@ func (c *Config) Validate() error {
 	if err := c.validateMetacognitive(); err != nil {
 		return err
 	}
+	if err := c.validateDelegate(); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -1640,6 +1643,25 @@ func (c *Config) validateMetacognitive() error {
 	}
 	if c.Metacognitive.SupervisorProbability < 0 || c.Metacognitive.SupervisorProbability > 1.0 {
 		return fmt.Errorf("metacognitive.supervisor_probability %.2f must be in [0.0, 1.0]", c.Metacognitive.SupervisorProbability)
+	}
+	return nil
+}
+
+// validateDelegate checks delegate profile overrides for invalid values.
+func (c *Config) validateDelegate() error {
+	for name, p := range c.Delegate.Profiles {
+		if p.ToolTimeout < 0 {
+			return fmt.Errorf("delegate.profiles.%s.tool_timeout must be >= 0, got %s", name, p.ToolTimeout)
+		}
+		if p.MaxDuration < 0 {
+			return fmt.Errorf("delegate.profiles.%s.max_duration must be >= 0, got %s", name, p.MaxDuration)
+		}
+		if p.MaxIter < 0 {
+			return fmt.Errorf("delegate.profiles.%s.max_iter must be >= 0, got %d", name, p.MaxIter)
+		}
+		if p.MaxTokens < 0 {
+			return fmt.Errorf("delegate.profiles.%s.max_tokens must be >= 0, got %d", name, p.MaxTokens)
+		}
 	}
 	return nil
 }

@@ -98,9 +98,10 @@ func NewExecutor(logger *slog.Logger, llmClient llm.Client, rtr *router.Router, 
 }
 
 // ApplyProfileOverrides applies configuration overrides to builtin
-// profiles. Only non-zero fields in each override replace the builtin
-// defaults. Unknown profile names are silently ignored (config may
-// reference profiles that don't exist yet).
+// profiles. Only positive fields in each override replace the builtin
+// defaults. Negative values are logged as warnings and ignored.
+// Unknown profile names are silently ignored (config may reference
+// profiles that don't exist yet).
 func (e *Executor) ApplyProfileOverrides(overrides map[string]ProfileOverride) {
 	for name, o := range overrides {
 		p, ok := e.profiles[name]
@@ -123,7 +124,7 @@ func (e *Executor) ApplyProfileOverrides(overrides map[string]ProfileOverride) {
 }
 
 // ProfileOverride holds optional overrides for a delegate profile.
-// Zero-value fields are ignored.
+// Only positive values are applied; zero and negative fields are ignored.
 type ProfileOverride struct {
 	ToolTimeout time.Duration
 	MaxDuration time.Duration
