@@ -30,12 +30,14 @@ const MAX_ITERATION_HISTORY = 10;
 const physics = {
   nodes: new Map(),  // id -> { x, y, vx, vy, pinned }
   // Tuning constants — tweak these for feel.
-  centerGravity:    0.002,
-  springStrength:   0.02,
-  springRestLength: 120,
-  repulsionStrength: 5000,
-  damping:          0.92,
-  maxVelocity:      5,
+  centerGravity:      0.002,
+  springStrength:     0.02,
+  springRestLength:   120,    // system ↔ top-level
+  childSpringStrength: 0.06,  // parent ↔ child (3× stronger)
+  childRestLength:    60,     // parent ↔ child (tighter cluster)
+  repulsionStrength:  5000,
+  damping:            0.92,
+  maxVelocity:        5,
 };
 
 // Ensure physics.nodes matches the current set of loops + system node.
@@ -111,12 +113,11 @@ function physicsStep(cx, cy) {
 
   // 2. Spring forces — build edge list from loop relationships.
   for (const loop of state.loops.values()) {
-    // Parent-child spring.
     if (loop.parent_id && P.nodes.has(loop.parent_id)) {
-      applySpring(P.nodes.get(loop.parent_id), P.nodes.get(loop.id), P.springStrength, P.springRestLength);
-    }
-    // System-to-top-level spring.
-    if (!loop.parent_id && P.nodes.has('__system__')) {
+      // Parent↔child: shorter rest length, stronger spring for tight clusters.
+      applySpring(P.nodes.get(loop.parent_id), P.nodes.get(loop.id), P.childSpringStrength, P.childRestLength);
+    } else if (!loop.parent_id && P.nodes.has('__system__')) {
+      // System↔top-level: standard spring.
       applySpring(P.nodes.get('__system__'), P.nodes.get(loop.id), P.springStrength, P.springRestLength);
     }
   }

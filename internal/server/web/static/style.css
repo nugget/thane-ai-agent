@@ -1239,9 +1239,9 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
 
 .link-line--child {
   stroke: var(--text-muted);
-  stroke-width: 2;
-  stroke-dasharray: 4 3;
-  opacity: 0.3;
+  stroke-width: 2.5;
+  stroke-dasharray: 6 4;
+  opacity: 0.5;
 }
 
 .link-line--flash {
