@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestFindConfig_Explicit(t *testing.T) {
@@ -604,6 +605,62 @@ func TestValidate_LoggingInvalidFormat(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "logging.format") {
 		t.Errorf("error %q should mention logging.format", err)
+	}
+}
+
+func TestValidate_DelegateNegativeToolTimeout(t *testing.T) {
+	cfg := Default()
+	cfg.Delegate.Profiles = map[string]DelegateProfileConfig{
+		"general": {ToolTimeout: -1 * time.Second},
+	}
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected validation error for negative tool_timeout")
+	}
+	if !strings.Contains(err.Error(), "tool_timeout") {
+		t.Errorf("error %q should mention tool_timeout", err)
+	}
+}
+
+func TestValidate_DelegateNegativeMaxDuration(t *testing.T) {
+	cfg := Default()
+	cfg.Delegate.Profiles = map[string]DelegateProfileConfig{
+		"ha": {MaxDuration: -5 * time.Second},
+	}
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected validation error for negative max_duration")
+	}
+	if !strings.Contains(err.Error(), "max_duration") {
+		t.Errorf("error %q should mention max_duration", err)
+	}
+}
+
+func TestValidate_DelegateNegativeMaxIter(t *testing.T) {
+	cfg := Default()
+	cfg.Delegate.Profiles = map[string]DelegateProfileConfig{
+		"general": {MaxIter: -1},
+	}
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected validation error for negative max_iter")
+	}
+	if !strings.Contains(err.Error(), "max_iter") {
+		t.Errorf("error %q should mention max_iter", err)
+	}
+}
+
+func TestValidate_DelegateZeroKeepsDefaults(t *testing.T) {
+	cfg := Default()
+	cfg.Delegate.Profiles = map[string]DelegateProfileConfig{
+		"general": {ToolTimeout: 3 * time.Minute},
+	}
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("unexpected validation error: %v", err)
 	}
 }
 

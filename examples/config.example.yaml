@@ -185,6 +185,17 @@ talents_dir: ./talents
 workspace:
   path: ""  # e.g., /home/user/workspace
 
+# Delegate profiles — override thane_delegate tool execution limits.
+# Each key is a profile name (e.g., "general", "ha"). Only fields you
+# set override the builtin defaults; omitted fields keep compiled-in values.
+# delegate:
+#   profiles:
+#     general:
+#       tool_timeout: 3m       # max time per tool call (default: 30s)
+#       max_duration: 5m       # max wall clock for entire delegation (default: 90s)
+#       # max_iter: 15         # max tool-calling iterations (default: 15)
+#       # max_tokens: 25000    # max cumulative output tokens (default: 25000)
+
 # Shell execution (optional, disabled by default)
 # When enabled, the agent can execute shell commands on the host.
 # Use with caution — configure denied_patterns and allowed_prefixes
