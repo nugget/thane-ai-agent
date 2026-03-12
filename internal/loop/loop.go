@@ -581,6 +581,7 @@ func (l *Loop) run(ctx context.Context) {
 		var result *IterationResult
 		var err error
 		var handlerSummary map[string]any
+		var noOp bool
 		if l.config.Handler != nil {
 			iterStart := time.Now()
 			summary := make(map[string]any)
@@ -588,7 +589,11 @@ func (l *Loop) run(ctx context.Context) {
 			handlerCtx = context.WithValue(handlerCtx, progressFuncKey{}, l.makeProgressFunc())
 			handlerCtx = withLoopID(handlerCtx, l.id)
 			if handlerErr := l.config.Handler(handlerCtx, event); handlerErr != nil {
-				err = fmt.Errorf("handler: %w", handlerErr)
+				if errors.Is(handlerErr, ErrNoOp) {
+					noOp = true
+				} else {
+					err = fmt.Errorf("handler: %w", handlerErr)
+				}
 			} else {
 				result = &IterationResult{
 					ConvID:     convID,
@@ -609,142 +614,163 @@ func (l *Loop) run(ctx context.Context) {
 		l.llmContext = nil
 		l.mu.Unlock()
 
-		// Build iteration snapshot for the dashboard timeline.
-		var snap IterationSnapshot
-		snap.ConvID = convID
-		snap.StartedAt = iterStartTime
-		snap.Supervisor = isSupervisor
-
-		if err != nil {
-			if ctx.Err() != nil {
-				logger.Info("loop stopped")
-				break
-			}
-			iterLog.Warn("loop iteration failed", "error", err)
+		if noOp {
+			// Handler signaled no meaningful work. Undo pre-iteration
+			// bookkeeping so the no-op doesn't count as an attempt or
+			// appear in the dashboard. See [ErrNoOp].
 			l.mu.Lock()
-			l.lastError = err.Error()
-			l.consecutiveErrors++
-			l.mu.Unlock()
-			l.setState(StateError)
-
-			snap.Error = err.Error()
-			snap.CompletedAt = time.Now()
-			snap.ElapsedMs = snap.CompletedAt.Sub(iterStartTime).Milliseconds()
-
-			l.publishEvent(events.Event{
-				Timestamp: time.Now(),
-				Source:    events.SourceLoop,
-				Kind:      events.KindLoopError,
-				Data: map[string]any{
-					"loop_id":   l.id,
-					"loop_name": l.config.Name,
-					"error":     err.Error(),
-				},
-			})
-		} else {
-			l.mu.Lock()
-			l.iterations++
-			l.totalInputTokens += result.InputTokens
-			l.totalOutputTokens += result.OutputTokens
-			l.lastInputTokens = result.InputTokens
-			l.lastOutputTokens = result.OutputTokens
-			if result.ContextWindow > 0 {
-				l.contextWindow = result.ContextWindow
+			l.attempts--
+			if len(l.recentConvIDs) > 0 && l.recentConvIDs[0] == convID {
+				l.recentConvIDs = l.recentConvIDs[1:]
 			}
-			l.lastError = ""
-			l.consecutiveErrors = 0
-			if isSupervisor {
-				l.lastSupervisorIter = l.iterations
-			}
-			snap.Number = l.iterations
 			l.mu.Unlock()
+			iterLog.Debug("handler returned no-op, skipping iteration accounting")
+		}
 
-			snap.Model = result.Model
-			snap.InputTokens = result.InputTokens
-			snap.OutputTokens = result.OutputTokens
-			snap.ContextWindow = result.ContextWindow
-			snap.ElapsedMs = result.Elapsed.Milliseconds()
-			snap.CompletedAt = time.Now()
+		// Compute sleep unconditionally so timer-driven loops still
+		// pause between cycles even on no-op iterations.
+		var sleep time.Duration
+		if noOp {
+			sleep = l.computeSleep()
+		}
+		if !noOp {
+			// Build iteration snapshot for the dashboard timeline.
+			var snap IterationSnapshot
+			snap.ConvID = convID
+			snap.StartedAt = iterStartTime
+			snap.Supervisor = isSupervisor
 
-			// Deep copy ToolsUsed so the snapshot is independent
-			// of any caller-held references.
-			if len(result.ToolsUsed) > 0 {
-				snap.ToolsUsed = make(map[string]int, len(result.ToolsUsed))
-				for k, v := range result.ToolsUsed {
-					snap.ToolsUsed[k] = v
+			if err != nil {
+				if ctx.Err() != nil {
+					logger.Info("loop stopped")
+					break
 				}
+				iterLog.Warn("loop iteration failed", "error", err)
+				l.mu.Lock()
+				l.lastError = err.Error()
+				l.consecutiveErrors++
+				l.mu.Unlock()
+				l.setState(StateError)
+
+				snap.Error = err.Error()
+				snap.CompletedAt = time.Now()
+				snap.ElapsedMs = snap.CompletedAt.Sub(iterStartTime).Milliseconds()
+
+				l.publishEvent(events.Event{
+					Timestamp: time.Now(),
+					Source:    events.SourceLoop,
+					Kind:      events.KindLoopError,
+					Data: map[string]any{
+						"loop_id":   l.id,
+						"loop_name": l.config.Name,
+						"error":     err.Error(),
+					},
+				})
+			} else {
+				l.mu.Lock()
+				l.iterations++
+				l.totalInputTokens += result.InputTokens
+				l.totalOutputTokens += result.OutputTokens
+				l.lastInputTokens = result.InputTokens
+				l.lastOutputTokens = result.OutputTokens
+				if result.ContextWindow > 0 {
+					l.contextWindow = result.ContextWindow
+				}
+				l.lastError = ""
+				l.consecutiveErrors = 0
+				if isSupervisor {
+					l.lastSupervisorIter = l.iterations
+				}
+				snap.Number = l.iterations
+				l.mu.Unlock()
+
+				snap.Model = result.Model
+				snap.InputTokens = result.InputTokens
+				snap.OutputTokens = result.OutputTokens
+				snap.ContextWindow = result.ContextWindow
+				snap.ElapsedMs = result.Elapsed.Milliseconds()
+				snap.CompletedAt = time.Now()
+
+				// Deep copy ToolsUsed so the snapshot is independent
+				// of any caller-held references.
+				if len(result.ToolsUsed) > 0 {
+					snap.ToolsUsed = make(map[string]int, len(result.ToolsUsed))
+					for k, v := range result.ToolsUsed {
+						snap.ToolsUsed[k] = v
+					}
+				}
+
+				iterLog.Info("loop iteration complete",
+					"model", result.Model,
+					"input_tokens", result.InputTokens,
+					"output_tokens", result.OutputTokens,
+					"elapsed", result.Elapsed.Round(time.Second),
+				)
+
+				eventData := map[string]any{
+					"loop_id":         l.id,
+					"loop_name":       l.config.Name,
+					"model":           result.Model,
+					"input_tokens":    result.InputTokens,
+					"output_tokens":   result.OutputTokens,
+					"context_window":  result.ContextWindow,
+					"elapsed_ms":      result.Elapsed.Milliseconds(),
+					"tools_used":      result.ToolsUsed,
+					"supervisor":      result.Supervisor,
+					"conversation_id": convID,
+				}
+				if len(handlerSummary) > 0 {
+					eventData["summary"] = handlerSummary
+				}
+				l.publishEvent(events.Event{
+					Timestamp: time.Now(),
+					Source:    events.SourceLoop,
+					Kind:      events.KindLoopIterationComplete,
+					Data:      eventData,
+				})
 			}
 
-			iterLog.Info("loop iteration complete",
-				"model", result.Model,
-				"input_tokens", result.InputTokens,
-				"output_tokens", result.OutputTokens,
-				"elapsed", result.Elapsed.Round(time.Second),
-			)
+			// Compute sleep after updating error state so backoff reflects
+			// the outcome of the just-completed iteration.
+			sleep = l.computeSleep()
 
-			eventData := map[string]any{
-				"loop_id":         l.id,
-				"loop_name":       l.config.Name,
-				"model":           result.Model,
-				"input_tokens":    result.InputTokens,
-				"output_tokens":   result.OutputTokens,
-				"context_window":  result.ContextWindow,
-				"elapsed_ms":      result.Elapsed.Milliseconds(),
-				"tools_used":      result.ToolsUsed,
-				"supervisor":      result.Supervisor,
-				"conversation_id": convID,
+			// Record sleep/wait info on the snapshot before buffering.
+			if l.config.WaitFunc != nil {
+				snap.WaitAfter = true
+			} else {
+				snap.SleepAfterMs = sleep.Milliseconds()
 			}
+
+			// Attach handler summary if available.
 			if len(handlerSummary) > 0 {
-				eventData["summary"] = handlerSummary
+				snap.Summary = handlerSummary
 			}
-			l.publishEvent(events.Event{
-				Timestamp: time.Now(),
-				Source:    events.SourceLoop,
-				Kind:      events.KindLoopIterationComplete,
-				Data:      eventData,
-			})
-		}
 
-		// Compute sleep after updating error state so backoff reflects
-		// the outcome of the just-completed iteration.
-		sleep := l.computeSleep()
-
-		// Record sleep/wait info on the snapshot before buffering.
-		if l.config.WaitFunc != nil {
-			snap.WaitAfter = true
-		} else {
-			snap.SleepAfterMs = sleep.Milliseconds()
-		}
-
-		// Attach handler summary if available.
-		if len(handlerSummary) > 0 {
-			snap.Summary = handlerSummary
-		}
-
-		// Prepend snapshot to ring buffer (newest first).
-		l.mu.Lock()
-		l.recentIterations = append([]IterationSnapshot{snap}, l.recentIterations...)
-		if len(l.recentIterations) > recentIterationsCap {
-			l.recentIterations = l.recentIterations[:recentIterationsCap]
-		}
-		l.mu.Unlock()
-
-		// Call PostIterate on success if configured. Errors are logged
-		// but do not count as iteration failures. Uses iterCtx for
-		// per-iteration logger correlation.
-		if err == nil && l.config.PostIterate != nil {
-			postResult := IterationResult{
-				ConvID:       convID,
-				Model:        result.Model,
-				InputTokens:  result.InputTokens,
-				OutputTokens: result.OutputTokens,
-				ToolsUsed:    result.ToolsUsed,
-				Elapsed:      result.Elapsed,
-				Supervisor:   result.Supervisor,
-				Sleep:        sleep,
+			// Prepend snapshot to ring buffer (newest first).
+			l.mu.Lock()
+			l.recentIterations = append([]IterationSnapshot{snap}, l.recentIterations...)
+			if len(l.recentIterations) > recentIterationsCap {
+				l.recentIterations = l.recentIterations[:recentIterationsCap]
 			}
-			if postErr := l.config.PostIterate(iterCtx, postResult); postErr != nil {
-				iterLog.Warn("PostIterate callback failed", "error", postErr)
+			l.mu.Unlock()
+
+			// Call PostIterate on success if configured. Errors are logged
+			// but do not count as iteration failures. Uses iterCtx for
+			// per-iteration logger correlation.
+			if err == nil && l.config.PostIterate != nil {
+				postResult := IterationResult{
+					ConvID:       convID,
+					Model:        result.Model,
+					InputTokens:  result.InputTokens,
+					OutputTokens: result.OutputTokens,
+					ToolsUsed:    result.ToolsUsed,
+					Elapsed:      result.Elapsed,
+					Supervisor:   result.Supervisor,
+					Sleep:        sleep,
+				}
+				if postErr := l.config.PostIterate(iterCtx, postResult); postErr != nil {
+					iterLog.Warn("PostIterate callback failed", "error", postErr)
+				}
 			}
 		}
 

@@ -2,9 +2,18 @@ package loop
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 )
+
+// ErrNoOp is returned by a [Config.Handler] to signal that the
+// iteration ran but produced no meaningful work (e.g., all received
+// events were filtered out). The loop undoes pre-iteration bookkeeping
+// and skips accounting, snapshot creation, and event publishing —
+// mirroring the WaitFunc nil-payload contract. ErrNoOp is not counted
+// as an error and does not increment [Status.ConsecutiveErrors].
+var ErrNoOp = errors.New("loop: no-op iteration")
 
 // State represents the lifecycle state of a running loop.
 type State string
@@ -149,6 +158,10 @@ type Config struct {
 	// When set, [Deps].Runner is not required. Receives the event
 	// from WaitFunc (nil for timer-triggered loops). Handler-only
 	// loops still track iterations, errors, and health.
+	//
+	// Return [ErrNoOp] to signal that the iteration produced no
+	// meaningful work (e.g., all events were filtered). The loop
+	// skips iteration accounting and continues to the next cycle.
 	Handler func(ctx context.Context, event any) error `json:"-"`
 
 	// Hints are merged into RunRequest hints for each iteration.
