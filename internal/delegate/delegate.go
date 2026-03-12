@@ -252,7 +252,9 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 			"delegate_id":    did,
 			"parent_loop_id": parentLoopID,
 			"profile":        profile.Name,
-			"task":           truncate(task, 100),
+			"task":           truncate(task, 200),
+			"guidance":       truncate(guidance, 200),
+			"tags":           tags,
 			"name":           "delegate-" + did[:8],
 		},
 	})

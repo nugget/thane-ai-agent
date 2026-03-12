@@ -693,6 +693,10 @@ function handleDelegateEvent(evt) {
         },
         _delegate: true,
         _delegateId: did,
+        _delegateTask: evt.data.task || '',
+        _delegateProfile: evt.data.profile || '',
+        _delegateGuidance: evt.data.guidance || '',
+        _delegateTags: evt.data.tags || [],
         _iterStartTs: Date.now(),
       });
       startElapsedTimer(syntheticId);
@@ -1375,6 +1379,9 @@ function renderDetail() {
   // IDs section.
   renderDetailIDs(loop);
 
+  // Delegate detail (task, profile, guidance, tags).
+  renderDelegateDetail(loop);
+
   // Aggregate stats bar.
   renderAggregates(loop);
 
@@ -1517,6 +1524,69 @@ function renderDetailIDs(loop) {
     row.appendChild(chips);
     container.appendChild(row);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Rendering — Delegate Detail
+// ---------------------------------------------------------------------------
+
+function renderDelegateDetail(loop) {
+  const container = $('#detail-delegate');
+  if (!loop._delegate) {
+    container.hidden = true;
+    return;
+  }
+  container.hidden = false;
+  container.innerHTML = '';
+
+  // Task.
+  if (loop._delegateTask) {
+    const taskEl = document.createElement('div');
+    taskEl.className = 'delegate-field';
+    const label = document.createElement('span');
+    label.className = 'delegate-label';
+    label.textContent = 'Task';
+    taskEl.appendChild(label);
+    const val = document.createElement('span');
+    val.className = 'delegate-value delegate-task';
+    val.textContent = loop._delegateTask;
+    taskEl.appendChild(val);
+    container.appendChild(taskEl);
+  }
+
+  // Guidance.
+  if (loop._delegateGuidance) {
+    const guidEl = document.createElement('div');
+    guidEl.className = 'delegate-field';
+    const label = document.createElement('span');
+    label.className = 'delegate-label';
+    label.textContent = 'Guidance';
+    guidEl.appendChild(label);
+    const val = document.createElement('span');
+    val.className = 'delegate-value';
+    val.textContent = loop._delegateGuidance;
+    guidEl.appendChild(val);
+    container.appendChild(guidEl);
+  }
+
+  // Profile + tags row.
+  const metaRow = document.createElement('div');
+  metaRow.className = 'delegate-meta';
+  if (loop._delegateProfile) {
+    const chip = document.createElement('span');
+    chip.className = 'tag-chip';
+    chip.textContent = loop._delegateProfile;
+    metaRow.appendChild(chip);
+  }
+  if (loop._delegateTags && loop._delegateTags.length > 0) {
+    for (const tag of loop._delegateTags) {
+      const chip = document.createElement('span');
+      chip.className = 'tag-chip tag-chip--muted';
+      chip.textContent = tag;
+      metaRow.appendChild(chip);
+    }
+  }
+  if (metaRow.children.length > 0) container.appendChild(metaRow);
 }
 
 // makeIDRow, makeIDChip, shortID, shortModelName, buildToolCounts,

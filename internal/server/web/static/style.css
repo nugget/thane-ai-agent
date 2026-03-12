@@ -183,6 +183,43 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
   min-width: 0;
 }
 
+/* === Delegate Detail === */
+.detail-delegate {
+  margin-bottom: 0.75rem;
+  padding: 0.5rem 0.6rem;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+.delegate-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  margin-bottom: 0.4rem;
+}
+.delegate-field:last-child { margin-bottom: 0; }
+.delegate-label {
+  font-size: 0.65rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.delegate-value {
+  font-size: 0.78rem;
+  color: var(--text-primary);
+  line-height: 1.35;
+  word-break: break-word;
+}
+.delegate-task {
+  font-style: italic;
+}
+.delegate-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin-top: 0.4rem;
+}
+
 .id-row {
   display: flex;
   align-items: center;
