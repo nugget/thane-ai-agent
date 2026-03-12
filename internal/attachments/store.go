@@ -431,6 +431,16 @@ func (s *Store) Search(ctx context.Context, params SearchParams) ([]*Record, err
 	return records, nil
 }
 
+// TelemetryStats returns aggregate attachment statistics for
+// operational dashboards. The three counts (total records, total bytes,
+// unique content hashes) are computed in a single query.
+func (s *Store) TelemetryStats(ctx context.Context) (total, totalBytes, unique int64, err error) {
+	err = s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*), COALESCE(SUM(size), 0), COUNT(DISTINCT hash) FROM attachments`,
+	).Scan(&total, &totalBytes, &unique)
+	return
+}
+
 // Close closes the underlying database connection.
 func (s *Store) Close() error {
 	return s.db.Close()

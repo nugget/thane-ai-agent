@@ -796,6 +796,11 @@ type MQTTConfig struct {
 	// acted upon. Future phases will route messages to the anticipation
 	// engine. Supports MQTT wildcard characters (+ and #).
 	Subscriptions []SubscriptionConfig `yaml:"subscriptions"`
+
+	// Telemetry configures operational metric publishing. When enabled,
+	// a separate mqtt-telemetry loop publishes system health, token usage,
+	// loop states, and other operational data as native HA sensors.
+	Telemetry TelemetryConfig `yaml:"telemetry"`
 }
 
 // SubscriptionConfig describes a single MQTT topic subscription.
@@ -805,6 +810,20 @@ type SubscriptionConfig struct {
 	// Topic is the MQTT topic filter (e.g., "homeassistant/+/+/state",
 	// "frigate/events"). Supports MQTT wildcard characters.
 	Topic string `yaml:"topic"`
+}
+
+// TelemetryConfig configures MQTT telemetry publishing. When Enabled
+// is true and MQTT is configured, a dedicated loop publishes
+// operational metrics (DB sizes, token usage, loop states, etc.) as
+// native Home Assistant sensors via MQTT Discovery.
+type TelemetryConfig struct {
+	// Enabled activates the mqtt-telemetry loop. Requires MQTT to be
+	// configured (broker + device_name).
+	Enabled bool `yaml:"enabled"`
+
+	// Interval is how often (in seconds) telemetry metrics are
+	// collected and published. Default: 60. Minimum: 10.
+	Interval int `yaml:"interval"`
 }
 
 // Configured reports whether both Broker and DeviceName are set. A
@@ -1348,6 +1367,9 @@ func (c *Config) applyDefaults() {
 	if c.MQTT.PublishIntervalSec == 0 {
 		c.MQTT.PublishIntervalSec = 60
 	}
+	if c.MQTT.Telemetry.Interval == 0 {
+		c.MQTT.Telemetry.Interval = 60
+	}
 
 	if c.Unifi.PollIntervalSec == 0 {
 		c.Unifi.PollIntervalSec = 30
@@ -1585,6 +1607,9 @@ func (c *Config) Validate() error {
 			if sub.Topic == "" {
 				return fmt.Errorf("mqtt.subscriptions[%d].topic must not be empty", i)
 			}
+		}
+		if c.MQTT.Telemetry.Enabled && c.MQTT.Telemetry.Interval < 10 {
+			return fmt.Errorf("mqtt.telemetry.interval %d too low (minimum 10 seconds)", c.MQTT.Telemetry.Interval)
 		}
 	}
 	if err := c.validateSubscribe(); err != nil {
