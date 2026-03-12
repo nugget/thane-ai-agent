@@ -97,6 +97,41 @@ func NewExecutor(logger *slog.Logger, llmClient llm.Client, rtr *router.Router, 
 	}
 }
 
+// ApplyProfileOverrides applies configuration overrides to builtin
+// profiles. Only positive fields in each override replace the builtin
+// defaults. Negative values are logged as warnings and ignored.
+// Unknown profile names are silently ignored (config may reference
+// profiles that don't exist yet).
+func (e *Executor) ApplyProfileOverrides(overrides map[string]ProfileOverride) {
+	for name, o := range overrides {
+		p, ok := e.profiles[name]
+		if !ok {
+			continue
+		}
+		if o.ToolTimeout > 0 {
+			p.ToolTimeout = o.ToolTimeout
+		}
+		if o.MaxDuration > 0 {
+			p.MaxDuration = o.MaxDuration
+		}
+		if o.MaxIter > 0 {
+			p.MaxIter = o.MaxIter
+		}
+		if o.MaxTokens > 0 {
+			p.MaxTokens = o.MaxTokens
+		}
+	}
+}
+
+// ProfileOverride holds optional overrides for a delegate profile.
+// Only positive values are applied; zero and negative fields are ignored.
+type ProfileOverride struct {
+	ToolTimeout time.Duration
+	MaxDuration time.Duration
+	MaxIter     int
+	MaxTokens   int
+}
+
 // SetTimezone configures the IANA timezone for Current Conditions
 // in the delegate system prompt.
 func (e *Executor) SetTimezone(tz string) {
