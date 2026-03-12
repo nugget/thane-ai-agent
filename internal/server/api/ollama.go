@@ -763,18 +763,23 @@ func deriveConversationID(messages []agent.Message) string {
 }
 
 // owuDisplayName derives a short label for the dashboard node from the
-// conversation's last user message. Returns at most 24 characters.
+// conversation's last user message. Returns at most 24 characters
+// (including ellipsis when truncated). Truncation is rune-safe.
 func owuDisplayName(messages []agent.Message) string {
 	// Use the last user message — it's the most relevant for identifying
 	// the conversation's current topic.
 	for i := len(messages) - 1; i >= 0; i-- {
 		if messages[i].Role == "user" && messages[i].Content != "" {
 			s := messages[i].Content
-			if len(s) > 24 {
-				s = s[:24] + "…"
-			}
 			// Replace newlines with spaces for single-line label.
 			s = strings.ReplaceAll(s, "\n", " ")
+
+			const maxLen = 24
+			runes := []rune(s)
+			if len(runes) > maxLen {
+				// Leave room for the ellipsis so total ≤ maxLen.
+				s = string(runes[:maxLen-1]) + "…"
+			}
 			return s
 		}
 	}

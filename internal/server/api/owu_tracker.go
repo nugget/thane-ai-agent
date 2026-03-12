@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 
 	"github.com/nugget/thane-ai-agent/internal/agent"
@@ -14,6 +15,7 @@ import (
 
 // owuWork is a single request dispatched to a per-conversation child loop.
 type owuWork struct {
+	reqCtx   context.Context // HTTP request context for cancellation
 	req      *agent.Request
 	callback agent.StreamCallback
 	respCh   chan owuResult
@@ -89,6 +91,7 @@ func (t *OWUTracker) Dispatch(ctx context.Context, req *agent.Request, streamCal
 	ch := t.ensureConvLoop(ctx, convID, displayName)
 
 	work := owuWork{
+		reqCtx:   ctx,
 		req:      req,
 		callback: streamCallback,
 		respCh:   make(chan owuResult, 1),
@@ -124,9 +127,9 @@ func (t *OWUTracker) ensureConvLoop(_ context.Context, convID, displayName strin
 	parentID := t.parentID
 	t.mu.Unlock()
 
-	loopName := "owu/" + displayName
+	loopName := "owu/" + sanitizeOWULoopName(displayName)
 
-	_, err := t.registry.SpawnLoop(t.ctx, loop.Config{
+	loopID, err := t.registry.SpawnLoop(t.ctx, loop.Config{
 		Name: loopName,
 		WaitFunc: func(wCtx context.Context) (any, error) {
 			select {
@@ -144,11 +147,23 @@ func (t *OWUTracker) ensureConvLoop(_ context.Context, convID, displayName strin
 			if !ok {
 				return nil
 			}
+			// Merge the loop context (lifecycle) with the HTTP request
+			// context (client disconnect) so work cancels on either.
+			runCtx, cancel := context.WithCancel(hCtx)
+			go func() {
+				select {
+				case <-runCtx.Done():
+				case <-w.reqCtx.Done():
+					cancel()
+				}
+			}()
+			defer cancel()
+
 			progressFn := loop.ProgressFunc(hCtx)
 			// Fan-out: forward agent stream events to both the HTTP
 			// streaming callback and the loop progress func.
 			combined := fanOutStream(w.callback, buildAgentStream(progressFn))
-			resp, err := t.runner.Run(hCtx, w.req, combined)
+			resp, err := t.runner.Run(runCtx, w.req, combined)
 			w.respCh <- owuResult{resp: resp, err: err}
 			return err
 		},
@@ -186,9 +201,40 @@ func (t *OWUTracker) ensureConvLoop(_ context.Context, convID, displayName strin
 				}
 			}
 		}()
+		return ch
+	}
+
+	// Clean up the channel mapping when the child loop exits so that
+	// the next request for this conversation respawns a fresh loop
+	// instead of sending into an orphaned channel.
+	l := t.registry.Get(loopID)
+	if l != nil {
+		go func(convID string, ch chan owuWork) {
+			<-l.Done()
+			t.mu.Lock()
+			if t.convChs[convID] == ch {
+				delete(t.convChs, convID)
+			}
+			t.mu.Unlock()
+		}(convID, ch)
 	}
 
 	return ch
+}
+
+// sanitizeOWULoopName strips characters from a display name that could
+// confuse the loop hierarchy ("/") or produce unreadable node labels.
+func sanitizeOWULoopName(name string) string {
+	name = strings.TrimSpace(name)
+	return strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return -1 // drop control characters
+		}
+		if r == '/' {
+			return '_'
+		}
+		return r
+	}, name)
 }
 
 // fanOutStream creates a StreamCallback that forwards events to both a and b.

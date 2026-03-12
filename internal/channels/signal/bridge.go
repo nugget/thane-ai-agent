@@ -338,8 +338,38 @@ func (b *Bridge) dispatch(ctx context.Context, event any) error {
 		return nil
 	}
 
-	// Acknowledge receipt before the potentially long agent
-	// loop. Best-effort — failure does not prevent processing.
+	// Fan out to per-sender child loop.
+	b.ensureSenderLoop(ctx, env.Source)
+
+	b.mu.Lock()
+	ch, ok := b.senderChans[env.Source]
+	b.mu.Unlock()
+
+	enqueued := false
+	if ok {
+		select {
+		case ch <- env:
+			enqueued = true
+		case <-ctx.Done():
+			b.logger.Warn("signal context cancelled before enqueue, dropping message",
+				"sender", env.Source,
+				"error", ctx.Err(),
+			)
+		}
+	}
+
+	if !enqueued {
+		// Don't send a read receipt for messages we failed to enqueue.
+		return nil
+	}
+
+	if summary != nil {
+		summary["action"] = "dispatched"
+		summary["sender"] = env.Source
+	}
+
+	// Acknowledge receipt only after successful enqueue so we don't
+	// ack messages that were silently dropped.
 	receiptTS := env.Timestamp
 	if env.DataMessage != nil && env.DataMessage.Timestamp != 0 {
 		receiptTS = env.DataMessage.Timestamp
@@ -352,26 +382,6 @@ func (b *Bridge) dispatch(ctx context.Context, event any) error {
 		)
 	}
 
-	// Fan out to per-sender child loop.
-	b.ensureSenderLoop(ctx, env.Source)
-
-	b.mu.Lock()
-	ch, ok := b.senderChans[env.Source]
-	b.mu.Unlock()
-	if ok {
-		select {
-		case ch <- env:
-		default:
-			b.logger.Warn("signal sender channel full, dropping message",
-				"sender", env.Source,
-			)
-		}
-	}
-
-	if summary != nil {
-		summary["action"] = "dispatched"
-		summary["sender"] = env.Source
-	}
 	return nil
 }
 
@@ -393,7 +403,7 @@ func (b *Bridge) ensureSenderLoop(ctx context.Context, sender string) {
 	loopName := "signal/" + sanitizePhone(sender)
 	if b.resolver != nil {
 		if name, ok := b.resolver.ResolvePhone(sender); ok {
-			loopName = "signal/" + name
+			loopName = "signal/" + sanitizeLoopName(name)
 		}
 	}
 
@@ -866,6 +876,22 @@ func sanitizePhone(phone string) string {
 		}
 	}
 	return sb.String()
+}
+
+// sanitizeLoopName strips characters from a contact display name that
+// could confuse the loop hierarchy (e.g. "/" which is the parent/child
+// separator) or produce unreadable node labels (control characters).
+func sanitizeLoopName(name string) string {
+	name = strings.TrimSpace(name)
+	return strings.Map(func(r rune) rune {
+		if r < 0x20 || r == 0x7f {
+			return -1 // drop control characters
+		}
+		if r == '/' {
+			return '_' // avoid hierarchy separator
+		}
+		return r
+	}, name)
 }
 
 // formatMessage builds the user-facing message content for the agent
