@@ -448,6 +448,49 @@ func (l *Loop) run(ctx context.Context) {
 		defer cancel()
 	}
 
+	// --- INITIAL SLEEP (timer-driven loops only) ---
+	// On fresh startup, timer-driven loops sleep before their first
+	// iteration instead of firing immediately. The delay is jittered
+	// from SleepDefault to stagger loop starts and avoid a thundering
+	// herd of simultaneous iterations after a restart.
+	if l.config.WaitFunc == nil {
+		initialSleep := l.applyJitter(l.config.SleepDefault)
+		initialSleep = l.clamp(initialSleep)
+
+		l.publishEvent(events.Event{
+			Timestamp: time.Now(),
+			Source:    events.SourceLoop,
+			Kind:      events.KindLoopSleepStart,
+			Data: map[string]any{
+				"loop_id":        l.id,
+				"loop_name":      l.config.Name,
+				"sleep_duration": initialSleep.String(),
+				"initial":        true,
+			},
+		})
+
+		logger.Info("loop initial sleep before first iteration",
+			"duration", initialSleep.Round(time.Second),
+		)
+
+		if !sleepCtx(ctx, initialSleep) {
+			logger.Info("loop stopped during initial sleep")
+			l.setState(StateStopped)
+			l.publishEvent(events.Event{
+				Timestamp: time.Now(),
+				Source:    events.SourceLoop,
+				Kind:      events.KindLoopStopped,
+				Data: map[string]any{
+					"loop_id":    l.id,
+					"loop_name":  l.config.Name,
+					"iterations": l.iterations,
+					"attempts":   l.attempts,
+				},
+			})
+			return
+		}
+	}
+
 	for {
 		var event any // payload from WaitFunc; nil for timer-driven loops.
 
