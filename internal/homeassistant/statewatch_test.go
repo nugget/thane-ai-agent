@@ -255,6 +255,33 @@ func TestStateWatcher_NonStateChangedIgnored(t *testing.T) {
 	}
 }
 
+func TestHandleEvent_ReturnValue(t *testing.T) {
+	events := make(chan Event, 10)
+	handler := func(_, _, _ string) {}
+
+	// Filter accepts only "light.*".
+	filter := NewEntityFilter([]string{"light.*"}, nil)
+	watcher := NewStateWatcher(events, filter, nil, handler, nil)
+
+	// Matching event should return true.
+	ev := makeStateEvent(t, "light.kitchen", "off", "on")
+	if !watcher.HandleEvent(ev) {
+		t.Error("HandleEvent should return true for matching event")
+	}
+
+	// Non-matching entity should return false.
+	ev = makeStateEvent(t, "sensor.temperature", "20", "21")
+	if watcher.HandleEvent(ev) {
+		t.Error("HandleEvent should return false for filtered entity")
+	}
+
+	// Non-state_changed event should return false.
+	nonStateEv := Event{Type: "automation_triggered", Data: json.RawMessage(`{}`)}
+	if watcher.HandleEvent(nonStateEv) {
+		t.Error("HandleEvent should return false for non-state_changed event")
+	}
+}
+
 // makeStateEvent creates a state_changed Event for testing.
 func makeStateEvent(t *testing.T, entityID, oldState, newState string) Event {
 	t.Helper()
