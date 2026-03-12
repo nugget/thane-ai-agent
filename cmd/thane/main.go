@@ -2082,6 +2082,8 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 			drain:
 				for len(batch) < haBatchMax {
 					select {
+					case <-wCtx.Done():
+						break drain
 					case ev, ok := <-events:
 						if !ok {
 							break drain
