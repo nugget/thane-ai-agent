@@ -154,9 +154,9 @@ func (p *Publisher) PublishStates(ctx context.Context) {
 	p.publishStates(ctx)
 }
 
-// PublishInterval returns the configured publish interval, clamped to
-// a minimum of 5 seconds. Exported so callers can configure loop sleep
-// durations to match.
+// PublishInterval returns the configured publish interval. Non-positive
+// values are replaced with a 5-second minimum. Exported so callers can
+// configure loop sleep durations to match.
 func (p *Publisher) PublishInterval() time.Duration {
 	const minInterval = 5 * time.Second
 	interval := time.Duration(p.cfg.PublishIntervalSec) * time.Second

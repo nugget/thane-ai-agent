@@ -2037,29 +2037,45 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 
 		watcher := homeassistant.NewStateWatcher(haWS.Events(), filter, limiter, handler, logger)
 
+		// Derive a cancellable context so the loop exits cleanly
+		// when the HA event channel closes.
+		haLoopCtx, haLoopCancel := context.WithCancel(ctx)
+
 		// Track last cleanup time for periodic rate-limiter maintenance.
 		lastCleanup := time.Now()
-		const cleanupInterval = 5 * time.Minute
+		const haCleanupInterval = 5 * time.Minute
 
 		events := watcher.Events()
-		if _, err := loopRegistry.SpawnLoop(ctx, looppkg.Config{
+		if _, err := loopRegistry.SpawnLoop(haLoopCtx, looppkg.Config{
 			Name: "ha-state-watcher",
 			WaitFunc: func(wCtx context.Context) (any, error) {
+				// Use a timer so rate-limiter cleanup runs even
+				// during idle periods with no HA events.
+				cleanupTimer := time.NewTimer(haCleanupInterval)
+				defer cleanupTimer.Stop()
+
 				select {
 				case <-wCtx.Done():
 					return nil, wCtx.Err()
 				case ev, ok := <-events:
 					if !ok {
-						return nil, fmt.Errorf("HA event channel closed")
+						haLoopCancel()
+						return nil, context.Canceled
 					}
 					return ev, nil
+				case <-cleanupTimer.C:
+					watcher.CleanupRateLimiter()
+					lastCleanup = time.Now()
+					// Return a nil event — handler skips nil payloads.
+					return nil, nil
 				}
 			},
 			Handler: func(_ context.Context, payload any) error {
 				if ev, ok := payload.(homeassistant.Event); ok {
 					watcher.HandleEvent(ev)
 				}
-				if time.Since(lastCleanup) > cleanupInterval {
+				// Also check inline in case events arrive faster than the timer.
+				if time.Since(lastCleanup) > haCleanupInterval {
 					watcher.CleanupRateLimiter()
 					lastCleanup = time.Now()
 				}
@@ -2299,7 +2315,10 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 			})
 		}
 
-		if err := mqttPub.Connect(ctx); err != nil {
+		connectCtx, connectCancel := context.WithTimeout(ctx, 5*time.Second)
+		err = mqttPub.Connect(connectCtx)
+		connectCancel()
+		if err != nil {
 			logger.Error("mqtt publisher connection failed", "error", err)
 		} else {
 			// Publish immediately on connect, then let the loop handle the schedule.
