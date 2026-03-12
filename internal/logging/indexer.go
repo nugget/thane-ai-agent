@@ -10,7 +10,6 @@ import (
 	"slices"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -59,8 +58,9 @@ type indexShared struct {
 	db     *sql.DB
 	ch     chan indexEntry
 	done   chan struct{}
-	closed atomic.Bool // true after Close; guards sends on ch
-	once   sync.Once   // guards Close
+	mu     sync.RWMutex // serializes Handle sends with Close
+	closed bool         // true after Close; protected by mu
+	once   sync.Once    // guards Close
 }
 
 // indexEntry is the set of fields written to SQLite for one log record.
@@ -166,14 +166,19 @@ func (h *IndexHandler) Handle(ctx context.Context, r slog.Record) error {
 		entry.Attrs = string(b)
 	}
 
-	// Drop the entry if the handler has been closed or the channel is
-	// full. Never block a log call on database I/O.
-	if !h.shared.closed.Load() {
+	// Non-blocking send under a read lock so Close() cannot close the
+	// channel while we're sending. The closed flag is checked inside
+	// the lock to eliminate the TOCTOU race between checking and
+	// sending. Drop the entry if the channel is full — never block a
+	// log call on database I/O.
+	h.shared.mu.RLock()
+	if !h.shared.closed {
 		select {
 		case h.shared.ch <- entry:
 		default:
 		}
 	}
+	h.shared.mu.RUnlock()
 
 	return nil
 }
@@ -207,8 +212,10 @@ func (h *IndexHandler) WithGroup(name string) slog.Handler {
 // goroutine. It is safe to call multiple times.
 func (h *IndexHandler) Close() {
 	h.shared.once.Do(func() {
-		h.shared.closed.Store(true)
+		h.shared.mu.Lock()
+		h.shared.closed = true
 		close(h.shared.ch)
+		h.shared.mu.Unlock()
 		<-h.shared.done
 	})
 }

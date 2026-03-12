@@ -360,6 +360,33 @@ func TestIndexHandler_LogAfterCloseNoPanic(t *testing.T) {
 	logger.Debug("another post-close log")
 }
 
+func TestIndexHandler_ConcurrentLogDuringClose(t *testing.T) {
+	db := openTestDB(t)
+	inner := slog.NewJSONHandler(discardWriter{}, nil)
+	h := NewIndexHandler(inner, db, nil)
+
+	logger := slog.New(h)
+
+	// Simulate the real crash scenario: a background goroutine
+	// continues logging while Close() runs concurrently.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for range 1000 {
+			logger.Info("background log")
+		}
+	}()
+
+	// Close while the goroutine is still logging.
+	h.Close()
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for background logger")
+	}
+}
+
 func TestPrune_DebugAndTrace(t *testing.T) {
 	db := openTestDB(t)
 
