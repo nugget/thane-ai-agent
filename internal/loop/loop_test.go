@@ -1915,6 +1915,7 @@ func TestTimerLoopInitialSleep_PublishesEvent(t *testing.T) {
 
 	bus := events.New()
 	sub := bus.Subscribe(16)
+	defer bus.Unsubscribe(sub)
 
 	l, err := New(Config{
 		Name:         "initial-event",
@@ -1997,7 +1998,11 @@ func TestWaitFuncLoopNoInitialSleep(t *testing.T) {
 	mu.Unlock()
 
 	// Event-driven loop should fire quickly — well under SleepDefault.
-	if elapsed > 50*time.Millisecond {
-		t.Errorf("event-driven loop took %v to first iteration, expected near-instant", elapsed)
+	// Use a fraction of SleepDefault rather than a hard-coded bound
+	// so the assertion stays meaningful under scheduler load.
+	maxElapsed := 100 * time.Millisecond / 2 // 50% of SleepDefault
+	if elapsed > maxElapsed {
+		t.Errorf("event-driven loop took %v to first iteration, want < %v (SleepDefault = %v)",
+			elapsed, maxElapsed, 100*time.Millisecond)
 	}
 }

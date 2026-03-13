@@ -414,7 +414,7 @@ func (l *Loop) run(ctx context.Context) {
 	// Initial state depends on whether the loop waits for events or
 	// sleeps on a timer. WaitFunc loops enter StateWaiting immediately
 	// (they block at the top of the loop); timer loops enter
-	// StateSleeping (they process first, then sleep).
+	// StateSleeping (they sleep on startup, then process, then sleep).
 	if l.config.WaitFunc != nil {
 		l.setState(StateWaiting)
 	} else {
@@ -475,18 +475,7 @@ func (l *Loop) run(ctx context.Context) {
 
 		if !sleepCtx(ctx, initialSleep) {
 			logger.Info("loop stopped during initial sleep")
-			l.setState(StateStopped)
-			l.publishEvent(events.Event{
-				Timestamp: time.Now(),
-				Source:    events.SourceLoop,
-				Kind:      events.KindLoopStopped,
-				Data: map[string]any{
-					"loop_id":    l.id,
-					"loop_name":  l.config.Name,
-					"iterations": l.iterations,
-					"attempts":   l.attempts,
-				},
-			})
+			l.emitStopped()
 			return
 		}
 	}
@@ -861,6 +850,12 @@ func (l *Loop) run(ctx context.Context) {
 		}
 	}
 
+	l.emitStopped()
+}
+
+// emitStopped transitions the loop to StateStopped and publishes a
+// KindLoopStopped event. It is called from every exit path in run().
+func (l *Loop) emitStopped() {
 	l.setState(StateStopped)
 	l.publishEvent(events.Event{
 		Timestamp: time.Now(),
