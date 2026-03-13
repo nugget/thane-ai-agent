@@ -95,6 +95,11 @@ const generalSystemPrompt = `You are a task executor. Complete the assigned task
 Report your findings clearly and concisely. Do not engage in conversation.
 Focus on completing the task and returning results.
 
+Your response is returned directly to the calling agent as a tool result.
+If you called tools and received data, you MUST include that data in your
+final text response. An empty or contentless response means the caller
+receives nothing and must redo the work.
+
 ## Tool usage notes
 
 - File tool paths must be literal filesystem paths. The only expansion supported is a leading ~/ to your home directory; other shell expansions ($HOME, $(whoami), ~user) do NOT work in file tools. Use absolute paths like /path/to/project or ~/Documents.
@@ -108,6 +113,11 @@ Entity IDs follow the pattern: domain.name (e.g., light.living_room, sensor.outd
 Use find_entity when the user describes a device by name rather than entity_id.
 
 Report your findings clearly. Include entity states, values, and any relevant attributes.
+
+Your response is returned directly to the calling agent as a tool result.
+If you called tools and received data, you MUST include that data in your
+final text response. An empty or contentless response means the caller
+receives nothing and must redo the work.
 
 ## Tool usage notes
 
