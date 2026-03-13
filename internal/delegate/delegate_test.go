@@ -98,7 +98,7 @@ func TestExecute_SimpleTextResponse(t *testing.T) {
 	}
 
 	exec := NewExecutor(slog.Default(), mock, nil, newTestRegistry(), "test-model")
-	result, err := exec.Execute(context.Background(), "Check the office light", "general", "", nil)
+	result, err := exec.Execute(context.Background(), "Check the office light", "general", "", nil, nil)
 
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
@@ -156,7 +156,7 @@ func TestExecute_WithToolCalls(t *testing.T) {
 	}
 
 	exec := NewExecutor(slog.Default(), mock, nil, newTestRegistry(), "test-model")
-	result, err := exec.Execute(context.Background(), "Check the office light", "ha", "", nil)
+	result, err := exec.Execute(context.Background(), "Check the office light", "ha", "", nil, nil)
 
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
@@ -227,7 +227,7 @@ func TestExecute_MaxIterationsExhausted(t *testing.T) {
 
 	mock := &mockLLMClient{responses: responses}
 	exec := NewExecutor(slog.Default(), mock, nil, newTestRegistry(), "test-model")
-	result, err := exec.Execute(context.Background(), "Do something complex", "general", "", nil)
+	result, err := exec.Execute(context.Background(), "Do something complex", "general", "", nil, nil)
 
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
@@ -272,7 +272,7 @@ func TestExecute_TokenBudgetExhausted(t *testing.T) {
 
 	mock := &mockLLMClient{responses: []*llm.ChatResponse{toolCallResp, forcedText}}
 	exec := NewExecutor(slog.Default(), mock, nil, newTestRegistry(), "test-model")
-	result, err := exec.Execute(context.Background(), "Expensive task", "general", "", nil)
+	result, err := exec.Execute(context.Background(), "Expensive task", "general", "", nil, nil)
 
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
@@ -284,7 +284,7 @@ func TestExecute_TokenBudgetExhausted(t *testing.T) {
 
 func TestExecute_EmptyTask(t *testing.T) {
 	exec := NewExecutor(slog.Default(), &mockLLMClient{}, nil, newTestRegistry(), "test-model")
-	_, err := exec.Execute(context.Background(), "", "general", "", nil)
+	_, err := exec.Execute(context.Background(), "", "general", "", nil, nil)
 
 	if err == nil {
 		t.Fatal("Execute() with empty task should return error")
@@ -304,7 +304,7 @@ func TestExecute_UnknownProfileDefaultsToGeneral(t *testing.T) {
 	}
 
 	exec := NewExecutor(slog.Default(), mock, nil, newTestRegistry(), "test-model")
-	result, err := exec.Execute(context.Background(), "Do something", "nonexistent_profile", "", nil)
+	result, err := exec.Execute(context.Background(), "Do something", "nonexistent_profile", "", nil, nil)
 
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
@@ -319,7 +319,7 @@ func TestExecute_ContextCancellation(t *testing.T) {
 	cancel() // Cancel immediately
 
 	exec := NewExecutor(slog.Default(), &mockLLMClient{}, nil, newTestRegistry(), "test-model")
-	_, err := exec.Execute(ctx, "Do something", "general", "", nil)
+	_, err := exec.Execute(ctx, "Do something", "general", "", nil, nil)
 
 	if err == nil {
 		t.Fatal("Execute() with cancelled context should return error")
@@ -363,7 +363,7 @@ func TestExecute_HAProfileExcludesNonHATools(t *testing.T) {
 	}
 
 	exec := NewExecutor(slog.Default(), mock, nil, newTestRegistry(), "test-model")
-	result, err := exec.Execute(context.Background(), "Search the web", "ha", "", nil)
+	result, err := exec.Execute(context.Background(), "Search the web", "ha", "", nil, nil)
 
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
@@ -521,7 +521,7 @@ func TestExecute_GeneralProfileSelectsLocalModel(t *testing.T) {
 	}
 
 	exec := NewExecutor(slog.Default(), mock, rtr, newTestRegistry(), "local-model")
-	result, err := exec.Execute(context.Background(), "search IRC archives for distributed.net history", "general", "", nil)
+	result, err := exec.Execute(context.Background(), "search IRC archives for distributed.net history", "general", "", nil, nil)
 
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
@@ -643,7 +643,7 @@ func TestExecute_WallClockExhausted(t *testing.T) {
 	// Override the general profile with a tiny MaxDuration.
 	exec.profiles["general"].MaxDuration = 30 * time.Millisecond
 
-	result, err := exec.Execute(context.Background(), "Slow task", "general", "", nil)
+	result, err := exec.Execute(context.Background(), "Slow task", "general", "", nil, nil)
 
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
@@ -721,7 +721,7 @@ func TestExecute_ContextDeadlineCancelsBlockingLLM(t *testing.T) {
 	exec.profiles["general"].MaxDuration = 100 * time.Millisecond
 
 	start := time.Now()
-	result, err := exec.Execute(context.Background(), "Blocking task", "general", "", nil)
+	result, err := exec.Execute(context.Background(), "Blocking task", "general", "", nil, nil)
 	elapsed := time.Since(start)
 
 	if err != nil {
@@ -775,7 +775,7 @@ func TestExecute_ExhaustReasonMaxIterations(t *testing.T) {
 
 	mock := &mockLLMClient{responses: responses}
 	exec := NewExecutor(slog.Default(), mock, nil, newTestRegistry(), "test-model")
-	result, err := exec.Execute(context.Background(), "Loop task", "general", "", nil)
+	result, err := exec.Execute(context.Background(), "Loop task", "general", "", nil, nil)
 
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
@@ -819,7 +819,7 @@ func TestExecute_ExhaustReasonTokenBudget(t *testing.T) {
 
 	mock := &mockLLMClient{responses: []*llm.ChatResponse{toolCallResp, forcedText}}
 	exec := NewExecutor(slog.Default(), mock, nil, newTestRegistry(), "test-model")
-	result, err := exec.Execute(context.Background(), "Expensive task", "general", "", nil)
+	result, err := exec.Execute(context.Background(), "Expensive task", "general", "", nil, nil)
 
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
@@ -879,7 +879,7 @@ func TestExecute_EmptyResultAfterToolCalls(t *testing.T) {
 	}
 
 	exec := NewExecutor(slog.Default(), mock, nil, newTestRegistry(), "test-model")
-	result, err := exec.Execute(context.Background(), "Check the office light", "general", "", nil)
+	result, err := exec.Execute(context.Background(), "Check the office light", "general", "", nil, nil)
 
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
@@ -913,7 +913,7 @@ func TestExecute_EmptyResultFirstIter(t *testing.T) {
 	}
 
 	exec := NewExecutor(slog.Default(), mock, nil, newTestRegistry(), "test-model")
-	result, err := exec.Execute(context.Background(), "Do something", "general", "", nil)
+	result, err := exec.Execute(context.Background(), "Do something", "general", "", nil, nil)
 
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
@@ -1070,7 +1070,7 @@ func TestExecute_ToolTimeoutRecovery(t *testing.T) {
 	exec.profiles["general"].MaxDuration = 5 * time.Second
 
 	start := time.Now()
-	result, err := exec.Execute(context.Background(), "Run the slow tool", "general", "", nil)
+	result, err := exec.Execute(context.Background(), "Run the slow tool", "general", "", nil, nil)
 	elapsed := time.Since(start)
 
 	if err != nil {
@@ -1180,7 +1180,7 @@ func TestExecute_NonCooperativeToolTimeout(t *testing.T) {
 	exec.profiles["general"].MaxDuration = 5 * time.Second
 
 	start := time.Now()
-	result, err := exec.Execute(context.Background(), "Run the hung tool", "general", "", nil)
+	result, err := exec.Execute(context.Background(), "Run the hung tool", "general", "", nil, nil)
 	elapsed := time.Since(start)
 
 	if err != nil {
@@ -1278,7 +1278,7 @@ func TestExecute_TagScoping(t *testing.T) {
 	exec := NewExecutor(slog.Default(), mock, nil, reg, "test-model")
 	exec.SetAlwaysActiveTags([]string{"memory"})
 
-	result, err := exec.Execute(context.Background(), "Search for something", "general", "", []string{"web"})
+	result, err := exec.Execute(context.Background(), "Search for something", "general", "", []string{"web"}, nil)
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
@@ -1328,7 +1328,7 @@ func TestExecute_TagScoping_NilPreservesProfile(t *testing.T) {
 	}
 
 	exec := NewExecutor(slog.Default(), mock, nil, newTestRegistry(), "test-model")
-	result, err := exec.Execute(context.Background(), "Check the light", "ha", "", nil)
+	result, err := exec.Execute(context.Background(), "Check the light", "ha", "", nil, nil)
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
@@ -1397,7 +1397,7 @@ func TestExecute_IllegalToolRecovery(t *testing.T) {
 
 	mock := &mockLLMClient{responses: []*llm.ChatResponse{illegalToolCallResp, recoveryTextResp}}
 	exec := NewExecutor(slog.Default(), mock, nil, newTestRegistry(), "test-model")
-	result, err := exec.Execute(context.Background(), "Do something illegal", "general", "", nil)
+	result, err := exec.Execute(context.Background(), "Do something illegal", "general", "", nil, nil)
 
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
@@ -1480,7 +1480,7 @@ func TestExecute_ExhaustReasonIllegalTool(t *testing.T) {
 
 	mock := &mockLLMClient{responses: []*llm.ChatResponse{illegalToolCallResp, secondIllegalResp, forcedTextResp}}
 	exec := NewExecutor(slog.Default(), mock, nil, newTestRegistry(), "test-model")
-	result, err := exec.Execute(context.Background(), "Do something illegal", "general", "", nil)
+	result, err := exec.Execute(context.Background(), "Do something illegal", "general", "", nil, nil)
 
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
@@ -1513,7 +1513,7 @@ func TestExecute_ForgeContextInSystemPrompt(t *testing.T) {
 	exec := NewExecutor(slog.Default(), mock, nil, newTestRegistry(), "test-model")
 	exec.SetForgeContext(forgeCtx)
 
-	_, err := exec.Execute(context.Background(), "Check forge", "general", "", nil)
+	_, err := exec.Execute(context.Background(), "Check forge", "general", "", nil, nil)
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}
@@ -1549,7 +1549,7 @@ func TestExecute_NoForgeContextWhenUnset(t *testing.T) {
 	exec := NewExecutor(slog.Default(), mock, nil, newTestRegistry(), "test-model")
 	// No SetForgeContext call.
 
-	_, err := exec.Execute(context.Background(), "Check something", "general", "", nil)
+	_, err := exec.Execute(context.Background(), "Check something", "general", "", nil, nil)
 	if err != nil {
 		t.Fatalf("Execute() error = %v", err)
 	}

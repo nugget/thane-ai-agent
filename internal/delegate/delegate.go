@@ -201,7 +201,7 @@ func (e *Executor) ProfileNames() []string {
 // only tools belonging to the given capability tags (plus any
 // always-active tags). When tags is nil, the profile's AllowedTools
 // controls tool selection (existing behavior).
-func (e *Executor) Execute(ctx context.Context, task, profileName, guidance string, tags []string) (delegateResult *Result, delegateErr error) {
+func (e *Executor) Execute(ctx context.Context, task, profileName, guidance string, tags []string, pathPrefixes map[string]string) (delegateResult *Result, delegateErr error) {
 	if task == "" {
 		return nil, fmt.Errorf("task is required")
 	}
@@ -302,6 +302,12 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 	if e.forgeContext != "" {
 		sb.WriteString("\n\n")
 		sb.WriteString(e.forgeContext)
+	}
+
+	// Inject path prefix documentation so the delegate knows the shortcuts.
+	if prefixPrompt := formatPrefixPrompt(pathPrefixes); prefixPrompt != "" {
+		sb.WriteString("\n\n")
+		sb.WriteString(prefixPrompt)
 	}
 
 	// Expand temp file labels so the delegate sees real paths.
@@ -725,6 +731,11 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 			if tc.Function.Arguments != nil {
 				argsBytes, _ := json.Marshal(tc.Function.Arguments)
 				argsJSON = string(argsBytes)
+			}
+
+			// Expand caller-defined path prefixes in file tool arguments.
+			if len(pathPrefixes) > 0 && fileTools[tc.Function.Name] {
+				argsJSON = expandPathPrefixes(argsJSON, pathPrefixes)
 			}
 
 			toolStart := time.Now()
