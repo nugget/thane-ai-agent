@@ -2451,9 +2451,11 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 			})
 		}
 
-		connectCtx, connectCancel := context.WithTimeout(ctx, 5*time.Second)
-		err = mqttPub.Connect(connectCtx)
-		connectCancel()
+		// Pass the long-lived server context as the lifecycle context
+		// for the MQTT ConnectionManager. A short-lived context here
+		// would kill the connection as soon as it expired (#572).
+		// The initial connection await has its own internal timeout.
+		err = mqttPub.Connect(ctx)
 		if err != nil {
 			logger.Error("mqtt publisher connection failed", "error", err)
 		} else {

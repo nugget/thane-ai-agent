@@ -140,9 +140,12 @@ func (p *Publisher) PublishDynamicState(ctx context.Context, entitySuffix, state
 // Connect establishes the MQTT broker connection, publishes discovery
 // configs, and configures subscriptions. It does not start the periodic
 // publish loop — use [Publisher.PublishStates] in a loop infrastructure
-// handler for that. Returns after the connection is established (or
-// after a 30-second timeout, in which case autopaho retries in the
-// background).
+// handler for that.
+//
+// ctx is the lifecycle context for the MQTT connection manager — it
+// must remain valid for as long as the connection should stay alive.
+// Do NOT pass a short-lived or timeout-bounded context here; the
+// initial connection await uses its own internal timeout.
 func (p *Publisher) Connect(ctx context.Context) error {
 	return p.connect(ctx)
 }
@@ -278,20 +281,22 @@ func (p *Publisher) Start(ctx context.Context) error {
 // message before closing the MQTT connection. The provided context
 // controls how long to wait for the publish and disconnect to complete.
 func (p *Publisher) Stop(ctx context.Context) error {
-	if p.cm == nil {
+	cm := p.getCM()
+	if cm == nil {
 		return nil
 	}
-	p.publishAvailability(ctx, p.cm, "offline")
-	return p.cm.Disconnect(ctx)
+	p.publishAvailability(ctx, cm, "offline")
+	return cm.Disconnect(ctx)
 }
 
 // AwaitConnection blocks until the MQTT broker connection is
 // established or ctx expires. Useful for connwatch health probes.
 func (p *Publisher) AwaitConnection(ctx context.Context) error {
-	if p.cm == nil {
+	cm := p.getCM()
+	if cm == nil {
 		return fmt.Errorf("mqtt publisher not started")
 	}
-	return p.cm.AwaitConnection(ctx)
+	return cm.AwaitConnection(ctx)
 }
 
 // getCM returns the connection manager under the mutex, safe for
@@ -544,7 +549,8 @@ func (p *Publisher) runLoop(ctx context.Context) {
 }
 
 func (p *Publisher) publishStates(ctx context.Context) {
-	if p.cm == nil {
+	cm := p.getCM()
+	if cm == nil {
 		return
 	}
 
@@ -565,7 +571,7 @@ func (p *Publisher) publishStates(ctx context.Context) {
 	}
 
 	for entity, value := range states {
-		if _, err := p.cm.Publish(ctx, &paho.Publish{
+		if _, err := cm.Publish(ctx, &paho.Publish{
 			Topic:   p.StateTopic(entity),
 			Payload: []byte(value),
 			QoS:     0,
