@@ -831,6 +831,10 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	loop = agent.NewLoop(logger, mem, compactor, rtr, ha, sched, llmClient, cfg.Models.Default, talentContent, personaContent, defaultContextWindow)
 	loop.SetTimezone(cfg.Timezone)
 	loop.SetDebugConfig(cfg.Debug)
+	if cfg.Models.RecoveryModel != "" {
+		loop.SetRecoveryModel(cfg.Models.RecoveryModel)
+		logger.Info("LLM timeout recovery enabled", "recovery_model", cfg.Models.RecoveryModel)
+	}
 	loop.SetArchiver(archiveAdapter)
 	if ha != nil {
 		loop.SetHAInject(ha)

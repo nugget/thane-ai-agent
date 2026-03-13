@@ -527,6 +527,12 @@ type ModelsConfig struct {
 	// when routing decisions are made by the model router.
 	LocalFirst bool `yaml:"local_first"`
 
+	// RecoveryModel is a fast, cheap model used to generate summaries
+	// when the primary model times out after completing tool calls.
+	// When empty, timeout recovery falls back to a static message
+	// listing the tools that were used.
+	RecoveryModel string `yaml:"recovery_model"`
+
 	// Available lists all models that Thane can route to. Each entry
 	// maps a model name to a provider and declares its capabilities.
 	Available []ModelConfig `yaml:"available"`
