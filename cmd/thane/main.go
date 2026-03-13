@@ -1601,14 +1601,15 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 			}
 
 			bridge := sigcli.NewBridge(sigcli.BridgeConfig{
-				Client:      signalClient,
-				Runner:      loop,
-				Logger:      logger,
-				RateLimit:   cfg.Signal.RateLimitPerMinute,
-				Routing:     cfg.Signal.Routing,
-				Rotator:     signalRotator,
-				IdleTimeout: idleTimeout,
-				Resolver:    &contactPhoneResolver{store: contactStore},
+				Client:        signalClient,
+				Runner:        loop,
+				Logger:        logger,
+				RateLimit:     cfg.Signal.RateLimitPerMinute,
+				HandleTimeout: cfg.Signal.HandleTimeout,
+				Routing:       cfg.Signal.Routing,
+				Rotator:       signalRotator,
+				IdleTimeout:   idleTimeout,
+				Resolver:      &contactPhoneResolver{store: contactStore},
 				Attachments: sigcli.AttachmentConfig{
 					SourceDir: cfg.Signal.AttachmentSourceDir,
 					DestDir:   cfg.Signal.AttachmentDir,
