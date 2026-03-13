@@ -35,6 +35,13 @@ func ToolDefinition() map[string]any {
 					"When provided, the delegate only sees tools from these tags " +
 					"(plus always-active tags). Omit to use the profile's default toolset.",
 			},
+			"path_prefixes": map[string]any{
+				"type":                 "object",
+				"additionalProperties": map[string]any{"type": "string"},
+				"description": "Map of short prefix names to full directory paths. " +
+					"The delegate can use 'prefix/rest' in file tool paths instead of the full path. " +
+					"Use this to pass pre-resolved paths so the delegate skips discovery.",
+			},
 		},
 		"required": []string{"task"},
 	}
@@ -69,7 +76,17 @@ func ToolHandler(exec *Executor) func(ctx context.Context, args map[string]any) 
 			}
 		}
 
-		result, err := exec.Execute(ctx, task, profileName, guidance, tags)
+		var pathPrefixes map[string]string
+		if rawPrefixes, ok := args["path_prefixes"].(map[string]any); ok {
+			pathPrefixes = make(map[string]string, len(rawPrefixes))
+			for k, v := range rawPrefixes {
+				if s, ok := v.(string); ok {
+					pathPrefixes[k] = s
+				}
+			}
+		}
+
+		result, err := exec.Execute(ctx, task, profileName, guidance, tags, pathPrefixes)
 		if err != nil {
 			return fmt.Sprintf("[Delegate error: profile=%s] %s", profileName, err.Error()), nil
 		}
