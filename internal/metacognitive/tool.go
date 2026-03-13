@@ -17,10 +17,9 @@ import (
 const minStateContentLen = 50
 
 // RegisterTools registers metacognitive-specific tools on the given
-// registry: set_next_sleep, update_metacognitive_state, and (when
-// egoFile is non-empty) append_ego_observation. The LLM calls these
-// during iterations to control sleep timing, persist its state file,
-// and contribute observations to ego.md.
+// registry: set_next_sleep and update_metacognitive_state. The LLM
+// calls these during iterations to control sleep timing and persist
+// its state file.
 //
 // stateFilePath is the resolved absolute path to the state file (either
 // inside the provenance store or the workspace, depending on config).
@@ -32,7 +31,7 @@ const minStateContentLen = 50
 // Tool handlers capture theLoop via closure to communicate with the
 // running loop goroutine (e.g., setting sleep durations, reading the
 // current conversation ID).
-func RegisterTools(registry *tools.Registry, theLoop *loop.Loop, cfg Config, stateFilePath, egoFile string, store ProvenanceWriter) {
+func RegisterTools(registry *tools.Registry, theLoop *loop.Loop, cfg Config, stateFilePath string, store ProvenanceWriter) {
 	statePath := stateFilePath
 
 	registry.Register(&tools.Tool{
@@ -170,81 +169,4 @@ func RegisterTools(registry *tools.Registry, theLoop *loop.Loop, cfg Config, sta
 			return fmt.Sprintf("State file updated (%d bytes) at %s.", len(fullContent), statePath), nil
 		},
 	})
-
-	// append_ego_observation: append-only shim for ego.md, available
-	// when egoFile is configured. The metacog loop excludes general
-	// file tools, so this provides controlled write access to
-	// core:ego.md without granting full file_write.
-	if egoFile != "" {
-		registry.Register(&tools.Tool{
-			Name: "append_ego_observation",
-			Description: "Append a metacognitive observation to core:ego.md. " +
-				"Use this when you notice significant behavioral patterns, breakthroughs, " +
-				"or persistent struggles that would matter to long-term self-understanding. " +
-				"Your observation is appended — existing content is never overwritten.",
-			Parameters: map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"observation": map[string]any{
-						"type":        "string",
-						"description": "The observation to append. Should focus on patterns revealing how the agent is evolving. Must be at least 50 characters.",
-					},
-				},
-				"required": []string{"observation"},
-			},
-			Handler: func(ctx context.Context, args map[string]any) (string, error) {
-				observation, _ := args["observation"].(string)
-				if len(observation) < minStateContentLen {
-					return "", fmt.Errorf("observation too short (%d chars, minimum %d)", len(observation), minStateContentLen)
-				}
-
-				convID := theLoop.CurrentConvID()
-
-				// Build the appended block with metadata.
-				block := fmt.Sprintf("\n\n### Metacognitive Observation\n"+
-					"<!-- metacognitive: iteration=%s observed=%s -->\n\n%s\n",
-					convID, time.Now().UTC().Format(time.RFC3339), observation)
-
-				if store != nil {
-					// Read existing from provenance store, append, write back.
-					existing, err := store.Read("ego.md")
-					if err != nil && !os.IsNotExist(err) {
-						return "", fmt.Errorf("read ego from provenance: %w", err)
-					}
-					fullContent := existing + block
-					if err := store.Write(ctx, "ego.md", fullContent, convID); err != nil {
-						return "", fmt.Errorf("write ego via provenance: %w", err)
-					}
-					logging.Logger(ctx).Info("ego observation committed to provenance",
-						"file", "ego.md",
-						"bytes", len(block),
-					)
-					return fmt.Sprintf("Observation committed to provenance ego.md (%d bytes).", len(block)), nil
-				}
-
-				// Fallback: direct file I/O.
-				existing, err := os.ReadFile(egoFile)
-				if err != nil && !os.IsNotExist(err) {
-					return "", fmt.Errorf("read ego file: %w", err)
-				}
-				fullContent := string(existing) + block
-
-				// Ensure parent directory exists.
-				if err := os.MkdirAll(filepath.Dir(egoFile), 0o755); err != nil {
-					return "", fmt.Errorf("create ego directory: %w", err)
-				}
-
-				if err := os.WriteFile(egoFile, []byte(fullContent), 0o644); err != nil {
-					return "", fmt.Errorf("write ego file: %w", err)
-				}
-
-				logging.Logger(ctx).Info("ego observation appended",
-					"path", egoFile,
-					"bytes", len(block),
-				)
-
-				return fmt.Sprintf("Observation appended to core:ego.md (%d bytes).", len(block)), nil
-			},
-		})
-	}
 }

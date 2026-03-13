@@ -47,11 +47,10 @@ To update it, call update_metacognitive_state with your complete new content.
   Deltas become meaningless on the next iteration.
 - Don't over-act. Quiet observation is a valid outcome. Not every iteration
   needs a message or anticipation.
-- You have exactly three special tools: update_metacognitive_state,
-  set_next_sleep, and append_ego_observation. All other tools are from
-  the standard agent toolkit (contacts, facts, anticipations,
-  notifications). File tools, exec, and session management tools are
-  NOT available.
+- You have exactly two special tools: update_metacognitive_state and
+  set_next_sleep. All other tools are from the standard agent toolkit
+  (contacts, facts, anticipations, notifications). File tools, exec,
+  and session management tools are NOT available.
 - If nothing interesting is happening, note it and sleep long.`
 
 // metacognitiveSupervisorAugmentation is appended for frontier/supervisor
@@ -77,15 +76,7 @@ frontier model. In addition to the normal assessment, critically evaluate:
   Is it still genuinely reasoning or just going through motions?
 
 Be honest. This is self-supervision — the point is to catch things the
-cheaper model's consistent blind spots miss.
-
-Your supervisory perspective provides unique insight into the agent's
-behavioral patterns and development. You observe from outside what the agent
-experiences from within. When you notice significant patterns, breakthroughs,
-or persistent struggles that would matter to long-term self-understanding,
-call append_ego_observation to contribute these insights to core:ego.md.
-Focus on patterns that reveal how the agent is evolving, not routine
-operational decisions.`
+cheaper model's consistent blind spots miss.`
 
 // MetacognitivePrompt returns the prompt for a metacognitive loop
 // iteration. When isSupervisor is true, additional self-review
