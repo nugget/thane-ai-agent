@@ -1367,6 +1367,9 @@ func (c *Config) applyDefaults() {
 	// (farewell message on next inbound). Inherit when omitted (nil) so
 	// users only need to set signal.session_idle_minutes for both to work.
 	// Explicit 0 disables the backstop without affecting the signal path.
+	if c.Signal.HandleTimeout == 0 {
+		c.Signal.HandleTimeout = 10 * time.Minute
+	}
 	if c.Archive.SessionIdleMinutes == nil && c.Signal.SessionIdleMinutes > 0 {
 		v := c.Signal.SessionIdleMinutes
 		c.Archive.SessionIdleMinutes = &v

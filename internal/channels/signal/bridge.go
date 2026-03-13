@@ -177,6 +177,7 @@ func NewBridge(cfg BridgeConfig) *Bridge {
 	if handleTimeout <= 0 {
 		handleTimeout = defaultHandleTimeout
 	}
+
 	return &Bridge{
 		client:          cfg.Client,
 		runner:          cfg.Runner,
