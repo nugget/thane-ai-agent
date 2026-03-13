@@ -1104,7 +1104,15 @@ type MediaConfig struct {
 
 	// CookiesFile is an optional path to a Netscape-format cookie file
 	// for accessing auth-required content (e.g., age-restricted videos).
+	// Mutually exclusive with CookiesFromBrowser.
 	CookiesFile string `yaml:"cookies_file"`
+
+	// CookiesFromBrowser extracts cookies directly from an installed
+	// browser, eliminating the need for manual cookie file export.
+	// Value is passed to yt-dlp's --cookies-from-browser flag.
+	// Examples: "chrome", "firefox", "chrome:Profile 1".
+	// Mutually exclusive with CookiesFile.
+	CookiesFromBrowser string `yaml:"cookies_from_browser"`
 
 	// SubtitleLanguage is the preferred subtitle language code.
 	// Default: "en".
@@ -1617,6 +1625,9 @@ func (c *Config) Validate() error {
 		if c.MQTT.Telemetry.Enabled && c.MQTT.Telemetry.Interval < 10 {
 			return fmt.Errorf("mqtt.telemetry.interval %d too low (minimum 10 seconds)", c.MQTT.Telemetry.Interval)
 		}
+	}
+	if c.Media.CookiesFile != "" && c.Media.CookiesFromBrowser != "" {
+		return fmt.Errorf("media: cookies_file and cookies_from_browser are mutually exclusive")
 	}
 	if err := c.validateSubscribe(); err != nil {
 		return err

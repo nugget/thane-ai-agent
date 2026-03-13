@@ -28,6 +28,11 @@ type Config struct {
 	// for accessing auth-required content.
 	CookiesFile string
 
+	// CookiesFromBrowser extracts cookies directly from an installed
+	// browser (e.g., "chrome", "firefox", "chrome:Profile 1").
+	// Passed to yt-dlp's --cookies-from-browser flag.
+	CookiesFromBrowser string
+
 	// SubtitleLanguage is the preferred subtitle language code (default "en").
 	SubtitleLanguage string
 
@@ -249,7 +254,9 @@ func (c *Client) runYtDlp(ctx context.Context, rawURL, language, tmpDir string) 
 		rawURL,
 	}
 
-	if c.cfg.CookiesFile != "" {
+	if c.cfg.CookiesFromBrowser != "" {
+		args = append([]string{"--cookies-from-browser", c.cfg.CookiesFromBrowser}, args...)
+	} else if c.cfg.CookiesFile != "" {
 		args = append([]string{"--cookies", c.cfg.CookiesFile}, args...)
 	}
 
