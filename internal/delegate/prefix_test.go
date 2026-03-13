@@ -2,6 +2,8 @@ package delegate
 
 import (
 	"encoding/json"
+	"fmt"
+	"os"
 	"strings"
 	"testing"
 )
@@ -252,11 +254,12 @@ func TestFormatPrefixPrompt(t *testing.T) {
 		}
 	})
 
-	t.Run("single prefix", func(t *testing.T) {
+	t.Run("nonexistent directory", func(t *testing.T) {
 		got := formatPrefixPrompt(map[string]string{
-			"docs": "~/Documents",
+			"docs": "/nonexistent/path/abc123",
 		})
-		want := "Path prefixes available:\n  docs/ → ~/Documents/\nUse these prefixes at the start of file tool paths instead of full paths."
+		// No listing section when directory doesn't exist.
+		want := "Path prefixes available:\n  docs/ → /nonexistent/path/abc123/\nUse these prefixes at the start of file tool paths instead of full paths."
 		if got != want {
 			t.Errorf("got:\n%s\nwant:\n%s", got, want)
 		}
@@ -264,8 +267,8 @@ func TestFormatPrefixPrompt(t *testing.T) {
 
 	t.Run("multiple sorted", func(t *testing.T) {
 		got := formatPrefixPrompt(map[string]string{
-			"z": "/z-path",
-			"a": "/a-path",
+			"z": "/nonexistent/z-path",
+			"a": "/nonexistent/a-path",
 		})
 		if got == "" {
 			t.Fatal("expected non-empty prompt")
@@ -281,13 +284,143 @@ func TestFormatPrefixPrompt(t *testing.T) {
 		}
 	})
 
-	t.Run("trailing slash stripped", func(t *testing.T) {
+	t.Run("trailing slash normalized", func(t *testing.T) {
+		// Input has trailing slash — output should have exactly one.
 		got := formatPrefixPrompt(map[string]string{
-			"docs": "~/Documents/",
+			"docs": "/nonexistent/Documents/",
 		})
-		want := "Path prefixes available:\n  docs/ → ~/Documents/\nUse these prefixes at the start of file tool paths instead of full paths."
+		want := "Path prefixes available:\n  docs/ → /nonexistent/Documents/\nUse these prefixes at the start of file tool paths instead of full paths."
 		if got != want {
 			t.Errorf("got:\n%s\nwant:\n%s", got, want)
 		}
 	})
+
+	t.Run("directory listing included", func(t *testing.T) {
+		dir := t.TempDir()
+		os.WriteFile(dir+"/alpha.md", []byte("a"), 0o644)
+		os.WriteFile(dir+"/beta.txt", []byte("b"), 0o644)
+		os.Mkdir(dir+"/subdir", 0o755)
+
+		got := formatPrefixPrompt(map[string]string{
+			"vault": dir,
+		})
+
+		// Should contain the mapping header.
+		if !strings.Contains(got, "vault/ → "+dir) {
+			t.Errorf("missing prefix mapping in output:\n%s", got)
+		}
+
+		// Should contain a listing section.
+		if !strings.Contains(got, "vault/ contents:") {
+			t.Errorf("missing contents section in output:\n%s", got)
+		}
+
+		// Entries should be listed.
+		if !strings.Contains(got, "  alpha.md") {
+			t.Errorf("missing alpha.md in listing:\n%s", got)
+		}
+		if !strings.Contains(got, "  beta.txt") {
+			t.Errorf("missing beta.txt in listing:\n%s", got)
+		}
+		// Directories get trailing slash.
+		if !strings.Contains(got, "  subdir/") {
+			t.Errorf("missing subdir/ in listing:\n%s", got)
+		}
+	})
+
+	t.Run("listing capped at max entries", func(t *testing.T) {
+		dir := t.TempDir()
+		for i := range maxPrefixEntries + 10 {
+			os.WriteFile(fmt.Sprintf("%s/file_%03d.txt", dir, i), []byte("x"), 0o644)
+		}
+
+		got := formatPrefixPrompt(map[string]string{
+			"big": dir,
+		})
+
+		if !strings.Contains(got, "... (list truncated") {
+			t.Errorf("expected truncation notice in output:\n%s", got)
+		}
+
+		// Count listed entries (lines starting with two spaces under
+		// the contents header, excluding the truncation line).
+		lines := strings.Split(got, "\n")
+		var entryCount int
+		inContents := false
+		for _, line := range lines {
+			if strings.HasSuffix(line, "contents:") {
+				inContents = true
+				continue
+			}
+			if inContents && strings.HasPrefix(line, "  ") {
+				if !strings.HasPrefix(line, "  ...") {
+					entryCount++
+				}
+			}
+		}
+		if entryCount != maxPrefixEntries {
+			t.Errorf("expected %d entries, got %d", maxPrefixEntries, entryCount)
+		}
+	})
+}
+
+func TestListPrefixDir(t *testing.T) {
+	t.Run("nonexistent", func(t *testing.T) {
+		got := listPrefixDir("/nonexistent/path/abc123")
+		if got != nil {
+			t.Errorf("expected nil for nonexistent dir, got %v", got)
+		}
+	})
+
+	t.Run("empty dir", func(t *testing.T) {
+		dir := t.TempDir()
+		got := listPrefixDir(dir)
+		if len(got) != 0 {
+			t.Errorf("expected empty listing, got %v", got)
+		}
+	})
+
+	t.Run("files and dirs", func(t *testing.T) {
+		dir := t.TempDir()
+		os.WriteFile(dir+"/readme.md", []byte("hi"), 0o644)
+		os.Mkdir(dir+"/sub", 0o755)
+
+		got := listPrefixDir(dir)
+		if len(got) != 2 {
+			t.Fatalf("expected 2 entries, got %v", got)
+		}
+		// os.ReadDir returns sorted entries.
+		if got[0] != "readme.md" {
+			t.Errorf("got[0] = %q, want readme.md", got[0])
+		}
+		if got[1] != "sub/" {
+			t.Errorf("got[1] = %q, want sub/", got[1])
+		}
+	})
+}
+
+func TestExpandHome(t *testing.T) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skip("cannot determine home directory")
+	}
+
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"~/foo", home + "/foo"},
+		{"/absolute/path", "/absolute/path"},
+		{"relative/path", "relative/path"},
+		{"~notuser/foo", "~notuser/foo"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := expandHome(tt.input)
+			if got != tt.want {
+				t.Errorf("expandHome(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
 }

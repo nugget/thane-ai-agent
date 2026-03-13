@@ -3,6 +3,7 @@ package delegate
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 )
@@ -129,9 +130,13 @@ func expandPrefix(path string, prefixes map[string]string) string {
 	return path
 }
 
+// maxPrefixEntries caps the number of directory entries listed per
+// prefix to avoid blowing up the system prompt.
+const maxPrefixEntries = 50
+
 // formatPrefixPrompt returns a system prompt block documenting the
-// available path prefixes. Returns an empty string if no prefixes are
-// defined.
+// available path prefixes and a shallow listing of each directory's
+// contents. Returns an empty string if no prefixes are defined.
 func formatPrefixPrompt(prefixes map[string]string) string {
 	if len(prefixes) == 0 {
 		return ""
@@ -147,8 +152,69 @@ func formatPrefixPrompt(prefixes map[string]string) string {
 	var sb strings.Builder
 	sb.WriteString("Path prefixes available:\n")
 	for _, name := range names {
-		sb.WriteString(fmt.Sprintf("  %s/ → %s/\n", name, strings.TrimRight(prefixes[name], "/")))
+		dir := strings.TrimRight(prefixes[name], "/")
+		sb.WriteString(fmt.Sprintf("  %s/ → %s/\n", name, dir))
 	}
-	sb.WriteString("Use these prefixes at the start of file tool paths instead of full paths.")
-	return sb.String()
+	sb.WriteString("Use these prefixes at the start of file tool paths instead of full paths.\n")
+
+	// Append a shallow directory listing for each prefix so the
+	// delegate can reference files immediately without calling
+	// file_list first.
+	for _, name := range names {
+		entries := listPrefixDir(prefixes[name])
+		if len(entries) == 0 {
+			continue
+		}
+		sb.WriteString(fmt.Sprintf("\n%s/ contents:\n", name))
+		for _, e := range entries {
+			sb.WriteString(fmt.Sprintf("  %s\n", e))
+		}
+	}
+
+	return strings.TrimRight(sb.String(), "\n")
+}
+
+// listPrefixDir returns a shallow listing of the directory at path.
+// Directories get a trailing "/". The result is capped at
+// [maxPrefixEntries]; when truncated a summary line is appended.
+// Returns nil if the path cannot be read.
+func listPrefixDir(path string) []string {
+	path = expandHome(path)
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return nil
+	}
+
+	truncated := false
+	if len(entries) > maxPrefixEntries {
+		truncated = true
+		entries = entries[:maxPrefixEntries]
+	}
+
+	result := make([]string, 0, len(entries)+1)
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() {
+			name += "/"
+		}
+		result = append(result, name)
+	}
+
+	if truncated {
+		result = append(result, fmt.Sprintf("... (list truncated at %d entries)", maxPrefixEntries))
+	}
+
+	return result
+}
+
+// expandHome replaces a leading "~/" with the user's home directory.
+func expandHome(path string) string {
+	if !strings.HasPrefix(path, "~/") {
+		return path
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return path
+	}
+	return home + path[1:]
 }
