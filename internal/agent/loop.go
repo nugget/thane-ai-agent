@@ -11,6 +11,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -176,6 +177,7 @@ type Loop struct {
 	tools             *tools.Registry
 	model             string
 	recoveryModel     string            // Fast model for timeout recovery summaries (empty = disabled)
+	retryBaseDelay    time.Duration     // Base backoff delay between timeout retries (0 = use default)
 	talents           string            // Combined talent content for system prompt
 	persona           string            // Persona content (replaces base system prompt if set)
 	egoFile           string            // Path to ego.md — read fresh each turn for system prompt
@@ -301,6 +303,8 @@ func (l *Loop) SetOrchestratorTools(names []string) {
 // SetRecoveryModel configures a fast, cheap model used to generate
 // summaries when the primary model times out after completing tool
 // calls. When empty, timeout recovery falls back to a static message.
+// Only wired in the serve path — CLI one-shot requests don't need
+// timeout recovery because they have no multi-turn tool loops.
 func (l *Loop) SetRecoveryModel(model string) {
 	l.recoveryModel = model
 }
@@ -1299,8 +1303,12 @@ iterLoop:
 			if isTimeout(err) {
 				// --- Timeout recovery: retry same model, then downshift ---
 				recovered := false
+				baseDelay := l.retryBaseDelay
+				if baseDelay == 0 {
+					baseDelay = timeoutRetryBaseDelay
+				}
 				for retry := 1; retry <= timeoutRetryLimit; retry++ {
-					backoff := timeoutRetryBaseDelay * time.Duration(1<<(retry-1))
+					backoff := baseDelay * time.Duration(1<<(retry-1))
 					iterLog.Warn("LLM timeout, retrying same model",
 						"retry", retry,
 						"backoff", backoff.Round(time.Second),
@@ -1353,7 +1361,7 @@ iterLoop:
 						iterLog.Info("timeout recovery successful", "recovery_model", l.recoveryModel)
 						content := llmResp.Message.Content
 						if content == "" {
-							content = "The request timed out after completing tool calls. Please check the results."
+							content = prompts.TimeoutRecoveryEmpty
 						}
 
 						totalInputTokens += llmResp.InputTokens
@@ -1982,12 +1990,13 @@ const (
 
 // isTimeout reports whether err is a timeout or deadline-exceeded error.
 // It checks for context.DeadlineExceeded and common provider-level
-// timeout indicators (Anthropic overload, HTTP 529).
+// timeout indicators (Anthropic overload, HTTP 529). String matching
+// is case-insensitive to handle varied provider error formats.
 func isTimeout(err error) bool {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return true
 	}
-	msg := err.Error()
+	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "timeout") ||
 		strings.Contains(msg, "overloaded") ||
 		strings.Contains(msg, "529")
@@ -2010,17 +2019,21 @@ func buildRecoveryPrompt(messages []llm.Message, toolsUsed map[string]int) []llm
 		if strings.HasPrefix(preview, "Error:") {
 			status = "error"
 		}
-		if len(preview) > maxToolResultPreview {
-			preview = preview[:maxToolResultPreview] + "..."
+		if runes := []rune(preview); len(runes) > maxToolResultPreview {
+			preview = string(runes[:maxToolResultPreview]) + "..."
 		}
-		// Use ToolCallID as a rough identifier; if empty, skip.
 		sb.WriteString(fmt.Sprintf("- [%s] %s\n", status, strings.TrimSpace(preview)))
 	}
 
 	sb.WriteString("\nTool call counts: ")
-	parts := make([]string, 0, len(toolsUsed))
-	for name, count := range toolsUsed {
-		parts = append(parts, fmt.Sprintf("%s ×%d", name, count))
+	names := make([]string, 0, len(toolsUsed))
+	for name := range toolsUsed {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	parts := make([]string, 0, len(names))
+	for _, name := range names {
+		parts = append(parts, fmt.Sprintf("%s ×%d", name, toolsUsed[name]))
 	}
 	sb.WriteString(strings.Join(parts, ", "))
 	sb.WriteString("\n\nSummarize what was completed and what may remain undone. Be concise.")
@@ -2028,7 +2041,7 @@ func buildRecoveryPrompt(messages []llm.Message, toolsUsed map[string]int) []llm
 	return []llm.Message{
 		{
 			Role:    "system",
-			Content: "You are summarizing work completed by a previous assistant that timed out before it could respond. Provide a brief, helpful summary to the user.",
+			Content: prompts.TimeoutRecoverySystem,
 		},
 		{
 			Role:    "user",
@@ -2041,18 +2054,19 @@ func buildRecoveryPrompt(messages []llm.Message, toolsUsed map[string]int) []llm
 // recovery model fails. It lists the tools that were used so the user
 // has some visibility into what happened.
 func staticRecoveryResponse(toolsUsed map[string]int, model string, inputTokens, outputTokens int, sessionID, requestID string) *Response {
-	parts := make([]string, 0, len(toolsUsed))
-	for name, count := range toolsUsed {
-		parts = append(parts, fmt.Sprintf("%s ×%d", name, count))
+	names := make([]string, 0, len(toolsUsed))
+	for name := range toolsUsed {
+		names = append(names, name)
 	}
+	sort.Strings(names)
+	parts := make([]string, 0, len(names))
 	total := 0
-	for _, c := range toolsUsed {
-		total += c
+	for _, name := range names {
+		count := toolsUsed[name]
+		parts = append(parts, fmt.Sprintf("%s ×%d", name, count))
+		total += count
 	}
-	content := fmt.Sprintf(
-		"I completed %d tool call(s) (%s) but the request timed out before I could compose a response. Please check the results or try again.",
-		total, strings.Join(parts, ", "),
-	)
+	content := fmt.Sprintf(prompts.TimeoutRecoveryFallback, total, strings.Join(parts, ", "))
 	return &Response{
 		Content:      content,
 		Model:        model,

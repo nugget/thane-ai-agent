@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/llm"
 )
@@ -118,6 +119,12 @@ func TestStaticRecoveryResponse(t *testing.T) {
 	}
 	if !strings.Contains(resp.Content, "file_write") {
 		t.Errorf("content should mention file_write, got: %s", resp.Content)
+	}
+	// Tool names should be sorted alphabetically.
+	editIdx := strings.Index(resp.Content, "file_edit")
+	writeIdx := strings.Index(resp.Content, "file_write")
+	if editIdx > writeIdx {
+		t.Errorf("tool names should be sorted: file_edit before file_write, got: %s", resp.Content)
 	}
 	if resp.Model != "test-model" {
 		t.Errorf("Model = %q, want test-model", resp.Model)
@@ -355,9 +362,11 @@ func TestTimeoutRecovery_StaticFallbackWhenNoRecoveryModel(t *testing.T) {
 	}
 }
 
-// buildTestLoopWithLLM creates a test Loop with a custom LLM client.
+// buildTestLoopWithLLM creates a test Loop with a custom LLM client
+// and a near-zero retry delay so tests don't block on real backoff.
 func buildTestLoopWithLLM(client llm.Client, extraNames []string) *Loop {
 	loop := buildTestLoop(&mockLLM{}, extraNames)
 	loop.llm = client
+	loop.retryBaseDelay = 1 * time.Millisecond // fast retries in tests
 	return loop
 }
