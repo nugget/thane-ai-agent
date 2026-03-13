@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -241,6 +242,8 @@ func (c *Client) GetTranscript(ctx context.Context, rawURL, language, focus stri
 
 // runYtDlp executes yt-dlp and returns parsed metadata.
 func (c *Client) runYtDlp(ctx context.Context, rawURL, language, tmpDir string) (*ytdlpJSON, error) {
+	usingCookies := c.cfg.CookiesFromBrowser != "" || c.cfg.CookiesFile != ""
+
 	args := []string{
 		"--write-sub",
 		"--write-auto-sub",
@@ -249,9 +252,15 @@ func (c *Client) runYtDlp(ctx context.Context, rawURL, language, tmpDir string) 
 		"--convert-subs", "vtt",
 		"--skip-download",
 		"--print-json",
-		"--no-warnings",
 		"-o", filepath.Join(tmpDir, "%(id)s"),
 		rawURL,
+	}
+
+	// When cookies are configured, omit --no-warnings so cookie
+	// extraction failures surface on stderr. Otherwise suppress
+	// warnings to keep output clean.
+	if !usingCookies {
+		args = append(args, "--no-warnings")
 	}
 
 	if c.cfg.CookiesFromBrowser != "" {
@@ -273,10 +282,20 @@ func (c *Client) runYtDlp(ctx context.Context, rawURL, language, tmpDir string) 
 
 	if err := cmd.Run(); err != nil {
 		errOutput := stderr.String()
+		// Check cookie status even on failure — the failure may be
+		// caused by a cookie problem.
+		if usingCookies {
+			c.checkCookieStatus(errOutput)
+		}
 		if len(errOutput) > 500 {
 			errOutput = errOutput[:500]
 		}
 		return nil, fmt.Errorf("%w: %s", err, errOutput)
+	}
+
+	// Surface cookie extraction health after every successful run.
+	if usingCookies {
+		c.checkCookieStatus(stderr.String())
 	}
 
 	var meta ytdlpJSON
@@ -285,6 +304,65 @@ func (c *Client) runYtDlp(ctx context.Context, rawURL, language, tmpDir string) 
 	}
 
 	return &meta, nil
+}
+
+// cookieExtractedRe matches yt-dlp's cookie extraction summary line:
+//
+//	"Extracted 87 cookies from chrome"
+//	"Extracted 0 cookies from chrome (87 could not be decrypted)"
+var cookieExtractedRe = regexp.MustCompile(`Extracted (\d+) cookies from (\S+)(?:\s+\((\d+) could not be decrypted\))?`)
+
+// cookieDecryptFailRe matches individual decryption failure warnings.
+var cookieDecryptFailRe = regexp.MustCompile(`(?i)failed to decrypt cookie`)
+
+// checkCookieStatus scans yt-dlp stderr output for cookie extraction
+// messages and logs the results at appropriate severity levels.
+//
+// Healthy: "Extracted 87 cookies from chrome" → Info with count.
+// Degraded: "Extracted 50 cookies from chrome (37 could not be decrypted)" → Warn.
+// Failed: "Extracted 0 cookies" or no extraction line at all → Error.
+func (c *Client) checkCookieStatus(stderrOutput string) {
+	m := cookieExtractedRe.FindStringSubmatch(stderrOutput)
+	if m == nil {
+		// No extraction summary found — cookie loading likely failed
+		// entirely before reaching the extraction phase.
+		c.logger.Error("cookie extraction produced no output — cookies may not have loaded",
+			"cookies_from_browser", c.cfg.CookiesFromBrowser,
+			"cookies_file", c.cfg.CookiesFile,
+		)
+		return
+	}
+
+	count, _ := strconv.Atoi(m[1])
+	browser := m[2]
+	var failedCount int
+	if m[3] != "" {
+		failedCount, _ = strconv.Atoi(m[3])
+	}
+
+	// Also count individual decryption warning lines for extra signal.
+	decryptWarnings := len(cookieDecryptFailRe.FindAllString(stderrOutput, -1))
+
+	switch {
+	case count == 0:
+		c.logger.Error("cookie extraction returned 0 cookies — authentication will fail",
+			"browser", browser,
+			"failed_decrypt", failedCount,
+			"decrypt_warnings", decryptWarnings,
+		)
+	case failedCount > 0:
+		c.logger.Warn("cookie extraction partially degraded — some cookies could not be decrypted",
+			"browser", browser,
+			"extracted", count,
+			"failed_decrypt", failedCount,
+			"decrypt_warnings", decryptWarnings,
+		)
+	default:
+		c.logger.Info("cookie extraction healthy",
+			"browser", browser,
+			"extracted", count,
+		)
+	}
 }
 
 // findAndCleanSubtitles looks for VTT subtitle files in the temp directory,
