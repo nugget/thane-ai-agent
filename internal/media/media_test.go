@@ -376,6 +376,19 @@ func TestCookieExtractedRegex(t *testing.T) {
 			wantBrowse: "firefox",
 		},
 		{
+			line:       "Extracted 42 cookies from chrome:Profile 1",
+			wantMatch:  true,
+			wantCount:  "42",
+			wantBrowse: "chrome:Profile 1",
+		},
+		{
+			line:       "Extracted 10 cookies from chrome:Profile 1 (5 could not be decrypted)",
+			wantMatch:  true,
+			wantCount:  "10",
+			wantBrowse: "chrome:Profile 1",
+			wantFailed: "5",
+		},
+		{
 			line:      "no match here",
 			wantMatch: false,
 		},
@@ -411,7 +424,9 @@ type captureHandler struct {
 
 func (h *captureHandler) Enabled(_ context.Context, _ slog.Level) bool { return true }
 func (h *captureHandler) Handle(_ context.Context, r slog.Record) error {
-	*h.records = append(*h.records, r)
+	// Clone the record so its internal attribute storage isn't reused
+	// by subsequent calls (per slog's Handler contract).
+	*h.records = append(*h.records, r.Clone())
 	return nil
 }
 func (h *captureHandler) WithAttrs(_ []slog.Attr) slog.Handler { return h }

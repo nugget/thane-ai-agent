@@ -242,8 +242,10 @@ func (c *Client) GetTranscript(ctx context.Context, rawURL, language, focus stri
 
 // runYtDlp executes yt-dlp and returns parsed metadata.
 func (c *Client) runYtDlp(ctx context.Context, rawURL, language, tmpDir string) (*ytdlpJSON, error) {
-	usingCookies := c.cfg.CookiesFromBrowser != "" || c.cfg.CookiesFile != ""
+	browserCookies := c.cfg.CookiesFromBrowser != ""
 
+	// Build flags first, URL last — yt-dlp treats positional args after
+	// the URL as additional URLs, so flags must precede it.
 	args := []string{
 		"--write-sub",
 		"--write-auto-sub",
@@ -253,21 +255,23 @@ func (c *Client) runYtDlp(ctx context.Context, rawURL, language, tmpDir string) 
 		"--skip-download",
 		"--print-json",
 		"-o", filepath.Join(tmpDir, "%(id)s"),
-		rawURL,
 	}
 
-	// When cookies are configured, omit --no-warnings so cookie
-	// extraction failures surface on stderr. Otherwise suppress
+	// When browser cookies are configured, omit --no-warnings so
+	// cookie extraction failures surface on stderr. Otherwise suppress
 	// warnings to keep output clean.
-	if !usingCookies {
+	if !browserCookies {
 		args = append(args, "--no-warnings")
 	}
 
-	if c.cfg.CookiesFromBrowser != "" {
-		args = append([]string{"--cookies-from-browser", c.cfg.CookiesFromBrowser}, args...)
+	if browserCookies {
+		args = append(args, "--cookies-from-browser", c.cfg.CookiesFromBrowser)
 	} else if c.cfg.CookiesFile != "" {
-		args = append([]string{"--cookies", c.cfg.CookiesFile}, args...)
+		args = append(args, "--cookies", c.cfg.CookiesFile)
 	}
+
+	// URL must come last.
+	args = append(args, rawURL)
 
 	c.logger.Info("running yt-dlp",
 		"url", rawURL,
@@ -284,7 +288,7 @@ func (c *Client) runYtDlp(ctx context.Context, rawURL, language, tmpDir string) 
 		errOutput := stderr.String()
 		// Check cookie status even on failure — the failure may be
 		// caused by a cookie problem.
-		if usingCookies {
+		if browserCookies {
 			c.checkCookieStatus(errOutput)
 		}
 		if len(errOutput) > 500 {
@@ -294,7 +298,9 @@ func (c *Client) runYtDlp(ctx context.Context, rawURL, language, tmpDir string) 
 	}
 
 	// Surface cookie extraction health after every successful run.
-	if usingCookies {
+	// Only relevant for --cookies-from-browser; --cookies (file) does
+	// not produce extraction summary lines.
+	if browserCookies {
 		c.checkCookieStatus(stderr.String())
 	}
 
@@ -310,7 +316,11 @@ func (c *Client) runYtDlp(ctx context.Context, rawURL, language, tmpDir string) 
 //
 //	"Extracted 87 cookies from chrome"
 //	"Extracted 0 cookies from chrome (87 could not be decrypted)"
-var cookieExtractedRe = regexp.MustCompile(`Extracted (\d+) cookies from (\S+)(?:\s+\((\d+) could not be decrypted\))?`)
+//	"Extracted 42 cookies from chrome:Profile 1"
+//
+// The browser capture uses (.+?) to handle names with spaces or colons
+// (e.g. "chrome:Profile 1"), stopping at the optional failure trailer.
+var cookieExtractedRe = regexp.MustCompile(`(?m)Extracted (\d+) cookies from (.+?)(?:\s+\((\d+) could not be decrypted\))?$`)
 
 // cookieDecryptFailRe matches individual decryption failure warnings.
 var cookieDecryptFailRe = regexp.MustCompile(`(?i)failed to decrypt cookie`)
