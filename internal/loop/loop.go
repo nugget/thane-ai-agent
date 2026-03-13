@@ -414,7 +414,7 @@ func (l *Loop) run(ctx context.Context) {
 	// Initial state depends on whether the loop waits for events or
 	// sleeps on a timer. WaitFunc loops enter StateWaiting immediately
 	// (they block at the top of the loop); timer loops enter
-	// StateSleeping (they process first, then sleep).
+	// StateSleeping (they sleep on startup, then process, then sleep).
 	if l.config.WaitFunc != nil {
 		l.setState(StateWaiting)
 	} else {
@@ -446,6 +446,38 @@ func (l *Loop) run(ctx context.Context) {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, l.config.MaxDuration)
 		defer cancel()
+	}
+
+	// --- INITIAL SLEEP (timer-driven loops only) ---
+	// On fresh startup, timer-driven loops sleep before their first
+	// iteration instead of firing immediately. The delay is jittered
+	// from SleepDefault to stagger loop starts and avoid a thundering
+	// herd of simultaneous iterations after a restart.
+	if l.config.WaitFunc == nil {
+		initialSleep := l.applyJitter(l.config.SleepDefault)
+		initialSleep = l.clamp(initialSleep)
+
+		l.publishEvent(events.Event{
+			Timestamp: time.Now(),
+			Source:    events.SourceLoop,
+			Kind:      events.KindLoopSleepStart,
+			Data: map[string]any{
+				"loop_id":        l.id,
+				"loop_name":      l.config.Name,
+				"sleep_duration": initialSleep.String(),
+				"initial":        true,
+			},
+		})
+
+		logger.Info("loop initial sleep before first iteration",
+			"duration", initialSleep.Round(time.Second),
+		)
+
+		if !sleepCtx(ctx, initialSleep) {
+			logger.Info("loop stopped during initial sleep")
+			l.emitStopped()
+			return
+		}
 	}
 
 	for {
@@ -818,6 +850,12 @@ func (l *Loop) run(ctx context.Context) {
 		}
 	}
 
+	l.emitStopped()
+}
+
+// emitStopped transitions the loop to StateStopped and publishes a
+// KindLoopStopped event. It is called from every exit path in run().
+func (l *Loop) emitStopped() {
 	l.setState(StateStopped)
 	l.publishEvent(events.Event{
 		Timestamp: time.Now(),

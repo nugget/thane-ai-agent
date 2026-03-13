@@ -1816,3 +1816,193 @@ func TestLLMContextInStatus(t *testing.T) {
 		t.Errorf("LLMContext should be nil after iteration, got %v", status.LLMContext)
 	}
 }
+
+// --- Initial sleep tests ---
+
+func TestTimerLoopInitialSleep(t *testing.T) {
+	t.Parallel()
+
+	// Use a SleepDefault long enough to measure but short enough for
+	// a fast test. Zero jitter so the initial sleep is deterministic.
+	const initialDelay = 50 * time.Millisecond
+
+	var firstCallAt time.Time
+	var mu sync.Mutex
+
+	l, err := New(Config{
+		Name:         "initial-sleep",
+		SleepMin:     1 * time.Millisecond,
+		SleepMax:     100 * time.Millisecond,
+		SleepDefault: initialDelay,
+		Jitter:       Float64Ptr(0),
+		MaxIter:      1,
+		Handler: func(_ context.Context, _ any) error {
+			mu.Lock()
+			firstCallAt = time.Now()
+			mu.Unlock()
+			return nil
+		},
+	}, Deps{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	startedAt := time.Now()
+	_ = l.Start(context.Background())
+	<-l.Done()
+
+	mu.Lock()
+	elapsed := firstCallAt.Sub(startedAt)
+	mu.Unlock()
+
+	// The first iteration should not fire until after the initial
+	// sleep. Allow some slack for scheduling but it should be at
+	// least 80% of the configured delay.
+	minExpected := initialDelay * 80 / 100
+	if elapsed < minExpected {
+		t.Errorf("first iteration fired after %v, want at least %v (initial sleep = %v)",
+			elapsed, minExpected, initialDelay)
+	}
+}
+
+func TestTimerLoopInitialSleep_Cancelled(t *testing.T) {
+	t.Parallel()
+
+	// Verify the loop stops cleanly if context is cancelled during
+	// initial sleep (no iteration should run).
+	var calls atomic.Int32
+
+	l, err := New(Config{
+		Name:         "initial-cancel",
+		SleepMin:     1 * time.Second,
+		SleepMax:     5 * time.Second,
+		SleepDefault: 5 * time.Second,
+		Jitter:       Float64Ptr(0),
+		Handler: func(_ context.Context, _ any) error {
+			calls.Add(1)
+			return nil
+		},
+	}, Deps{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	_ = l.Start(ctx)
+
+	// Cancel quickly — before initial sleep finishes.
+	time.Sleep(10 * time.Millisecond)
+	cancel()
+
+	select {
+	case <-l.Done():
+	case <-time.After(2 * time.Second):
+		t.Fatal("loop did not stop after context cancellation during initial sleep")
+	}
+
+	if calls.Load() != 0 {
+		t.Errorf("handler was called %d times, want 0 (cancelled during initial sleep)", calls.Load())
+	}
+
+	status := l.Status()
+	if status.State != StateStopped {
+		t.Errorf("state = %v, want Stopped", status.State)
+	}
+}
+
+func TestTimerLoopInitialSleep_PublishesEvent(t *testing.T) {
+	t.Parallel()
+
+	bus := events.New()
+	sub := bus.Subscribe(16)
+	defer bus.Unsubscribe(sub)
+
+	l, err := New(Config{
+		Name:         "initial-event",
+		SleepMin:     1 * time.Millisecond,
+		SleepMax:     10 * time.Millisecond,
+		SleepDefault: 5 * time.Millisecond,
+		Jitter:       Float64Ptr(0),
+		MaxIter:      1,
+		Handler: func(_ context.Context, _ any) error {
+			return nil
+		},
+	}, Deps{EventBus: bus})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	_ = l.Start(context.Background())
+	<-l.Done()
+
+	// Collect events. The initial sleep should produce a sleep_start
+	// event with initial=true.
+	var foundInitial bool
+	timeout := time.After(1 * time.Second)
+	for !foundInitial {
+		select {
+		case ev := <-sub:
+			if ev.Kind == events.KindLoopSleepStart {
+				if initial, ok := ev.Data["initial"].(bool); ok && initial {
+					foundInitial = true
+				}
+			}
+		case <-timeout:
+			t.Fatal("timed out waiting for initial sleep event")
+		}
+	}
+}
+
+func TestWaitFuncLoopNoInitialSleep(t *testing.T) {
+	t.Parallel()
+
+	// Event-driven loops should NOT have initial sleep — they block
+	// on WaitFunc immediately.
+	var firstCallAt time.Time
+	var mu sync.Mutex
+
+	eventCh := make(chan struct{}, 1)
+	eventCh <- struct{}{} // Pre-load one event so it fires immediately.
+
+	l, err := New(Config{
+		Name:         "waitfunc-no-initial",
+		SleepMin:     1 * time.Millisecond,
+		SleepMax:     100 * time.Millisecond,
+		SleepDefault: 100 * time.Millisecond,
+		MaxIter:      1,
+		WaitFunc: func(ctx context.Context) (any, error) {
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-eventCh:
+				return "event", nil
+			}
+		},
+		Handler: func(_ context.Context, _ any) error {
+			mu.Lock()
+			firstCallAt = time.Now()
+			mu.Unlock()
+			return nil
+		},
+	}, Deps{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	startedAt := time.Now()
+	_ = l.Start(context.Background())
+	<-l.Done()
+
+	mu.Lock()
+	elapsed := firstCallAt.Sub(startedAt)
+	mu.Unlock()
+
+	// Event-driven loop should fire quickly — well under SleepDefault.
+	// Use a fraction of SleepDefault rather than a hard-coded bound
+	// so the assertion stays meaningful under scheduler load.
+	maxElapsed := 100 * time.Millisecond / 2 // 50% of SleepDefault
+	if elapsed > maxElapsed {
+		t.Errorf("event-driven loop took %v to first iteration, want < %v (SleepDefault = %v)",
+			elapsed, maxElapsed, 100*time.Millisecond)
+	}
+}

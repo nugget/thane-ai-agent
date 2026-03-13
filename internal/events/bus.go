@@ -103,7 +103,8 @@ const (
 	// Data: loop_id, loop_name, model, input_tokens, output_tokens, elapsed_ms.
 	KindLoopIterationComplete = "loop_iteration_complete"
 	// KindLoopSleepStart signals a loop has entered its sleep phase.
-	// Data: loop_id, loop_name, sleep_duration.
+	// Data: loop_id, loop_name, sleep_duration, initial (bool, true
+	// only for the pre-first-iteration startup sleep).
 	KindLoopSleepStart = "loop_sleep_start"
 	// KindLoopWaitStart signals a loop has entered its wait phase,
 	// blocking on a WaitFunc for an external event.
