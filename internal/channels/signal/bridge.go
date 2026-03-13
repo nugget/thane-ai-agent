@@ -57,9 +57,10 @@ type ContactResolver interface {
 	ResolvePhone(phone string) (name string, trustZone string, ok bool)
 }
 
-// handleTimeout bounds how long a single inbound message may be
-// processed (agent loop + response send).
-const handleTimeout = 5 * time.Minute
+// defaultHandleTimeout bounds how long a single inbound message may be
+// processed (agent loop + response send) when no explicit timeout is
+// configured.
+const defaultHandleTimeout = 10 * time.Minute
 
 // rateWindow is the sliding window for per-sender rate limiting.
 const rateWindow = time.Minute
@@ -120,6 +121,7 @@ type BridgeConfig struct {
 	Runner          AgentRunner
 	Logger          *slog.Logger
 	RateLimit       int                        // per sender per minute; 0 = unlimited
+	HandleTimeout   time.Duration              // per-message processing timeout; 0 = defaultHandleTimeout
 	Routing         config.SignalRoutingConfig // model selection and routing hints
 	Rotator         SessionRotator             // nil disables idle session rotation
 	IdleTimeout     time.Duration              // 0 disables idle session rotation
@@ -138,6 +140,7 @@ type Bridge struct {
 	runner          AgentRunner
 	logger          *slog.Logger
 	rateLimit       int
+	handleTimeout   time.Duration
 	routing         config.SignalRoutingConfig
 	rotator         SessionRotator
 	idleTimeout     time.Duration
@@ -170,11 +173,16 @@ func NewBridge(cfg BridgeConfig) *Bridge {
 			)
 		}
 	}
+	handleTimeout := cfg.HandleTimeout
+	if handleTimeout <= 0 {
+		handleTimeout = defaultHandleTimeout
+	}
 	return &Bridge{
 		client:          cfg.Client,
 		runner:          cfg.Runner,
 		logger:          logger,
 		rateLimit:       cfg.RateLimit,
+		handleTimeout:   handleTimeout,
 		routing:         cfg.Routing,
 		rotator:         cfg.Rotator,
 		idleTimeout:     cfg.IdleTimeout,
@@ -239,6 +247,7 @@ func (b *Bridge) Register(ctx context.Context) error {
 
 	b.logger.Info("signal bridge registered with loop infrastructure",
 		"parent_id", parentID,
+		"handle_timeout", b.handleTimeout,
 	)
 	return nil
 }
@@ -553,7 +562,7 @@ func buildAgentStream(progressFn func(string, map[string]any)) agent.StreamCallb
 // The progressFn, if non-nil, is used to forward in-flight events
 // to the loop infrastructure for dashboard visibility.
 func (b *Bridge) handleMessage(ctx context.Context, env *Envelope, progressFn func(string, map[string]any)) {
-	ctx, cancel := context.WithTimeout(ctx, handleTimeout)
+	ctx, cancel := context.WithTimeout(ctx, b.handleTimeout)
 	defer cancel()
 
 	sender := env.Source
@@ -714,7 +723,7 @@ func (b *Bridge) handleMessage(ctx context.Context, env *Envelope, progressFn fu
 // removals are logged but do not wake the agent. Non-removal
 // reactions are forwarded to the agent loop with contextual hints.
 func (b *Bridge) handleReaction(ctx context.Context, env *Envelope) {
-	ctx, cancel := context.WithTimeout(ctx, handleTimeout)
+	ctx, cancel := context.WithTimeout(ctx, b.handleTimeout)
 	defer cancel()
 
 	sender := env.Source

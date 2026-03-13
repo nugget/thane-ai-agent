@@ -1027,6 +1027,12 @@ type SignalConfig struct {
 	// will be processed. Attachments exceeding this are described but
 	// not copied. Zero means no limit.
 	MaxAttachmentSize int64 `yaml:"max_attachment_size"`
+
+	// HandleTimeout bounds how long a single inbound message may be
+	// processed (agent loop + response send). This needs to be long
+	// enough to cover tool execution (e.g., media_transcript) plus
+	// the subsequent LLM response. Default: 10m.
+	HandleTimeout time.Duration `yaml:"handle_timeout"`
 }
 
 // SignalRoutingConfig controls model selection for Signal messages.
@@ -1863,6 +1869,9 @@ func (c *Config) validateSignal() error {
 	}
 	if c.Signal.MaxAttachmentSize < 0 {
 		return fmt.Errorf("signal.max_attachment_size %d must be non-negative", c.Signal.MaxAttachmentSize)
+	}
+	if c.Signal.HandleTimeout < 0 {
+		return fmt.Errorf("signal.handle_timeout %s must be non-negative", c.Signal.HandleTimeout)
 	}
 	return nil
 }
