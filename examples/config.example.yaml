@@ -27,6 +27,7 @@ models:
   default: qwen2.5:72b
   ollama_url: http://your-ollama-server:11434
   local_first: true
+  recovery_model: qwen3:4b  # Fast model for timeout recovery summaries (optional)
   available:
     - name: qwen3:4b
       provider: ollama

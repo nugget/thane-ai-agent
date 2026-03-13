@@ -11,6 +11,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -175,6 +176,8 @@ type Loop struct {
 	llm               llm.Client
 	tools             *tools.Registry
 	model             string
+	recoveryModel     string            // Fast model for timeout recovery summaries (empty = disabled)
+	retryBaseDelay    time.Duration     // Base backoff delay between timeout retries (0 = use default)
 	talents           string            // Combined talent content for system prompt
 	persona           string            // Persona content (replaces base system prompt if set)
 	egoFile           string            // Path to ego.md — read fresh each turn for system prompt
@@ -295,6 +298,15 @@ func (l *Loop) SetTimezone(tz string) {
 // tools.
 func (l *Loop) SetOrchestratorTools(names []string) {
 	l.orchestratorTools = names
+}
+
+// SetRecoveryModel configures a fast, cheap model used to generate
+// summaries when the primary model times out after completing tool
+// calls. When empty, timeout recovery falls back to a static message.
+// Only wired in the serve path — CLI one-shot requests don't need
+// timeout recovery because they have no multi-turn tool loops.
+func (l *Loop) SetRecoveryModel(model string) {
+	l.recoveryModel = model
 }
 
 // SetDebugConfig configures debug options for the agent loop.
@@ -1288,29 +1300,117 @@ iterLoop:
 		if err != nil {
 			iterLog.Error("LLM call failed", "error", err, "model", model)
 
-			// Try failover to default model if using a routed model
-			if model != l.model {
-				fallbackModel := l.model
-				iterLog.Info("attempting failover", "from", model, "to", fallbackModel)
-
-				// Call failover handler if configured (for checkpointing)
-				if l.failoverHandler != nil {
-					if ferr := l.failoverHandler.OnFailover(iterCtx, model, fallbackModel, err.Error()); ferr != nil {
-						iterLog.Warn("failover handler failed", "error", ferr)
-						// Continue with failover anyway
+			if isTimeout(err) {
+				// --- Timeout recovery: retry same model, then downshift ---
+				recovered := false
+				baseDelay := l.retryBaseDelay
+				if baseDelay == 0 {
+					baseDelay = timeoutRetryBaseDelay
+				}
+				for retry := 1; retry <= timeoutRetryLimit; retry++ {
+					backoff := baseDelay * time.Duration(1<<(retry-1))
+					iterLog.Warn("LLM timeout, retrying same model",
+						"retry", retry,
+						"backoff", backoff.Round(time.Second),
+						"model", model,
+					)
+					select {
+					case <-ctx.Done():
+						return nil, ctx.Err()
+					case <-time.After(backoff):
+					}
+					llmResp, err = l.llm.ChatStream(iterCtx, model, llmMessages, toolDefs, stream)
+					if err == nil {
+						iterLog.Info("LLM retry succeeded", "retry", retry, "model", model)
+						recovered = true
+						break
+					}
+					if !isTimeout(err) {
+						// Non-timeout error during retry — bail immediately.
+						iterLog.Error("non-timeout error during retry", "error", err, "model", model)
+						return nil, err
 					}
 				}
 
-				// Retry with fallback model
-				model = fallbackModel
-				llmResp, err = l.llm.ChatStream(iterCtx, model, llmMessages, toolDefs, stream)
-				if err != nil {
-					iterLog.Error("failover also failed", "error", err, "model", model)
+				if !recovered {
+					// Retries exhausted. Downshift to recovery model if
+					// configured and tool calls were already made.
+					if l.recoveryModel != "" && len(toolsUsed) > 0 {
+						iterLog.Warn("retries exhausted, downshifting to recovery model",
+							"recovery_model", l.recoveryModel,
+							"tools_used", len(toolsUsed),
+						)
+						recoveryMessages := buildRecoveryPrompt(llmMessages, toolsUsed)
+
+						// The original context is expired — use a fresh one.
+						// This is a justified use of context.Background()
+						// because the parent deadline already fired.
+						recoveryCtx, recoveryCancel := context.WithTimeout(context.Background(), timeoutRecoveryDeadline)
+						llmResp, err = l.llm.ChatStream(recoveryCtx, l.recoveryModel, recoveryMessages, nil, stream)
+						recoveryCancel()
+
+						if err != nil {
+							iterLog.Error("recovery model also failed, returning static summary",
+								"error", err,
+								"recovery_model", l.recoveryModel,
+							)
+							l.archiveIterations(log, convID, iterations)
+							return staticRecoveryResponse(toolsUsed, model, totalInputTokens, totalOutputTokens, sessionID, requestID), nil
+						}
+
+						iterLog.Info("timeout recovery successful", "recovery_model", l.recoveryModel)
+						content := llmResp.Message.Content
+						if content == "" {
+							content = prompts.TimeoutRecoveryEmpty
+						}
+
+						totalInputTokens += llmResp.InputTokens
+						totalOutputTokens += llmResp.OutputTokens
+						l.archiveIterations(log, convID, iterations)
+						return &Response{
+							Content:      content,
+							Model:        l.recoveryModel,
+							FinishReason: "timeout_recovery",
+							InputTokens:  totalInputTokens,
+							OutputTokens: totalOutputTokens,
+							ToolsUsed:    toolsUsed,
+							SessionID:    sessionID,
+							RequestID:    requestID,
+						}, nil
+					}
+
+					// No recovery model or no tool calls — return static fallback
+					// if tools were used, otherwise propagate the error.
+					if len(toolsUsed) > 0 {
+						iterLog.Error("LLM timeout with no recovery model configured, returning static summary")
+						l.archiveIterations(log, convID, iterations)
+						return staticRecoveryResponse(toolsUsed, model, totalInputTokens, totalOutputTokens, sessionID, requestID), nil
+					}
+					return nil, fmt.Errorf("LLM call timed out after %d retries: %w", timeoutRetryLimit, err)
+				}
+			} else {
+				// Non-timeout error: try failover to default model if
+				// using a routed model.
+				if model != l.model {
+					fallbackModel := l.model
+					iterLog.Info("attempting failover", "from", model, "to", fallbackModel)
+
+					if l.failoverHandler != nil {
+						if ferr := l.failoverHandler.OnFailover(iterCtx, model, fallbackModel, err.Error()); ferr != nil {
+							iterLog.Warn("failover handler failed", "error", ferr)
+						}
+					}
+
+					model = fallbackModel
+					llmResp, err = l.llm.ChatStream(iterCtx, model, llmMessages, toolDefs, stream)
+					if err != nil {
+						iterLog.Error("failover also failed", "error", err, "model", model)
+						return nil, err
+					}
+					iterLog.Info("failover successful", "model", model)
+				} else {
 					return nil, err
 				}
-				iterLog.Info("failover successful", "model", model)
-			} else {
-				return nil, err
 			}
 		}
 
@@ -1867,6 +1967,115 @@ func (l *Loop) archiveIterations(log *slog.Logger, convID string, iterations []i
 	archived := toArchivedIterations(sessionID, iterations)
 	if err := l.archiver.ArchiveIterations(archived); err != nil {
 		log.Warn("failed to archive iterations", "error", err)
+	}
+}
+
+// Timeout recovery constants.
+const (
+	// timeoutRetryLimit is the number of same-model retries before
+	// downshifting to the recovery model.
+	timeoutRetryLimit = 2
+
+	// timeoutRecoveryDeadline is the context deadline for the recovery
+	// model call. Kept short because the recovery model should be fast.
+	timeoutRecoveryDeadline = 30 * time.Second
+
+	// timeoutRetryBaseDelay is the initial backoff delay between retries.
+	timeoutRetryBaseDelay = 2 * time.Second
+
+	// maxToolResultPreview is the maximum length of a tool result
+	// included in the recovery prompt.
+	maxToolResultPreview = 200
+)
+
+// isTimeout reports whether err is a timeout or deadline-exceeded error.
+// It checks for context.DeadlineExceeded and common provider-level
+// timeout indicators (Anthropic overload, HTTP 529). String matching
+// is case-insensitive to handle varied provider error formats.
+func isTimeout(err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "timeout") ||
+		strings.Contains(msg, "overloaded") ||
+		strings.Contains(msg, "529")
+}
+
+// buildRecoveryPrompt constructs a minimal message history for the
+// recovery model. It scans llmMessages for completed tool calls and
+// builds a summary the recovery model can use to tell the user what
+// happened.
+func buildRecoveryPrompt(messages []llm.Message, toolsUsed map[string]int) []llm.Message {
+	var sb strings.Builder
+	sb.WriteString("The previous assistant completed these tool calls before timing out:\n\n")
+
+	for _, msg := range messages {
+		if msg.Role != "tool" {
+			continue
+		}
+		status := "success"
+		preview := msg.Content
+		if strings.HasPrefix(preview, "Error:") {
+			status = "error"
+		}
+		if runes := []rune(preview); len(runes) > maxToolResultPreview {
+			preview = string(runes[:maxToolResultPreview]) + "..."
+		}
+		sb.WriteString(fmt.Sprintf("- [%s] %s\n", status, strings.TrimSpace(preview)))
+	}
+
+	sb.WriteString("\nTool call counts: ")
+	names := make([]string, 0, len(toolsUsed))
+	for name := range toolsUsed {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	parts := make([]string, 0, len(names))
+	for _, name := range names {
+		parts = append(parts, fmt.Sprintf("%s ×%d", name, toolsUsed[name]))
+	}
+	sb.WriteString(strings.Join(parts, ", "))
+	sb.WriteString("\n\nSummarize what was completed and what may remain undone. Be concise.")
+
+	return []llm.Message{
+		{
+			Role:    "system",
+			Content: prompts.TimeoutRecoverySystem,
+		},
+		{
+			Role:    "user",
+			Content: sb.String(),
+		},
+	}
+}
+
+// staticRecoveryResponse builds a last-resort Response when even the
+// recovery model fails. It lists the tools that were used so the user
+// has some visibility into what happened.
+func staticRecoveryResponse(toolsUsed map[string]int, model string, inputTokens, outputTokens int, sessionID, requestID string) *Response {
+	names := make([]string, 0, len(toolsUsed))
+	for name := range toolsUsed {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	parts := make([]string, 0, len(names))
+	total := 0
+	for _, name := range names {
+		count := toolsUsed[name]
+		parts = append(parts, fmt.Sprintf("%s ×%d", name, count))
+		total += count
+	}
+	content := fmt.Sprintf(prompts.TimeoutRecoveryFallback, total, strings.Join(parts, ", "))
+	return &Response{
+		Content:      content,
+		Model:        model,
+		FinishReason: "timeout_recovery",
+		InputTokens:  inputTokens,
+		OutputTokens: outputTokens,
+		ToolsUsed:    toolsUsed,
+		SessionID:    sessionID,
+		RequestID:    requestID,
 	}
 }
 
