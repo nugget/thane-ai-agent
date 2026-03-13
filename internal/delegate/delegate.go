@@ -735,7 +735,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 
 			// Expand caller-defined path prefixes in file tool arguments.
 			if len(pathPrefixes) > 0 && fileTools[tc.Function.Name] {
-				argsJSON = expandPathPrefixes(argsJSON, pathPrefixes)
+				argsJSON = expandPathPrefixes(tc.Function.Name, argsJSON, pathPrefixes)
 			}
 
 			toolStart := time.Now()

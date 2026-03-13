@@ -20,15 +20,15 @@ var fileTools = map[string]bool{
 	"file_tree":   true,
 }
 
-// expandPathPrefixes replaces known prefix names at the start of the
-// "path" argument in argsJSON. Only file tool arguments are expanded.
-// Absolute paths and ~/... paths are left untouched. Unknown prefixes
-// are left as-is.
+// expandPathPrefixes replaces known prefix names at the start of path
+// arguments in argsJSON. Most file tools use a single "path" key;
+// file_stat uses a comma-separated "paths" key instead. Absolute paths
+// and ~/... paths are left untouched. Unknown prefixes are left as-is.
 //
 // Prefixes are sorted by descending length so a longer prefix is matched
 // before a shorter one that shares the same start (same pattern as
 // [tools.TempFileStore.ExpandLabels]).
-func expandPathPrefixes(argsJSON string, prefixes map[string]string) string {
+func expandPathPrefixes(toolName, argsJSON string, prefixes map[string]string) string {
 	if len(prefixes) == 0 || argsJSON == "" {
 		return argsJSON
 	}
@@ -38,17 +38,17 @@ func expandPathPrefixes(argsJSON string, prefixes map[string]string) string {
 		return argsJSON
 	}
 
+	// file_stat uses a comma-separated "paths" key.
+	if toolName == "file_stat" {
+		return expandStatPaths(args, argsJSON, prefixes)
+	}
+
 	pathVal, ok := args["path"].(string)
 	if !ok || pathVal == "" {
 		return argsJSON
 	}
 
-	// Don't expand absolute or home-relative paths.
-	if strings.HasPrefix(pathVal, "/") || strings.HasPrefix(pathVal, "~/") {
-		return argsJSON
-	}
-
-	expanded := expandPrefix(pathVal, prefixes)
+	expanded := expandSinglePath(pathVal, prefixes)
 	if expanded == pathVal {
 		return argsJSON
 	}
@@ -61,9 +61,51 @@ func expandPathPrefixes(argsJSON string, prefixes map[string]string) string {
 	return string(out)
 }
 
+// expandStatPaths handles the comma-separated "paths" argument used by
+// file_stat. Each entry is trimmed, expanded independently, and
+// reassembled.
+func expandStatPaths(args map[string]any, original string, prefixes map[string]string) string {
+	pathsVal, ok := args["paths"].(string)
+	if !ok || pathsVal == "" {
+		return original
+	}
+
+	parts := strings.Split(pathsVal, ",")
+	changed := false
+	for i, p := range parts {
+		p = strings.TrimSpace(p)
+		expanded := expandSinglePath(p, prefixes)
+		if expanded != p {
+			changed = true
+		}
+		parts[i] = expanded
+	}
+
+	if !changed {
+		return original
+	}
+
+	args["paths"] = strings.Join(parts, ",")
+	out, err := json.Marshal(args)
+	if err != nil {
+		return original
+	}
+	return string(out)
+}
+
+// expandSinglePath expands a prefix in a single path string. Absolute
+// and home-relative paths are returned unchanged.
+func expandSinglePath(path string, prefixes map[string]string) string {
+	if strings.HasPrefix(path, "/") || strings.HasPrefix(path, "~/") {
+		return path
+	}
+	return expandPrefix(path, prefixes)
+}
+
 // expandPrefix matches a prefix name at the start of path and replaces
-// it with the corresponding full directory. Returns the original path
-// unchanged if no prefix matches.
+// it with the corresponding full directory. Trailing slashes on prefix
+// values are normalized so the result never contains "//". Returns the
+// original path unchanged if no prefix matches.
 func expandPrefix(path string, prefixes map[string]string) string {
 	// Sort by descending length to match longest prefix first.
 	sorted := make([]string, 0, len(prefixes))
@@ -75,12 +117,13 @@ func expandPrefix(path string, prefixes map[string]string) string {
 	})
 
 	for _, name := range sorted {
+		dir := strings.TrimRight(prefixes[name], "/")
 		// Match "prefix/rest" or exact "prefix".
 		if path == name {
-			return prefixes[name]
+			return dir
 		}
 		if strings.HasPrefix(path, name+"/") {
-			return prefixes[name] + path[len(name):]
+			return dir + path[len(name):]
 		}
 	}
 	return path
