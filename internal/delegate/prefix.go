@@ -136,6 +136,10 @@ func expandPrefix(path string, prefixes map[string]string) string {
 // prefix to avoid blowing up the system prompt.
 const maxPrefixEntries = 50
 
+// prefixPromptHeader is the system prompt preamble for path prefix
+// documentation. Kept as a const so it's easy to find and update.
+const prefixPromptHeader = "Path prefixes available (use these at the start of file tool paths):"
+
 // dirEntry is a single file or directory in a prefix listing.
 type dirEntry struct {
 	Name    string `json:"name"`
@@ -145,10 +149,12 @@ type dirEntry struct {
 }
 
 // prefixInfo describes a single path prefix and its contents.
+// Entries and Truncated are always emitted (no omitempty) so the
+// delegate sees a consistent JSON schema regardless of directory state.
 type prefixInfo struct {
 	Dir       string     `json:"dir"`
-	Entries   []dirEntry `json:"entries,omitempty"`
-	Truncated bool       `json:"truncated,omitempty"`
+	Entries   []dirEntry `json:"entries"`
+	Truncated bool       `json:"truncated"`
 }
 
 // formatPrefixPrompt returns a system prompt block documenting the
@@ -170,11 +176,15 @@ func formatPrefixPrompt(prefixes map[string]string, now time.Time) string {
 	info := make(map[string]prefixInfo, len(names))
 	for _, name := range names {
 		dir := strings.TrimRight(prefixes[name], "/")
-		pi := prefixInfo{Dir: dir}
 		entries, truncated := listPrefixDir(prefixes[name], now)
-		pi.Entries = entries
-		pi.Truncated = truncated
-		info[name] = pi
+		if entries == nil {
+			entries = []dirEntry{}
+		}
+		info[name] = prefixInfo{
+			Dir:       dir,
+			Entries:   entries,
+			Truncated: truncated,
+		}
 	}
 
 	listing, err := json.Marshal(info)
@@ -183,7 +193,8 @@ func formatPrefixPrompt(prefixes map[string]string, now time.Time) string {
 	}
 
 	var sb strings.Builder
-	sb.WriteString("Path prefixes available (use these at the start of file tool paths):\n")
+	sb.WriteString(prefixPromptHeader)
+	sb.WriteByte('\n')
 	sb.Write(listing)
 	return sb.String()
 }
@@ -192,17 +203,30 @@ func formatPrefixPrompt(prefixes map[string]string, now time.Time) string {
 // with modification times expressed as deltas relative to now. The
 // result is capped at [maxPrefixEntries]. Returns nil entries if the
 // path cannot be read.
+//
+// The directory is read incrementally via (*os.File).ReadDir so that
+// only maxPrefixEntries+1 entries are fetched from the kernel, avoiding
+// unnecessary memory and latency for large directories.
 func listPrefixDir(path string, now time.Time) ([]dirEntry, bool) {
 	path = expandHome(path)
-	rawEntries, err := os.ReadDir(path)
+	f, err := os.Open(path)
 	if err != nil {
 		return nil, false
 	}
+	defer f.Close()
 
-	truncated := false
-	if len(rawEntries) > maxPrefixEntries {
-		truncated = true
+	// Read one extra entry to detect truncation without reading the
+	// entire directory.
+	rawEntries, err := f.ReadDir(maxPrefixEntries + 1)
+	truncated := len(rawEntries) > maxPrefixEntries
+	if truncated {
 		rawEntries = rawEntries[:maxPrefixEntries]
+	}
+	// ReadDir returns a non-nil error when the directory has been fully
+	// read (io.EOF) or on real I/O errors. An empty result with err is
+	// fine — we just return the (possibly empty) slice.
+	if err != nil && len(rawEntries) == 0 {
+		return nil, false
 	}
 
 	result := make([]dirEntry, 0, len(rawEntries))

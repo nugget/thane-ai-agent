@@ -300,9 +300,9 @@ func TestFormatPrefixPrompt(t *testing.T) {
 
 	t.Run("directory listing included", func(t *testing.T) {
 		dir := t.TempDir()
-		os.WriteFile(dir+"/alpha.md", []byte("a"), 0o644)
-		os.WriteFile(dir+"/beta.txt", []byte("bb"), 0o644)
-		os.Mkdir(dir+"/subdir", 0o755)
+		mustWriteFile(t, dir+"/alpha.md", []byte("a"))
+		mustWriteFile(t, dir+"/beta.txt", []byte("bb"))
+		mustMkdir(t, dir+"/subdir")
 
 		got := formatPrefixPrompt(map[string]string{
 			"vault": dir,
@@ -344,7 +344,7 @@ func TestFormatPrefixPrompt(t *testing.T) {
 	t.Run("listing capped at max entries", func(t *testing.T) {
 		dir := t.TempDir()
 		for i := range maxPrefixEntries + 10 {
-			os.WriteFile(fmt.Sprintf("%s/file_%03d.txt", dir, i), []byte("x"), 0o644)
+			mustWriteFile(t, fmt.Sprintf("%s/file_%03d.txt", dir, i), []byte("x"))
 		}
 
 		got := formatPrefixPrompt(map[string]string{
@@ -363,7 +363,7 @@ func TestFormatPrefixPrompt(t *testing.T) {
 
 	t.Run("mod time is delta format", func(t *testing.T) {
 		dir := t.TempDir()
-		os.WriteFile(dir+"/recent.md", []byte("r"), 0o644)
+		mustWriteFile(t, dir+"/recent.md", []byte("r"))
 
 		got := formatPrefixPrompt(map[string]string{
 			"test": dir,
@@ -423,8 +423,8 @@ func TestListPrefixDir(t *testing.T) {
 
 	t.Run("files and dirs", func(t *testing.T) {
 		dir := t.TempDir()
-		os.WriteFile(dir+"/readme.md", []byte("hi"), 0o644)
-		os.Mkdir(dir+"/sub", 0o755)
+		mustWriteFile(t, dir+"/readme.md", []byte("hi"))
+		mustMkdir(t, dir+"/sub")
 
 		got, truncated := listPrefixDir(dir, now)
 		if truncated {
@@ -448,6 +448,24 @@ func TestListPrefixDir(t *testing.T) {
 			t.Errorf("got[1].Size = %d, want 0 for dir", got[1].Size)
 		}
 	})
+}
+
+// mustWriteFile is a test helper that writes data to path and fails the
+// test immediately if the write fails.
+func mustWriteFile(t *testing.T, path string, data []byte) {
+	t.Helper()
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", path, err)
+	}
+}
+
+// mustMkdir is a test helper that creates a directory and fails the
+// test immediately if the mkdir fails.
+func mustMkdir(t *testing.T, path string) {
+	t.Helper()
+	if err := os.Mkdir(path, 0o755); err != nil {
+		t.Fatalf("Mkdir(%q): %v", path, err)
+	}
 }
 
 func TestExpandHome(t *testing.T) {
