@@ -1,7 +1,9 @@
 package media
 
 import (
+	"context"
 	"encoding/json"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -253,6 +255,182 @@ func TestResultTruncation(t *testing.T) {
 		t.Error("expected truncated = true")
 	}
 }
+
+func TestCheckCookieStatus(t *testing.T) {
+	tests := []struct {
+		name       string
+		stderr     string
+		wantLevel  slog.Level // expected log level
+		wantExtrac int        // expected "extracted" attr, -1 if not expected
+	}{
+		{
+			name:       "healthy extraction",
+			stderr:     "[Cookies] Extracted 87 cookies from chrome\n",
+			wantLevel:  slog.LevelInfo,
+			wantExtrac: 87,
+		},
+		{
+			name:       "zero cookies is error",
+			stderr:     "[Cookies] Extracted 0 cookies from chrome\n",
+			wantLevel:  slog.LevelError,
+			wantExtrac: -1, // error log uses "failed_decrypt" not "extracted"
+		},
+		{
+			name:       "partial decryption failure",
+			stderr:     "[Cookies] Extracted 50 cookies from chrome (37 could not be decrypted)\n",
+			wantLevel:  slog.LevelWarn,
+			wantExtrac: 50,
+		},
+		{
+			name:       "zero with decryption failures",
+			stderr:     "[Cookies] Extracted 0 cookies from chrome (87 could not be decrypted)\n",
+			wantLevel:  slog.LevelError,
+			wantExtrac: -1,
+		},
+		{
+			name:       "no extraction line at all",
+			stderr:     "some random output\n",
+			wantLevel:  slog.LevelError,
+			wantExtrac: -1,
+		},
+		{
+			name:       "empty stderr",
+			stderr:     "",
+			wantLevel:  slog.LevelError,
+			wantExtrac: -1,
+		},
+		{
+			name:       "firefox cookies",
+			stderr:     "[Cookies] Extracted 142 cookies from firefox\n",
+			wantLevel:  slog.LevelInfo,
+			wantExtrac: 142,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var captured []slog.Record
+			handler := &captureHandler{records: &captured}
+			logger := slog.New(handler)
+
+			c := &Client{
+				cfg: Config{
+					CookiesFromBrowser: "chrome",
+				},
+				logger: logger,
+			}
+
+			c.checkCookieStatus(tt.stderr)
+
+			if len(captured) == 0 {
+				t.Fatal("expected at least one log record")
+			}
+
+			rec := captured[0]
+			if rec.Level != tt.wantLevel {
+				t.Errorf("log level = %v, want %v", rec.Level, tt.wantLevel)
+			}
+
+			if tt.wantExtrac >= 0 {
+				found := false
+				rec.Attrs(func(a slog.Attr) bool {
+					if a.Key == "extracted" && a.Value.Int64() == int64(tt.wantExtrac) {
+						found = true
+						return false
+					}
+					return true
+				})
+				if !found {
+					t.Errorf("expected extracted=%d in log attrs", tt.wantExtrac)
+				}
+			}
+		})
+	}
+}
+
+func TestCookieExtractedRegex(t *testing.T) {
+	tests := []struct {
+		line       string
+		wantMatch  bool
+		wantCount  string
+		wantBrowse string
+		wantFailed string
+	}{
+		{
+			line:       "Extracted 87 cookies from chrome",
+			wantMatch:  true,
+			wantCount:  "87",
+			wantBrowse: "chrome",
+		},
+		{
+			line:       "Extracted 0 cookies from chrome (87 could not be decrypted)",
+			wantMatch:  true,
+			wantCount:  "0",
+			wantBrowse: "chrome",
+			wantFailed: "87",
+		},
+		{
+			line:       "Extracted 142 cookies from firefox",
+			wantMatch:  true,
+			wantCount:  "142",
+			wantBrowse: "firefox",
+		},
+		{
+			line:       "Extracted 42 cookies from chrome:Profile 1",
+			wantMatch:  true,
+			wantCount:  "42",
+			wantBrowse: "chrome:Profile 1",
+		},
+		{
+			line:       "Extracted 10 cookies from chrome:Profile 1 (5 could not be decrypted)",
+			wantMatch:  true,
+			wantCount:  "10",
+			wantBrowse: "chrome:Profile 1",
+			wantFailed: "5",
+		},
+		{
+			line:      "no match here",
+			wantMatch: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.line, func(t *testing.T) {
+			m := cookieExtractedRe.FindStringSubmatch(tt.line)
+			if tt.wantMatch {
+				if m == nil {
+					t.Fatal("expected match, got nil")
+				}
+				if m[1] != tt.wantCount {
+					t.Errorf("count = %q, want %q", m[1], tt.wantCount)
+				}
+				if m[2] != tt.wantBrowse {
+					t.Errorf("browser = %q, want %q", m[2], tt.wantBrowse)
+				}
+				if m[3] != tt.wantFailed {
+					t.Errorf("failed = %q, want %q", m[3], tt.wantFailed)
+				}
+			} else if m != nil {
+				t.Errorf("expected no match, got %v", m)
+			}
+		})
+	}
+}
+
+// captureHandler is a minimal slog.Handler that captures records for testing.
+type captureHandler struct {
+	records *[]slog.Record
+}
+
+func (h *captureHandler) Enabled(_ context.Context, _ slog.Level) bool { return true }
+func (h *captureHandler) Handle(_ context.Context, r slog.Record) error {
+	// Clone the record so its internal attribute storage isn't reused
+	// by subsequent calls (per slog's Handler contract).
+	*h.records = append(*h.records, r.Clone())
+	return nil
+}
+func (h *captureHandler) WithAttrs(_ []slog.Attr) slog.Handler { return h }
+func (h *captureHandler) WithGroup(_ string) slog.Handler      { return h }
 
 func TestResultAnalysisGuidance(t *testing.T) {
 	t.Run("included when set", func(t *testing.T) {

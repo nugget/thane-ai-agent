@@ -259,6 +259,7 @@ shell_exec:
 # media:
 #   yt_dlp_path: ""                   # auto-detected via PATH
 #   cookies_file: ""                  # Netscape cookie file for auth content
+#   cookies_from_browser: ""          # e.g., "chrome", "firefox" (exclusive with cookies_file)
 #   subtitle_language: en
 #   max_transcript_chars: 50000
 #   transcript_dir: ""                # empty = in-context only

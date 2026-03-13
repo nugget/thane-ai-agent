@@ -1350,6 +1350,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		mc := media.New(media.Config{
 			YtDlpPath:          ytdlpPath,
 			CookiesFile:        cfg.Media.CookiesFile,
+			CookiesFromBrowser: cfg.Media.CookiesFromBrowser,
 			SubtitleLanguage:   cfg.Media.SubtitleLanguage,
 			MaxTranscriptChars: cfg.Media.MaxTranscriptChars,
 			WhisperModel:       cfg.Media.WhisperModel,
