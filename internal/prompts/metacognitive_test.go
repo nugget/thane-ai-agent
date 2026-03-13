@@ -36,11 +36,10 @@ func TestMetacognitivePrompt_Supervisor(t *testing.T) {
 	if !strings.Contains(result, "Drift detection") {
 		t.Error("supervisor prompt should contain drift detection instruction")
 	}
-	if !strings.Contains(result, "core:ego.md") {
-		t.Error("supervisor prompt should reference core:ego.md path prefix")
-	}
-	if !strings.Contains(result, "append_ego_observation") {
-		t.Error("supervisor prompt should reference append_ego_observation tool")
+	// append_ego_observation was removed in #575 — ego updates belong
+	// in the interactive agent context, not the metacog loop.
+	if strings.Contains(result, "append_ego_observation") {
+		t.Error("supervisor prompt should not reference removed append_ego_observation tool")
 	}
 }
 
@@ -88,13 +87,13 @@ func TestMetacognitivePrompt_FileToolsNotAvailable(t *testing.T) {
 func TestMetacognitivePrompt_ToolBoundary(t *testing.T) {
 	result := MetacognitivePrompt("some state", false)
 
-	if !strings.Contains(result, "exactly three special tools") {
-		t.Error("prompt should state the three special tools available")
+	if !strings.Contains(result, "exactly two special tools") {
+		t.Error("prompt should state the two special tools available")
 	}
-	if !strings.Contains(result, "append_ego_observation") {
-		t.Error("prompt should mention append_ego_observation tool")
+	if strings.Contains(result, "append_ego_observation") {
+		t.Error("prompt should not mention removed append_ego_observation tool")
 	}
-	if !strings.Contains(result, "File tools, exec, and") {
+	if !strings.Contains(result, "File tools, exec,") {
 		t.Error("prompt should explicitly list unavailable tool categories")
 	}
 }

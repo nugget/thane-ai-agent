@@ -2661,15 +2661,6 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 			return fmt.Errorf("metacognitive config: %w", err)
 		}
 
-		var metacogEgoFile string
-		if provenanceStore != nil {
-			metacogEgoFile = provenanceStore.FilePath("ego.md")
-		} else if resolver != nil {
-			if resolved, err := resolver.Resolve("core:ego.md"); err == nil {
-				metacogEgoFile = resolved
-			}
-		}
-
 		// Resolve state file path: provenance store when configured,
 		// workspace-relative otherwise. Uses filepath.Base to normalize
 		// config values like "Thane/metacognitive.md" to flat layout.
@@ -2689,7 +2680,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 			StateFileName:   stateFileName,
 		})
 		loopCfg.Setup = func(l *looppkg.Loop) {
-			metacognitive.RegisterTools(loop.Tools(), l, metacogCfg, metacogStatePath, metacogEgoFile, provenanceStore)
+			metacognitive.RegisterTools(loop.Tools(), l, metacogCfg, metacogStatePath, provenanceStore)
 		}
 
 		if _, err := loopRegistry.SpawnLoop(ctx, loopCfg, looppkg.Deps{
