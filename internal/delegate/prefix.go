@@ -2,10 +2,12 @@ package delegate
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"sort"
 	"strings"
+	"time"
+
+	"github.com/nugget/thane-ai-agent/internal/awareness"
 )
 
 // fileTools lists tool names whose "path" argument should have path
@@ -134,10 +136,26 @@ func expandPrefix(path string, prefixes map[string]string) string {
 // prefix to avoid blowing up the system prompt.
 const maxPrefixEntries = 50
 
+// dirEntry is a single file or directory in a prefix listing.
+type dirEntry struct {
+	Name    string `json:"name"`
+	Type    string `json:"type"`           // "file" or "dir"
+	ModTime string `json:"mod,omitempty"`  // delta like "-3247s"
+	Size    int64  `json:"size,omitempty"` // bytes, files only
+}
+
+// prefixInfo describes a single path prefix and its contents.
+type prefixInfo struct {
+	Dir       string     `json:"dir"`
+	Entries   []dirEntry `json:"entries,omitempty"`
+	Truncated bool       `json:"truncated,omitempty"`
+}
+
 // formatPrefixPrompt returns a system prompt block documenting the
 // available path prefixes and a shallow listing of each directory's
-// contents. Returns an empty string if no prefixes are defined.
-func formatPrefixPrompt(prefixes map[string]string) string {
+// contents as structured JSON. Returns an empty string if no prefixes
+// are defined.
+func formatPrefixPrompt(prefixes map[string]string, now time.Time) string {
 	if len(prefixes) == 0 {
 		return ""
 	}
@@ -149,62 +167,62 @@ func formatPrefixPrompt(prefixes map[string]string) string {
 	}
 	sort.Strings(names)
 
-	var sb strings.Builder
-	sb.WriteString("Path prefixes available:\n")
+	info := make(map[string]prefixInfo, len(names))
 	for _, name := range names {
 		dir := strings.TrimRight(prefixes[name], "/")
-		sb.WriteString(fmt.Sprintf("  %s/ → %s/\n", name, dir))
-	}
-	sb.WriteString("Use these prefixes at the start of file tool paths instead of full paths.\n")
-
-	// Append a shallow directory listing for each prefix so the
-	// delegate can reference files immediately without calling
-	// file_list first.
-	for _, name := range names {
-		entries := listPrefixDir(prefixes[name])
-		if len(entries) == 0 {
-			continue
-		}
-		sb.WriteString(fmt.Sprintf("\n%s/ contents:\n", name))
-		for _, e := range entries {
-			sb.WriteString(fmt.Sprintf("  %s\n", e))
-		}
+		pi := prefixInfo{Dir: dir}
+		entries, truncated := listPrefixDir(prefixes[name], now)
+		pi.Entries = entries
+		pi.Truncated = truncated
+		info[name] = pi
 	}
 
-	return strings.TrimRight(sb.String(), "\n")
+	listing, err := json.Marshal(info)
+	if err != nil {
+		listing = []byte("{}")
+	}
+
+	var sb strings.Builder
+	sb.WriteString("Path prefixes available (use these at the start of file tool paths):\n")
+	sb.Write(listing)
+	return sb.String()
 }
 
-// listPrefixDir returns a shallow listing of the directory at path.
-// Directories get a trailing "/". The result is capped at
-// [maxPrefixEntries]; when truncated a summary line is appended.
-// Returns nil if the path cannot be read.
-func listPrefixDir(path string) []string {
+// listPrefixDir returns a shallow listing of the directory at path
+// with modification times expressed as deltas relative to now. The
+// result is capped at [maxPrefixEntries]. Returns nil entries if the
+// path cannot be read.
+func listPrefixDir(path string, now time.Time) ([]dirEntry, bool) {
 	path = expandHome(path)
-	entries, err := os.ReadDir(path)
+	rawEntries, err := os.ReadDir(path)
 	if err != nil {
-		return nil
+		return nil, false
 	}
 
 	truncated := false
-	if len(entries) > maxPrefixEntries {
+	if len(rawEntries) > maxPrefixEntries {
 		truncated = true
-		entries = entries[:maxPrefixEntries]
+		rawEntries = rawEntries[:maxPrefixEntries]
 	}
 
-	result := make([]string, 0, len(entries)+1)
-	for _, e := range entries {
-		name := e.Name()
+	result := make([]dirEntry, 0, len(rawEntries))
+	for _, e := range rawEntries {
+		de := dirEntry{Name: e.Name()}
 		if e.IsDir() {
-			name += "/"
+			de.Type = "dir"
+		} else {
+			de.Type = "file"
 		}
-		result = append(result, name)
+		if info, err := e.Info(); err == nil {
+			de.ModTime = awareness.FormatDeltaOnly(info.ModTime(), now)
+			if !e.IsDir() {
+				de.Size = info.Size()
+			}
+		}
+		result = append(result, de)
 	}
 
-	if truncated {
-		result = append(result, fmt.Sprintf("... (list truncated at %d entries)", maxPrefixEntries))
-	}
-
-	return result
+	return result, truncated
 }
 
 // expandHome replaces a leading "~/" with the user's home directory.

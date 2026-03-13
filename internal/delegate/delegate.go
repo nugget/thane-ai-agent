@@ -305,7 +305,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 	}
 
 	// Inject path prefix documentation so the delegate knows the shortcuts.
-	if prefixPrompt := formatPrefixPrompt(pathPrefixes); prefixPrompt != "" {
+	if prefixPrompt := formatPrefixPrompt(pathPrefixes, time.Now()); prefixPrompt != "" {
 		sb.WriteString("\n\n")
 		sb.WriteString(prefixPrompt)
 	}
