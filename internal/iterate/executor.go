@@ -48,7 +48,7 @@ func (d *DeadlineExecutor) Execute(ctx context.Context, name, argsJSON string) (
 	case r := <-ch:
 		return r.value, r.err
 	case <-ctx.Done():
-		logging.Logger(ctx).Warn("tool handler did not respect context cancellation; goroutine leaked",
+		logging.Logger(ctx).Warn("tool handler may not have respected context cancellation; goroutine may still be running",
 			"tool", name)
 		err := ctx.Err()
 		reason := "ended due to context error"

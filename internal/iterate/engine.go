@@ -58,7 +58,7 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 		// toolDefs is resolved first so the callback has the full picture
 		// (message history + tools offered) for accurate token estimation.
 		if cfg.OnIterationStart != nil {
-			cfg.OnIterationStart(iterCtx, i, messages, toolDefs)
+			cfg.OnIterationStart(iterCtx, i, model, messages, toolDefs)
 		}
 
 		iterStart := time.Now()
@@ -70,13 +70,31 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 				var newModel string
 				llmResp, newModel, err = cfg.OnLLMError(iterCtx, err, model, messages, toolDefs, cfg.Stream)
 				if err != nil {
-					return nil, err
+					return &Result{
+						Model:          model,
+						InputTokens:    totalInput,
+						OutputTokens:   totalOutput,
+						ToolsUsed:      toolsUsed,
+						Exhausted:      true,
+						Iterations:     iterations,
+						Messages:       messages,
+						IterationCount: len(iterations),
+					}, err
 				}
 				if newModel != "" {
 					model = newModel
 				}
 			} else {
-				return nil, err
+				return &Result{
+					Model:          model,
+					InputTokens:    totalInput,
+					OutputTokens:   totalOutput,
+					ToolsUsed:      toolsUsed,
+					Exhausted:      true,
+					Iterations:     iterations,
+					Messages:       messages,
+					IterationCount: len(iterations),
+				}, err
 			}
 		}
 
@@ -114,15 +132,29 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 				Iterations:     iterations,
 				IterationCount: i + 1,
 			}
-			// If the response is text-only, use it directly; forceText
-			// requires a pending tool result and would return empty content.
+			// Text-only response: use content directly.
 			if llmResp.Message.Content != "" && len(llmResp.Message.ToolCalls) == 0 {
 				messages = append(messages, llmResp.Message)
 				partial.Content = llmResp.Message.Content
 				partial.Messages = messages
 				return partial, nil
 			}
-			return e.forceText(ctx, cfg, model, messages, partial)
+			// Tool-call or empty response: try forceText using the existing
+			// message history. Do NOT append the unexecuted tool-call
+			// response — it would create unmatched tool calls. forceText
+			// fires only when the last message is a tool result; if not,
+			// ensure content is non-empty via fallback.
+			forceResult, forceErr := e.forceText(ctx, cfg, model, messages, partial)
+			if forceErr != nil {
+				return nil, forceErr
+			}
+			if forceResult.Content == "" {
+				forceResult.Content = cfg.FallbackContent
+				if forceResult.Content == "" {
+					forceResult.Content = prompts.EmptyResponseFallback
+				}
+			}
+			return forceResult, nil
 		}
 
 		// Build iteration record.

@@ -59,10 +59,12 @@ type Config struct {
 	// --- Callbacks ---
 
 	// OnIterationStart fires at the top of each iteration before the
-	// LLM call. Receives the iteration index, the current message history
-	// (including assistant and tool messages appended by prior iterations),
-	// and the tool definitions for this iteration.
-	OnIterationStart func(ctx context.Context, iteration int, msgs []llm.Message, toolDefs []map[string]any)
+	// LLM call. Receives the iteration index, the active model name at
+	// the start of the iteration (may differ from Config.Model if a
+	// prior OnLLMError changed it), the current message history
+	// (including assistant and tool messages appended by prior
+	// iterations), and the tool definitions for this iteration.
+	OnIterationStart func(ctx context.Context, iteration int, currentModel string, msgs []llm.Message, toolDefs []map[string]any)
 
 	// OnLLMResponse fires after each successful LLM call, before tool
 	// execution. Use it for logging and emitting stream events.

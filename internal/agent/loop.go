@@ -1264,14 +1264,14 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		},
 
 		// Iteration lifecycle callbacks.
-		OnIterationStart: func(iterCtx context.Context, i int, msgs []llm.Message, _ []map[string]any) {
+		OnIterationStart: func(iterCtx context.Context, i int, currentModel string, msgs []llm.Message, _ []map[string]any) {
 			iterLog := logging.Logger(iterCtx)
 			iterMsgTokens := 0
 			for _, m := range msgs {
 				iterMsgTokens += len(m.Content) / 4
 			}
 			iterLog.Info("llm call",
-				"model", model,
+				"model", currentModel,
 				"msgs", len(msgs),
 				"est_tokens", iterMsgTokens,
 				"system_tokens", systemTokens,
@@ -1291,7 +1291,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 				}
 				stream(llm.StreamEvent{
 					Kind:     llm.KindLLMStart,
-					Response: &llm.ChatResponse{Model: model},
+					Response: &llm.ChatResponse{Model: currentModel},
 					Data:     startData,
 				})
 			}
@@ -1306,8 +1306,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			}
 			iterLog := logging.Logger(iterCtx)
 			iterLog.Info("llm response",
-				"model", model,
-				"resp_model", llmResp.Model,
+				"model", llmResp.Model,
 				"input_tokens", llmResp.InputTokens,
 				"output_tokens", llmResp.OutputTokens,
 				"tool_calls", len(llmResp.Message.ToolCalls),

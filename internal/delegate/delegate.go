@@ -466,6 +466,12 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 	if err != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			// Wall clock exhaustion — return result, not error.
+			// Engine.Run returns a partial Result alongside the error;
+			// use its Messages if available for a complete execution trace.
+			archiveMsgs := messages
+			if iterResult != nil && len(iterResult.Messages) > 0 {
+				archiveMsgs = iterResult.Messages
+			}
 			completed = true
 			e.recordCompletion(&completionRecord{
 				log:              log,
@@ -483,7 +489,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 				exhausted:        true,
 				exhaustReason:    ExhaustWallClock,
 				startTime:        startTime,
-				messages:         messages,
+				messages:         archiveMsgs,
 				resultContent:    "Delegate was unable to complete the task within its time limit.",
 				errMsg:           err.Error(),
 				toolCalls:        toolCalls,

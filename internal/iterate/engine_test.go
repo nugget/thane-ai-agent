@@ -462,16 +462,20 @@ func TestEngine_DeferMixedText(t *testing.T) {
 }
 
 func TestEngine_BudgetExhaustion(t *testing.T) {
+	// Budget fires on the second iteration (after iter 0's tool has been
+	// executed, so the last message is a tool result). This lets forceText
+	// fire a real LLM call to produce a text response.
 	mock := &mockLLM{
 		responses: []*llm.ChatResponse{
-			toolCallResponse(makeToolCall("work", nil)),
-			textResponse("forced by budget"),
+			toolCallResponse(makeToolCall("work", nil)), // iter 0: tool call (10 tokens)
+			toolCallResponse(makeToolCall("work", nil)), // iter 1: tool call → budget fires (20 >= 20)
+			textResponse("forced by budget"),            // forceText LLM call
 		},
 	}
 	exec := &mockExecutor{results: map[string]string{"work": "done"}}
 	cfg := baseCfg(mock, exec)
-	// Budget check fires after first response (10 output tokens).
-	cfg.CheckBudget = func(totalOutput int) bool { return totalOutput >= 10 }
+	// Budget fires when cumulative output tokens reach 20 (after 2 iterations).
+	cfg.CheckBudget = func(totalOutput int) bool { return totalOutput >= 20 }
 
 	engine := &Engine{}
 	result, err := engine.Run(context.Background(), cfg, baseMessages())
@@ -483,6 +487,16 @@ func TestEngine_BudgetExhaustion(t *testing.T) {
 	}
 	if result.ExhaustReason != ExhaustTokenBudget {
 		t.Errorf("exhaust reason = %q", result.ExhaustReason)
+	}
+	if result.Content != "forced by budget" {
+		t.Errorf("content = %q, want %q", result.Content, "forced by budget")
+	}
+	// forceText should have made a third LLM call (with tools=nil).
+	if mock.callIdx != 3 {
+		t.Errorf("LLM called %d times, want 3", mock.callIdx)
+	}
+	if mock.calls[2].Tools != nil {
+		t.Error("forceText call should have tools=nil")
 	}
 }
 
@@ -597,7 +611,7 @@ func TestEngine_CallbacksFired(t *testing.T) {
 		textResponseCalled bool
 	)
 
-	cfg.OnIterationStart = func(_ context.Context, _ int, _ []llm.Message, _ []map[string]any) { iterStartCalled++ }
+	cfg.OnIterationStart = func(_ context.Context, _ int, _ string, _ []llm.Message, _ []map[string]any) { iterStartCalled++ }
 	cfg.OnLLMResponse = func(_ context.Context, _ *llm.ChatResponse, _ int) { llmResponseCalled++ }
 	cfg.OnToolCallStart = func(_ context.Context, tc llm.ToolCall) {
 		toolCallStartCalls = append(toolCallStartCalls, tc.Function.Name)
