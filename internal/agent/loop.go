@@ -1264,22 +1264,22 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		},
 
 		// Iteration lifecycle callbacks.
-		OnIterationStart: func(iterCtx context.Context, i int) {
+		OnIterationStart: func(iterCtx context.Context, i int, msgs []llm.Message, _ []map[string]any) {
 			iterLog := logging.Logger(iterCtx)
 			iterMsgTokens := 0
-			for _, m := range llmMessages {
+			for _, m := range msgs {
 				iterMsgTokens += len(m.Content) / 4
 			}
 			iterLog.Info("llm call",
 				"model", model,
-				"msgs", len(llmMessages),
+				"msgs", len(msgs),
 				"est_tokens", iterMsgTokens,
 				"system_tokens", systemTokens,
 			)
 			if stream != nil {
 				startData := map[string]any{
 					"est_tokens": iterMsgTokens + systemTokens,
-					"messages":   len(llmMessages),
+					"messages":   len(msgs),
 					"iteration":  i,
 				}
 				if routerDecision != nil {

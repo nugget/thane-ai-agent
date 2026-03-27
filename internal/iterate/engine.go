@@ -48,15 +48,17 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 		iterLog := log.With("iter", i)
 		iterCtx := logging.WithLogger(ctx, iterLog)
 
-		// --- Callbacks: iteration start ---
-		if cfg.OnIterationStart != nil {
-			cfg.OnIterationStart(iterCtx, i)
-		}
-
 		// Get tool definitions for this iteration.
 		var toolDefs []map[string]any
 		if cfg.ToolDefs != nil {
 			toolDefs = cfg.ToolDefs(i)
+		}
+
+		// --- Callbacks: iteration start ---
+		// toolDefs is resolved first so the callback has the full picture
+		// (message history + tools offered) for accurate token estimation.
+		if cfg.OnIterationStart != nil {
+			cfg.OnIterationStart(iterCtx, i, messages, toolDefs)
 		}
 
 		iterStart := time.Now()

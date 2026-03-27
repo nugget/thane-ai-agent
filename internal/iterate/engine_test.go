@@ -597,7 +597,7 @@ func TestEngine_CallbacksFired(t *testing.T) {
 		textResponseCalled bool
 	)
 
-	cfg.OnIterationStart = func(_ context.Context, _ int) { iterStartCalled++ }
+	cfg.OnIterationStart = func(_ context.Context, _ int, _ []llm.Message, _ []map[string]any) { iterStartCalled++ }
 	cfg.OnLLMResponse = func(_ context.Context, _ *llm.ChatResponse, _ int) { llmResponseCalled++ }
 	cfg.OnToolCallStart = func(_ context.Context, tc llm.ToolCall) {
 		toolCallStartCalls = append(toolCallStartCalls, tc.Function.Name)
