@@ -1088,21 +1088,28 @@ function buildWaterfallItem(tc) {
   bar.appendChild(callId);
   item.appendChild(bar);
 
-  // Expandable detail section.
+  // Expandable detail section — content is lazily built on first expand
+  // to avoid eagerly pretty-printing large JSON payloads for every item.
   const expand = document.createElement('div');
   expand.className = 'waterfall__expand';
 
-  if (tc.arguments) {
-    expand.appendChild(buildWaterfallSub('Arguments', formatJSON(tc.arguments)));
-  }
-  if (tc.result) {
-    expand.appendChild(buildWaterfallSub('Result', tc.result));
+  let expandInit = false;
+  function ensureExpandedContent() {
+    if (expandInit) return;
+    expandInit = true;
+    if (tc.arguments) {
+      expand.appendChild(buildWaterfallSub('Arguments', formatJSON(tc.arguments)));
+    }
+    if (tc.result) {
+      expand.appendChild(buildWaterfallSub('Result', tc.result));
+    }
   }
 
   item.appendChild(expand);
 
   bar.addEventListener('click', () => {
-    expand.classList.toggle('waterfall__expand--open');
+    const isOpen = expand.classList.toggle('waterfall__expand--open');
+    if (isOpen) ensureExpandedContent();
   });
 
   return item;

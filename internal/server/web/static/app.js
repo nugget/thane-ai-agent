@@ -1914,8 +1914,9 @@ async function showRequestDetail(requestID) {
 
     renderRequestDetail(detail, requestDetailEls);
 
-    // Update URL fragment for deep linking.
-    history.replaceState(null, '', '#request/' + requestID);
+    // Update URL fragment for deep linking. Use location.hash (which
+    // creates a history entry) so the browser Back button closes the panel.
+    window.location.hash = 'request/' + requestID;
   } catch (err) {
     if (err.name === 'AbortError') return; // Superseded by a newer request.
     console.warn('Failed to fetch request detail:', err);
@@ -1924,11 +1925,17 @@ async function showRequestDetail(requestID) {
 
 function closeRequestDetail() {
   activeRequestID = null;
+  activeRequestJSON = null;
+  // Cancel any in-flight fetch so a stale response can't re-open the panel.
+  if (requestDetailAbort) {
+    requestDetailAbort.abort();
+    requestDetailAbort = null;
+  }
   requestDetailPanel.hidden = true;
   // Restore the previous detail panel state.
   renderAll();
-  // Clear hash.
-  history.replaceState(null, '', window.location.pathname);
+  // Clear hash while preserving path and query string.
+  history.replaceState(null, '', window.location.pathname + window.location.search);
 }
 
 $('#request-detail-close').addEventListener('click', closeRequestDetail);
@@ -1967,7 +1974,12 @@ function handleHashRoute() {
   const match = hash && hash.match(/^#request\/(.+)$/);
 
   if (match) {
-    showRequestDetail(decodeURIComponent(match[1]));
+    const id = decodeURIComponent(match[1]);
+    // Skip if already showing this request (avoids re-fetch when
+    // showRequestDetail sets location.hash and triggers hashchange).
+    if (id !== activeRequestID) {
+      showRequestDetail(id);
+    }
     return;
   }
 
@@ -1976,6 +1988,10 @@ function handleHashRoute() {
   if (requestDetailPanel && !requestDetailPanel.hidden) {
     activeRequestID = null;
     activeRequestJSON = null;
+    if (requestDetailAbort) {
+      requestDetailAbort.abort();
+      requestDetailAbort = null;
+    }
     requestDetailPanel.hidden = true;
     renderAll();
   }
