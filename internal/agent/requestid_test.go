@@ -12,9 +12,9 @@ func TestGenerateRequestID(t *testing.T) {
 		t.Errorf("request ID %q missing r_ prefix", id)
 	}
 
-	// r_ prefix + 8 hex chars = 10 total
-	if len(id) != 10 {
-		t.Errorf("request ID %q length = %d, want 10", id, len(id))
+	// r_ prefix + 16 hex chars = 18 total
+	if len(id) != 18 {
+		t.Errorf("request ID %q length = %d, want 18", id, len(id))
 	}
 
 	// Hex chars only after prefix.

@@ -746,20 +746,19 @@ func formatDeltaDuration(d time.Duration) string {
 	}
 }
 
-// generateRequestID returns a short, human-scannable identifier for a single
-// user-message turn (e.g., "r_7f3ab2c1"). It uses 4 random bytes from a
-// UUIDv7 (bytes 8-11), giving 32 bits of entropy — sufficient for
-// request-level correlation without realistic collision risk.
+// generateRequestID returns a human-scannable identifier for a single
+// user-message turn (e.g., "r_7f3ab2c1d5e6f7a8"). It uses 8 random
+// bytes from a UUIDv7 (bytes 8-15), giving ~62 bits of effective
+// entropy after the variant/version bits. This is wide enough that
+// birthday collisions are negligible even over millions of retained
+// request traces.
 func generateRequestID() string {
 	id, err := uuid.NewV7()
 	if err != nil {
-		// Fallback: use current time hex if UUID generation fails.
-		return fmt.Sprintf("r_%08x", time.Now().UnixMilli()&0xFFFFFFFF)
+		return fmt.Sprintf("r_%016x", time.Now().UnixNano())
 	}
-	// Bytes 8-11 are from the random section of UUIDv7 (after the
-	// variant bits in byte 8, masked by the UUID spec, but still
-	// provide ~30 bits of effective randomness).
-	return "r_" + hex.EncodeToString(id[8:12])
+	// Bytes 8-15 are the random section of UUIDv7.
+	return "r_" + hex.EncodeToString(id[8:16])
 }
 
 // Run executes one iteration of the agent loop.

@@ -483,12 +483,31 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 			if iterResult != nil {
 				partialIterations = iterResult.Iterations
 				// ctx is past its deadline — use a fresh context so content
-				// retention writes don't fail immediately.
-				go func() {
-					retainCtx, retainCancel := context.WithTimeout(context.Background(), 5*time.Second)
-					defer retainCancel()
-					e.retainContent(retainCtx, did, messages[0].Content, userMsg.String(), iterResult)
-				}()
+				// retention writes don't fail immediately. Build RequestContent
+				// directly so we can override the exhaustion metadata: the
+				// partial iterate.Result comes from the engine's error path
+				// and lacks an ExhaustReason, but the delegate knows it's
+				// ExhaustWallClock.
+				if e.contentWriter != nil {
+					go func() {
+						retainCtx, retainCancel := context.WithTimeout(context.Background(), 5*time.Second)
+						defer retainCancel()
+						e.contentWriter.WriteRequest(retainCtx, logging.RequestContent{
+							RequestID:        did,
+							SystemPrompt:     messages[0].Content,
+							UserContent:      userMsg.String(),
+							Model:            iterResult.Model,
+							AssistantContent: iterResult.Content,
+							IterationCount:   iterResult.IterationCount,
+							InputTokens:      iterResult.InputTokens,
+							OutputTokens:     iterResult.OutputTokens,
+							ToolsUsed:        iterResult.ToolsUsed,
+							Exhausted:        true,
+							ExhaustReason:    ExhaustWallClock,
+							Messages:         iterResult.Messages,
+						})
+					}()
+				}
 			}
 			e.recordCompletion(&completionRecord{
 				log:              log,
