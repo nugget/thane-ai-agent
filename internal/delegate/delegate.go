@@ -80,6 +80,7 @@ type Executor struct {
 	alwaysActiveTags []string
 	forgeContext     string
 	eventBus         *events.Bus
+	contentWriter    *logging.ContentWriter
 }
 
 // NewExecutor creates a delegate executor.
@@ -182,6 +183,11 @@ func (e *Executor) SetForgeContext(ctx string) {
 // always_active tag behavior.
 func (e *Executor) SetAlwaysActiveTags(tags []string) {
 	e.alwaysActiveTags = tags
+}
+
+// SetContentWriter configures content retention for delegate executions.
+func (e *Executor) SetContentWriter(w *logging.ContentWriter) {
+	e.contentWriter = w
 }
 
 // ProfileNames returns the names of all registered profiles.
@@ -476,6 +482,32 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 			var partialIterations []iterate.IterationRecord
 			if iterResult != nil {
 				partialIterations = iterResult.Iterations
+				// ctx is past its deadline — use a fresh context so content
+				// retention writes don't fail immediately. Build RequestContent
+				// directly so we can override the exhaustion metadata: the
+				// partial iterate.Result comes from the engine's error path
+				// and lacks an ExhaustReason, but the delegate knows it's
+				// ExhaustWallClock.
+				if e.contentWriter != nil {
+					go func() {
+						retainCtx, retainCancel := context.WithTimeout(context.Background(), 5*time.Second)
+						defer retainCancel()
+						e.contentWriter.WriteRequest(retainCtx, logging.RequestContent{
+							RequestID:        did,
+							SystemPrompt:     messages[0].Content,
+							UserContent:      userMsg.String(),
+							Model:            iterResult.Model,
+							AssistantContent: iterResult.Content,
+							IterationCount:   iterResult.IterationCount,
+							InputTokens:      iterResult.InputTokens,
+							OutputTokens:     iterResult.OutputTokens,
+							ToolsUsed:        iterResult.ToolsUsed,
+							Exhausted:        true,
+							ExhaustReason:    ExhaustWallClock,
+							Messages:         iterResult.Messages,
+						})
+					}()
+				}
 			}
 			e.recordCompletion(&completionRecord{
 				log:              log,
@@ -528,6 +560,11 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 	}
 
 	completed = true
+	go func() {
+		bgCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		e.retainContent(bgCtx, did, messages[0].Content, userMsg.String(), iterResult)
+	}()
 	e.recordCompletion(&completionRecord{
 		log:              log,
 		delegateID:       did,
@@ -611,6 +648,28 @@ type completionRecord struct {
 	errMsg           string
 	toolCalls        []ToolCallOutcome
 	iterations       []iterate.IterationRecord
+}
+
+// retainContent persists request-level content for a delegate execution.
+// No-op when the content writer is nil (content retention disabled).
+func (e *Executor) retainContent(ctx context.Context, delegateID, systemPrompt, userContent string, result *iterate.Result) {
+	if e.contentWriter == nil || result == nil {
+		return
+	}
+	e.contentWriter.WriteRequest(ctx, logging.RequestContent{
+		RequestID:        delegateID,
+		SystemPrompt:     systemPrompt,
+		UserContent:      userContent,
+		Model:            result.Model,
+		AssistantContent: result.Content,
+		IterationCount:   result.IterationCount,
+		InputTokens:      result.InputTokens,
+		OutputTokens:     result.OutputTokens,
+		ToolsUsed:        result.ToolsUsed,
+		Exhausted:        result.Exhausted,
+		ExhaustReason:    result.ExhaustReason,
+		Messages:         result.Messages,
+	})
 }
 
 // recordCompletion logs and optionally persists a delegate execution.

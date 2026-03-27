@@ -300,14 +300,6 @@ embeddings:
 #   min_sleep: 60                     # minimum seconds between iterations
 #   max_sleep: 3600                   # maximum seconds between iterations
 
-# Debug options — diagnostic tools for system prompt visibility.
-# When dump_system_prompt is true, the fully assembled system prompt is
-# written to {dump_dir}/system-prompt-latest.txt on every LLM call,
-# with section markers and character counts per section.
-# debug:
-#   dump_system_prompt: true
-#   dump_dir: ./debug          # default
-
 # Logging: self-managed log files with daily rotation.
 # Logs go to both stdout and the configured directory. Old logs are
 # never deleted — rotate daily and optionally gzip-compress.
@@ -322,6 +314,8 @@ embeddings:
 #   format: json            # json (default) or text (human-readable)
 #   compress: true          # gzip rotated files; default: true
 #   retention_days: 7       # prune DEBUG/TRACE index entries older than N days; 0 = keep all
+#   retain_content: false   # persist system prompts, tool args/results, and message content to logs.db
+#   max_content_length: 4096  # max chars per retained content field; 0 = unlimited
 #
 # DEPRECATED: log_level and log_format are still accepted at the top level
 # for backwards compatibility but will be removed in a future release.

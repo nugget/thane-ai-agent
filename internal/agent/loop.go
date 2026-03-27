@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -190,7 +189,7 @@ type Loop struct {
 	archiver          SessionArchiver
 	extractor         *memory.Extractor
 	orchestratorTools []string                       // Restricted tool set for orchestrator mode (nil = all tools)
-	debugCfg          config.DebugConfig             // Debug options (system prompt dump, etc.)
+	contentWriter     *logging.ContentWriter         // nil = content retention disabled
 	usageStore        *usage.Store                   // nil = no usage recording
 	pricing           map[string]config.PricingEntry // model→cost for usage recording
 
@@ -309,9 +308,11 @@ func (l *Loop) SetRecoveryModel(model string) {
 	l.recoveryModel = model
 }
 
-// SetDebugConfig configures debug options for the agent loop.
-func (l *Loop) SetDebugConfig(cfg config.DebugConfig) {
-	l.debugCfg = cfg
+// SetContentWriter configures the content retention writer. When set,
+// system prompts, tool call details, and request/response content are
+// persisted to the log index database after each request completes.
+func (l *Loop) SetContentWriter(w *logging.ContentWriter) {
+	l.contentWriter = w
 }
 
 // SetCapabilityTags configures tag-driven tool and talent filtering.
@@ -494,8 +495,8 @@ func getGreetingResponse() string {
 }
 
 // promptSection records the name and byte boundaries of one section in
-// the assembled system prompt. Used by the debug dump to annotate
-// section sizes.
+// the assembled system prompt. Used for content retention (prompt
+// archival with section metadata) and future section-level diffing.
 type promptSection struct {
 	name  string
 	start int
@@ -664,13 +665,7 @@ func (l *Loop) buildSystemPrompt(ctx context.Context, userMessage string, histor
 		seal()
 	}
 
-	result := sb.String()
-
-	if l.debugCfg.DumpSystemPrompt {
-		l.dumpSystemPrompt(result, sections)
-	}
-
-	return result
+	return sb.String()
 }
 
 // injectEgo injects the ego.md content into the system prompt. When a
@@ -751,78 +746,19 @@ func formatDeltaDuration(d time.Duration) string {
 	}
 }
 
-// dumpSystemPrompt writes the assembled system prompt to disk with
-// section markers and size annotations. Errors are logged as warnings
-// and never fail the request.
-func (l *Loop) dumpSystemPrompt(prompt string, sections []promptSection) {
-	dir := l.debugCfg.DumpDir
-	if dir == "" {
-		dir = "./debug"
-	}
-
-	if err := os.MkdirAll(dir, 0o750); err != nil {
-		l.logger.Warn("debug: failed to create dump dir", "dir", dir, "error", err)
-		return
-	}
-
-	var dump strings.Builder
-	attrs := make([]any, 0, len(sections)*2+2)
-	for _, s := range sections {
-		size := s.end - s.start
-		attrs = append(attrs, strings.ToLower(strings.ReplaceAll(s.name, " ", "_")), size)
-		fmt.Fprintf(&dump, "=== %s (%s chars) ===\n", s.name, formatNumber(size))
-		dump.WriteString(prompt[s.start:s.end])
-		if !strings.HasSuffix(prompt[s.start:s.end], "\n") {
-			dump.WriteString("\n")
-		}
-		dump.WriteString("\n")
-	}
-	fmt.Fprintf(&dump, "=== TOTAL: %s chars ===\n", formatNumber(len(prompt)))
-	attrs = append(attrs, "total", len(prompt))
-
-	l.logger.Info("debug: system prompt dump", attrs...)
-
-	path := filepath.Join(dir, "system-prompt-latest.txt")
-	if err := os.WriteFile(path, []byte(dump.String()), 0o640); err != nil {
-		l.logger.Warn("debug: failed to write system prompt dump", "path", path, "error", err)
-	}
-}
-
-// formatNumber formats an integer with comma separators for readability
-// in debug output (e.g., 87494 → "87,494").
-func formatNumber(n int) string {
-	s := fmt.Sprintf("%d", n)
-	if len(s) <= 3 {
-		return s
-	}
-	var sb strings.Builder
-	remainder := len(s) % 3
-	if remainder > 0 {
-		sb.WriteString(s[:remainder])
-	}
-	for i := remainder; i < len(s); i += 3 {
-		if sb.Len() > 0 {
-			sb.WriteByte(',')
-		}
-		sb.WriteString(s[i : i+3])
-	}
-	return sb.String()
-}
-
-// generateRequestID returns a short, human-scannable identifier for a single
-// user-message turn (e.g., "r_7f3ab2c1"). It uses 4 random bytes from a
-// UUIDv7 (bytes 8-11), giving 32 bits of entropy — sufficient for
-// request-level correlation without realistic collision risk.
+// generateRequestID returns a human-scannable identifier for a single
+// user-message turn (e.g., "r_7f3ab2c1d5e6f7a8"). It uses 8 random
+// bytes from a UUIDv7 (bytes 8-15), giving ~62 bits of effective
+// entropy after the variant/version bits. This is wide enough that
+// birthday collisions are negligible even over millions of retained
+// request traces.
 func generateRequestID() string {
 	id, err := uuid.NewV7()
 	if err != nil {
-		// Fallback: use current time hex if UUID generation fails.
-		return fmt.Sprintf("r_%08x", time.Now().UnixMilli()&0xFFFFFFFF)
+		return fmt.Sprintf("r_%016x", time.Now().UnixNano())
 	}
-	// Bytes 8-11 are from the random section of UUIDv7 (after the
-	// variant bits in byte 8, masked by the UUID spec, but still
-	// provide ~30 bits of effective randomness).
-	return "r_" + hex.EncodeToString(id[8:12])
+	// Bytes 8-15 are the random section of UUIDv7.
+	return "r_" + hex.EncodeToString(id[8:16])
 }
 
 // Run executes one iteration of the agent loop.
@@ -1482,6 +1418,14 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	l.recordUsage(ctx, req, iterResult.Model, iterResult.InputTokens, iterResult.OutputTokens, convID, sessionTag, requestID)
 	l.archiveIterations(log, convID, iterResult.Iterations)
 
+	// Content retention is fire-and-forget with a short deadline so it
+	// never blocks response delivery.
+	go func() {
+		bgCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		l.retainContent(bgCtx, requestID, systemPrompt, userMessage, iterResult)
+	}()
+
 	return resp, nil
 }
 
@@ -1640,6 +1584,29 @@ func (l *Loop) archiveIterations(log *slog.Logger, convID string, iterations []i
 	if err := l.archiver.ArchiveIterations(archived); err != nil {
 		log.Warn("failed to archive iterations", "error", err)
 	}
+}
+
+// retainContent persists request-level content (system prompt, tool call
+// details, messages) to the log index database. No-op when the content
+// writer is nil (content retention disabled).
+func (l *Loop) retainContent(ctx context.Context, requestID, systemPrompt, userMessage string, result *iterate.Result) {
+	if l.contentWriter == nil {
+		return
+	}
+	l.contentWriter.WriteRequest(ctx, logging.RequestContent{
+		RequestID:        requestID,
+		SystemPrompt:     systemPrompt,
+		UserContent:      userMessage,
+		Model:            result.Model,
+		AssistantContent: result.Content,
+		IterationCount:   result.IterationCount,
+		InputTokens:      result.InputTokens,
+		OutputTokens:     result.OutputTokens,
+		ToolsUsed:        result.ToolsUsed,
+		Exhausted:        result.Exhausted,
+		ExhaustReason:    result.ExhaustReason,
+		Messages:         result.Messages,
+	})
 }
 
 // Timeout recovery constants.

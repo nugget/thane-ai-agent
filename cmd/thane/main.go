@@ -343,6 +343,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// output destination. The initial Info-level text logger above is used
 	// only for the startup banner and config load message.
 	var indexDB *sql.DB
+	var contentWriter *logging.ContentWriter
 	{
 		level, _ := config.ParseLogLevel(cfg.Logging.Level)
 
@@ -394,6 +395,21 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 			"thane_version", buildinfo.Version,
 			"thane_commit", buildinfo.GitCommit,
 		)
+	}
+
+	// Content retention — create after the final logger so warnings
+	// go through the configured handler.
+	if cfg.Logging.RetainContent && indexDB != nil {
+		cw, cwErr := logging.NewContentWriter(indexDB, cfg.Logging.ContentMaxLength(), logger)
+		if cwErr != nil {
+			logger.Warn("failed to create content writer, content retention disabled", "error", cwErr)
+		} else {
+			contentWriter = cw
+			defer contentWriter.Close()
+			logger.Info("content retention enabled",
+				"max_content_length", cfg.Logging.ContentMaxLength(),
+			)
+		}
 	}
 
 	// Log PATH augmentation now that the final logger is configured.
@@ -830,7 +846,9 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 
 	loop = agent.NewLoop(logger, mem, compactor, rtr, ha, sched, llmClient, cfg.Models.Default, talentContent, personaContent, defaultContextWindow)
 	loop.SetTimezone(cfg.Timezone)
-	loop.SetDebugConfig(cfg.Debug)
+	if contentWriter != nil {
+		loop.SetContentWriter(contentWriter)
+	}
 	if cfg.Models.RecoveryModel != "" {
 		loop.SetRecoveryModel(cfg.Models.RecoveryModel)
 		logger.Info("LLM timeout recovery enabled", "recovery_model", cfg.Models.RecoveryModel)
@@ -1723,6 +1741,9 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		delegateExec.ApplyProfileOverrides(overrides)
 	}
 	delegateExec.SetTimezone(cfg.Timezone)
+	if contentWriter != nil {
+		delegateExec.SetContentWriter(contentWriter)
+	}
 	delegateExec.SetArchiver(archiveStore)
 	delegateExec.SetUsageRecorder(usageStore, cfg.Pricing)
 	delegateExec.SetEventBus(eventBus)
