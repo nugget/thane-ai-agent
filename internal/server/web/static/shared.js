@@ -425,7 +425,13 @@ function buildLiveCard(loop) {
   liveLabel.className = 'iter-card__live-label';
   liveLabel.textContent = loop._supervisor ? 'SUPERVISOR' : 'LIVE';
 
+  // Show which iteration number is running (next after completed count).
+  const iterNum = document.createElement('span');
+  iterNum.className = 'iter-card__iter-num';
+  iterNum.textContent = '#' + ((loop.iterations || 0) + 1);
+
   header.appendChild(liveLabel);
+  header.appendChild(iterNum);
   header.appendChild(elapsed);
   header.appendChild(model);
   card.appendChild(header);
@@ -878,10 +884,14 @@ function applyLoopEventToLoop(evt, ctx) {
 // age, last error) into the given DOM element.
 function renderAggregates(loop, el) {
   const parts = [];
-  const iter = loop.iterations || 0;
+  // Delegate nodes track iterations via their completion event, not
+  // the loop counter (which is never incremented for synthetic nodes).
+  const iter = loop._delegate
+    ? (loop._delegateIterations || 0)
+    : (loop.iterations || 0);
   const att = loop.attempts || 0;
   parts.push(formatNumber(iter) + ' iter');
-  if (att !== iter) parts.push(formatNumber(att) + ' att');
+  if (!loop._delegate && att !== iter) parts.push(formatNumber(att) + ' att');
   const totalTok = (loop.total_input_tokens || 0) + (loop.total_output_tokens || 0);
   if (totalTok > 0) parts.push(formatTokens(totalTok) + ' tok');
   if (loop.started_at) parts.push(timeAgo(new Date(loop.started_at)));
@@ -916,9 +926,13 @@ function renderTimeline(loop, container, history, sleepTimerId, sleepTimers) {
   // Live card (shown during processing).
   if (isProcessing && loop._iterStartTs) {
     container.appendChild(buildLiveCard(loop));
+    // Add a connector between the live card and past history.
+    if (history.length > 0) {
+      container.appendChild(buildConnector(loop, history[0], false, null));
+    }
   }
 
-  // Live connector (between live position and first past card).
+  // Live connector (between sleep/wait position and first past card).
   if ((isSleeping || isWaiting) && history.length > 0) {
     container.appendChild(buildConnector(loop, history[0], true, sleepTimers.get(sleepTimerId)));
   }
