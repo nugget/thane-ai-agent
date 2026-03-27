@@ -1491,8 +1491,8 @@ func TestExecute_ExhaustReasonIllegalTool(t *testing.T) {
 	if result.ExhaustReason != ExhaustIllegalTool {
 		t.Errorf("ExhaustReason = %q, want %q", result.ExhaustReason, ExhaustIllegalTool)
 	}
-	if result.Iterations != 2 {
-		t.Errorf("Iterations = %d, want 2 (initial illegal + recovery illegal before break)", result.Iterations)
+	if result.Iterations != 3 {
+		t.Errorf("Iterations = %d, want 3 (initial illegal + recovery illegal + force-text)", result.Iterations)
 	}
 }
 
