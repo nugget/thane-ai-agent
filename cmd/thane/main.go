@@ -388,16 +388,6 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 				defer indexDB.Close()
 				defer indexHandler.Close() // LIFO: flush pending entries before closing DB
 				handler = indexHandler
-
-				if cfg.Logging.RetainContent {
-					cw, cwErr := logging.NewContentWriter(indexDB, cfg.Logging.ContentMaxLength(), slog.Default())
-					if cwErr != nil {
-						logger.Warn("failed to create content writer, content retention disabled", "error", cwErr)
-					} else {
-						contentWriter = cw
-						defer contentWriter.Close()
-					}
-				}
 			}
 		}
 
@@ -405,6 +395,21 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 			"thane_version", buildinfo.Version,
 			"thane_commit", buildinfo.GitCommit,
 		)
+	}
+
+	// Content retention — create after the final logger so warnings
+	// go through the configured handler.
+	if cfg.Logging.RetainContent && indexDB != nil {
+		cw, cwErr := logging.NewContentWriter(indexDB, cfg.Logging.ContentMaxLength(), logger)
+		if cwErr != nil {
+			logger.Warn("failed to create content writer, content retention disabled", "error", cwErr)
+		} else {
+			contentWriter = cw
+			defer contentWriter.Close()
+			logger.Info("content retention enabled",
+				"max_content_length", cfg.Logging.ContentMaxLength(),
+			)
+		}
 	}
 
 	// Log PATH augmentation now that the final logger is configured.

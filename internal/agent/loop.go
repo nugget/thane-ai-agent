@@ -1418,7 +1418,14 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 
 	l.recordUsage(ctx, req, iterResult.Model, iterResult.InputTokens, iterResult.OutputTokens, convID, sessionTag, requestID)
 	l.archiveIterations(log, convID, iterResult.Iterations)
-	l.retainContent(ctx, requestID, systemPrompt, userMessage, iterResult)
+
+	// Content retention is fire-and-forget with a short deadline so it
+	// never blocks response delivery.
+	go func() {
+		bgCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		l.retainContent(bgCtx, requestID, systemPrompt, userMessage, iterResult)
+	}()
 
 	return resp, nil
 }

@@ -257,6 +257,11 @@ func Migrate(db *sql.DB) error {
 
 	// Content retention tables — created unconditionally (the schema
 	// is cheap; the config flag gates writes, not table creation).
+	// prompt_hash is a logical foreign key to log_prompts(hash) but
+	// is not enforced via FOREIGN KEY constraint — SQLite FK
+	// enforcement requires PRAGMA foreign_keys=ON per connection and
+	// would add overhead to every write for minimal benefit in this
+	// append-mostly workload.
 	contentSchema := `
 	CREATE TABLE IF NOT EXISTS log_prompts (
 		hash TEXT PRIMARY KEY,

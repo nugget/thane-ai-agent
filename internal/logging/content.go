@@ -29,6 +29,7 @@ type ContentWriter struct {
 	logger            *slog.Logger
 	stmtUpsertPrompt  *sql.Stmt
 	stmtInsertRequest *sql.Stmt
+	stmtDeleteTools   *sql.Stmt
 	stmtInsertTool    *sql.Stmt
 }
 
@@ -53,12 +54,20 @@ func NewContentWriter(db *sql.DB, maxLen int, logger *slog.Logger) (*ContentWrit
 		return nil, fmt.Errorf("prepare insert request: %w", err)
 	}
 
+	deleteTools, err := db.Prepare(`DELETE FROM log_tool_content WHERE request_id = ?`)
+	if err != nil {
+		upsertPrompt.Close()
+		insertRequest.Close()
+		return nil, fmt.Errorf("prepare delete tools: %w", err)
+	}
+
 	insertTool, err := db.Prepare(`INSERT INTO log_tool_content
 		(request_id, iteration_index, tool_call_id, tool_name, arguments, result, created_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		upsertPrompt.Close()
 		insertRequest.Close()
+		deleteTools.Close()
 		return nil, fmt.Errorf("prepare insert tool: %w", err)
 	}
 
@@ -68,6 +77,7 @@ func NewContentWriter(db *sql.DB, maxLen int, logger *slog.Logger) (*ContentWrit
 		logger:            logger,
 		stmtUpsertPrompt:  upsertPrompt,
 		stmtInsertRequest: insertRequest,
+		stmtDeleteTools:   deleteTools,
 		stmtInsertTool:    insertTool,
 	}, nil
 }
@@ -76,6 +86,7 @@ func NewContentWriter(db *sql.DB, maxLen int, logger *slog.Logger) (*ContentWrit
 func (w *ContentWriter) Close() error {
 	w.stmtUpsertPrompt.Close()
 	w.stmtInsertRequest.Close()
+	w.stmtDeleteTools.Close()
 	w.stmtInsertTool.Close()
 	return nil
 }
@@ -153,6 +164,16 @@ func (w *ContentWriter) WriteRequest(ctx context.Context, rc RequestContent) {
 // arguments and results. Tool calls appear as assistant messages with
 // ToolCalls, followed by tool-role messages with the result content.
 func (w *ContentWriter) writeToolCalls(ctx context.Context, requestID string, messages []llm.Message, now string) {
+	// Delete any existing tool rows for this request to prevent
+	// duplicates if WriteRequest is called more than once (e.g.,
+	// INSERT OR REPLACE on the request row doesn't cascade).
+	if _, err := w.stmtDeleteTools.ExecContext(ctx, requestID); err != nil {
+		w.logger.Warn("content retention: failed to clear old tool rows",
+			"request_id", requestID,
+			"error", err,
+		)
+	}
+
 	// Build a map of tool_call_id → result content from tool messages.
 	results := make(map[string]string)
 	for _, m := range messages {

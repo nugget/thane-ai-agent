@@ -482,7 +482,13 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 			var partialIterations []iterate.IterationRecord
 			if iterResult != nil {
 				partialIterations = iterResult.Iterations
-				e.retainContent(ctx, did, messages[0].Content, userMsg.String(), iterResult)
+				// ctx is past its deadline — use a fresh context so content
+				// retention writes don't fail immediately.
+				go func() {
+					retainCtx, retainCancel := context.WithTimeout(context.Background(), 5*time.Second)
+					defer retainCancel()
+					e.retainContent(retainCtx, did, messages[0].Content, userMsg.String(), iterResult)
+				}()
 			}
 			e.recordCompletion(&completionRecord{
 				log:              log,
@@ -535,7 +541,11 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 	}
 
 	completed = true
-	e.retainContent(ctx, did, messages[0].Content, userMsg.String(), iterResult)
+	go func() {
+		bgCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		e.retainContent(bgCtx, did, messages[0].Content, userMsg.String(), iterResult)
+	}()
 	e.recordCompletion(&completionRecord{
 		log:              log,
 		delegateID:       did,

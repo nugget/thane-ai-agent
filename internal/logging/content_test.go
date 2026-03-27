@@ -161,6 +161,49 @@ func TestContentWriter_ToolCallExtraction(t *testing.T) {
 	}
 }
 
+func TestContentWriter_DuplicateWriteNoDuplicateTools(t *testing.T) {
+	db := openTestDB(t)
+	w, err := NewContentWriter(db, 4096, slog.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Close()
+
+	rc := RequestContent{
+		RequestID:    "r_dup",
+		SystemPrompt: "system",
+		UserContent:  "hi",
+		Model:        "m",
+		Messages: []llm.Message{
+			{Role: "system", Content: "system"},
+			{Role: "user", Content: "hi"},
+			{Role: "assistant", ToolCalls: []llm.ToolCall{
+				{
+					ID: "tc_dup",
+					Function: struct {
+						Name      string         `json:"name"`
+						Arguments map[string]any `json:"arguments"`
+					}{Name: "tool_a", Arguments: map[string]any{"x": 1}},
+				},
+			}},
+			{Role: "tool", ToolCallID: "tc_dup", Content: "result"},
+			{Role: "assistant", Content: "done"},
+		},
+		AssistantContent: "done",
+		IterationCount:   2,
+	}
+
+	// Write twice — tool rows should not duplicate.
+	w.WriteRequest(context.Background(), rc)
+	w.WriteRequest(context.Background(), rc)
+
+	var count int
+	db.QueryRow("SELECT COUNT(*) FROM log_tool_content WHERE request_id = ?", "r_dup").Scan(&count)
+	if count != 1 {
+		t.Errorf("tool row count = %d after double write, want 1", count)
+	}
+}
+
 func TestContentWriter_Truncation(t *testing.T) {
 	db := openTestDB(t)
 	w, err := NewContentWriter(db, 10, slog.Default()) // maxLen = 10

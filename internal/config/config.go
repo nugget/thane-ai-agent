@@ -360,6 +360,9 @@ func (l LoggingConfig) ContentMaxLength() int {
 	if l.MaxContentLength == nil {
 		return 4096
 	}
+	if *l.MaxContentLength < 0 {
+		return 0
+	}
 	return *l.MaxContentLength
 }
 
