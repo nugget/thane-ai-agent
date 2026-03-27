@@ -15,10 +15,10 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/awareness"
 	"github.com/nugget/thane-ai-agent/internal/config"
 	"github.com/nugget/thane-ai-agent/internal/events"
+	"github.com/nugget/thane-ai-agent/internal/iterate"
 	"github.com/nugget/thane-ai-agent/internal/llm"
 	"github.com/nugget/thane-ai-agent/internal/logging"
 	"github.com/nugget/thane-ai-agent/internal/memory"
-	"github.com/nugget/thane-ai-agent/internal/prompts"
 	"github.com/nugget/thane-ai-agent/internal/router"
 	"github.com/nugget/thane-ai-agent/internal/tools"
 	"github.com/nugget/thane-ai-agent/internal/usage"
@@ -27,19 +27,16 @@ import (
 // delegateToolName is the tool name excluded from delegate registries to prevent recursion.
 const delegateToolName = "thane_delegate"
 
-// Exhaustion reason constants.
+// Exhaustion reason constants are defined in the [iterate] package.
+// These aliases preserve backward compatibility for consumers that
+// reference them via the delegate package.
 const (
-	ExhaustMaxIterations = "max_iterations"
-	ExhaustTokenBudget   = "token_budget"
-	ExhaustWallClock     = "wall_clock"
-	ExhaustNoOutput      = "no_output"
-	ExhaustIllegalTool   = "illegal_tool"
+	ExhaustMaxIterations = iterate.ExhaustMaxIterations
+	ExhaustTokenBudget   = iterate.ExhaustTokenBudget
+	ExhaustWallClock     = iterate.ExhaustWallClock
+	ExhaustNoOutput      = iterate.ExhaustNoOutput
+	ExhaustIllegalTool   = iterate.ExhaustIllegalTool
 )
-
-// maxIllegalStrikes is the number of consecutive iterations containing
-// illegal tool calls before the loop forces a text-only response. The
-// first strike allows the model one recovery iteration to self-correct.
-const maxIllegalStrikes = 2
 
 // ToolCallOutcome records the name and success/failure of a single tool
 // invocation during delegate execution.
@@ -338,7 +335,6 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 	startTime := time.Now()
 	var totalInput, totalOutput int
 	var toolCalls []ToolCallOutcome
-	var iterations []iterationRecord
 
 	// Publish complete event on all exit paths so the dashboard removes
 	// the ephemeral node. The defer captures the named return delegateResult.
@@ -397,264 +393,67 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 		}
 	}()
 
-	illegalStrikes := 0 // Consecutive iterations with illegal tool calls
+	// Build the iterate.Config, delegating tool execution to
+	// DeadlineExecutor with per-tool timeouts.
+	toolTimeout := profile.ToolTimeout
+	if toolTimeout == 0 {
+		toolTimeout = defaultToolTimeout
+	}
 
-	for i := range maxIter {
-		// Inject iteration index into context so downstream tool
-		// implementations inherit it automatically via logging.Logger(ctx).
-		iterLog := log.With("iter", i)
-		iterCtx := logging.WithLogger(ctx, iterLog)
+	// toolCancelFuncs holds per-tool cancel functions created by
+	// OnBeforeToolExec, cancelled after each tool completes.
+	var currentToolCancel context.CancelFunc
 
-		// Check context at iteration boundary. External cancellation
-		// (caller cancelled) returns an error; our own deadline
-		// (wall clock enforcement) returns an exhaustion result.
-		if err := ctx.Err(); err != nil {
-			if errors.Is(err, context.DeadlineExceeded) {
-				iterLog.Warn("delegate context deadline at iteration boundary",
-					"elapsed", time.Since(startTime).Round(time.Second),
-				)
-				completed = true
-				e.recordCompletion(&completionRecord{
-					log:              log,
-					delegateID:       did,
-					conversationID:   convID,
-					archiveSessionID: archiveSessionID,
-					task:             task,
-					guidance:         guidance,
-					profileName:      profile.Name,
-					model:            model,
-					totalIter:        i,
-					maxIter:          maxIter,
-					totalInput:       totalInput,
-					totalOutput:      totalOutput,
-					exhausted:        true,
-					exhaustReason:    ExhaustWallClock,
-					startTime:        startTime,
-					messages:         messages,
-					resultContent:    "Delegate was unable to complete the task within its time limit.",
-					errMsg:           err.Error(),
-					toolCalls:        toolCalls,
-					iterations:       iterations,
-				})
-				return &Result{
-					Content:       "Delegate was unable to complete the task within its time limit.",
-					Model:         model,
-					Iterations:    i,
-					InputTokens:   totalInput,
-					OutputTokens:  totalOutput,
-					Exhausted:     true,
-					ExhaustReason: ExhaustWallClock,
-					ToolCalls:     toolCalls,
-					Duration:      time.Since(startTime),
-				}, nil
+	iterCfg := iterate.Config{
+		MaxIterations: maxIter,
+		Model:         model,
+		LLM:           e.llm,
+		ToolDefs:      func(int) []map[string]any { return toolDefs },
+		Executor: &iterate.DeadlineExecutor{
+			Exec: func(execCtx context.Context, name, argsJSON string) (string, error) {
+				// Expand caller-defined path prefixes in file tool arguments.
+				if len(pathPrefixes) > 0 && fileTools[name] {
+					argsJSON = expandPathPrefixes(name, argsJSON, pathPrefixes)
+				}
+				return reg.Execute(execCtx, name, argsJSON)
+			},
+		},
+		OnBeforeToolExec: func(execCtx context.Context, _ int, _ llm.ToolCall) context.Context {
+			toolCtx := tools.WithConversationID(execCtx, convID)
+			toolCtx, currentToolCancel = context.WithTimeout(toolCtx, toolTimeout)
+			return toolCtx
+		},
+		OnToolCallDone: func(_ context.Context, name, _, errMsg string) {
+			if currentToolCancel != nil {
+				currentToolCancel()
+				currentToolCancel = nil
 			}
-			// External cancellation — propagate as error.
-			return nil, fmt.Errorf("delegate cancelled: %w", err)
-		}
-
-		// Check wall clock limit (may fire before context deadline due
-		// to scheduling jitter).
-		if time.Since(startTime) > maxDuration {
-			iterLog.Warn("delegate wall clock exceeded",
-				"elapsed", time.Since(startTime).Round(time.Second),
-				"max_duration", maxDuration,
-			)
-			completed = true
-			return e.forceTextResponse(ctx, model, messages, &completionRecord{
-				log:              log,
-				delegateID:       did,
-				conversationID:   convID,
-				archiveSessionID: archiveSessionID,
-				task:             task,
-				guidance:         guidance,
-				profileName:      profile.Name,
-				model:            model,
-				totalIter:        i,
-				maxIter:          maxIter,
-				totalInput:       totalInput,
-				totalOutput:      totalOutput,
-				exhausted:        true,
-				exhaustReason:    ExhaustWallClock,
-				startTime:        startTime,
-				messages:         messages,
-				toolCalls:        toolCalls,
-				iterations:       iterations,
+			toolCalls = append(toolCalls, ToolCallOutcome{
+				Name:    name,
+				Success: errMsg == "",
 			})
-		}
-
-		iterStart := time.Now()
-
-		iterLog.Info("delegate llm call",
-			"model", model,
-			"msgs", len(messages),
-		)
-
-		resp, err := e.llm.ChatStream(iterCtx, model, messages, toolDefs, nil)
-		if err != nil {
-			// If our context deadline fired (wall clock enforcement),
-			// return an exhaustion result instead of an opaque error.
-			// Cannot call forceTextResponse — context is already cancelled.
-			// External cancellation (context.Canceled) is propagated as an error.
+		},
+		CheckBudget:    func(totalOut int) bool { return totalOut >= maxTokens },
+		CheckToolAvail: func(name string) bool { return reg.Get(name) != nil },
+		OnLLMError: func(_ context.Context, err error, m string,
+			_ []llm.Message, _ []map[string]any,
+			_ llm.StreamCallback) (*llm.ChatResponse, string, error) {
+			// Translate context deadline into wall-clock exhaustion so
+			// the engine returns an exhaustion result.
 			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-				iterLog.Warn("delegate context deadline exceeded during llm call",
-					"elapsed", time.Since(startTime).Round(time.Second),
-					"max_duration", maxDuration,
-				)
-				completed = true
-				e.recordCompletion(&completionRecord{
-					log:              log,
-					delegateID:       did,
-					conversationID:   convID,
-					archiveSessionID: archiveSessionID,
-					task:             task,
-					guidance:         guidance,
-					profileName:      profile.Name,
-					model:            model,
-					totalIter:        i + 1,
-					maxIter:          maxIter,
-					totalInput:       totalInput,
-					totalOutput:      totalOutput,
-					exhausted:        true,
-					exhaustReason:    ExhaustWallClock,
-					startTime:        startTime,
-					messages:         messages,
-					resultContent:    "Delegate was unable to complete the task within its time limit.",
-					errMsg:           err.Error(),
-					toolCalls:        toolCalls,
-					iterations:       iterations,
-				})
-				return &Result{
-					Content:       "Delegate was unable to complete the task within its time limit.",
-					Model:         model,
-					Iterations:    i + 1,
-					InputTokens:   totalInput,
-					OutputTokens:  totalOutput,
-					Exhausted:     true,
-					ExhaustReason: ExhaustWallClock,
-					ToolCalls:     toolCalls,
-					Duration:      time.Since(startTime),
-				}, nil
+				return nil, "", err
 			}
-			// External cancellation — use consistent error form.
-			if errors.Is(ctx.Err(), context.Canceled) {
-				completed = true
-				return nil, fmt.Errorf("delegate cancelled: %w", ctx.Err())
-			}
-			completed = true
-			return nil, fmt.Errorf("delegate llm call failed (iter %d): %w", i, err)
-		}
+			return nil, "", err
+		},
+	}
 
-		totalInput += resp.InputTokens
-		totalOutput += resp.OutputTokens
+	engine := &iterate.Engine{}
+	iterResult, err := engine.Run(ctx, iterCfg, messages)
 
-		// Re-check wall clock after LLM call — it may have taken a while.
-		if time.Since(startTime) > maxDuration {
-			iterLog.Warn("delegate wall clock exceeded after llm call",
-				"elapsed", time.Since(startTime).Round(time.Second),
-				"max_duration", maxDuration,
-			)
-			messages = append(messages, resp.Message)
-			iterations = append(iterations, iterationRecord{
-				index:        i,
-				model:        model,
-				inputTokens:  resp.InputTokens,
-				outputTokens: resp.OutputTokens,
-				toolsOffered: toolNames,
-				startedAt:    iterStart,
-				durationMs:   time.Since(iterStart).Milliseconds(),
-				hasToolCalls: len(resp.Message.ToolCalls) > 0,
-				breakReason:  ExhaustWallClock,
-			})
-			completed = true
-			return e.forceTextResponse(ctx, model, messages, &completionRecord{
-				log:              log,
-				delegateID:       did,
-				conversationID:   convID,
-				archiveSessionID: archiveSessionID,
-				task:             task,
-				guidance:         guidance,
-				profileName:      profile.Name,
-				model:            model,
-				totalIter:        i + 1,
-				maxIter:          maxIter,
-				totalInput:       totalInput,
-				totalOutput:      totalOutput,
-				exhausted:        true,
-				exhaustReason:    ExhaustWallClock,
-				startTime:        startTime,
-				messages:         messages,
-				toolCalls:        toolCalls,
-				iterations:       iterations,
-			})
-		}
-
-		iterLog.Info("delegate llm response",
-			"model", model,
-			"input_tokens", resp.InputTokens,
-			"output_tokens", resp.OutputTokens,
-			"tool_calls", len(resp.Message.ToolCalls),
-			"elapsed", time.Since(iterStart).Round(time.Second),
-		)
-
-		// Record this iteration for the execution trace.
-		iterRec := iterationRecord{
-			index:        i,
-			model:        resp.Model,
-			inputTokens:  resp.InputTokens,
-			outputTokens: resp.OutputTokens,
-			toolsOffered: toolNames,
-			startedAt:    iterStart,
-			durationMs:   time.Since(iterStart).Milliseconds(),
-			hasToolCalls: len(resp.Message.ToolCalls) > 0,
-		}
-
-		// No tool calls — we have the final response.
-		if len(resp.Message.ToolCalls) == 0 {
-			content := resp.Message.Content
-			messages = append(messages, resp.Message)
-			iterations = append(iterations, iterRec)
-
-			// Empty content after tool-call iterations is a silent failure.
-			// The model completed its tool work but never produced text output.
-			if content == "" && i > 0 {
-				iterLog.Warn("delegate produced empty result after tool calls",
-					"total_iter", i+1,
-				)
-				completed = true
-				e.recordCompletion(&completionRecord{
-					log:              log,
-					delegateID:       did,
-					conversationID:   convID,
-					archiveSessionID: archiveSessionID,
-					task:             task,
-					guidance:         guidance,
-					profileName:      profile.Name,
-					model:            model,
-					totalIter:        i + 1,
-					maxIter:          maxIter,
-					totalInput:       totalInput,
-					totalOutput:      totalOutput,
-					exhausted:        true,
-					exhaustReason:    ExhaustNoOutput,
-					startTime:        startTime,
-					messages:         messages,
-					resultContent:    "",
-					toolCalls:        toolCalls,
-					iterations:       iterations,
-				})
-				return &Result{
-					Content:       "",
-					Model:         model,
-					Iterations:    i + 1,
-					InputTokens:   totalInput,
-					OutputTokens:  totalOutput,
-					Exhausted:     true,
-					ExhaustReason: ExhaustNoOutput,
-					ToolCalls:     toolCalls,
-					Duration:      time.Since(startTime),
-				}, nil
-			}
-
+	// Handle context errors that propagated through the engine.
+	if err != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			// Wall clock exhaustion — return result, not error.
 			completed = true
 			e.recordCompletion(&completionRecord{
 				log:              log,
@@ -665,252 +464,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 				guidance:         guidance,
 				profileName:      profile.Name,
 				model:            model,
-				totalIter:        i + 1,
-				maxIter:          maxIter,
-				totalInput:       totalInput,
-				totalOutput:      totalOutput,
-				exhausted:        false,
-				startTime:        startTime,
-				messages:         messages,
-				resultContent:    content,
-				toolCalls:        toolCalls,
-				iterations:       iterations,
-			})
-			return &Result{
-				Content:      content,
-				Model:        model,
-				Iterations:   i + 1,
-				InputTokens:  totalInput,
-				OutputTokens: totalOutput,
-				Exhausted:    false,
-				ToolCalls:    toolCalls,
-				Duration:     time.Since(startTime),
-			}, nil
-		}
-
-		// Check token budget before executing tools.
-		if totalOutput >= maxTokens {
-			iterLog.Warn("delegate token budget exhausted",
-				"cumul_output", totalOutput,
-				"max_tokens", maxTokens,
-			)
-			iterRec.breakReason = ExhaustTokenBudget
-			iterRec.durationMs = time.Since(iterStart).Milliseconds()
-			iterations = append(iterations, iterRec)
-			completed = true
-			return e.forceTextResponse(ctx, model, messages, &completionRecord{
-				log:              log,
-				delegateID:       did,
-				conversationID:   convID,
-				archiveSessionID: archiveSessionID,
-				task:             task,
-				guidance:         guidance,
-				profileName:      profile.Name,
-				model:            model,
-				totalIter:        i + 1,
-				maxIter:          maxIter,
-				totalInput:       totalInput,
-				totalOutput:      totalOutput,
-				exhausted:        true,
-				exhaustReason:    ExhaustTokenBudget,
-				startTime:        startTime,
-				messages:         messages,
-				toolCalls:        toolCalls,
-				iterations:       iterations,
-			})
-		}
-
-		// Execute tool calls.
-		messages = append(messages, resp.Message)
-		var illegalCall bool
-		for _, tc := range resp.Message.ToolCalls {
-			// Track tool call ID for iteration linkage.
-			iterRec.toolCallIDs = append(iterRec.toolCallIDs, tc.ID)
-
-			argsJSON := ""
-			if tc.Function.Arguments != nil {
-				argsBytes, _ := json.Marshal(tc.Function.Arguments)
-				argsJSON = string(argsBytes)
-			}
-
-			// Expand caller-defined path prefixes in file tool arguments.
-			if len(pathPrefixes) > 0 && fileTools[tc.Function.Name] {
-				argsJSON = expandPathPrefixes(tc.Function.Name, argsJSON, pathPrefixes)
-			}
-
-			toolStart := time.Now()
-
-			iterLog.Info("delegate tool exec",
-				"tool", tc.Function.Name,
-			)
-
-			toolCtx := tools.WithConversationID(iterCtx, convID)
-			toolTimeout := profile.ToolTimeout
-			if toolTimeout == 0 {
-				toolTimeout = defaultToolTimeout
-			}
-			toolCtx, toolCancel := context.WithTimeout(toolCtx, toolTimeout)
-			result, err := executeWithDeadline(toolCtx, reg, tc.Function.Name, argsJSON)
-			toolCancel()
-
-			toolCalls = append(toolCalls, ToolCallOutcome{
-				Name:    tc.Function.Name,
-				Success: err == nil,
-			})
-
-			if err != nil {
-				// Illegal tool call — tool not in delegate's registry.
-				var unavail *tools.ErrToolUnavailable
-				if errors.As(err, &unavail) {
-					illegalCall = true
-					result = fmt.Sprintf(prompts.IllegalToolMessage, tc.Function.Name)
-					iterLog.Warn("delegate illegal tool call",
-						"tool", tc.Function.Name,
-					)
-				} else if errors.Is(toolCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil {
-					// Per-tool timeout fired but parent context is still alive —
-					// report as a tool error so the LLM can adapt.
-					iterLog.Warn("delegate tool exec timed out",
-						"tool", tc.Function.Name,
-						"timeout", toolTimeout,
-					)
-					result = fmt.Sprintf("Error: tool %s timed out after %s", tc.Function.Name, toolTimeout)
-				} else if ctx.Err() != nil {
-					// Parent context is done (our deadline or external
-					// cancellation) — stop executing remaining tool calls.
-					if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-						iterLog.Warn("delegate context deadline exceeded during tool exec",
-							"tool", tc.Function.Name,
-							"elapsed", time.Since(startTime).Round(time.Second),
-						)
-						iterRec.breakReason = ExhaustWallClock
-						iterRec.durationMs = time.Since(iterStart).Milliseconds()
-						iterations = append(iterations, iterRec)
-						completed = true
-						e.recordCompletion(&completionRecord{
-							log:              log,
-							delegateID:       did,
-							conversationID:   convID,
-							archiveSessionID: archiveSessionID,
-							task:             task,
-							guidance:         guidance,
-							profileName:      profile.Name,
-							model:            model,
-							totalIter:        i + 1,
-							maxIter:          maxIter,
-							totalInput:       totalInput,
-							totalOutput:      totalOutput,
-							exhausted:        true,
-							exhaustReason:    ExhaustWallClock,
-							startTime:        startTime,
-							messages:         messages,
-							resultContent:    "Delegate was unable to complete the task within its time limit.",
-							errMsg:           err.Error(),
-							toolCalls:        toolCalls,
-							iterations:       iterations,
-						})
-						return &Result{
-							Content:       "Delegate was unable to complete the task within its time limit.",
-							Model:         model,
-							Iterations:    i + 1,
-							InputTokens:   totalInput,
-							OutputTokens:  totalOutput,
-							Exhausted:     true,
-							ExhaustReason: ExhaustWallClock,
-							ToolCalls:     toolCalls,
-							Duration:      time.Since(startTime),
-						}, nil
-					}
-					// External cancellation — stop tool execution and
-					// propagate as error.
-					completed = true
-					return nil, fmt.Errorf("delegate cancelled: %w", ctx.Err())
-				} else {
-					// Generic tool error — report to LLM and continue.
-					result = "Error: " + err.Error()
-					iterLog.Error("delegate tool exec failed",
-						"tool", tc.Function.Name,
-						"error", err,
-					)
-				}
-			} else {
-				iterLog.Debug("delegate tool exec done",
-					"tool", tc.Function.Name,
-					"result_len", len(result),
-					"elapsed", time.Since(toolStart).Round(time.Second),
-				)
-			}
-
-			messages = append(messages, llm.Message{
-				Role:       "tool",
-				Content:    result,
-				ToolCallID: tc.ID,
-			})
-		}
-
-		// If any tool call in this batch was illegal (tool unavailable),
-		// give the model one chance to self-correct before forcing text.
-		// The error result is already appended, so the model will see
-		// it on the next iteration and can choose a legal tool or
-		// respond with text. On the second strike, force text-only.
-		if illegalCall {
-			illegalStrikes++
-			if illegalStrikes >= maxIllegalStrikes {
-				iterLog.Warn("repeated illegal tool calls, forcing text response",
-					"strikes", illegalStrikes,
-				)
-				iterRec.breakReason = ExhaustIllegalTool
-				iterRec.durationMs = time.Since(iterStart).Milliseconds()
-				iterations = append(iterations, iterRec)
-				completed = true
-				return e.forceTextResponse(ctx, model, messages, &completionRecord{
-					log:              log,
-					delegateID:       did,
-					conversationID:   convID,
-					archiveSessionID: archiveSessionID,
-					task:             task,
-					guidance:         guidance,
-					profileName:      profile.Name,
-					model:            model,
-					totalIter:        i + 1,
-					maxIter:          maxIter,
-					totalInput:       totalInput,
-					totalOutput:      totalOutput,
-					exhausted:        true,
-					exhaustReason:    ExhaustIllegalTool,
-					startTime:        startTime,
-					messages:         messages,
-					toolCalls:        toolCalls,
-					iterations:       iterations,
-				})
-			}
-			iterLog.Warn("delegate illegal tool call, allowing recovery iteration",
-				"strikes", illegalStrikes,
-			)
-		} else {
-			illegalStrikes = 0
-		}
-
-		// Re-check wall clock after tool execution.
-		if time.Since(startTime) > maxDuration {
-			iterLog.Warn("delegate wall clock exceeded after tool exec",
-				"elapsed", time.Since(startTime).Round(time.Second),
-				"max_duration", maxDuration,
-			)
-			iterRec.breakReason = ExhaustWallClock
-			iterRec.durationMs = time.Since(iterStart).Milliseconds()
-			iterations = append(iterations, iterRec)
-			completed = true
-			return e.forceTextResponse(ctx, model, messages, &completionRecord{
-				log:              log,
-				delegateID:       did,
-				conversationID:   convID,
-				archiveSessionID: archiveSessionID,
-				task:             task,
-				guidance:         guidance,
-				profileName:      profile.Name,
-				model:            model,
-				totalIter:        i + 1,
+				totalIter:        0,
 				maxIter:          maxIter,
 				totalInput:       totalInput,
 				totalOutput:      totalOutput,
@@ -918,22 +472,40 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 				exhaustReason:    ExhaustWallClock,
 				startTime:        startTime,
 				messages:         messages,
+				resultContent:    "Delegate was unable to complete the task within its time limit.",
+				errMsg:           err.Error(),
 				toolCalls:        toolCalls,
-				iterations:       iterations,
 			})
+			return &Result{
+				Content:       "Delegate was unable to complete the task within its time limit.",
+				Model:         model,
+				InputTokens:   totalInput,
+				OutputTokens:  totalOutput,
+				Exhausted:     true,
+				ExhaustReason: ExhaustWallClock,
+				ToolCalls:     toolCalls,
+				Duration:      time.Since(startTime),
+			}, nil
 		}
-
-		// Normal end of tool-call iteration — finalize and continue.
-		iterRec.durationMs = time.Since(iterStart).Milliseconds()
-		iterations = append(iterations, iterRec)
+		if errors.Is(ctx.Err(), context.Canceled) {
+			completed = true
+			return nil, fmt.Errorf("delegate cancelled: %w", ctx.Err())
+		}
+		completed = true
+		return nil, fmt.Errorf("delegate failed: %w", err)
 	}
 
-	// Max iterations exhausted — force a text response.
-	log.Warn("delegate max iterations reached",
-		"max_iter", maxIter,
-	)
+	// Convert iterate.Result → delegate.Result.
+	// Empty content after tool iterations is a no-output exhaustion.
+	exhaustReason := iterResult.ExhaustReason
+	exhausted := iterResult.Exhausted
+	if iterResult.Content == "" && iterResult.IterationCount > 1 && !exhausted {
+		exhausted = true
+		exhaustReason = ExhaustNoOutput
+	}
+
 	completed = true
-	return e.forceTextResponse(ctx, model, messages, &completionRecord{
+	e.recordCompletion(&completionRecord{
 		log:              log,
 		delegateID:       did,
 		conversationID:   convID,
@@ -941,56 +513,29 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 		task:             task,
 		guidance:         guidance,
 		profileName:      profile.Name,
-		model:            model,
-		totalIter:        maxIter,
+		model:            iterResult.Model,
+		totalIter:        iterResult.IterationCount,
 		maxIter:          maxIter,
-		totalInput:       totalInput,
-		totalOutput:      totalOutput,
-		exhausted:        true,
-		exhaustReason:    ExhaustMaxIterations,
+		totalInput:       iterResult.InputTokens,
+		totalOutput:      iterResult.OutputTokens,
+		exhausted:        exhausted,
+		exhaustReason:    exhaustReason,
 		startTime:        startTime,
-		messages:         messages,
+		messages:         iterResult.Messages,
+		resultContent:    iterResult.Content,
 		toolCalls:        toolCalls,
-		iterations:       iterations,
+		iterations:       iterResult.Iterations,
 	})
-}
-
-// forceTextResponse makes a final LLM call with tools=nil to force text output.
-func (e *Executor) forceTextResponse(ctx context.Context, model string, messages []llm.Message, rec *completionRecord) (*Result, error) {
-	resp, err := e.llm.ChatStream(ctx, model, messages, nil, nil)
-	if err != nil {
-		rec.resultContent = "Delegate was unable to complete the task within its budget."
-		rec.errMsg = err.Error()
-		e.recordCompletion(rec)
-		return &Result{
-			Content:       rec.resultContent,
-			Model:         model,
-			Iterations:    rec.totalIter,
-			InputTokens:   rec.totalInput,
-			OutputTokens:  rec.totalOutput,
-			Exhausted:     true,
-			ExhaustReason: rec.exhaustReason,
-			ToolCalls:     rec.toolCalls,
-			Duration:      time.Since(rec.startTime),
-		}, nil
-	}
-
-	rec.totalInput += resp.InputTokens
-	rec.totalOutput += resp.OutputTokens
-	rec.resultContent = resp.Message.Content
-	rec.messages = append(rec.messages, resp.Message)
-	e.recordCompletion(rec)
-
 	return &Result{
-		Content:       resp.Message.Content,
-		Model:         model,
-		Iterations:    rec.totalIter,
-		InputTokens:   rec.totalInput,
-		OutputTokens:  rec.totalOutput,
-		Exhausted:     true,
-		ExhaustReason: rec.exhaustReason,
-		ToolCalls:     rec.toolCalls,
-		Duration:      time.Since(rec.startTime),
+		Content:       iterResult.Content,
+		Model:         iterResult.Model,
+		Iterations:    iterResult.IterationCount,
+		InputTokens:   iterResult.InputTokens,
+		OutputTokens:  iterResult.OutputTokens,
+		Exhausted:     exhausted,
+		ExhaustReason: exhaustReason,
+		ToolCalls:     toolCalls,
+		Duration:      time.Since(startTime),
 	}, nil
 }
 
@@ -1018,21 +563,6 @@ func (e *Executor) selectModel(ctx context.Context, task string, profile *Profil
 	return e.defaultModel
 }
 
-// iterationRecord collects per-iteration data during delegate execution
-// for batch archiving after completion.
-type iterationRecord struct {
-	index        int
-	model        string
-	inputTokens  int
-	outputTokens int
-	toolCallIDs  []string
-	toolsOffered []string
-	startedAt    time.Time
-	durationMs   int64
-	hasToolCalls bool
-	breakReason  string
-}
-
 // completionRecord carries all data for logging and persistence of a
 // delegate execution. The log field carries the context-enriched logger
 // so recordCompletion and archiveSession inherit trace fields (request_id,
@@ -1057,7 +587,7 @@ type completionRecord struct {
 	resultContent    string
 	errMsg           string
 	toolCalls        []ToolCallOutcome
-	iterations       []iterationRecord
+	iterations       []iterate.IterationRecord
 }
 
 // recordCompletion logs and optionally persists a delegate execution.
@@ -1180,17 +710,17 @@ func (e *Executor) archiveSession(rec *completionRecord, now time.Time) {
 		for i, iter := range rec.iterations {
 			archived[i] = memory.ArchivedIteration{
 				SessionID:      sessionID,
-				IterationIndex: iter.index,
-				Model:          iter.model,
-				InputTokens:    iter.inputTokens,
-				OutputTokens:   iter.outputTokens,
-				ToolCallCount:  len(iter.toolCallIDs),
-				ToolCallIDs:    iter.toolCallIDs,
-				ToolsOffered:   iter.toolsOffered,
-				StartedAt:      iter.startedAt,
-				DurationMs:     iter.durationMs,
-				HasToolCalls:   iter.hasToolCalls,
-				BreakReason:    iter.breakReason,
+				IterationIndex: iter.Index,
+				Model:          iter.Model,
+				InputTokens:    iter.InputTokens,
+				OutputTokens:   iter.OutputTokens,
+				ToolCallCount:  len(iter.ToolCallIDs),
+				ToolCallIDs:    iter.ToolCallIDs,
+				ToolsOffered:   iter.ToolsOffered,
+				StartedAt:      iter.StartedAt,
+				DurationMs:     iter.DurationMs,
+				HasToolCalls:   iter.HasToolCalls,
+				BreakReason:    iter.BreakReason,
 			}
 		}
 		if err := e.archiver.ArchiveIterations(archived); err != nil {
@@ -1233,43 +763,4 @@ func truncate(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
-}
-
-// executeWithDeadline runs a tool handler in a separate goroutine and
-// returns when either the handler completes or the context is done
-// (due to deadline expiration or cancellation), whichever comes first.
-// This prevents non-cooperative handlers (e.g., blocked on a syscall
-// that ignores context cancellation) from blocking the delegate loop
-// indefinitely.
-//
-// Trade-off: if the handler ignores context cancellation, the goroutine
-// leaks until the handler eventually returns. A warning is logged when
-// this happens so leaked goroutines are observable. The alternative is
-// hanging the entire delegate and its caller forever.
-func executeWithDeadline(ctx context.Context, reg *tools.Registry, name, argsJSON string) (string, error) {
-	type result struct {
-		value string
-		err   error
-	}
-	ch := make(chan result, 1)
-	go func() {
-		v, e := reg.Execute(ctx, name, argsJSON)
-		ch <- result{v, e}
-	}()
-	select {
-	case r := <-ch:
-		return r.value, r.err
-	case <-ctx.Done():
-		logging.Logger(ctx).Warn("tool handler did not respect context cancellation; goroutine leaked",
-			"tool", name)
-		err := ctx.Err()
-		reason := "ended due to context error"
-		switch {
-		case errors.Is(err, context.DeadlineExceeded):
-			reason = "timed out"
-		case errors.Is(err, context.Canceled):
-			reason = "canceled"
-		}
-		return "", fmt.Errorf("tool %s %s: %w", name, reason, err)
-	}
 }
