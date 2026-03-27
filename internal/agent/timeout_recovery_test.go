@@ -99,38 +99,42 @@ func TestBuildRecoveryPrompt(t *testing.T) {
 	}
 }
 
-// --- staticRecoveryResponse tests ---
+// --- toolsUsedFromMessages tests ---
 
-func TestStaticRecoveryResponse(t *testing.T) {
+func TestToolsUsedFromMessages(t *testing.T) {
 	t.Parallel()
 
-	toolsUsed := map[string]int{
-		"file_write": 3,
-		"file_edit":  2,
+	mkCall := func(id, name string) llm.ToolCall {
+		tc := llm.ToolCall{ID: id}
+		tc.Function.Name = name
+		return tc
 	}
 
-	resp := staticRecoveryResponse(toolsUsed, "test-model", 1000, 500, "sess-1", "req-1")
+	msgs := []llm.Message{
+		{
+			Role:      "assistant",
+			ToolCalls: []llm.ToolCall{mkCall("tc1", "file_write"), mkCall("tc2", "file_edit")},
+		},
+		{Role: "tool", ToolCallID: "tc1", Content: "ok"},
+		{Role: "tool", ToolCallID: "tc2", Content: "ok"},
+		{
+			Role:      "assistant",
+			ToolCalls: []llm.ToolCall{mkCall("tc3", "file_write"), mkCall("tc4", "file_write")},
+		},
+		{Role: "tool", ToolCallID: "tc3", Content: "ok"},
+		// tc4 has no result — should not be counted.
+	}
 
-	if resp.FinishReason != "timeout_recovery" {
-		t.Errorf("FinishReason = %q, want timeout_recovery", resp.FinishReason)
+	used := toolsUsedFromMessages(msgs)
+
+	if used["file_write"] != 2 {
+		t.Errorf("file_write = %d, want 2", used["file_write"])
 	}
-	if !strings.Contains(resp.Content, "5 tool call") {
-		t.Errorf("content should mention 5 tool calls, got: %s", resp.Content)
+	if used["file_edit"] != 1 {
+		t.Errorf("file_edit = %d, want 1", used["file_edit"])
 	}
-	if !strings.Contains(resp.Content, "file_write") {
-		t.Errorf("content should mention file_write, got: %s", resp.Content)
-	}
-	// Tool names should be sorted alphabetically.
-	editIdx := strings.Index(resp.Content, "file_edit")
-	writeIdx := strings.Index(resp.Content, "file_write")
-	if editIdx > writeIdx {
-		t.Errorf("tool names should be sorted: file_edit before file_write, got: %s", resp.Content)
-	}
-	if resp.Model != "test-model" {
-		t.Errorf("Model = %q, want test-model", resp.Model)
-	}
-	if resp.SessionID != "sess-1" {
-		t.Errorf("SessionID = %q, want sess-1", resp.SessionID)
+	if len(used) != 2 {
+		t.Errorf("len(used) = %d, want 2", len(used))
 	}
 }
 

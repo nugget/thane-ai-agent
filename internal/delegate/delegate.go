@@ -404,6 +404,10 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 	// OnBeforeToolExec, cancelled after each tool completes.
 	var currentToolCancel context.CancelFunc
 
+	// iterCount tracks completed iterations so the wall-clock deadline
+	// path can record accurate counts even when engine.Run returns an error.
+	var iterCount int
+
 	iterCfg := iterate.Config{
 		MaxIterations: maxIter,
 		Model:         model,
@@ -417,6 +421,14 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 				}
 				return reg.Execute(execCtx, name, argsJSON)
 			},
+		},
+		// Accumulate token counts as each LLM call completes so they
+		// remain accurate even if engine.Run returns an error (e.g.
+		// wall-clock deadline fires mid-run).
+		OnLLMResponse: func(_ context.Context, resp *llm.ChatResponse, _ int) {
+			totalInput += resp.InputTokens
+			totalOutput += resp.OutputTokens
+			iterCount++
 		},
 		OnBeforeToolExec: func(execCtx context.Context, _ int, _ llm.ToolCall) context.Context {
 			toolCtx := tools.WithConversationID(execCtx, convID)
@@ -464,7 +476,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 				guidance:         guidance,
 				profileName:      profile.Name,
 				model:            model,
-				totalIter:        0,
+				totalIter:        iterCount,
 				maxIter:          maxIter,
 				totalInput:       totalInput,
 				totalOutput:      totalOutput,

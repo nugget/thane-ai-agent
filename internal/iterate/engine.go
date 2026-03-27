@@ -90,7 +90,7 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 		// --- Budget check ---
 		if cfg.CheckBudget != nil && cfg.CheckBudget(totalOutput) {
 			iterLog.Warn("budget exhausted", "total_output", totalOutput)
-			iterations = append(iterations, IterationRecord{
+			budgetRec := IterationRecord{
 				Index:        i,
 				Model:        llmResp.Model,
 				InputTokens:  llmResp.InputTokens,
@@ -100,8 +100,9 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 				DurationMs:   time.Since(iterStart).Milliseconds(),
 				HasToolCalls: len(llmResp.Message.ToolCalls) > 0,
 				BreakReason:  ExhaustTokenBudget,
-			})
-			return e.forceText(ctx, cfg, model, messages, &Result{
+			}
+			iterations = append(iterations, budgetRec)
+			partial := &Result{
 				Model:          model,
 				InputTokens:    totalInput,
 				OutputTokens:   totalOutput,
@@ -110,7 +111,16 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 				ExhaustReason:  ExhaustTokenBudget,
 				Iterations:     iterations,
 				IterationCount: i + 1,
-			})
+			}
+			// If the response is text-only, use it directly; forceText
+			// requires a pending tool result and would return empty content.
+			if llmResp.Message.Content != "" && len(llmResp.Message.ToolCalls) == 0 {
+				messages = append(messages, llmResp.Message)
+				partial.Content = llmResp.Message.Content
+				partial.Messages = messages
+				return partial, nil
+			}
+			return e.forceText(ctx, cfg, model, messages, partial)
 		}
 
 		// Build iteration record.
@@ -142,6 +152,7 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 
 			var illegalCall bool
 			var batchHasNonMetaTool bool
+			var toolLoopDetected bool
 
 			for _, tc := range llmResp.Message.ToolCalls {
 				toolName := tc.Function.Name
@@ -153,7 +164,10 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 					argsJSON = string(argsBytes)
 				}
 
-				// Detect tool call loops.
+				// Detect tool call loops. Append an error result but
+				// continue processing remaining calls in the batch so
+				// every tool call has a matching result — the API
+				// requires a 1:1 correspondence.
 				callKey := toolName + ":" + argsJSON
 				toolCallCounts[callKey]++
 				if toolCallCounts[callKey] > cfg.MaxToolRepeat {
@@ -162,13 +176,12 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 						"repeat_count", toolCallCounts[callKey],
 					)
 					messages = append(messages, llm.Message{
-						Role:    "tool",
-						Content: fmt.Sprintf("Error: tool '%s' has been called %d times with the same arguments. Stop calling tools and provide your response to the user.", toolName, toolCallCounts[callKey]),
+						Role:       "tool",
+						Content:    fmt.Sprintf("Error: tool '%s' has been called %d times with the same arguments. Stop calling tools and provide your response to the user.", toolName, toolCallCounts[callKey]),
+						ToolCallID: tc.ID,
 					})
-					iterRec.BreakReason = "tool_loop"
-					iterRec.DurationMs = time.Since(iterStart).Milliseconds()
-					iterations = append(iterations, iterRec)
-					continue // continue outer for loop — next iteration
+					toolLoopDetected = true
+					continue // skip execution; move to next tool in batch
 				}
 
 				iterLog.Info("tool exec", "tool", toolName)
@@ -191,6 +204,15 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 					toolCtx = cfg.OnBeforeToolExec(iterCtx, i, tc)
 				}
 
+				// Record tool call ID. Prefer the internal ID injected
+				// into toolCtx by OnBeforeToolExec (e.g. a UUID stored
+				// by the agent for DB linking), falling back to the
+				// LLM-assigned tc.ID.
+				toolCallRecordID := tc.ID
+				if id := tools.ToolCallIDFromContext(toolCtx); id != "" {
+					toolCallRecordID = id
+				}
+
 				// Check tool availability.
 				var result string
 				var toolErr error
@@ -201,7 +223,7 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 					result, toolErr = cfg.Executor.Execute(toolCtx, toolName, argsJSON)
 				}
 				toolsUsed[toolName]++
-				iterRec.ToolCallIDs = append(iterRec.ToolCallIDs, tc.ID)
+				iterRec.ToolCallIDs = append(iterRec.ToolCallIDs, toolCallRecordID)
 
 				errMsg := ""
 				if toolErr != nil {
@@ -223,8 +245,10 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 				}
 
 				// --- Callback: tool call done ---
+				// Pass toolCtx so the callback can access values injected
+				// by OnBeforeToolExec (tool_call_id, per-tool deadline, etc.).
 				if cfg.OnToolCallDone != nil {
-					cfg.OnToolCallDone(iterCtx, toolName, result, errMsg)
+					cfg.OnToolCallDone(toolCtx, toolName, result, errMsg)
 				}
 
 				// Add tool result message.
@@ -233,6 +257,10 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 					Content:    result,
 					ToolCallID: tc.ID,
 				})
+			}
+
+			if toolLoopDetected {
+				iterRec.BreakReason = "tool_loop"
 			}
 
 			// Illegal tool strike counting.
@@ -306,6 +334,9 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 		if cfg.OnTextResponse != nil {
 			cfg.OnTextResponse(iterCtx, llmResp.Message.Content, messages)
 		}
+
+		// Append the final assistant message so Result.Messages is complete.
+		messages = append(messages, llmResp.Message)
 
 		return &Result{
 			Content:        llmResp.Message.Content,

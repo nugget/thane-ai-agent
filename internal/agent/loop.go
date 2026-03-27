@@ -1529,7 +1529,7 @@ func (l *Loop) buildLLMErrorHandler(ctx context.Context, stream llm.StreamCallba
 				iterLog.Warn("retries exhausted, downshifting to recovery model",
 					"recovery_model", l.recoveryModel,
 				)
-				recoveryMessages := buildRecoveryPrompt(msgs, nil)
+				recoveryMessages := buildRecoveryPrompt(msgs, toolsUsedFromMessages(msgs))
 				recoveryCtx, recoveryCancel := context.WithTimeout(context.Background(), timeoutRecoveryDeadline)
 				resp, recoveryErr := l.llm.ChatStream(recoveryCtx, l.recoveryModel, recoveryMessages, nil, stream)
 				recoveryCancel()
@@ -1555,9 +1555,26 @@ func (l *Loop) buildLLMErrorHandler(ctx context.Context, stream llm.StreamCallba
 			// so the user sees something rather than an error.
 			iterLog.Error("LLM timeout with no recovery model, returning static fallback")
 			*timeoutRecovered = true
+			used := toolsUsedFromMessages(msgs)
+			names := make([]string, 0, len(used))
+			for name := range used {
+				names = append(names, name)
+			}
+			sort.Strings(names)
+			parts := make([]string, 0, len(names))
+			total := 0
+			for _, name := range names {
+				count := used[name]
+				parts = append(parts, fmt.Sprintf("%s ×%d", name, count))
+				total += count
+			}
+			toolList := strings.Join(parts, ", ")
+			if toolList == "" {
+				toolList = "none"
+			}
 			return &llm.ChatResponse{
 				Model:   model,
-				Message: llm.Message{Role: "assistant", Content: fmt.Sprintf(prompts.TimeoutRecoveryFallback, 0, "unknown")},
+				Message: llm.Message{Role: "assistant", Content: fmt.Sprintf(prompts.TimeoutRecoveryFallback, total, toolList)},
 			}, model, nil
 		}
 
@@ -1704,33 +1721,27 @@ func buildRecoveryPrompt(messages []llm.Message, toolsUsed map[string]int) []llm
 	}
 }
 
-// staticRecoveryResponse builds a last-resort Response when even the
-// recovery model fails. It lists the tools that were used so the user
-// has some visibility into what happened.
-func staticRecoveryResponse(toolsUsed map[string]int, model string, inputTokens, outputTokens int, sessionID, requestID string) *Response {
-	names := make([]string, 0, len(toolsUsed))
-	for name := range toolsUsed {
-		names = append(names, name)
+// toolsUsedFromMessages derives a tool-name to call-count map from the
+// message history. It pairs tool calls in assistant messages with their
+// corresponding tool result messages to count only completed calls.
+func toolsUsedFromMessages(msgs []llm.Message) map[string]int {
+	// Build a map of tool call ID → tool name from assistant messages.
+	callNames := make(map[string]string)
+	for _, m := range msgs {
+		for _, tc := range m.ToolCalls {
+			callNames[tc.ID] = tc.Function.Name
+		}
 	}
-	sort.Strings(names)
-	parts := make([]string, 0, len(names))
-	total := 0
-	for _, name := range names {
-		count := toolsUsed[name]
-		parts = append(parts, fmt.Sprintf("%s ×%d", name, count))
-		total += count
+	// Count only tool calls that have a matching result message.
+	used := make(map[string]int)
+	for _, m := range msgs {
+		if m.Role == "tool" && m.ToolCallID != "" {
+			if name, ok := callNames[m.ToolCallID]; ok {
+				used[name]++
+			}
+		}
 	}
-	content := fmt.Sprintf(prompts.TimeoutRecoveryFallback, total, strings.Join(parts, ", "))
-	return &Response{
-		Content:      content,
-		Model:        model,
-		FinishReason: "timeout_recovery",
-		InputTokens:  inputTokens,
-		OutputTokens: outputTokens,
-		ToolsUsed:    toolsUsed,
-		SessionID:    sessionID,
-		RequestID:    requestID,
-	}
+	return used
 }
 
 // MemoryStats returns current memory statistics.
