@@ -473,6 +473,10 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 				archiveMsgs = iterResult.Messages
 			}
 			completed = true
+			var partialIterations []iterate.IterationRecord
+			if iterResult != nil {
+				partialIterations = iterResult.Iterations
+			}
 			e.recordCompletion(&completionRecord{
 				log:              log,
 				delegateID:       did,
@@ -493,6 +497,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 				resultContent:    "Delegate was unable to complete the task within its time limit.",
 				errMsg:           err.Error(),
 				toolCalls:        toolCalls,
+				iterations:       partialIterations,
 			})
 			return &Result{
 				Content:       "Delegate was unable to complete the task within its time limit.",

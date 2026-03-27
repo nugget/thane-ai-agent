@@ -364,13 +364,14 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 			// treats it as ExhaustNoOutput).
 		}
 
+		// Append the final assistant message before firing OnTextResponse
+		// so the callback receives a complete message history.
+		messages = append(messages, llmResp.Message)
+
 		// --- Callback: text response ---
 		if cfg.OnTextResponse != nil {
 			cfg.OnTextResponse(iterCtx, llmResp.Message.Content, messages)
 		}
-
-		// Append the final assistant message so Result.Messages is complete.
-		messages = append(messages, llmResp.Message)
 
 		return &Result{
 			Content:        llmResp.Message.Content,

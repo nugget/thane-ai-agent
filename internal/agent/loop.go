@@ -1522,9 +1522,11 @@ func (l *Loop) buildLLMErrorHandler(ctx context.Context, stream llm.StreamCallba
 					return nil, "", retryErr
 				}
 			}
-			// Retries exhausted. Downshift to recovery model if
-			// configured and tool calls were already made.
-			if l.recoveryModel != "" {
+			// Retries exhausted. Downshift to recovery model only if
+			// configured AND tool calls were already completed — a plain
+			// timeout on the first LLM call (no tool work done) should
+			// surface the static fallback, not a misleading "recovery" summary.
+			if l.recoveryModel != "" && len(toolsUsedFromMessages(msgs)) > 0 {
 				iterLog.Warn("retries exhausted, downshifting to recovery model",
 					"recovery_model", l.recoveryModel,
 				)
