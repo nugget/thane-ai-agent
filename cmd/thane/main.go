@@ -343,6 +343,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// output destination. The initial Info-level text logger above is used
 	// only for the startup banner and config load message.
 	var indexDB *sql.DB
+	var contentWriter *logging.ContentWriter
 	{
 		level, _ := config.ParseLogLevel(cfg.Logging.Level)
 
@@ -387,6 +388,16 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 				defer indexDB.Close()
 				defer indexHandler.Close() // LIFO: flush pending entries before closing DB
 				handler = indexHandler
+
+				if cfg.Logging.RetainContent {
+					cw, cwErr := logging.NewContentWriter(indexDB, cfg.Logging.ContentMaxLength(), slog.Default())
+					if cwErr != nil {
+						logger.Warn("failed to create content writer, content retention disabled", "error", cwErr)
+					} else {
+						contentWriter = cw
+						defer contentWriter.Close()
+					}
+				}
 			}
 		}
 
@@ -830,7 +841,9 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 
 	loop = agent.NewLoop(logger, mem, compactor, rtr, ha, sched, llmClient, cfg.Models.Default, talentContent, personaContent, defaultContextWindow)
 	loop.SetTimezone(cfg.Timezone)
-	loop.SetDebugConfig(cfg.Debug)
+	if contentWriter != nil {
+		loop.SetContentWriter(contentWriter)
+	}
 	if cfg.Models.RecoveryModel != "" {
 		loop.SetRecoveryModel(cfg.Models.RecoveryModel)
 		logger.Info("LLM timeout recovery enabled", "recovery_model", cfg.Models.RecoveryModel)
@@ -1723,6 +1736,9 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		delegateExec.ApplyProfileOverrides(overrides)
 	}
 	delegateExec.SetTimezone(cfg.Timezone)
+	if contentWriter != nil {
+		delegateExec.SetContentWriter(contentWriter)
+	}
 	delegateExec.SetArchiver(archiveStore)
 	delegateExec.SetUsageRecorder(usageStore, cfg.Pricing)
 	delegateExec.SetEventBus(eventBus)

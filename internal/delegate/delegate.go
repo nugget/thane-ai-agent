@@ -80,6 +80,7 @@ type Executor struct {
 	alwaysActiveTags []string
 	forgeContext     string
 	eventBus         *events.Bus
+	contentWriter    *logging.ContentWriter
 }
 
 // NewExecutor creates a delegate executor.
@@ -182,6 +183,11 @@ func (e *Executor) SetForgeContext(ctx string) {
 // always_active tag behavior.
 func (e *Executor) SetAlwaysActiveTags(tags []string) {
 	e.alwaysActiveTags = tags
+}
+
+// SetContentWriter configures content retention for delegate executions.
+func (e *Executor) SetContentWriter(w *logging.ContentWriter) {
+	e.contentWriter = w
 }
 
 // ProfileNames returns the names of all registered profiles.
@@ -476,6 +482,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 			var partialIterations []iterate.IterationRecord
 			if iterResult != nil {
 				partialIterations = iterResult.Iterations
+				e.retainContent(ctx, did, messages[0].Content, userMsg.String(), iterResult)
 			}
 			e.recordCompletion(&completionRecord{
 				log:              log,
@@ -528,6 +535,7 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 	}
 
 	completed = true
+	e.retainContent(ctx, did, messages[0].Content, userMsg.String(), iterResult)
 	e.recordCompletion(&completionRecord{
 		log:              log,
 		delegateID:       did,
@@ -611,6 +619,28 @@ type completionRecord struct {
 	errMsg           string
 	toolCalls        []ToolCallOutcome
 	iterations       []iterate.IterationRecord
+}
+
+// retainContent persists request-level content for a delegate execution.
+// No-op when the content writer is nil (content retention disabled).
+func (e *Executor) retainContent(ctx context.Context, delegateID, systemPrompt, userContent string, result *iterate.Result) {
+	if e.contentWriter == nil || result == nil {
+		return
+	}
+	e.contentWriter.WriteRequest(ctx, logging.RequestContent{
+		RequestID:        delegateID,
+		SystemPrompt:     systemPrompt,
+		UserContent:      userContent,
+		Model:            result.Model,
+		AssistantContent: result.Content,
+		IterationCount:   result.IterationCount,
+		InputTokens:      result.InputTokens,
+		OutputTokens:     result.OutputTokens,
+		ToolsUsed:        result.ToolsUsed,
+		Exhausted:        result.Exhausted,
+		ExhaustReason:    result.ExhaustReason,
+		Messages:         result.Messages,
+	})
 }
 
 // recordCompletion logs and optionally persists a delegate execution.

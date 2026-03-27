@@ -251,10 +251,53 @@ func Migrate(db *sql.DB) error {
 	CREATE INDEX IF NOT EXISTS idx_log_tool ON log_entries(tool);
 	CREATE INDEX IF NOT EXISTS idx_log_model ON log_entries(model);
 	`
-	_, err := db.Exec(schema)
-	if err != nil {
+	if _, err := db.Exec(schema); err != nil {
 		return fmt.Errorf("migrate log index: %w", err)
 	}
+
+	// Content retention tables — created unconditionally (the schema
+	// is cheap; the config flag gates writes, not table creation).
+	contentSchema := `
+	CREATE TABLE IF NOT EXISTS log_prompts (
+		hash TEXT PRIMARY KEY,
+		content TEXT NOT NULL,
+		first_seen TEXT NOT NULL
+	);
+
+	CREATE TABLE IF NOT EXISTS log_request_content (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		request_id TEXT NOT NULL UNIQUE,
+		prompt_hash TEXT,
+		user_content TEXT,
+		assistant_content TEXT,
+		model TEXT,
+		iteration_count INTEGER,
+		input_tokens INTEGER,
+		output_tokens INTEGER,
+		tools_used TEXT,
+		exhausted BOOLEAN DEFAULT FALSE,
+		exhaust_reason TEXT,
+		created_at TEXT NOT NULL
+	);
+	CREATE INDEX IF NOT EXISTS idx_request_content_request ON log_request_content(request_id);
+	CREATE INDEX IF NOT EXISTS idx_request_content_prompt ON log_request_content(prompt_hash);
+
+	CREATE TABLE IF NOT EXISTS log_tool_content (
+		id INTEGER PRIMARY KEY AUTOINCREMENT,
+		request_id TEXT NOT NULL,
+		iteration_index INTEGER NOT NULL,
+		tool_call_id TEXT,
+		tool_name TEXT NOT NULL,
+		arguments TEXT,
+		result TEXT,
+		created_at TEXT NOT NULL
+	);
+	CREATE INDEX IF NOT EXISTS idx_tool_content_request ON log_tool_content(request_id);
+	`
+	if _, err := db.Exec(contentSchema); err != nil {
+		return fmt.Errorf("migrate content retention: %w", err)
+	}
+
 	return nil
 }
 

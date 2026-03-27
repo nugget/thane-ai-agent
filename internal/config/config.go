@@ -315,6 +315,18 @@ type LoggingConfig struct {
 	// entries are kept. Entries at INFO and above are kept indefinitely.
 	// Default: 7. Set to 0 to disable pruning (keep everything).
 	RetentionDays *int `yaml:"retention_days"`
+
+	// RetainContent enables content retention in the log index database.
+	// When true, system prompts (deduplicated by SHA-256 hash), tool call
+	// arguments/results, and request/response content are persisted to
+	// logs.db alongside the existing log index. Default: false.
+	RetainContent bool `yaml:"retain_content"`
+
+	// MaxContentLength is the maximum number of characters retained per
+	// tool result or message body. Longer content is truncated. This
+	// bounds storage growth while preserving enough for diagnostics.
+	// Default: 4096. Set to 0 for unlimited.
+	MaxContentLength *int `yaml:"max_content_length"`
 }
 
 // DirPath returns the resolved log directory path. When Dir is nil
@@ -340,6 +352,15 @@ func (l LoggingConfig) RetentionDaysDuration() time.Duration {
 		return 0
 	}
 	return time.Duration(days) * 24 * time.Hour
+}
+
+// ContentMaxLength returns the maximum character count for retained
+// content fields. Defaults to 4096 when unset. Returns 0 for unlimited.
+func (l LoggingConfig) ContentMaxLength() int {
+	if l.MaxContentLength == nil {
+		return 4096
+	}
+	return *l.MaxContentLength
 }
 
 // CompressEnabled returns whether rotated log compression is on.
@@ -889,19 +910,8 @@ func (c UnifiConfig) Configured() bool {
 	return c.URL != "" && c.APIKey != ""
 }
 
-// DebugConfig configures diagnostic options for inspecting the
-// assembled system prompt and other internal state.
+// DebugConfig configures diagnostic options for development and testing.
 type DebugConfig struct {
-	// DumpSystemPrompt enables writing the fully assembled system
-	// prompt to disk on every LLM call, with section markers and
-	// size annotations. The file is overwritten each call so it
-	// always reflects the most recent prompt.
-	DumpSystemPrompt bool `yaml:"dump_system_prompt"`
-
-	// DumpDir is the directory where debug output files are written.
-	// Created automatically on first write. Default: "./debug".
-	DumpDir string `yaml:"dump_dir"`
-
 	// DemoLoops spawns simulated loops covering all visual variants
 	// (categories, parent/child, error states, node churn) so the
 	// dashboard can be iterated on without real service dependencies.
@@ -1425,10 +1435,6 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Episodic.SessionGapMinutes == 0 {
 		c.Episodic.SessionGapMinutes = 30
-	}
-
-	if c.Debug.DumpSystemPrompt && c.Debug.DumpDir == "" {
-		c.Debug.DumpDir = "./debug"
 	}
 
 	if c.Pricing == nil {

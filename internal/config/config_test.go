@@ -210,37 +210,29 @@ func TestApplyDefaults_UnifiPollInterval(t *testing.T) {
 	}
 }
 
-func TestApplyDefaults_DebugDumpDir(t *testing.T) {
-	t.Run("sets default when dump enabled", func(t *testing.T) {
-		cfg := Default()
-		cfg.Debug.DumpSystemPrompt = true
-		cfg.applyDefaults()
+func TestContentMaxLength_Default(t *testing.T) {
+	cfg := Default()
+	if got := cfg.Logging.ContentMaxLength(); got != 4096 {
+		t.Errorf("ContentMaxLength() default = %d, want 4096", got)
+	}
+}
 
-		if cfg.Debug.DumpDir != "./debug" {
-			t.Errorf("expected default dump_dir './debug', got %q", cfg.Debug.DumpDir)
-		}
-	})
+func TestContentMaxLength_Explicit(t *testing.T) {
+	cfg := Default()
+	n := 8192
+	cfg.Logging.MaxContentLength = &n
+	if got := cfg.Logging.ContentMaxLength(); got != 8192 {
+		t.Errorf("ContentMaxLength() = %d, want 8192", got)
+	}
+}
 
-	t.Run("leaves empty when dump disabled", func(t *testing.T) {
-		cfg := Default()
-		cfg.Debug.DumpSystemPrompt = false
-		cfg.applyDefaults()
-
-		if cfg.Debug.DumpDir != "" {
-			t.Errorf("expected empty dump_dir when dump disabled, got %q", cfg.Debug.DumpDir)
-		}
-	})
-
-	t.Run("preserves custom dir", func(t *testing.T) {
-		cfg := Default()
-		cfg.Debug.DumpSystemPrompt = true
-		cfg.Debug.DumpDir = "/tmp/thane-debug"
-		cfg.applyDefaults()
-
-		if cfg.Debug.DumpDir != "/tmp/thane-debug" {
-			t.Errorf("expected custom dump_dir preserved, got %q", cfg.Debug.DumpDir)
-		}
-	})
+func TestContentMaxLength_Zero(t *testing.T) {
+	cfg := Default()
+	n := 0
+	cfg.Logging.MaxContentLength = &n
+	if got := cfg.Logging.ContentMaxLength(); got != 0 {
+		t.Errorf("ContentMaxLength() = %d, want 0 (unlimited)", got)
+	}
 }
 
 func TestValidate_PersonDevicesValid(t *testing.T) {
