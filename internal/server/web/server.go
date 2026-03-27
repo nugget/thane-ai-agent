@@ -47,6 +47,13 @@ type LogQuerier interface {
 	Query(params logging.QueryParams) ([]logging.LogEntry, error)
 }
 
+// ContentQuerier fetches retained request content (system prompts,
+// tool call details, message bodies) from the log index. Nil disables
+// the request detail API endpoint.
+type ContentQuerier interface {
+	QueryRequestDetail(requestID string) (*logging.RequestDetail, error)
+}
+
 // SystemStatusProvider exposes runtime health and metadata for the
 // system node on the dashboard canvas. Nil disables the system node.
 type SystemStatusProvider interface {
@@ -78,6 +85,9 @@ type Config struct {
 	EventBus *events.Bus
 	// LogQuerier enables log drill-down. Nil disables the feature.
 	LogQuerier LogQuerier
+	// ContentQuerier enables request detail drill-down. Nil disables
+	// the /api/requests/{id} endpoint.
+	ContentQuerier ContentQuerier
 	// SystemStatus provides runtime health for the system canvas node.
 	// Nil disables the system node.
 	SystemStatus SystemStatusProvider
@@ -87,11 +97,12 @@ type Config struct {
 
 // WebServer serves the Cognition Engine dashboard and its API endpoints.
 type WebServer struct {
-	registry     LoopRegistry
-	eventBus     *events.Bus
-	logQuerier   LogQuerier
-	systemStatus SystemStatusProvider
-	logger       *slog.Logger
+	registry       LoopRegistry
+	eventBus       *events.Bus
+	logQuerier     LogQuerier
+	contentQuerier ContentQuerier
+	systemStatus   SystemStatusProvider
+	logger         *slog.Logger
 }
 
 // NewWebServer creates a web server with the given configuration.
@@ -101,11 +112,12 @@ func NewWebServer(cfg Config) *WebServer {
 		logger = slog.Default()
 	}
 	return &WebServer{
-		registry:     cfg.LoopRegistry,
-		eventBus:     cfg.EventBus,
-		logQuerier:   cfg.LogQuerier,
-		systemStatus: cfg.SystemStatus,
-		logger:       logger,
+		registry:       cfg.LoopRegistry,
+		eventBus:       cfg.EventBus,
+		logQuerier:     cfg.LogQuerier,
+		contentQuerier: cfg.ContentQuerier,
+		systemStatus:   cfg.SystemStatus,
+		logger:         logger,
 	}
 }
 
@@ -118,6 +130,7 @@ func (s *WebServer) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/loops", s.handleLoops)
 	mux.HandleFunc("GET /api/loops/events", s.handleLoopEvents)
 	mux.HandleFunc("GET /api/loops/{id}/logs", s.handleLoopLogs)
+	mux.HandleFunc("GET /api/requests/{id}", s.handleRequestDetail)
 	mux.HandleFunc("GET /api/system/logs", s.handleSystemLogs)
 }
 
@@ -126,6 +139,17 @@ func (s *WebServer) writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(v); err != nil {
 		s.logger.Debug("failed to write JSON response", "error", err)
+	}
+}
+
+// writeJSONError writes an error response with the given status code
+// and a JSON body of {"error": msg}. Unlike [http.Error], this sets
+// Content-Type to application/json for consistent API responses.
+func (s *WebServer) writeJSONError(w http.ResponseWriter, msg string, code int) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	if err := json.NewEncoder(w).Encode(map[string]string{"error": msg}); err != nil {
+		s.logger.Debug("failed to write JSON error response", "error", err)
 	}
 }
 

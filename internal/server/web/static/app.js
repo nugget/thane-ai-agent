@@ -1654,6 +1654,9 @@ document.addEventListener('keydown', (e) => {
       toggleLogs();
       break;
     case 'escape':
+      if (activeRequestID) {
+        closeRequestDetail();
+      }
       hideContextMenu();
       break;
   }
@@ -1858,12 +1861,176 @@ function applyViewportTransform() {
 })();
 
 // ---------------------------------------------------------------------------
+// Request Detail Panel
+// ---------------------------------------------------------------------------
+
+const requestDetailPanel = $('#request-detail');
+const requestDetailEls = {
+  ids: $('#request-detail-ids'),
+  meta: $('#request-detail-meta'),
+  content: $('#request-detail-content'),
+  waterfall: $('#request-detail-waterfall'),
+};
+
+// Currently displayed request ID (for deep linking and back button).
+let activeRequestID = null;
+
+// Cached raw detail JSON for copy-as-JSON feature.
+let activeRequestJSON = null;
+
+// AbortController for in-flight request detail fetches. Prevents stale
+// data from overwriting the panel when the user clicks rapidly.
+let requestDetailAbort = null;
+
+async function showRequestDetail(requestID) {
+  if (!requestID) return;
+
+  // Cancel any in-flight fetch for a previous request.
+  if (requestDetailAbort) {
+    requestDetailAbort.abort();
+  }
+  const controller = new AbortController();
+  requestDetailAbort = controller;
+
+  try {
+    const resp = await fetch('/api/requests/' + encodeURIComponent(requestID), {
+      signal: controller.signal,
+    });
+
+    // Verify this is still the active request — a newer click may have
+    // replaced the controller while we were awaiting the response.
+    if (requestDetailAbort !== controller) return;
+
+    if (!resp.ok) {
+      if (resp.status === 404) {
+        console.warn('Request detail not found:', requestID);
+      }
+      // Close the panel so a stale previous request doesn't remain visible.
+      closeRequestDetail();
+      return;
+    }
+    const detail = await resp.json();
+
+    // Re-check after parsing — another click could have landed.
+    if (requestDetailAbort !== controller) return;
+
+    activeRequestID = requestID;
+    activeRequestJSON = JSON.stringify(detail, null, 2);
+
+    // Show the request detail panel, hide others.
+    detailPlaceholder.hidden = true;
+    detailContent.hidden = true;
+    systemDetail.hidden = true;
+    requestDetailPanel.hidden = false;
+
+    renderRequestDetail(detail, requestDetailEls);
+
+    // Update URL fragment for deep linking. Use location.hash (which
+    // creates a history entry) so the browser Back button closes the panel.
+    window.location.hash = 'request/' + requestID;
+  } catch (err) {
+    if (err.name === 'AbortError') return; // Superseded by a newer request.
+    console.warn('Failed to fetch request detail:', err);
+  }
+}
+
+function closeRequestDetail() {
+  activeRequestID = null;
+  activeRequestJSON = null;
+  // Cancel any in-flight fetch so a stale response can't re-open the panel.
+  if (requestDetailAbort) {
+    requestDetailAbort.abort();
+    requestDetailAbort = null;
+  }
+  requestDetailPanel.hidden = true;
+  // Restore the previous detail panel state.
+  renderAll();
+  // Clear hash while preserving path and query string.
+  history.replaceState(null, '', window.location.pathname + window.location.search);
+}
+
+$('#request-detail-close').addEventListener('click', closeRequestDetail);
+$('#request-detail-copy').addEventListener('click', () => {
+  if (!activeRequestJSON) return;
+  const btn = $('#request-detail-copy');
+  navigator.clipboard.writeText(activeRequestJSON).then(() => {
+    btn.textContent = 'Copied';
+    btn.classList.add('copy-btn--copied');
+    setTimeout(() => {
+      btn.textContent = 'JSON';
+      btn.classList.remove('copy-btn--copied');
+    }, 1200);
+  });
+});
+
+// Override renderDetail to respect active request detail view.
+const _origRenderDetail = renderDetail;
+// eslint-disable-next-line no-global-assign
+renderDetail = function() {
+  if (activeRequestID && !requestDetailPanel.hidden) {
+    return; // Don't overwrite the request detail panel.
+  }
+  _origRenderDetail();
+};
+
+// Probe whether content retention is enabled. The callback is only set
+// if the API endpoint is available (not 503), so request ID chips in
+// shared.js render as plain copy-on-click when retention is disabled.
+async function probeContentRetention() {
+  try {
+    // Use a dummy ID — we only care about the status code.
+    const resp = await fetch('/api/requests/_probe');
+    // 404 = endpoint works, no such request. 503 = retention disabled.
+    if (resp.status !== 503) {
+      window.onRequestChipClick = showRequestDetail;
+    }
+  } catch (_) {
+    // Network error — leave chips as non-inspectable.
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Deep Link Routing (URL Fragment)
+// ---------------------------------------------------------------------------
+
+function handleHashRoute() {
+  const hash = window.location.hash;
+  const match = hash && hash.match(/^#request\/(.+)$/);
+
+  if (match) {
+    const id = decodeURIComponent(match[1]);
+    // Skip if already showing this request (avoids re-fetch when
+    // showRequestDetail sets location.hash and triggers hashchange).
+    if (id !== activeRequestID) {
+      showRequestDetail(id);
+    }
+    return;
+  }
+
+  // Hash is empty or doesn't match a request route — close any open
+  // request detail so UI stays in sync with URL (e.g. browser Back).
+  if (requestDetailPanel && !requestDetailPanel.hidden) {
+    activeRequestID = null;
+    activeRequestJSON = null;
+    if (requestDetailAbort) {
+      requestDetailAbort.abort();
+      requestDetailAbort = null;
+    }
+    requestDetailPanel.hidden = true;
+    renderAll();
+  }
+}
+
+window.addEventListener('hashchange', handleHashRoute);
+
+// ---------------------------------------------------------------------------
 // Boot
 // ---------------------------------------------------------------------------
 
 connect();
 fetchVersionInfo();
 fetchSystemStatus();
+probeContentRetention().then(handleHashRoute);
 // Refresh uptime display every second.
 setInterval(updateUptime, 1000);
 // Refresh system status every 10s.

@@ -1438,6 +1438,219 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
   animation: node-shake 0.3s ease-in-out;
 }
 
+/* === Request Detail / Waterfall === */
+
+.request-content {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 0;
+}
+
+.request-content__section {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.request-content__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  background: var(--bg-tertiary);
+  cursor: pointer;
+  user-select: none;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.request-content__header:hover {
+  color: var(--text-primary);
+}
+
+.request-content__header .copy-btn {
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+.request-content__section:hover .copy-btn,
+.request-content__section:focus-within .copy-btn {
+  opacity: 1;
+}
+
+@media (pointer: coarse) {
+  .request-content__header .copy-btn {
+    opacity: 1;
+  }
+}
+
+.request-content__body {
+  padding: 8px 10px;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-primary);
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.request-content__body--collapsed {
+  display: none;
+}
+
+.waterfall {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 0;
+}
+
+.waterfall__title {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 4px;
+}
+
+.waterfall__item {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  transition: border-color 0.15s;
+}
+
+.waterfall__item:hover {
+  border-color: var(--accent);
+}
+
+.waterfall__bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.waterfall__index {
+  font-size: 0.7rem;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+  min-width: 18px;
+}
+
+.waterfall__name {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--accent);
+  flex: 1;
+}
+
+.waterfall__call-id {
+  font-size: 0.7rem;
+  font-family: var(--font-mono);
+  color: var(--text-muted);
+}
+
+.waterfall__expand {
+  display: none;
+  padding: 0 10px 8px;
+}
+
+.waterfall__expand--open {
+  display: block;
+}
+
+.waterfall__sub-section {
+  margin-bottom: 6px;
+}
+
+.waterfall__sub-label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 2px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.waterfall__sub-content {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--text-primary);
+  max-height: 160px;
+  overflow-y: auto;
+  background: var(--bg-tertiary);
+  border-radius: 4px;
+  padding: 6px 8px;
+}
+
+.copy-btn {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-muted);
+  font-size: 0.65rem;
+  padding: 1px 6px;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.copy-btn:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.copy-btn--copied {
+  color: var(--green);
+  border-color: var(--green);
+}
+
+.request-meta-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  padding: 6px 0;
+  font-size: 0.75rem;
+}
+
+.request-meta-bar__item {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.request-meta-bar__label {
+  color: var(--text-muted);
+}
+
+.request-meta-bar__value {
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+}
+
+.request-meta-bar__value--warn {
+  color: var(--orange);
+}
+
+.log-id-chip--clickable {
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 2px;
+}
+
+.log-id-chip--clickable:hover {
+  color: var(--accent);
+}
+
 /* === Responsive === */
 @media (max-width: 768px) {
   .main { flex-direction: column; }

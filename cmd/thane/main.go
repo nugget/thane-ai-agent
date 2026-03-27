@@ -2673,6 +2673,12 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		}
 		if indexDB != nil {
 			webCfg.LogQuerier = &logQueryAdapter{db: indexDB}
+			// Content querier is only useful when content retention is
+			// enabled — without it every request detail lookup returns
+			// empty, making the inspectable chips misleading.
+			if cfg.Logging.RetainContent {
+				webCfg.ContentQuerier = &contentQueryAdapter{db: indexDB}
+			}
 		}
 		server.SetWebServer(web.NewWebServer(webCfg))
 		logger.Info("cognition engine dashboard enabled", "url", fmt.Sprintf("http://localhost:%d/", cfg.Listen.Port))

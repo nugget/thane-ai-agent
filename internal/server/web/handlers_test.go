@@ -40,6 +40,16 @@ func (q *stubLogQuerier) Query(_ logging.QueryParams) ([]logging.LogEntry, error
 	return q.entries, q.err
 }
 
+// stubContentQuerier implements [ContentQuerier] for tests.
+type stubContentQuerier struct {
+	detail *logging.RequestDetail
+	err    error
+}
+
+func (q *stubContentQuerier) QueryRequestDetail(_ string) (*logging.RequestDetail, error) {
+	return q.detail, q.err
+}
+
 func newTestServer(reg LoopRegistry, lq LogQuerier, bus *events.Bus) *WebServer {
 	return NewWebServer(Config{
 		LoopRegistry: reg,
@@ -445,5 +455,90 @@ func TestHandleSystemLogs_NoQuerier(t *testing.T) {
 
 	if w.Code != http.StatusServiceUnavailable {
 		t.Errorf("status = %d, want 503 when LogQuerier is nil", w.Code)
+	}
+}
+
+func TestHandleRequestDetail_Found(t *testing.T) {
+	t.Parallel()
+
+	cq := &stubContentQuerier{
+		detail: &logging.RequestDetail{
+			RequestID:        "r_abc123",
+			Model:            "test-model",
+			UserContent:      "Hello",
+			AssistantContent: "Hi!",
+			IterationCount:   1,
+			InputTokens:      100,
+			OutputTokens:     50,
+			ToolCalls:        []logging.ToolDetail{},
+			CreatedAt:        "2025-01-01T00:00:00Z",
+		},
+	}
+
+	srv := NewWebServer(Config{
+		LoopRegistry:   &stubRegistry{},
+		EventBus:       events.New(),
+		ContentQuerier: cq,
+	})
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	req := httptest.NewRequest("GET", "/api/requests/r_abc123", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	resp := w.Result()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	var body map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	if body["request_id"] != "r_abc123" {
+		t.Errorf("request_id = %v, want r_abc123", body["request_id"])
+	}
+	if body["model"] != "test-model" {
+		t.Errorf("model = %v, want test-model", body["model"])
+	}
+}
+
+func TestHandleRequestDetail_NotFound(t *testing.T) {
+	t.Parallel()
+
+	cq := &stubContentQuerier{detail: nil}
+
+	srv := NewWebServer(Config{
+		LoopRegistry:   &stubRegistry{},
+		EventBus:       events.New(),
+		ContentQuerier: cq,
+	})
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	req := httptest.NewRequest("GET", "/api/requests/r_nonexistent", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", w.Code)
+	}
+}
+
+func TestHandleRequestDetail_NoQuerier(t *testing.T) {
+	t.Parallel()
+
+	srv := newTestServer(&stubRegistry{}, nil, events.New())
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	req := httptest.NewRequest("GET", "/api/requests/r_test", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want 503 when ContentQuerier is nil", w.Code)
 	}
 }

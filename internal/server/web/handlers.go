@@ -111,6 +111,35 @@ func (s *WebServer) handleLoopLogs(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// handleRequestDetail returns the full retained content for a single
+// request, including system prompt, user/assistant messages, tool call
+// arguments and results, and token metadata.
+func (s *WebServer) handleRequestDetail(w http.ResponseWriter, r *http.Request) {
+	if s.contentQuerier == nil {
+		s.writeJSONError(w, "content retention not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	requestID := r.PathValue("id")
+	if requestID == "" {
+		s.writeJSONError(w, "missing request id", http.StatusBadRequest)
+		return
+	}
+
+	detail, err := s.contentQuerier.QueryRequestDetail(requestID)
+	if err != nil {
+		s.logger.Warn("request detail query failed", "request_id", requestID, "error", err)
+		s.writeJSONError(w, "query failed", http.StatusInternalServerError)
+		return
+	}
+	if detail == nil {
+		s.writeJSONError(w, "request not found", http.StatusNotFound)
+		return
+	}
+
+	s.writeJSON(w, detail)
+}
+
 // handleSystemLogs returns all log entries across the entire runtime.
 // When the runtime node is selected this acts as a full log tail,
 // replacing the need for a separate terminal window.
