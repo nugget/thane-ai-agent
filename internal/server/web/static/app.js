@@ -1654,6 +1654,9 @@ document.addEventListener('keydown', (e) => {
       toggleLogs();
       break;
     case 'escape':
+      if (activeRequestID) {
+        closeRequestDetail();
+      }
       hideContextMenu();
       break;
   }
@@ -1858,12 +1861,114 @@ function applyViewportTransform() {
 })();
 
 // ---------------------------------------------------------------------------
+// Request Detail Panel
+// ---------------------------------------------------------------------------
+
+const requestDetailPanel = $('#request-detail');
+const requestDetailEls = {
+  ids: $('#request-detail-ids'),
+  meta: $('#request-detail-meta'),
+  content: $('#request-detail-content'),
+  waterfall: $('#request-detail-waterfall'),
+};
+
+// Currently displayed request ID (for deep linking and back button).
+let activeRequestID = null;
+
+// Cached raw detail JSON for copy-as-JSON feature.
+let activeRequestJSON = null;
+
+async function showRequestDetail(requestID) {
+  if (!requestID) return;
+
+  try {
+    const resp = await fetch('/api/requests/' + encodeURIComponent(requestID));
+    if (!resp.ok) {
+      if (resp.status === 404) {
+        console.warn('Request detail not found:', requestID);
+      }
+      return;
+    }
+    const detail = await resp.json();
+
+    activeRequestID = requestID;
+    activeRequestJSON = JSON.stringify(detail, null, 2);
+
+    // Show the request detail panel, hide others.
+    detailPlaceholder.hidden = true;
+    detailContent.hidden = true;
+    systemDetail.hidden = true;
+    requestDetailPanel.hidden = false;
+
+    renderRequestDetail(detail, requestDetailEls);
+
+    // Update URL fragment for deep linking.
+    history.replaceState(null, '', '#request/' + requestID);
+  } catch (err) {
+    console.warn('Failed to fetch request detail:', err);
+  }
+}
+
+function closeRequestDetail() {
+  activeRequestID = null;
+  requestDetailPanel.hidden = true;
+  // Restore the previous detail panel state.
+  renderAll();
+  // Clear hash.
+  history.replaceState(null, '', window.location.pathname);
+}
+
+$('#request-detail-close').addEventListener('click', closeRequestDetail);
+$('#request-detail-copy').addEventListener('click', () => {
+  if (!activeRequestJSON) return;
+  const btn = $('#request-detail-copy');
+  navigator.clipboard.writeText(activeRequestJSON).then(() => {
+    btn.textContent = 'Copied';
+    btn.classList.add('copy-btn--copied');
+    setTimeout(() => {
+      btn.textContent = 'JSON';
+      btn.classList.remove('copy-btn--copied');
+    }, 1200);
+  });
+});
+
+// Override renderDetail to respect active request detail view.
+const _origRenderDetail = renderDetail;
+// eslint-disable-next-line no-global-assign
+renderDetail = function() {
+  if (activeRequestID && !requestDetailPanel.hidden) {
+    return; // Don't overwrite the request detail panel.
+  }
+  _origRenderDetail();
+};
+
+// Global callback for shared.js to trigger request detail from log chips.
+window.onRequestChipClick = showRequestDetail;
+
+// ---------------------------------------------------------------------------
+// Deep Link Routing (URL Fragment)
+// ---------------------------------------------------------------------------
+
+function handleHashRoute() {
+  const hash = window.location.hash;
+  if (!hash) return;
+
+  const match = hash.match(/^#request\/(.+)$/);
+  if (match) {
+    showRequestDetail(decodeURIComponent(match[1]));
+  }
+}
+
+window.addEventListener('hashchange', handleHashRoute);
+
+// ---------------------------------------------------------------------------
 // Boot
 // ---------------------------------------------------------------------------
 
 connect();
 fetchVersionInfo();
 fetchSystemStatus();
+handleHashRoute();
 // Refresh uptime display every second.
 setInterval(updateUptime, 1000);
 // Refresh system status every 10s.

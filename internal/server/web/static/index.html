@@ -55,6 +55,19 @@
           <div id="detail-tags-list" class="tag-list"></div>
         </div>
       </div>
+      <div id="request-detail" class="detail-content" hidden>
+        <div class="detail-header">
+          <h2 class="detail-name">Request Detail</h2>
+          <div style="display:flex;gap:4px;align-items:center">
+            <button id="request-detail-copy" class="copy-btn" title="Copy full request as JSON">JSON</button>
+            <button id="request-detail-close" class="btn btn--sm" title="Close request detail">&times;</button>
+          </div>
+        </div>
+        <div id="request-detail-ids" class="detail-ids"></div>
+        <div id="request-detail-meta" class="detail-aggregates"></div>
+        <div id="request-detail-content" class="request-content"></div>
+        <div id="request-detail-waterfall" class="waterfall"></div>
+      </div>
       <div id="system-detail" class="detail-content" hidden>
         <div class="detail-header">
           <h2 class="detail-name">Runtime</h2>

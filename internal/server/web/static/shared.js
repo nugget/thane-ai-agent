@@ -363,20 +363,27 @@ function buildLogDetail(td, entry) {
     td.appendChild(span);
   }
 
-  // Copy-clickable ID chips for tracing IDs.
+  // Copy-clickable ID chips for tracing IDs. Request ID chips are also
+  // clickable to open the request detail waterfall view.
   const ids = [
-    { label: 'req', full: entry.RequestID },
+    { label: 'req', full: entry.RequestID, inspectable: true },
     { label: 'conv', full: entry.ConversationID },
     { label: 'sess', full: entry.SessionID },
   ];
-  for (const { label, full } of ids) {
+  for (const { label, full, inspectable } of ids) {
     if (!full) continue;
     const chip = document.createElement('span');
-    chip.className = 'log-id-chip';
+    chip.className = 'log-id-chip' + (inspectable ? ' log-id-chip--clickable' : '');
     chip.textContent = label + ':' + shortID(full);
-    chip.title = label + ' \u2014 click to copy\n' + full;
+    chip.title = inspectable
+      ? 'Click to inspect request \u00b7 Shift+click to copy\n' + full
+      : label + ' \u2014 click to copy\n' + full;
     chip.addEventListener('click', (e) => {
       e.stopPropagation();
+      if (inspectable && !e.shiftKey && typeof window.onRequestChipClick === 'function') {
+        window.onRequestChipClick(full);
+        return;
+      }
       navigator.clipboard.writeText(full).then(() => {
         chip.classList.add('log-id-chip--copied');
         setTimeout(() => chip.classList.remove('log-id-chip--copied'), 1200);
@@ -922,5 +929,212 @@ function renderTimeline(loop, container, history, sleepTimerId, sleepTimers) {
     if (i < history.length - 1) {
       container.appendChild(buildConnector(loop, history[i], false, null));
     }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Request Detail / Waterfall Rendering
+// ---------------------------------------------------------------------------
+
+// makeCopyBtn creates a small "Copy" button that copies text to clipboard.
+function makeCopyBtn(text, label) {
+  const btn = document.createElement('button');
+  btn.className = 'copy-btn';
+  btn.textContent = label || 'Copy';
+  btn.title = 'Copy to clipboard';
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    navigator.clipboard.writeText(text).then(() => {
+      btn.textContent = 'Copied';
+      btn.classList.add('copy-btn--copied');
+      setTimeout(() => {
+        btn.textContent = label || 'Copy';
+        btn.classList.remove('copy-btn--copied');
+      }, 1200);
+    });
+  });
+  return btn;
+}
+
+// renderRequestDetail populates the request detail panel from API data.
+//
+//   detail:    object from GET /api/requests/{id}
+//   els:       { ids, meta, content, waterfall } — DOM containers
+function renderRequestDetail(detail, els) {
+  // IDs section.
+  els.ids.innerHTML = '';
+  els.ids.appendChild(makeIDRow('request_id', detail.request_id));
+  if (detail.prompt_hash) {
+    els.ids.appendChild(makeIDRow('prompt_hash', detail.prompt_hash));
+  }
+
+  // Metadata bar.
+  els.meta.innerHTML = '';
+  const bar = document.createElement('div');
+  bar.className = 'request-meta-bar';
+
+  const items = [
+    { label: 'model', value: detail.model },
+    { label: 'iterations', value: String(detail.iteration_count) },
+    { label: 'in', value: formatTokens(detail.input_tokens) },
+    { label: 'out', value: formatTokens(detail.output_tokens) },
+  ];
+  if (detail.exhausted) {
+    items.push({ label: 'exhausted', value: detail.exhaust_reason || 'yes', warn: true });
+  }
+  for (const item of items) {
+    if (!item.value) continue;
+    const el = document.createElement('span');
+    el.className = 'request-meta-bar__item';
+    el.innerHTML =
+      '<span class="request-meta-bar__label">' + escapeHTML(item.label) + '</span> ' +
+      '<span class="request-meta-bar__value' + (item.warn ? ' request-meta-bar__value--warn' : '') +
+      '">' + escapeHTML(item.value) + '</span>';
+    bar.appendChild(el);
+  }
+  if (detail.tools_used) {
+    for (const [name, count] of Object.entries(detail.tools_used)) {
+      const el = document.createElement('span');
+      el.className = 'request-meta-bar__item';
+      el.innerHTML =
+        '<span class="request-meta-bar__label">' + escapeHTML(name) + '</span> ' +
+        '<span class="request-meta-bar__value">&times;' + count + '</span>';
+      bar.appendChild(el);
+    }
+  }
+  els.meta.appendChild(bar);
+
+  // Content sections (system prompt, user, assistant).
+  els.content.innerHTML = '';
+
+  if (detail.system_prompt) {
+    els.content.appendChild(buildContentSection('System Prompt', detail.system_prompt));
+  }
+  if (detail.user_content) {
+    els.content.appendChild(buildContentSection('User', detail.user_content));
+  }
+  if (detail.assistant_content) {
+    els.content.appendChild(buildContentSection('Assistant', detail.assistant_content));
+  }
+
+  // Tool call waterfall.
+  els.waterfall.innerHTML = '';
+  if (detail.tool_calls && detail.tool_calls.length > 0) {
+    const title = document.createElement('div');
+    title.className = 'waterfall__title';
+    title.textContent = 'Tool Calls (' + detail.tool_calls.length + ')';
+    els.waterfall.appendChild(title);
+
+    for (const tc of detail.tool_calls) {
+      els.waterfall.appendChild(buildWaterfallItem(tc));
+    }
+  }
+}
+
+// buildContentSection creates a collapsible section showing text content.
+function buildContentSection(label, text) {
+  const section = document.createElement('div');
+  section.className = 'request-content__section';
+
+  const header = document.createElement('div');
+  header.className = 'request-content__header';
+
+  const labelSpan = document.createElement('span');
+  labelSpan.textContent = label;
+  header.appendChild(labelSpan);
+  header.appendChild(makeCopyBtn(text));
+
+  const body = document.createElement('div');
+  body.className = 'request-content__body';
+  body.textContent = text;
+
+  // Start collapsed if long.
+  if (text.length > 300) {
+    body.classList.add('request-content__body--collapsed');
+  }
+
+  header.addEventListener('click', (e) => {
+    if (e.target.closest('.copy-btn')) return;
+    body.classList.toggle('request-content__body--collapsed');
+  });
+
+  section.appendChild(header);
+  section.appendChild(body);
+  return section;
+}
+
+// buildWaterfallItem creates a single tool call entry in the waterfall.
+function buildWaterfallItem(tc) {
+  const item = document.createElement('div');
+  item.className = 'waterfall__item';
+
+  const bar = document.createElement('div');
+  bar.className = 'waterfall__bar';
+
+  const idx = document.createElement('span');
+  idx.className = 'waterfall__index';
+  idx.textContent = '#' + tc.iteration_index;
+
+  const name = document.createElement('span');
+  name.className = 'waterfall__name';
+  name.textContent = tc.tool_name;
+
+  const callId = document.createElement('span');
+  callId.className = 'waterfall__call-id';
+  callId.textContent = tc.tool_call_id ? shortID(tc.tool_call_id) : '';
+
+  bar.appendChild(idx);
+  bar.appendChild(name);
+  bar.appendChild(callId);
+  item.appendChild(bar);
+
+  // Expandable detail section.
+  const expand = document.createElement('div');
+  expand.className = 'waterfall__expand';
+
+  if (tc.arguments) {
+    expand.appendChild(buildWaterfallSub('Arguments', formatJSON(tc.arguments)));
+  }
+  if (tc.result) {
+    expand.appendChild(buildWaterfallSub('Result', tc.result));
+  }
+
+  item.appendChild(expand);
+
+  bar.addEventListener('click', () => {
+    expand.classList.toggle('waterfall__expand--open');
+  });
+
+  return item;
+}
+
+// buildWaterfallSub creates a labeled sub-section within a waterfall item.
+function buildWaterfallSub(label, text) {
+  const section = document.createElement('div');
+  section.className = 'waterfall__sub-section';
+
+  const labelEl = document.createElement('div');
+  labelEl.className = 'waterfall__sub-label';
+
+  const labelText = document.createElement('span');
+  labelText.textContent = label;
+  labelEl.appendChild(labelText);
+  labelEl.appendChild(makeCopyBtn(text));
+
+  const content = document.createElement('div');
+  content.className = 'waterfall__sub-content';
+  content.textContent = text;
+
+  section.appendChild(labelEl);
+  section.appendChild(content);
+  return section;
+}
+
+// formatJSON tries to pretty-print a JSON string. Returns as-is if invalid.
+function formatJSON(s) {
+  try {
+    return JSON.stringify(JSON.parse(s), null, 2);
+  } catch (_) {
+    return s;
   }
 }

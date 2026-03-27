@@ -2673,6 +2673,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		}
 		if indexDB != nil {
 			webCfg.LogQuerier = &logQueryAdapter{db: indexDB}
+			webCfg.ContentQuerier = &contentQueryAdapter{db: indexDB}
 		}
 		server.SetWebServer(web.NewWebServer(webCfg))
 		logger.Info("cognition engine dashboard enabled", "url", fmt.Sprintf("http://localhost:%d/", cfg.Listen.Port))
