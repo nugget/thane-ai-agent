@@ -1889,19 +1889,30 @@ async function showRequestDetail(requestID) {
   if (requestDetailAbort) {
     requestDetailAbort.abort();
   }
-  requestDetailAbort = new AbortController();
+  const controller = new AbortController();
+  requestDetailAbort = controller;
 
   try {
     const resp = await fetch('/api/requests/' + encodeURIComponent(requestID), {
-      signal: requestDetailAbort.signal,
+      signal: controller.signal,
     });
+
+    // Verify this is still the active request — a newer click may have
+    // replaced the controller while we were awaiting the response.
+    if (requestDetailAbort !== controller) return;
+
     if (!resp.ok) {
       if (resp.status === 404) {
         console.warn('Request detail not found:', requestID);
       }
+      // Close the panel so a stale previous request doesn't remain visible.
+      closeRequestDetail();
       return;
     }
     const detail = await resp.json();
+
+    // Re-check after parsing — another click could have landed.
+    if (requestDetailAbort !== controller) return;
 
     activeRequestID = requestID;
     activeRequestJSON = JSON.stringify(detail, null, 2);
@@ -1962,8 +1973,21 @@ renderDetail = function() {
   _origRenderDetail();
 };
 
-// Global callback for shared.js to trigger request detail from log chips.
-window.onRequestChipClick = showRequestDetail;
+// Probe whether content retention is enabled. The callback is only set
+// if the API endpoint is available (not 503), so request ID chips in
+// shared.js render as plain copy-on-click when retention is disabled.
+async function probeContentRetention() {
+  try {
+    // Use a dummy ID — we only care about the status code.
+    const resp = await fetch('/api/requests/_probe');
+    // 404 = endpoint works, no such request. 503 = retention disabled.
+    if (resp.status !== 503) {
+      window.onRequestChipClick = showRequestDetail;
+    }
+  } catch (_) {
+    // Network error — leave chips as non-inspectable.
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Deep Link Routing (URL Fragment)
@@ -2006,7 +2030,7 @@ window.addEventListener('hashchange', handleHashRoute);
 connect();
 fetchVersionInfo();
 fetchSystemStatus();
-handleHashRoute();
+probeContentRetention().then(handleHashRoute);
 // Refresh uptime display every second.
 setInterval(updateUptime, 1000);
 // Refresh system status every 10s.

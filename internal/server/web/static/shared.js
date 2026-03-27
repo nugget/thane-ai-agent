@@ -366,7 +366,7 @@ function buildLogDetail(td, entry) {
   // Copy-clickable ID chips for tracing IDs. Request ID chips are also
   // clickable to open the request detail waterfall view.
   const ids = [
-    { label: 'req', full: entry.RequestID, inspectable: true },
+    { label: 'req', full: entry.RequestID, inspectable: typeof window.onRequestChipClick === 'function' },
     { label: 'conv', full: entry.ConversationID },
     { label: 'sess', full: entry.SessionID },
   ];
