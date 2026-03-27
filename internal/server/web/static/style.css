@@ -1474,8 +1474,15 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
   opacity: 0;
   transition: opacity 0.15s;
 }
-.request-content__section:hover .copy-btn {
+.request-content__section:hover .copy-btn,
+.request-content__section:focus-within .copy-btn {
   opacity: 1;
+}
+
+@media (pointer: coarse) {
+  .request-content__header .copy-btn {
+    opacity: 1;
+  }
 }
 
 .request-content__body {

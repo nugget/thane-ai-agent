@@ -142,6 +142,17 @@ func (s *WebServer) writeJSON(w http.ResponseWriter, v any) {
 	}
 }
 
+// writeJSONError writes an error response with the given status code
+// and a JSON body of {"error": msg}. Unlike [http.Error], this sets
+// Content-Type to application/json for consistent API responses.
+func (s *WebServer) writeJSONError(w http.ResponseWriter, msg string, code int) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	if err := json.NewEncoder(w).Encode(map[string]string{"error": msg}); err != nil {
+		s.logger.Debug("failed to write JSON error response", "error", err)
+	}
+}
+
 // handleIndex serves the single-page visualizer.
 func (s *WebServer) handleIndex(w http.ResponseWriter, _ *http.Request) {
 	data, err := staticFS.ReadFile("static/index.html")

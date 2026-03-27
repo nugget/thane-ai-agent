@@ -116,24 +116,24 @@ func (s *WebServer) handleLoopLogs(w http.ResponseWriter, r *http.Request) {
 // arguments and results, and token metadata.
 func (s *WebServer) handleRequestDetail(w http.ResponseWriter, r *http.Request) {
 	if s.contentQuerier == nil {
-		http.Error(w, `{"error":"content retention not available"}`, http.StatusServiceUnavailable)
+		s.writeJSONError(w, "content retention not available", http.StatusServiceUnavailable)
 		return
 	}
 
 	requestID := r.PathValue("id")
 	if requestID == "" {
-		http.Error(w, `{"error":"missing request id"}`, http.StatusBadRequest)
+		s.writeJSONError(w, "missing request id", http.StatusBadRequest)
 		return
 	}
 
 	detail, err := s.contentQuerier.QueryRequestDetail(requestID)
 	if err != nil {
 		s.logger.Warn("request detail query failed", "request_id", requestID, "error", err)
-		http.Error(w, `{"error":"query failed"}`, http.StatusInternalServerError)
+		s.writeJSONError(w, "query failed", http.StatusInternalServerError)
 		return
 	}
 	if detail == nil {
-		http.Error(w, `{"error":"request not found"}`, http.StatusNotFound)
+		s.writeJSONError(w, "request not found", http.StatusNotFound)
 		return
 	}
 

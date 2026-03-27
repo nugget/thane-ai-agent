@@ -3,6 +3,7 @@ package logging
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 )
 
@@ -56,7 +57,7 @@ func QueryRequestDetail(db *sql.DB, requestID string) (*RequestDetail, error) {
 		&model, &iterCount, &inputTok, &outputTok, &toolsUsed,
 		&exhausted, &exhaustReason, &createdAt,
 	)
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
@@ -84,7 +85,10 @@ func QueryRequestDetail(db *sql.DB, requestID string) (*RequestDetail, error) {
 	// Resolve system prompt content from the prompts table.
 	if rd.PromptHash != "" {
 		var content sql.NullString
-		_ = db.QueryRow(`SELECT content FROM log_prompts WHERE hash = ?`, rd.PromptHash).Scan(&content)
+		err := db.QueryRow(`SELECT content FROM log_prompts WHERE hash = ?`, rd.PromptHash).Scan(&content)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return &rd, fmt.Errorf("query prompt content: %w", err)
+		}
 		rd.SystemPrompt = content.String
 	}
 

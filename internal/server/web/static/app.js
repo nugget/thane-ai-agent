@@ -1878,11 +1878,23 @@ let activeRequestID = null;
 // Cached raw detail JSON for copy-as-JSON feature.
 let activeRequestJSON = null;
 
+// AbortController for in-flight request detail fetches. Prevents stale
+// data from overwriting the panel when the user clicks rapidly.
+let requestDetailAbort = null;
+
 async function showRequestDetail(requestID) {
   if (!requestID) return;
 
+  // Cancel any in-flight fetch for a previous request.
+  if (requestDetailAbort) {
+    requestDetailAbort.abort();
+  }
+  requestDetailAbort = new AbortController();
+
   try {
-    const resp = await fetch('/api/requests/' + encodeURIComponent(requestID));
+    const resp = await fetch('/api/requests/' + encodeURIComponent(requestID), {
+      signal: requestDetailAbort.signal,
+    });
     if (!resp.ok) {
       if (resp.status === 404) {
         console.warn('Request detail not found:', requestID);
@@ -1905,6 +1917,7 @@ async function showRequestDetail(requestID) {
     // Update URL fragment for deep linking.
     history.replaceState(null, '', '#request/' + requestID);
   } catch (err) {
+    if (err.name === 'AbortError') return; // Superseded by a newer request.
     console.warn('Failed to fetch request detail:', err);
   }
 }
@@ -1951,11 +1964,20 @@ window.onRequestChipClick = showRequestDetail;
 
 function handleHashRoute() {
   const hash = window.location.hash;
-  if (!hash) return;
+  const match = hash && hash.match(/^#request\/(.+)$/);
 
-  const match = hash.match(/^#request\/(.+)$/);
   if (match) {
     showRequestDetail(decodeURIComponent(match[1]));
+    return;
+  }
+
+  // Hash is empty or doesn't match a request route — close any open
+  // request detail so UI stays in sync with URL (e.g. browser Back).
+  if (requestDetailPanel && !requestDetailPanel.hidden) {
+    activeRequestID = null;
+    activeRequestJSON = null;
+    requestDetailPanel.hidden = true;
+    renderAll();
   }
 }
 
