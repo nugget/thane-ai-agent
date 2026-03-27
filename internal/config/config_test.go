@@ -235,6 +235,15 @@ func TestContentMaxLength_Zero(t *testing.T) {
 	}
 }
 
+func TestContentMaxLength_Negative(t *testing.T) {
+	cfg := Default()
+	n := -1
+	cfg.Logging.MaxContentLength = &n
+	if got := cfg.Logging.ContentMaxLength(); got != 4096 {
+		t.Errorf("ContentMaxLength() = %d, want 4096 (clamped to default)", got)
+	}
+}
+
 func TestValidate_PersonDevicesValid(t *testing.T) {
 	cfg := Default()
 	cfg.Person.Track = []string{"person.alice"}

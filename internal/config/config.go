@@ -355,13 +355,15 @@ func (l LoggingConfig) RetentionDaysDuration() time.Duration {
 }
 
 // ContentMaxLength returns the maximum character count for retained
-// content fields. Defaults to 4096 when unset. Returns 0 for unlimited.
+// content fields. Defaults to 4096 when unset. A value of 0 means
+// unlimited; negative values are treated as misconfiguration and
+// clamped to the default (4096).
 func (l LoggingConfig) ContentMaxLength() int {
 	if l.MaxContentLength == nil {
 		return 4096
 	}
 	if *l.MaxContentLength < 0 {
-		return 0
+		return 4096
 	}
 	return *l.MaxContentLength
 }

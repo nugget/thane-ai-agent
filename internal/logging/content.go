@@ -220,14 +220,22 @@ func (w *ContentWriter) writeToolCalls(ctx context.Context, requestID string, me
 	}
 }
 
-// truncate limits s to w.maxLen characters. When maxLen is 0, the
-// string is returned unchanged.
+// truncate limits s to w.maxLen runes without allocating a []rune
+// slice. When maxLen is 0 or s is within the limit, the string is
+// returned unchanged. Uses a for-range walk to find the byte offset
+// of the maxLen-th rune boundary.
 func (w *ContentWriter) truncate(s string) string {
-	if w.maxLen <= 0 || len([]rune(s)) <= w.maxLen {
+	if w.maxLen <= 0 {
 		return s
 	}
-	runes := []rune(s)
-	return string(runes[:w.maxLen])
+	runeCount := 0
+	for i := range s {
+		if runeCount == w.maxLen {
+			return s[:i]
+		}
+		runeCount++
+	}
+	return s
 }
 
 // hashPrompt returns the hex-encoded SHA-256 hash of a system prompt.

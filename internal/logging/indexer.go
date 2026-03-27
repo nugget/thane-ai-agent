@@ -284,7 +284,8 @@ func Migrate(db *sql.DB) error {
 		exhaust_reason TEXT,
 		created_at TEXT NOT NULL
 	);
-	CREATE INDEX IF NOT EXISTS idx_request_content_request ON log_request_content(request_id);
+	-- request_id UNIQUE already creates an implicit index; only
+	-- prompt_hash needs an explicit one for hash-based lookups.
 	CREATE INDEX IF NOT EXISTS idx_request_content_prompt ON log_request_content(prompt_hash);
 
 	CREATE TABLE IF NOT EXISTS log_tool_content (
