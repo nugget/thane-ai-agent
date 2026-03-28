@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/nugget/thane-ai-agent/internal/awareness"
 )
@@ -25,13 +26,25 @@ func (r *Registry) registerWatchlistTools() {
 		Description: "Add a Home Assistant entity to the watched list. " +
 			"Watched entities have their live state injected into your context every turn, " +
 			"eliminating the need for repeated get_state calls. " +
-			"Use this to monitor sensors, doors, batteries, or any entity you want to keep an eye on.",
+			"Rich domains (weather, climate, light, person) automatically include relevant attributes. " +
+			"Use tags to scope entity context to specific capabilities (only visible when that tag is active). " +
+			"Use history to include historical state snapshots at specific intervals.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"entity_id": map[string]any{
 					"type":        "string",
-					"description": "The Home Assistant entity ID to watch (e.g., sensor.office_temperature)",
+					"description": "The Home Assistant entity ID to watch (e.g., sensor.office_temperature, weather.home)",
+				},
+				"tags": map[string]any{
+					"type":        "array",
+					"items":       map[string]any{"type": "string"},
+					"description": "Capability tags to scope this entity to. When set, the entity's context only appears when one of these tags is active. Omit for always-visible entities.",
+				},
+				"history": map[string]any{
+					"type":        "array",
+					"items":       map[string]any{"type": "integer"},
+					"description": "(Reserved) Historical snapshot offsets in seconds. Stored for future use — historical context injection is not yet implemented. E.g., [600, 3600, 86400] would include snapshots from 10min, 1hr, and 1day ago.",
 				},
 			},
 			"required": []string{"entity_id"},
@@ -63,12 +76,75 @@ func (r *Registry) handleAddContextEntity(_ context.Context, args map[string]any
 		return "", fmt.Errorf("entity_id is required")
 	}
 
-	if err := r.watchlistStore.Add(entityID); err != nil {
-		return "", fmt.Errorf("add to watchlist: %w", err)
+	var tags []string
+	if rawTags, ok := args["tags"].([]any); ok {
+		seen := make(map[string]bool)
+		for _, rt := range rawTags {
+			s, ok := rt.(string)
+			if !ok || s == "" {
+				continue
+			}
+			s = strings.TrimSpace(s)
+			if strings.Contains(s, ",") {
+				return "", fmt.Errorf("tag %q must not contain commas", s)
+			}
+			if !seen[s] {
+				seen[s] = true
+				tags = append(tags, s)
+			}
+		}
 	}
 
-	slog.Info("context entity added", "entity_id", entityID)
-	return fmt.Sprintf("Now watching %s — its state will appear in your context each turn.", entityID), nil
+	var history []int
+	if rawHist, ok := args["history"].([]any); ok {
+		for i, rh := range rawHist {
+			switch v := rh.(type) {
+			case float64:
+				if v != float64(int(v)) {
+					return "", fmt.Errorf("history[%d]: must be a whole number of seconds, got %v", i, v)
+				}
+				iv := int(v)
+				if iv <= 0 {
+					return "", fmt.Errorf("history[%d]: must be positive, got %d", i, iv)
+				}
+				history = append(history, iv)
+			case int:
+				if v <= 0 {
+					return "", fmt.Errorf("history[%d]: must be positive, got %d", i, v)
+				}
+				history = append(history, v)
+			default:
+				return "", fmt.Errorf("history[%d]: expected integer seconds, got %T", i, rh)
+			}
+		}
+	}
+
+	if len(tags) > 0 || len(history) > 0 {
+		if err := r.watchlistStore.AddWithOptions(entityID, tags, history); err != nil {
+			return "", fmt.Errorf("add to watchlist: %w", err)
+		}
+	} else {
+		if err := r.watchlistStore.Add(entityID); err != nil {
+			return "", fmt.Errorf("add to watchlist: %w", err)
+		}
+	}
+
+	msg := fmt.Sprintf("Now watching %s", entityID)
+	if len(tags) > 0 {
+		msg += fmt.Sprintf(" (scoped to tags: %v)", tags)
+	}
+	if len(history) > 0 {
+		parts := make([]string, len(history))
+		for i, h := range history {
+			parts[i] = fmt.Sprintf("%ds", h)
+		}
+		msg += fmt.Sprintf(" (history: %s ago, reserved)", strings.Join(parts, ", "))
+	}
+	msg += "."
+
+	slog.Info("context entity added",
+		"entity_id", entityID, "tags", tags, "history", history)
+	return msg, nil
 }
 
 func (r *Registry) handleRemoveContextEntity(_ context.Context, args map[string]any) (string, error) {

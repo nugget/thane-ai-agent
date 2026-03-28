@@ -86,14 +86,17 @@ func TestProvider_SingleEntity(t *testing.T) {
 	if !strings.Contains(got, "### Watched Entities") {
 		t.Error("missing header")
 	}
-	if !strings.Contains(got, "Office Temperature") {
-		t.Error("missing friendly_name")
+	if !strings.Contains(got, `"name":"Office Temperature"`) {
+		t.Error("missing friendly_name in JSON")
 	}
-	if !strings.Contains(got, "sensor.office_temperature") {
-		t.Error("missing entity_id")
+	if !strings.Contains(got, `"entity":"sensor.office_temperature"`) {
+		t.Error("missing entity_id in JSON")
 	}
-	if !strings.Contains(got, "72.4 °F") {
-		t.Error("missing state with unit")
+	if !strings.Contains(got, `"state":"72.4"`) {
+		t.Error("missing state in JSON")
+	}
+	if !strings.Contains(got, `"unit":"°F"`) {
+		t.Error("missing unit in JSON")
 	}
 }
 
@@ -156,16 +159,16 @@ func TestProvider_MultipleEntities(t *testing.T) {
 		t.Fatalf("GetContext: %v", err)
 	}
 
-	if !strings.Contains(got, "Temperature") {
+	if !strings.Contains(got, `"name":"Temperature"`) {
 		t.Error("missing first entity")
 	}
-	if !strings.Contains(got, "Front Door") {
+	if !strings.Contains(got, `"name":"Front Door"`) {
 		t.Error("missing second entity")
 	}
-	if !strings.Contains(got, "68 °F") {
-		t.Error("missing temperature state with unit")
+	if !strings.Contains(got, `"state":"68"`) {
+		t.Error("missing temperature state")
 	}
-	if !strings.Contains(got, "off") {
+	if !strings.Contains(got, `"state":"off"`) {
 		t.Error("missing door state")
 	}
 }
@@ -192,12 +195,14 @@ func TestProvider_NoFriendlyName(t *testing.T) {
 		t.Fatalf("GetContext: %v", err)
 	}
 
-	// When no friendly_name, entity_id is used as the display name.
-	// It should appear as both the name and the parenthetical ID.
-	if !strings.Contains(got, "sensor.raw") {
-		t.Error("missing entity_id fallback as display name")
+	// When no friendly_name, name is omitted from JSON.
+	if !strings.Contains(got, `"entity":"sensor.raw"`) {
+		t.Error("missing entity_id in JSON")
 	}
-	if !strings.Contains(got, "42") {
-		t.Error("missing state value")
+	if !strings.Contains(got, `"state":"42"`) {
+		t.Error("missing state value in JSON")
+	}
+	if strings.Contains(got, `"name"`) {
+		t.Error("name should be omitted when no friendly_name")
 	}
 }

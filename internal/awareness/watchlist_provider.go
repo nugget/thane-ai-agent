@@ -38,11 +38,19 @@ func NewWatchlistProvider(store *WatchlistStore, ha StateGetter, logger *slog.Lo
 	}
 }
 
-// GetContext returns a formatted markdown block of watched entity states
-// for injection into the agent's system prompt. Returns an empty string
+// GetContext returns a formatted block of watched entity states for
+// injection into the agent's system prompt. Returns an empty string
 // when the watchlist is empty. Implements agent.ContextProvider.
+//
+// Entities with rich domains (weather, climate, light, person) are
+// formatted as compact JSON with relevant attributes. Default domains
+// use a markdown line with state and unit. All timestamps use delta
+// format per #458.
 func (p *WatchlistProvider) GetContext(ctx context.Context, _ string) (string, error) {
-	ids, err := p.store.List()
+	// Only emit untagged entities in the always-on context provider.
+	// Tagged entities are emitted through WatchlistTagProvider when
+	// their capability tag is active.
+	ids, err := p.store.ListUntagged()
 	if err != nil {
 		return "", fmt.Errorf("list watched entities: %w", err)
 	}
@@ -66,18 +74,54 @@ func (p *WatchlistProvider) GetContext(ctx context.Context, _ string) (string, e
 			continue
 		}
 
-		displayName := id
-		if name, ok := state.Attributes["friendly_name"].(string); ok && name != "" {
-			displayName = name
+		sb.WriteString(formatEntityContext(state, now))
+		sb.WriteByte('\n')
+	}
+
+	return sb.String(), nil
+}
+
+// WatchlistTagProvider emits watched entity context for a specific
+// capability tag. Implements agent.TagContextProvider via structural
+// typing. Entities are fetched fresh each turn.
+type WatchlistTagProvider struct {
+	tag    string
+	store  *WatchlistStore
+	ha     StateGetter
+	logger *slog.Logger
+}
+
+// NewWatchlistTagProvider creates a tag-scoped watchlist provider.
+func NewWatchlistTagProvider(tag string, store *WatchlistStore, ha StateGetter, logger *slog.Logger) *WatchlistTagProvider {
+	return &WatchlistTagProvider{tag: tag, store: store, ha: ha, logger: logger}
+}
+
+// TagContext returns context for watched entities tagged with this
+// provider's tag. Implements agent.TagContextProvider.
+func (p *WatchlistTagProvider) TagContext(ctx context.Context) (string, error) {
+	entities, err := p.store.ListByTag(p.tag)
+	if err != nil {
+		return "", fmt.Errorf("list watched entities for tag %s: %w", p.tag, err)
+	}
+	if len(entities) == 0 {
+		return "", nil
+	}
+
+	now := time.Now()
+
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "### Watched Entities (%s)\n\n", p.tag)
+
+	for _, e := range entities {
+		state, err := p.ha.GetState(ctx, e.EntityID)
+		if err != nil {
+			p.logger.Warn("failed to fetch tagged entity state",
+				"entity_id", e.EntityID, "tag", p.tag, "error", err)
+			continue
 		}
 
-		stateValue := state.State
-		if unit, ok := state.Attributes["unit_of_measurement"].(string); ok && unit != "" {
-			stateValue += " " + unit
-		}
-
-		since := FormatDeltaOnly(state.LastChanged, now)
-		fmt.Fprintf(&sb, "- **%s** (%s): %s (since %s)\n", displayName, id, stateValue, since)
+		sb.WriteString(formatEntityContext(state, now))
+		sb.WriteByte('\n')
 	}
 
 	return sb.String(), nil
