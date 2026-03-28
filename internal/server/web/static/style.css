@@ -506,6 +506,12 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
 }
 .iter-card--live .iter-card__live-label { color: var(--green); }
 
+.iter-card__iter-num {
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  color: var(--text-muted);
+}
+
 .iter-card__elapsed {
   font-variant-numeric: tabular-nums;
   color: var(--green);

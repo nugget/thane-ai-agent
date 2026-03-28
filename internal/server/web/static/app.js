@@ -460,15 +460,40 @@ function handleLoopEvent(evt) {
   if (state.events.length > MAX_EVENTS) state.events.length = MAX_EVENTS;
 
   // loop_started requires a full fetch — not a per-loop mutation.
+  // Also bootstrap a minimal entry immediately so that in-flight
+  // events arriving before fetchLoops() completes aren't discarded.
   if (evt.kind === 'loop_started') {
+    if (loopId && !state.loops.has(loopId)) {
+      state.loops.set(loopId, {
+        id: loopId,
+        name: loopName || loopId,
+        state: 'processing',
+        parent_id: evt.data.parent_id || null,
+        iterations: 0,
+        _iterStartTs: Date.now(),
+      });
+    }
     fetchLoops();
     renderAll();
     return;
   }
 
-  if (!loopId || !state.loops.has(loopId)) {
+  if (!loopId) {
     renderAll();
     return;
+  }
+
+  // Create a minimal entry for unknown loops so in-flight events
+  // (e.g. loop_iteration_start arriving before fetchLoops() returns)
+  // aren't silently dropped.
+  if (!state.loops.has(loopId)) {
+    state.loops.set(loopId, {
+      id: loopId,
+      name: loopName || loopId,
+      state: 'processing',
+      iterations: 0,
+      _iterStartTs: Date.now(),
+    });
   }
 
   const loop = state.loops.get(loopId);
@@ -593,10 +618,40 @@ async function fetchLoops() {
     const resp = await fetch('/api/loops');
     if (!resp.ok) return;
     const statuses = await resp.json();
-    state.loops.clear();
+
+    // Merge server state with existing entries to preserve transient
+    // telemetry (_iterStartTs, _liveTools, _liveModel, etc.) that may
+    // have been set by in-flight SSE events before this fetch returned.
+    const serverIds = new Set();
     for (const s of statuses) {
+      serverIds.add(s.id);
+      const existing = state.loops.get(s.id);
+      if (existing) {
+        // Preserve transient fields that the server doesn't track.
+        const transient = [
+          '_iterStartTs', '_liveTools', '_liveModel', '_llmContext',
+          '_supervisor', '_currentConvID', '_lastModel', '_lastSupervisor',
+          '_delegate', '_delegateId', '_delegateTask', '_delegateProfile',
+          '_delegateGuidance', '_delegateTags', '_delegateIterations',
+          '_delegateDurationMs', '_delegateExhausted', '_delegateExhaustReason',
+        ];
+        for (const key of transient) {
+          if (existing[key] !== undefined && s[key] === undefined) {
+            s[key] = existing[key];
+          }
+        }
+      }
       state.loops.set(s.id, s);
     }
+
+    // Remove loops that the server no longer reports, but keep
+    // delegate nodes (they're client-only ephemeral entries).
+    for (const id of state.loops.keys()) {
+      if (!serverIds.has(id) && !state.loops.get(id)?._delegate) {
+        state.loops.delete(id);
+      }
+    }
+
     renderAll();
   } catch (err) {
     console.warn('Failed to fetch loops:', err);
