@@ -24,6 +24,18 @@ func newTagTestLoop() *Loop {
 	return l
 }
 
+// setTagsWithAssembler is a test helper that sets capability tags on the
+// loop and creates a matching TagContextAssembler. This mirrors the
+// production wiring in main.go.
+func setTagsWithAssembler(l *Loop, capTags map[string]config.CapabilityTagConfig, parsedTalents []talents.Talent) {
+	l.SetCapabilityTags(capTags, parsedTalents)
+	l.SetTagContextAssembler(NewTagContextAssembler(TagContextAssemblerConfig{
+		CapTags:  capTags,
+		HAInject: l.HAInject(),
+		Logger:   l.logger,
+	}))
+}
+
 func TestBuildSystemPrompt_TagContextIncluded(t *testing.T) {
 	dir := t.TempDir()
 	f1 := filepath.Join(dir, "arch.md")
@@ -32,7 +44,7 @@ func TestBuildSystemPrompt_TagContextIncluded(t *testing.T) {
 	os.WriteFile(f2, []byte("# Style Guide\nTabs not spaces."), 0644)
 
 	l := newTagTestLoop()
-	l.SetCapabilityTags(map[string]config.CapabilityTagConfig{
+	setTagsWithAssembler(l, map[string]config.CapabilityTagConfig{
 		"forge": {
 			Description:  "Code generation",
 			Tools:        []string{"forge_run"},
@@ -60,7 +72,7 @@ func TestBuildSystemPrompt_TagContextInactiveExcluded(t *testing.T) {
 	os.WriteFile(f, []byte("# Architecture\nSecret content."), 0644)
 
 	l := newTagTestLoop()
-	l.SetCapabilityTags(map[string]config.CapabilityTagConfig{
+	setTagsWithAssembler(l, map[string]config.CapabilityTagConfig{
 		"forge": {
 			Description:  "Code generation",
 			Tools:        []string{"forge_run"},
@@ -85,7 +97,7 @@ func TestBuildSystemPrompt_TagContextDedup(t *testing.T) {
 	os.WriteFile(shared, []byte("shared knowledge"), 0644)
 
 	l := newTagTestLoop()
-	l.SetCapabilityTags(map[string]config.CapabilityTagConfig{
+	setTagsWithAssembler(l, map[string]config.CapabilityTagConfig{
 		"forge": {
 			Description:  "Code generation",
 			Tools:        []string{"forge_run"},
@@ -116,7 +128,7 @@ func TestBuildSystemPrompt_TagContextMissingFile(t *testing.T) {
 	os.WriteFile(good, []byte("good content"), 0644)
 
 	l := newTagTestLoop()
-	l.SetCapabilityTags(map[string]config.CapabilityTagConfig{
+	setTagsWithAssembler(l, map[string]config.CapabilityTagConfig{
 		"test": {
 			Description:  "Test tag",
 			Tools:        []string{"test_tool"},
@@ -139,7 +151,7 @@ func TestBuildSystemPrompt_TagContextRereadPerTurn(t *testing.T) {
 	os.WriteFile(f, []byte("version-1"), 0644)
 
 	l := newTagTestLoop()
-	l.SetCapabilityTags(map[string]config.CapabilityTagConfig{
+	setTagsWithAssembler(l, map[string]config.CapabilityTagConfig{
 		"test": {
 			Description:  "Test tag",
 			Tools:        []string{"test_tool"},
@@ -185,7 +197,7 @@ func TestBuildSystemPrompt_TagContextOrderAfterInjected(t *testing.T) {
 
 	l := newTagTestLoop()
 	l.SetInjectFiles([]string{injected})
-	l.SetCapabilityTags(map[string]config.CapabilityTagConfig{
+	setTagsWithAssembler(l, map[string]config.CapabilityTagConfig{
 		"test": {
 			Description:  "Test tag",
 			Tools:        []string{"test_tool"},
@@ -238,7 +250,11 @@ func TestBuildSystemPrompt_HAInjectResolved(t *testing.T) {
 	os.WriteFile(f, []byte("<!-- ha-inject: sensor.pool_temp -->\n# Pool Status\nRefer to live state above."), 0644)
 
 	l := newTagTestLoop()
-	l.SetCapabilityTags(map[string]config.CapabilityTagConfig{
+	// Set HAInject before assembler so it gets the fetcher.
+	l.SetHAInject(&mockStateFetcher{states: map[string]string{
+		"sensor.pool_temp": "84.2",
+	}})
+	setTagsWithAssembler(l, map[string]config.CapabilityTagConfig{
 		"pool": {
 			Description:  "Pool management",
 			Tools:        []string{"pool_tool"},
@@ -246,9 +262,6 @@ func TestBuildSystemPrompt_HAInjectResolved(t *testing.T) {
 			AlwaysActive: true,
 		},
 	}, nil)
-	l.SetHAInject(&mockStateFetcher{states: map[string]string{
-		"sensor.pool_temp": "84.2",
-	}})
 
 	prompt := l.buildSystemPrompt(context.Background(), "hello", nil)
 
@@ -269,7 +282,7 @@ func TestBuildSystemPrompt_HAInjectNilFetcher(t *testing.T) {
 	os.WriteFile(f, []byte("<!-- ha-inject: sensor.temp -->\n# Doc"), 0644)
 
 	l := newTagTestLoop()
-	l.SetCapabilityTags(map[string]config.CapabilityTagConfig{
+	setTagsWithAssembler(l, map[string]config.CapabilityTagConfig{
 		"test": {
 			Description:  "Test",
 			Tools:        []string{"test_tool"},
@@ -295,7 +308,8 @@ func TestBuildSystemPrompt_HAInjectFetchFailure(t *testing.T) {
 	os.WriteFile(f, []byte("<!-- ha-inject: sensor.missing -->\n# Doc"), 0644)
 
 	l := newTagTestLoop()
-	l.SetCapabilityTags(map[string]config.CapabilityTagConfig{
+	l.SetHAInject(&mockStateFetcher{states: map[string]string{}})
+	setTagsWithAssembler(l, map[string]config.CapabilityTagConfig{
 		"test": {
 			Description:  "Test",
 			Tools:        []string{"test_tool"},
@@ -303,7 +317,6 @@ func TestBuildSystemPrompt_HAInjectFetchFailure(t *testing.T) {
 			AlwaysActive: true,
 		},
 	}, nil)
-	l.SetHAInject(&mockStateFetcher{states: map[string]string{}})
 
 	prompt := l.buildSystemPrompt(context.Background(), "hello", nil)
 
@@ -312,5 +325,168 @@ func TestBuildSystemPrompt_HAInjectFetchFailure(t *testing.T) {
 	}
 	if !strings.Contains(prompt, "# Doc") {
 		t.Error("original document content should be preserved on failure")
+	}
+}
+
+// --- TagContextAssembler unit tests ---
+
+// mockTagProvider is a test double for TagContextProvider.
+type mockTagProvider struct {
+	content string
+	err     error
+}
+
+func (m *mockTagProvider) TagContext(_ context.Context) (string, error) {
+	return m.content, m.err
+}
+
+func TestTagContextAssembler_LiveProvider(t *testing.T) {
+	a := NewTagContextAssembler(TagContextAssemblerConfig{
+		CapTags: map[string]config.CapabilityTagConfig{
+			"forge": {},
+		},
+		Providers: map[string]TagContextProvider{
+			"forge": &mockTagProvider{content: `{"accounts":["github-primary"]}`},
+		},
+	})
+
+	result := a.Build(context.Background(), map[string]bool{"forge": true})
+
+	if !strings.Contains(result, "github-primary") {
+		t.Error("expected live provider content")
+	}
+}
+
+func TestTagContextAssembler_ProviderError(t *testing.T) {
+	a := NewTagContextAssembler(TagContextAssemblerConfig{
+		CapTags: map[string]config.CapabilityTagConfig{
+			"forge": {},
+			"ha":    {},
+		},
+		Providers: map[string]TagContextProvider{
+			"forge": &mockTagProvider{err: fmt.Errorf("connection failed")},
+			"ha":    &mockTagProvider{content: "ha context ok"},
+		},
+	})
+
+	result := a.Build(context.Background(), map[string]bool{"forge": true, "ha": true})
+
+	if strings.Contains(result, "connection failed") {
+		t.Error("provider error should not appear in output")
+	}
+	if !strings.Contains(result, "ha context ok") {
+		t.Error("other provider should still produce output")
+	}
+}
+
+func TestTagContextAssembler_TaggedKBArticles(t *testing.T) {
+	kbDir := t.TempDir()
+
+	os.WriteFile(filepath.Join(kbDir, "forge-guide.md"),
+		[]byte("---\ntags: [forge]\n---\n# Forge Conventions\nAlways use PRs."), 0o644)
+	os.WriteFile(filepath.Join(kbDir, "general.md"),
+		[]byte("# General\nUntagged."), 0o644)
+	os.WriteFile(filepath.Join(kbDir, "ha-guide.md"),
+		[]byte("---\ntags: [ha]\n---\n# HA Guide"), 0o644)
+
+	a := NewTagContextAssembler(TagContextAssemblerConfig{
+		CapTags: map[string]config.CapabilityTagConfig{"forge": {}},
+		KBDir:   kbDir,
+	})
+
+	result := a.Build(context.Background(), map[string]bool{"forge": true})
+
+	if !strings.Contains(result, "Forge Conventions") {
+		t.Error("expected tagged KB article content")
+	}
+	if strings.Contains(result, "Untagged") {
+		t.Error("untagged KB article should not be auto-loaded")
+	}
+	if strings.Contains(result, "HA Guide") {
+		t.Error("KB article with different tag should not load")
+	}
+	// Frontmatter should be stripped.
+	if strings.Contains(result, "tags:") {
+		t.Error("frontmatter should be stripped from KB articles")
+	}
+}
+
+func TestTagContextAssembler_AllThreeSources(t *testing.T) {
+	dir := t.TempDir()
+	staticFile := filepath.Join(dir, "static.md")
+	os.WriteFile(staticFile, []byte("STATIC_CONTENT"), 0o644)
+
+	kbDir := t.TempDir()
+	os.WriteFile(filepath.Join(kbDir, "kb.md"),
+		[]byte("---\ntags: [forge]\n---\nKB_CONTENT"), 0o644)
+
+	a := NewTagContextAssembler(TagContextAssemblerConfig{
+		CapTags: map[string]config.CapabilityTagConfig{
+			"forge": {Context: []string{staticFile}},
+		},
+		KBDir: kbDir,
+		Providers: map[string]TagContextProvider{
+			"forge": &mockTagProvider{content: "LIVE_CONTENT"},
+		},
+	})
+
+	result := a.Build(context.Background(), map[string]bool{"forge": true})
+
+	for _, want := range []string{"STATIC_CONTENT", "KB_CONTENT", "LIVE_CONTENT"} {
+		if !strings.Contains(result, want) {
+			t.Errorf("missing %s in assembled output", want)
+		}
+	}
+}
+
+func TestTagContextAssembler_NilAssembler(t *testing.T) {
+	var a *TagContextAssembler
+	result := a.Build(context.Background(), map[string]bool{"forge": true})
+	if result != "" {
+		t.Errorf("nil assembler should return empty, got %q", result)
+	}
+}
+
+func TestTagContextAssembler_KBArticleTags(t *testing.T) {
+	kbDir := t.TempDir()
+	os.WriteFile(filepath.Join(kbDir, "a.md"), []byte("---\ntags: [forge]\n---\nA"), 0o644)
+	os.WriteFile(filepath.Join(kbDir, "b.md"), []byte("---\ntags: [forge, ha]\n---\nB"), 0o644)
+	os.WriteFile(filepath.Join(kbDir, "c.md"), []byte("---\ntags: [ha]\n---\nC"), 0o644)
+	os.WriteFile(filepath.Join(kbDir, "d.md"), []byte("no frontmatter"), 0o644)
+
+	a := NewTagContextAssembler(TagContextAssemblerConfig{
+		CapTags: map[string]config.CapabilityTagConfig{},
+		KBDir:   kbDir,
+	})
+
+	counts := a.KBArticleTags()
+	if counts["forge"] != 2 {
+		t.Errorf("forge KB count = %d, want 2", counts["forge"])
+	}
+	if counts["ha"] != 2 {
+		t.Errorf("ha KB count = %d, want 2", counts["ha"])
+	}
+}
+
+func TestBuildSystemPrompt_TagContextViaProvider(t *testing.T) {
+	l := newTagTestLoop()
+	setTagsWithAssembler(l, map[string]config.CapabilityTagConfig{
+		"forge": {
+			Description:  "Code generation",
+			Tools:        []string{"forge_run"},
+			AlwaysActive: true,
+		},
+	}, nil)
+	l.RegisterTagContextProvider("forge", &mockTagProvider{
+		content: `{"accounts":["github-primary"]}`,
+	})
+
+	prompt := l.buildSystemPrompt(context.Background(), "hello", nil)
+
+	if !strings.Contains(prompt, "github-primary") {
+		t.Error("system prompt should contain live provider content")
+	}
+	if !strings.Contains(prompt, "Capability Context") {
+		t.Error("system prompt should contain capability context heading")
 	}
 }

@@ -1,0 +1,275 @@
+package agent
+
+import (
+	"context"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+
+	"github.com/nugget/thane-ai-agent/internal/config"
+	"github.com/nugget/thane-ai-agent/internal/homeassistant"
+	"github.com/nugget/thane-ai-agent/internal/talents"
+)
+
+// TagContextAssembler builds the Capability Context section from three
+// sources for each active tag:
+//
+//  1. Static config files — paths listed in [config.CapabilityTagConfig.Context]
+//  2. Tagged KB articles — markdown files with tags: frontmatter in the
+//     knowledge base directory (same pattern as talents)
+//  3. Live providers — [TagContextProvider] implementations producing
+//     fresh context each turn
+//
+// Both the main agent loop and delegate executor share a single assembler
+// to avoid duplicating the assembly logic. The assembler is safe for
+// concurrent use after construction.
+type TagContextAssembler struct {
+	capTags    map[string]config.CapabilityTagConfig
+	providers  map[string]TagContextProvider
+	kbArticles []kbArticle                // pre-scanned, sorted
+	haInject   homeassistant.StateFetcher // nil-safe — delegates pass nil
+	logger     *slog.Logger
+}
+
+// kbArticle is a knowledge base file with tag affinity parsed from
+// frontmatter. Reuses the talent frontmatter format: tags: [a, b].
+type kbArticle struct {
+	Path string   // absolute file path
+	Tags []string // from frontmatter
+	Name string   // filename without .md
+}
+
+// TagContextAssemblerConfig holds the construction parameters for a
+// TagContextAssembler.
+type TagContextAssemblerConfig struct {
+	CapTags   map[string]config.CapabilityTagConfig
+	Providers map[string]TagContextProvider
+	KBDir     string                     // resolved kb: directory; empty skips scanning
+	HAInject  homeassistant.StateFetcher // nil-safe
+	Logger    *slog.Logger
+}
+
+// NewTagContextAssembler creates an assembler, scanning the KB directory
+// for tagged articles at construction time. KB scan errors are logged
+// but do not prevent construction.
+func NewTagContextAssembler(cfg TagContextAssemblerConfig) *TagContextAssembler {
+	if cfg.Logger == nil {
+		cfg.Logger = slog.Default()
+	}
+
+	var articles []kbArticle
+	if cfg.KBDir != "" {
+		var err error
+		articles, err = scanKBArticles(cfg.KBDir)
+		if err != nil {
+			cfg.Logger.Warn("failed to scan KB directory for tagged articles",
+				"dir", cfg.KBDir, "error", err)
+		}
+	}
+
+	return &TagContextAssembler{
+		capTags:    cfg.CapTags,
+		providers:  cfg.Providers,
+		kbArticles: articles,
+		haInject:   cfg.HAInject,
+		logger:     cfg.Logger,
+	}
+}
+
+// Build assembles tag context for the given active tags. The ctx should
+// carry any timeout (e.g., the 2-second HA deadline from the main loop).
+// Returns empty string when no content is produced.
+func (a *TagContextAssembler) Build(ctx context.Context, activeTags map[string]bool) string {
+	if a == nil {
+		return ""
+	}
+
+	seen := make(map[string]bool)
+	var buf strings.Builder
+
+	// Phase 1: Static config files (re-read each turn for freshness).
+	for tag, active := range activeTags {
+		if !active {
+			continue
+		}
+		cfg, ok := a.capTags[tag]
+		if !ok {
+			continue
+		}
+		for _, path := range cfg.Context {
+			if seen[path] {
+				continue
+			}
+			seen[path] = true
+			data, err := os.ReadFile(path)
+			if err != nil {
+				a.logger.Warn("failed to read tag context file",
+					"tag", tag, "path", path, "error", err)
+				continue
+			}
+			// Resolve <!-- ha-inject: ... --> directives to live HA state.
+			data = homeassistant.ResolveInject(ctx, data, a.haInject, a.logger)
+			a.appendContent(&buf, data)
+			if buf.Len() >= maxTagContextBytes {
+				a.logger.Warn("tag context aggregate limit reached",
+					"tag", tag, "limit_bytes", maxTagContextBytes)
+				return buf.String()
+			}
+		}
+	}
+
+	// Phase 2: Tagged KB articles (re-read each turn for freshness).
+	for _, article := range a.kbArticles {
+		if !articleMatchesTags(article, activeTags) {
+			continue
+		}
+		if seen[article.Path] {
+			continue
+		}
+		seen[article.Path] = true
+		data, err := os.ReadFile(article.Path)
+		if err != nil {
+			a.logger.Warn("failed to read tagged KB article",
+				"path", article.Path, "error", err)
+			continue
+		}
+		// Strip frontmatter before injection — the model doesn't need
+		// the YAML metadata, just the knowledge content.
+		_, content := talents.ParseFrontmatter(string(data))
+		data = homeassistant.ResolveInject(ctx, []byte(content), a.haInject, a.logger)
+		a.appendContent(&buf, data)
+		if buf.Len() >= maxTagContextBytes {
+			a.logger.Warn("tag context aggregate limit reached",
+				"source", "kb_article", "limit_bytes", maxTagContextBytes)
+			return buf.String()
+		}
+	}
+
+	// Phase 3: Live providers.
+	for tag, active := range activeTags {
+		if !active {
+			continue
+		}
+		p, ok := a.providers[tag]
+		if !ok {
+			continue
+		}
+		content, err := p.TagContext(ctx)
+		if err != nil {
+			a.logger.Warn("tag context provider failed",
+				"tag", tag, "error", err)
+			continue
+		}
+		if content == "" {
+			continue
+		}
+		a.appendContent(&buf, []byte(content))
+		if buf.Len() >= maxTagContextBytes {
+			a.logger.Warn("tag context aggregate limit reached",
+				"tag", tag, "source", "provider", "limit_bytes", maxTagContextBytes)
+			return buf.String()
+		}
+	}
+
+	return buf.String()
+}
+
+// appendContent adds data to buf with a separator, respecting the
+// aggregate size limit. Truncates data if it would exceed the cap.
+func (a *TagContextAssembler) appendContent(buf *strings.Builder, data []byte) {
+	if len(data) == 0 {
+		return
+	}
+	if buf.Len() > 0 {
+		buf.WriteString("\n\n---\n\n")
+	}
+	remaining := maxTagContextBytes - buf.Len()
+	if remaining <= 0 {
+		return
+	}
+	if len(data) > remaining {
+		buf.Write(data[:remaining])
+		buf.WriteString("\n\n[tag context truncated — exceeded aggregate 64 KB limit]")
+	} else {
+		buf.Write(data)
+	}
+}
+
+// KBArticleTags returns the tag→article count index, useful for
+// enriching the capability manifest with KB article counts.
+func (a *TagContextAssembler) KBArticleTags() map[string]int {
+	if a == nil {
+		return nil
+	}
+	counts := make(map[string]int)
+	for _, article := range a.kbArticles {
+		for _, tag := range article.Tags {
+			counts[tag]++
+		}
+	}
+	return counts
+}
+
+// scanKBArticles walks the KB directory for .md files with tags:
+// frontmatter. Only top-level and one-level-deep files are scanned
+// (matching typical KB layouts like kb:dossiers/foo.md).
+func scanKBArticles(dir string) ([]kbArticle, error) {
+	var articles []kbArticle
+
+	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil // skip unreadable entries
+		}
+		if d.IsDir() {
+			// Allow root and one level of subdirectories.
+			rel, _ := filepath.Rel(dir, path)
+			if rel != "." && strings.Count(rel, string(filepath.Separator)) > 0 {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(d.Name(), ".md") {
+			return nil
+		}
+
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil // skip unreadable files
+		}
+
+		tags, _ := talents.ParseFrontmatter(string(data))
+		if len(tags) == 0 {
+			return nil // untagged KB articles are not auto-loaded
+		}
+
+		articles = append(articles, kbArticle{
+			Path: path,
+			Tags: tags,
+			Name: strings.TrimSuffix(d.Name(), ".md"),
+		})
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	// Sort for deterministic ordering.
+	sort.Slice(articles, func(i, j int) bool {
+		return articles[i].Path < articles[j].Path
+	})
+
+	return articles, nil
+}
+
+// articleMatchesTags returns true if any of the article's tags are in
+// the active set.
+func articleMatchesTags(a kbArticle, activeTags map[string]bool) bool {
+	for _, tag := range a.Tags {
+		if activeTags[tag] {
+			return true
+		}
+	}
+	return false
+}

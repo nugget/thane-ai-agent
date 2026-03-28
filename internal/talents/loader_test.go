@@ -66,7 +66,7 @@ func TestParseFrontmatter_Tags(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tags, body := parseFrontmatter(tt.raw)
+			tags, body := ParseFrontmatter(tt.raw)
 
 			if tt.wantTags == nil && tags != nil {
 				t.Errorf("tags = %v, want nil", tags)

@@ -100,7 +100,7 @@ func (l *Loader) LoadAll() ([]Talent, error) {
 		}
 
 		name := strings.TrimSuffix(f, ".md")
-		tags, content := parseFrontmatter(string(data))
+		tags, content := ParseFrontmatter(string(data))
 		talents = append(talents, Talent{
 			Name:    name,
 			Tags:    tags,
@@ -145,7 +145,7 @@ func shouldIncludeTalent(t Talent, activeTags map[string]bool) bool {
 	return false
 }
 
-// parseFrontmatter extracts tags from YAML frontmatter delimited by
+// ParseFrontmatter extracts tags from YAML frontmatter delimited by
 // "---" lines. Returns (tags, content) where content has the
 // frontmatter stripped. If no frontmatter is found, returns (nil, raw).
 //
@@ -154,7 +154,7 @@ func shouldIncludeTalent(t Talent, activeTags map[string]bool) bool {
 //	---
 //	tags: [ha, physical]
 //	---
-func parseFrontmatter(raw string) ([]string, string) {
+func ParseFrontmatter(raw string) ([]string, string) {
 	if !strings.HasPrefix(raw, "---") {
 		return nil, raw
 	}
@@ -217,6 +217,8 @@ type ManifestEntry struct {
 	Tools        []string
 	Context      []string // resolved context file paths
 	AlwaysActive bool
+	KBArticles   int  // tagged KB articles auto-loaded when active
+	LiveContext  bool // has a registered TagContextProvider
 }
 
 // GenerateManifest creates a Talent containing the capability manifest.
@@ -243,12 +245,27 @@ func GenerateManifest(entries []ManifestEntry) *Talent {
 		if len(e.Tools) > 0 {
 			sb.WriteString(fmt.Sprintf("  Tools: %s\n", strings.Join(e.Tools, ", ")))
 		}
+		// Summarize context sources for this tag.
+		var ctxParts []string
 		if len(e.Context) > 0 {
 			fileWord := "files"
 			if len(e.Context) == 1 {
 				fileWord = "file"
 			}
-			sb.WriteString(fmt.Sprintf("  Context: %d knowledge %s loaded when active\n", len(e.Context), fileWord))
+			ctxParts = append(ctxParts, fmt.Sprintf("%d config %s", len(e.Context), fileWord))
+		}
+		if e.KBArticles > 0 {
+			artWord := "articles"
+			if e.KBArticles == 1 {
+				artWord = "article"
+			}
+			ctxParts = append(ctxParts, fmt.Sprintf("%d KB %s", e.KBArticles, artWord))
+		}
+		if e.LiveContext {
+			ctxParts = append(ctxParts, "live context")
+		}
+		if len(ctxParts) > 0 {
+			sb.WriteString(fmt.Sprintf("  Context: %s loaded when active\n", strings.Join(ctxParts, ", ")))
 		}
 	}
 

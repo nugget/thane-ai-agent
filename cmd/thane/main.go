@@ -1859,7 +1859,36 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 				"tag", tag, "files", len(resolved))
 		}
 
-		// Build manifest entries for the capability tools description.
+		// Build the shared tag context assembler early so KB article
+		// counts are available for the manifest. It merges three
+		// sources per active tag: static config files, tagged KB
+		// articles (frontmatter tags: [forge]), and live providers.
+		var kbDir string
+		if resolver != nil {
+			resolved, err := resolver.Resolve("kb:")
+			if err == nil {
+				kbDir = resolved
+			}
+		}
+
+		tagCtxAssembler := agent.NewTagContextAssembler(agent.TagContextAssemblerConfig{
+			CapTags:  cfg.CapabilityTags,
+			KBDir:    kbDir,
+			HAInject: loop.HAInject(),
+			Logger:   logger.With("component", "tag_context"),
+		})
+
+		// Register forge as a tag context provider so its account
+		// config appears/disappears with the forge capability tag
+		// instead of being unconditionally injected.
+		if forgeContext != "" {
+			loop.RegisterTagContextProvider("forge", forge.NewContextProvider(forgeContext))
+		}
+
+		// Build manifest entries with enriched context info.
+		kbCounts := tagCtxAssembler.KBArticleTags()
+		liveProviders := loop.TagContextProviders()
+
 		tagIndex := make(map[string][]string, len(cfg.CapabilityTags))
 		descriptions := make(map[string]string, len(cfg.CapabilityTags))
 		alwaysActive := make(map[string]bool, len(cfg.CapabilityTags))
@@ -1872,7 +1901,6 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		}
 		manifest := tools.BuildCapabilityManifest(tagIndex, descriptions, alwaysActive, contextFiles)
 
-		// Generate the capability manifest talent and prepend it.
 		manifestEntries := make([]talents.ManifestEntry, len(manifest))
 		for i, m := range manifest {
 			manifestEntries[i] = talents.ManifestEntry{
@@ -1881,6 +1909,8 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 				Tools:        m.Tools,
 				Context:      m.Context,
 				AlwaysActive: m.AlwaysActive,
+				KBArticles:   kbCounts[m.Tag],
+				LiveContext:  liveProviders[m.Tag] != nil,
 			}
 		}
 		if manifestTalent := talents.GenerateManifest(manifestEntries); manifestTalent != nil {
@@ -1889,6 +1919,11 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 
 		loop.SetCapabilityTags(cfg.CapabilityTags, parsedTalents)
 		loop.Tools().SetCapabilityTools(loop, manifest)
+		loop.SetTagContextAssembler(tagCtxAssembler)
+
+		// Wire tag context into delegates so they get the same
+		// capability context as the main loop.
+		delegateExec.SetTagContextBuilder(tagCtxAssembler)
 
 		var activeTags []string
 		for tag := range loop.ActiveTags() {
@@ -1898,6 +1933,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 			"tags", len(cfg.CapabilityTags),
 			"always_active", activeTags,
 			"talents", len(parsedTalents),
+			"kb_tagged_articles", kbCounts,
 		)
 	}
 
@@ -2062,11 +2098,9 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		logger.Warn("unifi configured but person tracking disabled (no person.track entries)")
 	}
 
-	// Forge account context — injects configured forge accounts so the
-	// model knows which accounts exist and their default owners.
-	if forgeContext != "" {
-		contextProvider.Add(forge.NewContextProvider(forgeContext))
-	}
+	// Forge account context is now injected via tag context provider
+	// (registered above in capability tag setup). It appears/disappears
+	// with the forge capability tag instead of being always present.
 
 	// Contact directory context — injects relevant contacts when the
 	// user message mentions people or organizations. Uses semantic

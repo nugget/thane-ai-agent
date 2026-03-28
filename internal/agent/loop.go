@@ -142,6 +142,17 @@ type ContextProvider interface {
 	GetContext(ctx context.Context, userMessage string) (string, error)
 }
 
+// TagContextProvider supplies live-computed context for a capability tag.
+// Unlike static context files in [config.CapabilityTagConfig.Context],
+// providers generate fresh output each turn. Output should follow #458
+// conventions: delta-annotated timestamps via [awareness.FormatDelta],
+// machine-first format, pre-computed relationships.
+type TagContextProvider interface {
+	// TagContext returns context to inject when the associated tag is active.
+	// The ctx carries the shared HA timeout from prompt assembly.
+	TagContext(ctx context.Context) (string, error)
+}
+
 // SessionArchiver handles session lifecycle and message archiving.
 type SessionArchiver interface {
 	// ArchiveConversation archives all messages from a conversation before clearing.
@@ -210,6 +221,17 @@ type Loop struct {
 	parsedTalents     []talents.Talent                      // pre-loaded talent structs for tag filtering
 	channelTags       map[string][]string                   // channel name → tag names (auto-activated per Run)
 
+	// tagProviders holds live context providers keyed by capability tag.
+	// Registered via RegisterTagContextProvider and called during
+	// system prompt assembly for each active tag.
+	tagProviders   map[string]TagContextProvider
+	tagProvidersMu sync.Mutex
+
+	// tagContextAssembler builds the Capability Context section from
+	// static config files, tagged KB articles, and live providers.
+	// Set via SetTagContextAssembler; nil disables tag context.
+	tagContextAssembler *TagContextAssembler
+
 	// haInject resolves <!-- ha-inject: ... --> directives in tag context files.
 	haInject homeassistant.StateFetcher
 
@@ -248,6 +270,41 @@ func (l *Loop) SetFailoverHandler(handler FailoverHandler) {
 // SetContextProvider configures a provider for dynamic system prompt context.
 func (l *Loop) SetContextProvider(provider ContextProvider) {
 	l.contextProvider = provider
+}
+
+// RegisterTagContextProvider registers a live context provider for a
+// capability tag. The provider's TagContext method is called during
+// system prompt assembly for each turn where the tag is active.
+// Only one provider per tag is supported; a second registration for
+// the same tag replaces the previous provider.
+func (l *Loop) RegisterTagContextProvider(tag string, p TagContextProvider) {
+	l.tagProvidersMu.Lock()
+	defer l.tagProvidersMu.Unlock()
+	if l.tagProviders == nil {
+		l.tagProviders = make(map[string]TagContextProvider)
+	}
+	l.tagProviders[tag] = p
+}
+
+// TagContextProviders returns a snapshot of the registered tag context
+// providers. The returned map is safe for concurrent use by callers
+// (e.g., delegate executors) since each value is read-only after
+// registration.
+func (l *Loop) TagContextProviders() map[string]TagContextProvider {
+	l.tagProvidersMu.Lock()
+	defer l.tagProvidersMu.Unlock()
+	snapshot := make(map[string]TagContextProvider, len(l.tagProviders))
+	for k, v := range l.tagProviders {
+		snapshot[k] = v
+	}
+	return snapshot
+}
+
+// SetTagContextAssembler configures the shared assembler that builds
+// the Capability Context section of the system prompt from static
+// files, tagged KB articles, and live providers.
+func (l *Loop) SetTagContextAssembler(a *TagContextAssembler) {
+	l.tagContextAssembler = a
 }
 
 // SetArchiver configures the session archiver for preserving conversations.
@@ -368,6 +425,13 @@ func (l *Loop) SetChannelTags(ct map[string][]string) {
 // files are resolved to live entity state on each turn.
 func (l *Loop) SetHAInject(fetcher homeassistant.StateFetcher) {
 	l.haInject = fetcher
+}
+
+// HAInject returns the HA entity state fetcher used for resolving
+// ha-inject directives in context files. May be nil when HA is not
+// configured.
+func (l *Loop) HAInject() homeassistant.StateFetcher {
+	return l.haInject
 }
 
 // SetOpenClawConfig configures the OpenClaw workspace settings. When
@@ -551,64 +615,21 @@ func (l *Loop) buildSystemPrompt(ctx context.Context, userMessage string, histor
 	}
 
 	// 3b. Tag context (capability knowledge — what does my active role need)
-	// When capability tags are active, inject their associated context files
-	// into the system prompt. Files are re-read each turn (matching the
-	// inject_files freshness pattern) so external changes are visible.
-	//
-	// A shared 2-second timeout bounds all HA entity resolution across
-	// every context file in this turn. Individual Resolve calls share
-	// the same deadline so a slow HA cannot stall prompt assembly
-	// beyond 2 s total.
-	if l.capTags != nil && tags != nil {
+	// Delegates to the shared TagContextAssembler which merges three
+	// sources: static config files, tagged KB articles, and live
+	// providers. A 2-second timeout bounds all HA entity resolution.
+	if l.tagContextAssembler != nil && tags != nil {
 		haCtx, haCancel := context.WithTimeout(ctx, 2*time.Second)
 		defer haCancel()
 
-		seen := make(map[string]bool)
-		var tagCtxBuf strings.Builder
-		for tag, active := range tags {
-			if !active {
-				continue
-			}
-			cfg, ok := l.capTags[tag]
-			if !ok {
-				continue
-			}
-			for _, path := range cfg.Context {
-				if seen[path] {
-					continue
-				}
-				seen[path] = true
-				data, err := os.ReadFile(path)
-				if err != nil {
-					l.logger.Warn("failed to read tag context file",
-						"tag", tag, "path", path, "error", err)
-					continue
-				}
-				// Resolve <!-- ha-inject: ... --> directives to live HA state.
-				data = homeassistant.ResolveInject(haCtx, data, l.haInject, l.logger)
-				if tagCtxBuf.Len() > 0 {
-					tagCtxBuf.WriteString("\n\n---\n\n")
-				}
-				remaining := maxTagContextBytes - tagCtxBuf.Len()
-				if remaining <= 0 {
-					l.logger.Warn("tag context aggregate limit reached, skipping remaining files",
-						"tag", tag, "path", path, "limit_bytes", maxTagContextBytes)
-					break
-				}
-				if len(data) > remaining {
-					tagCtxBuf.Write(data[:remaining])
-					tagCtxBuf.WriteString("\n\n[tag context truncated — exceeded aggregate 64 KB limit]")
-					l.logger.Warn("tag context truncated to fit aggregate limit",
-						"tag", tag, "path", path, "file_bytes", len(data), "limit_bytes", maxTagContextBytes)
-				} else {
-					tagCtxBuf.Write(data)
-				}
-			}
-		}
-		if tagCtxBuf.Len() > 0 {
+		// Snapshot live providers so the assembler sees a consistent
+		// view without holding the lock during I/O.
+		l.tagContextAssembler.providers = l.TagContextProviders()
+
+		if tagCtx := l.tagContextAssembler.Build(haCtx, tags); tagCtx != "" {
 			mark("TAG CONTEXT")
 			sb.WriteString("\n\n## Capability Context\n\n")
-			sb.WriteString(tagCtxBuf.String())
+			sb.WriteString(tagCtx)
 			seal()
 		}
 	}
