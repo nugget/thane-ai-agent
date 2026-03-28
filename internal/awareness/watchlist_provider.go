@@ -110,6 +110,8 @@ func (p *WatchlistTagProvider) TagContext(ctx context.Context) (string, error) {
 	now := time.Now()
 
 	var sb strings.Builder
+	fmt.Fprintf(&sb, "### Watched Entities (%s)\n\n", p.tag)
+
 	for _, e := range entities {
 		state, err := p.ha.GetState(ctx, e.EntityID)
 		if err != nil {

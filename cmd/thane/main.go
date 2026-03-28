@@ -2012,6 +2012,19 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	if ha != nil {
 		watchlistProvider := awareness.NewWatchlistProvider(watchlistStore, ha, logger)
 		contextProvider.Add(watchlistProvider)
+
+		// Register tag-scoped watchlist providers for entities added
+		// with tags. Each distinct tag in the store gets a provider that
+		// emits those entities only when the tag is active.
+		if taggedTags, err := watchlistStore.DistinctTags(); err == nil && len(taggedTags) > 0 {
+			for _, tag := range taggedTags {
+				loop.RegisterTagContextProvider(tag,
+					awareness.NewWatchlistTagProvider(tag, watchlistStore, ha, logger))
+			}
+			logger.Info("tagged watchlist entities registered",
+				"tags", taggedTags)
+		}
+
 		logger.Info("entity watchlist context enabled")
 	}
 

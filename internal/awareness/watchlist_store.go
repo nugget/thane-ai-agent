@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -45,14 +46,19 @@ func (s *WatchlistStore) migrate() error {
 		return err
 	}
 
-	// Add columns for existing databases (idempotent).
+	// Add columns for existing databases (idempotent). Only the
+	// "duplicate column" error is expected and ignored; other ALTER
+	// failures are surfaced.
 	for _, col := range []struct{ name, def string }{
 		{"tags", "TEXT NOT NULL DEFAULT ''"},
 		{"options", "TEXT NOT NULL DEFAULT '{}'"},
 	} {
-		_, _ = s.db.Exec(fmt.Sprintf(
+		_, err = s.db.Exec(fmt.Sprintf(
 			`ALTER TABLE watched_entities ADD COLUMN %s %s`, col.name, col.def,
 		))
+		if err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+			return fmt.Errorf("alter watched_entities add column %s: %w", col.name, err)
+		}
 	}
 
 	return nil
@@ -178,6 +184,39 @@ func (s *WatchlistStore) ListByTag(tag string) ([]WatchedEntity, error) {
 		})
 	}
 	return entities, rows.Err()
+}
+
+// DistinctTags returns all unique tags across all watched entities.
+// Used at startup to register tag-scoped watchlist providers.
+func (s *WatchlistStore) DistinctTags() ([]string, error) {
+	rows, err := s.db.Query(
+		`SELECT DISTINCT tags FROM watched_entities WHERE tags != '' ORDER BY tags ASC`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	seen := make(map[string]bool)
+	for rows.Next() {
+		var tagsStr string
+		if err := rows.Scan(&tagsStr); err != nil {
+			return nil, err
+		}
+		for _, tag := range splitTags(tagsStr) {
+			seen[tag] = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	tags := make([]string, 0, len(seen))
+	for tag := range seen {
+		tags = append(tags, tag)
+	}
+	sort.Strings(tags)
+	return tags, nil
 }
 
 func splitTags(s string) []string {

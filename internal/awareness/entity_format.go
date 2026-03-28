@@ -97,9 +97,14 @@ func formatWeather(state *homeassistant.State, now time.Time) string {
 				TempHigh:  entry["temperature"],
 				TempLow:   entry["templow"],
 			}
-			// Delta-annotate forecast time if available.
+			// Delta-annotate forecast time if available. HA may include
+			// fractional seconds, so try RFC3339Nano first.
 			if dtStr, ok := entry["datetime"].(string); ok {
-				if dt, err := time.Parse(time.RFC3339, dtStr); err == nil {
+				dt, err := time.Parse(time.RFC3339Nano, dtStr)
+				if err != nil {
+					dt, err = time.Parse(time.RFC3339, dtStr)
+				}
+				if err == nil {
 					fc.Delta = FormatDeltaOnly(dt, now)
 				} else {
 					fc.Delta = dtStr

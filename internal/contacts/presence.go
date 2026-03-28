@@ -197,9 +197,9 @@ func (t *PresenceTracker) HandleStateChange(entityID, _, newState string) {
 // agent's system prompt. Returns an empty string if no entities are
 // tracked. This method satisfies the agent.ContextProvider interface.
 //
-// Output uses compact JSON per person with delta-annotated timestamps
-// following #458 conventions. Fields are only emitted when they have
-// values.
+// People with known state are formatted as compact JSON with delta-
+// annotated timestamps following #458 conventions. People with unknown
+// or unset state are rendered as plain markdown text.
 func (t *PresenceTracker) GetContext(_ context.Context, _ string) (string, error) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()

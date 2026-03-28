@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/nugget/thane-ai-agent/internal/awareness"
 )
@@ -43,7 +44,7 @@ func (r *Registry) registerWatchlistTools() {
 				"history": map[string]any{
 					"type":        "array",
 					"items":       map[string]any{"type": "integer"},
-					"description": "Historical snapshot offsets in seconds. Include state values from these many seconds ago. E.g., [600, 3600, 86400] includes snapshots from 10min, 1hr, and 1day ago.",
+					"description": "(Reserved) Historical snapshot offsets in seconds. Stored for future use — historical context injection is not yet implemented. E.g., [600, 3600, 86400] would include snapshots from 10min, 1hr, and 1day ago.",
 				},
 			},
 			"required": []string{"entity_id"},
@@ -77,8 +78,18 @@ func (r *Registry) handleAddContextEntity(_ context.Context, args map[string]any
 
 	var tags []string
 	if rawTags, ok := args["tags"].([]any); ok {
+		seen := make(map[string]bool)
 		for _, rt := range rawTags {
-			if s, ok := rt.(string); ok && s != "" {
+			s, ok := rt.(string)
+			if !ok || s == "" {
+				continue
+			}
+			s = strings.TrimSpace(s)
+			if strings.Contains(s, ",") {
+				return "", fmt.Errorf("tag %q must not contain commas", s)
+			}
+			if !seen[s] {
+				seen[s] = true
 				tags = append(tags, s)
 			}
 		}
@@ -86,12 +97,24 @@ func (r *Registry) handleAddContextEntity(_ context.Context, args map[string]any
 
 	var history []int
 	if rawHist, ok := args["history"].([]any); ok {
-		for _, rh := range rawHist {
+		for i, rh := range rawHist {
 			switch v := rh.(type) {
 			case float64:
-				history = append(history, int(v))
+				if v != float64(int(v)) {
+					return "", fmt.Errorf("history[%d]: must be a whole number of seconds, got %v", i, v)
+				}
+				iv := int(v)
+				if iv <= 0 {
+					return "", fmt.Errorf("history[%d]: must be positive, got %d", i, iv)
+				}
+				history = append(history, iv)
 			case int:
+				if v <= 0 {
+					return "", fmt.Errorf("history[%d]: must be positive, got %d", i, v)
+				}
 				history = append(history, v)
+			default:
+				return "", fmt.Errorf("history[%d]: expected integer seconds, got %T", i, rh)
 			}
 		}
 	}
@@ -111,7 +134,11 @@ func (r *Registry) handleAddContextEntity(_ context.Context, args map[string]any
 		msg += fmt.Sprintf(" (scoped to tags: %v)", tags)
 	}
 	if len(history) > 0 {
-		msg += fmt.Sprintf(" (history: %vs ago)", history)
+		parts := make([]string, len(history))
+		for i, h := range history {
+			parts[i] = fmt.Sprintf("%ds", h)
+		}
+		msg += fmt.Sprintf(" (history: %s ago, reserved)", strings.Join(parts, ", "))
 	}
 	msg += "."
 
