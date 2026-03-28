@@ -100,7 +100,7 @@ func (l *Loader) LoadAll() ([]Talent, error) {
 		}
 
 		name := strings.TrimSuffix(f, ".md")
-		tags, content := parseFrontmatter(string(data))
+		tags, content := ParseFrontmatter(string(data))
 		talents = append(talents, Talent{
 			Name:    name,
 			Tags:    tags,
@@ -145,7 +145,7 @@ func shouldIncludeTalent(t Talent, activeTags map[string]bool) bool {
 	return false
 }
 
-// parseFrontmatter extracts tags from YAML frontmatter delimited by
+// ParseFrontmatter extracts tags from YAML frontmatter delimited by
 // "---" lines. Returns (tags, content) where content has the
 // frontmatter stripped. If no frontmatter is found, returns (nil, raw).
 //
@@ -154,7 +154,7 @@ func shouldIncludeTalent(t Talent, activeTags map[string]bool) bool {
 //	---
 //	tags: [ha, physical]
 //	---
-func parseFrontmatter(raw string) ([]string, string) {
+func ParseFrontmatter(raw string) ([]string, string) {
 	if !strings.HasPrefix(raw, "---") {
 		return nil, raw
 	}
@@ -217,6 +217,9 @@ type ManifestEntry struct {
 	Tools        []string
 	Context      []string // resolved context file paths
 	AlwaysActive bool
+	KBArticles   int  // tagged KB articles auto-loaded when active
+	LiveContext  bool // has a registered TagContextProvider
+	AdHoc        bool // discovered from KB/talents, not in config
 }
 
 // GenerateManifest creates a Talent containing the capability manifest.
@@ -228,13 +231,24 @@ func GenerateManifest(entries []ManifestEntry) *Talent {
 		return nil
 	}
 
+	// Separate configured and ad-hoc entries.
+	var configured, adHoc []ManifestEntry
+	for _, e := range entries {
+		if e.AdHoc {
+			adHoc = append(adHoc, e)
+		} else {
+			configured = append(configured, e)
+		}
+	}
+
 	var sb strings.Builder
 	sb.WriteString("### Available Capabilities\n\n")
 	sb.WriteString("Activate with `request_capability(\"tag\")` for sustained work, or ")
 	sb.WriteString("`delegate(task, tags: [\"tag\"])` for one-off tasks. ")
-	sb.WriteString("Use `drop_capability` when you no longer need a capability's tools.\n\n")
+	sb.WriteString("Use `drop_capability` when you no longer need a capability's tools.\n")
+	sb.WriteString("You may also request ad-hoc tags not listed here — any tagged KB articles or talents matching the tag will load.\n\n")
 
-	for _, e := range entries {
+	for _, e := range configured {
 		status := "available"
 		if e.AlwaysActive {
 			status = "always active"
@@ -243,12 +257,14 @@ func GenerateManifest(entries []ManifestEntry) *Talent {
 		if len(e.Tools) > 0 {
 			sb.WriteString(fmt.Sprintf("  Tools: %s\n", strings.Join(e.Tools, ", ")))
 		}
-		if len(e.Context) > 0 {
-			fileWord := "files"
-			if len(e.Context) == 1 {
-				fileWord = "file"
-			}
-			sb.WriteString(fmt.Sprintf("  Context: %d knowledge %s loaded when active\n", len(e.Context), fileWord))
+		writeContextSummary(&sb, e)
+	}
+
+	if len(adHoc) > 0 {
+		sb.WriteString("\n**Discoverable (no configured tools):**\n")
+		for _, e := range adHoc {
+			sb.WriteString(fmt.Sprintf("- **%s**", e.Tag))
+			writeContextSummary(&sb, e)
 		}
 	}
 
@@ -256,6 +272,33 @@ func GenerateManifest(entries []ManifestEntry) *Talent {
 		Name:    "_capability_manifest",
 		Tags:    nil, // Untagged — always loads
 		Content: sb.String(),
+	}
+}
+
+// writeContextSummary appends a context source summary line to sb.
+func writeContextSummary(sb *strings.Builder, e ManifestEntry) {
+	var ctxParts []string
+	if len(e.Context) > 0 {
+		fileWord := "files"
+		if len(e.Context) == 1 {
+			fileWord = "file"
+		}
+		ctxParts = append(ctxParts, fmt.Sprintf("%d config %s", len(e.Context), fileWord))
+	}
+	if e.KBArticles > 0 {
+		artWord := "articles"
+		if e.KBArticles == 1 {
+			artWord = "article"
+		}
+		ctxParts = append(ctxParts, fmt.Sprintf("%d KB %s", e.KBArticles, artWord))
+	}
+	if e.LiveContext {
+		ctxParts = append(ctxParts, "live context")
+	}
+	if len(ctxParts) > 0 {
+		sb.WriteString(fmt.Sprintf("  Context: %s loaded when active\n", strings.Join(ctxParts, ", ")))
+	} else {
+		sb.WriteByte('\n')
 	}
 }
 

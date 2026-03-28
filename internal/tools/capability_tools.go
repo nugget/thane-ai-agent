@@ -107,6 +107,8 @@ func (r *Registry) registerRequestCapability(mgr CapabilityManager, manifest []C
 					}
 					fmt.Fprintf(&result, " Context loaded: %d %s.", len(m.Context), fileWord)
 				}
+			} else {
+				result.WriteString(" Ad-hoc tag — no configured tools. Tagged KB articles, talents, and live providers matching this tag will be loaded.")
 			}
 			return result.String(), nil
 		},

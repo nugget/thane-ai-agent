@@ -64,7 +64,12 @@ type labelExpander interface {
 	ExpandLabels(convID, text string) string
 }
 
-// Executor runs delegated tasks using a lightweight iteration loop.
+// tagContextFunc builds capability context for a set of active tags.
+// The function should snapshot any mutable state (e.g., live providers)
+// at call time. Wired in main.go as a closure over the loop and assembler.
+type tagContextFunc func(ctx context.Context, activeTags map[string]bool) string
+
+// Executor runs delegate sub-agent tasks.
 type Executor struct {
 	logger           *slog.Logger
 	llm              llm.Client
@@ -79,6 +84,7 @@ type Executor struct {
 	pricing          map[string]config.PricingEntry
 	alwaysActiveTags []string
 	forgeContext     string
+	tagCtxFunc       tagContextFunc // nil-safe — replaces forgeContext when set
 	eventBus         *events.Bus
 	contentWriter    *logging.ContentWriter
 }
@@ -183,6 +189,14 @@ func (e *Executor) SetForgeContext(ctx string) {
 // always_active tag behavior.
 func (e *Executor) SetAlwaysActiveTags(tags []string) {
 	e.alwaysActiveTags = tags
+}
+
+// SetTagContextFunc configures the tag context builder function for
+// injecting capability context (static files, tagged KB articles,
+// and live providers) into delegate system prompts. When set, this
+// replaces the ad-hoc forge context injection.
+func (e *Executor) SetTagContextFunc(fn tagContextFunc) {
+	e.tagCtxFunc = fn
 }
 
 // SetContentWriter configures content retention for delegate executions.
@@ -302,7 +316,23 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 	sb.WriteString(profile.SystemPrompt)
 	sb.WriteString("\n\n")
 	sb.WriteString(awareness.CurrentConditions(e.timezone))
-	if e.forgeContext != "" {
+
+	// Inject tag context (static files, KB articles, live providers).
+	// Falls back to the legacy forge-only injection when the tag
+	// context function is not configured.
+	merged := make(map[string]bool, len(tags)+len(e.alwaysActiveTags))
+	for _, t := range tags {
+		merged[t] = true
+	}
+	for _, t := range e.alwaysActiveTags {
+		merged[t] = true
+	}
+	if e.tagCtxFunc != nil && len(merged) > 0 {
+		if tagCtx := e.tagCtxFunc(ctx, merged); tagCtx != "" {
+			sb.WriteString("\n\n## Capability Context\n\n")
+			sb.WriteString(tagCtx)
+		}
+	} else if e.forgeContext != "" {
 		sb.WriteString("\n\n")
 		sb.WriteString(e.forgeContext)
 	}
