@@ -30,22 +30,38 @@ func formatEntityContext(state *homeassistant.State, now time.Time) string {
 	}
 }
 
-// formatDefault produces the original markdown line format:
-//
-//   - **Office Temperature** (sensor.office_temperature): 72.4 °F (since -45s)
+// defaultContext is the JSON structure for entities without a
+// domain-specific formatter.
+type defaultContext struct {
+	Entity      string `json:"entity"`
+	Name        string `json:"name,omitempty"`
+	State       string `json:"state"`
+	Unit        string `json:"unit,omitempty"`
+	DeviceClass string `json:"device_class,omitempty"`
+	Since       string `json:"since"`
+	Updated     string `json:"updated,omitempty"` // only when differs from since
+}
+
+// formatDefault produces compact JSON for any entity type. Includes
+// device_class when available and last_updated when it differs from
+// last_changed (indicating attribute-only updates).
 func formatDefault(state *homeassistant.State, now time.Time) string {
-	displayName := state.EntityID
+	dc := defaultContext{
+		Entity:      state.EntityID,
+		State:       state.State,
+		Unit:        attrString(state.Attributes, "unit_of_measurement"),
+		DeviceClass: attrString(state.Attributes, "device_class"),
+		Since:       FormatDeltaOnly(state.LastChanged, now),
+	}
 	if name, ok := state.Attributes["friendly_name"].(string); ok && name != "" {
-		displayName = name
+		dc.Name = name
 	}
-
-	stateValue := state.State
-	if unit, ok := state.Attributes["unit_of_measurement"].(string); ok && unit != "" {
-		stateValue += " " + unit
+	// Include last_updated when it meaningfully differs from
+	// last_changed (attribute-only updates vs state changes).
+	if !state.LastUpdated.IsZero() && state.LastUpdated.Sub(state.LastChanged) > time.Second {
+		dc.Updated = FormatDeltaOnly(state.LastUpdated, now)
 	}
-
-	since := FormatDeltaOnly(state.LastChanged, now)
-	return fmt.Sprintf("- **%s** (%s): %s (since %s)", displayName, state.EntityID, stateValue, since)
+	return marshalCompact(dc)
 }
 
 // weatherContext is the JSON structure for weather entity context.

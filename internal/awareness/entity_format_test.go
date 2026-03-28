@@ -24,14 +24,24 @@ func TestFormatDefault_BasicSensor(t *testing.T) {
 
 	result := formatEntityContext(state, testNow)
 
-	if !strings.Contains(result, "Office Temperature") {
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("default format should be valid JSON: %v\nGot: %s", err, result)
+	}
+	if parsed["entity"] != "sensor.office_temperature" {
+		t.Error("missing entity")
+	}
+	if parsed["name"] != "Office Temperature" {
 		t.Error("missing friendly name")
 	}
-	if !strings.Contains(result, "72.4 °F") {
-		t.Error("missing state with unit")
+	if parsed["state"] != "72.4" {
+		t.Error("missing state")
 	}
-	if !strings.Contains(result, "-45s") {
-		t.Error("missing delta timestamp")
+	if parsed["unit"] != "°F" {
+		t.Error("missing unit")
+	}
+	if parsed["since"] != "-45s" {
+		t.Errorf("since = %v, want -45s", parsed["since"])
 	}
 }
 
@@ -203,12 +213,25 @@ func TestFormatDefault_NoAttributes(t *testing.T) {
 
 	result := formatEntityContext(state, testNow)
 
-	// Default format: markdown line.
-	if !strings.HasPrefix(result, "- **") {
-		t.Error("default format should be markdown line")
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("default format should be valid JSON: %v\nGot: %s", err, result)
 	}
-	if !strings.Contains(result, "binary_sensor.door") {
+	if parsed["entity"] != "binary_sensor.door" {
 		t.Error("missing entity ID")
+	}
+	if parsed["state"] != "off" {
+		t.Error("missing state")
+	}
+	if parsed["since"] != "-10s" {
+		t.Errorf("since = %v, want -10s", parsed["since"])
+	}
+	// No name or unit when attributes are empty.
+	if _, hasName := parsed["name"]; hasName {
+		t.Error("name should be omitted when no friendly_name")
+	}
+	if _, hasUnit := parsed["unit"]; hasUnit {
+		t.Error("unit should be omitted when no unit_of_measurement")
 	}
 }
 
