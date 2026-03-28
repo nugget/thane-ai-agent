@@ -44,8 +44,8 @@ func TestNewPresenceTracker(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetContext: %v", err)
 	}
-	if !strings.Contains(result, "- Unknown") {
-		t.Errorf("expected Unknown state in initial context, got:\n%s", result)
+	if !strings.Contains(result, ": unknown") {
+		t.Errorf("expected unknown state in initial context, got:\n%s", result)
 	}
 }
 
@@ -79,17 +79,17 @@ func TestTracker_Initialize(t *testing.T) {
 		t.Fatalf("GetContext: %v", err)
 	}
 
-	if !strings.Contains(result, "- **Alice**:") {
+	if !strings.Contains(result, `"name":"Alice"`) {
 		t.Errorf("expected Alice in context, got:\n%s", result)
 	}
-	if !strings.Contains(result, "Home since") {
-		t.Errorf("expected Home since in context, got:\n%s", result)
+	if !strings.Contains(result, `"state":"home"`) {
+		t.Errorf("expected state:home in context, got:\n%s", result)
 	}
-	if !strings.Contains(result, "- **Bob**:") {
+	if !strings.Contains(result, `"name":"Bob"`) {
 		t.Errorf("expected Bob in context, got:\n%s", result)
 	}
-	if !strings.Contains(result, "Away since") {
-		t.Errorf("expected Away since in context, got:\n%s", result)
+	if !strings.Contains(result, `"state":"away"`) {
+		t.Errorf("expected state:away in context, got:\n%s", result)
 	}
 }
 
@@ -115,13 +115,13 @@ func TestTracker_Initialize_PartialFailure(t *testing.T) {
 
 	result, _ := tracker.GetContext(context.Background(), "")
 
-	// Alice should be populated with nested format.
-	if !strings.Contains(result, "- **Alice**:\n  - Home since") {
-		t.Errorf("expected Alice: Home since ..., got:\n%s", result)
+	// Alice should be populated with JSON format.
+	if !strings.Contains(result, `"name":"Alice"`) || !strings.Contains(result, `"state":"home"`) {
+		t.Errorf("expected Alice with state:home, got:\n%s", result)
 	}
-	// Bob should show Unknown.
-	if !strings.Contains(result, "- **Bob**:\n  - Unknown") {
-		t.Errorf("expected Bob: Unknown, got:\n%s", result)
+	// Bob should show unknown.
+	if !strings.Contains(result, "- **Bob**: unknown") {
+		t.Errorf("expected Bob: unknown, got:\n%s", result)
 	}
 }
 
@@ -145,8 +145,8 @@ func TestTracker_HandleStateChange(t *testing.T) {
 	tracker.HandleStateChange("person.alice", "home", "not_home")
 
 	result, _ := tracker.GetContext(context.Background(), "")
-	if !strings.Contains(result, "Away since") {
-		t.Errorf("expected Away since after state change, got:\n%s", result)
+	if !strings.Contains(result, `"state":"away"`) {
+		t.Errorf("expected state:away after state change, got:\n%s", result)
 	}
 }
 
@@ -158,8 +158,8 @@ func TestTracker_HandleStateChange_IgnoresUntracked(t *testing.T) {
 	tracker.HandleStateChange("light.kitchen", "off", "on")
 
 	result, _ := tracker.GetContext(context.Background(), "")
-	if !strings.Contains(result, "- **Alice**:\n  - Unknown") {
-		t.Errorf("expected Alice: Unknown unchanged, got:\n%s", result)
+	if !strings.Contains(result, "- **Alice**: unknown") {
+		t.Errorf("expected Alice: unknown unchanged, got:\n%s", result)
 	}
 }
 
@@ -212,15 +212,15 @@ func TestTracker_HandleStateChange_ClearsRoom(t *testing.T) {
 	tracker.UpdateRoom("person.alice", "office", "ap-hor-office")
 
 	result, _ := tracker.GetContext(context.Background(), "")
-	if !strings.Contains(result, "Room: office") {
-		t.Errorf("expected Room: office, got:\n%s", result)
+	if !strings.Contains(result, `"room":"office"`) {
+		t.Errorf("expected room:office in JSON, got:\n%s", result)
 	}
 
 	// Transition to not_home should clear room.
 	tracker.HandleStateChange("person.alice", "home", "not_home")
 
 	result, _ = tracker.GetContext(context.Background(), "")
-	if strings.Contains(result, "Room:") {
+	if strings.Contains(result, `"room"`) {
 		t.Errorf("expected room cleared after not_home, got:\n%s", result)
 	}
 }
@@ -259,9 +259,12 @@ func TestTracker_GetContext(t *testing.T) {
 		t.Errorf("expected heading, got:\n%s", result)
 	}
 
-	// Verify nested format with ISO 8601.
-	if !strings.Contains(result, "- **Alice**:\n  - Home since 2026-02-15T16:30:00-06:00") {
-		t.Errorf("expected nested format with RFC3339, got:\n%s", result)
+	// Verify compact JSON format with delta timestamp.
+	if !strings.Contains(result, `"entity":"person.alice"`) || !strings.Contains(result, `"state":"home"`) {
+		t.Errorf("expected JSON format with entity and state, got:\n%s", result)
+	}
+	if !strings.Contains(result, `"since":"-`) {
+		t.Errorf("expected delta since field, got:\n%s", result)
 	}
 
 	// Verify Alice comes before Bob (insertion order).
@@ -294,9 +297,12 @@ func TestTracker_GetContext_WithRoom(t *testing.T) {
 
 	result, _ := tracker.GetContext(context.Background(), "")
 
-	// Verify room appears as sub-bullet.
-	if !strings.Contains(result, "  - Room: office\n") {
-		t.Errorf("expected Room: office sub-bullet, got:\n%s", result)
+	// Verify room appears in JSON.
+	if !strings.Contains(result, `"room":"office"`) {
+		t.Errorf("expected room:office in JSON, got:\n%s", result)
+	}
+	if !strings.Contains(result, `"room_source":"ap-hor-office"`) {
+		t.Errorf("expected room_source in JSON, got:\n%s", result)
 	}
 }
 
@@ -318,9 +324,9 @@ func TestTracker_GetContext_WithoutRoom(t *testing.T) {
 
 	result, _ := tracker.GetContext(context.Background(), "")
 
-	// No Room line should appear when Room is empty.
-	if strings.Contains(result, "Room:") {
-		t.Errorf("expected no Room line for empty room, got:\n%s", result)
+	// No room field should appear when Room is empty (omitempty).
+	if strings.Contains(result, `"room"`) {
+		t.Errorf("expected no room field for empty room, got:\n%s", result)
 	}
 }
 
@@ -353,8 +359,8 @@ func TestTracker_GetContext_NotHome(t *testing.T) {
 	_ = tracker.Initialize(context.Background(), getter)
 
 	result, _ := tracker.GetContext(context.Background(), "")
-	if !strings.Contains(result, "Away since") {
-		t.Errorf("expected not_home displayed as Away since, got:\n%s", result)
+	if !strings.Contains(result, `"state":"away"`) {
+		t.Errorf("expected not_home displayed as state:away, got:\n%s", result)
 	}
 	if strings.Contains(result, "not_home") {
 		t.Errorf("raw not_home should not appear in output:\n%s", result)

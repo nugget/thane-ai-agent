@@ -12,6 +12,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/nugget/thane-ai-agent/internal/awareness"
 	"github.com/nugget/thane-ai-agent/internal/homeassistant"
 )
 
@@ -196,8 +197,9 @@ func (t *PresenceTracker) HandleStateChange(entityID, _, newState string) {
 // agent's system prompt. Returns an empty string if no entities are
 // tracked. This method satisfies the agent.ContextProvider interface.
 //
-// Output uses nested markdown with ISO 8601 timestamps for efficient
-// model consumption. Fields are only emitted when they have values.
+// Output uses compact JSON per person with delta-annotated timestamps
+// following #458 conventions. Fields are only emitted when they have
+// values.
 func (t *PresenceTracker) GetContext(_ context.Context, _ string) (string, error) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
@@ -206,6 +208,8 @@ func (t *PresenceTracker) GetContext(_ context.Context, _ string) (string, error
 		return "", nil
 	}
 
+	now := time.Now()
+
 	var sb strings.Builder
 	sb.WriteString("### People & Presence\n\n")
 
@@ -213,21 +217,15 @@ func (t *PresenceTracker) GetContext(_ context.Context, _ string) (string, error
 		p := t.people[id]
 		displayName := TitleCase(p.FriendlyName)
 
-		fmt.Fprintf(&sb, "- **%s**:\n", displayName)
-
 		if p.State == "Unknown" || p.Since.IsZero() {
-			sb.WriteString("  - Unknown\n")
+			fmt.Fprintf(&sb, "- **%s**: unknown\n", displayName)
 		} else {
-			displayState := formatState(p.State)
-			since := p.Since.In(t.loc).Format(time.RFC3339)
-			fmt.Fprintf(&sb, "  - %s since %s\n", displayState, since)
+			sb.WriteString(awareness.FormatPersonPresence(
+				p.EntityID, displayName, p.State, p.Since,
+				p.Room, p.RoomSource, now,
+			))
+			sb.WriteByte('\n')
 		}
-
-		if p.Room != "" {
-			fmt.Fprintf(&sb, "  - Room: %s\n", p.Room)
-		}
-
-		sb.WriteString("\n")
 	}
 
 	return sb.String(), nil
