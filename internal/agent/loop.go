@@ -470,35 +470,37 @@ func (l *Loop) snapshotActiveTags() map[string]bool {
 }
 
 // RequestCapability activates a capability tag for the current session.
-// Returns an error if the tag is unknown.
+// Both configured tags (with tools and static context) and ad-hoc tags
+// (with only tagged KB articles, talents, or live providers) are
+// accepted. Ad-hoc tags allow site-specific capability sets to be
+// created through KB articles and talents without config changes.
 func (l *Loop) RequestCapability(tag string) error {
-	if l.capTags == nil {
-		return fmt.Errorf("capability tags not configured")
-	}
-	if _, ok := l.capTags[tag]; !ok {
-		return fmt.Errorf("unknown capability tag: %q", tag)
-	}
 	l.tagMu.Lock()
+	if l.activeTags == nil {
+		l.activeTags = make(map[string]bool)
+	}
 	l.activeTags[tag] = true
 	l.tagMu.Unlock()
-	l.logger.Info("capability activated", "tag", tag)
+
+	configured := ""
+	if _, ok := l.capTags[tag]; ok {
+		configured = "configured"
+	} else {
+		configured = "ad-hoc"
+	}
+	l.logger.Info("capability activated", "tag", tag, "type", configured)
 	return nil
 }
 
 // DropCapability deactivates a capability tag for the current session.
-// Always-active and channel-pinned tags cannot be dropped. Returns an
-// error if the tag is unknown, always active, or pinned by the current
-// channel.
+// Always-active and channel-pinned tags cannot be dropped. Ad-hoc tags
+// (not in config) can always be dropped.
 func (l *Loop) DropCapability(tag string) error {
-	if l.capTags == nil {
-		return fmt.Errorf("capability tags not configured")
-	}
-	cfg, ok := l.capTags[tag]
-	if !ok {
-		return fmt.Errorf("unknown capability tag: %q", tag)
-	}
-	if cfg.AlwaysActive {
-		return fmt.Errorf("cannot drop always-active tag: %q", tag)
+	// Check configured-tag constraints (always-active, channel-pinned).
+	if cfg, ok := l.capTags[tag]; ok {
+		if cfg.AlwaysActive {
+			return fmt.Errorf("cannot drop always-active tag: %q", tag)
+		}
 	}
 	l.tagMu.Lock()
 	if l.channelPinnedTags[tag] > 0 {

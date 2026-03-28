@@ -1913,6 +1913,35 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 				LiveContext:  liveProviders[m.Tag] != nil,
 			}
 		}
+
+		// Discover ad-hoc tags from KB articles and talents that aren't
+		// in the config. These can be activated at runtime to load their
+		// tagged content without requiring config changes.
+		configuredTags := make(map[string]bool, len(cfg.CapabilityTags))
+		for tag := range cfg.CapabilityTags {
+			configuredTags[tag] = true
+		}
+		adHocTags := make(map[string]bool)
+		for tag := range kbCounts {
+			if !configuredTags[tag] {
+				adHocTags[tag] = true
+			}
+		}
+		for _, t := range parsedTalents {
+			for _, tag := range t.Tags {
+				if !configuredTags[tag] {
+					adHocTags[tag] = true
+				}
+			}
+		}
+		for tag := range adHocTags {
+			manifestEntries = append(manifestEntries, talents.ManifestEntry{
+				Tag:        tag,
+				AdHoc:      true,
+				KBArticles: kbCounts[tag],
+			})
+		}
+
 		if manifestTalent := talents.GenerateManifest(manifestEntries); manifestTalent != nil {
 			parsedTalents = append([]talents.Talent{*manifestTalent}, parsedTalents...)
 		}
