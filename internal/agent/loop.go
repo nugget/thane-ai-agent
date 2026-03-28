@@ -622,11 +622,11 @@ func (l *Loop) buildSystemPrompt(ctx context.Context, userMessage string, histor
 		haCtx, haCancel := context.WithTimeout(ctx, 2*time.Second)
 		defer haCancel()
 
-		// Snapshot live providers so the assembler sees a consistent
+		// Snapshot live providers under lock so Build sees a consistent
 		// view without holding the lock during I/O.
-		l.tagContextAssembler.providers = l.TagContextProviders()
+		providers := l.TagContextProviders()
 
-		if tagCtx := l.tagContextAssembler.Build(haCtx, tags); tagCtx != "" {
+		if tagCtx := l.tagContextAssembler.Build(haCtx, tags, providers); tagCtx != "" {
 			mark("TAG CONTEXT")
 			sb.WriteString("\n\n## Capability Context\n\n")
 			sb.WriteString(tagCtx)

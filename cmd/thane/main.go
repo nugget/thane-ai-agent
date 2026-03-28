@@ -1921,9 +1921,13 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		loop.Tools().SetCapabilityTools(loop, manifest)
 		loop.SetTagContextAssembler(tagCtxAssembler)
 
-		// Wire tag context into delegates so they get the same
-		// capability context as the main loop.
-		delegateExec.SetTagContextBuilder(tagCtxAssembler)
+		// Wire tag context into delegates. The closure captures both the
+		// assembler and the loop so delegates always see the latest
+		// registered providers at call time (not a stale snapshot from
+		// construction time).
+		delegateExec.SetTagContextFunc(func(ctx context.Context, activeTags map[string]bool) string {
+			return tagCtxAssembler.Build(ctx, activeTags, loop.TagContextProviders())
+		})
 
 		var activeTags []string
 		for tag := range loop.ActiveTags() {

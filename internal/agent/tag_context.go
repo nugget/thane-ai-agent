@@ -27,7 +27,6 @@ import (
 // concurrent use after construction.
 type TagContextAssembler struct {
 	capTags    map[string]config.CapabilityTagConfig
-	providers  map[string]TagContextProvider
 	kbArticles []kbArticle                // pre-scanned, sorted
 	haInject   homeassistant.StateFetcher // nil-safe — delegates pass nil
 	logger     *slog.Logger
@@ -44,11 +43,10 @@ type kbArticle struct {
 // TagContextAssemblerConfig holds the construction parameters for a
 // TagContextAssembler.
 type TagContextAssemblerConfig struct {
-	CapTags   map[string]config.CapabilityTagConfig
-	Providers map[string]TagContextProvider
-	KBDir     string                     // resolved kb: directory; empty skips scanning
-	HAInject  homeassistant.StateFetcher // nil-safe
-	Logger    *slog.Logger
+	CapTags  map[string]config.CapabilityTagConfig
+	KBDir    string                     // resolved kb: directory; empty skips scanning
+	HAInject homeassistant.StateFetcher // nil-safe
+	Logger   *slog.Logger
 }
 
 // NewTagContextAssembler creates an assembler, scanning the KB directory
@@ -71,17 +69,18 @@ func NewTagContextAssembler(cfg TagContextAssemblerConfig) *TagContextAssembler 
 
 	return &TagContextAssembler{
 		capTags:    cfg.CapTags,
-		providers:  cfg.Providers,
 		kbArticles: articles,
 		haInject:   cfg.HAInject,
 		logger:     cfg.Logger,
 	}
 }
 
-// Build assembles tag context for the given active tags. The ctx should
-// carry any timeout (e.g., the 2-second HA deadline from the main loop).
+// Build assembles tag context for the given active tags. Providers
+// supply live-computed context and must be passed per-call (typically
+// a snapshot from [Loop.TagContextProviders]) to avoid data races.
+// The ctx should carry any timeout (e.g., the 2-second HA deadline).
 // Returns empty string when no content is produced.
-func (a *TagContextAssembler) Build(ctx context.Context, activeTags map[string]bool) string {
+func (a *TagContextAssembler) Build(ctx context.Context, activeTags map[string]bool, providers map[string]TagContextProvider) string {
 	if a == nil {
 		return ""
 	}
@@ -152,7 +151,7 @@ func (a *TagContextAssembler) Build(ctx context.Context, activeTags map[string]b
 		if !active {
 			continue
 		}
-		p, ok := a.providers[tag]
+		p, ok := providers[tag]
 		if !ok {
 			continue
 		}
@@ -176,8 +175,12 @@ func (a *TagContextAssembler) Build(ctx context.Context, activeTags map[string]b
 	return buf.String()
 }
 
+const truncationMarker = "\n\n[tag context truncated — exceeded aggregate 64 KB limit]"
+
 // appendContent adds data to buf with a separator, respecting the
-// aggregate size limit. Truncates data if it would exceed the cap.
+// aggregate size limit. Truncates data if it would exceed the cap,
+// reserving space for the truncation marker so the buffer never
+// exceeds maxTagContextBytes.
 func (a *TagContextAssembler) appendContent(buf *strings.Builder, data []byte) {
 	if len(data) == 0 {
 		return
@@ -190,8 +193,12 @@ func (a *TagContextAssembler) appendContent(buf *strings.Builder, data []byte) {
 		return
 	}
 	if len(data) > remaining {
-		buf.Write(data[:remaining])
-		buf.WriteString("\n\n[tag context truncated — exceeded aggregate 64 KB limit]")
+		// Reserve space for the truncation marker.
+		dataCap := remaining - len(truncationMarker)
+		if dataCap > 0 {
+			buf.Write(data[:dataCap])
+		}
+		buf.WriteString(truncationMarker)
 	} else {
 		buf.Write(data)
 	}

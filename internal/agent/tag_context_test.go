@@ -345,12 +345,12 @@ func TestTagContextAssembler_LiveProvider(t *testing.T) {
 		CapTags: map[string]config.CapabilityTagConfig{
 			"forge": {},
 		},
-		Providers: map[string]TagContextProvider{
-			"forge": &mockTagProvider{content: `{"accounts":["github-primary"]}`},
-		},
 	})
 
-	result := a.Build(context.Background(), map[string]bool{"forge": true})
+	providers := map[string]TagContextProvider{
+		"forge": &mockTagProvider{content: `{"accounts":["github-primary"]}`},
+	}
+	result := a.Build(context.Background(), map[string]bool{"forge": true}, providers)
 
 	if !strings.Contains(result, "github-primary") {
 		t.Error("expected live provider content")
@@ -363,13 +363,13 @@ func TestTagContextAssembler_ProviderError(t *testing.T) {
 			"forge": {},
 			"ha":    {},
 		},
-		Providers: map[string]TagContextProvider{
-			"forge": &mockTagProvider{err: fmt.Errorf("connection failed")},
-			"ha":    &mockTagProvider{content: "ha context ok"},
-		},
 	})
 
-	result := a.Build(context.Background(), map[string]bool{"forge": true, "ha": true})
+	providers := map[string]TagContextProvider{
+		"forge": &mockTagProvider{err: fmt.Errorf("connection failed")},
+		"ha":    &mockTagProvider{content: "ha context ok"},
+	}
+	result := a.Build(context.Background(), map[string]bool{"forge": true, "ha": true}, providers)
 
 	if strings.Contains(result, "connection failed") {
 		t.Error("provider error should not appear in output")
@@ -394,7 +394,7 @@ func TestTagContextAssembler_TaggedKBArticles(t *testing.T) {
 		KBDir:   kbDir,
 	})
 
-	result := a.Build(context.Background(), map[string]bool{"forge": true})
+	result := a.Build(context.Background(), map[string]bool{"forge": true}, nil)
 
 	if !strings.Contains(result, "Forge Conventions") {
 		t.Error("expected tagged KB article content")
@@ -425,12 +425,12 @@ func TestTagContextAssembler_AllThreeSources(t *testing.T) {
 			"forge": {Context: []string{staticFile}},
 		},
 		KBDir: kbDir,
-		Providers: map[string]TagContextProvider{
-			"forge": &mockTagProvider{content: "LIVE_CONTENT"},
-		},
 	})
 
-	result := a.Build(context.Background(), map[string]bool{"forge": true})
+	providers := map[string]TagContextProvider{
+		"forge": &mockTagProvider{content: "LIVE_CONTENT"},
+	}
+	result := a.Build(context.Background(), map[string]bool{"forge": true}, providers)
 
 	for _, want := range []string{"STATIC_CONTENT", "KB_CONTENT", "LIVE_CONTENT"} {
 		if !strings.Contains(result, want) {
@@ -441,7 +441,7 @@ func TestTagContextAssembler_AllThreeSources(t *testing.T) {
 
 func TestTagContextAssembler_NilAssembler(t *testing.T) {
 	var a *TagContextAssembler
-	result := a.Build(context.Background(), map[string]bool{"forge": true})
+	result := a.Build(context.Background(), map[string]bool{"forge": true}, nil)
 	if result != "" {
 		t.Errorf("nil assembler should return empty, got %q", result)
 	}
