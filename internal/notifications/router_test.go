@@ -457,7 +457,7 @@ func TestRoute_ActivityDifferentContact(t *testing.T) {
 	}
 }
 
-func TestSendActionable_FallbackOnUnsupported(t *testing.T) {
+func TestSendActionable_FallbackOnDeliveryFailure(t *testing.T) {
 	testID := uuid.New()
 	resolver := &mockContactResolver{
 		contact: &contacts.Contact{ID: testID, FormattedName: "nugget"},

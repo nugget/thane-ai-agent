@@ -21,6 +21,31 @@ type MessageRecorder interface {
 	RecordOutbound(phone, message string) error
 }
 
+// outboundAnnotation builds a provenance-annotated message for recording
+// in conversation memory. Includes structured metadata so a future
+// resolve_actionable tool can identify the notification and its actions.
+func outboundAnnotation(source string, msg string, requestID string, actions []Action) string {
+	var sb strings.Builder
+	sb.WriteString("[notification via signal")
+	if source != "" {
+		sb.WriteString(" | source: ")
+		sb.WriteString(source)
+	}
+	if requestID != "" {
+		sb.WriteString(" | request_id: ")
+		sb.WriteString(requestID)
+	}
+	sb.WriteString("]\n")
+	sb.WriteString(msg)
+	if len(actions) > 0 {
+		sb.WriteString("\n\nOptions:")
+		for i, a := range actions {
+			sb.WriteString(fmt.Sprintf("\n%d) %s", i+1, a.Label))
+		}
+	}
+	return sb.String()
+}
+
 // SignalProvider delivers fire-and-forget notifications via Signal
 // by resolving the recipient's phone number from the contact store.
 // When a MessageRecorder is set, outbound notifications are recorded
@@ -82,11 +107,7 @@ func (p *SignalProvider) Send(ctx context.Context, req NotificationRequest) erro
 	// Record in conversation memory so the agent has context when the
 	// user replies. The message is annotated with provenance metadata.
 	if p.recorder != nil {
-		annotated := fmt.Sprintf("[notification via signal | source: %s]\n%s",
-			req.Priority, msg)
-		if req.Priority == "" {
-			annotated = fmt.Sprintf("[notification via signal]\n%s", msg)
-		}
+		annotated := outboundAnnotation(req.Priority, msg, "", nil)
 		if err := p.recorder.RecordOutbound(phone, annotated); err != nil {
 			p.logger.Warn("failed to record notification in memory",
 				"phone", phone, "error", err)
@@ -100,11 +121,56 @@ func (p *SignalProvider) Send(ctx context.Context, req NotificationRequest) erro
 	return nil
 }
 
-// SendActionable returns an error because Signal does not support
-// interactive action buttons. The router should fall back to a
-// provider that supports structured actions (e.g., ha_push).
-func (p *SignalProvider) SendActionable(_ context.Context, req ActionableRequest) error {
-	return fmt.Errorf("signal provider does not support actionable notifications (recipient: %s); use a provider with button support", req.Recipient)
+// SendActionable delivers an actionable notification via Signal as a
+// text message with numbered options. The model interprets the user's
+// natural-language reply and can resolve the callback via a future
+// resolve_actionable tool. The message is recorded in conversation
+// memory with request_id and action metadata for that tool to use.
+func (p *SignalProvider) SendActionable(ctx context.Context, req ActionableRequest) error {
+	if p.sender == nil {
+		return fmt.Errorf("signal provider: sender is nil")
+	}
+	if p.contacts == nil {
+		return fmt.Errorf("signal provider: contact resolver is nil")
+	}
+	phone, err := p.resolvePhone(req.Recipient)
+	if err != nil {
+		return err
+	}
+
+	// Format message with title and numbered options.
+	msg := req.Message
+	if req.Title != "" {
+		msg = req.Title + "\n\n" + req.Message
+	}
+	for i, a := range req.Actions {
+		msg += fmt.Sprintf("\n%d) %s", i+1, a.Label)
+	}
+
+	if _, err := p.sender.Send(ctx, phone, msg); err != nil {
+		return fmt.Errorf("signal send actionable to %s: %w", req.Recipient, err)
+	}
+
+	// Record with full actionable metadata so the model can resolve
+	// the callback when the user replies.
+	if p.recorder != nil {
+		annotated := outboundAnnotation(req.Priority, req.Message, req.RequestID, req.Actions)
+		if req.Title != "" {
+			annotated = outboundAnnotation(req.Priority, req.Title+"\n\n"+req.Message, req.RequestID, req.Actions)
+		}
+		if err := p.recorder.RecordOutbound(phone, annotated); err != nil {
+			p.logger.Warn("failed to record actionable notification in memory",
+				"phone", phone, "error", err)
+		}
+	}
+
+	p.logger.Info("signal actionable notification sent",
+		"recipient", req.Recipient,
+		"phone", phone,
+		"request_id", req.RequestID,
+		"actions", len(req.Actions),
+	)
+	return nil
 }
 
 // resolvePhone looks up the recipient's phone number from contact

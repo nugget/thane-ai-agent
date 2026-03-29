@@ -3,6 +3,7 @@ package notifications
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
@@ -134,12 +135,55 @@ func TestSignalProvider_Send_UnknownContact(t *testing.T) {
 	}
 }
 
-func TestSignalProvider_SendActionable_Unsupported(t *testing.T) {
-	p := NewSignalProvider(nil, nil, nil)
+func TestSignalProvider_SendActionable(t *testing.T) {
+	sender := &mockSignalSender{}
+	contactID := uuid.Must(uuid.NewV7())
+	resolver := &mockSignalContacts{
+		contact: &contacts.Contact{ID: contactID, FormattedName: "nugget"},
+		props:   map[string][]string{"TEL": {"+15551234567"}},
+	}
+
+	p := NewSignalProvider(sender, resolver, nil)
 	err := p.SendActionable(context.Background(), ActionableRequest{
-		NotificationRequest: NotificationRequest{Recipient: "nugget"},
+		NotificationRequest: NotificationRequest{
+			Recipient: "nugget",
+			Title:     "Merge PR?",
+			Message:   "PR #42 has 3 approvals.",
+		},
+		Actions:   []Action{{ID: "merge", Label: "Merge"}, {ID: "skip", Label: "Skip"}},
+		RequestID: "r_test123",
 	})
-	if err == nil {
-		t.Fatal("expected error for unsupported actionable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Should include numbered options in the message.
+	if !strings.Contains(sender.lastMessage, "1) Merge") {
+		t.Errorf("message should contain numbered options, got: %q", sender.lastMessage)
+	}
+	if !strings.Contains(sender.lastMessage, "2) Skip") {
+		t.Errorf("message should contain option 2, got: %q", sender.lastMessage)
+	}
+}
+
+func TestOutboundAnnotation(t *testing.T) {
+	// Fire-and-forget.
+	got := outboundAnnotation("", "Hello world", "", nil)
+	if !strings.Contains(got, "[notification via signal]") {
+		t.Errorf("missing header: %q", got)
+	}
+	if !strings.Contains(got, "Hello world") {
+		t.Errorf("missing message: %q", got)
+	}
+
+	// Actionable with request_id and actions.
+	got = outboundAnnotation("urgent", "Merge PR?", "r_abc", []Action{
+		{ID: "merge", Label: "Merge"},
+		{ID: "skip", Label: "Skip"},
+	})
+	if !strings.Contains(got, "request_id: r_abc") {
+		t.Errorf("missing request_id: %q", got)
+	}
+	if !strings.Contains(got, "1) Merge") {
+		t.Errorf("missing option 1: %q", got)
 	}
 }
