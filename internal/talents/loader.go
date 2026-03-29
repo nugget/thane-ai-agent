@@ -255,18 +255,25 @@ func GenerateManifest(entries []ManifestEntry) *Talent {
 	sb.WriteString("Activate with `request_capability(\"tag\")`, or `delegate(task, tags: [\"tag\"])` for one-off tasks. ")
 	sb.WriteString("Drop with `drop_capability` when done. Ad-hoc tags work too — any tagged KB articles or talents will load.\n\n")
 
-	// Build JSON capabilities map.
-	caps := make(map[string]capabilityJSON, len(entries))
-	var adHocTags []string
+	// Sort entries by tag name for deterministic JSON output.
+	// Input may come from map iteration (nondeterministic order).
+	sorted := make([]ManifestEntry, len(entries))
+	copy(sorted, entries)
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].Tag < sorted[j].Tag
+	})
 
-	for _, e := range entries {
-		if e.AdHoc {
-			adHocTags = append(adHocTags, e.Tag)
-			continue
-		}
+	// Build JSON capabilities map. Ad-hoc tags (discovered from
+	// KB/talents but not in config) get status "discoverable" with
+	// their context metadata preserved.
+	caps := make(map[string]capabilityJSON, len(sorted))
 
+	for _, e := range sorted {
 		status := "available"
-		if e.AlwaysActive {
+		switch {
+		case e.AdHoc:
+			status = "discoverable"
+		case e.AlwaysActive:
 			status = "always_active"
 		}
 
@@ -290,15 +297,14 @@ func GenerateManifest(entries []ManifestEntry) *Talent {
 
 	wrapper := struct {
 		Capabilities map[string]capabilityJSON `json:"capabilities"`
-		Discoverable []string                  `json:"discoverable,omitempty"`
 	}{
 		Capabilities: caps,
-		Discoverable: adHocTags,
 	}
 
 	data, err := json.Marshal(wrapper)
 	if err != nil {
-		sb.WriteString(fmt.Sprintf("(manifest error: %v)", err))
+		// Emit valid JSON even on marshal failure.
+		sb.WriteString(`{"error":"manifest marshal failed"}`)
 	} else {
 		sb.Write(data)
 	}

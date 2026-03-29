@@ -51,6 +51,6 @@ When the task requires judgment, synthesis, or emotional intelligence. When you 
 
 - `forge_issue_update` body REPLACES entire description — not a patch
 - `call_service` does NOT validate entity names — silent no-op on bad entity_id
-- `list_entities` returns 10K-83K chars — use `find_entity` for discovery instead
+- `list_entities` defaults to 20 entities per page but high limits produce very large outputs — prefer `find_entity` for discovery
 - `file_read` is restricted to allowed directories — use `exec(command="cat /path")` for system paths
 - There is no `list_tools` or `mcp_list_tools` — all tools are already in your context

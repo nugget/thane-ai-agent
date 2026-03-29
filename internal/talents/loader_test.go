@@ -1,6 +1,7 @@
 package talents
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -239,8 +240,9 @@ func TestLoadAll_MissingDir(t *testing.T) {
 
 func TestGenerateManifest(t *testing.T) {
 	entries := []ManifestEntry{
-		{Tag: "ha", Description: "Home Assistant tools", Tools: []string{"get_state", "call_service"}, AlwaysActive: true},
+		{Tag: "ha", Description: "Home Assistant tools", Tools: []string{"get_state", "call_service"}, AlwaysActive: true, KBArticles: 3, LiveContext: true},
 		{Tag: "search", Description: "Web search tools", Tools: []string{"web_search", "web_fetch"}, AlwaysActive: false},
+		{Tag: "hpde", AdHoc: true, KBArticles: 2},
 	}
 
 	talent := GenerateManifest(entries)
@@ -255,32 +257,76 @@ func TestGenerateManifest(t *testing.T) {
 		t.Errorf("Tags = %v, want nil (untagged)", talent.Tags)
 	}
 
-	// Manifest should be valid JSON after the preamble text.
-	if !strings.Contains(talent.Content, `"ha"`) {
-		t.Error("manifest JSON should contain ha tag")
-	}
-	if !strings.Contains(talent.Content, `"always_active"`) {
-		t.Error("manifest JSON should contain always_active status for ha")
-	}
-	if !strings.Contains(talent.Content, `"search"`) {
-		t.Error("manifest JSON should contain search tag")
-	}
-	if !strings.Contains(talent.Content, `"available"`) {
-		t.Error("manifest JSON should contain available status for search")
-	}
+	// Preamble text.
 	if !strings.Contains(talent.Content, "request_capability") {
 		t.Error("manifest should mention request_capability in preamble")
 	}
 	if !strings.Contains(talent.Content, "delegate") {
 		t.Error("manifest should mention delegate in preamble")
 	}
-	// Tool names should NOT appear (only counts).
-	if strings.Contains(talent.Content, "get_state") {
-		t.Error("manifest should not list individual tool names (only counts)")
+
+	// Extract and parse the JSON portion.
+	jsonStart := strings.Index(talent.Content, "{")
+	if jsonStart < 0 {
+		t.Fatal("manifest should contain JSON block")
 	}
-	// Tool count should appear.
-	if !strings.Contains(talent.Content, `"tools":2`) {
-		t.Error("manifest should include tool count")
+	jsonStr := talent.Content[jsonStart:]
+
+	var parsed struct {
+		Capabilities map[string]struct {
+			Status      string `json:"status"`
+			Description string `json:"description"`
+			ToolCount   int    `json:"tools"`
+			Context     *struct {
+				ConfigFiles int  `json:"config_files"`
+				KBArticles  int  `json:"kb_articles"`
+				Live        bool `json:"live"`
+			} `json:"context"`
+		} `json:"capabilities"`
+	}
+	if err := json.Unmarshal([]byte(jsonStr), &parsed); err != nil {
+		t.Fatalf("manifest JSON should be valid: %v\nJSON: %s", err, jsonStr)
+	}
+
+	// Configured tag: ha
+	ha, ok := parsed.Capabilities["ha"]
+	if !ok {
+		t.Fatal("missing ha capability")
+	}
+	if ha.Status != "always_active" {
+		t.Errorf("ha status = %q, want always_active", ha.Status)
+	}
+	if ha.ToolCount != 2 {
+		t.Errorf("ha tools = %d, want 2", ha.ToolCount)
+	}
+	if ha.Context == nil || ha.Context.KBArticles != 3 || !ha.Context.Live {
+		t.Errorf("ha context = %+v, want kb=3 live=true", ha.Context)
+	}
+
+	// Configured tag: search
+	search, ok := parsed.Capabilities["search"]
+	if !ok {
+		t.Fatal("missing search capability")
+	}
+	if search.Status != "available" {
+		t.Errorf("search status = %q, want available", search.Status)
+	}
+
+	// Ad-hoc tag: hpde
+	hpde, ok := parsed.Capabilities["hpde"]
+	if !ok {
+		t.Fatal("missing hpde discoverable capability")
+	}
+	if hpde.Status != "discoverable" {
+		t.Errorf("hpde status = %q, want discoverable", hpde.Status)
+	}
+	if hpde.Context == nil || hpde.Context.KBArticles != 2 {
+		t.Errorf("hpde context = %+v, want kb=2", hpde.Context)
+	}
+
+	// Tool names should NOT appear in the output.
+	if strings.Contains(talent.Content, "get_state") {
+		t.Error("manifest should not list individual tool names")
 	}
 }
 

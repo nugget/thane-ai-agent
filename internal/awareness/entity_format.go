@@ -114,8 +114,8 @@ func formatWeather(state *homeassistant.State, now time.Time) string {
 			}
 			fc := weatherForecast{
 				Condition: attrString(entry, "condition"),
-				TempHigh:  entry["temperature"],
-				TempLow:   entry["templow"],
+				TempHigh:  roundAttr(entry["temperature"], 1),
+				TempLow:   roundAttr(entry["templow"], 1),
 			}
 			// Delta-annotate forecast time if available. HA may include
 			// fractional seconds, so try RFC3339Nano first.
