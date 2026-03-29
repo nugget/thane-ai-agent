@@ -103,12 +103,21 @@ func (p *ChannelOverviewProvider) GetContext(ctx context.Context, _ string) (str
 	now := p.nowFunc()
 
 	// Determine the requesting channel's source hint for annotation.
-	var currentSource, currentSenderName string
+	// Signal sets "source"; OWU/Ollama sets "channel". Read both.
+	var currentSource, currentSender, currentSenderName string
 	if p.hintsFunc != nil {
 		if hints := p.hintsFunc(ctx); hints != nil {
 			currentSource = hints["source"]
+			if currentSource == "" {
+				currentSource = hints["channel"]
+			}
+			currentSender = hints["sender"]
 			currentSenderName = hints["sender_name"]
 		}
+	}
+	// Normalize OWU's "ollama" channel hint to match loop metadata.
+	if currentSource == "ollama" {
+		currentSource = "owu"
 	}
 
 	var entries []channelEntry
@@ -166,8 +175,9 @@ func (p *ChannelOverviewProvider) GetContext(ctx context.Context, _ string) (str
 		// all sender loops; other channels match on subsystem alone.
 		if currentSource == subsystem {
 			if e.Sender != "" {
-				// Per-sender channel: match by sender phone or contact name.
-				if currentSenderName != "" && (e.Sender == currentSenderName || e.Contact == currentSenderName) {
+				// Per-sender channel: match by raw phone, resolved name,
+				// or sender_name hint (whichever is available).
+				if e.Sender == currentSender || e.Sender == currentSenderName || e.Contact == currentSenderName {
 					e.YouAreHere = true
 				}
 			} else {
