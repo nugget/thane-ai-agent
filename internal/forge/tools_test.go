@@ -389,7 +389,8 @@ func TestHandleIssueGet(t *testing.T) {
 
 		wantParts := []string{
 			"Issue #42: Bug report",
-			"State: open | Author: alice",
+			"State: open | Author: alice |",
+			"comments",
 			"Labels: bug, urgent",
 			"Assignees: bob",
 			"Something is broken",

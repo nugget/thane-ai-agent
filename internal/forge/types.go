@@ -67,6 +67,8 @@ type PullRequest struct {
 	Body string
 	// State is the PR lifecycle state: "open", "closed", or "merged".
 	State string
+	// Draft indicates the PR is not ready for review.
+	Draft bool
 	// Author is the username who opened the PR.
 	Author string
 	// Head is the source branch name.
@@ -76,8 +78,16 @@ type PullRequest struct {
 	// Mergeable indicates whether the PR can be merged cleanly. Nil
 	// means the mergeability check has not completed yet.
 	Mergeable *bool
+	// Labels lists the label names applied to this PR.
+	Labels []string
+	// Assignees lists the usernames assigned to this PR.
+	Assignees []string
+	// RequestedReviewers lists usernames whose review is requested.
+	RequestedReviewers []string
 	// ReviewState is the aggregate review status (e.g., "approved").
 	ReviewState string
+	// CommentCount is the number of comments on the PR.
+	CommentCount int
 	// Additions is the total lines added across all files.
 	Additions int
 	// Deletions is the total lines removed across all files.

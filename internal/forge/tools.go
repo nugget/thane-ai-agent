@@ -194,16 +194,17 @@ func (t *Tools) HandleIssueGet(ctx context.Context, args map[string]any) (string
 		return "", err
 	}
 
+	now := time.Now()
+
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "Issue #%d: %s\n", issue.Number, issue.Title)
-	fmt.Fprintf(&sb, "State: %s | Author: %s\n", issue.State, issue.Author)
+	fmt.Fprintf(&sb, "State: %s | Author: %s | %d comments\n", issue.State, issue.Author, issue.CommentCount)
 	if len(issue.Labels) > 0 {
 		fmt.Fprintf(&sb, "Labels: %s\n", strings.Join(issue.Labels, ", "))
 	}
 	if len(issue.Assignees) > 0 {
 		fmt.Fprintf(&sb, "Assignees: %s\n", strings.Join(issue.Assignees, ", "))
 	}
-	now := time.Now()
 	fmt.Fprintf(&sb, "Created: %s | Updated: %s\n",
 		awareness.FormatDelta(issue.CreatedAt, now),
 		awareness.FormatDelta(issue.UpdatedAt, now))
@@ -340,19 +341,82 @@ func (t *Tools) HandlePRGet(ctx context.Context, args map[string]any) (string, e
 		return "", err
 	}
 
+	now := time.Now()
+
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "PR #%d: %s\n", pr.Number, pr.Title)
-	fmt.Fprintf(&sb, "State: %s | Author: %s\n", pr.State, pr.Author)
+
+	// State line with draft indicator.
+	state := pr.State
+	if pr.Draft {
+		state += " (draft)"
+	}
+	fmt.Fprintf(&sb, "State: %s | Author: %s\n", state, pr.Author)
 	fmt.Fprintf(&sb, "Branch: %s → %s\n", pr.Head, pr.Base)
-	fmt.Fprintf(&sb, "Changes: +%d -%d across %d files\n", pr.Additions, pr.Deletions, pr.ChangedFiles)
+	fmt.Fprintf(&sb, "Changes: +%d -%d across %d files | %d comments\n",
+		pr.Additions, pr.Deletions, pr.ChangedFiles, pr.CommentCount)
+	if len(pr.Labels) > 0 {
+		fmt.Fprintf(&sb, "Labels: %s\n", strings.Join(pr.Labels, ", "))
+	}
+	if len(pr.Assignees) > 0 {
+		fmt.Fprintf(&sb, "Assignees: %s\n", strings.Join(pr.Assignees, ", "))
+	}
+	if len(pr.RequestedReviewers) > 0 {
+		fmt.Fprintf(&sb, "Requested reviewers: %s\n", strings.Join(pr.RequestedReviewers, ", "))
+	}
 	if pr.Mergeable != nil {
 		fmt.Fprintf(&sb, "Mergeable: %v\n", *pr.Mergeable)
 	}
-	now := time.Now()
 	fmt.Fprintf(&sb, "Created: %s | Updated: %s\n",
 		awareness.FormatDelta(pr.CreatedAt, now),
 		awareness.FormatDelta(pr.UpdatedAt, now))
 	fmt.Fprintf(&sb, "URL: %s\n", pr.URL)
+
+	// Inline review summary (extra API call, but saves a follow-up tool call).
+	if reviews, err := provider.ListPRReviews(ctx, repo, number); err == nil && len(reviews) > 0 {
+		counts := map[string]int{}
+		for _, r := range reviews {
+			counts[r.State]++
+		}
+		var parts []string
+		if n := counts["APPROVED"]; n > 0 {
+			parts = append(parts, fmt.Sprintf("%d approved", n))
+		}
+		if n := counts["CHANGES_REQUESTED"]; n > 0 {
+			parts = append(parts, fmt.Sprintf("%d changes requested", n))
+		}
+		if n := counts["COMMENTED"]; n > 0 {
+			parts = append(parts, fmt.Sprintf("%d commented", n))
+		}
+		fmt.Fprintf(&sb, "Reviews: %s\n", strings.Join(parts, ", "))
+	}
+
+	// Inline check summary (extra API call, but saves a follow-up tool call).
+	if checks, err := provider.ListChecks(ctx, repo, number); err == nil && len(checks) > 0 {
+		passed, failed, pending := 0, 0, 0
+		for _, c := range checks {
+			switch {
+			case c.Conclusion == "success" || c.Conclusion == "skipped" || c.Conclusion == "neutral":
+				passed++
+			case c.Status != "completed":
+				pending++
+			default:
+				failed++
+			}
+		}
+		var checkParts []string
+		if passed > 0 {
+			checkParts = append(checkParts, fmt.Sprintf("%d passed", passed))
+		}
+		if failed > 0 {
+			checkParts = append(checkParts, fmt.Sprintf("%d failed", failed))
+		}
+		if pending > 0 {
+			checkParts = append(checkParts, fmt.Sprintf("%d pending", pending))
+		}
+		fmt.Fprintf(&sb, "Checks: %s\n", strings.Join(checkParts, ", "))
+	}
+
 	if pr.Body != "" {
 		fmt.Fprintf(&sb, "\n---\n%s", pr.Body)
 	}

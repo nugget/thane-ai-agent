@@ -718,16 +718,30 @@ func mapGitHubPR(gp *github.PullRequest) *PullRequest {
 		Title:        gp.GetTitle(),
 		Body:         gp.GetBody(),
 		State:        gp.GetState(),
+		Draft:        gp.GetDraft(),
 		Author:       gp.GetUser().GetLogin(),
 		Head:         gp.GetHead().GetRef(),
 		Base:         gp.GetBase().GetRef(),
 		Mergeable:    gp.Mergeable,
+		CommentCount: gp.GetComments() + gp.GetReviewComments(),
 		Additions:    gp.GetAdditions(),
 		Deletions:    gp.GetDeletions(),
 		ChangedFiles: gp.GetChangedFiles(),
 		URL:          gp.GetHTMLURL(),
 		CreatedAt:    gp.GetCreatedAt().Time,
 		UpdatedAt:    gp.GetUpdatedAt().Time,
+	}
+	// Labels.
+	for _, l := range gp.Labels {
+		pr.Labels = append(pr.Labels, l.GetName())
+	}
+	// Assignees.
+	for _, a := range gp.Assignees {
+		pr.Assignees = append(pr.Assignees, a.GetLogin())
+	}
+	// Requested reviewers.
+	for _, r := range gp.RequestedReviewers {
+		pr.RequestedReviewers = append(pr.RequestedReviewers, r.GetLogin())
 	}
 	return pr
 }
