@@ -207,10 +207,11 @@ function makeIDRow(label, value) {
 function makeIDChip(fullID) {
   const chip = document.createElement('span');
   chip.className = 'id-chip';
-  chip.title = 'Click to copy: ' + fullID;
+  chip.title = fullID;
   const txt = document.createElement('span');
   txt.className = 'id-chip-text';
-  txt.textContent = fullID;
+  // Show first 8 chars (UUID first segment) — full value on hover/click.
+  txt.textContent = fullID.length > 12 ? fullID.slice(0, 8) : fullID;
   chip.appendChild(txt);
   chip.addEventListener('click', (e) => {
     e.stopPropagation();
