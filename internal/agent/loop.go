@@ -636,54 +636,18 @@ func (l *Loop) buildSystemPrompt(ctx context.Context, userMessage string, histor
 		}
 	}
 
-	// 3c. Active capabilities summary — tells the model what it has loaded.
+	// 3c. Active capabilities — compact list of currently loaded tags.
+	// The full catalog (descriptions, tool counts, context sources) is
+	// in the capability manifest talent; this just shows current state.
 	if len(tags) > 0 {
 		mark("ACTIVE CAPABILITIES")
-		sb.WriteString("\n\n## Active Capabilities\n\n")
-
-		type capEntry struct {
-			Tag         string `json:"tag"`
-			Status      string `json:"status"`
-			Description string `json:"description,omitempty"`
-		}
-
-		var entries []capEntry
-		// Active tags first.
 		sorted := make([]string, 0, len(tags))
 		for t := range tags {
 			sorted = append(sorted, t)
 		}
 		sort.Strings(sorted)
-		for _, tag := range sorted {
-			e := capEntry{Tag: tag, Status: "active"}
-			if cfg, ok := l.capTags[tag]; ok {
-				if cfg.AlwaysActive {
-					e.Status = "always-active"
-				}
-				e.Description = cfg.Description
-			} else {
-				e.Status = "active (ad-hoc)"
-			}
-			entries = append(entries, e)
-		}
-		// Available-but-inactive tags.
-		var inactive []string
-		for tag := range l.capTags {
-			if !tags[tag] && !l.capTags[tag].AlwaysActive {
-				inactive = append(inactive, tag)
-			}
-		}
-		sort.Strings(inactive)
-		for _, tag := range inactive {
-			entries = append(entries, capEntry{
-				Tag:         tag,
-				Status:      "available",
-				Description: l.capTags[tag].Description,
-			})
-		}
-
-		capJSON, _ := json.Marshal(entries)
-		sb.Write(capJSON)
+		sb.WriteString("\n\nActive capabilities: ")
+		sb.WriteString(strings.Join(sorted, ", "))
 		sb.WriteString("\n")
 		seal()
 	}
