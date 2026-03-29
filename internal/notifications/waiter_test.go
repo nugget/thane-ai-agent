@@ -81,9 +81,13 @@ func TestResponseWaiter_WaitWithTimeout(t *testing.T) {
 
 	ch := w.Register("req-4")
 
-	// Don't signal — let it time out.
+	// Don't signal — let the local timeout expire.
+	// This should return a TimedOut response, not an error.
 	resp, err := w.WaitWithTimeout(context.Background(), "req-4", ch, 50*time.Millisecond)
-	if err == nil {
-		t.Fatalf("expected timeout error, got response: %+v", resp)
+	if err != nil {
+		t.Fatalf("expected timeout response, got error: %v", err)
+	}
+	if !resp.TimedOut {
+		t.Error("expected TimedOut=true")
 	}
 }

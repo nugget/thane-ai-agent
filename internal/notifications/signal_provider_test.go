@@ -163,6 +163,8 @@ func TestSignalProvider_SendActionable(t *testing.T) {
 	if !strings.Contains(sender.lastMessage, "2) Skip") {
 		t.Errorf("message should contain option 2, got: %q", sender.lastMessage)
 	}
+	// The outbound message to the user doesn't include action_ids (those
+	// are only in the memory annotation for the model's benefit).
 }
 
 func TestOutboundAnnotation(t *testing.T) {
@@ -183,7 +185,7 @@ func TestOutboundAnnotation(t *testing.T) {
 	if !strings.Contains(got, "request_id: r_abc") {
 		t.Errorf("missing request_id: %q", got)
 	}
-	if !strings.Contains(got, "1) Merge") {
-		t.Errorf("missing option 1: %q", got)
+	if !strings.Contains(got, "1) Merge (action_id: merge)") {
+		t.Errorf("missing option 1 with action_id: %q", got)
 	}
 }

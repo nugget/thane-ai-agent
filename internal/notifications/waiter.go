@@ -74,13 +74,13 @@ func (w *ResponseWaiter) SignalTimeout(requestID string) bool {
 }
 
 // Wait blocks until the response arrives or the context is cancelled.
-// Cleans up the waiter on context cancellation.
+// Returns an error only when the parent context is cancelled (e.g.,
+// the run is shutting down). Cleans up the waiter on exit.
 func (w *ResponseWaiter) Wait(ctx context.Context, requestID string, ch <-chan EscalationResponse) (EscalationResponse, error) {
 	select {
 	case resp := <-ch:
 		return resp, nil
 	case <-ctx.Done():
-		// Clean up the waiter.
 		w.mu.Lock()
 		delete(w.waiters, requestID)
 		w.mu.Unlock()
@@ -88,10 +88,30 @@ func (w *ResponseWaiter) Wait(ctx context.Context, requestID string, ch <-chan E
 	}
 }
 
-// WaitWithTimeout is a convenience that creates a timeout context
-// and blocks until the response arrives or the timeout expires.
+// WaitWithTimeout blocks until the response arrives, the timeout
+// expires, or the parent context is cancelled. A timeout expiry
+// returns an [EscalationResponse] with TimedOut=true (not an error),
+// since timeouts are an expected outcome. Only parent context
+// cancellation (e.g., run shutdown) returns an error.
 func (w *ResponseWaiter) WaitWithTimeout(ctx context.Context, requestID string, ch <-chan EscalationResponse, timeout time.Duration) (EscalationResponse, error) {
-	timeoutCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	return w.Wait(timeoutCtx, requestID, ch)
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+
+	select {
+	case resp := <-ch:
+		return resp, nil
+	case <-timer.C:
+		// Local timeout expired — this is the expected timeout path.
+		// Clean up the waiter so the TimeoutWatcher doesn't also signal.
+		w.mu.Lock()
+		delete(w.waiters, requestID)
+		w.mu.Unlock()
+		return EscalationResponse{TimedOut: true}, nil
+	case <-ctx.Done():
+		// Parent context cancelled — run is shutting down.
+		w.mu.Lock()
+		delete(w.waiters, requestID)
+		w.mu.Unlock()
+		return EscalationResponse{}, fmt.Errorf("escalation %s: %w", requestID, ctx.Err())
+	}
 }

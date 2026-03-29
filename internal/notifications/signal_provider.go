@@ -40,7 +40,7 @@ func outboundAnnotation(source string, msg string, requestID string, actions []A
 	if len(actions) > 0 {
 		sb.WriteString("\n\nOptions:")
 		for i, a := range actions {
-			sb.WriteString(fmt.Sprintf("\n%d) %s", i+1, a.Label))
+			sb.WriteString(fmt.Sprintf("\n%d) %s (action_id: %s)", i+1, a.Label, a.ID))
 		}
 	}
 	return sb.String()
