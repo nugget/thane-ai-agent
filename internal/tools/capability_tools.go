@@ -7,15 +7,16 @@ import (
 	"strings"
 )
 
-// CapabilityManager controls per-session capability tag activation.
-// Implemented by agent.Loop.
+// CapabilityManager controls per-Run capability tag activation.
+// Implemented by agent.Loop. All methods operate on the
+// context-scoped capability scope created at the start of each Run().
 type CapabilityManager interface {
-	// RequestCapability activates a capability tag for the session.
-	RequestCapability(tag string) error
-	// DropCapability deactivates a capability tag for the session.
-	DropCapability(tag string) error
-	// ActiveTags returns the set of currently active tags.
-	ActiveTags() map[string]bool
+	// RequestCapability activates a capability tag for the current Run.
+	RequestCapability(ctx context.Context, tag string) error
+	// DropCapability deactivates a capability tag for the current Run.
+	DropCapability(ctx context.Context, tag string) error
+	// ActiveTags returns the set of currently active tags for the Run.
+	ActiveTags(ctx context.Context) map[string]bool
 }
 
 // CapabilityManifest describes a capability tag for the manifest.
@@ -89,7 +90,7 @@ func (r *Registry) registerRequestCapability(mgr CapabilityManager, manifest []C
 				return "", fmt.Errorf("tag is required")
 			}
 
-			if err := mgr.RequestCapability(tag); err != nil {
+			if err := mgr.RequestCapability(ctx, tag); err != nil {
 				return "", err
 			}
 
@@ -137,7 +138,7 @@ func (r *Registry) registerDropCapability(mgr CapabilityManager, tagManifest map
 				return "", fmt.Errorf("tag is required")
 			}
 
-			if err := mgr.DropCapability(tag); err != nil {
+			if err := mgr.DropCapability(ctx, tag); err != nil {
 				return "", err
 			}
 
@@ -147,7 +148,7 @@ func (r *Registry) registerDropCapability(mgr CapabilityManager, tagManifest map
 			if m, ok := tagManifest[tag]; ok && len(m.Tools) > 0 {
 				fmt.Fprintf(&result, " Tools removed: %s.", strings.Join(m.Tools, ", "))
 			}
-			if remaining := mgr.ActiveTags(); len(remaining) > 0 {
+			if remaining := mgr.ActiveTags(ctx); len(remaining) > 0 {
 				tags := make([]string, 0, len(remaining))
 				for t := range remaining {
 					tags = append(tags, t)

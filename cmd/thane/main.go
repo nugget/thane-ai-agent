@@ -1957,7 +1957,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		// spawned through the registry so the dashboard can display
 		// dynamically activated capabilities.
 		loopRegistry.SetDefaultActiveTagsFunc(func() []string {
-			tags := loop.ActiveTags()
+			tags := loop.LastRunTags()
 			if tags == nil {
 				return nil
 			}
@@ -1978,7 +1978,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		})
 
 		var activeTags []string
-		for tag := range loop.ActiveTags() {
+		for tag := range loop.LastRunTags() {
 			activeTags = append(activeTags, tag)
 		}
 		logger.Info("capability tags enabled",

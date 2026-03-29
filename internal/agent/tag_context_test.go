@@ -36,6 +36,16 @@ func setTagsWithAssembler(l *Loop, capTags map[string]config.CapabilityTagConfig
 	}))
 }
 
+// testCtxForLoop creates a context containing a capabilityScope seeded
+// from the loop's capTags (always-active tags are activated). This
+// mirrors what Run() does before calling buildSystemPrompt.
+func testCtxForLoop(l *Loop) context.Context {
+	if l.capTags == nil {
+		return context.Background()
+	}
+	return withCapabilityScope(context.Background(), newCapabilityScope(l.capTags))
+}
+
 func TestBuildSystemPrompt_TagContextIncluded(t *testing.T) {
 	dir := t.TempDir()
 	f1 := filepath.Join(dir, "arch.md")
@@ -53,7 +63,7 @@ func TestBuildSystemPrompt_TagContextIncluded(t *testing.T) {
 		},
 	}, nil)
 
-	prompt := l.buildSystemPrompt(context.Background(), "hello", nil)
+	prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello", nil)
 
 	if !strings.Contains(prompt, "hexagonal pattern") {
 		t.Error("system prompt should contain first context file content")
@@ -81,7 +91,7 @@ func TestBuildSystemPrompt_TagContextInactiveExcluded(t *testing.T) {
 		},
 	}, nil)
 
-	prompt := l.buildSystemPrompt(context.Background(), "hello", nil)
+	prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello", nil)
 
 	if strings.Contains(prompt, "Secret content") {
 		t.Error("system prompt should not contain context from inactive tags")
@@ -112,7 +122,7 @@ func TestBuildSystemPrompt_TagContextDedup(t *testing.T) {
 		},
 	}, nil)
 
-	prompt := l.buildSystemPrompt(context.Background(), "hello", nil)
+	prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello", nil)
 
 	// The shared file should appear exactly once.
 	count := strings.Count(prompt, "shared knowledge")
@@ -137,7 +147,7 @@ func TestBuildSystemPrompt_TagContextMissingFile(t *testing.T) {
 		},
 	}, nil)
 
-	prompt := l.buildSystemPrompt(context.Background(), "hello", nil)
+	prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello", nil)
 
 	// Good file should still be included despite missing file.
 	if !strings.Contains(prompt, "good content") {
@@ -160,7 +170,7 @@ func TestBuildSystemPrompt_TagContextRereadPerTurn(t *testing.T) {
 		},
 	}, nil)
 
-	prompt1 := l.buildSystemPrompt(context.Background(), "hello", nil)
+	prompt1 := l.buildSystemPrompt(testCtxForLoop(l), "hello", nil)
 	if !strings.Contains(prompt1, "version-1") {
 		t.Fatal("first prompt should contain version-1")
 	}
@@ -168,7 +178,7 @@ func TestBuildSystemPrompt_TagContextRereadPerTurn(t *testing.T) {
 	// Modify the file between turns.
 	os.WriteFile(f, []byte("version-2"), 0644)
 
-	prompt2 := l.buildSystemPrompt(context.Background(), "hello", nil)
+	prompt2 := l.buildSystemPrompt(testCtxForLoop(l), "hello", nil)
 	if strings.Contains(prompt2, "version-1") {
 		t.Error("second prompt should not contain stale version-1")
 	}
@@ -181,7 +191,7 @@ func TestBuildSystemPrompt_TagContextNoCapTags(t *testing.T) {
 	l := newMinimalLoop()
 	// capTags not set — should not inject any tag context
 
-	prompt := l.buildSystemPrompt(context.Background(), "hello", nil)
+	prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello", nil)
 
 	if strings.Contains(prompt, "Capability Context") {
 		t.Error("system prompt should not contain capability context section when capTags is nil")
@@ -206,7 +216,7 @@ func TestBuildSystemPrompt_TagContextOrderAfterInjected(t *testing.T) {
 		},
 	}, []talents.Talent{})
 
-	prompt := l.buildSystemPrompt(context.Background(), "hello", nil)
+	prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello", nil)
 
 	injectedIdx := strings.Index(prompt, "INJECTED_MARKER")
 	tagCtxIdx := strings.Index(prompt, "TAG_CONTEXT_MARKER")
@@ -263,7 +273,7 @@ func TestBuildSystemPrompt_HAInjectResolved(t *testing.T) {
 		},
 	}, nil)
 
-	prompt := l.buildSystemPrompt(context.Background(), "hello", nil)
+	prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello", nil)
 
 	if !strings.Contains(prompt, "## Current HA State (live)") {
 		t.Error("prompt should contain live state header")
@@ -292,7 +302,7 @@ func TestBuildSystemPrompt_HAInjectNilFetcher(t *testing.T) {
 	}, nil)
 	// haInject not set — should pass through without resolving
 
-	prompt := l.buildSystemPrompt(context.Background(), "hello", nil)
+	prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello", nil)
 
 	if strings.Contains(prompt, "## Current HA State") {
 		t.Error("prompt should not contain state block when haInject is nil")
@@ -318,7 +328,7 @@ func TestBuildSystemPrompt_HAInjectFetchFailure(t *testing.T) {
 		},
 	}, nil)
 
-	prompt := l.buildSystemPrompt(context.Background(), "hello", nil)
+	prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello", nil)
 
 	if !strings.Contains(prompt, "⚠️ HA entity state unavailable") {
 		t.Error("prompt should contain unavailability warning when all fetches fail")
@@ -481,7 +491,7 @@ func TestBuildSystemPrompt_TagContextViaProvider(t *testing.T) {
 		content: `{"accounts":["github-primary"]}`,
 	})
 
-	prompt := l.buildSystemPrompt(context.Background(), "hello", nil)
+	prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello", nil)
 
 	if !strings.Contains(prompt, "github-primary") {
 		t.Error("system prompt should contain live provider content")

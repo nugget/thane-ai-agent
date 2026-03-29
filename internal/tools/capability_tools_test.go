@@ -24,7 +24,7 @@ func newMockCapabilityManager(validTags ...string) *mockCapabilityManager {
 	return m
 }
 
-func (m *mockCapabilityManager) RequestCapability(tag string) error {
+func (m *mockCapabilityManager) RequestCapability(_ context.Context, tag string) error {
 	if !m.allTags[tag] {
 		return fmt.Errorf("unknown capability tag: %q", tag)
 	}
@@ -32,7 +32,7 @@ func (m *mockCapabilityManager) RequestCapability(tag string) error {
 	return nil
 }
 
-func (m *mockCapabilityManager) DropCapability(tag string) error {
+func (m *mockCapabilityManager) DropCapability(_ context.Context, tag string) error {
 	if !m.allTags[tag] {
 		return fmt.Errorf("unknown capability tag: %q", tag)
 	}
@@ -40,7 +40,7 @@ func (m *mockCapabilityManager) DropCapability(tag string) error {
 	return nil
 }
 
-func (m *mockCapabilityManager) ActiveTags() map[string]bool {
+func (m *mockCapabilityManager) ActiveTags(_ context.Context) map[string]bool {
 	return m.activeTags
 }
 
