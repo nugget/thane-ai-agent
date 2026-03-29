@@ -22,7 +22,9 @@ type LoopSnapshot struct {
 // ChannelLoopSource provides snapshots of channel-category loops.
 type ChannelLoopSource interface {
 	// ChannelLoops returns status snapshots for loops with
-	// category=channel metadata.
+	// category=channel metadata. The returned slice must be in a
+	// deterministic order (e.g., sorted by name) to ensure prompt
+	// stability across turns.
 	ChannelLoops() []LoopSnapshot
 }
 
@@ -131,15 +133,20 @@ func (p *ChannelOverviewProvider) GetContext(ctx context.Context, _ string) (str
 			if len(l.RecentConvIDs) > 0 {
 				e.ConvID = l.RecentConvIDs[0]
 			}
-			// Resolve phone to contact name.
+			// Resolve phone to contact name and authoritative trust zone.
 			if p.phones != nil && sender != "" {
-				if name, _, ok := p.phones.ResolvePhone(sender); ok {
+				if name, tz, ok := p.phones.ResolvePhone(sender); ok {
 					e.Contact = name
+					if tz != "" {
+						e.TrustZone = tz
+					}
 				}
 			}
-			// Match requesting channel by sender_name hint.
-			if currentSource == "signal" && currentSenderName != "" && e.Contact == currentSenderName {
-				e.YouAreHere = true
+			// Match requesting channel by raw sender or resolved name.
+			if currentSource == "signal" && currentSenderName != "" {
+				if e.Sender == currentSenderName || e.Contact == currentSenderName {
+					e.YouAreHere = true
+				}
 			}
 		case "owu":
 			e.ConvID = l.Metadata["conversation_id"]

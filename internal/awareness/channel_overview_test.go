@@ -154,9 +154,14 @@ func TestChannelOverview_YouAreHere(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	const header = "### Channel Overview\n\n"
+	if !strings.HasPrefix(got, header) {
+		t.Fatalf("output missing expected header, got: %q", got)
+	}
 	var entries []channelEntry
-	jsonStr := strings.TrimPrefix(got, "### Channel Overview\n\n")
-	json.Unmarshal([]byte(strings.TrimSpace(jsonStr)), &entries)
+	if err := json.Unmarshal([]byte(strings.TrimSpace(strings.TrimPrefix(got, header))), &entries); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
 
 	if len(entries) != 1 {
 		t.Fatalf("expected 1 entry, got %d", len(entries))
@@ -186,9 +191,14 @@ func TestChannelOverview_NilPhoneResolver(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	const header = "### Channel Overview\n\n"
+	if !strings.HasPrefix(got, header) {
+		t.Fatalf("output missing expected header, got: %q", got)
+	}
 	var entries []channelEntry
-	jsonStr := strings.TrimPrefix(got, "### Channel Overview\n\n")
-	json.Unmarshal([]byte(strings.TrimSpace(jsonStr)), &entries)
+	if err := json.Unmarshal([]byte(strings.TrimSpace(strings.TrimPrefix(got, header))), &entries); err != nil {
+		t.Fatalf("invalid JSON: %v", err)
+	}
 
 	if len(entries) != 1 {
 		t.Fatalf("expected 1 entry, got %d", len(entries))
