@@ -1045,16 +1045,18 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// --- Forge integration ---
 	// Native GitHub (and future Gitea/GitLab) integration. Replaces the
 	// MCP github server with direct API calls via go-github.
-	var forgeContext string
+	var forgeMgr *forge.Manager
+	var forgeOpLog *forge.OperationLog
 	if cfg.Forge.Configured() {
-		forgeMgr, err := forge.NewManager(cfg.Forge, logger)
+		var err error
+		forgeMgr, err = forge.NewManager(cfg.Forge, logger)
 		if err != nil {
 			return fmt.Errorf("create forge manager: %w", err)
 		}
 
-		forgeTools := forge.NewTools(forgeMgr, logger)
+		forgeOpLog = forge.NewOperationLog()
+		forgeTools := forge.NewTools(forgeMgr, forgeOpLog, logger)
 		loop.Tools().SetForgeTools(forgeTools)
-		forgeContext = forgeMgr.Context()
 
 		logger.Info("forge enabled", "accounts", len(cfg.Forge.Accounts))
 	} else {
@@ -1756,8 +1758,8 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	if len(alwaysActiveTags) > 0 {
 		delegateExec.SetAlwaysActiveTags(alwaysActiveTags)
 	}
-	if forgeContext != "" {
-		delegateExec.SetForgeContext(forgeContext)
+	if forgeMgr != nil {
+		delegateExec.SetForgeContext(forgeMgr.Context())
 	}
 	if tfs := loop.Tools().TempFileStore(); tfs != nil {
 		delegateExec.SetTempFileStore(tfs)
@@ -1879,10 +1881,10 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		})
 
 		// Register forge as a tag context provider so its account
-		// config appears/disappears with the forge capability tag
-		// instead of being unconditionally injected.
-		if forgeContext != "" {
-			loop.RegisterTagContextProvider("forge", forge.NewContextProvider(forgeContext))
+		// config and recent operations appear/disappear with the
+		// forge capability tag.
+		if forgeMgr != nil {
+			loop.RegisterTagContextProvider("forge", forge.NewContextProvider(forgeMgr, forgeOpLog))
 		}
 
 		// Build manifest entries with enriched context info.

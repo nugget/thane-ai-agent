@@ -332,7 +332,7 @@ func TestResolveAccountAndRepo(t *testing.T) {
 			mp := &mockProvider{name: "test"}
 			tools := newTestTools(mp, tt.owner)
 
-			provider, repo, err := tools.resolveAccountAndRepo(tt.args)
+			provider, repo, _, err := tools.resolveAccountAndRepo(tt.args)
 			if tt.wantErr != "" {
 				if err == nil {
 					t.Fatalf("expected error containing %q, got nil", tt.wantErr)
