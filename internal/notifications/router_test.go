@@ -342,6 +342,154 @@ func TestSendActionable_NoRecordStore(t *testing.T) {
 	}
 }
 
+// mockActivitySource returns fixed channel activity.
+type mockActivitySource struct {
+	channels []ChannelActivity
+}
+
+func (m *mockActivitySource) ActiveChannels() []ChannelActivity { return m.channels }
+
+func TestRoute_ActiveChannelPreferred(t *testing.T) {
+	testID := uuid.New()
+	resolver := &mockContactResolver{
+		contact: &contacts.Contact{ID: testID, FormattedName: "nugget"},
+		props:   map[string][]string{"ha_companion_app": {"mobile_app_mcphone"}},
+	}
+	router, _ := newTestRouter(t, resolver)
+
+	haPush := &mockProvider{name: "ha_push"}
+	signal := &mockProvider{name: "signal"}
+	router.RegisterProvider(haPush)
+	router.RegisterProvider(signal)
+	router.SetActivitySource(&mockActivitySource{
+		channels: []ChannelActivity{
+			{Channel: "signal", Contact: "nugget", LastActive: time.Now()},
+		},
+	})
+
+	got, err := router.Route("nugget")
+	if err != nil {
+		t.Fatalf("Route() error = %v", err)
+	}
+	if got.Name() != "signal" {
+		t.Errorf("Route() = %q, want signal (active channel)", got.Name())
+	}
+}
+
+func TestRoute_PreferenceOverridesActivity(t *testing.T) {
+	testID := uuid.New()
+	resolver := &mockContactResolver{
+		contact: &contacts.Contact{ID: testID, FormattedName: "nugget"},
+		props: map[string][]string{
+			"ha_companion_app":        {"mobile_app_mcphone"},
+			"notification_preference": {"ha_push"},
+		},
+	}
+	router, _ := newTestRouter(t, resolver)
+
+	haPush := &mockProvider{name: "ha_push"}
+	signal := &mockProvider{name: "signal"}
+	router.RegisterProvider(haPush)
+	router.RegisterProvider(signal)
+	router.SetActivitySource(&mockActivitySource{
+		channels: []ChannelActivity{
+			{Channel: "signal", Contact: "nugget", LastActive: time.Now()},
+		},
+	})
+
+	got, err := router.Route("nugget")
+	if err != nil {
+		t.Fatalf("Route() error = %v", err)
+	}
+	if got.Name() != "ha_push" {
+		t.Errorf("Route() = %q, want ha_push (explicit preference)", got.Name())
+	}
+}
+
+func TestRoute_NoActivityFallsBackToStatic(t *testing.T) {
+	testID := uuid.New()
+	resolver := &mockContactResolver{
+		contact: &contacts.Contact{ID: testID, FormattedName: "nugget"},
+		props:   map[string][]string{"ha_companion_app": {"mobile_app_mcphone"}},
+	}
+	router, _ := newTestRouter(t, resolver)
+
+	haPush := &mockProvider{name: "ha_push"}
+	signal := &mockProvider{name: "signal"}
+	router.RegisterProvider(haPush)
+	router.RegisterProvider(signal)
+	router.SetActivitySource(&mockActivitySource{channels: nil}) // no activity
+
+	got, err := router.Route("nugget")
+	if err != nil {
+		t.Fatalf("Route() error = %v", err)
+	}
+	if got.Name() != "ha_push" {
+		t.Errorf("Route() = %q, want ha_push (static fallback)", got.Name())
+	}
+}
+
+func TestRoute_ActivityDifferentContact(t *testing.T) {
+	testID := uuid.New()
+	resolver := &mockContactResolver{
+		contact: &contacts.Contact{ID: testID, FormattedName: "nugget"},
+		props:   map[string][]string{"ha_companion_app": {"mobile_app_mcphone"}},
+	}
+	router, _ := newTestRouter(t, resolver)
+
+	haPush := &mockProvider{name: "ha_push"}
+	signal := &mockProvider{name: "signal"}
+	router.RegisterProvider(haPush)
+	router.RegisterProvider(signal)
+	router.SetActivitySource(&mockActivitySource{
+		channels: []ChannelActivity{
+			{Channel: "signal", Contact: "someone_else", LastActive: time.Now()},
+		},
+	})
+
+	got, err := router.Route("nugget")
+	if err != nil {
+		t.Fatalf("Route() error = %v", err)
+	}
+	// Activity is for a different contact — should not match.
+	if got.Name() != "ha_push" {
+		t.Errorf("Route() = %q, want ha_push (activity for different contact)", got.Name())
+	}
+}
+
+func TestSendActionable_FallbackOnUnsupported(t *testing.T) {
+	testID := uuid.New()
+	resolver := &mockContactResolver{
+		contact: &contacts.Contact{ID: testID, FormattedName: "nugget"},
+		props:   map[string][]string{"ha_companion_app": {"mobile_app_mcphone"}},
+	}
+	router, _ := newTestRouter(t, resolver)
+
+	// Signal is active but doesn't support actionable.
+	signal := &mockProvider{name: "signal", actionableErr: errors.New("not supported")}
+	haPush := &mockProvider{name: "ha_push"}
+	router.RegisterProvider(signal)
+	router.RegisterProvider(haPush)
+	router.SetActivitySource(&mockActivitySource{
+		channels: []ChannelActivity{
+			{Channel: "signal", Contact: "nugget", LastActive: time.Now()},
+		},
+	})
+
+	_, err := router.SendActionable(context.Background(), ActionableRequest{
+		NotificationRequest: NotificationRequest{Recipient: "nugget", Message: "Approve?"},
+		Actions:             []Action{{ID: "yes", Label: "Yes"}},
+		Timeout:             5 * time.Minute,
+	}, "session-1", "conv-1")
+	if err != nil {
+		t.Fatalf("SendActionable() should fall back to ha_push, got error: %v", err)
+	}
+	// ha_push should have received the call.
+	if len(haPush.actionableCalls) != 1 {
+		t.Errorf("ha_push actionable calls = %d, want 1", len(haPush.actionableCalls))
+	}
+}
+
 func TestRouter_Send_EscalationSender(t *testing.T) {
 	testID := uuid.New()
 	resolver := &mockContactResolver{

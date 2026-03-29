@@ -184,8 +184,22 @@ func (r *NotificationRouter) SendActionable(ctx context.Context, req ActionableR
 	req.RequestID = u.String()
 
 	// Deliver first — fail early before creating a tracking record.
+	// If the primary provider doesn't support actionable notifications
+	// (e.g., Signal), fall back to ha_push which has button support.
 	if err := provider.SendActionable(ctx, req); err != nil {
-		return "", err
+		if fallback, ok := r.providers["ha_push"]; ok && fallback.Name() != provider.Name() {
+			r.logger.Info("actionable notification fallback",
+				"primary", provider.Name(),
+				"fallback", "ha_push",
+				"reason", err.Error(),
+			)
+			if fbErr := fallback.SendActionable(ctx, req); fbErr != nil {
+				return "", fbErr
+			}
+			provider = fallback
+		} else {
+			return "", err
+		}
 	}
 
 	// Create tracking record.

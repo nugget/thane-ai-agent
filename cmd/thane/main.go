@@ -986,8 +986,8 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		notifRouter = notifications.NewNotificationRouter(contactStore, notifRecords, logger)
 		notifRouter.RegisterProvider(notifications.NewHAPushProvider(notifSender))
 		notifRouter.SetActivitySource(&channelActivityAdapter{
-			loops:  &channelLoopAdapter{registry: loopRegistry},
-			phones: &contactPhoneResolver{store: contactStore},
+			loops: &channelLoopAdapter{registry: loopRegistry},
+			store: contactStore,
 		})
 		loop.Tools().SetNotificationRouter(notifRouter)
 		logger.Info("notification router initialized", "providers", "ha_push")
@@ -3657,8 +3657,10 @@ type channelLoopAdapter struct {
 	registry *looppkg.Registry
 }
 
-// ChannelLoops returns loop snapshots for loops with category=channel
-// metadata, excluding parent loops (no sender/conversation_id).
+// ChannelLoops returns loop snapshots for all loops with
+// category=channel metadata (both parents and children). Consumers
+// that need only child loops should filter on channel-specific
+// identifiers (e.g., sender for signal, conversation_id for owu).
 func (a *channelLoopAdapter) ChannelLoops() []awareness.LoopSnapshot {
 	statuses := a.registry.Statuses()
 	var result []awareness.LoopSnapshot
@@ -3679,14 +3681,15 @@ func (a *channelLoopAdapter) ChannelLoops() []awareness.LoopSnapshot {
 }
 
 // channelActivityAdapter bridges [notifications.ChannelActivitySource]
-// to the loop registry, resolving phone numbers to contact names.
+// to the loop registry, resolving sender identities to contact names.
 type channelActivityAdapter struct {
-	loops  *channelLoopAdapter
-	phones *contactPhoneResolver
+	loops *channelLoopAdapter
+	store *contacts.Store
 }
 
-// ActiveChannels returns channel activity entries for all active
-// channel loops, resolving Signal phone numbers to contact names.
+// ActiveChannels returns channel activity entries for active channel
+// child loops, resolving Signal phone numbers to contact names via
+// both TEL and IMPP properties.
 func (a *channelActivityAdapter) ActiveChannels() []notifications.ChannelActivity {
 	loops := a.loops.ChannelLoops()
 	var result []notifications.ChannelActivity
@@ -3708,11 +3711,12 @@ func (a *channelActivityAdapter) ActiveChannels() []notifications.ChannelActivit
 			LastActive: l.LastWakeAt,
 		}
 
-		// Resolve contact name for Signal senders.
-		if subsystem == "signal" {
-			if sender := l.Metadata["sender"]; sender != "" && a.phones != nil {
-				if name, _, ok := a.phones.ResolvePhone(sender); ok {
-					entry.Contact = name
+		// Resolve contact name from channel-specific identifiers.
+		if a.store != nil {
+			switch subsystem {
+			case "signal":
+				if sender := l.Metadata["sender"]; sender != "" {
+					entry.Contact = resolveSignalContact(a.store, sender)
 				}
 			}
 		}
@@ -3720,4 +3724,18 @@ func (a *channelActivityAdapter) ActiveChannels() []notifications.ChannelActivit
 		result = append(result, entry)
 	}
 	return result
+}
+
+// resolveSignalContact resolves a phone number to a contact name by
+// checking TEL properties first, then IMPP with signal: prefix.
+func resolveSignalContact(store *contacts.Store, phone string) string {
+	// Try TEL property.
+	if matches, err := store.FindByPropertyExact("TEL", phone); err == nil && len(matches) > 0 {
+		return matches[0].FormattedName
+	}
+	// Try IMPP with signal: prefix.
+	if matches, err := store.FindByPropertyExact("IMPP", "signal:"+phone); err == nil && len(matches) > 0 {
+		return matches[0].FormattedName
+	}
+	return ""
 }

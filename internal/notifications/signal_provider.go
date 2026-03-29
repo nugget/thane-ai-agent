@@ -41,6 +41,12 @@ func (p *SignalProvider) Name() string { return "signal" }
 // recipient is resolved to a phone number via contact properties
 // (IMPP with signal: prefix, or TEL).
 func (p *SignalProvider) Send(ctx context.Context, req NotificationRequest) error {
+	if p.sender == nil {
+		return fmt.Errorf("signal provider: sender is nil")
+	}
+	if p.contacts == nil {
+		return fmt.Errorf("signal provider: contact resolver is nil")
+	}
 	phone, err := p.resolvePhone(req.Recipient)
 	if err != nil {
 		return err
@@ -87,14 +93,20 @@ func (p *SignalProvider) resolvePhone(recipient string) (string, error) {
 	if impp, ok := props["IMPP"]; ok {
 		for _, v := range impp {
 			if strings.HasPrefix(v, "signal:") {
-				return strings.TrimPrefix(v, "signal:"), nil
+				phone := strings.TrimSpace(strings.TrimPrefix(v, "signal:"))
+				if phone != "" {
+					return phone, nil
+				}
 			}
 		}
 	}
 
 	// Fall back to TEL property.
 	if tel, ok := props["TEL"]; ok && len(tel) > 0 {
-		return tel[0], nil
+		phone := strings.TrimSpace(tel[0])
+		if phone != "" {
+			return phone, nil
+		}
 	}
 
 	return "", fmt.Errorf("no phone number found for contact %q", recipient)
