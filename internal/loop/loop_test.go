@@ -1817,6 +1817,45 @@ func TestLLMContextInStatus(t *testing.T) {
 	}
 }
 
+func TestActiveTagsInStatus(t *testing.T) {
+	t.Parallel()
+
+	bus := events.New()
+	l, err := New(Config{
+		Name:    "active-tags-test",
+		Handler: func(context.Context, any) error { return nil },
+	}, Deps{EventBus: bus})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	// Without SetActiveTagsFunc, ActiveTags should be nil.
+	status := l.Status()
+	if status.ActiveTags != nil {
+		t.Errorf("ActiveTags should be nil without callback, got %v", status.ActiveTags)
+	}
+
+	// With a callback, ActiveTags should reflect the callback's return.
+	l.SetActiveTagsFunc(func() []string {
+		return []string{"forge", "memory"}
+	})
+
+	status = l.Status()
+	if len(status.ActiveTags) != 2 {
+		t.Fatalf("ActiveTags length = %d, want 2", len(status.ActiveTags))
+	}
+	if status.ActiveTags[0] != "forge" || status.ActiveTags[1] != "memory" {
+		t.Errorf("ActiveTags = %v, want [forge memory]", status.ActiveTags)
+	}
+
+	// Callback returning nil should result in nil ActiveTags.
+	l.SetActiveTagsFunc(func() []string { return nil })
+	status = l.Status()
+	if status.ActiveTags != nil {
+		t.Errorf("ActiveTags should be nil when callback returns nil, got %v", status.ActiveTags)
+	}
+}
+
 // --- Initial sleep tests ---
 
 func TestTimerLoopInitialSleep(t *testing.T) {

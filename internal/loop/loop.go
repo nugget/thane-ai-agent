@@ -154,6 +154,11 @@ type Loop struct {
 	// in Status() so late-connecting dashboard clients see it.
 	llmContext map[string]any
 
+	// activeTagsFunc is an optional callback that returns the currently
+	// active capability tags. When set, Status() includes the result
+	// in ActiveTags so the dashboard can display dynamic capabilities.
+	activeTagsFunc func() []string
+
 	// nextSleep can be set externally (e.g., by a set_next_sleep
 	// tool handler) to override the default sleep for one cycle.
 	nextSleep time.Duration
@@ -284,7 +289,10 @@ func (l *Loop) Done() <-chan struct{} {
 // via the snapshot.
 func (l *Loop) Status() Status {
 	l.mu.Lock()
-	defer l.mu.Unlock()
+
+	// Capture the callback reference under the lock; call it after
+	// releasing to avoid holding l.mu while the agent's tagMu is acquired.
+	atFunc := l.activeTagsFunc
 
 	// Deep copy Config to prevent callers from mutating internal state
 	// via shared slices/maps. Function fields are cleared — they can't
@@ -355,7 +363,7 @@ func (l *Loop) Status() Status {
 		}
 	}
 
-	return Status{
+	s := Status{
 		ID:                 l.id,
 		Name:               l.config.Name,
 		State:              l.state,
@@ -379,6 +387,15 @@ func (l *Loop) Status() Status {
 		EventDriven:        l.config.WaitFunc != nil,
 		Config:             cfgCopy,
 	}
+	l.mu.Unlock()
+
+	// Call the active tags callback outside the lock to avoid
+	// lock-ordering issues with the agent loop's tagMu.
+	if atFunc != nil {
+		s.ActiveTags = atFunc()
+	}
+
+	return s
 }
 
 // SetNextSleep sets the sleep duration for the next cycle. This is
@@ -387,6 +404,15 @@ func (l *Loop) Status() Status {
 func (l *Loop) SetNextSleep(d time.Duration) {
 	l.mu.Lock()
 	l.nextSleep = d
+	l.mu.Unlock()
+}
+
+// SetActiveTagsFunc configures an optional callback that returns the
+// currently active capability tags. When set, [Status] includes the
+// result so the dashboard can display dynamically activated capabilities.
+func (l *Loop) SetActiveTagsFunc(fn func() []string) {
+	l.mu.Lock()
+	l.activeTagsFunc = fn
 	l.mu.Unlock()
 }
 

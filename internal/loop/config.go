@@ -365,6 +365,9 @@ type Status struct {
 	// is in processing state, so late-connecting dashboard clients
 	// can display it immediately.
 	LLMContext map[string]any `json:"llm_context,omitempty"`
+	// ActiveTags holds the currently active capability tags at the time
+	// of the snapshot. Nil when capability tagging is not configured.
+	ActiveTags []string `json:"active_tags,omitempty"`
 	// Config is a copy of the loop's configuration.
 	Config Config `json:"config"`
 }

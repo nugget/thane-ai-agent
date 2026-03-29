@@ -783,8 +783,17 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
   border-radius: 3px;
   padding: 0.1em 0.4em;
 }
+.tag-chip--active {
+  border-color: var(--accent);
+  color: var(--text-primary);
+}
 .tag-chip--muted {
   opacity: 0.5;
+}
+.tag-chip--dynamic {
+  border-color: var(--accent);
+  color: var(--text-primary);
+  border-style: dashed;
 }
 
 /* === Section Title === */

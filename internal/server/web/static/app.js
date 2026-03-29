@@ -1307,16 +1307,24 @@ function renderDetail() {
   // Iteration timeline.
   renderTimeline(loop, $('#detail-timeline'), state.iterationHistory.get(loop.id) || [], loop.id, state.sleepTimers);
 
-  // Capabilities (tags from config).
-  const tags = (loop.config && loop.config.Tags) || [];
+  // Capabilities: show configured tags (muted if inactive) and
+  // dynamically activated tags (dashed border if not in config).
+  const configTags = (loop.config && loop.config.Tags) || [];
+  const activeTags = new Set(loop.active_tags || []);
+  const allTags = new Set([...configTags, ...activeTags]);
   const tagsSection = $('#detail-tags');
   const tagsList = $('#detail-tags-list');
-  if (tags.length > 0) {
+  if (allTags.size > 0) {
     tagsSection.hidden = false;
     tagsList.innerHTML = '';
-    for (const tag of tags) {
+    for (const tag of [...allTags].sort()) {
       const chip = document.createElement('span');
-      chip.className = 'tag-chip';
+      const inConfig = configTags.includes(tag);
+      const isActive = activeTags.has(tag);
+      chip.className = 'tag-chip'
+        + (isActive && inConfig ? ' tag-chip--active' : '')
+        + (!isActive && inConfig ? ' tag-chip--muted' : '')
+        + (isActive && !inConfig ? ' tag-chip--dynamic' : '');
       chip.textContent = tag;
       tagsList.appendChild(chip);
     }
