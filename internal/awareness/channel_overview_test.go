@@ -94,8 +94,8 @@ func TestChannelOverview_SignalAndOWU(t *testing.T) {
 	if sig.State != "waiting" {
 		t.Errorf("entry[0].state = %q, want waiting", sig.State)
 	}
-	if sig.LastActivity != "2m ago" {
-		t.Errorf("entry[0].last_activity = %q, want 2m ago", sig.LastActivity)
+	if sig.LastActivity != "-120s" {
+		t.Errorf("entry[0].last_activity = %q, want -120s", sig.LastActivity)
 	}
 	if sig.ConvID != "signal-15551234567" {
 		t.Errorf("entry[0].conv_id = %q, want signal-15551234567", sig.ConvID)
@@ -198,26 +198,5 @@ func TestChannelOverview_NilPhoneResolver(t *testing.T) {
 	}
 	if entries[0].Sender != "+15559999999" {
 		t.Errorf("sender should still be set: got %q", entries[0].Sender)
-	}
-}
-
-func TestFormatActivityDelta(t *testing.T) {
-	t.Parallel()
-	now := time.Date(2026, 3, 29, 15, 0, 0, 0, time.UTC)
-	tests := []struct {
-		delta time.Duration
-		want  string
-	}{
-		{30 * time.Second, "just now"},
-		{5 * time.Minute, "5m ago"},
-		{90 * time.Minute, "1h30m ago"},
-		{3 * time.Hour, "3h ago"},
-		{26 * time.Hour, "1d ago"},
-	}
-	for _, tt := range tests {
-		got := formatActivityDelta(now, now.Add(-tt.delta))
-		if got != tt.want {
-			t.Errorf("formatActivityDelta(-%v) = %q, want %q", tt.delta, got, tt.want)
-		}
 	}
 }

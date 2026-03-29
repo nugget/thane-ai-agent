@@ -3,7 +3,6 @@ package awareness
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log/slog"
 	"strings"
 	"time"
@@ -153,9 +152,9 @@ func (p *ChannelOverviewProvider) GetContext(ctx context.Context, _ string) (str
 			e.ConvID = l.Metadata["conversation_id"]
 		}
 
-		// Human-readable activity delta.
+		// Exact-second delta per issue #458.
 		if !l.LastWakeAt.IsZero() {
-			e.LastActivity = formatActivityDelta(now, l.LastWakeAt)
+			e.LastActivity = FormatDeltaOnly(l.LastWakeAt, now)
 		}
 
 		entries = append(entries, e)
@@ -172,27 +171,6 @@ func (p *ChannelOverviewProvider) GetContext(ctx context.Context, _ string) (str
 	}
 
 	return "### Channel Overview\n\n" + string(data) + "\n", nil
-}
-
-// formatActivityDelta returns a human-readable time delta like "2m ago"
-// or "4h ago".
-func formatActivityDelta(now, t time.Time) string {
-	d := now.Sub(t)
-	switch {
-	case d < time.Minute:
-		return "just now"
-	case d < time.Hour:
-		return fmt.Sprintf("%dm ago", int(d.Minutes()))
-	case d < 24*time.Hour:
-		h := int(d.Hours())
-		m := int(d.Minutes()) % 60
-		if m > 0 {
-			return fmt.Sprintf("%dh%dm ago", h, m)
-		}
-		return fmt.Sprintf("%dh ago", h)
-	default:
-		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
-	}
 }
 
 // shortID returns the first 8 characters of an ID for compact display.
