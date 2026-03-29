@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/agent"
+	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
 	"github.com/nugget/thane-ai-agent/internal/media"
 	"github.com/nugget/thane-ai-agent/internal/prompts"
 	"github.com/nugget/thane-ai-agent/internal/router"
@@ -48,6 +49,10 @@ func mediaFeedHandler(poller *media.FeedPoller, runner agentRunner, logger *slog
 		}, nil)
 		if err != nil {
 			return fmt.Errorf("agent dispatch: %w", err)
+		}
+
+		if summary := looppkg.IterationSummary(ctx); summary != nil && resp != nil {
+			summary["request_id"] = resp.RequestID
 		}
 
 		logger.Info("media feed analysis complete",

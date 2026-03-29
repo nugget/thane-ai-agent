@@ -8,6 +8,7 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/agent"
 	"github.com/nugget/thane-ai-agent/internal/channels/email"
+	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
 	"github.com/nugget/thane-ai-agent/internal/prompts"
 	"github.com/nugget/thane-ai-agent/internal/router"
 )
@@ -48,6 +49,10 @@ func emailPollHandler(poller *email.Poller, runner agentRunner, logger *slog.Log
 		}, nil)
 		if err != nil {
 			return fmt.Errorf("agent dispatch: %w", err)
+		}
+
+		if summary := looppkg.IterationSummary(ctx); summary != nil && resp != nil {
+			summary["request_id"] = resp.RequestID
 		}
 
 		logger.Info("email triage complete",

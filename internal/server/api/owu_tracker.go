@@ -165,6 +165,12 @@ func (t *OWUTracker) ensureConvLoop(_ context.Context, convID, displayName strin
 			combined := fanOutStream(w.callback, buildAgentStream(progressFn))
 			resp, err := t.runner.Run(runCtx, w.req, combined)
 			w.respCh <- owuResult{resp: resp, err: err}
+			// Report request ID for dashboard request-detail linking.
+			if resp != nil {
+				if summary := loop.IterationSummary(hCtx); summary != nil {
+					summary["request_id"] = resp.RequestID
+				}
+			}
 			return err
 		},
 		ParentID: parentID,

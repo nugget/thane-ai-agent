@@ -686,6 +686,7 @@ func (b *Bridge) handleMessage(ctx context.Context, env *Envelope, progressFn fu
 
 	// Report iteration stats for the loop dashboard.
 	if summary := loop.IterationSummary(ctx); summary != nil {
+		summary["request_id"] = resp.RequestID
 		summary["message_len"] = len(content)
 		summary["response_len"] = len(resp.Content)
 		summary["model"] = resp.Model

@@ -54,6 +54,7 @@ type RunResponse struct {
 	OutputTokens  int
 	ContextWindow int
 	ToolsUsed     map[string]int
+	RequestID     string
 }
 
 // StreamCallback receives streaming events. Nil disables streaming.
@@ -651,6 +652,14 @@ func (l *Loop) run(ctx context.Context) {
 					Elapsed:    time.Since(iterStart),
 				}
 			}
+			// Extract request_id from summary if the handler reported
+			// one (e.g., signal/OWU handlers that call agent.Run).
+			if rid, ok := summary["request_id"].(string); ok && rid != "" {
+				if result != nil {
+					result.RequestID = rid
+				}
+				delete(summary, "request_id")
+			}
 			if len(summary) > 0 {
 				handlerSummary = summary
 			}
@@ -748,6 +757,7 @@ func (l *Loop) run(ctx context.Context) {
 				l.mu.Unlock()
 
 				snap.Model = result.Model
+				snap.RequestID = result.RequestID
 				snap.InputTokens = result.InputTokens
 				snap.OutputTokens = result.OutputTokens
 				snap.ContextWindow = result.ContextWindow
@@ -774,6 +784,7 @@ func (l *Loop) run(ctx context.Context) {
 					"loop_id":         l.id,
 					"loop_name":       l.config.Name,
 					"model":           result.Model,
+					"request_id":      result.RequestID,
 					"input_tokens":    result.InputTokens,
 					"output_tokens":   result.OutputTokens,
 					"context_window":  result.ContextWindow,
@@ -989,6 +1000,7 @@ func (l *Loop) iterate(ctx context.Context, isSupervisor bool, convID string) (*
 		OutputTokens:  resp.OutputTokens,
 		ContextWindow: resp.ContextWindow,
 		ToolsUsed:     resp.ToolsUsed,
+		RequestID:     resp.RequestID,
 		Elapsed:       time.Since(iterStart),
 		Supervisor:    isSupervisor,
 	}, nil
