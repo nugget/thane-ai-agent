@@ -117,5 +117,6 @@ func (a *loopAdapter) Run(ctx context.Context, req loop.RunRequest, _ loop.Strea
 		OutputTokens:  resp.OutputTokens,
 		ContextWindow: ctxWindow,
 		ToolsUsed:     resp.ToolsUsed,
+		RequestID:     resp.RequestID,
 	}, nil
 }

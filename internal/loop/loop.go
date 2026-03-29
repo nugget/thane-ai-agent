@@ -54,6 +54,7 @@ type RunResponse struct {
 	OutputTokens  int
 	ContextWindow int
 	ToolsUsed     map[string]int
+	RequestID     string
 }
 
 // StreamCallback receives streaming events. Nil disables streaming.
@@ -153,6 +154,11 @@ type Loop struct {
 	// during processing, cleared when the iteration ends. Included
 	// in Status() so late-connecting dashboard clients see it.
 	llmContext map[string]any
+
+	// activeTagsFunc is an optional callback that returns the currently
+	// active capability tags. When set, Status() includes the result
+	// in ActiveTags so the dashboard can display dynamic capabilities.
+	activeTagsFunc func() []string
 
 	// nextSleep can be set externally (e.g., by a set_next_sleep
 	// tool handler) to override the default sleep for one cycle.
@@ -284,7 +290,10 @@ func (l *Loop) Done() <-chan struct{} {
 // via the snapshot.
 func (l *Loop) Status() Status {
 	l.mu.Lock()
-	defer l.mu.Unlock()
+
+	// Capture the callback reference under the lock; call it after
+	// releasing to avoid holding l.mu while the agent's tagMu is acquired.
+	atFunc := l.activeTagsFunc
 
 	// Deep copy Config to prevent callers from mutating internal state
 	// via shared slices/maps. Function fields are cleared — they can't
@@ -355,7 +364,7 @@ func (l *Loop) Status() Status {
 		}
 	}
 
-	return Status{
+	s := Status{
 		ID:                 l.id,
 		Name:               l.config.Name,
 		State:              l.state,
@@ -379,6 +388,20 @@ func (l *Loop) Status() Status {
 		EventDriven:        l.config.WaitFunc != nil,
 		Config:             cfgCopy,
 	}
+	l.mu.Unlock()
+
+	// Call the active tags callback outside the lock to avoid
+	// lock-ordering issues with the agent loop's tagMu.
+	// Deep-copy the result so callers can't mutate internal state.
+	if atFunc != nil {
+		if tags := atFunc(); len(tags) > 0 {
+			cp := make([]string, len(tags))
+			copy(cp, tags)
+			s.ActiveTags = cp
+		}
+	}
+
+	return s
 }
 
 // SetNextSleep sets the sleep duration for the next cycle. This is
@@ -387,6 +410,15 @@ func (l *Loop) Status() Status {
 func (l *Loop) SetNextSleep(d time.Duration) {
 	l.mu.Lock()
 	l.nextSleep = d
+	l.mu.Unlock()
+}
+
+// SetActiveTagsFunc configures an optional callback that returns the
+// currently active capability tags. When set, [Status] includes the
+// result so the dashboard can display dynamically activated capabilities.
+func (l *Loop) SetActiveTagsFunc(fn func() []string) {
+	l.mu.Lock()
+	l.activeTagsFunc = fn
 	l.mu.Unlock()
 }
 
@@ -589,6 +621,23 @@ func (l *Loop) run(ctx context.Context) {
 		var err error
 		var handlerSummary map[string]any
 		var noOp bool
+		// Transition to processing and emit iteration_start before
+		// dispatching work so the dashboard sees activity immediately.
+		l.setState(StateProcessing)
+		l.publishEvent(events.Event{
+			Timestamp: time.Now(),
+			Source:    events.SourceLoop,
+			Kind:      events.KindLoopIterationStart,
+			Data: map[string]any{
+				"loop_id":         l.id,
+				"loop_name":       l.config.Name,
+				"conversation_id": convID,
+				"supervisor":      isSupervisor,
+				"attempt":         attemptCount + 1,
+			},
+		})
+		iterLog.Info("loop iteration starting")
+
 		if l.config.Handler != nil {
 			iterStart := time.Now()
 			summary := make(map[string]any)
@@ -608,13 +657,33 @@ func (l *Loop) run(ctx context.Context) {
 					Elapsed:    time.Since(iterStart),
 				}
 			}
+			// Extract request_id from summary if the handler reported
+			// one (e.g., signal/OWU handlers that call agent.Run).
+			// Only remove from summary when successfully copied to
+			// result; on error (result == nil) keep it in summary
+			// so it's available in the error snapshot for debugging.
+			if rid, ok := summary["request_id"].(string); ok && rid != "" && result != nil {
+				result.RequestID = rid
+				delete(summary, "request_id")
+			}
 			if len(summary) > 0 {
 				handlerSummary = summary
 			}
+			// Commit bookkeeping only when the handler did real work.
+			// No-op iterations (e.g. pollers with nothing new) skip
+			// this to keep the dashboard activity indicator quiet.
+			if !noOp {
+				l.mu.Lock()
+				l.lastWakeAt = iterStartTime
+				l.attempts++
+				l.recentConvIDs = append([]string{convID}, l.recentConvIDs...)
+				if len(l.recentConvIDs) > recentConvIDsCap {
+					l.recentConvIDs = l.recentConvIDs[:recentConvIDsCap]
+				}
+				l.mu.Unlock()
+			}
 		} else {
-			// LLM-based loops always do meaningful work; commit
-			// bookkeeping and transition to processing state.
-			l.setState(StateProcessing)
+			// LLM-based loops always do meaningful work.
 			l.mu.Lock()
 			l.lastWakeAt = iterStartTime
 			l.attempts++
@@ -623,19 +692,6 @@ func (l *Loop) run(ctx context.Context) {
 				l.recentConvIDs = l.recentConvIDs[:recentConvIDsCap]
 			}
 			l.mu.Unlock()
-			l.publishEvent(events.Event{
-				Timestamp: time.Now(),
-				Source:    events.SourceLoop,
-				Kind:      events.KindLoopIterationStart,
-				Data: map[string]any{
-					"loop_id":         l.id,
-					"loop_name":       l.config.Name,
-					"conversation_id": convID,
-					"supervisor":      isSupervisor,
-					"attempt":         attemptCount + 1,
-				},
-			})
-			iterLog.Info("loop iteration starting")
 			result, err = l.iterate(iterCtx, isSupervisor, convID)
 		}
 
@@ -647,35 +703,20 @@ func (l *Loop) run(ctx context.Context) {
 
 		if noOp {
 			iterLog.Debug("handler returned no-op, skipping iteration accounting")
-		}
-
-		// For handler-based loops, only commit the iteration to
-		// bookkeeping and the event stream when real work occurred.
-		// This keeps the dashboard activity indicator quiet on
-		// filtered-only batches. See [ErrNoOp].
-		if l.config.Handler != nil && !noOp {
-			l.setState(StateProcessing)
-			l.mu.Lock()
-			l.lastWakeAt = iterStartTime
-			l.attempts++
-			l.recentConvIDs = append([]string{convID}, l.recentConvIDs...)
-			if len(l.recentConvIDs) > recentConvIDsCap {
-				l.recentConvIDs = l.recentConvIDs[:recentConvIDsCap]
-			}
-			l.mu.Unlock()
+			// Emit a zero-token iteration_complete so the dashboard
+			// sees a balanced start→complete pair for every wake.
 			l.publishEvent(events.Event{
 				Timestamp: time.Now(),
 				Source:    events.SourceLoop,
-				Kind:      events.KindLoopIterationStart,
+				Kind:      events.KindLoopIterationComplete,
 				Data: map[string]any{
 					"loop_id":         l.id,
 					"loop_name":       l.config.Name,
 					"conversation_id": convID,
-					"supervisor":      isSupervisor,
-					"attempt":         attemptCount + 1,
+					"no_op":           true,
+					"elapsed_ms":      time.Since(iterStartTime).Milliseconds(),
 				},
 			})
-			iterLog.Info("loop iteration starting")
 		}
 
 		// Compute sleep unconditionally so timer-driven loops still
@@ -736,6 +777,7 @@ func (l *Loop) run(ctx context.Context) {
 				l.mu.Unlock()
 
 				snap.Model = result.Model
+				snap.RequestID = result.RequestID
 				snap.InputTokens = result.InputTokens
 				snap.OutputTokens = result.OutputTokens
 				snap.ContextWindow = result.ContextWindow
@@ -762,6 +804,7 @@ func (l *Loop) run(ctx context.Context) {
 					"loop_id":         l.id,
 					"loop_name":       l.config.Name,
 					"model":           result.Model,
+					"request_id":      result.RequestID,
 					"input_tokens":    result.InputTokens,
 					"output_tokens":   result.OutputTokens,
 					"context_window":  result.ContextWindow,
@@ -977,6 +1020,7 @@ func (l *Loop) iterate(ctx context.Context, isSupervisor bool, convID string) (*
 		OutputTokens:  resp.OutputTokens,
 		ContextWindow: resp.ContextWindow,
 		ToolsUsed:     resp.ToolsUsed,
+		RequestID:     resp.RequestID,
 		Elapsed:       time.Since(iterStart),
 		Supervisor:    isSupervisor,
 	}, nil

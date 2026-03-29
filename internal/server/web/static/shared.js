@@ -207,10 +207,11 @@ function makeIDRow(label, value) {
 function makeIDChip(fullID) {
   const chip = document.createElement('span');
   chip.className = 'id-chip';
-  chip.title = 'Click to copy: ' + fullID;
+  chip.title = fullID;
   const txt = document.createElement('span');
   txt.className = 'id-chip-text';
-  txt.textContent = fullID;
+  // Show first 8 chars (UUID first segment) — full value on hover/click.
+  txt.textContent = fullID.length > 12 ? fullID.slice(0, 8) : fullID;
   chip.appendChild(txt);
   chip.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -564,6 +565,24 @@ function buildPastCard(snap, handlerOnly, idx, startExpanded) {
     body.appendChild(tokens);
   }
 
+  // Request detail link (when content retention is enabled and the
+  // request ID is available). Clicking opens the request detail panel.
+  if (snap.request_id && typeof window.onRequestChipClick === 'function') {
+    const reqChip = document.createElement('span');
+    reqChip.className = 'log-id-chip log-id-chip--clickable';
+    reqChip.textContent = 'req:' + shortID(snap.request_id);
+    reqChip.title = 'Click to inspect request\n' + snap.request_id;
+    reqChip.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (e.shiftKey) {
+        navigator.clipboard.writeText(snap.request_id);
+        return;
+      }
+      window.onRequestChipClick(snap.request_id);
+    });
+    body.appendChild(reqChip);
+  }
+
   // Tool chips.
   const toolsUsed = snap.tools_used;
   if (toolsUsed && Object.keys(toolsUsed).length > 0) {
@@ -785,6 +804,7 @@ function applyLoopEventToLoop(evt, ctx) {
       const snap = {
         number: loop.iterations,
         conv_id: d.conversation_id || loop._currentConvID || '',
+        request_id: d.request_id || '',
         model: d.model || '',
         input_tokens: d.input_tokens || 0,
         output_tokens: d.output_tokens || 0,
@@ -817,6 +837,11 @@ function applyLoopEventToLoop(evt, ctx) {
             break;
           }
         }
+      }
+      // Signal that active capabilities may have changed so the
+      // caller can refetch loop status for updated active_tags.
+      if (d.tool === 'request_capability' || d.tool === 'drop_capability') {
+        return { capabilityChanged: true };
       }
       return null;
 

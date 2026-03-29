@@ -248,6 +248,8 @@ func (c *Config) validate() error {
 type IterationResult struct {
 	// ConvID is the conversation ID for this iteration.
 	ConvID string
+	// RequestID is the agent-generated request ID for this iteration.
+	RequestID string
 	// Model is the LLM model used for this iteration.
 	Model string
 	// InputTokens is the number of input tokens consumed.
@@ -274,6 +276,9 @@ type IterationSnapshot struct {
 	Number int `json:"number"`
 	// ConvID is the conversation ID used for this iteration.
 	ConvID string `json:"conv_id,omitempty"`
+	// RequestID is the agent-generated request ID, linking to
+	// log_request_content for prompt/response inspection.
+	RequestID string `json:"request_id,omitempty"`
 	// Model is the LLM model used.
 	Model string `json:"model,omitempty"`
 	// InputTokens consumed by this iteration.
@@ -365,6 +370,9 @@ type Status struct {
 	// is in processing state, so late-connecting dashboard clients
 	// can display it immediately.
 	LLMContext map[string]any `json:"llm_context,omitempty"`
+	// ActiveTags holds the currently active capability tags at the time
+	// of the snapshot. Nil when capability tagging is not configured.
+	ActiveTags []string `json:"active_tags,omitempty"`
 	// Config is a copy of the loop's configuration.
 	Config Config `json:"config"`
 }

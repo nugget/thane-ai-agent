@@ -34,12 +34,16 @@
         <p>Select a loop to inspect</p>
       </div>
       <div id="detail-content" class="detail-content" hidden>
-        <div class="detail-header">
-          <h2 id="detail-name" class="detail-name"></h2>
-          <span id="detail-state" class="state-badge"></span>
+        <div class="detail-card">
+          <div class="detail-header">
+            <h2 id="detail-name" class="detail-name"></h2>
+            <span id="detail-state" class="state-badge"></span>
+          </div>
+          <div id="detail-ids" class="detail-ids"></div>
+          <div id="detail-tags" class="detail-tags" hidden>
+            <div id="detail-tags-list" class="tag-list"></div>
+          </div>
         </div>
-
-        <div id="detail-ids" class="detail-ids"></div>
 
         <!-- Delegate call arguments (only shown for delegate nodes) -->
         <div id="detail-delegate" class="detail-delegate" hidden></div>
@@ -49,11 +53,6 @@
 
         <!-- Iteration timeline (JS-populated) -->
         <div id="detail-timeline" class="iter-timeline"></div>
-
-        <div id="detail-tags" class="detail-tags" hidden>
-          <h3 class="section-title">Capabilities</h3>
-          <div id="detail-tags-list" class="tag-list"></div>
-        </div>
       </div>
       <div id="request-detail" class="detail-content" hidden>
         <div class="detail-header">

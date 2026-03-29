@@ -177,9 +177,9 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
 /* === ID Chips === */
 .detail-ids {
   display: flex;
-  flex-direction: column;
-  gap: 0.3rem;
-  margin-bottom: 0.75rem;
+  flex-wrap: wrap;
+  gap: 0.2rem 0.5rem;
+  margin-bottom: 0.5rem;
   min-width: 0;
 }
 
@@ -236,24 +236,22 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
 }
 
 .id-row {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 0.35rem;
-  font-size: 0.7rem;
+  gap: 0.25rem;
+  font-size: 0.65rem;
   min-width: 0;
 }
 
 .id-label {
   color: var(--text-muted);
   flex-shrink: 0;
-  min-width: 5.5em;
 }
 
 .id-chip {
   display: inline-flex;
   align-items: center;
   gap: 0.25rem;
-  flex: 1;
   min-width: 0;
   font-family: var(--font-mono);
   font-size: 0.65rem;
@@ -322,11 +320,20 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
   content: '';
 }
 
+/* Header card — groups name, state, IDs, and capabilities */
+.detail-card {
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.6rem 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
 .detail-header {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  margin-bottom: 0.75rem;
+  margin-bottom: 0.35rem;
 }
 
 .detail-header .state-badge { margin-left: auto; }
@@ -767,24 +774,32 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
 }
 
 /* === Capability Tags === */
-.detail-tags { margin-bottom: 0.75rem; }
+.detail-tags { margin-top: 0.35rem; }
 .tag-list {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.3rem;
+  gap: 0.25rem;
 }
 .tag-chip {
   display: inline-block;
-  font-size: 0.65rem;
+  font-size: 0.6rem;
   font-family: var(--font-mono);
-  background: var(--bg-tertiary);
-  color: var(--text-secondary);
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  padding: 0.1em 0.4em;
+  background: transparent;
+  color: var(--text-muted);
+  border-radius: 9px;
+  padding: 0.1em 0.5em;
+}
+.tag-chip--active {
+  background: var(--accent-dim);
+  color: var(--accent);
 }
 .tag-chip--muted {
-  opacity: 0.5;
+  opacity: 0.4;
+}
+.tag-chip--dynamic {
+  background: var(--accent-dim);
+  color: var(--accent);
+  border: 1px dashed rgba(45, 212, 191, 0.35);
 }
 
 /* === Section Title === */

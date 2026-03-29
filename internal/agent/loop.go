@@ -636,6 +636,22 @@ func (l *Loop) buildSystemPrompt(ctx context.Context, userMessage string, histor
 		}
 	}
 
+	// 3c. Active capabilities — compact list of currently loaded tags.
+	// The full catalog (descriptions, tool counts, context sources) is
+	// in the capability manifest talent; this just shows current state.
+	if len(tags) > 0 {
+		mark("ACTIVE CAPABILITIES")
+		sorted := make([]string, 0, len(tags))
+		for t := range tags {
+			sorted = append(sorted, t)
+		}
+		sort.Strings(sorted)
+		sb.WriteString("\n\nActive capabilities: ")
+		sb.WriteString(strings.Join(sorted, ", "))
+		sb.WriteString("\n")
+		seal()
+	}
+
 	// 4. Current Conditions (environment — where/when am I)
 	// Placed early because models attend more strongly to content near
 	// the beginning. Uses H1 heading to signal operational importance.

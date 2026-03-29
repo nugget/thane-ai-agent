@@ -29,6 +29,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -1951,6 +1952,22 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		loop.SetCapabilityTags(cfg.CapabilityTags, parsedTalents)
 		loop.Tools().SetCapabilityTools(loop, manifest)
 		loop.SetTagContextAssembler(tagCtxAssembler)
+
+		// Expose the agent loop's active tags to every process loop
+		// spawned through the registry so the dashboard can display
+		// dynamically activated capabilities.
+		loopRegistry.SetDefaultActiveTagsFunc(func() []string {
+			tags := loop.ActiveTags()
+			if tags == nil {
+				return nil
+			}
+			result := make([]string, 0, len(tags))
+			for t := range tags {
+				result = append(result, t)
+			}
+			sort.Strings(result)
+			return result
+		})
 
 		// Wire tag context into delegates. The closure captures both the
 		// assembler and the loop so delegates always see the latest

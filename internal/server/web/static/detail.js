@@ -236,6 +236,27 @@ function applyLoopEvent(evt) {
       iterationHistory.length = MAX_ITERATION_HISTORY;
     }
   }
+
+  // Capability tools change active_tags — refetch to update chips.
+  if (result && result.capabilityChanged) {
+    refreshActiveTags();
+  }
+}
+
+// refreshActiveTags fetches current loop status and updates
+// the active_tags field so capability chips reflect changes
+// from request_capability / drop_capability tool calls.
+async function refreshActiveTags() {
+  try {
+    const resp = await fetch('/api/loops');
+    if (!resp.ok) return;
+    const statuses = await resp.json();
+    const match = statuses.find(s => s.id === nodeId);
+    if (match && loopData) {
+      loopData.active_tags = match.active_tags || null;
+      renderLoopDetail();
+    }
+  } catch (_) { /* best-effort */ }
 }
 
 function renderLoopDetail() {
@@ -261,16 +282,24 @@ function renderLoopDetail() {
   // Iteration timeline.
   renderTimeline(loopData, $('#detail-timeline'), iterationHistory, nodeId, sleepTimers);
 
-  // Capabilities (tags from config).
-  const tags = (loopData.config && loopData.config.Tags) || [];
+  // Capabilities: show configured tags (muted if inactive) and
+  // dynamically activated tags (dashed border if not in config).
+  const configTags = (loopData.config && loopData.config.Tags) || [];
+  const activeTags = new Set(loopData.active_tags || []);
+  const allTags = new Set([...configTags, ...activeTags]);
   const tagsSection = $('#detail-tags');
   const tagsList = $('#detail-tags-list');
-  if (tags.length > 0) {
+  if (allTags.size > 0) {
     tagsSection.hidden = false;
     tagsList.innerHTML = '';
-    for (const tag of tags) {
+    for (const tag of [...allTags].sort()) {
       const chip = document.createElement('span');
-      chip.className = 'tag-chip';
+      const inConfig = configTags.includes(tag);
+      const isActive = activeTags.has(tag);
+      chip.className = 'tag-chip'
+        + (isActive && inConfig ? ' tag-chip--active' : '')
+        + (!isActive && inConfig ? ' tag-chip--muted' : '')
+        + (isActive && !inConfig ? ' tag-chip--dynamic' : '');
       chip.textContent = tag;
       tagsList.appendChild(chip);
     }
