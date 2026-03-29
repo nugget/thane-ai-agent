@@ -387,12 +387,14 @@ func TestHandleIssueGet(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
+		// Verify JSON structure with key fields.
 		wantParts := []string{
-			"Issue #42: Bug report",
-			"State: open | Author: alice |",
-			"comments",
-			"Labels: bug, urgent",
-			"Assignees: bob",
+			`"number":42`,
+			`"title":"Bug report"`,
+			`"state":"open"`,
+			`"author":"alice"`,
+			`"labels":["bug","urgent"]`,
+			`"assignees":["bob"]`,
 			"Something is broken",
 		}
 		for _, part := range wantParts {
@@ -400,13 +402,17 @@ func TestHandleIssueGet(t *testing.T) {
 				t.Errorf("output missing %q\ngot: %s", part, got)
 			}
 		}
-		// Verify delta format: past dates should contain "(-" and "s)".
-		if !strings.Contains(got, "(-") || !strings.Contains(got, "s)") {
+		// Verify delta format: past dates should contain "-" and "s" (e.g. "-86400s").
+		if !strings.Contains(got, `"created":"-`) || !strings.Contains(got, `"updated":"-`) {
 			t.Errorf("Created/Updated should use delta format, got:\n%s", got)
 		}
 		// Should NOT contain raw date format.
 		if strings.Contains(got, "2025-01-15") {
 			t.Error("should not contain raw date, expected delta format")
+		}
+		// Body should be after JSON separator.
+		if !strings.Contains(got, "\n\n---\n") {
+			t.Error("body should be separated from JSON by \\n\\n---\\n")
 		}
 
 		// Verify the provider was called with the resolved repo.
@@ -489,10 +495,13 @@ func TestHandleIssueCreate(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if !strings.Contains(got, "#99") {
+		if !strings.Contains(got, `"number":99`) {
 			t.Errorf("output missing issue number: %s", got)
 		}
-		if !strings.Contains(got, "New feature") {
+		if !strings.Contains(got, `"action":"created"`) {
+			t.Errorf("output missing action: %s", got)
+		}
+		if !strings.Contains(got, `"title":"New feature"`) {
 			t.Errorf("output missing title: %s", got)
 		}
 
@@ -578,11 +587,17 @@ func TestHandleIssueList(t *testing.T) {
 		}
 
 		wantParts := []string{
-			"Found 2 issue(s):",
-			"#1 First (open) [bug]",
-			"alice, 3 comments",
-			"#2 Second (closed)",
-			"bob, 0 comments",
+			`"count":2`,
+			`"number":1`,
+			`"title":"First"`,
+			`"state":"open"`,
+			`"labels":["bug"]`,
+			`"author":"alice"`,
+			`"comments":3`,
+			`"number":2`,
+			`"title":"Second"`,
+			`"state":"closed"`,
+			`"author":"bob"`,
 		}
 		for _, part := range wantParts {
 			if !strings.Contains(got, part) {
@@ -715,10 +730,13 @@ func TestHandlePRList(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if !strings.Contains(got, "#10 Add feature (open)") {
-			t.Errorf("output missing PR info\ngot: %s", got)
+		if !strings.Contains(got, `"number":10`) {
+			t.Errorf("output missing PR number\ngot: %s", got)
 		}
-		if !strings.Contains(got, "feat → main") {
+		if !strings.Contains(got, `"title":"Add feature"`) {
+			t.Errorf("output missing PR title\ngot: %s", got)
+		}
+		if !strings.Contains(got, `"head":"feat"`) || !strings.Contains(got, `"base":"main"`) {
 			t.Errorf("output missing branch info\ngot: %s", got)
 		}
 	})
@@ -759,17 +777,24 @@ func TestHandlePRGet(t *testing.T) {
 		}
 
 		wantParts := []string{
-			"PR #7: Fix tests",
-			"State: open | Author: bob",
-			"Branch: fix/tests → main",
-			"Changes: +10 -3 across 2 files",
-			"Mergeable: true",
+			`"number":7`,
+			`"title":"Fix tests"`,
+			`"state":"open"`,
+			`"author":"bob"`,
+			`"head":"fix/tests"`,
+			`"base":"main"`,
+			`"changes":{"added":10,"removed":3,"files":2}`,
+			`"mergeable":true`,
 			"This fixes the flaky tests.",
 		}
 		for _, part := range wantParts {
 			if !strings.Contains(got, part) {
 				t.Errorf("output missing %q\ngot: %s", part, got)
 			}
+		}
+		// Body should be after JSON separator.
+		if !strings.Contains(got, "\n\n---\n") {
+			t.Error("body should be separated from JSON by \\n\\n---\\n")
 		}
 	})
 }
@@ -832,11 +857,14 @@ func TestHandleReact(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if !strings.Contains(got, ":+1:") {
+		if !strings.Contains(got, `"reaction":"+1"`) {
 			t.Errorf("output missing emoji\ngot: %s", got)
 		}
-		if !strings.Contains(got, "#5") {
+		if !strings.Contains(got, `"number":5`) {
 			t.Errorf("output missing issue number\ngot: %s", got)
+		}
+		if !strings.Contains(got, `"action":"reaction_added"`) {
+			t.Errorf("output missing action\ngot: %s", got)
 		}
 	})
 
@@ -854,8 +882,11 @@ func TestHandleReact(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if !strings.Contains(got, "comment 123") {
-			t.Errorf("output missing comment ID\ngot: %s", got)
+		if !strings.Contains(got, `"reaction":"heart"`) {
+			t.Errorf("output missing reaction\ngot: %s", got)
+		}
+		if !strings.Contains(got, `"number":5`) {
+			t.Errorf("output missing issue number\ngot: %s", got)
 		}
 	})
 
@@ -890,11 +921,14 @@ func TestHandleRequestReview(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if !strings.Contains(got, "alice, bob") {
+		if !strings.Contains(got, `"reviewers":["alice","bob"]`) {
 			t.Errorf("output missing reviewers\ngot: %s", got)
 		}
-		if !strings.Contains(got, "PR #10") {
+		if !strings.Contains(got, `"number":10`) {
 			t.Errorf("output missing PR number\ngot: %s", got)
+		}
+		if !strings.Contains(got, `"action":"review_requested"`) {
+			t.Errorf("output missing action\ngot: %s", got)
 		}
 	})
 
@@ -935,15 +969,14 @@ func TestHandleSearch(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if !strings.Contains(got, "Found 2 result(s)") {
+		if !strings.Contains(got, `"count":2`) {
 			t.Errorf("output missing count\ngot: %s", got)
 		}
-		if !strings.Contains(got, "#1 Found issue") {
+		if !strings.Contains(got, `"number":1`) || !strings.Contains(got, `"title":"Found issue"`) {
 			t.Errorf("output missing issue result\ngot: %s", got)
 		}
-		// Code result has no number, so should not have "#0" prefix.
-		if strings.Contains(got, "#0") {
-			t.Errorf("output should not show #0 for numberless results\ngot: %s", got)
+		if !strings.Contains(got, `"title":"Code result"`) {
+			t.Errorf("output missing code result\ngot: %s", got)
 		}
 	})
 
@@ -1015,11 +1048,14 @@ func TestHandlePRMerge(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if !strings.Contains(got, "abc123") {
+		if !strings.Contains(got, `"sha":"abc123"`) {
 			t.Errorf("output missing SHA\ngot: %s", got)
 		}
-		if !strings.Contains(got, "PR #15 merged") {
-			t.Errorf("output missing merge confirmation\ngot: %s", got)
+		if !strings.Contains(got, `"action":"merged"`) {
+			t.Errorf("output missing merge action\ngot: %s", got)
+		}
+		if !strings.Contains(got, `"number":15`) {
+			t.Errorf("output missing PR number\ngot: %s", got)
 		}
 	})
 }
@@ -1059,11 +1095,14 @@ func TestHandlePRFiles(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if !strings.Contains(got, "2 changed file(s)") {
+		if !strings.Contains(got, `"count":2`) {
 			t.Errorf("output missing file count\ngot: %s", got)
 		}
-		if !strings.Contains(got, "main.go (modified) +5 -2") {
+		if !strings.Contains(got, `"filename":"main.go"`) || !strings.Contains(got, `"status":"modified"`) {
 			t.Errorf("output missing file info\ngot: %s", got)
+		}
+		if !strings.Contains(got, `"added":5`) || !strings.Contains(got, `"removed":2`) {
+			t.Errorf("output missing additions/deletions\ngot: %s", got)
 		}
 	})
 }
@@ -1162,7 +1201,7 @@ func TestHandlePRReviews(t *testing.T) {
 		if !strings.Contains(got, "CHANGES_REQUESTED") {
 			t.Errorf("output missing state\ngot: %s", got)
 		}
-		if !strings.Contains(got, "main.go:42: Typo here") {
+		if !strings.Contains(got, `"path":"main.go"`) || !strings.Contains(got, `"line":42`) || !strings.Contains(got, `"body":"Typo here"`) {
 			t.Errorf("output missing inline comment\ngot: %s", got)
 		}
 	})
@@ -1203,13 +1242,13 @@ func TestHandlePRChecks(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if !strings.Contains(got, "ci/test: completed (success)") {
+		if !strings.Contains(got, `"name":"ci/test"`) || !strings.Contains(got, `"conclusion":"success"`) {
 			t.Errorf("output missing check run\ngot: %s", got)
 		}
-		if !strings.Contains(got, "ci/lint: completed (failure)") {
+		if !strings.Contains(got, `"name":"ci/lint"`) || !strings.Contains(got, `"conclusion":"failure"`) {
 			t.Errorf("output missing failed check\ngot: %s", got)
 		}
-		if !strings.Contains(got, "https://ci.example.com/123") {
+		if !strings.Contains(got, `"url":"https://ci.example.com/123"`) {
 			t.Errorf("output missing details URL\ngot: %s", got)
 		}
 	})
@@ -1239,7 +1278,7 @@ func TestHandleIssueUpdate(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if !strings.Contains(got, "Updated issue #5") {
+		if !strings.Contains(got, `"action":"updated"`) || !strings.Contains(got, `"number":5`) {
 			t.Errorf("output missing update confirmation\ngot: %s", got)
 		}
 	})
@@ -1282,10 +1321,10 @@ func TestHandlePRReview(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if !strings.Contains(got, "200") {
-			t.Errorf("output missing review ID\ngot: %s", got)
+		if !strings.Contains(got, `"action":"review_submitted"`) {
+			t.Errorf("output missing action\ngot: %s", got)
 		}
-		if !strings.Contains(got, "APPROVED") {
+		if !strings.Contains(got, `"event":"APPROVED"`) {
 			t.Errorf("output missing state\ngot: %s", got)
 		}
 	})
@@ -1344,10 +1383,10 @@ func TestHandlePRReviewComment(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if !strings.Contains(got, "300") {
+		if !strings.Contains(got, `"comment_id":300`) {
 			t.Errorf("output missing comment ID\ngot: %s", got)
 		}
-		if !strings.Contains(got, "main.go:10") {
+		if !strings.Contains(got, `"path":"main.go"`) || !strings.Contains(got, `"line":10`) {
 			t.Errorf("output missing file:line\ngot: %s", got)
 		}
 	})

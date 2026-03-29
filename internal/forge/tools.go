@@ -2,6 +2,7 @@ package forge
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -80,6 +81,201 @@ func stringSliceArg(args map[string]any, key string) []string {
 	}
 }
 
+// --- JSON response helpers ---
+
+// marshalResponse marshals a value to compact JSON.
+func marshalResponse(v any) (string, error) {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return "", fmt.Errorf("marshal response: %w", err)
+	}
+	return string(data), nil
+}
+
+// --- JSON response types ---
+
+type issueGetResponse struct {
+	Number    int      `json:"number"`
+	Title     string   `json:"title"`
+	State     string   `json:"state"`
+	Author    string   `json:"author"`
+	Comments  int      `json:"comments"`
+	Labels    []string `json:"labels,omitempty"`
+	Assignees []string `json:"assignees,omitempty"`
+	Created   string   `json:"created"`
+	Updated   string   `json:"updated"`
+	URL       string   `json:"url"`
+}
+
+type issueActionResponse struct {
+	Action string `json:"action"`
+	Number int    `json:"number"`
+	Title  string `json:"title"`
+	URL    string `json:"url"`
+}
+
+type issueCommentResponse struct {
+	Action    string `json:"action"`
+	Number    int    `json:"number"`
+	CommentID int64  `json:"comment_id"`
+	URL       string `json:"url"`
+}
+
+type issueListEntry struct {
+	Number   int      `json:"number"`
+	Title    string   `json:"title"`
+	State    string   `json:"state"`
+	Author   string   `json:"author"`
+	Labels   []string `json:"labels,omitempty"`
+	Comments int      `json:"comments"`
+}
+
+type issueListResponse struct {
+	Count  int              `json:"count"`
+	Issues []issueListEntry `json:"issues"`
+}
+
+type prGetChanges struct {
+	Added   int `json:"added"`
+	Removed int `json:"removed"`
+	Files   int `json:"files"`
+}
+
+type prGetResponse struct {
+	Number             int            `json:"number"`
+	Title              string         `json:"title"`
+	State              string         `json:"state"`
+	Draft              bool           `json:"draft,omitempty"`
+	Author             string         `json:"author"`
+	Head               string         `json:"head"`
+	Base               string         `json:"base"`
+	Changes            prGetChanges   `json:"changes"`
+	Comments           int            `json:"comments"`
+	Labels             []string       `json:"labels,omitempty"`
+	Assignees          []string       `json:"assignees,omitempty"`
+	RequestedReviewers []string       `json:"requested_reviewers,omitempty"`
+	Mergeable          *bool          `json:"mergeable,omitempty"`
+	Created            string         `json:"created"`
+	Updated            string         `json:"updated"`
+	Reviews            map[string]int `json:"reviews,omitempty"`
+	Checks             map[string]int `json:"checks,omitempty"`
+	URL                string         `json:"url"`
+}
+
+type prListEntry struct {
+	Number int    `json:"number"`
+	Title  string `json:"title"`
+	State  string `json:"state"`
+	Author string `json:"author"`
+	Head   string `json:"head"`
+	Base   string `json:"base"`
+}
+
+type prListResponse struct {
+	Count int           `json:"count"`
+	PRs   []prListEntry `json:"prs"`
+}
+
+type prMergeResponse struct {
+	Action  string `json:"action"`
+	Number  int    `json:"number"`
+	SHA     string `json:"sha"`
+	Message string `json:"message"`
+}
+
+type prReviewResponse struct {
+	Action string `json:"action"`
+	Number int    `json:"number"`
+	Event  string `json:"event"`
+}
+
+type prReviewCommentResponse struct {
+	Action    string `json:"action"`
+	Number    int    `json:"number"`
+	CommentID int64  `json:"comment_id"`
+	Path      string `json:"path"`
+	Line      int    `json:"line"`
+}
+
+type reactResponse struct {
+	Action   string `json:"action"`
+	Number   int    `json:"number"`
+	Reaction string `json:"reaction"`
+}
+
+type requestReviewResponse struct {
+	Action    string   `json:"action"`
+	Number    int      `json:"number"`
+	Reviewers []string `json:"reviewers"`
+}
+
+type prCommitEntry struct {
+	SHA     string `json:"sha"`
+	Message string `json:"message"`
+	Author  string `json:"author"`
+	Date    string `json:"date"`
+}
+
+type prCommitsResponse struct {
+	Count   int             `json:"count"`
+	Commits []prCommitEntry `json:"commits"`
+}
+
+type prReviewInlineComment struct {
+	Path string `json:"path"`
+	Line int    `json:"line"`
+	Body string `json:"body"`
+}
+
+type prReviewEntry struct {
+	ID             int64                   `json:"id"`
+	Author         string                  `json:"author"`
+	State          string                  `json:"state"`
+	Date           string                  `json:"date,omitempty"`
+	Body           string                  `json:"body,omitempty"`
+	InlineComments []prReviewInlineComment `json:"inline_comments,omitempty"`
+}
+
+type prReviewsResponse struct {
+	Count   int             `json:"count"`
+	Reviews []prReviewEntry `json:"reviews"`
+}
+
+type prCheckEntry struct {
+	Name       string `json:"name"`
+	Status     string `json:"status"`
+	Conclusion string `json:"conclusion,omitempty"`
+	URL        string `json:"url,omitempty"`
+}
+
+type prChecksResponse struct {
+	Count  int            `json:"count"`
+	Checks []prCheckEntry `json:"checks"`
+}
+
+type prFileEntry struct {
+	Filename string `json:"filename"`
+	Status   string `json:"status"`
+	Added    int    `json:"added"`
+	Removed  int    `json:"removed"`
+}
+
+type prFilesResponse struct {
+	Count int           `json:"count"`
+	Files []prFileEntry `json:"files"`
+}
+
+type searchResultEntry struct {
+	Number int    `json:"number,omitempty"`
+	Title  string `json:"title"`
+	URL    string `json:"url"`
+}
+
+type searchResponse struct {
+	Count   int                 `json:"count"`
+	Results []searchResultEntry `json:"results"`
+}
+
 // --- Common helpers ---
 
 // resolveAccountAndRepo extracts the account and repo from args,
@@ -138,7 +334,12 @@ func (t *Tools) HandleIssueCreate(ctx context.Context, args map[string]any) (str
 	}
 
 	t.recordOp("forge_issue_create", acct, repo, fmt.Sprintf("#%d", issue.Number))
-	return fmt.Sprintf("Created issue #%d: %s\nURL: %s", issue.Number, issue.Title, issue.URL), nil
+	return marshalResponse(issueActionResponse{
+		Action: "created",
+		Number: issue.Number,
+		Title:  issue.Title,
+		URL:    issue.URL,
+	})
 }
 
 // HandleIssueUpdate updates an existing issue. Body REPLACES the
@@ -174,7 +375,12 @@ func (t *Tools) HandleIssueUpdate(ctx context.Context, args map[string]any) (str
 	}
 
 	t.recordOp("forge_issue_update", acct, repo, fmt.Sprintf("#%d", number))
-	return fmt.Sprintf("Updated issue #%d: %s\nURL: %s", issue.Number, issue.Title, issue.URL), nil
+	return marshalResponse(issueActionResponse{
+		Action: "updated",
+		Number: issue.Number,
+		Title:  issue.Title,
+		URL:    issue.URL,
+	})
 }
 
 // HandleIssueGet retrieves a single issue by number.
@@ -196,25 +402,30 @@ func (t *Tools) HandleIssueGet(ctx context.Context, args map[string]any) (string
 
 	now := time.Now()
 
-	var sb strings.Builder
-	fmt.Fprintf(&sb, "Issue #%d: %s\n", issue.Number, issue.Title)
-	fmt.Fprintf(&sb, "State: %s | Author: %s | %d comments\n", issue.State, issue.Author, issue.CommentCount)
-	if len(issue.Labels) > 0 {
-		fmt.Fprintf(&sb, "Labels: %s\n", strings.Join(issue.Labels, ", "))
+	resp := issueGetResponse{
+		Number:    issue.Number,
+		Title:     issue.Title,
+		State:     issue.State,
+		Author:    issue.Author,
+		Comments:  issue.CommentCount,
+		Labels:    issue.Labels,
+		Assignees: issue.Assignees,
+		Created:   awareness.FormatDeltaOnly(issue.CreatedAt, now),
+		Updated:   awareness.FormatDeltaOnly(issue.UpdatedAt, now),
+		URL:       issue.URL,
 	}
-	if len(issue.Assignees) > 0 {
-		fmt.Fprintf(&sb, "Assignees: %s\n", strings.Join(issue.Assignees, ", "))
+
+	result, err := marshalResponse(resp)
+	if err != nil {
+		return "", err
 	}
-	fmt.Fprintf(&sb, "Created: %s | Updated: %s\n",
-		awareness.FormatDelta(issue.CreatedAt, now),
-		awareness.FormatDelta(issue.UpdatedAt, now))
-	fmt.Fprintf(&sb, "URL: %s\n", issue.URL)
+
 	if issue.Body != "" {
-		fmt.Fprintf(&sb, "\n---\n%s", issue.Body)
+		result += "\n\n---\n" + issue.Body
 	}
 
 	t.recordOp("forge_issue_get", acct, repo, fmt.Sprintf("#%d", number))
-	return sb.String(), nil
+	return result, nil
 }
 
 // HandleIssueList lists issues matching the given filters.
@@ -244,19 +455,23 @@ func (t *Tools) HandleIssueList(ctx context.Context, args map[string]any) (strin
 		return "No issues found.", nil
 	}
 
-	var sb strings.Builder
-	fmt.Fprintf(&sb, "Found %d issue(s):\n\n", len(issues))
+	entries := make([]issueListEntry, 0, len(issues))
 	for _, i := range issues {
-		labels := ""
-		if len(i.Labels) > 0 {
-			labels = " [" + strings.Join(i.Labels, ", ") + "]"
-		}
-		fmt.Fprintf(&sb, "#%d %s (%s)%s — %s, %d comments\n",
-			i.Number, i.Title, i.State, labels, i.Author, i.CommentCount)
+		entries = append(entries, issueListEntry{
+			Number:   i.Number,
+			Title:    i.Title,
+			State:    i.State,
+			Author:   i.Author,
+			Labels:   i.Labels,
+			Comments: i.CommentCount,
+		})
 	}
 
 	t.recordOp("forge_issue_list", acct, repo, "")
-	return sb.String(), nil
+	return marshalResponse(issueListResponse{
+		Count:  len(entries),
+		Issues: entries,
+	})
 }
 
 // HandleIssueComment posts a comment on an issue or pull request.
@@ -281,7 +496,12 @@ func (t *Tools) HandleIssueComment(ctx context.Context, args map[string]any) (st
 	}
 
 	t.recordOp("forge_issue_comment", acct, repo, fmt.Sprintf("#%d", number))
-	return fmt.Sprintf("Comment added (ID: %d)\nURL: %s", comment.ID, comment.URL), nil
+	return marshalResponse(issueCommentResponse{
+		Action:    "comment_added",
+		Number:    number,
+		CommentID: comment.ID,
+		URL:       comment.URL,
+	})
 }
 
 // --- PR handlers ---
@@ -313,15 +533,23 @@ func (t *Tools) HandlePRList(ctx context.Context, args map[string]any) (string, 
 		return "No pull requests found.", nil
 	}
 
-	var sb strings.Builder
-	fmt.Fprintf(&sb, "Found %d PR(s):\n\n", len(prs))
+	entries := make([]prListEntry, 0, len(prs))
 	for _, p := range prs {
-		fmt.Fprintf(&sb, "#%d %s (%s) — %s → %s — by %s\n",
-			p.Number, p.Title, p.State, p.Head, p.Base, p.Author)
+		entries = append(entries, prListEntry{
+			Number: p.Number,
+			Title:  p.Title,
+			State:  p.State,
+			Author: p.Author,
+			Head:   p.Head,
+			Base:   p.Base,
+		})
 	}
 
 	t.recordOp("forge_pr_list", acct, repo, "")
-	return sb.String(), nil
+	return marshalResponse(prListResponse{
+		Count: len(entries),
+		PRs:   entries,
+	})
 }
 
 // HandlePRGet retrieves a single pull request by number.
@@ -343,34 +571,28 @@ func (t *Tools) HandlePRGet(ctx context.Context, args map[string]any) (string, e
 
 	now := time.Now()
 
-	var sb strings.Builder
-	fmt.Fprintf(&sb, "PR #%d: %s\n", pr.Number, pr.Title)
-
-	// State line with draft indicator.
-	state := pr.State
-	if pr.Draft {
-		state += " (draft)"
+	resp := prGetResponse{
+		Number: pr.Number,
+		Title:  pr.Title,
+		State:  pr.State,
+		Draft:  pr.Draft,
+		Author: pr.Author,
+		Head:   pr.Head,
+		Base:   pr.Base,
+		Changes: prGetChanges{
+			Added:   pr.Additions,
+			Removed: pr.Deletions,
+			Files:   pr.ChangedFiles,
+		},
+		Comments:           pr.CommentCount,
+		Labels:             pr.Labels,
+		Assignees:          pr.Assignees,
+		RequestedReviewers: pr.RequestedReviewers,
+		Mergeable:          pr.Mergeable,
+		Created:            awareness.FormatDeltaOnly(pr.CreatedAt, now),
+		Updated:            awareness.FormatDeltaOnly(pr.UpdatedAt, now),
+		URL:                pr.URL,
 	}
-	fmt.Fprintf(&sb, "State: %s | Author: %s\n", state, pr.Author)
-	fmt.Fprintf(&sb, "Branch: %s → %s\n", pr.Head, pr.Base)
-	fmt.Fprintf(&sb, "Changes: +%d -%d across %d files | %d comments\n",
-		pr.Additions, pr.Deletions, pr.ChangedFiles, pr.CommentCount)
-	if len(pr.Labels) > 0 {
-		fmt.Fprintf(&sb, "Labels: %s\n", strings.Join(pr.Labels, ", "))
-	}
-	if len(pr.Assignees) > 0 {
-		fmt.Fprintf(&sb, "Assignees: %s\n", strings.Join(pr.Assignees, ", "))
-	}
-	if len(pr.RequestedReviewers) > 0 {
-		fmt.Fprintf(&sb, "Requested reviewers: %s\n", strings.Join(pr.RequestedReviewers, ", "))
-	}
-	if pr.Mergeable != nil {
-		fmt.Fprintf(&sb, "Mergeable: %v\n", *pr.Mergeable)
-	}
-	fmt.Fprintf(&sb, "Created: %s | Updated: %s\n",
-		awareness.FormatDelta(pr.CreatedAt, now),
-		awareness.FormatDelta(pr.UpdatedAt, now))
-	fmt.Fprintf(&sb, "URL: %s\n", pr.URL)
 
 	// Inline review summary (extra API call, but saves a follow-up tool call).
 	if reviews, err := provider.ListPRReviews(ctx, repo, number); err == nil && len(reviews) > 0 {
@@ -378,51 +600,36 @@ func (t *Tools) HandlePRGet(ctx context.Context, args map[string]any) (string, e
 		for _, r := range reviews {
 			counts[r.State]++
 		}
-		var parts []string
-		if n := counts["APPROVED"]; n > 0 {
-			parts = append(parts, fmt.Sprintf("%d approved", n))
-		}
-		if n := counts["CHANGES_REQUESTED"]; n > 0 {
-			parts = append(parts, fmt.Sprintf("%d changes requested", n))
-		}
-		if n := counts["COMMENTED"]; n > 0 {
-			parts = append(parts, fmt.Sprintf("%d commented", n))
-		}
-		fmt.Fprintf(&sb, "Reviews: %s\n", strings.Join(parts, ", "))
+		resp.Reviews = counts
 	}
 
 	// Inline check summary (extra API call, but saves a follow-up tool call).
 	if checks, err := provider.ListChecks(ctx, repo, number); err == nil && len(checks) > 0 {
-		passed, failed, pending := 0, 0, 0
+		summary := map[string]int{}
 		for _, c := range checks {
 			switch {
 			case c.Conclusion == "success" || c.Conclusion == "skipped" || c.Conclusion == "neutral":
-				passed++
+				summary["passed"]++
 			case c.Status != "completed":
-				pending++
+				summary["pending"]++
 			default:
-				failed++
+				summary["failed"]++
 			}
 		}
-		var checkParts []string
-		if passed > 0 {
-			checkParts = append(checkParts, fmt.Sprintf("%d passed", passed))
-		}
-		if failed > 0 {
-			checkParts = append(checkParts, fmt.Sprintf("%d failed", failed))
-		}
-		if pending > 0 {
-			checkParts = append(checkParts, fmt.Sprintf("%d pending", pending))
-		}
-		fmt.Fprintf(&sb, "Checks: %s\n", strings.Join(checkParts, ", "))
+		resp.Checks = summary
+	}
+
+	result, err := marshalResponse(resp)
+	if err != nil {
+		return "", err
 	}
 
 	if pr.Body != "" {
-		fmt.Fprintf(&sb, "\n---\n%s", pr.Body)
+		result += "\n\n---\n" + pr.Body
 	}
 
 	t.recordOp("forge_pr_get", acct, repo, fmt.Sprintf("#%d", number))
-	return sb.String(), nil
+	return result, nil
 }
 
 // HandlePRDiff returns the unified diff for a pull request, truncated
@@ -481,17 +688,21 @@ func (t *Tools) HandlePRFiles(ctx context.Context, args map[string]any) (string,
 		return "No changed files.", nil
 	}
 
-	var sb strings.Builder
-	fmt.Fprintf(&sb, "%d changed file(s):\n\n", len(files))
+	entries := make([]prFileEntry, 0, len(files))
 	for _, f := range files {
-		fmt.Fprintf(&sb, "%s (%s) +%d -%d\n", f.Filename, f.Status, f.Additions, f.Deletions)
-		if f.Patch != "" {
-			fmt.Fprintf(&sb, "```\n%s\n```\n\n", f.Patch)
-		}
+		entries = append(entries, prFileEntry{
+			Filename: f.Filename,
+			Status:   f.Status,
+			Added:    f.Additions,
+			Removed:  f.Deletions,
+		})
 	}
 
 	t.recordOp("forge_pr_files", acct, repo, fmt.Sprintf("#%d", number))
-	return sb.String(), nil
+	return marshalResponse(prFilesResponse{
+		Count: len(entries),
+		Files: entries,
+	})
 }
 
 // HandlePRCommits returns commits in a pull request.
@@ -517,20 +728,26 @@ func (t *Tools) HandlePRCommits(ctx context.Context, args map[string]any) (strin
 	}
 
 	now := time.Now()
-	var sb strings.Builder
-	fmt.Fprintf(&sb, "%d commit(s):\n\n", len(commits))
+	entries := make([]prCommitEntry, 0, len(commits))
 	for _, c := range commits {
 		// First line of commit message only.
 		msg := c.Message
 		if idx := strings.IndexByte(msg, '\n'); idx >= 0 {
 			msg = msg[:idx]
 		}
-		fmt.Fprintf(&sb, "%s %s — %s %s\n",
-			c.SHA, msg, c.Author, awareness.FormatDelta(c.Date, now))
+		entries = append(entries, prCommitEntry{
+			SHA:     c.SHA,
+			Message: msg,
+			Author:  c.Author,
+			Date:    awareness.FormatDeltaOnly(c.Date, now),
+		})
 	}
 
 	t.recordOp("forge_pr_commits", acct, repo, fmt.Sprintf("#%d", number))
-	return sb.String(), nil
+	return marshalResponse(prCommitsResponse{
+		Count:   len(entries),
+		Commits: entries,
+	})
 }
 
 // HandlePRReviews returns reviews for a pull request with inline comments.
@@ -556,25 +773,32 @@ func (t *Tools) HandlePRReviews(ctx context.Context, args map[string]any) (strin
 	}
 
 	now := time.Now()
-	var sb strings.Builder
-	fmt.Fprintf(&sb, "%d review(s):\n\n", len(reviews))
+	entries := make([]prReviewEntry, 0, len(reviews))
 	for _, r := range reviews {
-		fmt.Fprintf(&sb, "Review #%d by %s — %s", r.ID, r.Author, r.State)
-		if !r.SubmittedAt.IsZero() {
-			fmt.Fprintf(&sb, " %s", awareness.FormatDelta(r.SubmittedAt, now))
+		entry := prReviewEntry{
+			ID:     r.ID,
+			Author: r.Author,
+			State:  r.State,
+			Body:   r.Body,
 		}
-		sb.WriteString("\n")
-		if r.Body != "" {
-			fmt.Fprintf(&sb, "  %s\n", r.Body)
+		if !r.SubmittedAt.IsZero() {
+			entry.Date = awareness.FormatDeltaOnly(r.SubmittedAt, now)
 		}
 		for _, c := range r.InlineComments {
-			fmt.Fprintf(&sb, "  → %s:%d: %s\n", c.Path, c.Line, c.Body)
+			entry.InlineComments = append(entry.InlineComments, prReviewInlineComment{
+				Path: c.Path,
+				Line: c.Line,
+				Body: c.Body,
+			})
 		}
-		sb.WriteString("\n")
+		entries = append(entries, entry)
 	}
 
 	t.recordOp("forge_pr_reviews", acct, repo, fmt.Sprintf("#%d", number))
-	return sb.String(), nil
+	return marshalResponse(prReviewsResponse{
+		Count:   len(entries),
+		Reviews: entries,
+	})
 }
 
 // HandlePRReview submits a review on a pull request.
@@ -607,7 +831,11 @@ func (t *Tools) HandlePRReview(ctx context.Context, args map[string]any) (string
 	}
 
 	t.recordOp("forge_pr_review", acct, repo, fmt.Sprintf("#%d", number))
-	return fmt.Sprintf("Review submitted (ID: %d, state: %s)", review.ID, review.State), nil
+	return marshalResponse(prReviewResponse{
+		Action: "review_submitted",
+		Number: number,
+		Event:  review.State,
+	})
 }
 
 // HandlePRReviewComment posts an inline comment on a pull request diff.
@@ -647,7 +875,13 @@ func (t *Tools) HandlePRReviewComment(ctx context.Context, args map[string]any) 
 	}
 
 	t.recordOp("forge_pr_review_comment", acct, repo, fmt.Sprintf("#%d", number))
-	return fmt.Sprintf("Review comment added (ID: %d) on %s:%d", comment.ID, comment.Path, comment.Line), nil
+	return marshalResponse(prReviewCommentResponse{
+		Action:    "review_comment_added",
+		Number:    number,
+		CommentID: comment.ID,
+		Path:      comment.Path,
+		Line:      comment.Line,
+	})
 }
 
 // HandlePRChecks returns CI check runs for a pull request.
@@ -672,21 +906,21 @@ func (t *Tools) HandlePRChecks(ctx context.Context, args map[string]any) (string
 		return "No check runs found.", nil
 	}
 
-	var sb strings.Builder
-	fmt.Fprintf(&sb, "%d check run(s):\n\n", len(checks))
+	entries := make([]prCheckEntry, 0, len(checks))
 	for _, c := range checks {
-		fmt.Fprintf(&sb, "%s: %s", c.Name, c.Status)
-		if c.Conclusion != "" {
-			fmt.Fprintf(&sb, " (%s)", c.Conclusion)
-		}
-		if c.DetailsURL != "" {
-			fmt.Fprintf(&sb, " — %s", c.DetailsURL)
-		}
-		sb.WriteString("\n")
+		entries = append(entries, prCheckEntry{
+			Name:       c.Name,
+			Status:     c.Status,
+			Conclusion: c.Conclusion,
+			URL:        c.DetailsURL,
+		})
 	}
 
 	t.recordOp("forge_pr_checks", acct, repo, fmt.Sprintf("#%d", number))
-	return sb.String(), nil
+	return marshalResponse(prChecksResponse{
+		Count:  len(entries),
+		Checks: entries,
+	})
 }
 
 // HandlePRMerge merges a pull request.
@@ -713,7 +947,12 @@ func (t *Tools) HandlePRMerge(ctx context.Context, args map[string]any) (string,
 	}
 
 	t.recordOp("forge_pr_merge", acct, repo, fmt.Sprintf("#%d", number))
-	return fmt.Sprintf("PR #%d merged (SHA: %s): %s", number, result.SHA, result.Message), nil
+	return marshalResponse(prMergeResponse{
+		Action:  "merged",
+		Number:  number,
+		SHA:     result.SHA,
+		Message: result.Message,
+	})
 }
 
 // --- Reaction handler ---
@@ -742,10 +981,11 @@ func (t *Tools) HandleReact(ctx context.Context, args map[string]any) (string, e
 	}
 
 	t.recordOp("forge_react", acct, repo, fmt.Sprintf("#%d", number))
-	if commentID > 0 {
-		return fmt.Sprintf("Added :%s: reaction to comment %d on #%d", emoji, commentID, number), nil
-	}
-	return fmt.Sprintf("Added :%s: reaction to #%d", emoji, number), nil
+	return marshalResponse(reactResponse{
+		Action:   "reaction_added",
+		Number:   number,
+		Reaction: emoji,
+	})
 }
 
 // --- Review request handler ---
@@ -772,7 +1012,11 @@ func (t *Tools) HandleRequestReview(ctx context.Context, args map[string]any) (s
 	}
 
 	t.recordOp("forge_pr_request_review", acct, repo, fmt.Sprintf("#%d", number))
-	return fmt.Sprintf("Requested review from %s on PR #%d", strings.Join(reviewers, ", "), number), nil
+	return marshalResponse(requestReviewResponse{
+		Action:    "review_requested",
+		Number:    number,
+		Reviewers: reviewers,
+	})
 }
 
 // --- Search handler ---
@@ -811,19 +1055,18 @@ func (t *Tools) HandleSearch(ctx context.Context, args map[string]any) (string, 
 		return "No results found.", nil
 	}
 
-	var sb strings.Builder
-	fmt.Fprintf(&sb, "Found %d result(s):\n\n", len(results))
+	entries := make([]searchResultEntry, 0, len(results))
 	for _, r := range results {
-		if r.Number > 0 {
-			fmt.Fprintf(&sb, "#%d ", r.Number)
-		}
-		fmt.Fprintf(&sb, "%s\n  %s\n", r.Title, r.URL)
-		if r.Body != "" {
-			fmt.Fprintf(&sb, "  %s\n", r.Body)
-		}
-		sb.WriteString("\n")
+		entries = append(entries, searchResultEntry{
+			Number: r.Number,
+			Title:  r.Title,
+			URL:    r.URL,
+		})
 	}
 
 	t.recordOp("forge_search", resolvedAcct, "", kindStr+": "+query)
-	return sb.String(), nil
+	return marshalResponse(searchResponse{
+		Count:   len(entries),
+		Results: entries,
+	})
 }
