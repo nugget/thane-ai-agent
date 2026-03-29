@@ -985,6 +985,10 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		// behind a routing layer that selects delivery channel per recipient.
 		notifRouter = notifications.NewNotificationRouter(contactStore, notifRecords, logger)
 		notifRouter.RegisterProvider(notifications.NewHAPushProvider(notifSender))
+		notifRouter.SetActivitySource(&channelActivityAdapter{
+			loops:  &channelLoopAdapter{registry: loopRegistry},
+			phones: &contactPhoneResolver{store: contactStore},
+		})
 		loop.Tools().SetNotificationRouter(notifRouter)
 		logger.Info("notification router initialized", "providers", "ha_push")
 	}
@@ -1717,6 +1721,16 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 				Backoff: connwatch.DefaultBackoffConfig(),
 				Logger:  logger,
 			})
+
+			// Register Signal as a notification delivery channel so the
+			// notification router can route to Signal when the contact
+			// has an active Signal session.
+			if notifRouter != nil {
+				notifRouter.RegisterProvider(notifications.NewSignalProvider(
+					signalClient, contactStore, logger,
+				))
+				logger.Info("signal notification provider registered")
+			}
 
 			logger.Info("signal bridge started",
 				"command", cfg.Signal.Command,
@@ -3643,7 +3657,8 @@ type channelLoopAdapter struct {
 	registry *looppkg.Registry
 }
 
-// ChannelLoops returns loop snapshots for loops with category=channel metadata.
+// ChannelLoops returns loop snapshots for loops with category=channel
+// metadata, excluding parent loops (no sender/conversation_id).
 func (a *channelLoopAdapter) ChannelLoops() []awareness.LoopSnapshot {
 	statuses := a.registry.Statuses()
 	var result []awareness.LoopSnapshot
@@ -3659,6 +3674,50 @@ func (a *channelLoopAdapter) ChannelLoops() []awareness.LoopSnapshot {
 			Metadata:      s.Config.Metadata,
 			RecentConvIDs: s.RecentConvIDs,
 		})
+	}
+	return result
+}
+
+// channelActivityAdapter bridges [notifications.ChannelActivitySource]
+// to the loop registry, resolving phone numbers to contact names.
+type channelActivityAdapter struct {
+	loops  *channelLoopAdapter
+	phones *contactPhoneResolver
+}
+
+// ActiveChannels returns channel activity entries for all active
+// channel loops, resolving Signal phone numbers to contact names.
+func (a *channelActivityAdapter) ActiveChannels() []notifications.ChannelActivity {
+	loops := a.loops.ChannelLoops()
+	var result []notifications.ChannelActivity
+	for _, l := range loops {
+		subsystem := l.Metadata["subsystem"]
+		if subsystem == "" {
+			continue
+		}
+		// Skip parent loops (no per-conversation identity).
+		if subsystem == "signal" && l.Metadata["sender"] == "" {
+			continue
+		}
+		if subsystem == "owu" && l.Metadata["conversation_id"] == "" {
+			continue
+		}
+
+		entry := notifications.ChannelActivity{
+			Channel:    subsystem,
+			LastActive: l.LastWakeAt,
+		}
+
+		// Resolve contact name for Signal senders.
+		if subsystem == "signal" {
+			if sender := l.Metadata["sender"]; sender != "" && a.phones != nil {
+				if name, _, ok := a.phones.ResolvePhone(sender); ok {
+					entry.Contact = name
+				}
+			}
+		}
+
+		result = append(result, entry)
 	}
 	return result
 }
