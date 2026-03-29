@@ -218,14 +218,13 @@ func (r *Registry) SpawnLoop(ctx context.Context, cfg Config, deps Deps) (string
 		return "", fmt.Errorf("create loop %q: %w", cfg.Name, err)
 	}
 
-	// Apply the default active tags callback to loops that interact
-	// with the agent (Runner-based or channel handlers that call
-	// agent.Run internally). Skip pure infrastructure loops (handler-
-	// only with no runner) since they can't activate capabilities.
+	// Apply the default active tags callback so every loop can
+	// surface active capabilities on the dashboard. The callback
+	// returns nil when no tags are configured, which is safe.
 	r.mu.RLock()
 	atFunc := r.defaultActiveTagsFunc
 	r.mu.RUnlock()
-	if atFunc != nil && (deps.Runner != nil || cfg.Metadata["category"] == "channel") {
+	if atFunc != nil {
 		l.SetActiveTagsFunc(atFunc)
 	}
 

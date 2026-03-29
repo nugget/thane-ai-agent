@@ -392,8 +392,13 @@ func (l *Loop) Status() Status {
 
 	// Call the active tags callback outside the lock to avoid
 	// lock-ordering issues with the agent loop's tagMu.
+	// Deep-copy the result so callers can't mutate internal state.
 	if atFunc != nil {
-		s.ActiveTags = atFunc()
+		if tags := atFunc(); len(tags) > 0 {
+			cp := make([]string, len(tags))
+			copy(cp, tags)
+			s.ActiveTags = cp
+		}
 	}
 
 	return s
@@ -654,10 +659,11 @@ func (l *Loop) run(ctx context.Context) {
 			}
 			// Extract request_id from summary if the handler reported
 			// one (e.g., signal/OWU handlers that call agent.Run).
-			if rid, ok := summary["request_id"].(string); ok && rid != "" {
-				if result != nil {
-					result.RequestID = rid
-				}
+			// Only remove from summary when successfully copied to
+			// result; on error (result == nil) keep it in summary
+			// so it's available in the error snapshot for debugging.
+			if rid, ok := summary["request_id"].(string); ok && rid != "" && result != nil {
+				result.RequestID = rid
 				delete(summary, "request_id")
 			}
 			if len(summary) > 0 {
@@ -697,6 +703,20 @@ func (l *Loop) run(ctx context.Context) {
 
 		if noOp {
 			iterLog.Debug("handler returned no-op, skipping iteration accounting")
+			// Emit a zero-token iteration_complete so the dashboard
+			// sees a balanced start→complete pair for every wake.
+			l.publishEvent(events.Event{
+				Timestamp: time.Now(),
+				Source:    events.SourceLoop,
+				Kind:      events.KindLoopIterationComplete,
+				Data: map[string]any{
+					"loop_id":         l.id,
+					"loop_name":       l.config.Name,
+					"conversation_id": convID,
+					"no_op":           true,
+					"elapsed_ms":      time.Since(iterStartTime).Milliseconds(),
+				},
+			})
 		}
 
 		// Compute sleep unconditionally so timer-driven loops still
