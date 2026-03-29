@@ -27,6 +27,8 @@ func formatEntityContext(state *homeassistant.State, now time.Time) string {
 		return formatLight(state, now)
 	case "person":
 		return formatPerson(state, now)
+	case "sun":
+		return formatSun(state, now)
 	default:
 		return formatDefault(state, now)
 	}
@@ -243,6 +245,46 @@ func formatPerson(state *homeassistant.State, now time.Time) string {
 		Source: attrString(state.Attributes, "source"),
 	}
 	return marshalCompact(pc)
+}
+
+// sunContext is the JSON structure for the sun.sun entity.
+// Provides above/below horizon state with delta-annotated next
+// sunrise and sunset times — critical for a home agent's awareness
+// of lighting, security, and automation context.
+type sunContext struct {
+	Entity    string `json:"entity"`
+	State     string `json:"state"` // above_horizon or below_horizon
+	NextRise  string `json:"next_rising,omitempty"`
+	NextSet   string `json:"next_setting,omitempty"`
+	Elevation any    `json:"elevation,omitempty"`
+	Since     string `json:"since"`
+}
+
+func formatSun(state *homeassistant.State, now time.Time) string {
+	sc := sunContext{
+		Entity:    state.EntityID,
+		State:     state.State,
+		Elevation: roundAttr(state.Attributes["elevation"], 1),
+		Since:     FormatDeltaOnly(state.LastChanged, now),
+	}
+
+	// Delta-annotate next rising/setting times.
+	if rising, ok := state.Attributes["next_rising"].(string); ok {
+		if t, err := time.Parse(time.RFC3339Nano, rising); err == nil {
+			sc.NextRise = FormatDeltaOnly(t, now)
+		} else if t, err := time.Parse(time.RFC3339, rising); err == nil {
+			sc.NextRise = FormatDeltaOnly(t, now)
+		}
+	}
+	if setting, ok := state.Attributes["next_setting"].(string); ok {
+		if t, err := time.Parse(time.RFC3339Nano, setting); err == nil {
+			sc.NextSet = FormatDeltaOnly(t, now)
+		} else if t, err := time.Parse(time.RFC3339, setting); err == nil {
+			sc.NextSet = FormatDeltaOnly(t, now)
+		}
+	}
+
+	return marshalCompact(sc)
 }
 
 // PersonPresenceContext is the JSON structure emitted by the

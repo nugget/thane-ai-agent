@@ -6,7 +6,7 @@ package awareness
 
 import (
 	"context"
-	"fmt"
+	"encoding/json"
 	"log/slog"
 	"strings"
 	"sync"
@@ -89,10 +89,18 @@ func (p *StateWindowProvider) HandleStateChange(entityID, oldState, newState str
 	p.mu.Unlock()
 }
 
+// stateChangeJSON is the compact JSON structure for a state transition.
+type stateChangeJSON struct {
+	Entity string `json:"entity"`
+	From   string `json:"from"`
+	To     string `json:"to"`
+	Ago    string `json:"ago"`
+}
+
 // GetContext returns a formatted context block listing recent state
-// changes for injection into the agent's system prompt. Entries older
-// than maxAge are excluded. Returns an empty string when no valid
-// entries exist.
+// changes as compact JSON for injection into the agent's system prompt.
+// Entries older than maxAge are excluded. Returns an empty string when
+// no valid entries exist.
 func (p *StateWindowProvider) GetContext(_ context.Context, _ string) (string, error) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
@@ -106,26 +114,30 @@ func (p *StateWindowProvider) GetContext(_ context.Context, _ string) (string, e
 	bufLen := len(p.entries)
 
 	// Collect valid entries in reverse chronological order (newest first).
-	// The newest entry is at (head-1) mod bufLen, walking backwards.
-	var lines []string
+	var entries []stateChangeJSON
 	for i := 0; i < p.count; i++ {
 		idx := (p.head - 1 - i + bufLen) % bufLen
 		e := p.entries[idx]
 		if e.Timestamp.Before(cutoff) {
 			continue
 		}
-		delta := FormatDelta(e.Timestamp.In(p.loc), now.In(p.loc))
-		lines = append(lines, fmt.Sprintf("- %s: %s → %s %s", e.EntityID, e.OldState, e.NewState, delta))
+		entries = append(entries, stateChangeJSON{
+			Entity: e.EntityID,
+			From:   e.OldState,
+			To:     e.NewState,
+			Ago:    FormatDeltaOnly(e.Timestamp, now),
+		})
 	}
 
-	if len(lines) == 0 {
+	if len(entries) == 0 {
 		return "", nil
 	}
 
 	var sb strings.Builder
 	sb.WriteString("### Recent State Changes\n\n")
-	for _, line := range lines {
-		sb.WriteString(line)
+	for _, entry := range entries {
+		data, _ := json.Marshal(entry)
+		sb.Write(data)
 		sb.WriteByte('\n')
 	}
 

@@ -203,6 +203,48 @@ func TestFormatPerson(t *testing.T) {
 	}
 }
 
+func TestFormatSun(t *testing.T) {
+	sunrise := testNow.Add(6 * time.Hour)
+	sunset := testNow.Add(-2 * time.Hour)
+
+	state := &homeassistant.State{
+		EntityID:    "sun.sun",
+		State:       "above_horizon",
+		LastChanged: testNow.Add(-3 * time.Hour),
+		Attributes: map[string]any{
+			"next_rising":  sunrise.Format(time.RFC3339),
+			"next_setting": sunset.Format(time.RFC3339),
+			"elevation":    42.7654321,
+		},
+	}
+
+	result := formatEntityContext(state, testNow)
+
+	var parsed map[string]any
+	if err := json.Unmarshal([]byte(result), &parsed); err != nil {
+		t.Fatalf("sun output should be valid JSON: %v\nGot: %s", err, result)
+	}
+
+	if parsed["entity"] != "sun.sun" {
+		t.Error("missing entity")
+	}
+	if parsed["state"] != "above_horizon" {
+		t.Error("missing state")
+	}
+	// Next rising should be a positive delta (future).
+	if rise, ok := parsed["next_rising"].(string); !ok || !strings.HasPrefix(rise, "+") {
+		t.Errorf("next_rising should be positive delta, got %v", parsed["next_rising"])
+	}
+	// Next setting should be a negative delta (past).
+	if set, ok := parsed["next_setting"].(string); !ok || !strings.HasPrefix(set, "-") {
+		t.Errorf("next_setting should be negative delta, got %v", parsed["next_setting"])
+	}
+	// Elevation should be rounded to 1 decimal.
+	if elev, ok := parsed["elevation"].(float64); !ok || elev != 42.8 {
+		t.Errorf("elevation = %v, want 42.8", parsed["elevation"])
+	}
+}
+
 func TestFormatDefault_NoAttributes(t *testing.T) {
 	state := &homeassistant.State{
 		EntityID:    "binary_sensor.door",

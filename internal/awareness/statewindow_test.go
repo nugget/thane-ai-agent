@@ -54,14 +54,17 @@ func TestProvider_SingleEntry(t *testing.T) {
 	if !strings.Contains(got, "### Recent State Changes") {
 		t.Error("missing header")
 	}
-	if !strings.Contains(got, "binary_sensor.front_door") {
-		t.Error("missing entity ID")
+	if !strings.Contains(got, `"entity":"binary_sensor.front_door"`) {
+		t.Error("missing entity ID in JSON")
 	}
-	if !strings.Contains(got, "off → on") {
-		t.Error("missing state transition")
+	if !strings.Contains(got, `"from":"off"`) {
+		t.Error("missing from state in JSON")
 	}
-	if !strings.Contains(got, "(-0s)") {
-		t.Errorf("missing delta timestamp, got:\n%s", got)
+	if !strings.Contains(got, `"to":"on"`) {
+		t.Error("missing to state in JSON")
+	}
+	if !strings.Contains(got, `"ago":"-0s"`) {
+		t.Errorf("missing delta timestamp in JSON, got:\n%s", got)
 	}
 }
 
@@ -186,8 +189,8 @@ func TestProvider_DeltaFormat(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if !strings.Contains(got, "(-300s)") {
-		t.Errorf("expected delta (-300s), got:\n%s", got)
+	if !strings.Contains(got, `"ago":"-300s"`) {
+		t.Errorf("expected delta ago:-300s in JSON, got:\n%s", got)
 	}
 }
 
@@ -210,6 +213,34 @@ func TestProvider_HandleStateChange_Concurrent(t *testing.T) {
 	}
 	if !strings.Contains(got, "sensor.concurrent") {
 		t.Error("expected entries after concurrent writes")
+	}
+}
+
+func TestProvider_SameStateSuppressed(t *testing.T) {
+	now := time.Date(2025, 6, 15, 14, 30, 0, 0, time.UTC)
+	p := NewStateWindowProvider(10, 30*time.Minute, time.UTC, nil)
+	p.nowFunc = fixedClock(now)
+
+	// Same→same should be filtered.
+	p.HandleStateChange("person.nugget", "home", "home")
+	p.HandleStateChange("sensor.temp", "20", "20")
+
+	// Real transition should be recorded.
+	p.HandleStateChange("light.office", "off", "on")
+
+	got, err := p.GetContext(context.Background(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if strings.Contains(got, "person.nugget") {
+		t.Error("same→same transition should be filtered")
+	}
+	if strings.Contains(got, "sensor.temp") {
+		t.Error("same→same transition should be filtered")
+	}
+	if !strings.Contains(got, "light.office") {
+		t.Error("real transition should be present")
 	}
 }
 
