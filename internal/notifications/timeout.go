@@ -77,6 +77,11 @@ func (w *TimeoutWatcher) check(ctx context.Context) {
 			"recipient", rec.Recipient,
 		)
 
+		// Signal any synchronous escalation waiter.
+		if w.dispatcher != nil && w.dispatcher.ResponseWaiter() != nil {
+			w.dispatcher.ResponseWaiter().SignalTimeout(rec.RequestID)
+		}
+
 		w.handleTimeoutAction(ctx, rec)
 	}
 }

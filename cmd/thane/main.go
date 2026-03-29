@@ -985,6 +985,10 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		// behind a routing layer that selects delivery channel per recipient.
 		notifRouter = notifications.NewNotificationRouter(contactStore, notifRecords, logger)
 		notifRouter.RegisterProvider(notifications.NewHAPushProvider(notifSender))
+		notifRouter.SetActivitySource(&channelActivityAdapter{
+			loops: &channelLoopAdapter{registry: loopRegistry},
+			store: contactStore,
+		})
 		loop.Tools().SetNotificationRouter(notifRouter)
 		logger.Info("notification router initialized", "providers", "ha_push")
 	}
@@ -1718,6 +1722,18 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 				Logger:  logger,
 			})
 
+			// Register Signal as a notification delivery channel so the
+			// notification router can route to Signal when the contact
+			// has an active Signal session.
+			if notifRouter != nil {
+				sp := notifications.NewSignalProvider(
+					signalClient, contactStore, logger,
+				)
+				sp.SetRecorder(&signalMemoryRecorder{mem: mem})
+				notifRouter.RegisterProvider(sp)
+				logger.Info("signal notification provider registered")
+			}
+
 			logger.Info("signal bridge started",
 				"command", cfg.Signal.Command,
 				"account", cfg.Signal.Account,
@@ -1799,6 +1815,19 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 			30*time.Second, logger,
 		)
 		go timeoutWatcher.Start(ctx)
+		loop.Tools().SetCallbackDispatcher(notifCallbackDispatcher)
+
+		// Synchronous escalation support — allows tools to block
+		// waiting for human responses via any notification channel.
+		escalationWaiter := notifications.NewResponseWaiter()
+		notifCallbackDispatcher.SetResponseWaiter(escalationWaiter)
+		loop.Tools().SetEscalationTools(tools.EscalationDeps{
+			Router:     notifRouter,
+			Records:    notifRecords,
+			Dispatcher: notifCallbackDispatcher,
+			Waiter:     escalationWaiter,
+		})
+
 		logger.Info("notification callback dispatcher and timeout watcher initialized")
 	}
 
@@ -3643,7 +3672,10 @@ type channelLoopAdapter struct {
 	registry *looppkg.Registry
 }
 
-// ChannelLoops returns loop snapshots for loops with category=channel metadata.
+// ChannelLoops returns loop snapshots for all loops with
+// category=channel metadata (both parents and children). Consumers
+// that need only child loops should filter on channel-specific
+// identifiers (e.g., sender for signal, conversation_id for owu).
 func (a *channelLoopAdapter) ChannelLoops() []awareness.LoopSnapshot {
 	statuses := a.registry.Statuses()
 	var result []awareness.LoopSnapshot
@@ -3661,4 +3693,92 @@ func (a *channelLoopAdapter) ChannelLoops() []awareness.LoopSnapshot {
 		})
 	}
 	return result
+}
+
+// signalMemoryRecorder records outbound Signal notifications in
+// conversation memory so the agent has context when the user replies.
+// Implements [notifications.MessageRecorder].
+type signalMemoryRecorder struct {
+	mem memory.MemoryStore
+}
+
+// RecordOutbound stores an annotated assistant message in the Signal
+// conversation for the given phone number.
+func (r *signalMemoryRecorder) RecordOutbound(phone, message string) error {
+	// Derive conversation ID the same way the Signal bridge does:
+	// "signal-" + phone normalized to alphanumeric characters.
+	var sb strings.Builder
+	for _, c := range phone {
+		if c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' {
+			sb.WriteRune(c)
+		}
+	}
+	convID := "signal-" + sb.String()
+	return r.mem.AddMessage(convID, "assistant", message)
+}
+
+// channelActivityAdapter bridges [notifications.ChannelActivitySource]
+// to the loop registry, resolving sender identities to contact names.
+type channelActivityAdapter struct {
+	loops *channelLoopAdapter
+	store *contacts.Store
+}
+
+// ActiveChannels returns channel activity entries for active channel
+// child loops, resolving Signal phone numbers to contact names via
+// both TEL and IMPP properties.
+func (a *channelActivityAdapter) ActiveChannels() []notifications.ChannelActivity {
+	loops := a.loops.ChannelLoops()
+	var result []notifications.ChannelActivity
+	for _, l := range loops {
+		subsystem := l.Metadata["subsystem"]
+		if subsystem == "" {
+			continue
+		}
+		// Skip parent loops (no per-conversation identity).
+		if subsystem == "signal" && l.Metadata["sender"] == "" {
+			continue
+		}
+		if subsystem == "owu" && l.Metadata["conversation_id"] == "" {
+			continue
+		}
+
+		entry := notifications.ChannelActivity{
+			Channel:    subsystem,
+			LastActive: l.LastWakeAt,
+		}
+
+		// Resolve contact name from channel-specific identifiers.
+		if a.store != nil {
+			switch subsystem {
+			case "signal":
+				if sender := l.Metadata["sender"]; sender != "" {
+					entry.Contact = resolveSignalContact(a.store, sender)
+				}
+			}
+		}
+
+		result = append(result, entry)
+	}
+	return result
+}
+
+// resolveSignalContact resolves a phone number to a contact name by
+// checking TEL and IMPP properties with both raw and +-prefixed forms.
+func resolveSignalContact(store *contacts.Store, phone string) string {
+	candidates := []string{phone}
+	if !strings.HasPrefix(phone, "+") {
+		candidates = append(candidates, "+"+phone)
+	}
+	for _, p := range candidates {
+		if matches, err := store.FindByPropertyExact("TEL", p); err == nil && len(matches) > 0 {
+			return matches[0].FormattedName
+		}
+	}
+	for _, p := range candidates {
+		if matches, err := store.FindByPropertyExact("IMPP", "signal:"+p); err == nil && len(matches) > 0 {
+			return matches[0].FormattedName
+		}
+	}
+	return ""
 }

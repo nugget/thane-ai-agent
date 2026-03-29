@@ -6,19 +6,37 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 )
 
+// ChannelActivity describes a channel with recent interaction for a
+// specific contact.
+type ChannelActivity struct {
+	Channel    string    // provider name: "signal", "owu"
+	Contact    string    // resolved contact name
+	LastActive time.Time // when the channel last had activity
+}
+
+// ChannelActivitySource provides information about which channels
+// have recent activity for which contacts. Used by the notification
+// router to prefer channels the user is actively engaged on.
+type ChannelActivitySource interface {
+	ActiveChannels() []ChannelActivity
+}
+
 // NotificationRouter selects a notification provider based on contact
-// facts and orchestrates delivery for both fire-and-forget and
-// actionable notifications. It is the single entry point for the
-// provider-agnostic send_notification and request_human_decision tools.
+// facts and channel activity, then orchestrates delivery for both
+// fire-and-forget and actionable notifications. It is the single
+// entry point for the provider-agnostic send_notification and
+// request_human_decision tools.
 type NotificationRouter struct {
 	providers map[string]NotificationProvider
 	contacts  ContactResolver
 	records   *RecordStore
+	activity  ChannelActivitySource
 	logger    *slog.Logger
 }
 
@@ -35,6 +53,12 @@ func NewNotificationRouter(contacts ContactResolver, records *RecordStore, logge
 		records:   records,
 		logger:    logger,
 	}
+}
+
+// SetActivitySource configures channel activity awareness. When set,
+// [Route] prefers providers with recent activity for the recipient.
+func (r *NotificationRouter) SetActivitySource(src ChannelActivitySource) {
+	r.activity = src
 }
 
 // RegisterProvider adds a notification provider to the router. Nil
@@ -83,7 +107,35 @@ func (r *NotificationRouter) Route(recipient string) (NotificationProvider, erro
 			"recipient", recipient, "preference", prefs[0])
 	}
 
-	// 2. HA companion app available → route to ha_push.
+	// 2. Active channel — prefer a provider the contact is currently
+	// engaged on. Pick the most recently active channel that has a
+	// registered provider.
+	if r.activity != nil {
+		var bestProvider NotificationProvider
+		var bestTime time.Time
+		contactName := contact.FormattedName
+		for _, ch := range r.activity.ActiveChannels() {
+			if !strings.EqualFold(ch.Contact, contactName) {
+				continue
+			}
+			if ch.LastActive.After(bestTime) {
+				if p, exists := r.providers[ch.Channel]; exists {
+					bestProvider = p
+					bestTime = ch.LastActive
+				}
+			}
+		}
+		if bestProvider != nil {
+			r.logger.Info("routing to active channel",
+				"recipient", recipient,
+				"provider", bestProvider.Name(),
+				"last_active", bestTime,
+			)
+			return bestProvider, nil
+		}
+	}
+
+	// 3. Static fallback — HA companion app available → ha_push.
 	if apps, ok := props["ha_companion_app"]; ok && len(apps) > 0 {
 		if p, exists := r.providers["ha_push"]; exists {
 			return p, nil
@@ -132,9 +184,25 @@ func (r *NotificationRouter) SendActionable(ctx context.Context, req ActionableR
 	req.RequestID = u.String()
 
 	// Deliver first — fail early before creating a tracking record.
+	// On failure, try ha_push as fallback (it supports structured
+	// action buttons natively).
+	deliveredVia := provider
 	if err := provider.SendActionable(ctx, req); err != nil {
-		return "", err
+		fallback, ok := r.providers["ha_push"]
+		if !ok || fallback.Name() == provider.Name() {
+			return "", err
+		}
+		r.logger.Info("actionable notification fallback",
+			"primary", provider.Name(),
+			"fallback", "ha_push",
+			"reason", err.Error(),
+		)
+		if fbErr := fallback.SendActionable(ctx, req); fbErr != nil {
+			return "", fbErr
+		}
+		deliveredVia = fallback
 	}
+	_ = deliveredVia // available for future telemetry
 
 	// Create tracking record.
 	now := time.Now().UTC()

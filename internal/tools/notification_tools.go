@@ -188,11 +188,24 @@ func (r *Registry) handleActionableNotify(ctx context.Context, n notifications.N
 	), nil
 }
 
+// CallbackDispatcher routes notification responses to originating
+// sessions. Implemented by notifications.CallbackDispatcher.
+type CallbackDispatcher interface {
+	DispatchAction(record *notifications.Record, actionID string)
+}
+
 // SetNotificationRouter adds the provider-agnostic send_notification
 // and request_human_decision tools to the registry.
 func (r *Registry) SetNotificationRouter(router *notifications.NotificationRouter) {
 	r.notifRouter = router
 	r.registerGenericNotificationTools()
+}
+
+// SetCallbackDispatcher configures callback routing for the
+// resolve_actionable tool.
+func (r *Registry) SetCallbackDispatcher(d CallbackDispatcher) {
+	r.notifDispatcher = d
+	r.registerResolveActionable()
 }
 
 func (r *Registry) registerGenericNotificationTools() {
@@ -415,4 +428,84 @@ func parseActionsArg(args map[string]any) []notifications.Action {
 		actions = append(actions, notifications.Action{ID: id, Label: label})
 	}
 	return actions
+}
+
+// registerResolveActionable adds the resolve_actionable tool. Called
+// when a CallbackDispatcher is configured.
+func (r *Registry) registerResolveActionable() {
+	if r.notifDispatcher == nil || r.notifRecords == nil {
+		return
+	}
+
+	r.Register(&Tool{
+		Name: "resolve_actionable",
+		Description: "Resolve a pending actionable notification by recording the user's chosen action. " +
+			"Use this when a user replies to an actionable notification in a conversational channel (e.g., Signal). " +
+			"The notification's [request_id: ...] annotation in conversation history identifies which notification to resolve. " +
+			"The action_id must match one of the notification's original action IDs.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"request_id": map[string]any{
+					"type":        "string",
+					"description": "The request_id from the notification's metadata annotation",
+				},
+				"action_id": map[string]any{
+					"type":        "string",
+					"description": "The action ID chosen by the user (must match one of the notification's original action IDs)",
+				},
+			},
+			"required": []string{"request_id", "action_id"},
+		},
+		Handler: func(ctx context.Context, args map[string]any) (string, error) {
+			requestID, _ := args["request_id"].(string)
+			actionID, _ := args["action_id"].(string)
+			if requestID == "" || actionID == "" {
+				return "", fmt.Errorf("request_id and action_id are required")
+			}
+
+			// Validate the UUID format.
+			if _, err := uuid.Parse(requestID); err != nil {
+				return "", fmt.Errorf("invalid request_id %q: %w", requestID, err)
+			}
+
+			// Fetch the record.
+			record, err := r.notifRecords.Get(requestID)
+			if err != nil {
+				return "", fmt.Errorf("notification %s not found: %w", requestID, err)
+			}
+
+			// Validate the action ID against the record's actions.
+			validAction := false
+			for _, a := range record.Actions {
+				if a.ID == actionID {
+					validAction = true
+					break
+				}
+			}
+			if !validAction {
+				validIDs := make([]string, len(record.Actions))
+				for i, a := range record.Actions {
+					validIDs[i] = a.ID
+				}
+				return "", fmt.Errorf("invalid action_id %q; valid actions: %s",
+					actionID, strings.Join(validIDs, ", "))
+			}
+
+			// Atomically mark as responded (race-safe with timeout watcher).
+			ok, err := r.notifRecords.Respond(requestID, actionID)
+			if err != nil {
+				return "", fmt.Errorf("resolve notification %s: %w", requestID, err)
+			}
+			if !ok {
+				return fmt.Sprintf("Notification %s already resolved.", requestID), nil
+			}
+
+			// Dispatch the callback to the originating session/conversation.
+			r.notifDispatcher.DispatchAction(record, actionID)
+
+			return fmt.Sprintf("Notification %s resolved: action %q dispatched to originating conversation.",
+				requestID, actionID), nil
+		},
+	})
 }
