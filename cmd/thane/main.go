@@ -2000,6 +2000,12 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	anticipationProvider := scheduler.NewAnticipationProvider(anticipationStore)
 	contextProvider := agent.NewCompositeContextProvider(anticipationProvider)
 	contextProvider.Add(agent.NewChannelProvider(&contactNameLookup{store: contactStore}))
+	contextProvider.Add(awareness.NewChannelOverviewProvider(awareness.ChannelOverviewConfig{
+		Loops:  &channelLoopAdapter{registry: loopRegistry},
+		Phones: &contactPhoneResolver{store: contactStore},
+		Hints:  tools.HintsFromContext,
+		Logger: logger,
+	}))
 
 	episodicProvider := memory.NewEpisodicProvider(archiveStore, logger, memory.EpisodicConfig{
 		Timezone:          cfg.Timezone,
@@ -3629,4 +3635,30 @@ func augmentPath(extra []string) []string {
 		return nil
 	}
 	return prepend
+}
+
+// channelLoopAdapter bridges [awareness.ChannelLoopSource] to the loop
+// registry, filtering for channel-category loops only.
+type channelLoopAdapter struct {
+	registry *looppkg.Registry
+}
+
+// ChannelLoops returns loop snapshots for loops with category=channel metadata.
+func (a *channelLoopAdapter) ChannelLoops() []awareness.LoopSnapshot {
+	statuses := a.registry.Statuses()
+	var result []awareness.LoopSnapshot
+	for _, s := range statuses {
+		if s.Config.Metadata["category"] != "channel" {
+			continue
+		}
+		result = append(result, awareness.LoopSnapshot{
+			ID:            s.ID,
+			Name:          s.Name,
+			State:         string(s.State),
+			LastWakeAt:    s.LastWakeAt,
+			Metadata:      s.Config.Metadata,
+			RecentConvIDs: s.RecentConvIDs,
+		})
+	}
+	return result
 }
