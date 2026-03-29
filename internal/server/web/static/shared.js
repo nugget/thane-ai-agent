@@ -818,6 +818,11 @@ function applyLoopEventToLoop(evt, ctx) {
           }
         }
       }
+      // Signal that active capabilities may have changed so the
+      // caller can refetch loop status for updated active_tags.
+      if (d.tool === 'request_capability' || d.tool === 'drop_capability') {
+        return { capabilityChanged: true };
+      }
       return null;
 
     case 'loop_llm_start':

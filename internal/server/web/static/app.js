@@ -513,6 +513,12 @@ function handleLoopEvent(evt) {
     }
   }
 
+  // Capability tools change active_tags — refetch loop status so
+  // the dashboard shows the updated capability state immediately.
+  if (result && result.capabilityChanged) {
+    fetchLoops();
+  }
+
   renderAll();
 }
 

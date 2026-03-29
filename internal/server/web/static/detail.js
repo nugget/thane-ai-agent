@@ -236,6 +236,27 @@ function applyLoopEvent(evt) {
       iterationHistory.length = MAX_ITERATION_HISTORY;
     }
   }
+
+  // Capability tools change active_tags — refetch to update chips.
+  if (result && result.capabilityChanged) {
+    refreshActiveTags();
+  }
+}
+
+// refreshActiveTags fetches current loop status and updates
+// the active_tags field so capability chips reflect changes
+// from request_capability / drop_capability tool calls.
+async function refreshActiveTags() {
+  try {
+    const resp = await fetch('/api/loops');
+    if (!resp.ok) return;
+    const statuses = await resp.json();
+    const match = statuses.find(s => s.id === nodeId);
+    if (match && loopData) {
+      loopData.active_tags = match.active_tags || null;
+      renderLoopDetail();
+    }
+  } catch (_) { /* best-effort */ }
 }
 
 function renderLoopDetail() {
