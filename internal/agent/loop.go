@@ -640,41 +640,51 @@ func (l *Loop) buildSystemPrompt(ctx context.Context, userMessage string, histor
 	if len(tags) > 0 {
 		mark("ACTIVE CAPABILITIES")
 		sb.WriteString("\n\n## Active Capabilities\n\n")
+
+		type capEntry struct {
+			Tag         string `json:"tag"`
+			Status      string `json:"status"`
+			Description string `json:"description,omitempty"`
+		}
+
+		var entries []capEntry
+		// Active tags first.
 		sorted := make([]string, 0, len(tags))
 		for t := range tags {
 			sorted = append(sorted, t)
 		}
 		sort.Strings(sorted)
 		for _, tag := range sorted {
-			cfg, configured := l.capTags[tag]
-			if configured && cfg.AlwaysActive {
-				sb.WriteString("- **")
-				sb.WriteString(tag)
-				sb.WriteString("** (always-active)")
+			e := capEntry{Tag: tag, Status: "active"}
+			if cfg, ok := l.capTags[tag]; ok {
+				if cfg.AlwaysActive {
+					e.Status = "always-active"
+				}
+				e.Description = cfg.Description
 			} else {
-				sb.WriteString("- **")
-				sb.WriteString(tag)
-				sb.WriteString("**")
+				e.Status = "active (ad-hoc)"
 			}
-			if configured && cfg.Description != "" {
-				sb.WriteString(": ")
-				sb.WriteString(cfg.Description)
-			}
-			sb.WriteString("\n")
+			entries = append(entries, e)
 		}
-		// List available-but-inactive tags so the model knows what it can request.
+		// Available-but-inactive tags.
 		var inactive []string
-		for tag, cfg := range l.capTags {
-			if !tags[tag] && !cfg.AlwaysActive {
+		for tag := range l.capTags {
+			if !tags[tag] && !l.capTags[tag].AlwaysActive {
 				inactive = append(inactive, tag)
 			}
 		}
-		if len(inactive) > 0 {
-			sort.Strings(inactive)
-			sb.WriteString("\nAvailable but not active: ")
-			sb.WriteString(strings.Join(inactive, ", "))
-			sb.WriteString(". Use request_capability to activate.\n")
+		sort.Strings(inactive)
+		for _, tag := range inactive {
+			entries = append(entries, capEntry{
+				Tag:         tag,
+				Status:      "available",
+				Description: l.capTags[tag].Description,
+			})
 		}
+
+		capJSON, _ := json.Marshal(entries)
+		sb.Write(capJSON)
+		sb.WriteString("\n")
 		seal()
 	}
 
