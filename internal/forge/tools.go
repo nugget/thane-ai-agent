@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
+
+	"github.com/nugget/thane-ai-agent/internal/awareness"
 )
 
 // Tools holds forge tool dependencies. Each Handle* method takes the
@@ -173,7 +176,10 @@ func (t *Tools) HandleIssueGet(ctx context.Context, args map[string]any) (string
 	if len(issue.Assignees) > 0 {
 		fmt.Fprintf(&sb, "Assignees: %s\n", strings.Join(issue.Assignees, ", "))
 	}
-	fmt.Fprintf(&sb, "Created: %s | Updated: %s\n", issue.CreatedAt.Format("2006-01-02"), issue.UpdatedAt.Format("2006-01-02"))
+	now := time.Now()
+	fmt.Fprintf(&sb, "Created: %s | Updated: %s\n",
+		awareness.FormatDelta(issue.CreatedAt, now),
+		awareness.FormatDelta(issue.UpdatedAt, now))
 	fmt.Fprintf(&sb, "URL: %s\n", issue.URL)
 	if issue.Body != "" {
 		fmt.Fprintf(&sb, "\n---\n%s", issue.Body)
@@ -309,7 +315,10 @@ func (t *Tools) HandlePRGet(ctx context.Context, args map[string]any) (string, e
 	if pr.Mergeable != nil {
 		fmt.Fprintf(&sb, "Mergeable: %v\n", *pr.Mergeable)
 	}
-	fmt.Fprintf(&sb, "Created: %s | Updated: %s\n", pr.CreatedAt.Format("2006-01-02"), pr.UpdatedAt.Format("2006-01-02"))
+	now := time.Now()
+	fmt.Fprintf(&sb, "Created: %s | Updated: %s\n",
+		awareness.FormatDelta(pr.CreatedAt, now),
+		awareness.FormatDelta(pr.UpdatedAt, now))
 	fmt.Fprintf(&sb, "URL: %s\n", pr.URL)
 	if pr.Body != "" {
 		fmt.Fprintf(&sb, "\n---\n%s", pr.Body)
@@ -404,6 +413,7 @@ func (t *Tools) HandlePRCommits(ctx context.Context, args map[string]any) (strin
 		return "No commits.", nil
 	}
 
+	now := time.Now()
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "%d commit(s):\n\n", len(commits))
 	for _, c := range commits {
@@ -412,8 +422,8 @@ func (t *Tools) HandlePRCommits(ctx context.Context, args map[string]any) (strin
 		if idx := strings.IndexByte(msg, '\n'); idx >= 0 {
 			msg = msg[:idx]
 		}
-		fmt.Fprintf(&sb, "%s %s — %s (%s)\n",
-			c.SHA, msg, c.Author, c.Date.Format("2006-01-02"))
+		fmt.Fprintf(&sb, "%s %s — %s %s\n",
+			c.SHA, msg, c.Author, awareness.FormatDelta(c.Date, now))
 	}
 
 	return sb.String(), nil
@@ -440,12 +450,13 @@ func (t *Tools) HandlePRReviews(ctx context.Context, args map[string]any) (strin
 		return "No reviews.", nil
 	}
 
+	now := time.Now()
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "%d review(s):\n\n", len(reviews))
 	for _, r := range reviews {
 		fmt.Fprintf(&sb, "Review #%d by %s — %s", r.ID, r.Author, r.State)
 		if !r.SubmittedAt.IsZero() {
-			fmt.Fprintf(&sb, " (%s)", r.SubmittedAt.Format("2006-01-02 15:04"))
+			fmt.Fprintf(&sb, " %s", awareness.FormatDelta(r.SubmittedAt, now))
 		}
 		sb.WriteString("\n")
 		if r.Body != "" {

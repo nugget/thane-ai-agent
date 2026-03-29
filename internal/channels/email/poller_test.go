@@ -21,12 +21,15 @@ func testOpstate(t *testing.T) *opstate.Store {
 }
 
 func TestFormatPollSection_Single(t *testing.T) {
+	// Use a date relative to now so the delta assertion is stable.
+	msgDate := time.Now().Add(-2 * time.Hour)
+
 	messages := []Envelope{
 		{
 			UID:     100,
 			From:    "Jane Doe <jane@example.com>",
 			Subject: "Re: Project update",
-			Date:    time.Date(2026, 2, 20, 16, 30, 0, 0, time.UTC),
+			Date:    msgDate,
 		},
 	}
 
@@ -41,8 +44,9 @@ func TestFormatPollSection_Single(t *testing.T) {
 	if !strings.Contains(result, "Subject: Re: Project update") {
 		t.Error("should contain subject")
 	}
-	if !strings.Contains(result, "Date: 2026-02-20 16:30") {
-		t.Error("should contain date")
+	// Date should use delta format: "(-Ns)" for past.
+	if !strings.Contains(result, "(-") {
+		t.Errorf("date should use delta format (past), got:\n%s", result)
 	}
 }
 

@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/nugget/thane-ai-agent/internal/awareness"
 )
 
 // Tools holds email tool dependencies. Each handler takes the raw
@@ -412,6 +414,7 @@ func (t *Tools) sendEmail(ctx context.Context, account string, to, cc []string, 
 // --- Formatting helpers ---
 
 func formatEnvelopeList(envelopes []Envelope) string {
+	now := time.Now()
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("Found %d message(s):\n\n", len(envelopes)))
 
@@ -419,7 +422,7 @@ func formatEnvelopeList(envelopes []Envelope) string {
 		sb.WriteString(fmt.Sprintf("UID: %d\n", env.UID))
 		sb.WriteString(fmt.Sprintf("From: %s\n", env.From))
 		sb.WriteString(fmt.Sprintf("Subject: %s\n", env.Subject))
-		sb.WriteString(fmt.Sprintf("Date: %s\n", env.Date.Format("2006-01-02 15:04")))
+		sb.WriteString(fmt.Sprintf("Date: %s\n", awareness.FormatDelta(env.Date, now)))
 
 		if len(env.Flags) > 0 {
 			sb.WriteString(fmt.Sprintf("Flags: %s\n", strings.Join(env.Flags, ", ")))
@@ -432,6 +435,7 @@ func formatEnvelopeList(envelopes []Envelope) string {
 }
 
 func formatMessage(msg *Message) string {
+	now := time.Now()
 	var sb strings.Builder
 
 	sb.WriteString(fmt.Sprintf("From: %s\n", msg.From))
@@ -440,7 +444,7 @@ func formatMessage(msg *Message) string {
 		sb.WriteString(fmt.Sprintf("Cc: %s\n", strings.Join(msg.Cc, ", ")))
 	}
 	sb.WriteString(fmt.Sprintf("Subject: %s\n", msg.Subject))
-	sb.WriteString(fmt.Sprintf("Date: %s\n", msg.Date.Format("2006-01-02 15:04 MST")))
+	sb.WriteString(fmt.Sprintf("Date: %s\n", awareness.FormatDelta(msg.Date, now)))
 	if len(msg.Flags) > 0 {
 		sb.WriteString(fmt.Sprintf("Flags: %s\n", strings.Join(msg.Flags, ", ")))
 	}

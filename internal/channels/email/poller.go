@@ -6,7 +6,9 @@ import (
 	"log/slog"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/nugget/thane-ai-agent/internal/awareness"
 	"github.com/nugget/thane-ai-agent/internal/loop"
 	"github.com/nugget/thane-ai-agent/internal/opstate"
 )
@@ -285,13 +287,14 @@ func (p *Poller) advanceHighWaterMark(accountName, stateKey string, currentMark 
 // formatPollSection builds a wake message section for new messages on
 // a single account.
 func formatPollSection(accountName string, messages []Envelope) string {
+	now := time.Now()
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("Account: %s (INBOX)\n", accountName))
 
 	for _, env := range messages {
 		sb.WriteString(fmt.Sprintf("  From: %s\n", env.From))
 		sb.WriteString(fmt.Sprintf("  Subject: %s\n", env.Subject))
-		sb.WriteString(fmt.Sprintf("  Date: %s\n", env.Date.Format("2006-01-02 15:04")))
+		sb.WriteString(fmt.Sprintf("  Date: %s\n", awareness.FormatDelta(env.Date, now)))
 		sb.WriteString("\n")
 	}
 

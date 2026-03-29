@@ -3,7 +3,9 @@ package tools
 import (
 	"context"
 	"fmt"
+	"time"
 
+	"github.com/nugget/thane-ai-agent/internal/awareness"
 	"github.com/nugget/thane-ai-agent/internal/memory"
 )
 
@@ -47,7 +49,7 @@ func (r *Registry) SetWorkingMemoryStore(store *memory.WorkingMemoryStore) {
 				if content == "" {
 					return "(no working memory for this conversation)", nil
 				}
-				return fmt.Sprintf("Last updated: %s\n\n%s", updatedAt.Format("2006-01-02 15:04:05"), content), nil
+				return fmt.Sprintf("Last updated: %s\n\n%s", awareness.FormatDeltaOnly(updatedAt, time.Now()), content), nil
 
 			case "write":
 				content, _ := args["content"].(string)
