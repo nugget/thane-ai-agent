@@ -281,33 +281,21 @@ func TestChannelTags_UnknownChannel(t *testing.T) {
 }
 
 func TestChannelTags_DropPinnedTagRejected(t *testing.T) {
-	// Channel-pinned tags cannot be dropped via DropCapability.
-	// Simulate the state that Run() creates when a channel source is set.
-	loop := buildTestLoop(&mockLLM{}, nil)
-	loop.SetCapabilityTags(map[string]config.CapabilityTagConfig{
-		"signal": {
-			Description: "Signal messaging",
-			Tools:       []string{"signal_tool"},
-		},
-		"extra": {
-			Description: "Extra tools",
-			Tools:       []string{"extra_tool"},
-		},
-	}, nil)
-	loop.SetChannelTags(map[string][]string{
-		"signal": {"signal"},
-	})
+	// Channel-pinned tags cannot be dropped via capabilityScope.Drop.
+	capTags := map[string]config.CapabilityTagConfig{
+		"signal": {Description: "Signal messaging", Tools: []string{"signal_tool"}},
+		"extra":  {Description: "Extra tools", Tools: []string{"extra_tool"}},
+	}
+	scope := newCapabilityScope(capTags)
+	scope.PinChannelTags([]string{"signal"})
+	_ = scope.Request("extra") // agent-requested, not pinned
 
-	// Simulate what Run() does: activate the channel tag and ref-count it.
-	loop.tagMu.Lock()
-	loop.activeTags["signal"] = true
-	loop.channelPinnedTags["signal"] = 1
-	// Also activate "extra" as an agent-requested tag (not channel-pinned).
-	loop.activeTags["extra"] = true
-	loop.tagMu.Unlock()
+	ctx := withCapabilityScope(context.Background(), scope)
 
 	// Dropping the channel-pinned tag should fail.
-	err := loop.DropCapability("signal")
+	loop := buildTestLoop(&mockLLM{}, nil)
+	loop.SetCapabilityTags(capTags, nil)
+	err := loop.DropCapability(ctx, "signal")
 	if err == nil {
 		t.Fatal("expected error when dropping channel-pinned tag")
 	}
@@ -316,7 +304,7 @@ func TestChannelTags_DropPinnedTagRejected(t *testing.T) {
 	}
 
 	// The tag should still be active.
-	active := loop.ActiveTags()
+	active := scope.Snapshot()
 	if !active["signal"] {
 		t.Error("signal tag should still be active after rejected drop")
 	}
@@ -324,35 +312,25 @@ func TestChannelTags_DropPinnedTagRejected(t *testing.T) {
 
 func TestChannelTags_DropNonPinnedTagAllowed(t *testing.T) {
 	// Tags that are active but not channel-pinned can still be dropped.
-	loop := buildTestLoop(&mockLLM{}, nil)
-	loop.SetCapabilityTags(map[string]config.CapabilityTagConfig{
-		"signal": {
-			Description: "Signal messaging",
-			Tools:       []string{"signal_tool"},
-		},
-		"extra": {
-			Description: "Extra tools",
-			Tools:       []string{"extra_tool"},
-		},
-	}, nil)
-	loop.SetChannelTags(map[string][]string{
-		"signal": {"signal"},
-	})
+	capTags := map[string]config.CapabilityTagConfig{
+		"signal": {Description: "Signal messaging", Tools: []string{"signal_tool"}},
+		"extra":  {Description: "Extra tools", Tools: []string{"extra_tool"}},
+	}
+	scope := newCapabilityScope(capTags)
+	scope.PinChannelTags([]string{"signal"})
+	_ = scope.Request("extra") // agent-requested, not pinned
 
-	// Simulate: "signal" is channel-pinned, "extra" is agent-requested.
-	loop.tagMu.Lock()
-	loop.activeTags["signal"] = true
-	loop.channelPinnedTags["signal"] = 1
-	loop.activeTags["extra"] = true
-	loop.tagMu.Unlock()
+	ctx := withCapabilityScope(context.Background(), scope)
 
 	// Dropping the non-pinned tag should succeed.
-	err := loop.DropCapability("extra")
+	loop := buildTestLoop(&mockLLM{}, nil)
+	loop.SetCapabilityTags(capTags, nil)
+	err := loop.DropCapability(ctx, "extra")
 	if err != nil {
 		t.Fatalf("unexpected error dropping non-pinned tag: %v", err)
 	}
 
-	active := loop.ActiveTags()
+	active := scope.Snapshot()
 	if active["extra"] {
 		t.Error("extra tag should no longer be active after drop")
 	}
