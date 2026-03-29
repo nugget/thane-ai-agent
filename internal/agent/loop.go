@@ -636,6 +636,48 @@ func (l *Loop) buildSystemPrompt(ctx context.Context, userMessage string, histor
 		}
 	}
 
+	// 3c. Active capabilities summary — tells the model what it has loaded.
+	if len(tags) > 0 {
+		mark("ACTIVE CAPABILITIES")
+		sb.WriteString("\n\n## Active Capabilities\n\n")
+		sorted := make([]string, 0, len(tags))
+		for t := range tags {
+			sorted = append(sorted, t)
+		}
+		sort.Strings(sorted)
+		for _, tag := range sorted {
+			cfg, configured := l.capTags[tag]
+			if configured && cfg.AlwaysActive {
+				sb.WriteString("- **")
+				sb.WriteString(tag)
+				sb.WriteString("** (always-active)")
+			} else {
+				sb.WriteString("- **")
+				sb.WriteString(tag)
+				sb.WriteString("**")
+			}
+			if configured && cfg.Description != "" {
+				sb.WriteString(": ")
+				sb.WriteString(cfg.Description)
+			}
+			sb.WriteString("\n")
+		}
+		// List available-but-inactive tags so the model knows what it can request.
+		var inactive []string
+		for tag, cfg := range l.capTags {
+			if !tags[tag] && !cfg.AlwaysActive {
+				inactive = append(inactive, tag)
+			}
+		}
+		if len(inactive) > 0 {
+			sort.Strings(inactive)
+			sb.WriteString("\nAvailable but not active: ")
+			sb.WriteString(strings.Join(inactive, ", "))
+			sb.WriteString(". Use request_capability to activate.\n")
+		}
+		seal()
+	}
+
 	// 4. Current Conditions (environment — where/when am I)
 	// Placed early because models attend more strongly to content near
 	// the beginning. Uses H1 heading to signal operational importance.

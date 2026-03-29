@@ -43,7 +43,6 @@ func (r *Registry) SetCapabilityTools(mgr CapabilityManager, manifest []Capabili
 	}
 	r.registerRequestCapability(mgr, manifest, tagManifest)
 	r.registerDropCapability(mgr, tagManifest)
-	r.registerListCapabilities(mgr, manifest, tagManifest)
 }
 
 // registerRequestCapability registers the request_capability tool.
@@ -156,48 +155,6 @@ func (r *Registry) registerDropCapability(mgr CapabilityManager, tagManifest map
 				sort.Strings(tags)
 				fmt.Fprintf(&result, " Active tags: %s.", strings.Join(tags, ", "))
 			}
-			return result.String(), nil
-		},
-	})
-}
-
-// registerListCapabilities registers the list_capabilities tool.
-func (r *Registry) registerListCapabilities(mgr CapabilityManager, manifest []CapabilityManifest, tagManifest map[string]CapabilityManifest) {
-	r.Register(&Tool{
-		Name:            "list_capabilities",
-		AlwaysAvailable: true,
-		Description:     "List all capability tags and their current activation state. Shows which tags are active, always-active, or available for activation, along with the tools each provides.",
-		Parameters: map[string]any{
-			"type":       "object",
-			"properties": map[string]any{},
-		},
-		Handler: func(ctx context.Context, args map[string]any) (string, error) {
-			active := mgr.ActiveTags()
-
-			var result strings.Builder
-			result.WriteString("## Capability Tags\n\n")
-
-			for _, m := range manifest {
-				state := "inactive"
-				if m.AlwaysActive {
-					state = "always-active"
-				} else if active[m.Tag] {
-					state = "active"
-				}
-				fmt.Fprintf(&result, "- **%s** [%s]: %s", m.Tag, state, m.Description)
-				if len(m.Tools) > 0 {
-					fmt.Fprintf(&result, " (tools: %s)", strings.Join(m.Tools, ", "))
-				}
-				result.WriteString("\n")
-			}
-
-			// Show ad-hoc tags (active but not in manifest).
-			for tag := range active {
-				if _, ok := tagManifest[tag]; !ok {
-					fmt.Fprintf(&result, "- **%s** [active]: ad-hoc tag\n", tag)
-				}
-			}
-
 			return result.String(), nil
 		},
 	})
