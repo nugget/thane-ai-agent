@@ -46,6 +46,7 @@ type Registry struct {
 	notifier          *notifications.Sender
 	notifRecords      *notifications.RecordStore
 	notifRouter       *notifications.NotificationRouter
+	notifDispatcher   CallbackDispatcher
 	forgeTools        forgeHandler
 	fileTools         *FileTools
 	shellExec         *ShellExec

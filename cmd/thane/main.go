@@ -1815,6 +1815,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 			30*time.Second, logger,
 		)
 		go timeoutWatcher.Start(ctx)
+		loop.Tools().SetCallbackDispatcher(notifCallbackDispatcher)
 		logger.Info("notification callback dispatcher and timeout watcher initialized")
 	}
 
