@@ -696,7 +696,7 @@ func (t *Tools) HandleRequestReview(ctx context.Context, args map[string]any) (s
 		return "", err
 	}
 
-	t.recordOp("forge_request_review", acct, repo, fmt.Sprintf("#%d", number))
+	t.recordOp("forge_pr_request_review", acct, repo, fmt.Sprintf("#%d", number))
 	return fmt.Sprintf("Requested review from %s on PR #%d", strings.Join(reviewers, ", "), number), nil
 }
 
@@ -705,6 +705,10 @@ func (t *Tools) HandleRequestReview(ctx context.Context, args map[string]any) (s
 // HandleSearch performs a forge-native search.
 func (t *Tools) HandleSearch(ctx context.Context, args map[string]any) (string, error) {
 	account := stringArg(args, "account")
+	resolvedAcct := account
+	if resolvedAcct == "" && len(t.manager.order) > 0 {
+		resolvedAcct = t.manager.order[0]
+	}
 	provider, err := t.manager.Account(account)
 	if err != nil {
 		return "", err
@@ -728,6 +732,7 @@ func (t *Tools) HandleSearch(ctx context.Context, args map[string]any) (string, 
 	}
 
 	if len(results) == 0 {
+		t.recordOp("forge_search", resolvedAcct, "", kindStr+": "+query)
 		return "No results found.", nil
 	}
 
@@ -744,5 +749,6 @@ func (t *Tools) HandleSearch(ctx context.Context, args map[string]any) (string, 
 		sb.WriteString("\n")
 	}
 
+	t.recordOp("forge_search", resolvedAcct, "", kindStr+": "+query)
 	return sb.String(), nil
 }

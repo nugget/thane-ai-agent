@@ -3,6 +3,7 @@ package forge
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/awareness"
@@ -49,18 +50,18 @@ type recentOpJSON struct {
 // GetContext returns the forge context block. Implements
 // agent.ContextProvider.
 func (p *ContextProvider) GetContext(_ context.Context, _ string) (string, error) {
-	return p.buildContext(), nil
+	return p.buildContext()
 }
 
 // TagContext returns the forge context block for tag-gated injection.
 // Implements agent.TagContextProvider.
 func (p *ContextProvider) TagContext(_ context.Context) (string, error) {
-	return p.buildContext(), nil
+	return p.buildContext()
 }
 
-func (p *ContextProvider) buildContext() string {
+func (p *ContextProvider) buildContext() (string, error) {
 	if p.manager == nil || len(p.manager.order) == 0 {
-		return ""
+		return "", nil
 	}
 
 	now := time.Now()
@@ -98,7 +99,7 @@ func (p *ContextProvider) buildContext() string {
 
 	data, err := json.Marshal(output)
 	if err != nil {
-		return ""
+		return "", fmt.Errorf("marshal forge context: %w", err)
 	}
-	return string(data)
+	return string(data), nil
 }

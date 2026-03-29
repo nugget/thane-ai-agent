@@ -39,9 +39,8 @@ func NewOperationLog() *OperationLog {
 // Record adds a successful operation to the log. The timestamp is
 // set automatically. Failed operations should not be recorded.
 func (l *OperationLog) Record(op Operation) {
-	op.Timestamp = time.Now()
-
 	l.mu.Lock()
+	op.Timestamp = time.Now() // inside lock so ordering matches insertion order
 	l.entries[l.head] = op
 	l.head = (l.head + 1) % len(l.entries)
 	if l.count < len(l.entries) {
