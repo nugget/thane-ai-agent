@@ -498,8 +498,7 @@ func (r *Registry) registerResolveActionable() {
 				return "", fmt.Errorf("resolve notification %s: %w", requestID, err)
 			}
 			if !ok {
-				return fmt.Sprintf("Notification %s already resolved (status: %s).",
-					requestID, record.Status), nil
+				return fmt.Sprintf("Notification %s already resolved.", requestID), nil
 			}
 
 			// Dispatch the callback to the originating session/conversation.

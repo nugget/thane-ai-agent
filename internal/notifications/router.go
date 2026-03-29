@@ -186,6 +186,7 @@ func (r *NotificationRouter) SendActionable(ctx context.Context, req ActionableR
 	// Deliver first — fail early before creating a tracking record.
 	// On failure, try ha_push as fallback (it supports structured
 	// action buttons natively).
+	deliveredVia := provider
 	if err := provider.SendActionable(ctx, req); err != nil {
 		fallback, ok := r.providers["ha_push"]
 		if !ok || fallback.Name() == provider.Name() {
@@ -199,7 +200,9 @@ func (r *NotificationRouter) SendActionable(ctx context.Context, req ActionableR
 		if fbErr := fallback.SendActionable(ctx, req); fbErr != nil {
 			return "", fbErr
 		}
+		deliveredVia = fallback
 	}
+	_ = deliveredVia // available for future telemetry
 
 	// Create tracking record.
 	now := time.Now().UTC()

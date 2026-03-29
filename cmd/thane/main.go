@@ -3706,7 +3706,7 @@ type signalMemoryRecorder struct {
 // conversation for the given phone number.
 func (r *signalMemoryRecorder) RecordOutbound(phone, message string) error {
 	// Derive conversation ID the same way the Signal bridge does:
-	// "signal-" + digits-only phone.
+	// "signal-" + phone normalized to alphanumeric characters.
 	var sb strings.Builder
 	for _, c := range phone {
 		if c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' {
@@ -3764,15 +3764,21 @@ func (a *channelActivityAdapter) ActiveChannels() []notifications.ChannelActivit
 }
 
 // resolveSignalContact resolves a phone number to a contact name by
-// checking TEL properties first, then IMPP with signal: prefix.
+// checking TEL and IMPP properties with both raw and +-prefixed forms.
 func resolveSignalContact(store *contacts.Store, phone string) string {
-	// Try TEL property.
-	if matches, err := store.FindByPropertyExact("TEL", phone); err == nil && len(matches) > 0 {
-		return matches[0].FormattedName
+	candidates := []string{phone}
+	if !strings.HasPrefix(phone, "+") {
+		candidates = append(candidates, "+"+phone)
 	}
-	// Try IMPP with signal: prefix.
-	if matches, err := store.FindByPropertyExact("IMPP", "signal:"+phone); err == nil && len(matches) > 0 {
-		return matches[0].FormattedName
+	for _, p := range candidates {
+		if matches, err := store.FindByPropertyExact("TEL", p); err == nil && len(matches) > 0 {
+			return matches[0].FormattedName
+		}
+	}
+	for _, p := range candidates {
+		if matches, err := store.FindByPropertyExact("IMPP", "signal:"+p); err == nil && len(matches) > 0 {
+			return matches[0].FormattedName
+		}
 	}
 	return ""
 }

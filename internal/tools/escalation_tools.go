@@ -59,7 +59,7 @@ func (r *Registry) registerHumanEscalation(deps EscalationDeps) {
 					"type":        "string",
 					"description": "Relevant context to help the human decide",
 				},
-				"options": map[string]any{
+				"actions": map[string]any{
 					"type":        "array",
 					"description": "Structured choices. Each must have 'id' and 'label'.",
 					"items": map[string]any{
@@ -81,7 +81,7 @@ func (r *Registry) registerHumanEscalation(deps EscalationDeps) {
 					"enum":        []string{"low", "normal", "urgent"},
 				},
 			},
-			"required": []string{"recipient", "question", "options"},
+			"required": []string{"recipient", "question", "actions"},
 		},
 		Handler: func(ctx context.Context, args map[string]any) (string, error) {
 			recipient, _ := args["recipient"].(string)
@@ -149,7 +149,12 @@ func (r *Registry) registerHumanEscalation(deps EscalationDeps) {
 			ch := deps.Waiter.Register(requestID)
 			resp, err := deps.Waiter.WaitWithTimeout(ctx, requestID, ch, timeout)
 			if err != nil {
-				return fmt.Sprintf("Escalation %s: timed out or cancelled waiting for human response.", requestID), nil
+				// Propagate context cancellation (run shutting down)
+				// instead of masking it as a timeout.
+				if ctx.Err() != nil {
+					return "", ctx.Err()
+				}
+				return "", fmt.Errorf("wait for escalation response: %w", err)
 			}
 
 			if resp.TimedOut {
