@@ -114,7 +114,7 @@ func TestChannelOverview_SignalAndOWU(t *testing.T) {
 	}
 }
 
-// hintsKey mirrors tools.hintsKey for test context injection.
+// testHintsKey is a test-specific context key used by the injected HintsFunc.
 type testHintsKey struct{}
 
 func TestChannelOverview_YouAreHere(t *testing.T) {

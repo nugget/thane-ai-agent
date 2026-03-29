@@ -124,6 +124,18 @@ func (p *ChannelOverviewProvider) GetContext(ctx context.Context, _ string) (str
 			LoopID:  shortID(l.ID),
 		}
 
+		// Skip parent loops (no per-conversation identity).
+		switch subsystem {
+		case "signal":
+			if l.Metadata["sender"] == "" {
+				continue
+			}
+		case "owu":
+			if l.Metadata["conversation_id"] == "" {
+				continue
+			}
+		}
+
 		// Channel-specific field extraction.
 		switch subsystem {
 		case "signal":
@@ -149,12 +161,16 @@ func (p *ChannelOverviewProvider) GetContext(ctx context.Context, _ string) (str
 			e.ConvID = l.Metadata["conversation_id"]
 		}
 
-		// Annotate the channel this request arrived on. For channels
-		// with per-sender loops (signal), refine by sender identity.
+		// Annotate the channel this request arrived on. Per-sender
+		// channels (signal) require a sender match to avoid marking
+		// all sender loops; other channels match on subsystem alone.
 		if currentSource == subsystem {
-			if currentSenderName == "" {
-				e.YouAreHere = true
-			} else if e.Sender == currentSenderName || e.Contact == currentSenderName {
+			if e.Sender != "" {
+				// Per-sender channel: match by sender phone or contact name.
+				if currentSenderName != "" && (e.Sender == currentSenderName || e.Contact == currentSenderName) {
+					e.YouAreHere = true
+				}
+			} else {
 				e.YouAreHere = true
 			}
 		}
@@ -180,10 +196,12 @@ func (p *ChannelOverviewProvider) GetContext(ctx context.Context, _ string) (str
 	return "### Channel Overview\n\n" + string(data) + "\n", nil
 }
 
-// shortID returns the first 8 characters of an ID for compact display.
+// shortID returns the first 8 runes of an ID for compact display.
+// Uses rune-aware truncation per CLAUDE.md guidance.
 func shortID(id string) string {
-	if len(id) > 8 {
-		return id[:8]
+	runes := []rune(id)
+	if len(runes) > 8 {
+		return string(runes[:8])
 	}
 	return id
 }
