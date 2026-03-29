@@ -392,7 +392,7 @@ func TestHandleIssueGet(t *testing.T) {
 			"State: open | Author: alice",
 			"Labels: bug, urgent",
 			"Assignees: bob",
-			"Created: 2025-01-15",
+			"Created:", // delta-annotated, not raw date
 			"Something is broken",
 		}
 		for _, part := range wantParts {

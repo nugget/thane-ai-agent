@@ -41,8 +41,12 @@ func TestFormatPollSection_Single(t *testing.T) {
 	if !strings.Contains(result, "Subject: Re: Project update") {
 		t.Error("should contain subject")
 	}
-	if !strings.Contains(result, "Date: 2026-02-20 16:30") {
-		t.Error("should contain date")
+	if !strings.Contains(result, "Date: ") {
+		t.Error("should contain date field")
+	}
+	// Date uses delta format (e.g., "(-86400s)"), not raw timestamp.
+	if strings.Contains(result, "2026-02-20") {
+		t.Error("date should use delta format, not raw timestamp")
 	}
 }
 
