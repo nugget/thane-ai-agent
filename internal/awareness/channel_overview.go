@@ -44,7 +44,7 @@ type HintsFunc func(ctx context.Context) map[string]string
 type ChannelOverviewProvider struct {
 	loops     ChannelLoopSource
 	phones    PhoneResolver // nil disables phone→name resolution
-	hintsFunc HintsFunc     // nil disables requesting_channel annotation
+	hintsFunc HintsFunc     // nil disables you_are_here annotation
 	nowFunc   func() time.Time
 	logger    *slog.Logger
 }
@@ -75,16 +75,16 @@ func NewChannelOverviewProvider(cfg ChannelOverviewConfig) *ChannelOverviewProvi
 
 // channelEntry is the JSON structure for a single channel in the overview.
 type channelEntry struct {
-	Channel           string `json:"channel"`
-	Contact           string `json:"contact,omitempty"`
-	Sender            string `json:"sender,omitempty"`
-	DisplayName       string `json:"display_name,omitempty"`
-	TrustZone         string `json:"trust_zone,omitempty"`
-	State             string `json:"state"`
-	LastActivity      string `json:"last_activity,omitempty"`
-	LoopID            string `json:"loop_id,omitempty"`
-	ConvID            string `json:"conv_id,omitempty"`
-	RequestingChannel bool   `json:"requesting_channel,omitempty"`
+	Channel      string `json:"channel"`
+	Contact      string `json:"contact,omitempty"`
+	Sender       string `json:"sender,omitempty"`
+	DisplayName  string `json:"display_name,omitempty"`
+	TrustZone    string `json:"trust_zone,omitempty"`
+	State        string `json:"state"`
+	LastActivity string `json:"last_activity,omitempty"`
+	LoopID       string `json:"loop_id,omitempty"`
+	ConvID       string `json:"conv_id,omitempty"`
+	YouAreHere   bool   `json:"you_are_here,omitempty"`
 }
 
 // GetContext returns a compact JSON channel overview for injection into
@@ -140,14 +140,14 @@ func (p *ChannelOverviewProvider) GetContext(ctx context.Context, _ string) (str
 			}
 			// Match requesting channel by sender_name hint.
 			if currentSource == "signal" && currentSenderName != "" && e.Contact == currentSenderName {
-				e.RequestingChannel = true
+				e.YouAreHere = true
 			}
 		case "owu":
 			e.ConvID = l.Metadata["conversation_id"]
 			e.DisplayName = cleanLoopName(l.Name)
 			// OWU loops don't have per-sender identity in hints.
 			if currentSource == "owu" {
-				e.RequestingChannel = true
+				e.YouAreHere = true
 			}
 		default:
 			e.ConvID = l.Metadata["conversation_id"]

@@ -117,7 +117,7 @@ func TestChannelOverview_SignalAndOWU(t *testing.T) {
 // hintsKey mirrors tools.hintsKey for test context injection.
 type testHintsKey struct{}
 
-func TestChannelOverview_RequestingChannel(t *testing.T) {
+func TestChannelOverview_YouAreHere(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 3, 29, 15, 0, 0, 0, time.UTC)
 
@@ -161,8 +161,8 @@ func TestChannelOverview_RequestingChannel(t *testing.T) {
 	if len(entries) != 1 {
 		t.Fatalf("expected 1 entry, got %d", len(entries))
 	}
-	if !entries[0].RequestingChannel {
-		t.Error("signal entry should be marked as requesting_channel")
+	if !entries[0].YouAreHere {
+		t.Error("signal entry should be marked as you_are_here")
 	}
 }
 
