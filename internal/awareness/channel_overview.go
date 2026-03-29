@@ -142,21 +142,21 @@ func (p *ChannelOverviewProvider) GetContext(ctx context.Context, _ string) (str
 					}
 				}
 			}
-			// Match requesting channel by raw sender or resolved name.
-			if currentSource == "signal" && currentSenderName != "" {
-				if e.Sender == currentSenderName || e.Contact == currentSenderName {
-					e.YouAreHere = true
-				}
-			}
 		case "owu":
 			e.ConvID = l.Metadata["conversation_id"]
 			e.DisplayName = cleanLoopName(l.Name)
-			// OWU loops don't have per-sender identity in hints.
-			if currentSource == "owu" {
-				e.YouAreHere = true
-			}
 		default:
 			e.ConvID = l.Metadata["conversation_id"]
+		}
+
+		// Annotate the channel this request arrived on. For channels
+		// with per-sender loops (signal), refine by sender identity.
+		if currentSource == subsystem {
+			if currentSenderName == "" {
+				e.YouAreHere = true
+			} else if e.Sender == currentSenderName || e.Contact == currentSenderName {
+				e.YouAreHere = true
+			}
 		}
 
 		// Exact-second delta per issue #458.
