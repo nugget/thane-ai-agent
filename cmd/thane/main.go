@@ -1726,9 +1726,11 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 			// notification router can route to Signal when the contact
 			// has an active Signal session.
 			if notifRouter != nil {
-				notifRouter.RegisterProvider(notifications.NewSignalProvider(
+				sp := notifications.NewSignalProvider(
 					signalClient, contactStore, logger,
-				))
+				)
+				sp.SetRecorder(&signalMemoryRecorder{mem: mem})
+				notifRouter.RegisterProvider(sp)
 				logger.Info("signal notification provider registered")
 			}
 
@@ -3678,6 +3680,28 @@ func (a *channelLoopAdapter) ChannelLoops() []awareness.LoopSnapshot {
 		})
 	}
 	return result
+}
+
+// signalMemoryRecorder records outbound Signal notifications in
+// conversation memory so the agent has context when the user replies.
+// Implements [notifications.MessageRecorder].
+type signalMemoryRecorder struct {
+	mem memory.MemoryStore
+}
+
+// RecordOutbound stores an annotated assistant message in the Signal
+// conversation for the given phone number.
+func (r *signalMemoryRecorder) RecordOutbound(phone, message string) error {
+	// Derive conversation ID the same way the Signal bridge does:
+	// "signal-" + digits-only phone.
+	var sb strings.Builder
+	for _, c := range phone {
+		if c >= '0' && c <= '9' || c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' {
+			sb.WriteRune(c)
+		}
+	}
+	convID := "signal-" + sb.String()
+	return r.mem.AddMessage(convID, "assistant", message)
 }
 
 // channelActivityAdapter bridges [notifications.ChannelActivitySource]

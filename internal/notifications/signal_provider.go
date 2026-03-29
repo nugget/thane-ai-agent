@@ -14,11 +14,21 @@ type SignalSender interface {
 	Send(ctx context.Context, recipient, message string) (int64, error)
 }
 
+// MessageRecorder records outbound messages in conversation memory so
+// they appear in history when the recipient replies. Callers provide
+// the conversation ID derivation appropriate for their channel.
+type MessageRecorder interface {
+	RecordOutbound(phone, message string) error
+}
+
 // SignalProvider delivers fire-and-forget notifications via Signal
 // by resolving the recipient's phone number from the contact store.
+// When a MessageRecorder is set, outbound notifications are recorded
+// in conversation memory with provenance metadata.
 type SignalProvider struct {
 	sender   SignalSender
 	contacts ContactResolver
+	recorder MessageRecorder // optional; nil skips memory recording
 	logger   *slog.Logger
 }
 
@@ -32,6 +42,13 @@ func NewSignalProvider(sender SignalSender, contacts ContactResolver, logger *sl
 		contacts: contacts,
 		logger:   logger,
 	}
+}
+
+// SetRecorder configures memory recording for outbound notifications.
+// When set, sent messages are recorded in conversation history with
+// provenance metadata so the agent has context when the user replies.
+func (p *SignalProvider) SetRecorder(r MessageRecorder) {
+	p.recorder = r
 }
 
 // Name returns the provider identifier.
@@ -60,6 +77,20 @@ func (p *SignalProvider) Send(ctx context.Context, req NotificationRequest) erro
 
 	if _, err := p.sender.Send(ctx, phone, msg); err != nil {
 		return fmt.Errorf("signal send to %s: %w", req.Recipient, err)
+	}
+
+	// Record in conversation memory so the agent has context when the
+	// user replies. The message is annotated with provenance metadata.
+	if p.recorder != nil {
+		annotated := fmt.Sprintf("[notification via signal | source: %s]\n%s",
+			req.Priority, msg)
+		if req.Priority == "" {
+			annotated = fmt.Sprintf("[notification via signal]\n%s", msg)
+		}
+		if err := p.recorder.RecordOutbound(phone, annotated); err != nil {
+			p.logger.Warn("failed to record notification in memory",
+				"phone", phone, "error", err)
+		}
 	}
 
 	p.logger.Info("signal notification sent",
