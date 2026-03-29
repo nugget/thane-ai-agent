@@ -561,8 +561,9 @@ func TestHandleIssueList(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if got != "No issues found." {
-			t.Errorf("got %q, want 'No issues found.'", got)
+		want := `{"count":0,"issues":[]}`
+		if got != want {
+			t.Errorf("got %q, want %q", got, want)
 		}
 	})
 
@@ -712,8 +713,9 @@ func TestHandlePRList(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if got != "No pull requests found." {
-			t.Errorf("got %q, want 'No pull requests found.'", got)
+		want := `{"count":0,"prs":[]}`
+		if got != want {
+			t.Errorf("got %q, want %q", got, want)
 		}
 	})
 
@@ -992,8 +994,9 @@ func TestHandleSearch(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if got != "No results found." {
-			t.Errorf("got %q, want 'No results found.'", got)
+		want := `{"count":0,"results":[]}`
+		if got != want {
+			t.Errorf("got %q, want %q", got, want)
 		}
 	})
 
@@ -1075,8 +1078,9 @@ func TestHandlePRFiles(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if got != "No changed files." {
-			t.Errorf("got %q, want 'No changed files.'", got)
+		want := `{"count":0,"files":[]}`
+		if got != want {
+			t.Errorf("got %q, want %q", got, want)
 		}
 	})
 
@@ -1122,8 +1126,9 @@ func TestHandlePRCommits(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if got != "No commits." {
-			t.Errorf("got %q, want 'No commits.'", got)
+		want := `{"count":0,"commits":[]}`
+		if got != want {
+			t.Errorf("got %q, want %q", got, want)
 		}
 	})
 
@@ -1166,8 +1171,9 @@ func TestHandlePRReviews(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if got != "No reviews." {
-			t.Errorf("got %q, want 'No reviews.'", got)
+		want := `{"count":0,"reviews":[]}`
+		if got != want {
+			t.Errorf("got %q, want %q", got, want)
 		}
 	})
 
@@ -1222,8 +1228,9 @@ func TestHandlePRChecks(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if got != "No check runs found." {
-			t.Errorf("got %q, want 'No check runs found.'", got)
+		want := `{"count":0,"checks":[]}`
+		if got != want {
+			t.Errorf("got %q, want %q", got, want)
 		}
 	})
 

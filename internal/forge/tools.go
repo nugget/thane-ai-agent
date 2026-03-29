@@ -145,7 +145,7 @@ type prGetResponse struct {
 	Number             int            `json:"number"`
 	Title              string         `json:"title"`
 	State              string         `json:"state"`
-	Draft              bool           `json:"draft,omitempty"`
+	Draft              bool           `json:"draft"`
 	Author             string         `json:"author"`
 	Head               string         `json:"head"`
 	Base               string         `json:"base"`
@@ -198,9 +198,10 @@ type prReviewCommentResponse struct {
 }
 
 type reactResponse struct {
-	Action   string `json:"action"`
-	Number   int    `json:"number"`
-	Reaction string `json:"reaction"`
+	Action    string `json:"action"`
+	Number    int    `json:"number"`
+	Reaction  string `json:"reaction"`
+	CommentID int64  `json:"comment_id,omitempty"`
 }
 
 type requestReviewResponse struct {
@@ -268,6 +269,7 @@ type prFilesResponse struct {
 type searchResultEntry struct {
 	Number int    `json:"number,omitempty"`
 	Title  string `json:"title"`
+	Body   string `json:"body,omitempty"`
 	URL    string `json:"url"`
 }
 
@@ -452,7 +454,7 @@ func (t *Tools) HandleIssueList(ctx context.Context, args map[string]any) (strin
 
 	if len(issues) == 0 {
 		t.recordOp("forge_issue_list", acct, repo, "")
-		return "No issues found.", nil
+		return marshalResponse(issueListResponse{Count: 0, Issues: []issueListEntry{}})
 	}
 
 	entries := make([]issueListEntry, 0, len(issues))
@@ -530,7 +532,7 @@ func (t *Tools) HandlePRList(ctx context.Context, args map[string]any) (string, 
 
 	if len(prs) == 0 {
 		t.recordOp("forge_pr_list", acct, repo, "")
-		return "No pull requests found.", nil
+		return marshalResponse(prListResponse{Count: 0, PRs: []prListEntry{}})
 	}
 
 	entries := make([]prListEntry, 0, len(prs))
@@ -685,7 +687,7 @@ func (t *Tools) HandlePRFiles(ctx context.Context, args map[string]any) (string,
 
 	if len(files) == 0 {
 		t.recordOp("forge_pr_files", acct, repo, fmt.Sprintf("#%d", number))
-		return "No changed files.", nil
+		return marshalResponse(prFilesResponse{Count: 0, Files: []prFileEntry{}})
 	}
 
 	entries := make([]prFileEntry, 0, len(files))
@@ -724,7 +726,7 @@ func (t *Tools) HandlePRCommits(ctx context.Context, args map[string]any) (strin
 
 	if len(commits) == 0 {
 		t.recordOp("forge_pr_commits", acct, repo, fmt.Sprintf("#%d", number))
-		return "No commits.", nil
+		return marshalResponse(prCommitsResponse{Count: 0, Commits: []prCommitEntry{}})
 	}
 
 	now := time.Now()
@@ -769,7 +771,7 @@ func (t *Tools) HandlePRReviews(ctx context.Context, args map[string]any) (strin
 
 	if len(reviews) == 0 {
 		t.recordOp("forge_pr_reviews", acct, repo, fmt.Sprintf("#%d", number))
-		return "No reviews.", nil
+		return marshalResponse(prReviewsResponse{Count: 0, Reviews: []prReviewEntry{}})
 	}
 
 	now := time.Now()
@@ -903,7 +905,7 @@ func (t *Tools) HandlePRChecks(ctx context.Context, args map[string]any) (string
 
 	if len(checks) == 0 {
 		t.recordOp("forge_pr_checks", acct, repo, fmt.Sprintf("#%d", number))
-		return "No check runs found.", nil
+		return marshalResponse(prChecksResponse{Count: 0, Checks: []prCheckEntry{}})
 	}
 
 	entries := make([]prCheckEntry, 0, len(checks))
@@ -982,9 +984,10 @@ func (t *Tools) HandleReact(ctx context.Context, args map[string]any) (string, e
 
 	t.recordOp("forge_react", acct, repo, fmt.Sprintf("#%d", number))
 	return marshalResponse(reactResponse{
-		Action:   "reaction_added",
-		Number:   number,
-		Reaction: emoji,
+		Action:    "reaction_added",
+		Number:    number,
+		Reaction:  emoji,
+		CommentID: commentID,
 	})
 }
 
@@ -1052,7 +1055,7 @@ func (t *Tools) HandleSearch(ctx context.Context, args map[string]any) (string, 
 
 	if len(results) == 0 {
 		t.recordOp("forge_search", resolvedAcct, "", kindStr+": "+query)
-		return "No results found.", nil
+		return marshalResponse(searchResponse{Count: 0, Results: []searchResultEntry{}})
 	}
 
 	entries := make([]searchResultEntry, 0, len(results))
@@ -1060,6 +1063,7 @@ func (t *Tools) HandleSearch(ctx context.Context, args map[string]any) (string, 
 		entries = append(entries, searchResultEntry{
 			Number: r.Number,
 			Title:  r.Title,
+			Body:   r.Body,
 			URL:    r.URL,
 		})
 	}
