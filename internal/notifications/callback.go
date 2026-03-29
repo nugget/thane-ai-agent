@@ -47,8 +47,21 @@ type CallbackDispatcher struct {
 	records      *RecordStore
 	injector     SessionInjector
 	delegate     DelegateSpawner
+	waiter       *ResponseWaiter // optional; signals synchronous escalation waiters
 	logger       *slog.Logger
 	actionPrefix string // e.g., "AIMEE_THANE"
+}
+
+// SetResponseWaiter configures synchronous escalation support. When
+// set, [DispatchAction] signals any waiting escalation tool in
+// addition to injecting session messages or spawning delegates.
+func (d *CallbackDispatcher) SetResponseWaiter(w *ResponseWaiter) {
+	d.waiter = w
+}
+
+// ResponseWaiter returns the configured waiter, or nil.
+func (d *CallbackDispatcher) ResponseWaiter() *ResponseWaiter {
+	return d.waiter
 }
 
 // NewCallbackDispatcher creates a callback dispatcher. The deviceName
@@ -144,6 +157,17 @@ func (d *CallbackDispatcher) Handle(_ string, payload []byte) {
 // also used by the timeout watcher to dispatch auto-fired timeout
 // actions.
 func (d *CallbackDispatcher) DispatchAction(record *Record, actionID string) {
+	// Signal any synchronous escalation waiter first. This unblocks
+	// the request_human_escalation tool if it's waiting.
+	if d.waiter != nil {
+		if d.waiter.Signal(record.RequestID, actionID) {
+			d.logger.Info("callback: signaled synchronous escalation waiter",
+				"request_id", record.RequestID,
+				"action_id", actionID,
+			)
+		}
+	}
+
 	msg := fmt.Sprintf(
 		"User responded to notification %s: chose %q. Context: %s",
 		record.RequestID, actionID, record.Context,

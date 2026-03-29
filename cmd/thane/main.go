@@ -1816,6 +1816,18 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		)
 		go timeoutWatcher.Start(ctx)
 		loop.Tools().SetCallbackDispatcher(notifCallbackDispatcher)
+
+		// Synchronous escalation support — allows tools to block
+		// waiting for human responses via any notification channel.
+		escalationWaiter := notifications.NewResponseWaiter()
+		notifCallbackDispatcher.SetResponseWaiter(escalationWaiter)
+		loop.Tools().SetEscalationTools(tools.EscalationDeps{
+			Router:     notifRouter,
+			Records:    notifRecords,
+			Dispatcher: notifCallbackDispatcher,
+			Waiter:     escalationWaiter,
+		})
+
 		logger.Info("notification callback dispatcher and timeout watcher initialized")
 	}
 
