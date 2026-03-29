@@ -68,6 +68,11 @@ func NewStateWindowProvider(maxEntries int, maxAge time.Duration, loc *time.Loca
 // It matches the homeassistant.StateWatchHandler function signature and
 // can be composed directly into the state watcher handler chain.
 func (p *StateWindowProvider) HandleStateChange(entityID, oldState, newState string) {
+	// Filter no-op transitions (device tracker refreshes, etc.).
+	if oldState == newState {
+		return
+	}
+
 	now := p.nowFunc()
 
 	p.mu.Lock()

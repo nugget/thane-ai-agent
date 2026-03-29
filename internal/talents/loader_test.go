@@ -254,23 +254,33 @@ func TestGenerateManifest(t *testing.T) {
 	if talent.Tags != nil {
 		t.Errorf("Tags = %v, want nil (untagged)", talent.Tags)
 	}
-	if !strings.Contains(talent.Content, "ha") {
-		t.Error("manifest should mention 'ha' tag")
+
+	// Manifest should be valid JSON after the preamble text.
+	if !strings.Contains(talent.Content, `"ha"`) {
+		t.Error("manifest JSON should contain ha tag")
 	}
-	if !strings.Contains(talent.Content, "always active") {
-		t.Error("manifest should mention 'always active' for ha tag")
+	if !strings.Contains(talent.Content, `"always_active"`) {
+		t.Error("manifest JSON should contain always_active status for ha")
 	}
-	if !strings.Contains(talent.Content, "search") {
-		t.Error("manifest should mention 'search' tag")
+	if !strings.Contains(talent.Content, `"search"`) {
+		t.Error("manifest JSON should contain search tag")
 	}
-	if !strings.Contains(talent.Content, "available") {
-		t.Error("manifest should mention 'available' for non-always-active tags")
+	if !strings.Contains(talent.Content, `"available"`) {
+		t.Error("manifest JSON should contain available status for search")
 	}
 	if !strings.Contains(talent.Content, "request_capability") {
-		t.Error("manifest should mention request_capability tool")
+		t.Error("manifest should mention request_capability in preamble")
 	}
 	if !strings.Contains(talent.Content, "delegate") {
-		t.Error("manifest should mention delegate as alternative")
+		t.Error("manifest should mention delegate in preamble")
+	}
+	// Tool names should NOT appear (only counts).
+	if strings.Contains(talent.Content, "get_state") {
+		t.Error("manifest should not list individual tool names (only counts)")
+	}
+	// Tool count should appear.
+	if !strings.Contains(talent.Content, `"tools":2`) {
+		t.Error("manifest should include tool count")
 	}
 }
 

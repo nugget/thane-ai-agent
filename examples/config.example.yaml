@@ -179,6 +179,13 @@ models:
 data_dir: ./db
 talents_dir: ./talents
 
+# Named directory prefixes for file resolution. Components use these
+# prefixes (e.g., kb:devops/tool-reference.md) to resolve paths.
+# KB articles with tags: frontmatter auto-load when matching capability
+# tags are active.
+paths:
+  kb: ./knowledge
+
 # Extra PATH directories — prepended to the process PATH at startup so
 # exec.LookPath can find binaries outside launchd's minimal PATH.
 # macOS Homebrew dirs (/opt/homebrew/bin, /opt/homebrew/sbin) are added

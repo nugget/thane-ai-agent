@@ -47,46 +47,10 @@ Labels are semantic: `issue_body`, `review_comments`, `config_patch`. Automatic 
 
 When the task requires judgment, synthesis, or emotional intelligence. When you need to combine results into a narrative. When you already know the answer. When it's a conversation, not a task.
 
-## Tool reference
+## Tool-specific gotchas
 
-### Forge (GitHub/Gitea)
-
-**Issues:** `forge_issue_get`, `forge_issue_list`, `forge_issue_create`, `forge_issue_update` (body REPLACES entire description), `forge_issue_comment`
-
-**PRs:** `forge_pr_get`, `forge_pr_list`, `forge_pr_diff` (default 2000 lines), `forge_pr_files`, `forge_pr_commits`, `forge_pr_reviews`, `forge_pr_review` (APPROVE/COMMENT/REQUEST_CHANGES), `forge_pr_review_comment` (inline), `forge_pr_checks`, `forge_pr_merge` (default: squash), `forge_pr_request_review`
-
-**Other:** `forge_react` (emoji), `forge_search` (issues/code/commits)
-
-Default repo owner is `nugget`. Pass just `"thane-ai-agent"` or full `"nugget/thane-ai-agent"`.
-
-### Home Assistant (native profile)
-
-| Tool | Notes |
-|---|---|
-| `get_state` | State + attributes. Returns 404 for nonexistent entities — use as validation. |
-| `find_entity` | Search by name/keyword. Preferred for discovery. |
-| `list_entities` | ALL entities by domain. 10K-83K chars — never for discovery. |
-| `control_device` | Find AND control in one step. Never guess entity IDs. |
-| `call_service` | Call HA services. Does NOT validate entity names — silent no-op on bad entity_id. |
-
-**Three-step device control:** find_entity → call_service → get_state (verify). Never trust call_service success alone.
-
-### Home Assistant (MCP tools)
-
-`ha_search_entities`, `ha_deep_search`, `ha_get_overview` (43K chars — sparingly), `ha_get_state`, `ha_get_history`, `ha_get_statistics`, `ha_get_device`, `ha_call_service` (does NOT validate entities), `ha_bulk_control`, `ha_config_get_automation` / `set` / `remove`, `ha_get_automation_traces`, zone CRUD, `ha_list_services`
-
-### Signal
-
-`signal_send_message`, `signal_send_reaction`. Do NOT use `notify.signal_messenger` via HA — it doesn't exist.
-
-### Media
-
-`media_transcript(url, language="en", focus, detail)` — YouTube, Vimeo, podcasts. Detail levels: `full` (raw), `summary` (2-3K), `brief` (~500 chars). Raw transcript always saved to `~/Thane/transcripts/`.
-
-## Pitfalls
-
-- `file_read` is restricted to allowed directories. For `/tmp` or system paths, use `exec(command="cat /path")`.
-- Scenes can't be deleted via call_service — requires HA UI or YAML.
-- GitHub issues in thane-ai-agent are authored by `thane-agent`. Search with `author:thane-agent`.
-- There is no `mcp_list_tools` or `list_tools`. All tools are already in context.
-- `ha_call_service` `return_response` VALIDATION_FAILED? Retry — usually succeeds.
+- `forge_issue_update` body REPLACES entire description — not a patch
+- `call_service` does NOT validate entity names — silent no-op on bad entity_id
+- `list_entities` returns 10K-83K chars — use `find_entity` for discovery instead
+- `file_read` is restricted to allowed directories — use `exec(command="cat /path")` for system paths
+- There is no `list_tools` or `mcp_list_tools` — all tools are already in your context
