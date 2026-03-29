@@ -413,6 +413,7 @@ func (t *Tools) HandlePRCommits(ctx context.Context, args map[string]any) (strin
 		return "No commits.", nil
 	}
 
+	now := time.Now()
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "%d commit(s):\n\n", len(commits))
 	for _, c := range commits {
@@ -422,7 +423,7 @@ func (t *Tools) HandlePRCommits(ctx context.Context, args map[string]any) (strin
 			msg = msg[:idx]
 		}
 		fmt.Fprintf(&sb, "%s %s — %s %s\n",
-			c.SHA, msg, c.Author, awareness.FormatDelta(c.Date, time.Now()))
+			c.SHA, msg, c.Author, awareness.FormatDelta(c.Date, now))
 	}
 
 	return sb.String(), nil
@@ -449,12 +450,13 @@ func (t *Tools) HandlePRReviews(ctx context.Context, args map[string]any) (strin
 		return "No reviews.", nil
 	}
 
+	now := time.Now()
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "%d review(s):\n\n", len(reviews))
 	for _, r := range reviews {
 		fmt.Fprintf(&sb, "Review #%d by %s — %s", r.ID, r.Author, r.State)
 		if !r.SubmittedAt.IsZero() {
-			fmt.Fprintf(&sb, " %s", awareness.FormatDelta(r.SubmittedAt, time.Now()))
+			fmt.Fprintf(&sb, " %s", awareness.FormatDelta(r.SubmittedAt, now))
 		}
 		sb.WriteString("\n")
 		if r.Body != "" {

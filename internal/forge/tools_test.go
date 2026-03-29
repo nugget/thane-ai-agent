@@ -392,13 +392,20 @@ func TestHandleIssueGet(t *testing.T) {
 			"State: open | Author: alice",
 			"Labels: bug, urgent",
 			"Assignees: bob",
-			"Created:", // delta-annotated, not raw date
 			"Something is broken",
 		}
 		for _, part := range wantParts {
 			if !strings.Contains(got, part) {
 				t.Errorf("output missing %q\ngot: %s", part, got)
 			}
+		}
+		// Verify delta format: past dates should contain "(-" and "s)".
+		if !strings.Contains(got, "(-") || !strings.Contains(got, "s)") {
+			t.Errorf("Created/Updated should use delta format, got:\n%s", got)
+		}
+		// Should NOT contain raw date format.
+		if strings.Contains(got, "2025-01-15") {
+			t.Error("should not contain raw date, expected delta format")
 		}
 
 		// Verify the provider was called with the resolved repo.

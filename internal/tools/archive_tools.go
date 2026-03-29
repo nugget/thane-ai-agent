@@ -149,6 +149,7 @@ func (r *Registry) registerArchiveSessionList(store *memory.ArchiveStore) {
 				return "No sessions found in the archive.", nil
 			}
 
+			now := time.Now()
 			var sb strings.Builder
 			sb.WriteString(fmt.Sprintf("Found %d sessions:\n\n", len(sessions)))
 
@@ -169,7 +170,7 @@ func (r *Registry) registerArchiveSessionList(store *memory.ArchiveStore) {
 				}
 				sb.WriteString(fmt.Sprintf("- **%s** — %s, %d messages, %s\n",
 					title,
-					awareness.FormatDelta(s.StartedAt, time.Now()),
+					awareness.FormatDelta(s.StartedAt, now),
 					s.MessageCount,
 					endInfo,
 				))
@@ -289,6 +290,7 @@ func resolveShortSessionID(store *memory.ArchiveStore, prefix string) (string, e
 
 // formatSearchResults formats archive search results for the agent.
 func formatSearchResults(results []memory.SearchResult) string {
+	now := time.Now()
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("Found %d results:\n\n", len(results)))
 
@@ -297,19 +299,19 @@ func formatSearchResults(results []memory.SearchResult) string {
 
 		// Context before
 		for _, m := range r.ContextBefore {
-			sb.WriteString(formatArchiveMessage(m))
+			sb.WriteString(formatArchiveMessage(m, now))
 		}
 
 		// The match itself (highlighted)
 		sb.WriteString(fmt.Sprintf(">>> [%s] %s: %s\n",
-			awareness.FormatDeltaOnly(r.Match.Timestamp, time.Now()),
+			awareness.FormatDeltaOnly(r.Match.Timestamp, now),
 			r.Match.Role,
 			r.Match.Content,
 		))
 
 		// Context after
 		for _, m := range r.ContextAfter {
-			sb.WriteString(formatArchiveMessage(m))
+			sb.WriteString(formatArchiveMessage(m, now))
 		}
 
 		sb.WriteString("\n")
@@ -318,9 +320,9 @@ func formatSearchResults(results []memory.SearchResult) string {
 	return sb.String()
 }
 
-func formatArchiveMessage(m memory.Message) string {
+func formatArchiveMessage(m memory.Message, now time.Time) string {
 	return fmt.Sprintf("    [%s] %s: %s\n",
-		awareness.FormatDeltaOnly(m.Timestamp, time.Now()),
+		awareness.FormatDeltaOnly(m.Timestamp, now),
 		m.Role,
 		truncate(m.Content, 500),
 	)

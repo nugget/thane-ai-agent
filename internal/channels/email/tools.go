@@ -414,6 +414,7 @@ func (t *Tools) sendEmail(ctx context.Context, account string, to, cc []string, 
 // --- Formatting helpers ---
 
 func formatEnvelopeList(envelopes []Envelope) string {
+	now := time.Now()
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("Found %d message(s):\n\n", len(envelopes)))
 
@@ -421,7 +422,7 @@ func formatEnvelopeList(envelopes []Envelope) string {
 		sb.WriteString(fmt.Sprintf("UID: %d\n", env.UID))
 		sb.WriteString(fmt.Sprintf("From: %s\n", env.From))
 		sb.WriteString(fmt.Sprintf("Subject: %s\n", env.Subject))
-		sb.WriteString(fmt.Sprintf("Date: %s\n", awareness.FormatDelta(env.Date, time.Now())))
+		sb.WriteString(fmt.Sprintf("Date: %s\n", awareness.FormatDelta(env.Date, now)))
 
 		if len(env.Flags) > 0 {
 			sb.WriteString(fmt.Sprintf("Flags: %s\n", strings.Join(env.Flags, ", ")))
@@ -434,6 +435,7 @@ func formatEnvelopeList(envelopes []Envelope) string {
 }
 
 func formatMessage(msg *Message) string {
+	now := time.Now()
 	var sb strings.Builder
 
 	sb.WriteString(fmt.Sprintf("From: %s\n", msg.From))
@@ -442,7 +444,7 @@ func formatMessage(msg *Message) string {
 		sb.WriteString(fmt.Sprintf("Cc: %s\n", strings.Join(msg.Cc, ", ")))
 	}
 	sb.WriteString(fmt.Sprintf("Subject: %s\n", msg.Subject))
-	sb.WriteString(fmt.Sprintf("Date: %s\n", awareness.FormatDelta(msg.Date, time.Now())))
+	sb.WriteString(fmt.Sprintf("Date: %s\n", awareness.FormatDelta(msg.Date, now)))
 	if len(msg.Flags) > 0 {
 		sb.WriteString(fmt.Sprintf("Flags: %s\n", strings.Join(msg.Flags, ", ")))
 	}
