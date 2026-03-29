@@ -3,6 +3,8 @@ package awareness
 import (
 	"encoding/json"
 	"fmt"
+	"math"
+	"strconv"
 	"strings"
 	"time"
 
@@ -25,6 +27,8 @@ func formatEntityContext(state *homeassistant.State, now time.Time) string {
 		return formatLight(state, now)
 	case "person":
 		return formatPerson(state, now)
+	case "sun":
+		return formatSun(state, now)
 	default:
 		return formatDefault(state, now)
 	}
@@ -44,13 +48,15 @@ type defaultContext struct {
 
 // formatDefault produces compact JSON for any entity type. Includes
 // device_class when available and last_updated when it differs from
-// last_changed (indicating attribute-only updates).
+// last_changed (indicating attribute-only updates). Numeric state
+// values are rounded based on device_class.
 func formatDefault(state *homeassistant.State, now time.Time) string {
+	deviceClass := attrString(state.Attributes, "device_class")
 	dc := defaultContext{
 		Entity:      state.EntityID,
-		State:       state.State,
+		State:       roundState(state.State, deviceClass),
 		Unit:        attrString(state.Attributes, "unit_of_measurement"),
-		DeviceClass: attrString(state.Attributes, "device_class"),
+		DeviceClass: deviceClass,
 		Since:       FormatDeltaOnly(state.LastChanged, now),
 	}
 	if name, ok := state.Attributes["friendly_name"].(string); ok && name != "" {
@@ -89,11 +95,11 @@ func formatWeather(state *homeassistant.State, now time.Time) string {
 	wc := weatherContext{
 		Entity:      state.EntityID,
 		State:       state.State,
-		Temperature: state.Attributes["temperature"],
-		Humidity:    state.Attributes["humidity"],
-		WindSpeed:   state.Attributes["wind_speed"],
-		WindBearing: state.Attributes["wind_bearing"],
-		Pressure:    state.Attributes["pressure"],
+		Temperature: roundAttr(state.Attributes["temperature"], 1),
+		Humidity:    roundAttr(state.Attributes["humidity"], 0),
+		WindSpeed:   roundAttr(state.Attributes["wind_speed"], 1),
+		WindBearing: roundAttr(state.Attributes["wind_bearing"], 0),
+		Pressure:    roundAttr(state.Attributes["pressure"], 0),
 		Since:       FormatDeltaOnly(state.LastChanged, now),
 	}
 
@@ -110,8 +116,8 @@ func formatWeather(state *homeassistant.State, now time.Time) string {
 			}
 			fc := weatherForecast{
 				Condition: attrString(entry, "condition"),
-				TempHigh:  entry["temperature"],
-				TempLow:   entry["templow"],
+				TempHigh:  roundAttr(entry["temperature"], 1),
+				TempLow:   roundAttr(entry["templow"], 1),
 			}
 			// Delta-annotate forecast time if available. HA may include
 			// fractional seconds, so try RFC3339Nano first.
@@ -151,11 +157,11 @@ func formatClimate(state *homeassistant.State, now time.Time) string {
 	cc := climateContext{
 		Entity:      state.EntityID,
 		State:       state.State,
-		CurrentTemp: state.Attributes["current_temperature"],
-		TargetTemp:  state.Attributes["temperature"],
-		TargetHigh:  state.Attributes["target_temp_high"],
-		TargetLow:   state.Attributes["target_temp_low"],
-		Humidity:    state.Attributes["current_humidity"],
+		CurrentTemp: roundAttr(state.Attributes["current_temperature"], 1),
+		TargetTemp:  roundAttr(state.Attributes["temperature"], 1),
+		TargetHigh:  roundAttr(state.Attributes["target_temp_high"], 1),
+		TargetLow:   roundAttr(state.Attributes["target_temp_low"], 1),
+		Humidity:    roundAttr(state.Attributes["current_humidity"], 0),
 		HVACMode:    attrString(state.Attributes, "hvac_mode"),
 		PresetMode:  attrString(state.Attributes, "preset_mode"),
 		Since:       FormatDeltaOnly(state.LastChanged, now),
@@ -241,6 +247,46 @@ func formatPerson(state *homeassistant.State, now time.Time) string {
 	return marshalCompact(pc)
 }
 
+// sunContext is the JSON structure for the sun.sun entity.
+// Provides above/below horizon state with delta-annotated next
+// sunrise and sunset times — critical for a home agent's awareness
+// of lighting, security, and automation context.
+type sunContext struct {
+	Entity    string `json:"entity"`
+	State     string `json:"state"` // above_horizon or below_horizon
+	NextRise  string `json:"next_rising,omitempty"`
+	NextSet   string `json:"next_setting,omitempty"`
+	Elevation any    `json:"elevation,omitempty"`
+	Since     string `json:"since"`
+}
+
+func formatSun(state *homeassistant.State, now time.Time) string {
+	sc := sunContext{
+		Entity:    state.EntityID,
+		State:     state.State,
+		Elevation: roundAttr(state.Attributes["elevation"], 1),
+		Since:     FormatDeltaOnly(state.LastChanged, now),
+	}
+
+	// Delta-annotate next rising/setting times.
+	if rising, ok := state.Attributes["next_rising"].(string); ok {
+		if t, err := time.Parse(time.RFC3339Nano, rising); err == nil {
+			sc.NextRise = FormatDeltaOnly(t, now)
+		} else if t, err := time.Parse(time.RFC3339, rising); err == nil {
+			sc.NextRise = FormatDeltaOnly(t, now)
+		}
+	}
+	if setting, ok := state.Attributes["next_setting"].(string); ok {
+		if t, err := time.Parse(time.RFC3339Nano, setting); err == nil {
+			sc.NextSet = FormatDeltaOnly(t, now)
+		} else if t, err := time.Parse(time.RFC3339, setting); err == nil {
+			sc.NextSet = FormatDeltaOnly(t, now)
+		}
+	}
+
+	return marshalCompact(sc)
+}
+
 // PersonPresenceContext is the JSON structure emitted by the
 // PresenceTracker for each tracked person. Richer than personContext
 // because the tracker has room data from UniFi AP associations.
@@ -269,6 +315,55 @@ func FormatPersonPresence(entityID, name, state string, since time.Time, room, r
 		RoomSr: roomSource,
 	}
 	return marshalCompact(pc)
+}
+
+// roundState rounds a numeric state string to appropriate precision
+// based on device_class. Non-numeric states pass through unchanged.
+func roundState(state, deviceClass string) string {
+	f, err := strconv.ParseFloat(state, 64)
+	if err != nil {
+		return state // non-numeric, pass through
+	}
+
+	var places int
+	switch deviceClass {
+	case "temperature":
+		places = 1
+	case "humidity", "battery":
+		places = 0
+	case "power", "energy", "voltage", "current":
+		places = 1
+	default:
+		places = 2
+	}
+
+	return roundFloat(f, places)
+}
+
+// roundFloat formats a float to the given decimal places, stripping
+// trailing zeros for cleanliness.
+func roundFloat(f float64, places int) string {
+	mult := math.Pow10(places)
+	rounded := math.Round(f*mult) / mult
+	return strconv.FormatFloat(rounded, 'f', -1, 64)
+}
+
+// roundAttr rounds a numeric attribute value (any type) to the given
+// decimal places. Returns nil for nil input. Non-numeric values pass
+// through unchanged.
+func roundAttr(v any, places int) any {
+	if v == nil {
+		return nil
+	}
+	switch n := v.(type) {
+	case float64:
+		mult := math.Pow10(places)
+		return math.Round(n*mult) / mult
+	case int:
+		return n
+	default:
+		return v
+	}
 }
 
 // marshalCompact returns compact JSON for a struct, falling back to

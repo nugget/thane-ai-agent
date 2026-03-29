@@ -2,6 +2,7 @@
 package talents
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -222,83 +223,96 @@ type ManifestEntry struct {
 	AdHoc        bool // discovered from KB/talents, not in config
 }
 
-// GenerateManifest creates a Talent containing the capability manifest.
-// The manifest lists all available tags and their descriptions so the
-// agent knows what capabilities it can request. The generated talent has
-// no tags (always loads). Returns nil when entries is empty.
+// capabilityJSON is the JSON structure for a single capability tag.
+type capabilityJSON struct {
+	Status      string      `json:"status"`
+	Description string      `json:"description"`
+	ToolCount   int         `json:"tools,omitempty"`
+	Context     *ctxSummary `json:"context,omitempty"`
+}
+
+// ctxSummary describes context sources for a capability.
+type ctxSummary struct {
+	ConfigFiles int  `json:"config_files,omitempty"`
+	KBArticles  int  `json:"kb_articles,omitempty"`
+	Live        bool `json:"live,omitempty"`
+}
+
+// GenerateManifest creates a Talent containing the capability manifest
+// as compact JSON. Tool names are omitted — the model already has tool
+// definitions in its schema. The manifest provides tag descriptions,
+// tool counts, and context source metadata.
+//
+// The generated talent has no tags (always loads). Returns nil when
+// entries is empty.
 func GenerateManifest(entries []ManifestEntry) *Talent {
 	if len(entries) == 0 {
 		return nil
 	}
 
-	// Separate configured and ad-hoc entries.
-	var configured, adHoc []ManifestEntry
-	for _, e := range entries {
-		if e.AdHoc {
-			adHoc = append(adHoc, e)
-		} else {
-			configured = append(configured, e)
-		}
-	}
-
 	var sb strings.Builder
 	sb.WriteString("### Available Capabilities\n\n")
-	sb.WriteString("Activate with `request_capability(\"tag\")` for sustained work, or ")
-	sb.WriteString("`delegate(task, tags: [\"tag\"])` for one-off tasks. ")
-	sb.WriteString("Use `drop_capability` when you no longer need a capability's tools.\n")
-	sb.WriteString("You may also request ad-hoc tags not listed here — any tagged KB articles or talents matching the tag will load.\n\n")
+	sb.WriteString("Activate with `request_capability(\"tag\")`, or `delegate(task, tags: [\"tag\"])` for one-off tasks. ")
+	sb.WriteString("Drop with `drop_capability` when done. Ad-hoc tags work too — any tagged KB articles or talents will load.\n\n")
 
-	for _, e := range configured {
+	// Sort entries by tag name for deterministic JSON output.
+	// Input may come from map iteration (nondeterministic order).
+	sorted := make([]ManifestEntry, len(entries))
+	copy(sorted, entries)
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].Tag < sorted[j].Tag
+	})
+
+	// Build JSON capabilities map. Ad-hoc tags (discovered from
+	// KB/talents but not in config) get status "discoverable" with
+	// their context metadata preserved.
+	caps := make(map[string]capabilityJSON, len(sorted))
+
+	for _, e := range sorted {
 		status := "available"
-		if e.AlwaysActive {
-			status = "always active"
+		switch {
+		case e.AdHoc:
+			status = "discoverable"
+		case e.AlwaysActive:
+			status = "always_active"
 		}
-		sb.WriteString(fmt.Sprintf("- **%s** (%s): %s\n", e.Tag, status, e.Description))
-		if len(e.Tools) > 0 {
-			sb.WriteString(fmt.Sprintf("  Tools: %s\n", strings.Join(e.Tools, ", ")))
+
+		c := capabilityJSON{
+			Status:      status,
+			Description: e.Description,
+			ToolCount:   len(e.Tools),
 		}
-		writeContextSummary(&sb, e)
+
+		// Only include context summary if there are sources.
+		if len(e.Context) > 0 || e.KBArticles > 0 || e.LiveContext {
+			c.Context = &ctxSummary{
+				ConfigFiles: len(e.Context),
+				KBArticles:  e.KBArticles,
+				Live:        e.LiveContext,
+			}
+		}
+
+		caps[e.Tag] = c
 	}
 
-	if len(adHoc) > 0 {
-		sb.WriteString("\n**Discoverable (no configured tools):**\n")
-		for _, e := range adHoc {
-			sb.WriteString(fmt.Sprintf("- **%s**", e.Tag))
-			writeContextSummary(&sb, e)
-		}
+	wrapper := struct {
+		Capabilities map[string]capabilityJSON `json:"capabilities"`
+	}{
+		Capabilities: caps,
+	}
+
+	data, err := json.Marshal(wrapper)
+	if err != nil {
+		// Emit valid JSON even on marshal failure.
+		sb.WriteString(`{"error":"manifest marshal failed"}`)
+	} else {
+		sb.Write(data)
 	}
 
 	return &Talent{
 		Name:    "_capability_manifest",
 		Tags:    nil, // Untagged — always loads
 		Content: sb.String(),
-	}
-}
-
-// writeContextSummary appends a context source summary line to sb.
-func writeContextSummary(sb *strings.Builder, e ManifestEntry) {
-	var ctxParts []string
-	if len(e.Context) > 0 {
-		fileWord := "files"
-		if len(e.Context) == 1 {
-			fileWord = "file"
-		}
-		ctxParts = append(ctxParts, fmt.Sprintf("%d config %s", len(e.Context), fileWord))
-	}
-	if e.KBArticles > 0 {
-		artWord := "articles"
-		if e.KBArticles == 1 {
-			artWord = "article"
-		}
-		ctxParts = append(ctxParts, fmt.Sprintf("%d KB %s", e.KBArticles, artWord))
-	}
-	if e.LiveContext {
-		ctxParts = append(ctxParts, "live context")
-	}
-	if len(ctxParts) > 0 {
-		sb.WriteString(fmt.Sprintf("  Context: %s loaded when active\n", strings.Join(ctxParts, ", ")))
-	} else {
-		sb.WriteByte('\n')
 	}
 }
 
