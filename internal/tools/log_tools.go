@@ -219,7 +219,9 @@ func (r *Registry) handleLogsQuery(_ context.Context, args map[string]any) (stri
 		included++
 	}
 
-	// Build final JSON.
+	// Build final JSON with a hard cap enforcement. The entry
+	// collection above uses an estimated budget; this final pass
+	// guarantees the output never exceeds maxLogsResultBytes.
 	var sb strings.Builder
 	fmt.Fprintf(&sb, `{"count":%d,"returned":%d,"entries":[`, included, returned)
 	for i, entry := range marshaledEntries {
@@ -234,7 +236,32 @@ func (r *Registry) handleLogsQuery(_ context.Context, args map[string]any) (stri
 	}
 	sb.WriteString("}")
 
-	return sb.String(), nil
+	// Hard cap: if the assembled output still exceeds the limit
+	// (shouldn't happen with the budget above, but defense in depth),
+	// drop entries from the end until it fits.
+	out := sb.String()
+	if len(out) > maxLogsResultBytes {
+		// Rebuild with fewer entries.
+		for len(marshaledEntries) > 0 && len(out) > maxLogsResultBytes {
+			marshaledEntries = marshaledEntries[:len(marshaledEntries)-1]
+			included = len(marshaledEntries)
+
+			var rebuild strings.Builder
+			fmt.Fprintf(&rebuild, `{"count":%d,"returned":%d,"entries":[`, included, returned)
+			for i, entry := range marshaledEntries {
+				if i > 0 {
+					rebuild.WriteByte(',')
+				}
+				rebuild.Write(entry)
+			}
+			rebuild.WriteString("]")
+			fmt.Fprintf(&rebuild, `,"truncated":true,"note":"showing %d of %d returned entries (byte limit). Narrow filters for more targeted results."`, included, returned)
+			rebuild.WriteString("}")
+			out = rebuild.String()
+		}
+	}
+
+	return out, nil
 }
 
 // stringArg extracts a string value from the args map.
