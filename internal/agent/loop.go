@@ -1177,7 +1177,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 
 	// Request-level exclusions are static for the run, so compute once.
 	// Tag-based filtering is recomputed each iteration inside the loop
-	// to reflect tags activated via request_capability mid-run.
+	// to reflect tags activated via activate_capability mid-run.
 	baseTools := l.tools
 	if len(req.ExcludeTools) > 0 {
 		baseTools = l.tools.FilteredCopyExcluding(req.ExcludeTools)
@@ -1208,7 +1208,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		FallbackContent: prompts.EmptyResponseFallback,
 
 		// Per-iteration tool definitions: recompute effective tools each
-		// iteration so tags activated via request_capability are reflected.
+		// iteration so tags activated via activate_capability are reflected.
 		ToolDefs: func(i int) []map[string]any {
 			effectiveTools := baseTools
 			if scope != nil && !skipTagFilter {

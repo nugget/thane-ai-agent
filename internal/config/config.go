@@ -166,7 +166,7 @@ type Config struct {
 	// CapabilityTags defines named groups of tools and talents that
 	// can be activated or deactivated per session. Tags marked
 	// always_active are loaded unconditionally. Other tags are
-	// activated via request_capability/drop_capability tools or
+	// activated via activate_capability/deactivate_capability tools or
 	// channel-pinned configuration.
 	CapabilityTags map[string]CapabilityTagConfig `yaml:"capability_tags"`
 
