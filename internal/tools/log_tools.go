@@ -71,7 +71,7 @@ func (r *Registry) registerLogsQuery() {
 				"level": map[string]any{
 					"type":        "string",
 					"enum":        []string{"ERROR", "WARN", "INFO", "DEBUG"},
-					"description": "Minimum log level (inclusive). ERROR returns only errors; DEBUG returns everything.",
+					"description": "Minimum log level (default: INFO). Use DEBUG only when you need low-level tracing — it produces very large result sets.",
 				},
 				"since": map[string]any{
 					"type":        "string",
@@ -95,6 +95,11 @@ func (r *Registry) registerLogsQuery() {
 	})
 }
 
+// maxLogsResultBytes caps the serialized JSON response to prevent
+// context bombs when queries match many entries. The model can always
+// narrow filters and query again.
+const maxLogsResultBytes = 50 * 1024
+
 // handleLogsQuery implements the logs_query tool.
 func (r *Registry) handleLogsQuery(_ context.Context, args map[string]any) (string, error) {
 	params := logging.QueryParams{
@@ -110,8 +115,19 @@ func (r *Registry) handleLogsQuery(_ context.Context, args map[string]any) (stri
 		Pattern:        stringArg(args, "pattern"),
 	}
 
-	if v, ok := args["limit"].(float64); ok {
+	// Default level to INFO — DEBUG is extremely noisy and rarely
+	// useful for analysis. The model can explicitly request DEBUG
+	// when needed.
+	if params.Level == "" {
+		params.Level = "INFO"
+	}
+
+	// Handle limit from JSON (float64 or int).
+	switch v := args["limit"].(type) {
+	case float64:
 		params.Limit = int(v)
+	case int:
+		params.Limit = v
 	}
 
 	if s := stringArg(args, "since"); s != "" {
@@ -126,9 +142,9 @@ func (r *Registry) handleLogsQuery(_ context.Context, args map[string]any) (stri
 		return "", fmt.Errorf("logs_query: %w", err)
 	}
 
-	// Build JSON response matching the schema from issue #530.
+	// Build compact JSON response (one line per entry, not pretty-printed).
 	type jsonEntry struct {
-		Timestamp      string         `json:"timestamp"`
+		Timestamp      string         `json:"ts"`
 		Level          string         `json:"level"`
 		Msg            string         `json:"msg"`
 		RequestID      string         `json:"request_id,omitempty"`
@@ -143,17 +159,15 @@ func (r *Registry) handleLogsQuery(_ context.Context, args map[string]any) (stri
 		Source         string         `json:"source,omitempty"`
 	}
 
-	type jsonResult struct {
-		Count   int         `json:"count"`
-		Entries []jsonEntry `json:"entries"`
-	}
+	// Marshal entries one at a time with a byte budget. Stop when
+	// we'd exceed the safety cap.
+	totalEntries := len(entries)
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf(`{"count":%d,"total":%d,"entries":[`, 0, totalEntries)) // count placeholder
 
-	result := jsonResult{
-		Count:   len(entries),
-		Entries: make([]jsonEntry, len(entries)),
-	}
-
-	for i, e := range entries {
+	included := 0
+	truncated := false
+	for _, e := range entries {
 		je := jsonEntry{
 			Timestamp:      e.Timestamp.Format(time.RFC3339),
 			Level:          e.Level,
@@ -170,18 +184,42 @@ func (r *Registry) handleLogsQuery(_ context.Context, args map[string]any) (stri
 		if e.SourceFile != "" {
 			je.Source = fmt.Sprintf("%s:%d", e.SourceFile, e.SourceLine)
 		}
-		// Parse attrs JSON string into a map for proper nested JSON output.
 		if e.Attrs != "" {
 			var attrs map[string]any
 			if json.Unmarshal([]byte(e.Attrs), &attrs) == nil {
 				je.Attrs = attrs
 			}
 		}
-		result.Entries[i] = je
+
+		entryJSON, err := json.Marshal(je)
+		if err != nil {
+			continue
+		}
+
+		// Check if adding this entry would exceed the byte budget.
+		if sb.Len()+len(entryJSON)+10 > maxLogsResultBytes {
+			truncated = true
+			break
+		}
+
+		if included > 0 {
+			sb.WriteByte(',')
+		}
+		sb.Write(entryJSON)
+		included++
 	}
 
-	out, _ := json.MarshalIndent(result, "", "  ")
-	return string(out), nil
+	sb.WriteString("]")
+	if truncated {
+		sb.WriteString(fmt.Sprintf(`,"truncated":true,"note":"showing %d of %d entries. Narrow filters (time range, level, pattern) for more targeted results."`, included, totalEntries))
+	}
+	sb.WriteString("}")
+
+	// Patch the count placeholder with actual included count.
+	out := sb.String()
+	out = strings.Replace(out, fmt.Sprintf(`"count":0,"total":%d`, totalEntries), fmt.Sprintf(`"count":%d,"total":%d`, included, totalEntries), 1)
+
+	return out, nil
 }
 
 // stringArg extracts a string value from the args map.
