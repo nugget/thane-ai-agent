@@ -280,8 +280,11 @@ Full IMAP/SMTP email support (`internal/email/`):
 | `list_anticipations` | planning | List active anticipations |
 | `cancel_anticipation` | planning | Cancel an anticipation |
 | **Capabilities** | | |
-| `request_capability` | always | Activate capability tags for current session |
-| `drop_capability` | always | Deactivate capability tags |
+| `activate_capability` | always | Activate capability tags for current conversation |
+| `deactivate_capability` | always | Deactivate capability tags |
+| `activate_lens` | always | Activate a persistent global behavioral lens |
+| `deactivate_lens` | always | Deactivate a global behavioral lens |
+| `list_lenses` | always | List active behavioral lenses |
 | **Forge (GitHub/Forgejo)** | | |
 | `forge_issue_create` | forge | Create an issue |
 | `forge_issue_get` | forge | Get issue details |

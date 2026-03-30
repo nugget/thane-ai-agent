@@ -149,7 +149,7 @@ func TestCapabilityActivation_MidLoop(t *testing.T) {
 
 // TestIllegalStrikes_NotResetByMetaTool verifies that the illegal strike
 // counter is not reset by capability meta-tools (activate_capability,
-// drop_capability), preventing infinite request→blocked→request loops.
+// deactivate_capability), preventing infinite activate→blocked→activate loops.
 func TestIllegalStrikes_NotResetByMetaTool(t *testing.T) {
 	mock := &mockLLM{
 		responses: []*llm.ChatResponse{
