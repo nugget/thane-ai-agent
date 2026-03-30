@@ -2,6 +2,7 @@ package tools
 
 import (
 	"database/sql"
+	"strings"
 	"testing"
 	"time"
 
@@ -50,6 +51,103 @@ func TestSetLogIndexDB_NilDB(t *testing.T) {
 	if tool != nil {
 		t.Error("logs_query tool should not be registered with nil DB")
 	}
+}
+
+func insertTestLogEntry(t *testing.T, db *sql.DB, ts time.Time, level, msg, loopID, loopName, subsystem string) {
+	t.Helper()
+	_, err := db.Exec(`INSERT INTO log_entries
+		(timestamp, level, msg, loop_id, loop_name, subsystem)
+		VALUES (?, ?, ?, ?, ?, ?)`,
+		ts.UTC().Format(time.RFC3339Nano), level, msg,
+		sql.NullString{String: loopID, Valid: loopID != ""},
+		sql.NullString{String: loopName, Valid: loopName != ""},
+		sql.NullString{String: subsystem, Valid: subsystem != ""},
+	)
+	if err != nil {
+		t.Fatalf("insert test log entry: %v", err)
+	}
+}
+
+func TestLogsQuery_LoopFilters(t *testing.T) {
+	db := openLogTestDB(t)
+	now := time.Now()
+
+	// Insert entries for two different loops.
+	insertTestLogEntry(t, db, now.Add(-10*time.Second), "INFO", "metacog iteration", "loop-aaa", "metacognitive", "loop")
+	insertTestLogEntry(t, db, now.Add(-9*time.Second), "WARN", "metacog warning", "loop-aaa", "metacognitive", "loop")
+	insertTestLogEntry(t, db, now.Add(-8*time.Second), "INFO", "email poll", "loop-bbb", "email-poller", "loop")
+	insertTestLogEntry(t, db, now.Add(-7*time.Second), "INFO", "no loop context", "", "", "agent")
+
+	r := NewEmptyRegistry()
+	r.SetLogIndexDB(db)
+	tool := r.Get("logs_query")
+	if tool == nil {
+		t.Fatal("logs_query not registered")
+	}
+
+	t.Run("filter by loop_id", func(t *testing.T) {
+		result, err := tool.Handler(nil, map[string]any{
+			"loop_id": "loop-aaa",
+			"since":   "1h",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(result, "metacog iteration") {
+			t.Error("should contain metacog iteration")
+		}
+		if !strings.Contains(result, "metacog warning") {
+			t.Error("should contain metacog warning")
+		}
+		if strings.Contains(result, "email poll") {
+			t.Error("should not contain email-poller entries")
+		}
+	})
+
+	t.Run("filter by loop_name", func(t *testing.T) {
+		result, err := tool.Handler(nil, map[string]any{
+			"loop_name": "email-poller",
+			"since":     "1h",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(result, "email poll") {
+			t.Error("should contain email poll entry")
+		}
+		if strings.Contains(result, "metacog") {
+			t.Error("should not contain metacognitive entries")
+		}
+	})
+
+	t.Run("response includes loop fields", func(t *testing.T) {
+		result, err := tool.Handler(nil, map[string]any{
+			"loop_id": "loop-aaa",
+			"limit":   float64(1),
+			"since":   "1h",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(result, `"loop_id": "loop-aaa"`) {
+			t.Errorf("response should include loop_id field, got: %s", result)
+		}
+		if !strings.Contains(result, `"loop_name": "metacognitive"`) {
+			t.Errorf("response should include loop_name field, got: %s", result)
+		}
+	})
+
+	t.Run("no loop filter returns all", func(t *testing.T) {
+		result, err := tool.Handler(nil, map[string]any{
+			"since": "1h",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(result, "metacog iteration") || !strings.Contains(result, "email poll") || !strings.Contains(result, "no loop context") {
+			t.Errorf("unfiltered query should return all entries, got: %s", result)
+		}
+	})
 }
 
 func TestParseTimeOrDuration(t *testing.T) {
