@@ -5,18 +5,33 @@ tags: [devops, forge, ha]
 
 This knowledge article loads when devops, forge, or ha capability tags are active. It provides tool-specific notes and workflow patterns.
 
-## Temp files for large content
+## Path prefixes and content resolution
 
-Use `create_temp_file` when passing structured content to delegates or forge tools. The `temp:LABEL` reference is automatically resolved to file content before the tool handler runs.
+Tool arguments containing path prefixes are automatically resolved before the handler runs. Two resolution modes:
 
-**Pattern: Writing issue/PR descriptions**
+**Path resolution** — prefix expands to an absolute filesystem path:
+- `kb:devops/thane-ops.md` → `/path/to/knowledge/devops/thane-ops.md`
+- `scratchpad:dev-status.md` → `/path/to/scratchpad/dev-status.md`
+- `temp:LABEL` → `/path/to/.tmp/label-file` (from `create_temp_file`)
+
+**Content resolution** — for tools that read content, the prefix resolves AND the file is read inline. Passing `kb:file.md` as a tool argument gives the handler the file's content, not the path.
+
+Available prefixes depend on the `paths:` config. Common ones:
+- `kb:` — knowledge base directory
+- `scratchpad:` — inter-runtime communication / working notes
+- `temp:` — ephemeral files created by `create_temp_file`
+- `core:` — workspace root
+
+### Temp files for large content
+
+Use `create_temp_file` when composing large content for forge tools or delegates:
+
 ```
 1. create_temp_file(label: "issue-body", content: "## Summary\n...")
 2. forge_issue_update(repo: "thane-ai-agent", number: 93, body: "temp:issue-body")
    → body is resolved to full file content before the API call
 ```
 
-**Pattern: Delegating with context**
 ```
 1. create_temp_file(label: "pr-review-context", content: "<diff and notes>")
 2. thane_delegate(task: "Review PR #595. Context: temp:pr-review-context", tags: ["forge"])
