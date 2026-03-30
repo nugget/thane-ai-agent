@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/nugget/thane-ai-agent/internal/awareness"
 	"github.com/nugget/thane-ai-agent/internal/logging"
 )
 
@@ -160,16 +161,26 @@ func (r *Registry) handleLogsQuery(_ context.Context, args map[string]any) (stri
 	}
 
 	// Marshal entries one at a time with a byte budget. Stop when
-	// we'd exceed the safety cap.
-	totalEntries := len(entries)
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf(`{"count":%d,"total":%d,"entries":[`, 0, totalEntries)) // count placeholder
+	// we'd exceed the safety cap. Timestamps use delta format per #458.
+	//
+	// "returned" is the number of rows the DB gave us (after LIMIT).
+	// "count" is how many we actually included before the byte cap.
+	// When count < returned, the response is truncated.
+	now := time.Now()
+	returned := len(entries)
 
+	// Reserve space for the JSON envelope and potential truncation note.
+	const envelopeOverhead = 256
+	byteBudget := maxLogsResultBytes - envelopeOverhead
+
+	var marshaledEntries [][]byte
 	included := 0
+	bytesSoFar := 0
 	truncated := false
+
 	for _, e := range entries {
 		je := jsonEntry{
-			Timestamp:      e.Timestamp.Format(time.RFC3339),
+			Timestamp:      awareness.FormatDeltaOnly(e.Timestamp, now),
 			Level:          e.Level,
 			Msg:            e.Msg,
 			RequestID:      e.RequestID,
@@ -196,30 +207,34 @@ func (r *Registry) handleLogsQuery(_ context.Context, args map[string]any) (stri
 			continue
 		}
 
-		// Check if adding this entry would exceed the byte budget.
-		if sb.Len()+len(entryJSON)+10 > maxLogsResultBytes {
+		// Would this entry push us over the byte budget?
+		entrySize := len(entryJSON) + 1 // +1 for comma separator
+		if bytesSoFar+entrySize > byteBudget {
 			truncated = true
 			break
 		}
 
-		if included > 0 {
-			sb.WriteByte(',')
-		}
-		sb.Write(entryJSON)
+		marshaledEntries = append(marshaledEntries, entryJSON)
+		bytesSoFar += entrySize
 		included++
 	}
 
+	// Build final JSON.
+	var sb strings.Builder
+	fmt.Fprintf(&sb, `{"count":%d,"returned":%d,"entries":[`, included, returned)
+	for i, entry := range marshaledEntries {
+		if i > 0 {
+			sb.WriteByte(',')
+		}
+		sb.Write(entry)
+	}
 	sb.WriteString("]")
 	if truncated {
-		sb.WriteString(fmt.Sprintf(`,"truncated":true,"note":"showing %d of %d entries. Narrow filters (time range, level, pattern) for more targeted results."`, included, totalEntries))
+		fmt.Fprintf(&sb, `,"truncated":true,"note":"showing %d of %d returned entries (byte limit). Narrow filters for more targeted results."`, included, returned)
 	}
 	sb.WriteString("}")
 
-	// Patch the count placeholder with actual included count.
-	out := sb.String()
-	out = strings.Replace(out, fmt.Sprintf(`"count":0,"total":%d`, totalEntries), fmt.Sprintf(`"count":%d,"total":%d`, included, totalEntries), 1)
-
-	return out, nil
+	return sb.String(), nil
 }
 
 // stringArg extracts a string value from the args map.

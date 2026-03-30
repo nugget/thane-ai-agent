@@ -228,14 +228,18 @@ func TestLogsQuery_ResultTruncation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if len(result) > 55000 { // some overhead above the 50KB cap
-		t.Errorf("result should be truncated near 50KB, got %d bytes", len(result))
+	if len(result) > maxLogsResultBytes+512 {
+		t.Errorf("result should be near %d byte cap, got %d bytes", maxLogsResultBytes, len(result))
 	}
 	if !strings.Contains(result, `"truncated":true`) {
 		t.Error("truncated result should include truncated:true")
 	}
-	if !strings.Contains(result, `"total":100`) {
-		t.Error("should report total matching entries")
+	if !strings.Contains(result, `"returned":100`) {
+		t.Error("should report returned count from DB")
+	}
+	// count should be less than returned when truncated.
+	if strings.Contains(result, `"count":100`) {
+		t.Error("count should be less than returned when truncated by byte cap")
 	}
 }
 
