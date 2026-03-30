@@ -27,41 +27,64 @@ type CapabilityManifest struct {
 	AlwaysActive bool
 }
 
-// SetCapabilityTools adds request_capability and drop_capability tools
-// to the registry. These tools let the agent dynamically activate or
-// deactivate capability tags mid-session.
+// SetCapabilityTools adds activate_capability and deactivate_capability
+// tools to the registry. These tools let the agent dynamically activate
+// or deactivate capability tags mid-conversation.
 //
 // These tools are intentionally not assigned to any tag group. They
 // live in the base registry and survive all tag filtering, ensuring the
-// agent can always request or shed capabilities regardless of which
-// tags are currently active.
+// agent can always activate or deactivate capabilities regardless of
+// which tags are currently active.
 func (r *Registry) SetCapabilityTools(mgr CapabilityManager, manifest []CapabilityManifest) {
 	// Index manifest by tag for fast lookup in handlers.
 	tagManifest := make(map[string]CapabilityManifest, len(manifest))
 	for _, m := range manifest {
 		tagManifest[m.Tag] = m
 	}
-	r.registerRequestCapability(mgr, manifest, tagManifest)
-	r.registerDropCapability(mgr, tagManifest)
+	r.registerActivateCapability(mgr, manifest, tagManifest)
+	r.registerDeactivateCapability(mgr, tagManifest)
 }
 
-// registerRequestCapability registers the request_capability tool.
-func (r *Registry) registerRequestCapability(mgr CapabilityManager, manifest []CapabilityManifest, tagManifest map[string]CapabilityManifest) {
+// extractTag extracts the tag parameter from args, accepting common
+// misnames ("capability", "name") as aliases for "tag".
+func extractTag(args map[string]any) string {
+	if tag, ok := args["tag"].(string); ok {
+		if t := strings.TrimSpace(tag); t != "" {
+			return t
+		}
+	}
+	if v, ok := args["capability"].(string); ok {
+		if t := strings.TrimSpace(v); t != "" {
+			return t
+		}
+	}
+	if v, ok := args["name"].(string); ok {
+		if t := strings.TrimSpace(v); t != "" {
+			return t
+		}
+	}
+	return ""
+}
+
+// registerActivateCapability registers the activate_capability tool.
+func (r *Registry) registerActivateCapability(mgr CapabilityManager, manifest []CapabilityManifest, tagManifest map[string]CapabilityManifest) {
 	// Build the available tags list for the description.
 	var availableDesc strings.Builder
-	availableDesc.WriteString("Activate a capability tag to gain access to additional tools. ")
+	availableDesc.WriteString("Activate a capability to load its tools and context into YOUR current conversation. ")
+	availableDesc.WriteString("This modifies your own runtime — it cannot be delegated. ")
+	availableDesc.WriteString("Delegates get capabilities via the tags parameter on thane_delegate.\n\n")
 	availableDesc.WriteString("Available capabilities:\n")
 	for _, m := range manifest {
 		if m.AlwaysActive {
-			continue // Don't list always-active tags — they can't be toggled.
+			continue
 		}
 		availableDesc.WriteString(fmt.Sprintf("- **%s**: %s (%d tools)\n",
 			m.Tag, m.Description, len(m.Tools)))
 	}
-	availableDesc.WriteString("Use drop_capability to deactivate a tag when you no longer need those tools.")
+	availableDesc.WriteString("\nUse deactivate_capability when done to keep your tool set focused.")
 
 	r.Register(&Tool{
-		Name:            "request_capability",
+		Name:            "activate_capability",
 		AlwaysAvailable: true,
 		Description:     availableDesc.String(),
 		Parameters: map[string]any{
@@ -69,22 +92,21 @@ func (r *Registry) registerRequestCapability(mgr CapabilityManager, manifest []C
 			"properties": map[string]any{
 				"tag": map[string]any{
 					"type":        "string",
-					"description": "The capability tag to activate",
+					"description": "The capability tag to activate (e.g., \"forge\", \"ha\", \"email\")",
 				},
 			},
 			"required": []string{"tag"},
 		},
 		Handler: func(ctx context.Context, args map[string]any) (string, error) {
-			tag, _ := args["tag"].(string)
+			tag := extractTag(args)
 			if tag == "" {
-				return "", fmt.Errorf("tag is required")
+				return "", fmt.Errorf("tag is required (e.g., activate_capability(tag: \"forge\"))")
 			}
 
 			if err := mgr.RequestCapability(ctx, tag); err != nil {
 				return "", err
 			}
 
-			// Report what was activated.
 			var result strings.Builder
 			fmt.Fprintf(&result, "Capability **%s** activated.", tag)
 			if m, ok := tagManifest[tag]; ok {
@@ -99,12 +121,13 @@ func (r *Registry) registerRequestCapability(mgr CapabilityManager, manifest []C
 	})
 }
 
-// registerDropCapability registers the drop_capability tool.
-func (r *Registry) registerDropCapability(mgr CapabilityManager, tagManifest map[string]CapabilityManifest) {
+// registerDeactivateCapability registers the deactivate_capability tool.
+func (r *Registry) registerDeactivateCapability(mgr CapabilityManager, tagManifest map[string]CapabilityManifest) {
 	r.Register(&Tool{
-		Name:            "drop_capability",
+		Name:            "deactivate_capability",
 		AlwaysAvailable: true,
-		Description:     "Deactivate a capability tag to remove its tools from the active set. Always-active tags cannot be dropped. Use when you no longer need a capability's tools to keep the tool set focused.",
+		Description: "Deactivate a capability to remove its tools and context from YOUR current conversation. " +
+			"Always-active tags cannot be deactivated. Use when you no longer need a capability's tools to keep your context focused.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -116,20 +139,19 @@ func (r *Registry) registerDropCapability(mgr CapabilityManager, tagManifest map
 			"required": []string{"tag"},
 		},
 		Handler: func(ctx context.Context, args map[string]any) (string, error) {
-			tag, _ := args["tag"].(string)
+			tag := extractTag(args)
 			if tag == "" {
-				return "", fmt.Errorf("tag is required")
+				return "", fmt.Errorf("tag is required (e.g., deactivate_capability(tag: \"forge\"))")
 			}
 
 			if err := mgr.DropCapability(ctx, tag); err != nil {
 				return "", err
 			}
 
-			// List the tools that were unloaded and the remaining active tags.
 			var result strings.Builder
 			fmt.Fprintf(&result, "Capability **%s** deactivated.", tag)
 			if m, ok := tagManifest[tag]; ok && len(m.Tools) > 0 {
-				fmt.Fprintf(&result, " Tools removed: %s.", strings.Join(m.Tools, ", "))
+				fmt.Fprintf(&result, " %d tools removed.", len(m.Tools))
 			}
 			if remaining := mgr.ActiveTags(ctx); len(remaining) > 0 {
 				tags := make([]string, 0, len(remaining))
@@ -137,7 +159,7 @@ func (r *Registry) registerDropCapability(mgr CapabilityManager, tagManifest map
 					tags = append(tags, t)
 				}
 				sort.Strings(tags)
-				fmt.Fprintf(&result, " Active tags: %s.", strings.Join(tags, ", "))
+				fmt.Fprintf(&result, " Active: %s.", strings.Join(tags, ", "))
 			}
 			return result.String(), nil
 		},

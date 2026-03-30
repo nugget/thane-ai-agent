@@ -11,7 +11,7 @@ import (
 )
 
 // setupCapabilityLoop builds a Loop with capability tags configured and the
-// request_capability / drop_capability tools registered. This mirrors the
+// activate_capability / deactivate_capability tools registered. This mirrors the
 // production wiring in cmd/thane/main.go.
 func setupCapabilityLoop(mock *mockLLM, extraNames []string, capTags map[string]config.CapabilityTagConfig) *Loop {
 	loop := buildTestLoop(mock, extraNames)
@@ -33,7 +33,7 @@ func setupCapabilityLoop(mock *mockLLM, extraNames []string, capTags map[string]
 	return loop
 }
 
-// TestCapabilityActivation_MidLoop verifies that request_capability
+// TestCapabilityActivation_MidLoop verifies that activate_capability
 // activates a tag mid-loop and the newly-available tools can be called
 // on the next iteration. This was broken when effectiveTools was
 // snapshotted once before the loop (issue #507).
@@ -53,7 +53,7 @@ func TestCapabilityActivation_MidLoop(t *testing.T) {
 							Name      string         `json:"name"`
 							Arguments map[string]any `json:"arguments"`
 						}{
-							Name:      "request_capability",
+							Name:      "activate_capability",
 							Arguments: map[string]any{"tag": "forge"},
 						},
 					}},
@@ -124,7 +124,7 @@ func TestCapabilityActivation_MidLoop(t *testing.T) {
 
 	// forge_tool should have been executed successfully.
 	if !forgeToolCalled {
-		t.Error("forge_tool was not called; request_capability did not activate the tag mid-loop")
+		t.Error("forge_tool was not called; activate_capability did not activate the tag mid-loop")
 	}
 
 	// The response should not contain illegal-tool errors.
@@ -143,12 +143,12 @@ func TestCapabilityActivation_MidLoop(t *testing.T) {
 	}
 	iter1Tools := toolNames(mock.calls[1].Tools)
 	if !hasName(iter1Tools, "forge_tool") {
-		t.Error("forge_tool should be in iter 1 tool definitions (activated by request_capability)")
+		t.Error("forge_tool should be in iter 1 tool definitions (activated by activate_capability)")
 	}
 }
 
 // TestIllegalStrikes_NotResetByMetaTool verifies that the illegal strike
-// counter is not reset by capability meta-tools (request_capability,
+// counter is not reset by capability meta-tools (activate_capability,
 // drop_capability), preventing infinite request→blocked→request loops.
 func TestIllegalStrikes_NotResetByMetaTool(t *testing.T) {
 	mock := &mockLLM{
@@ -172,7 +172,7 @@ func TestIllegalStrikes_NotResetByMetaTool(t *testing.T) {
 				InputTokens:  100,
 				OutputTokens: 20,
 			},
-			// Iter 1: model calls request_capability (success, but meta-only
+			// Iter 1: model calls activate_capability (success, but meta-only
 			// batch — should NOT reset strikes).
 			{
 				Model: "test-model",
@@ -184,7 +184,7 @@ func TestIllegalStrikes_NotResetByMetaTool(t *testing.T) {
 							Name      string         `json:"name"`
 							Arguments map[string]any `json:"arguments"`
 						}{
-							Name:      "request_capability",
+							Name:      "activate_capability",
 							Arguments: map[string]any{"tag": "base"},
 						},
 					}},
@@ -240,7 +240,7 @@ func TestIllegalStrikes_NotResetByMetaTool(t *testing.T) {
 
 	// The loop should have broken after 3 tool iterations (not looped
 	// indefinitely). With the old bug, strikes reset on
-	// request_capability success, allowing infinite loops.
+	// activate_capability success, allowing infinite loops.
 	if len(mock.calls) > 4 {
 		t.Errorf("expected at most 4 LLM calls (3 tool iters + 1 forced text), got %d", len(mock.calls))
 	}

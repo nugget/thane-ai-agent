@@ -54,6 +54,7 @@ type Registry struct {
 	watchlistStore    *awareness.WatchlistStore
 	tempFileStore     *TempFileStore
 	usageStore        *usage.Store
+	lensStore         *LensStore
 	logIndexDB        *sql.DB
 	contentResolver   *ContentResolver
 }

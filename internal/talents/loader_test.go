@@ -258,8 +258,8 @@ func TestGenerateManifest(t *testing.T) {
 	}
 
 	// Preamble text.
-	if !strings.Contains(talent.Content, "request_capability") {
-		t.Error("manifest should mention request_capability in preamble")
+	if !strings.Contains(talent.Content, "activate_capability") {
+		t.Error("manifest should mention activate_capability in preamble")
 	}
 	if !strings.Contains(talent.Content, "delegate") {
 		t.Error("manifest should mention delegate in preamble")

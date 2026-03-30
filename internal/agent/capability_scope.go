@@ -49,9 +49,10 @@ type capabilityScope struct {
 	capTags map[string]config.CapabilityTagConfig // read-only reference to config
 }
 
-// newCapabilityScope creates a scope seeded with all always-active tags.
-// The capTags reference is stored read-only for configured-tag checks.
-func newCapabilityScope(capTags map[string]config.CapabilityTagConfig) *capabilityScope {
+// newCapabilityScope creates a scope seeded with always-active tags and
+// global lenses. The capTags reference is stored read-only for
+// configured-tag checks.
+func newCapabilityScope(capTags map[string]config.CapabilityTagConfig, globalLenses []string) *capabilityScope {
 	s := &capabilityScope{
 		active:  make(map[string]bool),
 		pinned:  make(map[string]bool),
@@ -61,6 +62,12 @@ func newCapabilityScope(capTags map[string]config.CapabilityTagConfig) *capabili
 		if cfg.AlwaysActive {
 			s.active[tag] = true
 		}
+	}
+	// Seed global lenses — these are persistent behavioral modes
+	// that apply to all conversations.
+	for _, lens := range globalLenses {
+		s.active[lens] = true
+		s.pinned[lens] = true // protect from deactivate_capability
 	}
 	return s
 }

@@ -43,7 +43,7 @@ func testCtxForLoop(l *Loop) context.Context {
 	if l.capTags == nil {
 		return context.Background()
 	}
-	return withCapabilityScope(context.Background(), newCapabilityScope(l.capTags))
+	return withCapabilityScope(context.Background(), newCapabilityScope(l.capTags, nil))
 }
 
 func TestBuildSystemPrompt_TagContextIncluded(t *testing.T) {

@@ -286,7 +286,7 @@ func TestChannelTags_DropPinnedTagRejected(t *testing.T) {
 		"signal": {Description: "Signal messaging", Tools: []string{"signal_tool"}},
 		"extra":  {Description: "Extra tools", Tools: []string{"extra_tool"}},
 	}
-	scope := newCapabilityScope(capTags)
+	scope := newCapabilityScope(capTags, nil)
 	scope.PinChannelTags([]string{"signal"})
 	_ = scope.Request("extra") // agent-requested, not pinned
 
@@ -316,7 +316,7 @@ func TestChannelTags_DropNonPinnedTagAllowed(t *testing.T) {
 		"signal": {Description: "Signal messaging", Tools: []string{"signal_tool"}},
 		"extra":  {Description: "Extra tools", Tools: []string{"extra_tool"}},
 	}
-	scope := newCapabilityScope(capTags)
+	scope := newCapabilityScope(capTags, nil)
 	scope.PinChannelTags([]string{"signal"})
 	_ = scope.Request("extra") // agent-requested, not pinned
 
