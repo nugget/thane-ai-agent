@@ -5,6 +5,8 @@ tags: [forge]
 
 Patterns for working with GitHub/Gitea through forge tools. All forge tool responses are JSON — parse structured fields, read body/description as prose after the `---` separator.
 
+Forge tools operate directly against the GitHub/Gitea API. Most operations don't need local repo access or shell commands — the tools handle authentication, pagination, and response formatting.
+
 ## Issue management
 
 **Reading issues**: `forge_issue_get` returns JSON with number, state, author, labels, assignees, comment count, delta timestamps, and the full body. One call gives you everything.
@@ -30,32 +32,45 @@ The `temp:` reference resolves to the full file content automatically. Never try
 3. `forge_pr_files` — see which files changed and their stats
 4. `forge_pr_review(event: "APPROVE" | "COMMENT" | "REQUEST_CHANGES", body: "...")`
 
-**Creating PRs**: Use `exec` with `gh pr create` — there's no native forge PR creation tool. Compose the PR body with `create_temp_file` first if it's substantial.
-
-## Delegation patterns
-
-**Tag-scoped forge work**: `thane_delegate(task: "...", tags: ["forge"])` gives the delegate all forge tools. Use `path_prefixes` for repo checkouts:
-
+**Creating PRs**: Use `forge_pr_create` with the branch names and description:
 ```
-thane_delegate(
-  task: "Review PR #595 on thane-ai-agent",
-  tags: ["forge"],
-  path_prefixes: {"repo": "~/Sync/Projects/AI/Claude/thane-ai-agent"}
+forge_pr_create(
+  repo: "thane-ai-agent",
+  title: "feat: add behavioral lens system",
+  body: "temp:pr-description",
+  head: "feature-branch",
+  base: "main"
 )
 ```
+For large PR descriptions, compose the body with `create_temp_file` first.
 
-The delegate gets a directory listing of the prefix path in its context, eliminating the first `file_list` call.
+**Merging PRs**: `forge_pr_merge(number: 595)` defaults to squash merge. Pass `method: "merge"` or `method: "rebase"` for other strategies. Use `commit_title` and `commit_message` to customize the merge commit.
 
-**Passing context to delegates**: For tasks that need background (diffs, issue bodies, prior discussion):
+## Search
+
+`forge_search(query: "...", kind: "issues" | "code" | "commits")` searches across the configured forge. Results are JSON with number, title, URL, and body snippet.
+
+**Search operators**: GitHub search syntax works — `is:open`, `is:closed`, `author:thane-agent`, `label:enhancement`, `created:>2026-03-01`, etc. Always search before creating issues to avoid duplicates.
+
+## When to delegate
+
+Most forge operations work well from the core model — `forge_issue_get`, `forge_pr_get`, `forge_search` are single API calls that return concise JSON. Use these directly.
+
+Delegate when you need to **explore broadly without burning core context**: surveying many issues, reading multiple PR diffs, or doing bulk operations where the intermediate data is large but the desired output is a summary.
 
 ```
-create_temp_file(label: "pr-595-context", content: "<assembled context>")
 thane_delegate(
-  task: "Review the changes in temp:pr-595-context and suggest improvements",
+  task: "Survey all open issues labeled 'enhancement' on thane-ai-agent and write a one-paragraph summary of themes",
   tags: ["forge"]
 )
 ```
 
-## Search
+Delegation is also useful when the task needs **local file access** alongside forge data (e.g., reading source code to understand an issue). Use `path_prefixes` so the delegate has the repo:
 
-`forge_search(query: "...", kind: "issues" | "code" | "commits")` searches across the configured forge. Results are JSON with number, title, URL, and body snippet. Use `kind: "issues"` to find related issues before creating new ones.
+```
+thane_delegate(
+  task: "Read the router code and assess whether issue #93 Phase 1 is still accurate",
+  tags: ["forge", "files"],
+  path_prefixes: {"repo": "~/Sync/Projects/AI/Claude/thane-ai-agent"}
+)
+```
