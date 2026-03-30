@@ -76,8 +76,16 @@ func (r *Registry) registerRequestCapability(mgr CapabilityManager, manifest []C
 		},
 		Handler: func(ctx context.Context, args map[string]any) (string, error) {
 			tag, _ := args["tag"].(string)
+			// Accept common misnames — models sometimes guess "capability" or "name".
 			if tag == "" {
-				return "", fmt.Errorf("tag is required")
+				if v, ok := args["capability"].(string); ok && v != "" {
+					tag = v
+				} else if v, ok := args["name"].(string); ok && v != "" {
+					tag = v
+				}
+			}
+			if tag == "" {
+				return "", fmt.Errorf("tag is required (parameter name is \"tag\", e.g. {\"tag\": \"forge\"})")
 			}
 
 			if err := mgr.RequestCapability(ctx, tag); err != nil {
@@ -117,8 +125,16 @@ func (r *Registry) registerDropCapability(mgr CapabilityManager, tagManifest map
 		},
 		Handler: func(ctx context.Context, args map[string]any) (string, error) {
 			tag, _ := args["tag"].(string)
+			// Accept common misnames — models sometimes guess "capability" or "name".
 			if tag == "" {
-				return "", fmt.Errorf("tag is required")
+				if v, ok := args["capability"].(string); ok && v != "" {
+					tag = v
+				} else if v, ok := args["name"].(string); ok && v != "" {
+					tag = v
+				}
+			}
+			if tag == "" {
+				return "", fmt.Errorf("tag is required (parameter name is \"tag\", e.g. {\"tag\": \"forge\"})")
 			}
 
 			if err := mgr.DropCapability(ctx, tag); err != nil {
