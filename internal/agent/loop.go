@@ -1255,12 +1255,14 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			// - Capability context reflects tags activated mid-run
 			// - Watchlist entities, state changes, and conditions are fresh
 			// - KB articles and live providers see current tag state
-			if i > 0 && len(msgs) > 0 && msgs[0].Role == "system" {
+			// Skip rebuild when a custom SystemPrompt is in use (e.g.,
+			// OpenClaw profiles that assemble their own context).
+			if i > 0 && len(msgs) > 0 && msgs[0].Role == "system" && req.SystemPrompt == "" {
 				rebuilt := l.buildSystemPrompt(iterCtx, userMessage, history)
-				if line := awareness.FormatContextUsage(usageInfo); line != "" {
-					rebuilt += "\n" + line
-				}
+				// Omit FormatContextUsage — usageInfo was computed before the
+				// run and would be misleading after prompt content changes.
 				msgs[0].Content = rebuilt
+				systemPrompt = rebuilt // keep retained content in sync
 				systemTokens = len(rebuilt) / 4
 			}
 
@@ -1472,6 +1474,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		for tag := range scope.Snapshot() {
 			activeTags = append(activeTags, tag)
 		}
+		sort.Strings(activeTags)
 	}
 
 	resp = &Response{

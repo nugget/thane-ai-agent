@@ -1025,8 +1025,10 @@ func (l *Loop) iterate(ctx context.Context, isSupervisor bool, convID string) (*
 
 	resp, err := l.deps.Runner.Run(ctx, req, nil)
 	// Capture activated tags for next iteration (under lock since
-	// activatedTags is read during Status snapshots).
-	if err == nil && len(resp.ActiveTags) > 0 {
+	// activatedTags is read during Status snapshots). Always update,
+	// even to nil — if all tags were dropped during a run, the next
+	// iteration should not re-seed the old tags.
+	if err == nil {
 		l.mu.Lock()
 		l.activatedTags = resp.ActiveTags
 		l.mu.Unlock()
