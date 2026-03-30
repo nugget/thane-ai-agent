@@ -48,6 +48,7 @@ type Request struct {
 	SkipContext    bool              `json:"-"`               // Skip memory, tools, and context injection (for lightweight completions)
 	ExcludeTools   []string          `json:"-"`               // Tool names to exclude from this run (e.g., lifecycle tools for recurring wakes)
 	SkipTagFilter  bool              `json:"-"`               // Bypass capability tag filtering (for self-scoping contexts like metacognitive)
+	SeedTags       []string          `json:"-"`               // Tags to activate at Run start (carried forward from previous loop iterations)
 
 	// SystemPrompt, when non-empty, replaces the output of
 	// buildSystemPrompt(). Used by profiles that assemble their
@@ -100,6 +101,10 @@ type Response struct {
 	// correlate post-run log lines with the agent loop's context.
 	SessionID string `json:"session_id,omitempty"`
 	RequestID string `json:"request_id,omitempty"`
+
+	// ActiveTags is the set of capability tags active at the end of
+	// the Run. Used by loops to carry forward activations.
+	ActiveTags []string `json:"-"`
 }
 
 // MemoryStore is the interface for memory storage.
@@ -993,6 +998,10 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			lenses = l.lensProvider()
 		}
 		scope = newCapabilityScope(l.capTags, lenses)
+		// Seed tags carried forward from previous loop iterations.
+		for _, tag := range req.SeedTags {
+			_ = scope.Request(tag) // cannot fail for ad-hoc tags
+		}
 		if source := req.Hints["source"]; source != "" {
 			if pinnedTags, ok := l.channelTags[source]; ok {
 				scope.PinChannelTags(pinnedTags)
@@ -1241,6 +1250,20 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		// Iteration lifecycle callbacks.
 		OnIterationStart: func(iterCtx context.Context, i int, currentModel string, msgs []llm.Message, _ []map[string]any) {
 			iterLog := logging.Logger(iterCtx)
+
+			// Rebuild system prompt each iteration so that:
+			// - Capability context reflects tags activated mid-run
+			// - Watchlist entities, state changes, and conditions are fresh
+			// - KB articles and live providers see current tag state
+			if i > 0 && len(msgs) > 0 && msgs[0].Role == "system" {
+				rebuilt := l.buildSystemPrompt(iterCtx, userMessage, history)
+				if line := awareness.FormatContextUsage(usageInfo); line != "" {
+					rebuilt += "\n" + line
+				}
+				msgs[0].Content = rebuilt
+				systemTokens = len(rebuilt) / 4
+			}
+
 			iterMsgTokens := 0
 			for _, m := range msgs {
 				iterMsgTokens += len(m.Content) / 4
@@ -1443,6 +1466,14 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		finishReason = "timeout_recovery"
 	}
 
+	// Snapshot active tags for loops to carry forward.
+	var activeTags []string
+	if scope != nil {
+		for tag := range scope.Snapshot() {
+			activeTags = append(activeTags, tag)
+		}
+	}
+
 	resp = &Response{
 		Content:      iterResult.Content,
 		Model:        iterResult.Model,
@@ -1452,6 +1483,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		ToolsUsed:    iterResult.ToolsUsed,
 		SessionID:    sessionID,
 		RequestID:    requestID,
+		ActiveTags:   activeTags,
 	}
 
 	l.recordUsage(ctx, req, iterResult.Model, iterResult.InputTokens, iterResult.OutputTokens, convID, sessionTag, requestID)
