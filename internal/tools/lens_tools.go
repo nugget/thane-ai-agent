@@ -103,17 +103,17 @@ func (r *Registry) SetLensTools(store *LensStore) {
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"lens": map[string]any{
+				"tag": map[string]any{
 					"type":        "string",
-					"description": "The lens to activate (e.g., \"night_quiet\", \"everyone_away\")",
+					"description": "The lens tag to activate (e.g., \"night_quiet\", \"everyone_away\"). Same tag used in KB article frontmatter.",
 				},
 			},
-			"required": []string{"lens"},
+			"required": []string{"tag"},
 		},
 		Handler: func(_ context.Context, args map[string]any) (string, error) {
 			lens := extractLensArg(args)
 			if lens == "" {
-				return "", fmt.Errorf("lens is required (e.g., activate_lens(lens: \"night_quiet\"))")
+				return "", fmt.Errorf("tag is required (e.g., activate_lens(tag: \"night_quiet\"))")
 			}
 
 			if err := store.Add(lens); err != nil {
@@ -132,17 +132,17 @@ func (r *Registry) SetLensTools(store *LensStore) {
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"lens": map[string]any{
+				"tag": map[string]any{
 					"type":        "string",
-					"description": "The lens to deactivate",
+					"description": "The lens tag to deactivate",
 				},
 			},
-			"required": []string{"lens"},
+			"required": []string{"tag"},
 		},
 		Handler: func(_ context.Context, args map[string]any) (string, error) {
 			lens := extractLensArg(args)
 			if lens == "" {
-				return "", fmt.Errorf("lens is required")
+				return "", fmt.Errorf("tag is required")
 			}
 
 			if err := store.Remove(lens); err != nil {
@@ -179,14 +179,14 @@ func (r *Registry) SetLensTools(store *LensStore) {
 }
 
 func extractLensArg(args map[string]any) string {
+	if v, ok := args["tag"].(string); ok && v != "" {
+		return strings.TrimSpace(v)
+	}
+	// Accept "lens" and "name" as aliases.
 	if v, ok := args["lens"].(string); ok && v != "" {
 		return strings.TrimSpace(v)
 	}
-	// Accept "name" or "tag" as aliases.
 	if v, ok := args["name"].(string); ok && v != "" {
-		return strings.TrimSpace(v)
-	}
-	if v, ok := args["tag"].(string); ok && v != "" {
 		return strings.TrimSpace(v)
 	}
 	return ""
