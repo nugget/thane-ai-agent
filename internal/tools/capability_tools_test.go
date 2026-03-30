@@ -67,8 +67,8 @@ func TestRequestCapability(t *testing.T) {
 	if !strings.Contains(result, "activated") {
 		t.Errorf("result = %q, want to contain 'activated'", result)
 	}
-	if !strings.Contains(result, "get_state") {
-		t.Errorf("result = %q, want to list tools like 'get_state'", result)
+	if !strings.Contains(result, "1 tools now available") {
+		t.Errorf("result = %q, want to mention tools count", result)
 	}
 	if !mgr.activeTags["ha"] {
 		t.Error("ha tag should be active after request")
@@ -170,8 +170,8 @@ func TestRequestCapability_DescriptionContainsManifest(t *testing.T) {
 	if !strings.Contains(tool.Description, "**search**") {
 		t.Errorf("description should mention 'search': %s", tool.Description)
 	}
-	if !strings.Contains(tool.Description, "web_search") {
-		t.Errorf("description should list tools: %s", tool.Description)
+	if !strings.Contains(tool.Description, "(1 tools)") {
+		t.Errorf("description should list tool count: %s", tool.Description)
 	}
 }
 
@@ -188,11 +188,7 @@ func TestBuildCapabilityManifest(t *testing.T) {
 		"ha": true,
 	}
 
-	contextFiles := map[string][]string{
-		"ha": {"/path/to/ha-guide.md", "/path/to/automations.md"},
-	}
-
-	manifest := BuildCapabilityManifest(tags, descriptions, alwaysActive, contextFiles)
+	manifest := BuildCapabilityManifest(tags, descriptions, alwaysActive)
 
 	if len(manifest) != 2 {
 		t.Fatalf("len(manifest) = %d, want 2", len(manifest))
@@ -210,67 +206,6 @@ func TestBuildCapabilityManifest(t *testing.T) {
 	}
 	if manifest[1].AlwaysActive {
 		t.Error("search should not be always_active")
-	}
-
-	// Context files should be propagated.
-	if len(manifest[0].Context) != 2 {
-		t.Errorf("manifest[0].Context = %v, want 2 files", manifest[0].Context)
-	}
-	if len(manifest[1].Context) != 0 {
-		t.Errorf("manifest[1].Context = %v, want empty", manifest[1].Context)
-	}
-}
-
-func TestBuildCapabilityManifest_NilContextFiles(t *testing.T) {
-	tags := map[string][]string{
-		"ha": {"get_state"},
-	}
-	descriptions := map[string]string{
-		"ha": "Home Assistant",
-	}
-	alwaysActive := map[string]bool{}
-
-	manifest := BuildCapabilityManifest(tags, descriptions, alwaysActive, nil)
-
-	if len(manifest) != 1 {
-		t.Fatalf("len(manifest) = %d, want 1", len(manifest))
-	}
-	if len(manifest[0].Context) != 0 {
-		t.Errorf("manifest[0].Context = %v, want empty with nil contextFiles", manifest[0].Context)
-	}
-}
-
-func TestRequestCapability_ContextInMessage(t *testing.T) {
-	mgr := newMockCapabilityManager("forge")
-	manifest := []CapabilityManifest{
-		{Tag: "forge", Description: "Code generation", Tools: []string{"forge_run"}, Context: []string{"/docs/arch.md", "/docs/style.md"}},
-	}
-
-	reg := NewEmptyRegistry()
-	reg.SetCapabilityTools(mgr, manifest)
-
-	tool := reg.Get("request_capability")
-	result, err := tool.Handler(context.Background(), map[string]any{"tag": "forge"})
-	if err != nil {
-		t.Fatalf("request_capability error: %v", err)
-	}
-	if !strings.Contains(result, "Context loaded: 2 files") {
-		t.Errorf("result = %q, want to mention context loaded", result)
-	}
-}
-
-func TestRequestCapability_DescriptionShowsContext(t *testing.T) {
-	mgr := newMockCapabilityManager("forge")
-	manifest := []CapabilityManifest{
-		{Tag: "forge", Description: "Code generation", Tools: []string{"forge_run"}, Context: []string{"/docs/arch.md"}},
-	}
-
-	reg := NewEmptyRegistry()
-	reg.SetCapabilityTools(mgr, manifest)
-
-	tool := reg.Get("request_capability")
-	if !strings.Contains(tool.Description, "context: 1 file") {
-		t.Errorf("description should mention context file: %s", tool.Description)
 	}
 }
 

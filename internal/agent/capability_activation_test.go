@@ -27,7 +27,7 @@ func setupCapabilityLoop(mock *mockLLM, extraNames []string, capTags map[string]
 		descriptions[tag] = cfg.Description
 		alwaysActive[tag] = cfg.AlwaysActive
 	}
-	manifest := tools.BuildCapabilityManifest(tagTools, descriptions, alwaysActive, nil)
+	manifest := tools.BuildCapabilityManifest(tagTools, descriptions, alwaysActive)
 	loop.Tools().SetCapabilityTools(loop, manifest)
 
 	return loop

@@ -216,7 +216,6 @@ type ManifestEntry struct {
 	Tag          string
 	Description  string
 	Tools        []string
-	Context      []string // resolved context file paths
 	AlwaysActive bool
 	KBArticles   int  // tagged KB articles auto-loaded when active
 	LiveContext  bool // has a registered TagContextProvider
@@ -233,9 +232,8 @@ type capabilityJSON struct {
 
 // ctxSummary describes context sources for a capability.
 type ctxSummary struct {
-	ConfigFiles int  `json:"config_files,omitempty"`
-	KBArticles  int  `json:"kb_articles,omitempty"`
-	Live        bool `json:"live,omitempty"`
+	KBArticles int  `json:"kb_articles,omitempty"`
+	Live       bool `json:"live,omitempty"`
 }
 
 // GenerateManifest creates a Talent containing the capability manifest
@@ -284,11 +282,10 @@ func GenerateManifest(entries []ManifestEntry) *Talent {
 		}
 
 		// Only include context summary if there are sources.
-		if len(e.Context) > 0 || e.KBArticles > 0 || e.LiveContext {
+		if e.KBArticles > 0 || e.LiveContext {
 			c.Context = &ctxSummary{
-				ConfigFiles: len(e.Context),
-				KBArticles:  e.KBArticles,
-				Live:        e.LiveContext,
+				KBArticles: e.KBArticles,
+				Live:       e.LiveContext,
 			}
 		}
 
