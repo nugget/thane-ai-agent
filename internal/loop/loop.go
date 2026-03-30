@@ -542,7 +542,7 @@ func (l *Loop) run(ctx context.Context) {
 					"loop_name": l.config.Name,
 				},
 			})
-			logger.Debug("loop waiting for event")
+			logger.Log(ctx, slog.LevelDebug-4, "loop waiting for event") // TRACE
 
 			var waitErr error
 			event, waitErr = l.config.WaitFunc(ctx)
@@ -636,7 +636,7 @@ func (l *Loop) run(ctx context.Context) {
 				"attempt":         attemptCount + 1,
 			},
 		})
-		iterLog.Info("loop iteration starting")
+		iterLog.Log(iterCtx, slog.LevelDebug-4, "loop iteration starting") // TRACE
 
 		if l.config.Handler != nil {
 			iterStart := time.Now()
@@ -702,7 +702,7 @@ func (l *Loop) run(ctx context.Context) {
 		l.mu.Unlock()
 
 		if noOp {
-			iterLog.Debug("handler returned no-op, skipping iteration accounting")
+			iterLog.Log(iterCtx, slog.LevelDebug-4, "handler returned no-op, skipping iteration accounting") // TRACE
 			// Emit a zero-token iteration_complete so the dashboard
 			// sees a balanced start→complete pair for every wake.
 			l.publishEvent(events.Event{
