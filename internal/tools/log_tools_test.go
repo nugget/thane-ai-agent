@@ -2,6 +2,7 @@ package tools
 
 import (
 	"database/sql"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -72,11 +73,13 @@ func TestLogsQuery_LoopFilters(t *testing.T) {
 	db := openLogTestDB(t)
 	now := time.Now()
 
-	// Insert entries for two different loops.
+	// Insert entries for two different loops at INFO and above
+	// (default level filter is INFO now).
 	insertTestLogEntry(t, db, now.Add(-10*time.Second), "INFO", "metacog iteration", "loop-aaa", "metacognitive", "loop")
 	insertTestLogEntry(t, db, now.Add(-9*time.Second), "WARN", "metacog warning", "loop-aaa", "metacognitive", "loop")
 	insertTestLogEntry(t, db, now.Add(-8*time.Second), "INFO", "email poll", "loop-bbb", "email-poller", "loop")
 	insertTestLogEntry(t, db, now.Add(-7*time.Second), "INFO", "no loop context", "", "", "agent")
+	insertTestLogEntry(t, db, now.Add(-6*time.Second), "DEBUG", "debug noise", "loop-aaa", "metacognitive", "loop")
 
 	r := NewEmptyRegistry()
 	r.SetLogIndexDB(db)
@@ -129,15 +132,63 @@ func TestLogsQuery_LoopFilters(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !strings.Contains(result, `"loop_id": "loop-aaa"`) {
+		// Compact JSON now (no spaces after colons in keys).
+		if !strings.Contains(result, `"loop_id":"loop-aaa"`) {
 			t.Errorf("response should include loop_id field, got: %s", result)
 		}
-		if !strings.Contains(result, `"loop_name": "metacognitive"`) {
+		if !strings.Contains(result, `"loop_name":"metacognitive"`) {
 			t.Errorf("response should include loop_name field, got: %s", result)
 		}
 	})
 
-	t.Run("no loop filter returns all", func(t *testing.T) {
+	t.Run("default level is INFO", func(t *testing.T) {
+		// No level specified — should default to INFO, excluding DEBUG.
+		result, err := tool.Handler(nil, map[string]any{
+			"loop_id": "loop-aaa",
+			"since":   "1h",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(result, "debug noise") {
+			t.Error("default level should be INFO, should not include DEBUG entries")
+		}
+		if !strings.Contains(result, "metacog iteration") {
+			t.Error("should include INFO entries")
+		}
+		if !strings.Contains(result, "metacog warning") {
+			t.Error("should include WARN entries")
+		}
+	})
+
+	t.Run("explicit DEBUG includes debug entries", func(t *testing.T) {
+		result, err := tool.Handler(nil, map[string]any{
+			"loop_id": "loop-aaa",
+			"level":   "DEBUG",
+			"since":   "1h",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(result, "debug noise") {
+			t.Error("explicit DEBUG level should include DEBUG entries")
+		}
+	})
+
+	t.Run("limit respected", func(t *testing.T) {
+		result, err := tool.Handler(nil, map[string]any{
+			"since": "1h",
+			"limit": float64(2),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(result, `"count":2`) {
+			t.Errorf("limit=2 should return count:2, got: %s", result)
+		}
+	})
+
+	t.Run("no loop filter returns all INFO+", func(t *testing.T) {
 		result, err := tool.Handler(nil, map[string]any{
 			"since": "1h",
 		})
@@ -145,9 +196,51 @@ func TestLogsQuery_LoopFilters(t *testing.T) {
 			t.Fatal(err)
 		}
 		if !strings.Contains(result, "metacog iteration") || !strings.Contains(result, "email poll") || !strings.Contains(result, "no loop context") {
-			t.Errorf("unfiltered query should return all entries, got: %s", result)
+			t.Errorf("unfiltered query should return all INFO+ entries, got: %s", result)
+		}
+		// DEBUG should be excluded by default.
+		if strings.Contains(result, "debug noise") {
+			t.Error("default query should not include DEBUG entries")
 		}
 	})
+}
+
+func TestLogsQuery_ResultTruncation(t *testing.T) {
+	db := openLogTestDB(t)
+	now := time.Now()
+
+	// Insert many entries with large messages to exceed the byte cap.
+	bigMsg := strings.Repeat("x", 2000)
+	for i := 0; i < 100; i++ {
+		insertTestLogEntry(t, db, now.Add(-time.Duration(i)*time.Second), "INFO",
+			fmt.Sprintf("entry-%d %s", i, bigMsg), "", "", "agent")
+	}
+
+	r := NewEmptyRegistry()
+	r.SetLogIndexDB(db)
+	tool := r.Get("logs_query")
+
+	result, err := tool.Handler(nil, map[string]any{
+		"since": "1h",
+		"limit": float64(100),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(result) > maxLogsResultBytes {
+		t.Errorf("result must not exceed %d-byte hard cap, got %d bytes", maxLogsResultBytes, len(result))
+	}
+	if !strings.Contains(result, `"truncated":true`) {
+		t.Error("truncated result should include truncated:true")
+	}
+	if !strings.Contains(result, `"returned":100`) {
+		t.Error("should report returned count from DB")
+	}
+	// count should be less than returned when truncated.
+	if strings.Contains(result, `"count":100`) {
+		t.Error("count should be less than returned when truncated by byte cap")
+	}
 }
 
 func TestParseTimeOrDuration(t *testing.T) {
