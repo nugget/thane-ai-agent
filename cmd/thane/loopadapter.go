@@ -42,6 +42,7 @@ func (a *loopAdapter) Run(ctx context.Context, req loop.RunRequest, _ loop.Strea
 		ExcludeTools:   req.ExcludeTools,
 		SkipTagFilter:  req.SkipTagFilter,
 		Hints:          req.Hints,
+		SeedTags:       req.SeedTags,
 	}
 
 	// Build an agent streaming callback that relays tool and LLM
@@ -118,5 +119,6 @@ func (a *loopAdapter) Run(ctx context.Context, req loop.RunRequest, _ loop.Strea
 		ContextWindow: ctxWindow,
 		ToolsUsed:     resp.ToolsUsed,
 		RequestID:     resp.RequestID,
+		ActiveTags:    resp.ActiveTags,
 	}, nil
 }

@@ -29,6 +29,10 @@ type RunRequest struct {
 	ExcludeTools   []string
 	SkipTagFilter  bool
 	Hints          map[string]string
+	// SeedTags are capability tags to activate at the start of the Run,
+	// in addition to always-active and channel-pinned tags. Used by loops
+	// to carry forward tags activated in previous iterations.
+	SeedTags []string
 
 	// OnProgress is called by the Runner during execution to report
 	// in-flight activity (tool calls, LLM responses). The kind
@@ -55,6 +59,10 @@ type RunResponse struct {
 	ContextWindow int
 	ToolsUsed     map[string]int
 	RequestID     string
+	// ActiveTags is the set of capability tags that were active at the
+	// end of the Run. Loops use this to carry forward activations to
+	// subsequent iterations.
+	ActiveTags []string
 }
 
 // StreamCallback receives streaming events. Nil disables streaming.
@@ -133,6 +141,11 @@ type Loop struct {
 	// Set at the start of each iteration, cleared after. Tool handlers
 	// read it via [Loop.CurrentConvID].
 	currentConvID string
+
+	// activatedTags tracks capability tags activated during previous
+	// iterations. Carried forward via SeedTags on the next RunRequest
+	// so activations persist across the loop's lifetime.
+	activatedTags []string
 
 	// recentConvIDs is a ring buffer of conversation IDs from the most
 	// recent iterations (newest first, up to recentConvIDsCap). Used by
@@ -1007,9 +1020,19 @@ func (l *Loop) iterate(ctx context.Context, isSupervisor bool, convID string) (*
 		SkipTagFilter: len(l.config.Tags) == 0,
 		Hints:         hints,
 		OnProgress:    l.makeProgressFunc(),
+		SeedTags:      l.activatedTags, // carry forward from previous iterations
 	}
 
 	resp, err := l.deps.Runner.Run(ctx, req, nil)
+	// Capture activated tags for next iteration (under lock since
+	// activatedTags is read during Status snapshots). Always update,
+	// even to nil — if all tags were dropped during a run, the next
+	// iteration should not re-seed the old tags.
+	if err == nil {
+		l.mu.Lock()
+		l.activatedTags = resp.ActiveTags
+		l.mu.Unlock()
+	}
 	if err != nil {
 		return nil, fmt.Errorf("loop LLM call: %w", err)
 	}
