@@ -213,6 +213,7 @@ type Loop struct {
 	capTags       map[string]config.CapabilityTagConfig // tag definitions from config (static)
 	parsedTalents []talents.Talent                      // pre-loaded talent structs for tag filtering (static)
 	channelTags   map[string][]string                   // channel name → tag names (static)
+	lensProvider  func() []string                       // returns active global lenses (nil = none)
 
 	// lastRunTags is a snapshot of the most recent Run()'s active
 	// tags, used by the dashboard callback (which has no context).
@@ -415,6 +416,13 @@ func (l *Loop) SetUsageRecorder(store *usage.Store, pricing map[string]config.Pr
 // DropCapability. They are removed on return to prevent cross-channel bleed.
 func (l *Loop) SetChannelTags(ct map[string][]string) {
 	l.channelTags = ct
+}
+
+// SetLensProvider configures a function that returns the currently
+// active global lenses. These are merged into every Run's capability
+// scope alongside always-active and channel-pinned tags.
+func (l *Loop) SetLensProvider(fn func() []string) {
+	l.lensProvider = fn
 }
 
 // SetHAInject configures the HA entity state resolver for tag context
@@ -980,7 +988,11 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	// prompt assembly read/write per-Run state, not global state.
 	var scope *capabilityScope
 	if l.capTags != nil {
-		scope = newCapabilityScope(l.capTags)
+		var lenses []string
+		if l.lensProvider != nil {
+			lenses = l.lensProvider()
+		}
+		scope = newCapabilityScope(l.capTags, lenses)
 		if source := req.Hints["source"]; source != "" {
 			if pinnedTags, ok := l.channelTags[source]; ok {
 				scope.PinChannelTags(pinnedTags)

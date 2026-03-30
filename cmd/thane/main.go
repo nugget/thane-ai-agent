@@ -1951,6 +1951,16 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		loop.Tools().SetCapabilityTools(loop, manifest)
 		loop.SetTagContextAssembler(tagCtxAssembler)
 
+		// Behavioral lenses — persistent global context modes backed
+		// by opstate. Active lenses are merged into every Run's
+		// capability scope so their KB articles and talents load.
+		lensStore := tools.NewLensStore(opStore)
+		loop.Tools().SetLensTools(lensStore)
+		loop.SetLensProvider(func() []string {
+			lenses, _ := lensStore.ActiveLenses()
+			return lenses
+		})
+
 		// Expose the agent loop's active tags to every process loop
 		// spawned through the registry so the dashboard can display
 		// dynamically activated capabilities.
