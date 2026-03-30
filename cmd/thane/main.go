@@ -1951,19 +1951,8 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		loop.Tools().SetCapabilityTools(loop, manifest)
 		loop.SetTagContextAssembler(tagCtxAssembler)
 
-		// Behavioral lenses — persistent global context modes backed
-		// by opstate. Active lenses are merged into every Run's
-		// capability scope so their KB articles and talents load.
-		lensStore := tools.NewLensStore(opStore)
-		loop.Tools().SetLensTools(lensStore)
-		loop.SetLensProvider(func() []string {
-			lenses, err := lensStore.ActiveLenses()
-			if err != nil {
-				logger.Warn("failed to load active lenses", "error", err)
-				return nil
-			}
-			return lenses
-		})
+		// Behavioral lenses are wired below (outside this block)
+		// so they work even without capability_tags configured.
 
 		// Expose the agent loop's active tags to every process loop
 		// spawned through the registry so the dashboard can display
@@ -2004,6 +1993,27 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	if len(cfg.ChannelTags) > 0 {
 		loop.SetChannelTags(cfg.ChannelTags)
 		logger.Info("channel tags configured", "channels", len(cfg.ChannelTags))
+	}
+
+	// --- Behavioral lenses ---
+	// Persistent global context modes backed by opstate. Active lenses
+	// are merged into every Run's capability scope (and every delegate
+	// execution) so their KB articles and talents load globally.
+	// Wired unconditionally — lenses work even without capability_tags.
+	lensStore := tools.NewLensStore(opStore)
+	loop.Tools().SetLensTools(lensStore)
+	lensProviderFn := func() []string {
+		lenses, err := lensStore.ActiveLenses()
+		if err != nil {
+			logger.Warn("failed to load active lenses", "error", err)
+			return nil
+		}
+		return lenses
+	}
+	loop.SetLensProvider(lensProviderFn)
+	delegateExec.SetLensProvider(lensProviderFn)
+	if lenses, _ := lensStore.ActiveLenses(); len(lenses) > 0 {
+		logger.Info("active lenses loaded from opstate", "lenses", lenses)
 	}
 
 	// --- Context providers ---

@@ -83,6 +83,7 @@ type Executor struct {
 	usageStore       *usage.Store
 	pricing          map[string]config.PricingEntry
 	alwaysActiveTags []string
+	lensProvider     func() []string // returns active global lenses (nil = none)
 	forgeContext     string
 	tagCtxFunc       tagContextFunc // nil-safe — replaces forgeContext when set
 	eventBus         *events.Bus
@@ -189,6 +190,13 @@ func (e *Executor) SetForgeContext(ctx string) {
 // always_active tag behavior.
 func (e *Executor) SetAlwaysActiveTags(tags []string) {
 	e.alwaysActiveTags = tags
+}
+
+// SetLensProvider configures a function that returns the currently
+// active global lenses. These are merged into every delegate execution's
+// effective tag set so lens-tagged KB articles and talents apply.
+func (e *Executor) SetLensProvider(fn func() []string) {
+	e.lensProvider = fn
 }
 
 // SetTagContextFunc configures the tag context builder function for
@@ -320,12 +328,18 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 	// Inject tag context (static files, KB articles, live providers).
 	// Falls back to the legacy forge-only injection when the tag
 	// context function is not configured.
+	// Build effective tag set: explicit tags + always-active + global lenses.
 	merged := make(map[string]bool, len(tags)+len(e.alwaysActiveTags))
 	for _, t := range tags {
 		merged[t] = true
 	}
 	for _, t := range e.alwaysActiveTags {
 		merged[t] = true
+	}
+	if e.lensProvider != nil {
+		for _, lens := range e.lensProvider() {
+			merged[lens] = true
+		}
 	}
 	if e.tagCtxFunc != nil && len(merged) > 0 {
 		if tagCtx := e.tagCtxFunc(ctx, merged); tagCtx != "" {
