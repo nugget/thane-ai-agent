@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 
 	"github.com/nugget/thane-ai-agent/internal/opstate"
 )
@@ -19,6 +20,7 @@ const (
 // Lenses are global — they apply to all conversations and survive
 // restarts. Use activate_capability for per-conversation tool access.
 type LensStore struct {
+	mu    sync.Mutex
 	state *opstate.Store
 }
 
@@ -29,6 +31,14 @@ func NewLensStore(state *opstate.Store) *LensStore {
 
 // ActiveLenses returns the currently active lens tags.
 func (s *LensStore) ActiveLenses() ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.activeLensesLocked()
+}
+
+// activeLensesLocked is the lock-free inner implementation of ActiveLenses.
+// The caller must hold s.mu.
+func (s *LensStore) activeLensesLocked() ([]string, error) {
 	raw, err := s.state.Get(lensNamespace, lensActiveKey)
 	if err != nil {
 		return nil, err
@@ -54,7 +64,9 @@ func (s *LensStore) setLenses(lenses []string) error {
 
 // Add activates a lens. Duplicates are ignored.
 func (s *LensStore) Add(lens string) error {
-	lenses, err := s.ActiveLenses()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	lenses, err := s.activeLensesLocked()
 	if err != nil {
 		return err
 	}
@@ -68,7 +80,9 @@ func (s *LensStore) Add(lens string) error {
 
 // Remove deactivates a lens.
 func (s *LensStore) Remove(lens string) error {
-	lenses, err := s.ActiveLenses()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	lenses, err := s.activeLensesLocked()
 	if err != nil {
 		return err
 	}

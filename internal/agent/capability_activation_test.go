@@ -11,7 +11,7 @@ import (
 )
 
 // setupCapabilityLoop builds a Loop with capability tags configured and the
-// activate_capability / drop_capability tools registered. This mirrors the
+// activate_capability / deactivate_capability tools registered. This mirrors the
 // production wiring in cmd/thane/main.go.
 func setupCapabilityLoop(mock *mockLLM, extraNames []string, capTags map[string]config.CapabilityTagConfig) *Loop {
 	loop := buildTestLoop(mock, extraNames)

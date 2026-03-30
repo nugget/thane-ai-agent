@@ -48,14 +48,20 @@ func (r *Registry) SetCapabilityTools(mgr CapabilityManager, manifest []Capabili
 // extractTag extracts the tag parameter from args, accepting common
 // misnames ("capability", "name") as aliases for "tag".
 func extractTag(args map[string]any) string {
-	if tag, ok := args["tag"].(string); ok && tag != "" {
-		return tag
+	if tag, ok := args["tag"].(string); ok {
+		if t := strings.TrimSpace(tag); t != "" {
+			return t
+		}
 	}
-	if v, ok := args["capability"].(string); ok && v != "" {
-		return v
+	if v, ok := args["capability"].(string); ok {
+		if t := strings.TrimSpace(v); t != "" {
+			return t
+		}
 	}
-	if v, ok := args["name"].(string); ok && v != "" {
-		return v
+	if v, ok := args["name"].(string); ok {
+		if t := strings.TrimSpace(v); t != "" {
+			return t
+		}
 	}
 	return ""
 }

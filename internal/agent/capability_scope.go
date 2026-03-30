@@ -67,6 +67,7 @@ func newCapabilityScope(capTags map[string]config.CapabilityTagConfig, globalLen
 	// that apply to all conversations.
 	for _, lens := range globalLenses {
 		s.active[lens] = true
+		s.pinned[lens] = true // protect from deactivate_capability
 	}
 	return s
 }

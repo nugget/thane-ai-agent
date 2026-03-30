@@ -1957,7 +1957,11 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		lensStore := tools.NewLensStore(opStore)
 		loop.Tools().SetLensTools(lensStore)
 		loop.SetLensProvider(func() []string {
-			lenses, _ := lensStore.ActiveLenses()
+			lenses, err := lensStore.ActiveLenses()
+			if err != nil {
+				logger.Warn("failed to load active lenses", "error", err)
+				return nil
+			}
 			return lenses
 		})
 

@@ -251,7 +251,7 @@ func GenerateManifest(entries []ManifestEntry) *Talent {
 	var sb strings.Builder
 	sb.WriteString("### Available Capabilities\n\n")
 	sb.WriteString("Activate with `activate_capability(tag: \"name\")`, or `delegate(task, tags: [\"name\"])` for one-off tasks. ")
-	sb.WriteString("Deactivate with `deactivate_capability` when done. Ad-hoc tags work too — any tagged KB articles or talents will load.\n\n")
+	sb.WriteString("Deactivate with `deactivate_capability(tag: \"name\")` when done. Ad-hoc tags work too — any tagged KB articles or talents will load.\n\n")
 
 	// Sort entries by tag name for deterministic JSON output.
 	// Input may come from map iteration (nondeterministic order).
