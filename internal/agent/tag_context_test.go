@@ -47,18 +47,28 @@ func testCtxForLoop(l *Loop) context.Context {
 }
 
 func TestBuildSystemPrompt_TagContextIncluded(t *testing.T) {
-	dir := t.TempDir()
-	f1 := filepath.Join(dir, "arch.md")
-	f2 := filepath.Join(dir, "style.md")
-	os.WriteFile(f1, []byte("# Architecture\nUse hexagonal pattern."), 0644)
-	os.WriteFile(f2, []byte("# Style Guide\nTabs not spaces."), 0644)
+	kbDir := t.TempDir()
+	os.WriteFile(filepath.Join(kbDir, "arch.md"),
+		[]byte("---\ntags: [forge]\n---\n# Architecture\nUse hexagonal pattern."), 0644)
+	os.WriteFile(filepath.Join(kbDir, "style.md"),
+		[]byte("---\ntags: [forge]\n---\n# Style Guide\nTabs not spaces."), 0644)
 
 	l := newTagTestLoop()
-	setTagsWithAssembler(l, map[string]config.CapabilityTagConfig{
+	l.SetTagContextAssembler(NewTagContextAssembler(TagContextAssemblerConfig{
+		CapTags: map[string]config.CapabilityTagConfig{
+			"forge": {
+				Description:  "Code generation",
+				Tools:        []string{"forge_run"},
+				AlwaysActive: true,
+			},
+		},
+		KBDir:  kbDir,
+		Logger: l.logger,
+	}))
+	l.SetCapabilityTags(map[string]config.CapabilityTagConfig{
 		"forge": {
 			Description:  "Code generation",
 			Tools:        []string{"forge_run"},
-			Context:      []string{f1, f2},
 			AlwaysActive: true,
 		},
 	}, nil)
@@ -66,10 +76,10 @@ func TestBuildSystemPrompt_TagContextIncluded(t *testing.T) {
 	prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello", nil)
 
 	if !strings.Contains(prompt, "hexagonal pattern") {
-		t.Error("system prompt should contain first context file content")
+		t.Error("system prompt should contain first KB article content")
 	}
 	if !strings.Contains(prompt, "Tabs not spaces") {
-		t.Error("system prompt should contain second context file content")
+		t.Error("system prompt should contain second KB article content")
 	}
 	if !strings.Contains(prompt, "Capability Context") {
 		t.Error("system prompt should contain capability context section heading")
@@ -77,19 +87,25 @@ func TestBuildSystemPrompt_TagContextIncluded(t *testing.T) {
 }
 
 func TestBuildSystemPrompt_TagContextInactiveExcluded(t *testing.T) {
-	dir := t.TempDir()
-	f := filepath.Join(dir, "arch.md")
-	os.WriteFile(f, []byte("# Architecture\nSecret content."), 0644)
+	kbDir := t.TempDir()
+	os.WriteFile(filepath.Join(kbDir, "arch.md"),
+		[]byte("---\ntags: [forge]\n---\n# Architecture\nSecret content."), 0644)
 
-	l := newTagTestLoop()
-	setTagsWithAssembler(l, map[string]config.CapabilityTagConfig{
+	capTags := map[string]config.CapabilityTagConfig{
 		"forge": {
 			Description:  "Code generation",
 			Tools:        []string{"forge_run"},
-			Context:      []string{f},
 			AlwaysActive: false, // not always active, so inactive by default
 		},
-	}, nil)
+	}
+
+	l := newTagTestLoop()
+	l.SetCapabilityTags(capTags, nil)
+	l.SetTagContextAssembler(NewTagContextAssembler(TagContextAssemblerConfig{
+		CapTags: capTags,
+		KBDir:   kbDir,
+		Logger:  l.logger,
+	}))
 
 	prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello", nil)
 
@@ -102,25 +118,31 @@ func TestBuildSystemPrompt_TagContextInactiveExcluded(t *testing.T) {
 }
 
 func TestBuildSystemPrompt_TagContextDedup(t *testing.T) {
-	dir := t.TempDir()
-	shared := filepath.Join(dir, "shared.md")
-	os.WriteFile(shared, []byte("shared knowledge"), 0644)
+	kbDir := t.TempDir()
+	// A KB article tagged with both forge and review should appear only once.
+	os.WriteFile(filepath.Join(kbDir, "shared.md"),
+		[]byte("---\ntags: [forge, review]\n---\nshared knowledge"), 0644)
 
-	l := newTagTestLoop()
-	setTagsWithAssembler(l, map[string]config.CapabilityTagConfig{
+	capTags := map[string]config.CapabilityTagConfig{
 		"forge": {
 			Description:  "Code generation",
 			Tools:        []string{"forge_run"},
-			Context:      []string{shared},
 			AlwaysActive: true,
 		},
 		"review": {
 			Description:  "Code review",
 			Tools:        []string{"review_run"},
-			Context:      []string{shared}, // same file as forge
 			AlwaysActive: true,
 		},
-	}, nil)
+	}
+
+	l := newTagTestLoop()
+	l.SetCapabilityTags(capTags, nil)
+	l.SetTagContextAssembler(NewTagContextAssembler(TagContextAssemblerConfig{
+		CapTags: capTags,
+		KBDir:   kbDir,
+		Logger:  l.logger,
+	}))
 
 	prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello", nil)
 
@@ -128,62 +150,6 @@ func TestBuildSystemPrompt_TagContextDedup(t *testing.T) {
 	count := strings.Count(prompt, "shared knowledge")
 	if count != 1 {
 		t.Errorf("shared context file should appear exactly once, found %d times", count)
-	}
-}
-
-func TestBuildSystemPrompt_TagContextMissingFile(t *testing.T) {
-	dir := t.TempDir()
-	good := filepath.Join(dir, "good.md")
-	missing := filepath.Join(dir, "nonexistent.md")
-	os.WriteFile(good, []byte("good content"), 0644)
-
-	l := newTagTestLoop()
-	setTagsWithAssembler(l, map[string]config.CapabilityTagConfig{
-		"test": {
-			Description:  "Test tag",
-			Tools:        []string{"test_tool"},
-			Context:      []string{missing, good},
-			AlwaysActive: true,
-		},
-	}, nil)
-
-	prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello", nil)
-
-	// Good file should still be included despite missing file.
-	if !strings.Contains(prompt, "good content") {
-		t.Error("system prompt should still include readable context files when some are missing")
-	}
-}
-
-func TestBuildSystemPrompt_TagContextRereadPerTurn(t *testing.T) {
-	dir := t.TempDir()
-	f := filepath.Join(dir, "evolving.md")
-	os.WriteFile(f, []byte("version-1"), 0644)
-
-	l := newTagTestLoop()
-	setTagsWithAssembler(l, map[string]config.CapabilityTagConfig{
-		"test": {
-			Description:  "Test tag",
-			Tools:        []string{"test_tool"},
-			Context:      []string{f},
-			AlwaysActive: true,
-		},
-	}, nil)
-
-	prompt1 := l.buildSystemPrompt(testCtxForLoop(l), "hello", nil)
-	if !strings.Contains(prompt1, "version-1") {
-		t.Fatal("first prompt should contain version-1")
-	}
-
-	// Modify the file between turns.
-	os.WriteFile(f, []byte("version-2"), 0644)
-
-	prompt2 := l.buildSystemPrompt(testCtxForLoop(l), "hello", nil)
-	if strings.Contains(prompt2, "version-1") {
-		t.Error("second prompt should not contain stale version-1")
-	}
-	if !strings.Contains(prompt2, "version-2") {
-		t.Error("second prompt should contain updated version-2")
 	}
 }
 
@@ -201,20 +167,28 @@ func TestBuildSystemPrompt_TagContextNoCapTags(t *testing.T) {
 func TestBuildSystemPrompt_TagContextOrderAfterInjected(t *testing.T) {
 	dir := t.TempDir()
 	injected := filepath.Join(dir, "injected.md")
-	tagCtx := filepath.Join(dir, "tag-context.md")
 	os.WriteFile(injected, []byte("INJECTED_MARKER"), 0644)
-	os.WriteFile(tagCtx, []byte("TAG_CONTEXT_MARKER"), 0644)
 
-	l := newTagTestLoop()
-	l.SetInjectFiles([]string{injected})
-	setTagsWithAssembler(l, map[string]config.CapabilityTagConfig{
+	kbDir := t.TempDir()
+	os.WriteFile(filepath.Join(kbDir, "tag-context.md"),
+		[]byte("---\ntags: [test]\n---\nTAG_CONTEXT_MARKER"), 0644)
+
+	capTags := map[string]config.CapabilityTagConfig{
 		"test": {
 			Description:  "Test tag",
 			Tools:        []string{"test_tool"},
-			Context:      []string{tagCtx},
 			AlwaysActive: true,
 		},
-	}, []talents.Talent{})
+	}
+
+	l := newTagTestLoop()
+	l.SetInjectFiles([]string{injected})
+	l.SetCapabilityTags(capTags, []talents.Talent{})
+	l.SetTagContextAssembler(NewTagContextAssembler(TagContextAssemblerConfig{
+		CapTags: capTags,
+		KBDir:   kbDir,
+		Logger:  l.logger,
+	}))
 
 	prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello", nil)
 
@@ -255,23 +229,30 @@ func (m *mockStateFetcher) FetchState(_ context.Context, entityID string) (strin
 }
 
 func TestBuildSystemPrompt_HAInjectResolved(t *testing.T) {
-	dir := t.TempDir()
-	f := filepath.Join(dir, "pool.md")
-	os.WriteFile(f, []byte("<!-- ha-inject: sensor.pool_temp -->\n# Pool Status\nRefer to live state above."), 0644)
+	kbDir := t.TempDir()
+	os.WriteFile(filepath.Join(kbDir, "pool.md"),
+		[]byte("---\ntags: [pool]\n---\n<!-- ha-inject: sensor.pool_temp -->\n# Pool Status\nRefer to live state above."), 0644)
+
+	capTags := map[string]config.CapabilityTagConfig{
+		"pool": {
+			Description:  "Pool management",
+			Tools:        []string{"pool_tool"},
+			AlwaysActive: true,
+		},
+	}
 
 	l := newTagTestLoop()
 	// Set HAInject before assembler so it gets the fetcher.
 	l.SetHAInject(&mockStateFetcher{states: map[string]string{
 		"sensor.pool_temp": "84.2",
 	}})
-	setTagsWithAssembler(l, map[string]config.CapabilityTagConfig{
-		"pool": {
-			Description:  "Pool management",
-			Tools:        []string{"pool_tool"},
-			Context:      []string{f},
-			AlwaysActive: true,
-		},
-	}, nil)
+	l.SetCapabilityTags(capTags, nil)
+	l.SetTagContextAssembler(NewTagContextAssembler(TagContextAssemblerConfig{
+		CapTags:  capTags,
+		KBDir:    kbDir,
+		HAInject: l.HAInject(),
+		Logger:   l.logger,
+	}))
 
 	prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello", nil)
 
@@ -287,19 +268,25 @@ func TestBuildSystemPrompt_HAInjectResolved(t *testing.T) {
 }
 
 func TestBuildSystemPrompt_HAInjectNilFetcher(t *testing.T) {
-	dir := t.TempDir()
-	f := filepath.Join(dir, "doc.md")
-	os.WriteFile(f, []byte("<!-- ha-inject: sensor.temp -->\n# Doc"), 0644)
+	kbDir := t.TempDir()
+	os.WriteFile(filepath.Join(kbDir, "doc.md"),
+		[]byte("---\ntags: [test]\n---\n<!-- ha-inject: sensor.temp -->\n# Doc"), 0644)
 
-	l := newTagTestLoop()
-	setTagsWithAssembler(l, map[string]config.CapabilityTagConfig{
+	capTags := map[string]config.CapabilityTagConfig{
 		"test": {
 			Description:  "Test",
 			Tools:        []string{"test_tool"},
-			Context:      []string{f},
 			AlwaysActive: true,
 		},
-	}, nil)
+	}
+
+	l := newTagTestLoop()
+	l.SetCapabilityTags(capTags, nil)
+	l.SetTagContextAssembler(NewTagContextAssembler(TagContextAssemblerConfig{
+		CapTags: capTags,
+		KBDir:   kbDir,
+		Logger:  l.logger,
+	}))
 	// haInject not set — should pass through without resolving
 
 	prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello", nil)
@@ -313,20 +300,27 @@ func TestBuildSystemPrompt_HAInjectNilFetcher(t *testing.T) {
 }
 
 func TestBuildSystemPrompt_HAInjectFetchFailure(t *testing.T) {
-	dir := t.TempDir()
-	f := filepath.Join(dir, "doc.md")
-	os.WriteFile(f, []byte("<!-- ha-inject: sensor.missing -->\n# Doc"), 0644)
+	kbDir := t.TempDir()
+	os.WriteFile(filepath.Join(kbDir, "doc.md"),
+		[]byte("---\ntags: [test]\n---\n<!-- ha-inject: sensor.missing -->\n# Doc"), 0644)
 
-	l := newTagTestLoop()
-	l.SetHAInject(&mockStateFetcher{states: map[string]string{}})
-	setTagsWithAssembler(l, map[string]config.CapabilityTagConfig{
+	capTags := map[string]config.CapabilityTagConfig{
 		"test": {
 			Description:  "Test",
 			Tools:        []string{"test_tool"},
-			Context:      []string{f},
 			AlwaysActive: true,
 		},
-	}, nil)
+	}
+
+	l := newTagTestLoop()
+	l.SetHAInject(&mockStateFetcher{states: map[string]string{}})
+	l.SetCapabilityTags(capTags, nil)
+	l.SetTagContextAssembler(NewTagContextAssembler(TagContextAssemblerConfig{
+		CapTags:  capTags,
+		KBDir:    kbDir,
+		HAInject: l.HAInject(),
+		Logger:   l.logger,
+	}))
 
 	prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello", nil)
 
@@ -421,18 +415,14 @@ func TestTagContextAssembler_TaggedKBArticles(t *testing.T) {
 	}
 }
 
-func TestTagContextAssembler_AllThreeSources(t *testing.T) {
-	dir := t.TempDir()
-	staticFile := filepath.Join(dir, "static.md")
-	os.WriteFile(staticFile, []byte("STATIC_CONTENT"), 0o644)
-
+func TestTagContextAssembler_KBAndLiveProvider(t *testing.T) {
 	kbDir := t.TempDir()
 	os.WriteFile(filepath.Join(kbDir, "kb.md"),
 		[]byte("---\ntags: [forge]\n---\nKB_CONTENT"), 0o644)
 
 	a := NewTagContextAssembler(TagContextAssemblerConfig{
 		CapTags: map[string]config.CapabilityTagConfig{
-			"forge": {Context: []string{staticFile}},
+			"forge": {},
 		},
 		KBDir: kbDir,
 	})
@@ -442,7 +432,7 @@ func TestTagContextAssembler_AllThreeSources(t *testing.T) {
 	}
 	result := a.Build(context.Background(), map[string]bool{"forge": true}, providers)
 
-	for _, want := range []string{"STATIC_CONTENT", "KB_CONTENT", "LIVE_CONTENT"} {
+	for _, want := range []string{"KB_CONTENT", "LIVE_CONTENT"} {
 		if !strings.Contains(result, want) {
 			t.Errorf("missing %s in assembled output", want)
 		}

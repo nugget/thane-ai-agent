@@ -13,13 +13,12 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/talents"
 )
 
-// TagContextAssembler builds the Capability Context section from three
+// TagContextAssembler builds the Capability Context section from two
 // sources for each active tag:
 //
-//  1. Static config files — paths listed in [config.CapabilityTagConfig.Context]
-//  2. Tagged KB articles — markdown files with tags: frontmatter in the
+//  1. Tagged KB articles — markdown files with tags: frontmatter in the
 //     knowledge base directory (same pattern as talents)
-//  3. Live providers — [TagContextProvider] implementations producing
+//  2. Live providers — [TagContextProvider] implementations producing
 //     fresh context each turn
 //
 // Both the main agent loop and delegate executor share a single assembler
@@ -88,38 +87,9 @@ func (a *TagContextAssembler) Build(ctx context.Context, activeTags map[string]b
 	seen := make(map[string]bool)
 	var buf strings.Builder
 
-	// Phase 1: Static config files (re-read each turn for freshness).
-	for tag, active := range activeTags {
-		if !active {
-			continue
-		}
-		cfg, ok := a.capTags[tag]
-		if !ok {
-			continue
-		}
-		for _, path := range cfg.Context {
-			if seen[path] {
-				continue
-			}
-			seen[path] = true
-			data, err := os.ReadFile(path)
-			if err != nil {
-				a.logger.Warn("failed to read tag context file",
-					"tag", tag, "path", path, "error", err)
-				continue
-			}
-			// Resolve <!-- ha-inject: ... --> directives to live HA state.
-			data = homeassistant.ResolveInject(ctx, data, a.haInject, a.logger)
-			a.appendContent(&buf, data)
-			if buf.Len() >= maxTagContextBytes {
-				a.logger.Warn("tag context aggregate limit reached",
-					"tag", tag, "limit_bytes", maxTagContextBytes)
-				return buf.String()
-			}
-		}
-	}
-
-	// Phase 2: Tagged KB articles (re-read each turn for freshness).
+	// Phase 1: Tagged KB articles (re-read each turn for freshness).
+	// KB articles declare their tag affinity via frontmatter
+	// (tags: [forge, ha]) and auto-load when matching tags are active.
 	for _, article := range a.kbArticles {
 		if !articleMatchesTags(article, activeTags) {
 			continue
@@ -146,7 +116,7 @@ func (a *TagContextAssembler) Build(ctx context.Context, activeTags map[string]b
 		}
 	}
 
-	// Phase 3: Live providers.
+	// Phase 2: Live providers.
 	for tag, active := range activeTags {
 		if !active {
 			continue

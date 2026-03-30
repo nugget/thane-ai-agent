@@ -1863,38 +1863,10 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 			}
 		}
 
-		// Resolve context file paths in capability tags.
-		// Same pattern as inject_files: resolve kb: prefixes and ~ at
-		// startup, re-read per turn. Missing files are warned but kept
-		// (may appear later).
-		for tag, tagCfg := range cfg.CapabilityTags {
-			if len(tagCfg.Context) == 0 {
-				continue
-			}
-			resolved := make([]string, 0, len(tagCfg.Context))
-			for _, ctxPath := range tagCfg.Context {
-				ctxPath = resolvePath(ctxPath, resolver)
-				if _, err := os.Stat(ctxPath); err != nil {
-					if errors.Is(err, fs.ErrNotExist) {
-						logger.Warn("capability tag context file not found",
-							"tag", tag, "path", ctxPath)
-					} else {
-						logger.Warn("capability tag context file unreadable",
-							"tag", tag, "path", ctxPath, "error", err)
-					}
-				}
-				resolved = append(resolved, ctxPath)
-			}
-			tagCfg.Context = resolved
-			cfg.CapabilityTags[tag] = tagCfg
-			logger.Debug("capability tag context files resolved",
-				"tag", tag, "files", len(resolved))
-		}
-
 		// Build the shared tag context assembler early so KB article
-		// counts are available for the manifest. It merges three
-		// sources per active tag: static config files, tagged KB
-		// articles (frontmatter tags: [forge]), and live providers.
+		// counts are available for the manifest. It merges two sources
+		// per active tag: tagged KB articles (frontmatter tags: [forge])
+		// and live providers.
 		var kbDir string
 		if resolver != nil {
 			resolved, err := resolver.Resolve("kb:")
@@ -1924,14 +1896,12 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		tagIndex := make(map[string][]string, len(cfg.CapabilityTags))
 		descriptions := make(map[string]string, len(cfg.CapabilityTags))
 		alwaysActive := make(map[string]bool, len(cfg.CapabilityTags))
-		contextFiles := make(map[string][]string, len(cfg.CapabilityTags))
 		for tag, tagCfg := range cfg.CapabilityTags {
 			tagIndex[tag] = tagCfg.Tools
 			descriptions[tag] = tagCfg.Description
 			alwaysActive[tag] = tagCfg.AlwaysActive
-			contextFiles[tag] = tagCfg.Context
 		}
-		manifest := tools.BuildCapabilityManifest(tagIndex, descriptions, alwaysActive, contextFiles)
+		manifest := tools.BuildCapabilityManifest(tagIndex, descriptions, alwaysActive)
 
 		manifestEntries := make([]talents.ManifestEntry, len(manifest))
 		for i, m := range manifest {
@@ -1939,7 +1909,6 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 				Tag:          m.Tag,
 				Description:  m.Description,
 				Tools:        m.Tools,
-				Context:      m.Context,
 				AlwaysActive: m.AlwaysActive,
 				KBArticles:   kbCounts[m.Tag],
 				LiveContext:  liveProviders[m.Tag] != nil,

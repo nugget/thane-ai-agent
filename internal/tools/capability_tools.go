@@ -24,7 +24,6 @@ type CapabilityManifest struct {
 	Tag          string
 	Description  string
 	Tools        []string
-	Context      []string // resolved context file paths
 	AlwaysActive bool
 }
 
@@ -56,17 +55,8 @@ func (r *Registry) registerRequestCapability(mgr CapabilityManager, manifest []C
 		if m.AlwaysActive {
 			continue // Don't list always-active tags — they can't be toggled.
 		}
-		if len(m.Context) > 0 {
-			fileWord := "files"
-			if len(m.Context) == 1 {
-				fileWord = "file"
-			}
-			availableDesc.WriteString(fmt.Sprintf("- **%s**: %s (tools: %s, context: %d %s)\n",
-				m.Tag, m.Description, strings.Join(m.Tools, ", "), len(m.Context), fileWord))
-		} else {
-			availableDesc.WriteString(fmt.Sprintf("- **%s**: %s (tools: %s)\n",
-				m.Tag, m.Description, strings.Join(m.Tools, ", ")))
-		}
+		availableDesc.WriteString(fmt.Sprintf("- **%s**: %s (%d tools)\n",
+			m.Tag, m.Description, len(m.Tools)))
 	}
 	availableDesc.WriteString("Use drop_capability to deactivate a tag when you no longer need those tools.")
 
@@ -94,22 +84,15 @@ func (r *Registry) registerRequestCapability(mgr CapabilityManager, manifest []C
 				return "", err
 			}
 
-			// List the tools and context now available from this tag.
+			// Report what was activated.
 			var result strings.Builder
 			fmt.Fprintf(&result, "Capability **%s** activated.", tag)
 			if m, ok := tagManifest[tag]; ok {
 				if len(m.Tools) > 0 {
-					fmt.Fprintf(&result, " Tools now available: %s.", strings.Join(m.Tools, ", "))
-				}
-				if len(m.Context) > 0 {
-					fileWord := "files"
-					if len(m.Context) == 1 {
-						fileWord = "file"
-					}
-					fmt.Fprintf(&result, " Context loaded: %d %s.", len(m.Context), fileWord)
+					fmt.Fprintf(&result, " %d tools now available.", len(m.Tools))
 				}
 			} else {
-				result.WriteString(" Ad-hoc tag — no configured tools. Tagged KB articles, talents, and live providers matching this tag will be loaded.")
+				result.WriteString(" Ad-hoc tag — tagged KB articles, talents, and live providers matching this tag will be loaded.")
 			}
 			return result.String(), nil
 		},
@@ -163,16 +146,14 @@ func (r *Registry) registerDropCapability(mgr CapabilityManager, tagManifest map
 
 // BuildCapabilityManifest creates a sorted list of capability descriptions
 // from the config map. This is used both for the tool description and for
-// generating the capability manifest talent. The contextFiles parameter
-// maps tag names to resolved context file paths (may be nil).
-func BuildCapabilityManifest(tags map[string][]string, descriptions map[string]string, alwaysActive map[string]bool, contextFiles map[string][]string) []CapabilityManifest {
+// generating the capability manifest talent.
+func BuildCapabilityManifest(tags map[string][]string, descriptions map[string]string, alwaysActive map[string]bool) []CapabilityManifest {
 	manifest := make([]CapabilityManifest, 0, len(tags))
 	for tag, toolNames := range tags {
 		manifest = append(manifest, CapabilityManifest{
 			Tag:          tag,
 			Description:  descriptions[tag],
 			Tools:        toolNames,
-			Context:      contextFiles[tag],
 			AlwaysActive: alwaysActive[tag],
 		})
 	}
