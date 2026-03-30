@@ -245,7 +245,7 @@ function applyLoopEvent(evt) {
 
 // refreshActiveTags fetches current loop status and updates
 // the active_tags field so capability chips reflect changes
-// from request_capability / drop_capability tool calls.
+// from activate_capability / deactivate_capability tool calls.
 async function refreshActiveTags() {
   try {
     const resp = await fetch('/api/loops');

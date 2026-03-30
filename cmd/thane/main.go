@@ -1843,7 +1843,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// --- Capability tags ---
 	// Tag-driven tool and talent filtering. When configured, tools and
 	// talents are grouped into named capabilities that can be activated
-	// per-session via request_capability/drop_capability tools.
+	// per-conversation via activate_capability/deactivate_capability tools.
 	if len(cfg.CapabilityTags) > 0 {
 		// Load parsed talents for tag-aware filtering.
 		parsedTalents, err := talentLoader.LoadAll()
