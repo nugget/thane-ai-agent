@@ -23,6 +23,8 @@ var promotedKeys = map[string]bool{
 	"subsystem":       true,
 	"tool":            true,
 	"model":           true,
+	"loop_id":         true,
+	"loop_name":       true,
 }
 
 // IndexHandler is an [slog.Handler] that wraps another handler and
@@ -74,6 +76,8 @@ type indexEntry struct {
 	Subsystem      string
 	Tool           string
 	Model          string
+	LoopID         string
+	LoopName       string
 	SourceFile     string
 	SourceLine     int
 	Attrs          string // JSON object of non-promoted attributes
@@ -235,6 +239,8 @@ func Migrate(db *sql.DB) error {
 		subsystem TEXT,
 		tool TEXT,
 		model TEXT,
+		loop_id TEXT,
+		loop_name TEXT,
 		source_file TEXT,
 		source_line INTEGER,
 		attrs TEXT,
@@ -250,6 +256,8 @@ func Migrate(db *sql.DB) error {
 	CREATE INDEX IF NOT EXISTS idx_log_subsystem ON log_entries(subsystem);
 	CREATE INDEX IF NOT EXISTS idx_log_tool ON log_entries(tool);
 	CREATE INDEX IF NOT EXISTS idx_log_model ON log_entries(model);
+	CREATE INDEX IF NOT EXISTS idx_log_loop_id ON log_entries(loop_id);
+	CREATE INDEX IF NOT EXISTS idx_log_loop_name ON log_entries(loop_name);
 	`
 	if _, err := db.Exec(schema); err != nil {
 		return fmt.Errorf("migrate log index: %w", err)
@@ -314,9 +322,9 @@ func (h *IndexHandler) drain() {
 
 	const insertSQL = `INSERT INTO log_entries
 		(timestamp, level, msg, request_id, session_id, conversation_id,
-		 subsystem, tool, model, source_file, source_line, attrs,
-		 raw_file, raw_line)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+		 subsystem, tool, model, loop_id, loop_name,
+		 source_file, source_line, attrs, raw_file, raw_line)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
 
 	stmt, err := h.shared.db.Prepare(insertSQL)
 	if err != nil {
@@ -337,6 +345,8 @@ func (h *IndexHandler) drain() {
 			nullString(e.Subsystem),
 			nullString(e.Tool),
 			nullString(e.Model),
+			nullString(e.LoopID),
+			nullString(e.LoopName),
 			nullString(e.SourceFile),
 			nullInt(e.SourceLine),
 			nullString(e.Attrs),
@@ -396,6 +406,10 @@ func (h *IndexHandler) classifyAttr(a slog.Attr, entry *indexEntry, extras map[s
 			entry.Tool = v
 		case "model":
 			entry.Model = v
+		case "loop_id":
+			entry.LoopID = v
+		case "loop_name":
+			entry.LoopName = v
 		}
 		return
 	}
@@ -516,6 +530,8 @@ type LogEntry struct {
 	Subsystem      string
 	Tool           string
 	Model          string
+	LoopID         string
+	LoopName       string
 	Attrs          string
 	SourceFile     string
 	SourceLine     int
@@ -532,6 +548,8 @@ type QueryParams struct {
 	Subsystem             string
 	Tool                  string
 	Model                 string
+	LoopID                string
+	LoopName              string
 	Level                 string    // minimum level: ERROR > WARN > INFO > DEBUG
 	Since                 time.Time // zero = no lower bound
 	Until                 time.Time // zero = defaults to now
@@ -549,7 +567,8 @@ type QueryParams struct {
 // level and/or subsystem.
 func QueryBySession(db *sql.DB, sessionID, level, subsystem string, limit int) ([]LogEntry, error) {
 	query := `SELECT id, timestamp, level, msg, request_id, session_id,
-		conversation_id, subsystem, tool, model, attrs, source_file, source_line
+		conversation_id, subsystem, tool, model, loop_id, loop_name,
+		attrs, source_file, source_line
 		FROM log_entries WHERE session_id = ?`
 	args := []any{sessionID}
 
@@ -596,7 +615,8 @@ func QueryBySession(db *sql.DB, sessionID, level, subsystem string, limit int) (
 // e.g., WARN returns WARN and ERROR entries.
 func Query(db *sql.DB, params QueryParams) ([]LogEntry, error) {
 	query := `SELECT id, timestamp, level, msg, request_id, session_id,
-		conversation_id, subsystem, tool, model, attrs, source_file, source_line
+		conversation_id, subsystem, tool, model, loop_id, loop_name,
+		attrs, source_file, source_line
 		FROM log_entries WHERE 1=1`
 	var args []any
 
@@ -623,6 +643,14 @@ func Query(db *sql.DB, params QueryParams) ([]LogEntry, error) {
 	if params.Model != "" {
 		query += " AND model = ?"
 		args = append(args, params.Model)
+	}
+	if params.LoopID != "" {
+		query += " AND loop_id = ?"
+		args = append(args, params.LoopID)
+	}
+	if params.LoopName != "" {
+		query += " AND loop_name = ?"
+		args = append(args, params.LoopName)
 	}
 	if params.Level != "" {
 		levels := levelsAtOrAbove(params.Level)
@@ -693,22 +721,25 @@ func Query(db *sql.DB, params QueryParams) ([]LogEntry, error) {
 
 // scanLogEntries reads LogEntry rows from a *sql.Rows. The SELECT must
 // return columns in the order: id, timestamp, level, msg, request_id,
-// session_id, conversation_id, subsystem, tool, model, attrs,
-// source_file, source_line.
+// session_id, conversation_id, subsystem, tool, model, loop_id,
+// loop_name, attrs, source_file, source_line.
 func scanLogEntries(rows *sql.Rows) ([]LogEntry, error) {
 	var entries []LogEntry
 	for rows.Next() {
 		var e LogEntry
 		var ts string
 		var reqID, sessID, convID sql.NullString
-		var sub, tool, model, attrs, srcFile sql.NullString
+		var sub, tool, model sql.NullString
+		var loopID, loopName sql.NullString
+		var attrs, srcFile sql.NullString
 		var srcLine sql.NullInt64
 
 		if err := rows.Scan(
 			&e.ID, &ts, &e.Level, &e.Msg,
 			&reqID, &sessID, &convID,
-			&sub, &tool, &model, &attrs,
-			&srcFile, &srcLine,
+			&sub, &tool, &model,
+			&loopID, &loopName,
+			&attrs, &srcFile, &srcLine,
 		); err != nil {
 			return nil, fmt.Errorf("scan log entry: %w", err)
 		}
@@ -724,6 +755,8 @@ func scanLogEntries(rows *sql.Rows) ([]LogEntry, error) {
 		e.Subsystem = sub.String
 		e.Tool = tool.String
 		e.Model = model.String
+		e.LoopID = loopID.String
+		e.LoopName = loopName.String
 		e.Attrs = attrs.String
 		e.SourceFile = srcFile.String
 		e.SourceLine = int(srcLine.Int64)
