@@ -182,7 +182,7 @@ var metacogExcludeTools = []string{
 	"exec",
 	"conversation_reset", "session_close", "session_split", "session_checkpoint",
 	"create_temp_file",
-	"request_capability", "drop_capability",
+	"activate_capability", "deactivate_capability",
 }
 
 // readStateFile reads the metacognitive state file from the given path.

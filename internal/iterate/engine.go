@@ -273,7 +273,7 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 					}
 				} else {
 					iterLog.Debug("tool exec done", "tool", toolName, "result_len", len(result))
-					if toolName != "request_capability" && toolName != "drop_capability" {
+					if toolName != "activate_capability" && toolName != "deactivate_capability" {
 						batchHasNonMetaTool = true
 					}
 				}

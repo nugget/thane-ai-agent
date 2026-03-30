@@ -44,7 +44,7 @@ func (m *mockCapabilityManager) ActiveTags(_ context.Context) map[string]bool {
 	return m.activeTags
 }
 
-func TestRequestCapability(t *testing.T) {
+func TestActivateCapability(t *testing.T) {
 	mgr := newMockCapabilityManager("ha", "search")
 	manifest := []CapabilityManifest{
 		{Tag: "ha", Description: "Home Assistant", Tools: []string{"get_state"}, AlwaysActive: false},
@@ -54,15 +54,15 @@ func TestRequestCapability(t *testing.T) {
 	reg := NewEmptyRegistry()
 	reg.SetCapabilityTools(mgr, manifest)
 
-	tool := reg.Get("request_capability")
+	tool := reg.Get("activate_capability")
 	if tool == nil {
-		t.Fatal("request_capability not registered")
+		t.Fatal("activate_capability not registered")
 	}
 
 	// Activate a valid tag.
 	result, err := tool.Handler(context.Background(), map[string]any{"tag": "ha"})
 	if err != nil {
-		t.Fatalf("request_capability error: %v", err)
+		t.Fatalf("activate_capability error: %v", err)
 	}
 	if !strings.Contains(result, "activated") {
 		t.Errorf("result = %q, want to contain 'activated'", result)
@@ -81,7 +81,7 @@ func TestRequestCapability(t *testing.T) {
 	}
 }
 
-func TestDropCapability(t *testing.T) {
+func TestDeactivateCapability(t *testing.T) {
 	mgr := newMockCapabilityManager("ha", "search")
 	mgr.activeTags["ha"] = true
 	mgr.activeTags["search"] = true
@@ -94,28 +94,28 @@ func TestDropCapability(t *testing.T) {
 	reg := NewEmptyRegistry()
 	reg.SetCapabilityTools(mgr, manifest)
 
-	tool := reg.Get("drop_capability")
+	tool := reg.Get("deactivate_capability")
 	if tool == nil {
-		t.Fatal("drop_capability not registered")
+		t.Fatal("deactivate_capability not registered")
 	}
 
 	// Drop an active tag.
 	result, err := tool.Handler(context.Background(), map[string]any{"tag": "ha"})
 	if err != nil {
-		t.Fatalf("drop_capability error: %v", err)
+		t.Fatalf("deactivate_capability error: %v", err)
 	}
 	if !strings.Contains(result, "deactivated") {
 		t.Errorf("result = %q, want to contain 'deactivated'", result)
 	}
-	if !strings.Contains(result, "get_state") {
-		t.Errorf("result = %q, want to list removed tools like 'get_state'", result)
+	if !strings.Contains(result, "2 tools removed") {
+		t.Errorf("result = %q, want to mention tool count removed", result)
 	}
 	if mgr.activeTags["ha"] {
 		t.Error("ha tag should be inactive after drop")
 	}
 
 	// Response should list remaining active tags.
-	if !strings.Contains(result, "Active tags: search") {
+	if !strings.Contains(result, "Active: search") {
 		t.Errorf("result = %q, want to list remaining active tags", result)
 	}
 
@@ -125,31 +125,31 @@ func TestDropCapability(t *testing.T) {
 	}
 }
 
-func TestRequestCapability_EmptyTag(t *testing.T) {
+func TestActivateCapability_EmptyTag(t *testing.T) {
 	mgr := newMockCapabilityManager("ha")
 	reg := NewEmptyRegistry()
 	reg.SetCapabilityTools(mgr, nil)
 
-	tool := reg.Get("request_capability")
+	tool := reg.Get("activate_capability")
 	_, err := tool.Handler(context.Background(), map[string]any{"tag": ""})
 	if err == nil {
 		t.Error("expected error for empty tag")
 	}
 }
 
-func TestDropCapability_EmptyTag(t *testing.T) {
+func TestDeactivateCapability_EmptyTag(t *testing.T) {
 	mgr := newMockCapabilityManager("ha")
 	reg := NewEmptyRegistry()
 	reg.SetCapabilityTools(mgr, nil)
 
-	tool := reg.Get("drop_capability")
+	tool := reg.Get("deactivate_capability")
 	_, err := tool.Handler(context.Background(), map[string]any{"tag": ""})
 	if err == nil {
 		t.Error("expected error for empty tag")
 	}
 }
 
-func TestRequestCapability_DescriptionContainsManifest(t *testing.T) {
+func TestActivateCapability_DescriptionContainsManifest(t *testing.T) {
 	mgr := newMockCapabilityManager("ha", "search")
 	manifest := []CapabilityManifest{
 		{Tag: "ha", Description: "Home Assistant tools", Tools: []string{"get_state", "call_service"}, AlwaysActive: true},
@@ -159,7 +159,7 @@ func TestRequestCapability_DescriptionContainsManifest(t *testing.T) {
 	reg := NewEmptyRegistry()
 	reg.SetCapabilityTools(mgr, manifest)
 
-	tool := reg.Get("request_capability")
+	tool := reg.Get("activate_capability")
 
 	// Always-active tags should NOT appear in the description (they can't be toggled).
 	if strings.Contains(tool.Description, "**ha**") {
@@ -285,9 +285,9 @@ func TestRegistryFilterByTags_AlwaysAvailable(t *testing.T) {
 	// Tagged tools
 	reg.Register(&Tool{Name: "get_state", Description: "HA state"})
 	reg.Register(&Tool{Name: "web_search", Description: "Search"})
-	// AlwaysAvailable meta-tools (like request_capability, drop_capability)
-	reg.Register(&Tool{Name: "request_capability", Description: "Activate a tag", AlwaysAvailable: true})
-	reg.Register(&Tool{Name: "drop_capability", Description: "Deactivate a tag", AlwaysAvailable: true})
+	// AlwaysAvailable meta-tools (like activate_capability, deactivate_capability)
+	reg.Register(&Tool{Name: "activate_capability", Description: "Activate a tag", AlwaysAvailable: true})
+	reg.Register(&Tool{Name: "deactivate_capability", Description: "Deactivate a tag", AlwaysAvailable: true})
 	// Untagged tool WITHOUT AlwaysAvailable — should be filtered out
 	reg.Register(&Tool{Name: "plain_untagged", Description: "Not tagged, not meta"})
 
@@ -305,25 +305,25 @@ func TestRegistryFilterByTags_AlwaysAvailable(t *testing.T) {
 		{
 			name:    "always-available tools survive ha-only filter",
 			tags:    []string{"ha"},
-			wantIn:  []string{"get_state", "request_capability", "drop_capability"},
+			wantIn:  []string{"get_state", "activate_capability", "deactivate_capability"},
 			wantOut: []string{"web_search", "plain_untagged"},
 		},
 		{
 			name:    "always-available tools survive search-only filter",
 			tags:    []string{"search"},
-			wantIn:  []string{"web_search", "request_capability", "drop_capability"},
+			wantIn:  []string{"web_search", "activate_capability", "deactivate_capability"},
 			wantOut: []string{"get_state", "plain_untagged"},
 		},
 		{
 			name:    "always-available tools survive unknown-tag filter",
 			tags:    []string{"nonexistent"},
-			wantIn:  []string{"request_capability", "drop_capability"},
+			wantIn:  []string{"activate_capability", "deactivate_capability"},
 			wantOut: []string{"get_state", "web_search", "plain_untagged"},
 		},
 		{
 			name:   "nil tags returns everything",
 			tags:   nil,
-			wantIn: []string{"get_state", "web_search", "request_capability", "drop_capability", "plain_untagged"},
+			wantIn: []string{"get_state", "web_search", "activate_capability", "deactivate_capability", "plain_untagged"},
 		},
 	}
 
