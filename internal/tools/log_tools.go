@@ -60,6 +60,14 @@ func (r *Registry) registerLogsQuery() {
 					"type":        "string",
 					"description": "Filter by LLM model name.",
 				},
+				"loop_id": map[string]any{
+					"type":        "string",
+					"description": "Filter by loop ID (UUID). Matches entries from a specific loop instance.",
+				},
+				"loop_name": map[string]any{
+					"type":        "string",
+					"description": "Filter by loop name (e.g., \"metacognitive\", \"signal-parent\", \"email-poller\").",
+				},
 				"level": map[string]any{
 					"type":        "string",
 					"enum":        []string{"ERROR", "WARN", "INFO", "DEBUG"},
@@ -96,6 +104,8 @@ func (r *Registry) handleLogsQuery(_ context.Context, args map[string]any) (stri
 		Subsystem:      stringArg(args, "subsystem"),
 		Tool:           stringArg(args, "tool"),
 		Model:          stringArg(args, "model"),
+		LoopID:         stringArg(args, "loop_id"),
+		LoopName:       stringArg(args, "loop_name"),
 		Level:          stringArg(args, "level"),
 		Pattern:        stringArg(args, "pattern"),
 	}
@@ -127,6 +137,8 @@ func (r *Registry) handleLogsQuery(_ context.Context, args map[string]any) (stri
 		Subsystem      string         `json:"subsystem,omitempty"`
 		Tool           string         `json:"tool,omitempty"`
 		Model          string         `json:"model,omitempty"`
+		LoopID         string         `json:"loop_id,omitempty"`
+		LoopName       string         `json:"loop_name,omitempty"`
 		Attrs          map[string]any `json:"attrs,omitempty"`
 		Source         string         `json:"source,omitempty"`
 	}
@@ -152,6 +164,8 @@ func (r *Registry) handleLogsQuery(_ context.Context, args map[string]any) (stri
 			Subsystem:      e.Subsystem,
 			Tool:           e.Tool,
 			Model:          e.Model,
+			LoopID:         e.LoopID,
+			LoopName:       e.LoopName,
 		}
 		if e.SourceFile != "" {
 			je.Source = fmt.Sprintf("%s:%d", e.SourceFile, e.SourceLine)
