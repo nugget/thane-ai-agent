@@ -261,6 +261,43 @@ serve: build
 logs workdir="./Thane":
     tail -f {{workdir}}/logs/thane.log
 
+# --- Database ---
+
+# Migrate data from legacy per-store .db files into the unified thane.db.
+# Run once before first launch after upgrading to consolidated database layout.
+# Safe to run multiple times (uses INSERT OR IGNORE). Removes old files on success.
+[group('operations')]
+migrate-databases datadir="Thane/db":
+    #!/usr/bin/env sh
+    set -e
+    DB="{{datadir}}/thane.db"
+    if [ ! -f "$DB" ]; then
+        echo "No thane.db found at $DB — nothing to migrate."
+        exit 0
+    fi
+    migrated=0
+    for old in opstate.db anticipations.db watchlist.db checkpoints.db; do
+        OLD_PATH="{{datadir}}/$old"
+        if [ -f "$OLD_PATH" ]; then
+            echo "Migrating $old → thane.db ..."
+            sqlite3 "$DB" "ATTACH '$OLD_PATH' AS old;"
+            # Iterate over tables in the old database and merge each one
+            tables=$(sqlite3 "$OLD_PATH" ".tables")
+            for tbl in $tables; do
+                echo "  $tbl"
+                sqlite3 "$DB" "ATTACH '$OLD_PATH' AS old; INSERT OR IGNORE INTO $tbl SELECT * FROM old.$tbl; DETACH old;"
+            done
+            rm "$OLD_PATH"
+            echo "  Removed $OLD_PATH"
+            migrated=$((migrated + 1))
+        fi
+    done
+    if [ "$migrated" -eq 0 ]; then
+        echo "No legacy database files found — already migrated."
+    else
+        echo "Done. Migrated $migrated database(s)."
+    fi
+
 # --- Release ---
 
 # Tag and publish a GitHub release (usage: just release 0.2.0)
