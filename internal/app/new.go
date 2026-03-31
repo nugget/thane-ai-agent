@@ -72,8 +72,11 @@ import (
 // all deferred goroutines and persistent loops, then [App.Serve] to
 // start external servers and block until shutdown.
 //
-// All resources that require cleanup are tracked on the returned App;
-// cleanup happens in [App.shutdown].
+// All resources that require cleanup are registered on the closer
+// stack via [onClose] / [onCloseErr]. Workers register their stop
+// functions during [StartWorkers]. The LIFO ordering guarantees
+// workers stop before the resources they depend on are released.
+// See [App.shutdown] for the two-phase teardown sequence.
 func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io.Writer, llmClient llm.Client, ollamaClient *llm.OllamaClient) (*App, error) {
 	a := &App{
 		cfg:          cfg,
@@ -110,6 +113,7 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 					"dir", logDir, "error", err)
 			} else {
 				a.rotator = rotator
+				a.onCloseErr("rotator", rotator.Close)
 				logWriter = io.MultiWriter(stdout, rotator)
 			}
 		}
@@ -133,9 +137,10 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 				a.indexDB = nil
 			} else {
 				indexHandler := logging.NewIndexHandler(handler, a.indexDB, rotator)
-				// indexHandler and indexDB are closed in shutdown()
+				a.onCloseErr("index-db", a.indexDB.Close)
 				handler = indexHandler
 				a.indexHandler = indexHandler
+				a.onClose("index-handler", indexHandler.Close)
 			}
 		}
 
@@ -154,6 +159,7 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 			logger.Warn("failed to create content writer, content retention disabled", "error", cwErr)
 		} else {
 			a.contentWriter = cw
+			a.onCloseErr("content-writer", cw.Close)
 			logger.Info("content retention enabled",
 				"max_content_length", cfg.Logging.ContentMaxLength(),
 			)
@@ -277,6 +283,7 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 		return nil, fmt.Errorf("open memory database %s: %w", dbPath, err)
 	}
 	a.mem = mem
+	a.onCloseErr("memory", mem.Close)
 	logger.Info("memory database opened", "path", dbPath)
 
 	// --- Home Assistant client ---
@@ -376,6 +383,7 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 		return nil, fmt.Errorf("open archive store: %w", err)
 	}
 	a.archiveStore = archiveStore
+	a.onCloseErr("archive", archiveStore.Close)
 
 	// --- Working memory ---
 	// Persists free-form experiential context per conversation.
@@ -517,6 +525,7 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 		return nil, fmt.Errorf("open scheduler database: %w", err)
 	}
 	a.schedStore = schedStore
+	a.onCloseErr("scheduler-db", schedStore.Close)
 
 	// --- Operational state ---
 	// Generic KV store for persistent operational state (poller
@@ -557,6 +566,7 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 		if err := sched.Start(ctx); err != nil {
 			return fmt.Errorf("start scheduler: %w", err)
 		}
+		a.onClose("scheduler", sched.Stop)
 		return nil
 	})
 
@@ -716,6 +726,7 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 		return nil, fmt.Errorf("open fact store: %w", err)
 	}
 	a.factStore = factStore
+	a.onCloseErr("facts", factStore.Close)
 
 	factTools := knowledge.NewTools(factStore)
 	loop.Tools().SetFactTools(factTools)
@@ -729,6 +740,7 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 		return nil, fmt.Errorf("open contact store: %w", err)
 	}
 	a.contactStore = contactStore
+	a.onCloseErr("contacts", contactStore.Close)
 
 	// Wire summarizer → contact interaction tracking now that the
 	// contact store is available. Register the callback before Start()
@@ -738,6 +750,7 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 	})
 	a.deferWorker("summary-worker", func(ctx context.Context) error {
 		summaryWorker.Start(ctx)
+		a.onClose("summary-worker", summaryWorker.Stop)
 		return nil
 	})
 
@@ -783,6 +796,7 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 	if cfg.Email.Configured() {
 		emailMgr := email.NewManager(cfg.Email, logger)
 		a.emailMgr = emailMgr
+		a.onClose("email", emailMgr.Close)
 
 		emailTools := email.NewTools(emailMgr, &emailContactResolver{store: contactStore})
 		loop.Tools().SetEmailTools(emailTools)
@@ -969,6 +983,7 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 		if err != nil {
 			return nil, fmt.Errorf("init attachment store: %w", err)
 		}
+		a.onCloseErr("attachments", a.attachmentStore.Close)
 		logger.Info("attachment store initialized",
 			"db", attachDbPath,
 			"store_dir", storeDir,
@@ -1207,6 +1222,8 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 	a.mediaStore, err = media.NewMediaStore(cfg.Media.Analysis.DatabasePath, logger)
 	if err != nil {
 		logger.Warn("media engagement store unavailable; analysis will persist to vault only", "error", err)
+	} else if a.mediaStore != nil {
+		a.onCloseErr("media", a.mediaStore.Close)
 	}
 	vaultWriter := media.NewVaultWriter(logger)
 	analysisTools := media.NewAnalysisTools(
@@ -1325,6 +1342,8 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 		}
 
 		a.mcpClients = append(a.mcpClients, client)
+		mcpName := serverCfg.Name // capture for closure
+		a.onCloseErr("mcp-"+mcpName, client.Close)
 
 		connMgr.Watch(ctx, connwatch.WatcherConfig{
 			Name:    "mcp-" + serverCfg.Name,
@@ -1354,6 +1373,7 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 				return nil // non-fatal: system works without Signal
 			}
 			a.signalClient = signalClient
+			a.onCloseErr("signal", signalClient.Close)
 
 			// Register signal_send_message tool so the agent can
 			// send messages during its tool loop.
