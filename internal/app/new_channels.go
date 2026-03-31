@@ -105,7 +105,7 @@ func (a *App) initChannels(s *newState) error {
 			loops: &channelLoopAdapter{registry: a.loopRegistry},
 			store: contactStore,
 		})
-		a.notifRouter.SetSourceFunc(notificationSourceFromContext)
+		a.notifRouter.SetSourceFunc(tools.NotificationSource)
 		a.loop.Tools().SetNotificationRouter(a.notifRouter)
 		a.logger.Info("notification router initialized", "providers", "ha_push")
 	}
@@ -874,25 +874,4 @@ func (a *App) initChannels(s *newState) error {
 	}
 
 	return nil
-}
-
-// notificationSourceFromContext builds a source identifier from the
-// request context for notification history logging. It reads the
-// routing hints set by the channel that originated the request.
-func notificationSourceFromContext(ctx context.Context) string {
-	hints := tools.HintsFromContext(ctx)
-	if hints == nil {
-		return "agent"
-	}
-	source := hints["source"]
-	if source == "" {
-		source = hints["channel"]
-	}
-	if source == "" {
-		return "agent"
-	}
-	if sender := hints["sender"]; sender != "" {
-		return source + "/" + sender
-	}
-	return source
 }

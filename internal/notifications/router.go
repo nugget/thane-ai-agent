@@ -168,7 +168,7 @@ func (r *NotificationRouter) source(ctx context.Context) string {
 			return s
 		}
 	}
-	return "unknown"
+	return "agent"
 }
 
 // SendNotification delivers a fire-and-forget notification via the

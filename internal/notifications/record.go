@@ -190,6 +190,8 @@ func (s *RecordStore) Log(r *Record) error {
 	if kind == "" {
 		kind = KindFireAndForget
 	}
+	// Fire-and-forget records never expire — store zero time regardless
+	// of what the caller passes to avoid ambiguity.
 	_, err := s.db.Exec(`
 INSERT INTO notification_records
     (request_id, recipient, origin_session, origin_conversation, context,
@@ -197,7 +199,7 @@ INSERT INTO notification_records
      channel, source, kind, title, message)
 VALUES (?, ?, ?, ?, '', '[]', 0, '', ?, ?, ?, ?, ?, ?, ?, ?)`,
 		r.RequestID, r.Recipient, r.OriginSession, r.OriginConversation,
-		StatusSent, r.CreatedAt, r.ExpiresAt,
+		StatusSent, r.CreatedAt, time.Time{},
 		r.Channel, r.Source, kind, r.Title, r.Message,
 	)
 	if err != nil {

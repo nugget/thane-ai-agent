@@ -25,7 +25,7 @@ type HistoryProvider struct {
 
 // HistoryProviderConfig holds dependencies for [NewHistoryProvider].
 type HistoryProviderConfig struct {
-	Records *RecordStore  // required
+	Records *RecordStore  // optional; nil disables history output
 	Window  time.Duration // lookback window; default 6h
 	Limit   int           // max entries; default 30
 	Logger  *slog.Logger  // optional; defaults to slog.Default

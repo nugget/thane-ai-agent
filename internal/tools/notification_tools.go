@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/nugget/thane-ai-agent/internal/logging"
 	"github.com/nugget/thane-ai-agent/internal/notifications"
 )
 
@@ -174,7 +175,7 @@ func (r *Registry) handleActionableNotify(ctx context.Context, n notifications.N
 		CreatedAt:          now,
 		ExpiresAt:          now.Add(timeout),
 		Channel:            "ha_push",
-		Source:             notificationSource(ctx),
+		Source:             NotificationSource(ctx),
 		Kind:               notifications.KindActionable,
 		Title:              n.Title,
 		Message:            n.Message,
@@ -516,10 +517,10 @@ func (r *Registry) registerResolveActionable() {
 	})
 }
 
-// notificationSource builds a source identifier from the request
+// NotificationSource builds a source identifier from the request
 // context for notification history logging. Returns a string like
-// "metacognitive", "signal/+15125551234", or "api".
-func notificationSource(ctx context.Context) string {
+// "metacognitive", "signal/+15125551234", or "agent".
+func NotificationSource(ctx context.Context) string {
 	hints := HintsFromContext(ctx)
 	if hints == nil {
 		return "agent"
@@ -539,24 +540,29 @@ func notificationSource(ctx context.Context) string {
 }
 
 // logHANotify records a fire-and-forget ha_notify send for history
-// awareness. Errors are logged but not propagated.
+// awareness. Errors are logged but not propagated — delivery already
+// succeeded and logging failures should not surface as tool errors.
 func (r *Registry) logHANotify(ctx context.Context, n notifications.Notification) {
 	if r.notifRecords == nil {
 		return
 	}
+	logger := logging.Logger(ctx)
 	u, err := uuid.NewV7()
 	if err != nil {
+		logger.Warn("failed to generate notification log ID", "error", err)
 		return
 	}
 	now := time.Now().UTC()
-	_ = r.notifRecords.Log(&notifications.Record{
+	if err := r.notifRecords.Log(&notifications.Record{
 		RequestID: u.String(),
 		Recipient: n.Recipient,
 		Channel:   "ha_push",
-		Source:    notificationSource(ctx),
+		Source:    NotificationSource(ctx),
 		Kind:      notifications.KindFireAndForget,
 		Title:     n.Title,
 		Message:   n.Message,
 		CreatedAt: now,
-	})
+	}); err != nil {
+		logger.Warn("failed to log ha_notify for history", "error", err)
+	}
 }
