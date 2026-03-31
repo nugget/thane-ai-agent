@@ -264,28 +264,35 @@ logs workdir="./Thane":
 # --- Database ---
 
 # Migrate data from legacy per-store .db files into the unified thane.db.
-# Run once before first launch after upgrading to consolidated database layout.
-# Safe to run multiple times (uses INSERT OR IGNORE). Removes old files on success.
+# The new binary must have run at least once first (to create the target
+# tables via CREATE TABLE IF NOT EXISTS), then been stopped before running
+# this recipe. Safe to run multiple times (uses INSERT OR IGNORE).
+# Removes old files on success.
 [group('operations')]
 migrate-databases datadir="Thane/db":
     #!/usr/bin/env sh
     set -e
     DB="{{datadir}}/thane.db"
     if [ ! -f "$DB" ]; then
-        echo "No thane.db found at $DB — nothing to migrate."
-        exit 0
+        echo "No thane.db found at $DB."
+        echo "Start the new binary once to create the schema, stop it, then re-run this."
+        exit 1
     fi
     migrated=0
     for old in opstate.db anticipations.db watchlist.db checkpoints.db usage.db notifications.db; do
         OLD_PATH="{{datadir}}/$old"
         if [ -f "$OLD_PATH" ]; then
             echo "Migrating $old → thane.db ..."
-            sqlite3 "$DB" "ATTACH '$OLD_PATH' AS old;"
-            # Iterate over tables in the old database and merge each one
             tables=$(sqlite3 "$OLD_PATH" ".tables")
             for tbl in $tables; do
-                echo "  $tbl"
-                sqlite3 "$DB" "ATTACH '$OLD_PATH' AS old; INSERT OR IGNORE INTO $tbl SELECT * FROM old.$tbl; DETACH old;"
+                # Only migrate tables that exist in thane.db (schema created by app).
+                if sqlite3 "$DB" "SELECT name FROM sqlite_master WHERE type='table' AND name='$tbl';" | grep -q "$tbl"; then
+                    count=$(sqlite3 "$OLD_PATH" "SELECT COUNT(*) FROM $tbl;")
+                    sqlite3 "$DB" "ATTACH '$OLD_PATH' AS old; INSERT OR IGNORE INTO $tbl SELECT * FROM old.$tbl; DETACH old;"
+                    echo "  $tbl ($count rows)"
+                else
+                    echo "  Skipping $tbl — not present in thane.db schema"
+                fi
             done
             rm "$OLD_PATH"
             echo "  Removed $OLD_PATH"

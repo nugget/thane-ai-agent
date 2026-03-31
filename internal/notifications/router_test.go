@@ -38,7 +38,7 @@ func (m *mockProvider) SendActionable(_ context.Context, req ActionableRequest) 
 
 func newTestRouter(t *testing.T, resolver *mockContactResolver) (*NotificationRouter, *RecordStore) {
 	t.Helper()
-	db, err := database.Open(":memory:")
+	db, err := database.OpenMemory()
 	if err != nil {
 		t.Fatalf("database.Open: %v", err)
 	}

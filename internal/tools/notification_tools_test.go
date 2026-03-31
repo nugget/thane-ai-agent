@@ -66,7 +66,7 @@ func newTestNotifyRegistryWithRecords(t *testing.T) (*Registry, *mockNotifyHA, *
 	t.Helper()
 	reg, ha := newTestNotifyRegistry()
 
-	db, err := database.Open(":memory:")
+	db, err := database.OpenMemory()
 	if err != nil {
 		t.Fatalf("database.Open: %v", err)
 	}
@@ -339,7 +339,7 @@ func newTestNotifyRegistryWithRouter(t *testing.T) (*Registry, *mockRouterProvid
 		props:   map[string][]string{"ha_companion_app": {"mobile_app_mcphone"}},
 	}
 
-	db, err := database.Open(":memory:")
+	db, err := database.OpenMemory()
 	if err != nil {
 		t.Fatalf("database.Open: %v", err)
 	}

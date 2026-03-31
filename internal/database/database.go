@@ -17,6 +17,14 @@ func Open(path string) (*sql.DB, error) {
 	return sql.Open("sqlite3", path+"?_journal_mode=WAL&_busy_timeout=5000")
 }
 
+// OpenMemory opens a shared-cache in-memory SQLite database suitable
+// for tests. Unlike Open(":memory:"), all connections in the pool share
+// the same database, preventing flaky tests from schema/data isolation
+// across pooled connections.
+func OpenMemory() (*sql.DB, error) {
+	return sql.Open("sqlite3", "file::memory:?mode=memory&cache=shared&_busy_timeout=5000")
+}
+
 // HasColumn reports whether the given table contains a column with the
 // specified name. It uses a lightweight SELECT probe that avoids
 // scanning any rows. Identifiers are left unquoted because SQLite

@@ -10,7 +10,7 @@ import (
 
 func newTestLensStore(t *testing.T) *LensStore {
 	t.Helper()
-	db, err := database.Open(":memory:")
+	db, err := database.OpenMemory()
 	if err != nil {
 		t.Fatalf("database.Open: %v", err)
 	}
@@ -100,7 +100,7 @@ func TestLensStore_EmptyList(t *testing.T) {
 func TestLensStore_Persistence(t *testing.T) {
 	// Use a shared DB connection — data written through one LensStore
 	// is visible through another backed by the same connection.
-	db, err := database.Open(":memory:")
+	db, err := database.OpenMemory()
 	if err != nil {
 		t.Fatalf("database.Open: %v", err)
 	}

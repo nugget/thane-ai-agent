@@ -65,7 +65,7 @@ func (m *mockDelegateSpawner) waitSpawn(t *testing.T) {
 
 func newTestDispatcher(t *testing.T) (*CallbackDispatcher, *RecordStore, *mockInjector, *mockDelegateSpawner) {
 	t.Helper()
-	db, err := database.Open(":memory:")
+	db, err := database.OpenMemory()
 	if err != nil {
 		t.Fatalf("database.Open: %v", err)
 	}

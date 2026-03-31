@@ -10,7 +10,7 @@ import (
 
 func newTestCapStore(t *testing.T) *OpstateCapabilityTagStore {
 	t.Helper()
-	db, err := database.Open(":memory:")
+	db, err := database.OpenMemory()
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -11,7 +11,7 @@ import (
 
 func testStore(t *testing.T) *Store {
 	t.Helper()
-	db, err := database.Open(":memory:")
+	db, err := database.OpenMemory()
 	if err != nil {
 		t.Fatalf("database.Open: %v", err)
 	}
@@ -176,9 +176,9 @@ func TestNewStore_NilDB(t *testing.T) {
 	}
 }
 
-func TestStore_PersistAcrossReopen(t *testing.T) {
-	// Use a shared *sql.DB — data persists because the connection stays open.
-	db, err := database.Open(":memory:")
+func TestStore_SharedConnection(t *testing.T) {
+	// Two Store instances on the same *sql.DB see each other's writes.
+	db, err := database.OpenMemory()
 	if err != nil {
 		t.Fatalf("database.Open: %v", err)
 	}

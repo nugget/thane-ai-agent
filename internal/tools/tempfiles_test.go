@@ -13,7 +13,7 @@ import (
 
 func testTempFileStore(t *testing.T) (*TempFileStore, *opstate.Store) {
 	t.Helper()
-	db, err := database.Open(":memory:")
+	db, err := database.OpenMemory()
 	if err != nil {
 		t.Fatalf("database.Open: %v", err)
 	}

@@ -15,7 +15,7 @@ import (
 // newTestStore creates a temporary opstate store for testing.
 func newTestStore(t *testing.T) *opstate.Store {
 	t.Helper()
-	db, err := database.Open(":memory:")
+	db, err := database.OpenMemory()
 	if err != nil {
 		t.Fatalf("database.Open: %v", err)
 	}

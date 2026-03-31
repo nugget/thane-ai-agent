@@ -12,7 +12,7 @@ import (
 
 func newTestTimeoutWatcher(t *testing.T) (*TimeoutWatcher, *RecordStore, *mockInjector, *mockDelegateSpawner) {
 	t.Helper()
-	db, err := database.Open(":memory:")
+	db, err := database.OpenMemory()
 	if err != nil {
 		t.Fatalf("database.Open: %v", err)
 	}

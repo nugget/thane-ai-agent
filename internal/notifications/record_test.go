@@ -12,7 +12,7 @@ import (
 
 func newTestRecordStore(t *testing.T) *RecordStore {
 	t.Helper()
-	db, err := database.Open(":memory:")
+	db, err := database.OpenMemory()
 	if err != nil {
 		t.Fatalf("database.Open: %v", err)
 	}
