@@ -2417,22 +2417,15 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 			convs := mem.GetAllConversations()
 			result := make([]checkpoint.Conversation, len(convs))
 			for i, c := range convs {
-				msgs := make([]checkpoint.Message, len(c.Messages))
+				msgs := make([]checkpoint.SourceMessage, len(c.Messages))
 				for j, m := range c.Messages {
-					msgID, _ := uuid.NewV7()
-					msgs[j] = checkpoint.Message{
-						ID:        msgID,
+					msgs[j] = checkpoint.SourceMessage{
 						Role:      m.Role,
 						Content:   m.Content,
 						Timestamp: m.Timestamp,
 					}
 				}
-				result[i] = checkpoint.Conversation{
-					ID:        c.ID,
-					CreatedAt: c.CreatedAt,
-					UpdatedAt: c.UpdatedAt,
-					Messages:  msgs,
-				}
+				result[i] = checkpoint.ConvertConversation(c.ID, c.CreatedAt, c.UpdatedAt, msgs)
 			}
 			return result, nil
 		},
