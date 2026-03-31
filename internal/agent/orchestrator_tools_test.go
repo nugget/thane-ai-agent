@@ -104,12 +104,11 @@ func buildTestLoop(mock *mockLLM, extraNames []string) *Loop {
 	}
 
 	l := &Loop{
-		logger:  slog.Default(),
-		memory:  newMockMem(),
-		llm:     mock,
-		tools:   reg,
-		model:   "test-model",
-		talents: "",
+		logger: slog.Default(),
+		memory: newMockMem(),
+		llm:    mock,
+		tools:  reg,
+		model:  "test-model",
 	}
 	return l
 }

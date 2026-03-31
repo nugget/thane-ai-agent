@@ -248,14 +248,14 @@ func runAsk(ctx context.Context, stdout io.Writer, stderr io.Writer, configPath 
 	llmClient := createLLMClient(cfg, logger, ollamaClient)
 
 	talentLoader := talents.NewLoader(cfg.TalentsDir)
-	talentContent, _ := talentLoader.Load()
+	cliTalents, _ := talentLoader.Talents()
 
 	// In-memory store is fine for a single question — nothing to persist.
 	mem := memory.NewStore(100)
 
 	// Minimal loop: no router, no scheduler, no compactor. The default
 	// model handles everything for CLI one-shots.
-	loop := agent.NewLoop(logger, mem, nil, nil, ha, nil, llmClient, cfg.Models.Default, talentContent, "", 0)
+	loop := agent.NewLoop(logger, mem, nil, nil, ha, nil, llmClient, cfg.Models.Default, cliTalents, "", 0)
 	if ha != nil {
 		loop.SetHAInject(ha)
 	}
@@ -653,13 +653,16 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// Talents are markdown files that extend the system prompt with
 	// domain-specific knowledge and instructions.
 	talentLoader := talents.NewLoader(cfg.TalentsDir)
-	talentContent, err := talentLoader.Load()
+	parsedTalents, err := talentLoader.Talents()
 	if err != nil {
 		return fmt.Errorf("load talents: %w", err)
 	}
-	if talentContent != "" {
-		talentList, _ := talentLoader.List()
-		logger.Info("talents loaded", "count", len(talentList), "talents", talentList)
+	if len(parsedTalents) > 0 {
+		talentNames := make([]string, len(parsedTalents))
+		for i, t := range parsedTalents {
+			talentNames[i] = t.Name
+		}
+		logger.Info("talents loaded", "count", len(parsedTalents), "talents", talentNames)
 	}
 
 	// --- Persona ---
@@ -878,7 +881,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// into it.
 	defaultContextWindow := cfg.ContextWindowForModel(cfg.Models.Default, 200000)
 
-	loop = agent.NewLoop(logger, mem, compactor, rtr, ha, sched, llmClient, cfg.Models.Default, talentContent, personaContent, defaultContextWindow)
+	loop = agent.NewLoop(logger, mem, compactor, rtr, ha, sched, llmClient, cfg.Models.Default, parsedTalents, personaContent, defaultContextWindow)
 	loop.SetTimezone(cfg.Timezone)
 	if contentWriter != nil {
 		loop.SetContentWriter(contentWriter)
@@ -1872,11 +1875,9 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// talents are grouped into named capabilities that can be activated
 	// per-conversation via activate_capability/deactivate_capability tools.
 	if len(cfg.CapabilityTags) > 0 {
-		// Load parsed talents for tag-aware filtering.
-		parsedTalents, err := talentLoader.LoadAll()
-		if err != nil {
-			return fmt.Errorf("load talents for capability tags: %w", err)
-		}
+		// parsedTalents was loaded above; copy the slice header so the
+		// manifest prepend below doesn't modify the outer variable.
+		capTalents := append([]talents.Talent(nil), parsedTalents...)
 
 		// Warn about tools referenced in config but not registered.
 		// This catches typos, missing MCP servers, and tools gated by config
@@ -1955,7 +1956,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 				adHocTags[tag] = true
 			}
 		}
-		for _, t := range parsedTalents {
+		for _, t := range capTalents {
 			for _, tag := range t.Tags {
 				if !configuredTags[tag] {
 					adHocTags[tag] = true
@@ -1971,10 +1972,10 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		}
 
 		if manifestTalent := talents.GenerateManifest(manifestEntries); manifestTalent != nil {
-			parsedTalents = append([]talents.Talent{*manifestTalent}, parsedTalents...)
+			capTalents = append([]talents.Talent{*manifestTalent}, capTalents...)
 		}
 
-		loop.SetCapabilityTags(cfg.CapabilityTags, parsedTalents)
+		loop.SetCapabilityTags(cfg.CapabilityTags, capTalents)
 		loop.Tools().SetCapabilityTools(loop, manifest)
 		loop.SetTagContextAssembler(tagCtxAssembler)
 		loop.SetCapabilityTagStore(agent.NewOpstateCapabilityTagStore(opStore))
