@@ -1,6 +1,7 @@
 package logging
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -39,6 +40,12 @@ type ToolDetail struct {
 // its request ID. Returns nil, nil if the request is not found or if
 // content retention was not active when the request was processed.
 func QueryRequestDetail(db *sql.DB, requestID string) (*RequestDetail, error) {
+	return queryRequestDetailCtx(context.Background(), db, requestID)
+}
+
+// queryRequestDetailCtx is the context-aware implementation shared by
+// QueryRequestDetail and the Archiver.
+func queryRequestDetailCtx(ctx context.Context, db *sql.DB, requestID string) (*RequestDetail, error) {
 	var (
 		rd                             RequestDetail
 		promptHash, userContent        sql.NullString
@@ -49,7 +56,7 @@ func QueryRequestDetail(db *sql.DB, requestID string) (*RequestDetail, error) {
 		createdAt                      string
 	)
 
-	err := db.QueryRow(`SELECT request_id, prompt_hash, user_content, assistant_content,
+	err := db.QueryRowContext(ctx, `SELECT request_id, prompt_hash, user_content, assistant_content,
 		model, iteration_count, input_tokens, output_tokens, tools_used,
 		exhausted, exhaust_reason, created_at
 		FROM log_request_content WHERE request_id = ?`, requestID).Scan(
@@ -85,7 +92,7 @@ func QueryRequestDetail(db *sql.DB, requestID string) (*RequestDetail, error) {
 	// Resolve system prompt content from the prompts table.
 	if rd.PromptHash != "" {
 		var content sql.NullString
-		err := db.QueryRow(`SELECT content FROM log_prompts WHERE hash = ?`, rd.PromptHash).Scan(&content)
+		err := db.QueryRowContext(ctx, `SELECT content FROM log_prompts WHERE hash = ?`, rd.PromptHash).Scan(&content)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return &rd, fmt.Errorf("query prompt content: %w", err)
 		}
@@ -93,7 +100,7 @@ func QueryRequestDetail(db *sql.DB, requestID string) (*RequestDetail, error) {
 	}
 
 	// Fetch tool calls for this request.
-	rows, err := db.Query(`SELECT tool_call_id, tool_name, arguments, result, iteration_index
+	rows, err := db.QueryContext(ctx, `SELECT tool_call_id, tool_name, arguments, result, iteration_index
 		FROM log_tool_content WHERE request_id = ? ORDER BY iteration_index, id`, requestID)
 	if err != nil {
 		return &rd, fmt.Errorf("query tool content: %w", err)

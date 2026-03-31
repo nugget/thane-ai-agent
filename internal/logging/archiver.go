@@ -114,7 +114,7 @@ func (a *Archiver) fetchBatch(ctx context.Context, cutoff string) ([]string, err
 func (a *Archiver) processBatch(ctx context.Context, ids []string, archiveDir string, open map[string]*monthFile) (int, error) {
 	// Write phase: fetch and emit each record.
 	for _, id := range ids {
-		rd, err := QueryRequestDetail(a.db, id)
+		rd, err := queryRequestDetailCtx(ctx, a.db, id)
 		if err != nil {
 			return 0, fmt.Errorf("query request %s: %w", id, err)
 		}

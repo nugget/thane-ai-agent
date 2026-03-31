@@ -455,7 +455,10 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 					defer ticker.Stop()
 					for {
 						before := time.Now().Add(-archiveDur)
-						if n, err := archiver.Archive(ctx, before); err != nil {
+						runCtx, cancel := context.WithTimeout(ctx, 30*time.Minute)
+						n, err := archiver.Archive(runCtx, before)
+						cancel()
+						if err != nil {
 							logger.Warn("content archive failed", "error", err, "before", before)
 						} else if n > 0 {
 							logger.Info("content archived", "requests", n, "before", before)

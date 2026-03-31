@@ -350,7 +350,11 @@ archive-logs logdir="Thane/logs" archivedir="Thane/logs/archive" days="90":
         sys.exit(1)
 
     os.makedirs(archive_dir, exist_ok=True)
-    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    # Use microsecond precision so the cutoff sorts correctly against
+    # RFC3339Nano timestamps stored in created_at. Without sub-second
+    # precision, "...45Z" sorts AFTER "...45.123456789Z" lexicographically
+    # (ASCII '.' < 'Z'), causing same-second rows to be archived incorrectly.
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
     print(f"Archiving log_request_content rows older than {cutoff} ...")
 
     conn = sqlite3.connect(db_path)
