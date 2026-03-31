@@ -10,24 +10,6 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 )
 
-// mockConversationProvider returns test conversations.
-type mockConversationProvider struct {
-	conversations []Conversation
-}
-
-func (m *mockConversationProvider) GetConversations() ([]Conversation, error) {
-	return m.conversations, nil
-}
-
-// mockFactProvider returns test knowledge.
-type mockFactProvider struct {
-	facts []Fact
-}
-
-func (m *mockFactProvider) GetFacts() ([]Fact, error) {
-	return m.facts, nil
-}
-
 func TestGetStartupStatus_Empty(t *testing.T) {
 	// Create temp database
 	tmpDB, err := os.CreateTemp("", "checkpoint-test-*.db")
@@ -51,8 +33,8 @@ func TestGetStartupStatus_Empty(t *testing.T) {
 
 	// Empty providers
 	cp.SetProviders(
-		&mockConversationProvider{},
-		&mockFactProvider{},
+		func() ([]Conversation, error) { return nil, nil },
+		func() ([]Fact, error) { return nil, nil },
 		nil,
 	)
 
@@ -97,8 +79,8 @@ func TestGetStartupStatus_WithData(t *testing.T) {
 
 	// Providers with test data
 	cp.SetProviders(
-		&mockConversationProvider{
-			conversations: []Conversation{
+		func() ([]Conversation, error) {
+			return []Conversation{
 				{
 					ID: "conv-1",
 					Messages: []Message{
@@ -112,14 +94,14 @@ func TestGetStartupStatus_WithData(t *testing.T) {
 						{Role: "user", Content: "test"},
 					},
 				},
-			},
+			}, nil
 		},
-		&mockFactProvider{
-			facts: []Fact{
+		func() ([]Fact, error) {
+			return []Fact{
 				{Key: "fact-1", Value: "value-1"},
 				{Key: "fact-2", Value: "value-2"},
 				{Key: "fact-3", Value: "value-3"},
-			},
+			}, nil
 		},
 		nil,
 	)

@@ -261,6 +261,168 @@ serve: build
 logs workdir="./Thane":
     tail -f {{workdir}}/logs/thane.log
 
+# --- Database ---
+
+# Migrate data from legacy per-store .db files into the unified thane.db.
+# Handles: opstate, anticipations, watchlist, checkpoints, usage, notifications,
+# and archive (sessions, archive_messages, archive_tool_calls, archive_iterations).
+# The new binary must have run at least once first (to create the target
+# tables via CREATE TABLE IF NOT EXISTS), then been stopped before running
+# this recipe. Safe to run multiple times (uses INSERT OR IGNORE).
+# Removes old files only when every table was successfully migrated.
+# Uses column-intersection INSERT to tolerate schema evolution (AddColumn).
+[group('operations')]
+migrate-databases datadir="Thane/db":
+    #!/usr/bin/env sh
+    set -e
+    DB="{{datadir}}/thane.db"
+    if [ ! -f "$DB" ]; then
+        echo "No thane.db found at $DB."
+        echo "Start the new binary once to create the schema, stop it, then re-run this."
+        exit 1
+    fi
+    migrated=0
+    # archive.db is last: at ~300MB it is the largest migration and benefits
+    # from the smaller stores being committed first.
+    for old in opstate.db anticipations.db watchlist.db checkpoints.db usage.db notifications.db archive.db; do
+        OLD_PATH="{{datadir}}/$old"
+        if [ -f "$OLD_PATH" ]; then
+            echo "Migrating $old → thane.db ..."
+            # Filter out SQLite-internal tables (sqlite_sequence etc.) so they
+            # are never counted as skipped application tables.
+            tables=$(sqlite3 "$OLD_PATH" ".tables" | tr ' ' '\n' | grep -v '^sqlite_' | grep -v '^$')
+            skipped=0
+            for tbl in $tables; do
+                # Only migrate tables that exist in thane.db (schema created by app).
+                if sqlite3 "$DB" "SELECT name FROM sqlite_master WHERE type='table' AND name='$tbl';" | grep -q "$tbl"; then
+                    # Build the intersection of columns present in both databases to
+                    # handle schema evolution (AddColumn migrations add columns to
+                    # thane.db that the old file doesn't have yet).
+                    # sort|uniq -d finds lines present in both sets (the intersection).
+                    src_cols=$(sqlite3 "$OLD_PATH" "PRAGMA table_info($tbl);" | awk -F'|' '{print $2}')
+                    dst_cols=$(sqlite3 "$DB"       "PRAGMA table_info($tbl);" | awk -F'|' '{print $2}')
+                    common_cols=$(printf '%s\n' $src_cols $dst_cols | sort | uniq -d | tr '\n' ',' | sed 's/,$//')
+                    if [ -z "$common_cols" ]; then
+                        echo "  Skipping $tbl — no common columns"
+                        skipped=$((skipped + 1))
+                        continue
+                    fi
+                    count=$(sqlite3 "$OLD_PATH" "SELECT COUNT(*) FROM $tbl;")
+                    sqlite3 "$DB" "ATTACH '$OLD_PATH' AS old; INSERT OR IGNORE INTO $tbl ($common_cols) SELECT $common_cols FROM old.$tbl; DETACH old;"
+                    echo "  $tbl ($count rows, columns: $common_cols)"
+                else
+                    echo "  Skipping $tbl — not present in thane.db schema"
+                    skipped=$((skipped + 1))
+                fi
+            done
+            if [ "$skipped" -eq 0 ]; then
+                rm "$OLD_PATH"
+                echo "  Removed $OLD_PATH"
+                migrated=$((migrated + 1))
+            else
+                echo "  WARNING: $skipped table(s) skipped — $OLD_PATH NOT removed"
+                echo "  Inspect the output above and re-run after resolving the schema."
+            fi
+        fi
+    done
+    if [ "$migrated" -eq 0 ]; then
+        echo "No legacy database files found — already migrated."
+    else
+        echo "Done. Migrated $migrated database(s)."
+    fi
+
+# Archive retained request/tool content older than DAYS days from logs.db to
+# monthly JSONL files in archivedir. Safe to run while the service is
+# stopped; do not run while the service is actively writing to logs.db.
+# Default: archive rows older than 90 days into Thane/logs/archive/.
+[group('operations')]
+archive-logs logdir="Thane/logs" archivedir="Thane/logs/archive" days="90":
+    #!/usr/bin/env python3
+    import json, os, sqlite3, sys
+    from datetime import datetime, timezone, timedelta
+
+    db_path    = "{{logdir}}/logs.db"
+    archive_dir = "{{archivedir}}"
+    days        = int("{{days}}")
+
+    if not os.path.exists(db_path):
+        print(f"No logs.db found at {db_path}.")
+        sys.exit(1)
+
+    os.makedirs(archive_dir, exist_ok=True)
+    # Use microsecond precision so the cutoff sorts correctly against
+    # RFC3339Nano timestamps stored in created_at. Without sub-second
+    # precision, "...45Z" sorts AFTER "...45.123456789Z" lexicographically
+    # (ASCII '.' < 'Z'), causing same-second rows to be archived incorrectly.
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
+    print(f"Archiving log_request_content rows older than {cutoff} ...")
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+
+    ids = conn.execute(
+        "SELECT request_id, strftime('%Y-%m', created_at) AS month "
+        "FROM log_request_content WHERE created_at < ? ORDER BY created_at",
+        (cutoff,)
+    ).fetchall()
+
+    if not ids:
+        print("Nothing to archive.")
+        conn.close()
+        sys.exit(0)
+
+    open_files = {}
+
+    def get_file(month):
+        if month not in open_files:
+            open_files[month] = open(os.path.join(archive_dir, f"{month}.jsonl"), "a")
+        return open_files[month]
+
+    archived = 0
+    for row in ids:
+        rid, month = row["request_id"], row["month"] or "unknown"
+        r = conn.execute(
+            "SELECT r.request_id, r.prompt_hash, p.content AS system_prompt, "
+            "r.user_content, r.assistant_content, r.model, "
+            "r.iteration_count, r.input_tokens, r.output_tokens, "
+            "r.tools_used, r.exhausted, r.exhaust_reason, r.created_at "
+            "FROM log_request_content r "
+            "LEFT JOIN log_prompts p ON p.hash = r.prompt_hash "
+            "WHERE r.request_id = ?", (rid,)
+        ).fetchone()
+        if not r:
+            continue
+        record = dict(r)
+        if record.get("tools_used"):
+            try:
+                record["tools_used"] = json.loads(record["tools_used"])
+            except Exception:
+                pass
+        tools = conn.execute(
+            "SELECT tool_call_id, tool_name, arguments, result, iteration_index "
+            "FROM log_tool_content WHERE request_id = ? ORDER BY iteration_index, id",
+            (rid,)
+        ).fetchall()
+        record["tool_calls"] = [dict(t) for t in tools]
+        get_file(month).write(json.dumps(record, ensure_ascii=False) + "\n")
+        archived += 1
+
+    # Flush and fsync all archive files before deleting from DB.
+    for f in open_files.values():
+        f.flush()
+        os.fsync(f.fileno())
+        f.close()
+
+    # Delete archived rows from the database.
+    for row in ids:
+        rid = row["request_id"]
+        conn.execute("DELETE FROM log_tool_content WHERE request_id = ?", (rid,))
+        conn.execute("DELETE FROM log_request_content WHERE request_id = ?", (rid,))
+    conn.commit()
+    conn.close()
+
+    print(f"Archived {archived} request(s). Files written to {archive_dir}/")
+
 # --- Release ---
 
 # Tag and publish a GitHub release (usage: just release 0.2.0)

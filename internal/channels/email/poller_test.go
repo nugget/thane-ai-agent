@@ -2,21 +2,27 @@ package email
 
 import (
 	"log/slog"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	_ "github.com/mattn/go-sqlite3"
+	"github.com/nugget/thane-ai-agent/internal/database"
 	"github.com/nugget/thane-ai-agent/internal/opstate"
 )
 
 func testOpstate(t *testing.T) *opstate.Store {
 	t.Helper()
-	s, err := opstate.NewStore(filepath.Join(t.TempDir(), "opstate_test.db"))
+	db, err := database.OpenMemory()
+	if err != nil {
+		t.Fatalf("database.Open: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	s, err := opstate.NewStore(db)
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
-	t.Cleanup(func() { s.Close() })
 	return s
 }
 

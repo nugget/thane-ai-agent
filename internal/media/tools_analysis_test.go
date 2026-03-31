@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	_ "github.com/mattn/go-sqlite3"
+	"github.com/nugget/thane-ai-agent/internal/database"
 	"github.com/nugget/thane-ai-agent/internal/opstate"
 )
 
@@ -14,12 +16,16 @@ import (
 func newTestAnalysisTools(t *testing.T, defaultOutputPath string) (*AnalysisTools, *opstate.Store, string) {
 	t.Helper()
 
-	stateDB := filepath.Join(t.TempDir(), "opstate.db")
-	state, err := opstate.NewStore(stateDB)
+	db, err := database.OpenMemory()
+	if err != nil {
+		t.Fatalf("database.Open: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	state, err := opstate.NewStore(db)
 	if err != nil {
 		t.Fatalf("NewStore() error: %v", err)
 	}
-	t.Cleanup(func() { state.Close() })
 
 	engDB := filepath.Join(t.TempDir(), "engagement.db")
 	store, err := NewMediaStore(engDB, nil)

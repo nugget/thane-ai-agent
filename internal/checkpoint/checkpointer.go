@@ -11,36 +11,24 @@ import (
 	"github.com/google/uuid"
 )
 
-// StateProvider is implemented by components that contribute to checkpoints.
-type StateProvider interface {
-	// CheckpointState returns the current state for checkpointing.
-	CheckpointState() (interface{}, error)
-}
+// ConversationFunc returns conversations for checkpointing.
+type ConversationFunc func() ([]Conversation, error)
 
-// ConversationProvider provides conversation data.
-type ConversationProvider interface {
-	GetConversations() ([]Conversation, error)
-}
+// FactFunc returns facts for checkpointing.
+type FactFunc func() ([]Fact, error)
 
-// FactProvider provides memory knowledge.
-type FactProvider interface {
-	GetFacts() ([]Fact, error)
-}
-
-// TaskProvider provides scheduled tasks.
-type TaskProvider interface {
-	GetTasks() ([]Task, error)
-}
+// TaskFunc returns tasks for checkpointing.
+type TaskFunc func() ([]Task, error)
 
 // Checkpointer manages automatic and manual checkpointing.
 type Checkpointer struct {
 	store *Store
 	log   *slog.Logger
 
-	// Providers for collecting state
-	conversations ConversationProvider
-	facts         FactProvider
-	tasks         TaskProvider
+	// Provider functions for collecting state
+	conversations ConversationFunc
+	facts         FactFunc
+	tasks         TaskFunc
 
 	// Config
 	periodicInterval int // Create checkpoint every N messages (0 = disabled)
@@ -69,8 +57,8 @@ func NewCheckpointer(db *sql.DB, cfg Config, log *slog.Logger) (*Checkpointer, e
 	}, nil
 }
 
-// SetProviders configures where to get state from.
-func (c *Checkpointer) SetProviders(conv ConversationProvider, facts FactProvider, tasks TaskProvider) {
+// SetProviders configures the functions that supply state for snapshots.
+func (c *Checkpointer) SetProviders(conv ConversationFunc, facts FactFunc, tasks TaskFunc) {
 	c.conversations = conv
 	c.facts = facts
 	c.tasks = tasks
@@ -201,7 +189,7 @@ func (c *Checkpointer) GetStartupStatus() (*StartupStatus, error) {
 
 	// Get conversation/message counts from provider
 	if c.conversations != nil {
-		convs, err := c.conversations.GetConversations()
+		convs, err := c.conversations()
 		if err == nil {
 			status.Conversations = len(convs)
 			for _, conv := range convs {
@@ -212,7 +200,7 @@ func (c *Checkpointer) GetStartupStatus() (*StartupStatus, error) {
 
 	// Get fact count from provider
 	if c.facts != nil {
-		facts, err := c.facts.GetFacts()
+		facts, err := c.facts()
 		if err == nil {
 			status.Facts = len(facts)
 		}
@@ -256,7 +244,7 @@ func (c *Checkpointer) collectState() (*State, error) {
 	state := &State{}
 
 	if c.conversations != nil {
-		convs, err := c.conversations.GetConversations()
+		convs, err := c.conversations()
 		if err != nil {
 			return nil, fmt.Errorf("get conversations: %w", err)
 		}
@@ -264,7 +252,7 @@ func (c *Checkpointer) collectState() (*State, error) {
 	}
 
 	if c.facts != nil {
-		facts, err := c.facts.GetFacts()
+		facts, err := c.facts()
 		if err != nil {
 			return nil, fmt.Errorf("get facts: %w", err)
 		}
@@ -272,7 +260,7 @@ func (c *Checkpointer) collectState() (*State, error) {
 	}
 
 	if c.tasks != nil {
-		tasks, err := c.tasks.GetTasks()
+		tasks, err := c.tasks()
 		if err != nil {
 			return nil, fmt.Errorf("get tasks: %w", err)
 		}

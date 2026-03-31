@@ -2,11 +2,52 @@
 package checkpoint
 
 import (
+	"fmt"
 	"strconv"
 	"time"
 
 	"github.com/google/uuid"
 )
+
+// ParseUUID parses a string to UUID, returning zero UUID on error.
+func ParseUUID(s string) uuid.UUID {
+	id, _ := uuid.Parse(s)
+	return id
+}
+
+// SourceMessage holds the minimal fields needed to convert an external
+// message into a checkpoint Message. This avoids import cycles between
+// checkpoint and memory packages.
+type SourceMessage struct {
+	Role      string
+	Content   string
+	Timestamp time.Time
+}
+
+// ConvertConversation builds a checkpoint Conversation from external
+// data, generating fresh UUIDs for each message. Returns an error if
+// UUID generation fails.
+func ConvertConversation(id string, createdAt, updatedAt time.Time, msgs []SourceMessage) (Conversation, error) {
+	converted := make([]Message, len(msgs))
+	for i, m := range msgs {
+		msgID, err := uuid.NewV7()
+		if err != nil {
+			return Conversation{}, fmt.Errorf("generate message UUID: %w", err)
+		}
+		converted[i] = Message{
+			ID:        msgID,
+			Role:      m.Role,
+			Content:   m.Content,
+			Timestamp: m.Timestamp,
+		}
+	}
+	return Conversation{
+		ID:        id,
+		CreatedAt: createdAt,
+		UpdatedAt: updatedAt,
+		Messages:  converted,
+	}, nil
+}
 
 // Trigger describes what caused a checkpoint to be created.
 type Trigger string

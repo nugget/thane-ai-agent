@@ -4,11 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
-	"path/filepath"
 	"testing"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/nugget/thane-ai-agent/internal/database"
 )
 
 // mockInjector records InjectSystemMessage calls.
@@ -65,12 +65,16 @@ func (m *mockDelegateSpawner) waitSpawn(t *testing.T) {
 
 func newTestDispatcher(t *testing.T) (*CallbackDispatcher, *RecordStore, *mockInjector, *mockDelegateSpawner) {
 	t.Helper()
-	dir := t.TempDir()
-	store, err := NewRecordStore(filepath.Join(dir, "test.db"), slog.Default())
+	db, err := database.OpenMemory()
+	if err != nil {
+		t.Fatalf("database.Open: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	store, err := NewRecordStore(db, slog.Default())
 	if err != nil {
 		t.Fatalf("NewRecordStore: %v", err)
 	}
-	t.Cleanup(func() { store.Close() })
 
 	inj := &mockInjector{alive: true}
 	del := newMockDelegateSpawner()

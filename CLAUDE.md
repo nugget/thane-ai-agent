@@ -110,3 +110,27 @@ internal/
 - PRs require review before merge to `main`
 - **Always run `just ci` before pushing** — it catches formatting, lint, and race conditions. This is a hard requirement, not a suggestion.
 - Keep PRs focused: one feature or fix per PR
+
+## GitHub Collaboration
+
+Be a good GitHub collaborator. Review threads left open signal to the next reader that work is unfinished — always close the loop.
+
+**When addressing review feedback:**
+1. Fix the issue in a commit
+2. Reply to the thread with the fixing commit hash and a one-line explanation
+3. Resolve the conversation
+4. If a comment is intentionally deferred (out of scope, follow-up issue), say so explicitly before resolving — don't silently close without context
+
+**After a round of fixes:** Request re-review so the reviewer knows the ball is back in their court.
+
+**When deferring feedback:** Post a reply explaining *why* it's deferred (e.g. "would require coupling X to Y, creating an import cycle — filing as follow-up") before resolving. A resolved thread with no reply looks like the comment was missed.
+
+**Resolving threads via CLI:**
+```bash
+gh api graphql -f query='mutation { resolveReviewThread(input: {threadId: "THREAD_ID"}) { thread { isResolved } } }'
+```
+
+**PR hygiene:**
+- Check off test plan items in the PR description as they are verified
+- Use `Refs #NNN` or `Closes #NNN` in commit message bodies when a commit relates to or closes an issue
+- Keep PR description tables accurate — if the scope changes during the PR, update the description

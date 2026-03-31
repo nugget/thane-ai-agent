@@ -3,23 +3,25 @@ package notifications
 import (
 	"database/sql"
 	"log/slog"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/nugget/thane-ai-agent/internal/database"
 )
 
 func newTestRecordStore(t *testing.T) *RecordStore {
 	t.Helper()
-	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "test_notifications.db")
-	s, err := NewRecordStore(dbPath, slog.Default())
+	db, err := database.OpenMemory()
+	if err != nil {
+		t.Fatalf("database.Open: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	s, err := NewRecordStore(db, slog.Default())
 	if err != nil {
 		t.Fatalf("NewRecordStore: %v", err)
 	}
-	t.Cleanup(func() { s.Close() })
 	return s
 }
 
@@ -308,9 +310,9 @@ func TestRecordStore_PendingExpiredEmpty(t *testing.T) {
 	}
 }
 
-func TestNewRecordStore_InvalidPath(t *testing.T) {
-	_, err := NewRecordStore(filepath.Join(os.DevNull, "impossible", "path.db"), slog.Default())
+func TestNewRecordStore_NilDB(t *testing.T) {
+	_, err := NewRecordStore(nil, slog.Default())
 	if err == nil {
-		t.Fatal("expected error for invalid path")
+		t.Fatal("expected error for nil DB")
 	}
 }

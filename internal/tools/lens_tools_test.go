@@ -1,15 +1,22 @@
 package tools
 
 import (
-	"path/filepath"
 	"testing"
 
+	_ "github.com/mattn/go-sqlite3"
+	"github.com/nugget/thane-ai-agent/internal/database"
 	"github.com/nugget/thane-ai-agent/internal/opstate"
 )
 
 func newTestLensStore(t *testing.T) *LensStore {
 	t.Helper()
-	store, err := opstate.NewStore(filepath.Join(t.TempDir(), "test.db"))
+	db, err := database.OpenMemory()
+	if err != nil {
+		t.Fatalf("database.Open: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	store, err := opstate.NewStore(db)
 	if err != nil {
 		t.Fatalf("create opstate store: %v", err)
 	}
@@ -91,9 +98,15 @@ func TestLensStore_EmptyList(t *testing.T) {
 }
 
 func TestLensStore_Persistence(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "test.db")
+	// Use a shared DB connection — data written through one LensStore
+	// is visible through another backed by the same connection.
+	db, err := database.OpenMemory()
+	if err != nil {
+		t.Fatalf("database.Open: %v", err)
+	}
+	defer db.Close()
 
-	store1, err := opstate.NewStore(dbPath)
+	store1, err := opstate.NewStore(db)
 	if err != nil {
 		t.Fatalf("create store1: %v", err)
 	}
@@ -104,7 +117,7 @@ func TestLensStore_Persistence(t *testing.T) {
 	}
 
 	// Create a new LensStore on the same database to verify persistence.
-	store2, err := opstate.NewStore(dbPath)
+	store2, err := opstate.NewStore(db)
 	if err != nil {
 		t.Fatalf("create store2: %v", err)
 	}

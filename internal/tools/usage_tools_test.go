@@ -2,22 +2,27 @@ package tools
 
 import (
 	"context"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	_ "github.com/mattn/go-sqlite3"
+	"github.com/nugget/thane-ai-agent/internal/database"
 	"github.com/nugget/thane-ai-agent/internal/usage"
 )
 
 func testUsageStore(t *testing.T) *usage.Store {
 	t.Helper()
-	dbPath := filepath.Join(t.TempDir(), "usage_test.db")
-	s, err := usage.NewStore(dbPath)
+	db, err := database.OpenMemory()
 	if err != nil {
-		t.Fatalf("NewStore(%q): %v", dbPath, err)
+		t.Fatalf("database.Open: %v", err)
 	}
-	t.Cleanup(func() { s.Close() })
+	t.Cleanup(func() { db.Close() })
+
+	s, err := usage.NewStore(db)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
 	return s
 }
 

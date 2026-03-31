@@ -2,20 +2,25 @@ package opstate
 
 import (
 	"context"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
+
+	_ "github.com/mattn/go-sqlite3"
+	"github.com/nugget/thane-ai-agent/internal/database"
 )
 
 func testStore(t *testing.T) *Store {
 	t.Helper()
-	dbPath := filepath.Join(t.TempDir(), "opstate_test.db")
-	s, err := NewStore(dbPath)
+	db, err := database.OpenMemory()
 	if err != nil {
-		t.Fatalf("NewStore(%q): %v", dbPath, err)
+		t.Fatalf("database.Open: %v", err)
 	}
-	t.Cleanup(func() { s.Close() })
+	t.Cleanup(func() { db.Close() })
+
+	s, err := NewStore(db)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
 	return s
 }
 
@@ -163,32 +168,35 @@ func TestListEmpty(t *testing.T) {
 	}
 }
 
-func TestNewStore_InvalidPath(t *testing.T) {
-	_, err := NewStore("/nonexistent/path/db.sqlite")
+func TestNewStore_NilDB(t *testing.T) {
+	// A nil *sql.DB should fail during migration.
+	_, err := NewStore(nil)
 	if err == nil {
-		t.Error("NewStore() should fail for invalid path")
+		t.Error("NewStore(nil) should fail")
 	}
 }
 
-func TestStore_PersistAcrossReopen(t *testing.T) {
-	dbPath := filepath.Join(t.TempDir(), "persist_test.db")
+func TestStore_SharedConnection(t *testing.T) {
+	// Two Store instances on the same *sql.DB see each other's writes.
+	db, err := database.OpenMemory()
+	if err != nil {
+		t.Fatalf("database.Open: %v", err)
+	}
+	defer db.Close()
 
-	// Open, write, close.
-	s1, err := NewStore(dbPath)
+	s1, err := NewStore(db)
 	if err != nil {
 		t.Fatalf("NewStore(1): %v", err)
 	}
 	if err := s1.Set("ns", "key", "persistent"); err != nil {
 		t.Fatalf("Set() error: %v", err)
 	}
-	s1.Close()
 
-	// Reopen and verify.
-	s2, err := NewStore(dbPath)
+	// Create a second Store on the same DB — data should be visible.
+	s2, err := NewStore(db)
 	if err != nil {
 		t.Fatalf("NewStore(2): %v", err)
 	}
-	defer s2.Close()
 
 	val, err := s2.Get("ns", "key")
 	if err != nil {
@@ -242,18 +250,6 @@ func TestDeleteNamespace_Empty(t *testing.T) {
 	// Deleting a non-existent namespace should not error.
 	if err := s.DeleteNamespace("nonexistent"); err != nil {
 		t.Errorf("DeleteNamespace(empty): %v", err)
-	}
-}
-
-func TestNewStore_InvalidPath_NoDir(t *testing.T) {
-	// Use a path where the parent directory doesn't exist.
-	dbPath := filepath.Join(t.TempDir(), "subdir", "nested", "db.sqlite")
-	// Remove the temp dir's content to ensure subdir doesn't exist.
-	_ = os.RemoveAll(filepath.Dir(filepath.Dir(dbPath)))
-
-	_, err := NewStore(dbPath)
-	if err == nil {
-		t.Error("NewStore() should fail when parent directory doesn't exist")
 	}
 }
 

@@ -4,22 +4,27 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"testing"
 
+	_ "github.com/mattn/go-sqlite3"
+	"github.com/nugget/thane-ai-agent/internal/database"
 	"github.com/nugget/thane-ai-agent/internal/opstate"
 )
 
 // newTestStore creates a temporary opstate store for testing.
 func newTestStore(t *testing.T) *opstate.Store {
 	t.Helper()
-	dir := t.TempDir()
-	store, err := opstate.NewStore(filepath.Join(dir, "test.db"))
+	db, err := database.OpenMemory()
+	if err != nil {
+		t.Fatalf("database.Open: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	store, err := opstate.NewStore(db)
 	if err != nil {
 		t.Fatalf("NewStore() error: %v", err)
 	}
-	t.Cleanup(func() { store.Close() })
 	return store
 }
 

@@ -6,6 +6,7 @@ package database
 import (
 	"database/sql"
 	"fmt"
+	"sync/atomic"
 )
 
 // Open opens a SQLite database at the given path with standard
@@ -15,6 +16,27 @@ import (
 // package or test file).
 func Open(path string) (*sql.DB, error) {
 	return sql.Open("sqlite3", path+"?_journal_mode=WAL&_busy_timeout=5000")
+}
+
+// memoryDBSeq generates unique names for in-memory test databases.
+var memoryDBSeq uint64
+
+// OpenMemory opens an isolated shared-cache in-memory SQLite database
+// suitable for tests. Each call gets a unique database name so parallel
+// test packages cannot contaminate each other. MaxOpenConns and
+// MaxIdleConns are set to 1 to prevent the pool from dropping the last
+// connection and silently losing the in-memory state.
+func OpenMemory() (*sql.DB, error) {
+	id := atomic.AddUint64(&memoryDBSeq, 1)
+	dsn := fmt.Sprintf("file:thane_test_%d?mode=memory&cache=shared&_busy_timeout=5000", id)
+	db, err := sql.Open("sqlite3", dsn)
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	db.SetConnMaxLifetime(0)
+	return db, nil
 }
 
 // HasColumn reports whether the given table contains a column with the

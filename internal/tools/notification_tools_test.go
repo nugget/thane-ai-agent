@@ -3,13 +3,13 @@ package tools
 import (
 	"context"
 	"log/slog"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/nugget/thane-ai-agent/internal/contacts"
+	"github.com/nugget/thane-ai-agent/internal/database"
 	"github.com/nugget/thane-ai-agent/internal/notifications"
 )
 
@@ -66,12 +66,16 @@ func newTestNotifyRegistryWithRecords(t *testing.T) (*Registry, *mockNotifyHA, *
 	t.Helper()
 	reg, ha := newTestNotifyRegistry()
 
-	dir := t.TempDir()
-	store, err := notifications.NewRecordStore(filepath.Join(dir, "test.db"), slog.Default())
+	db, err := database.OpenMemory()
+	if err != nil {
+		t.Fatalf("database.Open: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	store, err := notifications.NewRecordStore(db, slog.Default())
 	if err != nil {
 		t.Fatalf("NewRecordStore: %v", err)
 	}
-	t.Cleanup(func() { store.Close() })
 
 	reg.SetNotificationRecords(store)
 	return reg, ha, store
@@ -335,12 +339,16 @@ func newTestNotifyRegistryWithRouter(t *testing.T) (*Registry, *mockRouterProvid
 		props:   map[string][]string{"ha_companion_app": {"mobile_app_mcphone"}},
 	}
 
-	dbPath := filepath.Join(t.TempDir(), "router-test.db")
-	records, err := notifications.NewRecordStore(dbPath, slog.Default())
+	db, err := database.OpenMemory()
+	if err != nil {
+		t.Fatalf("database.Open: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	records, err := notifications.NewRecordStore(db, slog.Default())
 	if err != nil {
 		t.Fatalf("NewRecordStore: %v", err)
 	}
-	t.Cleanup(func() { records.Close() })
 
 	router := notifications.NewNotificationRouter(resolver, records, slog.Default())
 	provider := &mockRouterProvider{name: "ha_push"}
