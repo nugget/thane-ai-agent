@@ -1497,17 +1497,12 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		sort.Strings(activeTags)
 
 		// Persist conversation-scoped capability tags so they survive
-		// across messages within the same conversation.
+		// across messages within the same conversation. Only user-
+		// activated tags are saved — always-active, channel-pinned,
+		// and lens tags are loaded independently each Run.
 		if l.capTagStore != nil && convID != "" {
-			// Only save tags that aren't always-active or lenses —
-			// those are loaded independently each Run.
-			var userTags []string
-			for _, tag := range activeTags {
-				if cfg, ok := l.capTags[tag]; ok && cfg.AlwaysActive {
-					continue
-				}
-				userTags = append(userTags, tag)
-			}
+			userTags := scope.UserActivatedTags()
+			sort.Strings(userTags)
 			if err := l.capTagStore.SaveTags(convID, userTags); err != nil {
 				log.Warn("failed to save conversation capability tags",
 					"conversation_id", convID, "error", err)

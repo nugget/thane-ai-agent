@@ -107,6 +107,25 @@ func (s *capabilityScope) Snapshot() map[string]bool {
 	return snap
 }
 
+// UserActivatedTags returns tags that were activated by the model (not
+// always-active, not pinned by channel or lens). These are the tags
+// that should be persisted per conversation.
+func (s *capabilityScope) UserActivatedTags() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var tags []string
+	for tag := range s.active {
+		if s.pinned[tag] {
+			continue // lenses and channel-pinned
+		}
+		if cfg, ok := s.capTags[tag]; ok && cfg.AlwaysActive {
+			continue
+		}
+		tags = append(tags, tag)
+	}
+	return tags
+}
+
 // Request activates a capability tag. Both configured tags (with tools
 // and static context) and ad-hoc tags (KB articles, talents, live
 // providers only) are accepted.
