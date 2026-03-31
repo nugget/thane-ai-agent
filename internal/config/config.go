@@ -15,6 +15,12 @@
 // Protect the file with appropriate permissions (chmod 600). Environment
 // variable expansion is available as a convenience for container and
 // 12-factor deployments but is not the recommended default.
+//
+// To regenerate examples/config.example.yaml from source:
+//
+//	go generate ./internal/config
+//
+//go:generate go run ./gen/gencfg -srcdir . -out ../../examples/config.example.yaml
 package config
 
 import (
