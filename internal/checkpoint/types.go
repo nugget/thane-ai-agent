@@ -2,6 +2,7 @@
 package checkpoint
 
 import (
+	"fmt"
 	"strconv"
 	"time"
 
@@ -24,11 +25,15 @@ type SourceMessage struct {
 }
 
 // ConvertConversation builds a checkpoint Conversation from external
-// data, generating fresh UUIDs for each message.
-func ConvertConversation(id string, createdAt, updatedAt time.Time, msgs []SourceMessage) Conversation {
+// data, generating fresh UUIDs for each message. Returns an error if
+// UUID generation fails.
+func ConvertConversation(id string, createdAt, updatedAt time.Time, msgs []SourceMessage) (Conversation, error) {
 	converted := make([]Message, len(msgs))
 	for i, m := range msgs {
-		msgID, _ := uuid.NewV7()
+		msgID, err := uuid.NewV7()
+		if err != nil {
+			return Conversation{}, fmt.Errorf("generate message UUID: %w", err)
+		}
 		converted[i] = Message{
 			ID:        msgID,
 			Role:      m.Role,
@@ -41,7 +46,7 @@ func ConvertConversation(id string, createdAt, updatedAt time.Time, msgs []Sourc
 		CreatedAt: createdAt,
 		UpdatedAt: updatedAt,
 		Messages:  converted,
-	}
+	}, nil
 }
 
 // Trigger describes what caused a checkpoint to be created.

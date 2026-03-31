@@ -288,7 +288,9 @@ migrate-databases datadir="Thane/db":
         OLD_PATH="{{datadir}}/$old"
         if [ -f "$OLD_PATH" ]; then
             echo "Migrating $old → thane.db ..."
-            tables=$(sqlite3 "$OLD_PATH" ".tables")
+            # Filter out SQLite-internal tables (sqlite_sequence etc.) so they
+            # are never counted as skipped application tables.
+            tables=$(sqlite3 "$OLD_PATH" ".tables" | tr ' ' '\n' | grep -v '^sqlite_' | grep -v '^$')
             skipped=0
             for tbl in $tables; do
                 # Only migrate tables that exist in thane.db (schema created by app).
@@ -296,9 +298,10 @@ migrate-databases datadir="Thane/db":
                     # Build the intersection of columns present in both databases to
                     # handle schema evolution (AddColumn migrations add columns to
                     # thane.db that the old file doesn't have yet).
+                    # sort|uniq -d finds lines present in both sets (the intersection).
                     src_cols=$(sqlite3 "$OLD_PATH" "PRAGMA table_info($tbl);" | awk -F'|' '{print $2}')
                     dst_cols=$(sqlite3 "$DB"       "PRAGMA table_info($tbl);" | awk -F'|' '{print $2}')
-                    common_cols=$(printf '%s\n' $src_cols | grep -Fx "$(printf '%s\n' $dst_cols)" | tr '\n' ',' | sed 's/,$//')
+                    common_cols=$(printf '%s\n' $src_cols $dst_cols | sort | uniq -d | tr '\n' ',' | sed 's/,$//')
                     if [ -z "$common_cols" ]; then
                         echo "  Skipping $tbl — no common columns"
                         skipped=$((skipped + 1))

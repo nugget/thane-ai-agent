@@ -2454,7 +2454,11 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 						Timestamp: m.Timestamp,
 					}
 				}
-				result[i] = checkpoint.ConvertConversation(c.ID, c.CreatedAt, c.UpdatedAt, msgs)
+				conv, err := checkpoint.ConvertConversation(c.ID, c.CreatedAt, c.UpdatedAt, msgs)
+				if err != nil {
+					return nil, fmt.Errorf("convert conversation %s: %w", c.ID, err)
+				}
+				result[i] = conv
 			}
 			return result, nil
 		},
