@@ -72,8 +72,11 @@ import (
 // all deferred goroutines and persistent loops, then [App.Serve] to
 // start external servers and block until shutdown.
 //
-// All resources that require cleanup are tracked on the returned App;
-// cleanup happens in [App.shutdown].
+// All resources that require cleanup are registered on the closer
+// stack via [onClose] / [onCloseErr]. Workers register their stop
+// functions during [StartWorkers]. The LIFO ordering guarantees
+// workers stop before the resources they depend on are released.
+// See [App.shutdown] for the two-phase teardown sequence.
 func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io.Writer, llmClient llm.Client, ollamaClient *llm.OllamaClient) (*App, error) {
 	a := &App{
 		cfg:          cfg,
@@ -110,6 +113,7 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 					"dir", logDir, "error", err)
 			} else {
 				a.rotator = rotator
+				a.onCloseErr("rotator", rotator.Close)
 				logWriter = io.MultiWriter(stdout, rotator)
 			}
 		}
@@ -133,9 +137,10 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 				a.indexDB = nil
 			} else {
 				indexHandler := logging.NewIndexHandler(handler, a.indexDB, rotator)
-				// indexHandler and indexDB are closed in shutdown()
+				a.onCloseErr("index-db", a.indexDB.Close)
 				handler = indexHandler
 				a.indexHandler = indexHandler
+				a.onClose("index-handler", indexHandler.Close)
 			}
 		}
 
@@ -154,6 +159,7 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 			logger.Warn("failed to create content writer, content retention disabled", "error", cwErr)
 		} else {
 			a.contentWriter = cw
+			a.onCloseErr("content-writer", cw.Close)
 			logger.Info("content retention enabled",
 				"max_content_length", cfg.Logging.ContentMaxLength(),
 			)
@@ -277,6 +283,7 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 		return nil, fmt.Errorf("open memory database %s: %w", dbPath, err)
 	}
 	a.mem = mem
+	a.onCloseErr("memory", mem.Close)
 	logger.Info("memory database opened", "path", dbPath)
 
 	// --- Home Assistant client ---
@@ -376,6 +383,7 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 		return nil, fmt.Errorf("open archive store: %w", err)
 	}
 	a.archiveStore = archiveStore
+	a.onCloseErr("archive", archiveStore.Close)
 
 	// --- Working memory ---
 	// Persists free-form experiential context per conversation.
@@ -517,6 +525,7 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 		return nil, fmt.Errorf("open scheduler database: %w", err)
 	}
 	a.schedStore = schedStore
+	a.onCloseErr("scheduler-db", schedStore.Close)
 
 	// --- Operational state ---
 	// Generic KV store for persistent operational state (poller
@@ -557,6 +566,7 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 		if err := sched.Start(ctx); err != nil {
 			return fmt.Errorf("start scheduler: %w", err)
 		}
+		a.onClose("scheduler", sched.Stop)
 		return nil
 	})
 
@@ -716,6 +726,7 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 		return nil, fmt.Errorf("open fact store: %w", err)
 	}
 	a.factStore = factStore
+	a.onCloseErr("facts", factStore.Close)
 
 	factTools := knowledge.NewTools(factStore)
 	loop.Tools().SetFactTools(factTools)
@@ -729,6 +740,7 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 		return nil, fmt.Errorf("open contact store: %w", err)
 	}
 	a.contactStore = contactStore
+	a.onCloseErr("contacts", contactStore.Close)
 
 	// Wire summarizer → contact interaction tracking now that the
 	// contact store is available. Register the callback before Start()
@@ -738,6 +750,7 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 	})
 	a.deferWorker("summary-worker", func(ctx context.Context) error {
 		summaryWorker.Start(ctx)
+		a.onClose("summary-worker", summaryWorker.Stop)
 		return nil
 	})
 
@@ -783,6 +796,7 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 	if cfg.Email.Configured() {
 		emailMgr := email.NewManager(cfg.Email, logger)
 		a.emailMgr = emailMgr
+		a.onClose("email", emailMgr.Close)
 
 		emailTools := email.NewTools(emailMgr, &emailContactResolver{store: contactStore})
 		loop.Tools().SetEmailTools(emailTools)
@@ -969,6 +983,7 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 		if err != nil {
 			return nil, fmt.Errorf("init attachment store: %w", err)
 		}
+		a.onCloseErr("attachments", a.attachmentStore.Close)
 		logger.Info("attachment store initialized",
 			"db", attachDbPath,
 			"store_dir", storeDir,
@@ -1207,6 +1222,8 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 	a.mediaStore, err = media.NewMediaStore(cfg.Media.Analysis.DatabasePath, logger)
 	if err != nil {
 		logger.Warn("media engagement store unavailable; analysis will persist to vault only", "error", err)
+	} else if a.mediaStore != nil {
+		a.onCloseErr("media", a.mediaStore.Close)
 	}
 	vaultWriter := media.NewVaultWriter(logger)
 	analysisTools := media.NewAnalysisTools(
@@ -1325,6 +1342,8 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 		}
 
 		a.mcpClients = append(a.mcpClients, client)
+		mcpName := serverCfg.Name // capture for closure
+		a.onCloseErr("mcp-"+mcpName, client.Close)
 
 		connMgr.Watch(ctx, connwatch.WatcherConfig{
 			Name:    "mcp-" + serverCfg.Name,
@@ -1342,13 +1361,28 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 	// --- Signal message bridge ---
 	// Launches a native signal-cli jsonRpc subprocess and receives
 	// messages event-driven, routing them through the agent loop.
+	// Deferred to StartWorkers because Start() spawns a subprocess and
+	// the entire tool/bridge/notification wiring depends on it running.
+	//
+	// deferredTools tracks tool names that will be registered by deferred
+	// workers. The capability-tag validation (below) skips these names so
+	// it doesn't emit misleading "unregistered tool" warnings for tools
+	// that are simply not yet started.
+	deferredTools := make(map[string]bool)
 	if cfg.Signal.Configured() {
+		deferredTools["signal_send_message"] = true
+		deferredTools["signal_send_reaction"] = true
+
 		signalArgs := append([]string{"-a", cfg.Signal.Account, "jsonRpc"}, cfg.Signal.Args...)
 		signalClient := sigcli.NewClient(cfg.Signal.Command, signalArgs, logger)
-		if err := signalClient.Start(ctx); err != nil {
-			logger.Error("signal-cli start failed", "error", err)
-		} else {
+
+		a.deferWorker("signal", func(ctx context.Context) error {
+			if err := signalClient.Start(ctx); err != nil {
+				logger.Error("signal-cli start failed", "error", err)
+				return nil // non-fatal: system works without Signal
+			}
 			a.signalClient = signalClient
+			a.onCloseErr("signal", signalClient.Close)
 
 			// Register signal_send_message tool so the agent can
 			// send messages during its tool loop.
@@ -1512,7 +1546,8 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 				"rate_limit", cfg.Signal.RateLimitPerMinute,
 				"session_idle_timeout", idleTimeout,
 			)
-		}
+			return nil
+		})
 	}
 
 	// --- Delegation ---
@@ -1627,9 +1662,11 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 		// Warn about tools referenced in config but not registered.
 		// This catches typos, missing MCP servers, and tools gated by config
 		// (e.g., shell_exec disabled). Non-fatal: skip the missing tool.
+		// Tools in deferredTools are registered by StartWorkers and are
+		// expected to be absent during New().
 		for tag, tagCfg := range cfg.CapabilityTags {
 			for _, toolName := range tagCfg.Tools {
-				if loop.Tools().Get(toolName) == nil {
+				if loop.Tools().Get(toolName) == nil && !deferredTools[toolName] {
 					logger.Warn("capability tag references unregistered tool",
 						"tag", tag, "tool", toolName)
 				}
@@ -2363,19 +2400,37 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 			})
 		}
 
-		// Pass the long-lived server context as the lifecycle context
-		// for the MQTT ConnectionManager. A short-lived context here
-		// would kill the connection as soon as it expired (#572).
-		// The initial connection await has its own internal timeout.
-		err = mqttPub.Connect(ctx)
-		if err != nil {
-			logger.Error("mqtt publisher connection failed", "error", err)
-		} else {
+		// Defer MQTT connection, initial publish, and publisher loop
+		// to StartWorkers. The publisher object and message handler are
+		// already wired above; this just activates the network connection.
+		a.deferWorker("mqtt-connect", func(ctx context.Context) error {
+			// Pass the long-lived server context as the lifecycle context
+			// for the MQTT ConnectionManager. A short-lived context here
+			// would kill the connection as soon as it expired (#572).
+			// The initial connection await has its own internal timeout.
+			if err := mqttPub.Connect(ctx); err != nil {
+				logger.Error("mqtt publisher connection failed", "error", err)
+				return nil // non-fatal: system works without MQTT
+			}
+
+			// Register with connwatch after a successful Connect so the
+			// health probe doesn't fire before the publisher is ready.
+			connMgr.Watch(ctx, connwatch.WatcherConfig{
+				Name: "mqtt",
+				Probe: func(pCtx context.Context) error {
+					awaitCtx, awaitCancel := context.WithTimeout(pCtx, 2*time.Second)
+					defer awaitCancel()
+					return mqttPub.AwaitConnection(awaitCtx)
+				},
+				Backoff: connwatch.DefaultBackoffConfig(),
+				Logger:  logger,
+			})
+
 			// Publish immediately on connect, then let the loop handle the schedule.
 			mqttPub.PublishStates(ctx)
 
 			mqttInterval := mqttPub.PublishInterval()
-			mqttLoopCfg := looppkg.Config{
+			if _, err := loopRegistry.SpawnLoop(ctx, looppkg.Config{
 				Name:         "mqtt-publisher",
 				SleepMin:     mqttInterval,
 				SleepMax:     mqttInterval,
@@ -2389,29 +2444,19 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 					"subsystem": "mqtt",
 					"category":  "publisher",
 				},
-			}
-			mqttLoopDeps := looppkg.Deps{
+			}, looppkg.Deps{
 				Logger:   logger,
 				EventBus: eventBus,
+			}); err != nil {
+				return fmt.Errorf("spawn mqtt-publisher loop: %w", err)
 			}
-			a.deferWorker("mqtt-publisher", func(ctx context.Context) error {
-				if _, err := loopRegistry.SpawnLoop(ctx, mqttLoopCfg, mqttLoopDeps); err != nil {
-					return fmt.Errorf("spawn mqtt-publisher loop: %w", err)
-				}
-				return nil
-			})
-		}
 
-		// Register with connwatch for health endpoint visibility.
-		connMgr.Watch(ctx, connwatch.WatcherConfig{
-			Name: "mqtt",
-			Probe: func(pCtx context.Context) error {
-				awaitCtx, awaitCancel := context.WithTimeout(pCtx, 2*time.Second)
-				defer awaitCancel()
-				return mqttPub.AwaitConnection(awaitCtx)
-			},
-			Backoff: connwatch.DefaultBackoffConfig(),
-			Logger:  logger,
+			logger.Info("mqtt connected",
+				"broker", cfg.MQTT.Broker,
+				"device_name", cfg.MQTT.DeviceName,
+				"interval", cfg.MQTT.PublishIntervalSec,
+			)
+			return nil
 		})
 
 		logger.Info("mqtt publishing enabled",

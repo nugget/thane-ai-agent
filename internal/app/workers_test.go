@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"testing"
 )
@@ -89,6 +90,91 @@ func TestStartWorkers(t *testing.T) {
 				t.Error("pendingWorkers not cleared after successful StartWorkers")
 			}
 		})
+	}
+}
+
+func TestCloserStack_LIFO_order(t *testing.T) {
+	t.Parallel()
+
+	var order []string
+	a := &App{logger: slog.Default()}
+	a.onClose("first", func() { order = append(order, "first") })
+	a.onClose("second", func() { order = append(order, "second") })
+	a.onClose("third", func() { order = append(order, "third") })
+
+	a.shutdown()
+
+	want := []string{"third", "second", "first"}
+	if len(order) != len(want) {
+		t.Fatalf("got %d closers, want %d", len(order), len(want))
+	}
+	for i, name := range want {
+		if order[i] != name {
+			t.Errorf("closer[%d] = %q, want %q", i, order[i], name)
+		}
+	}
+
+	// Verify the stack was cleared.
+	if a.closers != nil {
+		t.Error("closers not cleared after shutdown")
+	}
+}
+
+func TestCloserStack_onCloseErr_logs_errors(t *testing.T) {
+	t.Parallel()
+
+	var order []string
+	a := &App{logger: slog.Default()}
+	a.onCloseErr("failing", func() error {
+		order = append(order, "failing")
+		return errors.New("close error")
+	})
+	a.onClose("ok", func() { order = append(order, "ok") })
+
+	// Should not panic, even if the closer returns an error.
+	a.shutdown()
+
+	want := []string{"ok", "failing"}
+	if len(order) != len(want) {
+		t.Fatalf("got %d closers, want %d", len(order), len(want))
+	}
+	for i, name := range want {
+		if order[i] != name {
+			t.Errorf("closer[%d] = %q, want %q", i, order[i], name)
+		}
+	}
+}
+
+func TestStartWorkers_registers_closers(t *testing.T) {
+	t.Parallel()
+
+	var order []string
+	a := &App{logger: slog.Default()}
+
+	// Simulate a resource registered during New().
+	a.onClose("resource", func() { order = append(order, "resource") })
+
+	// Worker registers its own closer after starting.
+	a.deferWorker("worker", func(ctx context.Context) error {
+		a.onClose("worker-stop", func() { order = append(order, "worker-stop") })
+		return nil
+	})
+
+	if err := a.StartWorkers(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	a.shutdown()
+
+	// LIFO: worker-stop (registered last) runs before resource (registered first).
+	want := []string{"worker-stop", "resource"}
+	if len(order) != len(want) {
+		t.Fatalf("got %v, want %v", order, want)
+	}
+	for i, name := range want {
+		if order[i] != name {
+			t.Errorf("closer[%d] = %q, want %q", i, order[i], name)
+		}
 	}
 }
 

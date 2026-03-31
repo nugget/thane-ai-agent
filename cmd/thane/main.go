@@ -299,13 +299,16 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// goroutines started during initialization inherit it and stop cleanly
 	// on SIGINT/SIGTERM.
 	ctx, cancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
-	defer cancel()
 
 	a, err := app.New(ctx, cfg, logger, stdout, llmClient, ollamaClient)
 	if err != nil {
+		cancel()
 		return err
 	}
+	// LIFO ordering: cancel fires first (stops goroutines), then Close
+	// tears down the resources they were using.
 	defer a.Close()
+	defer cancel()
 
 	// Log with the fully-configured logger (file handler, index handler,
 	// correct level/format) so this line is captured in rotated logs.

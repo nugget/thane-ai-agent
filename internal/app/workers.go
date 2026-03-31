@@ -5,6 +5,34 @@ import (
 	"fmt"
 )
 
+// closer pairs a descriptive name with a cleanup function. Closers
+// are registered during [New] (for resources) and during [StartWorkers]
+// (for workers) and drained in LIFO order by [App.shutdown].
+type closer struct {
+	name string
+	fn   func()
+}
+
+// onClose registers a named cleanup function on the closer stack.
+// Functions are called in LIFO order during [App.shutdown], so
+// resources registered first (in [New]) are released last — after
+// workers registered later (in [StartWorkers]) have stopped.
+func (a *App) onClose(name string, fn func()) {
+	a.closers = append(a.closers, closer{name: name, fn: fn})
+}
+
+// onCloseErr is like [onClose] but accepts a func() error, logging
+// any error at Warn level. Most resource Close methods return an
+// error, but on shutdown we can only log — there is no caller to
+// propagate to.
+func (a *App) onCloseErr(name string, fn func() error) {
+	a.closers = append(a.closers, closer{name: name, fn: func() {
+		if err := fn(); err != nil {
+			a.logger.Warn("close failed", "name", name, "error", err)
+		}
+	}})
+}
+
 // pendingWorker pairs a descriptive name with its start function so
 // errors from [StartWorkers] identify the failing subsystem.
 type pendingWorker struct {

@@ -151,6 +151,12 @@ type App struct {
 	// Deferred worker starts, populated by New(), executed by StartWorkers().
 	pendingWorkers []pendingWorker
 
+	// closers is a LIFO stack of cleanup functions registered by New()
+	// (resource closers) and StartWorkers() (worker stop functions).
+	// shutdown() drains it in reverse order after Phase 1 cross-cutting
+	// stops (loopRegistry, connMgr).
+	closers []closer
+
 	// closeOnce ensures shutdown runs exactly once across Close and Serve.
 	closeOnce sync.Once
 }
