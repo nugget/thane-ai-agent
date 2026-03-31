@@ -1342,12 +1342,17 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 	// --- Signal message bridge ---
 	// Launches a native signal-cli jsonRpc subprocess and receives
 	// messages event-driven, routing them through the agent loop.
+	// Deferred to StartWorkers because Start() spawns a subprocess and
+	// the entire tool/bridge/notification wiring depends on it running.
 	if cfg.Signal.Configured() {
 		signalArgs := append([]string{"-a", cfg.Signal.Account, "jsonRpc"}, cfg.Signal.Args...)
 		signalClient := sigcli.NewClient(cfg.Signal.Command, signalArgs, logger)
-		if err := signalClient.Start(ctx); err != nil {
-			logger.Error("signal-cli start failed", "error", err)
-		} else {
+
+		a.deferWorker("signal", func(ctx context.Context) error {
+			if err := signalClient.Start(ctx); err != nil {
+				logger.Error("signal-cli start failed", "error", err)
+				return nil // non-fatal: system works without Signal
+			}
 			a.signalClient = signalClient
 
 			// Register signal_send_message tool so the agent can
@@ -1512,7 +1517,8 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 				"rate_limit", cfg.Signal.RateLimitPerMinute,
 				"session_idle_timeout", idleTimeout,
 			)
-		}
+			return nil
+		})
 	}
 
 	// --- Delegation ---
@@ -2363,19 +2369,24 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 			})
 		}
 
-		// Pass the long-lived server context as the lifecycle context
-		// for the MQTT ConnectionManager. A short-lived context here
-		// would kill the connection as soon as it expired (#572).
-		// The initial connection await has its own internal timeout.
-		err = mqttPub.Connect(ctx)
-		if err != nil {
-			logger.Error("mqtt publisher connection failed", "error", err)
-		} else {
+		// Defer MQTT connection, initial publish, and publisher loop
+		// to StartWorkers. The publisher object and message handler are
+		// already wired above; this just activates the network connection.
+		a.deferWorker("mqtt-connect", func(ctx context.Context) error {
+			// Pass the long-lived server context as the lifecycle context
+			// for the MQTT ConnectionManager. A short-lived context here
+			// would kill the connection as soon as it expired (#572).
+			// The initial connection await has its own internal timeout.
+			if err := mqttPub.Connect(ctx); err != nil {
+				logger.Error("mqtt publisher connection failed", "error", err)
+				return nil // non-fatal: system works without MQTT
+			}
+
 			// Publish immediately on connect, then let the loop handle the schedule.
 			mqttPub.PublishStates(ctx)
 
 			mqttInterval := mqttPub.PublishInterval()
-			mqttLoopCfg := looppkg.Config{
+			if _, err := loopRegistry.SpawnLoop(ctx, looppkg.Config{
 				Name:         "mqtt-publisher",
 				SleepMin:     mqttInterval,
 				SleepMax:     mqttInterval,
@@ -2389,18 +2400,20 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 					"subsystem": "mqtt",
 					"category":  "publisher",
 				},
-			}
-			mqttLoopDeps := looppkg.Deps{
+			}, looppkg.Deps{
 				Logger:   logger,
 				EventBus: eventBus,
+			}); err != nil {
+				return fmt.Errorf("spawn mqtt-publisher loop: %w", err)
 			}
-			a.deferWorker("mqtt-publisher", func(ctx context.Context) error {
-				if _, err := loopRegistry.SpawnLoop(ctx, mqttLoopCfg, mqttLoopDeps); err != nil {
-					return fmt.Errorf("spawn mqtt-publisher loop: %w", err)
-				}
-				return nil
-			})
-		}
+
+			logger.Info("mqtt connected",
+				"broker", cfg.MQTT.Broker,
+				"device_name", cfg.MQTT.DeviceName,
+				"interval", cfg.MQTT.PublishIntervalSec,
+			)
+			return nil
+		})
 
 		// Register with connwatch for health endpoint visibility.
 		connMgr.Watch(ctx, connwatch.WatcherConfig{
