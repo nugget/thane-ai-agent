@@ -14,6 +14,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/knowledge"
 	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
 	"github.com/nugget/thane-ai-agent/internal/memory"
+	"github.com/nugget/thane-ai-agent/internal/notifications"
 	"github.com/nugget/thane-ai-agent/internal/scheduler"
 	"github.com/nugget/thane-ai-agent/internal/tools"
 	"github.com/nugget/thane-ai-agent/internal/unifi"
@@ -38,6 +39,15 @@ func (a *App) initAwareness(s *newState) error {
 		Hints:  tools.HintsFromContext,
 		Logger: logger,
 	}))
+
+	// Notification history — injects recent sends (fire-and-forget and
+	// actionable with HITL status) so agents avoid duplicate notifications.
+	if a.notifRecords != nil {
+		contextProvider.Add(notifications.NewHistoryProvider(notifications.HistoryProviderConfig{
+			Records: a.notifRecords,
+			Logger:  logger,
+		}))
+	}
 
 	episodicProvider := memory.NewEpisodicProvider(a.archiveStore, logger, memory.EpisodicConfig{
 		Timezone:          cfg.Timezone,

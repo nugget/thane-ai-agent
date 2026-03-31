@@ -105,6 +105,7 @@ func (a *App) initChannels(s *newState) error {
 			loops: &channelLoopAdapter{registry: a.loopRegistry},
 			store: contactStore,
 		})
+		a.notifRouter.SetSourceFunc(tools.NotificationSource)
 		a.loop.Tools().SetNotificationRouter(a.notifRouter)
 		a.logger.Info("notification router initialized", "providers", "ha_push")
 	}

@@ -27,17 +27,25 @@ type ChannelActivitySource interface {
 	ActiveChannels() []ChannelActivity
 }
 
+// SourceFunc extracts a human-readable source identifier from the
+// request context. The returned string identifies the originating
+// loop or conversation (e.g., "metacognitive", "signal/+15125551234").
+// Used by the router to populate the Source field on notification
+// records for history awareness.
+type SourceFunc func(ctx context.Context) string
+
 // NotificationRouter selects a notification provider based on contact
 // facts and channel activity, then orchestrates delivery for both
 // fire-and-forget and actionable notifications. It is the single
 // entry point for the provider-agnostic send_notification and
 // request_human_decision tools.
 type NotificationRouter struct {
-	providers map[string]NotificationProvider
-	contacts  ContactResolver
-	records   *RecordStore
-	activity  ChannelActivitySource
-	logger    *slog.Logger
+	providers  map[string]NotificationProvider
+	contacts   ContactResolver
+	records    *RecordStore
+	activity   ChannelActivitySource
+	sourceFunc SourceFunc
+	logger     *slog.Logger
 }
 
 // NewNotificationRouter creates a router with contact resolution and
@@ -59,6 +67,13 @@ func NewNotificationRouter(contacts ContactResolver, records *RecordStore, logge
 // [Route] prefers providers with recent activity for the recipient.
 func (r *NotificationRouter) SetActivitySource(src ChannelActivitySource) {
 	r.activity = src
+}
+
+// SetSourceFunc configures the function that extracts a source
+// identifier from the request context for notification history
+// logging.
+func (r *NotificationRouter) SetSourceFunc(fn SourceFunc) {
+	r.sourceFunc = fn
 }
 
 // RegisterProvider adds a notification provider to the router. Nil
@@ -145,14 +160,57 @@ func (r *NotificationRouter) Route(recipient string) (NotificationProvider, erro
 	return nil, fmt.Errorf("no notification provider available for contact %q", recipient)
 }
 
+// source returns a human-readable source identifier from the context,
+// or "unknown" if no source function is configured.
+func (r *NotificationRouter) source(ctx context.Context) string {
+	if r.sourceFunc != nil {
+		if s := r.sourceFunc(ctx); s != "" {
+			return s
+		}
+	}
+	return "agent"
+}
+
 // SendNotification delivers a fire-and-forget notification via the
-// appropriate provider for the recipient.
+// appropriate provider for the recipient. On success, a record is
+// logged for notification history awareness.
 func (r *NotificationRouter) SendNotification(ctx context.Context, req NotificationRequest) error {
 	provider, err := r.Route(req.Recipient)
 	if err != nil {
 		return err
 	}
-	return provider.Send(ctx, req)
+	if err := provider.Send(ctx, req); err != nil {
+		return err
+	}
+	r.logFireAndForget(ctx, provider.Name(), req)
+	return nil
+}
+
+// logFireAndForget records a fire-and-forget notification for history
+// awareness. Errors are logged but not propagated — delivery already
+// succeeded and we don't want logging failures to surface as tool errors.
+func (r *NotificationRouter) logFireAndForget(ctx context.Context, channel string, req NotificationRequest) {
+	if r.records == nil {
+		return
+	}
+	u, err := uuid.NewV7()
+	if err != nil {
+		r.logger.Warn("failed to generate notification log ID", "error", err)
+		return
+	}
+	now := time.Now().UTC()
+	if err := r.records.Log(&Record{
+		RequestID: u.String(),
+		Recipient: req.Recipient,
+		Channel:   channel,
+		Source:    r.source(ctx),
+		Kind:      KindFireAndForget,
+		Title:     req.Title,
+		Message:   req.Message,
+		CreatedAt: now,
+	}); err != nil {
+		r.logger.Warn("failed to log notification", "error", err)
+	}
 }
 
 // SendActionable delivers an actionable notification and creates a
@@ -217,6 +275,11 @@ func (r *NotificationRouter) SendActionable(ctx context.Context, req ActionableR
 		TimeoutAction:      req.TimeoutAction,
 		CreatedAt:          now,
 		ExpiresAt:          now.Add(req.Timeout),
+		Channel:            deliveredVia.Name(),
+		Source:             r.source(ctx),
+		Kind:               KindActionable,
+		Title:              req.Title,
+		Message:            req.Message,
 	}
 	if err := r.records.Create(rec); err != nil {
 		return "", fmt.Errorf("create notification record: %w", err)

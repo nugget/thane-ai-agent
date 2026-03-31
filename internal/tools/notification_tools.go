@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/nugget/thane-ai-agent/internal/logging"
 	"github.com/nugget/thane-ai-agent/internal/notifications"
 )
 
@@ -115,6 +116,7 @@ func (r *Registry) handleHANotify(ctx context.Context, args map[string]any) (str
 	if err := r.notifier.Send(ctx, n); err != nil {
 		return "", err
 	}
+	r.logHANotify(ctx, n)
 	return fmt.Sprintf("Notification sent to %s", recipient), nil
 }
 
@@ -172,6 +174,11 @@ func (r *Registry) handleActionableNotify(ctx context.Context, n notifications.N
 		TimeoutAction:      timeoutAction,
 		CreatedAt:          now,
 		ExpiresAt:          now.Add(timeout),
+		Channel:            "ha_push",
+		Source:             NotificationSource(ctx),
+		Kind:               notifications.KindActionable,
+		Title:              n.Title,
+		Message:            n.Message,
 	}
 	if err := r.notifRecords.Create(rec); err != nil {
 		return "", fmt.Errorf("create notification record: %w", err)
@@ -508,4 +515,54 @@ func (r *Registry) registerResolveActionable() {
 				requestID, actionID), nil
 		},
 	})
+}
+
+// NotificationSource builds a source identifier from the request
+// context for notification history logging. Returns a string like
+// "metacognitive", "signal/+15125551234", or "agent".
+func NotificationSource(ctx context.Context) string {
+	hints := HintsFromContext(ctx)
+	if hints == nil {
+		return "agent"
+	}
+	source := hints["source"]
+	if source == "" {
+		source = hints["channel"]
+	}
+	if source == "" {
+		return "agent"
+	}
+	// For per-sender channels, append the sender identity.
+	if sender := hints["sender"]; sender != "" {
+		return source + "/" + sender
+	}
+	return source
+}
+
+// logHANotify records a fire-and-forget ha_notify send for history
+// awareness. Errors are logged but not propagated — delivery already
+// succeeded and logging failures should not surface as tool errors.
+func (r *Registry) logHANotify(ctx context.Context, n notifications.Notification) {
+	if r.notifRecords == nil {
+		return
+	}
+	logger := logging.Logger(ctx)
+	u, err := uuid.NewV7()
+	if err != nil {
+		logger.Warn("failed to generate notification log ID", "error", err)
+		return
+	}
+	now := time.Now().UTC()
+	if err := r.notifRecords.Log(&notifications.Record{
+		RequestID: u.String(),
+		Recipient: n.Recipient,
+		Channel:   "ha_push",
+		Source:    NotificationSource(ctx),
+		Kind:      notifications.KindFireAndForget,
+		Title:     n.Title,
+		Message:   n.Message,
+		CreatedAt: now,
+	}); err != nil {
+		logger.Warn("failed to log ha_notify for history", "error", err)
+	}
 }
