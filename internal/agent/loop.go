@@ -218,6 +218,7 @@ type Loop struct {
 	capTags       map[string]config.CapabilityTagConfig // tag definitions from config (static)
 	parsedTalents []talents.Talent                      // pre-loaded talent structs for tag filtering (static)
 	channelTags   map[string][]string                   // channel name → tag names (static)
+	capTagStore   CapabilityTagStore                    // persists activated tags per conversation (nil = no persistence)
 	lensProvider  func() []string                       // returns active global lenses (nil = none)
 
 	// lastRunTags is a snapshot of the most recent Run()'s active
@@ -428,6 +429,14 @@ func (l *Loop) SetChannelTags(ct map[string][]string) {
 // scope alongside always-active and channel-pinned tags.
 func (l *Loop) SetLensProvider(fn func() []string) {
 	l.lensProvider = fn
+}
+
+// SetCapabilityTagStore configures persistent storage for per-conversation
+// capability tags. When set, tags activated via activate_capability are
+// saved at the end of each Run and restored at the start of the next Run
+// for the same conversation.
+func (l *Loop) SetCapabilityTagStore(store CapabilityTagStore) {
+	l.capTagStore = store
 }
 
 // SetHAInject configures the HA entity state resolver for tag context
@@ -1000,7 +1009,18 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		scope = newCapabilityScope(l.capTags, lenses)
 		// Seed tags carried forward from previous loop iterations.
 		for _, tag := range req.SeedTags {
-			_ = scope.Request(tag) // cannot fail for ad-hoc tags
+			_ = scope.Request(tag)
+		}
+		// Restore conversation-persisted capability tags.
+		if l.capTagStore != nil && convID != "" {
+			if saved, err := l.capTagStore.LoadTags(convID); err == nil {
+				for _, tag := range saved {
+					_ = scope.Request(tag)
+				}
+			} else {
+				log.Warn("failed to load conversation capability tags",
+					"conversation_id", convID, "error", err)
+			}
 		}
 		if source := req.Hints["source"]; source != "" {
 			if pinnedTags, ok := l.channelTags[source]; ok {
@@ -1475,6 +1495,24 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			activeTags = append(activeTags, tag)
 		}
 		sort.Strings(activeTags)
+
+		// Persist conversation-scoped capability tags so they survive
+		// across messages within the same conversation.
+		if l.capTagStore != nil && convID != "" {
+			// Only save tags that aren't always-active or lenses —
+			// those are loaded independently each Run.
+			var userTags []string
+			for _, tag := range activeTags {
+				if cfg, ok := l.capTags[tag]; ok && cfg.AlwaysActive {
+					continue
+				}
+				userTags = append(userTags, tag)
+			}
+			if err := l.capTagStore.SaveTags(convID, userTags); err != nil {
+				log.Warn("failed to save conversation capability tags",
+					"conversation_id", convID, "error", err)
+			}
+		}
 	}
 
 	resp = &Response{

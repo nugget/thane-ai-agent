@@ -1950,6 +1950,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		loop.SetCapabilityTags(cfg.CapabilityTags, parsedTalents)
 		loop.Tools().SetCapabilityTools(loop, manifest)
 		loop.SetTagContextAssembler(tagCtxAssembler)
+		loop.SetCapabilityTagStore(agent.NewOpstateCapabilityTagStore(opStore))
 
 		// Behavioral lenses are wired below (outside this block)
 		// so they work even without capability_tags configured.

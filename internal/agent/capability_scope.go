@@ -16,6 +16,18 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/config"
 )
 
+// CapabilityTagStore persists activated capability tags per conversation.
+// Tags activated via activate_capability are saved at the end of each
+// Run and restored at the start of the next Run for the same conversation.
+type CapabilityTagStore interface {
+	// LoadTags returns the previously activated tags for a conversation.
+	// Returns nil on missing/empty.
+	LoadTags(conversationID string) ([]string, error)
+	// SaveTags persists the active tags for a conversation. Pass nil
+	// or empty to clear.
+	SaveTags(conversationID string, tags []string) error
+}
+
 type capScopeKey struct{}
 
 // withCapabilityScope stores the scope in ctx.
