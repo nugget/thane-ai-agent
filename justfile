@@ -82,9 +82,20 @@ config-generate-check:
     go generate ./internal/config/...
     @test -z "$(git diff --name-only examples/config.example.yaml)" || (echo "examples/config.example.yaml is stale — run 'go generate ./internal/config/...' and commit the result" && git diff examples/config.example.yaml && exit 1)
 
+# Architecture metrics report — shows package count, interface count, large files, Set* mutators, and database.Open call sites vs baselines.
+[group('test')]
+architecture:
+    @bash scripts/architecture.sh report
+
+# Architecture guardrail check — fails if any metric in scripts/architecture.baseline is exceeded.
+# Run 'scripts/architecture.sh update' to advance a baseline when the growth is intentional.
+[group('test')]
+architecture-check:
+    @bash scripts/architecture.sh check
+
 # CI: format check, lint, and tests
 [group('test')]
-ci: fmt-check mod-tidy-check config-generate-check lint test
+ci: fmt-check mod-tidy-check config-generate-check architecture-check lint test
 
 # --- Install ---
 
