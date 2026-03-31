@@ -282,6 +282,32 @@ migrate-databases datadir="Thane/db":
         exit 1
     fi
     migrated=0
+
+    # migrate_table SRC_DB SRC_TABLE DST_TABLE
+    # Copies rows from SRC_TABLE in SRC_DB into DST_TABLE in thane.db using
+    # the column intersection (handles AddColumn schema drift). Prints a
+    # summary line. Returns 1 if the destination table is absent.
+    migrate_table() {
+        src_db=$1 src_tbl=$2 dst_tbl=$3
+        if ! sqlite3 "$DB" "SELECT name FROM sqlite_master WHERE type='table' AND name='$dst_tbl';" | grep -q "$dst_tbl"; then
+            return 1
+        fi
+        src_cols=$(sqlite3 "$src_db" "PRAGMA table_info($src_tbl);" | awk -F'|' '{print $2}')
+        dst_cols=$(sqlite3 "$DB"     "PRAGMA table_info($dst_tbl);"  | awk -F'|' '{print $2}')
+        common_cols=$(printf '%s\n' $src_cols $dst_cols | sort | uniq -d | tr '\n' ',' | sed 's/,$//')
+        if [ -z "$common_cols" ]; then
+            echo "  Skipping $src_tbl → $dst_tbl — no common columns"
+            return 1
+        fi
+        count=$(sqlite3 "$src_db" "SELECT COUNT(*) FROM $src_tbl;")
+        sqlite3 "$DB" "ATTACH '$src_db' AS old; INSERT OR IGNORE INTO $dst_tbl ($common_cols) SELECT $common_cols FROM old.$src_tbl; DETACH old;"
+        if [ "$src_tbl" = "$dst_tbl" ]; then
+            echo "  $src_tbl ($count rows)"
+        else
+            echo "  $src_tbl → $dst_tbl ($count rows)"
+        fi
+    }
+
     # archive.db is last: at ~300MB it is the largest migration and benefits
     # from the smaller stores being committed first.
     for old in opstate.db anticipations.db watchlist.db checkpoints.db usage.db notifications.db archive.db; do
@@ -293,25 +319,28 @@ migrate-databases datadir="Thane/db":
             tables=$(sqlite3 "$OLD_PATH" ".tables" | tr ' ' '\n' | grep -v '^sqlite_' | grep -v '^$')
             skipped=0
             for tbl in $tables; do
-                # Only migrate tables that exist in thane.db (schema created by app).
-                if sqlite3 "$DB" "SELECT name FROM sqlite_master WHERE type='table' AND name='$tbl';" | grep -q "$tbl"; then
-                    # Build the intersection of columns present in both databases to
-                    # handle schema evolution (AddColumn migrations add columns to
-                    # thane.db that the old file doesn't have yet).
-                    # sort|uniq -d finds lines present in both sets (the intersection).
-                    src_cols=$(sqlite3 "$OLD_PATH" "PRAGMA table_info($tbl);" | awk -F'|' '{print $2}')
-                    dst_cols=$(sqlite3 "$DB"       "PRAGMA table_info($tbl);" | awk -F'|' '{print $2}')
-                    common_cols=$(printf '%s\n' $src_cols $dst_cols | sort | uniq -d | tr '\n' ',' | sed 's/,$//')
-                    if [ -z "$common_cols" ]; then
-                        echo "  Skipping $tbl — no common columns"
-                        skipped=$((skipped + 1))
-                        continue
-                    fi
-                    count=$(sqlite3 "$OLD_PATH" "SELECT COUNT(*) FROM $tbl;")
-                    sqlite3 "$DB" "ATTACH '$OLD_PATH' AS old; INSERT OR IGNORE INTO $tbl ($common_cols) SELECT $common_cols FROM old.$tbl; DETACH old;"
-                    echo "  $tbl ($count rows, columns: $common_cols)"
-                else
-                    echo "  Skipping $tbl — not present in thane.db schema"
+                # Benign skips: FTS virtual tables (rebuilt by app from the
+                # messages table) and tables already absorbed elsewhere.
+                # These are not counted against the skip threshold.
+                case "$tbl" in
+                    archive_fts|archive_fts_config|archive_fts_data|archive_fts_docsize|archive_fts_idx)
+                        echo "  Skipping $tbl (FTS virtual table — will be rebuilt by app)"
+                        continue ;;
+                    delegations)
+                        echo "  Skipping $tbl (absorbed into sessions.metadata in #446)"
+                        continue ;;
+                esac
+
+                # Explicit renames: table existed under a different name in
+                # the legacy file-based schema.
+                dst_tbl="$tbl"
+                case "$tbl" in
+                    archive_messages)   dst_tbl="messages" ;;
+                    archive_tool_calls) dst_tbl="tool_calls" ;;
+                esac
+
+                if ! migrate_table "$OLD_PATH" "$tbl" "$dst_tbl"; then
+                    echo "  Skipping $tbl — destination $dst_tbl not present in thane.db"
                     skipped=$((skipped + 1))
                 fi
             done
