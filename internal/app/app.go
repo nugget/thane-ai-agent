@@ -8,10 +8,10 @@
 package app
 
 import (
-	"context"
 	"database/sql"
 	"io"
 	"log/slog"
+	"sync"
 
 	"github.com/nugget/thane-ai-agent/internal/agent"
 	"github.com/nugget/thane-ai-agent/internal/attachments"
@@ -149,5 +149,8 @@ type App struct {
 	signalBridge *sigcli.Bridge
 
 	// Deferred worker starts, populated by New(), executed by StartWorkers().
-	pendingWorkers []func(ctx context.Context) error
+	pendingWorkers []pendingWorker
+
+	// closeOnce ensures shutdown runs exactly once across Close and Serve.
+	closeOnce sync.Once
 }

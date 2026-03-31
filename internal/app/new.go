@@ -169,7 +169,7 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 	// the index database is available.
 	if a.indexDB != nil {
 		if retention := cfg.Logging.RetentionDaysDuration(); retention > 0 {
-			a.deferWorker(func(ctx context.Context) error {
+			a.deferWorker("log-index-pruner", func(ctx context.Context) error {
 				go func() {
 					ticker := time.NewTicker(24 * time.Hour)
 					defer ticker.Stop()
@@ -200,7 +200,7 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 			if archiveDur := cfg.Logging.ContentArchiveDuration(); archiveDur > 0 && a.contentWriter != nil {
 				archiveDir := cfg.Logging.ContentArchiveDirPath(logDir)
 				archiver := logging.NewArchiver(a.indexDB, archiveDir, logger)
-				a.deferWorker(func(ctx context.Context) error {
+				a.deferWorker("content-archiver", func(ctx context.Context) error {
 					go func() {
 						ticker := time.NewTicker(24 * time.Hour)
 						defer ticker.Stop()
@@ -259,7 +259,7 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 
 	// --- Demo loops (debug) ---
 	if cfg.Debug.DemoLoops {
-		a.deferWorker(func(ctx context.Context) error {
+		a.deferWorker("demo-loops", func(ctx context.Context) error {
 			if err := looppkg.SpawnDemoLoops(ctx, loopRegistry, eventBus, logger); err != nil {
 				return fmt.Errorf("spawn demo loops: %w", err)
 			}
@@ -553,7 +553,7 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 
 	sched := scheduler.New(logger, schedStore, executeTask)
 	a.sched = sched
-	a.deferWorker(func(ctx context.Context) error {
+	a.deferWorker("scheduler", func(ctx context.Context) error {
 		if err := sched.Start(ctx); err != nil {
 			return fmt.Errorf("start scheduler: %w", err)
 		}
@@ -736,7 +736,7 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 	summaryWorker.SetInteractionCallback(func(conversationID, sessionID string, endedAt time.Time, topics []string) {
 		updateContactInteraction(contactStore, logger, conversationID, sessionID, endedAt, topics)
 	})
-	a.deferWorker(func(ctx context.Context) error {
+	a.deferWorker("summary-worker", func(ctx context.Context) error {
 		summaryWorker.Start(ctx)
 		return nil
 	})
@@ -821,7 +821,7 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 				Logger:   logger,
 				EventBus: eventBus,
 			}
-			a.deferWorker(func(ctx context.Context) error {
+			a.deferWorker("email-poller", func(ctx context.Context) error {
 				if _, err := loopRegistry.SpawnLoop(ctx, loopCfg, loopDeps); err != nil {
 					return fmt.Errorf("spawn email poller loop: %w", err)
 				}
@@ -1237,7 +1237,7 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 			Logger:   logger,
 			EventBus: eventBus,
 		}
-		a.deferWorker(func(ctx context.Context) error {
+		a.deferWorker("media-feed-poller", func(ctx context.Context) error {
 			if _, err := loopRegistry.SpawnLoop(ctx, loopCfg, loopDeps); err != nil {
 				return fmt.Errorf("spawn media feed poller loop: %w", err)
 			}
@@ -1586,7 +1586,7 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 			a.notifRecords, a.notifCallbackDispatcher, escalationSender,
 			30*time.Second, logger,
 		)
-		a.deferWorker(func(ctx context.Context) error {
+		a.deferWorker("notification-timeout-watcher", func(ctx context.Context) error {
 			go timeoutWatcher.Start(ctx)
 			return nil
 		})
@@ -1939,7 +1939,7 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 			Logger:   logger,
 			EventBus: eventBus,
 		}
-		a.deferWorker(func(ctx context.Context) error {
+		a.deferWorker("unifi-poller", func(ctx context.Context) error {
 			if _, err := loopRegistry.SpawnLoop(ctx, unifiLoopCfg, unifiLoopDeps); err != nil {
 				return fmt.Errorf("spawn unifi poller loop: %w", err)
 			}
@@ -2061,7 +2061,7 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 		watcher := homeassistant.NewStateWatcher(a.haWS.Events(), filter, limiter, handler, logger)
 		haEvents := watcher.Events()
 
-		a.deferWorker(func(ctx context.Context) error {
+		a.deferWorker("ha-state-watcher", func(ctx context.Context) error {
 			// Derive a cancellable context so the loop exits cleanly
 			// when the HA event channel closes.
 			haLoopCtx, haLoopCancel := context.WithCancel(ctx)
@@ -2151,14 +2151,13 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 			}); err != nil {
 				return fmt.Errorf("spawn ha-state-watcher loop: %w", err)
 			}
+			logger.Info("state watcher started",
+				"entity_globs", globs,
+				"rate_limit_per_minute", cfg.HomeAssistant.Subscribe.RateLimitPerMinute,
+				"cooldown", cooldown,
+			)
 			return nil
 		})
-
-		logger.Info("state watcher started",
-			"entity_globs", globs,
-			"rate_limit_per_minute", cfg.HomeAssistant.Subscribe.RateLimitPerMinute,
-			"cooldown", cooldown,
-		)
 	}
 
 	// --- API server ---
@@ -2395,7 +2394,7 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 				Logger:   logger,
 				EventBus: eventBus,
 			}
-			a.deferWorker(func(ctx context.Context) error {
+			a.deferWorker("mqtt-publisher", func(ctx context.Context) error {
 				if _, err := loopRegistry.SpawnLoop(ctx, mqttLoopCfg, mqttLoopDeps); err != nil {
 					return fmt.Errorf("spawn mqtt-publisher loop: %w", err)
 				}
@@ -2551,7 +2550,7 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 			Logger:   logger,
 			EventBus: eventBus,
 		}
-		a.deferWorker(func(ctx context.Context) error {
+		a.deferWorker("mqtt-telemetry", func(ctx context.Context) error {
 			if _, err := loopRegistry.SpawnLoop(ctx, telLoopCfg, telLoopDeps); err != nil {
 				return fmt.Errorf("spawn mqtt-telemetry loop: %w", err)
 			}
@@ -2620,7 +2619,7 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 			Logger:   logger,
 			EventBus: eventBus,
 		}
-		a.deferWorker(func(ctx context.Context) error {
+		a.deferWorker("metacognitive", func(ctx context.Context) error {
 			if _, err := loopRegistry.SpawnLoop(ctx, loopCfg, metacogDeps); err != nil {
 				return fmt.Errorf("spawn metacognitive loop: %w", err)
 			}

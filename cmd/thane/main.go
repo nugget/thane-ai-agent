@@ -305,6 +305,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	if err != nil {
 		return err
 	}
+	defer a.Close()
 
 	// Log with the fully-configured logger (file handler, index handler,
 	// correct level/format) so this line is captured in rotated logs.
