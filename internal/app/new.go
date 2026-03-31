@@ -67,11 +67,13 @@ import (
 // the caller (cmd/thane) so that runAsk and runServe can share the
 // createLLMClient function without importing internal/app.
 //
-// New may start internal background workers and other long-lived
-// activities that are part of the App's lifecycle, but it does not start
-// external servers or network listeners — those are started by [App.Serve].
-// All resources and background goroutines that require cleanup are tracked
-// on the returned App; cleanup happens in [App.shutdown].
+// New opens resources, wires dependencies, and registers background
+// workers but does not start them. Call [App.StartWorkers] to launch
+// all deferred goroutines and persistent loops, then [App.Serve] to
+// start external servers and block until shutdown.
+//
+// All resources that require cleanup are tracked on the returned App;
+// cleanup happens in [App.shutdown].
 func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io.Writer, llmClient llm.Client, ollamaClient *llm.OllamaClient) (*App, error) {
 	a := &App{
 		cfg:          cfg,
@@ -163,52 +165,21 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 		logger.Debug("augmented PATH", "prepended", augmentedDirs)
 	}
 
-	// Start background log index pruner if retention is configured and
+	// Defer background log index pruner if retention is configured and
 	// the index database is available.
 	if a.indexDB != nil {
 		if retention := cfg.Logging.RetentionDaysDuration(); retention > 0 {
-			go func() {
-				ticker := time.NewTicker(24 * time.Hour)
-				defer ticker.Stop()
-				for {
-					if deleted, err := logging.Prune(a.indexDB, retention, slog.LevelInfo); err != nil {
-						logger.Warn("log index prune failed", "error", err, "retention", retention)
-					} else if deleted > 0 {
-						logger.Info("pruned log index", "deleted", deleted, "retention", retention)
-					} else {
-						logger.Debug("log index prune ran; nothing to delete", "retention", retention)
-					}
-					select {
-					case <-ctx.Done():
-						return
-					case <-ticker.C:
-					}
-				}
-			}()
-		}
-
-		// Start background content archiver: exports retained request/tool
-		// content older than ContentArchiveDays to monthly JSONL files, then
-		// removes it from logs.db. Runs daily; disabled when archive duration
-		// is 0 or content retention is off.
-		if logDir := cfg.Logging.DirPath(); logDir != "" {
-			if archiveDur := cfg.Logging.ContentArchiveDuration(); archiveDur > 0 && a.contentWriter != nil {
-				archiveDir := cfg.Logging.ContentArchiveDirPath(logDir)
-				archiver := logging.NewArchiver(a.indexDB, archiveDir, logger)
+			a.deferWorker(func(ctx context.Context) error {
 				go func() {
 					ticker := time.NewTicker(24 * time.Hour)
 					defer ticker.Stop()
 					for {
-						before := time.Now().Add(-archiveDur)
-						runCtx, cancel := context.WithTimeout(ctx, 30*time.Minute)
-						n, err := archiver.Archive(runCtx, before)
-						cancel()
-						if err != nil {
-							logger.Warn("content archive failed", "error", err, "before", before)
-						} else if n > 0 {
-							logger.Info("content archived", "requests", n, "before", before)
+						if deleted, err := logging.Prune(a.indexDB, retention, slog.LevelInfo); err != nil {
+							logger.Warn("log index prune failed", "error", err, "retention", retention)
+						} else if deleted > 0 {
+							logger.Info("pruned log index", "deleted", deleted, "retention", retention)
 						} else {
-							logger.Debug("content archive ran; nothing to archive", "before", before)
+							logger.Debug("log index prune ran; nothing to delete", "retention", retention)
 						}
 						select {
 						case <-ctx.Done():
@@ -217,6 +188,43 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 						}
 					}
 				}()
+				return nil
+			})
+		}
+
+		// Defer background content archiver: exports retained request/tool
+		// content older than ContentArchiveDays to monthly JSONL files, then
+		// removes it from logs.db. Runs daily; disabled when archive duration
+		// is 0 or content retention is off.
+		if logDir := cfg.Logging.DirPath(); logDir != "" {
+			if archiveDur := cfg.Logging.ContentArchiveDuration(); archiveDur > 0 && a.contentWriter != nil {
+				archiveDir := cfg.Logging.ContentArchiveDirPath(logDir)
+				archiver := logging.NewArchiver(a.indexDB, archiveDir, logger)
+				a.deferWorker(func(ctx context.Context) error {
+					go func() {
+						ticker := time.NewTicker(24 * time.Hour)
+						defer ticker.Stop()
+						for {
+							before := time.Now().Add(-archiveDur)
+							runCtx, cancel := context.WithTimeout(ctx, 30*time.Minute)
+							n, err := archiver.Archive(runCtx, before)
+							cancel()
+							if err != nil {
+								logger.Warn("content archive failed", "error", err, "before", before)
+							} else if n > 0 {
+								logger.Info("content archived", "requests", n, "before", before)
+							} else {
+								logger.Debug("content archive ran; nothing to archive", "before", before)
+							}
+							select {
+							case <-ctx.Done():
+								return
+							case <-ticker.C:
+							}
+						}
+					}()
+					return nil
+				})
 				logger.Info("content archival enabled", "archive_after", archiveDur)
 			}
 		}
@@ -251,10 +259,13 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 
 	// --- Demo loops (debug) ---
 	if cfg.Debug.DemoLoops {
-		if err := looppkg.SpawnDemoLoops(ctx, loopRegistry, eventBus, logger); err != nil {
-			return nil, fmt.Errorf("spawn demo loops: %w", err)
-		}
-		logger.Warn("demo loops enabled — dashboard shows simulated activity")
+		a.deferWorker(func(ctx context.Context) error {
+			if err := looppkg.SpawnDemoLoops(ctx, loopRegistry, eventBus, logger); err != nil {
+				return fmt.Errorf("spawn demo loops: %w", err)
+			}
+			logger.Warn("demo loops enabled — dashboard shows simulated activity")
+			return nil
+		})
 	}
 
 	// --- Memory store ---
@@ -542,9 +553,12 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 
 	sched := scheduler.New(logger, schedStore, executeTask)
 	a.sched = sched
-	if err := sched.Start(ctx); err != nil {
-		return nil, fmt.Errorf("start scheduler: %w", err)
-	}
+	a.deferWorker(func(ctx context.Context) error {
+		if err := sched.Start(ctx); err != nil {
+			return fmt.Errorf("start scheduler: %w", err)
+		}
+		return nil
+	})
 
 	// --- Periodic reflection ---
 	// Register the self-reflection task if it doesn't already exist.
@@ -722,7 +736,10 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 	summaryWorker.SetInteractionCallback(func(conversationID, sessionID string, endedAt time.Time, topics []string) {
 		updateContactInteraction(contactStore, logger, conversationID, sessionID, endedAt, topics)
 	})
-	summaryWorker.Start(ctx)
+	a.deferWorker(func(ctx context.Context) error {
+		summaryWorker.Start(ctx)
+		return nil
+	})
 
 	contactTools := contacts.NewTools(contactStore)
 	if cfg.Identity.ContactName != "" {
@@ -789,8 +806,7 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 		if cfg.Email.PollIntervalSec > 0 {
 			poller := email.NewPoller(emailMgr, opStore, logger)
 			pollInterval := time.Duration(cfg.Email.PollIntervalSec) * time.Second
-
-			if _, err := loopRegistry.SpawnLoop(ctx, looppkg.Config{
+			loopCfg := looppkg.Config{
 				Name:         "email-poller",
 				SleepMin:     pollInterval,
 				SleepMax:     pollInterval,
@@ -800,12 +816,17 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 				Metadata: map[string]string{
 					"subsystem": "email",
 				},
-			}, looppkg.Deps{
+			}
+			loopDeps := looppkg.Deps{
 				Logger:   logger,
 				EventBus: eventBus,
-			}); err != nil {
-				return nil, fmt.Errorf("spawn email poller loop: %w", err)
 			}
+			a.deferWorker(func(ctx context.Context) error {
+				if _, err := loopRegistry.SpawnLoop(ctx, loopCfg, loopDeps); err != nil {
+					return fmt.Errorf("spawn email poller loop: %w", err)
+				}
+				return nil
+			})
 		}
 
 		logger.Info("email enabled", "accounts", emailMgr.AccountNames(), "poll_interval", cfg.Email.PollIntervalSec)
@@ -1201,8 +1222,7 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 	if cfg.Media.FeedCheckInterval > 0 {
 		feedPoller := media.NewFeedPoller(opStore, logger)
 		pollInterval := time.Duration(cfg.Media.FeedCheckInterval) * time.Second
-
-		if _, err := loopRegistry.SpawnLoop(ctx, looppkg.Config{
+		loopCfg := looppkg.Config{
 			Name:         "media-feed-poller",
 			SleepMin:     pollInterval,
 			SleepMax:     pollInterval,
@@ -1212,12 +1232,17 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 			Metadata: map[string]string{
 				"subsystem": "media",
 			},
-		}, looppkg.Deps{
+		}
+		loopDeps := looppkg.Deps{
 			Logger:   logger,
 			EventBus: eventBus,
-		}); err != nil {
-			return nil, fmt.Errorf("spawn media feed poller loop: %w", err)
 		}
+		a.deferWorker(func(ctx context.Context) error {
+			if _, err := loopRegistry.SpawnLoop(ctx, loopCfg, loopDeps); err != nil {
+				return fmt.Errorf("spawn media feed poller loop: %w", err)
+			}
+			return nil
+		})
 
 		logger.Info("media feed polling enabled",
 			"interval", pollInterval,
@@ -1561,7 +1586,10 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 			a.notifRecords, a.notifCallbackDispatcher, escalationSender,
 			30*time.Second, logger,
 		)
-		go timeoutWatcher.Start(ctx)
+		a.deferWorker(func(ctx context.Context) error {
+			go timeoutWatcher.Start(ctx)
+			return nil
+		})
 		loop.Tools().SetCallbackDispatcher(a.notifCallbackDispatcher)
 
 		// Synchronous escalation support — allows tools to block
@@ -1894,7 +1922,7 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 			Logger:       logger,
 		})
 
-		if _, err := loopRegistry.SpawnLoop(ctx, looppkg.Config{
+		unifiLoopCfg := looppkg.Config{
 			Name:         "unifi-poller",
 			SleepMin:     pollInterval,
 			SleepMax:     pollInterval,
@@ -1906,12 +1934,17 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 			Metadata: map[string]string{
 				"subsystem": "unifi",
 			},
-		}, looppkg.Deps{
+		}
+		unifiLoopDeps := looppkg.Deps{
 			Logger:   logger,
 			EventBus: eventBus,
-		}); err != nil {
-			return nil, fmt.Errorf("spawn unifi poller loop: %w", err)
 		}
+		a.deferWorker(func(ctx context.Context) error {
+			if _, err := loopRegistry.SpawnLoop(ctx, unifiLoopCfg, unifiLoopDeps); err != nil {
+				return fmt.Errorf("spawn unifi poller loop: %w", err)
+			}
+			return nil
+		})
 
 		// Register UniFi with connwatch for health endpoint visibility.
 		connMgr.Watch(ctx, connwatch.WatcherConfig{
@@ -2026,97 +2059,100 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 		}
 
 		watcher := homeassistant.NewStateWatcher(a.haWS.Events(), filter, limiter, handler, logger)
-
-		// Derive a cancellable context so the loop exits cleanly
-		// when the HA event channel closes.
-		haLoopCtx, haLoopCancel := context.WithCancel(ctx)
-
-		// Track last cleanup time for periodic rate-limiter maintenance.
-		lastCleanup := time.Now()
-		const haCleanupInterval = 5 * time.Minute
-		const haBatchWindow = 1 * time.Second
-		const haBatchMax = 100
-
 		haEvents := watcher.Events()
-		if _, err := loopRegistry.SpawnLoop(haLoopCtx, looppkg.Config{
-			Name: "ha-state-watcher",
-			WaitFunc: func(wCtx context.Context) (any, error) {
-				// Block until at least one event arrives, then drain
-				// up to haBatchMax events within haBatchWindow. This
-				// debounces high-frequency HA state changes into one
-				// loop iteration per batch.
-				cleanupTimer := time.NewTimer(haCleanupInterval)
-				defer cleanupTimer.Stop()
 
-				var batch []homeassistant.Event
+		a.deferWorker(func(ctx context.Context) error {
+			// Derive a cancellable context so the loop exits cleanly
+			// when the HA event channel closes.
+			haLoopCtx, haLoopCancel := context.WithCancel(ctx)
 
-				// Wait for the first event (or cleanup/cancel).
-				select {
-				case <-wCtx.Done():
-					return nil, wCtx.Err()
-				case ev, ok := <-haEvents:
-					if !ok {
-						haLoopCancel()
-						return nil, context.Canceled
-					}
-					batch = append(batch, ev)
-				case <-cleanupTimer.C:
-					watcher.CleanupRateLimiter()
-					lastCleanup = time.Now()
-					return nil, nil
-				}
+			// Track last cleanup time for periodic rate-limiter maintenance.
+			lastCleanup := time.Now()
+			const haCleanupInterval = 5 * time.Minute
+			const haBatchWindow = 1 * time.Second
+			const haBatchMax = 100
 
-				// Drain additional events within the batch window.
-				drainTimer := time.NewTimer(haBatchWindow)
-				defer drainTimer.Stop()
-			drain:
-				for len(batch) < haBatchMax {
+			if _, err := loopRegistry.SpawnLoop(haLoopCtx, looppkg.Config{
+				Name: "ha-state-watcher",
+				WaitFunc: func(wCtx context.Context) (any, error) {
+					// Block until at least one event arrives, then drain
+					// up to haBatchMax events within haBatchWindow. This
+					// debounces high-frequency HA state changes into one
+					// loop iteration per batch.
+					cleanupTimer := time.NewTimer(haCleanupInterval)
+					defer cleanupTimer.Stop()
+
+					var batch []homeassistant.Event
+
+					// Wait for the first event (or cleanup/cancel).
 					select {
 					case <-wCtx.Done():
-						break drain
+						return nil, wCtx.Err()
 					case ev, ok := <-haEvents:
 						if !ok {
-							break drain
+							haLoopCancel()
+							return nil, context.Canceled
 						}
 						batch = append(batch, ev)
-					case <-drainTimer.C:
-						break drain
+					case <-cleanupTimer.C:
+						watcher.CleanupRateLimiter()
+						lastCleanup = time.Now()
+						return nil, nil
 					}
-				}
 
-				return batch, nil
-			},
-			Handler: func(ctx context.Context, payload any) error {
-				var processed int
-				if batch, ok := payload.([]homeassistant.Event); ok {
-					for _, ev := range batch {
-						if watcher.HandleEvent(ev) {
-							processed++
+					// Drain additional events within the batch window.
+					drainTimer := time.NewTimer(haBatchWindow)
+					defer drainTimer.Stop()
+				drain:
+					for len(batch) < haBatchMax {
+						select {
+						case <-wCtx.Done():
+							break drain
+						case ev, ok := <-haEvents:
+							if !ok {
+								break drain
+							}
+							batch = append(batch, ev)
+						case <-drainTimer.C:
+							break drain
 						}
 					}
-				}
-				if time.Since(lastCleanup) > haCleanupInterval {
-					watcher.CleanupRateLimiter()
-					lastCleanup = time.Now()
-				}
-				if processed == 0 {
-					return looppkg.ErrNoOp
-				}
-				if summary := looppkg.IterationSummary(ctx); summary != nil {
-					summary["events_processed"] = processed
-				}
-				return nil
-			},
-			Metadata: map[string]string{
-				"subsystem": "homeassistant",
-				"category":  "listener",
-			},
-		}, looppkg.Deps{
-			Logger:   logger,
-			EventBus: eventBus,
-		}); err != nil {
-			return nil, fmt.Errorf("spawn ha-state-watcher loop: %w", err)
-		}
+
+					return batch, nil
+				},
+				Handler: func(ctx context.Context, payload any) error {
+					var processed int
+					if batch, ok := payload.([]homeassistant.Event); ok {
+						for _, ev := range batch {
+							if watcher.HandleEvent(ev) {
+								processed++
+							}
+						}
+					}
+					if time.Since(lastCleanup) > haCleanupInterval {
+						watcher.CleanupRateLimiter()
+						lastCleanup = time.Now()
+					}
+					if processed == 0 {
+						return looppkg.ErrNoOp
+					}
+					if summary := looppkg.IterationSummary(ctx); summary != nil {
+						summary["events_processed"] = processed
+					}
+					return nil
+				},
+				Metadata: map[string]string{
+					"subsystem": "homeassistant",
+					"category":  "listener",
+				},
+			}, looppkg.Deps{
+				Logger:   logger,
+				EventBus: eventBus,
+			}); err != nil {
+				return fmt.Errorf("spawn ha-state-watcher loop: %w", err)
+			}
+			return nil
+		})
 
 		logger.Info("state watcher started",
 			"entity_globs", globs,
@@ -2340,7 +2376,7 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 			mqttPub.PublishStates(ctx)
 
 			mqttInterval := mqttPub.PublishInterval()
-			if _, err := loopRegistry.SpawnLoop(ctx, looppkg.Config{
+			mqttLoopCfg := looppkg.Config{
 				Name:         "mqtt-publisher",
 				SleepMin:     mqttInterval,
 				SleepMax:     mqttInterval,
@@ -2354,12 +2390,17 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 					"subsystem": "mqtt",
 					"category":  "publisher",
 				},
-			}, looppkg.Deps{
+			}
+			mqttLoopDeps := looppkg.Deps{
 				Logger:   logger,
 				EventBus: eventBus,
-			}); err != nil {
-				return nil, fmt.Errorf("spawn mqtt-publisher loop: %w", err)
 			}
+			a.deferWorker(func(ctx context.Context) error {
+				if _, err := loopRegistry.SpawnLoop(ctx, mqttLoopCfg, mqttLoopDeps); err != nil {
+					return fmt.Errorf("spawn mqtt-publisher loop: %w", err)
+				}
+				return nil
+			})
 		}
 
 		// Register with connwatch for health endpoint visibility.
@@ -2492,7 +2533,7 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 		telPub := telemetry.NewPublisher(telCollector, a.mqttPub, telBuilder, logger)
 
 		telInterval := time.Duration(cfg.MQTT.Telemetry.Interval) * time.Second
-		if _, err := loopRegistry.SpawnLoop(ctx, looppkg.Config{
+		telLoopCfg := looppkg.Config{
 			Name:         "mqtt-telemetry",
 			SleepMin:     telInterval,
 			SleepMax:     telInterval,
@@ -2505,12 +2546,17 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 				"subsystem": "mqtt",
 				"category":  "telemetry",
 			},
-		}, looppkg.Deps{
+		}
+		telLoopDeps := looppkg.Deps{
 			Logger:   logger,
 			EventBus: eventBus,
-		}); err != nil {
-			return nil, fmt.Errorf("spawn mqtt-telemetry loop: %w", err)
 		}
+		a.deferWorker(func(ctx context.Context) error {
+			if _, err := loopRegistry.SpawnLoop(ctx, telLoopCfg, telLoopDeps); err != nil {
+				return fmt.Errorf("spawn mqtt-telemetry loop: %w", err)
+			}
+			return nil
+		})
 
 		logger.Info("mqtt telemetry enabled",
 			"interval", cfg.MQTT.Telemetry.Interval,
@@ -2569,13 +2615,17 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 			metacognitive.RegisterTools(loop.Tools(), l, metacogCfg, metacogStatePath, a.provenanceStore)
 		}
 
-		if _, err := loopRegistry.SpawnLoop(ctx, loopCfg, looppkg.Deps{
+		metacogDeps := looppkg.Deps{
 			Runner:   adapter,
 			Logger:   logger,
 			EventBus: eventBus,
-		}); err != nil {
-			return nil, fmt.Errorf("spawn metacognitive loop: %w", err)
 		}
+		a.deferWorker(func(ctx context.Context) error {
+			if _, err := loopRegistry.SpawnLoop(ctx, loopCfg, metacogDeps); err != nil {
+				return fmt.Errorf("spawn metacognitive loop: %w", err)
+			}
+			return nil
+		})
 
 		logger.Info("metacognitive loop enabled",
 			"state_file", cfg.Metacognitive.StateFile,

@@ -315,6 +315,10 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		"ollama_url", cfg.Models.OllamaURL,
 	)
 
+	if err := a.StartWorkers(ctx); err != nil {
+		return err
+	}
+
 	return a.Serve(ctx)
 }
 

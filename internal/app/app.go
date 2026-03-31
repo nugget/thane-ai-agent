@@ -8,6 +8,7 @@
 package app
 
 import (
+	"context"
 	"database/sql"
 	"io"
 	"log/slog"
@@ -146,4 +147,7 @@ type App struct {
 	// Signal bridge
 	signalClient *sigcli.Client
 	signalBridge *sigcli.Bridge
+
+	// Deferred worker starts, populated by New(), executed by StartWorkers().
+	pendingWorkers []func(ctx context.Context) error
 }
