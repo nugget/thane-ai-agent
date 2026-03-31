@@ -264,6 +264,8 @@ logs workdir="./Thane":
 # --- Database ---
 
 # Migrate data from legacy per-store .db files into the unified thane.db.
+# Handles: opstate, anticipations, watchlist, checkpoints, usage, notifications,
+# and archive (sessions, archive_messages, archive_tool_calls, archive_iterations).
 # The new binary must have run at least once first (to create the target
 # tables via CREATE TABLE IF NOT EXISTS), then been stopped before running
 # this recipe. Safe to run multiple times (uses INSERT OR IGNORE).
@@ -280,7 +282,9 @@ migrate-databases datadir="Thane/db":
         exit 1
     fi
     migrated=0
-    for old in opstate.db anticipations.db watchlist.db checkpoints.db usage.db notifications.db; do
+    # archive.db is last: at ~300MB it is the largest migration and benefits
+    # from the smaller stores being committed first.
+    for old in opstate.db anticipations.db watchlist.db checkpoints.db usage.db notifications.db archive.db; do
         OLD_PATH="{{datadir}}/$old"
         if [ -f "$OLD_PATH" ]; then
             echo "Migrating $old → thane.db ..."
