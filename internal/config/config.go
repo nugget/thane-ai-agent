@@ -327,6 +327,12 @@ type LoggingConfig struct {
 	// bounds storage growth while preserving enough for diagnostics.
 	// Default: 4096. Set to 0 for unlimited.
 	MaxContentLength *int `yaml:"max_content_length"`
+
+	// ContentArchiveDays is the age threshold in days for archiving
+	// log_request_content rows to JSONL flat files. Rows older than
+	// this are exported to {log_dir}/archive/YYYY-MM.jsonl and removed
+	// from logs.db. Default: 90. Set to 0 to disable archival.
+	ContentArchiveDays *int `yaml:"content_archive_days"`
 }
 
 // DirPath returns the resolved log directory path. When Dir is nil
@@ -366,6 +372,20 @@ func (l LoggingConfig) ContentMaxLength() int {
 		return 4096
 	}
 	return *l.MaxContentLength
+}
+
+// ContentArchiveDuration returns the age threshold after which retained
+// content rows should be archived to JSONL. Defaults to 90 days when
+// unset. A value of 0 disables archival.
+func (l LoggingConfig) ContentArchiveDuration() time.Duration {
+	days := 90
+	if l.ContentArchiveDays != nil {
+		days = *l.ContentArchiveDays
+	}
+	if days <= 0 {
+		return 0
+	}
+	return time.Duration(days) * 24 * time.Hour
 }
 
 // CompressEnabled returns whether rotated log compression is on.

@@ -324,6 +324,94 @@ migrate-databases datadir="Thane/db":
         echo "Done. Migrated $migrated database(s)."
     fi
 
+# Archive retained request/tool content older than DAYS days from logs.db to
+# monthly JSONL files in {logdir}/archive/. Safe to run while the service is
+# stopped; do not run while the service is actively writing to logs.db.
+# Default: archive rows older than 90 days.
+[group('operations')]
+archive-logs logdir="Thane/logs" days="90":
+    #!/usr/bin/env python3
+    import json, os, sqlite3, sys
+    from datetime import datetime, timezone, timedelta
+
+    db_path    = "{{logdir}}/logs.db"
+    archive_dir = "{{logdir}}/archive"
+    days        = int("{{days}}")
+
+    if not os.path.exists(db_path):
+        print(f"No logs.db found at {db_path}.")
+        sys.exit(1)
+
+    os.makedirs(archive_dir, exist_ok=True)
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    print(f"Archiving log_request_content rows older than {cutoff} ...")
+
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+
+    ids = conn.execute(
+        "SELECT request_id, strftime('%Y-%m', created_at) AS month "
+        "FROM log_request_content WHERE created_at < ? ORDER BY created_at",
+        (cutoff,)
+    ).fetchall()
+
+    if not ids:
+        print("Nothing to archive.")
+        conn.close()
+        sys.exit(0)
+
+    open_files = {}
+
+    def get_file(month):
+        if month not in open_files:
+            open_files[month] = open(os.path.join(archive_dir, f"{month}.jsonl"), "a")
+        return open_files[month]
+
+    archived = 0
+    for row in ids:
+        rid, month = row["request_id"], row["month"] or "unknown"
+        r = conn.execute(
+            "SELECT r.request_id, r.prompt_hash, p.content AS system_prompt, "
+            "r.user_content, r.assistant_content, r.model, "
+            "r.iteration_count, r.input_tokens, r.output_tokens, "
+            "r.tools_used, r.exhausted, r.exhaust_reason, r.created_at "
+            "FROM log_request_content r "
+            "LEFT JOIN log_prompts p ON p.hash = r.prompt_hash "
+            "WHERE r.request_id = ?", (rid,)
+        ).fetchone()
+        if not r:
+            continue
+        record = dict(r)
+        if record.get("tools_used"):
+            try:
+                record["tools_used"] = json.loads(record["tools_used"])
+            except Exception:
+                pass
+        tools = conn.execute(
+            "SELECT tool_call_id, tool_name, arguments, result, iteration_index "
+            "FROM log_tool_content WHERE request_id = ? ORDER BY iteration_index, id",
+            (rid,)
+        ).fetchall()
+        record["tool_calls"] = [dict(t) for t in tools]
+        get_file(month).write(json.dumps(record, ensure_ascii=False) + "\n")
+        archived += 1
+
+    # Flush and fsync all archive files before deleting from DB.
+    for f in open_files.values():
+        f.flush()
+        os.fsync(f.fileno())
+        f.close()
+
+    # Delete archived rows from the database.
+    for row in ids:
+        rid = row["request_id"]
+        conn.execute("DELETE FROM log_tool_content WHERE request_id = ?", (rid,))
+        conn.execute("DELETE FROM log_request_content WHERE request_id = ?", (rid,))
+    conn.commit()
+    conn.close()
+
+    print(f"Archived {archived} request(s). Files written to {archive_dir}/")
+
 # --- Release ---
 
 # Tag and publish a GitHub release (usage: just release 0.2.0)

@@ -441,6 +441,36 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 				}
 			}()
 		}
+
+		// Start background content archiver: exports retained request/tool
+		// content older than ContentArchiveDays to monthly JSONL files, then
+		// removes it from logs.db. Runs daily; disabled when archive duration
+		// is 0 or content retention is off.
+		if logDir := cfg.Logging.DirPath(); logDir != "" {
+			if archiveDur := cfg.Logging.ContentArchiveDuration(); archiveDur > 0 && contentWriter != nil {
+				archiver := logging.NewArchiver(indexDB, logDir, logger)
+				go func() {
+					ticker := time.NewTicker(24 * time.Hour)
+					defer ticker.Stop()
+					for {
+						before := time.Now().Add(-archiveDur)
+						if n, err := archiver.Archive(ctx, before); err != nil {
+							logger.Warn("content archive failed", "error", err, "before", before)
+						} else if n > 0 {
+							logger.Info("content archived", "requests", n, "before", before)
+						} else {
+							logger.Debug("content archive ran; nothing to archive", "before", before)
+						}
+						select {
+						case <-ctx.Done():
+							return
+						case <-ticker.C:
+						}
+					}
+				}()
+				logger.Info("content archival enabled", "archive_after", archiveDur)
+			}
+		}
 	}
 
 	// Warn about deprecated config fields.
