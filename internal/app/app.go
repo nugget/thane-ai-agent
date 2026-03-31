@@ -11,6 +11,7 @@ import (
 	"database/sql"
 	"io"
 	"log/slog"
+	"sync"
 
 	"github.com/nugget/thane-ai-agent/internal/agent"
 	"github.com/nugget/thane-ai-agent/internal/attachments"
@@ -146,4 +147,10 @@ type App struct {
 	// Signal bridge
 	signalClient *sigcli.Client
 	signalBridge *sigcli.Bridge
+
+	// Deferred worker starts, populated by New(), executed by StartWorkers().
+	pendingWorkers []pendingWorker
+
+	// closeOnce ensures shutdown runs exactly once across Close and Serve.
+	closeOnce sync.Once
 }

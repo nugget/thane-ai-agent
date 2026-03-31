@@ -305,6 +305,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	if err != nil {
 		return err
 	}
+	defer a.Close()
 
 	// Log with the fully-configured logger (file handler, index handler,
 	// correct level/format) so this line is captured in rotated logs.
@@ -314,6 +315,10 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		"model", cfg.Models.Default,
 		"ollama_url", cfg.Models.OllamaURL,
 	)
+
+	if err := a.StartWorkers(ctx); err != nil {
+		return err
+	}
 
 	return a.Serve(ctx)
 }

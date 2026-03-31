@@ -13,7 +13,7 @@ import (
 // Cleanup of all resources opened during [New] is handled by
 // [App.shutdown], which Serve defers at entry.
 func (a *App) Serve(ctx context.Context) error {
-	defer a.shutdown()
+	defer a.Close()
 
 	// Periodic cleanup of expired opstate keys (issue #457). Expired
 	// keys are already invisible on read; this reclaims storage.
