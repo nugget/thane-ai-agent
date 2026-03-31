@@ -43,6 +43,12 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/usage"
 )
 
+// Logger returns the application's configured logger. Callers that
+// construct the logger before calling [New] (e.g. cmd/thane/runServe) can
+// call this after [New] returns to obtain the fully-configured logger
+// (file handler, index handler, level, format) for subsequent log lines.
+func (a *App) Logger() *slog.Logger { return a.logger }
+
 // App holds all long-lived application state for the Thane server. It is
 // constructed by [New] and run by [App.Serve]. Fields map directly to the
 // subsystems initialized during startup.

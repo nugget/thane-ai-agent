@@ -22,7 +22,9 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/nugget/thane-ai-agent/internal/agent"
 	"github.com/nugget/thane-ai-agent/internal/app"
@@ -289,20 +291,29 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	if err != nil {
 		return err
 	}
-	logger.Info("config loaded",
-		"path", cfgPath,
-		"port", cfg.Listen.Port,
-		"model", cfg.Models.Default,
-		"ollama_url", cfg.Models.OllamaURL,
-	)
 
 	ollamaClient := llm.NewOllamaClient(cfg.Models.OllamaURL, logger)
 	llmClient := createLLMClient(cfg, logger, ollamaClient)
+
+	// Create the signal-aware context before app.New so that background
+	// goroutines started during initialization inherit it and stop cleanly
+	// on SIGINT/SIGTERM.
+	ctx, cancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
 
 	a, err := app.New(ctx, cfg, logger, stdout, llmClient, ollamaClient)
 	if err != nil {
 		return err
 	}
+
+	// Log with the fully-configured logger (file handler, index handler,
+	// correct level/format) so this line is captured in rotated logs.
+	a.Logger().Info("config loaded",
+		"path", cfgPath,
+		"port", cfg.Listen.Port,
+		"model", cfg.Models.Default,
+		"ollama_url", cfg.Models.OllamaURL,
+	)
 
 	return a.Serve(ctx)
 }

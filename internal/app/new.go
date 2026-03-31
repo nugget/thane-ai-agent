@@ -67,10 +67,11 @@ import (
 // the caller (cmd/thane) so that runAsk and runServe can share the
 // createLLMClient function without importing internal/app.
 //
-// New does not start any servers or background goroutines that require
-// shutdown handling — those are started by [App.Serve]. Resources that
-// require cleanup are tracked on the returned App; cleanup happens
-// in [App.shutdown].
+// New may start internal background workers and other long-lived
+// activities that are part of the App's lifecycle, but it does not start
+// external servers or network listeners — those are started by [App.Serve].
+// All resources and background goroutines that require cleanup are tracked
+// on the returned App; cleanup happens in [App.shutdown].
 func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io.Writer, llmClient llm.Client, ollamaClient *llm.OllamaClient) (*App, error) {
 	a := &App{
 		cfg:          cfg,
@@ -1229,7 +1230,6 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 	loop.Tools().SetArchiveStore(archiveStore)
 	loop.Tools().SetConversationResetter(loop)
 	loop.Tools().SetSessionManager(loop)
-	logger.Info("web fetch enabled")
 
 	// --- Embeddings ---
 	// Optional semantic search over fact and contact stores. When enabled,
@@ -1767,7 +1767,7 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 	// current state (e.g., pending anticipations) before each LLM call.
 	anticipationProvider := scheduler.NewAnticipationProvider(anticipationStore)
 	contextProvider := agent.NewCompositeContextProvider(anticipationProvider)
-	contextProvider.Add(agent.NewChannelProvider(&contactNameLookup{store: contactStore}))
+	contextProvider.Add(agent.NewChannelProvider(&contactNameLookup{store: contactStore, logger: logger}))
 	contextProvider.Add(awareness.NewChannelOverviewProvider(awareness.ChannelOverviewConfig{
 		Loops:  &channelLoopAdapter{registry: loopRegistry},
 		Phones: &contactPhoneResolver{store: contactStore},
@@ -2632,10 +2632,8 @@ func resolvePath(p string, resolver *paths.Resolver) string {
 // exec.LookPath (used during tool registration) can find binaries
 // installed outside the default system PATH. On macOS, Homebrew
 // directories are added automatically if they exist on disk.
-// augmentPath prepends directories to the process PATH so that
-// exec.LookPath can find binaries installed outside launchd's minimal
-// PATH. Returns the list of directories that were prepended (for
-// deferred logging after the final logger is configured).
+// Returns the list of directories that were prepended (for deferred
+// logging after the final logger is configured).
 func augmentPath(extra []string) []string {
 	var dirs []string
 

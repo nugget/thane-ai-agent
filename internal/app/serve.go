@@ -3,8 +3,6 @@ package app
 import (
 	"context"
 	"fmt"
-	"os/signal"
-	"syscall"
 	"time"
 )
 
@@ -16,12 +14,6 @@ import (
 // [App.shutdown], which Serve defers at entry.
 func (a *App) Serve(ctx context.Context) error {
 	defer a.shutdown()
-
-	// --- Signal handling and graceful shutdown ---
-	// NotifyContext wraps the parent context so that SIGINT/SIGTERM
-	// cancellation flows through the same ctx used by all components.
-	ctx, cancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
-	defer cancel()
 
 	// Periodic cleanup of expired opstate keys (issue #457). Expired
 	// keys are already invisible on read; this reclaims storage.
@@ -87,13 +79,23 @@ func (a *App) Serve(ctx context.Context) error {
 			a.logger.Error("failed to create shutdown checkpoint", "error", err)
 		}
 
-		shutdownCtx := context.Background()
-		_ = a.server.Shutdown(shutdownCtx)
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer shutdownCancel()
+		if err := a.server.Shutdown(shutdownCtx); err != nil {
+			a.logger.Error("server shutdown failed", "error", err)
+		}
 		if a.ollamaServer != nil {
-			_ = a.ollamaServer.Shutdown(shutdownCtx)
+			if err := a.ollamaServer.Shutdown(shutdownCtx); err != nil {
+				a.logger.Error("ollama server shutdown failed", "error", err)
+			}
 		}
 		if a.carddavServer != nil {
-			_ = a.carddavServer.Shutdown(shutdownCtx)
+			if err := a.carddavServer.Shutdown(shutdownCtx); err != nil {
+				a.logger.Error("carddav server shutdown failed", "error", err)
+			}
+		}
+		if shutdownCtx.Err() == context.DeadlineExceeded {
+			a.logger.Warn("server shutdown timed out; some connections may have been forcefully terminated")
 		}
 	}()
 
@@ -186,15 +188,16 @@ func (a *App) shutdown() {
 		a.mem.Close()
 	}
 
-	// Logging infrastructure (LIFO: flush index handler before closing DB).
+	// Logging infrastructure (LIFO: flush statement owners before closing DB).
+	// contentWriter holds prepared statements against indexDB — close it first.
+	if a.contentWriter != nil {
+		a.contentWriter.Close()
+	}
 	if a.indexHandler != nil {
 		a.indexHandler.Close()
 	}
 	if a.indexDB != nil {
 		a.indexDB.Close()
-	}
-	if a.contentWriter != nil {
-		a.contentWriter.Close()
 	}
 	if a.rotator != nil {
 		a.rotator.Close()

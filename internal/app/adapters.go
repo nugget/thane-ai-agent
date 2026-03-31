@@ -274,7 +274,8 @@ func (r *contactPhoneResolver) ResolvePhone(phone string) (string, string, bool)
 // contactNameLookup resolves contact names to rich context profiles for
 // channel context injection. Implements agent.ContactLookup.
 type contactNameLookup struct {
-	store *contacts.Store
+	store  *contacts.Store
+	logger *slog.Logger
 }
 
 // LookupContact returns a ContactContext for the given name, or nil if
@@ -291,14 +292,14 @@ func (r *contactNameLookup) LookupContact(name string, source string) *agent.Con
 	c, err := r.store.ResolveContact(name)
 	if err != nil {
 		if !errors.Is(err, sql.ErrNoRows) {
-			slog.Error("failed to resolve contact by name", "name", name, "error", err)
+			r.logger.Error("failed to resolve contact by name", "name", name, "error", err)
 		}
 		return nil
 	}
 
 	props, err := r.store.GetProperties(c.ID)
 	if err != nil {
-		slog.Error("failed to get properties for contact", "contact_id", c.ID, "name", c.FormattedName, "error", err)
+		r.logger.Error("failed to get properties for contact", "contact_id", c.ID, "name", c.FormattedName, "error", err)
 		props = nil
 	}
 
