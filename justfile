@@ -18,10 +18,12 @@ default:
 
 # --- Build ---
 
-# Copy default files into embeddable positions for go:embed
+# Copy default files into embeddable positions for go:embed, and
+# regenerate examples/config.example.yaml from internal/config.
 [group('build')]
 generate:
     go generate ./internal/talents/ ./cmd/thane/
+    go generate ./internal/config/...
 
 # Build a binary into dist/ (defaults to current platform, or specify OS/ARCH)
 [group('build')]
@@ -73,9 +75,16 @@ mod-tidy-check:
     go mod tidy
     @test -z "$(git diff --name-only go.mod go.sum)" || (echo "go.mod/go.sum not tidy — run 'go mod tidy'" && git diff go.mod go.sum && exit 1)
 
+# Check examples/config.example.yaml is up to date with the config package.
+# Runs go generate and fails if the file changed (i.e., was stale).
+[group('test')]
+config-generate-check:
+    go generate ./internal/config/...
+    @test -z "$(git diff --name-only examples/config.example.yaml)" || (echo "examples/config.example.yaml is stale — run 'go generate ./internal/config/...' and commit the result" && git diff examples/config.example.yaml && exit 1)
+
 # CI: format check, lint, and tests
 [group('test')]
-ci: fmt-check mod-tidy-check lint test
+ci: fmt-check mod-tidy-check config-generate-check lint test
 
 # --- Install ---
 

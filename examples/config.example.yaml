@@ -159,61 +159,133 @@ talents_dir: ./talents
 #
 # (optional) Context configures static context injection into the system prompt.
 # context:
+#   InjectFiles is a list of file paths to re-read and inject into
+#   the system prompt on every turn. Paths support ~ expansion.
+#   Missing or unreadable files are silently skipped at read time.
 #   inject_files:
 #     - ~/.agents.md
 #     - ~/Thane/MEMORY.md
 #
 # (optional) Archive configures session archive behavior.
 # archive:
+#   MetadataModel is a soft preference for the LLM model used when
+#   generating session metadata (title, tags, summaries). Passed as a
+#   hint to the model router; the router has final say. This is a
+#   background operation where latency doesn't matter — ideal for
+#   local/free models. Default: uses the default model.
 #   metadata_model: qwen2.5-coder:32b
+#   SummarizeInterval is how often (in seconds) the background
+#   summarizer scans for unsummarized sessions. Default: 300 (5 min).
 #   summarize_interval: 300
+#   SummarizeTimeout is the max seconds for a single session's
+#   metadata LLM call. Default: 60.
 #   summarize_timeout: 60
+#   SessionIdleMinutes is the backstop idle timeout for the
+#   summarizer worker. Active sessions with no message activity
+#   for this many minutes are silently closed and become eligible
+#   for summarization. This complements the channel-specific idle
+#   check (e.g. signal.session_idle_minutes) which sends farewell
+#   messages.
+#
+#   Pointer type distinguishes "omitted" (nil → inherit from
+#   signal.session_idle_minutes) from "explicitly set to 0"
+#   (disabled). A positive value overrides the inherited default.
 #   session_idle_minutes: 30
 #
 # (optional) Extraction configures automatic fact extraction from conversations.
 # extraction:
+#   Enabled controls whether automatic fact extraction runs.
+#   Default: false (opt-in).
 #   enabled: false
+#   Model is the LLM model used for fact extraction. This runs async
+#   in the background — local/free models recommended.
+#   Default: falls back to archive.metadata_model, then models.default.
 #   model: ""
+#   MinMessages is the minimum conversation length (in messages) before
+#   extraction is attempted. Very short exchanges rarely contain knowledge.
+#   Default: 2.
 #   min_messages: 2
+#   TimeoutSeconds is the maximum time allowed for a single extraction
+#   call. Default: 30.
 #   timeout_seconds: 30
 #
 # (optional) Search configures web search providers.
 # search:
+#   Default is the provider name to use when the agent doesn't
+#   specify one. If empty, the first configured provider is used.
 #   default: searxng
+#   SearXNG configures the self-hosted SearXNG meta-search provider.
 #   searxng:
 #     url: http://your-searxng:8080
+#   Brave configures the Brave Search API provider.
 #   brave:
 #     api_key: your-brave-api-key
 #
 # (optional) Episodic configures episodic memory context injection (daily
 # episodic:
+#   DailyDir is the directory containing daily memory files named
+#   YYYY-MM-DD.md. Supports ~ expansion. If empty, daily memory
+#   file injection is disabled.
 #   daily_dir: ~/Thane/daily
+#   LookbackDays is how many days of daily memory files to include.
+#   Today and the previous (LookbackDays-1) days are checked.
+#   Default: 2 (today + yesterday).
 #   lookback_days: 2
+#   HistoryTokens is the approximate token budget for recent
+#   conversation history injected into the system prompt.
+#   Default: 4000.
 #   history_tokens: 4000
+#   SessionGapMinutes is the silence duration (in minutes) between
+#   sessions that triggers a gap annotation in the history output.
+#   Default: 30.
 #   session_gap_minutes: 0
 #
 # (optional) Agent configures agent loop behavior, including orchestrator
 # agent:
+#   OrchestratorTools lists tool names to advertise when
+#   DelegationRequired is true. If empty, a sensible default set
+#   is applied (thane_delegate plus lightweight memory tools).
 #   orchestrator_tools: []
+#   DelegationRequired enables orchestrator tool gating. When false
+#   (the default), all tools are available on every iteration.
 #   delegation_required: false
 #
 # (optional) Delegate configures the thane_delegate tool's split-model execution.
 # delegate:
+#   Profiles contains per-profile overrides. The map key is the
+#   profile name (e.g., "general", "ha"). Only fields that are set
+#   override the builtin defaults — omitted fields keep their
+#   compiled-in values.
 #   profiles:
 #     general:
+#       ToolTimeout is the maximum time a single tool call may run
+#       before being cancelled. Accepts Go duration strings (e.g.,
+#       "30s", "3m", "5m"). Zero keeps the builtin default (30s).
 #       tool_timeout: 3m
+#       MaxDuration is the maximum wall clock time for the entire
+#       delegation loop. Zero keeps the builtin default (90s).
 #       max_duration: 5m
+#       MaxIter is the maximum number of tool-calling iterations.
+#       Zero keeps the builtin default (15).
 #       max_iter: 15
+#       MaxTokens is the maximum cumulative output tokens before
+#       budget exhaustion. Zero keeps the builtin default (25000).
 #       max_tokens: 25000
 #
 # (optional) CapabilityTags defines named groups of tools and talents that
 # capability_tags:
 #   ha:
+#     Description is a human-readable summary shown in the capability
+#     manifest so the agent knows what activating this tag provides.
 #     description: Home Assistant tools and sensors
+#     Tools lists the tool names belonging to this tag. A tool can
+#     appear in multiple tags; it loads when any of its tags is active.
 #     tools:
 #       - get_ha_states
 #       - call_ha_service
 #       - get_ha_history
+#     AlwaysActive tags cannot be deactivated. They are included in
+#     every session regardless of channel or agent requests.
 #     always_active: true
 #
 # (optional) ChannelTags maps conversation source channels (e.g., "signal",
@@ -226,63 +298,156 @@ talents_dir: ./talents
 #
 # (optional) MCP configures external MCP (Model Context Protocol) server
 # mcp:
+#   Servers lists the MCP servers to connect to at startup.
 #   servers:
-#     - name: my-mcp-server
+#     - # Name is a short identifier used in tool namespacing and logging
+#       (e.g., "home-assistant", "github"). Required.
+#       name: my-mcp-server
+#       Transport is the connection type: "stdio" or "http". Required.
 #       transport: stdio
+#       Command is the executable to spawn (stdio transport only).
 #       command: npx
+#       Args are command-line arguments for the subprocess (stdio transport only).
 #       args:
 #         - -y
 #         - '@modelcontextprotocol/server-example'
+#       Env are additional environment variables for the subprocess
+#       (stdio transport only). Format: "KEY=VALUE".
 #       env: []
+#       URL is the MCP server endpoint (http transport only).
 #       url: ""
+#       Headers are additional HTTP headers sent with every request
+#       (http transport only). Useful for authentication tokens.
 #       headers: {}
+#       IncludeTools is an optional allowlist of MCP tool names to
+#       bridge. When non-empty, only tools in this list are registered.
+#       Cannot be used together with ExcludeTools.
 #       include_tools: []
+#       ExcludeTools is an optional blocklist of MCP tool names to skip.
+#       Cannot be used together with IncludeTools.
 #       exclude_tools: []
 #
 # (optional) MQTT configures MQTT publishing for Home Assistant device discovery
 # mqtt:
+#   Broker is the MQTT broker URL (e.g., "mqtts://host:8883"
+#   or "mqtt://host:1883").
 #   broker: mqtts://your-broker:8883
+#   Username for MQTT broker authentication.
 #   username: thane
+#   Password for MQTT broker authentication.
 #   password: your-mqtt-password
+#   DiscoveryPrefix is the Home Assistant MQTT discovery topic
+#   prefix. Default: "homeassistant".
 #   discovery_prefix: homeassistant
+#   DeviceName drives MQTT topic paths and HA entity IDs. Example:
+#   "aimee-thane" produces sensor.aimee_thane_uptime in HA.
 #   device_name: thane-ai-agent
+#   PublishIntervalSec is how often (in seconds) sensor states are
+#   re-published to the broker. Default: 60. Minimum: 10.
 #   publish_interval: 60
+#   Subscriptions lists MQTT topics to subscribe to for ambient
+#   awareness. Messages are received and logged but not autonomously
+#   acted upon. Future phases will route messages to the anticipation
+#   engine. Supports MQTT wildcard characters (+ and #).
 #   subscriptions:
-#     - topic: homeassistant/+/+/state
-#     - topic: frigate/events
+#     - # Topic is the MQTT topic filter (e.g., "homeassistant/+/+/state",
+#       "frigate/events"). Supports MQTT wildcard characters.
+#       topic: homeassistant/+/+/state
+#     - # Topic is the MQTT topic filter (e.g., "homeassistant/+/+/state",
+#       "frigate/events"). Supports MQTT wildcard characters.
+#       topic: frigate/events
+#   Telemetry configures operational metric publishing. When enabled,
+#   a separate mqtt-telemetry loop publishes system health, token usage,
+#   loop states, and other operational data as native HA sensors.
 #   telemetry:
+#     Enabled activates the mqtt-telemetry loop. Requires MQTT to be
+#     configured (broker + device_name).
 #     enabled: true
+#     Interval is how often (in seconds) telemetry metrics are
+#     collected and published. Default: 60. Minimum: 10.
 #     interval: 60
 #
 # (optional) Person configures household member presence tracking. When Track
 # person:
+#   Track is a list of Home Assistant person entity IDs to monitor
+#   (e.g., ["person.nugget", "person.dan"]). Each entry must begin
+#   with "person.". An empty list disables person tracking.
 #   track:
 #     - person.alice
 #     - person.bob
+#   Devices maps tracked person entity IDs to their wireless device
+#   MAC addresses. Used by the UniFi poller to determine which person
+#   a wireless client belongs to for room-level presence.
 #   devices:
 #     person.alice:
-#       - mac: AA:BB:CC:DD:EE:FF
-#       - mac: 11:22:33:44:55:66
+#       - # MAC is the device's MAC address (e.g., "AA:BB:CC:DD:EE:FF").
+#         Case-insensitive; normalized to lowercase at startup.
+#         mac: AA:BB:CC:DD:EE:FF
+#       - # MAC is the device's MAC address (e.g., "AA:BB:CC:DD:EE:FF").
+#         Case-insensitive; normalized to lowercase at startup.
+#         mac: 11:22:33:44:55:66
+#   APRooms maps AP names (e.g., "ap-hor-office") to human-readable
+#   room names (e.g., "office"). Only APs listed here contribute to
+#   room presence; unlisted APs are ignored.
 #   ap_rooms:
 #     ap-bedroom: bedroom
 #     ap-office: office
 #
 # (optional) Signal configures the Signal message bridge for inbound message
 # signal:
+#   Enabled controls whether the Signal bridge starts.
 #   enabled: true
+#   Command is the signal-cli executable path (e.g., "signal-cli").
 #   command: signal-cli
+#   Account is the phone number to use (e.g., "+15124232707").
+#   Passed as the -a flag to signal-cli.
 #   account: "+15551234567"
+#   Args are additional command-line arguments appended after the
+#   standard "-a ACCOUNT jsonRpc" arguments.
 #   args: []
+#   RateLimitPerMinute caps how many inbound messages per sender
+#   are processed per minute. Zero disables rate limiting.
+#   Default: 10.
 #   rate_limit_per_minute: 10
+#   SessionIdleMinutes is the idle timeout in minutes for session
+#   rotation. When a new Signal message arrives and the last message
+#   from that sender was more than this many minutes ago, the
+#   previous session is ended (triggering background summarization)
+#   and a fresh one begins on the next agent loop call. Zero or
+#   omitted disables idle rotation.
 #   session_idle_minutes: 30
+#   Routing configures how Signal messages are routed to LLM models.
+#   All fields are optional; defaults preserve the original hardcoded
+#   behavior (quality_floor=6, mission=conversation, delegation_gating=disabled).
 #   routing:
+#     Model sets an explicit model for Signal messages. When non-empty,
+#     the router is bypassed entirely. Empty means use the router with
+#     the hint-based defaults below.
 #     model: ""
+#     QualityFloor is the minimum model quality rating (1-10) passed
+#     to the router. Default: "6".
 #     quality_floor: "6"
+#     Mission describes the task context for routing. Default: "conversation".
 #     mission: conversation
+#     DelegationGating controls whether delegation-first tool gating
+#     is active. Default: "disabled".
 #     delegation_gating: disabled
+#   AttachmentSourceDir is the directory where signal-cli stores
+#   downloaded attachments. Defaults to
+#   ~/.local/share/signal-cli/attachments when empty.
 #   attachment_source_dir: ""
+#   AttachmentDir is the workspace subdirectory where received
+#   attachments are copied for agent access. Defaults to
+#   {workspace}/signal-attachments when empty and workspace is set.
 #   attachment_dir: ""
+#   MaxAttachmentSize is the maximum attachment size in bytes that
+#   will be processed. Attachments exceeding this are described but
+#   not copied. Zero means no limit.
 #   max_attachment_size: 0
+#   HandleTimeout bounds how long a single inbound message may be
+#   processed (agent loop + response send). This needs to be long
+#   enough to cover tool execution (e.g., media_transcript) plus
+#   the subsequent LLM response. Default: 10m.
 #   handle_timeout: 10m
 #
 # (optional) Forge configures code forge integrations (GitHub, Gitea). When
@@ -318,10 +483,18 @@ talents_dir: ./talents
 #
 # (optional) Identity configures the agent's own contact identity for vCard
 # identity:
+#   ContactName is the formatted name of the agent's own contact
+#   record. When set, export_vcf name="self" resolves to this
+#   contact.
 #   contact_name: Thane
 #
 # (optional) Attachments configures content-addressed attachment storage.
 # attachments:
+#   StoreDir is the root directory for the content-addressed file
+#   store. When set, received attachments are stored by SHA-256 hash
+#   instead of being copied with their original filenames. The
+#   metadata index is stored at {data_dir}/attachments.db.
+#   Supports ~ expansion. Example: ~/Thane/attachments
 #   store_dir: ~/Thane/attachments
 #   vision:
 #     enabled: true
@@ -331,68 +504,171 @@ talents_dir: ./talents
 #
 # (optional) Provenance configures git-backed file storage with SSH signature
 # provenance:
+#   Path is the directory for the provenance git repository.
+#   Supports ~ expansion. Example: ~/Thane/identity
 #   path: ~/Thane/identity
+#   SigningKey is the path to an SSH private key used to sign
+#   commits. The key is loaded at startup and held in memory.
+#   Supports ~ expansion. Example: ~/.ssh/id_ed25519
 #   signing_key: ~/.ssh/id_ed25519
 #
 # (optional) StateWindow configures the rolling window of recent Home Assistant
 # state_window:
+#   MaxEntries is the circular buffer capacity. When the buffer is
+#   full, the oldest entry is overwritten. Default: 50.
 #   max_entries: 50
+#   MaxAgeMinutes controls how long entries remain visible. Entries
+#   older than this are excluded from the context output at read
+#   time. Default: 30.
 #   max_age_minutes: 30
 #
 # (optional) Unifi configures the UniFi network controller connection for
 # unifi:
+#   URL is the base URL of the UniFi controller
+#   (e.g., "https://192.168.1.1").
 #   url: https://192.168.1.1
+#   APIKey is the API key for UniFi controller authentication.
+#   Sent as X-API-KEY header.
 #   api_key: your-unifi-api-key
+#   PollIntervalSec is how often (in seconds) to poll for wireless
+#   client station data. Default: 30. Minimum: 10.
 #   poll_interval: 30
 #
 # (optional) Prewarm configures context pre-warming for cold-start loops.
 # prewarm:
+#   Enabled controls whether subject-keyed fact injection is active.
+#   Default: false.
 #   enabled: false
+#   MaxFacts caps the number of subject-matched facts injected per
+#   wake. Default: 10.
 #   max_facts: 10
+#   Archive configures Phase 2 pre-warming: injecting relevant past
+#   conversation excerpts alongside Layer 1 knowledge. See issue #404.
 #   archive:
+#     Enabled controls whether archive injection is active.
+#     Requires the parent Prewarm.Enabled to also be true.
+#     Default: false.
 #     enabled: false
+#     MaxResults caps the number of archive search results injected.
+#     Default: 3.
 #     max_results: 3
+#     MaxBytes caps the formatted output in bytes to prevent context
+#     flooding. Default: 4000 (~1000 tokens).
 #     max_bytes: 4000
 #
 # (optional) Media configures the media transcript retrieval tool. When yt-dlp
 # media:
+#   YtDlpPath is the explicit path to the yt-dlp binary. If empty,
+#   the binary is located via exec.LookPath at startup.
 #   yt_dlp_path: ""
+#   CookiesFile is an optional path to a Netscape-format cookie file
+#   for accessing auth-required content (e.g., age-restricted videos).
+#   Mutually exclusive with CookiesFromBrowser.
 #   cookies_file: ""
+#   CookiesFromBrowser extracts cookies directly from an installed
+#   browser, eliminating the need for manual cookie file export.
+#   Value is passed to yt-dlp's --cookies-from-browser flag.
+#   Examples: "chrome", "firefox", "chrome:Profile 1".
+#   Mutually exclusive with CookiesFile.
 #   cookies_from_browser: ""
+#   SubtitleLanguage is the preferred subtitle language code.
+#   Default: "en".
 #   subtitle_language: en
+#   MaxTranscriptChars limits the transcript text returned in-context.
+#   Longer transcripts are truncated. Default: 50000.
 #   max_transcript_chars: 50000
+#   WhisperModel is the Ollama model name for audio transcription
+#   fallback when no subtitles are available. Default: "large-v3".
 #   whisper_model: ""
+#   TranscriptDir is the directory for durable transcript storage.
+#   Each transcript is saved as a markdown file with YAML frontmatter.
+#   If empty, transcripts are returned in-context only (not persisted).
 #   transcript_dir: ""
+#   SummarizeModel is the preferred model for transcript summarization.
+#   When set, it is passed as a routing hint (soft preference, not
+#   override). If empty, the router selects an appropriate local model.
 #   summarize_model: ""
+#   FeedCheckInterval is how often (in seconds) to poll followed RSS/Atom
+#   feeds for new entries. Set to a positive value to enable polling (e.g.,
+#   3600 for hourly). Default: 0 (disabled). No default is applied —
+#   users must opt in by setting a positive interval.
 #   feed_check_interval: 3600
+#   MaxFeeds limits the number of feeds that can be followed.
+#   Default: 50.
 #   max_feeds: 50
+#   Analysis configures the structured media analysis pipeline
+#   that writes analysis output to an Obsidian-compatible vault.
 #   analysis:
+#     DefaultOutputPath is the base directory for analysis output when
+#     a feed has no per-feed output_path configured. Supports ~ expansion.
+#     Example: ~/Sync/Aimee/Vault/Media
 #     default_output_path: ~/Sync/Vault/Media
+#     DatabasePath is the SQLite database file for engagement tracking.
+#     If empty, defaults to {data_dir}/media_engagement.db at startup.
 #     database_path: ""
 #
 # (optional) Metacognitive configures the perpetual metacognitive attention loop.
 # metacognitive:
+#   Enabled controls whether the metacognitive loop starts. Default: false.
 #   enabled: false
+#   StateFile is the path to the persistent state file, relative to
+#   the workspace root. Default: "metacognitive.md".
 #   state_file: metacognitive.md
+#   MinSleep is the minimum allowed sleep duration between iterations.
+#   The LLM cannot request a shorter sleep via set_next_sleep.
+#   Default: "2m". Parsed as a Go duration string.
 #   min_sleep: 2m
+#   MaxSleep is the maximum allowed sleep duration between iterations.
+#   Default: "30m".
 #   max_sleep: 30m
+#   DefaultSleep is used when the LLM does not call set_next_sleep.
+#   Default: "10m".
 #   default_sleep: 10m
+#   Jitter is the sleep randomization factor (0.0–1.0). A value of
+#   0.2 means the actual sleep varies by ±20% of the computed
+#   duration. Default: 0.2. Set to 0.0 for deterministic timing.
 #   jitter: 0.2
+#   SupervisorProbability is the chance (0.0–1.0) that each wake
+#   uses a frontier model with supervisor-augmented prompt.
+#   Default: 0.1. Set to 0.0 to disable supervisor iterations.
 #   supervisor_probability: 0.1
+#   Router configures model routing for normal (non-supervisor)
+#   iterations.
 #   router:
+#     QualityFloor is the minimum quality rating (1–10) for model
+#     selection. Default: 3 for normal iterations, 8 for supervisor.
 #     quality_floor: 3
+#   SupervisorRouter configures model routing for supervisor
+#   iterations (frontier model with augmented prompt).
 #   supervisor_router:
+#     QualityFloor is the minimum quality rating (1–10) for model
+#     selection. Default: 3 for normal iterations, 8 for supervisor.
 #     quality_floor: 8
 #
 # (optional) OpenClaw configures the thane:openclaw Ollama profile, which
 # openclaw:
+#   WorkspacePath is the root directory containing the agent's
+#   workspace files (AGENTS.md, SOUL.md, USER.md, MEMORY.md, etc.)
+#   and memory directory. Supports ~ expansion.
+#   Default: ~/Thane/openclaw.
 #   workspace: ~/Thane/openclaw
+#   SkillsDirs is a list of directories to scan for SKILL.md files.
+#   Directories are searched in order; skills in earlier directories
+#   override same-named skills in later ones.
+#   Default: [~/Thane/openclaw/skills].
 #   skills_dirs:
 #     - ~/Thane/openclaw/skills
+#   MaxFileChars is the maximum characters per injected workspace
+#   file. Files exceeding this limit are truncated using the 70/20
+#   head/tail strategy matching OpenClaw v2026.2.9 behavior.
+#   Default: 20000.
 #   max_file_chars: 20000
 #
 # (optional) Debug configures diagnostic options for inspecting the assembled
 # debug:
+#   DemoLoops spawns simulated loops covering all visual variants
+#   (categories, parent/child, error states, node churn) so the
+#   dashboard can be iterated on without real service dependencies.
 #   demo_loops: false
 #
 # (optional) Timezone is the IANA timezone for the household (e.g.,

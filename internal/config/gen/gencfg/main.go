@@ -213,7 +213,7 @@ func buildDocument(cfg *config.Config, comments commentMap) *yaml.Node {
 
 		if optionalKeys[yamlKey] {
 			// Build commented-out YAML for this section and accumulate.
-			commented := buildCommentedSection(yamlKey, fv, ft, fieldDoc)
+			commented := buildCommentedSection(yamlKey, fv, ft, fieldDoc, comments)
 			pendingComment.WriteString(commented)
 		} else {
 			// Build the required key node.
@@ -254,15 +254,22 @@ func buildDocument(cfg *config.Config, comments commentMap) *yaml.Node {
 	return docNode
 }
 
-// buildCommentedSection marshals the field as a key: value YAML block and
-// prefixes every line with "# ". The field doc comment appears as an
-// "(optional)" header line so users understand the section is optional.
-func buildCommentedSection(key string, v reflect.Value, t reflect.Type, fieldDoc string) string {
+// buildCommentedSection marshals the field as a key: value YAML block, with
+// per-field doc comments included, and renders every line commented out.
+// The fieldDoc appears as an "(optional)" header so users understand the
+// section is not required. The comments map is used for per-field guidance
+// within the block.
+//
+// yaml.v3 renders HeadComment nodes as "  # comment text" lines. When we
+// prefix the whole block with "# ", those lines would become "# # comment
+// text" (double-hashed). To avoid that, we detect inner HeadComment lines
+// and strip their leading "#" so they render as clean single-hash comments
+// inside the outer "# " prefix.
+func buildCommentedSection(key string, v reflect.Value, t reflect.Type, fieldDoc string, comments commentMap) string {
 	var buf strings.Builder
 
 	// Section header: blank comment separator + doc summary.
-	buf.WriteString("#\n")
-	buf.WriteString("# (optional) ")
+	buf.WriteString("#\n# (optional) ")
 	if fieldDoc != "" {
 		// First sentence of the doc comment is sufficient here.
 		first := strings.SplitN(fieldDoc, "\n", 2)[0]
@@ -272,9 +279,9 @@ func buildCommentedSection(key string, v reflect.Value, t reflect.Type, fieldDoc
 	}
 	buf.WriteString("\n")
 
-	// Marshal the section value without per-field comments (nil commentMap)
-	// for a compact, readable commented-out block.
-	valNode := buildValueNode(v, t, nil)
+	// Build the value node with full field comments so users see per-field
+	// documentation inside the commented-out block.
+	valNode := buildValueNode(v, t, comments)
 
 	wrapDoc := &yaml.Node{
 		Kind: yaml.DocumentNode,
@@ -300,9 +307,25 @@ func buildCommentedSection(key string, v reflect.Value, t reflect.Type, fieldDoc
 	raw = strings.TrimPrefix(raw, "---\n")
 
 	for _, line := range strings.Split(strings.TrimRight(raw, "\n"), "\n") {
-		buf.WriteString("# ")
-		buf.WriteString(line)
-		buf.WriteString("\n")
+		// yaml.v3 renders HeadComments as indented "  # text" lines.
+		// Detect them by checking whether the trimmed line starts with "#",
+		// then strip the inner "#" prefix so the outer "# " produces clean
+		// single-hash comment lines rather than "# # text".
+		trimmed := strings.TrimLeft(line, " \t")
+		if strings.HasPrefix(trimmed, "#") {
+			spaces := line[:len(line)-len(trimmed)]
+			commentText := strings.TrimPrefix(trimmed, "#")
+			commentText = strings.TrimPrefix(commentText, " ")
+			if commentText == "" {
+				buf.WriteString("#\n")
+			} else {
+				buf.WriteString("# " + spaces + commentText + "\n")
+			}
+		} else {
+			buf.WriteString("# ")
+			buf.WriteString(line)
+			buf.WriteString("\n")
+		}
 	}
 
 	return buf.String()
@@ -312,16 +335,14 @@ func buildCommentedSection(key string, v reflect.Value, t reflect.Type, fieldDoc
 // value. When comments is non-nil, struct field doc comments are attached
 // as HeadComments on key nodes.
 func buildValueNode(v reflect.Value, t reflect.Type, comments commentMap) *yaml.Node {
-	// Dereference pointers.
+	// Dereference pointers. A nil pointer in the required (non-commented)
+	// path emits "null". In a commented-out section the caller already
+	// has a non-nil value from ExampleConfig, but if somehow we reach nil
+	// here, synthesize a zero value so the YAML block is still meaningful.
 	if t.Kind() == reflect.Ptr {
 		if v.IsNil() {
-			if comments == nil {
-				// In commented-out mode, emit a zero value for the element type
-				// so the user sees a meaningful example rather than "null".
-				zv := reflect.New(t.Elem()).Elem()
-				return buildValueNode(zv, t.Elem(), nil)
-			}
-			return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!null", Value: "null"}
+			zv := reflect.New(t.Elem()).Elem()
+			return buildValueNode(zv, t.Elem(), comments)
 		}
 		return buildValueNode(v.Elem(), t.Elem(), comments)
 	}
