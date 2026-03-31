@@ -20,7 +20,7 @@ import (
 //
 // When new fields are added to [Config] or any sub-struct, ExampleConfig
 // must be updated accordingly so the generated config stays complete.
-// The generator (go generate ./internal/config/gen/gencfg) re-runs automatically
+// The generator (go generate ./internal/config) re-runs automatically
 // on any change to this file or to the Config struct definitions.
 func ExampleConfig() *Config {
 	// Pointer helpers — needed for optional *T fields.

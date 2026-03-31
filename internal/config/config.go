@@ -18,7 +18,7 @@
 //
 // To regenerate examples/config.example.yaml from source:
 //
-//	go generate ./internal/config/gen/gencfg
+//	go generate ./internal/config
 //
 //go:generate go run ./gen/gencfg -srcdir . -out ../../examples/config.example.yaml
 package config
