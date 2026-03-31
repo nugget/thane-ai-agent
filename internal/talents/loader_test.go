@@ -169,7 +169,7 @@ func TestFilterByTags_Empty(t *testing.T) {
 	}
 }
 
-func TestLoadAll(t *testing.T) {
+func TestTalents(t *testing.T) {
 	dir := t.TempDir()
 
 	// Write talent files with and without frontmatter.
@@ -178,7 +178,7 @@ func TestLoadAll(t *testing.T) {
 	writeFile(t, dir, "search.md", "---\ntags: [search, web]\n---\n# Search\nSearch guidance.")
 
 	loader := NewLoader(dir)
-	talents, err := loader.LoadAll()
+	talents, err := loader.Talents()
 	if err != nil {
 		t.Fatalf("LoadAll() error = %v", err)
 	}
@@ -216,25 +216,25 @@ func TestLoadAll(t *testing.T) {
 	}
 }
 
-func TestLoadAll_EmptyDir(t *testing.T) {
+func TestTalents_EmptyDir(t *testing.T) {
 	loader := NewLoader("")
-	talents, err := loader.LoadAll()
+	talents, err := loader.Talents()
 	if err != nil {
-		t.Fatalf("LoadAll() error = %v", err)
+		t.Fatalf("Talents() error = %v", err)
 	}
 	if talents != nil {
-		t.Errorf("LoadAll() = %v, want nil for empty dir", talents)
+		t.Errorf("Talents() = %v, want nil for empty dir", talents)
 	}
 }
 
-func TestLoadAll_MissingDir(t *testing.T) {
+func TestTalents_MissingDir(t *testing.T) {
 	loader := NewLoader("/nonexistent/path")
-	talents, err := loader.LoadAll()
+	talents, err := loader.Talents()
 	if err != nil {
-		t.Fatalf("LoadAll() error = %v", err)
+		t.Fatalf("Talents() error = %v", err)
 	}
 	if talents != nil {
-		t.Errorf("LoadAll() = %v, want nil for missing dir", talents)
+		t.Errorf("Talents() = %v, want nil for missing dir", talents)
 	}
 }
 

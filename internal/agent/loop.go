@@ -193,7 +193,6 @@ type Loop struct {
 	model             string
 	recoveryModel     string            // Fast model for timeout recovery summaries (empty = disabled)
 	retryBaseDelay    time.Duration     // Base backoff delay between timeout retries (0 = use default)
-	talents           string            // Combined talent content for system prompt
 	persona           string            // Persona content (replaces base system prompt if set)
 	egoFile           string            // Path to ego.md — read fresh each turn for system prompt
 	provenanceStore   *provenance.Store // Optional provenance store for ego.md metadata injection
@@ -250,7 +249,7 @@ type Loop struct {
 }
 
 // NewLoop creates a new agent loop.
-func NewLoop(logger *slog.Logger, mem MemoryStore, compactor Compactor, rtr *router.Router, ha *homeassistant.Client, sched *scheduler.Scheduler, llmClient llm.Client, defaultModel, talents, persona string, contextWindow int) *Loop {
+func NewLoop(logger *slog.Logger, mem MemoryStore, compactor Compactor, rtr *router.Router, ha *homeassistant.Client, sched *scheduler.Scheduler, llmClient llm.Client, defaultModel string, parsedTalents []talents.Talent, persona string, contextWindow int) *Loop {
 	return &Loop{
 		logger:        logger,
 		memory:        mem,
@@ -259,7 +258,7 @@ func NewLoop(logger *slog.Logger, mem MemoryStore, compactor Compactor, rtr *rou
 		llm:           llmClient,
 		tools:         tools.NewRegistry(ha, sched),
 		model:         defaultModel,
-		talents:       talents,
+		parsedTalents: parsedTalents,
 		persona:       persona,
 		contextWindow: contextWindow,
 		nowFunc:       time.Now,
@@ -690,12 +689,8 @@ func (l *Loop) buildSystemPrompt(ctx context.Context, userMessage string, histor
 	seal()
 
 	// 5. Talents (behavior — how should I act)
-	// When capability tagging is configured, filter talents by active tags.
-	// Otherwise, use the pre-combined static string.
-	talentContent := l.talents
-	if l.parsedTalents != nil {
-		talentContent = talents.FilterByTags(l.parsedTalents, tags)
-	}
+	// Filter by active tags; nil tags means no filtering (all talents load).
+	talentContent := talents.FilterByTags(l.parsedTalents, tags)
 	if talentContent != "" {
 		mark("TALENTS")
 		sb.WriteString("\n\n## Behavioral Guidance\n\n")

@@ -27,55 +27,12 @@ type Talent struct {
 	Content string   // Markdown content (frontmatter stripped)
 }
 
-// Load reads all .md files from the talents directory and returns
-// their combined content, suitable for injection into system prompts.
-func (l *Loader) Load() (string, error) {
-	if l.dir == "" {
-		return "", nil
-	}
-
-	entries, err := os.ReadDir(l.dir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return "", nil // No talents dir is fine
-		}
-		return "", fmt.Errorf("read talents dir: %w", err)
-	}
-
-	var files []string
-	for _, e := range entries {
-		if !e.IsDir() && strings.HasSuffix(e.Name(), ".md") {
-			files = append(files, e.Name())
-		}
-	}
-
-	// Sort for deterministic ordering
-	sort.Strings(files)
-
-	var parts []string
-	for _, f := range files {
-		content, err := os.ReadFile(filepath.Join(l.dir, f))
-		if err != nil {
-			return "", fmt.Errorf("read talent %s: %w", f, err)
-		}
-		parts = append(parts, string(content))
-	}
-
-	if len(parts) == 0 {
-		return "", nil
-	}
-
-	return strings.Join(parts, "\n\n---\n\n"), nil
-}
-
-// LoadAll reads all talent files and parses their frontmatter. Returns
-// parsed Talent structs with tags extracted. Use FilterByTags to select
-// talents matching active capability tags.
-func (l *Loader) LoadAll() ([]Talent, error) {
+// listFiles returns a sorted slice of .md filenames in l.dir.
+// Returns nil, nil when dir is unset or does not exist.
+func (l *Loader) listFiles() ([]string, error) {
 	if l.dir == "" {
 		return nil, nil
 	}
-
 	entries, err := os.ReadDir(l.dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -83,33 +40,36 @@ func (l *Loader) LoadAll() ([]Talent, error) {
 		}
 		return nil, fmt.Errorf("read talents dir: %w", err)
 	}
-
 	var files []string
 	for _, e := range entries {
 		if !e.IsDir() && strings.HasSuffix(e.Name(), ".md") {
 			files = append(files, e.Name())
 		}
 	}
-
 	sort.Strings(files)
+	return files, nil
+}
 
-	var talents []Talent
+// Talents reads all .md files from the talents directory, parses their
+// YAML frontmatter, and returns one Talent per file. Tags are extracted
+// from frontmatter; Content has the frontmatter stripped. Use
+// FilterByTags to select the subset matching active capability tags.
+func (l *Loader) Talents() ([]Talent, error) {
+	files, err := l.listFiles()
+	if err != nil {
+		return nil, err
+	}
+	var ts []Talent
 	for _, f := range files {
 		data, err := os.ReadFile(filepath.Join(l.dir, f))
 		if err != nil {
 			return nil, fmt.Errorf("read talent %s: %w", f, err)
 		}
-
 		name := strings.TrimSuffix(f, ".md")
 		tags, content := ParseFrontmatter(string(data))
-		talents = append(talents, Talent{
-			Name:    name,
-			Tags:    tags,
-			Content: content,
-		})
+		ts = append(ts, Talent{Name: name, Tags: tags, Content: content})
 	}
-
-	return talents, nil
+	return ts, nil
 }
 
 // FilterByTags returns the combined content of talents matching the
@@ -311,30 +271,4 @@ func GenerateManifest(entries []ManifestEntry) *Talent {
 		Tags:    nil, // Untagged — always loads
 		Content: sb.String(),
 	}
-}
-
-// List returns the names of available talent files.
-func (l *Loader) List() ([]string, error) {
-	if l.dir == "" {
-		return nil, nil
-	}
-
-	entries, err := os.ReadDir(l.dir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-
-	var names []string
-	for _, e := range entries {
-		if !e.IsDir() && strings.HasSuffix(e.Name(), ".md") {
-			name := strings.TrimSuffix(e.Name(), ".md")
-			names = append(names, name)
-		}
-	}
-
-	sort.Strings(names)
-	return names, nil
 }
