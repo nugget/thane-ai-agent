@@ -16,6 +16,18 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/config"
 )
 
+// CapabilityTagStore persists activated capability tags per conversation.
+// Tags activated via activate_capability are saved at the end of each
+// Run and restored at the start of the next Run for the same conversation.
+type CapabilityTagStore interface {
+	// LoadTags returns the previously activated tags for a conversation.
+	// Returns nil on missing/empty.
+	LoadTags(conversationID string) ([]string, error)
+	// SaveTags persists the active tags for a conversation. Pass nil
+	// or empty to clear.
+	SaveTags(conversationID string, tags []string) error
+}
+
 type capScopeKey struct{}
 
 // withCapabilityScope stores the scope in ctx.
@@ -93,6 +105,25 @@ func (s *capabilityScope) Snapshot() map[string]bool {
 		snap[k] = v
 	}
 	return snap
+}
+
+// UserActivatedTags returns tags that were activated by the model (not
+// always-active, not pinned by channel or lens). These are the tags
+// that should be persisted per conversation.
+func (s *capabilityScope) UserActivatedTags() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var tags []string
+	for tag := range s.active {
+		if s.pinned[tag] {
+			continue // lenses and channel-pinned
+		}
+		if cfg, ok := s.capTags[tag]; ok && cfg.AlwaysActive {
+			continue
+		}
+		tags = append(tags, tag)
+	}
+	return tags
 }
 
 // Request activates a capability tag. Both configured tags (with tools
