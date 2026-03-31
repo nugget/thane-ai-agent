@@ -7,7 +7,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/nugget/thane-ai-agent/internal/agent"
 	"github.com/nugget/thane-ai-agent/internal/connwatch"
 	"github.com/nugget/thane-ai-agent/internal/events"
 	"github.com/nugget/thane-ai-agent/internal/homeassistant"
@@ -22,8 +21,9 @@ import (
 )
 
 // initStores creates data stores, background infrastructure, and the
-// model router. Everything here is "passive" — no goroutines are
-// launched, but deferred workers are registered for later start.
+// model router. Most components are passive — their goroutines are
+// started later via deferred workers — but connwatch watchers start
+// background health-check goroutines immediately.
 func (a *App) initStores(s *newState) error {
 	cfg := a.cfg
 	logger := a.logger
@@ -332,16 +332,14 @@ func (a *App) initStores(s *newState) error {
 	}
 	a.usageStore = usageStore
 
-	// Forward-declare task execution dependencies so the executeTask
-	// closure can reference them. All fields are populated before the
-	// scheduler fires its first task.
-	var loop *agent.Loop
+	// Task execution dependencies. The runner reads a.loop at call time
+	// (not capture time) so it sees the loop constructed by initAgentLoop.
 	var deps taskExecDeps
 	deps.logger = logger
 	deps.workspacePath = cfg.Workspace.Path
 
 	executeTask := func(ctx context.Context, task *scheduler.Task, exec *scheduler.Execution) error {
-		deps.runner = loop // captured by reference, set before first fire
+		deps.runner = a.loop // read at execution time, set by initAgentLoop
 		return runScheduledTask(ctx, task, exec, deps)
 	}
 
