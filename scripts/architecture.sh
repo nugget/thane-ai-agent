@@ -21,9 +21,10 @@ pkg_count() {
 }
 
 # Exported and unexported interface type definitions in non-test .go files.
+# Matches both `type X interface {` and `type X interface{`.
 iface_count() {
     grep -rh --include='*.go' --exclude='*_test.go' \
-        -E '^[[:space:]]*type [A-Za-z][A-Za-z0-9_]* interface' \
+        -E '^[[:space:]]*type [A-Za-z][A-Za-z0-9_]* interface[[:space:]]*\{' \
         "$ROOT/internal" "$ROOT/cmd" 2>/dev/null \
         | wc -l | tr -d '[:space:]'
 }
@@ -36,7 +37,7 @@ large_file_count() {
         | wc -l | tr -d '[:space:]'
 }
 
-# Method definitions matching Set[A-Z]* on a pointer receiver in non-test files.
+# Method definitions matching Set[A-Z]* (any receiver type) in non-test files.
 set_mutator_count() {
     grep -rh --include='*.go' --exclude='*_test.go' \
         -E 'func \([^)]+\) Set[A-Z]' \
@@ -67,7 +68,7 @@ large_files_list() {
 
 read_baseline() {
     local key="$1"
-    grep "^${key}=" "$BASELINE" 2>/dev/null | cut -d= -f2
+    grep "^${key}=" "$BASELINE" 2>/dev/null | head -1 | cut -d= -f2
 }
 
 # ── collect current counts ───────────────────────────────────────────────────
