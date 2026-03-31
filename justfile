@@ -267,7 +267,8 @@ logs workdir="./Thane":
 # The new binary must have run at least once first (to create the target
 # tables via CREATE TABLE IF NOT EXISTS), then been stopped before running
 # this recipe. Safe to run multiple times (uses INSERT OR IGNORE).
-# Removes old files on success.
+# Removes old files only when every table was successfully migrated.
+# Uses column-intersection INSERT to tolerate schema evolution (AddColumn).
 [group('operations')]
 migrate-databases datadir="Thane/db":
     #!/usr/bin/env sh
@@ -284,19 +285,37 @@ migrate-databases datadir="Thane/db":
         if [ -f "$OLD_PATH" ]; then
             echo "Migrating $old → thane.db ..."
             tables=$(sqlite3 "$OLD_PATH" ".tables")
+            skipped=0
             for tbl in $tables; do
                 # Only migrate tables that exist in thane.db (schema created by app).
                 if sqlite3 "$DB" "SELECT name FROM sqlite_master WHERE type='table' AND name='$tbl';" | grep -q "$tbl"; then
+                    # Build the intersection of columns present in both databases to
+                    # handle schema evolution (AddColumn migrations add columns to
+                    # thane.db that the old file doesn't have yet).
+                    src_cols=$(sqlite3 "$OLD_PATH" "PRAGMA table_info($tbl);" | awk -F'|' '{print $2}')
+                    dst_cols=$(sqlite3 "$DB"       "PRAGMA table_info($tbl);" | awk -F'|' '{print $2}')
+                    common_cols=$(printf '%s\n' $src_cols | grep -Fx "$(printf '%s\n' $dst_cols)" | tr '\n' ',' | sed 's/,$//')
+                    if [ -z "$common_cols" ]; then
+                        echo "  Skipping $tbl — no common columns"
+                        skipped=$((skipped + 1))
+                        continue
+                    fi
                     count=$(sqlite3 "$OLD_PATH" "SELECT COUNT(*) FROM $tbl;")
-                    sqlite3 "$DB" "ATTACH '$OLD_PATH' AS old; INSERT OR IGNORE INTO $tbl SELECT * FROM old.$tbl; DETACH old;"
-                    echo "  $tbl ($count rows)"
+                    sqlite3 "$DB" "ATTACH '$OLD_PATH' AS old; INSERT OR IGNORE INTO $tbl ($common_cols) SELECT $common_cols FROM old.$tbl; DETACH old;"
+                    echo "  $tbl ($count rows, columns: $common_cols)"
                 else
                     echo "  Skipping $tbl — not present in thane.db schema"
+                    skipped=$((skipped + 1))
                 fi
             done
-            rm "$OLD_PATH"
-            echo "  Removed $OLD_PATH"
-            migrated=$((migrated + 1))
+            if [ "$skipped" -eq 0 ]; then
+                rm "$OLD_PATH"
+                echo "  Removed $OLD_PATH"
+                migrated=$((migrated + 1))
+            else
+                echo "  WARNING: $skipped table(s) skipped — $OLD_PATH NOT removed"
+                echo "  Inspect the output above and re-run after resolving the schema."
+            fi
         fi
     done
     if [ "$migrated" -eq 0 ]; then
