@@ -11,9 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	_ "github.com/mattn/go-sqlite3"
 	"github.com/nugget/thane-ai-agent/internal/config"
-	"github.com/nugget/thane-ai-agent/internal/database"
 )
 
 // Record represents a single LLM interaction's token usage and cost.
@@ -54,26 +52,20 @@ type Store struct {
 	db *sql.DB
 }
 
-// NewStore creates a usage store at the given database path. The schema
+// NewStore creates a usage store using the given database connection.
+// The caller owns the connection — Store does not close it. The schema
 // is created automatically on first use.
-func NewStore(dbPath string) (*Store, error) {
-	db, err := database.Open(dbPath)
-	if err != nil {
-		return nil, fmt.Errorf("open usage database: %w", err)
+func NewStore(db *sql.DB) (*Store, error) {
+	if db == nil {
+		return nil, fmt.Errorf("nil database connection")
 	}
 
 	s := &Store{db: db}
 	if err := s.migrate(); err != nil {
-		db.Close()
 		return nil, fmt.Errorf("migrate usage schema: %w", err)
 	}
 
 	return s, nil
-}
-
-// Close closes the database connection.
-func (s *Store) Close() error {
-	return s.db.Close()
 }
 
 func (s *Store) migrate() error {

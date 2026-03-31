@@ -751,12 +751,11 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// --- Usage tracking ---
 	// Persistent token usage and cost recording for attribution and
 	// analysis. Append-only SQLite store, queried via the cost_summary tool.
-	usageStore, err := usage.NewStore(filepath.Join(cfg.DataDir, "usage.db"))
+	// Shares the main thane.db connection.
+	usageStore, err := usage.NewStore(mem.DB())
 	if err != nil {
-		return fmt.Errorf("open usage database: %w", err)
+		return fmt.Errorf("initialize usage store: %w", err)
 	}
-	defer usageStore.Close()
-	logger.Info("usage store initialized", "path", filepath.Join(cfg.DataDir, "usage.db"))
 
 	// Forward-declare task execution dependencies so the executeTask
 	// closure can reference them. All fields are populated before the
@@ -973,13 +972,12 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		logger.Info("HA notification sender initialized")
 
 		var nrErr error
-		notifRecords, nrErr = notifications.NewRecordStore(cfg.DataDir+"/notifications.db", logger)
+		notifRecords, nrErr = notifications.NewRecordStore(mem.DB(), logger)
 		if nrErr != nil {
-			return fmt.Errorf("open notification record store: %w", nrErr)
+			return fmt.Errorf("initialize notification record store: %w", nrErr)
 		}
-		defer notifRecords.Close()
 		loop.Tools().SetNotificationRecords(notifRecords)
-		logger.Info("notification record store initialized", "path", cfg.DataDir+"/notifications.db")
+		logger.Info("notification record store initialized")
 
 		// Provider-agnostic notification router — wraps the HA push sender
 		// behind a routing layer that selects delivery channel per recipient.

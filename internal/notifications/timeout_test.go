@@ -3,21 +3,25 @@ package notifications
 import (
 	"context"
 	"log/slog"
-	"path/filepath"
 	"testing"
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/nugget/thane-ai-agent/internal/database"
 )
 
 func newTestTimeoutWatcher(t *testing.T) (*TimeoutWatcher, *RecordStore, *mockInjector, *mockDelegateSpawner) {
 	t.Helper()
-	dir := t.TempDir()
-	store, err := NewRecordStore(filepath.Join(dir, "test.db"), slog.Default())
+	db, err := database.Open(":memory:")
+	if err != nil {
+		t.Fatalf("database.Open: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	store, err := NewRecordStore(db, slog.Default())
 	if err != nil {
 		t.Fatalf("NewRecordStore: %v", err)
 	}
-	t.Cleanup(func() { store.Close() })
 
 	inj := &mockInjector{alive: false}
 	del := newMockDelegateSpawner()

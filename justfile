@@ -276,7 +276,7 @@ migrate-databases datadir="Thane/db":
         exit 0
     fi
     migrated=0
-    for old in opstate.db anticipations.db watchlist.db checkpoints.db; do
+    for old in opstate.db anticipations.db watchlist.db checkpoints.db usage.db notifications.db; do
         OLD_PATH="{{datadir}}/$old"
         if [ -f "$OLD_PATH" ]; then
             echo "Migrating $old → thane.db ..."

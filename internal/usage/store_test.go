@@ -2,21 +2,26 @@ package usage
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 	"time"
 
+	_ "github.com/mattn/go-sqlite3"
 	"github.com/nugget/thane-ai-agent/internal/config"
+	"github.com/nugget/thane-ai-agent/internal/database"
 )
 
 func testStore(t *testing.T) *Store {
 	t.Helper()
-	dbPath := filepath.Join(t.TempDir(), "usage_test.db")
-	s, err := NewStore(dbPath)
+	db, err := database.Open(":memory:")
 	if err != nil {
-		t.Fatalf("NewStore(%q): %v", dbPath, err)
+		t.Fatalf("database.Open: %v", err)
 	}
-	t.Cleanup(func() { s.Close() })
+	t.Cleanup(func() { db.Close() })
+
+	s, err := NewStore(db)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
 	return s
 }
 
@@ -364,10 +369,10 @@ func TestRecord_AutoID(t *testing.T) {
 	}
 }
 
-func TestNewStore_InvalidPath(t *testing.T) {
-	_, err := NewStore("/nonexistent/path/usage.db")
+func TestNewStore_NilDB(t *testing.T) {
+	_, err := NewStore(nil)
 	if err == nil {
-		t.Error("NewStore() should fail for invalid path")
+		t.Error("NewStore(nil) should fail")
 	}
 }
 

@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"log/slog"
 	"time"
-
-	"github.com/nugget/thane-ai-agent/internal/database"
 )
 
 // Status constants for notification records.
@@ -48,24 +46,18 @@ type RecordStore struct {
 	logger *slog.Logger
 }
 
-// NewRecordStore opens (or creates) the notifications database at
-// dbPath and runs schema migrations.
-func NewRecordStore(dbPath string, logger *slog.Logger) (*RecordStore, error) {
-	db, err := database.Open(dbPath)
-	if err != nil {
-		return nil, fmt.Errorf("open notifications db: %w", err)
+// NewRecordStore creates a notification record store using the given
+// database connection. The caller owns the connection — RecordStore
+// does not close it. The schema is created automatically on first use.
+func NewRecordStore(db *sql.DB, logger *slog.Logger) (*RecordStore, error) {
+	if db == nil {
+		return nil, fmt.Errorf("nil database connection")
 	}
 	s := &RecordStore{db: db, logger: logger}
 	if err := s.migrate(); err != nil {
-		db.Close()
 		return nil, fmt.Errorf("migrate notifications db: %w", err)
 	}
 	return s, nil
-}
-
-// Close closes the underlying database connection.
-func (s *RecordStore) Close() error {
-	return s.db.Close()
 }
 
 // migrate creates the notification_records table and indexes if they

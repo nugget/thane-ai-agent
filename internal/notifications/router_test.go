@@ -5,13 +5,14 @@ import (
 	"errors"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	_ "github.com/mattn/go-sqlite3"
 	"github.com/nugget/thane-ai-agent/internal/contacts"
+	"github.com/nugget/thane-ai-agent/internal/database"
 )
 
 // mockProvider records calls and optionally returns errors.
@@ -37,12 +38,16 @@ func (m *mockProvider) SendActionable(_ context.Context, req ActionableRequest) 
 
 func newTestRouter(t *testing.T, resolver *mockContactResolver) (*NotificationRouter, *RecordStore) {
 	t.Helper()
-	dbPath := filepath.Join(t.TempDir(), "router-test.db")
-	records, err := NewRecordStore(dbPath, slog.Default())
+	db, err := database.Open(":memory:")
+	if err != nil {
+		t.Fatalf("database.Open: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	records, err := NewRecordStore(db, slog.Default())
 	if err != nil {
 		t.Fatalf("NewRecordStore() error = %v", err)
 	}
-	t.Cleanup(func() { records.Close() })
 	return NewNotificationRouter(resolver, records, slog.New(slog.NewTextHandler(os.Stderr, nil))), records
 }
 
