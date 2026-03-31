@@ -1,0 +1,384 @@
+package config
+
+import (
+	"time"
+
+	"github.com/nugget/thane-ai-agent/internal/channels/email"
+	"github.com/nugget/thane-ai-agent/internal/forge"
+	"github.com/nugget/thane-ai-agent/internal/search"
+)
+
+// ExampleConfig returns a *Config populated with realistic example values
+// for every field. It is the single source of truth for generated config
+// documentation — callers should not hard-code example values elsewhere.
+//
+// Required sections (listen, homeassistant, models, etc.) contain real
+// placeholder values. Optional sections contain example values that the
+// generator emits as commented-out YAML blocks so new users can see the
+// full configuration surface without accidentally enabling services they
+// haven't configured.
+//
+// When new fields are added to [Config] or any sub-struct, ExampleConfig
+// must be updated accordingly so the generated config stays complete.
+// The generator (go generate ./internal/config/gen/gencfg) re-runs automatically
+// on any change to this file or to the Config struct definitions.
+func ExampleConfig() *Config {
+	// Pointer helpers — needed for optional *T fields.
+	logDir := "logs"
+	compress := true
+	retentionDays := 7
+	maxContent := 4096
+	archiveDays := 90
+	sessionIdle := 30
+
+	return &Config{
+		// ── Required / always-shown sections ──────────────────────────────
+
+		Listen: ListenConfig{
+			Port: 8080,
+		},
+
+		OllamaAPI: OllamaAPIConfig{
+			Enabled: true,
+			Port:    11434,
+		},
+
+		HomeAssistant: HomeAssistantConfig{
+			URL:   "https://your-homeassistant.local:8123",
+			Token: "your-long-lived-access-token",
+			Subscribe: SubscribeConfig{
+				EntityGlobs:        []string{"person.*", "binary_sensor.*door*"},
+				RateLimitPerMinute: 10,
+				CooldownMinutes:    5,
+			},
+		},
+
+		Models: ModelsConfig{
+			Default:       "qwen2.5:72b",
+			OllamaURL:     "http://your-ollama-server:11434",
+			LocalFirst:    true,
+			RecoveryModel: "qwen3:4b",
+			Available: []ModelConfig{
+				{
+					Name:          "qwen3:4b",
+					Provider:      "ollama",
+					SupportsTools: true,
+					ContextWindow: 32768,
+					Speed:         9,
+					Quality:       5,
+					CostTier:      0,
+					MinComplexity: "simple",
+				},
+				{
+					Name:          "qwen2.5:72b",
+					Provider:      "ollama",
+					SupportsTools: true,
+					ContextWindow: 131072,
+					Speed:         3,
+					Quality:       9,
+					CostTier:      0,
+					MinComplexity: "moderate",
+				},
+			},
+		},
+
+		DataDir:    "./db",
+		TalentsDir: "./talents",
+
+		Paths: map[string]string{
+			"kb": "./knowledge",
+		},
+
+		ShellExec: ShellExecConfig{
+			Enabled: false,
+			DeniedPatterns: []string{
+				"rm -rf /",
+				"rm -rf /*",
+				"mkfs",
+				"dd if=",
+				":(){:|:&};:",
+				"chmod -R 777 /",
+				"> /dev/sda",
+			},
+			AllowedPrefixes:   []string{},
+			DefaultTimeoutSec: 30,
+		},
+
+		Workspace: WorkspaceConfig{
+			Path: "",
+		},
+
+		Embeddings: EmbeddingsConfig{
+			Enabled: false,
+			Model:   "nomic-embed-text",
+		},
+
+		Logging: LoggingConfig{
+			Dir:                &logDir,
+			Level:              "info",
+			Format:             "json",
+			Compress:           &compress,
+			RetentionDays:      &retentionDays,
+			RetainContent:      false,
+			MaxContentLength:   &maxContent,
+			ContentArchiveDays: &archiveDays,
+		},
+
+		// ── Optional sections (emitted as commented-out YAML) ─────────────
+
+		Anthropic: AnthropicConfig{
+			APIKey: "sk-ant-your-api-key",
+		},
+
+		MQTT: MQTTConfig{
+			Broker:             "mqtts://your-broker:8883",
+			Username:           "thane",
+			Password:           "your-mqtt-password",
+			DiscoveryPrefix:    "homeassistant",
+			DeviceName:         "thane-ai-agent",
+			PublishIntervalSec: 60,
+			Subscriptions: []SubscriptionConfig{
+				{Topic: "homeassistant/+/+/state"},
+				{Topic: "frigate/events"},
+			},
+			Telemetry: TelemetryConfig{
+				Enabled:  true,
+				Interval: 60,
+			},
+		},
+
+		Person: PersonConfig{
+			Track: []string{"person.alice", "person.bob"},
+			Devices: map[string][]DeviceMapping{
+				"person.alice": {
+					{MAC: "AA:BB:CC:DD:EE:FF"},
+					{MAC: "11:22:33:44:55:66"},
+				},
+			},
+			APRooms: map[string]string{
+				"ap-office":  "office",
+				"ap-bedroom": "bedroom",
+			},
+		},
+
+		Unifi: UnifiConfig{
+			URL:             "https://192.168.1.1",
+			APIKey:          "your-unifi-api-key",
+			PollIntervalSec: 30,
+		},
+
+		Signal: SignalConfig{
+			Enabled:            true,
+			Command:            "signal-cli",
+			Account:            "+15551234567",
+			Args:               []string{},
+			RateLimitPerMinute: 10,
+			SessionIdleMinutes: 30,
+			HandleTimeout:      10 * time.Minute,
+			Routing: SignalRoutingConfig{
+				QualityFloor:     "6",
+				Mission:          "conversation",
+				DelegationGating: "disabled",
+			},
+		},
+
+		CardDAV: CardDAVConfig{
+			Enabled:  true,
+			Listen:   []string{"127.0.0.1:8843"},
+			Username: "thane",
+			Password: "your-carddav-password",
+		},
+
+		Identity: IdentityConfig{
+			ContactName: "Thane",
+		},
+
+		Attachments: AttachmentsConfig{
+			StoreDir: "~/Thane/attachments",
+			Vision: VisionConfig{
+				Enabled: true,
+				Model:   "llava:latest",
+				Prompt:  "",
+				Timeout: "30s",
+			},
+		},
+
+		Provenance: ProvenanceConfig{
+			Path:       "~/Thane/identity",
+			SigningKey: "~/.ssh/id_ed25519",
+		},
+
+		Forge: forge.Config{
+			Accounts: []forge.AccountConfig{
+				{
+					Name:     "github",
+					Provider: "github",
+					URL:      "https://api.github.com",
+					Token:    "ghp_your-token",
+					Owner:    "your-username",
+				},
+			},
+		},
+
+		Email: email.Config{
+			Accounts: []email.AccountConfig{
+				{
+					Name: "primary",
+					IMAP: email.IMAPConfig{
+						Host:     "imap.example.com",
+						Port:     993,
+						Username: "thane@example.com",
+						Password: "your-email-password",
+						TLS:      true,
+					},
+					SMTP: email.SMTPConfig{
+						Host:     "smtp.example.com",
+						Port:     587,
+						Username: "thane@example.com",
+						Password: "your-email-password",
+					},
+					DefaultFrom: "Thane <thane@example.com>",
+				},
+			},
+		},
+
+		Context: ContextConfig{
+			InjectFiles: []string{
+				"~/.agents.md",
+				"~/Thane/MEMORY.md",
+			},
+		},
+
+		Archive: ArchiveConfig{
+			MetadataModel:      "qwen2.5-coder:32b",
+			SummarizeInterval:  300,
+			SummarizeTimeout:   60,
+			SessionIdleMinutes: &sessionIdle,
+		},
+
+		Extraction: ExtractionConfig{
+			Enabled:        false,
+			Model:          "",
+			MinMessages:    2,
+			TimeoutSeconds: 30,
+		},
+
+		Episodic: EpisodicConfig{
+			DailyDir:      "~/Thane/daily",
+			LookbackDays:  2,
+			HistoryTokens: 4000,
+		},
+
+		Search: SearchConfig{
+			Default: "searxng",
+			SearXNG: search.SearXNGConfig{
+				URL: "http://your-searxng:8080",
+			},
+			Brave: search.BraveConfig{
+				APIKey: "your-brave-api-key",
+			},
+		},
+
+		Media: MediaConfig{
+			SubtitleLanguage:   "en",
+			MaxTranscriptChars: 50000,
+			FeedCheckInterval:  3600,
+			MaxFeeds:           50,
+			Analysis: AnalysisConfig{
+				DefaultOutputPath: "~/Sync/Vault/Media",
+			},
+		},
+
+		Metacognitive: MetacognitiveConfig{
+			Enabled:               false,
+			StateFile:             "metacognitive.md",
+			MinSleep:              "2m",
+			MaxSleep:              "30m",
+			DefaultSleep:          "10m",
+			Jitter:                0.2,
+			SupervisorProbability: 0.1,
+			Router:                MetacognitiveRouterConfig{QualityFloor: 3},
+			SupervisorRouter:      MetacognitiveRouterConfig{QualityFloor: 8},
+		},
+
+		Agent: AgentConfig{
+			DelegationRequired: false,
+		},
+
+		Delegate: DelegateConfig{
+			Profiles: map[string]DelegateProfileConfig{
+				"general": {
+					ToolTimeout: 3 * time.Minute,
+					MaxDuration: 5 * time.Minute,
+					MaxIter:     15,
+					MaxTokens:   25000,
+				},
+			},
+		},
+
+		MCP: MCPConfig{
+			Servers: []MCPServerConfig{
+				{
+					Name:      "my-mcp-server",
+					Transport: "stdio",
+					Command:   "npx",
+					Args:      []string{"-y", "@modelcontextprotocol/server-example"},
+				},
+			},
+		},
+
+		Prewarm: PrewarmConfig{
+			Enabled:  false,
+			MaxFacts: 10,
+			Archive: ArchivePrewarmConfig{
+				Enabled:    false,
+				MaxResults: 3,
+				MaxBytes:   4000,
+			},
+		},
+
+		StateWindow: StateWindowConfig{
+			MaxEntries:    50,
+			MaxAgeMinutes: 30,
+		},
+
+		CapabilityTags: map[string]CapabilityTagConfig{
+			"ha": {
+				Description:  "Home Assistant tools and sensors",
+				Tools:        []string{"get_ha_states", "call_ha_service", "get_ha_history"},
+				AlwaysActive: true,
+			},
+		},
+
+		ChannelTags: map[string][]string{
+			"signal": {"ha", "search"},
+			"email":  {"forge"},
+		},
+
+		OpenClaw: &OpenClawConfig{
+			WorkspacePath: "~/Thane/openclaw",
+			SkillsDirs:    []string{"~/Thane/openclaw/skills"},
+			MaxFileChars:  20000,
+		},
+
+		Timezone: "America/Chicago",
+
+		PersonaFile: "./persona.md",
+
+		ExtraPath: []string{
+			"$HOME/.local/bin",
+			"/usr/local/go/bin",
+		},
+
+		Pricing: map[string]PricingEntry{
+			"claude-opus-4-20250514": {
+				InputPerMillion:  15.0,
+				OutputPerMillion: 75.0,
+			},
+		},
+
+		Debug: DebugConfig{
+			DemoLoops: false,
+		},
+	}
+}
