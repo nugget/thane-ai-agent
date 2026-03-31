@@ -115,6 +115,7 @@ func (r *Registry) handleHANotify(ctx context.Context, args map[string]any) (str
 	if err := r.notifier.Send(ctx, n); err != nil {
 		return "", err
 	}
+	r.logHANotify(ctx, n)
 	return fmt.Sprintf("Notification sent to %s", recipient), nil
 }
 
@@ -172,6 +173,11 @@ func (r *Registry) handleActionableNotify(ctx context.Context, n notifications.N
 		TimeoutAction:      timeoutAction,
 		CreatedAt:          now,
 		ExpiresAt:          now.Add(timeout),
+		Channel:            "ha_push",
+		Source:             notificationSource(ctx),
+		Kind:               notifications.KindActionable,
+		Title:              n.Title,
+		Message:            n.Message,
 	}
 	if err := r.notifRecords.Create(rec); err != nil {
 		return "", fmt.Errorf("create notification record: %w", err)
@@ -507,5 +513,50 @@ func (r *Registry) registerResolveActionable() {
 			return fmt.Sprintf("Notification %s resolved: action %q dispatched to originating conversation.",
 				requestID, actionID), nil
 		},
+	})
+}
+
+// notificationSource builds a source identifier from the request
+// context for notification history logging. Returns a string like
+// "metacognitive", "signal/+15125551234", or "api".
+func notificationSource(ctx context.Context) string {
+	hints := HintsFromContext(ctx)
+	if hints == nil {
+		return "agent"
+	}
+	source := hints["source"]
+	if source == "" {
+		source = hints["channel"]
+	}
+	if source == "" {
+		return "agent"
+	}
+	// For per-sender channels, append the sender identity.
+	if sender := hints["sender"]; sender != "" {
+		return source + "/" + sender
+	}
+	return source
+}
+
+// logHANotify records a fire-and-forget ha_notify send for history
+// awareness. Errors are logged but not propagated.
+func (r *Registry) logHANotify(ctx context.Context, n notifications.Notification) {
+	if r.notifRecords == nil {
+		return
+	}
+	u, err := uuid.NewV7()
+	if err != nil {
+		return
+	}
+	now := time.Now().UTC()
+	_ = r.notifRecords.Log(&notifications.Record{
+		RequestID: u.String(),
+		Recipient: n.Recipient,
+		Channel:   "ha_push",
+		Source:    notificationSource(ctx),
+		Kind:      notifications.KindFireAndForget,
+		Title:     n.Title,
+		Message:   n.Message,
+		CreatedAt: now,
 	})
 }

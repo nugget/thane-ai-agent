@@ -13,6 +13,7 @@ const (
 	StatusPending   = "pending"
 	StatusResponded = "responded"
 	StatusExpired   = "expired"
+	StatusSent      = "sent" // fire-and-forget, no response expected
 )
 
 // Action represents a single action button on a notification.
@@ -21,9 +22,16 @@ type Action struct {
 	Label string `json:"label"`
 }
 
-// Record tracks an actionable notification from creation through
-// response or expiry. It is the central data type for the HITL
-// callback routing system.
+// Kind constants for notification records.
+const (
+	KindFireAndForget = "fire_and_forget"
+	KindActionable    = "actionable"
+)
+
+// Record tracks a notification from creation through delivery, and
+// optionally through response or expiry for actionable notifications.
+// Fire-and-forget records have empty Actions, zero Timeout fields,
+// and Status set to [StatusSent].
 type Record struct {
 	RequestID          string
 	Recipient          string
@@ -38,6 +46,13 @@ type Record struct {
 	RespondedAt        time.Time
 	CreatedAt          time.Time
 	ExpiresAt          time.Time
+
+	// Fields added for notification history awareness (issue #614).
+	Channel string // provider name: "ha_push", "signal"
+	Source  string // originating loop/conversation: "metacognitive", "signal/+1234"
+	Kind    string // "fire_and_forget" or "actionable"
+	Title   string // notification title
+	Message string // notification body (may be truncated for display)
 }
 
 // RecordStore provides SQLite-backed CRUD for notification records.
@@ -61,7 +76,7 @@ func NewRecordStore(db *sql.DB, logger *slog.Logger) (*RecordStore, error) {
 }
 
 // migrate creates the notification_records table and indexes if they
-// do not already exist.
+// do not already exist, and applies additive schema migrations.
 func (s *RecordStore) migrate() error {
 	const ddl = `
 CREATE TABLE IF NOT EXISTS notification_records (
@@ -84,25 +99,81 @@ CREATE INDEX IF NOT EXISTS idx_notif_pending_status
 CREATE INDEX IF NOT EXISTS idx_notif_pending_expires
     ON notification_records (expires_at) WHERE status = 'pending';
 `
-	_, err := s.db.Exec(ddl)
+	if _, err := s.db.Exec(ddl); err != nil {
+		return err
+	}
+
+	// Issue #614: add columns for notification history awareness.
+	// These are additive-only (ALTER TABLE ADD COLUMN IF NOT EXISTS
+	// is not supported by SQLite, so we check pragma table_info).
+	newCols := []struct {
+		name string
+		ddl  string
+	}{
+		{"channel", `ALTER TABLE notification_records ADD COLUMN channel TEXT NOT NULL DEFAULT ''`},
+		{"source", `ALTER TABLE notification_records ADD COLUMN source TEXT NOT NULL DEFAULT ''`},
+		{"kind", `ALTER TABLE notification_records ADD COLUMN kind TEXT NOT NULL DEFAULT 'actionable'`},
+		{"title", `ALTER TABLE notification_records ADD COLUMN title TEXT NOT NULL DEFAULT ''`},
+		{"message", `ALTER TABLE notification_records ADD COLUMN message TEXT NOT NULL DEFAULT ''`},
+	}
+
+	existing := make(map[string]bool)
+	rows, err := s.db.Query(`PRAGMA table_info(notification_records)`)
+	if err != nil {
+		return fmt.Errorf("pragma table_info: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, typ string
+		var notnull int
+		var dflt sql.NullString
+		var pk int
+		if err := rows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
+			return fmt.Errorf("scan table_info: %w", err)
+		}
+		existing[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate table_info: %w", err)
+	}
+
+	for _, col := range newCols {
+		if existing[col.name] {
+			continue
+		}
+		if _, err := s.db.Exec(col.ddl); err != nil {
+			return fmt.Errorf("add column %s: %w", col.name, err)
+		}
+	}
+
+	// Index for history queries: newest-first scan bounded by time.
+	_, err = s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_notif_created ON notification_records (created_at)`)
 	return err
 }
 
 // Create inserts a new notification record. The record's Status is
-// set to [StatusPending] regardless of the caller's value.
+// set to [StatusPending] regardless of the caller's value. Kind
+// defaults to [KindActionable] if not set.
 func (s *RecordStore) Create(r *Record) error {
 	actionsJSON, err := json.Marshal(r.Actions)
 	if err != nil {
 		return fmt.Errorf("marshal actions: %w", err)
 	}
+	kind := r.Kind
+	if kind == "" {
+		kind = KindActionable
+	}
 	_, err = s.db.Exec(`
 INSERT INTO notification_records
     (request_id, recipient, origin_session, origin_conversation, context,
-     actions_json, timeout_seconds, timeout_action, status, created_at, expires_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
+     actions_json, timeout_seconds, timeout_action, status, created_at, expires_at,
+     channel, source, kind, title, message)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?)`,
 		r.RequestID, r.Recipient, r.OriginSession, r.OriginConversation,
 		r.Context, string(actionsJSON), r.TimeoutSeconds, r.TimeoutAction,
 		r.CreatedAt, r.ExpiresAt,
+		r.Channel, r.Source, kind, r.Title, r.Message,
 	)
 	if err != nil {
 		return fmt.Errorf("insert notification record: %w", err)
@@ -110,34 +181,66 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
 	return nil
 }
 
+// Log inserts a fire-and-forget notification record. Unlike [Create],
+// this is for notifications that need no callback tracking — the
+// record exists solely for history awareness. Status is set to
+// [StatusSent] and ExpiresAt to the zero value.
+func (s *RecordStore) Log(r *Record) error {
+	kind := r.Kind
+	if kind == "" {
+		kind = KindFireAndForget
+	}
+	_, err := s.db.Exec(`
+INSERT INTO notification_records
+    (request_id, recipient, origin_session, origin_conversation, context,
+     actions_json, timeout_seconds, timeout_action, status, created_at, expires_at,
+     channel, source, kind, title, message)
+VALUES (?, ?, ?, ?, '', '[]', 0, '', ?, ?, ?, ?, ?, ?, ?, ?)`,
+		r.RequestID, r.Recipient, r.OriginSession, r.OriginConversation,
+		StatusSent, r.CreatedAt, r.ExpiresAt,
+		r.Channel, r.Source, kind, r.Title, r.Message,
+	)
+	if err != nil {
+		return fmt.Errorf("log notification: %w", err)
+	}
+	return nil
+}
+
+// Recent returns the most recent notification records created since
+// the given time, ordered newest-first. It returns both fire-and-forget
+// and actionable records for history awareness.
+func (s *RecordStore) Recent(since time.Time, limit int) ([]*Record, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	return s.queryRecords(`
+SELECT request_id, recipient, origin_session, origin_conversation, context,
+       actions_json, timeout_seconds, timeout_action, status, response_action,
+       responded_at, created_at, expires_at,
+       channel, source, kind, title, message
+FROM notification_records
+WHERE created_at >= ?
+ORDER BY created_at DESC
+LIMIT ?`, since.UTC(), limit)
+}
+
 // Get retrieves a notification record by request ID. Returns
 // [sql.ErrNoRows] if no record is found.
 func (s *RecordStore) Get(requestID string) (*Record, error) {
-	row := s.db.QueryRow(`
+	records, err := s.queryRecords(`
 SELECT request_id, recipient, origin_session, origin_conversation, context,
        actions_json, timeout_seconds, timeout_action, status, response_action,
-       responded_at, created_at, expires_at
+       responded_at, created_at, expires_at,
+       channel, source, kind, title, message
 FROM notification_records
 WHERE request_id = ?`, requestID)
-
-	var r Record
-	var actionsJSON string
-	var respondedAt sql.NullTime
-	err := row.Scan(
-		&r.RequestID, &r.Recipient, &r.OriginSession, &r.OriginConversation,
-		&r.Context, &actionsJSON, &r.TimeoutSeconds, &r.TimeoutAction,
-		&r.Status, &r.ResponseAction, &respondedAt, &r.CreatedAt, &r.ExpiresAt,
-	)
 	if err != nil {
 		return nil, err
 	}
-	if respondedAt.Valid {
-		r.RespondedAt = respondedAt.Time
+	if len(records) == 0 {
+		return nil, sql.ErrNoRows
 	}
-	if err := json.Unmarshal([]byte(actionsJSON), &r.Actions); err != nil {
-		return nil, fmt.Errorf("unmarshal actions: %w", err)
-	}
-	return &r, nil
+	return records[0], nil
 }
 
 // Respond marks a pending record as responded with the given action
@@ -204,15 +307,23 @@ WHERE request_id = ?`,
 // PendingExpired returns all records that are still pending but whose
 // expiry time has passed.
 func (s *RecordStore) PendingExpired() ([]*Record, error) {
-	rows, err := s.db.Query(`
+	return s.queryRecords(`
 SELECT request_id, recipient, origin_session, origin_conversation, context,
        actions_json, timeout_seconds, timeout_action, status, response_action,
-       responded_at, created_at, expires_at
+       responded_at, created_at, expires_at,
+       channel, source, kind, title, message
 FROM notification_records
 WHERE status = 'pending' AND expires_at <= ?
 ORDER BY expires_at ASC`, time.Now().UTC())
+}
+
+// queryRecords executes a query and scans the results into Record
+// structs. The query must SELECT the full 18-column set in the
+// canonical order.
+func (s *RecordStore) queryRecords(query string, args ...any) ([]*Record, error) {
+	rows, err := s.db.Query(query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("query pending expired: %w", err)
+		return nil, fmt.Errorf("query notification records: %w", err)
 	}
 	defer rows.Close()
 
@@ -225,9 +336,10 @@ ORDER BY expires_at ASC`, time.Now().UTC())
 			&r.RequestID, &r.Recipient, &r.OriginSession, &r.OriginConversation,
 			&r.Context, &actionsJSON, &r.TimeoutSeconds, &r.TimeoutAction,
 			&r.Status, &r.ResponseAction, &respondedAt, &r.CreatedAt, &r.ExpiresAt,
+			&r.Channel, &r.Source, &r.Kind, &r.Title, &r.Message,
 		)
 		if err != nil {
-			return nil, fmt.Errorf("scan pending expired row: %w", err)
+			return nil, fmt.Errorf("scan notification record: %w", err)
 		}
 		if respondedAt.Valid {
 			r.RespondedAt = respondedAt.Time
