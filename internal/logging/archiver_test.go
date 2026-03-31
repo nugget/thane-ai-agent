@@ -90,7 +90,7 @@ func TestArchiver_Basic(t *testing.T) {
 
 	// Find the JSONL archive file.
 	monthKey := time.Now().UTC().Add(-100 * 24 * time.Hour).Format("2006-01")
-	archivePath := filepath.Join(archiveDir, "archive", monthKey+".jsonl")
+	archivePath := filepath.Join(archiveDir, monthKey+".jsonl")
 	f, err := os.Open(archivePath)
 	if err != nil {
 		t.Fatalf("open archive file %s: %v", archivePath, err)
@@ -183,7 +183,7 @@ func TestArchiver_ToolCallsPreserved(t *testing.T) {
 	}
 
 	monthKey := time.Now().UTC().Add(-100 * 24 * time.Hour).Format("2006-01")
-	archivePath := filepath.Join(archiveDir, "archive", monthKey+".jsonl")
+	archivePath := filepath.Join(archiveDir, monthKey+".jsonl")
 	data, err := os.ReadFile(archivePath)
 	if err != nil {
 		t.Fatalf("read archive: %v", err)

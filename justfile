@@ -325,17 +325,17 @@ migrate-databases datadir="Thane/db":
     fi
 
 # Archive retained request/tool content older than DAYS days from logs.db to
-# monthly JSONL files in {logdir}/archive/. Safe to run while the service is
+# monthly JSONL files in archivedir. Safe to run while the service is
 # stopped; do not run while the service is actively writing to logs.db.
-# Default: archive rows older than 90 days.
+# Default: archive rows older than 90 days into Thane/logs/archive/.
 [group('operations')]
-archive-logs logdir="Thane/logs" days="90":
+archive-logs logdir="Thane/logs" archivedir="Thane/logs/archive" days="90":
     #!/usr/bin/env python3
     import json, os, sqlite3, sys
     from datetime import datetime, timezone, timedelta
 
     db_path    = "{{logdir}}/logs.db"
-    archive_dir = "{{logdir}}/archive"
+    archive_dir = "{{archivedir}}"
     days        = int("{{days}}")
 
     if not os.path.exists(db_path):

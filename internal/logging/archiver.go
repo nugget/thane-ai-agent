@@ -39,18 +39,19 @@ type Archiver struct {
 	logger *slog.Logger
 }
 
-// NewArchiver creates an Archiver that writes JSONL files under dir/archive/.
+// NewArchiver creates an Archiver that writes JSONL files directly into dir.
+// The caller is responsible for resolving the directory path (see
+// LoggingConfig.ContentArchiveDirPath for the default).
 func NewArchiver(db *sql.DB, dir string, logger *slog.Logger) *Archiver {
 	return &Archiver{db: db, dir: dir, logger: logger}
 }
 
 // Archive exports all log_request_content rows with created_at older
-// than before to monthly JSONL files, then deletes them (and their
-// associated log_tool_content rows) from the database. Returns the
-// number of requests archived.
+// than before to monthly JSONL files in a.dir, then deletes them (and
+// their associated log_tool_content rows) from the database. Returns
+// the number of requests archived.
 func (a *Archiver) Archive(ctx context.Context, before time.Time) (int, error) {
-	archiveDir := filepath.Join(a.dir, "archive")
-	if err := os.MkdirAll(archiveDir, 0o755); err != nil {
+	if err := os.MkdirAll(a.dir, 0o755); err != nil {
 		return 0, fmt.Errorf("create archive dir: %w", err)
 	}
 
@@ -75,7 +76,7 @@ func (a *Archiver) Archive(ctx context.Context, before time.Time) (int, error) {
 			break
 		}
 
-		archived, err := a.processBatch(ctx, ids, archiveDir, open)
+		archived, err := a.processBatch(ctx, ids, a.dir, open)
 		total += archived
 		if err != nil {
 			return total, err

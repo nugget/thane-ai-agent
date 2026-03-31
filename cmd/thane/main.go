@@ -448,7 +448,8 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		// is 0 or content retention is off.
 		if logDir := cfg.Logging.DirPath(); logDir != "" {
 			if archiveDur := cfg.Logging.ContentArchiveDuration(); archiveDur > 0 && contentWriter != nil {
-				archiver := logging.NewArchiver(indexDB, logDir, logger)
+				archiveDir := cfg.Logging.ContentArchiveDirPath(logDir)
+				archiver := logging.NewArchiver(indexDB, archiveDir, logger)
 				go func() {
 					ticker := time.NewTicker(24 * time.Hour)
 					defer ticker.Stop()
