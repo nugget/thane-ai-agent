@@ -1363,7 +1363,16 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 	// messages event-driven, routing them through the agent loop.
 	// Deferred to StartWorkers because Start() spawns a subprocess and
 	// the entire tool/bridge/notification wiring depends on it running.
+	//
+	// deferredTools tracks tool names that will be registered by deferred
+	// workers. The capability-tag validation (below) skips these names so
+	// it doesn't emit misleading "unregistered tool" warnings for tools
+	// that are simply not yet started.
+	deferredTools := make(map[string]bool)
 	if cfg.Signal.Configured() {
+		deferredTools["signal_send_message"] = true
+		deferredTools["signal_send_reaction"] = true
+
 		signalArgs := append([]string{"-a", cfg.Signal.Account, "jsonRpc"}, cfg.Signal.Args...)
 		signalClient := sigcli.NewClient(cfg.Signal.Command, signalArgs, logger)
 
@@ -1653,9 +1662,11 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 		// Warn about tools referenced in config but not registered.
 		// This catches typos, missing MCP servers, and tools gated by config
 		// (e.g., shell_exec disabled). Non-fatal: skip the missing tool.
+		// Tools in deferredTools are registered by StartWorkers and are
+		// expected to be absent during New().
 		for tag, tagCfg := range cfg.CapabilityTags {
 			for _, toolName := range tagCfg.Tools {
-				if loop.Tools().Get(toolName) == nil {
+				if loop.Tools().Get(toolName) == nil && !deferredTools[toolName] {
 					logger.Warn("capability tag references unregistered tool",
 						"tag", tag, "tool", toolName)
 				}
@@ -2402,6 +2413,19 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 				return nil // non-fatal: system works without MQTT
 			}
 
+			// Register with connwatch after a successful Connect so the
+			// health probe doesn't fire before the publisher is ready.
+			connMgr.Watch(ctx, connwatch.WatcherConfig{
+				Name: "mqtt",
+				Probe: func(pCtx context.Context) error {
+					awaitCtx, awaitCancel := context.WithTimeout(pCtx, 2*time.Second)
+					defer awaitCancel()
+					return mqttPub.AwaitConnection(awaitCtx)
+				},
+				Backoff: connwatch.DefaultBackoffConfig(),
+				Logger:  logger,
+			})
+
 			// Publish immediately on connect, then let the loop handle the schedule.
 			mqttPub.PublishStates(ctx)
 
@@ -2433,18 +2457,6 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 				"interval", cfg.MQTT.PublishIntervalSec,
 			)
 			return nil
-		})
-
-		// Register with connwatch for health endpoint visibility.
-		connMgr.Watch(ctx, connwatch.WatcherConfig{
-			Name: "mqtt",
-			Probe: func(pCtx context.Context) error {
-				awaitCtx, awaitCancel := context.WithTimeout(pCtx, 2*time.Second)
-				defer awaitCancel()
-				return mqttPub.AwaitConnection(awaitCtx)
-			},
-			Backoff: connwatch.DefaultBackoffConfig(),
-			Logger:  logger,
 		})
 
 		logger.Info("mqtt publishing enabled",
