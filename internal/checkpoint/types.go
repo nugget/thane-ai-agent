@@ -8,6 +8,12 @@ import (
 	"github.com/google/uuid"
 )
 
+// ParseUUID parses a string to UUID, returning zero UUID on error.
+func ParseUUID(s string) uuid.UUID {
+	id, _ := uuid.Parse(s)
+	return id
+}
+
 // Trigger describes what caused a checkpoint to be created.
 type Trigger string
 

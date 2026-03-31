@@ -6,16 +6,23 @@ import (
 	"path/filepath"
 	"testing"
 
+	_ "github.com/mattn/go-sqlite3"
+	"github.com/nugget/thane-ai-agent/internal/database"
 	"github.com/nugget/thane-ai-agent/internal/opstate"
 )
 
 func testTempFileStore(t *testing.T) (*TempFileStore, *opstate.Store) {
 	t.Helper()
-	state, err := opstate.NewStore(filepath.Join(t.TempDir(), "opstate_test.db"))
+	db, err := database.Open(":memory:")
+	if err != nil {
+		t.Fatalf("database.Open: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	state, err := opstate.NewStore(db)
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
-	t.Cleanup(func() { state.Close() })
 
 	baseDir := filepath.Join(t.TempDir(), ".tmp")
 	return NewTempFileStore(baseDir, state, nil), state

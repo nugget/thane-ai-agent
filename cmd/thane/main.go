@@ -742,11 +742,11 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// --- Operational state ---
 	// Generic KV store for persistent operational state (poller
 	// high-water marks, feature toggles, session preferences).
-	opStore, err := opstate.NewStore(cfg.DataDir + "/opstate.db")
+	// Shares the main thane.db connection.
+	opStore, err := opstate.NewStore(mem.DB())
 	if err != nil {
-		return fmt.Errorf("open operational state database: %w", err)
+		return fmt.Errorf("initialize operational state store: %w", err)
 	}
-	defer opStore.Close()
 
 	// --- Usage tracking ---
 	// Persistent token usage and cost recording for attribution and
@@ -1140,20 +1140,15 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// --- Anticipation store ---
 	// Bridges intent to action. The agent can set anticipations ("I expect
 	// X to happen") that trigger context injection when they're fulfilled.
-	anticipationDB, err := database.Open(cfg.DataDir + "/anticipations.db")
-	if err != nil {
-		return fmt.Errorf("open anticipation db: %w", err)
-	}
-	defer anticipationDB.Close()
-
-	anticipationStore, err := scheduler.NewAnticipationStore(anticipationDB)
+	// Shares the main thane.db connection.
+	anticipationStore, err := scheduler.NewAnticipationStore(mem.DB())
 	if err != nil {
 		return fmt.Errorf("create anticipation store: %w", err)
 	}
 
 	anticipationTools := scheduler.NewAnticipationTools(anticipationStore)
 	loop.Tools().SetAnticipationTools(anticipationTools)
-	logger.Info("anticipation store initialized", "path", cfg.DataDir+"/anticipations.db")
+	logger.Info("anticipation store initialized")
 
 	// --- Provenance store ---
 	// Git-backed file storage with SSH signature enforcement. When
@@ -2045,14 +2040,8 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// --- Entity watchlist ---
 	// Allows the agent to dynamically add HA entities to a watched list
 	// whose live state is injected into context each turn. Persisted in
-	// SQLite so the watchlist survives restarts.
-	watchlistDB, err := database.Open(cfg.DataDir + "/watchlist.db")
-	if err != nil {
-		return fmt.Errorf("open watchlist db: %w", err)
-	}
-	defer watchlistDB.Close()
-
-	watchlistStore, err := awareness.NewWatchlistStore(watchlistDB)
+	// SQLite so the watchlist survives restarts. Shares thane.db.
+	watchlistStore, err := awareness.NewWatchlistStore(mem.DB())
 	if err != nil {
 		return fmt.Errorf("watchlist store: %w", err)
 	}
@@ -2413,81 +2402,80 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// --- Checkpointer ---
 	// Periodically snapshots application state (conversations, facts,
 	// scheduled tasks) to enable crash recovery. Also creates a snapshot
-	// on clean shutdown and before model failover.
-	checkpointDB, err := database.Open(cfg.DataDir + "/checkpoints.db")
-	if err != nil {
-		return fmt.Errorf("open checkpoint database: %w", err)
-	}
-	defer checkpointDB.Close()
-
+	// on clean shutdown and before model failover. Shares thane.db.
 	checkpointCfg := checkpoint.Config{
 		PeriodicMessages: 50, // Snapshot every 50 messages
 	}
-	checkpointer, err := checkpoint.NewCheckpointer(checkpointDB, checkpointCfg, logger)
+	checkpointer, err := checkpoint.NewCheckpointer(mem.DB(), checkpointCfg, logger)
 	if err != nil {
 		return fmt.Errorf("create checkpointer: %w", err)
 	}
 
 	// Wire up the data providers that the checkpointer snapshots.
-	convProvider := checkpoint.ConversationProviderFunc(func() ([]checkpoint.Conversation, error) {
-		convs := mem.GetAllConversations()
-		result := make([]checkpoint.Conversation, len(convs))
-		for i, c := range convs {
-			msgs := make([]checkpoint.MemoryMessage, len(c.Messages))
-			for j, m := range c.Messages {
-				msgs[j] = checkpoint.MemoryMessage{
-					Role:      m.Role,
-					Content:   m.Content,
-					Timestamp: m.Timestamp,
+	checkpointer.SetProviders(
+		func() ([]checkpoint.Conversation, error) {
+			convs := mem.GetAllConversations()
+			result := make([]checkpoint.Conversation, len(convs))
+			for i, c := range convs {
+				msgs := make([]checkpoint.Message, len(c.Messages))
+				for j, m := range c.Messages {
+					msgID, _ := uuid.NewV7()
+					msgs[j] = checkpoint.Message{
+						ID:        msgID,
+						Role:      m.Role,
+						Content:   m.Content,
+						Timestamp: m.Timestamp,
+					}
+				}
+				result[i] = checkpoint.Conversation{
+					ID:        c.ID,
+					CreatedAt: c.CreatedAt,
+					UpdatedAt: c.UpdatedAt,
+					Messages:  msgs,
 				}
 			}
-			result[i] = checkpoint.ConvertMemoryConversation(c.ID, msgs, c.CreatedAt, c.UpdatedAt)
-		}
-		return result, nil
-	})
-
-	taskProvider := checkpoint.TaskProviderFunc(func() ([]checkpoint.Task, error) {
-		tasks, err := sched.GetAllTasks()
-		if err != nil {
-			return nil, err
-		}
-		result := make([]checkpoint.Task, len(tasks))
-		for i, t := range tasks {
-			result[i] = checkpoint.Task{
-				ID:          checkpoint.ParseUUID(t.ID),
-				Name:        t.Name,
-				Description: "",
-				Schedule:    t.Schedule.Cron,
-				Action:      string(t.Payload.Kind),
-				Enabled:     t.Enabled,
-				CreatedAt:   t.CreatedAt,
+			return result, nil
+		},
+		func() ([]checkpoint.Fact, error) {
+			allFacts, err := factStore.GetAll()
+			if err != nil {
+				return nil, err
 			}
-		}
-		return result, nil
-	})
-
-	factProvider := checkpoint.FactProviderFunc(func() ([]checkpoint.Fact, error) {
-		allFacts, err := factStore.GetAll()
-		if err != nil {
-			return nil, err
-		}
-		result := make([]checkpoint.Fact, len(allFacts))
-		for i, f := range allFacts {
-			result[i] = checkpoint.Fact{
-				ID:         f.ID,
-				Category:   string(f.Category),
-				Key:        f.Key,
-				Value:      f.Value,
-				Source:     f.Source,
-				CreatedAt:  f.CreatedAt,
-				UpdatedAt:  f.UpdatedAt,
-				Confidence: f.Confidence,
+			result := make([]checkpoint.Fact, len(allFacts))
+			for i, f := range allFacts {
+				result[i] = checkpoint.Fact{
+					ID:         f.ID,
+					Category:   string(f.Category),
+					Key:        f.Key,
+					Value:      f.Value,
+					Source:     f.Source,
+					CreatedAt:  f.CreatedAt,
+					UpdatedAt:  f.UpdatedAt,
+					Confidence: f.Confidence,
+				}
 			}
-		}
-		return result, nil
-	})
-
-	checkpointer.SetProviders(convProvider, factProvider, taskProvider)
+			return result, nil
+		},
+		func() ([]checkpoint.Task, error) {
+			tasks, err := sched.GetAllTasks()
+			if err != nil {
+				return nil, err
+			}
+			result := make([]checkpoint.Task, len(tasks))
+			for i, t := range tasks {
+				result[i] = checkpoint.Task{
+					ID:          checkpoint.ParseUUID(t.ID),
+					Name:        t.Name,
+					Description: "",
+					Schedule:    t.Schedule.Cron,
+					Action:      string(t.Payload.Kind),
+					Enabled:     t.Enabled,
+					CreatedAt:   t.CreatedAt,
+				}
+			}
+			return result, nil
+		},
+	)
 	server.SetCheckpointer(checkpointer)
 	loop.SetFailoverHandler(checkpointer)
 	logger.Info("checkpointing enabled", "periodic_messages", checkpointCfg.PeriodicMessages)

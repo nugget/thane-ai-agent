@@ -1,19 +1,25 @@
 package agent
 
 import (
-	"path/filepath"
 	"testing"
 
+	_ "github.com/mattn/go-sqlite3"
+	"github.com/nugget/thane-ai-agent/internal/database"
 	"github.com/nugget/thane-ai-agent/internal/opstate"
 )
 
 func newTestCapStore(t *testing.T) *OpstateCapabilityTagStore {
 	t.Helper()
-	state, err := opstate.NewStore(filepath.Join(t.TempDir(), "opstate_test.db"))
+	db, err := database.Open(":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { state.Close() })
+	t.Cleanup(func() { db.Close() })
+
+	state, err := opstate.NewStore(db)
+	if err != nil {
+		t.Fatal(err)
+	}
 	return NewOpstateCapabilityTagStore(state)
 }
 
