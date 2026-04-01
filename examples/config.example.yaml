@@ -35,6 +35,11 @@ ollama_api:
 #   username: thane
 #   password: your-carddav-password
 #
+# Platform configures the WebSocket endpoint for native platform
+# provider connections (e.g. macOS app).
+platform:
+  enabled: false
+  token: ""
 # HomeAssistant configures the connection to a Home Assistant instance.
 homeassistant:
   url: https://your-homeassistant.local:8123

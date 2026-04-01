@@ -16,6 +16,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/contacts"
 	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
 	"github.com/nugget/thane-ai-agent/internal/metacognitive"
+	"github.com/nugget/thane-ai-agent/internal/platform"
 	"github.com/nugget/thane-ai-agent/internal/server/api"
 	"github.com/nugget/thane-ai-agent/internal/server/web"
 	"github.com/nugget/thane-ai-agent/internal/telemetry"
@@ -151,6 +152,29 @@ func (a *App) initServers(s *newState) error {
 	if cfg.OllamaAPI.Enabled {
 		a.ollamaServer = api.NewOllamaServer(cfg.OllamaAPI.Address, cfg.OllamaAPI.Port, a.loop, logger)
 		a.ollamaServer.SetOWUTracker(owuTracker)
+	}
+
+	// --- Platform provider endpoint ---
+	// Optional: WebSocket endpoint for native platform apps (e.g. macOS)
+	// to connect and register capabilities for bidirectional service dispatch.
+	if cfg.Platform.Configured() {
+		a.platformRegistry = platform.NewRegistry(logger)
+		handler := platform.NewHandler(cfg.Platform.Token, a.platformRegistry, logger)
+		server.SetPlatformHandler(handler)
+
+		a.connMgr.Watch(s.ctx, connwatch.WatcherConfig{
+			Name: "platform",
+			Probe: func(_ context.Context) error {
+				if a.platformRegistry.Count() == 0 {
+					return fmt.Errorf("no providers connected")
+				}
+				return nil
+			},
+			Backoff: connwatch.DefaultBackoffConfig(),
+			Logger:  logger,
+		})
+
+		logger.Info("platform provider endpoint enabled")
 	}
 
 	// --- CardDAV server ---

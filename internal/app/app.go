@@ -37,6 +37,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/metacognitive"
 	"github.com/nugget/thane-ai-agent/internal/notifications"
 	"github.com/nugget/thane-ai-agent/internal/opstate"
+	"github.com/nugget/thane-ai-agent/internal/platform"
 	"github.com/nugget/thane-ai-agent/internal/provenance"
 	"github.com/nugget/thane-ai-agent/internal/router"
 	"github.com/nugget/thane-ai-agent/internal/scheduler"
@@ -85,6 +86,9 @@ type App struct {
 	// External service clients
 	ha   *homeassistant.Client
 	haWS *homeassistant.WSClient
+
+	// Platform provider registry
+	platformRegistry *platform.Registry
 
 	// Connection health
 	connMgr *connwatch.Manager

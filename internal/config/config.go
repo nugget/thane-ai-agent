@@ -104,6 +104,10 @@ type Config struct {
 	// contact app sync (macOS Contacts.app, iOS, Thunderbird, etc.).
 	CardDAV CardDAVConfig `yaml:"carddav"`
 
+	// Platform configures the WebSocket endpoint for native platform
+	// provider connections (e.g. macOS app).
+	Platform PlatformConfig `yaml:"platform"`
+
 	// HomeAssistant configures the connection to a Home Assistant instance.
 	HomeAssistant HomeAssistantConfig `yaml:"homeassistant"`
 
@@ -459,6 +463,20 @@ type CardDAVConfig struct {
 // settings.
 func (c CardDAVConfig) Configured() bool {
 	return c.Enabled && c.Username != "" && c.Password != ""
+}
+
+// PlatformConfig configures the WebSocket endpoint for native platform
+// provider connections (e.g. macOS app). When enabled, providers can
+// connect and register capabilities for bidirectional service dispatch.
+type PlatformConfig struct {
+	Enabled bool   `yaml:"enabled"`
+	Token   string `yaml:"token"` // Shared secret for provider auth
+}
+
+// Configured reports whether the platform provider endpoint is enabled
+// and has a token configured.
+func (c PlatformConfig) Configured() bool {
+	return c.Enabled && c.Token != ""
 }
 
 // IdentityConfig configures the agent's own contact identity. The

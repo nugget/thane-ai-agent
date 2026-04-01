@@ -1,0 +1,222 @@
+package platform
+
+import (
+	"log/slog"
+	"net/http"
+	"time"
+
+	"github.com/gorilla/websocket"
+)
+
+const (
+	// pingInterval is how often the server sends a ping to each provider.
+	pingInterval = 30 * time.Second
+
+	// pongWait is the maximum time to wait for a pong (or any message)
+	// before considering the connection dead. 1.5x the ping interval.
+	pongWait = 45 * time.Second
+
+	// writeWait is the maximum time to wait for a write to complete.
+	writeWait = 10 * time.Second
+
+	// authTimeout is the maximum time allowed for the auth handshake.
+	authTimeout = 10 * time.Second
+)
+
+var upgrader = websocket.Upgrader{
+	ReadBufferSize:  4096,
+	WriteBufferSize: 4096,
+	CheckOrigin: func(r *http.Request) bool {
+		return true // Auth is token-based, not origin-based.
+	},
+}
+
+// Handler is the HTTP handler for platform provider WebSocket connections.
+type Handler struct {
+	token    string
+	registry *Registry
+	logger   *slog.Logger
+}
+
+// NewHandler creates a new platform WebSocket handler.
+func NewHandler(token string, registry *Registry, logger *slog.Logger) *Handler {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return &Handler{
+		token:    token,
+		registry: registry,
+		logger:   logger,
+	}
+}
+
+// ServeHTTP upgrades the connection to WebSocket, performs the auth
+// handshake, and runs the heartbeat and read loops for the provider.
+func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	conn, err := upgrader.Upgrade(w, r, nil)
+	if err != nil {
+		h.logger.Error("platform websocket upgrade failed", "error", err)
+		return
+	}
+
+	provider, err := h.authenticate(conn)
+	if err != nil {
+		h.logger.Warn("platform auth failed",
+			"error", err,
+			"remote_addr", r.RemoteAddr,
+		)
+		conn.Close()
+		return
+	}
+
+	h.registry.Add(provider)
+	defer func() {
+		h.registry.Remove(provider.ID)
+		close(provider.done)
+		conn.Close()
+	}()
+
+	// Start heartbeat goroutine.
+	go h.heartbeat(provider)
+
+	// Run the read loop (blocks until connection closes).
+	h.readLoop(provider)
+}
+
+// writeJSONWithDeadline sets a write deadline and sends msg as JSON.
+func writeJSONWithDeadline(conn *websocket.Conn, deadline time.Duration, msg any) error {
+	if err := conn.SetWriteDeadline(time.Now().Add(deadline)); err != nil {
+		return err
+	}
+	return conn.WriteJSON(msg)
+}
+
+// authenticate performs the auth handshake on a newly upgraded connection.
+func (h *Handler) authenticate(conn *websocket.Conn) (*Provider, error) {
+	// Step 1: Send auth_required.
+	if err := writeJSONWithDeadline(conn, writeWait, authRequired{
+		Type:    typeAuthRequired,
+		Version: protocolVersion,
+	}); err != nil {
+		return nil, err
+	}
+
+	// Step 2: Read auth message.
+	if err := conn.SetReadDeadline(time.Now().Add(authTimeout)); err != nil {
+		return nil, err
+	}
+	var msg authMessage
+	if err := conn.ReadJSON(&msg); err != nil {
+		return nil, err
+	}
+
+	if msg.Type != typeAuth {
+		// Best-effort error response — ignore write errors.
+		_ = writeJSONWithDeadline(conn, writeWait, authFailed{
+			Type:    typeAuthFailed,
+			Message: "expected auth message",
+		})
+		return nil, &authError{"expected auth message, got " + msg.Type}
+	}
+
+	// Step 3: Validate token.
+	if msg.Token != h.token {
+		_ = writeJSONWithDeadline(conn, writeWait, authFailed{
+			Type:    typeAuthFailed,
+			Message: "invalid token",
+		})
+		return nil, &authError{"invalid token"}
+	}
+
+	// Step 4: Send auth_ok with assigned provider ID.
+	providerID := generateProviderID()
+	if err := writeJSONWithDeadline(conn, writeWait, authOK{
+		Type:       typeAuthOK,
+		ProviderID: providerID,
+	}); err != nil {
+		return nil, err
+	}
+
+	return &Provider{
+		ID:          providerID,
+		ClientName:  msg.ClientName,
+		ClientID:    msg.ClientID,
+		Conn:        conn,
+		ConnectedAt: time.Now(),
+		done:        make(chan struct{}),
+	}, nil
+}
+
+// heartbeat sends periodic ping messages to the provider.
+func (h *Handler) heartbeat(p *Provider) {
+	ticker := time.NewTicker(pingInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			if err := writeJSONWithDeadline(p.Conn, writeWait, ping{Type: typePing}); err != nil {
+				h.logger.Debug("platform ping failed",
+					"provider_id", p.ID,
+					"error", err,
+				)
+				return
+			}
+		case <-p.done:
+			return
+		}
+	}
+}
+
+// readLoop reads messages from the provider until the connection closes.
+// Any incoming message resets the read deadline, so pongs (and future
+// message types) keep the connection alive.
+func (h *Handler) readLoop(p *Provider) {
+	if err := p.Conn.SetReadDeadline(time.Now().Add(pongWait)); err != nil {
+		return
+	}
+
+	for {
+		var msg Message
+		if err := p.Conn.ReadJSON(&msg); err != nil {
+			if websocket.IsUnexpectedCloseError(err,
+				websocket.CloseNormalClosure,
+				websocket.CloseGoingAway,
+			) {
+				h.logger.Warn("platform provider connection lost",
+					"provider_id", p.ID,
+					"error", err,
+				)
+			} else {
+				h.logger.Debug("platform provider disconnected",
+					"provider_id", p.ID,
+				)
+			}
+			return
+		}
+
+		// Any valid message resets the read deadline.
+		if err := p.Conn.SetReadDeadline(time.Now().Add(pongWait)); err != nil {
+			return
+		}
+
+		switch msg.Type {
+		case typePong:
+			// Heartbeat response — deadline already reset above.
+		default:
+			h.logger.Debug("platform message received (unhandled)",
+				"provider_id", p.ID,
+				"type", msg.Type,
+			)
+		}
+	}
+}
+
+// authError is a sentinel error type for authentication failures.
+type authError struct {
+	reason string
+}
+
+func (e *authError) Error() string {
+	return "platform auth: " + e.reason
+}
