@@ -298,21 +298,45 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// Set up signal handling with explicit logging so operators see
 	// confirmation that the shutdown was received. A second signal
 	// forces an immediate exit for cases where graceful shutdown hangs.
-	ctx, cancel := context.WithCancel(ctx)
-	sigCh := make(chan os.Signal, 1)
+	//
+	// Buffer of 2 ensures back-to-back signals aren't coalesced before
+	// the goroutine reads the first. The goroutine selects on the parent
+	// context (before we derive our own) so it exits cleanly when
+	// shutdown is triggered by context cancellation rather than an OS
+	// signal.
+	parentCtx := ctx
+	ctx, cancel := context.WithCancel(parentCtx)
+	sigCh := make(chan os.Signal, 2)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
-		sig := <-sigCh
-		logger.Info("received shutdown signal, stopping gracefully", "signal", sig)
-		cancel()
-		sig = <-sigCh
-		logger.Warn("received second signal, forcing exit", "signal", sig)
-		os.Exit(1)
+		select {
+		case sig := <-sigCh:
+			logger.Info("received shutdown signal, stopping gracefully", "signal", sig)
+			cancel()
+		case <-parentCtx.Done():
+			return
+		}
+		// Graceful shutdown is in progress. Wait for a second signal
+		// or for the function to return (signal.Stop closes our window).
+		// If a second signal arrives, the deferred cleanup is the thing
+		// that's stuck — os.Exit is intentional here as the only way out.
+		sig, ok := <-sigCh
+		if ok {
+			logger.Warn("received second signal, forcing exit", "signal", sig)
+			os.Exit(1)
+		}
 	}()
+
+	// stopSignals deregisters the signal handler and closes the channel
+	// so the signal goroutine can exit cleanly when shutdown completes.
+	stopSignals := func() {
+		signal.Stop(sigCh)
+		close(sigCh)
+	}
 
 	a, err := app.New(ctx, cfg, logger, stdout, llmClient, ollamaClient)
 	if err != nil {
-		signal.Stop(sigCh)
+		stopSignals()
 		cancel()
 		return err
 	}
@@ -320,7 +344,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// tears down the resources they were using.
 	defer a.Close()
 	defer cancel()
-	defer signal.Stop(sigCh)
+	defer stopSignals()
 
 	// Log with the fully-configured logger (file handler, index handler,
 	// correct level/format) so this line is captured in rotated logs.

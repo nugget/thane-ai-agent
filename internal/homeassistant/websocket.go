@@ -349,13 +349,13 @@ func (c *WSClient) readLoop() {
 				c.logger.Info("WebSocket closed normally")
 				return
 			}
-			// When Close() sets conn to nil and closes the underlying
-			// connection, ReadJSON returns a "use of closed network
-			// connection" error. Distinguish this from a genuine loss.
+			// When Close() nils c.conn, or Connect() replaces it with a
+			// new connection, ReadJSON on the old conn returns an error.
+			// Distinguish intentional close/replacement from genuine loss.
 			c.connMu.Lock()
-			closed := c.conn == nil
+			current := c.conn
 			c.connMu.Unlock()
-			if closed {
+			if current == nil || current != conn {
 				c.logger.Info("WebSocket connection closed")
 				return
 			}
