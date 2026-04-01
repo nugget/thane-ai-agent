@@ -649,7 +649,7 @@ func (l *Loop) run(ctx context.Context) {
 				"attempt":         attemptCount + 1,
 			},
 		})
-		iterLog.Info("loop iteration starting")
+		iterLog.Debug("loop iteration starting")
 
 		if l.config.Handler != nil {
 			iterStart := time.Now()
@@ -806,7 +806,7 @@ func (l *Loop) run(ctx context.Context) {
 					}
 				}
 
-				iterLog.Info("loop iteration complete",
+				iterLog.Debug("loop iteration complete",
 					"model", result.Model,
 					"input_tokens", result.InputTokens,
 					"output_tokens", result.OutputTokens,
