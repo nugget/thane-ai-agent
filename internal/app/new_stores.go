@@ -79,6 +79,7 @@ func (a *App) initStores(s *newState) error {
 	if cfg.HomeAssistant.Configured() {
 		a.ha = homeassistant.NewClient(cfg.HomeAssistant.URL, cfg.HomeAssistant.Token, logger)
 		a.haWS = homeassistant.NewWSClient(cfg.HomeAssistant.URL, cfg.HomeAssistant.Token, logger)
+		a.onCloseErr("ha-websocket", a.haWS.Close)
 		logger.Debug("Home Assistant configured", "url", cfg.HomeAssistant.URL)
 	} else {
 		logger.Warn("Home Assistant not configured - tools will be limited")

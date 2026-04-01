@@ -188,13 +188,17 @@ func (c *WSClient) Connect(ctx context.Context) error {
 	return nil
 }
 
-// Close closes the WebSocket connection.
+// Close closes the WebSocket connection. The readLoop goroutine
+// exits when the underlying read returns an error from the closed
+// connection. Safe to call multiple times.
 func (c *WSClient) Close() error {
 	c.connMu.Lock()
-	defer c.connMu.Unlock()
+	conn := c.conn
+	c.conn = nil
+	c.connMu.Unlock()
 
-	if c.conn != nil {
-		return c.conn.Close()
+	if conn != nil {
+		return conn.Close()
 	}
 	return nil
 }
@@ -327,6 +331,8 @@ func (c *WSClient) sendAndWait(ctx context.Context, id int64, msg any) (json.Raw
 
 // readLoop continuously reads messages from the WebSocket.
 func (c *WSClient) readLoop() {
+	defer c.logger.Debug("readLoop exited")
+
 	for {
 		var msg wsMessage
 
@@ -341,6 +347,16 @@ func (c *WSClient) readLoop() {
 		if err := conn.ReadJSON(&msg); err != nil {
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
 				c.logger.Info("WebSocket closed normally")
+				return
+			}
+			// When Close() sets conn to nil and closes the underlying
+			// connection, ReadJSON returns a "use of closed network
+			// connection" error. Distinguish this from a genuine loss.
+			c.connMu.Lock()
+			closed := c.conn == nil
+			c.connMu.Unlock()
+			if closed {
+				c.logger.Info("WebSocket connection closed")
 				return
 			}
 			c.logger.Error("WebSocket read error, connection lost", "error", err)

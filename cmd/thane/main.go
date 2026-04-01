@@ -295,13 +295,24 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	ollamaClient := llm.NewOllamaClient(cfg.Models.OllamaURL, logger)
 	llmClient := createLLMClient(cfg, logger, ollamaClient)
 
-	// Create the signal-aware context before app.New so that background
-	// goroutines started during initialization inherit it and stop cleanly
-	// on SIGINT/SIGTERM.
-	ctx, cancel := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
+	// Set up signal handling with explicit logging so operators see
+	// confirmation that the shutdown was received. A second signal
+	// forces an immediate exit for cases where graceful shutdown hangs.
+	ctx, cancel := context.WithCancel(ctx)
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		sig := <-sigCh
+		logger.Info("received shutdown signal, stopping gracefully", "signal", sig)
+		cancel()
+		sig = <-sigCh
+		logger.Warn("received second signal, forcing exit", "signal", sig)
+		os.Exit(1)
+	}()
 
 	a, err := app.New(ctx, cfg, logger, stdout, llmClient, ollamaClient)
 	if err != nil {
+		signal.Stop(sigCh)
 		cancel()
 		return err
 	}
@@ -309,6 +320,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	// tears down the resources they were using.
 	defer a.Close()
 	defer cancel()
+	defer signal.Stop(sigCh)
 
 	// Log with the fully-configured logger (file handler, index handler,
 	// correct level/format) so this line is captured in rotated logs.
