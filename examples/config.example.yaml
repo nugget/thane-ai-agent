@@ -39,7 +39,7 @@ ollama_api:
 # provider connections (e.g. macOS app).
 platform:
   enabled: false
-  token: ""
+  providers: {}
 # HomeAssistant configures the connection to a Home Assistant instance.
 homeassistant:
   url: https://your-homeassistant.local:8123

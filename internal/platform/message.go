@@ -36,10 +36,12 @@ type authMessage struct {
 	ClientID   string `json:"client_id"`
 }
 
-// authOK confirms successful authentication and assigns a provider ID.
+// authOK confirms successful authentication, assigns a provider ID, and
+// echoes back the server-resolved account name.
 type authOK struct {
 	Type       string `json:"type"`
 	ProviderID string `json:"provider_id"`
+	Account    string `json:"account"`
 }
 
 // authFailed is sent when the client provides invalid credentials.

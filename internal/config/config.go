@@ -468,15 +468,45 @@ func (c CardDAVConfig) Configured() bool {
 // PlatformConfig configures the WebSocket endpoint for native platform
 // provider connections (e.g. macOS app). When enabled, providers can
 // connect and register capabilities for bidirectional service dispatch.
+//
+// Each entry in Providers maps an account name (e.g. "nugget", "aimee")
+// to a set of per-device tokens. Multiple devices under the same account
+// share an identity but are independently addressable by client_id.
 type PlatformConfig struct {
-	Enabled bool   `yaml:"enabled"`
-	Token   string `yaml:"token"` // Shared secret for provider auth
+	Enabled   bool                              `yaml:"enabled"`
+	Providers map[string]PlatformProviderConfig `yaml:"providers"`
+}
+
+// PlatformProviderConfig defines the tokens for a single account identity.
+// Each token typically corresponds to a different device running a
+// platform agent (e.g. thane-agent-macos on a laptop vs desktop).
+type PlatformProviderConfig struct {
+	Tokens []string `yaml:"tokens"`
 }
 
 // Configured reports whether the platform provider endpoint is enabled
-// and has a token configured.
+// and has at least one provider with at least one token.
 func (c PlatformConfig) Configured() bool {
-	return c.Enabled && c.Token != ""
+	if !c.Enabled || len(c.Providers) == 0 {
+		return false
+	}
+	for _, p := range c.Providers {
+		if len(p.Tokens) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// TokenIndex builds a map from token → account name for O(1) auth lookups.
+func (c PlatformConfig) TokenIndex() map[string]string {
+	idx := make(map[string]string)
+	for account, p := range c.Providers {
+		for _, tok := range p.Tokens {
+			idx[tok] = account
+		}
+	}
+	return idx
 }
 
 // IdentityConfig configures the agent's own contact identity. The

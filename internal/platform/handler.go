@@ -33,20 +33,22 @@ var upgrader = websocket.Upgrader{
 
 // Handler is the HTTP handler for platform provider WebSocket connections.
 type Handler struct {
-	token    string
-	registry *Registry
-	logger   *slog.Logger
+	tokenIndex map[string]string // token → account name
+	registry   *Registry
+	logger     *slog.Logger
 }
 
-// NewHandler creates a new platform WebSocket handler.
-func NewHandler(token string, registry *Registry, logger *slog.Logger) *Handler {
+// NewHandler creates a new platform WebSocket handler. The tokenIndex
+// maps authentication tokens to account names (built by
+// config.PlatformConfig.TokenIndex).
+func NewHandler(tokenIndex map[string]string, registry *Registry, logger *slog.Logger) *Handler {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return &Handler{
-		token:    token,
-		registry: registry,
-		logger:   logger,
+		tokenIndex: tokenIndex,
+		registry:   registry,
+		logger:     logger,
 	}
 }
 
@@ -119,8 +121,9 @@ func (h *Handler) authenticate(conn *websocket.Conn) (*Provider, error) {
 		return nil, &authError{"expected auth message, got " + msg.Type}
 	}
 
-	// Step 3: Validate token.
-	if msg.Token != h.token {
+	// Step 3: Validate token and resolve account.
+	account, ok := h.tokenIndex[msg.Token]
+	if !ok {
 		_ = writeJSONWithDeadline(conn, writeWait, authFailed{
 			Type:    typeAuthFailed,
 			Message: "invalid token",
@@ -128,17 +131,19 @@ func (h *Handler) authenticate(conn *websocket.Conn) (*Provider, error) {
 		return nil, &authError{"invalid token"}
 	}
 
-	// Step 4: Send auth_ok with assigned provider ID.
+	// Step 4: Send auth_ok with assigned provider ID and resolved account.
 	providerID := generateProviderID()
 	if err := writeJSONWithDeadline(conn, writeWait, authOK{
 		Type:       typeAuthOK,
 		ProviderID: providerID,
+		Account:    account,
 	}); err != nil {
 		return nil, err
 	}
 
 	return &Provider{
 		ID:          providerID,
+		Account:     account,
 		ClientName:  msg.ClientName,
 		ClientID:    msg.ClientID,
 		Conn:        conn,
