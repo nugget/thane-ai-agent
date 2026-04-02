@@ -17,6 +17,15 @@ type LabelRegistryEntry struct {
 	Description string `json:"description"`
 }
 
+// CategoryRegistryEntry represents a Home Assistant category within a scope.
+type CategoryRegistryEntry struct {
+	CategoryID string  `json:"category_id"`
+	Name       string  `json:"name"`
+	Icon       string  `json:"icon"`
+	CreatedAt  float64 `json:"created_at"`
+	ModifiedAt float64 `json:"modified_at"`
+}
+
 // DeviceRegistryEntry represents a Home Assistant device registry row.
 type DeviceRegistryEntry struct {
 	ID                    string               `json:"id"`
@@ -83,6 +92,15 @@ func (c *Client) GetLabelRegistry(ctx context.Context) ([]LabelRegistryEntry, er
 		return nil, err
 	}
 	return ws.GetLabelRegistry(ctx)
+}
+
+// GetCategoryRegistry retrieves all categories for a given scope from Home Assistant.
+func (c *Client) GetCategoryRegistry(ctx context.Context, scope string) ([]CategoryRegistryEntry, error) {
+	ws, err := c.requireWS()
+	if err != nil {
+		return nil, err
+	}
+	return ws.GetCategoryRegistry(ctx, scope)
 }
 
 // GetDeviceRegistry retrieves all devices from Home Assistant.
@@ -209,6 +227,15 @@ func (c *WSClient) GetLabelRegistry(ctx context.Context) ([]LabelRegistryEntry, 
 		return nil, fmt.Errorf("get label registry: %w", err)
 	}
 	return labels, nil
+}
+
+// GetCategoryRegistry retrieves categories for a scope via WebSocket.
+func (c *WSClient) GetCategoryRegistry(ctx context.Context, scope string) ([]CategoryRegistryEntry, error) {
+	var categories []CategoryRegistryEntry
+	if err := c.call(ctx, "config/category_registry/list", map[string]any{"scope": scope}, &categories); err != nil {
+		return nil, fmt.Errorf("get category registry: %w", err)
+	}
+	return categories, nil
 }
 
 // GetEntityRegistryEntry retrieves an extended entity registry row.

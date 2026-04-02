@@ -24,6 +24,7 @@ type fakeHAServer struct {
 	configs      map[string]map[string]any
 	areas        []map[string]any
 	labels       []map[string]any
+	categories   map[string][]map[string]any
 	devices      []map[string]any
 	entityRows   []map[string]any
 	entityByID   map[string]map[string]any
@@ -39,6 +40,7 @@ func newFakeHAServer(t *testing.T) *fakeHAServer {
 		t:          t,
 		upgrader:   websocket.Upgrader{},
 		configs:    make(map[string]map[string]any),
+		categories: make(map[string][]map[string]any),
 		entityByID: make(map[string]map[string]any),
 		validations: map[string]homeassistant.ConfigValidationResult{
 			"triggers":   {Valid: true},
@@ -219,6 +221,9 @@ func (f *fakeHAServer) wsResult(msgType string, msg map[string]any) (any, bool) 
 		return f.areas, true
 	case "config/label_registry/list":
 		return f.labels, true
+	case "config/category_registry/list":
+		scope, _ := msg["scope"].(string)
+		return f.categories[scope], true
 	case "config/device_registry/list":
 		return f.devices, true
 	case "config/entity_registry/list":
@@ -365,6 +370,9 @@ func TestHAAutomationGetIncludesRegistryMetadata(t *testing.T) {
 	fake.labels = []map[string]any{
 		{"label_id": "label_critical", "name": "Critical", "icon": "mdi:alert", "color": "red"},
 	}
+	fake.categories["automation"] = []map[string]any{
+		{"category_id": "cat_maintenance", "name": "Maintenance", "icon": "mdi:wrench"},
+	}
 	entry := map[string]any{
 		"id":              "entity_row_1",
 		"entity_id":       "automation.door_lock_battery_level_critical",
@@ -373,7 +381,7 @@ func TestHAAutomationGetIncludesRegistryMetadata(t *testing.T) {
 		"labels":          []string{"label_critical"},
 		"icon":            "mdi:battery-alert",
 		"aliases":         []string{"door battery critical"},
-		"categories":      map[string]any{"automation": "maintenance"},
+		"categories":      map[string]any{"automation": "cat_maintenance"},
 		"has_entity_name": true,
 	}
 	fake.entityRows = []map[string]any{entry}
@@ -402,6 +410,18 @@ func TestHAAutomationGetIncludesRegistryMetadata(t *testing.T) {
 	}
 	if len(got.Metadata.Labels) != 1 || got.Metadata.Labels[0].Name != "Critical" {
 		t.Fatalf("labels = %#v, want resolved Critical label", got.Metadata.Labels)
+	}
+	if got.Metadata.CategoryID != "cat_maintenance" {
+		t.Fatalf("category_id = %q, want %q", got.Metadata.CategoryID, "cat_maintenance")
+	}
+	if got.Metadata.Category != "Maintenance" {
+		t.Fatalf("category = %q, want %q", got.Metadata.Category, "Maintenance")
+	}
+	if got.Metadata.Categories["automation"] != "Maintenance" {
+		t.Fatalf("categories = %#v, want automation=Maintenance", got.Metadata.Categories)
+	}
+	if got.Metadata.CategoryIDs["automation"] != "cat_maintenance" {
+		t.Fatalf("category_ids = %#v, want automation=cat_maintenance", got.Metadata.CategoryIDs)
 	}
 	if got.Config["description"] != "Fire if any of the door deadbolt batteries is below 35%" {
 		t.Fatalf("config.description = %#v", got.Config["description"])
@@ -581,6 +601,67 @@ func TestHAAutomationListIncludesActivitySummary(t *testing.T) {
 	}
 	if len(unused.Activity.RecentActivations) != 0 {
 		t.Fatalf("unused recent_activations = %#v, want empty", unused.Activity.RecentActivations)
+	}
+}
+
+func TestHAAutomationListResolvesCategoryNames(t *testing.T) {
+	fake := newFakeHAServer(t)
+	fake.states = []homeassistant.State{
+		{
+			EntityID: "automation.front_door_watch",
+			State:    "on",
+			Attributes: map[string]any{
+				"id":            "front-door-watch",
+				"friendly_name": "Front Door Watch",
+			},
+		},
+	}
+	fake.areas = []map[string]any{
+		{"area_id": "entry", "name": "Entry"},
+	}
+	fake.categories["automation"] = []map[string]any{
+		{"category_id": "01JSPY2KHMDFXMSDFXJNKZWX2V", "name": "Physical"},
+	}
+	row := map[string]any{
+		"id":         "front_door_watch_row",
+		"entity_id":  "automation.front_door_watch",
+		"name":       "Front Door Watch",
+		"area_id":    "entry",
+		"labels":     []string{},
+		"aliases":    []string{},
+		"categories": map[string]any{"automation": "01JSPY2KHMDFXMSDFXJNKZWX2V"},
+	}
+	fake.entityRows = []map[string]any{row}
+	fake.entityByID["automation.front_door_watch"] = row
+
+	reg := fake.registry(t)
+
+	result, err := reg.Execute(context.Background(), "ha_automation_list", `{"query":"physical","limit":10}`)
+	if err != nil {
+		t.Fatalf("ha_automation_list failed: %v", err)
+	}
+
+	var got []haAutomationView
+	if err := json.Unmarshal([]byte(result), &got); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d automations, want 1", len(got))
+	}
+	if got[0].Metadata == nil {
+		t.Fatal("metadata is nil")
+	}
+	if got[0].Metadata.CategoryID != "01JSPY2KHMDFXMSDFXJNKZWX2V" {
+		t.Fatalf("category_id = %q, want raw category ID", got[0].Metadata.CategoryID)
+	}
+	if got[0].Metadata.Category != "Physical" {
+		t.Fatalf("category = %q, want %q", got[0].Metadata.Category, "Physical")
+	}
+	if got[0].Metadata.Categories["automation"] != "Physical" {
+		t.Fatalf("categories = %#v, want automation=Physical", got[0].Metadata.Categories)
+	}
+	if got[0].Metadata.CategoryIDs["automation"] != "01JSPY2KHMDFXMSDFXJNKZWX2V" {
+		t.Fatalf("category_ids = %#v, want raw automation category ID", got[0].Metadata.CategoryIDs)
 	}
 }
 

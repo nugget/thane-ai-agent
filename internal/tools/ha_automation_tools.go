@@ -121,6 +121,8 @@ type haAutomationEntityMeta struct {
 	AreaName      string            `json:"area_name,omitempty"`
 	LabelIDs      []string          `json:"label_ids,omitempty"`
 	Labels        []namedID         `json:"labels,omitempty"`
+	CategoryID    string            `json:"category_id,omitempty"`
+	CategoryIDs   map[string]string `json:"category_ids,omitempty"`
 	Category      string            `json:"category,omitempty"`
 	Categories    map[string]string `json:"categories,omitempty"`
 	Icon          string            `json:"icon,omitempty"`
@@ -136,6 +138,12 @@ type resolvedAutomation struct {
 	state    *homeassistant.State
 	entry    *homeassistant.EntityRegistryEntry
 	config   map[string]any
+}
+
+type haMetadataMaps struct {
+	areas      map[string]string
+	labels     map[string]string
+	categories map[string]map[string]string
 }
 
 func (r *Registry) registerHAAutomationTools() {
@@ -641,9 +649,11 @@ func (r *Registry) handleHAAutomationList(ctx context.Context, args map[string]a
 		for _, view := range views {
 			areaName := ""
 			labelNames := []string(nil)
+			categoryNames := []string(nil)
 			if view.Metadata != nil {
 				areaName = view.Metadata.AreaName
 				labelNames = namedIDNames(view.Metadata.Labels)
+				categoryNames = mapValues(view.Metadata.Categories)
 			}
 			score := scorer(
 				view.ID,
@@ -652,6 +662,7 @@ func (r *Registry) handleHAAutomationList(ctx context.Context, args map[string]a
 				view.Description,
 				areaName,
 				strings.Join(labelNames, " "),
+				strings.Join(categoryNames, " "),
 			)
 			if score <= 0 {
 				continue
@@ -920,7 +931,7 @@ func (r *Registry) listAutomations(ctx context.Context, includeConfig bool) ([]h
 			entryByEntity[entry.EntityID] = entry
 		}
 	}
-	areaMap, labelMap, err := r.loadAreaAndLabelMaps(ctx)
+	meta, err := r.loadMetadataMaps(ctx, "automation")
 	if err != nil {
 		return nil, err
 	}
@@ -951,7 +962,7 @@ func (r *Registry) listAutomations(ctx context.Context, includeConfig bool) ([]h
 			}
 			resolved.config = cfg
 		}
-		view := buildAutomationViewFromMaps(resolved, includeConfig, areaMap, labelMap)
+		view := buildAutomationViewFromMaps(resolved, includeConfig, meta)
 		views = append(views, view)
 	}
 
@@ -1115,11 +1126,11 @@ func (r *Registry) resolveAutomation(ctx context.Context, idArg, entityArg strin
 }
 
 func (r *Registry) buildAutomationView(ctx context.Context, resolved resolvedAutomation, includeConfig bool) (haAutomationView, error) {
-	areaMap, labelMap, err := r.loadAreaAndLabelMaps(ctx)
+	meta, err := r.loadMetadataMaps(ctx, "automation")
 	if err != nil {
 		return haAutomationView{}, err
 	}
-	return buildAutomationViewFromMaps(resolved, includeConfig, areaMap, labelMap), nil
+	return buildAutomationViewFromMaps(resolved, includeConfig, meta), nil
 }
 
 func (r *Registry) validateAutomationConfig(ctx context.Context, cfg map[string]any) (map[string]homeassistant.ConfigValidationResult, error) {
@@ -1220,19 +1231,39 @@ func (r *Registry) nextAvailableAutomationID(ctx context.Context, base string) (
 	return "", fmt.Errorf("could not find available automation id for base %q", base)
 }
 
-func (r *Registry) loadAreaAndLabelMaps(ctx context.Context) (map[string]string, map[string]string, error) {
+func (r *Registry) loadMetadataMaps(ctx context.Context, categoryScopes ...string) (haMetadataMaps, error) {
 	areas, err := r.ha.GetAreas(ctx)
 	if err != nil {
-		return nil, nil, fmt.Errorf("get areas: %w", err)
+		return haMetadataMaps{}, fmt.Errorf("get areas: %w", err)
 	}
 	labels, err := r.ha.GetLabelRegistry(ctx)
 	if err != nil {
-		return nil, nil, fmt.Errorf("get labels: %w", err)
+		return haMetadataMaps{}, fmt.Errorf("get labels: %w", err)
 	}
-	return buildAreaNameMap(areas), buildLabelNameMap(labels), nil
+
+	categoryMaps := make(map[string]map[string]string, len(categoryScopes))
+	for _, scope := range categoryScopes {
+		scope = strings.TrimSpace(scope)
+		if scope == "" {
+			continue
+		}
+		categories, err := r.ha.GetCategoryRegistry(ctx, scope)
+		if err != nil {
+			if isHACategoryRegistryUnsupported(err) {
+				continue
+			}
+			return haMetadataMaps{}, fmt.Errorf("get %s categories: %w", scope, err)
+		}
+		categoryMaps[scope] = buildCategoryNameMap(categories)
+	}
+	return haMetadataMaps{
+		areas:      buildAreaNameMap(areas),
+		labels:     buildLabelNameMap(labels),
+		categories: categoryMaps,
+	}, nil
 }
 
-func buildAutomationViewFromMaps(resolved resolvedAutomation, includeConfig bool, areaMap, labelMap map[string]string) haAutomationView {
+func buildAutomationViewFromMaps(resolved resolvedAutomation, includeConfig bool, meta haMetadataMaps) haAutomationView {
 	view := haAutomationView{
 		ID:       resolved.id,
 		EntityID: resolved.entityID,
@@ -1258,14 +1289,17 @@ func buildAutomationViewFromMaps(resolved resolvedAutomation, includeConfig bool
 	}
 
 	if resolved.entry != nil {
+		resolvedCategories := resolveCategoryNamesByScope(resolved.entry.Categories, meta.categories)
 		view.Metadata = &haAutomationEntityMeta{
 			Name:          resolved.entry.Name,
 			AreaID:        resolved.entry.AreaID,
-			AreaName:      areaMap[resolved.entry.AreaID],
+			AreaName:      meta.areas[resolved.entry.AreaID],
 			LabelIDs:      append([]string(nil), resolved.entry.Labels...),
-			Labels:        resolveNamedIDs(resolved.entry.Labels, labelMap),
-			Categories:    resolved.entry.Categories,
-			Category:      resolved.entry.Categories["automation"],
+			Labels:        resolveNamedIDs(resolved.entry.Labels, meta.labels),
+			CategoryIDs:   copyStringMap(resolved.entry.Categories),
+			CategoryID:    resolved.entry.Categories["automation"],
+			Categories:    resolvedCategories,
+			Category:      resolvedCategories["automation"],
 			Icon:          resolved.entry.Icon,
 			Aliases:       resolved.entry.Aliases,
 			HiddenBy:      resolved.entry.HiddenBy,
@@ -1289,6 +1323,14 @@ func buildLabelNameMap(labels []homeassistant.LabelRegistryEntry) map[string]str
 	out := make(map[string]string, len(labels))
 	for _, label := range labels {
 		out[label.LabelID] = label.Name
+	}
+	return out
+}
+
+func buildCategoryNameMap(categories []homeassistant.CategoryRegistryEntry) map[string]string {
+	out := make(map[string]string, len(categories))
+	for _, category := range categories {
+		out[category.CategoryID] = category.Name
 	}
 	return out
 }
@@ -1363,6 +1405,11 @@ func isAutomationTriggerLogbookEntry(entry homeassistant.LogbookEntry) bool {
 }
 
 func isHALogbookUnsupported(err error) bool {
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "not_found:") || strings.Contains(msg, "unknown command")
+}
+
+func isHACategoryRegistryUnsupported(err error) bool {
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "not_found:") || strings.Contains(msg, "unknown command")
 }
@@ -1549,6 +1596,35 @@ func resolveNamedIDs(ids []string, names map[string]string) []namedID {
 	return out
 }
 
+func resolveCategoryNamesByScope(ids map[string]string, namesByScope map[string]map[string]string) map[string]string {
+	if len(ids) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(ids))
+	for scope, id := range ids {
+		if strings.TrimSpace(id) == "" {
+			continue
+		}
+		name := strings.TrimSpace(resolveCategoryName(scope, id, namesByScope))
+		if name == "" {
+			name = id
+		}
+		out[scope] = name
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func resolveCategoryName(scope, id string, namesByScope map[string]map[string]string) string {
+	scopeNames := namesByScope[scope]
+	if len(scopeNames) == 0 {
+		return ""
+	}
+	return scopeNames[id]
+}
+
 func resolveNames(ids []string, names map[string]string) []string {
 	out := make([]string, 0, len(ids))
 	for _, id := range ids {
@@ -1567,6 +1643,29 @@ func namedIDNames(ids []namedID) []string {
 		}
 	}
 	return out
+}
+
+func mapValues(values map[string]string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		if strings.TrimSpace(value) == "" {
+			continue
+		}
+		out = append(out, value)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func copyStringMap(src map[string]string) map[string]string {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := make(map[string]string, len(src))
+	for key, value := range src {
+		dst[key] = value
+	}
+	return dst
 }
 
 func containsString(values []string, needle string) bool {
