@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	cdav "github.com/nugget/thane-ai-agent/internal/carddav"
@@ -287,12 +288,14 @@ func (a *App) initServers(s *newState) error {
 		}
 
 		// Track the mqtt parent loop ID once it's spawned (deferred
-		// worker runs after this wiring, so we use a closure).
-		var mqttParentID string
+		// worker runs after this wiring, so we use atomic.Value for
+		// safe cross-goroutine access).
+		var mqttParentID atomic.Value
+		mqttParentID.Store("") // initialize with zero-value string
 		wakeDeps := mqttWakeDeps{
 			registry: a.loopRegistry,
 			eventBus: a.eventBus,
-			parentID: func() string { return mqttParentID },
+			parentID: &mqttParentID,
 		}
 
 		// Wrap with the wake handler: wake-configured topics dispatch
@@ -355,7 +358,7 @@ func (a *App) initServers(s *newState) error {
 			if err != nil {
 				return fmt.Errorf("spawn mqtt loop: %w", err)
 			}
-			mqttParentID = parentID
+			mqttParentID.Store(parentID)
 
 			logger.Info("mqtt connected",
 				"broker", cfg.MQTT.Broker,
