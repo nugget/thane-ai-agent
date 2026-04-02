@@ -1185,6 +1185,21 @@ type SignalRoutingConfig struct {
 	DelegationGating string `yaml:"delegation_gating"`
 }
 
+// LoopSeed converts the Signal routing config into the shared
+// LoopSeed representation used by wake-style entrypoints.
+//
+// It intentionally maps only the fields exposed by SignalRoutingConfig.
+// LoopSeed-only fields such as ExcludeTools and SeedTags are omitted
+// until Signal grows explicit config for them.
+func (c SignalRoutingConfig) LoopSeed() router.LoopSeed {
+	return router.LoopSeed{
+		Model:            c.Model,
+		QualityFloor:     c.QualityFloor,
+		Mission:          c.Mission,
+		DelegationGating: c.DelegationGating,
+	}
+}
+
 // Configured reports whether the Signal bridge has the minimum
 // required configuration (enabled with a command and account).
 func (c SignalConfig) Configured() bool {
@@ -1998,6 +2013,10 @@ func (c *Config) validateSignal() error {
 	}
 	if c.Signal.HandleTimeout < 0 {
 		return fmt.Errorf("signal.handle_timeout %s must be non-negative", c.Signal.HandleTimeout)
+	}
+	seed := c.Signal.Routing.LoopSeed()
+	if err := seed.Validate(); err != nil {
+		return fmt.Errorf("signal.routing: %w", err)
 	}
 	return nil
 }

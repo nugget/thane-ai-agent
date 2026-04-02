@@ -255,24 +255,25 @@ func sanitizePayload(payload []byte) string {
 // and seed tags. This function lives in the app package rather than on
 // LoopSeed itself to avoid a circular import between router and agent.
 func applyLoopSeed(seed *router.LoopSeed, req *agent.Request) {
-	if seed.Model != "" {
-		req.Model = seed.Model
+	opts := seed.RequestOptions()
+
+	if opts.Model != "" {
+		req.Model = opts.Model
 	}
 
-	hints := seed.Hints()
-	if len(hints) > 0 {
+	if len(opts.Hints) > 0 {
 		if req.Hints == nil {
-			req.Hints = make(map[string]string, len(hints))
+			req.Hints = make(map[string]string, len(opts.Hints))
 		}
-		for k, v := range hints {
+		for k, v := range opts.Hints {
 			req.Hints[k] = v
 		}
 	}
 
-	if len(seed.ExcludeTools) > 0 {
-		req.ExcludeTools = append(req.ExcludeTools, seed.ExcludeTools...)
+	if len(opts.ExcludeTools) > 0 {
+		req.ExcludeTools = append(req.ExcludeTools, opts.ExcludeTools...)
 	}
-	if len(seed.SeedTags) > 0 {
-		req.SeedTags = append(req.SeedTags, seed.SeedTags...)
+	if len(opts.SeedTags) > 0 {
+		req.SeedTags = append(req.SeedTags, opts.SeedTags...)
 	}
 }

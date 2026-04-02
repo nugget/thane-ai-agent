@@ -290,6 +290,26 @@ func TestValidate_SignalValid(t *testing.T) {
 	}
 }
 
+func TestValidate_SignalInvalidRouting(t *testing.T) {
+	cfg := Default()
+	cfg.Signal = SignalConfig{
+		Enabled: true,
+		Command: "signal-cli",
+		Account: "+15551234567",
+		Routing: SignalRoutingConfig{
+			QualityFloor: "11",
+		},
+	}
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected validation error for invalid signal routing")
+	}
+	if !strings.Contains(err.Error(), "signal.routing") {
+		t.Errorf("error should mention signal.routing, got: %v", err)
+	}
+}
+
 func TestValidate_SignalEnabledMissingCommand(t *testing.T) {
 	cfg := Default()
 	cfg.Signal = SignalConfig{

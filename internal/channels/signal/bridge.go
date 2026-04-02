@@ -578,26 +578,18 @@ func (b *Bridge) handleMessage(ctx context.Context, env *Envelope, progressFn fu
 	// visible during long agent processing.
 	stopTyping := b.startTypingRefresh(ctx, sender)
 
-	hints := map[string]string{
-		"source":                    "signal",
-		"sender":                    sender,
-		router.HintQualityFloor:     b.routing.QualityFloor,
-		router.HintMission:          b.routing.Mission,
-		router.HintDelegationGating: b.routing.DelegationGating,
-	}
-
-	// Resolve sender phone number to a contact name when available.
-	if b.resolver != nil {
-		if name, _, ok := b.resolver.ResolvePhone(sender); ok {
-			hints["sender_name"] = name
-		}
-	}
+	opts := b.requestOptions(sender, map[string]string{
+		"source": "signal",
+		"sender": sender,
+	})
 
 	req := &agent.Request{
 		ConversationID: convID,
 		Messages:       []agent.Message{{Role: "user", Content: content}},
-		Model:          b.routing.Model,
-		Hints:          hints,
+		Model:          opts.Model,
+		Hints:          opts.Hints,
+		ExcludeTools:   opts.ExcludeTools,
+		SeedTags:       opts.SeedTags,
 	}
 
 	stream := agent.BuildProgressStream(progressFn)
@@ -698,28 +690,21 @@ func (b *Bridge) handleReaction(ctx context.Context, env *Envelope) {
 
 	content := formatReaction(env)
 
-	hints := map[string]string{
-		"source":                    "signal",
-		"sender":                    sender,
-		"event_type":                "reaction",
-		"reaction_emoji":            reaction.Emoji,
-		"target_sent_timestamp":     fmt.Sprintf("%d", reaction.TargetSentTimestamp),
-		router.HintQualityFloor:     b.routing.QualityFloor,
-		router.HintMission:          b.routing.Mission,
-		router.HintDelegationGating: b.routing.DelegationGating,
-	}
-
-	if b.resolver != nil {
-		if name, _, ok := b.resolver.ResolvePhone(sender); ok {
-			hints["sender_name"] = name
-		}
-	}
+	opts := b.requestOptions(sender, map[string]string{
+		"source":                "signal",
+		"sender":                sender,
+		"event_type":            "reaction",
+		"reaction_emoji":        reaction.Emoji,
+		"target_sent_timestamp": fmt.Sprintf("%d", reaction.TargetSentTimestamp),
+	})
 
 	req := &agent.Request{
 		ConversationID: convID,
 		Messages:       []agent.Message{{Role: "user", Content: content}},
-		Model:          b.routing.Model,
-		Hints:          hints,
+		Model:          opts.Model,
+		Hints:          opts.Hints,
+		ExcludeTools:   opts.ExcludeTools,
+		SeedTags:       opts.SeedTags,
 	}
 
 	resp, err := b.runner.Run(ctx, req, nil)
@@ -782,6 +767,30 @@ func (b *Bridge) startTypingRefresh(ctx context.Context, recipient string) conte
 	}()
 
 	return cancel
+}
+
+func (b *Bridge) requestOptions(sender string, extraHints map[string]string) router.RequestOptions {
+	seed := b.routing.LoopSeed()
+	opts := seed.RequestOptions()
+	if len(extraHints) > 0 {
+		if opts.Hints == nil {
+			opts.Hints = make(map[string]string, len(extraHints))
+		}
+		for k, v := range extraHints {
+			opts.Hints[k] = v
+		}
+	}
+
+	if b.resolver != nil {
+		if name, _, ok := b.resolver.ResolvePhone(sender); ok {
+			if opts.Hints == nil {
+				opts.Hints = make(map[string]string, 1)
+			}
+			opts.Hints["sender_name"] = name
+		}
+	}
+
+	return opts
 }
 
 // allowSender checks whether the sender is within the per-minute rate

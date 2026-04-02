@@ -323,7 +323,9 @@ func TestApplyLoopSeed(t *testing.T) {
 	}
 
 	req := &agent.Request{
-		Hints: map[string]string{"existing": "hint"},
+		Hints:        map[string]string{"existing": "hint"},
+		ExcludeTools: []string{"files_read"},
+		SeedTags:     []string{"baseline"},
 	}
 
 	applyLoopSeed(&seed, req)
@@ -343,11 +345,11 @@ func TestApplyLoopSeed(t *testing.T) {
 	if req.Hints["custom"] != "value" {
 		t.Errorf("extra hint not applied")
 	}
-	if len(req.ExcludeTools) != 1 || req.ExcludeTools[0] != "shell_exec" {
-		t.Errorf("ExcludeTools = %v, want [shell_exec]", req.ExcludeTools)
+	if len(req.ExcludeTools) != 2 || req.ExcludeTools[0] != "files_read" || req.ExcludeTools[1] != "shell_exec" {
+		t.Errorf("ExcludeTools = %v, want [files_read shell_exec]", req.ExcludeTools)
 	}
-	if len(req.SeedTags) != 1 || req.SeedTags[0] != "homeassistant" {
-		t.Errorf("SeedTags = %v, want [homeassistant]", req.SeedTags)
+	if len(req.SeedTags) != 2 || req.SeedTags[0] != "baseline" || req.SeedTags[1] != "homeassistant" {
+		t.Errorf("SeedTags = %v, want [baseline homeassistant]", req.SeedTags)
 	}
 }
 

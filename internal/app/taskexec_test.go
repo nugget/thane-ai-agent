@@ -363,3 +363,84 @@ func TestRunScheduledTask_PayloadPartialOverride(t *testing.T) {
 		t.Errorf("hint quality_floor = %q, want %q", runner.req.Hints[router.HintQualityFloor], "5")
 	}
 }
+
+func TestBuildScheduledTaskLoopSeed(t *testing.T) {
+	tests := []struct {
+		name string
+		task *scheduler.Task
+		want router.LoopSeed
+	}{
+		{
+			name: "defaults",
+			task: &scheduler.Task{
+				Name: "Heartbeat",
+				Payload: scheduler.Payload{
+					Kind: scheduler.PayloadWake,
+				},
+			},
+			want: router.LoopSeed{
+				LocalOnly:        "true",
+				QualityFloor:     "1",
+				Mission:          "automation",
+				DelegationGating: "disabled",
+				ExtraHints: map[string]string{
+					"source": "scheduler",
+					"task":   "Heartbeat",
+				},
+			},
+		},
+		{
+			name: "payload overrides",
+			task: &scheduler.Task{
+				Name: "Custom",
+				Payload: scheduler.Payload{
+					Kind: scheduler.PayloadWake,
+					Data: map[string]any{
+						"model":         "claude-sonnet-4-20250514",
+						"local_only":    "false",
+						"quality_floor": "7",
+					},
+				},
+			},
+			want: router.LoopSeed{
+				Model:            "claude-sonnet-4-20250514",
+				LocalOnly:        "false",
+				QualityFloor:     "7",
+				Mission:          "automation",
+				DelegationGating: "disabled",
+				ExtraHints: map[string]string{
+					"source": "scheduler",
+					"task":   "Custom",
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := buildScheduledTaskLoopSeed(tt.task)
+
+			if got.Model != tt.want.Model {
+				t.Fatalf("Model = %q, want %q", got.Model, tt.want.Model)
+			}
+			if got.LocalOnly != tt.want.LocalOnly {
+				t.Fatalf("LocalOnly = %q, want %q", got.LocalOnly, tt.want.LocalOnly)
+			}
+			if got.QualityFloor != tt.want.QualityFloor {
+				t.Fatalf("QualityFloor = %q, want %q", got.QualityFloor, tt.want.QualityFloor)
+			}
+			if got.Mission != tt.want.Mission {
+				t.Fatalf("Mission = %q, want %q", got.Mission, tt.want.Mission)
+			}
+			if got.DelegationGating != tt.want.DelegationGating {
+				t.Fatalf("DelegationGating = %q, want %q", got.DelegationGating, tt.want.DelegationGating)
+			}
+			if got.ExtraHints["source"] != "scheduler" {
+				t.Fatalf("ExtraHints[source] = %q, want %q", got.ExtraHints["source"], "scheduler")
+			}
+			if got.ExtraHints["task"] != tt.task.Name {
+				t.Fatalf("ExtraHints[task] = %q, want %q", got.ExtraHints["task"], tt.task.Name)
+			}
+		})
+	}
+}

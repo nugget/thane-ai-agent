@@ -147,6 +147,48 @@ func TestLoopSeedValidate(t *testing.T) {
 	}
 }
 
+func TestLoopSeedRequestOptions(t *testing.T) {
+	seed := LoopSeed{
+		Model:            "claude-sonnet-4-20250514",
+		QualityFloor:     "7",
+		Mission:          "automation",
+		LocalOnly:        "false",
+		DelegationGating: "disabled",
+		ExcludeTools:     []string{"resolve_anticipation", "cancel_anticipation"},
+		SeedTags:         []string{"scheduler", "wake"},
+		ExtraHints: map[string]string{
+			"source": "scheduler",
+		},
+	}
+
+	opts := seed.RequestOptions()
+
+	if opts.Model != seed.Model {
+		t.Fatalf("Model = %q, want %q", opts.Model, seed.Model)
+	}
+	if opts.Hints[HintMission] != seed.Mission {
+		t.Fatalf("Hints[%q] = %q, want %q", HintMission, opts.Hints[HintMission], seed.Mission)
+	}
+	if opts.Hints["source"] != "scheduler" {
+		t.Fatalf("Hints[source] = %q, want %q", opts.Hints["source"], "scheduler")
+	}
+	if len(opts.ExcludeTools) != len(seed.ExcludeTools) {
+		t.Fatalf("ExcludeTools len = %d, want %d", len(opts.ExcludeTools), len(seed.ExcludeTools))
+	}
+	if len(opts.SeedTags) != len(seed.SeedTags) {
+		t.Fatalf("SeedTags len = %d, want %d", len(opts.SeedTags), len(seed.SeedTags))
+	}
+
+	opts.ExcludeTools[0] = "changed"
+	opts.SeedTags[0] = "changed"
+	if seed.ExcludeTools[0] != "resolve_anticipation" {
+		t.Fatalf("seed ExcludeTools mutated to %q", seed.ExcludeTools[0])
+	}
+	if seed.SeedTags[0] != "scheduler" {
+		t.Fatalf("seed SeedTags mutated to %q", seed.SeedTags[0])
+	}
+}
+
 func TestValidateTopicFilter(t *testing.T) {
 	tests := []struct {
 		filter  string
@@ -160,11 +202,11 @@ func TestValidateTopicFilter(t *testing.T) {
 		{"foo/bar/baz", false},
 
 		// Invalid cases.
-		{"", true},                // empty
-		{"foo/ba#r", true},        // # not alone in segment
-		{"foo/#/bar", true},       // # not last segment
-		{"foo/b+r", true},         // + not alone in segment
-		{"foo/bar\x00/baz", true}, // null character
+		{"", true},
+		{"foo/ba#r", true},
+		{"foo/#/bar", true},
+		{"foo/b+r", true},
+		{"foo/bar\x00/baz", true},
 	}
 
 	for _, tt := range tests {
@@ -201,7 +243,6 @@ func TestLoopSeedJSONRoundTrip(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 
-	// Compare fields.
 	if restored.Model != original.Model {
 		t.Errorf("Model = %q, want %q", restored.Model, original.Model)
 	}
