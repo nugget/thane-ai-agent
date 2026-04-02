@@ -4,12 +4,15 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"path"
 	"strings"
 	"time"
 	"unicode/utf8"
 
 	"github.com/nugget/thane-ai-agent/internal/agent"
 	mqtt "github.com/nugget/thane-ai-agent/internal/channels/mqtt"
+	"github.com/nugget/thane-ai-agent/internal/events"
+	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
 	"github.com/nugget/thane-ai-agent/internal/router"
 )
 
@@ -22,15 +25,28 @@ const maxWakePayloadBytes = 32 * 1024
 // conversation may run before being cancelled.
 const mqttWakeTimeout = 5 * time.Minute
 
+// mqttWakeDeps holds optional dependencies for dashboard integration.
+// When registry is non-nil, each wake conversation is spawned as a
+// child loop under parentID so it appears on the dashboard.
+type mqttWakeDeps struct {
+	registry *looppkg.Registry
+	eventBus *events.Bus
+	parentID func() string // deferred: mqtt parent loop ID may not exist yet
+}
+
 // mqttWakeHandler returns a MessageHandler that dispatches agent
 // conversations when MQTT messages arrive on wake-configured topics.
 // Messages on topics without a wake subscription are passed through
 // to the fallback handler.
+//
+// When deps.registry is non-nil, each wake conversation is registered
+// as a child loop under the MQTT parent so it appears on the dashboard.
 func mqttWakeHandler(
 	store *mqtt.SubscriptionStore,
 	runner agentRunner,
 	fallback mqtt.MessageHandler,
 	logger *slog.Logger,
+	deps mqttWakeDeps,
 ) mqtt.MessageHandler {
 	if logger == nil {
 		logger = slog.Default()
@@ -73,23 +89,95 @@ func mqttWakeHandler(
 				"payload_size", len(payload),
 			)
 
-			resp, err := runner.Run(ctx, req, nil)
-			if err != nil {
-				logger.Error("mqtt wake agent dispatch failed",
-					"conv_id", convID,
-					"topic", topic,
-					"error", err,
-				)
-				return
-			}
+			// Use a short topic suffix for the loop name (last path segment).
+			loopName := "mqtt/" + path.Base(topic)
 
+			if deps.registry != nil {
+				dispatchViaLoop(ctx, deps, runner, req, loopName, topic, convID, logger)
+			} else {
+				dispatchDirect(ctx, runner, req, topic, convID, logger)
+			}
+		}()
+	}
+}
+
+// dispatchViaLoop spawns a one-shot child loop under the MQTT parent
+// so the wake conversation appears on the dashboard.
+func dispatchViaLoop(
+	ctx context.Context,
+	deps mqttWakeDeps,
+	runner agentRunner,
+	req *agent.Request,
+	loopName, topic, convID string,
+	logger *slog.Logger,
+) {
+	parentID := ""
+	if deps.parentID != nil {
+		parentID = deps.parentID()
+	}
+
+	_, err := deps.registry.SpawnLoop(ctx, looppkg.Config{
+		Name:        loopName,
+		MaxIter:     1,
+		MaxDuration: mqttWakeTimeout,
+		ParentID:    parentID,
+		Handler: func(hCtx context.Context, _ any) error {
+			resp, err := runner.Run(hCtx, req, nil)
+			if err != nil {
+				return err
+			}
 			logger.Info("mqtt wake complete",
 				"conv_id", convID,
 				"topic", topic,
 				"result_len", len(resp.Content),
 			)
-		}()
+			return nil
+		},
+		Metadata: map[string]string{
+			"subsystem":       "mqtt",
+			"category":        "wake",
+			"mqtt_topic":      topic,
+			"conversation_id": convID,
+		},
+	}, looppkg.Deps{
+		Logger:   logger,
+		EventBus: deps.eventBus,
+	})
+	if err != nil {
+		logger.Error("mqtt wake loop spawn failed, falling back to direct dispatch",
+			"conv_id", convID,
+			"topic", topic,
+			"error", err,
+		)
+		// Fall back to direct dispatch if loop spawn fails (e.g.,
+		// concurrency limit reached).
+		dispatchDirect(ctx, runner, req, topic, convID, logger)
 	}
+}
+
+// dispatchDirect runs the agent directly without loop registry
+// integration.
+func dispatchDirect(
+	ctx context.Context,
+	runner agentRunner,
+	req *agent.Request,
+	topic, convID string,
+	logger *slog.Logger,
+) {
+	resp, err := runner.Run(ctx, req, nil)
+	if err != nil {
+		logger.Error("mqtt wake agent dispatch failed",
+			"conv_id", convID,
+			"topic", topic,
+			"error", err,
+		)
+		return
+	}
+	logger.Info("mqtt wake complete",
+		"conv_id", convID,
+		"topic", topic,
+		"result_len", len(resp.Content),
+	)
 }
 
 // buildWakeMessage constructs the user message for an MQTT wake. When

@@ -286,10 +286,19 @@ func (a *App) initServers(s *newState) error {
 			}
 		}
 
+		// Track the mqtt parent loop ID once it's spawned (deferred
+		// worker runs after this wiring, so we use a closure).
+		var mqttParentID string
+		wakeDeps := mqttWakeDeps{
+			registry: a.loopRegistry,
+			eventBus: a.eventBus,
+			parentID: func() string { return mqttParentID },
+		}
+
 		// Wrap with the wake handler: wake-configured topics dispatch
 		// agent conversations, everything else falls through to the
 		// base handler above.
-		mqttPub.SetMessageHandler(mqttWakeHandler(subStore, a.loop, baseMsgHandler, logger))
+		mqttPub.SetMessageHandler(mqttWakeHandler(subStore, a.loop, baseMsgHandler, logger, wakeDeps))
 
 		// Register MQTT wake subscription tools.
 		mqttTools := mqtt.NewTools(subStore)
@@ -325,8 +334,8 @@ func (a *App) initServers(s *newState) error {
 			mqttPub.PublishStates(ctx)
 
 			mqttInterval := mqttPub.PublishInterval()
-			if _, err := a.loopRegistry.SpawnLoop(ctx, looppkg.Config{
-				Name:         "mqtt-publisher",
+			parentID, err := a.loopRegistry.SpawnLoop(ctx, looppkg.Config{
+				Name:         "mqtt",
 				SleepMin:     mqttInterval,
 				SleepMax:     mqttInterval,
 				SleepDefault: mqttInterval,
@@ -342,9 +351,11 @@ func (a *App) initServers(s *newState) error {
 			}, looppkg.Deps{
 				Logger:   logger,
 				EventBus: a.eventBus,
-			}); err != nil {
-				return fmt.Errorf("spawn mqtt-publisher loop: %w", err)
+			})
+			if err != nil {
+				return fmt.Errorf("spawn mqtt loop: %w", err)
 			}
+			mqttParentID = parentID
 
 			logger.Info("mqtt connected",
 				"broker", cfg.MQTT.Broker,
