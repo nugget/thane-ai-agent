@@ -61,6 +61,14 @@ func mqttWakeHandler(
 			return
 		}
 
+		if deps.registry == nil {
+			logger.Error("mqtt wake has no loop registry, dropping message",
+				"topic", topic,
+				"matches", len(matches),
+			)
+			return
+		}
+
 		// Fan-out: dispatch one agent conversation per matching
 		// subscription. Each gets its own goroutine so the MQTT
 		// message handler does not block the inbound message loop.
@@ -95,14 +103,7 @@ func mqttWakeHandler(
 				// Use a short topic suffix for the loop name (last path segment).
 				loopName := "mqtt/" + path.Base(topic)
 
-				if deps.registry != nil {
-					dispatchViaLoop(deps, runner, req, loopName, topic, convID, logger)
-				} else {
-					logger.Error("mqtt wake has no loop registry, dropping message",
-						"conv_id", convID,
-						"topic", topic,
-					)
-				}
+				dispatchViaLoop(deps, runner, req, loopName, topic, convID, logger)
 			}()
 		}
 	}
@@ -125,6 +126,18 @@ func dispatchViaLoop(
 		if v, ok := deps.parentID.Load().(string); ok {
 			parentID = v
 		}
+	}
+
+	// A wake loop without a parentID would be registered as a top-level
+	// loop, which means it won't be filtered from MQTT telemetry and
+	// could leak conversation content into topic names. Drop the message
+	// rather than create an unparented loop.
+	if parentID == "" {
+		logger.Warn("mqtt wake parent loop not yet registered, dropping message",
+			"conv_id", convID,
+			"topic", topic,
+		)
+		return
 	}
 
 	// Use a background context: SpawnLoop is non-blocking (starts a

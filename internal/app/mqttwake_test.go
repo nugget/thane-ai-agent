@@ -73,7 +73,7 @@ func TestMQTTWakeHandlerMatchingTopic(t *testing.T) {
 	bus := events.New()
 
 	var parentID atomic.Value
-	parentID.Store("")
+	parentID.Store("test-mqtt-parent")
 
 	deps := mqttWakeDeps{
 		registry: registry,
@@ -207,7 +207,7 @@ func TestMQTTWakeHandlerFanOut(t *testing.T) {
 	bus := events.New()
 
 	var parentID atomic.Value
-	parentID.Store("")
+	parentID.Store("test-mqtt-parent")
 
 	deps := mqttWakeDeps{
 		registry: registry,

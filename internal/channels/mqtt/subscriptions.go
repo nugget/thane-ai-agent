@@ -96,6 +96,22 @@ func (s *SubscriptionStore) loadRuntime() error {
 			continue
 		}
 		ws.CreatedAt = ts
+
+		// Validate persisted rows against current rules — older rows
+		// may predate the validation added in Add(). Skip invalid
+		// entries rather than letting them cause SUBSCRIBE failures
+		// or unexpected matching at runtime.
+		if err := router.ValidateTopicFilter(ws.Topic); err != nil {
+			s.logger.Warn("skipping persisted subscription with invalid topic",
+				"id", ws.ID, "topic", ws.Topic, "error", err)
+			continue
+		}
+		if err := ws.Seed.Validate(); err != nil {
+			s.logger.Warn("skipping persisted subscription with invalid seed",
+				"id", ws.ID, "topic", ws.Topic, "error", err)
+			continue
+		}
+
 		s.subs = append(s.subs, ws)
 	}
 
