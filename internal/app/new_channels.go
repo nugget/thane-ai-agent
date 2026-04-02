@@ -858,5 +858,14 @@ func (a *App) initChannels(s *newState) error {
 		})
 	}
 
+	// Mark MQTT wake tools as deferred so capability tag validation in
+	// initDelegation doesn't warn — they're registered in initServers
+	// alongside the MQTT publisher.
+	if a.cfg.MQTT.Configured() {
+		s.deferredTools["mqtt_wake_list"] = true
+		s.deferredTools["mqtt_wake_add"] = true
+		s.deferredTools["mqtt_wake_remove"] = true
+	}
+
 	return nil
 }
