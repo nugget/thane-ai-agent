@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"time"
@@ -20,6 +21,10 @@ const (
 	defaultHAAutomationListLimit = 25
 	maxHAAutomationListLimit     = 100
 	automationEntityWait         = 5 * time.Second
+	automationActivityHourWindow = time.Hour
+	automationActivityDayWindow  = 24 * time.Hour
+	automationActivityWeekWindow = 7 * 24 * time.Hour
+	maxAutomationRecentHits      = 3
 )
 
 type namedID struct {
@@ -96,8 +101,17 @@ type haAutomationView struct {
 	State         string                  `json:"state,omitempty"`
 	Enabled       bool                    `json:"enabled"`
 	LastTriggered string                  `json:"last_triggered,omitempty"`
+	Activity      *haAutomationActivity   `json:"activity,omitempty"`
 	Metadata      *haAutomationEntityMeta `json:"metadata,omitempty"`
 	Config        map[string]any          `json:"config,omitempty"`
+}
+
+type haAutomationActivity struct {
+	Activations1h          int      `json:"activations_1h"`
+	Activations24h         int      `json:"activations_24h"`
+	Activations7d          int      `json:"activations_7d"`
+	ActivationRate7dPerDay float64  `json:"activation_rate_7d_per_day"`
+	RecentActivations      []string `json:"recent_activations,omitempty"`
 }
 
 type haAutomationEntityMeta struct {
@@ -171,7 +185,7 @@ func (r *Registry) registerHAAutomationTools() {
 
 	r.Register(&Tool{
 		Name:        "ha_automation_list",
-		Description: "List Home Assistant automations with their config IDs, entity IDs, current enabled state, and registry metadata such as area and labels. Use this before updating or deleting an automation.",
+		Description: "List Home Assistant automations with their config IDs, entity IDs, current enabled state, recent trigger activity (1h/24h/7d counts plus recent activation deltas), and registry metadata such as area and labels. Use this before updating or deleting an automation, and to spot automations that never fire or fire too often.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -645,6 +659,10 @@ func (r *Registry) handleHAAutomationList(ctx context.Context, args map[string]a
 		}
 	}
 
+	if err := r.enrichAutomationActivity(ctx, filtered); err != nil {
+		return "", err
+	}
+
 	return toIndentedJSON(filtered), nil
 }
 
@@ -914,6 +932,82 @@ func (r *Registry) listAutomations(ctx context.Context, includeConfig bool) ([]h
 	return views, nil
 }
 
+func (r *Registry) enrichAutomationActivity(ctx context.Context, views []haAutomationView) error {
+	if len(views) == 0 {
+		return nil
+	}
+
+	entityIDs := make([]string, 0, len(views))
+	seen := make(map[string]struct{}, len(views))
+	for _, view := range views {
+		entityID := strings.TrimSpace(view.EntityID)
+		if entityID == "" {
+			continue
+		}
+		if _, ok := seen[entityID]; ok {
+			continue
+		}
+		seen[entityID] = struct{}{}
+		entityIDs = append(entityIDs, entityID)
+	}
+	if len(entityIDs) == 0 {
+		return nil
+	}
+
+	now := time.Now()
+	activityByEntity, err := r.loadAutomationActivity(ctx, entityIDs, now)
+	if err != nil {
+		if isHALogbookUnsupported(err) {
+			return nil
+		}
+		return fmt.Errorf("load automation activity: %w", err)
+	}
+
+	for i := range views {
+		summary, ok := activityByEntity[views[i].EntityID]
+		if !ok {
+			summary = summarizeAutomationActivity(nil, now)
+		}
+		views[i].Activity = &summary
+	}
+
+	return nil
+}
+
+func (r *Registry) loadAutomationActivity(ctx context.Context, entityIDs []string, now time.Time) (map[string]haAutomationActivity, error) {
+	events, err := r.ha.GetLogbookEvents(ctx, now.Add(-automationActivityWeekWindow), now, entityIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	wanted := make(map[string]struct{}, len(entityIDs))
+	for _, entityID := range entityIDs {
+		wanted[entityID] = struct{}{}
+	}
+
+	timesByEntity := make(map[string][]time.Time, len(entityIDs))
+	for _, entry := range events {
+		if !isAutomationTriggerLogbookEntry(entry) {
+			continue
+		}
+		if _, ok := wanted[entry.EntityID]; !ok {
+			continue
+		}
+		when := entry.WhenTime()
+		if when.IsZero() {
+			continue
+		}
+		timesByEntity[entry.EntityID] = append(timesByEntity[entry.EntityID], when)
+	}
+
+	summaries := make(map[string]haAutomationActivity, len(entityIDs))
+	for _, entityID := range entityIDs {
+		summaries[entityID] = summarizeAutomationActivity(timesByEntity[entityID], now)
+	}
+
+	return summaries, nil
+}
+
 func (r *Registry) resolveAutomation(ctx context.Context, idArg, entityArg string) (resolvedAutomation, error) {
 	idArg = strings.TrimSpace(idArg)
 	entityArg = strings.TrimSpace(entityArg)
@@ -1180,6 +1274,64 @@ func buildDeviceMap(devices []homeassistant.DeviceRegistryEntry) map[string]*hom
 		out[devices[i].ID] = &devices[i]
 	}
 	return out
+}
+
+func summarizeAutomationActivity(times []time.Time, now time.Time) haAutomationActivity {
+	sort.Slice(times, func(i, j int) bool { return times[i].After(times[j]) })
+
+	weekCutoff := now.Add(-automationActivityWeekWindow)
+	dayCutoff := now.Add(-automationActivityDayWindow)
+	hourCutoff := now.Add(-automationActivityHourWindow)
+
+	weekCount := countTimesSince(times, weekCutoff)
+	summary := haAutomationActivity{
+		Activations1h:          countTimesSince(times, hourCutoff),
+		Activations24h:         countTimesSince(times, dayCutoff),
+		Activations7d:          weekCount,
+		ActivationRate7dPerDay: roundToHundredths(float64(weekCount) / 7),
+	}
+
+	for _, when := range times {
+		if when.Before(weekCutoff) {
+			continue
+		}
+		summary.RecentActivations = append(summary.RecentActivations, awareness.FormatDeltaOnly(when, now))
+		if len(summary.RecentActivations) >= maxAutomationRecentHits {
+			break
+		}
+	}
+
+	return summary
+}
+
+func countTimesSince(times []time.Time, cutoff time.Time) int {
+	count := 0
+	for _, when := range times {
+		if when.Before(cutoff) {
+			break
+		}
+		count++
+	}
+	return count
+}
+
+func roundToHundredths(v float64) float64 {
+	return math.Round(v*100) / 100
+}
+
+func isAutomationTriggerLogbookEntry(entry homeassistant.LogbookEntry) bool {
+	if strings.TrimSpace(entry.EntityID) == "" {
+		return false
+	}
+	if entry.Domain != "" && entry.Domain != "automation" {
+		return false
+	}
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(entry.Message)), "triggered")
+}
+
+func isHALogbookUnsupported(err error) bool {
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "not_found:") || strings.Contains(msg, "unknown command")
 }
 
 func ensureHAAvailable(ha *homeassistant.Client) error {

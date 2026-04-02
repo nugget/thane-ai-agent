@@ -27,6 +27,7 @@ type fakeHAServer struct {
 	devices     []map[string]any
 	entityRows  []map[string]any
 	entityByID  map[string]map[string]any
+	logbook     []map[string]any
 	validations map[string]homeassistant.ConfigValidationResult
 }
 
@@ -247,6 +248,24 @@ func (f *fakeHAServer) wsResult(msgType string, msg map[string]any) (any, bool) 
 			return map[string]any{"config": cfg}, true
 		}
 		return nil, false
+	case "logbook/get_events":
+		entityIDs := stringSliceFromAny(msg["entity_ids"])
+		if len(entityIDs) == 0 {
+			return f.logbook, true
+		}
+		allowed := make(map[string]struct{}, len(entityIDs))
+		for _, entityID := range entityIDs {
+			allowed[entityID] = struct{}{}
+		}
+		filtered := make([]map[string]any, 0, len(f.logbook))
+		for _, event := range f.logbook {
+			entityID, _ := event["entity_id"].(string)
+			if _, ok := allowed[entityID]; !ok {
+				continue
+			}
+			filtered = append(filtered, cloneMap(event))
+		}
+		return filtered, true
 	default:
 		return nil, false
 	}
@@ -431,6 +450,117 @@ func TestHARegistrySearchFindsEntityAndDevice(t *testing.T) {
 	}
 }
 
+func TestHAAutomationListIncludesActivitySummary(t *testing.T) {
+	fake := newFakeHAServer(t)
+	now := time.Now().UTC()
+	fake.states = []homeassistant.State{
+		{
+			EntityID: "automation.low_battery_watch",
+			State:    "on",
+			Attributes: map[string]any{
+				"id":            "low-battery-watch",
+				"friendly_name": "Low Battery Watch",
+			},
+		},
+		{
+			EntityID: "automation.unused_automation",
+			State:    "on",
+			Attributes: map[string]any{
+				"id":            "unused-automation",
+				"friendly_name": "Unused Automation",
+			},
+		},
+	}
+	fake.logbook = []map[string]any{
+		{
+			"when":      float64(now.Add(-15 * time.Minute).Unix()),
+			"name":      "Low Battery Watch",
+			"message":   "triggered by numeric state of sensor.frontdoor_battery_level",
+			"entity_id": "automation.low_battery_watch",
+			"domain":    "automation",
+		},
+		{
+			"when":      float64(now.Add(-2 * time.Hour).Unix()),
+			"name":      "Low Battery Watch",
+			"message":   "triggered",
+			"entity_id": "automation.low_battery_watch",
+			"domain":    "automation",
+		},
+		{
+			"when":      float64(now.Add(-26 * time.Hour).Unix()),
+			"name":      "Low Battery Watch",
+			"message":   "triggered",
+			"entity_id": "automation.low_battery_watch",
+			"domain":    "automation",
+		},
+		{
+			"when":      float64(now.Add(-8 * 24 * time.Hour).Unix()),
+			"name":      "Low Battery Watch",
+			"message":   "triggered",
+			"entity_id": "automation.low_battery_watch",
+			"domain":    "automation",
+		},
+		{
+			"when":      float64(now.Add(-10 * time.Minute).Unix()),
+			"name":      "Low Battery Watch",
+			"message":   "turned off",
+			"entity_id": "automation.low_battery_watch",
+			"domain":    "automation",
+		},
+	}
+
+	reg := fake.registry(t)
+
+	result, err := reg.Execute(context.Background(), "ha_automation_list", `{"limit":10}`)
+	if err != nil {
+		t.Fatalf("ha_automation_list failed: %v", err)
+	}
+
+	var got []haAutomationView
+	if err := json.Unmarshal([]byte(result), &got); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+
+	byEntity := make(map[string]haAutomationView, len(got))
+	for _, view := range got {
+		byEntity[view.EntityID] = view
+	}
+
+	watch := byEntity["automation.low_battery_watch"]
+	if watch.Activity == nil {
+		t.Fatal("low battery watch activity is nil")
+	}
+	if watch.Activity.Activations1h != 1 {
+		t.Fatalf("activations_1h = %d, want 1", watch.Activity.Activations1h)
+	}
+	if watch.Activity.Activations24h != 2 {
+		t.Fatalf("activations_24h = %d, want 2", watch.Activity.Activations24h)
+	}
+	if watch.Activity.Activations7d != 3 {
+		t.Fatalf("activations_7d = %d, want 3", watch.Activity.Activations7d)
+	}
+	if watch.Activity.ActivationRate7dPerDay != 0.43 {
+		t.Fatalf("activation_rate_7d_per_day = %v, want 0.43", watch.Activity.ActivationRate7dPerDay)
+	}
+	if len(watch.Activity.RecentActivations) != 3 {
+		t.Fatalf("recent_activations = %#v, want 3 entries", watch.Activity.RecentActivations)
+	}
+	if !strings.HasPrefix(watch.Activity.RecentActivations[0], "-") || !strings.HasSuffix(watch.Activity.RecentActivations[0], "s") {
+		t.Fatalf("recent_activations[0] = %q, want delta-only format", watch.Activity.RecentActivations[0])
+	}
+
+	unused := byEntity["automation.unused_automation"]
+	if unused.Activity == nil {
+		t.Fatal("unused automation activity is nil")
+	}
+	if unused.Activity.Activations1h != 0 || unused.Activity.Activations24h != 0 || unused.Activity.Activations7d != 0 {
+		t.Fatalf("unused activity = %#v, want zero counts", unused.Activity)
+	}
+	if len(unused.Activity.RecentActivations) != 0 {
+		t.Fatalf("unused recent_activations = %#v, want empty", unused.Activity.RecentActivations)
+	}
+}
+
 func writeJSON(t *testing.T, w http.ResponseWriter, value any) {
 	t.Helper()
 	w.Header().Set("Content-Type", "application/json")
@@ -448,4 +578,21 @@ func cloneMap(src map[string]any) map[string]any {
 		dst[key] = value
 	}
 	return dst
+}
+
+func stringSliceFromAny(v any) []string {
+	switch raw := v.(type) {
+	case []string:
+		return append([]string(nil), raw...)
+	case []any:
+		out := make([]string, 0, len(raw))
+		for _, item := range raw {
+			if s, ok := item.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
 }

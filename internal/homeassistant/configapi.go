@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"time"
 )
 
 // LabelRegistryEntry represents a Home Assistant label.
@@ -44,6 +45,28 @@ type DeviceRegistryEntry struct {
 type ConfigValidationResult struct {
 	Valid bool   `json:"valid"`
 	Error string `json:"error"`
+}
+
+// LogbookEntry mirrors the Home Assistant logbook/get_events response shape.
+type LogbookEntry struct {
+	When     float64 `json:"when"`
+	Name     string  `json:"name"`
+	Message  string  `json:"message"`
+	EntityID string  `json:"entity_id"`
+	Icon     string  `json:"icon"`
+	Source   string  `json:"source"`
+	Domain   string  `json:"domain"`
+	State    string  `json:"state"`
+}
+
+// WhenTime converts the Python timestamp from Home Assistant into UTC time.
+func (e LogbookEntry) WhenTime() time.Time {
+	if e.When == 0 {
+		return time.Time{}
+	}
+	secs := int64(e.When)
+	nanos := int64((e.When - float64(secs)) * float64(time.Second))
+	return time.Unix(secs, nanos).UTC()
 }
 
 func (c *Client) requireWS() (*WSClient, error) {
@@ -96,6 +119,18 @@ func (c *Client) ValidateConfig(ctx context.Context, sections map[string]any) (m
 		return nil, err
 	}
 	return ws.ValidateConfig(ctx, sections)
+}
+
+// GetLogbookEvents retrieves recorder-backed logbook events for the requested entities.
+func (c *Client) GetLogbookEvents(ctx context.Context, startTime, endTime time.Time, entityIDs []string) ([]LogbookEntry, error) {
+	if len(entityIDs) == 0 {
+		return nil, nil
+	}
+	ws, err := c.requireWS()
+	if err != nil {
+		return nil, err
+	}
+	return ws.GetLogbookEvents(ctx, startTime, endTime, entityIDs)
 }
 
 // GetAutomationConfigByEntityID fetches an automation's raw config by entity_id.
@@ -204,6 +239,24 @@ func (c *WSClient) ValidateConfig(ctx context.Context, sections map[string]any) 
 	result := make(map[string]ConfigValidationResult)
 	if err := c.call(ctx, "validate_config", sections, &result); err != nil {
 		return nil, fmt.Errorf("validate config: %w", err)
+	}
+	return result, nil
+}
+
+// GetLogbookEvents retrieves logbook rows for the requested entities and window.
+func (c *WSClient) GetLogbookEvents(ctx context.Context, startTime, endTime time.Time, entityIDs []string) ([]LogbookEntry, error) {
+	if len(entityIDs) == 0 {
+		return nil, nil
+	}
+	fields := map[string]any{
+		"start_time": startTime.UTC().Format(time.RFC3339),
+		"end_time":   endTime.UTC().Format(time.RFC3339),
+		"entity_ids": entityIDs,
+	}
+
+	var result []LogbookEntry
+	if err := c.call(ctx, "logbook/get_events", fields, &result); err != nil {
+		return nil, fmt.Errorf("get logbook events: %w", err)
 	}
 	return result, nil
 }
