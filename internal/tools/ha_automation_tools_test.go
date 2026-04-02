@@ -299,6 +299,7 @@ func TestHAAutomationCreateValidateOnly(t *testing.T) {
 
 func TestHAAutomationGetIncludesRegistryMetadata(t *testing.T) {
 	fake := newFakeHAServer(t)
+	lastTriggered := time.Now().Add(-90 * time.Second).UTC().Format(time.RFC3339)
 	fake.states = []homeassistant.State{
 		{
 			EntityID: "automation.door_lock_battery_level_critical",
@@ -306,7 +307,7 @@ func TestHAAutomationGetIncludesRegistryMetadata(t *testing.T) {
 			Attributes: map[string]any{
 				"id":             "door-lock-battery-level-critical",
 				"friendly_name":  "Door Lock Battery Level Critical",
-				"last_triggered": "2026-04-02T18:30:00Z",
+				"last_triggered": lastTriggered,
 			},
 		},
 	}
@@ -362,6 +363,9 @@ func TestHAAutomationGetIncludesRegistryMetadata(t *testing.T) {
 	}
 	if got.Config["description"] != "Fire if any of the door deadbolt batteries is below 35%" {
 		t.Fatalf("config.description = %#v", got.Config["description"])
+	}
+	if !strings.HasPrefix(got.LastTriggered, "-") || !strings.HasSuffix(got.LastTriggered, "s") {
+		t.Fatalf("last_triggered = %q, want exact-second delta format", got.LastTriggered)
 	}
 }
 

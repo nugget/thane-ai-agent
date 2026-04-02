@@ -10,6 +10,7 @@ import (
 	"time"
 	"unicode"
 
+	"github.com/nugget/thane-ai-agent/internal/awareness"
 	"github.com/nugget/thane-ai-agent/internal/homeassistant"
 )
 
@@ -1114,7 +1115,7 @@ func buildAutomationViewFromMaps(resolved resolvedAutomation, includeConfig bool
 	if resolved.state != nil {
 		view.State = resolved.state.State
 		if lastTriggered, ok := resolved.state.Attributes["last_triggered"].(string); ok {
-			view.LastTriggered = lastTriggered
+			view.LastTriggered = formatAutomationLastTriggered(lastTriggered, time.Now())
 		}
 	}
 
@@ -1339,6 +1340,20 @@ func friendlyNameForState(state *homeassistant.State) string {
 		return friendly
 	}
 	return ""
+}
+
+func formatAutomationLastTriggered(raw string, now time.Time) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if ts, err := time.Parse(time.RFC3339, raw); err == nil {
+		return awareness.FormatDeltaOnly(ts, now)
+	}
+	if ts, err := time.Parse(time.RFC3339Nano, raw); err == nil {
+		return awareness.FormatDeltaOnly(ts, now)
+	}
+	return raw
 }
 
 func resolveNamedIDs(ids []string, names map[string]string) []namedID {
