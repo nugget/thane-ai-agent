@@ -31,8 +31,10 @@ func (r *Registry) registerMQTTSubscriptionTools() {
 	})
 
 	r.Register(&Tool{
-		Name:        "mqtt_wake_add",
-		Description: "Add a runtime MQTT wake subscription. When a message arrives on the given topic, the agent wakes with the specified routing configuration. Supports MQTT wildcards (+ for single level, # for multi-level). The subscription persists across restarts and takes effect on the next broker reconnect.",
+		Name: "mqtt_wake_add",
+		Description: `Add a runtime MQTT wake subscription. When a message arrives on the given topic, the agent wakes with the specified routing configuration. The subscription persists across restarts and takes effect on the next broker reconnect.
+
+Topic conventions: Use thane/{device_name}/wake/{purpose} for instance-directed wakes. Subscribe to external topics directly for shared events (e.g., frigate/+/events). MQTT wildcards: + matches one level, # matches remaining levels (must be last segment). Each wake creates a fresh conversation — no state accumulates across messages. The MQTT payload becomes the user message, optionally wrapped with the instructions field.`,
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
