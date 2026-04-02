@@ -79,11 +79,6 @@ const typingRefreshInterval = 10 * time.Second
 // child processes a message.
 const senderChanSize = 4
 
-// maxToolResultLen is the maximum tool result length forwarded to the
-// dashboard via SSE. Results longer than this are truncated with an
-// ellipsis to keep event payloads bounded.
-const maxToolResultLen = 2000
-
 // lastMessage tracks a sender's most recent inbound message timestamp
 // along with when we received it, for bounded cleanup.
 type lastMessage struct {
@@ -504,60 +499,6 @@ func (b *Bridge) ensureSenderLoop(ctx context.Context, sender string) {
 	}
 }
 
-// buildAgentStream converts a loop progress func into an agent
-// StreamCallback that forwards in-flight LLM and tool events to the
-// event bus for dashboard visibility. Returns nil if progressFn is nil.
-func buildAgentStream(progressFn func(string, map[string]any)) agent.StreamCallback {
-	if progressFn == nil {
-		return nil
-	}
-	return func(e agent.StreamEvent) {
-		switch e.Kind {
-		case agent.KindLLMStart:
-			if e.Response != nil {
-				data := map[string]any{
-					"model": e.Response.Model,
-				}
-				for k, v := range e.Data {
-					data[k] = v
-				}
-				progressFn(events.KindLoopLLMStart, data)
-			}
-		case agent.KindToolCallStart:
-			if e.ToolCall != nil {
-				data := map[string]any{
-					"tool": e.ToolCall.Function.Name,
-				}
-				if len(e.ToolCall.Function.Arguments) > 0 {
-					data["args"] = e.ToolCall.Function.Arguments
-				}
-				progressFn(events.KindLoopToolStart, data)
-			}
-		case agent.KindToolCallDone:
-			data := map[string]any{"tool": e.ToolName}
-			if e.ToolError != "" {
-				data["error"] = e.ToolError
-			}
-			if e.ToolResult != "" {
-				r := e.ToolResult
-				if len(r) > maxToolResultLen {
-					r = r[:maxToolResultLen] + "…"
-				}
-				data["result"] = r
-			}
-			progressFn(events.KindLoopToolDone, data)
-		case agent.KindLLMResponse:
-			if e.Response != nil {
-				progressFn(events.KindLoopLLMResponse, map[string]any{
-					"model":         e.Response.Model,
-					"input_tokens":  e.Response.InputTokens,
-					"output_tokens": e.Response.OutputTokens,
-				})
-			}
-		}
-	}
-}
-
 // handleMessage processes a single inbound Signal message: runs it
 // through the agent loop and sends the response back to the sender.
 // The progressFn, if non-nil, is used to forward in-flight events
@@ -659,7 +600,7 @@ func (b *Bridge) handleMessage(ctx context.Context, env *Envelope, progressFn fu
 		Hints:          hints,
 	}
 
-	stream := buildAgentStream(progressFn)
+	stream := agent.BuildProgressStream(progressFn)
 	resp, err := b.runner.Run(ctx, req, stream)
 
 	// Stop the typing refresh goroutine, then send a definitive
@@ -685,11 +626,14 @@ func (b *Bridge) handleMessage(ctx context.Context, env *Envelope, progressFn fu
 	}
 
 	// Report iteration stats for the loop dashboard.
-	if summary := loop.IterationSummary(ctx); summary != nil {
-		summary["request_id"] = resp.RequestID
+	if summary := loop.ReportAgentRun(ctx, loop.AgentRunSummary{
+		RequestID:    resp.RequestID,
+		Model:        resp.Model,
+		InputTokens:  resp.InputTokens,
+		OutputTokens: resp.OutputTokens,
+	}); summary != nil {
 		summary["message_len"] = len(content)
 		summary["response_len"] = len(resp.Content)
-		summary["model"] = resp.Model
 		summary["sender"] = sender
 	}
 
