@@ -159,6 +159,15 @@ func (a *App) initServers(s *newState) error {
 	// Optional: WebSocket endpoint for native platform apps (e.g. macOS)
 	// to connect and register capabilities for bidirectional service dispatch.
 	if cfg.Platform.Configured() {
+		// Platform tools are registered here, after initDelegation's
+		// capability-tag validation pass. Mark them as deferred so
+		// config-backed capability tags can reference them without
+		// startup warnings.
+		if s.deferredTools == nil {
+			s.deferredTools = make(map[string]bool)
+		}
+		s.deferredTools["macos_calendar_events"] = true
+
 		a.platformRegistry = platform.NewRegistry(logger)
 		a.loop.Tools().EnablePlatformTools(a.platformRegistry.Call)
 		handler := platform.NewHandler(cfg.Platform.TokenIndex(), a.platformRegistry, logger)
