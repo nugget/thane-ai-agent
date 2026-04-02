@@ -19,6 +19,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/agent"
 	"github.com/nugget/thane-ai-agent/internal/attachments"
 	"github.com/nugget/thane-ai-agent/internal/config"
+	"github.com/nugget/thane-ai-agent/internal/router"
 )
 
 // testRunner records the most recent Run call and returns a canned
@@ -224,6 +225,31 @@ func TestBridge_CustomRoutingConfig(t *testing.T) {
 	}
 	if req.Hints["delegation_gating"] != "disabled" {
 		t.Errorf("delegation_gating = %q, want %q", req.Hints["delegation_gating"], "disabled")
+	}
+}
+
+func TestSignalRoutingConfigLoopSeed(t *testing.T) {
+	cfg := config.SignalRoutingConfig{
+		Model:            "claude-sonnet-4-20250514",
+		QualityFloor:     "8",
+		Mission:          "conversation",
+		DelegationGating: "disabled",
+	}
+
+	seed := cfg.LoopSeed()
+	opts := seed.RequestOptions()
+
+	if opts.Model != "claude-sonnet-4-20250514" {
+		t.Errorf("Model = %q, want %q", opts.Model, "claude-sonnet-4-20250514")
+	}
+	if opts.Hints[router.HintQualityFloor] != "8" {
+		t.Errorf("quality_floor = %q, want %q", opts.Hints[router.HintQualityFloor], "8")
+	}
+	if opts.Hints[router.HintMission] != "conversation" {
+		t.Errorf("mission = %q, want %q", opts.Hints[router.HintMission], "conversation")
+	}
+	if opts.Hints[router.HintDelegationGating] != "disabled" {
+		t.Errorf("delegation_gating = %q, want %q", opts.Hints[router.HintDelegationGating], "disabled")
 	}
 }
 
@@ -855,7 +881,14 @@ func TestStartTypingRefresh_CancelsCleanly(t *testing.T) {
 // --- Issue #358: Reaction Handling ---
 
 func TestBridge_ReactionWakesAgent(t *testing.T) {
-	bridge, stdout, stdin, runner := bridgeHelper(t)
+	bridge, stdout, stdin, runner := bridgeHelper(t, func(cfg *BridgeConfig) {
+		cfg.Routing = config.SignalRoutingConfig{
+			Model:            "claude-sonnet-4-20250514",
+			QualityFloor:     "8",
+			Mission:          "conversation",
+			DelegationGating: "disabled",
+		}
+	})
 	go drainRPCRequests(t, stdin, stdout)
 
 	env := &Envelope{
@@ -890,6 +923,18 @@ func TestBridge_ReactionWakesAgent(t *testing.T) {
 	}
 	if req.Hints["source"] != "signal" {
 		t.Errorf("source hint = %q, want %q", req.Hints["source"], "signal")
+	}
+	if req.Model != "claude-sonnet-4-20250514" {
+		t.Errorf("Model = %q, want %q", req.Model, "claude-sonnet-4-20250514")
+	}
+	if req.Hints[router.HintQualityFloor] != "8" {
+		t.Errorf("quality_floor = %q, want %q", req.Hints[router.HintQualityFloor], "8")
+	}
+	if req.Hints[router.HintMission] != "conversation" {
+		t.Errorf("mission = %q, want %q", req.Hints[router.HintMission], "conversation")
+	}
+	if req.Hints[router.HintDelegationGating] != "disabled" {
+		t.Errorf("delegation_gating = %q, want %q", req.Hints[router.HintDelegationGating], "disabled")
 	}
 	if req.ConversationID != "signal-15551234567" {
 		t.Errorf("ConversationID = %q, want %q", req.ConversationID, "signal-15551234567")
