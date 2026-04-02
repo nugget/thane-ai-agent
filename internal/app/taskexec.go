@@ -66,36 +66,21 @@ func runScheduledTask(ctx context.Context, task *scheduler.Task, exec *scheduler
 		msg = prompts.PeriodicReflectionPrompt(egoContent)
 	}
 
-	// Extract optional routing overrides from payload data.
-	// Tasks can specify model, local_only, and quality_floor to
-	// override the defaults (local-only, cheapest model).
-	model, _ := task.Payload.Data["model"].(string)
-
-	localOnly := "true"
-	if lo, ok := task.Payload.Data["local_only"].(string); ok {
-		localOnly = lo
-	}
-
-	qualityFloor := "1"
-	if qf, ok := task.Payload.Data["quality_floor"].(string); ok {
-		qualityFloor = qf
-	}
+	// Build the wake routing profile via LoopSeed so scheduled tasks
+	// use the same routing/config path as the newer wake subsystems.
+	seed := buildScheduledTaskLoopSeed(task)
+	reqOpts := seed.RequestOptions()
 
 	// Each execution gets a fresh conversation so prior poll/wake context
 	// doesn't accumulate across cycles. The execution ID (UUIDv7) ensures
 	// uniqueness while the task ID prefix aids log correlation.
 	req := &agent.Request{
 		ConversationID: fmt.Sprintf("sched-%s-%s", task.ID, exec.ID),
-		Model:          model,
+		Model:          reqOpts.Model,
 		Messages:       []agent.Message{{Role: "user", Content: msg}},
-		Hints: map[string]string{
-			"source":                    "scheduler",
-			"task":                      task.Name,
-			router.HintLocalOnly:        localOnly,
-			router.HintQualityFloor:     qualityFloor,
-			router.HintMission:          "automation",
-			router.HintDelegationGating: "disabled", // full tool access, no delegation indirection
-		},
+		Hints:          reqOpts.Hints,
+		ExcludeTools:   reqOpts.ExcludeTools,
+		SeedTags:       reqOpts.SeedTags,
 	}
 
 	resp, err := deps.runner.Run(ctx, req, nil)
@@ -110,6 +95,36 @@ func runScheduledTask(ctx context.Context, task *scheduler.Task, exec *scheduler
 		"result_len", len(resp.Content),
 	)
 	return nil
+}
+
+// buildScheduledTaskLoopSeed converts a wake task payload into the
+// shared LoopSeed routing/config shape. Tasks can override the default
+// local-only, cheapest-model behavior with model/local_only/
+// quality_floor payload fields.
+func buildScheduledTaskLoopSeed(task *scheduler.Task) router.LoopSeed {
+	model, _ := task.Payload.Data["model"].(string)
+
+	localOnly := "true"
+	if lo, ok := task.Payload.Data["local_only"].(string); ok {
+		localOnly = lo
+	}
+
+	qualityFloor := "1"
+	if qf, ok := task.Payload.Data["quality_floor"].(string); ok {
+		qualityFloor = qf
+	}
+
+	return router.LoopSeed{
+		Model:            model,
+		LocalOnly:        localOnly,
+		QualityFloor:     qualityFloor,
+		Mission:          "automation",
+		DelegationGating: "disabled",
+		ExtraHints: map[string]string{
+			"source": "scheduler",
+			"task":   task.Name,
+		},
+	}
 }
 
 // maxEgoBytes is the maximum ego.md content passed to the reflection

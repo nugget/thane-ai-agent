@@ -57,6 +57,16 @@ type LoopSeed struct {
 	Instructions string `yaml:"instructions,omitempty" json:"instructions,omitempty"`
 }
 
+// RequestOptions contains the agent request fields derived from a
+// LoopSeed. Callers can merge additional channel- or trigger-specific
+// hints on top of these shared routing defaults.
+type RequestOptions struct {
+	Model        string
+	Hints        map[string]string
+	ExcludeTools []string
+	SeedTags     []string
+}
+
 // Hints builds a routing hints map from the seed's typed fields.
 // Only non-empty fields are included. ExtraHints are merged last and
 // can override typed fields.
@@ -162,4 +172,23 @@ func ValidateTopicFilter(filter string) error {
 		}
 	}
 	return nil
+}
+
+// RequestOptions returns the request-ready fields implied by the seed.
+// Slices are copied so callers can mutate the result without affecting
+// the underlying LoopSeed.
+func (s *LoopSeed) RequestOptions() RequestOptions {
+	opts := RequestOptions{
+		Model: s.Model,
+		Hints: s.Hints(),
+	}
+
+	if len(s.ExcludeTools) > 0 {
+		opts.ExcludeTools = append([]string(nil), s.ExcludeTools...)
+	}
+	if len(s.SeedTags) > 0 {
+		opts.SeedTags = append([]string(nil), s.SeedTags...)
+	}
+
+	return opts
 }
