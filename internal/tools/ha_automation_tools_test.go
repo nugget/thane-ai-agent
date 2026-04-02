@@ -19,16 +19,17 @@ type fakeHAServer struct {
 	server   *httptest.Server
 	upgrader websocket.Upgrader
 
-	mu          sync.Mutex
-	states      []homeassistant.State
-	configs     map[string]map[string]any
-	areas       []map[string]any
-	labels      []map[string]any
-	devices     []map[string]any
-	entityRows  []map[string]any
-	entityByID  map[string]map[string]any
-	logbook     []map[string]any
-	validations map[string]homeassistant.ConfigValidationResult
+	mu           sync.Mutex
+	states       []homeassistant.State
+	configs      map[string]map[string]any
+	areas        []map[string]any
+	labels       []map[string]any
+	devices      []map[string]any
+	entityRows   []map[string]any
+	entityByID   map[string]map[string]any
+	logbook      []map[string]any
+	serviceCalls []string
+	validations  map[string]homeassistant.ConfigValidationResult
 }
 
 func newFakeHAServer(t *testing.T) *fakeHAServer {
@@ -118,6 +119,7 @@ func (f *fakeHAServer) handleAutomationConfig(w http.ResponseWriter, r *http.Req
 			f.t.Fatalf("decode config: %v", err)
 		}
 		f.configs[id] = cfg
+		f.ensureAutomationStateLocked(id, cfg)
 		w.WriteHeader(http.StatusOK)
 		writeJSON(f.t, w, map[string]any{"result": "ok"})
 	case http.MethodDelete:
@@ -134,6 +136,22 @@ func (f *fakeHAServer) handleServiceCall(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	var payload map[string]any
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		f.t.Fatalf("decode service payload: %v", err)
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	f.serviceCalls = append(f.serviceCalls, strings.TrimPrefix(r.URL.Path, "/api/services/"))
+	entityID, _ := payload["entity_id"].(string)
+	switch {
+	case strings.HasSuffix(r.URL.Path, "/turn_off"):
+		f.setAutomationStateLocked(entityID, "off")
+	case strings.HasSuffix(r.URL.Path, "/turn_on"):
+		f.setAutomationStateLocked(entityID, "on")
+	}
+
 	w.WriteHeader(http.StatusOK)
 	writeJSON(f.t, w, map[string]any{"result": "ok"})
 }
@@ -224,6 +242,11 @@ func (f *fakeHAServer) wsResult(msgType string, msg map[string]any) (any, bool) 
 		}
 		if newEntityID, ok := msg["new_entity_id"].(string); ok && newEntityID != "" {
 			updated["entity_id"] = newEntityID
+			for i, state := range f.states {
+				if state.EntityID == entityID {
+					f.states[i].EntityID = newEntityID
+				}
+			}
 			delete(f.entityByID, entityID)
 			entityID = newEntityID
 		}
@@ -561,6 +584,170 @@ func TestHAAutomationListIncludesActivitySummary(t *testing.T) {
 	}
 }
 
+func TestHAAutomationCreateUpdateDeleteOperationalFlow(t *testing.T) {
+	fake := newFakeHAServer(t)
+	reg := fake.registry(t)
+
+	createResult, err := reg.Execute(context.Background(), "ha_automation_create", `{
+		"id": "battery-watch",
+		"config": {
+			"alias": "Battery Watch",
+			"triggers": [{"trigger":"numeric_state","entity_id":"sensor.frontdoor_battery_level","below":30}],
+			"actions": [{"action":"mqtt.publish","data":{"topic":"thane/test"}}]
+		},
+		"metadata": {
+			"area_id": "garage",
+			"label_ids": ["critical"],
+			"entity_id": "automation.battery_watch_custom"
+		},
+		"enabled": false
+	}`)
+	if err != nil {
+		t.Fatalf("ha_automation_create failed: %v", err)
+	}
+
+	var created haAutomationView
+	if err := json.Unmarshal([]byte(createResult), &created); err != nil {
+		t.Fatalf("unmarshal create result: %v", err)
+	}
+	if created.EntityID != "automation.battery_watch_custom" {
+		t.Fatalf("created entity_id = %q, want automation.battery_watch_custom", created.EntityID)
+	}
+	if created.State != "off" || created.Enabled {
+		t.Fatalf("created state/enabled = %q/%v, want off/false", created.State, created.Enabled)
+	}
+	if created.Metadata == nil || created.Metadata.AreaID != "garage" {
+		t.Fatalf("created metadata = %#v, want area_id garage", created.Metadata)
+	}
+
+	updateResult, err := reg.Execute(context.Background(), "ha_automation_update", `{
+		"id": "battery-watch",
+		"config": {
+			"description": "Updated description"
+		},
+		"metadata": {
+			"entity_id": "automation.battery_watch_renamed"
+		},
+		"enabled": true
+	}`)
+	if err != nil {
+		t.Fatalf("ha_automation_update failed: %v", err)
+	}
+
+	var updated haAutomationView
+	if err := json.Unmarshal([]byte(updateResult), &updated); err != nil {
+		t.Fatalf("unmarshal update result: %v", err)
+	}
+	if updated.EntityID != "automation.battery_watch_renamed" {
+		t.Fatalf("updated entity_id = %q, want automation.battery_watch_renamed", updated.EntityID)
+	}
+	if updated.Config["description"] != "Updated description" {
+		t.Fatalf("updated description = %#v, want Updated description", updated.Config["description"])
+	}
+	if updated.State != "on" || !updated.Enabled {
+		t.Fatalf("updated state/enabled = %q/%v, want on/true", updated.State, updated.Enabled)
+	}
+
+	deleteResult, err := reg.Execute(context.Background(), "ha_automation_delete", `{"id":"battery-watch"}`)
+	if err != nil {
+		t.Fatalf("ha_automation_delete failed: %v", err)
+	}
+
+	var deleted map[string]any
+	if err := json.Unmarshal([]byte(deleteResult), &deleted); err != nil {
+		t.Fatalf("unmarshal delete result: %v", err)
+	}
+	if deleted["deleted"] != true {
+		t.Fatalf("delete result = %#v, want deleted=true", deleted)
+	}
+	if _, ok := fake.configs["battery-watch"]; ok {
+		t.Fatal("expected automation config to be deleted")
+	}
+}
+
+func TestHAAutomationListFiltersByAreaAndDisabled(t *testing.T) {
+	fake := newFakeHAServer(t)
+	fake.states = []homeassistant.State{
+		{
+			EntityID: "automation.garage_watch",
+			State:    "on",
+			Attributes: map[string]any{
+				"id":            "garage-watch",
+				"friendly_name": "Garage Watch",
+			},
+		},
+		{
+			EntityID: "automation.kitchen_watch",
+			State:    "on",
+			Attributes: map[string]any{
+				"id":            "kitchen-watch",
+				"friendly_name": "Kitchen Watch",
+			},
+		},
+	}
+	fake.areas = []map[string]any{
+		{"area_id": "garage", "name": "Garage"},
+		{"area_id": "kitchen", "name": "Kitchen"},
+	}
+	fake.entityRows = []map[string]any{
+		{
+			"id":          "garage_row",
+			"entity_id":   "automation.garage_watch",
+			"name":        "Garage Watch",
+			"area_id":     "garage",
+			"labels":      []string{},
+			"aliases":     []string{},
+			"categories":  map[string]any{},
+			"disabled_by": "",
+		},
+		{
+			"id":          "kitchen_row",
+			"entity_id":   "automation.kitchen_watch",
+			"name":        "Kitchen Watch",
+			"area_id":     "kitchen",
+			"labels":      []string{},
+			"aliases":     []string{},
+			"categories":  map[string]any{},
+			"disabled_by": "user",
+		},
+	}
+	fake.entityByID["automation.garage_watch"] = fake.entityRows[0]
+	fake.entityByID["automation.kitchen_watch"] = fake.entityRows[1]
+
+	reg := fake.registry(t)
+
+	result, err := reg.Execute(context.Background(), "ha_automation_list", `{"area_id":"garage","include_disabled":false}`)
+	if err != nil {
+		t.Fatalf("ha_automation_list failed: %v", err)
+	}
+
+	var got []haAutomationView
+	if err := json.Unmarshal([]byte(result), &got); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+	if len(got) != 1 || got[0].EntityID != "automation.garage_watch" {
+		t.Fatalf("filtered list = %#v, want only automation.garage_watch", got)
+	}
+}
+
+func TestToIndentedJSONHardCap(t *testing.T) {
+	var items []map[string]any
+	for i := 0; i < 400; i++ {
+		items = append(items, map[string]any{
+			"id":          i,
+			"description": strings.Repeat("battery_watch_", 40),
+		})
+	}
+
+	result := toIndentedJSON(items)
+	if len(result) > maxHAToolResultBytes {
+		t.Fatalf("result exceeded hard cap: got %d, want <= %d", len(result), maxHAToolResultBytes)
+	}
+	if !strings.Contains(result, "_truncated") {
+		t.Fatalf("result = %q, want truncation metadata when payload exceeds hard cap", result)
+	}
+}
+
 func writeJSON(t *testing.T, w http.ResponseWriter, value any) {
 	t.Helper()
 	w.Header().Set("Content-Type", "application/json")
@@ -595,4 +782,66 @@ func stringSliceFromAny(v any) []string {
 	default:
 		return nil
 	}
+}
+
+func (f *fakeHAServer) ensureAutomationStateLocked(id string, cfg map[string]any) {
+	entityID := automationEntityIDFromConfigID(id)
+	alias, _ := cfg["alias"].(string)
+
+	foundState := false
+	for i, state := range f.states {
+		if state.EntityID != entityID {
+			continue
+		}
+		if state.Attributes == nil {
+			state.Attributes = map[string]any{}
+		}
+		state.Attributes["id"] = id
+		if strings.TrimSpace(alias) != "" {
+			state.Attributes["friendly_name"] = alias
+		}
+		if state.State == "" {
+			state.State = "on"
+		}
+		f.states[i] = state
+		foundState = true
+		break
+	}
+	if !foundState {
+		attrs := map[string]any{"id": id}
+		if strings.TrimSpace(alias) != "" {
+			attrs["friendly_name"] = alias
+		}
+		f.states = append(f.states, homeassistant.State{
+			EntityID:   entityID,
+			State:      "on",
+			Attributes: attrs,
+		})
+	}
+
+	if _, ok := f.entityByID[entityID]; !ok {
+		row := map[string]any{
+			"id":         entityID + "_row",
+			"entity_id":  entityID,
+			"name":       alias,
+			"labels":     []string{},
+			"aliases":    []string{},
+			"categories": map[string]any{},
+		}
+		f.entityByID[entityID] = row
+		f.entityRows = append(f.entityRows, row)
+	}
+}
+
+func (f *fakeHAServer) setAutomationStateLocked(entityID, stateValue string) {
+	for i, state := range f.states {
+		if state.EntityID == entityID {
+			f.states[i].State = stateValue
+			return
+		}
+	}
+}
+
+func automationEntityIDFromConfigID(id string) string {
+	return "automation." + strings.ReplaceAll(id, "-", "_")
 }

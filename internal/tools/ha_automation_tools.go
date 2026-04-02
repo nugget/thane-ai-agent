@@ -20,6 +20,7 @@ const (
 	maxHARegistrySearchLimit     = 25
 	defaultHAAutomationListLimit = 25
 	maxHAAutomationListLimit     = 100
+	maxHAToolResultBytes         = 50 * 1024
 	automationEntityWait         = 5 * time.Second
 	automationActivityHourWindow = time.Hour
 	automationActivityDayWindow  = 24 * time.Hour
@@ -355,25 +356,55 @@ func (r *Registry) handleHARegistrySearch(ctx context.Context, args map[string]a
 		}
 	}
 
-	areas, err := r.ha.GetAreas(ctx)
-	if err != nil {
-		return "", fmt.Errorf("get areas: %w", err)
+	areaFilter := strings.TrimSpace(stringArg(args, "area_id"))
+	labelFilter := strings.TrimSpace(stringArg(args, "label_id"))
+	domainFilter := strings.TrimSpace(stringArg(args, "domain"))
+	includeDisabled := boolArg(args, "include_disabled")
+
+	needAreas := searchKinds["areas"] || searchKinds["devices"] || searchKinds["entities"]
+	needLabels := searchKinds["areas"] || searchKinds["labels"] || searchKinds["devices"] || searchKinds["entities"]
+	needDevices := searchKinds["devices"] || searchKinds["entities"]
+	needEntities := searchKinds["entities"]
+	needStates := searchKinds["entities"]
+
+	var areas []homeassistant.Area
+	if needAreas {
+		areas, err = r.ha.GetAreas(ctx)
+		if err != nil {
+			return "", fmt.Errorf("get areas: %w", err)
+		}
 	}
-	labels, err := r.ha.GetLabelRegistry(ctx)
-	if err != nil {
-		return "", fmt.Errorf("get labels: %w", err)
+
+	var labels []homeassistant.LabelRegistryEntry
+	if needLabels {
+		labels, err = r.ha.GetLabelRegistry(ctx)
+		if err != nil {
+			return "", fmt.Errorf("get labels: %w", err)
+		}
 	}
-	devices, err := r.ha.GetDeviceRegistry(ctx)
-	if err != nil {
-		return "", fmt.Errorf("get devices: %w", err)
+
+	var devices []homeassistant.DeviceRegistryEntry
+	if needDevices {
+		devices, err = r.ha.GetDeviceRegistry(ctx)
+		if err != nil {
+			return "", fmt.Errorf("get devices: %w", err)
+		}
 	}
-	entities, err := r.ha.GetEntityRegistry(ctx)
-	if err != nil {
-		return "", fmt.Errorf("get entity registry: %w", err)
+
+	var entities []homeassistant.EntityRegistryEntry
+	if needEntities {
+		entities, err = r.ha.GetEntityRegistry(ctx)
+		if err != nil {
+			return "", fmt.Errorf("get entity registry: %w", err)
+		}
 	}
-	states, err := r.ha.GetStates(ctx)
-	if err != nil {
-		return "", fmt.Errorf("get states: %w", err)
+
+	var states []homeassistant.State
+	if needStates {
+		states, err = r.ha.GetStates(ctx)
+		if err != nil {
+			return "", fmt.Errorf("get states: %w", err)
+		}
 	}
 
 	labelMap := buildLabelNameMap(labels)
@@ -383,10 +414,6 @@ func (r *Registry) handleHARegistrySearch(ctx context.Context, args map[string]a
 
 	result := haRegistrySearchResult{Query: query}
 	queryScore := makeScorer(query)
-	areaFilter := strings.TrimSpace(stringArg(args, "area_id"))
-	labelFilter := strings.TrimSpace(stringArg(args, "label_id"))
-	domainFilter := strings.TrimSpace(stringArg(args, "domain"))
-	includeDisabled := boolArg(args, "include_disabled")
 
 	if searchKinds["areas"] {
 		type scoredArea struct {
@@ -1141,8 +1168,8 @@ func (r *Registry) waitForAutomationEntity(ctx context.Context, id string) (stri
 	waitCtx, cancel := context.WithTimeout(ctx, automationEntityWait)
 	defer cancel()
 
-	ticker := time.NewTicker(250 * time.Millisecond)
-	defer ticker.Stop()
+	delay := 250 * time.Millisecond
+	const maxDelay = time.Second
 
 	for {
 		states, err := r.ha.GetStates(waitCtx)
@@ -1161,7 +1188,13 @@ func (r *Registry) waitForAutomationEntity(ctx context.Context, id string) (stri
 		select {
 		case <-waitCtx.Done():
 			return "", waitCtx.Err()
-		case <-ticker.C:
+		case <-time.After(delay):
+			if delay < maxDelay {
+				delay *= 2
+				if delay > maxDelay {
+					delay = maxDelay
+				}
+			}
 		}
 	}
 }
@@ -1640,9 +1673,54 @@ func toIndentedJSON(v any) string {
 	if err != nil {
 		return `{"error":"json encoding failed"}`
 	}
-	return string(data)
+	if len(data) <= maxHAToolResultBytes {
+		return string(data)
+	}
+
+	compact, err := json.Marshal(v)
+	if err != nil {
+		return `{"error":"json encoding failed"}`
+	}
+	if len(compact) <= maxHAToolResultBytes {
+		return string(compact)
+	}
+
+	return encodeTruncatedJSONPreview(compact)
 }
 
 func isEntityRegistryNotFound(err error) bool {
-	return strings.Contains(err.Error(), "Entity not found")
+	msg := strings.ToLower(strings.TrimSpace(err.Error()))
+	return strings.HasPrefix(msg, "not_found:") || strings.Contains(msg, "entity not found")
+}
+
+func encodeTruncatedJSONPreview(compact []byte) string {
+	const overhead = 256
+	previewBudget := maxHAToolResultBytes - overhead
+	if previewBudget < 0 {
+		previewBudget = 0
+	}
+
+	for {
+		envelope := map[string]any{
+			"_truncated":  true,
+			"total_bytes": len(compact),
+			"max_bytes":   maxHAToolResultBytes,
+			"note":        "Result exceeded the tool byte cap; narrow the query or disable include_config for a smaller payload.",
+			"preview":     truncateUTF8(string(compact), previewBudget),
+		}
+		data, err := json.Marshal(envelope)
+		if err == nil && len(data) <= maxHAToolResultBytes {
+			return string(data)
+		}
+		if previewBudget == 0 {
+			break
+		}
+		if previewBudget > 512 {
+			previewBudget -= 512
+		} else {
+			previewBudget = 0
+		}
+	}
+
+	return fmt.Sprintf(`{"_truncated":true,"total_bytes":%d,"max_bytes":%d,"note":"Result exceeded the tool byte cap; narrow the query or disable include_config for a smaller payload."}`, len(compact), maxHAToolResultBytes)
 }
