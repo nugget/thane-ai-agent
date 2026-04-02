@@ -7,7 +7,6 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/forge"
 	"github.com/nugget/thane-ai-agent/internal/knowledge"
 	"github.com/nugget/thane-ai-agent/internal/paths"
-	"github.com/nugget/thane-ai-agent/internal/scheduler"
 	"github.com/nugget/thane-ai-agent/internal/talents"
 )
 
@@ -31,8 +30,7 @@ type newState struct {
 	resolver *paths.Resolver
 
 	// Built in initChannels, used by initAwareness.
-	anticipationStore *scheduler.AnticipationStore
-	embClient         knowledge.EmbeddingClient
+	embClient knowledge.EmbeddingClient
 
 	// Built in initChannels, used by initDelegation.
 	forgeOpLog *forge.OperationLog

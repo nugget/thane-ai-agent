@@ -39,7 +39,6 @@ internal/
   buildinfo/            Version injection via ldflags
   router/               Model selection routing
   scheduler/            Time-based task scheduling
-  anticipation/         Event-based trigger system
   ingest/               Markdown document ingestion
 ```
 

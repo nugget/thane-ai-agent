@@ -59,10 +59,6 @@ homeassistant:
     # RateLimitPerMinute caps how many state changes per entity are
     # forwarded per minute. Zero means no rate limiting.
     rate_limit_per_minute: 10
-    # CooldownMinutes is the per-anticipation cooldown period in minutes.
-    # After an anticipation triggers a wake, it cannot trigger again until
-    # this interval elapses. Defaults to 5 minutes via applyDefaults.
-    cooldown_minutes: 5
 # Models configures LLM providers, model routing, and the default model.
 models:
   # Default is the model name used when no specific model is requested.
@@ -153,7 +149,7 @@ shell_exec:
   # run before being killed. Default: 30.
   default_timeout_sec: 30
 # DataDir is the root directory for SQLite databases (memory, facts,
-# scheduler, checkpoints, and anticipations). Default: "./db".
+# scheduler, and checkpoints). Default: "./db".
 data_dir: ./db
 # TalentsDir is the directory containing talent markdown files that
 # extend the system prompt. Default: "./talents".
@@ -352,8 +348,7 @@ talents_dir: ./talents
 #   publish_interval: 60
 #   Subscriptions lists MQTT topics to subscribe to for ambient
 #   awareness. Messages are received and logged but not autonomously
-#   acted upon. Future phases will route messages to the anticipation
-#   engine. Supports MQTT wildcard characters (+ and #).
+#   acted upon. Supports MQTT wildcard characters (+ and #).
 #   subscriptions:
 #     - # Topic is the MQTT topic filter (e.g., "homeassistant/+/+/state",
 #       "frigate/events"). Supports MQTT wildcard characters.

@@ -56,16 +56,6 @@ Full state snapshots for crash recovery, triggered by:
 
 Checkpoints capture conversations, facts, and metadata so the agent can resume exactly where it left off.
 
-## Anticipations
-
-Event-driven triggers stored in SQLite:
-
-- **Created by:** `create_anticipation` tool — the agent decides what to watch for
-- **Trigger conditions:** Entity patterns, state transitions, time windows
-- **Resolution:** When a matching event arrives (via HA WebSocket or MQTT), the anticipation fires and triggers an agent loop run with context about what happened
-
-Example: Thane notices you left home → creates an anticipation for your return → when person entity changes to `home`, fires a welcome-back response.
-
 ## Storage Layout
 
 All memory lives in SQLite databases under `data_dir`:
@@ -73,8 +63,7 @@ All memory lives in SQLite databases under `data_dir`:
 ```
 ~/Thane/data/
 ├── thane.db          # Conversations, messages, sessions, tool calls, checkpoints
-├── facts.db          # Semantic facts with embeddings
-└── anticipations.db  # Event-driven triggers
+└── facts.db          # Semantic facts with embeddings
 ```
 
 Active and archived messages share the `messages` table, differentiated by a lifecycle `status` column. FTS5 triggers keep the full-text index in sync automatically.
@@ -83,8 +72,7 @@ Active and archived messages share the `messages` table, differentiated by a lif
 
 1. **Before LLM call:** Load conversation history, query relevant facts, inject working memory, build enriched context
 2. **After LLM response:** Store new messages, auto-extract facts if enabled, update working memory
-3. **On events:** Match incoming events against anticipations, fire triggered agent runs
-4. **Periodic:** Compact old conversations, checkpoint state
+3. **Periodic:** Compact old conversations, checkpoint state
 
 ## Future Directions
 

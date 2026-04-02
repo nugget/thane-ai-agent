@@ -27,14 +27,13 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/prompts"
 	"github.com/nugget/thane-ai-agent/internal/provenance"
 	"github.com/nugget/thane-ai-agent/internal/router"
-	"github.com/nugget/thane-ai-agent/internal/scheduler"
 	"github.com/nugget/thane-ai-agent/internal/search"
 	"github.com/nugget/thane-ai-agent/internal/tools"
 )
 
 // initChannels wires tools and external channels into the agent loop.
 // Sections include fact store, contact directory, notifications, email,
-// forge, working memory, fact extraction, anticipation, provenance,
+// forge, working memory, fact extraction, provenance,
 // attachments, file tools, content resolution, usage, shell exec, web
 // search/fetch, media, archive, embeddings, MCP servers, and Signal.
 func (a *App) initChannels(s *newState) error {
@@ -258,20 +257,6 @@ func (a *App) initChannels(s *newState) error {
 
 		a.loop.SetExtractor(extractor)
 	}
-
-	// --- Anticipation store ---
-	// Bridges intent to action. The agent can set anticipations ("I expect
-	// X to happen") that trigger context injection when they're fulfilled.
-	// Shares the main thane.db connection.
-	anticipationStore, err := scheduler.NewAnticipationStore(a.mem.DB())
-	if err != nil {
-		return fmt.Errorf("create anticipation store: %w", err)
-	}
-	s.anticipationStore = anticipationStore
-
-	anticipationTools := scheduler.NewAnticipationTools(anticipationStore)
-	a.loop.Tools().SetAnticipationTools(anticipationTools)
-	a.logger.Info("anticipation store initialized")
 
 	// --- Provenance store ---
 	// Git-backed file storage with SSH signature enforcement. When

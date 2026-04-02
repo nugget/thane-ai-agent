@@ -276,9 +276,6 @@ Full IMAP/SMTP email support (`internal/email/`):
 | `schedule_task` | planning | Time-based future actions |
 | `list_tasks` | planning | List scheduled tasks |
 | `cancel_task` | planning | Cancel a scheduled task |
-| `create_anticipation` | planning | Event-based triggers with routing hints |
-| `list_anticipations` | planning | List active anticipations |
-| `cancel_anticipation` | planning | Cancel an anticipation |
 | **Capabilities** | | |
 | `activate_capability` | always | Activate capability tags for current conversation |
 | `deactivate_capability` | always | Deactivate capability tags |
@@ -351,12 +348,11 @@ Score-based routing that selects the right model for each task. Models are score
 | Session summarizer | 7 | — | ✓ | Long-term memory — quality matters |
 | Compaction summarizer | 7 | — | ✓ | In-conversation summaries — routed through router |
 | Self-reflection | 7 | — | — | Personality development — allows cloud |
-| Anticipation wake | 6 | — | ✓ | Event responses — per-anticipation overrides |
 | Scheduled tasks | — | — | — | Per-task model/routing overrides |
 
 ### Memory Store
 
-SQLite-backed with optional vector search. Conversations, memory, scheduler state, and anticipations live in a unified `thane.db` (contacts maintain a separate `contacts.db`):
+SQLite-backed with optional vector search. Conversations, memory, and scheduler state live in a unified `thane.db` (contacts maintain a separate `contacts.db`):
 
 - **Facts** — Categorized knowledge (user, home, device, routine, preference) with embeddings
 - **Conversations** — Full history with tool calls
@@ -398,15 +394,6 @@ When configured, deep HA integration via multiple protocols:
 - **WebSocket API** — Persistent connection for real-time `state_changed` events, area/device/entity registry access. Client-side filtering by entity glob patterns.
 - **MCP** — [ha-mcp](https://github.com/karimkhaleel/ha-mcp) server provides 90+ tools for comprehensive HA interaction
 - **MQTT** — Thane publishes its own sensor telemetry as HA-discoverable entities. Subscribes to Frigate events for NVR-driven triggers.
-
-### Anticipation Engine
-
-Event-driven behavior through **anticipations** — conditions the agent watches for:
-
-- Stored in SQLite with trigger conditions (entity patterns, state transitions)
-- **Per-anticipation routing hints** — model, local_only, quality_floor stored at creation time
-- Event sources: HA WebSocket, MQTT, scheduled wakes
-- Resolution triggers an agent loop run with context about what happened and why
 
 ### Scheduler
 

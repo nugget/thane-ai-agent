@@ -72,11 +72,10 @@ See [docs/getting-started.md](docs/getting-started.md) for detailed setup and de
 - **Semantic memory** — learns and recalls facts with embeddings-based search
 - **Self-reflection** — periodic ego.md analysis for personality development and behavioral pattern consolidation
 - **Session management** — close, checkpoint, and split sessions with carry-forward context
-- **Anticipation engine** — event-driven triggers with per-anticipation model routing
 - **Task scheduler** — cron-style scheduling with model/routing overrides
 - **RSS/Atom feed monitoring** — follow feeds and YouTube channels with periodic polling and new-entry detection
 - **Media analysis vault** — structured content analysis output to Obsidian-compatible markdown with engagement tracking
-- **Web dashboard** — operational visibility with data browsers for contacts, facts, sessions, tasks, and anticipations
+- **Web dashboard** — operational visibility with data browsers for contacts, facts, sessions, and tasks
 - **GitHub/Forgejo integration** — issues, PRs, code review, and search via 18 native forge tools
 - **Web search** — SearXNG and Brave Search providers with pluggable architecture
 - **Web fetch** — extract readable content from any URL
@@ -84,7 +83,7 @@ See [docs/getting-started.md](docs/getting-started.md) for detailed setup and de
 - **Talent system** — customize agent behavior with tag-filtered markdown files
 - **Checkpoint/restore** — survives restarts without losing context
 - **Dual-port architecture** — native API + Ollama-compatible API simultaneously
-- **Unified database** — conversations, memory, scheduler, and anticipations in a single `thane.db`
+- **Unified database** — conversations, memory, and scheduler in a single `thane.db`
 - **Operational state store** — generic KV persistence with TTL support for poller cursors, feature flags, session preferences
 - **Event bus** — in-process publish/subscribe for execution tracing and operational observability
 - **MQTT telemetry** — publishes agent state as HA-discoverable entities
@@ -155,7 +154,7 @@ Config is auto-discovered from: `./config.yaml`, `~/Thane/config.yaml`, `~/.conf
 
 ## Roadmap
 
-**Working today:** Conversation agent, HA integration (REST + WebSocket + MCP), delegation with execution summaries, capability tag system, native email (IMAP/SMTP), email polling, Signal messaging bridge, vCard-aligned contact directory with trust zones (admin/household/trusted/known), CardDAV server for native contact sync, VCF import/export with QR codes, actionable notifications with HITL callbacks, model routing with quality/speed hints, semantic memory, self-reflection, session management, anticipation engine, task scheduler, RSS/Atom feed monitoring, media analysis vault, web dashboard with data browsers, GitHub/Forgejo integration (18 tools), event bus, MQTT telemetry, web search/fetch, shell exec, operational state store with TTL support, unified database (thane.db), execution tracing.
+**Working today:** Conversation agent, HA integration (REST + WebSocket + MCP), delegation with execution summaries, capability tag system, native email (IMAP/SMTP), email polling, Signal messaging bridge, vCard-aligned contact directory with trust zones (admin/household/trusted/known), CardDAV server for native contact sync, VCF import/export with QR codes, actionable notifications with HITL callbacks, model routing with quality/speed hints, semantic memory, self-reflection, session management, task scheduler, RSS/Atom feed monitoring, media analysis vault, web dashboard with data browsers, GitHub/Forgejo integration (18 tools), event bus, MQTT telemetry, web search/fetch, shell exec, operational state store with TTL support, unified database (thane.db), execution tracing.
 
 **Next up:** Egress gate for outbound message control (#336), dynamic model registry (#93), email trust-zone triage on poll, notification channel expansion (Signal delivery). **Bug fixes landing in 0.8.0:** capability tag refresh (#507), delegate tool timeout (#508), feed size limit (#511).
 

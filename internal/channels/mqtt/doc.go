@@ -5,8 +5,6 @@
 //
 // Phase 1 (publish): Sensor entities and availability.
 // Phase 2 (subscribe): Topic subscriptions with structured logging.
-// Future phases will route inbound messages to the anticipation engine
-// for autonomous action.
 //
 // The publisher uses Eclipse Paho v2's [autopaho] package for
 // connection management with automatic reconnection. On every

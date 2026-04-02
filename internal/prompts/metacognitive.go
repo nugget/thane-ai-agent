@@ -24,9 +24,9 @@ To update it, call update_metacognitive_state with your complete new content.
 ## What To Do This Iteration
 
 1. **Assess** — Review your state file and the current context (system prompt
-   data: state changes, anticipations, person presence, time of day).
-2. **Act if warranted** — Create anticipations, send messages, or use any
-   available tool if the situation calls for it.
+   data: state changes, person presence, time of day).
+2. **Act if warranted** — Send messages or use any available tool if the
+   situation calls for it.
 3. **Update metacognitive.md** — Call update_metacognitive_state with your
    complete updated state (observations, active concerns, recent actions,
    sleep reasoning). This is the ONLY tool that writes your state file.
@@ -46,10 +46,10 @@ To update it, call update_metacognitive_state with your complete new content.
   2026-03-07T03:14:00-06:00) using the current time from your context.
   Deltas become meaningless on the next iteration.
 - Don't over-act. Quiet observation is a valid outcome. Not every iteration
-  needs a message or anticipation.
+  needs a message or action.
 - You have exactly two special tools: update_metacognitive_state and
   set_next_sleep. All other tools are from the standard agent toolkit
-  (contacts, facts, anticipations, notifications). File tools, exec,
+  (contacts, facts, notifications). File tools, exec,
   and session management tools are NOT available.
 - If nothing interesting is happening, note it and sleep long.`
 
@@ -70,8 +70,6 @@ frontier model. In addition to the normal assessment, critically evaluate:
   watching that it should be? What's happening that normal iterations miss?
 - **Attention calibration** — Is the loop focused on what actually matters, or
   latched onto something unimportant?
-- **Anticipation quality** — Are anticipations firing usefully? Are expired
-  ones being replaced? Are there gaps in coverage?
 - **Drift detection** — Has the loop's behavior become routine or mechanical?
   Is it still genuinely reasoning or just going through motions?
 

@@ -698,7 +698,7 @@ func (l *Loop) buildSystemPrompt(ctx context.Context, userMessage string, histor
 		seal()
 	}
 
-	// 6. Dynamic context (facts, anticipations — what's relevant right now)
+	// 6. Dynamic context (what's relevant right now)
 	if l.contextProvider != nil {
 		dynCtx, err := l.contextProvider.GetContext(ctx, userMessage)
 		if err != nil {

@@ -3,8 +3,8 @@
 // main agent, reporting via output targets without blocking conversation
 // flow.
 //
-// Loops are the universal primitive replacing three currently-separate
-// systems (metacognitive loop, anticipations, observers) with a single
+// Loops are the universal primitive replacing previously-separate
+// systems (metacognitive loop, observers) with a single
 // [Registry.SpawnLoop] abstraction. Each loop is a background goroutine that
 // iterates on a randomized bounded sleep schedule, running LLM iterations
 // via the agent runner and optionally writing observations to output

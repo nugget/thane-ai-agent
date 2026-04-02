@@ -50,7 +50,7 @@ internal/
   paths/                Path resolution
   prompts/              Prompt templates
   router/               Model selection routing
-  scheduler/            Time-based task scheduling and anticipation matching
+  scheduler/            Time-based task scheduling
   search/               Web search providers and page content extraction
   server/
     api/                HTTP API server (OpenAI-compatible + Ollama-compatible)

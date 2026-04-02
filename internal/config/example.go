@@ -49,7 +49,6 @@ func ExampleConfig() *Config {
 			Subscribe: SubscribeConfig{
 				EntityGlobs:        []string{"person.*", "binary_sensor.*door*"},
 				RateLimitPerMinute: 10,
-				CooldownMinutes:    5,
 			},
 		},
 
