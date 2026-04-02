@@ -177,10 +177,15 @@ func (r *Registry) ResolveResult(providerID string, msg Message) bool {
 // Call dispatches a request to a connected provider and waits for the
 // corresponding result or context cancellation.
 func (r *Registry) Call(ctx context.Context, req CallRequest) (json.RawMessage, error) {
-	if strings.TrimSpace(req.Capability) == "" {
+	req.Account = strings.TrimSpace(req.Account)
+	req.ClientID = strings.TrimSpace(req.ClientID)
+	req.Capability = strings.TrimSpace(req.Capability)
+	req.Method = strings.TrimSpace(req.Method)
+
+	if req.Capability == "" {
 		return nil, fmt.Errorf("capability is required")
 	}
-	if strings.TrimSpace(req.Method) == "" {
+	if req.Method == "" {
 		return nil, fmt.Errorf("method is required")
 	}
 

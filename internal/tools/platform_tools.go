@@ -35,6 +35,12 @@ type platformCalendarEvent struct {
 	URL          string `json:"url,omitempty"`
 }
 
+const (
+	defaultPlatformCalendarLimit = 20
+	maxPlatformCalendarLimit     = 100
+	maxPlatformCalendarResultLen = 16_000
+)
+
 // EnablePlatformTools adds native platform-host tools to the registry.
 func (r *Registry) EnablePlatformTools(caller platformCallFunc) {
 	r.platformCaller = caller
@@ -83,7 +89,7 @@ func (r *Registry) registerPlatformTools() {
 				},
 				"limit": map[string]any{
 					"type":        "integer",
-					"description": "Maximum number of events to return. Default: 20.",
+					"description": fmt.Sprintf("Maximum number of events to return. Default: %d. Max: %d.", defaultPlatformCalendarLimit, maxPlatformCalendarLimit),
 				},
 			},
 		},
@@ -109,7 +115,7 @@ func (r *Registry) handleMacOSCalendarEvents(ctx context.Context, args map[strin
 		return "", fmt.Errorf("end must be after start")
 	}
 
-	limit := 20
+	limit := defaultPlatformCalendarLimit
 	if raw, ok := args["limit"].(float64); ok {
 		if raw != float64(int(raw)) {
 			return "", fmt.Errorf("limit must be a whole number")
@@ -118,6 +124,9 @@ func (r *Registry) handleMacOSCalendarEvents(ctx context.Context, args map[strin
 	}
 	if limit <= 0 {
 		return "", fmt.Errorf("limit must be positive")
+	}
+	if limit > maxPlatformCalendarLimit {
+		return "", fmt.Errorf("limit must be <= %d", maxPlatformCalendarLimit)
 	}
 
 	request := platformCalendarRequest{
@@ -212,7 +221,16 @@ func formatPlatformCalendarResponse(response platformCalendarResponse) string {
 			fmt.Fprintf(&b, "\n  URL: %s", event.URL)
 		}
 	}
-	return b.String()
+	formatted := b.String()
+	if len(formatted) <= maxPlatformCalendarResultLen {
+		return formatted
+	}
+	const note = "\n\n[... output truncated; narrow the window, filters, or limit for more ...]"
+	allowed := maxPlatformCalendarResultLen - len(note)
+	if allowed < 0 {
+		allowed = 0
+	}
+	return truncateUTF8(formatted, allowed) + note
 }
 
 func formatPlatformCalendarRange(event platformCalendarEvent) string {
@@ -226,10 +244,7 @@ func formatPlatformCalendarRange(event platformCalendarEvent) string {
 	}
 
 	if event.AllDay {
-		if endErr == nil && end.After(start) {
-			return fmt.Sprintf("%s (all day)", start.Format("Mon Jan 2"))
-		}
-		return fmt.Sprintf("%s (all day)", start.Format("Mon Jan 2"))
+		return formatPlatformCalendarAllDayRange(start, end, endErr)
 	}
 
 	if endErr != nil || event.End == "" {
@@ -239,6 +254,23 @@ func formatPlatformCalendarRange(event platformCalendarEvent) string {
 		return fmt.Sprintf("%s-%s", start.Format("Mon Jan 2 3:04PM MST"), end.Format("3:04PM MST"))
 	}
 	return fmt.Sprintf("%s -> %s", start.Format("Mon Jan 2 3:04PM MST"), end.Format("Mon Jan 2 3:04PM MST"))
+}
+
+func formatPlatformCalendarAllDayRange(start, end time.Time, endErr error) string {
+	if endErr != nil || !end.After(start) {
+		return fmt.Sprintf("%s (all day)", start.Format("Mon Jan 2"))
+	}
+
+	// EventKit-style all-day events use an exclusive end date, so show
+	// the previous day when the range spans multiple days.
+	lastDay := end.Add(-24 * time.Hour)
+	if lastDay.Before(start) {
+		lastDay = start
+	}
+	if start.Year() == lastDay.Year() && start.YearDay() == lastDay.YearDay() {
+		return fmt.Sprintf("%s (all day)", start.Format("Mon Jan 2"))
+	}
+	return fmt.Sprintf("%s -> %s (all day)", start.Format("Mon Jan 2"), lastDay.Format("Mon Jan 2"))
 }
 
 func parseCalendarTimestamp(value string) (time.Time, error) {

@@ -82,6 +82,9 @@ func TestSetPlatformCallerRegistersCalendarTool(t *testing.T) {
 	if forwarded.Query != "design" {
 		t.Fatalf("query: got %q, want %q", forwarded.Query, "design")
 	}
+	if forwarded.Limit != 5 {
+		t.Fatalf("limit: got %d, want %d", forwarded.Limit, 5)
+	}
 
 	for _, part := range []string{
 		"Found 1 macOS calendar events",
@@ -106,5 +109,53 @@ func TestMacOSCalendarEventsPropagatesProviderError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "no connected platform provider") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestMacOSCalendarEventsRejectsLimitOverMax(t *testing.T) {
+	reg := NewEmptyRegistry()
+	reg.EnablePlatformTools((&fakePlatformCaller{}).Call)
+
+	_, err := reg.Execute(context.Background(), "macos_calendar_events", `{"limit":101}`)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "limit must be <=") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestFormatPlatformCalendarResponseTruncatesOutput(t *testing.T) {
+	response := platformCalendarResponse{
+		Events: make([]platformCalendarEvent, 0, 80),
+	}
+	for i := 0; i < 80; i++ {
+		response.Events = append(response.Events, platformCalendarEvent{
+			Title:        strings.Repeat("Quarterly planning sync ", 8),
+			Calendar:     "Work",
+			Start:        "2026-04-02T09:00:00Z",
+			End:          "2026-04-02T10:00:00Z",
+			Location:     strings.Repeat("Conference Room A ", 6),
+			NotesExcerpt: strings.Repeat("Bring status notes. ", 12),
+		})
+	}
+
+	formatted := formatPlatformCalendarResponse(response)
+	if len(formatted) > maxPlatformCalendarResultLen {
+		t.Fatalf("formatted output exceeded hard cap: got %d, want <= %d", len(formatted), maxPlatformCalendarResultLen)
+	}
+	if !strings.Contains(formatted, "[... output truncated;") {
+		t.Fatalf("expected truncated note, got: %s", formatted)
+	}
+}
+
+func TestFormatPlatformCalendarRangeAllDayMultiDay(t *testing.T) {
+	got := formatPlatformCalendarRange(platformCalendarEvent{
+		Start:  "2026-04-02T00:00:00Z",
+		End:    "2026-04-05T00:00:00Z",
+		AllDay: true,
+	})
+	if got != "Thu Apr 2 -> Sat Apr 4 (all day)" {
+		t.Fatalf("all-day range: got %q", got)
 	}
 }

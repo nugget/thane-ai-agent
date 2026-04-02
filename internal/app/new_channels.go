@@ -677,6 +677,9 @@ func (a *App) initChannels(s *newState) error {
 	// names so it doesn't emit misleading "unregistered tool" warnings for
 	// tools that are simply not yet started.
 	s.deferredTools = make(map[string]bool)
+	if a.cfg.Platform.Configured() {
+		s.deferredTools["macos_calendar_events"] = true
+	}
 	if a.cfg.Signal.Configured() {
 		s.deferredTools["signal_send_message"] = true
 		s.deferredTools["signal_send_reaction"] = true

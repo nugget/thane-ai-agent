@@ -260,18 +260,33 @@ func (h *Handler) handleRegisterCapabilities(p *Provider, id int64, payload []by
 		h.writeErrorResult(p, id, "invalid_payload", "failed to decode capability registration")
 		return
 	}
+	if id == 0 {
+		h.logger.Warn("platform capabilities missing correlation id",
+			"provider_id", p.ID,
+		)
+		return
+	}
+	if msg.ID != 0 && msg.ID != id {
+		h.logger.Warn("platform capabilities id mismatch",
+			"provider_id", p.ID,
+			"envelope_id", id,
+			"message_id", msg.ID,
+		)
+		h.writeErrorResult(p, id, "invalid_payload", "capability registration id mismatch")
+		return
+	}
 
 	if err := h.registry.RegisterCapabilities(p.ID, msg.Capabilities); err != nil {
 		h.logger.Warn("platform capability registration failed",
 			"provider_id", p.ID,
 			"error", err,
 		)
-		h.writeErrorResult(p, msg.ID, "provider_not_found", err.Error())
+		h.writeErrorResult(p, id, "provider_not_found", err.Error())
 		return
 	}
 
 	if err := p.writeJSON(Message{
-		ID:      msg.ID,
+		ID:      id,
 		Type:    typeResult,
 		Success: true,
 	}); err != nil {
