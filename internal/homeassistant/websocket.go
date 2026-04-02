@@ -287,6 +287,60 @@ func (c *WSClient) GetEntityRegistryWS(ctx context.Context) ([]EntityRegistryEnt
 	return entries, nil
 }
 
+// UpdateEntityRegistryEntry updates an entity's registry entry via WebSocket.
+// The updates map can contain fields like "new_entity_id", "area_id",
+// "hidden_by" (null or "user"), "labels", etc.
+func (c *WSClient) UpdateEntityRegistryEntry(ctx context.Context, entityID string, updates map[string]any) error {
+	id := c.msgID.Add(1)
+	msg := map[string]any{
+		"id":        id,
+		"type":      "config/entity_registry/update",
+		"entity_id": entityID,
+	}
+	for k, v := range updates {
+		msg[k] = v
+	}
+
+	_, err := c.sendAndWait(ctx, id, msg)
+	if err != nil {
+		return fmt.Errorf("update entity registry %s: %w", entityID, err)
+	}
+	return nil
+}
+
+// SetEntityLabels sets the labels for an entity in the registry.
+func (c *WSClient) SetEntityLabels(ctx context.Context, entityID string, labels []string) error {
+	return c.UpdateEntityRegistryEntry(ctx, entityID, map[string]any{
+		"labels": labels,
+	})
+}
+
+// SetEntityArea assigns an entity to an area by area ID.
+func (c *WSClient) SetEntityArea(ctx context.Context, entityID, areaID string) error {
+	return c.UpdateEntityRegistryEntry(ctx, entityID, map[string]any{
+		"area_id": areaID,
+	})
+}
+
+// SetEntityVisible controls whether an entity is visible in the HA UI.
+// When hidden is true, the entity is hidden by "user" preference.
+func (c *WSClient) SetEntityVisible(ctx context.Context, entityID string, visible bool) error {
+	var hiddenBy any
+	if !visible {
+		hiddenBy = "user"
+	}
+	return c.UpdateEntityRegistryEntry(ctx, entityID, map[string]any{
+		"hidden_by": hiddenBy,
+	})
+}
+
+// RenameEntityID changes an entity's ID in the registry.
+func (c *WSClient) RenameEntityID(ctx context.Context, oldEntityID, newEntityID string) error {
+	return c.UpdateEntityRegistryEntry(ctx, oldEntityID, map[string]any{
+		"new_entity_id": newEntityID,
+	})
+}
+
 // sendAndWait sends a message and waits for the response.
 func (c *WSClient) sendAndWait(ctx context.Context, id int64, msg any) (json.RawMessage, error) {
 	// Create response channel

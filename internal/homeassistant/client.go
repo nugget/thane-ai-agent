@@ -227,6 +227,43 @@ func splitEntityID(entityID string) []string {
 	return nil
 }
 
+// AutomationConfig represents a Home Assistant automation configuration.
+// Matches the schema at /api/config/automation/config/{id}.
+type AutomationConfig struct {
+	ID          string `json:"id"`
+	Alias       string `json:"alias"`
+	Description string `json:"description,omitempty"`
+	Trigger     []any  `json:"trigger"`
+	Condition   []any  `json:"condition,omitempty"`
+	Action      []any  `json:"action"`
+	Mode        string `json:"mode,omitempty"`
+}
+
+// CreateOrUpdateAutomation creates or updates an automation configuration.
+// Uses PUT /api/config/automation/config/{id}.
+func (c *Client) CreateOrUpdateAutomation(ctx context.Context, id string, config AutomationConfig) error {
+	path := fmt.Sprintf("/api/config/automation/config/%s", id)
+	return c.put(ctx, path, config, nil)
+}
+
+// DeleteAutomation removes an automation configuration by ID.
+// Uses DELETE /api/config/automation/config/{id}.
+func (c *Client) DeleteAutomation(ctx context.Context, id string) error {
+	path := fmt.Sprintf("/api/config/automation/config/%s", id)
+	return c.doDelete(ctx, path)
+}
+
+// GetAutomation retrieves an automation configuration by ID.
+// Uses GET /api/config/automation/config/{id}.
+func (c *Client) GetAutomation(ctx context.Context, id string) (*AutomationConfig, error) {
+	var config AutomationConfig
+	path := fmt.Sprintf("/api/config/automation/config/%s", id)
+	if err := c.get(ctx, path, &config); err != nil {
+		return nil, err
+	}
+	return &config, nil
+}
+
 // get performs a GET request to the HA API.
 func (c *Client) get(ctx context.Context, path string, result any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
@@ -252,6 +289,66 @@ func (c *Client) get(ctx context.Context, path string, result any) error {
 		if err := json.NewDecoder(resp.Body).Decode(result); err != nil {
 			return fmt.Errorf("decode response: %w", err)
 		}
+	}
+
+	return nil
+}
+
+// put performs a PUT request to the HA API.
+func (c *Client) put(ctx context.Context, path string, data any, result any) error {
+	var reqBody []byte
+	if data != nil {
+		var err error
+		reqBody, err = json.Marshal(data)
+		if err != nil {
+			return fmt.Errorf("marshal data: %w", err)
+		}
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, c.baseURL+path, bytes.NewReader(reqBody))
+	if err != nil {
+		return fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("request %s: %w", path, err)
+	}
+	defer httpkit.DrainAndClose(resp.Body, 4096)
+
+	if resp.StatusCode != http.StatusOK {
+		body := httpkit.ReadErrorBody(resp.Body, 512)
+		return fmt.Errorf("API error %d: %s", resp.StatusCode, body)
+	}
+
+	if result != nil {
+		if err := json.NewDecoder(resp.Body).Decode(result); err != nil {
+			return fmt.Errorf("decode response: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// doDelete performs a DELETE request to the HA API.
+func (c *Client) doDelete(ctx context.Context, path string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, c.baseURL+path, nil)
+	if err != nil {
+		return fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("request %s: %w", path, err)
+	}
+	defer httpkit.DrainAndClose(resp.Body, 4096)
+
+	if resp.StatusCode != http.StatusOK {
+		body := httpkit.ReadErrorBody(resp.Body, 512)
+		return fmt.Errorf("API error %d: %s", resp.StatusCode, body)
 	}
 
 	return nil
