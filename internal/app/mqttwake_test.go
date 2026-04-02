@@ -64,7 +64,7 @@ func TestMQTTWakeHandlerMatchingTopic(t *testing.T) {
 	})
 
 	runner := &mqttMockRunner{}
-	handler := mqttWakeHandler(store, runner, nil, nil)
+	handler := mqttWakeHandler(store, runner, nil, nil, mqttWakeDeps{})
 
 	handler("test/foo/wake", []byte(`{"event": "motion"}`))
 
@@ -118,7 +118,7 @@ func TestMQTTWakeHandlerNoMatchFallback(t *testing.T) {
 	}
 
 	runner := &mqttMockRunner{}
-	handler := mqttWakeHandler(store, runner, fallback, nil)
+	handler := mqttWakeHandler(store, runner, fallback, nil, mqttWakeDeps{})
 
 	handler("unmatched/topic", []byte("data"))
 
