@@ -67,8 +67,19 @@ func TestMQTTWakeHandlerMatchingTopic(t *testing.T) {
 	})
 
 	runner := &mqttMockRunner{}
-	handler := mqttWakeHandler(store, runner, nil, nil, mqttWakeDeps{})
+	registry := looppkg.NewRegistry()
+	bus := events.New()
 
+	var parentID atomic.Value
+	parentID.Store("")
+
+	deps := mqttWakeDeps{
+		registry: registry,
+		eventBus: bus,
+		parentID: &parentID,
+	}
+
+	handler := mqttWakeHandler(store, runner, nil, nil, deps)
 	handler("test/foo/wake", []byte(`{"event": "motion"}`))
 
 	// Wait for goroutine dispatch.
@@ -173,6 +184,73 @@ func TestMQTTWakeHandlerWithRegistry(t *testing.T) {
 	req := reqs[0]
 	if req.Hints["source"] != "mqtt_wake" {
 		t.Errorf("source hint = %q, want %q", req.Hints["source"], "mqtt_wake")
+	}
+}
+
+func TestMQTTWakeHandlerFanOut(t *testing.T) {
+	store := newTestWakeStore(t)
+	seedA := router.LoopSeed{Mission: "automation", Instructions: "check temperature"}
+	seedB := router.LoopSeed{Mission: "background", Instructions: "log reading"}
+	store.LoadConfig([]config.SubscriptionConfig{
+		{Topic: "sensors/+/reading", Wake: &seedA},
+		{Topic: "sensors/+/reading", Wake: &seedB},
+	})
+
+	runner := &mqttMockRunner{}
+	registry := looppkg.NewRegistry()
+	bus := events.New()
+
+	var parentID atomic.Value
+	parentID.Store("")
+
+	deps := mqttWakeDeps{
+		registry: registry,
+		eventBus: bus,
+		parentID: &parentID,
+	}
+
+	handler := mqttWakeHandler(store, runner, nil, nil, deps)
+	handler("sensors/temp/reading", []byte(`{"value": 22.5}`))
+
+	// Wait for both goroutines to dispatch.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if reqs := runner.requests(); len(reqs) >= 2 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	reqs := runner.requests()
+	if len(reqs) != 2 {
+		t.Fatalf("expected 2 requests (fan-out), got %d", len(reqs))
+	}
+
+	// Both should have the subscription ID hint set.
+	for i, req := range reqs {
+		if req.Hints["mqtt_subscription_id"] == "" {
+			t.Errorf("request %d missing mqtt_subscription_id hint", i)
+		}
+	}
+}
+
+func TestMQTTWakeHandlerNoRegistryDropsMessage(t *testing.T) {
+	store := newTestWakeStore(t)
+	seed := router.LoopSeed{Mission: "automation"}
+	store.LoadConfig([]config.SubscriptionConfig{
+		{Topic: "test/topic", Wake: &seed},
+	})
+
+	runner := &mqttMockRunner{}
+	// No registry — message should be dropped, not dispatched directly.
+	handler := mqttWakeHandler(store, runner, nil, nil, mqttWakeDeps{})
+	handler("test/topic", []byte("data"))
+
+	// Give goroutine time to (not) run.
+	time.Sleep(200 * time.Millisecond)
+
+	if reqs := runner.requests(); len(reqs) != 0 {
+		t.Fatalf("expected 0 requests without registry, got %d", len(reqs))
 	}
 }
 

@@ -85,6 +85,12 @@ func (t *Tools) HandleAddWakeSubscription(_ context.Context, args map[string]any
 		seed.SeedTags = toStringSlice(raw)
 	}
 
+	// Validate the seed before persisting — fail fast with a clear
+	// error rather than storing an invalid subscription.
+	if err := seed.Validate(); err != nil {
+		return "", fmt.Errorf("invalid seed: %w", err)
+	}
+
 	ws, err := t.store.Add(topic, seed)
 	if err != nil {
 		return "", err

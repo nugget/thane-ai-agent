@@ -155,7 +155,7 @@ func TestSubscriptionStoreConfigNotRemovable(t *testing.T) {
 	}
 }
 
-func TestSubscriptionStoreMatch(t *testing.T) {
+func TestSubscriptionStoreMatches(t *testing.T) {
 	s := newTestStore(t)
 
 	seed := router.LoopSeed{Mission: "automation"}
@@ -164,18 +164,50 @@ func TestSubscriptionStoreMatch(t *testing.T) {
 	})
 
 	// Matching topic.
-	ws, ok := s.Match("frigate/camera1/events")
-	if !ok {
-		t.Fatal("expected match, got false")
+	matches := s.Matches("frigate/camera1/events")
+	if len(matches) != 1 {
+		t.Fatalf("expected 1 match, got %d", len(matches))
 	}
-	if ws.Topic != "frigate/+/events" {
-		t.Errorf("matched topic = %q, want %q", ws.Topic, "frigate/+/events")
+	if matches[0].Topic != "frigate/+/events" {
+		t.Errorf("matched topic = %q, want %q", matches[0].Topic, "frigate/+/events")
 	}
 
 	// Non-matching topic.
-	_, ok = s.Match("homeassistant/sensor/temperature/state")
-	if ok {
-		t.Fatal("expected no match")
+	matches = s.Matches("homeassistant/sensor/temperature/state")
+	if len(matches) != 0 {
+		t.Fatalf("expected 0 matches, got %d", len(matches))
+	}
+}
+
+func TestSubscriptionStoreMatchesFanOut(t *testing.T) {
+	s := newTestStore(t)
+
+	// Two subscriptions on the same topic with different seeds.
+	seedA := router.LoopSeed{Mission: "automation", Instructions: "check temperature"}
+	seedB := router.LoopSeed{Mission: "background", Instructions: "log to database"}
+	s.LoadConfig([]config.SubscriptionConfig{
+		{Topic: "sensors/temperature", Wake: &seedA},
+		{Topic: "sensors/temperature", Wake: &seedB},
+	})
+
+	matches := s.Matches("sensors/temperature")
+	if len(matches) != 2 {
+		t.Fatalf("expected 2 matches for fan-out, got %d", len(matches))
+	}
+
+	// Verify they have distinct IDs.
+	if matches[0].ID == matches[1].ID {
+		t.Errorf("fan-out subscriptions have duplicate IDs: %q", matches[0].ID)
+	}
+
+	// Verify distinct seeds carried through.
+	missions := map[string]bool{
+		matches[0].Seed.Mission: true,
+		matches[1].Seed.Mission: true,
+	}
+	if !missions["automation"] || !missions["background"] {
+		t.Errorf("expected both missions, got %v and %v",
+			matches[0].Seed.Mission, matches[1].Seed.Mission)
 	}
 }
 
@@ -265,5 +297,33 @@ func TestSubscriptionStoreSubscribeHookNotCalledWithoutHook(t *testing.T) {
 	_, err := s.Add("no-hook/test", router.LoopSeed{})
 	if err != nil {
 		t.Fatalf("add: %v", err)
+	}
+}
+
+func TestSubscriptionStoreAddValidation(t *testing.T) {
+	s := newTestStore(t)
+
+	// Invalid topic filter.
+	_, err := s.Add("", router.LoopSeed{})
+	if err == nil {
+		t.Fatal("expected error for empty topic")
+	}
+
+	// Invalid topic with bad wildcard.
+	_, err = s.Add("foo/ba#r", router.LoopSeed{})
+	if err == nil {
+		t.Fatal("expected error for bad wildcard in topic")
+	}
+
+	// Invalid seed.
+	_, err = s.Add("valid/topic", router.LoopSeed{QualityFloor: "99"})
+	if err == nil {
+		t.Fatal("expected error for invalid quality_floor")
+	}
+
+	// Valid — should succeed.
+	_, err = s.Add("valid/topic", router.LoopSeed{Mission: "automation", QualityFloor: "7"})
+	if err != nil {
+		t.Fatalf("expected success, got: %v", err)
 	}
 }

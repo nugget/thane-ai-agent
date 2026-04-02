@@ -100,6 +100,78 @@ func TestLoopSeedHints(t *testing.T) {
 	}
 }
 
+func TestLoopSeedValidate(t *testing.T) {
+	tests := []struct {
+		name    string
+		seed    LoopSeed
+		wantErr bool
+	}{
+		{name: "empty seed is valid", seed: LoopSeed{}},
+		{name: "fully populated valid seed", seed: LoopSeed{
+			QualityFloor:     "7",
+			Mission:          "automation",
+			LocalOnly:        "false",
+			DelegationGating: "disabled",
+			PreferSpeed:      "true",
+		}},
+		{name: "quality_floor boundary low", seed: LoopSeed{QualityFloor: "1"}},
+		{name: "quality_floor boundary high", seed: LoopSeed{QualityFloor: "10"}},
+		{name: "quality_floor zero", seed: LoopSeed{QualityFloor: "0"}, wantErr: true},
+		{name: "quality_floor eleven", seed: LoopSeed{QualityFloor: "11"}, wantErr: true},
+		{name: "quality_floor non-numeric", seed: LoopSeed{QualityFloor: "high"}, wantErr: true},
+		{name: "quality_floor negative", seed: LoopSeed{QualityFloor: "-1"}, wantErr: true},
+		{name: "unknown mission", seed: LoopSeed{Mission: "unknown"}, wantErr: true},
+		{name: "all valid missions", seed: LoopSeed{Mission: "conversation"}},
+		{name: "mission device_control", seed: LoopSeed{Mission: "device_control"}},
+		{name: "mission background", seed: LoopSeed{Mission: "background"}},
+		{name: "mission metacognitive", seed: LoopSeed{Mission: "metacognitive"}},
+		{name: "local_only invalid", seed: LoopSeed{LocalOnly: "yes"}, wantErr: true},
+		{name: "local_only true", seed: LoopSeed{LocalOnly: "true"}},
+		{name: "prefer_speed invalid", seed: LoopSeed{PreferSpeed: "fast"}, wantErr: true},
+		{name: "delegation_gating invalid", seed: LoopSeed{DelegationGating: "partial"}, wantErr: true},
+		{name: "delegation_gating enabled", seed: LoopSeed{DelegationGating: "enabled"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.seed.Validate()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidateTopicFilter(t *testing.T) {
+	tests := []struct {
+		filter  string
+		wantErr bool
+	}{
+		{"foo/bar", false},
+		{"foo/+/bar", false},
+		{"foo/#", false},
+		{"#", false},
+		{"+/+/+", false},
+		{"foo/bar/baz", false},
+
+		// Invalid cases.
+		{"", true},                // empty
+		{"foo/ba#r", true},        // # not alone in segment
+		{"foo/#/bar", true},       // # not last segment
+		{"foo/b+r", true},         // + not alone in segment
+		{"foo/bar\x00/baz", true}, // null character
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.filter, func(t *testing.T) {
+			err := ValidateTopicFilter(tt.filter)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("ValidateTopicFilter(%q) error = %v, wantErr %v", tt.filter, err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestLoopSeedJSONRoundTrip(t *testing.T) {
 	original := LoopSeed{
 		Model:            "gpt-4o",
