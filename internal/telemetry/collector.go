@@ -154,7 +154,13 @@ func (c *Collector) collectSessions(m *Metrics) {
 	}
 }
 
-// collectLoops gathers loop registry status.
+// collectLoops gathers loop registry status. Child loops (those with a
+// ParentID) are counted in aggregate totals but excluded from
+// LoopDetails — they are ephemeral, their auto-generated names may
+// contain private conversation content, and their single-iteration
+// metrics aren't useful as persistent HA sensors. The dashboard shows
+// child loops as nested nodes under their parent; that is their
+// visibility surface.
 func (c *Collector) collectLoops(m *Metrics) {
 	if c.src.LoopRegistry == nil {
 		return
@@ -162,15 +168,8 @@ func (c *Collector) collectLoops(m *Metrics) {
 
 	statuses := c.src.LoopRegistry.Statuses()
 	m.LoopsTotal = len(statuses)
-	m.LoopDetails = make([]LoopMetric, len(statuses))
 
-	for i, s := range statuses {
-		m.LoopDetails[i] = LoopMetric{
-			Name:       s.Name,
-			State:      string(s.State),
-			Iterations: s.Iterations,
-		}
-
+	for _, s := range statuses {
 		switch s.State {
 		case loop.StateProcessing:
 			m.LoopsActive++
@@ -179,6 +178,17 @@ func (c *Collector) collectLoops(m *Metrics) {
 		case loop.StateError:
 			m.LoopsErrored++
 		}
+
+		// Skip child loops from MQTT telemetry publishing.
+		if s.ParentID != "" {
+			continue
+		}
+
+		m.LoopDetails = append(m.LoopDetails, LoopMetric{
+			Name:       s.Name,
+			State:      string(s.State),
+			Iterations: s.Iterations,
+		})
 	}
 }
 

@@ -10,6 +10,8 @@ import (
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
+
+	"github.com/nugget/thane-ai-agent/internal/loop"
 )
 
 // mockArchiveSource implements ArchiveSource for testing.
@@ -186,6 +188,83 @@ func TestPercentile(t *testing.T) {
 					tt.data, tt.p, got, tt.wantLo, tt.wantHi)
 			}
 		})
+	}
+}
+
+func TestCollect_LoopsExcludeChildren(t *testing.T) {
+	registry := loop.NewRegistry()
+
+	// Use blocking handlers so loops stay registered during collection.
+	gate := make(chan struct{})
+	blockingHandler := func(context.Context, any) error {
+		<-gate
+		return nil
+	}
+
+	immediate := time.Millisecond
+	parentID, err := registry.SpawnLoop(context.Background(), loop.Config{
+		Name:         "mqtt",
+		MaxIter:      1,
+		SleepDefault: immediate,
+		SleepMin:     immediate,
+		SleepMax:     immediate,
+		Jitter:       loop.Float64Ptr(0),
+		Handler:      blockingHandler,
+	}, loop.Deps{})
+	if err != nil {
+		t.Fatalf("spawn parent: %v", err)
+	}
+
+	// Spawn a child loop (has ParentID).
+	_, err = registry.SpawnLoop(context.Background(), loop.Config{
+		Name:         "owu/Do an archive search to…",
+		MaxIter:      1,
+		SleepDefault: immediate,
+		SleepMin:     immediate,
+		SleepMax:     immediate,
+		Jitter:       loop.Float64Ptr(0),
+		ParentID:     parentID,
+		Handler:      blockingHandler,
+	}, loop.Deps{})
+	if err != nil {
+		t.Fatalf("spawn child: %v", err)
+	}
+
+	// Wait for both loops to enter their handler.
+	time.Sleep(50 * time.Millisecond)
+
+	c := NewCollector(Sources{
+		LoopRegistry: registry,
+		Logger:       slog.New(slog.NewTextHandler(os.Stderr, nil)),
+	})
+
+	m := c.Collect(context.Background())
+
+	// Release handlers so loops can exit.
+	close(gate)
+
+	// Aggregate counts should include both loops.
+	if m.LoopsTotal < 2 {
+		t.Errorf("LoopsTotal = %d, want >= 2", m.LoopsTotal)
+	}
+
+	// LoopDetails should only include the parent (no child).
+	for _, ld := range m.LoopDetails {
+		if ld.Name == "owu/Do an archive search to…" {
+			t.Errorf("child loop %q leaked into LoopDetails (would be published to MQTT)", ld.Name)
+		}
+	}
+
+	// Parent should be present.
+	found := false
+	for _, ld := range m.LoopDetails {
+		if ld.Name == "mqtt" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("parent loop 'mqtt' not found in LoopDetails")
 	}
 }
 

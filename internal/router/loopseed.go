@@ -1,5 +1,12 @@
 package router
 
+import (
+	"fmt"
+	"regexp"
+	"strconv"
+	"strings"
+)
+
 // LoopSeed captures the common routing and configuration parameters
 // shared by all agent wake sites. It is serializable via both YAML
 // (for config file embedding) and JSON (for API and tool payloads).
@@ -77,4 +84,82 @@ func (s *LoopSeed) Hints() map[string]string {
 	}
 
 	return h
+}
+
+// validBoolHints is the set of accepted values for boolean-style hint
+// fields (LocalOnly, PreferSpeed). Empty string is always accepted
+// (omitted field).
+var validBoolHints = map[string]bool{
+	"":      true,
+	"true":  true,
+	"false": true,
+}
+
+// missionPattern matches valid mission identifiers: lowercase ASCII
+// letters, digits, and underscores. The router handles unknown missions
+// gracefully (no special routing rules fire), so we validate format
+// rather than restricting to a closed enum.
+var missionPattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
+
+// validDelegationGating is the set of known delegation gating modes.
+var validDelegationGating = map[string]bool{
+	"":         true,
+	"enabled":  true,
+	"disabled": true,
+}
+
+// Validate checks that the seed's typed fields contain semantically
+// valid values. It does not require any field to be set — an empty
+// LoopSeed is valid. Returns nil on success.
+func (s *LoopSeed) Validate() error {
+	if s.QualityFloor != "" {
+		n, err := strconv.Atoi(s.QualityFloor)
+		if err != nil || n < 1 || n > 10 {
+			return fmt.Errorf("quality_floor must be an integer 1–10, got %q", s.QualityFloor)
+		}
+	}
+	if s.Mission != "" && !missionPattern.MatchString(s.Mission) {
+		return fmt.Errorf("mission must be a lowercase identifier (letters, digits, underscores), got %q", s.Mission)
+	}
+	if !validBoolHints[s.LocalOnly] {
+		return fmt.Errorf("local_only must be \"true\" or \"false\", got %q", s.LocalOnly)
+	}
+	if !validDelegationGating[s.DelegationGating] {
+		return fmt.Errorf("delegation_gating must be \"enabled\" or \"disabled\", got %q", s.DelegationGating)
+	}
+	if !validBoolHints[s.PreferSpeed] {
+		return fmt.Errorf("prefer_speed must be \"true\" or \"false\", got %q", s.PreferSpeed)
+	}
+	return nil
+}
+
+// ValidateTopicFilter checks that an MQTT topic filter is syntactically
+// valid per the MQTT v5 specification:
+//   - Must not be empty
+//   - '#' wildcard must be the last segment (and alone in its level)
+//   - '+' wildcard must occupy an entire level
+//   - No null characters (U+0000)
+func ValidateTopicFilter(filter string) error {
+	if filter == "" {
+		return fmt.Errorf("topic filter must not be empty")
+	}
+	if strings.ContainsRune(filter, 0) {
+		return fmt.Errorf("topic filter must not contain null characters")
+	}
+
+	parts := strings.Split(filter, "/")
+	for i, p := range parts {
+		if strings.Contains(p, "#") {
+			if p != "#" {
+				return fmt.Errorf("'#' wildcard must occupy an entire level, got %q in segment %d", p, i)
+			}
+			if i != len(parts)-1 {
+				return fmt.Errorf("'#' wildcard must be the last segment, found at segment %d of %d", i, len(parts))
+			}
+		}
+		if strings.Contains(p, "+") && p != "+" {
+			return fmt.Errorf("'+' wildcard must occupy an entire level, got %q in segment %d", p, i)
+		}
+	}
+	return nil
 }

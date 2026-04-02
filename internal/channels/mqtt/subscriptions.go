@@ -96,6 +96,22 @@ func (s *SubscriptionStore) loadRuntime() error {
 			continue
 		}
 		ws.CreatedAt = ts
+
+		// Validate persisted rows against current rules — older rows
+		// may predate the validation added in Add(). Skip invalid
+		// entries rather than letting them cause SUBSCRIBE failures
+		// or unexpected matching at runtime.
+		if err := router.ValidateTopicFilter(ws.Topic); err != nil {
+			s.logger.Warn("skipping persisted subscription with invalid topic",
+				"id", ws.ID, "topic", ws.Topic, "error", err)
+			continue
+		}
+		if err := ws.Seed.Validate(); err != nil {
+			s.logger.Warn("skipping persisted subscription with invalid seed",
+				"id", ws.ID, "topic", ws.Topic, "error", err)
+			continue
+		}
+
 		s.subs = append(s.subs, ws)
 	}
 
@@ -105,7 +121,10 @@ func (s *SubscriptionStore) loadRuntime() error {
 // LoadConfig loads config-defined wake subscriptions. Only entries with
 // a non-nil Wake field are loaded. Config subscriptions are not persisted
 // to SQLite and cannot be removed via [SubscriptionStore.Remove].
-func (s *SubscriptionStore) LoadConfig(subs []config.SubscriptionConfig) {
+// Returns an error if any wake subscription has an invalid topic filter
+// or seed — config-backed triggers should fail at startup rather than
+// silently dropping messages at runtime.
+func (s *SubscriptionStore) LoadConfig(subs []config.SubscriptionConfig) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -119,18 +138,25 @@ func (s *SubscriptionStore) LoadConfig(subs []config.SubscriptionConfig) {
 	}
 	s.subs = filtered
 
-	for _, sc := range subs {
+	for i, sc := range subs {
 		if sc.Wake == nil {
 			continue
 		}
+		if err := router.ValidateTopicFilter(sc.Topic); err != nil {
+			return fmt.Errorf("mqtt.subscriptions[%d]: invalid topic %q: %w", i, sc.Topic, err)
+		}
+		if err := sc.Wake.Validate(); err != nil {
+			return fmt.Errorf("mqtt.subscriptions[%d] (topic %q): invalid wake seed: %w", i, sc.Topic, err)
+		}
 		s.subs = append(s.subs, WakeSubscription{
-			ID:        "cfg-" + topicHash(sc.Topic),
+			ID:        fmt.Sprintf("cfg-%s-%d", topicHash(sc.Topic), i),
 			Topic:     sc.Topic,
 			Seed:      *sc.Wake,
 			Source:    "config",
 			CreatedAt: time.Now(),
 		})
 	}
+	return nil
 }
 
 // SetSubscribeHook registers a callback that is invoked after a runtime
@@ -144,8 +170,17 @@ func (s *SubscriptionStore) SetSubscribeHook(fn func(topics []string)) {
 }
 
 // Add creates a runtime wake subscription, persists it to SQLite, and
-// returns the new subscription.
+// returns the new subscription. The topic filter and seed are validated
+// before persistence — invalid values are rejected early rather than
+// stored and retried forever.
 func (s *SubscriptionStore) Add(topic string, seed router.LoopSeed) (WakeSubscription, error) {
+	if err := router.ValidateTopicFilter(topic); err != nil {
+		return WakeSubscription{}, fmt.Errorf("invalid topic filter: %w", err)
+	}
+	if err := seed.Validate(); err != nil {
+		return WakeSubscription{}, fmt.Errorf("invalid loop seed: %w", err)
+	}
+
 	ws := WakeSubscription{
 		ID:        fmt.Sprintf("rt-%s-%d", topicHash(topic), time.Now().UnixMilli()),
 		Topic:     topic,
@@ -225,19 +260,21 @@ func (s *SubscriptionStore) List() []WakeSubscription {
 	return result
 }
 
-// Match finds the first wake subscription whose topic filter matches
-// the given concrete MQTT topic. Returns the subscription and true if
-// found, or a zero value and false otherwise.
-func (s *SubscriptionStore) Match(topic string) (WakeSubscription, bool) {
+// Matches returns all wake subscriptions whose topic filter matches
+// the given concrete MQTT topic. Multiple subscriptions on the same
+// topic (with different LoopSeed configurations) are all returned,
+// enabling fan-out dispatch.
+func (s *SubscriptionStore) Matches(topic string) []WakeSubscription {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
+	var matches []WakeSubscription
 	for _, ws := range s.subs {
 		if matchTopicFilter(ws.Topic, topic) {
-			return ws, true
+			matches = append(matches, ws)
 		}
 	}
-	return WakeSubscription{}, false
+	return matches
 }
 
 // Topics returns all unique topic filters across config and runtime

@@ -53,51 +53,59 @@ func mqttWakeHandler(
 		logger = slog.Default()
 	}
 	return func(topic string, payload []byte) {
-		ws, ok := store.Match(topic)
-		if !ok {
+		matches := store.Matches(topic)
+		if len(matches) == 0 {
 			if fallback != nil {
 				fallback(topic, payload)
 			}
 			return
 		}
 
-		// Dispatch in a goroutine so the MQTT message handler does not
-		// block the inbound message loop.
-		go func() {
-			convID := fmt.Sprintf("mqtt-wake-%d", time.Now().UnixMilli())
-			msg := buildWakeMessage(topic, payload, ws.Seed.Instructions)
-
-			req := &agent.Request{
-				ConversationID: convID,
-				Messages:       []agent.Message{{Role: "user", Content: msg}},
-			}
-			applyLoopSeed(&ws.Seed, req)
-
-			// Always tag the source so tools and logging can identify
-			// MQTT-triggered conversations.
-			if req.Hints == nil {
-				req.Hints = make(map[string]string)
-			}
-			req.Hints["source"] = "mqtt_wake"
-			req.Hints["mqtt_topic"] = topic
-
-			logger.Info("mqtt wake dispatching agent",
-				"conv_id", convID,
+		if deps.registry == nil {
+			logger.Error("mqtt wake has no loop registry, dropping message",
 				"topic", topic,
-				"payload_size", len(payload),
+				"matches", len(matches),
 			)
+			return
+		}
 
-			// Use a short topic suffix for the loop name (last path segment).
-			loopName := "mqtt/" + path.Base(topic)
+		// Fan-out: dispatch one agent conversation per matching
+		// subscription. Each gets its own goroutine so the MQTT
+		// message handler does not block the inbound message loop.
+		for _, ws := range matches {
+			ws := ws // capture loop variable
+			go func() {
+				convID := fmt.Sprintf("mqtt-wake-%s-%d", ws.ID, time.Now().UnixMilli())
+				msg := buildWakeMessage(topic, payload, ws.Seed.Instructions)
 
-			if deps.registry != nil {
+				req := &agent.Request{
+					ConversationID: convID,
+					Messages:       []agent.Message{{Role: "user", Content: msg}},
+				}
+				applyLoopSeed(&ws.Seed, req)
+
+				// Always tag the source so tools and logging can identify
+				// MQTT-triggered conversations.
+				if req.Hints == nil {
+					req.Hints = make(map[string]string)
+				}
+				req.Hints["source"] = "mqtt_wake"
+				req.Hints["mqtt_topic"] = topic
+				req.Hints["mqtt_subscription_id"] = ws.ID
+
+				logger.Info("mqtt wake dispatching agent",
+					"conv_id", convID,
+					"subscription_id", ws.ID,
+					"topic", topic,
+					"payload_size", len(payload),
+				)
+
+				// Use a short topic suffix for the loop name (last path segment).
+				loopName := "mqtt/" + path.Base(topic)
+
 				dispatchViaLoop(deps, runner, req, loopName, topic, convID, logger)
-			} else {
-				ctx, cancel := context.WithTimeout(context.Background(), mqttWakeTimeout)
-				defer cancel()
-				dispatchDirect(ctx, runner, req, topic, convID, logger)
-			}
-		}()
+			}()
+		}
 	}
 }
 
@@ -118,6 +126,18 @@ func dispatchViaLoop(
 		if v, ok := deps.parentID.Load().(string); ok {
 			parentID = v
 		}
+	}
+
+	// A wake loop without a parentID would be registered as a top-level
+	// loop, which means it won't be filtered from MQTT telemetry and
+	// could leak conversation content into topic names. Drop the message
+	// rather than create an unparented loop.
+	if parentID == "" {
+		logger.Warn("mqtt wake parent loop not yet registered, dropping message",
+			"conv_id", convID,
+			"topic", topic,
+		)
+		return
 	}
 
 	// Use a background context: SpawnLoop is non-blocking (starts a
@@ -174,42 +194,12 @@ func dispatchViaLoop(
 		EventBus: deps.eventBus,
 	})
 	if err != nil {
-		logger.Error("mqtt wake loop spawn failed, falling back to direct dispatch",
+		logger.Error("mqtt wake loop spawn failed, message dropped",
 			"conv_id", convID,
 			"topic", topic,
 			"error", err,
 		)
-		// Fall back to direct dispatch if loop spawn fails (e.g.,
-		// concurrency limit reached).
-		ctx, cancel := context.WithTimeout(context.Background(), mqttWakeTimeout)
-		defer cancel()
-		dispatchDirect(ctx, runner, req, topic, convID, logger)
 	}
-}
-
-// dispatchDirect runs the agent directly without loop registry
-// integration.
-func dispatchDirect(
-	ctx context.Context,
-	runner agentRunner,
-	req *agent.Request,
-	topic, convID string,
-	logger *slog.Logger,
-) {
-	resp, err := runner.Run(ctx, req, nil)
-	if err != nil {
-		logger.Error("mqtt wake agent dispatch failed",
-			"conv_id", convID,
-			"topic", topic,
-			"error", err,
-		)
-		return
-	}
-	logger.Info("mqtt wake complete",
-		"conv_id", convID,
-		"topic", topic,
-		"result_len", len(resp.Content),
-	)
 }
 
 // buildWakeMessage constructs the user message for an MQTT wake. When
