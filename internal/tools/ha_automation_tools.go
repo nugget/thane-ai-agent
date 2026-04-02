@@ -227,11 +227,11 @@ func (r *Registry) registerHAAutomationTools() {
 			"properties": map[string]any{
 				"id": map[string]any{
 					"type":        "string",
-					"description": "Automation config ID from automations.yaml, such as door_lock_battery_level_critical.",
+					"description": "Automation config ID from automations.yaml, such as door-lock-battery-level-critical.",
 				},
 				"entity_id": map[string]any{
 					"type":        "string",
-					"description": "Automation entity_id such as automation.door_lock_battery_level_critical.",
+					"description": "Automation entity_id such as automation.door_lock_battery_level_critical; use the automation's actual entity_id value.",
 				},
 			},
 		},
@@ -1689,8 +1689,14 @@ func toIndentedJSON(v any) string {
 }
 
 func isEntityRegistryNotFound(err error) bool {
-	msg := strings.ToLower(strings.TrimSpace(err.Error()))
-	return strings.HasPrefix(msg, "not_found:") || strings.Contains(msg, "entity not found")
+	for err != nil {
+		msg := strings.ToLower(strings.TrimSpace(err.Error()))
+		if strings.HasPrefix(msg, "not_found:") || strings.Contains(msg, "not_found:") || strings.Contains(msg, "entity not found") {
+			return true
+		}
+		err = errors.Unwrap(err)
+	}
+	return false
 }
 
 func encodeTruncatedJSONPreview(compact []byte) string {
