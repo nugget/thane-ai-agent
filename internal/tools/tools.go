@@ -76,6 +76,7 @@ func NewRegistry(ha *homeassistant.Client, sched *scheduler.Scheduler) *Registry
 	}
 	r.registerBuiltins()
 	r.registerFindEntity() // Smart entity discovery
+	r.registerHAAutomationTools()
 	return r
 }
 
