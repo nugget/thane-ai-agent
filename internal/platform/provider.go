@@ -39,9 +39,10 @@ type Provider struct {
 
 	writeMu sync.Mutex
 
-	stateMu         sync.RWMutex
+	capabilityMu    sync.RWMutex
 	capabilities    []Capability
 	capabilityIndex map[string]capabilityState
+	pendingMu       sync.Mutex
 	pending         map[int64]chan Message
 	nextRequestID   atomic.Int64
 }
@@ -90,14 +91,17 @@ func NewRegistry(logger *slog.Logger) *Registry {
 
 // Add registers a provider in the registry.
 func (r *Registry) Add(p *Provider) {
-	p.stateMu.Lock()
+	p.capabilityMu.Lock()
 	if p.capabilityIndex == nil {
 		p.capabilityIndex = make(map[string]capabilityState)
 	}
+	p.capabilityMu.Unlock()
+
+	p.pendingMu.Lock()
 	if p.pending == nil {
 		p.pending = make(map[int64]chan Message)
 	}
-	p.stateMu.Unlock()
+	p.pendingMu.Unlock()
 
 	r.mu.Lock()
 	r.providers[p.ID] = p
@@ -176,6 +180,9 @@ func (r *Registry) ResolveResult(providerID string, msg Message) bool {
 
 // Call dispatches a request to a connected provider and waits for the
 // corresponding result or context cancellation.
+//
+// Call relies on the caller to provide a bounded context; it does not
+// impose an additional timeout beyond ctx.Done() and provider disconnects.
 func (r *Registry) Call(ctx context.Context, req CallRequest) (json.RawMessage, error) {
 	req.Account = strings.TrimSpace(req.Account)
 	req.ClientID = strings.TrimSpace(req.ClientID)
@@ -358,15 +365,15 @@ func (p *Provider) setCapabilities(capabilities []Capability) {
 		})
 	}
 
-	p.stateMu.Lock()
+	p.capabilityMu.Lock()
 	p.capabilities = normalized
 	p.capabilityIndex = index
-	p.stateMu.Unlock()
+	p.capabilityMu.Unlock()
 }
 
 func (p *Provider) capabilitiesSnapshot() []Capability {
-	p.stateMu.RLock()
-	defer p.stateMu.RUnlock()
+	p.capabilityMu.RLock()
+	defer p.capabilityMu.RUnlock()
 	if len(p.capabilities) == 0 {
 		return nil
 	}
@@ -383,8 +390,8 @@ func (p *Provider) capabilitiesSnapshot() []Capability {
 }
 
 func (p *Provider) supports(capability, method string) bool {
-	p.stateMu.RLock()
-	defer p.stateMu.RUnlock()
+	p.capabilityMu.RLock()
+	defer p.capabilityMu.RUnlock()
 
 	state, ok := p.capabilityIndex[capability]
 	if !ok {
@@ -400,17 +407,20 @@ func (p *Provider) newPendingRequest() (int64, chan Message) {
 	id := p.nextRequestID.Add(1)
 	ch := make(chan Message, 1)
 
-	p.stateMu.Lock()
+	p.pendingMu.Lock()
 	if p.pending == nil {
 		p.pending = make(map[int64]chan Message)
 	}
 	p.pending[id] = ch
-	p.stateMu.Unlock()
+	p.pendingMu.Unlock()
 
 	return id, ch
 }
 
 func (p *Provider) cancelPending(id int64) {
+	// resolvePending removes the map entry before it delivers on the
+	// channel, so this deferred cleanup only closes channels for requests
+	// that never resolved.
 	if ch := p.takePending(id); ch != nil {
 		close(ch)
 	}
@@ -427,10 +437,10 @@ func (p *Provider) resolvePending(msg Message) bool {
 }
 
 func (p *Provider) failPending(msg Message) {
-	p.stateMu.Lock()
+	p.pendingMu.Lock()
 	pending := p.pending
 	p.pending = make(map[int64]chan Message)
-	p.stateMu.Unlock()
+	p.pendingMu.Unlock()
 
 	for _, ch := range pending {
 		ch <- msg
@@ -439,8 +449,8 @@ func (p *Provider) failPending(msg Message) {
 }
 
 func (p *Provider) takePending(id int64) chan Message {
-	p.stateMu.Lock()
-	defer p.stateMu.Unlock()
+	p.pendingMu.Lock()
+	defer p.pendingMu.Unlock()
 	ch := p.pending[id]
 	if ch != nil {
 		delete(p.pending, id)

@@ -36,9 +36,9 @@ type platformCalendarEvent struct {
 }
 
 const (
-	defaultPlatformCalendarLimit = 20
-	maxPlatformCalendarLimit     = 100
-	maxPlatformCalendarResultLen = 16_000
+	defaultPlatformCalendarLimit   = 20
+	maxPlatformCalendarLimit       = 100
+	maxPlatformCalendarResultBytes = 16_000
 )
 
 // EnablePlatformTools adds native platform-host tools to the registry.
@@ -222,11 +222,11 @@ func formatPlatformCalendarResponse(response platformCalendarResponse) string {
 		}
 	}
 	formatted := b.String()
-	if len(formatted) <= maxPlatformCalendarResultLen {
+	if len(formatted) <= maxPlatformCalendarResultBytes {
 		return formatted
 	}
 	const note = "\n\n[... output truncated; narrow the window, filters, or limit for more ...]"
-	allowed := maxPlatformCalendarResultLen - len(note)
+	allowed := maxPlatformCalendarResultBytes - len(note)
 	if allowed < 0 {
 		allowed = 0
 	}

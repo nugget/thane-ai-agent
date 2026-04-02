@@ -141,8 +141,8 @@ func TestFormatPlatformCalendarResponseTruncatesOutput(t *testing.T) {
 	}
 
 	formatted := formatPlatformCalendarResponse(response)
-	if len(formatted) > maxPlatformCalendarResultLen {
-		t.Fatalf("formatted output exceeded hard cap: got %d, want <= %d", len(formatted), maxPlatformCalendarResultLen)
+	if len(formatted) > maxPlatformCalendarResultBytes {
+		t.Fatalf("formatted output exceeded hard cap: got %d, want <= %d", len(formatted), maxPlatformCalendarResultBytes)
 	}
 	if !strings.Contains(formatted, "[... output truncated;") {
 		t.Fatalf("expected truncated note, got: %s", formatted)
