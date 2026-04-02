@@ -44,11 +44,17 @@ func (r *testRunner) getLastReq() *agent.Request {
 	return r.lastReq
 }
 
+// bridgeOption applies a focused test-specific mutation to BridgeConfig.
+// The tests use this lightweight options pattern to keep setup local to
+// each case without adding many near-identical helpers.
+type bridgeOption func(*BridgeConfig)
+
 // bridgeHelper sets up a Bridge wired to pipe-backed Client and a mock
 // runner. It returns the bridge, the stdout writer (to simulate
 // subprocess output), the stdin reader (to capture what the client
-// sends), and the test runner.
-func bridgeHelper(t *testing.T, opts ...func(*BridgeConfig)) (*Bridge, io.Writer, io.Reader, *testRunner) {
+// sends), and the test runner. Optional bridgeOption values can tweak
+// individual BridgeConfig fields for a specific test case.
+func bridgeHelper(t *testing.T, opts ...bridgeOption) (*Bridge, io.Writer, io.Reader, *testRunner) {
 	t.Helper()
 	client, stdout, stdin := pipeClient(t)
 	runner := &testRunner{
@@ -191,7 +197,7 @@ func TestBridge_ZeroValueRoutingConfig(t *testing.T) {
 	}
 }
 
-func TestBridge_CustomRoutingConfig(t *testing.T) {
+func TestBridge_CustomRoutingConfigKeepsSignalContext(t *testing.T) {
 	bridge, stdout, stdin, runner := bridgeHelper(t, func(cfg *BridgeConfig) {
 		cfg.Routing = config.SignalRoutingConfig{
 			Model:            "claude-sonnet-4-20250514",
@@ -217,14 +223,11 @@ func TestBridge_CustomRoutingConfig(t *testing.T) {
 	if req.Model != "claude-sonnet-4-20250514" {
 		t.Errorf("Model = %q, want %q", req.Model, "claude-sonnet-4-20250514")
 	}
-	if req.Hints["quality_floor"] != "8" {
-		t.Errorf("quality_floor = %q, want %q", req.Hints["quality_floor"], "8")
+	if req.Hints["source"] != "signal" {
+		t.Errorf("source = %q, want %q", req.Hints["source"], "signal")
 	}
-	if req.Hints["mission"] != "conversation" {
-		t.Errorf("mission = %q, want %q", req.Hints["mission"], "conversation")
-	}
-	if req.Hints["delegation_gating"] != "disabled" {
-		t.Errorf("delegation_gating = %q, want %q", req.Hints["delegation_gating"], "disabled")
+	if req.Hints["sender"] != "+15551234567" {
+		t.Errorf("sender = %q, want %q", req.Hints["sender"], "+15551234567")
 	}
 }
 

@@ -1187,6 +1187,10 @@ type SignalRoutingConfig struct {
 
 // LoopSeed converts the Signal routing config into the shared
 // LoopSeed representation used by wake-style entrypoints.
+//
+// It intentionally maps only the fields exposed by SignalRoutingConfig.
+// LoopSeed-only fields such as ExcludeTools and SeedTags are omitted
+// until Signal grows explicit config for them.
 func (c SignalRoutingConfig) LoopSeed() router.LoopSeed {
 	return router.LoopSeed{
 		Model:            c.Model,
