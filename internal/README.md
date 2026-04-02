@@ -53,7 +53,7 @@ Thane's internal packages, organized by architectural role.
 |---------|---------|
 | `config/` | Configuration loading, validation, and defaults |
 | `database/` | Shared SQLite helpers (WAL mode, busy timeout, schema migration) |
-| `scheduler/` | Task scheduling (time-based and condition-based via anticipations) |
+| `scheduler/` | Time-based task scheduling |
 | `opstate/` | Operational state key-value store with TTLs |
 | `events/` | In-process publish/subscribe event bus |
 | `checkpoint/` | State snapshots for crash recovery |

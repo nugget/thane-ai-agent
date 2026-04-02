@@ -139,7 +139,7 @@ type Config struct {
 	ShellExec ShellExecConfig `yaml:"shell_exec"`
 
 	// DataDir is the root directory for SQLite databases (memory, facts,
-	// scheduler, checkpoints, and anticipations). Default: "./db".
+	// scheduler, and checkpoints). Default: "./db".
 	DataDir string `yaml:"data_dir"`
 
 	// TalentsDir is the directory containing talent markdown files that
@@ -633,11 +633,6 @@ type SubscribeConfig struct {
 	// RateLimitPerMinute caps how many state changes per entity are
 	// forwarded per minute. Zero means no rate limiting.
 	RateLimitPerMinute int `yaml:"rate_limit_per_minute"`
-
-	// CooldownMinutes is the per-anticipation cooldown period in minutes.
-	// After an anticipation triggers a wake, it cannot trigger again until
-	// this interval elapses. Defaults to 5 minutes via applyDefaults.
-	CooldownMinutes int `yaml:"cooldown_minutes"`
 }
 
 // Configured reports whether both URL and Token are set. A partial
@@ -937,8 +932,7 @@ type MQTTConfig struct {
 
 	// Subscriptions lists MQTT topics to subscribe to for ambient
 	// awareness. Messages are received and logged but not autonomously
-	// acted upon. Future phases will route messages to the anticipation
-	// engine. Supports MQTT wildcard characters (+ and #).
+	// acted upon. Supports MQTT wildcard characters (+ and #).
 	Subscriptions []SubscriptionConfig `yaml:"subscriptions"`
 
 	// Telemetry configures operational metric publishing. When enabled,
@@ -1610,10 +1604,6 @@ func (c *Config) applyDefaults() {
 			"session_close",
 			"archive_search",
 		}
-	}
-
-	if c.HomeAssistant.Subscribe.CooldownMinutes == 0 {
-		c.HomeAssistant.Subscribe.CooldownMinutes = 5
 	}
 
 	// Signal session idle timeout: 0 disables idle rotation (no default override).

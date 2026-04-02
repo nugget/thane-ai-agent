@@ -66,16 +66,6 @@ Delegates receive task descriptions as natural language. The delegate model choo
 
 **Structural fix:** Delegations should declare required capability tags. Delegates receive only tools for those tags, not the full profile toolset. (Phase 2 of #265)
 
-### Anticipation Creation
-**Risk: Medium**
-
-`create_anticipation` accepts free-form text describing what to watch for and how to respond. There are no structural limits on:
-- How many anticipations target a single entity (enables surveillance patterns)
-- What the response action can be (notify, but the notification content is unconstrained)
-- Whether the monitoring pattern constitutes research on an individual
-
-**Structural fix:** Max anticipations per entity, mandatory cooldowns at creation time, content pattern matching that flags person-monitoring patterns.
-
 ### Carry-Forward Content
 **Risk: Medium**
 

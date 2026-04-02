@@ -35,28 +35,27 @@ type Tool struct {
 
 // Registry holds available tools.
 type Registry struct {
-	tools             map[string]*Tool
-	tagIndex          map[string][]string // tag → tool names
-	ha                *homeassistant.Client
-	scheduler         *scheduler.Scheduler
-	factTools         *knowledge.Tools
-	contactTools      *contacts.Tools
-	anticipationTools *scheduler.AnticipationTools
-	emailTools        *email.Tools
-	notifier          *notifications.Sender
-	notifRecords      *notifications.RecordStore
-	notifRouter       *notifications.NotificationRouter
-	notifDispatcher   CallbackDispatcher
-	forgeTools        forgeHandler
-	fileTools         *FileTools
-	shellExec         *ShellExec
-	attachmentTools   *attachments.Tools
-	watchlistStore    *awareness.WatchlistStore
-	tempFileStore     *TempFileStore
-	usageStore        *usage.Store
-	lensStore         *LensStore
-	logIndexDB        *sql.DB
-	contentResolver   *ContentResolver
+	tools           map[string]*Tool
+	tagIndex        map[string][]string // tag → tool names
+	ha              *homeassistant.Client
+	scheduler       *scheduler.Scheduler
+	factTools       *knowledge.Tools
+	contactTools    *contacts.Tools
+	emailTools      *email.Tools
+	notifier        *notifications.Sender
+	notifRecords    *notifications.RecordStore
+	notifRouter     *notifications.NotificationRouter
+	notifDispatcher CallbackDispatcher
+	forgeTools      forgeHandler
+	fileTools       *FileTools
+	shellExec       *ShellExec
+	attachmentTools *attachments.Tools
+	watchlistStore  *awareness.WatchlistStore
+	tempFileStore   *TempFileStore
+	usageStore      *usage.Store
+	lensStore       *LensStore
+	logIndexDB      *sql.DB
+	contentResolver *ContentResolver
 }
 
 // NewEmptyRegistry creates an empty tool registry with no built-in tools.
@@ -81,12 +80,6 @@ func NewRegistry(ha *homeassistant.Client, sched *scheduler.Scheduler) *Registry
 func (r *Registry) SetFactTools(ft *knowledge.Tools) {
 	r.factTools = ft
 	r.registerFactTools()
-}
-
-// SetAnticipationTools adds anticipation management tools to the registry.
-func (r *Registry) SetAnticipationTools(at *scheduler.AnticipationTools) {
-	r.anticipationTools = at
-	r.registerAnticipationTools()
 }
 
 // SetFileTools adds file operation tools to the registry.
@@ -324,124 +317,6 @@ func (r *Registry) registerFactTools() {
 				return "", fmt.Errorf("failed to serialize arguments: %w", err)
 			}
 			return r.factTools.Forget(string(argsJSON))
-		},
-	})
-}
-
-func (r *Registry) registerAnticipationTools() {
-	if r.anticipationTools == nil {
-		return
-	}
-
-	r.Register(&Tool{
-		Name:        "create_anticipation",
-		Description: "Create an anticipation — something you're expecting to happen. When you wake and conditions match, you'll receive context to remember why you care about this moment.",
-		Parameters: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"description": map[string]any{
-					"type":        "string",
-					"description": "Short description of what you're anticipating (e.g., 'Dan's flight arriving')",
-				},
-				"context": map[string]any{
-					"type":        "string",
-					"description": "Instructions/reasoning to inject when this anticipation matches. What should you do or check when this happens?",
-				},
-				"after_time": map[string]any{
-					"type":        "string",
-					"description": "ISO8601 timestamp — anticipation activates after this time (e.g., '2026-02-09T14:30:00Z')",
-				},
-				"entity_id": map[string]any{
-					"type":        "string",
-					"description": "Entity to watch (e.g., 'person.dan', 'binary_sensor.front_door')",
-				},
-				"entity_state": map[string]any{
-					"type":        "string",
-					"description": "State to match for entity (e.g., 'home', 'on', 'open')",
-				},
-				"zone": map[string]any{
-					"type":        "string",
-					"description": "Zone name for presence matching (e.g., 'airport', 'home')",
-				},
-				"zone_action": map[string]any{
-					"type":        "string",
-					"enum":        []string{"enter", "leave"},
-					"description": "Zone transition type",
-				},
-				"event_type": map[string]any{
-					"type":        "string",
-					"description": "Event type to match (e.g., 'presence_change', 'state_change')",
-				},
-				"expires_in": map[string]any{
-					"type":        "string",
-					"description": "Duration until expiration (e.g., '2h', '24h', '7d'). Omit for no expiration.",
-				},
-				"cooldown": map[string]any{
-					"type":        "string",
-					"description": "Minimum time between wake firings for this anticipation (e.g., '5m', '1h'). Omit to use the global default.",
-				},
-				"recurring": map[string]any{
-					"type":        "boolean",
-					"description": "If true, the anticipation persists after firing (keeps firing on matches, subject to cooldown). If false (default), auto-resolved after the first wake.",
-				},
-				"context_entities": map[string]any{
-					"type":        "array",
-					"items":       map[string]any{"type": "string"},
-					"description": "Entity IDs to fetch and inject as context when this anticipation fires (max 10). The triggering entity is auto-included.",
-				},
-			},
-			"required": []string{"description", "context"},
-		},
-		Handler: func(ctx context.Context, args map[string]any) (string, error) {
-			return r.anticipationTools.Execute("create_anticipation", args)
-		},
-	})
-
-	r.Register(&Tool{
-		Name:        "list_anticipations",
-		Description: "List all active (non-resolved, non-expired) anticipations.",
-		Parameters: map[string]any{
-			"type":       "object",
-			"properties": map[string]any{},
-		},
-		Handler: func(ctx context.Context, args map[string]any) (string, error) {
-			return r.anticipationTools.Execute("list_anticipations", args)
-		},
-	})
-
-	r.Register(&Tool{
-		Name:        "resolve_anticipation",
-		Description: "Mark an anticipation as resolved — it happened and was handled.",
-		Parameters: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"id": map[string]any{
-					"type":        "string",
-					"description": "Anticipation ID to resolve",
-				},
-			},
-			"required": []string{"id"},
-		},
-		Handler: func(ctx context.Context, args map[string]any) (string, error) {
-			return r.anticipationTools.Execute("resolve_anticipation", args)
-		},
-	})
-
-	r.Register(&Tool{
-		Name:        "cancel_anticipation",
-		Description: "Cancel an anticipation — no longer relevant or needed.",
-		Parameters: map[string]any{
-			"type": "object",
-			"properties": map[string]any{
-				"id": map[string]any{
-					"type":        "string",
-					"description": "Anticipation ID to cancel",
-				},
-			},
-			"required": []string{"id"},
-		},
-		Handler: func(ctx context.Context, args map[string]any) (string, error) {
-			return r.anticipationTools.Execute("cancel_anticipation", args)
 		},
 	})
 }
@@ -1133,7 +1008,7 @@ func (r *Registry) handleGetState(ctx context.Context, args map[string]any) (str
 
 // FormatEntityState formats a Home Assistant entity state for LLM
 // consumption. Used by get_state, control_device post-action verification,
-// and anticipation wake context injection.
+// and context injection.
 func FormatEntityState(state *homeassistant.State) string {
 	result := fmt.Sprintf("Entity: %s\nState: %s\n", state.EntityID, state.State)
 

@@ -30,7 +30,7 @@ func (a *App) initStores(s *newState) error {
 
 	// --- Data directory ---
 	// All persistent state (SQLite databases for memory, facts, scheduler,
-	// checkpoints, and anticipations) lives under this directory.
+	// checkpoints) lives under this directory.
 	if err := os.MkdirAll(cfg.DataDir, 0755); err != nil {
 		return fmt.Errorf("create data directory %s: %w", cfg.DataDir, err)
 	}

@@ -15,7 +15,6 @@ import (
 	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
 	"github.com/nugget/thane-ai-agent/internal/memory"
 	"github.com/nugget/thane-ai-agent/internal/notifications"
-	"github.com/nugget/thane-ai-agent/internal/scheduler"
 	"github.com/nugget/thane-ai-agent/internal/tools"
 	"github.com/nugget/thane-ai-agent/internal/unifi"
 )
@@ -29,9 +28,8 @@ func (a *App) initAwareness(s *newState) error {
 
 	// --- Context providers ---
 	// Dynamic system prompt injection. Providers add context based on
-	// current state (e.g., pending anticipations) before each LLM call.
-	anticipationProvider := scheduler.NewAnticipationProvider(s.anticipationStore)
-	contextProvider := agent.NewCompositeContextProvider(anticipationProvider)
+	// current state before each LLM call.
+	contextProvider := agent.NewCompositeContextProvider()
 	contextProvider.Add(agent.NewChannelProvider(&contactNameLookup{store: a.contactStore, logger: logger}))
 	contextProvider.Add(awareness.NewChannelOverviewProvider(awareness.ChannelOverviewConfig{
 		Loops:  &channelLoopAdapter{registry: a.loopRegistry},
@@ -258,11 +256,10 @@ func (a *App) initAwareness(s *newState) error {
 	)
 
 	// --- State watcher ---
-	// Consumes state_changed events from the HA WebSocket, bridges them
-	// to the anticipation system via WakeContext, and triggers agent wakes
-	// when an active anticipation matches the state change. Person entity
-	// IDs are auto-merged into entity globs so the person tracker
-	// receives state changes regardless of the user's subscribe config.
+	// Consumes state_changed events from the HA WebSocket and forwards
+	// them to the state window and person tracker. Person entity IDs
+	// are auto-merged into entity globs so the person tracker receives
+	// state changes regardless of the user's subscribe config.
 	if a.haWS != nil {
 		globs := append([]string(nil), cfg.HomeAssistant.Subscribe.EntityGlobs...)
 		if s.personTracker != nil {
@@ -270,38 +267,17 @@ func (a *App) initAwareness(s *newState) error {
 		}
 		filter := homeassistant.NewEntityFilter(globs, logger)
 		limiter := homeassistant.NewEntityRateLimiter(cfg.HomeAssistant.Subscribe.RateLimitPerMinute)
-		cooldown := time.Duration(cfg.HomeAssistant.Subscribe.CooldownMinutes) * time.Minute
 
-		wakeCfg := WakeBridgeConfig{
-			Store:    s.anticipationStore,
-			Resolver: s.anticipationStore,
-			Runner:   a.loop,
-			Provider: anticipationProvider,
-			Logger:   logger,
-			Ctx:      s.ctx,
-			Cooldown: cooldown,
-		}
-		if a.ha != nil {
-			wakeCfg.HA = a.ha
-		}
-		bridge := NewWakeBridge(wakeCfg)
-
-		// Compose handler: state window, person tracker, and wake bridge
-		// all see every state change that passes the filter and rate limiter.
-		var handler homeassistant.StateWatchHandler = bridge.HandleStateChange
+		// Compose handler: state window and person tracker both see
+		// every state change that passes the filter and rate limiter.
+		var handler homeassistant.StateWatchHandler
 		if s.personTracker != nil {
-			bridgeHandler := handler
-			handler = func(entityID, oldState, newState string) {
-				s.personTracker.HandleStateChange(entityID, oldState, newState)
-				bridgeHandler(entityID, oldState, newState)
-			}
-		}
-		{
-			prevHandler := handler
 			handler = func(entityID, oldState, newState string) {
 				stateWindowProvider.HandleStateChange(entityID, oldState, newState)
-				prevHandler(entityID, oldState, newState)
+				s.personTracker.HandleStateChange(entityID, oldState, newState)
 			}
+		} else {
+			handler = stateWindowProvider.HandleStateChange
 		}
 
 		watcher := homeassistant.NewStateWatcher(a.haWS.Events(), filter, limiter, handler, logger)
@@ -400,7 +376,6 @@ func (a *App) initAwareness(s *newState) error {
 			logger.Info("state watcher started",
 				"entity_globs", globs,
 				"rate_limit_per_minute", cfg.HomeAssistant.Subscribe.RateLimitPerMinute,
-				"cooldown", cooldown,
 			)
 			return nil
 		})

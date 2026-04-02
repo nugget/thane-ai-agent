@@ -28,7 +28,7 @@ const (
 	HintQualityFloor = "quality_floor"
 	// HintModelPreference suggests a specific model (soft preference, not override).
 	HintModelPreference = "model_preference"
-	// HintMission describes the task context: "conversation", "device_control", "background", "anticipation", "automation"
+	// HintMission describes the task context: "conversation", "device_control", "background", "automation", "metacognitive"
 	HintMission = "mission"
 	// HintLocalOnly restricts routing to free/local models when set to "true".
 	HintLocalOnly = "local_only"
@@ -443,11 +443,11 @@ func (r *Router) selectModel(req Request, decision *Decision) string {
 				}
 			}
 
-			// Mission hint: background/anticipation/metacognitive tasks prefer cheap
+			// Mission hint: background/metacognitive tasks prefer cheap models
 			// (unless caller explicitly opted out of local preference).
 			// Note: "conversation" mission no longer gets a quality bonus —
 			// thane:thinking sets quality_floor for that purpose. See issue #107.
-			if mission := req.Hints[HintMission]; (mission == "background" || mission == "anticipation" || mission == "metacognitive") && !explicitlyNotLocal {
+			if mission := req.Hints[HintMission]; (mission == "background" || mission == "metacognitive") && !explicitlyNotLocal {
 				if m.CostTier == 0 {
 					score += 20
 					rulesMatched = append(rulesMatched, "mission_background_bonus_"+m.Name)
