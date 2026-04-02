@@ -19,6 +19,7 @@ type Client struct {
 	token      string
 	httpClient *http.Client
 	watcher    readyChecker // set via SetWatcher for health status
+	ws         *WSClient
 }
 
 // readyChecker is satisfied by connwatch.Watcher. Defined here to avoid
@@ -30,6 +31,18 @@ type readyChecker interface {
 // SetWatcher sets the connection watcher for health status queries.
 func (c *Client) SetWatcher(w readyChecker) {
 	c.watcher = w
+}
+
+// UseWSClient sets the shared Home Assistant WebSocket client used for
+// registry/config APIs that are only exposed over WebSocket.
+func (c *Client) UseWSClient(ws *WSClient) {
+	c.ws = ws
+}
+
+// HasWSClient reports whether a WebSocket client is available for
+// registry/config API calls.
+func (c *Client) HasWSClient() bool {
+	return c.ws != nil
 }
 
 // IsReady reports whether Home Assistant is currently reachable.
@@ -135,13 +148,22 @@ func (c *Client) CallService(ctx context.Context, domain, service string, data m
 
 // Area represents a Home Assistant area.
 type Area struct {
-	AreaID  string   `json:"area_id"`
-	Name    string   `json:"name"`
-	Aliases []string `json:"aliases"`
+	AreaID              string   `json:"area_id"`
+	Name                string   `json:"name"`
+	Aliases             []string `json:"aliases"`
+	Labels              []string `json:"labels"`
+	Icon                string   `json:"icon"`
+	FloorID             string   `json:"floor_id"`
+	Picture             string   `json:"picture"`
+	TemperatureEntityID string   `json:"temperature_entity_id"`
+	HumidityEntityID    string   `json:"humidity_entity_id"`
 }
 
 // GetAreas retrieves all areas from the area registry.
 func (c *Client) GetAreas(ctx context.Context) ([]Area, error) {
+	if c.ws != nil {
+		return c.ws.GetAreaRegistry(ctx)
+	}
 	var areas []Area
 	if err := c.get(ctx, "/api/config/area_registry/list", &areas); err != nil {
 		return nil, err
@@ -151,13 +173,28 @@ func (c *Client) GetAreas(ctx context.Context) ([]Area, error) {
 
 // EntityRegistryEntry represents an entity from the registry with area info.
 type EntityRegistryEntry struct {
-	EntityID     string `json:"entity_id"`
-	Name         string `json:"name"`
-	OriginalName string `json:"original_name"`
-	AreaID       string `json:"area_id"`
-	DeviceID     string `json:"device_id"`
-	Platform     string `json:"platform"`
-	DisabledBy   string `json:"disabled_by"`
+	ID                  string            `json:"id"`
+	EntityID            string            `json:"entity_id"`
+	Name                string            `json:"name"`
+	OriginalName        string            `json:"original_name"`
+	Aliases             []string          `json:"aliases"`
+	AreaID              string            `json:"area_id"`
+	DeviceID            string            `json:"device_id"`
+	Platform            string            `json:"platform"`
+	DisabledBy          string            `json:"disabled_by"`
+	HiddenBy            string            `json:"hidden_by"`
+	EntityCategory      string            `json:"entity_category"`
+	Labels              []string          `json:"labels"`
+	Icon                string            `json:"icon"`
+	OriginalIcon        string            `json:"original_icon"`
+	DeviceClass         string            `json:"device_class"`
+	OriginalDeviceClass string            `json:"original_device_class"`
+	HasEntityName       bool              `json:"has_entity_name"`
+	UniqueID            string            `json:"unique_id"`
+	TranslationKey      string            `json:"translation_key"`
+	Options             map[string]any    `json:"options"`
+	Categories          map[string]string `json:"categories"`
+	Capabilities        map[string]any    `json:"capabilities"`
 }
 
 // IsDisabled reports whether the entity is disabled in Home Assistant.
@@ -167,6 +204,9 @@ func (e EntityRegistryEntry) IsDisabled() bool {
 
 // GetEntityRegistry retrieves the entity registry.
 func (c *Client) GetEntityRegistry(ctx context.Context) ([]EntityRegistryEntry, error) {
+	if c.ws != nil {
+		return c.ws.GetEntityRegistryWS(ctx)
+	}
 	var entries []EntityRegistryEntry
 	if err := c.get(ctx, "/api/config/entity_registry/list", &entries); err != nil {
 		return nil, err
@@ -227,6 +267,16 @@ func splitEntityID(entityID string) []string {
 	return nil
 }
 
+// APIError represents a non-2xx Home Assistant REST response.
+type APIError struct {
+	StatusCode int
+	Body       string
+}
+
+func (e *APIError) Error() string {
+	return fmt.Sprintf("API error %d: %s", e.StatusCode, e.Body)
+}
+
 // get performs a GET request to the HA API.
 func (c *Client) get(ctx context.Context, path string, result any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
@@ -245,7 +295,7 @@ func (c *Client) get(ctx context.Context, path string, result any) error {
 
 	if resp.StatusCode != http.StatusOK {
 		body := httpkit.ReadErrorBody(resp.Body, 512)
-		return fmt.Errorf("API error %d: %s", resp.StatusCode, body)
+		return &APIError{StatusCode: resp.StatusCode, Body: body}
 	}
 
 	if result != nil {
@@ -284,7 +334,36 @@ func (c *Client) post(ctx context.Context, path string, data any, result any) er
 
 	if resp.StatusCode != http.StatusOK {
 		body := httpkit.ReadErrorBody(resp.Body, 512)
-		return fmt.Errorf("API error %d: %s", resp.StatusCode, body)
+		return &APIError{StatusCode: resp.StatusCode, Body: body}
+	}
+
+	if result != nil {
+		if err := json.NewDecoder(resp.Body).Decode(result); err != nil {
+			return fmt.Errorf("decode response: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// delete performs a DELETE request to the HA API.
+func (c *Client) delete(ctx context.Context, path string, result any) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, c.baseURL+path, nil)
+	if err != nil {
+		return fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("request %s: %w", path, err)
+	}
+	defer httpkit.DrainAndClose(resp.Body, 4096)
+
+	if resp.StatusCode != http.StatusOK {
+		body := httpkit.ReadErrorBody(resp.Body, 512)
+		return &APIError{StatusCode: resp.StatusCode, Body: body}
 	}
 
 	if result != nil {
