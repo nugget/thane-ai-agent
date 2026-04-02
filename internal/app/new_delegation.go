@@ -43,6 +43,8 @@ func (a *App) initDelegation(s *newState) error {
 	delegateExec.SetArchiver(a.archiveStore)
 	delegateExec.SetUsageRecorder(a.usageStore, cfg.Pricing)
 	delegateExec.SetEventBus(a.eventBus)
+	delegateExec.ConfigureLoopExecution(a.loop, a.loopRegistry)
+	delegateExec.ConfigureSessionLifecycle(a.archiveAdapter, a.mem)
 	var alwaysActiveTags []string
 	for tag, tagCfg := range cfg.CapabilityTags {
 		if tagCfg.AlwaysActive {

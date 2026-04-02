@@ -1375,7 +1375,7 @@ function renderDetailIDs(loop) {
   // IDs are just iteration counters with no associated LLM conversation.
   const convs = loop.recent_conv_ids;
   const MAX_VISIBLE_CONVS = 5;
-  if (convs && convs.length > 0 && !loop.handler_only) {
+  if (convs && convs.length > 0 && (!loop.handler_only || getLoopCategory(loop) === 'delegate')) {
     const row = document.createElement('div');
     row.className = 'id-row';
 
@@ -1407,15 +1407,31 @@ function renderDetailIDs(loop) {
 
 function renderDelegateDetail(loop) {
   const container = $('#detail-delegate');
-  if (!loop._delegate) {
+  const meta = (loop.config && loop.config.Metadata) || {};
+  const isSynthetic = !!loop._delegate;
+  const isRealDelegate = !isSynthetic && getLoopCategory(loop) === 'delegate';
+  if (!isSynthetic && !isRealDelegate) {
     container.hidden = true;
     return;
   }
   container.hidden = false;
   container.innerHTML = '';
 
+  const taskText = isSynthetic ? loop._delegateTask : (meta.delegate_task || '');
+  const guidanceText = isSynthetic ? loop._delegateGuidance : (meta.delegate_guidance || '');
+  const profileText = isSynthetic ? loop._delegateProfile : (meta.delegate_profile || '');
+  const tags = isSynthetic ? (loop._delegateTags || []) : (((loop.config && loop.config.Tags) || []).slice());
+  const latestSnap = (state.iterationHistory.get(loop.id) || [])[0] || null;
+  const latestSummary = (latestSnap && latestSnap.summary) || {};
+  const exhausted = isSynthetic ? !!loop._delegateExhausted : !!latestSummary.delegate_exhausted;
+  const exhaustReason = isSynthetic ? (loop._delegateExhaustReason || '') : (latestSummary.delegate_finish_reason || '');
+  const iterCount = isSynthetic ? (loop._delegateIterations || 0) : (latestSummary.delegate_iterations || loop.iterations || 0);
+  const durationMs = isSynthetic
+    ? (loop._delegateDurationMs || 0)
+    : ((latestSnap && latestSnap.elapsed_ms) || 0);
+
   // Task.
-  if (loop._delegateTask) {
+  if (taskText) {
     const taskEl = document.createElement('div');
     taskEl.className = 'delegate-field';
     const label = document.createElement('span');
@@ -1424,13 +1440,13 @@ function renderDelegateDetail(loop) {
     taskEl.appendChild(label);
     const val = document.createElement('span');
     val.className = 'delegate-value delegate-task';
-    val.textContent = loop._delegateTask;
+    val.textContent = taskText;
     taskEl.appendChild(val);
     container.appendChild(taskEl);
   }
 
   // Guidance.
-  if (loop._delegateGuidance) {
+  if (guidanceText) {
     const guidEl = document.createElement('div');
     guidEl.className = 'delegate-field';
     const label = document.createElement('span');
@@ -1439,7 +1455,7 @@ function renderDelegateDetail(loop) {
     guidEl.appendChild(label);
     const val = document.createElement('span');
     val.className = 'delegate-value';
-    val.textContent = loop._delegateGuidance;
+    val.textContent = guidanceText;
     guidEl.appendChild(val);
     container.appendChild(guidEl);
   }
@@ -1447,14 +1463,14 @@ function renderDelegateDetail(loop) {
   // Profile + tags row.
   const metaRow = document.createElement('div');
   metaRow.className = 'delegate-meta';
-  if (loop._delegateProfile) {
+  if (profileText) {
     const chip = document.createElement('span');
     chip.className = 'tag-chip';
-    chip.textContent = loop._delegateProfile;
+    chip.textContent = profileText;
     metaRow.appendChild(chip);
   }
-  if (loop._delegateTags && loop._delegateTags.length > 0) {
-    for (const tag of loop._delegateTags) {
+  if (tags.length > 0) {
+    for (const tag of tags) {
       const chip = document.createElement('span');
       chip.className = 'tag-chip tag-chip--muted';
       chip.textContent = tag;
@@ -1464,18 +1480,18 @@ function renderDelegateDetail(loop) {
   if (metaRow.children.length > 0) container.appendChild(metaRow);
 
   // Completion result (shown after delegate finishes).
-  if (loop.state === 'completed' || loop.state === 'error') {
+  if (loop.state === 'completed' || loop.state === 'error' || loop.state === 'stopped') {
     const resultEl = document.createElement('div');
-    resultEl.className = 'delegate-result ' + (loop._delegateExhausted ? 'delegate-result--failed' : 'delegate-result--ok');
+    resultEl.className = 'delegate-result ' + (exhausted ? 'delegate-result--failed' : 'delegate-result--ok');
 
-    const icon = loop._delegateExhausted ? '\u2717' : '\u2713';
-    const status = loop._delegateExhausted
-      ? 'Failed' + (loop._delegateExhaustReason ? ' \u2014 ' + loop._delegateExhaustReason : '')
+    const icon = exhausted ? '\u2717' : '\u2713';
+    const status = exhausted
+      ? 'Failed' + (exhaustReason ? ' \u2014 ' + exhaustReason : '')
       : 'Succeeded';
 
     const parts = [icon + ' ' + status];
-    if (loop._delegateIterations > 0) parts.push(loop._delegateIterations + ' iter');
-    if (loop._delegateDurationMs > 0) parts.push(formatFuzzy(loop._delegateDurationMs));
+    if (iterCount > 0) parts.push(iterCount + ' iter');
+    if (durationMs > 0) parts.push(formatFuzzy(durationMs));
     resultEl.textContent = parts.join(' \u00b7 ');
     container.appendChild(resultEl);
   }
