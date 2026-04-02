@@ -257,14 +257,12 @@ func (p *Publisher) connect(ctx context.Context) error {
 		}
 	}
 
-	cm, err := autopaho.NewConnection(ctx, pahoCfg)
-	if err != nil {
-		return fmt.Errorf("mqtt connect: %w", err)
-	}
-	p.setCM(cm)
-
-	// Wire inbound message handler if subscriptions or dynamic topics
-	// are configured.
+	// Wire inbound message handler BEFORE NewConnection so it is baked
+	// into the paho.ClientConfig. autopaho copies the config on every
+	// (re-)connect, so handlers registered here persist across reconnects.
+	// In contrast, cm.AddOnPublishReceived() only registers on the
+	// *current* paho.Client instance and is lost on reconnect — and if
+	// the connection isn't up yet (c.cli == nil) it silently no-ops.
 	hasSubs := len(p.cfg.Subscriptions) > 0 || p.dynamicTopics != nil
 	if hasSubs {
 		if p.handler == nil {
@@ -273,24 +271,33 @@ func (p *Publisher) connect(ctx context.Context) error {
 		p.rateLimiter = newMessageRateLimiter(100, time.Second, p.logger)
 		go p.rateLimiter.start(ctx)
 
-		cm.AddOnPublishReceived(func(pr autopaho.PublishReceived) (bool, error) {
-			if !p.rateLimiter.allow() {
-				return true, nil
-			}
-			func() {
-				defer func() {
-					if r := recover(); r != nil {
-						p.logger.Error("mqtt message handler panicked",
-							"topic", pr.Packet.Topic,
-							"panic", r,
-						)
-					}
+		pahoCfg.OnPublishReceived = append(
+			pahoCfg.OnPublishReceived,
+			func(pr paho.PublishReceived) (bool, error) {
+				if !p.rateLimiter.allow() {
+					return true, nil
+				}
+				func() {
+					defer func() {
+						if r := recover(); r != nil {
+							p.logger.Error("mqtt message handler panicked",
+								"topic", pr.Packet.Topic,
+								"panic", r,
+							)
+						}
+					}()
+					p.handler(pr.Packet.Topic, pr.Packet.Payload)
 				}()
-				p.handler(pr.Packet.Topic, pr.Packet.Payload)
-			}()
-			return true, nil
-		})
+				return true, nil
+			},
+		)
 	}
+
+	cm, err := autopaho.NewConnection(ctx, pahoCfg)
+	if err != nil {
+		return fmt.Errorf("mqtt connect: %w", err)
+	}
+	p.setCM(cm)
 
 	// Wait for the initial connection before starting the publish loop.
 	connCtx, connCancel := context.WithTimeout(ctx, 30*time.Second)
