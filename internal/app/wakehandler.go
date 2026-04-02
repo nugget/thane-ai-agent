@@ -18,6 +18,12 @@ import (
 // wakeTimeout bounds how long a single MQTT wake may run.
 const mqttWakeTimeout = 5 * time.Minute
 
+// wakeStateGetter fetches entity state from Home Assistant.
+// Satisfied by [homeassistant.Client].
+type wakeStateGetter interface {
+	GetState(ctx context.Context, entityID string) (*homeassistant.State, error)
+}
+
 // wakeFireRecorder records a fire event for a wake subscription.
 // Satisfied by [homeassistant.WakeStore].
 type wakeFireRecorder interface {
