@@ -4,12 +4,16 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"path"
 	"strings"
+	"sync/atomic"
 	"time"
 	"unicode/utf8"
 
 	"github.com/nugget/thane-ai-agent/internal/agent"
 	mqtt "github.com/nugget/thane-ai-agent/internal/channels/mqtt"
+	"github.com/nugget/thane-ai-agent/internal/events"
+	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
 	"github.com/nugget/thane-ai-agent/internal/router"
 )
 
@@ -22,15 +26,28 @@ const maxWakePayloadBytes = 32 * 1024
 // conversation may run before being cancelled.
 const mqttWakeTimeout = 5 * time.Minute
 
+// mqttWakeDeps holds optional dependencies for dashboard integration.
+// When registry is non-nil, each wake conversation is spawned as a
+// child loop under parentID so it appears on the dashboard.
+type mqttWakeDeps struct {
+	registry *looppkg.Registry
+	eventBus *events.Bus
+	parentID *atomic.Value // stores string; set by deferred worker, read by handler goroutines
+}
+
 // mqttWakeHandler returns a MessageHandler that dispatches agent
 // conversations when MQTT messages arrive on wake-configured topics.
 // Messages on topics without a wake subscription are passed through
 // to the fallback handler.
+//
+// When deps.registry is non-nil, each wake conversation is registered
+// as a child loop under the MQTT parent so it appears on the dashboard.
 func mqttWakeHandler(
 	store *mqtt.SubscriptionStore,
 	runner agentRunner,
 	fallback mqtt.MessageHandler,
 	logger *slog.Logger,
+	deps mqttWakeDeps,
 ) mqtt.MessageHandler {
 	if logger == nil {
 		logger = slog.Default()
@@ -47,9 +64,6 @@ func mqttWakeHandler(
 		// Dispatch in a goroutine so the MQTT message handler does not
 		// block the inbound message loop.
 		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), mqttWakeTimeout)
-			defer cancel()
-
 			convID := fmt.Sprintf("mqtt-wake-%d", time.Now().UnixMilli())
 			msg := buildWakeMessage(topic, payload, ws.Seed.Instructions)
 
@@ -73,23 +87,120 @@ func mqttWakeHandler(
 				"payload_size", len(payload),
 			)
 
-			resp, err := runner.Run(ctx, req, nil)
+			// Use a short topic suffix for the loop name (last path segment).
+			loopName := "mqtt/" + path.Base(topic)
+
+			if deps.registry != nil {
+				dispatchViaLoop(deps, runner, req, loopName, topic, convID, logger)
+			} else {
+				ctx, cancel := context.WithTimeout(context.Background(), mqttWakeTimeout)
+				defer cancel()
+				dispatchDirect(ctx, runner, req, topic, convID, logger)
+			}
+		}()
+	}
+}
+
+// dispatchViaLoop spawns a one-shot child loop under the MQTT parent
+// so the wake conversation appears on the dashboard. The loop manages
+// its own lifecycle via MaxDuration — no external context timeout is
+// needed (SpawnLoop is non-blocking, so the caller must not use a
+// short-lived context that would cancel the child loop).
+func dispatchViaLoop(
+	deps mqttWakeDeps,
+	runner agentRunner,
+	req *agent.Request,
+	loopName, topic, convID string,
+	logger *slog.Logger,
+) {
+	var parentID string
+	if deps.parentID != nil {
+		if v, ok := deps.parentID.Load().(string); ok {
+			parentID = v
+		}
+	}
+
+	// Use a background context: SpawnLoop is non-blocking (starts a
+	// goroutine and returns immediately), so a timeout context here
+	// would cancel the child loop as soon as defer fires. The loop's
+	// MaxDuration enforces the wall-clock bound instead.
+	//
+	// Sleep values are set to 1ms so the initial sleep is effectively
+	// zero — this is a one-shot loop that should execute immediately.
+	const immediate = time.Millisecond
+	_, err := deps.registry.SpawnLoop(context.Background(), looppkg.Config{
+		Name:         loopName,
+		MaxIter:      1,
+		MaxDuration:  mqttWakeTimeout,
+		SleepMin:     immediate,
+		SleepMax:     immediate,
+		SleepDefault: immediate,
+		Jitter:       looppkg.Float64Ptr(0),
+		ParentID:     parentID,
+		Handler: func(hCtx context.Context, _ any) error {
+			resp, err := runner.Run(hCtx, req, nil)
 			if err != nil {
-				logger.Error("mqtt wake agent dispatch failed",
+				logger.Error("mqtt wake agent failed",
 					"conv_id", convID,
 					"topic", topic,
 					"error", err,
 				)
-				return
+				return fmt.Errorf("mqtt wake %s on %s: %w", convID, topic, err)
 			}
-
 			logger.Info("mqtt wake complete",
 				"conv_id", convID,
 				"topic", topic,
 				"result_len", len(resp.Content),
 			)
-		}()
+			return nil
+		},
+		Metadata: map[string]string{
+			"subsystem":       "mqtt",
+			"category":        "wake",
+			"mqtt_topic":      topic,
+			"conversation_id": convID,
+		},
+	}, looppkg.Deps{
+		Logger:   logger,
+		EventBus: deps.eventBus,
+	})
+	if err != nil {
+		logger.Error("mqtt wake loop spawn failed, falling back to direct dispatch",
+			"conv_id", convID,
+			"topic", topic,
+			"error", err,
+		)
+		// Fall back to direct dispatch if loop spawn fails (e.g.,
+		// concurrency limit reached).
+		ctx, cancel := context.WithTimeout(context.Background(), mqttWakeTimeout)
+		defer cancel()
+		dispatchDirect(ctx, runner, req, topic, convID, logger)
 	}
+}
+
+// dispatchDirect runs the agent directly without loop registry
+// integration.
+func dispatchDirect(
+	ctx context.Context,
+	runner agentRunner,
+	req *agent.Request,
+	topic, convID string,
+	logger *slog.Logger,
+) {
+	resp, err := runner.Run(ctx, req, nil)
+	if err != nil {
+		logger.Error("mqtt wake agent dispatch failed",
+			"conv_id", convID,
+			"topic", topic,
+			"error", err,
+		)
+		return
+	}
+	logger.Info("mqtt wake complete",
+		"conv_id", convID,
+		"topic", topic,
+		"result_len", len(resp.Content),
+	)
 }
 
 // buildWakeMessage constructs the user message for an MQTT wake. When

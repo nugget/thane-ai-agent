@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	cdav "github.com/nugget/thane-ai-agent/internal/carddav"
@@ -286,10 +287,21 @@ func (a *App) initServers(s *newState) error {
 			}
 		}
 
+		// Track the mqtt parent loop ID once it's spawned (deferred
+		// worker runs after this wiring, so we use atomic.Value for
+		// safe cross-goroutine access).
+		var mqttParentID atomic.Value
+		mqttParentID.Store("") // initialize with zero-value string
+		wakeDeps := mqttWakeDeps{
+			registry: a.loopRegistry,
+			eventBus: a.eventBus,
+			parentID: &mqttParentID,
+		}
+
 		// Wrap with the wake handler: wake-configured topics dispatch
 		// agent conversations, everything else falls through to the
 		// base handler above.
-		mqttPub.SetMessageHandler(mqttWakeHandler(subStore, a.loop, baseMsgHandler, logger))
+		mqttPub.SetMessageHandler(mqttWakeHandler(subStore, a.loop, baseMsgHandler, logger, wakeDeps))
 
 		// Register MQTT wake subscription tools.
 		mqttTools := mqtt.NewTools(subStore)
@@ -325,8 +337,8 @@ func (a *App) initServers(s *newState) error {
 			mqttPub.PublishStates(ctx)
 
 			mqttInterval := mqttPub.PublishInterval()
-			if _, err := a.loopRegistry.SpawnLoop(ctx, looppkg.Config{
-				Name:         "mqtt-publisher",
+			parentID, err := a.loopRegistry.SpawnLoop(ctx, looppkg.Config{
+				Name:         "mqtt",
 				SleepMin:     mqttInterval,
 				SleepMax:     mqttInterval,
 				SleepDefault: mqttInterval,
@@ -342,9 +354,11 @@ func (a *App) initServers(s *newState) error {
 			}, looppkg.Deps{
 				Logger:   logger,
 				EventBus: a.eventBus,
-			}); err != nil {
-				return fmt.Errorf("spawn mqtt-publisher loop: %w", err)
+			})
+			if err != nil {
+				return fmt.Errorf("spawn mqtt loop: %w", err)
 			}
+			mqttParentID.Store(parentID)
 
 			logger.Info("mqtt connected",
 				"broker", cfg.MQTT.Broker,
@@ -473,7 +487,7 @@ func (a *App) initServers(s *newState) error {
 
 		telInterval := time.Duration(cfg.MQTT.Telemetry.Interval) * time.Second
 		telLoopCfg := looppkg.Config{
-			Name:         "mqtt-telemetry",
+			Name:         "telemetry",
 			SleepMin:     telInterval,
 			SleepMax:     telInterval,
 			SleepDefault: telInterval,
@@ -490,9 +504,9 @@ func (a *App) initServers(s *newState) error {
 			Logger:   logger,
 			EventBus: a.eventBus,
 		}
-		a.deferWorker("mqtt-telemetry", func(ctx context.Context) error {
+		a.deferWorker("telemetry", func(ctx context.Context) error {
 			if _, err := a.loopRegistry.SpawnLoop(ctx, telLoopCfg, telLoopDeps); err != nil {
-				return fmt.Errorf("spawn mqtt-telemetry loop: %w", err)
+				return fmt.Errorf("spawn telemetry loop: %w", err)
 			}
 			return nil
 		})

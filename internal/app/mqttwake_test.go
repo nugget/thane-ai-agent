@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -10,6 +11,8 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/channels/mqtt"
 	"github.com/nugget/thane-ai-agent/internal/config"
 	"github.com/nugget/thane-ai-agent/internal/database"
+	"github.com/nugget/thane-ai-agent/internal/events"
+	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
 	"github.com/nugget/thane-ai-agent/internal/router"
 
 	_ "github.com/mattn/go-sqlite3"
@@ -64,7 +67,7 @@ func TestMQTTWakeHandlerMatchingTopic(t *testing.T) {
 	})
 
 	runner := &mqttMockRunner{}
-	handler := mqttWakeHandler(store, runner, nil, nil)
+	handler := mqttWakeHandler(store, runner, nil, nil, mqttWakeDeps{})
 
 	handler("test/foo/wake", []byte(`{"event": "motion"}`))
 
@@ -118,7 +121,7 @@ func TestMQTTWakeHandlerNoMatchFallback(t *testing.T) {
 	}
 
 	runner := &mqttMockRunner{}
-	handler := mqttWakeHandler(store, runner, fallback, nil)
+	handler := mqttWakeHandler(store, runner, fallback, nil, mqttWakeDeps{})
 
 	handler("unmatched/topic", []byte("data"))
 
@@ -127,6 +130,49 @@ func TestMQTTWakeHandlerNoMatchFallback(t *testing.T) {
 	}
 	if reqs := runner.requests(); len(reqs) != 0 {
 		t.Errorf("expected 0 requests, got %d", len(reqs))
+	}
+}
+
+func TestMQTTWakeHandlerWithRegistry(t *testing.T) {
+	store := newTestWakeStore(t)
+	seed := router.LoopSeed{Instructions: "test instructions"}
+	store.LoadConfig([]config.SubscriptionConfig{
+		{Topic: "home/sensor/wake", Wake: &seed},
+	})
+
+	runner := &mqttMockRunner{}
+	registry := looppkg.NewRegistry()
+	bus := events.New()
+
+	var parentID atomic.Value
+	parentID.Store("parent-loop-123")
+
+	deps := mqttWakeDeps{
+		registry: registry,
+		eventBus: bus,
+		parentID: &parentID,
+	}
+
+	handler := mqttWakeHandler(store, runner, nil, nil, deps)
+	handler("home/sensor/wake", []byte(`{"temp": 22}`))
+
+	// Wait for the spawned loop to complete.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if reqs := runner.requests(); len(reqs) > 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	reqs := runner.requests()
+	if len(reqs) != 1 {
+		t.Fatalf("expected 1 request via registry dispatch, got %d", len(reqs))
+	}
+
+	req := reqs[0]
+	if req.Hints["source"] != "mqtt_wake" {
+		t.Errorf("source hint = %q, want %q", req.Hints["source"], "mqtt_wake")
 	}
 }
 
