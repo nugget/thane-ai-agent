@@ -251,22 +251,21 @@ func (a *App) initServers(s *newState) error {
 		}
 		subStore.LoadConfig(cfg.MQTT.Subscriptions)
 
-		// Append runtime-persisted wake topics to the subscription list
-		// so the publisher subscribes to them on connect.
-		for _, topic := range subStore.Topics() {
-			found := false
-			for _, sub := range cfg.MQTT.Subscriptions {
-				if sub.Topic == topic {
-					found = true
-					break
-				}
+		// Wire dynamic topic discovery: on every broker (re-)connect the
+		// publisher merges store topics into the SUBSCRIBE packet.
+		mqttPub.SetDynamicTopics(subStore.Topics)
+
+		// Wire live subscribe: when a runtime subscription is added via
+		// tool, immediately send a SUBSCRIBE to the broker so the topic
+		// is active without waiting for reconnect.
+		subStore.SetSubscribeHook(func(topics []string) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := mqttPub.SubscribeTopics(ctx, topics); err != nil {
+				logger.Warn("failed to live-subscribe new wake topic",
+					"topics", topics, "error", err)
 			}
-			if !found {
-				cfg.MQTT.Subscriptions = append(cfg.MQTT.Subscriptions, config.SubscriptionConfig{
-					Topic: topic,
-				})
-			}
-		}
+		})
 
 		// Build the base message handler: routes the instance callback
 		// topic to the notification dispatcher, everything else gets

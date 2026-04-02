@@ -60,6 +60,7 @@ type Publisher struct {
 	rateLimiter    *messageRateLimiter
 	mu             sync.Mutex
 	dynamicSensors []DynamicSensor
+	dynamicTopics  func() []string // returns extra topics to subscribe on (re-)connect
 }
 
 // New creates a Publisher but does not connect. Call [Publisher.Start]
@@ -86,6 +87,41 @@ func New(cfg config.MQTTConfig, instanceID string, tokens *DailyTokens, stats St
 // is used when subscriptions are configured.
 func (p *Publisher) SetMessageHandler(h MessageHandler) {
 	p.handler = h
+}
+
+// SetDynamicTopics registers a callback that returns additional topic
+// filters to include in every (re-)subscribe. The callback is invoked
+// on each broker reconnect alongside the static config subscriptions.
+// Must be called before [Publisher.Connect].
+func (p *Publisher) SetDynamicTopics(fn func() []string) {
+	p.dynamicTopics = fn
+}
+
+// SubscribeTopics sends a SUBSCRIBE packet for the given topic filters
+// on the live broker connection. Safe for concurrent use. Returns an
+// error if the publisher is not connected.
+func (p *Publisher) SubscribeTopics(ctx context.Context, topics []string) error {
+	if len(topics) == 0 {
+		return nil
+	}
+	cm := p.getCM()
+	if cm == nil {
+		return fmt.Errorf("mqtt publisher not connected")
+	}
+
+	opts := make([]paho.SubscribeOptions, len(topics))
+	for i, t := range topics {
+		opts[i] = paho.SubscribeOptions{Topic: t, QoS: 0}
+	}
+
+	if _, err := cm.Subscribe(ctx, &paho.Subscribe{
+		Subscriptions: opts,
+	}); err != nil {
+		return fmt.Errorf("mqtt subscribe: %w", err)
+	}
+
+	p.logger.Info("mqtt subscribed to dynamic topics", "topics", topics)
+	return nil
 }
 
 // RegisterSensors adds dynamic sensor definitions that are published
@@ -227,8 +263,10 @@ func (p *Publisher) connect(ctx context.Context) error {
 	}
 	p.setCM(cm)
 
-	// Wire inbound message handler if subscriptions are configured.
-	if len(p.cfg.Subscriptions) > 0 {
+	// Wire inbound message handler if subscriptions or dynamic topics
+	// are configured.
+	hasSubs := len(p.cfg.Subscriptions) > 0 || p.dynamicTopics != nil
+	if hasSubs {
 		if p.handler == nil {
 			p.handler = defaultMessageHandler(p.logger)
 		}
@@ -493,22 +531,37 @@ func (p *Publisher) publishAvailability(ctx context.Context, cm *autopaho.Connec
 
 // --- Subscriptions ---
 
-// subscribe sends SUBSCRIBE packets for all configured topic filters.
-// Called on every (re-)connect because autopaho does not automatically
-// resubscribe after reconnection.
+// subscribe sends SUBSCRIBE packets for all configured and dynamic
+// topic filters. Called on every (re-)connect because autopaho does
+// not automatically resubscribe after reconnection.
 func (p *Publisher) subscribe(ctx context.Context, cm *autopaho.ConnectionManager) {
-	if len(p.cfg.Subscriptions) == 0 {
-		return
+	// Collect all topics: config-defined + dynamic (runtime wake subs, etc.).
+	seen := make(map[string]struct{})
+	var opts []paho.SubscribeOptions
+	var topics []string
+
+	for _, sub := range p.cfg.Subscriptions {
+		if _, dup := seen[sub.Topic]; dup {
+			continue
+		}
+		seen[sub.Topic] = struct{}{}
+		opts = append(opts, paho.SubscribeOptions{Topic: sub.Topic, QoS: 0})
+		topics = append(topics, sub.Topic)
 	}
 
-	opts := make([]paho.SubscribeOptions, 0, len(p.cfg.Subscriptions))
-	topics := make([]string, 0, len(p.cfg.Subscriptions))
-	for _, sub := range p.cfg.Subscriptions {
-		opts = append(opts, paho.SubscribeOptions{
-			Topic: sub.Topic,
-			QoS:   0,
-		})
-		topics = append(topics, sub.Topic)
+	if p.dynamicTopics != nil {
+		for _, t := range p.dynamicTopics() {
+			if _, dup := seen[t]; dup {
+				continue
+			}
+			seen[t] = struct{}{}
+			opts = append(opts, paho.SubscribeOptions{Topic: t, QoS: 0})
+			topics = append(topics, t)
+		}
+	}
+
+	if len(opts) == 0 {
+		return
 	}
 
 	if _, err := cm.Subscribe(ctx, &paho.Subscribe{

@@ -30,10 +30,11 @@ type WakeSubscription struct {
 // persistent storage in SQLite for runtime-added subscriptions. Config-
 // defined subscriptions are held in memory only and reloaded on restart.
 type SubscriptionStore struct {
-	db     *sql.DB
-	mu     sync.RWMutex
-	subs   []WakeSubscription
-	logger *slog.Logger
+	db            *sql.DB
+	mu            sync.RWMutex
+	subs          []WakeSubscription
+	logger        *slog.Logger
+	subscribeHook func(topics []string) // called after Add with new topics
 }
 
 const createSubscriptionsTable = `
@@ -132,6 +133,13 @@ func (s *SubscriptionStore) LoadConfig(subs []config.SubscriptionConfig) {
 	}
 }
 
+// SetSubscribeHook registers a callback that is invoked after a runtime
+// subscription is added. The callback receives the new topic filter(s)
+// so the caller can send a live SUBSCRIBE to the broker.
+func (s *SubscriptionStore) SetSubscribeHook(fn func(topics []string)) {
+	s.subscribeHook = fn
+}
+
 // Add creates a runtime wake subscription, persists it to SQLite, and
 // returns the new subscription.
 func (s *SubscriptionStore) Add(topic string, seed router.LoopSeed) (WakeSubscription, error) {
@@ -162,6 +170,11 @@ func (s *SubscriptionStore) Add(topic string, seed router.LoopSeed) (WakeSubscri
 
 	s.logger.Info("mqtt wake subscription added",
 		"id", ws.ID, "topic", ws.Topic)
+
+	if s.subscribeHook != nil {
+		s.subscribeHook([]string{ws.Topic})
+	}
+
 	return ws, nil
 }
 
