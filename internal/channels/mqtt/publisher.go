@@ -205,22 +205,11 @@ func (p *Publisher) PublishInterval() time.Duration {
 	return interval
 }
 
-// connect establishes the MQTT broker connection, publishes discovery
-// configs, configures subscriptions, and waits for initial connection.
-// Shared by both [Connect] and [Start].
-func (p *Publisher) connect(ctx context.Context) error {
-	if p.tokens == nil {
-		return fmt.Errorf("mqtt publisher: tokens must not be nil")
-	}
-	if p.stats == nil {
-		return fmt.Errorf("mqtt publisher: stats must not be nil")
-	}
-
-	brokerURL, err := url.Parse(p.cfg.Broker)
-	if err != nil {
-		return fmt.Errorf("parse mqtt broker URL: %w", err)
-	}
-
+// buildClientConfig constructs the autopaho.ClientConfig for the broker
+// connection. It is called by [connect] and is separated for testability
+// — callers can inspect the returned config (e.g. OnPublishReceived
+// handlers) without needing a live broker.
+func (p *Publisher) buildClientConfig(brokerURL *url.URL) autopaho.ClientConfig {
 	availTopic := p.AvailabilityTopic()
 
 	pahoCfg := autopaho.ClientConfig{
@@ -257,8 +246,8 @@ func (p *Publisher) connect(ctx context.Context) error {
 		}
 	}
 
-	// Wire inbound message handler BEFORE NewConnection so it is baked
-	// into the paho.ClientConfig. autopaho copies the config on every
+	// Wire inbound message handler into the paho.ClientConfig so it is
+	// baked in BEFORE NewConnection. autopaho copies the config on every
 	// (re-)connect, so handlers registered here persist across reconnects.
 	// In contrast, cm.AddOnPublishReceived() only registers on the
 	// *current* paho.Client instance and is lost on reconnect — and if
@@ -269,7 +258,6 @@ func (p *Publisher) connect(ctx context.Context) error {
 			p.handler = defaultMessageHandler(p.logger)
 		}
 		p.rateLimiter = newMessageRateLimiter(100, time.Second, p.logger)
-		go p.rateLimiter.start(ctx)
 
 		pahoCfg.OnPublishReceived = append(
 			pahoCfg.OnPublishReceived,
@@ -293,11 +281,38 @@ func (p *Publisher) connect(ctx context.Context) error {
 		)
 	}
 
+	return pahoCfg
+}
+
+// connect establishes the MQTT broker connection, publishes discovery
+// configs, configures subscriptions, and waits for initial connection.
+// Shared by both [Connect] and [Start].
+func (p *Publisher) connect(ctx context.Context) error {
+	if p.tokens == nil {
+		return fmt.Errorf("mqtt publisher: tokens must not be nil")
+	}
+	if p.stats == nil {
+		return fmt.Errorf("mqtt publisher: stats must not be nil")
+	}
+
+	brokerURL, err := url.Parse(p.cfg.Broker)
+	if err != nil {
+		return fmt.Errorf("parse mqtt broker URL: %w", err)
+	}
+
+	pahoCfg := p.buildClientConfig(brokerURL)
+
 	cm, err := autopaho.NewConnection(ctx, pahoCfg)
 	if err != nil {
 		return fmt.Errorf("mqtt connect: %w", err)
 	}
 	p.setCM(cm)
+
+	// Start the rate limiter after NewConnection succeeds to avoid
+	// leaking a goroutine on the error path.
+	if p.rateLimiter != nil {
+		go p.rateLimiter.start(ctx)
+	}
 
 	// Wait for the initial connection before starting the publish loop.
 	connCtx, connCancel := context.WithTimeout(ctx, 30*time.Second)
