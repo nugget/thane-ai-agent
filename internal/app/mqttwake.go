@@ -147,6 +147,17 @@ func dispatchViaLoop(
 				)
 				return fmt.Errorf("mqtt wake %s on %s: %w", convID, topic, err)
 			}
+
+			// Report agent metadata to the loop iteration snapshot
+			// so the dashboard can render clickable request links
+			// and token/tool metrics.
+			if summary := looppkg.IterationSummary(hCtx); summary != nil {
+				summary["request_id"] = resp.RequestID
+				summary["model"] = resp.Model
+				summary["input_tokens"] = resp.InputTokens
+				summary["output_tokens"] = resp.OutputTokens
+			}
+
 			logger.Info("mqtt wake complete",
 				"conv_id", convID,
 				"topic", topic,
