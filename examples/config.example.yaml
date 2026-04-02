@@ -353,9 +353,58 @@ talents_dir: ./talents
 #     - # Topic is the MQTT topic filter (e.g., "homeassistant/+/+/state",
 #       "frigate/events"). Supports MQTT wildcard characters.
 #       topic: homeassistant/+/+/state
+#       Wake, when non-nil, enables agent wake on this topic. Messages
+#       arriving on the topic trigger an agent conversation using the
+#       seed's routing configuration. When nil, messages are received
+#       for ambient awareness only (debug-logged, not acted upon).
+#       wake:
+#         model: ""
+#         quality_floor: ""
+#         mission: ""
+#         local_only: ""
+#         delegation_gating: ""
+#         prefer_speed: ""
+#         exclude_tools: []
+#         seed_tags: []
+#         extra_hints: {}
+#         instructions: ""
 #     - # Topic is the MQTT topic filter (e.g., "homeassistant/+/+/state",
 #       "frigate/events"). Supports MQTT wildcard characters.
 #       topic: frigate/events
+#       Wake, when non-nil, enables agent wake on this topic. Messages
+#       arriving on the topic trigger an agent conversation using the
+#       seed's routing configuration. When nil, messages are received
+#       for ambient awareness only (debug-logged, not acted upon).
+#       wake:
+#         model: ""
+#         quality_floor: ""
+#         mission: ""
+#         local_only: ""
+#         delegation_gating: ""
+#         prefer_speed: ""
+#         exclude_tools: []
+#         seed_tags: []
+#         extra_hints: {}
+#         instructions: ""
+#     - # Topic is the MQTT topic filter (e.g., "homeassistant/+/+/state",
+#       "frigate/events"). Supports MQTT wildcard characters.
+#       topic: automation/wake/security
+#       Wake, when non-nil, enables agent wake on this topic. Messages
+#       arriving on the topic trigger an agent conversation using the
+#       seed's routing configuration. When nil, messages are received
+#       for ambient awareness only (debug-logged, not acted upon).
+#       wake:
+#         model: ""
+#         quality_floor: "7"
+#         mission: automation
+#         local_only: "false"
+#         delegation_gating: disabled
+#         prefer_speed: ""
+#         exclude_tools: []
+#         seed_tags:
+#           - homeassistant
+#         extra_hints: {}
+#         instructions: Evaluate the security event and decide if action is needed.
 #   Telemetry configures operational metric publishing. When enabled,
 #   a separate mqtt-telemetry loop publishes system health, token usage,
 #   loop states, and other operational data as native HA sensors.
