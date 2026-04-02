@@ -104,6 +104,10 @@ type Config struct {
 	// contact app sync (macOS Contacts.app, iOS, Thunderbird, etc.).
 	CardDAV CardDAVConfig `yaml:"carddav"`
 
+	// Platform configures the WebSocket endpoint for native platform
+	// provider connections (e.g. macOS app).
+	Platform PlatformConfig `yaml:"platform"`
+
 	// HomeAssistant configures the connection to a Home Assistant instance.
 	HomeAssistant HomeAssistantConfig `yaml:"homeassistant"`
 
@@ -459,6 +463,80 @@ type CardDAVConfig struct {
 // settings.
 func (c CardDAVConfig) Configured() bool {
 	return c.Enabled && c.Username != "" && c.Password != ""
+}
+
+// PlatformConfig configures the WebSocket endpoint for native platform
+// provider connections (e.g. macOS app). When enabled, providers can
+// connect and register capabilities for bidirectional service dispatch.
+//
+// Each entry in Providers maps an account name (e.g. "nugget", "aimee")
+// to a set of per-device tokens. Multiple devices under the same account
+// share an identity but are independently addressable by client_id.
+type PlatformConfig struct {
+	Enabled   bool                              `yaml:"enabled"`
+	Providers map[string]PlatformProviderConfig `yaml:"providers"`
+}
+
+// PlatformProviderConfig defines the tokens for a single account identity.
+// Each token typically corresponds to a different device running a
+// platform agent (e.g. thane-agent-macos on a laptop vs desktop).
+type PlatformProviderConfig struct {
+	Tokens []string `yaml:"tokens"`
+}
+
+// Configured reports whether the platform provider endpoint is enabled
+// and has at least one provider with at least one token.
+func (c PlatformConfig) Configured() bool {
+	if !c.Enabled || len(c.Providers) == 0 {
+		return false
+	}
+	for _, p := range c.Providers {
+		if len(p.Tokens) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// Validate checks platform configuration for internal consistency.
+// When enabled, at least one provider must have a non-empty token, and
+// tokens must not be shared across accounts.
+func (c PlatformConfig) Validate() error {
+	if !c.Enabled {
+		return nil
+	}
+	if len(c.Providers) == 0 {
+		return fmt.Errorf("platform: enabled but no providers configured")
+	}
+	hasToken := false
+	seen := make(map[string]string) // token → account
+	for account, p := range c.Providers {
+		for _, tok := range p.Tokens {
+			if tok == "" {
+				continue
+			}
+			hasToken = true
+			if prev, dup := seen[tok]; dup {
+				return fmt.Errorf("platform: duplicate token shared by accounts %q and %q", prev, account)
+			}
+			seen[tok] = account
+		}
+	}
+	if !hasToken {
+		return fmt.Errorf("platform: enabled but no tokens configured for any provider")
+	}
+	return nil
+}
+
+// TokenIndex builds a map from token → account name for O(1) auth lookups.
+func (c PlatformConfig) TokenIndex() map[string]string {
+	idx := make(map[string]string)
+	for account, p := range c.Providers {
+		for _, tok := range p.Tokens {
+			idx[tok] = account
+		}
+	}
+	return idx
 }
 
 // IdentityConfig configures the agent's own contact identity. The
@@ -1791,6 +1869,9 @@ func (c *Config) Validate() error {
 		return err
 	}
 	if err := c.validateDelegate(); err != nil {
+		return err
+	}
+	if err := c.Platform.Validate(); err != nil {
 		return err
 	}
 	return nil

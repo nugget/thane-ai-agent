@@ -60,21 +60,22 @@ type TokenObserver interface {
 
 // Server is the HTTP API server.
 type Server struct {
-	address       string
-	port          int
-	loop          *agent.Loop
-	router        *router.Router
-	checkpointer  *checkpoint.Checkpointer
-	memoryStore   *memory.SQLiteStore
-	archiveStore  *memory.ArchiveStore
-	healthDeps    HealthStatusFunc
-	tokenObserver TokenObserver
-	eventBus      *events.Bus
-	owuTracker    *OWUTracker
-	webServer     WebServerRegistrar
-	logger        *slog.Logger
-	server        *http.Server
-	stats         *SessionStats
+	address         string
+	port            int
+	loop            *agent.Loop
+	router          *router.Router
+	checkpointer    *checkpoint.Checkpointer
+	memoryStore     *memory.SQLiteStore
+	archiveStore    *memory.ArchiveStore
+	healthDeps      HealthStatusFunc
+	tokenObserver   TokenObserver
+	eventBus        *events.Bus
+	owuTracker      *OWUTracker
+	webServer       WebServerRegistrar
+	platformHandler http.Handler
+	logger          *slog.Logger
+	server          *http.Server
+	stats           *SessionStats
 }
 
 // SetOWUTracker configures the Open WebUI loop tracker for dashboard visibility.
@@ -103,6 +104,12 @@ func (s *Server) SetEventBus(bus *events.Bus) {
 // serves HTML at "/" and the old JSON root handler becomes a fallback.
 func (s *Server) SetWebServer(ws WebServerRegistrar) {
 	s.webServer = ws
+}
+
+// SetPlatformHandler configures the WebSocket handler for platform
+// provider connections.
+func (s *Server) SetPlatformHandler(h http.Handler) {
+	s.platformHandler = h
 }
 
 // DashboardSnapshot returns a copy of the current session stats
@@ -279,6 +286,11 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("GET /v1/archive/search", s.handleArchiveSearch)
 	mux.HandleFunc("GET /v1/archive/messages", s.handleArchiveMessages)
 	mux.HandleFunc("GET /v1/archive/stats", s.handleArchiveStats)
+
+	// Platform provider WebSocket endpoint
+	if s.platformHandler != nil {
+		mux.Handle("GET /v1/platform/ws", s.platformHandler)
+	}
 
 	// When a WebServerRegistrar is wired in, it owns "/" and related
 	// UI routes. Otherwise, fall back to the JSON root handler.
