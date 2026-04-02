@@ -21,13 +21,21 @@ const (
 
 	// authTimeout is the maximum time allowed for the auth handshake.
 	authTimeout = 10 * time.Second
+
+	// maxMessageSize is the maximum size of a single WebSocket message
+	// frame. Limits memory usage from oversized client payloads.
+	maxMessageSize = 64 * 1024 // 64 KiB
 )
 
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  4096,
 	WriteBufferSize: 4096,
+	// CheckOrigin allows all origins because platform providers are native
+	// desktop apps, not browsers. Authentication is token-based. If browser
+	// clients are added in the future, this should validate Origin against
+	// an allowlist.
 	CheckOrigin: func(r *http.Request) bool {
-		return true // Auth is token-based, not origin-based.
+		return true
 	},
 }
 
@@ -40,10 +48,14 @@ type Handler struct {
 
 // NewHandler creates a new platform WebSocket handler. The tokenIndex
 // maps authentication tokens to account names (built by
-// config.PlatformConfig.TokenIndex).
+// config.PlatformConfig.TokenIndex). If registry is nil, a default
+// Registry is created.
 func NewHandler(tokenIndex map[string]string, registry *Registry, logger *slog.Logger) *Handler {
 	if logger == nil {
 		logger = slog.Default()
+	}
+	if registry == nil {
+		registry = NewRegistry(logger)
 	}
 	return &Handler{
 		tokenIndex: tokenIndex,
@@ -60,6 +72,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.logger.Error("platform websocket upgrade failed", "error", err)
 		return
 	}
+	conn.SetReadLimit(maxMessageSize)
 
 	provider, err := h.authenticate(conn)
 	if err != nil {
@@ -71,12 +84,22 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Register the provider before confirming to the client, so the
+	// registry is consistent by the time the client reads auth_ok.
 	h.registry.Add(provider)
 	defer func() {
 		h.registry.Remove(provider.ID)
 		close(provider.done)
 		conn.Close()
 	}()
+
+	if err := writeJSONWithDeadline(conn, writeWait, authOK{
+		Type:       typeAuthOK,
+		ProviderID: provider.ID,
+		Account:    provider.Account,
+	}); err != nil {
+		return
+	}
 
 	// Start heartbeat goroutine.
 	go h.heartbeat(provider)
@@ -131,16 +154,9 @@ func (h *Handler) authenticate(conn *websocket.Conn) (*Provider, error) {
 		return nil, &authError{"invalid token"}
 	}
 
-	// Step 4: Send auth_ok with assigned provider ID and resolved account.
+	// Build the provider — auth_ok is sent by ServeHTTP after
+	// the provider is registered, ensuring registry consistency.
 	providerID := generateProviderID()
-	if err := writeJSONWithDeadline(conn, writeWait, authOK{
-		Type:       typeAuthOK,
-		ProviderID: providerID,
-		Account:    account,
-	}); err != nil {
-		return nil, err
-	}
-
 	return &Provider{
 		ID:          providerID,
 		Account:     account,

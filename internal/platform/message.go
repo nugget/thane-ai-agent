@@ -5,9 +5,9 @@ package platform
 
 import "encoding/json"
 
-// Message is the generic WebSocket message envelope. All messages between
-// server and client use this structure, with the Type field determining
-// the semantics.
+// Message is the generic WebSocket message envelope used for post-auth
+// communication (pong, future request/response). The auth handshake uses
+// dedicated structs (authRequired, authMessage, authOK, authFailed, ping).
 type Message struct {
 	ID      int64           `json:"id,omitempty"`
 	Type    string          `json:"type"`

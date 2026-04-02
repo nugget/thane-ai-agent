@@ -498,6 +498,36 @@ func (c PlatformConfig) Configured() bool {
 	return false
 }
 
+// Validate checks platform configuration for internal consistency.
+// When enabled, at least one provider must have a non-empty token, and
+// tokens must not be shared across accounts.
+func (c PlatformConfig) Validate() error {
+	if !c.Enabled {
+		return nil
+	}
+	if len(c.Providers) == 0 {
+		return fmt.Errorf("platform: enabled but no providers configured")
+	}
+	hasToken := false
+	seen := make(map[string]string) // token → account
+	for account, p := range c.Providers {
+		for _, tok := range p.Tokens {
+			if tok == "" {
+				continue
+			}
+			hasToken = true
+			if prev, dup := seen[tok]; dup {
+				return fmt.Errorf("platform: duplicate token shared by accounts %q and %q", prev, account)
+			}
+			seen[tok] = account
+		}
+	}
+	if !hasToken {
+		return fmt.Errorf("platform: enabled but no tokens configured for any provider")
+	}
+	return nil
+}
+
 // TokenIndex builds a map from token → account name for O(1) auth lookups.
 func (c PlatformConfig) TokenIndex() map[string]string {
 	idx := make(map[string]string)
@@ -1839,6 +1869,9 @@ func (c *Config) Validate() error {
 		return err
 	}
 	if err := c.validateDelegate(); err != nil {
+		return err
+	}
+	if err := c.Platform.Validate(); err != nil {
 		return err
 	}
 	return nil

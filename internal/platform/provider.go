@@ -161,8 +161,13 @@ func providerToInfo(p *Provider) ProviderInfo {
 func generateProviderID() string {
 	b := make([]byte, 6)
 	if _, err := rand.Read(b); err != nil {
-		// Fallback: extremely unlikely, but don't panic.
-		return "prov_000000"
+		// Fallback: use time-based suffix to avoid collisions.
+		slog.Error("crypto/rand.Read failed generating provider ID; falling back to time-based ID", "err", err)
+		ts := time.Now().UnixNano()
+		for i := 0; i < 6; i++ {
+			b[5-i] = byte(ts & 0xff)
+			ts >>= 8
+		}
 	}
 	return "prov_" + hex.EncodeToString(b)
 }

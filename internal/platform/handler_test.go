@@ -133,10 +133,12 @@ func TestMultiAccountAuth(t *testing.T) {
 	var authReq1 authRequired
 	readJSON(t, conn1, &authReq1)
 	conn1.SetWriteDeadline(time.Now().Add(5 * time.Second))
-	conn1.WriteJSON(authMessage{
+	if err := conn1.WriteJSON(authMessage{
 		Type: typeAuth, Token: "nugget-token",
 		ClientName: "deepslate", ClientID: "uuid-nugget",
-	})
+	}); err != nil {
+		t.Fatalf("nugget auth WriteJSON: %v", err)
+	}
 	var ok1 authOK
 	readJSON(t, conn1, &ok1)
 	if ok1.Account != "nugget" {
@@ -153,10 +155,12 @@ func TestMultiAccountAuth(t *testing.T) {
 	var authReq2 authRequired
 	readJSON(t, conn2, &authReq2)
 	conn2.SetWriteDeadline(time.Now().Add(5 * time.Second))
-	conn2.WriteJSON(authMessage{
+	if err := conn2.WriteJSON(authMessage{
 		Type: typeAuth, Token: "aimee-token",
 		ClientName: "pocket", ClientID: "uuid-aimee",
-	})
+	}); err != nil {
+		t.Fatalf("aimee auth WriteJSON: %v", err)
+	}
 	var ok2 authOK
 	readJSON(t, conn2, &ok2)
 	if ok2.Account != "aimee" {
@@ -204,10 +208,12 @@ func TestMultiDeviceSameAccount(t *testing.T) {
 	var authReq1 authRequired
 	readJSON(t, conn1, &authReq1)
 	conn1.SetWriteDeadline(time.Now().Add(5 * time.Second))
-	conn1.WriteJSON(authMessage{
+	if err := conn1.WriteJSON(authMessage{
 		Type: typeAuth, Token: "nugget-laptop",
 		ClientName: "deepslate", ClientID: "uuid-laptop",
-	})
+	}); err != nil {
+		t.Fatalf("laptop auth WriteJSON: %v", err)
+	}
 	var ok1 authOK
 	readJSON(t, conn1, &ok1)
 
@@ -221,10 +227,12 @@ func TestMultiDeviceSameAccount(t *testing.T) {
 	var authReq2 authRequired
 	readJSON(t, conn2, &authReq2)
 	conn2.SetWriteDeadline(time.Now().Add(5 * time.Second))
-	conn2.WriteJSON(authMessage{
+	if err := conn2.WriteJSON(authMessage{
 		Type: typeAuth, Token: "nugget-desktop",
 		ClientName: "granite", ClientID: "uuid-desktop",
-	})
+	}); err != nil {
+		t.Fatalf("desktop auth WriteJSON: %v", err)
+	}
 	var ok2 authOK
 	readJSON(t, conn2, &ok2)
 
@@ -314,12 +322,14 @@ func TestProviderCleanupOnDisconnect(t *testing.T) {
 	var authReq authRequired
 	readJSON(t, conn, &authReq)
 	conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
-	conn.WriteJSON(authMessage{
+	if err := conn.WriteJSON(authMessage{
 		Type:       typeAuth,
 		Token:      "test-secret",
 		ClientName: "Disconnect Test",
 		ClientID:   "test-uuid-4",
-	})
+	}); err != nil {
+		t.Fatalf("send auth: %v", err)
+	}
 	var ok authOK
 	readJSON(t, conn, &ok)
 
@@ -363,12 +373,14 @@ func TestMultipleProviders(t *testing.T) {
 		var authReq authRequired
 		readJSON(t, conn, &authReq)
 		conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
-		conn.WriteJSON(authMessage{
+		if err := conn.WriteJSON(authMessage{
 			Type:       typeAuth,
 			Token:      "test-secret",
 			ClientName: "Multi Test",
 			ClientID:   "test-uuid-multi",
-		})
+		}); err != nil {
+			t.Fatalf("send auth %d: %v", i, err)
+		}
 		var ok authOK
 		readJSON(t, conn, &ok)
 	}
@@ -399,7 +411,9 @@ func TestAuthHandshakeWrongMessageType(t *testing.T) {
 	var msg struct {
 		Type string `json:"type"`
 	}
-	json.Unmarshal(raw, &msg)
+	if err := json.Unmarshal(raw, &msg); err != nil {
+		t.Fatalf("unmarshal auth_failed: %v (raw: %s)", err, raw)
+	}
 	if msg.Type != typeAuthFailed {
 		t.Fatalf("expected %q, got %q (raw: %s)", typeAuthFailed, msg.Type, raw)
 	}
