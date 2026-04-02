@@ -13,6 +13,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/awareness"
 	"github.com/nugget/thane-ai-agent/internal/buildinfo"
 	"github.com/nugget/thane-ai-agent/internal/channels/email"
+	"github.com/nugget/thane-ai-agent/internal/channels/mqtt"
 	"github.com/nugget/thane-ai-agent/internal/contacts"
 	"github.com/nugget/thane-ai-agent/internal/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/knowledge"
@@ -42,6 +43,7 @@ type Registry struct {
 	factTools       *knowledge.Tools
 	contactTools    *contacts.Tools
 	emailTools      *email.Tools
+	mqttSubTools    *mqtt.Tools
 	notifier        *notifications.Sender
 	notifRecords    *notifications.RecordStore
 	notifRouter     *notifications.NotificationRouter

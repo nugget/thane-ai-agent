@@ -5,6 +5,7 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/channels/email"
 	"github.com/nugget/thane-ai-agent/internal/forge"
+	"github.com/nugget/thane-ai-agent/internal/router"
 	"github.com/nugget/thane-ai-agent/internal/search"
 )
 
@@ -139,6 +140,17 @@ func ExampleConfig() *Config {
 			Subscriptions: []SubscriptionConfig{
 				{Topic: "homeassistant/+/+/state"},
 				{Topic: "frigate/events"},
+				{
+					Topic: "automation/wake/security",
+					Wake: &router.LoopSeed{
+						QualityFloor:     "7",
+						Mission:          "automation",
+						LocalOnly:        "false",
+						DelegationGating: "disabled",
+						SeedTags:         []string{"homeassistant"},
+						Instructions:     "Evaluate the security event and decide if action is needed.",
+					},
+				},
 			},
 			Telemetry: TelemetryConfig{
 				Enabled:  true,

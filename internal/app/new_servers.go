@@ -241,20 +241,57 @@ func (a *App) initServers(s *newState) error {
 		mqttPub := mqtt.New(cfg.MQTT, a.mqttInstanceID, dailyTokens, statsAdapter, logger)
 		a.mqttPub = mqttPub
 
-		// Composite MQTT message handler: routes the instance callback
+		// --- MQTT wake subscription store ---
+		// Manages topic-to-LoopSeed mappings for wake-on-message.
+		// Config-defined wake subscriptions are loaded from
+		// cfg.MQTT.Subscriptions; runtime subscriptions persist in SQLite.
+		subStore, err := mqtt.NewSubscriptionStore(a.mem.DB(), logger)
+		if err != nil {
+			return fmt.Errorf("create mqtt subscription store: %w", err)
+		}
+		subStore.LoadConfig(cfg.MQTT.Subscriptions)
+
+		// Append runtime-persisted wake topics to the subscription list
+		// so the publisher subscribes to them on connect.
+		for _, topic := range subStore.Topics() {
+			found := false
+			for _, sub := range cfg.MQTT.Subscriptions {
+				if sub.Topic == topic {
+					found = true
+					break
+				}
+			}
+			if !found {
+				cfg.MQTT.Subscriptions = append(cfg.MQTT.Subscriptions, config.SubscriptionConfig{
+					Topic: topic,
+				})
+			}
+		}
+
+		// Build the base message handler: routes the instance callback
 		// topic to the notification dispatcher, everything else gets
 		// default debug logging.
+		var baseMsgHandler mqtt.MessageHandler
 		if a.notifCallbackDispatcher != nil {
 			dispatcher := a.notifCallbackDispatcher // capture for closure
 			cbTopic := callbackTopic                // capture for closure
-			mqttPub.SetMessageHandler(func(topic string, payload []byte) {
+			baseMsgHandler = func(topic string, payload []byte) {
 				if topic == cbTopic {
 					dispatcher.Handle(topic, payload)
 					return
 				}
 				logger.Debug("mqtt message received", "topic", topic, "size", len(payload))
-			})
+			}
 		}
+
+		// Wrap with the wake handler: wake-configured topics dispatch
+		// agent conversations, everything else falls through to the
+		// base handler above.
+		mqttPub.SetMessageHandler(mqttWakeHandler(subStore, a.loop, baseMsgHandler, logger))
+
+		// Register MQTT wake subscription tools.
+		mqttTools := mqtt.NewTools(subStore)
+		a.loop.Tools().SetMQTTSubscriptionTools(mqttTools)
 
 		// Defer MQTT connection, initial publish, and publisher loop
 		// to StartWorkers. The publisher object and message handler are

@@ -36,6 +36,7 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/channels/email"
 	"github.com/nugget/thane-ai-agent/internal/forge"
+	"github.com/nugget/thane-ai-agent/internal/router"
 	"github.com/nugget/thane-ai-agent/internal/search"
 	"gopkg.in/yaml.v3"
 )
@@ -948,6 +949,12 @@ type SubscriptionConfig struct {
 	// Topic is the MQTT topic filter (e.g., "homeassistant/+/+/state",
 	// "frigate/events"). Supports MQTT wildcard characters.
 	Topic string `yaml:"topic"`
+
+	// Wake, when non-nil, enables agent wake on this topic. Messages
+	// arriving on the topic trigger an agent conversation using the
+	// seed's routing configuration. When nil, messages are received
+	// for ambient awareness only (debug-logged, not acted upon).
+	Wake *router.LoopSeed `yaml:"wake,omitempty"`
 }
 
 // TelemetryConfig configures MQTT telemetry publishing. When Enabled
