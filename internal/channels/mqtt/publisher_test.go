@@ -2,12 +2,14 @@ package mqtt
 
 import (
 	"encoding/json"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/eclipse/paho.golang/paho"
 	"github.com/nugget/thane-ai-agent/internal/config"
 )
 
@@ -360,6 +362,92 @@ func TestSensorConfig_JsonAttributesTopic(t *testing.T) {
 	}
 	if strings.Contains(string(data), `"json_attributes_topic"`) {
 		t.Errorf("json_attributes_topic should be omitted when empty:\n%s", data)
+	}
+}
+
+func TestPublisher_BuildClientConfig_HandlerRegistered(t *testing.T) {
+	cfg := config.MQTTConfig{
+		Broker:     "mqtt://localhost:1883",
+		DeviceName: "test-thane",
+		Subscriptions: []config.SubscriptionConfig{
+			{Topic: "test/topic"},
+		},
+	}
+
+	var handlerCalled bool
+	p := New(cfg, "instance-123", NewDailyTokens(time.UTC), nil, nil)
+	p.SetMessageHandler(func(topic string, payload []byte) {
+		handlerCalled = true
+	})
+
+	brokerURL, err := url.Parse(cfg.Broker)
+	if err != nil {
+		t.Fatalf("parse broker URL: %v", err)
+	}
+
+	pahoCfg := p.buildClientConfig(brokerURL)
+
+	// The handler must be registered on pahoCfg.OnPublishReceived so it
+	// persists across autopaho reconnects. Previously this was done via
+	// cm.AddOnPublishReceived() which silently no-oped when c.cli was nil.
+	if len(pahoCfg.OnPublishReceived) == 0 {
+		t.Fatal("OnPublishReceived is empty; handler was not registered on the config")
+	}
+
+	// Verify the registered handler actually routes to our MessageHandler.
+	pr := paho.PublishReceived{
+		Packet: &paho.Publish{
+			Topic:   "test/topic",
+			Payload: []byte("hello"),
+		},
+	}
+	if _, err := pahoCfg.OnPublishReceived[0](pr); err != nil {
+		t.Fatalf("OnPublishReceived handler returned error: %v", err)
+	}
+	if !handlerCalled {
+		t.Error("OnPublishReceived handler did not invoke the MessageHandler")
+	}
+}
+
+func TestPublisher_BuildClientConfig_NoHandlerWithoutSubs(t *testing.T) {
+	cfg := config.MQTTConfig{
+		Broker:     "mqtt://localhost:1883",
+		DeviceName: "test-thane",
+		// No subscriptions.
+	}
+	p := New(cfg, "instance-123", NewDailyTokens(time.UTC), nil, nil)
+
+	brokerURL, err := url.Parse(cfg.Broker)
+	if err != nil {
+		t.Fatalf("parse broker URL: %v", err)
+	}
+
+	pahoCfg := p.buildClientConfig(brokerURL)
+
+	if len(pahoCfg.OnPublishReceived) != 0 {
+		t.Errorf("OnPublishReceived should be empty without subscriptions, got %d handlers",
+			len(pahoCfg.OnPublishReceived))
+	}
+}
+
+func TestPublisher_BuildClientConfig_DynamicTopicsTriggersHandler(t *testing.T) {
+	cfg := config.MQTTConfig{
+		Broker:     "mqtt://localhost:1883",
+		DeviceName: "test-thane",
+		// No config subscriptions, but dynamic topics set.
+	}
+	p := New(cfg, "instance-123", NewDailyTokens(time.UTC), nil, nil)
+	p.SetDynamicTopics(func() []string { return []string{"dynamic/topic"} })
+
+	brokerURL, err := url.Parse(cfg.Broker)
+	if err != nil {
+		t.Fatalf("parse broker URL: %v", err)
+	}
+
+	pahoCfg := p.buildClientConfig(brokerURL)
+
+	if len(pahoCfg.OnPublishReceived) == 0 {
+		t.Fatal("OnPublishReceived should be registered when dynamicTopics is set")
 	}
 }
 
