@@ -19,8 +19,10 @@ func (r *Registry) registerMQTTSubscriptionTools() {
 	}
 
 	r.Register(&Tool{
-		Name:        "mqtt_wake_list",
-		Description: "List all MQTT wake subscriptions. Shows topic filters that trigger agent conversations when messages arrive, along with their routing configuration (mission, quality floor, model) and source (config or runtime).",
+		Name: "mqtt_wake_list",
+		Description: `List all MQTT wake subscriptions. Shows topic filters that trigger agent conversations when messages arrive, along with their routing configuration (mission, quality floor, model) and source (config or runtime).
+
+Topic conventions: For instance-directed wakes (HA automations targeting this agent), use thane/{device_name}/wake/{purpose}. This follows the existing thane/{device_name}/ namespace used for sensors and availability. For shared events from external systems (camera events, environmental alerts, etc.), subscribe to the source's native topic directly — don't force external topics into the Thane namespace. MQTT wildcards: + matches exactly one topic level, # matches any remaining levels and must be the last segment. Config-defined subscriptions are immutable at runtime; use mqtt_wake_add for runtime subscriptions. The MQTT payload becomes the user message content; the LoopSeed attached to the subscription controls model routing, tool access, and capability tags.`,
 		Parameters: map[string]any{
 			"type":       "object",
 			"properties": map[string]any{},
@@ -31,8 +33,10 @@ func (r *Registry) registerMQTTSubscriptionTools() {
 	})
 
 	r.Register(&Tool{
-		Name:        "mqtt_wake_add",
-		Description: "Add a runtime MQTT wake subscription. When a message arrives on the given topic, the agent wakes with the specified routing configuration. Supports MQTT wildcards (+ for single level, # for multi-level). The subscription persists across restarts and takes effect on the next broker reconnect.",
+		Name: "mqtt_wake_add",
+		Description: `Add a runtime MQTT wake subscription. When a message arrives on the given topic, the agent wakes with the specified routing configuration. The subscription persists across restarts and takes effect on the next broker reconnect.
+
+Topic conventions: Use thane/{device_name}/wake/{purpose} for instance-directed wakes. Subscribe to external topics directly for shared events (e.g., frigate/+/events). MQTT wildcards: + matches one level, # matches remaining levels (must be last segment). Each wake creates a fresh conversation — no state accumulates across messages. The MQTT payload becomes the user message, optionally wrapped with the instructions field.`,
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
