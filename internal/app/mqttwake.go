@@ -138,7 +138,8 @@ func dispatchViaLoop(
 		Jitter:       looppkg.Float64Ptr(0),
 		ParentID:     parentID,
 		Handler: func(hCtx context.Context, _ any) error {
-			resp, err := runner.Run(hCtx, req, nil)
+			stream := agent.BuildProgressStream(looppkg.ProgressFunc(hCtx))
+			resp, err := runner.Run(hCtx, req, stream)
 			if err != nil {
 				logger.Error("mqtt wake agent failed",
 					"conv_id", convID,
@@ -147,6 +148,14 @@ func dispatchViaLoop(
 				)
 				return fmt.Errorf("mqtt wake %s on %s: %w", convID, topic, err)
 			}
+
+			looppkg.ReportAgentRun(hCtx, looppkg.AgentRunSummary{
+				RequestID:    resp.RequestID,
+				Model:        resp.Model,
+				InputTokens:  resp.InputTokens,
+				OutputTokens: resp.OutputTokens,
+			})
+
 			logger.Info("mqtt wake complete",
 				"conv_id", convID,
 				"topic", topic,

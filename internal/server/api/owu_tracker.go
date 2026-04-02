@@ -159,17 +159,19 @@ func (t *OWUTracker) ensureConvLoop(_ context.Context, convID, displayName strin
 			}()
 			defer cancel()
 
-			progressFn := loop.ProgressFunc(hCtx)
+			progressStream := agent.BuildProgressStream(loop.ProgressFunc(hCtx))
 			// Fan-out: forward agent stream events to both the HTTP
 			// streaming callback and the loop progress func.
-			combined := fanOutStream(w.callback, buildAgentStream(progressFn))
+			combined := fanOutStream(w.callback, progressStream)
 			resp, err := t.runner.Run(runCtx, w.req, combined)
 			w.respCh <- owuResult{resp: resp, err: err}
-			// Report request ID for dashboard request-detail linking.
 			if resp != nil {
-				if summary := loop.IterationSummary(hCtx); summary != nil {
-					summary["request_id"] = resp.RequestID
-				}
+				loop.ReportAgentRun(hCtx, loop.AgentRunSummary{
+					RequestID:    resp.RequestID,
+					Model:        resp.Model,
+					InputTokens:  resp.InputTokens,
+					OutputTokens: resp.OutputTokens,
+				})
 			}
 			return err
 		},
@@ -255,61 +257,5 @@ func fanOutStream(a, b agent.StreamCallback) agent.StreamCallback {
 	return func(e agent.StreamEvent) {
 		a(e)
 		b(e)
-	}
-}
-
-const maxToolResultLen = 200
-
-// buildAgentStream converts a loop progress func into an agent
-// StreamCallback that forwards in-flight LLM and tool events to the
-// event bus for dashboard visibility. Returns nil if progressFn is nil.
-func buildAgentStream(progressFn func(string, map[string]any)) agent.StreamCallback {
-	if progressFn == nil {
-		return nil
-	}
-	return func(e agent.StreamEvent) {
-		switch e.Kind {
-		case agent.KindLLMStart:
-			if e.Response != nil {
-				data := map[string]any{
-					"model": e.Response.Model,
-				}
-				for k, v := range e.Data {
-					data[k] = v
-				}
-				progressFn(events.KindLoopLLMStart, data)
-			}
-		case agent.KindToolCallStart:
-			if e.ToolCall != nil {
-				data := map[string]any{
-					"tool": e.ToolCall.Function.Name,
-				}
-				if len(e.ToolCall.Function.Arguments) > 0 {
-					data["args"] = e.ToolCall.Function.Arguments
-				}
-				progressFn(events.KindLoopToolStart, data)
-			}
-		case agent.KindToolCallDone:
-			data := map[string]any{"tool": e.ToolName}
-			if e.ToolError != "" {
-				data["error"] = e.ToolError
-			}
-			if e.ToolResult != "" {
-				r := e.ToolResult
-				if len(r) > maxToolResultLen {
-					r = r[:maxToolResultLen] + "…"
-				}
-				data["result"] = r
-			}
-			progressFn(events.KindLoopToolDone, data)
-		case agent.KindLLMResponse:
-			if e.Response != nil {
-				progressFn(events.KindLoopLLMResponse, map[string]any{
-					"model":         e.Response.Model,
-					"input_tokens":  e.Response.InputTokens,
-					"output_tokens": e.Response.OutputTokens,
-				})
-			}
-		}
 	}
 }
