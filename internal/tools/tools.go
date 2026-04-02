@@ -35,28 +35,28 @@ type Tool struct {
 
 // Registry holds available tools.
 type Registry struct {
-	tools             map[string]*Tool
-	tagIndex          map[string][]string // tag → tool names
-	ha                *homeassistant.Client
-	scheduler         *scheduler.Scheduler
-	factTools         *knowledge.Tools
-	contactTools      *contacts.Tools
-	anticipationTools *scheduler.AnticipationTools
-	emailTools        *email.Tools
-	notifier          *notifications.Sender
-	notifRecords      *notifications.RecordStore
-	notifRouter       *notifications.NotificationRouter
-	notifDispatcher   CallbackDispatcher
-	forgeTools        forgeHandler
-	fileTools         *FileTools
-	shellExec         *ShellExec
-	attachmentTools   *attachments.Tools
-	watchlistStore    *awareness.WatchlistStore
-	tempFileStore     *TempFileStore
-	usageStore        *usage.Store
-	lensStore         *LensStore
-	logIndexDB        *sql.DB
-	contentResolver   *ContentResolver
+	tools           map[string]*Tool
+	tagIndex        map[string][]string // tag → tool names
+	ha              *homeassistant.Client
+	scheduler       *scheduler.Scheduler
+	factTools       *knowledge.Tools
+	contactTools    *contacts.Tools
+	wakeTools       *homeassistant.WakeTools
+	emailTools      *email.Tools
+	notifier        *notifications.Sender
+	notifRecords    *notifications.RecordStore
+	notifRouter     *notifications.NotificationRouter
+	notifDispatcher CallbackDispatcher
+	forgeTools      forgeHandler
+	fileTools       *FileTools
+	shellExec       *ShellExec
+	attachmentTools *attachments.Tools
+	watchlistStore  *awareness.WatchlistStore
+	tempFileStore   *TempFileStore
+	usageStore      *usage.Store
+	lensStore       *LensStore
+	logIndexDB      *sql.DB
+	contentResolver *ContentResolver
 }
 
 // NewEmptyRegistry creates an empty tool registry with no built-in tools.
@@ -83,10 +83,10 @@ func (r *Registry) SetFactTools(ft *knowledge.Tools) {
 	r.registerFactTools()
 }
 
-// SetAnticipationTools adds anticipation management tools to the registry.
-func (r *Registry) SetAnticipationTools(at *scheduler.AnticipationTools) {
-	r.anticipationTools = at
-	r.registerAnticipationTools()
+// SetWakeTools adds wake subscription management tools to the registry.
+func (r *Registry) SetWakeTools(wt *homeassistant.WakeTools) {
+	r.wakeTools = wt
+	r.registerWakeTools()
 }
 
 // SetFileTools adds file operation tools to the registry.
@@ -328,120 +328,128 @@ func (r *Registry) registerFactTools() {
 	})
 }
 
-func (r *Registry) registerAnticipationTools() {
-	if r.anticipationTools == nil {
+func (r *Registry) registerWakeTools() {
+	if r.wakeTools == nil {
 		return
 	}
 
 	r.Register(&Tool{
 		Name:        "create_anticipation",
-		Description: "Create an anticipation — something you're expecting to happen. When you wake and conditions match, you'll receive context to remember why you care about this moment.",
+		Description: "Create a wake subscription — bind an MQTT topic to an agent wake with pre-loaded knowledge context. When a message arrives on the topic, you wake with the KB reference and context already loaded. Pair with create_ha_automation to build HA automations that publish to your wake topics.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"description": map[string]any{
+				"topic": map[string]any{
 					"type":        "string",
-					"description": "Short description of what you're anticipating (e.g., 'Dan's flight arriving')",
+					"description": "MQTT topic to subscribe to (e.g., 'thane/nugget/wake/garage_motion'). Supports MQTT wildcards.",
+				},
+				"name": map[string]any{
+					"type":        "string",
+					"description": "Human-readable name for this subscription (e.g., 'Garage motion at night')",
+				},
+				"kb_ref": map[string]any{
+					"type":        "string",
+					"description": "Knowledge base reference — fact key or KB-relative file path (e.g., 'routines/security_protocol.md')",
 				},
 				"context": map[string]any{
 					"type":        "string",
-					"description": "Instructions/reasoning to inject when this anticipation matches. What should you do or check when this happens?",
-				},
-				"after_time": map[string]any{
-					"type":        "string",
-					"description": "ISO8601 timestamp — anticipation activates after this time (e.g., '2026-02-09T14:30:00Z')",
-				},
-				"entity_id": map[string]any{
-					"type":        "string",
-					"description": "Entity to watch (e.g., 'person.dan', 'binary_sensor.front_door')",
-				},
-				"entity_state": map[string]any{
-					"type":        "string",
-					"description": "State to match for entity (e.g., 'home', 'on', 'open')",
-				},
-				"zone": map[string]any{
-					"type":        "string",
-					"description": "Zone name for presence matching (e.g., 'airport', 'home')",
-				},
-				"zone_action": map[string]any{
-					"type":        "string",
-					"enum":        []string{"enter", "leave"},
-					"description": "Zone transition type",
-				},
-				"event_type": map[string]any{
-					"type":        "string",
-					"description": "Event type to match (e.g., 'presence_change', 'state_change')",
-				},
-				"expires_in": map[string]any{
-					"type":        "string",
-					"description": "Duration until expiration (e.g., '2h', '24h', '7d'). Omit for no expiration.",
-				},
-				"cooldown": map[string]any{
-					"type":        "string",
-					"description": "Minimum time between wake firings for this anticipation (e.g., '5m', '1h'). Omit to use the global default.",
-				},
-				"recurring": map[string]any{
-					"type":        "boolean",
-					"description": "If true, the anticipation persists after firing (keeps firing on matches, subject to cooldown). If false (default), auto-resolved after the first wake.",
+					"description": "Instructions for yourself when this wake fires. What should you do or check?",
 				},
 				"context_entities": map[string]any{
 					"type":        "array",
 					"items":       map[string]any{"type": "string"},
-					"description": "Entity IDs to fetch and inject as context when this anticipation fires (max 10). The triggering entity is auto-included.",
+					"description": "HA entity IDs to snapshot and inject as context when this fires (max 10). E.g., ['binary_sensor.garage_motion', 'light.garage'].",
+				},
+				"kb_refs": map[string]any{
+					"type":        "array",
+					"items":       map[string]any{"type": "string"},
+					"description": "Additional KB articles to pre-load on wake.",
+				},
+				"model": map[string]any{
+					"type":        "string",
+					"description": "Soft model preference for wake execution (e.g., 'claude-sonnet-4-20250514'). Omit to let the router choose.",
+				},
+				"local_only": map[string]any{
+					"type":        "boolean",
+					"description": "If false, allows cloud models for wake execution. Default is true (local models only).",
+				},
+				"quality_floor": map[string]any{
+					"type":        "integer",
+					"description": "Minimum model quality rating (1-10) for wake execution. Default is 6.",
 				},
 			},
-			"required": []string{"description", "context"},
+			"required": []string{"topic", "name"},
 		},
 		Handler: func(ctx context.Context, args map[string]any) (string, error) {
-			return r.anticipationTools.Execute("create_anticipation", args)
+			return r.wakeTools.Execute("create_anticipation", args)
 		},
 	})
 
 	r.Register(&Tool{
 		Name:        "list_anticipations",
-		Description: "List all active (non-resolved, non-expired) anticipations.",
+		Description: "List all active wake subscriptions with operational health: fire count, fire rate, last fired time, age, and KB references.",
 		Parameters: map[string]any{
 			"type":       "object",
 			"properties": map[string]any{},
 		},
 		Handler: func(ctx context.Context, args map[string]any) (string, error) {
-			return r.anticipationTools.Execute("list_anticipations", args)
+			return r.wakeTools.Execute("list_anticipations", args)
 		},
 	})
 
 	r.Register(&Tool{
-		Name:        "resolve_anticipation",
-		Description: "Mark an anticipation as resolved — it happened and was handled.",
+		Name:        "update_anticipation",
+		Description: "Update a wake subscription — modify the topic, name, KB reference, context, or enabled state.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"id": map[string]any{
 					"type":        "string",
-					"description": "Anticipation ID to resolve",
+					"description": "Wake subscription ID to update",
+				},
+				"topic": map[string]any{
+					"type":        "string",
+					"description": "New MQTT topic (optional)",
+				},
+				"name": map[string]any{
+					"type":        "string",
+					"description": "New name (optional)",
+				},
+				"kb_ref": map[string]any{
+					"type":        "string",
+					"description": "New KB reference (optional)",
+				},
+				"context": map[string]any{
+					"type":        "string",
+					"description": "New context/instructions (optional)",
+				},
+				"enabled": map[string]any{
+					"type":        "boolean",
+					"description": "Enable or disable the subscription (optional)",
 				},
 			},
 			"required": []string{"id"},
 		},
 		Handler: func(ctx context.Context, args map[string]any) (string, error) {
-			return r.anticipationTools.Execute("resolve_anticipation", args)
+			return r.wakeTools.Execute("update_anticipation", args)
 		},
 	})
 
 	r.Register(&Tool{
 		Name:        "cancel_anticipation",
-		Description: "Cancel an anticipation — no longer relevant or needed.",
+		Description: "Cancel a wake subscription — remove it permanently.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"id": map[string]any{
 					"type":        "string",
-					"description": "Anticipation ID to cancel",
+					"description": "Wake subscription ID to cancel",
 				},
 			},
 			"required": []string{"id"},
 		},
 		Handler: func(ctx context.Context, args map[string]any) (string, error) {
-			return r.anticipationTools.Execute("cancel_anticipation", args)
+			return r.wakeTools.Execute("cancel_anticipation", args)
 		},
 	})
 }

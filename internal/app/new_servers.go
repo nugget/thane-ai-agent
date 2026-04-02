@@ -214,18 +214,59 @@ func (a *App) initServers(s *newState) error {
 			logger.Info("notification callback topic configured", "topic", callbackTopic)
 		}
 
+		// Auto-subscribe to wake topics from active wake subscriptions.
+		var wakeHandler *WakeHandler
+		if s.wakeStore != nil {
+			activeSubs, err := s.wakeStore.Active()
+			if err != nil {
+				logger.Warn("failed to load active wake subscriptions", "error", err)
+			}
+			for _, sub := range activeSubs {
+				if !sub.Enabled || sub.Topic == "" {
+					continue
+				}
+				found := false
+				for _, existing := range cfg.MQTT.Subscriptions {
+					if existing.Topic == sub.Topic {
+						found = true
+						break
+					}
+				}
+				if !found {
+					cfg.MQTT.Subscriptions = append(cfg.MQTT.Subscriptions, config.SubscriptionConfig{
+						Topic: sub.Topic,
+					})
+				}
+			}
+			wakeHandler = NewWakeHandler(WakeHandlerConfig{
+				Store:  s.wakeStore,
+				Fire:   s.wakeStore,
+				HA:     a.ha,
+				Runner: a.loop,
+				Logger: logger,
+			})
+			logger.Info("wake handler initialized", "active_subscriptions", len(activeSubs))
+		}
+
 		mqttPub := mqtt.New(cfg.MQTT, a.mqttInstanceID, dailyTokens, statsAdapter, logger)
 		a.mqttPub = mqttPub
 
-		// Composite MQTT message handler: routes the instance callback
-		// topic to the notification dispatcher, everything else gets
-		// default debug logging.
-		if a.notifCallbackDispatcher != nil {
-			dispatcher := a.notifCallbackDispatcher // capture for closure
-			cbTopic := callbackTopic                // capture for closure
+		// Composite MQTT message handler: routes topics to the
+		// notification dispatcher and/or wake handler, with default
+		// debug logging for unmatched topics.
+		{
+			dispatcher := a.notifCallbackDispatcher // may be nil
+			cbTopic := callbackTopic                // empty if dispatcher nil
+			wh := wakeHandler                       // may be nil
 			mqttPub.SetMessageHandler(func(topic string, payload []byte) {
-				if topic == cbTopic {
+				if dispatcher != nil && topic == cbTopic {
 					dispatcher.Handle(topic, payload)
+					return
+				}
+				if wh != nil {
+					wh.HandleMessage(topic, payload)
+					// Wake handler handles all non-callback topics.
+					// If no subscription matched, it returns silently.
 					return
 				}
 				logger.Debug("mqtt message received", "topic", topic, "size", len(payload))

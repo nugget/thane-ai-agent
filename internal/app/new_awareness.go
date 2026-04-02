@@ -15,7 +15,6 @@ import (
 	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
 	"github.com/nugget/thane-ai-agent/internal/memory"
 	"github.com/nugget/thane-ai-agent/internal/notifications"
-	"github.com/nugget/thane-ai-agent/internal/scheduler"
 	"github.com/nugget/thane-ai-agent/internal/tools"
 	"github.com/nugget/thane-ai-agent/internal/unifi"
 )
@@ -30,8 +29,8 @@ func (a *App) initAwareness(s *newState) error {
 	// --- Context providers ---
 	// Dynamic system prompt injection. Providers add context based on
 	// current state (e.g., pending anticipations) before each LLM call.
-	anticipationProvider := scheduler.NewAnticipationProvider(s.anticipationStore)
-	contextProvider := agent.NewCompositeContextProvider(anticipationProvider)
+	wakeProvider := homeassistant.NewWakeProvider(s.wakeStore)
+	contextProvider := agent.NewCompositeContextProvider(wakeProvider)
 	contextProvider.Add(agent.NewChannelProvider(&contactNameLookup{store: a.contactStore, logger: logger}))
 	contextProvider.Add(awareness.NewChannelOverviewProvider(awareness.ChannelOverviewConfig{
 		Loops:  &channelLoopAdapter{registry: a.loopRegistry},
@@ -270,36 +269,17 @@ func (a *App) initAwareness(s *newState) error {
 		}
 		filter := homeassistant.NewEntityFilter(globs, logger)
 		limiter := homeassistant.NewEntityRateLimiter(cfg.HomeAssistant.Subscribe.RateLimitPerMinute)
-		cooldown := time.Duration(cfg.HomeAssistant.Subscribe.CooldownMinutes) * time.Minute
-
-		wakeCfg := WakeBridgeConfig{
-			Store:    s.anticipationStore,
-			Resolver: s.anticipationStore,
-			Runner:   a.loop,
-			Provider: anticipationProvider,
-			Logger:   logger,
-			Ctx:      s.ctx,
-			Cooldown: cooldown,
+		// Compose handler: state window and person tracker see every
+		// state change that passes the filter and rate limiter.
+		// Wake-triggering is now handled via MQTT (see WakeHandler in
+		// initServers) instead of the v1 WakeBridge.
+		var handler homeassistant.StateWatchHandler = func(entityID, oldState, newState string) {
+			stateWindowProvider.HandleStateChange(entityID, oldState, newState)
 		}
-		if a.ha != nil {
-			wakeCfg.HA = a.ha
-		}
-		bridge := NewWakeBridge(wakeCfg)
-
-		// Compose handler: state window, person tracker, and wake bridge
-		// all see every state change that passes the filter and rate limiter.
-		var handler homeassistant.StateWatchHandler = bridge.HandleStateChange
 		if s.personTracker != nil {
-			bridgeHandler := handler
-			handler = func(entityID, oldState, newState string) {
-				s.personTracker.HandleStateChange(entityID, oldState, newState)
-				bridgeHandler(entityID, oldState, newState)
-			}
-		}
-		{
 			prevHandler := handler
 			handler = func(entityID, oldState, newState string) {
-				stateWindowProvider.HandleStateChange(entityID, oldState, newState)
+				s.personTracker.HandleStateChange(entityID, oldState, newState)
 				prevHandler(entityID, oldState, newState)
 			}
 		}
@@ -400,7 +380,6 @@ func (a *App) initAwareness(s *newState) error {
 			logger.Info("state watcher started",
 				"entity_globs", globs,
 				"rate_limit_per_minute", cfg.HomeAssistant.Subscribe.RateLimitPerMinute,
-				"cooldown", cooldown,
 			)
 			return nil
 		})

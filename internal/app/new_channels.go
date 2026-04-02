@@ -16,6 +16,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/connwatch"
 	"github.com/nugget/thane-ai-agent/internal/contacts"
 	"github.com/nugget/thane-ai-agent/internal/forge"
+	"github.com/nugget/thane-ai-agent/internal/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/knowledge"
 	"github.com/nugget/thane-ai-agent/internal/llm"
 	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
@@ -27,7 +28,6 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/prompts"
 	"github.com/nugget/thane-ai-agent/internal/provenance"
 	"github.com/nugget/thane-ai-agent/internal/router"
-	"github.com/nugget/thane-ai-agent/internal/scheduler"
 	"github.com/nugget/thane-ai-agent/internal/search"
 	"github.com/nugget/thane-ai-agent/internal/tools"
 )
@@ -259,19 +259,19 @@ func (a *App) initChannels(s *newState) error {
 		a.loop.SetExtractor(extractor)
 	}
 
-	// --- Anticipation store ---
-	// Bridges intent to action. The agent can set anticipations ("I expect
-	// X to happen") that trigger context injection when they're fulfilled.
+	// --- Wake subscription store ---
+	// MQTT wake subscriptions: bind a topic to an agent wake with
+	// pre-loaded KB context. Replaces v1 anticipation store.
 	// Shares the main thane.db connection.
-	anticipationStore, err := scheduler.NewAnticipationStore(a.mem.DB())
+	wakeStore, err := homeassistant.NewWakeStore(a.mem.DB())
 	if err != nil {
-		return fmt.Errorf("create anticipation store: %w", err)
+		return fmt.Errorf("create wake store: %w", err)
 	}
-	s.anticipationStore = anticipationStore
+	s.wakeStore = wakeStore
 
-	anticipationTools := scheduler.NewAnticipationTools(anticipationStore)
-	a.loop.Tools().SetAnticipationTools(anticipationTools)
-	a.logger.Info("anticipation store initialized")
+	wakeTools := homeassistant.NewWakeTools(wakeStore)
+	a.loop.Tools().SetWakeTools(wakeTools)
+	a.logger.Info("wake subscription store initialized")
 
 	// --- Provenance store ---
 	// Git-backed file storage with SSH signature enforcement. When
