@@ -239,3 +239,31 @@ func TestSubscriptionStoreTopics(t *testing.T) {
 		t.Errorf("topics = %v, want [topic/a, topic/b]", topics)
 	}
 }
+
+func TestSubscriptionStoreSubscribeHook(t *testing.T) {
+	s := newTestStore(t)
+
+	var hookedTopics []string
+	s.SetSubscribeHook(func(topics []string) {
+		hookedTopics = append(hookedTopics, topics...)
+	})
+
+	_, err := s.Add("hook/test", router.LoopSeed{Mission: "automation"})
+	if err != nil {
+		t.Fatalf("add: %v", err)
+	}
+
+	if len(hookedTopics) != 1 || hookedTopics[0] != "hook/test" {
+		t.Errorf("hook received %v, want [hook/test]", hookedTopics)
+	}
+}
+
+func TestSubscriptionStoreSubscribeHookNotCalledWithoutHook(t *testing.T) {
+	s := newTestStore(t)
+
+	// No hook set — Add should not panic.
+	_, err := s.Add("no-hook/test", router.LoopSeed{})
+	if err != nil {
+		t.Fatalf("add: %v", err)
+	}
+}

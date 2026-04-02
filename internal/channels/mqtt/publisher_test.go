@@ -382,3 +382,71 @@ func TestMQTTConfig_Configured(t *testing.T) {
 		})
 	}
 }
+
+func TestPublisher_CollectSubscribeTopics(t *testing.T) {
+	tests := []struct {
+		name          string
+		configTopics  []config.SubscriptionConfig
+		dynamicTopics []string
+		want          []string
+	}{
+		{
+			name: "config only",
+			configTopics: []config.SubscriptionConfig{
+				{Topic: "a/b"},
+				{Topic: "c/d"},
+			},
+			want: []string{"a/b", "c/d"},
+		},
+		{
+			name:          "dynamic only",
+			dynamicTopics: []string{"x/y", "z/w"},
+			want:          []string{"x/y", "z/w"},
+		},
+		{
+			name: "config and dynamic merged",
+			configTopics: []config.SubscriptionConfig{
+				{Topic: "a/b"},
+			},
+			dynamicTopics: []string{"c/d"},
+			want:          []string{"a/b", "c/d"},
+		},
+		{
+			name: "duplicates removed",
+			configTopics: []config.SubscriptionConfig{
+				{Topic: "a/b"},
+				{Topic: "a/b"},
+			},
+			dynamicTopics: []string{"a/b", "c/d"},
+			want:          []string{"a/b", "c/d"},
+		},
+		{
+			name: "empty",
+			want: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			p := &Publisher{
+				cfg: config.MQTTConfig{
+					Subscriptions: tt.configTopics,
+				},
+			}
+			if tt.dynamicTopics != nil {
+				dynTopics := tt.dynamicTopics // capture
+				p.dynamicTopics = func() []string { return dynTopics }
+			}
+
+			got := p.collectSubscribeTopics()
+			if len(got) != len(tt.want) {
+				t.Fatalf("collectSubscribeTopics() = %v, want %v", got, tt.want)
+			}
+			for i, w := range tt.want {
+				if got[i] != w {
+					t.Errorf("topic[%d] = %q, want %q", i, got[i], w)
+				}
+			}
+		})
+	}
+}
