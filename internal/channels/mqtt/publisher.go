@@ -535,33 +535,14 @@ func (p *Publisher) publishAvailability(ctx context.Context, cm *autopaho.Connec
 // topic filters. Called on every (re-)connect because autopaho does
 // not automatically resubscribe after reconnection.
 func (p *Publisher) subscribe(ctx context.Context, cm *autopaho.ConnectionManager) {
-	// Collect all topics: config-defined + dynamic (runtime wake subs, etc.).
-	seen := make(map[string]struct{})
-	var opts []paho.SubscribeOptions
-	var topics []string
-
-	for _, sub := range p.cfg.Subscriptions {
-		if _, dup := seen[sub.Topic]; dup {
-			continue
-		}
-		seen[sub.Topic] = struct{}{}
-		opts = append(opts, paho.SubscribeOptions{Topic: sub.Topic, QoS: 0})
-		topics = append(topics, sub.Topic)
-	}
-
-	if p.dynamicTopics != nil {
-		for _, t := range p.dynamicTopics() {
-			if _, dup := seen[t]; dup {
-				continue
-			}
-			seen[t] = struct{}{}
-			opts = append(opts, paho.SubscribeOptions{Topic: t, QoS: 0})
-			topics = append(topics, t)
-		}
-	}
-
-	if len(opts) == 0 {
+	topics := p.collectSubscribeTopics()
+	if len(topics) == 0 {
 		return
+	}
+
+	opts := make([]paho.SubscribeOptions, len(topics))
+	for i, t := range topics {
+		opts[i] = paho.SubscribeOptions{Topic: t, QoS: 0}
 	}
 
 	if _, err := cm.Subscribe(ctx, &paho.Subscribe{
@@ -572,6 +553,34 @@ func (p *Publisher) subscribe(ctx context.Context, cm *autopaho.ConnectionManage
 	} else {
 		p.logger.Info("mqtt subscribed to topics", "topics", topics)
 	}
+}
+
+// collectSubscribeTopics merges config-defined and dynamic topic
+// filters, deduplicating by topic string. Order is config first, then
+// dynamic.
+func (p *Publisher) collectSubscribeTopics() []string {
+	seen := make(map[string]struct{})
+	var topics []string
+
+	for _, sub := range p.cfg.Subscriptions {
+		if _, dup := seen[sub.Topic]; dup {
+			continue
+		}
+		seen[sub.Topic] = struct{}{}
+		topics = append(topics, sub.Topic)
+	}
+
+	if p.dynamicTopics != nil {
+		for _, t := range p.dynamicTopics() {
+			if _, dup := seen[t]; dup {
+				continue
+			}
+			seen[t] = struct{}{}
+			topics = append(topics, t)
+		}
+	}
+
+	return topics
 }
 
 // --- Periodic state loop ---

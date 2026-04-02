@@ -90,7 +90,7 @@ func (t *Tools) HandleAddWakeSubscription(_ context.Context, args map[string]any
 		return "", err
 	}
 
-	return fmt.Sprintf("Wake subscription added (id=%s, topic=%s). Subscription is active immediately.", ws.ID, ws.Topic), nil
+	return fmt.Sprintf("Wake subscription added (id=%s, topic=%s). Live subscribe attempted; activates on next reconnect if broker is not currently connected.", ws.ID, ws.Topic), nil
 }
 
 // HandleRemoveWakeSubscription removes a runtime subscription by ID.

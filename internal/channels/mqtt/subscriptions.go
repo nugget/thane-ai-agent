@@ -135,8 +135,11 @@ func (s *SubscriptionStore) LoadConfig(subs []config.SubscriptionConfig) {
 
 // SetSubscribeHook registers a callback that is invoked after a runtime
 // subscription is added. The callback receives the new topic filter(s)
-// so the caller can send a live SUBSCRIBE to the broker.
+// so the caller can send a live SUBSCRIBE to the broker. Must be called
+// before any concurrent Add calls (typically during init).
 func (s *SubscriptionStore) SetSubscribeHook(fn func(topics []string)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.subscribeHook = fn
 }
 
@@ -171,8 +174,13 @@ func (s *SubscriptionStore) Add(topic string, seed router.LoopSeed) (WakeSubscri
 	s.logger.Info("mqtt wake subscription added",
 		"id", ws.ID, "topic", ws.Topic)
 
-	if s.subscribeHook != nil {
-		s.subscribeHook([]string{ws.Topic})
+	// Copy under lock to avoid racing with SetSubscribeHook.
+	s.mu.RLock()
+	hook := s.subscribeHook
+	s.mu.RUnlock()
+
+	if hook != nil {
+		hook([]string{ws.Topic})
 	}
 
 	return ws, nil
