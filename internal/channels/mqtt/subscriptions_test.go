@@ -122,7 +122,9 @@ func TestSubscriptionStoreLoadConfig(t *testing.T) {
 		{Topic: "frigate/events", Wake: &seed}, // wake-enabled
 	}
 
-	s.LoadConfig(cfgSubs)
+	if err := s.LoadConfig(cfgSubs); err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
 
 	subs := s.List()
 	if len(subs) != 1 {
@@ -140,9 +142,11 @@ func TestSubscriptionStoreConfigNotRemovable(t *testing.T) {
 	s := newTestStore(t)
 
 	seed := router.LoopSeed{Mission: "automation"}
-	s.LoadConfig([]config.SubscriptionConfig{
+	if err := s.LoadConfig([]config.SubscriptionConfig{
 		{Topic: "test/topic", Wake: &seed},
-	})
+	}); err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
 
 	subs := s.List()
 	if len(subs) != 1 {
@@ -159,9 +163,11 @@ func TestSubscriptionStoreMatches(t *testing.T) {
 	s := newTestStore(t)
 
 	seed := router.LoopSeed{Mission: "automation"}
-	s.LoadConfig([]config.SubscriptionConfig{
+	if err := s.LoadConfig([]config.SubscriptionConfig{
 		{Topic: "frigate/+/events", Wake: &seed},
-	})
+	}); err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
 
 	// Matching topic.
 	matches := s.Matches("frigate/camera1/events")
@@ -185,10 +191,12 @@ func TestSubscriptionStoreMatchesFanOut(t *testing.T) {
 	// Two subscriptions on the same topic with different seeds.
 	seedA := router.LoopSeed{Mission: "automation", Instructions: "check temperature"}
 	seedB := router.LoopSeed{Mission: "background", Instructions: "log to database"}
-	s.LoadConfig([]config.SubscriptionConfig{
+	if err := s.LoadConfig([]config.SubscriptionConfig{
 		{Topic: "sensors/temperature", Wake: &seedA},
 		{Topic: "sensors/temperature", Wake: &seedB},
-	})
+	}); err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
 
 	matches := s.Matches("sensors/temperature")
 	if len(matches) != 2 {
@@ -251,9 +259,11 @@ func TestSubscriptionStoreTopics(t *testing.T) {
 	s := newTestStore(t)
 
 	seed := router.LoopSeed{Mission: "automation"}
-	s.LoadConfig([]config.SubscriptionConfig{
+	if err := s.LoadConfig([]config.SubscriptionConfig{
 		{Topic: "topic/a", Wake: &seed},
-	})
+	}); err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
 	if _, err := s.Add("topic/b", seed); err != nil {
 		t.Fatalf("add: %v", err)
 	}

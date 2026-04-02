@@ -135,9 +135,11 @@ func TestToolsHandleRemoveConfigProtected(t *testing.T) {
 	tools := newTestTools(t)
 
 	seed := router.LoopSeed{Mission: "automation"}
-	tools.store.LoadConfig([]config.SubscriptionConfig{
+	if err := tools.store.LoadConfig([]config.SubscriptionConfig{
 		{Topic: "config/test", Wake: &seed},
-	})
+	}); err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
 
 	subs := tools.store.List()
 	if len(subs) != 1 {

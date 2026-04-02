@@ -2,6 +2,7 @@ package router
 
 import (
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -94,15 +95,11 @@ var validBoolHints = map[string]bool{
 	"false": true,
 }
 
-// validMissions is the set of known mission values. Empty is accepted.
-var validMissions = map[string]bool{
-	"":               true,
-	"conversation":   true,
-	"automation":     true,
-	"device_control": true,
-	"background":     true,
-	"metacognitive":  true,
-}
+// missionPattern matches valid mission identifiers: lowercase ASCII
+// letters, digits, and underscores. The router handles unknown missions
+// gracefully (no special routing rules fire), so we validate format
+// rather than restricting to a closed enum.
+var missionPattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
 
 // validDelegationGating is the set of known delegation gating modes.
 var validDelegationGating = map[string]bool{
@@ -121,8 +118,8 @@ func (s *LoopSeed) Validate() error {
 			return fmt.Errorf("quality_floor must be an integer 1–10, got %q", s.QualityFloor)
 		}
 	}
-	if !validMissions[s.Mission] {
-		return fmt.Errorf("mission must be one of conversation, automation, device_control, background, metacognitive; got %q", s.Mission)
+	if s.Mission != "" && !missionPattern.MatchString(s.Mission) {
+		return fmt.Errorf("mission must be a lowercase identifier (letters, digits, underscores), got %q", s.Mission)
 	}
 	if !validBoolHints[s.LocalOnly] {
 		return fmt.Errorf("local_only must be \"true\" or \"false\", got %q", s.LocalOnly)

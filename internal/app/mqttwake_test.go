@@ -62,9 +62,11 @@ func TestMQTTWakeHandlerMatchingTopic(t *testing.T) {
 		DelegationGating: "disabled",
 		Instructions:     "handle this",
 	}
-	store.LoadConfig([]config.SubscriptionConfig{
+	if err := store.LoadConfig([]config.SubscriptionConfig{
 		{Topic: "test/+/wake", Wake: &seed},
-	})
+	}); err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
 
 	runner := &mqttMockRunner{}
 	registry := looppkg.NewRegistry()
@@ -147,9 +149,11 @@ func TestMQTTWakeHandlerNoMatchFallback(t *testing.T) {
 func TestMQTTWakeHandlerWithRegistry(t *testing.T) {
 	store := newTestWakeStore(t)
 	seed := router.LoopSeed{Instructions: "test instructions"}
-	store.LoadConfig([]config.SubscriptionConfig{
+	if err := store.LoadConfig([]config.SubscriptionConfig{
 		{Topic: "home/sensor/wake", Wake: &seed},
-	})
+	}); err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
 
 	runner := &mqttMockRunner{}
 	registry := looppkg.NewRegistry()
@@ -191,10 +195,12 @@ func TestMQTTWakeHandlerFanOut(t *testing.T) {
 	store := newTestWakeStore(t)
 	seedA := router.LoopSeed{Mission: "automation", Instructions: "check temperature"}
 	seedB := router.LoopSeed{Mission: "background", Instructions: "log reading"}
-	store.LoadConfig([]config.SubscriptionConfig{
+	if err := store.LoadConfig([]config.SubscriptionConfig{
 		{Topic: "sensors/+/reading", Wake: &seedA},
 		{Topic: "sensors/+/reading", Wake: &seedB},
-	})
+	}); err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
 
 	runner := &mqttMockRunner{}
 	registry := looppkg.NewRegistry()
@@ -237,9 +243,11 @@ func TestMQTTWakeHandlerFanOut(t *testing.T) {
 func TestMQTTWakeHandlerNoRegistryDropsMessage(t *testing.T) {
 	store := newTestWakeStore(t)
 	seed := router.LoopSeed{Mission: "automation"}
-	store.LoadConfig([]config.SubscriptionConfig{
+	if err := store.LoadConfig([]config.SubscriptionConfig{
 		{Topic: "test/topic", Wake: &seed},
-	})
+	}); err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
 
 	runner := &mqttMockRunner{}
 	// No registry — message should be dropped, not dispatched directly.

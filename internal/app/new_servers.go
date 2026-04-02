@@ -250,7 +250,9 @@ func (a *App) initServers(s *newState) error {
 		if err != nil {
 			return fmt.Errorf("create mqtt subscription store: %w", err)
 		}
-		subStore.LoadConfig(cfg.MQTT.Subscriptions)
+		if err := subStore.LoadConfig(cfg.MQTT.Subscriptions); err != nil {
+			return fmt.Errorf("load mqtt wake subscriptions: %w", err)
+		}
 
 		// Wire dynamic topic discovery: on every broker (re-)connect the
 		// publisher merges store topics into the SUBSCRIBE packet.

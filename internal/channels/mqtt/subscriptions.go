@@ -105,9 +105,10 @@ func (s *SubscriptionStore) loadRuntime() error {
 // LoadConfig loads config-defined wake subscriptions. Only entries with
 // a non-nil Wake field are loaded. Config subscriptions are not persisted
 // to SQLite and cannot be removed via [SubscriptionStore.Remove].
-// Subscriptions with invalid topic filters or seeds are logged and
-// skipped rather than causing a startup failure.
-func (s *SubscriptionStore) LoadConfig(subs []config.SubscriptionConfig) {
+// Returns an error if any wake subscription has an invalid topic filter
+// or seed — config-backed triggers should fail at startup rather than
+// silently dropping messages at runtime.
+func (s *SubscriptionStore) LoadConfig(subs []config.SubscriptionConfig) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -126,14 +127,10 @@ func (s *SubscriptionStore) LoadConfig(subs []config.SubscriptionConfig) {
 			continue
 		}
 		if err := router.ValidateTopicFilter(sc.Topic); err != nil {
-			s.logger.Warn("skipping config subscription with invalid topic",
-				"index", i, "topic", sc.Topic, "error", err)
-			continue
+			return fmt.Errorf("mqtt.subscriptions[%d]: invalid topic %q: %w", i, sc.Topic, err)
 		}
 		if err := sc.Wake.Validate(); err != nil {
-			s.logger.Warn("skipping config subscription with invalid seed",
-				"index", i, "topic", sc.Topic, "error", err)
-			continue
+			return fmt.Errorf("mqtt.subscriptions[%d] (topic %q): invalid wake seed: %w", i, sc.Topic, err)
 		}
 		s.subs = append(s.subs, WakeSubscription{
 			ID:        fmt.Sprintf("cfg-%s-%d", topicHash(sc.Topic), i),
@@ -143,6 +140,7 @@ func (s *SubscriptionStore) LoadConfig(subs []config.SubscriptionConfig) {
 			CreatedAt: time.Now(),
 		})
 	}
+	return nil
 }
 
 // SetSubscribeHook registers a callback that is invoked after a runtime
