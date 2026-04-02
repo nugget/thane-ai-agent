@@ -312,7 +312,7 @@ func TestHAAutomationCreateValidateOnly(t *testing.T) {
 		"metadata": {
 			"area_id": "area_entry",
 			"label_ids": ["label_critical"],
-			"category": "maintenance"
+			"category_id": "maintenance"
 		},
 		"validate_only": true
 	}`)
@@ -414,11 +414,11 @@ func TestHAAutomationGetIncludesRegistryMetadata(t *testing.T) {
 	if got.Metadata.CategoryID != "cat_maintenance" {
 		t.Fatalf("category_id = %q, want %q", got.Metadata.CategoryID, "cat_maintenance")
 	}
-	if got.Metadata.Category != "Maintenance" {
-		t.Fatalf("category = %q, want %q", got.Metadata.Category, "Maintenance")
+	if got.Metadata.CategoryName != "Maintenance" {
+		t.Fatalf("category_name = %q, want %q", got.Metadata.CategoryName, "Maintenance")
 	}
-	if got.Metadata.Categories["automation"] != "Maintenance" {
-		t.Fatalf("categories = %#v, want automation=Maintenance", got.Metadata.Categories)
+	if got.Metadata.CategoryNames["automation"] != "Maintenance" {
+		t.Fatalf("category_names = %#v, want automation=Maintenance", got.Metadata.CategoryNames)
 	}
 	if got.Metadata.CategoryIDs["automation"] != "cat_maintenance" {
 		t.Fatalf("category_ids = %#v, want automation=cat_maintenance", got.Metadata.CategoryIDs)
@@ -654,14 +654,44 @@ func TestHAAutomationListResolvesCategoryNames(t *testing.T) {
 	if got[0].Metadata.CategoryID != "01JSPY2KHMDFXMSDFXJNKZWX2V" {
 		t.Fatalf("category_id = %q, want raw category ID", got[0].Metadata.CategoryID)
 	}
-	if got[0].Metadata.Category != "Physical" {
-		t.Fatalf("category = %q, want %q", got[0].Metadata.Category, "Physical")
+	if got[0].Metadata.CategoryName != "Physical" {
+		t.Fatalf("category_name = %q, want %q", got[0].Metadata.CategoryName, "Physical")
 	}
-	if got[0].Metadata.Categories["automation"] != "Physical" {
-		t.Fatalf("categories = %#v, want automation=Physical", got[0].Metadata.Categories)
+	if got[0].Metadata.CategoryNames["automation"] != "Physical" {
+		t.Fatalf("category_names = %#v, want automation=Physical", got[0].Metadata.CategoryNames)
 	}
 	if got[0].Metadata.CategoryIDs["automation"] != "01JSPY2KHMDFXMSDFXJNKZWX2V" {
 		t.Fatalf("category_ids = %#v, want raw automation category ID", got[0].Metadata.CategoryIDs)
+	}
+}
+
+func TestBuildEntityRegistryUpdateAcceptsCategoryIDAndIgnoresResolvedCategoryNames(t *testing.T) {
+	update, err := buildEntityRegistryUpdate(map[string]any{
+		"category_id":   "cat_maintenance",
+		"category_name": "Maintenance",
+		"category_names": map[string]any{
+			"automation": "Maintenance",
+		},
+		"category_ids": map[string]any{
+			"automation": "cat_from_round_trip",
+		},
+	})
+	if err != nil {
+		t.Fatalf("buildEntityRegistryUpdate failed: %v", err)
+	}
+
+	categories, ok := update["categories"].(map[string]any)
+	if !ok {
+		t.Fatalf("categories update = %#v, want map", update["categories"])
+	}
+	if categories["automation"] != "cat_maintenance" {
+		t.Fatalf("categories.automation = %#v, want %q", categories["automation"], "cat_maintenance")
+	}
+	if _, ok := update["category_name"]; ok {
+		t.Fatalf("category_name leaked into update payload: %#v", update)
+	}
+	if _, ok := update["category_names"]; ok {
+		t.Fatalf("category_names leaked into update payload: %#v", update)
 	}
 }
 
