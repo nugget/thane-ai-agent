@@ -16,6 +16,14 @@ type Message struct {
 	Error   *Error          `json:"error,omitempty"`
 }
 
+// Capability describes a platform capability exposed by a connected
+// provider, along with the methods it supports.
+type Capability struct {
+	Name    string   `json:"name"`
+	Version string   `json:"version,omitempty"`
+	Methods []string `json:"methods,omitempty"`
+}
+
 // Error carries structured error information in message responses.
 type Error struct {
 	Code    string `json:"code"`
@@ -55,6 +63,24 @@ type ping struct {
 	Type string `json:"type"`
 }
 
+// registerCapabilitiesMessage is sent by the client after auth to
+// declare the platform capabilities it can service.
+type registerCapabilitiesMessage struct {
+	ID           int64        `json:"id"`
+	Type         string       `json:"type"`
+	Capabilities []Capability `json:"capabilities"`
+}
+
+// platformRequestMessage is sent by the server to invoke a registered
+// capability method on the provider.
+type platformRequestMessage struct {
+	ID         int64           `json:"id"`
+	Type       string          `json:"type"`
+	Capability string          `json:"capability"`
+	Method     string          `json:"method"`
+	Params     json.RawMessage `json:"params,omitempty"`
+}
+
 // Message type constants.
 const (
 	typeAuthRequired = "auth_required"
@@ -63,6 +89,9 @@ const (
 	typeAuthFailed   = "auth_failed"
 	typePing         = "ping"
 	typePong         = "pong"
+	typeRegisterCaps = "register_capabilities"
+	typePlatformReq  = "platform_request"
+	typeResult       = "result"
 )
 
 // protocolVersion is the current platform provider protocol version.

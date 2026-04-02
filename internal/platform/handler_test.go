@@ -1,9 +1,12 @@
 package platform
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -438,5 +441,263 @@ func TestUpgradeOnCorrectPath(t *testing.T) {
 	readJSON(t, conn, &authReq)
 	if authReq.Type != typeAuthRequired {
 		t.Fatalf("expected auth_required, got %q", authReq.Type)
+	}
+}
+
+func TestRegisterCapabilitiesAndCallRoundTrip(t *testing.T) {
+	registry := NewRegistry(nil)
+	handler := NewHandler(testTokenIndex(), registry, nil)
+	srv := httptest.NewServer(handler)
+	defer srv.Close()
+
+	wsURL := "ws" + srv.URL[len("http"):]
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer conn.Close()
+
+	var authReq authRequired
+	readJSON(t, conn, &authReq)
+	conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	if err := conn.WriteJSON(authMessage{
+		Type:       typeAuth,
+		Token:      "test-secret",
+		ClientName: "Calendar Host",
+		ClientID:   "test-uuid-calendar",
+	}); err != nil {
+		t.Fatalf("send auth: %v", err)
+	}
+
+	var ok authOK
+	readJSON(t, conn, &ok)
+
+	conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	if err := conn.WriteJSON(registerCapabilitiesMessage{
+		ID:   1,
+		Type: typeRegisterCaps,
+		Capabilities: []Capability{{
+			Name:    "macos.calendar",
+			Version: "1",
+			Methods: []string{"list_events"},
+		}},
+	}); err != nil {
+		t.Fatalf("send capability registration: %v", err)
+	}
+
+	var ack Message
+	readJSON(t, conn, &ack)
+	if ack.Type != typeResult {
+		t.Fatalf("expected result ack, got %q", ack.Type)
+	}
+	if !ack.Success {
+		t.Fatalf("expected successful capability ack, got %+v", ack)
+	}
+
+	type platformRequestRead struct {
+		req platformRequestMessage
+		err error
+	}
+	requestSeen := make(chan platformRequestRead, 1)
+	go func() {
+		var req platformRequestMessage
+		conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		if err := conn.ReadJSON(&req); err != nil {
+			requestSeen <- platformRequestRead{err: fmt.Errorf("read platform request: %w", err)}
+			return
+		}
+		conn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+		if err := conn.WriteJSON(Message{
+			ID:      req.ID,
+			Type:    typeResult,
+			Success: true,
+			Result:  json.RawMessage(`{"events":[{"title":"Design Review"}]}`),
+		}); err != nil {
+			requestSeen <- platformRequestRead{err: fmt.Errorf("send result: %w", err)}
+			return
+		}
+		requestSeen <- platformRequestRead{req: req}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	result, err := registry.Call(ctx, CallRequest{
+		Account:    "nugget",
+		Capability: "macos.calendar",
+		Method:     "list_events",
+		Params:     json.RawMessage(`{"start":"2026-04-02T09:00:00-05:00","end":"2026-04-02T17:00:00-05:00"}`),
+	})
+	if err != nil {
+		t.Fatalf("registry.Call: %v", err)
+	}
+
+	var payload struct {
+		Events []struct {
+			Title string `json:"title"`
+		} `json:"events"`
+	}
+	if err := json.Unmarshal(result, &payload); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+	if len(payload.Events) != 1 || payload.Events[0].Title != "Design Review" {
+		t.Fatalf("unexpected result payload: %s", result)
+	}
+
+	request := <-requestSeen
+	if request.err != nil {
+		t.Fatal(request.err)
+	}
+	if request.req.Type != typePlatformReq {
+		t.Fatalf("expected platform_request, got %q", request.req.Type)
+	}
+	if request.req.Capability != "macos.calendar" {
+		t.Errorf("capability: got %q, want %q", request.req.Capability, "macos.calendar")
+	}
+	if request.req.Method != "list_events" {
+		t.Errorf("method: got %q, want %q", request.req.Method, "list_events")
+	}
+}
+
+func TestRegistryCallRequiresAccountWhenMultipleAccountsMatch(t *testing.T) {
+	registry := NewRegistry(nil)
+
+	nugget := &Provider{
+		ID:          "prov_nugget",
+		Account:     "nugget",
+		ClientName:  "MacBook Pro",
+		ClientID:    "mbp",
+		ConnectedAt: time.Now(),
+		done:        make(chan struct{}),
+	}
+	nugget.setCapabilities([]Capability{{
+		Name:    "macos.calendar",
+		Methods: []string{"list_events"},
+	}})
+	registry.Add(nugget)
+
+	aimee := &Provider{
+		ID:          "prov_aimee",
+		Account:     "aimee",
+		ClientName:  "Studio Mac",
+		ClientID:    "studio",
+		ConnectedAt: time.Now(),
+		done:        make(chan struct{}),
+	}
+	aimee.setCapabilities([]Capability{{
+		Name:    "macos.calendar",
+		Methods: []string{"list_events"},
+	}})
+	registry.Add(aimee)
+
+	_, err := registry.Call(context.Background(), CallRequest{
+		Capability: "macos.calendar",
+		Method:     "list_events",
+	})
+	if err == nil {
+		t.Fatal("expected ambiguity error, got nil")
+	}
+	if !strings.Contains(err.Error(), "multiple accounts") {
+		t.Fatalf("expected multiple accounts error, got %v", err)
+	}
+}
+
+func TestRegistryCallTrimsRoutingSelectors(t *testing.T) {
+	registry := NewRegistry(nil)
+	handler := NewHandler(testTokenIndex(), registry, nil)
+	server := httptest.NewServer(handler)
+	defer server.Close()
+
+	wsURL := "ws" + server.URL[len("http"):]
+	providerConn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial provider: %v", err)
+	}
+	defer providerConn.Close()
+
+	var authReq authRequired
+	readJSON(t, providerConn, &authReq)
+	providerConn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	if err := providerConn.WriteJSON(authMessage{
+		Type:       typeAuth,
+		Token:      "test-secret",
+		ClientName: "Calendar Host",
+		ClientID:   "test-uuid-calendar",
+	}); err != nil {
+		t.Fatalf("send auth: %v", err)
+	}
+
+	var ok authOK
+	readJSON(t, providerConn, &ok)
+	if ok.Account != "nugget" {
+		t.Fatalf("expected account %q, got %q", "nugget", ok.Account)
+	}
+
+	providerConn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+	if err := providerConn.WriteJSON(registerCapabilitiesMessage{
+		ID:   1,
+		Type: typeRegisterCaps,
+		Capabilities: []Capability{{
+			Name:    "macos.calendar",
+			Version: "1",
+			Methods: []string{"list_events"},
+		}},
+	}); err != nil {
+		t.Fatalf("send capability registration: %v", err)
+	}
+
+	var ack Message
+	readJSON(t, providerConn, &ack)
+	if !ack.Success {
+		t.Fatalf("expected successful capability ack, got %+v", ack)
+	}
+
+	type platformRequestRead struct {
+		req platformRequestMessage
+		err error
+	}
+	requestSeen := make(chan platformRequestRead, 1)
+	go func() {
+		var req platformRequestMessage
+		providerConn.SetReadDeadline(time.Now().Add(5 * time.Second))
+		if err := providerConn.ReadJSON(&req); err != nil {
+			requestSeen <- platformRequestRead{err: fmt.Errorf("read platform request: %w", err)}
+			return
+		}
+		providerConn.SetWriteDeadline(time.Now().Add(5 * time.Second))
+		if err := providerConn.WriteJSON(Message{
+			ID:      req.ID,
+			Type:    typeResult,
+			Success: true,
+			Result:  json.RawMessage(`{"events":[]}`),
+		}); err != nil {
+			requestSeen <- platformRequestRead{err: fmt.Errorf("send result: %w", err)}
+			return
+		}
+		requestSeen <- platformRequestRead{req: req}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if _, err := registry.Call(ctx, CallRequest{
+		Account:    " nugget ",
+		ClientID:   " test-uuid-calendar ",
+		Capability: " macos.calendar ",
+		Method:     " list_events ",
+		Params:     json.RawMessage(`{"start":"2026-04-02T09:00:00-05:00","end":"2026-04-02T17:00:00-05:00"}`),
+	}); err != nil {
+		t.Fatalf("registry.Call: %v", err)
+	}
+
+	request := <-requestSeen
+	if request.err != nil {
+		t.Fatal(request.err)
+	}
+	if request.req.Capability != "macos.calendar" {
+		t.Fatalf("capability: got %q, want %q", request.req.Capability, "macos.calendar")
+	}
+	if request.req.Method != "list_events" {
+		t.Fatalf("method: got %q, want %q", request.req.Method, "list_events")
 	}
 }

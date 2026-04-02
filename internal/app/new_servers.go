@@ -160,6 +160,7 @@ func (a *App) initServers(s *newState) error {
 	// to connect and register capabilities for bidirectional service dispatch.
 	if cfg.Platform.Configured() {
 		a.platformRegistry = platform.NewRegistry(logger)
+		a.loop.Tools().EnablePlatformTools(a.platformRegistry.Call)
 		handler := platform.NewHandler(cfg.Platform.TokenIndex(), a.platformRegistry, logger)
 		server.SetPlatformHandler(handler)
 

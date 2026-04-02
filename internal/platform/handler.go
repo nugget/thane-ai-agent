@@ -1,6 +1,7 @@
 package platform
 
 import (
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"time"
@@ -176,7 +177,7 @@ func (h *Handler) heartbeat(p *Provider) {
 	for {
 		select {
 		case <-ticker.C:
-			if err := writeJSONWithDeadline(p.Conn, writeWait, ping{Type: typePing}); err != nil {
+			if err := p.writeJSON(ping{Type: typePing}); err != nil {
 				h.logger.Debug("platform ping failed",
 					"provider_id", p.ID,
 					"error", err,
@@ -198,8 +199,8 @@ func (h *Handler) readLoop(p *Provider) {
 	}
 
 	for {
-		var msg Message
-		if err := p.Conn.ReadJSON(&msg); err != nil {
+		_, payload, err := p.Conn.ReadMessage()
+		if err != nil {
 			if websocket.IsUnexpectedCloseError(err,
 				websocket.CloseNormalClosure,
 				websocket.CloseGoingAway,
@@ -216,20 +217,134 @@ func (h *Handler) readLoop(p *Provider) {
 			return
 		}
 
+		var envelope struct {
+			ID   int64  `json:"id,omitempty"`
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(payload, &envelope); err != nil {
+			h.logger.Warn("platform message decode failed",
+				"provider_id", p.ID,
+				"error", err,
+			)
+			continue
+		}
+
 		// Any valid message resets the read deadline.
 		if err := p.Conn.SetReadDeadline(time.Now().Add(pongWait)); err != nil {
 			return
 		}
 
-		switch msg.Type {
+		switch envelope.Type {
 		case typePong:
 			// Heartbeat response — deadline already reset above.
+		case typeRegisterCaps:
+			h.handleRegisterCapabilities(p, envelope.ID, payload)
+		case typeResult:
+			h.handleResult(p, payload)
 		default:
 			h.logger.Debug("platform message received (unhandled)",
 				"provider_id", p.ID,
-				"type", msg.Type,
+				"type", envelope.Type,
 			)
 		}
+	}
+}
+
+func (h *Handler) handleRegisterCapabilities(p *Provider, id int64, payload []byte) {
+	var msg registerCapabilitiesMessage
+	if err := json.Unmarshal(payload, &msg); err != nil {
+		h.logger.Warn("platform capabilities decode failed",
+			"provider_id", p.ID,
+			"error", err,
+		)
+		h.writeErrorResult(p, id, "invalid_payload", "failed to decode capability registration")
+		return
+	}
+	if id == 0 {
+		h.logger.Warn("platform capabilities missing correlation id",
+			"provider_id", p.ID,
+		)
+		return
+	}
+	if msg.ID != 0 && msg.ID != id {
+		h.logger.Warn("platform capabilities id mismatch",
+			"provider_id", p.ID,
+			"envelope_id", id,
+			"message_id", msg.ID,
+		)
+		h.writeErrorResult(p, id, "invalid_payload", "capability registration id mismatch")
+		return
+	}
+
+	if err := h.registry.RegisterCapabilities(p.ID, msg.Capabilities); err != nil {
+		h.logger.Warn("platform capability registration failed",
+			"provider_id", p.ID,
+			"error", err,
+		)
+		h.writeErrorResult(p, id, "provider_not_found", err.Error())
+		return
+	}
+
+	if err := p.writeJSON(Message{
+		ID:      id,
+		Type:    typeResult,
+		Success: true,
+	}); err != nil {
+		h.logger.Debug("platform capability ack failed",
+			"provider_id", p.ID,
+			"error", err,
+		)
+		return
+	}
+
+	h.logger.Info("platform capabilities registered",
+		"provider_id", p.ID,
+		"account", p.Account,
+		"count", len(msg.Capabilities),
+	)
+}
+
+func (h *Handler) handleResult(p *Provider, payload []byte) {
+	var msg Message
+	if err := json.Unmarshal(payload, &msg); err != nil {
+		h.logger.Warn("platform result decode failed",
+			"provider_id", p.ID,
+			"error", err,
+		)
+		return
+	}
+
+	if msg.ID == 0 {
+		h.logger.Debug("platform result missing id",
+			"provider_id", p.ID,
+		)
+		return
+	}
+
+	if !h.registry.ResolveResult(p.ID, msg) {
+		h.logger.Debug("platform result had no pending waiter",
+			"provider_id", p.ID,
+			"id", msg.ID,
+		)
+	}
+}
+
+func (h *Handler) writeErrorResult(p *Provider, id int64, code, message string) {
+	if id == 0 {
+		return
+	}
+	if err := p.writeJSON(Message{
+		ID:   id,
+		Type: typeResult,
+		Error: &Error{
+			Code:    code,
+			Message: message,
+		},
+	}); err != nil {
+		h.logger.Debug("platform error result write failed",
+			"provider_id", p.ID,
+			"error", err,
+		)
 	}
 }
 
