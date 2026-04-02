@@ -271,16 +271,19 @@ func (a *App) initServers(s *newState) error {
 		// Build the base message handler: routes the instance callback
 		// topic to the notification dispatcher, everything else gets
 		// default debug logging.
-		var baseMsgHandler mqtt.MessageHandler
+		baseMsgHandler := mqtt.MessageHandler(func(topic string, payload []byte) {
+			logger.Debug("mqtt message received", "topic", topic, "size", len(payload))
+		})
 		if a.notifCallbackDispatcher != nil {
 			dispatcher := a.notifCallbackDispatcher // capture for closure
 			cbTopic := callbackTopic                // capture for closure
+			debugFallback := baseMsgHandler         // capture for closure
 			baseMsgHandler = func(topic string, payload []byte) {
 				if topic == cbTopic {
 					dispatcher.Handle(topic, payload)
 					return
 				}
-				logger.Debug("mqtt message received", "topic", topic, "size", len(payload))
+				debugFallback(topic, payload)
 			}
 		}
 

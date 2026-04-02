@@ -1,7 +1,9 @@
 package mqtt
 
 import (
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -121,7 +123,7 @@ func (s *SubscriptionStore) LoadConfig(subs []config.SubscriptionConfig) {
 			continue
 		}
 		s.subs = append(s.subs, WakeSubscription{
-			ID:        "cfg-" + sanitizeTopic(sc.Topic),
+			ID:        "cfg-" + topicHash(sc.Topic),
 			Topic:     sc.Topic,
 			Seed:      *sc.Wake,
 			Source:    "config",
@@ -134,7 +136,7 @@ func (s *SubscriptionStore) LoadConfig(subs []config.SubscriptionConfig) {
 // returns the new subscription.
 func (s *SubscriptionStore) Add(topic string, seed router.LoopSeed) (WakeSubscription, error) {
 	ws := WakeSubscription{
-		ID:        fmt.Sprintf("rt-%s-%d", sanitizeTopic(topic), time.Now().UnixMilli()),
+		ID:        fmt.Sprintf("rt-%s-%d", topicHash(topic), time.Now().UnixMilli()),
 		Topic:     topic,
 		Seed:      seed,
 		Source:    "runtime",
@@ -264,9 +266,10 @@ func matchTopicFilter(filter, topic string) bool {
 	return len(filterParts) == len(topicParts)
 }
 
-// sanitizeTopic produces a safe ID fragment from a topic string by
-// replacing / with _ and stripping wildcards.
-func sanitizeTopic(topic string) string {
-	r := strings.NewReplacer("/", "_", "+", "x", "#", "x")
-	return r.Replace(topic)
+// topicHash returns a short, collision-resistant hex hash of a topic
+// string for use in subscription IDs. Uses the first 8 bytes (16 hex
+// chars) of a SHA-256 digest.
+func topicHash(topic string) string {
+	h := sha256.Sum256([]byte(topic))
+	return hex.EncodeToString(h[:8])
 }

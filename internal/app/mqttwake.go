@@ -4,12 +4,19 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/nugget/thane-ai-agent/internal/agent"
 	mqtt "github.com/nugget/thane-ai-agent/internal/channels/mqtt"
 	"github.com/nugget/thane-ai-agent/internal/router"
 )
+
+// maxWakePayloadBytes is the maximum MQTT payload size included in the
+// user message. Payloads exceeding this are truncated on a valid UTF-8
+// boundary with a marker.
+const maxWakePayloadBytes = 32 * 1024
 
 // mqttWakeTimeout bounds how long a single MQTT-triggered agent
 // conversation may run before being cancelled.
@@ -88,8 +95,11 @@ func mqttWakeHandler(
 // buildWakeMessage constructs the user message for an MQTT wake. When
 // instructions are provided, the payload is wrapped with context about
 // the topic and instructions. Otherwise the raw payload is used.
+//
+// Payloads are sanitised to valid UTF-8 and truncated to
+// [maxWakePayloadBytes] to bound prompt size and cost.
 func buildWakeMessage(topic string, payload []byte, instructions string) string {
-	payloadStr := string(payload)
+	payloadStr := sanitizePayload(payload)
 
 	if instructions == "" {
 		if payloadStr == "" {
@@ -102,6 +112,32 @@ func buildWakeMessage(topic string, payload []byte, instructions string) string 
 		return fmt.Sprintf("Instructions: %s\n\nMQTT topic: %s\n(no payload)", instructions, topic)
 	}
 	return fmt.Sprintf("Instructions: %s\n\nMQTT topic: %s\nPayload:\n%s", instructions, topic, payloadStr)
+}
+
+// sanitizePayload converts raw MQTT bytes to a valid UTF-8 string,
+// replacing invalid sequences and truncating to maxWakePayloadBytes
+// on a rune boundary.
+func sanitizePayload(payload []byte) string {
+	if len(payload) == 0 {
+		return ""
+	}
+
+	// Ensure valid UTF-8 — replace invalid bytes.
+	s := string(payload)
+	if !utf8.ValidString(s) {
+		s = strings.ToValidUTF8(s, "\uFFFD")
+	}
+
+	if len(s) <= maxWakePayloadBytes {
+		return s
+	}
+
+	// Truncate on a rune boundary.
+	truncated := s[:maxWakePayloadBytes]
+	for len(truncated) > 0 && !utf8.ValidString(truncated) {
+		truncated = truncated[:len(truncated)-1]
+	}
+	return truncated + fmt.Sprintf("\n\n[Truncated: %d bytes total, showing first %d bytes]", len(s), maxWakePayloadBytes)
 }
 
 // applyLoopSeed applies a LoopSeed's configuration to an agent.Request.
