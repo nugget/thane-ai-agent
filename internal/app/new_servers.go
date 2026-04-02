@@ -484,7 +484,7 @@ func (a *App) initServers(s *newState) error {
 
 		telInterval := time.Duration(cfg.MQTT.Telemetry.Interval) * time.Second
 		telLoopCfg := looppkg.Config{
-			Name:         "mqtt-telemetry",
+			Name:         "telemetry",
 			SleepMin:     telInterval,
 			SleepMax:     telInterval,
 			SleepDefault: telInterval,
@@ -501,9 +501,9 @@ func (a *App) initServers(s *newState) error {
 			Logger:   logger,
 			EventBus: a.eventBus,
 		}
-		a.deferWorker("mqtt-telemetry", func(ctx context.Context) error {
+		a.deferWorker("telemetry", func(ctx context.Context) error {
 			if _, err := a.loopRegistry.SpawnLoop(ctx, telLoopCfg, telLoopDeps); err != nil {
-				return fmt.Errorf("spawn mqtt-telemetry loop: %w", err)
+				return fmt.Errorf("spawn telemetry loop: %w", err)
 			}
 			return nil
 		})
