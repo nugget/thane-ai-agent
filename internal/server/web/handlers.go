@@ -32,12 +32,16 @@ func (s *WebServer) handleSystem(w http.ResponseWriter, r *http.Request) {
 	if !allReady {
 		status = "degraded"
 	}
-	s.writeJSON(w, map[string]any{
+	body := map[string]any{
 		"status":  status,
 		"health":  health,
 		"uptime":  s.systemStatus.Uptime().Truncate(time.Second).String(),
 		"version": s.systemStatus.Version(),
-	})
+	}
+	if snapshot := s.systemStatus.ModelRegistry(); snapshot != nil {
+		body["model_registry"] = snapshot
+	}
+	s.writeJSON(w, body)
 }
 
 // handleLoops returns a JSON array of all loop statuses.

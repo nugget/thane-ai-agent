@@ -341,7 +341,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		close(sigCh)
 	}
 
-	a, err := app.New(ctx, cfg, logger, stdout, llmSetup.Client, llmSetup.OllamaClients, llmSetup.Catalog)
+	a, err := app.New(ctx, cfg, logger, stdout, llmSetup.Client, llmSetup.OllamaClients, llmSetup.ModelRegistry)
 	if err != nil {
 		stopSignals()
 		cancel()
@@ -424,9 +424,9 @@ func loadConfig(explicit string) (*config.Config, string, error) {
 
 type llmSetup struct {
 	Catalog       *models.Catalog
+	ModelRegistry *models.Registry
 	Client        llm.Client
 	OllamaClients map[string]*llm.OllamaClient
-	Inventory     *models.Inventory
 }
 
 func createLLMSetup(ctx context.Context, cfg *config.Config, logger *slog.Logger) (*llmSetup, error) {
@@ -441,14 +441,17 @@ func createLLMSetup(ctx context.Context, cfg *config.Config, logger *slog.Logger
 		return nil, fmt.Errorf("build llm clients: %w", err)
 	}
 
+	registry, err := models.NewRegistry(baseCatalog)
+	if err != nil {
+		return nil, fmt.Errorf("create model registry: %w", err)
+	}
+
 	discoveryCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	inventory := models.DiscoverInventory(discoveryCtx, baseCatalog, bootstrapBundle)
-
-	catalog, err := models.MergeInventory(baseCatalog, inventory)
-	if err != nil {
-		return nil, fmt.Errorf("merge model inventory: %w", err)
+	if err := registry.Refresh(discoveryCtx, bootstrapBundle); err != nil {
+		return nil, fmt.Errorf("refresh model inventory: %w", err)
 	}
+	catalog := registry.Catalog()
 
 	bundle, err := models.BuildClients(catalog, cfg, logger)
 	if err != nil {
@@ -457,9 +460,9 @@ func createLLMSetup(ctx context.Context, cfg *config.Config, logger *slog.Logger
 
 	return &llmSetup{
 		Catalog:       catalog,
+		ModelRegistry: registry,
 		Client:        bundle.Client,
 		OllamaClients: bundle.OllamaClients,
-		Inventory:     inventory,
 	}, nil
 }
 
@@ -468,38 +471,47 @@ func logLLMSetup(logger *slog.Logger, setup *llmSetup) {
 		return
 	}
 
-	if setup.Inventory != nil {
-		for _, ri := range setup.Inventory.Resources {
-			switch {
-			case ri.Error != "":
-				logger.Warn("model inventory discovery failed",
-					"resource", ri.ResourceID,
-					"provider", ri.Provider,
-					"error", ri.Error,
-				)
-			case len(ri.Models) > 0:
-				logger.Info("model inventory discovered",
-					"resource", ri.ResourceID,
-					"provider", ri.Provider,
-					"models", len(ri.Models),
-				)
-			}
-		}
+	snapshot := setup.ModelRegistry.Snapshot()
+	if snapshot == nil {
+		return
 	}
 
-	discovered := 0
-	for _, dep := range setup.Catalog.Deployments {
-		if dep.Source == models.DeploymentSourceDiscovered {
-			discovered++
+	for _, res := range snapshot.Resources {
+		switch {
+		case res.LastError != "":
+			logger.Warn("model inventory discovery failed",
+				"resource", res.ID,
+				"provider", res.Provider,
+				"error", res.LastError,
+			)
+		case res.LastRefresh != "":
+			logger.Info("model inventory discovered",
+				"resource", res.ID,
+				"provider", res.Provider,
+				"models", res.DiscoveredModels,
+			)
 		}
 	}
 
 	logger.Info("LLM client initialized",
-		"default_model", setup.Catalog.DefaultModel,
-		"resources", len(setup.Catalog.Resources),
-		"deployments", len(setup.Catalog.Deployments),
-		"discovered_deployments", discovered,
+		"default_model", snapshot.DefaultModel,
+		"resources", len(snapshot.Resources),
+		"deployments", len(snapshot.Deployments),
+		"discovered_deployments", countDiscoveredDeployments(snapshot),
 	)
+}
+
+func countDiscoveredDeployments(snapshot *models.RegistrySnapshot) int {
+	if snapshot == nil {
+		return 0
+	}
+	discovered := 0
+	for _, dep := range snapshot.Deployments {
+		if dep.Source == models.DeploymentSourceDiscovered {
+			discovered++
+		}
+	}
+	return discovered
 }
 
 func normalizeConfiguredModelRefs(cfg *config.Config, catalog *models.Catalog) {

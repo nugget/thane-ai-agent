@@ -526,7 +526,7 @@ func (a *App) initServers(s *newState) error {
 		webCfg := web.Config{
 			LoopRegistry: a.loopRegistry,
 			EventBus:     a.eventBus,
-			SystemStatus: &systemStatusAdapter{connMgr: a.connMgr},
+			SystemStatus: &systemStatusAdapter{connMgr: a.connMgr, modelRegistry: a.modelRegistry},
 			Logger:       logger,
 		}
 		if a.indexDB != nil {

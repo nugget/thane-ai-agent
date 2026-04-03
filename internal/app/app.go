@@ -64,6 +64,7 @@ type App struct {
 	llmClient     llm.Client
 	ollamaClients map[string]*llm.OllamaClient
 	modelCatalog  *models.Catalog
+	modelRegistry *models.Registry
 
 	// Core subsystems
 	mem            *memory.SQLiteStore

@@ -16,6 +16,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/events"
 	"github.com/nugget/thane-ai-agent/internal/logging"
 	"github.com/nugget/thane-ai-agent/internal/loop"
+	"github.com/nugget/thane-ai-agent/internal/models"
 )
 
 //go:embed static/*
@@ -63,6 +64,8 @@ type SystemStatusProvider interface {
 	Uptime() time.Duration
 	// Version returns build and runtime metadata.
 	Version() map[string]string
+	// ModelRegistry returns the current model-registry snapshot.
+	ModelRegistry() *models.RegistrySnapshot
 }
 
 // ServiceHealth describes the health of a single watched service.
