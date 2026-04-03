@@ -5,12 +5,18 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"image"
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "image/png"
 	"net/http"
 	"strings"
 
 	"github.com/nugget/thane-ai-agent/internal/agent"
 	"github.com/nugget/thane-ai-agent/internal/llm"
 )
+
+const maxDecodedImageBytes = 20 << 20
 
 type chatCompletionRequestMessage struct {
 	Role    string          `json:"role"`
@@ -130,8 +136,46 @@ func parseImageDataURL(raw string) (llm.ImageContent, error) {
 	if data == "" {
 		return llm.ImageContent{}, fmt.Errorf("image data URL is empty")
 	}
-	if _, err := base64.StdEncoding.DecodeString(data); err != nil {
+	return decodeBase64ImageContent(data, mediaType)
+}
+
+func parseOllamaImages(raw []string) ([]llm.ImageContent, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	out := make([]llm.ImageContent, 0, len(raw))
+	for i, data := range raw {
+		data = strings.TrimSpace(data)
+		if data == "" {
+			continue
+		}
+		img, err := decodeBase64ImageContent(data, "")
+		if err != nil {
+			return nil, fmt.Errorf("images[%d]: %w", i, err)
+		}
+		out = append(out, img)
+	}
+	return out, nil
+}
+
+func decodeBase64ImageContent(data, declaredMediaType string) (llm.ImageContent, error) {
+	data = strings.TrimSpace(data)
+	if data == "" {
+		return llm.ImageContent{}, fmt.Errorf("image data is empty")
+	}
+
+	if decodedLen := base64.StdEncoding.DecodedLen(len(data)); decodedLen > maxDecodedImageBytes {
+		return llm.ImageContent{}, fmt.Errorf("image data exceeds %d MiB limit", maxDecodedImageBytes>>20)
+	}
+
+	decoded, err := base64.StdEncoding.DecodeString(data)
+	if err != nil {
 		return llm.ImageContent{}, fmt.Errorf("invalid base64 image data: %w", err)
+	}
+
+	mediaType, err := validateDecodedImage(decoded, declaredMediaType)
+	if err != nil {
+		return llm.ImageContent{}, err
 	}
 
 	return llm.ImageContent{
@@ -140,32 +184,46 @@ func parseImageDataURL(raw string) (llm.ImageContent, error) {
 	}, nil
 }
 
-func parseOllamaImages(raw []string) []llm.ImageContent {
-	if len(raw) == 0 {
-		return nil
+func validateDecodedImage(decoded []byte, declaredMediaType string) (string, error) {
+	if len(decoded) == 0 {
+		return "", fmt.Errorf("image data is empty")
 	}
-	out := make([]llm.ImageContent, 0, len(raw))
-	for _, data := range raw {
-		data = strings.TrimSpace(data)
-		if data == "" {
-			continue
+
+	sniffed := detectImageMediaType(decoded)
+	if !strings.HasPrefix(sniffed, "image/") {
+		return "", fmt.Errorf("decoded bytes are not an image (detected %q)", sniffed)
+	}
+
+	declared := normalizeImageMediaType(declaredMediaType)
+	actual := normalizeImageMediaType(sniffed)
+	if actual == "" {
+		actual = sniffed
+	}
+
+	if declared != "" && actual != "" && declared != actual {
+		return "", fmt.Errorf("declared media type %q does not match decoded image data %q", declared, actual)
+	}
+
+	switch actual {
+	case "image/png", "image/jpeg", "image/gif":
+		if _, _, err := image.DecodeConfig(bytes.NewReader(decoded)); err != nil {
+			return "", fmt.Errorf("invalid %s data: %w", actual, err)
 		}
-		out = append(out, llm.ImageContent{
-			Data:      data,
-			MediaType: detectBase64ImageMediaType(data),
-		})
+	case "image/webp":
+		if !looksLikeWEBP(decoded) {
+			return "", fmt.Errorf("invalid image/webp data")
+		}
 	}
-	return out
+
+	if actual != "" {
+		return actual, nil
+	}
+	return declared, nil
 }
 
-func detectBase64ImageMediaType(data string) string {
-	data = strings.TrimSpace(data)
-	if data == "" {
-		return "application/octet-stream"
-	}
-	decoded, err := base64.StdEncoding.DecodeString(data)
-	if err != nil || len(decoded) == 0 {
-		return "application/octet-stream"
+func detectImageMediaType(decoded []byte) string {
+	if looksLikeWEBP(decoded) {
+		return "image/webp"
 	}
 	sniffLen := len(decoded)
 	if sniffLen > 512 {
@@ -176,4 +234,26 @@ func detectBase64ImageMediaType(data string) string {
 		return "application/octet-stream"
 	}
 	return mediaType
+}
+
+func normalizeImageMediaType(mediaType string) string {
+	mediaType = strings.ToLower(strings.TrimSpace(mediaType))
+	if mediaType == "" {
+		return ""
+	}
+	if semi := strings.Index(mediaType, ";"); semi >= 0 {
+		mediaType = strings.TrimSpace(mediaType[:semi])
+	}
+	switch mediaType {
+	case "image/jpg":
+		return "image/jpeg"
+	default:
+		return mediaType
+	}
+}
+
+func looksLikeWEBP(decoded []byte) bool {
+	return len(decoded) >= 12 &&
+		string(decoded[:4]) == "RIFF" &&
+		string(decoded[8:12]) == "WEBP"
 }

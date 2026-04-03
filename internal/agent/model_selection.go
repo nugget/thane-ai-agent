@@ -8,6 +8,8 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/models"
 )
 
+const estimatedImageContextTokens = 1536
+
 // IncompatibleModelError reports that an explicit deployment cannot
 // satisfy the request's required capabilities.
 type IncompatibleModelError struct {
@@ -61,7 +63,7 @@ func (l *Loop) currentModelCatalog() *models.Catalog {
 	return l.usageCatalog
 }
 
-func (l *Loop) preflightExplicitModel(ref string, needsTools, needsStreaming, needsImages bool) (string, error) {
+func (l *Loop) preflightExplicitModel(ref string, needsTools, needsStreaming, needsImages bool, contextSize int) (string, error) {
 	ref = strings.TrimSpace(ref)
 	if ref == "" || ref == "thane" {
 		return ref, nil
@@ -92,6 +94,13 @@ func (l *Loop) preflightExplicitModel(ref string, needsTools, needsStreaming, ne
 	if needsImages && !dep.SupportsImages {
 		reasons = append(reasons, "it does not support image inputs")
 	}
+	if contextSize > 0 && dep.ContextWindow > 0 && contextSize > dep.ContextWindow {
+		reasons = append(reasons, fmt.Sprintf(
+			"its context window is too small for this request (estimated %d tokens > %d token window)",
+			contextSize,
+			dep.ContextWindow,
+		))
+	}
 	if len(reasons) > 0 {
 		return "", &IncompatibleModelError{
 			Model:   dep.ID,
@@ -108,6 +117,23 @@ func messagesNeedImages(msgs []Message) bool {
 		}
 	}
 	return false
+}
+
+func estimateRequestContextTokens(systemPrompt string, msgs []Message) int {
+	total := roughTokenCount(systemPrompt)
+	for _, msg := range msgs {
+		total += roughTokenCount(msg.Content)
+		total += len(msg.Images) * estimatedImageContextTokens
+	}
+	return total
+}
+
+func roughTokenCount(s string) int {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0
+	}
+	return (len(s) + 3) / 4
 }
 
 func noEligibleImageRoutingError(cat *models.Catalog) error {

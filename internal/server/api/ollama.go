@@ -169,10 +169,15 @@ func handleOllamaChatShared(w http.ResponseWriter, r *http.Request, loop *agent.
 	// Convert Ollama messages to agent messages
 	messages := make([]agent.Message, len(req.Messages))
 	for i, m := range req.Messages {
+		images, err := parseOllamaImages(m.Images)
+		if err != nil {
+			ollamaError(w, http.StatusBadRequest, fmt.Sprintf("messages[%d]: %v", i, err))
+			return
+		}
 		messages[i] = agent.Message{
 			Role:    m.Role,
 			Content: m.Content,
-			Images:  parseOllamaImages(m.Images),
+			Images:  images,
 		}
 	}
 

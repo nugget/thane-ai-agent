@@ -177,6 +177,67 @@ func TestRun_ExplicitModelRejectsImageIncompatibleDeployment(t *testing.T) {
 	}
 }
 
+func TestRun_ExplicitModelRejectsContextOverflow(t *testing.T) {
+	mock := &mockLLM{}
+	loop := buildTestLoop(mock, nil)
+	loop.UseModelRegistry(testModelRegistryFromConfig(t, &config.Config{
+		Models: config.ModelsConfig{
+			Default: "tiny-context",
+			Resources: map[string]config.ModelServerConfig{
+				"edge": {URL: "http://edge.example", Provider: "lmstudio"},
+			},
+			Available: []config.ModelConfig{
+				{
+					Name:          "tiny-context",
+					Resource:      "edge",
+					SupportsTools: true,
+					ContextWindow: 1024,
+				},
+			},
+		},
+	}))
+
+	_, err := loop.Run(context.Background(), &Request{
+		Model: "tiny-context",
+		Messages: []Message{{
+			Role:    "user",
+			Content: strings.Repeat("context ", 800),
+			Images:  []llm.ImageContent{{Data: "Zm9v", MediaType: "image/png"}},
+		}},
+	}, nil)
+
+	var incompatible *IncompatibleModelError
+	if !errors.As(err, &incompatible) {
+		t.Fatalf("Run error = %T, want *IncompatibleModelError", err)
+	}
+	if !strings.Contains(err.Error(), "context window is too small") {
+		t.Fatalf("error = %q, want context-window detail", err)
+	}
+	if len(mock.calls) != 0 {
+		t.Fatalf("llm calls = %d, want 0 when preflight rejects", len(mock.calls))
+	}
+}
+
+func TestEstimateRequestContextTokens_IncludesImages(t *testing.T) {
+	got := estimateRequestContextTokens("abcd", []Message{{
+		Role:    "user",
+		Content: "abcdefgh",
+		Images: []llm.ImageContent{
+			{Data: validTinyPNGBase64ForAgentTest(), MediaType: "image/png"},
+			{Data: validTinyPNGBase64ForAgentTest(), MediaType: "image/png"},
+		},
+	}})
+
+	want := 1 + 2 + (2 * estimatedImageContextTokens)
+	if got != want {
+		t.Fatalf("estimateRequestContextTokens() = %d, want %d", got, want)
+	}
+}
+
+func validTinyPNGBase64ForAgentTest() string {
+	return "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aW3cAAAAASUVORK5CYII="
+}
+
 func TestRun_RoutedImageRequestRejectsWhenNoEligibleImageCapableDeploymentExists(t *testing.T) {
 	mock := &mockLLM{}
 	loop := buildTestLoop(mock, nil)

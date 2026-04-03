@@ -1206,10 +1206,10 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 				}
 			}
 
-			// Calculate context size (rough estimate). History is now
-			// embedded as JSON in systemPrompt, so its length covers
-			// persona, talents, dynamic context, and conversation history.
-			contextSize := len(systemPrompt) / 4
+			// Estimate effective prompt size for routing. This includes
+			// the assembled system prompt, user-visible message text, and
+			// a conservative surcharge for image-bearing inputs.
+			contextSize := estimateRequestContextTokens(systemPrompt, req.Messages)
 
 			routerReq := router.Request{
 				Query:          query,
@@ -1232,7 +1232,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			log.Debug("model selected as default (no router)", "model", model)
 		}
 	} else {
-		resolvedModel, err := l.preflightExplicitModel(model, needsTools, needsStreaming, needsImages)
+		resolvedModel, err := l.preflightExplicitModel(model, needsTools, needsStreaming, needsImages, estimateRequestContextTokens(systemPrompt, req.Messages))
 		if err != nil {
 			return nil, err
 		}

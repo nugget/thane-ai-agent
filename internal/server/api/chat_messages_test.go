@@ -9,11 +9,11 @@ import (
 
 func tinyPNGDataURL(t *testing.T) string {
 	t.Helper()
-	png := []byte{
-		0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
-		0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
-	}
-	return "data:image/png;base64," + base64.StdEncoding.EncodeToString(png)
+	return "data:image/png;base64," + validTinyPNGBase64()
+}
+
+func validTinyPNGBase64() string {
+	return "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aW3cAAAAASUVORK5CYII="
 }
 
 func TestChatCompletionRequest_AgentMessages_StringContent(t *testing.T) {
@@ -91,15 +91,48 @@ func TestChatCompletionRequest_AgentMessages_RejectsExternalImageURL(t *testing.
 	}
 }
 
-func TestParseOllamaImages_DetectsMediaType(t *testing.T) {
-	dataURL := tinyPNGDataURL(t)
-	_, encoded, _ := strings.Cut(dataURL, ",")
+func TestChatCompletionRequest_AgentMessages_RejectsInvalidImageData(t *testing.T) {
+	req := ChatCompletionRequest{
+		Messages: []chatCompletionRequestMessage{
+			{
+				Role: "user",
+				Content: json.RawMessage(`[
+					{"type":"image_url","image_url":{"url":"data:image/png;base64,Zm9v"}}
+				]`),
+			},
+		},
+	}
 
-	out := parseOllamaImages([]string{encoded})
+	_, err := req.AgentMessages()
+	if err == nil {
+		t.Fatal("AgentMessages() error = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "not an image") {
+		t.Fatalf("error = %q, want invalid-image guidance", err)
+	}
+}
+
+func TestParseOllamaImages_DetectsMediaType(t *testing.T) {
+	_, encoded, _ := strings.Cut(tinyPNGDataURL(t), ",")
+
+	out, err := parseOllamaImages([]string{encoded})
+	if err != nil {
+		t.Fatalf("parseOllamaImages() error = %v", err)
+	}
 	if len(out) != 1 {
 		t.Fatalf("len(out) = %d, want 1", len(out))
 	}
 	if out[0].MediaType != "image/png" {
 		t.Fatalf("MediaType = %q, want image/png", out[0].MediaType)
+	}
+}
+
+func TestParseOllamaImages_RejectsInvalidImageData(t *testing.T) {
+	_, err := parseOllamaImages([]string{base64.StdEncoding.EncodeToString([]byte("not an image"))})
+	if err == nil {
+		t.Fatal("parseOllamaImages() error = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "not an image") {
+		t.Fatalf("error = %q, want invalid-image guidance", err)
 	}
 }
