@@ -477,6 +477,9 @@ function renderModelRegistry(summaryEl, resourcesEl, deploymentsEl, metaEl, regi
     if (dep.resource) chips.appendChild(buildSystemChip(dep.resource, 'resource'));
     if (dep.source) chips.appendChild(buildSystemChip(dep.source, dep.source === 'config' ? 'config' : 'discovered'));
     if (dep.policy_state) chips.appendChild(buildSystemChip(dep.policy_state, dep.policy_state === 'active' ? 'ok' : dep.policy_state === 'flagged' ? 'warn' : 'error'));
+    if (dep.routable_source === 'overlay') {
+      chips.appendChild(buildSystemChip(dep.routable ? 'promoted' : 'demoted', dep.routable ? 'ok' : 'muted'));
+    }
     if (!dep.routable) chips.appendChild(buildSystemChip('explicit only', 'muted'));
     if (dep.supports_tools) chips.appendChild(buildSystemChip('tools', 'ok'));
     else if (dep.provider_supports_tools) chips.appendChild(buildSystemChip('tools off', 'muted'));

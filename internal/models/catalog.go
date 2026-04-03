@@ -61,6 +61,7 @@ type Deployment struct {
 	PolicySource    DeploymentPolicySource
 	PolicyReason    string
 	PolicyUpdatedAt time.Time
+	RoutableSource  DeploymentPolicySource
 }
 
 // Catalog is the normalized, provider-aware model view used by both

@@ -426,11 +426,79 @@ func TestHandleModelRegistryPolicySet_UpdatesRouterConfig(t *testing.T) {
 	}
 }
 
+func TestHandleModelRegistryPolicySet_PromotesDiscoveredDeploymentIntoRouter(t *testing.T) {
+	registry := testAPIModelRegistry(t)
+	if err := registry.ApplyInventory(&models.Inventory{
+		Resources: []models.ResourceInventory{
+			{
+				ResourceID: "mirror",
+				Provider:   "ollama",
+				Attempted:  true,
+				Models: []models.DiscoveredModel{
+					{Name: "qwen3-vl:latest", SupportsTools: true, SupportsStreaming: true, SupportsImages: true},
+				},
+			},
+		},
+	}, time.Now()); err != nil {
+		t.Fatalf("ApplyInventory: %v", err)
+	}
+
+	rtr := router.NewRouter(testAPILogger(), registry.Catalog().RouterConfig(10))
+	server := NewServer("", 0, nil, rtr, nil, registry, nil, testAPILogger())
+
+	body := bytes.NewBufferString(`{"deployment":"mirror/qwen3-vl:latest","routable":true,"reason":"promote vision model"}`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/model-registry/policy", body)
+	rec := httptest.NewRecorder()
+	server.handleModelRegistryPolicySet(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+
+	var resp modelRegistryPolicyResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !resp.Deployment.Routable {
+		t.Fatalf("response deployment Routable = false, want true")
+	}
+	if resp.Deployment.RoutableSource != models.DeploymentPolicySourceOverlay {
+		t.Fatalf("response RoutableSource = %q, want %q", resp.Deployment.RoutableSource, models.DeploymentPolicySourceOverlay)
+	}
+
+	found := false
+	for _, model := range rtr.GetModels() {
+		if model.Name == "mirror/qwen3-vl:latest" {
+			found = true
+			if !model.SupportsImages {
+				t.Fatalf("router model = %+v, want image support", model)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("promoted deployment missing from router config")
+	}
+}
+
 func TestHandleModelRegistryPolicySet_InvalidState(t *testing.T) {
 	registry := testAPIModelRegistry(t)
 	server := NewServer("", 0, nil, nil, nil, registry, nil, testAPILogger())
 
 	body := bytes.NewBufferString(`{"deployment":"spark/gpt-oss:20b","state":"bogus"}`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/model-registry/policy", body)
+	rec := httptest.NewRecorder()
+	server.handleModelRegistryPolicySet(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+}
+
+func TestHandleModelRegistryPolicySet_RequiresStateOrRoutable(t *testing.T) {
+	registry := testAPIModelRegistry(t)
+	server := NewServer("", 0, nil, nil, nil, registry, nil, testAPILogger())
+
+	body := bytes.NewBufferString(`{"deployment":"spark/gpt-oss:20b"}`)
 	req := httptest.NewRequest(http.MethodPost, "/v1/model-registry/policy", body)
 	rec := httptest.NewRecorder()
 	server.handleModelRegistryPolicySet(rec, req)

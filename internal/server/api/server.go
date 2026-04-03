@@ -842,6 +842,7 @@ func (s *Server) handleRouterExplain(w http.ResponseWriter, r *http.Request) {
 type setModelRegistryPolicyRequest struct {
 	Deployment string `json:"deployment"`
 	State      string `json:"state"`
+	Routable   *bool  `json:"routable,omitempty"`
 	Reason     string `json:"reason,omitempty"`
 }
 
@@ -879,15 +880,31 @@ func (s *Server) handleModelRegistryPolicySet(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	state, err := models.ParseDeploymentPolicyState(req.State)
-	if err != nil {
-		s.errorResponse(w, http.StatusBadRequest, err.Error())
+	if strings.TrimSpace(req.State) == "" && req.Routable == nil {
+		s.errorResponse(w, http.StatusBadRequest, "state or routable is required")
 		return
 	}
 
+	current := findRegistryDeployment(s.modelRegistry.Snapshot(), req.Deployment)
+	if !current.found {
+		s.errorResponse(w, http.StatusNotFound, (&models.UnknownDeploymentError{Deployment: req.Deployment}).Error())
+		return
+	}
+
+	state := current.snapshot.PolicyState
+	if raw := strings.TrimSpace(req.State); raw != "" {
+		parsed, err := models.ParseDeploymentPolicyState(raw)
+		if err != nil {
+			s.errorResponse(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		state = parsed
+	}
+
 	if err := s.modelRegistry.ApplyDeploymentPolicy(req.Deployment, models.DeploymentPolicy{
-		State:  state,
-		Reason: req.Reason,
+		State:    state,
+		Routable: req.Routable,
+		Reason:   req.Reason,
 	}, time.Now()); err != nil {
 		if models.IsUnknownDeployment(err) {
 			s.errorResponse(w, http.StatusNotFound, err.Error())
@@ -901,8 +918,8 @@ func (s *Server) handleModelRegistryPolicySet(w http.ResponseWriter, r *http.Req
 	}
 
 	snapshot := s.modelRegistry.Snapshot()
-	deployment, ok := findRegistryDeployment(snapshot, req.Deployment)
-	if !ok {
+	deployment := findRegistryDeployment(snapshot, req.Deployment)
+	if !deployment.found {
 		s.errorResponse(w, http.StatusInternalServerError, "deployment policy applied but deployment snapshot is unavailable")
 		return
 	}
@@ -911,7 +928,7 @@ func (s *Server) handleModelRegistryPolicySet(w http.ResponseWriter, r *http.Req
 	writeJSON(w, modelRegistryPolicyResponse{
 		Status:     "ok",
 		Generation: snapshot.Generation,
-		Deployment: deployment,
+		Deployment: deployment.snapshot,
 	}, s.logger)
 }
 
@@ -940,8 +957,8 @@ func (s *Server) handleModelRegistryPolicyDelete(w http.ResponseWriter, r *http.
 	}
 
 	snapshot := s.modelRegistry.Snapshot()
-	deployment, ok := findRegistryDeployment(snapshot, id)
-	if !ok {
+	deployment := findRegistryDeployment(snapshot, id)
+	if !deployment.found {
 		s.errorResponse(w, http.StatusInternalServerError, "deployment policy cleared but deployment snapshot is unavailable")
 		return
 	}
@@ -950,20 +967,25 @@ func (s *Server) handleModelRegistryPolicyDelete(w http.ResponseWriter, r *http.
 	writeJSON(w, modelRegistryPolicyResponse{
 		Status:     "ok",
 		Generation: snapshot.Generation,
-		Deployment: deployment,
+		Deployment: deployment.snapshot,
 	}, s.logger)
 }
 
-func findRegistryDeployment(snapshot *models.RegistrySnapshot, id string) (models.RegistryDeploymentSnapshot, bool) {
+type registryDeploymentLookup struct {
+	snapshot models.RegistryDeploymentSnapshot
+	found    bool
+}
+
+func findRegistryDeployment(snapshot *models.RegistrySnapshot, id string) registryDeploymentLookup {
 	if snapshot == nil {
-		return models.RegistryDeploymentSnapshot{}, false
+		return registryDeploymentLookup{}
 	}
 	for _, dep := range snapshot.Deployments {
 		if dep.ID == id {
-			return dep, true
+			return registryDeploymentLookup{snapshot: dep, found: true}
 		}
 	}
-	return models.RegistryDeploymentSnapshot{}, false
+	return registryDeploymentLookup{}
 }
 
 // Checkpoint handlers

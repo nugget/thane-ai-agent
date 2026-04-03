@@ -237,11 +237,16 @@ func applyDeploymentPolicies(cat *Catalog, policies map[string]DeploymentPolicy)
 		out.Deployments[i].PolicySource = DeploymentPolicySourceDefault
 		out.Deployments[i].PolicyReason = ""
 		out.Deployments[i].PolicyUpdatedAt = time.Time{}
+		out.Deployments[i].RoutableSource = DeploymentPolicySourceDefault
 		if policy, ok := policies[out.Deployments[i].ID]; ok {
 			out.Deployments[i].PolicyState = policy.State
 			out.Deployments[i].PolicySource = DeploymentPolicySourceOverlay
 			out.Deployments[i].PolicyReason = policy.Reason
 			out.Deployments[i].PolicyUpdatedAt = policy.UpdatedAt
+			if policy.Routable != nil {
+				out.Deployments[i].Routable = *policy.Routable
+				out.Deployments[i].RoutableSource = DeploymentPolicySourceOverlay
+			}
 		}
 	}
 	if err := out.reindex(cat.DefaultModel, cat.RecoveryModel); err != nil {

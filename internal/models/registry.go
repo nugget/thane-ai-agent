@@ -75,6 +75,7 @@ type RegistryDeploymentSnapshot struct {
 	Resource              string                 `json:"resource"`
 	Source                DeploymentSource       `json:"source"`
 	Routable              bool                   `json:"routable"`
+	RoutableSource        DeploymentPolicySource `json:"routable_source"`
 	SupportsTools         bool                   `json:"supports_tools,omitempty"`
 	ProviderSupportsTools bool                   `json:"provider_supports_tools,omitempty"`
 	SupportsStreaming     bool                   `json:"supports_streaming,omitempty"`
@@ -340,6 +341,7 @@ func (r *Registry) Snapshot() *RegistrySnapshot {
 			Resource:              dep.ResourceID,
 			Source:                dep.Source,
 			Routable:              dep.Routable,
+			RoutableSource:        dep.RoutableSource,
 			SupportsTools:         dep.SupportsTools,
 			ProviderSupportsTools: dep.ProviderSupportsTools,
 			SupportsStreaming:     dep.SupportsStreaming,

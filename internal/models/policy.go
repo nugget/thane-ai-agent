@@ -30,6 +30,7 @@ const (
 // deployment.
 type DeploymentPolicy struct {
 	State     DeploymentPolicyState
+	Routable  *bool
 	Reason    string
 	UpdatedAt time.Time
 }

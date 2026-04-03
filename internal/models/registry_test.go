@@ -325,6 +325,128 @@ func TestRegistryDeploymentPolicyLifecycle(t *testing.T) {
 	}
 }
 
+func TestRegistryDeploymentPolicyCanPromoteDiscoveredDeploymentIntoRouting(t *testing.T) {
+	t.Parallel()
+
+	base := &Catalog{
+		DefaultModel: "spark/gpt-oss:20b",
+		LocalFirst:   true,
+		Resources: []Resource{
+			{ID: "deepslate", Provider: "lmstudio", URL: "http://deepslate.example"},
+			{ID: "spark", Provider: "ollama", URL: "http://spark.example"},
+		},
+		Deployments: []Deployment{
+			{
+				ID:                    "spark/gpt-oss:20b",
+				ModelName:             "gpt-oss:20b",
+				Provider:              "ollama",
+				ResourceID:            "spark",
+				Server:                "spark",
+				SupportsTools:         true,
+				ProviderSupportsTools: true,
+				SupportsStreaming:     true,
+				ContextWindow:         8192,
+				Speed:                 6,
+				Quality:               6,
+				CostTier:              0,
+				Source:                DeploymentSourceConfig,
+				Routable:              true,
+			},
+		},
+	}
+	if err := base.reindex(base.DefaultModel, base.RecoveryModel); err != nil {
+		t.Fatalf("reindex base: %v", err)
+	}
+
+	reg, err := NewRegistry(base)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	if err := reg.ApplyInventory(&Inventory{
+		Resources: []ResourceInventory{
+			{
+				ResourceID: "deepslate",
+				Provider:   "lmstudio",
+				Attempted:  true,
+				Models: []DiscoveredModel{
+					{
+						Name:              "google/gemma-3-4b",
+						SupportsTools:     true,
+						SupportsStreaming: true,
+						SupportsImages:    true,
+					},
+				},
+			},
+		},
+	}, time.Date(2026, 4, 3, 21, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("ApplyInventory: %v", err)
+	}
+
+	snap := reg.Snapshot()
+	dep, ok := findPolicySnapshot(snap, "deepslate/google/gemma-3-4b")
+	if !ok {
+		t.Fatal("missing discovered deployment snapshot")
+	}
+	if dep.Routable {
+		t.Fatalf("default discovered Routable = true, want false")
+	}
+	if dep.RoutableSource != DeploymentPolicySourceDefault {
+		t.Fatalf("default discovered RoutableSource = %q, want %q", dep.RoutableSource, DeploymentPolicySourceDefault)
+	}
+
+	routable := true
+	updatedAt := time.Date(2026, 4, 3, 21, 5, 0, 0, time.UTC)
+	if err := reg.ApplyDeploymentPolicy("deepslate/google/gemma-3-4b", DeploymentPolicy{
+		State:    DeploymentPolicyStateActive,
+		Routable: &routable,
+		Reason:   "promote vision route",
+	}, updatedAt); err != nil {
+		t.Fatalf("ApplyDeploymentPolicy: %v", err)
+	}
+
+	snap = reg.Snapshot()
+	dep, ok = findPolicySnapshot(snap, "deepslate/google/gemma-3-4b")
+	if !ok {
+		t.Fatal("missing promoted deployment snapshot")
+	}
+	if !dep.Routable {
+		t.Fatalf("promoted Routable = false, want true")
+	}
+	if dep.RoutableSource != DeploymentPolicySourceOverlay {
+		t.Fatalf("promoted RoutableSource = %q, want %q", dep.RoutableSource, DeploymentPolicySourceOverlay)
+	}
+
+	routerCfg := reg.Catalog().RouterConfig(100)
+	found := false
+	for _, model := range routerCfg.Models {
+		if model.Name == "deepslate/google/gemma-3-4b" {
+			found = true
+			if !model.SupportsImages {
+				t.Fatalf("promoted router model = %+v, want image support", model)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("promoted discovered deployment missing from router config")
+	}
+
+	if err := reg.ClearDeploymentPolicy("deepslate/google/gemma-3-4b", time.Date(2026, 4, 3, 21, 10, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("ClearDeploymentPolicy: %v", err)
+	}
+
+	snap = reg.Snapshot()
+	dep, ok = findPolicySnapshot(snap, "deepslate/google/gemma-3-4b")
+	if !ok {
+		t.Fatal("missing deployment snapshot after clear")
+	}
+	if dep.Routable {
+		t.Fatalf("cleared Routable = true, want false")
+	}
+	if dep.RoutableSource != DeploymentPolicySourceDefault {
+		t.Fatalf("cleared RoutableSource = %q, want %q", dep.RoutableSource, DeploymentPolicySourceDefault)
+	}
+}
+
 func findPolicySnapshot(snapshot *RegistrySnapshot, id string) (RegistryDeploymentSnapshot, bool) {
 	for _, dep := range snapshot.Deployments {
 		if dep.ID == id {
