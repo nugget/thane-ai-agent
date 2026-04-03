@@ -606,8 +606,12 @@ func handleOllamaVersionShared(w http.ResponseWriter, r *http.Request, logger *s
 func ollamaError(w http.ResponseWriter, code int, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
-	// Best-effort write - client may have disconnected
-	_, _ = w.Write([]byte(`{"error":"` + message + `"}`))
+	// Best-effort write - client may have disconnected.
+	body, err := json.Marshal(map[string]string{"error": message})
+	if err != nil {
+		body = []byte(`{"error":"internal error"}`)
+	}
+	_, _ = w.Write(body)
 }
 
 func ollamaAgentError(err error) (int, string) {
