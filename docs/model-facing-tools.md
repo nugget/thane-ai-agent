@@ -224,6 +224,14 @@ something that could have been accepted literally.
 Prefer tool shapes that accept exact file paths, IDs, or other canonical
 selectors directly when the caller already has them.
 
+Stable path abstractions are also valid when they resolve
+deterministically before execution. This is the lesson of
+[#377](https://github.com/nugget/thane-ai-agent/issues/377) and
+[PR #378](https://github.com/nugget/thane-ai-agent/pull/378): prefixes
+like `kb:`, `scratchpad:`, and `temp:` are good abstractions when they
+are backed by a shared resolver and collapse to concrete paths without
+making the model search the filesystem.
+
 Bad:
 
 - requiring a search step before every file read or entity mutation
@@ -231,6 +239,7 @@ Bad:
 Better:
 
 - `read_file(path="/home/thane/config.yaml")`
+- `read_file(path="kb:reference/architecture.md")`
 - `ha_automation_get(entity_id="automation.low_battery_warning")`
 
 ## Delegate-Specific Guidance
