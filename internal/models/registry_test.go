@@ -163,3 +163,153 @@ func TestRegistryApplyInventoryDoesNotMarkUnattemptedResourcesRefreshed(t *testi
 		t.Fatalf("DiscoveredModels = %d, want 0", snap.Resources[0].DiscoveredModels)
 	}
 }
+
+func TestRegistryDeploymentPolicyLifecycle(t *testing.T) {
+	t.Parallel()
+
+	base := &Catalog{
+		DefaultModel: "spark/gpt-oss:20b",
+		LocalFirst:   true,
+		Resources: []Resource{
+			{ID: "mirror", Provider: "ollama", URL: "http://mirror.example"},
+			{ID: "spark", Provider: "ollama", URL: "http://spark.example"},
+		},
+		Deployments: []Deployment{
+			{
+				ID:            "spark/gpt-oss:20b",
+				ModelName:     "gpt-oss:20b",
+				Provider:      "ollama",
+				ResourceID:    "spark",
+				Server:        "spark",
+				SupportsTools: true,
+				ContextWindow: 8192,
+				Speed:         6,
+				Quality:       6,
+				CostTier:      0,
+				Source:        DeploymentSourceConfig,
+				Routable:      true,
+			},
+		},
+	}
+	if err := base.reindex(base.DefaultModel, base.RecoveryModel); err != nil {
+		t.Fatalf("reindex base: %v", err)
+	}
+
+	reg, err := NewRegistry(base)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	if err := reg.ApplyInventory(&Inventory{
+		Resources: []ResourceInventory{
+			{
+				ResourceID: "mirror",
+				Provider:   "ollama",
+				Attempted:  true,
+				Models: []DiscoveredModel{
+					{Name: "qwen3:8b"},
+				},
+			},
+		},
+	}, time.Date(2026, 4, 3, 20, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("ApplyInventory: %v", err)
+	}
+
+	snap := reg.Snapshot()
+	if snap == nil {
+		t.Fatal("Snapshot returned nil")
+	}
+
+	dep, ok := findPolicySnapshot(snap, "spark/gpt-oss:20b")
+	if !ok {
+		t.Fatal("missing config deployment snapshot")
+	}
+	if dep.PolicyState != DeploymentPolicyStateActive {
+		t.Fatalf("default policy state = %q, want %q", dep.PolicyState, DeploymentPolicyStateActive)
+	}
+	if dep.PolicySource != DeploymentPolicySourceDefault {
+		t.Fatalf("default policy source = %q, want %q", dep.PolicySource, DeploymentPolicySourceDefault)
+	}
+
+	updatedAt := time.Date(2026, 4, 3, 20, 5, 0, 0, time.UTC)
+	if err := reg.ApplyDeploymentPolicy("mirror/qwen3:8b", DeploymentPolicy{
+		State:  DeploymentPolicyStateFlagged,
+		Reason: "manual review",
+	}, updatedAt); err != nil {
+		t.Fatalf("ApplyDeploymentPolicy: %v", err)
+	}
+
+	snap = reg.Snapshot()
+	dep, ok = findPolicySnapshot(snap, "mirror/qwen3:8b")
+	if !ok {
+		t.Fatal("missing discovered deployment snapshot")
+	}
+	if dep.PolicyState != DeploymentPolicyStateFlagged {
+		t.Fatalf("policy state = %q, want %q", dep.PolicyState, DeploymentPolicyStateFlagged)
+	}
+	if dep.PolicySource != DeploymentPolicySourceOverlay {
+		t.Fatalf("policy source = %q, want %q", dep.PolicySource, DeploymentPolicySourceOverlay)
+	}
+	if dep.PolicyReason != "manual review" {
+		t.Fatalf("policy reason = %q, want %q", dep.PolicyReason, "manual review")
+	}
+	if dep.PolicyUpdated != updatedAt.Format(time.RFC3339) {
+		t.Fatalf("policy updated = %q, want %q", dep.PolicyUpdated, updatedAt.Format(time.RFC3339))
+	}
+
+	// A later inventory refresh should preserve the explicit policy.
+	if err := reg.ApplyInventory(&Inventory{
+		Resources: []ResourceInventory{
+			{
+				ResourceID: "mirror",
+				Provider:   "ollama",
+				Attempted:  true,
+				Models: []DiscoveredModel{
+					{Name: "qwen3:8b"},
+					{Name: "llama3.2:latest"},
+				},
+			},
+		},
+	}, time.Date(2026, 4, 3, 20, 10, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("ApplyInventory second refresh: %v", err)
+	}
+
+	snap = reg.Snapshot()
+	dep, ok = findPolicySnapshot(snap, "mirror/qwen3:8b")
+	if !ok {
+		t.Fatal("missing discovered deployment snapshot after refresh")
+	}
+	if dep.PolicyState != DeploymentPolicyStateFlagged {
+		t.Fatalf("post-refresh policy state = %q, want %q", dep.PolicyState, DeploymentPolicyStateFlagged)
+	}
+
+	if err := reg.ClearDeploymentPolicy("mirror/qwen3:8b", time.Date(2026, 4, 3, 20, 12, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("ClearDeploymentPolicy: %v", err)
+	}
+
+	snap = reg.Snapshot()
+	dep, ok = findPolicySnapshot(snap, "mirror/qwen3:8b")
+	if !ok {
+		t.Fatal("missing deployment snapshot after clear")
+	}
+	if dep.PolicyState != DeploymentPolicyStateActive {
+		t.Fatalf("cleared policy state = %q, want %q", dep.PolicyState, DeploymentPolicyStateActive)
+	}
+	if dep.PolicySource != DeploymentPolicySourceDefault {
+		t.Fatalf("cleared policy source = %q, want %q", dep.PolicySource, DeploymentPolicySourceDefault)
+	}
+	if dep.PolicyReason != "" {
+		t.Fatalf("cleared policy reason = %q, want empty", dep.PolicyReason)
+	}
+	if dep.PolicyUpdated != "" {
+		t.Fatalf("cleared policy updated = %q, want empty", dep.PolicyUpdated)
+	}
+}
+
+func findPolicySnapshot(snapshot *RegistrySnapshot, id string) (RegistryDeploymentSnapshot, bool) {
+	for _, dep := range snapshot.Deployments {
+		if dep.ID == id {
+			return dep, true
+		}
+	}
+	return RegistryDeploymentSnapshot{}, false
+}

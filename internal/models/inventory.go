@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"time"
 )
 
 // Inventory is the mutable provider-exported overlay that sits on top
@@ -172,6 +173,32 @@ func cloneDeployments(in []Deployment) []Deployment {
 		out[i] = dep
 	}
 	return out
+}
+
+func applyDeploymentPolicies(cat *Catalog, policies map[string]DeploymentPolicy) (*Catalog, error) {
+	if cat == nil {
+		return nil, fmt.Errorf("nil model catalog")
+	}
+
+	out := *cat
+	out.Resources = append([]Resource(nil), cat.Resources...)
+	out.Deployments = cloneDeployments(cat.Deployments)
+	for i := range out.Deployments {
+		out.Deployments[i].PolicyState = DeploymentPolicyStateActive
+		out.Deployments[i].PolicySource = DeploymentPolicySourceDefault
+		out.Deployments[i].PolicyReason = ""
+		out.Deployments[i].PolicyUpdatedAt = time.Time{}
+		if policy, ok := policies[out.Deployments[i].ID]; ok {
+			out.Deployments[i].PolicyState = policy.State
+			out.Deployments[i].PolicySource = DeploymentPolicySourceOverlay
+			out.Deployments[i].PolicyReason = policy.Reason
+			out.Deployments[i].PolicyUpdatedAt = policy.UpdatedAt
+		}
+	}
+	if err := out.reindex(cat.DefaultModel, cat.RecoveryModel); err != nil {
+		return nil, err
+	}
+	return &out, nil
 }
 
 func deploymentKey(resourceID, modelName string) string {

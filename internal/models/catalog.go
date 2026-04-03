@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/config"
 	"github.com/nugget/thane-ai-agent/internal/router"
@@ -50,6 +51,11 @@ type Deployment struct {
 	Families      []string
 	ParameterSize string
 	Quantization  string
+
+	PolicyState     DeploymentPolicyState
+	PolicySource    DeploymentPolicySource
+	PolicyReason    string
+	PolicyUpdatedAt time.Time
 }
 
 // Catalog is the normalized, provider-aware model view used by both

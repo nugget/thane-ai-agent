@@ -75,7 +75,7 @@ type Server struct {
 	owuTracker      *OWUTracker
 	webServer       WebServerRegistrar
 	platformHandler http.Handler
-	modelCatalog    *models.Catalog
+	modelRegistry   *models.Registry
 	usageStore      *usage.Store
 	logger          *slog.Logger
 	server          *http.Server
@@ -184,7 +184,11 @@ func (s *SessionStats) LastRequest() time.Time {
 // token observer (if set) so external consumers (e.g., the MQTT daily
 // token accumulator) are updated.
 func (s *Server) recordUsage(model string, inputTokens, outputTokens int) {
-	identity := usage.ResolveModelIdentity(model, s.modelCatalog)
+	var cat *models.Catalog
+	if s.modelRegistry != nil {
+		cat = s.modelRegistry.Catalog()
+	}
+	identity := usage.ResolveModelIdentity(model, cat)
 	s.stats.Record(identity, inputTokens, outputTokens)
 	if s.tokenObserver != nil {
 		s.tokenObserver.OnTokens(inputTokens, outputTokens)
@@ -268,15 +272,15 @@ func cloneSessionUsageMap(src map[string]usage.Summary) map[string]usage.Summary
 
 // NewServer creates a new API server. The pricing map drives cost
 // estimation in session stats; pass nil for zero-cost defaults.
-func NewServer(address string, port int, loop *agent.Loop, rtr *router.Router, pricing map[string]config.PricingEntry, cat *models.Catalog, usageStore *usage.Store, logger *slog.Logger) *Server {
+func NewServer(address string, port int, loop *agent.Loop, rtr *router.Router, pricing map[string]config.PricingEntry, registry *models.Registry, usageStore *usage.Store, logger *slog.Logger) *Server {
 	return &Server{
-		address:      address,
-		port:         port,
-		loop:         loop,
-		router:       rtr,
-		modelCatalog: cat,
-		usageStore:   usageStore,
-		logger:       logger,
+		address:       address,
+		port:          port,
+		loop:          loop,
+		router:        rtr,
+		modelRegistry: registry,
+		usageStore:    usageStore,
+		logger:        logger,
 		stats: &SessionStats{
 			pricing:         pricing,
 			ByModel:         make(map[string]usage.Summary),
@@ -321,6 +325,11 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("GET /v1/router/stats", s.handleRouterStats)
 	mux.HandleFunc("GET /v1/router/audit", s.handleRouterAudit)
 	mux.HandleFunc("GET /v1/router/explain/{requestId}", s.handleRouterExplain)
+
+	// Model registry endpoints
+	mux.HandleFunc("GET /v1/model-registry", s.handleModelRegistry)
+	mux.HandleFunc("POST /v1/model-registry/policy", s.handleModelRegistryPolicySet)
+	mux.HandleFunc("DELETE /v1/model-registry/policy", s.handleModelRegistryPolicyDelete)
 
 	// Checkpoint endpoints
 	mux.HandleFunc("POST /v1/checkpoint", s.handleCheckpointCreate)
@@ -813,6 +822,119 @@ func (s *Server) handleRouterExplain(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	writeJSON(w, decision, s.logger)
+}
+
+type setModelRegistryPolicyRequest struct {
+	Deployment string `json:"deployment"`
+	State      string `json:"state"`
+	Reason     string `json:"reason,omitempty"`
+}
+
+type modelRegistryPolicyResponse struct {
+	Status     string                            `json:"status"`
+	Generation int64                             `json:"generation"`
+	Deployment models.RegistryDeploymentSnapshot `json:"deployment"`
+}
+
+func (s *Server) handleModelRegistry(w http.ResponseWriter, r *http.Request) {
+	if s.modelRegistry == nil {
+		s.errorResponse(w, http.StatusServiceUnavailable, "model registry not configured")
+		return
+	}
+
+	snapshot := s.modelRegistry.Snapshot()
+	w.Header().Set("Content-Type", "application/json")
+	writeJSON(w, snapshot, s.logger)
+}
+
+func (s *Server) handleModelRegistryPolicySet(w http.ResponseWriter, r *http.Request) {
+	if s.modelRegistry == nil {
+		s.errorResponse(w, http.StatusServiceUnavailable, "model registry not configured")
+		return
+	}
+
+	var req setModelRegistryPolicyRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.errorResponse(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	req.Deployment = strings.TrimSpace(req.Deployment)
+	if req.Deployment == "" {
+		s.errorResponse(w, http.StatusBadRequest, "deployment is required")
+		return
+	}
+
+	state, err := models.ParseDeploymentPolicyState(req.State)
+	if err != nil {
+		s.errorResponse(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	if err := s.modelRegistry.ApplyDeploymentPolicy(req.Deployment, models.DeploymentPolicy{
+		State:  state,
+		Reason: req.Reason,
+	}, time.Now()); err != nil {
+		s.errorResponse(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	snapshot := s.modelRegistry.Snapshot()
+	deployment, ok := findRegistryDeployment(snapshot, req.Deployment)
+	if !ok {
+		s.errorResponse(w, http.StatusInternalServerError, "deployment policy applied but deployment snapshot is unavailable")
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	writeJSON(w, modelRegistryPolicyResponse{
+		Status:     "ok",
+		Generation: snapshot.Generation,
+		Deployment: deployment,
+	}, s.logger)
+}
+
+func (s *Server) handleModelRegistryPolicyDelete(w http.ResponseWriter, r *http.Request) {
+	if s.modelRegistry == nil {
+		s.errorResponse(w, http.StatusServiceUnavailable, "model registry not configured")
+		return
+	}
+
+	id := strings.TrimSpace(r.URL.Query().Get("deployment"))
+	if id == "" {
+		s.errorResponse(w, http.StatusBadRequest, "deployment is required")
+		return
+	}
+
+	if err := s.modelRegistry.ClearDeploymentPolicy(id, time.Now()); err != nil {
+		s.errorResponse(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	snapshot := s.modelRegistry.Snapshot()
+	deployment, ok := findRegistryDeployment(snapshot, id)
+	if !ok {
+		s.errorResponse(w, http.StatusInternalServerError, "deployment policy cleared but deployment snapshot is unavailable")
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	writeJSON(w, modelRegistryPolicyResponse{
+		Status:     "ok",
+		Generation: snapshot.Generation,
+		Deployment: deployment,
+	}, s.logger)
+}
+
+func findRegistryDeployment(snapshot *models.RegistrySnapshot, id string) (models.RegistryDeploymentSnapshot, bool) {
+	if snapshot == nil {
+		return models.RegistryDeploymentSnapshot{}, false
+	}
+	for _, dep := range snapshot.Deployments {
+		if dep.ID == id {
+			return dep, true
+		}
+	}
+	return models.RegistryDeploymentSnapshot{}, false
 }
 
 // Checkpoint handlers

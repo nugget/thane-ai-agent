@@ -11,7 +11,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nugget/thane-ai-agent/internal/config"
 	"github.com/nugget/thane-ai-agent/internal/database"
+	"github.com/nugget/thane-ai-agent/internal/models"
 	"github.com/nugget/thane-ai-agent/internal/usage"
 )
 
@@ -32,6 +34,49 @@ func testAPIUsageStore(t *testing.T) *usage.Store {
 		t.Fatalf("usage.NewStore: %v", err)
 	}
 	return store
+}
+
+func testAPIModelRegistry(t *testing.T) *models.Registry {
+	t.Helper()
+
+	cfg := &config.Config{}
+	cfg.Models.LocalFirst = true
+	cfg.Models.Default = "spark/gpt-oss:20b"
+	cfg.Models.Servers = map[string]config.ModelServerConfig{
+		"mirror": {URL: "http://mirror.example", Provider: "ollama"},
+		"spark":  {URL: "http://spark.example", Provider: "ollama"},
+	}
+	cfg.Models.Available = []config.ModelConfig{
+		{
+			Name:          "gpt-oss:20b",
+			Server:        "mirror",
+			SupportsTools: true,
+			ContextWindow: 8192,
+			Speed:         6,
+			Quality:       6,
+			CostTier:      0,
+		},
+		{
+			Name:          "gpt-oss:20b",
+			Server:        "spark",
+			SupportsTools: true,
+			ContextWindow: 8192,
+			Speed:         6,
+			Quality:       6,
+			CostTier:      0,
+		},
+	}
+
+	base, err := models.BuildCatalog(cfg)
+	if err != nil {
+		t.Fatalf("models.BuildCatalog: %v", err)
+	}
+
+	registry, err := models.NewRegistry(base)
+	if err != nil {
+		t.Fatalf("models.NewRegistry: %v", err)
+	}
+	return registry
 }
 
 func TestSimpleChatRequest_Parsing(t *testing.T) {
@@ -263,6 +308,97 @@ func TestHandleUsageSummary_InvalidHours(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/v1/usage/summary?hours=zero", nil)
 	rec := httptest.NewRecorder()
 	server.handleUsageSummary(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+}
+
+func TestHandleModelRegistry(t *testing.T) {
+	registry := testAPIModelRegistry(t)
+	server := NewServer("", 0, nil, nil, nil, registry, nil, testAPILogger())
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/model-registry", nil)
+	rec := httptest.NewRecorder()
+	server.handleModelRegistry(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+
+	var snap models.RegistrySnapshot
+	if err := json.NewDecoder(rec.Body).Decode(&snap); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(snap.Deployments) != 2 {
+		t.Fatalf("deployments len = %d, want 2", len(snap.Deployments))
+	}
+	if snap.Deployments[1].ID != "spark/gpt-oss:20b" {
+		t.Fatalf("deployment id = %q, want %q", snap.Deployments[1].ID, "spark/gpt-oss:20b")
+	}
+	if snap.Deployments[1].PolicyState != models.DeploymentPolicyStateActive {
+		t.Fatalf("policy state = %q, want %q", snap.Deployments[1].PolicyState, models.DeploymentPolicyStateActive)
+	}
+	if snap.Deployments[1].PolicySource != models.DeploymentPolicySourceDefault {
+		t.Fatalf("policy source = %q, want %q", snap.Deployments[1].PolicySource, models.DeploymentPolicySourceDefault)
+	}
+}
+
+func TestHandleModelRegistryPolicySetAndDelete(t *testing.T) {
+	registry := testAPIModelRegistry(t)
+	server := NewServer("", 0, nil, nil, nil, registry, nil, testAPILogger())
+
+	body := bytes.NewBufferString(`{"deployment":"spark/gpt-oss:20b","state":"flagged","reason":"manual review"}`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/model-registry/policy", body)
+	rec := httptest.NewRecorder()
+	server.handleModelRegistryPolicySet(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("set status = %d, want 200", rec.Code)
+	}
+
+	var setResp modelRegistryPolicyResponse
+	if err := json.NewDecoder(rec.Body).Decode(&setResp); err != nil {
+		t.Fatalf("decode set response: %v", err)
+	}
+	if setResp.Deployment.PolicyState != models.DeploymentPolicyStateFlagged {
+		t.Fatalf("set policy state = %q, want %q", setResp.Deployment.PolicyState, models.DeploymentPolicyStateFlagged)
+	}
+	if setResp.Deployment.PolicySource != models.DeploymentPolicySourceOverlay {
+		t.Fatalf("set policy source = %q, want %q", setResp.Deployment.PolicySource, models.DeploymentPolicySourceOverlay)
+	}
+	if setResp.Deployment.PolicyReason != "manual review" {
+		t.Fatalf("set policy reason = %q, want %q", setResp.Deployment.PolicyReason, "manual review")
+	}
+
+	deleteReq := httptest.NewRequest(http.MethodDelete, "/v1/model-registry/policy?deployment=spark/gpt-oss:20b", nil)
+	deleteRec := httptest.NewRecorder()
+	server.handleModelRegistryPolicyDelete(deleteRec, deleteReq)
+
+	if deleteRec.Code != http.StatusOK {
+		t.Fatalf("delete status = %d, want 200", deleteRec.Code)
+	}
+
+	var deleteResp modelRegistryPolicyResponse
+	if err := json.NewDecoder(deleteRec.Body).Decode(&deleteResp); err != nil {
+		t.Fatalf("decode delete response: %v", err)
+	}
+	if deleteResp.Deployment.PolicyState != models.DeploymentPolicyStateActive {
+		t.Fatalf("delete policy state = %q, want %q", deleteResp.Deployment.PolicyState, models.DeploymentPolicyStateActive)
+	}
+	if deleteResp.Deployment.PolicySource != models.DeploymentPolicySourceDefault {
+		t.Fatalf("delete policy source = %q, want %q", deleteResp.Deployment.PolicySource, models.DeploymentPolicySourceDefault)
+	}
+}
+
+func TestHandleModelRegistryPolicySet_InvalidState(t *testing.T) {
+	registry := testAPIModelRegistry(t)
+	server := NewServer("", 0, nil, nil, nil, registry, nil, testAPILogger())
+
+	body := bytes.NewBufferString(`{"deployment":"spark/gpt-oss:20b","state":"bogus"}`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/model-registry/policy", body)
+	rec := httptest.NewRecorder()
+	server.handleModelRegistryPolicySet(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", rec.Code)
