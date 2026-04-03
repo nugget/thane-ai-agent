@@ -6,6 +6,17 @@ import (
 	"sort"
 )
 
+// AmbiguousModelError reports that a model selector matches multiple
+// qualified route targets and must be disambiguated by the caller.
+type AmbiguousModelError struct {
+	Model   string
+	Targets []string
+}
+
+func (e *AmbiguousModelError) Error() string {
+	return fmt.Sprintf("model %q is ambiguous; use one of %q", e.Model, e.Targets)
+}
+
 type route struct {
 	providerName string
 	modelName    string
@@ -68,7 +79,9 @@ func (m *MultiClient) MarkAmbiguous(alias string, targets []string) {
 func (m *MultiClient) resolve(model string) (Client, string, string, error) {
 	target := model
 	if routes, ok := m.ambiguous[model]; ok {
-		return nil, "", "", fmt.Errorf("model %q is ambiguous; use one of %q", model, routes)
+		out := make([]string, len(routes))
+		copy(out, routes)
+		return nil, "", "", &AmbiguousModelError{Model: model, Targets: out}
 	}
 	if alias, ok := m.aliases[model]; ok {
 		target = alias

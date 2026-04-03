@@ -366,6 +366,40 @@ func TestTimeoutRecovery_StaticFallbackWhenNoRecoveryModel(t *testing.T) {
 	}
 }
 
+func TestAmbiguousModelError_DoesNotFailOver(t *testing.T) {
+	t.Parallel()
+
+	mock := &mockTimeoutLLM{
+		errors: []error{
+			&llm.AmbiguousModelError{
+				Model:   "gpt-oss:20b",
+				Targets: []string{"mirror/gpt-oss:20b", "spark/gpt-oss:20b"},
+			},
+		},
+	}
+
+	loop := buildTestLoopWithLLM(mock, nil)
+	loop.model = "spark/gpt-oss:20b"
+
+	_, err := loop.Run(context.Background(), &Request{
+		Messages: []Message{{Role: "user", Content: "Reply with exactly ok"}},
+		Model:    "gpt-oss:20b",
+	}, nil)
+	if err == nil {
+		t.Fatal("Run() error = nil, want ambiguity error")
+	}
+	if !strings.Contains(err.Error(), `model "gpt-oss:20b" is ambiguous`) {
+		t.Fatalf("Run() error = %q, want ambiguity message", err)
+	}
+
+	mock.mu.Lock()
+	callCount := len(mock.calls)
+	mock.mu.Unlock()
+	if callCount != 1 {
+		t.Fatalf("LLM call count = %d, want 1 (no failover)", callCount)
+	}
+}
+
 // buildTestLoopWithLLM creates a test Loop with a custom LLM client
 // and a near-zero retry delay so tests don't block on real backoff.
 func buildTestLoopWithLLM(client llm.Client, extraNames []string) *Loop {

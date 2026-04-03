@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -64,6 +65,10 @@ func TestMultiClientChat_RejectsAmbiguousAlias(t *testing.T) {
 	_, err := multi.Chat(context.Background(), "qwen3:4b", nil, nil)
 	if err == nil {
 		t.Fatal("Chat() should fail for ambiguous alias")
+	}
+	var amb *AmbiguousModelError
+	if !errors.As(err, &amb) {
+		t.Fatalf("Chat() error = %T, want *AmbiguousModelError", err)
 	}
 	if msg := err.Error(); !strings.Contains(msg, "default/qwen3:4b") || !strings.Contains(msg, "edge/qwen3:4b") {
 		t.Fatalf("Chat() error = %q, want both qualified ids", msg)

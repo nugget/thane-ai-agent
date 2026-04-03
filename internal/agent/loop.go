@@ -1657,6 +1657,13 @@ func (l *Loop) buildLLMErrorHandler(ctx context.Context, stream llm.StreamCallba
 			}, model, nil
 		}
 
+		// Ambiguous route selection is user-fixable and should surface
+		// directly instead of being silently collapsed to the default.
+		var ambiguous *llm.AmbiguousModelError
+		if errors.As(err, &ambiguous) {
+			return nil, "", err
+		}
+
 		// Non-timeout error: failover to default model if using a routed model.
 		if model != l.model {
 			fallbackModel := l.model
