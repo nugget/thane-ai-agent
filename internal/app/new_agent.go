@@ -96,6 +96,7 @@ func (a *App) initAgentLoop(s *newState) error {
 	loop := agent.NewLoop(logger, a.mem, a.compactor, a.rtr, a.ha, a.sched, a.llmClient, defaultModel, s.parsedTalents, s.personaContent, defaultContextWindow)
 	a.loop = loop
 	loop.SetTimezone(cfg.Timezone)
+	loop.UseModelRegistry(a.modelRegistry)
 	if a.contentWriter != nil {
 		loop.SetContentWriter(a.contentWriter)
 	}

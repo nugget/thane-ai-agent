@@ -5,12 +5,21 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/nugget/thane-ai-agent/internal/agent"
 	"github.com/nugget/thane-ai-agent/internal/llm"
+	"github.com/nugget/thane-ai-agent/internal/models"
 )
 
 func agentErrorDetails(err error) (int, string) {
 	var ambiguous *llm.AmbiguousModelError
 	if errors.As(err, &ambiguous) {
+		return http.StatusBadRequest, err.Error()
+	}
+	var incompatible *agent.IncompatibleModelError
+	if errors.As(err, &incompatible) {
+		return http.StatusBadRequest, err.Error()
+	}
+	if models.IsUnknownModel(err) {
 		return http.StatusBadRequest, err.Error()
 	}
 

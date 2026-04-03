@@ -217,6 +217,7 @@ type Loop struct {
 	usageStore        *usage.Store                   // nil = no usage recording
 	pricing           map[string]config.PricingEntry // model→cost for usage recording
 	usageCatalog      *models.Catalog
+	modelRegistry     *models.Registry
 
 	// Capability tags — per-Run tool/talent filtering.
 	//
@@ -422,6 +423,12 @@ func (l *Loop) SetUsageRecorder(store *usage.Store, pricing map[string]config.Pr
 	l.usageStore = store
 	l.pricing = pricing
 	l.usageCatalog = cat
+}
+
+// UseModelRegistry configures the live model registry used for
+// explicit model resolution and runtime usage attribution.
+func (l *Loop) UseModelRegistry(registry *models.Registry) {
+	l.modelRegistry = registry
 }
 
 // SetChannelTags configures channel-pinned tag activation. When a
@@ -1159,6 +1166,25 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		log.Info("tools excluded from run", "excluded", req.ExcludeTools)
 	}
 
+	// Determine whether tool gating is active before model selection so
+	// both router decisions and explicit-model preflight can reason
+	// about the actual tool surface this run will expose.
+	gatingActive := len(l.orchestratorTools) > 0 && l.tools.Get("thane_delegate") != nil
+	if req.Hints[router.HintDelegationGating] == "disabled" {
+		gatingActive = false
+	}
+	if gatingActive {
+		log.Info("orchestrator tool gating active", "tools", l.orchestratorTools)
+	}
+	skipTagFilter := req.SkipTagFilter
+
+	visibleTools := baseTools
+	if gatingActive {
+		visibleTools = visibleTools.FilteredCopy(l.orchestratorTools)
+	}
+	needsTools := len(visibleTools.List()) > 0
+	needsStreaming := stream != nil
+
 	// Select model via router
 	model := req.Model
 	var routerDecision *router.Decision
@@ -1184,9 +1210,9 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			routerReq := router.Request{
 				Query:          query,
 				ContextSize:    contextSize,
-				NeedsTools:     true, // We always have tools available
-				NeedsStreaming: stream != nil,
-				ToolCount:      len(baseTools.List()),
+				NeedsTools:     needsTools,
+				NeedsStreaming: needsStreaming,
+				ToolCount:      len(visibleTools.List()),
 				Priority:       router.PriorityInteractive,
 				Hints:          req.Hints,
 			}
@@ -1198,22 +1224,13 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			log.Debug("model selected as default (no router)", "model", model)
 		}
 	} else {
+		resolvedModel, err := l.preflightExplicitModel(model, needsTools, needsStreaming, false)
+		if err != nil {
+			return nil, err
+		}
+		model = resolvedModel
 		log.Debug("model specified in request, skipping router", "model", model)
 	}
-
-	// Determine whether tool gating is active. Gating is silently disabled
-	// when thane_delegate is not registered — without a delegation tool the
-	// restricted set would leave the agent unable to act. The thane:ops
-	// profile disables gating via the delegation_gating hint to give the
-	// model direct access to all tools.
-	gatingActive := len(l.orchestratorTools) > 0 && l.tools.Get("thane_delegate") != nil
-	if req.Hints[router.HintDelegationGating] == "disabled" {
-		gatingActive = false
-	}
-	if gatingActive {
-		log.Info("orchestrator tool gating active", "tools", l.orchestratorTools)
-	}
-	skipTagFilter := req.SkipTagFilter
 
 	startTime := time.Now()
 
@@ -2262,7 +2279,7 @@ func (l *Loop) recordUsage(ctx context.Context, req *Request, model string, tota
 		}
 	}
 
-	identity := usage.ResolveModelIdentity(model, l.usageCatalog)
+	identity := usage.ResolveModelIdentity(model, l.currentModelCatalog())
 	cost := usage.ComputeCostForIdentity(identity, totalIn, totalOut, l.pricing)
 	rec := usage.Record{
 		Timestamp:      time.Now(),

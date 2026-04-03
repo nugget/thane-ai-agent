@@ -498,16 +498,24 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	agentReq := &agent.Request{
-		Messages: req.Messages,
-		Model:    req.Model,
-		Hints: map[string]string{
-			"channel": "api", // Native OpenAI-compatible API
-		},
-	}
-
 	log := s.logger.With("subsystem", logging.SubsystemAPI)
 	ctx := logging.WithLogger(r.Context(), log)
+
+	hints := map[string]string{
+		"channel": "api", // Native OpenAI-compatible API
+	}
+	var openClawCfg *config.OpenClawConfig
+	if s.loop != nil {
+		openClawCfg = s.loop.OpenClawConfig()
+	}
+	model, hints, systemPrompt := normalizeModelSelection(req.Model, hints, premiumQualityFloor(s.router), openClawCfg, log)
+
+	agentReq := &agent.Request{
+		Messages:     req.Messages,
+		Model:        model,
+		Hints:        hints,
+		SystemPrompt: systemPrompt,
+	}
 
 	if req.Stream {
 		s.handleStreamingCompletion(w, r.WithContext(ctx), agentReq)
