@@ -8,27 +8,9 @@ other model-driven path, the audience is a model.
 This document is a sibling to
 [Model-Facing Context](model-facing-context.md). That page is about
 context injection and prompt assembly. This page is about tool surfaces
-and the data contracts around them.
-
-## Mission
-
-Make the next correct tool call easier.
-
-The model should not have to reverse-engineer the purpose of a tool,
-guess which argument is required, infer what a raw identifier means, or
-learn a recovery plan from a vague error string. Good tools reduce
-decision friction before and after the call.
-
-## Core Principle
-
-Tooling is not a UI.
-
-Our audience is not a human reading pretty output. The goal is compact,
-semantic, machine-usable data that helps a model choose the next action
-correctly.
-
-Human-readable names still matter, but as semantic metadata for the
-model, not as presentation polish.
+and the data contracts around them. Assume the conventions in the
+companion document still apply here. This page covers the tool-specific
+rules that are easiest to get wrong.
 
 ## Philosophy
 
@@ -79,20 +61,10 @@ Bad fit:
 
 When ambiguity exists, fail fast and return the candidates.
 
-### 3. Return compact structure with semantic metadata
+### 3. Return semantic metadata, not just raw IDs
 
-Tool results are working memory for later model steps. They should be
-compact, structured, and easy to chain into the next call.
-
-Prefer:
-
-- JSON objects and arrays with stable fields
-- canonical IDs needed for follow-up mutations
-- semantic names alongside opaque IDs when they add meaning
-- precomputed relationships, rates, counts, and deltas
-- deterministic ordering
-
-Do not add human-oriented prose around data just because it looks nicer.
+Tool results should include the canonical IDs needed for follow-up calls
+and the names or labels needed for interpretation.
 
 The purpose of names in results is not friendliness. It is semantic
 value. If a model sees only a category ID like
@@ -206,52 +178,6 @@ Examples:
 If the model has to re-run a broad search just to recover the argument
 for a follow-up call, the first tool did not expose enough.
 
-## Conventions
-
-### Prefer JSON when structure matters
-
-Compact JSON is usually the best fit for tool results and validation
-errors.
-
-Use prose only when the output is genuinely instructional or when the
-tool's job is to write text.
-
-### Keep schemas stable
-
-For model-facing tools:
-
-- keep field names stable
-- keep ordering stable unless relevance or time ordering is the point
-- cap large outputs
-- mark truncation explicitly
-- include empty arrays or fixed fields when that makes downstream use
-  simpler
-
-### Use names as metadata, not as a replacement for IDs
-
-If a result includes both raw IDs and resolved names, that is usually a
-feature, not duplication.
-
-The ID is for exact follow-up calls. The name is for meaning.
-
-### Echo the scoped selection in errors
-
-When an error depends on account, client, label, area, time range, or
-query, include those values in the error.
-
-That gives the model something concrete to revise.
-
-### Prefer one-step recovery paths
-
-If an error can suggest a clear next attempt, do it.
-
-Examples:
-
-- tell the model to specify `account`
-- tell the model which `client_id` values are available
-- tell the model which field was ambiguous
-- tell the model whether widening time bounds is likely to help
-
 ## Delegate-Specific Guidance
 
 Delegates are literal. They do not have human intuition about what an
@@ -262,14 +188,6 @@ Write tool contracts and errors so a delegate can:
 1. understand what failed
 2. identify the argument to change
 3. issue one better follow-up call
-
-Keep in mind:
-
-- delegates may not have extra narrative context beyond the task and the
-  tool response
-- delegates are often working under iteration limits and tool timeouts
-- delegates benefit from explicit candidate lists more than from generic
-  troubleshooting advice
 
 If a delegate would need to ask itself "what do I try next?", the tool
 surface can probably be improved.
