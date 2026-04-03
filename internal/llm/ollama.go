@@ -113,6 +113,25 @@ type Options struct {
 	NumPredict  int     `json:"num_predict,omitempty"`
 }
 
+// OllamaModelDetails contains model metadata returned by /api/tags.
+type OllamaModelDetails struct {
+	Format            string   `json:"format,omitempty"`
+	Family            string   `json:"family,omitempty"`
+	Families          []string `json:"families,omitempty"`
+	ParameterSize     string   `json:"parameter_size,omitempty"`
+	QuantizationLevel string   `json:"quantization_level,omitempty"`
+}
+
+// OllamaModelInfo describes a single model discovered from an Ollama
+// resource inventory.
+type OllamaModelInfo struct {
+	Name       string             `json:"name"`
+	Digest     string             `json:"digest,omitempty"`
+	Size       int64              `json:"size,omitempty"`
+	ModifiedAt string             `json:"modified_at,omitempty"`
+	Details    OllamaModelDetails `json:"details,omitempty"`
+}
+
 // ollamaWireResponse is the raw JSON response from Ollama's /api/chat endpoint.
 // This is a deserialization target only — convert to ChatResponse for internal use.
 type ollamaWireResponse struct {
@@ -587,7 +606,7 @@ func (c *OllamaClient) Ping(ctx context.Context) error {
 }
 
 // ListModels returns available models.
-func (c *OllamaClient) ListModels(ctx context.Context) ([]string, error) {
+func (c *OllamaClient) ListModelInfos(ctx context.Context) ([]OllamaModelInfo, error) {
 	httpReq, err := http.NewRequestWithContext(ctx, "GET", c.baseURL+"/api/tags", nil)
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
@@ -599,17 +618,29 @@ func (c *OllamaClient) ListModels(ctx context.Context) ([]string, error) {
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != http.StatusOK {
+		errBody := httpkit.ReadErrorBody(resp.Body, 4096)
+		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, errBody)
+	}
+
 	var result struct {
-		Models []struct {
-			Name string `json:"name"`
-		} `json:"models"`
+		Models []OllamaModelInfo `json:"models"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 
-	names := make([]string, len(result.Models))
-	for i, m := range result.Models {
+	return result.Models, nil
+}
+
+// ListModels returns available model names.
+func (c *OllamaClient) ListModels(ctx context.Context) ([]string, error) {
+	models, err := c.ListModelInfos(ctx)
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, len(models))
+	for i, m := range models {
 		names[i] = m.Name
 	}
 	return names, nil

@@ -25,6 +25,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/agent"
 	"github.com/nugget/thane-ai-agent/internal/app"
@@ -204,7 +205,7 @@ func runAsk(ctx context.Context, stdout io.Writer, stderr io.Writer, configPath 
 		ha = homeassistant.NewClient(cfg.HomeAssistant.URL, cfg.HomeAssistant.Token, logger)
 	}
 
-	llmSetup, err := createLLMSetup(cfg, logger)
+	llmSetup, err := createLLMSetup(ctx, cfg, logger)
 	if err != nil {
 		return err
 	}
@@ -295,7 +296,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		return err
 	}
 
-	llmSetup, err := createLLMSetup(cfg, logger)
+	llmSetup, err := createLLMSetup(ctx, cfg, logger)
 	if err != nil {
 		return err
 	}
@@ -424,22 +425,44 @@ type llmSetup struct {
 	OllamaClients map[string]*llm.OllamaClient
 }
 
-func createLLMSetup(cfg *config.Config, logger *slog.Logger) (*llmSetup, error) {
-	catalog, err := models.BuildCatalog(cfg)
+func createLLMSetup(ctx context.Context, cfg *config.Config, logger *slog.Logger) (*llmSetup, error) {
+	baseCatalog, err := models.BuildCatalog(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("build model catalog: %w", err)
 	}
-	normalizeConfiguredModelRefs(cfg, catalog)
+	normalizeConfiguredModelRefs(cfg, baseCatalog)
+
+	bootstrapBundle, err := models.BuildClients(baseCatalog, cfg, logger)
+	if err != nil {
+		return nil, fmt.Errorf("build llm clients: %w", err)
+	}
+
+	discoveryCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	inventory := models.DiscoverInventory(discoveryCtx, baseCatalog, bootstrapBundle, logger)
+
+	catalog, err := models.MergeInventory(baseCatalog, inventory)
+	if err != nil {
+		return nil, fmt.Errorf("merge model inventory: %w", err)
+	}
 
 	bundle, err := models.BuildClients(catalog, cfg, logger)
 	if err != nil {
 		return nil, fmt.Errorf("build llm clients: %w", err)
 	}
 
+	discovered := 0
+	for _, dep := range catalog.Deployments {
+		if dep.Source == models.DeploymentSourceDiscovered {
+			discovered++
+		}
+	}
+
 	logger.Info("LLM client initialized",
 		"default_model", catalog.DefaultModel,
 		"resources", len(catalog.Resources),
 		"deployments", len(catalog.Deployments),
+		"discovered_deployments", discovered,
 	)
 
 	return &llmSetup{

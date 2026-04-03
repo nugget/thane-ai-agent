@@ -1,6 +1,9 @@
 package llm
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 )
 
@@ -266,6 +269,75 @@ func TestExtractToolNames(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestOllamaClientListModelInfos(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/tags" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"models": [
+				{
+					"name": "gpt-oss:20b",
+					"digest": "sha256:abc",
+					"size": 123,
+					"modified_at": "2026-04-03T18:00:00Z",
+					"details": {
+						"family": "gpt-oss",
+						"families": ["gpt-oss"],
+						"parameter_size": "20B",
+						"quantization_level": "Q4_K_M"
+					}
+				}
+			]
+		}`))
+	}))
+	defer srv.Close()
+
+	client := NewOllamaClient(srv.URL, nil)
+	models, err := client.ListModelInfos(context.Background())
+	if err != nil {
+		t.Fatalf("ListModelInfos() error = %v", err)
+	}
+	if len(models) != 1 {
+		t.Fatalf("len(models) = %d, want 1", len(models))
+	}
+	if models[0].Name != "gpt-oss:20b" {
+		t.Fatalf("models[0].Name = %q, want %q", models[0].Name, "gpt-oss:20b")
+	}
+	if models[0].Details.Family != "gpt-oss" {
+		t.Fatalf("models[0].Details.Family = %q, want %q", models[0].Details.Family, "gpt-oss")
+	}
+	if models[0].Details.ParameterSize != "20B" {
+		t.Fatalf("models[0].Details.ParameterSize = %q, want %q", models[0].Details.ParameterSize, "20B")
+	}
+}
+
+func TestOllamaClientListModels_UsesInventoryNames(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"models":[{"name":"qwen3:4b"},{"name":"gpt-oss:20b"}]}`))
+	}))
+	defer srv.Close()
+
+	client := NewOllamaClient(srv.URL, nil)
+	names, err := client.ListModels(context.Background())
+	if err != nil {
+		t.Fatalf("ListModels() error = %v", err)
+	}
+	if len(names) != 2 {
+		t.Fatalf("len(names) = %d, want 2", len(names))
+	}
+	if names[0] != "qwen3:4b" || names[1] != "gpt-oss:20b" {
+		t.Fatalf("names = %v, want [qwen3:4b gpt-oss:20b]", names)
 	}
 }
 

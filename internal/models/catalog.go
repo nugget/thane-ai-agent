@@ -18,6 +18,14 @@ type Resource struct {
 	URL      string
 }
 
+// DeploymentSource describes where a deployment definition came from.
+type DeploymentSource string
+
+const (
+	DeploymentSourceConfig     DeploymentSource = "config"
+	DeploymentSourceDiscovered DeploymentSource = "discovered"
+)
+
 // Deployment is the normalized routing unit derived from config. The
 // same upstream model on different resources becomes distinct
 // deployments with distinct IDs.
@@ -33,6 +41,15 @@ type Deployment struct {
 	Quality       int
 	CostTier      int
 	MinComplexity string
+	Source        DeploymentSource
+	Routable      bool
+
+	// Provider-exported metadata kept alongside the normalized Thane
+	// deployment so later routing/policy layers can reason with it.
+	Family        string
+	Families      []string
+	ParameterSize string
+	Quantization  string
 }
 
 // Catalog is the normalized, provider-aware model view used by both
@@ -103,6 +120,7 @@ func BuildCatalog(cfg *config.Config) (*Catalog, error) {
 	sort.Strings(ollamaResourceIDs)
 
 	type unresolved struct {
+		ID            string
 		ModelName     string
 		Provider      string
 		ResourceID    string
@@ -113,6 +131,13 @@ func BuildCatalog(cfg *config.Config) (*Catalog, error) {
 		Quality       int
 		CostTier      int
 		MinComplexity string
+		Source        DeploymentSource
+		Routable      bool
+		AlwaysQualify bool
+		Family        string
+		Families      []string
+		ParameterSize string
+		Quantization  string
 	}
 
 	var pending []unresolved
@@ -173,6 +198,8 @@ func BuildCatalog(cfg *config.Config) (*Catalog, error) {
 			Quality:       m.Quality,
 			CostTier:      m.CostTier,
 			MinComplexity: m.MinComplexity,
+			Source:        DeploymentSourceConfig,
+			Routable:      true,
 		})
 		countByModel[m.Name]++
 	}
@@ -180,15 +207,11 @@ func BuildCatalog(cfg *config.Config) (*Catalog, error) {
 	sort.Slice(resources, func(i, j int) bool { return resources[i].ID < resources[j].ID })
 
 	deployments := make([]Deployment, 0, len(pending))
-	byID := make(map[string]Deployment, len(pending))
-	byModel := make(map[string][]Deployment)
-	aliases := make(map[string]string)
-	ambiguous := make(map[string][]string)
 
 	for _, p := range pending {
-		id := deploymentID(p.ModelName, p.Provider, p.Server, countByModel[p.ModelName] > 1)
-		if _, exists := byID[id]; exists {
-			return nil, fmt.Errorf("duplicate deployment id %q for model %q", id, p.ModelName)
+		id := p.ID
+		if id == "" {
+			id = deploymentID(p.ModelName, p.Provider, p.Server, countByModel[p.ModelName] > 1 || p.AlwaysQualify)
 		}
 
 		dep := Deployment{
@@ -203,54 +226,23 @@ func BuildCatalog(cfg *config.Config) (*Catalog, error) {
 			Quality:       p.Quality,
 			CostTier:      p.CostTier,
 			MinComplexity: p.MinComplexity,
+			Source:        p.Source,
+			Routable:      p.Routable,
+			Family:        p.Family,
+			Families:      append([]string(nil), p.Families...),
+			ParameterSize: p.ParameterSize,
+			Quantization:  p.Quantization,
 		}
 		deployments = append(deployments, dep)
-		byID[id] = dep
-		byModel[p.ModelName] = append(byModel[p.ModelName], dep)
-		aliases[id] = id
-	}
-
-	for modelName, deps := range byModel {
-		if len(deps) == 1 {
-			aliases[modelName] = deps[0].ID
-			continue
-		}
-		ids := make([]string, 0, len(deps))
-		for _, dep := range deps {
-			ids = append(ids, dep.ID)
-		}
-		sort.Strings(ids)
-		ambiguous[modelName] = ids
 	}
 
 	cat := &Catalog{
-		LocalFirst: cfg.Models.LocalFirst,
-		Resources:  resources,
-		Deployments: func() []Deployment {
-			out := make([]Deployment, len(deployments))
-			copy(out, deployments)
-			return out
-		}(),
-		byID:       byID,
-		byModel:    byModel,
-		aliases:    aliases,
-		ambiguous:  ambiguous,
-		resourceBy: resourceByID,
+		LocalFirst:  cfg.Models.LocalFirst,
+		Resources:   append([]Resource(nil), resources...),
+		Deployments: append([]Deployment(nil), deployments...),
 	}
-
-	if cfg.Models.Default != "" {
-		id, err := cat.ResolveModelRef(cfg.Models.Default)
-		if err != nil {
-			return nil, fmt.Errorf("models.default: %w", err)
-		}
-		cat.DefaultModel = id
-	}
-	if cfg.Models.RecoveryModel != "" {
-		id, err := cat.ResolveModelRef(cfg.Models.RecoveryModel)
-		if err != nil {
-			return nil, fmt.Errorf("models.recovery_model: %w", err)
-		}
-		cat.RecoveryModel = id
+	if err := cat.reindex(cfg.Models.Default, cfg.Models.RecoveryModel); err != nil {
+		return nil, err
 	}
 
 	return cat, nil
@@ -269,6 +261,72 @@ func deploymentID(modelName, provider, server string, duplicate bool) string {
 		return server + "/" + modelName
 	}
 	return provider + "/" + modelName
+}
+
+func (c *Catalog) reindex(defaultRef, recoveryRef string) error {
+	byID := make(map[string]Deployment, len(c.Deployments))
+	byModel := make(map[string][]Deployment)
+	aliases := make(map[string]string)
+	ambiguous := make(map[string][]string)
+	resourceBy := make(map[string]Resource, len(c.Resources))
+
+	sort.Slice(c.Resources, func(i, j int) bool { return c.Resources[i].ID < c.Resources[j].ID })
+	sort.Slice(c.Deployments, func(i, j int) bool { return c.Deployments[i].ID < c.Deployments[j].ID })
+
+	for _, res := range c.Resources {
+		resourceBy[res.ID] = res
+	}
+	for _, dep := range c.Deployments {
+		if strings.TrimSpace(dep.ID) == "" {
+			return fmt.Errorf("deployment id must not be empty for model %q", dep.ModelName)
+		}
+		if _, exists := byID[dep.ID]; exists {
+			return fmt.Errorf("duplicate deployment id %q for model %q", dep.ID, dep.ModelName)
+		}
+		aliases[dep.ID] = dep.ID
+		byID[dep.ID] = dep
+		byModel[dep.ModelName] = append(byModel[dep.ModelName], dep)
+	}
+	for modelName, deps := range byModel {
+		if len(deps) == 1 {
+			aliases[modelName] = deps[0].ID
+			continue
+		}
+		if _, ok := byID[modelName]; ok {
+			// Preserve a stable configured deployment ID even after
+			// discovery adds additional qualified deployments for the
+			// same upstream model name.
+			continue
+		}
+		ids := make([]string, 0, len(deps))
+		for _, dep := range deps {
+			ids = append(ids, dep.ID)
+		}
+		sort.Strings(ids)
+		ambiguous[modelName] = ids
+	}
+
+	c.byID = byID
+	c.byModel = byModel
+	c.aliases = aliases
+	c.ambiguous = ambiguous
+	c.resourceBy = resourceBy
+
+	if defaultRef != "" {
+		id, err := c.ResolveModelRef(defaultRef)
+		if err != nil {
+			return fmt.Errorf("models.default: %w", err)
+		}
+		c.DefaultModel = id
+	}
+	if recoveryRef != "" {
+		id, err := c.ResolveModelRef(recoveryRef)
+		if err != nil {
+			return fmt.Errorf("models.recovery_model: %w", err)
+		}
+		c.RecoveryModel = id
+	}
+	return nil
 }
 
 // ResolveModelRef resolves a raw model reference or qualified
@@ -340,6 +398,9 @@ func (c *Catalog) RouterConfig(maxAuditLog int) router.Config {
 		MaxAuditLog:  maxAuditLog,
 	}
 	for _, dep := range c.Deployments {
+		if !dep.Routable {
+			continue
+		}
 		minComp := router.ComplexitySimple
 		switch dep.MinComplexity {
 		case "moderate":
