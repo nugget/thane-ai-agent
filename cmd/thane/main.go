@@ -209,6 +209,7 @@ func runAsk(ctx context.Context, stdout io.Writer, stderr io.Writer, configPath 
 	if err != nil {
 		return err
 	}
+	logLLMSetup(logger, llmSetup)
 
 	talentLoader := talents.NewLoader(cfg.TalentsDir)
 	cliTalents, _ := talentLoader.Talents()
@@ -352,6 +353,8 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	defer cancel()
 	defer stopSignals()
 
+	logLLMSetup(a.Logger(), llmSetup)
+
 	// Log with the fully-configured logger (file handler, index handler,
 	// correct level/format) so this line is captured in rotated logs.
 	a.Logger().Info("config loaded",
@@ -423,6 +426,7 @@ type llmSetup struct {
 	Catalog       *models.Catalog
 	Client        llm.Client
 	OllamaClients map[string]*llm.OllamaClient
+	Inventory     *models.Inventory
 }
 
 func createLLMSetup(ctx context.Context, cfg *config.Config, logger *slog.Logger) (*llmSetup, error) {
@@ -439,7 +443,7 @@ func createLLMSetup(ctx context.Context, cfg *config.Config, logger *slog.Logger
 
 	discoveryCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	inventory := models.DiscoverInventory(discoveryCtx, baseCatalog, bootstrapBundle, logger)
+	inventory := models.DiscoverInventory(discoveryCtx, baseCatalog, bootstrapBundle)
 
 	catalog, err := models.MergeInventory(baseCatalog, inventory)
 	if err != nil {
@@ -451,25 +455,51 @@ func createLLMSetup(ctx context.Context, cfg *config.Config, logger *slog.Logger
 		return nil, fmt.Errorf("build llm clients: %w", err)
 	}
 
+	return &llmSetup{
+		Catalog:       catalog,
+		Client:        bundle.Client,
+		OllamaClients: bundle.OllamaClients,
+		Inventory:     inventory,
+	}, nil
+}
+
+func logLLMSetup(logger *slog.Logger, setup *llmSetup) {
+	if logger == nil || setup == nil {
+		return
+	}
+
+	if setup.Inventory != nil {
+		for _, ri := range setup.Inventory.Resources {
+			switch {
+			case ri.Error != "":
+				logger.Warn("model inventory discovery failed",
+					"resource", ri.ResourceID,
+					"provider", ri.Provider,
+					"error", ri.Error,
+				)
+			case len(ri.Models) > 0:
+				logger.Info("model inventory discovered",
+					"resource", ri.ResourceID,
+					"provider", ri.Provider,
+					"models", len(ri.Models),
+				)
+			}
+		}
+	}
+
 	discovered := 0
-	for _, dep := range catalog.Deployments {
+	for _, dep := range setup.Catalog.Deployments {
 		if dep.Source == models.DeploymentSourceDiscovered {
 			discovered++
 		}
 	}
 
 	logger.Info("LLM client initialized",
-		"default_model", catalog.DefaultModel,
-		"resources", len(catalog.Resources),
-		"deployments", len(catalog.Deployments),
+		"default_model", setup.Catalog.DefaultModel,
+		"resources", len(setup.Catalog.Resources),
+		"deployments", len(setup.Catalog.Deployments),
 		"discovered_deployments", discovered,
 	)
-
-	return &llmSetup{
-		Catalog:       catalog,
-		Client:        bundle.Client,
-		OllamaClients: bundle.OllamaClients,
-	}, nil
 }
 
 func normalizeConfiguredModelRefs(cfg *config.Config, catalog *models.Catalog) {

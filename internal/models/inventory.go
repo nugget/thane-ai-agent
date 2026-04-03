@@ -3,7 +3,6 @@ package models
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"sort"
 )
 
@@ -36,12 +35,9 @@ type DiscoveredModel struct {
 // DiscoverInventory probes configured resources for live model
 // inventory. Discovery is best-effort; individual resource failures are
 // captured in the returned overlay instead of aborting startup.
-func DiscoverInventory(ctx context.Context, cat *Catalog, bundle *ClientBundle, logger *slog.Logger) *Inventory {
+func DiscoverInventory(ctx context.Context, cat *Catalog, bundle *ClientBundle) *Inventory {
 	if cat == nil || bundle == nil {
 		return &Inventory{}
-	}
-	if logger == nil {
-		logger = slog.Default()
 	}
 
 	inv := &Inventory{
@@ -59,14 +55,12 @@ func DiscoverInventory(ctx context.Context, cat *Catalog, bundle *ClientBundle, 
 			client := bundle.OllamaClients[res.ID]
 			if client == nil {
 				ri.Error = "missing ollama client"
-				logger.Warn("model inventory discovery skipped", "resource", res.ID, "provider", res.Provider, "error", ri.Error)
 				inv.Resources = append(inv.Resources, ri)
 				continue
 			}
 			models, err := client.ListModelInfos(ctx)
 			if err != nil {
 				ri.Error = err.Error()
-				logger.Warn("model inventory discovery failed", "resource", res.ID, "provider", res.Provider, "error", err)
 				inv.Resources = append(inv.Resources, ri)
 				continue
 			}
@@ -80,9 +74,6 @@ func DiscoverInventory(ctx context.Context, cat *Catalog, bundle *ClientBundle, 
 					Quantization:  m.Details.QuantizationLevel,
 				})
 			}
-			logger.Info("model inventory discovered", "resource", res.ID, "provider", res.Provider, "models", len(ri.Models))
-		default:
-			logger.Debug("model inventory discovery not implemented for provider", "resource", res.ID, "provider", res.Provider)
 		}
 
 		inv.Resources = append(inv.Resources, ri)
