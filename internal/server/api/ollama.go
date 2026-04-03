@@ -12,6 +12,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -19,6 +20,7 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/agent"
+	"github.com/nugget/thane-ai-agent/internal/llm"
 	"github.com/nugget/thane-ai-agent/internal/logging"
 	"github.com/nugget/thane-ai-agent/internal/openclaw"
 	"github.com/nugget/thane-ai-agent/internal/router"
@@ -326,7 +328,8 @@ func handleOllamaChatShared(w http.ResponseWriter, r *http.Request, loop *agent.
 	resp, err := runFn(r.Context(), agentReq, nil)
 	if err != nil {
 		logger.Error("agent loop failed", "error", err)
-		ollamaError(w, http.StatusInternalServerError, "agent error")
+		code, message := ollamaAgentError(err)
+		ollamaError(w, code, message)
 		return
 	}
 
@@ -605,6 +608,14 @@ func ollamaError(w http.ResponseWriter, code int, message string) {
 	w.WriteHeader(code)
 	// Best-effort write - client may have disconnected
 	_, _ = w.Write([]byte(`{"error":"` + message + `"}`))
+}
+
+func ollamaAgentError(err error) (int, string) {
+	var ambiguous *llm.AmbiguousModelError
+	if errors.As(err, &ambiguous) {
+		return http.StatusBadRequest, err.Error()
+	}
+	return http.StatusInternalServerError, "agent error"
 }
 
 // sanitizeHARequest strips HA-provided tools and instructions, keeping only
