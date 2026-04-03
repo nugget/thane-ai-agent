@@ -18,6 +18,7 @@
 - **[Memory](memory.md)** — How Thane remembers: facts, conversations, archives, anticipations
 - **[Context Layers](context-layers.md)** — How the system prompt is assembled from persona, talents, knowledge, and session state
 - **[Model-Facing Context](model-facing-context.md)** — Philosophy and conventions for writing data that will be consumed by future model loops
+- **[Model-Facing Tools](model-facing-tools.md)** — Guidance for naming, shaping, and erroring internal tools so models and delegates can use them reliably
 
 ## Contributing
 
