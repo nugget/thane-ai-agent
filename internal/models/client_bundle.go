@@ -12,8 +12,9 @@ import (
 // clients keyed by resource ID for connection watching and other
 // resource-level concerns.
 type ClientBundle struct {
-	Client        llm.Client
-	OllamaClients map[string]*llm.OllamaClient
+	Client          llm.Client
+	ResourceClients map[string]llm.Client
+	OllamaClients   map[string]*llm.OllamaClient
 }
 
 // BuildClients constructs provider clients and a routed llm.Client from
@@ -53,15 +54,37 @@ func BuildClients(cat *Catalog, cfg *config.Config, logger *slog.Logger) (*Clien
 		resourceClients[res.ID] = client
 	}
 
+	bundle := &ClientBundle{
+		ResourceClients: resourceClients,
+		OllamaClients:   ollamaClients,
+	}
+	client, err := bundle.BuildRoutedClient(cat)
+	if err != nil {
+		return nil, err
+	}
+	bundle.Client = client
+	return bundle, nil
+}
+
+// BuildRoutedClient constructs a routed llm.Client for the provided
+// effective catalog using the bundle's stable per-resource clients.
+func (b *ClientBundle) BuildRoutedClient(cat *Catalog) (llm.Client, error) {
+	if b == nil {
+		return nil, fmt.Errorf("nil client bundle")
+	}
+	if cat == nil {
+		return nil, fmt.Errorf("nil model catalog")
+	}
+
 	var fallback llm.Client
 	switch {
 	case cat.DefaultModel != "":
 		if dep, ok := cat.byID[cat.DefaultModel]; ok {
-			fallback = resourceClients[dep.ResourceID]
+			fallback = b.ResourceClients[dep.ResourceID]
 		}
-	case len(ollamaClients) > 0:
+	case len(b.OllamaClients) > 0:
 		if url := cat.PrimaryOllamaURL(); url != "" {
-			for id, client := range ollamaClients {
+			for id, client := range b.OllamaClients {
 				if res, ok := cat.resourceBy[id]; ok && res.URL == url {
 					fallback = client
 					break
@@ -71,14 +94,14 @@ func BuildClients(cat *Catalog, cfg *config.Config, logger *slog.Logger) (*Clien
 	}
 
 	if fallback == nil {
-		for _, client := range resourceClients {
+		for _, client := range b.ResourceClients {
 			fallback = client
 			break
 		}
 	}
 
 	multi := llm.NewMultiClient(fallback)
-	for id, client := range resourceClients {
+	for id, client := range b.ResourceClients {
 		multi.AddProvider(id, client)
 	}
 
@@ -94,8 +117,5 @@ func BuildClients(cat *Catalog, cfg *config.Config, logger *slog.Logger) (*Clien
 		multi.MarkAmbiguous(alias, targets)
 	}
 
-	return &ClientBundle{
-		Client:        multi,
-		OllamaClients: ollamaClients,
-	}, nil
+	return multi, nil
 }

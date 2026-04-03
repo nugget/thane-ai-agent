@@ -63,6 +63,7 @@ type App struct {
 	// LLM clients
 	llmClient     llm.Client
 	ollamaClients map[string]*llm.OllamaClient
+	modelRuntime  *models.Runtime
 	modelCatalog  *models.Catalog
 	modelRegistry *models.Registry
 

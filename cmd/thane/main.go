@@ -25,7 +25,6 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/agent"
 	"github.com/nugget/thane-ai-agent/internal/app"
@@ -341,7 +340,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		close(sigCh)
 	}
 
-	a, err := app.New(ctx, cfg, logger, stdout, llmSetup.Client, llmSetup.OllamaClients, llmSetup.ModelRegistry)
+	a, err := app.New(ctx, cfg, logger, stdout, llmSetup.Client, llmSetup.OllamaClients, llmSetup.ModelRuntime)
 	if err != nil {
 		stopSignals()
 		cancel()
@@ -425,6 +424,7 @@ func loadConfig(explicit string) (*config.Config, string, error) {
 type llmSetup struct {
 	Catalog       *models.Catalog
 	ModelRegistry *models.Registry
+	ModelRuntime  *models.Runtime
 	Client        llm.Client
 	OllamaClients map[string]*llm.OllamaClient
 }
@@ -436,33 +436,17 @@ func createLLMSetup(ctx context.Context, cfg *config.Config, logger *slog.Logger
 	}
 	normalizeConfiguredModelRefs(cfg, baseCatalog)
 
-	bootstrapBundle, err := models.BuildClients(baseCatalog, cfg, logger)
+	runtime, err := models.NewRuntime(ctx, baseCatalog, cfg, logger)
 	if err != nil {
-		return nil, fmt.Errorf("build llm clients: %w", err)
-	}
-
-	registry, err := models.NewRegistry(baseCatalog)
-	if err != nil {
-		return nil, fmt.Errorf("create model registry: %w", err)
-	}
-
-	discoveryCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-	if err := registry.Refresh(discoveryCtx, bootstrapBundle); err != nil {
-		return nil, fmt.Errorf("refresh model inventory: %w", err)
-	}
-	catalog := registry.Catalog()
-
-	bundle, err := models.BuildClients(catalog, cfg, logger)
-	if err != nil {
-		return nil, fmt.Errorf("build llm clients: %w", err)
+		return nil, fmt.Errorf("build model runtime: %w", err)
 	}
 
 	return &llmSetup{
-		Catalog:       catalog,
-		ModelRegistry: registry,
-		Client:        bundle.Client,
-		OllamaClients: bundle.OllamaClients,
+		Catalog:       runtime.Registry().Catalog(),
+		ModelRegistry: runtime.Registry(),
+		ModelRuntime:  runtime,
+		Client:        runtime.Client(),
+		OllamaClients: runtime.OllamaClients(),
 	}, nil
 }
 

@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"sync"
@@ -13,12 +14,15 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/llm"
 	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
 	"github.com/nugget/thane-ai-agent/internal/memory"
+	"github.com/nugget/thane-ai-agent/internal/models"
 	"github.com/nugget/thane-ai-agent/internal/opstate"
 	"github.com/nugget/thane-ai-agent/internal/router"
 	"github.com/nugget/thane-ai-agent/internal/scheduler"
 	"github.com/nugget/thane-ai-agent/internal/talents"
 	"github.com/nugget/thane-ai-agent/internal/usage"
 )
+
+const modelInventoryRefreshInterval = 5 * time.Minute
 
 // initStores creates data stores, background infrastructure, and the
 // model router. Most components are passive — their goroutines are
@@ -94,6 +98,53 @@ func (a *App) initStores(s *newState) error {
 	connMgr := connwatch.NewManager(logger)
 	a.connMgr = connMgr
 
+	countDiscovered := func(snapshot *models.RegistrySnapshot) int {
+		if snapshot == nil {
+			return 0
+		}
+		discovered := 0
+		for _, dep := range snapshot.Deployments {
+			if dep.Source == models.DeploymentSourceDiscovered {
+				discovered++
+			}
+		}
+		return discovered
+	}
+
+	refreshModelRuntime := func(ctx context.Context, reason string) {
+		if a.modelRuntime == nil {
+			return
+		}
+		refreshCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		result, err := a.modelRuntime.Refresh(refreshCtx)
+		if err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				logger.Debug("model registry refresh canceled", "reason", reason, "error", err)
+				return
+			}
+			logger.Warn("model registry refresh failed", "reason", reason, "error", err)
+			return
+		}
+		if result == nil || result.Snapshot == nil {
+			return
+		}
+		if result.Changed {
+			logger.Info("model registry refreshed",
+				"reason", reason,
+				"generation", result.Snapshot.Generation,
+				"resources", len(result.Snapshot.Resources),
+				"deployments", len(result.Snapshot.Deployments),
+				"discovered_deployments", countDiscovered(result.Snapshot),
+			)
+		} else {
+			logger.Debug("model registry refresh completed with no changes",
+				"reason", reason,
+				"generation", result.Snapshot.Generation,
+			)
+		}
+	}
+
 	// The OnReady callback captures s (pointer) so it sees the
 	// personTracker assigned later in initAwareness.
 	var subscribeOnce sync.Once
@@ -153,6 +204,7 @@ func (a *App) initStores(s *newState) error {
 	}
 
 	for _, res := range a.modelCatalog.Resources {
+		res := res
 		client, ok := a.ollamaClients[res.ID]
 		if !ok {
 			continue
@@ -166,9 +218,31 @@ func (a *App) initStores(s *newState) error {
 			Name:    watchName,
 			Probe:   func(pCtx context.Context) error { return c.Ping(pCtx) },
 			Backoff: connwatch.DefaultBackoffConfig(),
-			Logger:  logger.With("resource", res.ID),
+			OnReady: func() {
+				refreshModelRuntime(s.ctx, "resource_ready:"+res.ID)
+			},
+			Logger: logger.With("resource", res.ID),
 		})
 		c.SetWatcher(ollamaWatcher)
+	}
+
+	if a.modelRuntime != nil && len(a.ollamaClients) > 0 {
+		a.deferWorker("model-inventory-refresh", func(ctx context.Context) error {
+			go func() {
+				ticker := time.NewTicker(modelInventoryRefreshInterval)
+				defer ticker.Stop()
+				for {
+					select {
+					case <-ctx.Done():
+						return
+					case <-ticker.C:
+						refreshModelRuntime(ctx, "periodic")
+					}
+				}
+			}()
+			return nil
+		})
+		logger.Info("model inventory refresh enabled", "interval", modelInventoryRefreshInterval)
 	}
 
 	// --- Session archive ---

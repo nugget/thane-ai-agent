@@ -3,6 +3,7 @@ package models
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"sync"
 	"time"
 )
@@ -158,10 +159,13 @@ func (r *Registry) ApplyInventory(inv *Inventory, refreshedAt time.Time) error {
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	changed := !reflect.DeepEqual(inv, r.overlay) || r.effective == nil
 	r.overlay = inv
 	r.effective = effective
 	r.resources = resourceState
-	r.generation++
+	if changed {
+		r.generation++
+	}
 	if !refreshedAt.IsZero() {
 		r.updatedAt = refreshedAt.UTC()
 	}

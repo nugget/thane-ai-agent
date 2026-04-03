@@ -43,10 +43,11 @@ import (
 //   - [initDelegation] — delegate executor, capability tags, lenses
 //   - [initAwareness]  — context providers, watchlist, person tracker, state watcher
 //   - [initServers]    — API server, checkpointer, MQTT, dashboard, metacognitive
-func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io.Writer, llmClient llm.Client, ollamaClients map[string]*llm.OllamaClient, modelRegistry *models.Registry) (*App, error) {
-	if modelRegistry == nil {
-		return nil, fmt.Errorf("nil model registry")
+func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io.Writer, llmClient llm.Client, ollamaClients map[string]*llm.OllamaClient, modelRuntime *models.Runtime) (*App, error) {
+	if modelRuntime == nil {
+		return nil, fmt.Errorf("nil model runtime")
 	}
+	modelRegistry := modelRuntime.Registry()
 	modelCatalog := modelRegistry.Catalog()
 	a := &App{
 		cfg:           cfg,
@@ -54,6 +55,7 @@ func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io
 		stdout:        stdout,
 		llmClient:     llmClient,
 		ollamaClients: ollamaClients,
+		modelRuntime:  modelRuntime,
 		modelRegistry: modelRegistry,
 		modelCatalog:  modelCatalog,
 	}
