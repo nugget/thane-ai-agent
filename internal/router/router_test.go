@@ -3,6 +3,7 @@ package router
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"testing"
 )
 
@@ -169,6 +170,119 @@ func TestRoute_LocalOnlyFalseDisablesLocalBias(t *testing.T) {
 	}
 	if cloudScore <= localScore {
 		t.Errorf("cloud-model score (%d) should beat local-model score (%d) when local_only=false", cloudScore, localScore)
+	}
+}
+
+func TestRoute_RejectsModelsByCapabilities(t *testing.T) {
+	r := NewRouter(slog.Default(), Config{
+		DefaultModel: "streaming-model",
+		Models: []Model{
+			{
+				Name:                  "deployment-tools-off",
+				Provider:              "ollama",
+				SupportsTools:         false,
+				ProviderSupportsTools: true,
+				SupportsStreaming:     true,
+				ContextWindow:         8192,
+				Speed:                 8,
+				Quality:               6,
+				CostTier:              0,
+			},
+			{
+				Name:              "non-streaming-model",
+				Provider:          "ollama",
+				SupportsTools:     true,
+				SupportsStreaming: false,
+				ContextWindow:     8192,
+				Speed:             8,
+				Quality:           6,
+				CostTier:          0,
+			},
+			{
+				Name:              "streaming-model",
+				Provider:          "ollama",
+				SupportsTools:     true,
+				SupportsStreaming: true,
+				ContextWindow:     8192,
+				Speed:             8,
+				Quality:           6,
+				CostTier:          0,
+			},
+		},
+		MaxAuditLog: 10,
+	})
+
+	model, decision := r.Route(context.Background(), Request{
+		Query:          "search archives for the last battery warning",
+		NeedsTools:     true,
+		NeedsStreaming: true,
+		ToolCount:      4,
+		Priority:       PriorityInteractive,
+	})
+
+	if model != "streaming-model" {
+		t.Fatalf("Route() selected %q, want %q", model, "streaming-model")
+	}
+	if got := decision.RejectedModels["deployment-tools-off"]; len(got) != 1 || got[0] != "tool use disabled for this deployment" {
+		t.Fatalf("RejectedModels[deployment-tools-off] = %#v, want tool-disable reason", got)
+	}
+	if got := decision.RejectedModels["non-streaming-model"]; len(got) != 1 || got[0] != "missing streaming support" {
+		t.Fatalf("RejectedModels[non-streaming-model] = %#v, want streaming reason", got)
+	}
+	if !strings.Contains(decision.Reasoning, "Tool-capable deployment required.") {
+		t.Fatalf("Reasoning = %q, want tool-capable note", decision.Reasoning)
+	}
+	if !strings.Contains(decision.Reasoning, "Streaming-capable deployment required.") {
+		t.Fatalf("Reasoning = %q, want streaming note", decision.Reasoning)
+	}
+}
+
+func TestRoute_NoEligibleModelsSummarizesRejections(t *testing.T) {
+	r := NewRouter(slog.Default(), Config{
+		DefaultModel: "fallback-model",
+		Models: []Model{
+			{
+				Name:              "small-model",
+				Provider:          "ollama",
+				SupportsTools:     true,
+				SupportsStreaming: true,
+				ContextWindow:     2048,
+				Speed:             8,
+				Quality:           6,
+				CostTier:          0,
+			},
+			{
+				Name:              "non-streaming-model",
+				Provider:          "ollama",
+				SupportsTools:     true,
+				SupportsStreaming: false,
+				ContextWindow:     8192,
+				Speed:             8,
+				Quality:           6,
+				CostTier:          0,
+			},
+		},
+		MaxAuditLog: 10,
+	})
+
+	model, decision := r.Route(context.Background(), Request{
+		Query:          "summarize this conversation",
+		ContextSize:    5000,
+		NeedsStreaming: true,
+		Priority:       PriorityInteractive,
+	})
+
+	if model != "fallback-model" {
+		t.Fatalf("Route() selected %q, want fallback default %q", model, "fallback-model")
+	}
+	if !strings.Contains(decision.Reasoning, "No eligible models, using default.") {
+		t.Fatalf("Reasoning = %q, want no-eligible prefix", decision.Reasoning)
+	}
+	if !strings.Contains(decision.Reasoning, "small-model (context window too small)") {
+		t.Fatalf("Reasoning = %q, want small-model rejection", decision.Reasoning)
+	}
+	if !strings.Contains(decision.Reasoning, "non-streaming-model (missing streaming support)") {
+		t.Fatalf("Reasoning = %q, want streaming rejection", decision.Reasoning)
 	}
 }
 

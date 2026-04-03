@@ -174,10 +174,20 @@ func TestMergeInventory_AddsDiscoveredDeploymentsAsNonRoutable(t *testing.T) {
 	}
 
 	routerCfg := merged.RouterConfig(100)
+	found := false
 	for _, model := range routerCfg.Models {
 		if model.Name == "default/gpt-oss:20b" {
 			t.Fatal("discovered deployment should not be included in router config yet")
 		}
+		if model.Name == "qwen3:4b" {
+			found = true
+			if !model.SupportsStreaming || !model.SupportsImages || !model.ProviderSupportsTools {
+				t.Fatalf("router model capabilities = %+v, want provider-backed streaming/images/tools", model)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("router config missing configured qwen3:4b deployment")
 	}
 }
 

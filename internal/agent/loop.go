@@ -1182,12 +1182,13 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			contextSize := len(systemPrompt) / 4
 
 			routerReq := router.Request{
-				Query:       query,
-				ContextSize: contextSize,
-				NeedsTools:  true, // We always have tools available
-				ToolCount:   len(baseTools.List()),
-				Priority:    router.PriorityInteractive,
-				Hints:       req.Hints,
+				Query:          query,
+				ContextSize:    contextSize,
+				NeedsTools:     true, // We always have tools available
+				NeedsStreaming: stream != nil,
+				ToolCount:      len(baseTools.List()),
+				Priority:       router.PriorityInteractive,
+				Hints:          req.Hints,
 			}
 
 			model, routerDecision = l.router.Route(ctx, routerReq)

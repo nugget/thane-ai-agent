@@ -4,6 +4,7 @@ package router
 import (
 	"context"
 	"log/slog"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -12,12 +13,14 @@ import (
 
 // Request contains the information needed for routing decisions.
 type Request struct {
-	Query       string            // The user's input
-	ContextSize int               // Estimated tokens of context (talents, history)
-	NeedsTools  bool              // Whether tool calling is required
-	ToolCount   int               // Number of tools available
-	Priority    Priority          // Latency requirements
-	Hints       map[string]string // Caller-supplied routing hints (see HintXxx constants)
+	Query          string            // The user's input
+	ContextSize    int               // Estimated tokens of context (talents, history)
+	NeedsTools     bool              // Whether tool calling is required
+	NeedsStreaming bool              // Whether a streaming response is required
+	NeedsImages    bool              // Whether image/multimodal input is required
+	ToolCount      int               // Number of tools available
+	Priority       Priority          // Latency requirements
+	Hints          map[string]string // Caller-supplied routing hints (see HintXxx constants)
 }
 
 // Hint keys for routing decisions. Callers set these to influence model selection.
@@ -62,14 +65,17 @@ type Decision struct {
 	QueryLength    int        `json:"query_length"`
 	ContextSize    int        `json:"context_size"`
 	NeedsTools     bool       `json:"needs_tools"`
+	NeedsStreaming bool       `json:"needs_streaming,omitempty"`
+	NeedsImages    bool       `json:"needs_images,omitempty"`
 	Priority       string     `json:"priority"`
 	DetectedIntent string     `json:"detected_intent,omitempty"`
 	Complexity     Complexity `json:"complexity"`
 
 	// Decision process
-	RulesEvaluated []string       `json:"rules_evaluated"`
-	RulesMatched   []string       `json:"rules_matched"`
-	Scores         map[string]int `json:"scores,omitempty"`
+	RulesEvaluated []string            `json:"rules_evaluated"`
+	RulesMatched   []string            `json:"rules_matched"`
+	RejectedModels map[string][]string `json:"rejected_models,omitempty"`
+	Scores         map[string]int      `json:"scores,omitempty"`
 
 	// Outcome
 	ModelSelected         string `json:"model_selected"`
@@ -109,17 +115,20 @@ func (c Complexity) String() string {
 
 // Model represents an available model with its capabilities.
 type Model struct {
-	Name          string     // Route/deployment identifier (e.g., "qwen3:4b" or "spark/qwen3:32b")
-	UpstreamModel string     // Provider-native model name (e.g., "qwen3:32b")
-	Provider      string     // "ollama" or "anthropic" etc
-	ResourceID    string     // Provider resource identity (e.g., server name)
-	Server        string     // Configured server name when applicable
-	SupportsTools bool       // Can do tool calling
-	ContextWindow int        // Max tokens
-	Speed         int        // Relative speed (1-10, 10=fastest)
-	Quality       int        // Relative quality (1-10, 10=best)
-	CostTier      int        // 0=free/local, 1=cheap, 2=moderate, 3=expensive
-	MinComplexity Complexity // Don't use for simpler than this
+	Name                  string     // Route/deployment identifier (e.g., "qwen3:4b" or "spark/qwen3:32b")
+	UpstreamModel         string     // Provider-native model name (e.g., "qwen3:32b")
+	Provider              string     // "ollama" or "anthropic" etc
+	ResourceID            string     // Provider resource identity (e.g., server name)
+	Server                string     // Configured server name when applicable
+	SupportsTools         bool       // Deployment is configured for tool calling
+	ProviderSupportsTools bool       // Underlying provider supports tool calling
+	SupportsStreaming     bool       // Deployment/provider can stream
+	SupportsImages        bool       // Deployment/provider accepts image input
+	ContextWindow         int        // Max tokens
+	Speed                 int        // Relative speed (1-10, 10=fastest)
+	Quality               int        // Relative quality (1-10, 10=best)
+	CostTier              int        // 0=free/local, 1=cheap, 2=moderate, 3=expensive
+	MinComplexity         Complexity // Don't use for simpler than this
 }
 
 // Config holds router configuration.
@@ -244,12 +253,14 @@ func (r *Router) MaxQuality() int {
 func (r *Router) Route(ctx context.Context, req Request) (string, *Decision) {
 	cfg := r.configSnapshot()
 	decision := &Decision{
-		RequestID:   generateRequestID(),
-		Timestamp:   time.Now(),
-		QueryLength: len(req.Query),
-		ContextSize: req.ContextSize,
-		NeedsTools:  req.NeedsTools,
-		Priority:    priorityString(req.Priority),
+		RequestID:      generateRequestID(),
+		Timestamp:      time.Now(),
+		QueryLength:    len(req.Query),
+		ContextSize:    req.ContextSize,
+		NeedsTools:     req.NeedsTools,
+		NeedsStreaming: req.NeedsStreaming,
+		NeedsImages:    req.NeedsImages,
+		Priority:       priorityString(req.Priority),
 	}
 
 	// Analyze complexity
@@ -351,19 +362,41 @@ func (r *Router) detectIntent(query string) string {
 func (r *Router) selectModel(cfg Config, req Request, decision *Decision) string {
 	var rulesEvaluated, rulesMatched []string
 	var reasoning strings.Builder
+	rejected := make(map[string][]string)
 
 	// Find eligible models
 	var candidates []Model
 	for _, m := range cfg.Models {
 		rulesEvaluated = append(rulesEvaluated, "check_"+m.Name)
 
+		var reasons []string
+
 		// Must support tools if needed
 		if req.NeedsTools && !m.SupportsTools {
-			continue
+			if m.ProviderSupportsTools {
+				reasons = append(reasons, "tool use disabled for this deployment")
+			} else {
+				reasons = append(reasons, "missing tool support")
+			}
+		}
+
+		// Must support streaming when required by the caller.
+		if req.NeedsStreaming && !m.SupportsStreaming {
+			reasons = append(reasons, "missing streaming support")
+		}
+
+		// Must support image input when required by the caller.
+		if req.NeedsImages && !m.SupportsImages {
+			reasons = append(reasons, "missing image support")
 		}
 
 		// Must fit context
 		if req.ContextSize > 0 && m.ContextWindow > 0 && req.ContextSize > m.ContextWindow {
+			reasons = append(reasons, "context window too small")
+		}
+
+		if len(reasons) > 0 {
+			rejected[m.Name] = reasons
 			continue
 		}
 
@@ -372,9 +405,15 @@ func (r *Router) selectModel(cfg Config, req Request, decision *Decision) string
 	}
 
 	decision.RulesEvaluated = rulesEvaluated
+	if len(rejected) > 0 {
+		decision.RejectedModels = rejected
+	}
 
 	if len(candidates) == 0 {
-		reasoning.WriteString("No eligible models, using default. ")
+		reasoning.WriteString("No eligible models, using default.")
+		if summary := summarizeRejectedModels(rejected); summary != "" {
+			reasoning.WriteString(" Rejected: " + summary + ".")
+		}
 		decision.RulesMatched = rulesMatched
 		decision.Reasoning = reasoning.String()
 		return cfg.DefaultModel
@@ -551,6 +590,15 @@ func (r *Router) selectModel(cfg Config, req Request, decision *Decision) string
 	reasoning.WriteString("Selected " + best.Name)
 	reasoning.WriteString(" (score=" + strconv.Itoa(bestScore) + ")")
 	reasoning.WriteString(" for " + decision.Complexity.String() + " " + decision.DetectedIntent + " query.")
+	if req.NeedsTools && best.SupportsTools {
+		reasoning.WriteString(" Tool-capable deployment required.")
+	}
+	if req.NeedsStreaming && best.SupportsStreaming {
+		reasoning.WriteString(" Streaming-capable deployment required.")
+	}
+	if req.NeedsImages && best.SupportsImages {
+		reasoning.WriteString(" Image-capable deployment required.")
+	}
 
 	if cfg.LocalFirst && best.CostTier == 0 {
 		reasoning.WriteString(" Local-first preference applied.")
@@ -694,6 +742,26 @@ func priorityString(p Priority) string {
 		return "interactive"
 	}
 	return "background"
+}
+
+func summarizeRejectedModels(rejected map[string][]string) string {
+	if len(rejected) == 0 {
+		return ""
+	}
+	names := make([]string, 0, len(rejected))
+	for name := range rejected {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	parts := make([]string, 0, len(names))
+	for _, name := range names {
+		reasons := rejected[name]
+		if len(reasons) == 0 {
+			continue
+		}
+		parts = append(parts, name+" ("+strings.Join(reasons, ", ")+")")
+	}
+	return strings.Join(parts, "; ")
 }
 
 func (r *Router) populateSelectionMetadata(cfg Config, decision *Decision, modelName string) {

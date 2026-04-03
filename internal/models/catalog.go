@@ -471,17 +471,20 @@ func (c *Catalog) RouterConfig(maxAuditLog int) router.Config {
 			minComp = router.ComplexityComplex
 		}
 		cfg.Models = append(cfg.Models, router.Model{
-			Name:          dep.ID,
-			UpstreamModel: dep.ModelName,
-			Provider:      dep.Provider,
-			ResourceID:    dep.ResourceID,
-			Server:        dep.Server,
-			SupportsTools: dep.SupportsTools,
-			ContextWindow: dep.ContextWindow,
-			Speed:         dep.Speed,
-			Quality:       dep.Quality,
-			CostTier:      dep.CostTier,
-			MinComplexity: minComp,
+			Name:                  dep.ID,
+			UpstreamModel:         dep.ModelName,
+			Provider:              dep.Provider,
+			ResourceID:            dep.ResourceID,
+			Server:                dep.Server,
+			SupportsTools:         dep.SupportsTools,
+			ProviderSupportsTools: dep.ProviderSupportsTools,
+			SupportsStreaming:     dep.SupportsStreaming,
+			SupportsImages:        dep.SupportsImages,
+			ContextWindow:         dep.ContextWindow,
+			Speed:                 dep.Speed,
+			Quality:               dep.Quality,
+			CostTier:              dep.CostTier,
+			MinComplexity:         minComp,
 		})
 	}
 	return cfg
