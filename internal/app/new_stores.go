@@ -157,17 +157,18 @@ func (a *App) initStores(s *newState) error {
 		if !ok {
 			continue
 		}
+		c := client
 		watchName := "ollama"
 		if len(a.ollamaClients) > 1 || res.ID != "default" {
 			watchName = "ollama:" + res.ID
 		}
 		ollamaWatcher := connMgr.Watch(s.ctx, connwatch.WatcherConfig{
 			Name:    watchName,
-			Probe:   func(pCtx context.Context) error { return client.Ping(pCtx) },
+			Probe:   func(pCtx context.Context) error { return c.Ping(pCtx) },
 			Backoff: connwatch.DefaultBackoffConfig(),
 			Logger:  logger.With("resource", res.ID),
 		})
-		client.SetWatcher(ollamaWatcher)
+		c.SetWatcher(ollamaWatcher)
 	}
 
 	// --- Session archive ---

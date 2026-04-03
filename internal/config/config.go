@@ -1522,6 +1522,12 @@ func (c *Config) applyDefaults() {
 	if c.Models.OllamaURL == "" && len(c.Models.Servers) == 0 {
 		c.Models.OllamaURL = "http://localhost:11434"
 	}
+	for name, srv := range c.Models.Servers {
+		if srv.Provider == "" {
+			srv.Provider = "ollama"
+		}
+		c.Models.Servers[name] = srv
+	}
 	if c.OllamaAPI.Port == 0 {
 		c.OllamaAPI.Port = 11434
 	}
@@ -1721,12 +1727,6 @@ func (c *Config) applyDefaults() {
 		}
 	}
 
-	for name, srv := range c.Models.Servers {
-		if srv.Provider == "" {
-			srv.Provider = "ollama"
-		}
-		c.Models.Servers[name] = srv
-	}
 	for i := range c.Models.Available {
 		if c.Models.Available[i].Provider == "" && c.Models.Available[i].Server == "" {
 			c.Models.Available[i].Provider = "ollama"

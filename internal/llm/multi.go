@@ -65,10 +65,10 @@ func (m *MultiClient) MarkAmbiguous(alias string, targets []string) {
 	m.ambiguous[alias] = out
 }
 
-func (m *MultiClient) resolve(model string) (Client, string, error) {
+func (m *MultiClient) resolve(model string) (Client, string, string, error) {
 	target := model
 	if routes, ok := m.ambiguous[model]; ok {
-		return nil, "", fmt.Errorf("model %q is ambiguous; use one of %q", model, routes)
+		return nil, "", "", fmt.Errorf("model %q is ambiguous; use one of %q", model, routes)
 	}
 	if alias, ok := m.aliases[model]; ok {
 		target = alias
@@ -76,32 +76,55 @@ func (m *MultiClient) resolve(model string) (Client, string, error) {
 	if r, ok := m.routes[target]; ok {
 		client, ok := m.clients[r.providerName]
 		if !ok {
-			return nil, "", fmt.Errorf("no provider configured for route %q", target)
+			return nil, "", "", fmt.Errorf("no provider configured for route %q", target)
 		}
-		return client, r.modelName, nil
+		return client, r.modelName, target, nil
 	}
 	if m.fallback != nil {
-		return m.fallback, model, nil
+		return m.fallback, model, model, nil
 	}
-	return nil, "", fmt.Errorf("no provider configured for model %q", model)
+	return nil, "", "", fmt.Errorf("no provider configured for model %q", model)
 }
 
 // Chat sends a request to the appropriate provider for the model.
 func (m *MultiClient) Chat(ctx context.Context, model string, messages []Message, tools []map[string]any) (*ChatResponse, error) {
-	client, routedModel, err := m.resolve(model)
+	client, routedModel, routeTarget, err := m.resolve(model)
 	if err != nil {
 		return nil, err
 	}
-	return client.Chat(ctx, routedModel, messages, tools)
+	resp, err := client.Chat(ctx, routedModel, messages, tools)
+	if err != nil {
+		return nil, err
+	}
+	if resp != nil {
+		resp.Model = routeTarget
+	}
+	return resp, nil
 }
 
 // ChatStream sends a streaming request to the appropriate provider.
 func (m *MultiClient) ChatStream(ctx context.Context, model string, messages []Message, tools []map[string]any, callback StreamCallback) (*ChatResponse, error) {
-	client, routedModel, err := m.resolve(model)
+	client, routedModel, routeTarget, err := m.resolve(model)
 	if err != nil {
 		return nil, err
 	}
-	return client.ChatStream(ctx, routedModel, messages, tools, callback)
+	var wrapped StreamCallback
+	if callback != nil {
+		wrapped = func(event StreamEvent) {
+			if event.Response != nil {
+				event.Response.Model = routeTarget
+			}
+			callback(event)
+		}
+	}
+	resp, err := client.ChatStream(ctx, routedModel, messages, tools, wrapped)
+	if err != nil {
+		return nil, err
+	}
+	if resp != nil {
+		resp.Model = routeTarget
+	}
+	return resp, nil
 }
 
 // Ping checks the fallback provider.

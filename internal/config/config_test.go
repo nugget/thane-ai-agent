@@ -244,6 +244,25 @@ func TestContentMaxLength_Negative(t *testing.T) {
 	}
 }
 
+func TestApplyDefaults_EmbeddingsBaseURLUsesImplicitOllamaServer(t *testing.T) {
+	cfg := &Config{
+		Models: ModelsConfig{
+			Servers: map[string]ModelServerConfig{
+				"default": {URL: "http://ollama-primary:11434"},
+			},
+		},
+	}
+
+	cfg.applyDefaults()
+
+	if got := cfg.Models.Servers["default"].Provider; got != "ollama" {
+		t.Fatalf("models.servers.default.provider = %q, want %q", got, "ollama")
+	}
+	if got := cfg.Embeddings.BaseURL; got != "http://ollama-primary:11434" {
+		t.Fatalf("Embeddings.BaseURL = %q, want %q", got, "http://ollama-primary:11434")
+	}
+}
+
 func TestValidate_PersonDevicesValid(t *testing.T) {
 	cfg := Default()
 	cfg.Person.Track = []string{"person.alice"}
