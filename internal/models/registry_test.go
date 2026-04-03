@@ -47,6 +47,7 @@ func TestRegistryApplyInventoryBuildsEffectiveSnapshot(t *testing.T) {
 			{
 				ResourceID: "mirror",
 				Provider:   "ollama",
+				Attempted:  true,
 				Models: []DiscoveredModel{
 					{Name: "qwen3:8b", Family: "qwen3", Families: []string{"qwen3"}, ParameterSize: "8B", Quantization: "Q4_K_M"},
 				},
@@ -54,6 +55,7 @@ func TestRegistryApplyInventoryBuildsEffectiveSnapshot(t *testing.T) {
 			{
 				ResourceID: "spark",
 				Provider:   "ollama",
+				Attempted:  true,
 				Models: []DiscoveredModel{
 					{Name: "gpt-oss:20b"},
 					{Name: "qwen3:8b", Family: "qwen3", Families: []string{"qwen3"}, ParameterSize: "8B", Quantization: "Q4_K_M"},
@@ -114,5 +116,50 @@ func TestRegistryApplyInventoryBuildsEffectiveSnapshot(t *testing.T) {
 	}
 	if routableDiscovered != 0 {
 		t.Fatalf("routable discovered deployments = %d, want 0", routableDiscovered)
+	}
+}
+
+func TestRegistryApplyInventoryDoesNotMarkUnattemptedResourcesRefreshed(t *testing.T) {
+	t.Parallel()
+
+	base := &Catalog{
+		Resources: []Resource{
+			{ID: "cloud", Provider: "anthropic", URL: "https://api.anthropic.com"},
+		},
+	}
+	if err := base.reindex(base.DefaultModel, base.RecoveryModel); err != nil {
+		t.Fatalf("reindex base: %v", err)
+	}
+
+	reg, err := NewRegistry(base)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+
+	refreshedAt := time.Date(2026, 4, 3, 19, 30, 0, 0, time.UTC)
+	err = reg.ApplyInventory(&Inventory{
+		Resources: []ResourceInventory{
+			{
+				ResourceID: "cloud",
+				Provider:   "anthropic",
+			},
+		},
+	}, refreshedAt)
+	if err != nil {
+		t.Fatalf("ApplyInventory: %v", err)
+	}
+
+	snap := reg.Snapshot()
+	if snap == nil {
+		t.Fatal("Snapshot returned nil")
+	}
+	if len(snap.Resources) != 1 {
+		t.Fatalf("len(resources) = %d, want 1", len(snap.Resources))
+	}
+	if snap.Resources[0].LastRefresh != "" {
+		t.Fatalf("LastRefresh = %q, want empty for unattempted resource", snap.Resources[0].LastRefresh)
+	}
+	if snap.Resources[0].DiscoveredModels != 0 {
+		t.Fatalf("DiscoveredModels = %d, want 0", snap.Resources[0].DiscoveredModels)
 	}
 }

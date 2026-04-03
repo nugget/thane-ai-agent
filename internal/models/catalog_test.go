@@ -134,6 +134,7 @@ func TestMergeInventory_AddsDiscoveredDeploymentsAsNonRoutable(t *testing.T) {
 			{
 				ResourceID: "default",
 				Provider:   "ollama",
+				Attempted:  true,
 				Models: []DiscoveredModel{
 					{Name: "qwen3:4b"},
 					{Name: "gpt-oss:20b", Family: "gpt-oss", Families: []string{"gpt-oss"}, ParameterSize: "20B", Quantization: "Q4_K_M"},
@@ -199,6 +200,7 @@ func TestMergeInventory_PreservesStableConfiguredIDWhenDuplicateAppears(t *testi
 			{
 				ResourceID: "edge",
 				Provider:   "ollama",
+				Attempted:  true,
 				Models:     []DiscoveredModel{{Name: "qwen3:4b"}},
 			},
 		},

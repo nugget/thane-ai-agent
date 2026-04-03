@@ -150,6 +150,9 @@ func (r *Registry) ApplyInventory(inv *Inventory, refreshedAt time.Time) error {
 
 	resourceState := baseResourceRuntime(base.Resources)
 	for _, ri := range inv.Resources {
+		if !ri.Attempted {
+			continue
+		}
 		state := resourceState[ri.ResourceID]
 		state.LastRefresh = refreshedAt
 		state.LastError = ri.Error

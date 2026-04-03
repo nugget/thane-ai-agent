@@ -18,6 +18,7 @@ type Inventory struct {
 type ResourceInventory struct {
 	ResourceID string
 	Provider   string
+	Attempted  bool
 	Models     []DiscoveredModel
 	Error      string
 }
@@ -52,6 +53,7 @@ func DiscoverInventory(ctx context.Context, cat *Catalog, bundle *ClientBundle) 
 
 		switch res.Provider {
 		case "ollama":
+			ri.Attempted = true
 			client := bundle.OllamaClients[res.ID]
 			if client == nil {
 				ri.Error = "missing ollama client"
@@ -76,6 +78,9 @@ func DiscoverInventory(ctx context.Context, cat *Catalog, bundle *ClientBundle) 
 			}
 		}
 
+		if !ri.Attempted {
+			continue
+		}
 		inv.Resources = append(inv.Resources, ri)
 	}
 
@@ -116,7 +121,7 @@ func MergeInventory(base *Catalog, inv *Inventory) (*Catalog, error) {
 	}
 
 	for _, ri := range inv.Resources {
-		if ri.Error != "" {
+		if !ri.Attempted || ri.Error != "" {
 			continue
 		}
 		if _, ok := base.resourceBy[ri.ResourceID]; !ok {
