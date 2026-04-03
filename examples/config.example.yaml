@@ -63,9 +63,20 @@ homeassistant:
 models:
   # Default is the model name used when no specific model is requested.
   default: qwen2.5:72b
-  # OllamaURL is the base URL of the Ollama API server used as the
-  # default LLM backend. Default: "http://localhost:11434".
-  ollama_url: http://your-ollama-server:11434
+  # OllamaURL is backward-compatible shorthand for a default Ollama
+  # server. It is used when Servers is empty. When Servers is
+  # populated, callers should prefer the normalized server catalog.
+  ollama_url: ""
+  # Servers defines named model provider resources such as Ollama
+  # instances running on different machines. When empty, OllamaURL is
+  # treated as a synthetic server named "default".
+  servers:
+    default:
+      url: http://your-primary-ollama-server:11434
+      provider: ollama
+    edge:
+      url: http://your-edge-ollama-server:11434
+      provider: ollama
   # LocalFirst prefers local (cost_tier=0) models over cloud models
   # when routing decisions are made by the model router.
   local_first: true
@@ -78,7 +89,8 @@ models:
   # maps a model name to a provider and declares its capabilities.
   available:
     - name: qwen3:4b
-      provider: ollama
+      provider: ""
+      server: edge
       supports_tools: true
       context_window: 32768
       speed: 9
@@ -86,7 +98,8 @@ models:
       cost_tier: 0
       min_complexity: simple
     - name: qwen2.5:72b
-      provider: ollama
+      provider: ""
+      server: default
       supports_tools: true
       context_window: 131072
       speed: 3

@@ -12,13 +12,15 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/config"
 	"github.com/nugget/thane-ai-agent/internal/llm"
 	"github.com/nugget/thane-ai-agent/internal/logging"
+	"github.com/nugget/thane-ai-agent/internal/models"
 	"github.com/nugget/thane-ai-agent/internal/paths"
 )
 
 // New constructs and initializes a fully wired App from the provided
-// configuration. The llmClient and ollamaClient are pre-constructed by
+// configuration. The llmClient, Ollama resource clients, and model
+// catalog are pre-constructed by
 // the caller (cmd/thane) so that runAsk and runServe can share the
-// createLLMClient function without importing internal/app.
+// same startup normalization path without importing internal/app.
 //
 // New opens resources, wires dependencies, and registers background
 // workers but does not start them. Call [App.StartWorkers] to launch
@@ -40,13 +42,14 @@ import (
 //   - [initDelegation] — delegate executor, capability tags, lenses
 //   - [initAwareness]  — context providers, watchlist, person tracker, state watcher
 //   - [initServers]    — API server, checkpointer, MQTT, dashboard, metacognitive
-func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io.Writer, llmClient llm.Client, ollamaClient *llm.OllamaClient) (*App, error) {
+func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io.Writer, llmClient llm.Client, ollamaClients map[string]*llm.OllamaClient, modelCatalog *models.Catalog) (*App, error) {
 	a := &App{
-		cfg:          cfg,
-		logger:       logger,
-		stdout:       stdout,
-		llmClient:    llmClient,
-		ollamaClient: ollamaClient,
+		cfg:           cfg,
+		logger:        logger,
+		stdout:        stdout,
+		llmClient:     llmClient,
+		ollamaClients: ollamaClients,
+		modelCatalog:  modelCatalog,
 	}
 
 	// Augment PATH before any exec.LookPath calls (tool registration,

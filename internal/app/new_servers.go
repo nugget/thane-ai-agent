@@ -213,7 +213,7 @@ func (a *App) initServers(s *newState) error {
 		server.SetTokenObserver(dailyTokens)
 
 		statsAdapter := &mqttStatsAdapter{
-			model:  cfg.Models.Default,
+			model:  a.modelCatalog.DefaultModel,
 			server: server,
 		}
 

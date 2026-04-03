@@ -23,7 +23,7 @@ func (a *App) initDelegation(s *newState) error {
 	// --- Delegation ---
 	// Register thane_delegate tool AFTER all other tools so the delegate
 	// executor's parent registry snapshot includes the full tool set.
-	delegateExec := delegate.NewExecutor(logger, a.llmClient, a.rtr, a.loop.Tools(), cfg.Models.Default)
+	delegateExec := delegate.NewExecutor(logger, a.llmClient, a.rtr, a.loop.Tools(), a.modelCatalog.DefaultModel)
 	if len(cfg.Delegate.Profiles) > 0 {
 		overrides := make(map[string]delegate.ProfileOverride, len(cfg.Delegate.Profiles))
 		for name, pc := range cfg.Delegate.Profiles {

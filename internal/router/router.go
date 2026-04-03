@@ -106,8 +106,11 @@ func (c Complexity) String() string {
 
 // Model represents an available model with its capabilities.
 type Model struct {
-	Name          string     // Model identifier (e.g., "qwen3:4b")
+	Name          string     // Route/deployment identifier (e.g., "qwen3:4b" or "spark/qwen3:32b")
+	UpstreamModel string     // Provider-native model name (e.g., "qwen3:32b")
 	Provider      string     // "ollama" or "anthropic" etc
+	ResourceID    string     // Provider resource identity (e.g., server name)
+	Server        string     // Configured server name when applicable
 	SupportsTools bool       // Can do tool calling
 	ContextWindow int        // Max tokens
 	Speed         int        // Relative speed (1-10, 10=fastest)
@@ -163,10 +166,17 @@ func NewRouter(logger *slog.Logger, config Config) *Router {
 // model. If the model is not found in the router's configuration, it
 // returns 0.
 func (r *Router) ContextWindowForModel(name string) int {
+	maxByUpstream := 0
 	for _, m := range r.config.Models {
 		if m.Name == name {
 			return m.ContextWindow
 		}
+		if m.UpstreamModel == name && m.ContextWindow > maxByUpstream {
+			maxByUpstream = m.ContextWindow
+		}
+	}
+	if maxByUpstream > 0 {
+		return maxByUpstream
 	}
 	return 0
 }

@@ -31,6 +31,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -660,9 +661,15 @@ type ModelsConfig struct {
 	// Default is the model name used when no specific model is requested.
 	Default string `yaml:"default"`
 
-	// OllamaURL is the base URL of the Ollama API server used as the
-	// default LLM backend. Default: "http://localhost:11434".
+	// OllamaURL is backward-compatible shorthand for a default Ollama
+	// server. It is used when Servers is empty. When Servers is
+	// populated, callers should prefer the normalized server catalog.
 	OllamaURL string `yaml:"ollama_url"`
+
+	// Servers defines named model provider resources such as Ollama
+	// instances running on different machines. When empty, OllamaURL is
+	// treated as a synthetic server named "default".
+	Servers map[string]ModelServerConfig `yaml:"servers"`
 
 	// LocalFirst prefers local (cost_tier=0) models over cloud models
 	// when routing decisions are made by the model router.
@@ -684,13 +691,47 @@ type ModelsConfig struct {
 // request.
 type ModelConfig struct {
 	Name          string `yaml:"name"`           // Model identifier (e.g., "claude-opus-4-20250514")
-	Provider      string `yaml:"provider"`       // Provider name: ollama, anthropic, openai. Default: ollama
+	Provider      string `yaml:"provider"`       // Provider name: ollama, anthropic, openai. Defaults to ollama when no server is set
+	Server        string `yaml:"server"`         // Named provider resource from models.servers for this deployment
 	SupportsTools bool   `yaml:"supports_tools"` // Whether the model can invoke tool calls
 	ContextWindow int    `yaml:"context_window"` // Maximum context length in tokens
 	Speed         int    `yaml:"speed"`          // Relative speed rating, 1 (slow) to 10 (fast)
 	Quality       int    `yaml:"quality"`        // Relative quality rating, 1 (low) to 10 (high)
 	CostTier      int    `yaml:"cost_tier"`      // 0=local/free, 1=cheap, 2=moderate, 3=expensive
 	MinComplexity string `yaml:"min_complexity"` // Minimum task complexity: simple, moderate, complex
+}
+
+// ModelServerConfig describes a named model provider resource.
+type ModelServerConfig struct {
+	URL      string `yaml:"url"`
+	Provider string `yaml:"provider"` // Default: ollama
+}
+
+// PreferredOllamaURL returns the best available Ollama URL for callers
+// that still need one local endpoint outside the routed model catalog.
+// Preference order is: a server named "default", then the first
+// configured Ollama server by name, then the legacy OllamaURL field.
+func (c ModelsConfig) PreferredOllamaURL() string {
+	if len(c.Servers) > 0 {
+		if srv, ok := c.Servers["default"]; ok && srv.Provider == "ollama" && srv.URL != "" {
+			return srv.URL
+		}
+		names := make([]string, 0, len(c.Servers))
+		for name := range c.Servers {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			srv := c.Servers[name]
+			if srv.Provider == "" {
+				srv.Provider = "ollama"
+			}
+			if srv.Provider == "ollama" && srv.URL != "" {
+				return srv.URL
+			}
+		}
+	}
+	return c.OllamaURL
 }
 
 // SearchConfig configures web search providers. At least one provider
@@ -1478,7 +1519,7 @@ func (c *Config) applyDefaults() {
 	if c.TalentsDir == "" {
 		c.TalentsDir = "./talents"
 	}
-	if c.Models.OllamaURL == "" {
+	if c.Models.OllamaURL == "" && len(c.Models.Servers) == 0 {
 		c.Models.OllamaURL = "http://localhost:11434"
 	}
 	if c.OllamaAPI.Port == 0 {
@@ -1491,7 +1532,7 @@ func (c *Config) applyDefaults() {
 		c.Embeddings.Model = "nomic-embed-text"
 	}
 	if c.Embeddings.BaseURL == "" {
-		c.Embeddings.BaseURL = c.Models.OllamaURL
+		c.Embeddings.BaseURL = c.Models.PreferredOllamaURL()
 	}
 	if c.ShellExec.DefaultTimeoutSec == 0 {
 		c.ShellExec.DefaultTimeoutSec = 30
@@ -1680,8 +1721,14 @@ func (c *Config) applyDefaults() {
 		}
 	}
 
+	for name, srv := range c.Models.Servers {
+		if srv.Provider == "" {
+			srv.Provider = "ollama"
+		}
+		c.Models.Servers[name] = srv
+	}
 	for i := range c.Models.Available {
-		if c.Models.Available[i].Provider == "" {
+		if c.Models.Available[i].Provider == "" && c.Models.Available[i].Server == "" {
 			c.Models.Available[i].Provider = "ollama"
 		}
 	}
@@ -1886,6 +1933,40 @@ func (c *Config) Validate() error {
 	if err := c.Platform.Validate(); err != nil {
 		return err
 	}
+	if err := c.validateModels(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (c *Config) validateModels() error {
+	for name, srv := range c.Models.Servers {
+		if strings.TrimSpace(name) == "" {
+			return fmt.Errorf("models.servers contains an empty server name")
+		}
+		if strings.TrimSpace(srv.URL) == "" {
+			return fmt.Errorf("models.servers.%s.url is required", name)
+		}
+	}
+	for i, m := range c.Models.Available {
+		if strings.TrimSpace(m.Name) == "" {
+			return fmt.Errorf("models.available[%d].name must not be empty", i)
+		}
+		if m.Server != "" {
+			srv, ok := c.Models.Servers[m.Server]
+			if !ok {
+				return fmt.Errorf("models.available[%d] (%s): unknown server %q", i, m.Name, m.Server)
+			}
+			if m.Provider != "" && m.Provider != srv.Provider {
+				return fmt.Errorf("models.available[%d] (%s): provider %q conflicts with server %q provider %q", i, m.Name, m.Provider, m.Server, srv.Provider)
+			}
+		}
+		switch m.MinComplexity {
+		case "", "simple", "moderate", "complex":
+		default:
+			return fmt.Errorf("models.available[%d] (%s): min_complexity %q invalid (expected simple, moderate, complex)", i, m.Name, m.MinComplexity)
+		}
+	}
 	return nil
 }
 
@@ -2028,6 +2109,9 @@ func (c *Config) validateSignal() error {
 func (c *Config) ContextWindowForModel(name string, defaultSize int) int {
 	for _, m := range c.Models.Available {
 		if m.Name == name {
+			return m.ContextWindow
+		}
+		if m.Server != "" && m.Server+"/"+m.Name == name {
 			return m.ContextWindow
 		}
 	}

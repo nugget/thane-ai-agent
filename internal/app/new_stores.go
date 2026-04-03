@@ -152,13 +152,23 @@ func (a *App) initStores(s *newState) error {
 		a.ha.SetWatcher(haWatcher)
 	}
 
-	ollamaWatcher := connMgr.Watch(s.ctx, connwatch.WatcherConfig{
-		Name:    "ollama",
-		Probe:   func(pCtx context.Context) error { return a.ollamaClient.Ping(pCtx) },
-		Backoff: connwatch.DefaultBackoffConfig(),
-		Logger:  logger,
-	})
-	a.ollamaClient.SetWatcher(ollamaWatcher)
+	for _, res := range a.modelCatalog.Resources {
+		client, ok := a.ollamaClients[res.ID]
+		if !ok {
+			continue
+		}
+		watchName := "ollama"
+		if len(a.ollamaClients) > 1 || res.ID != "default" {
+			watchName = "ollama:" + res.ID
+		}
+		ollamaWatcher := connMgr.Watch(s.ctx, connwatch.WatcherConfig{
+			Name:    watchName,
+			Probe:   func(pCtx context.Context) error { return client.Ping(pCtx) },
+			Backoff: connwatch.DefaultBackoffConfig(),
+			Logger:  logger.With("resource", res.ID),
+		})
+		client.SetWatcher(ollamaWatcher)
+	}
 
 	// --- Session archive ---
 	// All data (sessions, iterations, messages, tool calls) lives in
@@ -216,33 +226,7 @@ func (a *App) initStores(s *newState) error {
 	// --- Model router ---
 	// Selects the best model for each request based on complexity, cost,
 	// and capability requirements. Falls back to the default model.
-	routerCfg := router.Config{
-		DefaultModel: cfg.Models.Default,
-		LocalFirst:   cfg.Models.LocalFirst,
-		MaxAuditLog:  1000,
-	}
-
-	for _, m := range cfg.Models.Available {
-		minComp := router.ComplexitySimple
-		switch m.MinComplexity {
-		case "moderate":
-			minComp = router.ComplexityModerate
-		case "complex":
-			minComp = router.ComplexityComplex
-		}
-
-		routerCfg.Models = append(routerCfg.Models, router.Model{
-			Name:          m.Name,
-			Provider:      m.Provider,
-			SupportsTools: m.SupportsTools,
-			ContextWindow: m.ContextWindow,
-			Speed:         m.Speed,
-			Quality:       m.Quality,
-			CostTier:      m.CostTier,
-			MinComplexity: minComp,
-		})
-	}
-
+	routerCfg := a.modelCatalog.RouterConfig(1000)
 	rtr := router.NewRouter(logger, routerCfg)
 	a.rtr = rtr
 	logger.Info("model router initialized",

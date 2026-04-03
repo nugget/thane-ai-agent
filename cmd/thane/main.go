@@ -35,6 +35,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/llm"
 	"github.com/nugget/thane-ai-agent/internal/logging"
 	"github.com/nugget/thane-ai-agent/internal/memory"
+	"github.com/nugget/thane-ai-agent/internal/models"
 	"github.com/nugget/thane-ai-agent/internal/talents"
 
 	_ "github.com/mattn/go-sqlite3" // SQLite driver for database/sql
@@ -203,8 +204,10 @@ func runAsk(ctx context.Context, stdout io.Writer, stderr io.Writer, configPath 
 		ha = homeassistant.NewClient(cfg.HomeAssistant.URL, cfg.HomeAssistant.Token, logger)
 	}
 
-	ollamaClient := llm.NewOllamaClient(cfg.Models.OllamaURL, logger)
-	llmClient := createLLMClient(cfg, logger, ollamaClient)
+	llmSetup, err := createLLMSetup(cfg, logger)
+	if err != nil {
+		return err
+	}
 
 	talentLoader := talents.NewLoader(cfg.TalentsDir)
 	cliTalents, _ := talentLoader.Talents()
@@ -214,7 +217,7 @@ func runAsk(ctx context.Context, stdout io.Writer, stderr io.Writer, configPath 
 
 	// Minimal loop: no router, no scheduler, no compactor. The default
 	// model handles everything for CLI one-shots.
-	loop := agent.NewLoop(logger, mem, nil, nil, ha, nil, llmClient, cfg.Models.Default, cliTalents, "", 0)
+	loop := agent.NewLoop(logger, mem, nil, nil, ha, nil, llmSetup.Client, llmSetup.Catalog.DefaultModel, cliTalents, "", 0)
 	if ha != nil {
 		loop.SetHAInject(ha)
 	}
@@ -292,8 +295,10 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		return err
 	}
 
-	ollamaClient := llm.NewOllamaClient(cfg.Models.OllamaURL, logger)
-	llmClient := createLLMClient(cfg, logger, ollamaClient)
+	llmSetup, err := createLLMSetup(cfg, logger)
+	if err != nil {
+		return err
+	}
 
 	// Set up signal handling with explicit logging so operators see
 	// confirmation that the shutdown was received. A second signal
@@ -334,7 +339,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		close(sigCh)
 	}
 
-	a, err := app.New(ctx, cfg, logger, stdout, llmClient, ollamaClient)
+	a, err := app.New(ctx, cfg, logger, stdout, llmSetup.Client, llmSetup.OllamaClients, llmSetup.Catalog)
 	if err != nil {
 		stopSignals()
 		cancel()
@@ -351,8 +356,9 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	a.Logger().Info("config loaded",
 		"path", cfgPath,
 		"port", cfg.Listen.Port,
-		"model", cfg.Models.Default,
-		"ollama_url", cfg.Models.OllamaURL,
+		"model", llmSetup.Catalog.DefaultModel,
+		"ollama_resources", len(llmSetup.OllamaClients),
+		"primary_ollama_url", llmSetup.Catalog.PrimaryOllamaURL(),
 	)
 
 	if err := a.StartWorkers(ctx); err != nil {
@@ -412,33 +418,53 @@ func loadConfig(explicit string) (*config.Config, string, error) {
 	return cfg, cfgPath, nil
 }
 
-// createLLMClient builds a multi-provider LLM client from the configuration.
-// Each model listed in config is mapped to its provider (ollama, anthropic,
-// etc.). Models not explicitly mapped fall through to the Ollama provider,
-// which acts as the default backend. The OllamaClient is created externally
-// so that the caller can register a connwatch watcher on it.
-func createLLMClient(cfg *config.Config, logger *slog.Logger, ollamaClient *llm.OllamaClient) llm.Client {
-	multi := llm.NewMultiClient(ollamaClient)
-	multi.AddProvider("ollama", ollamaClient)
+type llmSetup struct {
+	Catalog       *models.Catalog
+	Client        llm.Client
+	OllamaClients map[string]*llm.OllamaClient
+}
 
-	if cfg.Anthropic.Configured() {
-		anthropicClient := llm.NewAnthropicClient(cfg.Anthropic.APIKey, logger)
-		multi.AddProvider("anthropic", anthropicClient)
-		logger.Info("Anthropic provider configured")
+func createLLMSetup(cfg *config.Config, logger *slog.Logger) (*llmSetup, error) {
+	catalog, err := models.BuildCatalog(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("build model catalog: %w", err)
+	}
+	normalizeConfiguredModelRefs(cfg, catalog)
+
+	bundle, err := models.BuildClients(catalog, cfg, logger)
+	if err != nil {
+		return nil, fmt.Errorf("build llm clients: %w", err)
 	}
 
-	// Model providers are already defaulted to "ollama" by applyDefaults.
-	for _, m := range cfg.Models.Available {
-		multi.AddModel(m.Name, m.Provider)
-	}
+	logger.Info("LLM client initialized",
+		"default_model", catalog.DefaultModel,
+		"resources", len(catalog.Resources),
+		"deployments", len(catalog.Deployments),
+	)
 
-	defaultProvider := "ollama"
-	for _, m := range cfg.Models.Available {
-		if m.Name == cfg.Models.Default {
-			defaultProvider = m.Provider
+	return &llmSetup{
+		Catalog:       catalog,
+		Client:        bundle.Client,
+		OllamaClients: bundle.OllamaClients,
+	}, nil
+}
+
+func normalizeConfiguredModelRefs(cfg *config.Config, catalog *models.Catalog) {
+	cfg.Models.Default = catalog.DefaultModel
+	cfg.Models.RecoveryModel = catalog.RecoveryModel
+
+	resolve := func(ref string) string {
+		if ref == "" {
+			return ""
 		}
+		if id, err := catalog.ResolveModelRef(ref); err == nil {
+			return id
+		}
+		return ref
 	}
-	logger.Info("LLM client initialized", "default_model", cfg.Models.Default, "default_provider", defaultProvider)
 
-	return multi
+	cfg.Archive.MetadataModel = resolve(cfg.Archive.MetadataModel)
+	cfg.Extraction.Model = resolve(cfg.Extraction.Model)
+	cfg.Media.SummarizeModel = resolve(cfg.Media.SummarizeModel)
+	cfg.Attachments.Vision.Model = resolve(cfg.Attachments.Vision.Model)
 }

@@ -480,7 +480,7 @@ func (a *App) initChannels(s *newState) error {
 			MaxTranscriptChars: a.cfg.Media.MaxTranscriptChars,
 			WhisperModel:       a.cfg.Media.WhisperModel,
 			TranscriptDir:      a.cfg.Media.TranscriptDir,
-			OllamaURL:          a.cfg.Models.OllamaURL,
+			OllamaURL:          a.modelCatalog.PrimaryOllamaURL(),
 		}, a.logger)
 
 		// Wire up LLM summarization for map-reduce transcript processing.
