@@ -3,6 +3,9 @@
 Thane constructs its system prompt from four distinct layers. Each has a
 specific purpose. Mixing concerns across layers degrades agent behavior.
 
+For conventions on how dynamic and model-facing data should be shaped
+inside those layers, see [Model-Facing Context](model-facing-context.md).
+
 ## The Four Layers
 
 ### 1. Persona (`persona_file`)
