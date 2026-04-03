@@ -95,8 +95,10 @@ Prefer:
 Do not add human-oriented prose around data just because it looks nicer.
 
 The purpose of names in results is not friendliness. It is semantic
-value. If a model sees only `01JSPY2KHMDFXMSDFXJNKZWX2V`, it may invent a
-story. If it also sees `Physical`, it can reason with less guesswork.
+value. If a model sees only a category ID like
+`01JSPY2KHMDFXMSDFXJNKZWX2V`, it may invent a story about what that
+category means. If it also sees the resolved category name
+`Door Locks`, it can reason with less guesswork.
 
 ### 4. Errors must teach the next move
 
