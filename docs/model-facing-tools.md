@@ -32,7 +32,8 @@ verb to make room for it. Prefer names like
 
 Avoid:
 
-- overloaded names like `list`, `get`, or `update`
+- bare generic names like `list`, `get`, or `update` with no object or
+  scope
 - synonyms that hide the true object being manipulated
 - names that require knowledge of internal package structure
 
@@ -117,13 +118,14 @@ miss looks identical.
 
 Models work best when they can inspect before they change.
 
-Prefer tool families that make the progression obvious:
+Prefer tool families that make the progression obvious through
+descriptive names:
 
-- `search` or `list`
-- `get`
-- `create`
-- `update`
-- `delete`
+- `*_search` or `*_list`
+- `*_get`
+- `*_create`
+- `*_update`
+- `*_delete`
 
 Mutation tools should return enough canonical data for the next step:
 
