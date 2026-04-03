@@ -391,7 +391,7 @@ func (a *App) initChannels(s *newState) error {
 	// --- Usage recording ---
 	// Wire persistent token usage recording into the agent loop and
 	// register the cost_summary tool so the agent can query its own spend.
-	a.loop.SetUsageRecorder(a.usageStore, a.cfg.Pricing)
+	a.loop.SetUsageRecorder(a.usageStore, a.cfg.Pricing, a.modelCatalog)
 	a.loop.Tools().SetUsageStore(a.usageStore)
 
 	// --- Log index query ---

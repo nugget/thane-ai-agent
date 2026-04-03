@@ -19,6 +19,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/events"
 	"github.com/nugget/thane-ai-agent/internal/logging"
 	"github.com/nugget/thane-ai-agent/internal/memory"
+	"github.com/nugget/thane-ai-agent/internal/models"
 	"github.com/nugget/thane-ai-agent/internal/router"
 	"github.com/nugget/thane-ai-agent/internal/usage"
 )
@@ -73,6 +74,7 @@ type Server struct {
 	owuTracker      *OWUTracker
 	webServer       WebServerRegistrar
 	platformHandler http.Handler
+	modelCatalog    *models.Catalog
 	logger          *slog.Logger
 	server          *http.Server
 	stats           *SessionStats
@@ -149,14 +151,14 @@ type SessionStats struct {
 
 // Record accumulates token usage and cost for a model. Cost is computed
 // from the config-driven pricing table.
-func (s *SessionStats) Record(model string, inputTokens, outputTokens int) {
+func (s *SessionStats) Record(identity usage.ModelIdentity, inputTokens, outputTokens int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.TotalInputTokens += int64(inputTokens)
 	s.TotalOutputTokens += int64(outputTokens)
 	s.TotalRequests++
 	s.LastRequestAt = time.Now()
-	s.EstimatedCostUSD += usage.ComputeCost(model, inputTokens, outputTokens, s.pricing)
+	s.EstimatedCostUSD += usage.ComputeCostForIdentity(identity, inputTokens, outputTokens, s.pricing)
 }
 
 // LastRequest returns when the most recent LLM request completed.
@@ -171,7 +173,8 @@ func (s *SessionStats) LastRequest() time.Time {
 // token observer (if set) so external consumers (e.g., the MQTT daily
 // token accumulator) are updated.
 func (s *Server) recordUsage(model string, inputTokens, outputTokens int) {
-	s.stats.Record(model, inputTokens, outputTokens)
+	identity := usage.ResolveModelIdentity(model, s.modelCatalog)
+	s.stats.Record(identity, inputTokens, outputTokens)
 	if s.tokenObserver != nil {
 		s.tokenObserver.OnTokens(inputTokens, outputTokens)
 	}
@@ -213,14 +216,15 @@ func (s *SessionStats) Snapshot() SessionStatsSnapshot {
 
 // NewServer creates a new API server. The pricing map drives cost
 // estimation in session stats; pass nil for zero-cost defaults.
-func NewServer(address string, port int, loop *agent.Loop, rtr *router.Router, pricing map[string]config.PricingEntry, logger *slog.Logger) *Server {
+func NewServer(address string, port int, loop *agent.Loop, rtr *router.Router, pricing map[string]config.PricingEntry, cat *models.Catalog, logger *slog.Logger) *Server {
 	return &Server{
-		address: address,
-		port:    port,
-		loop:    loop,
-		router:  rtr,
-		logger:  logger,
-		stats:   &SessionStats{pricing: pricing},
+		address:      address,
+		port:         port,
+		loop:         loop,
+		router:       rtr,
+		modelCatalog: cat,
+		logger:       logger,
+		stats:        &SessionStats{pricing: pricing},
 	}
 }
 

@@ -23,6 +23,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/logging"
 	"github.com/nugget/thane-ai-agent/internal/loop"
 	"github.com/nugget/thane-ai-agent/internal/memory"
+	"github.com/nugget/thane-ai-agent/internal/models"
 	"github.com/nugget/thane-ai-agent/internal/openclaw"
 	"github.com/nugget/thane-ai-agent/internal/prompts"
 	"github.com/nugget/thane-ai-agent/internal/provenance"
@@ -215,6 +216,7 @@ type Loop struct {
 	contentWriter     *logging.ContentWriter         // nil = content retention disabled
 	usageStore        *usage.Store                   // nil = no usage recording
 	pricing           map[string]config.PricingEntry // model→cost for usage recording
+	usageCatalog      *models.Catalog
 
 	// Capability tags — per-Run tool/talent filtering.
 	//
@@ -416,9 +418,10 @@ func (l *Loop) SetCapabilityTags(capTags map[string]config.CapabilityTagConfig, 
 // SetUsageRecorder configures persistent token usage recording. When
 // set, every LLM completion in the agent loop is persisted for cost
 // attribution and analysis.
-func (l *Loop) SetUsageRecorder(store *usage.Store, pricing map[string]config.PricingEntry) {
+func (l *Loop) SetUsageRecorder(store *usage.Store, pricing map[string]config.PricingEntry, cat *models.Catalog) {
 	l.usageStore = store
 	l.pricing = pricing
+	l.usageCatalog = cat
 }
 
 // SetChannelTags configures channel-pinned tag activation. When a
@@ -2245,14 +2248,17 @@ func (l *Loop) recordUsage(ctx context.Context, req *Request, model string, tota
 		}
 	}
 
-	cost := usage.ComputeCost(model, totalIn, totalOut, l.pricing)
+	identity := usage.ResolveModelIdentity(model, l.usageCatalog)
+	cost := usage.ComputeCostForIdentity(identity, totalIn, totalOut, l.pricing)
 	rec := usage.Record{
 		Timestamp:      time.Now(),
 		RequestID:      requestID,
 		SessionID:      sessionTag,
 		ConversationID: convID,
-		Model:          model,
-		Provider:       usage.ResolveProvider(model),
+		Model:          identity.Model,
+		UpstreamModel:  identity.UpstreamModel,
+		Resource:       identity.Resource,
+		Provider:       identity.Provider,
 		InputTokens:    totalIn,
 		OutputTokens:   totalOut,
 		CostUSD:        cost,

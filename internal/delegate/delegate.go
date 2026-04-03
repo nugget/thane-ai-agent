@@ -21,6 +21,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/logging"
 	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
 	"github.com/nugget/thane-ai-agent/internal/memory"
+	"github.com/nugget/thane-ai-agent/internal/models"
 	"github.com/nugget/thane-ai-agent/internal/router"
 	"github.com/nugget/thane-ai-agent/internal/tools"
 	"github.com/nugget/thane-ai-agent/internal/usage"
@@ -84,6 +85,7 @@ type Executor struct {
 	tempFiles        labelExpander
 	usageStore       *usage.Store
 	pricing          map[string]config.PricingEntry
+	usageCatalog     *models.Catalog
 	alwaysActiveTags []string
 	lensProvider     func() []string // returns active global lenses (nil = none)
 	forgeContext     string
@@ -170,9 +172,10 @@ func (e *Executor) SetTempFileStore(tfs interface {
 // SetUsageRecorder configures persistent token usage recording for
 // delegate executions. When set, every delegate completion is persisted
 // for cost attribution.
-func (e *Executor) SetUsageRecorder(store *usage.Store, pricing map[string]config.PricingEntry) {
+func (e *Executor) SetUsageRecorder(store *usage.Store, pricing map[string]config.PricingEntry, cat *models.Catalog) {
 	e.usageStore = store
 	e.pricing = pricing
+	e.usageCatalog = cat
 }
 
 // SetEventBus configures the event bus for delegate lifecycle events.
@@ -1153,13 +1156,16 @@ func (e *Executor) recordCompletion(rec *completionRecord) {
 	// Record usage for cost tracking. Uses context.Background() because
 	// the delegate's context may be cancelled (e.g., wall-clock exhaustion).
 	if e.usageStore != nil {
-		cost := usage.ComputeCost(rec.model, rec.totalInput, rec.totalOutput, e.pricing)
+		identity := usage.ResolveModelIdentity(rec.model, e.usageCatalog)
+		cost := usage.ComputeCostForIdentity(identity, rec.totalInput, rec.totalOutput, e.pricing)
 		usageRec := usage.Record{
 			Timestamp:      now,
 			RequestID:      rec.delegateID,
 			ConversationID: rec.conversationID,
-			Model:          rec.model,
-			Provider:       usage.ResolveProvider(rec.model),
+			Model:          identity.Model,
+			UpstreamModel:  identity.UpstreamModel,
+			Resource:       identity.Resource,
+			Provider:       identity.Provider,
 			InputTokens:    rec.totalInput,
 			OutputTokens:   rec.totalOutput,
 			CostUSD:        cost,

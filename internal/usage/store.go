@@ -12,6 +12,8 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nugget/thane-ai-agent/internal/config"
+	"github.com/nugget/thane-ai-agent/internal/database"
+	"github.com/nugget/thane-ai-agent/internal/models"
 )
 
 // Record represents a single LLM interaction's token usage and cost.
@@ -21,13 +23,24 @@ type Record struct {
 	RequestID      string
 	SessionID      string
 	ConversationID string
-	Model          string
+	Model          string // Selected deployment ID when known
+	UpstreamModel  string
+	Resource       string
 	Provider       string // "anthropic", "ollama"
 	InputTokens    int
 	OutputTokens   int
 	CostUSD        float64
 	Role           string // "interactive", "delegate", "scheduled", "auxiliary"
 	TaskName       string // "email_poll", "periodic_reflection", etc. (empty for interactive)
+}
+
+// ModelIdentity is the normalized usage-facing identity for a selected
+// model/deployment.
+type ModelIdentity struct {
+	Model         string
+	UpstreamModel string
+	Resource      string
+	Provider      string
 }
 
 // Summary holds aggregated token usage and cost totals.
@@ -88,8 +101,16 @@ func (s *Store) migrate() error {
 	CREATE INDEX IF NOT EXISTS idx_usage_session ON usage_records(session_id);
 	CREATE INDEX IF NOT EXISTS idx_usage_conversation ON usage_records(conversation_id);
 	`
-	_, err := s.db.Exec(schema)
-	return err
+	if _, err := s.db.Exec(schema); err != nil {
+		return err
+	}
+	if err := database.AddColumn(s.db, "usage_records", "upstream_model", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := database.AddColumn(s.db, "usage_records", "resource", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	return nil
 }
 
 // Record persists a usage record. If rec.ID is empty, a UUIDv7 is
@@ -108,15 +129,17 @@ func (s *Store) Record(ctx context.Context, rec Record) error {
 
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO usage_records
-			(id, timestamp, request_id, session_id, conversation_id, model, provider,
+			(id, timestamp, request_id, session_id, conversation_id, model, upstream_model, resource, provider,
 			 input_tokens, output_tokens, cost_usd, role, task_name)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		rec.ID,
 		rec.Timestamp.UTC().Format(time.RFC3339),
 		rec.RequestID,
 		rec.SessionID,
 		rec.ConversationID,
 		rec.Model,
+		rec.UpstreamModel,
+		rec.Resource,
 		rec.Provider,
 		rec.InputTokens,
 		rec.OutputTokens,
@@ -198,25 +221,78 @@ func (s *Store) summaryGroupedBy(column string, start, end time.Time) ([]Grouped
 	return result, rows.Err()
 }
 
+// ResolveModelIdentity resolves usage-facing metadata for a selected
+// model/deployment. When a normalized catalog is available, it is used
+// as the source of truth. Otherwise the function falls back to parsing
+// deployment-qualified IDs like "resource/model".
+func ResolveModelIdentity(model string, cat *models.Catalog) ModelIdentity {
+	model = strings.TrimSpace(model)
+	if cat != nil {
+		if dep, ok := cat.DeploymentByRef(model); ok {
+			return ModelIdentity{
+				Model:         dep.ID,
+				UpstreamModel: dep.ModelName,
+				Resource:      dep.ResourceID,
+				Provider:      dep.Provider,
+			}
+		}
+	}
+
+	identity := ModelIdentity{
+		Model: model,
+	}
+	if slash := strings.Index(model, "/"); slash > 0 && slash < len(model)-1 {
+		identity.Resource = model[:slash]
+		identity.UpstreamModel = model[slash+1:]
+	} else {
+		identity.UpstreamModel = model
+	}
+	identity.Provider = ResolveProvider(identity.UpstreamModel)
+	return identity
+}
+
 // ResolveProvider infers the LLM provider from the model name. Models
 // starting with "claude-" are Anthropic; everything else is assumed to
 // be Ollama (local).
 func ResolveProvider(model string) string {
+	model = strings.TrimSpace(model)
+	if slash := strings.Index(model, "/"); slash > 0 && slash < len(model)-1 {
+		model = model[slash+1:]
+	}
 	if strings.HasPrefix(model, "claude-") {
 		return "anthropic"
 	}
 	return "ollama"
 }
 
+// ComputeCostForIdentity calculates USD cost for a resolved model
+// identity. The selected deployment ID is checked first, then the
+// upstream model as a fallback so deployment-qualified IDs can reuse
+// provider pricing entries keyed by upstream model name.
+func ComputeCostForIdentity(identity ModelIdentity, inputTokens, outputTokens int, pricing map[string]config.PricingEntry) float64 {
+	if len(pricing) == 0 {
+		return 0
+	}
+
+	keys := []string{identity.Model}
+	if identity.UpstreamModel != "" && identity.UpstreamModel != identity.Model {
+		keys = append(keys, identity.UpstreamModel)
+	}
+	for _, key := range keys {
+		entry, ok := pricing[key]
+		if !ok {
+			continue
+		}
+		cost := float64(inputTokens) / 1_000_000.0 * entry.InputPerMillion
+		cost += float64(outputTokens) / 1_000_000.0 * entry.OutputPerMillion
+		return cost
+	}
+	return 0
+}
+
 // ComputeCost calculates the USD cost for a model's token usage based
 // on the pricing table. Models not in the table are treated as free
 // (local/Ollama models).
 func ComputeCost(model string, inputTokens, outputTokens int, pricing map[string]config.PricingEntry) float64 {
-	entry, ok := pricing[model]
-	if !ok {
-		return 0
-	}
-	cost := float64(inputTokens) / 1_000_000.0 * entry.InputPerMillion
-	cost += float64(outputTokens) / 1_000_000.0 * entry.OutputPerMillion
-	return cost
+	return ComputeCostForIdentity(ResolveModelIdentity(model, nil), inputTokens, outputTokens, pricing)
 }

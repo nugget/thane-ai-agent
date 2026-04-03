@@ -348,6 +348,20 @@ func (c *Catalog) ResolveModelRef(ref string) (string, error) {
 	return "", fmt.Errorf("unknown model %q", ref)
 }
 
+// DeploymentByRef resolves a model reference or deployment ID and
+// returns the normalized deployment metadata when known.
+func (c *Catalog) DeploymentByRef(ref string) (Deployment, bool) {
+	if c == nil {
+		return Deployment{}, false
+	}
+	id, err := c.ResolveModelRef(ref)
+	if err != nil {
+		return Deployment{}, false
+	}
+	dep, ok := c.byID[id]
+	return dep, ok
+}
+
 // ContextWindowForModel returns the configured context window for a
 // model reference or resolved deployment ID. When only an upstream
 // model name is available from a provider response and multiple

@@ -8,6 +8,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/nugget/thane-ai-agent/internal/config"
 	"github.com/nugget/thane-ai-agent/internal/database"
+	"github.com/nugget/thane-ai-agent/internal/models"
 )
 
 func testStore(t *testing.T) *Store {
@@ -318,9 +319,10 @@ func TestComputeCost(t *testing.T) {
 		output int
 		want   float64
 	}{
-		{"opus_normal", "claude-opus-4-20250514", 1_000_000, 100_000, 22.5},    // 15 + 7.5
-		{"sonnet_normal", "claude-sonnet-4-20250514", 1_000_000, 100_000, 4.5}, // 3 + 1.5
-		{"unknown_model", "gpt-oss:120b", 1_000_000, 1_000_000, 0},             // not in pricing
+		{"opus_normal", "claude-opus-4-20250514", 1_000_000, 100_000, 22.5},              // 15 + 7.5
+		{"qualified_opus", "anthropic/claude-opus-4-20250514", 1_000_000, 100_000, 22.5}, // upstream fallback
+		{"sonnet_normal", "claude-sonnet-4-20250514", 1_000_000, 100_000, 4.5},           // 3 + 1.5
+		{"unknown_model", "gpt-oss:120b", 1_000_000, 1_000_000, 0},                       // not in pricing
 		{"zero_tokens", "claude-opus-4-20250514", 0, 0, 0},
 		{"small_usage", "claude-opus-4-20250514", 1000, 500, 0.0525}, // 0.015 + 0.0375
 	}
@@ -382,6 +384,7 @@ func TestResolveProvider(t *testing.T) {
 		want  string
 	}{
 		{"claude-opus-4-20250514", "anthropic"},
+		{"anthropic/claude-opus-4-20250514", "anthropic"},
 		{"claude-sonnet-4-20250514", "anthropic"},
 		{"claude-haiku-3-20240307", "anthropic"},
 		{"llama3.2:latest", "ollama"},
@@ -396,5 +399,124 @@ func TestResolveProvider(t *testing.T) {
 				t.Errorf("ResolveProvider(%q) = %q, want %q", tt.model, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestResolveModelIdentity_WithCatalog(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{}
+	cfg.Models.Servers = map[string]config.ModelServerConfig{
+		"edge": {URL: "http://edge.example:11434", Provider: "ollama"},
+	}
+	cfg.Models.Available = []config.ModelConfig{
+		{Name: "qwen3:8b", Server: "edge", SupportsTools: true, ContextWindow: 32768, Speed: 7, Quality: 6, CostTier: 0},
+	}
+
+	cat, err := models.BuildCatalog(cfg)
+	if err != nil {
+		t.Fatalf("BuildCatalog: %v", err)
+	}
+
+	identity := ResolveModelIdentity("edge/qwen3:8b", cat)
+	if identity.Model != "edge/qwen3:8b" {
+		t.Fatalf("Model = %q, want %q", identity.Model, "edge/qwen3:8b")
+	}
+	if identity.UpstreamModel != "qwen3:8b" {
+		t.Fatalf("UpstreamModel = %q, want %q", identity.UpstreamModel, "qwen3:8b")
+	}
+	if identity.Resource != "edge" {
+		t.Fatalf("Resource = %q, want %q", identity.Resource, "edge")
+	}
+	if identity.Provider != "ollama" {
+		t.Fatalf("Provider = %q, want %q", identity.Provider, "ollama")
+	}
+}
+
+func TestRecord_PersistsDeploymentMetadata(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+
+	rec := Record{
+		Timestamp:      time.Now().UTC(),
+		RequestID:      "r_meta",
+		SessionID:      "sess-meta",
+		ConversationID: "conv-meta",
+		Model:          "mirror/claude-opus-4-20250514",
+		UpstreamModel:  "claude-opus-4-20250514",
+		Resource:       "mirror",
+		Provider:       "anthropic",
+		InputTokens:    100,
+		OutputTokens:   50,
+		CostUSD:        1.23,
+		Role:           "interactive",
+	}
+	if err := s.Record(ctx, rec); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+
+	var got Record
+	row := s.db.QueryRowContext(ctx, `
+		SELECT model, upstream_model, resource, provider, input_tokens, output_tokens, cost_usd
+		FROM usage_records
+		WHERE request_id = ?`,
+		rec.RequestID,
+	)
+	if err := row.Scan(&got.Model, &got.UpstreamModel, &got.Resource, &got.Provider, &got.InputTokens, &got.OutputTokens, &got.CostUSD); err != nil {
+		t.Fatalf("scan usage record: %v", err)
+	}
+	if got.Model != rec.Model {
+		t.Fatalf("Model = %q, want %q", got.Model, rec.Model)
+	}
+	if got.UpstreamModel != rec.UpstreamModel {
+		t.Fatalf("UpstreamModel = %q, want %q", got.UpstreamModel, rec.UpstreamModel)
+	}
+	if got.Resource != rec.Resource {
+		t.Fatalf("Resource = %q, want %q", got.Resource, rec.Resource)
+	}
+	if got.Provider != rec.Provider {
+		t.Fatalf("Provider = %q, want %q", got.Provider, rec.Provider)
+	}
+}
+
+func TestMigrate_AddsDeploymentMetadataColumns(t *testing.T) {
+	db, err := database.OpenMemory()
+	if err != nil {
+		t.Fatalf("database.OpenMemory: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	_, err = db.Exec(`
+		CREATE TABLE usage_records (
+			id TEXT PRIMARY KEY,
+			timestamp TEXT NOT NULL,
+			request_id TEXT NOT NULL,
+			session_id TEXT,
+			conversation_id TEXT,
+			model TEXT NOT NULL,
+			provider TEXT NOT NULL,
+			input_tokens INTEGER NOT NULL,
+			output_tokens INTEGER NOT NULL,
+			cost_usd REAL NOT NULL,
+			role TEXT NOT NULL,
+			task_name TEXT
+		);
+	`)
+	if err != nil {
+		t.Fatalf("create legacy table: %v", err)
+	}
+
+	s, err := NewStore(db)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	if s == nil {
+		t.Fatal("NewStore returned nil store")
+	}
+	if !database.HasColumn(db, "usage_records", "upstream_model") {
+		t.Fatal("expected upstream_model column after migration")
+	}
+	if !database.HasColumn(db, "usage_records", "resource") {
+		t.Fatal("expected resource column after migration")
 	}
 }
