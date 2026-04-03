@@ -29,14 +29,6 @@ type ReadyWatcher interface {
 	IsReady() bool
 }
 
-// HealthClient supports connection readiness and health probes for one
-// model-provider resource.
-type HealthClient interface {
-	Ping(ctx context.Context) error
-	SetWatcher(w ReadyWatcher)
-	IsReady() bool
-}
-
 // SetWatcher sets the connection watcher for health status queries.
 func (c *OllamaClient) SetWatcher(w ReadyWatcher) {
 	c.watcher = w

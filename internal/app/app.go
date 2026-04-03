@@ -63,7 +63,7 @@ type App struct {
 	// LLM clients
 	llmClient             llm.Client
 	ollamaClients         map[string]*llm.OllamaClient
-	resourceHealthClients map[string]llm.HealthClient
+	resourceHealthClients map[string]models.ResourceHealthClient
 	modelRuntime          *models.Runtime
 	modelCatalog          *models.Catalog
 	modelRegistry         *models.Registry

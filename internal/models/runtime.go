@@ -87,7 +87,7 @@ func (r *Runtime) OllamaClients() map[string]*llm.OllamaClient {
 
 // HealthClients returns the stable per-resource health clients used by
 // connwatch and inventory refresh triggers.
-func (r *Runtime) HealthClients() map[string]llm.HealthClient {
+func (r *Runtime) HealthClients() map[string]ResourceHealthClient {
 	if r == nil || r.bundle == nil {
 		return nil
 	}

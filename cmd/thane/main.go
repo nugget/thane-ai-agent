@@ -427,7 +427,7 @@ type llmSetup struct {
 	ModelRegistry *models.Registry
 	ModelRuntime  *models.Runtime
 	Client        llm.Client
-	HealthClients map[string]llm.HealthClient
+	HealthClients map[string]models.ResourceHealthClient
 	OllamaClients map[string]*llm.OllamaClient
 }
 

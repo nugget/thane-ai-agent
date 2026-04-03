@@ -1,6 +1,7 @@
 package models
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 
@@ -14,9 +15,16 @@ import (
 type ClientBundle struct {
 	Client          llm.Client
 	ResourceClients map[string]llm.Client
-	HealthClients   map[string]llm.HealthClient
+	HealthClients   map[string]ResourceHealthClient
 	OllamaClients   map[string]*llm.OllamaClient
 	LMStudioClients map[string]*llm.LMStudioClient
+}
+
+// ResourceHealthClient is the minimal health/watch surface that app
+// wiring needs from one model-provider resource.
+type ResourceHealthClient struct {
+	Ping          func(ctx context.Context) error
+	AttachWatcher func(w llm.ReadyWatcher)
 }
 
 // BuildClients constructs provider clients and a routed llm.Client from
@@ -32,7 +40,7 @@ func BuildClients(cat *Catalog, cfg *config.Config, logger *slog.Logger) (*Clien
 	ollamaClients := make(map[string]*llm.OllamaClient)
 	lmstudioClients := make(map[string]*llm.LMStudioClient)
 	resourceClients := make(map[string]llm.Client, len(cat.Resources))
-	healthClients := make(map[string]llm.HealthClient, len(cat.Resources))
+	healthClients := make(map[string]ResourceHealthClient, len(cat.Resources))
 
 	var anthropicClient *llm.AnthropicClient
 
@@ -42,12 +50,18 @@ func BuildClients(cat *Catalog, cfg *config.Config, logger *slog.Logger) (*Clien
 		case "ollama":
 			oc := llm.NewOllamaClient(res.URL, logger.With("resource", res.ID))
 			ollamaClients[res.ID] = oc
-			healthClients[res.ID] = oc
+			healthClients[res.ID] = ResourceHealthClient{
+				Ping:          oc.Ping,
+				AttachWatcher: oc.SetWatcher,
+			}
 			client = oc
 		case "lmstudio":
 			lc := llm.NewLMStudioClient(res.URL, serverAPIKey(cfg, res.ID), logger.With("resource", res.ID))
 			lmstudioClients[res.ID] = lc
-			healthClients[res.ID] = lc
+			healthClients[res.ID] = ResourceHealthClient{
+				Ping:          lc.Ping,
+				AttachWatcher: lc.AttachWatcher,
+			}
 			client = lc
 		case "anthropic":
 			if !cfg.Anthropic.Configured() {

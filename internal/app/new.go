@@ -43,7 +43,7 @@ import (
 //   - [initDelegation] — delegate executor, capability tags, lenses
 //   - [initAwareness]  — context providers, watchlist, person tracker, state watcher
 //   - [initServers]    — API server, checkpointer, MQTT, dashboard, metacognitive
-func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io.Writer, llmClient llm.Client, ollamaClients map[string]*llm.OllamaClient, healthClients map[string]llm.HealthClient, modelRuntime *models.Runtime) (*App, error) {
+func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io.Writer, llmClient llm.Client, ollamaClients map[string]*llm.OllamaClient, healthClients map[string]models.ResourceHealthClient, modelRuntime *models.Runtime) (*App, error) {
 	if modelRuntime == nil {
 		return nil, fmt.Errorf("nil model runtime")
 	}

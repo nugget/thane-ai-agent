@@ -216,14 +216,14 @@ func (a *App) initStores(s *newState) error {
 		}
 		resourceWatcher := connMgr.Watch(s.ctx, connwatch.WatcherConfig{
 			Name:    watchName,
-			Probe:   func(pCtx context.Context) error { return c.Ping(pCtx) },
+			Probe:   c.Ping,
 			Backoff: connwatch.DefaultBackoffConfig(),
 			OnReady: func() {
 				refreshModelRuntime(s.ctx, "resource_ready:"+res.ID)
 			},
 			Logger: logger.With("resource", res.ID, "provider", res.Provider),
 		})
-		c.SetWatcher(resourceWatcher)
+		c.AttachWatcher(resourceWatcher)
 	}
 
 	if a.modelRuntime != nil && a.modelRuntime.InventoryClientCount() > 0 {
