@@ -45,18 +45,18 @@ type ModelIdentity struct {
 
 // Summary holds aggregated token usage and cost totals.
 type Summary struct {
-	TotalRecords      int
-	TotalInputTokens  int64
-	TotalOutputTokens int64
-	TotalCostUSD      float64
+	TotalRecords      int     `json:"total_records"`
+	TotalInputTokens  int64   `json:"total_input_tokens"`
+	TotalOutputTokens int64   `json:"total_output_tokens"`
+	TotalCostUSD      float64 `json:"total_cost_usd"`
 }
 
 // GroupedSummary pairs a grouping key (model name, role, task name)
 // with its aggregated usage totals. Slices of GroupedSummary preserve
 // the SQL ordering (highest cost first).
 type GroupedSummary struct {
-	Key     string
-	Summary Summary
+	Key     string  `json:"key"`
+	Summary Summary `json:"summary"`
 }
 
 // Store is an append-only SQLite store for token usage records. All
@@ -176,6 +176,24 @@ func (s *Store) SummaryByModel(start, end time.Time) ([]GroupedSummary, error) {
 	return s.summaryGroupedBy("model", start, end)
 }
 
+// SummaryByUpstreamModel returns per-upstream-model aggregated totals
+// for records within [start, end), ordered by cost descending.
+func (s *Store) SummaryByUpstreamModel(start, end time.Time) ([]GroupedSummary, error) {
+	return s.summaryGroupedBy("upstream_model", start, end)
+}
+
+// SummaryByProvider returns per-provider aggregated totals for records
+// within [start, end), ordered by cost descending.
+func (s *Store) SummaryByProvider(start, end time.Time) ([]GroupedSummary, error) {
+	return s.summaryGroupedBy("provider", start, end)
+}
+
+// SummaryByResource returns per-resource aggregated totals for records
+// within [start, end), ordered by cost descending.
+func (s *Store) SummaryByResource(start, end time.Time) ([]GroupedSummary, error) {
+	return s.summaryGroupedBy("resource", start, end)
+}
+
 // SummaryByRole returns per-role aggregated totals for records within
 // [start, end), ordered by cost descending.
 func (s *Store) SummaryByRole(start, end time.Time) ([]GroupedSummary, error) {
@@ -187,6 +205,27 @@ func (s *Store) SummaryByRole(start, end time.Time) ([]GroupedSummary, error) {
 // task_name are grouped under the key "".
 func (s *Store) SummaryByTask(start, end time.Time) ([]GroupedSummary, error) {
 	return s.summaryGroupedBy("task_name", start, end)
+}
+
+// SummaryByGroup dispatches the grouped summary query based on the
+// caller-provided grouping key.
+func (s *Store) SummaryByGroup(groupBy string, start, end time.Time) ([]GroupedSummary, error) {
+	switch strings.TrimSpace(groupBy) {
+	case "model":
+		return s.SummaryByModel(start, end)
+	case "upstream_model":
+		return s.SummaryByUpstreamModel(start, end)
+	case "provider":
+		return s.SummaryByProvider(start, end)
+	case "resource":
+		return s.SummaryByResource(start, end)
+	case "role":
+		return s.SummaryByRole(start, end)
+	case "task":
+		return s.SummaryByTask(start, end)
+	default:
+		return nil, fmt.Errorf("unsupported group_by %q; use one of [\"model\" \"upstream_model\" \"provider\" \"resource\" \"role\" \"task\"]", groupBy)
+	}
 }
 
 func (s *Store) summaryGroupedBy(column string, start, end time.Time) ([]GroupedSummary, error) {

@@ -34,7 +34,7 @@ func (a *App) initServers(s *newState) error {
 	// --- API server ---
 	// The primary HTTP server exposing the OpenAI-compatible chat API,
 	// health endpoint, router introspection, and the web UI.
-	server := api.NewServer(cfg.Listen.Address, cfg.Listen.Port, a.loop, a.rtr, cfg.Pricing, a.modelCatalog, logger)
+	server := api.NewServer(cfg.Listen.Address, cfg.Listen.Port, a.loop, a.rtr, cfg.Pricing, a.modelCatalog, a.usageStore, logger)
 	server.SetMemoryStore(a.mem)
 	server.SetArchiveStore(a.archiveStore)
 	server.SetEventBus(a.eventBus)

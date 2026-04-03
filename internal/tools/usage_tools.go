@@ -29,8 +29,8 @@ func (r *Registry) registerCostSummary() {
 				},
 				"group_by": map[string]any{
 					"type":        "string",
-					"enum":        []string{"model", "role", "task"},
-					"description": "Optional: group results by model, role, or task name.",
+					"enum":        []string{"model", "upstream_model", "provider", "resource", "role", "task"},
+					"description": "Optional: group results by deployment, upstream model, provider, resource, role, or task name.",
 				},
 			},
 			"required": []string{"period"},
@@ -84,13 +84,22 @@ func (r *Registry) registerCostSummary() {
 func queryGrouped(store *usage.Store, groupBy string, start, end time.Time) ([]usage.GroupedSummary, string, error) {
 	switch groupBy {
 	case "model":
-		result, err := store.SummaryByModel(start, end)
-		return result, "Model", err
+		result, err := store.SummaryByGroup(groupBy, start, end)
+		return result, "Deployment", err
+	case "upstream_model":
+		result, err := store.SummaryByGroup(groupBy, start, end)
+		return result, "Upstream Model", err
+	case "provider":
+		result, err := store.SummaryByGroup(groupBy, start, end)
+		return result, "Provider", err
+	case "resource":
+		result, err := store.SummaryByGroup(groupBy, start, end)
+		return result, "Resource", err
 	case "role":
-		result, err := store.SummaryByRole(start, end)
+		result, err := store.SummaryByGroup(groupBy, start, end)
 		return result, "Role", err
 	case "task":
-		result, err := store.SummaryByTask(start, end)
+		result, err := store.SummaryByGroup(groupBy, start, end)
 		return result, "Task", err
 	default:
 		return nil, "", nil

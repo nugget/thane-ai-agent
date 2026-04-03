@@ -309,6 +309,111 @@ func TestSummaryByModel_EmptyDB(t *testing.T) {
 	}
 }
 
+func TestSummaryByGroup_DeploymentDimensions(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+
+	now := time.Now().UTC()
+	recs := []Record{
+		{
+			Timestamp:     now,
+			RequestID:     "r1",
+			Model:         "mirror/gpt-oss:20b",
+			UpstreamModel: "gpt-oss:20b",
+			Resource:      "mirror",
+			Provider:      "ollama",
+			CostUSD:       2.0,
+			Role:          "interactive",
+		},
+		{
+			Timestamp:     now,
+			RequestID:     "r2",
+			Model:         "spark/gpt-oss:20b",
+			UpstreamModel: "gpt-oss:20b",
+			Resource:      "spark",
+			Provider:      "ollama",
+			CostUSD:       1.0,
+			Role:          "interactive",
+		},
+		{
+			Timestamp:     now,
+			RequestID:     "r3",
+			Model:         "anthropic/claude-sonnet-4-20250514",
+			UpstreamModel: "claude-sonnet-4-20250514",
+			Resource:      "anthropic",
+			Provider:      "anthropic",
+			CostUSD:       3.0,
+			Role:          "delegate",
+		},
+	}
+	for _, rec := range recs {
+		if err := s.Record(ctx, rec); err != nil {
+			t.Fatalf("Record: %v", err)
+		}
+	}
+
+	start := now.Add(-1 * time.Minute)
+	end := now.Add(1 * time.Minute)
+
+	upstream, err := s.SummaryByUpstreamModel(start, end)
+	if err != nil {
+		t.Fatalf("SummaryByUpstreamModel: %v", err)
+	}
+	if len(upstream) != 2 {
+		t.Fatalf("upstream groups = %d, want 2", len(upstream))
+	}
+	if upstream[0].Key != "gpt-oss:20b" {
+		t.Fatalf("first upstream key = %q, want %q", upstream[0].Key, "gpt-oss:20b")
+	}
+	if upstream[0].Summary.TotalRecords != 2 {
+		t.Fatalf("gpt-oss:20b records = %d, want 2", upstream[0].Summary.TotalRecords)
+	}
+
+	resource, err := s.SummaryByResource(start, end)
+	if err != nil {
+		t.Fatalf("SummaryByResource: %v", err)
+	}
+	if len(resource) != 3 {
+		t.Fatalf("resource groups = %d, want 3", len(resource))
+	}
+	if resource[0].Key != "anthropic" {
+		t.Fatalf("first resource key = %q, want %q", resource[0].Key, "anthropic")
+	}
+
+	provider, err := s.SummaryByProvider(start, end)
+	if err != nil {
+		t.Fatalf("SummaryByProvider: %v", err)
+	}
+	if len(provider) != 2 {
+		t.Fatalf("provider groups = %d, want 2", len(provider))
+	}
+	if provider[0].Key != "ollama" {
+		t.Fatalf("first provider key = %q, want %q", provider[0].Key, "ollama")
+	}
+	if provider[0].Summary.TotalCostUSD != 3.0 {
+		t.Fatalf("ollama cost = %f, want 3.0", provider[0].Summary.TotalCostUSD)
+	}
+
+	grouped, err := s.SummaryByGroup("resource", start, end)
+	if err != nil {
+		t.Fatalf("SummaryByGroup(resource): %v", err)
+	}
+	if len(grouped) != len(resource) {
+		t.Fatalf("grouped resource len = %d, want %d", len(grouped), len(resource))
+	}
+}
+
+func TestSummaryByGroup_InvalidGroup(t *testing.T) {
+	s := testStore(t)
+
+	start := time.Now().Add(-1 * time.Hour)
+	end := time.Now()
+	_, err := s.SummaryByGroup("bogus", start, end)
+	if err == nil {
+		t.Fatal("expected invalid group_by error")
+	}
+}
+
 func TestComputeCost(t *testing.T) {
 	pricing := testPricing()
 

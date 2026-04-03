@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -75,6 +76,7 @@ type Server struct {
 	webServer       WebServerRegistrar
 	platformHandler http.Handler
 	modelCatalog    *models.Catalog
+	usageStore      *usage.Store
 	logger          *slog.Logger
 	server          *http.Server
 	stats           *SessionStats
@@ -145,6 +147,10 @@ type SessionStats struct {
 	ReportedBalance   float64   `json:"reported_balance_usd,omitempty"`
 	BalanceSetAt      string    `json:"balance_set_at,omitempty"`
 	LastRequestAt     time.Time `json:"-"` // Used by MQTT publisher, not exposed in JSON.
+	ByModel           map[string]usage.Summary
+	ByUpstreamModel   map[string]usage.Summary
+	ByProvider        map[string]usage.Summary
+	ByResource        map[string]usage.Summary
 	pricing           map[string]config.PricingEntry
 	mu                sync.Mutex
 }
@@ -158,7 +164,12 @@ func (s *SessionStats) Record(identity usage.ModelIdentity, inputTokens, outputT
 	s.TotalOutputTokens += int64(outputTokens)
 	s.TotalRequests++
 	s.LastRequestAt = time.Now()
-	s.EstimatedCostUSD += usage.ComputeCostForIdentity(identity, inputTokens, outputTokens, s.pricing)
+	cost := usage.ComputeCostForIdentity(identity, inputTokens, outputTokens, s.pricing)
+	s.EstimatedCostUSD += cost
+	recordSessionUsageSummary(s.ByModel, identity.Model, inputTokens, outputTokens, cost)
+	recordSessionUsageSummary(s.ByUpstreamModel, identity.UpstreamModel, inputTokens, outputTokens, cost)
+	recordSessionUsageSummary(s.ByProvider, identity.Provider, inputTokens, outputTokens, cost)
+	recordSessionUsageSummary(s.ByResource, identity.Resource, inputTokens, outputTokens, cost)
 }
 
 // LastRequest returns when the most recent LLM request completed.
@@ -189,16 +200,20 @@ func (s *SessionStats) SetBalance(balance float64) {
 
 // SessionStatsSnapshot is a copy-safe snapshot of session stats.
 type SessionStatsSnapshot struct {
-	TotalInputTokens  int64             `json:"total_input_tokens"`
-	TotalOutputTokens int64             `json:"total_output_tokens"`
-	TotalRequests     int64             `json:"total_requests"`
-	EstimatedCostUSD  float64           `json:"estimated_cost_usd"`
-	ReportedBalance   float64           `json:"reported_balance_usd,omitempty"`
-	BalanceSetAt      string            `json:"balance_set_at,omitempty"`
-	ContextTokens     int               `json:"context_tokens"`
-	ContextWindow     int               `json:"context_window"`
-	MessageCount      int               `json:"message_count"`
-	Build             map[string]string `json:"build,omitempty"`
+	TotalInputTokens  int64                    `json:"total_input_tokens"`
+	TotalOutputTokens int64                    `json:"total_output_tokens"`
+	TotalRequests     int64                    `json:"total_requests"`
+	EstimatedCostUSD  float64                  `json:"estimated_cost_usd"`
+	ReportedBalance   float64                  `json:"reported_balance_usd,omitempty"`
+	BalanceSetAt      string                   `json:"balance_set_at,omitempty"`
+	ByModel           map[string]usage.Summary `json:"by_model,omitempty"`
+	ByUpstreamModel   map[string]usage.Summary `json:"by_upstream_model,omitempty"`
+	ByProvider        map[string]usage.Summary `json:"by_provider,omitempty"`
+	ByResource        map[string]usage.Summary `json:"by_resource,omitempty"`
+	ContextTokens     int                      `json:"context_tokens"`
+	ContextWindow     int                      `json:"context_window"`
+	MessageCount      int                      `json:"message_count"`
+	Build             map[string]string        `json:"build,omitempty"`
 }
 
 func (s *SessionStats) Snapshot() SessionStatsSnapshot {
@@ -211,20 +226,64 @@ func (s *SessionStats) Snapshot() SessionStatsSnapshot {
 		EstimatedCostUSD:  s.EstimatedCostUSD,
 		ReportedBalance:   s.ReportedBalance,
 		BalanceSetAt:      s.BalanceSetAt,
+		ByModel:           cloneSessionUsageMap(s.ByModel),
+		ByUpstreamModel:   cloneSessionUsageMap(s.ByUpstreamModel),
+		ByProvider:        cloneSessionUsageMap(s.ByProvider),
+		ByResource:        cloneSessionUsageMap(s.ByResource),
 	}
+}
+
+type usageSummaryResponse struct {
+	Start   string                 `json:"start"`
+	End     string                 `json:"end"`
+	Hours   int                    `json:"hours"`
+	GroupBy string                 `json:"group_by,omitempty"`
+	Summary *usage.Summary         `json:"summary"`
+	Groups  []usage.GroupedSummary `json:"groups,omitempty"`
+}
+
+func recordSessionUsageSummary(dst map[string]usage.Summary, key string, inputTokens, outputTokens int, cost float64) {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return
+	}
+	sum := dst[key]
+	sum.TotalRecords++
+	sum.TotalInputTokens += int64(inputTokens)
+	sum.TotalOutputTokens += int64(outputTokens)
+	sum.TotalCostUSD += cost
+	dst[key] = sum
+}
+
+func cloneSessionUsageMap(src map[string]usage.Summary) map[string]usage.Summary {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := make(map[string]usage.Summary, len(src))
+	for key, sum := range src {
+		dst[key] = sum
+	}
+	return dst
 }
 
 // NewServer creates a new API server. The pricing map drives cost
 // estimation in session stats; pass nil for zero-cost defaults.
-func NewServer(address string, port int, loop *agent.Loop, rtr *router.Router, pricing map[string]config.PricingEntry, cat *models.Catalog, logger *slog.Logger) *Server {
+func NewServer(address string, port int, loop *agent.Loop, rtr *router.Router, pricing map[string]config.PricingEntry, cat *models.Catalog, usageStore *usage.Store, logger *slog.Logger) *Server {
 	return &Server{
 		address:      address,
 		port:         port,
 		loop:         loop,
 		router:       rtr,
 		modelCatalog: cat,
+		usageStore:   usageStore,
 		logger:       logger,
-		stats:        &SessionStats{pricing: pricing},
+		stats: &SessionStats{
+			pricing:         pricing,
+			ByModel:         make(map[string]usage.Summary),
+			ByUpstreamModel: make(map[string]usage.Summary),
+			ByProvider:      make(map[string]usage.Summary),
+			ByResource:      make(map[string]usage.Summary),
+		},
 	}
 }
 
@@ -278,6 +337,7 @@ func (s *Server) Start(ctx context.Context) error {
 
 	// Session stats
 	mux.HandleFunc("GET /v1/session/stats", s.handleSessionStats)
+	mux.HandleFunc("GET /v1/usage/summary", s.handleUsageSummary)
 	mux.HandleFunc("POST /v1/session/balance", s.handleSetBalance)
 	mux.HandleFunc("POST /v1/session/reset", s.handleSessionReset)
 	mux.HandleFunc("POST /v1/session/compact", s.handleSessionCompact)
@@ -995,6 +1055,53 @@ func (s *Server) handleToolStats(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleSessionStats(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	writeJSON(w, s.DashboardSnapshot(), s.logger)
+}
+
+func (s *Server) handleUsageSummary(w http.ResponseWriter, r *http.Request) {
+	if s.usageStore == nil {
+		s.errorResponse(w, http.StatusServiceUnavailable, "usage store not configured")
+		return
+	}
+
+	hours := 24
+	if raw := strings.TrimSpace(r.URL.Query().Get("hours")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed <= 0 {
+			s.errorResponse(w, http.StatusBadRequest, "hours must be a positive integer")
+			return
+		}
+		hours = parsed
+	}
+
+	end := time.Now().Add(1 * time.Minute)
+	start := end.Add(-time.Duration(hours) * time.Hour)
+
+	summary, err := s.usageStore.Summary(start, end)
+	if err != nil {
+		s.logger.Error("usage summary query failed", "error", err, "hours", hours)
+		s.errorResponse(w, http.StatusInternalServerError, "usage summary query failed")
+		return
+	}
+
+	resp := usageSummaryResponse{
+		Start:   start.UTC().Format(time.RFC3339),
+		End:     end.UTC().Format(time.RFC3339),
+		Hours:   hours,
+		Summary: summary,
+	}
+
+	if groupBy := strings.TrimSpace(r.URL.Query().Get("group_by")); groupBy != "" {
+		grouped, err := s.usageStore.SummaryByGroup(groupBy, start, end)
+		if err != nil {
+			s.errorResponse(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		resp.GroupBy = groupBy
+		resp.Groups = grouped
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	writeJSON(w, resp, s.logger)
 }
 
 func (s *Server) handleSetBalance(w http.ResponseWriter, r *http.Request) {
