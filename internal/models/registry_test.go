@@ -84,6 +84,9 @@ func TestRegistryApplyInventoryBuildsEffectiveSnapshot(t *testing.T) {
 	if snap.Resources[0].ID != "mirror" || snap.Resources[0].DiscoveredModels != 1 {
 		t.Fatalf("mirror resource snapshot = %+v, want discovered_models=1", snap.Resources[0])
 	}
+	if !snap.Resources[0].SupportsStreaming || !snap.Resources[0].SupportsTools || !snap.Resources[0].SupportsImages || !snap.Resources[0].SupportsInventory {
+		t.Fatalf("mirror capabilities = %+v, want streaming/tools/images/inventory", snap.Resources[0])
+	}
 	if snap.Resources[1].ID != "spark" || snap.Resources[1].DiscoveredModels != 2 {
 		t.Fatalf("spark resource snapshot = %+v, want discovered_models=2", snap.Resources[1])
 	}
@@ -117,6 +120,13 @@ func TestRegistryApplyInventoryBuildsEffectiveSnapshot(t *testing.T) {
 	}
 	if routableDiscovered != 0 {
 		t.Fatalf("routable discovered deployments = %d, want 0", routableDiscovered)
+	}
+	qwen, ok := findPolicySnapshot(snap, "spark/qwen3:8b")
+	if !ok {
+		t.Fatal("missing spark/qwen3:8b snapshot")
+	}
+	if !qwen.SupportsTools || !qwen.ProviderSupportsTools || !qwen.SupportsStreaming || !qwen.SupportsImages {
+		t.Fatalf("spark/qwen3:8b capabilities = %+v, want provider-driven tools/streaming/images", qwen)
 	}
 }
 
@@ -156,6 +166,12 @@ func TestRegistryApplyInventoryDoesNotMarkUnattemptedResourcesRefreshed(t *testi
 	}
 	if len(snap.Resources) != 1 {
 		t.Fatalf("len(resources) = %d, want 1", len(snap.Resources))
+	}
+	if !snap.Resources[0].SupportsTools || !snap.Resources[0].SupportsStreaming || !snap.Resources[0].SupportsImages {
+		t.Fatalf("anthropic resource capabilities = %+v, want chat/streaming/tools/images metadata", snap.Resources[0])
+	}
+	if snap.Resources[0].SupportsInventory {
+		t.Fatalf("anthropic SupportsInventory = true, want false")
 	}
 	if snap.Resources[0].LastRefresh != "" {
 		t.Fatalf("LastRefresh = %q, want empty for unattempted resource", snap.Resources[0].LastRefresh)

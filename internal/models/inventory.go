@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"sort"
 	"time"
+
+	modelproviders "github.com/nugget/thane-ai-agent/internal/models/providers"
 )
 
 // Inventory is the mutable provider-exported overlay that sits on top
@@ -17,21 +19,25 @@ type Inventory struct {
 // resource at a point in time. Errors are recorded per-resource so the
 // overlay can be partial without blocking startup.
 type ResourceInventory struct {
-	ResourceID string
-	Provider   string
-	Attempted  bool
-	Models     []DiscoveredModel
-	Error      string
+	ResourceID   string
+	Provider     string
+	Capabilities modelproviders.Capabilities
+	Attempted    bool
+	Models       []DiscoveredModel
+	Error        string
 }
 
 // DiscoveredModel is provider-exported model metadata normalized just
 // enough for Thane's overlay layer.
 type DiscoveredModel struct {
-	Name          string
-	Family        string
-	Families      []string
-	ParameterSize string
-	Quantization  string
+	Name              string
+	Family            string
+	Families          []string
+	ParameterSize     string
+	Quantization      string
+	SupportsTools     bool
+	SupportsStreaming bool
+	SupportsImages    bool
 }
 
 // DiscoverInventory probes configured resources for live model
@@ -48,8 +54,9 @@ func DiscoverInventory(ctx context.Context, cat *Catalog, bundle *ClientBundle) 
 
 	for _, res := range cat.Resources {
 		ri := ResourceInventory{
-			ResourceID: res.ID,
-			Provider:   res.Provider,
+			ResourceID:   res.ID,
+			Provider:     res.Provider,
+			Capabilities: providerCapabilities(res.Provider, res.Capabilities),
 		}
 
 		switch res.Provider {
@@ -70,11 +77,14 @@ func DiscoverInventory(ctx context.Context, cat *Catalog, bundle *ClientBundle) 
 			sort.Slice(models, func(i, j int) bool { return models[i].Name < models[j].Name })
 			for _, m := range models {
 				ri.Models = append(ri.Models, DiscoveredModel{
-					Name:          m.Name,
-					Family:        m.Details.Family,
-					Families:      append([]string(nil), m.Details.Families...),
-					ParameterSize: m.Details.ParameterSize,
-					Quantization:  m.Details.QuantizationLevel,
+					Name:              m.Name,
+					Family:            m.Details.Family,
+					Families:          append([]string(nil), m.Details.Families...),
+					ParameterSize:     m.Details.ParameterSize,
+					Quantization:      m.Details.QuantizationLevel,
+					SupportsTools:     ri.Capabilities.SupportsTools,
+					SupportsStreaming: ri.Capabilities.SupportsStreaming,
+					SupportsImages:    ri.Capabilities.SupportsImages,
 				})
 			}
 		case "lmstudio":
@@ -94,7 +104,10 @@ func DiscoverInventory(ctx context.Context, cat *Catalog, bundle *ClientBundle) 
 			sort.Slice(models, func(i, j int) bool { return models[i].ID < models[j].ID })
 			for _, m := range models {
 				ri.Models = append(ri.Models, DiscoveredModel{
-					Name: m.ID,
+					Name:              m.ID,
+					SupportsTools:     ri.Capabilities.SupportsTools,
+					SupportsStreaming: ri.Capabilities.SupportsStreaming,
+					SupportsImages:    ri.Capabilities.SupportsImages,
 				})
 			}
 		}
@@ -148,6 +161,7 @@ func MergeInventory(base *Catalog, inv *Inventory) (*Catalog, error) {
 		if _, ok := base.resourceBy[ri.ResourceID]; !ok {
 			continue
 		}
+		caps := providerCapabilities(ri.Provider, ri.Capabilities)
 		for _, m := range ri.Models {
 			key := deploymentKey(ri.ResourceID, m.Name)
 			if existingByResourceModel[key] {
@@ -158,22 +172,25 @@ func MergeInventory(base *Catalog, inv *Inventory) (*Catalog, error) {
 				continue
 			}
 			out.Deployments = append(out.Deployments, Deployment{
-				ID:            id,
-				ModelName:     m.Name,
-				Provider:      ri.Provider,
-				ResourceID:    ri.ResourceID,
-				Server:        ri.ResourceID,
-				SupportsTools: false,
-				ContextWindow: base.ContextWindowForModel(m.Name, 8192),
-				Speed:         5,
-				Quality:       5,
-				CostTier:      defaultCostTier(ri.Provider),
-				Source:        DeploymentSourceDiscovered,
-				Routable:      false,
-				Family:        m.Family,
-				Families:      append([]string(nil), m.Families...),
-				ParameterSize: m.ParameterSize,
-				Quantization:  m.Quantization,
+				ID:                    id,
+				ModelName:             m.Name,
+				Provider:              ri.Provider,
+				ResourceID:            ri.ResourceID,
+				Server:                ri.ResourceID,
+				SupportsTools:         m.SupportsTools || caps.SupportsTools,
+				ProviderSupportsTools: caps.SupportsTools,
+				SupportsStreaming:     m.SupportsStreaming || caps.SupportsStreaming,
+				SupportsImages:        m.SupportsImages || caps.SupportsImages,
+				ContextWindow:         base.ContextWindowForModel(m.Name, 8192),
+				Speed:                 5,
+				Quality:               5,
+				CostTier:              defaultCostTier(ri.Provider),
+				Source:                DeploymentSourceDiscovered,
+				Routable:              false,
+				Family:                m.Family,
+				Families:              append([]string(nil), m.Families...),
+				ParameterSize:         m.ParameterSize,
+				Quantization:          m.Quantization,
 			})
 			existingByResourceModel[key] = true
 			existingByID[id] = true

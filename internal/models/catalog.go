@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/config"
+	modelproviders "github.com/nugget/thane-ai-agent/internal/models/providers"
 	"github.com/nugget/thane-ai-agent/internal/router"
 )
 
@@ -14,9 +15,10 @@ import (
 // more model deployments. Examples include an Ollama server on a
 // specific host or a global cloud provider endpoint.
 type Resource struct {
-	ID       string
-	Provider string
-	URL      string
+	ID           string
+	Provider     string
+	URL          string
+	Capabilities modelproviders.Capabilities
 }
 
 // DeploymentSource describes where a deployment definition came from.
@@ -31,19 +33,22 @@ const (
 // same upstream model on different resources becomes distinct
 // deployments with distinct IDs.
 type Deployment struct {
-	ID            string
-	ModelName     string
-	Provider      string
-	ResourceID    string
-	Server        string
-	SupportsTools bool
-	ContextWindow int
-	Speed         int
-	Quality       int
-	CostTier      int
-	MinComplexity string
-	Source        DeploymentSource
-	Routable      bool
+	ID                    string
+	ModelName             string
+	Provider              string
+	ResourceID            string
+	Server                string
+	SupportsTools         bool
+	ProviderSupportsTools bool
+	SupportsStreaming     bool
+	SupportsImages        bool
+	ContextWindow         int
+	Speed                 int
+	Quality               int
+	CostTier              int
+	MinComplexity         string
+	Source                DeploymentSource
+	Routable              bool
 
 	// Provider-exported metadata kept alongside the normalized Thane
 	// deployment so later routing/policy layers can reason with it.
@@ -122,9 +127,10 @@ func BuildCatalog(cfg *config.Config) (*Catalog, error) {
 				provider = "ollama"
 			}
 			res := Resource{
-				ID:       name,
-				Provider: provider,
-				URL:      srv.URL,
+				ID:           name,
+				Provider:     provider,
+				URL:          srv.URL,
+				Capabilities: modelproviders.CapabilitiesForProvider(provider),
 			}
 			resourceByID[res.ID] = res
 			resources = append(resources, res)
@@ -133,9 +139,10 @@ func BuildCatalog(cfg *config.Config) (*Catalog, error) {
 		url := cfg.Models.PreferredOllamaURL()
 		if url != "" {
 			res := Resource{
-				ID:       "default",
-				Provider: "ollama",
-				URL:      url,
+				ID:           "default",
+				Provider:     "ollama",
+				URL:          url,
+				Capabilities: modelproviders.CapabilitiesForProvider("ollama"),
 			}
 			resourceByID[res.ID] = res
 			resources = append(resources, res)
@@ -211,7 +218,11 @@ func BuildCatalog(cfg *config.Config) (*Catalog, error) {
 				}
 			} else {
 				if _, ok := resourceByID[provider]; !ok {
-					res := Resource{ID: provider, Provider: provider}
+					res := Resource{
+						ID:           provider,
+						Provider:     provider,
+						Capabilities: modelproviders.CapabilitiesForProvider(provider),
+					}
 					resourceByID[res.ID] = res
 					resources = append(resources, res)
 				}
@@ -264,6 +275,11 @@ func BuildCatalog(cfg *config.Config) (*Catalog, error) {
 			Families:      append([]string(nil), p.Families...),
 			ParameterSize: p.ParameterSize,
 			Quantization:  p.Quantization,
+		}
+		if res, ok := resourceByID[p.ResourceID]; ok {
+			dep.ProviderSupportsTools = res.Capabilities.SupportsTools
+			dep.SupportsStreaming = res.Capabilities.SupportsStreaming
+			dep.SupportsImages = res.Capabilities.SupportsImages
 		}
 		deployments = append(deployments, dep)
 	}

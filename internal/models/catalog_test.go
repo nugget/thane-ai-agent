@@ -166,6 +166,9 @@ func TestMergeInventory_AddsDiscoveredDeploymentsAsNonRoutable(t *testing.T) {
 	if dep.Routable {
 		t.Fatal("Routable = true, want false for discovered deployment")
 	}
+	if !dep.SupportsTools || !dep.ProviderSupportsTools || !dep.SupportsStreaming || !dep.SupportsImages {
+		t.Fatalf("discovered deployment capabilities = %+v, want tools/provider_tools/streaming/images", dep)
+	}
 	if dep.Family != "gpt-oss" {
 		t.Fatalf("Family = %q, want %q", dep.Family, "gpt-oss")
 	}
@@ -253,6 +256,9 @@ func TestBuildCatalog_SingleLMStudioResourceCanBeInferred(t *testing.T) {
 	}
 	if dep.ResourceID != "deepslate" {
 		t.Fatalf("ResourceID = %q, want %q", dep.ResourceID, "deepslate")
+	}
+	if !dep.ProviderSupportsTools || !dep.SupportsStreaming || !dep.SupportsImages {
+		t.Fatalf("LM Studio deployment capabilities = %+v, want provider tools/streaming/images", dep)
 	}
 }
 

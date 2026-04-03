@@ -396,6 +396,10 @@ function renderModelRegistry(summaryEl, resourcesEl, deploymentsEl, metaEl, regi
       const chips = document.createElement('div');
       chips.className = 'system-item__chips';
       chips.appendChild(buildSystemChip(resource.provider || 'unknown', 'provider'));
+      if (resource.supports_inventory) chips.appendChild(buildSystemChip('inventory', 'ok'));
+      if (resource.supports_streaming) chips.appendChild(buildSystemChip('stream', 'ok'));
+      if (resource.supports_tools) chips.appendChild(buildSystemChip('tools', 'ok'));
+      if (resource.supports_images) chips.appendChild(buildSystemChip('images', 'ok'));
       if (resource.last_error) {
         chips.appendChild(buildSystemChip('error', 'error'));
       } else if (resource.last_refresh) {
@@ -475,6 +479,9 @@ function renderModelRegistry(summaryEl, resourcesEl, deploymentsEl, metaEl, regi
     if (dep.policy_state) chips.appendChild(buildSystemChip(dep.policy_state, dep.policy_state === 'active' ? 'ok' : dep.policy_state === 'flagged' ? 'warn' : 'error'));
     if (!dep.routable) chips.appendChild(buildSystemChip('explicit only', 'muted'));
     if (dep.supports_tools) chips.appendChild(buildSystemChip('tools', 'ok'));
+    else if (dep.provider_supports_tools) chips.appendChild(buildSystemChip('tools off', 'muted'));
+    if (dep.supports_streaming) chips.appendChild(buildSystemChip('stream', 'ok'));
+    if (dep.supports_images) chips.appendChild(buildSystemChip('images', 'ok'));
     item.appendChild(chips);
 
     const facts = document.createElement('div');

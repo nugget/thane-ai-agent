@@ -73,10 +73,16 @@ func TestDiscoverInventoryIncludesLMStudioResources(t *testing.T) {
 	if !inv.Resources[0].Attempted {
 		t.Fatal("expected LM Studio resource discovery to be attempted")
 	}
+	if !inv.Resources[0].Capabilities.SupportsStreaming || !inv.Resources[0].Capabilities.SupportsTools || !inv.Resources[0].Capabilities.SupportsImages {
+		t.Fatalf("LM Studio capabilities = %+v, want streaming/tools/images", inv.Resources[0].Capabilities)
+	}
 	if len(inv.Resources[0].Models) != 2 {
 		t.Fatalf("len(Models) = %d, want 2", len(inv.Resources[0].Models))
 	}
 	if inv.Resources[0].Models[0].Name != "gpt-oss:20b" || inv.Resources[0].Models[1].Name != "qwen3:8b" {
 		t.Fatalf("models = %+v", inv.Resources[0].Models)
+	}
+	if !inv.Resources[0].Models[0].SupportsStreaming || !inv.Resources[0].Models[0].SupportsTools || !inv.Resources[0].Models[0].SupportsImages {
+		t.Fatalf("first discovered model = %+v, want streaming/tools/images", inv.Resources[0].Models[0])
 	}
 }
