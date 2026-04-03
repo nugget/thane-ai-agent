@@ -116,6 +116,75 @@ func TestLMStudioChat_NonStreamingToolCalls(t *testing.T) {
 	}
 }
 
+func TestLMStudioChat_NonStreamingContent(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			t.Fatalf("path = %q, want /v1/chat/completions", r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(lmStudioChatResponse{
+			Model:   "deepslate/google/gemma-3-4b",
+			Created: 1712160000,
+			Choices: []lmStudioChatChoice{
+				{
+					Index: 0,
+					Message: &lmStudioMessageResponse{
+						Role:    "assistant",
+						Content: "ok\n",
+					},
+				},
+			},
+			Usage: &lmStudioUsage{PromptTokens: 13, CompletionTokens: 3},
+		})
+	}))
+	defer srv.Close()
+
+	client := NewLMStudioClient(srv.URL, "", nil)
+	resp, err := client.Chat(context.Background(), "google/gemma-3-4b", []Message{{Role: "user", Content: "Reply with exactly ok"}}, nil)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	if resp.Model != "deepslate/google/gemma-3-4b" {
+		t.Fatalf("resp.Model = %q, want %q", resp.Model, "deepslate/google/gemma-3-4b")
+	}
+	if resp.Message.Content != "ok\n" {
+		t.Fatalf("resp.Message.Content = %q, want %q", resp.Message.Content, "ok\n")
+	}
+	if resp.InputTokens != 13 || resp.OutputTokens != 3 {
+		t.Fatalf("usage = in:%d out:%d, want 13/3", resp.InputTokens, resp.OutputTokens)
+	}
+}
+
+func TestLMStudioChat_NonStreamingEmptyCompletionErrors(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(lmStudioChatResponse{
+			Model: "deepslate/google/gemma-3-4b",
+			Choices: []lmStudioChatChoice{
+				{
+					Index: 0,
+					Message: &lmStudioMessageResponse{
+						Role:    "assistant",
+						Content: "",
+					},
+				},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	client := NewLMStudioClient(srv.URL, "", nil)
+	_, err := client.Chat(context.Background(), "google/gemma-3-4b", []Message{{Role: "user", Content: "Reply with exactly ok"}}, nil)
+	if err == nil {
+		t.Fatal("Chat() error = nil, want empty completion error")
+	}
+	if !strings.Contains(err.Error(), "empty assistant completion") {
+		t.Fatalf("Chat() error = %q, want empty completion message", err)
+	}
+}
+
 func TestLMStudioChatStream_ContentAndToolCalls(t *testing.T) {
 	t.Parallel()
 

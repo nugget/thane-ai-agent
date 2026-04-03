@@ -1569,6 +1569,8 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 // buildLLMErrorHandler returns the OnLLMError callback that implements
 // the agent's timeout retry, recovery model downshift, and failover logic.
 func (l *Loop) buildLLMErrorHandler(ctx context.Context, stream llm.StreamCallback, defaultModel string, req *Request, timeoutRecovered *bool) func(context.Context, error, string, []llm.Message, []map[string]any, llm.StreamCallback) (*llm.ChatResponse, string, error) {
+	explicitModelRequested := strings.TrimSpace(req.Model) != ""
+
 	return func(iterCtx context.Context, err error, model string,
 		msgs []llm.Message, toolDefs []map[string]any,
 		_ llm.StreamCallback) (*llm.ChatResponse, string, error) {
@@ -1664,6 +1666,11 @@ func (l *Loop) buildLLMErrorHandler(ctx context.Context, stream llm.StreamCallba
 		// directly instead of being silently collapsed to the default.
 		var ambiguous *llm.AmbiguousModelError
 		if errors.As(err, &ambiguous) {
+			return nil, "", err
+		}
+
+		if explicitModelRequested {
+			iterLog.Info("explicit model requested, skipping failover", "model", model)
 			return nil, "", err
 		}
 

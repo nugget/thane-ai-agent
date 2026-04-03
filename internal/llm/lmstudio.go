@@ -346,5 +346,8 @@ func (c *LMStudioClient) chatResponseFromWire(wire *lmStudioChatResponse, validT
 	result.Message.Content = lmStudioContentText(wire.Choices[0].Message.Content)
 	result.Message.ToolCalls = toolCalls
 	applyTextToolFallback(result, validToolNames)
+	if strings.TrimSpace(result.Message.Content) == "" && len(result.Message.ToolCalls) == 0 {
+		return nil, fmt.Errorf("LM Studio returned an empty assistant completion for model %q", wire.Model)
+	}
 	return result, nil
 }
