@@ -1,6 +1,7 @@
 package models
 
 import (
+	"errors"
 	"testing"
 	"time"
 )
@@ -312,4 +313,39 @@ func findPolicySnapshot(snapshot *RegistrySnapshot, id string) (RegistryDeployme
 		}
 	}
 	return RegistryDeploymentSnapshot{}, false
+}
+
+func TestRegistryApplyDeploymentPolicy_UnknownDeployment(t *testing.T) {
+	base := &Catalog{
+		DefaultModel: "spark/gpt-oss:20b",
+		Resources: []Resource{
+			{ID: "spark", Provider: "ollama", URL: "http://spark.example"},
+		},
+		Deployments: []Deployment{
+			{
+				ID:         "spark/gpt-oss:20b",
+				ModelName:  "gpt-oss:20b",
+				Provider:   "ollama",
+				ResourceID: "spark",
+				Server:     "spark",
+				Source:     DeploymentSourceConfig,
+				Routable:   true,
+			},
+		},
+	}
+	if err := base.reindex(base.DefaultModel, base.RecoveryModel); err != nil {
+		t.Fatalf("reindex base: %v", err)
+	}
+	reg, err := NewRegistry(base)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+	err = reg.ApplyDeploymentPolicy("missing/model", DeploymentPolicy{State: DeploymentPolicyStateFlagged}, time.Now())
+	if err == nil {
+		t.Fatal("ApplyDeploymentPolicy error = nil, want unknown deployment error")
+	}
+	var target *UnknownDeploymentError
+	if !errors.As(err, &target) {
+		t.Fatalf("ApplyDeploymentPolicy error = %T, want *UnknownDeploymentError", err)
+	}
 }

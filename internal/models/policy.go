@@ -1,6 +1,7 @@
 package models
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -31,6 +32,22 @@ type DeploymentPolicy struct {
 	State     DeploymentPolicyState
 	Reason    string
 	UpdatedAt time.Time
+}
+
+// UnknownDeploymentError reports that a requested deployment ID does not
+// exist in the current effective registry snapshot.
+type UnknownDeploymentError struct {
+	Deployment string
+}
+
+func (e *UnknownDeploymentError) Error() string {
+	return fmt.Sprintf("unknown deployment %q; query /v1/model-registry for valid deployment IDs", e.Deployment)
+}
+
+// IsUnknownDeployment reports whether err identifies a missing deployment ID.
+func IsUnknownDeployment(err error) bool {
+	var target *UnknownDeploymentError
+	return errors.As(err, &target)
 }
 
 // ParseDeploymentPolicyState validates a caller-provided policy state.

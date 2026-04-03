@@ -282,6 +282,13 @@ func TestHandleUsageSummary(t *testing.T) {
 	if resp.GroupBy != "resource" {
 		t.Fatalf("GroupBy = %q, want %q", resp.GroupBy, "resource")
 	}
+	end, err := time.Parse(time.RFC3339, resp.End)
+	if err != nil {
+		t.Fatalf("parse end: %v", err)
+	}
+	if end.After(time.Now().UTC().Add(2 * time.Second)) {
+		t.Fatalf("End = %s, want a non-future timestamp", resp.End)
+	}
 	if resp.Summary == nil || resp.Summary.TotalRecords != 2 {
 		t.Fatalf("summary total_records = %#v, want 2", resp.Summary)
 	}
@@ -402,5 +409,32 @@ func TestHandleModelRegistryPolicySet_InvalidState(t *testing.T) {
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+}
+
+func TestHandleModelRegistryPolicySet_UnknownDeployment(t *testing.T) {
+	registry := testAPIModelRegistry(t)
+	server := NewServer("", 0, nil, nil, nil, registry, nil, testAPILogger())
+
+	body := bytes.NewBufferString(`{"deployment":"missing/model","state":"flagged"}`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/model-registry/policy", body)
+	rec := httptest.NewRecorder()
+	server.handleModelRegistryPolicySet(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", rec.Code)
+	}
+}
+
+func TestHandleModelRegistryPolicyDelete_UnknownDeployment(t *testing.T) {
+	registry := testAPIModelRegistry(t)
+	server := NewServer("", 0, nil, nil, nil, registry, nil, testAPILogger())
+
+	req := httptest.NewRequest(http.MethodDelete, "/v1/model-registry/policy?deployment=missing/model", nil)
+	rec := httptest.NewRecorder()
+	server.handleModelRegistryPolicyDelete(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", rec.Code)
 	}
 }

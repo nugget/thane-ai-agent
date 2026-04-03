@@ -213,7 +213,7 @@ func (r *Registry) ApplyDeploymentPolicy(id string, policy DeploymentPolicy, upd
 		return fmt.Errorf("model registry is not initialized")
 	}
 	if _, ok := currentEffective.byID[id]; !ok {
-		return fmt.Errorf("unknown deployment %q; query /v1/model-registry for valid deployment IDs", id)
+		return &UnknownDeploymentError{Deployment: id}
 	}
 
 	current[id] = policy
@@ -259,7 +259,7 @@ func (r *Registry) ClearDeploymentPolicy(id string, updatedAt time.Time) error {
 		return fmt.Errorf("model registry is not initialized")
 	}
 	if _, ok := currentEffective.byID[id]; !ok {
-		return fmt.Errorf("unknown deployment %q; query /v1/model-registry for valid deployment IDs", id)
+		return &UnknownDeploymentError{Deployment: id}
 	}
 
 	delete(current, id)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sort"
 
 	"github.com/nugget/thane-ai-agent/internal/config"
 	"github.com/nugget/thane-ai-agent/internal/llm"
@@ -113,28 +114,9 @@ func (b *ClientBundle) BuildRoutedClient(cat *Catalog) (llm.Client, error) {
 		return nil, fmt.Errorf("nil model catalog")
 	}
 
-	var fallback llm.Client
-	switch {
-	case cat.DefaultModel != "":
-		if dep, ok := cat.byID[cat.DefaultModel]; ok {
-			fallback = b.ResourceClients[dep.ResourceID]
-		}
-	case len(b.OllamaClients) > 0:
-		if url := cat.PrimaryOllamaURL(); url != "" {
-			for id, client := range b.OllamaClients {
-				if res, ok := cat.resourceBy[id]; ok && res.URL == url {
-					fallback = client
-					break
-				}
-			}
-		}
-	}
-
-	if fallback == nil {
-		for _, client := range b.ResourceClients {
-			fallback = client
-			break
-		}
+	fallback, err := b.fallbackClient(cat)
+	if err != nil {
+		return nil, err
 	}
 
 	multi := llm.NewMultiClient(fallback)
@@ -155,4 +137,39 @@ func (b *ClientBundle) BuildRoutedClient(cat *Catalog) (llm.Client, error) {
 	}
 
 	return multi, nil
+}
+
+func (b *ClientBundle) fallbackClient(cat *Catalog) (llm.Client, error) {
+	if cat == nil {
+		return nil, fmt.Errorf("nil model catalog")
+	}
+	if cat.DefaultModel != "" {
+		if dep, ok := cat.byID[cat.DefaultModel]; ok {
+			if client, ok := b.ResourceClients[dep.ResourceID]; ok {
+				return client, nil
+			}
+		}
+	}
+	if url := cat.PrimaryOllamaURL(); url != "" {
+		for _, res := range cat.Resources {
+			if res.URL != url {
+				continue
+			}
+			if client, ok := b.ResourceClients[res.ID]; ok {
+				return client, nil
+			}
+		}
+	}
+	if client, ok := b.ResourceClients["default"]; ok {
+		return client, nil
+	}
+	if len(b.ResourceClients) == 0 {
+		return nil, fmt.Errorf("no resource clients configured")
+	}
+	ids := make([]string, 0, len(b.ResourceClients))
+	for id := range b.ResourceClients {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return b.ResourceClients[ids[0]], nil
 }

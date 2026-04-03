@@ -875,6 +875,10 @@ func (s *Server) handleModelRegistryPolicySet(w http.ResponseWriter, r *http.Req
 		State:  state,
 		Reason: req.Reason,
 	}, time.Now()); err != nil {
+		if models.IsUnknownDeployment(err) {
+			s.errorResponse(w, http.StatusNotFound, err.Error())
+			return
+		}
 		s.errorResponse(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -907,6 +911,10 @@ func (s *Server) handleModelRegistryPolicyDelete(w http.ResponseWriter, r *http.
 	}
 
 	if err := s.modelRegistry.ClearDeploymentPolicy(id, time.Now()); err != nil {
+		if models.IsUnknownDeployment(err) {
+			s.errorResponse(w, http.StatusNotFound, err.Error())
+			return
+		}
 		s.errorResponse(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -1196,10 +1204,11 @@ func (s *Server) handleUsageSummary(w http.ResponseWriter, r *http.Request) {
 		hours = parsed
 	}
 
-	end := time.Now().Add(1 * time.Minute)
+	end := time.Now().UTC().Truncate(time.Second)
 	start := end.Add(-time.Duration(hours) * time.Hour)
+	queryEnd := end.Add(1 * time.Second)
 
-	summary, err := s.usageStore.Summary(start, end)
+	summary, err := s.usageStore.Summary(start, queryEnd)
 	if err != nil {
 		s.logger.Error("usage summary query failed", "error", err, "hours", hours)
 		s.errorResponse(w, http.StatusInternalServerError, "usage summary query failed")
@@ -1214,7 +1223,7 @@ func (s *Server) handleUsageSummary(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if groupBy := strings.TrimSpace(r.URL.Query().Get("group_by")); groupBy != "" {
-		grouped, err := s.usageStore.SummaryByGroup(groupBy, start, end)
+		grouped, err := s.usageStore.SummaryByGroup(groupBy, start, queryEnd)
 		if err != nil {
 			s.errorResponse(w, http.StatusBadRequest, err.Error())
 			return
