@@ -1,4 +1,4 @@
-package llm
+package providers
 
 import (
 	"context"
@@ -8,6 +8,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/nugget/thane-ai-agent/internal/llm"
 )
 
 func TestLMStudioPingAndListModelInfos(t *testing.T) {
@@ -93,7 +95,7 @@ func TestLMStudioChat_NonStreamingToolCalls(t *testing.T) {
 	defer srv.Close()
 
 	client := NewLMStudioClient(srv.URL, "secret-token", nil)
-	resp, err := client.Chat(context.Background(), "qwen3:8b", []Message{{Role: "user", Content: "check the sun"}}, []map[string]any{
+	resp, err := client.Chat(context.Background(), "qwen3:8b", []llm.Message{{Role: "user", Content: "check the sun"}}, []map[string]any{
 		{"type": "function", "function": map[string]any{"name": "get_state"}},
 	})
 	if err != nil {
@@ -141,7 +143,7 @@ func TestLMStudioChat_NonStreamingContent(t *testing.T) {
 	defer srv.Close()
 
 	client := NewLMStudioClient(srv.URL, "", nil)
-	resp, err := client.Chat(context.Background(), "google/gemma-3-4b", []Message{{Role: "user", Content: "Reply with exactly ok"}}, nil)
+	resp, err := client.Chat(context.Background(), "google/gemma-3-4b", []llm.Message{{Role: "user", Content: "Reply with exactly ok"}}, nil)
 	if err != nil {
 		t.Fatalf("Chat() error = %v", err)
 	}
@@ -176,7 +178,7 @@ func TestLMStudioChat_NonStreamingEmptyCompletionErrors(t *testing.T) {
 	defer srv.Close()
 
 	client := NewLMStudioClient(srv.URL, "", nil)
-	_, err := client.Chat(context.Background(), "google/gemma-3-4b", []Message{{Role: "user", Content: "Reply with exactly ok"}}, nil)
+	_, err := client.Chat(context.Background(), "google/gemma-3-4b", []llm.Message{{Role: "user", Content: "Reply with exactly ok"}}, nil)
 	if err == nil {
 		t.Fatal("Chat() error = nil, want empty completion error")
 	}
@@ -266,10 +268,10 @@ func TestLMStudioChatStream_ContentAndToolCalls(t *testing.T) {
 
 	client := NewLMStudioClient(srv.URL, "", nil)
 	var tokens []string
-	resp, err := client.ChatStream(context.Background(), "qwen3:8b", []Message{{Role: "user", Content: "say hello and plan a tool call"}}, []map[string]any{
+	resp, err := client.ChatStream(context.Background(), "qwen3:8b", []llm.Message{{Role: "user", Content: "say hello and plan a tool call"}}, []map[string]any{
 		{"type": "function", "function": map[string]any{"name": "get_state"}},
-	}, func(event StreamEvent) {
-		if event.Kind == KindToken {
+	}, func(event llm.StreamEvent) {
+		if event.Kind == llm.KindToken {
 			tokens = append(tokens, event.Token)
 		}
 	})

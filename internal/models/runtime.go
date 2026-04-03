@@ -8,6 +8,7 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/config"
 	"github.com/nugget/thane-ai-agent/internal/llm"
+	modelproviders "github.com/nugget/thane-ai-agent/internal/models/providers"
 )
 
 // RefreshResult describes the outcome of a runtime inventory refresh.
@@ -78,7 +79,7 @@ func (r *Runtime) Registry() *Registry {
 
 // OllamaClients returns the stable per-resource Ollama clients used by
 // watchers and discovery refresh.
-func (r *Runtime) OllamaClients() map[string]*llm.OllamaClient {
+func (r *Runtime) OllamaClients() map[string]*modelproviders.OllamaClient {
 	if r == nil || r.bundle == nil {
 		return nil
 	}

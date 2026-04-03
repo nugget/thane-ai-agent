@@ -1,19 +1,21 @@
-package llm
+package providers
 
 import (
 	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/nugget/thane-ai-agent/internal/llm"
 )
 
 func TestToOllamaMessages(t *testing.T) {
-	msgs := []Message{
+	msgs := []llm.Message{
 		{Role: "user", Content: "hello"},
 		{
 			Role:    "user",
 			Content: "describe this",
-			Images: []ImageContent{
+			Images: []llm.ImageContent{
 				{Data: "base64data", MediaType: "image/jpeg"},
 				{Data: "moredata", MediaType: "image/png"},
 			},
@@ -26,7 +28,7 @@ func TestToOllamaMessages(t *testing.T) {
 		{
 			Role:    "assistant",
 			Content: "",
-			ToolCalls: []ToolCall{
+			ToolCalls: []llm.ToolCall{
 				{ID: "call_123", Function: struct {
 					Name      string         `json:"name"`
 					Arguments map[string]any `json:"arguments"`

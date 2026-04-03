@@ -7,7 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/nugget/thane-ai-agent/internal/llm"
+	modelproviders "github.com/nugget/thane-ai-agent/internal/models/providers"
 )
 
 func TestDiscoverInventorySkipsUnsupportedProviders(t *testing.T) {
@@ -60,8 +60,8 @@ func TestDiscoverInventoryIncludesLMStudioResources(t *testing.T) {
 	}
 
 	inv := DiscoverInventory(context.Background(), base, &ClientBundle{
-		LMStudioClients: map[string]*llm.LMStudioClient{
-			"deepslate": llm.NewLMStudioClient(srv.URL, "secret-token", nil),
+		LMStudioClients: map[string]*modelproviders.LMStudioClient{
+			"deepslate": modelproviders.NewLMStudioClient(srv.URL, "secret-token", nil),
 		},
 	})
 	if inv == nil {

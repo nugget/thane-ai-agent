@@ -14,3 +14,9 @@ type Client interface {
 	// Ping checks if the provider is reachable.
 	Ping(ctx context.Context) error
 }
+
+// ReadyWatcher is satisfied by connection watchers that can report
+// whether a provider resource is currently reachable.
+type ReadyWatcher interface {
+	IsReady() bool
+}

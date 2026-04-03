@@ -7,6 +7,7 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/config"
 	"github.com/nugget/thane-ai-agent/internal/llm"
+	modelproviders "github.com/nugget/thane-ai-agent/internal/models/providers"
 )
 
 // ClientBundle contains the routed LLM client plus provider-specific
@@ -16,8 +17,8 @@ type ClientBundle struct {
 	Client          llm.Client
 	ResourceClients map[string]llm.Client
 	HealthClients   map[string]ResourceHealthClient
-	OllamaClients   map[string]*llm.OllamaClient
-	LMStudioClients map[string]*llm.LMStudioClient
+	OllamaClients   map[string]*modelproviders.OllamaClient
+	LMStudioClients map[string]*modelproviders.LMStudioClient
 }
 
 // ResourceHealthClient is the minimal health/watch surface that app
@@ -37,18 +38,18 @@ func BuildClients(cat *Catalog, cfg *config.Config, logger *slog.Logger) (*Clien
 		logger = slog.Default()
 	}
 
-	ollamaClients := make(map[string]*llm.OllamaClient)
-	lmstudioClients := make(map[string]*llm.LMStudioClient)
+	ollamaClients := make(map[string]*modelproviders.OllamaClient)
+	lmstudioClients := make(map[string]*modelproviders.LMStudioClient)
 	resourceClients := make(map[string]llm.Client, len(cat.Resources))
 	healthClients := make(map[string]ResourceHealthClient, len(cat.Resources))
 
-	var anthropicClient *llm.AnthropicClient
+	var anthropicClient *modelproviders.AnthropicClient
 
 	for _, res := range cat.Resources {
 		var client llm.Client
 		switch res.Provider {
 		case "ollama":
-			oc := llm.NewOllamaClient(res.URL, logger.With("resource", res.ID))
+			oc := modelproviders.NewOllamaClient(res.URL, logger.With("resource", res.ID))
 			ollamaClients[res.ID] = oc
 			healthClients[res.ID] = ResourceHealthClient{
 				Ping:          oc.Ping,
@@ -56,7 +57,7 @@ func BuildClients(cat *Catalog, cfg *config.Config, logger *slog.Logger) (*Clien
 			}
 			client = oc
 		case "lmstudio":
-			lc := llm.NewLMStudioClient(res.URL, serverAPIKey(cfg, res.ID), logger.With("resource", res.ID))
+			lc := modelproviders.NewLMStudioClient(res.URL, serverAPIKey(cfg, res.ID), logger.With("resource", res.ID))
 			lmstudioClients[res.ID] = lc
 			healthClients[res.ID] = ResourceHealthClient{
 				Ping:          lc.Ping,
@@ -68,7 +69,7 @@ func BuildClients(cat *Catalog, cfg *config.Config, logger *slog.Logger) (*Clien
 				return nil, fmt.Errorf("resource %q requires anthropic config", res.ID)
 			}
 			if anthropicClient == nil {
-				anthropicClient = llm.NewAnthropicClient(cfg.Anthropic.APIKey, logger)
+				anthropicClient = modelproviders.NewAnthropicClient(cfg.Anthropic.APIKey, logger)
 			}
 			client = anthropicClient
 		default:

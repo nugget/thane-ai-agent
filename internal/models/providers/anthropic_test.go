@@ -1,12 +1,14 @@
-package llm
+package providers
 
 import (
 	"encoding/json"
 	"testing"
+
+	"github.com/nugget/thane-ai-agent/internal/llm"
 )
 
 func TestConvertToAnthropic(t *testing.T) {
-	messages := []Message{
+	messages := []llm.Message{
 		{Role: "system", Content: "You are a helpful assistant."},
 		{Role: "user", Content: "Hello!"},
 		{Role: "assistant", Content: "Hi there!"},
@@ -29,12 +31,12 @@ func TestConvertToAnthropic(t *testing.T) {
 }
 
 func TestConvertToAnthropicWithToolCalls(t *testing.T) {
-	messages := []Message{
+	messages := []llm.Message{
 		{Role: "system", Content: "You are a home assistant."},
 		{Role: "user", Content: "Turn on lights."},
 		{
 			Role: "assistant",
-			ToolCalls: []ToolCall{{
+			ToolCalls: []llm.ToolCall{{
 				ID: "toolu_abc123",
 				Function: struct {
 					Name      string         `json:"name"`
@@ -153,12 +155,12 @@ func TestConvertFromAnthropic(t *testing.T) {
 
 func TestAnthropicClientImplementsInterface(t *testing.T) {
 	// Compile-time check that AnthropicClient implements Client
-	var _ Client = (*AnthropicClient)(nil)
+	var _ llm.Client = (*AnthropicClient)(nil)
 }
 
 func TestOllamaClientImplementsInterface(t *testing.T) {
 	// Compile-time check that OllamaClient implements Client
-	var _ Client = (*OllamaClient)(nil)
+	var _ llm.Client = (*OllamaClient)(nil)
 }
 
 func TestAnthropicRequestSerialization(t *testing.T) {

@@ -1,4 +1,4 @@
-package llm
+package providers
 
 import (
 	"bufio"
@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/httpkit"
+	"github.com/nugget/thane-ai-agent/internal/llm"
 )
 
 // LMStudioClient is a client for LM Studio's OpenAI-compatible API.
@@ -21,7 +22,7 @@ type LMStudioClient struct {
 	apiKey     string
 	httpClient *http.Client
 	logger     *slog.Logger
-	watcher    ReadyWatcher
+	watcher    llm.ReadyWatcher
 }
 
 // NewLMStudioClient creates a new LM Studio client.
@@ -49,7 +50,7 @@ func NewLMStudioClient(baseURL, apiKey string, logger *slog.Logger) *LMStudioCli
 }
 
 // AttachWatcher sets the connection watcher for health status queries.
-func (c *LMStudioClient) AttachWatcher(w ReadyWatcher) {
+func (c *LMStudioClient) AttachWatcher(w llm.ReadyWatcher) {
 	c.watcher = w
 }
 
@@ -62,13 +63,13 @@ func (c *LMStudioClient) IsReady() bool {
 }
 
 // Chat sends a non-streaming chat completion request to LM Studio.
-func (c *LMStudioClient) Chat(ctx context.Context, model string, messages []Message, tools []map[string]any) (*ChatResponse, error) {
+func (c *LMStudioClient) Chat(ctx context.Context, model string, messages []llm.Message, tools []map[string]any) (*llm.ChatResponse, error) {
 	return c.ChatStream(ctx, model, messages, tools, nil)
 }
 
 // ChatStream sends a chat request to LM Studio. If callback is non-nil,
 // tokens are streamed via OpenAI-compatible SSE.
-func (c *LMStudioClient) ChatStream(ctx context.Context, model string, messages []Message, tools []map[string]any, callback StreamCallback) (*ChatResponse, error) {
+func (c *LMStudioClient) ChatStream(ctx context.Context, model string, messages []llm.Message, tools []map[string]any, callback llm.StreamCallback) (*llm.ChatResponse, error) {
 	stream := callback != nil
 
 	wireMessages, err := toLMStudioMessages(messages)
@@ -97,7 +98,7 @@ func (c *LMStudioClient) ChatStream(ctx context.Context, model string, messages 
 		"tools", len(tools),
 		"stream", stream,
 	)
-	c.logger.Log(ctx, LevelTrace, "request payload", "json", string(jsonData))
+	c.logger.Log(ctx, llm.LevelTrace, "request payload", "json", string(jsonData))
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/v1/chat/completions", bytes.NewReader(jsonData))
 	if err != nil {
@@ -134,7 +135,7 @@ func (c *LMStudioClient) ChatStream(ctx context.Context, model string, messages 
 			"output_tokens", result.OutputTokens,
 			"tool_calls", len(result.Message.ToolCalls),
 		)
-		c.logger.Log(ctx, LevelTrace, "response content", "content", result.Message.Content)
+		c.logger.Log(ctx, llm.LevelTrace, "response content", "content", result.Message.Content)
 		return result, nil
 	}
 
@@ -194,7 +195,7 @@ func (c *LMStudioClient) setAuth(req *http.Request) {
 	}
 }
 
-func (c *LMStudioClient) handleStreaming(ctx context.Context, requestedModel string, validToolNames []string, body io.Reader, callback StreamCallback) (*ChatResponse, error) {
+func (c *LMStudioClient) handleStreaming(ctx context.Context, requestedModel string, validToolNames []string, body io.Reader, callback llm.StreamCallback) (*llm.ChatResponse, error) {
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 2*1024*1024)
 
@@ -235,7 +236,7 @@ func (c *LMStudioClient) handleStreaming(ctx context.Context, requestedModel str
 			}
 			if choice.Delta.Content != "" {
 				contentBuilder.WriteString(choice.Delta.Content)
-				callback(StreamEvent{Kind: KindToken, Token: choice.Delta.Content})
+				callback(llm.StreamEvent{Kind: llm.KindToken, Token: choice.Delta.Content})
 			}
 			for _, tc := range choice.Delta.ToolCalls {
 				acc := toolAcc[tc.Index]
@@ -294,7 +295,7 @@ func (c *LMStudioClient) handleStreaming(ctx context.Context, requestedModel str
 		return nil, err
 	}
 
-	result := &ChatResponse{
+	result := &llm.ChatResponse{
 		Model:         model,
 		CreatedAt:     createdAt,
 		Done:          true,
@@ -313,11 +314,11 @@ func (c *LMStudioClient) handleStreaming(ctx context.Context, requestedModel str
 		"content_len", len(result.Message.Content),
 		"tool_calls", len(result.Message.ToolCalls),
 	)
-	c.logger.Log(ctx, LevelTrace, "stream final content", "content", result.Message.Content)
+	c.logger.Log(ctx, llm.LevelTrace, "stream final content", "content", result.Message.Content)
 	return result, nil
 }
 
-func (c *LMStudioClient) chatResponseFromWire(wire *lmStudioChatResponse, validToolNames []string) (*ChatResponse, error) {
+func (c *LMStudioClient) chatResponseFromWire(wire *lmStudioChatResponse, validToolNames []string) (*llm.ChatResponse, error) {
 	if wire == nil {
 		return nil, fmt.Errorf("nil response")
 	}
@@ -329,7 +330,7 @@ func (c *LMStudioClient) chatResponseFromWire(wire *lmStudioChatResponse, validT
 	if err != nil {
 		return nil, err
 	}
-	result := &ChatResponse{
+	result := &llm.ChatResponse{
 		Model:        wire.Model,
 		Done:         true,
 		InputTokens:  0,

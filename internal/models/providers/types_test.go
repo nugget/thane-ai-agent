@@ -1,9 +1,11 @@
-package llm
+package providers
 
 import (
 	"encoding/json"
 	"testing"
 	"time"
+
+	"github.com/nugget/thane-ai-agent/internal/llm"
 )
 
 // Representative Ollama /api/chat responses captured from real interactions.
@@ -407,7 +409,7 @@ func TestConvertFromAnthropic_EmptyContent(t *testing.T) {
 func TestChatResponse_TimeTypeSafety(t *testing.T) {
 	// Verify we can do time operations on ChatResponse fields
 	// (This would fail at compile time if CreatedAt were string)
-	resp := ChatResponse{
+	resp := llm.ChatResponse{
 		CreatedAt:     time.Now(),
 		TotalDuration: 5 * time.Second,
 		EvalDuration:  3 * time.Second,
@@ -431,7 +433,7 @@ func TestChatResponse_TimeTypeSafety(t *testing.T) {
 
 func TestChatResponse_ZeroValuesSafe(t *testing.T) {
 	// Zero-value ChatResponse should be safe to use
-	var resp ChatResponse
+	var resp llm.ChatResponse
 
 	if !resp.CreatedAt.IsZero() {
 		t.Error("zero ChatResponse.CreatedAt should be zero time")

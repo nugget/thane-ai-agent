@@ -1,10 +1,12 @@
-package llm
+package providers
 
 import (
 	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/nugget/thane-ai-agent/internal/llm"
 )
 
 // LMStudioModelInfo describes one model from /v1/models.
@@ -105,7 +107,7 @@ type lmStudioToolAccumulator struct {
 	Args strings.Builder
 }
 
-func toLMStudioMessages(msgs []Message) ([]lmStudioMessage, error) {
+func toLMStudioMessages(msgs []llm.Message) ([]lmStudioMessage, error) {
 	out := make([]lmStudioMessage, 0, len(msgs))
 	for _, m := range msgs {
 		wire := lmStudioMessage{
@@ -152,7 +154,7 @@ func toLMStudioMessages(msgs []Message) ([]lmStudioMessage, error) {
 	return out, nil
 }
 
-func decodeLMStudioToolCalls(accs map[int]*lmStudioToolAccumulator) ([]ToolCall, error) {
+func decodeLMStudioToolCalls(accs map[int]*lmStudioToolAccumulator) ([]llm.ToolCall, error) {
 	if len(accs) == 0 {
 		return nil, nil
 	}
@@ -162,7 +164,7 @@ func decodeLMStudioToolCalls(accs map[int]*lmStudioToolAccumulator) ([]ToolCall,
 	}
 	sort.Ints(indexes)
 
-	out := make([]ToolCall, 0, len(indexes))
+	out := make([]llm.ToolCall, 0, len(indexes))
 	for _, idx := range indexes {
 		acc := accs[idx]
 		if acc == nil || acc.Name == "" {
@@ -172,7 +174,7 @@ func decodeLMStudioToolCalls(accs map[int]*lmStudioToolAccumulator) ([]ToolCall,
 		if err != nil {
 			return nil, err
 		}
-		call := ToolCall{ID: acc.ID}
+		call := llm.ToolCall{ID: acc.ID}
 		call.Function.Name = acc.Name
 		call.Function.Arguments = args
 		out = append(out, call)
@@ -180,7 +182,7 @@ func decodeLMStudioToolCalls(accs map[int]*lmStudioToolAccumulator) ([]ToolCall,
 	return out, nil
 }
 
-func decodeLMStudioToolCallsFromSlice(in []lmStudioToolCallDelta) ([]ToolCall, error) {
+func decodeLMStudioToolCallsFromSlice(in []lmStudioToolCallDelta) ([]llm.ToolCall, error) {
 	if len(in) == 0 {
 		return nil, nil
 	}
@@ -239,7 +241,7 @@ func lmStudioContentText(v any) string {
 	}
 }
 
-func applyTextToolFallback(resp *ChatResponse, validToolNames []string) {
+func applyTextToolFallback(resp *llm.ChatResponse, validToolNames []string) {
 	if resp == nil || len(resp.Message.ToolCalls) > 0 || resp.Message.Content == "" {
 		return
 	}

@@ -36,6 +36,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/memory"
 	"github.com/nugget/thane-ai-agent/internal/metacognitive"
 	"github.com/nugget/thane-ai-agent/internal/models"
+	modelproviders "github.com/nugget/thane-ai-agent/internal/models/providers"
 	"github.com/nugget/thane-ai-agent/internal/notifications"
 	"github.com/nugget/thane-ai-agent/internal/opstate"
 	"github.com/nugget/thane-ai-agent/internal/platform"
@@ -62,7 +63,7 @@ type App struct {
 
 	// LLM clients
 	llmClient             llm.Client
-	ollamaClients         map[string]*llm.OllamaClient
+	ollamaClients         map[string]*modelproviders.OllamaClient
 	resourceHealthClients map[string]models.ResourceHealthClient
 	modelRuntime          *models.Runtime
 	modelCatalog          *models.Catalog

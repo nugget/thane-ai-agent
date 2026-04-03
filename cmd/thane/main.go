@@ -36,6 +36,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/logging"
 	"github.com/nugget/thane-ai-agent/internal/memory"
 	"github.com/nugget/thane-ai-agent/internal/models"
+	modelproviders "github.com/nugget/thane-ai-agent/internal/models/providers"
 	"github.com/nugget/thane-ai-agent/internal/talents"
 
 	_ "github.com/mattn/go-sqlite3" // SQLite driver for database/sql
@@ -428,7 +429,7 @@ type llmSetup struct {
 	ModelRuntime  *models.Runtime
 	Client        llm.Client
 	HealthClients map[string]models.ResourceHealthClient
-	OllamaClients map[string]*llm.OllamaClient
+	OllamaClients map[string]*modelproviders.OllamaClient
 }
 
 func createLLMSetup(ctx context.Context, cfg *config.Config, logger *slog.Logger) (*llmSetup, error) {
