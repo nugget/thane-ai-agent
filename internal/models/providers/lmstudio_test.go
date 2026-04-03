@@ -16,18 +16,46 @@ func TestLMStudioPingAndListModelInfos(t *testing.T) {
 	t.Parallel()
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/models" {
-			t.Fatalf("path = %q, want /v1/models", r.URL.Path)
-		}
 		if got := r.Header.Get("Authorization"); got != "Bearer secret-token" {
 			t.Fatalf("Authorization = %q, want Bearer token", got)
 		}
-		_ = json.NewEncoder(w).Encode(lmStudioModelsResponse{
-			Data: []LMStudioModelInfo{
-				{ID: "gpt-oss:20b"},
-				{ID: "qwen3:8b"},
-			},
-		})
+		switch r.URL.Path {
+		case "/v1/models":
+			_ = json.NewEncoder(w).Encode(lmStudioModelsResponse{
+				Data: []LMStudioModelInfo{
+					{ID: "gpt-oss:20b"},
+					{ID: "qwen3:8b"},
+				},
+			})
+		case "/api/v0/models":
+			_ = json.NewEncoder(w).Encode(lmStudioModelsResponse{
+				Data: []LMStudioModelInfo{
+					{
+						ID:                  "google/gemma-3-4b",
+						Type:                "vlm",
+						Publisher:           "google",
+						Arch:                "gemma3",
+						CompatibilityType:   "mlx",
+						Quantization:        "4bit",
+						State:               "loaded",
+						MaxContextLength:    131072,
+						LoadedContextLength: 4096,
+					},
+					{
+						ID:                "text-embedding-nomic-embed-text-v1.5",
+						Type:              "embeddings",
+						Publisher:         "nomic-ai",
+						Arch:              "nomic-bert",
+						CompatibilityType: "gguf",
+						Quantization:      "Q4_K_M",
+						State:             "not-loaded",
+						MaxContextLength:  2048,
+					},
+				},
+			})
+		default:
+			t.Fatalf("path = %q, want /v1/models or /api/v0/models", r.URL.Path)
+		}
 	}))
 	defer srv.Close()
 
@@ -43,8 +71,41 @@ func TestLMStudioPingAndListModelInfos(t *testing.T) {
 	if len(models) != 2 {
 		t.Fatalf("len(models) = %d, want 2", len(models))
 	}
-	if models[0].ID != "gpt-oss:20b" || models[1].ID != "qwen3:8b" {
+	if models[0].ID != "google/gemma-3-4b" || models[1].ID != "text-embedding-nomic-embed-text-v1.5" {
 		t.Fatalf("models = %+v", models)
+	}
+	if models[0].LoadedContextLength != 4096 || models[0].MaxContextLength != 131072 {
+		t.Fatalf("gemma context metadata = %+v, want loaded=4096 max=131072", models[0])
+	}
+	if models[1].Type != "embeddings" {
+		t.Fatalf("embedding model type = %q, want embeddings", models[1].Type)
+	}
+}
+
+func TestLMStudioListModelInfos_FallsBackToOpenAIEndpoint(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v0/models":
+			http.Error(w, `{"error":"Unexpected endpoint or method."}`, http.StatusNotFound)
+		case "/v1/models":
+			_ = json.NewEncoder(w).Encode(lmStudioModelsResponse{
+				Data: []LMStudioModelInfo{{ID: "qwen3:8b"}},
+			})
+		default:
+			t.Fatalf("path = %q, want /api/v0/models or /v1/models", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	client := NewLMStudioClient(srv.URL, "", nil)
+	models, err := client.ListModelInfos(context.Background())
+	if err != nil {
+		t.Fatalf("ListModelInfos() error = %v", err)
+	}
+	if len(models) != 1 || models[0].ID != "qwen3:8b" {
+		t.Fatalf("models = %+v, want v1 fallback result", models)
 	}
 }
 

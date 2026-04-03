@@ -66,6 +66,30 @@ func SupportsImagesForModel(provider, name, family string, families []string, ca
 	}
 }
 
+// SupportsChatForModel reports whether a specific discovered model
+// should be treated as chat-capable by Thane.
+func SupportsChatForModel(provider, modelType string, caps Capabilities) bool {
+	if !caps.SupportsChat {
+		return false
+	}
+
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case "lmstudio":
+		switch strings.ToLower(strings.TrimSpace(modelType)) {
+		case "", "llm", "vlm":
+			return true
+		case "embeddings", "embedding", "rerank", "transcription", "speech":
+			return false
+		default:
+			// Default open for unknown future chat-capable LM Studio
+			// types, but keep obviously non-chat families excluded above.
+			return true
+		}
+	default:
+		return true
+	}
+}
+
 func looksLikeVisionModel(name, family string, families []string) bool {
 	values := make([]string, 0, 2+len(families))
 	values = append(values, name, family)

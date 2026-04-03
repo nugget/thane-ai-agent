@@ -30,14 +30,22 @@ type ResourceInventory struct {
 // DiscoveredModel is provider-exported model metadata normalized just
 // enough for Thane's overlay layer.
 type DiscoveredModel struct {
-	Name              string
-	Family            string
-	Families          []string
-	ParameterSize     string
-	Quantization      string
-	SupportsTools     bool
-	SupportsStreaming bool
-	SupportsImages    bool
+	SupportsChat        bool
+	Name                string
+	ModelType           string
+	Publisher           string
+	CompatibilityType   string
+	State               string
+	Family              string
+	Families            []string
+	ParameterSize       string
+	Quantization        string
+	SupportsTools       bool
+	SupportsStreaming   bool
+	SupportsImages      bool
+	ContextWindow       int
+	MaxContextWindow    int
+	LoadedContextWindow int
 }
 
 // DiscoverInventory probes configured resources for live model
@@ -77,6 +85,7 @@ func DiscoverInventory(ctx context.Context, cat *Catalog, bundle *ClientBundle) 
 			sort.Slice(models, func(i, j int) bool { return models[i].Name < models[j].Name })
 			for _, m := range models {
 				ri.Models = append(ri.Models, DiscoveredModel{
+					SupportsChat:      true,
 					Name:              m.Name,
 					Family:            m.Details.Family,
 					Families:          append([]string(nil), m.Details.Families...),
@@ -109,17 +118,34 @@ func DiscoverInventory(ctx context.Context, cat *Catalog, bundle *ClientBundle) 
 			}
 			sort.Slice(models, func(i, j int) bool { return models[i].ID < models[j].ID })
 			for _, m := range models {
+				supportsChat := modelproviders.SupportsChatForModel(ri.Provider, m.Type, ri.Capabilities)
+				contextWindow := m.LoadedContextLength
+				if contextWindow <= 0 {
+					contextWindow = m.MaxContextLength
+				}
 				ri.Models = append(ri.Models, DiscoveredModel{
+					SupportsChat:      supportsChat,
 					Name:              m.ID,
-					SupportsTools:     ri.Capabilities.SupportsTools,
-					SupportsStreaming: ri.Capabilities.SupportsStreaming,
+					ModelType:         m.Type,
+					Publisher:         m.Publisher,
+					CompatibilityType: m.CompatibilityType,
+					State:             m.State,
+					Family:            m.Arch,
+					Quantization:      m.Quantization,
+					SupportsTools:     supportsChat && ri.Capabilities.SupportsTools,
+					SupportsStreaming: supportsChat && ri.Capabilities.SupportsStreaming,
 					SupportsImages: modelproviders.SupportsImagesForModel(
 						ri.Provider,
 						m.ID,
-						"",
+						m.Arch,
 						nil,
-						ri.Capabilities,
-					),
+						modelproviders.Capabilities{
+							SupportsImages: supportsChat && ri.Capabilities.SupportsImages,
+						},
+					) && supportsChat,
+					ContextWindow:       contextWindow,
+					MaxContextWindow:    m.MaxContextLength,
+					LoadedContextWindow: m.LoadedContextLength,
 				})
 			}
 		}
@@ -131,6 +157,16 @@ func DiscoverInventory(ctx context.Context, cat *Catalog, bundle *ClientBundle) 
 	}
 
 	return inv
+}
+
+func discoveredModelSupportsChat(provider string, caps modelproviders.Capabilities, model DiscoveredModel) bool {
+	if model.SupportsChat {
+		return true
+	}
+	if model.ModelType != "" {
+		return modelproviders.SupportsChatForModel(provider, model.ModelType, caps)
+	}
+	return caps.SupportsChat
 }
 
 // MergeInventory overlays discovered provider inventory on top of the
@@ -175,6 +211,9 @@ func MergeInventory(base *Catalog, inv *Inventory) (*Catalog, error) {
 		}
 		caps := providerCapabilities(ri.Provider, ri.Capabilities)
 		for _, m := range ri.Models {
+			if !discoveredModelSupportsChat(ri.Provider, caps, m) {
+				continue
+			}
 			key := deploymentKey(ri.ResourceID, m.Name)
 			if existingByResourceModel[key] {
 				continue
@@ -186,14 +225,20 @@ func MergeInventory(base *Catalog, inv *Inventory) (*Catalog, error) {
 			out.Deployments = append(out.Deployments, Deployment{
 				ID:                    id,
 				ModelName:             m.Name,
+				ModelType:             m.ModelType,
+				Publisher:             m.Publisher,
 				Provider:              ri.Provider,
 				ResourceID:            ri.ResourceID,
 				Server:                ri.ResourceID,
+				CompatibilityType:     m.CompatibilityType,
+				RunnerState:           m.State,
 				SupportsTools:         m.SupportsTools || caps.SupportsTools,
 				ProviderSupportsTools: caps.SupportsTools,
 				SupportsStreaming:     m.SupportsStreaming || caps.SupportsStreaming,
 				SupportsImages:        m.SupportsImages,
-				ContextWindow:         base.ContextWindowForModel(m.Name, 8192),
+				ContextWindow:         firstPositiveInt(m.ContextWindow, base.ContextWindowForModel(m.Name, 8192)),
+				MaxContextWindow:      m.MaxContextWindow,
+				LoadedContextWindow:   m.LoadedContextWindow,
 				Speed:                 5,
 				Quality:               5,
 				CostTier:              defaultCostTier(ri.Provider),
@@ -213,6 +258,15 @@ func MergeInventory(base *Catalog, inv *Inventory) (*Catalog, error) {
 		return nil, err
 	}
 	return out, nil
+}
+
+func firstPositiveInt(values ...int) int {
+	for _, v := range values {
+		if v > 0 {
+			return v
+		}
+	}
+	return 0
 }
 
 func cloneDeployments(in []Deployment) []Deployment {

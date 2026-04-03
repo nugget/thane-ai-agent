@@ -35,14 +35,20 @@ const (
 type Deployment struct {
 	ID                    string
 	ModelName             string
+	ModelType             string
+	Publisher             string
 	Provider              string
 	ResourceID            string
 	Server                string
+	CompatibilityType     string
+	RunnerState           string
 	SupportsTools         bool
 	ProviderSupportsTools bool
 	SupportsStreaming     bool
 	SupportsImages        bool
 	ContextWindow         int
+	MaxContextWindow      int
+	LoadedContextWindow   int
 	Speed                 int
 	Quality               int
 	CostTier              int
@@ -159,24 +165,30 @@ func BuildCatalog(cfg *config.Config) (*Catalog, error) {
 	}
 
 	type unresolved struct {
-		ID            string
-		ModelName     string
-		Provider      string
-		ResourceID    string
-		Server        string
-		SupportsTools bool
-		ContextWindow int
-		Speed         int
-		Quality       int
-		CostTier      int
-		MinComplexity string
-		Source        DeploymentSource
-		Routable      bool
-		AlwaysQualify bool
-		Family        string
-		Families      []string
-		ParameterSize string
-		Quantization  string
+		ID                  string
+		ModelName           string
+		ModelType           string
+		Publisher           string
+		Provider            string
+		ResourceID          string
+		Server              string
+		CompatibilityType   string
+		RunnerState         string
+		SupportsTools       bool
+		ContextWindow       int
+		MaxContextWindow    int
+		LoadedContextWindow int
+		Speed               int
+		Quality             int
+		CostTier            int
+		MinComplexity       string
+		Source              DeploymentSource
+		Routable            bool
+		AlwaysQualify       bool
+		Family              string
+		Families            []string
+		ParameterSize       string
+		Quantization        string
 	}
 
 	var pending []unresolved
@@ -259,23 +271,29 @@ func BuildCatalog(cfg *config.Config) (*Catalog, error) {
 		}
 
 		dep := Deployment{
-			ID:            id,
-			ModelName:     p.ModelName,
-			Provider:      p.Provider,
-			ResourceID:    p.ResourceID,
-			Server:        p.Server,
-			SupportsTools: p.SupportsTools,
-			ContextWindow: p.ContextWindow,
-			Speed:         p.Speed,
-			Quality:       p.Quality,
-			CostTier:      p.CostTier,
-			MinComplexity: p.MinComplexity,
-			Source:        p.Source,
-			Routable:      p.Routable,
-			Family:        p.Family,
-			Families:      append([]string(nil), p.Families...),
-			ParameterSize: p.ParameterSize,
-			Quantization:  p.Quantization,
+			ID:                  id,
+			ModelName:           p.ModelName,
+			ModelType:           p.ModelType,
+			Publisher:           p.Publisher,
+			Provider:            p.Provider,
+			ResourceID:          p.ResourceID,
+			Server:              p.Server,
+			CompatibilityType:   p.CompatibilityType,
+			RunnerState:         p.RunnerState,
+			SupportsTools:       p.SupportsTools,
+			ContextWindow:       p.ContextWindow,
+			MaxContextWindow:    p.MaxContextWindow,
+			LoadedContextWindow: p.LoadedContextWindow,
+			Speed:               p.Speed,
+			Quality:             p.Quality,
+			CostTier:            p.CostTier,
+			MinComplexity:       p.MinComplexity,
+			Source:              p.Source,
+			Routable:            p.Routable,
+			Family:              p.Family,
+			Families:            append([]string(nil), p.Families...),
+			ParameterSize:       p.ParameterSize,
+			Quantization:        p.Quantization,
 		}
 		if res, ok := resourceByID[p.ResourceID]; ok {
 			dep.ProviderSupportsTools = res.Capabilities.SupportsTools

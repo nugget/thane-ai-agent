@@ -11,9 +11,17 @@ import (
 
 // LMStudioModelInfo describes one model from /v1/models.
 type LMStudioModelInfo struct {
-	ID      string `json:"id"`
-	Object  string `json:"object,omitempty"`
-	OwnedBy string `json:"owned_by,omitempty"`
+	ID                  string `json:"id"`
+	Object              string `json:"object,omitempty"`
+	OwnedBy             string `json:"owned_by,omitempty"`
+	Type                string `json:"type,omitempty"`
+	Publisher           string `json:"publisher,omitempty"`
+	Arch                string `json:"arch,omitempty"`
+	CompatibilityType   string `json:"compatibility_type,omitempty"`
+	Quantization        string `json:"quantization,omitempty"`
+	State               string `json:"state,omitempty"`
+	MaxContextLength    int    `json:"max_context_length,omitempty"`
+	LoadedContextLength int    `json:"loaded_context_length,omitempty"`
 }
 
 type lmStudioChatRequest struct {

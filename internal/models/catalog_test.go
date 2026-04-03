@@ -197,6 +197,75 @@ func TestMergeInventory_AddsDiscoveredDeploymentsAsNonRoutable(t *testing.T) {
 	}
 }
 
+func TestMergeInventory_SkipsNonChatDiscoveredModels(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Models.Resources = map[string]config.ModelServerConfig{
+		"deepslate": {URL: "http://deepslate:1234", Provider: "lmstudio"},
+	}
+	cfg.Models.Default = "gpt-oss:20b"
+	cfg.Models.Available = []config.ModelConfig{
+		{Name: "gpt-oss:20b", Resource: "deepslate", SupportsTools: true, ContextWindow: 8192, Speed: 7, Quality: 6, CostTier: 0},
+	}
+
+	base, err := BuildCatalog(cfg)
+	if err != nil {
+		t.Fatalf("BuildCatalog() error = %v", err)
+	}
+
+	merged, err := MergeInventory(base, &Inventory{
+		Resources: []ResourceInventory{
+			{
+				ResourceID: "deepslate",
+				Provider:   "lmstudio",
+				Attempted:  true,
+				Models: []DiscoveredModel{
+					{
+						Name:                "google/gemma-3-4b",
+						SupportsChat:        true,
+						ModelType:           "vlm",
+						CompatibilityType:   "mlx",
+						State:               "loaded",
+						SupportsTools:       true,
+						SupportsStreaming:   true,
+						SupportsImages:      true,
+						ContextWindow:       4096,
+						MaxContextWindow:    131072,
+						LoadedContextWindow: 4096,
+					},
+					{
+						Name:             "text-embedding-nomic-embed-text-v1.5",
+						SupportsChat:     false,
+						ModelType:        "embeddings",
+						ContextWindow:    2048,
+						MaxContextWindow: 2048,
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("MergeInventory() error = %v", err)
+	}
+
+	if _, err := merged.ResolveModelRef("deepslate/google/gemma-3-4b"); err != nil {
+		t.Fatalf("ResolveModelRef(deepslate/google/gemma-3-4b) error = %v", err)
+	}
+	if _, err := merged.ResolveModelRef("text-embedding-nomic-embed-text-v1.5"); err == nil {
+		t.Fatal("embedding model should not become a chat deployment")
+	}
+
+	dep, ok := merged.byID["deepslate/google/gemma-3-4b"]
+	if !ok {
+		t.Fatal("missing discovered gemma deployment")
+	}
+	if dep.ContextWindow != 4096 || dep.LoadedContextWindow != 4096 || dep.MaxContextWindow != 131072 {
+		t.Fatalf("gemma context metadata = %+v, want loaded=4096 max=131072", dep)
+	}
+	if dep.ModelType != "vlm" || dep.CompatibilityType != "mlx" || dep.RunnerState != "loaded" {
+		t.Fatalf("gemma runner metadata = %+v, want vlm/mlx/loaded", dep)
+	}
+}
+
 func TestMergeInventory_PreservesStableConfiguredIDWhenDuplicateAppears(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Models.Resources = map[string]config.ModelServerConfig{

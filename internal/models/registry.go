@@ -71,16 +71,22 @@ type RegistryResourceSnapshot struct {
 type RegistryDeploymentSnapshot struct {
 	ID                    string                 `json:"id"`
 	Model                 string                 `json:"model"`
+	ModelType             string                 `json:"model_type,omitempty"`
+	Publisher             string                 `json:"publisher,omitempty"`
 	Provider              string                 `json:"provider"`
 	Resource              string                 `json:"resource"`
 	Source                DeploymentSource       `json:"source"`
 	Routable              bool                   `json:"routable"`
 	RoutableSource        DeploymentPolicySource `json:"routable_source"`
+	CompatibilityType     string                 `json:"compatibility_type,omitempty"`
+	RunnerState           string                 `json:"runner_state,omitempty"`
 	SupportsTools         bool                   `json:"supports_tools,omitempty"`
 	ProviderSupportsTools bool                   `json:"provider_supports_tools,omitempty"`
 	SupportsStreaming     bool                   `json:"supports_streaming,omitempty"`
 	SupportsImages        bool                   `json:"supports_images,omitempty"`
 	ContextWindow         int                    `json:"context_window,omitempty"`
+	MaxContextWindow      int                    `json:"max_context_window,omitempty"`
+	LoadedContextWindow   int                    `json:"loaded_context_window,omitempty"`
 	Speed                 int                    `json:"speed,omitempty"`
 	Quality               int                    `json:"quality,omitempty"`
 	CostTier              int                    `json:"cost_tier,omitempty"`
@@ -337,16 +343,22 @@ func (r *Registry) Snapshot() *RegistrySnapshot {
 		snap.Deployments = append(snap.Deployments, RegistryDeploymentSnapshot{
 			ID:                    dep.ID,
 			Model:                 dep.ModelName,
+			ModelType:             dep.ModelType,
+			Publisher:             dep.Publisher,
 			Provider:              dep.Provider,
 			Resource:              dep.ResourceID,
 			Source:                dep.Source,
 			Routable:              dep.Routable,
 			RoutableSource:        dep.RoutableSource,
+			CompatibilityType:     dep.CompatibilityType,
+			RunnerState:           dep.RunnerState,
 			SupportsTools:         dep.SupportsTools,
 			ProviderSupportsTools: dep.ProviderSupportsTools,
 			SupportsStreaming:     dep.SupportsStreaming,
 			SupportsImages:        dep.SupportsImages,
 			ContextWindow:         dep.ContextWindow,
+			MaxContextWindow:      dep.MaxContextWindow,
+			LoadedContextWindow:   dep.LoadedContextWindow,
 			Speed:                 dep.Speed,
 			Quality:               dep.Quality,
 			CostTier:              dep.CostTier,
