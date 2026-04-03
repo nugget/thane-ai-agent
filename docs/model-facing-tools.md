@@ -41,8 +41,12 @@ Good:
 
 - `ha_automation_list`
 - `ha_automation_update`
-- `macos_calendar_events`
+- `ha_registry_search`
 - `add_context_entity`
+
+If platform or source matters, keep it in the name, but do not drop the
+verb to make room for it. Prefer names like
+`macos_calendar_list_events` over names like `macos_calendar_events`.
 
 Avoid:
 
