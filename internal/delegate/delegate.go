@@ -12,12 +12,14 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/nugget/thane-ai-agent/internal/agent"
 	"github.com/nugget/thane-ai-agent/internal/awareness"
 	"github.com/nugget/thane-ai-agent/internal/config"
 	"github.com/nugget/thane-ai-agent/internal/events"
 	"github.com/nugget/thane-ai-agent/internal/iterate"
 	"github.com/nugget/thane-ai-agent/internal/llm"
 	"github.com/nugget/thane-ai-agent/internal/logging"
+	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
 	"github.com/nugget/thane-ai-agent/internal/memory"
 	"github.com/nugget/thane-ai-agent/internal/router"
 	"github.com/nugget/thane-ai-agent/internal/tools"
@@ -88,6 +90,10 @@ type Executor struct {
 	tagCtxFunc       tagContextFunc // nil-safe — replaces forgeContext when set
 	eventBus         *events.Bus
 	contentWriter    *logging.ContentWriter
+	loopRunner       *agent.Loop
+	loopRegistry     *looppkg.Registry
+	sessionArchiver  agent.SessionArchiver
+	conversations    *memory.SQLiteStore
 }
 
 // NewExecutor creates a delegate executor.
@@ -212,6 +218,24 @@ func (e *Executor) SetContentWriter(w *logging.ContentWriter) {
 	e.contentWriter = w
 }
 
+// ConfigureLoopExecution configures real loop-backed delegate execution. When
+// both runner and registry are set, Execute spawns a one-shot child loop whose
+// handler calls the core agent runner, giving delegates the same telemetry path
+// as other loop-driven work.
+func (e *Executor) ConfigureLoopExecution(runner *agent.Loop, registry *looppkg.Registry) {
+	e.loopRunner = runner
+	e.loopRegistry = registry
+}
+
+// ConfigureSessionLifecycle configures archival and cleanup for loop-backed
+// delegate conversations. The archiver preserves parent session linkage and
+// archived transcripts; the conversation store is cleared after completion so
+// ephemeral delegate turns do not accumulate in working memory.
+func (e *Executor) ConfigureSessionLifecycle(archiver agent.SessionArchiver, store *memory.SQLiteStore) {
+	e.sessionArchiver = archiver
+	e.conversations = store
+}
+
 // ProfileNames returns the names of all registered profiles.
 func (e *Executor) ProfileNames() []string {
 	names := make([]string, 0, len(e.profiles))
@@ -226,7 +250,14 @@ func (e *Executor) ProfileNames() []string {
 // only tools belonging to the given capability tags (plus any
 // always-active tags). When tags is nil, the profile's AllowedTools
 // controls tool selection (existing behavior).
-func (e *Executor) Execute(ctx context.Context, task, profileName, guidance string, tags []string, pathPrefixes map[string]string) (delegateResult *Result, delegateErr error) {
+func (e *Executor) Execute(ctx context.Context, task, profileName, guidance string, tags []string, pathPrefixes map[string]string) (*Result, error) {
+	if e.loopRunner != nil && e.loopRegistry != nil {
+		return e.executeViaLoop(ctx, task, profileName, guidance, tags, pathPrefixes)
+	}
+	return e.executeLegacy(ctx, task, profileName, guidance, tags, pathPrefixes)
+}
+
+func (e *Executor) executeLegacy(ctx context.Context, task, profileName, guidance string, tags []string, pathPrefixes map[string]string) (delegateResult *Result, delegateErr error) {
 	if task == "" {
 		return nil, fmt.Errorf("task is required")
 	}
@@ -640,6 +671,388 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 		ExhaustReason: exhaustReason,
 		ToolCalls:     toolCalls,
 		Duration:      time.Since(startTime),
+	}, nil
+}
+
+type preparedExecution struct {
+	id               string
+	conversationID   string
+	archiveSessionID string
+	parentLoopID     string
+	profile          *Profile
+	log              *slog.Logger
+	systemPrompt     string
+	userMessage      string
+	model            string
+	toolNames        []string
+	explicitTags     []string
+	effectiveTags    []string
+	maxIterations    int
+	maxOutputTokens  int
+	maxDuration      time.Duration
+	toolTimeout      time.Duration
+}
+
+type loopOutcome struct {
+	result *Result
+	err    error
+}
+
+func (e *Executor) executeViaLoop(ctx context.Context, task, profileName, guidance string, tags []string, pathPrefixes map[string]string) (*Result, error) {
+	prep, err := e.prepareExecution(ctx, task, profileName, guidance, tags, pathPrefixes)
+	if err != nil {
+		return nil, err
+	}
+
+	outcomeCh := make(chan loopOutcome, 1)
+	loopName := "delegate-" + prep.id[:8]
+	loopMaxDuration := prep.maxDuration + 5*time.Second
+	if loopMaxDuration <= 0 {
+		loopMaxDuration = prep.maxDuration
+	}
+
+	loopID, err := e.loopRegistry.SpawnLoop(ctx, looppkg.Config{
+		Name:         loopName,
+		MaxIter:      1,
+		MaxDuration:  loopMaxDuration,
+		SleepMin:     time.Millisecond,
+		SleepMax:     time.Millisecond,
+		SleepDefault: time.Millisecond,
+		Jitter:       looppkg.Float64Ptr(0),
+		ParentID:     prep.parentLoopID,
+		Tags:         append([]string(nil), prep.effectiveTags...),
+		Handler: func(hCtx context.Context, _ any) error {
+			runCtx, cancel := context.WithTimeout(hCtx, prep.maxDuration)
+			defer cancel()
+			runStart := time.Now()
+
+			var toolCalls []ToolCallOutcome
+			progressStream := agent.BuildProgressStream(looppkg.ProgressFunc(hCtx))
+			stream := func(evt agent.StreamEvent) {
+				if progressStream != nil {
+					progressStream(evt)
+				}
+				if evt.Kind == agent.KindToolCallDone {
+					toolCalls = append(toolCalls, ToolCallOutcome{
+						Name:    evt.ToolName,
+						Success: evt.ToolError == "",
+					})
+				}
+			}
+
+			hints := make(map[string]string, len(prep.profile.RouterHints)+2)
+			for k, v := range prep.profile.RouterHints {
+				hints[k] = v
+			}
+			hints["source"] = "delegate"
+			hints[router.HintDelegationGating] = "disabled"
+
+			req := &agent.Request{
+				ConversationID:  prep.conversationID,
+				Messages:        []agent.Message{{Role: "user", Content: prep.userMessage}},
+				Model:           prep.model,
+				Hints:           hints,
+				AllowedTools:    append([]string(nil), prep.toolNames...),
+				SkipTagFilter:   len(prep.explicitTags) == 0,
+				SeedTags:        append([]string(nil), prep.effectiveTags...),
+				SystemPrompt:    prep.systemPrompt,
+				MaxIterations:   prep.maxIterations,
+				MaxOutputTokens: prep.maxOutputTokens,
+				ToolTimeout:     prep.toolTimeout,
+				UsageRole:       "delegate",
+				UsageTaskName:   prep.profile.Name,
+			}
+
+			resp, runErr := e.loopRunner.Run(runCtx, req, stream)
+			looppkg.ReportConversationID(hCtx, prep.conversationID)
+			summary := looppkg.IterationSummary(hCtx)
+
+			if runErr != nil {
+				if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
+					if summary != nil {
+						summary["delegate_profile"] = prep.profile.Name
+						summary["delegate_exhausted"] = true
+						summary["delegate_finish_reason"] = ExhaustWallClock
+					}
+					outcomeCh <- loopOutcome{
+						result: &Result{
+							Content:       "Delegate was unable to complete the task within its time limit.",
+							Model:         prep.model,
+							Exhausted:     true,
+							ExhaustReason: ExhaustWallClock,
+							ToolCalls:     toolCalls,
+							Duration:      time.Since(runStart),
+						},
+					}
+					return nil
+				}
+				outcomeCh <- loopOutcome{err: fmt.Errorf("delegate failed: %w", runErr)}
+				return runErr
+			}
+
+			looppkg.ReportAgentRun(hCtx, looppkg.AgentRunSummary{
+				RequestID:    resp.RequestID,
+				Model:        resp.Model,
+				InputTokens:  resp.InputTokens,
+				OutputTokens: resp.OutputTokens,
+			})
+			if summary != nil {
+				summary["delegate_profile"] = prep.profile.Name
+				summary["delegate_iterations"] = resp.Iterations
+				summary["delegate_exhausted"] = resp.Exhausted
+				if resp.FinishReason != "" {
+					summary["delegate_finish_reason"] = resp.FinishReason
+				}
+			}
+
+			exhausted := resp.Exhausted
+			exhaustReason := resp.FinishReason
+			if resp.Content == "" && len(toolCalls) > 0 && !exhausted {
+				exhausted = true
+				exhaustReason = ExhaustNoOutput
+			}
+
+			outcomeCh <- loopOutcome{
+				result: &Result{
+					Content:       resp.Content,
+					Model:         resp.Model,
+					Iterations:    resp.Iterations,
+					InputTokens:   resp.InputTokens,
+					OutputTokens:  resp.OutputTokens,
+					Exhausted:     exhausted,
+					ExhaustReason: exhaustReason,
+					ToolCalls:     toolCalls,
+					Duration:      time.Since(runStart),
+				},
+			}
+			return nil
+		},
+		Metadata: map[string]string{
+			"category":          "delegate",
+			"delegate_id":       prep.id,
+			"delegate_task":     truncate(task, 500),
+			"delegate_profile":  prep.profile.Name,
+			"delegate_guidance": truncate(guidance, 500),
+		},
+	}, looppkg.Deps{
+		Logger:   prep.log,
+		EventBus: e.eventBus,
+	})
+	if err != nil {
+		e.finishLoopExecution(prep)
+		return nil, fmt.Errorf("spawn delegate loop: %w", err)
+	}
+
+	select {
+	case outcome := <-outcomeCh:
+		e.finishLoopExecution(prep)
+		if outcome.err != nil {
+			return nil, outcome.err
+		}
+		return outcome.result, nil
+	case <-ctx.Done():
+		shouldFinish := true
+		if l := e.loopRegistry.Get(loopID); l != nil {
+			done := l.Done()
+			l.Stop()
+			if done != nil {
+				select {
+				case <-done:
+				default:
+					shouldFinish = false
+					prep.log.Warn("delegate loop did not stop before cancellation cleanup; skipping archive and clear to avoid racing active writes",
+						"loop_id", loopID,
+					)
+				}
+			}
+		}
+		if shouldFinish {
+			e.finishLoopExecution(prep)
+		}
+		return nil, fmt.Errorf("delegate cancelled: %w", ctx.Err())
+	}
+}
+
+func (e *Executor) finishLoopExecution(prep *preparedExecution) {
+	if prep == nil {
+		return
+	}
+	if e.sessionArchiver != nil && e.conversations != nil {
+		msgs := e.conversations.GetMessages(prep.conversationID)
+		if err := e.sessionArchiver.ArchiveConversation(prep.conversationID, msgs, "delegate"); err != nil {
+			prep.log.Warn("failed to archive delegate conversation", "error", err)
+		}
+		sessionID := e.sessionArchiver.ActiveSessionID(prep.conversationID)
+		if sessionID == "" {
+			sessionID = prep.archiveSessionID
+		}
+		if sessionID != "" {
+			if err := e.sessionArchiver.EndSession(sessionID, "delegate"); err != nil {
+				prep.log.Warn("failed to end delegate session", "error", err)
+			}
+		}
+		if err := e.conversations.Clear(prep.conversationID); err != nil {
+			prep.log.Warn("failed to clear delegate conversation", "error", err)
+		}
+		return
+	}
+	if e.archiver != nil && prep.archiveSessionID != "" {
+		if err := e.archiver.EndSession(prep.archiveSessionID, "delegate"); err != nil {
+			prep.log.Warn("failed to end delegate archive session", "error", err)
+		}
+	}
+}
+
+func (e *Executor) prepareExecution(ctx context.Context, task, profileName, guidance string, tags []string, pathPrefixes map[string]string) (*preparedExecution, error) {
+	if task == "" {
+		return nil, fmt.Errorf("task is required")
+	}
+
+	delegateID, _ := uuid.NewV7()
+	did := delegateID.String()
+	conversationID := "delegate-" + did[:8]
+
+	log := logging.Logger(ctx).With(
+		"subsystem", logging.SubsystemDelegate,
+		"delegate_id", did,
+	)
+	ctx = logging.WithLogger(ctx, log)
+
+	var archiveSessionID string
+	if e.archiver != nil {
+		parentSessionID := tools.SessionIDFromContext(ctx)
+		parentToolCallID := tools.ToolCallIDFromContext(ctx)
+
+		var opts []memory.SessionOption
+		if parentSessionID != "" {
+			opts = append(opts, memory.WithParentSession(parentSessionID))
+		}
+		if parentToolCallID != "" {
+			opts = append(opts, memory.WithParentToolCall(parentToolCallID))
+		}
+
+		sess, err := e.archiver.StartSessionWithOptions(conversationID, opts...)
+		if err != nil {
+			log.Warn("failed to create archive session for delegate", "error", err)
+		} else {
+			archiveSessionID = sess.ID
+		}
+	}
+
+	profile := e.profiles[profileName]
+	if profile == nil {
+		profile = e.profiles["general"]
+	}
+
+	var reg *tools.Registry
+	if len(tags) > 0 {
+		merged := append([]string(nil), tags...)
+		merged = append(merged, e.alwaysActiveTags...)
+		reg = e.parentReg.FilterByTags(merged)
+		reg = reg.FilteredCopyExcluding([]string{delegateToolName})
+	} else if len(profile.AllowedTools) > 0 {
+		reg = e.parentReg.FilteredCopy(profile.AllowedTools)
+	} else {
+		reg = e.parentReg.FilteredCopyExcluding([]string{delegateToolName})
+	}
+	toolDefs := reg.List()
+	toolNames := reg.AllToolNames()
+	sort.Strings(toolNames)
+
+	log = log.With("profile", profile.Name)
+	ctx = logging.WithLogger(ctx, log)
+	log.Info("delegate started",
+		"task", truncate(task, 200),
+		"guidance", truncate(guidance, 200),
+		"tags", tags,
+		"tools_available", len(toolDefs),
+	)
+
+	effectiveTagsMap := make(map[string]bool, len(tags)+len(e.alwaysActiveTags))
+	for _, t := range tags {
+		effectiveTagsMap[t] = true
+	}
+	for _, t := range e.alwaysActiveTags {
+		effectiveTagsMap[t] = true
+	}
+	if e.lensProvider != nil {
+		for _, lens := range e.lensProvider() {
+			effectiveTagsMap[lens] = true
+		}
+	}
+	effectiveTags := make([]string, 0, len(effectiveTagsMap))
+	for tag := range effectiveTagsMap {
+		effectiveTags = append(effectiveTags, tag)
+	}
+	sort.Strings(effectiveTags)
+
+	var sb strings.Builder
+	sb.WriteString(profile.SystemPrompt)
+	sb.WriteString("\n\n")
+	sb.WriteString(awareness.CurrentConditions(e.timezone))
+	if e.tagCtxFunc != nil && len(effectiveTagsMap) > 0 {
+		if tagCtx := e.tagCtxFunc(ctx, effectiveTagsMap); tagCtx != "" {
+			sb.WriteString("\n\n## Capability Context\n\n")
+			sb.WriteString(tagCtx)
+		}
+	} else if e.forgeContext != "" {
+		sb.WriteString("\n\n")
+		sb.WriteString(e.forgeContext)
+	}
+	if prefixPrompt := formatPrefixPrompt(pathPrefixes, time.Now()); prefixPrompt != "" {
+		sb.WriteString("\n\n")
+		sb.WriteString(prefixPrompt)
+	}
+
+	if e.tempFiles != nil {
+		parentConvID := tools.ConversationIDFromContext(ctx)
+		task = e.tempFiles.ExpandLabels(parentConvID, task)
+		if guidance != "" {
+			guidance = e.tempFiles.ExpandLabels(parentConvID, guidance)
+		}
+	}
+
+	var userMsg strings.Builder
+	userMsg.WriteString(task)
+	if guidance != "" {
+		userMsg.WriteString("\n\nGuidance: ")
+		userMsg.WriteString(guidance)
+	}
+
+	maxIterations := profile.MaxIter
+	if maxIterations <= 0 {
+		maxIterations = defaultMaxIter
+	}
+	maxOutputTokens := profile.MaxTokens
+	if maxOutputTokens <= 0 {
+		maxOutputTokens = defaultMaxTokens
+	}
+	maxDuration := profile.MaxDuration
+	if maxDuration <= 0 {
+		maxDuration = defaultMaxDuration
+	}
+	toolTimeout := profile.ToolTimeout
+	if toolTimeout <= 0 {
+		toolTimeout = defaultToolTimeout
+	}
+
+	return &preparedExecution{
+		id:               did,
+		conversationID:   conversationID,
+		archiveSessionID: archiveSessionID,
+		parentLoopID:     tools.LoopIDFromContext(ctx),
+		profile:          profile,
+		log:              log,
+		systemPrompt:     sb.String(),
+		userMessage:      userMsg.String(),
+		model:            e.selectModel(ctx, task, profile, len(toolDefs)),
+		toolNames:        toolNames,
+		explicitTags:     append([]string(nil), tags...),
+		effectiveTags:    effectiveTags,
+		maxIterations:    maxIterations,
+		maxOutputTokens:  maxOutputTokens,
+		maxDuration:      maxDuration,
+		toolTimeout:      toolTimeout,
 	}, nil
 }
 
