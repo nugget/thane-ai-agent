@@ -2,7 +2,6 @@ package agent
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -116,12 +115,8 @@ func (l *Loop) preflightExplicitModel(ref string, needsTools, needsStreaming, ne
 	return dep.ID, nil
 }
 
-func (l *Loop) maybePrepareExplicitModel(ctx context.Context, ref string, contextSize int, currentErr error) (bool, error) {
+func (l *Loop) maybePrepareExplicitModel(ctx context.Context, ref string, needsTools, needsStreaming, needsImages bool, contextSize int) (bool, error) {
 	if l == nil || l.modelRuntime == nil || contextSize <= 0 {
-		return false, nil
-	}
-	var incompatible *IncompatibleModelError
-	if !errors.As(currentErr, &incompatible) {
 		return false, nil
 	}
 
@@ -134,6 +129,20 @@ func (l *Loop) maybePrepareExplicitModel(ctx context.Context, ref string, contex
 		return false, nil
 	}
 	if !models.CanExpandLoadedContext(dep, contextSize) {
+		return false, nil
+	}
+	if needsTools {
+		switch {
+		case !dep.ProviderSupportsTools:
+			return false, nil
+		case !dep.SupportsTools:
+			return false, nil
+		}
+	}
+	if needsStreaming && !dep.SupportsStreaming {
+		return false, nil
+	}
+	if needsImages && !dep.SupportsImages {
 		return false, nil
 	}
 

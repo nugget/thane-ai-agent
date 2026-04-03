@@ -1238,18 +1238,12 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			log.Debug("model selected as default (no router)", "model", model)
 		}
 	} else {
+		if _, prepErr := l.maybePrepareExplicitModel(ctx, model, needsTools, needsStreaming, needsImages, contextSize); prepErr != nil {
+			return nil, prepErr
+		}
 		resolvedModel, err := l.preflightExplicitModel(model, needsTools, needsStreaming, needsImages, contextSize)
 		if err != nil {
-			prepared, prepErr := l.maybePrepareExplicitModel(ctx, model, contextSize, err)
-			if prepErr != nil {
-				return nil, prepErr
-			}
-			if prepared {
-				resolvedModel, err = l.preflightExplicitModel(model, needsTools, needsStreaming, needsImages, contextSize)
-			}
-			if err != nil {
-				return nil, err
-			}
+			return nil, err
 		}
 		model = resolvedModel
 		log.Debug("model specified in request, skipping router", "model", model)
