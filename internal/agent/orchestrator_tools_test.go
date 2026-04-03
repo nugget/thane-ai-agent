@@ -9,6 +9,7 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/llm"
 	"github.com/nugget/thane-ai-agent/internal/memory"
+	"github.com/nugget/thane-ai-agent/internal/prompts"
 	"github.com/nugget/thane-ai-agent/internal/tools"
 )
 
@@ -353,5 +354,66 @@ func TestToolGating_DisabledByDelegationGatingHint(t *testing.T) {
 	names := toolNames(mock.calls[0].Tools)
 	if len(names) != fullToolCount {
 		t.Errorf("tool count = %d, want %d (gating should be disabled by hint); tools: %v", len(names), fullToolCount, names)
+	}
+}
+
+func TestToolGating_BlocksCallsOutsideOrchestratorSet(t *testing.T) {
+	mock := &mockLLM{
+		responses: []*llm.ChatResponse{
+			{
+				Model: "test-model",
+				Message: llm.Message{
+					Role: "assistant",
+					ToolCalls: []llm.ToolCall{{
+						ID: "call-1",
+						Function: struct {
+							Name      string         `json:"name"`
+							Arguments map[string]any `json:"arguments"`
+						}{
+							Name:      "web_search",
+							Arguments: map[string]any{"q": "locks"},
+						},
+					}},
+				},
+			},
+			{
+				Model:   "test-model",
+				Message: llm.Message{Role: "assistant", Content: "Recovered."},
+			},
+		},
+	}
+
+	loop := buildTestLoop(mock, []string{"thane_delegate", "web_search"})
+	loop.SetOrchestratorTools([]string{"thane_delegate"})
+
+	resp, err := loop.Run(context.Background(), &Request{
+		Messages: []Message{{Role: "user", Content: "delegate the work"}},
+	}, nil)
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	if resp.Content != "Recovered." {
+		t.Fatalf("Content = %q, want %q", resp.Content, "Recovered.")
+	}
+	if len(mock.calls) != 2 {
+		t.Fatalf("expected 2 LLM calls, got %d", len(mock.calls))
+	}
+
+	names := toolNames(mock.calls[0].Tools)
+	if len(names) != 1 || !hasName(names, "thane_delegate") {
+		t.Fatalf("first call tools = %v, want only thane_delegate", names)
+	}
+
+	msgs := mock.calls[1].Messages
+	if len(msgs) == 0 {
+		t.Fatal("second call messages = empty, want tool recovery context")
+	}
+	last := msgs[len(msgs)-1]
+	if last.Role != "tool" {
+		t.Fatalf("last message role = %q, want tool", last.Role)
+	}
+	want := fmt.Sprintf(prompts.IllegalToolMessage, "web_search")
+	if last.Content != want {
+		t.Fatalf("tool recovery content = %q, want %q", last.Content, want)
 	}
 }

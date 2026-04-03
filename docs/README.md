@@ -17,6 +17,7 @@
 - **[Delegation & MCP](delegation.md)** — How the primary model orchestrates local models and external tool servers
 - **[Memory](memory.md)** — How Thane remembers: facts, conversations, archives, anticipations
 - **[Context Layers](context-layers.md)** — How the system prompt is assembled from persona, talents, knowledge, and session state
+- **[Model-Facing Context](model-facing-context.md)** — Philosophy and conventions for writing data that will be consumed by future model loops
 
 ## Contributing
 

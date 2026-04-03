@@ -41,14 +41,20 @@ type Message struct {
 
 // Request represents an incoming agent request.
 type Request struct {
-	Messages       []Message         `json:"messages"`
-	Model          string            `json:"model,omitempty"`
-	ConversationID string            `json:"conversation_id,omitempty"`
-	Hints          map[string]string `json:"hints,omitempty"` // Routing hints (channel, mission, etc.)
-	SkipContext    bool              `json:"-"`               // Skip memory, tools, and context injection (for lightweight completions)
-	ExcludeTools   []string          `json:"-"`               // Tool names to exclude from this run (e.g., lifecycle tools for recurring wakes)
-	SkipTagFilter  bool              `json:"-"`               // Bypass capability tag filtering (for self-scoping contexts like metacognitive)
-	SeedTags       []string          `json:"-"`               // Tags to activate at Run start (carried forward from previous loop iterations)
+	Messages        []Message         `json:"messages"`
+	Model           string            `json:"model,omitempty"`
+	ConversationID  string            `json:"conversation_id,omitempty"`
+	Hints           map[string]string `json:"hints,omitempty"` // Routing hints (channel, mission, etc.)
+	SkipContext     bool              `json:"-"`               // Skip memory, tools, and context injection (for lightweight completions)
+	AllowedTools    []string          `json:"-"`               // Optional allowlist of tools visible for this run
+	ExcludeTools    []string          `json:"-"`               // Tool names to exclude from this run (e.g., lifecycle tools for recurring wakes)
+	SkipTagFilter   bool              `json:"-"`               // Bypass capability tag filtering (for self-scoping contexts like metacognitive)
+	SeedTags        []string          `json:"-"`               // Tags to activate at Run start (carried forward from previous loop iterations)
+	MaxIterations   int               `json:"-"`               // Optional per-request iteration cap (0 = default)
+	MaxOutputTokens int               `json:"-"`               // Optional output-token budget across all iterations (0 = unlimited)
+	ToolTimeout     time.Duration     `json:"-"`               // Optional per-tool timeout (0 = no extra timeout)
+	UsageRole       string            `json:"-"`               // Optional usage role override (e.g., "delegate")
+	UsageTaskName   string            `json:"-"`               // Optional usage task name override
 
 	// SystemPrompt, when non-empty, replaces the output of
 	// buildSystemPrompt(). Used by profiles that assemble their
@@ -96,6 +102,8 @@ type Response struct {
 	InputTokens  int            `json:"input_tokens,omitempty"`
 	OutputTokens int            `json:"output_tokens,omitempty"`
 	ToolsUsed    map[string]int `json:"tools_used,omitempty"` // tool name → call count
+	Iterations   int            `json:"iterations,omitempty"`
+	Exhausted    bool           `json:"exhausted,omitempty"`
 
 	// SessionID and RequestID are set by Run() so callers can
 	// correlate post-run log lines with the agent loop's context.
@@ -1136,6 +1144,18 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		})
 	}
 
+	// Request-level tool restrictions are static for the run. Apply them
+	// before model routing so tool-count-sensitive decisions see the same
+	// effective surface the model will actually get.
+	baseTools := l.tools
+	if len(req.AllowedTools) > 0 {
+		baseTools = baseTools.FilteredCopy(req.AllowedTools)
+	}
+	if len(req.ExcludeTools) > 0 {
+		baseTools = baseTools.FilteredCopyExcluding(req.ExcludeTools)
+		log.Info("tools excluded from run", "excluded", req.ExcludeTools)
+	}
+
 	// Select model via router
 	model := req.Model
 	var routerDecision *router.Decision
@@ -1162,7 +1182,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 				Query:       query,
 				ContextSize: contextSize,
 				NeedsTools:  true, // We always have tools available
-				ToolCount:   len(l.tools.List()),
+				ToolCount:   len(baseTools.List()),
 				Priority:    router.PriorityInteractive,
 				Hints:       req.Hints,
 			}
@@ -1189,15 +1209,6 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	if gatingActive {
 		log.Info("orchestrator tool gating active", "tools", l.orchestratorTools)
 	}
-
-	// Request-level exclusions are static for the run, so compute once.
-	// Tag-based filtering is recomputed each iteration inside the loop
-	// to reflect tags activated via activate_capability mid-run.
-	baseTools := l.tools
-	if len(req.ExcludeTools) > 0 {
-		baseTools = l.tools.FilteredCopyExcluding(req.ExcludeTools)
-		log.Info("tools excluded from run", "excluded", req.ExcludeTools)
-	}
 	skipTagFilter := req.SkipTagFilter
 
 	startTime := time.Now()
@@ -1211,9 +1222,32 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	// Track whether the error handler triggered timeout recovery.
 	var timeoutRecovered bool
 
+	// Optional per-tool timeout wrapper for request-scoped runs such as
+	// delegates. Cancelled after each tool completes.
+	var currentToolCancel context.CancelFunc
+
+	maxIterations := 50
+	if req.MaxIterations > 0 {
+		maxIterations = req.MaxIterations
+	}
+
+	currentTools := func() *tools.Registry {
+		toolsForIter := baseTools
+		if scope != nil && !skipTagFilter {
+			if tagSnap := scope.Snapshot(); len(tagSnap) > 0 {
+				tagList := make([]string, 0, len(tagSnap))
+				for tag := range tagSnap {
+					tagList = append(tagList, tag)
+				}
+				toolsForIter = baseTools.FilterByTags(tagList)
+			}
+		}
+		return toolsForIter
+	}
+
 	// Build iterate.Config with agent-specific callbacks.
 	iterCfg := iterate.Config{
-		MaxIterations:   50,
+		MaxIterations:   maxIterations,
 		Model:           model,
 		LLM:             l.llm,
 		Stream:          stream,
@@ -1225,35 +1259,24 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		// Per-iteration tool definitions: recompute effective tools each
 		// iteration so tags activated via activate_capability are reflected.
 		ToolDefs: func(i int) []map[string]any {
-			effectiveTools := baseTools
-			if scope != nil && !skipTagFilter {
-				if tagSnap := scope.Snapshot(); len(tagSnap) > 0 {
-					tagList := make([]string, 0, len(tagSnap))
-					for tag := range tagSnap {
-						tagList = append(tagList, tag)
-					}
-					effectiveTools = baseTools.FilterByTags(tagList)
-				}
-			}
+			toolsForIter := currentTools()
 			if gatingActive {
-				return effectiveTools.FilteredCopy(l.orchestratorTools).List()
+				return toolsForIter.FilteredCopy(l.orchestratorTools).List()
 			}
-			return effectiveTools.List()
+			return toolsForIter.List()
 		},
 
 		// Tool availability check using the effective tools for this iteration.
 		CheckToolAvail: func(toolName string) bool {
-			effectiveTools := baseTools
-			if scope != nil && !skipTagFilter {
-				if tagSnap := scope.Snapshot(); len(tagSnap) > 0 {
-					tagList := make([]string, 0, len(tagSnap))
-					for tag := range tagSnap {
-						tagList = append(tagList, tag)
-					}
-					effectiveTools = baseTools.FilterByTags(tagList)
-				}
+			toolsForIter := currentTools()
+			if gatingActive {
+				return toolsForIter.FilteredCopy(l.orchestratorTools).Get(toolName) != nil
 			}
-			return effectiveTools.Get(toolName) != nil
+			return toolsForIter.Get(toolName) != nil
+		},
+
+		CheckBudget: func(totalOut int) bool {
+			return req.MaxOutputTokens > 0 && totalOut >= req.MaxOutputTokens
 		},
 
 		Executor: &iterate.DirectExecutor{
@@ -1349,6 +1372,9 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			} else if lid := req.Hints["loop_id"]; lid != "" {
 				toolCtx = tools.WithLoopID(toolCtx, lid)
 			}
+			if req.ToolTimeout > 0 {
+				toolCtx, currentToolCancel = context.WithTimeout(toolCtx, req.ToolTimeout)
+			}
 
 			// Record tool call start.
 			if hasRecorder {
@@ -1375,6 +1401,10 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		},
 
 		OnToolCallDone: func(iterCtx context.Context, toolName, result, errMsg string) {
+			if currentToolCancel != nil {
+				currentToolCancel()
+				currentToolCancel = nil
+			}
 			if stream != nil {
 				stream(llm.StreamEvent{
 					Kind:       llm.KindToolCallDone,
@@ -1512,6 +1542,8 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		InputTokens:  iterResult.InputTokens,
 		OutputTokens: iterResult.OutputTokens,
 		ToolsUsed:    iterResult.ToolsUsed,
+		Iterations:   iterResult.IterationCount,
+		Exhausted:    iterResult.Exhausted,
 		SessionID:    sessionID,
 		RequestID:    requestID,
 		ActiveTags:   activeTags,
@@ -2190,6 +2222,12 @@ func (l *Loop) recordUsage(ctx context.Context, req *Request, model string, tota
 
 	role := "interactive"
 	taskName := ""
+	if req.UsageRole != "" {
+		role = req.UsageRole
+	}
+	if req.UsageTaskName != "" {
+		taskName = req.UsageTaskName
+	}
 	if req.SkipContext {
 		role = "auxiliary"
 	}

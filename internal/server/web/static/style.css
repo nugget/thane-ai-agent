@@ -234,6 +234,10 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
   background: var(--red-dim);
   color: var(--red);
 }
+.delegate-result--neutral {
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+}
 
 .id-row {
   display: inline-flex;

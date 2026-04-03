@@ -49,3 +49,17 @@ func ReportAgentRun(ctx context.Context, s AgentRunSummary) map[string]any {
 	summary["output_tokens"] = s.OutputTokens
 	return summary
 }
+
+// ReportConversationID overrides the loop-visible conversation ID for the
+// current handler iteration. Handler-only loops normally generate an internal
+// conversation ID before dispatch; handlers that proxy a nested agent.Run can
+// call this so the dashboard timeline and log lookups follow the real child
+// conversation instead.
+func ReportConversationID(ctx context.Context, conversationID string) map[string]any {
+	summary := IterationSummary(ctx)
+	if summary == nil || conversationID == "" {
+		return summary
+	}
+	summary["conversation_id"] = conversationID
+	return summary
+}

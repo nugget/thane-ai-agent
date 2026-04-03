@@ -679,6 +679,13 @@ func (l *Loop) run(ctx context.Context) {
 				result.RequestID = rid
 				delete(summary, "request_id")
 			}
+			if reportedConvID, ok := summary["conversation_id"].(string); ok && reportedConvID != "" {
+				convID = reportedConvID
+				delete(summary, "conversation_id")
+				if result != nil {
+					result.ConvID = reportedConvID
+				}
+			}
 			if len(summary) > 0 {
 				handlerSummary = summary
 			}
