@@ -123,8 +123,8 @@ type haAutomationEntityMeta struct {
 	Labels        []namedID         `json:"labels,omitempty"`
 	CategoryID    string            `json:"category_id,omitempty"`
 	CategoryIDs   map[string]string `json:"category_ids,omitempty"`
-	CategoryName  string            `json:"category_name,omitempty"`
-	CategoryNames map[string]string `json:"category_names,omitempty"`
+	Category      string            `json:"category,omitempty"`
+	Categories    map[string]string `json:"categories,omitempty"`
 	Icon          string            `json:"icon,omitempty"`
 	Aliases       []string          `json:"aliases,omitempty"`
 	HiddenBy      string            `json:"hidden_by,omitempty"`
@@ -229,7 +229,7 @@ func (r *Registry) registerHAAutomationTools() {
 
 	r.Register(&Tool{
 		Name:        "ha_automation_get",
-		Description: "Fetch a Home Assistant automation by config ID or entity_id. Returns the raw automation object plus registry metadata such as area, labels, category IDs plus resolved category names, icon, aliases, and current enabled state.",
+		Description: "Fetch a Home Assistant automation by config ID or entity_id. Returns the raw automation object plus registry metadata such as area, labels, resolved category names plus raw category IDs, icon, aliases, and current enabled state.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -262,7 +262,7 @@ func (r *Registry) registerHAAutomationTools() {
 				},
 				"metadata": map[string]any{
 					"type":        "object",
-					"description": "Optional entity registry metadata. Friendly fields: area_id, label_ids, category_id, icon, name, entity_id, aliases, hidden. category remains accepted as a legacy alias for category_id. Additional raw entity registry update keys may also be supplied.",
+					"description": "Optional entity registry metadata. Friendly fields: area_id, label_ids, category_id, icon, name, entity_id, aliases, hidden. category is still accepted as a legacy alias, but write operations should prefer category_id. Additional raw entity registry update keys may also be supplied.",
 				},
 				"enabled": map[string]any{
 					"type":        "boolean",
@@ -298,7 +298,7 @@ func (r *Registry) registerHAAutomationTools() {
 				},
 				"metadata": map[string]any{
 					"type":        "object",
-					"description": "Optional entity registry metadata update. Friendly fields: area_id, label_ids, category_id, icon, name, entity_id, aliases, hidden. category remains accepted as a legacy alias for category_id. Additional raw entity registry update keys may also be supplied.",
+					"description": "Optional entity registry metadata update. Friendly fields: area_id, label_ids, category_id, icon, name, entity_id, aliases, hidden. category is still accepted as a legacy alias, but write operations should prefer category_id. Additional raw entity registry update keys may also be supplied.",
 				},
 				"enabled": map[string]any{
 					"type":        "boolean",
@@ -653,7 +653,7 @@ func (r *Registry) handleHAAutomationList(ctx context.Context, args map[string]a
 			if view.Metadata != nil {
 				areaName = view.Metadata.AreaName
 				labelNames = namedIDNames(view.Metadata.Labels)
-				categoryNames = mapValues(view.Metadata.CategoryNames)
+				categoryNames = mapValues(view.Metadata.Categories)
 			}
 			score := scorer(
 				view.ID,
@@ -755,7 +755,16 @@ func (r *Registry) handleHAAutomationCreate(ctx context.Context, args map[string
 		return "", err
 	}
 
-	metadataUpdate, err := buildEntityRegistryUpdate(mapArg(args, "metadata"))
+	var meta haMetadataMaps
+	metadata := mapArg(args, "metadata")
+	if metadata != nil {
+		meta, err = r.loadMetadataMaps(ctx, "automation")
+		if err != nil {
+			return "", err
+		}
+	}
+
+	metadataUpdate, err := buildEntityRegistryUpdate(metadata, meta)
 	if err != nil {
 		return "", err
 	}
@@ -824,7 +833,16 @@ func (r *Registry) handleHAAutomationUpdate(ctx context.Context, args map[string
 	}
 
 	configPatch := mapArg(args, "config")
-	metadataUpdate, err := buildEntityRegistryUpdate(mapArg(args, "metadata"))
+	var meta haMetadataMaps
+	metadata := mapArg(args, "metadata")
+	if metadata != nil {
+		meta, err = r.loadMetadataMaps(ctx, "automation")
+		if err != nil {
+			return "", err
+		}
+	}
+
+	metadataUpdate, err := buildEntityRegistryUpdate(metadata, meta)
 	if err != nil {
 		return "", err
 	}
@@ -1298,8 +1316,8 @@ func buildAutomationViewFromMaps(resolved resolvedAutomation, includeConfig bool
 			Labels:        resolveNamedIDs(resolved.entry.Labels, meta.labels),
 			CategoryIDs:   copyStringMap(resolved.entry.Categories),
 			CategoryID:    resolved.entry.Categories["automation"],
-			CategoryNames: resolvedCategories,
-			CategoryName:  resolvedCategories["automation"],
+			Categories:    resolvedCategories,
+			Category:      resolvedCategories["automation"],
 			Icon:          resolved.entry.Icon,
 			Aliases:       resolved.entry.Aliases,
 			HiddenBy:      resolved.entry.HiddenBy,
@@ -1483,7 +1501,16 @@ func stringFromAny(v any) string {
 	return s
 }
 
-func buildEntityRegistryUpdate(metadata map[string]any) (map[string]any, error) {
+func mapValue(args map[string]any, key, nested string) (any, bool) {
+	m := mapArg(args, key)
+	if m == nil {
+		return nil, false
+	}
+	value, ok := m[nested]
+	return value, ok
+}
+
+func buildEntityRegistryUpdate(metadata map[string]any, meta haMetadataMaps) (map[string]any, error) {
 	if metadata == nil {
 		return nil, nil
 	}
@@ -1491,7 +1518,7 @@ func buildEntityRegistryUpdate(metadata map[string]any) (map[string]any, error) 
 
 	for key, value := range metadata {
 		switch key {
-		case "label_ids", "category", "category_id", "category_ids", "category_name", "category_names", "entity_id", "hidden", "raw_update":
+		case "area_name", "label_ids", "labels", "category", "categories", "category_id", "category_ids", "entity_id", "hidden", "raw_update":
 			continue
 		default:
 			update[key] = value
@@ -1504,11 +1531,19 @@ func buildEntityRegistryUpdate(metadata map[string]any) (map[string]any, error) 
 		}
 	}
 
-	if hasArg(metadata, "label_ids") {
-		labels := stringSliceArg(metadata, "label_ids")
+	if areaValue, ok, err := automationAreaUpdateValue(metadata, meta.areas); err != nil {
+		return nil, err
+	} else if ok {
+		update["area_id"] = areaValue
+	}
+	if labels, ok, err := automationLabelUpdateValues(metadata, meta.labels); err != nil {
+		return nil, err
+	} else if ok {
 		update["labels"] = labels
 	}
-	if categoryValue, ok := automationCategoryUpdateValue(metadata); ok {
+	if categoryValue, ok, err := automationCategoryUpdateValue(metadata, meta.categories["automation"]); err != nil {
+		return nil, err
+	} else if ok {
 		categories := map[string]any{}
 		if existing, ok := update["categories"].(map[string]any); ok {
 			for key, value := range existing {
@@ -1536,22 +1571,147 @@ func buildEntityRegistryUpdate(metadata map[string]any) (map[string]any, error) 
 	return update, nil
 }
 
-func automationCategoryUpdateValue(metadata map[string]any) (any, bool) {
+func resolveRegistryMetadataValue(raw any, namesByID map[string]string, kind string) (any, error) {
+	if raw == nil {
+		return nil, nil
+	}
+
+	value := strings.TrimSpace(stringFromAny(raw))
+	if value == "" {
+		return "", nil
+	}
+	if _, ok := namesByID[value]; ok {
+		return value, nil
+	}
+
+	matches := lookupRegistryIDsByName(value, namesByID)
+	switch len(matches) {
+	case 0:
+		return value, nil
+	case 1:
+		return matches[0], nil
+	default:
+		return nil, fmt.Errorf("%s %q is ambiguous; matches IDs %s", kind, value, strings.Join(matches, ", "))
+	}
+}
+
+func automationAreaUpdateValue(metadata map[string]any, namesByID map[string]string) (any, bool, error) {
 	if metadata == nil {
-		return nil, false
+		return nil, false, nil
+	}
+	if value, ok := metadata["area_id"]; ok {
+		resolved, err := resolveRegistryMetadataValue(value, namesByID, "area")
+		return resolved, true, err
+	}
+	if value, ok := metadata["area_name"]; ok {
+		resolved, err := resolveRegistryMetadataValue(value, namesByID, "area")
+		return resolved, true, err
+	}
+	return nil, false, nil
+}
+
+func automationLabelUpdateValues(metadata map[string]any, namesByID map[string]string) ([]string, bool, error) {
+	if metadata == nil {
+		return nil, false, nil
+	}
+
+	if raw, ok := metadata["label_ids"]; ok {
+		values, err := normalizeRegistryStringList(metadataStringList(raw), namesByID, "label")
+		return values, true, err
+	}
+	if raw, ok := metadata["labels"]; ok {
+		values, err := normalizeRegistryStringList(metadataStringList(raw), namesByID, "label")
+		return values, true, err
+	}
+	return nil, false, nil
+}
+
+func automationCategoryUpdateValue(metadata map[string]any, namesByID map[string]string) (any, bool, error) {
+	if metadata == nil {
+		return nil, false, nil
 	}
 	if value, ok := metadata["category_id"]; ok {
-		return value, true
+		resolved, err := resolveRegistryMetadataValue(value, namesByID, "automation category")
+		return resolved, true, err
+	}
+	if value, ok := mapValue(metadata, "category_ids", "automation"); ok {
+		resolved, err := resolveRegistryMetadataValue(value, namesByID, "automation category")
+		return resolved, true, err
 	}
 	if value, ok := metadata["category"]; ok {
-		return value, true
+		resolved, err := resolveRegistryMetadataValue(value, namesByID, "automation category")
+		return resolved, true, err
 	}
-	categoryIDs := mapArg(metadata, "category_ids")
-	if categoryIDs == nil {
-		return nil, false
+	if value, ok := mapValue(metadata, "categories", "automation"); ok {
+		resolved, err := resolveRegistryMetadataValue(value, namesByID, "automation category")
+		return resolved, true, err
 	}
-	value, ok := categoryIDs["automation"]
-	return value, ok
+	return nil, false, nil
+}
+
+func normalizeRegistryStringList(values []string, namesByID map[string]string, kind string) ([]string, error) {
+	if len(values) == 0 {
+		return nil, nil
+	}
+
+	out := make([]string, 0, len(values))
+	seen := make(map[string]bool, len(values))
+	for _, value := range values {
+		resolved, err := resolveRegistryMetadataValue(value, namesByID, kind)
+		if err != nil {
+			return nil, err
+		}
+		id := strings.TrimSpace(stringFromAny(resolved))
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+	}
+	return out, nil
+}
+
+func metadataStringList(raw any) []string {
+	items, ok := raw.([]any)
+	if !ok {
+		return nil
+	}
+
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		switch value := item.(type) {
+		case string:
+			value = strings.TrimSpace(value)
+			if value != "" {
+				out = append(out, value)
+			}
+		case map[string]any:
+			if id := strings.TrimSpace(stringFromAny(value["id"])); id != "" {
+				out = append(out, id)
+				continue
+			}
+			if name := strings.TrimSpace(stringFromAny(value["name"])); name != "" {
+				out = append(out, name)
+			}
+		}
+	}
+	return out
+}
+
+func lookupRegistryIDsByName(name string, namesByID map[string]string) []string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil
+	}
+
+	var matches []string
+	for id, candidate := range namesByID {
+		if strings.EqualFold(strings.TrimSpace(candidate), name) {
+			matches = append(matches, id)
+		}
+	}
+	sort.Strings(matches)
+	return matches
 }
 
 func mergeAutomationConfig(base, patch map[string]any) map[string]any {

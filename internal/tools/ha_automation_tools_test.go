@@ -414,11 +414,11 @@ func TestHAAutomationGetIncludesRegistryMetadata(t *testing.T) {
 	if got.Metadata.CategoryID != "cat_maintenance" {
 		t.Fatalf("category_id = %q, want %q", got.Metadata.CategoryID, "cat_maintenance")
 	}
-	if got.Metadata.CategoryName != "Maintenance" {
-		t.Fatalf("category_name = %q, want %q", got.Metadata.CategoryName, "Maintenance")
+	if got.Metadata.Category != "Maintenance" {
+		t.Fatalf("category = %q, want %q", got.Metadata.Category, "Maintenance")
 	}
-	if got.Metadata.CategoryNames["automation"] != "Maintenance" {
-		t.Fatalf("category_names = %#v, want automation=Maintenance", got.Metadata.CategoryNames)
+	if got.Metadata.Categories["automation"] != "Maintenance" {
+		t.Fatalf("categories = %#v, want automation=Maintenance", got.Metadata.Categories)
 	}
 	if got.Metadata.CategoryIDs["automation"] != "cat_maintenance" {
 		t.Fatalf("category_ids = %#v, want automation=cat_maintenance", got.Metadata.CategoryIDs)
@@ -654,32 +654,55 @@ func TestHAAutomationListResolvesCategoryNames(t *testing.T) {
 	if got[0].Metadata.CategoryID != "01JSPY2KHMDFXMSDFXJNKZWX2V" {
 		t.Fatalf("category_id = %q, want raw category ID", got[0].Metadata.CategoryID)
 	}
-	if got[0].Metadata.CategoryName != "Physical" {
-		t.Fatalf("category_name = %q, want %q", got[0].Metadata.CategoryName, "Physical")
+	if got[0].Metadata.Category != "Physical" {
+		t.Fatalf("category = %q, want %q", got[0].Metadata.Category, "Physical")
 	}
-	if got[0].Metadata.CategoryNames["automation"] != "Physical" {
-		t.Fatalf("category_names = %#v, want automation=Physical", got[0].Metadata.CategoryNames)
+	if got[0].Metadata.Categories["automation"] != "Physical" {
+		t.Fatalf("categories = %#v, want automation=Physical", got[0].Metadata.Categories)
 	}
 	if got[0].Metadata.CategoryIDs["automation"] != "01JSPY2KHMDFXMSDFXJNKZWX2V" {
 		t.Fatalf("category_ids = %#v, want raw automation category ID", got[0].Metadata.CategoryIDs)
 	}
 }
 
-func TestBuildEntityRegistryUpdateAcceptsCategoryIDAndIgnoresResolvedCategoryNames(t *testing.T) {
+func TestBuildEntityRegistryUpdateNormalizesMetadataNamesToIDs(t *testing.T) {
 	update, err := buildEntityRegistryUpdate(map[string]any{
-		"category_id":   "cat_maintenance",
-		"category_name": "Maintenance",
-		"category_names": map[string]any{
+		"area_name": "Garage Entry",
+		"labels": []any{
+			map[string]any{"id": "label_critical", "name": "Critical"},
+			"Battery Watch",
+		},
+		"categories": map[string]any{
 			"automation": "Maintenance",
 		},
-		"category_ids": map[string]any{
-			"automation": "cat_from_round_trip",
+	}, haMetadataMaps{
+		areas: map[string]string{
+			"area_entry": "Garage Entry",
+		},
+		labels: map[string]string{
+			"label_critical": "Critical",
+			"label_battery":  "Battery Watch",
+		},
+		categories: map[string]map[string]string{
+			"automation": {
+				"cat_maintenance": "Maintenance",
+			},
 		},
 	})
 	if err != nil {
 		t.Fatalf("buildEntityRegistryUpdate failed: %v", err)
 	}
 
+	if update["area_id"] != "area_entry" {
+		t.Fatalf("area_id = %#v, want %q", update["area_id"], "area_entry")
+	}
+	labels, ok := update["labels"].([]string)
+	if !ok {
+		t.Fatalf("labels update = %#v, want []string", update["labels"])
+	}
+	if len(labels) != 2 || labels[0] != "label_critical" || labels[1] != "label_battery" {
+		t.Fatalf("labels = %#v, want [label_critical label_battery]", labels)
+	}
 	categories, ok := update["categories"].(map[string]any)
 	if !ok {
 		t.Fatalf("categories update = %#v, want map", update["categories"])
@@ -687,11 +710,34 @@ func TestBuildEntityRegistryUpdateAcceptsCategoryIDAndIgnoresResolvedCategoryNam
 	if categories["automation"] != "cat_maintenance" {
 		t.Fatalf("categories.automation = %#v, want %q", categories["automation"], "cat_maintenance")
 	}
-	if _, ok := update["category_name"]; ok {
-		t.Fatalf("category_name leaked into update payload: %#v", update)
+	if _, ok := update["area_name"]; ok {
+		t.Fatalf("area_name leaked into update payload: %#v", update)
 	}
-	if _, ok := update["category_names"]; ok {
-		t.Fatalf("category_names leaked into update payload: %#v", update)
+	if _, ok := update["category"]; ok {
+		t.Fatalf("category leaked into update payload: %#v", update)
+	}
+	if _, ok := update["category_ids"]; ok {
+		t.Fatalf("category_ids leaked into update payload: %#v", update)
+	}
+	if _, ok := update["labels"].([]any); ok {
+		t.Fatalf("labels leaked in unnormalized form: %#v", update["labels"])
+	}
+}
+
+func TestBuildEntityRegistryUpdateRejectsAmbiguousMetadataNames(t *testing.T) {
+	_, err := buildEntityRegistryUpdate(map[string]any{
+		"label_ids": []any{"Critical"},
+	}, haMetadataMaps{
+		labels: map[string]string{
+			"label_a": "Critical",
+			"label_b": "Critical",
+		},
+	})
+	if err == nil {
+		t.Fatal("expected ambiguous label name error")
+	}
+	if !strings.Contains(err.Error(), "ambiguous") {
+		t.Fatalf("err = %v, want ambiguous match error", err)
 	}
 }
 
