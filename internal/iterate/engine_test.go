@@ -426,6 +426,27 @@ func TestEngine_EmptyResponseWithoutNudge(t *testing.T) {
 	}
 }
 
+func TestEngine_EmptyFirstResponseNudges(t *testing.T) {
+	mock := &mockLLM{
+		responses: []*llm.ChatResponse{
+			textResponse(""),
+			textResponse("nudged response"),
+		},
+	}
+	exec := &mockExecutor{results: map[string]string{}}
+	cfg := baseCfg(mock, exec)
+	cfg.NudgeOnEmpty = true
+
+	engine := &Engine{}
+	result, err := engine.Run(context.Background(), cfg, baseMessages())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Content != "nudged response" {
+		t.Errorf("content = %q, want %q", result.Content, "nudged response")
+	}
+}
+
 func TestEngine_DeferMixedText(t *testing.T) {
 	// Model returns text + tool calls, then empty response.
 	// Deferred text should be used.
@@ -761,9 +782,8 @@ func TestEngine_ForceTextOnExhaustionWithNoPendingTools(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	// First iteration returns empty text on i=0 — no tool calls happened,
-	// so the empty response handling for i>0 doesn't trigger. It returns
-	// the empty content directly.
+	// With NudgeOnEmpty disabled, an empty first-turn response is still
+	// preserved as empty so callers can decide how to handle it.
 	if result.Exhausted {
 		t.Error("single text response should not be exhausted")
 	}

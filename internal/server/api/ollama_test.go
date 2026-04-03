@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/nugget/thane-ai-agent/internal/llm"
@@ -32,6 +33,28 @@ func TestOllamaAgentError_DefaultsToGeneric500(t *testing.T) {
 	}
 	if message != "agent error" {
 		t.Fatalf("message = %q, want %q", message, "agent error")
+	}
+}
+
+func TestOllamaAgentError_SurfacesProviderBadRequest(t *testing.T) {
+	code, message := ollamaAgentError(fmt.Errorf(`API error 400: {"error":"context too long"}`))
+
+	if code != http.StatusBadRequest {
+		t.Fatalf("code = %d, want %d", code, http.StatusBadRequest)
+	}
+	if !strings.Contains(message, "context too long") {
+		t.Fatalf("message = %q, want provider error details", message)
+	}
+}
+
+func TestOllamaAgentError_EmptyCompletionIsBadGateway(t *testing.T) {
+	code, message := ollamaAgentError(fmt.Errorf(`LM Studio returned an empty assistant completion for model "deepslate/google/gemma-3-4b"`))
+
+	if code != http.StatusBadGateway {
+		t.Fatalf("code = %d, want %d", code, http.StatusBadGateway)
+	}
+	if !strings.Contains(message, "empty assistant completion") {
+		t.Fatalf("message = %q, want empty completion details", message)
 	}
 }
 

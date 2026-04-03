@@ -518,7 +518,8 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	resp, err := s.loop.Run(ctx, agentReq, nil)
 	if err != nil {
 		log.Error("agent loop failed", "error", err)
-		s.errorResponse(w, http.StatusInternalServerError, "agent error")
+		code, message := agentErrorDetails(err)
+		s.errorResponse(w, code, message)
 		return
 	}
 

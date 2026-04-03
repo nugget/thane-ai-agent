@@ -336,14 +336,17 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 			deferredText = ""
 		}
 
-		// Handle empty responses after tool call iterations.
-		if llmResp.Message.Content == "" && i > 0 {
+		// Handle empty responses. After tool call iterations this is a
+		// common failure mode, but first-turn empty completions are not
+		// useful either, so treat both paths consistently when nudging
+		// is enabled.
+		if llmResp.Message.Content == "" {
 			if deferredText != "" {
 				iterLog.Info("using deferred text from prior iteration",
 					"deferred_len", len(deferredText))
 				llmResp.Message.Content = deferredText
 			} else if cfg.NudgeOnEmpty && !emptyRetried {
-				iterLog.Warn("empty response after tool calls, nudging model")
+				iterLog.Warn("empty response, nudging model")
 				prompt := cfg.NudgePrompt
 				if prompt == "" {
 					prompt = prompts.EmptyResponseNudge

@@ -12,7 +12,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -20,7 +19,6 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/agent"
-	"github.com/nugget/thane-ai-agent/internal/llm"
 	"github.com/nugget/thane-ai-agent/internal/logging"
 	"github.com/nugget/thane-ai-agent/internal/openclaw"
 	"github.com/nugget/thane-ai-agent/internal/router"
@@ -615,11 +613,7 @@ func ollamaError(w http.ResponseWriter, code int, message string) {
 }
 
 func ollamaAgentError(err error) (int, string) {
-	var ambiguous *llm.AmbiguousModelError
-	if errors.As(err, &ambiguous) {
-		return http.StatusBadRequest, err.Error()
-	}
-	return http.StatusInternalServerError, "agent error"
+	return agentErrorDetails(err)
 }
 
 // sanitizeHARequest strips HA-provided tools and instructions, keeping only
