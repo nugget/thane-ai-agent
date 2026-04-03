@@ -20,10 +20,6 @@
 - **[Model-Facing Context](model-facing-context.md)** — Philosophy and conventions for writing data that will be consumed by future model loops
 - **[Model-Facing Tools](model-facing-tools.md)** — Guidance for naming, shaping, and erroring internal tools so models and delegates can use them reliably
 
-## Intent & Direction
-
-- **[Model Registry And Provider Topology](intent/model-registry.md)** — Current-state design note for issue #93 and the path from static model config to a dynamic provider-aware registry
-
 ## Contributing
 
 - **[Contributing](../CONTRIBUTING.md)** — Development workflow and guidelines
