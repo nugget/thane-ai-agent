@@ -24,6 +24,20 @@ type LMStudioModelInfo struct {
 	LoadedContextLength int    `json:"loaded_context_length,omitempty"`
 }
 
+type lmStudioLoadRequest struct {
+	Model          string `json:"model"`
+	ContextLength  int    `json:"context_length,omitempty"`
+	EchoLoadConfig bool   `json:"echo_load_config,omitempty"`
+}
+
+type LMStudioLoadResponse struct {
+	Type            string         `json:"type,omitempty"`
+	InstanceID      string         `json:"instance_id,omitempty"`
+	LoadTimeSeconds float64        `json:"load_time_seconds,omitempty"`
+	Status          string         `json:"status,omitempty"`
+	LoadConfig      map[string]any `json:"load_config,omitempty"`
+}
+
 type lmStudioChatRequest struct {
 	Model         string                 `json:"model"`
 	Messages      []lmStudioMessage      `json:"messages"`

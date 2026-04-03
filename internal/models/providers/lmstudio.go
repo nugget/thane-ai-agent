@@ -259,6 +259,58 @@ func (c *LMStudioClient) setAuth(req *http.Request) {
 	}
 }
 
+// LoadModel asks LM Studio to load or reload a model with the requested
+// inference context length.
+func (c *LMStudioClient) LoadModel(ctx context.Context, model string, contextLength int) (*LMStudioLoadResponse, error) {
+	reqBody := lmStudioLoadRequest{
+		Model:          strings.TrimSpace(model),
+		ContextLength:  contextLength,
+		EchoLoadConfig: true,
+	}
+	if reqBody.Model == "" {
+		return nil, fmt.Errorf("model is required")
+	}
+	if reqBody.ContextLength < 0 {
+		reqBody.ContextLength = 0
+	}
+
+	jsonData, err := json.Marshal(reqBody)
+	if err != nil {
+		return nil, fmt.Errorf("marshal request: %w", err)
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/api/v1/models/load", bytes.NewReader(jsonData))
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	c.setAuth(httpReq)
+
+	resp, err := c.httpClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		errBody := httpkit.ReadErrorBody(resp.Body, 4096)
+		c.logger.Error("load model API error", "status", resp.StatusCode, "body", errBody, "model", reqBody.Model, "context_length", reqBody.ContextLength)
+		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, errBody)
+	}
+
+	var result LMStudioLoadResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decode response: %w", err)
+	}
+	c.logger.Info("model loaded",
+		"model", reqBody.Model,
+		"context_length", reqBody.ContextLength,
+		"status", result.Status,
+		"instance_id", result.InstanceID,
+	)
+	return &result, nil
+}
+
 func (c *LMStudioClient) handleStreaming(ctx context.Context, requestedModel string, validToolNames []string, body io.Reader, callback llm.StreamCallback) (*llm.ChatResponse, error) {
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 2*1024*1024)

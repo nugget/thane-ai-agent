@@ -219,6 +219,57 @@ func TestLMStudioChat_NonStreamingContent(t *testing.T) {
 	}
 }
 
+func TestLMStudioLoadModel(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/models/load" {
+			t.Fatalf("path = %q, want /api/v1/models/load", r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer secret-token" {
+			t.Fatalf("Authorization = %q, want Bearer token", got)
+		}
+		var req lmStudioLoadRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if req.Model != "google/gemma-3-4b" {
+			t.Fatalf("req.Model = %q, want google/gemma-3-4b", req.Model)
+		}
+		if req.ContextLength != 12288 {
+			t.Fatalf("req.ContextLength = %d, want 12288", req.ContextLength)
+		}
+		if !req.EchoLoadConfig {
+			t.Fatal("EchoLoadConfig = false, want true")
+		}
+		_ = json.NewEncoder(w).Encode(LMStudioLoadResponse{
+			Type:            "llm",
+			InstanceID:      "google/gemma-3-4b",
+			LoadTimeSeconds: 1.25,
+			Status:          "loaded",
+			LoadConfig: map[string]any{
+				"context_length": float64(12288),
+			},
+		})
+	}))
+	defer srv.Close()
+
+	client := NewLMStudioClient(srv.URL, "secret-token", nil)
+	resp, err := client.LoadModel(context.Background(), "google/gemma-3-4b", 12288)
+	if err != nil {
+		t.Fatalf("LoadModel() error = %v", err)
+	}
+	if resp.Status != "loaded" {
+		t.Fatalf("resp.Status = %q, want loaded", resp.Status)
+	}
+	if resp.InstanceID != "google/gemma-3-4b" {
+		t.Fatalf("resp.InstanceID = %q, want google/gemma-3-4b", resp.InstanceID)
+	}
+	if got := resp.LoadConfig["context_length"]; got != float64(12288) {
+		t.Fatalf("resp.LoadConfig[context_length] = %v, want 12288", got)
+	}
+}
+
 func TestLMStudioChat_NonStreamingEmptyCompletionErrors(t *testing.T) {
 	t.Parallel()
 

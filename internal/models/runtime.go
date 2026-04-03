@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 
 	"github.com/nugget/thane-ai-agent/internal/config"
@@ -114,6 +115,14 @@ func (r *Runtime) Refresh(ctx context.Context) (*RefreshResult, error) {
 	r.refreshMu.Lock()
 	defer r.refreshMu.Unlock()
 
+	return r.refreshLocked(ctx)
+}
+
+func (r *Runtime) refreshLocked(ctx context.Context) (*RefreshResult, error) {
+	if r == nil {
+		return nil, fmt.Errorf("nil runtime")
+	}
+
 	before := r.registry.Snapshot()
 	if err := r.registry.Refresh(ctx, r.bundle); err != nil {
 		return nil, err
@@ -133,4 +142,62 @@ func (r *Runtime) Refresh(ctx context.Context) (*RefreshResult, error) {
 		Changed:  changed,
 		Snapshot: after,
 	}, nil
+}
+
+// PrepareExplicitModel asks the backing provider to ready an explicit
+// deployment for the requested context size, then refreshes the live
+// registry snapshot when the provider state changes. Today this is used
+// only for LM Studio deployments whose loaded context window is smaller
+// than the runner-advertised maximum.
+func (r *Runtime) PrepareExplicitModel(ctx context.Context, ref string, contextSize int) (bool, error) {
+	if r == nil {
+		return false, fmt.Errorf("nil runtime")
+	}
+
+	r.refreshMu.Lock()
+	defer r.refreshMu.Unlock()
+
+	cat := r.registry.Catalog()
+	if cat == nil {
+		return false, fmt.Errorf("model registry is not initialized")
+	}
+	dep, err := cat.ResolveDeploymentRef(ref)
+	if err != nil {
+		return false, err
+	}
+	if !CanExpandLoadedContext(dep, contextSize) {
+		return false, nil
+	}
+
+	client := r.bundle.LMStudioClients[dep.ResourceID]
+	if client == nil {
+		return false, fmt.Errorf("lmstudio resource %q is unavailable", dep.ResourceID)
+	}
+	if _, err := client.LoadModel(ctx, dep.ModelName, contextSize); err != nil {
+		return false, err
+	}
+
+	result, err := r.refreshLocked(ctx)
+	if err != nil {
+		return false, err
+	}
+	return result.Changed, nil
+}
+
+// CanExpandLoadedContext reports whether a deployment can plausibly be
+// reloaded by its runner to satisfy the requested context size.
+func CanExpandLoadedContext(dep Deployment, contextSize int) bool {
+	if strings.TrimSpace(dep.Provider) != "lmstudio" {
+		return false
+	}
+	if contextSize <= 0 {
+		return false
+	}
+	if dep.LoadedContextWindow <= 0 || dep.MaxContextWindow <= dep.LoadedContextWindow {
+		return false
+	}
+	if contextSize <= dep.LoadedContextWindow {
+		return false
+	}
+	return contextSize <= dep.MaxContextWindow
 }

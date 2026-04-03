@@ -220,6 +220,7 @@ type Loop struct {
 	pricing           map[string]config.PricingEntry // model→cost for usage recording
 	usageCatalog      *models.Catalog
 	modelRegistry     *models.Registry
+	modelRuntime      *models.Runtime
 
 	// Capability tags — per-Run tool/talent filtering.
 	//
@@ -431,6 +432,12 @@ func (l *Loop) SetUsageRecorder(store *usage.Store, pricing map[string]config.Pr
 // explicit model resolution and runtime usage attribution.
 func (l *Loop) UseModelRegistry(registry *models.Registry) {
 	l.modelRegistry = registry
+}
+
+// UseModelRuntime configures the live model runtime used for explicit
+// runner preparation flows such as LM Studio context expansion.
+func (l *Loop) UseModelRuntime(runtime *models.Runtime) {
+	l.modelRuntime = runtime
 }
 
 // SetChannelTags configures channel-pinned tag activation. When a
@@ -1188,6 +1195,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	needsTools := len(visibleTools.List()) > 0
 	needsStreaming := stream != nil
 	needsImages := messagesNeedImages(req.Messages)
+	contextSize := estimateRequestContextTokens(systemPrompt, req.Messages)
 
 	// Select model via router
 	model := req.Model
@@ -1209,8 +1217,6 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			// Estimate effective prompt size for routing. This includes
 			// the assembled system prompt, user-visible message text, and
 			// a conservative surcharge for image-bearing inputs.
-			contextSize := estimateRequestContextTokens(systemPrompt, req.Messages)
-
 			routerReq := router.Request{
 				Query:          query,
 				ContextSize:    contextSize,
@@ -1232,9 +1238,18 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			log.Debug("model selected as default (no router)", "model", model)
 		}
 	} else {
-		resolvedModel, err := l.preflightExplicitModel(model, needsTools, needsStreaming, needsImages, estimateRequestContextTokens(systemPrompt, req.Messages))
+		resolvedModel, err := l.preflightExplicitModel(model, needsTools, needsStreaming, needsImages, contextSize)
 		if err != nil {
-			return nil, err
+			prepared, prepErr := l.maybePrepareExplicitModel(ctx, model, contextSize, err)
+			if prepErr != nil {
+				return nil, prepErr
+			}
+			if prepared {
+				resolvedModel, err = l.preflightExplicitModel(model, needsTools, needsStreaming, needsImages, contextSize)
+			}
+			if err != nil {
+				return nil, err
+			}
 		}
 		model = resolvedModel
 		log.Debug("model specified in request, skipping router", "model", model)

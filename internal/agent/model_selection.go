@@ -1,6 +1,8 @@
 package agent
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -112,6 +114,37 @@ func (l *Loop) preflightExplicitModel(ref string, needsTools, needsStreaming, ne
 		}
 	}
 	return dep.ID, nil
+}
+
+func (l *Loop) maybePrepareExplicitModel(ctx context.Context, ref string, contextSize int, currentErr error) (bool, error) {
+	if l == nil || l.modelRuntime == nil || contextSize <= 0 {
+		return false, nil
+	}
+	var incompatible *IncompatibleModelError
+	if !errors.As(currentErr, &incompatible) {
+		return false, nil
+	}
+
+	cat := l.currentModelCatalog()
+	if cat == nil {
+		return false, nil
+	}
+	dep, err := cat.ResolveDeploymentRef(ref)
+	if err != nil {
+		return false, nil
+	}
+	if !models.CanExpandLoadedContext(dep, contextSize) {
+		return false, nil
+	}
+
+	changed, err := l.modelRuntime.PrepareExplicitModel(ctx, dep.ID, contextSize)
+	if err != nil {
+		return false, err
+	}
+	if changed && l.router != nil && l.modelRegistry != nil {
+		l.router.UpdateConfig(l.modelRegistry.Catalog().RouterConfig(0))
+	}
+	return changed, nil
 }
 
 func messagesNeedImages(msgs []Message) bool {

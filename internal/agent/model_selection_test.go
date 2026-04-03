@@ -2,15 +2,20 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/config"
 	"github.com/nugget/thane-ai-agent/internal/llm"
 	"github.com/nugget/thane-ai-agent/internal/models"
+	modelproviders "github.com/nugget/thane-ai-agent/internal/models/providers"
 	"github.com/nugget/thane-ai-agent/internal/router"
 )
 
@@ -295,6 +300,131 @@ func TestRun_ExplicitModelRejectsLoadedContextOverflowWithMaxHint(t *testing.T) 
 	}
 	if len(mock.calls) != 0 {
 		t.Fatalf("llm calls = %d, want 0 when preflight rejects", len(mock.calls))
+	}
+}
+
+func TestRun_ExplicitModelPreparesLoadedContextAndRetries(t *testing.T) {
+	mock := &mockLLM{
+		responses: []*llm.ChatResponse{{
+			Model: "deepslate/google/gemma-3-4b",
+			Message: llm.Message{
+				Role:    "assistant",
+				Content: "ok",
+			},
+			InputTokens:  42,
+			OutputTokens: 3,
+		}},
+	}
+	loop := buildTestLoop(mock, nil)
+	var mu sync.Mutex
+	loadedContext := 4096
+	loadCalls := 0
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v0/models":
+			mu.Lock()
+			current := loadedContext
+			mu.Unlock()
+			_ = json.NewEncoder(w).Encode(struct {
+				Data []modelproviders.LMStudioModelInfo `json:"data"`
+			}{
+				Data: []modelproviders.LMStudioModelInfo{{
+					ID:                  "google/gemma-3-4b",
+					Type:                "vlm",
+					State:               "loaded",
+					MaxContextLength:    131072,
+					LoadedContextLength: current,
+				}},
+			})
+		case "/api/v1/models/load":
+			var req struct {
+				Model         string `json:"model"`
+				ContextLength int    `json:"context_length"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode load request: %v", err)
+			}
+			if req.Model != "google/gemma-3-4b" {
+				t.Fatalf("load model = %q, want google/gemma-3-4b", req.Model)
+			}
+			if req.ContextLength <= 4096 {
+				t.Fatalf("context_length = %d, want > 4096", req.ContextLength)
+			}
+			mu.Lock()
+			loadedContext = req.ContextLength
+			loadCalls++
+			mu.Unlock()
+			_ = json.NewEncoder(w).Encode(modelproviders.LMStudioLoadResponse{
+				Type:       "llm",
+				InstanceID: req.Model,
+				Status:     "loaded",
+			})
+		default:
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	cfg := &config.Config{
+		Models: config.ModelsConfig{
+			Default: "gpt-oss:20b",
+			Resources: map[string]config.ModelServerConfig{
+				"spark":     {URL: "http://spark.example", Provider: "ollama"},
+				"deepslate": {URL: srv.URL, Provider: "lmstudio"},
+			},
+			Available: []config.ModelConfig{
+				{
+					Name:          "gpt-oss:20b",
+					Resource:      "spark",
+					SupportsTools: true,
+					ContextWindow: 8192,
+				},
+			},
+		},
+	}
+
+	cat, err := models.BuildCatalog(cfg)
+	if err != nil {
+		t.Fatalf("models.BuildCatalog: %v", err)
+	}
+	runtime, err := models.NewRuntime(context.Background(), cat, cfg, nil)
+	if err != nil {
+		t.Fatalf("models.NewRuntime: %v", err)
+	}
+	registry := runtime.Registry()
+	loop.UseModelRegistry(registry)
+	loop.UseModelRuntime(runtime)
+
+	resp, err := loop.Run(context.Background(), &Request{
+		Model: "deepslate/google/gemma-3-4b",
+		Messages: []Message{{
+			Role:    "user",
+			Content: strings.Repeat("context ", 1500),
+			Images:  []llm.ImageContent{{Data: validTinyPNGBase64ForAgentTest(), MediaType: "image/png"}},
+		}},
+	}, nil)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if resp.Model != "deepslate/google/gemma-3-4b" {
+		t.Fatalf("resp.Model = %q, want deepslate/google/gemma-3-4b", resp.Model)
+	}
+	mu.Lock()
+	gotLoadCalls := loadCalls
+	gotLoadedContext := loadedContext
+	mu.Unlock()
+	if gotLoadCalls != 1 {
+		t.Fatalf("load calls = %d, want 1", gotLoadCalls)
+	}
+	if gotLoadedContext <= 4096 {
+		t.Fatalf("loadedContext = %d, want > 4096 after prepare", gotLoadedContext)
+	}
+	if len(mock.calls) != 1 {
+		t.Fatalf("llm calls = %d, want 1", len(mock.calls))
+	}
+	if mock.calls[0].Model != "deepslate/google/gemma-3-4b" {
+		t.Fatalf("llm call model = %q, want deepslate/google/gemma-3-4b", mock.calls[0].Model)
 	}
 }
 
