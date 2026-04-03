@@ -202,20 +202,6 @@ for a follow-up call, the first tool did not expose enough.
 
 ## Common Pitfalls
 
-### Output instruction trap
-
-Delegates can successfully call tools and still fail the task if the
-instruction never says what to return.
-
-Bad:
-
-- `Call forge_issue_get(number: 352).`
-
-Better:
-
-- `Call forge_issue_get(number: 352) and return the issue title and
-  state as text.`
-
 ### Parameter type mismatches
 
 If a tool expects an integer, path, enum, or boolean, say so explicitly
@@ -232,16 +218,20 @@ Better:
 
 ### Path discovery spirals
 
-Delegates burn iterations when they have to hunt for files that the
-caller already knows.
+Delegates burn iterations when a tool design forces a discovery step for
+something that could have been accepted literally.
+
+Prefer tool shapes that accept exact file paths, IDs, or other canonical
+selectors directly when the caller already has them.
 
 Bad:
 
-- `Find and read the config file.`
+- requiring a search step before every file read or entity mutation
 
 Better:
 
-- `Read /home/thane/config.yaml.`
+- `read_file(path="/home/thane/config.yaml")`
+- `ha_automation_get(entity_id="automation.low_battery_warning")`
 
 ## Delegate-Specific Guidance
 
@@ -257,15 +247,12 @@ Write tool contracts and errors so a delegate can:
 Tool descriptions should help with that. Include:
 
 - required parameter names and types when they are easy to misuse
+- what the tool returns when that is important for the next step
 - literal examples when a value shape is non-obvious
 - common failure modes when there is a known trap
 
 For example, if a tool expects an integer issue number, say `number
 (integer, not string)` instead of just `number`.
-
-When a delegate task depends on producing text after the tool call,
-state the required output explicitly in the task. A successful tool call
-is not the same thing as a successful delegate result.
 
 If a delegate would need to ask itself "what do I try next?", the tool
 surface can probably be improved.
