@@ -218,6 +218,86 @@ func TestRun_ExplicitModelRejectsContextOverflow(t *testing.T) {
 	}
 }
 
+func TestRun_ExplicitModelRejectsLoadedContextOverflowWithMaxHint(t *testing.T) {
+	mock := &mockLLM{}
+	loop := buildTestLoop(mock, nil)
+
+	cfg := &config.Config{
+		Models: config.ModelsConfig{
+			Default: "gpt-oss:20b",
+			Resources: map[string]config.ModelServerConfig{
+				"spark":     {URL: "http://spark.example", Provider: "ollama"},
+				"deepslate": {URL: "http://deepslate.example", Provider: "lmstudio"},
+			},
+			Available: []config.ModelConfig{
+				{
+					Name:          "gpt-oss:20b",
+					Resource:      "spark",
+					SupportsTools: true,
+					ContextWindow: 8192,
+				},
+			},
+		},
+	}
+
+	cat, err := models.BuildCatalog(cfg)
+	if err != nil {
+		t.Fatalf("models.BuildCatalog: %v", err)
+	}
+	registry, err := models.NewRegistry(cat)
+	if err != nil {
+		t.Fatalf("models.NewRegistry: %v", err)
+	}
+	if err := registry.ApplyInventory(&models.Inventory{
+		Resources: []models.ResourceInventory{
+			{
+				ResourceID: "deepslate",
+				Provider:   "lmstudio",
+				Attempted:  true,
+				Models: []models.DiscoveredModel{
+					{
+						Name:                "google/gemma-3-4b",
+						SupportsChat:        true,
+						ModelType:           "vlm",
+						SupportsTools:       true,
+						SupportsStreaming:   true,
+						SupportsImages:      true,
+						ContextWindow:       4096,
+						MaxContextWindow:    131072,
+						LoadedContextWindow: 4096,
+					},
+				},
+			},
+		},
+	}, time.Date(2026, 4, 3, 18, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("registry.ApplyInventory: %v", err)
+	}
+	loop.UseModelRegistry(registry)
+
+	_, err = loop.Run(context.Background(), &Request{
+		Model: "deepslate/google/gemma-3-4b",
+		Messages: []Message{{
+			Role:    "user",
+			Content: strings.Repeat("context ", 2200),
+			Images:  []llm.ImageContent{{Data: validTinyPNGBase64ForAgentTest(), MediaType: "image/png"}},
+		}},
+	}, nil)
+
+	var incompatible *IncompatibleModelError
+	if !errors.As(err, &incompatible) {
+		t.Fatalf("Run error = %T, want *IncompatibleModelError", err)
+	}
+	if !strings.Contains(err.Error(), "currently loaded context window") {
+		t.Fatalf("error = %q, want loaded-context detail", err)
+	}
+	if !strings.Contains(err.Error(), "runner advertises max 131072") {
+		t.Fatalf("error = %q, want max-context hint", err)
+	}
+	if len(mock.calls) != 0 {
+		t.Fatalf("llm calls = %d, want 0 when preflight rejects", len(mock.calls))
+	}
+}
+
 func TestEstimateRequestContextTokens_IncludesImages(t *testing.T) {
 	got := estimateRequestContextTokens("abcd", []Message{{
 		Role:    "user",
@@ -254,10 +334,13 @@ func TestNoEligibleImageRoutingError_IncludesContextHint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("models.BuildCatalog: %v", err)
 	}
+	cat.Deployments[0].ContextWindow = 4096
+	cat.Deployments[0].LoadedContextWindow = 4096
+	cat.Deployments[0].MaxContextWindow = 131072
 
 	err = noEligibleImageRoutingError(cat, &router.Decision{
 		RejectedModels: map[string][]string{
-			"vision/qwen3-vl:4b": {"context window too small"},
+			"qwen3-vl:4b": {"context window too small"},
 		},
 	})
 
@@ -267,6 +350,9 @@ func TestNoEligibleImageRoutingError_IncludesContextHint(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "too small for the current prompt") {
 		t.Fatalf("error = %q, want context-fit hint", err)
+	}
+	if !strings.Contains(err.Error(), "larger max window than is currently loaded") {
+		t.Fatalf("error = %q, want loaded-vs-max hint", err)
 	}
 }
 

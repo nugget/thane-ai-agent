@@ -103,11 +103,7 @@ func (l *Loop) preflightExplicitModel(ref string, needsTools, needsStreaming, ne
 		reasons = append(reasons, "it does not support image inputs")
 	}
 	if contextSize > 0 && dep.ContextWindow > 0 && contextSize > dep.ContextWindow {
-		reasons = append(reasons, fmt.Sprintf(
-			"its context window is too small for this request (estimated %d tokens > %d token window)",
-			contextSize,
-			dep.ContextWindow,
-		))
+		reasons = append(reasons, contextWindowReason(dep, contextSize))
 	}
 	if len(reasons) > 0 {
 		return "", &IncompatibleModelError{
@@ -150,9 +146,33 @@ func noEligibleImageRoutingError(cat *models.Catalog, decision *router.Decision)
 		Suggestions: imageCapableDeploymentSuggestions(cat, 5),
 	}
 	if imageRoutingLimitedByContext(decision) {
-		err.Hint = "the available image-capable routed deployments are too small for the current prompt; try a shorter request or use a larger explicit vision deployment"
+		err.Hint = imageRoutingContextHint(cat, decision)
 	}
 	return err
+}
+
+func contextWindowReason(dep models.Deployment, contextSize int) string {
+	if dep.LoadedContextWindow > 0 && dep.MaxContextWindow > dep.LoadedContextWindow {
+		if contextSize <= dep.MaxContextWindow {
+			return fmt.Sprintf(
+				"its currently loaded context window is too small for this request (estimated %d tokens > %d loaded token window; runner advertises max %d)",
+				contextSize,
+				dep.LoadedContextWindow,
+				dep.MaxContextWindow,
+			)
+		}
+		return fmt.Sprintf(
+			"its context window is too small for this request (estimated %d tokens > %d max token window; %d currently loaded)",
+			contextSize,
+			dep.MaxContextWindow,
+			dep.LoadedContextWindow,
+		)
+	}
+	return fmt.Sprintf(
+		"its context window is too small for this request (estimated %d tokens > %d token window)",
+		contextSize,
+		dep.ContextWindow,
+	)
 }
 
 func imageCapableDeploymentSuggestions(cat *models.Catalog, limit int) []string {
@@ -217,4 +237,42 @@ func imageRoutingLimitedByContext(decision *router.Decision) bool {
 		}
 	}
 	return sawImageCandidate
+}
+
+func imageRoutingContextHint(cat *models.Catalog, decision *router.Decision) string {
+	base := "the available image-capable routed deployments are too small for the current prompt; try a shorter request or use a larger explicit vision deployment"
+	if !imageRoutingLimitedByLoadedWindow(cat, decision) {
+		return base
+	}
+	return base + "; at least one vision deployment advertises a larger max window than is currently loaded on the runner"
+}
+
+func imageRoutingLimitedByLoadedWindow(cat *models.Catalog, decision *router.Decision) bool {
+	if cat == nil || decision == nil || len(decision.RejectedModels) == 0 {
+		return false
+	}
+	deployments := make(map[string]models.Deployment, len(cat.Deployments))
+	for _, dep := range cat.Deployments {
+		deployments[dep.ID] = dep
+	}
+	for id, reasons := range decision.RejectedModels {
+		hasContextRejection := false
+		for _, reason := range reasons {
+			if strings.Contains(reason, "context window too small") {
+				hasContextRejection = true
+				break
+			}
+		}
+		if !hasContextRejection {
+			continue
+		}
+		dep, ok := deployments[id]
+		if !ok || !dep.SupportsImages {
+			continue
+		}
+		if dep.LoadedContextWindow > 0 && dep.MaxContextWindow > dep.LoadedContextWindow {
+			return true
+		}
+	}
+	return false
 }
