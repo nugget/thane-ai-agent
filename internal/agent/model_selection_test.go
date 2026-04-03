@@ -132,3 +132,44 @@ func TestRun_ExplicitModelRejectsAmbiguousBareReference(t *testing.T) {
 		t.Fatalf("llm calls = %d, want 0 when preflight rejects", len(mock.calls))
 	}
 }
+
+func TestRun_ExplicitModelRejectsImageIncompatibleDeployment(t *testing.T) {
+	mock := &mockLLM{}
+	loop := buildTestLoop(mock, nil)
+	loop.UseModelRegistry(testModelRegistryFromConfig(t, &config.Config{
+		Models: config.ModelsConfig{
+			Default: "noimage",
+			Resources: map[string]config.ModelServerConfig{
+				"edge": {URL: "http://edge.example", Provider: "custom"},
+			},
+			Available: []config.ModelConfig{
+				{
+					Name:          "noimage",
+					Resource:      "edge",
+					SupportsTools: true,
+					ContextWindow: 8192,
+				},
+			},
+		},
+	}))
+
+	_, err := loop.Run(context.Background(), &Request{
+		Model: "noimage",
+		Messages: []Message{{
+			Role:    "user",
+			Content: "describe the image",
+			Images:  []llm.ImageContent{{Data: "Zm9v", MediaType: "image/png"}},
+		}},
+	}, nil)
+
+	var incompatible *IncompatibleModelError
+	if !errors.As(err, &incompatible) {
+		t.Fatalf("Run error = %T, want *IncompatibleModelError", err)
+	}
+	if !strings.Contains(err.Error(), "does not support image inputs") {
+		t.Fatalf("error = %q, want image-input detail", err)
+	}
+	if len(mock.calls) != 0 {
+		t.Fatalf("llm calls = %d, want 0 when preflight rejects", len(mock.calls))
+	}
+}

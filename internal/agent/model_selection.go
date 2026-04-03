@@ -77,3 +77,12 @@ func (l *Loop) preflightExplicitModel(ref string, needsTools, needsStreaming, ne
 	}
 	return dep.ID, nil
 }
+
+func messagesNeedImages(msgs []Message) bool {
+	for _, msg := range msgs {
+		if len(msg.Images) > 0 {
+			return true
+		}
+	}
+	return false
+}

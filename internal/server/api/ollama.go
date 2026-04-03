@@ -172,6 +172,7 @@ func handleOllamaChatShared(w http.ResponseWriter, r *http.Request, loop *agent.
 		messages[i] = agent.Message{
 			Role:    m.Role,
 			Content: m.Content,
+			Images:  parseOllamaImages(m.Images),
 		}
 	}
 

@@ -462,9 +462,9 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 
 // ChatCompletionRequest is the OpenAI-compatible request format.
 type ChatCompletionRequest struct {
-	Model    string          `json:"model"`
-	Messages []agent.Message `json:"messages"`
-	Stream   bool            `json:"stream,omitempty"`
+	Model    string                         `json:"model"`
+	Messages []chatCompletionRequestMessage `json:"messages"`
+	Stream   bool                           `json:"stream,omitempty"`
 }
 
 // ChatCompletionResponse is the OpenAI-compatible response format.
@@ -501,6 +501,12 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	log := s.logger.With("subsystem", logging.SubsystemAPI)
 	ctx := logging.WithLogger(r.Context(), log)
 
+	messages, err := req.AgentMessages()
+	if err != nil {
+		s.errorResponse(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
 	hints := map[string]string{
 		"channel": "api", // Native OpenAI-compatible API
 	}
@@ -511,7 +517,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	model, hints, systemPrompt := normalizeModelSelection(req.Model, hints, premiumQualityFloor(s.router), openClawCfg, log)
 
 	agentReq := &agent.Request{
-		Messages:     req.Messages,
+		Messages:     messages,
 		Model:        model,
 		Hints:        hints,
 		SystemPrompt: systemPrompt,

@@ -36,8 +36,9 @@ import (
 
 // Message represents a chat message.
 type Message struct {
-	Role    string `json:"role"` // system, user, assistant
-	Content string `json:"content"`
+	Role    string             `json:"role"` // system, user, assistant
+	Content string             `json:"content"`
+	Images  []llm.ImageContent `json:"-"`
 }
 
 // Request represents an incoming agent request.
@@ -1151,6 +1152,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		llmMessages = append(llmMessages, llm.Message{
 			Role:    m.Role,
 			Content: m.Content,
+			Images:  append([]llm.ImageContent(nil), m.Images...),
 		})
 	}
 
@@ -1184,6 +1186,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	}
 	needsTools := len(visibleTools.List()) > 0
 	needsStreaming := stream != nil
+	needsImages := messagesNeedImages(req.Messages)
 
 	// Select model via router
 	model := req.Model
@@ -1212,6 +1215,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 				ContextSize:    contextSize,
 				NeedsTools:     needsTools,
 				NeedsStreaming: needsStreaming,
+				NeedsImages:    needsImages,
 				ToolCount:      len(visibleTools.List()),
 				Priority:       router.PriorityInteractive,
 				Hints:          req.Hints,
@@ -1224,7 +1228,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			log.Debug("model selected as default (no router)", "model", model)
 		}
 	} else {
-		resolvedModel, err := l.preflightExplicitModel(model, needsTools, needsStreaming, false)
+		resolvedModel, err := l.preflightExplicitModel(model, needsTools, needsStreaming, needsImages)
 		if err != nil {
 			return nil, err
 		}
