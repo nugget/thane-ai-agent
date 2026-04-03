@@ -72,8 +72,11 @@ type Decision struct {
 	Scores         map[string]int `json:"scores,omitempty"`
 
 	// Outcome
-	ModelSelected string `json:"model_selected"`
-	Reasoning     string `json:"reasoning"`
+	ModelSelected         string `json:"model_selected"`
+	UpstreamModelSelected string `json:"upstream_model_selected,omitempty"`
+	ProviderSelected      string `json:"provider_selected,omitempty"`
+	ResourceSelected      string `json:"resource_selected,omitempty"`
+	Reasoning             string `json:"reasoning"`
 
 	// Post-execution (filled in later)
 	LatencyMs  int64 `json:"latency_ms,omitempty"`
@@ -139,10 +142,28 @@ type Router struct {
 
 // Stats tracks routing statistics.
 type Stats struct {
-	TotalRequests    int64            `json:"total_requests"`
-	ModelCounts      map[string]int64 `json:"model_counts"`
-	AvgLatencyMs     map[string]int64 `json:"avg_latency_ms"`
-	ComplexityCounts map[string]int64 `json:"complexity_counts"`
+	TotalRequests    int64                      `json:"total_requests"`
+	ModelCounts      map[string]int64           `json:"model_counts"`
+	AvgLatencyMs     map[string]int64           `json:"avg_latency_ms"`
+	ComplexityCounts map[string]int64           `json:"complexity_counts"`
+	SuccessCount     int64                      `json:"success_count"`
+	FailureCount     int64                      `json:"failure_count"`
+	ProviderCounts   map[string]int64           `json:"provider_counts,omitempty"`
+	ResourceCounts   map[string]int64           `json:"resource_counts,omitempty"`
+	DeploymentStats  map[string]DeploymentStats `json:"deployment_stats,omitempty"`
+}
+
+// DeploymentStats tracks routing and outcome state for one concrete
+// deployment/route target.
+type DeploymentStats struct {
+	Provider      string `json:"provider"`
+	Resource      string `json:"resource,omitempty"`
+	UpstreamModel string `json:"upstream_model,omitempty"`
+	Requests      int64  `json:"requests"`
+	Successes     int64  `json:"successes"`
+	Failures      int64  `json:"failures"`
+	AvgLatencyMs  int64  `json:"avg_latency_ms,omitempty"`
+	AvgTokensUsed int64  `json:"avg_tokens_used,omitempty"`
 }
 
 // NewRouter creates a router with the given configuration.
@@ -158,6 +179,9 @@ func NewRouter(logger *slog.Logger, config Config) *Router {
 			ModelCounts:      make(map[string]int64),
 			AvgLatencyMs:     make(map[string]int64),
 			ComplexityCounts: make(map[string]int64),
+			ProviderCounts:   make(map[string]int64),
+			ResourceCounts:   make(map[string]int64),
+			DeploymentStats:  make(map[string]DeploymentStats),
 		},
 	}
 }
@@ -215,6 +239,7 @@ func (r *Router) Route(ctx context.Context, req Request) (string, *Decision) {
 	// Evaluate rules and select model
 	model := r.selectModel(req, decision)
 	decision.ModelSelected = model
+	r.populateSelectionMetadata(decision, model)
 
 	// Log the decision
 	r.recordDecision(*decision)
@@ -530,7 +555,19 @@ func (r *Router) RecordOutcome(requestID string, latencyMs int64, tokensUsed int
 
 			// Update stats
 			model := r.auditLog[i].ModelSelected
-			r.stats.AvgLatencyMs[model] = (r.stats.AvgLatencyMs[model] + latencyMs) / 2
+			meta := r.stats.DeploymentStats[model]
+			if success {
+				r.stats.SuccessCount++
+				meta.Successes++
+			} else {
+				r.stats.FailureCount++
+				meta.Failures++
+			}
+			outcomes := meta.Successes + meta.Failures
+			r.stats.AvgLatencyMs[model] = weightedAverage(r.stats.AvgLatencyMs[model], outcomes, latencyMs)
+			meta.AvgLatencyMs = weightedAverage(meta.AvgLatencyMs, outcomes, latencyMs)
+			meta.AvgTokensUsed = weightedAverage(meta.AvgTokensUsed, outcomes, int64(tokensUsed))
+			r.stats.DeploymentStats[model] = meta
 			break
 		}
 	}
@@ -552,6 +589,18 @@ func (r *Router) recordDecision(d Decision) {
 	r.stats.TotalRequests++
 	r.stats.ModelCounts[d.ModelSelected]++
 	r.stats.ComplexityCounts[d.Complexity.String()]++
+	if d.ProviderSelected != "" {
+		r.stats.ProviderCounts[d.ProviderSelected]++
+	}
+	if d.ResourceSelected != "" {
+		r.stats.ResourceCounts[d.ResourceSelected]++
+	}
+	meta := r.stats.DeploymentStats[d.ModelSelected]
+	meta.Provider = d.ProviderSelected
+	meta.Resource = d.ResourceSelected
+	meta.UpstreamModel = d.UpstreamModelSelected
+	meta.Requests++
+	r.stats.DeploymentStats[d.ModelSelected] = meta
 }
 
 // GetAuditLog returns recent routing decisions.
@@ -574,7 +623,17 @@ func (r *Router) GetAuditLog(limit int) []Decision {
 func (r *Router) GetStats() Stats {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return r.stats
+	return Stats{
+		TotalRequests:    r.stats.TotalRequests,
+		ModelCounts:      cloneInt64Map(r.stats.ModelCounts),
+		AvgLatencyMs:     cloneInt64Map(r.stats.AvgLatencyMs),
+		ComplexityCounts: cloneInt64Map(r.stats.ComplexityCounts),
+		SuccessCount:     r.stats.SuccessCount,
+		FailureCount:     r.stats.FailureCount,
+		ProviderCounts:   cloneInt64Map(r.stats.ProviderCounts),
+		ResourceCounts:   cloneInt64Map(r.stats.ResourceCounts),
+		DeploymentStats:  cloneDeploymentStatsMap(r.stats.DeploymentStats),
+	}
 }
 
 // GetModels returns a copy of the configured model list. The returned
@@ -612,4 +671,49 @@ func priorityString(p Priority) string {
 		return "interactive"
 	}
 	return "background"
+}
+
+func (r *Router) populateSelectionMetadata(decision *Decision, modelName string) {
+	if decision == nil {
+		return
+	}
+	for _, m := range r.config.Models {
+		if m.Name != modelName {
+			continue
+		}
+		decision.UpstreamModelSelected = m.UpstreamModel
+		decision.ProviderSelected = m.Provider
+		decision.ResourceSelected = m.ResourceID
+		return
+	}
+}
+
+func weightedAverage(currentAvg, samplesAfterUpdate, next int64) int64 {
+	if samplesAfterUpdate <= 1 {
+		return next
+	}
+	previousSamples := samplesAfterUpdate - 1
+	return ((currentAvg * previousSamples) + next) / samplesAfterUpdate
+}
+
+func cloneInt64Map(in map[string]int64) map[string]int64 {
+	if len(in) == 0 {
+		return map[string]int64{}
+	}
+	out := make(map[string]int64, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
+func cloneDeploymentStatsMap(in map[string]DeploymentStats) map[string]DeploymentStats {
+	if len(in) == 0 {
+		return map[string]DeploymentStats{}
+	}
+	out := make(map[string]DeploymentStats, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
 }

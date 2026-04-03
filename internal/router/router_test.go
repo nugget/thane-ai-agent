@@ -344,3 +344,106 @@ func TestRoute_PreferSpeedWithQualityFloor(t *testing.T) {
 			fastScore, slowScore)
 	}
 }
+
+func TestRouteAndStatsTrackDeploymentMetadata(t *testing.T) {
+	t.Parallel()
+
+	r := NewRouter(slog.Default(), Config{
+		DefaultModel: "edge/qwen3:8b",
+		Models: []Model{
+			{
+				Name:          "edge/qwen3:8b",
+				UpstreamModel: "qwen3:8b",
+				Provider:      "ollama",
+				ResourceID:    "edge",
+				Server:        "edge",
+				SupportsTools: true,
+				ContextWindow: 32768,
+				Speed:         8,
+				Quality:       6,
+				CostTier:      0,
+			},
+			{
+				Name:          "cloud/claude-sonnet",
+				UpstreamModel: "claude-sonnet-4-20250514",
+				Provider:      "anthropic",
+				ResourceID:    "anthropic",
+				Server:        "anthropic",
+				SupportsTools: true,
+				ContextWindow: 200000,
+				Speed:         6,
+				Quality:       10,
+				CostTier:      3,
+			},
+		},
+		MaxAuditLog: 10,
+	})
+
+	model, decision := r.Route(context.Background(), Request{
+		Query:      "check the state of the back gate",
+		NeedsTools: true,
+		ToolCount:  2,
+		Priority:   PriorityInteractive,
+		Hints: map[string]string{
+			HintLocalOnly: "true",
+		},
+	})
+
+	if model != "edge/qwen3:8b" {
+		t.Fatalf("Route() selected %q, want %q", model, "edge/qwen3:8b")
+	}
+	if decision.ModelSelected != "edge/qwen3:8b" {
+		t.Fatalf("ModelSelected = %q, want %q", decision.ModelSelected, "edge/qwen3:8b")
+	}
+	if decision.UpstreamModelSelected != "qwen3:8b" {
+		t.Fatalf("UpstreamModelSelected = %q, want %q", decision.UpstreamModelSelected, "qwen3:8b")
+	}
+	if decision.ProviderSelected != "ollama" {
+		t.Fatalf("ProviderSelected = %q, want %q", decision.ProviderSelected, "ollama")
+	}
+	if decision.ResourceSelected != "edge" {
+		t.Fatalf("ResourceSelected = %q, want %q", decision.ResourceSelected, "edge")
+	}
+
+	r.RecordOutcome(decision.RequestID, 120, 600, true)
+
+	stats := r.GetStats()
+	if stats.TotalRequests != 1 {
+		t.Fatalf("TotalRequests = %d, want 1", stats.TotalRequests)
+	}
+	if stats.SuccessCount != 1 || stats.FailureCount != 0 {
+		t.Fatalf("success/failure = %d/%d, want 1/0", stats.SuccessCount, stats.FailureCount)
+	}
+	if stats.ModelCounts["edge/qwen3:8b"] != 1 {
+		t.Fatalf("ModelCounts[edge/qwen3:8b] = %d, want 1", stats.ModelCounts["edge/qwen3:8b"])
+	}
+	if stats.ProviderCounts["ollama"] != 1 {
+		t.Fatalf("ProviderCounts[ollama] = %d, want 1", stats.ProviderCounts["ollama"])
+	}
+	if stats.ResourceCounts["edge"] != 1 {
+		t.Fatalf("ResourceCounts[edge] = %d, want 1", stats.ResourceCounts["edge"])
+	}
+
+	depStats, ok := stats.DeploymentStats["edge/qwen3:8b"]
+	if !ok {
+		t.Fatal("missing deployment stats for edge/qwen3:8b")
+	}
+	if depStats.Provider != "ollama" {
+		t.Fatalf("DeploymentStats.Provider = %q, want %q", depStats.Provider, "ollama")
+	}
+	if depStats.Resource != "edge" {
+		t.Fatalf("DeploymentStats.Resource = %q, want %q", depStats.Resource, "edge")
+	}
+	if depStats.UpstreamModel != "qwen3:8b" {
+		t.Fatalf("DeploymentStats.UpstreamModel = %q, want %q", depStats.UpstreamModel, "qwen3:8b")
+	}
+	if depStats.Requests != 1 || depStats.Successes != 1 || depStats.Failures != 0 {
+		t.Fatalf("deployment stats = %+v, want requests=1 successes=1 failures=0", depStats)
+	}
+	if depStats.AvgLatencyMs != 120 {
+		t.Fatalf("DeploymentStats.AvgLatencyMs = %d, want 120", depStats.AvgLatencyMs)
+	}
+	if depStats.AvgTokensUsed != 600 {
+		t.Fatalf("DeploymentStats.AvgTokensUsed = %d, want 600", depStats.AvgTokensUsed)
+	}
+}
