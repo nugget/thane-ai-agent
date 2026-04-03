@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -1694,6 +1695,11 @@ func (l *Loop) buildLLMErrorHandler(ctx context.Context, stream llm.StreamCallba
 			return nil, "", err
 		}
 
+		if isUserFixableModelError(err) {
+			iterLog.Info("user-fixable model error, skipping failover", "model", model)
+			return nil, "", err
+		}
+
 		if explicitModelRequested {
 			iterLog.Info("explicit model requested, skipping failover", "model", model)
 			return nil, "", err
@@ -1821,6 +1827,26 @@ func isTimeout(err error) bool {
 	return strings.Contains(msg, "timeout") ||
 		strings.Contains(msg, "overloaded") ||
 		strings.Contains(msg, "529")
+}
+
+func isUserFixableModelError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.TrimSpace(err.Error())
+	if !strings.HasPrefix(msg, "API error ") {
+		return false
+	}
+	rest := strings.TrimPrefix(msg, "API error ")
+	codeField, _, ok := strings.Cut(rest, ":")
+	if !ok {
+		return false
+	}
+	code, parseErr := strconv.Atoi(strings.TrimSpace(codeField))
+	if parseErr != nil {
+		return false
+	}
+	return code >= 400 && code < 500
 }
 
 // buildRecoveryPrompt constructs a minimal message history for the
