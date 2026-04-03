@@ -124,7 +124,7 @@ func RegisterTools(registry *tools.Registry, theLoop *loop.Loop, cfg Config, sta
 				convID, time.Now().UTC().Format(time.RFC3339))
 			fullContent := content + footer
 
-			if store != nil {
+			if hasProvenanceWriter(store) {
 				// Write through provenance store — auto-committed
 				// with SSH signature. Use filepath.Base to normalize
 				// paths like "Thane/metacognitive.md" to a flat layout.

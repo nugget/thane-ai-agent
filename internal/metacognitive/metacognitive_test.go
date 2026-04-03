@@ -255,6 +255,44 @@ func TestAppendIterationLog_NoStateFile(t *testing.T) {
 	}
 }
 
+type panicProvenanceWriter struct{}
+
+func (*panicProvenanceWriter) Read(string) (string, error) {
+	panic("unexpected provenance read")
+}
+
+func (*panicProvenanceWriter) Write(context.Context, string, string, string) error {
+	panic("unexpected provenance write")
+}
+
+func TestAppendIterationLog_TypedNilProvenanceWriterFallsBackToFileIO(t *testing.T) {
+	tmpDir := t.TempDir()
+	statePath := filepath.Join(tmpDir, "metacognitive.md")
+	if err := os.WriteFile(statePath, []byte("## Current Sense\nStill here.\n"), 0o644); err != nil {
+		t.Fatalf("write state: %v", err)
+	}
+
+	var store ProvenanceWriter = (*panicProvenanceWriter)(nil)
+	result := &loop.IterationResult{
+		ConvID:       "metacog-typed-nil",
+		Model:        "llama3:8b",
+		InputTokens:  111,
+		OutputTokens: 22,
+		Elapsed:      2 * time.Second,
+		Sleep:        3 * time.Minute,
+	}
+
+	appendIterationLog(context.Background(), slog.Default(), statePath, store, "metacognitive.md", result)
+
+	data, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatalf("read state: %v", err)
+	}
+	if !strings.Contains(string(data), "conversation=metacog-typed-nil") {
+		t.Error("iteration log should still be appended via direct file I/O")
+	}
+}
+
 // --- pruneIterationLogs tests ---
 
 func TestPruneIterationLogs_NoLogs(t *testing.T) {
@@ -704,6 +742,39 @@ func TestUpdateMetacognitiveState_PrevFile(t *testing.T) {
 	}
 	if string(prevData) != original {
 		t.Errorf(".prev content = %q, want original content", string(prevData))
+	}
+}
+
+func TestUpdateMetacognitiveState_TypedNilProvenanceWriterFallsBackToFileIO(t *testing.T) {
+	cfg := testConfig()
+	workspace := t.TempDir()
+	theLoop := testLoopForTools(t)
+
+	var store ProvenanceWriter = (*panicProvenanceWriter)(nil)
+
+	reg := tools.NewRegistry(nil, nil)
+	RegisterTools(reg, theLoop, cfg, filepath.Join(workspace, cfg.StateFile), store)
+
+	tool := reg.Get("update_metacognitive_state")
+	content := "## Current Sense\nBattery device drift noted. Watching closely and preserving local fallback path."
+
+	result, err := tool.Handler(context.Background(), map[string]any{
+		"content": content,
+	})
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if !strings.Contains(result, "updated") {
+		t.Errorf("result = %q, want local file update confirmation", result)
+	}
+
+	statePath := filepath.Join(workspace, "metacognitive.md")
+	data, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatalf("read state file: %v", err)
+	}
+	if !strings.Contains(string(data), "Battery device drift noted") {
+		t.Error("state file should be written via direct file I/O when provenance writer is typed nil")
 	}
 }
 
