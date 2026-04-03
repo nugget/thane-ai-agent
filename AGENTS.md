@@ -46,6 +46,7 @@ internal/
 
 - **Go 1.24+** required
 - **Conventional commits**: `feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `chore:`
+- **Model-facing changes**: If you are changing tool implementations, tool outputs, tool schemas, tool descriptions, or any context emitted for later model consumption, read [`docs/model-facing-context.md`](docs/model-facing-context.md) and [`docs/model-facing-tools.md`](docs/model-facing-tools.md) first. Apply those conventions while doing the work; do not treat them as a later cleanup pass.
 - **All HTTP clients** must use `httpkit.NewClient()` / `httpkit.NewTransport()` — never construct `http.Client{}` directly
 - **Prefer the standard library**. Third-party module imports are expensive — they add supply chain risk, version churn, and transitive dependencies. If `net/http`, `encoding/json`, `crypto/tls`, or another stdlib package can do the job, use it. Only reach for an external module when the stdlib genuinely can't.
 - **Error handling**: Always drain response bodies (`httpkit.DrainAndClose`), bound error reads (`httpkit.ReadErrorBody`)
