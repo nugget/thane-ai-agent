@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/nugget/thane-ai-agent/internal/models"
+	"github.com/nugget/thane-ai-agent/internal/router"
 )
 
 const estimatedImageContextTokens = 1536
@@ -36,6 +37,7 @@ func (e *IncompatibleModelError) Error() string {
 type NoEligibleModelError struct {
 	Requirement string
 	Suggestions []string
+	Hint        string
 }
 
 func (e *NoEligibleModelError) Error() string {
@@ -43,14 +45,20 @@ func (e *NoEligibleModelError) Error() string {
 	if requirement == "" {
 		requirement = "this request"
 	}
+	base := ""
 	if len(e.Suggestions) == 0 {
-		return fmt.Sprintf("no eligible routed model supports %s; configure an eligible deployment", requirement)
+		base = fmt.Sprintf("no eligible routed model supports %s; configure an eligible deployment", requirement)
+	} else {
+		base = fmt.Sprintf(
+			"no eligible routed model supports %s; use an explicit deployment such as %q or configure one as routable",
+			requirement,
+			e.Suggestions[0],
+		)
 	}
-	return fmt.Sprintf(
-		"no eligible routed model supports %s; use an explicit deployment such as %q or configure one as routable",
-		requirement,
-		e.Suggestions[0],
-	)
+	if hint := strings.TrimSpace(e.Hint); hint != "" {
+		return base + "; " + hint
+	}
+	return base
 }
 
 func (l *Loop) currentModelCatalog() *models.Catalog {
@@ -136,18 +144,26 @@ func roughTokenCount(s string) int {
 	return (len(s) + 3) / 4
 }
 
-func noEligibleImageRoutingError(cat *models.Catalog) error {
-	return &NoEligibleModelError{
+func noEligibleImageRoutingError(cat *models.Catalog, decision *router.Decision) error {
+	err := &NoEligibleModelError{
 		Requirement: "image inputs",
 		Suggestions: imageCapableDeploymentSuggestions(cat, 5),
 	}
+	if imageRoutingLimitedByContext(decision) {
+		err.Hint = "the available image-capable routed deployments are too small for the current prompt; try a shorter request or use a larger explicit vision deployment"
+	}
+	return err
 }
 
 func imageCapableDeploymentSuggestions(cat *models.Catalog, limit int) []string {
 	if cat == nil || limit <= 0 {
 		return nil
 	}
-	out := make([]string, 0, limit)
+	type candidate struct {
+		id            string
+		contextWindow int
+	}
+	candidates := make([]candidate, 0, limit)
 	for _, dep := range cat.Deployments {
 		if !dep.SupportsImages {
 			continue
@@ -155,11 +171,50 @@ func imageCapableDeploymentSuggestions(cat *models.Catalog, limit int) []string 
 		if dep.PolicyState == models.DeploymentPolicyStateInactive {
 			continue
 		}
-		out = append(out, dep.ID)
+		candidates = append(candidates, candidate{id: dep.ID, contextWindow: dep.ContextWindow})
 	}
-	sort.Strings(out)
-	if len(out) > limit {
-		out = out[:limit]
+	sort.Slice(candidates, func(i, j int) bool {
+		if candidates[i].contextWindow != candidates[j].contextWindow {
+			return candidates[i].contextWindow > candidates[j].contextWindow
+		}
+		return candidates[i].id < candidates[j].id
+	})
+
+	if len(candidates) > limit {
+		candidates = candidates[:limit]
+	}
+	out := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		out = append(out, candidate.id)
 	}
 	return out
+}
+
+func imageRoutingLimitedByContext(decision *router.Decision) bool {
+	if decision == nil || len(decision.RejectedModels) == 0 {
+		return false
+	}
+	sawImageCandidate := false
+	for model, reasons := range decision.RejectedModels {
+		hasContextRejection := false
+		hasImageRejection := false
+		for _, reason := range reasons {
+			if strings.Contains(reason, "context window too small") {
+				hasContextRejection = true
+			}
+			if strings.Contains(reason, "missing image support") {
+				hasImageRejection = true
+			}
+		}
+		if hasImageRejection {
+			continue
+		}
+		if model != "" {
+			sawImageCandidate = true
+		}
+		if !hasContextRejection {
+			return false
+		}
+	}
+	return sawImageCandidate
 }

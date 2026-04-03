@@ -234,6 +234,42 @@ func TestEstimateRequestContextTokens_IncludesImages(t *testing.T) {
 	}
 }
 
+func TestNoEligibleImageRoutingError_IncludesContextHint(t *testing.T) {
+	cat, err := models.BuildCatalog(&config.Config{
+		Models: config.ModelsConfig{
+			Default: "qwen3-vl:4b",
+			Resources: map[string]config.ModelServerConfig{
+				"vision": {URL: "http://vision.example", Provider: "ollama"},
+			},
+			Available: []config.ModelConfig{
+				{
+					Name:          "qwen3-vl:4b",
+					Resource:      "vision",
+					SupportsTools: true,
+					ContextWindow: 4096,
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("models.BuildCatalog: %v", err)
+	}
+
+	err = noEligibleImageRoutingError(cat, &router.Decision{
+		RejectedModels: map[string][]string{
+			"vision/qwen3-vl:4b": {"context window too small"},
+		},
+	})
+
+	var noEligible *NoEligibleModelError
+	if !errors.As(err, &noEligible) {
+		t.Fatalf("error = %T, want *NoEligibleModelError", err)
+	}
+	if !strings.Contains(err.Error(), "too small for the current prompt") {
+		t.Fatalf("error = %q, want context-fit hint", err)
+	}
+}
+
 func validTinyPNGBase64ForAgentTest() string {
 	return "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aW3cAAAAASUVORK5CYII="
 }
