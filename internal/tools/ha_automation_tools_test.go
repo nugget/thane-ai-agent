@@ -31,6 +31,7 @@ type fakeHAServer struct {
 	logbook      []map[string]any
 	serviceCalls []string
 	validations  map[string]homeassistant.ConfigValidationResult
+	wsCalls      map[string]int
 }
 
 func newFakeHAServer(t *testing.T) *fakeHAServer {
@@ -42,6 +43,7 @@ func newFakeHAServer(t *testing.T) *fakeHAServer {
 		configs:    make(map[string]map[string]any),
 		categories: make(map[string][]map[string]any),
 		entityByID: make(map[string]map[string]any),
+		wsCalls:    make(map[string]int),
 		validations: map[string]homeassistant.ConfigValidationResult{
 			"triggers":   {Valid: true},
 			"conditions": {Valid: true},
@@ -185,6 +187,9 @@ func (f *fakeHAServer) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 		id, _ := msg["id"].(float64)
 		msgType, _ := msg["type"].(string)
+		f.mu.Lock()
+		f.wsCalls[msgType]++
+		f.mu.Unlock()
 		result, ok := f.wsResult(msgType, msg)
 		if !ok {
 			_ = conn.WriteJSON(map[string]any{
@@ -741,6 +746,54 @@ func TestBuildEntityRegistryUpdateRejectsAmbiguousMetadataNames(t *testing.T) {
 	}
 }
 
+func TestBuildEntityRegistryUpdateRejectsUnknownNameKeys(t *testing.T) {
+	cases := []struct {
+		name     string
+		metadata map[string]any
+		meta     haMetadataMaps
+		wantText string
+	}{
+		{
+			name:     "area_name",
+			metadata: map[string]any{"area_name": "Garage Entry"},
+			meta: haMetadataMaps{
+				areas: map[string]string{"area_garage": "Garage"},
+			},
+			wantText: `area "Garage Entry" was not found`,
+		},
+		{
+			name:     "labels",
+			metadata: map[string]any{"labels": []any{"Critical"}},
+			meta: haMetadataMaps{
+				labels: map[string]string{"label_warning": "Warning"},
+			},
+			wantText: `label "Critical" was not found`,
+		},
+		{
+			name:     "category",
+			metadata: map[string]any{"category": "Door Locks"},
+			meta: haMetadataMaps{
+				categories: map[string]map[string]string{
+					"automation": {"cat_maintenance": "Maintenance"},
+				},
+			},
+			wantText: `automation category "Door Locks" was not found`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := buildEntityRegistryUpdate(tc.metadata, tc.meta)
+			if err == nil {
+				t.Fatal("expected not-found error")
+			}
+			if !strings.Contains(err.Error(), tc.wantText) {
+				t.Fatalf("err = %v, want substring %q", err, tc.wantText)
+			}
+		})
+	}
+}
+
 func TestHAAutomationCreateUpdateDeleteOperationalFlow(t *testing.T) {
 	fake := newFakeHAServer(t)
 	reg := fake.registry(t)
@@ -819,6 +872,96 @@ func TestHAAutomationCreateUpdateDeleteOperationalFlow(t *testing.T) {
 	}
 	if _, ok := fake.configs["battery-watch"]; ok {
 		t.Fatal("expected automation config to be deleted")
+	}
+}
+
+func TestHAAutomationCreateSkipsRegistryLookupsWhenMetadataNeedsNoNormalization(t *testing.T) {
+	fake := newFakeHAServer(t)
+	reg := fake.registry(t)
+
+	_, err := reg.Execute(context.Background(), "ha_automation_create", `{
+		"config": {
+			"alias": "Battery Watch",
+			"triggers": [{"trigger":"numeric_state","entity_id":"sensor.frontdoor_battery_level","below":30}],
+			"actions": [{"action":"mqtt.publish","data":{"topic":"thane/test"}}]
+		},
+		"metadata": {
+			"entity_id": "automation.battery_watch_custom",
+			"hidden": true,
+			"raw_update": {"icon":"mdi:battery-alert"}
+		},
+		"validate_only": true
+	}`)
+	if err != nil {
+		t.Fatalf("ha_automation_create validate_only failed: %v", err)
+	}
+
+	if got := fake.wsCalls["config/area_registry/list"]; got != 0 {
+		t.Fatalf("area registry calls = %d, want 0", got)
+	}
+	if got := fake.wsCalls["config/label_registry/list"]; got != 0 {
+		t.Fatalf("label registry calls = %d, want 0", got)
+	}
+	if got := fake.wsCalls["config/category_registry/list"]; got != 0 {
+		t.Fatalf("category registry calls = %d, want 0", got)
+	}
+}
+
+func TestHAAutomationUpdateSkipsRegistryLookupsWhenMetadataNeedsNoNormalization(t *testing.T) {
+	fake := newFakeHAServer(t)
+	fake.states = []homeassistant.State{
+		{
+			EntityID: "automation.battery_watch",
+			State:    "on",
+			Attributes: map[string]any{
+				"id":            "battery-watch",
+				"friendly_name": "Battery Watch",
+			},
+		},
+	}
+	fake.configs["battery-watch"] = map[string]any{
+		"alias": "Battery Watch",
+		"triggers": []any{
+			map[string]any{"trigger": "numeric_state", "entity_id": "sensor.frontdoor_battery_level", "below": 30},
+		},
+		"actions": []any{
+			map[string]any{"action": "mqtt.publish", "data": map[string]any{"topic": "thane/test"}},
+		},
+	}
+	entry := map[string]any{
+		"id":         "battery_watch_row",
+		"entity_id":  "automation.battery_watch",
+		"name":       "Battery Watch",
+		"labels":     []string{},
+		"aliases":    []string{},
+		"categories": map[string]any{},
+	}
+	fake.entityRows = []map[string]any{entry}
+	fake.entityByID["automation.battery_watch"] = entry
+
+	reg := fake.registry(t)
+
+	_, err := reg.Execute(context.Background(), "ha_automation_update", `{
+		"id": "battery-watch",
+		"metadata": {
+			"entity_id": "automation.battery_watch_custom",
+			"hidden": false,
+			"raw_update": {"icon":"mdi:battery"}
+		},
+		"validate_only": true
+	}`)
+	if err != nil {
+		t.Fatalf("ha_automation_update validate_only failed: %v", err)
+	}
+
+	if got := fake.wsCalls["config/area_registry/list"]; got != 0 {
+		t.Fatalf("area registry calls = %d, want 0", got)
+	}
+	if got := fake.wsCalls["config/label_registry/list"]; got != 0 {
+		t.Fatalf("label registry calls = %d, want 0", got)
+	}
+	if got := fake.wsCalls["config/category_registry/list"]; got != 0 {
+		t.Fatalf("category registry calls = %d, want 0", got)
 	}
 }
 

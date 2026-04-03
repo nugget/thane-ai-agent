@@ -146,6 +146,12 @@ type haMetadataMaps struct {
 	categories map[string]map[string]string
 }
 
+type haMetadataNeeds struct {
+	areas      bool
+	labels     bool
+	categories map[string]bool
+}
+
 func (r *Registry) registerHAAutomationTools() {
 	if r.ha == nil || !r.ha.HasWSClient() {
 		return
@@ -755,15 +761,11 @@ func (r *Registry) handleHAAutomationCreate(ctx context.Context, args map[string
 		return "", err
 	}
 
-	var meta haMetadataMaps
 	metadata := mapArg(args, "metadata")
-	if metadata != nil {
-		meta, err = r.loadMetadataMaps(ctx, "automation")
-		if err != nil {
-			return "", err
-		}
+	meta, err := r.loadMetadataMaps(ctx, automationMetadataNeeds(metadata))
+	if err != nil {
+		return "", err
 	}
-
 	metadataUpdate, err := buildEntityRegistryUpdate(metadata, meta)
 	if err != nil {
 		return "", err
@@ -833,15 +835,11 @@ func (r *Registry) handleHAAutomationUpdate(ctx context.Context, args map[string
 	}
 
 	configPatch := mapArg(args, "config")
-	var meta haMetadataMaps
 	metadata := mapArg(args, "metadata")
-	if metadata != nil {
-		meta, err = r.loadMetadataMaps(ctx, "automation")
-		if err != nil {
-			return "", err
-		}
+	meta, err := r.loadMetadataMaps(ctx, automationMetadataNeeds(metadata))
+	if err != nil {
+		return "", err
 	}
-
 	metadataUpdate, err := buildEntityRegistryUpdate(metadata, meta)
 	if err != nil {
 		return "", err
@@ -949,7 +947,7 @@ func (r *Registry) listAutomations(ctx context.Context, includeConfig bool) ([]h
 			entryByEntity[entry.EntityID] = entry
 		}
 	}
-	meta, err := r.loadMetadataMaps(ctx, "automation")
+	meta, err := r.loadMetadataMaps(ctx, allAutomationMetadataNeeds())
 	if err != nil {
 		return nil, err
 	}
@@ -1144,7 +1142,7 @@ func (r *Registry) resolveAutomation(ctx context.Context, idArg, entityArg strin
 }
 
 func (r *Registry) buildAutomationView(ctx context.Context, resolved resolvedAutomation, includeConfig bool) (haAutomationView, error) {
-	meta, err := r.loadMetadataMaps(ctx, "automation")
+	meta, err := r.loadMetadataMaps(ctx, allAutomationMetadataNeeds())
 	if err != nil {
 		return haAutomationView{}, err
 	}
@@ -1249,36 +1247,50 @@ func (r *Registry) nextAvailableAutomationID(ctx context.Context, base string) (
 	return "", fmt.Errorf("could not find available automation id for base %q", base)
 }
 
-func (r *Registry) loadMetadataMaps(ctx context.Context, categoryScopes ...string) (haMetadataMaps, error) {
-	areas, err := r.ha.GetAreas(ctx)
-	if err != nil {
-		return haMetadataMaps{}, fmt.Errorf("get areas: %w", err)
+func (r *Registry) loadMetadataMaps(ctx context.Context, needs haMetadataNeeds) (haMetadataMaps, error) {
+	meta := haMetadataMaps{
+		areas:      map[string]string{},
+		labels:     map[string]string{},
+		categories: map[string]map[string]string{},
 	}
-	labels, err := r.ha.GetLabelRegistry(ctx)
-	if err != nil {
-		return haMetadataMaps{}, fmt.Errorf("get labels: %w", err)
+	if !needs.areas && !needs.labels && len(needs.categories) == 0 {
+		return meta, nil
 	}
-
-	categoryMaps := make(map[string]map[string]string, len(categoryScopes))
-	for _, scope := range categoryScopes {
-		scope = strings.TrimSpace(scope)
-		if scope == "" {
-			continue
-		}
-		categories, err := r.ha.GetCategoryRegistry(ctx, scope)
+	if needs.areas {
+		areas, err := r.ha.GetAreas(ctx)
 		if err != nil {
-			if isHACategoryRegistryUnsupported(err) {
-				continue
-			}
-			return haMetadataMaps{}, fmt.Errorf("get %s categories: %w", scope, err)
+			return haMetadataMaps{}, fmt.Errorf("get areas: %w", err)
 		}
-		categoryMaps[scope] = buildCategoryNameMap(categories)
+		meta.areas = buildAreaNameMap(areas)
 	}
-	return haMetadataMaps{
-		areas:      buildAreaNameMap(areas),
-		labels:     buildLabelNameMap(labels),
-		categories: categoryMaps,
-	}, nil
+	if needs.labels {
+		labels, err := r.ha.GetLabelRegistry(ctx)
+		if err != nil {
+			return haMetadataMaps{}, fmt.Errorf("get labels: %w", err)
+		}
+		meta.labels = buildLabelNameMap(labels)
+	}
+	if len(needs.categories) > 0 {
+		scopes := make([]string, 0, len(needs.categories))
+		for scope := range needs.categories {
+			scope = strings.TrimSpace(scope)
+			if scope != "" {
+				scopes = append(scopes, scope)
+			}
+		}
+		sort.Strings(scopes)
+		for _, scope := range scopes {
+			categories, err := r.ha.GetCategoryRegistry(ctx, scope)
+			if err != nil {
+				if isHACategoryRegistryUnsupported(err) {
+					continue
+				}
+				return haMetadataMaps{}, fmt.Errorf("get %s categories: %w", scope, err)
+			}
+			meta.categories[scope] = buildCategoryNameMap(categories)
+		}
+	}
+	return meta, nil
 }
 
 func buildAutomationViewFromMaps(resolved resolvedAutomation, includeConfig bool, meta haMetadataMaps) haAutomationView {
@@ -1571,7 +1583,7 @@ func buildEntityRegistryUpdate(metadata map[string]any, meta haMetadataMaps) (ma
 	return update, nil
 }
 
-func resolveRegistryMetadataValue(raw any, namesByID map[string]string, kind string) (any, error) {
+func resolveRegistryMetadataValue(raw any, namesByID map[string]string, kind string, allowUnknownAsID bool) (any, error) {
 	if raw == nil {
 		return nil, nil
 	}
@@ -1587,6 +1599,9 @@ func resolveRegistryMetadataValue(raw any, namesByID map[string]string, kind str
 	matches := lookupRegistryIDsByName(value, namesByID)
 	switch len(matches) {
 	case 0:
+		if !allowUnknownAsID {
+			return nil, fmt.Errorf("%s %q was not found", kind, value)
+		}
 		return value, nil
 	case 1:
 		return matches[0], nil
@@ -1600,11 +1615,11 @@ func automationAreaUpdateValue(metadata map[string]any, namesByID map[string]str
 		return nil, false, nil
 	}
 	if value, ok := metadata["area_id"]; ok {
-		resolved, err := resolveRegistryMetadataValue(value, namesByID, "area")
+		resolved, err := resolveRegistryMetadataValue(value, namesByID, "area", true)
 		return resolved, true, err
 	}
 	if value, ok := metadata["area_name"]; ok {
-		resolved, err := resolveRegistryMetadataValue(value, namesByID, "area")
+		resolved, err := resolveRegistryMetadataValue(value, namesByID, "area", false)
 		return resolved, true, err
 	}
 	return nil, false, nil
@@ -1616,11 +1631,11 @@ func automationLabelUpdateValues(metadata map[string]any, namesByID map[string]s
 	}
 
 	if raw, ok := metadata["label_ids"]; ok {
-		values, err := normalizeRegistryStringList(metadataStringList(raw), namesByID, "label")
+		values, err := normalizeRegistryStringList(metadataStringList(raw), namesByID, "label", true)
 		return values, true, err
 	}
 	if raw, ok := metadata["labels"]; ok {
-		values, err := normalizeRegistryStringList(metadataStringList(raw), namesByID, "label")
+		values, err := normalizeRegistryStringList(metadataStringList(raw), namesByID, "label", false)
 		return values, true, err
 	}
 	return nil, false, nil
@@ -1631,25 +1646,25 @@ func automationCategoryUpdateValue(metadata map[string]any, namesByID map[string
 		return nil, false, nil
 	}
 	if value, ok := metadata["category_id"]; ok {
-		resolved, err := resolveRegistryMetadataValue(value, namesByID, "automation category")
+		resolved, err := resolveRegistryMetadataValue(value, namesByID, "automation category", true)
 		return resolved, true, err
 	}
 	if value, ok := mapValue(metadata, "category_ids", "automation"); ok {
-		resolved, err := resolveRegistryMetadataValue(value, namesByID, "automation category")
+		resolved, err := resolveRegistryMetadataValue(value, namesByID, "automation category", true)
 		return resolved, true, err
 	}
 	if value, ok := metadata["category"]; ok {
-		resolved, err := resolveRegistryMetadataValue(value, namesByID, "automation category")
+		resolved, err := resolveRegistryMetadataValue(value, namesByID, "automation category", false)
 		return resolved, true, err
 	}
 	if value, ok := mapValue(metadata, "categories", "automation"); ok {
-		resolved, err := resolveRegistryMetadataValue(value, namesByID, "automation category")
+		resolved, err := resolveRegistryMetadataValue(value, namesByID, "automation category", false)
 		return resolved, true, err
 	}
 	return nil, false, nil
 }
 
-func normalizeRegistryStringList(values []string, namesByID map[string]string, kind string) ([]string, error) {
+func normalizeRegistryStringList(values []string, namesByID map[string]string, kind string, allowUnknownAsID bool) ([]string, error) {
 	if len(values) == 0 {
 		return nil, nil
 	}
@@ -1657,7 +1672,7 @@ func normalizeRegistryStringList(values []string, namesByID map[string]string, k
 	out := make([]string, 0, len(values))
 	seen := make(map[string]bool, len(values))
 	for _, value := range values {
-		resolved, err := resolveRegistryMetadataValue(value, namesByID, kind)
+		resolved, err := resolveRegistryMetadataValue(value, namesByID, kind, allowUnknownAsID)
 		if err != nil {
 			return nil, err
 		}
@@ -1712,6 +1727,50 @@ func lookupRegistryIDsByName(name string, namesByID map[string]string) []string 
 	}
 	sort.Strings(matches)
 	return matches
+}
+
+func automationMetadataNeeds(metadata map[string]any) haMetadataNeeds {
+	needs := haMetadataNeeds{
+		categories: map[string]bool{},
+	}
+	if metadata == nil {
+		return needs
+	}
+	if _, ok := metadata["area_id"]; ok {
+		needs.areas = true
+	}
+	if _, ok := metadata["area_name"]; ok {
+		needs.areas = true
+	}
+	if _, ok := metadata["label_ids"]; ok {
+		needs.labels = true
+	}
+	if _, ok := metadata["labels"]; ok {
+		needs.labels = true
+	}
+	if _, ok := metadata["category_id"]; ok {
+		needs.categories["automation"] = true
+	}
+	if _, ok := metadata["category"]; ok {
+		needs.categories["automation"] = true
+	}
+	if _, ok := metadata["category_ids"]; ok {
+		needs.categories["automation"] = true
+	}
+	if _, ok := metadata["categories"]; ok {
+		needs.categories["automation"] = true
+	}
+	return needs
+}
+
+func allAutomationMetadataNeeds() haMetadataNeeds {
+	return haMetadataNeeds{
+		areas:  true,
+		labels: true,
+		categories: map[string]bool{
+			"automation": true,
+		},
+	}
 }
 
 func mergeAutomationConfig(base, patch map[string]any) map[string]any {
