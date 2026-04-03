@@ -84,14 +84,14 @@ func BuildCatalog(cfg *config.Config) (*Catalog, error) {
 	resourceByID := make(map[string]Resource)
 	var resources []Resource
 
-	if len(cfg.Models.Servers) > 0 {
-		names := make([]string, 0, len(cfg.Models.Servers))
-		for name := range cfg.Models.Servers {
+	if len(cfg.Models.Resources) > 0 {
+		names := make([]string, 0, len(cfg.Models.Resources))
+		for name := range cfg.Models.Resources {
 			names = append(names, name)
 		}
 		sort.Strings(names)
 		for _, name := range names {
-			srv := cfg.Models.Servers[name]
+			srv := cfg.Models.Resources[name]
 			provider := srv.Provider
 			if provider == "" {
 				provider = "ollama"
@@ -117,13 +117,13 @@ func BuildCatalog(cfg *config.Config) (*Catalog, error) {
 		}
 	}
 
-	ollamaResourceIDs := make([]string, 0)
+	resourceIDsByProvider := make(map[string][]string)
 	for _, res := range resources {
-		if res.Provider == "ollama" {
-			ollamaResourceIDs = append(ollamaResourceIDs, res.ID)
-		}
+		resourceIDsByProvider[res.Provider] = append(resourceIDsByProvider[res.Provider], res.ID)
 	}
-	sort.Strings(ollamaResourceIDs)
+	for provider := range resourceIDsByProvider {
+		sort.Strings(resourceIDsByProvider[provider])
+	}
 
 	type unresolved struct {
 		ID            string
@@ -154,17 +154,17 @@ func BuildCatalog(cfg *config.Config) (*Catalog, error) {
 			return nil, fmt.Errorf("models.available[%d]: name must not be empty", i)
 		}
 
-		provider := strings.TrimSpace(m.Provider)
+		provider := strings.ToLower(strings.TrimSpace(m.Provider))
 		resourceID := ""
-		server := strings.TrimSpace(m.Server)
+		resourceName := strings.TrimSpace(m.Resource)
 
-		if server != "" {
-			res, ok := resourceByID[server]
+		if resourceName != "" {
+			res, ok := resourceByID[resourceName]
 			if !ok {
-				return nil, fmt.Errorf("models.available[%d] (%s): unknown server %q", i, m.Name, server)
+				return nil, fmt.Errorf("models.available[%d] (%s): unknown resource %q", i, m.Name, resourceName)
 			}
 			if provider != "" && provider != res.Provider {
-				return nil, fmt.Errorf("models.available[%d] (%s): provider %q conflicts with server %q provider %q", i, m.Name, provider, server, res.Provider)
+				return nil, fmt.Errorf("models.available[%d] (%s): provider %q conflicts with resource %q provider %q", i, m.Name, provider, resourceName, res.Provider)
 			}
 			provider = res.Provider
 			resourceID = res.ID
@@ -172,16 +172,17 @@ func BuildCatalog(cfg *config.Config) (*Catalog, error) {
 			if provider == "" {
 				provider = "ollama"
 			}
-			if provider == "ollama" {
+			if provider == "ollama" || provider == "lmstudio" {
+				providerResourceIDs := resourceIDsByProvider[provider]
 				switch {
-				case hasOllamaResource(resourceByID, "default"):
+				case hasProviderResource(resourceByID, "default", provider):
 					resourceID = "default"
-				case len(ollamaResourceIDs) == 1:
-					resourceID = ollamaResourceIDs[0]
-				case len(ollamaResourceIDs) == 0:
-					return nil, fmt.Errorf("models.available[%d] (%s): provider %q requires an ollama resource", i, m.Name, provider)
+				case len(providerResourceIDs) == 1:
+					resourceID = providerResourceIDs[0]
+				case len(providerResourceIDs) == 0:
+					return nil, fmt.Errorf("models.available[%d] (%s): provider %q requires a configured resource", i, m.Name, provider)
 				default:
-					return nil, fmt.Errorf("models.available[%d] (%s): multiple ollama servers are configured; specify server explicitly", i, m.Name)
+					return nil, fmt.Errorf("models.available[%d] (%s): multiple %s resources are configured; specify resource explicitly", i, m.Name, provider)
 				}
 			} else {
 				if _, ok := resourceByID[provider]; !ok {
@@ -197,7 +198,7 @@ func BuildCatalog(cfg *config.Config) (*Catalog, error) {
 			ModelName:     m.Name,
 			Provider:      provider,
 			ResourceID:    resourceID,
-			Server:        server,
+			Server:        resourceName,
 			SupportsTools: m.SupportsTools,
 			ContextWindow: m.ContextWindow,
 			Speed:         m.Speed,
@@ -254,9 +255,9 @@ func BuildCatalog(cfg *config.Config) (*Catalog, error) {
 	return cat, nil
 }
 
-func hasOllamaResource(resourceByID map[string]Resource, id string) bool {
+func hasProviderResource(resourceByID map[string]Resource, id, provider string) bool {
 	res, ok := resourceByID[id]
-	return ok && res.Provider == "ollama"
+	return ok && res.Provider == provider
 }
 
 func deploymentID(modelName, provider, server string, duplicate bool) string {

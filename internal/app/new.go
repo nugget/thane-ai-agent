@@ -18,7 +18,7 @@ import (
 )
 
 // New constructs and initializes a fully wired App from the provided
-// configuration. The llmClient, Ollama resource clients, and model
+// configuration. The llmClient, resource health clients, and model
 // registry/catalog are pre-constructed by
 // the caller (cmd/thane) so that runAsk and runServe can share the
 // same startup normalization path without importing internal/app.
@@ -43,21 +43,22 @@ import (
 //   - [initDelegation] — delegate executor, capability tags, lenses
 //   - [initAwareness]  — context providers, watchlist, person tracker, state watcher
 //   - [initServers]    — API server, checkpointer, MQTT, dashboard, metacognitive
-func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io.Writer, llmClient llm.Client, ollamaClients map[string]*llm.OllamaClient, modelRuntime *models.Runtime) (*App, error) {
+func New(ctx context.Context, cfg *config.Config, logger *slog.Logger, stdout io.Writer, llmClient llm.Client, ollamaClients map[string]*llm.OllamaClient, healthClients map[string]llm.HealthClient, modelRuntime *models.Runtime) (*App, error) {
 	if modelRuntime == nil {
 		return nil, fmt.Errorf("nil model runtime")
 	}
 	modelRegistry := modelRuntime.Registry()
 	modelCatalog := modelRegistry.Catalog()
 	a := &App{
-		cfg:           cfg,
-		logger:        logger,
-		stdout:        stdout,
-		llmClient:     llmClient,
-		ollamaClients: ollamaClients,
-		modelRuntime:  modelRuntime,
-		modelRegistry: modelRegistry,
-		modelCatalog:  modelCatalog,
+		cfg:                   cfg,
+		logger:                logger,
+		stdout:                stdout,
+		llmClient:             llmClient,
+		ollamaClients:         ollamaClients,
+		resourceHealthClients: healthClients,
+		modelRuntime:          modelRuntime,
+		modelRegistry:         modelRegistry,
+		modelCatalog:          modelCatalog,
 	}
 
 	// Augment PATH before any exec.LookPath calls (tool registration,

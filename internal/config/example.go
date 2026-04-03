@@ -56,7 +56,7 @@ func ExampleConfig() *Config {
 		Models: ModelsConfig{
 			Default:    "qwen2.5:72b",
 			LocalFirst: true,
-			Servers: map[string]ModelServerConfig{
+			Resources: map[string]ModelServerConfig{
 				"default": {
 					URL:      "http://your-primary-ollama-server:11434",
 					Provider: "ollama",
@@ -70,7 +70,7 @@ func ExampleConfig() *Config {
 			Available: []ModelConfig{
 				{
 					Name:          "qwen3:4b",
-					Server:        "edge",
+					Resource:      "edge",
 					SupportsTools: true,
 					ContextWindow: 32768,
 					Speed:         9,
@@ -80,7 +80,7 @@ func ExampleConfig() *Config {
 				},
 				{
 					Name:          "qwen2.5:72b",
-					Server:        "default",
+					Resource:      "default",
 					SupportsTools: true,
 					ContextWindow: 131072,
 					Speed:         3,

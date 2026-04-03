@@ -662,14 +662,14 @@ type ModelsConfig struct {
 	Default string `yaml:"default"`
 
 	// OllamaURL is backward-compatible shorthand for a default Ollama
-	// server. It is used when Servers is empty. When Servers is
-	// populated, callers should prefer the normalized server catalog.
+	// resource. It is used when Resources is empty. When Resources is
+	// populated, callers should prefer the normalized resource catalog.
 	OllamaURL string `yaml:"ollama_url"`
 
-	// Servers defines named model provider resources such as Ollama
+	// Resources defines named model provider resources such as Ollama
 	// instances running on different machines. When empty, OllamaURL is
-	// treated as a synthetic server named "default".
-	Servers map[string]ModelServerConfig `yaml:"servers"`
+	// treated as a synthetic resource named "default".
+	Resources map[string]ModelServerConfig `yaml:"resources"`
 
 	// LocalFirst prefers local (cost_tier=0) models over cloud models
 	// when routing decisions are made by the model router.
@@ -691,8 +691,8 @@ type ModelsConfig struct {
 // request.
 type ModelConfig struct {
 	Name          string `yaml:"name"`           // Model identifier (e.g., "claude-opus-4-20250514")
-	Provider      string `yaml:"provider"`       // Provider name: ollama, anthropic, openai. Defaults to ollama when no server is set
-	Server        string `yaml:"server"`         // Named provider resource from models.servers for this deployment
+	Provider      string `yaml:"provider"`       // Provider name: ollama, anthropic, lmstudio. Defaults to ollama when no resource is set
+	Resource      string `yaml:"resource"`       // Named provider resource from models.resources for this deployment
 	SupportsTools bool   `yaml:"supports_tools"` // Whether the model can invoke tool calls
 	ContextWindow int    `yaml:"context_window"` // Maximum context length in tokens
 	Speed         int    `yaml:"speed"`          // Relative speed rating, 1 (slow) to 10 (fast)
@@ -705,24 +705,25 @@ type ModelConfig struct {
 type ModelServerConfig struct {
 	URL      string `yaml:"url"`
 	Provider string `yaml:"provider"` // Default: ollama
+	APIKey   string `yaml:"api_key"`  // Optional bearer/API key for providers that require auth
 }
 
 // PreferredOllamaURL returns the best available Ollama URL for callers
 // that still need one local endpoint outside the routed model catalog.
-// Preference order is: a server named "default", then the first
-// configured Ollama server by name, then the legacy OllamaURL field.
+// Preference order is: a resource named "default", then the first
+// configured Ollama resource by name, then the legacy OllamaURL field.
 func (c ModelsConfig) PreferredOllamaURL() string {
-	if len(c.Servers) > 0 {
-		if srv, ok := c.Servers["default"]; ok && srv.Provider == "ollama" && srv.URL != "" {
+	if len(c.Resources) > 0 {
+		if srv, ok := c.Resources["default"]; ok && srv.Provider == "ollama" && srv.URL != "" {
 			return srv.URL
 		}
-		names := make([]string, 0, len(c.Servers))
-		for name := range c.Servers {
+		names := make([]string, 0, len(c.Resources))
+		for name := range c.Resources {
 			names = append(names, name)
 		}
 		sort.Strings(names)
 		for _, name := range names {
-			srv := c.Servers[name]
+			srv := c.Resources[name]
 			if srv.Provider == "" {
 				srv.Provider = "ollama"
 			}
@@ -1519,14 +1520,15 @@ func (c *Config) applyDefaults() {
 	if c.TalentsDir == "" {
 		c.TalentsDir = "./talents"
 	}
-	if c.Models.OllamaURL == "" && len(c.Models.Servers) == 0 {
+	if c.Models.OllamaURL == "" && len(c.Models.Resources) == 0 {
 		c.Models.OllamaURL = "http://localhost:11434"
 	}
-	for name, srv := range c.Models.Servers {
+	for name, srv := range c.Models.Resources {
+		srv.Provider = strings.ToLower(strings.TrimSpace(srv.Provider))
 		if srv.Provider == "" {
 			srv.Provider = "ollama"
 		}
-		c.Models.Servers[name] = srv
+		c.Models.Resources[name] = srv
 	}
 	if c.OllamaAPI.Port == 0 {
 		c.OllamaAPI.Port = 11434
@@ -1728,7 +1730,7 @@ func (c *Config) applyDefaults() {
 	}
 
 	for i := range c.Models.Available {
-		if c.Models.Available[i].Provider == "" && c.Models.Available[i].Server == "" {
+		if c.Models.Available[i].Provider == "" && c.Models.Available[i].Resource == "" {
 			c.Models.Available[i].Provider = "ollama"
 		}
 	}
@@ -1940,25 +1942,26 @@ func (c *Config) Validate() error {
 }
 
 func (c *Config) validateModels() error {
-	for name, srv := range c.Models.Servers {
+	for name, srv := range c.Models.Resources {
 		if strings.TrimSpace(name) == "" {
-			return fmt.Errorf("models.servers contains an empty server name")
+			return fmt.Errorf("models.resources contains an empty resource name")
 		}
 		if strings.TrimSpace(srv.URL) == "" {
-			return fmt.Errorf("models.servers.%s.url is required", name)
+			return fmt.Errorf("models.resources.%s.url is required", name)
 		}
 	}
 	for i, m := range c.Models.Available {
 		if strings.TrimSpace(m.Name) == "" {
 			return fmt.Errorf("models.available[%d].name must not be empty", i)
 		}
-		if m.Server != "" {
-			srv, ok := c.Models.Servers[m.Server]
+		provider := strings.ToLower(strings.TrimSpace(m.Provider))
+		if m.Resource != "" {
+			srv, ok := c.Models.Resources[m.Resource]
 			if !ok {
-				return fmt.Errorf("models.available[%d] (%s): unknown server %q", i, m.Name, m.Server)
+				return fmt.Errorf("models.available[%d] (%s): unknown resource %q", i, m.Name, m.Resource)
 			}
-			if m.Provider != "" && m.Provider != srv.Provider {
-				return fmt.Errorf("models.available[%d] (%s): provider %q conflicts with server %q provider %q", i, m.Name, m.Provider, m.Server, srv.Provider)
+			if provider != "" && provider != srv.Provider {
+				return fmt.Errorf("models.available[%d] (%s): provider %q conflicts with resource %q provider %q", i, m.Name, m.Provider, m.Resource, srv.Provider)
 			}
 		}
 		switch m.MinComplexity {
@@ -2111,7 +2114,7 @@ func (c *Config) ContextWindowForModel(name string, defaultSize int) int {
 		if m.Name == name {
 			return m.ContextWindow
 		}
-		if m.Server != "" && m.Server+"/"+m.Name == name {
+		if m.Resource != "" && m.Resource+"/"+m.Name == name {
 			return m.ContextWindow
 		}
 	}

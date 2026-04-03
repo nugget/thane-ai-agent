@@ -64,19 +64,21 @@ models:
   # Default is the model name used when no specific model is requested.
   default: qwen2.5:72b
   # OllamaURL is backward-compatible shorthand for a default Ollama
-  # server. It is used when Servers is empty. When Servers is
-  # populated, callers should prefer the normalized server catalog.
+  # resource. It is used when Resources is empty. When Resources is
+  # populated, callers should prefer the normalized resource catalog.
   ollama_url: ""
-  # Servers defines named model provider resources such as Ollama
+  # Resources defines named model provider resources such as Ollama
   # instances running on different machines. When empty, OllamaURL is
-  # treated as a synthetic server named "default".
-  servers:
+  # treated as a synthetic resource named "default".
+  resources:
     default:
       url: http://your-primary-ollama-server:11434
       provider: ollama
+      api_key: ""
     edge:
       url: http://your-edge-ollama-server:11434
       provider: ollama
+      api_key: ""
   # LocalFirst prefers local (cost_tier=0) models over cloud models
   # when routing decisions are made by the model router.
   local_first: true
@@ -90,7 +92,7 @@ models:
   available:
     - name: qwen3:4b
       provider: ""
-      server: edge
+      resource: edge
       supports_tools: true
       context_window: 32768
       speed: 9
@@ -99,7 +101,7 @@ models:
       min_complexity: simple
     - name: qwen2.5:72b
       provider: ""
-      server: default
+      resource: default
       supports_tools: true
       context_window: 131072
       speed: 3

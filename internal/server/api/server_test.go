@@ -42,14 +42,14 @@ func testAPIModelRegistry(t *testing.T) *models.Registry {
 	cfg := &config.Config{}
 	cfg.Models.LocalFirst = true
 	cfg.Models.Default = "spark/gpt-oss:20b"
-	cfg.Models.Servers = map[string]config.ModelServerConfig{
+	cfg.Models.Resources = map[string]config.ModelServerConfig{
 		"mirror": {URL: "http://mirror.example", Provider: "ollama"},
 		"spark":  {URL: "http://spark.example", Provider: "ollama"},
 	}
 	cfg.Models.Available = []config.ModelConfig{
 		{
 			Name:          "gpt-oss:20b",
-			Server:        "mirror",
+			Resource:      "mirror",
 			SupportsTools: true,
 			ContextWindow: 8192,
 			Speed:         6,
@@ -58,7 +58,7 @@ func testAPIModelRegistry(t *testing.T) *models.Registry {
 		},
 		{
 			Name:          "gpt-oss:20b",
-			Server:        "spark",
+			Resource:      "spark",
 			SupportsTools: true,
 			ContextWindow: 8192,
 			Speed:         6,

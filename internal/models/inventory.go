@@ -77,6 +77,26 @@ func DiscoverInventory(ctx context.Context, cat *Catalog, bundle *ClientBundle) 
 					Quantization:  m.Details.QuantizationLevel,
 				})
 			}
+		case "lmstudio":
+			ri.Attempted = true
+			client := bundle.LMStudioClients[res.ID]
+			if client == nil {
+				ri.Error = "missing lmstudio client"
+				inv.Resources = append(inv.Resources, ri)
+				continue
+			}
+			models, err := client.ListModelInfos(ctx)
+			if err != nil {
+				ri.Error = err.Error()
+				inv.Resources = append(inv.Resources, ri)
+				continue
+			}
+			sort.Slice(models, func(i, j int) bool { return models[i].ID < models[j].ID })
+			for _, m := range models {
+				ri.Models = append(ri.Models, DiscoveredModel{
+					Name: m.ID,
+				})
+			}
 		}
 
 		if !ri.Attempted {
@@ -207,7 +227,7 @@ func deploymentKey(resourceID, modelName string) string {
 
 func defaultCostTier(provider string) int {
 	switch provider {
-	case "ollama":
+	case "ollama", "lmstudio":
 		return 0
 	case "anthropic", "openai":
 		return 3

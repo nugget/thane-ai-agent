@@ -340,7 +340,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		close(sigCh)
 	}
 
-	a, err := app.New(ctx, cfg, logger, stdout, llmSetup.Client, llmSetup.OllamaClients, llmSetup.ModelRuntime)
+	a, err := app.New(ctx, cfg, logger, stdout, llmSetup.Client, llmSetup.OllamaClients, llmSetup.HealthClients, llmSetup.ModelRuntime)
 	if err != nil {
 		stopSignals()
 		cancel()
@@ -360,6 +360,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		"path", cfgPath,
 		"port", cfg.Listen.Port,
 		"model", llmSetup.Catalog.DefaultModel,
+		"resource_clients", len(llmSetup.HealthClients),
 		"ollama_resources", len(llmSetup.OllamaClients),
 		"primary_ollama_url", llmSetup.Catalog.PrimaryOllamaURL(),
 	)
@@ -426,6 +427,7 @@ type llmSetup struct {
 	ModelRegistry *models.Registry
 	ModelRuntime  *models.Runtime
 	Client        llm.Client
+	HealthClients map[string]llm.HealthClient
 	OllamaClients map[string]*llm.OllamaClient
 }
 
@@ -446,6 +448,7 @@ func createLLMSetup(ctx context.Context, cfg *config.Config, logger *slog.Logger
 		ModelRegistry: runtime.Registry(),
 		ModelRuntime:  runtime,
 		Client:        runtime.Client(),
+		HealthClients: runtime.HealthClients(),
 		OllamaClients: runtime.OllamaClients(),
 	}, nil
 }

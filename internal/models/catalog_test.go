@@ -52,20 +52,20 @@ func TestBuildCatalog_LegacyOllamaURLCreatesDefaultResource(t *testing.T) {
 
 func TestBuildCatalog_AmbiguousModelRequiresQualifiedReference(t *testing.T) {
 	cfg := &config.Config{}
-	cfg.Models.Servers = map[string]config.ModelServerConfig{
+	cfg.Models.Resources = map[string]config.ModelServerConfig{
 		"default": {URL: "http://localhost:11434", Provider: "ollama"},
 		"edge":    {URL: "http://edge:11434", Provider: "ollama"},
 	}
 	cfg.Models.Available = []config.ModelConfig{
 		{
 			Name:          "qwen3:4b",
-			Server:        "default",
+			Resource:      "default",
 			SupportsTools: true,
 			ContextWindow: 32768,
 		},
 		{
 			Name:          "qwen3:4b",
-			Server:        "edge",
+			Resource:      "edge",
 			SupportsTools: true,
 			ContextWindow: 65536,
 		},
@@ -94,13 +94,13 @@ func TestBuildCatalog_AmbiguousModelRequiresQualifiedReference(t *testing.T) {
 
 func TestCatalogContextWindowForModel_UsesLargestMatchingDeployment(t *testing.T) {
 	cfg := &config.Config{}
-	cfg.Models.Servers = map[string]config.ModelServerConfig{
+	cfg.Models.Resources = map[string]config.ModelServerConfig{
 		"default": {URL: "http://localhost:11434", Provider: "ollama"},
 		"edge":    {URL: "http://edge:11434", Provider: "ollama"},
 	}
 	cfg.Models.Available = []config.ModelConfig{
-		{Name: "qwen3:4b", Server: "default", ContextWindow: 32768},
-		{Name: "qwen3:4b", Server: "edge", ContextWindow: 65536},
+		{Name: "qwen3:4b", Resource: "default", ContextWindow: 32768},
+		{Name: "qwen3:4b", Resource: "edge", ContextWindow: 65536},
 	}
 
 	cat, err := BuildCatalog(cfg)
@@ -178,13 +178,13 @@ func TestMergeInventory_AddsDiscoveredDeploymentsAsNonRoutable(t *testing.T) {
 
 func TestMergeInventory_PreservesStableConfiguredIDWhenDuplicateAppears(t *testing.T) {
 	cfg := &config.Config{}
-	cfg.Models.Servers = map[string]config.ModelServerConfig{
+	cfg.Models.Resources = map[string]config.ModelServerConfig{
 		"default": {URL: "http://localhost:11434", Provider: "ollama"},
 		"edge":    {URL: "http://edge:11434", Provider: "ollama"},
 	}
 	cfg.Models.Default = "qwen3:4b"
 	cfg.Models.Available = []config.ModelConfig{
-		{Name: "qwen3:4b", Server: "default", SupportsTools: true, ContextWindow: 32768, Speed: 7, Quality: 6, CostTier: 0},
+		{Name: "qwen3:4b", Resource: "default", SupportsTools: true, ContextWindow: 32768, Speed: 7, Quality: 6, CostTier: 0},
 	}
 
 	base, err := BuildCatalog(cfg)
@@ -221,5 +221,35 @@ func TestMergeInventory_PreservesStableConfiguredIDWhenDuplicateAppears(t *testi
 	}
 	if _, ok := merged.byID["edge/qwen3:4b"]; !ok {
 		t.Fatal("merged catalog missing discovered qualified deployment")
+	}
+}
+
+func TestBuildCatalog_SingleLMStudioResourceCanBeInferred(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Models.Resources = map[string]config.ModelServerConfig{
+		"deepslate": {URL: "http://deepslate:1234", Provider: "lmstudio", APIKey: "secret-token"},
+	}
+	cfg.Models.Default = "qwen3:8b"
+	cfg.Models.Available = []config.ModelConfig{
+		{Name: "qwen3:8b", Provider: "lmstudio", SupportsTools: true, ContextWindow: 32768, Speed: 8, Quality: 6, CostTier: 0},
+	}
+
+	cat, err := BuildCatalog(cfg)
+	if err != nil {
+		t.Fatalf("BuildCatalog() error = %v", err)
+	}
+
+	if got := cat.DefaultModel; got != "qwen3:8b" {
+		t.Fatalf("DefaultModel = %q, want %q", got, "qwen3:8b")
+	}
+	dep, ok := cat.byID["qwen3:8b"]
+	if !ok {
+		t.Fatal("catalog missing inferred LM Studio deployment")
+	}
+	if dep.Provider != "lmstudio" {
+		t.Fatalf("Provider = %q, want %q", dep.Provider, "lmstudio")
+	}
+	if dep.ResourceID != "deepslate" {
+		t.Fatalf("ResourceID = %q, want %q", dep.ResourceID, "deepslate")
 	}
 }

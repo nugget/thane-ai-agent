@@ -61,11 +61,12 @@ type App struct {
 	stdout io.Writer
 
 	// LLM clients
-	llmClient     llm.Client
-	ollamaClients map[string]*llm.OllamaClient
-	modelRuntime  *models.Runtime
-	modelCatalog  *models.Catalog
-	modelRegistry *models.Registry
+	llmClient             llm.Client
+	ollamaClients         map[string]*llm.OllamaClient
+	resourceHealthClients map[string]llm.HealthClient
+	modelRuntime          *models.Runtime
+	modelCatalog          *models.Catalog
+	modelRegistry         *models.Registry
 
 	// Core subsystems
 	mem            *memory.SQLiteStore

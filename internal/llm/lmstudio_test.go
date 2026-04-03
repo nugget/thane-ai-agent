@@ -1,0 +1,231 @@
+package llm
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
+
+func TestLMStudioPingAndListModelInfos(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" {
+			t.Fatalf("path = %q, want /v1/models", r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer secret-token" {
+			t.Fatalf("Authorization = %q, want Bearer token", got)
+		}
+		_ = json.NewEncoder(w).Encode(lmStudioModelsResponse{
+			Data: []LMStudioModelInfo{
+				{ID: "gpt-oss:20b"},
+				{ID: "qwen3:8b"},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	client := NewLMStudioClient(srv.URL, "secret-token", nil)
+	if err := client.Ping(context.Background()); err != nil {
+		t.Fatalf("Ping() error = %v", err)
+	}
+
+	models, err := client.ListModelInfos(context.Background())
+	if err != nil {
+		t.Fatalf("ListModelInfos() error = %v", err)
+	}
+	if len(models) != 2 {
+		t.Fatalf("len(models) = %d, want 2", len(models))
+	}
+	if models[0].ID != "gpt-oss:20b" || models[1].ID != "qwen3:8b" {
+		t.Fatalf("models = %+v", models)
+	}
+}
+
+func TestLMStudioChat_NonStreamingToolCalls(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			t.Fatalf("path = %q, want /v1/chat/completions", r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer secret-token" {
+			t.Fatalf("Authorization = %q, want Bearer token", got)
+		}
+		var req lmStudioChatRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if req.Stream {
+			t.Fatal("expected non-streaming request")
+		}
+		if len(req.Tools) != 1 {
+			t.Fatalf("len(req.Tools) = %d, want 1", len(req.Tools))
+		}
+		_ = json.NewEncoder(w).Encode(lmStudioChatResponse{
+			Model:   "deepslate/qwen3:8b",
+			Created: 1712160000,
+			Choices: []lmStudioChatChoice{
+				{
+					Index: 0,
+					Message: &lmStudioMessageResponse{
+						Role: "assistant",
+						ToolCalls: []lmStudioToolCallDelta{
+							{
+								ID:   "call_1",
+								Type: "function",
+								Function: lmStudioToolFunctionDelta{
+									Name:      "get_state",
+									Arguments: `{"entity_id":"sun.sun"}`,
+								},
+							},
+						},
+					},
+				},
+			},
+			Usage: &lmStudioUsage{PromptTokens: 42, CompletionTokens: 5},
+		})
+	}))
+	defer srv.Close()
+
+	client := NewLMStudioClient(srv.URL, "secret-token", nil)
+	resp, err := client.Chat(context.Background(), "qwen3:8b", []Message{{Role: "user", Content: "check the sun"}}, []map[string]any{
+		{"type": "function", "function": map[string]any{"name": "get_state"}},
+	})
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	if resp.Model != "deepslate/qwen3:8b" {
+		t.Fatalf("resp.Model = %q, want %q", resp.Model, "deepslate/qwen3:8b")
+	}
+	if resp.InputTokens != 42 || resp.OutputTokens != 5 {
+		t.Fatalf("usage = in:%d out:%d, want 42/5", resp.InputTokens, resp.OutputTokens)
+	}
+	if len(resp.Message.ToolCalls) != 1 {
+		t.Fatalf("len(tool_calls) = %d, want 1", len(resp.Message.ToolCalls))
+	}
+	if got := resp.Message.ToolCalls[0].Function.Name; got != "get_state" {
+		t.Fatalf("tool name = %q, want get_state", got)
+	}
+	if got := resp.Message.ToolCalls[0].Function.Arguments["entity_id"]; got != "sun.sun" {
+		t.Fatalf("tool args entity_id = %v, want sun.sun", got)
+	}
+}
+
+func TestLMStudioChatStream_ContentAndToolCalls(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			t.Fatalf("path = %q, want /v1/chat/completions", r.URL.Path)
+		}
+		var req lmStudioChatRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if !req.Stream {
+			t.Fatal("expected streaming request")
+		}
+		if req.StreamOptions == nil || !req.StreamOptions.IncludeUsage {
+			t.Fatal("expected stream_options.include_usage")
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher := w.(http.Flusher)
+		writeChunk := func(chunk lmStudioChatResponse) {
+			data, err := json.Marshal(chunk)
+			if err != nil {
+				t.Fatalf("marshal chunk: %v", err)
+			}
+			fmt.Fprintf(w, "data: %s\n\n", data)
+			flusher.Flush()
+		}
+
+		writeChunk(lmStudioChatResponse{
+			Model:   "deepslate/qwen3:8b",
+			Created: 1712160000,
+			Choices: []lmStudioChatChoice{{
+				Index: 0,
+				Delta: &lmStudioChatDelta{Role: "assistant", Content: "hel"},
+			}},
+		})
+		writeChunk(lmStudioChatResponse{
+			Model: "deepslate/qwen3:8b",
+			Choices: []lmStudioChatChoice{{
+				Index: 0,
+				Delta: &lmStudioChatDelta{Content: "lo"},
+			}},
+		})
+		writeChunk(lmStudioChatResponse{
+			Choices: []lmStudioChatChoice{{
+				Index: 0,
+				Delta: &lmStudioChatDelta{
+					ToolCalls: []lmStudioToolCallDelta{{
+						Index: 0,
+						ID:    "call_1",
+						Type:  "function",
+						Function: lmStudioToolFunctionDelta{
+							Name:      "get_state",
+							Arguments: `{"entity_id":"`,
+						},
+					}},
+				},
+			}},
+		})
+		writeChunk(lmStudioChatResponse{
+			Choices: []lmStudioChatChoice{{
+				Index: 0,
+				Delta: &lmStudioChatDelta{
+					ToolCalls: []lmStudioToolCallDelta{{
+						Index: 0,
+						Function: lmStudioToolFunctionDelta{
+							Arguments: `sun.sun"}`,
+						},
+					}},
+				},
+			}},
+			Usage: &lmStudioUsage{PromptTokens: 11, CompletionTokens: 7},
+		})
+		fmt.Fprint(w, "data: [DONE]\n\n")
+		flusher.Flush()
+	}))
+	defer srv.Close()
+
+	client := NewLMStudioClient(srv.URL, "", nil)
+	var tokens []string
+	resp, err := client.ChatStream(context.Background(), "qwen3:8b", []Message{{Role: "user", Content: "say hello and plan a tool call"}}, []map[string]any{
+		{"type": "function", "function": map[string]any{"name": "get_state"}},
+	}, func(event StreamEvent) {
+		if event.Kind == KindToken {
+			tokens = append(tokens, event.Token)
+		}
+	})
+	if err != nil {
+		t.Fatalf("ChatStream() error = %v", err)
+	}
+	if got := strings.Join(tokens, ""); got != "hello" {
+		t.Fatalf("streamed tokens = %q, want %q", got, "hello")
+	}
+	if resp.Message.Content != "hello" {
+		t.Fatalf("resp content = %q, want %q", resp.Message.Content, "hello")
+	}
+	if resp.Model != "deepslate/qwen3:8b" {
+		t.Fatalf("resp.Model = %q, want %q", resp.Model, "deepslate/qwen3:8b")
+	}
+	if resp.InputTokens != 11 || resp.OutputTokens != 7 {
+		t.Fatalf("usage = in:%d out:%d, want 11/7", resp.InputTokens, resp.OutputTokens)
+	}
+	if len(resp.Message.ToolCalls) != 1 {
+		t.Fatalf("len(tool_calls) = %d, want 1", len(resp.Message.ToolCalls))
+	}
+	if got := resp.Message.ToolCalls[0].Function.Name; got != "get_state" {
+		t.Fatalf("tool name = %q, want get_state", got)
+	}
+	if got := resp.Message.ToolCalls[0].Function.Arguments["entity_id"]; got != "sun.sun" {
+		t.Fatalf("tool args entity_id = %v, want sun.sun", got)
+	}
+}

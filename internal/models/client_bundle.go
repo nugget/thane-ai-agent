@@ -8,13 +8,15 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/llm"
 )
 
-// ClientBundle contains the routed LLM client plus the concrete Ollama
-// clients keyed by resource ID for connection watching and other
-// resource-level concerns.
+// ClientBundle contains the routed LLM client plus provider-specific
+// resource clients keyed by resource ID for connection watching and
+// inventory discovery.
 type ClientBundle struct {
 	Client          llm.Client
 	ResourceClients map[string]llm.Client
+	HealthClients   map[string]llm.HealthClient
 	OllamaClients   map[string]*llm.OllamaClient
+	LMStudioClients map[string]*llm.LMStudioClient
 }
 
 // BuildClients constructs provider clients and a routed llm.Client from
@@ -28,7 +30,9 @@ func BuildClients(cat *Catalog, cfg *config.Config, logger *slog.Logger) (*Clien
 	}
 
 	ollamaClients := make(map[string]*llm.OllamaClient)
+	lmstudioClients := make(map[string]*llm.LMStudioClient)
 	resourceClients := make(map[string]llm.Client, len(cat.Resources))
+	healthClients := make(map[string]llm.HealthClient, len(cat.Resources))
 
 	var anthropicClient *llm.AnthropicClient
 
@@ -38,7 +42,13 @@ func BuildClients(cat *Catalog, cfg *config.Config, logger *slog.Logger) (*Clien
 		case "ollama":
 			oc := llm.NewOllamaClient(res.URL, logger.With("resource", res.ID))
 			ollamaClients[res.ID] = oc
+			healthClients[res.ID] = oc
 			client = oc
+		case "lmstudio":
+			lc := llm.NewLMStudioClient(res.URL, serverAPIKey(cfg, res.ID), logger.With("resource", res.ID))
+			lmstudioClients[res.ID] = lc
+			healthClients[res.ID] = lc
+			client = lc
 		case "anthropic":
 			if !cfg.Anthropic.Configured() {
 				return nil, fmt.Errorf("resource %q requires anthropic config", res.ID)
@@ -56,7 +66,9 @@ func BuildClients(cat *Catalog, cfg *config.Config, logger *slog.Logger) (*Clien
 
 	bundle := &ClientBundle{
 		ResourceClients: resourceClients,
+		HealthClients:   healthClients,
 		OllamaClients:   ollamaClients,
+		LMStudioClients: lmstudioClients,
 	}
 	client, err := bundle.BuildRoutedClient(cat)
 	if err != nil {
@@ -64,6 +76,16 @@ func BuildClients(cat *Catalog, cfg *config.Config, logger *slog.Logger) (*Clien
 	}
 	bundle.Client = client
 	return bundle, nil
+}
+
+func serverAPIKey(cfg *config.Config, id string) string {
+	if cfg == nil {
+		return ""
+	}
+	if srv, ok := cfg.Models.Resources[id]; ok {
+		return srv.APIKey
+	}
+	return ""
 }
 
 // BuildRoutedClient constructs a routed llm.Client for the provided

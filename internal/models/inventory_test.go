@@ -2,7 +2,12 @@ package models
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+
+	"github.com/nugget/thane-ai-agent/internal/llm"
 )
 
 func TestDiscoverInventorySkipsUnsupportedProviders(t *testing.T) {
@@ -23,5 +28,55 @@ func TestDiscoverInventorySkipsUnsupportedProviders(t *testing.T) {
 	}
 	if len(inv.Resources) != 0 {
 		t.Fatalf("len(Resources) = %d, want 0 for unsupported providers", len(inv.Resources))
+	}
+}
+
+func TestDiscoverInventoryIncludesLMStudioResources(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/models" {
+			t.Fatalf("path = %q, want /v1/models", r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer secret-token" {
+			t.Fatalf("Authorization = %q, want Bearer token", got)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"data": []map[string]any{
+				{"id": "qwen3:8b"},
+				{"id": "gpt-oss:20b"},
+			},
+		})
+	}))
+	defer srv.Close()
+
+	base := &Catalog{
+		Resources: []Resource{
+			{ID: "deepslate", Provider: "lmstudio", URL: srv.URL},
+		},
+	}
+	if err := base.reindex(base.DefaultModel, base.RecoveryModel); err != nil {
+		t.Fatalf("reindex base: %v", err)
+	}
+
+	inv := DiscoverInventory(context.Background(), base, &ClientBundle{
+		LMStudioClients: map[string]*llm.LMStudioClient{
+			"deepslate": llm.NewLMStudioClient(srv.URL, "secret-token", nil),
+		},
+	})
+	if inv == nil {
+		t.Fatal("DiscoverInventory returned nil")
+	}
+	if len(inv.Resources) != 1 {
+		t.Fatalf("len(Resources) = %d, want 1", len(inv.Resources))
+	}
+	if !inv.Resources[0].Attempted {
+		t.Fatal("expected LM Studio resource discovery to be attempted")
+	}
+	if len(inv.Resources[0].Models) != 2 {
+		t.Fatalf("len(Models) = %d, want 2", len(inv.Resources[0].Models))
+	}
+	if inv.Resources[0].Models[0].Name != "gpt-oss:20b" || inv.Resources[0].Models[1].Name != "qwen3:8b" {
+		t.Fatalf("models = %+v", inv.Resources[0].Models)
 	}
 }

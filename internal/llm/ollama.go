@@ -20,17 +20,25 @@ type OllamaClient struct {
 	baseURL    string
 	httpClient *http.Client
 	logger     *slog.Logger
-	watcher    readyChecker // set via SetWatcher for health status
+	watcher    ReadyWatcher // set via SetWatcher for health status
 }
 
-// readyChecker is satisfied by connwatch.Watcher. Defined here to avoid
+// ReadyWatcher is satisfied by connwatch.Watcher. Defined here to avoid
 // a direct import cycle between llm and connwatch.
-type readyChecker interface {
+type ReadyWatcher interface {
+	IsReady() bool
+}
+
+// HealthClient supports connection readiness and health probes for one
+// model-provider resource.
+type HealthClient interface {
+	Ping(ctx context.Context) error
+	SetWatcher(w ReadyWatcher)
 	IsReady() bool
 }
 
 // SetWatcher sets the connection watcher for health status queries.
-func (c *OllamaClient) SetWatcher(w readyChecker) {
+func (c *OllamaClient) SetWatcher(w ReadyWatcher) {
 	c.watcher = w
 }
 

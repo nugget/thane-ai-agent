@@ -205,28 +205,28 @@ func (a *App) initStores(s *newState) error {
 
 	for _, res := range a.modelCatalog.Resources {
 		res := res
-		client, ok := a.ollamaClients[res.ID]
+		client, ok := a.resourceHealthClients[res.ID]
 		if !ok {
 			continue
 		}
 		c := client
-		watchName := "ollama"
-		if len(a.ollamaClients) > 1 || res.ID != "default" {
-			watchName = "ollama:" + res.ID
+		watchName := res.Provider
+		if len(a.resourceHealthClients) > 1 || res.ID != "default" {
+			watchName = res.Provider + ":" + res.ID
 		}
-		ollamaWatcher := connMgr.Watch(s.ctx, connwatch.WatcherConfig{
+		resourceWatcher := connMgr.Watch(s.ctx, connwatch.WatcherConfig{
 			Name:    watchName,
 			Probe:   func(pCtx context.Context) error { return c.Ping(pCtx) },
 			Backoff: connwatch.DefaultBackoffConfig(),
 			OnReady: func() {
 				refreshModelRuntime(s.ctx, "resource_ready:"+res.ID)
 			},
-			Logger: logger.With("resource", res.ID),
+			Logger: logger.With("resource", res.ID, "provider", res.Provider),
 		})
-		c.SetWatcher(ollamaWatcher)
+		c.SetWatcher(resourceWatcher)
 	}
 
-	if a.modelRuntime != nil && len(a.ollamaClients) > 0 {
+	if a.modelRuntime != nil && a.modelRuntime.InventoryClientCount() > 0 {
 		a.deferWorker("model-inventory-refresh", func(ctx context.Context) error {
 			go func() {
 				ticker := time.NewTicker(modelInventoryRefreshInterval)

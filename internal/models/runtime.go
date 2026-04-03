@@ -85,6 +85,24 @@ func (r *Runtime) OllamaClients() map[string]*llm.OllamaClient {
 	return r.bundle.OllamaClients
 }
 
+// HealthClients returns the stable per-resource health clients used by
+// connwatch and inventory refresh triggers.
+func (r *Runtime) HealthClients() map[string]llm.HealthClient {
+	if r == nil || r.bundle == nil {
+		return nil
+	}
+	return r.bundle.HealthClients
+}
+
+// InventoryClientCount reports how many resource clients participate in
+// runtime inventory discovery.
+func (r *Runtime) InventoryClientCount() int {
+	if r == nil || r.bundle == nil {
+		return 0
+	}
+	return len(r.bundle.OllamaClients) + len(r.bundle.LMStudioClients)
+}
+
 // Refresh probes provider inventory, updates the registry overlay, and
 // swaps in a new routed client for future requests.
 func (r *Runtime) Refresh(ctx context.Context) (*RefreshResult, error) {

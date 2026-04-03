@@ -511,11 +511,11 @@ func TestResolveModelIdentity_WithCatalog(t *testing.T) {
 	t.Parallel()
 
 	cfg := &config.Config{}
-	cfg.Models.Servers = map[string]config.ModelServerConfig{
+	cfg.Models.Resources = map[string]config.ModelServerConfig{
 		"edge": {URL: "http://edge.example:11434", Provider: "ollama"},
 	}
 	cfg.Models.Available = []config.ModelConfig{
-		{Name: "qwen3:8b", Server: "edge", SupportsTools: true, ContextWindow: 32768, Speed: 7, Quality: 6, CostTier: 0},
+		{Name: "qwen3:8b", Resource: "edge", SupportsTools: true, ContextWindow: 32768, Speed: 7, Quality: 6, CostTier: 0},
 	}
 
 	cat, err := models.BuildCatalog(cfg)
