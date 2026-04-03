@@ -1236,18 +1236,86 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
 }
 
 /* === System Detail Panel === */
+.system-sections {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.system-section {
+  margin-bottom: 0;
+}
+
+.system-section-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.system-section-header .section-title {
+  margin-bottom: 0;
+}
+
+.system-section-meta {
+  color: var(--text-muted);
+  font-size: 0.65rem;
+  font-family: var(--font-mono);
+  text-align: right;
+}
+
+.system-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.system-stat {
+  min-width: 0;
+  padding: 0.45rem 0.55rem;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.system-stat--emphasis {
+  border-color: rgba(45, 212, 191, 0.35);
+  box-shadow: inset 0 0 0 1px rgba(45, 212, 191, 0.08);
+}
+
+.system-stat__label {
+  color: var(--text-muted);
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 0.15rem;
+}
+
+.system-stat__value {
+  color: var(--text-primary);
+  font-size: 0.76rem;
+  font-family: var(--font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .system-services {
   display: flex;
   flex-direction: column;
   gap: 0.35rem;
-  margin-bottom: 0.75rem;
 }
 
 .system-svc-row {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 0.4rem;
   font-size: 0.8rem;
+  padding: 0.45rem 0.55rem;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
 }
 
 .system-svc-dot {
@@ -1265,12 +1333,176 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
   font-weight: 500;
 }
 
+.system-svc-info {
+  min-width: 0;
+  flex: 1;
+}
+
+.system-svc-meta {
+  color: var(--text-muted);
+  font-size: 0.68rem;
+  margin-top: 0.1rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
 .system-svc-error {
   color: var(--orange);
-  font-size: 0.7rem;
+  font-size: 0.68rem;
+  margin-top: 0.2rem;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.system-subsection {
+  margin-top: 0.8rem;
+}
+
+.system-subtitle {
+  color: var(--text-secondary);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 0.4rem;
+}
+
+.system-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.system-item {
+  padding: 0.5rem 0.6rem;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.system-item__header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.system-item__title {
+  min-width: 0;
+  color: var(--text-primary);
+  font-size: 0.78rem;
+  font-weight: 600;
+  word-break: break-word;
+}
+
+.system-item__title--mono {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+}
+
+.system-item__metric {
+  color: var(--text-secondary);
+  font-size: 0.66rem;
+  font-family: var(--font-mono);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.system-item__subtitle,
+.system-item__facts,
+.system-item__telemetry,
+.system-item__reason {
+  margin-top: 0.25rem;
+  font-size: 0.68rem;
+  line-height: 1.4;
+}
+
+.system-item__subtitle,
+.system-item__facts,
+.system-item__telemetry {
+  color: var(--text-secondary);
+}
+
+.system-item__subtitle {
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.system-item__facts,
+.system-item__telemetry,
+.system-item__reason {
+  font-family: var(--font-mono);
+}
+
+.system-item__facts,
+.system-item__reason,
+.system-item__error {
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.system-item__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin-top: 0.35rem;
+}
+
+.system-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.12rem 0.4rem;
+  border-radius: 999px;
+  font-size: 0.62rem;
+  font-family: var(--font-mono);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  background: var(--bg-secondary);
+}
+
+.system-chip--provider,
+.system-chip--resource,
+.system-chip--config,
+.system-chip--discovered {
+  color: var(--blue);
+  border-color: rgba(88, 166, 255, 0.3);
+  background: var(--blue-dim);
+}
+
+.system-chip--ok {
+  color: var(--green);
+  border-color: rgba(63, 185, 80, 0.3);
+  background: var(--green-dim);
+}
+
+.system-chip--warn {
+  color: var(--orange);
+  border-color: rgba(210, 153, 34, 0.3);
+  background: var(--orange-dim);
+}
+
+.system-chip--error {
+  color: var(--red);
+  border-color: rgba(248, 81, 73, 0.3);
+  background: var(--red-dim);
+}
+
+.system-chip--muted {
+  color: var(--text-muted);
+}
+
+.system-item__error {
+  margin-top: 0.3rem;
+  color: var(--orange);
+  font-size: 0.68rem;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.system-empty {
+  color: var(--text-muted);
+  font-size: 0.74rem;
+  padding: 0.4rem 0;
 }
 
 /* Progress ring for sleep countdown */

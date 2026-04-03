@@ -41,6 +41,9 @@ func (s *WebServer) handleSystem(w http.ResponseWriter, r *http.Request) {
 	if snapshot := s.systemStatus.ModelRegistry(); snapshot != nil {
 		body["model_registry"] = snapshot
 	}
+	if stats := s.systemStatus.RouterStats(); stats != nil {
+		body["router_stats"] = stats
+	}
 	s.writeJSON(w, body)
 }
 

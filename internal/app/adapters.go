@@ -750,6 +750,7 @@ func (a *contentQueryAdapter) QueryRequestDetail(requestID string) (*logging.Req
 type systemStatusAdapter struct {
 	connMgr       *connwatch.Manager
 	modelRegistry *models.Registry
+	router        *router.Router
 }
 
 // Health returns the health state of all watched services.
@@ -786,6 +787,15 @@ func (a *systemStatusAdapter) ModelRegistry() *models.RegistrySnapshot {
 		return nil
 	}
 	return a.modelRegistry.Snapshot()
+}
+
+// RouterStats returns the current router statistics snapshot.
+func (a *systemStatusAdapter) RouterStats() *router.Stats {
+	if a.router == nil {
+		return nil
+	}
+	stats := a.router.GetStats()
+	return &stats
 }
 
 // loopAdapter bridges [looppkg.Runner] to [*agent.Loop], converting

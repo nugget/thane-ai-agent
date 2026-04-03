@@ -13,6 +13,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/logging"
 	"github.com/nugget/thane-ai-agent/internal/loop"
 	"github.com/nugget/thane-ai-agent/internal/models"
+	"github.com/nugget/thane-ai-agent/internal/router"
 )
 
 // --- Test Doubles ---
@@ -65,6 +66,7 @@ type stubSystemStatus struct {
 	uptime        time.Duration
 	version       map[string]string
 	modelRegistry *models.RegistrySnapshot
+	routerStats   *router.Stats
 }
 
 func (s *stubSystemStatus) Health() map[string]ServiceHealth { return s.health }
@@ -73,6 +75,7 @@ func (s *stubSystemStatus) Version() map[string]string       { return s.version 
 func (s *stubSystemStatus) ModelRegistry() *models.RegistrySnapshot {
 	return s.modelRegistry
 }
+func (s *stubSystemStatus) RouterStats() *router.Stats { return s.routerStats }
 
 // --- Tests ---
 
@@ -332,6 +335,12 @@ func TestHandleSystem_Healthy(t *testing.T) {
 				{ID: "spark/qwen3:8b", Model: "qwen3:8b", Resource: "spark", Source: models.DeploymentSourceDiscovered, Routable: false},
 			},
 		},
+		routerStats: &router.Stats{
+			TotalRequests: 3,
+			DeploymentStats: map[string]router.DeploymentStats{
+				"spark/gpt-oss:20b": {Provider: "ollama", Resource: "spark", UpstreamModel: "gpt-oss:20b", Requests: 3, Successes: 3, AvgLatencyMs: 420, AvgTokensUsed: 1800},
+			},
+		},
 	}
 
 	srv := NewWebServer(Config{
@@ -379,6 +388,13 @@ func TestHandleSystem_Healthy(t *testing.T) {
 	deployments, ok := registry["deployments"].([]any)
 	if !ok || len(deployments) != 2 {
 		t.Fatalf("deployments = %T len=%d, want 2 entries", registry["deployments"], len(deployments))
+	}
+	routerStats, ok := body["router_stats"].(map[string]any)
+	if !ok {
+		t.Fatal("router_stats field missing or not a map")
+	}
+	if routerStats["total_requests"] != float64(3) {
+		t.Errorf("total_requests = %v, want 3", routerStats["total_requests"])
 	}
 }
 
