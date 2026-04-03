@@ -33,3 +33,20 @@ func TestAgentErrorDetails_IncompatibleModelIsBadRequest(t *testing.T) {
 		t.Fatalf("message = %q, want incompatible-model detail", message)
 	}
 }
+
+func TestAgentErrorDetails_NoEligibleModelIsBadRequest(t *testing.T) {
+	code, message := agentErrorDetails(&agent.NoEligibleModelError{
+		Requirement: "image inputs",
+		Suggestions: []string{"deepslate/google/gemma-3-4b"},
+	})
+
+	if code != http.StatusBadRequest {
+		t.Fatalf("code = %d, want %d", code, http.StatusBadRequest)
+	}
+	if !strings.Contains(message, "no eligible routed model supports image inputs") {
+		t.Fatalf("message = %q", message)
+	}
+	if !strings.Contains(message, "deepslate/google/gemma-3-4b") {
+		t.Fatalf("message = %q", message)
+	}
+}

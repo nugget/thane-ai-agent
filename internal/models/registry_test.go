@@ -125,8 +125,11 @@ func TestRegistryApplyInventoryBuildsEffectiveSnapshot(t *testing.T) {
 	if !ok {
 		t.Fatal("missing spark/qwen3:8b snapshot")
 	}
-	if !qwen.SupportsTools || !qwen.ProviderSupportsTools || !qwen.SupportsStreaming || !qwen.SupportsImages {
-		t.Fatalf("spark/qwen3:8b capabilities = %+v, want provider-driven tools/streaming/images", qwen)
+	if !qwen.SupportsTools || !qwen.ProviderSupportsTools || !qwen.SupportsStreaming {
+		t.Fatalf("spark/qwen3:8b capabilities = %+v, want provider-driven tools/streaming", qwen)
+	}
+	if qwen.SupportsImages {
+		t.Fatalf("spark/qwen3:8b capabilities = %+v, want image support=false", qwen)
 	}
 }
 

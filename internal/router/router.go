@@ -76,6 +76,7 @@ type Decision struct {
 	RulesMatched   []string            `json:"rules_matched"`
 	RejectedModels map[string][]string `json:"rejected_models,omitempty"`
 	Scores         map[string]int      `json:"scores,omitempty"`
+	NoEligible     bool                `json:"no_eligible,omitempty"`
 
 	// Outcome
 	ModelSelected         string `json:"model_selected"`
@@ -410,6 +411,7 @@ func (r *Router) selectModel(cfg Config, req Request, decision *Decision) string
 	}
 
 	if len(candidates) == 0 {
+		decision.NoEligible = true
 		reasoning.WriteString("No eligible models, using default.")
 		if summary := summarizeRejectedModels(rejected); summary != "" {
 			reasoning.WriteString(" Rejected: " + summary + ".")

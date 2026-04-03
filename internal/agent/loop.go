@@ -1222,6 +1222,9 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			}
 
 			model, routerDecision = l.router.Route(ctx, routerReq)
+			if needsImages && routerDecision != nil && routerDecision.NoEligible {
+				return nil, noEligibleImageRoutingError(l.currentModelCatalog())
+			}
 			log.Debug("model selected by router", "model", model)
 		} else {
 			model = l.model

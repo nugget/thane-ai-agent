@@ -275,6 +275,9 @@ func TestRoute_NoEligibleModelsSummarizesRejections(t *testing.T) {
 	if model != "fallback-model" {
 		t.Fatalf("Route() selected %q, want fallback default %q", model, "fallback-model")
 	}
+	if !decision.NoEligible {
+		t.Fatal("decision.NoEligible = false, want true")
+	}
 	if !strings.Contains(decision.Reasoning, "No eligible models, using default.") {
 		t.Fatalf("Reasoning = %q, want no-eligible prefix", decision.Reasoning)
 	}

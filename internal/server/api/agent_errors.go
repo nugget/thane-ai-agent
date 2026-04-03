@@ -19,6 +19,10 @@ func agentErrorDetails(err error) (int, string) {
 	if errors.As(err, &incompatible) {
 		return http.StatusBadRequest, err.Error()
 	}
+	var noEligible *agent.NoEligibleModelError
+	if errors.As(err, &noEligible) {
+		return http.StatusBadRequest, err.Error()
+	}
 	if models.IsUnknownModel(err) {
 		return http.StatusBadRequest, err.Error()
 	}

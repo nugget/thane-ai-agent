@@ -84,7 +84,13 @@ func DiscoverInventory(ctx context.Context, cat *Catalog, bundle *ClientBundle) 
 					Quantization:      m.Details.QuantizationLevel,
 					SupportsTools:     ri.Capabilities.SupportsTools,
 					SupportsStreaming: ri.Capabilities.SupportsStreaming,
-					SupportsImages:    ri.Capabilities.SupportsImages,
+					SupportsImages: modelproviders.SupportsImagesForModel(
+						ri.Provider,
+						m.Name,
+						m.Details.Family,
+						m.Details.Families,
+						ri.Capabilities,
+					),
 				})
 			}
 		case "lmstudio":
@@ -107,7 +113,13 @@ func DiscoverInventory(ctx context.Context, cat *Catalog, bundle *ClientBundle) 
 					Name:              m.ID,
 					SupportsTools:     ri.Capabilities.SupportsTools,
 					SupportsStreaming: ri.Capabilities.SupportsStreaming,
-					SupportsImages:    ri.Capabilities.SupportsImages,
+					SupportsImages: modelproviders.SupportsImagesForModel(
+						ri.Provider,
+						m.ID,
+						"",
+						nil,
+						ri.Capabilities,
+					),
 				})
 			}
 		}
@@ -180,7 +192,7 @@ func MergeInventory(base *Catalog, inv *Inventory) (*Catalog, error) {
 				SupportsTools:         m.SupportsTools || caps.SupportsTools,
 				ProviderSupportsTools: caps.SupportsTools,
 				SupportsStreaming:     m.SupportsStreaming || caps.SupportsStreaming,
-				SupportsImages:        m.SupportsImages || caps.SupportsImages,
+				SupportsImages:        m.SupportsImages,
 				ContextWindow:         base.ContextWindowForModel(m.Name, 8192),
 				Speed:                 5,
 				Quality:               5,

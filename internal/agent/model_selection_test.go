@@ -3,12 +3,15 @@ package agent
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/config"
 	"github.com/nugget/thane-ai-agent/internal/llm"
 	"github.com/nugget/thane-ai-agent/internal/models"
+	"github.com/nugget/thane-ai-agent/internal/router"
 )
 
 func testModelRegistryFromConfig(t *testing.T, cfg *config.Config) *models.Registry {
@@ -171,5 +174,81 @@ func TestRun_ExplicitModelRejectsImageIncompatibleDeployment(t *testing.T) {
 	}
 	if len(mock.calls) != 0 {
 		t.Fatalf("llm calls = %d, want 0 when preflight rejects", len(mock.calls))
+	}
+}
+
+func TestRun_RoutedImageRequestRejectsWhenNoEligibleImageCapableDeploymentExists(t *testing.T) {
+	mock := &mockLLM{}
+	loop := buildTestLoop(mock, nil)
+
+	cfg := &config.Config{
+		Models: config.ModelsConfig{
+			Default: "gpt-oss:20b",
+			Resources: map[string]config.ModelServerConfig{
+				"spark":     {URL: "http://spark.example", Provider: "ollama"},
+				"deepslate": {URL: "http://deepslate.example", Provider: "lmstudio"},
+			},
+			Available: []config.ModelConfig{
+				{
+					Name:          "gpt-oss:20b",
+					Resource:      "spark",
+					SupportsTools: true,
+					ContextWindow: 8192,
+				},
+			},
+		},
+	}
+
+	cat, err := models.BuildCatalog(cfg)
+	if err != nil {
+		t.Fatalf("models.BuildCatalog: %v", err)
+	}
+	registry, err := models.NewRegistry(cat)
+	if err != nil {
+		t.Fatalf("models.NewRegistry: %v", err)
+	}
+	if err := registry.ApplyInventory(&models.Inventory{
+		Resources: []models.ResourceInventory{
+			{
+				ResourceID: "deepslate",
+				Provider:   "lmstudio",
+				Attempted:  true,
+				Models: []models.DiscoveredModel{
+					{
+						Name:              "google/gemma-3-4b",
+						SupportsTools:     true,
+						SupportsStreaming: true,
+						SupportsImages:    true,
+					},
+				},
+			},
+		},
+	}, time.Date(2026, 4, 3, 18, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("registry.ApplyInventory: %v", err)
+	}
+
+	loop.UseModelRegistry(registry)
+	loop.router = router.NewRouter(slog.Default(), registry.Catalog().RouterConfig(32))
+
+	_, err = loop.Run(context.Background(), &Request{
+		Messages: []Message{{
+			Role:    "user",
+			Content: "describe the image",
+			Images:  []llm.ImageContent{{Data: "Zm9v", MediaType: "image/png"}},
+		}},
+	}, nil)
+
+	var noEligible *NoEligibleModelError
+	if !errors.As(err, &noEligible) {
+		t.Fatalf("Run error = %T, want *NoEligibleModelError", err)
+	}
+	if !strings.Contains(err.Error(), "image inputs") {
+		t.Fatalf("error = %q, want image-input detail", err)
+	}
+	if !strings.Contains(err.Error(), "deepslate/google/gemma-3-4b") {
+		t.Fatalf("error = %q, want explicit deployment suggestion", err)
+	}
+	if len(mock.calls) != 0 {
+		t.Fatalf("llm calls = %d, want 0 when routing rejects", len(mock.calls))
 	}
 }

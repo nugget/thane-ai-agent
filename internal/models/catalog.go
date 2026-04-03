@@ -279,7 +279,13 @@ func BuildCatalog(cfg *config.Config) (*Catalog, error) {
 		if res, ok := resourceByID[p.ResourceID]; ok {
 			dep.ProviderSupportsTools = res.Capabilities.SupportsTools
 			dep.SupportsStreaming = res.Capabilities.SupportsStreaming
-			dep.SupportsImages = res.Capabilities.SupportsImages
+			dep.SupportsImages = modelproviders.SupportsImagesForModel(
+				dep.Provider,
+				dep.ModelName,
+				dep.Family,
+				dep.Families,
+				res.Capabilities,
+			)
 		}
 		deployments = append(deployments, dep)
 	}
