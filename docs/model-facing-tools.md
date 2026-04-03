@@ -49,6 +49,13 @@ When deterministic resolution is possible and ambiguity is bounded,
 tools should accept either human names or canonical IDs, then normalize
 immediately to the canonical form before making the upstream call.
 
+Example:
+
+- accept `Kitchen` or `area_kitchen_1`
+- resolve both to the canonical area ID before calling upstream
+- if resolution fails, return a structured not-found or ambiguity error
+  instead of guessing
+
 Good fit for dual acceptance:
 
 - Home Assistant area IDs or area names
@@ -96,6 +103,19 @@ An actionable error usually includes:
 - the valid choices when the set is small
 - whether the failure was ambiguity, absence, gating, or upstream error
 - enough echoed context to understand the failed selection
+
+### Multi-account ambiguity
+
+If a tool can target multiple accounts, clients, or tenants, ambiguity
+errors should name the parameter to supply and list the valid choices
+when the set is small.
+
+Good:
+
+- `multiple accounts have connected platform providers for macos.calendar/list_events; retry with account set to one of ["aimee", "nugget"]`
+
+When the result shape allows it, include the choices as structured data
+as well as in the error text.
 
 ### 5. Distinguish empty results from selection problems
 
@@ -180,6 +200,49 @@ Examples:
 If the model has to re-run a broad search just to recover the argument
 for a follow-up call, the first tool did not expose enough.
 
+## Common Pitfalls
+
+### Output instruction trap
+
+Delegates can successfully call tools and still fail the task if the
+instruction never says what to return.
+
+Bad:
+
+- `Call forge_issue_get(number: 352).`
+
+Better:
+
+- `Call forge_issue_get(number: 352) and return the issue title and
+  state as text.`
+
+### Parameter type mismatches
+
+If a tool expects an integer, path, enum, or boolean, say so explicitly
+in the schema and description. Do not assume the model will infer the
+type from the parameter name alone.
+
+Bad:
+
+- `forge_issue_get(number: "352")`
+
+Better:
+
+- `forge_issue_get(number: 352)`
+
+### Path discovery spirals
+
+Delegates burn iterations when they have to hunt for files that the
+caller already knows.
+
+Bad:
+
+- `Find and read the config file.`
+
+Better:
+
+- `Read /home/thane/config.yaml.`
+
 ## Delegate-Specific Guidance
 
 Delegates are literal. They do not have human intuition about what an
@@ -190,6 +253,19 @@ Write tool contracts and errors so a delegate can:
 1. understand what failed
 2. identify the argument to change
 3. issue one better follow-up call
+
+Tool descriptions should help with that. Include:
+
+- required parameter names and types when they are easy to misuse
+- literal examples when a value shape is non-obvious
+- common failure modes when there is a known trap
+
+For example, if a tool expects an integer issue number, say `number
+(integer, not string)` instead of just `number`.
+
+When a delegate task depends on producing text after the tool call,
+state the required output explicitly in the task. A successful tool call
+is not the same thing as a successful delegate result.
 
 If a delegate would need to ask itself "what do I try next?", the tool
 surface can probably be improved.
@@ -205,8 +281,10 @@ Before merging a new or changed tool, ask:
 4. Does it also include the semantic names needed for interpretation?
 5. Are ambiguity and empty-result cases distinguished cleanly?
 6. Could a delegate recover from the error in one more attempt?
-7. Is the output compact structure instead of human-oriented narrative?
-8. Are we preserving exact upstream state where exactness matters?
+7. Does the description call out parameter types where misuse is likely?
+8. Would multi-account or multi-target ambiguity be obvious to recover?
+9. Is the output compact structure instead of human-oriented narrative?
+10. Are we preserving exact upstream state where exactness matters?
 
 If those answers are good, the tool surface is probably on the right
 track.
