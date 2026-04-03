@@ -1482,12 +1482,23 @@ function renderDelegateDetail(loop) {
   // Completion result (shown after delegate finishes).
   if (loop.state === 'completed' || loop.state === 'error' || loop.state === 'stopped') {
     const resultEl = document.createElement('div');
-    resultEl.className = 'delegate-result ' + (exhausted ? 'delegate-result--failed' : 'delegate-result--ok');
+    let resultClass = 'delegate-result--ok';
+    let icon = '\u2713';
+    let status = 'Succeeded';
 
-    const icon = exhausted ? '\u2717' : '\u2713';
-    const status = exhausted
-      ? 'Failed' + (exhaustReason ? ' \u2014 ' + exhaustReason : '')
-      : 'Succeeded';
+    if (loop.state === 'stopped') {
+      resultClass = 'delegate-result--neutral';
+      icon = '\u25a0';
+      status = exhaustReason ? 'Stopped \u2014 ' + exhaustReason : 'Stopped';
+    } else if (loop.state === 'error' || exhausted) {
+      resultClass = 'delegate-result--failed';
+      icon = '\u2717';
+      status = exhausted
+        ? 'Failed' + (exhaustReason ? ' \u2014 ' + exhaustReason : '')
+        : 'Failed';
+    }
+
+    resultEl.className = 'delegate-result ' + resultClass;
 
     const parts = [icon + ' ' + status];
     if (iterCount > 0) parts.push(iterCount + ' iter');

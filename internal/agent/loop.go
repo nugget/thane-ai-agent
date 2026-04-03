@@ -1231,6 +1231,20 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		maxIterations = req.MaxIterations
 	}
 
+	currentTools := func() *tools.Registry {
+		toolsForIter := baseTools
+		if scope != nil && !skipTagFilter {
+			if tagSnap := scope.Snapshot(); len(tagSnap) > 0 {
+				tagList := make([]string, 0, len(tagSnap))
+				for tag := range tagSnap {
+					tagList = append(tagList, tag)
+				}
+				toolsForIter = baseTools.FilterByTags(tagList)
+			}
+		}
+		return toolsForIter
+	}
+
 	// Build iterate.Config with agent-specific callbacks.
 	iterCfg := iterate.Config{
 		MaxIterations:   maxIterations,
@@ -1245,35 +1259,20 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		// Per-iteration tool definitions: recompute effective tools each
 		// iteration so tags activated via activate_capability are reflected.
 		ToolDefs: func(i int) []map[string]any {
-			effectiveTools := baseTools
-			if scope != nil && !skipTagFilter {
-				if tagSnap := scope.Snapshot(); len(tagSnap) > 0 {
-					tagList := make([]string, 0, len(tagSnap))
-					for tag := range tagSnap {
-						tagList = append(tagList, tag)
-					}
-					effectiveTools = baseTools.FilterByTags(tagList)
-				}
-			}
+			toolsForIter := currentTools()
 			if gatingActive {
-				return effectiveTools.FilteredCopy(l.orchestratorTools).List()
+				return toolsForIter.FilteredCopy(l.orchestratorTools).List()
 			}
-			return effectiveTools.List()
+			return toolsForIter.List()
 		},
 
 		// Tool availability check using the effective tools for this iteration.
 		CheckToolAvail: func(toolName string) bool {
-			effectiveTools := baseTools
-			if scope != nil && !skipTagFilter {
-				if tagSnap := scope.Snapshot(); len(tagSnap) > 0 {
-					tagList := make([]string, 0, len(tagSnap))
-					for tag := range tagSnap {
-						tagList = append(tagList, tag)
-					}
-					effectiveTools = baseTools.FilterByTags(tagList)
-				}
+			toolsForIter := currentTools()
+			if gatingActive {
+				return toolsForIter.FilteredCopy(l.orchestratorTools).Get(toolName) != nil
 			}
-			return effectiveTools.Get(toolName) != nil
+			return toolsForIter.Get(toolName) != nil
 		},
 
 		CheckBudget: func(totalOut int) bool {

@@ -851,10 +851,24 @@ func (e *Executor) executeViaLoop(ctx context.Context, task, profileName, guidan
 		}
 		return outcome.result, nil
 	case <-ctx.Done():
+		shouldFinish := true
 		if l := e.loopRegistry.Get(loopID); l != nil {
+			done := l.Done()
 			l.Stop()
+			if done != nil {
+				select {
+				case <-done:
+				default:
+					shouldFinish = false
+					prep.log.Warn("delegate loop did not stop before cancellation cleanup; skipping archive and clear to avoid racing active writes",
+						"loop_id", loopID,
+					)
+				}
+			}
 		}
-		e.finishLoopExecution(prep)
+		if shouldFinish {
+			e.finishLoopExecution(prep)
+		}
 		return nil, fmt.Errorf("delegate cancelled: %w", ctx.Err())
 	}
 }
@@ -868,8 +882,12 @@ func (e *Executor) finishLoopExecution(prep *preparedExecution) {
 		if err := e.sessionArchiver.ArchiveConversation(prep.conversationID, msgs, "delegate"); err != nil {
 			prep.log.Warn("failed to archive delegate conversation", "error", err)
 		}
-		if sid := e.sessionArchiver.ActiveSessionID(prep.conversationID); sid != "" {
-			if err := e.sessionArchiver.EndSession(sid, "delegate"); err != nil {
+		sessionID := e.sessionArchiver.ActiveSessionID(prep.conversationID)
+		if sessionID == "" {
+			sessionID = prep.archiveSessionID
+		}
+		if sessionID != "" {
+			if err := e.sessionArchiver.EndSession(sessionID, "delegate"); err != nil {
 				prep.log.Warn("failed to end delegate session", "error", err)
 			}
 		}
