@@ -266,6 +266,43 @@ func TestRoute_PreferSpeedHint(t *testing.T) {
 	}
 }
 
+func TestUpdateConfig_ReplacesLiveModelSet(t *testing.T) {
+	r := NewRouter(slog.Default(), Config{
+		DefaultModel: "local-a",
+		Models: []Model{
+			{Name: "local-a", Provider: "ollama", SupportsTools: true, Speed: 7, Quality: 5, CostTier: 0, ContextWindow: 8192},
+		},
+		MaxAuditLog: 10,
+	})
+
+	r.UpdateConfig(Config{
+		DefaultModel: "local-b",
+		Models: []Model{
+			{Name: "local-b", Provider: "ollama", SupportsTools: true, Speed: 8, Quality: 6, CostTier: 0, ContextWindow: 16384},
+		},
+		LocalFirst: true,
+	})
+
+	if got := r.DefaultModel(); got != "local-b" {
+		t.Fatalf("DefaultModel() = %q, want %q", got, "local-b")
+	}
+
+	model, _ := r.Route(context.Background(), Request{
+		Query:      "search the archives",
+		NeedsTools: true,
+		ToolCount:  2,
+		Priority:   PriorityBackground,
+	})
+	if model != "local-b" {
+		t.Fatalf("Route() selected %q, want %q after config update", model, "local-b")
+	}
+
+	models := r.GetModels()
+	if len(models) != 1 || models[0].Name != "local-b" {
+		t.Fatalf("GetModels() = %#v, want updated model list", models)
+	}
+}
+
 func TestGetModels(t *testing.T) {
 	models := []Model{
 		{Name: "fast-local", Provider: "ollama", Speed: 8, Quality: 5},

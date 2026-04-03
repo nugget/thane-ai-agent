@@ -1076,6 +1076,12 @@ func (e *Executor) selectModel(ctx context.Context, task string, profile *Profil
 			)
 			return model
 		}
+		if fallback := e.router.DefaultModel(); fallback != "" {
+			log.Debug("delegate using router default model",
+				"model", fallback,
+			)
+			return fallback
+		}
 	}
 	log.Debug("delegate using default model",
 		"model", e.defaultModel,

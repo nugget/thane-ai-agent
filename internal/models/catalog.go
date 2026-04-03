@@ -74,6 +74,31 @@ type Catalog struct {
 	resourceBy map[string]Resource
 }
 
+func routingEligible(dep Deployment) bool {
+	if !dep.Routable {
+		return false
+	}
+	return dep.PolicyState != DeploymentPolicyStateInactive
+}
+
+func (c *Catalog) preferredRoutedDefault() string {
+	if c == nil {
+		return ""
+	}
+	if dep, ok := c.byID[c.DefaultModel]; ok && routingEligible(dep) {
+		return dep.ID
+	}
+	if dep, ok := c.byID[c.RecoveryModel]; ok && routingEligible(dep) {
+		return dep.ID
+	}
+	for _, dep := range c.Deployments {
+		if routingEligible(dep) {
+			return dep.ID
+		}
+	}
+	return c.DefaultModel
+}
+
 // BuildCatalog converts config-driven model/provider configuration into
 // a normalized provider resource and deployment catalog.
 func BuildCatalog(cfg *config.Config) (*Catalog, error) {
@@ -414,12 +439,12 @@ func (c *Catalog) PrimaryOllamaURL() string {
 // RouterConfig converts the normalized catalog into router config.
 func (c *Catalog) RouterConfig(maxAuditLog int) router.Config {
 	cfg := router.Config{
-		DefaultModel: c.DefaultModel,
-		LocalFirst:   c.LocalFirst,
-		MaxAuditLog:  maxAuditLog,
+		LocalFirst:  c.LocalFirst,
+		MaxAuditLog: maxAuditLog,
 	}
+	cfg.DefaultModel = c.preferredRoutedDefault()
 	for _, dep := range c.Deployments {
-		if !dep.Routable {
+		if !routingEligible(dep) {
 			continue
 		}
 		minComp := router.ComplexitySimple

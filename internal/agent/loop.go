@@ -1674,9 +1674,15 @@ func (l *Loop) buildLLMErrorHandler(ctx context.Context, stream llm.StreamCallba
 			return nil, "", err
 		}
 
-		// Non-timeout error: failover to default model if using a routed model.
-		if model != l.model {
-			fallbackModel := l.model
+		// Non-timeout error: failover to the router's current default
+		// model when available so live routing policy updates apply here
+		// too. Fall back to the loop's static startup default only when
+		// no router is configured.
+		fallbackModel := l.model
+		if l.router != nil && l.router.DefaultModel() != "" {
+			fallbackModel = l.router.DefaultModel()
+		}
+		if model != fallbackModel {
 			iterLog.Info("attempting failover", "from", model, "to", fallbackModel)
 			if l.failoverHandler != nil {
 				if ferr := l.failoverHandler.OnFailover(iterCtx, model, fallbackModel, err.Error()); ferr != nil {

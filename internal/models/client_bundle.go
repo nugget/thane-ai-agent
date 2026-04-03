@@ -143,8 +143,8 @@ func (b *ClientBundle) fallbackClient(cat *Catalog) (llm.Client, error) {
 	if cat == nil {
 		return nil, fmt.Errorf("nil model catalog")
 	}
-	if cat.DefaultModel != "" {
-		if dep, ok := cat.byID[cat.DefaultModel]; ok {
+	if preferred := cat.preferredRoutedDefault(); preferred != "" {
+		if dep, ok := cat.byID[preferred]; ok {
 			if client, ok := b.ResourceClients[dep.ResourceID]; ok {
 				return client, nil
 			}

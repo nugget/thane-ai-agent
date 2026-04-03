@@ -129,6 +129,7 @@ func (a *App) initStores(s *newState) error {
 		if result == nil || result.Snapshot == nil {
 			return
 		}
+		a.syncRouterConfig()
 		if result.Changed {
 			logger.Info("model registry refreshed",
 				"reason", reason,
@@ -301,7 +302,7 @@ func (a *App) initStores(s *newState) error {
 	// --- Model router ---
 	// Selects the best model for each request based on complexity, cost,
 	// and capability requirements. Falls back to the default model.
-	routerCfg := a.modelCatalog.RouterConfig(1000)
+	routerCfg := a.modelRegistry.Catalog().RouterConfig(1000)
 	rtr := router.NewRouter(logger, routerCfg)
 	a.rtr = rtr
 	logger.Info("model router initialized",

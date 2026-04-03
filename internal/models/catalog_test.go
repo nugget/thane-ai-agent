@@ -1,10 +1,12 @@
 package models
 
 import (
+	"log/slog"
 	"strings"
 	"testing"
 
 	"github.com/nugget/thane-ai-agent/internal/config"
+	"github.com/nugget/thane-ai-agent/internal/router"
 )
 
 func TestBuildCatalog_LegacyOllamaURLCreatesDefaultResource(t *testing.T) {
@@ -251,5 +253,82 @@ func TestBuildCatalog_SingleLMStudioResourceCanBeInferred(t *testing.T) {
 	}
 	if dep.ResourceID != "deepslate" {
 		t.Fatalf("ResourceID = %q, want %q", dep.ResourceID, "deepslate")
+	}
+}
+
+func TestCatalogRouterConfig_ExcludesInactiveDeploymentsAndRetargetsDefault(t *testing.T) {
+	cat := &Catalog{
+		DefaultModel:  "spark/gpt-oss:20b",
+		RecoveryModel: "mirror/gpt-oss:20b",
+		LocalFirst:    true,
+		Deployments: []Deployment{
+			{
+				ID:            "spark/gpt-oss:20b",
+				ModelName:     "gpt-oss:20b",
+				Provider:      "ollama",
+				ResourceID:    "spark",
+				Routable:      true,
+				SupportsTools: true,
+				ContextWindow: 8192,
+				Speed:         6,
+				Quality:       6,
+				PolicyState:   DeploymentPolicyStateInactive,
+			},
+			{
+				ID:            "mirror/gpt-oss:20b",
+				ModelName:     "gpt-oss:20b",
+				Provider:      "ollama",
+				ResourceID:    "mirror",
+				Routable:      true,
+				SupportsTools: true,
+				ContextWindow: 8192,
+				Speed:         6,
+				Quality:       6,
+				PolicyState:   DeploymentPolicyStateActive,
+			},
+			{
+				ID:            "spark/qwen3:8b",
+				ModelName:     "qwen3:8b",
+				Provider:      "ollama",
+				ResourceID:    "spark",
+				Routable:      true,
+				SupportsTools: true,
+				ContextWindow: 32768,
+				Speed:         8,
+				Quality:       5,
+				PolicyState:   DeploymentPolicyStateFlagged,
+			},
+		},
+	}
+
+	cfg := cat.RouterConfig(100)
+
+	if cfg.DefaultModel != "mirror/gpt-oss:20b" {
+		t.Fatalf("DefaultModel = %q, want %q", cfg.DefaultModel, "mirror/gpt-oss:20b")
+	}
+	if len(cfg.Models) != 2 {
+		t.Fatalf("len(Models) = %d, want 2", len(cfg.Models))
+	}
+	for _, model := range cfg.Models {
+		if model.Name == "spark/gpt-oss:20b" {
+			t.Fatal("inactive deployment should not be included in automatic router config")
+		}
+	}
+	if cfg.Models[0].Name != "mirror/gpt-oss:20b" && cfg.Models[1].Name != "mirror/gpt-oss:20b" {
+		t.Fatal("active recovery deployment missing from automatic router config")
+	}
+	if cfg.Models[0].Name != "spark/qwen3:8b" && cfg.Models[1].Name != "spark/qwen3:8b" {
+		t.Fatal("flagged deployment should remain available for automatic routing in this slice")
+	}
+
+	rtr := router.NewRouter(slog.Default(), cfg)
+	got, _ := rtr.Route(t.Context(), router.Request{
+		Query:      "search for the latest battery event",
+		NeedsTools: true,
+		ToolCount:  2,
+		Priority:   router.PriorityBackground,
+	})
+	if got == "spark/gpt-oss:20b" {
+		t.Fatal("router selected inactive deployment")
 	}
 }

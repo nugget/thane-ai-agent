@@ -882,6 +882,9 @@ func (s *Server) handleModelRegistryPolicySet(w http.ResponseWriter, r *http.Req
 		s.errorResponse(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if s.router != nil {
+		s.router.UpdateConfig(s.modelRegistry.Catalog().RouterConfig(0))
+	}
 
 	snapshot := s.modelRegistry.Snapshot()
 	deployment, ok := findRegistryDeployment(snapshot, req.Deployment)
@@ -917,6 +920,9 @@ func (s *Server) handleModelRegistryPolicyDelete(w http.ResponseWriter, r *http.
 		}
 		s.errorResponse(w, http.StatusBadRequest, err.Error())
 		return
+	}
+	if s.router != nil {
+		s.router.UpdateConfig(s.modelRegistry.Catalog().RouterConfig(0))
 	}
 
 	snapshot := s.modelRegistry.Snapshot()

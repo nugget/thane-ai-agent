@@ -14,6 +14,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/config"
 	"github.com/nugget/thane-ai-agent/internal/database"
 	"github.com/nugget/thane-ai-agent/internal/models"
+	"github.com/nugget/thane-ai-agent/internal/router"
 	"github.com/nugget/thane-ai-agent/internal/usage"
 )
 
@@ -353,7 +354,8 @@ func TestHandleModelRegistry(t *testing.T) {
 
 func TestHandleModelRegistryPolicySetAndDelete(t *testing.T) {
 	registry := testAPIModelRegistry(t)
-	server := NewServer("", 0, nil, nil, nil, registry, nil, testAPILogger())
+	rtr := router.NewRouter(testAPILogger(), registry.Catalog().RouterConfig(10))
+	server := NewServer("", 0, nil, rtr, nil, registry, nil, testAPILogger())
 
 	body := bytes.NewBufferString(`{"deployment":"spark/gpt-oss:20b","state":"flagged","reason":"manual review"}`)
 	req := httptest.NewRequest(http.MethodPost, "/v1/model-registry/policy", body)
@@ -395,6 +397,32 @@ func TestHandleModelRegistryPolicySetAndDelete(t *testing.T) {
 	}
 	if deleteResp.Deployment.PolicySource != models.DeploymentPolicySourceDefault {
 		t.Fatalf("delete policy source = %q, want %q", deleteResp.Deployment.PolicySource, models.DeploymentPolicySourceDefault)
+	}
+}
+
+func TestHandleModelRegistryPolicySet_UpdatesRouterConfig(t *testing.T) {
+	registry := testAPIModelRegistry(t)
+	rtr := router.NewRouter(testAPILogger(), registry.Catalog().RouterConfig(10))
+	server := NewServer("", 0, nil, rtr, nil, registry, nil, testAPILogger())
+
+	body := bytes.NewBufferString(`{"deployment":"spark/gpt-oss:20b","state":"inactive","reason":"drain this node"}`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/model-registry/policy", body)
+	rec := httptest.NewRecorder()
+	server.handleModelRegistryPolicySet(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+
+	models := rtr.GetModels()
+	if len(models) != 1 {
+		t.Fatalf("len(GetModels()) = %d, want 1", len(models))
+	}
+	if models[0].Name != "mirror/gpt-oss:20b" {
+		t.Fatalf("GetModels()[0].Name = %q, want %q", models[0].Name, "mirror/gpt-oss:20b")
+	}
+	if got := rtr.DefaultModel(); got != "mirror/gpt-oss:20b" {
+		t.Fatalf("DefaultModel() = %q, want %q", got, "mirror/gpt-oss:20b")
 	}
 }
 

@@ -140,6 +140,23 @@ type Router struct {
 	stats    Stats
 }
 
+func cloneModels(in []Model) []Model {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]Model, len(in))
+	copy(out, in)
+	return out
+}
+
+func (r *Router) configSnapshot() Config {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	cfg := r.config
+	cfg.Models = cloneModels(r.config.Models)
+	return cfg
+}
+
 // Stats tracks routing statistics.
 type Stats struct {
 	TotalRequests    int64                      `json:"total_requests"`
@@ -190,8 +207,9 @@ func NewRouter(logger *slog.Logger, config Config) *Router {
 // model. If the model is not found in the router's configuration, it
 // returns 0.
 func (r *Router) ContextWindowForModel(name string) int {
+	cfg := r.configSnapshot()
 	maxByUpstream := 0
-	for _, m := range r.config.Models {
+	for _, m := range cfg.Models {
 		if m.Name == name {
 			return m.ContextWindow
 		}
@@ -209,8 +227,9 @@ func (r *Router) ContextWindowForModel(name string) int {
 // If no models are configured it returns 10 as a safe default that
 // selects the best available model at runtime.
 func (r *Router) MaxQuality() int {
+	cfg := r.configSnapshot()
 	max := 0
-	for _, m := range r.config.Models {
+	for _, m := range cfg.Models {
 		if m.Quality > max {
 			max = m.Quality
 		}
@@ -223,6 +242,7 @@ func (r *Router) MaxQuality() int {
 
 // Route selects a model for the given request.
 func (r *Router) Route(ctx context.Context, req Request) (string, *Decision) {
+	cfg := r.configSnapshot()
 	decision := &Decision{
 		RequestID:   generateRequestID(),
 		Timestamp:   time.Now(),
@@ -237,9 +257,9 @@ func (r *Router) Route(ctx context.Context, req Request) (string, *Decision) {
 	decision.DetectedIntent = r.detectIntent(req.Query)
 
 	// Evaluate rules and select model
-	model := r.selectModel(req, decision)
+	model := r.selectModel(cfg, req, decision)
 	decision.ModelSelected = model
-	r.populateSelectionMetadata(decision, model)
+	r.populateSelectionMetadata(cfg, decision, model)
 
 	// Log the decision
 	r.recordDecision(*decision)
@@ -328,13 +348,13 @@ func (r *Router) detectIntent(query string) string {
 }
 
 // selectModel picks the best model based on analysis.
-func (r *Router) selectModel(req Request, decision *Decision) string {
+func (r *Router) selectModel(cfg Config, req Request, decision *Decision) string {
 	var rulesEvaluated, rulesMatched []string
 	var reasoning strings.Builder
 
 	// Find eligible models
 	var candidates []Model
-	for _, m := range r.config.Models {
+	for _, m := range cfg.Models {
 		rulesEvaluated = append(rulesEvaluated, "check_"+m.Name)
 
 		// Must support tools if needed
@@ -357,7 +377,7 @@ func (r *Router) selectModel(req Request, decision *Decision) string {
 		reasoning.WriteString("No eligible models, using default. ")
 		decision.RulesMatched = rulesMatched
 		decision.Reasoning = reasoning.String()
-		return r.config.DefaultModel
+		return cfg.DefaultModel
 	}
 
 	// Score candidates
@@ -440,7 +460,7 @@ func (r *Router) selectModel(req Request, decision *Decision) string {
 
 		// --- Local preference ---
 		// (unless caller explicitly opted out of local preference)
-		if r.config.LocalFirst && m.CostTier == 0 && !explicitlyNotLocal {
+		if cfg.LocalFirst && m.CostTier == 0 && !explicitlyNotLocal {
 			score += 10
 			rulesMatched = append(rulesMatched, "local_first_"+m.Name)
 		}
@@ -532,7 +552,7 @@ func (r *Router) selectModel(req Request, decision *Decision) string {
 	reasoning.WriteString(" (score=" + strconv.Itoa(bestScore) + ")")
 	reasoning.WriteString(" for " + decision.Complexity.String() + " " + decision.DetectedIntent + " query.")
 
-	if r.config.LocalFirst && best.CostTier == 0 {
+	if cfg.LocalFirst && best.CostTier == 0 {
 		reasoning.WriteString(" Local-first preference applied.")
 	}
 
@@ -639,9 +659,12 @@ func (r *Router) GetStats() Stats {
 // GetModels returns a copy of the configured model list. The returned
 // slice is safe to mutate without affecting the router.
 func (r *Router) GetModels() []Model {
-	out := make([]Model, len(r.config.Models))
-	copy(out, r.config.Models)
-	return out
+	return cloneModels(r.configSnapshot().Models)
+}
+
+// DefaultModel returns the router's current fallback/default model.
+func (r *Router) DefaultModel() string {
+	return r.configSnapshot().DefaultModel
 }
 
 // Explain returns details about why a specific decision was made.
@@ -673,11 +696,11 @@ func priorityString(p Priority) string {
 	return "background"
 }
 
-func (r *Router) populateSelectionMetadata(decision *Decision, modelName string) {
+func (r *Router) populateSelectionMetadata(cfg Config, decision *Decision, modelName string) {
 	if decision == nil {
 		return
 	}
-	for _, m := range r.config.Models {
+	for _, m := range cfg.Models {
 		if m.Name != modelName {
 			continue
 		}
@@ -685,6 +708,25 @@ func (r *Router) populateSelectionMetadata(decision *Decision, modelName string)
 		decision.ProviderSelected = m.Provider
 		decision.ResourceSelected = m.ResourceID
 		return
+	}
+}
+
+// UpdateConfig swaps the router's live model configuration while
+// preserving accumulated audit history and stats.
+func (r *Router) UpdateConfig(cfg Config) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if cfg.MaxAuditLog <= 0 {
+		cfg.MaxAuditLog = r.config.MaxAuditLog
+		if cfg.MaxAuditLog <= 0 {
+			cfg.MaxAuditLog = 1000
+		}
+	}
+	cfg.Models = cloneModels(cfg.Models)
+	r.config = cfg
+	if len(r.auditLog) > cfg.MaxAuditLog {
+		r.auditLog = append([]Decision(nil), r.auditLog[len(r.auditLog)-cfg.MaxAuditLog:]...)
 	}
 }
 
