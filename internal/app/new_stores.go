@@ -22,7 +22,10 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/usage"
 )
 
-const modelInventoryRefreshInterval = 5 * time.Minute
+const (
+	modelInventoryRefreshInterval  = 5 * time.Minute
+	modelExperiencePersistInterval = 5 * time.Second
+)
 
 func modelResourceRefreshCallbacks(ctx context.Context, resourceID string, refresh func(context.Context, string)) (func(), func(error)) {
 	return func() {
@@ -394,6 +397,42 @@ func (a *App) initStores(s *newState) error {
 	a.modelPolicyStore = newModelPolicyStore(opStore)
 	if err := a.modelPolicyStore.LoadInto(a.modelRegistry, logger); err != nil {
 		return fmt.Errorf("load persisted model registry policies: %w", err)
+	}
+	a.modelExperienceStore = newModelExperienceStore(opStore)
+	if err := a.modelExperienceStore.LoadInto(a.rtr, logger); err != nil {
+		return fmt.Errorf("load persisted model registry experience: %w", err)
+	}
+	if a.modelExperienceStore != nil && a.rtr != nil {
+		a.deferWorker("model-experience-persist", func(ctx context.Context) error {
+			lastPersisted := a.rtr.ExperienceVersion()
+			a.onClose("model-experience-persist", func() {
+				if err := a.modelExperienceStore.SaveFrom(a.rtr); err != nil {
+					logger.Warn("persist model experience on shutdown failed", "error", err)
+				}
+			})
+			go func() {
+				ticker := time.NewTicker(modelExperiencePersistInterval)
+				defer ticker.Stop()
+				for {
+					select {
+					case <-ctx.Done():
+						return
+					case <-ticker.C:
+						current := a.rtr.ExperienceVersion()
+						if current == lastPersisted {
+							continue
+						}
+						if err := a.modelExperienceStore.SaveFrom(a.rtr); err != nil {
+							logger.Warn("persist model experience failed", "error", err)
+							continue
+						}
+						lastPersisted = current
+					}
+				}
+			}()
+			return nil
+		})
+		logger.Info("model experience persistence enabled", "interval", modelExperiencePersistInterval)
 	}
 
 	// --- Usage tracking ---

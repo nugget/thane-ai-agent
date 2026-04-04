@@ -148,6 +148,7 @@ type Router struct {
 	mu                    sync.RWMutex
 	auditLog              []Decision
 	stats                 Stats
+	experienceVersion     int64
 	resourceCooldownUntil map[string]time.Time
 }
 
@@ -588,6 +589,11 @@ func (r *Router) selectModel(cfg Config, req Request, decision *Decision) string
 			rulesMatched = append(rulesMatched, "resource_timeout_cooldown_"+m.Name)
 		}
 
+		if delta, reasons := experienceScore(r.deploymentExperience(m.Name), req); delta != 0 {
+			score += delta
+			rulesMatched = append(rulesMatched, reasons...)
+		}
+
 		scores[m.Name] = score
 	}
 
@@ -659,6 +665,7 @@ func (r *Router) RecordOutcome(requestID string, latencyMs int64, tokensUsed int
 			meta.AvgLatencyMs = weightedAverage(meta.AvgLatencyMs, outcomes, latencyMs)
 			meta.AvgTokensUsed = weightedAverage(meta.AvgTokensUsed, outcomes, int64(tokensUsed))
 			r.stats.DeploymentStats[model] = meta
+			r.experienceVersion++
 			break
 		}
 	}
@@ -692,6 +699,7 @@ func (r *Router) RecordFailure(requestID string, latencyMs int64, tokensUsed int
 			if resourceTimeout && resource != "" {
 				r.resourceCooldownUntil[resource] = time.Now().Add(resourceTimeoutCooldown)
 			}
+			r.experienceVersion++
 			break
 		}
 	}
@@ -725,6 +733,7 @@ func (r *Router) recordDecision(d Decision) {
 	meta.UpstreamModel = d.UpstreamModelSelected
 	meta.Requests++
 	r.stats.DeploymentStats[d.ModelSelected] = meta
+	r.experienceVersion++
 }
 
 // GetAuditLog returns recent routing decisions.
@@ -759,6 +768,34 @@ func (r *Router) GetStats() Stats {
 		ResourceHealth:   activeResourceHealthSnapshot(r.resourceCooldownUntil, time.Now()),
 		DeploymentStats:  cloneDeploymentStatsMap(r.stats.DeploymentStats),
 	}
+}
+
+// ExperienceSnapshot returns a copy of the deployment-scoped learned
+// experience that is safe to persist and later rehydrate. It excludes
+// transient resource cooldown state.
+func (r *Router) ExperienceSnapshot() map[string]DeploymentStats {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return cloneDeploymentStatsMap(r.stats.DeploymentStats)
+}
+
+// ExperienceVersion returns a monotonic counter that changes whenever
+// deployment-scoped learned experience is updated.
+func (r *Router) ExperienceVersion() int64 {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.experienceVersion
+}
+
+// ReplaceExperience replaces the router's persisted deployment-scoped
+// learned experience and rebuilds aggregate stats from it. Transient
+// resource cooldown state is intentionally left untouched.
+func (r *Router) ReplaceExperience(experience map[string]DeploymentStats) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.stats.DeploymentStats = cloneDeploymentStatsMap(experience)
+	r.rebuildDerivedStatsLocked()
+	r.experienceVersion++
 }
 
 func (r *Router) resourceCooldownDeadline(resource string) time.Time {
@@ -799,6 +836,12 @@ func (r *Router) GetModels() []Model {
 // DefaultModel returns the router's current fallback/default model.
 func (r *Router) DefaultModel() string {
 	return r.configSnapshot().DefaultModel
+}
+
+func (r *Router) deploymentExperience(model string) DeploymentStats {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.stats.DeploymentStats[model]
 }
 
 // Explain returns details about why a specific decision was made.
@@ -890,6 +933,80 @@ func weightedAverage(currentAvg, samplesAfterUpdate, next int64) int64 {
 	}
 	previousSamples := samplesAfterUpdate - 1
 	return ((currentAvg * previousSamples) + next) / samplesAfterUpdate
+}
+
+func experienceScore(meta DeploymentStats, req Request) (int, []string) {
+	score := 0
+	var reasons []string
+
+	if delta := int(meta.Successes - meta.Failures); delta != 0 {
+		switch {
+		case delta > 0:
+			bonus := clampInt(delta, 1, 6)
+			score += bonus
+			reasons = append(reasons, "experience_reliability_bonus")
+		case delta < 0:
+			penalty := clampInt((-delta)*2, 2, 12)
+			score -= penalty
+			reasons = append(reasons, "experience_reliability_penalty")
+		}
+	}
+
+	if meta.AvgLatencyMs > 0 && (req.Priority == PriorityInteractive || req.Hints[HintPreferSpeed] == "true") {
+		switch {
+		case meta.AvgLatencyMs <= 4000:
+			score += 4
+			reasons = append(reasons, "experience_latency_fast")
+		case meta.AvgLatencyMs <= 8000:
+			score += 2
+			reasons = append(reasons, "experience_latency_ok")
+		case meta.AvgLatencyMs >= 30000:
+			score -= 8
+			reasons = append(reasons, "experience_latency_slow")
+		case meta.AvgLatencyMs >= 15000:
+			score -= 4
+			reasons = append(reasons, "experience_latency_sluggish")
+		}
+	}
+
+	return score, reasons
+}
+
+func clampInt(v, min, max int) int {
+	if v < min {
+		return min
+	}
+	if v > max {
+		return max
+	}
+	return v
+}
+
+func (r *Router) rebuildDerivedStatsLocked() {
+	r.stats.TotalRequests = 0
+	r.stats.ModelCounts = make(map[string]int64, len(r.stats.DeploymentStats))
+	r.stats.AvgLatencyMs = make(map[string]int64, len(r.stats.DeploymentStats))
+	r.stats.SuccessCount = 0
+	r.stats.FailureCount = 0
+	r.stats.ProviderCounts = make(map[string]int64, len(r.stats.DeploymentStats))
+	r.stats.ResourceCounts = make(map[string]int64, len(r.stats.DeploymentStats))
+
+	for id, meta := range r.stats.DeploymentStats {
+		if meta.Requests <= 0 {
+			continue
+		}
+		r.stats.TotalRequests += meta.Requests
+		r.stats.ModelCounts[id] = meta.Requests
+		r.stats.AvgLatencyMs[id] = meta.AvgLatencyMs
+		r.stats.SuccessCount += meta.Successes
+		r.stats.FailureCount += meta.Failures
+		if provider := strings.TrimSpace(meta.Provider); provider != "" {
+			r.stats.ProviderCounts[provider] += meta.Requests
+		}
+		if resource := strings.TrimSpace(meta.Resource); resource != "" {
+			r.stats.ResourceCounts[resource] += meta.Requests
+		}
+	}
 }
 
 func cloneInt64Map(in map[string]int64) map[string]int64 {
