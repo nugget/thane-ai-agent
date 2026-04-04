@@ -94,6 +94,81 @@ func TestBuildCatalog_AmbiguousModelRequiresQualifiedReference(t *testing.T) {
 	}
 }
 
+func TestBuildCatalog_AnthropicModelBecomesRegistryDeployment(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Models.Default = "claude-opus-4-20250514"
+	cfg.Models.Available = []config.ModelConfig{
+		{
+			Name:          "claude-opus-4-20250514",
+			Provider:      "anthropic",
+			SupportsTools: true,
+			ContextWindow: 200000,
+			Speed:         4,
+			Quality:       10,
+			CostTier:      3,
+			MinComplexity: "complex",
+		},
+	}
+
+	cat, err := BuildCatalog(cfg)
+	if err != nil {
+		t.Fatalf("BuildCatalog() error = %v", err)
+	}
+
+	if got := len(cat.Resources); got != 1 {
+		t.Fatalf("len(Resources) = %d, want 1", got)
+	}
+	if cat.Resources[0].ID != "anthropic" {
+		t.Fatalf("Resources[0].ID = %q, want %q", cat.Resources[0].ID, "anthropic")
+	}
+	if cat.Resources[0].Provider != "anthropic" {
+		t.Fatalf("Resources[0].Provider = %q, want %q", cat.Resources[0].Provider, "anthropic")
+	}
+	if !cat.Resources[0].Capabilities.SupportsStreaming || !cat.Resources[0].Capabilities.SupportsTools || !cat.Resources[0].Capabilities.SupportsImages {
+		t.Fatalf("anthropic resource capabilities = %+v, want streaming/tools/images", cat.Resources[0].Capabilities)
+	}
+
+	dep, ok := cat.byID["claude-opus-4-20250514"]
+	if !ok {
+		t.Fatal("catalog missing claude-opus-4-20250514 deployment")
+	}
+	if dep.Provider != "anthropic" {
+		t.Fatalf("dep.Provider = %q, want %q", dep.Provider, "anthropic")
+	}
+	if dep.ResourceID != "anthropic" {
+		t.Fatalf("dep.ResourceID = %q, want %q", dep.ResourceID, "anthropic")
+	}
+	if dep.Source != DeploymentSourceConfig {
+		t.Fatalf("dep.Source = %q, want %q", dep.Source, DeploymentSourceConfig)
+	}
+	if !dep.Routable {
+		t.Fatal("dep.Routable = false, want true")
+	}
+	if !dep.SupportsTools || !dep.ProviderSupportsTools || !dep.SupportsStreaming || !dep.SupportsImages {
+		t.Fatalf("anthropic deployment capabilities = %+v, want tools/provider_tools/streaming/images", dep)
+	}
+	if dep.ContextWindow != 200000 {
+		t.Fatalf("dep.ContextWindow = %d, want %d", dep.ContextWindow, 200000)
+	}
+	if cat.DefaultModel != "claude-opus-4-20250514" {
+		t.Fatalf("DefaultModel = %q, want %q", cat.DefaultModel, "claude-opus-4-20250514")
+	}
+
+	routerCfg := cat.RouterConfig(100)
+	if routerCfg.DefaultModel != "claude-opus-4-20250514" {
+		t.Fatalf("router default = %q, want %q", routerCfg.DefaultModel, "claude-opus-4-20250514")
+	}
+	if got := len(routerCfg.Models); got != 1 {
+		t.Fatalf("len(router models) = %d, want 1", got)
+	}
+	if routerCfg.Models[0].Name != "claude-opus-4-20250514" {
+		t.Fatalf("router model name = %q, want %q", routerCfg.Models[0].Name, "claude-opus-4-20250514")
+	}
+	if routerCfg.Models[0].Provider != "anthropic" || routerCfg.Models[0].ResourceID != "anthropic" {
+		t.Fatalf("router model = %+v, want anthropic resource metadata", routerCfg.Models[0])
+	}
+}
+
 func TestCatalogContextWindowForModel_UsesLargestMatchingDeployment(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Models.Resources = map[string]config.ModelServerConfig{
