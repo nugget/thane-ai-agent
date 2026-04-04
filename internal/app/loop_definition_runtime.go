@@ -163,13 +163,13 @@ func (r *loopDefinitionRuntime) ReconcileDefinition(ctx context.Context, name st
 	existing := r.loops.GetByName(name)
 	if !found {
 		if existing != nil {
-			existing.Stop()
+			return r.loops.StopLoop(existing.ID())
 		}
 		return nil
 	}
 	if def.Spec.Operation != looppkg.OperationService || def.PolicyState != looppkg.DefinitionPolicyStateActive {
 		if existing != nil {
-			existing.Stop()
+			return r.loops.StopLoop(existing.ID())
 		}
 		return nil
 	}
