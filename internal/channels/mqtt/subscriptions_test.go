@@ -84,7 +84,7 @@ func TestSubscriptionStoreAddRemoveList(t *testing.T) {
 	}
 
 	// Add a subscription.
-	ws, err := s.Add("test/topic", router.LoopSeed{Mission: "automation"})
+	ws, err := s.Add("test/topic", router.LoopProfile{Mission: "automation"})
 	if err != nil {
 		t.Fatalf("add: %v", err)
 	}
@@ -116,7 +116,7 @@ func TestSubscriptionStoreAddRemoveList(t *testing.T) {
 func TestSubscriptionStoreLoadConfig(t *testing.T) {
 	s := newTestStore(t)
 
-	seed := router.LoopSeed{QualityFloor: "7", Mission: "automation"}
+	seed := router.LoopProfile{QualityFloor: "7", Mission: "automation"}
 	cfgSubs := []config.SubscriptionConfig{
 		{Topic: "homeassistant/+/+/state"},     // no wake
 		{Topic: "frigate/events", Wake: &seed}, // wake-enabled
@@ -141,7 +141,7 @@ func TestSubscriptionStoreLoadConfig(t *testing.T) {
 func TestSubscriptionStoreConfigNotRemovable(t *testing.T) {
 	s := newTestStore(t)
 
-	seed := router.LoopSeed{Mission: "automation"}
+	seed := router.LoopProfile{Mission: "automation"}
 	if err := s.LoadConfig([]config.SubscriptionConfig{
 		{Topic: "test/topic", Wake: &seed},
 	}); err != nil {
@@ -162,7 +162,7 @@ func TestSubscriptionStoreConfigNotRemovable(t *testing.T) {
 func TestSubscriptionStoreMatches(t *testing.T) {
 	s := newTestStore(t)
 
-	seed := router.LoopSeed{Mission: "automation"}
+	seed := router.LoopProfile{Mission: "automation"}
 	if err := s.LoadConfig([]config.SubscriptionConfig{
 		{Topic: "frigate/+/events", Wake: &seed},
 	}); err != nil {
@@ -189,8 +189,8 @@ func TestSubscriptionStoreMatchesFanOut(t *testing.T) {
 	s := newTestStore(t)
 
 	// Two subscriptions on the same topic with different seeds.
-	seedA := router.LoopSeed{Mission: "automation", Instructions: "check temperature"}
-	seedB := router.LoopSeed{Mission: "background", Instructions: "log to database"}
+	seedA := router.LoopProfile{Mission: "automation", Instructions: "check temperature"}
+	seedB := router.LoopProfile{Mission: "background", Instructions: "log to database"}
 	if err := s.LoadConfig([]config.SubscriptionConfig{
 		{Topic: "sensors/temperature", Wake: &seedA},
 		{Topic: "sensors/temperature", Wake: &seedB},
@@ -232,7 +232,7 @@ func TestSubscriptionStorePersistence(t *testing.T) {
 		t.Fatalf("new store 1: %v", err)
 	}
 
-	_, err = s1.Add("persist/test", router.LoopSeed{Mission: "automation", QualityFloor: "5"})
+	_, err = s1.Add("persist/test", router.LoopProfile{Mission: "automation", QualityFloor: "5"})
 	if err != nil {
 		t.Fatalf("add: %v", err)
 	}
@@ -258,7 +258,7 @@ func TestSubscriptionStorePersistence(t *testing.T) {
 func TestSubscriptionStoreTopics(t *testing.T) {
 	s := newTestStore(t)
 
-	seed := router.LoopSeed{Mission: "automation"}
+	seed := router.LoopProfile{Mission: "automation"}
 	if err := s.LoadConfig([]config.SubscriptionConfig{
 		{Topic: "topic/a", Wake: &seed},
 	}); err != nil {
@@ -290,7 +290,7 @@ func TestSubscriptionStoreSubscribeHook(t *testing.T) {
 		hookedTopics = append(hookedTopics, topics...)
 	})
 
-	_, err := s.Add("hook/test", router.LoopSeed{Mission: "automation"})
+	_, err := s.Add("hook/test", router.LoopProfile{Mission: "automation"})
 	if err != nil {
 		t.Fatalf("add: %v", err)
 	}
@@ -304,7 +304,7 @@ func TestSubscriptionStoreSubscribeHookNotCalledWithoutHook(t *testing.T) {
 	s := newTestStore(t)
 
 	// No hook set — Add should not panic.
-	_, err := s.Add("no-hook/test", router.LoopSeed{})
+	_, err := s.Add("no-hook/test", router.LoopProfile{})
 	if err != nil {
 		t.Fatalf("add: %v", err)
 	}
@@ -314,25 +314,25 @@ func TestSubscriptionStoreAddValidation(t *testing.T) {
 	s := newTestStore(t)
 
 	// Invalid topic filter.
-	_, err := s.Add("", router.LoopSeed{})
+	_, err := s.Add("", router.LoopProfile{})
 	if err == nil {
 		t.Fatal("expected error for empty topic")
 	}
 
 	// Invalid topic with bad wildcard.
-	_, err = s.Add("foo/ba#r", router.LoopSeed{})
+	_, err = s.Add("foo/ba#r", router.LoopProfile{})
 	if err == nil {
 		t.Fatal("expected error for bad wildcard in topic")
 	}
 
 	// Invalid seed.
-	_, err = s.Add("valid/topic", router.LoopSeed{QualityFloor: "99"})
+	_, err = s.Add("valid/topic", router.LoopProfile{QualityFloor: "99"})
 	if err == nil {
 		t.Fatal("expected error for invalid quality_floor")
 	}
 
 	// Valid — should succeed.
-	_, err = s.Add("valid/topic", router.LoopSeed{Mission: "automation", QualityFloor: "7"})
+	_, err = s.Add("valid/topic", router.LoopProfile{Mission: "automation", QualityFloor: "7"})
 	if err != nil {
 		t.Fatalf("expected success, got: %v", err)
 	}

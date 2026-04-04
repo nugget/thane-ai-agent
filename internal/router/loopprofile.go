@@ -7,14 +7,14 @@ import (
 	"strings"
 )
 
-// LoopSeed captures the common routing and configuration parameters
+// LoopProfile captures the common routing and configuration parameters
 // shared by all agent wake sites. It is serializable via both YAML
 // (for config file embedding) and JSON (for API and tool payloads).
 //
 // Each field maps to a well-known routing hint or agent.Request
 // property. Zero-value fields are omitted during serialization and
-// ignored by [LoopSeed.Hints].
-type LoopSeed struct {
+// ignored by [LoopProfile.Hints].
+type LoopProfile struct {
 	// Model sets an explicit model, bypassing the router. When empty,
 	// the router selects based on the other hint fields.
 	Model string `yaml:"model,omitempty" json:"model,omitempty"`
@@ -58,7 +58,7 @@ type LoopSeed struct {
 }
 
 // RequestOptions contains the agent request fields derived from a
-// LoopSeed. Callers can merge additional channel- or trigger-specific
+// LoopProfile. Callers can merge additional channel- or trigger-specific
 // hints on top of these shared routing defaults.
 type RequestOptions struct {
 	Model        string
@@ -70,7 +70,7 @@ type RequestOptions struct {
 // Hints builds a routing hints map from the seed's typed fields.
 // Only non-empty fields are included. ExtraHints are merged last and
 // can override typed fields.
-func (s *LoopSeed) Hints() map[string]string {
+func (s *LoopProfile) Hints() map[string]string {
 	h := make(map[string]string)
 
 	if s.QualityFloor != "" {
@@ -120,8 +120,8 @@ var validDelegationGating = map[string]bool{
 
 // Validate checks that the seed's typed fields contain semantically
 // valid values. It does not require any field to be set — an empty
-// LoopSeed is valid. Returns nil on success.
-func (s *LoopSeed) Validate() error {
+// LoopProfile is valid. Returns nil on success.
+func (s *LoopProfile) Validate() error {
 	if s.QualityFloor != "" {
 		n, err := strconv.Atoi(s.QualityFloor)
 		if err != nil || n < 1 || n > 10 {
@@ -176,8 +176,8 @@ func ValidateTopicFilter(filter string) error {
 
 // RequestOptions returns the request-ready fields implied by the seed.
 // Slices are copied so callers can mutate the result without affecting
-// the underlying LoopSeed.
-func (s *LoopSeed) RequestOptions() RequestOptions {
+// the underlying LoopProfile.
+func (s *LoopProfile) RequestOptions() RequestOptions {
 	opts := RequestOptions{
 		Model: s.Model,
 		Hints: s.Hints(),

@@ -60,7 +60,7 @@ func (t *Tools) HandleListWakeSubscriptions(_ context.Context, _ map[string]any)
 }
 
 // HandleAddWakeSubscription creates a new runtime wake subscription.
-// Required args: "topic". Optional: all LoopSeed fields.
+// Required args: "topic". Optional: all LoopProfile fields.
 func (t *Tools) HandleAddWakeSubscription(_ context.Context, args map[string]any) (string, error) {
 	topic, _ := args["topic"].(string)
 	topic = strings.TrimSpace(topic)
@@ -68,7 +68,7 @@ func (t *Tools) HandleAddWakeSubscription(_ context.Context, args map[string]any
 		return "", fmt.Errorf("topic is required")
 	}
 
-	seed := router.LoopSeed{
+	seed := router.LoopProfile{
 		Model:            stringArg(args, "model"),
 		QualityFloor:     stringArg(args, "quality_floor"),
 		Mission:          stringArg(args, "mission"),

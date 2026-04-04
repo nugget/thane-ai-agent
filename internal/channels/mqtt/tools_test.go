@@ -134,7 +134,7 @@ func TestToolsHandleRemove(t *testing.T) {
 func TestToolsHandleRemoveConfigProtected(t *testing.T) {
 	tools := newTestTools(t)
 
-	seed := router.LoopSeed{Mission: "automation"}
+	seed := router.LoopProfile{Mission: "automation"}
 	if err := tools.store.LoadConfig([]config.SubscriptionConfig{
 		{Topic: "config/test", Wake: &seed},
 	}); err != nil {

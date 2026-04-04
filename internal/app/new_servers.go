@@ -257,7 +257,7 @@ func (a *App) initServers(s *newState) error {
 		a.mqttPub = mqttPub
 
 		// --- MQTT wake subscription store ---
-		// Manages topic-to-LoopSeed mappings for wake-on-message.
+		// Manages topic-to-LoopProfile mappings for wake-on-message.
 		// Config-defined wake subscriptions are loaded from
 		// cfg.MQTT.Subscriptions; runtime subscriptions persist in SQLite.
 		subStore, err := mqtt.NewSubscriptionStore(a.mem.DB(), logger)

@@ -996,7 +996,7 @@ type SubscriptionConfig struct {
 	// arriving on the topic trigger an agent conversation using the
 	// seed's routing configuration. When nil, messages are received
 	// for ambient awareness only (debug-logged, not acted upon).
-	Wake *router.LoopSeed `yaml:"wake,omitempty"`
+	Wake *router.LoopProfile `yaml:"wake,omitempty"`
 }
 
 // TelemetryConfig configures MQTT telemetry publishing. When Enabled
@@ -1227,14 +1227,14 @@ type SignalRoutingConfig struct {
 	DelegationGating string `yaml:"delegation_gating"`
 }
 
-// LoopSeed converts the Signal routing config into the shared
-// LoopSeed representation used by wake-style entrypoints.
+// LoopProfile converts the Signal routing config into the shared
+// LoopProfile representation used by wake-style entrypoints.
 //
 // It intentionally maps only the fields exposed by SignalRoutingConfig.
-// LoopSeed-only fields such as ExcludeTools and SeedTags are omitted
+// LoopProfile-only fields such as ExcludeTools and SeedTags are omitted
 // until Signal grows explicit config for them.
-func (c SignalRoutingConfig) LoopSeed() router.LoopSeed {
-	return router.LoopSeed{
+func (c SignalRoutingConfig) LoopProfile() router.LoopProfile {
+	return router.LoopProfile{
 		Model:            c.Model,
 		QualityFloor:     c.QualityFloor,
 		Mission:          c.Mission,
@@ -2098,7 +2098,7 @@ func (c *Config) validateSignal() error {
 	if c.Signal.HandleTimeout < 0 {
 		return fmt.Errorf("signal.handle_timeout %s must be non-negative", c.Signal.HandleTimeout)
 	}
-	seed := c.Signal.Routing.LoopSeed()
+	seed := c.Signal.Routing.LoopProfile()
 	if err := seed.Validate(); err != nil {
 		return fmt.Errorf("signal.routing: %w", err)
 	}

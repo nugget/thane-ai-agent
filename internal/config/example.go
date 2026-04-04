@@ -151,7 +151,7 @@ func ExampleConfig() *Config {
 				{Topic: "frigate/events"},
 				{
 					Topic: "automation/wake/security",
-					Wake: &router.LoopSeed{
+					Wake: &router.LoopProfile{
 						QualityFloor:     "7",
 						Mission:          "automation",
 						LocalOnly:        "false",

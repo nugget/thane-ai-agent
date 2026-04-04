@@ -770,7 +770,7 @@ func (b *Bridge) startTypingRefresh(ctx context.Context, recipient string) conte
 }
 
 func (b *Bridge) requestOptions(sender string, extraHints map[string]string) router.RequestOptions {
-	seed := b.routing.LoopSeed()
+	seed := b.routing.LoopProfile()
 	opts := seed.RequestOptions()
 	if len(extraHints) > 0 {
 		if opts.Hints == nil {

@@ -56,7 +56,7 @@ func newTestWakeStore(t *testing.T) *mqtt.SubscriptionStore {
 
 func TestMQTTWakeHandlerMatchingTopic(t *testing.T) {
 	store := newTestWakeStore(t)
-	seed := router.LoopSeed{
+	seed := router.LoopProfile{
 		Mission:          "automation",
 		QualityFloor:     "7",
 		DelegationGating: "disabled",
@@ -148,7 +148,7 @@ func TestMQTTWakeHandlerNoMatchFallback(t *testing.T) {
 
 func TestMQTTWakeHandlerWithRegistry(t *testing.T) {
 	store := newTestWakeStore(t)
-	seed := router.LoopSeed{Instructions: "test instructions"}
+	seed := router.LoopProfile{Instructions: "test instructions"}
 	if err := store.LoadConfig([]config.SubscriptionConfig{
 		{Topic: "home/sensor/wake", Wake: &seed},
 	}); err != nil {
@@ -193,8 +193,8 @@ func TestMQTTWakeHandlerWithRegistry(t *testing.T) {
 
 func TestMQTTWakeHandlerFanOut(t *testing.T) {
 	store := newTestWakeStore(t)
-	seedA := router.LoopSeed{Mission: "automation", Instructions: "check temperature"}
-	seedB := router.LoopSeed{Mission: "background", Instructions: "log reading"}
+	seedA := router.LoopProfile{Mission: "automation", Instructions: "check temperature"}
+	seedB := router.LoopProfile{Mission: "background", Instructions: "log reading"}
 	if err := store.LoadConfig([]config.SubscriptionConfig{
 		{Topic: "sensors/+/reading", Wake: &seedA},
 		{Topic: "sensors/+/reading", Wake: &seedB},
@@ -242,7 +242,7 @@ func TestMQTTWakeHandlerFanOut(t *testing.T) {
 
 func TestMQTTWakeHandlerNoRegistryDropsMessage(t *testing.T) {
 	store := newTestWakeStore(t)
-	seed := router.LoopSeed{Mission: "automation"}
+	seed := router.LoopProfile{Mission: "automation"}
 	if err := store.LoadConfig([]config.SubscriptionConfig{
 		{Topic: "test/topic", Wake: &seed},
 	}); err != nil {
@@ -310,8 +310,8 @@ func TestBuildWakeMessage(t *testing.T) {
 	}
 }
 
-func TestApplyLoopSeed(t *testing.T) {
-	seed := router.LoopSeed{
+func TestApplyLoopProfile(t *testing.T) {
+	seed := router.LoopProfile{
 		Model:            "claude-3-opus",
 		QualityFloor:     "8",
 		Mission:          "automation",
@@ -328,7 +328,7 @@ func TestApplyLoopSeed(t *testing.T) {
 		SeedTags:     []string{"baseline"},
 	}
 
-	applyLoopSeed(&seed, req)
+	applyLoopProfile(&seed, req)
 
 	if req.Model != "claude-3-opus" {
 		t.Errorf("Model = %q, want %q", req.Model, "claude-3-opus")

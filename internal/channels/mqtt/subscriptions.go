@@ -16,14 +16,14 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/router"
 )
 
-// WakeSubscription pairs an MQTT topic filter with the LoopSeed
+// WakeSubscription pairs an MQTT topic filter with the LoopProfile
 // configuration used to wake the agent when a message arrives.
 type WakeSubscription struct {
-	ID        string          `json:"id"`
-	Topic     string          `json:"topic"`
-	Seed      router.LoopSeed `json:"seed"`
-	Source    string          `json:"source"` // "config" or "runtime"
-	CreatedAt time.Time       `json:"created_at"`
+	ID        string             `json:"id"`
+	Topic     string             `json:"topic"`
+	Seed      router.LoopProfile `json:"seed"`
+	Source    string             `json:"source"` // "config" or "runtime"
+	CreatedAt time.Time          `json:"created_at"`
 }
 
 // SubscriptionStore manages wake-enabled MQTT subscriptions with
@@ -173,7 +173,7 @@ func (s *SubscriptionStore) SetSubscribeHook(fn func(topics []string)) {
 // returns the new subscription. The topic filter and seed are validated
 // before persistence — invalid values are rejected early rather than
 // stored and retried forever.
-func (s *SubscriptionStore) Add(topic string, seed router.LoopSeed) (WakeSubscription, error) {
+func (s *SubscriptionStore) Add(topic string, seed router.LoopProfile) (WakeSubscription, error) {
 	if err := router.ValidateTopicFilter(topic); err != nil {
 		return WakeSubscription{}, fmt.Errorf("invalid topic filter: %w", err)
 	}
@@ -262,7 +262,7 @@ func (s *SubscriptionStore) List() []WakeSubscription {
 
 // Matches returns all wake subscriptions whose topic filter matches
 // the given concrete MQTT topic. Multiple subscriptions on the same
-// topic (with different LoopSeed configurations) are all returned,
+// topic (with different LoopProfile configurations) are all returned,
 // enabling fan-out dispatch.
 func (s *SubscriptionStore) Matches(topic string) []WakeSubscription {
 	s.mu.RLock()

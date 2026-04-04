@@ -82,7 +82,7 @@ func mqttWakeHandler(
 					ConversationID: convID,
 					Messages:       []agent.Message{{Role: "user", Content: msg}},
 				}
-				applyLoopSeed(&ws.Seed, req)
+				applyLoopProfile(&ws.Seed, req)
 
 				// Always tag the source so tools and logging can identify
 				// MQTT-triggered conversations.
@@ -250,11 +250,11 @@ func sanitizePayload(payload []byte) string {
 	return truncated + fmt.Sprintf("\n\n[Truncated: %d bytes total, showing first %d bytes]", len(s), maxWakePayloadBytes)
 }
 
-// applyLoopSeed applies a LoopSeed's configuration to an agent.Request.
+// applyLoopProfile applies a LoopProfile's configuration to an agent.Request.
 // It sets the model, merges routing hints, and copies tool exclusions
 // and seed tags. This function lives in the app package rather than on
-// LoopSeed itself to avoid a circular import between router and agent.
-func applyLoopSeed(seed *router.LoopSeed, req *agent.Request) {
+// LoopProfile itself to avoid a circular import between router and agent.
+func applyLoopProfile(seed *router.LoopProfile, req *agent.Request) {
 	opts := seed.RequestOptions()
 
 	if opts.Model != "" {
