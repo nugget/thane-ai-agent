@@ -1,10 +1,14 @@
 package app
 
 import (
+	"context"
+	"log/slog"
+	"os"
 	"testing"
 	"time"
 
 	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
+	"github.com/nugget/thane-ai-agent/internal/memory"
 )
 
 func TestCompileLoopAgentRequest(t *testing.T) {
@@ -71,5 +75,58 @@ func TestCompileLoopAgentRequest(t *testing.T) {
 	}
 	if req.InitialTags[0] != "monitoring" {
 		t.Fatalf("InitialTags mutated = %#v", req.InitialTags)
+	}
+}
+
+func TestConversationSystemInjector(t *testing.T) {
+	mem := memory.NewStore(10)
+	tmpDir := t.TempDir()
+	workingStore, err := memory.NewSQLiteStore(tmpDir+"/working.db", 100)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore: %v", err)
+	}
+	t.Cleanup(func() { _ = workingStore.Close() })
+	archiveStore, err := memory.NewArchiveStoreFromDB(workingStore.DB(), nil, nil)
+	if err != nil {
+		t.Fatalf("NewArchiveStoreFromDB: %v", err)
+	}
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
+	archiver := memory.NewArchiveAdapter(archiveStore, workingStore, workingStore, logger)
+	if _, err := archiver.StartSession("conv-1"); err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+
+	inj := &conversationSystemInjector{
+		mem:      mem,
+		archiver: archiver,
+	}
+
+	if !inj.IsSessionAlive("conv-1") {
+		t.Fatal("IsSessionAlive(conv-1) = false, want true")
+	}
+	if inj.IsSessionAlive("conv-2") {
+		t.Fatal("IsSessionAlive(conv-2) = true, want false")
+	}
+
+	if err := inj.InjectSystemMessage("conv-1", "hello from callback"); err != nil {
+		t.Fatalf("InjectSystemMessage: %v", err)
+	}
+	if err := inj.DeliverCompletion(context.Background(), looppkg.CompletionDelivery{
+		Mode:           looppkg.CompletionConversation,
+		ConversationID: "conv-1",
+		Content:        "hello from detached loop",
+	}); err != nil {
+		t.Fatalf("DeliverCompletion: %v", err)
+	}
+
+	msgs := mem.GetMessages("conv-1")
+	if len(msgs) != 2 {
+		t.Fatalf("messages len = %d, want 2", len(msgs))
+	}
+	if msgs[0].Role != "system" || msgs[0].Content != "hello from callback" {
+		t.Fatalf("first message = %#v", msgs[0])
+	}
+	if msgs[1].Role != "system" || msgs[1].Content != "hello from detached loop" {
+		t.Fatalf("second message = %#v", msgs[1])
 	}
 }

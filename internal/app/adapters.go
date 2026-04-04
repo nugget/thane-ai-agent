@@ -571,24 +571,33 @@ func resolveContactByChannelAddress(store *contacts.Store, channel, address stri
 	return nilID, false
 }
 
-// notifSessionInjector adapts the memory store and archive adapter
-// into a [notifications.SessionInjector]. It avoids importing
-// notifications in the memory package by using this thin adapter in
-// the app package.
-type notifSessionInjector struct {
-	mem      *memory.SQLiteStore
+// conversationSystemInjector is the shared app-side bridge for writing
+// detached system-originated messages back into live conversations.
+// Both notification callbacks and loops-ng detached completions use
+// this adapter so completion routing converges on one app-level seam.
+type conversationSystemInjector struct {
+	mem      memory.MemoryStore
 	archiver *memory.ArchiveAdapter
 }
 
 // InjectSystemMessage adds a system message to the conversation's
 // memory so the agent sees it on the next turn.
-func (n *notifSessionInjector) InjectSystemMessage(conversationID, message string) error {
+func (n *conversationSystemInjector) InjectSystemMessage(conversationID, message string) error {
+	if n == nil || n.mem == nil {
+		return nil
+	}
+	if conversationID == "" || strings.TrimSpace(message) == "" {
+		return nil
+	}
 	return n.mem.AddMessage(conversationID, "system", message)
 }
 
 // IsSessionAlive reports whether the conversation has an active
 // archive session.
-func (n *notifSessionInjector) IsSessionAlive(conversationID string) bool {
+func (n *conversationSystemInjector) IsSessionAlive(conversationID string) bool {
+	if n == nil || n.archiver == nil || conversationID == "" {
+		return false
+	}
 	return n.archiver.ActiveSessionID(conversationID) != ""
 }
 
@@ -604,21 +613,17 @@ func (n *notifDelegateSpawner) Spawn(ctx context.Context, task, guidance string)
 	return err
 }
 
-// loopConversationCompletionSink injects detached loop completions back
-// into a live conversation as system messages so the primary loop can
-// notice the background result on its next turn.
-type loopConversationCompletionSink struct {
-	mem memory.MemoryStore
-}
-
-func (s *loopConversationCompletionSink) DeliverCompletion(_ context.Context, delivery looppkg.CompletionDelivery) error {
-	if s == nil || s.mem == nil {
+// DeliverCompletion injects detached loop completions back into a live
+// conversation as system messages so the primary loop can notice the
+// background result on its next turn.
+func (n *conversationSystemInjector) DeliverCompletion(_ context.Context, delivery looppkg.CompletionDelivery) error {
+	if n == nil {
 		return nil
 	}
 	if delivery.ConversationID == "" || strings.TrimSpace(delivery.Content) == "" {
 		return nil
 	}
-	return s.mem.AddMessage(delivery.ConversationID, "system", delivery.Content)
+	return n.InjectSystemMessage(delivery.ConversationID, delivery.Content)
 }
 
 // channelLoopAdapter bridges [awareness.ChannelLoopSource] to the loop
