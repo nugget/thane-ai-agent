@@ -11,7 +11,9 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/config"
 	"github.com/nugget/thane-ai-agent/internal/database"
+	"github.com/nugget/thane-ai-agent/internal/events"
 	"github.com/nugget/thane-ai-agent/internal/llm"
+	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
 	"github.com/nugget/thane-ai-agent/internal/models"
 	"github.com/nugget/thane-ai-agent/internal/router"
 	"github.com/nugget/thane-ai-agent/internal/tools"
@@ -87,6 +89,22 @@ func newTestRegistry() *tools.Registry {
 		},
 	})
 	return r
+}
+
+type mockLoopRunner struct {
+	onRun func(req looppkg.Request)
+	resp  *looppkg.Response
+	err   error
+}
+
+func (m *mockLoopRunner) Run(_ context.Context, req looppkg.Request, _ looppkg.StreamCallback) (*looppkg.Response, error) {
+	if m.onRun != nil {
+		m.onRun(req)
+	}
+	if req.OnProgress != nil {
+		req.OnProgress(events.KindLoopToolDone, map[string]any{"tool": "get_state"})
+	}
+	return m.resp, m.err
 }
 
 func TestExecute_SimpleTextResponse(t *testing.T) {
@@ -190,6 +208,81 @@ func TestExecute_WithToolCalls(t *testing.T) {
 	}
 	if result.Duration <= 0 {
 		t.Errorf("Duration = %v, want > 0", result.Duration)
+	}
+}
+
+func TestExecute_LoopBackedPathUsesLaunch(t *testing.T) {
+	t.Parallel()
+
+	var captured looppkg.Request
+	runner := &mockLoopRunner{
+		onRun: func(req looppkg.Request) {
+			captured = req
+		},
+		resp: &looppkg.Response{
+			Content:                  "delegate answer",
+			Model:                    "deepslate/google/gemma-3-4b",
+			FinishReason:             "stop",
+			InputTokens:              120,
+			OutputTokens:             42,
+			CacheCreationInputTokens: 11,
+			CacheReadInputTokens:     7,
+			Iterations:               2,
+			Exhausted:                false,
+		},
+	}
+
+	exec := NewExecutor(slog.Default(), nil, nil, newTestRegistry(), "spark/gpt-oss:20b")
+	exec.ConfigureLoopExecution(runner, looppkg.NewRegistry())
+
+	result, err := exec.Execute(context.Background(), "Check the office light", "ha", "Be concise", []string{"homeassistant"}, nil)
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if result.Content != "delegate answer" {
+		t.Fatalf("Content = %q, want delegate answer", result.Content)
+	}
+	if result.Model != "deepslate/google/gemma-3-4b" {
+		t.Fatalf("Model = %q", result.Model)
+	}
+	if result.Iterations != 2 {
+		t.Fatalf("Iterations = %d, want 2", result.Iterations)
+	}
+	if result.InputTokens != 120 || result.OutputTokens != 42 {
+		t.Fatalf("tokens = %d/%d", result.InputTokens, result.OutputTokens)
+	}
+	if result.CacheCreationInputTokens != 11 || result.CacheReadInputTokens != 7 {
+		t.Fatalf("cache tokens = %d/%d", result.CacheCreationInputTokens, result.CacheReadInputTokens)
+	}
+	if result.Exhausted {
+		t.Fatal("Exhausted = true, want false")
+	}
+	if len(result.ToolCalls) != 1 || result.ToolCalls[0].Name != "get_state" || !result.ToolCalls[0].Success {
+		t.Fatalf("ToolCalls = %#v", result.ToolCalls)
+	}
+	if captured.ConversationID == "" {
+		t.Fatal("ConversationID = empty, want delegate conversation")
+	}
+	if captured.Model != "spark/gpt-oss:20b" {
+		t.Fatalf("captured Model = %q, want spark/gpt-oss:20b", captured.Model)
+	}
+	if captured.SystemPrompt == "" {
+		t.Fatal("SystemPrompt = empty, want delegate prompt")
+	}
+	if len(captured.Messages) != 1 || !strings.Contains(captured.Messages[0].Content, "Check the office light") || !strings.Contains(captured.Messages[0].Content, "Be concise") {
+		t.Fatalf("Messages = %#v", captured.Messages)
+	}
+	if captured.Hints["source"] != "delegate" {
+		t.Fatalf("source hint = %q, want delegate", captured.Hints["source"])
+	}
+	if captured.Hints[router.HintDelegationGating] != "disabled" {
+		t.Fatalf("delegation gating hint = %q, want disabled", captured.Hints[router.HintDelegationGating])
+	}
+	if captured.SkipTagFilter {
+		t.Fatal("SkipTagFilter = true, want false for explicit tag-scoped delegate")
+	}
+	if captured.UsageRole != "delegate" || captured.UsageTaskName != "ha" {
+		t.Fatalf("usage role/task = %q/%q", captured.UsageRole, captured.UsageTaskName)
 	}
 }
 

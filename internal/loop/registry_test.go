@@ -464,6 +464,22 @@ func TestRegistryLaunchForwardsOnProgress(t *testing.T) {
 	}
 }
 
+func TestLaunchValidateAllowsTaskOverrideWithoutSpecTask(t *testing.T) {
+	t.Parallel()
+
+	launch := Launch{
+		Spec: Spec{
+			Name:       "launch-task-override",
+			Operation:  OperationRequestReply,
+			Completion: CompletionReturn,
+		},
+		Task: "run this task",
+	}
+	if err := launch.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
 func TestRegistryShutdownAll(t *testing.T) {
 	t.Parallel()
 

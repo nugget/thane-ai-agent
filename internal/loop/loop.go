@@ -292,6 +292,9 @@ func NewFromLaunch(launch Launch, deps Deps) (*Loop, error) {
 	}
 
 	spec := launch.Spec
+	if launch.Task != "" && spec.Task == "" && spec.TaskBuilder == nil && spec.Handler == nil {
+		spec.Task = launch.Task
+	}
 	cfg := spec.ToConfig()
 	if launch.ParentID != "" {
 		cfg.ParentID = launch.ParentID

@@ -9,6 +9,7 @@ import (
 	"math"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -95,7 +96,7 @@ type Executor struct {
 	tagCtxFunc       tagContextFunc // nil-safe — replaces forgeContext when set
 	eventBus         *events.Bus
 	contentWriter    *logging.ContentWriter
-	loopRunner       *agent.Loop
+	loopRunner       looppkg.Runner
 	loopRegistry     *looppkg.Registry
 	sessionArchiver  agent.SessionArchiver
 	conversations    *memory.SQLiteStore
@@ -230,11 +231,11 @@ func (e *Executor) SetContentWriter(w *logging.ContentWriter) {
 	e.contentWriter = w
 }
 
-// ConfigureLoopExecution configures real loop-backed delegate execution. When
-// both runner and registry are set, Execute spawns a one-shot child loop whose
-// handler calls the core agent runner, giving delegates the same telemetry path
-// as other loop-driven work.
-func (e *Executor) ConfigureLoopExecution(runner *agent.Loop, registry *looppkg.Registry) {
+// ConfigureLoopExecution configures loop-backed delegate execution. When both
+// runner and registry are set, Execute launches a one-shot child loop through
+// the shared loops-ng path, giving delegates the same telemetry path as other
+// loop-driven work.
+func (e *Executor) ConfigureLoopExecution(runner looppkg.Runner, registry *looppkg.Registry) {
 	e.loopRunner = runner
 	e.loopRegistry = registry
 }
@@ -715,183 +716,156 @@ type preparedExecution struct {
 	toolTimeout      time.Duration
 }
 
-type loopOutcome struct {
-	result *Result
-	err    error
-}
-
 func (e *Executor) executeViaLoop(ctx context.Context, task, profileName, guidance string, tags []string, pathPrefixes map[string]string) (*Result, error) {
 	prep, err := e.prepareExecution(ctx, task, profileName, guidance, tags, pathPrefixes)
 	if err != nil {
 		return nil, err
 	}
 
-	outcomeCh := make(chan loopOutcome, 1)
 	loopName := "delegate-" + prep.id[:8]
 	loopMaxDuration := prep.maxDuration + 5*time.Second
 	if loopMaxDuration <= 0 {
 		loopMaxDuration = prep.maxDuration
 	}
 
-	loopID, err := e.loopRegistry.SpawnLoop(ctx, looppkg.Config{
-		Name:         loopName,
-		MaxIter:      1,
-		MaxDuration:  loopMaxDuration,
-		SleepMin:     time.Millisecond,
-		SleepMax:     time.Millisecond,
-		SleepDefault: time.Millisecond,
-		Jitter:       looppkg.Float64Ptr(0),
-		ParentID:     prep.parentLoopID,
-		Tags:         append([]string(nil), prep.effectiveTags...),
-		Handler: func(hCtx context.Context, _ any) error {
-			runCtx, cancel := context.WithTimeout(hCtx, prep.maxDuration)
-			defer cancel()
-			runStart := time.Now()
+	var toolCallsMu sync.Mutex
+	var toolCalls []ToolCallOutcome
 
-			var toolCalls []ToolCallOutcome
-			progressStream := agent.BuildProgressStream(looppkg.ProgressFunc(hCtx))
-			stream := func(evt agent.StreamEvent) {
-				if progressStream != nil {
-					progressStream(evt)
-				}
-				if evt.Kind == agent.KindToolCallDone {
-					toolCalls = append(toolCalls, ToolCallOutcome{
-						Name:    evt.ToolName,
-						Success: evt.ToolError == "",
-					})
-				}
-			}
+	hints := make(map[string]string, len(prep.profile.RouterHints)+2)
+	for k, v := range prep.profile.RouterHints {
+		hints[k] = v
+	}
+	hints["source"] = "delegate"
+	hints[router.HintDelegationGating] = "disabled"
 
-			hints := make(map[string]string, len(prep.profile.RouterHints)+2)
-			for k, v := range prep.profile.RouterHints {
-				hints[k] = v
-			}
-			hints["source"] = "delegate"
-			hints[router.HintDelegationGating] = "disabled"
-
-			req := &agent.Request{
-				ConversationID:  prep.conversationID,
-				Messages:        []agent.Message{{Role: "user", Content: prep.userMessage}},
-				Model:           prep.model,
-				Hints:           hints,
-				AllowedTools:    append([]string(nil), prep.toolNames...),
-				SkipTagFilter:   len(prep.explicitTags) == 0,
-				InitialTags:     append([]string(nil), prep.effectiveTags...),
-				SystemPrompt:    prep.systemPrompt,
-				MaxIterations:   prep.maxIterations,
-				MaxOutputTokens: prep.maxOutputTokens,
-				ToolTimeout:     prep.toolTimeout,
-				UsageRole:       "delegate",
-				UsageTaskName:   prep.profile.Name,
-			}
-
-			resp, runErr := e.loopRunner.Run(runCtx, req, stream)
-			looppkg.ReportConversationID(hCtx, prep.conversationID)
-			summary := looppkg.IterationSummary(hCtx)
-
-			if runErr != nil {
-				if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
-					if summary != nil {
-						summary["delegate_profile"] = prep.profile.Name
-						summary["delegate_exhausted"] = true
-						summary["delegate_finish_reason"] = ExhaustWallClock
-					}
-					outcomeCh <- loopOutcome{
-						result: &Result{
-							Content:       "Delegate was unable to complete the task within its time limit.",
-							Model:         prep.model,
-							Exhausted:     true,
-							ExhaustReason: ExhaustWallClock,
-							ToolCalls:     toolCalls,
-							Duration:      time.Since(runStart),
-						},
-					}
-					return nil
-				}
-				outcomeCh <- loopOutcome{err: fmt.Errorf("delegate failed: %w", runErr)}
-				return runErr
-			}
-
-			looppkg.ReportAgentRun(hCtx, looppkg.AgentRunSummary{
-				RequestID:    resp.RequestID,
-				Model:        resp.Model,
-				InputTokens:  resp.InputTokens,
-				OutputTokens: resp.OutputTokens,
-			})
-			if summary != nil {
-				summary["delegate_profile"] = prep.profile.Name
-				summary["delegate_iterations"] = resp.Iterations
-				summary["delegate_exhausted"] = resp.Exhausted
-				if resp.FinishReason != "" {
-					summary["delegate_finish_reason"] = resp.FinishReason
-				}
-			}
-
-			exhausted := resp.Exhausted
-			exhaustReason := resp.FinishReason
-			if resp.Content == "" && len(toolCalls) > 0 && !exhausted {
-				exhausted = true
-				exhaustReason = ExhaustNoOutput
-			}
-
-			outcomeCh <- loopOutcome{
-				result: &Result{
-					Content:       resp.Content,
-					Model:         resp.Model,
-					Iterations:    resp.Iterations,
-					InputTokens:   resp.InputTokens,
-					OutputTokens:  resp.OutputTokens,
-					Exhausted:     exhausted,
-					ExhaustReason: exhaustReason,
-					ToolCalls:     toolCalls,
-					Duration:      time.Since(runStart),
-				},
-			}
-			return nil
+	runStart := time.Now()
+	launchResult, err := e.loopRegistry.Launch(ctx, looppkg.Launch{
+		Spec: looppkg.Spec{
+			Name:        loopName,
+			Operation:   looppkg.OperationRequestReply,
+			Completion:  looppkg.CompletionReturn,
+			MaxDuration: loopMaxDuration,
+			Tags:        append([]string(nil), prep.explicitTags...),
+			Metadata: map[string]string{
+				"category":          "delegate",
+				"delegate_id":       prep.id,
+				"delegate_task":     truncate(task, 500),
+				"delegate_profile":  prep.profile.Name,
+				"delegate_guidance": truncate(guidance, 500),
+			},
 		},
-		Metadata: map[string]string{
-			"category":          "delegate",
-			"delegate_id":       prep.id,
-			"delegate_task":     truncate(task, 500),
-			"delegate_profile":  prep.profile.Name,
-			"delegate_guidance": truncate(guidance, 500),
+		Task:            prep.userMessage,
+		ParentID:        prep.parentLoopID,
+		ConversationID:  prep.conversationID,
+		Model:           prep.model,
+		Hints:           hints,
+		AllowedTools:    append([]string(nil), prep.toolNames...),
+		SkipTagFilter:   len(prep.explicitTags) == 0,
+		InitialTags:     append([]string(nil), prep.effectiveTags...),
+		SystemPrompt:    prep.systemPrompt,
+		MaxIterations:   prep.maxIterations,
+		MaxOutputTokens: prep.maxOutputTokens,
+		ToolTimeout:     prep.toolTimeout,
+		UsageRole:       "delegate",
+		UsageTaskName:   prep.profile.Name,
+		RunTimeout:      prep.maxDuration,
+		OnProgress: func(kind string, data map[string]any) {
+			if kind != events.KindLoopToolDone {
+				return
+			}
+			name, _ := data["tool"].(string)
+			errMsg, _ := data["error"].(string)
+			toolCallsMu.Lock()
+			toolCalls = append(toolCalls, ToolCallOutcome{
+				Name:    name,
+				Success: errMsg == "",
+			})
+			toolCallsMu.Unlock()
 		},
 	}, looppkg.Deps{
+		Runner:   e.loopRunner,
 		Logger:   prep.log,
 		EventBus: e.eventBus,
 	})
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			e.finishLoopExecution(prep)
+			toolCallsMu.Lock()
+			defer toolCallsMu.Unlock()
+			return &Result{
+				Content:       "Delegate was unable to complete the task within its time limit.",
+				Model:         prep.model,
+				Exhausted:     true,
+				ExhaustReason: ExhaustWallClock,
+				ToolCalls:     append([]ToolCallOutcome(nil), toolCalls...),
+				Duration:      time.Since(runStart),
+			}, nil
+		}
+		if errors.Is(err, context.Canceled) {
+			shouldFinish := e.stopLoopForCancellation(launchResult.LoopID, prep)
+			if shouldFinish {
+				e.finishLoopExecution(prep)
+			}
+			return nil, fmt.Errorf("delegate cancelled: %w", ctx.Err())
+		}
 		e.finishLoopExecution(prep)
-		return nil, fmt.Errorf("spawn delegate loop: %w", err)
+		return nil, fmt.Errorf("delegate failed: %w", err)
 	}
 
+	e.finishLoopExecution(prep)
+	resp := launchResult.Response
+	if resp == nil {
+		return nil, fmt.Errorf("delegate failed: joined launch completed without response")
+	}
+
+	toolCallsMu.Lock()
+	defer toolCallsMu.Unlock()
+
+	exhausted := resp.Exhausted
+	exhaustReason := resp.FinishReason
+	if resp.Content == "" && len(toolCalls) > 0 && !exhausted {
+		exhausted = true
+		exhaustReason = ExhaustNoOutput
+	}
+
+	return &Result{
+		Content:                  resp.Content,
+		Model:                    resp.Model,
+		Iterations:               resp.Iterations,
+		InputTokens:              resp.InputTokens,
+		OutputTokens:             resp.OutputTokens,
+		CacheCreationInputTokens: resp.CacheCreationInputTokens,
+		CacheReadInputTokens:     resp.CacheReadInputTokens,
+		Exhausted:                exhausted,
+		ExhaustReason:            exhaustReason,
+		ToolCalls:                append([]ToolCallOutcome(nil), toolCalls...),
+		Duration:                 time.Since(runStart),
+	}, nil
+}
+
+func (e *Executor) stopLoopForCancellation(loopID string, prep *preparedExecution) bool {
+	if loopID == "" {
+		return true
+	}
+	l := e.loopRegistry.Get(loopID)
+	if l == nil {
+		return true
+	}
+	done := l.Done()
+	l.Stop()
+	if done == nil {
+		return true
+	}
 	select {
-	case outcome := <-outcomeCh:
-		e.finishLoopExecution(prep)
-		if outcome.err != nil {
-			return nil, outcome.err
+	case <-done:
+		return true
+	default:
+		if prep != nil {
+			prep.log.Warn("delegate loop did not stop before cancellation cleanup; skipping archive and clear to avoid racing active writes",
+				"loop_id", loopID,
+			)
 		}
-		return outcome.result, nil
-	case <-ctx.Done():
-		shouldFinish := true
-		if l := e.loopRegistry.Get(loopID); l != nil {
-			done := l.Done()
-			l.Stop()
-			if done != nil {
-				select {
-				case <-done:
-				default:
-					shouldFinish = false
-					prep.log.Warn("delegate loop did not stop before cancellation cleanup; skipping archive and clear to avoid racing active writes",
-						"loop_id", loopID,
-					)
-				}
-			}
-		}
-		if shouldFinish {
-			e.finishLoopExecution(prep)
-		}
-		return nil, fmt.Errorf("delegate cancelled: %w", ctx.Err())
+		return false
 	}
 }
 

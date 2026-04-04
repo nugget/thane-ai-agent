@@ -39,7 +39,11 @@ func (l *Launch) Validate() error {
 	if l.RunTimeout < 0 {
 		return fmt.Errorf("loop: run timeout must be >= 0")
 	}
-	return l.Spec.Validate()
+	spec := l.Spec
+	if l.Task != "" && spec.Task == "" && spec.TaskBuilder == nil && spec.Handler == nil {
+		spec.Task = l.Task
+	}
+	return spec.Validate()
 }
 
 func (l *Launch) requestOverride() Request {

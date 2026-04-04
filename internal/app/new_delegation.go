@@ -44,7 +44,7 @@ func (a *App) initDelegation(s *newState) error {
 	delegateExec.SetUsageRecorder(a.usageStore, cfg.Pricing, a.modelCatalog)
 	delegateExec.UseModelRegistry(a.modelRegistry)
 	delegateExec.SetEventBus(a.eventBus)
-	delegateExec.ConfigureLoopExecution(a.loop, a.loopRegistry)
+	delegateExec.ConfigureLoopExecution(&loopAdapter{agentLoop: a.loop, router: a.rtr}, a.loopRegistry)
 	delegateExec.ConfigureSessionLifecycle(a.archiveAdapter, a.mem)
 	var alwaysActiveTags []string
 	for tag, tagCfg := range cfg.CapabilityTags {
