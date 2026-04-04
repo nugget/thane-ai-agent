@@ -22,6 +22,7 @@ type LMStudioModelInfo struct {
 	State               string `json:"state,omitempty"`
 	MaxContextLength    int    `json:"max_context_length,omitempty"`
 	LoadedContextLength int    `json:"loaded_context_length,omitempty"`
+	LoadedInstanceID    string `json:"loaded_instance_id,omitempty"`
 	Vision              bool   `json:"vision,omitempty"`
 	TrainedForToolUse   bool   `json:"trained_for_tool_use,omitempty"`
 }
@@ -162,10 +163,12 @@ type lmStudioV1ModelCapabilities struct {
 
 func (m lmStudioV1ModelInfo) toModelInfo() LMStudioModelInfo {
 	loadedContext := 0
+	loadedInstanceID := ""
 	state := ""
 	for _, inst := range m.LoadedInstances {
 		if inst.Config.ContextLength > loadedContext {
 			loadedContext = inst.Config.ContextLength
+			loadedInstanceID = inst.ID
 		}
 	}
 	if len(m.LoadedInstances) > 0 {
@@ -180,6 +183,7 @@ func (m lmStudioV1ModelInfo) toModelInfo() LMStudioModelInfo {
 		CompatibilityType:   m.Format,
 		MaxContextLength:    m.MaxContextLength,
 		LoadedContextLength: loadedContext,
+		LoadedInstanceID:    loadedInstanceID,
 		State:               state,
 	}
 	if m.Quantization != nil {

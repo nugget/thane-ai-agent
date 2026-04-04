@@ -64,7 +64,7 @@ func TestRuntimePrepareExplicitModel_LoadsLMStudioContext(t *testing.T) {
 			mu.Unlock()
 			_ = json.NewEncoder(w).Encode(modelproviders.LMStudioLoadResponse{
 				Type:       "llm",
-				InstanceID: req.Model,
+				InstanceID: "google/gemma-3-4b:2",
 				Status:     "loaded",
 			})
 		default:
@@ -97,12 +97,18 @@ func TestRuntimePrepareExplicitModel_LoadsLMStudioContext(t *testing.T) {
 		t.Fatalf("initial LoadedContextWindow = %d, want 4096", dep.LoadedContextWindow)
 	}
 
-	changed, err := runtime.PrepareExplicitModel(context.Background(), "deepslate/google/gemma-3-4b", 6144)
+	prep, err := runtime.PrepareExplicitModel(context.Background(), "deepslate/google/gemma-3-4b", 6144)
 	if err != nil {
 		t.Fatalf("PrepareExplicitModel: %v", err)
 	}
-	if !changed {
+	if prep == nil || !prep.Changed {
 		t.Fatal("PrepareExplicitModel changed = false, want true")
+	}
+	if prep.Instance != "google/gemma-3-4b:2" {
+		t.Fatalf("prep.Instance = %q, want google/gemma-3-4b:2", prep.Instance)
+	}
+	if prep.Resolved != "deepslate/google/gemma-3-4b" {
+		t.Fatalf("prep.Resolved = %q, want deepslate/google/gemma-3-4b", prep.Resolved)
 	}
 
 	dep, err = runtime.Registry().Catalog().ResolveDeploymentRef("deepslate/google/gemma-3-4b")

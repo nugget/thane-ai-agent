@@ -489,11 +489,12 @@ func TestRun_ExplicitModelRetriesProviderContextErrorAfterLMStudioLoad(t *testin
 			mu.Unlock()
 			_ = json.NewEncoder(w).Encode(modelproviders.LMStudioLoadResponse{
 				Type:       "llm",
-				InstanceID: req.Model,
+				InstanceID: "google/gemma-3-4b:7",
 				Status:     "loaded",
 			})
 		case "/v1/chat/completions":
 			var req struct {
+				Model string           `json:"model"`
 				Tools []map[string]any `json:"tools"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -506,6 +507,10 @@ func TestRun_ExplicitModelRetriesProviderContextErrorAfterLMStudioLoad(t *testin
 			mu.Unlock()
 			if current < 131072 {
 				http.Error(w, `{"error":"The number of tokens to keep from the initial prompt is greater than the context length. Try to load the model with a larger context length, or provide a shorter input"}`, http.StatusBadRequest)
+				return
+			}
+			if req.Model != "google/gemma-3-4b:7" {
+				http.Error(w, `{"error":"expected retry to target loaded instance"}`, http.StatusBadRequest)
 				return
 			}
 			if len(req.Tools) > 0 {
@@ -634,7 +639,7 @@ func TestRun_ExplicitModelRetriesWithoutToolsWhenLMStudioAlreadyAtMaxContext(t *
 						"trained_for_tool_use": false,
 					},
 					"loaded_instances": []map[string]any{{
-						"id": "google/gemma-3-4b",
+						"id": "google/gemma-3-4b:7",
 						"config": map[string]any{
 							"context_length": 131072,
 						},
@@ -643,6 +648,7 @@ func TestRun_ExplicitModelRetriesWithoutToolsWhenLMStudioAlreadyAtMaxContext(t *
 			})
 		case "/v1/chat/completions":
 			var req struct {
+				Model string           `json:"model"`
 				Tools []map[string]any `json:"tools"`
 			}
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -652,6 +658,10 @@ func TestRun_ExplicitModelRetriesWithoutToolsWhenLMStudioAlreadyAtMaxContext(t *
 			chatCalls++
 			lastToolCount = len(req.Tools)
 			mu.Unlock()
+			if req.Model != "google/gemma-3-4b:7" {
+				http.Error(w, `{"error":"expected retry to target loaded instance"}`, http.StatusBadRequest)
+				return
+			}
 			if len(req.Tools) > 0 {
 				http.Error(w, `{"error":"The number of tokens to keep from the initial prompt is greater than the context length. Try to load the model with a larger context length, or provide a shorter input"}`, http.StatusBadRequest)
 				return

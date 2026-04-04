@@ -69,3 +69,43 @@ func TestClientBundleBuildRoutedClient_SelectsDeterministicFallback(t *testing.T
 		t.Fatalf("spark should not be used for fallback, got %q", spark.lastModel)
 	}
 }
+
+func TestClientBundleBuildRoutedClient_UsesLMStudioLoadedInstanceForUpstream(t *testing.T) {
+	cat := &Catalog{
+		Resources: []Resource{
+			{ID: "deepslate", Provider: "lmstudio", URL: "http://127.0.0.1:1234"},
+		},
+		Deployments: []Deployment{{
+			ID:               "deepslate/google/gemma-3-4b",
+			ModelName:        "google/gemma-3-4b",
+			Provider:         "lmstudio",
+			ResourceID:       "deepslate",
+			LoadedInstanceID: "google/gemma-3-4b:7",
+		}},
+	}
+	if err := cat.reindex("deepslate/google/gemma-3-4b", ""); err != nil {
+		t.Fatalf("reindex: %v", err)
+	}
+
+	clientImpl := &testBundleClient{}
+	bundle := &ClientBundle{
+		ResourceClients: map[string]llm.Client{
+			"deepslate": clientImpl,
+		},
+	}
+
+	client, err := bundle.BuildRoutedClient(cat)
+	if err != nil {
+		t.Fatalf("BuildRoutedClient: %v", err)
+	}
+	resp, err := client.Chat(context.Background(), "deepslate/google/gemma-3-4b", nil, nil)
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	if clientImpl.lastModel != "google/gemma-3-4b:7" {
+		t.Fatalf("upstream model = %q, want loaded instance id", clientImpl.lastModel)
+	}
+	if resp.Model != "deepslate/google/gemma-3-4b" {
+		t.Fatalf("resp.Model = %q, want stable deployment id", resp.Model)
+	}
+}

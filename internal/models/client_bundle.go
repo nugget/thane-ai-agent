@@ -125,7 +125,11 @@ func (b *ClientBundle) BuildRoutedClient(cat *Catalog) (llm.Client, error) {
 	}
 
 	for _, dep := range cat.Deployments {
-		multi.AddRoute(dep.ID, dep.ResourceID, dep.ModelName)
+		upstreamModel := dep.ModelName
+		if dep.Provider == "lmstudio" && dep.LoadedInstanceID != "" {
+			upstreamModel = dep.LoadedInstanceID
+		}
+		multi.AddRoute(dep.ID, dep.ResourceID, upstreamModel)
 	}
 	for alias, target := range cat.aliases {
 		if alias != target {

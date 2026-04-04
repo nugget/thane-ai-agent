@@ -18,6 +18,15 @@ type RefreshResult struct {
 	Snapshot *RegistrySnapshot
 }
 
+// ExplicitModelPrepareResult describes the provider-side outcome of
+// readying an explicit deployment for immediate use.
+type ExplicitModelPrepareResult struct {
+	Changed  bool
+	Resolved string
+	Instance string
+	Snapshot *RegistrySnapshot
+}
+
 // Runtime owns the long-lived model registry plus the swappable routed
 // llm.Client built from it.
 type Runtime struct {
@@ -87,6 +96,15 @@ func (r *Runtime) OllamaClients() map[string]*modelproviders.OllamaClient {
 	return r.bundle.OllamaClients
 }
 
+// LMStudioClient returns the stable per-resource LM Studio client used
+// by runtime discovery and explicit recovery flows.
+func (r *Runtime) LMStudioClient(resourceID string) *modelproviders.LMStudioClient {
+	if r == nil || r.bundle == nil {
+		return nil
+	}
+	return r.bundle.LMStudioClients[resourceID]
+}
+
 // HealthClients returns the stable per-resource health clients used by
 // connwatch and inventory refresh triggers.
 func (r *Runtime) HealthClients() map[string]ResourceHealthClient {
@@ -149,9 +167,9 @@ func (r *Runtime) refreshLocked(ctx context.Context) (*RefreshResult, error) {
 // registry snapshot when the provider state changes. Today this is used
 // only for LM Studio deployments whose loaded context window is smaller
 // than the runner-advertised maximum.
-func (r *Runtime) PrepareExplicitModel(ctx context.Context, ref string, contextSize int) (bool, error) {
+func (r *Runtime) PrepareExplicitModel(ctx context.Context, ref string, contextSize int) (*ExplicitModelPrepareResult, error) {
 	if r == nil {
-		return false, fmt.Errorf("nil runtime")
+		return nil, fmt.Errorf("nil runtime")
 	}
 
 	r.refreshMu.Lock()
@@ -159,29 +177,35 @@ func (r *Runtime) PrepareExplicitModel(ctx context.Context, ref string, contextS
 
 	cat := r.registry.Catalog()
 	if cat == nil {
-		return false, fmt.Errorf("model registry is not initialized")
+		return nil, fmt.Errorf("model registry is not initialized")
 	}
 	dep, err := cat.ResolveDeploymentRef(ref)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 	if !CanExpandLoadedContext(dep, contextSize) {
-		return false, nil
+		return &ExplicitModelPrepareResult{Resolved: dep.ID}, nil
 	}
 
 	client := r.bundle.LMStudioClients[dep.ResourceID]
 	if client == nil {
-		return false, fmt.Errorf("lmstudio resource %q is unavailable", dep.ResourceID)
+		return nil, fmt.Errorf("lmstudio resource %q is unavailable", dep.ResourceID)
 	}
-	if _, err := client.LoadModel(ctx, dep.ModelName, contextSize); err != nil {
-		return false, err
+	loadResp, err := client.LoadModel(ctx, dep.ModelName, contextSize)
+	if err != nil {
+		return nil, err
 	}
 
 	result, err := r.refreshLocked(ctx)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
-	return result.Changed, nil
+	return &ExplicitModelPrepareResult{
+		Changed:  result.Changed,
+		Resolved: dep.ID,
+		Instance: loadResp.InstanceID,
+		Snapshot: result.Snapshot,
+	}, nil
 }
 
 // CanExpandLoadedContext reports whether a deployment can plausibly be

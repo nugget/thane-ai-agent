@@ -50,6 +50,7 @@ type Deployment struct {
 	ContextWindow         int
 	MaxContextWindow      int
 	LoadedContextWindow   int
+	LoadedInstanceID      string
 	Speed                 int
 	Quality               int
 	CostTier              int
@@ -180,6 +181,7 @@ func BuildCatalog(cfg *config.Config) (*Catalog, error) {
 		ContextWindow       int
 		MaxContextWindow    int
 		LoadedContextWindow int
+		LoadedInstanceID    string
 		Speed               int
 		Quality             int
 		CostTier            int
@@ -288,6 +290,7 @@ func BuildCatalog(cfg *config.Config) (*Catalog, error) {
 			ContextWindow:       p.ContextWindow,
 			MaxContextWindow:    p.MaxContextWindow,
 			LoadedContextWindow: p.LoadedContextWindow,
+			LoadedInstanceID:    p.LoadedInstanceID,
 			Speed:               p.Speed,
 			Quality:             p.Quality,
 			CostTier:            p.CostTier,

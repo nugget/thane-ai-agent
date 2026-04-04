@@ -47,6 +47,7 @@ type DiscoveredModel struct {
 	ContextWindow       int
 	MaxContextWindow    int
 	LoadedContextWindow int
+	LoadedInstanceID    string
 }
 
 // DiscoverInventory probes configured resources for live model
@@ -148,6 +149,7 @@ func DiscoverInventory(ctx context.Context, cat *Catalog, bundle *ClientBundle) 
 					ContextWindow:       contextWindow,
 					MaxContextWindow:    m.MaxContextLength,
 					LoadedContextWindow: m.LoadedContextLength,
+					LoadedInstanceID:    m.LoadedInstanceID,
 				})
 			}
 		}
@@ -242,6 +244,7 @@ func MergeInventory(base *Catalog, inv *Inventory) (*Catalog, error) {
 				ContextWindow:         firstPositiveInt(m.ContextWindow, base.ContextWindowForModel(m.Name, 8192)),
 				MaxContextWindow:      m.MaxContextWindow,
 				LoadedContextWindow:   m.LoadedContextWindow,
+				LoadedInstanceID:      m.LoadedInstanceID,
 				Speed:                 5,
 				Quality:               5,
 				CostTier:              defaultCostTier(ri.Provider),

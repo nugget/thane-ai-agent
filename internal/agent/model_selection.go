@@ -147,14 +147,14 @@ func (l *Loop) maybePrepareExplicitModel(ctx context.Context, ref string, needsT
 		return false, nil
 	}
 
-	changed, err := l.modelRuntime.PrepareExplicitModel(ctx, dep.ID, contextSize)
+	prep, err := l.modelRuntime.PrepareExplicitModel(ctx, dep.ID, contextSize)
 	if err != nil {
 		return false, err
 	}
-	if changed && l.router != nil && l.modelRegistry != nil {
+	if prep != nil && prep.Changed && l.router != nil && l.modelRegistry != nil {
 		l.router.UpdateConfig(l.modelRegistry.Catalog().RouterConfig(0))
 	}
-	return changed, nil
+	return prep != nil && prep.Changed, nil
 }
 
 func (l *Loop) maybeRetryExplicitModelAfterProviderContextError(
@@ -185,31 +185,54 @@ func (l *Loop) maybeRetryExplicitModelAfterProviderContextError(
 	}
 
 	changed := false
+	retryModel := dep.ID
+	retryUpstreamModel := strings.TrimSpace(dep.LoadedInstanceID)
 	if dep.MaxContextWindow > dep.LoadedContextWindow && dep.MaxContextWindow > 0 {
-		prepChanged, prepErr := l.modelRuntime.PrepareExplicitModel(ctx, dep.ID, dep.MaxContextWindow)
+		prep, prepErr := l.modelRuntime.PrepareExplicitModel(ctx, dep.ID, dep.MaxContextWindow)
 		if prepErr != nil {
 			return nil, "", prepErr, true
 		}
-		changed = prepChanged
+		if prep != nil {
+			changed = prep.Changed
+			if strings.TrimSpace(prep.Resolved) != "" {
+				retryModel = prep.Resolved
+			}
+			if strings.TrimSpace(prep.Instance) != "" {
+				retryUpstreamModel = strings.TrimSpace(prep.Instance)
+			}
+		}
 		if changed && l.router != nil && l.modelRegistry != nil {
 			l.router.UpdateConfig(l.modelRegistry.Catalog().RouterConfig(0))
 		}
 	}
 
+	retryCall := func(tools []map[string]any) (*llm.ChatResponse, error) {
+		if retryUpstreamModel != "" {
+			if client := l.modelRuntime.LMStudioClient(dep.ResourceID); client != nil {
+				resp, err := client.ChatStream(ctx, retryUpstreamModel, msgs, tools, stream)
+				if resp != nil {
+					resp.Model = retryModel
+				}
+				return resp, err
+			}
+		}
+		return l.llm.ChatStream(ctx, retryModel, msgs, tools, stream)
+	}
+
 	if changed {
-		resp, retryErr := l.llm.ChatStream(ctx, dep.ID, msgs, toolDefs, stream)
+		resp, retryErr := retryCall(toolDefs)
 		if retryErr == nil {
-			return resp, dep.ID, nil, true
+			return resp, retryModel, nil, true
 		}
 		if len(toolDefs) == 0 || dep.TrainedForToolUse || !isLMStudioLoadedContextError(retryErr) {
 			return nil, "", retryErr, true
 		}
 	}
 
-	if len(toolDefs) > 0 && !dep.TrainedForToolUse {
-		resp, retryErr := l.llm.ChatStream(ctx, dep.ID, msgs, nil, stream)
+	if len(toolDefs) > 0 && !dep.TrainedForToolUse && strings.TrimSpace(retryModel) != "" {
+		resp, retryErr := retryCall(nil)
 		if retryErr == nil {
-			return resp, dep.ID, nil, true
+			return resp, retryModel, nil, true
 		}
 		if changed || isLMStudioLoadedContextError(retryErr) {
 			return nil, "", retryErr, true

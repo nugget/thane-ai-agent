@@ -88,6 +88,7 @@ type RegistryDeploymentSnapshot struct {
 	ContextWindow         int                    `json:"context_window,omitempty"`
 	MaxContextWindow      int                    `json:"max_context_window,omitempty"`
 	LoadedContextWindow   int                    `json:"loaded_context_window,omitempty"`
+	LoadedInstanceID      string                 `json:"loaded_instance_id,omitempty"`
 	Speed                 int                    `json:"speed,omitempty"`
 	Quality               int                    `json:"quality,omitempty"`
 	CostTier              int                    `json:"cost_tier,omitempty"`
@@ -361,6 +362,7 @@ func (r *Registry) Snapshot() *RegistrySnapshot {
 			ContextWindow:         dep.ContextWindow,
 			MaxContextWindow:      dep.MaxContextWindow,
 			LoadedContextWindow:   dep.LoadedContextWindow,
+			LoadedInstanceID:      dep.LoadedInstanceID,
 			Speed:                 dep.Speed,
 			Quality:               dep.Quality,
 			CostTier:              dep.CostTier,
