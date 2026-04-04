@@ -9,9 +9,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nugget/thane-ai-agent/internal/config"
+	"github.com/nugget/thane-ai-agent/internal/database"
 	"github.com/nugget/thane-ai-agent/internal/llm"
+	"github.com/nugget/thane-ai-agent/internal/models"
 	"github.com/nugget/thane-ai-agent/internal/router"
 	"github.com/nugget/thane-ai-agent/internal/tools"
+	"github.com/nugget/thane-ai-agent/internal/usage"
 )
 
 // mockLLMClient returns pre-configured responses in sequence.
@@ -186,6 +190,85 @@ func TestExecute_WithToolCalls(t *testing.T) {
 	}
 	if result.Duration <= 0 {
 		t.Errorf("Duration = %v, want > 0", result.Duration)
+	}
+}
+
+func TestRecordCompletion_UsesLiveModelRegistryForUsageIdentity(t *testing.T) {
+	db, err := database.OpenMemory()
+	if err != nil {
+		t.Fatalf("database.OpenMemory: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	usageStore, err := usage.NewStore(db)
+	if err != nil {
+		t.Fatalf("usage.NewStore: %v", err)
+	}
+
+	staleCatalog, err := models.BuildCatalog(&config.Config{
+		Models: config.ModelsConfig{
+			Resources: map[string]config.ModelServerConfig{
+				"deepslate": {URL: "http://deepslate:1234", Provider: "lmstudio"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("models.BuildCatalog: %v", err)
+	}
+
+	registry, err := models.NewRegistry(staleCatalog)
+	if err != nil {
+		t.Fatalf("models.NewRegistry: %v", err)
+	}
+	if err := registry.ApplyInventory(&models.Inventory{
+		Resources: []models.ResourceInventory{
+			{
+				ResourceID: "deepslate",
+				Provider:   "lmstudio",
+				Attempted:  true,
+				Models: []models.DiscoveredModel{
+					{
+						Name:              "google/gemma-3-4b",
+						SupportsChat:      true,
+						SupportsStreaming: true,
+						SupportsImages:    true,
+						ContextWindow:     131072,
+					},
+				},
+			},
+		},
+	}, time.Now().UTC()); err != nil {
+		t.Fatalf("registry.ApplyInventory: %v", err)
+	}
+
+	exec := NewExecutor(slog.Default(), &mockLLMClient{}, nil, newTestRegistry(), "test-model")
+	exec.SetUsageRecorder(usageStore, nil, staleCatalog)
+	exec.UseModelRegistry(registry)
+	exec.recordCompletion(&completionRecord{
+		log:            slog.Default(),
+		delegateID:     "delegate-1",
+		conversationID: "conv-1",
+		profileName:    "general",
+		model:          "deepslate/google/gemma-3-4b",
+		totalInput:     120,
+		totalOutput:    34,
+		startTime:      time.Now().Add(-2 * time.Second),
+	})
+
+	byProvider, err := usageStore.SummaryByProvider(time.Time{}, time.Now().Add(time.Minute))
+	if err != nil {
+		t.Fatalf("SummaryByProvider: %v", err)
+	}
+	if len(byProvider) != 1 || byProvider[0].Key != "lmstudio" {
+		t.Fatalf("provider summary = %+v, want lmstudio", byProvider)
+	}
+
+	byResource, err := usageStore.SummaryByResource(time.Time{}, time.Now().Add(time.Minute))
+	if err != nil {
+		t.Fatalf("SummaryByResource: %v", err)
+	}
+	if len(byResource) != 1 || byResource[0].Key != "deepslate" {
+		t.Fatalf("resource summary = %+v, want deepslate", byResource)
 	}
 }
 

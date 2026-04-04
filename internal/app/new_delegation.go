@@ -42,6 +42,7 @@ func (a *App) initDelegation(s *newState) error {
 	}
 	delegateExec.SetArchiver(a.archiveStore)
 	delegateExec.SetUsageRecorder(a.usageStore, cfg.Pricing, a.modelCatalog)
+	delegateExec.UseModelRegistry(a.modelRegistry)
 	delegateExec.SetEventBus(a.eventBus)
 	delegateExec.ConfigureLoopExecution(a.loop, a.loopRegistry)
 	delegateExec.ConfigureSessionLifecycle(a.archiveAdapter, a.mem)

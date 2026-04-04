@@ -83,6 +83,9 @@ func (r *Registry) registerCostSummary() {
 // group_by parameter. Results are ordered by cost descending.
 func queryGrouped(store *usage.Store, groupBy string, start, end time.Time) ([]usage.GroupedSummary, string, error) {
 	groupBy = strings.ToLower(strings.TrimSpace(groupBy))
+	if groupBy == "" {
+		return nil, "", nil
+	}
 	switch groupBy {
 	case "model":
 		result, err := store.SummaryByGroup(groupBy, start, end)

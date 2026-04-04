@@ -86,6 +86,7 @@ type Executor struct {
 	usageStore       *usage.Store
 	pricing          map[string]config.PricingEntry
 	usageCatalog     *models.Catalog
+	modelRegistry    *models.Registry
 	alwaysActiveTags []string
 	lensProvider     func() []string // returns active global lenses (nil = none)
 	forgeContext     string
@@ -176,6 +177,12 @@ func (e *Executor) SetUsageRecorder(store *usage.Store, pricing map[string]confi
 	e.usageStore = store
 	e.pricing = pricing
 	e.usageCatalog = cat
+}
+
+// UseModelRegistry configures the live model registry used for
+// runtime usage attribution and deployment metadata resolution.
+func (e *Executor) UseModelRegistry(registry *models.Registry) {
+	e.modelRegistry = registry
 }
 
 // SetEventBus configures the event bus for delegate lifecycle events.
@@ -1162,7 +1169,7 @@ func (e *Executor) recordCompletion(rec *completionRecord) {
 	// Record usage for cost tracking. Uses context.Background() because
 	// the delegate's context may be cancelled (e.g., wall-clock exhaustion).
 	if e.usageStore != nil {
-		identity := usage.ResolveModelIdentity(rec.model, e.usageCatalog)
+		identity := usage.ResolveModelIdentity(rec.model, e.currentModelCatalog())
 		cost := usage.ComputeCostForIdentity(identity, rec.totalInput, rec.totalOutput, e.pricing)
 		usageRec := usage.Record{
 			Timestamp:      now,
@@ -1182,6 +1189,16 @@ func (e *Executor) recordCompletion(rec *completionRecord) {
 			rec.log.Warn("failed to record delegate usage", "error", err)
 		}
 	}
+}
+
+func (e *Executor) currentModelCatalog() *models.Catalog {
+	if e == nil {
+		return nil
+	}
+	if e.modelRegistry != nil {
+		return e.modelRegistry.Catalog()
+	}
+	return e.usageCatalog
 }
 
 // archiveSession persists the delegate's messages, tool calls, and ends

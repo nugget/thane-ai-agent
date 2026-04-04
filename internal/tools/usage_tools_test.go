@@ -289,6 +289,39 @@ func TestCostSummaryTool_GroupBy_InvalidValue(t *testing.T) {
 	}
 }
 
+func TestCostSummaryTool_GroupBy_WhitespaceMeansUngrouped(t *testing.T) {
+	store := testUsageStore(t)
+	ctx := context.Background()
+
+	if err := store.Record(ctx, usage.Record{
+		Timestamp:    time.Now().UTC(),
+		RequestID:    "r_whitespace",
+		Model:        "sonnet",
+		Provider:     "anthropic",
+		InputTokens:  10,
+		OutputTokens: 5,
+		CostUSD:      0.1,
+		Role:         "interactive",
+	}); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+
+	reg := NewRegistry(nil, nil)
+	reg.SetUsageStore(store)
+
+	tool := reg.Get("cost_summary")
+	result, err := tool.Handler(ctx, map[string]any{
+		"period":   "all",
+		"group_by": "   ",
+	})
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if strings.Contains(result, "By ") {
+		t.Fatalf("expected ungrouped summary, got:\n%s", result)
+	}
+}
+
 func TestCostSummaryTool_GroupByOrdering(t *testing.T) {
 	store := testUsageStore(t)
 	ctx := context.Background()
