@@ -99,14 +99,16 @@ const maxTagContextBytes = 64 * 1024
 // Response represents the agent's response.
 // Response is the result of a single agent Run() call.
 type Response struct {
-	Content      string         `json:"content"`
-	Model        string         `json:"model"`
-	FinishReason string         `json:"finish_reason"`
-	InputTokens  int            `json:"input_tokens,omitempty"`
-	OutputTokens int            `json:"output_tokens,omitempty"`
-	ToolsUsed    map[string]int `json:"tools_used,omitempty"` // tool name → call count
-	Iterations   int            `json:"iterations,omitempty"`
-	Exhausted    bool           `json:"exhausted,omitempty"`
+	Content                  string         `json:"content"`
+	Model                    string         `json:"model"`
+	FinishReason             string         `json:"finish_reason"`
+	InputTokens              int            `json:"input_tokens,omitempty"`
+	OutputTokens             int            `json:"output_tokens,omitempty"`
+	CacheCreationInputTokens int            `json:"cache_creation_input_tokens,omitempty"`
+	CacheReadInputTokens     int            `json:"cache_read_input_tokens,omitempty"`
+	ToolsUsed                map[string]int `json:"tools_used,omitempty"` // tool name → call count
+	Iterations               int            `json:"iterations,omitempty"`
+	Exhausted                bool           `json:"exhausted,omitempty"`
 
 	// SessionID and RequestID are set by Run() so callers can
 	// correlate post-run log lines with the agent loop's context.
@@ -1005,16 +1007,18 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			"elapsed", time.Since(startTime).Round(time.Second),
 		)
 
-		l.recordUsage(ctx, req, llmResp.Model, llmResp.InputTokens, llmResp.OutputTokens, convID, sessionTag, requestID)
+		l.recordUsage(ctx, req, llmResp.Model, llmResp.InputTokens, llmResp.OutputTokens, llmResp.CacheCreationInputTokens, llmResp.CacheReadInputTokens, convID, sessionTag, requestID)
 
 		return &Response{
-			Content:      llmResp.Message.Content,
-			Model:        llmResp.Model,
-			FinishReason: "stop",
-			InputTokens:  llmResp.InputTokens,
-			OutputTokens: llmResp.OutputTokens,
-			SessionID:    sessionID,
-			RequestID:    requestID,
+			Content:                  llmResp.Message.Content,
+			Model:                    llmResp.Model,
+			FinishReason:             "stop",
+			InputTokens:              llmResp.InputTokens,
+			OutputTokens:             llmResp.OutputTokens,
+			CacheCreationInputTokens: llmResp.CacheCreationInputTokens,
+			CacheReadInputTokens:     llmResp.CacheReadInputTokens,
+			SessionID:                sessionID,
+			RequestID:                requestID,
 		}, nil
 	}
 
@@ -1578,20 +1582,22 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	}
 
 	resp = &Response{
-		Content:      iterResult.Content,
-		Model:        iterResult.Model,
-		FinishReason: finishReason,
-		InputTokens:  iterResult.InputTokens,
-		OutputTokens: iterResult.OutputTokens,
-		ToolsUsed:    iterResult.ToolsUsed,
-		Iterations:   iterResult.IterationCount,
-		Exhausted:    iterResult.Exhausted,
-		SessionID:    sessionID,
-		RequestID:    requestID,
-		ActiveTags:   activeTags,
+		Content:                  iterResult.Content,
+		Model:                    iterResult.Model,
+		FinishReason:             finishReason,
+		InputTokens:              iterResult.InputTokens,
+		OutputTokens:             iterResult.OutputTokens,
+		CacheCreationInputTokens: iterResult.CacheCreationInputTokens,
+		CacheReadInputTokens:     iterResult.CacheReadInputTokens,
+		ToolsUsed:                iterResult.ToolsUsed,
+		Iterations:               iterResult.IterationCount,
+		Exhausted:                iterResult.Exhausted,
+		SessionID:                sessionID,
+		RequestID:                requestID,
+		ActiveTags:               activeTags,
 	}
 
-	l.recordUsage(ctx, req, iterResult.Model, iterResult.InputTokens, iterResult.OutputTokens, convID, sessionTag, requestID)
+	l.recordUsage(ctx, req, iterResult.Model, iterResult.InputTokens, iterResult.OutputTokens, iterResult.CacheCreationInputTokens, iterResult.CacheReadInputTokens, convID, sessionTag, requestID)
 	l.archiveIterations(log, convID, iterResult.Iterations)
 
 	// Content retention is fire-and-forget with a short deadline so it
@@ -2313,7 +2319,7 @@ func formatHistoryJSON(messages []memory.Message, tz string) string {
 // recordUsage persists a usage record for a completed LLM interaction.
 // No-op when usage recording is not configured. Errors are logged but
 // do not affect the caller.
-func (l *Loop) recordUsage(ctx context.Context, req *Request, model string, totalIn, totalOut int, convID, sessionTag, requestID string) {
+func (l *Loop) recordUsage(ctx context.Context, req *Request, model string, totalIn, totalOut, cacheCreateIn, cacheReadIn int, convID, sessionTag, requestID string) {
 	if l.usageStore == nil {
 		return
 	}
@@ -2337,21 +2343,23 @@ func (l *Loop) recordUsage(ctx context.Context, req *Request, model string, tota
 	}
 
 	identity := usage.ResolveModelIdentity(model, l.currentModelCatalog())
-	cost := usage.ComputeCostForIdentity(identity, totalIn, totalOut, l.pricing)
+	cost := usage.ComputeDetailedCostForIdentity(identity, totalIn, cacheCreateIn, cacheReadIn, totalOut, l.pricing)
 	rec := usage.Record{
-		Timestamp:      time.Now(),
-		RequestID:      requestID,
-		SessionID:      sessionTag,
-		ConversationID: convID,
-		Model:          identity.Model,
-		UpstreamModel:  identity.UpstreamModel,
-		Resource:       identity.Resource,
-		Provider:       identity.Provider,
-		InputTokens:    totalIn,
-		OutputTokens:   totalOut,
-		CostUSD:        cost,
-		Role:           role,
-		TaskName:       taskName,
+		Timestamp:                time.Now(),
+		RequestID:                requestID,
+		SessionID:                sessionTag,
+		ConversationID:           convID,
+		Model:                    identity.Model,
+		UpstreamModel:            identity.UpstreamModel,
+		Resource:                 identity.Resource,
+		Provider:                 identity.Provider,
+		InputTokens:              totalIn,
+		OutputTokens:             totalOut,
+		CacheCreationInputTokens: cacheCreateIn,
+		CacheReadInputTokens:     cacheReadIn,
+		CostUSD:                  cost,
+		Role:                     role,
+		TaskName:                 taskName,
 	}
 
 	if err := l.usageStore.Record(ctx, rec); err != nil {

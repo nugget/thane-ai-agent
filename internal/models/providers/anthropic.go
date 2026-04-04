@@ -105,8 +105,10 @@ type anthropicResponse struct {
 }
 
 type anthropicUsage struct {
-	InputTokens  int `json:"input_tokens"`
-	OutputTokens int `json:"output_tokens"`
+	InputTokens              int `json:"input_tokens"`
+	OutputTokens             int `json:"output_tokens"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
+	CacheReadInputTokens     int `json:"cache_read_input_tokens,omitempty"`
 }
 
 // SSE event types for streaming
@@ -351,9 +353,11 @@ func (c *AnthropicClient) handleStreaming(ctx context.Context, body io.Reader, c
 			Content:   contentBuilder.String(),
 			ToolCalls: toolCalls,
 		},
-		Done:         true,
-		InputTokens:  usage.InputTokens,
-		OutputTokens: usage.OutputTokens,
+		Done:                     true,
+		InputTokens:              usage.InputTokens,
+		OutputTokens:             usage.OutputTokens,
+		CacheCreationInputTokens: usage.CacheCreationInputTokens,
+		CacheReadInputTokens:     usage.CacheReadInputTokens,
 	}
 
 	// stopReason available for future use (end_turn, tool_use, max_tokens, stop_sequence)
@@ -531,9 +535,11 @@ func convertFromAnthropic(resp *anthropicResponse) *llm.ChatResponse {
 			Content:   content,
 			ToolCalls: toolCalls,
 		},
-		Done:         true,
-		InputTokens:  resp.Usage.InputTokens,
-		OutputTokens: resp.Usage.OutputTokens,
+		Done:                     true,
+		InputTokens:              resp.Usage.InputTokens,
+		OutputTokens:             resp.Usage.OutputTokens,
+		CacheCreationInputTokens: resp.Usage.CacheCreationInputTokens,
+		CacheReadInputTokens:     resp.Usage.CacheReadInputTokens,
 	}
 }
 

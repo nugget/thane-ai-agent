@@ -285,7 +285,12 @@ func TestConvertFromAnthropic_TextOnly(t *testing.T) {
 			{Type: "text", Text: "The lights are off."},
 		},
 		StopReason: "end_turn",
-		Usage:      anthropicUsage{InputTokens: 100, OutputTokens: 25},
+		Usage: anthropicUsage{
+			InputTokens:              100,
+			OutputTokens:             25,
+			CacheCreationInputTokens: 4096,
+			CacheReadInputTokens:     2048,
+		},
 	}
 
 	result := convertFromAnthropic(resp)
@@ -301,6 +306,12 @@ func TestConvertFromAnthropic_TextOnly(t *testing.T) {
 	}
 	if result.OutputTokens != 25 {
 		t.Errorf("OutputTokens = %d, want 25", result.OutputTokens)
+	}
+	if result.CacheCreationInputTokens != 4096 {
+		t.Errorf("CacheCreationInputTokens = %d, want 4096", result.CacheCreationInputTokens)
+	}
+	if result.CacheReadInputTokens != 2048 {
+		t.Errorf("CacheReadInputTokens = %d, want 2048", result.CacheReadInputTokens)
 	}
 	if !result.Done {
 		t.Error("Done = false, want true")

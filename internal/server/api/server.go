@@ -144,36 +144,40 @@ func (s *Server) LastRequest() time.Time {
 
 // SessionStats tracks token usage and cost for the current session.
 type SessionStats struct {
-	TotalInputTokens  int64     `json:"total_input_tokens"`
-	TotalOutputTokens int64     `json:"total_output_tokens"`
-	TotalRequests     int64     `json:"total_requests"`
-	EstimatedCostUSD  float64   `json:"estimated_cost_usd"`
-	ReportedBalance   float64   `json:"reported_balance_usd,omitempty"`
-	BalanceSetAt      string    `json:"balance_set_at,omitempty"`
-	LastRequestAt     time.Time `json:"-"` // Used by MQTT publisher, not exposed in JSON.
-	ByModel           map[string]usage.Summary
-	ByUpstreamModel   map[string]usage.Summary
-	ByProvider        map[string]usage.Summary
-	ByResource        map[string]usage.Summary
-	pricing           map[string]config.PricingEntry
-	mu                sync.Mutex
+	TotalInputTokens              int64     `json:"total_input_tokens"`
+	TotalOutputTokens             int64     `json:"total_output_tokens"`
+	TotalCacheCreationInputTokens int64     `json:"total_cache_creation_input_tokens"`
+	TotalCacheReadInputTokens     int64     `json:"total_cache_read_input_tokens"`
+	TotalRequests                 int64     `json:"total_requests"`
+	EstimatedCostUSD              float64   `json:"estimated_cost_usd"`
+	ReportedBalance               float64   `json:"reported_balance_usd,omitempty"`
+	BalanceSetAt                  string    `json:"balance_set_at,omitempty"`
+	LastRequestAt                 time.Time `json:"-"` // Used by MQTT publisher, not exposed in JSON.
+	ByModel                       map[string]usage.Summary
+	ByUpstreamModel               map[string]usage.Summary
+	ByProvider                    map[string]usage.Summary
+	ByResource                    map[string]usage.Summary
+	pricing                       map[string]config.PricingEntry
+	mu                            sync.Mutex
 }
 
 // Record accumulates token usage and cost for a model. Cost is computed
 // from the config-driven pricing table.
-func (s *SessionStats) Record(identity usage.ModelIdentity, inputTokens, outputTokens int) {
+func (s *SessionStats) Record(identity usage.ModelIdentity, inputTokens, outputTokens, cacheCreationInputTokens, cacheReadInputTokens int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.TotalInputTokens += int64(inputTokens)
 	s.TotalOutputTokens += int64(outputTokens)
+	s.TotalCacheCreationInputTokens += int64(cacheCreationInputTokens)
+	s.TotalCacheReadInputTokens += int64(cacheReadInputTokens)
 	s.TotalRequests++
 	s.LastRequestAt = time.Now()
-	cost := usage.ComputeCostForIdentity(identity, inputTokens, outputTokens, s.pricing)
+	cost := usage.ComputeDetailedCostForIdentity(identity, inputTokens, cacheCreationInputTokens, cacheReadInputTokens, outputTokens, s.pricing)
 	s.EstimatedCostUSD += cost
-	recordSessionUsageSummary(s.ByModel, identity.Model, inputTokens, outputTokens, cost)
-	recordSessionUsageSummary(s.ByUpstreamModel, identity.UpstreamModel, inputTokens, outputTokens, cost)
-	recordSessionUsageSummary(s.ByProvider, identity.Provider, inputTokens, outputTokens, cost)
-	recordSessionUsageSummary(s.ByResource, identity.Resource, inputTokens, outputTokens, cost)
+	recordSessionUsageSummary(s.ByModel, identity.Model, inputTokens, outputTokens, cacheCreationInputTokens, cacheReadInputTokens, cost)
+	recordSessionUsageSummary(s.ByUpstreamModel, identity.UpstreamModel, inputTokens, outputTokens, cacheCreationInputTokens, cacheReadInputTokens, cost)
+	recordSessionUsageSummary(s.ByProvider, identity.Provider, inputTokens, outputTokens, cacheCreationInputTokens, cacheReadInputTokens, cost)
+	recordSessionUsageSummary(s.ByResource, identity.Resource, inputTokens, outputTokens, cacheCreationInputTokens, cacheReadInputTokens, cost)
 }
 
 // LastRequest returns when the most recent LLM request completed.
@@ -187,13 +191,13 @@ func (s *SessionStats) LastRequest() time.Time {
 // recordUsage records token usage in session stats and notifies the
 // token observer (if set) so external consumers (e.g., the MQTT daily
 // token accumulator) are updated.
-func (s *Server) recordUsage(model string, inputTokens, outputTokens int) {
+func (s *Server) recordUsage(model string, inputTokens, outputTokens, cacheCreationInputTokens, cacheReadInputTokens int) {
 	var cat *models.Catalog
 	if s.modelRegistry != nil {
 		cat = s.modelRegistry.Catalog()
 	}
 	identity := usage.ResolveModelIdentity(model, cat)
-	s.stats.Record(identity, inputTokens, outputTokens)
+	s.stats.Record(identity, inputTokens, outputTokens, cacheCreationInputTokens, cacheReadInputTokens)
 	if s.tokenObserver != nil {
 		s.tokenObserver.OnTokens(inputTokens, outputTokens)
 	}
@@ -208,36 +212,40 @@ func (s *SessionStats) SetBalance(balance float64) {
 
 // SessionStatsSnapshot is a copy-safe snapshot of session stats.
 type SessionStatsSnapshot struct {
-	TotalInputTokens  int64                    `json:"total_input_tokens"`
-	TotalOutputTokens int64                    `json:"total_output_tokens"`
-	TotalRequests     int64                    `json:"total_requests"`
-	EstimatedCostUSD  float64                  `json:"estimated_cost_usd"`
-	ReportedBalance   float64                  `json:"reported_balance_usd,omitempty"`
-	BalanceSetAt      string                   `json:"balance_set_at,omitempty"`
-	ByModel           map[string]usage.Summary `json:"by_model,omitempty"`
-	ByUpstreamModel   map[string]usage.Summary `json:"by_upstream_model,omitempty"`
-	ByProvider        map[string]usage.Summary `json:"by_provider,omitempty"`
-	ByResource        map[string]usage.Summary `json:"by_resource,omitempty"`
-	ContextTokens     int                      `json:"context_tokens"`
-	ContextWindow     int                      `json:"context_window"`
-	MessageCount      int                      `json:"message_count"`
-	Build             map[string]string        `json:"build,omitempty"`
+	TotalInputTokens              int64                    `json:"total_input_tokens"`
+	TotalOutputTokens             int64                    `json:"total_output_tokens"`
+	TotalCacheCreationInputTokens int64                    `json:"total_cache_creation_input_tokens"`
+	TotalCacheReadInputTokens     int64                    `json:"total_cache_read_input_tokens"`
+	TotalRequests                 int64                    `json:"total_requests"`
+	EstimatedCostUSD              float64                  `json:"estimated_cost_usd"`
+	ReportedBalance               float64                  `json:"reported_balance_usd,omitempty"`
+	BalanceSetAt                  string                   `json:"balance_set_at,omitempty"`
+	ByModel                       map[string]usage.Summary `json:"by_model,omitempty"`
+	ByUpstreamModel               map[string]usage.Summary `json:"by_upstream_model,omitempty"`
+	ByProvider                    map[string]usage.Summary `json:"by_provider,omitempty"`
+	ByResource                    map[string]usage.Summary `json:"by_resource,omitempty"`
+	ContextTokens                 int                      `json:"context_tokens"`
+	ContextWindow                 int                      `json:"context_window"`
+	MessageCount                  int                      `json:"message_count"`
+	Build                         map[string]string        `json:"build,omitempty"`
 }
 
 func (s *SessionStats) Snapshot() SessionStatsSnapshot {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return SessionStatsSnapshot{
-		TotalInputTokens:  s.TotalInputTokens,
-		TotalOutputTokens: s.TotalOutputTokens,
-		TotalRequests:     s.TotalRequests,
-		EstimatedCostUSD:  s.EstimatedCostUSD,
-		ReportedBalance:   s.ReportedBalance,
-		BalanceSetAt:      s.BalanceSetAt,
-		ByModel:           cloneSessionUsageMap(s.ByModel),
-		ByUpstreamModel:   cloneSessionUsageMap(s.ByUpstreamModel),
-		ByProvider:        cloneSessionUsageMap(s.ByProvider),
-		ByResource:        cloneSessionUsageMap(s.ByResource),
+		TotalInputTokens:              s.TotalInputTokens,
+		TotalOutputTokens:             s.TotalOutputTokens,
+		TotalCacheCreationInputTokens: s.TotalCacheCreationInputTokens,
+		TotalCacheReadInputTokens:     s.TotalCacheReadInputTokens,
+		TotalRequests:                 s.TotalRequests,
+		EstimatedCostUSD:              s.EstimatedCostUSD,
+		ReportedBalance:               s.ReportedBalance,
+		BalanceSetAt:                  s.BalanceSetAt,
+		ByModel:                       cloneSessionUsageMap(s.ByModel),
+		ByUpstreamModel:               cloneSessionUsageMap(s.ByUpstreamModel),
+		ByProvider:                    cloneSessionUsageMap(s.ByProvider),
+		ByResource:                    cloneSessionUsageMap(s.ByResource),
 	}
 }
 
@@ -250,7 +258,7 @@ type usageSummaryResponse struct {
 	Groups  []usage.GroupedSummary `json:"groups,omitempty"`
 }
 
-func recordSessionUsageSummary(dst map[string]usage.Summary, key string, inputTokens, outputTokens int, cost float64) {
+func recordSessionUsageSummary(dst map[string]usage.Summary, key string, inputTokens, outputTokens, cacheCreationInputTokens, cacheReadInputTokens int, cost float64) {
 	key = strings.TrimSpace(key)
 	if key == "" {
 		return
@@ -259,6 +267,8 @@ func recordSessionUsageSummary(dst map[string]usage.Summary, key string, inputTo
 	sum.TotalRecords++
 	sum.TotalInputTokens += int64(inputTokens)
 	sum.TotalOutputTokens += int64(outputTokens)
+	sum.TotalCacheCreationInputTokens += int64(cacheCreationInputTokens)
+	sum.TotalCacheReadInputTokens += int64(cacheReadInputTokens)
 	sum.TotalCostUSD += cost
 	dst[key] = sum
 }
@@ -561,7 +571,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Record usage stats
-	s.recordUsage(resp.Model, resp.InputTokens, resp.OutputTokens)
+	s.recordUsage(resp.Model, resp.InputTokens, resp.OutputTokens, resp.CacheCreationInputTokens, resp.CacheReadInputTokens)
 
 	// Format as OpenAI response
 	completion := ChatCompletionResponse{
@@ -643,7 +653,7 @@ func (s *Server) handleSimpleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.recordUsage(resp.Model, resp.InputTokens, resp.OutputTokens)
+	s.recordUsage(resp.Model, resp.InputTokens, resp.OutputTokens, resp.CacheCreationInputTokens, resp.CacheReadInputTokens)
 
 	w.Header().Set("Content-Type", "application/json")
 	writeJSON(w, SimpleChatResponse{
@@ -758,7 +768,7 @@ func (s *Server) handleStreamingCompletion(w http.ResponseWriter, r *http.Reques
 	}
 
 	// Record usage stats
-	s.recordUsage(resp.Model, resp.InputTokens, resp.OutputTokens)
+	s.recordUsage(resp.Model, resp.InputTokens, resp.OutputTokens, resp.CacheCreationInputTokens, resp.CacheReadInputTokens)
 
 	// Update model name and send final chunk
 	modelName = resp.Model

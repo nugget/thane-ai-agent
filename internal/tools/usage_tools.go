@@ -51,6 +51,12 @@ func (r *Registry) registerCostSummary() {
 			sb.WriteString(fmt.Sprintf("  Total requests: %d\n", summary.TotalRecords))
 			sb.WriteString(fmt.Sprintf("  Input tokens: %s\n", formatTokenCount(summary.TotalInputTokens)))
 			sb.WriteString(fmt.Sprintf("  Output tokens: %s\n", formatTokenCount(summary.TotalOutputTokens)))
+			if summary.TotalCacheCreationInputTokens > 0 {
+				sb.WriteString(fmt.Sprintf("  Cache write tokens: %s\n", formatTokenCount(summary.TotalCacheCreationInputTokens)))
+			}
+			if summary.TotalCacheReadInputTokens > 0 {
+				sb.WriteString(fmt.Sprintf("  Cache read tokens: %s\n", formatTokenCount(summary.TotalCacheReadInputTokens)))
+			}
 			sb.WriteString(fmt.Sprintf("  Estimated cost: $%.4f\n", summary.TotalCostUSD))
 
 			if groupBy != "" {
@@ -70,6 +76,12 @@ func (r *Registry) registerCostSummary() {
 							formatTokenCount(gs.Summary.TotalInputTokens),
 							formatTokenCount(gs.Summary.TotalOutputTokens),
 						))
+						if gs.Summary.TotalCacheCreationInputTokens > 0 || gs.Summary.TotalCacheReadInputTokens > 0 {
+							sb.WriteString(fmt.Sprintf("    cache: %s write / %s read\n",
+								formatTokenCount(gs.Summary.TotalCacheCreationInputTokens),
+								formatTokenCount(gs.Summary.TotalCacheReadInputTokens),
+							))
+						}
 					}
 				}
 			}

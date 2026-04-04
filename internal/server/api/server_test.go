@@ -203,13 +203,13 @@ func TestSessionStatsSnapshot_IncludesDeploymentBreakdowns(t *testing.T) {
 		UpstreamModel: "gpt-oss:20b",
 		Resource:      "mirror",
 		Provider:      "ollama",
-	}, 100, 25)
+	}, 100, 25, 0, 0)
 	stats.Record(usage.ModelIdentity{
 		Model:         "mirror/gpt-oss:20b",
 		UpstreamModel: "gpt-oss:20b",
 		Resource:      "mirror",
 		Provider:      "ollama",
-	}, 50, 10)
+	}, 50, 10, 0, 0)
 
 	snap := stats.Snapshot()
 	if snap.TotalRequests != 2 {

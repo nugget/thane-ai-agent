@@ -19,16 +19,18 @@ const (
 // identical iterationRecord structs that were independently defined in
 // the agent and delegate packages.
 type IterationRecord struct {
-	Index        int
-	Model        string
-	InputTokens  int
-	OutputTokens int
-	ToolCallIDs  []string
-	ToolsOffered []string
-	StartedAt    time.Time
-	DurationMs   int64
-	HasToolCalls bool
-	BreakReason  string
+	Index                    int
+	Model                    string
+	InputTokens              int
+	OutputTokens             int
+	CacheCreationInputTokens int
+	CacheReadInputTokens     int
+	ToolCallIDs              []string
+	ToolsOffered             []string
+	StartedAt                time.Time
+	DurationMs               int64
+	HasToolCalls             bool
+	BreakReason              string
 }
 
 // Result is the outcome of an [Engine.Run] execution.
@@ -46,6 +48,14 @@ type Result struct {
 
 	// OutputTokens is the cumulative output token count across all iterations.
 	OutputTokens int
+
+	// CacheCreationInputTokens is the cumulative prompt-cache write token
+	// count across all iterations when the provider reports it.
+	CacheCreationInputTokens int
+
+	// CacheReadInputTokens is the cumulative prompt-cache read token
+	// count across all iterations when the provider reports it.
+	CacheReadInputTokens int
 
 	// ToolsUsed maps tool name → invocation count.
 	ToolsUsed map[string]int

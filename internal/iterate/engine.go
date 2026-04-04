@@ -33,15 +33,17 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 
 	// Per-run tracking.
 	var (
-		iterations     []IterationRecord
-		toolsUsed      = make(map[string]int)
-		toolCallCounts = make(map[string]int)
-		totalInput     int
-		totalOutput    int
-		illegalStrikes int
-		emptyRetried   bool
-		deferredText   string
-		breakReason    string
+		iterations       []IterationRecord
+		toolsUsed        = make(map[string]int)
+		toolCallCounts   = make(map[string]int)
+		totalInput       int
+		totalOutput      int
+		totalCacheCreate int
+		totalCacheRead   int
+		illegalStrikes   int
+		emptyRetried     bool
+		deferredText     string
+		breakReason      string
 	)
 
 	for i := 0; i < cfg.MaxIterations; i++ {
@@ -71,14 +73,16 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 				llmResp, newModel, err = cfg.OnLLMError(iterCtx, err, model, messages, toolDefs, cfg.Stream)
 				if err != nil {
 					return &Result{
-						Model:          model,
-						InputTokens:    totalInput,
-						OutputTokens:   totalOutput,
-						ToolsUsed:      toolsUsed,
-						Exhausted:      true,
-						Iterations:     iterations,
-						Messages:       messages,
-						IterationCount: len(iterations),
+						Model:                    model,
+						InputTokens:              totalInput,
+						OutputTokens:             totalOutput,
+						CacheCreationInputTokens: totalCacheCreate,
+						CacheReadInputTokens:     totalCacheRead,
+						ToolsUsed:                toolsUsed,
+						Exhausted:                true,
+						Iterations:               iterations,
+						Messages:                 messages,
+						IterationCount:           len(iterations),
 					}, err
 				}
 				if newModel != "" {
@@ -86,14 +90,16 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 				}
 			} else {
 				return &Result{
-					Model:          model,
-					InputTokens:    totalInput,
-					OutputTokens:   totalOutput,
-					ToolsUsed:      toolsUsed,
-					Exhausted:      true,
-					Iterations:     iterations,
-					Messages:       messages,
-					IterationCount: len(iterations),
+					Model:                    model,
+					InputTokens:              totalInput,
+					OutputTokens:             totalOutput,
+					CacheCreationInputTokens: totalCacheCreate,
+					CacheReadInputTokens:     totalCacheRead,
+					ToolsUsed:                toolsUsed,
+					Exhausted:                true,
+					Iterations:               iterations,
+					Messages:                 messages,
+					IterationCount:           len(iterations),
 				}, err
 			}
 		}
@@ -101,6 +107,8 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 		// Accumulate token usage.
 		totalInput += llmResp.InputTokens
 		totalOutput += llmResp.OutputTokens
+		totalCacheCreate += llmResp.CacheCreationInputTokens
+		totalCacheRead += llmResp.CacheReadInputTokens
 
 		// --- Callback: LLM response ---
 		if cfg.OnLLMResponse != nil {
@@ -111,26 +119,30 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 		if cfg.CheckBudget != nil && cfg.CheckBudget(totalOutput) {
 			iterLog.Warn("budget exhausted", "total_output", totalOutput)
 			budgetRec := IterationRecord{
-				Index:        i,
-				Model:        llmResp.Model,
-				InputTokens:  llmResp.InputTokens,
-				OutputTokens: llmResp.OutputTokens,
-				ToolsOffered: toolDefsNames(toolDefs),
-				StartedAt:    iterStart,
-				DurationMs:   time.Since(iterStart).Milliseconds(),
-				HasToolCalls: len(llmResp.Message.ToolCalls) > 0,
-				BreakReason:  ExhaustTokenBudget,
+				Index:                    i,
+				Model:                    llmResp.Model,
+				InputTokens:              llmResp.InputTokens,
+				OutputTokens:             llmResp.OutputTokens,
+				CacheCreationInputTokens: llmResp.CacheCreationInputTokens,
+				CacheReadInputTokens:     llmResp.CacheReadInputTokens,
+				ToolsOffered:             toolDefsNames(toolDefs),
+				StartedAt:                iterStart,
+				DurationMs:               time.Since(iterStart).Milliseconds(),
+				HasToolCalls:             len(llmResp.Message.ToolCalls) > 0,
+				BreakReason:              ExhaustTokenBudget,
 			}
 			iterations = append(iterations, budgetRec)
 			partial := &Result{
-				Model:          model,
-				InputTokens:    totalInput,
-				OutputTokens:   totalOutput,
-				ToolsUsed:      toolsUsed,
-				Exhausted:      true,
-				ExhaustReason:  ExhaustTokenBudget,
-				Iterations:     iterations,
-				IterationCount: i + 1,
+				Model:                    model,
+				InputTokens:              totalInput,
+				OutputTokens:             totalOutput,
+				CacheCreationInputTokens: totalCacheCreate,
+				CacheReadInputTokens:     totalCacheRead,
+				ToolsUsed:                toolsUsed,
+				Exhausted:                true,
+				ExhaustReason:            ExhaustTokenBudget,
+				Iterations:               iterations,
+				IterationCount:           i + 1,
 			}
 			// Text-only response: use content directly.
 			if llmResp.Message.Content != "" && len(llmResp.Message.ToolCalls) == 0 {
@@ -159,13 +171,15 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 
 		// Build iteration record.
 		iterRec := IterationRecord{
-			Index:        i,
-			Model:        llmResp.Model,
-			InputTokens:  llmResp.InputTokens,
-			OutputTokens: llmResp.OutputTokens,
-			ToolsOffered: toolDefsNames(toolDefs),
-			StartedAt:    iterStart,
-			HasToolCalls: len(llmResp.Message.ToolCalls) > 0,
+			Index:                    i,
+			Model:                    llmResp.Model,
+			InputTokens:              llmResp.InputTokens,
+			OutputTokens:             llmResp.OutputTokens,
+			CacheCreationInputTokens: llmResp.CacheCreationInputTokens,
+			CacheReadInputTokens:     llmResp.CacheReadInputTokens,
+			ToolsOffered:             toolDefsNames(toolDefs),
+			StartedAt:                iterStart,
+			HasToolCalls:             len(llmResp.Message.ToolCalls) > 0,
 		}
 
 		// =============================================
@@ -381,15 +395,17 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 		}
 
 		return &Result{
-			Content:        llmResp.Message.Content,
-			Model:          model,
-			InputTokens:    totalInput,
-			OutputTokens:   totalOutput,
-			ToolsUsed:      toolsUsed,
-			Exhausted:      false,
-			Iterations:     iterations,
-			Messages:       messages,
-			IterationCount: i + 1,
+			Content:                  llmResp.Message.Content,
+			Model:                    model,
+			InputTokens:              totalInput,
+			OutputTokens:             totalOutput,
+			CacheCreationInputTokens: totalCacheCreate,
+			CacheReadInputTokens:     totalCacheRead,
+			ToolsUsed:                toolsUsed,
+			Exhausted:                false,
+			Iterations:               iterations,
+			Messages:                 messages,
+			IterationCount:           i + 1,
 		}, nil
 	}
 
@@ -400,14 +416,16 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 	log.Warn("iteration loop ended", "reason", breakReason)
 
 	return e.forceText(ctx, cfg, model, messages, &Result{
-		Model:          model,
-		InputTokens:    totalInput,
-		OutputTokens:   totalOutput,
-		ToolsUsed:      toolsUsed,
-		Exhausted:      true,
-		ExhaustReason:  breakReason,
-		Iterations:     iterations,
-		IterationCount: len(iterations),
+		Model:                    model,
+		InputTokens:              totalInput,
+		OutputTokens:             totalOutput,
+		CacheCreationInputTokens: totalCacheCreate,
+		CacheReadInputTokens:     totalCacheRead,
+		ToolsUsed:                toolsUsed,
+		Exhausted:                true,
+		ExhaustReason:            breakReason,
+		Iterations:               iterations,
+		IterationCount:           len(iterations),
 	})
 }
 
@@ -436,6 +454,8 @@ func (e *Engine) forceText(ctx context.Context, cfg Config, model string, messag
 
 		partial.InputTokens += resp.InputTokens
 		partial.OutputTokens += resp.OutputTokens
+		partial.CacheCreationInputTokens += resp.CacheCreationInputTokens
+		partial.CacheReadInputTokens += resp.CacheReadInputTokens
 		messages = append(messages, resp.Message)
 
 		content := resp.Message.Content
@@ -449,13 +469,15 @@ func (e *Engine) forceText(ctx context.Context, cfg Config, model string, messag
 
 		// Record the recovery call as its own iteration.
 		partial.Iterations = append(partial.Iterations, IterationRecord{
-			Index:        len(partial.Iterations),
-			Model:        resp.Model,
-			InputTokens:  resp.InputTokens,
-			OutputTokens: resp.OutputTokens,
-			StartedAt:    time.Now(),
-			HasToolCalls: false,
-			BreakReason:  partial.ExhaustReason,
+			Index:                    len(partial.Iterations),
+			Model:                    resp.Model,
+			InputTokens:              resp.InputTokens,
+			OutputTokens:             resp.OutputTokens,
+			CacheCreationInputTokens: resp.CacheCreationInputTokens,
+			CacheReadInputTokens:     resp.CacheReadInputTokens,
+			StartedAt:                time.Now(),
+			HasToolCalls:             false,
+			BreakReason:              partial.ExhaustReason,
 		})
 		partial.IterationCount = len(partial.Iterations)
 
@@ -464,21 +486,4 @@ func (e *Engine) forceText(ctx context.Context, cfg Config, model string, messag
 
 	partial.Messages = messages
 	return partial, nil
-}
-
-// toolDefsNames extracts tool names from OpenAI-format tool definitions.
-func toolDefsNames(defs []map[string]any) []string {
-	if len(defs) == 0 {
-		return nil
-	}
-	names := make([]string, 0, len(defs))
-	for _, def := range defs {
-		fn, _ := def["function"].(map[string]any)
-		if fn != nil {
-			if name, ok := fn["name"].(string); ok {
-				names = append(names, name)
-			}
-		}
-	}
-	return names
 }

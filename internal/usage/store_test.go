@@ -41,16 +41,18 @@ func TestRecord_And_Summary(t *testing.T) {
 	now := time.Now().UTC()
 	recs := []Record{
 		{
-			Timestamp:      now,
-			RequestID:      "r_001",
-			SessionID:      "sess-1",
-			ConversationID: "conv-1",
-			Model:          "claude-opus-4-20250514",
-			Provider:       "anthropic",
-			InputTokens:    1000,
-			OutputTokens:   500,
-			CostUSD:        0.0525, // 1000/1M*15 + 500/1M*75
-			Role:           "interactive",
+			Timestamp:                now,
+			RequestID:                "r_001",
+			SessionID:                "sess-1",
+			ConversationID:           "conv-1",
+			Model:                    "claude-opus-4-20250514",
+			Provider:                 "anthropic",
+			InputTokens:              1000,
+			OutputTokens:             500,
+			CacheCreationInputTokens: 4000,
+			CacheReadInputTokens:     8000,
+			CostUSD:                  0.0525 + 0.075 + 0.012, // base + cache write + cache read
+			Role:                     "interactive",
 		},
 		{
 			Timestamp:      now,
@@ -88,9 +90,15 @@ func TestRecord_And_Summary(t *testing.T) {
 	if sum.TotalOutputTokens != 1500 {
 		t.Errorf("TotalOutputTokens = %d, want 1500", sum.TotalOutputTokens)
 	}
-	// 0.0525 + 0.021 = 0.0735
-	if diff := sum.TotalCostUSD - 0.0735; diff > 0.0001 || diff < -0.0001 {
-		t.Errorf("TotalCostUSD = %f, want ~0.0735", sum.TotalCostUSD)
+	if sum.TotalCacheCreationInputTokens != 4000 {
+		t.Errorf("TotalCacheCreationInputTokens = %d, want 4000", sum.TotalCacheCreationInputTokens)
+	}
+	if sum.TotalCacheReadInputTokens != 8000 {
+		t.Errorf("TotalCacheReadInputTokens = %d, want 8000", sum.TotalCacheReadInputTokens)
+	}
+	// (0.0525 + 0.075 + 0.012) + 0.021 = 0.1605
+	if diff := sum.TotalCostUSD - 0.1605; diff > 0.0001 || diff < -0.0001 {
+		t.Errorf("TotalCostUSD = %f, want ~0.1605", sum.TotalCostUSD)
 	}
 }
 
@@ -442,6 +450,22 @@ func TestComputeCost(t *testing.T) {
 	}
 }
 
+func TestComputeDetailedCostForIdentity_AnthropicCacheBuckets(t *testing.T) {
+	pricing := testPricing()
+	identity := ModelIdentity{
+		Model:         "anthropic/claude-opus-4-20250514",
+		UpstreamModel: "claude-opus-4-20250514",
+		Resource:      "anthropic",
+		Provider:      "anthropic",
+	}
+
+	got := ComputeDetailedCostForIdentity(identity, 1_000_000, 1_000_000, 1_000_000, 100_000, pricing)
+	want := 15.0 + (15.0 * 1.25) + (15.0 * 0.10) + 7.5
+	if diff := got - want; diff > 0.0001 || diff < -0.0001 {
+		t.Fatalf("ComputeDetailedCostForIdentity(...) = %f, want %f", got, want)
+	}
+}
+
 func TestComputeCost_NilPricing(t *testing.T) {
 	got := ComputeCost("claude-opus-4-20250514", 1000, 500, nil)
 	if got != 0 {
@@ -543,18 +567,20 @@ func TestRecord_PersistsDeploymentMetadata(t *testing.T) {
 	ctx := context.Background()
 
 	rec := Record{
-		Timestamp:      time.Now().UTC(),
-		RequestID:      "r_meta",
-		SessionID:      "sess-meta",
-		ConversationID: "conv-meta",
-		Model:          "mirror/claude-opus-4-20250514",
-		UpstreamModel:  "claude-opus-4-20250514",
-		Resource:       "mirror",
-		Provider:       "anthropic",
-		InputTokens:    100,
-		OutputTokens:   50,
-		CostUSD:        1.23,
-		Role:           "interactive",
+		Timestamp:                time.Now().UTC(),
+		RequestID:                "r_meta",
+		SessionID:                "sess-meta",
+		ConversationID:           "conv-meta",
+		Model:                    "mirror/claude-opus-4-20250514",
+		UpstreamModel:            "claude-opus-4-20250514",
+		Resource:                 "mirror",
+		Provider:                 "anthropic",
+		InputTokens:              100,
+		OutputTokens:             50,
+		CacheCreationInputTokens: 64,
+		CacheReadInputTokens:     128,
+		CostUSD:                  1.23,
+		Role:                     "interactive",
 	}
 	if err := s.Record(ctx, rec); err != nil {
 		t.Fatalf("Record: %v", err)
@@ -562,12 +588,12 @@ func TestRecord_PersistsDeploymentMetadata(t *testing.T) {
 
 	var got Record
 	row := s.db.QueryRowContext(ctx, `
-		SELECT model, upstream_model, resource, provider, input_tokens, output_tokens, cost_usd
+		SELECT model, upstream_model, resource, provider, input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens, cost_usd
 		FROM usage_records
 		WHERE request_id = ?`,
 		rec.RequestID,
 	)
-	if err := row.Scan(&got.Model, &got.UpstreamModel, &got.Resource, &got.Provider, &got.InputTokens, &got.OutputTokens, &got.CostUSD); err != nil {
+	if err := row.Scan(&got.Model, &got.UpstreamModel, &got.Resource, &got.Provider, &got.InputTokens, &got.OutputTokens, &got.CacheCreationInputTokens, &got.CacheReadInputTokens, &got.CostUSD); err != nil {
 		t.Fatalf("scan usage record: %v", err)
 	}
 	if got.Model != rec.Model {
@@ -581,6 +607,12 @@ func TestRecord_PersistsDeploymentMetadata(t *testing.T) {
 	}
 	if got.Provider != rec.Provider {
 		t.Fatalf("Provider = %q, want %q", got.Provider, rec.Provider)
+	}
+	if got.CacheCreationInputTokens != rec.CacheCreationInputTokens {
+		t.Fatalf("CacheCreationInputTokens = %d, want %d", got.CacheCreationInputTokens, rec.CacheCreationInputTokens)
+	}
+	if got.CacheReadInputTokens != rec.CacheReadInputTokens {
+		t.Fatalf("CacheReadInputTokens = %d, want %d", got.CacheReadInputTokens, rec.CacheReadInputTokens)
 	}
 }
 
@@ -623,5 +655,11 @@ func TestMigrate_AddsDeploymentMetadataColumns(t *testing.T) {
 	}
 	if !database.HasColumn(db, "usage_records", "resource") {
 		t.Fatal("expected resource column after migration")
+	}
+	if !database.HasColumn(db, "usage_records", "cache_creation_input_tokens") {
+		t.Fatal("expected cache_creation_input_tokens column after migration")
+	}
+	if !database.HasColumn(db, "usage_records", "cache_read_input_tokens") {
+		t.Fatal("expected cache_read_input_tokens column after migration")
 	}
 }
