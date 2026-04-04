@@ -134,7 +134,7 @@ func DiscoverInventory(ctx context.Context, cat *Catalog, bundle *ClientBundle) 
 					Quantization:      m.Quantization,
 					SupportsTools:     supportsChat && ri.Capabilities.SupportsTools,
 					SupportsStreaming: supportsChat && ri.Capabilities.SupportsStreaming,
-					SupportsImages: modelproviders.SupportsImagesForModel(
+					SupportsImages: (m.Vision || modelproviders.SupportsImagesForModel(
 						ri.Provider,
 						m.ID,
 						m.Arch,
@@ -142,7 +142,7 @@ func DiscoverInventory(ctx context.Context, cat *Catalog, bundle *ClientBundle) 
 						modelproviders.Capabilities{
 							SupportsImages: supportsChat && ri.Capabilities.SupportsImages,
 						},
-					) && supportsChat,
+					)) && supportsChat,
 					ContextWindow:       contextWindow,
 					MaxContextWindow:    m.MaxContextLength,
 					LoadedContextWindow: m.LoadedContextLength,

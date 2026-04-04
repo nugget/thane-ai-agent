@@ -22,6 +22,8 @@ type LMStudioModelInfo struct {
 	State               string `json:"state,omitempty"`
 	MaxContextLength    int    `json:"max_context_length,omitempty"`
 	LoadedContextLength int    `json:"loaded_context_length,omitempty"`
+	Vision              bool   `json:"vision,omitempty"`
+	TrainedForToolUse   bool   `json:"trained_for_tool_use,omitempty"`
 }
 
 type lmStudioLoadRequest struct {
@@ -121,6 +123,73 @@ type lmStudioUsage struct {
 
 type lmStudioModelsResponse struct {
 	Data []LMStudioModelInfo `json:"data"`
+}
+
+type lmStudioV1ModelsResponse struct {
+	Models []lmStudioV1ModelInfo `json:"models"`
+}
+
+type lmStudioV1ModelInfo struct {
+	Type             string                       `json:"type,omitempty"`
+	Publisher        string                       `json:"publisher,omitempty"`
+	Key              string                       `json:"key,omitempty"`
+	Architecture     string                       `json:"architecture,omitempty"`
+	Quantization     *lmStudioV1Quantization      `json:"quantization,omitempty"`
+	ParamsString     string                       `json:"params_string,omitempty"`
+	LoadedInstances  []lmStudioV1LoadedInstance   `json:"loaded_instances,omitempty"`
+	MaxContextLength int                          `json:"max_context_length,omitempty"`
+	Format           string                       `json:"format,omitempty"`
+	Capabilities     *lmStudioV1ModelCapabilities `json:"capabilities,omitempty"`
+}
+
+type lmStudioV1Quantization struct {
+	Name string `json:"name,omitempty"`
+}
+
+type lmStudioV1LoadedInstance struct {
+	ID     string               `json:"id,omitempty"`
+	Config lmStudioV1LoadConfig `json:"config"`
+}
+
+type lmStudioV1LoadConfig struct {
+	ContextLength int `json:"context_length,omitempty"`
+}
+
+type lmStudioV1ModelCapabilities struct {
+	Vision            bool `json:"vision,omitempty"`
+	TrainedForToolUse bool `json:"trained_for_tool_use,omitempty"`
+}
+
+func (m lmStudioV1ModelInfo) toModelInfo() LMStudioModelInfo {
+	loadedContext := 0
+	state := ""
+	for _, inst := range m.LoadedInstances {
+		if inst.Config.ContextLength > loadedContext {
+			loadedContext = inst.Config.ContextLength
+		}
+	}
+	if len(m.LoadedInstances) > 0 {
+		state = "loaded"
+	}
+
+	info := LMStudioModelInfo{
+		ID:                  m.Key,
+		Type:                m.Type,
+		Publisher:           m.Publisher,
+		Arch:                m.Architecture,
+		CompatibilityType:   m.Format,
+		MaxContextLength:    m.MaxContextLength,
+		LoadedContextLength: loadedContext,
+		State:               state,
+	}
+	if m.Quantization != nil {
+		info.Quantization = m.Quantization.Name
+	}
+	if m.Capabilities != nil {
+		info.Vision = m.Capabilities.Vision
+		info.TrainedForToolUse = m.Capabilities.TrainedForToolUse
+	}
+	return info
 }
 
 type lmStudioToolAccumulator struct {

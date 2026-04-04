@@ -322,19 +322,26 @@ func TestRun_ExplicitModelPreparesLoadedContextAndRetries(t *testing.T) {
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/api/v0/models":
+		case "/api/v1/models":
 			mu.Lock()
 			current := loadedContext
 			mu.Unlock()
 			_ = json.NewEncoder(w).Encode(struct {
-				Data []modelproviders.LMStudioModelInfo `json:"data"`
+				Models []map[string]any `json:"models"`
 			}{
-				Data: []modelproviders.LMStudioModelInfo{{
-					ID:                  "google/gemma-3-4b",
-					Type:                "vlm",
-					State:               "loaded",
-					MaxContextLength:    131072,
-					LoadedContextLength: current,
+				Models: []map[string]any{{
+					"key":                "google/gemma-3-4b",
+					"type":               "vlm",
+					"architecture":       "gemma3",
+					"format":             "mlx",
+					"max_context_length": 131072,
+					"capabilities":       map[string]any{"vision": true},
+					"loaded_instances": []map[string]any{{
+						"id": "google/gemma-3-4b",
+						"config": map[string]any{
+							"context_length": current,
+						},
+					}},
 				}},
 			})
 		case "/api/v1/models/load":

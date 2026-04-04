@@ -35,17 +35,44 @@ func TestDiscoverInventoryIncludesLMStudioResources(t *testing.T) {
 	t.Parallel()
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/v0/models" {
-			t.Fatalf("path = %q, want /api/v0/models", r.URL.Path)
+		if r.URL.Path != "/api/v1/models" {
+			t.Fatalf("path = %q, want /api/v1/models", r.URL.Path)
 		}
 		if got := r.Header.Get("Authorization"); got != "Bearer secret-token" {
 			t.Fatalf("Authorization = %q, want Bearer token", got)
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"data": []map[string]any{
-				{"id": "google/gemma-3-4b", "type": "vlm", "arch": "gemma3", "publisher": "google", "compatibility_type": "mlx", "quantization": "4bit", "state": "loaded", "max_context_length": 131072, "loaded_context_length": 4096},
-				{"id": "qwen3:8b", "type": "llm", "arch": "qwen3", "compatibility_type": "gguf", "quantization": "Q4_K_M", "max_context_length": 32768},
-				{"id": "text-embedding-nomic-embed-text-v1.5", "type": "embeddings", "arch": "nomic-bert", "compatibility_type": "gguf", "quantization": "Q4_K_M", "max_context_length": 2048},
+			"models": []map[string]any{
+				{
+					"key":                "google/gemma-3-4b",
+					"type":               "vlm",
+					"architecture":       "gemma3",
+					"publisher":          "google",
+					"format":             "mlx",
+					"quantization":       map[string]any{"name": "4bit"},
+					"max_context_length": 131072,
+					"capabilities":       map[string]any{"vision": true},
+					"loaded_instances": []map[string]any{
+						{"id": "google/gemma-3-4b:1", "config": map[string]any{"context_length": 2048}},
+						{"id": "google/gemma-3-4b:2", "config": map[string]any{"context_length": 4096}},
+					},
+				},
+				{
+					"key":                "qwen3:8b",
+					"type":               "llm",
+					"architecture":       "qwen3",
+					"format":             "gguf",
+					"quantization":       map[string]any{"name": "Q4_K_M"},
+					"max_context_length": 32768,
+				},
+				{
+					"key":                "text-embedding-nomic-embed-text-v1.5",
+					"type":               "embeddings",
+					"architecture":       "nomic-bert",
+					"format":             "gguf",
+					"quantization":       map[string]any{"name": "Q4_K_M"},
+					"max_context_length": 2048,
+				},
 			},
 		})
 	}))
