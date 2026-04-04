@@ -393,6 +393,14 @@ func (a *App) initChannels(s *newState) error {
 	// register the cost_summary tool so the agent can query its own spend.
 	a.loop.SetUsageRecorder(a.usageStore, a.cfg.Pricing, a.modelCatalog)
 	a.loop.Tools().SetUsageStore(a.usageStore)
+	a.loop.Tools().ConfigureModelRegistryTools(tools.ModelRegistryToolDeps{
+		Registry:                a.modelRegistry,
+		SyncRouter:              a.syncRouterConfig,
+		PersistDeploymentPolicy: a.persistModelRegistryPolicy,
+		DeleteDeploymentPolicy:  a.deletePersistedModelRegistryPolicy,
+		PersistResourcePolicy:   a.persistModelRegistryResourcePolicy,
+		DeleteResourcePolicy:    a.deletePersistedModelRegistryResourcePolicy,
+	})
 
 	// --- Log index query ---
 	// Expose the structured log index so the agent can query its own

@@ -18,6 +18,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/knowledge"
 	"github.com/nugget/thane-ai-agent/internal/media"
+	"github.com/nugget/thane-ai-agent/internal/models"
 	"github.com/nugget/thane-ai-agent/internal/notifications"
 	"github.com/nugget/thane-ai-agent/internal/scheduler"
 	"github.com/nugget/thane-ai-agent/internal/search"
@@ -58,6 +59,14 @@ type Registry struct {
 	usageStore      *usage.Store
 	lensStore       *LensStore
 	logIndexDB      *sql.DB
+
+	modelRegistry                              *models.Registry
+	modelRegistrySyncRouter                    func()
+	persistModelRegistryPolicy                 func(string, models.DeploymentPolicy) error
+	deletePersistedModelRegistryPolicy         func(string) error
+	persistModelRegistryResourcePolicy         func(string, models.ResourcePolicy) error
+	deletePersistedModelRegistryResourcePolicy func(string) error
+
 	contentResolver *ContentResolver
 }
 
