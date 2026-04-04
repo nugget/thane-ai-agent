@@ -166,7 +166,7 @@ type Config struct {
 	// skips iteration accounting and continues to the next cycle.
 	Handler func(ctx context.Context, event any) error `json:"-"`
 
-	// Hints are merged into RunRequest hints for each iteration.
+	// Hints are merged into Request hints for each iteration.
 	// Config hints override loop-generated defaults (e.g., setting
 	// "source" to "metacognitive" instead of "loop").
 	Hints map[string]string

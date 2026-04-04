@@ -133,7 +133,7 @@ type Spec struct {
 	// Handler processes an iteration directly without an LLM call.
 	Handler func(ctx context.Context, event any) error `json:"-"`
 
-	// Hints are merged into RunRequest hints for each iteration.
+	// Hints are merged into Request hints for each iteration.
 	Hints map[string]string
 
 	// Setup is called by [Registry.SpawnLoop] after [New] but before

@@ -254,6 +254,44 @@ func (r *Registry) SpawnLoop(ctx context.Context, cfg Config, deps Deps) (string
 	return l.id, nil
 }
 
+// SpawnSpec creates, registers, and starts a loop from a [Spec]. It is
+// the additive loops-ng entrypoint while existing call sites continue to
+// use [Registry.SpawnLoop] with [Config].
+func (r *Registry) SpawnSpec(ctx context.Context, spec Spec, deps Deps) (string, error) {
+	l, err := NewFromSpec(spec, deps)
+	if err != nil {
+		return "", fmt.Errorf("create loop %q: %w", spec.Name, err)
+	}
+
+	r.mu.RLock()
+	atFunc := r.defaultActiveTagsFunc
+	r.mu.RUnlock()
+	if atFunc != nil {
+		l.SetActiveTagsFunc(atFunc)
+	}
+
+	cfg := spec.ToConfig()
+	if cfg.Setup != nil {
+		cfg.Setup(l)
+	}
+
+	if err := r.Register(l); err != nil {
+		return "", err
+	}
+
+	if err := l.Start(ctx); err != nil {
+		r.Deregister(l.id)
+		return "", fmt.Errorf("start loop %q: %w", spec.Name, err)
+	}
+
+	go func(id string, done <-chan struct{}) {
+		<-done
+		r.Deregister(id)
+	}(l.id, l.Done())
+
+	return l.id, nil
+}
+
 // StopLoop stops a loop by ID and deregisters it once the goroutine
 // has exited. Returns an error if the loop is not found. If the
 // goroutine does not exit within 10 seconds (the Stop timeout), the

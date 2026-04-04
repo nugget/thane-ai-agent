@@ -138,6 +138,55 @@ func TestRegistryStatuses(t *testing.T) {
 	}
 }
 
+func TestNewFromSpec(t *testing.T) {
+	t.Parallel()
+
+	l, err := NewFromSpec(Spec{
+		Name:       "from-spec",
+		Task:       "hello",
+		Operation:  OperationRequestReply,
+		Completion: CompletionReturn,
+		SleepMin:   1 * time.Millisecond,
+		SleepMax:   2 * time.Millisecond,
+		Jitter:     Float64Ptr(0),
+		MaxIter:    1,
+	}, Deps{Runner: &noopRunner{}})
+	if err != nil {
+		t.Fatalf("NewFromSpec: %v", err)
+	}
+	if l.Name() != "from-spec" {
+		t.Fatalf("Name = %q, want from-spec", l.Name())
+	}
+}
+
+func TestRegistrySpawnSpec(t *testing.T) {
+	t.Parallel()
+
+	r := NewRegistry()
+	id, err := r.SpawnSpec(context.Background(), Spec{
+		Name:       "spawn-spec",
+		Task:       "test",
+		Operation:  OperationRequestReply,
+		Completion: CompletionReturn,
+		SleepMin:   1 * time.Millisecond,
+		SleepMax:   2 * time.Millisecond,
+		Jitter:     Float64Ptr(0),
+		MaxIter:    1,
+	}, Deps{Runner: &noopRunner{}})
+	if err != nil {
+		t.Fatalf("SpawnSpec: %v", err)
+	}
+	l := r.Get(id)
+	if l == nil {
+		t.Fatalf("Get(%q) = nil, want loop", id)
+	}
+	select {
+	case <-l.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("loop did not finish")
+	}
+}
+
 func TestRegistryShutdownAll(t *testing.T) {
 	t.Parallel()
 

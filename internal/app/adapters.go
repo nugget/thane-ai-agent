@@ -812,23 +812,10 @@ type loopAdapter struct {
 // ellipsis to keep event payloads bounded.
 const maxToolResultLen = 2000
 
-// Run converts a [looppkg.RunRequest] to [agent.Request], calls the agent
-// loop, and converts the result back to [looppkg.RunResponse].
-func (a *loopAdapter) Run(ctx context.Context, req looppkg.RunRequest, _ looppkg.StreamCallback) (*looppkg.RunResponse, error) {
-	// Convert messages.
-	msgs := make([]agent.Message, len(req.Messages))
-	for i, m := range req.Messages {
-		msgs[i] = agent.Message{Role: m.Role, Content: m.Content}
-	}
-
-	agentReq := &agent.Request{
-		ConversationID: req.ConversationID,
-		Messages:       msgs,
-		ExcludeTools:   req.ExcludeTools,
-		SkipTagFilter:  req.SkipTagFilter,
-		Hints:          req.Hints,
-		SeedTags:       req.SeedTags,
-	}
+// Run converts a [looppkg.Request] to [agent.Request], calls the agent
+// loop, and converts the result back to [looppkg.Response].
+func (a *loopAdapter) Run(ctx context.Context, req looppkg.Request, _ looppkg.StreamCallback) (*looppkg.Response, error) {
+	agentReq := compileLoopAgentRequest(req)
 
 	// Build an agent streaming callback that relays tool and LLM
 	// events through the loop's OnProgress callback.
@@ -896,7 +883,7 @@ func (a *loopAdapter) Run(ctx context.Context, req looppkg.RunRequest, _ looppkg
 		}
 	}
 
-	return &looppkg.RunResponse{
+	return &looppkg.Response{
 		Content:       resp.Content,
 		Model:         resp.Model,
 		InputTokens:   resp.InputTokens,
@@ -906,6 +893,43 @@ func (a *loopAdapter) Run(ctx context.Context, req looppkg.RunRequest, _ looppkg
 		RequestID:     resp.RequestID,
 		ActiveTags:    resp.ActiveTags,
 	}, nil
+}
+
+func compileLoopAgentRequest(req looppkg.Request) *agent.Request {
+	// Convert messages.
+	msgs := make([]agent.Message, len(req.Messages))
+	for i, m := range req.Messages {
+		msgs[i] = agent.Message{Role: m.Role, Content: m.Content}
+	}
+
+	return &agent.Request{
+		Model:           req.Model,
+		ConversationID:  req.ConversationID,
+		Messages:        msgs,
+		SkipContext:     req.SkipContext,
+		AllowedTools:    append([]string(nil), req.AllowedTools...),
+		ExcludeTools:    append([]string(nil), req.ExcludeTools...),
+		SkipTagFilter:   req.SkipTagFilter,
+		Hints:           cloneStringMap(req.Hints),
+		SeedTags:        append([]string(nil), req.SeedTags...),
+		MaxIterations:   req.MaxIterations,
+		MaxOutputTokens: req.MaxOutputTokens,
+		ToolTimeout:     req.ToolTimeout,
+		UsageRole:       req.UsageRole,
+		UsageTaskName:   req.UsageTaskName,
+		SystemPrompt:    req.SystemPrompt,
+	}
+}
+
+func cloneStringMap(src map[string]string) map[string]string {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := make(map[string]string, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
 }
 
 // itoa converts an int to a string without importing strconv at the top

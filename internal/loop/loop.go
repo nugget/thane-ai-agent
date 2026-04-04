@@ -18,14 +18,17 @@ import (
 // Runner abstracts the agent loop for LLM calls. Satisfied by
 // *agent.Loop. Defined here to avoid a circular import.
 type Runner interface {
-	Run(ctx context.Context, req RunRequest, stream StreamCallback) (*RunResponse, error)
+	Run(ctx context.Context, req Request, stream StreamCallback) (*Response, error)
 }
 
-// RunRequest mirrors the fields of agent.Request that loops need.
-// The loop package defines its own type to avoid importing agent.
-type RunRequest struct {
+// Request mirrors the loop-facing fields of agent.Request. The loop
+// package defines its own type to avoid importing agent.
+type Request struct {
+	Model          string
 	ConversationID string
-	Messages       []RunMessage
+	Messages       []Message
+	SkipContext    bool
+	AllowedTools   []string
 	ExcludeTools   []string
 	SkipTagFilter  bool
 	Hints          map[string]string
@@ -41,17 +44,32 @@ type RunRequest struct {
 	// and loop_name into data before publishing. Nil means no
 	// progress reporting.
 	OnProgress func(kind string, data map[string]any) `json:"-"`
+
+	MaxIterations   int
+	MaxOutputTokens int
+	ToolTimeout     time.Duration
+	UsageRole       string
+	UsageTaskName   string
+	SystemPrompt    string
 }
 
-// RunMessage is a chat message for the runner.
-type RunMessage struct {
+// RunRequest is kept as a compatibility alias while loops-ng migrates
+// onto Request as the primary loop-facing run descriptor.
+type RunRequest = Request
+
+// Message is a chat message for the runner.
+type Message struct {
 	Role    string
 	Content string
 }
 
-// RunResponse mirrors agent.Response fields that loops consume.
-// RunResponse holds the result of an LLM call executed by a [Runner].
-type RunResponse struct {
+// RunMessage is kept as a compatibility alias while loops-ng migrates
+// onto Message as the primary loop-facing message type.
+type RunMessage = Message
+
+// Response mirrors agent.Response fields that loops consume. It holds
+// the result of an LLM call executed by a [Runner].
+type Response struct {
 	Content       string
 	Model         string
 	InputTokens   int
@@ -64,6 +82,10 @@ type RunResponse struct {
 	// subsequent iterations.
 	ActiveTags []string
 }
+
+// RunResponse is kept as a compatibility alias while loops-ng
+// migrates onto Response as the primary loop-facing response type.
+type RunResponse = Response
 
 // StreamCallback receives streaming events. Nil disables streaming.
 type StreamCallback func(event any)
@@ -143,8 +165,8 @@ type Loop struct {
 	currentConvID string
 
 	// activatedTags tracks capability tags activated during previous
-	// iterations. Carried forward via SeedTags on the next RunRequest
-	// so activations persist across the loop's lifetime.
+	// iterations. Carried forward via SeedTags on the next Request so
+	// activations persist across the loop's lifetime.
 	activatedTags []string
 
 	// recentConvIDs is a ring buffer of conversation IDs from the most
@@ -213,6 +235,16 @@ func New(cfg Config, deps Deps) (*Loop, error) {
 		deps:   deps,
 		state:  StatePending,
 	}, nil
+}
+
+// NewFromSpec creates a loop from a [Spec], validating the loops-ng
+// fields before compiling the engine-facing [Config]. This is an
+// additive bridge for gradually moving call sites onto Spec.
+func NewFromSpec(spec Spec, deps Deps) (*Loop, error) {
+	if err := spec.Validate(); err != nil {
+		return nil, err
+	}
+	return New(spec.ToConfig(), deps)
 }
 
 // ID returns the unique loop identifier.
@@ -1018,9 +1050,9 @@ func (l *Loop) iterate(ctx context.Context, isSupervisor bool, convID string) (*
 		hints[k] = v
 	}
 
-	req := RunRequest{
+	req := Request{
 		ConversationID: convID,
-		Messages: []RunMessage{
+		Messages: []Message{
 			{Role: "user", Content: task},
 		},
 		ExcludeTools:  l.config.ExcludeTools,
