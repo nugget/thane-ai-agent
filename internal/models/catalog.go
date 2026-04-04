@@ -15,10 +15,14 @@ import (
 // more model deployments. Examples include an Ollama server on a
 // specific host or a global cloud provider endpoint.
 type Resource struct {
-	ID           string
-	Provider     string
-	URL          string
-	Capabilities modelproviders.Capabilities
+	ID              string
+	Provider        string
+	URL             string
+	Capabilities    modelproviders.Capabilities
+	PolicyState     DeploymentPolicyState
+	PolicySource    DeploymentPolicySource
+	PolicyReason    string
+	PolicyUpdatedAt time.Time
 }
 
 // DeploymentSource describes where a deployment definition came from.
@@ -65,11 +69,15 @@ type Deployment struct {
 	ParameterSize string
 	Quantization  string
 
-	PolicyState     DeploymentPolicyState
-	PolicySource    DeploymentPolicySource
-	PolicyReason    string
-	PolicyUpdatedAt time.Time
-	RoutableSource  DeploymentPolicySource
+	PolicyState             DeploymentPolicyState
+	PolicySource            DeploymentPolicySource
+	PolicyReason            string
+	PolicyUpdatedAt         time.Time
+	RoutableSource          DeploymentPolicySource
+	ResourcePolicyState     DeploymentPolicyState
+	ResourcePolicySource    DeploymentPolicySource
+	ResourcePolicyReason    string
+	ResourcePolicyUpdatedAt time.Time
 }
 
 // Catalog is the normalized, provider-aware model view used by both
@@ -92,7 +100,10 @@ func routingEligible(dep Deployment) bool {
 	if !dep.Routable {
 		return false
 	}
-	return dep.PolicyState != DeploymentPolicyStateInactive
+	if dep.PolicyState == DeploymentPolicyStateInactive {
+		return false
+	}
+	return dep.ResourcePolicyState != DeploymentPolicyStateInactive
 }
 
 func (c *Catalog) preferredRoutedDefault() string {

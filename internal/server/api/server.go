@@ -62,26 +62,28 @@ type TokenObserver interface {
 
 // Server is the HTTP API server.
 type Server struct {
-	address                    string
-	port                       int
-	loop                       *agent.Loop
-	router                     *router.Router
-	checkpointer               *checkpoint.Checkpointer
-	memoryStore                *memory.SQLiteStore
-	archiveStore               *memory.ArchiveStore
-	healthDeps                 HealthStatusFunc
-	tokenObserver              TokenObserver
-	eventBus                   *events.Bus
-	owuTracker                 *OWUTracker
-	webServer                  WebServerRegistrar
-	platformHandler            http.Handler
-	modelRegistry              *models.Registry
-	usageStore                 *usage.Store
-	persistModelRegistryPolicy func(string, models.DeploymentPolicy) error
-	deleteModelRegistryPolicy  func(string) error
-	logger                     *slog.Logger
-	server                     *http.Server
-	stats                      *SessionStats
+	address                            string
+	port                               int
+	loop                               *agent.Loop
+	router                             *router.Router
+	checkpointer                       *checkpoint.Checkpointer
+	memoryStore                        *memory.SQLiteStore
+	archiveStore                       *memory.ArchiveStore
+	healthDeps                         HealthStatusFunc
+	tokenObserver                      TokenObserver
+	eventBus                           *events.Bus
+	owuTracker                         *OWUTracker
+	webServer                          WebServerRegistrar
+	platformHandler                    http.Handler
+	modelRegistry                      *models.Registry
+	usageStore                         *usage.Store
+	persistModelRegistryPolicy         func(string, models.DeploymentPolicy) error
+	deleteModelRegistryPolicy          func(string) error
+	persistModelRegistryResourcePolicy func(string, models.ResourcePolicy) error
+	deleteModelRegistryResourcePolicy  func(string) error
+	logger                             *slog.Logger
+	server                             *http.Server
+	stats                              *SessionStats
 }
 
 // SetOWUTracker configures the Open WebUI loop tracker for dashboard visibility.
@@ -284,18 +286,22 @@ func NewServer(
 	usageStore *usage.Store,
 	persistPolicy func(string, models.DeploymentPolicy) error,
 	deletePolicy func(string) error,
+	persistResourcePolicy func(string, models.ResourcePolicy) error,
+	deleteResourcePolicy func(string) error,
 	logger *slog.Logger,
 ) *Server {
 	return &Server{
-		address:                    address,
-		port:                       port,
-		loop:                       loop,
-		router:                     rtr,
-		modelRegistry:              registry,
-		usageStore:                 usageStore,
-		persistModelRegistryPolicy: persistPolicy,
-		deleteModelRegistryPolicy:  deletePolicy,
-		logger:                     logger,
+		address:                            address,
+		port:                               port,
+		loop:                               loop,
+		router:                             rtr,
+		modelRegistry:                      registry,
+		usageStore:                         usageStore,
+		persistModelRegistryPolicy:         persistPolicy,
+		deleteModelRegistryPolicy:          deletePolicy,
+		persistModelRegistryResourcePolicy: persistResourcePolicy,
+		deleteModelRegistryResourcePolicy:  deleteResourcePolicy,
+		logger:                             logger,
 		stats: &SessionStats{
 			pricing:         pricing,
 			ByModel:         make(map[string]usage.Summary),
@@ -345,6 +351,8 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("GET /v1/model-registry", s.handleModelRegistry)
 	mux.HandleFunc("POST /v1/model-registry/policy", s.handleModelRegistryPolicySet)
 	mux.HandleFunc("DELETE /v1/model-registry/policy", s.handleModelRegistryPolicyDelete)
+	mux.HandleFunc("POST /v1/model-registry/resource-policy", s.handleModelRegistryResourcePolicySet)
+	mux.HandleFunc("DELETE /v1/model-registry/resource-policy", s.handleModelRegistryResourcePolicyDelete)
 
 	// Checkpoint endpoints
 	mux.HandleFunc("POST /v1/checkpoint", s.handleCheckpointCreate)
@@ -861,10 +869,22 @@ type setModelRegistryPolicyRequest struct {
 	Reason     string `json:"reason,omitempty"`
 }
 
+type setModelRegistryResourcePolicyRequest struct {
+	Resource string `json:"resource"`
+	State    string `json:"state"`
+	Reason   string `json:"reason,omitempty"`
+}
+
 type modelRegistryPolicyResponse struct {
 	Status     string                            `json:"status"`
 	Generation int64                             `json:"generation"`
 	Deployment models.RegistryDeploymentSnapshot `json:"deployment"`
+}
+
+type modelRegistryResourcePolicyResponse struct {
+	Status     string                          `json:"status"`
+	Generation int64                           `json:"generation"`
+	Resource   models.RegistryResourceSnapshot `json:"resource"`
 }
 
 func (s *Server) handleModelRegistry(w http.ResponseWriter, r *http.Request) {
@@ -1004,8 +1024,123 @@ func (s *Server) handleModelRegistryPolicyDelete(w http.ResponseWriter, r *http.
 	}, s.logger)
 }
 
+func (s *Server) handleModelRegistryResourcePolicySet(w http.ResponseWriter, r *http.Request) {
+	if s.modelRegistry == nil {
+		s.errorResponse(w, http.StatusServiceUnavailable, "model registry not configured")
+		return
+	}
+
+	var req setModelRegistryResourcePolicyRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.errorResponse(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	req.Resource = strings.TrimSpace(req.Resource)
+	if req.Resource == "" {
+		s.errorResponse(w, http.StatusBadRequest, "resource is required")
+		return
+	}
+
+	parsed, err := models.ParseDeploymentPolicyState(req.State)
+	if err != nil {
+		s.errorResponse(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	policy := models.ResourcePolicy{
+		State:     parsed,
+		Reason:    req.Reason,
+		UpdatedAt: time.Now(),
+	}
+	if s.persistModelRegistryResourcePolicy != nil {
+		if err := s.persistModelRegistryResourcePolicy(req.Resource, policy); err != nil {
+			s.logger.Error("persist model registry resource policy failed", "resource", req.Resource, "error", err)
+			s.errorResponse(w, http.StatusInternalServerError, "failed to persist model registry resource policy")
+			return
+		}
+	}
+
+	if err := s.modelRegistry.ApplyResourcePolicy(req.Resource, policy, policy.UpdatedAt); err != nil {
+		if models.IsUnknownResource(err) {
+			s.errorResponse(w, http.StatusNotFound, err.Error())
+			return
+		}
+		s.errorResponse(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if s.router != nil {
+		s.router.UpdateConfig(s.modelRegistry.Catalog().RouterConfig(0))
+	}
+
+	snapshot := s.modelRegistry.Snapshot()
+	resource := findRegistryResource(snapshot, req.Resource)
+	if !resource.found {
+		s.errorResponse(w, http.StatusInternalServerError, "resource policy applied but resource snapshot is unavailable")
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	writeJSON(w, modelRegistryResourcePolicyResponse{
+		Status:     "ok",
+		Generation: snapshot.Generation,
+		Resource:   resource.snapshot,
+	}, s.logger)
+}
+
+func (s *Server) handleModelRegistryResourcePolicyDelete(w http.ResponseWriter, r *http.Request) {
+	if s.modelRegistry == nil {
+		s.errorResponse(w, http.StatusServiceUnavailable, "model registry not configured")
+		return
+	}
+
+	id := strings.TrimSpace(r.URL.Query().Get("resource"))
+	if id == "" {
+		s.errorResponse(w, http.StatusBadRequest, "resource is required")
+		return
+	}
+
+	if s.deleteModelRegistryResourcePolicy != nil {
+		if err := s.deleteModelRegistryResourcePolicy(id); err != nil {
+			s.logger.Error("delete persisted model registry resource policy failed", "resource", id, "error", err)
+			s.errorResponse(w, http.StatusInternalServerError, "failed to delete persisted model registry resource policy")
+			return
+		}
+	}
+
+	if err := s.modelRegistry.ClearResourcePolicy(id, time.Now()); err != nil {
+		if models.IsUnknownResource(err) {
+			s.errorResponse(w, http.StatusNotFound, err.Error())
+			return
+		}
+		s.errorResponse(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if s.router != nil {
+		s.router.UpdateConfig(s.modelRegistry.Catalog().RouterConfig(0))
+	}
+
+	snapshot := s.modelRegistry.Snapshot()
+	resource := findRegistryResource(snapshot, id)
+	if !resource.found {
+		s.errorResponse(w, http.StatusInternalServerError, "resource policy cleared but resource snapshot is unavailable")
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	writeJSON(w, modelRegistryResourcePolicyResponse{
+		Status:     "ok",
+		Generation: snapshot.Generation,
+		Resource:   resource.snapshot,
+	}, s.logger)
+}
+
 type registryDeploymentLookup struct {
 	snapshot models.RegistryDeploymentSnapshot
+	found    bool
+}
+
+type registryResourceLookup struct {
+	snapshot models.RegistryResourceSnapshot
 	found    bool
 }
 
@@ -1019,6 +1154,18 @@ func findRegistryDeployment(snapshot *models.RegistrySnapshot, id string) regist
 		}
 	}
 	return registryDeploymentLookup{}
+}
+
+func findRegistryResource(snapshot *models.RegistrySnapshot, id string) registryResourceLookup {
+	if snapshot == nil {
+		return registryResourceLookup{}
+	}
+	for _, res := range snapshot.Resources {
+		if res.ID == id {
+			return registryResourceLookup{snapshot: res, found: true}
+		}
+	}
+	return registryResourceLookup{}
 }
 
 // Checkpoint handlers

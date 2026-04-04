@@ -398,6 +398,13 @@ func (a *App) initStores(s *newState) error {
 	if err := a.modelPolicyStore.LoadInto(a.modelRegistry, logger); err != nil {
 		return fmt.Errorf("load persisted model registry policies: %w", err)
 	}
+	a.modelResourcePolicyStore = newModelResourcePolicyStore(opStore)
+	if err := a.modelResourcePolicyStore.LoadInto(a.modelRegistry, logger); err != nil {
+		return fmt.Errorf("load persisted model registry resource policies: %w", err)
+	}
+	if a.rtr != nil {
+		a.syncRouterConfig()
+	}
 	a.modelExperienceStore = newModelExperienceStore(opStore)
 	if err := a.modelExperienceStore.LoadInto(a.rtr, logger); err != nil {
 		return fmt.Errorf("load persisted model registry experience: %w", err)

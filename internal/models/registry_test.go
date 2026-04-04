@@ -447,6 +447,115 @@ func TestRegistryDeploymentPolicyCanPromoteDiscoveredDeploymentIntoRouting(t *te
 	}
 }
 
+func TestRegistryResourcePolicyCanDisableRoutingAndRestoreAfterClear(t *testing.T) {
+	t.Parallel()
+
+	base := &Catalog{
+		DefaultModel: "deepslate/google/gemma-3-4b",
+		LocalFirst:   true,
+		Resources: []Resource{
+			{ID: "deepslate", Provider: "lmstudio", URL: "http://deepslate.example"},
+			{ID: "spark", Provider: "ollama", URL: "http://spark.example"},
+		},
+		Deployments: []Deployment{
+			{
+				ID:                    "deepslate/google/gemma-3-4b",
+				ModelName:             "google/gemma-3-4b",
+				Provider:              "lmstudio",
+				ResourceID:            "deepslate",
+				Server:                "deepslate",
+				SupportsTools:         true,
+				ProviderSupportsTools: true,
+				SupportsStreaming:     true,
+				SupportsImages:        true,
+				ContextWindow:         131072,
+				Speed:                 6,
+				Quality:               8,
+				CostTier:              0,
+				Source:                DeploymentSourceConfig,
+				Routable:              true,
+			},
+			{
+				ID:                    "spark/gpt-oss:20b",
+				ModelName:             "gpt-oss:20b",
+				Provider:              "ollama",
+				ResourceID:            "spark",
+				Server:                "spark",
+				SupportsTools:         true,
+				ProviderSupportsTools: true,
+				SupportsStreaming:     true,
+				ContextWindow:         8192,
+				Speed:                 8,
+				Quality:               6,
+				CostTier:              0,
+				Source:                DeploymentSourceConfig,
+				Routable:              true,
+			},
+		},
+	}
+	if err := base.reindex(base.DefaultModel, base.RecoveryModel); err != nil {
+		t.Fatalf("reindex base: %v", err)
+	}
+
+	reg, err := NewRegistry(base)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+
+	before := reg.Catalog().RouterConfig(10)
+	if len(before.Models) != 2 {
+		t.Fatalf("len(router models) before = %d, want 2", len(before.Models))
+	}
+
+	updatedAt := time.Date(2026, 4, 4, 3, 0, 0, 0, time.UTC)
+	if err := reg.ApplyResourcePolicy("deepslate", ResourcePolicy{
+		State:  DeploymentPolicyStateInactive,
+		Reason: "office hours",
+	}, updatedAt); err != nil {
+		t.Fatalf("ApplyResourcePolicy: %v", err)
+	}
+
+	snap := reg.Snapshot()
+	var resource RegistryResourceSnapshot
+	foundResource := false
+	for _, res := range snap.Resources {
+		if res.ID == "deepslate" {
+			resource = res
+			foundResource = true
+			break
+		}
+	}
+	if !foundResource {
+		t.Fatal("missing resource snapshot for deepslate")
+	}
+	if resource.PolicyState != DeploymentPolicyStateInactive {
+		t.Fatalf("resource PolicyState = %q, want %q", resource.PolicyState, DeploymentPolicyStateInactive)
+	}
+	if resource.PolicySource != DeploymentPolicySourceOverlay {
+		t.Fatalf("resource PolicySource = %q, want %q", resource.PolicySource, DeploymentPolicySourceOverlay)
+	}
+	if resource.PolicyReason != "office hours" {
+		t.Fatalf("resource PolicyReason = %q, want %q", resource.PolicyReason, "office hours")
+	}
+	if resource.PolicyUpdated != updatedAt.Format(time.RFC3339) {
+		t.Fatalf("resource PolicyUpdated = %q, want %q", resource.PolicyUpdated, updatedAt.Format(time.RFC3339))
+	}
+
+	routerCfg := reg.Catalog().RouterConfig(10)
+	if len(routerCfg.Models) != 1 || routerCfg.Models[0].Name != "spark/gpt-oss:20b" {
+		t.Fatalf("router config after resource disable = %+v, want only spark/gpt-oss:20b", routerCfg.Models)
+	}
+
+	if err := reg.ClearResourcePolicy("deepslate", time.Date(2026, 4, 4, 3, 5, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("ClearResourcePolicy: %v", err)
+	}
+
+	routerCfg = reg.Catalog().RouterConfig(10)
+	if len(routerCfg.Models) != 2 {
+		t.Fatalf("len(router models) after clear = %d, want 2", len(routerCfg.Models))
+	}
+}
+
 func findPolicySnapshot(snapshot *RegistrySnapshot, id string) (RegistryDeploymentSnapshot, bool) {
 	for _, dep := range snapshot.Deployments {
 		if dep.ID == id {

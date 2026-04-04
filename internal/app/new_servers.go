@@ -44,6 +44,8 @@ func (a *App) initServers(s *newState) error {
 		a.usageStore,
 		a.persistModelRegistryPolicy,
 		a.deletePersistedModelRegistryPolicy,
+		a.persistModelRegistryResourcePolicy,
+		a.deletePersistedModelRegistryResourcePolicy,
 		logger,
 	)
 	server.SetMemoryStore(a.mem)

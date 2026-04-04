@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"reflect"
-	"strings"
 	"sync"
 	"time"
 
@@ -16,14 +15,15 @@ import (
 // inventory overlay, and the effective merged catalog derived from the
 // two.
 type Registry struct {
-	mu         sync.RWMutex
-	base       *Catalog
-	overlay    *Inventory
-	policies   map[string]DeploymentPolicy
-	effective  *Catalog
-	generation int64
-	updatedAt  time.Time
-	resources  map[string]ResourceRuntime
+	mu               sync.RWMutex
+	base             *Catalog
+	overlay          *Inventory
+	policies         map[string]DeploymentPolicy
+	resourcePolicies map[string]ResourcePolicy
+	effective        *Catalog
+	generation       int64
+	updatedAt        time.Time
+	resources        map[string]ResourceRuntime
 }
 
 // ResourceRuntime captures runtime discovery state for one provider
@@ -53,17 +53,21 @@ type RegistrySnapshot struct {
 // RegistryResourceSnapshot is the API-facing runtime state for one
 // provider resource.
 type RegistryResourceSnapshot struct {
-	ID                string `json:"id"`
-	Provider          string `json:"provider"`
-	URL               string `json:"url,omitempty"`
-	SupportsChat      bool   `json:"supports_chat,omitempty"`
-	SupportsStreaming bool   `json:"supports_streaming,omitempty"`
-	SupportsTools     bool   `json:"supports_tools,omitempty"`
-	SupportsImages    bool   `json:"supports_images,omitempty"`
-	SupportsInventory bool   `json:"supports_inventory,omitempty"`
-	LastRefresh       string `json:"last_refresh,omitempty"`
-	LastError         string `json:"last_error,omitempty"`
-	DiscoveredModels  int    `json:"discovered_models,omitempty"`
+	ID                string                 `json:"id"`
+	Provider          string                 `json:"provider"`
+	URL               string                 `json:"url,omitempty"`
+	SupportsChat      bool                   `json:"supports_chat,omitempty"`
+	SupportsStreaming bool                   `json:"supports_streaming,omitempty"`
+	SupportsTools     bool                   `json:"supports_tools,omitempty"`
+	SupportsImages    bool                   `json:"supports_images,omitempty"`
+	SupportsInventory bool                   `json:"supports_inventory,omitempty"`
+	LastRefresh       string                 `json:"last_refresh,omitempty"`
+	LastError         string                 `json:"last_error,omitempty"`
+	DiscoveredModels  int                    `json:"discovered_models,omitempty"`
+	PolicyState       DeploymentPolicyState  `json:"policy_state"`
+	PolicySource      DeploymentPolicySource `json:"policy_source"`
+	PolicyReason      string                 `json:"policy_reason,omitempty"`
+	PolicyUpdated     string                 `json:"policy_updated_at,omitempty"`
 }
 
 // RegistryDeploymentSnapshot is the API-facing state for one effective
@@ -101,6 +105,10 @@ type RegistryDeploymentSnapshot struct {
 	PolicySource          DeploymentPolicySource `json:"policy_source"`
 	PolicyReason          string                 `json:"policy_reason,omitempty"`
 	PolicyUpdated         string                 `json:"policy_updated_at,omitempty"`
+	ResourcePolicyState   DeploymentPolicyState  `json:"resource_policy_state"`
+	ResourcePolicySource  DeploymentPolicySource `json:"resource_policy_source"`
+	ResourcePolicyReason  string                 `json:"resource_policy_reason,omitempty"`
+	ResourcePolicyUpdated string                 `json:"resource_policy_updated_at,omitempty"`
 }
 
 // NewRegistry constructs a registry from the immutable config-defined
@@ -109,16 +117,17 @@ func NewRegistry(base *Catalog) (*Registry, error) {
 	if base == nil {
 		return nil, fmt.Errorf("nil base catalog")
 	}
-	effective, err := buildEffectiveCatalog(base, nil, nil)
+	effective, err := buildEffectiveCatalog(base, nil, nil, nil)
 	if err != nil {
 		return nil, err
 	}
 	return &Registry{
-		base:      base,
-		overlay:   &Inventory{},
-		policies:  make(map[string]DeploymentPolicy),
-		effective: effective,
-		resources: baseResourceRuntime(base.Resources),
+		base:             base,
+		overlay:          &Inventory{},
+		policies:         make(map[string]DeploymentPolicy),
+		resourcePolicies: make(map[string]ResourcePolicy),
+		effective:        effective,
+		resources:        baseResourceRuntime(base.Resources),
 	}, nil
 }
 
@@ -169,9 +178,10 @@ func (r *Registry) ApplyInventory(inv *Inventory, refreshedAt time.Time) error {
 	r.mu.RLock()
 	base := r.base
 	policies := clonePolicies(r.policies)
+	resourcePolicies := cloneResourcePolicies(r.resourcePolicies)
 	r.mu.RUnlock()
 
-	effective, err := buildEffectiveCatalog(base, inv, policies)
+	effective, err := buildEffectiveCatalog(base, inv, policies, resourcePolicies)
 	if err != nil {
 		return err
 	}
@@ -200,138 +210,6 @@ func (r *Registry) ApplyInventory(inv *Inventory, refreshedAt time.Time) error {
 	if !refreshedAt.IsZero() {
 		r.updatedAt = refreshedAt.UTC()
 	}
-	return nil
-}
-
-// ApplyDeploymentPolicy upserts a runtime policy override for one
-// deployment ID in the current registry.
-func (r *Registry) ApplyDeploymentPolicy(id string, policy DeploymentPolicy, updatedAt time.Time) error {
-	if r == nil {
-		return fmt.Errorf("nil registry")
-	}
-	id = strings.TrimSpace(id)
-	if id == "" {
-		return fmt.Errorf("deployment is required")
-	}
-	if policy.State == "" {
-		return fmt.Errorf("state must be one of [\"active\" \"inactive\" \"flagged\"]")
-	}
-	if updatedAt.IsZero() {
-		updatedAt = time.Now()
-	}
-	policy.Reason = strings.TrimSpace(policy.Reason)
-	policy.UpdatedAt = updatedAt.UTC()
-
-	r.mu.RLock()
-	base := r.base
-	inv := cloneInventory(r.overlay)
-	current := clonePolicies(r.policies)
-	currentEffective := r.effective
-	r.mu.RUnlock()
-
-	if currentEffective == nil {
-		return fmt.Errorf("model registry is not initialized")
-	}
-	if _, ok := currentEffective.byID[id]; !ok {
-		return &UnknownDeploymentError{Deployment: id}
-	}
-
-	current[id] = policy
-	effective, err := buildEffectiveCatalog(base, inv, current)
-	if err != nil {
-		return err
-	}
-
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	changed := !reflect.DeepEqual(current, r.policies)
-	r.policies = current
-	r.effective = effective
-	if changed {
-		r.generation++
-	}
-	r.updatedAt = updatedAt.UTC()
-	return nil
-}
-
-// ClearDeploymentPolicy removes an explicit runtime policy override for
-// one deployment ID.
-func (r *Registry) ClearDeploymentPolicy(id string, updatedAt time.Time) error {
-	if r == nil {
-		return fmt.Errorf("nil registry")
-	}
-	id = strings.TrimSpace(id)
-	if id == "" {
-		return fmt.Errorf("deployment is required")
-	}
-	if updatedAt.IsZero() {
-		updatedAt = time.Now()
-	}
-
-	r.mu.RLock()
-	base := r.base
-	inv := cloneInventory(r.overlay)
-	current := clonePolicies(r.policies)
-	currentEffective := r.effective
-	r.mu.RUnlock()
-
-	if currentEffective == nil {
-		return fmt.Errorf("model registry is not initialized")
-	}
-	if _, ok := currentEffective.byID[id]; !ok {
-		return &UnknownDeploymentError{Deployment: id}
-	}
-
-	delete(current, id)
-	effective, err := buildEffectiveCatalog(base, inv, current)
-	if err != nil {
-		return err
-	}
-
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	changed := !reflect.DeepEqual(current, r.policies)
-	r.policies = current
-	r.effective = effective
-	if changed {
-		r.generation++
-	}
-	r.updatedAt = updatedAt.UTC()
-	return nil
-}
-
-// ReplaceDeploymentPolicies swaps the explicit runtime policy overlay
-// with the provided policy map. Policies for currently absent
-// deployments are retained so they can reapply automatically when a
-// discovered deployment returns in a later inventory refresh.
-func (r *Registry) ReplaceDeploymentPolicies(policies map[string]DeploymentPolicy, updatedAt time.Time) error {
-	if r == nil {
-		return fmt.Errorf("nil registry")
-	}
-	if updatedAt.IsZero() {
-		updatedAt = time.Now()
-	}
-
-	r.mu.RLock()
-	base := r.base
-	inv := cloneInventory(r.overlay)
-	r.mu.RUnlock()
-
-	next := clonePolicies(policies)
-	effective, err := buildEffectiveCatalog(base, inv, next)
-	if err != nil {
-		return err
-	}
-
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	changed := !reflect.DeepEqual(next, r.policies)
-	r.policies = next
-	r.effective = effective
-	if changed {
-		r.generation++
-	}
-	r.updatedAt = updatedAt.UTC()
 	return nil
 }
 
@@ -369,6 +247,10 @@ func (r *Registry) Snapshot() *RegistrySnapshot {
 			SupportsInventory: runtime.Capabilities.SupportsInventory,
 			LastError:         runtime.LastError,
 			DiscoveredModels:  runtime.DiscoveredModels,
+			PolicyState:       res.PolicyState,
+			PolicySource:      res.PolicySource,
+			PolicyReason:      res.PolicyReason,
+			PolicyUpdated:     formatPolicyTime(res.PolicyUpdatedAt),
 		}
 		if !runtime.LastRefresh.IsZero() {
 			rs.LastRefresh = runtime.LastRefresh.UTC().Format(time.RFC3339)
@@ -410,6 +292,10 @@ func (r *Registry) Snapshot() *RegistrySnapshot {
 			PolicySource:          dep.PolicySource,
 			PolicyReason:          dep.PolicyReason,
 			PolicyUpdated:         formatPolicyTime(dep.PolicyUpdatedAt),
+			ResourcePolicyState:   dep.ResourcePolicyState,
+			ResourcePolicySource:  dep.ResourcePolicySource,
+			ResourcePolicyReason:  dep.ResourcePolicyReason,
+			ResourcePolicyUpdated: formatPolicyTime(dep.ResourcePolicyUpdatedAt),
 		})
 	}
 
@@ -425,25 +311,6 @@ func baseResourceRuntime(resources []Resource) map[string]ResourceRuntime {
 			URL:          res.URL,
 			Capabilities: providerCapabilities(res.Provider, res.Capabilities),
 		}
-	}
-	return out
-}
-
-func buildEffectiveCatalog(base *Catalog, inv *Inventory, policies map[string]DeploymentPolicy) (*Catalog, error) {
-	merged, err := MergeInventory(base, inv)
-	if err != nil {
-		return nil, err
-	}
-	return applyDeploymentPolicies(merged, policies)
-}
-
-func clonePolicies(in map[string]DeploymentPolicy) map[string]DeploymentPolicy {
-	if len(in) == 0 {
-		return make(map[string]DeploymentPolicy)
-	}
-	out := make(map[string]DeploymentPolicy, len(in))
-	for key, value := range in {
-		out[key] = value
 	}
 	return out
 }

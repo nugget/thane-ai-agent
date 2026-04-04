@@ -90,6 +90,9 @@ func (l *Loop) preflightExplicitModel(ref string, needsTools, needsStreaming, ne
 	}
 
 	var reasons []string
+	if dep.ResourcePolicyState == models.DeploymentPolicyStateInactive {
+		reasons = append(reasons, "its resource is currently inactive by operator policy")
+	}
 	if needsTools {
 		switch {
 		case !dep.ProviderSupportsTools:
@@ -127,6 +130,9 @@ func (l *Loop) maybePrepareExplicitModel(ctx context.Context, ref string, needsT
 	}
 	dep, err := cat.ResolveDeploymentRef(ref)
 	if err != nil {
+		return false, nil
+	}
+	if dep.ResourcePolicyState == models.DeploymentPolicyStateInactive {
 		return false, nil
 	}
 	if !models.CanExpandLoadedContext(dep, contextSize) {

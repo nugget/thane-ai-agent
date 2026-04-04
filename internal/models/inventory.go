@@ -284,6 +284,48 @@ func cloneDeployments(in []Deployment) []Deployment {
 	return out
 }
 
+func applyResourcePolicies(cat *Catalog, policies map[string]ResourcePolicy) (*Catalog, error) {
+	if cat == nil {
+		return nil, fmt.Errorf("nil model catalog")
+	}
+
+	out := *cat
+	out.Resources = append([]Resource(nil), cat.Resources...)
+	out.Deployments = cloneDeployments(cat.Deployments)
+	for i := range out.Resources {
+		out.Resources[i].PolicyState = DeploymentPolicyStateActive
+		out.Resources[i].PolicySource = DeploymentPolicySourceDefault
+		out.Resources[i].PolicyReason = ""
+		out.Resources[i].PolicyUpdatedAt = time.Time{}
+		if policy, ok := policies[out.Resources[i].ID]; ok {
+			out.Resources[i].PolicyState = policy.State
+			out.Resources[i].PolicySource = DeploymentPolicySourceOverlay
+			out.Resources[i].PolicyReason = policy.Reason
+			out.Resources[i].PolicyUpdatedAt = policy.UpdatedAt
+		}
+	}
+	resourceByID := make(map[string]Resource, len(out.Resources))
+	for _, res := range out.Resources {
+		resourceByID[res.ID] = res
+	}
+	for i := range out.Deployments {
+		out.Deployments[i].ResourcePolicyState = DeploymentPolicyStateActive
+		out.Deployments[i].ResourcePolicySource = DeploymentPolicySourceDefault
+		out.Deployments[i].ResourcePolicyReason = ""
+		out.Deployments[i].ResourcePolicyUpdatedAt = time.Time{}
+		if res, ok := resourceByID[out.Deployments[i].ResourceID]; ok {
+			out.Deployments[i].ResourcePolicyState = res.PolicyState
+			out.Deployments[i].ResourcePolicySource = res.PolicySource
+			out.Deployments[i].ResourcePolicyReason = res.PolicyReason
+			out.Deployments[i].ResourcePolicyUpdatedAt = res.PolicyUpdatedAt
+		}
+	}
+	if err := out.reindex(cat.DefaultModel, cat.RecoveryModel); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
 func applyDeploymentPolicies(cat *Catalog, policies map[string]DeploymentPolicy) (*Catalog, error) {
 	if cat == nil {
 		return nil, fmt.Errorf("nil model catalog")

@@ -96,3 +96,13 @@ func (c *Catalog) PrimaryOllamaURL() string {
 	}
 	return ""
 }
+
+// ResourceByID returns the normalized resource metadata for the given
+// configured resource ID.
+func (c *Catalog) ResourceByID(id string) (Resource, bool) {
+	if c == nil {
+		return Resource{}, false
+	}
+	res, ok := c.resourceBy[strings.TrimSpace(id)]
+	return res, ok
+}

@@ -35,6 +35,14 @@ type DeploymentPolicy struct {
 	UpdatedAt time.Time
 }
 
+// ResourcePolicy is the mutable runtime policy overlay for one
+// configured provider resource.
+type ResourcePolicy struct {
+	State     DeploymentPolicyState
+	Reason    string
+	UpdatedAt time.Time
+}
+
 // UnknownDeploymentError reports that a requested deployment ID does not
 // exist in the current effective registry snapshot.
 type UnknownDeploymentError struct {
@@ -48,6 +56,22 @@ func (e *UnknownDeploymentError) Error() string {
 // IsUnknownDeployment reports whether err identifies a missing deployment ID.
 func IsUnknownDeployment(err error) bool {
 	var target *UnknownDeploymentError
+	return errors.As(err, &target)
+}
+
+// UnknownResourceError reports that a requested resource ID does not
+// exist in the current effective registry snapshot.
+type UnknownResourceError struct {
+	Resource string
+}
+
+func (e *UnknownResourceError) Error() string {
+	return fmt.Sprintf("unknown resource %q; query /v1/model-registry for valid resource IDs", e.Resource)
+}
+
+// IsUnknownResource reports whether err identifies a missing resource ID.
+func IsUnknownResource(err error) bool {
+	var target *UnknownResourceError
 	return errors.As(err, &target)
 }
 

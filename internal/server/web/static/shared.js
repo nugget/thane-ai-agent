@@ -412,6 +412,12 @@ function renderModelRegistry(summaryEl, resourcesEl, deploymentsEl, metaEl, regi
       if (resource.supports_streaming) chips.appendChild(buildSystemChip('stream', 'ok'));
       if (resource.supports_tools) chips.appendChild(buildSystemChip('tools', 'ok'));
       if (resource.supports_images) chips.appendChild(buildSystemChip('images', 'ok'));
+      if (resource.policy_state) {
+        chips.appendChild(buildSystemChip(
+          resource.policy_state,
+          resource.policy_state === 'active' ? 'ok' : resource.policy_state === 'flagged' ? 'warn' : 'error',
+        ));
+      }
       if (health && health.cooldown_until) {
         chips.appendChild(buildSystemChip('cooldown', 'warn'));
       }
@@ -438,6 +444,14 @@ function renderModelRegistry(summaryEl, resourcesEl, deploymentsEl, metaEl, regi
         reason.className = 'system-item__reason';
         reason.textContent = health.cooldown_reason;
         reason.title = health.cooldown_reason;
+        item.appendChild(reason);
+      }
+
+      if (resource.policy_reason) {
+        const reason = document.createElement('div');
+        reason.className = 'system-item__reason';
+        reason.textContent = resource.policy_reason;
+        reason.title = resource.policy_reason;
         item.appendChild(reason);
       }
 
