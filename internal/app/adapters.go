@@ -613,19 +613,6 @@ func (n *notifDelegateSpawner) Spawn(ctx context.Context, task, guidance string)
 	return err
 }
 
-// DeliverCompletion injects detached loop completions back into a live
-// conversation as system messages so the primary loop can notice the
-// background result on its next turn.
-func (n *conversationSystemInjector) DeliverCompletion(_ context.Context, delivery looppkg.CompletionDelivery) error {
-	if n == nil {
-		return nil
-	}
-	if delivery.ConversationID == "" || strings.TrimSpace(delivery.Content) == "" {
-		return nil
-	}
-	return n.InjectSystemMessage(delivery.ConversationID, delivery.Content)
-}
-
 // channelLoopAdapter bridges [awareness.ChannelLoopSource] to the loop
 // registry, filtering for channel-category loops only.
 type channelLoopAdapter struct {

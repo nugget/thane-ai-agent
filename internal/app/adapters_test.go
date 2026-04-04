@@ -111,12 +111,24 @@ func TestConversationSystemInjector(t *testing.T) {
 	if err := inj.InjectSystemMessage("conv-1", "hello from callback"); err != nil {
 		t.Fatalf("InjectSystemMessage: %v", err)
 	}
-	if err := inj.DeliverCompletion(context.Background(), looppkg.CompletionDelivery{
+	dispatcher := newDetachedLoopCompletionDispatcher(inj)
+	plan := dispatcher.plan(looppkg.CompletionDelivery{
 		Mode:           looppkg.CompletionConversation,
 		ConversationID: "conv-1",
 		Content:        "hello from detached loop",
-	}); err != nil {
-		t.Fatalf("DeliverCompletion: %v", err)
+	})
+	if plan.Mode != looppkg.CompletionConversation || plan.ConversationID != "conv-1" || plan.Content != "hello from detached loop" {
+		t.Fatalf("plan = %#v", plan)
+	}
+	presented, err := dispatcher.present(context.Background(), plan)
+	if err != nil {
+		t.Fatalf("present: %v", err)
+	}
+	if presented.Mode != looppkg.CompletionConversation || presented.ConversationID != "conv-1" || presented.Content != "hello from detached loop" {
+		t.Fatalf("presented = %#v", presented)
+	}
+	if err := dispatcher.dispatch(context.Background(), presented); err != nil {
+		t.Fatalf("dispatch: %v", err)
 	}
 
 	msgs := mem.GetMessages("conv-1")
