@@ -298,6 +298,33 @@ func (r *Router) Route(ctx context.Context, req Request) (string, *Decision) {
 	return model, decision
 }
 
+// ExplainRequest computes a routing decision for the supplied request
+// using the router's current config, learned experience, and transient
+// resource health, but does not mutate audit history or stats.
+func (r *Router) ExplainRequest(req Request) *Decision {
+	if r == nil {
+		return nil
+	}
+	cfg := r.configSnapshot()
+	decision := &Decision{
+		RequestID:      "",
+		Timestamp:      time.Now(),
+		QueryLength:    len(req.Query),
+		ContextSize:    req.ContextSize,
+		NeedsTools:     req.NeedsTools,
+		NeedsStreaming: req.NeedsStreaming,
+		NeedsImages:    req.NeedsImages,
+		Priority:       priorityString(req.Priority),
+	}
+	decision.Complexity = r.analyzeComplexity(req.Query)
+	decision.DetectedIntent = r.detectIntent(req.Query)
+
+	model := r.selectModel(cfg, req, decision)
+	decision.ModelSelected = model
+	r.populateSelectionMetadata(cfg, decision, model)
+	return decision
+}
+
 // analyzeComplexity estimates query difficulty.
 //
 // Retrieval verbs at the start of the query (search, read, list, etc.)

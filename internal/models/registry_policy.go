@@ -17,8 +17,8 @@ func (r *Registry) ApplyDeploymentPolicy(id string, policy DeploymentPolicy, upd
 	if id == "" {
 		return fmt.Errorf("deployment is required")
 	}
-	if policy.State == "" {
-		return fmt.Errorf("state must be one of [\"active\" \"inactive\" \"flagged\"]")
+	if policy.State == "" && policy.Routable == nil {
+		return fmt.Errorf("state or routable override is required")
 	}
 	if updatedAt.IsZero() {
 		updatedAt = time.Now()

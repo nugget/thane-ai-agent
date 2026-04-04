@@ -128,6 +128,34 @@ func TestRoute_LocalOnlyHint(t *testing.T) {
 	}
 }
 
+func TestExplainRequest_DoesNotRecordAuditLog(t *testing.T) {
+	r := NewRouter(slog.Default(), Config{
+		DefaultModel: "local-model",
+		Models: []Model{
+			{Name: "local-model", Provider: "ollama", SupportsTools: true, SupportsStreaming: true, ContextWindow: 8192, Speed: 8, Quality: 6, CostTier: 0},
+			{Name: "vision-model", Provider: "ollama", SupportsTools: true, SupportsStreaming: true, SupportsImages: true, ContextWindow: 8192, Speed: 7, Quality: 7, CostTier: 0},
+		},
+		MaxAuditLog: 10,
+	})
+
+	before := len(r.GetAuditLog(100))
+	decision := r.ExplainRequest(Request{
+		Query:       "describe this image",
+		NeedsImages: true,
+		Priority:    PriorityInteractive,
+	})
+	if decision == nil {
+		t.Fatal("ExplainRequest returned nil")
+	}
+	if decision.ModelSelected != "vision-model" {
+		t.Fatalf("ModelSelected = %q, want vision-model", decision.ModelSelected)
+	}
+	after := len(r.GetAuditLog(100))
+	if after != before {
+		t.Fatalf("audit log length changed from %d to %d; explain should not record", before, after)
+	}
+}
+
 func TestRoute_LocalOnlyFalseDisablesLocalBias(t *testing.T) {
 	r := NewRouter(slog.Default(), Config{
 		DefaultModel: "local-model",

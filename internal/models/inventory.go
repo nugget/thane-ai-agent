@@ -341,7 +341,9 @@ func applyDeploymentPolicies(cat *Catalog, policies map[string]DeploymentPolicy)
 		out.Deployments[i].PolicyUpdatedAt = time.Time{}
 		out.Deployments[i].RoutableSource = DeploymentPolicySourceDefault
 		if policy, ok := policies[out.Deployments[i].ID]; ok {
-			out.Deployments[i].PolicyState = policy.State
+			if policy.State != "" {
+				out.Deployments[i].PolicyState = policy.State
+			}
 			out.Deployments[i].PolicySource = DeploymentPolicySourceOverlay
 			out.Deployments[i].PolicyReason = policy.Reason
 			out.Deployments[i].PolicyUpdatedAt = policy.UpdatedAt

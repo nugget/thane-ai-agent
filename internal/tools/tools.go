@@ -20,6 +20,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/media"
 	"github.com/nugget/thane-ai-agent/internal/models"
 	"github.com/nugget/thane-ai-agent/internal/notifications"
+	routepkg "github.com/nugget/thane-ai-agent/internal/router"
 	"github.com/nugget/thane-ai-agent/internal/scheduler"
 	"github.com/nugget/thane-ai-agent/internal/search"
 	"github.com/nugget/thane-ai-agent/internal/usage"
@@ -61,6 +62,7 @@ type Registry struct {
 	logIndexDB      *sql.DB
 
 	modelRegistry                              *models.Registry
+	modelRouter                                *routepkg.Router
 	modelRegistrySyncRouter                    func()
 	persistModelRegistryPolicy                 func(string, models.DeploymentPolicy) error
 	deletePersistedModelRegistryPolicy         func(string) error

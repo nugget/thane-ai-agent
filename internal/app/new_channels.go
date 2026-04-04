@@ -395,6 +395,7 @@ func (a *App) initChannels(s *newState) error {
 	a.loop.Tools().SetUsageStore(a.usageStore)
 	a.loop.Tools().ConfigureModelRegistryTools(tools.ModelRegistryToolDeps{
 		Registry:                a.modelRegistry,
+		Router:                  a.rtr,
 		SyncRouter:              a.syncRouterConfig,
 		PersistDeploymentPolicy: a.persistModelRegistryPolicy,
 		DeleteDeploymentPolicy:  a.deletePersistedModelRegistryPolicy,
