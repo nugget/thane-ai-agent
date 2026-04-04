@@ -65,6 +65,12 @@ func (a *App) initStores(s *newState) error {
 	loopRegistry := looppkg.NewRegistry(looppkg.WithRegistryLogger(logger))
 	a.loopRegistry = loopRegistry
 
+	loopDefinitionRegistry, err := looppkg.NewDefinitionRegistry(cfg.Loops.Definitions)
+	if err != nil {
+		return fmt.Errorf("create loop definition registry: %w", err)
+	}
+	a.loopDefinitionRegistry = loopDefinitionRegistry
+
 	// --- Demo loops (debug) ---
 	if cfg.Debug.DemoLoops {
 		a.deferWorker("demo-loops", func(ctx context.Context) error {
@@ -408,6 +414,18 @@ func (a *App) initStores(s *newState) error {
 	a.modelExperienceStore = newModelExperienceStore(opStore)
 	if err := a.modelExperienceStore.LoadInto(a.rtr, logger); err != nil {
 		return fmt.Errorf("load persisted model registry experience: %w", err)
+	}
+	a.loopDefinitionStore = newLoopDefinitionStore(opStore)
+	if err := a.loopDefinitionStore.LoadInto(a.loopDefinitionRegistry, logger); err != nil {
+		return fmt.Errorf("load persisted loop definitions: %w", err)
+	}
+	if snap := a.loopDefinitionRegistry.Snapshot(); snap != nil {
+		logger.Info("loop definition registry initialized",
+			"generation", snap.Generation,
+			"config_definitions", snap.ConfigDefinitions,
+			"overlay_definitions", snap.OverlayDefinitions,
+			"definitions", len(snap.Definitions),
+		)
 	}
 	if a.modelExperienceStore != nil && a.rtr != nil {
 		a.deferWorker("model-experience-persist", func(ctx context.Context) error {

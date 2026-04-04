@@ -80,6 +80,7 @@ type App struct {
 	modelPolicyStore         *modelPolicyStore
 	modelResourcePolicyStore *modelResourcePolicyStore
 	modelExperienceStore     *modelExperienceStore
+	loopDefinitionStore      *loopDefinitionStore
 	usageStore               *usage.Store
 	schedStore               *scheduler.Store
 	sched                    *scheduler.Scheduler
@@ -146,7 +147,8 @@ type App struct {
 	checkpointer *checkpoint.Checkpointer
 
 	// Loop registry
-	loopRegistry *looppkg.Registry
+	loopRegistry           *looppkg.Registry
+	loopDefinitionRegistry *looppkg.DefinitionRegistry
 
 	// Metacognitive config (stored for Serve-time use)
 	metacogCfg *metacognitive.Config

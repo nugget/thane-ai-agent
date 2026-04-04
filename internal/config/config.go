@@ -37,6 +37,7 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/channels/email"
 	"github.com/nugget/thane-ai-agent/internal/forge"
+	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
 	"github.com/nugget/thane-ai-agent/internal/router"
 	"github.com/nugget/thane-ai-agent/internal/search"
 	"gopkg.in/yaml.v3"
@@ -259,6 +260,12 @@ type Config struct {
 	// When enabled, a background goroutine monitors the environment,
 	// reasons via LLM, and adapts its own sleep cycle between iterations.
 	Metacognitive MetacognitiveConfig `yaml:"metacognitive"`
+
+	// Loops configures immutable loop definitions loaded from the config
+	// file. These definitions become the base layer for the loops-ng
+	// definition registry, with a persistent dynamic overlay applied at
+	// runtime.
+	Loops LoopsConfig `yaml:"loops"`
 
 	// OpenClaw configures the thane:openclaw Ollama profile, which
 	// replicates OpenClaw's workspace-aware agent behavior using
@@ -1407,6 +1414,15 @@ type MetacognitiveRouterConfig struct {
 	QualityFloor int `yaml:"quality_floor"`
 }
 
+// LoopsConfig configures immutable loops-ng definitions loaded from the
+// config file.
+type LoopsConfig struct {
+	// Definitions is the set of config-defined loop specs. These specs
+	// are immutable at runtime; dynamic loop creation lives in the
+	// persistent overlay registry instead.
+	Definitions []looppkg.Spec `yaml:"definitions"`
+}
+
 // StateWindowConfig configures the rolling window of recent Home Assistant
 // state changes injected into the agent's system prompt.
 type StateWindowConfig struct {
@@ -1929,6 +1945,9 @@ func (c *Config) Validate() error {
 	if err := c.validateMetacognitive(); err != nil {
 		return err
 	}
+	if err := c.validateLoops(); err != nil {
+		return err
+	}
 	if err := c.validateDelegate(); err != nil {
 		return err
 	}
@@ -2006,6 +2025,23 @@ func (c *Config) validateMetacognitive() error {
 	}
 	if c.Metacognitive.SupervisorProbability < 0 || c.Metacognitive.SupervisorProbability > 1.0 {
 		return fmt.Errorf("metacognitive.supervisor_probability %.2f must be in [0.0, 1.0]", c.Metacognitive.SupervisorProbability)
+	}
+	return nil
+}
+
+func (c *Config) validateLoops() error {
+	if len(c.Loops.Definitions) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(c.Loops.Definitions))
+	for i, spec := range c.Loops.Definitions {
+		if err := spec.ValidatePersistable(); err != nil {
+			return fmt.Errorf("loops.definitions[%d]: %w", i, err)
+		}
+		if _, exists := seen[spec.Name]; exists {
+			return fmt.Errorf("loops.definitions[%d]: duplicate definition %q", i, spec.Name)
+		}
+		seen[spec.Name] = struct{}{}
 	}
 	return nil
 }

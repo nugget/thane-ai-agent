@@ -1,6 +1,7 @@
 package loop
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -120,5 +121,20 @@ func TestSpecToConfigAppliesOneShotOperationDefaults(t *testing.T) {
 	}
 	if cfg.Jitter == nil || *cfg.Jitter != 0 {
 		t.Fatalf("Jitter = %v, want 0", cfg.Jitter)
+	}
+}
+
+func TestSpecValidatePersistableRejectsRuntimeHooks(t *testing.T) {
+	spec := &Spec{
+		Name: "dynamic-loop",
+		Task: "Do useful background work.",
+		TaskBuilder: func(_ context.Context, _ bool) (string, error) {
+			return "dynamic", nil
+		},
+	}
+
+	err := spec.ValidatePersistable()
+	if err == nil || !strings.Contains(err.Error(), "cannot set TaskBuilder") {
+		t.Fatalf("ValidatePersistable() error = %v, want TaskBuilder rejection", err)
 	}
 }

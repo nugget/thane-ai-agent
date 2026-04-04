@@ -709,6 +709,13 @@ talents_dir: ./talents
 #     selection. Default: 3 for normal iterations, 8 for supervisor.
 #     quality_floor: 8
 #
+# (optional) Loops configures immutable loop definitions loaded from the config
+# loops:
+#   Definitions is the set of config-defined loop specs. These specs
+#   are immutable at runtime; dynamic loop creation lives in the
+#   persistent overlay registry instead.
+#   definitions: []
+#
 # (optional) OpenClaw configures the thane:openclaw Ollama profile, which
 # openclaw:
 #   WorkspacePath is the root directory containing the agent's

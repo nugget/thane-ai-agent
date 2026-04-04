@@ -171,6 +171,29 @@ func (s *Spec) Validate() error {
 	return nil
 }
 
+// ValidatePersistable checks that the spec is valid and safe to store in
+// config or a persistent overlay. Persisted loop definitions are data, not
+// code, so runtime-only hooks must remain nil.
+func (s *Spec) ValidatePersistable() error {
+	if err := s.Validate(); err != nil {
+		return err
+	}
+	switch {
+	case s.TaskBuilder != nil:
+		return fmt.Errorf("loop: persistable spec %q cannot set TaskBuilder", s.Name)
+	case s.PostIterate != nil:
+		return fmt.Errorf("loop: persistable spec %q cannot set PostIterate", s.Name)
+	case s.WaitFunc != nil:
+		return fmt.Errorf("loop: persistable spec %q cannot set WaitFunc", s.Name)
+	case s.Handler != nil:
+		return fmt.Errorf("loop: persistable spec %q cannot set Handler", s.Name)
+	case s.Setup != nil:
+		return fmt.Errorf("loop: persistable spec %q cannot set Setup", s.Name)
+	default:
+		return nil
+	}
+}
+
 // ToConfig compiles the current engine-facing portion of a Spec
 // into today's [Config] shape. This is intentionally conservative:
 // loops-ng-specific fields such as [Spec.Operation] and
