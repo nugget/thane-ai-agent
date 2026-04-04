@@ -52,6 +52,12 @@ func (a *App) initServers(s *newState) error {
 	server.SetArchiveStore(a.archiveStore)
 	server.UseLoopDefinitionRegistry(a.loopDefinitionRegistry)
 	server.ConfigureLoopDefinitionPersistence(a.persistLoopDefinition, a.deletePersistedLoopDefinition)
+	server.ConfigureLoopDefinitionLifecycle(
+		a.persistLoopDefinitionPolicy,
+		a.deletePersistedLoopDefinitionPolicy,
+		a.reconcileLoopDefinition,
+		a.launchLoopDefinition,
+	)
 	server.SetEventBus(a.eventBus)
 	server.SetConnManager(func() map[string]api.DependencyStatus {
 		status := a.connMgr.Status()
@@ -612,16 +618,9 @@ func (a *App) initServers(s *newState) error {
 	// immutable+overlay definition registry. Existing special-case loops
 	// still start through their legacy paths for now; bootstrap skips
 	// duplicate names so the later migration can remain mechanical.
-	if a.loopDefinitionRegistry != nil {
-		runtime := &loopDefinitionRuntime{
-			definitions: a.loopDefinitionRegistry,
-			loops:       a.loopRegistry,
-			runner:      &loopAdapter{agentLoop: a.loop, router: a.rtr},
-			logger:      logger,
-			eventBus:    a.eventBus,
-		}
+	if a.loopDefinitionRuntime != nil {
 		a.deferWorker("loop-definition-services", func(ctx context.Context) error {
-			result, err := runtime.StartEnabledServices(ctx)
+			result, err := a.loopDefinitionRuntime.StartEnabledServices(ctx)
 			if err != nil {
 				return err
 			}

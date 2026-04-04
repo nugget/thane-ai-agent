@@ -393,6 +393,9 @@ func (a *App) initChannels(s *newState) error {
 	// register the cost_summary tool so the agent can query its own spend.
 	a.loop.SetUsageRecorder(a.usageStore, a.cfg.Pricing, a.modelCatalog)
 	a.loop.Tools().SetUsageStore(a.usageStore)
+	if a.loopDefinitionRuntime == nil {
+		a.loopDefinitionRuntime = newAppLoopDefinitionRuntime(a)
+	}
 	a.loop.Tools().ConfigureModelRegistryTools(tools.ModelRegistryToolDeps{
 		Registry:                a.modelRegistry,
 		Router:                  a.rtr,
@@ -403,9 +406,13 @@ func (a *App) initChannels(s *newState) error {
 		DeleteResourcePolicy:    a.deletePersistedModelRegistryResourcePolicy,
 	})
 	a.loop.Tools().ConfigureLoopDefinitionTools(tools.LoopDefinitionToolDeps{
-		Registry:    a.loopDefinitionRegistry,
-		PersistSpec: a.persistLoopDefinition,
-		DeleteSpec:  a.deletePersistedLoopDefinition,
+		Registry:         a.loopDefinitionRegistry,
+		PersistSpec:      a.persistLoopDefinition,
+		DeleteSpec:       a.deletePersistedLoopDefinition,
+		PersistPolicy:    a.persistLoopDefinitionPolicy,
+		DeletePolicy:     a.deletePersistedLoopDefinitionPolicy,
+		Reconcile:        a.reconcileLoopDefinition,
+		LaunchDefinition: a.launchLoopDefinition,
 	})
 
 	// --- Log index query ---

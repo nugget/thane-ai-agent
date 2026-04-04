@@ -30,10 +30,14 @@ type DefinitionRecord struct {
 // DefinitionSnapshot is the API-facing state for one effective loop
 // definition.
 type DefinitionSnapshot struct {
-	Name      string           `yaml:"name,omitempty" json:"name"`
-	Source    DefinitionSource `yaml:"source,omitempty" json:"source"`
-	UpdatedAt time.Time        `yaml:"updated_at,omitempty" json:"updated_at,omitempty"`
-	Spec      Spec             `yaml:"spec,omitempty" json:"spec,omitempty"`
+	Name            string                 `yaml:"name,omitempty" json:"name"`
+	Source          DefinitionSource       `yaml:"source,omitempty" json:"source"`
+	UpdatedAt       time.Time              `yaml:"updated_at,omitempty" json:"updated_at,omitempty"`
+	PolicyState     DefinitionPolicyState  `yaml:"policy_state,omitempty" json:"policy_state,omitempty"`
+	PolicySource    DefinitionPolicySource `yaml:"policy_source,omitempty" json:"policy_source,omitempty"`
+	PolicyReason    string                 `yaml:"policy_reason,omitempty" json:"policy_reason,omitempty"`
+	PolicyUpdatedAt time.Time              `yaml:"policy_updated_at,omitempty" json:"policy_updated_at,omitempty"`
+	Spec            Spec                   `yaml:"spec,omitempty" json:"spec,omitempty"`
 }
 
 // DefinitionRegistrySnapshot is a read-only snapshot of the effective
@@ -72,6 +76,7 @@ type DefinitionRegistry struct {
 	mu         sync.RWMutex
 	base       map[string]Spec
 	overlay    map[string]DefinitionRecord
+	policies   map[string]DefinitionPolicy
 	generation int64
 	updatedAt  time.Time
 }
@@ -94,6 +99,7 @@ func NewDefinitionRegistry(base []Spec) (*DefinitionRegistry, error) {
 	return &DefinitionRegistry{
 		base:       baseMap,
 		overlay:    make(map[string]DefinitionRecord),
+		policies:   make(map[string]DefinitionPolicy),
 		generation: 1,
 	}, nil
 }
@@ -147,18 +153,30 @@ func (r *DefinitionRegistry) Snapshot() *DefinitionRegistrySnapshot {
 
 	for _, name := range names {
 		if record, ok := r.overlay[name]; ok {
+			policy := r.policies[name]
+			state, source := effectiveDefinitionPolicy(record.Spec, policy)
 			snap.Definitions = append(snap.Definitions, DefinitionSnapshot{
-				Name:      name,
-				Source:    DefinitionSourceOverlay,
-				UpdatedAt: record.UpdatedAt,
-				Spec:      cloneSpec(record.Spec),
+				Name:            name,
+				Source:          DefinitionSourceOverlay,
+				UpdatedAt:       record.UpdatedAt,
+				PolicyState:     state,
+				PolicySource:    source,
+				PolicyReason:    policy.Reason,
+				PolicyUpdatedAt: policy.UpdatedAt,
+				Spec:            cloneSpec(record.Spec),
 			})
 			continue
 		}
+		policy := r.policies[name]
+		state, source := effectiveDefinitionPolicy(r.base[name], policy)
 		snap.Definitions = append(snap.Definitions, DefinitionSnapshot{
-			Name:   name,
-			Source: DefinitionSourceConfig,
-			Spec:   cloneSpec(r.base[name]),
+			Name:            name,
+			Source:          DefinitionSourceConfig,
+			PolicyState:     state,
+			PolicySource:    source,
+			PolicyReason:    policy.Reason,
+			PolicyUpdatedAt: policy.UpdatedAt,
+			Spec:            cloneSpec(r.base[name]),
 		})
 	}
 
@@ -217,6 +235,7 @@ func (r *DefinitionRegistry) Delete(name string, updatedAt time.Time) error {
 		return &UnknownDefinitionError{Name: name}
 	}
 	delete(r.overlay, name)
+	delete(r.policies, name)
 	r.generation++
 	r.updatedAt = updatedAt.UTC()
 	return nil

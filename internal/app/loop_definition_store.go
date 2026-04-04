@@ -108,5 +108,13 @@ func (a *App) deletePersistedLoopDefinition(name string) error {
 	if a == nil || a.loopDefinitionStore == nil {
 		return nil
 	}
-	return a.loopDefinitionStore.Delete(name)
+	if err := a.loopDefinitionStore.Delete(name); err != nil {
+		return err
+	}
+	if a.loopDefinitionPolicyStore != nil {
+		if err := a.loopDefinitionPolicyStore.Delete(name); err != nil {
+			return err
+		}
+	}
+	return nil
 }

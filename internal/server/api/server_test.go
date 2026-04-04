@@ -88,6 +88,7 @@ func testAPILoopDefinitionRegistry(t *testing.T) *looppkg.DefinitionRegistry {
 	registry, err := looppkg.NewDefinitionRegistry([]looppkg.Spec{
 		{
 			Name:       "metacog_like",
+			Enabled:    true,
 			Task:       "Observe and reflect.",
 			Operation:  looppkg.OperationService,
 			Completion: looppkg.CompletionNone,
@@ -771,6 +772,7 @@ func TestHandleLoopDefinitionSetAndDelete(t *testing.T) {
 	var savedSpec looppkg.Spec
 	var savedAt time.Time
 	var deleted string
+	var reconciled []string
 	server := NewServer("", 0, nil, nil, nil, nil, nil, nil, nil, nil, nil, testAPILogger())
 	server.UseLoopDefinitionRegistry(registry)
 	server.ConfigureLoopDefinitionPersistence(
@@ -784,6 +786,10 @@ func TestHandleLoopDefinitionSetAndDelete(t *testing.T) {
 			return nil
 		},
 	)
+	server.ConfigureLoopDefinitionLifecycle(nil, nil, func(_ context.Context, name string) error {
+		reconciled = append(reconciled, name)
+		return nil
+	}, nil)
 
 	body := bytes.NewBufferString(`{"spec":{"name":"room_monitor","task":"Watch the office.","operation":"service","completion":"conversation","profile":{"mission":"background"},"sleep_min":"5m","sleep_max":"30m","sleep_default":"10m"}}`)
 	req := httptest.NewRequest(http.MethodPost, "/v1/loop-definitions", body)
@@ -822,6 +828,9 @@ func TestHandleLoopDefinitionSetAndDelete(t *testing.T) {
 	if deleted != "room_monitor" {
 		t.Fatalf("deleted = %q, want room_monitor", deleted)
 	}
+	if len(reconciled) != 2 || reconciled[0] != "room_monitor" || reconciled[1] != "room_monitor" {
+		t.Fatalf("reconciled = %v, want [room_monitor room_monitor]", reconciled)
+	}
 }
 
 func TestHandleLoopDefinitionSet_ConfigDefinitionConflict(t *testing.T) {
@@ -836,5 +845,96 @@ func TestHandleLoopDefinitionSet_ConfigDefinitionConflict(t *testing.T) {
 
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("status = %d, want 409", rec.Code)
+	}
+}
+
+func TestHandleLoopDefinitionPolicySetAndDelete(t *testing.T) {
+	registry := testAPILoopDefinitionRegistry(t)
+	var persisted looppkg.DefinitionPolicy
+	var deleted string
+	server := NewServer("", 0, nil, nil, nil, nil, nil, nil, nil, nil, nil, testAPILogger())
+	server.UseLoopDefinitionRegistry(registry)
+	server.ConfigureLoopDefinitionLifecycle(
+		func(name string, policy looppkg.DefinitionPolicy) error {
+			if name != "metacog_like" {
+				t.Fatalf("persist name = %q, want metacog_like", name)
+			}
+			persisted = policy
+			return nil
+		},
+		func(name string) error {
+			deleted = name
+			return nil
+		},
+		nil,
+		nil,
+	)
+
+	body := bytes.NewBufferString(`{"name":"metacog_like","state":"inactive","reason":"quiet hours"}`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/loop-definitions/policy", body)
+	rec := httptest.NewRecorder()
+	server.handleLoopDefinitionPolicySet(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("set status = %d, want 200", rec.Code)
+	}
+	if persisted.Reason != "quiet hours" {
+		t.Fatalf("persisted = %+v, want quiet hours", persisted)
+	}
+
+	var setResp loopDefinitionResponse
+	if err := json.NewDecoder(rec.Body).Decode(&setResp); err != nil {
+		t.Fatalf("decode set response: %v", err)
+	}
+	if setResp.Definition.PolicyState != looppkg.DefinitionPolicyStateInactive || setResp.Definition.PolicySource != looppkg.DefinitionPolicySourceOverlay {
+		t.Fatalf("policy = %q/%q, want inactive/overlay", setResp.Definition.PolicyState, setResp.Definition.PolicySource)
+	}
+
+	deleteReq := httptest.NewRequest(http.MethodDelete, "/v1/loop-definitions/policy?name=metacog_like", nil)
+	deleteRec := httptest.NewRecorder()
+	server.handleLoopDefinitionPolicyDelete(deleteRec, deleteReq)
+
+	if deleteRec.Code != http.StatusOK {
+		t.Fatalf("delete status = %d, want 200", deleteRec.Code)
+	}
+	if deleted != "metacog_like" {
+		t.Fatalf("deleted = %q, want metacog_like", deleted)
+	}
+}
+
+func TestHandleLoopDefinitionLaunch(t *testing.T) {
+	registry := testAPILoopDefinitionRegistry(t)
+	server := NewServer("", 0, nil, nil, nil, nil, nil, nil, nil, nil, nil, testAPILogger())
+	server.UseLoopDefinitionRegistry(registry)
+	server.ConfigureLoopDefinitionLifecycle(nil, nil, nil, func(_ context.Context, name string, launch looppkg.Launch) (looppkg.LaunchResult, error) {
+		if name != "metacog_like" {
+			t.Fatalf("launch name = %q, want metacog_like", name)
+		}
+		if launch.CompletionConversationID != "conv-1" {
+			t.Fatalf("completion conversation = %q, want conv-1", launch.CompletionConversationID)
+		}
+		return looppkg.LaunchResult{
+			LoopID:    "loop-123",
+			Operation: looppkg.OperationService,
+			Detached:  true,
+		}, nil
+	})
+
+	body := bytes.NewBufferString(`{"launch":{"completion_conversation_id":"conv-1"}}`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/loop-definitions/metacog_like/launch", body)
+	req.SetPathValue("name", "metacog_like")
+	rec := httptest.NewRecorder()
+	server.handleLoopDefinitionLaunch(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+
+	var resp loopDefinitionLaunchResponse
+	if err := json.NewDecoder(rec.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Result.LoopID != "loop-123" {
+		t.Fatalf("loop_id = %q, want loop-123", resp.Result.LoopID)
 	}
 }

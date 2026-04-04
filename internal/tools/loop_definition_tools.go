@@ -2,9 +2,7 @@ package tools
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"strings"
 	"time"
 
 	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
@@ -19,9 +17,13 @@ const (
 // tool registry so the model can inspect and mutate the persistent loops-ng
 // definition overlay.
 type LoopDefinitionToolDeps struct {
-	Registry    *looppkg.DefinitionRegistry
-	PersistSpec func(looppkg.Spec, time.Time) error
-	DeleteSpec  func(string) error
+	Registry         *looppkg.DefinitionRegistry
+	PersistSpec      func(looppkg.Spec, time.Time) error
+	DeleteSpec       func(string) error
+	PersistPolicy    func(string, looppkg.DefinitionPolicy) error
+	DeletePolicy     func(string) error
+	Reconcile        func(context.Context, string) error
+	LaunchDefinition func(context.Context, string, looppkg.Launch) (looppkg.LaunchResult, error)
 }
 
 // ConfigureLoopDefinitionTools stores the runtime dependencies needed by
@@ -30,6 +32,10 @@ func (r *Registry) ConfigureLoopDefinitionTools(deps LoopDefinitionToolDeps) {
 	r.loopDefinitionRegistry = deps.Registry
 	r.persistLoopDefinition = deps.PersistSpec
 	r.deletePersistedLoopDefinition = deps.DeleteSpec
+	r.persistLoopDefinitionPolicy = deps.PersistPolicy
+	r.deletePersistedLoopDefinitionPolicy = deps.DeletePolicy
+	r.reconcileLoopDefinition = deps.Reconcile
+	r.launchLoopDefinition = deps.LaunchDefinition
 	r.registerLoopDefinitionTools()
 }
 
@@ -72,6 +78,11 @@ func (r *Registry) registerLoopDefinitionTools() {
 					"type":        "string",
 					"enum":        []string{"return", "conversation", "channel", "none"},
 					"description": "Optional completion filter.",
+				},
+				"policy_state": map[string]any{
+					"type":        "string",
+					"enum":        []string{"active", "inactive"},
+					"description": "Optional exact effective policy-state filter.",
 				},
 				"limit": map[string]any{
 					"type":        "integer",
@@ -129,250 +140,53 @@ func (r *Registry) registerLoopDefinitionTools() {
 		},
 		Handler: r.handleLoopDefinitionDelete,
 	})
-}
 
-func ldStringArg(args map[string]any, key string) string {
-	value, _ := args[key].(string)
-	return strings.TrimSpace(value)
-}
-
-func ldIntArg(args map[string]any, key string) int {
-	switch v := args[key].(type) {
-	case int:
-		return v
-	case float64:
-		return int(v)
-	default:
-		return 0
-	}
-}
-
-func ldMarshalToolJSON(v any) (string, error) {
-	data, err := json.Marshal(v)
-	if err != nil {
-		return "", err
-	}
-	return string(data), nil
-}
-
-func decodeLoopSpecArg(args map[string]any, key string) (looppkg.Spec, error) {
-	raw, ok := args[key]
-	if !ok {
-		return looppkg.Spec{}, fmt.Errorf("%s is required", key)
-	}
-	data, err := json.Marshal(raw)
-	if err != nil {
-		return looppkg.Spec{}, err
-	}
-	var spec looppkg.Spec
-	if err := json.Unmarshal(data, &spec); err != nil {
-		return looppkg.Spec{}, err
-	}
-	return spec, nil
-}
-
-func findLoopDefinition(snapshot *looppkg.DefinitionRegistrySnapshot, name string) (looppkg.DefinitionSnapshot, bool) {
-	if snapshot == nil {
-		return looppkg.DefinitionSnapshot{}, false
-	}
-	for _, def := range snapshot.Definitions {
-		if def.Name == name {
-			return def, true
-		}
-	}
-	return looppkg.DefinitionSnapshot{}, false
-}
-
-func currentLoopDefinitionSnapshot(r *Registry) (*looppkg.DefinitionRegistrySnapshot, error) {
-	if r.loopDefinitionRegistry == nil {
-		return nil, fmt.Errorf("loop definition registry not configured")
-	}
-	snapshot := r.loopDefinitionRegistry.Snapshot()
-	if snapshot == nil {
-		return nil, fmt.Errorf("loop definition registry snapshot unavailable")
-	}
-	return snapshot, nil
-}
-
-func (r *Registry) handleLoopDefinitionSummary(_ context.Context, _ map[string]any) (string, error) {
-	snapshot, err := currentLoopDefinitionSnapshot(r)
-	if err != nil {
-		return "", err
-	}
-	bySource := map[string]int{}
-	byOperation := map[string]int{}
-	byCompletion := map[string]int{}
-	names := make([]string, 0, len(snapshot.Definitions))
-	for _, def := range snapshot.Definitions {
-		bySource[string(def.Source)]++
-		byOperation[string(def.Spec.Operation)]++
-		byCompletion[string(def.Spec.Completion)]++
-		names = append(names, def.Name)
-	}
-	return ldMarshalToolJSON(map[string]any{
-		"generation":          snapshot.Generation,
-		"definition_count":    len(snapshot.Definitions),
-		"config_definitions":  snapshot.ConfigDefinitions,
-		"overlay_definitions": snapshot.OverlayDefinitions,
-		"by_source":           bySource,
-		"by_operation":        byOperation,
-		"by_completion":       byCompletion,
-		"names":               names,
+	r.Register(&Tool{
+		Name:        "loop_definition_set_policy",
+		Description: "Set or clear runtime policy for one stored loop definition. Use this to activate or deactivate a definition without editing the definition itself. Changes persist across restart.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"name": map[string]any{
+					"type":        "string",
+					"description": "Loop definition name.",
+				},
+				"state": map[string]any{
+					"type":        "string",
+					"enum":        []string{"active", "inactive"},
+					"description": "Effective policy state to apply.",
+				},
+				"reason": map[string]any{
+					"type":        "string",
+					"description": "Optional short operator reason.",
+				},
+				"clear_override": map[string]any{
+					"type":        "boolean",
+					"description": "When true, remove any explicit overlay for this definition and return it to its default state from the stored spec.",
+				},
+			},
+			"required": []string{"name"},
+		},
+		Handler: r.handleLoopDefinitionSetPolicy,
 	})
-}
 
-func (r *Registry) handleLoopDefinitionList(_ context.Context, args map[string]any) (string, error) {
-	snapshot, err := currentLoopDefinitionSnapshot(r)
-	if err != nil {
-		return "", err
-	}
-	query := strings.ToLower(ldStringArg(args, "query"))
-	source := ldStringArg(args, "source")
-	operation := ldStringArg(args, "operation")
-	completion := ldStringArg(args, "completion")
-	limit := ldIntArg(args, "limit")
-	if limit <= 0 {
-		limit = defaultLoopDefinitionListLimit
-	}
-	if limit > maxLoopDefinitionListLimit {
-		limit = maxLoopDefinitionListLimit
-	}
-
-	items := make([]looppkg.DefinitionSnapshot, 0, len(snapshot.Definitions))
-	for _, def := range snapshot.Definitions {
-		if source != "" && string(def.Source) != source {
-			continue
-		}
-		if operation != "" && string(def.Spec.Operation) != operation {
-			continue
-		}
-		if completion != "" && string(def.Spec.Completion) != completion {
-			continue
-		}
-		if query != "" && !loopDefinitionMatchesQuery(def, query) {
-			continue
-		}
-		items = append(items, def)
-		if len(items) >= limit {
-			break
-		}
-	}
-
-	return ldMarshalToolJSON(map[string]any{
-		"generation": snapshot.Generation,
-		"count":      len(items),
-		"items":      items,
-	})
-}
-
-func loopDefinitionMatchesQuery(def looppkg.DefinitionSnapshot, query string) bool {
-	if strings.Contains(strings.ToLower(def.Name), query) {
-		return true
-	}
-	if strings.Contains(strings.ToLower(def.Spec.Task), query) {
-		return true
-	}
-	if strings.Contains(strings.ToLower(def.Spec.Profile.Mission), query) {
-		return true
-	}
-	for key, value := range def.Spec.Metadata {
-		if strings.Contains(strings.ToLower(key), query) || strings.Contains(strings.ToLower(value), query) {
-			return true
-		}
-	}
-	return false
-}
-
-func (r *Registry) handleLoopDefinitionGet(_ context.Context, args map[string]any) (string, error) {
-	snapshot, err := currentLoopDefinitionSnapshot(r)
-	if err != nil {
-		return "", err
-	}
-	name := ldStringArg(args, "name")
-	if name == "" {
-		return "", fmt.Errorf("name is required")
-	}
-	def, ok := findLoopDefinition(snapshot, name)
-	if !ok {
-		return "", (&looppkg.UnknownDefinitionError{Name: name})
-	}
-	return ldMarshalToolJSON(map[string]any{
-		"generation": snapshot.Generation,
-		"definition": def,
-	})
-}
-
-func (r *Registry) handleLoopDefinitionSet(_ context.Context, args map[string]any) (string, error) {
-	if r.loopDefinitionRegistry == nil {
-		return "", fmt.Errorf("loop definition registry not configured")
-	}
-	spec, err := decodeLoopSpecArg(args, "spec")
-	if err != nil {
-		return "", err
-	}
-	snapshot, err := currentLoopDefinitionSnapshot(r)
-	if err != nil {
-		return "", err
-	}
-	if existing, ok := findLoopDefinition(snapshot, spec.Name); ok && existing.Source == looppkg.DefinitionSourceConfig {
-		return "", (&looppkg.ImmutableDefinitionError{Name: spec.Name})
-	}
-	updatedAt := time.Now().UTC()
-	if r.persistLoopDefinition != nil {
-		if err := r.persistLoopDefinition(spec, updatedAt); err != nil {
-			return "", fmt.Errorf("persist loop definition: %w", err)
-		}
-	}
-	if err := r.loopDefinitionRegistry.Upsert(spec, updatedAt); err != nil {
-		return "", err
-	}
-	snapshot, err = currentLoopDefinitionSnapshot(r)
-	if err != nil {
-		return "", err
-	}
-	def, ok := findLoopDefinition(snapshot, spec.Name)
-	if !ok {
-		return "", fmt.Errorf("loop definition stored but snapshot is unavailable")
-	}
-	return ldMarshalToolJSON(map[string]any{
-		"status":     "ok",
-		"generation": snapshot.Generation,
-		"definition": def,
-	})
-}
-
-func (r *Registry) handleLoopDefinitionDelete(_ context.Context, args map[string]any) (string, error) {
-	if r.loopDefinitionRegistry == nil {
-		return "", fmt.Errorf("loop definition registry not configured")
-	}
-	name := ldStringArg(args, "name")
-	if name == "" {
-		return "", fmt.Errorf("name is required")
-	}
-	snapshot, err := currentLoopDefinitionSnapshot(r)
-	if err != nil {
-		return "", err
-	}
-	if existing, ok := findLoopDefinition(snapshot, name); ok && existing.Source == looppkg.DefinitionSourceConfig {
-		return "", (&looppkg.ImmutableDefinitionError{Name: name})
-	} else if !ok {
-		return "", (&looppkg.UnknownDefinitionError{Name: name})
-	}
-	if r.deletePersistedLoopDefinition != nil {
-		if err := r.deletePersistedLoopDefinition(name); err != nil {
-			return "", fmt.Errorf("delete persisted loop definition: %w", err)
-		}
-	}
-	if err := r.loopDefinitionRegistry.Delete(name, time.Now().UTC()); err != nil {
-		return "", err
-	}
-	snapshot, err = currentLoopDefinitionSnapshot(r)
-	if err != nil {
-		return "", err
-	}
-	return ldMarshalToolJSON(map[string]any{
-		"status":     "ok",
-		"generation": snapshot.Generation,
-		"name":       name,
+	r.Register(&Tool{
+		Name:        "loop_definition_launch",
+		Description: "Launch one stored loop definition by name using its persisted spec plus optional per-launch overrides. Use this instead of resending the full definition for request_reply, background_task, or on-demand service launches.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"name": map[string]any{
+					"type":        "string",
+					"description": "Loop definition name to launch.",
+				},
+				"launch": map[string]any{
+					"type":        "object",
+					"description": "Optional per-launch overrides using the loops-ng launch contract. The stored definition spec is used automatically.",
+				},
+			},
+			"required": []string{"name"},
+		},
+		Handler: r.handleLoopDefinitionLaunch,
 	})
 }

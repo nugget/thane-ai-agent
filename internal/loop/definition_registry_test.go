@@ -13,6 +13,7 @@ func TestDefinitionRegistrySnapshotIncludesConfigAndOverlay(t *testing.T) {
 	reg, err := NewDefinitionRegistry([]Spec{
 		{
 			Name:       "metacog_like",
+			Enabled:    true,
 			Task:       "Observe and reflect.",
 			Operation:  OperationService,
 			Completion: CompletionNone,
@@ -59,8 +60,14 @@ func TestDefinitionRegistrySnapshotIncludesConfigAndOverlay(t *testing.T) {
 	if snap.Definitions[0].Name != "metacog_like" || snap.Definitions[0].Source != DefinitionSourceConfig {
 		t.Fatalf("Definitions[0] = %+v, want config metacog_like", snap.Definitions[0])
 	}
+	if snap.Definitions[0].PolicyState != DefinitionPolicyStateActive || snap.Definitions[0].PolicySource != DefinitionPolicySourceDefault {
+		t.Fatalf("Definitions[0] policy = %q/%q, want active/default", snap.Definitions[0].PolicyState, snap.Definitions[0].PolicySource)
+	}
 	if snap.Definitions[1].Name != "room_monitor" || snap.Definitions[1].Source != DefinitionSourceOverlay {
 		t.Fatalf("Definitions[1] = %+v, want overlay room_monitor", snap.Definitions[1])
+	}
+	if snap.Definitions[1].PolicyState != DefinitionPolicyStateInactive || snap.Definitions[1].PolicySource != DefinitionPolicySourceDefault {
+		t.Fatalf("Definitions[1] policy = %q/%q, want inactive/default", snap.Definitions[1].PolicyState, snap.Definitions[1].PolicySource)
 	}
 	if !snap.Definitions[1].UpdatedAt.Equal(updatedAt) {
 		t.Fatalf("UpdatedAt = %v, want %v", snap.Definitions[1].UpdatedAt, updatedAt)
@@ -73,6 +80,7 @@ func TestDefinitionRegistryRejectsMutatingConfigDefinitions(t *testing.T) {
 	reg, err := NewDefinitionRegistry([]Spec{
 		{
 			Name:      "metacog_like",
+			Enabled:   true,
 			Task:      "Observe and reflect.",
 			Operation: OperationService,
 		},
@@ -122,5 +130,55 @@ func TestDefinitionRegistryReplaceOverlayRejectsRuntimeHooks(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("ReplaceOverlay error = nil, want persistable validation error")
+	}
+}
+
+func TestDefinitionRegistryPolicyOverlay(t *testing.T) {
+	t.Parallel()
+
+	reg, err := NewDefinitionRegistry([]Spec{
+		{
+			Name:       "night_watch",
+			Enabled:    false,
+			Task:       "Observe quietly.",
+			Operation:  OperationService,
+			Completion: CompletionNone,
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewDefinitionRegistry: %v", err)
+	}
+
+	updatedAt := time.Date(2026, 4, 5, 1, 2, 3, 0, time.UTC)
+	if err := reg.ApplyPolicy("night_watch", DefinitionPolicy{
+		State:     DefinitionPolicyStateActive,
+		Reason:    "after hours",
+		UpdatedAt: updatedAt,
+	}, updatedAt); err != nil {
+		t.Fatalf("ApplyPolicy: %v", err)
+	}
+
+	snap := reg.Snapshot()
+	if snap == nil || len(snap.Definitions) != 1 {
+		t.Fatalf("snapshot = %+v, want one definition", snap)
+	}
+	got := snap.Definitions[0]
+	if got.PolicyState != DefinitionPolicyStateActive || got.PolicySource != DefinitionPolicySourceOverlay {
+		t.Fatalf("policy = %q/%q, want active/overlay", got.PolicyState, got.PolicySource)
+	}
+	if got.PolicyReason != "after hours" {
+		t.Fatalf("PolicyReason = %q, want after hours", got.PolicyReason)
+	}
+	if !got.PolicyUpdatedAt.Equal(updatedAt) {
+		t.Fatalf("PolicyUpdatedAt = %v, want %v", got.PolicyUpdatedAt, updatedAt)
+	}
+
+	if err := reg.ClearPolicy("night_watch", updatedAt.Add(time.Minute)); err != nil {
+		t.Fatalf("ClearPolicy: %v", err)
+	}
+	snap = reg.Snapshot()
+	got = snap.Definitions[0]
+	if got.PolicyState != DefinitionPolicyStateInactive || got.PolicySource != DefinitionPolicySourceDefault {
+		t.Fatalf("policy after clear = %q/%q, want inactive/default", got.PolicyState, got.PolicySource)
 	}
 }

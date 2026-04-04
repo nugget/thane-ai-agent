@@ -16,6 +16,9 @@ type testLoopDefinitionDeps struct {
 	persisted        map[string]looppkg.Spec
 	persistedUpdated map[string]time.Time
 	deleted          []string
+	persistedPolicy  map[string]looppkg.DefinitionPolicy
+	deletedPolicy    []string
+	reconciled       []string
 }
 
 func newTestLoopDefinitionDeps(t *testing.T) *testLoopDefinitionDeps {
@@ -24,6 +27,7 @@ func newTestLoopDefinitionDeps(t *testing.T) *testLoopDefinitionDeps {
 	defs, err := looppkg.NewDefinitionRegistry([]looppkg.Spec{
 		{
 			Name:       "metacog_like",
+			Enabled:    true,
 			Task:       "Observe and reflect.",
 			Operation:  looppkg.OperationService,
 			Completion: looppkg.CompletionNone,
@@ -42,6 +46,7 @@ func newTestLoopDefinitionDeps(t *testing.T) *testLoopDefinitionDeps {
 		defs:             defs,
 		persisted:        make(map[string]looppkg.Spec),
 		persistedUpdated: make(map[string]time.Time),
+		persistedPolicy:  make(map[string]looppkg.DefinitionPolicy),
 	}
 	reg.ConfigureLoopDefinitionTools(LoopDefinitionToolDeps{
 		Registry: defs,
@@ -56,6 +61,30 @@ func newTestLoopDefinitionDeps(t *testing.T) *testLoopDefinitionDeps {
 			delete(deps.persistedUpdated, name)
 			return nil
 		},
+		PersistPolicy: func(name string, policy looppkg.DefinitionPolicy) error {
+			deps.persistedPolicy[name] = policy
+			return nil
+		},
+		DeletePolicy: func(name string) error {
+			deps.deletedPolicy = append(deps.deletedPolicy, name)
+			delete(deps.persistedPolicy, name)
+			return nil
+		},
+		Reconcile: func(_ context.Context, name string) error {
+			deps.reconciled = append(deps.reconciled, name)
+			return nil
+		},
+		LaunchDefinition: func(_ context.Context, name string, launch looppkg.Launch) (looppkg.LaunchResult, error) {
+			spec, ok := deps.defs.Get(name)
+			if !ok {
+				return looppkg.LaunchResult{}, &looppkg.UnknownDefinitionError{Name: name}
+			}
+			return looppkg.LaunchResult{
+				LoopID:    "loop-123",
+				Operation: spec.Operation,
+				Detached:  spec.Operation != looppkg.OperationRequestReply,
+			}, nil
+		},
 	})
 	return deps
 }
@@ -69,6 +98,8 @@ func TestConfigureLoopDefinitionTools_RegistersTools(t *testing.T) {
 		"loop_definition_get",
 		"loop_definition_set",
 		"loop_definition_delete",
+		"loop_definition_set_policy",
+		"loop_definition_launch",
 	} {
 		if deps.reg.Get(name) == nil {
 			t.Fatalf("%s tool not registered", name)
@@ -139,6 +170,9 @@ func TestLoopDefinitionSetAndDelete(t *testing.T) {
 	if len(deps.deleted) != 1 || deps.deleted[0] != "room_monitor" {
 		t.Fatalf("deleted = %v, want [room_monitor]", deps.deleted)
 	}
+	if len(deps.reconciled) != 2 || deps.reconciled[0] != "room_monitor" || deps.reconciled[1] != "room_monitor" {
+		t.Fatalf("reconciled = %v, want [room_monitor room_monitor]", deps.reconciled)
+	}
 }
 
 func TestLoopDefinitionListFiltersOverlay(t *testing.T) {
@@ -175,5 +209,50 @@ func TestLoopDefinitionListFiltersOverlay(t *testing.T) {
 	}
 	if got.Items[0].Name != "room_monitor" {
 		t.Fatalf("item name = %q, want room_monitor", got.Items[0].Name)
+	}
+}
+
+func TestLoopDefinitionSetPolicyAndLaunch(t *testing.T) {
+	deps := newTestLoopDefinitionDeps(t)
+
+	out, err := deps.reg.Get("loop_definition_set_policy").Handler(context.Background(), map[string]any{
+		"name":   "metacog_like",
+		"state":  "inactive",
+		"reason": "quiet hours",
+	})
+	if err != nil {
+		t.Fatalf("loop_definition_set_policy: %v", err)
+	}
+
+	var policyResp struct {
+		Status     string                     `json:"status"`
+		Generation int64                      `json:"generation"`
+		Definition looppkg.DefinitionSnapshot `json:"definition"`
+	}
+	if err := json.Unmarshal([]byte(out), &policyResp); err != nil {
+		t.Fatalf("unmarshal policy response: %v", err)
+	}
+	if policyResp.Definition.PolicyState != looppkg.DefinitionPolicyStateInactive || policyResp.Definition.PolicySource != looppkg.DefinitionPolicySourceOverlay {
+		t.Fatalf("policy = %q/%q, want inactive/overlay", policyResp.Definition.PolicyState, policyResp.Definition.PolicySource)
+	}
+	if deps.persistedPolicy["metacog_like"].Reason != "quiet hours" {
+		t.Fatalf("persisted policy = %+v, want quiet hours", deps.persistedPolicy["metacog_like"])
+	}
+
+	launchOut, err := deps.reg.Get("loop_definition_launch").Handler(context.Background(), map[string]any{
+		"name": "metacog_like",
+	})
+	if err != nil {
+		t.Fatalf("loop_definition_launch: %v", err)
+	}
+	var launchResp struct {
+		Status string               `json:"status"`
+		Result looppkg.LaunchResult `json:"result"`
+	}
+	if err := json.Unmarshal([]byte(launchOut), &launchResp); err != nil {
+		t.Fatalf("unmarshal launch response: %v", err)
+	}
+	if launchResp.Result.LoopID != "loop-123" {
+		t.Fatalf("launch loop_id = %q, want loop-123", launchResp.Result.LoopID)
 	}
 }

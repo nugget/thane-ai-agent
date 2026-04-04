@@ -85,6 +85,10 @@ type Server struct {
 	deleteModelRegistryResourcePolicy  func(string) error
 	persistLoopDefinition              func(looppkg.Spec, time.Time) error
 	deleteLoopDefinition               func(string) error
+	persistLoopDefinitionPolicy        func(string, looppkg.DefinitionPolicy) error
+	deleteLoopDefinitionPolicy         func(string) error
+	reconcileLoopDefinition            func(context.Context, string) error
+	launchLoopDefinition               func(context.Context, string, looppkg.Launch) (looppkg.LaunchResult, error)
 	logger                             *slog.Logger
 	server                             *http.Server
 	stats                              *SessionStats
@@ -138,6 +142,21 @@ func (s *Server) ConfigureLoopDefinitionPersistence(
 ) {
 	s.persistLoopDefinition = save
 	s.deleteLoopDefinition = remove
+}
+
+// ConfigureLoopDefinitionLifecycle configures runtime lifecycle
+// callbacks for stored loop definitions: policy persistence, live
+// reconcile, and launch-by-definition.
+func (s *Server) ConfigureLoopDefinitionLifecycle(
+	persistPolicy func(string, looppkg.DefinitionPolicy) error,
+	deletePolicy func(string) error,
+	reconcile func(context.Context, string) error,
+	launch func(context.Context, string, looppkg.Launch) (looppkg.LaunchResult, error),
+) {
+	s.persistLoopDefinitionPolicy = persistPolicy
+	s.deleteLoopDefinitionPolicy = deletePolicy
+	s.reconcileLoopDefinition = reconcile
+	s.launchLoopDefinition = launch
 }
 
 // DashboardSnapshot returns a copy of the current session stats
@@ -389,6 +408,9 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("GET /v1/loop-definitions/{name}", s.handleLoopDefinitionGet)
 	mux.HandleFunc("POST /v1/loop-definitions", s.handleLoopDefinitionSet)
 	mux.HandleFunc("DELETE /v1/loop-definitions/{name}", s.handleLoopDefinitionDelete)
+	mux.HandleFunc("POST /v1/loop-definitions/policy", s.handleLoopDefinitionPolicySet)
+	mux.HandleFunc("DELETE /v1/loop-definitions/policy", s.handleLoopDefinitionPolicyDelete)
+	mux.HandleFunc("POST /v1/loop-definitions/{name}/launch", s.handleLoopDefinitionLaunch)
 
 	// Checkpoint endpoints
 	mux.HandleFunc("POST /v1/checkpoint", s.handleCheckpointCreate)

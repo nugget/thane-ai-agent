@@ -419,6 +419,10 @@ func (a *App) initStores(s *newState) error {
 	if err := a.loopDefinitionStore.LoadInto(a.loopDefinitionRegistry, logger); err != nil {
 		return fmt.Errorf("load persisted loop definitions: %w", err)
 	}
+	a.loopDefinitionPolicyStore = newLoopDefinitionPolicyStore(opStore)
+	if err := a.loopDefinitionPolicyStore.LoadInto(a.loopDefinitionRegistry, logger); err != nil {
+		return fmt.Errorf("load persisted loop definition policies: %w", err)
+	}
 	if snap := a.loopDefinitionRegistry.Snapshot(); snap != nil {
 		logger.Info("loop definition registry initialized",
 			"generation", snap.Generation,

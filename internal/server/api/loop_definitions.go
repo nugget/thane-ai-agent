@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -14,10 +15,27 @@ type setLoopDefinitionRequest struct {
 	Spec looppkg.Spec `json:"spec"`
 }
 
+type setLoopDefinitionPolicyRequest struct {
+	Name   string `json:"name"`
+	State  string `json:"state"`
+	Reason string `json:"reason,omitempty"`
+}
+
+type launchLoopDefinitionRequest struct {
+	Launch looppkg.Launch `json:"launch"`
+}
+
 type loopDefinitionResponse struct {
 	Status     string                     `json:"status"`
 	Generation int64                      `json:"generation"`
 	Definition looppkg.DefinitionSnapshot `json:"definition"`
+}
+
+type loopDefinitionLaunchResponse struct {
+	Status     string                     `json:"status"`
+	Generation int64                      `json:"generation"`
+	Definition looppkg.DefinitionSnapshot `json:"definition"`
+	Result     looppkg.LaunchResult       `json:"result"`
 }
 
 func (s *Server) handleLoopDefinitions(w http.ResponseWriter, _ *http.Request) {
@@ -89,6 +107,13 @@ func (s *Server) handleLoopDefinitionSet(w http.ResponseWriter, r *http.Request)
 		}
 		return
 	}
+	if s.reconcileLoopDefinition != nil {
+		if err := s.reconcileLoopDefinition(r.Context(), req.Spec.Name); err != nil {
+			s.logger.Error("reconcile loop definition failed", "name", req.Spec.Name, "error", err)
+			s.errorResponse(w, http.StatusInternalServerError, "failed to reconcile loop definition")
+			return
+		}
+	}
 	snapshot = s.loopDefinitionRegistry.Snapshot()
 	def, found := findAPILoopDefinition(snapshot, req.Spec.Name)
 	if !found {
@@ -141,12 +166,183 @@ func (s *Server) handleLoopDefinitionDelete(w http.ResponseWriter, r *http.Reque
 		}
 		return
 	}
+	if s.reconcileLoopDefinition != nil {
+		if err := s.reconcileLoopDefinition(r.Context(), name); err != nil {
+			s.logger.Error("reconcile loop definition failed", "name", name, "error", err)
+			s.errorResponse(w, http.StatusInternalServerError, "failed to reconcile loop definition")
+			return
+		}
+	}
 	snapshot = s.loopDefinitionRegistry.Snapshot()
 	w.Header().Set("Content-Type", "application/json")
 	writeJSON(w, map[string]any{
 		"status":     "ok",
 		"generation": snapshot.Generation,
 		"name":       name,
+	}, s.logger)
+}
+
+func (s *Server) handleLoopDefinitionPolicySet(w http.ResponseWriter, r *http.Request) {
+	if s.loopDefinitionRegistry == nil {
+		s.errorResponse(w, http.StatusServiceUnavailable, "loop definition registry not configured")
+		return
+	}
+	var req setLoopDefinitionPolicyRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.errorResponse(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	req.Name = strings.TrimSpace(req.Name)
+	if req.Name == "" {
+		s.errorResponse(w, http.StatusBadRequest, "name is required")
+		return
+	}
+	if _, found := findAPILoopDefinition(s.loopDefinitionRegistry.Snapshot(), req.Name); !found {
+		s.errorResponse(w, http.StatusNotFound, (&looppkg.UnknownDefinitionError{Name: req.Name}).Error())
+		return
+	}
+	state, err := looppkg.ParseDefinitionPolicyState(req.State)
+	if err != nil {
+		s.errorResponse(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	policy := looppkg.DefinitionPolicy{
+		State:     state,
+		Reason:    req.Reason,
+		UpdatedAt: time.Now().UTC(),
+	}
+	if s.persistLoopDefinitionPolicy != nil {
+		if err := s.persistLoopDefinitionPolicy(req.Name, policy); err != nil {
+			s.logger.Error("persist loop definition policy failed", "name", req.Name, "error", err)
+			s.errorResponse(w, http.StatusInternalServerError, "failed to persist loop definition policy")
+			return
+		}
+	}
+	if err := s.loopDefinitionRegistry.ApplyPolicy(req.Name, policy, policy.UpdatedAt); err != nil {
+		var unknown *looppkg.UnknownDefinitionError
+		if errors.As(err, &unknown) {
+			s.errorResponse(w, http.StatusNotFound, err.Error())
+			return
+		}
+		s.errorResponse(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if s.reconcileLoopDefinition != nil {
+		if err := s.reconcileLoopDefinition(r.Context(), req.Name); err != nil {
+			s.logger.Error("reconcile loop definition failed", "name", req.Name, "error", err)
+			s.errorResponse(w, http.StatusInternalServerError, "failed to reconcile loop definition")
+			return
+		}
+	}
+	snapshot := s.loopDefinitionRegistry.Snapshot()
+	def, found := findAPILoopDefinition(snapshot, req.Name)
+	if !found {
+		s.errorResponse(w, http.StatusInternalServerError, "loop definition policy applied but snapshot is unavailable")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	writeJSON(w, loopDefinitionResponse{
+		Status:     "ok",
+		Generation: snapshot.Generation,
+		Definition: def,
+	}, s.logger)
+}
+
+func (s *Server) handleLoopDefinitionPolicyDelete(w http.ResponseWriter, r *http.Request) {
+	if s.loopDefinitionRegistry == nil {
+		s.errorResponse(w, http.StatusServiceUnavailable, "loop definition registry not configured")
+		return
+	}
+	name := strings.TrimSpace(r.URL.Query().Get("name"))
+	if name == "" {
+		s.errorResponse(w, http.StatusBadRequest, "name is required")
+		return
+	}
+	if _, found := findAPILoopDefinition(s.loopDefinitionRegistry.Snapshot(), name); !found {
+		s.errorResponse(w, http.StatusNotFound, (&looppkg.UnknownDefinitionError{Name: name}).Error())
+		return
+	}
+	if s.deleteLoopDefinitionPolicy != nil {
+		if err := s.deleteLoopDefinitionPolicy(name); err != nil {
+			s.logger.Error("delete persisted loop definition policy failed", "name", name, "error", err)
+			s.errorResponse(w, http.StatusInternalServerError, "failed to delete loop definition policy")
+			return
+		}
+	}
+	if err := s.loopDefinitionRegistry.ClearPolicy(name, time.Now().UTC()); err != nil {
+		var unknown *looppkg.UnknownDefinitionError
+		if errors.As(err, &unknown) {
+			s.errorResponse(w, http.StatusNotFound, err.Error())
+			return
+		}
+		s.errorResponse(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if s.reconcileLoopDefinition != nil {
+		if err := s.reconcileLoopDefinition(r.Context(), name); err != nil {
+			s.logger.Error("reconcile loop definition failed", "name", name, "error", err)
+			s.errorResponse(w, http.StatusInternalServerError, "failed to reconcile loop definition")
+			return
+		}
+	}
+	snapshot := s.loopDefinitionRegistry.Snapshot()
+	def, found := findAPILoopDefinition(snapshot, name)
+	if !found {
+		s.errorResponse(w, http.StatusInternalServerError, "loop definition policy cleared but snapshot is unavailable")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	writeJSON(w, loopDefinitionResponse{
+		Status:     "ok",
+		Generation: snapshot.Generation,
+		Definition: def,
+	}, s.logger)
+}
+
+func (s *Server) handleLoopDefinitionLaunch(w http.ResponseWriter, r *http.Request) {
+	if s.launchLoopDefinition == nil || s.loopDefinitionRegistry == nil {
+		s.errorResponse(w, http.StatusServiceUnavailable, "loop definition launch is not configured")
+		return
+	}
+	name := strings.TrimSpace(r.PathValue("name"))
+	if name == "" {
+		s.errorResponse(w, http.StatusBadRequest, "name is required")
+		return
+	}
+	var req launchLoopDefinitionRequest
+	if r.Body != nil {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+			s.errorResponse(w, http.StatusBadRequest, "invalid JSON")
+			return
+		}
+	}
+	result, err := s.launchLoopDefinition(r.Context(), name, req.Launch)
+	if err != nil {
+		var unknown *looppkg.UnknownDefinitionError
+		var inactive *looppkg.InactiveDefinitionError
+		switch {
+		case errors.As(err, &unknown):
+			s.errorResponse(w, http.StatusNotFound, err.Error())
+		case errors.As(err, &inactive):
+			s.errorResponse(w, http.StatusConflict, err.Error())
+		default:
+			s.errorResponse(w, http.StatusBadRequest, err.Error())
+		}
+		return
+	}
+	snapshot := s.loopDefinitionRegistry.Snapshot()
+	def, found := findAPILoopDefinition(snapshot, name)
+	if !found {
+		s.errorResponse(w, http.StatusInternalServerError, "loop definition launched but snapshot is unavailable")
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	writeJSON(w, loopDefinitionLaunchResponse{
+		Status:     "ok",
+		Generation: snapshot.Generation,
+		Definition: def,
+		Result:     result,
 	}, s.logger)
 }
 
