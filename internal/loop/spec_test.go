@@ -7,9 +7,9 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/router"
 )
 
-func TestLoopSpecValidate(t *testing.T) {
+func TestSpecValidate(t *testing.T) {
 	t.Run("minimal request reply spec is valid", func(t *testing.T) {
-		spec := &LoopSpec{
+		spec := &Spec{
 			Name:       "delegate-like",
 			Task:       "Summarize what you find.",
 			Operation:  OperationRequestReply,
@@ -24,10 +24,10 @@ func TestLoopSpecValidate(t *testing.T) {
 	})
 
 	t.Run("invalid operation is rejected", func(t *testing.T) {
-		spec := &LoopSpec{
+		spec := &Spec{
 			Name:      "bad-op",
 			Task:      "Do something.",
-			Operation: LoopOperation("launch_and_vibe"),
+			Operation: Operation("launch_and_vibe"),
 		}
 		err := spec.Validate()
 		if err == nil || !strings.Contains(err.Error(), "unsupported operation") {
@@ -36,10 +36,10 @@ func TestLoopSpecValidate(t *testing.T) {
 	})
 
 	t.Run("invalid completion is rejected", func(t *testing.T) {
-		spec := &LoopSpec{
+		spec := &Spec{
 			Name:       "bad-completion",
 			Task:       "Do something.",
-			Completion: LoopCompletion("callback"),
+			Completion: Completion("callback"),
 		}
 		err := spec.Validate()
 		if err == nil || !strings.Contains(err.Error(), "unsupported completion") {
@@ -48,7 +48,7 @@ func TestLoopSpecValidate(t *testing.T) {
 	})
 
 	t.Run("invalid profile is rejected", func(t *testing.T) {
-		spec := &LoopSpec{
+		spec := &Spec{
 			Name: "bad-profile",
 			Task: "Do something.",
 			Profile: router.LoopProfile{
@@ -62,9 +62,9 @@ func TestLoopSpecValidate(t *testing.T) {
 	})
 }
 
-func TestLoopSpecToConfigCopiesMutableFields(t *testing.T) {
+func TestSpecToConfigCopiesMutableFields(t *testing.T) {
 	jitter := 0.4
-	spec := &LoopSpec{
+	spec := &Spec{
 		Name:         "copy-test",
 		Task:         "Watch the room.",
 		Tags:         []string{"monitoring"},

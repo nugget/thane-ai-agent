@@ -8,46 +8,46 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/router"
 )
 
-// LoopOperation describes the runtime pattern a loop is expected to
+// Operation describes the runtime pattern a loop is expected to
 // follow. The zero value is accepted while loops-ng adoption is
 // incremental.
-type LoopOperation string
+type Operation string
 
 const (
 	// OperationRequestReply is a one-shot run that is expected to
 	// conclude with a direct result for the caller.
-	OperationRequestReply LoopOperation = "request_reply"
+	OperationRequestReply Operation = "request_reply"
 	// OperationBackgroundTask is a detached task whose result is
 	// delivered later through a non-blocking completion path.
-	OperationBackgroundTask LoopOperation = "background_task"
+	OperationBackgroundTask Operation = "background_task"
 	// OperationService is a persistent loop such as metacognition,
 	// ego, or a long-running watcher.
-	OperationService LoopOperation = "service"
+	OperationService Operation = "service"
 )
 
-// LoopCompletion describes how a loop's result should be delivered.
+// Completion describes how a loop's result should be delivered.
 // The zero value is accepted while loops-ng adoption is incremental.
-type LoopCompletion string
+type Completion string
 
 const (
 	// CompletionReturn delivers the result directly to the caller.
-	CompletionReturn LoopCompletion = "return"
+	CompletionReturn Completion = "return"
 	// CompletionConversation injects the result into a conversation.
-	CompletionConversation LoopCompletion = "conversation"
+	CompletionConversation Completion = "conversation"
 	// CompletionChannel delivers the result to a channel integration.
-	CompletionChannel LoopCompletion = "channel"
+	CompletionChannel Completion = "channel"
 	// CompletionNone means the loop has no outward completion delivery.
-	CompletionNone LoopCompletion = "none"
+	CompletionNone Completion = "none"
 )
 
-var validLoopOperations = map[LoopOperation]bool{
+var validOperations = map[Operation]bool{
 	"":                      true,
 	OperationRequestReply:   true,
 	OperationBackgroundTask: true,
 	OperationService:        true,
 }
 
-var validLoopCompletions = map[LoopCompletion]bool{
+var validCompletions = map[Completion]bool{
 	"":                     true,
 	CompletionReturn:       true,
 	CompletionConversation: true,
@@ -55,12 +55,12 @@ var validLoopCompletions = map[LoopCompletion]bool{
 	CompletionNone:         true,
 }
 
-// LoopSpec is the loops-ng contract for describing a loop. It carries
+// Spec is the loops-ng contract for describing a loop. It carries
 // both the current engine-facing config fields and the forward-looking
 // loops-ng semantics. Today it can be compiled to [Config] without
 // behavior change; [Profile], [Operation], and [Completion] are
 // retained for the upcoming RunV2 work.
-type LoopSpec struct {
+type Spec struct {
 	// Name is the unique identifier for the loop. Required.
 	Name string
 
@@ -73,11 +73,11 @@ type LoopSpec struct {
 	Profile router.LoopProfile
 
 	// Operation describes the runtime pattern expected for the loop.
-	Operation LoopOperation
+	Operation Operation
 
 	// Completion describes how results should be delivered back to a
 	// caller, conversation, or channel.
-	Completion LoopCompletion
+	Completion Completion
 
 	// Tags are capability tags for tool scoping. When non-empty,
 	// the loop's tool registry is filtered to tools matching these
@@ -149,14 +149,14 @@ type LoopSpec struct {
 
 // Validate checks that the loops-ng-facing fields and the current
 // engine-facing configuration are internally consistent.
-func (s *LoopSpec) Validate() error {
+func (s *Spec) Validate() error {
 	if s == nil {
 		return fmt.Errorf("loop: spec is nil")
 	}
-	if !validLoopOperations[s.Operation] {
+	if !validOperations[s.Operation] {
 		return fmt.Errorf("loop: unsupported operation %q", s.Operation)
 	}
-	if !validLoopCompletions[s.Completion] {
+	if !validCompletions[s.Completion] {
 		return fmt.Errorf("loop: unsupported completion %q", s.Completion)
 	}
 	if err := s.Profile.Validate(); err != nil {
@@ -170,12 +170,12 @@ func (s *LoopSpec) Validate() error {
 	return nil
 }
 
-// ToConfig compiles the current engine-facing portion of a LoopSpec
+// ToConfig compiles the current engine-facing portion of a Spec
 // into today's [Config] shape. This is intentionally conservative:
-// loops-ng-specific fields such as [LoopSpec.Profile], [LoopSpec.Operation],
-// and [LoopSpec.Completion] are retained on the spec for future RunV2
+// loops-ng-specific fields such as [Spec.Profile], [Spec.Operation],
+// and [Spec.Completion] are retained on the spec for future RunV2
 // wiring rather than forced into today's engine.
-func (s *LoopSpec) ToConfig() Config {
+func (s *Spec) ToConfig() Config {
 	if s == nil {
 		return Config{}
 	}
