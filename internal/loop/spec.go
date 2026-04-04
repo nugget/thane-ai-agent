@@ -65,6 +65,10 @@ type Spec struct {
 	// Name is the unique identifier for the loop. Required.
 	Name string `yaml:"name,omitempty" json:"name,omitempty"`
 
+	// Enabled marks the definition as eligible for runtime lifecycle
+	// management. Service definitions only auto-start when enabled.
+	Enabled bool `yaml:"enabled" json:"enabled"`
+
 	// Task is the static prompt for each iteration. Ignored when
 	// TaskBuilder is set.
 	Task string `yaml:"task,omitempty" json:"task,omitempty"`

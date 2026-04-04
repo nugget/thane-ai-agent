@@ -143,6 +143,7 @@ func TestSpecValidatePersistableRejectsRuntimeHooks(t *testing.T) {
 func TestSpecJSONRoundTripUsesHumanFacingFields(t *testing.T) {
 	spec := Spec{
 		Name:       "room_monitor",
+		Enabled:    true,
 		Task:       "Watch the office.",
 		Operation:  OperationService,
 		Completion: CompletionConversation,
@@ -163,7 +164,7 @@ func TestSpecJSONRoundTripUsesHumanFacingFields(t *testing.T) {
 		t.Fatalf("json.Marshal: %v", err)
 	}
 	gotJSON := string(data)
-	for _, want := range []string{`"sleep_min":"5m0s"`, `"sleep_max":"30m0s"`, `"max_duration":"1h0m0s"`, `"on_retrigger":"restart"`} {
+	for _, want := range []string{`"enabled":true`, `"sleep_min":"5m0s"`, `"sleep_max":"30m0s"`, `"max_duration":"1h0m0s"`, `"on_retrigger":"restart"`} {
 		if !strings.Contains(gotJSON, want) {
 			t.Fatalf("json = %s, want substring %s", gotJSON, want)
 		}
@@ -178,5 +179,8 @@ func TestSpecJSONRoundTripUsesHumanFacingFields(t *testing.T) {
 	}
 	if roundTrip.OnRetrigger != RetriggerRestart {
 		t.Fatalf("OnRetrigger = %v, want restart", roundTrip.OnRetrigger)
+	}
+	if !roundTrip.Enabled {
+		t.Fatal("Enabled = false, want true")
 	}
 }

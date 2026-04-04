@@ -607,5 +607,35 @@ func (a *App) initServers(s *newState) error {
 		)
 	}
 
+	// --- Loop definition services ---
+	// Durable loops-ng service definitions are bootstrapped from the
+	// immutable+overlay definition registry. Existing special-case loops
+	// still start through their legacy paths for now; bootstrap skips
+	// duplicate names so the later migration can remain mechanical.
+	if a.loopDefinitionRegistry != nil {
+		runtime := &loopDefinitionRuntime{
+			definitions: a.loopDefinitionRegistry,
+			loops:       a.loopRegistry,
+			runner:      &loopAdapter{agentLoop: a.loop, router: a.rtr},
+			logger:      logger,
+			eventBus:    a.eventBus,
+		}
+		a.deferWorker("loop-definition-services", func(ctx context.Context) error {
+			result, err := runtime.StartEnabledServices(ctx)
+			if err != nil {
+				return err
+			}
+			if result.Started > 0 || result.SkippedDisabled > 0 || result.SkippedExisting > 0 || result.SkippedNonService > 0 {
+				logger.Info("loop definition services reconciled",
+					"started", result.Started,
+					"skipped_disabled", result.SkippedDisabled,
+					"skipped_existing", result.SkippedExisting,
+					"skipped_non_service", result.SkippedNonService,
+				)
+			}
+			return nil
+		})
+	}
+
 	return nil
 }

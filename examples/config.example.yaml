@@ -714,7 +714,42 @@ talents_dir: ./talents
 #   Definitions is the set of config-defined loop specs. These specs
 #   are immutable at runtime; dynamic loop creation lives in the
 #   persistent overlay registry instead.
-#   definitions: []
+#   definitions:
+#     - name: office_watch
+#       enabled: true
+#       task: Watch the office and report noteworthy changes or trends.
+#       profile:
+#         model: ""
+#         quality_floor: ""
+#         mission: background
+#         local_only: ""
+#         delegation_gating: disabled
+#         prefer_speed: ""
+#         exclude_tools: []
+#         initial_tags:
+#           - homeassistant
+#         extra_hints: {}
+#         instructions: Be concise and focus on high-signal observations.
+#       operation: service
+#       completion: none
+#       tags: []
+#       exclude_tools: []
+#       sleep_min: 2m
+#       sleep_max: 10m
+#       sleep_default: 5m
+#       jitter: 0.2
+#       max_duration: 0s
+#       max_iter: 0
+#       supervisor: false
+#       supervisor_prob: 0.0
+#       quality_floor: 0
+#       supervisor_context: ""
+#       supervisor_quality_floor: 0
+#       on_retrigger: 0
+#       hints: {}
+#       metadata:
+#         category: observer
+#       parent_id: ""
 #
 # (optional) OpenClaw configures the thane:openclaw Ollama profile, which
 # openclaw:

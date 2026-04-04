@@ -8,6 +8,7 @@ import (
 
 type specJSON struct {
 	Name                   string            `json:"name,omitempty"`
+	Enabled                bool              `json:"enabled"`
 	Task                   string            `json:"task,omitempty"`
 	Profile                any               `json:"profile,omitempty"`
 	Operation              Operation         `json:"operation,omitempty"`
@@ -37,6 +38,7 @@ type specJSON struct {
 func (s Spec) MarshalJSON() ([]byte, error) {
 	wire := specJSON{
 		Name:                   s.Name,
+		Enabled:                s.Enabled,
 		Task:                   s.Task,
 		Profile:                s.Profile,
 		Operation:              s.Operation,
@@ -94,6 +96,7 @@ func (s *Spec) UnmarshalJSON(data []byte) error {
 	}
 	*s = Spec{
 		Name:                   wire.Name,
+		Enabled:                wire.Enabled,
 		Task:                   wire.Task,
 		Operation:              wire.Operation,
 		Completion:             wire.Completion,
