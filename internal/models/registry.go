@@ -81,6 +81,7 @@ type RegistryDeploymentSnapshot struct {
 	CompatibilityType     string                 `json:"compatibility_type,omitempty"`
 	RunnerState           string                 `json:"runner_state,omitempty"`
 	SupportsTools         bool                   `json:"supports_tools,omitempty"`
+	TrainedForToolUse     bool                   `json:"trained_for_tool_use,omitempty"`
 	ProviderSupportsTools bool                   `json:"provider_supports_tools,omitempty"`
 	SupportsStreaming     bool                   `json:"supports_streaming,omitempty"`
 	SupportsImages        bool                   `json:"supports_images,omitempty"`
@@ -353,6 +354,7 @@ func (r *Registry) Snapshot() *RegistrySnapshot {
 			CompatibilityType:     dep.CompatibilityType,
 			RunnerState:           dep.RunnerState,
 			SupportsTools:         dep.SupportsTools,
+			TrainedForToolUse:     dep.TrainedForToolUse,
 			ProviderSupportsTools: dep.ProviderSupportsTools,
 			SupportsStreaming:     dep.SupportsStreaming,
 			SupportsImages:        dep.SupportsImages,

@@ -41,6 +41,7 @@ type DiscoveredModel struct {
 	ParameterSize       string
 	Quantization        string
 	SupportsTools       bool
+	TrainedForToolUse   bool
 	SupportsStreaming   bool
 	SupportsImages      bool
 	ContextWindow       int
@@ -133,6 +134,7 @@ func DiscoverInventory(ctx context.Context, cat *Catalog, bundle *ClientBundle) 
 					Family:            m.Arch,
 					Quantization:      m.Quantization,
 					SupportsTools:     supportsChat && ri.Capabilities.SupportsTools,
+					TrainedForToolUse: m.TrainedForToolUse,
 					SupportsStreaming: supportsChat && ri.Capabilities.SupportsStreaming,
 					SupportsImages: (m.Vision || modelproviders.SupportsImagesForModel(
 						ri.Provider,
@@ -233,6 +235,7 @@ func MergeInventory(base *Catalog, inv *Inventory) (*Catalog, error) {
 				CompatibilityType:     m.CompatibilityType,
 				RunnerState:           m.State,
 				SupportsTools:         m.SupportsTools || caps.SupportsTools,
+				TrainedForToolUse:     m.TrainedForToolUse,
 				ProviderSupportsTools: caps.SupportsTools,
 				SupportsStreaming:     m.SupportsStreaming || caps.SupportsStreaming,
 				SupportsImages:        m.SupportsImages,

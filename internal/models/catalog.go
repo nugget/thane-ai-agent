@@ -43,6 +43,7 @@ type Deployment struct {
 	CompatibilityType     string
 	RunnerState           string
 	SupportsTools         bool
+	TrainedForToolUse     bool
 	ProviderSupportsTools bool
 	SupportsStreaming     bool
 	SupportsImages        bool
@@ -175,6 +176,7 @@ func BuildCatalog(cfg *config.Config) (*Catalog, error) {
 		CompatibilityType   string
 		RunnerState         string
 		SupportsTools       bool
+		TrainedForToolUse   bool
 		ContextWindow       int
 		MaxContextWindow    int
 		LoadedContextWindow int
@@ -244,18 +246,19 @@ func BuildCatalog(cfg *config.Config) (*Catalog, error) {
 		}
 
 		pending = append(pending, unresolved{
-			ModelName:     m.Name,
-			Provider:      provider,
-			ResourceID:    resourceID,
-			Server:        resourceName,
-			SupportsTools: m.SupportsTools,
-			ContextWindow: m.ContextWindow,
-			Speed:         m.Speed,
-			Quality:       m.Quality,
-			CostTier:      m.CostTier,
-			MinComplexity: m.MinComplexity,
-			Source:        DeploymentSourceConfig,
-			Routable:      true,
+			ModelName:         m.Name,
+			Provider:          provider,
+			ResourceID:        resourceID,
+			Server:            resourceName,
+			SupportsTools:     m.SupportsTools,
+			TrainedForToolUse: m.SupportsTools,
+			ContextWindow:     m.ContextWindow,
+			Speed:             m.Speed,
+			Quality:           m.Quality,
+			CostTier:          m.CostTier,
+			MinComplexity:     m.MinComplexity,
+			Source:            DeploymentSourceConfig,
+			Routable:          true,
 		})
 		countByModel[m.Name]++
 	}
@@ -281,6 +284,7 @@ func BuildCatalog(cfg *config.Config) (*Catalog, error) {
 			CompatibilityType:   p.CompatibilityType,
 			RunnerState:         p.RunnerState,
 			SupportsTools:       p.SupportsTools,
+			TrainedForToolUse:   p.TrainedForToolUse,
 			ContextWindow:       p.ContextWindow,
 			MaxContextWindow:    p.MaxContextWindow,
 			LoadedContextWindow: p.LoadedContextWindow,

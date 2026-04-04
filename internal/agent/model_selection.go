@@ -199,6 +199,9 @@ func (l *Loop) maybeRetryExplicitModelAfterProviderContextError(
 	}
 
 	resp, retryErr := l.llm.ChatStream(ctx, dep.ID, msgs, toolDefs, stream)
+	if retryErr != nil && len(toolDefs) > 0 && !dep.TrainedForToolUse && isLMStudioLoadedContextError(retryErr) {
+		resp, retryErr = l.llm.ChatStream(ctx, dep.ID, msgs, nil, stream)
+	}
 	if retryErr != nil {
 		return nil, "", retryErr, true
 	}

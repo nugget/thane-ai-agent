@@ -440,6 +440,7 @@ func TestRun_ExplicitModelRetriesProviderContextErrorAfterLMStudioLoad(t *testin
 	loadedContext := 24000
 	loadCalls := 0
 	chatCalls := 0
+	lastToolCount := -1
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -457,7 +458,8 @@ func TestRun_ExplicitModelRetriesProviderContextErrorAfterLMStudioLoad(t *testin
 					"format":             "mlx",
 					"max_context_length": 131072,
 					"capabilities": map[string]any{
-						"vision": true,
+						"vision":               true,
+						"trained_for_tool_use": false,
 					},
 					"loaded_instances": []map[string]any{{
 						"id": "google/gemma-3-4b",
@@ -491,11 +493,22 @@ func TestRun_ExplicitModelRetriesProviderContextErrorAfterLMStudioLoad(t *testin
 				Status:     "loaded",
 			})
 		case "/v1/chat/completions":
+			var req struct {
+				Tools []map[string]any `json:"tools"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode chat request: %v", err)
+			}
 			mu.Lock()
 			current := loadedContext
 			chatCalls++
+			lastToolCount = len(req.Tools)
 			mu.Unlock()
 			if current < 131072 {
+				http.Error(w, `{"error":"The number of tokens to keep from the initial prompt is greater than the context length. Try to load the model with a larger context length, or provide a shorter input"}`, http.StatusBadRequest)
+				return
+			}
+			if len(req.Tools) > 0 {
 				http.Error(w, `{"error":"The number of tokens to keep from the initial prompt is greater than the context length. Try to load the model with a larger context length, or provide a shorter input"}`, http.StatusBadRequest)
 				return
 			}
@@ -546,7 +559,7 @@ func TestRun_ExplicitModelRetriesProviderContextErrorAfterLMStudioLoad(t *testin
 	if err != nil {
 		t.Fatalf("models.NewRuntime: %v", err)
 	}
-	loop := buildTestLoopWithLLM(runtime.Client(), nil)
+	loop := buildTestLoopWithLLM(runtime.Client(), []string{"get_state"})
 	loop.UseModelRegistry(runtime.Registry())
 	loop.UseModelRuntime(runtime)
 
@@ -572,15 +585,19 @@ func TestRun_ExplicitModelRetriesProviderContextErrorAfterLMStudioLoad(t *testin
 	gotLoadCalls := loadCalls
 	gotChatCalls := chatCalls
 	gotLoadedContext := loadedContext
+	gotLastToolCount := lastToolCount
 	mu.Unlock()
 	if gotLoadCalls != 1 {
 		t.Fatalf("load calls = %d, want 1", gotLoadCalls)
 	}
-	if gotChatCalls != 2 {
-		t.Fatalf("chat calls = %d, want 2", gotChatCalls)
+	if gotChatCalls != 3 {
+		t.Fatalf("chat calls = %d, want 3", gotChatCalls)
 	}
 	if gotLoadedContext != 131072 {
 		t.Fatalf("loadedContext = %d, want 131072", gotLoadedContext)
+	}
+	if gotLastToolCount != 0 {
+		t.Fatalf("last tool count = %d, want 0 on final retry", gotLastToolCount)
 	}
 
 	dep, err := runtime.Registry().Catalog().ResolveDeploymentRef("deepslate/google/gemma-3-4b")
@@ -589,6 +606,9 @@ func TestRun_ExplicitModelRetriesProviderContextErrorAfterLMStudioLoad(t *testin
 	}
 	if dep.LoadedContextWindow != 131072 || dep.ContextWindow != 131072 {
 		t.Fatalf("deployment context after retry = loaded:%d context:%d, want 131072/131072", dep.LoadedContextWindow, dep.ContextWindow)
+	}
+	if dep.TrainedForToolUse {
+		t.Fatal("dep.TrainedForToolUse = true, want false from LM Studio inventory")
 	}
 }
 
