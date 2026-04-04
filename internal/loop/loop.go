@@ -169,10 +169,19 @@ type Loop struct {
 	// only populated for loops created via [NewFromSpec].
 	requestBase Request
 
+	// requestOverride carries launch-specific per-run overrides
+	// applied on top of the spec/profile-derived request shaping.
+	requestOverride Request
+
 	// requestInstructions is extra guidance derived from a loops-ng
 	// [Spec]'s [router.LoopProfile]. It is prepended to each iteration
 	// task when present.
 	requestInstructions string
+
+	// taskOverride replaces the spec/config task for launch-driven,
+	// one-shot runs that need per-run input without mutating the
+	// underlying [Spec].
+	taskOverride string
 
 	// activatedTags tracks capability tags activated during previous
 	// iterations. Carried forward via InitialTags on the next Request so
@@ -260,6 +269,42 @@ func NewFromSpec(spec Spec, deps Deps) (*Loop, error) {
 	}
 	l.requestBase = spec.profileRequest()
 	l.requestInstructions = spec.Profile.Instructions
+	return l, nil
+}
+
+// NewFromLaunch creates a loop from a [Launch], validating the launch,
+// compiling the underlying [Spec], and applying per-run request and
+// metadata overrides. This is the additive bridge used by
+// [Registry.Launch].
+func NewFromLaunch(launch Launch, deps Deps) (*Loop, error) {
+	if err := launch.Validate(); err != nil {
+		return nil, err
+	}
+
+	spec := launch.Spec
+	cfg := spec.ToConfig()
+	if launch.ParentID != "" {
+		cfg.ParentID = launch.ParentID
+	}
+	if len(launch.Metadata) > 0 {
+		merged := cloneStringMap(cfg.Metadata)
+		if merged == nil {
+			merged = make(map[string]string, len(launch.Metadata))
+		}
+		for k, v := range launch.Metadata {
+			merged[k] = v
+		}
+		cfg.Metadata = merged
+	}
+
+	l, err := New(cfg, deps)
+	if err != nil {
+		return nil, err
+	}
+	l.requestBase = spec.profileRequest()
+	l.requestInstructions = spec.Profile.Instructions
+	l.requestOverride = launch.requestOverride()
+	l.taskOverride = launch.Task
 	return l, nil
 }
 
@@ -1060,6 +1105,9 @@ func (l *Loop) iterate(ctx context.Context, isSupervisor bool, convID string) (*
 			task = l.config.SupervisorContext + "\n\n" + task
 		}
 	}
+	if l.taskOverride != "" {
+		task = l.taskOverride
+	}
 
 	if l.requestInstructions != "" {
 		task = "Instructions: " + l.requestInstructions + "\n\n" + task
@@ -1074,18 +1122,36 @@ func (l *Loop) iterate(ctx context.Context, isSupervisor bool, convID string) (*
 	for k, v := range l.config.Hints {
 		hints[k] = v
 	}
+	for k, v := range l.requestOverride.Hints {
+		hints[k] = v
+	}
+
+	conversationID := convID
+	if l.requestOverride.ConversationID != "" {
+		conversationID = l.requestOverride.ConversationID
+	}
+
+	skipTagFilter := len(l.config.Tags) == 0 || l.requestOverride.SkipTagFilter
 
 	req := Request{
-		Model:          l.requestBase.Model,
-		ConversationID: convID,
+		Model:          firstNonEmpty(l.requestOverride.Model, l.requestBase.Model),
+		ConversationID: conversationID,
 		Messages: []Message{
 			{Role: "user", Content: task},
 		},
-		ExcludeTools:  mergeUniqueStrings(l.requestBase.ExcludeTools, l.config.ExcludeTools),
-		SkipTagFilter: len(l.config.Tags) == 0,
-		Hints:         hints,
-		OnProgress:    l.makeProgressFunc(),
-		InitialTags:   mergeUniqueStrings(l.requestBase.InitialTags, l.activatedTags),
+		SkipContext:     l.requestOverride.SkipContext,
+		AllowedTools:    append([]string(nil), l.requestOverride.AllowedTools...),
+		ExcludeTools:    mergeUniqueStrings(l.requestBase.ExcludeTools, l.config.ExcludeTools, l.requestOverride.ExcludeTools),
+		SkipTagFilter:   skipTagFilter,
+		Hints:           hints,
+		OnProgress:      l.makeProgressFunc(),
+		InitialTags:     mergeUniqueStrings(l.requestBase.InitialTags, l.requestOverride.InitialTags, l.activatedTags),
+		MaxIterations:   l.requestOverride.MaxIterations,
+		MaxOutputTokens: l.requestOverride.MaxOutputTokens,
+		ToolTimeout:     l.requestOverride.ToolTimeout,
+		UsageRole:       l.requestOverride.UsageRole,
+		UsageTaskName:   l.requestOverride.UsageTaskName,
+		SystemPrompt:    l.requestOverride.SystemPrompt,
 	}
 
 	resp, err := l.deps.Runner.Run(ctx, req, nil)
@@ -1133,6 +1199,15 @@ func mergeUniqueStrings(parts ...[]string) []string {
 		return nil
 	}
 	return merged
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // computeSleep returns the sleep duration for the next cycle. If

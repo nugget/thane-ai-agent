@@ -2,8 +2,11 @@ package loop
 
 import (
 	"context"
+	"slices"
 	"testing"
 	"time"
+
+	"github.com/nugget/thane-ai-agent/internal/router"
 )
 
 // mustNew is a test helper that calls New and fails on error.
@@ -259,6 +262,127 @@ func TestRegistryLaunchBackgroundTaskDetaches(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("loop %q still registered after completion", result.LoopID)
+}
+
+func TestRegistryLaunchAppliesRequestOverrides(t *testing.T) {
+	t.Parallel()
+
+	var captured Request
+	result, err := NewRegistry().Launch(context.Background(), Launch{
+		Spec: Spec{
+			Name:       "launch-overrides",
+			Task:       "base task",
+			Operation:  OperationRequestReply,
+			Completion: CompletionReturn,
+			Profile: router.LoopProfile{
+				Model:        "spark/base",
+				Mission:      "automation",
+				ExcludeTools: []string{"profile_block"},
+				InitialTags:  []string{"profile_tag"},
+				Instructions: "profile guidance",
+			},
+			Hints: map[string]string{
+				"source": "spec",
+			},
+			ExcludeTools: []string{"config_block"},
+		},
+		Task:            "launch task",
+		ParentID:        "parent-loop",
+		Metadata:        map[string]string{"origin": "launch"},
+		ConversationID:  "conv-123",
+		Model:           "deepslate/google/gemma-3-4b",
+		Hints:           map[string]string{"source": "launch", "custom": "1"},
+		AllowedTools:    []string{"ha_get_state"},
+		ExcludeTools:    []string{"launch_block"},
+		InitialTags:     []string{"launch_tag"},
+		SkipContext:     true,
+		SkipTagFilter:   true,
+		SystemPrompt:    "system prompt",
+		MaxIterations:   7,
+		MaxOutputTokens: 321,
+		ToolTimeout:     2 * time.Second,
+		UsageRole:       "delegate",
+		UsageTaskName:   "general",
+	}, Deps{Runner: &inspectingRunner{
+		onRun: func(req RunRequest) {
+			captured = Request{
+				Model:           req.Model,
+				ConversationID:  req.ConversationID,
+				Messages:        append([]Message(nil), req.Messages...),
+				SkipContext:     req.SkipContext,
+				AllowedTools:    append([]string(nil), req.AllowedTools...),
+				ExcludeTools:    append([]string(nil), req.ExcludeTools...),
+				SkipTagFilter:   req.SkipTagFilter,
+				Hints:           cloneStringMap(req.Hints),
+				InitialTags:     append([]string(nil), req.InitialTags...),
+				MaxIterations:   req.MaxIterations,
+				MaxOutputTokens: req.MaxOutputTokens,
+				ToolTimeout:     req.ToolTimeout,
+				UsageRole:       req.UsageRole,
+				UsageTaskName:   req.UsageTaskName,
+				SystemPrompt:    req.SystemPrompt,
+			}
+		},
+	}})
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+
+	if result.FinalStatus == nil {
+		t.Fatal("FinalStatus = nil, want status")
+	}
+	if result.FinalStatus.ParentID != "parent-loop" {
+		t.Fatalf("ParentID = %q, want parent-loop", result.FinalStatus.ParentID)
+	}
+	if result.FinalStatus.Config.Metadata["origin"] != "launch" {
+		t.Fatalf("Metadata origin = %q, want launch", result.FinalStatus.Config.Metadata["origin"])
+	}
+	if captured.Model != "deepslate/google/gemma-3-4b" {
+		t.Fatalf("Model = %q, want deepslate/google/gemma-3-4b", captured.Model)
+	}
+	if captured.ConversationID != "conv-123" {
+		t.Fatalf("ConversationID = %q, want conv-123", captured.ConversationID)
+	}
+	if got := captured.Messages[0].Content; got != "Instructions: profile guidance\n\nlaunch task" {
+		t.Fatalf("Message content = %q", got)
+	}
+	if !captured.SkipContext || !captured.SkipTagFilter {
+		t.Fatalf("Skip flags = %#v", captured)
+	}
+	if !slices.Equal(captured.AllowedTools, []string{"ha_get_state"}) {
+		t.Fatalf("AllowedTools = %#v", captured.AllowedTools)
+	}
+	for _, want := range []string{"profile_block", "config_block", "launch_block"} {
+		if !slices.Contains(captured.ExcludeTools, want) {
+			t.Fatalf("ExcludeTools = %#v, missing %q", captured.ExcludeTools, want)
+		}
+	}
+	for _, want := range []string{"profile_tag", "launch_tag"} {
+		if !slices.Contains(captured.InitialTags, want) {
+			t.Fatalf("InitialTags = %#v, missing %q", captured.InitialTags, want)
+		}
+	}
+	if captured.Hints["mission"] != "automation" {
+		t.Fatalf("mission hint = %q, want automation", captured.Hints["mission"])
+	}
+	if captured.Hints["source"] != "launch" {
+		t.Fatalf("source hint = %q, want launch", captured.Hints["source"])
+	}
+	if captured.Hints["custom"] != "1" {
+		t.Fatalf("custom hint = %q, want 1", captured.Hints["custom"])
+	}
+	if captured.MaxIterations != 7 || captured.MaxOutputTokens != 321 {
+		t.Fatalf("limits = iterations %d output %d", captured.MaxIterations, captured.MaxOutputTokens)
+	}
+	if captured.ToolTimeout != 2*time.Second {
+		t.Fatalf("ToolTimeout = %v, want 2s", captured.ToolTimeout)
+	}
+	if captured.SystemPrompt != "system prompt" {
+		t.Fatalf("SystemPrompt = %q, want system prompt", captured.SystemPrompt)
+	}
+	if captured.UsageRole != "delegate" || captured.UsageTaskName != "general" {
+		t.Fatalf("Usage = role %q task %q", captured.UsageRole, captured.UsageTaskName)
+	}
 }
 
 func TestRegistryShutdownAll(t *testing.T) {

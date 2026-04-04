@@ -289,12 +289,12 @@ func (r *Registry) Launch(ctx context.Context, launch Launch, deps Deps) (Launch
 	}
 
 	spec := launch.Spec
-	l, err := NewFromSpec(spec, deps)
+	l, err := NewFromLaunch(launch, deps)
 	if err != nil {
 		return LaunchResult{}, fmt.Errorf("create loop %q: %w", spec.Name, err)
 	}
 
-	cfg := spec.ToConfig()
+	cfg := l.config
 	detached := spec.Operation != OperationRequestReply
 	if err := r.startLoop(ctx, spec.Name, l, cfg.Setup, detached); err != nil {
 		return LaunchResult{}, err
