@@ -92,11 +92,3 @@ func effectiveDefinitionPolicy(spec Spec, policy DefinitionPolicy) (DefinitionPo
 	}
 	return defaultDefinitionPolicyState(spec), DefinitionPolicySourceDefault
 }
-
-func cloneDefinitionPolicies(src map[string]DefinitionPolicy) map[string]DefinitionPolicy {
-	dst := make(map[string]DefinitionPolicy, len(src))
-	for key, policy := range src {
-		dst[key] = policy
-	}
-	return dst
-}

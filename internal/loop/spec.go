@@ -3,6 +3,7 @@ package loop
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/router"
@@ -53,6 +54,13 @@ var validCompletions = map[Completion]bool{
 	CompletionConversation: true,
 	CompletionChannel:      true,
 	CompletionNone:         true,
+}
+
+func effectiveOperation(op Operation) Operation {
+	if op == "" {
+		return OperationRequestReply
+	}
+	return op
 }
 
 // Spec is the loops-ng contract for describing a loop. It carries
@@ -158,6 +166,9 @@ func (s *Spec) Validate() error {
 	if s == nil {
 		return fmt.Errorf("loop: spec is nil")
 	}
+	if strings.TrimSpace(s.Name) == "" {
+		return fmt.Errorf("loop: spec name is required")
+	}
 	if !validOperations[s.Operation] {
 		return fmt.Errorf("loop: unsupported operation %q", s.Operation)
 	}
@@ -256,7 +267,7 @@ func (s *Spec) normalized() Spec {
 	}
 	ns := *s
 
-	switch ns.Operation {
+	switch effectiveOperation(ns.Operation) {
 	case OperationRequestReply, OperationBackgroundTask:
 		if ns.MaxIter == 0 {
 			ns.MaxIter = 1

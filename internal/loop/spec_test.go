@@ -63,6 +63,18 @@ func TestSpecValidate(t *testing.T) {
 			t.Fatalf("Validate() error = %v, want profile validation", err)
 		}
 	})
+
+	t.Run("missing name is rejected", func(t *testing.T) {
+		spec := &Spec{
+			Task:       "Summarize what you find.",
+			Operation:  OperationRequestReply,
+			Completion: CompletionReturn,
+		}
+		err := spec.Validate()
+		if err == nil || !strings.Contains(err.Error(), "spec name is required") {
+			t.Fatalf("Validate() error = %v, want missing name rejection", err)
+		}
+	})
 }
 
 func TestSpecToConfigCopiesMutableFields(t *testing.T) {

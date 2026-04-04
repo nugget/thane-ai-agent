@@ -1,6 +1,7 @@
 package loop
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -180,6 +181,50 @@ func TestDefinitionRegistryPolicyOverlay(t *testing.T) {
 	got = snap.Definitions[0]
 	if got.PolicyState != DefinitionPolicyStateInactive || got.PolicySource != DefinitionPolicySourceDefault {
 		t.Fatalf("policy after clear = %q/%q, want inactive/default", got.PolicyState, got.PolicySource)
+	}
+}
+
+func TestDefinitionRegistryApplyPolicyRejectsUnsupportedState(t *testing.T) {
+	t.Parallel()
+
+	reg, err := NewDefinitionRegistry([]Spec{{
+		Name:      "night_watch",
+		Enabled:   true,
+		Task:      "Observe quietly.",
+		Operation: OperationService,
+	}})
+	if err != nil {
+		t.Fatalf("NewDefinitionRegistry: %v", err)
+	}
+
+	err = reg.ApplyPolicy("night_watch", DefinitionPolicy{
+		State: DefinitionPolicyState("drifting"),
+	}, time.Now())
+	if err == nil || !strings.Contains(err.Error(), "state must be one of") {
+		t.Fatalf("ApplyPolicy error = %v, want unsupported state", err)
+	}
+}
+
+func TestDefinitionRegistryReplacePoliciesRejectsUnsupportedState(t *testing.T) {
+	t.Parallel()
+
+	reg, err := NewDefinitionRegistry([]Spec{{
+		Name:      "night_watch",
+		Enabled:   true,
+		Task:      "Observe quietly.",
+		Operation: OperationService,
+	}})
+	if err != nil {
+		t.Fatalf("NewDefinitionRegistry: %v", err)
+	}
+
+	err = reg.ReplacePolicies(map[string]DefinitionPolicy{
+		"night_watch": {
+			State: DefinitionPolicyState("drifting"),
+		},
+	}, time.Now())
+	if err == nil || !strings.Contains(err.Error(), "state must be one of") {
+		t.Fatalf("ReplacePolicies error = %v, want unsupported state", err)
 	}
 }
 

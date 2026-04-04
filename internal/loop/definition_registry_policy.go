@@ -2,7 +2,6 @@ package loop
 
 import (
 	"fmt"
-	"reflect"
 	"strings"
 	"time"
 )
@@ -17,32 +16,27 @@ func (r *DefinitionRegistry) ApplyPolicy(name string, policy DefinitionPolicy, u
 	if name == "" {
 		return fmt.Errorf("definition name is required")
 	}
-	if policy.State == "" {
-		return fmt.Errorf("state must be one of [\"active\" \"inactive\"]")
+	state, err := ParseDefinitionPolicyState(string(policy.State))
+	if err != nil {
+		return err
 	}
 	if updatedAt.IsZero() {
 		updatedAt = time.Now()
 	}
+	policy.State = state
 	policy.Reason = strings.TrimSpace(policy.Reason)
 	policy.UpdatedAt = updatedAt.UTC()
 
-	r.mu.RLock()
-	_, exists := r.base[name]
-	if !exists {
-		_, exists = r.overlay[name]
-	}
-	current := cloneDefinitionPolicies(r.policies)
-	r.mu.RUnlock()
-	if !exists {
-		return &UnknownDefinitionError{Name: name}
-	}
-
-	current[name] = policy
-
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	changed := !reflect.DeepEqual(current, r.policies)
-	r.policies = current
+	if _, exists := r.base[name]; !exists {
+		if _, exists := r.overlay[name]; !exists {
+			return &UnknownDefinitionError{Name: name}
+		}
+	}
+	existing, hadExisting := r.policies[name]
+	changed := !hadExisting || existing != policy
+	r.policies[name] = policy
 	if changed {
 		r.generation++
 	}
@@ -64,23 +58,15 @@ func (r *DefinitionRegistry) ClearPolicy(name string, updatedAt time.Time) error
 		updatedAt = time.Now()
 	}
 
-	r.mu.RLock()
-	_, exists := r.base[name]
-	if !exists {
-		_, exists = r.overlay[name]
-	}
-	current := cloneDefinitionPolicies(r.policies)
-	r.mu.RUnlock()
-	if !exists {
-		return &UnknownDefinitionError{Name: name}
-	}
-
-	delete(current, name)
-
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	changed := !reflect.DeepEqual(current, r.policies)
-	r.policies = current
+	if _, exists := r.base[name]; !exists {
+		if _, exists := r.overlay[name]; !exists {
+			return &UnknownDefinitionError{Name: name}
+		}
+	}
+	_, changed := r.policies[name]
+	delete(r.policies, name)
 	if changed {
 		r.generation++
 	}
@@ -104,9 +90,11 @@ func (r *DefinitionRegistry) ReplacePolicies(policies map[string]DefinitionPolic
 		if name == "" {
 			continue
 		}
-		if policy.State == "" {
-			return fmt.Errorf("loop: policy for %q is missing state", name)
+		state, err := ParseDefinitionPolicyState(string(policy.State))
+		if err != nil {
+			return fmt.Errorf("loop: policy for %q: %w", name, err)
 		}
+		policy.State = state
 		policy.Reason = strings.TrimSpace(policy.Reason)
 		if policy.UpdatedAt.IsZero() {
 			policy.UpdatedAt = updatedAt.UTC()
@@ -129,7 +117,15 @@ func (r *DefinitionRegistry) ReplacePolicies(policies map[string]DefinitionPolic
 		delete(next, name)
 	}
 
-	changed := !reflect.DeepEqual(next, r.policies)
+	changed := len(next) != len(r.policies)
+	if !changed {
+		for name, policy := range next {
+			if r.policies[name] != policy {
+				changed = true
+				break
+			}
+		}
+	}
 	r.policies = next
 	if changed {
 		r.generation++

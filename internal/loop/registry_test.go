@@ -227,6 +227,31 @@ func TestRegistryLaunchRequestReplyWaitsForCompletion(t *testing.T) {
 	}
 }
 
+func TestRegistryLaunchZeroValueOperationDefaultsToRequestReply(t *testing.T) {
+	t.Parallel()
+
+	r := NewRegistry()
+	result, err := r.Launch(context.Background(), Launch{
+		Spec: Spec{
+			Name:       "launch-default-operation",
+			Task:       "test",
+			Completion: CompletionReturn,
+		},
+	}, Deps{Runner: &noopRunner{}})
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	if result.Detached {
+		t.Fatal("Detached = true, want false")
+	}
+	if result.Operation != OperationRequestReply {
+		t.Fatalf("Operation = %q, want %q", result.Operation, OperationRequestReply)
+	}
+	if result.Response == nil || result.FinalStatus == nil {
+		t.Fatalf("result = %#v, want joined response and final status", result)
+	}
+}
+
 func TestRegistryLaunchBackgroundTaskDetaches(t *testing.T) {
 	t.Parallel()
 
@@ -653,9 +678,13 @@ func (r *ctxBlockingRunner) Run(ctx context.Context, _ RunRequest, _ StreamCallb
 
 type recordingCompletionSink struct {
 	deliveries chan CompletionDelivery
+	err        error
 }
 
 func (s *recordingCompletionSink) DeliverCompletion(_ context.Context, delivery CompletionDelivery) error {
+	if s.err != nil {
+		return s.err
+	}
 	s.deliveries <- delivery
 	return nil
 }

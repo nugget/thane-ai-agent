@@ -7,7 +7,10 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 )
+
+const detachedCompletionTimeout = 10 * time.Second
 
 // Registry tracks all active loops and provides visibility into what is
 // running. It enforces concurrency limits and coordinates graceful
@@ -290,6 +293,7 @@ func (r *Registry) Launch(ctx context.Context, launch Launch, deps Deps) (Launch
 	}
 
 	spec := launch.Spec
+	spec.Operation = effectiveOperation(spec.Operation)
 	l, err := NewFromLaunch(launch, deps)
 	if err != nil {
 		return LaunchResult{}, fmt.Errorf("create loop %q: %w", spec.Name, err)
@@ -366,7 +370,10 @@ func (r *Registry) startDetachedCompletion(launch Launch, l *Loop) {
 			return
 		}
 
-		_ = l.deps.CompletionSink(context.Background(), CompletionDelivery{
+		deliveryCtx, cancel := context.WithTimeout(context.Background(), detachedCompletionTimeout)
+		defer cancel()
+
+		if err := l.deps.CompletionSink(deliveryCtx, CompletionDelivery{
 			Mode:           CompletionConversation,
 			ConversationID: conversationID,
 			Content:        content,
@@ -374,7 +381,14 @@ func (r *Registry) startDetachedCompletion(launch Launch, l *Loop) {
 			LoopName:       l.config.Name,
 			Response:       resp,
 			Status:         &status,
-		})
+		}); err != nil {
+			r.logger.Warn("detached loop completion delivery failed",
+				"loop_id", l.id,
+				"loop_name", l.config.Name,
+				"conversation_id", conversationID,
+				"error", err,
+			)
+		}
 	}()
 }
 
