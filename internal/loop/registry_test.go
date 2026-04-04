@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -236,7 +237,7 @@ func TestRegistryLaunchBackgroundTaskDetaches(t *testing.T) {
 			Name:       "launch-background-task",
 			Task:       "test",
 			Operation:  OperationBackgroundTask,
-			Completion: CompletionConversation,
+			Completion: CompletionNone,
 		},
 	}, Deps{Runner: &blockingRunner{gate: gate}})
 	if err != nil {
@@ -272,6 +273,59 @@ func TestRegistryLaunchBackgroundTaskDetaches(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("loop %q still registered after completion", result.LoopID)
+}
+
+func TestRegistryLaunchBackgroundTaskDeliversConversationCompletion(t *testing.T) {
+	t.Parallel()
+
+	sink := &recordingCompletionSink{deliveries: make(chan CompletionDelivery, 1)}
+	r := NewRegistry()
+	result, err := r.Launch(context.Background(), Launch{
+		Spec: Spec{
+			Name:       "launch-background-completion",
+			Task:       "test",
+			Operation:  OperationBackgroundTask,
+			Completion: CompletionConversation,
+		},
+		CompletionConversationID: "conv-123",
+		Task:                     "Summarize the device check",
+	}, Deps{
+		Runner:         &noopRunner{},
+		CompletionSink: sink.DeliverCompletion,
+	})
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	if !result.Detached {
+		t.Fatal("Detached = false, want true")
+	}
+	if result.Response != nil || result.FinalStatus != nil {
+		t.Fatalf("detached result = %#v, want no immediate response/status", result)
+	}
+
+	select {
+	case delivery := <-sink.deliveries:
+		if delivery.Mode != CompletionConversation {
+			t.Fatalf("Mode = %q, want conversation", delivery.Mode)
+		}
+		if delivery.ConversationID != "conv-123" {
+			t.Fatalf("ConversationID = %q, want conv-123", delivery.ConversationID)
+		}
+		if delivery.LoopID != result.LoopID {
+			t.Fatalf("LoopID = %q, want %q", delivery.LoopID, result.LoopID)
+		}
+		if !strings.Contains(delivery.Content, "Summarize the device check") || !strings.Contains(delivery.Content, "ok") {
+			t.Fatalf("Content = %q", delivery.Content)
+		}
+		if delivery.Response == nil || delivery.Response.Content != "ok" {
+			t.Fatalf("Response = %#v", delivery.Response)
+		}
+		if delivery.Status == nil {
+			t.Fatal("Status = nil, want status")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for detached completion delivery")
+	}
 }
 
 func TestRegistryLaunchRunTimeoutStopsJoinedLoop(t *testing.T) {
@@ -480,6 +534,22 @@ func TestLaunchValidateAllowsTaskOverrideWithoutSpecTask(t *testing.T) {
 	}
 }
 
+func TestLaunchValidateRequiresConversationCompletionTarget(t *testing.T) {
+	t.Parallel()
+
+	launch := Launch{
+		Spec: Spec{
+			Name:       "launch-missing-conversation-target",
+			Task:       "background work",
+			Operation:  OperationBackgroundTask,
+			Completion: CompletionConversation,
+		},
+	}
+	if err := launch.Validate(); err == nil {
+		t.Fatal("Validate() error = nil, want missing conversation target error")
+	}
+}
+
 func TestRegistryShutdownAll(t *testing.T) {
 	t.Parallel()
 
@@ -579,4 +649,13 @@ type ctxBlockingRunner struct{}
 func (r *ctxBlockingRunner) Run(ctx context.Context, _ RunRequest, _ StreamCallback) (*RunResponse, error) {
 	<-ctx.Done()
 	return nil, ctx.Err()
+}
+
+type recordingCompletionSink struct {
+	deliveries chan CompletionDelivery
+}
+
+func (s *recordingCompletionSink) DeliverCompletion(_ context.Context, delivery CompletionDelivery) error {
+	s.deliveries <- delivery
+	return nil
 }

@@ -121,6 +121,9 @@ type Deps struct {
 	// Runner executes LLM iterations. Required unless [Config].Handler
 	// is set (Handler-only loops do not call the Runner).
 	Runner Runner
+	// CompletionSink receives detached completion deliveries such as
+	// background-task results injected into conversations.
+	CompletionSink CompletionSink
 	// Logger for loop operations. Defaults to slog.Default().
 	Logger *slog.Logger
 	// EventBus publishes loop lifecycle events. Nil disables events.

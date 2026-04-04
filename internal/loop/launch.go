@@ -2,6 +2,7 @@ package loop
 
 import (
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -9,26 +10,27 @@ import (
 // from [Spec] so per-launch overrides and delivery hooks can grow here
 // over time without turning [Spec] itself into an ephemeral run object.
 type Launch struct {
-	Spec            Spec
-	Task            string
-	ParentID        string
-	Metadata        map[string]string
-	ConversationID  string
-	Model           string
-	Hints           map[string]string
-	AllowedTools    []string
-	ExcludeTools    []string
-	InitialTags     []string
-	OnProgress      func(kind string, data map[string]any) `json:"-"`
-	RunTimeout      time.Duration
-	SkipContext     bool
-	SkipTagFilter   bool
-	SystemPrompt    string
-	MaxIterations   int
-	MaxOutputTokens int
-	ToolTimeout     time.Duration
-	UsageRole       string
-	UsageTaskName   string
+	Spec                     Spec
+	Task                     string
+	ParentID                 string
+	Metadata                 map[string]string
+	ConversationID           string
+	Model                    string
+	Hints                    map[string]string
+	AllowedTools             []string
+	ExcludeTools             []string
+	InitialTags              []string
+	OnProgress               func(kind string, data map[string]any) `json:"-"`
+	RunTimeout               time.Duration
+	CompletionConversationID string
+	SkipContext              bool
+	SkipTagFilter            bool
+	SystemPrompt             string
+	MaxIterations            int
+	MaxOutputTokens          int
+	ToolTimeout              time.Duration
+	UsageRole                string
+	UsageTaskName            string
 }
 
 // Validate checks that the launch is well-formed.
@@ -38,6 +40,9 @@ func (l *Launch) Validate() error {
 	}
 	if l.RunTimeout < 0 {
 		return fmt.Errorf("loop: run timeout must be >= 0")
+	}
+	if l.Spec.Completion == CompletionConversation && strings.TrimSpace(l.CompletionConversationID) == "" {
+		return fmt.Errorf("loop: completion conversation ID is required for conversation completion")
 	}
 	spec := l.Spec
 	if l.Task != "" && spec.Task == "" && spec.TaskBuilder == nil && spec.Handler == nil {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strings"
 	"sync"
 )
 
@@ -306,6 +307,7 @@ func (r *Registry) Launch(ctx context.Context, launch Launch, deps Deps) (Launch
 		Detached:  detached,
 	}
 	if detached {
+		r.startDetachedCompletion(launch, l)
 		return result, nil
 	}
 
@@ -333,6 +335,68 @@ func (r *Registry) Launch(ctx context.Context, launch Launch, deps Deps) (Launch
 			l.Stop()
 		}
 		return result, waitCtx.Err()
+	}
+}
+
+func (r *Registry) startDetachedCompletion(launch Launch, l *Loop) {
+	if l == nil {
+		return
+	}
+	if launch.Spec.Completion != CompletionConversation {
+		return
+	}
+	if l.deps.CompletionSink == nil {
+		return
+	}
+	conversationID := strings.TrimSpace(launch.CompletionConversationID)
+	if conversationID == "" {
+		return
+	}
+
+	go func() {
+		done := l.Done()
+		if done != nil {
+			<-done
+		}
+
+		resp := l.lastResponseSnapshot()
+		status := l.Status()
+		content := formatCompletionContent(launch, resp, status)
+		if strings.TrimSpace(content) == "" {
+			return
+		}
+
+		_ = l.deps.CompletionSink(context.Background(), CompletionDelivery{
+			Mode:           CompletionConversation,
+			ConversationID: conversationID,
+			Content:        content,
+			LoopID:         l.id,
+			LoopName:       l.config.Name,
+			Response:       resp,
+			Status:         &status,
+		})
+	}()
+}
+
+func formatCompletionContent(launch Launch, resp *Response, status Status) string {
+	label := strings.TrimSpace(launch.Task)
+	if label == "" {
+		label = strings.TrimSpace(launch.Spec.Name)
+	}
+	if label == "" {
+		label = "background task"
+	}
+
+	prefix := fmt.Sprintf("Background task complete (%s).", label)
+	switch {
+	case resp != nil && strings.TrimSpace(resp.Content) != "":
+		return prefix + "\n\n" + resp.Content
+	case status.LastError != "":
+		return prefix + "\n\nTask failed: " + status.LastError
+	case resp != nil && resp.Exhausted && resp.FinishReason != "":
+		return prefix + "\n\nTask exhausted: " + resp.FinishReason
+	default:
+		return prefix
 	}
 }
 
