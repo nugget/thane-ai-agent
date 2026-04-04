@@ -55,12 +55,18 @@ func NewAnthropicClient(apiKey string, logger *slog.Logger) *AnthropicClient {
 // Anthropic request/response types
 
 type anthropicRequest struct {
-	Model     string             `json:"model"`
-	Messages  []anthropicMessage `json:"messages"`
-	System    string             `json:"system,omitempty"`
-	MaxTokens int                `json:"max_tokens"`
-	Stream    bool               `json:"stream,omitempty"`
-	Tools     []anthropicTool    `json:"tools,omitempty"`
+	Model        string                 `json:"model"`
+	Messages     []anthropicMessage     `json:"messages"`
+	System       string                 `json:"system,omitempty"`
+	MaxTokens    int                    `json:"max_tokens"`
+	Stream       bool                   `json:"stream,omitempty"`
+	Tools        []anthropicTool        `json:"tools,omitempty"`
+	CacheControl *anthropicCacheControl `json:"cache_control,omitempty"`
+}
+
+type anthropicCacheControl struct {
+	Type string `json:"type"`
+	TTL  string `json:"ttl,omitempty"`
 }
 
 type anthropicMessage struct {
@@ -151,12 +157,13 @@ func (c *AnthropicClient) ChatStream(ctx context.Context, model string, messages
 	)
 
 	req := anthropicRequest{
-		Model:     model,
-		Messages:  anthropicMsgs,
-		System:    systemPrompt,
-		MaxTokens: 4096,
-		Stream:    stream,
-		Tools:     anthropicTools,
+		Model:        model,
+		Messages:     anthropicMsgs,
+		System:       systemPrompt,
+		MaxTokens:    4096,
+		Stream:       stream,
+		Tools:        anthropicTools,
+		CacheControl: anthropicPromptCacheControl(systemPrompt, anthropicMsgs, anthropicTools),
 	}
 
 	jsonData, err := json.Marshal(req)
@@ -373,6 +380,31 @@ func (c *AnthropicClient) handleStreaming(ctx context.Context, body io.Reader, c
 	c.logger.Log(ctx, llm.LevelTrace, "stream final content", "content", resp.Message.Content)
 
 	return resp, nil
+}
+
+func anthropicPromptCacheControl(systemPrompt string, messages []anthropicMessage, tools []anthropicTool) *anthropicCacheControl {
+	if !shouldUseAnthropicPromptCaching(systemPrompt, messages, tools) {
+		return nil
+	}
+	return &anthropicCacheControl{Type: "ephemeral"}
+}
+
+func shouldUseAnthropicPromptCaching(systemPrompt string, messages []anthropicMessage, tools []anthropicTool) bool {
+	if len(tools) > 0 {
+		return true
+	}
+	if len(messages) >= 3 {
+		return true
+	}
+	if strings.TrimSpace(systemPrompt) != "" && len(systemPrompt) >= 4096 {
+		return true
+	}
+	for _, msg := range messages {
+		if msg.Role == "assistant" {
+			return true
+		}
+	}
+	return false
 }
 
 // convertToAnthropic converts internal messages to Anthropic format.
