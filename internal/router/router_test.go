@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 )
 
 func newTestRouter() *Router {
@@ -599,5 +600,156 @@ func TestRouteAndStatsTrackDeploymentMetadata(t *testing.T) {
 	}
 	if depStats.AvgTokensUsed != 600 {
 		t.Fatalf("DeploymentStats.AvgTokensUsed = %d, want 600", depStats.AvgTokensUsed)
+	}
+}
+
+func TestRecordFailureTimeoutCoolsResourceAndShiftsRouting(t *testing.T) {
+	t.Parallel()
+
+	r := NewRouter(slog.Default(), Config{
+		DefaultModel: "edge-primary/qwen3:8b",
+		Models: []Model{
+			{
+				Name:          "edge-primary/qwen3:8b",
+				UpstreamModel: "qwen3:8b",
+				Provider:      "ollama",
+				ResourceID:    "edge-primary",
+				Server:        "edge-primary",
+				SupportsTools: true,
+				ContextWindow: 32768,
+				Speed:         8,
+				Quality:       7,
+				CostTier:      0,
+			},
+			{
+				Name:          "edge-backup/qwen3:8b",
+				UpstreamModel: "qwen3:8b",
+				Provider:      "ollama",
+				ResourceID:    "edge-backup",
+				Server:        "edge-backup",
+				SupportsTools: true,
+				ContextWindow: 32768,
+				Speed:         8,
+				Quality:       6,
+				CostTier:      0,
+			},
+		},
+		MaxAuditLog: 10,
+	})
+
+	req := Request{
+		Query:      "check the state of the back gate",
+		NeedsTools: true,
+		ToolCount:  2,
+		Priority:   PriorityInteractive,
+		Hints: map[string]string{
+			HintLocalOnly: "true",
+		},
+	}
+
+	model, decision := r.Route(context.Background(), req)
+	if model != "edge-primary/qwen3:8b" {
+		t.Fatalf("Route() selected %q, want %q", model, "edge-primary/qwen3:8b")
+	}
+
+	r.RecordFailure(decision.RequestID, 5000, 0, true)
+
+	stats := r.GetStats()
+	depStats := stats.DeploymentStats["edge-primary/qwen3:8b"]
+	if depStats.Failures != 1 {
+		t.Fatalf("Failures = %d, want 1", depStats.Failures)
+	}
+	if depStats.AvgLatencyMs != 5000 {
+		t.Fatalf("AvgLatencyMs = %d, want 5000", depStats.AvgLatencyMs)
+	}
+	if until := r.resourceCooldownDeadline("edge-primary"); until.IsZero() {
+		t.Fatal("resource cooldown not set for edge-primary")
+	}
+
+	nextModel, nextDecision := r.Route(context.Background(), req)
+	if nextModel != "edge-backup/qwen3:8b" {
+		t.Fatalf("Route() after timeout selected %q, want %q", nextModel, "edge-backup/qwen3:8b")
+	}
+	if score := nextDecision.Scores["edge-primary/qwen3:8b"]; score >= nextDecision.Scores["edge-backup/qwen3:8b"] {
+		t.Fatalf("cooldown penalty did not push primary below backup: primary=%d backup=%d", score, nextDecision.Scores["edge-backup/qwen3:8b"])
+	}
+}
+
+func TestRecordFailureWithoutTimeoutDoesNotCoolResource(t *testing.T) {
+	t.Parallel()
+
+	r := NewRouter(slog.Default(), Config{
+		DefaultModel: "edge/qwen3:8b",
+		Models: []Model{
+			{
+				Name:          "edge/qwen3:8b",
+				UpstreamModel: "qwen3:8b",
+				Provider:      "ollama",
+				ResourceID:    "edge",
+				Server:        "edge",
+				SupportsTools: true,
+				ContextWindow: 32768,
+				Speed:         8,
+				Quality:       7,
+				CostTier:      0,
+			},
+		},
+		MaxAuditLog: 10,
+	})
+
+	model, decision := r.Route(context.Background(), Request{
+		Query:      "check the gate",
+		NeedsTools: true,
+		ToolCount:  1,
+		Priority:   PriorityInteractive,
+	})
+	if model != "edge/qwen3:8b" {
+		t.Fatalf("Route() selected %q, want %q", model, "edge/qwen3:8b")
+	}
+
+	r.RecordFailure(decision.RequestID, 250, 0, false)
+
+	if until := r.resourceCooldownDeadline("edge"); !until.IsZero() {
+		t.Fatalf("resource cooldown unexpectedly set: %v", until)
+	}
+}
+
+func TestRecordOutcomeSuccessClearsResourceCooldown(t *testing.T) {
+	t.Parallel()
+
+	r := NewRouter(slog.Default(), Config{
+		DefaultModel: "edge/qwen3:8b",
+		Models: []Model{
+			{
+				Name:          "edge/qwen3:8b",
+				UpstreamModel: "qwen3:8b",
+				Provider:      "ollama",
+				ResourceID:    "edge",
+				Server:        "edge",
+				SupportsTools: true,
+				ContextWindow: 32768,
+				Speed:         8,
+				Quality:       7,
+				CostTier:      0,
+			},
+		},
+		MaxAuditLog: 10,
+	})
+
+	model, decision := r.Route(context.Background(), Request{
+		Query:      "check the gate",
+		NeedsTools: true,
+		ToolCount:  1,
+		Priority:   PriorityInteractive,
+	})
+	if model != "edge/qwen3:8b" {
+		t.Fatalf("Route() selected %q, want %q", model, "edge/qwen3:8b")
+	}
+
+	r.resourceCooldownUntil["edge"] = time.Now().Add(time.Minute)
+	r.RecordOutcome(decision.RequestID, 120, 600, true)
+
+	if until := r.resourceCooldownDeadline("edge"); !until.IsZero() {
+		t.Fatalf("resource cooldown not cleared: %v", until)
 	}
 }

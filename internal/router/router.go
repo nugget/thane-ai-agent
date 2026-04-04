@@ -145,9 +145,10 @@ type Router struct {
 	logger *slog.Logger
 	config Config
 
-	mu       sync.RWMutex
-	auditLog []Decision
-	stats    Stats
+	mu                    sync.RWMutex
+	auditLog              []Decision
+	stats                 Stats
+	resourceCooldownUntil map[string]time.Time
 }
 
 func cloneModels(in []Model) []Model {
@@ -210,8 +211,11 @@ func NewRouter(logger *slog.Logger, config Config) *Router {
 			ResourceCounts:   make(map[string]int64),
 			DeploymentStats:  make(map[string]DeploymentStats),
 		},
+		resourceCooldownUntil: make(map[string]time.Time),
 	}
 }
+
+const resourceTimeoutCooldown = 2 * time.Minute
 
 // ContextWindowForModel returns the context window size for the named
 // model. If the model is not found in the router's configuration, it
@@ -364,6 +368,7 @@ func (r *Router) selectModel(cfg Config, req Request, decision *Decision) string
 	var rulesEvaluated, rulesMatched []string
 	var reasoning strings.Builder
 	rejected := make(map[string][]string)
+	now := time.Now()
 
 	// Find eligible models
 	var candidates []Model
@@ -571,6 +576,11 @@ func (r *Router) selectModel(cfg Config, req Request, decision *Decision) string
 			}
 		}
 
+		if until := r.resourceCooldownDeadline(m.ResourceID); !until.IsZero() && now.Before(until) {
+			score -= 100
+			rulesMatched = append(rulesMatched, "resource_timeout_cooldown_"+m.Name)
+		}
+
 		scores[m.Name] = score
 	}
 
@@ -625,10 +635,14 @@ func (r *Router) RecordOutcome(requestID string, latencyMs int64, tokensUsed int
 
 			// Update stats
 			model := r.auditLog[i].ModelSelected
+			resource := r.auditLog[i].ResourceSelected
 			meta := r.stats.DeploymentStats[model]
 			if success {
 				r.stats.SuccessCount++
 				meta.Successes++
+				if resource != "" {
+					delete(r.resourceCooldownUntil, resource)
+				}
 			} else {
 				r.stats.FailureCount++
 				meta.Failures++
@@ -638,6 +652,39 @@ func (r *Router) RecordOutcome(requestID string, latencyMs int64, tokensUsed int
 			meta.AvgLatencyMs = weightedAverage(meta.AvgLatencyMs, outcomes, latencyMs)
 			meta.AvgTokensUsed = weightedAverage(meta.AvgTokensUsed, outcomes, int64(tokensUsed))
 			r.stats.DeploymentStats[model] = meta
+			break
+		}
+	}
+}
+
+// RecordFailure updates a failed routing outcome and optionally applies
+// a temporary resource cooldown so automatic routing can avoid a runner
+// that is timing out on real chat traffic.
+func (r *Router) RecordFailure(requestID string, latencyMs int64, tokensUsed int, resourceTimeout bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	for i := len(r.auditLog) - 1; i >= 0; i-- {
+		if r.auditLog[i].RequestID == requestID {
+			r.auditLog[i].LatencyMs = latencyMs
+			r.auditLog[i].TokensUsed = tokensUsed
+			success := false
+			r.auditLog[i].Success = &success
+
+			model := r.auditLog[i].ModelSelected
+			resource := r.auditLog[i].ResourceSelected
+			meta := r.stats.DeploymentStats[model]
+			r.stats.FailureCount++
+			meta.Failures++
+			outcomes := meta.Successes + meta.Failures
+			r.stats.AvgLatencyMs[model] = weightedAverage(r.stats.AvgLatencyMs[model], outcomes, latencyMs)
+			meta.AvgLatencyMs = weightedAverage(meta.AvgLatencyMs, outcomes, latencyMs)
+			meta.AvgTokensUsed = weightedAverage(meta.AvgTokensUsed, outcomes, int64(tokensUsed))
+			r.stats.DeploymentStats[model] = meta
+
+			if resourceTimeout && resource != "" {
+				r.resourceCooldownUntil[resource] = time.Now().Add(resourceTimeoutCooldown)
+			}
 			break
 		}
 	}
@@ -704,6 +751,15 @@ func (r *Router) GetStats() Stats {
 		ResourceCounts:   cloneInt64Map(r.stats.ResourceCounts),
 		DeploymentStats:  cloneDeploymentStatsMap(r.stats.DeploymentStats),
 	}
+}
+
+func (r *Router) resourceCooldownDeadline(resource string) time.Time {
+	if strings.TrimSpace(resource) == "" {
+		return time.Time{}
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.resourceCooldownUntil[resource]
 }
 
 // GetModels returns a copy of the configured model list. The returned
