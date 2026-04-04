@@ -1,5 +1,5 @@
-// Package llm provides LLM client implementations.
-package llm
+// Package providers implements concrete model runner integrations.
+package providers
 
 import (
 	"bytes"
@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/httpkit"
+	"github.com/nugget/thane-ai-agent/internal/llm"
 )
 
 // OllamaClient is a client for the Ollama API.
@@ -20,17 +21,11 @@ type OllamaClient struct {
 	baseURL    string
 	httpClient *http.Client
 	logger     *slog.Logger
-	watcher    readyChecker // set via SetWatcher for health status
-}
-
-// readyChecker is satisfied by connwatch.Watcher. Defined here to avoid
-// a direct import cycle between llm and connwatch.
-type readyChecker interface {
-	IsReady() bool
+	watcher    llm.ReadyWatcher // set via SetWatcher for health status
 }
 
 // SetWatcher sets the connection watcher for health status queries.
-func (c *OllamaClient) SetWatcher(w readyChecker) {
+func (c *OllamaClient) SetWatcher(w llm.ReadyWatcher) {
 	c.watcher = w
 }
 
@@ -81,16 +76,16 @@ type ChatRequest struct {
 // accepts images as a flat array of base64 strings alongside each
 // message, unlike Anthropic which uses typed content blocks.
 type ollamaMessage struct {
-	Role       string     `json:"role"`
-	Content    string     `json:"content"`
-	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string     `json:"tool_call_id,omitempty"`
-	Images     []string   `json:"images,omitempty"`
+	Role       string         `json:"role"`
+	Content    string         `json:"content"`
+	ToolCalls  []llm.ToolCall `json:"tool_calls,omitempty"`
+	ToolCallID string         `json:"tool_call_id,omitempty"`
+	Images     []string       `json:"images,omitempty"`
 }
 
 // toOllamaMessages converts internal Messages to Ollama wire format,
 // extracting [ImageContent] into the flat base64 array Ollama expects.
-func toOllamaMessages(msgs []Message) []ollamaMessage {
+func toOllamaMessages(msgs []llm.Message) []ollamaMessage {
 	out := make([]ollamaMessage, len(msgs))
 	for i, m := range msgs {
 		om := ollamaMessage{
@@ -113,25 +108,44 @@ type Options struct {
 	NumPredict  int     `json:"num_predict,omitempty"`
 }
 
+// OllamaModelDetails contains model metadata returned by /api/tags.
+type OllamaModelDetails struct {
+	Format            string   `json:"format,omitempty"`
+	Family            string   `json:"family,omitempty"`
+	Families          []string `json:"families,omitempty"`
+	ParameterSize     string   `json:"parameter_size,omitempty"`
+	QuantizationLevel string   `json:"quantization_level,omitempty"`
+}
+
+// OllamaModelInfo describes a single model discovered from an Ollama
+// resource inventory.
+type OllamaModelInfo struct {
+	Name       string             `json:"name"`
+	Digest     string             `json:"digest,omitempty"`
+	Size       int64              `json:"size,omitempty"`
+	ModifiedAt string             `json:"modified_at,omitempty"`
+	Details    OllamaModelDetails `json:"details,omitempty"`
+}
+
 // ollamaWireResponse is the raw JSON response from Ollama's /api/chat endpoint.
 // This is a deserialization target only — convert to ChatResponse for internal use.
 type ollamaWireResponse struct {
-	Model              string  `json:"model"`
-	CreatedAt          string  `json:"created_at"`
-	Message            Message `json:"message"`
-	Done               bool    `json:"done"`
-	TotalDuration      int64   `json:"total_duration,omitempty"`
-	LoadDuration       int64   `json:"load_duration,omitempty"`
-	PromptEvalCount    int     `json:"prompt_eval_count,omitempty"`
-	PromptEvalDuration int64   `json:"prompt_eval_duration,omitempty"`
-	EvalCount          int     `json:"eval_count,omitempty"`
-	EvalDuration       int64   `json:"eval_duration,omitempty"`
+	Model              string      `json:"model"`
+	CreatedAt          string      `json:"created_at"`
+	Message            llm.Message `json:"message"`
+	Done               bool        `json:"done"`
+	TotalDuration      int64       `json:"total_duration,omitempty"`
+	LoadDuration       int64       `json:"load_duration,omitempty"`
+	PromptEvalCount    int         `json:"prompt_eval_count,omitempty"`
+	PromptEvalDuration int64       `json:"prompt_eval_duration,omitempty"`
+	EvalCount          int         `json:"eval_count,omitempty"`
+	EvalDuration       int64       `json:"eval_duration,omitempty"`
 }
 
 // toChatResponse converts an Ollama wire response to the internal ChatResponse type.
-func (w *ollamaWireResponse) toChatResponse() *ChatResponse {
+func (w *ollamaWireResponse) toChatResponse() *llm.ChatResponse {
 	createdAt, _ := time.Parse(time.RFC3339Nano, w.CreatedAt)
-	return &ChatResponse{
+	return &llm.ChatResponse{
 		Model:         w.Model,
 		CreatedAt:     createdAt,
 		Message:       w.Message,
@@ -145,13 +159,13 @@ func (w *ollamaWireResponse) toChatResponse() *ChatResponse {
 }
 
 // Chat sends a chat completion request to Ollama.
-func (c *OllamaClient) Chat(ctx context.Context, model string, messages []Message, tools []map[string]any) (*ChatResponse, error) {
+func (c *OllamaClient) Chat(ctx context.Context, model string, messages []llm.Message, tools []map[string]any) (*llm.ChatResponse, error) {
 	return c.ChatStream(ctx, model, messages, tools, nil)
 }
 
 // ChatStream sends a streaming chat request to Ollama.
 // If callback is non-nil, tokens are streamed to it.
-func (c *OllamaClient) ChatStream(ctx context.Context, model string, messages []Message, tools []map[string]any, callback StreamCallback) (*ChatResponse, error) {
+func (c *OllamaClient) ChatStream(ctx context.Context, model string, messages []llm.Message, tools []map[string]any, callback llm.StreamCallback) (*llm.ChatResponse, error) {
 	stream := callback != nil
 
 	c.logger.Debug("preparing request",
@@ -173,7 +187,7 @@ func (c *OllamaClient) ChatStream(ctx context.Context, model string, messages []
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	c.logger.Log(ctx, LevelTrace, "request payload", "json", string(jsonData))
+	c.logger.Log(ctx, llm.LevelTrace, "request payload", "json", string(jsonData))
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/api/chat", bytes.NewReader(jsonData))
 	if err != nil {
@@ -211,7 +225,7 @@ func (c *OllamaClient) ChatStream(ctx context.Context, model string, messages []
 			"total_duration", chatResp.TotalDuration,
 			"tool_calls", len(chatResp.Message.ToolCalls),
 		)
-		c.logger.Log(ctx, LevelTrace, "response content", "content", chatResp.Message.Content)
+		c.logger.Log(ctx, llm.LevelTrace, "response content", "content", chatResp.Message.Content)
 
 		// Try to parse text-based tool calls if no native tool_calls
 		if len(chatResp.Message.ToolCalls) == 0 && chatResp.Message.Content != "" {
@@ -232,8 +246,8 @@ func (c *OllamaClient) ChatStream(ctx context.Context, model string, messages []
 	}
 
 	// Streaming: read newline-delimited JSON
-	var finalResp *ChatResponse
-	var toolCalls []ToolCall
+	var finalResp *llm.ChatResponse
+	var toolCalls []llm.ToolCall
 	var contentBuilder strings.Builder
 	toolCallBufferFlushed := false // tracks whether we've started streaming to client
 	decoder := json.NewDecoder(resp.Body)
@@ -261,9 +275,9 @@ func (c *OllamaClient) ChatStream(ctx context.Context, model string, messages []
 					// Flush any buffered content + this token
 					if !toolCallBufferFlushed && contentBuilder.Len() > len(wire.Message.Content) {
 						// First flush: send everything accumulated so far
-						callback(StreamEvent{Kind: KindToken, Token: accumulated})
+						callback(llm.StreamEvent{Kind: llm.KindToken, Token: accumulated})
 					} else {
-						callback(StreamEvent{Kind: KindToken, Token: wire.Message.Content})
+						callback(llm.StreamEvent{Kind: llm.KindToken, Token: wire.Message.Content})
 					}
 					toolCallBufferFlushed = true
 				}
@@ -286,7 +300,7 @@ func (c *OllamaClient) ChatStream(ctx context.Context, model string, messages []
 
 	if finalResp == nil {
 		c.logger.Debug("stream ended without done marker, synthesizing response")
-		finalResp = &ChatResponse{Model: model, Done: true}
+		finalResp = &llm.ChatResponse{Model: model, Done: true}
 		finalResp.Message.Content = contentBuilder.String()
 		finalResp.Message.ToolCalls = toolCalls
 	}
@@ -299,7 +313,7 @@ func (c *OllamaClient) ChatStream(ctx context.Context, model string, messages []
 		"content_len", len(finalResp.Message.Content),
 		"tool_calls", len(finalResp.Message.ToolCalls),
 	)
-	c.logger.Log(ctx, LevelTrace, "stream final content", "content", finalResp.Message.Content)
+	c.logger.Log(ctx, llm.LevelTrace, "stream final content", "content", finalResp.Message.Content)
 
 	// Try to parse text-based tool calls if no native tool_calls
 	if len(finalResp.Message.ToolCalls) == 0 && finalResp.Message.Content != "" {
@@ -411,7 +425,7 @@ func looksLikeToolCall(content string) bool {
 // If validTools is non-empty, only tool calls with names in that list are returned.
 // This prevents false positives when models output JSON that happens to have
 // name/arguments fields but isn't meant to be a tool call.
-func parseTextToolCalls(content string, validTools []string) []ToolCall {
+func parseTextToolCalls(content string, validTools []string) []llm.ToolCall {
 	content = strings.TrimSpace(content)
 	if content == "" {
 		return nil
@@ -429,7 +443,7 @@ func parseTextToolCalls(content string, validTools []string) []ToolCall {
 		}
 	}
 
-	var result []ToolCall
+	var result []llm.ToolCall
 
 	// Try parsing as array of tool calls
 	var calls []struct {
@@ -444,7 +458,7 @@ func parseTextToolCalls(content string, validTools []string) []ToolCall {
 			if !isValidTool(c.Name, validTools) {
 				continue
 			}
-			result = append(result, ToolCall{
+			result = append(result, llm.ToolCall{
 				Function: struct {
 					Name      string         `json:"name"`
 					Arguments map[string]any `json:"arguments"`
@@ -464,7 +478,7 @@ func parseTextToolCalls(content string, validTools []string) []ToolCall {
 	}
 	if err := json.Unmarshal([]byte(content), &single); err == nil && single.Name != "" {
 		if isValidTool(single.Name, validTools) {
-			return []ToolCall{{
+			return []llm.ToolCall{{
 				Function: struct {
 					Name      string         `json:"name"`
 					Arguments map[string]any `json:"arguments"`
@@ -489,7 +503,7 @@ func parseTextToolCalls(content string, validTools []string) []ToolCall {
 				break
 			}
 			if tc.Name != "" && isValidTool(tc.Name, validTools) {
-				result = append(result, ToolCall{
+				result = append(result, llm.ToolCall{
 					Function: struct {
 						Name      string         `json:"name"`
 						Arguments map[string]any `json:"arguments"`
@@ -536,7 +550,7 @@ func parseTextToolCalls(content string, validTools []string) []ToolCall {
 
 			var args map[string]any
 			if err := json.Unmarshal([]byte(argsJSON), &args); err == nil {
-				return []ToolCall{{
+				return []llm.ToolCall{{
 					Function: struct {
 						Name      string         `json:"name"`
 						Arguments map[string]any `json:"arguments"`
@@ -587,7 +601,7 @@ func (c *OllamaClient) Ping(ctx context.Context) error {
 }
 
 // ListModels returns available models.
-func (c *OllamaClient) ListModels(ctx context.Context) ([]string, error) {
+func (c *OllamaClient) ListModelInfos(ctx context.Context) ([]OllamaModelInfo, error) {
 	httpReq, err := http.NewRequestWithContext(ctx, "GET", c.baseURL+"/api/tags", nil)
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
@@ -599,17 +613,29 @@ func (c *OllamaClient) ListModels(ctx context.Context) ([]string, error) {
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != http.StatusOK {
+		errBody := httpkit.ReadErrorBody(resp.Body, 4096)
+		return nil, fmt.Errorf("API error %d: %s", resp.StatusCode, errBody)
+	}
+
 	var result struct {
-		Models []struct {
-			Name string `json:"name"`
-		} `json:"models"`
+		Models []OllamaModelInfo `json:"models"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 
-	names := make([]string, len(result.Models))
-	for i, m := range result.Models {
+	return result.Models, nil
+}
+
+// ListModels returns available model names.
+func (c *OllamaClient) ListModels(ctx context.Context) ([]string, error) {
+	models, err := c.ListModelInfos(ctx)
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, len(models))
+	for i, m := range models {
 		names[i] = m.Name
 	}
 	return names, nil

@@ -391,8 +391,17 @@ func (a *App) initChannels(s *newState) error {
 	// --- Usage recording ---
 	// Wire persistent token usage recording into the agent loop and
 	// register the cost_summary tool so the agent can query its own spend.
-	a.loop.SetUsageRecorder(a.usageStore, a.cfg.Pricing)
+	a.loop.SetUsageRecorder(a.usageStore, a.cfg.Pricing, a.modelCatalog)
 	a.loop.Tools().SetUsageStore(a.usageStore)
+	a.loop.Tools().ConfigureModelRegistryTools(tools.ModelRegistryToolDeps{
+		Registry:                a.modelRegistry,
+		Router:                  a.rtr,
+		SyncRouter:              a.syncRouterConfig,
+		PersistDeploymentPolicy: a.persistModelRegistryPolicy,
+		DeleteDeploymentPolicy:  a.deletePersistedModelRegistryPolicy,
+		PersistResourcePolicy:   a.persistModelRegistryResourcePolicy,
+		DeleteResourcePolicy:    a.deletePersistedModelRegistryResourcePolicy,
+	})
 
 	// --- Log index query ---
 	// Expose the structured log index so the agent can query its own
@@ -480,7 +489,7 @@ func (a *App) initChannels(s *newState) error {
 			MaxTranscriptChars: a.cfg.Media.MaxTranscriptChars,
 			WhisperModel:       a.cfg.Media.WhisperModel,
 			TranscriptDir:      a.cfg.Media.TranscriptDir,
-			OllamaURL:          a.cfg.Models.OllamaURL,
+			OllamaURL:          a.modelCatalog.PrimaryOllamaURL(),
 		}, a.logger)
 
 		// Wire up LLM summarization for map-reduce transcript processing.

@@ -18,6 +18,8 @@ import (
 func (a *App) initAgentLoop(s *newState) error {
 	cfg := a.cfg
 	logger := a.logger
+	defaultModel := a.modelCatalog.DefaultModel
+	recoveryModel := a.modelCatalog.RecoveryModel
 
 	// --- Periodic reflection ---
 	// Register the self-reflection task if it doesn't already exist.
@@ -25,11 +27,15 @@ func (a *App) initAgentLoop(s *newState) error {
 	// Uses a cloud model (Sonnet) for higher-quality reflection output.
 	if cfg.Workspace.Path != "" {
 		reflectionInterval := 24 * time.Hour
+		reflectionModel := "claude-sonnet-4-20250514"
+		if resolved, err := a.modelCatalog.ResolveModelRef(reflectionModel); err == nil {
+			reflectionModel = resolved
+		}
 		reflectionPayload := scheduler.Payload{
 			Kind: scheduler.PayloadWake,
 			Data: map[string]any{
 				"message":       "periodic_reflection",
-				"model":         "claude-sonnet-4-20250514",
+				"model":         reflectionModel,
 				"local_only":    "false",
 				"quality_floor": "7",
 			},
@@ -85,17 +91,19 @@ func (a *App) initAgentLoop(s *newState) error {
 	// The core conversation engine. Receives messages, manages context,
 	// invokes tools, and streams responses. All other components plug
 	// into it.
-	defaultContextWindow := cfg.ContextWindowForModel(cfg.Models.Default, 200000)
+	defaultContextWindow := a.modelCatalog.ContextWindowForModel(defaultModel, 200000)
 
-	loop := agent.NewLoop(logger, a.mem, a.compactor, a.rtr, a.ha, a.sched, a.llmClient, cfg.Models.Default, s.parsedTalents, s.personaContent, defaultContextWindow)
+	loop := agent.NewLoop(logger, a.mem, a.compactor, a.rtr, a.ha, a.sched, a.llmClient, defaultModel, s.parsedTalents, s.personaContent, defaultContextWindow)
 	a.loop = loop
 	loop.SetTimezone(cfg.Timezone)
+	loop.UseModelRegistry(a.modelRegistry)
+	loop.UseModelRuntime(a.modelRuntime)
 	if a.contentWriter != nil {
 		loop.SetContentWriter(a.contentWriter)
 	}
-	if cfg.Models.RecoveryModel != "" {
-		loop.SetRecoveryModel(cfg.Models.RecoveryModel)
-		logger.Info("LLM timeout recovery enabled", "recovery_model", cfg.Models.RecoveryModel)
+	if recoveryModel != "" {
+		loop.SetRecoveryModel(recoveryModel)
+		logger.Info("LLM timeout recovery enabled", "recovery_model", recoveryModel)
 	}
 	loop.SetArchiver(a.archiveAdapter)
 	if a.ha != nil {

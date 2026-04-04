@@ -12,6 +12,8 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/events"
 	"github.com/nugget/thane-ai-agent/internal/logging"
 	"github.com/nugget/thane-ai-agent/internal/loop"
+	"github.com/nugget/thane-ai-agent/internal/models"
+	"github.com/nugget/thane-ai-agent/internal/router"
 )
 
 // --- Test Doubles ---
@@ -60,14 +62,20 @@ func newTestServer(reg LoopRegistry, lq LogQuerier, bus *events.Bus) *WebServer 
 
 // stubSystemStatus implements [SystemStatusProvider] for tests.
 type stubSystemStatus struct {
-	health  map[string]ServiceHealth
-	uptime  time.Duration
-	version map[string]string
+	health        map[string]ServiceHealth
+	uptime        time.Duration
+	version       map[string]string
+	modelRegistry *models.RegistrySnapshot
+	routerStats   *router.Stats
 }
 
 func (s *stubSystemStatus) Health() map[string]ServiceHealth { return s.health }
 func (s *stubSystemStatus) Uptime() time.Duration            { return s.uptime }
 func (s *stubSystemStatus) Version() map[string]string       { return s.version }
+func (s *stubSystemStatus) ModelRegistry() *models.RegistrySnapshot {
+	return s.modelRegistry
+}
+func (s *stubSystemStatus) RouterStats() *router.Stats { return s.routerStats }
 
 // --- Tests ---
 
@@ -316,6 +324,23 @@ func TestHandleSystem_Healthy(t *testing.T) {
 		},
 		uptime:  3*time.Hour + 42*time.Minute,
 		version: map[string]string{"version": "v0.1.0", "git_commit": "abc1234"},
+		modelRegistry: &models.RegistrySnapshot{
+			Generation:   2,
+			DefaultModel: "spark/gpt-oss:20b",
+			Resources: []models.RegistryResourceSnapshot{
+				{ID: "spark", Provider: "ollama", DiscoveredModels: 14},
+			},
+			Deployments: []models.RegistryDeploymentSnapshot{
+				{ID: "spark/gpt-oss:20b", Model: "gpt-oss:20b", Resource: "spark", Source: models.DeploymentSourceConfig, Routable: true},
+				{ID: "spark/qwen3:8b", Model: "qwen3:8b", Resource: "spark", Source: models.DeploymentSourceDiscovered, Routable: false},
+			},
+		},
+		routerStats: &router.Stats{
+			TotalRequests: 3,
+			DeploymentStats: map[string]router.DeploymentStats{
+				"spark/gpt-oss:20b": {Provider: "ollama", Resource: "spark", UpstreamModel: "gpt-oss:20b", Requests: 3, Successes: 3, AvgLatencyMs: 420, AvgTokensUsed: 1800},
+			},
+		},
 	}
 
 	srv := NewWebServer(Config{
@@ -352,6 +377,24 @@ func TestHandleSystem_Healthy(t *testing.T) {
 	}
 	if len(health) != 2 {
 		t.Errorf("got %d services, want 2", len(health))
+	}
+	registry, ok := body["model_registry"].(map[string]any)
+	if !ok {
+		t.Fatal("model_registry field missing or not a map")
+	}
+	if registry["default_model"] != "spark/gpt-oss:20b" {
+		t.Errorf("default_model = %v, want spark/gpt-oss:20b", registry["default_model"])
+	}
+	deployments, ok := registry["deployments"].([]any)
+	if !ok || len(deployments) != 2 {
+		t.Fatalf("deployments = %T len=%d, want 2 entries", registry["deployments"], len(deployments))
+	}
+	routerStats, ok := body["router_stats"].(map[string]any)
+	if !ok {
+		t.Fatal("router_stats field missing or not a map")
+	}
+	if routerStats["total_requests"] != float64(3) {
+		t.Errorf("total_requests = %v, want 3", routerStats["total_requests"])
 	}
 }
 

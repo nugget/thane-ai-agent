@@ -46,8 +46,10 @@ type ChatResponse struct {
 	Done      bool
 
 	// Token usage (provider-neutral)
-	InputTokens  int
-	OutputTokens int
+	InputTokens              int
+	OutputTokens             int
+	CacheCreationInputTokens int
+	CacheReadInputTokens     int
 
 	// Timing (populated when available)
 	TotalDuration time.Duration

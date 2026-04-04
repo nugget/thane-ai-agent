@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/events"
 	"github.com/nugget/thane-ai-agent/internal/logging"
 	"github.com/nugget/thane-ai-agent/internal/memory"
+	"github.com/nugget/thane-ai-agent/internal/models"
 	"github.com/nugget/thane-ai-agent/internal/router"
 	"github.com/nugget/thane-ai-agent/internal/usage"
 )
@@ -60,22 +62,28 @@ type TokenObserver interface {
 
 // Server is the HTTP API server.
 type Server struct {
-	address         string
-	port            int
-	loop            *agent.Loop
-	router          *router.Router
-	checkpointer    *checkpoint.Checkpointer
-	memoryStore     *memory.SQLiteStore
-	archiveStore    *memory.ArchiveStore
-	healthDeps      HealthStatusFunc
-	tokenObserver   TokenObserver
-	eventBus        *events.Bus
-	owuTracker      *OWUTracker
-	webServer       WebServerRegistrar
-	platformHandler http.Handler
-	logger          *slog.Logger
-	server          *http.Server
-	stats           *SessionStats
+	address                            string
+	port                               int
+	loop                               *agent.Loop
+	router                             *router.Router
+	checkpointer                       *checkpoint.Checkpointer
+	memoryStore                        *memory.SQLiteStore
+	archiveStore                       *memory.ArchiveStore
+	healthDeps                         HealthStatusFunc
+	tokenObserver                      TokenObserver
+	eventBus                           *events.Bus
+	owuTracker                         *OWUTracker
+	webServer                          WebServerRegistrar
+	platformHandler                    http.Handler
+	modelRegistry                      *models.Registry
+	usageStore                         *usage.Store
+	persistModelRegistryPolicy         func(string, models.DeploymentPolicy) error
+	deleteModelRegistryPolicy          func(string) error
+	persistModelRegistryResourcePolicy func(string, models.ResourcePolicy) error
+	deleteModelRegistryResourcePolicy  func(string) error
+	logger                             *slog.Logger
+	server                             *http.Server
+	stats                              *SessionStats
 }
 
 // SetOWUTracker configures the Open WebUI loop tracker for dashboard visibility.
@@ -136,27 +144,40 @@ func (s *Server) LastRequest() time.Time {
 
 // SessionStats tracks token usage and cost for the current session.
 type SessionStats struct {
-	TotalInputTokens  int64     `json:"total_input_tokens"`
-	TotalOutputTokens int64     `json:"total_output_tokens"`
-	TotalRequests     int64     `json:"total_requests"`
-	EstimatedCostUSD  float64   `json:"estimated_cost_usd"`
-	ReportedBalance   float64   `json:"reported_balance_usd,omitempty"`
-	BalanceSetAt      string    `json:"balance_set_at,omitempty"`
-	LastRequestAt     time.Time `json:"-"` // Used by MQTT publisher, not exposed in JSON.
-	pricing           map[string]config.PricingEntry
-	mu                sync.Mutex
+	TotalInputTokens              int64     `json:"total_input_tokens"`
+	TotalOutputTokens             int64     `json:"total_output_tokens"`
+	TotalCacheCreationInputTokens int64     `json:"total_cache_creation_input_tokens"`
+	TotalCacheReadInputTokens     int64     `json:"total_cache_read_input_tokens"`
+	TotalRequests                 int64     `json:"total_requests"`
+	EstimatedCostUSD              float64   `json:"estimated_cost_usd"`
+	ReportedBalance               float64   `json:"reported_balance_usd,omitempty"`
+	BalanceSetAt                  string    `json:"balance_set_at,omitempty"`
+	LastRequestAt                 time.Time `json:"-"` // Used by MQTT publisher, not exposed in JSON.
+	ByModel                       map[string]usage.Summary
+	ByUpstreamModel               map[string]usage.Summary
+	ByProvider                    map[string]usage.Summary
+	ByResource                    map[string]usage.Summary
+	pricing                       map[string]config.PricingEntry
+	mu                            sync.Mutex
 }
 
 // Record accumulates token usage and cost for a model. Cost is computed
 // from the config-driven pricing table.
-func (s *SessionStats) Record(model string, inputTokens, outputTokens int) {
+func (s *SessionStats) Record(identity usage.ModelIdentity, inputTokens, outputTokens, cacheCreationInputTokens, cacheReadInputTokens int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.TotalInputTokens += int64(inputTokens)
 	s.TotalOutputTokens += int64(outputTokens)
+	s.TotalCacheCreationInputTokens += int64(cacheCreationInputTokens)
+	s.TotalCacheReadInputTokens += int64(cacheReadInputTokens)
 	s.TotalRequests++
 	s.LastRequestAt = time.Now()
-	s.EstimatedCostUSD += usage.ComputeCost(model, inputTokens, outputTokens, s.pricing)
+	cost := usage.ComputeDetailedCostForIdentity(identity, inputTokens, cacheCreationInputTokens, cacheReadInputTokens, outputTokens, s.pricing)
+	s.EstimatedCostUSD += cost
+	recordSessionUsageSummary(s.ByModel, identity.Model, inputTokens, outputTokens, cacheCreationInputTokens, cacheReadInputTokens, cost)
+	recordSessionUsageSummary(s.ByUpstreamModel, identity.UpstreamModel, inputTokens, outputTokens, cacheCreationInputTokens, cacheReadInputTokens, cost)
+	recordSessionUsageSummary(s.ByProvider, identity.Provider, inputTokens, outputTokens, cacheCreationInputTokens, cacheReadInputTokens, cost)
+	recordSessionUsageSummary(s.ByResource, identity.Resource, inputTokens, outputTokens, cacheCreationInputTokens, cacheReadInputTokens, cost)
 }
 
 // LastRequest returns when the most recent LLM request completed.
@@ -170,8 +191,13 @@ func (s *SessionStats) LastRequest() time.Time {
 // recordUsage records token usage in session stats and notifies the
 // token observer (if set) so external consumers (e.g., the MQTT daily
 // token accumulator) are updated.
-func (s *Server) recordUsage(model string, inputTokens, outputTokens int) {
-	s.stats.Record(model, inputTokens, outputTokens)
+func (s *Server) recordUsage(model string, inputTokens, outputTokens, cacheCreationInputTokens, cacheReadInputTokens int) {
+	var cat *models.Catalog
+	if s.modelRegistry != nil {
+		cat = s.modelRegistry.Catalog()
+	}
+	identity := usage.ResolveModelIdentity(model, cat)
+	s.stats.Record(identity, inputTokens, outputTokens, cacheCreationInputTokens, cacheReadInputTokens)
 	if s.tokenObserver != nil {
 		s.tokenObserver.OnTokens(inputTokens, outputTokens)
 	}
@@ -186,41 +212,113 @@ func (s *SessionStats) SetBalance(balance float64) {
 
 // SessionStatsSnapshot is a copy-safe snapshot of session stats.
 type SessionStatsSnapshot struct {
-	TotalInputTokens  int64             `json:"total_input_tokens"`
-	TotalOutputTokens int64             `json:"total_output_tokens"`
-	TotalRequests     int64             `json:"total_requests"`
-	EstimatedCostUSD  float64           `json:"estimated_cost_usd"`
-	ReportedBalance   float64           `json:"reported_balance_usd,omitempty"`
-	BalanceSetAt      string            `json:"balance_set_at,omitempty"`
-	ContextTokens     int               `json:"context_tokens"`
-	ContextWindow     int               `json:"context_window"`
-	MessageCount      int               `json:"message_count"`
-	Build             map[string]string `json:"build,omitempty"`
+	TotalInputTokens              int64                    `json:"total_input_tokens"`
+	TotalOutputTokens             int64                    `json:"total_output_tokens"`
+	TotalCacheCreationInputTokens int64                    `json:"total_cache_creation_input_tokens"`
+	TotalCacheReadInputTokens     int64                    `json:"total_cache_read_input_tokens"`
+	TotalRequests                 int64                    `json:"total_requests"`
+	EstimatedCostUSD              float64                  `json:"estimated_cost_usd"`
+	ReportedBalance               float64                  `json:"reported_balance_usd,omitempty"`
+	BalanceSetAt                  string                   `json:"balance_set_at,omitempty"`
+	ByModel                       map[string]usage.Summary `json:"by_model,omitempty"`
+	ByUpstreamModel               map[string]usage.Summary `json:"by_upstream_model,omitempty"`
+	ByProvider                    map[string]usage.Summary `json:"by_provider,omitempty"`
+	ByResource                    map[string]usage.Summary `json:"by_resource,omitempty"`
+	ContextTokens                 int                      `json:"context_tokens"`
+	ContextWindow                 int                      `json:"context_window"`
+	MessageCount                  int                      `json:"message_count"`
+	Build                         map[string]string        `json:"build,omitempty"`
 }
 
 func (s *SessionStats) Snapshot() SessionStatsSnapshot {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return SessionStatsSnapshot{
-		TotalInputTokens:  s.TotalInputTokens,
-		TotalOutputTokens: s.TotalOutputTokens,
-		TotalRequests:     s.TotalRequests,
-		EstimatedCostUSD:  s.EstimatedCostUSD,
-		ReportedBalance:   s.ReportedBalance,
-		BalanceSetAt:      s.BalanceSetAt,
+		TotalInputTokens:              s.TotalInputTokens,
+		TotalOutputTokens:             s.TotalOutputTokens,
+		TotalCacheCreationInputTokens: s.TotalCacheCreationInputTokens,
+		TotalCacheReadInputTokens:     s.TotalCacheReadInputTokens,
+		TotalRequests:                 s.TotalRequests,
+		EstimatedCostUSD:              s.EstimatedCostUSD,
+		ReportedBalance:               s.ReportedBalance,
+		BalanceSetAt:                  s.BalanceSetAt,
+		ByModel:                       cloneSessionUsageMap(s.ByModel),
+		ByUpstreamModel:               cloneSessionUsageMap(s.ByUpstreamModel),
+		ByProvider:                    cloneSessionUsageMap(s.ByProvider),
+		ByResource:                    cloneSessionUsageMap(s.ByResource),
 	}
+}
+
+type usageSummaryResponse struct {
+	Start   string                 `json:"start"`
+	End     string                 `json:"end"`
+	Hours   int                    `json:"hours"`
+	GroupBy string                 `json:"group_by,omitempty"`
+	Summary *usage.Summary         `json:"summary"`
+	Groups  []usage.GroupedSummary `json:"groups,omitempty"`
+}
+
+func recordSessionUsageSummary(dst map[string]usage.Summary, key string, inputTokens, outputTokens, cacheCreationInputTokens, cacheReadInputTokens int, cost float64) {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return
+	}
+	sum := dst[key]
+	sum.TotalRecords++
+	sum.TotalInputTokens += int64(inputTokens)
+	sum.TotalOutputTokens += int64(outputTokens)
+	sum.TotalCacheCreationInputTokens += int64(cacheCreationInputTokens)
+	sum.TotalCacheReadInputTokens += int64(cacheReadInputTokens)
+	sum.TotalCostUSD += cost
+	dst[key] = sum
+}
+
+func cloneSessionUsageMap(src map[string]usage.Summary) map[string]usage.Summary {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := make(map[string]usage.Summary, len(src))
+	for key, sum := range src {
+		dst[key] = sum
+	}
+	return dst
 }
 
 // NewServer creates a new API server. The pricing map drives cost
 // estimation in session stats; pass nil for zero-cost defaults.
-func NewServer(address string, port int, loop *agent.Loop, rtr *router.Router, pricing map[string]config.PricingEntry, logger *slog.Logger) *Server {
+func NewServer(
+	address string,
+	port int,
+	loop *agent.Loop,
+	rtr *router.Router,
+	pricing map[string]config.PricingEntry,
+	registry *models.Registry,
+	usageStore *usage.Store,
+	persistPolicy func(string, models.DeploymentPolicy) error,
+	deletePolicy func(string) error,
+	persistResourcePolicy func(string, models.ResourcePolicy) error,
+	deleteResourcePolicy func(string) error,
+	logger *slog.Logger,
+) *Server {
 	return &Server{
-		address: address,
-		port:    port,
-		loop:    loop,
-		router:  rtr,
-		logger:  logger,
-		stats:   &SessionStats{pricing: pricing},
+		address:                            address,
+		port:                               port,
+		loop:                               loop,
+		router:                             rtr,
+		modelRegistry:                      registry,
+		usageStore:                         usageStore,
+		persistModelRegistryPolicy:         persistPolicy,
+		deleteModelRegistryPolicy:          deletePolicy,
+		persistModelRegistryResourcePolicy: persistResourcePolicy,
+		deleteModelRegistryResourcePolicy:  deleteResourcePolicy,
+		logger:                             logger,
+		stats: &SessionStats{
+			pricing:         pricing,
+			ByModel:         make(map[string]usage.Summary),
+			ByUpstreamModel: make(map[string]usage.Summary),
+			ByProvider:      make(map[string]usage.Summary),
+			ByResource:      make(map[string]usage.Summary),
+		},
 	}
 }
 
@@ -259,6 +357,13 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("GET /v1/router/audit", s.handleRouterAudit)
 	mux.HandleFunc("GET /v1/router/explain/{requestId}", s.handleRouterExplain)
 
+	// Model registry endpoints
+	mux.HandleFunc("GET /v1/model-registry", s.handleModelRegistry)
+	mux.HandleFunc("POST /v1/model-registry/policy", s.handleModelRegistryPolicySet)
+	mux.HandleFunc("DELETE /v1/model-registry/policy", s.handleModelRegistryPolicyDelete)
+	mux.HandleFunc("POST /v1/model-registry/resource-policy", s.handleModelRegistryResourcePolicySet)
+	mux.HandleFunc("DELETE /v1/model-registry/resource-policy", s.handleModelRegistryResourcePolicyDelete)
+
 	// Checkpoint endpoints
 	mux.HandleFunc("POST /v1/checkpoint", s.handleCheckpointCreate)
 	mux.HandleFunc("GET /v1/checkpoints", s.handleCheckpointList)
@@ -274,6 +379,7 @@ func (s *Server) Start(ctx context.Context) error {
 
 	// Session stats
 	mux.HandleFunc("GET /v1/session/stats", s.handleSessionStats)
+	mux.HandleFunc("GET /v1/usage/summary", s.handleUsageSummary)
 	mux.HandleFunc("POST /v1/session/balance", s.handleSetBalance)
 	mux.HandleFunc("POST /v1/session/reset", s.handleSessionReset)
 	mux.HandleFunc("POST /v1/session/compact", s.handleSessionCompact)
@@ -389,9 +495,9 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 
 // ChatCompletionRequest is the OpenAI-compatible request format.
 type ChatCompletionRequest struct {
-	Model    string          `json:"model"`
-	Messages []agent.Message `json:"messages"`
-	Stream   bool            `json:"stream,omitempty"`
+	Model    string                         `json:"model"`
+	Messages []chatCompletionRequestMessage `json:"messages"`
+	Stream   bool                           `json:"stream,omitempty"`
 }
 
 // ChatCompletionResponse is the OpenAI-compatible response format.
@@ -425,16 +531,30 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	agentReq := &agent.Request{
-		Messages: req.Messages,
-		Model:    req.Model,
-		Hints: map[string]string{
-			"channel": "api", // Native OpenAI-compatible API
-		},
-	}
-
 	log := s.logger.With("subsystem", logging.SubsystemAPI)
 	ctx := logging.WithLogger(r.Context(), log)
+
+	messages, err := req.AgentMessages()
+	if err != nil {
+		s.errorResponse(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	hints := map[string]string{
+		"channel": "api", // Native OpenAI-compatible API
+	}
+	var openClawCfg *config.OpenClawConfig
+	if s.loop != nil {
+		openClawCfg = s.loop.OpenClawConfig()
+	}
+	model, hints, systemPrompt := normalizeModelSelection(req.Model, hints, premiumQualityFloor(s.router), openClawCfg, log)
+
+	agentReq := &agent.Request{
+		Messages:     messages,
+		Model:        model,
+		Hints:        hints,
+		SystemPrompt: systemPrompt,
+	}
 
 	if req.Stream {
 		s.handleStreamingCompletion(w, r.WithContext(ctx), agentReq)
@@ -445,12 +565,13 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	resp, err := s.loop.Run(ctx, agentReq, nil)
 	if err != nil {
 		log.Error("agent loop failed", "error", err)
-		s.errorResponse(w, http.StatusInternalServerError, "agent error")
+		code, message := agentErrorDetails(err)
+		s.errorResponse(w, code, message)
 		return
 	}
 
 	// Record usage stats
-	s.recordUsage(resp.Model, resp.InputTokens, resp.OutputTokens)
+	s.recordUsage(resp.Model, resp.InputTokens, resp.OutputTokens, resp.CacheCreationInputTokens, resp.CacheReadInputTokens)
 
 	// Format as OpenAI response
 	completion := ChatCompletionResponse{
@@ -532,7 +653,7 @@ func (s *Server) handleSimpleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.recordUsage(resp.Model, resp.InputTokens, resp.OutputTokens)
+	s.recordUsage(resp.Model, resp.InputTokens, resp.OutputTokens, resp.CacheCreationInputTokens, resp.CacheReadInputTokens)
 
 	w.Header().Set("Content-Type", "application/json")
 	writeJSON(w, SimpleChatResponse{
@@ -647,7 +768,7 @@ func (s *Server) handleStreamingCompletion(w http.ResponseWriter, r *http.Reques
 	}
 
 	// Record usage stats
-	s.recordUsage(resp.Model, resp.InputTokens, resp.OutputTokens)
+	s.recordUsage(resp.Model, resp.InputTokens, resp.OutputTokens, resp.CacheCreationInputTokens, resp.CacheReadInputTokens)
 
 	// Update model name and send final chunk
 	modelName = resp.Model
@@ -749,6 +870,312 @@ func (s *Server) handleRouterExplain(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	writeJSON(w, decision, s.logger)
+}
+
+type setModelRegistryPolicyRequest struct {
+	Deployment string `json:"deployment"`
+	State      string `json:"state"`
+	Routable   *bool  `json:"routable,omitempty"`
+	Reason     string `json:"reason,omitempty"`
+}
+
+type setModelRegistryResourcePolicyRequest struct {
+	Resource string `json:"resource"`
+	State    string `json:"state"`
+	Reason   string `json:"reason,omitempty"`
+}
+
+type modelRegistryPolicyResponse struct {
+	Status     string                            `json:"status"`
+	Generation int64                             `json:"generation"`
+	Deployment models.RegistryDeploymentSnapshot `json:"deployment"`
+}
+
+type modelRegistryResourcePolicyResponse struct {
+	Status     string                          `json:"status"`
+	Generation int64                           `json:"generation"`
+	Resource   models.RegistryResourceSnapshot `json:"resource"`
+}
+
+func (s *Server) handleModelRegistry(w http.ResponseWriter, r *http.Request) {
+	if s.modelRegistry == nil {
+		s.errorResponse(w, http.StatusServiceUnavailable, "model registry not configured")
+		return
+	}
+
+	snapshot := s.modelRegistry.Snapshot()
+	w.Header().Set("Content-Type", "application/json")
+	writeJSON(w, snapshot, s.logger)
+}
+
+func (s *Server) handleModelRegistryPolicySet(w http.ResponseWriter, r *http.Request) {
+	if s.modelRegistry == nil {
+		s.errorResponse(w, http.StatusServiceUnavailable, "model registry not configured")
+		return
+	}
+
+	var req setModelRegistryPolicyRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.errorResponse(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	req.Deployment = strings.TrimSpace(req.Deployment)
+	if req.Deployment == "" {
+		s.errorResponse(w, http.StatusBadRequest, "deployment is required")
+		return
+	}
+
+	if strings.TrimSpace(req.State) == "" && req.Routable == nil {
+		s.errorResponse(w, http.StatusBadRequest, "state or routable is required")
+		return
+	}
+
+	current := findRegistryDeployment(s.modelRegistry.Snapshot(), req.Deployment)
+	if !current.found {
+		s.errorResponse(w, http.StatusNotFound, (&models.UnknownDeploymentError{Deployment: req.Deployment}).Error())
+		return
+	}
+
+	state := current.snapshot.PolicyState
+	if raw := strings.TrimSpace(req.State); raw != "" {
+		parsed, err := models.ParseDeploymentPolicyState(raw)
+		if err != nil {
+			s.errorResponse(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		state = parsed
+	}
+
+	policy := models.DeploymentPolicy{
+		State:     state,
+		Routable:  req.Routable,
+		Reason:    req.Reason,
+		UpdatedAt: time.Now(),
+	}
+	if s.persistModelRegistryPolicy != nil {
+		if err := s.persistModelRegistryPolicy(req.Deployment, policy); err != nil {
+			s.logger.Error("persist model registry policy failed", "deployment", req.Deployment, "error", err)
+			s.errorResponse(w, http.StatusInternalServerError, "failed to persist model registry policy")
+			return
+		}
+	}
+
+	if err := s.modelRegistry.ApplyDeploymentPolicy(req.Deployment, policy, policy.UpdatedAt); err != nil {
+		if models.IsUnknownDeployment(err) {
+			s.errorResponse(w, http.StatusNotFound, err.Error())
+			return
+		}
+		s.errorResponse(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if s.router != nil {
+		s.router.UpdateConfig(s.modelRegistry.Catalog().RouterConfig(0))
+	}
+
+	snapshot := s.modelRegistry.Snapshot()
+	deployment := findRegistryDeployment(snapshot, req.Deployment)
+	if !deployment.found {
+		s.errorResponse(w, http.StatusInternalServerError, "deployment policy applied but deployment snapshot is unavailable")
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	writeJSON(w, modelRegistryPolicyResponse{
+		Status:     "ok",
+		Generation: snapshot.Generation,
+		Deployment: deployment.snapshot,
+	}, s.logger)
+}
+
+func (s *Server) handleModelRegistryPolicyDelete(w http.ResponseWriter, r *http.Request) {
+	if s.modelRegistry == nil {
+		s.errorResponse(w, http.StatusServiceUnavailable, "model registry not configured")
+		return
+	}
+
+	id := strings.TrimSpace(r.URL.Query().Get("deployment"))
+	if id == "" {
+		s.errorResponse(w, http.StatusBadRequest, "deployment is required")
+		return
+	}
+
+	if s.deleteModelRegistryPolicy != nil {
+		if err := s.deleteModelRegistryPolicy(id); err != nil {
+			s.logger.Error("delete persisted model registry policy failed", "deployment", id, "error", err)
+			s.errorResponse(w, http.StatusInternalServerError, "failed to delete persisted model registry policy")
+			return
+		}
+	}
+
+	if err := s.modelRegistry.ClearDeploymentPolicy(id, time.Now()); err != nil {
+		if models.IsUnknownDeployment(err) {
+			s.errorResponse(w, http.StatusNotFound, err.Error())
+			return
+		}
+		s.errorResponse(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if s.router != nil {
+		s.router.UpdateConfig(s.modelRegistry.Catalog().RouterConfig(0))
+	}
+
+	snapshot := s.modelRegistry.Snapshot()
+	deployment := findRegistryDeployment(snapshot, id)
+	if !deployment.found {
+		s.errorResponse(w, http.StatusInternalServerError, "deployment policy cleared but deployment snapshot is unavailable")
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	writeJSON(w, modelRegistryPolicyResponse{
+		Status:     "ok",
+		Generation: snapshot.Generation,
+		Deployment: deployment.snapshot,
+	}, s.logger)
+}
+
+func (s *Server) handleModelRegistryResourcePolicySet(w http.ResponseWriter, r *http.Request) {
+	if s.modelRegistry == nil {
+		s.errorResponse(w, http.StatusServiceUnavailable, "model registry not configured")
+		return
+	}
+
+	var req setModelRegistryResourcePolicyRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.errorResponse(w, http.StatusBadRequest, "invalid JSON")
+		return
+	}
+	req.Resource = strings.TrimSpace(req.Resource)
+	if req.Resource == "" {
+		s.errorResponse(w, http.StatusBadRequest, "resource is required")
+		return
+	}
+
+	parsed, err := models.ParseDeploymentPolicyState(req.State)
+	if err != nil {
+		s.errorResponse(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	policy := models.ResourcePolicy{
+		State:     parsed,
+		Reason:    req.Reason,
+		UpdatedAt: time.Now(),
+	}
+	if s.persistModelRegistryResourcePolicy != nil {
+		if err := s.persistModelRegistryResourcePolicy(req.Resource, policy); err != nil {
+			s.logger.Error("persist model registry resource policy failed", "resource", req.Resource, "error", err)
+			s.errorResponse(w, http.StatusInternalServerError, "failed to persist model registry resource policy")
+			return
+		}
+	}
+
+	if err := s.modelRegistry.ApplyResourcePolicy(req.Resource, policy, policy.UpdatedAt); err != nil {
+		if models.IsUnknownResource(err) {
+			s.errorResponse(w, http.StatusNotFound, err.Error())
+			return
+		}
+		s.errorResponse(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if s.router != nil {
+		s.router.UpdateConfig(s.modelRegistry.Catalog().RouterConfig(0))
+	}
+
+	snapshot := s.modelRegistry.Snapshot()
+	resource := findRegistryResource(snapshot, req.Resource)
+	if !resource.found {
+		s.errorResponse(w, http.StatusInternalServerError, "resource policy applied but resource snapshot is unavailable")
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	writeJSON(w, modelRegistryResourcePolicyResponse{
+		Status:     "ok",
+		Generation: snapshot.Generation,
+		Resource:   resource.snapshot,
+	}, s.logger)
+}
+
+func (s *Server) handleModelRegistryResourcePolicyDelete(w http.ResponseWriter, r *http.Request) {
+	if s.modelRegistry == nil {
+		s.errorResponse(w, http.StatusServiceUnavailable, "model registry not configured")
+		return
+	}
+
+	id := strings.TrimSpace(r.URL.Query().Get("resource"))
+	if id == "" {
+		s.errorResponse(w, http.StatusBadRequest, "resource is required")
+		return
+	}
+
+	if s.deleteModelRegistryResourcePolicy != nil {
+		if err := s.deleteModelRegistryResourcePolicy(id); err != nil {
+			s.logger.Error("delete persisted model registry resource policy failed", "resource", id, "error", err)
+			s.errorResponse(w, http.StatusInternalServerError, "failed to delete persisted model registry resource policy")
+			return
+		}
+	}
+
+	if err := s.modelRegistry.ClearResourcePolicy(id, time.Now()); err != nil {
+		if models.IsUnknownResource(err) {
+			s.errorResponse(w, http.StatusNotFound, err.Error())
+			return
+		}
+		s.errorResponse(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if s.router != nil {
+		s.router.UpdateConfig(s.modelRegistry.Catalog().RouterConfig(0))
+	}
+
+	snapshot := s.modelRegistry.Snapshot()
+	resource := findRegistryResource(snapshot, id)
+	if !resource.found {
+		s.errorResponse(w, http.StatusInternalServerError, "resource policy cleared but resource snapshot is unavailable")
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	writeJSON(w, modelRegistryResourcePolicyResponse{
+		Status:     "ok",
+		Generation: snapshot.Generation,
+		Resource:   resource.snapshot,
+	}, s.logger)
+}
+
+type registryDeploymentLookup struct {
+	snapshot models.RegistryDeploymentSnapshot
+	found    bool
+}
+
+type registryResourceLookup struct {
+	snapshot models.RegistryResourceSnapshot
+	found    bool
+}
+
+func findRegistryDeployment(snapshot *models.RegistrySnapshot, id string) registryDeploymentLookup {
+	if snapshot == nil {
+		return registryDeploymentLookup{}
+	}
+	for _, dep := range snapshot.Deployments {
+		if dep.ID == id {
+			return registryDeploymentLookup{snapshot: dep, found: true}
+		}
+	}
+	return registryDeploymentLookup{}
+}
+
+func findRegistryResource(snapshot *models.RegistrySnapshot, id string) registryResourceLookup {
+	if snapshot == nil {
+		return registryResourceLookup{}
+	}
+	for _, res := range snapshot.Resources {
+		if res.ID == id {
+			return registryResourceLookup{snapshot: res, found: true}
+		}
+	}
+	return registryResourceLookup{}
 }
 
 // Checkpoint handlers
@@ -991,6 +1418,54 @@ func (s *Server) handleToolStats(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleSessionStats(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	writeJSON(w, s.DashboardSnapshot(), s.logger)
+}
+
+func (s *Server) handleUsageSummary(w http.ResponseWriter, r *http.Request) {
+	if s.usageStore == nil {
+		s.errorResponse(w, http.StatusServiceUnavailable, "usage store not configured")
+		return
+	}
+
+	hours := 24
+	if raw := strings.TrimSpace(r.URL.Query().Get("hours")); raw != "" {
+		parsed, err := strconv.Atoi(raw)
+		if err != nil || parsed <= 0 {
+			s.errorResponse(w, http.StatusBadRequest, "hours must be a positive integer")
+			return
+		}
+		hours = parsed
+	}
+
+	end := time.Now().UTC().Truncate(time.Second)
+	start := end.Add(-time.Duration(hours) * time.Hour)
+	queryEnd := end.Add(1 * time.Second)
+
+	summary, err := s.usageStore.Summary(start, queryEnd)
+	if err != nil {
+		s.logger.Error("usage summary query failed", "error", err, "hours", hours)
+		s.errorResponse(w, http.StatusInternalServerError, "usage summary query failed")
+		return
+	}
+
+	resp := usageSummaryResponse{
+		Start:   start.UTC().Format(time.RFC3339),
+		End:     end.UTC().Format(time.RFC3339),
+		Hours:   hours,
+		Summary: summary,
+	}
+
+	if groupBy := strings.TrimSpace(r.URL.Query().Get("group_by")); groupBy != "" {
+		grouped, err := s.usageStore.SummaryByGroup(groupBy, start, queryEnd)
+		if err != nil {
+			s.errorResponse(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		resp.GroupBy = groupBy
+		resp.Groups = grouped
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	writeJSON(w, resp, s.logger)
 }
 
 func (s *Server) handleSetBalance(w http.ResponseWriter, r *http.Request) {

@@ -18,7 +18,7 @@ func (r *Registry) registerCostSummary() {
 
 	r.Register(&Tool{
 		Name:        "cost_summary",
-		Description: "Query your own token usage and API costs. Returns totals and optional breakdown by model, role, or task. Use to understand spending patterns and resource consumption.",
+		Description: "Query your own token usage and API costs. Returns totals and optional breakdown by deployment, upstream model, provider, resource, role, or task. Use to understand spending patterns and resource consumption.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -29,8 +29,8 @@ func (r *Registry) registerCostSummary() {
 				},
 				"group_by": map[string]any{
 					"type":        "string",
-					"enum":        []string{"model", "role", "task"},
-					"description": "Optional: group results by model, role, or task name.",
+					"enum":        []string{"deployment", "model", "upstream_model", "provider", "resource", "role", "task"},
+					"description": "Optional: group results by deployment ID (deployment or model), upstream model, provider, resource, role, or task name.",
 				},
 			},
 			"required": []string{"period"},
@@ -51,6 +51,12 @@ func (r *Registry) registerCostSummary() {
 			sb.WriteString(fmt.Sprintf("  Total requests: %d\n", summary.TotalRecords))
 			sb.WriteString(fmt.Sprintf("  Input tokens: %s\n", formatTokenCount(summary.TotalInputTokens)))
 			sb.WriteString(fmt.Sprintf("  Output tokens: %s\n", formatTokenCount(summary.TotalOutputTokens)))
+			if summary.TotalCacheCreationInputTokens > 0 {
+				sb.WriteString(fmt.Sprintf("  Cache write tokens: %s\n", formatTokenCount(summary.TotalCacheCreationInputTokens)))
+			}
+			if summary.TotalCacheReadInputTokens > 0 {
+				sb.WriteString(fmt.Sprintf("  Cache read tokens: %s\n", formatTokenCount(summary.TotalCacheReadInputTokens)))
+			}
 			sb.WriteString(fmt.Sprintf("  Estimated cost: $%.4f\n", summary.TotalCostUSD))
 
 			if groupBy != "" {
@@ -70,6 +76,12 @@ func (r *Registry) registerCostSummary() {
 							formatTokenCount(gs.Summary.TotalInputTokens),
 							formatTokenCount(gs.Summary.TotalOutputTokens),
 						))
+						if gs.Summary.TotalCacheCreationInputTokens > 0 || gs.Summary.TotalCacheReadInputTokens > 0 {
+							sb.WriteString(fmt.Sprintf("    cache: %s write / %s read\n",
+								formatTokenCount(gs.Summary.TotalCacheCreationInputTokens),
+								formatTokenCount(gs.Summary.TotalCacheReadInputTokens),
+							))
+						}
 					}
 				}
 			}
@@ -82,18 +94,31 @@ func (r *Registry) registerCostSummary() {
 // queryGrouped dispatches the grouped summary query based on the
 // group_by parameter. Results are ordered by cost descending.
 func queryGrouped(store *usage.Store, groupBy string, start, end time.Time) ([]usage.GroupedSummary, string, error) {
+	groupBy = strings.ToLower(strings.TrimSpace(groupBy))
+	if groupBy == "" {
+		return nil, "", nil
+	}
 	switch groupBy {
-	case "model":
-		result, err := store.SummaryByModel(start, end)
-		return result, "Model", err
+	case "deployment", "model":
+		result, err := store.SummaryByGroup(groupBy, start, end)
+		return result, "Deployment", err
+	case "upstream_model":
+		result, err := store.SummaryByGroup(groupBy, start, end)
+		return result, "Upstream Model", err
+	case "provider":
+		result, err := store.SummaryByGroup(groupBy, start, end)
+		return result, "Provider", err
+	case "resource":
+		result, err := store.SummaryByGroup(groupBy, start, end)
+		return result, "Resource", err
 	case "role":
-		result, err := store.SummaryByRole(start, end)
+		result, err := store.SummaryByGroup(groupBy, start, end)
 		return result, "Role", err
 	case "task":
-		result, err := store.SummaryByTask(start, end)
+		result, err := store.SummaryByGroup(groupBy, start, end)
 		return result, "Task", err
 	default:
-		return nil, "", nil
+		return nil, "", fmt.Errorf("unsupported group_by %q; use one of: deployment, model, upstream_model, provider, resource, role, task", groupBy)
 	}
 }
 

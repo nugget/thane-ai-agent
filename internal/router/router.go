@@ -4,6 +4,7 @@ package router
 import (
 	"context"
 	"log/slog"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -12,12 +13,14 @@ import (
 
 // Request contains the information needed for routing decisions.
 type Request struct {
-	Query       string            // The user's input
-	ContextSize int               // Estimated tokens of context (talents, history)
-	NeedsTools  bool              // Whether tool calling is required
-	ToolCount   int               // Number of tools available
-	Priority    Priority          // Latency requirements
-	Hints       map[string]string // Caller-supplied routing hints (see HintXxx constants)
+	Query          string            // The user's input
+	ContextSize    int               // Estimated tokens of context (talents, history)
+	NeedsTools     bool              // Whether tool calling is required
+	NeedsStreaming bool              // Whether a streaming response is required
+	NeedsImages    bool              // Whether image/multimodal input is required
+	ToolCount      int               // Number of tools available
+	Priority       Priority          // Latency requirements
+	Hints          map[string]string // Caller-supplied routing hints (see HintXxx constants)
 }
 
 // Hint keys for routing decisions. Callers set these to influence model selection.
@@ -62,18 +65,25 @@ type Decision struct {
 	QueryLength    int        `json:"query_length"`
 	ContextSize    int        `json:"context_size"`
 	NeedsTools     bool       `json:"needs_tools"`
+	NeedsStreaming bool       `json:"needs_streaming,omitempty"`
+	NeedsImages    bool       `json:"needs_images,omitempty"`
 	Priority       string     `json:"priority"`
 	DetectedIntent string     `json:"detected_intent,omitempty"`
 	Complexity     Complexity `json:"complexity"`
 
 	// Decision process
-	RulesEvaluated []string       `json:"rules_evaluated"`
-	RulesMatched   []string       `json:"rules_matched"`
-	Scores         map[string]int `json:"scores,omitempty"`
+	RulesEvaluated []string            `json:"rules_evaluated"`
+	RulesMatched   []string            `json:"rules_matched"`
+	RejectedModels map[string][]string `json:"rejected_models,omitempty"`
+	Scores         map[string]int      `json:"scores,omitempty"`
+	NoEligible     bool                `json:"no_eligible,omitempty"`
 
 	// Outcome
-	ModelSelected string `json:"model_selected"`
-	Reasoning     string `json:"reasoning"`
+	ModelSelected         string `json:"model_selected"`
+	UpstreamModelSelected string `json:"upstream_model_selected,omitempty"`
+	ProviderSelected      string `json:"provider_selected,omitempty"`
+	ResourceSelected      string `json:"resource_selected,omitempty"`
+	Reasoning             string `json:"reasoning"`
 
 	// Post-execution (filled in later)
 	LatencyMs  int64 `json:"latency_ms,omitempty"`
@@ -106,14 +116,20 @@ func (c Complexity) String() string {
 
 // Model represents an available model with its capabilities.
 type Model struct {
-	Name          string     // Model identifier (e.g., "qwen3:4b")
-	Provider      string     // "ollama" or "anthropic" etc
-	SupportsTools bool       // Can do tool calling
-	ContextWindow int        // Max tokens
-	Speed         int        // Relative speed (1-10, 10=fastest)
-	Quality       int        // Relative quality (1-10, 10=best)
-	CostTier      int        // 0=free/local, 1=cheap, 2=moderate, 3=expensive
-	MinComplexity Complexity // Don't use for simpler than this
+	Name                  string     // Route/deployment identifier (e.g., "qwen3:4b" or "spark/qwen3:32b")
+	UpstreamModel         string     // Provider-native model name (e.g., "qwen3:32b")
+	Provider              string     // "ollama" or "anthropic" etc
+	ResourceID            string     // Provider resource identity (e.g., server name)
+	Server                string     // Configured server name when applicable
+	SupportsTools         bool       // Deployment is configured for tool calling
+	ProviderSupportsTools bool       // Underlying provider supports tool calling
+	SupportsStreaming     bool       // Deployment/provider can stream
+	SupportsImages        bool       // Deployment/provider accepts image input
+	ContextWindow         int        // Max tokens
+	Speed                 int        // Relative speed (1-10, 10=fastest)
+	Quality               int        // Relative quality (1-10, 10=best)
+	CostTier              int        // 0=free/local, 1=cheap, 2=moderate, 3=expensive
+	MinComplexity         Complexity // Don't use for simpler than this
 }
 
 // Config holds router configuration.
@@ -129,17 +145,61 @@ type Router struct {
 	logger *slog.Logger
 	config Config
 
-	mu       sync.RWMutex
-	auditLog []Decision
-	stats    Stats
+	mu                    sync.RWMutex
+	auditLog              []Decision
+	stats                 Stats
+	experienceVersion     int64
+	resourceCooldownUntil map[string]time.Time
+}
+
+func cloneModels(in []Model) []Model {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]Model, len(in))
+	copy(out, in)
+	return out
+}
+
+func (r *Router) configSnapshot() Config {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	cfg := r.config
+	cfg.Models = cloneModels(r.config.Models)
+	return cfg
 }
 
 // Stats tracks routing statistics.
 type Stats struct {
-	TotalRequests    int64            `json:"total_requests"`
-	ModelCounts      map[string]int64 `json:"model_counts"`
-	AvgLatencyMs     map[string]int64 `json:"avg_latency_ms"`
-	ComplexityCounts map[string]int64 `json:"complexity_counts"`
+	TotalRequests    int64                      `json:"total_requests"`
+	ModelCounts      map[string]int64           `json:"model_counts"`
+	AvgLatencyMs     map[string]int64           `json:"avg_latency_ms"`
+	ComplexityCounts map[string]int64           `json:"complexity_counts"`
+	SuccessCount     int64                      `json:"success_count"`
+	FailureCount     int64                      `json:"failure_count"`
+	ProviderCounts   map[string]int64           `json:"provider_counts,omitempty"`
+	ResourceCounts   map[string]int64           `json:"resource_counts,omitempty"`
+	ResourceHealth   map[string]ResourceHealth  `json:"resource_health,omitempty"`
+	DeploymentStats  map[string]DeploymentStats `json:"deployment_stats,omitempty"`
+}
+
+// DeploymentStats tracks routing and outcome state for one concrete
+// deployment/route target.
+type DeploymentStats struct {
+	Provider      string `json:"provider"`
+	Resource      string `json:"resource,omitempty"`
+	UpstreamModel string `json:"upstream_model,omitempty"`
+	Requests      int64  `json:"requests"`
+	Successes     int64  `json:"successes"`
+	Failures      int64  `json:"failures"`
+	AvgLatencyMs  int64  `json:"avg_latency_ms,omitempty"`
+	AvgTokensUsed int64  `json:"avg_tokens_used,omitempty"`
+}
+
+// ResourceHealth exposes request-plane routing health for one resource.
+type ResourceHealth struct {
+	CooldownUntil  time.Time `json:"cooldown_until,omitempty"`
+	CooldownReason string    `json:"cooldown_reason,omitempty"`
 }
 
 // NewRouter creates a router with the given configuration.
@@ -155,18 +215,32 @@ func NewRouter(logger *slog.Logger, config Config) *Router {
 			ModelCounts:      make(map[string]int64),
 			AvgLatencyMs:     make(map[string]int64),
 			ComplexityCounts: make(map[string]int64),
+			ProviderCounts:   make(map[string]int64),
+			ResourceCounts:   make(map[string]int64),
+			DeploymentStats:  make(map[string]DeploymentStats),
 		},
+		resourceCooldownUntil: make(map[string]time.Time),
 	}
 }
+
+const resourceTimeoutCooldown = 2 * time.Minute
 
 // ContextWindowForModel returns the context window size for the named
 // model. If the model is not found in the router's configuration, it
 // returns 0.
 func (r *Router) ContextWindowForModel(name string) int {
-	for _, m := range r.config.Models {
+	cfg := r.configSnapshot()
+	maxByUpstream := 0
+	for _, m := range cfg.Models {
 		if m.Name == name {
 			return m.ContextWindow
 		}
+		if m.UpstreamModel == name && m.ContextWindow > maxByUpstream {
+			maxByUpstream = m.ContextWindow
+		}
+	}
+	if maxByUpstream > 0 {
+		return maxByUpstream
 	}
 	return 0
 }
@@ -175,8 +249,9 @@ func (r *Router) ContextWindowForModel(name string) int {
 // If no models are configured it returns 10 as a safe default that
 // selects the best available model at runtime.
 func (r *Router) MaxQuality() int {
+	cfg := r.configSnapshot()
 	max := 0
-	for _, m := range r.config.Models {
+	for _, m := range cfg.Models {
 		if m.Quality > max {
 			max = m.Quality
 		}
@@ -189,13 +264,16 @@ func (r *Router) MaxQuality() int {
 
 // Route selects a model for the given request.
 func (r *Router) Route(ctx context.Context, req Request) (string, *Decision) {
+	cfg := r.configSnapshot()
 	decision := &Decision{
-		RequestID:   generateRequestID(),
-		Timestamp:   time.Now(),
-		QueryLength: len(req.Query),
-		ContextSize: req.ContextSize,
-		NeedsTools:  req.NeedsTools,
-		Priority:    priorityString(req.Priority),
+		RequestID:      generateRequestID(),
+		Timestamp:      time.Now(),
+		QueryLength:    len(req.Query),
+		ContextSize:    req.ContextSize,
+		NeedsTools:     req.NeedsTools,
+		NeedsStreaming: req.NeedsStreaming,
+		NeedsImages:    req.NeedsImages,
+		Priority:       priorityString(req.Priority),
 	}
 
 	// Analyze complexity
@@ -203,8 +281,9 @@ func (r *Router) Route(ctx context.Context, req Request) (string, *Decision) {
 	decision.DetectedIntent = r.detectIntent(req.Query)
 
 	// Evaluate rules and select model
-	model := r.selectModel(req, decision)
+	model := r.selectModel(cfg, req, decision)
 	decision.ModelSelected = model
+	r.populateSelectionMetadata(cfg, decision, model)
 
 	// Log the decision
 	r.recordDecision(*decision)
@@ -217,6 +296,33 @@ func (r *Router) Route(ctx context.Context, req Request) (string, *Decision) {
 	)
 
 	return model, decision
+}
+
+// ExplainRequest computes a routing decision for the supplied request
+// using the router's current config, learned experience, and transient
+// resource health, but does not mutate audit history or stats.
+func (r *Router) ExplainRequest(req Request) *Decision {
+	if r == nil {
+		return nil
+	}
+	cfg := r.configSnapshot()
+	decision := &Decision{
+		RequestID:      "",
+		Timestamp:      time.Now(),
+		QueryLength:    len(req.Query),
+		ContextSize:    req.ContextSize,
+		NeedsTools:     req.NeedsTools,
+		NeedsStreaming: req.NeedsStreaming,
+		NeedsImages:    req.NeedsImages,
+		Priority:       priorityString(req.Priority),
+	}
+	decision.Complexity = r.analyzeComplexity(req.Query)
+	decision.DetectedIntent = r.detectIntent(req.Query)
+
+	model := r.selectModel(cfg, req, decision)
+	decision.ModelSelected = model
+	r.populateSelectionMetadata(cfg, decision, model)
+	return decision
 }
 
 // analyzeComplexity estimates query difficulty.
@@ -293,22 +399,45 @@ func (r *Router) detectIntent(query string) string {
 }
 
 // selectModel picks the best model based on analysis.
-func (r *Router) selectModel(req Request, decision *Decision) string {
+func (r *Router) selectModel(cfg Config, req Request, decision *Decision) string {
 	var rulesEvaluated, rulesMatched []string
 	var reasoning strings.Builder
+	rejected := make(map[string][]string)
+	now := time.Now()
 
 	// Find eligible models
 	var candidates []Model
-	for _, m := range r.config.Models {
+	for _, m := range cfg.Models {
 		rulesEvaluated = append(rulesEvaluated, "check_"+m.Name)
+
+		var reasons []string
 
 		// Must support tools if needed
 		if req.NeedsTools && !m.SupportsTools {
-			continue
+			if m.ProviderSupportsTools {
+				reasons = append(reasons, "tool use disabled for this deployment")
+			} else {
+				reasons = append(reasons, "missing tool support")
+			}
+		}
+
+		// Must support streaming when required by the caller.
+		if req.NeedsStreaming && !m.SupportsStreaming {
+			reasons = append(reasons, "missing streaming support")
+		}
+
+		// Must support image input when required by the caller.
+		if req.NeedsImages && !m.SupportsImages {
+			reasons = append(reasons, "missing image support")
 		}
 
 		// Must fit context
 		if req.ContextSize > 0 && m.ContextWindow > 0 && req.ContextSize > m.ContextWindow {
+			reasons = append(reasons, "context window too small")
+		}
+
+		if len(reasons) > 0 {
+			rejected[m.Name] = reasons
 			continue
 		}
 
@@ -317,12 +446,19 @@ func (r *Router) selectModel(req Request, decision *Decision) string {
 	}
 
 	decision.RulesEvaluated = rulesEvaluated
+	if len(rejected) > 0 {
+		decision.RejectedModels = rejected
+	}
 
 	if len(candidates) == 0 {
-		reasoning.WriteString("No eligible models, using default. ")
+		decision.NoEligible = true
+		reasoning.WriteString("No eligible models, using default.")
+		if summary := summarizeRejectedModels(rejected); summary != "" {
+			reasoning.WriteString(" Rejected: " + summary + ".")
+		}
 		decision.RulesMatched = rulesMatched
 		decision.Reasoning = reasoning.String()
-		return r.config.DefaultModel
+		return cfg.DefaultModel
 	}
 
 	// Score candidates
@@ -405,7 +541,7 @@ func (r *Router) selectModel(req Request, decision *Decision) string {
 
 		// --- Local preference ---
 		// (unless caller explicitly opted out of local preference)
-		if r.config.LocalFirst && m.CostTier == 0 && !explicitlyNotLocal {
+		if cfg.LocalFirst && m.CostTier == 0 && !explicitlyNotLocal {
 			score += 10
 			rulesMatched = append(rulesMatched, "local_first_"+m.Name)
 		}
@@ -475,6 +611,16 @@ func (r *Router) selectModel(req Request, decision *Decision) string {
 			}
 		}
 
+		if until := r.resourceCooldownDeadline(m.ResourceID); !until.IsZero() && now.Before(until) {
+			score -= 100
+			rulesMatched = append(rulesMatched, "resource_timeout_cooldown_"+m.Name)
+		}
+
+		if delta, reasons := experienceScore(r.deploymentExperience(m.Name), req); delta != 0 {
+			score += delta
+			rulesMatched = append(rulesMatched, reasons...)
+		}
+
 		scores[m.Name] = score
 	}
 
@@ -496,8 +642,17 @@ func (r *Router) selectModel(req Request, decision *Decision) string {
 	reasoning.WriteString("Selected " + best.Name)
 	reasoning.WriteString(" (score=" + strconv.Itoa(bestScore) + ")")
 	reasoning.WriteString(" for " + decision.Complexity.String() + " " + decision.DetectedIntent + " query.")
+	if req.NeedsTools && best.SupportsTools {
+		reasoning.WriteString(" Tool-capable deployment required.")
+	}
+	if req.NeedsStreaming && best.SupportsStreaming {
+		reasoning.WriteString(" Streaming-capable deployment required.")
+	}
+	if req.NeedsImages && best.SupportsImages {
+		reasoning.WriteString(" Image-capable deployment required.")
+	}
 
-	if r.config.LocalFirst && best.CostTier == 0 {
+	if cfg.LocalFirst && best.CostTier == 0 {
 		reasoning.WriteString(" Local-first preference applied.")
 	}
 
@@ -520,7 +675,58 @@ func (r *Router) RecordOutcome(requestID string, latencyMs int64, tokensUsed int
 
 			// Update stats
 			model := r.auditLog[i].ModelSelected
-			r.stats.AvgLatencyMs[model] = (r.stats.AvgLatencyMs[model] + latencyMs) / 2
+			resource := r.auditLog[i].ResourceSelected
+			meta := r.stats.DeploymentStats[model]
+			if success {
+				r.stats.SuccessCount++
+				meta.Successes++
+				if resource != "" {
+					delete(r.resourceCooldownUntil, resource)
+				}
+			} else {
+				r.stats.FailureCount++
+				meta.Failures++
+			}
+			outcomes := meta.Successes + meta.Failures
+			r.stats.AvgLatencyMs[model] = weightedAverage(r.stats.AvgLatencyMs[model], outcomes, latencyMs)
+			meta.AvgLatencyMs = weightedAverage(meta.AvgLatencyMs, outcomes, latencyMs)
+			meta.AvgTokensUsed = weightedAverage(meta.AvgTokensUsed, outcomes, int64(tokensUsed))
+			r.stats.DeploymentStats[model] = meta
+			r.experienceVersion++
+			break
+		}
+	}
+}
+
+// RecordFailure updates a failed routing outcome and optionally applies
+// a temporary resource cooldown so automatic routing can avoid a runner
+// that is timing out on real chat traffic.
+func (r *Router) RecordFailure(requestID string, latencyMs int64, tokensUsed int, resourceTimeout bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	for i := len(r.auditLog) - 1; i >= 0; i-- {
+		if r.auditLog[i].RequestID == requestID {
+			r.auditLog[i].LatencyMs = latencyMs
+			r.auditLog[i].TokensUsed = tokensUsed
+			success := false
+			r.auditLog[i].Success = &success
+
+			model := r.auditLog[i].ModelSelected
+			resource := r.auditLog[i].ResourceSelected
+			meta := r.stats.DeploymentStats[model]
+			r.stats.FailureCount++
+			meta.Failures++
+			outcomes := meta.Successes + meta.Failures
+			r.stats.AvgLatencyMs[model] = weightedAverage(r.stats.AvgLatencyMs[model], outcomes, latencyMs)
+			meta.AvgLatencyMs = weightedAverage(meta.AvgLatencyMs, outcomes, latencyMs)
+			meta.AvgTokensUsed = weightedAverage(meta.AvgTokensUsed, outcomes, int64(tokensUsed))
+			r.stats.DeploymentStats[model] = meta
+
+			if resourceTimeout && resource != "" {
+				r.resourceCooldownUntil[resource] = time.Now().Add(resourceTimeoutCooldown)
+			}
+			r.experienceVersion++
 			break
 		}
 	}
@@ -542,6 +748,19 @@ func (r *Router) recordDecision(d Decision) {
 	r.stats.TotalRequests++
 	r.stats.ModelCounts[d.ModelSelected]++
 	r.stats.ComplexityCounts[d.Complexity.String()]++
+	if d.ProviderSelected != "" {
+		r.stats.ProviderCounts[d.ProviderSelected]++
+	}
+	if d.ResourceSelected != "" {
+		r.stats.ResourceCounts[d.ResourceSelected]++
+	}
+	meta := r.stats.DeploymentStats[d.ModelSelected]
+	meta.Provider = d.ProviderSelected
+	meta.Resource = d.ResourceSelected
+	meta.UpstreamModel = d.UpstreamModelSelected
+	meta.Requests++
+	r.stats.DeploymentStats[d.ModelSelected] = meta
+	r.experienceVersion++
 }
 
 // GetAuditLog returns recent routing decisions.
@@ -564,15 +783,92 @@ func (r *Router) GetAuditLog(limit int) []Decision {
 func (r *Router) GetStats() Stats {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return r.stats
+	return Stats{
+		TotalRequests:    r.stats.TotalRequests,
+		ModelCounts:      cloneInt64Map(r.stats.ModelCounts),
+		AvgLatencyMs:     cloneInt64Map(r.stats.AvgLatencyMs),
+		ComplexityCounts: cloneInt64Map(r.stats.ComplexityCounts),
+		SuccessCount:     r.stats.SuccessCount,
+		FailureCount:     r.stats.FailureCount,
+		ProviderCounts:   cloneInt64Map(r.stats.ProviderCounts),
+		ResourceCounts:   cloneInt64Map(r.stats.ResourceCounts),
+		ResourceHealth:   activeResourceHealthSnapshot(r.resourceCooldownUntil, time.Now()),
+		DeploymentStats:  cloneDeploymentStatsMap(r.stats.DeploymentStats),
+	}
+}
+
+// ExperienceSnapshot returns a copy of the deployment-scoped learned
+// experience that is safe to persist and later rehydrate. It excludes
+// transient resource cooldown state.
+func (r *Router) ExperienceSnapshot() map[string]DeploymentStats {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return cloneDeploymentStatsMap(r.stats.DeploymentStats)
+}
+
+// ExperienceVersion returns a monotonic counter that changes whenever
+// deployment-scoped learned experience is updated.
+func (r *Router) ExperienceVersion() int64 {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.experienceVersion
+}
+
+// ReplaceExperience replaces the router's persisted deployment-scoped
+// learned experience and rebuilds aggregate stats from it. Transient
+// resource cooldown state is intentionally left untouched.
+func (r *Router) ReplaceExperience(experience map[string]DeploymentStats) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.stats.DeploymentStats = cloneDeploymentStatsMap(experience)
+	r.rebuildDerivedStatsLocked()
+	r.experienceVersion++
+}
+
+func (r *Router) resourceCooldownDeadline(resource string) time.Time {
+	if strings.TrimSpace(resource) == "" {
+		return time.Time{}
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.resourceCooldownUntil[resource]
+}
+
+func activeResourceHealthSnapshot(in map[string]time.Time, now time.Time) map[string]ResourceHealth {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]ResourceHealth)
+	for resource, until := range in {
+		if until.IsZero() || !until.After(now) {
+			continue
+		}
+		out[resource] = ResourceHealth{
+			CooldownUntil:  until,
+			CooldownReason: "recent timeout",
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // GetModels returns a copy of the configured model list. The returned
 // slice is safe to mutate without affecting the router.
 func (r *Router) GetModels() []Model {
-	out := make([]Model, len(r.config.Models))
-	copy(out, r.config.Models)
-	return out
+	return cloneModels(r.configSnapshot().Models)
+}
+
+// DefaultModel returns the router's current fallback/default model.
+func (r *Router) DefaultModel() string {
+	return r.configSnapshot().DefaultModel
+}
+
+func (r *Router) deploymentExperience(model string) DeploymentStats {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.stats.DeploymentStats[model]
 }
 
 // Explain returns details about why a specific decision was made.
@@ -602,4 +898,162 @@ func priorityString(p Priority) string {
 		return "interactive"
 	}
 	return "background"
+}
+
+func summarizeRejectedModels(rejected map[string][]string) string {
+	if len(rejected) == 0 {
+		return ""
+	}
+	names := make([]string, 0, len(rejected))
+	for name := range rejected {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	parts := make([]string, 0, len(names))
+	for _, name := range names {
+		reasons := rejected[name]
+		if len(reasons) == 0 {
+			continue
+		}
+		parts = append(parts, name+" ("+strings.Join(reasons, ", ")+")")
+	}
+	return strings.Join(parts, "; ")
+}
+
+func (r *Router) populateSelectionMetadata(cfg Config, decision *Decision, modelName string) {
+	if decision == nil {
+		return
+	}
+	for _, m := range cfg.Models {
+		if m.Name != modelName {
+			continue
+		}
+		decision.UpstreamModelSelected = m.UpstreamModel
+		decision.ProviderSelected = m.Provider
+		decision.ResourceSelected = m.ResourceID
+		return
+	}
+}
+
+// UpdateConfig swaps the router's live model configuration while
+// preserving accumulated audit history and stats.
+func (r *Router) UpdateConfig(cfg Config) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if cfg.MaxAuditLog <= 0 {
+		cfg.MaxAuditLog = r.config.MaxAuditLog
+		if cfg.MaxAuditLog <= 0 {
+			cfg.MaxAuditLog = 1000
+		}
+	}
+	cfg.Models = cloneModels(cfg.Models)
+	r.config = cfg
+	if len(r.auditLog) > cfg.MaxAuditLog {
+		r.auditLog = append([]Decision(nil), r.auditLog[len(r.auditLog)-cfg.MaxAuditLog:]...)
+	}
+}
+
+func weightedAverage(currentAvg, samplesAfterUpdate, next int64) int64 {
+	if samplesAfterUpdate <= 1 {
+		return next
+	}
+	previousSamples := samplesAfterUpdate - 1
+	return ((currentAvg * previousSamples) + next) / samplesAfterUpdate
+}
+
+func experienceScore(meta DeploymentStats, req Request) (int, []string) {
+	score := 0
+	var reasons []string
+
+	if delta := int(meta.Successes - meta.Failures); delta != 0 {
+		switch {
+		case delta > 0:
+			bonus := clampInt(delta, 1, 6)
+			score += bonus
+			reasons = append(reasons, "experience_reliability_bonus")
+		case delta < 0:
+			penalty := clampInt((-delta)*2, 2, 12)
+			score -= penalty
+			reasons = append(reasons, "experience_reliability_penalty")
+		}
+	}
+
+	if meta.AvgLatencyMs > 0 && (req.Priority == PriorityInteractive || req.Hints[HintPreferSpeed] == "true") {
+		switch {
+		case meta.AvgLatencyMs <= 4000:
+			score += 4
+			reasons = append(reasons, "experience_latency_fast")
+		case meta.AvgLatencyMs <= 8000:
+			score += 2
+			reasons = append(reasons, "experience_latency_ok")
+		case meta.AvgLatencyMs >= 30000:
+			score -= 8
+			reasons = append(reasons, "experience_latency_slow")
+		case meta.AvgLatencyMs >= 15000:
+			score -= 4
+			reasons = append(reasons, "experience_latency_sluggish")
+		}
+	}
+
+	return score, reasons
+}
+
+func clampInt(v, min, max int) int {
+	if v < min {
+		return min
+	}
+	if v > max {
+		return max
+	}
+	return v
+}
+
+func (r *Router) rebuildDerivedStatsLocked() {
+	r.stats.TotalRequests = 0
+	r.stats.ModelCounts = make(map[string]int64, len(r.stats.DeploymentStats))
+	r.stats.AvgLatencyMs = make(map[string]int64, len(r.stats.DeploymentStats))
+	r.stats.SuccessCount = 0
+	r.stats.FailureCount = 0
+	r.stats.ProviderCounts = make(map[string]int64, len(r.stats.DeploymentStats))
+	r.stats.ResourceCounts = make(map[string]int64, len(r.stats.DeploymentStats))
+
+	for id, meta := range r.stats.DeploymentStats {
+		if meta.Requests <= 0 {
+			continue
+		}
+		r.stats.TotalRequests += meta.Requests
+		r.stats.ModelCounts[id] = meta.Requests
+		r.stats.AvgLatencyMs[id] = meta.AvgLatencyMs
+		r.stats.SuccessCount += meta.Successes
+		r.stats.FailureCount += meta.Failures
+		if provider := strings.TrimSpace(meta.Provider); provider != "" {
+			r.stats.ProviderCounts[provider] += meta.Requests
+		}
+		if resource := strings.TrimSpace(meta.Resource); resource != "" {
+			r.stats.ResourceCounts[resource] += meta.Requests
+		}
+	}
+}
+
+func cloneInt64Map(in map[string]int64) map[string]int64 {
+	if len(in) == 0 {
+		return map[string]int64{}
+	}
+	out := make(map[string]int64, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
+func cloneDeploymentStatsMap(in map[string]DeploymentStats) map[string]DeploymentStats {
+	if len(in) == 0 {
+		return map[string]DeploymentStats{}
+	}
+	out := make(map[string]DeploymentStats, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
 }

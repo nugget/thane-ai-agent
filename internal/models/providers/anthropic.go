@@ -1,4 +1,4 @@
-package llm
+package providers
 
 import (
 	"bufio"
@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/httpkit"
+	"github.com/nugget/thane-ai-agent/internal/llm"
 )
 
 const (
@@ -54,12 +55,18 @@ func NewAnthropicClient(apiKey string, logger *slog.Logger) *AnthropicClient {
 // Anthropic request/response types
 
 type anthropicRequest struct {
-	Model     string             `json:"model"`
-	Messages  []anthropicMessage `json:"messages"`
-	System    string             `json:"system,omitempty"`
-	MaxTokens int                `json:"max_tokens"`
-	Stream    bool               `json:"stream,omitempty"`
-	Tools     []anthropicTool    `json:"tools,omitempty"`
+	Model        string                 `json:"model"`
+	Messages     []anthropicMessage     `json:"messages"`
+	System       string                 `json:"system,omitempty"`
+	MaxTokens    int                    `json:"max_tokens"`
+	Stream       bool                   `json:"stream,omitempty"`
+	Tools        []anthropicTool        `json:"tools,omitempty"`
+	CacheControl *anthropicCacheControl `json:"cache_control,omitempty"`
+}
+
+type anthropicCacheControl struct {
+	Type string `json:"type"`
+	TTL  string `json:"ttl,omitempty"`
 }
 
 type anthropicMessage struct {
@@ -104,8 +111,10 @@ type anthropicResponse struct {
 }
 
 type anthropicUsage struct {
-	InputTokens  int `json:"input_tokens"`
-	OutputTokens int `json:"output_tokens"`
+	InputTokens              int `json:"input_tokens"`
+	OutputTokens             int `json:"output_tokens"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
+	CacheReadInputTokens     int `json:"cache_read_input_tokens,omitempty"`
 }
 
 // SSE event types for streaming
@@ -127,12 +136,12 @@ type anthropicDelta struct {
 }
 
 // Chat sends a non-streaming chat completion request.
-func (c *AnthropicClient) Chat(ctx context.Context, model string, messages []Message, tools []map[string]any) (*ChatResponse, error) {
+func (c *AnthropicClient) Chat(ctx context.Context, model string, messages []llm.Message, tools []map[string]any) (*llm.ChatResponse, error) {
 	return c.ChatStream(ctx, model, messages, tools, nil)
 }
 
 // ChatStream sends a chat request, optionally streaming tokens via callback.
-func (c *AnthropicClient) ChatStream(ctx context.Context, model string, messages []Message, tools []map[string]any, callback StreamCallback) (*ChatResponse, error) {
+func (c *AnthropicClient) ChatStream(ctx context.Context, model string, messages []llm.Message, tools []map[string]any, callback llm.StreamCallback) (*llm.ChatResponse, error) {
 	stream := callback != nil
 
 	// Convert messages and extract system prompt
@@ -148,12 +157,13 @@ func (c *AnthropicClient) ChatStream(ctx context.Context, model string, messages
 	)
 
 	req := anthropicRequest{
-		Model:     model,
-		Messages:  anthropicMsgs,
-		System:    systemPrompt,
-		MaxTokens: 4096,
-		Stream:    stream,
-		Tools:     anthropicTools,
+		Model:        model,
+		Messages:     anthropicMsgs,
+		System:       systemPrompt,
+		MaxTokens:    4096,
+		Stream:       stream,
+		Tools:        anthropicTools,
+		CacheControl: anthropicPromptCacheControl(systemPrompt, anthropicMsgs, anthropicTools),
 	}
 
 	jsonData, err := json.Marshal(req)
@@ -161,7 +171,7 @@ func (c *AnthropicClient) ChatStream(ctx context.Context, model string, messages
 		return nil, fmt.Errorf("marshal request: %w", err)
 	}
 
-	c.logger.Log(ctx, LevelTrace, "request payload", "json", string(jsonData))
+	c.logger.Log(ctx, llm.LevelTrace, "request payload", "json", string(jsonData))
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", anthropicAPIURL, bytes.NewReader(jsonData))
 	if err != nil {
@@ -227,7 +237,7 @@ func (c *AnthropicClient) Ping(ctx context.Context) error {
 	return nil
 }
 
-func (c *AnthropicClient) handleNonStreaming(ctx context.Context, body io.Reader) (*ChatResponse, error) {
+func (c *AnthropicClient) handleNonStreaming(ctx context.Context, body io.Reader) (*llm.ChatResponse, error) {
 	var resp anthropicResponse
 	if err := json.NewDecoder(body).Decode(&resp); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
@@ -240,19 +250,19 @@ func (c *AnthropicClient) handleNonStreaming(ctx context.Context, body io.Reader
 		"output_tokens", result.OutputTokens,
 		"tool_calls", len(result.Message.ToolCalls),
 	)
-	c.logger.Log(ctx, LevelTrace, "response content", "content", result.Message.Content)
+	c.logger.Log(ctx, llm.LevelTrace, "response content", "content", result.Message.Content)
 
 	return result, nil
 }
 
-func (c *AnthropicClient) handleStreaming(ctx context.Context, body io.Reader, callback StreamCallback) (*ChatResponse, error) {
+func (c *AnthropicClient) handleStreaming(ctx context.Context, body io.Reader, callback llm.StreamCallback) (*llm.ChatResponse, error) {
 	scanner := bufio.NewScanner(body)
 	// Increase scanner buffer for large responses
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 
 	var (
 		contentBuilder strings.Builder
-		toolCalls      []ToolCall
+		toolCalls      []llm.ToolCall
 		currentTool    *anthropicContent // Track in-progress tool_use block
 		toolJSONBuf    strings.Builder
 		stopReason     string
@@ -300,7 +310,7 @@ func (c *AnthropicClient) handleStreaming(ctx context.Context, body io.Reader, c
 				case "text_delta":
 					contentBuilder.WriteString(event.Delta.Text)
 					if callback != nil {
-						callback(StreamEvent{Kind: KindToken, Token: event.Delta.Text})
+						callback(llm.StreamEvent{Kind: llm.KindToken, Token: event.Delta.Text})
 					}
 				case "input_json_delta":
 					toolJSONBuf.WriteString(event.Delta.PartialJSON)
@@ -316,7 +326,7 @@ func (c *AnthropicClient) handleStreaming(ctx context.Context, body io.Reader, c
 						args = map[string]any{"_raw": toolJSONBuf.String()}
 					}
 				}
-				toolCalls = append(toolCalls, ToolCall{
+				toolCalls = append(toolCalls, llm.ToolCall{
 					ID: currentTool.ID,
 					Function: struct {
 						Name      string         `json:"name"`
@@ -343,16 +353,18 @@ func (c *AnthropicClient) handleStreaming(ctx context.Context, body io.Reader, c
 		return nil, fmt.Errorf("read stream: %w", err)
 	}
 
-	resp := &ChatResponse{
+	resp := &llm.ChatResponse{
 		Model: model,
-		Message: Message{
+		Message: llm.Message{
 			Role:      "assistant",
 			Content:   contentBuilder.String(),
 			ToolCalls: toolCalls,
 		},
-		Done:         true,
-		InputTokens:  usage.InputTokens,
-		OutputTokens: usage.OutputTokens,
+		Done:                     true,
+		InputTokens:              usage.InputTokens,
+		OutputTokens:             usage.OutputTokens,
+		CacheCreationInputTokens: usage.CacheCreationInputTokens,
+		CacheReadInputTokens:     usage.CacheReadInputTokens,
 	}
 
 	// stopReason available for future use (end_turn, tool_use, max_tokens, stop_sequence)
@@ -365,14 +377,39 @@ func (c *AnthropicClient) handleStreaming(ctx context.Context, body io.Reader, c
 		"content_len", len(resp.Message.Content),
 		"tool_calls", len(resp.Message.ToolCalls),
 	)
-	c.logger.Log(ctx, LevelTrace, "stream final content", "content", resp.Message.Content)
+	c.logger.Log(ctx, llm.LevelTrace, "stream final content", "content", resp.Message.Content)
 
 	return resp, nil
 }
 
+func anthropicPromptCacheControl(systemPrompt string, messages []anthropicMessage, tools []anthropicTool) *anthropicCacheControl {
+	if !shouldUseAnthropicPromptCaching(systemPrompt, messages, tools) {
+		return nil
+	}
+	return &anthropicCacheControl{Type: "ephemeral"}
+}
+
+func shouldUseAnthropicPromptCaching(systemPrompt string, messages []anthropicMessage, tools []anthropicTool) bool {
+	if len(tools) > 0 {
+		return true
+	}
+	if len(messages) >= 3 {
+		return true
+	}
+	if strings.TrimSpace(systemPrompt) != "" && len(systemPrompt) >= 4096 {
+		return true
+	}
+	for _, msg := range messages {
+		if msg.Role == "assistant" {
+			return true
+		}
+	}
+	return false
+}
+
 // convertToAnthropic converts internal messages to Anthropic format.
 // Extracts system messages into a separate system prompt.
-func convertToAnthropic(messages []Message) ([]anthropicMessage, string) {
+func convertToAnthropic(messages []llm.Message) ([]anthropicMessage, string) {
 	var systemParts []string
 	var result []anthropicMessage
 
@@ -497,9 +534,9 @@ func convertToolsToAnthropic(tools []map[string]any) []anthropicTool {
 }
 
 // convertFromAnthropic converts an Anthropic response to our internal format.
-func convertFromAnthropic(resp *anthropicResponse) *ChatResponse {
+func convertFromAnthropic(resp *anthropicResponse) *llm.ChatResponse {
 	var content string
-	var toolCalls []ToolCall
+	var toolCalls []llm.ToolCall
 
 	for _, block := range resp.Content {
 		switch block.Type {
@@ -510,7 +547,7 @@ func convertFromAnthropic(resp *anthropicResponse) *ChatResponse {
 			if !ok {
 				args = map[string]any{}
 			}
-			toolCalls = append(toolCalls, ToolCall{
+			toolCalls = append(toolCalls, llm.ToolCall{
 				ID: block.ID,
 				Function: struct {
 					Name      string         `json:"name"`
@@ -523,16 +560,18 @@ func convertFromAnthropic(resp *anthropicResponse) *ChatResponse {
 		}
 	}
 
-	return &ChatResponse{
+	return &llm.ChatResponse{
 		Model: resp.Model,
-		Message: Message{
+		Message: llm.Message{
 			Role:      resp.Role,
 			Content:   content,
 			ToolCalls: toolCalls,
 		},
-		Done:         true,
-		InputTokens:  resp.Usage.InputTokens,
-		OutputTokens: resp.Usage.OutputTokens,
+		Done:                     true,
+		InputTokens:              resp.Usage.InputTokens,
+		OutputTokens:             resp.Usage.OutputTokens,
+		CacheCreationInputTokens: resp.Usage.CacheCreationInputTokens,
+		CacheReadInputTokens:     resp.Usage.CacheReadInputTokens,
 	}
 }
 

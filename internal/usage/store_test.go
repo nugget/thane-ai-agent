@@ -8,6 +8,7 @@ import (
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/nugget/thane-ai-agent/internal/config"
 	"github.com/nugget/thane-ai-agent/internal/database"
+	"github.com/nugget/thane-ai-agent/internal/models"
 )
 
 func testStore(t *testing.T) *Store {
@@ -40,16 +41,18 @@ func TestRecord_And_Summary(t *testing.T) {
 	now := time.Now().UTC()
 	recs := []Record{
 		{
-			Timestamp:      now,
-			RequestID:      "r_001",
-			SessionID:      "sess-1",
-			ConversationID: "conv-1",
-			Model:          "claude-opus-4-20250514",
-			Provider:       "anthropic",
-			InputTokens:    1000,
-			OutputTokens:   500,
-			CostUSD:        0.0525, // 1000/1M*15 + 500/1M*75
-			Role:           "interactive",
+			Timestamp:                now,
+			RequestID:                "r_001",
+			SessionID:                "sess-1",
+			ConversationID:           "conv-1",
+			Model:                    "claude-opus-4-20250514",
+			Provider:                 "anthropic",
+			InputTokens:              1000,
+			OutputTokens:             500,
+			CacheCreationInputTokens: 4000,
+			CacheReadInputTokens:     8000,
+			CostUSD:                  0.0525 + 0.075 + 0.012, // base + cache write + cache read
+			Role:                     "interactive",
 		},
 		{
 			Timestamp:      now,
@@ -87,9 +90,15 @@ func TestRecord_And_Summary(t *testing.T) {
 	if sum.TotalOutputTokens != 1500 {
 		t.Errorf("TotalOutputTokens = %d, want 1500", sum.TotalOutputTokens)
 	}
-	// 0.0525 + 0.021 = 0.0735
-	if diff := sum.TotalCostUSD - 0.0735; diff > 0.0001 || diff < -0.0001 {
-		t.Errorf("TotalCostUSD = %f, want ~0.0735", sum.TotalCostUSD)
+	if sum.TotalCacheCreationInputTokens != 4000 {
+		t.Errorf("TotalCacheCreationInputTokens = %d, want 4000", sum.TotalCacheCreationInputTokens)
+	}
+	if sum.TotalCacheReadInputTokens != 8000 {
+		t.Errorf("TotalCacheReadInputTokens = %d, want 8000", sum.TotalCacheReadInputTokens)
+	}
+	// (0.0525 + 0.075 + 0.012) + 0.021 = 0.1605
+	if diff := sum.TotalCostUSD - 0.1605; diff > 0.0001 || diff < -0.0001 {
+		t.Errorf("TotalCostUSD = %f, want ~0.1605", sum.TotalCostUSD)
 	}
 }
 
@@ -308,6 +317,126 @@ func TestSummaryByModel_EmptyDB(t *testing.T) {
 	}
 }
 
+func TestSummaryByGroup_DeploymentDimensions(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+
+	now := time.Now().UTC()
+	recs := []Record{
+		{
+			Timestamp:     now,
+			RequestID:     "r1",
+			Model:         "mirror/gpt-oss:20b",
+			UpstreamModel: "gpt-oss:20b",
+			Resource:      "mirror",
+			Provider:      "ollama",
+			CostUSD:       2.0,
+			Role:          "interactive",
+		},
+		{
+			Timestamp:     now,
+			RequestID:     "r2",
+			Model:         "spark/gpt-oss:20b",
+			UpstreamModel: "gpt-oss:20b",
+			Resource:      "spark",
+			Provider:      "ollama",
+			CostUSD:       1.0,
+			Role:          "interactive",
+		},
+		{
+			Timestamp:     now,
+			RequestID:     "r3",
+			Model:         "anthropic/claude-sonnet-4-20250514",
+			UpstreamModel: "claude-sonnet-4-20250514",
+			Resource:      "anthropic",
+			Provider:      "anthropic",
+			CostUSD:       3.0,
+			Role:          "delegate",
+		},
+	}
+	for _, rec := range recs {
+		if err := s.Record(ctx, rec); err != nil {
+			t.Fatalf("Record: %v", err)
+		}
+	}
+
+	start := now.Add(-1 * time.Minute)
+	end := now.Add(1 * time.Minute)
+
+	upstream, err := s.SummaryByUpstreamModel(start, end)
+	if err != nil {
+		t.Fatalf("SummaryByUpstreamModel: %v", err)
+	}
+	if len(upstream) != 2 {
+		t.Fatalf("upstream groups = %d, want 2", len(upstream))
+	}
+	if upstream[0].Key != "gpt-oss:20b" {
+		t.Fatalf("first upstream key = %q, want %q", upstream[0].Key, "gpt-oss:20b")
+	}
+	if upstream[0].Summary.TotalRecords != 2 {
+		t.Fatalf("gpt-oss:20b records = %d, want 2", upstream[0].Summary.TotalRecords)
+	}
+
+	resource, err := s.SummaryByResource(start, end)
+	if err != nil {
+		t.Fatalf("SummaryByResource: %v", err)
+	}
+	if len(resource) != 3 {
+		t.Fatalf("resource groups = %d, want 3", len(resource))
+	}
+	if resource[0].Key != "anthropic" {
+		t.Fatalf("first resource key = %q, want %q", resource[0].Key, "anthropic")
+	}
+
+	provider, err := s.SummaryByProvider(start, end)
+	if err != nil {
+		t.Fatalf("SummaryByProvider: %v", err)
+	}
+	if len(provider) != 2 {
+		t.Fatalf("provider groups = %d, want 2", len(provider))
+	}
+	if provider[0].Key != "ollama" {
+		t.Fatalf("first provider key = %q, want %q", provider[0].Key, "ollama")
+	}
+	if provider[0].Summary.TotalCostUSD != 3.0 {
+		t.Fatalf("ollama cost = %f, want 3.0", provider[0].Summary.TotalCostUSD)
+	}
+
+	grouped, err := s.SummaryByGroup("resource", start, end)
+	if err != nil {
+		t.Fatalf("SummaryByGroup(resource): %v", err)
+	}
+	if len(grouped) != len(resource) {
+		t.Fatalf("grouped resource len = %d, want %d", len(grouped), len(resource))
+	}
+
+	deployment, err := s.SummaryByGroup("deployment", start, end)
+	if err != nil {
+		t.Fatalf("SummaryByGroup(deployment): %v", err)
+	}
+	model, err := s.SummaryByGroup("model", start, end)
+	if err != nil {
+		t.Fatalf("SummaryByGroup(model): %v", err)
+	}
+	if len(deployment) != len(model) {
+		t.Fatalf("deployment groups len = %d, want %d", len(deployment), len(model))
+	}
+	if deployment[0].Key != model[0].Key {
+		t.Fatalf("deployment first key = %q, want %q", deployment[0].Key, model[0].Key)
+	}
+}
+
+func TestSummaryByGroup_InvalidGroup(t *testing.T) {
+	s := testStore(t)
+
+	start := time.Now().Add(-1 * time.Hour)
+	end := time.Now()
+	_, err := s.SummaryByGroup("bogus", start, end)
+	if err == nil {
+		t.Fatal("expected invalid group_by error")
+	}
+}
+
 func TestComputeCost(t *testing.T) {
 	pricing := testPricing()
 
@@ -318,9 +447,10 @@ func TestComputeCost(t *testing.T) {
 		output int
 		want   float64
 	}{
-		{"opus_normal", "claude-opus-4-20250514", 1_000_000, 100_000, 22.5},    // 15 + 7.5
-		{"sonnet_normal", "claude-sonnet-4-20250514", 1_000_000, 100_000, 4.5}, // 3 + 1.5
-		{"unknown_model", "gpt-oss:120b", 1_000_000, 1_000_000, 0},             // not in pricing
+		{"opus_normal", "claude-opus-4-20250514", 1_000_000, 100_000, 22.5},              // 15 + 7.5
+		{"qualified_opus", "anthropic/claude-opus-4-20250514", 1_000_000, 100_000, 22.5}, // upstream fallback
+		{"sonnet_normal", "claude-sonnet-4-20250514", 1_000_000, 100_000, 4.5},           // 3 + 1.5
+		{"unknown_model", "gpt-oss:120b", 1_000_000, 1_000_000, 0},                       // not in pricing
 		{"zero_tokens", "claude-opus-4-20250514", 0, 0, 0},
 		{"small_usage", "claude-opus-4-20250514", 1000, 500, 0.0525}, // 0.015 + 0.0375
 	}
@@ -332,6 +462,22 @@ func TestComputeCost(t *testing.T) {
 				t.Errorf("ComputeCost(%q, %d, %d) = %f, want %f", tt.model, tt.input, tt.output, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestComputeDetailedCostForIdentity_AnthropicCacheBuckets(t *testing.T) {
+	pricing := testPricing()
+	identity := ModelIdentity{
+		Model:         "anthropic/claude-opus-4-20250514",
+		UpstreamModel: "claude-opus-4-20250514",
+		Resource:      "anthropic",
+		Provider:      "anthropic",
+	}
+
+	got := ComputeDetailedCostForIdentity(identity, 1_000_000, 1_000_000, 1_000_000, 100_000, pricing)
+	want := 15.0 + (15.0 * 1.25) + (15.0 * 0.10) + 7.5
+	if diff := got - want; diff > 0.0001 || diff < -0.0001 {
+		t.Fatalf("ComputeDetailedCostForIdentity(...) = %f, want %f", got, want)
 	}
 }
 
@@ -382,6 +528,7 @@ func TestResolveProvider(t *testing.T) {
 		want  string
 	}{
 		{"claude-opus-4-20250514", "anthropic"},
+		{"anthropic/claude-opus-4-20250514", "anthropic"},
 		{"claude-sonnet-4-20250514", "anthropic"},
 		{"claude-haiku-3-20240307", "anthropic"},
 		{"llama3.2:latest", "ollama"},
@@ -396,5 +543,138 @@ func TestResolveProvider(t *testing.T) {
 				t.Errorf("ResolveProvider(%q) = %q, want %q", tt.model, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestResolveModelIdentity_WithCatalog(t *testing.T) {
+	t.Parallel()
+
+	cfg := &config.Config{}
+	cfg.Models.Resources = map[string]config.ModelServerConfig{
+		"edge": {URL: "http://edge.example:11434", Provider: "ollama"},
+	}
+	cfg.Models.Available = []config.ModelConfig{
+		{Name: "qwen3:8b", Resource: "edge", SupportsTools: true, ContextWindow: 32768, Speed: 7, Quality: 6, CostTier: 0},
+	}
+
+	cat, err := models.BuildCatalog(cfg)
+	if err != nil {
+		t.Fatalf("BuildCatalog: %v", err)
+	}
+
+	identity := ResolveModelIdentity("edge/qwen3:8b", cat)
+	if identity.Model != "edge/qwen3:8b" {
+		t.Fatalf("Model = %q, want %q", identity.Model, "edge/qwen3:8b")
+	}
+	if identity.UpstreamModel != "qwen3:8b" {
+		t.Fatalf("UpstreamModel = %q, want %q", identity.UpstreamModel, "qwen3:8b")
+	}
+	if identity.Resource != "edge" {
+		t.Fatalf("Resource = %q, want %q", identity.Resource, "edge")
+	}
+	if identity.Provider != "ollama" {
+		t.Fatalf("Provider = %q, want %q", identity.Provider, "ollama")
+	}
+}
+
+func TestRecord_PersistsDeploymentMetadata(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+
+	rec := Record{
+		Timestamp:                time.Now().UTC(),
+		RequestID:                "r_meta",
+		SessionID:                "sess-meta",
+		ConversationID:           "conv-meta",
+		Model:                    "mirror/claude-opus-4-20250514",
+		UpstreamModel:            "claude-opus-4-20250514",
+		Resource:                 "mirror",
+		Provider:                 "anthropic",
+		InputTokens:              100,
+		OutputTokens:             50,
+		CacheCreationInputTokens: 64,
+		CacheReadInputTokens:     128,
+		CostUSD:                  1.23,
+		Role:                     "interactive",
+	}
+	if err := s.Record(ctx, rec); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+
+	var got Record
+	row := s.db.QueryRowContext(ctx, `
+		SELECT model, upstream_model, resource, provider, input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens, cost_usd
+		FROM usage_records
+		WHERE request_id = ?`,
+		rec.RequestID,
+	)
+	if err := row.Scan(&got.Model, &got.UpstreamModel, &got.Resource, &got.Provider, &got.InputTokens, &got.OutputTokens, &got.CacheCreationInputTokens, &got.CacheReadInputTokens, &got.CostUSD); err != nil {
+		t.Fatalf("scan usage record: %v", err)
+	}
+	if got.Model != rec.Model {
+		t.Fatalf("Model = %q, want %q", got.Model, rec.Model)
+	}
+	if got.UpstreamModel != rec.UpstreamModel {
+		t.Fatalf("UpstreamModel = %q, want %q", got.UpstreamModel, rec.UpstreamModel)
+	}
+	if got.Resource != rec.Resource {
+		t.Fatalf("Resource = %q, want %q", got.Resource, rec.Resource)
+	}
+	if got.Provider != rec.Provider {
+		t.Fatalf("Provider = %q, want %q", got.Provider, rec.Provider)
+	}
+	if got.CacheCreationInputTokens != rec.CacheCreationInputTokens {
+		t.Fatalf("CacheCreationInputTokens = %d, want %d", got.CacheCreationInputTokens, rec.CacheCreationInputTokens)
+	}
+	if got.CacheReadInputTokens != rec.CacheReadInputTokens {
+		t.Fatalf("CacheReadInputTokens = %d, want %d", got.CacheReadInputTokens, rec.CacheReadInputTokens)
+	}
+}
+
+func TestMigrate_AddsDeploymentMetadataColumns(t *testing.T) {
+	db, err := database.OpenMemory()
+	if err != nil {
+		t.Fatalf("database.OpenMemory: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	_, err = db.Exec(`
+		CREATE TABLE usage_records (
+			id TEXT PRIMARY KEY,
+			timestamp TEXT NOT NULL,
+			request_id TEXT NOT NULL,
+			session_id TEXT,
+			conversation_id TEXT,
+			model TEXT NOT NULL,
+			provider TEXT NOT NULL,
+			input_tokens INTEGER NOT NULL,
+			output_tokens INTEGER NOT NULL,
+			cost_usd REAL NOT NULL,
+			role TEXT NOT NULL,
+			task_name TEXT
+		);
+	`)
+	if err != nil {
+		t.Fatalf("create legacy table: %v", err)
+	}
+
+	s, err := NewStore(db)
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	if s == nil {
+		t.Fatal("NewStore returned nil store")
+	}
+	if !database.HasColumn(db, "usage_records", "upstream_model") {
+		t.Fatal("expected upstream_model column after migration")
+	}
+	if !database.HasColumn(db, "usage_records", "resource") {
+		t.Fatal("expected resource column after migration")
+	}
+	if !database.HasColumn(db, "usage_records", "cache_creation_input_tokens") {
+		t.Fatal("expected cache_creation_input_tokens column after migration")
+	}
+	if !database.HasColumn(db, "usage_records", "cache_read_input_tokens") {
+		t.Fatal("expected cache_read_input_tokens column after migration")
 	}
 }

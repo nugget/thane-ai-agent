@@ -21,6 +21,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/logging"
 	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
 	"github.com/nugget/thane-ai-agent/internal/memory"
+	"github.com/nugget/thane-ai-agent/internal/models"
 	"github.com/nugget/thane-ai-agent/internal/router"
 	"github.com/nugget/thane-ai-agent/internal/tools"
 	"github.com/nugget/thane-ai-agent/internal/usage"
@@ -49,15 +50,17 @@ type ToolCallOutcome struct {
 
 // Result is the outcome of a delegated task execution.
 type Result struct {
-	Content       string            `json:"content"`
-	Model         string            `json:"model"`
-	Iterations    int               `json:"iterations"`
-	InputTokens   int               `json:"input_tokens"`
-	OutputTokens  int               `json:"output_tokens"`
-	Exhausted     bool              `json:"exhausted"`
-	ExhaustReason string            `json:"exhaust_reason,omitempty"`
-	ToolCalls     []ToolCallOutcome `json:"tool_calls,omitempty"`
-	Duration      time.Duration     `json:"duration"`
+	Content                  string            `json:"content"`
+	Model                    string            `json:"model"`
+	Iterations               int               `json:"iterations"`
+	InputTokens              int               `json:"input_tokens"`
+	OutputTokens             int               `json:"output_tokens"`
+	CacheCreationInputTokens int               `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int               `json:"cache_read_input_tokens"`
+	Exhausted                bool              `json:"exhausted"`
+	ExhaustReason            string            `json:"exhaust_reason,omitempty"`
+	ToolCalls                []ToolCallOutcome `json:"tool_calls,omitempty"`
+	Duration                 time.Duration     `json:"duration"`
 }
 
 // labelExpander expands temp file labels in task descriptions. Defined
@@ -84,6 +87,8 @@ type Executor struct {
 	tempFiles        labelExpander
 	usageStore       *usage.Store
 	pricing          map[string]config.PricingEntry
+	usageCatalog     *models.Catalog
+	modelRegistry    *models.Registry
 	alwaysActiveTags []string
 	lensProvider     func() []string // returns active global lenses (nil = none)
 	forgeContext     string
@@ -170,9 +175,16 @@ func (e *Executor) SetTempFileStore(tfs interface {
 // SetUsageRecorder configures persistent token usage recording for
 // delegate executions. When set, every delegate completion is persisted
 // for cost attribution.
-func (e *Executor) SetUsageRecorder(store *usage.Store, pricing map[string]config.PricingEntry) {
+func (e *Executor) SetUsageRecorder(store *usage.Store, pricing map[string]config.PricingEntry, cat *models.Catalog) {
 	e.usageStore = store
 	e.pricing = pricing
+	e.usageCatalog = cat
+}
+
+// UseModelRegistry configures the live model registry used for
+// runtime usage attribution and deployment metadata resolution.
+func (e *Executor) UseModelRegistry(registry *models.Registry) {
+	e.modelRegistry = registry
 }
 
 // SetEventBus configures the event bus for delegate lifecycle events.
@@ -414,7 +426,7 @@ func (e *Executor) executeLegacy(ctx context.Context, task, profileName, guidanc
 	model := e.selectModel(ctx, task, profile, len(toolDefs))
 
 	startTime := time.Now()
-	var totalInput, totalOutput int
+	var totalInput, totalOutput, totalCacheCreate, totalCacheRead int
 	var toolCalls []ToolCallOutcome
 
 	// Publish complete event on all exit paths so the dashboard removes
@@ -509,6 +521,8 @@ func (e *Executor) executeLegacy(ctx context.Context, task, profileName, guidanc
 		OnLLMResponse: func(_ context.Context, resp *llm.ChatResponse, _ int) {
 			totalInput += resp.InputTokens
 			totalOutput += resp.OutputTokens
+			totalCacheCreate += resp.CacheCreationInputTokens
+			totalCacheRead += resp.CacheReadInputTokens
 			iterCount++
 		},
 		OnBeforeToolExec: func(execCtx context.Context, _ int, _ llm.ToolCall) context.Context {
@@ -597,6 +611,8 @@ func (e *Executor) executeLegacy(ctx context.Context, task, profileName, guidanc
 				maxIter:          maxIter,
 				totalInput:       totalInput,
 				totalOutput:      totalOutput,
+				totalCacheCreate: totalCacheCreate,
+				totalCacheRead:   totalCacheRead,
 				exhausted:        true,
 				exhaustReason:    ExhaustWallClock,
 				startTime:        startTime,
@@ -607,14 +623,16 @@ func (e *Executor) executeLegacy(ctx context.Context, task, profileName, guidanc
 				iterations:       partialIterations,
 			})
 			return &Result{
-				Content:       "Delegate was unable to complete the task within its time limit.",
-				Model:         model,
-				InputTokens:   totalInput,
-				OutputTokens:  totalOutput,
-				Exhausted:     true,
-				ExhaustReason: ExhaustWallClock,
-				ToolCalls:     toolCalls,
-				Duration:      time.Since(startTime),
+				Content:                  "Delegate was unable to complete the task within its time limit.",
+				Model:                    model,
+				InputTokens:              totalInput,
+				OutputTokens:             totalOutput,
+				CacheCreationInputTokens: totalCacheCreate,
+				CacheReadInputTokens:     totalCacheRead,
+				Exhausted:                true,
+				ExhaustReason:            ExhaustWallClock,
+				ToolCalls:                toolCalls,
+				Duration:                 time.Since(startTime),
 			}, nil
 		}
 		if errors.Is(ctx.Err(), context.Canceled) {
@@ -653,6 +671,8 @@ func (e *Executor) executeLegacy(ctx context.Context, task, profileName, guidanc
 		maxIter:          maxIter,
 		totalInput:       iterResult.InputTokens,
 		totalOutput:      iterResult.OutputTokens,
+		totalCacheCreate: iterResult.CacheCreationInputTokens,
+		totalCacheRead:   iterResult.CacheReadInputTokens,
 		exhausted:        exhausted,
 		exhaustReason:    exhaustReason,
 		startTime:        startTime,
@@ -662,15 +682,17 @@ func (e *Executor) executeLegacy(ctx context.Context, task, profileName, guidanc
 		iterations:       iterResult.Iterations,
 	})
 	return &Result{
-		Content:       iterResult.Content,
-		Model:         iterResult.Model,
-		Iterations:    iterResult.IterationCount,
-		InputTokens:   iterResult.InputTokens,
-		OutputTokens:  iterResult.OutputTokens,
-		Exhausted:     exhausted,
-		ExhaustReason: exhaustReason,
-		ToolCalls:     toolCalls,
-		Duration:      time.Since(startTime),
+		Content:                  iterResult.Content,
+		Model:                    iterResult.Model,
+		Iterations:               iterResult.IterationCount,
+		InputTokens:              iterResult.InputTokens,
+		OutputTokens:             iterResult.OutputTokens,
+		CacheCreationInputTokens: iterResult.CacheCreationInputTokens,
+		CacheReadInputTokens:     iterResult.CacheReadInputTokens,
+		Exhausted:                exhausted,
+		ExhaustReason:            exhaustReason,
+		ToolCalls:                toolCalls,
+		Duration:                 time.Since(startTime),
 	}, nil
 }
 
@@ -1073,6 +1095,12 @@ func (e *Executor) selectModel(ctx context.Context, task string, profile *Profil
 			)
 			return model
 		}
+		if fallback := e.router.DefaultModel(); fallback != "" {
+			log.Debug("delegate using router default model",
+				"model", fallback,
+			)
+			return fallback
+		}
 	}
 	log.Debug("delegate using default model",
 		"model", e.defaultModel,
@@ -1097,6 +1125,8 @@ type completionRecord struct {
 	maxIter          int
 	totalInput       int
 	totalOutput      int
+	totalCacheCreate int
+	totalCacheRead   int
 	exhausted        bool
 	exhaustReason    string
 	startTime        time.Time
@@ -1153,23 +1183,38 @@ func (e *Executor) recordCompletion(rec *completionRecord) {
 	// Record usage for cost tracking. Uses context.Background() because
 	// the delegate's context may be cancelled (e.g., wall-clock exhaustion).
 	if e.usageStore != nil {
-		cost := usage.ComputeCost(rec.model, rec.totalInput, rec.totalOutput, e.pricing)
+		identity := usage.ResolveModelIdentity(rec.model, e.currentModelCatalog())
+		cost := usage.ComputeDetailedCostForIdentity(identity, rec.totalInput, rec.totalCacheCreate, rec.totalCacheRead, rec.totalOutput, e.pricing)
 		usageRec := usage.Record{
-			Timestamp:      now,
-			RequestID:      rec.delegateID,
-			ConversationID: rec.conversationID,
-			Model:          rec.model,
-			Provider:       usage.ResolveProvider(rec.model),
-			InputTokens:    rec.totalInput,
-			OutputTokens:   rec.totalOutput,
-			CostUSD:        cost,
-			Role:           "delegate",
-			TaskName:       rec.profileName,
+			Timestamp:                now,
+			RequestID:                rec.delegateID,
+			ConversationID:           rec.conversationID,
+			Model:                    identity.Model,
+			UpstreamModel:            identity.UpstreamModel,
+			Resource:                 identity.Resource,
+			Provider:                 identity.Provider,
+			InputTokens:              rec.totalInput,
+			OutputTokens:             rec.totalOutput,
+			CacheCreationInputTokens: rec.totalCacheCreate,
+			CacheReadInputTokens:     rec.totalCacheRead,
+			CostUSD:                  cost,
+			Role:                     "delegate",
+			TaskName:                 rec.profileName,
 		}
 		if err := e.usageStore.Record(context.Background(), usageRec); err != nil {
 			rec.log.Warn("failed to record delegate usage", "error", err)
 		}
 	}
+}
+
+func (e *Executor) currentModelCatalog() *models.Catalog {
+	if e == nil {
+		return nil
+	}
+	if e.modelRegistry != nil {
+		return e.modelRegistry.Catalog()
+	}
+	return e.usageCatalog
 }
 
 // archiveSession persists the delegate's messages, tool calls, and ends

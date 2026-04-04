@@ -366,6 +366,105 @@ func TestTimeoutRecovery_StaticFallbackWhenNoRecoveryModel(t *testing.T) {
 	}
 }
 
+func TestAmbiguousModelError_DoesNotFailOver(t *testing.T) {
+	t.Parallel()
+
+	mock := &mockTimeoutLLM{
+		errors: []error{
+			&llm.AmbiguousModelError{
+				Model:   "gpt-oss:20b",
+				Targets: []string{"mirror/gpt-oss:20b", "spark/gpt-oss:20b"},
+			},
+		},
+	}
+
+	loop := buildTestLoopWithLLM(mock, nil)
+	loop.model = "spark/gpt-oss:20b"
+
+	_, err := loop.Run(context.Background(), &Request{
+		Messages: []Message{{Role: "user", Content: "Reply with exactly ok"}},
+		Model:    "gpt-oss:20b",
+	}, nil)
+	if err == nil {
+		t.Fatal("Run() error = nil, want ambiguity error")
+	}
+	if !strings.Contains(err.Error(), `model "gpt-oss:20b" is ambiguous`) {
+		t.Fatalf("Run() error = %q, want ambiguity message", err)
+	}
+
+	mock.mu.Lock()
+	callCount := len(mock.calls)
+	mock.mu.Unlock()
+	if callCount != 1 {
+		t.Fatalf("LLM call count = %d, want 1 (no failover)", callCount)
+	}
+}
+
+func TestExplicitModelError_DoesNotFailOver(t *testing.T) {
+	t.Parallel()
+
+	mock := &mockTimeoutLLM{
+		errors: []error{
+			errors.New("runner returned empty completion"),
+		},
+	}
+
+	loop := buildTestLoopWithLLM(mock, nil)
+	loop.model = "spark/gpt-oss:20b"
+
+	_, err := loop.Run(context.Background(), &Request{
+		Messages: []Message{{Role: "user", Content: "Reply with exactly ok"}},
+		Model:    "deepslate/google/gemma-3-4b",
+	}, nil)
+	if err == nil {
+		t.Fatal("Run() error = nil, want provider error")
+	}
+	if !strings.Contains(err.Error(), "empty completion") {
+		t.Fatalf("Run() error = %q, want empty completion error", err)
+	}
+
+	mock.mu.Lock()
+	callCount := len(mock.calls)
+	mock.mu.Unlock()
+	if callCount != 1 {
+		t.Fatalf("LLM call count = %d, want 1 (no failover)", callCount)
+	}
+}
+
+func TestRoutedUserFixableAPIError_DoesNotFailOver(t *testing.T) {
+	t.Parallel()
+
+	mock := &mockTimeoutLLM{
+		errors: []error{
+			errors.New(`API error 400: {"error":"Invalid image detected at index 0"}`),
+		},
+	}
+
+	loop := buildTestLoopWithLLM(mock, nil)
+	loop.model = "spark/gpt-oss:20b"
+
+	_, err := loop.Run(context.Background(), &Request{
+		Messages: []Message{{
+			Role:    "user",
+			Content: "describe the image",
+			Images:  []llm.ImageContent{{Data: "Zm9v", MediaType: "image/png"}},
+		}},
+	}, nil)
+	if err == nil {
+		t.Fatal("Run() error = nil, want provider 400 error")
+	}
+	if !strings.Contains(err.Error(), "API error 400:") {
+		t.Fatalf("Run() error = %q, want provider 400 error", err)
+	}
+
+	mock.mu.Lock()
+	callCount := len(mock.calls)
+	mock.mu.Unlock()
+	if callCount != 1 {
+		t.Fatalf("LLM call count = %d, want 1 (no failover)", callCount)
+	}
+}
+
 // buildTestLoopWithLLM creates a test Loop with a custom LLM client
 // and a near-zero retry delay so tests don't block on real backoff.
 func buildTestLoopWithLLM(client llm.Client, extraNames []string) *Loop {

@@ -35,6 +35,8 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/llm"
 	"github.com/nugget/thane-ai-agent/internal/logging"
 	"github.com/nugget/thane-ai-agent/internal/memory"
+	"github.com/nugget/thane-ai-agent/internal/models"
+	modelproviders "github.com/nugget/thane-ai-agent/internal/models/providers"
 	"github.com/nugget/thane-ai-agent/internal/talents"
 
 	_ "github.com/mattn/go-sqlite3" // SQLite driver for database/sql
@@ -203,8 +205,11 @@ func runAsk(ctx context.Context, stdout io.Writer, stderr io.Writer, configPath 
 		ha = homeassistant.NewClient(cfg.HomeAssistant.URL, cfg.HomeAssistant.Token, logger)
 	}
 
-	ollamaClient := llm.NewOllamaClient(cfg.Models.OllamaURL, logger)
-	llmClient := createLLMClient(cfg, logger, ollamaClient)
+	llmSetup, err := createLLMSetup(ctx, cfg, logger)
+	if err != nil {
+		return err
+	}
+	logLLMSetup(logger, llmSetup)
 
 	talentLoader := talents.NewLoader(cfg.TalentsDir)
 	cliTalents, _ := talentLoader.Talents()
@@ -214,7 +219,7 @@ func runAsk(ctx context.Context, stdout io.Writer, stderr io.Writer, configPath 
 
 	// Minimal loop: no router, no scheduler, no compactor. The default
 	// model handles everything for CLI one-shots.
-	loop := agent.NewLoop(logger, mem, nil, nil, ha, nil, llmClient, cfg.Models.Default, cliTalents, "", 0)
+	loop := agent.NewLoop(logger, mem, nil, nil, ha, nil, llmSetup.Client, llmSetup.Catalog.DefaultModel, cliTalents, "", 0)
 	if ha != nil {
 		loop.SetHAInject(ha)
 	}
@@ -292,8 +297,10 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		return err
 	}
 
-	ollamaClient := llm.NewOllamaClient(cfg.Models.OllamaURL, logger)
-	llmClient := createLLMClient(cfg, logger, ollamaClient)
+	llmSetup, err := createLLMSetup(ctx, cfg, logger)
+	if err != nil {
+		return err
+	}
 
 	// Set up signal handling with explicit logging so operators see
 	// confirmation that the shutdown was received. A second signal
@@ -334,7 +341,7 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 		close(sigCh)
 	}
 
-	a, err := app.New(ctx, cfg, logger, stdout, llmClient, ollamaClient)
+	a, err := app.New(ctx, cfg, logger, stdout, llmSetup.Client, llmSetup.OllamaClients, llmSetup.HealthClients, llmSetup.ModelRuntime)
 	if err != nil {
 		stopSignals()
 		cancel()
@@ -346,13 +353,17 @@ func runServe(ctx context.Context, stdout io.Writer, stderr io.Writer, configPat
 	defer cancel()
 	defer stopSignals()
 
+	logLLMSetup(a.Logger(), llmSetup)
+
 	// Log with the fully-configured logger (file handler, index handler,
 	// correct level/format) so this line is captured in rotated logs.
 	a.Logger().Info("config loaded",
 		"path", cfgPath,
 		"port", cfg.Listen.Port,
-		"model", cfg.Models.Default,
-		"ollama_url", cfg.Models.OllamaURL,
+		"model", llmSetup.Catalog.DefaultModel,
+		"resource_clients", len(llmSetup.HealthClients),
+		"ollama_resources", len(llmSetup.OllamaClients),
+		"primary_ollama_url", llmSetup.Catalog.PrimaryOllamaURL(),
 	)
 
 	if err := a.StartWorkers(ctx); err != nil {
@@ -412,33 +423,101 @@ func loadConfig(explicit string) (*config.Config, string, error) {
 	return cfg, cfgPath, nil
 }
 
-// createLLMClient builds a multi-provider LLM client from the configuration.
-// Each model listed in config is mapped to its provider (ollama, anthropic,
-// etc.). Models not explicitly mapped fall through to the Ollama provider,
-// which acts as the default backend. The OllamaClient is created externally
-// so that the caller can register a connwatch watcher on it.
-func createLLMClient(cfg *config.Config, logger *slog.Logger, ollamaClient *llm.OllamaClient) llm.Client {
-	multi := llm.NewMultiClient(ollamaClient)
-	multi.AddProvider("ollama", ollamaClient)
+type llmSetup struct {
+	Catalog       *models.Catalog
+	ModelRegistry *models.Registry
+	ModelRuntime  *models.Runtime
+	Client        llm.Client
+	HealthClients map[string]models.ResourceHealthClient
+	OllamaClients map[string]*modelproviders.OllamaClient
+}
 
-	if cfg.Anthropic.Configured() {
-		anthropicClient := llm.NewAnthropicClient(cfg.Anthropic.APIKey, logger)
-		multi.AddProvider("anthropic", anthropicClient)
-		logger.Info("Anthropic provider configured")
+func createLLMSetup(ctx context.Context, cfg *config.Config, logger *slog.Logger) (*llmSetup, error) {
+	baseCatalog, err := models.BuildCatalog(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("build model catalog: %w", err)
+	}
+	normalizeConfiguredModelRefs(cfg, baseCatalog)
+
+	runtime, err := models.NewRuntime(ctx, baseCatalog, cfg, logger)
+	if err != nil {
+		return nil, fmt.Errorf("build model runtime: %w", err)
 	}
 
-	// Model providers are already defaulted to "ollama" by applyDefaults.
-	for _, m := range cfg.Models.Available {
-		multi.AddModel(m.Name, m.Provider)
+	return &llmSetup{
+		Catalog:       runtime.Registry().Catalog(),
+		ModelRegistry: runtime.Registry(),
+		ModelRuntime:  runtime,
+		Client:        runtime.Client(),
+		HealthClients: runtime.HealthClients(),
+		OllamaClients: runtime.OllamaClients(),
+	}, nil
+}
+
+func logLLMSetup(logger *slog.Logger, setup *llmSetup) {
+	if logger == nil || setup == nil {
+		return
 	}
 
-	defaultProvider := "ollama"
-	for _, m := range cfg.Models.Available {
-		if m.Name == cfg.Models.Default {
-			defaultProvider = m.Provider
+	snapshot := setup.ModelRegistry.Snapshot()
+	if snapshot == nil {
+		return
+	}
+
+	for _, res := range snapshot.Resources {
+		switch {
+		case res.LastError != "":
+			logger.Warn("model inventory discovery failed",
+				"resource", res.ID,
+				"provider", res.Provider,
+				"error", res.LastError,
+			)
+		case res.LastRefresh != "":
+			logger.Info("model inventory discovered",
+				"resource", res.ID,
+				"provider", res.Provider,
+				"models", res.DiscoveredModels,
+			)
 		}
 	}
-	logger.Info("LLM client initialized", "default_model", cfg.Models.Default, "default_provider", defaultProvider)
 
-	return multi
+	logger.Info("LLM client initialized",
+		"default_model", snapshot.DefaultModel,
+		"resources", len(snapshot.Resources),
+		"deployments", len(snapshot.Deployments),
+		"discovered_deployments", countDiscoveredDeployments(snapshot),
+	)
+}
+
+func countDiscoveredDeployments(snapshot *models.RegistrySnapshot) int {
+	if snapshot == nil {
+		return 0
+	}
+	discovered := 0
+	for _, dep := range snapshot.Deployments {
+		if dep.Source == models.DeploymentSourceDiscovered {
+			discovered++
+		}
+	}
+	return discovered
+}
+
+func normalizeConfiguredModelRefs(cfg *config.Config, catalog *models.Catalog) {
+	cfg.Models.Default = catalog.DefaultModel
+	cfg.Models.RecoveryModel = catalog.RecoveryModel
+
+	resolve := func(ref string) string {
+		if ref == "" {
+			return ""
+		}
+		if id, err := catalog.ResolveModelRef(ref); err == nil {
+			return id
+		}
+		return ref
+	}
+
+	cfg.Archive.MetadataModel = resolve(cfg.Archive.MetadataModel)
+	cfg.Extraction.Model = resolve(cfg.Extraction.Model)
+	cfg.Media.SummarizeModel = resolve(cfg.Media.SummarizeModel)
+	cfg.Attachments.Vision.Model = resolve(cfg.Attachments.Vision.Model)
 }

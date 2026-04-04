@@ -35,6 +35,8 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/media"
 	"github.com/nugget/thane-ai-agent/internal/memory"
 	"github.com/nugget/thane-ai-agent/internal/metacognitive"
+	"github.com/nugget/thane-ai-agent/internal/models"
+	modelproviders "github.com/nugget/thane-ai-agent/internal/models/providers"
 	"github.com/nugget/thane-ai-agent/internal/notifications"
 	"github.com/nugget/thane-ai-agent/internal/opstate"
 	"github.com/nugget/thane-ai-agent/internal/platform"
@@ -60,20 +62,27 @@ type App struct {
 	stdout io.Writer
 
 	// LLM clients
-	llmClient    llm.Client
-	ollamaClient *llm.OllamaClient
+	llmClient             llm.Client
+	ollamaClients         map[string]*modelproviders.OllamaClient
+	resourceHealthClients map[string]models.ResourceHealthClient
+	modelRuntime          *models.Runtime
+	modelCatalog          *models.Catalog
+	modelRegistry         *models.Registry
 
 	// Core subsystems
-	mem            *memory.SQLiteStore
-	archiveStore   *memory.ArchiveStore
-	archiveAdapter *memory.ArchiveAdapter
-	wmStore        *memory.WorkingMemoryStore
-	factStore      *knowledge.Store
-	contactStore   *contacts.Store
-	opStore        *opstate.Store
-	usageStore     *usage.Store
-	schedStore     *scheduler.Store
-	sched          *scheduler.Scheduler
+	mem                      *memory.SQLiteStore
+	archiveStore             *memory.ArchiveStore
+	archiveAdapter           *memory.ArchiveAdapter
+	wmStore                  *memory.WorkingMemoryStore
+	factStore                *knowledge.Store
+	contactStore             *contacts.Store
+	opStore                  *opstate.Store
+	modelPolicyStore         *modelPolicyStore
+	modelResourcePolicyStore *modelResourcePolicyStore
+	modelExperienceStore     *modelExperienceStore
+	usageStore               *usage.Store
+	schedStore               *scheduler.Store
+	sched                    *scheduler.Scheduler
 
 	// Agent loop and router
 	loop *agent.Loop

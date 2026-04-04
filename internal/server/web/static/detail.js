@@ -86,41 +86,16 @@ async function fetchSystemStatus() {
       systemStartTime = Date.now() - uptimeMs;
     }
 
-    // Status badge.
-    const badge = $('#system-status');
-    badge.textContent = sys.status || 'unknown';
-    badge.className = 'state-badge state-badge--' +
-      (sys.status === 'healthy' ? 'sleeping' : 'error');
-
-    // Services.
-    const container = $('#system-services');
-    container.innerHTML = '';
-    const health = sys.health || {};
-    for (const [key, svc] of Object.entries(health)) {
-      const row = document.createElement('div');
-      row.className = 'system-svc-row';
-      const dot = document.createElement('span');
-      dot.className = 'system-svc-dot system-svc-dot--' + (svc.ready ? 'ok' : 'err');
-      row.appendChild(dot);
-      const name = document.createElement('span');
-      name.className = 'system-svc-name';
-      name.textContent = svc.name || key;
-      row.appendChild(name);
-      if (!svc.ready && svc.last_error) {
-        const err = document.createElement('span');
-        err.className = 'system-svc-error';
-        err.textContent = svc.last_error;
-        row.appendChild(err);
-      }
-      container.appendChild(row);
-    }
-
+    renderSystemInspector(sys, {
+      badge: $('#system-status'),
+      overview: $('#system-overview'),
+      services: $('#system-services'),
+      registryMeta: $('#system-registry-meta'),
+      registrySummary: $('#system-registry-summary'),
+      registryResources: $('#system-registry-resources'),
+      registryDeployments: $('#system-registry-deployments'),
+    });
     updateSystemUptime();
-    const ver = sys.version || {};
-    $('#system-version').textContent = ver.version || '-';
-    $('#system-commit').textContent = ver.git_commit ? ver.git_commit.slice(0, 7) : '-';
-    $('#system-go').textContent = ver.go_version || '-';
-    $('#system-arch').textContent = (ver.os || '') + '/' + (ver.arch || '') || '-';
 
     setConnStatus('ok', 'Connected \u2014 last updated ' + formatTime(new Date()));
   } catch (err) {

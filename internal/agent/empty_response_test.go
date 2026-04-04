@@ -144,10 +144,9 @@ func TestEmptyResponse_FallbackAfterNudge(t *testing.T) {
 	}
 }
 
-func TestEmptyResponse_FirstIterNotNudged(t *testing.T) {
-	// If the model returns empty content on the very first iteration
-	// (no prior tool calls), the nudge should NOT trigger because
-	// i == 0 — the guard only activates after tool call iterations.
+func TestEmptyResponse_FirstIterNudged(t *testing.T) {
+	// First-turn empty text now follows the same nudge path as later
+	// empty completions so the agent does not silently return blank.
 	mock := &mockLLM{
 		responses: []*llm.ChatResponse{
 			// Iter 0: empty content, no tool calls
@@ -156,6 +155,12 @@ func TestEmptyResponse_FirstIterNotNudged(t *testing.T) {
 				Message:      llm.Message{Role: "assistant", Content: ""},
 				InputTokens:  100,
 				OutputTokens: 2,
+			},
+			{
+				Model:        "test-model",
+				Message:      llm.Message{Role: "assistant", Content: "nudged response"},
+				InputTokens:  120,
+				OutputTokens: 8,
 			},
 		},
 	}
@@ -169,14 +174,13 @@ func TestEmptyResponse_FirstIterNotNudged(t *testing.T) {
 		t.Fatalf("Run() error: %v", err)
 	}
 
-	// Only 1 LLM call — no nudge retry.
-	if len(mock.calls) != 1 {
-		t.Fatalf("expected 1 LLM call, got %d", len(mock.calls))
+	// Nudge should trigger one retry.
+	if len(mock.calls) != 2 {
+		t.Fatalf("expected 2 LLM calls, got %d", len(mock.calls))
 	}
 
-	// Response should be empty (no fallback for first-iteration empty).
-	if resp.Content != "" {
-		t.Errorf("response content = %q, want empty", resp.Content)
+	if resp.Content != "nudged response" {
+		t.Errorf("response content = %q, want %q", resp.Content, "nudged response")
 	}
 }
 

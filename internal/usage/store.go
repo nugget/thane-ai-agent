@@ -12,38 +12,55 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nugget/thane-ai-agent/internal/config"
+	"github.com/nugget/thane-ai-agent/internal/database"
+	"github.com/nugget/thane-ai-agent/internal/models"
 )
 
 // Record represents a single LLM interaction's token usage and cost.
 type Record struct {
-	ID             string
-	Timestamp      time.Time
-	RequestID      string
-	SessionID      string
-	ConversationID string
-	Model          string
-	Provider       string // "anthropic", "ollama"
-	InputTokens    int
-	OutputTokens   int
-	CostUSD        float64
-	Role           string // "interactive", "delegate", "scheduled", "auxiliary"
-	TaskName       string // "email_poll", "periodic_reflection", etc. (empty for interactive)
+	ID                       string
+	Timestamp                time.Time
+	RequestID                string
+	SessionID                string
+	ConversationID           string
+	Model                    string // Selected deployment ID when known
+	UpstreamModel            string
+	Resource                 string
+	Provider                 string // Provider family, e.g. "anthropic", "ollama", "lmstudio"
+	InputTokens              int
+	OutputTokens             int
+	CacheCreationInputTokens int
+	CacheReadInputTokens     int
+	CostUSD                  float64
+	Role                     string // "interactive", "delegate", "scheduled", "auxiliary"
+	TaskName                 string // "email_poll", "periodic_reflection", etc. (empty for interactive)
+}
+
+// ModelIdentity is the normalized usage-facing identity for a selected
+// model/deployment.
+type ModelIdentity struct {
+	Model         string
+	UpstreamModel string
+	Resource      string
+	Provider      string
 }
 
 // Summary holds aggregated token usage and cost totals.
 type Summary struct {
-	TotalRecords      int
-	TotalInputTokens  int64
-	TotalOutputTokens int64
-	TotalCostUSD      float64
+	TotalRecords                  int     `json:"total_records"`
+	TotalInputTokens              int64   `json:"total_input_tokens"`
+	TotalOutputTokens             int64   `json:"total_output_tokens"`
+	TotalCacheCreationInputTokens int64   `json:"total_cache_creation_input_tokens"`
+	TotalCacheReadInputTokens     int64   `json:"total_cache_read_input_tokens"`
+	TotalCostUSD                  float64 `json:"total_cost_usd"`
 }
 
 // GroupedSummary pairs a grouping key (model name, role, task name)
 // with its aggregated usage totals. Slices of GroupedSummary preserve
 // the SQL ordering (highest cost first).
 type GroupedSummary struct {
-	Key     string
-	Summary Summary
+	Key     string  `json:"key"`
+	Summary Summary `json:"summary"`
 }
 
 // Store is an append-only SQLite store for token usage records. All
@@ -88,8 +105,22 @@ func (s *Store) migrate() error {
 	CREATE INDEX IF NOT EXISTS idx_usage_session ON usage_records(session_id);
 	CREATE INDEX IF NOT EXISTS idx_usage_conversation ON usage_records(conversation_id);
 	`
-	_, err := s.db.Exec(schema)
-	return err
+	if _, err := s.db.Exec(schema); err != nil {
+		return err
+	}
+	if err := database.AddColumn(s.db, "usage_records", "upstream_model", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := database.AddColumn(s.db, "usage_records", "resource", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := database.AddColumn(s.db, "usage_records", "cache_creation_input_tokens", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	if err := database.AddColumn(s.db, "usage_records", "cache_read_input_tokens", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	return nil
 }
 
 // Record persists a usage record. If rec.ID is empty, a UUIDv7 is
@@ -108,18 +139,22 @@ func (s *Store) Record(ctx context.Context, rec Record) error {
 
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO usage_records
-			(id, timestamp, request_id, session_id, conversation_id, model, provider,
-			 input_tokens, output_tokens, cost_usd, role, task_name)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			(id, timestamp, request_id, session_id, conversation_id, model, upstream_model, resource, provider,
+			 input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens, cost_usd, role, task_name)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		rec.ID,
 		rec.Timestamp.UTC().Format(time.RFC3339),
 		rec.RequestID,
 		rec.SessionID,
 		rec.ConversationID,
 		rec.Model,
+		rec.UpstreamModel,
+		rec.Resource,
 		rec.Provider,
 		rec.InputTokens,
 		rec.OutputTokens,
+		rec.CacheCreationInputTokens,
+		rec.CacheReadInputTokens,
 		rec.CostUSD,
 		rec.Role,
 		rec.TaskName,
@@ -133,7 +168,9 @@ func (s *Store) Record(ctx context.Context, rec Record) error {
 // Summary returns aggregated totals for records within [start, end).
 func (s *Store) Summary(start, end time.Time) (*Summary, error) {
 	row := s.db.QueryRow(
-		`SELECT COUNT(*), COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0), COALESCE(SUM(cost_usd), 0)
+		`SELECT COUNT(*), COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0),
+		        COALESCE(SUM(cache_creation_input_tokens), 0), COALESCE(SUM(cache_read_input_tokens), 0),
+		        COALESCE(SUM(cost_usd), 0)
 		 FROM usage_records
 		 WHERE timestamp >= ? AND timestamp < ?`,
 		start.UTC().Format(time.RFC3339),
@@ -141,7 +178,7 @@ func (s *Store) Summary(start, end time.Time) (*Summary, error) {
 	)
 
 	var sum Summary
-	if err := row.Scan(&sum.TotalRecords, &sum.TotalInputTokens, &sum.TotalOutputTokens, &sum.TotalCostUSD); err != nil {
+	if err := row.Scan(&sum.TotalRecords, &sum.TotalInputTokens, &sum.TotalOutputTokens, &sum.TotalCacheCreationInputTokens, &sum.TotalCacheReadInputTokens, &sum.TotalCostUSD); err != nil {
 		return nil, fmt.Errorf("query usage summary: %w", err)
 	}
 	return &sum, nil
@@ -151,6 +188,24 @@ func (s *Store) Summary(start, end time.Time) (*Summary, error) {
 // [start, end), ordered by cost descending.
 func (s *Store) SummaryByModel(start, end time.Time) ([]GroupedSummary, error) {
 	return s.summaryGroupedBy("model", start, end)
+}
+
+// SummaryByUpstreamModel returns per-upstream-model aggregated totals
+// for records within [start, end), ordered by cost descending.
+func (s *Store) SummaryByUpstreamModel(start, end time.Time) ([]GroupedSummary, error) {
+	return s.summaryGroupedBy("upstream_model", start, end)
+}
+
+// SummaryByProvider returns per-provider aggregated totals for records
+// within [start, end), ordered by cost descending.
+func (s *Store) SummaryByProvider(start, end time.Time) ([]GroupedSummary, error) {
+	return s.summaryGroupedBy("provider", start, end)
+}
+
+// SummaryByResource returns per-resource aggregated totals for records
+// within [start, end), ordered by cost descending.
+func (s *Store) SummaryByResource(start, end time.Time) ([]GroupedSummary, error) {
+	return s.summaryGroupedBy("resource", start, end)
 }
 
 // SummaryByRole returns per-role aggregated totals for records within
@@ -166,11 +221,33 @@ func (s *Store) SummaryByTask(start, end time.Time) ([]GroupedSummary, error) {
 	return s.summaryGroupedBy("task_name", start, end)
 }
 
+// SummaryByGroup dispatches the grouped summary query based on the
+// caller-provided grouping key.
+func (s *Store) SummaryByGroup(groupBy string, start, end time.Time) ([]GroupedSummary, error) {
+	switch strings.TrimSpace(groupBy) {
+	case "deployment", "model":
+		return s.SummaryByModel(start, end)
+	case "upstream_model":
+		return s.SummaryByUpstreamModel(start, end)
+	case "provider":
+		return s.SummaryByProvider(start, end)
+	case "resource":
+		return s.SummaryByResource(start, end)
+	case "role":
+		return s.SummaryByRole(start, end)
+	case "task":
+		return s.SummaryByTask(start, end)
+	default:
+		return nil, fmt.Errorf("unsupported group_by %q; use one of [\"deployment\" \"model\" \"upstream_model\" \"provider\" \"resource\" \"role\" \"task\"]", groupBy)
+	}
+}
+
 func (s *Store) summaryGroupedBy(column string, start, end time.Time) ([]GroupedSummary, error) {
 	// column is always a compile-time constant from our own methods,
 	// never user input, so embedding it directly is safe.
 	query := fmt.Sprintf(
-		`SELECT COALESCE(%s, ''), COUNT(*), COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0), COALESCE(SUM(cost_usd), 0)
+		`SELECT COALESCE(%s, ''), COUNT(*), COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0),
+		        COALESCE(SUM(cache_creation_input_tokens), 0), COALESCE(SUM(cache_read_input_tokens), 0), COALESCE(SUM(cost_usd), 0)
 		 FROM usage_records
 		 WHERE timestamp >= ? AND timestamp < ?
 		 GROUP BY %s
@@ -190,7 +267,7 @@ func (s *Store) summaryGroupedBy(column string, start, end time.Time) ([]Grouped
 	var result []GroupedSummary
 	for rows.Next() {
 		var gs GroupedSummary
-		if err := rows.Scan(&gs.Key, &gs.Summary.TotalRecords, &gs.Summary.TotalInputTokens, &gs.Summary.TotalOutputTokens, &gs.Summary.TotalCostUSD); err != nil {
+		if err := rows.Scan(&gs.Key, &gs.Summary.TotalRecords, &gs.Summary.TotalInputTokens, &gs.Summary.TotalOutputTokens, &gs.Summary.TotalCacheCreationInputTokens, &gs.Summary.TotalCacheReadInputTokens, &gs.Summary.TotalCostUSD); err != nil {
 			return nil, fmt.Errorf("scan usage by %s: %w", column, err)
 		}
 		result = append(result, gs)
@@ -198,25 +275,93 @@ func (s *Store) summaryGroupedBy(column string, start, end time.Time) ([]Grouped
 	return result, rows.Err()
 }
 
+// ResolveModelIdentity resolves usage-facing metadata for a selected
+// model/deployment. When a normalized catalog is available, it is used
+// as the source of truth. Otherwise the function falls back to parsing
+// deployment-qualified IDs like "resource/model".
+func ResolveModelIdentity(model string, cat *models.Catalog) ModelIdentity {
+	model = strings.TrimSpace(model)
+	if cat != nil {
+		if dep, ok := cat.DeploymentByRef(model); ok {
+			return ModelIdentity{
+				Model:         dep.ID,
+				UpstreamModel: dep.ModelName,
+				Resource:      dep.ResourceID,
+				Provider:      dep.Provider,
+			}
+		}
+	}
+
+	identity := ModelIdentity{
+		Model: model,
+	}
+	if slash := strings.Index(model, "/"); slash > 0 && slash < len(model)-1 {
+		identity.Resource = model[:slash]
+		identity.UpstreamModel = model[slash+1:]
+	} else {
+		identity.UpstreamModel = model
+	}
+	identity.Provider = ResolveProvider(identity.UpstreamModel)
+	return identity
+}
+
 // ResolveProvider infers the LLM provider from the model name. Models
 // starting with "claude-" are Anthropic; everything else is assumed to
 // be Ollama (local).
 func ResolveProvider(model string) string {
+	model = strings.TrimSpace(model)
+	if slash := strings.Index(model, "/"); slash > 0 && slash < len(model)-1 {
+		model = model[slash+1:]
+	}
 	if strings.HasPrefix(model, "claude-") {
 		return "anthropic"
 	}
 	return "ollama"
 }
 
+const (
+	anthropicCacheWriteMultiplier = 1.25
+	anthropicCacheReadMultiplier  = 0.10
+)
+
+// ComputeDetailedCostForIdentity calculates USD cost for a resolved model
+// identity using uncached input tokens, cache-write input tokens,
+// cache-read input tokens, and output tokens. Deployment-qualified IDs
+// fall back to upstream-model pricing when needed.
+func ComputeDetailedCostForIdentity(identity ModelIdentity, inputTokens, cacheCreationInputTokens, cacheReadInputTokens, outputTokens int, pricing map[string]config.PricingEntry) float64 {
+	if len(pricing) == 0 {
+		return 0
+	}
+
+	keys := []string{identity.Model}
+	if identity.UpstreamModel != "" && identity.UpstreamModel != identity.Model {
+		keys = append(keys, identity.UpstreamModel)
+	}
+	for _, key := range keys {
+		entry, ok := pricing[key]
+		if !ok {
+			continue
+		}
+		cost := float64(inputTokens) / 1_000_000.0 * entry.InputPerMillion
+		cost += float64(cacheCreationInputTokens) / 1_000_000.0 * (entry.InputPerMillion * anthropicCacheWriteMultiplier)
+		cost += float64(cacheReadInputTokens) / 1_000_000.0 * (entry.InputPerMillion * anthropicCacheReadMultiplier)
+		cost += float64(outputTokens) / 1_000_000.0 * entry.OutputPerMillion
+		return cost
+	}
+	return 0
+}
+
+// ComputeCostForIdentity calculates USD cost for a resolved model
+// identity. The selected deployment ID is checked first, then the
+// upstream model as a fallback so deployment-qualified IDs can reuse
+// provider pricing entries keyed by upstream model name.
+func ComputeCostForIdentity(identity ModelIdentity, inputTokens, outputTokens int, pricing map[string]config.PricingEntry) float64 {
+	return ComputeDetailedCostForIdentity(identity, inputTokens, 0, 0, outputTokens, pricing)
+}
+
 // ComputeCost calculates the USD cost for a model's token usage based
 // on the pricing table. Models not in the table are treated as free
 // (local/Ollama models).
 func ComputeCost(model string, inputTokens, outputTokens int, pricing map[string]config.PricingEntry) float64 {
-	entry, ok := pricing[model]
-	if !ok {
-		return 0
-	}
-	cost := float64(inputTokens) / 1_000_000.0 * entry.InputPerMillion
-	cost += float64(outputTokens) / 1_000_000.0 * entry.OutputPerMillion
-	return cost
+	return ComputeCostForIdentity(ResolveModelIdentity(model, nil), inputTokens, outputTokens, pricing)
 }

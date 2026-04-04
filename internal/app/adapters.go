@@ -23,6 +23,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/logging"
 	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
 	"github.com/nugget/thane-ai-agent/internal/memory"
+	"github.com/nugget/thane-ai-agent/internal/models"
 	"github.com/nugget/thane-ai-agent/internal/notifications"
 	"github.com/nugget/thane-ai-agent/internal/prompts"
 	"github.com/nugget/thane-ai-agent/internal/router"
@@ -747,7 +748,9 @@ func (a *contentQueryAdapter) QueryRequestDetail(requestID string) (*logging.Req
 // web package's [web.SystemStatusProvider] interface, keeping the web
 // package decoupled from connwatch and buildinfo.
 type systemStatusAdapter struct {
-	connMgr *connwatch.Manager
+	connMgr       *connwatch.Manager
+	modelRegistry *models.Registry
+	router        *router.Router
 }
 
 // Health returns the health state of all watched services.
@@ -776,6 +779,23 @@ func (a *systemStatusAdapter) Uptime() time.Duration {
 // Version returns build and runtime metadata.
 func (a *systemStatusAdapter) Version() map[string]string {
 	return buildinfo.RuntimeInfo()
+}
+
+// ModelRegistry returns the current effective model-registry snapshot.
+func (a *systemStatusAdapter) ModelRegistry() *models.RegistrySnapshot {
+	if a.modelRegistry == nil {
+		return nil
+	}
+	return a.modelRegistry.Snapshot()
+}
+
+// RouterStats returns the current router statistics snapshot.
+func (a *systemStatusAdapter) RouterStats() *router.Stats {
+	if a.router == nil {
+		return nil
+	}
+	stats := a.router.GetStats()
+	return &stats
 }
 
 // loopAdapter bridges [looppkg.Runner] to [*agent.Loop], converting

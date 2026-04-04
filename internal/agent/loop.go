@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -23,6 +24,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/logging"
 	"github.com/nugget/thane-ai-agent/internal/loop"
 	"github.com/nugget/thane-ai-agent/internal/memory"
+	"github.com/nugget/thane-ai-agent/internal/models"
 	"github.com/nugget/thane-ai-agent/internal/openclaw"
 	"github.com/nugget/thane-ai-agent/internal/prompts"
 	"github.com/nugget/thane-ai-agent/internal/provenance"
@@ -35,8 +37,9 @@ import (
 
 // Message represents a chat message.
 type Message struct {
-	Role    string `json:"role"` // system, user, assistant
-	Content string `json:"content"`
+	Role    string             `json:"role"` // system, user, assistant
+	Content string             `json:"content"`
+	Images  []llm.ImageContent `json:"-"`
 }
 
 // Request represents an incoming agent request.
@@ -96,14 +99,16 @@ const maxTagContextBytes = 64 * 1024
 // Response represents the agent's response.
 // Response is the result of a single agent Run() call.
 type Response struct {
-	Content      string         `json:"content"`
-	Model        string         `json:"model"`
-	FinishReason string         `json:"finish_reason"`
-	InputTokens  int            `json:"input_tokens,omitempty"`
-	OutputTokens int            `json:"output_tokens,omitempty"`
-	ToolsUsed    map[string]int `json:"tools_used,omitempty"` // tool name → call count
-	Iterations   int            `json:"iterations,omitempty"`
-	Exhausted    bool           `json:"exhausted,omitempty"`
+	Content                  string         `json:"content"`
+	Model                    string         `json:"model"`
+	FinishReason             string         `json:"finish_reason"`
+	InputTokens              int            `json:"input_tokens,omitempty"`
+	OutputTokens             int            `json:"output_tokens,omitempty"`
+	CacheCreationInputTokens int            `json:"cache_creation_input_tokens,omitempty"`
+	CacheReadInputTokens     int            `json:"cache_read_input_tokens,omitempty"`
+	ToolsUsed                map[string]int `json:"tools_used,omitempty"` // tool name → call count
+	Iterations               int            `json:"iterations,omitempty"`
+	Exhausted                bool           `json:"exhausted,omitempty"`
 
 	// SessionID and RequestID are set by Run() so callers can
 	// correlate post-run log lines with the agent loop's context.
@@ -215,6 +220,9 @@ type Loop struct {
 	contentWriter     *logging.ContentWriter         // nil = content retention disabled
 	usageStore        *usage.Store                   // nil = no usage recording
 	pricing           map[string]config.PricingEntry // model→cost for usage recording
+	usageCatalog      *models.Catalog
+	modelRegistry     *models.Registry
+	modelRuntime      *models.Runtime
 
 	// Capability tags — per-Run tool/talent filtering.
 	//
@@ -416,9 +424,22 @@ func (l *Loop) SetCapabilityTags(capTags map[string]config.CapabilityTagConfig, 
 // SetUsageRecorder configures persistent token usage recording. When
 // set, every LLM completion in the agent loop is persisted for cost
 // attribution and analysis.
-func (l *Loop) SetUsageRecorder(store *usage.Store, pricing map[string]config.PricingEntry) {
+func (l *Loop) SetUsageRecorder(store *usage.Store, pricing map[string]config.PricingEntry, cat *models.Catalog) {
 	l.usageStore = store
 	l.pricing = pricing
+	l.usageCatalog = cat
+}
+
+// UseModelRegistry configures the live model registry used for
+// explicit model resolution and runtime usage attribution.
+func (l *Loop) UseModelRegistry(registry *models.Registry) {
+	l.modelRegistry = registry
+}
+
+// UseModelRuntime configures the live model runtime used for explicit
+// runner preparation flows such as LM Studio context expansion.
+func (l *Loop) UseModelRuntime(runtime *models.Runtime) {
+	l.modelRuntime = runtime
 }
 
 // SetChannelTags configures channel-pinned tag activation. When a
@@ -969,7 +990,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		if err != nil {
 			// Record failed outcome
 			if l.router != nil && liteDecision != nil {
-				l.router.RecordOutcome(liteDecision.RequestID, time.Since(startTime).Milliseconds(), 0, false)
+				l.router.RecordFailure(liteDecision.RequestID, time.Since(startTime).Milliseconds(), 0, isTimeout(err))
 			}
 			return nil, fmt.Errorf("lightweight completion: %w", err)
 		}
@@ -986,16 +1007,18 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			"elapsed", time.Since(startTime).Round(time.Second),
 		)
 
-		l.recordUsage(ctx, req, llmResp.Model, llmResp.InputTokens, llmResp.OutputTokens, convID, sessionTag, requestID)
+		l.recordUsage(ctx, req, llmResp.Model, llmResp.InputTokens, llmResp.OutputTokens, llmResp.CacheCreationInputTokens, llmResp.CacheReadInputTokens, convID, sessionTag, requestID)
 
 		return &Response{
-			Content:      llmResp.Message.Content,
-			Model:        llmResp.Model,
-			FinishReason: "stop",
-			InputTokens:  llmResp.InputTokens,
-			OutputTokens: llmResp.OutputTokens,
-			SessionID:    sessionID,
-			RequestID:    requestID,
+			Content:                  llmResp.Message.Content,
+			Model:                    llmResp.Model,
+			FinishReason:             "stop",
+			InputTokens:              llmResp.InputTokens,
+			OutputTokens:             llmResp.OutputTokens,
+			CacheCreationInputTokens: llmResp.CacheCreationInputTokens,
+			CacheReadInputTokens:     llmResp.CacheReadInputTokens,
+			SessionID:                sessionID,
+			RequestID:                requestID,
 		}, nil
 	}
 
@@ -1141,6 +1164,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		llmMessages = append(llmMessages, llm.Message{
 			Role:    m.Role,
 			Content: m.Content,
+			Images:  append([]llm.ImageContent(nil), m.Images...),
 		})
 	}
 
@@ -1155,6 +1179,27 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		baseTools = baseTools.FilteredCopyExcluding(req.ExcludeTools)
 		log.Info("tools excluded from run", "excluded", req.ExcludeTools)
 	}
+
+	// Determine whether tool gating is active before model selection so
+	// both router decisions and explicit-model preflight can reason
+	// about the actual tool surface this run will expose.
+	gatingActive := len(l.orchestratorTools) > 0 && l.tools.Get("thane_delegate") != nil
+	if req.Hints[router.HintDelegationGating] == "disabled" {
+		gatingActive = false
+	}
+	if gatingActive {
+		log.Info("orchestrator tool gating active", "tools", l.orchestratorTools)
+	}
+	skipTagFilter := req.SkipTagFilter
+
+	visibleTools := baseTools
+	if gatingActive {
+		visibleTools = visibleTools.FilteredCopy(l.orchestratorTools)
+	}
+	needsTools := len(visibleTools.List()) > 0
+	needsStreaming := stream != nil
+	needsImages := messagesNeedImages(req.Messages)
+	contextSize := estimateRequestContextTokens(systemPrompt, req.Messages)
 
 	// Select model via router
 	model := req.Model
@@ -1173,43 +1218,40 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 				}
 			}
 
-			// Calculate context size (rough estimate). History is now
-			// embedded as JSON in systemPrompt, so its length covers
-			// persona, talents, dynamic context, and conversation history.
-			contextSize := len(systemPrompt) / 4
-
+			// Estimate effective prompt size for routing. This includes
+			// the assembled system prompt, user-visible message text, and
+			// a conservative surcharge for image-bearing inputs.
 			routerReq := router.Request{
-				Query:       query,
-				ContextSize: contextSize,
-				NeedsTools:  true, // We always have tools available
-				ToolCount:   len(baseTools.List()),
-				Priority:    router.PriorityInteractive,
-				Hints:       req.Hints,
+				Query:          query,
+				ContextSize:    contextSize,
+				NeedsTools:     needsTools,
+				NeedsStreaming: needsStreaming,
+				NeedsImages:    needsImages,
+				ToolCount:      len(visibleTools.List()),
+				Priority:       router.PriorityInteractive,
+				Hints:          req.Hints,
 			}
 
 			model, routerDecision = l.router.Route(ctx, routerReq)
+			if needsImages && routerDecision != nil && routerDecision.NoEligible {
+				return nil, noEligibleImageRoutingError(l.currentModelCatalog(), routerDecision)
+			}
 			log.Debug("model selected by router", "model", model)
 		} else {
 			model = l.model
 			log.Debug("model selected as default (no router)", "model", model)
 		}
 	} else {
+		if _, prepErr := l.maybePrepareExplicitModel(ctx, model, needsTools, needsStreaming, needsImages, contextSize); prepErr != nil {
+			return nil, prepErr
+		}
+		resolvedModel, err := l.preflightExplicitModel(model, needsTools, needsStreaming, needsImages, contextSize)
+		if err != nil {
+			return nil, err
+		}
+		model = resolvedModel
 		log.Debug("model specified in request, skipping router", "model", model)
 	}
-
-	// Determine whether tool gating is active. Gating is silently disabled
-	// when thane_delegate is not registered — without a delegation tool the
-	// restricted set would leave the agent unable to act. The thane:ops
-	// profile disables gating via the delegation_gating hint to give the
-	// model direct access to all tools.
-	gatingActive := len(l.orchestratorTools) > 0 && l.tools.Get("thane_delegate") != nil
-	if req.Hints[router.HintDelegationGating] == "disabled" {
-		gatingActive = false
-	}
-	if gatingActive {
-		log.Info("orchestrator tool gating active", "tools", l.orchestratorTools)
-	}
-	skipTagFilter := req.SkipTagFilter
 
 	startTime := time.Now()
 
@@ -1474,6 +1516,10 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	engine := &iterate.Engine{}
 	iterResult, err := engine.Run(ctx, iterCfg, llmMessages)
 	if err != nil {
+		if l.router != nil && routerDecision != nil {
+			latency := time.Since(startTime).Milliseconds()
+			l.router.RecordFailure(routerDecision.RequestID, latency, l.memory.GetTokenCount(convID), isTimeout(err))
+		}
 		return nil, err
 	}
 
@@ -1536,20 +1582,22 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	}
 
 	resp = &Response{
-		Content:      iterResult.Content,
-		Model:        iterResult.Model,
-		FinishReason: finishReason,
-		InputTokens:  iterResult.InputTokens,
-		OutputTokens: iterResult.OutputTokens,
-		ToolsUsed:    iterResult.ToolsUsed,
-		Iterations:   iterResult.IterationCount,
-		Exhausted:    iterResult.Exhausted,
-		SessionID:    sessionID,
-		RequestID:    requestID,
-		ActiveTags:   activeTags,
+		Content:                  iterResult.Content,
+		Model:                    iterResult.Model,
+		FinishReason:             finishReason,
+		InputTokens:              iterResult.InputTokens,
+		OutputTokens:             iterResult.OutputTokens,
+		CacheCreationInputTokens: iterResult.CacheCreationInputTokens,
+		CacheReadInputTokens:     iterResult.CacheReadInputTokens,
+		ToolsUsed:                iterResult.ToolsUsed,
+		Iterations:               iterResult.IterationCount,
+		Exhausted:                iterResult.Exhausted,
+		SessionID:                sessionID,
+		RequestID:                requestID,
+		ActiveTags:               activeTags,
 	}
 
-	l.recordUsage(ctx, req, iterResult.Model, iterResult.InputTokens, iterResult.OutputTokens, convID, sessionTag, requestID)
+	l.recordUsage(ctx, req, iterResult.Model, iterResult.InputTokens, iterResult.OutputTokens, iterResult.CacheCreationInputTokens, iterResult.CacheReadInputTokens, convID, sessionTag, requestID)
 	l.archiveIterations(log, convID, iterResult.Iterations)
 
 	// Content retention is fire-and-forget with a short deadline so it
@@ -1566,6 +1614,8 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 // buildLLMErrorHandler returns the OnLLMError callback that implements
 // the agent's timeout retry, recovery model downshift, and failover logic.
 func (l *Loop) buildLLMErrorHandler(ctx context.Context, stream llm.StreamCallback, defaultModel string, req *Request, timeoutRecovered *bool) func(context.Context, error, string, []llm.Message, []map[string]any, llm.StreamCallback) (*llm.ChatResponse, string, error) {
+	explicitModelRequested := strings.TrimSpace(req.Model) != ""
+
 	return func(iterCtx context.Context, err error, model string,
 		msgs []llm.Message, toolDefs []map[string]any,
 		_ llm.StreamCallback) (*llm.ChatResponse, string, error) {
@@ -1657,9 +1707,43 @@ func (l *Loop) buildLLMErrorHandler(ctx context.Context, stream llm.StreamCallba
 			}, model, nil
 		}
 
-		// Non-timeout error: failover to default model if using a routed model.
-		if model != l.model {
-			fallbackModel := l.model
+		// Ambiguous route selection is user-fixable and should surface
+		// directly instead of being silently collapsed to the default.
+		var ambiguous *llm.AmbiguousModelError
+		if errors.As(err, &ambiguous) {
+			return nil, "", err
+		}
+
+		if explicitModelRequested {
+			if resp, recoveredModel, recoveryErr, handled := l.maybeRetryExplicitModelAfterProviderContextError(iterCtx, model, err, msgs, toolDefs, stream); handled {
+				if recoveryErr != nil {
+					iterLog.Warn("explicit model context recovery failed", "model", model, "error", recoveryErr)
+					return nil, "", recoveryErr
+				}
+				iterLog.Info("explicit model context recovery successful", "model", recoveredModel)
+				return resp, recoveredModel, nil
+			}
+		}
+
+		if isUserFixableModelError(err) {
+			iterLog.Info("user-fixable model error, skipping failover", "model", model)
+			return nil, "", err
+		}
+
+		if explicitModelRequested {
+			iterLog.Info("explicit model requested, skipping failover", "model", model)
+			return nil, "", err
+		}
+
+		// Non-timeout error: failover to the router's current default
+		// model when available so live routing policy updates apply here
+		// too. Fall back to the loop's static startup default only when
+		// no router is configured.
+		fallbackModel := l.model
+		if l.router != nil && l.router.DefaultModel() != "" {
+			fallbackModel = l.router.DefaultModel()
+		}
+		if model != fallbackModel {
 			iterLog.Info("attempting failover", "from", model, "to", fallbackModel)
 			if l.failoverHandler != nil {
 				if ferr := l.failoverHandler.OnFailover(iterCtx, model, fallbackModel, err.Error()); ferr != nil {
@@ -1773,6 +1857,26 @@ func isTimeout(err error) bool {
 	return strings.Contains(msg, "timeout") ||
 		strings.Contains(msg, "overloaded") ||
 		strings.Contains(msg, "529")
+}
+
+func isUserFixableModelError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.TrimSpace(err.Error())
+	if !strings.HasPrefix(msg, "API error ") {
+		return false
+	}
+	rest := strings.TrimPrefix(msg, "API error ")
+	codeField, _, ok := strings.Cut(rest, ":")
+	if !ok {
+		return false
+	}
+	code, parseErr := strconv.Atoi(strings.TrimSpace(codeField))
+	if parseErr != nil {
+		return false
+	}
+	return code >= 400 && code < 500
 }
 
 // buildRecoveryPrompt constructs a minimal message history for the
@@ -2215,7 +2319,7 @@ func formatHistoryJSON(messages []memory.Message, tz string) string {
 // recordUsage persists a usage record for a completed LLM interaction.
 // No-op when usage recording is not configured. Errors are logged but
 // do not affect the caller.
-func (l *Loop) recordUsage(ctx context.Context, req *Request, model string, totalIn, totalOut int, convID, sessionTag, requestID string) {
+func (l *Loop) recordUsage(ctx context.Context, req *Request, model string, totalIn, totalOut, cacheCreateIn, cacheReadIn int, convID, sessionTag, requestID string) {
 	if l.usageStore == nil {
 		return
 	}
@@ -2238,19 +2342,24 @@ func (l *Loop) recordUsage(ctx context.Context, req *Request, model string, tota
 		}
 	}
 
-	cost := usage.ComputeCost(model, totalIn, totalOut, l.pricing)
+	identity := usage.ResolveModelIdentity(model, l.currentModelCatalog())
+	cost := usage.ComputeDetailedCostForIdentity(identity, totalIn, cacheCreateIn, cacheReadIn, totalOut, l.pricing)
 	rec := usage.Record{
-		Timestamp:      time.Now(),
-		RequestID:      requestID,
-		SessionID:      sessionTag,
-		ConversationID: convID,
-		Model:          model,
-		Provider:       usage.ResolveProvider(model),
-		InputTokens:    totalIn,
-		OutputTokens:   totalOut,
-		CostUSD:        cost,
-		Role:           role,
-		TaskName:       taskName,
+		Timestamp:                time.Now(),
+		RequestID:                requestID,
+		SessionID:                sessionTag,
+		ConversationID:           convID,
+		Model:                    identity.Model,
+		UpstreamModel:            identity.UpstreamModel,
+		Resource:                 identity.Resource,
+		Provider:                 identity.Provider,
+		InputTokens:              totalIn,
+		OutputTokens:             totalOut,
+		CacheCreationInputTokens: cacheCreateIn,
+		CacheReadInputTokens:     cacheReadIn,
+		CostUSD:                  cost,
+		Role:                     role,
+		TaskName:                 taskName,
 	}
 
 	if err := l.usageStore.Record(ctx, rec); err != nil {

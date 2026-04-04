@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"sync"
@@ -13,12 +14,26 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/llm"
 	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
 	"github.com/nugget/thane-ai-agent/internal/memory"
+	"github.com/nugget/thane-ai-agent/internal/models"
 	"github.com/nugget/thane-ai-agent/internal/opstate"
 	"github.com/nugget/thane-ai-agent/internal/router"
 	"github.com/nugget/thane-ai-agent/internal/scheduler"
 	"github.com/nugget/thane-ai-agent/internal/talents"
 	"github.com/nugget/thane-ai-agent/internal/usage"
 )
+
+const (
+	modelInventoryRefreshInterval  = 5 * time.Minute
+	modelExperiencePersistInterval = 5 * time.Second
+)
+
+func modelResourceRefreshCallbacks(ctx context.Context, resourceID string, refresh func(context.Context, string)) (func(), func(error)) {
+	return func() {
+			refresh(ctx, "resource_ready:"+resourceID)
+		}, func(error) {
+			refresh(ctx, "resource_down:"+resourceID)
+		}
+}
 
 // initStores creates data stores, background infrastructure, and the
 // model router. Most components are passive — their goroutines are
@@ -94,6 +109,54 @@ func (a *App) initStores(s *newState) error {
 	connMgr := connwatch.NewManager(logger)
 	a.connMgr = connMgr
 
+	countDiscovered := func(snapshot *models.RegistrySnapshot) int {
+		if snapshot == nil {
+			return 0
+		}
+		discovered := 0
+		for _, dep := range snapshot.Deployments {
+			if dep.Source == models.DeploymentSourceDiscovered {
+				discovered++
+			}
+		}
+		return discovered
+	}
+
+	refreshModelRuntime := func(ctx context.Context, reason string) {
+		if a.modelRuntime == nil {
+			return
+		}
+		refreshCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		result, err := a.modelRuntime.Refresh(refreshCtx)
+		if err != nil {
+			if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+				logger.Debug("model registry refresh canceled", "reason", reason, "error", err)
+				return
+			}
+			logger.Warn("model registry refresh failed", "reason", reason, "error", err)
+			return
+		}
+		if result == nil || result.Snapshot == nil {
+			return
+		}
+		a.syncRouterConfig()
+		if result.Changed {
+			logger.Info("model registry refreshed",
+				"reason", reason,
+				"generation", result.Snapshot.Generation,
+				"resources", len(result.Snapshot.Resources),
+				"deployments", len(result.Snapshot.Deployments),
+				"discovered_deployments", countDiscovered(result.Snapshot),
+			)
+		} else {
+			logger.Debug("model registry refresh completed with no changes",
+				"reason", reason,
+				"generation", result.Snapshot.Generation,
+			)
+		}
+	}
+
 	// The OnReady callback captures s (pointer) so it sees the
 	// personTracker assigned later in initAwareness.
 	var subscribeOnce sync.Once
@@ -152,13 +215,47 @@ func (a *App) initStores(s *newState) error {
 		a.ha.SetWatcher(haWatcher)
 	}
 
-	ollamaWatcher := connMgr.Watch(s.ctx, connwatch.WatcherConfig{
-		Name:    "ollama",
-		Probe:   func(pCtx context.Context) error { return a.ollamaClient.Ping(pCtx) },
-		Backoff: connwatch.DefaultBackoffConfig(),
-		Logger:  logger,
-	})
-	a.ollamaClient.SetWatcher(ollamaWatcher)
+	for _, res := range a.modelCatalog.Resources {
+		res := res
+		client, ok := a.resourceHealthClients[res.ID]
+		if !ok {
+			continue
+		}
+		c := client
+		watchName := res.Provider
+		if len(a.resourceHealthClients) > 1 || res.ID != "default" {
+			watchName = res.Provider + ":" + res.ID
+		}
+		onReady, onDown := modelResourceRefreshCallbacks(s.ctx, res.ID, refreshModelRuntime)
+		resourceWatcher := connMgr.Watch(s.ctx, connwatch.WatcherConfig{
+			Name:    watchName,
+			Probe:   c.Ping,
+			Backoff: connwatch.DefaultBackoffConfig(),
+			OnReady: onReady,
+			OnDown:  onDown,
+			Logger:  logger.With("resource", res.ID, "provider", res.Provider),
+		})
+		c.AttachWatcher(resourceWatcher)
+	}
+
+	if a.modelRuntime != nil && a.modelRuntime.InventoryClientCount() > 0 {
+		a.deferWorker("model-inventory-refresh", func(ctx context.Context) error {
+			go func() {
+				ticker := time.NewTicker(modelInventoryRefreshInterval)
+				defer ticker.Stop()
+				for {
+					select {
+					case <-ctx.Done():
+						return
+					case <-ticker.C:
+						refreshModelRuntime(ctx, "periodic")
+					}
+				}
+			}()
+			return nil
+		})
+		logger.Info("model inventory refresh enabled", "interval", modelInventoryRefreshInterval)
+	}
 
 	// --- Session archive ---
 	// All data (sessions, iterations, messages, tool calls) lives in
@@ -216,33 +313,7 @@ func (a *App) initStores(s *newState) error {
 	// --- Model router ---
 	// Selects the best model for each request based on complexity, cost,
 	// and capability requirements. Falls back to the default model.
-	routerCfg := router.Config{
-		DefaultModel: cfg.Models.Default,
-		LocalFirst:   cfg.Models.LocalFirst,
-		MaxAuditLog:  1000,
-	}
-
-	for _, m := range cfg.Models.Available {
-		minComp := router.ComplexitySimple
-		switch m.MinComplexity {
-		case "moderate":
-			minComp = router.ComplexityModerate
-		case "complex":
-			minComp = router.ComplexityComplex
-		}
-
-		routerCfg.Models = append(routerCfg.Models, router.Model{
-			Name:          m.Name,
-			Provider:      m.Provider,
-			SupportsTools: m.SupportsTools,
-			ContextWindow: m.ContextWindow,
-			Speed:         m.Speed,
-			Quality:       m.Quality,
-			CostTier:      m.CostTier,
-			MinComplexity: minComp,
-		})
-	}
-
+	routerCfg := a.modelRegistry.Catalog().RouterConfig(1000)
 	rtr := router.NewRouter(logger, routerCfg)
 	a.rtr = rtr
 	logger.Info("model router initialized",
@@ -323,6 +394,53 @@ func (a *App) initStores(s *newState) error {
 		return fmt.Errorf("initialize operational state store: %w", err)
 	}
 	a.opStore = opStore
+	a.modelPolicyStore = newModelPolicyStore(opStore)
+	if err := a.modelPolicyStore.LoadInto(a.modelRegistry, logger); err != nil {
+		return fmt.Errorf("load persisted model registry policies: %w", err)
+	}
+	a.modelResourcePolicyStore = newModelResourcePolicyStore(opStore)
+	if err := a.modelResourcePolicyStore.LoadInto(a.modelRegistry, logger); err != nil {
+		return fmt.Errorf("load persisted model registry resource policies: %w", err)
+	}
+	if a.rtr != nil {
+		a.syncRouterConfig()
+	}
+	a.modelExperienceStore = newModelExperienceStore(opStore)
+	if err := a.modelExperienceStore.LoadInto(a.rtr, logger); err != nil {
+		return fmt.Errorf("load persisted model registry experience: %w", err)
+	}
+	if a.modelExperienceStore != nil && a.rtr != nil {
+		a.deferWorker("model-experience-persist", func(ctx context.Context) error {
+			lastPersisted := a.rtr.ExperienceVersion()
+			a.onClose("model-experience-persist", func() {
+				if err := a.modelExperienceStore.SaveFrom(a.rtr); err != nil {
+					logger.Warn("persist model experience on shutdown failed", "error", err)
+				}
+			})
+			go func() {
+				ticker := time.NewTicker(modelExperiencePersistInterval)
+				defer ticker.Stop()
+				for {
+					select {
+					case <-ctx.Done():
+						return
+					case <-ticker.C:
+						current := a.rtr.ExperienceVersion()
+						if current == lastPersisted {
+							continue
+						}
+						if err := a.modelExperienceStore.SaveFrom(a.rtr); err != nil {
+							logger.Warn("persist model experience failed", "error", err)
+							continue
+						}
+						lastPersisted = current
+					}
+				}
+			}()
+			return nil
+		})
+		logger.Info("model experience persistence enabled", "interval", modelExperiencePersistInterval)
+	}
 
 	// --- Usage tracking ---
 	// Persistent token usage and cost recording for attribution and

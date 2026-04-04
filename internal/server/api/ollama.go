@@ -20,8 +20,6 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/agent"
 	"github.com/nugget/thane-ai-agent/internal/logging"
-	"github.com/nugget/thane-ai-agent/internal/openclaw"
-	"github.com/nugget/thane-ai-agent/internal/router"
 )
 
 // OllamaChatRequest is the Ollama /api/chat request format.
@@ -171,9 +169,15 @@ func handleOllamaChatShared(w http.ResponseWriter, r *http.Request, loop *agent.
 	// Convert Ollama messages to agent messages
 	messages := make([]agent.Message, len(req.Messages))
 	for i, m := range req.Messages {
+		images, err := parseOllamaImages(m.Images)
+		if err != nil {
+			ollamaError(w, http.StatusBadRequest, fmt.Sprintf("messages[%d]: %v", i, err))
+			return
+		}
 		messages[i] = agent.Message{
 			Role:    m.Role,
 			Content: m.Content,
+			Images:  images,
 		}
 	}
 
@@ -195,88 +199,10 @@ func handleOllamaChatShared(w http.ResponseWriter, r *http.Request, loop *agent.
 
 	// Map model name to routing profile.
 	// Ollama "model" names like "thane:thinking" become routing hints.
-	model := req.Model
 	hints := map[string]string{
 		"channel": "ollama",
 	}
-
-	// ocSystemPrompt is set by the thane:openclaw profile to override
-	// the agent loop's default system prompt with OC-style context.
-	var ocSystemPrompt string
-
-	// Derive max quality floor for premium/ops profiles.
-	premiumFloor := "10"
-	if rtr := loop.Router(); rtr != nil {
-		premiumFloor = fmt.Sprintf("%d", rtr.MaxQuality())
-	}
-
-	switch model {
-	case "", "thane", "thane:latest":
-		model = "" // default routing — daily conversation
-
-	// --- New intent-based profiles ---
-	case "thane:trigger":
-		model = ""
-		hints[router.HintLocalOnly] = "true"
-		hints[router.HintQualityFloor] = "1"
-		hints[router.HintMission] = "automation"
-	case "thane:command":
-		model = ""
-		hints[router.HintMission] = "device_control"
-	case "thane:premium":
-		model = ""
-		hints[router.HintQualityFloor] = premiumFloor
-	case "thane:ops":
-		model = ""
-		hints[router.HintQualityFloor] = premiumFloor
-		hints[router.HintDelegationGating] = "disabled"
-	case "thane:peer":
-		model = ""
-		hints[router.HintMission] = "conversation"
-	case "thane:local":
-		model = ""
-		hints[router.HintQualityFloor] = "1"
-		hints[router.HintModelPreference] = ""
-		hints[router.HintLocalOnly] = "true"
-
-	// --- OpenClaw emulation profile ---
-	case "thane:openclaw":
-		model = ""
-		if ocCfg := loop.OpenClawConfig(); ocCfg != nil {
-			hints[router.HintQualityFloor] = premiumFloor
-			hints[router.HintMission] = "openclaw"
-			if prompt, err := openclaw.BuildSystemPrompt(ocCfg, false); err == nil {
-				ocSystemPrompt = prompt
-			} else {
-				logger.Warn("openclaw prompt build failed, falling back to default", "error", err)
-			}
-		} else {
-			logger.Warn("thane:openclaw requested but openclaw config not set, using default routing")
-		}
-
-	// --- Deprecated aliases (backward compat) ---
-	case "thane:thinking":
-		logger.Warn("deprecated profile, use thane:premium", "profile", model)
-		model = ""
-		hints[router.HintQualityFloor] = premiumFloor
-	case "thane:balanced":
-		logger.Warn("deprecated profile, use thane:latest", "profile", model)
-		model = "" // same as latest
-	case "thane:fast":
-		logger.Warn("deprecated profile, use thane:command", "profile", model)
-		model = ""
-		hints[router.HintMission] = "device_control"
-	case "thane:homeassistant":
-		logger.Warn("deprecated profile, use thane:command", "profile", model)
-		model = ""
-		hints[router.HintMission] = "device_control"
-
-	default:
-		// Unknown profile or explicit model name — pass through
-		if strings.HasPrefix(model, "thane:") {
-			model = "" // unknown thane profile, use default
-		}
-	}
+	model, hints, ocSystemPrompt := normalizeModelSelection(req.Model, hints, premiumQualityFloor(loop.Router()), loop.OpenClawConfig(), logger)
 
 	// Derive a conversation ID from the message history.
 	// Open WebUI sends full history with each request, so hashing the first
@@ -326,7 +252,8 @@ func handleOllamaChatShared(w http.ResponseWriter, r *http.Request, loop *agent.
 	resp, err := runFn(r.Context(), agentReq, nil)
 	if err != nil {
 		logger.Error("agent loop failed", "error", err)
-		ollamaError(w, http.StatusInternalServerError, "agent error")
+		code, message := ollamaAgentError(err)
+		ollamaError(w, code, message)
 		return
 	}
 
@@ -603,8 +530,16 @@ func handleOllamaVersionShared(w http.ResponseWriter, r *http.Request, logger *s
 func ollamaError(w http.ResponseWriter, code int, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
-	// Best-effort write - client may have disconnected
-	_, _ = w.Write([]byte(`{"error":"` + message + `"}`))
+	// Best-effort write - client may have disconnected.
+	body, err := json.Marshal(map[string]string{"error": message})
+	if err != nil {
+		body = []byte(`{"error":"internal error"}`)
+	}
+	_, _ = w.Write(body)
+}
+
+func ollamaAgentError(err error) (int, string) {
+	return agentErrorDetails(err)
 }
 
 // sanitizeHARequest strips HA-provided tools and instructions, keeping only

@@ -224,6 +224,380 @@ function makeIDChip(fullID) {
 }
 
 // ---------------------------------------------------------------------------
+// System Inspector Rendering
+// ---------------------------------------------------------------------------
+
+function parseTimestamp(raw) {
+  if (!raw) return null;
+  const date = new Date(raw);
+  if (isNaN(date)) return null;
+  return date;
+}
+
+function formatTimestampMeta(raw) {
+  const date = parseTimestamp(raw);
+  if (!date) return '-';
+  return timeAgo(date);
+}
+
+function formatFutureMeta(raw) {
+  const date = parseTimestamp(raw);
+  if (!date) return '-';
+  const diff = date.getTime() - Date.now();
+  if (diff <= 0) return 'expired';
+  return 'for ' + formatDuration(diff);
+}
+
+function buildSystemStat(label, value, opts = {}) {
+  const item = document.createElement('div');
+  item.className = 'system-stat' + (opts.emphasis ? ' system-stat--emphasis' : '');
+
+  const lbl = document.createElement('div');
+  lbl.className = 'system-stat__label';
+  lbl.textContent = label;
+  item.appendChild(lbl);
+
+  const val = document.createElement('div');
+  val.className = 'system-stat__value';
+  if (opts.id) val.id = opts.id;
+  val.textContent = value;
+  if (opts.title) val.title = opts.title;
+  item.appendChild(val);
+
+  return item;
+}
+
+function buildSystemChip(label, kind = '') {
+  const chip = document.createElement('span');
+  chip.className = 'system-chip' + (kind ? ' system-chip--' + kind : '');
+  chip.textContent = label;
+  return chip;
+}
+
+function buildSystemEmpty(text) {
+  const empty = document.createElement('div');
+  empty.className = 'system-empty';
+  empty.textContent = text;
+  return empty;
+}
+
+function renderSystemServices(container, health) {
+  if (!container) return;
+  container.innerHTML = '';
+
+  const services = Object.entries(health || {}).sort((a, b) => {
+    const aName = (a[1].name || a[0]).toLowerCase();
+    const bName = (b[1].name || b[0]).toLowerCase();
+    return aName.localeCompare(bName);
+  });
+  if (services.length === 0) {
+    container.appendChild(buildSystemEmpty('No service health data'));
+    return;
+  }
+
+  for (const [key, svc] of services) {
+    const row = document.createElement('div');
+    row.className = 'system-svc-row';
+
+    const dot = document.createElement('span');
+    dot.className = 'system-svc-dot system-svc-dot--' + (svc.ready ? 'ok' : 'err');
+    row.appendChild(dot);
+
+    const info = document.createElement('div');
+    info.className = 'system-svc-info';
+
+    const name = document.createElement('div');
+    name.className = 'system-svc-name';
+    name.textContent = svc.name || key;
+    info.appendChild(name);
+
+    const meta = document.createElement('div');
+    meta.className = 'system-svc-meta';
+    meta.textContent = svc.ready ? 'ready' : 'degraded';
+    info.appendChild(meta);
+
+    if (!svc.ready && svc.last_error) {
+      const err = document.createElement('div');
+      err.className = 'system-svc-error';
+      err.textContent = svc.last_error;
+      err.title = svc.last_error;
+      info.appendChild(err);
+    }
+
+    row.appendChild(info);
+    container.appendChild(row);
+  }
+}
+
+function renderModelRegistry(summaryEl, resourcesEl, deploymentsEl, metaEl, registry, routerStats) {
+  if (!summaryEl || !resourcesEl || !deploymentsEl) return;
+
+  summaryEl.innerHTML = '';
+  resourcesEl.innerHTML = '';
+  deploymentsEl.innerHTML = '';
+  if (metaEl) metaEl.textContent = '';
+
+  if (!registry) {
+    summaryEl.appendChild(buildSystemEmpty('Model registry not available'));
+    return;
+  }
+
+  const deployments = Array.isArray(registry.deployments) ? registry.deployments.slice() : [];
+  const resources = Array.isArray(registry.resources) ? registry.resources.slice() : [];
+  const deploymentStats = (routerStats && routerStats.deployment_stats) || {};
+  const resourceHealth = (routerStats && routerStats.resource_health) || {};
+
+  const discoveredCount = deployments.filter((dep) => dep.source === 'discovered').length;
+  const routableCount = deployments.filter((dep) => dep.routable).length;
+  const flaggedCount = deployments.filter((dep) => dep.policy_state === 'flagged').length;
+  const inactiveCount = deployments.filter((dep) => dep.policy_state === 'inactive').length;
+  const overrideCount = deployments.filter((dep) => dep.policy_source === 'overlay').length;
+  const cooldownCount = Object.keys(resourceHealth).length;
+
+  summaryEl.appendChild(buildSystemStat('Generation', String(registry.generation || 0)));
+  summaryEl.appendChild(buildSystemStat('Resources', formatNumber(resources.length)));
+  summaryEl.appendChild(buildSystemStat('Deployments', formatNumber(deployments.length)));
+  summaryEl.appendChild(buildSystemStat('Discovered', formatNumber(discoveredCount)));
+  summaryEl.appendChild(buildSystemStat('Routable', formatNumber(routableCount)));
+  summaryEl.appendChild(buildSystemStat('Cooldowns', formatNumber(cooldownCount), { title: cooldownCount > 0 ? 'resources temporarily avoided after recent timeouts' : '' }));
+  summaryEl.appendChild(buildSystemStat('Overrides', formatNumber(overrideCount), { title: 'flagged ' + flaggedCount + ' · inactive ' + inactiveCount }));
+
+  if (metaEl) {
+    const parts = [];
+    if (registry.updated_at) {
+      parts.push('updated ' + formatTimestampMeta(registry.updated_at));
+    }
+    if (registry.default_model) {
+      parts.push('default ' + registry.default_model);
+    }
+    metaEl.textContent = parts.join(' \u00b7 ');
+    if (registry.updated_at) {
+      const date = parseTimestamp(registry.updated_at);
+      if (date) metaEl.title = date.toLocaleString();
+    }
+  }
+
+  const sortedResources = resources.sort((a, b) => a.id.localeCompare(b.id));
+  if (sortedResources.length === 0) {
+    resourcesEl.appendChild(buildSystemEmpty('No configured resources'));
+  } else {
+    for (const resource of sortedResources) {
+      const health = resourceHealth[resource.id] || null;
+      const item = document.createElement('div');
+      item.className = 'system-item';
+
+      const header = document.createElement('div');
+      header.className = 'system-item__header';
+
+      const title = document.createElement('div');
+      title.className = 'system-item__title';
+      title.textContent = resource.id || '-';
+      header.appendChild(title);
+
+      const side = document.createElement('div');
+      side.className = 'system-item__metric';
+      side.textContent = formatNumber(resource.discovered_models || 0) + ' models';
+      header.appendChild(side);
+      item.appendChild(header);
+
+      const subtitle = document.createElement('div');
+      subtitle.className = 'system-item__subtitle';
+      subtitle.textContent = resource.provider || '-';
+      item.appendChild(subtitle);
+
+      const chips = document.createElement('div');
+      chips.className = 'system-item__chips';
+      chips.appendChild(buildSystemChip(resource.provider || 'unknown', 'provider'));
+      if (resource.supports_inventory) chips.appendChild(buildSystemChip('inventory', 'ok'));
+      if (resource.supports_streaming) chips.appendChild(buildSystemChip('stream', 'ok'));
+      if (resource.supports_tools) chips.appendChild(buildSystemChip('tools', 'ok'));
+      if (resource.supports_images) chips.appendChild(buildSystemChip('images', 'ok'));
+      if (resource.policy_state) {
+        chips.appendChild(buildSystemChip(
+          resource.policy_state,
+          resource.policy_state === 'active' ? 'ok' : resource.policy_state === 'flagged' ? 'warn' : 'error',
+        ));
+      }
+      if (health && health.cooldown_until) {
+        chips.appendChild(buildSystemChip('cooldown', 'warn'));
+      }
+      if (resource.last_error) {
+        chips.appendChild(buildSystemChip('error', 'error'));
+      } else if (resource.last_refresh) {
+        chips.appendChild(buildSystemChip('refreshed', 'ok'));
+      }
+      item.appendChild(chips);
+
+      const facts = document.createElement('div');
+      facts.className = 'system-item__facts';
+      const factParts = [];
+      if (resource.url) factParts.push(resource.url);
+      if (resource.last_refresh) factParts.push('refresh ' + formatTimestampMeta(resource.last_refresh));
+      if (health && health.cooldown_until) factParts.push('cooldown ' + formatFutureMeta(health.cooldown_until));
+      if (factParts.length === 0) factParts.push('No refresh data yet');
+      facts.textContent = factParts.join(' \u00b7 ');
+      facts.title = factParts.join(' \u00b7 ');
+      item.appendChild(facts);
+
+      if (health && health.cooldown_reason) {
+        const reason = document.createElement('div');
+        reason.className = 'system-item__reason';
+        reason.textContent = health.cooldown_reason;
+        reason.title = health.cooldown_reason;
+        item.appendChild(reason);
+      }
+
+      if (resource.policy_reason) {
+        const reason = document.createElement('div');
+        reason.className = 'system-item__reason';
+        reason.textContent = resource.policy_reason;
+        reason.title = resource.policy_reason;
+        item.appendChild(reason);
+      }
+
+      if (resource.last_error) {
+        const err = document.createElement('div');
+        err.className = 'system-item__error';
+        err.textContent = resource.last_error;
+        err.title = resource.last_error;
+        item.appendChild(err);
+      }
+
+      resourcesEl.appendChild(item);
+    }
+  }
+
+  const sortedDeployments = deployments.sort((a, b) => {
+    const aStats = deploymentStats[a.id] || {};
+    const bStats = deploymentStats[b.id] || {};
+    const reqDiff = Number(bStats.requests || 0) - Number(aStats.requests || 0);
+    if (reqDiff !== 0) return reqDiff;
+    const aActive = a.policy_state === 'active' ? 1 : 0;
+    const bActive = b.policy_state === 'active' ? 1 : 0;
+    if (bActive !== aActive) return bActive - aActive;
+    return (a.id || '').localeCompare(b.id || '');
+  });
+
+  if (sortedDeployments.length === 0) {
+    deploymentsEl.appendChild(buildSystemEmpty('No deployments in registry'));
+    return;
+  }
+
+  for (const dep of sortedDeployments) {
+    const stats = deploymentStats[dep.id] || {};
+    const item = document.createElement('div');
+    item.className = 'system-item system-item--deployment';
+
+    const header = document.createElement('div');
+    header.className = 'system-item__header';
+
+    const title = document.createElement('div');
+    title.className = 'system-item__title system-item__title--mono';
+    title.textContent = dep.id || dep.model || '-';
+    header.appendChild(title);
+
+    const side = document.createElement('div');
+    side.className = 'system-item__metric';
+    side.textContent = formatNumber(stats.requests || 0) + ' req';
+    header.appendChild(side);
+    item.appendChild(header);
+
+    if (dep.model && dep.model !== dep.id) {
+      const subtitle = document.createElement('div');
+      subtitle.className = 'system-item__subtitle';
+      subtitle.textContent = dep.model;
+      item.appendChild(subtitle);
+    }
+
+    const chips = document.createElement('div');
+    chips.className = 'system-item__chips';
+    chips.appendChild(buildSystemChip(dep.provider || 'unknown', 'provider'));
+    if (dep.resource) chips.appendChild(buildSystemChip(dep.resource, 'resource'));
+    if (dep.source) chips.appendChild(buildSystemChip(dep.source, dep.source === 'config' ? 'config' : 'discovered'));
+    if (dep.policy_state) chips.appendChild(buildSystemChip(dep.policy_state, dep.policy_state === 'active' ? 'ok' : dep.policy_state === 'flagged' ? 'warn' : 'error'));
+    if (dep.routable_source === 'overlay') {
+      chips.appendChild(buildSystemChip(dep.routable ? 'promoted' : 'demoted', dep.routable ? 'ok' : 'muted'));
+    }
+    if (!dep.routable) chips.appendChild(buildSystemChip('explicit only', 'muted'));
+    if (dep.supports_tools) chips.appendChild(buildSystemChip('tools', 'ok'));
+    else if (dep.provider_supports_tools) chips.appendChild(buildSystemChip('tools off', 'muted'));
+    if (dep.supports_streaming) chips.appendChild(buildSystemChip('stream', 'ok'));
+    if (dep.supports_images) chips.appendChild(buildSystemChip('images', 'ok'));
+    item.appendChild(chips);
+
+    const facts = document.createElement('div');
+    facts.className = 'system-item__facts';
+    const factParts = [];
+    if (dep.context_window) factParts.push('ctx ' + formatNumber(dep.context_window));
+    if (dep.speed) factParts.push('spd ' + dep.speed);
+    if (dep.quality) factParts.push('qlt ' + dep.quality);
+    factParts.push('cost ' + (dep.cost_tier || 0));
+    if (dep.parameter_size) factParts.push(dep.parameter_size);
+    if (dep.quantization) factParts.push(dep.quantization);
+    if (dep.family) factParts.push(dep.family);
+    facts.textContent = factParts.join(' \u00b7 ');
+    item.appendChild(facts);
+
+    const telemetry = document.createElement('div');
+    telemetry.className = 'system-item__telemetry';
+    const telemetryParts = [
+      'ok ' + formatNumber(stats.successes || 0),
+      'err ' + formatNumber(stats.failures || 0),
+      (stats.avg_latency_ms ? formatNumber(stats.avg_latency_ms) + 'ms' : '-'),
+      (stats.avg_tokens_used ? formatTokens(stats.avg_tokens_used) + ' tok' : '-'),
+    ];
+    telemetry.textContent = telemetryParts.join(' \u00b7 ');
+    item.appendChild(telemetry);
+
+    if (dep.policy_reason) {
+      const reason = document.createElement('div');
+      reason.className = 'system-item__reason';
+      reason.textContent = dep.policy_reason;
+      reason.title = dep.policy_reason;
+      item.appendChild(reason);
+    }
+
+    deploymentsEl.appendChild(item);
+  }
+}
+
+function renderSystemInspector(sys, els) {
+  if (!sys || !els) return;
+
+  const badge = els.badge;
+  if (badge) {
+    badge.textContent = sys.status || 'unknown';
+    badge.className = 'state-badge state-badge--' + (sys.status === 'healthy' ? 'sleeping' : 'error');
+  }
+
+  if (els.overview) {
+    els.overview.innerHTML = '';
+    const ver = sys.version || {};
+    const totalRequests = Number((sys.router_stats && sys.router_stats.total_requests) || 0);
+    const generation = Number((sys.model_registry && sys.model_registry.generation) || 0);
+
+    els.overview.appendChild(buildSystemStat('Uptime', sys.uptime || '-', { id: 'system-uptime' }));
+    els.overview.appendChild(buildSystemStat('Version', ver.version || '-', { id: 'system-version' }));
+    els.overview.appendChild(buildSystemStat('Commit', ver.git_commit ? ver.git_commit.slice(0, 7) : '-', { id: 'system-commit', title: ver.git_commit || '' }));
+    els.overview.appendChild(buildSystemStat('Go', ver.go_version || '-', { id: 'system-go' }));
+    els.overview.appendChild(buildSystemStat('Arch', ((ver.os || '') && (ver.arch || '')) ? (ver.os + '/' + ver.arch) : '-', { id: 'system-arch' }));
+    els.overview.appendChild(buildSystemStat('Requests', formatNumber(totalRequests), { emphasis: totalRequests > 0 }));
+    els.overview.appendChild(buildSystemStat('Generation', formatNumber(generation)));
+    els.overview.appendChild(buildSystemStat('Routing', sys.model_registry ? (sys.model_registry.local_first ? 'local-first' : 'policy') : '-', { title: sys.model_registry ? 'default ' + (sys.model_registry.default_model || '-') : '' }));
+  }
+
+  renderSystemServices(els.services, sys.health || {});
+  renderModelRegistry(
+    els.registrySummary,
+    els.registryResources,
+    els.registryDeployments,
+    els.registryMeta,
+    sys.model_registry,
+    sys.router_stats,
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Log Rendering
 // ---------------------------------------------------------------------------
 

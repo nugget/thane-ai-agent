@@ -24,6 +24,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -52,6 +53,23 @@ const iterationLogPrefix = "<!-- iteration_log:"
 type ProvenanceWriter interface {
 	Read(filename string) (string, error)
 	Write(ctx context.Context, filename, content, message string) error
+}
+
+// hasProvenanceWriter guards against typed-nil interfaces such as a
+// nil *provenance.Store assigned to ProvenanceWriter. A plain store !=
+// nil check is insufficient in that case and can lead to nil receiver
+// panics at call time.
+func hasProvenanceWriter(store ProvenanceWriter) bool {
+	if store == nil {
+		return false
+	}
+	v := reflect.ValueOf(store)
+	switch v.Kind() {
+	case reflect.Pointer, reflect.Map, reflect.Slice, reflect.Interface, reflect.Func:
+		return !v.IsNil()
+	default:
+		return true
+	}
 }
 
 // Config holds the parsed metacognitive loop configuration with
@@ -217,7 +235,7 @@ func readStateFile(path string) (string, error) {
 func appendIterationLog(ctx context.Context, log *slog.Logger, statePath string, store ProvenanceWriter, stateFileName string, result *loop.IterationResult) {
 	// Read the full file (uncapped) to avoid truncation on rewrite.
 	var content string
-	if store != nil {
+	if hasProvenanceWriter(store) {
 		existing, err := store.Read(stateFileName)
 		if err != nil && !os.IsNotExist(err) {
 			log.Warn("failed to read state file from provenance for iteration log, skipping append",
@@ -266,7 +284,7 @@ func appendIterationLog(ctx context.Context, log *slog.Logger, statePath string,
 
 	fullContent := content + logBlock
 
-	if store != nil {
+	if hasProvenanceWriter(store) {
 		if err := store.Write(ctx, stateFileName, fullContent, "iteration-log"); err != nil {
 			log.Warn("failed to commit iteration log to provenance",
 				"error", err,

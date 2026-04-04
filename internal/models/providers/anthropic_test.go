@@ -1,12 +1,15 @@
-package llm
+package providers
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
+
+	"github.com/nugget/thane-ai-agent/internal/llm"
 )
 
 func TestConvertToAnthropic(t *testing.T) {
-	messages := []Message{
+	messages := []llm.Message{
 		{Role: "system", Content: "You are a helpful assistant."},
 		{Role: "user", Content: "Hello!"},
 		{Role: "assistant", Content: "Hi there!"},
@@ -29,12 +32,12 @@ func TestConvertToAnthropic(t *testing.T) {
 }
 
 func TestConvertToAnthropicWithToolCalls(t *testing.T) {
-	messages := []Message{
+	messages := []llm.Message{
 		{Role: "system", Content: "You are a home assistant."},
 		{Role: "user", Content: "Turn on lights."},
 		{
 			Role: "assistant",
-			ToolCalls: []ToolCall{{
+			ToolCalls: []llm.ToolCall{{
 				ID: "toolu_abc123",
 				Function: struct {
 					Name      string         `json:"name"`
@@ -153,12 +156,12 @@ func TestConvertFromAnthropic(t *testing.T) {
 
 func TestAnthropicClientImplementsInterface(t *testing.T) {
 	// Compile-time check that AnthropicClient implements Client
-	var _ Client = (*AnthropicClient)(nil)
+	var _ llm.Client = (*AnthropicClient)(nil)
 }
 
 func TestOllamaClientImplementsInterface(t *testing.T) {
 	// Compile-time check that OllamaClient implements Client
-	var _ Client = (*OllamaClient)(nil)
+	var _ llm.Client = (*OllamaClient)(nil)
 }
 
 func TestAnthropicRequestSerialization(t *testing.T) {
@@ -172,6 +175,7 @@ func TestAnthropicRequestSerialization(t *testing.T) {
 			Description: "A test tool",
 			InputSchema: map[string]any{"type": "object"},
 		}},
+		CacheControl: &anthropicCacheControl{Type: "ephemeral"},
 	}
 
 	data, err := json.Marshal(req)
@@ -189,5 +193,57 @@ func TestAnthropicRequestSerialization(t *testing.T) {
 	}
 	if decoded.System != req.System {
 		t.Errorf("system mismatch: %s vs %s", decoded.System, req.System)
+	}
+	if decoded.CacheControl == nil || decoded.CacheControl.Type != "ephemeral" {
+		t.Fatalf("cache_control = %+v, want ephemeral", decoded.CacheControl)
+	}
+}
+
+func TestShouldUseAnthropicPromptCaching(t *testing.T) {
+	tests := []struct {
+		name   string
+		system string
+		msgs   []anthropicMessage
+		tools  []anthropicTool
+		want   bool
+	}{
+		{
+			name:   "tool loop enables caching",
+			system: "You are a tool-using assistant.",
+			msgs:   []anthropicMessage{{Role: "user", Content: "check the state"}},
+			tools:  []anthropicTool{{Name: "get_state", InputSchema: map[string]any{"type": "object"}}},
+			want:   true,
+		},
+		{
+			name:   "multi turn conversation enables caching",
+			system: "You are a helpful assistant.",
+			msgs: []anthropicMessage{
+				{Role: "user", Content: "hello"},
+				{Role: "assistant", Content: "hi"},
+				{Role: "user", Content: "what did I say?"},
+			},
+			want: true,
+		},
+		{
+			name:   "large system prompt enables caching",
+			system: strings.Repeat("x", 4096),
+			msgs:   []anthropicMessage{{Role: "user", Content: "summarize this"}},
+			want:   true,
+		},
+		{
+			name:   "simple one shot request stays uncached",
+			system: "You are a helpful assistant.",
+			msgs:   []anthropicMessage{{Role: "user", Content: "hello"}},
+			want:   false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := shouldUseAnthropicPromptCaching(tt.system, tt.msgs, tt.tools)
+			if got != tt.want {
+				t.Fatalf("shouldUseAnthropicPromptCaching() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }

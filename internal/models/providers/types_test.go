@@ -1,9 +1,11 @@
-package llm
+package providers
 
 import (
 	"encoding/json"
 	"testing"
 	"time"
+
+	"github.com/nugget/thane-ai-agent/internal/llm"
 )
 
 // Representative Ollama /api/chat responses captured from real interactions.
@@ -283,7 +285,12 @@ func TestConvertFromAnthropic_TextOnly(t *testing.T) {
 			{Type: "text", Text: "The lights are off."},
 		},
 		StopReason: "end_turn",
-		Usage:      anthropicUsage{InputTokens: 100, OutputTokens: 25},
+		Usage: anthropicUsage{
+			InputTokens:              100,
+			OutputTokens:             25,
+			CacheCreationInputTokens: 4096,
+			CacheReadInputTokens:     2048,
+		},
 	}
 
 	result := convertFromAnthropic(resp)
@@ -299,6 +306,12 @@ func TestConvertFromAnthropic_TextOnly(t *testing.T) {
 	}
 	if result.OutputTokens != 25 {
 		t.Errorf("OutputTokens = %d, want 25", result.OutputTokens)
+	}
+	if result.CacheCreationInputTokens != 4096 {
+		t.Errorf("CacheCreationInputTokens = %d, want 4096", result.CacheCreationInputTokens)
+	}
+	if result.CacheReadInputTokens != 2048 {
+		t.Errorf("CacheReadInputTokens = %d, want 2048", result.CacheReadInputTokens)
 	}
 	if !result.Done {
 		t.Error("Done = false, want true")
@@ -407,7 +420,7 @@ func TestConvertFromAnthropic_EmptyContent(t *testing.T) {
 func TestChatResponse_TimeTypeSafety(t *testing.T) {
 	// Verify we can do time operations on ChatResponse fields
 	// (This would fail at compile time if CreatedAt were string)
-	resp := ChatResponse{
+	resp := llm.ChatResponse{
 		CreatedAt:     time.Now(),
 		TotalDuration: 5 * time.Second,
 		EvalDuration:  3 * time.Second,
@@ -431,7 +444,7 @@ func TestChatResponse_TimeTypeSafety(t *testing.T) {
 
 func TestChatResponse_ZeroValuesSafe(t *testing.T) {
 	// Zero-value ChatResponse should be safe to use
-	var resp ChatResponse
+	var resp llm.ChatResponse
 
 	if !resp.CreatedAt.IsZero() {
 		t.Error("zero ChatResponse.CreatedAt should be zero time")

@@ -54,14 +54,23 @@ func ExampleConfig() *Config {
 		},
 
 		Models: ModelsConfig{
-			Default:       "qwen2.5:72b",
-			OllamaURL:     "http://your-ollama-server:11434",
-			LocalFirst:    true,
+			Default:    "qwen2.5:72b",
+			LocalFirst: true,
+			Resources: map[string]ModelServerConfig{
+				"default": {
+					URL:      "http://your-primary-ollama-server:11434",
+					Provider: "ollama",
+				},
+				"edge": {
+					URL:      "http://your-edge-ollama-server:11434",
+					Provider: "ollama",
+				},
+			},
 			RecoveryModel: "qwen3:4b",
 			Available: []ModelConfig{
 				{
 					Name:          "qwen3:4b",
-					Provider:      "ollama",
+					Resource:      "edge",
 					SupportsTools: true,
 					ContextWindow: 32768,
 					Speed:         9,
@@ -71,7 +80,7 @@ func ExampleConfig() *Config {
 				},
 				{
 					Name:          "qwen2.5:72b",
-					Provider:      "ollama",
+					Resource:      "default",
 					SupportsTools: true,
 					ContextWindow: 131072,
 					Speed:         3,

@@ -3,7 +3,9 @@ package router
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"testing"
+	"time"
 )
 
 func newTestRouter() *Router {
@@ -126,6 +128,34 @@ func TestRoute_LocalOnlyHint(t *testing.T) {
 	}
 }
 
+func TestExplainRequest_DoesNotRecordAuditLog(t *testing.T) {
+	r := NewRouter(slog.Default(), Config{
+		DefaultModel: "local-model",
+		Models: []Model{
+			{Name: "local-model", Provider: "ollama", SupportsTools: true, SupportsStreaming: true, ContextWindow: 8192, Speed: 8, Quality: 6, CostTier: 0},
+			{Name: "vision-model", Provider: "ollama", SupportsTools: true, SupportsStreaming: true, SupportsImages: true, ContextWindow: 8192, Speed: 7, Quality: 7, CostTier: 0},
+		},
+		MaxAuditLog: 10,
+	})
+
+	before := len(r.GetAuditLog(100))
+	decision := r.ExplainRequest(Request{
+		Query:       "describe this image",
+		NeedsImages: true,
+		Priority:    PriorityInteractive,
+	})
+	if decision == nil {
+		t.Fatal("ExplainRequest returned nil")
+	}
+	if decision.ModelSelected != "vision-model" {
+		t.Fatalf("ModelSelected = %q, want vision-model", decision.ModelSelected)
+	}
+	after := len(r.GetAuditLog(100))
+	if after != before {
+		t.Fatalf("audit log length changed from %d to %d; explain should not record", before, after)
+	}
+}
+
 func TestRoute_LocalOnlyFalseDisablesLocalBias(t *testing.T) {
 	r := NewRouter(slog.Default(), Config{
 		DefaultModel: "local-model",
@@ -169,6 +199,122 @@ func TestRoute_LocalOnlyFalseDisablesLocalBias(t *testing.T) {
 	}
 	if cloudScore <= localScore {
 		t.Errorf("cloud-model score (%d) should beat local-model score (%d) when local_only=false", cloudScore, localScore)
+	}
+}
+
+func TestRoute_RejectsModelsByCapabilities(t *testing.T) {
+	r := NewRouter(slog.Default(), Config{
+		DefaultModel: "streaming-model",
+		Models: []Model{
+			{
+				Name:                  "deployment-tools-off",
+				Provider:              "ollama",
+				SupportsTools:         false,
+				ProviderSupportsTools: true,
+				SupportsStreaming:     true,
+				ContextWindow:         8192,
+				Speed:                 8,
+				Quality:               6,
+				CostTier:              0,
+			},
+			{
+				Name:              "non-streaming-model",
+				Provider:          "ollama",
+				SupportsTools:     true,
+				SupportsStreaming: false,
+				ContextWindow:     8192,
+				Speed:             8,
+				Quality:           6,
+				CostTier:          0,
+			},
+			{
+				Name:              "streaming-model",
+				Provider:          "ollama",
+				SupportsTools:     true,
+				SupportsStreaming: true,
+				ContextWindow:     8192,
+				Speed:             8,
+				Quality:           6,
+				CostTier:          0,
+			},
+		},
+		MaxAuditLog: 10,
+	})
+
+	model, decision := r.Route(context.Background(), Request{
+		Query:          "search archives for the last battery warning",
+		NeedsTools:     true,
+		NeedsStreaming: true,
+		ToolCount:      4,
+		Priority:       PriorityInteractive,
+	})
+
+	if model != "streaming-model" {
+		t.Fatalf("Route() selected %q, want %q", model, "streaming-model")
+	}
+	if got := decision.RejectedModels["deployment-tools-off"]; len(got) != 1 || got[0] != "tool use disabled for this deployment" {
+		t.Fatalf("RejectedModels[deployment-tools-off] = %#v, want tool-disable reason", got)
+	}
+	if got := decision.RejectedModels["non-streaming-model"]; len(got) != 1 || got[0] != "missing streaming support" {
+		t.Fatalf("RejectedModels[non-streaming-model] = %#v, want streaming reason", got)
+	}
+	if !strings.Contains(decision.Reasoning, "Tool-capable deployment required.") {
+		t.Fatalf("Reasoning = %q, want tool-capable note", decision.Reasoning)
+	}
+	if !strings.Contains(decision.Reasoning, "Streaming-capable deployment required.") {
+		t.Fatalf("Reasoning = %q, want streaming note", decision.Reasoning)
+	}
+}
+
+func TestRoute_NoEligibleModelsSummarizesRejections(t *testing.T) {
+	r := NewRouter(slog.Default(), Config{
+		DefaultModel: "fallback-model",
+		Models: []Model{
+			{
+				Name:              "small-model",
+				Provider:          "ollama",
+				SupportsTools:     true,
+				SupportsStreaming: true,
+				ContextWindow:     2048,
+				Speed:             8,
+				Quality:           6,
+				CostTier:          0,
+			},
+			{
+				Name:              "non-streaming-model",
+				Provider:          "ollama",
+				SupportsTools:     true,
+				SupportsStreaming: false,
+				ContextWindow:     8192,
+				Speed:             8,
+				Quality:           6,
+				CostTier:          0,
+			},
+		},
+		MaxAuditLog: 10,
+	})
+
+	model, decision := r.Route(context.Background(), Request{
+		Query:          "summarize this conversation",
+		ContextSize:    5000,
+		NeedsStreaming: true,
+		Priority:       PriorityInteractive,
+	})
+
+	if model != "fallback-model" {
+		t.Fatalf("Route() selected %q, want fallback default %q", model, "fallback-model")
+	}
+	if !decision.NoEligible {
+		t.Fatal("decision.NoEligible = false, want true")
+	}
+	if !strings.Contains(decision.Reasoning, "No eligible models, using default.") {
+		t.Fatalf("Reasoning = %q, want no-eligible prefix", decision.Reasoning)
+	}
+	if !strings.Contains(decision.Reasoning, "small-model (context window too small)") {
+		t.Fatalf("Reasoning = %q, want small-model rejection", decision.Reasoning)
+	}
+	if !strings.Contains(decision.Reasoning, "non-streaming-model (missing streaming support)") {
+		t.Fatalf("Reasoning = %q, want streaming rejection", decision.Reasoning)
 	}
 }
 
@@ -266,6 +412,43 @@ func TestRoute_PreferSpeedHint(t *testing.T) {
 	}
 }
 
+func TestUpdateConfig_ReplacesLiveModelSet(t *testing.T) {
+	r := NewRouter(slog.Default(), Config{
+		DefaultModel: "local-a",
+		Models: []Model{
+			{Name: "local-a", Provider: "ollama", SupportsTools: true, Speed: 7, Quality: 5, CostTier: 0, ContextWindow: 8192},
+		},
+		MaxAuditLog: 10,
+	})
+
+	r.UpdateConfig(Config{
+		DefaultModel: "local-b",
+		Models: []Model{
+			{Name: "local-b", Provider: "ollama", SupportsTools: true, Speed: 8, Quality: 6, CostTier: 0, ContextWindow: 16384},
+		},
+		LocalFirst: true,
+	})
+
+	if got := r.DefaultModel(); got != "local-b" {
+		t.Fatalf("DefaultModel() = %q, want %q", got, "local-b")
+	}
+
+	model, _ := r.Route(context.Background(), Request{
+		Query:      "search the archives",
+		NeedsTools: true,
+		ToolCount:  2,
+		Priority:   PriorityBackground,
+	})
+	if model != "local-b" {
+		t.Fatalf("Route() selected %q, want %q after config update", model, "local-b")
+	}
+
+	models := r.GetModels()
+	if len(models) != 1 || models[0].Name != "local-b" {
+		t.Fatalf("GetModels() = %#v, want updated model list", models)
+	}
+}
+
 func TestGetModels(t *testing.T) {
 	models := []Model{
 		{Name: "fast-local", Provider: "ollama", Speed: 8, Quality: 5},
@@ -342,5 +525,434 @@ func TestRoute_PreferSpeedWithQualityFloor(t *testing.T) {
 	if fastScore >= slowScore {
 		t.Errorf("fast-local score (%d) should be below slow-local (%d) with quality_floor penalty",
 			fastScore, slowScore)
+	}
+}
+
+func TestRouteAndStatsTrackDeploymentMetadata(t *testing.T) {
+	t.Parallel()
+
+	r := NewRouter(slog.Default(), Config{
+		DefaultModel: "edge/qwen3:8b",
+		Models: []Model{
+			{
+				Name:          "edge/qwen3:8b",
+				UpstreamModel: "qwen3:8b",
+				Provider:      "ollama",
+				ResourceID:    "edge",
+				Server:        "edge",
+				SupportsTools: true,
+				ContextWindow: 32768,
+				Speed:         8,
+				Quality:       6,
+				CostTier:      0,
+			},
+			{
+				Name:          "cloud/claude-sonnet",
+				UpstreamModel: "claude-sonnet-4-20250514",
+				Provider:      "anthropic",
+				ResourceID:    "anthropic",
+				Server:        "anthropic",
+				SupportsTools: true,
+				ContextWindow: 200000,
+				Speed:         6,
+				Quality:       10,
+				CostTier:      3,
+			},
+		},
+		MaxAuditLog: 10,
+	})
+
+	model, decision := r.Route(context.Background(), Request{
+		Query:      "check the state of the back gate",
+		NeedsTools: true,
+		ToolCount:  2,
+		Priority:   PriorityInteractive,
+		Hints: map[string]string{
+			HintLocalOnly: "true",
+		},
+	})
+
+	if model != "edge/qwen3:8b" {
+		t.Fatalf("Route() selected %q, want %q", model, "edge/qwen3:8b")
+	}
+	if decision.ModelSelected != "edge/qwen3:8b" {
+		t.Fatalf("ModelSelected = %q, want %q", decision.ModelSelected, "edge/qwen3:8b")
+	}
+	if decision.UpstreamModelSelected != "qwen3:8b" {
+		t.Fatalf("UpstreamModelSelected = %q, want %q", decision.UpstreamModelSelected, "qwen3:8b")
+	}
+	if decision.ProviderSelected != "ollama" {
+		t.Fatalf("ProviderSelected = %q, want %q", decision.ProviderSelected, "ollama")
+	}
+	if decision.ResourceSelected != "edge" {
+		t.Fatalf("ResourceSelected = %q, want %q", decision.ResourceSelected, "edge")
+	}
+
+	r.RecordOutcome(decision.RequestID, 120, 600, true)
+
+	stats := r.GetStats()
+	if stats.TotalRequests != 1 {
+		t.Fatalf("TotalRequests = %d, want 1", stats.TotalRequests)
+	}
+	if stats.SuccessCount != 1 || stats.FailureCount != 0 {
+		t.Fatalf("success/failure = %d/%d, want 1/0", stats.SuccessCount, stats.FailureCount)
+	}
+	if stats.ModelCounts["edge/qwen3:8b"] != 1 {
+		t.Fatalf("ModelCounts[edge/qwen3:8b] = %d, want 1", stats.ModelCounts["edge/qwen3:8b"])
+	}
+	if stats.ProviderCounts["ollama"] != 1 {
+		t.Fatalf("ProviderCounts[ollama] = %d, want 1", stats.ProviderCounts["ollama"])
+	}
+	if stats.ResourceCounts["edge"] != 1 {
+		t.Fatalf("ResourceCounts[edge] = %d, want 1", stats.ResourceCounts["edge"])
+	}
+
+	depStats, ok := stats.DeploymentStats["edge/qwen3:8b"]
+	if !ok {
+		t.Fatal("missing deployment stats for edge/qwen3:8b")
+	}
+	if depStats.Provider != "ollama" {
+		t.Fatalf("DeploymentStats.Provider = %q, want %q", depStats.Provider, "ollama")
+	}
+	if depStats.Resource != "edge" {
+		t.Fatalf("DeploymentStats.Resource = %q, want %q", depStats.Resource, "edge")
+	}
+	if depStats.UpstreamModel != "qwen3:8b" {
+		t.Fatalf("DeploymentStats.UpstreamModel = %q, want %q", depStats.UpstreamModel, "qwen3:8b")
+	}
+	if depStats.Requests != 1 || depStats.Successes != 1 || depStats.Failures != 0 {
+		t.Fatalf("deployment stats = %+v, want requests=1 successes=1 failures=0", depStats)
+	}
+	if depStats.AvgLatencyMs != 120 {
+		t.Fatalf("DeploymentStats.AvgLatencyMs = %d, want 120", depStats.AvgLatencyMs)
+	}
+	if depStats.AvgTokensUsed != 600 {
+		t.Fatalf("DeploymentStats.AvgTokensUsed = %d, want 600", depStats.AvgTokensUsed)
+	}
+}
+
+func TestRecordFailureTimeoutCoolsResourceAndShiftsRouting(t *testing.T) {
+	t.Parallel()
+
+	r := NewRouter(slog.Default(), Config{
+		DefaultModel: "edge-primary/qwen3:8b",
+		Models: []Model{
+			{
+				Name:          "edge-primary/qwen3:8b",
+				UpstreamModel: "qwen3:8b",
+				Provider:      "ollama",
+				ResourceID:    "edge-primary",
+				Server:        "edge-primary",
+				SupportsTools: true,
+				ContextWindow: 32768,
+				Speed:         8,
+				Quality:       7,
+				CostTier:      0,
+			},
+			{
+				Name:          "edge-backup/qwen3:8b",
+				UpstreamModel: "qwen3:8b",
+				Provider:      "ollama",
+				ResourceID:    "edge-backup",
+				Server:        "edge-backup",
+				SupportsTools: true,
+				ContextWindow: 32768,
+				Speed:         8,
+				Quality:       6,
+				CostTier:      0,
+			},
+		},
+		MaxAuditLog: 10,
+	})
+
+	req := Request{
+		Query:      "check the state of the back gate",
+		NeedsTools: true,
+		ToolCount:  2,
+		Priority:   PriorityInteractive,
+		Hints: map[string]string{
+			HintLocalOnly: "true",
+		},
+	}
+
+	model, decision := r.Route(context.Background(), req)
+	if model != "edge-primary/qwen3:8b" {
+		t.Fatalf("Route() selected %q, want %q", model, "edge-primary/qwen3:8b")
+	}
+
+	r.RecordFailure(decision.RequestID, 5000, 0, true)
+
+	stats := r.GetStats()
+	depStats := stats.DeploymentStats["edge-primary/qwen3:8b"]
+	if depStats.Failures != 1 {
+		t.Fatalf("Failures = %d, want 1", depStats.Failures)
+	}
+	if depStats.AvgLatencyMs != 5000 {
+		t.Fatalf("AvgLatencyMs = %d, want 5000", depStats.AvgLatencyMs)
+	}
+	if until := r.resourceCooldownDeadline("edge-primary"); until.IsZero() {
+		t.Fatal("resource cooldown not set for edge-primary")
+	}
+
+	nextModel, nextDecision := r.Route(context.Background(), req)
+	if nextModel != "edge-backup/qwen3:8b" {
+		t.Fatalf("Route() after timeout selected %q, want %q", nextModel, "edge-backup/qwen3:8b")
+	}
+	if score := nextDecision.Scores["edge-primary/qwen3:8b"]; score >= nextDecision.Scores["edge-backup/qwen3:8b"] {
+		t.Fatalf("cooldown penalty did not push primary below backup: primary=%d backup=%d", score, nextDecision.Scores["edge-backup/qwen3:8b"])
+	}
+}
+
+func TestRecordFailureWithoutTimeoutDoesNotCoolResource(t *testing.T) {
+	t.Parallel()
+
+	r := NewRouter(slog.Default(), Config{
+		DefaultModel: "edge/qwen3:8b",
+		Models: []Model{
+			{
+				Name:          "edge/qwen3:8b",
+				UpstreamModel: "qwen3:8b",
+				Provider:      "ollama",
+				ResourceID:    "edge",
+				Server:        "edge",
+				SupportsTools: true,
+				ContextWindow: 32768,
+				Speed:         8,
+				Quality:       7,
+				CostTier:      0,
+			},
+		},
+		MaxAuditLog: 10,
+	})
+
+	model, decision := r.Route(context.Background(), Request{
+		Query:      "check the gate",
+		NeedsTools: true,
+		ToolCount:  1,
+		Priority:   PriorityInteractive,
+	})
+	if model != "edge/qwen3:8b" {
+		t.Fatalf("Route() selected %q, want %q", model, "edge/qwen3:8b")
+	}
+
+	r.RecordFailure(decision.RequestID, 250, 0, false)
+
+	if until := r.resourceCooldownDeadline("edge"); !until.IsZero() {
+		t.Fatalf("resource cooldown unexpectedly set: %v", until)
+	}
+}
+
+func TestRecordOutcomeSuccessClearsResourceCooldown(t *testing.T) {
+	t.Parallel()
+
+	r := NewRouter(slog.Default(), Config{
+		DefaultModel: "edge/qwen3:8b",
+		Models: []Model{
+			{
+				Name:          "edge/qwen3:8b",
+				UpstreamModel: "qwen3:8b",
+				Provider:      "ollama",
+				ResourceID:    "edge",
+				Server:        "edge",
+				SupportsTools: true,
+				ContextWindow: 32768,
+				Speed:         8,
+				Quality:       7,
+				CostTier:      0,
+			},
+		},
+		MaxAuditLog: 10,
+	})
+
+	model, decision := r.Route(context.Background(), Request{
+		Query:      "check the gate",
+		NeedsTools: true,
+		ToolCount:  1,
+		Priority:   PriorityInteractive,
+	})
+	if model != "edge/qwen3:8b" {
+		t.Fatalf("Route() selected %q, want %q", model, "edge/qwen3:8b")
+	}
+
+	r.resourceCooldownUntil["edge"] = time.Now().Add(time.Minute)
+	r.RecordOutcome(decision.RequestID, 120, 600, true)
+
+	if until := r.resourceCooldownDeadline("edge"); !until.IsZero() {
+		t.Fatalf("resource cooldown not cleared: %v", until)
+	}
+}
+
+func TestGetStatsIncludesOnlyActiveResourceHealth(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now()
+	stats := activeResourceHealthSnapshot(map[string]time.Time{
+		"edge":  now.Add(2 * time.Minute),
+		"stale": now.Add(-time.Second),
+		"blank": {},
+	}, now)
+
+	if len(stats) != 1 {
+		t.Fatalf("len(stats) = %d, want 1", len(stats))
+	}
+	health, ok := stats["edge"]
+	if !ok {
+		t.Fatal("missing active resource health for edge")
+	}
+	if health.CooldownReason != "recent timeout" {
+		t.Fatalf("CooldownReason = %q, want %q", health.CooldownReason, "recent timeout")
+	}
+	if !health.CooldownUntil.After(now) {
+		t.Fatalf("CooldownUntil = %v, want future time", health.CooldownUntil)
+	}
+}
+
+func TestReplaceExperienceRestoresStatsAndInfluencesRouting(t *testing.T) {
+	t.Parallel()
+
+	r := NewRouter(slog.Default(), Config{
+		DefaultModel: "edge-backup/qwen3:8b",
+		Models: []Model{
+			{
+				Name:          "edge-backup/qwen3:8b",
+				UpstreamModel: "qwen3:8b",
+				Provider:      "ollama",
+				ResourceID:    "edge-backup",
+				Server:        "edge-backup",
+				SupportsTools: true,
+				ContextWindow: 32768,
+				Speed:         8,
+				Quality:       7,
+				CostTier:      0,
+			},
+			{
+				Name:          "edge-primary/qwen3:8b",
+				UpstreamModel: "qwen3:8b",
+				Provider:      "ollama",
+				ResourceID:    "edge-primary",
+				Server:        "edge-primary",
+				SupportsTools: true,
+				ContextWindow: 32768,
+				Speed:         8,
+				Quality:       7,
+				CostTier:      0,
+			},
+		},
+		MaxAuditLog: 10,
+	})
+
+	r.ReplaceExperience(map[string]DeploymentStats{
+		"edge-primary/qwen3:8b": {
+			Provider:      "ollama",
+			Resource:      "edge-primary",
+			UpstreamModel: "qwen3:8b",
+			Requests:      8,
+			Successes:     7,
+			Failures:      1,
+			AvgLatencyMs:  3200,
+			AvgTokensUsed: 700,
+		},
+		"edge-backup/qwen3:8b": {
+			Provider:      "ollama",
+			Resource:      "edge-backup",
+			UpstreamModel: "qwen3:8b",
+			Requests:      8,
+			Successes:     2,
+			Failures:      4,
+			AvgLatencyMs:  24000,
+			AvgTokensUsed: 700,
+		},
+	})
+
+	stats := r.GetStats()
+	if stats.TotalRequests != 16 {
+		t.Fatalf("TotalRequests = %d, want 16", stats.TotalRequests)
+	}
+	if stats.SuccessCount != 9 || stats.FailureCount != 5 {
+		t.Fatalf("success/failure = %d/%d, want 9/5", stats.SuccessCount, stats.FailureCount)
+	}
+	if stats.ModelCounts["edge-primary/qwen3:8b"] != 8 {
+		t.Fatalf("ModelCounts[edge-primary/qwen3:8b] = %d, want 8", stats.ModelCounts["edge-primary/qwen3:8b"])
+	}
+	if stats.ProviderCounts["ollama"] != 16 {
+		t.Fatalf("ProviderCounts[ollama] = %d, want 16", stats.ProviderCounts["ollama"])
+	}
+	if stats.ResourceCounts["edge-primary"] != 8 || stats.ResourceCounts["edge-backup"] != 8 {
+		t.Fatalf("ResourceCounts = %#v, want 8/8", stats.ResourceCounts)
+	}
+	if len(stats.ResourceHealth) != 0 {
+		t.Fatalf("ResourceHealth = %#v, want no active cooldowns restored", stats.ResourceHealth)
+	}
+
+	model, decision := r.Route(context.Background(), Request{
+		Query:      "check the gate",
+		NeedsTools: true,
+		ToolCount:  1,
+		Priority:   PriorityInteractive,
+	})
+	if model != "edge-primary/qwen3:8b" {
+		t.Fatalf("Route() selected %q, want %q", model, "edge-primary/qwen3:8b")
+	}
+	if decision.Scores["edge-primary/qwen3:8b"] <= decision.Scores["edge-backup/qwen3:8b"] {
+		t.Fatalf("experience scoring did not favor primary: primary=%d backup=%d", decision.Scores["edge-primary/qwen3:8b"], decision.Scores["edge-backup/qwen3:8b"])
+	}
+}
+
+func TestExperienceVersionTracksRestoredAndRecordedExperience(t *testing.T) {
+	t.Parallel()
+
+	r := NewRouter(slog.Default(), Config{
+		DefaultModel: "edge/qwen3:8b",
+		Models: []Model{
+			{
+				Name:          "edge/qwen3:8b",
+				UpstreamModel: "qwen3:8b",
+				Provider:      "ollama",
+				ResourceID:    "edge",
+				Server:        "edge",
+				SupportsTools: true,
+				ContextWindow: 32768,
+				Speed:         8,
+				Quality:       7,
+				CostTier:      0,
+			},
+		},
+		MaxAuditLog: 10,
+	})
+
+	if got := r.ExperienceVersion(); got != 0 {
+		t.Fatalf("initial ExperienceVersion = %d, want 0", got)
+	}
+
+	r.ReplaceExperience(map[string]DeploymentStats{
+		"edge/qwen3:8b": {
+			Provider:      "ollama",
+			Resource:      "edge",
+			UpstreamModel: "qwen3:8b",
+			Requests:      3,
+			Successes:     3,
+			Failures:      0,
+			AvgLatencyMs:  3000,
+			AvgTokensUsed: 500,
+		},
+	})
+	afterRestore := r.ExperienceVersion()
+	if afterRestore == 0 {
+		t.Fatal("ExperienceVersion did not change after ReplaceExperience")
+	}
+
+	model, decision := r.Route(context.Background(), Request{
+		Query:      "check the gate",
+		NeedsTools: true,
+		ToolCount:  1,
+		Priority:   PriorityInteractive,
+	})
+	if model != "edge/qwen3:8b" {
+		t.Fatalf("Route() selected %q, want %q", model, "edge/qwen3:8b")
+	}
+	r.RecordOutcome(decision.RequestID, 120, 600, true)
+
+	if got := r.ExperienceVersion(); got <= afterRestore {
+		t.Fatalf("ExperienceVersion = %d, want > %d after RecordOutcome", got, afterRestore)
 	}
 }

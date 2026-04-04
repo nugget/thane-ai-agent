@@ -34,7 +34,20 @@ func (a *App) initServers(s *newState) error {
 	// --- API server ---
 	// The primary HTTP server exposing the OpenAI-compatible chat API,
 	// health endpoint, router introspection, and the web UI.
-	server := api.NewServer(cfg.Listen.Address, cfg.Listen.Port, a.loop, a.rtr, cfg.Pricing, logger)
+	server := api.NewServer(
+		cfg.Listen.Address,
+		cfg.Listen.Port,
+		a.loop,
+		a.rtr,
+		cfg.Pricing,
+		a.modelRegistry,
+		a.usageStore,
+		a.persistModelRegistryPolicy,
+		a.deletePersistedModelRegistryPolicy,
+		a.persistModelRegistryResourcePolicy,
+		a.deletePersistedModelRegistryResourcePolicy,
+		logger,
+	)
 	server.SetMemoryStore(a.mem)
 	server.SetArchiveStore(a.archiveStore)
 	server.SetEventBus(a.eventBus)
@@ -213,7 +226,7 @@ func (a *App) initServers(s *newState) error {
 		server.SetTokenObserver(dailyTokens)
 
 		statsAdapter := &mqttStatsAdapter{
-			model:  cfg.Models.Default,
+			model:  a.modelCatalog.DefaultModel,
 			server: server,
 		}
 
@@ -526,7 +539,7 @@ func (a *App) initServers(s *newState) error {
 		webCfg := web.Config{
 			LoopRegistry: a.loopRegistry,
 			EventBus:     a.eventBus,
-			SystemStatus: &systemStatusAdapter{connMgr: a.connMgr},
+			SystemStatus: &systemStatusAdapter{connMgr: a.connMgr, modelRegistry: a.modelRegistry, router: a.rtr},
 			Logger:       logger,
 		}
 		if a.indexDB != nil {
