@@ -1704,6 +1704,17 @@ func (l *Loop) buildLLMErrorHandler(ctx context.Context, stream llm.StreamCallba
 			return nil, "", err
 		}
 
+		if explicitModelRequested {
+			if resp, recoveredModel, recoveryErr, handled := l.maybeRetryExplicitModelAfterProviderContextError(iterCtx, model, err, msgs, toolDefs, stream); handled {
+				if recoveryErr != nil {
+					iterLog.Warn("explicit model context recovery failed", "model", model, "error", recoveryErr)
+					return nil, "", recoveryErr
+				}
+				iterLog.Info("explicit model context recovery successful", "model", recoveredModel)
+				return resp, recoveredModel, nil
+			}
+		}
+
 		if isUserFixableModelError(err) {
 			iterLog.Info("user-fixable model error, skipping failover", "model", model)
 			return nil, "", err

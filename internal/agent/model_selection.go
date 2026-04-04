@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/nugget/thane-ai-agent/internal/llm"
 	"github.com/nugget/thane-ai-agent/internal/models"
 	"github.com/nugget/thane-ai-agent/internal/router"
 )
@@ -156,6 +157,54 @@ func (l *Loop) maybePrepareExplicitModel(ctx context.Context, ref string, needsT
 	return changed, nil
 }
 
+func (l *Loop) maybeRetryExplicitModelAfterProviderContextError(
+	ctx context.Context,
+	model string,
+	err error,
+	msgs []llm.Message,
+	toolDefs []map[string]any,
+	stream llm.StreamCallback,
+) (*llm.ChatResponse, string, error, bool) {
+	if l == nil || l.modelRuntime == nil || err == nil {
+		return nil, "", nil, false
+	}
+	if !isLMStudioLoadedContextError(err) {
+		return nil, "", nil, false
+	}
+
+	cat := l.currentModelCatalog()
+	if cat == nil {
+		return nil, "", nil, false
+	}
+	dep, resolveErr := cat.ResolveDeploymentRef(model)
+	if resolveErr != nil {
+		return nil, "", nil, false
+	}
+	if strings.TrimSpace(dep.Provider) != "lmstudio" {
+		return nil, "", nil, false
+	}
+	if dep.MaxContextWindow <= dep.LoadedContextWindow || dep.MaxContextWindow <= 0 {
+		return nil, "", nil, false
+	}
+
+	changed, prepErr := l.modelRuntime.PrepareExplicitModel(ctx, dep.ID, dep.MaxContextWindow)
+	if prepErr != nil {
+		return nil, "", prepErr, true
+	}
+	if !changed {
+		return nil, "", nil, false
+	}
+	if l.router != nil && l.modelRegistry != nil {
+		l.router.UpdateConfig(l.modelRegistry.Catalog().RouterConfig(0))
+	}
+
+	resp, retryErr := l.llm.ChatStream(ctx, dep.ID, msgs, toolDefs, stream)
+	if retryErr != nil {
+		return nil, "", retryErr, true
+	}
+	return resp, dep.ID, nil, true
+}
+
 func messagesNeedImages(msgs []Message) bool {
 	for _, msg := range msgs {
 		if len(msg.Images) > 0 {
@@ -180,6 +229,15 @@ func roughTokenCount(s string) int {
 		return 0
 	}
 	return (len(s) + 3) / 4
+}
+
+func isLMStudioLoadedContextError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(strings.TrimSpace(err.Error()))
+	return strings.Contains(msg, "tokens to keep from the initial prompt is greater than the context length") &&
+		strings.Contains(msg, "load the model with a larger context length")
 }
 
 func noEligibleImageRoutingError(cat *models.Catalog, decision *router.Decision) error {

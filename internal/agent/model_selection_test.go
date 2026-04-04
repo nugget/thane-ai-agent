@@ -435,6 +435,163 @@ func TestRun_ExplicitModelPreparesLoadedContextAndRetries(t *testing.T) {
 	}
 }
 
+func TestRun_ExplicitModelRetriesProviderContextErrorAfterLMStudioLoad(t *testing.T) {
+	var mu sync.Mutex
+	loadedContext := 24000
+	loadCalls := 0
+	chatCalls := 0
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/models":
+			mu.Lock()
+			current := loadedContext
+			mu.Unlock()
+			_ = json.NewEncoder(w).Encode(struct {
+				Models []map[string]any `json:"models"`
+			}{
+				Models: []map[string]any{{
+					"key":                "google/gemma-3-4b",
+					"type":               "vlm",
+					"architecture":       "gemma3",
+					"format":             "mlx",
+					"max_context_length": 131072,
+					"capabilities": map[string]any{
+						"vision": true,
+					},
+					"loaded_instances": []map[string]any{{
+						"id": "google/gemma-3-4b",
+						"config": map[string]any{
+							"context_length": current,
+						},
+					}},
+				}},
+			})
+		case "/api/v1/models/load":
+			var req struct {
+				Model         string `json:"model"`
+				ContextLength int    `json:"context_length"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode load request: %v", err)
+			}
+			if req.Model != "google/gemma-3-4b" {
+				t.Fatalf("load model = %q, want google/gemma-3-4b", req.Model)
+			}
+			if req.ContextLength != 131072 {
+				t.Fatalf("context_length = %d, want 131072", req.ContextLength)
+			}
+			mu.Lock()
+			loadedContext = req.ContextLength
+			loadCalls++
+			mu.Unlock()
+			_ = json.NewEncoder(w).Encode(modelproviders.LMStudioLoadResponse{
+				Type:       "llm",
+				InstanceID: req.Model,
+				Status:     "loaded",
+			})
+		case "/v1/chat/completions":
+			mu.Lock()
+			current := loadedContext
+			chatCalls++
+			mu.Unlock()
+			if current < 131072 {
+				http.Error(w, `{"error":"The number of tokens to keep from the initial prompt is greater than the context length. Try to load the model with a larger context length, or provide a shorter input"}`, http.StatusBadRequest)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"model": "deepslate/google/gemma-3-4b",
+				"choices": []map[string]any{{
+					"index": 0,
+					"message": map[string]any{
+						"role":    "assistant",
+						"content": "ok",
+					},
+				}},
+				"usage": map[string]any{
+					"prompt_tokens":     42,
+					"completion_tokens": 3,
+					"total_tokens":      45,
+				},
+			})
+		default:
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	cfg := &config.Config{
+		Models: config.ModelsConfig{
+			Default: "gpt-oss:20b",
+			Resources: map[string]config.ModelServerConfig{
+				"spark":     {URL: "http://spark.example", Provider: "ollama"},
+				"deepslate": {URL: srv.URL, Provider: "lmstudio", APIKey: "secret-token"},
+			},
+			Available: []config.ModelConfig{
+				{
+					Name:          "gpt-oss:20b",
+					Resource:      "spark",
+					SupportsTools: true,
+					ContextWindow: 8192,
+				},
+			},
+		},
+	}
+
+	cat, err := models.BuildCatalog(cfg)
+	if err != nil {
+		t.Fatalf("models.BuildCatalog: %v", err)
+	}
+	runtime, err := models.NewRuntime(context.Background(), cat, cfg, nil)
+	if err != nil {
+		t.Fatalf("models.NewRuntime: %v", err)
+	}
+	loop := buildTestLoopWithLLM(runtime.Client(), nil)
+	loop.UseModelRegistry(runtime.Registry())
+	loop.UseModelRuntime(runtime)
+
+	resp, err := loop.Run(context.Background(), &Request{
+		Model: "deepslate/google/gemma-3-4b",
+		Messages: []Message{{
+			Role:    "user",
+			Content: "Reply with exactly ok after checking the image.",
+			Images:  []llm.ImageContent{{Data: validTinyPNGBase64ForAgentTest(), MediaType: "image/png"}},
+		}},
+	}, nil)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if resp.Model != "deepslate/google/gemma-3-4b" {
+		t.Fatalf("resp.Model = %q, want deepslate/google/gemma-3-4b", resp.Model)
+	}
+	if strings.TrimSpace(resp.Content) != "ok" {
+		t.Fatalf("resp.Content = %q, want ok", resp.Content)
+	}
+
+	mu.Lock()
+	gotLoadCalls := loadCalls
+	gotChatCalls := chatCalls
+	gotLoadedContext := loadedContext
+	mu.Unlock()
+	if gotLoadCalls != 1 {
+		t.Fatalf("load calls = %d, want 1", gotLoadCalls)
+	}
+	if gotChatCalls != 2 {
+		t.Fatalf("chat calls = %d, want 2", gotChatCalls)
+	}
+	if gotLoadedContext != 131072 {
+		t.Fatalf("loadedContext = %d, want 131072", gotLoadedContext)
+	}
+
+	dep, err := runtime.Registry().Catalog().ResolveDeploymentRef("deepslate/google/gemma-3-4b")
+	if err != nil {
+		t.Fatalf("ResolveDeploymentRef after retry: %v", err)
+	}
+	if dep.LoadedContextWindow != 131072 || dep.ContextWindow != 131072 {
+		t.Fatalf("deployment context after retry = loaded:%d context:%d, want 131072/131072", dep.LoadedContextWindow, dep.ContextWindow)
+	}
+}
+
 func TestEstimateRequestContextTokens_IncludesImages(t *testing.T) {
 	got := estimateRequestContextTokens("abcd", []Message{{
 		Role:    "user",
