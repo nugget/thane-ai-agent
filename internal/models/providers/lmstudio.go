@@ -208,6 +208,7 @@ func (c *LMStudioClient) handleStreaming(ctx context.Context, requestedModel str
 		eventLines     []string
 		contentBuilder strings.Builder
 		model          = requestedModel
+		role           = "assistant"
 		createdAt      time.Time
 		usage          lmStudioUsage
 		toolAcc        = make(map[int]*lmStudioToolAccumulator)
@@ -238,6 +239,9 @@ func (c *LMStudioClient) handleStreaming(ctx context.Context, requestedModel str
 		for _, choice := range chunk.Choices {
 			if choice.Delta == nil {
 				continue
+			}
+			if choice.Delta.Role != "" {
+				role = choice.Delta.Role
 			}
 			if choice.Delta.Content != "" {
 				contentBuilder.WriteString(choice.Delta.Content)
@@ -308,6 +312,7 @@ func (c *LMStudioClient) handleStreaming(ctx context.Context, requestedModel str
 		OutputTokens:  usage.CompletionTokens,
 		TotalDuration: 0,
 	}
+	result.Message.Role = normalizeLMStudioMessageRole(role)
 	result.Message.Content = contentBuilder.String()
 	result.Message.ToolCalls = toolCalls
 	applyTextToolFallback(result, validToolNames)
@@ -348,7 +353,7 @@ func (c *LMStudioClient) chatResponseFromWire(wire *lmStudioChatResponse, validT
 		result.InputTokens = wire.Usage.PromptTokens
 		result.OutputTokens = wire.Usage.CompletionTokens
 	}
-	result.Message.Role = wire.Choices[0].Message.Role
+	result.Message.Role = normalizeLMStudioMessageRole(wire.Choices[0].Message.Role)
 	result.Message.Content = lmStudioContentText(wire.Choices[0].Message.Content)
 	result.Message.ToolCalls = toolCalls
 	applyTextToolFallback(result, validToolNames)

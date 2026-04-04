@@ -247,6 +247,9 @@ func TestLMStudioChat_NonStreamingContent(t *testing.T) {
 	if resp.Model != "deepslate/google/gemma-3-4b" {
 		t.Fatalf("resp.Model = %q, want %q", resp.Model, "deepslate/google/gemma-3-4b")
 	}
+	if resp.Message.Role != "assistant" {
+		t.Fatalf("resp.Message.Role = %q, want assistant", resp.Message.Role)
+	}
 	if resp.Message.Content != "ok\n" {
 		t.Fatalf("resp.Message.Content = %q, want %q", resp.Message.Content, "ok\n")
 	}
@@ -429,6 +432,9 @@ func TestLMStudioChatStream_ContentAndToolCalls(t *testing.T) {
 	if got := strings.Join(tokens, ""); got != "hello" {
 		t.Fatalf("streamed tokens = %q, want %q", got, "hello")
 	}
+	if resp.Message.Role != "assistant" {
+		t.Fatalf("resp.Message.Role = %q, want assistant", resp.Message.Role)
+	}
 	if resp.Message.Content != "hello" {
 		t.Fatalf("resp content = %q, want %q", resp.Message.Content, "hello")
 	}
@@ -446,5 +452,58 @@ func TestLMStudioChatStream_ContentAndToolCalls(t *testing.T) {
 	}
 	if got := resp.Message.ToolCalls[0].Function.Arguments["entity_id"]; got != "sun.sun" {
 		t.Fatalf("tool args entity_id = %v, want sun.sun", got)
+	}
+}
+
+func TestLMStudioChatStream_DefaultsAssistantRoleWhenStreamOmitsIt(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher := w.(http.Flusher)
+		writeChunk := func(chunk lmStudioChatResponse) {
+			data, err := json.Marshal(chunk)
+			if err != nil {
+				t.Fatalf("marshal chunk: %v", err)
+			}
+			fmt.Fprintf(w, "data: %s\n\n", data)
+			flusher.Flush()
+		}
+
+		writeChunk(lmStudioChatResponse{
+			Model: "deepslate/google/gemma-3-4b",
+			Choices: []lmStudioChatChoice{{
+				Index: 0,
+				Delta: &lmStudioChatDelta{
+					ToolCalls: []lmStudioToolCallDelta{{
+						Index: 0,
+						ID:    "call_1",
+						Type:  "function",
+						Function: lmStudioToolFunctionDelta{
+							Name:      "set_next_sleep",
+							Arguments: `{"duration":"5m"}`,
+						},
+					}},
+				},
+			}},
+			Usage: &lmStudioUsage{PromptTokens: 9, CompletionTokens: 4},
+		})
+		fmt.Fprint(w, "data: [DONE]\n\n")
+		flusher.Flush()
+	}))
+	defer srv.Close()
+
+	client := NewLMStudioClient(srv.URL, "", nil)
+	resp, err := client.ChatStream(context.Background(), "google/gemma-3-4b", []llm.Message{{Role: "user", Content: "choose a sleep time"}}, []map[string]any{
+		{"type": "function", "function": map[string]any{"name": "set_next_sleep"}},
+	}, func(llm.StreamEvent) {})
+	if err != nil {
+		t.Fatalf("ChatStream() error = %v", err)
+	}
+	if resp.Message.Role != "assistant" {
+		t.Fatalf("resp.Message.Role = %q, want assistant", resp.Message.Role)
+	}
+	if len(resp.Message.ToolCalls) != 1 {
+		t.Fatalf("len(tool_calls) = %d, want 1", len(resp.Message.ToolCalls))
 	}
 }

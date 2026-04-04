@@ -249,6 +249,14 @@ func toLMStudioMessages(msgs []llm.Message) ([]lmStudioMessage, error) {
 	return out, nil
 }
 
+func normalizeLMStudioMessageRole(role string) string {
+	role = strings.TrimSpace(role)
+	if role == "" {
+		return "assistant"
+	}
+	return role
+}
+
 func decodeLMStudioToolCalls(accs map[int]*lmStudioToolAccumulator) ([]llm.ToolCall, error) {
 	if len(accs) == 0 {
 		return nil, nil
