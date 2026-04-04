@@ -238,6 +238,57 @@ func TestCostSummaryTool_GroupBy(t *testing.T) {
 	}
 }
 
+func TestCostSummaryTool_GroupBy_NormalizesInput(t *testing.T) {
+	store := testUsageStore(t)
+	ctx := context.Background()
+
+	if err := store.Record(ctx, usage.Record{
+		Timestamp:    time.Now().UTC(),
+		RequestID:    "r1",
+		Model:        "sonnet",
+		Provider:     "anthropic",
+		InputTokens:  10,
+		OutputTokens: 5,
+		CostUSD:      0.1,
+		Role:         "interactive",
+	}); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+
+	reg := NewRegistry(nil, nil)
+	reg.SetUsageStore(store)
+
+	tool := reg.Get("cost_summary")
+	result, err := tool.Handler(ctx, map[string]any{
+		"period":   "all",
+		"group_by": " Provider ",
+	})
+	if err != nil {
+		t.Fatalf("handler error: %v", err)
+	}
+	if !strings.Contains(result, "By Provider:") {
+		t.Fatalf("expected provider grouping in output, got:\n%s", result)
+	}
+}
+
+func TestCostSummaryTool_GroupBy_InvalidValue(t *testing.T) {
+	store := testUsageStore(t)
+	reg := NewRegistry(nil, nil)
+	reg.SetUsageStore(store)
+
+	tool := reg.Get("cost_summary")
+	_, err := tool.Handler(context.Background(), map[string]any{
+		"period":   "all",
+		"group_by": "bogus",
+	})
+	if err == nil {
+		t.Fatal("expected invalid group_by error")
+	}
+	if !strings.Contains(err.Error(), "unsupported group_by") {
+		t.Fatalf("error = %q, want unsupported group_by detail", err)
+	}
+}
+
 func TestCostSummaryTool_GroupByOrdering(t *testing.T) {
 	store := testUsageStore(t)
 	ctx := context.Background()

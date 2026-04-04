@@ -26,7 +26,7 @@ type Record struct {
 	Model          string // Selected deployment ID when known
 	UpstreamModel  string
 	Resource       string
-	Provider       string // "anthropic", "ollama"
+	Provider       string // Provider family, e.g. "anthropic", "ollama", "lmstudio"
 	InputTokens    int
 	OutputTokens   int
 	CostUSD        float64

@@ -18,7 +18,7 @@ func (r *Registry) registerCostSummary() {
 
 	r.Register(&Tool{
 		Name:        "cost_summary",
-		Description: "Query your own token usage and API costs. Returns totals and optional breakdown by model, role, or task. Use to understand spending patterns and resource consumption.",
+		Description: "Query your own token usage and API costs. Returns totals and optional breakdown by deployment, upstream model, provider, resource, role, or task. Use to understand spending patterns and resource consumption.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -82,6 +82,7 @@ func (r *Registry) registerCostSummary() {
 // queryGrouped dispatches the grouped summary query based on the
 // group_by parameter. Results are ordered by cost descending.
 func queryGrouped(store *usage.Store, groupBy string, start, end time.Time) ([]usage.GroupedSummary, string, error) {
+	groupBy = strings.ToLower(strings.TrimSpace(groupBy))
 	switch groupBy {
 	case "model":
 		result, err := store.SummaryByGroup(groupBy, start, end)
@@ -102,7 +103,7 @@ func queryGrouped(store *usage.Store, groupBy string, start, end time.Time) ([]u
 		result, err := store.SummaryByGroup(groupBy, start, end)
 		return result, "Task", err
 	default:
-		return nil, "", nil
+		return nil, "", fmt.Errorf("unsupported group_by %q; use one of: model, upstream_model, provider, resource, role, task", groupBy)
 	}
 }
 
