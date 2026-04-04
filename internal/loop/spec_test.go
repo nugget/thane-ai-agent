@@ -3,6 +3,7 @@ package loop
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/router"
 )
@@ -99,5 +100,25 @@ func TestSpecToConfigCopiesMutableFields(t *testing.T) {
 	}
 	if *spec.Jitter != 0.4 {
 		t.Fatalf("spec.Jitter mutated = %v", *spec.Jitter)
+	}
+}
+
+func TestSpecToConfigAppliesOneShotOperationDefaults(t *testing.T) {
+	spec := &Spec{
+		Name:       "delegate-like",
+		Task:       "Do one thing.",
+		Operation:  OperationRequestReply,
+		Completion: CompletionReturn,
+	}
+
+	cfg := spec.ToConfig()
+	if cfg.MaxIter != 1 {
+		t.Fatalf("MaxIter = %d, want 1", cfg.MaxIter)
+	}
+	if cfg.SleepMin != time.Millisecond || cfg.SleepMax != time.Millisecond || cfg.SleepDefault != time.Millisecond {
+		t.Fatalf("sleep defaults = min %v max %v default %v, want all 1ms", cfg.SleepMin, cfg.SleepMax, cfg.SleepDefault)
+	}
+	if cfg.Jitter == nil || *cfg.Jitter != 0 {
+		t.Fatalf("Jitter = %v, want 0", cfg.Jitter)
 	}
 }

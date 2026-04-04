@@ -181,31 +181,32 @@ func (s *Spec) ToConfig() Config {
 	if s == nil {
 		return Config{}
 	}
+	ns := s.normalized()
 	return Config{
-		Name:                   s.Name,
-		Task:                   s.Task,
-		Tags:                   append([]string(nil), s.Tags...),
-		ExcludeTools:           append([]string(nil), s.ExcludeTools...),
-		SleepMin:               s.SleepMin,
-		SleepMax:               s.SleepMax,
-		SleepDefault:           s.SleepDefault,
-		Jitter:                 cloneFloat64Ptr(s.Jitter),
-		MaxDuration:            s.MaxDuration,
-		MaxIter:                s.MaxIter,
-		Supervisor:             s.Supervisor,
-		SupervisorProb:         s.SupervisorProb,
-		QualityFloor:           s.QualityFloor,
-		SupervisorContext:      s.SupervisorContext,
-		SupervisorQualityFloor: s.SupervisorQualityFloor,
-		OnRetrigger:            s.OnRetrigger,
-		TaskBuilder:            s.TaskBuilder,
-		PostIterate:            s.PostIterate,
-		WaitFunc:               s.WaitFunc,
-		Handler:                s.Handler,
-		Hints:                  cloneStringMap(s.Hints),
-		Setup:                  s.Setup,
-		Metadata:               cloneStringMap(s.Metadata),
-		ParentID:               s.ParentID,
+		Name:                   ns.Name,
+		Task:                   ns.Task,
+		Tags:                   append([]string(nil), ns.Tags...),
+		ExcludeTools:           append([]string(nil), ns.ExcludeTools...),
+		SleepMin:               ns.SleepMin,
+		SleepMax:               ns.SleepMax,
+		SleepDefault:           ns.SleepDefault,
+		Jitter:                 cloneFloat64Ptr(ns.Jitter),
+		MaxDuration:            ns.MaxDuration,
+		MaxIter:                ns.MaxIter,
+		Supervisor:             ns.Supervisor,
+		SupervisorProb:         ns.SupervisorProb,
+		QualityFloor:           ns.QualityFloor,
+		SupervisorContext:      ns.SupervisorContext,
+		SupervisorQualityFloor: ns.SupervisorQualityFloor,
+		OnRetrigger:            ns.OnRetrigger,
+		TaskBuilder:            ns.TaskBuilder,
+		PostIterate:            ns.PostIterate,
+		WaitFunc:               ns.WaitFunc,
+		Handler:                ns.Handler,
+		Hints:                  cloneStringMap(ns.Hints),
+		Setup:                  ns.Setup,
+		Metadata:               cloneStringMap(ns.Metadata),
+		ParentID:               ns.ParentID,
 	}
 }
 
@@ -220,6 +221,34 @@ func (s *Spec) profileRequest() Request {
 		ExcludeTools: opts.ExcludeTools,
 		InitialTags:  opts.InitialTags,
 	}
+}
+
+func (s *Spec) normalized() Spec {
+	if s == nil {
+		return Spec{}
+	}
+	ns := *s
+
+	switch ns.Operation {
+	case OperationRequestReply, OperationBackgroundTask:
+		if ns.MaxIter == 0 {
+			ns.MaxIter = 1
+		}
+		if ns.SleepMin == 0 {
+			ns.SleepMin = time.Millisecond
+		}
+		if ns.SleepMax == 0 {
+			ns.SleepMax = time.Millisecond
+		}
+		if ns.SleepDefault == 0 {
+			ns.SleepDefault = time.Millisecond
+		}
+		if ns.Jitter == nil {
+			ns.Jitter = Float64Ptr(0)
+		}
+	}
+
+	return ns
 }
 
 func cloneStringMap(src map[string]string) map[string]string {

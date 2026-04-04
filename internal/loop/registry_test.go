@@ -187,6 +187,80 @@ func TestRegistrySpawnSpec(t *testing.T) {
 	}
 }
 
+func TestRegistryLaunchRequestReplyWaitsForCompletion(t *testing.T) {
+	t.Parallel()
+
+	r := NewRegistry()
+	result, err := r.Launch(context.Background(), Launch{
+		Spec: Spec{
+			Name:       "launch-request-reply",
+			Task:       "test",
+			Operation:  OperationRequestReply,
+			Completion: CompletionReturn,
+		},
+	}, Deps{Runner: &noopRunner{}})
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	if result.Detached {
+		t.Fatal("Detached = true, want false")
+	}
+	if result.FinalStatus == nil {
+		t.Fatal("FinalStatus = nil, want status")
+	}
+	if result.FinalStatus.Iterations != 1 {
+		t.Fatalf("Iterations = %d, want 1", result.FinalStatus.Iterations)
+	}
+	if got := r.Get(result.LoopID); got != nil {
+		t.Fatalf("Get(%q) = %v, want nil after joined completion", result.LoopID, got)
+	}
+}
+
+func TestRegistryLaunchBackgroundTaskDetaches(t *testing.T) {
+	t.Parallel()
+
+	r := NewRegistry()
+	gate := make(chan struct{})
+	result, err := r.Launch(context.Background(), Launch{
+		Spec: Spec{
+			Name:       "launch-background-task",
+			Task:       "test",
+			Operation:  OperationBackgroundTask,
+			Completion: CompletionConversation,
+		},
+	}, Deps{Runner: &blockingRunner{gate: gate}})
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	if !result.Detached {
+		t.Fatal("Detached = false, want true")
+	}
+	if result.FinalStatus != nil {
+		t.Fatalf("FinalStatus = %#v, want nil", result.FinalStatus)
+	}
+	l := r.Get(result.LoopID)
+	if l == nil {
+		t.Fatalf("Get(%q) = nil, want running loop", result.LoopID)
+	}
+
+	close(gate)
+
+	select {
+	case <-l.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("detached loop did not finish")
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if r.Get(result.LoopID) == nil {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("loop %q still registered after completion", result.LoopID)
+}
+
 func TestRegistryShutdownAll(t *testing.T) {
 	t.Parallel()
 
@@ -252,6 +326,20 @@ func TestRegistryShutdownAllWithUnstartedLoops(t *testing.T) {
 type noopRunner struct{}
 
 func (r *noopRunner) Run(_ context.Context, _ RunRequest, _ StreamCallback) (*RunResponse, error) {
+	return &RunResponse{
+		Content:      "ok",
+		Model:        "test-model",
+		InputTokens:  10,
+		OutputTokens: 5,
+	}, nil
+}
+
+type blockingRunner struct {
+	gate chan struct{}
+}
+
+func (r *blockingRunner) Run(_ context.Context, _ RunRequest, _ StreamCallback) (*RunResponse, error) {
+	<-r.gate
 	return &RunResponse{
 		Content:      "ok",
 		Model:        "test-model",
