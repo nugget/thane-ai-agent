@@ -57,9 +57,10 @@ var validCompletions = map[Completion]bool{
 
 // Spec is the loops-ng contract for describing a loop. It carries
 // both the current engine-facing config fields and the forward-looking
-// loops-ng semantics. Today it can be compiled to [Config] without
-// behavior change; [Profile], [Operation], and [Completion] are
-// retained for the upcoming RunV2 work.
+// loops-ng semantics. Today it compiles to [Config], while [Profile]
+// already shapes requests for loops created via [NewFromSpec].
+// [Operation] and [Completion] are retained for the upcoming RunV2
+// work.
 type Spec struct {
 	// Name is the unique identifier for the loop. Required.
 	Name string
@@ -136,8 +137,8 @@ type Spec struct {
 	// Hints are merged into Request hints for each iteration.
 	Hints map[string]string
 
-	// Setup is called by [Registry.SpawnLoop] after [New] but before
-	// [Loop.Start].
+	// Setup is called by the registry spawn helpers after [New] or
+	// [NewFromSpec] but before [Loop.Start].
 	Setup func(l *Loop) `json:"-"`
 
 	// Metadata holds arbitrary key/value pairs for the loop.
@@ -172,9 +173,10 @@ func (s *Spec) Validate() error {
 
 // ToConfig compiles the current engine-facing portion of a Spec
 // into today's [Config] shape. This is intentionally conservative:
-// loops-ng-specific fields such as [Spec.Profile], [Spec.Operation],
-// and [Spec.Completion] are retained on the spec for future RunV2
-// wiring rather than forced into today's engine.
+// loops-ng-specific fields such as [Spec.Operation] and
+// [Spec.Completion] are retained on the spec for future RunV2
+// wiring rather than forced into today's engine. [Spec.Profile] is
+// applied by [NewFromSpec] as per-iteration request shaping.
 func (s *Spec) ToConfig() Config {
 	if s == nil {
 		return Config{}
@@ -204,6 +206,19 @@ func (s *Spec) ToConfig() Config {
 		Setup:                  s.Setup,
 		Metadata:               cloneStringMap(s.Metadata),
 		ParentID:               s.ParentID,
+	}
+}
+
+func (s *Spec) profileRequest() Request {
+	if s == nil {
+		return Request{}
+	}
+	opts := s.Profile.RequestOptions()
+	return Request{
+		Model:        opts.Model,
+		Hints:        opts.Hints,
+		ExcludeTools: opts.ExcludeTools,
+		SeedTags:     opts.SeedTags,
 	}
 }
 

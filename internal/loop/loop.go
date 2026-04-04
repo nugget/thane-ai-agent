@@ -164,6 +164,16 @@ type Loop struct {
 	// read it via [Loop.CurrentConvID].
 	currentConvID string
 
+	// requestBase carries the per-iteration request shaping derived
+	// from a loops-ng [Spec]'s [router.LoopProfile]. It is additive and
+	// only populated for loops created via [NewFromSpec].
+	requestBase Request
+
+	// requestInstructions is extra guidance derived from a loops-ng
+	// [Spec]'s [router.LoopProfile]. It is prepended to each iteration
+	// task when present.
+	requestInstructions string
+
 	// activatedTags tracks capability tags activated during previous
 	// iterations. Carried forward via SeedTags on the next Request so
 	// activations persist across the loop's lifetime.
@@ -244,7 +254,13 @@ func NewFromSpec(spec Spec, deps Deps) (*Loop, error) {
 	if err := spec.Validate(); err != nil {
 		return nil, err
 	}
-	return New(spec.ToConfig(), deps)
+	l, err := New(spec.ToConfig(), deps)
+	if err != nil {
+		return nil, err
+	}
+	l.requestBase = spec.profileRequest()
+	l.requestInstructions = spec.Profile.Instructions
+	return l, nil
 }
 
 // ID returns the unique loop identifier.
@@ -1045,21 +1061,31 @@ func (l *Loop) iterate(ctx context.Context, isSupervisor bool, convID string) (*
 		}
 	}
 
+	if l.requestInstructions != "" {
+		task = "Instructions: " + l.requestInstructions + "\n\n" + task
+	}
+
+	// Merge loops-ng profile hints over loop-generated defaults.
+	for k, v := range l.requestBase.Hints {
+		hints[k] = v
+	}
+
 	// Merge config hints over loop-generated defaults.
 	for k, v := range l.config.Hints {
 		hints[k] = v
 	}
 
 	req := Request{
+		Model:          l.requestBase.Model,
 		ConversationID: convID,
 		Messages: []Message{
 			{Role: "user", Content: task},
 		},
-		ExcludeTools:  l.config.ExcludeTools,
+		ExcludeTools:  mergeUniqueStrings(l.requestBase.ExcludeTools, l.config.ExcludeTools),
 		SkipTagFilter: len(l.config.Tags) == 0,
 		Hints:         hints,
 		OnProgress:    l.makeProgressFunc(),
-		SeedTags:      l.activatedTags, // carry forward from previous iterations
+		SeedTags:      mergeUniqueStrings(l.requestBase.SeedTags, l.activatedTags),
 	}
 
 	resp, err := l.deps.Runner.Run(ctx, req, nil)
@@ -1086,6 +1112,27 @@ func (l *Loop) iterate(ctx context.Context, isSupervisor bool, convID string) (*
 		Elapsed:       time.Since(iterStart),
 		Supervisor:    isSupervisor,
 	}, nil
+}
+
+func mergeUniqueStrings(parts ...[]string) []string {
+	var merged []string
+	seen := make(map[string]struct{})
+	for _, part := range parts {
+		for _, item := range part {
+			if item == "" {
+				continue
+			}
+			if _, ok := seen[item]; ok {
+				continue
+			}
+			seen[item] = struct{}{}
+			merged = append(merged, item)
+		}
+	}
+	if len(merged) == 0 {
+		return nil
+	}
+	return merged
 }
 
 // computeSleep returns the sleep duration for the next cycle. If
