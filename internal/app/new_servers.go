@@ -575,13 +575,13 @@ func (a *App) initServers(s *newState) error {
 		}
 
 		adapter := &loopAdapter{agentLoop: a.loop, router: a.rtr}
-		loopCfg := metacognitive.BuildLoopConfig(metacogCfg, metacognitive.Opts{
+		loopSpec := metacognitive.BuildSpec(metacogCfg, metacognitive.Opts{
 			WorkspacePath:   cfg.Workspace.Path,
 			StateFilePath:   metacogStatePath,
 			ProvenanceStore: a.provenanceStore,
 			StateFileName:   stateFileName,
 		})
-		loopCfg.Setup = func(l *looppkg.Loop) {
+		loopSpec.Setup = func(l *looppkg.Loop) {
 			metacognitive.RegisterTools(a.loop.Tools(), l, metacogCfg, metacogStatePath, a.provenanceStore)
 		}
 
@@ -591,7 +591,7 @@ func (a *App) initServers(s *newState) error {
 			EventBus: a.eventBus,
 		}
 		a.deferWorker("metacognitive", func(ctx context.Context) error {
-			if _, err := a.loopRegistry.SpawnLoop(ctx, loopCfg, metacogDeps); err != nil {
+			if _, err := a.loopRegistry.SpawnSpec(ctx, loopSpec, metacogDeps); err != nil {
 				return fmt.Errorf("spawn metacognitive loop: %w", err)
 			}
 			return nil
