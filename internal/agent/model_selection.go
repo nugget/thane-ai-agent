@@ -183,29 +183,43 @@ func (l *Loop) maybeRetryExplicitModelAfterProviderContextError(
 	if strings.TrimSpace(dep.Provider) != "lmstudio" {
 		return nil, "", nil, false
 	}
-	if dep.MaxContextWindow <= dep.LoadedContextWindow || dep.MaxContextWindow <= 0 {
-		return nil, "", nil, false
+
+	changed := false
+	if dep.MaxContextWindow > dep.LoadedContextWindow && dep.MaxContextWindow > 0 {
+		prepChanged, prepErr := l.modelRuntime.PrepareExplicitModel(ctx, dep.ID, dep.MaxContextWindow)
+		if prepErr != nil {
+			return nil, "", prepErr, true
+		}
+		changed = prepChanged
+		if changed && l.router != nil && l.modelRegistry != nil {
+			l.router.UpdateConfig(l.modelRegistry.Catalog().RouterConfig(0))
+		}
 	}
 
-	changed, prepErr := l.modelRuntime.PrepareExplicitModel(ctx, dep.ID, dep.MaxContextWindow)
-	if prepErr != nil {
-		return nil, "", prepErr, true
+	if changed {
+		resp, retryErr := l.llm.ChatStream(ctx, dep.ID, msgs, toolDefs, stream)
+		if retryErr == nil {
+			return resp, dep.ID, nil, true
+		}
+		if len(toolDefs) == 0 || dep.TrainedForToolUse || !isLMStudioLoadedContextError(retryErr) {
+			return nil, "", retryErr, true
+		}
 	}
+
+	if len(toolDefs) > 0 && !dep.TrainedForToolUse {
+		resp, retryErr := l.llm.ChatStream(ctx, dep.ID, msgs, nil, stream)
+		if retryErr == nil {
+			return resp, dep.ID, nil, true
+		}
+		if changed || isLMStudioLoadedContextError(retryErr) {
+			return nil, "", retryErr, true
+		}
+	}
+
 	if !changed {
 		return nil, "", nil, false
 	}
-	if l.router != nil && l.modelRegistry != nil {
-		l.router.UpdateConfig(l.modelRegistry.Catalog().RouterConfig(0))
-	}
-
-	resp, retryErr := l.llm.ChatStream(ctx, dep.ID, msgs, toolDefs, stream)
-	if retryErr != nil && len(toolDefs) > 0 && !dep.TrainedForToolUse && isLMStudioLoadedContextError(retryErr) {
-		resp, retryErr = l.llm.ChatStream(ctx, dep.ID, msgs, nil, stream)
-	}
-	if retryErr != nil {
-		return nil, "", retryErr, true
-	}
-	return resp, dep.ID, nil, true
+	return nil, "", nil, false
 }
 
 func messagesNeedImages(msgs []Message) bool {

@@ -612,6 +612,123 @@ func TestRun_ExplicitModelRetriesProviderContextErrorAfterLMStudioLoad(t *testin
 	}
 }
 
+func TestRun_ExplicitModelRetriesWithoutToolsWhenLMStudioAlreadyAtMaxContext(t *testing.T) {
+	var mu sync.Mutex
+	chatCalls := 0
+	lastToolCount := -1
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/models":
+			_ = json.NewEncoder(w).Encode(struct {
+				Models []map[string]any `json:"models"`
+			}{
+				Models: []map[string]any{{
+					"key":                "google/gemma-3-4b",
+					"type":               "vlm",
+					"architecture":       "gemma3",
+					"format":             "mlx",
+					"max_context_length": 131072,
+					"capabilities": map[string]any{
+						"vision":               true,
+						"trained_for_tool_use": false,
+					},
+					"loaded_instances": []map[string]any{{
+						"id": "google/gemma-3-4b",
+						"config": map[string]any{
+							"context_length": 131072,
+						},
+					}},
+				}},
+			})
+		case "/v1/chat/completions":
+			var req struct {
+				Tools []map[string]any `json:"tools"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatalf("decode chat request: %v", err)
+			}
+			mu.Lock()
+			chatCalls++
+			lastToolCount = len(req.Tools)
+			mu.Unlock()
+			if len(req.Tools) > 0 {
+				http.Error(w, `{"error":"The number of tokens to keep from the initial prompt is greater than the context length. Try to load the model with a larger context length, or provide a shorter input"}`, http.StatusBadRequest)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"model": "deepslate/google/gemma-3-4b",
+				"choices": []map[string]any{{
+					"index": 0,
+					"message": map[string]any{
+						"role":    "assistant",
+						"content": "ok",
+					},
+				}},
+			})
+		default:
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+	}))
+	defer srv.Close()
+
+	cfg := &config.Config{
+		Models: config.ModelsConfig{
+			Default: "gpt-oss:20b",
+			Resources: map[string]config.ModelServerConfig{
+				"spark":     {URL: "http://spark.example", Provider: "ollama"},
+				"deepslate": {URL: srv.URL, Provider: "lmstudio", APIKey: "secret-token"},
+			},
+			Available: []config.ModelConfig{
+				{
+					Name:          "gpt-oss:20b",
+					Resource:      "spark",
+					SupportsTools: true,
+					ContextWindow: 8192,
+				},
+			},
+		},
+	}
+
+	cat, err := models.BuildCatalog(cfg)
+	if err != nil {
+		t.Fatalf("models.BuildCatalog: %v", err)
+	}
+	runtime, err := models.NewRuntime(context.Background(), cat, cfg, nil)
+	if err != nil {
+		t.Fatalf("models.NewRuntime: %v", err)
+	}
+	loop := buildTestLoopWithLLM(runtime.Client(), []string{"get_state"})
+	loop.UseModelRegistry(runtime.Registry())
+	loop.UseModelRuntime(runtime)
+
+	resp, err := loop.Run(context.Background(), &Request{
+		Model: "deepslate/google/gemma-3-4b",
+		Messages: []Message{{
+			Role:    "user",
+			Content: "Reply with exactly ok after checking the image.",
+			Images:  []llm.ImageContent{{Data: validTinyPNGBase64ForAgentTest(), MediaType: "image/png"}},
+		}},
+	}, nil)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if strings.TrimSpace(resp.Content) != "ok" {
+		t.Fatalf("resp.Content = %q, want ok", resp.Content)
+	}
+
+	mu.Lock()
+	gotChatCalls := chatCalls
+	gotLastToolCount := lastToolCount
+	mu.Unlock()
+	if gotChatCalls != 2 {
+		t.Fatalf("chat calls = %d, want 2", gotChatCalls)
+	}
+	if gotLastToolCount != 0 {
+		t.Fatalf("last tool count = %d, want 0 on final retry", gotLastToolCount)
+	}
+}
+
 func TestEstimateRequestContextTokens_IncludesImages(t *testing.T) {
 	got := estimateRequestContextTokens("abcd", []Message{{
 		Role:    "user",
