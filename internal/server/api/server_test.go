@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -263,7 +264,7 @@ func TestHandleUsageSummary(t *testing.T) {
 		}
 	}
 
-	server := NewServer("", 0, nil, nil, nil, nil, store, testAPILogger())
+	server := NewServer("", 0, nil, nil, nil, nil, store, nil, nil, testAPILogger())
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/usage/summary?hours=48&group_by=resource", nil)
 	rec := httptest.NewRecorder()
@@ -299,7 +300,7 @@ func TestHandleUsageSummary(t *testing.T) {
 }
 
 func TestHandleUsageSummary_InvalidGroupBy(t *testing.T) {
-	server := NewServer("", 0, nil, nil, nil, nil, testAPIUsageStore(t), testAPILogger())
+	server := NewServer("", 0, nil, nil, nil, nil, testAPIUsageStore(t), nil, nil, testAPILogger())
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/usage/summary?group_by=bogus", nil)
 	rec := httptest.NewRecorder()
@@ -311,7 +312,7 @@ func TestHandleUsageSummary_InvalidGroupBy(t *testing.T) {
 }
 
 func TestHandleUsageSummary_InvalidHours(t *testing.T) {
-	server := NewServer("", 0, nil, nil, nil, nil, testAPIUsageStore(t), testAPILogger())
+	server := NewServer("", 0, nil, nil, nil, nil, testAPIUsageStore(t), nil, nil, testAPILogger())
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/usage/summary?hours=zero", nil)
 	rec := httptest.NewRecorder()
@@ -324,7 +325,7 @@ func TestHandleUsageSummary_InvalidHours(t *testing.T) {
 
 func TestHandleModelRegistry(t *testing.T) {
 	registry := testAPIModelRegistry(t)
-	server := NewServer("", 0, nil, nil, nil, registry, nil, testAPILogger())
+	server := NewServer("", 0, nil, nil, nil, registry, nil, nil, nil, testAPILogger())
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/model-registry", nil)
 	rec := httptest.NewRecorder()
@@ -355,7 +356,7 @@ func TestHandleModelRegistry(t *testing.T) {
 func TestHandleModelRegistryPolicySetAndDelete(t *testing.T) {
 	registry := testAPIModelRegistry(t)
 	rtr := router.NewRouter(testAPILogger(), registry.Catalog().RouterConfig(10))
-	server := NewServer("", 0, nil, rtr, nil, registry, nil, testAPILogger())
+	server := NewServer("", 0, nil, rtr, nil, registry, nil, nil, nil, testAPILogger())
 
 	body := bytes.NewBufferString(`{"deployment":"spark/gpt-oss:20b","state":"flagged","reason":"manual review"}`)
 	req := httptest.NewRequest(http.MethodPost, "/v1/model-registry/policy", body)
@@ -403,7 +404,7 @@ func TestHandleModelRegistryPolicySetAndDelete(t *testing.T) {
 func TestHandleModelRegistryPolicySet_UpdatesRouterConfig(t *testing.T) {
 	registry := testAPIModelRegistry(t)
 	rtr := router.NewRouter(testAPILogger(), registry.Catalog().RouterConfig(10))
-	server := NewServer("", 0, nil, rtr, nil, registry, nil, testAPILogger())
+	server := NewServer("", 0, nil, rtr, nil, registry, nil, nil, nil, testAPILogger())
 
 	body := bytes.NewBufferString(`{"deployment":"spark/gpt-oss:20b","state":"inactive","reason":"drain this node"}`)
 	req := httptest.NewRequest(http.MethodPost, "/v1/model-registry/policy", body)
@@ -444,7 +445,7 @@ func TestHandleModelRegistryPolicySet_PromotesDiscoveredDeploymentIntoRouter(t *
 	}
 
 	rtr := router.NewRouter(testAPILogger(), registry.Catalog().RouterConfig(10))
-	server := NewServer("", 0, nil, rtr, nil, registry, nil, testAPILogger())
+	server := NewServer("", 0, nil, rtr, nil, registry, nil, nil, nil, testAPILogger())
 
 	body := bytes.NewBufferString(`{"deployment":"mirror/qwen3-vl:latest","routable":true,"reason":"promote vision model"}`)
 	req := httptest.NewRequest(http.MethodPost, "/v1/model-registry/policy", body)
@@ -482,7 +483,7 @@ func TestHandleModelRegistryPolicySet_PromotesDiscoveredDeploymentIntoRouter(t *
 
 func TestHandleModelRegistryPolicySet_InvalidState(t *testing.T) {
 	registry := testAPIModelRegistry(t)
-	server := NewServer("", 0, nil, nil, nil, registry, nil, testAPILogger())
+	server := NewServer("", 0, nil, nil, nil, registry, nil, nil, nil, testAPILogger())
 
 	body := bytes.NewBufferString(`{"deployment":"spark/gpt-oss:20b","state":"bogus"}`)
 	req := httptest.NewRequest(http.MethodPost, "/v1/model-registry/policy", body)
@@ -496,7 +497,7 @@ func TestHandleModelRegistryPolicySet_InvalidState(t *testing.T) {
 
 func TestHandleModelRegistryPolicySet_RequiresStateOrRoutable(t *testing.T) {
 	registry := testAPIModelRegistry(t)
-	server := NewServer("", 0, nil, nil, nil, registry, nil, testAPILogger())
+	server := NewServer("", 0, nil, nil, nil, registry, nil, nil, nil, testAPILogger())
 
 	body := bytes.NewBufferString(`{"deployment":"spark/gpt-oss:20b"}`)
 	req := httptest.NewRequest(http.MethodPost, "/v1/model-registry/policy", body)
@@ -510,7 +511,7 @@ func TestHandleModelRegistryPolicySet_RequiresStateOrRoutable(t *testing.T) {
 
 func TestHandleModelRegistryPolicySet_UnknownDeployment(t *testing.T) {
 	registry := testAPIModelRegistry(t)
-	server := NewServer("", 0, nil, nil, nil, registry, nil, testAPILogger())
+	server := NewServer("", 0, nil, nil, nil, registry, nil, nil, nil, testAPILogger())
 
 	body := bytes.NewBufferString(`{"deployment":"missing/model","state":"flagged"}`)
 	req := httptest.NewRequest(http.MethodPost, "/v1/model-registry/policy", body)
@@ -524,7 +525,7 @@ func TestHandleModelRegistryPolicySet_UnknownDeployment(t *testing.T) {
 
 func TestHandleModelRegistryPolicyDelete_UnknownDeployment(t *testing.T) {
 	registry := testAPIModelRegistry(t)
-	server := NewServer("", 0, nil, nil, nil, registry, nil, testAPILogger())
+	server := NewServer("", 0, nil, nil, nil, registry, nil, nil, nil, testAPILogger())
 
 	req := httptest.NewRequest(http.MethodDelete, "/v1/model-registry/policy?deployment=missing/model", nil)
 	rec := httptest.NewRecorder()
@@ -532,5 +533,96 @@ func TestHandleModelRegistryPolicyDelete_UnknownDeployment(t *testing.T) {
 
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", rec.Code)
+	}
+}
+
+func TestHandleModelRegistryPolicySetAndDelete_PersistenceCallbacks(t *testing.T) {
+	registry := testAPIModelRegistry(t)
+	var savedID string
+	var savedPolicy models.DeploymentPolicy
+	var deletedID string
+	server := NewServer(
+		"",
+		0,
+		nil,
+		nil,
+		nil,
+		registry,
+		nil,
+		func(id string, policy models.DeploymentPolicy) error {
+			savedID = id
+			savedPolicy = policy
+			return nil
+		},
+		func(id string) error {
+			deletedID = id
+			return nil
+		},
+		testAPILogger(),
+	)
+
+	body := bytes.NewBufferString(`{"deployment":"spark/gpt-oss:20b","state":"flagged","reason":"manual review"}`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/model-registry/policy", body)
+	rec := httptest.NewRecorder()
+	server.handleModelRegistryPolicySet(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("set status = %d, want 200", rec.Code)
+	}
+	if savedID != "spark/gpt-oss:20b" {
+		t.Fatalf("savedID = %q, want %q", savedID, "spark/gpt-oss:20b")
+	}
+	if savedPolicy.State != models.DeploymentPolicyStateFlagged {
+		t.Fatalf("saved state = %q, want %q", savedPolicy.State, models.DeploymentPolicyStateFlagged)
+	}
+	if savedPolicy.Reason != "manual review" {
+		t.Fatalf("saved reason = %q, want %q", savedPolicy.Reason, "manual review")
+	}
+	if savedPolicy.UpdatedAt.IsZero() {
+		t.Fatal("saved UpdatedAt = zero, want populated timestamp")
+	}
+
+	deleteReq := httptest.NewRequest(http.MethodDelete, "/v1/model-registry/policy?deployment=spark/gpt-oss:20b", nil)
+	deleteRec := httptest.NewRecorder()
+	server.handleModelRegistryPolicyDelete(deleteRec, deleteReq)
+	if deleteRec.Code != http.StatusOK {
+		t.Fatalf("delete status = %d, want 200", deleteRec.Code)
+	}
+	if deletedID != "spark/gpt-oss:20b" {
+		t.Fatalf("deletedID = %q, want %q", deletedID, "spark/gpt-oss:20b")
+	}
+}
+
+func TestHandleModelRegistryPolicySet_PersistenceFailure(t *testing.T) {
+	registry := testAPIModelRegistry(t)
+	server := NewServer(
+		"",
+		0,
+		nil,
+		nil,
+		nil,
+		registry,
+		nil,
+		func(string, models.DeploymentPolicy) error { return errors.New("boom") },
+		nil,
+		testAPILogger(),
+	)
+
+	body := bytes.NewBufferString(`{"deployment":"spark/gpt-oss:20b","state":"flagged"}`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/model-registry/policy", body)
+	rec := httptest.NewRecorder()
+	server.handleModelRegistryPolicySet(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", rec.Code)
+	}
+
+	snap := registry.Snapshot()
+	dep := findRegistryDeployment(snap, "spark/gpt-oss:20b")
+	if !dep.found {
+		t.Fatal("deployment missing from snapshot")
+	}
+	if dep.snapshot.PolicySource != models.DeploymentPolicySourceDefault {
+		t.Fatalf("PolicySource = %q, want %q after persistence failure", dep.snapshot.PolicySource, models.DeploymentPolicySourceDefault)
 	}
 }

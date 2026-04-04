@@ -70,16 +70,17 @@ type App struct {
 	modelRegistry         *models.Registry
 
 	// Core subsystems
-	mem            *memory.SQLiteStore
-	archiveStore   *memory.ArchiveStore
-	archiveAdapter *memory.ArchiveAdapter
-	wmStore        *memory.WorkingMemoryStore
-	factStore      *knowledge.Store
-	contactStore   *contacts.Store
-	opStore        *opstate.Store
-	usageStore     *usage.Store
-	schedStore     *scheduler.Store
-	sched          *scheduler.Scheduler
+	mem              *memory.SQLiteStore
+	archiveStore     *memory.ArchiveStore
+	archiveAdapter   *memory.ArchiveAdapter
+	wmStore          *memory.WorkingMemoryStore
+	factStore        *knowledge.Store
+	contactStore     *contacts.Store
+	opStore          *opstate.Store
+	modelPolicyStore *modelPolicyStore
+	usageStore       *usage.Store
+	schedStore       *scheduler.Store
+	sched            *scheduler.Scheduler
 
 	// Agent loop and router
 	loop *agent.Loop

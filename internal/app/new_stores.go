@@ -391,6 +391,10 @@ func (a *App) initStores(s *newState) error {
 		return fmt.Errorf("initialize operational state store: %w", err)
 	}
 	a.opStore = opStore
+	a.modelPolicyStore = newModelPolicyStore(opStore)
+	if err := a.modelPolicyStore.LoadInto(a.modelRegistry, logger); err != nil {
+		return fmt.Errorf("load persisted model registry policies: %w", err)
+	}
 
 	// --- Usage tracking ---
 	// Persistent token usage and cost recording for attribution and

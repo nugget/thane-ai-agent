@@ -300,6 +300,41 @@ func (r *Registry) ClearDeploymentPolicy(id string, updatedAt time.Time) error {
 	return nil
 }
 
+// ReplaceDeploymentPolicies swaps the explicit runtime policy overlay
+// with the provided policy map. Policies for currently absent
+// deployments are retained so they can reapply automatically when a
+// discovered deployment returns in a later inventory refresh.
+func (r *Registry) ReplaceDeploymentPolicies(policies map[string]DeploymentPolicy, updatedAt time.Time) error {
+	if r == nil {
+		return fmt.Errorf("nil registry")
+	}
+	if updatedAt.IsZero() {
+		updatedAt = time.Now()
+	}
+
+	r.mu.RLock()
+	base := r.base
+	inv := cloneInventory(r.overlay)
+	r.mu.RUnlock()
+
+	next := clonePolicies(policies)
+	effective, err := buildEffectiveCatalog(base, inv, next)
+	if err != nil {
+		return err
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	changed := !reflect.DeepEqual(next, r.policies)
+	r.policies = next
+	r.effective = effective
+	if changed {
+		r.generation++
+	}
+	r.updatedAt = updatedAt.UTC()
+	return nil
+}
+
 // Snapshot returns a JSON-friendly view of the registry state.
 func (r *Registry) Snapshot() *RegistrySnapshot {
 	if r == nil {

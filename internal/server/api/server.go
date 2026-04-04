@@ -62,24 +62,26 @@ type TokenObserver interface {
 
 // Server is the HTTP API server.
 type Server struct {
-	address         string
-	port            int
-	loop            *agent.Loop
-	router          *router.Router
-	checkpointer    *checkpoint.Checkpointer
-	memoryStore     *memory.SQLiteStore
-	archiveStore    *memory.ArchiveStore
-	healthDeps      HealthStatusFunc
-	tokenObserver   TokenObserver
-	eventBus        *events.Bus
-	owuTracker      *OWUTracker
-	webServer       WebServerRegistrar
-	platformHandler http.Handler
-	modelRegistry   *models.Registry
-	usageStore      *usage.Store
-	logger          *slog.Logger
-	server          *http.Server
-	stats           *SessionStats
+	address                    string
+	port                       int
+	loop                       *agent.Loop
+	router                     *router.Router
+	checkpointer               *checkpoint.Checkpointer
+	memoryStore                *memory.SQLiteStore
+	archiveStore               *memory.ArchiveStore
+	healthDeps                 HealthStatusFunc
+	tokenObserver              TokenObserver
+	eventBus                   *events.Bus
+	owuTracker                 *OWUTracker
+	webServer                  WebServerRegistrar
+	platformHandler            http.Handler
+	modelRegistry              *models.Registry
+	usageStore                 *usage.Store
+	persistModelRegistryPolicy func(string, models.DeploymentPolicy) error
+	deleteModelRegistryPolicy  func(string) error
+	logger                     *slog.Logger
+	server                     *http.Server
+	stats                      *SessionStats
 }
 
 // SetOWUTracker configures the Open WebUI loop tracker for dashboard visibility.
@@ -272,15 +274,28 @@ func cloneSessionUsageMap(src map[string]usage.Summary) map[string]usage.Summary
 
 // NewServer creates a new API server. The pricing map drives cost
 // estimation in session stats; pass nil for zero-cost defaults.
-func NewServer(address string, port int, loop *agent.Loop, rtr *router.Router, pricing map[string]config.PricingEntry, registry *models.Registry, usageStore *usage.Store, logger *slog.Logger) *Server {
+func NewServer(
+	address string,
+	port int,
+	loop *agent.Loop,
+	rtr *router.Router,
+	pricing map[string]config.PricingEntry,
+	registry *models.Registry,
+	usageStore *usage.Store,
+	persistPolicy func(string, models.DeploymentPolicy) error,
+	deletePolicy func(string) error,
+	logger *slog.Logger,
+) *Server {
 	return &Server{
-		address:       address,
-		port:          port,
-		loop:          loop,
-		router:        rtr,
-		modelRegistry: registry,
-		usageStore:    usageStore,
-		logger:        logger,
+		address:                    address,
+		port:                       port,
+		loop:                       loop,
+		router:                     rtr,
+		modelRegistry:              registry,
+		usageStore:                 usageStore,
+		persistModelRegistryPolicy: persistPolicy,
+		deleteModelRegistryPolicy:  deletePolicy,
+		logger:                     logger,
 		stats: &SessionStats{
 			pricing:         pricing,
 			ByModel:         make(map[string]usage.Summary),
@@ -901,11 +916,21 @@ func (s *Server) handleModelRegistryPolicySet(w http.ResponseWriter, r *http.Req
 		state = parsed
 	}
 
-	if err := s.modelRegistry.ApplyDeploymentPolicy(req.Deployment, models.DeploymentPolicy{
-		State:    state,
-		Routable: req.Routable,
-		Reason:   req.Reason,
-	}, time.Now()); err != nil {
+	policy := models.DeploymentPolicy{
+		State:     state,
+		Routable:  req.Routable,
+		Reason:    req.Reason,
+		UpdatedAt: time.Now(),
+	}
+	if s.persistModelRegistryPolicy != nil {
+		if err := s.persistModelRegistryPolicy(req.Deployment, policy); err != nil {
+			s.logger.Error("persist model registry policy failed", "deployment", req.Deployment, "error", err)
+			s.errorResponse(w, http.StatusInternalServerError, "failed to persist model registry policy")
+			return
+		}
+	}
+
+	if err := s.modelRegistry.ApplyDeploymentPolicy(req.Deployment, policy, policy.UpdatedAt); err != nil {
 		if models.IsUnknownDeployment(err) {
 			s.errorResponse(w, http.StatusNotFound, err.Error())
 			return
@@ -942,6 +967,14 @@ func (s *Server) handleModelRegistryPolicyDelete(w http.ResponseWriter, r *http.
 	if id == "" {
 		s.errorResponse(w, http.StatusBadRequest, "deployment is required")
 		return
+	}
+
+	if s.deleteModelRegistryPolicy != nil {
+		if err := s.deleteModelRegistryPolicy(id); err != nil {
+			s.logger.Error("delete persisted model registry policy failed", "deployment", id, "error", err)
+			s.errorResponse(w, http.StatusInternalServerError, "failed to delete persisted model registry policy")
+			return
+		}
 	}
 
 	if err := s.modelRegistry.ClearDeploymentPolicy(id, time.Now()); err != nil {

@@ -490,3 +490,101 @@ func TestRegistryApplyDeploymentPolicy_UnknownDeployment(t *testing.T) {
 		t.Fatalf("ApplyDeploymentPolicy error = %T, want *UnknownDeploymentError", err)
 	}
 }
+
+func TestRegistryReplaceDeploymentPolicies_ReappliesWhenDiscoveredDeploymentReturns(t *testing.T) {
+	t.Parallel()
+
+	base := &Catalog{
+		DefaultModel: "spark/gpt-oss:20b",
+		LocalFirst:   true,
+		Resources: []Resource{
+			{ID: "deepslate", Provider: "lmstudio", URL: "http://deepslate.example"},
+			{ID: "spark", Provider: "ollama", URL: "http://spark.example"},
+		},
+		Deployments: []Deployment{
+			{
+				ID:                    "spark/gpt-oss:20b",
+				ModelName:             "gpt-oss:20b",
+				Provider:              "ollama",
+				ResourceID:            "spark",
+				Server:                "spark",
+				SupportsTools:         true,
+				ProviderSupportsTools: true,
+				SupportsStreaming:     true,
+				ContextWindow:         8192,
+				Speed:                 6,
+				Quality:               6,
+				CostTier:              0,
+				Source:                DeploymentSourceConfig,
+				Routable:              true,
+			},
+		},
+	}
+	if err := base.reindex(base.DefaultModel, base.RecoveryModel); err != nil {
+		t.Fatalf("reindex base: %v", err)
+	}
+
+	reg, err := NewRegistry(base)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+
+	routable := true
+	policyTime := time.Date(2026, 4, 4, 1, 0, 0, 0, time.UTC)
+	if err := reg.ReplaceDeploymentPolicies(map[string]DeploymentPolicy{
+		"deepslate/google/gemma-3-4b": {
+			State:     DeploymentPolicyStateFlagged,
+			Routable:  &routable,
+			Reason:    "remember this overlay while host is away",
+			UpdatedAt: policyTime,
+		},
+	}, policyTime); err != nil {
+		t.Fatalf("ReplaceDeploymentPolicies: %v", err)
+	}
+
+	snap := reg.Snapshot()
+	if _, ok := findPolicySnapshot(snap, "deepslate/google/gemma-3-4b"); ok {
+		t.Fatal("absent discovered deployment should not appear before inventory returns")
+	}
+
+	if err := reg.ApplyInventory(&Inventory{
+		Resources: []ResourceInventory{
+			{
+				ResourceID: "deepslate",
+				Provider:   "lmstudio",
+				Attempted:  true,
+				Models: []DiscoveredModel{
+					{
+						Name:              "google/gemma-3-4b",
+						SupportsTools:     true,
+						SupportsStreaming: true,
+						SupportsImages:    true,
+					},
+				},
+			},
+		},
+	}, time.Date(2026, 4, 4, 1, 5, 0, 0, time.UTC)); err != nil {
+		t.Fatalf("ApplyInventory: %v", err)
+	}
+
+	snap = reg.Snapshot()
+	dep, ok := findPolicySnapshot(snap, "deepslate/google/gemma-3-4b")
+	if !ok {
+		t.Fatal("missing discovered deployment snapshot after rediscovery")
+	}
+	if dep.PolicyState != DeploymentPolicyStateFlagged {
+		t.Fatalf("PolicyState = %q, want %q", dep.PolicyState, DeploymentPolicyStateFlagged)
+	}
+	if dep.PolicySource != DeploymentPolicySourceOverlay {
+		t.Fatalf("PolicySource = %q, want %q", dep.PolicySource, DeploymentPolicySourceOverlay)
+	}
+	if dep.PolicyReason != "remember this overlay while host is away" {
+		t.Fatalf("PolicyReason = %q, want remembered reason", dep.PolicyReason)
+	}
+	if !dep.Routable {
+		t.Fatal("Routable = false, want true from persisted overlay")
+	}
+	if dep.RoutableSource != DeploymentPolicySourceOverlay {
+		t.Fatalf("RoutableSource = %q, want %q", dep.RoutableSource, DeploymentPolicySourceOverlay)
+	}
+}
