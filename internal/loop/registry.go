@@ -316,12 +316,23 @@ func (r *Registry) Launch(ctx context.Context, launch Launch, deps Deps) (Launch
 		r.Deregister(l.id)
 	}()
 
+	waitCtx := ctx
+	waitCancel := func() {}
+	if launch.RunTimeout > 0 {
+		waitCtx, waitCancel = context.WithTimeout(ctx, launch.RunTimeout)
+	}
+	defer waitCancel()
+
 	select {
 	case st := <-finalStatus:
+		result.Response = l.lastResponseSnapshot()
 		result.FinalStatus = &st
 		return result, nil
-	case <-ctx.Done():
-		return LaunchResult{}, ctx.Err()
+	case <-waitCtx.Done():
+		if launch.RunTimeout > 0 && waitCtx.Err() == context.DeadlineExceeded {
+			l.Stop()
+		}
+		return result, waitCtx.Err()
 	}
 }
 

@@ -884,14 +884,19 @@ func (a *loopAdapter) Run(ctx context.Context, req looppkg.Request, _ looppkg.St
 	}
 
 	return &looppkg.Response{
-		Content:       resp.Content,
-		Model:         resp.Model,
-		InputTokens:   resp.InputTokens,
-		OutputTokens:  resp.OutputTokens,
-		ContextWindow: ctxWindow,
-		ToolsUsed:     resp.ToolsUsed,
-		RequestID:     resp.RequestID,
-		ActiveTags:    resp.ActiveTags,
+		Content:                  resp.Content,
+		Model:                    resp.Model,
+		FinishReason:             resp.FinishReason,
+		InputTokens:              resp.InputTokens,
+		OutputTokens:             resp.OutputTokens,
+		CacheCreationInputTokens: resp.CacheCreationInputTokens,
+		CacheReadInputTokens:     resp.CacheReadInputTokens,
+		ContextWindow:            ctxWindow,
+		ToolsUsed:                resp.ToolsUsed,
+		RequestID:                resp.RequestID,
+		Iterations:               resp.Iterations,
+		Exhausted:                resp.Exhausted,
+		ActiveTags:               resp.ActiveTags,
 	}, nil
 }
 

@@ -70,13 +70,18 @@ type RunMessage = Message
 // Response mirrors agent.Response fields that loops consume. It holds
 // the result of an LLM call executed by a [Runner].
 type Response struct {
-	Content       string
-	Model         string
-	InputTokens   int
-	OutputTokens  int
-	ContextWindow int
-	ToolsUsed     map[string]int
-	RequestID     string
+	Content                  string
+	Model                    string
+	FinishReason             string
+	InputTokens              int
+	OutputTokens             int
+	CacheCreationInputTokens int
+	CacheReadInputTokens     int
+	ContextWindow            int
+	ToolsUsed                map[string]int
+	RequestID                string
+	Iterations               int
+	Exhausted                bool
 	// ActiveTags is the set of capability tags that were active at the
 	// end of the Run. Loops use this to carry forward activations to
 	// subsequent iterations.
@@ -177,6 +182,11 @@ type Loop struct {
 	// [Spec]'s [router.LoopProfile]. It is prepended to each iteration
 	// task when present.
 	requestInstructions string
+
+	// lastResponse is the most recent successful runner response for
+	// this loop. Joined request/reply launches surface this as their
+	// concrete result payload once the loop finishes.
+	lastResponse *Response
 
 	// taskOverride replaces the spec/config task for launch-driven,
 	// one-shot runs that need per-run input without mutating the
@@ -1144,7 +1154,7 @@ func (l *Loop) iterate(ctx context.Context, isSupervisor bool, convID string) (*
 		ExcludeTools:    mergeUniqueStrings(l.requestBase.ExcludeTools, l.config.ExcludeTools, l.requestOverride.ExcludeTools),
 		SkipTagFilter:   skipTagFilter,
 		Hints:           hints,
-		OnProgress:      l.makeProgressFunc(),
+		OnProgress:      composeProgressFuncs(l.makeProgressFunc(), l.requestOverride.OnProgress),
 		InitialTags:     mergeUniqueStrings(l.requestBase.InitialTags, l.requestOverride.InitialTags, l.activatedTags),
 		MaxIterations:   l.requestOverride.MaxIterations,
 		MaxOutputTokens: l.requestOverride.MaxOutputTokens,
@@ -1162,6 +1172,7 @@ func (l *Loop) iterate(ctx context.Context, isSupervisor bool, convID string) (*
 	if err == nil {
 		l.mu.Lock()
 		l.activatedTags = resp.ActiveTags
+		l.lastResponse = cloneResponse(resp)
 		l.mu.Unlock()
 	}
 	if err != nil {
@@ -1199,6 +1210,46 @@ func mergeUniqueStrings(parts ...[]string) []string {
 		return nil
 	}
 	return merged
+}
+
+func composeProgressFuncs(callbacks ...func(kind string, data map[string]any)) func(kind string, data map[string]any) {
+	var active []func(kind string, data map[string]any)
+	for _, cb := range callbacks {
+		if cb != nil {
+			active = append(active, cb)
+		}
+	}
+	if len(active) == 0 {
+		return nil
+	}
+	return func(kind string, data map[string]any) {
+		for _, cb := range active {
+			cb(kind, data)
+		}
+	}
+}
+
+func cloneResponse(resp *Response) *Response {
+	if resp == nil {
+		return nil
+	}
+	out := *resp
+	if len(resp.ToolsUsed) > 0 {
+		out.ToolsUsed = make(map[string]int, len(resp.ToolsUsed))
+		for k, v := range resp.ToolsUsed {
+			out.ToolsUsed[k] = v
+		}
+	}
+	if len(resp.ActiveTags) > 0 {
+		out.ActiveTags = append([]string(nil), resp.ActiveTags...)
+	}
+	return &out
+}
+
+func (l *Loop) lastResponseSnapshot() *Response {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return cloneResponse(l.lastResponse)
 }
 
 func firstNonEmpty(values ...string) string {

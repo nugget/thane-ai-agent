@@ -19,6 +19,8 @@ type Launch struct {
 	AllowedTools    []string
 	ExcludeTools    []string
 	InitialTags     []string
+	OnProgress      func(kind string, data map[string]any) `json:"-"`
+	RunTimeout      time.Duration
 	SkipContext     bool
 	SkipTagFilter   bool
 	SystemPrompt    string
@@ -33,6 +35,9 @@ type Launch struct {
 func (l *Launch) Validate() error {
 	if l == nil {
 		return fmt.Errorf("loop: launch is nil")
+	}
+	if l.RunTimeout < 0 {
+		return fmt.Errorf("loop: run timeout must be >= 0")
 	}
 	return l.Spec.Validate()
 }
@@ -50,6 +55,7 @@ func (l *Launch) requestOverride() Request {
 		SkipTagFilter:   l.SkipTagFilter,
 		Hints:           cloneStringMap(l.Hints),
 		InitialTags:     append([]string(nil), l.InitialTags...),
+		OnProgress:      l.OnProgress,
 		MaxIterations:   l.MaxIterations,
 		MaxOutputTokens: l.MaxOutputTokens,
 		ToolTimeout:     l.ToolTimeout,
@@ -66,5 +72,6 @@ type LaunchResult struct {
 	LoopID      string    `json:"loop_id"`
 	Operation   Operation `json:"operation"`
 	Detached    bool      `json:"detached"`
+	Response    *Response `json:"response,omitempty"`
 	FinalStatus *Status   `json:"final_status,omitempty"`
 }

@@ -2,6 +2,7 @@ package loop
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"testing"
 	"time"
@@ -211,6 +212,12 @@ func TestRegistryLaunchRequestReplyWaitsForCompletion(t *testing.T) {
 	if result.FinalStatus == nil {
 		t.Fatal("FinalStatus = nil, want status")
 	}
+	if result.Response == nil {
+		t.Fatal("Response = nil, want response")
+	}
+	if result.Response.Content != "ok" || result.Response.Model != "test-model" {
+		t.Fatalf("Response = %#v", result.Response)
+	}
 	if result.FinalStatus.Iterations != 1 {
 		t.Fatalf("Iterations = %d, want 1", result.FinalStatus.Iterations)
 	}
@@ -241,6 +248,9 @@ func TestRegistryLaunchBackgroundTaskDetaches(t *testing.T) {
 	if result.FinalStatus != nil {
 		t.Fatalf("FinalStatus = %#v, want nil", result.FinalStatus)
 	}
+	if result.Response != nil {
+		t.Fatalf("Response = %#v, want nil", result.Response)
+	}
 	l := r.Get(result.LoopID)
 	if l == nil {
 		t.Fatalf("Get(%q) = nil, want running loop", result.LoopID)
@@ -262,6 +272,45 @@ func TestRegistryLaunchBackgroundTaskDetaches(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("loop %q still registered after completion", result.LoopID)
+}
+
+func TestRegistryLaunchRunTimeoutStopsJoinedLoop(t *testing.T) {
+	t.Parallel()
+
+	r := NewRegistry()
+	result, err := r.Launch(context.Background(), Launch{
+		Spec: Spec{
+			Name:       "launch-run-timeout",
+			Task:       "test",
+			Operation:  OperationRequestReply,
+			Completion: CompletionReturn,
+		},
+		RunTimeout: 20 * time.Millisecond,
+	}, Deps{Runner: &ctxBlockingRunner{}})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Launch error = %v, want context deadline exceeded", err)
+	}
+	if result.LoopID == "" {
+		t.Fatal("LoopID = empty, want started loop ID")
+	}
+	if result.Detached {
+		t.Fatal("Detached = true, want false")
+	}
+	if result.Response != nil {
+		t.Fatalf("Response = %#v, want nil on timed-out joined launch", result.Response)
+	}
+	if result.FinalStatus != nil {
+		t.Fatalf("FinalStatus = %#v, want nil on timed-out joined launch", result.FinalStatus)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if r.Get(result.LoopID) == nil {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("loop %q still registered after timeout stop", result.LoopID)
 }
 
 func TestRegistryLaunchAppliesRequestOverrides(t *testing.T) {
@@ -385,6 +434,36 @@ func TestRegistryLaunchAppliesRequestOverrides(t *testing.T) {
 	}
 }
 
+func TestRegistryLaunchForwardsOnProgress(t *testing.T) {
+	t.Parallel()
+
+	var events []string
+	_, err := NewRegistry().Launch(context.Background(), Launch{
+		Spec: Spec{
+			Name:       "launch-progress",
+			Task:       "test",
+			Operation:  OperationRequestReply,
+			Completion: CompletionReturn,
+		},
+		OnProgress: func(kind string, _ map[string]any) {
+			events = append(events, kind)
+		},
+	}, Deps{Runner: &inspectingRunner{
+		onRun: func(req RunRequest) {
+			if req.OnProgress == nil {
+				t.Fatal("OnProgress = nil, want callback")
+			}
+			req.OnProgress("loop_progress_probe", map[string]any{"ok": true})
+		},
+	}})
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	if !slices.Equal(events, []string{"loop_progress_probe"}) {
+		t.Fatalf("events = %#v, want forwarded progress event", events)
+	}
+}
+
 func TestRegistryShutdownAll(t *testing.T) {
 	t.Parallel()
 
@@ -451,10 +530,14 @@ type noopRunner struct{}
 
 func (r *noopRunner) Run(_ context.Context, _ RunRequest, _ StreamCallback) (*RunResponse, error) {
 	return &RunResponse{
-		Content:      "ok",
-		Model:        "test-model",
-		InputTokens:  10,
-		OutputTokens: 5,
+		Content:                  "ok",
+		Model:                    "test-model",
+		FinishReason:             "stop",
+		InputTokens:              10,
+		OutputTokens:             5,
+		CacheCreationInputTokens: 3,
+		CacheReadInputTokens:     2,
+		Iterations:               1,
 	}, nil
 }
 
@@ -469,5 +552,15 @@ func (r *blockingRunner) Run(_ context.Context, _ RunRequest, _ StreamCallback) 
 		Model:        "test-model",
 		InputTokens:  10,
 		OutputTokens: 5,
+		FinishReason: "stop",
+		Iterations:   1,
+		Exhausted:    false,
 	}, nil
+}
+
+type ctxBlockingRunner struct{}
+
+func (r *ctxBlockingRunner) Run(ctx context.Context, _ RunRequest, _ StreamCallback) (*RunResponse, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
 }
