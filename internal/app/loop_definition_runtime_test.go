@@ -71,8 +71,8 @@ func TestLoopDefinitionRuntimeStartEnabledServices(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StartEnabledServices: %v", err)
 	}
-	if result.Started != 1 || result.SkippedDisabled != 1 || result.SkippedNonService != 1 || result.SkippedExisting != 0 {
-		t.Fatalf("result = %+v, want started=1 disabled=1 non_service=1 existing=0", result)
+	if result.Started != 1 || result.SkippedInactive != 1 || result.SkippedPaused != 0 || result.SkippedNonService != 1 || result.SkippedExisting != 0 {
+		t.Fatalf("result = %+v, want started=1 inactive=1 paused=0 non_service=1 existing=0", result)
 	}
 	if got := loops.GetByName("office_watch"); got == nil {
 		t.Fatal("enabled service definition was not started")
@@ -201,7 +201,7 @@ func TestLoopDefinitionRuntimeLaunchDefinition(t *testing.T) {
 		},
 		{
 			Name:       "paused_task",
-			Enabled:    false,
+			Enabled:    true,
 			Task:       "Do not run right now.",
 			Operation:  looppkg.OperationBackgroundTask,
 			Completion: looppkg.CompletionConversation,
@@ -235,11 +235,66 @@ func TestLoopDefinitionRuntimeLaunchDefinition(t *testing.T) {
 		t.Fatalf("result = %+v, want request_reply response ok", result)
 	}
 
+	if err := registry.ApplyPolicy("paused_task", looppkg.DefinitionPolicy{
+		State: looppkg.DefinitionPolicyStatePaused,
+	}, time.Now()); err != nil {
+		t.Fatalf("ApplyPolicy(paused): %v", err)
+	}
+
 	_, err = runtime.LaunchDefinition(context.Background(), "paused_task", looppkg.Launch{
 		CompletionConversationID: "conv-1",
 	})
-	var inactive *looppkg.InactiveDefinitionError
-	if err == nil || !errors.As(err, &inactive) {
-		t.Fatalf("inactive LaunchDefinition error = %v, want *InactiveDefinitionError", err)
+	var paused *looppkg.PausedDefinitionError
+	if err == nil || !errors.As(err, &paused) {
+		t.Fatalf("paused LaunchDefinition error = %v, want *PausedDefinitionError", err)
+	}
+}
+
+func TestLoopDefinitionRuntimeSnapshotIncludesRunningLoop(t *testing.T) {
+	t.Parallel()
+
+	registry, err := looppkg.NewDefinitionRegistry([]looppkg.Spec{
+		{
+			Name:         "office_watch",
+			Enabled:      true,
+			Task:         "Watch the office.",
+			Operation:    looppkg.OperationService,
+			Completion:   looppkg.CompletionNone,
+			SleepMin:     time.Minute,
+			SleepMax:     time.Minute,
+			SleepDefault: time.Minute,
+			Jitter:       looppkg.Float64Ptr(0),
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewDefinitionRegistry: %v", err)
+	}
+
+	loops := looppkg.NewRegistry()
+	t.Cleanup(func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		loops.ShutdownAll(shutdownCtx)
+	})
+
+	runtime := &loopDefinitionRuntime{
+		definitions: registry,
+		loops:       loops,
+		runner:      testLoopRunner{},
+		logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+	}
+	if err := runtime.ReconcileDefinition(context.Background(), "office_watch"); err != nil {
+		t.Fatalf("ReconcileDefinition: %v", err)
+	}
+
+	view := runtime.Snapshot()
+	if view == nil {
+		t.Fatal("Snapshot returned nil")
+	}
+	if view.RunningDefinitions != 1 {
+		t.Fatalf("RunningDefinitions = %d, want 1", view.RunningDefinitions)
+	}
+	if len(view.Definitions) != 1 || !view.Definitions[0].Runtime.Running {
+		t.Fatalf("Definitions = %+v, want one running definition", view.Definitions)
 	}
 }

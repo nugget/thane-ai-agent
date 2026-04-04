@@ -70,6 +70,7 @@ type Registry struct {
 	persistModelRegistryResourcePolicy         func(string, models.ResourcePolicy) error
 	deletePersistedModelRegistryResourcePolicy func(string) error
 	loopDefinitionRegistry                     *looppkg.DefinitionRegistry
+	loopDefinitionView                         func() *looppkg.DefinitionRegistryView
 	persistLoopDefinition                      func(looppkg.Spec, time.Time) error
 	deletePersistedLoopDefinition              func(string) error
 	persistLoopDefinitionPolicy                func(string, looppkg.DefinitionPolicy) error

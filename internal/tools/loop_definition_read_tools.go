@@ -9,37 +9,37 @@ import (
 )
 
 func (r *Registry) handleLoopDefinitionSummary(_ context.Context, _ map[string]any) (string, error) {
-	snapshot, err := currentLoopDefinitionSnapshot(r)
+	view, err := currentLoopDefinitionView(r)
 	if err != nil {
 		return "", err
 	}
 	bySource := map[string]int{}
 	byOperation := map[string]int{}
 	byCompletion := map[string]int{}
-	byPolicyState := map[string]int{}
-	names := make([]string, 0, len(snapshot.Definitions))
-	for _, def := range snapshot.Definitions {
+	names := make([]string, 0, len(view.Definitions))
+	for _, def := range view.Definitions {
 		bySource[string(def.Source)]++
 		byOperation[string(def.Spec.Operation)]++
 		byCompletion[string(def.Spec.Completion)]++
-		byPolicyState[string(def.PolicyState)]++
 		names = append(names, def.Name)
 	}
 	return ldMarshalToolJSON(map[string]any{
-		"generation":          snapshot.Generation,
-		"definition_count":    len(snapshot.Definitions),
-		"config_definitions":  snapshot.ConfigDefinitions,
-		"overlay_definitions": snapshot.OverlayDefinitions,
+		"generation":          view.Generation,
+		"definition_count":    len(view.Definitions),
+		"config_definitions":  view.ConfigDefinitions,
+		"overlay_definitions": view.OverlayDefinitions,
+		"running_definitions": view.RunningDefinitions,
 		"by_source":           bySource,
 		"by_operation":        byOperation,
 		"by_completion":       byCompletion,
-		"by_policy_state":     byPolicyState,
+		"by_policy_state":     view.ByPolicyState,
+		"by_runtime_state":    view.ByRuntimeState,
 		"names":               names,
 	})
 }
 
 func (r *Registry) handleLoopDefinitionList(_ context.Context, args map[string]any) (string, error) {
-	snapshot, err := currentLoopDefinitionSnapshot(r)
+	view, err := currentLoopDefinitionView(r)
 	if err != nil {
 		return "", err
 	}
@@ -48,6 +48,7 @@ func (r *Registry) handleLoopDefinitionList(_ context.Context, args map[string]a
 	operation := ldStringArg(args, "operation")
 	completion := ldStringArg(args, "completion")
 	policyState := ldStringArg(args, "policy_state")
+	runtimeState := strings.ToLower(ldStringArg(args, "runtime_state"))
 	limit := ldIntArg(args, "limit")
 	if limit <= 0 {
 		limit = defaultLoopDefinitionListLimit
@@ -56,8 +57,8 @@ func (r *Registry) handleLoopDefinitionList(_ context.Context, args map[string]a
 		limit = maxLoopDefinitionListLimit
 	}
 
-	items := make([]looppkg.DefinitionSnapshot, 0, len(snapshot.Definitions))
-	for _, def := range snapshot.Definitions {
+	items := make([]looppkg.DefinitionView, 0, len(view.Definitions))
+	for _, def := range view.Definitions {
 		if source != "" && string(def.Source) != source {
 			continue
 		}
@@ -70,7 +71,16 @@ func (r *Registry) handleLoopDefinitionList(_ context.Context, args map[string]a
 		if policyState != "" && string(def.PolicyState) != policyState {
 			continue
 		}
-		if query != "" && !loopDefinitionMatchesQuery(def, query) {
+		if runtimeState != "" {
+			currentRuntimeState := "not_running"
+			if def.Runtime.Running {
+				currentRuntimeState = strings.ToLower(string(def.Runtime.State))
+			}
+			if currentRuntimeState != runtimeState {
+				continue
+			}
+		}
+		if query != "" && !loopDefinitionMatchesQuery(def.DefinitionSnapshot, query) {
 			continue
 		}
 		items = append(items, def)
@@ -80,7 +90,7 @@ func (r *Registry) handleLoopDefinitionList(_ context.Context, args map[string]a
 	}
 
 	return ldMarshalToolJSON(map[string]any{
-		"generation": snapshot.Generation,
+		"generation": view.Generation,
 		"count":      len(items),
 		"items":      items,
 	})
@@ -105,7 +115,7 @@ func loopDefinitionMatchesQuery(def looppkg.DefinitionSnapshot, query string) bo
 }
 
 func (r *Registry) handleLoopDefinitionGet(_ context.Context, args map[string]any) (string, error) {
-	snapshot, err := currentLoopDefinitionSnapshot(r)
+	view, err := currentLoopDefinitionView(r)
 	if err != nil {
 		return "", err
 	}
@@ -113,12 +123,12 @@ func (r *Registry) handleLoopDefinitionGet(_ context.Context, args map[string]an
 	if name == "" {
 		return "", fmt.Errorf("name is required")
 	}
-	def, ok := findLoopDefinition(snapshot, name)
+	def, ok := findLoopDefinitionView(view, name)
 	if !ok {
 		return "", (&looppkg.UnknownDefinitionError{Name: name})
 	}
 	return ldMarshalToolJSON(map[string]any{
-		"generation": snapshot.Generation,
+		"generation": view.Generation,
 		"definition": def,
 	})
 }

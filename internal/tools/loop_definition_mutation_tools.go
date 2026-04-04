@@ -37,17 +37,17 @@ func (r *Registry) handleLoopDefinitionSet(ctx context.Context, args map[string]
 			return "", fmt.Errorf("reconcile loop definition: %w", err)
 		}
 	}
-	snapshot, err = currentLoopDefinitionSnapshot(r)
+	view, err := currentLoopDefinitionView(r)
 	if err != nil {
 		return "", err
 	}
-	def, ok := findLoopDefinition(snapshot, spec.Name)
+	def, ok := findLoopDefinitionView(view, spec.Name)
 	if !ok {
 		return "", fmt.Errorf("loop definition stored but snapshot is unavailable")
 	}
 	return ldMarshalToolJSON(map[string]any{
 		"status":     "ok",
-		"generation": snapshot.Generation,
+		"generation": view.Generation,
 		"definition": def,
 	})
 }
@@ -82,13 +82,13 @@ func (r *Registry) handleLoopDefinitionDelete(ctx context.Context, args map[stri
 			return "", fmt.Errorf("reconcile loop definition: %w", err)
 		}
 	}
-	snapshot, err = currentLoopDefinitionSnapshot(r)
+	view, err := currentLoopDefinitionView(r)
 	if err != nil {
 		return "", err
 	}
 	return ldMarshalToolJSON(map[string]any{
 		"status":     "ok",
-		"generation": snapshot.Generation,
+		"generation": view.Generation,
 		"name":       name,
 	})
 }
@@ -148,17 +148,17 @@ func (r *Registry) handleLoopDefinitionSetPolicy(ctx context.Context, args map[s
 		}
 	}
 
-	snapshot, err = currentLoopDefinitionSnapshot(r)
+	view, err := currentLoopDefinitionView(r)
 	if err != nil {
 		return "", err
 	}
-	def, found := findLoopDefinition(snapshot, name)
+	def, found := findLoopDefinitionView(view, name)
 	if !found {
 		return "", fmt.Errorf("definition policy updated but snapshot is unavailable")
 	}
 	return ldMarshalToolJSON(map[string]any{
 		"status":     "ok",
-		"generation": snapshot.Generation,
+		"generation": view.Generation,
 		"definition": def,
 	})
 }
@@ -179,17 +179,17 @@ func (r *Registry) handleLoopDefinitionLaunch(ctx context.Context, args map[stri
 	if err != nil {
 		return "", err
 	}
-	snapshot, err := currentLoopDefinitionSnapshot(r)
+	view, err := currentLoopDefinitionView(r)
 	if err != nil {
 		return "", err
 	}
-	def, found := findLoopDefinition(snapshot, name)
+	def, found := findLoopDefinitionView(view, name)
 	if !found {
 		return "", fmt.Errorf("definition launched but snapshot is unavailable")
 	}
 	return ldMarshalToolJSON(map[string]any{
 		"status":     "ok",
-		"generation": snapshot.Generation,
+		"generation": view.Generation,
 		"definition": def,
 		"result":     result,
 	})

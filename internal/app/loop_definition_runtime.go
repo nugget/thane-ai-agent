@@ -14,7 +14,8 @@ import (
 // pass from durable loop definitions into live loop instances.
 type loopDefinitionBootstrapResult struct {
 	Started           int `json:"started"`
-	SkippedDisabled   int `json:"skipped_disabled"`
+	SkippedInactive   int `json:"skipped_inactive"`
+	SkippedPaused     int `json:"skipped_paused"`
 	SkippedExisting   int `json:"skipped_existing"`
 	SkippedNonService int `json:"skipped_non_service"`
 }
@@ -68,6 +69,34 @@ func (r *loopDefinitionRuntime) definition(name string) (looppkg.DefinitionSnaps
 	return findLoopDefinitionByName(snap, name)
 }
 
+func (r *loopDefinitionRuntime) runtimeStatusByName() map[string]looppkg.DefinitionRuntimeStatus {
+	if r == nil || r.loops == nil {
+		return nil
+	}
+	statuses := make(map[string]looppkg.DefinitionRuntimeStatus)
+	for _, l := range r.loops.List() {
+		st := l.Status()
+		statuses[st.Name] = looppkg.DefinitionRuntimeStatus{
+			Running:    true,
+			LoopID:     st.ID,
+			State:      st.State,
+			StartedAt:  st.StartedAt,
+			LastWakeAt: st.LastWakeAt,
+			Iterations: st.Iterations,
+			Attempts:   st.Attempts,
+			LastError:  st.LastError,
+		}
+	}
+	return statuses
+}
+
+func (r *loopDefinitionRuntime) Snapshot() *looppkg.DefinitionRegistryView {
+	if r == nil || r.definitions == nil {
+		return nil
+	}
+	return looppkg.BuildDefinitionRegistryView(r.definitions.Snapshot(), r.runtimeStatusByName())
+}
+
 // StartEnabledServices starts durable service definitions that are
 // currently enabled and not already present in the live loop registry.
 // It relies on the loop engine's own initial jittered sleep to stagger
@@ -97,8 +126,11 @@ func (r *loopDefinitionRuntime) StartEnabledServices(ctx context.Context) (loopD
 		case spec.Operation != looppkg.OperationService:
 			result.SkippedNonService++
 			continue
-		case def.PolicyState != looppkg.DefinitionPolicyStateActive:
-			result.SkippedDisabled++
+		case def.PolicyState == looppkg.DefinitionPolicyStateInactive:
+			result.SkippedInactive++
+			continue
+		case def.PolicyState == looppkg.DefinitionPolicyStatePaused:
+			result.SkippedPaused++
 			continue
 		case r.loops.GetByName(spec.Name) != nil:
 			result.SkippedExisting++
@@ -165,8 +197,11 @@ func (r *loopDefinitionRuntime) LaunchDefinition(ctx context.Context, name strin
 	if !found {
 		return looppkg.LaunchResult{}, &looppkg.UnknownDefinitionError{Name: name}
 	}
-	if def.PolicyState != looppkg.DefinitionPolicyStateActive {
+	switch def.PolicyState {
+	case looppkg.DefinitionPolicyStateInactive:
 		return looppkg.LaunchResult{}, &looppkg.InactiveDefinitionError{Name: name}
+	case looppkg.DefinitionPolicyStatePaused:
+		return looppkg.LaunchResult{}, &looppkg.PausedDefinitionError{Name: name}
 	}
 	if def.Spec.Operation == looppkg.OperationService {
 		if existing := r.loops.GetByName(name); existing != nil {
@@ -206,4 +241,17 @@ func (a *App) launchLoopDefinition(ctx context.Context, name string, launch loop
 		return looppkg.LaunchResult{}, fmt.Errorf("loop definition runtime is not configured")
 	}
 	return a.loopDefinitionRuntime.LaunchDefinition(ctx, name, launch)
+}
+
+func (a *App) loopDefinitionView() *looppkg.DefinitionRegistryView {
+	if a == nil {
+		return nil
+	}
+	if a.loopDefinitionRuntime != nil {
+		return a.loopDefinitionRuntime.Snapshot()
+	}
+	if a.loopDefinitionRegistry == nil {
+		return nil
+	}
+	return looppkg.BuildDefinitionRegistryView(a.loopDefinitionRegistry.Snapshot(), nil)
 }

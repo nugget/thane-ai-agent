@@ -18,6 +18,7 @@ const (
 // definition overlay.
 type LoopDefinitionToolDeps struct {
 	Registry         *looppkg.DefinitionRegistry
+	View             func() *looppkg.DefinitionRegistryView
 	PersistSpec      func(looppkg.Spec, time.Time) error
 	DeleteSpec       func(string) error
 	PersistPolicy    func(string, looppkg.DefinitionPolicy) error
@@ -30,6 +31,7 @@ type LoopDefinitionToolDeps struct {
 // the loop-definition tool family and registers the tools.
 func (r *Registry) ConfigureLoopDefinitionTools(deps LoopDefinitionToolDeps) {
 	r.loopDefinitionRegistry = deps.Registry
+	r.loopDefinitionView = deps.View
 	r.persistLoopDefinition = deps.PersistSpec
 	r.deletePersistedLoopDefinition = deps.DeleteSpec
 	r.persistLoopDefinitionPolicy = deps.PersistPolicy
@@ -46,7 +48,7 @@ func (r *Registry) registerLoopDefinitionTools() {
 
 	r.Register(&Tool{
 		Name:        "loop_definition_summary",
-		Description: "Return a compact structured summary of the persistent loops-ng definition registry: generation, counts by source, operation, and completion, plus the known loop definition names.",
+		Description: "Return a compact structured summary of the persistent loops-ng definition registry: generation, counts by source, operation, policy state, and live runtime state, plus the known loop definition names.",
 		Parameters: map[string]any{
 			"type":       "object",
 			"properties": map[string]any{},
@@ -56,7 +58,7 @@ func (r *Registry) registerLoopDefinitionTools() {
 
 	r.Register(&Tool{
 		Name:        "loop_definition_list",
-		Description: "List persistent loop definitions with compact structured fields and optional filters. Use this to discover available service, background_task, and request_reply definitions before modifying them.",
+		Description: "List persistent loop definitions with compact structured fields and optional filters. Use this to discover available service, background_task, and request_reply definitions, along with their effective policy and current live runtime state, before modifying them.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -81,8 +83,12 @@ func (r *Registry) registerLoopDefinitionTools() {
 				},
 				"policy_state": map[string]any{
 					"type":        "string",
-					"enum":        []string{"active", "inactive"},
+					"enum":        []string{"active", "paused", "inactive"},
 					"description": "Optional exact effective policy-state filter.",
+				},
+				"runtime_state": map[string]any{
+					"type":        "string",
+					"description": "Optional runtime state filter such as not_running, pending, sleeping, waiting, processing, error, or stopped.",
 				},
 				"limit": map[string]any{
 					"type":        "integer",
@@ -95,7 +101,7 @@ func (r *Registry) registerLoopDefinitionTools() {
 
 	r.Register(&Tool{
 		Name:        "loop_definition_get",
-		Description: "Get one deep loop definition object from the persistent loops-ng definition registry by name.",
+		Description: "Get one deep loop definition object from the persistent loops-ng definition registry by name, including its current live runtime state when available.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -143,7 +149,7 @@ func (r *Registry) registerLoopDefinitionTools() {
 
 	r.Register(&Tool{
 		Name:        "loop_definition_set_policy",
-		Description: "Set or clear runtime policy for one stored loop definition. Use this to activate or deactivate a definition without editing the definition itself. Changes persist across restart.",
+		Description: "Set or clear runtime policy for one stored loop definition. Use this to activate, pause, or deactivate a definition without editing the definition itself. Changes persist across restart.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -153,7 +159,7 @@ func (r *Registry) registerLoopDefinitionTools() {
 				},
 				"state": map[string]any{
 					"type":        "string",
-					"enum":        []string{"active", "inactive"},
+					"enum":        []string{"active", "paused", "inactive"},
 					"description": "Effective policy state to apply.",
 				},
 				"reason": map[string]any{

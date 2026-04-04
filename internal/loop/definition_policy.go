@@ -14,6 +14,10 @@ const (
 	// DefinitionPolicyStateActive means the definition is eligible for
 	// runtime use. Service definitions may auto-start or be launched.
 	DefinitionPolicyStateActive DefinitionPolicyState = "active"
+	// DefinitionPolicyStatePaused means the definition is temporarily
+	// held out of runtime execution. Existing service loops should be
+	// stopped, but the definition remains retained for future resume.
+	DefinitionPolicyStatePaused DefinitionPolicyState = "paused"
 	// DefinitionPolicyStateInactive means the definition is disabled for
 	// runtime use. Existing service loops should be stopped.
 	DefinitionPolicyStateInactive DefinitionPolicyState = "inactive"
@@ -46,10 +50,12 @@ func ParseDefinitionPolicyState(raw string) (DefinitionPolicyState, error) {
 	switch DefinitionPolicyState(strings.TrimSpace(raw)) {
 	case DefinitionPolicyStateActive:
 		return DefinitionPolicyStateActive, nil
+	case DefinitionPolicyStatePaused:
+		return DefinitionPolicyStatePaused, nil
 	case DefinitionPolicyStateInactive:
 		return DefinitionPolicyStateInactive, nil
 	default:
-		return "", fmt.Errorf("state must be one of [\"active\" \"inactive\"]")
+		return "", fmt.Errorf("state must be one of [\"active\" \"paused\" \"inactive\"]")
 	}
 }
 
@@ -61,6 +67,16 @@ type InactiveDefinitionError struct {
 
 func (e *InactiveDefinitionError) Error() string {
 	return fmt.Sprintf("loop: definition %q is inactive", e.Name)
+}
+
+// PausedDefinitionError reports that a loop definition exists but is
+// currently paused by effective runtime policy.
+type PausedDefinitionError struct {
+	Name string
+}
+
+func (e *PausedDefinitionError) Error() string {
+	return fmt.Sprintf("loop: definition %q is paused", e.Name)
 }
 
 func defaultDefinitionPolicyState(spec Spec) DefinitionPolicyState {

@@ -51,6 +51,7 @@ func (a *App) initServers(s *newState) error {
 	server.SetMemoryStore(a.mem)
 	server.SetArchiveStore(a.archiveStore)
 	server.UseLoopDefinitionRegistry(a.loopDefinitionRegistry)
+	server.ConfigureLoopDefinitionView(a.loopDefinitionView)
 	server.ConfigureLoopDefinitionPersistence(a.persistLoopDefinition, a.deletePersistedLoopDefinition)
 	server.ConfigureLoopDefinitionLifecycle(
 		a.persistLoopDefinitionPolicy,
@@ -624,10 +625,11 @@ func (a *App) initServers(s *newState) error {
 			if err != nil {
 				return err
 			}
-			if result.Started > 0 || result.SkippedDisabled > 0 || result.SkippedExisting > 0 || result.SkippedNonService > 0 {
+			if result.Started > 0 || result.SkippedInactive > 0 || result.SkippedPaused > 0 || result.SkippedExisting > 0 || result.SkippedNonService > 0 {
 				logger.Info("loop definition services reconciled",
 					"started", result.Started,
-					"skipped_disabled", result.SkippedDisabled,
+					"skipped_inactive", result.SkippedInactive,
+					"skipped_paused", result.SkippedPaused,
 					"skipped_existing", result.SkippedExisting,
 					"skipped_non_service", result.SkippedNonService,
 				)

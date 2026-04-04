@@ -78,6 +78,7 @@ type Server struct {
 	platformHandler                    http.Handler
 	modelRegistry                      *models.Registry
 	loopDefinitionRegistry             *looppkg.DefinitionRegistry
+	loopDefinitionView                 func() *looppkg.DefinitionRegistryView
 	usageStore                         *usage.Store
 	persistModelRegistryPolicy         func(string, models.DeploymentPolicy) error
 	deleteModelRegistryPolicy          func(string) error
@@ -132,6 +133,12 @@ func (s *Server) SetPlatformHandler(h http.Handler) {
 // registry exposed by the API.
 func (s *Server) UseLoopDefinitionRegistry(reg *looppkg.DefinitionRegistry) {
 	s.loopDefinitionRegistry = reg
+}
+
+// ConfigureLoopDefinitionView configures the effective combined
+// definition registry view used by loops-ng read surfaces.
+func (s *Server) ConfigureLoopDefinitionView(fn func() *looppkg.DefinitionRegistryView) {
+	s.loopDefinitionView = fn
 }
 
 // ConfigureLoopDefinitionPersistence configures persistence callbacks for

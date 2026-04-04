@@ -746,6 +746,15 @@ func TestHandleLoopDefinitions(t *testing.T) {
 	registry := testAPILoopDefinitionRegistry(t)
 	server := NewServer("", 0, nil, nil, nil, nil, nil, nil, nil, nil, nil, testAPILogger())
 	server.UseLoopDefinitionRegistry(registry)
+	server.ConfigureLoopDefinitionView(func() *looppkg.DefinitionRegistryView {
+		return looppkg.BuildDefinitionRegistryView(registry.Snapshot(), map[string]looppkg.DefinitionRuntimeStatus{
+			"metacog_like": {
+				Running: true,
+				LoopID:  "loop-live-1",
+				State:   looppkg.StateSleeping,
+			},
+		})
+	})
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/loop-definitions", nil)
 	rec := httptest.NewRecorder()
@@ -755,7 +764,7 @@ func TestHandleLoopDefinitions(t *testing.T) {
 		t.Fatalf("status = %d, want 200", rec.Code)
 	}
 
-	var snap looppkg.DefinitionRegistrySnapshot
+	var snap looppkg.DefinitionRegistryView
 	if err := json.NewDecoder(rec.Body).Decode(&snap); err != nil {
 		t.Fatalf("decode response: %v", err)
 	}
@@ -764,6 +773,9 @@ func TestHandleLoopDefinitions(t *testing.T) {
 	}
 	if snap.Definitions[0].Name != "metacog_like" {
 		t.Fatalf("definition name = %q, want metacog_like", snap.Definitions[0].Name)
+	}
+	if !snap.Definitions[0].Runtime.Running || snap.Definitions[0].Runtime.LoopID != "loop-live-1" {
+		t.Fatalf("runtime = %+v, want running loop-live-1", snap.Definitions[0].Runtime)
 	}
 }
 
@@ -775,6 +787,9 @@ func TestHandleLoopDefinitionSetAndDelete(t *testing.T) {
 	var reconciled []string
 	server := NewServer("", 0, nil, nil, nil, nil, nil, nil, nil, nil, nil, testAPILogger())
 	server.UseLoopDefinitionRegistry(registry)
+	server.ConfigureLoopDefinitionView(func() *looppkg.DefinitionRegistryView {
+		return looppkg.BuildDefinitionRegistryView(registry.Snapshot(), nil)
+	})
 	server.ConfigureLoopDefinitionPersistence(
 		func(spec looppkg.Spec, updatedAt time.Time) error {
 			savedSpec = spec
@@ -854,6 +869,15 @@ func TestHandleLoopDefinitionPolicySetAndDelete(t *testing.T) {
 	var deleted string
 	server := NewServer("", 0, nil, nil, nil, nil, nil, nil, nil, nil, nil, testAPILogger())
 	server.UseLoopDefinitionRegistry(registry)
+	server.ConfigureLoopDefinitionView(func() *looppkg.DefinitionRegistryView {
+		return looppkg.BuildDefinitionRegistryView(registry.Snapshot(), map[string]looppkg.DefinitionRuntimeStatus{
+			"metacog_like": {
+				Running: true,
+				LoopID:  "loop-live-1",
+				State:   looppkg.StateSleeping,
+			},
+		})
+	})
 	server.ConfigureLoopDefinitionLifecycle(
 		func(name string, policy looppkg.DefinitionPolicy) error {
 			if name != "metacog_like" {
@@ -889,6 +913,9 @@ func TestHandleLoopDefinitionPolicySetAndDelete(t *testing.T) {
 	if setResp.Definition.PolicyState != looppkg.DefinitionPolicyStateInactive || setResp.Definition.PolicySource != looppkg.DefinitionPolicySourceOverlay {
 		t.Fatalf("policy = %q/%q, want inactive/overlay", setResp.Definition.PolicyState, setResp.Definition.PolicySource)
 	}
+	if setResp.Definition.Runtime.LoopID != "loop-live-1" {
+		t.Fatalf("runtime loop_id = %q, want loop-live-1", setResp.Definition.Runtime.LoopID)
+	}
 
 	deleteReq := httptest.NewRequest(http.MethodDelete, "/v1/loop-definitions/policy?name=metacog_like", nil)
 	deleteRec := httptest.NewRecorder()
@@ -906,6 +933,9 @@ func TestHandleLoopDefinitionLaunch(t *testing.T) {
 	registry := testAPILoopDefinitionRegistry(t)
 	server := NewServer("", 0, nil, nil, nil, nil, nil, nil, nil, nil, nil, testAPILogger())
 	server.UseLoopDefinitionRegistry(registry)
+	server.ConfigureLoopDefinitionView(func() *looppkg.DefinitionRegistryView {
+		return looppkg.BuildDefinitionRegistryView(registry.Snapshot(), nil)
+	})
 	server.ConfigureLoopDefinitionLifecycle(nil, nil, nil, func(_ context.Context, name string, launch looppkg.Launch) (looppkg.LaunchResult, error) {
 		if name != "metacog_like" {
 			t.Fatalf("launch name = %q, want metacog_like", name)

@@ -182,3 +182,53 @@ func TestDefinitionRegistryPolicyOverlay(t *testing.T) {
 		t.Fatalf("policy after clear = %q/%q, want inactive/default", got.PolicyState, got.PolicySource)
 	}
 }
+
+func TestBuildDefinitionRegistryViewIncludesRuntimeState(t *testing.T) {
+	t.Parallel()
+
+	reg, err := NewDefinitionRegistry([]Spec{
+		{
+			Name:       "metacog_like",
+			Enabled:    true,
+			Task:       "Observe and reflect.",
+			Operation:  OperationService,
+			Completion: CompletionNone,
+		},
+		{
+			Name:       "paused_watch",
+			Enabled:    false,
+			Task:       "Stay quiet.",
+			Operation:  OperationService,
+			Completion: CompletionNone,
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewDefinitionRegistry: %v", err)
+	}
+
+	view := BuildDefinitionRegistryView(reg.Snapshot(), map[string]DefinitionRuntimeStatus{
+		"metacog_like": {
+			Running: true,
+			LoopID:  "loop-123",
+			State:   StateSleeping,
+		},
+	})
+	if view == nil {
+		t.Fatal("BuildDefinitionRegistryView returned nil")
+	}
+	if view.RunningDefinitions != 1 {
+		t.Fatalf("RunningDefinitions = %d, want 1", view.RunningDefinitions)
+	}
+	if view.ByPolicyState[string(DefinitionPolicyStateActive)] != 1 || view.ByPolicyState[string(DefinitionPolicyStateInactive)] != 1 {
+		t.Fatalf("ByPolicyState = %+v, want active=1 inactive=1", view.ByPolicyState)
+	}
+	if view.ByRuntimeState[string(StateSleeping)] != 1 || view.ByRuntimeState[definitionRuntimeStateNotRunning] != 1 {
+		t.Fatalf("ByRuntimeState = %+v, want sleeping=1 not_running=1", view.ByRuntimeState)
+	}
+	if !view.Definitions[0].Runtime.Running {
+		t.Fatal("metacog_like runtime should be running")
+	}
+	if view.Definitions[1].Runtime.Running {
+		t.Fatal("paused_watch runtime should not be running")
+	}
+}

@@ -86,3 +86,28 @@ func currentLoopDefinitionSnapshot(r *Registry) (*looppkg.DefinitionRegistrySnap
 	}
 	return snapshot, nil
 }
+
+func findLoopDefinitionView(view *looppkg.DefinitionRegistryView, name string) (looppkg.DefinitionView, bool) {
+	if view == nil {
+		return looppkg.DefinitionView{}, false
+	}
+	for _, def := range view.Definitions {
+		if def.Name == name {
+			return def, true
+		}
+	}
+	return looppkg.DefinitionView{}, false
+}
+
+func currentLoopDefinitionView(r *Registry) (*looppkg.DefinitionRegistryView, error) {
+	if r.loopDefinitionView != nil {
+		if view := r.loopDefinitionView(); view != nil {
+			return view, nil
+		}
+	}
+	snapshot, err := currentLoopDefinitionSnapshot(r)
+	if err != nil {
+		return nil, err
+	}
+	return looppkg.BuildDefinitionRegistryView(snapshot, nil), nil
+}

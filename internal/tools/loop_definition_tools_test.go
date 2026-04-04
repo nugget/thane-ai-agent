@@ -50,6 +50,15 @@ func newTestLoopDefinitionDeps(t *testing.T) *testLoopDefinitionDeps {
 	}
 	reg.ConfigureLoopDefinitionTools(LoopDefinitionToolDeps{
 		Registry: defs,
+		View: func() *looppkg.DefinitionRegistryView {
+			return looppkg.BuildDefinitionRegistryView(defs.Snapshot(), map[string]looppkg.DefinitionRuntimeStatus{
+				"metacog_like": {
+					Running: true,
+					LoopID:  "loop-live-1",
+					State:   looppkg.StateSleeping,
+				},
+			})
+		},
 		PersistSpec: func(spec looppkg.Spec, updatedAt time.Time) error {
 			deps.persisted[spec.Name] = spec
 			deps.persistedUpdated[spec.Name] = updatedAt
@@ -133,9 +142,9 @@ func TestLoopDefinitionSetAndDelete(t *testing.T) {
 	}
 
 	var setResp struct {
-		Status     string                     `json:"status"`
-		Generation int64                      `json:"generation"`
-		Definition looppkg.DefinitionSnapshot `json:"definition"`
+		Status     string                 `json:"status"`
+		Generation int64                  `json:"generation"`
+		Definition looppkg.DefinitionView `json:"definition"`
 	}
 	if err := json.Unmarshal([]byte(out), &setResp); err != nil {
 		t.Fatalf("unmarshal set response: %v", err)
@@ -198,8 +207,8 @@ func TestLoopDefinitionListFiltersOverlay(t *testing.T) {
 	}
 
 	var got struct {
-		Count int                          `json:"count"`
-		Items []looppkg.DefinitionSnapshot `json:"items"`
+		Count int                      `json:"count"`
+		Items []looppkg.DefinitionView `json:"items"`
 	}
 	if err := json.Unmarshal([]byte(out), &got); err != nil {
 		t.Fatalf("unmarshal list: %v", err)
@@ -225,9 +234,9 @@ func TestLoopDefinitionSetPolicyAndLaunch(t *testing.T) {
 	}
 
 	var policyResp struct {
-		Status     string                     `json:"status"`
-		Generation int64                      `json:"generation"`
-		Definition looppkg.DefinitionSnapshot `json:"definition"`
+		Status     string                 `json:"status"`
+		Generation int64                  `json:"generation"`
+		Definition looppkg.DefinitionView `json:"definition"`
 	}
 	if err := json.Unmarshal([]byte(out), &policyResp); err != nil {
 		t.Fatalf("unmarshal policy response: %v", err)
@@ -237,6 +246,9 @@ func TestLoopDefinitionSetPolicyAndLaunch(t *testing.T) {
 	}
 	if deps.persistedPolicy["metacog_like"].Reason != "quiet hours" {
 		t.Fatalf("persisted policy = %+v, want quiet hours", deps.persistedPolicy["metacog_like"])
+	}
+	if policyResp.Definition.Runtime.LoopID != "loop-live-1" {
+		t.Fatalf("runtime loop_id = %q, want loop-live-1", policyResp.Definition.Runtime.LoopID)
 	}
 
 	launchOut, err := deps.reg.Get("loop_definition_launch").Handler(context.Background(), map[string]any{
@@ -254,5 +266,27 @@ func TestLoopDefinitionSetPolicyAndLaunch(t *testing.T) {
 	}
 	if launchResp.Result.LoopID != "loop-123" {
 		t.Fatalf("launch loop_id = %q, want loop-123", launchResp.Result.LoopID)
+	}
+}
+
+func TestLoopDefinitionListFiltersRuntimeState(t *testing.T) {
+	deps := newTestLoopDefinitionDeps(t)
+
+	out, err := deps.reg.Get("loop_definition_list").Handler(context.Background(), map[string]any{
+		"runtime_state": "sleeping",
+	})
+	if err != nil {
+		t.Fatalf("loop_definition_list(runtime_state): %v", err)
+	}
+
+	var got struct {
+		Count int                      `json:"count"`
+		Items []looppkg.DefinitionView `json:"items"`
+	}
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("unmarshal list: %v", err)
+	}
+	if got.Count != 1 || got.Items[0].Name != "metacog_like" {
+		t.Fatalf("items = %+v, want one sleeping metacog_like", got.Items)
 	}
 }
