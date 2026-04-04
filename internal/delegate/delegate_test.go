@@ -1189,6 +1189,62 @@ func TestToolHandler_FailedHeaderNoOutput(t *testing.T) {
 	}
 }
 
+func TestToolHandler_AsyncModeLaunchesBackgroundDelegate(t *testing.T) {
+	t.Parallel()
+
+	runner := &mockLoopRunner{
+		resp: &looppkg.Response{
+			Content: "Background delegate answer",
+			Model:   "deepslate/google/gemma-3-4b",
+		},
+	}
+	registry := looppkg.NewRegistry()
+	t.Cleanup(func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		registry.ShutdownAll(shutdownCtx)
+	})
+	sink := &delegateCompletionSink{deliveries: make(chan looppkg.CompletionDelivery, 1)}
+
+	exec := NewExecutor(slog.Default(), nil, nil, newTestRegistry(), "spark/gpt-oss:20b")
+	exec.ConfigureLoopExecution(runner, registry)
+	exec.ConfigureLoopCompletionSink(sink.DeliverCompletion)
+
+	handler := ToolHandler(exec)
+	ctx := tools.WithConversationID(context.Background(), "conv-async")
+	result, err := handler(ctx, map[string]any{
+		"task": "Check the office light",
+		"mode": "async",
+	})
+	if err != nil {
+		t.Fatalf("ToolHandler() error = %v", err)
+	}
+	if !strings.Contains(result, "[Delegate STARTED:") {
+		t.Fatalf("result = %q, want async started header", result)
+	}
+	if !strings.Contains(result, "conv-async") {
+		t.Fatalf("result = %q, want target conversation ID", result)
+	}
+
+	select {
+	case delivery := <-sink.deliveries:
+		if delivery.ConversationID != "conv-async" {
+			t.Fatalf("ConversationID = %q, want conv-async", delivery.ConversationID)
+		}
+		if delivery.Mode != looppkg.CompletionConversation {
+			t.Fatalf("Mode = %q, want conversation", delivery.Mode)
+		}
+		if delivery.Response == nil || delivery.Response.Content != "Background delegate answer" {
+			t.Fatalf("Response = %#v, want background delegate answer", delivery.Response)
+		}
+		if !strings.Contains(delivery.Content, "Background task complete") {
+			t.Fatalf("Content = %q, want background completion message", delivery.Content)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for detached completion delivery")
+	}
+}
+
 func TestExecute_ToolTimeoutRecovery(t *testing.T) {
 	// Register a tool that blocks longer than the per-tool timeout.
 	reg := tools.NewEmptyRegistry()
@@ -1293,6 +1349,15 @@ func TestExecute_ToolTimeoutRecovery(t *testing.T) {
 	if !found {
 		t.Error("LLM did not receive tool timeout error in messages")
 	}
+}
+
+type delegateCompletionSink struct {
+	deliveries chan looppkg.CompletionDelivery
+}
+
+func (s *delegateCompletionSink) DeliverCompletion(_ context.Context, delivery looppkg.CompletionDelivery) error {
+	s.deliveries <- delivery
+	return nil
 }
 
 // TestExecute_NonCooperativeToolTimeout verifies that the delegate

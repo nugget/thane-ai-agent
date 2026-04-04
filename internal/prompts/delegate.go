@@ -20,4 +20,6 @@ BAD delegate tasks (keep these yourself):
 - "Should I turn off the lights?" (requires user intent reasoning)
 - A single quick tool call (delegation overhead not worth it)
 
-Use the guidance field to steer execution: provide entity names, file paths, specific focus areas, or output format preferences. More specific guidance means fewer wasted iterations.`
+Use the guidance field to steer execution: provide entity names, file paths, specific focus areas, or output format preferences. More specific guidance means fewer wasted iterations.
+
+Use mode="async" when you want the delegate to keep running in the background and report the result back into the current conversation later instead of blocking for a direct reply.`

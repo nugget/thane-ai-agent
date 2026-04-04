@@ -98,6 +98,7 @@ type Executor struct {
 	contentWriter    *logging.ContentWriter
 	loopRunner       looppkg.Runner
 	loopRegistry     *looppkg.Registry
+	completionSink   looppkg.CompletionSink
 	sessionArchiver  agent.SessionArchiver
 	conversations    *memory.SQLiteStore
 }
@@ -240,6 +241,12 @@ func (e *Executor) ConfigureLoopExecution(runner looppkg.Runner, registry *loopp
 	e.loopRegistry = registry
 }
 
+// ConfigureLoopCompletionSink configures the detached completion sink used by
+// background delegate launches that report back into a conversation.
+func (e *Executor) ConfigureLoopCompletionSink(sink looppkg.CompletionSink) {
+	e.completionSink = sink
+}
+
 // ConfigureSessionLifecycle configures archival and cleanup for loop-backed
 // delegate conversations. The archiver preserves parent session linkage and
 // archived transcripts; the conversation store is cleared after completion so
@@ -268,6 +275,47 @@ func (e *Executor) Execute(ctx context.Context, task, profileName, guidance stri
 		return e.executeViaLoop(ctx, task, profileName, guidance, tags, pathPrefixes)
 	}
 	return e.executeLegacy(ctx, task, profileName, guidance, tags, pathPrefixes)
+}
+
+// StartBackground launches a detached delegate loop that reports its
+// completion back into the current conversation.
+func (e *Executor) StartBackground(ctx context.Context, task, profileName, guidance string, tags []string, pathPrefixes map[string]string) (string, error) {
+	if e.loopRunner == nil || e.loopRegistry == nil {
+		return "", fmt.Errorf("background delegation requires loops-ng execution")
+	}
+	if e.completionSink == nil {
+		return "", fmt.Errorf("background delegation requires a completion sink")
+	}
+
+	prep, err := e.prepareExecution(ctx, task, profileName, guidance, tags, pathPrefixes)
+	if err != nil {
+		return "", err
+	}
+
+	targetConversationID := strings.TrimSpace(tools.ConversationIDFromContext(ctx))
+	if targetConversationID == "" {
+		return "", fmt.Errorf("background delegation requires a target conversation")
+	}
+
+	loopName := "delegate-" + prep.id[:8]
+	loopMaxDuration := prep.maxDuration + 5*time.Second
+	if loopMaxDuration <= 0 {
+		loopMaxDuration = prep.maxDuration
+	}
+
+	launchResult, err := e.loopRegistry.Launch(ctx, e.buildLoopLaunch(prep, task, guidance, looppkg.OperationBackgroundTask, looppkg.CompletionConversation, targetConversationID, loopName, loopMaxDuration, nil), looppkg.Deps{
+		Runner:         e.loopRunner,
+		Logger:         prep.log,
+		EventBus:       e.eventBus,
+		CompletionSink: e.completionSink,
+	})
+	if err != nil {
+		e.finishLoopExecution(prep)
+		return "", fmt.Errorf("delegate failed to start in background: %w", err)
+	}
+
+	e.finishDetachedLoopExecution(launchResult.LoopID, prep)
+	return launchResult.LoopID, nil
 }
 
 func (e *Executor) executeLegacy(ctx context.Context, task, profileName, guidance string, tags []string, pathPrefixes map[string]string) (delegateResult *Result, delegateErr error) {
@@ -731,58 +779,20 @@ func (e *Executor) executeViaLoop(ctx context.Context, task, profileName, guidan
 	var toolCallsMu sync.Mutex
 	var toolCalls []ToolCallOutcome
 
-	hints := make(map[string]string, len(prep.profile.RouterHints)+2)
-	for k, v := range prep.profile.RouterHints {
-		hints[k] = v
-	}
-	hints["source"] = "delegate"
-	hints[router.HintDelegationGating] = "disabled"
-
 	runStart := time.Now()
-	launchResult, err := e.loopRegistry.Launch(ctx, looppkg.Launch{
-		Spec: looppkg.Spec{
-			Name:        loopName,
-			Operation:   looppkg.OperationRequestReply,
-			Completion:  looppkg.CompletionReturn,
-			MaxDuration: loopMaxDuration,
-			Tags:        append([]string(nil), prep.explicitTags...),
-			Metadata: map[string]string{
-				"category":          "delegate",
-				"delegate_id":       prep.id,
-				"delegate_task":     truncate(task, 500),
-				"delegate_profile":  prep.profile.Name,
-				"delegate_guidance": truncate(guidance, 500),
-			},
-		},
-		Task:            prep.userMessage,
-		ParentID:        prep.parentLoopID,
-		ConversationID:  prep.conversationID,
-		Model:           prep.model,
-		Hints:           hints,
-		AllowedTools:    append([]string(nil), prep.toolNames...),
-		SkipTagFilter:   len(prep.explicitTags) == 0,
-		InitialTags:     append([]string(nil), prep.effectiveTags...),
-		SystemPrompt:    prep.systemPrompt,
-		MaxIterations:   prep.maxIterations,
-		MaxOutputTokens: prep.maxOutputTokens,
-		ToolTimeout:     prep.toolTimeout,
-		UsageRole:       "delegate",
-		UsageTaskName:   prep.profile.Name,
-		RunTimeout:      prep.maxDuration,
-		OnProgress: func(kind string, data map[string]any) {
-			if kind != events.KindLoopToolDone {
-				return
-			}
-			name, _ := data["tool"].(string)
-			errMsg, _ := data["error"].(string)
-			toolCallsMu.Lock()
-			toolCalls = append(toolCalls, ToolCallOutcome{
-				Name:    name,
-				Success: errMsg == "",
-			})
-			toolCallsMu.Unlock()
-		},
-	}, looppkg.Deps{
+	launchResult, err := e.loopRegistry.Launch(ctx, e.buildLoopLaunch(prep, task, guidance, looppkg.OperationRequestReply, looppkg.CompletionReturn, "", loopName, loopMaxDuration, func(kind string, data map[string]any) {
+		if kind != events.KindLoopToolDone {
+			return
+		}
+		name, _ := data["tool"].(string)
+		errMsg, _ := data["error"].(string)
+		toolCallsMu.Lock()
+		toolCalls = append(toolCalls, ToolCallOutcome{
+			Name:    name,
+			Success: errMsg == "",
+		})
+		toolCallsMu.Unlock()
+	}), looppkg.Deps{
 		Runner:   e.loopRunner,
 		Logger:   prep.log,
 		EventBus: e.eventBus,
@@ -843,6 +853,49 @@ func (e *Executor) executeViaLoop(ctx context.Context, task, profileName, guidan
 	}, nil
 }
 
+func (e *Executor) buildLoopLaunch(prep *preparedExecution, task, guidance string, operation looppkg.Operation, completion looppkg.Completion, completionConversationID, loopName string, loopMaxDuration time.Duration, onProgress func(kind string, data map[string]any)) looppkg.Launch {
+	hints := make(map[string]string, len(prep.profile.RouterHints)+2)
+	for k, v := range prep.profile.RouterHints {
+		hints[k] = v
+	}
+	hints["source"] = "delegate"
+	hints[router.HintDelegationGating] = "disabled"
+
+	return looppkg.Launch{
+		Spec: looppkg.Spec{
+			Name:        loopName,
+			Operation:   operation,
+			Completion:  completion,
+			MaxDuration: loopMaxDuration,
+			Tags:        append([]string(nil), prep.explicitTags...),
+			Metadata: map[string]string{
+				"category":          "delegate",
+				"delegate_id":       prep.id,
+				"delegate_task":     truncate(task, 500),
+				"delegate_profile":  prep.profile.Name,
+				"delegate_guidance": truncate(guidance, 500),
+			},
+		},
+		Task:                     prep.userMessage,
+		ParentID:                 prep.parentLoopID,
+		ConversationID:           prep.conversationID,
+		Model:                    prep.model,
+		Hints:                    hints,
+		AllowedTools:             append([]string(nil), prep.toolNames...),
+		SkipTagFilter:            len(prep.explicitTags) == 0,
+		InitialTags:              append([]string(nil), prep.effectiveTags...),
+		SystemPrompt:             prep.systemPrompt,
+		MaxIterations:            prep.maxIterations,
+		MaxOutputTokens:          prep.maxOutputTokens,
+		ToolTimeout:              prep.toolTimeout,
+		UsageRole:                "delegate",
+		UsageTaskName:            prep.profile.Name,
+		RunTimeout:               prep.maxDuration,
+		CompletionConversationID: completionConversationID,
+		OnProgress:               onProgress,
+	}
+}
+
 func (e *Executor) stopLoopForCancellation(loopID string, prep *preparedExecution) bool {
 	if loopID == "" {
 		return true
@@ -867,6 +920,29 @@ func (e *Executor) stopLoopForCancellation(loopID string, prep *preparedExecutio
 		}
 		return false
 	}
+}
+
+func (e *Executor) finishDetachedLoopExecution(loopID string, prep *preparedExecution) {
+	if prep == nil {
+		return
+	}
+	if loopID == "" || e.loopRegistry == nil {
+		e.finishLoopExecution(prep)
+		return
+	}
+
+	l := e.loopRegistry.Get(loopID)
+	if l == nil {
+		e.finishLoopExecution(prep)
+		return
+	}
+
+	go func(done <-chan struct{}) {
+		if done != nil {
+			<-done
+		}
+		e.finishLoopExecution(prep)
+	}(l.Done())
 }
 
 func (e *Executor) finishLoopExecution(prep *preparedExecution) {
