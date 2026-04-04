@@ -24,18 +24,18 @@ type Runner interface {
 // Request mirrors the loop-facing fields of agent.Request. The loop
 // package defines its own type to avoid importing agent.
 type Request struct {
-	Model          string
-	ConversationID string
-	Messages       []Message
-	SkipContext    bool
-	AllowedTools   []string
-	ExcludeTools   []string
-	SkipTagFilter  bool
-	Hints          map[string]string
+	Model          string            `yaml:"model,omitempty" json:"model,omitempty"`
+	ConversationID string            `yaml:"conversation_id,omitempty" json:"conversation_id,omitempty"`
+	Messages       []Message         `yaml:"messages,omitempty" json:"messages,omitempty"`
+	SkipContext    bool              `yaml:"skip_context,omitempty" json:"skip_context,omitempty"`
+	AllowedTools   []string          `yaml:"allowed_tools,omitempty" json:"allowed_tools,omitempty"`
+	ExcludeTools   []string          `yaml:"exclude_tools,omitempty" json:"exclude_tools,omitempty"`
+	SkipTagFilter  bool              `yaml:"skip_tag_filter,omitempty" json:"skip_tag_filter,omitempty"`
+	Hints          map[string]string `yaml:"hints,omitempty" json:"hints,omitempty"`
 	// InitialTags are capability tags to activate at the start of the Run,
 	// in addition to always-active and channel-pinned tags. Used by loops
 	// to carry forward tags activated in previous iterations.
-	InitialTags []string
+	InitialTags []string `yaml:"initial_tags,omitempty" json:"initial_tags,omitempty"`
 
 	// OnProgress is called by the Runner during execution to report
 	// in-flight activity (tool calls, LLM responses). The kind
@@ -43,14 +43,14 @@ type Request struct {
 	// event-specific fields. The loop automatically injects loop_id
 	// and loop_name into data before publishing. Nil means no
 	// progress reporting.
-	OnProgress func(kind string, data map[string]any) `json:"-"`
+	OnProgress func(kind string, data map[string]any) `yaml:"-" json:"-"`
 
-	MaxIterations   int
-	MaxOutputTokens int
-	ToolTimeout     time.Duration
-	UsageRole       string
-	UsageTaskName   string
-	SystemPrompt    string
+	MaxIterations   int           `yaml:"max_iterations,omitempty" json:"max_iterations,omitempty"`
+	MaxOutputTokens int           `yaml:"max_output_tokens,omitempty" json:"max_output_tokens,omitempty"`
+	ToolTimeout     time.Duration `yaml:"tool_timeout,omitempty" json:"tool_timeout,omitempty"`
+	UsageRole       string        `yaml:"usage_role,omitempty" json:"usage_role,omitempty"`
+	UsageTaskName   string        `yaml:"usage_task_name,omitempty" json:"usage_task_name,omitempty"`
+	SystemPrompt    string        `yaml:"system_prompt,omitempty" json:"system_prompt,omitempty"`
 }
 
 // RunRequest is kept as a compatibility alias while loops-ng migrates
@@ -59,8 +59,8 @@ type RunRequest = Request
 
 // Message is a chat message for the runner.
 type Message struct {
-	Role    string
-	Content string
+	Role    string `yaml:"role" json:"role"`
+	Content string `yaml:"content" json:"content"`
 }
 
 // RunMessage is kept as a compatibility alias while loops-ng migrates
@@ -70,22 +70,22 @@ type RunMessage = Message
 // Response mirrors agent.Response fields that loops consume. It holds
 // the result of an LLM call executed by a [Runner].
 type Response struct {
-	Content                  string
-	Model                    string
-	FinishReason             string
-	InputTokens              int
-	OutputTokens             int
-	CacheCreationInputTokens int
-	CacheReadInputTokens     int
-	ContextWindow            int
-	ToolsUsed                map[string]int
-	RequestID                string
-	Iterations               int
-	Exhausted                bool
+	Content                  string         `yaml:"content,omitempty" json:"content,omitempty"`
+	Model                    string         `yaml:"model,omitempty" json:"model,omitempty"`
+	FinishReason             string         `yaml:"finish_reason,omitempty" json:"finish_reason,omitempty"`
+	InputTokens              int            `yaml:"input_tokens,omitempty" json:"input_tokens,omitempty"`
+	OutputTokens             int            `yaml:"output_tokens,omitempty" json:"output_tokens,omitempty"`
+	CacheCreationInputTokens int            `yaml:"cache_creation_input_tokens,omitempty" json:"cache_creation_input_tokens,omitempty"`
+	CacheReadInputTokens     int            `yaml:"cache_read_input_tokens,omitempty" json:"cache_read_input_tokens,omitempty"`
+	ContextWindow            int            `yaml:"context_window,omitempty" json:"context_window,omitempty"`
+	ToolsUsed                map[string]int `yaml:"tools_used,omitempty" json:"tools_used,omitempty"`
+	RequestID                string         `yaml:"request_id,omitempty" json:"request_id,omitempty"`
+	Iterations               int            `yaml:"iterations,omitempty" json:"iterations,omitempty"`
+	Exhausted                bool           `yaml:"exhausted,omitempty" json:"exhausted,omitempty"`
 	// ActiveTags is the set of capability tags that were active at the
 	// end of the Run. Loops use this to carry forward activations to
 	// subsequent iterations.
-	ActiveTags []string
+	ActiveTags []string `yaml:"active_tags,omitempty" json:"active_tags,omitempty"`
 }
 
 // RunResponse is kept as a compatibility alias while loops-ng

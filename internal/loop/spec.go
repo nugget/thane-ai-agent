@@ -63,89 +63,89 @@ var validCompletions = map[Completion]bool{
 // work.
 type Spec struct {
 	// Name is the unique identifier for the loop. Required.
-	Name string
+	Name string `yaml:"name,omitempty" json:"name,omitempty"`
 
 	// Task is the static prompt for each iteration. Ignored when
 	// TaskBuilder is set.
-	Task string
+	Task string `yaml:"task,omitempty" json:"task,omitempty"`
 
 	// Profile shapes loop execution: routing hints, context-injection
 	// tags, tool exclusions, and related request-shaping guidance.
-	Profile router.LoopProfile
+	Profile router.LoopProfile `yaml:"profile,omitempty" json:"profile,omitempty"`
 
 	// Operation describes the runtime pattern expected for the loop.
-	Operation Operation
+	Operation Operation `yaml:"operation,omitempty" json:"operation,omitempty"`
 
 	// Completion describes how results should be delivered back to a
 	// caller, conversation, or channel.
-	Completion Completion
+	Completion Completion `yaml:"completion,omitempty" json:"completion,omitempty"`
 
 	// Tags are capability tags for tool scoping. When non-empty,
 	// the loop's tool registry is filtered to tools matching these
 	// tags (plus always-active tags).
-	Tags []string
+	Tags []string `yaml:"tags,omitempty" json:"tags,omitempty"`
 
 	// ExcludeTools lists tool names to exclude from the loop's
 	// available tools.
-	ExcludeTools []string
+	ExcludeTools []string `yaml:"exclude_tools,omitempty" json:"exclude_tools,omitempty"`
 
 	// SleepMin is the minimum sleep duration between iterations.
-	SleepMin time.Duration
+	SleepMin time.Duration `yaml:"sleep_min,omitempty" json:"sleep_min,omitempty"`
 	// SleepMax is the maximum sleep duration between iterations.
-	SleepMax time.Duration
+	SleepMax time.Duration `yaml:"sleep_max,omitempty" json:"sleep_max,omitempty"`
 	// SleepDefault is the initial sleep duration before the loop
 	// self-adjusts.
-	SleepDefault time.Duration
+	SleepDefault time.Duration `yaml:"sleep_default,omitempty" json:"sleep_default,omitempty"`
 	// Jitter randomizes sleep durations to break periodicity.
-	Jitter *float64
+	Jitter *float64 `yaml:"jitter,omitempty" json:"jitter,omitempty"`
 
 	// MaxDuration is the maximum wall-clock time the loop may run.
-	MaxDuration time.Duration
+	MaxDuration time.Duration `yaml:"max_duration,omitempty" json:"max_duration,omitempty"`
 	// MaxIter is the maximum number of iteration attempts the loop
 	// may make.
-	MaxIter int
+	MaxIter int `yaml:"max_iter,omitempty" json:"max_iter,omitempty"`
 
 	// Supervisor enables frontier model dice rolls.
-	Supervisor bool
+	Supervisor bool `yaml:"supervisor,omitempty" json:"supervisor,omitempty"`
 	// SupervisorProb is the probability of using the supervisor model.
-	SupervisorProb float64
+	SupervisorProb float64 `yaml:"supervisor_prob,omitempty" json:"supervisor_prob,omitempty"`
 	// QualityFloor is the minimum model quality rating for normal
 	// iterations.
-	QualityFloor int
+	QualityFloor int `yaml:"quality_floor,omitempty" json:"quality_floor,omitempty"`
 	// SupervisorContext is prepended during supervisor iterations.
-	SupervisorContext string
+	SupervisorContext string `yaml:"supervisor_context,omitempty" json:"supervisor_context,omitempty"`
 	// SupervisorQualityFloor is the quality floor for supervisor
 	// iterations.
-	SupervisorQualityFloor int
+	SupervisorQualityFloor int `yaml:"supervisor_quality_floor,omitempty" json:"supervisor_quality_floor,omitempty"`
 
 	// OnRetrigger determines behavior when the loop is triggered again
 	// while already running.
-	OnRetrigger RetriggerMode
+	OnRetrigger RetriggerMode `yaml:"on_retrigger,omitempty" json:"on_retrigger,omitempty"`
 
 	// TaskBuilder generates a prompt per-iteration.
-	TaskBuilder func(ctx context.Context, isSupervisor bool) (string, error) `json:"-"`
+	TaskBuilder func(ctx context.Context, isSupervisor bool) (string, error) `yaml:"-" json:"-"`
 
 	// PostIterate runs after each successful iteration.
-	PostIterate func(ctx context.Context, result IterationResult) error `json:"-"`
+	PostIterate func(ctx context.Context, result IterationResult) error `yaml:"-" json:"-"`
 
 	// WaitFunc blocks until an external event arrives.
-	WaitFunc func(ctx context.Context) (any, error) `json:"-"`
+	WaitFunc func(ctx context.Context) (any, error) `yaml:"-" json:"-"`
 
 	// Handler processes an iteration directly without an LLM call.
-	Handler func(ctx context.Context, event any) error `json:"-"`
+	Handler func(ctx context.Context, event any) error `yaml:"-" json:"-"`
 
 	// Hints are merged into Request hints for each iteration.
-	Hints map[string]string
+	Hints map[string]string `yaml:"hints,omitempty" json:"hints,omitempty"`
 
 	// Setup is called by the registry spawn helpers after [New] or
 	// [NewFromSpec] but before [Loop.Start].
-	Setup func(l *Loop) `json:"-"`
+	Setup func(l *Loop) `yaml:"-" json:"-"`
 
 	// Metadata holds arbitrary key/value pairs for the loop.
-	Metadata map[string]string
+	Metadata map[string]string `yaml:"metadata,omitempty" json:"metadata,omitempty"`
 
 	// ParentID is the parent loop ID, if any.
-	ParentID string
+	ParentID string `yaml:"parent_id,omitempty" json:"parent_id,omitempty"`
 }
 
 // Validate checks that the loops-ng-facing fields and the current

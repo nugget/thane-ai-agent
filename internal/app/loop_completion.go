@@ -11,22 +11,22 @@ import (
 // completion. It is intentionally separate from loop.CompletionDelivery so
 // future routing policy can revise targets without mutating loop output.
 type loopCompletionPlan struct {
-	Mode           looppkg.Completion
-	ConversationID string
-	LoopID         string
-	LoopName       string
-	Content        string
-	Response       *looppkg.Response
-	Status         *looppkg.Status
+	Mode           looppkg.Completion `yaml:"mode,omitempty" json:"mode,omitempty"`
+	ConversationID string             `yaml:"conversation_id,omitempty" json:"conversation_id,omitempty"`
+	LoopID         string             `yaml:"loop_id,omitempty" json:"loop_id,omitempty"`
+	LoopName       string             `yaml:"loop_name,omitempty" json:"loop_name,omitempty"`
+	Content        string             `yaml:"content,omitempty" json:"content,omitempty"`
+	Response       *looppkg.Response  `yaml:"response,omitempty" json:"response,omitempty"`
+	Status         *looppkg.Status    `yaml:"status,omitempty" json:"status,omitempty"`
 }
 
 // loopCompletionPresentation is the app-layer presentation payload after
 // delivery planning. Future formatting or model-mediated rewriting should
 // happen between plan creation and this presented form.
 type loopCompletionPresentation struct {
-	Mode           looppkg.Completion
-	ConversationID string
-	Content        string
+	Mode           looppkg.Completion `yaml:"mode,omitempty" json:"mode,omitempty"`
+	ConversationID string             `yaml:"conversation_id,omitempty" json:"conversation_id,omitempty"`
+	Content        string             `yaml:"content,omitempty" json:"content,omitempty"`
 }
 
 // detachedLoopCompletionDispatcher is the shared app-side entry point for
