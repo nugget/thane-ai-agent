@@ -240,6 +240,14 @@ function formatTimestampMeta(raw) {
   return timeAgo(date);
 }
 
+function formatFutureMeta(raw) {
+  const date = parseTimestamp(raw);
+  if (!date) return '-';
+  const diff = date.getTime() - Date.now();
+  if (diff <= 0) return 'expired';
+  return 'for ' + formatDuration(diff);
+}
+
 function buildSystemStat(label, value, opts = {}) {
   const item = document.createElement('div');
   item.className = 'system-stat' + (opts.emphasis ? ' system-stat--emphasis' : '');
@@ -337,18 +345,21 @@ function renderModelRegistry(summaryEl, resourcesEl, deploymentsEl, metaEl, regi
   const deployments = Array.isArray(registry.deployments) ? registry.deployments.slice() : [];
   const resources = Array.isArray(registry.resources) ? registry.resources.slice() : [];
   const deploymentStats = (routerStats && routerStats.deployment_stats) || {};
+  const resourceHealth = (routerStats && routerStats.resource_health) || {};
 
   const discoveredCount = deployments.filter((dep) => dep.source === 'discovered').length;
   const routableCount = deployments.filter((dep) => dep.routable).length;
   const flaggedCount = deployments.filter((dep) => dep.policy_state === 'flagged').length;
   const inactiveCount = deployments.filter((dep) => dep.policy_state === 'inactive').length;
   const overrideCount = deployments.filter((dep) => dep.policy_source === 'overlay').length;
+  const cooldownCount = Object.keys(resourceHealth).length;
 
   summaryEl.appendChild(buildSystemStat('Generation', String(registry.generation || 0)));
   summaryEl.appendChild(buildSystemStat('Resources', formatNumber(resources.length)));
   summaryEl.appendChild(buildSystemStat('Deployments', formatNumber(deployments.length)));
   summaryEl.appendChild(buildSystemStat('Discovered', formatNumber(discoveredCount)));
   summaryEl.appendChild(buildSystemStat('Routable', formatNumber(routableCount)));
+  summaryEl.appendChild(buildSystemStat('Cooldowns', formatNumber(cooldownCount), { title: cooldownCount > 0 ? 'resources temporarily avoided after recent timeouts' : '' }));
   summaryEl.appendChild(buildSystemStat('Overrides', formatNumber(overrideCount), { title: 'flagged ' + flaggedCount + ' · inactive ' + inactiveCount }));
 
   if (metaEl) {
@@ -371,6 +382,7 @@ function renderModelRegistry(summaryEl, resourcesEl, deploymentsEl, metaEl, regi
     resourcesEl.appendChild(buildSystemEmpty('No configured resources'));
   } else {
     for (const resource of sortedResources) {
+      const health = resourceHealth[resource.id] || null;
       const item = document.createElement('div');
       item.className = 'system-item';
 
@@ -400,6 +412,9 @@ function renderModelRegistry(summaryEl, resourcesEl, deploymentsEl, metaEl, regi
       if (resource.supports_streaming) chips.appendChild(buildSystemChip('stream', 'ok'));
       if (resource.supports_tools) chips.appendChild(buildSystemChip('tools', 'ok'));
       if (resource.supports_images) chips.appendChild(buildSystemChip('images', 'ok'));
+      if (health && health.cooldown_until) {
+        chips.appendChild(buildSystemChip('cooldown', 'warn'));
+      }
       if (resource.last_error) {
         chips.appendChild(buildSystemChip('error', 'error'));
       } else if (resource.last_refresh) {
@@ -412,10 +427,19 @@ function renderModelRegistry(summaryEl, resourcesEl, deploymentsEl, metaEl, regi
       const factParts = [];
       if (resource.url) factParts.push(resource.url);
       if (resource.last_refresh) factParts.push('refresh ' + formatTimestampMeta(resource.last_refresh));
+      if (health && health.cooldown_until) factParts.push('cooldown ' + formatFutureMeta(health.cooldown_until));
       if (factParts.length === 0) factParts.push('No refresh data yet');
       facts.textContent = factParts.join(' \u00b7 ');
       facts.title = factParts.join(' \u00b7 ');
       item.appendChild(facts);
+
+      if (health && health.cooldown_reason) {
+        const reason = document.createElement('div');
+        reason.className = 'system-item__reason';
+        reason.textContent = health.cooldown_reason;
+        reason.title = health.cooldown_reason;
+        item.appendChild(reason);
+      }
 
       if (resource.last_error) {
         const err = document.createElement('div');

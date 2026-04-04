@@ -753,3 +753,28 @@ func TestRecordOutcomeSuccessClearsResourceCooldown(t *testing.T) {
 		t.Fatalf("resource cooldown not cleared: %v", until)
 	}
 }
+
+func TestGetStatsIncludesOnlyActiveResourceHealth(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now()
+	stats := activeResourceHealthSnapshot(map[string]time.Time{
+		"edge":  now.Add(2 * time.Minute),
+		"stale": now.Add(-time.Second),
+		"blank": {},
+	}, now)
+
+	if len(stats) != 1 {
+		t.Fatalf("len(stats) = %d, want 1", len(stats))
+	}
+	health, ok := stats["edge"]
+	if !ok {
+		t.Fatal("missing active resource health for edge")
+	}
+	if health.CooldownReason != "recent timeout" {
+		t.Fatalf("CooldownReason = %q, want %q", health.CooldownReason, "recent timeout")
+	}
+	if !health.CooldownUntil.After(now) {
+		t.Fatalf("CooldownUntil = %v, want future time", health.CooldownUntil)
+	}
+}

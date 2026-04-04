@@ -178,6 +178,7 @@ type Stats struct {
 	FailureCount     int64                      `json:"failure_count"`
 	ProviderCounts   map[string]int64           `json:"provider_counts,omitempty"`
 	ResourceCounts   map[string]int64           `json:"resource_counts,omitempty"`
+	ResourceHealth   map[string]ResourceHealth  `json:"resource_health,omitempty"`
 	DeploymentStats  map[string]DeploymentStats `json:"deployment_stats,omitempty"`
 }
 
@@ -192,6 +193,12 @@ type DeploymentStats struct {
 	Failures      int64  `json:"failures"`
 	AvgLatencyMs  int64  `json:"avg_latency_ms,omitempty"`
 	AvgTokensUsed int64  `json:"avg_tokens_used,omitempty"`
+}
+
+// ResourceHealth exposes request-plane routing health for one resource.
+type ResourceHealth struct {
+	CooldownUntil  time.Time `json:"cooldown_until,omitempty"`
+	CooldownReason string    `json:"cooldown_reason,omitempty"`
 }
 
 // NewRouter creates a router with the given configuration.
@@ -749,6 +756,7 @@ func (r *Router) GetStats() Stats {
 		FailureCount:     r.stats.FailureCount,
 		ProviderCounts:   cloneInt64Map(r.stats.ProviderCounts),
 		ResourceCounts:   cloneInt64Map(r.stats.ResourceCounts),
+		ResourceHealth:   activeResourceHealthSnapshot(r.resourceCooldownUntil, time.Now()),
 		DeploymentStats:  cloneDeploymentStatsMap(r.stats.DeploymentStats),
 	}
 }
@@ -760,6 +768,26 @@ func (r *Router) resourceCooldownDeadline(resource string) time.Time {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.resourceCooldownUntil[resource]
+}
+
+func activeResourceHealthSnapshot(in map[string]time.Time, now time.Time) map[string]ResourceHealth {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]ResourceHealth)
+	for resource, until := range in {
+		if until.IsZero() || !until.After(now) {
+			continue
+		}
+		out[resource] = ResourceHealth{
+			CooldownUntil:  until,
+			CooldownReason: "recent timeout",
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // GetModels returns a copy of the configured model list. The returned
