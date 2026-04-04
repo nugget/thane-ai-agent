@@ -225,7 +225,7 @@ func (s *Store) SummaryByTask(start, end time.Time) ([]GroupedSummary, error) {
 // caller-provided grouping key.
 func (s *Store) SummaryByGroup(groupBy string, start, end time.Time) ([]GroupedSummary, error) {
 	switch strings.TrimSpace(groupBy) {
-	case "model":
+	case "deployment", "model":
 		return s.SummaryByModel(start, end)
 	case "upstream_model":
 		return s.SummaryByUpstreamModel(start, end)
@@ -238,7 +238,7 @@ func (s *Store) SummaryByGroup(groupBy string, start, end time.Time) ([]GroupedS
 	case "task":
 		return s.SummaryByTask(start, end)
 	default:
-		return nil, fmt.Errorf("unsupported group_by %q; use one of [\"model\" \"upstream_model\" \"provider\" \"resource\" \"role\" \"task\"]", groupBy)
+		return nil, fmt.Errorf("unsupported group_by %q; use one of [\"deployment\" \"model\" \"upstream_model\" \"provider\" \"resource\" \"role\" \"task\"]", groupBy)
 	}
 }
 

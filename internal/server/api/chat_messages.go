@@ -203,6 +203,9 @@ func validateDecodedImage(decoded []byte, declaredMediaType string) (string, err
 	if declared != "" && actual != "" && declared != actual {
 		return "", fmt.Errorf("declared media type %q does not match decoded image data %q", declared, actual)
 	}
+	if !supportedImageMediaType(actual) {
+		return "", fmt.Errorf("unsupported image media type %q; supported types are image/png, image/jpeg, image/gif, image/webp", actual)
+	}
 
 	switch actual {
 	case "image/png", "image/jpeg", "image/gif":
@@ -256,4 +259,13 @@ func looksLikeWEBP(decoded []byte) bool {
 	return len(decoded) >= 12 &&
 		string(decoded[:4]) == "RIFF" &&
 		string(decoded[8:12]) == "WEBP"
+}
+
+func supportedImageMediaType(mediaType string) bool {
+	switch mediaType {
+	case "image/png", "image/jpeg", "image/gif", "image/webp":
+		return true
+	default:
+		return false
+	}
 }

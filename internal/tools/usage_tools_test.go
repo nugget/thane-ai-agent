@@ -215,6 +215,7 @@ func TestCostSummaryTool_GroupBy(t *testing.T) {
 		groupBy  string
 		wantText string
 	}{
+		{"by_deployment", "deployment", "By Deployment:"},
 		{"by_model", "model", "By Deployment:"},
 		{"by_upstream_model", "upstream_model", "By Upstream Model:"},
 		{"by_provider", "provider", "By Provider:"},

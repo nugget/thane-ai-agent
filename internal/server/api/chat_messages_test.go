@@ -112,6 +112,27 @@ func TestChatCompletionRequest_AgentMessages_RejectsInvalidImageData(t *testing.
 	}
 }
 
+func TestChatCompletionRequest_AgentMessages_RejectsUnsupportedImageType(t *testing.T) {
+	req := ChatCompletionRequest{
+		Messages: []chatCompletionRequestMessage{
+			{
+				Role: "user",
+				Content: json.RawMessage(`[
+					{"type":"image_url","image_url":{"url":"data:image/bmp;base64,Qk06AAAAAAAAADYAAAAoAAAAAQAAAAEAAAABABgAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQIDAA=="}}
+				]`),
+			},
+		},
+	}
+
+	_, err := req.AgentMessages()
+	if err == nil {
+		t.Fatal("AgentMessages() error = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "unsupported image media type") {
+		t.Fatalf("error = %q, want unsupported-image guidance", err)
+	}
+}
+
 func TestParseOllamaImages_DetectsMediaType(t *testing.T) {
 	_, encoded, _ := strings.Cut(tinyPNGDataURL(t), ",")
 
@@ -134,5 +155,15 @@ func TestParseOllamaImages_RejectsInvalidImageData(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "not an image") {
 		t.Fatalf("error = %q, want invalid-image guidance", err)
+	}
+}
+
+func TestParseOllamaImages_RejectsUnsupportedImageType(t *testing.T) {
+	_, err := parseOllamaImages([]string{"Qk06AAAAAAAAADYAAAAoAAAAAQAAAAEAAAABABgAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAQIDAA=="})
+	if err == nil {
+		t.Fatal("parseOllamaImages() error = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "unsupported image media type") {
+		t.Fatalf("error = %q, want unsupported-image guidance", err)
 	}
 }

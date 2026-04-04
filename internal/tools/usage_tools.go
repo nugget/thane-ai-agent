@@ -29,8 +29,8 @@ func (r *Registry) registerCostSummary() {
 				},
 				"group_by": map[string]any{
 					"type":        "string",
-					"enum":        []string{"model", "upstream_model", "provider", "resource", "role", "task"},
-					"description": "Optional: group results by deployment, upstream model, provider, resource, role, or task name.",
+					"enum":        []string{"deployment", "model", "upstream_model", "provider", "resource", "role", "task"},
+					"description": "Optional: group results by deployment ID (deployment or model), upstream model, provider, resource, role, or task name.",
 				},
 			},
 			"required": []string{"period"},
@@ -99,7 +99,7 @@ func queryGrouped(store *usage.Store, groupBy string, start, end time.Time) ([]u
 		return nil, "", nil
 	}
 	switch groupBy {
-	case "model":
+	case "deployment", "model":
 		result, err := store.SummaryByGroup(groupBy, start, end)
 		return result, "Deployment", err
 	case "upstream_model":
@@ -118,7 +118,7 @@ func queryGrouped(store *usage.Store, groupBy string, start, end time.Time) ([]u
 		result, err := store.SummaryByGroup(groupBy, start, end)
 		return result, "Task", err
 	default:
-		return nil, "", fmt.Errorf("unsupported group_by %q; use one of: model, upstream_model, provider, resource, role, task", groupBy)
+		return nil, "", fmt.Errorf("unsupported group_by %q; use one of: deployment, model, upstream_model, provider, resource, role, task", groupBy)
 	}
 }
 

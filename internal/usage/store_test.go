@@ -409,6 +409,21 @@ func TestSummaryByGroup_DeploymentDimensions(t *testing.T) {
 	if len(grouped) != len(resource) {
 		t.Fatalf("grouped resource len = %d, want %d", len(grouped), len(resource))
 	}
+
+	deployment, err := s.SummaryByGroup("deployment", start, end)
+	if err != nil {
+		t.Fatalf("SummaryByGroup(deployment): %v", err)
+	}
+	model, err := s.SummaryByGroup("model", start, end)
+	if err != nil {
+		t.Fatalf("SummaryByGroup(model): %v", err)
+	}
+	if len(deployment) != len(model) {
+		t.Fatalf("deployment groups len = %d, want %d", len(deployment), len(model))
+	}
+	if deployment[0].Key != model[0].Key {
+		t.Fatalf("deployment first key = %q, want %q", deployment[0].Key, model[0].Key)
+	}
 }
 
 func TestSummaryByGroup_InvalidGroup(t *testing.T) {
