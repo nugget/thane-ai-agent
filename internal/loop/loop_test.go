@@ -927,7 +927,7 @@ func TestNewFromSpecAppliesProfileToRequest(t *testing.T) {
 				Model:         req.Model,
 				Messages:      append([]Message(nil), req.Messages...),
 				ExcludeTools:  append([]string(nil), req.ExcludeTools...),
-				SeedTags:      append([]string(nil), req.SeedTags...),
+				InitialTags:   append([]string(nil), req.InitialTags...),
 				SkipTagFilter: req.SkipTagFilter,
 				Hints:         cloneStringMap(req.Hints),
 			}
@@ -947,7 +947,7 @@ func TestNewFromSpecAppliesProfileToRequest(t *testing.T) {
 			Model:        "spark/gpt-oss:20b",
 			Mission:      "automation",
 			ExcludeTools: []string{"shell_exec"},
-			SeedTags:     []string{"homeassistant"},
+			InitialTags:  []string{"homeassistant"},
 			Instructions: "stay concise",
 			PreferSpeed:  "true",
 			LocalOnly:    "false",
@@ -993,8 +993,8 @@ func TestNewFromSpecAppliesProfileToRequest(t *testing.T) {
 	if !slices.Contains(captured.ExcludeTools, "shell_exec") || !slices.Contains(captured.ExcludeTools, "dangerous_tool") {
 		t.Fatalf("ExcludeTools = %#v", captured.ExcludeTools)
 	}
-	if !slices.Contains(captured.SeedTags, "homeassistant") {
-		t.Fatalf("SeedTags = %#v", captured.SeedTags)
+	if !slices.Contains(captured.InitialTags, "homeassistant") {
+		t.Fatalf("InitialTags = %#v", captured.InitialTags)
 	}
 }
 

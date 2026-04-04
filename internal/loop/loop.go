@@ -32,10 +32,10 @@ type Request struct {
 	ExcludeTools   []string
 	SkipTagFilter  bool
 	Hints          map[string]string
-	// SeedTags are capability tags to activate at the start of the Run,
+	// InitialTags are capability tags to activate at the start of the Run,
 	// in addition to always-active and channel-pinned tags. Used by loops
 	// to carry forward tags activated in previous iterations.
-	SeedTags []string
+	InitialTags []string
 
 	// OnProgress is called by the Runner during execution to report
 	// in-flight activity (tool calls, LLM responses). The kind
@@ -175,7 +175,7 @@ type Loop struct {
 	requestInstructions string
 
 	// activatedTags tracks capability tags activated during previous
-	// iterations. Carried forward via SeedTags on the next Request so
+	// iterations. Carried forward via InitialTags on the next Request so
 	// activations persist across the loop's lifetime.
 	activatedTags []string
 
@@ -1085,7 +1085,7 @@ func (l *Loop) iterate(ctx context.Context, isSupervisor bool, convID string) (*
 		SkipTagFilter: len(l.config.Tags) == 0,
 		Hints:         hints,
 		OnProgress:    l.makeProgressFunc(),
-		SeedTags:      mergeUniqueStrings(l.requestBase.SeedTags, l.activatedTags),
+		InitialTags:   mergeUniqueStrings(l.requestBase.InitialTags, l.activatedTags),
 	}
 
 	resp, err := l.deps.Runner.Run(ctx, req, nil)

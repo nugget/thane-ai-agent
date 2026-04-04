@@ -589,7 +589,7 @@ func (b *Bridge) handleMessage(ctx context.Context, env *Envelope, progressFn fu
 		Model:          opts.Model,
 		Hints:          opts.Hints,
 		ExcludeTools:   opts.ExcludeTools,
-		SeedTags:       opts.SeedTags,
+		InitialTags:    opts.InitialTags,
 	}
 
 	stream := agent.BuildProgressStream(progressFn)
@@ -704,7 +704,7 @@ func (b *Bridge) handleReaction(ctx context.Context, env *Envelope) {
 		Model:          opts.Model,
 		Hints:          opts.Hints,
 		ExcludeTools:   opts.ExcludeTools,
-		SeedTags:       opts.SeedTags,
+		InitialTags:    opts.InitialTags,
 	}
 
 	resp, err := b.runner.Run(ctx, req, nil)

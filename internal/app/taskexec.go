@@ -80,7 +80,7 @@ func runScheduledTask(ctx context.Context, task *scheduler.Task, exec *scheduler
 		Messages:       []agent.Message{{Role: "user", Content: msg}},
 		Hints:          reqOpts.Hints,
 		ExcludeTools:   reqOpts.ExcludeTools,
-		SeedTags:       reqOpts.SeedTags,
+		InitialTags:    reqOpts.InitialTags,
 	}
 
 	resp, err := deps.runner.Run(ctx, req, nil)

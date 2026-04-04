@@ -155,7 +155,7 @@ func TestLoopProfileRequestOptions(t *testing.T) {
 		LocalOnly:        "false",
 		DelegationGating: "disabled",
 		ExcludeTools:     []string{"resolve_anticipation", "cancel_anticipation"},
-		SeedTags:         []string{"scheduler", "wake"},
+		InitialTags:      []string{"scheduler", "wake"},
 		ExtraHints: map[string]string{
 			"source": "scheduler",
 		},
@@ -175,17 +175,17 @@ func TestLoopProfileRequestOptions(t *testing.T) {
 	if len(opts.ExcludeTools) != len(seed.ExcludeTools) {
 		t.Fatalf("ExcludeTools len = %d, want %d", len(opts.ExcludeTools), len(seed.ExcludeTools))
 	}
-	if len(opts.SeedTags) != len(seed.SeedTags) {
-		t.Fatalf("SeedTags len = %d, want %d", len(opts.SeedTags), len(seed.SeedTags))
+	if len(opts.InitialTags) != len(seed.InitialTags) {
+		t.Fatalf("InitialTags len = %d, want %d", len(opts.InitialTags), len(seed.InitialTags))
 	}
 
 	opts.ExcludeTools[0] = "changed"
-	opts.SeedTags[0] = "changed"
+	opts.InitialTags[0] = "changed"
 	if seed.ExcludeTools[0] != "resolve_anticipation" {
 		t.Fatalf("seed ExcludeTools mutated to %q", seed.ExcludeTools[0])
 	}
-	if seed.SeedTags[0] != "scheduler" {
-		t.Fatalf("seed SeedTags mutated to %q", seed.SeedTags[0])
+	if seed.InitialTags[0] != "scheduler" {
+		t.Fatalf("seed InitialTags mutated to %q", seed.InitialTags[0])
 	}
 }
 
@@ -228,7 +228,7 @@ func TestLoopProfileJSONRoundTrip(t *testing.T) {
 		DelegationGating: "disabled",
 		PreferSpeed:      "true",
 		ExcludeTools:     []string{"shell_exec", "web_fetch"},
-		SeedTags:         []string{"homeassistant", "security"},
+		InitialTags:      []string{"homeassistant", "security"},
 		ExtraHints:       map[string]string{"source": "frigate"},
 		Instructions:     "Analyse the camera event and decide if action is needed.",
 	}
@@ -272,12 +272,12 @@ func TestLoopProfileJSONRoundTrip(t *testing.T) {
 			t.Errorf("ExcludeTools[%d] = %q, want %q", i, restored.ExcludeTools[i], v)
 		}
 	}
-	if len(restored.SeedTags) != len(original.SeedTags) {
-		t.Fatalf("SeedTags len = %d, want %d", len(restored.SeedTags), len(original.SeedTags))
+	if len(restored.InitialTags) != len(original.InitialTags) {
+		t.Fatalf("InitialTags len = %d, want %d", len(restored.InitialTags), len(original.InitialTags))
 	}
-	for i, v := range original.SeedTags {
-		if restored.SeedTags[i] != v {
-			t.Errorf("SeedTags[%d] = %q, want %q", i, restored.SeedTags[i], v)
+	for i, v := range original.InitialTags {
+		if restored.InitialTags[i] != v {
+			t.Errorf("InitialTags[%d] = %q, want %q", i, restored.InitialTags[i], v)
 		}
 	}
 	if len(restored.ExtraHints) != len(original.ExtraHints) {

@@ -156,7 +156,7 @@ func ExampleConfig() *Config {
 						Mission:          "automation",
 						LocalOnly:        "false",
 						DelegationGating: "disabled",
-						SeedTags:         []string{"homeassistant"},
+						InitialTags:      []string{"homeassistant"},
 						Instructions:     "Evaluate the security event and decide if action is needed.",
 					},
 				},

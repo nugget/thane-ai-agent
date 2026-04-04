@@ -370,7 +370,7 @@ talents_dir: ./talents
 #       topic: homeassistant/+/+/state
 #       Wake, when non-nil, enables agent wake on this topic. Messages
 #       arriving on the topic trigger an agent conversation using the
-#       seed's routing configuration. When nil, messages are received
+#       profile's routing configuration. When nil, messages are received
 #       for ambient awareness only (debug-logged, not acted upon).
 #       wake:
 #         model: ""
@@ -380,7 +380,7 @@ talents_dir: ./talents
 #         delegation_gating: ""
 #         prefer_speed: ""
 #         exclude_tools: []
-#         seed_tags: []
+#         initial_tags: []
 #         extra_hints: {}
 #         instructions: ""
 #     - # Topic is the MQTT topic filter (e.g., "homeassistant/+/+/state",
@@ -388,7 +388,7 @@ talents_dir: ./talents
 #       topic: frigate/events
 #       Wake, when non-nil, enables agent wake on this topic. Messages
 #       arriving on the topic trigger an agent conversation using the
-#       seed's routing configuration. When nil, messages are received
+#       profile's routing configuration. When nil, messages are received
 #       for ambient awareness only (debug-logged, not acted upon).
 #       wake:
 #         model: ""
@@ -398,7 +398,7 @@ talents_dir: ./talents
 #         delegation_gating: ""
 #         prefer_speed: ""
 #         exclude_tools: []
-#         seed_tags: []
+#         initial_tags: []
 #         extra_hints: {}
 #         instructions: ""
 #     - # Topic is the MQTT topic filter (e.g., "homeassistant/+/+/state",
@@ -406,7 +406,7 @@ talents_dir: ./talents
 #       topic: automation/wake/security
 #       Wake, when non-nil, enables agent wake on this topic. Messages
 #       arriving on the topic trigger an agent conversation using the
-#       seed's routing configuration. When nil, messages are received
+#       profile's routing configuration. When nil, messages are received
 #       for ambient awareness only (debug-logged, not acted upon).
 #       wake:
 #         model: ""
@@ -416,7 +416,7 @@ talents_dir: ./talents
 #         delegation_gating: disabled
 #         prefer_speed: ""
 #         exclude_tools: []
-#         seed_tags:
+#         initial_tags:
 #           - homeassistant
 #         extra_hints: {}
 #         instructions: Evaluate the security event and decide if action is needed.

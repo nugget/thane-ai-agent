@@ -911,7 +911,7 @@ func compileLoopAgentRequest(req looppkg.Request) *agent.Request {
 		ExcludeTools:    append([]string(nil), req.ExcludeTools...),
 		SkipTagFilter:   req.SkipTagFilter,
 		Hints:           cloneStringMap(req.Hints),
-		SeedTags:        append([]string(nil), req.SeedTags...),
+		InitialTags:     append([]string(nil), req.InitialTags...),
 		MaxIterations:   req.MaxIterations,
 		MaxOutputTokens: req.MaxOutputTokens,
 		ToolTimeout:     req.ToolTimeout,

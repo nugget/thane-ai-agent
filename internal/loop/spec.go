@@ -218,7 +218,7 @@ func (s *Spec) profileRequest() Request {
 		Model:        opts.Model,
 		Hints:        opts.Hints,
 		ExcludeTools: opts.ExcludeTools,
-		SeedTags:     opts.SeedTags,
+		InitialTags:  opts.InitialTags,
 	}
 }
 

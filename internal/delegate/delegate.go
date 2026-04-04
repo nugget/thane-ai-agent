@@ -776,7 +776,7 @@ func (e *Executor) executeViaLoop(ctx context.Context, task, profileName, guidan
 				Hints:           hints,
 				AllowedTools:    append([]string(nil), prep.toolNames...),
 				SkipTagFilter:   len(prep.explicitTags) == 0,
-				SeedTags:        append([]string(nil), prep.effectiveTags...),
+				InitialTags:     append([]string(nil), prep.effectiveTags...),
 				SystemPrompt:    prep.systemPrompt,
 				MaxIterations:   prep.maxIterations,
 				MaxOutputTokens: prep.maxOutputTokens,

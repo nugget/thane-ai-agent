@@ -43,9 +43,9 @@ type LoopProfile struct {
 	// ExcludeTools lists tool names to filter out of the agent run.
 	ExcludeTools []string `yaml:"exclude_tools,omitempty" json:"exclude_tools,omitempty"`
 
-	// SeedTags lists capability tags to activate at the start of the
+	// InitialTags lists capability tags to activate at the start of the
 	// agent run.
-	SeedTags []string `yaml:"seed_tags,omitempty" json:"seed_tags,omitempty"`
+	InitialTags []string `yaml:"initial_tags,omitempty" json:"initial_tags,omitempty"`
 
 	// ExtraHints carries arbitrary key-value routing hints that are
 	// merged last, allowing callers to override or extend the typed
@@ -64,10 +64,10 @@ type RequestOptions struct {
 	Model        string
 	Hints        map[string]string
 	ExcludeTools []string
-	SeedTags     []string
+	InitialTags  []string
 }
 
-// Hints builds a routing hints map from the seed's typed fields.
+// Hints builds a routing hints map from the profile's typed fields.
 // Only non-empty fields are included. ExtraHints are merged last and
 // can override typed fields.
 func (s *LoopProfile) Hints() map[string]string {
@@ -118,7 +118,7 @@ var validDelegationGating = map[string]bool{
 	"disabled": true,
 }
 
-// Validate checks that the seed's typed fields contain semantically
+// Validate checks that the profile's typed fields contain semantically
 // valid values. It does not require any field to be set — an empty
 // LoopProfile is valid. Returns nil on success.
 func (s *LoopProfile) Validate() error {
@@ -174,7 +174,7 @@ func ValidateTopicFilter(filter string) error {
 	return nil
 }
 
-// RequestOptions returns the request-ready fields implied by the seed.
+// RequestOptions returns the request-ready fields implied by the profile.
 // Slices are copied so callers can mutate the result without affecting
 // the underlying LoopProfile.
 func (s *LoopProfile) RequestOptions() RequestOptions {
@@ -186,8 +186,8 @@ func (s *LoopProfile) RequestOptions() RequestOptions {
 	if len(s.ExcludeTools) > 0 {
 		opts.ExcludeTools = append([]string(nil), s.ExcludeTools...)
 	}
-	if len(s.SeedTags) > 0 {
-		opts.SeedTags = append([]string(nil), s.SeedTags...)
+	if len(s.InitialTags) > 0 {
+		opts.InitialTags = append([]string(nil), s.InitialTags...)
 	}
 
 	return opts

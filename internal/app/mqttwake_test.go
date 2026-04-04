@@ -318,14 +318,14 @@ func TestApplyLoopProfile(t *testing.T) {
 		LocalOnly:        "false",
 		DelegationGating: "disabled",
 		ExcludeTools:     []string{"shell_exec"},
-		SeedTags:         []string{"homeassistant"},
+		InitialTags:      []string{"homeassistant"},
 		ExtraHints:       map[string]string{"custom": "value"},
 	}
 
 	req := &agent.Request{
 		Hints:        map[string]string{"existing": "hint"},
 		ExcludeTools: []string{"files_read"},
-		SeedTags:     []string{"baseline"},
+		InitialTags:  []string{"baseline"},
 	}
 
 	applyLoopProfile(&seed, req)
@@ -348,8 +348,8 @@ func TestApplyLoopProfile(t *testing.T) {
 	if len(req.ExcludeTools) != 2 || req.ExcludeTools[0] != "files_read" || req.ExcludeTools[1] != "shell_exec" {
 		t.Errorf("ExcludeTools = %v, want [files_read shell_exec]", req.ExcludeTools)
 	}
-	if len(req.SeedTags) != 2 || req.SeedTags[0] != "baseline" || req.SeedTags[1] != "homeassistant" {
-		t.Errorf("SeedTags = %v, want [baseline homeassistant]", req.SeedTags)
+	if len(req.InitialTags) != 2 || req.InitialTags[0] != "baseline" || req.InitialTags[1] != "homeassistant" {
+		t.Errorf("InitialTags = %v, want [baseline homeassistant]", req.InitialTags)
 	}
 }
 

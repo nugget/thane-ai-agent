@@ -20,7 +20,7 @@ func TestCompileLoopAgentRequest(t *testing.T) {
 		ExcludeTools:    []string{"gamma"},
 		SkipTagFilter:   true,
 		Hints:           map[string]string{"mission": "automation"},
-		SeedTags:        []string{"monitoring"},
+		InitialTags:     []string{"monitoring"},
 		MaxIterations:   7,
 		MaxOutputTokens: 321,
 		ToolTimeout:     2 * time.Second,
@@ -58,7 +58,7 @@ func TestCompileLoopAgentRequest(t *testing.T) {
 	got.AllowedTools[0] = "changed"
 	got.ExcludeTools[0] = "changed"
 	got.Hints["mission"] = "changed"
-	got.SeedTags[0] = "changed"
+	got.InitialTags[0] = "changed"
 
 	if req.AllowedTools[0] != "alpha" {
 		t.Fatalf("AllowedTools mutated = %#v", req.AllowedTools)
@@ -69,7 +69,7 @@ func TestCompileLoopAgentRequest(t *testing.T) {
 	if req.Hints["mission"] != "automation" {
 		t.Fatalf("Hints mutated = %#v", req.Hints)
 	}
-	if req.SeedTags[0] != "monitoring" {
-		t.Fatalf("SeedTags mutated = %#v", req.SeedTags)
+	if req.InitialTags[0] != "monitoring" {
+		t.Fatalf("InitialTags mutated = %#v", req.InitialTags)
 	}
 }
