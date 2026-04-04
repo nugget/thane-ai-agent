@@ -187,6 +187,33 @@ func (l *Loop) maybeRetryExplicitModelAfterProviderContextError(
 	changed := false
 	retryModel := dep.ID
 	retryUpstreamModel := strings.TrimSpace(dep.LoadedInstanceID)
+	refreshResolvedModel := func() error {
+		result, refreshErr := l.modelRuntime.Refresh(ctx)
+		if refreshErr != nil {
+			return refreshErr
+		}
+		if result != nil && result.Changed {
+			changed = true
+			if l.router != nil && l.modelRegistry != nil {
+				l.router.UpdateConfig(l.modelRegistry.Catalog().RouterConfig(0))
+			}
+		}
+		refreshedCat := l.currentModelCatalog()
+		if refreshedCat == nil {
+			return nil
+		}
+		refreshedDep, resolveErr := refreshedCat.ResolveDeploymentRef(model)
+		if resolveErr != nil {
+			return resolveErr
+		}
+		dep = refreshedDep
+		retryModel = dep.ID
+		retryUpstreamModel = strings.TrimSpace(dep.LoadedInstanceID)
+		return nil
+	}
+	if refreshErr := refreshResolvedModel(); refreshErr != nil {
+		return nil, "", refreshErr, true
+	}
 	if dep.MaxContextWindow > dep.LoadedContextWindow && dep.MaxContextWindow > 0 {
 		prep, prepErr := l.modelRuntime.PrepareExplicitModel(ctx, dep.ID, dep.MaxContextWindow)
 		if prepErr != nil {
@@ -200,9 +227,9 @@ func (l *Loop) maybeRetryExplicitModelAfterProviderContextError(
 			if strings.TrimSpace(prep.Instance) != "" {
 				retryUpstreamModel = strings.TrimSpace(prep.Instance)
 			}
-		}
-		if changed && l.router != nil && l.modelRegistry != nil {
-			l.router.UpdateConfig(l.modelRegistry.Catalog().RouterConfig(0))
+			if changed && l.router != nil && l.modelRegistry != nil {
+				l.router.UpdateConfig(l.modelRegistry.Catalog().RouterConfig(0))
+			}
 		}
 	}
 

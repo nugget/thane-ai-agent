@@ -217,7 +217,13 @@ func CanExpandLoadedContext(dep Deployment, contextSize int) bool {
 	if contextSize <= 0 {
 		return false
 	}
-	if dep.LoadedContextWindow <= 0 || dep.MaxContextWindow <= dep.LoadedContextWindow {
+	if dep.MaxContextWindow <= 0 {
+		return false
+	}
+	if dep.LoadedContextWindow <= 0 {
+		return contextSize <= dep.MaxContextWindow
+	}
+	if dep.MaxContextWindow <= dep.LoadedContextWindow {
 		return false
 	}
 	if contextSize <= dep.LoadedContextWindow {
