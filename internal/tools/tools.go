@@ -17,6 +17,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/contacts"
 	"github.com/nugget/thane-ai-agent/internal/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/knowledge"
+	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
 	"github.com/nugget/thane-ai-agent/internal/media"
 	"github.com/nugget/thane-ai-agent/internal/models"
 	"github.com/nugget/thane-ai-agent/internal/notifications"
@@ -68,6 +69,9 @@ type Registry struct {
 	deletePersistedModelRegistryPolicy         func(string) error
 	persistModelRegistryResourcePolicy         func(string, models.ResourcePolicy) error
 	deletePersistedModelRegistryResourcePolicy func(string) error
+	loopDefinitionRegistry                     *looppkg.DefinitionRegistry
+	persistLoopDefinition                      func(looppkg.Spec, time.Time) error
+	deletePersistedLoopDefinition              func(string) error
 
 	contentResolver *ContentResolver
 }

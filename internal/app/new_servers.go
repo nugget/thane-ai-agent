@@ -50,6 +50,8 @@ func (a *App) initServers(s *newState) error {
 	)
 	server.SetMemoryStore(a.mem)
 	server.SetArchiveStore(a.archiveStore)
+	server.UseLoopDefinitionRegistry(a.loopDefinitionRegistry)
+	server.ConfigureLoopDefinitionPersistence(a.persistLoopDefinition, a.deletePersistedLoopDefinition)
 	server.SetEventBus(a.eventBus)
 	server.SetConnManager(func() map[string]api.DependencyStatus {
 		status := a.connMgr.Status()

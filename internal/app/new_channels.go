@@ -402,6 +402,11 @@ func (a *App) initChannels(s *newState) error {
 		PersistResourcePolicy:   a.persistModelRegistryResourcePolicy,
 		DeleteResourcePolicy:    a.deletePersistedModelRegistryResourcePolicy,
 	})
+	a.loop.Tools().ConfigureLoopDefinitionTools(tools.LoopDefinitionToolDeps{
+		Registry:    a.loopDefinitionRegistry,
+		PersistSpec: a.persistLoopDefinition,
+		DeleteSpec:  a.deletePersistedLoopDefinition,
+	})
 
 	// --- Log index query ---
 	// Expose the structured log index so the agent can query its own

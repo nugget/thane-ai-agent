@@ -96,3 +96,17 @@ func (s *loopDefinitionStore) LoadInto(registry *looppkg.DefinitionRegistry, log
 	}
 	return registry.ReplaceOverlay(records)
 }
+
+func (a *App) persistLoopDefinition(spec looppkg.Spec, updatedAt time.Time) error {
+	if a == nil || a.loopDefinitionStore == nil {
+		return nil
+	}
+	return a.loopDefinitionStore.Save(spec, updatedAt)
+}
+
+func (a *App) deletePersistedLoopDefinition(name string) error {
+	if a == nil || a.loopDefinitionStore == nil {
+		return nil
+	}
+	return a.loopDefinitionStore.Delete(name)
+}

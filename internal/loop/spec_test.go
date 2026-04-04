@@ -2,6 +2,7 @@ package loop
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -136,5 +137,46 @@ func TestSpecValidatePersistableRejectsRuntimeHooks(t *testing.T) {
 	err := spec.ValidatePersistable()
 	if err == nil || !strings.Contains(err.Error(), "cannot set TaskBuilder") {
 		t.Fatalf("ValidatePersistable() error = %v, want TaskBuilder rejection", err)
+	}
+}
+
+func TestSpecJSONRoundTripUsesHumanFacingFields(t *testing.T) {
+	spec := Spec{
+		Name:       "room_monitor",
+		Task:       "Watch the office.",
+		Operation:  OperationService,
+		Completion: CompletionConversation,
+		Profile: router.LoopProfile{
+			Mission:      "background",
+			InitialTags:  []string{"homeassistant"},
+			Instructions: "Be concise.",
+		},
+		SleepMin:     5 * time.Minute,
+		SleepMax:     30 * time.Minute,
+		SleepDefault: 10 * time.Minute,
+		MaxDuration:  time.Hour,
+		OnRetrigger:  RetriggerRestart,
+	}
+
+	data, err := json.Marshal(spec)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+	gotJSON := string(data)
+	for _, want := range []string{`"sleep_min":"5m0s"`, `"sleep_max":"30m0s"`, `"max_duration":"1h0m0s"`, `"on_retrigger":"restart"`} {
+		if !strings.Contains(gotJSON, want) {
+			t.Fatalf("json = %s, want substring %s", gotJSON, want)
+		}
+	}
+
+	var roundTrip Spec
+	if err := json.Unmarshal(data, &roundTrip); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+	if roundTrip.SleepMin != 5*time.Minute || roundTrip.SleepMax != 30*time.Minute || roundTrip.MaxDuration != time.Hour {
+		t.Fatalf("roundTrip durations = min %v max %v maxDuration %v", roundTrip.SleepMin, roundTrip.SleepMax, roundTrip.MaxDuration)
+	}
+	if roundTrip.OnRetrigger != RetriggerRestart {
+		t.Fatalf("OnRetrigger = %v, want restart", roundTrip.OnRetrigger)
 	}
 }

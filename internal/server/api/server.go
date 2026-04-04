@@ -19,6 +19,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/config"
 	"github.com/nugget/thane-ai-agent/internal/events"
 	"github.com/nugget/thane-ai-agent/internal/logging"
+	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
 	"github.com/nugget/thane-ai-agent/internal/memory"
 	"github.com/nugget/thane-ai-agent/internal/models"
 	"github.com/nugget/thane-ai-agent/internal/router"
@@ -76,11 +77,14 @@ type Server struct {
 	webServer                          WebServerRegistrar
 	platformHandler                    http.Handler
 	modelRegistry                      *models.Registry
+	loopDefinitionRegistry             *looppkg.DefinitionRegistry
 	usageStore                         *usage.Store
 	persistModelRegistryPolicy         func(string, models.DeploymentPolicy) error
 	deleteModelRegistryPolicy          func(string) error
 	persistModelRegistryResourcePolicy func(string, models.ResourcePolicy) error
 	deleteModelRegistryResourcePolicy  func(string) error
+	persistLoopDefinition              func(looppkg.Spec, time.Time) error
+	deleteLoopDefinition               func(string) error
 	logger                             *slog.Logger
 	server                             *http.Server
 	stats                              *SessionStats
@@ -118,6 +122,22 @@ func (s *Server) SetWebServer(ws WebServerRegistrar) {
 // provider connections.
 func (s *Server) SetPlatformHandler(h http.Handler) {
 	s.platformHandler = h
+}
+
+// UseLoopDefinitionRegistry configures the persistent loops-ng definition
+// registry exposed by the API.
+func (s *Server) UseLoopDefinitionRegistry(reg *looppkg.DefinitionRegistry) {
+	s.loopDefinitionRegistry = reg
+}
+
+// ConfigureLoopDefinitionPersistence configures persistence callbacks for
+// dynamic loop-definition overlay mutations.
+func (s *Server) ConfigureLoopDefinitionPersistence(
+	save func(looppkg.Spec, time.Time) error,
+	remove func(string) error,
+) {
+	s.persistLoopDefinition = save
+	s.deleteLoopDefinition = remove
 }
 
 // DashboardSnapshot returns a copy of the current session stats
@@ -363,6 +383,12 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("DELETE /v1/model-registry/policy", s.handleModelRegistryPolicyDelete)
 	mux.HandleFunc("POST /v1/model-registry/resource-policy", s.handleModelRegistryResourcePolicySet)
 	mux.HandleFunc("DELETE /v1/model-registry/resource-policy", s.handleModelRegistryResourcePolicyDelete)
+
+	// Loop definition registry endpoints
+	mux.HandleFunc("GET /v1/loop-definitions", s.handleLoopDefinitions)
+	mux.HandleFunc("GET /v1/loop-definitions/{name}", s.handleLoopDefinitionGet)
+	mux.HandleFunc("POST /v1/loop-definitions", s.handleLoopDefinitionSet)
+	mux.HandleFunc("DELETE /v1/loop-definitions/{name}", s.handleLoopDefinitionDelete)
 
 	// Checkpoint endpoints
 	mux.HandleFunc("POST /v1/checkpoint", s.handleCheckpointCreate)

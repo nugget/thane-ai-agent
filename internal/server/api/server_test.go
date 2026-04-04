@@ -14,6 +14,7 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/config"
 	"github.com/nugget/thane-ai-agent/internal/database"
+	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
 	"github.com/nugget/thane-ai-agent/internal/models"
 	"github.com/nugget/thane-ai-agent/internal/router"
 	"github.com/nugget/thane-ai-agent/internal/usage"
@@ -77,6 +78,26 @@ func testAPIModelRegistry(t *testing.T) *models.Registry {
 	registry, err := models.NewRegistry(base)
 	if err != nil {
 		t.Fatalf("models.NewRegistry: %v", err)
+	}
+	return registry
+}
+
+func testAPILoopDefinitionRegistry(t *testing.T) *looppkg.DefinitionRegistry {
+	t.Helper()
+
+	registry, err := looppkg.NewDefinitionRegistry([]looppkg.Spec{
+		{
+			Name:       "metacog_like",
+			Task:       "Observe and reflect.",
+			Operation:  looppkg.OperationService,
+			Completion: looppkg.CompletionNone,
+			Profile: router.LoopProfile{
+				Mission: "background",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewDefinitionRegistry: %v", err)
 	}
 	return registry
 }
@@ -717,5 +738,103 @@ func TestHandleModelRegistryResourcePolicySet_PersistenceFailure(t *testing.T) {
 	}
 	if res.snapshot.PolicySource != models.DeploymentPolicySourceDefault {
 		t.Fatalf("PolicySource = %q, want %q after persistence failure", res.snapshot.PolicySource, models.DeploymentPolicySourceDefault)
+	}
+}
+
+func TestHandleLoopDefinitions(t *testing.T) {
+	registry := testAPILoopDefinitionRegistry(t)
+	server := NewServer("", 0, nil, nil, nil, nil, nil, nil, nil, nil, nil, testAPILogger())
+	server.UseLoopDefinitionRegistry(registry)
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/loop-definitions", nil)
+	rec := httptest.NewRecorder()
+	server.handleLoopDefinitions(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+
+	var snap looppkg.DefinitionRegistrySnapshot
+	if err := json.NewDecoder(rec.Body).Decode(&snap); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(snap.Definitions) != 1 {
+		t.Fatalf("definitions len = %d, want 1", len(snap.Definitions))
+	}
+	if snap.Definitions[0].Name != "metacog_like" {
+		t.Fatalf("definition name = %q, want metacog_like", snap.Definitions[0].Name)
+	}
+}
+
+func TestHandleLoopDefinitionSetAndDelete(t *testing.T) {
+	registry := testAPILoopDefinitionRegistry(t)
+	var savedSpec looppkg.Spec
+	var savedAt time.Time
+	var deleted string
+	server := NewServer("", 0, nil, nil, nil, nil, nil, nil, nil, nil, nil, testAPILogger())
+	server.UseLoopDefinitionRegistry(registry)
+	server.ConfigureLoopDefinitionPersistence(
+		func(spec looppkg.Spec, updatedAt time.Time) error {
+			savedSpec = spec
+			savedAt = updatedAt
+			return nil
+		},
+		func(name string) error {
+			deleted = name
+			return nil
+		},
+	)
+
+	body := bytes.NewBufferString(`{"spec":{"name":"room_monitor","task":"Watch the office.","operation":"service","completion":"conversation","profile":{"mission":"background"},"sleep_min":"5m","sleep_max":"30m","sleep_default":"10m"}}`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/loop-definitions", body)
+	rec := httptest.NewRecorder()
+	server.handleLoopDefinitionSet(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("set status = %d, want 200", rec.Code)
+	}
+	if savedSpec.Name != "room_monitor" {
+		t.Fatalf("savedSpec.Name = %q, want room_monitor", savedSpec.Name)
+	}
+	if savedAt.IsZero() {
+		t.Fatal("savedAt = zero, want populated timestamp")
+	}
+
+	var setResp loopDefinitionResponse
+	if err := json.NewDecoder(rec.Body).Decode(&setResp); err != nil {
+		t.Fatalf("decode set response: %v", err)
+	}
+	if setResp.Definition.Source != looppkg.DefinitionSourceOverlay {
+		t.Fatalf("source = %q, want overlay", setResp.Definition.Source)
+	}
+	if setResp.Definition.Spec.SleepMin != 5*time.Minute {
+		t.Fatalf("sleep_min = %v, want 5m", setResp.Definition.Spec.SleepMin)
+	}
+
+	deleteReq := httptest.NewRequest(http.MethodDelete, "/v1/loop-definitions/room_monitor", nil)
+	deleteReq.SetPathValue("name", "room_monitor")
+	deleteRec := httptest.NewRecorder()
+	server.handleLoopDefinitionDelete(deleteRec, deleteReq)
+
+	if deleteRec.Code != http.StatusOK {
+		t.Fatalf("delete status = %d, want 200", deleteRec.Code)
+	}
+	if deleted != "room_monitor" {
+		t.Fatalf("deleted = %q, want room_monitor", deleted)
+	}
+}
+
+func TestHandleLoopDefinitionSet_ConfigDefinitionConflict(t *testing.T) {
+	registry := testAPILoopDefinitionRegistry(t)
+	server := NewServer("", 0, nil, nil, nil, nil, nil, nil, nil, nil, nil, testAPILogger())
+	server.UseLoopDefinitionRegistry(registry)
+
+	body := bytes.NewBufferString(`{"spec":{"name":"metacog_like","task":"Override config.","operation":"service"}}`)
+	req := httptest.NewRequest(http.MethodPost, "/v1/loop-definitions", body)
+	rec := httptest.NewRecorder()
+	server.handleLoopDefinitionSet(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409", rec.Code)
 	}
 }

@@ -273,6 +273,7 @@ func cloneSpec(s Spec) Spec {
 	clone := s
 	clone.Tags = append([]string(nil), s.Tags...)
 	clone.ExcludeTools = append([]string(nil), s.ExcludeTools...)
+	clone.Jitter = cloneFloat64Ptr(s.Jitter)
 	clone.Hints = cloneStringMap(s.Hints)
 	clone.Metadata = cloneStringMap(s.Metadata)
 	clone.Profile = s.Profile
