@@ -24,6 +24,14 @@ import (
 
 const modelInventoryRefreshInterval = 5 * time.Minute
 
+func modelResourceRefreshCallbacks(ctx context.Context, resourceID string, refresh func(context.Context, string)) (func(), func(error)) {
+	return func() {
+			refresh(ctx, "resource_ready:"+resourceID)
+		}, func(error) {
+			refresh(ctx, "resource_down:"+resourceID)
+		}
+}
+
 // initStores creates data stores, background infrastructure, and the
 // model router. Most components are passive — their goroutines are
 // started later via deferred workers — but connwatch watchers start
@@ -215,14 +223,14 @@ func (a *App) initStores(s *newState) error {
 		if len(a.resourceHealthClients) > 1 || res.ID != "default" {
 			watchName = res.Provider + ":" + res.ID
 		}
+		onReady, onDown := modelResourceRefreshCallbacks(s.ctx, res.ID, refreshModelRuntime)
 		resourceWatcher := connMgr.Watch(s.ctx, connwatch.WatcherConfig{
 			Name:    watchName,
 			Probe:   c.Ping,
 			Backoff: connwatch.DefaultBackoffConfig(),
-			OnReady: func() {
-				refreshModelRuntime(s.ctx, "resource_ready:"+res.ID)
-			},
-			Logger: logger.With("resource", res.ID, "provider", res.Provider),
+			OnReady: onReady,
+			OnDown:  onDown,
+			Logger:  logger.With("resource", res.ID, "provider", res.Provider),
 		})
 		c.AttachWatcher(resourceWatcher)
 	}
