@@ -1178,6 +1178,7 @@ let connectionWasDegraded = false;
 let lastDetailSelectionKey = null;
 let detailInteractionHoldUntil = 0;
 let detailPointerSelectionActive = false;
+let detailInstantLayoutUntil = 0;
 
 function clampValue(value, min, max) {
   return Math.max(min, Math.min(max, value));
@@ -1399,8 +1400,8 @@ function applySchemaCardPreset(card, mode) {
   const entityKind = card.dataset.entityKind || '';
   const cardKey = card.dataset.cardKey || '';
   setSchemaCardLayout(entityKind, cardKey, { mode, height: 0 });
-  bumpDetailInteractionHold(450);
-  renderDetail({ force: true });
+  detailInstantLayoutUntil = Date.now() + 250;
+  renderDetail({ force: true, instantLayout: true });
 }
 
 function bumpDetailInteractionHold(ms = 1200) {
@@ -1435,6 +1436,23 @@ function currentDetailSelectionKey() {
   return null;
 }
 
+function captureOpenDetailKeys() {
+  const keys = new Set();
+  for (const el of detailEntity.querySelectorAll('details[data-detail-key][open]')) {
+    const key = el.dataset.detailKey;
+    if (key) keys.add(key);
+  }
+  return keys;
+}
+
+function restoreOpenDetailKeys(keys) {
+  if (!keys || keys.size === 0) return;
+  for (const key of keys) {
+    const el = detailEntity.querySelector(`details[data-detail-key="${CSS.escape(key)}"]`);
+    if (el) el.open = true;
+  }
+}
+
 function withPreservedDetailScroll(renderFn, opts = {}) {
   const selectionKey = currentDetailSelectionKey();
   if (!opts.force && detailPanel && selectionKey !== null && selectionKey === lastDetailSelectionKey && shouldDeferDetailRender()) {
@@ -1443,8 +1461,15 @@ function withPreservedDetailScroll(renderFn, opts = {}) {
 
   const preserve = !!detailPanel && selectionKey !== null && selectionKey === lastDetailSelectionKey;
   const previousTop = preserve ? detailPanel.scrollTop : 0;
+  const openDetailKeys = preserve ? captureOpenDetailKeys() : new Set();
+
+  if (detailPanel) {
+    const instant = !!opts.instantLayout || Date.now() < detailInstantLayoutUntil;
+    detailPanel.classList.toggle('detail-panel--instant', instant);
+  }
 
   renderFn();
+  restoreOpenDetailKeys(openDetailKeys);
   syncAllSchemaCardLayouts();
 
   if (detailPanel) {
@@ -1456,6 +1481,9 @@ function withPreservedDetailScroll(renderFn, opts = {}) {
     } else {
       detailPanel.scrollTop = 0;
     }
+    requestAnimationFrame(() => {
+      detailPanel.classList.remove('detail-panel--instant');
+    });
   }
 
   lastDetailSelectionKey = selectionKey;
@@ -2711,6 +2739,7 @@ function makeConversationFact(label, value) {
 function makeConversationSummaryEntry(summary, opts = {}) {
   const details = document.createElement('details');
   details.className = 'conversation-summary' + (opts.current ? ' conversation-summary--current' : '');
+  details.dataset.detailKey = 'conversation:' + summary.id;
 
   const summaryEl = document.createElement('summary');
   summaryEl.className = 'conversation-summary__summary';

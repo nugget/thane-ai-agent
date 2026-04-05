@@ -589,6 +589,13 @@ body.resize-col .schema-card__fade {
   transition: none !important;
 }
 
+.detail-panel--instant .schema-card--resizable,
+.detail-panel--instant .schema-card__body-shell,
+.detail-panel--instant .schema-card__body,
+.detail-panel--instant .schema-card__fade {
+  transition: none !important;
+}
+
 .schema-card--resizable.schema-card--clipped .schema-card__fade {
   opacity: 1;
 }
