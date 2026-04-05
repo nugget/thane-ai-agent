@@ -94,7 +94,7 @@ func (s *Spec) UnmarshalJSON(data []byte) error {
 	}
 	onRetrigger, err := ParseRetriggerMode(wire.OnRetrigger)
 	if err != nil {
-		return err
+		return fmt.Errorf("loop: on_retrigger: %w", err)
 	}
 	*s = Spec{
 		Name:                   wire.Name,

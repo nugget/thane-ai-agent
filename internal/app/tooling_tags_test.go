@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"slices"
 	"testing"
 
 	"github.com/nugget/thane-ai-agent/internal/config"
@@ -70,4 +71,37 @@ func TestResolveCapabilityTags_ConfigOverridesReplaceToolsAndDescription(t *test
 	if len(resolved["review"].Tools) != 2 {
 		t.Fatalf("review tools = %#v", resolved["review"].Tools)
 	}
+}
+
+func TestResolveCapabilityTags_SortsBaselineTools(t *testing.T) {
+	reg := tools.NewEmptyRegistry()
+	reg.Register(&tools.Tool{
+		Name:        "web_search",
+		Description: "Search the web",
+		Handler: func(ctx context.Context, args map[string]any) (string, error) {
+			return "", nil
+		},
+	})
+	reg.Register(&tools.Tool{
+		Name:        "web_fetch",
+		Description: "Fetch a page",
+		Handler: func(ctx context.Context, args map[string]any) (string, error) {
+			return "", nil
+		},
+	})
+
+	got := resolvedToolNames(resolveCapabilityTags(reg, nil), "web")
+	want := append([]string(nil), got...)
+	slices.Sort(want)
+	if !slices.Equal(got, want) {
+		t.Fatalf("web tools = %#v, want sorted %#v", got, want)
+	}
+}
+
+func resolvedToolNames(resolved map[string]config.CapabilityTagConfig, tag string) []string {
+	spec, ok := resolved[tag]
+	if !ok {
+		return nil
+	}
+	return spec.Tools
 }

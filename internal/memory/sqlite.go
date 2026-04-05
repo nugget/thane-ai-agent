@@ -393,11 +393,12 @@ func (s *SQLiteStore) PutConversationMetadata(conversationID string, metadata *C
 	if err != nil {
 		return fmt.Errorf("marshal conversation metadata: %w", err)
 	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
 	_, err = s.db.Exec(`
 		UPDATE conversations
 		SET metadata = ?, updated_at = ?
 		WHERE id = ?
-	`, raw, time.Now(), conversationID)
+	`, raw, now, conversationID)
 	if err != nil {
 		return fmt.Errorf("update conversation metadata: %w", err)
 	}

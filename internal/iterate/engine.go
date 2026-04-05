@@ -195,6 +195,14 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 				llmResp.Message.Content = ""
 			}
 
+			if cfg.NormalizeToolCall != nil {
+				normalizedToolCalls := make([]llm.ToolCall, 0, len(llmResp.Message.ToolCalls))
+				for _, rawTC := range llmResp.Message.ToolCalls {
+					normalizedToolCalls = append(normalizedToolCalls, cfg.NormalizeToolCall(iterCtx, i, rawTC))
+				}
+				llmResp.Message.ToolCalls = normalizedToolCalls
+			}
+
 			// Add assistant message with tool calls.
 			messages = append(messages, llmResp.Message)
 
@@ -202,11 +210,7 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 			var batchHasNonMetaTool bool
 			var toolLoopDetected bool
 
-			for _, rawTC := range llmResp.Message.ToolCalls {
-				tc := rawTC
-				if cfg.NormalizeToolCall != nil {
-					tc = cfg.NormalizeToolCall(iterCtx, i, tc)
-				}
+			for _, tc := range llmResp.Message.ToolCalls {
 				toolName := tc.Function.Name
 
 				// Marshal arguments to JSON.

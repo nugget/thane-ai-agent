@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/nugget/thane-ai-agent/internal/config"
+	modelproviders "github.com/nugget/thane-ai-agent/internal/models/providers"
 	"github.com/nugget/thane-ai-agent/internal/router"
 	"gopkg.in/yaml.v3"
 )
@@ -442,6 +443,38 @@ func TestMergeInventory_UpdatesConfiguredDeploymentWithObservedRuntime(t *testin
 	}
 	if dep.ContextWindow != 131072 {
 		t.Fatalf("dep.ContextWindow = %d, want effective observed context window", dep.ContextWindow)
+	}
+	if dep.LoadedContextWindow != 8192 {
+		t.Fatalf("dep.LoadedContextWindow = %d, want 8192", dep.LoadedContextWindow)
+	}
+	if dep.LoadedInstanceID != "gpt-oss-20b-live" {
+		t.Fatalf("dep.LoadedInstanceID = %q, want %q", dep.LoadedInstanceID, "gpt-oss-20b-live")
+	}
+}
+
+func TestMergeDiscoveredDeployment_PreservesExistingRuntimeMetadataOnZeroValues(t *testing.T) {
+	dep := &Deployment{
+		ObservedContextWindow: 131072,
+		MaxContextWindow:      131072,
+		LoadedContextWindow:   8192,
+		LoadedInstanceID:      "gpt-oss-20b-live",
+	}
+
+	mergeDiscoveredDeployment(dep, DiscoveredModel{
+		Name:                "gpt-oss:20b",
+		SupportsTools:       true,
+		SupportsStreaming:   true,
+		ContextWindow:       0,
+		MaxContextWindow:    0,
+		LoadedContextWindow: 0,
+		LoadedInstanceID:    "",
+	}, modelproviders.Capabilities{})
+
+	if dep.ObservedContextWindow != 131072 {
+		t.Fatalf("dep.ObservedContextWindow = %d, want 131072", dep.ObservedContextWindow)
+	}
+	if dep.MaxContextWindow != 131072 {
+		t.Fatalf("dep.MaxContextWindow = %d, want 131072", dep.MaxContextWindow)
 	}
 	if dep.LoadedContextWindow != 8192 {
 		t.Fatalf("dep.LoadedContextWindow = %d, want 8192", dep.LoadedContextWindow)

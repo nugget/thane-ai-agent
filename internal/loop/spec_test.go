@@ -209,3 +209,14 @@ func TestSpecJSONRoundTripUsesHumanFacingFields(t *testing.T) {
 		t.Fatalf("Conditions = %+v, want America/Chicago schedule", roundTrip.Conditions)
 	}
 }
+
+func TestSpecJSONInvalidOnRetriggerNamesField(t *testing.T) {
+	var spec Spec
+	err := json.Unmarshal([]byte(`{"name":"bad","task":"watch","on_retrigger":"bogus"}`), &spec)
+	if err == nil {
+		t.Fatal("expected error for invalid on_retrigger")
+	}
+	if !strings.Contains(err.Error(), "on_retrigger") {
+		t.Fatalf("error = %v, want on_retrigger context", err)
+	}
+}

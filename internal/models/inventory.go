@@ -275,10 +275,18 @@ func mergeDiscoveredDeployment(dep *Deployment, model DiscoveredModel, caps mode
 	}
 	dep.ObservedSupportsTools = observedBoolCapability(model.SupportsTools, caps.SupportsTools)
 	dep.ObservedSupportsStreaming = observedBoolCapability(model.SupportsStreaming, caps.SupportsStreaming)
-	dep.ObservedContextWindow = model.ContextWindow
-	dep.MaxContextWindow = model.MaxContextWindow
-	dep.LoadedContextWindow = model.LoadedContextWindow
-	dep.LoadedInstanceID = model.LoadedInstanceID
+	if model.ContextWindow > 0 {
+		dep.ObservedContextWindow = model.ContextWindow
+	}
+	if model.MaxContextWindow > 0 {
+		dep.MaxContextWindow = model.MaxContextWindow
+	}
+	if model.LoadedContextWindow > 0 {
+		dep.LoadedContextWindow = model.LoadedContextWindow
+	}
+	if model.LoadedInstanceID != "" {
+		dep.LoadedInstanceID = model.LoadedInstanceID
+	}
 	dep.SupportsImages = model.SupportsImages
 	if model.TrainedForToolUse {
 		dep.TrainedForToolUse = true

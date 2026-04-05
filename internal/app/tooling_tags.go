@@ -15,9 +15,11 @@ func resolveCapabilityTags(reg *tools.Registry, overrides map[string]config.Capa
 	builtinTags := toolcatalog.BuiltinTagSpecs()
 	for tag, toolNames := range reg.MetadataTagIndex() {
 		spec := builtinTags[tag]
+		sortedToolNames := append([]string(nil), toolNames...)
+		sort.Strings(sortedToolNames)
 		resolved[tag] = config.CapabilityTagConfig{
 			Description:  firstNonEmpty(strings.TrimSpace(spec.Description), generatedTagDescription(tag)),
-			Tools:        append([]string(nil), toolNames...),
+			Tools:        sortedToolNames,
 			AlwaysActive: spec.AlwaysActive,
 		}
 	}
