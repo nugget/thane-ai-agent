@@ -2836,12 +2836,14 @@ function renderSystemDetail() {
 }
 
 function updateSystemUptime() {
+  const uptimeEl = detailEntity.querySelector('[data-live-system-uptime]');
+  if (!uptimeEl) return;
   if (systemStartTime === null) {
-    $('#system-uptime').textContent = state.system ? (state.system.uptime || '-') : '-';
+    uptimeEl.textContent = state.system ? (state.system.uptime || '-') : '-';
     return;
   }
   const ms = Date.now() - systemStartTime;
-  $('#system-uptime').textContent = formatUptimeLong(ms);
+  uptimeEl.textContent = formatUptimeLong(ms);
 }
 
 // ---------------------------------------------------------------------------
@@ -3022,8 +3024,15 @@ function appendSchemaRow(body, label, value, opts = {}) {
   } else {
     valueEl.appendChild(value);
   }
+  if (opts.valueAttrs) {
+    for (const [name, attrValue] of Object.entries(opts.valueAttrs)) {
+      if (attrValue === null || attrValue === undefined) continue;
+      valueEl.setAttribute(name, String(attrValue));
+    }
+  }
   row.appendChild(valueEl);
   body.appendChild(row);
+  return { row, valueEl };
 }
 
 function makeSchemaIDList(ids, opts = {}) {
@@ -3325,7 +3334,9 @@ function renderSystemEntityDetail(sys) {
   });
   appendSchemaRow(identity.body, 'anchor kind', entity.kind);
   appendSchemaRow(identity.body, 'status', formatSchemaToken(entity.state));
-  appendSchemaRow(identity.body, 'uptime', entity.uptime);
+  appendSchemaRow(identity.body, 'uptime', entity.uptime, {
+    valueAttrs: { 'data-live-system-uptime': 'true' },
+  });
   appendSchemaRow(identity.body, 'version', entity.version);
   if (entity.commit) {
     appendSchemaRow(identity.body, 'commit', makeSchemaIDList([entity.commit], { maxVisible: 1 }));
