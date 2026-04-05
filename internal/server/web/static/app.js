@@ -53,6 +53,9 @@ const physics = {
   rootRadialBalanceStrength: 0.06,
   siblingAngularBalanceStrength: 0.18,
   siblingRadialBalanceStrength: 0.07,
+  rootOrbitProjection: 0.18,
+  siblingOrbitProjection: 0.2,
+  orbitProjectionVelocityDamping: 0.72,
   crossBranchRepulsionMultiplier: 1.45,
   sameBranchRepulsionMultiplier: 0.9,
   edgeNodeRepulsion:  0.2,
@@ -350,6 +353,27 @@ function applyRadialEquilibrium(entries, centerForEntry, targetRadiusForEntry, s
     const force = radiusError * strength;
     nd.fx += radialX * force;
     nd.fy += radialY * force;
+  }
+}
+
+function projectOrbitFamily(entries, centerForEntry, targetForEntry, positionBlend, velocityDamping) {
+  if (!entries || entries.length === 0 || positionBlend <= 0) return;
+
+  for (const entry of entries) {
+    const nd = physics.nodes.get(entry.id);
+    if (!nd || nd.pinned) continue;
+    const center = centerForEntry(entry);
+    const target = targetForEntry(entry);
+    if (!center || !target) continue;
+
+    const targetX = center.x + Math.cos(target.angle) * target.radius;
+    const targetY = center.y + Math.sin(target.angle) * target.radius;
+    const prevX = nd.x;
+    const prevY = nd.y;
+    nd.x += (targetX - nd.x) * positionBlend;
+    nd.y += (targetY - nd.y) * positionBlend;
+    nd.vx = (nd.vx + (nd.x - prevX)) * velocityDamping;
+    nd.vy = (nd.vy + (nd.y - prevY)) * velocityDamping;
   }
 }
 
@@ -773,6 +797,40 @@ function physicsStep(cx, cy, vw, vh) {
       nd.y = maxY;
       nd.vy *= 0.5;
     }
+  }
+
+  // 7. Family orbit projection — after the global force soup settles,
+  // nudge each sibling family back toward an explicit equalized orbit
+  // around its parent. This keeps the hierarchy readable without
+  // special-casing tier 1: roots are just the children of core.
+  projectOrbitFamily(
+    Array.from(topLevelTargets.keys()).map(id => ({ id })),
+    () => ({ x: cx, y: cy }),
+    entry => topLevelTargets.get(entry.id) || null,
+    P.rootOrbitProjection,
+    P.orbitProjectionVelocityDamping,
+  );
+
+  for (const [parentID, siblings] of siblingIndex) {
+    const parent = P.nodes.get(parentID);
+    if (!parent || siblings.length === 0) continue;
+    projectOrbitFamily(
+      siblings.map(loop => ({ id: loop.id })),
+      () => ({ x: parent.x, y: parent.y }),
+      entry => {
+        const target = siblingTargets.get(entry.id);
+        if (!target) return null;
+        const loop = state.loops.get(entry.id);
+        const parentLoop = state.loops.get(parentID);
+        const spacingMultiplier = getPairSpacingMultiplier(parentLoop, loop);
+        return {
+          angle: target.angle,
+          radius: P.childRestLength * spacingMultiplier * (1 + target.ring * 0.48),
+        };
+      },
+      P.siblingOrbitProjection,
+      P.orbitProjectionVelocityDamping,
+    );
   }
 }
 
