@@ -200,6 +200,83 @@ func TestRunResponseSurfacesEffectiveToolsAndLoadedCapabilities(t *testing.T) {
 	}
 }
 
+func TestCapabilityActivation_DoesNotBleedActiveStateAcrossConversations(t *testing.T) {
+	mock := &mockLLM{
+		responses: []*llm.ChatResponse{
+			{
+				Model: "test-model",
+				Message: llm.Message{
+					Role: "assistant",
+					ToolCalls: []llm.ToolCall{{
+						ID: "call-req-cap",
+						Function: struct {
+							Name      string         `json:"name"`
+							Arguments map[string]any `json:"arguments"`
+						}{
+							Name:      "activate_capability",
+							Arguments: map[string]any{"tag": "forge"},
+						},
+					}},
+				},
+				InputTokens:  100,
+				OutputTokens: 10,
+			},
+			{
+				Model:        "test-model",
+				Message:      llm.Message{Role: "assistant", Content: "Forge ready."},
+				InputTokens:  120,
+				OutputTokens: 10,
+			},
+			{
+				Model:        "test-model",
+				Message:      llm.Message{Role: "assistant", Content: "Fresh conversation."},
+				InputTokens:  100,
+				OutputTokens: 10,
+			},
+		},
+	}
+
+	capTags := map[string]config.CapabilityTagConfig{
+		"forge": {
+			Description: "Forge tools",
+			Tools:       []string{"forge_tool"},
+		},
+	}
+
+	loop := setupCapabilityLoop(mock, []string{"forge_tool"}, capTags)
+	loop.UseCapabilitySurface(tools.BuildCapabilityManifest(
+		map[string][]string{"forge": {"forge_tool"}},
+		map[string]string{"forge": "Forge tools"},
+		nil,
+	))
+	loop.SetCapabilityTagStore(newTestCapStore(t))
+
+	resp1, err := loop.Run(context.Background(), &Request{
+		ConversationID: "conv-1",
+		Messages:       []Message{{Role: "user", Content: "activate forge"}},
+	}, nil)
+	if err != nil {
+		t.Fatalf("Run conv-1 error: %v", err)
+	}
+	if !slices.Equal(resp1.ActiveTags, []string{"forge"}) {
+		t.Fatalf("conv-1 ActiveTags = %#v, want [forge]", resp1.ActiveTags)
+	}
+
+	resp2, err := loop.Run(context.Background(), &Request{
+		ConversationID: "conv-2",
+		Messages:       []Message{{Role: "user", Content: "what can you do here?"}},
+	}, nil)
+	if err != nil {
+		t.Fatalf("Run conv-2 error: %v", err)
+	}
+	if len(resp2.ActiveTags) != 0 {
+		t.Fatalf("conv-2 ActiveTags = %#v, want none", resp2.ActiveTags)
+	}
+	if len(resp2.LoadedCapabilities) != 0 {
+		t.Fatalf("conv-2 LoadedCapabilities = %#v, want none", resp2.LoadedCapabilities)
+	}
+}
+
 // TestIllegalStrikes_NotResetByMetaTool verifies that the illegal strike
 // counter is not reset by capability meta-tools (activate_capability,
 // deactivate_capability), preventing infinite activate→blocked→activate loops.

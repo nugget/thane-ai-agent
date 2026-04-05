@@ -16,11 +16,10 @@ const detachedCompletionTimeout = 10 * time.Second
 // running. It enforces concurrency limits and coordinates graceful
 // shutdown.
 type Registry struct {
-	mu                    sync.RWMutex
-	loops                 map[string]*Loop
-	maxLoops              int
-	logger                *slog.Logger
-	defaultActiveTagsFunc func() []string
+	mu       sync.RWMutex
+	loops    map[string]*Loop
+	maxLoops int
+	logger   *slog.Logger
 }
 
 // RegistryOption configures a Registry.
@@ -54,17 +53,6 @@ func NewRegistry(opts ...RegistryOption) *Registry {
 		opt(r)
 	}
 	return r
-}
-
-// SetDefaultActiveTagsFunc configures a callback that is automatically
-// applied (via [Loop.SetActiveTagsFunc]) to every loop created through
-// [Registry.SpawnLoop]. This lets the wiring layer provide a single
-// source of truth for active capability tags without threading the
-// callback through every package that spawns loops.
-func (r *Registry) SetDefaultActiveTagsFunc(fn func() []string) {
-	r.mu.Lock()
-	r.defaultActiveTagsFunc = fn
-	r.mu.Unlock()
 }
 
 // Register adds a loop to the registry. Returns an error if the loop's
@@ -214,16 +202,6 @@ func (r *Registry) ShutdownAll(ctx context.Context) int {
 }
 
 func (r *Registry) configureLoop(l *Loop, setup func(*Loop)) {
-	// Apply the default active tags callback so every loop can
-	// surface active capabilities on the dashboard. The callback
-	// returns nil when no tags are configured, which is safe.
-	r.mu.RLock()
-	atFunc := r.defaultActiveTagsFunc
-	r.mu.RUnlock()
-	if atFunc != nil {
-		l.SetActiveTagsFunc(atFunc)
-	}
-
 	// Call Setup before Register/Start so the caller can register
 	// tools or perform other initialization that needs *Loop.
 	if setup != nil {
