@@ -337,17 +337,42 @@ function updateNodePositions() {
 // Graph Visual Grammar: Category, State, and Capacity
 // ---------------------------------------------------------------------------
 
+const CATEGORY_LABELS = {
+  metacognitive: 'metacognitive',
+  channel: 'channel',
+  delegate: 'delegate',
+  scheduled: 'scheduled',
+  generic: 'generic',
+};
+
 // Derive a visual category from loop data. Drives fill tone and sigil.
-function getLoopCategory(loop) {
+function getLoopCategoryInfo(loop) {
   const hints = loop.config && loop.config.Hints;
-  if (hints && hints.source === 'metacognitive') return 'metacognitive';
+  if (hints && hints.source === 'metacognitive') {
+    return { category: 'metacognitive', source: 'hint source=metacognitive' };
+  }
   const meta = loop.config && loop.config.Metadata;
-  if (meta && meta.category) return meta.category;
-  if (loop.parent_id) return 'delegate';
+  if (meta && meta.category) {
+    return {
+      category: normalizeVisualCategory(meta.category),
+      source: 'metadata.category=' + meta.category,
+    };
+  }
+  if (loop.parent_id) {
+    return { category: 'delegate', source: 'parent_id relationship' };
+  }
   const name = (loop.name || '').toLowerCase();
-  if (/signal|email|mqtt|slack|irc/.test(name)) return 'channel';
-  if (/sched|cron|timer/.test(name)) return 'scheduled';
-  return 'generic';
+  if (/signal|email|mqtt|slack|irc/.test(name)) {
+    return { category: 'channel', source: 'name heuristic' };
+  }
+  if (/sched|cron|timer/.test(name)) {
+    return { category: 'scheduled', source: 'name heuristic' };
+  }
+  return { category: 'generic', source: 'default fallback' };
+}
+
+function getLoopCategory(loop) {
+  return getLoopCategoryInfo(loop).category;
 }
 
 // Category → compact center sigil. The graph uses circles throughout, so
@@ -568,16 +593,143 @@ function positionNodeRimBadge(badge, nodeR) {
   badge.setAttribute('transform', `translate(${x.toFixed(1)} ${y.toFixed(1)})`);
 }
 
+function formatSchemaToken(value) {
+  if (!value) return '';
+  return String(value).replace(/_/g, ' ');
+}
+
+function getLoopLatestSnapshot(loop) {
+  const history = state.iterationHistory.get(loop.id);
+  if (history && history.length > 0) return history[0];
+  return loop.recent_iterations && loop.recent_iterations.length > 0
+    ? loop.recent_iterations[0]
+    : null;
+}
+
+function describeLoopExecutionMode(loop) {
+  if (loop.handler_only) return 'handler';
+  if (loop.event_driven) return 'event-driven llm';
+  return 'timer-driven llm';
+}
+
+function buildLoopEntity(loop) {
+  const categoryInfo = getLoopCategoryInfo(loop);
+  const latest = getLoopLatestSnapshot(loop);
+  const hints = (loop.config && loop.config.Hints) || {};
+  const metadata = (loop.config && loop.config.Metadata) || {};
+  const configTags = ((loop.config && loop.config.Tags) || []).slice().sort();
+  const activeTags = ((loop.active_tags || [])).slice().sort();
+  const allTags = Array.from(new Set([...configTags, ...activeTags])).sort();
+  const latestModel = loop._liveModel || loop._lastModel || (latest && latest.model) || '';
+  const latestRequestID = (latest && latest.request_id) || '';
+  const currentConvID = loop._currentConvID || '';
+  const recentConvIDs = Array.isArray(loop.recent_conv_ids) ? loop.recent_conv_ids : [];
+  const trustZone = metadata.trust_zone || '';
+  const subsystem = metadata.subsystem || '';
+
+  return {
+    kind: 'loop_run',
+    title: loop.name || loop.id,
+    state: loop.state || 'pending',
+    stateLabel: loop._supervisor && loop.state === 'processing' ? 'supervisor' : (loop.state || 'pending'),
+    category: categoryInfo.category,
+    categoryLabel: CATEGORY_LABELS[categoryInfo.category] || categoryInfo.category,
+    categorySource: categoryInfo.source,
+    executionMode: describeLoopExecutionMode(loop),
+    relation: loop.parent_id ? 'child' : 'root',
+    loopID: loop.id,
+    parentID: loop.parent_id || '',
+    currentConvID,
+    recentConvIDs,
+    latestRequestID,
+    latestSnapshot: latest,
+    latestModel,
+    startedAt: loop.started_at || '',
+    lastWakeAt: loop.last_wake_at || '',
+    iterations: loop.iterations || 0,
+    attempts: loop.attempts || 0,
+    lastInputTokens: loop.last_input_tokens || 0,
+    lastOutputTokens: loop.last_output_tokens || 0,
+    totalInputTokens: loop.total_input_tokens || 0,
+    totalOutputTokens: loop.total_output_tokens || 0,
+    contextWindow: getLoopContextWindow(loop),
+    lastError: loop.last_error || '',
+    consecutiveErrors: loop.consecutive_errors || 0,
+    handlerOnly: !!loop.handler_only,
+    eventDriven: !!loop.event_driven,
+    hints,
+    metadata,
+    subsystem,
+    trustZone,
+    configTags,
+    activeTags,
+    allTags,
+  };
+}
+
+function buildSystemEntity(sys) {
+  const health = (sys && sys.health) || {};
+  const serviceKeys = Object.keys(health);
+  const readyCount = serviceKeys.filter((key) => health[key] && health[key].ready).length;
+  const registry = (sys && sys.model_registry) || {};
+  const routerStats = (sys && sys.router_stats) || {};
+  const resources = Array.isArray(registry.resources) ? registry.resources : [];
+  const deployments = Array.isArray(registry.deployments) ? registry.deployments : [];
+  const version = (sys && sys.version) || {};
+  const rootLoops = Array.from(state.loops.values()).filter((loop) => !loop.parent_id).length;
+  const childLoops = Math.max(0, state.loops.size - rootLoops);
+  const routingMode = registry.local_first ? 'local-first' : 'policy';
+  return {
+    kind: 'runtime_anchor',
+    title: 'Runtime',
+    state: sys.status || 'unknown',
+    uptime: sys.uptime || '',
+    version: version.version || '',
+    commit: version.git_commit || '',
+    goVersion: version.go_version || '',
+    arch: version.os && version.arch ? `${version.os}/${version.arch}` : '',
+    serviceCount: serviceKeys.length,
+    readyCount,
+    liveLoopCount: state.loops.size,
+    rootLoopCount: rootLoops,
+    childLoopCount: childLoops,
+    totalRequests: Number(routerStats.total_requests || 0),
+    routingMode,
+    defaultModel: registry.default_model || '',
+    registryGeneration: Number(registry.generation || 0),
+    resourceCount: resources.length,
+    deploymentCount: deployments.length,
+    routerStats,
+    registry,
+    health,
+  };
+}
+
 function buildLoopNodeTitle(loop, capacity) {
-  const parts = [loop.name || loop.id];
-  parts.push('State: ' + (loop.state || 'pending'));
+  const entity = buildLoopEntity(loop);
+  const parts = [entity.title];
+  parts.push('Kind: ' + entity.kind);
+  parts.push('State: ' + formatSchemaToken(entity.stateLabel));
+  parts.push('Visual: ' + entity.categoryLabel + ' (' + entity.categorySource + ')');
+  parts.push('Execution: ' + entity.executionMode);
+  if (entity.parentID) {
+    parts.push('Parent: ' + entity.parentID);
+  } else {
+    parts.push('Anchor: runtime');
+  }
+  if (entity.currentConvID) {
+    parts.push('Conversation: ' + entity.currentConvID);
+  }
+  if (entity.trustZone) {
+    parts.push('Trust: ' + entity.trustZone);
+  }
   if (capacity.basis === 'context' && capacity.contextWindow > 0) {
     parts.push('Context: ' + formatNumber(capacity.contextWindow));
   } else if (capacity.basis === 'model') {
     parts.push('Capacity: est. ' + capacity.label);
   }
-  if (loop._lastModel) {
-    parts.push('Model: ' + loop._lastModel);
+  if (entity.latestModel) {
+    parts.push('Model: ' + entity.latestModel);
   }
   return parts.join('\n');
 }
@@ -592,6 +744,7 @@ const canvasWorld = $('#canvas-world');
 const connBadge = $('#conn-status');
 const detailPlaceholder = $('#detail-placeholder');
 const detailContent = $('#detail-content');
+const detailEntity = $('#detail-entity');
 const emptyState = $('#empty-state');
 const logEmpty = $('#log-empty');
 const logScroll = $('#log-scroll');
@@ -1154,14 +1307,7 @@ function renderNode(loop) {
     group.addEventListener('click', () => selectLoop(loop.id));
     group.addEventListener('contextmenu', (e) => {
       e.preventDefault();
-      const items = [];
-      // Synthetic delegate nodes have no backend endpoint — skip detail popup.
-      if (!loop.id.startsWith('delegate-')) {
-        items.push({ label: 'Open in window', action: () => openDetailWindow('loop', loop.id) });
-        items.push({ separator: true });
-      }
-      items.push({ label: 'Copy loop ID', action: () => navigator.clipboard.writeText(loop.id) });
-      showContextMenu(e.clientX, e.clientY, items);
+      showContextMenu(e.clientX, e.clientY, buildLoopContextMenu(loop));
     });
 
     // Inner group for enter/exit scale animation (children drawn at origin).
@@ -1443,13 +1589,11 @@ function renderSystemNode() {
     group.addEventListener('click', () => selectSystem());
     group.addEventListener('contextmenu', (e) => {
       e.preventDefault();
-      showContextMenu(e.clientX, e.clientY, [
-        { label: 'Open in window', action: () => openDetailWindow('system') },
-      ]);
+      showContextMenu(e.clientX, e.clientY, buildSystemContextMenu(sys));
     });
 
     const title = createSVG('title', {});
-    title.textContent = 'Runtime';
+    title.textContent = buildSystemNodeTitle(sys);
     group.appendChild(title);
 
     // Glow/selection ring (same as loop nodes).
@@ -1487,6 +1631,8 @@ function renderSystemNode() {
     ? 'system-rect system-rect--healthy'
     : 'system-rect system-rect--degraded';
   rect.setAttribute('class', cls);
+  const title = group.querySelector('title');
+  if (title) title.textContent = buildSystemNodeTitle(sys);
 
   // Selection highlight (uses node-ring halo, same as loop nodes).
   if (state.selected === '__system__') {
@@ -1499,19 +1645,7 @@ function renderSystemNode() {
 function renderSystemDetail() {
   const sys = state.system;
   if (!sys) return;
-
-  renderSystemInspector(sys, {
-    badge: $('#system-status'),
-    overview: $('#system-overview'),
-    services: $('#system-services'),
-    registryMeta: $('#system-registry-meta'),
-    registrySummary: $('#system-registry-summary'),
-    registryResources: $('#system-registry-resources'),
-    registryDeployments: $('#system-registry-deployments'),
-  });
-
-  // Uptime is ticked live in tick(); overwrite the seeded value.
-  updateSystemUptime();
+  renderSystemEntityDetail(sys);
 }
 
 function updateSystemUptime() {
@@ -1527,7 +1661,400 @@ function updateSystemUptime() {
 // Rendering — Detail Panel
 // ---------------------------------------------------------------------------
 
-const systemDetail = $('#system-detail');
+function makeSchemaCard(title, meta) {
+  const card = document.createElement('section');
+  card.className = 'detail-card schema-card';
+
+  const header = document.createElement('div');
+  header.className = 'schema-card__header';
+
+  const titleEl = document.createElement('h3');
+  titleEl.className = 'schema-card__title';
+  titleEl.textContent = title;
+  header.appendChild(titleEl);
+
+  if (meta) {
+    const metaEl = document.createElement('span');
+    metaEl.className = 'schema-card__meta';
+    metaEl.textContent = meta;
+    header.appendChild(metaEl);
+  }
+
+  card.appendChild(header);
+
+  const body = document.createElement('div');
+  body.className = 'schema-card__body';
+  card.appendChild(body);
+  return { card, body, header };
+}
+
+function appendSchemaRow(body, label, value, opts = {}) {
+  if (value === null || value === undefined || value === '') return;
+  const row = document.createElement('div');
+  row.className = 'schema-row' + (opts.multiline ? ' schema-row--multiline' : '');
+
+  const labelEl = document.createElement('div');
+  labelEl.className = 'schema-row__label';
+  labelEl.textContent = label;
+  row.appendChild(labelEl);
+
+  const valueEl = document.createElement('div');
+  valueEl.className = 'schema-row__value';
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    valueEl.textContent = String(value);
+  } else {
+    valueEl.appendChild(value);
+  }
+  row.appendChild(valueEl);
+  body.appendChild(row);
+}
+
+function makeSchemaIDList(ids, opts = {}) {
+  const wrap = document.createElement('div');
+  wrap.className = 'schema-chip-list';
+  const visible = ids.slice(0, opts.maxVisible || ids.length);
+  for (const id of visible) {
+    wrap.appendChild(opts.request ? makeRequestChip(id) : makeIDChip(id));
+  }
+  if ((opts.maxVisible || ids.length) < ids.length) {
+    const more = document.createElement('span');
+    more.className = 'id-chip id-chip--muted';
+    more.textContent = '+' + (ids.length - (opts.maxVisible || ids.length));
+    wrap.appendChild(more);
+  }
+  return wrap;
+}
+
+function makeSchemaChipList(values, className = 'tag-chip') {
+  const wrap = document.createElement('div');
+  wrap.className = 'schema-chip-list';
+  for (const value of values) {
+    const chip = document.createElement('span');
+    chip.className = className;
+    chip.textContent = value;
+    wrap.appendChild(chip);
+  }
+  return wrap;
+}
+
+function makeRequestChip(requestID) {
+  const chip = document.createElement('span');
+  chip.className = 'id-chip' + (typeof window.onRequestChipClick === 'function' ? ' schema-request-chip' : '');
+  chip.title = (typeof window.onRequestChipClick === 'function'
+    ? 'Click to inspect request · Shift+click to copy\n'
+    : 'Click to copy request ID\n') + requestID;
+
+  const txt = document.createElement('span');
+  txt.className = 'id-chip-text';
+  txt.textContent = 'req:' + shortID(requestID);
+  chip.appendChild(txt);
+
+  chip.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (!e.shiftKey && typeof window.onRequestChipClick === 'function') {
+      window.onRequestChipClick(requestID);
+      return;
+    }
+    navigator.clipboard.writeText(requestID).then(() => {
+      chip.classList.add('id-chip--copied');
+      setTimeout(() => chip.classList.remove('id-chip--copied'), 1200);
+    });
+  });
+  return chip;
+}
+
+function objectEntriesExcluding(obj, excludedKeys) {
+  const excluded = new Set(excludedKeys || []);
+  return Object.entries(obj || {}).filter(([key, value]) => !excluded.has(key) && value !== '');
+}
+
+function renderSystemEntityDetail(sys) {
+  const entity = buildSystemEntity(sys);
+  detailEntity.innerHTML = '';
+
+  const hero = document.createElement('section');
+  hero.className = 'detail-card schema-card schema-card--hero';
+  hero.innerHTML = `
+    <div class="schema-hero">
+      <div class="schema-hero__copy">
+        <div class="schema-kind">${entity.kind}</div>
+        <h2 class="detail-name">${escapeHTML(entity.title)}</h2>
+        <div class="schema-subtitle">
+          Root anchor for <strong>${formatNumber(entity.liveLoopCount)} live loops</strong>
+          across ${formatNumber(entity.serviceCount)} runtime services
+        </div>
+      </div>
+      <div class="schema-badge-list">
+        <span class="state-badge state-badge--${escapeHTML(entity.state === 'healthy' ? 'sleeping' : 'error')}">${escapeHTML(formatSchemaToken(entity.state))}</span>
+        <span class="schema-badge">${escapeHTML(entity.routingMode)}</span>
+        <span class="schema-badge">${escapeHTML(`${entity.readyCount}/${entity.serviceCount} ready`)}</span>
+      </div>
+    </div>
+  `;
+  detailEntity.appendChild(hero);
+
+  const identity = makeSchemaCard('Identity', 'runtime snapshot and build metadata');
+  appendSchemaRow(identity.body, 'anchor kind', entity.kind);
+  appendSchemaRow(identity.body, 'status', formatSchemaToken(entity.state));
+  appendSchemaRow(identity.body, 'uptime', entity.uptime);
+  appendSchemaRow(identity.body, 'version', entity.version);
+  if (entity.commit) {
+    appendSchemaRow(identity.body, 'commit', makeSchemaIDList([entity.commit], { maxVisible: 1 }));
+  }
+  appendSchemaRow(identity.body, 'go', entity.goVersion);
+  appendSchemaRow(identity.body, 'arch', entity.arch);
+  detailEntity.appendChild(identity.card);
+
+  const topology = makeSchemaCard('Topology', 'how the runtime is currently shaped');
+  appendSchemaRow(topology.body, 'live loops', formatNumber(entity.liveLoopCount));
+  appendSchemaRow(topology.body, 'root loops', formatNumber(entity.rootLoopCount));
+  appendSchemaRow(topology.body, 'child loops', formatNumber(entity.childLoopCount));
+  appendSchemaRow(topology.body, 'services ready', `${formatNumber(entity.readyCount)} / ${formatNumber(entity.serviceCount)}`);
+  appendSchemaRow(topology.body, 'router requests', formatNumber(entity.totalRequests));
+  appendSchemaRow(topology.body, 'routing mode', entity.routingMode);
+  appendSchemaRow(topology.body, 'default model', entity.defaultModel);
+  appendSchemaRow(topology.body, 'registry generation', formatNumber(entity.registryGeneration));
+  appendSchemaRow(topology.body, 'model resources', formatNumber(entity.resourceCount));
+  appendSchemaRow(topology.body, 'deployments', formatNumber(entity.deploymentCount));
+  detailEntity.appendChild(topology.card);
+
+  const services = makeSchemaCard('Services', 'runtime health and readiness');
+  const servicesEl = document.createElement('div');
+  servicesEl.className = 'system-services';
+  renderSystemServices(servicesEl, entity.health);
+  services.body.appendChild(servicesEl);
+  detailEntity.appendChild(services.card);
+
+  const registryCard = makeSchemaCard('Model Registry');
+  const registryMeta = document.createElement('span');
+  registryMeta.className = 'schema-card__meta';
+  registryCard.header.appendChild(registryMeta);
+
+  const registrySummary = document.createElement('div');
+  registrySummary.className = 'system-summary-grid';
+  registryCard.body.appendChild(registrySummary);
+
+  const resourcesWrap = document.createElement('div');
+  resourcesWrap.className = 'schema-subsection';
+  resourcesWrap.innerHTML = '<h4 class="schema-subsection__title">Resources</h4>';
+  const registryResources = document.createElement('div');
+  registryResources.className = 'system-list';
+  resourcesWrap.appendChild(registryResources);
+  registryCard.body.appendChild(resourcesWrap);
+
+  const deploymentsWrap = document.createElement('div');
+  deploymentsWrap.className = 'schema-subsection';
+  deploymentsWrap.innerHTML = '<h4 class="schema-subsection__title">Deployments</h4>';
+  const registryDeployments = document.createElement('div');
+  registryDeployments.className = 'system-list';
+  deploymentsWrap.appendChild(registryDeployments);
+  registryCard.body.appendChild(deploymentsWrap);
+
+  renderModelRegistry(
+    registrySummary,
+    registryResources,
+    registryDeployments,
+    registryMeta,
+    entity.registry,
+    entity.routerStats,
+  );
+  detailEntity.appendChild(registryCard.card);
+
+  updateSystemUptime();
+}
+
+function renderLoopEntityDetail(loop) {
+  const entity = buildLoopEntity(loop);
+  detailEntity.innerHTML = '';
+
+  const hero = document.createElement('section');
+  hero.className = 'detail-card schema-card schema-card--hero';
+  hero.innerHTML = `
+    <div class="schema-hero">
+      <div class="schema-hero__copy">
+        <div class="schema-kind">${entity.kind}</div>
+        <h2 class="detail-name">${escapeHTML(entity.title)}</h2>
+        <div class="schema-subtitle">
+          Visual category <strong>${escapeHTML(entity.categoryLabel)}</strong>
+          via ${escapeHTML(entity.categorySource)}
+        </div>
+      </div>
+      <div class="schema-badge-list">
+        <span class="state-badge state-badge--${escapeHTML(entity.stateLabel === 'supervisor' ? 'supervisor' : entity.state)}">${escapeHTML(formatSchemaToken(entity.stateLabel))}</span>
+        <span class="schema-badge">${escapeHTML(entity.executionMode)}</span>
+        <span class="schema-badge">${escapeHTML(entity.relation)}</span>
+      </div>
+    </div>
+  `;
+  detailEntity.appendChild(hero);
+
+  const identity = makeSchemaCard('Identity', 'what this node is');
+  appendSchemaRow(identity.body, 'loop_id', makeIDChip(entity.loopID));
+  appendSchemaRow(identity.body, 'entity kind', entity.kind);
+  appendSchemaRow(identity.body, 'execution mode', entity.executionMode);
+  appendSchemaRow(identity.body, 'visual category', entity.categoryLabel);
+  appendSchemaRow(identity.body, 'classification source', entity.categorySource);
+  if (entity.subsystem) appendSchemaRow(identity.body, 'subsystem', entity.subsystem);
+  detailEntity.appendChild(identity.card);
+
+  const relationships = makeSchemaCard('Relationships', 'how this run is connected');
+  if (entity.parentID) {
+    appendSchemaRow(relationships.body, 'parent loop', makeIDChip(entity.parentID));
+  } else {
+    appendSchemaRow(relationships.body, 'root anchor', 'runtime');
+  }
+  if (entity.currentConvID) {
+    appendSchemaRow(relationships.body, 'current conversation', makeSchemaIDList([entity.currentConvID]));
+  }
+  if (entity.recentConvIDs.length > 0) {
+    appendSchemaRow(relationships.body, 'recent conversations', makeSchemaIDList(entity.recentConvIDs, { maxVisible: 5 }));
+  }
+  if (entity.latestRequestID) {
+    appendSchemaRow(relationships.body, 'latest request', makeSchemaIDList([entity.latestRequestID], { request: true }));
+  }
+  detailEntity.appendChild(relationships.card);
+
+  const runtime = makeSchemaCard('Runtime', 'current execution state');
+  appendSchemaRow(runtime.body, 'state', formatSchemaToken(entity.stateLabel));
+  appendSchemaRow(runtime.body, 'started', entity.startedAt ? timeAgo(new Date(entity.startedAt)) : '');
+  appendSchemaRow(runtime.body, 'last wake', entity.lastWakeAt ? timeAgo(new Date(entity.lastWakeAt)) : '');
+  appendSchemaRow(runtime.body, 'iterations', formatNumber(entity.iterations));
+  appendSchemaRow(runtime.body, 'attempts', formatNumber(entity.attempts));
+  appendSchemaRow(runtime.body, 'consecutive errors', entity.consecutiveErrors ? formatNumber(entity.consecutiveErrors) : '');
+  appendSchemaRow(runtime.body, 'latest model', entity.latestModel);
+  appendSchemaRow(runtime.body, 'context window', entity.contextWindow ? formatNumber(entity.contextWindow) : '');
+  appendSchemaRow(runtime.body, 'last io', entity.lastInputTokens || entity.lastOutputTokens ? `${formatTokens(entity.lastInputTokens)} in · ${formatTokens(entity.lastOutputTokens)} out` : '');
+  appendSchemaRow(runtime.body, 'total io', entity.totalInputTokens || entity.totalOutputTokens ? `${formatTokens(entity.totalInputTokens)} in · ${formatTokens(entity.totalOutputTokens)} out` : '');
+  if (entity.lastError) {
+    const err = document.createElement('div');
+    err.className = 'system-item__error';
+    err.textContent = entity.lastError;
+    appendSchemaRow(runtime.body, 'last error', err, { multiline: true });
+  }
+  detailEntity.appendChild(runtime.card);
+
+  const profile = makeSchemaCard('Profile', 'hints, metadata, and capability context');
+  if (entity.hints.mission) appendSchemaRow(profile.body, 'mission', entity.hints.mission);
+  if (entity.hints.source) appendSchemaRow(profile.body, 'source hint', entity.hints.source);
+  if (entity.hints.delegation_gating) appendSchemaRow(profile.body, 'delegation gating', entity.hints.delegation_gating);
+  if (entity.trustZone) appendSchemaRow(profile.body, 'trust zone', entity.trustZone);
+
+  const extraHints = objectEntriesExcluding(entity.hints, ['mission', 'source', 'delegation_gating']);
+  if (extraHints.length > 0) {
+    const wrap = document.createElement('div');
+    wrap.className = 'schema-map';
+    for (const [key, value] of extraHints) {
+      const item = document.createElement('span');
+      item.className = 'schema-map__item';
+      item.textContent = key + '=' + value;
+      wrap.appendChild(item);
+    }
+    appendSchemaRow(profile.body, 'extra hints', wrap, { multiline: true });
+  }
+
+  const extraMetadata = objectEntriesExcluding(entity.metadata, ['category', 'subsystem', 'trust_zone', 'delegate_task', 'delegate_guidance', 'delegate_profile']);
+  if (extraMetadata.length > 0) {
+    const wrap = document.createElement('div');
+    wrap.className = 'schema-map';
+    for (const [key, value] of extraMetadata) {
+      const item = document.createElement('span');
+      item.className = 'schema-map__item';
+      item.textContent = key + '=' + value;
+      wrap.appendChild(item);
+    }
+    appendSchemaRow(profile.body, 'metadata', wrap, { multiline: true });
+  }
+
+  if (entity.configTags.length > 0) {
+    appendSchemaRow(profile.body, 'configured tags', makeSchemaChipList(entity.configTags, 'tag-chip tag-chip--muted'));
+  }
+  if (entity.activeTags.length > 0) {
+    appendSchemaRow(profile.body, 'active tags', makeSchemaChipList(entity.activeTags, 'tag-chip tag-chip--active'));
+  }
+
+  const delegateTask = entity.metadata.delegate_task || '';
+  const delegateGuidance = entity.metadata.delegate_guidance || '';
+  const delegateProfile = entity.metadata.delegate_profile || '';
+  if (delegateTask || delegateGuidance || delegateProfile) {
+    if (delegateProfile) appendSchemaRow(profile.body, 'delegate profile', delegateProfile);
+    if (delegateTask) appendSchemaRow(profile.body, 'delegate task', delegateTask, { multiline: true });
+    if (delegateGuidance) appendSchemaRow(profile.body, 'delegate guidance', delegateGuidance, { multiline: true });
+  }
+  detailEntity.appendChild(profile.card);
+
+  const activity = makeSchemaCard('Activity', 'recent loop execution');
+  const aggregates = document.createElement('div');
+  aggregates.className = 'detail-aggregates';
+  renderAggregates(loop, aggregates);
+  activity.body.appendChild(aggregates);
+
+  const timeline = document.createElement('div');
+  timeline.className = 'iter-timeline';
+  renderTimeline(loop, timeline, state.iterationHistory.get(loop.id) || [], loop.id, state.sleepTimers);
+  activity.body.appendChild(timeline);
+  detailEntity.appendChild(activity.card);
+}
+
+function buildLoopContextMenu(loop) {
+  const entity = buildLoopEntity(loop);
+  const items = [
+    { label: 'kind: ' + entity.kind, disabled: true },
+    { label: 'visual: ' + entity.categoryLabel + ' · ' + entity.categorySource, disabled: true },
+    { label: 'relation: ' + entity.relation + (entity.parentID ? ' · parent ' + shortID(entity.parentID) : ' · anchored to runtime'), disabled: true },
+    entity.currentConvID ? { label: 'conversation: ' + shortID(entity.currentConvID), disabled: true } : null,
+    entity.trustZone ? { label: 'trust: ' + entity.trustZone, disabled: true } : null,
+    { separator: true },
+  ].filter(Boolean);
+  if (!loop.id.startsWith('delegate-')) {
+    items.push({ label: 'Open in window', action: () => openDetailWindow('loop', loop.id) });
+  }
+  if (entity.parentID && state.loops.has(entity.parentID)) {
+    items.push({ label: 'Select parent loop', action: () => selectLoop(entity.parentID) });
+  } else if (!entity.parentID && state.system) {
+    items.push({ label: 'Select runtime anchor', action: () => selectSystem() });
+  }
+  if (entity.latestRequestID && typeof window.onRequestChipClick === 'function') {
+    items.push({ label: 'Open latest request', action: () => showRequestDetail(entity.latestRequestID) });
+  }
+  items.push({ separator: true });
+  items.push({ label: 'Copy loop ID', action: () => navigator.clipboard.writeText(entity.loopID) });
+  if (entity.parentID) {
+    items.push({ label: 'Copy parent loop ID', action: () => navigator.clipboard.writeText(entity.parentID) });
+  }
+  if (entity.currentConvID) {
+    items.push({ label: 'Copy current conversation ID', action: () => navigator.clipboard.writeText(entity.currentConvID) });
+  }
+  if (entity.latestRequestID) {
+    items.push({ label: 'Copy latest request ID', action: () => navigator.clipboard.writeText(entity.latestRequestID) });
+  }
+  return items;
+}
+
+function buildSystemNodeTitle(sys) {
+  const entity = buildSystemEntity(sys || state.system || {});
+  return [
+    entity.title,
+    'Kind: ' + entity.kind,
+    'Status: ' + formatSchemaToken(entity.state),
+    'Topology: ' + formatNumber(entity.liveLoopCount) + ' loops · ' + formatNumber(entity.rootLoopCount) + ' roots',
+    'Services: ' + entity.readyCount + '/' + entity.serviceCount + ' ready',
+    'Routing: ' + entity.routingMode + (entity.defaultModel ? ' (' + entity.defaultModel + ')' : ''),
+  ].join('\n');
+}
+
+function buildSystemContextMenu(sys) {
+  const entity = buildSystemEntity(sys || state.system || {});
+  return [
+    { label: 'kind: ' + entity.kind, disabled: true },
+    { label: 'status: ' + formatSchemaToken(entity.state), disabled: true },
+    { label: 'topology: ' + formatNumber(entity.liveLoopCount) + ' loops · ' + formatNumber(entity.rootLoopCount) + ' roots', disabled: true },
+    { label: 'services: ' + entity.readyCount + '/' + entity.serviceCount + ' ready', disabled: true },
+    { label: 'routing: ' + entity.routingMode + (entity.defaultModel ? ' · ' + entity.defaultModel : ''), disabled: true },
+    { separator: true },
+    { label: 'Open in window', action: () => openDetailWindow('system') },
+    { label: 'Inspect runtime', action: () => selectSystem() },
+  ];
+}
 
 function renderDetail() {
   const isSystem = state.selected === '__system__';
@@ -1535,13 +2062,10 @@ function renderDetail() {
 
   if (isSystem && state.system) {
     detailPlaceholder.hidden = true;
-    detailContent.hidden = true;
-    systemDetail.hidden = false;
+    detailContent.hidden = false;
     renderSystemDetail();
     return;
   }
-
-  systemDetail.hidden = true;
 
   if (!isLoop) {
     detailPlaceholder.hidden = false;
@@ -1553,220 +2077,10 @@ function renderDetail() {
   detailContent.hidden = false;
 
   const loop = state.loops.get(state.selected);
-
-  $('#detail-name').textContent = loop.name || loop.id;
-
-  const badge = $('#detail-state');
-  const isSup = loop._supervisor && loop.state === 'processing';
-  badge.textContent = isSup ? 'supervisor' : (loop.state || 'unknown');
-  badge.className = 'state-badge state-badge--' + (isSup ? 'supervisor' : (loop.state || 'pending'));
-
-  // IDs section.
-  renderDetailIDs(loop);
-
-  // Delegate detail (task, profile, guidance, tags).
-  renderDelegateDetail(loop);
-
-  // Aggregate stats bar.
-  renderAggregates(loop, $('#detail-aggregates'));
-
-  // Iteration timeline.
-  renderTimeline(loop, $('#detail-timeline'), state.iterationHistory.get(loop.id) || [], loop.id, state.sleepTimers);
-
-  // Capabilities: show configured tags (muted if inactive) and
-  // dynamically activated tags (dashed border if not in config).
-  const configTags = (loop.config && loop.config.Tags) || [];
-  const activeTags = new Set(loop.active_tags || []);
-  const allTags = new Set([...configTags, ...activeTags]);
-  const tagsSection = $('#detail-tags');
-  const tagsList = $('#detail-tags-list');
-  if (allTags.size > 0) {
-    tagsSection.hidden = false;
-    tagsList.innerHTML = '';
-    for (const tag of [...allTags].sort()) {
-      const chip = document.createElement('span');
-      const inConfig = configTags.includes(tag);
-      const isActive = activeTags.has(tag);
-      chip.className = 'tag-chip'
-        + (isActive && inConfig ? ' tag-chip--active' : '')
-        + (!isActive && inConfig ? ' tag-chip--muted' : '')
-        + (isActive && !inConfig ? ' tag-chip--dynamic' : '');
-      chip.textContent = tag;
-      tagsList.appendChild(chip);
-    }
-  } else {
-    tagsSection.hidden = true;
-  }
+  renderLoopEntityDetail(loop);
 }
 
 // renderAggregates, renderTimeline, clearLiveTelemetry are in shared.js.
-
-function formatFuzzy(ms) {
-  const sec = Math.round(ms / 1000);
-  if (sec < 5) return 'moments';
-  if (sec < 60) return 'about ' + sec + 's';
-  const min = Math.floor(sec / 60);
-  const remSec = sec % 60;
-  if (min < 2) return 'about a minute';
-  if (remSec < 15) return min + ' min';
-  return min + ' min ' + remSec + 's';
-}
-
-function renderDetailIDs(loop) {
-  const container = $('#detail-ids');
-  container.innerHTML = '';
-
-  // Loop ID.
-  if (loop.id) {
-    container.appendChild(makeIDRow('loop_id', loop.id));
-  }
-
-  // Parent ID.
-  if (loop.parent_id) {
-    container.appendChild(makeIDRow('parent_id', loop.parent_id));
-  }
-
-  // Active conversation ID (from current iteration).
-  if (loop._currentConvID) {
-    container.appendChild(makeIDRow('conv_id', loop._currentConvID));
-  }
-
-  // Recent conversation IDs — skip for handler-only loops where the
-  // IDs are just iteration counters with no associated LLM conversation.
-  const convs = loop.recent_conv_ids;
-  const MAX_VISIBLE_CONVS = 5;
-  if (convs && convs.length > 0 && (!loop.handler_only || getLoopCategory(loop) === 'delegate')) {
-    const row = document.createElement('div');
-    row.className = 'id-row';
-
-    const label = document.createElement('span');
-    label.className = 'id-label';
-    label.textContent = 'recent';
-    row.appendChild(label);
-
-    const chips = document.createElement('span');
-    chips.className = 'id-convs';
-    const visible = convs.slice(0, MAX_VISIBLE_CONVS);
-    for (const cid of visible) {
-      chips.appendChild(makeIDChip(cid));
-    }
-    if (convs.length > MAX_VISIBLE_CONVS) {
-      const more = document.createElement('span');
-      more.className = 'id-chip id-chip--muted';
-      more.textContent = '+' + (convs.length - MAX_VISIBLE_CONVS);
-      chips.appendChild(more);
-    }
-    row.appendChild(chips);
-    container.appendChild(row);
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Rendering — Delegate Detail
-// ---------------------------------------------------------------------------
-
-function renderDelegateDetail(loop) {
-  const container = $('#detail-delegate');
-  const meta = (loop.config && loop.config.Metadata) || {};
-  const isSynthetic = !!loop._delegate;
-  const isRealDelegate = !isSynthetic && getLoopCategory(loop) === 'delegate';
-  if (!isSynthetic && !isRealDelegate) {
-    container.hidden = true;
-    return;
-  }
-  container.hidden = false;
-  container.innerHTML = '';
-
-  const taskText = isSynthetic ? loop._delegateTask : (meta.delegate_task || '');
-  const guidanceText = isSynthetic ? loop._delegateGuidance : (meta.delegate_guidance || '');
-  const profileText = isSynthetic ? loop._delegateProfile : (meta.delegate_profile || '');
-  const tags = isSynthetic ? (loop._delegateTags || []) : (((loop.config && loop.config.Tags) || []).slice());
-  const latestSnap = (state.iterationHistory.get(loop.id) || [])[0] || null;
-  const latestSummary = (latestSnap && latestSnap.summary) || {};
-  const exhausted = isSynthetic ? !!loop._delegateExhausted : !!latestSummary.delegate_exhausted;
-  const exhaustReason = isSynthetic ? (loop._delegateExhaustReason || '') : (latestSummary.delegate_finish_reason || '');
-  const iterCount = isSynthetic ? (loop._delegateIterations || 0) : (latestSummary.delegate_iterations || loop.iterations || 0);
-  const durationMs = isSynthetic
-    ? (loop._delegateDurationMs || 0)
-    : ((latestSnap && latestSnap.elapsed_ms) || 0);
-
-  // Task.
-  if (taskText) {
-    const taskEl = document.createElement('div');
-    taskEl.className = 'delegate-field';
-    const label = document.createElement('span');
-    label.className = 'delegate-label';
-    label.textContent = 'Task';
-    taskEl.appendChild(label);
-    const val = document.createElement('span');
-    val.className = 'delegate-value delegate-task';
-    val.textContent = taskText;
-    taskEl.appendChild(val);
-    container.appendChild(taskEl);
-  }
-
-  // Guidance.
-  if (guidanceText) {
-    const guidEl = document.createElement('div');
-    guidEl.className = 'delegate-field';
-    const label = document.createElement('span');
-    label.className = 'delegate-label';
-    label.textContent = 'Guidance';
-    guidEl.appendChild(label);
-    const val = document.createElement('span');
-    val.className = 'delegate-value';
-    val.textContent = guidanceText;
-    guidEl.appendChild(val);
-    container.appendChild(guidEl);
-  }
-
-  // Profile + tags row.
-  const metaRow = document.createElement('div');
-  metaRow.className = 'delegate-meta';
-  if (profileText) {
-    const chip = document.createElement('span');
-    chip.className = 'tag-chip';
-    chip.textContent = profileText;
-    metaRow.appendChild(chip);
-  }
-  if (tags.length > 0) {
-    for (const tag of tags) {
-      const chip = document.createElement('span');
-      chip.className = 'tag-chip tag-chip--muted';
-      chip.textContent = tag;
-      metaRow.appendChild(chip);
-    }
-  }
-  if (metaRow.children.length > 0) container.appendChild(metaRow);
-
-  // Completion result (shown after delegate finishes).
-  if (loop.state === 'completed' || loop.state === 'error' || loop.state === 'stopped') {
-    const resultEl = document.createElement('div');
-    let resultClass = 'delegate-result--ok';
-    let icon = '\u2713';
-    let status = 'Succeeded';
-
-    if (loop.state === 'stopped') {
-      resultClass = 'delegate-result--neutral';
-      icon = '\u25a0';
-      status = exhaustReason ? 'Stopped \u2014 ' + exhaustReason : 'Stopped';
-    } else if (loop.state === 'error' || exhausted) {
-      resultClass = 'delegate-result--failed';
-      icon = '\u2717';
-      status = exhausted
-        ? 'Failed' + (exhaustReason ? ' \u2014 ' + exhaustReason : '')
-        : 'Failed';
-    }
-
-    resultEl.className = 'delegate-result ' + resultClass;
-
-    const parts = [icon + ' ' + status];
-    if (iterCount > 0) parts.push(iterCount + ' iter');
-    if (durationMs > 0) parts.push(formatFuzzy(durationMs));
-    resultEl.textContent = parts.join(' \u00b7 ');
-    container.appendChild(resultEl);
-  }
-}
 
 // makeIDRow, makeIDChip, shortID, shortModelName, buildToolCounts,
 // escapeHTML, truncate are in shared.js.
@@ -1955,10 +2269,14 @@ function showContextMenu(clientX, clientY, items) {
     }
     const li = document.createElement('li');
     li.textContent = item.label;
-    li.addEventListener('click', () => {
-      hideContextMenu();
-      item.action();
-    });
+    if (item.disabled) {
+      li.className = 'context-menu-item context-menu-item--disabled';
+    } else {
+      li.addEventListener('click', () => {
+        hideContextMenu();
+        item.action();
+      });
+    }
     contextMenuItems.appendChild(li);
   }
 
@@ -2312,7 +2630,6 @@ async function showRequestDetail(requestID) {
     // Show the request detail panel, hide others.
     detailPlaceholder.hidden = true;
     detailContent.hidden = true;
-    systemDetail.hidden = true;
     requestDetailPanel.hidden = false;
 
     renderRequestDetail(detail, requestDetailEls);

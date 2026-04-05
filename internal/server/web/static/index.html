@@ -32,28 +32,10 @@
     <div class="resize-handle resize-handle--v" id="resize-v"></div>
     <aside class="detail-panel" id="detail-panel">
       <div id="detail-placeholder" class="detail-placeholder">
-        <p>Select a loop to inspect</p>
+        <p>Select an entity to inspect</p>
       </div>
       <div id="detail-content" class="detail-content" hidden>
-        <div class="detail-card">
-          <div class="detail-header">
-            <h2 id="detail-name" class="detail-name"></h2>
-            <span id="detail-state" class="state-badge"></span>
-          </div>
-          <div id="detail-ids" class="detail-ids"></div>
-          <div id="detail-tags" class="detail-tags" hidden>
-            <div id="detail-tags-list" class="tag-list"></div>
-          </div>
-        </div>
-
-        <!-- Delegate call arguments (only shown for delegate nodes) -->
-        <div id="detail-delegate" class="detail-delegate" hidden></div>
-
-        <!-- Aggregate stats (compact, single row) -->
-        <div id="detail-aggregates" class="detail-aggregates"></div>
-
-        <!-- Iteration timeline (JS-populated) -->
-        <div id="detail-timeline" class="iter-timeline"></div>
+        <div id="detail-entity" class="detail-entity"></div>
       </div>
       <div id="request-detail" class="detail-content" hidden>
         <div class="detail-header">
@@ -67,45 +49,6 @@
         <div id="request-detail-meta" class="detail-aggregates"></div>
         <div id="request-detail-content" class="request-content"></div>
         <div id="request-detail-waterfall" class="waterfall"></div>
-      </div>
-      <div id="system-detail" class="detail-content" hidden>
-        <div class="detail-header">
-          <h2 class="detail-name">Runtime</h2>
-          <span id="system-status" class="state-badge"></span>
-        </div>
-        <div class="system-sections">
-          <section class="detail-card system-section">
-            <div class="system-section-header">
-              <h3 class="section-title">Overview</h3>
-            </div>
-            <div id="system-overview" class="system-summary-grid"></div>
-          </section>
-
-          <section class="detail-card system-section">
-            <div class="system-section-header">
-              <h3 class="section-title">Services</h3>
-            </div>
-            <div id="system-services" class="system-services"></div>
-          </section>
-
-          <section class="detail-card system-section">
-            <div class="system-section-header">
-              <h3 class="section-title">Model Registry</h3>
-              <span id="system-registry-meta" class="system-section-meta"></span>
-            </div>
-            <div id="system-registry-summary" class="system-summary-grid"></div>
-
-            <div class="system-subsection">
-              <h4 class="system-subtitle">Resources</h4>
-              <div id="system-registry-resources" class="system-list"></div>
-            </div>
-
-            <div class="system-subsection">
-              <h4 class="system-subtitle">Deployments</h4>
-              <div id="system-registry-deployments" class="system-list"></div>
-            </div>
-          </section>
-        </div>
       </div>
     </aside>
   </main>
