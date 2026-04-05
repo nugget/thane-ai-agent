@@ -38,7 +38,7 @@ const physics = {
   damping:            0.92,
   maxVelocity:        5,
   wallStrength:       0.045,
-  collisionPadding:   18,
+  collisionPadding:   16,
   resizeVelocityGain: 0.12,
 };
 
@@ -155,11 +155,13 @@ function refreshCanvasViewport() {
   return nextRect;
 }
 
-function getPhysicsNodeRadius(id) {
-  if (id === '__system__') return 30;
+function getPhysicsNodeExtent(id) {
+  if (id === '__system__') return 38;
   const loop = state.loops.get(id);
-  if (!loop) return DEFAULT_NODE_R;
-  return getLoopVisualCapacity(loop).radius;
+  if (!loop) return DEFAULT_NODE_R + 14;
+  // Space the graph by the visible outer ring/halo footprint rather than
+  // just the core circle so neighboring node borders don't visually touch.
+  return getLoopVisualCapacity(loop).radius + 14;
 }
 
 // Run one physics simulation step. Applies center gravity, spring
@@ -211,7 +213,7 @@ function physicsStep(cx, cy, vw, vh) {
     const id = ids[i];
     const nd = nodes[i];
     if (nd.pinned) continue;
-    const radius = getPhysicsNodeRadius(id);
+    const radius = getPhysicsNodeExtent(id);
     const minX = padX + radius;
     const maxX = Math.max(minX, vw - padX - radius);
     const minY = padY + radius;
@@ -234,7 +236,7 @@ function physicsStep(cx, cy, vw, vh) {
       const distSq = dx * dx + dy * dy + EPS;
       const dist = Math.sqrt(distSq);
       const baseForce = P.repulsionStrength / distSq;
-      const minGap = getPhysicsNodeRadius(ids[i]) + getPhysicsNodeRadius(ids[j]) + P.collisionPadding;
+      const minGap = getPhysicsNodeExtent(ids[i]) + getPhysicsNodeExtent(ids[j]) + P.collisionPadding;
       const overlapForce = dist < minGap ? (minGap - dist) * 0.14 : 0;
       const force = baseForce + overlapForce;
       const fx = (dx / dist) * force;
@@ -263,7 +265,7 @@ function physicsStep(cx, cy, vw, vh) {
 
     // Safety clamp after integration so a burst of forces cannot eject nodes
     // off-screen between frames.
-    const radius = getPhysicsNodeRadius(id);
+    const radius = getPhysicsNodeExtent(id);
     const minX = padX + radius;
     const maxX = Math.max(minX, vw - padX - radius);
     const minY = padY + radius;
