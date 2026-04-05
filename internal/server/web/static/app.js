@@ -600,6 +600,7 @@ function getLoopContextWindow(loop) {
     : null;
   const candidates = [
     loop.context_window,
+    loop.config && loop.config.ContextWindow,
     loop._llmContext && loop._llmContext.context_window,
     loop._llmContext && loop._llmContext.max_context_length,
     recent && recent.context_window,
@@ -609,6 +610,46 @@ function getLoopContextWindow(loop) {
     if (Number.isFinite(n) && n > 0) return n;
   }
   return 0;
+}
+
+function getLoopConfiguredModelRef(loop) {
+  return (loop && loop.config && typeof loop.config.Model === 'string' && loop.config.Model) || '';
+}
+
+function getSystemDefaultModelRef() {
+  return (((state.system || {}).model_registry || {}).default_model || '').trim();
+}
+
+function deploymentMatchesModelRef(dep, ref) {
+  if (!dep || !ref) return false;
+  const normalizedRef = String(ref).trim().toLowerCase();
+  if (!normalizedRef) return false;
+  const deploymentID = String(dep.id || '').trim().toLowerCase();
+  const deploymentModel = String(dep.model || '').trim().toLowerCase();
+  if (deploymentID === normalizedRef || deploymentModel === normalizedRef) return true;
+  return deploymentID.endsWith('/' + normalizedRef);
+}
+
+function getRegistryContextWindowForModel(ref) {
+  if (!ref) return 0;
+  const registry = (state.system && state.system.model_registry) || null;
+  const deployments = registry && Array.isArray(registry.deployments) ? registry.deployments : [];
+  let maxWindow = 0;
+  for (const dep of deployments) {
+    if (!deploymentMatchesModelRef(dep, ref)) continue;
+    const candidates = [
+      dep.loaded_context_window,
+      dep.max_context_window,
+      dep.context_window,
+    ];
+    for (const candidate of candidates) {
+      const n = Number(candidate);
+      if (Number.isFinite(n) && n > maxWindow) {
+        maxWindow = n;
+      }
+    }
+  }
+  return maxWindow;
 }
 
 function getContextTier(contextWindow) {
@@ -634,7 +675,24 @@ function getLoopVisualCapacity(loop) {
   const recent = loop.recent_iterations && loop.recent_iterations.length > 0
     ? loop.recent_iterations[0]
     : null;
-  const modelName = loop._liveModel || loop._lastModel || (recent && recent.model) || '';
+  const configuredModel = getLoopConfiguredModelRef(loop);
+  const modelName = loop._liveModel
+    || loop._lastModel
+    || (recent && recent.model)
+    || configuredModel
+    || getSystemDefaultModelRef()
+    || '';
+  const registryContextWindow = getRegistryContextWindowForModel(modelName);
+  if (registryContextWindow > 0) {
+    const tier = getContextTier(registryContextWindow);
+    return {
+      radius: tier.radius,
+      label: tier.label,
+      key: tier.key,
+      basis: 'context',
+      contextWindow: registryContextWindow,
+    };
+  }
   const params = getModelParams(modelName);
   if (params !== null) {
     return {
