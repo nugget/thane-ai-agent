@@ -511,8 +511,8 @@ function getLayoutViewportRect() {
   const zoom = Math.max(0.001, viewport.zoom || 1);
   const width = rect.width / zoom;
   const height = rect.height / zoom;
-  const cx = width / 2;
-  const cy = height / 2;
+  const cx = (rect.width / 2 - viewport.panX) / zoom;
+  const cy = (rect.height / 2 - viewport.panY) / zoom;
   return { width, height, cx, cy };
 }
 
