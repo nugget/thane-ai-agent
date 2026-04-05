@@ -53,3 +53,31 @@ func TestRenderLoadedCapabilitySummary_UsesDescriptionsAndFallsBackForUnknownTag
 		t.Fatalf("summary = %q, want unknown-tag fallback", summary)
 	}
 }
+
+func TestRenderLoadedCapabilitySummary_EmptyStateExplainsAvailability(t *testing.T) {
+	summary := RenderLoadedCapabilitySummary(nil, nil)
+	if !strings.Contains(summary, "None loaded right now") {
+		t.Fatalf("summary = %q, want empty-state guidance", summary)
+	}
+	if !strings.Contains(summary, "`activate_capability`") {
+		t.Fatalf("summary = %q, want activate_capability guidance", summary)
+	}
+}
+
+func TestRenderCapabilityManifestMarkdown_UsesExactToolNames(t *testing.T) {
+	manifest := RenderCapabilityManifestMarkdown([]CapabilitySurface{
+		{Tag: "forge", Description: "Forge tools.", Tools: []string{"forge_pr_get"}},
+	})
+	if !strings.Contains(manifest, "`activate_capability(tag: \"name\")`") {
+		t.Fatalf("manifest = %q, want activate_capability example", manifest)
+	}
+	if !strings.Contains(manifest, "`thane_delegate(task: \"...\", tags: [\"name\"])`") {
+		t.Fatalf("manifest = %q, want thane_delegate example", manifest)
+	}
+	if !strings.Contains(manifest, "not automatically loaded") {
+		t.Fatalf("manifest = %q, want available-vs-loaded guidance", manifest)
+	}
+	if !strings.Contains(manifest, "Do not invent per-capability tool names") {
+		t.Fatalf("manifest = %q, want anti-invention guidance", manifest)
+	}
+}

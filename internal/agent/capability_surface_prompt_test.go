@@ -34,3 +34,25 @@ func TestBuildSystemPrompt_ActiveCapabilitiesUseSharedSurface(t *testing.T) {
 		t.Fatalf("prompt missing shared surface summary: %s", prompt)
 	}
 }
+
+func TestBuildSystemPrompt_ActiveCapabilitiesEmptyStateUsesSharedSurface(t *testing.T) {
+	l := newTagTestLoop()
+	l.UseCapabilitySurface([]toolcatalog.CapabilitySurface{
+		{
+			Tag:         "forge",
+			Description: "Forge and code review tools.",
+			Tools:       []string{"forge_pr_get", "forge_search"},
+		},
+	})
+
+	prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello", nil)
+	if !strings.Contains(prompt, "## Active Capabilities") {
+		t.Fatalf("prompt missing Active Capabilities section: %s", prompt)
+	}
+	if !strings.Contains(prompt, "None loaded right now") {
+		t.Fatalf("prompt missing empty-state guidance: %s", prompt)
+	}
+	if !strings.Contains(prompt, "`activate_capability`") {
+		t.Fatalf("prompt missing activate_capability guidance: %s", prompt)
+	}
+}

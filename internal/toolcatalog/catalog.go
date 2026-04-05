@@ -238,7 +238,8 @@ func RenderCapabilityActivationDescription(entries []CapabilitySurface) string {
 	var sb strings.Builder
 	sb.WriteString("Activate a capability to load its tools and context into YOUR current conversation. ")
 	sb.WriteString("This modifies your own runtime — it cannot be delegated. ")
-	sb.WriteString("Delegates get capabilities via the tags parameter on thane_delegate.\n\n")
+	sb.WriteString("The only valid activation tools are `activate_capability` and `deactivate_capability`; do not invent per-capability tool names. ")
+	sb.WriteString("Delegates get capabilities via the tags parameter on `thane_delegate`.\n\n")
 	sb.WriteString("Available capabilities:\n")
 
 	for _, entry := range SortCapabilitySurface(entries) {
@@ -307,8 +308,11 @@ func RenderCapabilityManifestMarkdown(entries []CapabilitySurface) string {
 
 	var sb strings.Builder
 	sb.WriteString("### Available Capabilities\n\n")
-	sb.WriteString("Activate with `activate_capability(tag: \"name\")`, or `delegate(task, tags: [\"name\"])` for one-off tasks. ")
-	sb.WriteString("Deactivate with `deactivate_capability(tag: \"name\")` when done. Ad-hoc tags work too — any tagged KB articles or talents will load.\n\n")
+	sb.WriteString("These capabilities are available to request; they are not automatically loaded just because they appear here. ")
+	sb.WriteString("To load one into this conversation, call `activate_capability(tag: \"name\")`. ")
+	sb.WriteString("To remove one, call `deactivate_capability(tag: \"name\")`. ")
+	sb.WriteString("For one-off delegated work, use `thane_delegate(task: \"...\", tags: [\"name\"])`. ")
+	sb.WriteString("Do not invent per-capability tool names like `forge_capability`.\n\n")
 	sb.Write(data)
 	return sb.String()
 }
@@ -317,7 +321,7 @@ func RenderCapabilityManifestMarkdown(entries []CapabilitySurface) string {
 // capabilities for always-on prompt context.
 func RenderLoadedCapabilitySummary(entries []CapabilitySurface, activeTags map[string]bool) string {
 	if len(activeTags) == 0 {
-		return ""
+		return "- None loaded right now. Capabilities listed in the catalog are available to request, not active until `activate_capability` succeeds."
 	}
 
 	byTag := make(map[string]CapabilitySurface, len(entries))
