@@ -7,9 +7,27 @@ const $ = (sel) => document.querySelector(sel);
 const logEmpty = $('#log-empty');
 const logScroll = $('#log-scroll');
 const logBody = $('#log-body');
+const logsSection = $('#logs-section');
+const requestSection = $('#request-section');
+const logControlsRow = $('#log-controls-row');
 const connDot = $('#conn-dot');
 const pollSlider = $('#poll-rate');
 const pollLabel = $('#poll-rate-label');
+const forensics = {
+  title: $('#forensics-title'),
+  subtitle: $('#forensics-subtitle'),
+  current: $('#forensics-current'),
+  follow: $('#forensics-follow'),
+  openRequest: $('#forensics-open-request'),
+  copyJSON: $('#forensics-copy-json'),
+  ids: $('#forensics-ids'),
+  meta: $('#forensics-meta'),
+  requestMeta: $('#forensics-request-meta'),
+  waterfallMeta: $('#forensics-waterfall-meta'),
+  empty: $('#forensics-empty'),
+  content: $('#forensics-content'),
+  waterfall: $('#forensics-waterfall'),
+};
 
 // ---------------------------------------------------------------------------
 // Connection Status (dot indicator instead of status bar)
@@ -20,11 +38,30 @@ function setConnStatus(state, detail) {
   connDot.title = detail || state;
 }
 
+function openRequestWindow(requestID) {
+  if (!requestID) return;
+  const name = 'Request ' + shortID(requestID);
+  const w = window.open(
+    '/static/request.html?id=' + encodeURIComponent(requestID),
+    'request-' + requestID,
+    'popup=yes,width=1180,height=860',
+  );
+  if (w) {
+    w.addEventListener('load', () => {
+      w.document.title = 'Thane \u00b7 ' + name;
+    });
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Dynamic Log Poll Rate
 // ---------------------------------------------------------------------------
 
 let logPollInterval = null;
+let activeRequestID = '';
+let activeRequestJSON = '';
+let pinnedRequestID = '';
+let followLatestRequest = true;
 
 function startLogPoll() {
   if (logPollInterval) clearInterval(logPollInterval);
@@ -66,6 +103,7 @@ function renderLogs(entries) {
 let systemStartTime = null;
 
 function initSystem() {
+  showSystemLogsView();
   $('#system-detail').hidden = false;
 
   fetchSystemStatus();
@@ -133,6 +171,198 @@ let iterationHistory = [];
 let loopEventSource = null;
 let loopEventSourceClosing = false;
 
+function showLoopForensicsView() {
+  if (requestSection) requestSection.hidden = false;
+  if (logsSection) logsSection.hidden = true;
+  if (logControlsRow) logControlsRow.hidden = true;
+  if (forensics.openRequest) forensics.openRequest.disabled = true;
+}
+
+function showSystemLogsView() {
+  if (requestSection) requestSection.hidden = true;
+  if (logsSection) logsSection.hidden = false;
+  if (logControlsRow) logControlsRow.hidden = false;
+}
+
+function getLatestLoopSnapshot() {
+  if (iterationHistory.length > 0) return iterationHistory[0];
+  if (loopData && Array.isArray(loopData.recent_iterations) && loopData.recent_iterations.length > 0) {
+    return loopData.recent_iterations[0];
+  }
+  return null;
+}
+
+function getLatestLoopRequestID() {
+  const latest = getLatestLoopSnapshot();
+  return (latest && latest.request_id) || '';
+}
+
+function setForensicsLoaded(loaded) {
+  if (!forensics.empty || !forensics.content || !forensics.waterfall) return;
+  forensics.empty.hidden = loaded;
+  forensics.content.hidden = !loaded;
+  forensics.waterfall.hidden = !loaded;
+}
+
+function updateForensicsControls() {
+  if (!forensics.follow) return;
+  if (followLatestRequest) {
+    forensics.follow.textContent = 'Following latest';
+    forensics.follow.classList.add('toggle-btn--active');
+    forensics.follow.title = 'Following the latest retained request for this loop';
+  } else {
+    forensics.follow.textContent = 'Resume live follow';
+    forensics.follow.classList.remove('toggle-btn--active');
+    forensics.follow.title = 'Jump back to the latest retained request';
+  }
+  if (forensics.openRequest) {
+    forensics.openRequest.disabled = !activeRequestID;
+  }
+}
+
+function renderForensicsCurrent(loop) {
+  if (!forensics.current) return;
+  const latestRequestID = getLatestLoopRequestID();
+  const latestSnap = getLatestLoopSnapshot();
+  const latestModel = loop._liveModel || loop._lastModel || latestSnap?.model || '';
+  const currentConvID = loop._currentConvID || latestSnap?.conv_id || '';
+  const chips = [
+    { text: formatSchemaToken(loop.state || 'pending') },
+    latestModel ? { text: shortModelName(latestModel) } : null,
+    currentConvID ? { text: 'thread ' + shortID(currentConvID) } : null,
+    latestRequestID ? { text: 'req ' + shortID(latestRequestID), request: true } : null,
+  ].filter(Boolean);
+
+  forensics.current.innerHTML = '';
+  for (const item of chips) {
+    const el = document.createElement(item.request ? 'button' : 'span');
+    el.className = 'forensics-chip' + (item.request ? ' forensics-chip--request' : '');
+    el.textContent = item.text;
+    if (item.request) {
+      el.type = 'button';
+      el.title = latestRequestID;
+      el.addEventListener('click', () => {
+        followLatestRequest = false;
+        pinnedRequestID = latestRequestID;
+        syncLoopRequestDetail(true);
+      });
+    }
+    forensics.current.appendChild(el);
+  }
+}
+
+async function fetchRequestDetailIntoForensics(requestID) {
+  if (!requestID) {
+    activeRequestID = '';
+    activeRequestJSON = '';
+    if (forensics.ids) forensics.ids.innerHTML = '';
+    if (forensics.meta) forensics.meta.innerHTML = '';
+    if (forensics.requestMeta) forensics.requestMeta.textContent = '';
+    if (forensics.waterfallMeta) forensics.waterfallMeta.textContent = '';
+    if (forensics.empty) {
+      forensics.empty.textContent = loopData && loopData.state === 'processing'
+        ? 'The loop is active, but the current request is not retained yet. Live tool and iteration telemetry stays in the sidebar until request detail becomes available.'
+        : 'Waiting for the first retained request in this loop.';
+    }
+    setForensicsLoaded(false);
+    updateForensicsControls();
+    return;
+  }
+
+  try {
+    const resp = await fetch('/api/requests/' + encodeURIComponent(requestID));
+    if (!resp.ok) {
+      activeRequestID = requestID;
+      activeRequestJSON = '';
+      if (forensics.ids) forensics.ids.innerHTML = '';
+      if (forensics.meta) forensics.meta.innerHTML = '';
+      if (forensics.requestMeta) forensics.requestMeta.textContent = resp.status === 404
+        ? 'Request retention unavailable'
+        : 'Request detail failed (' + resp.status + ')';
+      if (forensics.waterfallMeta) forensics.waterfallMeta.textContent = '';
+      if (forensics.empty) {
+        forensics.empty.textContent = resp.status === 404
+          ? 'Request detail is unavailable. Content retention may be disabled or this request may have been evicted.'
+          : 'Request detail failed to load.';
+      }
+      setForensicsLoaded(false);
+      updateForensicsControls();
+      return;
+    }
+
+    const detail = await resp.json();
+    activeRequestID = requestID;
+    activeRequestJSON = JSON.stringify(detail, null, 2);
+
+    if (forensics.requestMeta) {
+      const metaBits = [];
+      if (!followLatestRequest) metaBits.push('Pinned');
+      metaBits.push('req ' + shortID(requestID));
+      if (detail.model) metaBits.push(shortModelName(detail.model));
+      if (detail.iteration_count) metaBits.push(formatNumber(detail.iteration_count) + ' iterations');
+      forensics.requestMeta.textContent = metaBits.join(' · ');
+    }
+    if (forensics.waterfallMeta) {
+      const waterfallBits = [];
+      if (detail.tools_used && Object.keys(detail.tools_used).length > 0) {
+        waterfallBits.push(Object.entries(detail.tools_used).map(([name, count]) => `${name}×${count}`).join(' · '));
+      }
+      if (detail.exhausted) waterfallBits.push('exhausted');
+      forensics.waterfallMeta.textContent = waterfallBits.join(' · ');
+    }
+
+    renderRequestDetail(detail, {
+      ids: forensics.ids,
+      meta: forensics.meta,
+      content: forensics.content,
+      waterfall: forensics.waterfall,
+    });
+    setForensicsLoaded(true);
+    updateForensicsControls();
+  } catch (err) {
+    console.warn('Failed to fetch request detail:', err);
+    if (forensics.ids) forensics.ids.innerHTML = '';
+    if (forensics.meta) forensics.meta.innerHTML = '';
+    if (forensics.requestMeta) forensics.requestMeta.textContent = 'Request detail failed';
+    if (forensics.empty) forensics.empty.textContent = 'Request detail failed to load.';
+    setForensicsLoaded(false);
+    updateForensicsControls();
+  }
+}
+
+function syncLoopRequestDetail(force = false) {
+  if (!loopData) return;
+  const latestRequestID = getLatestLoopRequestID();
+  if (followLatestRequest) {
+    pinnedRequestID = '';
+  }
+  const targetRequestID = followLatestRequest ? latestRequestID : (pinnedRequestID || latestRequestID);
+
+  if (forensics.title) {
+    forensics.title.textContent = (loopData.name || nodeId.slice(0, 8)) + ' forensics';
+  }
+  if (forensics.subtitle) {
+    const subtitleBits = [
+      followLatestRequest ? 'Following the latest retained request for this loop.' : 'Pinned to a specific retained request for comparison.',
+      loopData.state === 'processing' ? 'Live tool and iteration telemetry stays in the sidebar while the turn runs.' : '',
+    ].filter(Boolean);
+    forensics.subtitle.textContent = subtitleBits.join(' ');
+  }
+
+  renderForensicsCurrent(loopData);
+  updateForensicsControls();
+
+  if (!targetRequestID) {
+    if (force || activeRequestID !== '' || (forensics.empty && forensics.empty.hidden)) {
+      void fetchRequestDetailIntoForensics('');
+    }
+    return;
+  }
+
+  if (!force && activeRequestID === targetRequestID && forensics.empty?.hidden) return;
+  void fetchRequestDetailIntoForensics(targetRequestID);
+}
+
 function disconnectLoopSSE() {
   loopEventSourceClosing = true;
   if (loopEventSource) {
@@ -147,11 +377,16 @@ function initLoop() {
     return;
   }
 
+  showLoopForensicsView();
   $('#loop-detail').hidden = false;
+  window.onRequestChipClick = (requestID) => {
+    if (!requestID) return;
+    followLatestRequest = false;
+    pinnedRequestID = requestID;
+    syncLoopRequestDetail(true);
+  };
 
   connectSSE();
-  fetchLoopLogs();
-  startLogPoll();
   setInterval(tickLoop, 1000);
 }
 
@@ -185,7 +420,7 @@ function connectSSE() {
         }
       }
       loopData = match;
-      document.title = 'Thane \u00b7 ' + (match.name || nodeId.slice(0, 8));
+      document.title = 'Thane \u00b7 ' + (match.name || nodeId.slice(0, 8)) + ' forensics';
       renderLoopDetail();
     }
     setConnStatus('ok', 'Connected \u2014 ' + formatTime(new Date()));
@@ -255,6 +490,7 @@ async function refreshActiveTags() {
 function renderLoopDetail() {
   if (!loopData) return;
 
+  document.title = 'Thane \u00b7 ' + (loopData.name || nodeId.slice(0, 8)) + ' forensics';
   $('#detail-name').textContent = loopData.name || loopData.id;
 
   const badge = $('#detail-state');
@@ -274,6 +510,7 @@ function renderLoopDetail() {
 
   // Iteration timeline.
   renderTimeline(loopData, $('#detail-timeline'), iterationHistory, nodeId, sleepTimers);
+  syncLoopRequestDetail();
 
   // Capabilities: show configured tags (muted if inactive) and
   // dynamically activated tags (dashed border if not in config).
@@ -385,6 +622,30 @@ $('#toggle-side').addEventListener('click', () => {
 $('#log-level').addEventListener('change', () => {
   if (nodeType === 'system') fetchSystemLogs();
   else fetchLoopLogs();
+});
+
+forensics.follow?.addEventListener('click', () => {
+  if (followLatestRequest) return;
+  followLatestRequest = true;
+  pinnedRequestID = '';
+  syncLoopRequestDetail(true);
+});
+
+forensics.openRequest?.addEventListener('click', () => {
+  if (!activeRequestID) return;
+  openRequestWindow(activeRequestID);
+});
+
+forensics.copyJSON?.addEventListener('click', () => {
+  if (!activeRequestJSON) return;
+  navigator.clipboard.writeText(activeRequestJSON).then(() => {
+    forensics.copyJSON.textContent = 'Copied';
+    forensics.copyJSON.classList.add('copy-btn--copied');
+    setTimeout(() => {
+      forensics.copyJSON.textContent = 'JSON';
+      forensics.copyJSON.classList.remove('copy-btn--copied');
+    }, 1200);
+  });
 });
 
 // ---------------------------------------------------------------------------

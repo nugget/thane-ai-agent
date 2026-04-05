@@ -3712,7 +3712,7 @@ function buildLoopContextMenu(loop) {
     { separator: true },
   ].filter(Boolean);
   if (!loop.id.startsWith('delegate-')) {
-    items.push({ label: 'Open telemetry window', action: () => openDetailWindow('loop', loop.id) });
+    items.push({ label: 'Open live forensics', action: () => openDetailWindow('loop', loop.id) });
   }
   if (entity.latestRequestID) {
     items.push({ label: 'Open request window', action: () => openRequestWindow(entity.latestRequestID) });
@@ -4096,15 +4096,18 @@ function openDetailWindow(type, id) {
   const name = type === 'system'
     ? 'Core'
     : (state.loops.get(id)?.name || id?.slice(0, 8) || 'Loop');
+  const title = type === 'system' ? name : name + ' forensics';
   const w = window.open(
     '/static/detail.html' + params + '&name=' + encodeURIComponent(name),
-    'detail-' + (id || 'system'),
-    'popup=yes,width=900,height=450'
+    (type === 'system' ? 'detail-' : 'forensics-') + (id || 'system'),
+    type === 'system'
+      ? 'popup=yes,width=900,height=450'
+      : 'popup=yes,width=1380,height=920'
   );
   // Set title once loaded (cross-origin safe since same origin).
   if (w) {
     w.addEventListener('load', () => {
-      w.document.title = 'Thane \u00b7 ' + name;
+      w.document.title = 'Thane \u00b7 ' + title;
     });
   }
 }
