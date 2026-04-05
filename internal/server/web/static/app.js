@@ -54,6 +54,8 @@ const physics = {
   orbitRadiusVelocityGain: 0.028,
   orbitRadiusVelocityCap: 1.3,
   orbitAspectStrength: 0.42,
+  pinnedAnchorStrength: 0.16,
+  pinnedAnchorDamping: 0.72,
   overlapRepulsionStrength: 0.16,
   overlapRepulsionRange: 1.2,
   parentChildRepulsionMultiplier: 1.55,
@@ -355,6 +357,35 @@ function kickOrbitReflow(orbitTargets, loopIDs) {
   }
 }
 
+function updatePinnedAnchorPositions() {
+  for (const nd of physics.nodes.values()) {
+    if (!nd || !nd.pinned) continue;
+    if (!Number.isFinite(nd.targetX) || !Number.isFinite(nd.targetY)) continue;
+
+    const dx = nd.targetX - nd.x;
+    const dy = nd.targetY - nd.y;
+    if (Math.abs(dx) < 0.001 && Math.abs(dy) < 0.001 && Math.abs(nd.vx || 0) < 0.001 && Math.abs(nd.vy || 0) < 0.001) {
+      nd.x = nd.targetX;
+      nd.y = nd.targetY;
+      nd.vx = 0;
+      nd.vy = 0;
+      continue;
+    }
+
+    nd.vx = ((nd.vx || 0) + dx * physics.pinnedAnchorStrength) * physics.pinnedAnchorDamping;
+    nd.vy = ((nd.vy || 0) + dy * physics.pinnedAnchorStrength) * physics.pinnedAnchorDamping;
+    nd.x += nd.vx;
+    nd.y += nd.vy;
+
+    if (Math.abs(nd.targetX - nd.x) < 0.08 && Math.abs(nd.targetY - nd.y) < 0.08 && Math.abs(nd.vx) < 0.08 && Math.abs(nd.vy) < 0.08) {
+      nd.x = nd.targetX;
+      nd.y = nd.targetY;
+      nd.vx = 0;
+      nd.vy = 0;
+    }
+  }
+}
+
 // Ensure physics.nodes matches the current set of loops + system node.
 // New nodes spawn at their parent position (or center with jitter).
 function syncPhysicsNodes(cx, cy) {
@@ -362,9 +393,14 @@ function syncPhysicsNodes(cx, cy) {
   if (state.system) {
     const sys = physics.nodes.get('__system__');
     if (sys) {
-      sys.x = cx; sys.y = cy;
+      sys.targetX = cx;
+      sys.targetY = cy;
+      if (!Number.isFinite(sys.x) || !Number.isFinite(sys.y)) {
+        sys.x = cx;
+        sys.y = cy;
+      }
     } else {
-      physics.nodes.set('__system__', { x: cx, y: cy, vx: 0, vy: 0, pinned: true });
+      physics.nodes.set('__system__', { x: cx, y: cy, vx: 0, vy: 0, pinned: true, targetX: cx, targetY: cy });
     }
   } else {
     physics.nodes.delete('__system__');
@@ -459,10 +495,8 @@ function reflowPhysicsNodes(prevRect, nextRect) {
 
   for (const [id, nd] of physics.nodes) {
     if (id === '__system__') {
-      nd.x = nextCx;
-      nd.y = nextCy;
-      nd.vx = 0;
-      nd.vy = 0;
+      nd.targetX = nextCx;
+      nd.targetY = nextCy;
       continue;
     }
 
@@ -4463,6 +4497,7 @@ function tick() {
   const rect = refreshCanvasViewport() || getLayoutViewportRect();
   if (rect.width > 0 && rect.height > 0) {
     physicsStep(rect.cx, rect.cy, rect.width, rect.height);
+    updatePinnedAnchorPositions();
     updateNodePositions();
   }
 
