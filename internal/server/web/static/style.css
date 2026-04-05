@@ -2461,7 +2461,11 @@ body.resize-col .schema-card__fade {
 }
 
 .registry-page {
+  display: block;
+  height: auto;
   min-height: 100vh;
+  overflow-x: hidden;
+  overflow-y: auto;
   background:
     radial-gradient(circle at top left, rgba(86, 212, 221, 0.05), transparent 28%),
     radial-gradient(circle at top right, rgba(88, 166, 255, 0.05), transparent 24%),
