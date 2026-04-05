@@ -49,6 +49,8 @@ const physics = {
   branchAnchorStrength: 0.024,
   branchContainmentStrength: 0.008,
   siblingAnchorStrength: 0.028,
+  rootAngularBalanceStrength: 0.2,
+  siblingAngularBalanceStrength: 0.18,
   crossBranchRepulsionMultiplier: 1.45,
   sameBranchRepulsionMultiplier: 0.9,
   edgeNodeRepulsion:  0.2,
@@ -258,6 +260,65 @@ function buildSiblingOrbitTargets(siblingIndex) {
 function getGraphMotionScale(nodeCount) {
   if (nodeCount <= 8) return 1;
   return Math.max(0.58, 1 - ((nodeCount - 8) * 0.026));
+}
+
+function normalizeAngle(angle) {
+  let out = angle;
+  while (out < 0) out += Math.PI * 2;
+  while (out >= Math.PI * 2) out -= Math.PI * 2;
+  return out;
+}
+
+function positiveAngleDelta(from, to) {
+  return normalizeAngle(to - from);
+}
+
+function applyAngularEquilibrium(entries, centerForEntry, strength) {
+  if (!entries || entries.length < 2) return;
+
+  const positioned = [];
+  for (const entry of entries) {
+    const nd = physics.nodes.get(entry.id);
+    if (!nd || nd.pinned) continue;
+    const center = centerForEntry(entry);
+    if (!center) continue;
+    const dx = nd.x - center.x;
+    const dy = nd.y - center.y;
+    const radius = Math.sqrt((dx * dx) + (dy * dy));
+    if (radius < 12) continue;
+    positioned.push({
+      ...entry,
+      node: nd,
+      center,
+      radius,
+      angle: normalizeAngle(Math.atan2(dy, dx)),
+    });
+  }
+
+  if (positioned.length < 2) return;
+  positioned.sort((a, b) => a.angle - b.angle);
+
+  const targetGap = (Math.PI * 2) / positioned.length;
+  for (let i = 0; i < positioned.length; i += 1) {
+    const current = positioned[i];
+    const next = positioned[(i + 1) % positioned.length];
+    const gap = positiveAngleDelta(current.angle, next.angle);
+    const gapError = targetGap - gap;
+    if (Math.abs(gapError) < 0.001) continue;
+
+    const radiusScale = Math.max(0.55, Math.min(1.35, Math.min(current.radius, next.radius) / 120));
+    const force = gapError * strength * radiusScale;
+
+    const currentTangentX = -Math.sin(current.angle);
+    const currentTangentY = Math.cos(current.angle);
+    const nextTangentX = -Math.sin(next.angle);
+    const nextTangentY = Math.cos(next.angle);
+
+    current.node.fx -= currentTangentX * force;
+    current.node.fy -= currentTangentY * force;
+    next.node.fx += nextTangentX * force;
+    next.node.fy += nextTangentY * force;
+  }
 }
 
 // Ensure physics.nodes matches the current set of loops + system node.
@@ -491,6 +552,21 @@ function physicsStep(cx, cy, vw, vh) {
     const anchorY = parent.y + Math.sin(target.angle) * radius;
     child.fx += (anchorX - child.x) * P.siblingAnchorStrength;
     child.fy += (anchorY - child.y) * P.siblingAnchorStrength;
+  }
+
+  // 2c. Angular equilibrium — orbital families should try to use the full
+  // circle around their center rather than collapsing into one favored arc.
+  const rootEntries = Array.from(topLevelTargets.keys()).map(id => ({ id }));
+  applyAngularEquilibrium(rootEntries, () => ({ x: cx, y: cy }), P.rootAngularBalanceStrength);
+
+  for (const [parentID, siblings] of siblingIndex) {
+    const parent = P.nodes.get(parentID);
+    if (!parent || siblings.length < 2) continue;
+    applyAngularEquilibrium(
+      siblings.map(loop => ({ id: loop.id })),
+      () => ({ x: parent.x, y: parent.y }),
+      P.siblingAngularBalanceStrength,
+    );
   }
 
   // 3. Soft border gravity keeps the cloud within the viewport while still
