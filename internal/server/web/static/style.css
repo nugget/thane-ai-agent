@@ -1089,7 +1089,7 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
 
 /* Base node group */
 .loop-node { cursor: pointer; }
-.loop-node:hover .node-ring { opacity: 0.3; }
+.loop-node:hover .node-ring { opacity: 0.92; }
 
 /* Trust zone underglow — diffused coloured halo behind the node */
 .trust-glow {
@@ -1097,34 +1097,64 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
   pointer-events: none;
 }
 
-/* Outer glow ring */
-.node-ring {
+/* Selection halo */
+.selection-ring {
   opacity: 0;
-  transition: opacity 0.3s ease;
+  stroke: var(--accent);
+  stroke-width: 2;
+  transition: opacity 0.2s ease;
 }
 
-/* Main shape (circle, rect, polygon — varies by category) */
+.node-selected .selection-ring {
+  opacity: 0.8;
+  filter: drop-shadow(0 0 8px var(--accent-glow));
+}
+
+/* Outer state ring */
+.node-ring {
+  opacity: 0.72;
+  transition: opacity 0.3s ease, stroke 0.4s ease, stroke-width 0.3s ease;
+}
+
+/* Main core */
 .node-shape {
-  stroke: rgba(255, 255, 255, 0.15);
-  stroke-width: 2;
-  transition: fill 0.8s ease, filter 0.8s ease, stroke-width 0.4s ease, opacity 0.6s ease;
+  stroke: rgba(230, 237, 243, 0.16);
+  stroke-width: 1.5;
+  transition: fill 0.8s ease, filter 0.8s ease, opacity 0.6s ease;
   will-change: transform, opacity;
 }
 
-/* State fills — stroke matches fill at higher opacity for context ring */
-.node-shape--sleeping    { fill: var(--blue); stroke: var(--blue); filter: drop-shadow(0 0 6px var(--blue-glow)); }
-.node-shape--waiting     { fill: var(--cyan); stroke: var(--cyan); filter: drop-shadow(0 0 6px var(--cyan-glow)); }
-.node-shape--processing  { fill: var(--green); stroke: var(--green); filter: drop-shadow(0 0 12px var(--green-glow)); }
-.node-shape--supervisor  { fill: var(--purple); stroke: var(--purple); filter: drop-shadow(0 0 16px rgba(188, 140, 255, 0.6)); }
-.node-shape--error       { fill: var(--orange); stroke: var(--orange); filter: drop-shadow(0 0 8px var(--orange-glow)); }
-.node-shape--degraded    { fill: var(--orange); stroke: var(--orange); filter: drop-shadow(0 0 8px var(--orange-glow)); }
-.node-shape--stopped     { fill: var(--text-muted); stroke: var(--text-muted); filter: none; }
-.node-shape--pending     { fill: var(--purple); stroke: var(--purple); filter: drop-shadow(0 0 4px var(--purple-dim)); }
+/* Category fills */
+.node-shape--category-generic       { fill: rgba(139, 148, 158, 0.24); }
+.node-shape--category-metacognitive { fill: rgba(188, 140, 255, 0.26); }
+.node-shape--category-channel       { fill: rgba(86, 212, 221, 0.26); }
+.node-shape--category-delegate      { fill: rgba(210, 153, 34, 0.26); }
+.node-shape--category-scheduled     { fill: rgba(88, 166, 255, 0.26); }
+
+/* Runtime-state rings */
+.node-ring--sleeping    { stroke: var(--blue);   filter: drop-shadow(0 0 6px var(--blue-glow)); }
+.node-ring--waiting     { stroke: var(--cyan);   filter: drop-shadow(0 0 6px var(--cyan-glow)); }
+.node-ring--processing  { stroke: var(--green);  filter: drop-shadow(0 0 10px var(--green-glow)); }
+.node-ring--supervisor  { stroke: var(--purple); filter: drop-shadow(0 0 14px rgba(188, 140, 255, 0.6)); }
+.node-ring--error       { stroke: var(--orange); filter: drop-shadow(0 0 8px var(--orange-glow)); }
+.node-ring--degraded    { stroke: var(--orange); filter: drop-shadow(0 0 8px var(--orange-glow)); }
+.node-ring--stopped     { stroke: var(--text-muted); filter: none; opacity: 0.5; }
+.node-ring--pending     { stroke: var(--purple); filter: drop-shadow(0 0 4px var(--purple-dim)); opacity: 0.6; }
+.node-ring--completed   { stroke: var(--green); filter: drop-shadow(0 0 6px var(--green-glow)); }
 
 /* Node label */
 .node-icon {
+  fill: rgba(230, 237, 243, 0.9);
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
   pointer-events: none;
   user-select: none;
+}
+
+.node-icon--delegate {
+  font-size: 16px;
 }
 
 .node-label {
@@ -1135,6 +1165,39 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
   text-anchor: middle;
   pointer-events: none;
   user-select: none;
+}
+
+/* Compact capacity badge on the rim */
+.node-rim-badge {
+  pointer-events: none;
+}
+
+.node-rim-badge__body {
+  fill: rgba(13, 17, 23, 0.96);
+  stroke: rgba(230, 237, 243, 0.22);
+  stroke-width: 1.25;
+}
+
+.node-rim-badge__text {
+  fill: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.node-rim-badge--context .node-rim-badge__body {
+  stroke: rgba(45, 212, 191, 0.45);
+}
+
+.node-rim-badge--model .node-rim-badge__body {
+  stroke-dasharray: 3 2;
+  stroke: rgba(210, 153, 34, 0.5);
+}
+
+.node-rim-badge--unknown .node-rim-badge__body {
+  stroke-dasharray: 2 2;
+  opacity: 0.75;
 }
 
 /* Supervisor indicator ring */
@@ -1161,12 +1224,6 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
   50% { opacity: 1; stroke-width: 3; }
 }
 
-/* Selection ring */
-.node-selected .node-ring {
-  opacity: 0.5;
-  stroke: var(--accent);
-}
-
 /* === Breathing Animations === */
 /* Only animate transform — never opacity or fill.  Colour/glow changes
    are driven by CSS transitions on the .node-shape base rule so that
@@ -1189,28 +1246,34 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
   50% { transform: scale(1.03); }
 }
 
-.node-shape--sleeping {
+.node-shape--activity-sleeping {
   animation: breathe-idle 5s cubic-bezier(0.37, 0, 0.63, 1) infinite;
+  filter: drop-shadow(0 0 4px rgba(88, 166, 255, 0.18));
 }
 
-.node-shape--waiting {
+.node-shape--activity-waiting {
   animation: breathe-idle 7s cubic-bezier(0.37, 0, 0.63, 1) infinite;
+  filter: drop-shadow(0 0 4px rgba(86, 212, 221, 0.18));
 }
 
-.node-shape--processing {
+.node-shape--activity-processing {
   animation: breathe-active 2.4s cubic-bezier(0.37, 0, 0.63, 1) infinite;
+  filter: drop-shadow(0 0 8px rgba(63, 185, 80, 0.18));
 }
 
-.node-shape--supervisor {
+.node-shape--activity-supervisor {
   animation: breathe-active 2.4s cubic-bezier(0.37, 0, 0.63, 1) infinite;
+  filter: drop-shadow(0 0 10px rgba(188, 140, 255, 0.24));
 }
 
-.node-shape--error {
+.node-shape--activity-error {
   animation: breathe-alert 3s cubic-bezier(0.37, 0, 0.63, 1) infinite;
+  filter: drop-shadow(0 0 6px rgba(210, 153, 34, 0.2));
 }
 
-.node-shape--degraded {
+.node-shape--activity-degraded {
   animation: breathe-alert 3s cubic-bezier(0.37, 0, 0.63, 1) infinite;
+  filter: drop-shadow(0 0 6px rgba(210, 153, 34, 0.2));
 }
 
 /* === System Node === */

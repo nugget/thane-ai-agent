@@ -214,10 +214,10 @@ function updateNodePositions() {
 }
 
 // ---------------------------------------------------------------------------
-// Loop Category + Shape + Model Sizing
+// Graph Visual Grammar: Category, State, and Capacity
 // ---------------------------------------------------------------------------
 
-// Derive a visual category from loop data. Drives which SVG shape is drawn.
+// Derive a visual category from loop data. Drives fill tone and sigil.
 function getLoopCategory(loop) {
   const hints = loop.config && loop.config.Hints;
   if (hints && hints.source === 'metacognitive') return 'metacognitive';
@@ -230,17 +230,33 @@ function getLoopCategory(loop) {
   return 'generic';
 }
 
-// Category → icon displayed inside the node circle.
-const CATEGORY_ICONS = {
-  metacognitive: '🧠',
-  channel:       '💬',
-  delegate:      '🔀',
-  scheduled:     '🕐',
-  generic:       '⚙️',
+// Category → compact center sigil. The graph uses circles throughout, so
+// entity meaning rides on fill, rings, and restrained iconography instead
+// of divergent node shapes.
+const CATEGORY_SIGILS = {
+  metacognitive: 'M',
+  channel:       '@',
+  delegate:      '↗',
+  scheduled:     '◷',
+  generic:       '•',
 };
 
+function normalizeVisualCategory(category) {
+  return CATEGORY_SIGILS[category] ? category : 'generic';
+}
+
+// Context-window tiers drive node radius. The steps are intentionally
+// weighted for readability instead of being proportional to raw tokens.
+const CONTEXT_TIERS = [
+  { key: 'ctx-8k',   max: 8192,   label: '8k',   radius: 24 },
+  { key: 'ctx-32k',  max: 32768,  label: '32k',  radius: 28 },
+  { key: 'ctx-128k', max: 131072, label: '128k', radius: 34 },
+  { key: 'ctx-256k', max: 262144, label: '256k', radius: 40 },
+  { key: 'ctx-512k', max: Infinity, label: '512k', radius: 46 },
+];
+
 // Model name → approximate parameter count (billions).
-// Used for area-proportional node sizing with sqrt compression.
+// Used only as a fallback when we do not know the active context window yet.
 const MODEL_SIZES = {
   // Anthropic
   'claude-haiku':        8,
@@ -294,23 +310,94 @@ function getModelParams(modelName) {
 }
 
 // Compute node radius from model parameters using sqrt compression.
-// Returns a radius in [MIN_NODE_R, MAX_NODE_R].
+// This is only used as a fallback capacity estimate when we do not yet have
+// a real context window for the loop.
 const MIN_NODE_R = 22;
 const MAX_NODE_R = 50;
 const DEFAULT_NODE_R = 32;
 
-function getModelRadius(modelName) {
-  const params = getModelParams(modelName);
+function getModelRadiusFromParams(params) {
   if (params === null) return DEFAULT_NODE_R;
 
-  // sqrt compression: area ∝ sqrt(params).
-  // Calibrated so 8B → MIN_NODE_R, 300B → MAX_NODE_R.
   const minParams = 3;    // floor (smallest model we'd see)
   const maxParams = 700;  // ceiling (largest model we'd see)
   const t = (Math.sqrt(params) - Math.sqrt(minParams)) /
             (Math.sqrt(maxParams) - Math.sqrt(minParams));
   const clamped = Math.max(0, Math.min(1, t));
   return MIN_NODE_R + clamped * (MAX_NODE_R - MIN_NODE_R);
+}
+
+function getModelRadius(modelName) {
+  return getModelRadiusFromParams(getModelParams(modelName));
+}
+
+function getLoopContextWindow(loop) {
+  if (!loop) return 0;
+  const recent = loop.recent_iterations && loop.recent_iterations.length > 0
+    ? loop.recent_iterations[0]
+    : null;
+  const candidates = [
+    loop.context_window,
+    loop._llmContext && loop._llmContext.context_window,
+    loop._llmContext && loop._llmContext.max_context_length,
+    recent && recent.context_window,
+  ];
+  for (const candidate of candidates) {
+    const n = Number(candidate);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return 0;
+}
+
+function getContextTier(contextWindow) {
+  for (const tier of CONTEXT_TIERS) {
+    if (contextWindow <= tier.max) return tier;
+  }
+  return CONTEXT_TIERS[CONTEXT_TIERS.length - 1];
+}
+
+function getLoopVisualCapacity(loop) {
+  const contextWindow = getLoopContextWindow(loop);
+  if (contextWindow > 0) {
+    const tier = getContextTier(contextWindow);
+    return {
+      radius: tier.radius,
+      label: tier.label,
+      key: tier.key,
+      basis: 'context',
+      contextWindow,
+    };
+  }
+
+  const modelName = loop._liveModel || loop._lastModel || '';
+  const params = getModelParams(modelName);
+  if (params !== null) {
+    return {
+      radius: getModelRadiusFromParams(params),
+      label: params + 'b',
+      key: 'model-estimate',
+      basis: 'model',
+      contextWindow: 0,
+    };
+  }
+
+  return {
+    radius: DEFAULT_NODE_R,
+    label: '?',
+    key: 'unknown',
+    basis: 'unknown',
+    contextWindow: 0,
+  };
+}
+
+function getLoopVisualState(loop) {
+  const isSup = loop._supervisor && loop.state === 'processing';
+  const svcDegraded = isServiceDegraded(loop.name);
+  if (isSup) return 'supervisor';
+  if (svcDegraded && (loop.state === 'sleeping' || loop.state === 'waiting' || loop.state === 'pending')) {
+    return 'degraded';
+  }
+  return loop.state || 'pending';
 }
 
 // Check whether a loop's backing service is degraded (not ready) in
@@ -337,6 +424,29 @@ function createNodeShape(category, r) {
 // Update an existing circle shape element's radius.
 function updateNodeShape(el, category, r) {
   el.setAttribute('r', r);
+}
+
+function positionNodeRimBadge(badge, nodeR) {
+  if (!badge) return;
+  const angle = -40 * Math.PI / 180;
+  const orbit = nodeR + 14;
+  const x = Math.cos(angle) * orbit;
+  const y = Math.sin(angle) * orbit;
+  badge.setAttribute('transform', `translate(${x.toFixed(1)} ${y.toFixed(1)})`);
+}
+
+function buildLoopNodeTitle(loop, capacity) {
+  const parts = [loop.name || loop.id];
+  parts.push('State: ' + (loop.state || 'pending'));
+  if (capacity.basis === 'context' && capacity.contextWindow > 0) {
+    parts.push('Context: ' + formatNumber(capacity.contextWindow));
+  } else if (capacity.basis === 'model') {
+    parts.push('Capacity: est. ' + capacity.label);
+  }
+  if (loop._lastModel) {
+    parts.push('Model: ' + loop._lastModel);
+  }
+  return parts.join('\n');
 }
 
 // ---------------------------------------------------------------------------
@@ -887,8 +997,9 @@ function flashLinkingLine(loopId) {
 }
 
 function renderNode(loop) {
-  const category = getLoopCategory(loop);
-  const nodeR = getModelRadius(loop._lastModel);
+  const category = normalizeVisualCategory(getLoopCategory(loop));
+  const capacity = getLoopVisualCapacity(loop);
+  const nodeR = capacity.radius;
   const ringR = nodeR + 12;
   let group = canvasWorld.querySelector(`[data-loop-id="${loop.id}"]`);
 
@@ -916,7 +1027,7 @@ function renderNode(loop) {
 
     // Native SVG tooltip — instant, no delay.
     const title = createSVG('title', {});
-    title.textContent = loop.name || loop.id;
+    title.textContent = buildLoopNodeTitle(loop, capacity);
     inner.appendChild(title);
 
     // Trust zone underglow — diffused coloured circle behind the node.
@@ -931,12 +1042,17 @@ function renderNode(loop) {
       inner.appendChild(glow);
     }
 
+    const selectionRing = createSVG('circle', {
+      class: 'selection-ring',
+      r: nodeR + 18,
+      fill: 'none',
+    });
+
     // Glow ring (always a circle regardless of shape).
     const ring = createSVG('circle', {
-      class: 'node-ring',
+      class: 'node-ring node-ring--pending',
       r: ringR,
       fill: 'none',
-      stroke: 'var(--accent)',
       'stroke-width': 2,
     });
 
@@ -957,9 +1073,9 @@ function renderNode(loop) {
       class: 'node-icon',
       'text-anchor': 'middle',
       'dominant-baseline': 'central',
-      'font-size': Math.round(nodeR * 0.7),
+      'font-size': Math.round(nodeR * 0.5),
     });
-    icon.textContent = CATEGORY_ICONS[category] || CATEGORY_ICONS.generic;
+    icon.textContent = CATEGORY_SIGILS[category] || CATEGORY_SIGILS.generic;
 
     // Supervisor ring (larger circle outside the node).
     const supDot = createSVG('circle', {
@@ -967,10 +1083,27 @@ function renderNode(loop) {
       r: nodeR + 10,
     });
 
+    const rimBadge = createSVG('g', {
+      class: 'node-rim-badge',
+    });
+    const rimBadgeBody = createSVG('circle', {
+      class: 'node-rim-badge__body',
+      r: 11,
+    });
+    const rimBadgeText = createSVG('text', {
+      class: 'node-rim-badge__text',
+      'text-anchor': 'middle',
+      'dominant-baseline': 'central',
+    });
+    rimBadgeText.textContent = capacity.label;
+    rimBadge.appendChild(rimBadgeBody);
+    rimBadge.appendChild(rimBadgeText);
+    positionNodeRimBadge(rimBadge, nodeR);
+
     // Label.
     const label = createSVG('text', {
       class: 'node-label',
-      y: nodeR + 18,
+      y: nodeR + 20,
     });
     // Child loops show just the suffix after "/" since the parent
     // line makes the hierarchy clear (e.g., "signal/Alice" → "Alice").
@@ -978,11 +1111,13 @@ function renderNode(loop) {
     const slash = loop.parent_id ? displayName.indexOf('/') : -1;
     label.textContent = slash > 0 ? displayName.slice(slash + 1) : displayName;
 
+    inner.appendChild(selectionRing);
     inner.appendChild(ring);
     inner.appendChild(sleepRing);
     inner.appendChild(shapeEl);
     inner.appendChild(icon);
     inner.appendChild(supDot);
+    inner.appendChild(rimBadge);
     inner.appendChild(label);
     group.appendChild(inner);
     canvasWorld.appendChild(group);
@@ -1019,6 +1154,9 @@ function renderNode(loop) {
     glowEl.remove();
   }
 
+  const title = group.querySelector('title');
+  if (title) title.textContent = buildLoopNodeTitle(loop, capacity);
+
   // Dynamic resizing — update shape, rings, label when model changes.
   const prevR = parseFloat(group.dataset.nodeR) || DEFAULT_NODE_R;
   if (Math.abs(nodeR - prevR) > 0.5) {
@@ -1028,6 +1166,7 @@ function renderNode(loop) {
 
     // Update dependent radii.
     const newRingR = nodeR + 12;
+    group.querySelector('.selection-ring').setAttribute('r', nodeR + 18);
     group.querySelector('.node-ring').setAttribute('r', newRingR);
     const sleepRing = group.querySelector('.sleep-ring');
     const newSleepR = nodeR;
@@ -1035,41 +1174,44 @@ function renderNode(loop) {
     const circ = 2 * Math.PI * newSleepR;
     sleepRing.setAttribute('stroke-dasharray', circ);
     group.querySelector('.supervisor-dot').setAttribute('r', nodeR + 10);
+    positionNodeRimBadge(group.querySelector('.node-rim-badge'), nodeR);
     const iconEl = group.querySelector('.node-icon');
-    if (iconEl) iconEl.setAttribute('font-size', Math.round(nodeR * 0.7));
-    group.querySelector('.node-label').setAttribute('y', nodeR + 18);
+    if (iconEl) iconEl.setAttribute('font-size', Math.round(nodeR * 0.5));
+    group.querySelector('.node-label').setAttribute('y', nodeR + 20);
   }
   group.dataset.nodeR = nodeR;
+  group.setAttribute('data-category', category);
 
-  // Update state class on main shape — supervisor processing gets its own style.
-  // If the loop's backing service is degraded, override idle states with the
-  // degraded visual so the canvas reflects connwatch health.
   const shapeEl = group.querySelector('.node-shape');
-  const isSup = loop._supervisor && loop.state === 'processing';
-  const svcDegraded = isServiceDegraded(loop.name);
-  let stateClass;
-  if (isSup) {
-    stateClass = 'node-shape--supervisor';
-  } else if (svcDegraded && (loop.state === 'sleeping' || loop.state === 'waiting')) {
-    stateClass = 'node-shape--degraded';
-  } else {
-    stateClass = 'node-shape--' + (loop.state || 'pending');
-  }
-  shapeEl.setAttribute('class', 'node-shape ' + stateClass);
+  const iconEl = group.querySelector('.node-icon');
+  const visualState = getLoopVisualState(loop);
+  shapeEl.setAttribute('class', 'node-shape node-shape--category-' + category + ' node-shape--activity-' + visualState);
+  iconEl.textContent = CATEGORY_SIGILS[category] || CATEGORY_SIGILS.generic;
+  iconEl.setAttribute('class', 'node-icon node-icon--' + category);
 
-  // Stroke width represents context utilization percentage.
-  const ctxPct = (loop.context_window > 0 && loop.last_input_tokens > 0)
-    ? Math.min(1, loop.last_input_tokens / loop.context_window)
+  const ring = group.querySelector('.node-ring');
+  ring.setAttribute('class', 'node-ring node-ring--' + visualState);
+
+  // Ring thickness represents context utilization percentage.
+  const ctxPct = (capacity.contextWindow > 0 && loop.last_input_tokens > 0)
+    ? Math.min(1, loop.last_input_tokens / capacity.contextWindow)
     : 0;
   const minStroke = 2;
-  const maxStroke = 10;
+  const maxStroke = 8;
   const strokeW = ctxPct > 0
     ? minStroke + ctxPct * (maxStroke - minStroke)
     : minStroke;
-  shapeEl.setAttribute('stroke-width', strokeW.toFixed(1));
+  ring.setAttribute('stroke-width', strokeW.toFixed(1));
+
+  const rimBadge = group.querySelector('.node-rim-badge');
+  rimBadge.setAttribute('class', 'node-rim-badge node-rim-badge--' + capacity.basis);
+  const rimBadgeText = rimBadge.querySelector('.node-rim-badge__text');
+  rimBadgeText.textContent = capacity.label;
+  positionNodeRimBadge(rimBadge, nodeR);
 
   // Supervisor ring (outer pulsing ring around node).
   const supDot = group.querySelector('.supervisor-dot');
+  const isSup = visualState === 'supervisor';
   supDot.setAttribute('class',
     'supervisor-dot' + (isSup ? ' supervisor-dot--active' : ''));
   // Also show dimmed ring when last iteration was supervisor (memory).
