@@ -245,3 +245,17 @@ func TestDetachedLoopCompletionDispatcherRequiresConfiguredTargets(t *testing.T)
 		t.Fatalf("channel dispatch error = %v", err)
 	}
 }
+
+func TestDetachedLoopCompletionDispatcherRequiresConversationID(t *testing.T) {
+	t.Parallel()
+
+	dispatcher := newDetachedLoopCompletionDispatcher(&conversationSystemInjector{}, nil)
+
+	err := dispatcher.dispatch(context.Background(), loopCompletionPresentation{
+		Mode:    looppkg.CompletionConversation,
+		Content: "hello",
+	})
+	if err == nil || err.Error() != "conversation completion delivery requires a non-empty conversation ID" {
+		t.Fatalf("conversation dispatch error = %v", err)
+	}
+}

@@ -184,7 +184,7 @@ async function probeContentRetention() {
   if (requestDetailProbeInFlight) return requestDetailProbeInFlight;
   requestDetailProbeInFlight = (async () => {
     try {
-      const resp = await fetch('/api/requests/_probe');
+      const resp = await fetch('/api/request-detail/_probe');
       requestDetailAvailable = resp.ok && resp.headers.get('X-Request-Detail-Available') === 'true';
     } catch (_) {
       requestDetailAvailable = null;

@@ -1,6 +1,7 @@
 package loop
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -41,6 +42,102 @@ type Launch struct {
 	ToolTimeout       time.Duration            `yaml:"tool_timeout,omitempty" json:"tool_timeout,omitempty"`
 	UsageRole         string                   `yaml:"usage_role,omitempty" json:"usage_role,omitempty"`
 	UsageTaskName     string                   `yaml:"usage_task_name,omitempty" json:"usage_task_name,omitempty"`
+}
+
+type launchJSON struct {
+	Spec                     Spec                     `json:"spec,omitempty"`
+	Task                     string                   `json:"task,omitempty"`
+	ParentID                 string                   `json:"parent_id,omitempty"`
+	Metadata                 map[string]string        `json:"metadata,omitempty"`
+	ConversationID           string                   `json:"conversation_id,omitempty"`
+	ChannelBinding           *memory.ChannelBinding   `json:"channel_binding,omitempty"`
+	Model                    string                   `json:"model,omitempty"`
+	Hints                    map[string]string        `json:"hints,omitempty"`
+	AllowedTools             []string                 `json:"allowed_tools,omitempty"`
+	ExcludeTools             []string                 `json:"exclude_tools,omitempty"`
+	InitialTags              []string                 `json:"initial_tags,omitempty"`
+	RunTimeout               string                   `json:"run_timeout,omitempty"`
+	CompletionConversationID string                   `json:"completion_conversation_id,omitempty"`
+	CompletionChannel        *CompletionChannelTarget `json:"completion_channel,omitempty"`
+	SkipContext              bool                     `json:"skip_context,omitempty"`
+	SkipTagFilter            bool                     `json:"skip_tag_filter,omitempty"`
+	SystemPrompt             string                   `json:"system_prompt,omitempty"`
+	MaxIterations            int                      `json:"max_iterations,omitempty"`
+	MaxOutputTokens          int                      `json:"max_output_tokens,omitempty"`
+	ToolTimeout              string                   `json:"tool_timeout,omitempty"`
+	UsageRole                string                   `json:"usage_role,omitempty"`
+	UsageTaskName            string                   `json:"usage_task_name,omitempty"`
+}
+
+func (l Launch) MarshalJSON() ([]byte, error) {
+	wire := launchJSON{
+		Spec:                     l.Spec,
+		Task:                     l.Task,
+		ParentID:                 l.ParentID,
+		Metadata:                 cloneStringMap(l.Metadata),
+		ConversationID:           l.ConversationID,
+		ChannelBinding:           l.ChannelBinding.Clone(),
+		Model:                    l.Model,
+		Hints:                    cloneStringMap(l.Hints),
+		AllowedTools:             append([]string(nil), l.AllowedTools...),
+		ExcludeTools:             append([]string(nil), l.ExcludeTools...),
+		InitialTags:              append([]string(nil), l.InitialTags...),
+		RunTimeout:               durationString(l.RunTimeout),
+		CompletionConversationID: l.CompletionConversationID,
+		CompletionChannel:        CloneCompletionChannelTarget(l.CompletionChannel),
+		SkipContext:              l.SkipContext,
+		SkipTagFilter:            l.SkipTagFilter,
+		SystemPrompt:             l.SystemPrompt,
+		MaxIterations:            l.MaxIterations,
+		MaxOutputTokens:          l.MaxOutputTokens,
+		ToolTimeout:              durationString(l.ToolTimeout),
+		UsageRole:                l.UsageRole,
+		UsageTaskName:            l.UsageTaskName,
+	}
+	return json.Marshal(wire)
+}
+
+func (l *Launch) UnmarshalJSON(data []byte) error {
+	if l == nil {
+		return fmt.Errorf("loop: nil launch")
+	}
+	var wire launchJSON
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	runTimeout, err := parseOptionalDuration(wire.RunTimeout)
+	if err != nil {
+		return fmt.Errorf("loop: run_timeout: %w", err)
+	}
+	toolTimeout, err := parseOptionalDuration(wire.ToolTimeout)
+	if err != nil {
+		return fmt.Errorf("loop: tool_timeout: %w", err)
+	}
+	*l = Launch{
+		Spec:                     wire.Spec,
+		Task:                     wire.Task,
+		ParentID:                 wire.ParentID,
+		Metadata:                 cloneStringMap(wire.Metadata),
+		ConversationID:           wire.ConversationID,
+		ChannelBinding:           wire.ChannelBinding.Clone(),
+		Model:                    wire.Model,
+		Hints:                    cloneStringMap(wire.Hints),
+		AllowedTools:             append([]string(nil), wire.AllowedTools...),
+		ExcludeTools:             append([]string(nil), wire.ExcludeTools...),
+		InitialTags:              append([]string(nil), wire.InitialTags...),
+		RunTimeout:               runTimeout,
+		CompletionConversationID: wire.CompletionConversationID,
+		CompletionChannel:        CloneCompletionChannelTarget(wire.CompletionChannel),
+		SkipContext:              wire.SkipContext,
+		SkipTagFilter:            wire.SkipTagFilter,
+		SystemPrompt:             wire.SystemPrompt,
+		MaxIterations:            wire.MaxIterations,
+		MaxOutputTokens:          wire.MaxOutputTokens,
+		ToolTimeout:              toolTimeout,
+		UsageRole:                wire.UsageRole,
+		UsageTaskName:            wire.UsageTaskName,
+	}
+	return nil
 }
 
 // Validate checks that the launch is well-formed.

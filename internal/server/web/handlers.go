@@ -123,12 +123,6 @@ func (s *WebServer) handleLoopLogs(w http.ResponseWriter, r *http.Request) {
 // tool call arguments and results, and token metadata.
 func (s *WebServer) handleRequestDetail(w http.ResponseWriter, r *http.Request) {
 	requestID := r.PathValue("id")
-	if requestID == "_probe" {
-		w.Header().Set("X-Request-Detail-Available", strconv.FormatBool(s.contentQuerier != nil))
-		w.WriteHeader(http.StatusNoContent)
-		return
-	}
-
 	if s.contentQuerier == nil {
 		s.writeJSONError(w, "request detail not available", http.StatusServiceUnavailable)
 		return
@@ -151,6 +145,11 @@ func (s *WebServer) handleRequestDetail(w http.ResponseWriter, r *http.Request) 
 	}
 
 	s.writeJSON(w, detail)
+}
+
+func (s *WebServer) handleRequestDetailProbe(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("X-Request-Detail-Available", strconv.FormatBool(s.contentQuerier != nil))
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // handleSystemLogs returns all log entries across the entire runtime.

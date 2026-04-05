@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"regexp"
 	"strings"
 
@@ -105,7 +106,7 @@ func bridgeTool(client *Client, serverName, name string, td ToolDefinition, defa
 		Name:        name,
 		Description: description,
 		Parameters:  td.InputSchema,
-		CanonicalID: fmt.Sprintf("mcp:%s/%s", sanitize(serverName), sanitize(mcpName)),
+		CanonicalID: canonicalToolID(serverName, mcpName),
 		Source:      "mcp",
 		Origin:      serverName,
 		DefaultTags: append([]string(nil), tags...),
@@ -113,6 +114,10 @@ func bridgeTool(client *Client, serverName, name string, td ToolDefinition, defa
 			return client.CallTool(ctx, mcpName, args)
 		},
 	}
+}
+
+func canonicalToolID(serverName, toolName string) string {
+	return fmt.Sprintf("mcp:%s/%s", url.PathEscape(serverName), url.PathEscape(toolName))
 }
 
 // sanitize converts a name to lowercase and replaces non-alphanumeric

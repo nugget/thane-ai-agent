@@ -56,6 +56,22 @@ func TestSanitize(t *testing.T) {
 	}
 }
 
+func TestCanonicalToolIDPreservesDistinctRawNames(t *testing.T) {
+	t.Parallel()
+
+	idWithDash := canonicalToolID("github-tools", "foo-bar")
+	idWithUnderscore := canonicalToolID("github-tools", "foo_bar")
+	if idWithDash == idWithUnderscore {
+		t.Fatalf("canonicalToolID collision: %q", idWithDash)
+	}
+	if want := "mcp:github-tools/foo-bar"; idWithDash != want {
+		t.Fatalf("canonicalToolID with dash = %q, want %q", idWithDash, want)
+	}
+	if want := "mcp:github-tools/foo_bar"; idWithUnderscore != want {
+		t.Fatalf("canonicalToolID with underscore = %q, want %q", idWithUnderscore, want)
+	}
+}
+
 func TestBridgeTools_AllTools(t *testing.T) {
 	mt := newMockTransport()
 	mt.addResponse("tools/list", toolsListResult{
@@ -104,6 +120,9 @@ func TestBridgeTools_AllTools(t *testing.T) {
 	tool := registry.Get("mcp_home_assistant_call_service")
 	if tool.Parameters == nil {
 		t.Fatal("Parameters is nil")
+	}
+	if tool.CanonicalID != "mcp:home-assistant/call_service" {
+		t.Fatalf("CanonicalID = %q, want mcp:home-assistant/call_service", tool.CanonicalID)
 	}
 	props, ok := tool.Parameters["properties"]
 	if !ok {

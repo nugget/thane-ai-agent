@@ -136,6 +136,7 @@ func (s *WebServer) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/loops", s.handleLoops)
 	mux.HandleFunc("GET /api/loops/events", s.handleLoopEvents)
 	mux.HandleFunc("GET /api/loops/{id}/logs", s.handleLoopLogs)
+	mux.HandleFunc("GET /api/request-detail/_probe", s.handleRequestDetailProbe)
 	mux.HandleFunc("GET /api/requests/{id}", s.handleRequestDetail)
 	mux.HandleFunc("GET /api/system/logs", s.handleSystemLogs)
 }

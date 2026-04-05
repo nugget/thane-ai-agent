@@ -4747,7 +4747,7 @@ async function probeContentRetention() {
   try {
     // Use a dedicated probe endpoint shape that always succeeds so
     // devtools don't fill with intentional 503s when retention is off.
-    const resp = await fetch('/api/requests/_probe');
+    const resp = await fetch('/api/request-detail/_probe');
     requestDetailAvailable = resp.ok && resp.headers.get('X-Request-Detail-Available') === 'true';
   } catch (_) {
     requestDetailAvailable = null;

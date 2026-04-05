@@ -44,11 +44,13 @@ func (q *stubLogQuerier) Query(_ logging.QueryParams) ([]logging.LogEntry, error
 
 // stubContentQuerier implements [ContentQuerier] for tests.
 type stubContentQuerier struct {
-	detail *logging.RequestDetail
-	err    error
+	detail        *logging.RequestDetail
+	err           error
+	lastRequestID string
 }
 
-func (q *stubContentQuerier) QueryRequestDetail(_ string) (*logging.RequestDetail, error) {
+func (q *stubContentQuerier) QueryRequestDetail(requestID string) (*logging.RequestDetail, error) {
+	q.lastRequestID = requestID
 	return q.detail, q.err
 }
 
@@ -597,7 +599,7 @@ func TestHandleRequestDetail_ProbeAvailable(t *testing.T) {
 	mux := http.NewServeMux()
 	srv.RegisterRoutes(mux)
 
-	req := httptest.NewRequest("GET", "/api/requests/_probe", nil)
+	req := httptest.NewRequest("GET", "/api/request-detail/_probe", nil)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
@@ -616,7 +618,7 @@ func TestHandleRequestDetail_ProbeUnavailable(t *testing.T) {
 	mux := http.NewServeMux()
 	srv.RegisterRoutes(mux)
 
-	req := httptest.NewRequest("GET", "/api/requests/_probe", nil)
+	req := httptest.NewRequest("GET", "/api/request-detail/_probe", nil)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
@@ -625,5 +627,35 @@ func TestHandleRequestDetail_ProbeUnavailable(t *testing.T) {
 	}
 	if got := w.Header().Get("X-Request-Detail-Available"); got != "false" {
 		t.Fatalf("header X-Request-Detail-Available = %q, want false", got)
+	}
+}
+
+func TestHandleRequestDetail_AllowsLiteralProbeRequestID(t *testing.T) {
+	t.Parallel()
+
+	cq := &stubContentQuerier{
+		detail: &logging.RequestDetail{
+			RequestID: "_probe",
+			Model:     "test-model",
+		},
+	}
+
+	srv := NewWebServer(Config{
+		LoopRegistry:   &stubRegistry{},
+		EventBus:       events.New(),
+		ContentQuerier: cq,
+	})
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	req := httptest.NewRequest("GET", "/api/requests/_probe", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	if cq.lastRequestID != "_probe" {
+		t.Fatalf("queried request id = %q, want _probe", cq.lastRequestID)
 	}
 }

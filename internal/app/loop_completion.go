@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
 )
@@ -163,6 +164,9 @@ func (d *detachedLoopCompletionDispatcher) dispatch(ctx context.Context, present
 	case looppkg.CompletionConversation:
 		if d.conversations == nil {
 			return fmt.Errorf("conversation completion delivery is not configured")
+		}
+		if strings.TrimSpace(presented.ConversationID) == "" {
+			return fmt.Errorf("conversation completion delivery requires a non-empty conversation ID")
 		}
 		return d.conversations.InjectSystemMessage(presented.ConversationID, presented.Content)
 	case looppkg.CompletionChannel:

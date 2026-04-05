@@ -4,6 +4,7 @@ const $ = (sel) => document.querySelector(sel);
 
 const urlParams = new URLSearchParams(window.location.search);
 const requestID = urlParams.get('id') || '';
+const REQUEST_DETAIL_PROBE_PATH = '/api/request-detail/_probe';
 
 const els = {
   title: $('#request-window-title'),
@@ -20,6 +21,7 @@ const els = {
 let activeRequestJSON = '';
 let refreshTimer = null;
 let requestDetailAvailable = null;
+let copyStatusTimer = null;
 
 function renderUnavailableState(message, subtitle = 'Request detail is not available in this runtime.') {
   els.title.textContent = 'Request ' + shortID(requestID);
@@ -50,6 +52,41 @@ function setRequestLoaded(loaded) {
 
 function updateWindowTitle() {
   document.title = 'Thane \u00b7 Request ' + (requestID ? shortID(requestID) : 'Unknown');
+}
+
+function setCopyButtonState(label, copied) {
+  if (!els.copy) return;
+  els.copy.textContent = label;
+  els.copy.classList.toggle('copy-btn--copied', Boolean(copied));
+}
+
+function queueCopyButtonReset(delay = 1200) {
+  if (copyStatusTimer) clearTimeout(copyStatusTimer);
+  copyStatusTimer = setTimeout(() => {
+    copyStatusTimer = null;
+    setCopyButtonState('JSON', false);
+  }, delay);
+}
+
+async function copyText(text) {
+  if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  const input = document.createElement('textarea');
+  input.value = text;
+  input.setAttribute('readonly', 'readonly');
+  input.style.position = 'fixed';
+  input.style.opacity = '0';
+  document.body.appendChild(input);
+  input.focus();
+  input.select();
+  const copied = document.execCommand('copy');
+  document.body.removeChild(input);
+  if (!copied) {
+    throw new Error('clipboard copy was rejected');
+  }
 }
 
 async function fetchRequestDetail() {
@@ -120,7 +157,7 @@ async function fetchRequestDetail() {
 
 async function probeContentRetention() {
   try {
-    const resp = await fetch('/api/requests/_probe');
+    const resp = await fetch(REQUEST_DETAIL_PROBE_PATH);
     requestDetailAvailable = resp.ok && resp.headers.get('X-Request-Detail-Available') === 'true';
   } catch (_) {
     requestDetailAvailable = null;
@@ -142,18 +179,21 @@ els.refresh?.addEventListener('click', () => {
 
 els.copy?.addEventListener('click', () => {
   if (!activeRequestJSON) return;
-  navigator.clipboard.writeText(activeRequestJSON).then(() => {
-    els.copy.textContent = 'Copied';
-    els.copy.classList.add('copy-btn--copied');
-    setTimeout(() => {
-      els.copy.textContent = 'JSON';
-      els.copy.classList.remove('copy-btn--copied');
-    }, 1200);
-  });
+  void copyText(activeRequestJSON)
+    .then(() => {
+      setCopyButtonState('Copied', true);
+      queueCopyButtonReset();
+    })
+    .catch((err) => {
+      console.warn('Failed to copy request detail JSON:', err);
+      setCopyButtonState('Copy failed', false);
+      queueCopyButtonReset(1600);
+    });
 });
 
 window.addEventListener('pagehide', () => {
   if (refreshTimer) clearInterval(refreshTimer);
+  if (copyStatusTimer) clearTimeout(copyStatusTimer);
 });
 
 updateWindowTitle();
