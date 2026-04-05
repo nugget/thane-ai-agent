@@ -101,6 +101,11 @@ func (c *Client) Start(ctx context.Context) error {
 		"args", c.args,
 	)
 
+	go func() {
+		<-ctx.Done()
+		c.closing.Store(true)
+	}()
+
 	cmd := exec.CommandContext(ctx, c.command, c.args...)
 	cmd.Env = os.Environ()
 
