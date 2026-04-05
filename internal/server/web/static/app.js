@@ -429,9 +429,8 @@ function getLayoutViewportRect() {
   const zoom = Math.max(0.001, viewport.zoom || 1);
   const width = rect.width / zoom;
   const height = rect.height / zoom;
-  const systemNode = physics.nodes.get('__system__');
-  const cx = systemNode && Number.isFinite(systemNode.x) ? systemNode.x : (width / 2);
-  const cy = systemNode && Number.isFinite(systemNode.y) ? systemNode.y : (height / 2);
+  const cx = width / 2;
+  const cy = height / 2;
   return { width, height, cx, cy };
 }
 
