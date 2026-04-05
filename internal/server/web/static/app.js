@@ -345,6 +345,9 @@ const CATEGORY_LABELS = {
   generic: 'generic',
 };
 
+const NODE_LABEL_GAP = 24;
+const SYSTEM_LABEL_GAP = 20;
+
 // Derive a visual category from loop data. Drives fill tone and sigil.
 function getLoopCategoryInfo(loop) {
   const hints = loop.config && loop.config.Hints;
@@ -1391,7 +1394,7 @@ function renderNode(loop) {
     // Label.
     const label = createSVG('text', {
       class: 'node-label',
-      y: nodeR + 20,
+      y: nodeR + NODE_LABEL_GAP,
     });
     // Child loops show just the suffix after "/" since the parent
     // line makes the hierarchy clear (e.g., "signal/Alice" → "Alice").
@@ -1465,7 +1468,7 @@ function renderNode(loop) {
     positionNodeRimBadge(group.querySelector('.node-rim-badge'), nodeR);
     const iconEl = group.querySelector('.node-icon');
     if (iconEl) iconEl.setAttribute('font-size', Math.round(nodeR * 0.5));
-    group.querySelector('.node-label').setAttribute('y', nodeR + 20);
+    group.querySelector('.node-label').setAttribute('y', nodeR + NODE_LABEL_GAP);
   }
   group.dataset.nodeR = nodeR;
   group.setAttribute('data-category', category);
@@ -1617,7 +1620,7 @@ function renderSystemNode() {
 
     const label = createSVG('text', {
       class: 'node-label',
-      y: s / 2 + 16,
+      y: s / 2 + SYSTEM_LABEL_GAP,
     });
     label.textContent = 'runtime';
     group.appendChild(label);
