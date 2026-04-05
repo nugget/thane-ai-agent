@@ -105,7 +105,7 @@
     <div class="legend-panel__header">
       <div>
         <h2 class="legend-panel__title">Graph Legend</h2>
-        <p class="legend-panel__subtitle">Node fills, rings, halos, badges, and live cues.</p>
+        <p class="legend-panel__subtitle">Entity family, runtime state, trust, lineage, and capacity cues.</p>
       </div>
       <button id="legend-close" class="btn" title="Close legend">&times;</button>
     </div>
@@ -127,36 +127,36 @@
           <div class="legend-item">
             <span class="legend-marker legend-marker--fill">@</span>
             <div class="legend-copy">
-              <strong>Core fill and sigil</strong>
-              <p>Entity family: channel, delegate, scheduled, metacognitive, or generic.</p>
+              <strong>Family fill and glyph</strong>
+              <p>The center mark identifies the entity family carried in schema metadata.</p>
             </div>
           </div>
           <div class="legend-item">
             <span class="legend-marker legend-marker--ring"></span>
             <div class="legend-copy">
-              <strong>Outer ring</strong>
-              <p>Current runtime state. Ring thickness grows with context utilization.</p>
+              <strong>State ring</strong>
+              <p>Color reflects current runtime state. Ring weight grows with context pressure.</p>
             </div>
           </div>
           <div class="legend-item">
             <span class="legend-marker legend-marker--sleep"></span>
             <div class="legend-copy">
-              <strong>Sleep arc</strong>
-              <p>Countdown progress for sleeping loops.</p>
+              <strong>Sleep timer</strong>
+              <p>Arc progress shows time remaining before the next wake.</p>
             </div>
           </div>
           <div class="legend-item">
             <span class="legend-marker legend-marker--halo"></span>
             <div class="legend-copy">
-              <strong>Halos and glows</strong>
-              <p>Selection halo, supervisor ring, and trust underglow add high-value context.</p>
+              <strong>Selection, trust, and supervision</strong>
+              <p>Halo, underglow, and outer accents add operator context without changing identity.</p>
             </div>
           </div>
           <div class="legend-item">
             <span class="legend-marker legend-marker--badge">8k</span>
             <div class="legend-copy">
-              <strong>Rim badge</strong>
-              <p>Capacity label. Solid badges are real context tiers; dashed badges are model-size estimates.</p>
+              <strong>Capacity badge</strong>
+              <p>Context tier when known. Dashed badges are model-size estimates before live capacity is observed.</p>
             </div>
           </div>
         </div>
@@ -164,41 +164,41 @@
     </section>
 
     <section class="legend-section">
-      <h3 class="section-title">Node Categories</h3>
+      <h3 class="section-title">Entity Families</h3>
       <div class="legend-chip-grid">
         <div class="legend-chip">
           <span class="legend-mini-node legend-mini-node--generic">•</span>
           <div class="legend-copy">
-            <strong>Generic</strong>
-            <p>Default runtime loop.</p>
+            <strong>Loop</strong>
+            <p>Default family when no specialized schema hint is present.</p>
           </div>
         </div>
         <div class="legend-chip">
           <span class="legend-mini-node legend-mini-node--metacognitive">M</span>
           <div class="legend-copy">
             <strong>Metacognitive</strong>
-            <p>Reflection and supervisor-style cognition.</p>
+            <p>Reflective or supervisory cognition family.</p>
           </div>
         </div>
         <div class="legend-chip">
           <span class="legend-mini-node legend-mini-node--channel">@</span>
           <div class="legend-copy">
             <strong>Channel</strong>
-            <p>Signal, OWU, and other interactive surfaces.</p>
+            <p>Loop bound to an external conversation or surface.</p>
           </div>
         </div>
         <div class="legend-chip">
           <span class="legend-mini-node legend-mini-node--delegate">↗</span>
           <div class="legend-copy">
             <strong>Delegate</strong>
-            <p>Child work spawned from another loop.</p>
+            <p>Child loop launched on behalf of another loop.</p>
           </div>
         </div>
         <div class="legend-chip">
           <span class="legend-mini-node legend-mini-node--scheduled">◷</span>
           <div class="legend-copy">
             <strong>Scheduled</strong>
-            <p>Timer or cron-style work.</p>
+            <p>Loop awakened by a timer or schedule policy.</p>
           </div>
         </div>
       </div>
@@ -218,35 +218,35 @@
           <span class="legend-state-swatch legend-state-swatch--waiting"></span>
           <div class="legend-copy">
             <strong>Waiting</strong>
-            <p>Blocked on input, event, or callback.</p>
+            <p>Paused on input, event, or external completion.</p>
           </div>
         </div>
         <div class="legend-chip">
           <span class="legend-state-swatch legend-state-swatch--processing"></span>
           <div class="legend-copy">
             <strong>Processing</strong>
-            <p>Actively thinking, planning, or using tools.</p>
+            <p>Active turn in progress: model work, planning, or tools.</p>
           </div>
         </div>
         <div class="legend-chip">
           <span class="legend-state-swatch legend-state-swatch--supervisor"></span>
           <div class="legend-copy">
             <strong>Supervisor</strong>
-            <p>Processing with supervisor emphasis.</p>
+            <p>Processing with supervisory or reflective emphasis.</p>
           </div>
         </div>
         <div class="legend-chip">
           <span class="legend-state-swatch legend-state-swatch--degraded"></span>
           <div class="legend-copy">
             <strong>Degraded or Error</strong>
-            <p>Service trouble, warning state, or failed work.</p>
+            <p>Recent failure, degraded dependency, or unhealthy turn.</p>
           </div>
         </div>
         <div class="legend-chip">
           <span class="legend-state-swatch legend-state-swatch--stopped"></span>
           <div class="legend-copy">
             <strong>Stopped or Idle</strong>
-            <p>Inactive, completed, or no longer running.</p>
+            <p>No active work and no pending wake right now.</p>
           </div>
         </div>
       </div>
@@ -262,61 +262,61 @@
         <span class="legend-capacity-badge legend-capacity-badge--context">512k</span>
         <span class="legend-capacity-badge legend-capacity-badge--model">70b</span>
       </div>
-      <p class="legend-note">Larger nodes usually indicate larger context capacity. Dashed badges are model-size estimates when context is not yet known.</p>
+      <p class="legend-note">Node scale usually tracks observed context capacity. Dashed badges are model-size estimates before live capacity is known.</p>
       <div class="legend-chip-grid">
         <div class="legend-chip">
           <span class="legend-glow-swatch legend-glow-swatch--admin"></span>
           <div class="legend-copy">
             <strong>Admin trust</strong>
-            <p>Highest-trust contact or channel context.</p>
+            <p>Highest-trust binding from contact or channel policy.</p>
           </div>
         </div>
         <div class="legend-chip">
           <span class="legend-glow-swatch legend-glow-swatch--household"></span>
           <div class="legend-copy">
             <strong>Household trust</strong>
-            <p>Known household or intimate context.</p>
+            <p>Household or intimate binding with expanded context.</p>
           </div>
         </div>
         <div class="legend-chip">
           <span class="legend-glow-swatch legend-glow-swatch--trusted"></span>
           <div class="legend-copy">
             <strong>Trusted or known</strong>
-            <p>Recognized contact with softer guardrails.</p>
+            <p>Recognized binding with softer guardrails.</p>
           </div>
         </div>
         <div class="legend-chip">
           <span class="legend-glow-swatch legend-glow-swatch--unknown"></span>
           <div class="legend-copy">
             <strong>Unknown</strong>
-            <p>Low-trust or unverified contact binding.</p>
+            <p>Unverified or low-trust binding.</p>
           </div>
         </div>
       </div>
     </section>
 
     <section class="legend-section">
-      <h3 class="section-title">Links and Live Activity</h3>
+      <h3 class="section-title">Lineage and Activity</h3>
       <div class="legend-link-list">
         <div class="legend-link-item">
           <span class="legend-line-swatch"></span>
           <div class="legend-copy">
             <strong>Relationship line</strong>
-            <p>Parent-child or topology relationship.</p>
+            <p>Declared lineage or topology edge.</p>
           </div>
         </div>
         <div class="legend-link-item">
           <span class="legend-line-swatch legend-line-swatch--child"></span>
           <div class="legend-copy">
             <strong>Child or delegate line</strong>
-            <p>Spawned work and subordinate loops.</p>
+            <p>Child execution, delegation, or branch growth away from an anchor.</p>
           </div>
         </div>
         <div class="legend-link-item">
           <span class="legend-line-swatch legend-line-swatch--flash"></span>
           <div class="legend-copy">
             <strong>Activity flash</strong>
-            <p>Recent supervisor or iteration activity.</p>
+            <p>Recent wake, iteration, or supervisory surge on that path.</p>
           </div>
         </div>
       </div>
