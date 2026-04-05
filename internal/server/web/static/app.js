@@ -421,11 +421,22 @@ function syncPhysicsNodes(cx, cy) {
 }
 
 function cloneRect(rect) {
-  return rect ? { width: rect.width, height: rect.height } : null;
+  return rect ? { width: rect.width, height: rect.height, cx: rect.cx, cy: rect.cy } : null;
+}
+
+function getLayoutViewportRect() {
+  const rect = canvas.getBoundingClientRect();
+  const zoom = Math.max(0.001, viewport.zoom || 1);
+  const width = rect.width / zoom;
+  const height = rect.height / zoom;
+  const systemNode = physics.nodes.get('__system__');
+  const cx = systemNode && Number.isFinite(systemNode.x) ? systemNode.x : (width / 2);
+  const cy = systemNode && Number.isFinite(systemNode.y) ? systemNode.y : (height / 2);
+  return { width, height, cx, cy };
 }
 
 function getCanvasRectSnapshot() {
-  return cloneRect(canvas.getBoundingClientRect());
+  return cloneRect(getLayoutViewportRect());
 }
 
 function isCanvasRectChanged(prevRect, nextRect) {
@@ -440,10 +451,10 @@ function reflowPhysicsNodes(prevRect, nextRect) {
     return;
   }
 
-  const prevCx = prevRect.width / 2;
-  const prevCy = prevRect.height / 2;
-  const nextCx = nextRect.width / 2;
-  const nextCy = nextRect.height / 2;
+  const prevCx = Number.isFinite(prevRect.cx) ? prevRect.cx : (prevRect.width / 2);
+  const prevCy = Number.isFinite(prevRect.cy) ? prevRect.cy : (prevRect.height / 2);
+  const nextCx = Number.isFinite(nextRect.cx) ? nextRect.cx : (nextRect.width / 2);
+  const nextCy = Number.isFinite(nextRect.cy) ? nextRect.cy : (nextRect.height / 2);
   const scaleX = Math.max(0.65, Math.min(1.65, nextRect.width / prevRect.width));
   const scaleY = Math.max(0.65, Math.min(1.65, nextRect.height / prevRect.height));
 
@@ -2760,9 +2771,9 @@ function renderNodes() {
   emptyState.hidden = loops.length > 0 || hasSystem;
 
   // Canvas center — used as gravity anchor and for new-node spawn.
-  const rect = refreshCanvasViewport() || canvas.getBoundingClientRect();
-  const cx = rect.width / 2;
-  const cy = rect.height / 2;
+  const rect = refreshCanvasViewport() || getLayoutViewportRect();
+  const cx = rect.cx;
+  const cy = rect.cy;
 
   // Sync physics state with current loops (add new, remove stale).
   syncPhysicsNodes(cx, cy);
@@ -4450,9 +4461,9 @@ function currentDetailTickIntervalMs() {
 
 function tick() {
   // Physics simulation — run every frame for smooth organic motion.
-  const rect = canvas.getBoundingClientRect();
+  const rect = refreshCanvasViewport() || getLayoutViewportRect();
   if (rect.width > 0 && rect.height > 0) {
-    physicsStep(rect.width / 2, rect.height / 2, rect.width, rect.height);
+    physicsStep(rect.cx, rect.cy, rect.width, rect.height);
     updateNodePositions();
   }
 
