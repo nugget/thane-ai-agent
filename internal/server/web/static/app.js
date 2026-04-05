@@ -1445,8 +1445,19 @@ const TRUST_ZONE_COLORS = {
 // ---------------------------------------------------------------------------
 
 let eventSource = null;
+let eventSourceClosing = false;
+
+function disconnectEventStream() {
+  eventSourceClosing = true;
+  if (eventSource) {
+    eventSource.close();
+    eventSource = null;
+  }
+}
 
 function connect() {
+  disconnectEventStream();
+  eventSourceClosing = false;
   setConnState('connecting');
   eventSource = new EventSource('/api/loops/events');
 
@@ -1489,6 +1500,7 @@ function connect() {
   });
 
   eventSource.onerror = () => {
+    if (eventSourceClosing) return;
     setConnState('disconnected');
     if (!connectionWasDegraded) {
       connectionWasDegraded = true;
@@ -1508,6 +1520,7 @@ function connect() {
   };
 
   eventSource.onopen = () => {
+    if (eventSourceClosing) return;
     setConnState('connected');
     if (connectionWasDegraded) {
       connectionWasDegraded = false;
@@ -1525,6 +1538,9 @@ function connect() {
     fetchVersionInfo(); // re-sync uptime on reconnect
   };
 }
+
+window.addEventListener('pagehide', disconnectEventStream);
+window.addEventListener('beforeunload', disconnectEventStream);
 
 let connState = 'connecting';
 

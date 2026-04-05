@@ -130,6 +130,16 @@ async function fetchSystemLogs() {
 let loopData = null;
 const sleepTimers = new Map();
 let iterationHistory = [];
+let loopEventSource = null;
+let loopEventSourceClosing = false;
+
+function disconnectLoopSSE() {
+  loopEventSourceClosing = true;
+  if (loopEventSource) {
+    loopEventSource.close();
+    loopEventSource = null;
+  }
+}
 
 function initLoop() {
   if (!nodeId) {
@@ -146,8 +156,11 @@ function initLoop() {
 }
 
 function connectSSE() {
+  disconnectLoopSSE();
+  loopEventSourceClosing = false;
   setConnStatus('connecting', 'Connecting...');
   const es = new EventSource('/api/loops/events');
+  loopEventSource = es;
 
   es.addEventListener('snapshot', (e) => {
     const statuses = JSON.parse(e.data);
@@ -187,13 +200,18 @@ function connectSSE() {
   });
 
   es.addEventListener('error', () => {
+    if (loopEventSourceClosing) return;
     setConnStatus('err', 'Disconnected \u2014 reconnecting...');
   });
 
   es.addEventListener('open', () => {
+    if (loopEventSourceClosing) return;
     setConnStatus('ok', 'Connected');
   });
 }
+
+window.addEventListener('pagehide', disconnectLoopSSE);
+window.addEventListener('beforeunload', disconnectLoopSSE);
 
 function applyLoopEvent(evt) {
   if (!loopData) return;
