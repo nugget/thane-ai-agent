@@ -1084,6 +1084,7 @@ const canvas = $('#canvas');
 const canvasWorld = $('#canvas-world');
 const connBadge = $('#conn-status');
 const detailPlaceholder = $('#detail-placeholder');
+const detailPanel = $('#detail-panel');
 const detailContent = $('#detail-content');
 const detailEntity = $('#detail-entity');
 const emptyState = $('#empty-state');
@@ -1132,6 +1133,33 @@ let nextNotificationID = 1;
 const recentNotificationSignatures = new Map();
 let connectionWasDegraded = false;
 let lastDetailSelectionKey = null;
+let detailInteractionHoldUntil = 0;
+let detailPointerSelectionActive = false;
+
+function bumpDetailInteractionHold(ms = 1200) {
+  detailInteractionHoldUntil = Math.max(detailInteractionHoldUntil, Date.now() + ms);
+}
+
+function nodeWithinDetailPanel(node) {
+  if (!detailPanel || !node) return false;
+  const el = node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement;
+  return !!el && detailPanel.contains(el);
+}
+
+function detailTextSelectionActive() {
+  const sel = typeof window.getSelection === 'function' ? window.getSelection() : null;
+  if (!sel || sel.isCollapsed || sel.rangeCount === 0) return false;
+  return nodeWithinDetailPanel(sel.anchorNode) || nodeWithinDetailPanel(sel.focusNode);
+}
+
+function shouldDeferDetailRender() {
+  if (detailPointerSelectionActive) return true;
+  if (detailTextSelectionActive()) {
+    bumpDetailInteractionHold(1500);
+    return true;
+  }
+  return Date.now() < detailInteractionHoldUntil;
+}
 
 function currentDetailSelectionKey() {
   if (typeof activeRequestID !== 'undefined' && activeRequestID) return 'request:' + activeRequestID;
@@ -1141,21 +1169,24 @@ function currentDetailSelectionKey() {
 }
 
 function withPreservedDetailScroll(renderFn) {
-  const panel = document.getElementById('detail-panel');
   const selectionKey = currentDetailSelectionKey();
-  const preserve = !!panel && selectionKey !== null && selectionKey === lastDetailSelectionKey;
-  const previousTop = preserve ? panel.scrollTop : 0;
+  if (detailPanel && selectionKey !== null && selectionKey === lastDetailSelectionKey && shouldDeferDetailRender()) {
+    return;
+  }
+
+  const preserve = !!detailPanel && selectionKey !== null && selectionKey === lastDetailSelectionKey;
+  const previousTop = preserve ? detailPanel.scrollTop : 0;
 
   renderFn();
 
-  if (panel) {
+  if (detailPanel) {
     if (preserve) {
       requestAnimationFrame(() => {
-        const maxTop = Math.max(0, panel.scrollHeight - panel.clientHeight);
-        panel.scrollTop = Math.min(previousTop, maxTop);
+        const maxTop = Math.max(0, detailPanel.scrollHeight - detailPanel.clientHeight);
+        detailPanel.scrollTop = Math.min(previousTop, maxTop);
       });
     } else {
-      panel.scrollTop = 0;
+      detailPanel.scrollTop = 0;
     }
   }
 
@@ -2911,6 +2942,31 @@ legendBackdrop?.addEventListener('click', () => setLegendVisible(false));
 
 setInspectorVisible(dashboardPrefs.inspectorVisible);
 setLogsVisible(dashboardPrefs.logsVisible);
+
+if (detailPanel) {
+  detailPanel.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    if (e.target.closest('button, .btn, .toggle-btn, .id-chip, .log-id-chip, summary, a')) return;
+    detailPointerSelectionActive = true;
+    bumpDetailInteractionHold(2000);
+  });
+
+  detailPanel.addEventListener('copy', () => {
+    bumpDetailInteractionHold(1200);
+  });
+}
+
+document.addEventListener('pointerup', () => {
+  if (!detailPointerSelectionActive) return;
+  detailPointerSelectionActive = false;
+  bumpDetailInteractionHold(900);
+});
+
+document.addEventListener('selectionchange', () => {
+  if (detailTextSelectionActive()) {
+    bumpDetailInteractionHold(1500);
+  }
+});
 
 // ---------------------------------------------------------------------------
 // Context Menu
