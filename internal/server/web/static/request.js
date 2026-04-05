@@ -19,6 +19,28 @@ const els = {
 
 let activeRequestJSON = '';
 let refreshTimer = null;
+let requestDetailAvailable = null;
+
+function renderUnavailableState(message, subtitle = 'Request detail is not available in this runtime.') {
+  els.title.textContent = 'Request ' + shortID(requestID);
+  els.subtitle.textContent = subtitle;
+  els.ids.innerHTML = '';
+  if (requestID) {
+    els.ids.appendChild(makeIDRow('request_id', requestID));
+  }
+  els.meta.innerHTML = '';
+  const meta = document.createElement('div');
+  meta.className = 'request-meta-bar';
+  const item = document.createElement('span');
+  item.className = 'request-meta-bar__item';
+  item.innerHTML =
+    '<span class="request-meta-bar__label">status</span> ' +
+    '<span class="request-meta-bar__value request-meta-bar__value--warn">' + escapeHTML(message) + '</span>';
+  meta.appendChild(item);
+  els.meta.appendChild(meta);
+  els.empty.textContent = message;
+  setRequestLoaded(false);
+}
 
 function setRequestLoaded(loaded) {
   els.empty.hidden = loaded;
@@ -37,15 +59,32 @@ async function fetchRequestDetail() {
     return;
   }
 
+  if (requestDetailAvailable === false) {
+    renderUnavailableState(
+      'Content retention is disabled for this runtime, so the full prompt, messages, and waterfall are unavailable.',
+      'Request anchor and copy helpers remain available even when retained content is off.',
+    );
+    return;
+  }
+
   try {
     const resp = await fetch('/api/requests/' + encodeURIComponent(requestID));
     if (!resp.ok) {
-      if (resp.status === 404) {
-        els.empty.textContent = 'Request detail is unavailable. Content retention may be disabled or the request may have been evicted.';
+      if (resp.status === 503) {
+        requestDetailAvailable = false;
+        renderUnavailableState(
+          'Content retention is disabled for this runtime, so this request window cannot load full request content.',
+          'Request anchor and copy helpers remain available even when retained content is off.',
+        );
+      } else if (resp.status === 404) {
+        renderUnavailableState(
+          'This retained request is unavailable. It may have been evicted or retention may not include this turn.',
+          'Stored request content is missing for this request ID.',
+        );
       } else {
         els.empty.textContent = 'Request detail failed to load (' + resp.status + ').';
+        setRequestLoaded(false);
       }
-      setRequestLoaded(false);
       return;
     }
 
@@ -79,10 +118,20 @@ async function fetchRequestDetail() {
   }
 }
 
+async function probeContentRetention() {
+  try {
+    const resp = await fetch('/api/requests/_probe');
+    requestDetailAvailable = resp.ok && resp.headers.get('X-Request-Detail-Available') === 'true';
+  } catch (_) {
+    requestDetailAvailable = null;
+  }
+}
+
 function startRefreshLoop() {
   if (refreshTimer) clearInterval(refreshTimer);
   refreshTimer = setInterval(() => {
     if (document.hidden) return;
+    if (requestDetailAvailable === false) return;
     void fetchRequestDetail();
   }, 3000);
 }
@@ -108,5 +157,5 @@ window.addEventListener('pagehide', () => {
 });
 
 updateWindowTitle();
-void fetchRequestDetail();
+void probeContentRetention().then(fetchRequestDetail);
 startRefreshLoop();

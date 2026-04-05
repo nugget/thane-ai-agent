@@ -4479,10 +4479,22 @@ let activeRequestID = null;
 
 // Cached raw detail JSON for copy-as-JSON feature.
 let activeRequestJSON = null;
+let requestDetailAvailable = null;
 
 // AbortController for in-flight request detail fetches. Prevents stale
 // data from overwriting the panel when the user clicks rapidly.
 let requestDetailAbort = null;
+
+function inspectRequest(requestID) {
+  if (!requestID) return;
+  if (requestDetailAvailable === false) {
+    openRequestWindow(requestID);
+    return;
+  }
+  void showRequestDetail(requestID);
+}
+
+window.onRequestChipClick = inspectRequest;
 
 async function showRequestDetail(requestID) {
   if (!requestID) return;
@@ -4504,6 +4516,12 @@ async function showRequestDetail(requestID) {
     if (requestDetailAbort !== controller) return;
 
     if (!resp.ok) {
+      if (resp.status === 503) {
+        requestDetailAvailable = false;
+        openRequestWindow(requestID);
+        closeRequestDetail();
+        return;
+      }
       if (resp.status === 404) {
         console.warn('Request detail not found:', requestID);
       }
@@ -4582,12 +4600,11 @@ async function probeContentRetention() {
     // Use a dedicated probe endpoint shape that always succeeds so
     // devtools don't fill with intentional 503s when retention is off.
     const resp = await fetch('/api/requests/_probe');
-    if (resp.ok && resp.headers.get('X-Request-Detail-Available') === 'true') {
-      window.onRequestChipClick = showRequestDetail;
-    }
+    requestDetailAvailable = resp.ok && resp.headers.get('X-Request-Detail-Available') === 'true';
   } catch (_) {
-    // Network error — leave chips as non-inspectable.
+    requestDetailAvailable = null;
   }
+  window.onRequestChipClick = inspectRequest;
 }
 
 // ---------------------------------------------------------------------------
