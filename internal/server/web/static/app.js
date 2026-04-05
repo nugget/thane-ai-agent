@@ -19,10 +19,19 @@ const state = {
   prevErrors: new Map(),     // id -> last known error string (for shake detection)
   knownLoopIds: new Set(),   // ids we've rendered before (for enter animation)
   canvasRect: null,          // last observed canvas viewport for responsive graph reflow
+  conversationIndex: {
+    fetchedAt: 0,
+    loading: null,
+    summaries: new Map(),
+  },
+  conversationDetails: new Map(), // conversation_id -> derived dashboard summary
+  conversationLoads: new Map(),   // conversation_id -> in-flight loader promise
 };
 
 const MAX_EVENTS = 50;
 const MAX_NOTIFICATIONS = 8;
+const CONVERSATION_SUMMARY_TTL_MS = 15000;
+const CONVERSATION_SESSION_LIMIT = 8;
 
 // ---------------------------------------------------------------------------
 // Force-Directed Physics Layout
@@ -782,7 +791,9 @@ function buildLoopEntity(loop) {
   const latestModel = loop._liveModel || loop._lastModel || (latest && latest.model) || '';
   const latestRequestID = (latest && latest.request_id) || '';
   const currentConvID = loop._currentConvID || '';
-  const recentConvIDs = Array.isArray(loop.recent_conv_ids) ? loop.recent_conv_ids : [];
+  const recentConvIDs = Array.from(new Set(
+    (Array.isArray(loop.recent_conv_ids) ? loop.recent_conv_ids : []).filter(Boolean),
+  ));
   const trustZone = metadata.trust_zone || '';
   const subsystem = metadata.subsystem || '';
 
@@ -824,6 +835,177 @@ function buildLoopEntity(loop) {
     activeTags,
     allTags,
   };
+}
+
+function inferConversationFamily(conversationID) {
+  if (!conversationID) return 'conversation';
+  if (conversationID.startsWith('owu-')) return 'owu';
+  if (conversationID.startsWith('signal-')) return 'signal';
+  if (conversationID.startsWith('delegate-')) return 'delegate';
+  return 'conversation';
+}
+
+function formatConversationChannel(channel) {
+  switch ((channel || '').toLowerCase()) {
+    case 'owu': return 'OWU';
+    case 'signal': return 'Signal';
+    case 'mqtt': return 'MQTT';
+    case 'email': return 'Email';
+    default: return channel ? String(channel) : '';
+  }
+}
+
+function describeConversationFallback(conversationID) {
+  switch (inferConversationFamily(conversationID)) {
+    case 'owu':
+      return 'OWU conversation';
+    case 'signal':
+      return 'Signal conversation';
+    case 'delegate':
+      return 'Delegate conversation';
+    default:
+      return 'Conversation ' + shortID(conversationID);
+  }
+}
+
+function buildConversationLabel(conversationID, binding, latestSession) {
+  if (binding && binding.contact_name) return binding.contact_name;
+  const title = (latestSession && latestSession.title ? latestSession.title : '').trim();
+  if (title) return title;
+  const oneLiner = (((latestSession || {}).metadata || {}).one_liner || '').trim();
+  if (oneLiner) return oneLiner;
+  const channel = formatConversationChannel(binding && binding.channel);
+  if (channel) return channel + ' conversation';
+  return describeConversationFallback(conversationID);
+}
+
+function buildConversationSummary(conversationID, conversation, sessions, opts = {}) {
+  const latestSession = Array.isArray(sessions) && sessions.length > 0 ? sessions[0] : null;
+  const metadata = (latestSession && latestSession.metadata) || {};
+  const binding = (metadata && metadata.channel_binding) || null;
+  const channelLabel = formatConversationChannel((binding && binding.channel) || inferConversationFamily(conversationID));
+  const updatedAtRaw = (conversation && conversation.updated_at) ||
+    (latestSession && (latestSession.ended_at || latestSession.started_at)) || '';
+  const updatedAt = parseTimestamp(updatedAtRaw);
+  const sessionTimestampRaw = latestSession ? (latestSession.ended_at || latestSession.started_at || '') : '';
+  const sessionTimestamp = parseTimestamp(sessionTimestampRaw);
+  const sessionCount = Array.isArray(sessions) ? sessions.length : 0;
+  const latestTitle = (latestSession && latestSession.title ? latestSession.title : '').trim();
+  const summaryText = (metadata.paragraph || latestSession?.summary || metadata.one_liner || '').trim();
+  const label = buildConversationLabel(conversationID, binding, latestSession);
+  const active = !!(latestSession && !latestSession.ended_at);
+  const metaParts = [];
+  if (channelLabel) metaParts.push(channelLabel);
+  if (binding && binding.trust_zone) metaParts.push(binding.trust_zone);
+  if (updatedAt) metaParts.push('active ' + timeAgo(updatedAt));
+  if (Number.isFinite(conversation && conversation.message_count)) metaParts.push(formatNumber(conversation.message_count) + ' msgs');
+  if (sessionCount > 0) metaParts.push(formatNumber(sessionCount) + ' sessions');
+
+  return {
+    id: conversationID,
+    label,
+    active,
+    error: !!opts.error,
+    loading: !!opts.loading,
+    metaLine: metaParts.join(' · '),
+    channelLabel,
+    trustZone: binding && binding.trust_zone ? binding.trust_zone : '',
+    contactName: binding && binding.contact_name ? binding.contact_name : '',
+    address: binding && binding.address ? binding.address : '',
+    linkSource: binding && binding.link_source ? binding.link_source : '',
+    updatedAt,
+    updatedAtRaw,
+    messageCount: Number.isFinite(conversation && conversation.message_count) ? conversation.message_count : null,
+    sessionCount,
+    latestSessionID: latestSession && latestSession.id ? latestSession.id : '',
+    latestSessionTitle: latestTitle,
+    latestSessionSummary: summaryText,
+    latestSessionAge: sessionTimestamp ? timeAgo(sessionTimestamp) : '',
+    latestSessionWhen: sessionTimestamp ? formatTimeShort(sessionTimestamp) : '',
+    latestSessionState: latestSession ? (latestSession.ended_at ? 'closed' : 'active') : '',
+    fetchedAt: Date.now(),
+  };
+}
+
+function buildPendingConversationSummary(conversationID) {
+  return buildConversationSummary(conversationID, null, [], { loading: true });
+}
+
+async function ensureConversationIndex() {
+  if (state.conversationIndex.summaries.size > 0 &&
+      (Date.now() - state.conversationIndex.fetchedAt) < CONVERSATION_SUMMARY_TTL_MS) {
+    return state.conversationIndex.summaries;
+  }
+  if (state.conversationIndex.loading) return state.conversationIndex.loading;
+
+  state.conversationIndex.loading = fetch('/v1/conversations')
+    .then((resp) => {
+      if (!resp.ok) throw new Error('conversation index unavailable: ' + resp.status);
+      return resp.json();
+    })
+    .then((body) => {
+      const summaries = new Map();
+      for (const conv of body.conversations || []) {
+        if (conv && conv.id) summaries.set(conv.id, conv);
+      }
+      state.conversationIndex.summaries = summaries;
+      state.conversationIndex.fetchedAt = Date.now();
+      return summaries;
+    })
+    .catch((err) => {
+      console.warn('Failed to load conversation index:', err);
+      if (state.conversationIndex.summaries.size > 0) {
+        return state.conversationIndex.summaries;
+      }
+      throw err;
+    })
+    .finally(() => {
+      state.conversationIndex.loading = null;
+    });
+
+  return state.conversationIndex.loading;
+}
+
+function refreshSelectedLoopInspector() {
+  if (state.selected && state.selected !== '__system__' && state.loops.has(state.selected)) {
+    renderDetail();
+  }
+}
+
+function ensureConversationSummary(conversationID) {
+  if (!conversationID) return;
+  const cached = state.conversationDetails.get(conversationID);
+  if (cached && (Date.now() - cached.fetchedAt) < CONVERSATION_SUMMARY_TTL_MS) {
+    return;
+  }
+  if (state.conversationLoads.has(conversationID)) return;
+
+  const load = Promise.allSettled([
+    ensureConversationIndex(),
+    fetch('/v1/archive/sessions?conversation_id=' + encodeURIComponent(conversationID) + '&limit=' + CONVERSATION_SESSION_LIMIT)
+      .then((resp) => {
+        if (!resp.ok) throw new Error('archive sessions unavailable: ' + resp.status);
+        return resp.json();
+      })
+      .then((body) => Array.isArray(body.sessions) ? body.sessions : []),
+  ]).then(([conversationResult, sessionsResult]) => {
+    const index = conversationResult.status === 'fulfilled' ? conversationResult.value : new Map();
+    const sessions = sessionsResult.status === 'fulfilled' ? sessionsResult.value : [];
+    const conversation = index.get(conversationID) || null;
+    const detail = buildConversationSummary(conversationID, conversation, sessions, {
+      error: conversationResult.status !== 'fulfilled' && sessionsResult.status !== 'fulfilled',
+    });
+    state.conversationDetails.set(conversationID, detail);
+    refreshSelectedLoopInspector();
+  }).catch((err) => {
+    console.warn('Failed to load conversation summary:', conversationID, err);
+    state.conversationDetails.set(conversationID, buildConversationSummary(conversationID, null, [], { error: true }));
+    refreshSelectedLoopInspector();
+  }).finally(() => {
+    state.conversationLoads.delete(conversationID);
+  });
+
+  state.conversationLoads.set(conversationID, load);
 }
 
 function buildSystemEntity(sys) {
@@ -2032,6 +2214,151 @@ function makeSchemaChipList(values, className = 'tag-chip') {
   return wrap;
 }
 
+function makeConversationFact(label, value) {
+  if (!value) return null;
+  const row = document.createElement('div');
+  row.className = 'conversation-summary__fact';
+
+  const labelEl = document.createElement('span');
+  labelEl.className = 'conversation-summary__fact-label';
+  labelEl.textContent = label;
+  row.appendChild(labelEl);
+
+  const valueEl = document.createElement('span');
+  valueEl.className = 'conversation-summary__fact-value';
+  valueEl.textContent = value;
+  row.appendChild(valueEl);
+
+  return row;
+}
+
+function makeConversationSummaryEntry(summary, opts = {}) {
+  const details = document.createElement('details');
+  details.className = 'conversation-summary' + (opts.current ? ' conversation-summary--current' : '');
+
+  const summaryEl = document.createElement('summary');
+  summaryEl.className = 'conversation-summary__summary';
+
+  const copy = document.createElement('div');
+  copy.className = 'conversation-summary__copy';
+
+  const titleRow = document.createElement('div');
+  titleRow.className = 'conversation-summary__title-row';
+
+  const title = document.createElement('span');
+  title.className = 'conversation-summary__title';
+  title.textContent = summary.label;
+  titleRow.appendChild(title);
+
+  if (opts.current) {
+    const badge = document.createElement('span');
+    badge.className = 'conversation-summary__badge conversation-summary__badge--current';
+    badge.textContent = 'current';
+    titleRow.appendChild(badge);
+  }
+  if (summary.active) {
+    const badge = document.createElement('span');
+    badge.className = 'conversation-summary__badge conversation-summary__badge--active';
+    badge.textContent = 'active';
+    titleRow.appendChild(badge);
+  }
+  if (summary.loading) {
+    const badge = document.createElement('span');
+    badge.className = 'conversation-summary__badge';
+    badge.textContent = 'loading';
+    titleRow.appendChild(badge);
+  }
+  copy.appendChild(titleRow);
+
+  const meta = document.createElement('div');
+  meta.className = 'conversation-summary__meta';
+  meta.textContent = summary.error
+    ? 'Conversation details unavailable'
+    : (summary.metaLine || 'No archived session detail yet');
+  copy.appendChild(meta);
+  summaryEl.appendChild(copy);
+
+  const chevron = document.createElement('span');
+  chevron.className = 'conversation-summary__chevron';
+  chevron.textContent = 'Details';
+  summaryEl.appendChild(chevron);
+
+  details.appendChild(summaryEl);
+
+  const body = document.createElement('div');
+  body.className = 'conversation-summary__body';
+
+  if (summary.latestSessionSummary) {
+    const desc = document.createElement('p');
+    desc.className = 'conversation-summary__description';
+    desc.textContent = summary.latestSessionSummary;
+    body.appendChild(desc);
+  }
+
+  const facts = document.createElement('div');
+  facts.className = 'conversation-summary__facts';
+  const factEls = [
+    makeConversationFact('channel', summary.channelLabel),
+    makeConversationFact('contact', summary.contactName),
+    makeConversationFact('address', summary.address),
+    makeConversationFact('trust', summary.trustZone),
+    makeConversationFact('session title', summary.latestSessionTitle && summary.latestSessionTitle !== summary.label
+      ? summary.latestSessionTitle
+      : ''),
+    makeConversationFact('last active', summary.updatedAt ? timeAgo(summary.updatedAt) : ''),
+    makeConversationFact('latest session', summary.latestSessionState
+      ? summary.latestSessionState + (summary.latestSessionAge ? ' · ' + summary.latestSessionAge : '')
+      : ''),
+    makeConversationFact('history', summary.sessionCount ? formatNumber(summary.sessionCount) + ' sessions' : ''),
+    makeConversationFact('working set', Number.isFinite(summary.messageCount) ? formatNumber(summary.messageCount) + ' messages' : ''),
+  ].filter(Boolean);
+  for (const fact of factEls) facts.appendChild(fact);
+  if (factEls.length > 0) body.appendChild(facts);
+
+  const ids = document.createElement('div');
+  ids.className = 'conversation-summary__ids';
+
+  const convBlock = document.createElement('div');
+  convBlock.className = 'conversation-summary__id-block';
+  const convLabel = document.createElement('span');
+  convLabel.className = 'conversation-summary__id-label';
+  convLabel.textContent = 'conversation';
+  convBlock.appendChild(convLabel);
+  convBlock.appendChild(makeIDChip(summary.id));
+  ids.appendChild(convBlock);
+
+  if (summary.latestSessionID) {
+    const sessBlock = document.createElement('div');
+    sessBlock.className = 'conversation-summary__id-block';
+    const sessLabel = document.createElement('span');
+    sessLabel.className = 'conversation-summary__id-label';
+    sessLabel.textContent = 'latest session';
+    sessBlock.appendChild(sessLabel);
+    sessBlock.appendChild(makeIDChip(summary.latestSessionID));
+    ids.appendChild(sessBlock);
+  }
+
+  body.appendChild(ids);
+  details.appendChild(body);
+  return details;
+}
+
+function makeConversationSummaryList(ids, opts = {}) {
+  const uniqueIDs = Array.from(new Set((ids || []).filter(Boolean)));
+  const list = document.createElement('div');
+  list.className = 'conversation-summary-list';
+
+  for (const conversationID of uniqueIDs) {
+    ensureConversationSummary(conversationID);
+    const summary = state.conversationDetails.get(conversationID) || buildPendingConversationSummary(conversationID);
+    list.appendChild(makeConversationSummaryEntry(summary, {
+      current: !!(opts.currentIDs && opts.currentIDs.has(conversationID)),
+    }));
+  }
+
+  return list;
+}
+
 function makeRequestChip(requestID) {
   const chip = document.createElement('span');
   chip.className = 'id-chip id-chip--responsive' + (typeof window.onRequestChipClick === 'function' ? ' schema-request-chip' : '');
@@ -2198,11 +2525,22 @@ function renderLoopEntityDetail(loop) {
   } else {
     appendSchemaRow(relationships.body, 'root anchor', 'core');
   }
+  const recentHistoryIDs = entity.recentConvIDs.filter((id) => id !== entity.currentConvID);
   if (entity.currentConvID) {
-    appendSchemaRow(relationships.body, 'current conversation', makeSchemaIDList([entity.currentConvID]));
+    appendSchemaRow(
+      relationships.body,
+      'conversation',
+      makeConversationSummaryList([entity.currentConvID], { currentIDs: new Set([entity.currentConvID]) }),
+      { multiline: true },
+    );
   }
-  if (entity.recentConvIDs.length > 0) {
-    appendSchemaRow(relationships.body, 'recent conversations', makeSchemaIDList(entity.recentConvIDs));
+  if (recentHistoryIDs.length > 0) {
+    appendSchemaRow(
+      relationships.body,
+      'conversation history',
+      makeConversationSummaryList(recentHistoryIDs),
+      { multiline: true },
+    );
   }
   if (entity.latestRequestID) {
     appendSchemaRow(relationships.body, 'latest request', makeSchemaIDList([entity.latestRequestID], { request: true }));
