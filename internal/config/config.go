@@ -697,15 +697,16 @@ type ModelsConfig struct {
 // The model router uses these fields to select the best model for each
 // request.
 type ModelConfig struct {
-	Name          string `yaml:"name"`           // Model identifier (e.g., "claude-opus-4-20250514")
-	Provider      string `yaml:"provider"`       // Provider name: ollama, anthropic, lmstudio. Defaults to ollama when no resource is set
-	Resource      string `yaml:"resource"`       // Named provider resource from models.resources for this deployment
-	SupportsTools bool   `yaml:"supports_tools"` // Whether the model can invoke tool calls
-	ContextWindow int    `yaml:"context_window"` // Maximum context length in tokens
-	Speed         int    `yaml:"speed"`          // Relative speed rating, 1 (slow) to 10 (fast)
-	Quality       int    `yaml:"quality"`        // Relative quality rating, 1 (low) to 10 (high)
-	CostTier      int    `yaml:"cost_tier"`      // 0=local/free, 1=cheap, 2=moderate, 3=expensive
-	MinComplexity string `yaml:"min_complexity"` // Minimum task complexity: simple, moderate, complex
+	Name              string `yaml:"name"`               // Model identifier (e.g., "claude-opus-4-20250514")
+	Provider          string `yaml:"provider"`           // Provider name: ollama, anthropic, lmstudio. Defaults to ollama when no resource is set
+	Resource          string `yaml:"resource"`           // Named provider resource from models.resources for this deployment
+	SupportsTools     bool   `yaml:"supports_tools"`     // Whether the model can invoke tool calls
+	SupportsStreaming *bool  `yaml:"supports_streaming"` // Optional per-deployment streaming override. Nil inherits provider/resource capability.
+	ContextWindow     int    `yaml:"context_window"`     // Maximum context length in tokens
+	Speed             int    `yaml:"speed"`              // Relative speed rating, 1 (slow) to 10 (fast)
+	Quality           int    `yaml:"quality"`            // Relative quality rating, 1 (low) to 10 (high)
+	CostTier          int    `yaml:"cost_tier"`          // 0=local/free, 1=cheap, 2=moderate, 3=expensive
+	MinComplexity     string `yaml:"min_complexity"`     // Minimum task complexity: simple, moderate, complex
 }
 
 // ModelServerConfig describes a named model provider resource.

@@ -94,6 +94,7 @@ models:
       provider: ""
       resource: edge
       supports_tools: true
+      supports_streaming: false
       context_window: 32768
       speed: 9
       quality: 5
@@ -103,6 +104,7 @@ models:
       provider: ""
       resource: default
       supports_tools: true
+      supports_streaming: false
       context_window: 131072
       speed: 3
       quality: 9

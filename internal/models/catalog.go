@@ -188,6 +188,7 @@ func BuildCatalog(cfg *config.Config) (*Catalog, error) {
 		CompatibilityType   string
 		RunnerState         string
 		SupportsTools       bool
+		SupportsStreaming   *bool
 		TrainedForToolUse   bool
 		ContextWindow       int
 		MaxContextWindow    int
@@ -264,6 +265,7 @@ func BuildCatalog(cfg *config.Config) (*Catalog, error) {
 			ResourceID:        resourceID,
 			Server:            resourceName,
 			SupportsTools:     m.SupportsTools,
+			SupportsStreaming: m.SupportsStreaming,
 			TrainedForToolUse: m.SupportsTools,
 			ContextWindow:     m.ContextWindow,
 			Speed:             m.Speed,
@@ -316,6 +318,9 @@ func BuildCatalog(cfg *config.Config) (*Catalog, error) {
 		if res, ok := resourceByID[p.ResourceID]; ok {
 			dep.ProviderSupportsTools = res.Capabilities.SupportsTools
 			dep.SupportsStreaming = res.Capabilities.SupportsStreaming
+			if p.SupportsStreaming != nil {
+				dep.SupportsStreaming = *p.SupportsStreaming
+			}
 			dep.SupportsImages = modelproviders.SupportsImagesForModel(
 				dep.Provider,
 				dep.ModelName,

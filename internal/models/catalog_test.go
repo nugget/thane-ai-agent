@@ -193,6 +193,50 @@ func TestCatalogContextWindowForModel_UsesLargestMatchingDeployment(t *testing.T
 	}
 }
 
+func TestBuildCatalog_ModelStreamingOverrideWinsOverProviderCapability(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Models.Resources = map[string]config.ModelServerConfig{
+		"mirror": {URL: "http://mirror:11434", Provider: "ollama"},
+	}
+	supportsStreaming := false
+	cfg.Models.Available = []config.ModelConfig{
+		{
+			Name:              "gpt-oss:20b",
+			Resource:          "mirror",
+			SupportsTools:     true,
+			SupportsStreaming: &supportsStreaming,
+			ContextWindow:     8192,
+			Speed:             6,
+			Quality:           6,
+			CostTier:          0,
+		},
+	}
+
+	cat, err := BuildCatalog(cfg)
+	if err != nil {
+		t.Fatalf("BuildCatalog() error = %v", err)
+	}
+
+	dep, ok := cat.byID["gpt-oss:20b"]
+	if !ok {
+		t.Fatal("catalog missing gpt-oss:20b deployment")
+	}
+	if !dep.ProviderSupportsTools {
+		t.Fatalf("dep.ProviderSupportsTools = false, want true")
+	}
+	if dep.SupportsStreaming {
+		t.Fatalf("dep.SupportsStreaming = true, want false from model override")
+	}
+
+	routerCfg := cat.RouterConfig(100)
+	if got := len(routerCfg.Models); got != 1 {
+		t.Fatalf("len(router models) = %d, want 1", got)
+	}
+	if routerCfg.Models[0].SupportsStreaming {
+		t.Fatalf("router model SupportsStreaming = true, want false from model override")
+	}
+}
+
 func TestMergeInventory_AddsDiscoveredDeploymentsAsNonRoutable(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Models.OllamaURL = "http://localhost:11434"
