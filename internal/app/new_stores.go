@@ -83,7 +83,7 @@ func (a *App) initStores(s *newState) error {
 	// SQLite-backed conversation memory. Persists across restarts so the
 	// agent can resume in-progress conversations.
 	dbPath := cfg.DataDir + "/thane.db"
-	mem, err := memory.NewSQLiteStore(dbPath, 100)
+	mem, err := memory.NewSQLiteStoreWithLogger(dbPath, 100, logger.With("component", "memory_store"))
 	if err != nil {
 		return fmt.Errorf("open memory database %s: %w", dbPath, err)
 	}

@@ -471,7 +471,7 @@ func TestRegistryLaunchAppliesRequestOverrides(t *testing.T) {
 		ConversationID:  "conv-123",
 		Model:           "deepslate/google/gemma-3-4b",
 		Hints:           map[string]string{"source": "launch", "custom": "1"},
-		AllowedTools:    []string{"ha_get_state"},
+		AllowedTools:    []string{"get_state"},
 		ExcludeTools:    []string{"launch_block"},
 		InitialTags:     []string{"launch_tag"},
 		SkipContext:     true,
@@ -528,7 +528,7 @@ func TestRegistryLaunchAppliesRequestOverrides(t *testing.T) {
 	if !captured.SkipContext || !captured.SkipTagFilter {
 		t.Fatalf("Skip flags = %#v", captured)
 	}
-	if !slices.Equal(captured.AllowedTools, []string{"ha_get_state"}) {
+	if !slices.Equal(captured.AllowedTools, []string{"get_state"}) {
 		t.Fatalf("AllowedTools = %#v", captured.AllowedTools)
 	}
 	for _, want := range []string{"profile_block", "config_block", "launch_block"} {

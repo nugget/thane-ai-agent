@@ -117,8 +117,13 @@ models:
 #
 # Embeddings configures vector embedding generation for semantic search.
 embeddings:
+  # Enabled controls whether Thane generates embeddings at ingest and
+  # lookup time for semantic search and related recall paths.
   enabled: false
+  # Model is the embedding model name. Default: "nomic-embed-text".
   model: nomic-embed-text
+  # BaseURL overrides the Ollama endpoint used for embeddings. Empty
+  # falls back to the default model resource/provider selection.
   baseurl: ""
 # Workspace configures the agent's sandboxed file system access.
 # In multi-root deployments, set Path to the common writable parent
@@ -326,7 +331,11 @@ talents_dir: ./talents
 #     description: Home Assistant tools and sensors
 #     Tools lists the tool names belonging to this tag. A tool can
 #     appear in multiple tags; it loads when any of its tags is active.
+#
 #     For compiled-in tags, empty keeps the built-in tool membership.
+#     Prefer leaving this empty for built-in or MCP-backed tags unless
+#     you intentionally want to replace the compiled/operator-derived
+#     membership with an explicit list.
 #     tools: []
 #     AlwaysActive tags cannot be deactivated. They are included in
 #     every session regardless of channel or agent requests.

@@ -16,12 +16,23 @@ import (
 type SQLiteStore struct {
 	db          *sql.DB
 	maxMessages int
+	logger      *slog.Logger
 }
 
 // NewSQLiteStore creates a new SQLite-backed store.
 func NewSQLiteStore(dbPath string, maxMessages int) (*SQLiteStore, error) {
+	return NewSQLiteStoreWithLogger(dbPath, maxMessages, nil)
+}
+
+// NewSQLiteStoreWithLogger creates a new SQLite-backed store and uses
+// logger for non-fatal data-integrity warnings encountered while
+// reading existing rows. Nil falls back to [slog.Default].
+func NewSQLiteStoreWithLogger(dbPath string, maxMessages int, logger *slog.Logger) (*SQLiteStore, error) {
 	if maxMessages <= 0 {
 		maxMessages = 100
+	}
+	if logger == nil {
+		logger = slog.Default()
 	}
 
 	db, err := database.Open(dbPath)
@@ -32,6 +43,7 @@ func NewSQLiteStore(dbPath string, maxMessages int) (*SQLiteStore, error) {
 	store := &SQLiteStore{
 		db:          db,
 		maxMessages: maxMessages,
+		logger:      logger,
 	}
 
 	if err := store.migrate(); err != nil {
@@ -282,7 +294,7 @@ func (s *SQLiteStore) GetConversation(id string) *Conversation {
 	if metadata.Valid {
 		meta, err := parseConversationMetadata(metadata.String)
 		if err != nil {
-			slog.Warn("GetConversation: invalid metadata",
+			s.logger.Warn("conversation metadata invalid",
 				"conversation_id", id,
 				"error", err,
 			)
@@ -357,7 +369,7 @@ func (s *SQLiteStore) GetAllConversations() []*Conversation {
 		}
 		if metadata.Valid {
 			if meta, err := parseConversationMetadata(metadata.String); err != nil {
-				slog.Warn("GetAllConversations: invalid metadata",
+				s.logger.Warn("conversation metadata invalid during snapshot",
 					"conversation_id", id,
 					"error", err,
 				)
@@ -366,13 +378,13 @@ func (s *SQLiteStore) GetAllConversations() []*Conversation {
 			}
 		}
 		if t, err := database.ParseTimestamp(createdAt); err != nil {
-			slog.Warn("GetAllConversations: invalid created_at",
+			s.logger.Warn("conversation created_at invalid during snapshot",
 				"conversation_id", id, "created_at", createdAt, "error", err)
 		} else {
 			conv.CreatedAt = t
 		}
 		if t, err := database.ParseTimestamp(updatedAt); err != nil {
-			slog.Warn("GetAllConversations: invalid updated_at",
+			s.logger.Warn("conversation updated_at invalid during snapshot",
 				"conversation_id", id, "updated_at", updatedAt, "error", err)
 		} else {
 			conv.UpdatedAt = t

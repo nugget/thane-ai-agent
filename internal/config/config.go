@@ -816,12 +816,20 @@ func (c SearchConfig) Configured() bool {
 }
 
 // EmbeddingsConfig configures vector embedding generation for semantic
-// search over the fact store. When Enabled is false, ingested facts are
-// stored without embeddings and semantic search is unavailable.
+// recall features. When Enabled is false, Thane still stores facts and
+// contacts, but vector-backed lookup and similarity search are disabled
+// for those stores and related ingest paths.
 type EmbeddingsConfig struct {
-	Enabled bool   `yaml:"enabled"`
-	Model   string `yaml:"model"`   // Embedding model name. Default: "nomic-embed-text"
-	BaseURL string `yaml:"baseurl"` // Ollama URL for knowledge. Default: models.ollama_url
+	// Enabled controls whether Thane generates embeddings at ingest and
+	// lookup time for semantic search and related recall paths.
+	Enabled bool `yaml:"enabled"`
+
+	// Model is the embedding model name. Default: "nomic-embed-text".
+	Model string `yaml:"model"`
+
+	// BaseURL overrides the Ollama endpoint used for embeddings. Empty
+	// falls back to the default model resource/provider selection.
+	BaseURL string `yaml:"baseurl"`
 }
 
 // ContextConfig configures context injection into the system prompt.
@@ -979,7 +987,11 @@ type CapabilityTagConfig struct {
 
 	// Tools lists the tool names belonging to this tag. A tool can
 	// appear in multiple tags; it loads when any of its tags is active.
+	//
 	// For compiled-in tags, empty keeps the built-in tool membership.
+	// Prefer leaving this empty for built-in or MCP-backed tags unless
+	// you intentionally want to replace the compiled/operator-derived
+	// membership with an explicit list.
 	Tools []string `yaml:"tools"`
 
 	// AlwaysActive tags cannot be deactivated. They are included in

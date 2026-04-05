@@ -209,7 +209,7 @@ func demoHandler(minWork, maxWork time.Duration, errRate float64) func(context.C
 
 		// Fake tool call mid-iteration.
 		if progressFn != nil {
-			tools := []string{"web_search", "shell_exec", "ha_get_state", "send_message", "knowledge_search"}
+			tools := []string{"web_search", "shell_exec", "get_state", "send_message", "knowledge_search"}
 			tool := tools[rand.IntN(len(tools))]
 			progressFn(events.KindLoopToolStart, map[string]any{
 				"tool": tool,

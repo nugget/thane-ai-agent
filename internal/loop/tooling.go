@@ -19,6 +19,8 @@ type ToolingState struct {
 	ToolsUsed          map[string]int                      `json:"tools_used,omitempty"`
 }
 
+// BuildToolingState normalizes a loop or iteration tool/capability
+// snapshot into a stable, sorted payload for the API and dashboard.
 func BuildToolingState(configuredTags, loadedTags, effectiveTools, excludedTools []string, loadedCapabilities []toolcatalog.LoadedCapabilityEntry, toolsUsed map[string]int) ToolingState {
 	state := ToolingState{
 		ConfiguredTags:     append([]string(nil), configuredTags...),
