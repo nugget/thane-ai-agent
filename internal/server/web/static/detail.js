@@ -65,6 +65,21 @@ function openRequestWindow(requestID) {
   }
 }
 
+function openRegistryWindow(registry) {
+  const key = String(registry || 'toolbox').trim().toLowerCase();
+  const name = key === 'models' ? 'Model Registry' : key === 'scheduled' ? 'Scheduled Loops' : 'Toolbox & Capabilities';
+  const w = window.open(
+    '/static/registry.html?registry=' + encodeURIComponent(key),
+    'registry-' + key,
+    'popup=yes,width=1280,height=920',
+  );
+  if (w) {
+    w.addEventListener('load', () => {
+      w.document.title = 'Thane \u00b7 ' + name;
+    });
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Dynamic Log Poll Rate
 // ---------------------------------------------------------------------------
@@ -309,13 +324,13 @@ async function fetchSystemStatus() {
       badge: $('#system-status'),
       overview: $('#system-overview'),
       services: $('#system-services'),
-      capabilityMeta: $('#system-capability-meta'),
-      capabilitySummary: $('#system-capability-summary'),
-      capabilityList: $('#system-capability-list'),
-      registryMeta: $('#system-registry-meta'),
-      registrySummary: $('#system-registry-summary'),
-      registryResources: $('#system-registry-resources'),
-      registryDeployments: $('#system-registry-deployments'),
+      registriesMeta: $('#system-registries-meta'),
+      registriesSummary: $('#system-registries-summary'),
+      registriesList: $('#system-registries-list'),
+      registryActions: {
+        toolbox: () => openRegistryWindow('toolbox'),
+        models: () => openRegistryWindow('models'),
+      },
     });
     updateSystemUptime();
     updatePopupFooter();

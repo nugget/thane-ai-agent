@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Thane - Registry</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="registry-page">
+  <main class="registry-shell">
+    <section class="registry-hero">
+      <div class="registry-hero__copy">
+        <div class="registry-hero__eyebrow">Core Registry</div>
+        <h1 id="registry-title" class="registry-hero__title">Registry</h1>
+        <p id="registry-subtitle" class="registry-hero__subtitle"></p>
+      </div>
+      <div class="registry-hero__actions">
+        <button id="registry-refresh" type="button" class="toggle-btn">Refresh</button>
+        <button id="registry-open-core" type="button" class="toggle-btn">Open core window</button>
+      </div>
+    </section>
+
+    <section class="detail-card system-section registry-card">
+      <div class="system-section-header">
+        <h2 id="registry-section-title" class="section-title">Registry</h2>
+        <span id="registry-meta" class="system-section-meta"></span>
+      </div>
+
+      <div id="registry-summary" class="system-summary-grid"></div>
+
+      <div id="registry-toolbox-section" class="system-subsection registry-section" hidden>
+        <h3 class="system-subtitle">Capabilities</h3>
+        <div id="registry-toolbox-list" class="system-list"></div>
+      </div>
+
+      <div id="registry-model-resources-section" class="system-subsection registry-section" hidden>
+        <h3 class="system-subtitle">Resources</h3>
+        <div id="registry-model-resources" class="system-list"></div>
+      </div>
+
+      <div id="registry-model-deployments-section" class="system-subsection registry-section" hidden>
+        <h3 class="system-subtitle">Deployments</h3>
+        <div id="registry-model-deployments" class="system-list"></div>
+      </div>
+
+      <div id="registry-empty" class="registry-empty" hidden></div>
+    </section>
+  </main>
+
+  <script src="/static/shared.js"></script>
+  <script src="/static/registry.js"></script>
+</body>
+</html>

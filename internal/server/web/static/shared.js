@@ -578,6 +578,146 @@ function renderModelRegistry(summaryEl, resourcesEl, deploymentsEl, metaEl, regi
   }
 }
 
+function renderSystemRegistries(summaryEl, listEl, metaEl, sys, actions = {}) {
+  if (summaryEl) summaryEl.innerHTML = '';
+  if (listEl) listEl.innerHTML = '';
+  if (metaEl) metaEl.textContent = '';
+  if (!summaryEl && !listEl && !metaEl) return;
+
+  const capabilities = getCapabilityCatalogEntries(sys);
+  const capabilitySummary = summarizeCapabilityCatalog(capabilities);
+  const registry = (sys && sys.model_registry) || {};
+  const resources = Array.isArray(registry.resources) ? registry.resources : [];
+  const deployments = Array.isArray(registry.deployments) ? registry.deployments : [];
+  const readyActions = [
+    typeof actions.toolbox === 'function' ? 'toolbox' : '',
+    typeof actions.models === 'function' ? 'models' : '',
+  ].filter(Boolean);
+
+  if (summaryEl) {
+    summaryEl.appendChild(buildSystemStat('Windows', formatNumber(readyActions.length)));
+    summaryEl.appendChild(buildSystemStat('Capabilities', formatNumber(capabilitySummary.capabilityCount)));
+    summaryEl.appendChild(buildSystemStat('Tools', formatNumber(capabilitySummary.uniqueToolCount)));
+    summaryEl.appendChild(buildSystemStat('Resources', formatNumber(resources.length)));
+    summaryEl.appendChild(buildSystemStat('Deployments', formatNumber(deployments.length)));
+  }
+
+  if (metaEl) {
+    metaEl.textContent = readyActions.length > 0
+      ? 'focused registry windows'
+      : 'registry launchers pending';
+  }
+
+  if (!listEl) return;
+
+  const entries = [
+    {
+      title: 'Toolbox & Capabilities',
+      metric: formatNumber(capabilitySummary.capabilityCount) + ' capabilities',
+      description: 'Runtime-defined capability catalog, tool membership, and operator-facing toolbox inventory.',
+      chips: [
+        buildSystemChip(formatNumber(capabilitySummary.uniqueToolCount) + ' tools', 'config'),
+        capabilitySummary.alwaysActiveCount > 0 ? buildSystemChip(formatNumber(capabilitySummary.alwaysActiveCount) + ' always-on', 'ok') : null,
+        capabilitySummary.discoverableCount > 0 ? buildSystemChip(formatNumber(capabilitySummary.discoverableCount) + ' discoverable', 'warn') : null,
+        capabilitySummary.liveContextCount > 0 ? buildSystemChip(formatNumber(capabilitySummary.liveContextCount) + ' live context', 'ok') : null,
+      ].filter(Boolean),
+      facts: [
+        capabilitySummary.capabilityCount > 0
+          ? 'Browse the current runtime toolbox without relying on config as the source of truth.'
+          : 'Capability catalog is not available yet.',
+      ],
+      actionLabel: 'Open toolbox window',
+      action: typeof actions.toolbox === 'function' ? actions.toolbox : null,
+    },
+    {
+      title: 'Model Registry',
+      metric: formatNumber(deployments.length) + ' deployments',
+      description: 'Routing inventory, provider resources, deployment policy, and observed model runtime attributes.',
+      chips: [
+        buildSystemChip(formatNumber(resources.length) + ' resources', 'resource'),
+        buildSystemChip(formatNumber(deployments.length) + ' deployments', 'provider'),
+        registry.default_model ? buildSystemChip('default ' + registry.default_model, 'config') : null,
+      ].filter(Boolean),
+      facts: [
+        registry.generation
+          ? 'Generation ' + formatNumber(registry.generation) + ' with current routing state and policy overlays.'
+          : 'Model registry state is not available yet.',
+      ],
+      actionLabel: 'Open model registry',
+      action: typeof actions.models === 'function' ? actions.models : null,
+    },
+    {
+      title: 'Scheduled Loops',
+      metric: 'planned',
+      description: 'Future registry window for scheduled loop definitions, cadence, and wake-policy inspection.',
+      chips: [
+        buildSystemChip('coming soon', 'muted'),
+      ],
+      facts: [
+        'This will follow the same focused-window pattern once scheduler registry data is exposed.',
+      ],
+      actionLabel: '',
+      action: null,
+    },
+  ];
+
+  for (const entry of entries) {
+    const item = document.createElement('div');
+    item.className = 'system-item';
+
+    const header = document.createElement('div');
+    header.className = 'system-item__header';
+
+    const title = document.createElement('div');
+    title.className = 'system-item__title';
+    title.textContent = entry.title;
+    header.appendChild(title);
+
+    const metric = document.createElement('div');
+    metric.className = 'system-item__metric';
+    metric.textContent = entry.metric;
+    header.appendChild(metric);
+
+    item.appendChild(header);
+
+    const subtitle = document.createElement('div');
+    subtitle.className = 'system-item__subtitle';
+    subtitle.textContent = entry.description;
+    item.appendChild(subtitle);
+
+    if (entry.chips.length > 0) {
+      const chips = document.createElement('div');
+      chips.className = 'system-item__chips';
+      for (const chip of entry.chips) chips.appendChild(chip);
+      item.appendChild(chips);
+    }
+
+    for (const fact of entry.facts) {
+      const facts = document.createElement('div');
+      facts.className = 'system-item__facts';
+      facts.textContent = fact;
+      item.appendChild(facts);
+    }
+
+    if (entry.action) {
+      const actionsEl = document.createElement('div');
+      actionsEl.className = 'system-item__actions';
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'toggle-btn system-item__button';
+      btn.textContent = entry.actionLabel || 'Open';
+      btn.addEventListener('click', (event) => {
+        event.preventDefault();
+        entry.action();
+      });
+      actionsEl.appendChild(btn);
+      item.appendChild(actionsEl);
+    }
+
+    listEl.appendChild(item);
+  }
+}
+
 function renderSystemInspector(sys, els) {
   if (!sys || !els) return;
 
@@ -621,6 +761,16 @@ function renderSystemInspector(sys, els) {
       els.capabilityMeta,
       capabilities,
       (sys.capability_catalog && sys.capability_catalog.activation_tools) || null,
+    );
+  }
+
+  if (els.registriesSummary || els.registriesList || els.registriesMeta) {
+    renderSystemRegistries(
+      els.registriesSummary,
+      els.registriesList,
+      els.registriesMeta,
+      sys,
+      els.registryActions || {},
     );
   }
 }

@@ -3556,95 +3556,46 @@ function renderSystemEntityDetail(sys) {
   services.body.appendChild(servicesEl);
   detailEntity.appendChild(services.card);
 
-  const registryCard = makeSchemaCard('Model Registry', '', {
+  const registries = makeSchemaCard('Registries', 'Focused windows for runtime catalogs and operator inventories', {
     entityKind: entity.kind,
-    key: 'model-registry',
-    titleSummary: `${formatNumber(entity.resourceCount)} resources and ${formatNumber(entity.deploymentCount)} deployments in play.`,
-    titleFacts: [entity.defaultModel || '', `gen ${formatNumber(entity.registryGeneration)}`].filter(Boolean),
-    widgetFacts: [
-      { label: 'Resources', value: formatNumber(entity.resourceCount) },
-      { label: 'Deployments', value: formatNumber(entity.deploymentCount) },
-      { label: 'Generation', value: formatNumber(entity.registryGeneration) },
-      { label: 'Routing', value: entity.routingMode },
-    ],
-  });
-  const registryMeta = document.createElement('span');
-  registryMeta.className = 'schema-card__meta';
-  const registryHeading = registryCard.header.querySelector('.schema-card__heading');
-  if (registryHeading) registryHeading.appendChild(registryMeta);
-
-  const registrySummary = document.createElement('div');
-  registrySummary.className = 'system-summary-grid';
-  registryCard.body.appendChild(registrySummary);
-
-  const resourcesWrap = document.createElement('div');
-  resourcesWrap.className = 'schema-subsection';
-  resourcesWrap.innerHTML = '<h4 class="schema-subsection__title">Resources</h4>';
-  const registryResources = document.createElement('div');
-  registryResources.className = 'system-list';
-  resourcesWrap.appendChild(registryResources);
-  registryCard.body.appendChild(resourcesWrap);
-
-  const deploymentsWrap = document.createElement('div');
-  deploymentsWrap.className = 'schema-subsection';
-  deploymentsWrap.innerHTML = '<h4 class="schema-subsection__title">Deployments</h4>';
-  const registryDeployments = document.createElement('div');
-  registryDeployments.className = 'system-list';
-  deploymentsWrap.appendChild(registryDeployments);
-  registryCard.body.appendChild(deploymentsWrap);
-
-  renderModelRegistry(
-    registrySummary,
-    registryResources,
-    registryDeployments,
-    registryMeta,
-    entity.registry,
-    entity.routerStats,
-  );
-  detailEntity.appendChild(registryCard.card);
-
-  const capabilityCard = makeSchemaCard('Capability Catalog', 'Runtime-defined capabilities and their tool membership', {
-    entityKind: entity.kind,
-    key: 'capability-catalog',
-    titleSummary: entity.capabilityCount > 0
-      ? `${formatNumber(entity.capabilityCount)} capabilities describing ${formatNumber(entity.toolboxToolCount)} tools.`
-      : 'Capability catalog not available yet.',
-    titleFacts: [
-      entity.alwaysActiveCapabilityCount ? `${formatNumber(entity.alwaysActiveCapabilityCount)} always-on` : '',
-      entity.discoverableCapabilityCount ? `${formatNumber(entity.discoverableCapabilityCount)} discoverable` : '',
-    ].filter(Boolean),
+    key: 'registries',
+    titleSummary: 'Open dedicated windows for toolbox, capability, and model inventory inspection instead of carrying the full registries in the core pane.',
+    titleFacts: [entity.defaultModel ? `default ${entity.defaultModel}` : '', `gen ${formatNumber(entity.registryGeneration)}`].filter(Boolean),
     widgetFacts: [
       { label: 'Capabilities', value: formatNumber(entity.capabilityCount) },
       { label: 'Tools', value: formatNumber(entity.toolboxToolCount) },
-      entity.alwaysActiveCapabilityCount ? { label: 'Always-on', value: formatNumber(entity.alwaysActiveCapabilityCount) } : null,
-      entity.discoverableCapabilityCount ? { label: 'Discoverable', value: formatNumber(entity.discoverableCapabilityCount) } : null,
+      { label: 'Resources', value: formatNumber(entity.resourceCount) },
+      { label: 'Deployments', value: formatNumber(entity.deploymentCount) },
     ],
   });
-  const capabilityMeta = document.createElement('span');
-  capabilityMeta.className = 'schema-card__meta';
-  const capabilityHeading = capabilityCard.header.querySelector('.schema-card__heading');
-  if (capabilityHeading) capabilityHeading.appendChild(capabilityMeta);
+  const registriesMeta = document.createElement('span');
+  registriesMeta.className = 'schema-card__meta';
+  const registriesHeading = registries.header.querySelector('.schema-card__heading');
+  if (registriesHeading) registriesHeading.appendChild(registriesMeta);
 
-  const capabilitySummary = document.createElement('div');
-  capabilitySummary.className = 'system-summary-grid';
-  capabilityCard.body.appendChild(capabilitySummary);
+  const registriesSummary = document.createElement('div');
+  registriesSummary.className = 'system-summary-grid';
+  registries.body.appendChild(registriesSummary);
 
-  const capabilityListWrap = document.createElement('div');
-  capabilityListWrap.className = 'schema-subsection';
-  capabilityListWrap.innerHTML = '<h4 class="schema-subsection__title">Available Capabilities</h4>';
-  const capabilityList = document.createElement('div');
-  capabilityList.className = 'system-list';
-  capabilityListWrap.appendChild(capabilityList);
-  capabilityCard.body.appendChild(capabilityListWrap);
+  const registriesWrap = document.createElement('div');
+  registriesWrap.className = 'schema-subsection';
+  registriesWrap.innerHTML = '<h4 class="schema-subsection__title">Core Registries</h4>';
+  const registriesList = document.createElement('div');
+  registriesList.className = 'system-list';
+  registriesWrap.appendChild(registriesList);
+  registries.body.appendChild(registriesWrap);
 
-  renderCapabilityCatalog(
-    capabilitySummary,
-    capabilityList,
-    capabilityMeta,
-    entity.capabilityEntries,
-    entity.capabilityCatalog && entity.capabilityCatalog.activation_tools,
+  renderSystemRegistries(
+    registriesSummary,
+    registriesList,
+    registriesMeta,
+    sys,
+    {
+      toolbox: () => openRegistryWindow('toolbox'),
+      models: () => openRegistryWindow('models'),
+    },
   );
-  detailEntity.appendChild(capabilityCard.card);
+  detailEntity.appendChild(registries.card);
 
   updateSystemUptime();
 }
@@ -4066,6 +4017,8 @@ function buildSystemContextMenu(sys) {
     { label: 'routing: ' + entity.routingMode + (entity.defaultModel ? ' · ' + entity.defaultModel : ''), disabled: true },
     { separator: true },
     { label: 'Open core window', action: () => openDetailWindow('system') },
+    { label: 'Open toolbox window', action: () => openRegistryWindow('toolbox') },
+    { label: 'Open model registry', action: () => openRegistryWindow('models') },
     { label: 'Inspect core', action: () => selectSystem() },
     { separator: true },
     { label: 'Copy core JSON', action: () => { void copySystemEntityJSON(sys || state.system || {}); } },
@@ -4412,6 +4365,21 @@ function openDetailWindow(type, id) {
   if (w) {
     w.addEventListener('load', () => {
       w.document.title = 'Thane \u00b7 ' + title;
+    });
+  }
+}
+
+function openRegistryWindow(registry) {
+  const key = String(registry || 'toolbox').trim().toLowerCase();
+  const name = key === 'models' ? 'Model Registry' : key === 'scheduled' ? 'Scheduled Loops' : 'Toolbox & Capabilities';
+  const w = window.open(
+    '/static/registry.html?registry=' + encodeURIComponent(key),
+    'registry-' + key,
+    'popup=yes,width=1280,height=920'
+  );
+  if (w) {
+    w.addEventListener('load', () => {
+      w.document.title = 'Thane \u00b7 ' + name;
     });
   }
 }

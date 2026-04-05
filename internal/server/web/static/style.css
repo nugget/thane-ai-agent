@@ -2385,6 +2385,17 @@ body.resize-col .schema-card__fade {
   overflow-wrap: anywhere;
 }
 
+.system-item__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin-top: 0.55rem;
+}
+
+.system-item__button {
+  font-size: 0.68rem;
+}
+
 .system-item__chips {
   display: flex;
   flex-wrap: wrap;
@@ -2447,6 +2458,89 @@ body.resize-col .schema-card__fade {
   color: var(--text-muted);
   font-size: 0.74rem;
   padding: 0.4rem 0;
+}
+
+.registry-page {
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at top left, rgba(86, 212, 221, 0.05), transparent 28%),
+    radial-gradient(circle at top right, rgba(88, 166, 255, 0.05), transparent 24%),
+    var(--bg-primary);
+}
+
+.registry-shell {
+  max-width: 1320px;
+  margin: 0 auto;
+  padding: 1.1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.registry-hero {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 1rem 1.05rem;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: linear-gradient(180deg, rgba(28, 33, 40, 0.92), rgba(22, 27, 34, 0.98));
+}
+
+.registry-hero__copy {
+  min-width: 0;
+  display: grid;
+  gap: 0.25rem;
+}
+
+.registry-hero__eyebrow {
+  color: var(--text-muted);
+  font-size: 0.68rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.registry-hero__title {
+  margin: 0;
+  font-size: 1.15rem;
+  line-height: 1.2;
+}
+
+.registry-hero__subtitle {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+  line-height: 1.5;
+  max-width: 70ch;
+}
+
+.registry-hero__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.registry-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+}
+
+.registry-empty {
+  padding: 1rem;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  color: var(--text-muted);
+  text-align: center;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.registry-empty[hidden],
+.registry-section[hidden] {
+  display: none !important;
 }
 
 /* Progress ring for sleep countdown */
