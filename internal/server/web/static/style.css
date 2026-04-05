@@ -1167,19 +1167,60 @@ body.resize-col .schema-card__fade {
 
 /* === Aggregate Stats Bar === */
 .detail-aggregates {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.2rem 0.35rem;
+  display: grid;
+  gap: 0.55rem;
   font-size: 0.7rem;
-  font-family: var(--font-mono);
   color: var(--text-secondary);
   background: var(--bg-tertiary);
-  border-radius: var(--radius);
-  padding: 0.3rem 0.5rem;
+  border-radius: 10px;
+  padding: 0.65rem 0.72rem;
   margin-bottom: 0.5rem;
 }
-.agg-sep { color: var(--text-muted); margin: 0 0.1rem; }
-.agg-error { color: var(--orange); }
+.agg-summary {
+  color: var(--text-secondary);
+  font-size: 0.76rem;
+  line-height: 1.45;
+  text-wrap: pretty;
+}
+.agg-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(7.4rem, 1fr));
+  gap: 0.42rem;
+}
+.agg-stat {
+  min-width: 0;
+  padding: 0.45rem 0.55rem 0.42rem;
+  border-radius: 9px;
+  border: 1px solid rgba(110, 118, 129, 0.18);
+  background: rgba(255, 255, 255, 0.02);
+}
+.agg-stat--emphasis {
+  border-color: rgba(45, 212, 191, 0.28);
+  box-shadow: inset 0 0 0 1px rgba(45, 212, 191, 0.06);
+}
+.agg-stat__value {
+  color: var(--text-primary);
+  font-size: 0.8rem;
+  font-weight: 650;
+  line-height: 1.15;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+.agg-stat__label {
+  margin-top: 0.16rem;
+  color: var(--text-muted);
+  font-size: 0.56rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.agg-error {
+  color: var(--orange);
+  font-size: 0.72rem;
+  line-height: 1.45;
+  text-wrap: pretty;
+}
 
 /* === Iteration Timeline === */
 .iter-timeline {
@@ -1262,18 +1303,51 @@ body.resize-col .schema-card__fade {
   font-weight: 600;
   font-size: 0.8rem;
 }
-.iter-card__number {
-  color: var(--text-muted);
+.iter-card__status-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 4.5rem;
+  padding: 0.22rem 0.46rem 0.18rem;
+  border-radius: 999px;
+  border: 1px solid rgba(63, 185, 80, 0.28);
+  background: rgba(63, 185, 80, 0.12);
+  color: var(--green);
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
   flex-shrink: 0;
-  font-weight: 600;
 }
-.iter-card--error .iter-card__number { color: var(--orange); }
+.iter-card__status-pill--ok {
+  border-color: rgba(63, 185, 80, 0.28);
+  background: rgba(63, 185, 80, 0.12);
+  color: var(--green);
+}
+.iter-card__status-pill--error {
+  border-color: rgba(210, 153, 34, 0.35);
+  background: rgba(210, 153, 34, 0.14);
+  color: var(--orange);
+}
+.iter-card__status-pill--supervisor {
+  border-color: rgba(188, 140, 255, 0.32);
+  background: rgba(188, 140, 255, 0.14);
+  color: var(--purple);
+}
 .iter-card__model {
   color: var(--text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   max-width: 120px;
+}
+.iter-card__title {
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 14rem;
+  font-weight: 500;
 }
 .iter-card__spacer { flex: 1; }
 .iter-card__time {
@@ -1308,6 +1382,13 @@ body.resize-col .schema-card__fade {
   gap: 0.38rem;
 }
 .iter-card__body[hidden] { display: none; }
+.iter-card__preview {
+  margin-top: 0.25rem;
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  line-height: 1.4;
+  text-wrap: pretty;
+}
 .iter-card__summary-line {
   color: var(--text-secondary);
   font-size: 0.72rem;
@@ -1331,6 +1412,8 @@ body.resize-col .schema-card__fade {
   font-size: 0.75rem;
   font-weight: 600;
   line-height: 1.15;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
   overflow-wrap: anywhere;
 }
 .iter-card__fact-label {

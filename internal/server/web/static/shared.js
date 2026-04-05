@@ -189,6 +189,16 @@ function buildToolCounts(liveTools) {
   return counts;
 }
 
+function countToolCalls(toolsUsed) {
+  if (!toolsUsed) return 0;
+  return Object.values(toolsUsed).reduce((sum, count) => sum + (count || 0), 0);
+}
+
+function countSummarySignals(summary) {
+  if (!summary) return 0;
+  return Object.keys(summary).length;
+}
+
 // ---------------------------------------------------------------------------
 // ID Chip Helpers
 // ---------------------------------------------------------------------------
@@ -812,20 +822,67 @@ function makeIterationFacts(items) {
 }
 
 function buildPastIterationSummary(snap, handlerOnly) {
+  const toolCalls = countToolCalls(snap.tools_used);
+  const summarySignals = countSummarySignals(snap.summary);
   const bits = [];
   if (snap.error) {
-    bits.push('Turn failed' + (snap.elapsed_ms ? ' after ' + formatDuration(snap.elapsed_ms) : ''));
+    bits.push('Turn ended with an issue' + (snap.elapsed_ms ? ' after ' + formatDuration(snap.elapsed_ms) : ''));
+  } else if (handlerOnly) {
+    bits.push('Handler pass completed cleanly' + (snap.elapsed_ms ? ' in ' + formatDuration(snap.elapsed_ms) : ''));
   } else {
-    bits.push('Turn completed' + (snap.elapsed_ms ? ' in ' + formatDuration(snap.elapsed_ms) : ''));
+    bits.push('Model turn completed cleanly' + (snap.elapsed_ms ? ' in ' + formatDuration(snap.elapsed_ms) : ''));
   }
   if (snap.model) bits.push('on ' + shortModelName(snap.model));
   if (!handlerOnly && (snap.input_tokens || snap.output_tokens)) {
     bits.push(formatTokens(snap.input_tokens || 0) + ' in / ' + formatTokens(snap.output_tokens || 0) + ' out');
   }
-  if (snap.tools_used && Object.keys(snap.tools_used).length > 0) {
-    bits.push(Object.keys(snap.tools_used).length + ' tool' + (Object.keys(snap.tools_used).length === 1 ? '' : 's'));
+  if (toolCalls > 0) {
+    bits.push(toolCalls + ' tool call' + (toolCalls === 1 ? '' : 's'));
+  }
+  if (handlerOnly && summarySignals > 0) {
+    bits.push(summarySignals + ' reported signal' + (summarySignals === 1 ? '' : 's'));
   }
   return bits.join(' · ');
+}
+
+function buildPastIterationHeaderTitle(snap, handlerOnly) {
+  const bits = [];
+  if (snap.request_id) bits.push('req ' + shortID(snap.request_id));
+  if (snap.model) bits.push(shortModelName(snap.model));
+  if (handlerOnly && bits.length === 0) bits.push('handler snapshot');
+  if (bits.length === 0) bits.push('recent turn');
+  return bits.join(' · ');
+}
+
+function buildPastIterationStatusLabel(snap, handlerOnly) {
+  if (snap.error) return 'Issue';
+  if (snap.supervisor) return 'Supervisor';
+  if (handlerOnly) return 'Handler';
+  return 'Turn';
+}
+
+function buildPastIterationHealth(snap) {
+  if (snap.error) return 'issue';
+  return 'clean';
+}
+
+function buildAggregateStat(label, value, opts = {}) {
+  if (value === null || value === undefined || value === '') return null;
+  const item = document.createElement('div');
+  item.className = 'agg-stat' + (opts.emphasis ? ' agg-stat--emphasis' : '');
+
+  const valueEl = document.createElement('div');
+  valueEl.className = 'agg-stat__value';
+  valueEl.textContent = String(value);
+  if (opts.title) valueEl.title = opts.title;
+  item.appendChild(valueEl);
+
+  const labelEl = document.createElement('div');
+  labelEl.className = 'agg-stat__label';
+  labelEl.textContent = String(label);
+  item.appendChild(labelEl);
+
+  return item;
 }
 
 function buildLiveCard(loop) {
@@ -864,20 +921,27 @@ function buildLiveCard(loop) {
   const summary = document.createElement('div');
   summary.className = 'iter-card__summary-line';
   const summaryBits = [];
-  if (loop._liveModel) summaryBits.push('Actively sampling on ' + shortModelName(loop._liveModel));
-  else summaryBits.push('Current turn is live');
+  const activeToolCalls = loop._liveTools ? loop._liveTools.length : 0;
+  if (activeToolCalls > 0) {
+    summaryBits.push('Current turn has ' + activeToolCalls + ' active tool call' + (activeToolCalls === 1 ? '' : 's'));
+  } else if (loop._liveModel) {
+    summaryBits.push('Current turn is sampling on ' + shortModelName(loop._liveModel));
+  } else {
+    summaryBits.push('Current turn is active');
+  }
   if (ctx && ctx.intent) summaryBits.push(ctx.intent.replace(/_/g, ' '));
   if (ctx && ctx.reasoning) summaryBits.push(ctx.reasoning);
   summary.textContent = summaryBits.join(' · ');
   card.appendChild(summary);
 
   // Context meter (if we have context info).
-  if (loop.context_window && loop.last_input_tokens) {
-    const pct = Math.min(100, (loop.last_input_tokens / loop.context_window) * 100);
+  const contextNumerator = (ctx && ctx.est_tokens) || loop.last_input_tokens || 0;
+  if (loop.context_window && contextNumerator) {
+    const pct = Math.min(100, (contextNumerator / loop.context_window) * 100);
     const meter = document.createElement('div');
     meter.className = 'context-meter';
     meter.innerHTML =
-      '<span class="context-meter__label">Context</span>' +
+      '<span class="context-meter__label">Context load</span>' +
       '<div class="context-meter__track">' +
         '<div class="context-meter__fill' +
         (pct >= 80 ? ' context-meter__fill--crit' : pct >= 50 ? ' context-meter__fill--warn' : '') +
@@ -903,11 +967,11 @@ function buildLiveCard(loop) {
   }
 
   const liveFacts = makeIterationFacts([
-    { label: 'Iteration', value: '#' + ((loop.iterations || 0) + 1) },
+    { label: 'Turn', value: '#' + ((loop.iterations || 0) + 1) },
     { label: 'Model', value: loop._liveModel ? shortModelName(loop._liveModel) : '' },
-    { label: 'Messages', value: ctx && ctx.messages ? ctx.messages : '' },
-    { label: 'Est tokens', value: ctx && ctx.est_tokens ? formatTokens(ctx.est_tokens) : '' },
-    { label: 'Tools', value: ctx && ctx.tools ? ctx.tools : '' },
+    { label: 'Messages', value: ctx && ctx.messages ? formatNumber(ctx.messages) : '' },
+    { label: 'Estimated context', value: ctx && ctx.est_tokens ? formatTokens(ctx.est_tokens) : '' },
+    { label: 'Active tools', value: activeToolCalls > 0 ? formatNumber(activeToolCalls) : (ctx && ctx.tools ? formatNumber(ctx.tools) : '') },
     { label: 'Complexity', value: ctx && ctx.complexity ? ctx.complexity : '' },
   ]);
   if (liveFacts) card.appendChild(liveFacts);
@@ -961,13 +1025,16 @@ function buildPastCard(snap, handlerOnly, idx, startExpanded) {
   const header = document.createElement('div');
   header.className = 'iter-card__header';
 
-  const num = document.createElement('span');
-  num.className = 'iter-card__number';
-  num.textContent = isError ? '\u2717' : '#' + (snap.number || '?');
+  const status = document.createElement('span');
+  status.className = 'iter-card__status-pill'
+    + (isError ? ' iter-card__status-pill--error' : '')
+    + (snap.supervisor ? ' iter-card__status-pill--supervisor' : '')
+    + (!isError && !snap.supervisor ? ' iter-card__status-pill--ok' : '');
+  status.textContent = buildPastIterationStatusLabel(snap, handlerOnly);
 
-  const model = document.createElement('span');
-  model.className = 'iter-card__model';
-  model.textContent = snap.model ? shortModelName(snap.model) : (handlerOnly ? 'handler' : '');
+  const title = document.createElement('span');
+  title.className = 'iter-card__title';
+  title.textContent = buildPastIterationHeaderTitle(snap, handlerOnly);
 
   const dur = document.createElement('span');
   dur.className = 'iter-card__duration';
@@ -977,8 +1044,8 @@ function buildPastCard(snap, handlerOnly, idx, startExpanded) {
   chevron.className = 'iter-card__chevron';
   chevron.textContent = startExpanded ? '\u25be' : '\u25b8';
 
-  header.appendChild(num);
-  header.appendChild(model);
+  header.appendChild(status);
+  header.appendChild(title);
   const spacer = document.createElement('span');
   spacer.className = 'iter-card__spacer';
   header.appendChild(spacer);
@@ -995,26 +1062,30 @@ function buildPastCard(snap, handlerOnly, idx, startExpanded) {
   header.appendChild(chevron);
   card.appendChild(header);
 
+  const preview = buildPastIterationSummary(snap, handlerOnly);
+  if (preview) {
+    const previewEl = document.createElement('div');
+    previewEl.className = 'iter-card__preview';
+    previewEl.textContent = preview;
+    card.appendChild(previewEl);
+  }
+
   // Body (hidden by default, toggled on click).
   const body = document.createElement('div');
   body.className = 'iter-card__body';
   body.hidden = !startExpanded;
 
-  const summary = buildPastIterationSummary(snap, handlerOnly);
-  if (summary) {
-    const summaryEl = document.createElement('div');
-    summaryEl.className = 'iter-card__summary-line';
-    summaryEl.textContent = summary;
-    body.appendChild(summaryEl);
-  }
-
+  const toolCalls = countToolCalls(snap.tools_used);
+  const summarySignals = countSummarySignals(snap.summary);
   const facts = makeIterationFacts([
+    { label: 'Health', value: buildPastIterationHealth(snap) },
     { label: 'Request', value: snap.request_id ? shortID(snap.request_id) : '' },
-    { label: 'Model', value: snap.model ? shortModelName(snap.model) : (handlerOnly ? 'handler' : '') },
     { label: 'Duration', value: snap.elapsed_ms ? formatDuration(snap.elapsed_ms) : '' },
-    { label: 'Context', value: snap.context_window ? formatNumber(snap.context_window) : '' },
-    { label: 'Tools', value: snap.tools_used ? Object.keys(snap.tools_used).length : '' },
-    { label: 'When', value: snap.completed_at ? timeAgo(new Date(snap.completed_at)) : '' },
+    { label: 'Tool calls', value: toolCalls > 0 ? formatNumber(toolCalls) : '' },
+    !handlerOnly ? { label: 'Input tokens', value: snap.input_tokens ? formatTokens(snap.input_tokens) : '' } : { label: 'Handler signals', value: summarySignals > 0 ? formatNumber(summarySignals) : '' },
+    !handlerOnly ? { label: 'Output tokens', value: snap.output_tokens ? formatTokens(snap.output_tokens) : '' } : { label: 'When', value: snap.completed_at ? timeAgo(new Date(snap.completed_at)) : '' },
+    !handlerOnly ? { label: 'Context window', value: snap.context_window ? formatNumber(snap.context_window) : '' } : null,
+    !handlerOnly ? { label: 'When', value: snap.completed_at ? timeAgo(new Date(snap.completed_at)) : '' } : null,
   ]);
   if (facts) body.appendChild(facts);
 
@@ -1370,23 +1441,56 @@ function applyLoopEventToLoop(evt, ctx) {
 // renderAggregates builds the one-line stats summary (iterations, tokens,
 // age, last error) into the given DOM element.
 function renderAggregates(loop, el) {
-  const parts = [];
-  // Delegate nodes track iterations via their completion event, not
-  // the loop counter (which is never incremented for synthetic nodes).
+  el.innerHTML = '';
   const iter = loop._delegate
     ? (loop._delegateIterations || 0)
     : (loop.iterations || 0);
   const att = loop.attempts || 0;
-  parts.push(formatNumber(iter) + ' iter');
-  if (!loop._delegate && att !== iter) parts.push(formatNumber(att) + ' att');
+  const failedAttempts = Math.max(0, att - iter);
   const totalTok = (loop.total_input_tokens || 0) + (loop.total_output_tokens || 0);
-  if (totalTok > 0) parts.push(formatTokens(totalTok) + ' tok');
   const startedAt = parseTimestamp(loop.started_at);
-  if (startedAt) parts.push(timeAgo(startedAt));
+  const lastWake = parseTimestamp(loop.last_wake_at);
+
+  const summary = document.createElement('div');
+  summary.className = 'agg-summary';
   if (loop.last_error) {
-    parts.push('<span class="agg-error">' + escapeHTML(truncate(loop.last_error, 40)) + '</span>');
+    summary.textContent = 'Recent execution ended with an issue. Review the latest error and recent turn details below.';
+  } else if (loop.state === 'processing') {
+    summary.textContent = 'Active turn is running now. Live telemetry below follows the current request, context load, and tool activity.';
+  } else if (loop.state === 'waiting' && loop.event_driven) {
+    summary.textContent = 'Event-driven loop is idle and waiting for the next trigger.';
+  } else if (loop.state === 'sleeping') {
+    summary.textContent = 'Timed loop is idle between turns and will wake on its next scheduled interval.';
+  } else {
+    summary.textContent = 'Recent loop health, throughput, and runtime totals for this anchor.';
   }
-  el.innerHTML = parts.join(' <span class="agg-sep">\u00b7</span> ');
+  el.appendChild(summary);
+
+  const grid = document.createElement('div');
+  grid.className = 'agg-grid';
+  const stats = [
+    buildAggregateStat('State', formatSchemaToken(loop.state || 'pending'), { emphasis: true }),
+    buildAggregateStat('Loop mode', loop.event_driven ? 'event driven' : 'timed sleep'),
+    buildAggregateStat('Successful turns', formatNumber(iter)),
+    buildAggregateStat('Failed attempts', failedAttempts > 0 ? formatNumber(failedAttempts) : '0'),
+    totalTok > 0 ? buildAggregateStat('Total tokens', formatTokens(totalTok)) : null,
+    startedAt ? buildAggregateStat('Started', timeAgo(startedAt), { title: startedAt.toISOString() }) : null,
+    lastWake ? buildAggregateStat('Last wake', timeAgo(lastWake), { title: lastWake.toISOString() }) : null,
+    loop.context_window ? buildAggregateStat('Context window', formatNumber(loop.context_window)) : null,
+    loop.consecutive_errors > 0 ? buildAggregateStat('Error streak', formatNumber(loop.consecutive_errors)) : buildAggregateStat('Health', 'clean'),
+  ].filter(Boolean);
+
+  for (const stat of stats) {
+    grid.appendChild(stat);
+  }
+  el.appendChild(grid);
+
+  if (loop.last_error) {
+    const err = document.createElement('div');
+    err.className = 'agg-error';
+    err.textContent = loop.last_error;
+    el.appendChild(err);
+  }
 }
 
 // renderTimeline builds the vertical iteration timeline (live card +
