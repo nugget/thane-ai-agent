@@ -128,6 +128,11 @@ function truncate(s, max) {
   return s.slice(0, max) + '\u2026';
 }
 
+function formatSchemaToken(value) {
+  if (!value) return '';
+  return String(value).replace(/_/g, ' ');
+}
+
 // formatToolTooltip builds a readable tooltip string for a live tool entry.
 // Fields: tool (name), status ("running"/"done"/"error"), args, result, error.
 function formatToolTooltip(entry) {
