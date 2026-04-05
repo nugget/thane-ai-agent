@@ -14,6 +14,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/events"
 	"github.com/nugget/thane-ai-agent/internal/logging"
 	"github.com/nugget/thane-ai-agent/internal/memory"
+	"github.com/nugget/thane-ai-agent/internal/toolcatalog"
 )
 
 // Runner abstracts the agent loop for LLM calls. Satisfied by
@@ -72,19 +73,20 @@ type RunMessage = Message
 // Response mirrors agent.Response fields that loops consume. It holds
 // the result of an LLM call executed by a [Runner].
 type Response struct {
-	Content                  string         `yaml:"content,omitempty" json:"content,omitempty"`
-	Model                    string         `yaml:"model,omitempty" json:"model,omitempty"`
-	FinishReason             string         `yaml:"finish_reason,omitempty" json:"finish_reason,omitempty"`
-	InputTokens              int            `yaml:"input_tokens,omitempty" json:"input_tokens,omitempty"`
-	OutputTokens             int            `yaml:"output_tokens,omitempty" json:"output_tokens,omitempty"`
-	CacheCreationInputTokens int            `yaml:"cache_creation_input_tokens,omitempty" json:"cache_creation_input_tokens,omitempty"`
-	CacheReadInputTokens     int            `yaml:"cache_read_input_tokens,omitempty" json:"cache_read_input_tokens,omitempty"`
-	ContextWindow            int            `yaml:"context_window,omitempty" json:"context_window,omitempty"`
-	ToolsUsed                map[string]int `yaml:"tools_used,omitempty" json:"tools_used,omitempty"`
-	EffectiveTools           []string       `yaml:"effective_tools,omitempty" json:"effective_tools,omitempty"`
-	RequestID                string         `yaml:"request_id,omitempty" json:"request_id,omitempty"`
-	Iterations               int            `yaml:"iterations,omitempty" json:"iterations,omitempty"`
-	Exhausted                bool           `yaml:"exhausted,omitempty" json:"exhausted,omitempty"`
+	Content                  string                              `yaml:"content,omitempty" json:"content,omitempty"`
+	Model                    string                              `yaml:"model,omitempty" json:"model,omitempty"`
+	FinishReason             string                              `yaml:"finish_reason,omitempty" json:"finish_reason,omitempty"`
+	InputTokens              int                                 `yaml:"input_tokens,omitempty" json:"input_tokens,omitempty"`
+	OutputTokens             int                                 `yaml:"output_tokens,omitempty" json:"output_tokens,omitempty"`
+	CacheCreationInputTokens int                                 `yaml:"cache_creation_input_tokens,omitempty" json:"cache_creation_input_tokens,omitempty"`
+	CacheReadInputTokens     int                                 `yaml:"cache_read_input_tokens,omitempty" json:"cache_read_input_tokens,omitempty"`
+	ContextWindow            int                                 `yaml:"context_window,omitempty" json:"context_window,omitempty"`
+	ToolsUsed                map[string]int                      `yaml:"tools_used,omitempty" json:"tools_used,omitempty"`
+	EffectiveTools           []string                            `yaml:"effective_tools,omitempty" json:"effective_tools,omitempty"`
+	LoadedCapabilities       []toolcatalog.LoadedCapabilityEntry `yaml:"loaded_capabilities,omitempty" json:"loaded_capabilities,omitempty"`
+	RequestID                string                              `yaml:"request_id,omitempty" json:"request_id,omitempty"`
+	Iterations               int                                 `yaml:"iterations,omitempty" json:"iterations,omitempty"`
+	Exhausted                bool                                `yaml:"exhausted,omitempty" json:"exhausted,omitempty"`
 	// ActiveTags is the set of capability tags that were active at the
 	// end of the Run. Loops use this to carry forward activations to
 	// subsequent iterations.
@@ -532,6 +534,28 @@ func (l *Loop) Status() Status {
 		}
 	}
 
+	effectiveTools := []string(nil)
+	if tooling, ok := llmCtxCopy["tooling"].(ToolingState); ok && len(tooling.EffectiveTools) > 0 {
+		effectiveTools = append(effectiveTools, tooling.EffectiveTools...)
+	} else if got, ok := llmCtxCopy["effective_tools"].([]string); ok {
+		effectiveTools = append(effectiveTools, got...)
+	} else if len(iterCopy) > 0 {
+		effectiveTools = append(effectiveTools, iterCopy[0].EffectiveTools...)
+	}
+
+	loadedCaps := []toolcatalog.LoadedCapabilityEntry(nil)
+	if tooling, ok := llmCtxCopy["tooling"].(ToolingState); ok && len(tooling.LoadedCapabilities) > 0 {
+		loadedCaps = append(loadedCaps, tooling.LoadedCapabilities...)
+	} else if len(iterCopy) > 0 {
+		loadedCaps = append(loadedCaps, iterCopy[0].Tooling.LoadedCapabilities...)
+	}
+
+	lastToolsUsed := map[string]int(nil)
+	if len(iterCopy) > 0 && len(iterCopy[0].ToolsUsed) > 0 {
+		lastToolsUsed = iterCopy[0].ToolsUsed
+	}
+	s.Tooling = BuildToolingState(cfgCopy.Tags, s.ActiveTags, effectiveTools, cfgCopy.ExcludeTools, loadedCaps, lastToolsUsed)
+
 	return s
 }
 
@@ -953,6 +977,7 @@ func (l *Loop) run(ctx context.Context) {
 				if len(result.ActiveTags) > 0 {
 					snap.ActiveTags = append([]string(nil), result.ActiveTags...)
 				}
+				snap.Tooling = BuildToolingState(nil, result.ActiveTags, result.EffectiveTools, nil, result.LoadedCapabilities, result.ToolsUsed)
 
 				iterLog.Debug("loop iteration complete",
 					"model", result.Model,
@@ -973,6 +998,7 @@ func (l *Loop) run(ctx context.Context) {
 					"tools_used":      result.ToolsUsed,
 					"effective_tools": result.EffectiveTools,
 					"active_tags":     result.ActiveTags,
+					"tooling":         snap.Tooling,
 					"supervisor":      result.Supervisor,
 					"conversation_id": convID,
 				}

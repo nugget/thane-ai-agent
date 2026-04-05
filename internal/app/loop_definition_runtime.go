@@ -46,7 +46,7 @@ func newAppLoopDefinitionRuntime(a *App) *loopDefinitionRuntime {
 	return &loopDefinitionRuntime{
 		definitions:  a.loopDefinitionRegistry,
 		loops:        a.loopRegistry,
-		runner:       &loopAdapter{agentLoop: a.loop, router: a.rtr},
+		runner:       &loopAdapter{agentLoop: a.loop, router: a.rtr, capSurface: a.capSurface},
 		completion:   dispatcher.Deliver,
 		hydrate:      a.hydrateLoopDefinitionSpec,
 		logger:       a.logger,

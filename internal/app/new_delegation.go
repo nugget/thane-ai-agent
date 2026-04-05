@@ -50,7 +50,7 @@ func (a *App) initDelegation(s *newState) error {
 	delegateExec.SetUsageRecorder(a.usageStore, cfg.Pricing, a.modelCatalog)
 	delegateExec.UseModelRegistry(a.modelRegistry)
 	delegateExec.SetEventBus(a.eventBus)
-	delegateExec.ConfigureLoopExecution(&loopAdapter{agentLoop: a.loop, router: a.rtr}, a.loopRegistry)
+	delegateExec.ConfigureLoopExecution(&loopAdapter{agentLoop: a.loop, router: a.rtr, capSurface: a.capSurface}, a.loopRegistry)
 	delegateExec.ConfigureLoopCompletionSink(completionDispatcher.Deliver)
 	delegateExec.ConfigureSessionLifecycle(a.archiveAdapter, a.mem)
 	var alwaysActiveTags []string
@@ -210,6 +210,7 @@ func (a *App) initDelegation(s *newState) error {
 		}
 
 		capSurface := buildCapabilitySurface(resolvedCapTags, kbCounts, liveTags, adHocTags)
+		a.capSurface = capSurface
 
 		if manifestTalent := talents.GenerateManifest(capSurface); manifestTalent != nil {
 			capTalents = append([]talents.Talent{*manifestTalent}, capTalents...)

@@ -937,20 +937,40 @@ function buildLoopEntity(loop) {
   const llmContext = loop._llmContext || null;
   const hints = (loop.config && loop.config.Hints) || {};
   const metadata = (loop.config && loop.config.Metadata) || {};
-  const configTags = ((loop.config && loop.config.Tags) || []).slice().sort();
-  const excludedTools = ((loop.config && loop.config.ExcludeTools) || []).slice().sort();
-  const activeTags = ((loop.active_tags || [])).slice().sort();
+  const loopTooling = normalizeTooling(loop.tooling, {
+    configuredTags: (loop.config && loop.config.Tags) || [],
+    loadedTags: loop.active_tags || [],
+    excludedTools: (loop.config && loop.config.ExcludeTools) || [],
+  });
+  const latestTooling = normalizeTooling(latest && latest.tooling, {
+    configuredTags: loopTooling.configuredTags,
+    loadedTags: latest && latest.active_tags,
+    effectiveTools: latest && latest.effective_tools,
+    excludedTools: loopTooling.excludedTools,
+    toolsUsed: latest && latest.tools_used,
+  });
+  const liveTooling = normalizeTooling(llmContext && llmContext.tooling, {
+    configuredTags: loopTooling.configuredTags,
+    loadedTags: llmContext && llmContext.active_tags,
+    effectiveTools: llmContext && llmContext.effective_tools,
+    excludedTools: loopTooling.excludedTools,
+  });
+  const currentTooling = (liveTooling.loadedTags.length > 0 || liveTooling.effectiveTools.length > 0 || liveTooling.loadedCapabilities.length > 0)
+    ? liveTooling
+    : ((latestTooling.loadedTags.length > 0 || latestTooling.effectiveTools.length > 0 || latestTooling.loadedCapabilities.length > 0)
+      ? latestTooling
+      : loopTooling);
+  const configTags = loopTooling.configuredTags.slice();
+  const excludedTools = loopTooling.excludedTools.slice();
+  const activeTags = loopTooling.loadedTags.slice();
   const allTags = Array.from(new Set([...configTags, ...activeTags])).sort();
-  const liveScopeTags = (Array.isArray(llmContext && llmContext.active_tags) ? llmContext.active_tags : []).slice().sort();
-  const latestScopeTags = (Array.isArray(latest && latest.active_tags) ? latest.active_tags : []).slice().sort();
-  const currentScopeTags = Array.from(new Set([
-    ...(liveScopeTags.length > 0 ? liveScopeTags : []),
-    ...((liveScopeTags.length === 0 && activeTags.length > 0) ? activeTags : []),
-    ...((liveScopeTags.length === 0 && activeTags.length === 0) ? latestScopeTags : []),
-  ])).sort();
-  const liveEffectiveTools = (Array.isArray(llmContext && llmContext.effective_tools) ? llmContext.effective_tools : []).slice().sort();
-  const latestEffectiveTools = (Array.isArray(latest && latest.effective_tools) ? latest.effective_tools : []).slice().sort();
-  const currentEffectiveTools = (liveEffectiveTools.length > 0 ? liveEffectiveTools : latestEffectiveTools).slice();
+  const currentScopeTags = currentTooling.loadedTags.slice();
+  const currentLoadedCapabilities = currentTooling.loadedCapabilities.slice();
+  const latestLoadedCapabilities = latestTooling.loadedCapabilities.slice();
+  const currentEffectiveTools = currentTooling.effectiveTools.slice();
+  const latestEffectiveTools = latestTooling.effectiveTools.slice();
+  const currentToolsUsed = currentTooling.toolsUsed || {};
+  const latestToolsUsed = latestTooling.toolsUsed || {};
   const latestModel = loop._liveModel || loop._lastModel || (latest && latest.model) || '';
   const latestRequestID = (latest && latest.request_id) || '';
   const startedAt = parseTimestamp(loop.started_at) ? loop.started_at : '';
@@ -1006,9 +1026,14 @@ function buildLoopEntity(loop) {
     excludedTools,
     activeTags,
     allTags,
+    availableCapabilities: getCapabilityCatalogEntries(state.system),
+    currentLoadedCapabilities,
+    latestLoadedCapabilities,
     currentScopeTags,
     currentEffectiveTools,
     latestEffectiveTools,
+    currentToolsUsed,
+    latestToolsUsed,
     liveTools,
     activeLiveTools,
   };
@@ -1039,7 +1064,7 @@ function renderLoopCurrentTurnCard(loop, entity, conversationSummary) {
   const threadLabel = conversationSummary ? conversationSummary.label : (getLoopPrimaryConversationID(entity) ? shortID(getLoopPrimaryConversationID(entity)) : 'No thread bound');
   const activeToolNames = entity.activeLiveTools.map((entry) => entry.tool).filter(Boolean);
   const activeToolSet = Array.from(new Set(activeToolNames)).sort();
-  const currentScopeTags = entity.currentScopeTags || [];
+  const currentLoadedCapabilities = entity.currentLoadedCapabilities || [];
   const currentEffectiveTools = entity.currentEffectiveTools || [];
   const iterationLabel = isProcessing
     ? '#' + formatNumber((entity.iterations || 0) + 1)
@@ -1052,7 +1077,7 @@ function renderLoopCurrentTurnCard(loop, entity, conversationSummary) {
       threadLabel,
       latestModelLabel !== 'model pending' ? 'on ' + latestModelLabel : '',
       currentEffectiveTools.length > 0 ? `${formatNumber(currentEffectiveTools.length)} tools in scope` : '',
-      currentScopeTags.length > 0 ? `${formatNumber(currentScopeTags.length)} tags loaded` : '',
+      currentLoadedCapabilities.length > 0 ? `${formatNumber(currentLoadedCapabilities.length)} capabilities loaded` : '',
       activeToolNames.length > 0
         ? `${formatNumber(activeToolNames.length)} tool${activeToolNames.length === 1 ? '' : 's'} in flight`
         : `iteration ${iterationLabel} in progress`,
@@ -1092,7 +1117,7 @@ function renderLoopCurrentTurnCard(loop, entity, conversationSummary) {
       { label: 'Model', value: latestModelLabel },
       { label: 'Health', value: serviceDegraded ? 'degraded' : (entity.lastError ? 'recovering' : 'steady') },
       currentEffectiveTools.length > 0 ? { label: 'Tool surface', value: formatNumber(currentEffectiveTools.length) } : null,
-      currentScopeTags.length > 0 ? { label: 'Loaded tags', value: currentScopeTags.join(', ') } : null,
+      currentLoadedCapabilities.length > 0 ? { label: 'Loaded capabilities', value: currentLoadedCapabilities.map((entry) => entry.tag).join(', ') } : null,
       entity.activeLiveTools.length > 0 ? { label: 'Tools live', value: activeToolSet.join(', ') } : null,
       lastWakeAgo ? { label: 'Wake', value: lastWakeAgo } : null,
     ],
@@ -1112,7 +1137,7 @@ function renderLoopCurrentTurnCard(loop, entity, conversationSummary) {
       ? { label: 'Tools in flight', value: activeToolSet.join(', ') }
       : { label: 'Thread', value: threadLabel },
     currentEffectiveTools.length > 0 ? { label: 'Tool surface', value: formatNumber(currentEffectiveTools.length) } : null,
-    currentScopeTags.length > 0 ? { label: 'Loaded tags', value: currentScopeTags.join(', ') } : null,
+    currentLoadedCapabilities.length > 0 ? { label: 'Loaded capabilities', value: currentLoadedCapabilities.map((entry) => entry.tag).join(', ') } : null,
   ]);
   if (turnMetrics) card.body.appendChild(turnMetrics);
 
@@ -1123,10 +1148,10 @@ function renderLoopCurrentTurnCard(loop, entity, conversationSummary) {
   if (isProcessing) {
     briefSummary.textContent = entity.activeLiveTools.length > 0
       ? `The loop is actively working this turn, with ${entity.activeLiveTools.length} tool${entity.activeLiveTools.length === 1 ? '' : 's'} in flight${currentEffectiveTools.length > 0 ? ` across a ${formatNumber(currentEffectiveTools.length)}-tool surface` : ''}.`
-      : 'The loop is actively working this turn. Watch the live telemetry below for context growth, loaded tags, tool surface, and model progress.';
+      : 'The loop is actively working this turn. Watch the live telemetry below for context growth, loaded capabilities, tool surface, and model progress.';
   } else if (entity.latestSnapshot) {
     briefSummary.textContent = entity.lastError
-      ? 'The latest recorded turn ended with an error. The snapshot below shows the last request detail, loaded tags, tool surface, timing, and tool activity for triage.'
+      ? 'The latest recorded turn ended with an error. The snapshot below shows the last request detail, loaded capabilities, tool surface, timing, and tool activity for triage.'
       : 'The loop is currently idle. The latest recorded turn below is the best executive summary of recent behavior, tool surface, and near-term future.';
   } else {
     briefSummary.textContent = 'No request detail snapshot is available yet. This view will fill in once the loop completes its first recorded iteration.';
@@ -1141,7 +1166,7 @@ function renderLoopCurrentTurnCard(loop, entity, conversationSummary) {
     { label: 'Model', value: latestModelLabel },
     { label: 'State', value: formatSchemaToken(entity.stateLabel) },
     { label: 'Context', value: contextLabel || 'pending' },
-    { label: 'Loaded tags', value: currentScopeTags.length > 0 ? currentScopeTags.join(', ') : 'none' },
+    { label: 'Loaded capabilities', value: currentLoadedCapabilities.length > 0 ? currentLoadedCapabilities.map((entry) => entry.tag).join(', ') : 'none' },
     { label: 'Tool surface', value: currentEffectiveTools.length > 0 ? formatNumber(currentEffectiveTools.length) : 'pending' },
     { label: 'Wake', value: lastWakeAgo || 'pending' },
   ];
@@ -1163,13 +1188,13 @@ function renderLoopCurrentTurnCard(loop, entity, conversationSummary) {
 
   const loadedTagsWrap = document.createElement('div');
   loadedTagsWrap.className = 'schema-subsection';
-  loadedTagsWrap.innerHTML = '<h4 class="schema-subsection__title">Loaded Tags</h4>';
-  if (currentScopeTags.length > 0) {
-    loadedTagsWrap.appendChild(makeSchemaChipList(currentScopeTags, 'tag-chip tag-chip--active'));
+  loadedTagsWrap.innerHTML = '<h4 class="schema-subsection__title">Loaded Capabilities</h4>';
+  if (currentLoadedCapabilities.length > 0) {
+    loadedTagsWrap.appendChild(makeSchemaChipList(currentLoadedCapabilities.map((entry) => entry.tag), 'tag-chip tag-chip--active'));
   } else {
     const empty = document.createElement('div');
     empty.className = 'loop-turn-empty';
-    empty.textContent = 'No capability tags are currently loaded for this loop.';
+    empty.textContent = 'No capabilities are currently loaded for this loop.';
     loadedTagsWrap.appendChild(empty);
   }
   card.body.appendChild(loadedTagsWrap);
@@ -1404,6 +1429,9 @@ function buildSystemEntity(sys) {
   const readyCount = serviceKeys.filter((key) => health[key] && health[key].ready).length;
   const registry = (sys && sys.model_registry) || {};
   const routerStats = (sys && sys.router_stats) || {};
+  const capabilityCatalog = (sys && sys.capability_catalog) || null;
+  const capabilityEntries = getCapabilityCatalogEntries(sys);
+  const capabilitySummary = summarizeCapabilityCatalog(capabilityEntries);
   const resources = Array.isArray(registry.resources) ? registry.resources : [];
   const deployments = Array.isArray(registry.deployments) ? registry.deployments : [];
   const version = (sys && sys.version) || {};
@@ -1430,6 +1458,12 @@ function buildSystemEntity(sys) {
     registryGeneration: Number(registry.generation || 0),
     resourceCount: resources.length,
     deploymentCount: deployments.length,
+    capabilityCatalog,
+    capabilityEntries,
+    capabilityCount: capabilitySummary.capabilityCount,
+    toolboxToolCount: capabilitySummary.uniqueToolCount,
+    alwaysActiveCapabilityCount: capabilitySummary.alwaysActiveCount,
+    discoverableCapabilityCount: capabilitySummary.discoverableCount,
     routerStats,
     registry,
     health,
@@ -1441,7 +1475,7 @@ function buildLoopNodeTitle(loop, capacity) {
   const primaryConvID = getLoopPrimaryConversationID(entity);
   const convSummary = primaryConvID ? state.conversationDetails.get(primaryConvID) : null;
   const runningTools = entity.activeLiveTools.map((entry) => entry.tool).filter(Boolean);
-  const scopeTags = entity.currentScopeTags || entity.activeTags || [];
+  const scopeTags = (entity.currentLoadedCapabilities || []).map((entry) => entry.tag);
   const toolSurface = entity.currentEffectiveTools || [];
   const parts = [entity.title];
   parts.push('Kind: ' + entity.kind);
@@ -1475,7 +1509,7 @@ function buildLoopNodeTitle(loop, capacity) {
     parts.push('Model: ' + entity.latestModel);
   }
   if (scopeTags.length > 0) {
-    parts.push('Loaded tags: ' + scopeTags.join(', '));
+    parts.push('Loaded capabilities: ' + scopeTags.join(', '));
   }
   if (toolSurface.length > 0) {
     parts.push('Tool surface: ' + toolSurface.join(', '));
@@ -2139,12 +2173,6 @@ function handleLoopEvent(evt) {
     if (state.selected === loopId) {
       fetchLogs(loopId);
     }
-  }
-
-  // Capability tools change active_tags — refetch loop status so
-  // the dashboard shows the updated capability state immediately.
-  if (result && result.capabilityChanged) {
-    fetchLoops();
   }
 
   if (evt.kind === 'loop_error') {
@@ -3575,6 +3603,49 @@ function renderSystemEntityDetail(sys) {
   );
   detailEntity.appendChild(registryCard.card);
 
+  const capabilityCard = makeSchemaCard('Capability Catalog', 'Runtime-defined capabilities and their tool membership', {
+    entityKind: entity.kind,
+    key: 'capability-catalog',
+    titleSummary: entity.capabilityCount > 0
+      ? `${formatNumber(entity.capabilityCount)} capabilities describing ${formatNumber(entity.toolboxToolCount)} tools.`
+      : 'Capability catalog not available yet.',
+    titleFacts: [
+      entity.alwaysActiveCapabilityCount ? `${formatNumber(entity.alwaysActiveCapabilityCount)} always-on` : '',
+      entity.discoverableCapabilityCount ? `${formatNumber(entity.discoverableCapabilityCount)} discoverable` : '',
+    ].filter(Boolean),
+    widgetFacts: [
+      { label: 'Capabilities', value: formatNumber(entity.capabilityCount) },
+      { label: 'Tools', value: formatNumber(entity.toolboxToolCount) },
+      entity.alwaysActiveCapabilityCount ? { label: 'Always-on', value: formatNumber(entity.alwaysActiveCapabilityCount) } : null,
+      entity.discoverableCapabilityCount ? { label: 'Discoverable', value: formatNumber(entity.discoverableCapabilityCount) } : null,
+    ],
+  });
+  const capabilityMeta = document.createElement('span');
+  capabilityMeta.className = 'schema-card__meta';
+  const capabilityHeading = capabilityCard.header.querySelector('.schema-card__heading');
+  if (capabilityHeading) capabilityHeading.appendChild(capabilityMeta);
+
+  const capabilitySummary = document.createElement('div');
+  capabilitySummary.className = 'system-summary-grid';
+  capabilityCard.body.appendChild(capabilitySummary);
+
+  const capabilityListWrap = document.createElement('div');
+  capabilityListWrap.className = 'schema-subsection';
+  capabilityListWrap.innerHTML = '<h4 class="schema-subsection__title">Available Capabilities</h4>';
+  const capabilityList = document.createElement('div');
+  capabilityList.className = 'system-list';
+  capabilityListWrap.appendChild(capabilityList);
+  capabilityCard.body.appendChild(capabilityListWrap);
+
+  renderCapabilityCatalog(
+    capabilitySummary,
+    capabilityList,
+    capabilityMeta,
+    entity.capabilityEntries,
+    entity.capabilityCatalog && entity.capabilityCatalog.activation_tools,
+  );
+  detailEntity.appendChild(capabilityCard.card);
+
   updateSystemUptime();
 }
 
@@ -3594,9 +3665,8 @@ function renderLoopEntityDetail(loop) {
   const missionSummary = entity.hints.mission ? truncate(entity.hints.mission, 92) : '';
   const conversationBacked = isConversationBackedLoop(entity);
   const currentEffectiveTools = entity.currentEffectiveTools || [];
-  const latestToolsUsed = entity.latestSnapshot && entity.latestSnapshot.tools_used
-    ? Object.keys(entity.latestSnapshot.tools_used).filter(Boolean).sort()
-    : [];
+  const currentLoadedCapabilities = entity.currentLoadedCapabilities || [];
+  const latestToolsUsed = Object.keys(entity.latestToolsUsed || {}).filter(Boolean).sort();
   const liveToolNames = Array.from(new Set(entity.activeLiveTools.map((entry) => entry.tool).filter(Boolean))).sort();
 
   const hero = document.createElement('section');
@@ -3625,9 +3695,9 @@ function renderLoopEntityDetail(loop) {
     utilities.appendChild(makeInspectorUtility('thread', makeIDChip(primaryConvID)));
   }
   utilities.appendChild(makeInspectorUtility(
-    'loaded tags',
-    entity.currentScopeTags.length > 0
-      ? makeSchemaChipList(entity.currentScopeTags, 'tag-chip tag-chip--active')
+    'loaded capabilities',
+    currentLoadedCapabilities.length > 0
+      ? makeSchemaChipList(currentLoadedCapabilities.map((entry) => entry.tag), 'tag-chip tag-chip--active')
       : 'none',
   ));
   if (entity.latestRequestID) {
@@ -3742,23 +3812,25 @@ function renderLoopEntityDetail(loop) {
     entityKind: entity.kind,
     key: 'tooling',
     titleSummary: [
-      entity.currentScopeTags.length > 0
-        ? `${formatNumber(entity.currentScopeTags.length)} tags loaded`
+      currentLoadedCapabilities.length > 0
+        ? `${formatNumber(currentLoadedCapabilities.length)} capabilities loaded`
         : (entity.configTags.length > 0 ? `${formatNumber(entity.configTags.length)} tags configured` : ''),
       currentEffectiveTools.length > 0
         ? `${formatNumber(currentEffectiveTools.length)} tools in scope`
         : (entity.excludedTools.length > 0 ? `${formatNumber(entity.excludedTools.length)} tools excluded` : ''),
+      entity.availableCapabilities.length > 0 ? `${formatNumber(entity.availableCapabilities.length)} capabilities available` : '',
       liveToolNames.length > 0 ? `${formatNumber(liveToolNames.length)} tools live` : '',
-    ].filter(Boolean).join(' · ') || 'Loaded tags and tool surface pending.',
+    ].filter(Boolean).join(' · ') || 'Capability state and tool surface pending.',
     titleFacts: [
       entity.configTags.length ? `${formatNumber(entity.configTags.length)} configured` : '',
-      entity.currentScopeTags.length ? `${formatNumber(entity.currentScopeTags.length)} loaded` : '',
+      currentLoadedCapabilities.length ? `${formatNumber(currentLoadedCapabilities.length)} loaded` : '',
       currentEffectiveTools.length ? `${formatNumber(currentEffectiveTools.length)} in scope` : '',
       liveToolNames.length ? `${formatNumber(liveToolNames.length)} running` : '',
     ].filter(Boolean),
     widgetFacts: [
       entity.configTags.length ? { label: 'Configured tags', value: entity.configTags.join(', ') } : null,
-      entity.currentScopeTags.length ? { label: 'Loaded tags', value: entity.currentScopeTags.join(', ') } : null,
+      currentLoadedCapabilities.length ? { label: 'Loaded capabilities', value: currentLoadedCapabilities.map((entry) => entry.tag).join(', ') } : null,
+      entity.availableCapabilities.length ? { label: 'Available capabilities', value: formatNumber(entity.availableCapabilities.length) } : null,
       currentEffectiveTools.length ? { label: 'Tool surface', value: formatNumber(currentEffectiveTools.length) } : null,
       entity.excludedTools.length ? { label: 'Excluded', value: formatNumber(entity.excludedTools.length) } : null,
       liveToolNames.length ? { label: 'Running', value: liveToolNames.join(', ') } : null,
@@ -3767,8 +3839,11 @@ function renderLoopEntityDetail(loop) {
   if (entity.configTags.length > 0) {
     appendSchemaRow(tooling.body, 'configured tags', makeSchemaChipList(entity.configTags, 'tag-chip tag-chip--muted'));
   }
-  if (entity.currentScopeTags.length > 0) {
-    appendSchemaRow(tooling.body, 'loaded tags', makeSchemaChipList(entity.currentScopeTags, 'tag-chip tag-chip--active'));
+  if (currentLoadedCapabilities.length > 0) {
+    appendSchemaRow(tooling.body, 'loaded capabilities', makeSchemaChipList(currentLoadedCapabilities.map((entry) => entry.tag), 'tag-chip tag-chip--active'));
+  }
+  if (entity.availableCapabilities.length > 0) {
+    appendSchemaRow(tooling.body, 'available capabilities', makeSchemaChipList(entity.availableCapabilities.map((entry) => entry.tag), 'tag-chip'));
   }
   if (entity.excludedTools.length > 0) {
     appendSchemaRow(tooling.body, 'excluded tools', makeSchemaChipList(entity.excludedTools, 'iter-card__tool-item iter-card__tool-item--scope'));

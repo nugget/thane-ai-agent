@@ -309,6 +309,9 @@ async function fetchSystemStatus() {
       badge: $('#system-status'),
       overview: $('#system-overview'),
       services: $('#system-services'),
+      capabilityMeta: $('#system-capability-meta'),
+      capabilitySummary: $('#system-capability-summary'),
+      capabilityList: $('#system-capability-list'),
       registryMeta: $('#system-registry-meta'),
       registrySummary: $('#system-registry-summary'),
       registryResources: $('#system-registry-resources'),
@@ -742,27 +745,6 @@ function applyLoopEvent(evt) {
   if (evt.kind === 'loop_iteration_complete' && evt.data && evt.data.request_id) {
     noteRecentlyCompletedRequest(evt.data.request_id);
   }
-
-  // Capability tools change active_tags — refetch to update chips.
-  if (result && result.capabilityChanged) {
-    refreshActiveTags();
-  }
-}
-
-// refreshActiveTags fetches current loop status and updates
-// the active_tags field so capability chips reflect changes
-// from activate_capability / deactivate_capability tool calls.
-async function refreshActiveTags() {
-  try {
-    const resp = await fetch('/api/loops');
-    if (!resp.ok) return;
-    const statuses = await resp.json();
-    const match = statuses.find(s => s.id === nodeId);
-    if (match && loopData) {
-      loopData.active_tags = match.active_tags || null;
-      renderLoopDetail();
-    }
-  } catch (_) { /* best-effort */ }
 }
 
 function renderLoopDetail() {
@@ -791,27 +773,40 @@ function renderLoopDetail() {
   syncLoopRequestDetail();
   updatePopupFooter();
 
-  // Capabilities: show configured tags (muted if inactive) and
-  // dynamically activated tags (dashed border if not in config).
-  const configTags = (loopData.config && loopData.config.Tags) || [];
-  const activeTags = new Set(loopData.active_tags || []);
-  const allTags = new Set([...configTags, ...activeTags]);
+  const liveTooling = normalizeTooling(loopData._llmContext && loopData._llmContext.tooling, {
+    configuredTags: loopData.tooling && loopData.tooling.configured_tags,
+    loadedTags: loopData._llmContext && loopData._llmContext.active_tags,
+    effectiveTools: loopData._llmContext && loopData._llmContext.effective_tools,
+    excludedTools: loopData.tooling && loopData.tooling.excluded_tools,
+  });
+  const baseTooling = normalizeTooling(loopData.tooling, {
+    configuredTags: (loopData.config && loopData.config.Tags) || [],
+    loadedTags: loopData.active_tags || [],
+    excludedTools: (loopData.config && loopData.config.ExcludeTools) || [],
+  });
+  const currentTooling = (liveTooling.loadedTags.length > 0 || liveTooling.effectiveTools.length > 0 || liveTooling.loadedCapabilities.length > 0)
+    ? liveTooling
+    : baseTooling;
   const tagsSection = $('#detail-tags');
   const tagsList = $('#detail-tags-list');
-  if (allTags.size > 0) {
+  const groups = makeIterationScopePanel([
+    currentTooling.loadedCapabilities.length > 0
+      ? { label: 'Loaded capabilities', capabilities: currentTooling.loadedCapabilities, className: 'tag-chip tag-chip--active' }
+      : null,
+    currentTooling.configuredTags.length > 0
+      ? { label: 'Configured tags', values: currentTooling.configuredTags, className: 'tag-chip tag-chip--muted' }
+      : null,
+    currentTooling.effectiveTools.length > 0
+      ? { label: 'Tool surface', values: currentTooling.effectiveTools, className: 'iter-card__tool-item iter-card__tool-item--scope' }
+      : null,
+    currentTooling.excludedTools.length > 0
+      ? { label: 'Excluded tools', values: currentTooling.excludedTools, className: 'iter-card__tool-item iter-card__tool-item--scope' }
+      : null,
+  ]);
+  if (groups) {
     tagsSection.hidden = false;
     tagsList.innerHTML = '';
-    for (const tag of [...allTags].sort()) {
-      const chip = document.createElement('span');
-      const inConfig = configTags.includes(tag);
-      const isActive = activeTags.has(tag);
-      chip.className = 'tag-chip'
-        + (isActive && inConfig ? ' tag-chip--active' : '')
-        + (!isActive && inConfig ? ' tag-chip--muted' : '')
-        + (isActive && !inConfig ? ' tag-chip--dynamic' : '');
-      chip.textContent = tag;
-      tagsList.appendChild(chip);
-    }
+    tagsList.appendChild(groups);
   } else {
     tagsSection.hidden = true;
   }

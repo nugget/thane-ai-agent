@@ -101,17 +101,18 @@ const maxTagContextBytes = 64 * 1024
 // Response represents the agent's response.
 // Response is the result of a single agent Run() call.
 type Response struct {
-	Content                  string         `json:"content"`
-	Model                    string         `json:"model"`
-	FinishReason             string         `json:"finish_reason"`
-	InputTokens              int            `json:"input_tokens,omitempty"`
-	OutputTokens             int            `json:"output_tokens,omitempty"`
-	CacheCreationInputTokens int            `json:"cache_creation_input_tokens,omitempty"`
-	CacheReadInputTokens     int            `json:"cache_read_input_tokens,omitempty"`
-	ToolsUsed                map[string]int `json:"tools_used,omitempty"` // tool name → call count
-	EffectiveTools           []string       `json:"effective_tools,omitempty"`
-	Iterations               int            `json:"iterations,omitempty"`
-	Exhausted                bool           `json:"exhausted,omitempty"`
+	Content                  string                              `json:"content"`
+	Model                    string                              `json:"model"`
+	FinishReason             string                              `json:"finish_reason"`
+	InputTokens              int                                 `json:"input_tokens,omitempty"`
+	OutputTokens             int                                 `json:"output_tokens,omitempty"`
+	CacheCreationInputTokens int                                 `json:"cache_creation_input_tokens,omitempty"`
+	CacheReadInputTokens     int                                 `json:"cache_read_input_tokens,omitempty"`
+	ToolsUsed                map[string]int                      `json:"tools_used,omitempty"` // tool name → call count
+	EffectiveTools           []string                            `json:"effective_tools,omitempty"`
+	LoadedCapabilities       []toolcatalog.LoadedCapabilityEntry `json:"loaded_capabilities,omitempty"`
+	Iterations               int                                 `json:"iterations,omitempty"`
+	Exhausted                bool                                `json:"exhausted,omitempty"`
 
 	// SessionID and RequestID are set by Run() so callers can
 	// correlate post-run log lines with the agent loop's context.
@@ -1739,11 +1740,16 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 				currentToolCancel = nil
 			}
 			if stream != nil {
+				doneData := map[string]any{
+					"active_tags":     activeTagList(),
+					"effective_tools": effectiveToolNames(),
+				}
 				stream(llm.StreamEvent{
 					Kind:       llm.KindToolCallDone,
 					ToolName:   toolName,
 					ToolResult: result,
 					ToolError:  errMsg,
+					Data:       doneData,
 				})
 			}
 			// Record tool call completion.

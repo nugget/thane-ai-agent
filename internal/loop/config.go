@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/nugget/thane-ai-agent/internal/toolcatalog"
 )
 
 // ErrNoOp is returned by a [Config.Handler] to signal that the
@@ -326,6 +328,9 @@ type IterationResult struct {
 	// ActiveTags holds the capability tags active at the end of this
 	// iteration.
 	ActiveTags []string
+	// LoadedCapabilities captures the structured capability entries
+	// corresponding to the tags loaded for this iteration.
+	LoadedCapabilities []toolcatalog.LoadedCapabilityEntry
 	// Elapsed is the wall-clock duration of the iteration.
 	Elapsed time.Duration
 	// Supervisor indicates whether this was a supervisor iteration.
@@ -359,6 +364,8 @@ type IterationSnapshot struct {
 	EffectiveTools []string `json:"effective_tools,omitempty"`
 	// ActiveTags holds the capability tags active for this turn.
 	ActiveTags []string `json:"active_tags,omitempty"`
+	// Tooling captures the authoritative tool/capability view for this turn.
+	Tooling ToolingState `json:"tooling,omitempty"`
 	// ElapsedMs is the wall-clock duration of the iteration in
 	// milliseconds. Stored as int64 (not time.Duration) so the JSON
 	// value is directly usable by the client without nanosecond
@@ -443,6 +450,8 @@ type Status struct {
 	// ActiveTags holds the currently active capability tags at the time
 	// of the snapshot. Nil when capability tagging is not configured.
 	ActiveTags []string `json:"active_tags,omitempty"`
+	// Tooling captures the resolved loop-level tool/capability state.
+	Tooling ToolingState `json:"tooling,omitempty"`
 	// Config is a copy of the loop's configuration.
 	Config Config `json:"config"`
 }

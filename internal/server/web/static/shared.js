@@ -612,6 +612,292 @@ function renderSystemInspector(sys, els) {
     sys.model_registry,
     sys.router_stats,
   );
+
+  if (els.capabilitySummary || els.capabilityList || els.capabilityMeta) {
+    const capabilities = getCapabilityCatalogEntries(sys);
+    renderCapabilityCatalog(
+      els.capabilitySummary,
+      els.capabilityList,
+      els.capabilityMeta,
+      capabilities,
+      (sys.capability_catalog && sys.capability_catalog.activation_tools) || null,
+    );
+  }
+}
+
+function cloneTokenList(values) {
+  if (!Array.isArray(values)) return [];
+  return Array.from(new Set(values.filter(Boolean).map((value) => String(value)))).sort((a, b) => a.localeCompare(b));
+}
+
+function cloneCountMap(raw) {
+  if (!raw || typeof raw !== 'object') return {};
+  const out = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (!key) continue;
+    const count = Number(value || 0);
+    if (Number.isFinite(count) && count > 0) out[key] = count;
+  }
+  return out;
+}
+
+function readToolingArray(raw, snakeKey, camelKey) {
+  if (!raw || typeof raw !== 'object') return [];
+  if (Array.isArray(raw[snakeKey])) return cloneTokenList(raw[snakeKey]);
+  if (Array.isArray(raw[camelKey])) return cloneTokenList(raw[camelKey]);
+  return [];
+}
+
+function normalizeCapabilityCatalogEntry(entry) {
+  if (!entry || typeof entry !== 'object') return null;
+  const tag = String(entry.tag || entry.Tag || '').trim();
+  if (!tag) return null;
+  const status = String(entry.status || entry.Status || 'available').trim() || 'available';
+  const description = String(entry.description || entry.Description || '').trim();
+  const toolCount = Number(entry.tool_count || entry.toolCount || 0);
+  const tools = cloneTokenList(entry.tools || entry.Tools || []);
+  const context = entry.context || entry.Context || null;
+  return {
+    tag,
+    status,
+    description,
+    toolCount: Number.isFinite(toolCount) ? toolCount : 0,
+    tools,
+    alwaysActive: !!(entry.always_active || entry.alwaysActive),
+    adHoc: !!(entry.ad_hoc || entry.adHoc),
+    context: context && typeof context === 'object'
+      ? {
+          kbArticles: Number(context.kb_articles || context.kbArticles || 0),
+          live: !!context.live,
+        }
+      : null,
+  };
+}
+
+function normalizeLoadedCapabilityEntry(entry) {
+  if (!entry || typeof entry !== 'object') return null;
+  const tag = String(entry.tag || entry.Tag || '').trim();
+  if (!tag) return null;
+  const description = String(entry.description || entry.Description || '').trim();
+  const toolCount = Number(entry.tool_count || entry.toolCount || 0);
+  const context = entry.context || entry.Context || null;
+  return {
+    tag,
+    description,
+    toolCount: Number.isFinite(toolCount) ? toolCount : 0,
+    alwaysActive: !!(entry.always_active || entry.alwaysActive),
+    adHoc: !!(entry.ad_hoc || entry.adHoc),
+    context: context && typeof context === 'object'
+      ? {
+          kbArticles: Number(context.kb_articles || context.kbArticles || 0),
+          live: !!context.live,
+        }
+      : null,
+  };
+}
+
+function normalizeLoadedCapabilities(entries, loadedTags) {
+  const result = [];
+  const seen = new Set();
+  for (const entry of Array.isArray(entries) ? entries : []) {
+    const normalized = normalizeLoadedCapabilityEntry(entry);
+    if (!normalized || seen.has(normalized.tag)) continue;
+    seen.add(normalized.tag);
+    result.push(normalized);
+  }
+  for (const tag of cloneTokenList(loadedTags)) {
+    if (seen.has(tag)) continue;
+    seen.add(tag);
+    result.push({ tag, description: '', toolCount: 0, alwaysActive: false, adHoc: false, context: null });
+  }
+  result.sort((a, b) => a.tag.localeCompare(b.tag));
+  return result;
+}
+
+function normalizeTooling(raw, fallback = {}) {
+  const configuredTags = cloneTokenList([
+    ...readToolingArray(raw, 'configured_tags', 'configuredTags'),
+    ...cloneTokenList(fallback.configuredTags || fallback.configured_tags || []),
+  ]);
+  const loadedTags = cloneTokenList([
+    ...readToolingArray(raw, 'loaded_tags', 'loadedTags'),
+    ...cloneTokenList(fallback.loadedTags || fallback.loaded_tags || []),
+  ]);
+  const effectiveTools = cloneTokenList([
+    ...readToolingArray(raw, 'effective_tools', 'effectiveTools'),
+    ...cloneTokenList(fallback.effectiveTools || fallback.effective_tools || []),
+  ]);
+  const excludedTools = cloneTokenList([
+    ...readToolingArray(raw, 'excluded_tools', 'excludedTools'),
+    ...cloneTokenList(fallback.excludedTools || fallback.excluded_tools || []),
+  ]);
+  const rawLoaded = raw && typeof raw === 'object'
+    ? (raw.loaded_capabilities || raw.loadedCapabilities || [])
+    : (fallback.loadedCapabilities || fallback.loaded_capabilities || []);
+  return {
+    configuredTags,
+    loadedTags,
+    loadedCapabilities: normalizeLoadedCapabilities(rawLoaded, loadedTags),
+    effectiveTools,
+    excludedTools,
+    toolsUsed: Object.assign(
+      {},
+      cloneCountMap(fallback.toolsUsed || fallback.tools_used || null),
+      cloneCountMap(raw && typeof raw === 'object' ? (raw.tools_used || raw.toolsUsed || null) : null),
+    ),
+  };
+}
+
+function getCapabilityCatalogEntries(system) {
+  const catalog = system && system.capability_catalog;
+  if (!catalog || !Array.isArray(catalog.capabilities)) return [];
+  return catalog.capabilities
+    .map((entry) => normalizeCapabilityCatalogEntry(entry))
+    .filter(Boolean)
+    .sort((a, b) => a.tag.localeCompare(b.tag));
+}
+
+function summarizeCapabilityCatalog(entries) {
+  const valid = Array.isArray(entries) ? entries : [];
+  const uniqueTools = new Set();
+  let alwaysActiveCount = 0;
+  let discoverableCount = 0;
+  let liveContextCount = 0;
+  for (const entry of valid) {
+    if (entry.alwaysActive) alwaysActiveCount++;
+    if (entry.status === 'discoverable' || entry.adHoc) discoverableCount++;
+    if (entry.context && entry.context.live) liveContextCount++;
+    for (const tool of entry.tools || []) uniqueTools.add(tool);
+  }
+  return {
+    capabilityCount: valid.length,
+    uniqueToolCount: uniqueTools.size,
+    alwaysActiveCount,
+    discoverableCount,
+    liveContextCount,
+  };
+}
+
+function describeCapabilityEntry(entry) {
+  if (!entry) return '';
+  const parts = [];
+  if (entry.description) parts.push(entry.description);
+  const meta = [];
+  if (entry.toolCount > 0) meta.push(formatNumber(entry.toolCount) + ' tools');
+  if (entry.alwaysActive) meta.push('always active');
+  else if (entry.status) meta.push(formatSchemaToken(entry.status));
+  if (entry.context && entry.context.kbArticles > 0) meta.push(formatNumber(entry.context.kbArticles) + ' KB');
+  if (entry.context && entry.context.live) meta.push('live context');
+  if (meta.length > 0) parts.push(meta.join(' · '));
+  return parts.join(' — ');
+}
+
+function makeIterationCapabilityGroup(label, entries, className = 'tag-chip tag-chip--active') {
+  const valid = Array.isArray(entries) ? entries.filter((entry) => entry && entry.tag) : [];
+  if (valid.length === 0) return null;
+  const group = document.createElement('div');
+  group.className = 'iter-card__scope-group';
+
+  const labelEl = document.createElement('div');
+  labelEl.className = 'iter-card__scope-label';
+  labelEl.textContent = label;
+  group.appendChild(labelEl);
+
+  const chips = document.createElement('div');
+  chips.className = 'iter-card__scope-chips';
+  for (const entry of valid) {
+    const chip = document.createElement('span');
+    chip.className = className;
+    chip.textContent = entry.tag;
+    const desc = describeCapabilityEntry(entry);
+    if (desc) chip.title = desc;
+    chips.appendChild(chip);
+  }
+  group.appendChild(chips);
+  return group;
+}
+
+function renderCapabilityCatalog(summaryEl, listEl, metaEl, entries, activationTools) {
+  if (summaryEl) summaryEl.innerHTML = '';
+  if (listEl) listEl.innerHTML = '';
+  if (metaEl) metaEl.textContent = '';
+
+  if (!summaryEl && !listEl && !metaEl) return;
+
+  const valid = Array.isArray(entries) ? entries : [];
+  const summary = summarizeCapabilityCatalog(valid);
+
+  if (summaryEl) {
+    if (valid.length === 0) {
+      summaryEl.appendChild(buildSystemEmpty('Capability catalog not available'));
+    } else {
+      summaryEl.appendChild(buildSystemStat('Capabilities', formatNumber(summary.capabilityCount)));
+      summaryEl.appendChild(buildSystemStat('Tools', formatNumber(summary.uniqueToolCount)));
+      summaryEl.appendChild(buildSystemStat('Always-on', formatNumber(summary.alwaysActiveCount)));
+      summaryEl.appendChild(buildSystemStat('Discoverable', formatNumber(summary.discoverableCount)));
+      summaryEl.appendChild(buildSystemStat('Live context', formatNumber(summary.liveContextCount)));
+    }
+  }
+
+  if (metaEl) {
+    const actionNames = [];
+    if (activationTools && activationTools.activate) actionNames.push(activationTools.activate);
+    if (activationTools && activationTools.deactivate) actionNames.push(activationTools.deactivate);
+    if (activationTools && activationTools.list) actionNames.push(activationTools.list);
+    metaEl.textContent = actionNames.length > 0 ? actionNames.join(' · ') : '';
+  }
+
+  if (!listEl) return;
+  if (valid.length === 0) {
+    listEl.appendChild(buildSystemEmpty('No capabilities registered'));
+    return;
+  }
+
+  for (const entry of valid) {
+    const item = document.createElement('div');
+    item.className = 'system-item';
+
+    const header = document.createElement('div');
+    header.className = 'system-item__header';
+
+    const title = document.createElement('div');
+    title.className = 'system-item__title';
+    title.textContent = entry.tag;
+    header.appendChild(title);
+
+    const side = document.createElement('div');
+    side.className = 'system-item__metric';
+    side.textContent = formatNumber(entry.toolCount) + ' tools';
+    header.appendChild(side);
+    item.appendChild(header);
+
+    const subtitle = document.createElement('div');
+    subtitle.className = 'system-item__subtitle';
+    subtitle.textContent = entry.description || 'Capability description pending';
+    item.appendChild(subtitle);
+
+    const chips = document.createElement('div');
+    chips.className = 'system-item__chips';
+    chips.appendChild(buildSystemChip(entry.status || 'available', entry.alwaysActive ? 'ok' : entry.adHoc ? 'warn' : 'config'));
+    if (entry.alwaysActive) chips.appendChild(buildSystemChip('always-on', 'ok'));
+    if (entry.context && entry.context.live) chips.appendChild(buildSystemChip('live context', 'ok'));
+    if (entry.context && entry.context.kbArticles > 0) chips.appendChild(buildSystemChip(formatNumber(entry.context.kbArticles) + ' KB', 'config'));
+    item.appendChild(chips);
+
+    if (entry.tools && entry.tools.length > 0) {
+      const tools = document.createElement('div');
+      tools.className = 'iter-card__scope-chips';
+      for (const tool of entry.tools) {
+        const chip = document.createElement('span');
+        chip.className = 'iter-card__tool-item iter-card__tool-item--scope';
+        chip.textContent = tool;
+        tools.appendChild(chip);
+      }
+      item.appendChild(tools);
+    }
+
+    listEl.appendChild(item);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -855,7 +1141,9 @@ function makeIterationScopePanel(items) {
   const panel = document.createElement('div');
   panel.className = 'iter-card__scope';
   for (const item of valid) {
-    const group = makeIterationChipGroup(item.label, item.values, item.className);
+    const group = item.capabilities
+      ? makeIterationCapabilityGroup(item.label, item.capabilities, item.className)
+      : makeIterationChipGroup(item.label, item.values, item.className);
     if (group) panel.appendChild(group);
   }
   return panel.childElementCount > 0 ? panel : null;
@@ -959,10 +1247,17 @@ function buildLiveCard(loop) {
 
   const ctx = loop._llmContext;
   const liveRequestID = loop._currentRequestID || (ctx && ctx.request_id) || '';
-  const activeTags = Array.isArray(ctx && ctx.active_tags) && ctx.active_tags.length > 0
-    ? ctx.active_tags
-    : (Array.isArray(loop.active_tags) ? loop.active_tags : []);
-  const effectiveTools = Array.isArray(ctx && ctx.effective_tools) ? ctx.effective_tools : [];
+  const liveTooling = normalizeTooling(ctx && ctx.tooling, {
+    configuredTags: loop.tooling && loop.tooling.configured_tags,
+    loadedTags: Array.isArray(ctx && ctx.active_tags) && ctx.active_tags.length > 0
+      ? ctx.active_tags
+      : (Array.isArray(loop.active_tags) ? loop.active_tags : []),
+    effectiveTools: Array.isArray(ctx && ctx.effective_tools) ? ctx.effective_tools : [],
+    excludedTools: loop.tooling && loop.tooling.excluded_tools,
+  });
+  const activeTags = liveTooling.loadedTags;
+  const loadedCapabilities = liveTooling.loadedCapabilities;
+  const effectiveTools = liveTooling.effectiveTools;
   const summary = document.createElement('div');
   summary.className = 'iter-card__summary-line';
   const summaryBits = [];
@@ -977,8 +1272,8 @@ function buildLiveCard(loop) {
   if (effectiveTools.length > 0) {
     summaryBits.push(effectiveTools.length + ' tools in scope');
   }
-  if (activeTags.length > 0) {
-    summaryBits.push(activeTags.length + ' tags loaded');
+  if (loadedCapabilities.length > 0) {
+    summaryBits.push(loadedCapabilities.length + ' capabilities loaded');
   }
   if (ctx && ctx.intent) summaryBits.push(ctx.intent.replace(/_/g, ' '));
   if (ctx && ctx.reasoning) summaryBits.push(ctx.reasoning);
@@ -1025,7 +1320,7 @@ function buildLiveCard(loop) {
     { label: 'Estimated context', value: ctx && ctx.est_tokens ? formatTokens(ctx.est_tokens) : '' },
     { label: 'Active tools', value: activeToolCalls > 0 ? formatNumber(activeToolCalls) : (ctx && ctx.tools ? formatNumber(ctx.tools) : '') },
     { label: 'Tool surface', value: effectiveTools.length > 0 ? formatNumber(effectiveTools.length) : '' },
-    { label: 'Loaded tags', value: activeTags.length > 0 ? activeTags.join(', ') : '' },
+    { label: 'Loaded capabilities', value: loadedCapabilities.length > 0 ? loadedCapabilities.map((entry) => entry.tag).join(', ') : '' },
     { label: 'Complexity', value: ctx && ctx.complexity ? ctx.complexity : '' },
   ]);
   if (liveFacts) card.appendChild(liveFacts);
@@ -1047,8 +1342,8 @@ function buildLiveCard(loop) {
   }
 
   const liveScope = makeIterationScopePanel([
-    activeTags.length > 0
-      ? { label: 'Loaded tags', values: activeTags, className: 'tag-chip tag-chip--active' }
+    loadedCapabilities.length > 0
+      ? { label: 'Loaded capabilities', capabilities: loadedCapabilities, className: 'tag-chip tag-chip--active' }
       : null,
     effectiveTools.length > 0
       ? { label: 'Tool surface', values: effectiveTools, className: 'iter-card__tool-item iter-card__tool-item--scope' }
@@ -1157,15 +1452,21 @@ function buildPastCard(snap, handlerOnly, idx, startExpanded) {
 
   const toolCalls = countToolCalls(snap.tools_used);
   const summarySignals = countSummarySignals(snap.summary);
-  const activeTags = Array.isArray(snap.active_tags) ? snap.active_tags : [];
-  const effectiveTools = Array.isArray(snap.effective_tools) ? snap.effective_tools : [];
+  const snapTooling = normalizeTooling(snap.tooling, {
+    loadedTags: Array.isArray(snap.active_tags) ? snap.active_tags : [],
+    effectiveTools: Array.isArray(snap.effective_tools) ? snap.effective_tools : [],
+    toolsUsed: snap.tools_used || null,
+  });
+  const activeTags = snapTooling.loadedTags;
+  const loadedCapabilities = snapTooling.loadedCapabilities;
+  const effectiveTools = snapTooling.effectiveTools;
   const facts = makeIterationFacts([
     { label: 'Health', value: buildPastIterationHealth(snap) },
     { label: 'Request', value: snap.request_id ? shortID(snap.request_id) : '' },
     { label: 'Duration', value: snap.elapsed_ms ? formatDuration(snap.elapsed_ms) : '' },
     { label: 'Tool calls', value: toolCalls > 0 ? formatNumber(toolCalls) : '' },
     { label: 'Tool surface', value: effectiveTools.length > 0 ? formatNumber(effectiveTools.length) : '' },
-    { label: 'Loaded tags', value: activeTags.length > 0 ? activeTags.join(', ') : '' },
+    { label: 'Loaded capabilities', value: loadedCapabilities.length > 0 ? loadedCapabilities.map((entry) => entry.tag).join(', ') : '' },
     !handlerOnly ? { label: 'Input tokens', value: snap.input_tokens ? formatTokens(snap.input_tokens) : '' } : { label: 'Handler signals', value: summarySignals > 0 ? formatNumber(summarySignals) : '' },
     !handlerOnly ? { label: 'Output tokens', value: snap.output_tokens ? formatTokens(snap.output_tokens) : '' } : { label: 'When', value: snap.completed_at ? timeAgo(new Date(snap.completed_at)) : '' },
     !handlerOnly ? { label: 'Context window', value: snap.context_window ? formatNumber(snap.context_window) : '' } : null,
@@ -1200,8 +1501,8 @@ function buildPastCard(snap, handlerOnly, idx, startExpanded) {
   }
 
   const pastScope = makeIterationScopePanel([
-    activeTags.length > 0
-      ? { label: 'Loaded tags', values: activeTags, className: 'tag-chip tag-chip--active' }
+    loadedCapabilities.length > 0
+      ? { label: 'Loaded capabilities', capabilities: loadedCapabilities, className: 'tag-chip tag-chip--active' }
       : null,
     effectiveTools.length > 0
       ? { label: 'Tool surface', values: effectiveTools, className: 'iter-card__tool-item iter-card__tool-item--scope' }
@@ -1428,6 +1729,23 @@ function applyLoopEventToLoop(evt, ctx) {
       if (loop._supervisor) loop.last_supervisor_iter = loop.iterations;
       loop._supervisor = false;
 
+      const tooling = normalizeTooling(d.tooling, {
+        configuredTags: loop.tooling && loop.tooling.configured_tags,
+        loadedTags: Array.isArray(d.active_tags) ? d.active_tags : [],
+        effectiveTools: Array.isArray(d.effective_tools) ? d.effective_tools : [],
+        excludedTools: loop.tooling && loop.tooling.excluded_tools,
+        toolsUsed: d.tools_used || null,
+      });
+      loop.active_tags = tooling.loadedTags.slice();
+      loop.tooling = {
+        configured_tags: tooling.configuredTags.slice(),
+        loaded_tags: tooling.loadedTags.slice(),
+        loaded_capabilities: tooling.loadedCapabilities.slice(),
+        effective_tools: tooling.effectiveTools.slice(),
+        excluded_tools: tooling.excludedTools.slice(),
+        tools_used: Object.keys(tooling.toolsUsed).length > 0 ? tooling.toolsUsed : null,
+      };
+
       const delegateCalls = extractDelegateCalls(loop._liveTools);
       const snap = {
         number: loop.iterations,
@@ -1437,9 +1755,17 @@ function applyLoopEventToLoop(evt, ctx) {
         input_tokens: d.input_tokens || 0,
         output_tokens: d.output_tokens || 0,
         context_window: d.context_window || 0,
-        tools_used: d.tools_used || buildToolCounts(loop._liveTools),
-        effective_tools: Array.isArray(d.effective_tools) ? d.effective_tools.slice() : null,
-        active_tags: Array.isArray(d.active_tags) ? d.active_tags.slice() : null,
+        tools_used: Object.keys(tooling.toolsUsed).length > 0 ? tooling.toolsUsed : buildToolCounts(loop._liveTools),
+        effective_tools: tooling.effectiveTools.length > 0 ? tooling.effectiveTools.slice() : null,
+        active_tags: tooling.loadedTags.length > 0 ? tooling.loadedTags.slice() : null,
+        tooling: {
+          configured_tags: tooling.configuredTags.slice(),
+          loaded_tags: tooling.loadedTags.slice(),
+          loaded_capabilities: tooling.loadedCapabilities.slice(),
+          effective_tools: tooling.effectiveTools.slice(),
+          excluded_tools: tooling.excludedTools.slice(),
+          tools_used: Object.keys(tooling.toolsUsed).length > 0 ? tooling.toolsUsed : null,
+        },
         elapsed_ms: d.elapsed_ms || 0,
         supervisor: loop._lastSupervisor || false,
         started_at: loop._iterStartTs ? new Date(loop._iterStartTs).toISOString() : evt.ts,
@@ -1468,24 +1794,53 @@ function applyLoopEventToLoop(evt, ctx) {
           }
         }
       }
-      // Signal that active capabilities may have changed so the
-      // caller can refetch loop status for updated active_tags.
-      if (d.tool === 'activate_capability' || d.tool === 'deactivate_capability' ||
-          d.tool === 'activate_lens' || d.tool === 'deactivate_lens') {
-        return { capabilityChanged: true };
+      if (d.tooling) {
+        const tooling = normalizeTooling(d.tooling, {
+          configuredTags: loop.tooling && loop.tooling.configured_tags,
+          loadedTags: Array.isArray(d.active_tags) ? d.active_tags : (Array.isArray(loop.active_tags) ? loop.active_tags : []),
+          effectiveTools: Array.isArray(d.effective_tools) ? d.effective_tools : [],
+          excludedTools: loop.tooling && loop.tooling.excluded_tools,
+        });
+        loop.active_tags = tooling.loadedTags.slice();
+        loop.tooling = {
+          configured_tags: tooling.configuredTags.slice(),
+          loaded_tags: tooling.loadedTags.slice(),
+          loaded_capabilities: tooling.loadedCapabilities.slice(),
+          effective_tools: tooling.effectiveTools.slice(),
+          excluded_tools: tooling.excludedTools.slice(),
+          tools_used: Object.keys(tooling.toolsUsed).length > 0 ? tooling.toolsUsed : null,
+        };
+        if (!loop._llmContext) loop._llmContext = {};
+        loop._llmContext.tooling = loop.tooling;
+        loop._llmContext.active_tags = tooling.loadedTags.slice();
+        loop._llmContext.effective_tools = tooling.effectiveTools.slice();
       }
       return null;
 
     case 'loop_llm_start':
       loop._liveModel = d.model || '';
       loop._currentRequestID = d.request_id || loop._currentRequestID || '';
+      const liveTooling = normalizeTooling(d.tooling, {
+        configuredTags: loop.tooling && loop.tooling.configured_tags,
+        loadedTags: Array.isArray(d.active_tags) ? d.active_tags : (Array.isArray(loop.active_tags) ? loop.active_tags : []),
+        effectiveTools: Array.isArray(d.effective_tools) ? d.effective_tools : [],
+        excludedTools: loop.tooling && loop.tooling.excluded_tools,
+      });
       loop._llmContext = {
         request_id: d.request_id || '',
         est_tokens: d.est_tokens || 0,
         messages: d.messages || 0,
         tools: d.tools || 0,
-        effective_tools: Array.isArray(d.effective_tools) ? d.effective_tools.slice() : [],
-        active_tags: Array.isArray(d.active_tags) ? d.active_tags.slice() : [],
+        effective_tools: liveTooling.effectiveTools.slice(),
+        active_tags: liveTooling.loadedTags.slice(),
+        tooling: {
+          configured_tags: liveTooling.configuredTags.slice(),
+          loaded_tags: liveTooling.loadedTags.slice(),
+          loaded_capabilities: liveTooling.loadedCapabilities.slice(),
+          effective_tools: liveTooling.effectiveTools.slice(),
+          excluded_tools: liveTooling.excludedTools.slice(),
+          tools_used: Object.keys(liveTooling.toolsUsed).length > 0 ? liveTooling.toolsUsed : null,
+        },
         iteration: d.iteration,
         complexity: d.complexity || '',
         intent: d.intent || '',

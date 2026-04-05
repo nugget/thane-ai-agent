@@ -44,6 +44,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/router"
 	"github.com/nugget/thane-ai-agent/internal/scheduler"
 	"github.com/nugget/thane-ai-agent/internal/server/api"
+	"github.com/nugget/thane-ai-agent/internal/toolcatalog"
 	"github.com/nugget/thane-ai-agent/internal/usage"
 )
 
@@ -89,6 +90,8 @@ type App struct {
 	// Agent loop and router
 	loop *agent.Loop
 	rtr  *router.Router
+	// Shared capability surface used by prompt renderers and dashboard views.
+	capSurface []toolcatalog.CapabilitySurface
 
 	// Compaction and summarization
 	compactor     *memory.Compactor

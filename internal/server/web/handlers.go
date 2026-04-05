@@ -44,6 +44,9 @@ func (s *WebServer) handleSystem(w http.ResponseWriter, r *http.Request) {
 	if stats := s.systemStatus.RouterStats(); stats != nil {
 		body["router_stats"] = stats
 	}
+	if catalog := s.systemStatus.CapabilityCatalog(); catalog != nil {
+		body["capability_catalog"] = catalog
+	}
 	s.writeJSON(w, body)
 }
 

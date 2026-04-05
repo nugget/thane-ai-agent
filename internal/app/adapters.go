@@ -29,6 +29,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/router"
 	"github.com/nugget/thane-ai-agent/internal/server/api"
 	"github.com/nugget/thane-ai-agent/internal/server/web"
+	"github.com/nugget/thane-ai-agent/internal/toolcatalog"
 )
 
 // factSetterFunc adapts knowledge.Store to the memory.FactSetter interface,
@@ -837,6 +838,7 @@ type systemStatusAdapter struct {
 	connMgr       *connwatch.Manager
 	modelRegistry *models.Registry
 	router        *router.Router
+	capSurface    []toolcatalog.CapabilitySurface
 }
 
 // Health returns the health state of all watched services.
@@ -884,13 +886,24 @@ func (a *systemStatusAdapter) RouterStats() *router.Stats {
 	return &stats
 }
 
+// CapabilityCatalog returns the runtime capability catalog used by the
+// agent prompt/tooling layer.
+func (a *systemStatusAdapter) CapabilityCatalog() *toolcatalog.CapabilityCatalogView {
+	if len(a.capSurface) == 0 {
+		return nil
+	}
+	view := toolcatalog.BuildCapabilityCatalogView(a.capSurface, true)
+	return &view
+}
+
 // loopAdapter bridges [looppkg.Runner] to [*agent.Loop], converting
 // between the loop package's request/response types and the agent
 // package's types. It lives in internal/app to avoid a circular import
 // between the loop and agent packages.
 type loopAdapter struct {
-	agentLoop *agent.Loop
-	router    *router.Router
+	agentLoop  *agent.Loop
+	router     *router.Router
+	capSurface []toolcatalog.CapabilitySurface
 }
 
 // maxToolResultLen is the maximum tool result length forwarded to the
@@ -911,8 +924,19 @@ func (a *loopAdapter) Run(ctx context.Context, req looppkg.Request, _ looppkg.St
 			switch e.Kind {
 			case agent.KindLLMStart:
 				if e.Response != nil {
+					activeTags, _ := e.Data["active_tags"].([]string)
+					effectiveTools, _ := e.Data["effective_tools"].([]string)
+					loadedCapabilities := toolcatalog.BuildLoadedCapabilityEntries(a.capSurface, activeTags)
 					data := map[string]any{
 						"model": e.Response.Model,
+						"tooling": looppkg.BuildToolingState(
+							nil,
+							activeTags,
+							effectiveTools,
+							nil,
+							loadedCapabilities,
+							nil,
+						),
 					}
 					// Forward enrichment data from agent (tokens, tools, router).
 					for k, v := range e.Data {
@@ -942,6 +966,21 @@ func (a *loopAdapter) Run(ctx context.Context, req looppkg.Request, _ looppkg.St
 					}
 					data["result"] = r
 				}
+				activeTags, _ := e.Data["active_tags"].([]string)
+				effectiveTools, _ := e.Data["effective_tools"].([]string)
+				if len(activeTags) > 0 || len(effectiveTools) > 0 {
+					loadedCapabilities := toolcatalog.BuildLoadedCapabilityEntries(a.capSurface, activeTags)
+					data["active_tags"] = append([]string(nil), activeTags...)
+					data["effective_tools"] = append([]string(nil), effectiveTools...)
+					data["tooling"] = looppkg.BuildToolingState(
+						nil,
+						activeTags,
+						effectiveTools,
+						nil,
+						loadedCapabilities,
+						nil,
+					)
+				}
 				req.OnProgress(events.KindLoopToolDone, data)
 			case agent.KindLLMResponse:
 				if e.Response != nil {
@@ -964,6 +1003,11 @@ func (a *loopAdapter) Run(ctx context.Context, req looppkg.Request, _ looppkg.St
 		return nil, err
 	}
 
+	loadedCapabilities := append([]toolcatalog.LoadedCapabilityEntry(nil), resp.LoadedCapabilities...)
+	if len(loadedCapabilities) == 0 {
+		loadedCapabilities = toolcatalog.BuildLoadedCapabilityEntries(a.capSurface, resp.ActiveTags)
+	}
+
 	// Use the routed model's context window if available, otherwise
 	// fall back to the agent loop's default.
 	ctxWindow := a.agentLoop.GetContextWindow()
@@ -984,6 +1028,7 @@ func (a *loopAdapter) Run(ctx context.Context, req looppkg.Request, _ looppkg.St
 		ContextWindow:            ctxWindow,
 		ToolsUsed:                resp.ToolsUsed,
 		EffectiveTools:           append([]string(nil), resp.EffectiveTools...),
+		LoadedCapabilities:       append([]toolcatalog.LoadedCapabilityEntry(nil), loadedCapabilities...),
 		RequestID:                resp.RequestID,
 		Iterations:               resp.Iterations,
 		Exhausted:                resp.Exhausted,

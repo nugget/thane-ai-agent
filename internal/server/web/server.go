@@ -18,6 +18,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/loop"
 	"github.com/nugget/thane-ai-agent/internal/models"
 	"github.com/nugget/thane-ai-agent/internal/router"
+	"github.com/nugget/thane-ai-agent/internal/toolcatalog"
 )
 
 //go:embed static/*
@@ -69,6 +70,8 @@ type SystemStatusProvider interface {
 	ModelRegistry() *models.RegistrySnapshot
 	// RouterStats returns the current router statistics snapshot.
 	RouterStats() *router.Stats
+	// CapabilityCatalog returns the resolved runtime capability catalog.
+	CapabilityCatalog() *toolcatalog.CapabilityCatalogView
 }
 
 // ServiceHealth describes the health of a single watched service.

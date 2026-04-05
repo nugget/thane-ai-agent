@@ -14,6 +14,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/loop"
 	"github.com/nugget/thane-ai-agent/internal/models"
 	"github.com/nugget/thane-ai-agent/internal/router"
+	"github.com/nugget/thane-ai-agent/internal/toolcatalog"
 )
 
 // --- Test Doubles ---
@@ -69,6 +70,7 @@ type stubSystemStatus struct {
 	version       map[string]string
 	modelRegistry *models.RegistrySnapshot
 	routerStats   *router.Stats
+	capCatalog    *toolcatalog.CapabilityCatalogView
 }
 
 func (s *stubSystemStatus) Health() map[string]ServiceHealth { return s.health }
@@ -78,6 +80,9 @@ func (s *stubSystemStatus) ModelRegistry() *models.RegistrySnapshot {
 	return s.modelRegistry
 }
 func (s *stubSystemStatus) RouterStats() *router.Stats { return s.routerStats }
+func (s *stubSystemStatus) CapabilityCatalog() *toolcatalog.CapabilityCatalogView {
+	return s.capCatalog
+}
 
 // --- Tests ---
 
@@ -343,6 +348,17 @@ func TestHandleSystem_Healthy(t *testing.T) {
 				"spark/gpt-oss:20b": {Provider: "ollama", Resource: "spark", UpstreamModel: "gpt-oss:20b", Requests: 3, Successes: 3, AvgLatencyMs: 420, AvgTokensUsed: 1800},
 			},
 		},
+		capCatalog: &toolcatalog.CapabilityCatalogView{
+			Kind: "capability_catalog",
+			ActivationTools: toolcatalog.CapabilityActionTools{
+				Activate:   "activate_capability",
+				Deactivate: "deactivate_capability",
+				List:       "list_loaded_capabilities",
+			},
+			Capabilities: []toolcatalog.CapabilityCatalogEntry{
+				{Tag: "forge", Status: "available", Description: "Forge tools", ToolCount: 12},
+			},
+		},
 	}
 
 	srv := NewWebServer(Config{
@@ -397,6 +413,14 @@ func TestHandleSystem_Healthy(t *testing.T) {
 	}
 	if routerStats["total_requests"] != float64(3) {
 		t.Errorf("total_requests = %v, want 3", routerStats["total_requests"])
+	}
+	capCatalog, ok := body["capability_catalog"].(map[string]any)
+	if !ok {
+		t.Fatal("capability_catalog field missing or not a map")
+	}
+	caps, ok := capCatalog["capabilities"].([]any)
+	if !ok || len(caps) != 1 {
+		t.Fatalf("capability catalog entries = %T len=%d, want 1 entry", capCatalog["capabilities"], len(caps))
 	}
 }
 

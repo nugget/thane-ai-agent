@@ -44,36 +44,52 @@ type CapabilitySurface struct {
 	AdHoc        bool
 }
 
-type capabilityContextSummary struct {
+type CapabilityContextSummary struct {
 	KBArticles int  `json:"kb_articles,omitempty"`
 	Live       bool `json:"live,omitempty"`
 }
 
-type capabilityCatalogEntry struct {
-	Status      string                    `json:"status"`
-	Description string                    `json:"description"`
-	ToolCount   int                       `json:"tool_count,omitempty"`
-	Context     *capabilityContextSummary `json:"context,omitempty"`
+type CapabilityCatalogEntry struct {
+	Tag          string                    `json:"tag"`
+	Status       string                    `json:"status"`
+	Description  string                    `json:"description"`
+	ToolCount    int                       `json:"tool_count,omitempty"`
+	Tools        []string                  `json:"tools,omitempty"`
+	AlwaysActive bool                      `json:"always_active,omitempty"`
+	AdHoc        bool                      `json:"ad_hoc,omitempty"`
+	Context      *CapabilityContextSummary `json:"context,omitempty"`
 }
 
-type loadedCapabilityEntry struct {
+type LoadedCapabilityEntry struct {
 	Tag          string                    `json:"tag"`
 	Description  string                    `json:"description,omitempty"`
 	ToolCount    int                       `json:"tool_count,omitempty"`
 	AlwaysActive bool                      `json:"always_active,omitempty"`
 	AdHoc        bool                      `json:"ad_hoc,omitempty"`
-	Context      *capabilityContextSummary `json:"context,omitempty"`
+	Context      *CapabilityContextSummary `json:"context,omitempty"`
 }
 
-type capabilityActionTools struct {
+type CapabilityActionTools struct {
 	Activate   string `json:"activate"`
 	Deactivate string `json:"deactivate"`
 	List       string `json:"list,omitempty"`
 	Delegate   string `json:"delegate,omitempty"`
 }
 
-func defaultCapabilityActionTools(includeDelegate bool) capabilityActionTools {
-	tools := capabilityActionTools{
+type CapabilityCatalogView struct {
+	Kind            string                   `json:"kind"`
+	ActivationTools CapabilityActionTools    `json:"activation_tools"`
+	Capabilities    []CapabilityCatalogEntry `json:"capabilities"`
+}
+
+type LoadedCapabilityView struct {
+	Kind               string                  `json:"kind"`
+	ActivationTools    CapabilityActionTools   `json:"activation_tools"`
+	LoadedCapabilities []LoadedCapabilityEntry `json:"loaded_capabilities"`
+}
+
+func defaultCapabilityActionTools(includeDelegate bool) CapabilityActionTools {
+	tools := CapabilityActionTools{
 		Activate:   "activate_capability",
 		Deactivate: "deactivate_capability",
 		List:       "list_loaded_capabilities",
@@ -82,6 +98,90 @@ func defaultCapabilityActionTools(includeDelegate bool) capabilityActionTools {
 		tools.Delegate = "thane_delegate"
 	}
 	return tools
+}
+
+func BuildCapabilityCatalogView(entries []CapabilitySurface, includeDelegate bool) CapabilityCatalogView {
+	view := CapabilityCatalogView{
+		Kind:            "capability_catalog",
+		ActivationTools: defaultCapabilityActionTools(includeDelegate),
+		Capabilities:    make([]CapabilityCatalogEntry, 0, len(entries)),
+	}
+
+	for _, entry := range SortCapabilitySurface(entries) {
+		status := "available"
+		switch {
+		case entry.AdHoc:
+			status = "discoverable"
+		case entry.AlwaysActive:
+			status = "always_active"
+		}
+
+		rendered := CapabilityCatalogEntry{
+			Tag:          entry.Tag,
+			Status:       status,
+			Description:  capabilityDescription(entry),
+			ToolCount:    len(entry.Tools),
+			Tools:        append([]string(nil), entry.Tools...),
+			AlwaysActive: entry.AlwaysActive,
+			AdHoc:        entry.AdHoc,
+		}
+		if entry.KBArticles > 0 || entry.LiveContext {
+			rendered.Context = &CapabilityContextSummary{
+				KBArticles: entry.KBArticles,
+				Live:       entry.LiveContext,
+			}
+		}
+		view.Capabilities = append(view.Capabilities, rendered)
+	}
+
+	return view
+}
+
+func BuildLoadedCapabilityEntries(entries []CapabilitySurface, activeTags []string) []LoadedCapabilityEntry {
+	if len(activeTags) == 0 {
+		return []LoadedCapabilityEntry{}
+	}
+
+	byTag := make(map[string]CapabilitySurface, len(entries))
+	for _, entry := range entries {
+		byTag[entry.Tag] = entry
+	}
+
+	names := append([]string(nil), activeTags...)
+	sort.Strings(names)
+
+	loaded := make([]LoadedCapabilityEntry, 0, len(names))
+	for _, tag := range names {
+		entry, ok := byTag[tag]
+		if !ok {
+			loaded = append(loaded, LoadedCapabilityEntry{Tag: tag})
+			continue
+		}
+		rendered := LoadedCapabilityEntry{
+			Tag:          tag,
+			Description:  capabilityDescription(entry),
+			ToolCount:    len(entry.Tools),
+			AlwaysActive: entry.AlwaysActive,
+			AdHoc:        entry.AdHoc,
+		}
+		if entry.KBArticles > 0 || entry.LiveContext {
+			rendered.Context = &CapabilityContextSummary{
+				KBArticles: entry.KBArticles,
+				Live:       entry.LiveContext,
+			}
+		}
+		loaded = append(loaded, rendered)
+	}
+
+	return loaded
+}
+
+func BuildLoadedCapabilityView(entries []CapabilitySurface, activeTags []string, includeDelegate bool) LoadedCapabilityView {
+	return LoadedCapabilityView{
+		Kind:               "loaded_capabilities",
+		ActivationTools:    defaultCapabilityActionTools(includeDelegate),
+		LoadedCapabilities: BuildLoadedCapabilityEntries(entries, activeTags),
+	}
 }
 
 var builtinToolSpecs = map[string]BuiltinToolSpec{
@@ -309,37 +409,23 @@ func RenderCapabilityManifestMarkdown(entries []CapabilitySurface) string {
 		Kind                              string                            `json:"kind"`
 		CatalogEntriesAreNotLoaded        bool                              `json:"catalog_entries_are_not_loaded"`
 		InventedCapabilityToolsAreInvalid bool                              `json:"invented_capability_tool_names_are_invalid"`
-		ActivationTools                   capabilityActionTools             `json:"activation_tools"`
-		Capabilities                      map[string]capabilityCatalogEntry `json:"available_capabilities"`
+		ActivationTools                   CapabilityActionTools             `json:"activation_tools"`
+		Capabilities                      map[string]CapabilityCatalogEntry `json:"available_capabilities"`
 	}{
 		Kind:                              "capability_catalog",
 		CatalogEntriesAreNotLoaded:        true,
 		InventedCapabilityToolsAreInvalid: true,
 		ActivationTools:                   defaultCapabilityActionTools(true),
-		Capabilities:                      make(map[string]capabilityCatalogEntry, len(entries)),
+		Capabilities:                      make(map[string]CapabilityCatalogEntry, len(entries)),
 	}
 
-	for _, entry := range SortCapabilitySurface(entries) {
-		status := "available"
-		switch {
-		case entry.AdHoc:
-			status = "discoverable"
-		case entry.AlwaysActive:
-			status = "always_active"
+	for _, rendered := range BuildCapabilityCatalogView(entries, true).Capabilities {
+		payload.Capabilities[rendered.Tag] = CapabilityCatalogEntry{
+			Status:      rendered.Status,
+			Description: rendered.Description,
+			ToolCount:   rendered.ToolCount,
+			Context:     rendered.Context,
 		}
-
-		rendered := capabilityCatalogEntry{
-			Status:      status,
-			Description: capabilityDescription(entry),
-			ToolCount:   len(entry.Tools),
-		}
-		if entry.KBArticles > 0 || entry.LiveContext {
-			rendered.Context = &capabilityContextSummary{
-				KBArticles: entry.KBArticles,
-				Live:       entry.LiveContext,
-			}
-		}
-		payload.Capabilities[entry.Tag] = rendered
 	}
 
 	data, err := json.Marshal(payload)
@@ -356,50 +442,21 @@ func RenderCapabilityManifestMarkdown(entries []CapabilitySurface) string {
 // RenderLoadedCapabilitySummary renders the currently loaded
 // capabilities for always-on prompt context.
 func RenderLoadedCapabilitySummary(entries []CapabilitySurface, activeTags map[string]bool) string {
-	byTag := make(map[string]CapabilitySurface, len(entries))
-	for _, entry := range entries {
-		byTag[entry.Tag] = entry
-	}
-
 	names := make([]string, 0, len(activeTags))
 	for tag := range activeTags {
 		names = append(names, tag)
-	}
-	sort.Strings(names)
-
-	loaded := make([]loadedCapabilityEntry, 0, len(names))
-	for _, tag := range names {
-		entry, ok := byTag[tag]
-		if !ok {
-			loaded = append(loaded, loadedCapabilityEntry{Tag: tag})
-			continue
-		}
-		rendered := loadedCapabilityEntry{
-			Tag:          tag,
-			Description:  capabilityDescription(entry),
-			ToolCount:    len(entry.Tools),
-			AlwaysActive: entry.AlwaysActive,
-			AdHoc:        entry.AdHoc,
-		}
-		if entry.KBArticles > 0 || entry.LiveContext {
-			rendered.Context = &capabilityContextSummary{
-				KBArticles: entry.KBArticles,
-				Live:       entry.LiveContext,
-			}
-		}
-		loaded = append(loaded, rendered)
 	}
 
 	payload := struct {
 		Kind                       string                  `json:"kind"`
 		CatalogEntriesAreNotLoaded bool                    `json:"catalog_entries_are_not_loaded"`
-		ActivationTools            capabilityActionTools   `json:"activation_tools"`
-		LoadedCapabilities         []loadedCapabilityEntry `json:"loaded_capabilities"`
+		ActivationTools            CapabilityActionTools   `json:"activation_tools"`
+		LoadedCapabilities         []LoadedCapabilityEntry `json:"loaded_capabilities"`
 	}{
 		Kind:                       "loaded_capabilities",
 		CatalogEntriesAreNotLoaded: true,
 		ActivationTools:            defaultCapabilityActionTools(false),
-		LoadedCapabilities:         loaded,
+		LoadedCapabilities:         BuildLoadedCapabilityEntries(entries, names),
 	}
 
 	data, err := json.Marshal(payload)
