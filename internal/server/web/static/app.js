@@ -2005,15 +2005,16 @@ function appendSchemaRow(body, label, value, opts = {}) {
 
 function makeSchemaIDList(ids, opts = {}) {
   const wrap = document.createElement('div');
-  wrap.className = 'schema-chip-list';
-  const visible = ids.slice(0, opts.maxVisible || ids.length);
+  wrap.className = 'schema-chip-list schema-chip-list--ids';
+  const limit = Number.isFinite(opts.maxVisible) ? Math.max(0, Number(opts.maxVisible)) : ids.length;
+  const visible = ids.slice(0, limit);
   for (const id of visible) {
     wrap.appendChild(opts.request ? makeRequestChip(id) : makeIDChip(id));
   }
-  if ((opts.maxVisible || ids.length) < ids.length) {
+  if (limit < ids.length) {
     const more = document.createElement('span');
     more.className = 'id-chip id-chip--muted';
-    more.textContent = '+' + (ids.length - (opts.maxVisible || ids.length));
+    more.textContent = '+' + (ids.length - limit);
     wrap.appendChild(more);
   }
   return wrap;
@@ -2033,14 +2034,14 @@ function makeSchemaChipList(values, className = 'tag-chip') {
 
 function makeRequestChip(requestID) {
   const chip = document.createElement('span');
-  chip.className = 'id-chip' + (typeof window.onRequestChipClick === 'function' ? ' schema-request-chip' : '');
+  chip.className = 'id-chip id-chip--responsive' + (typeof window.onRequestChipClick === 'function' ? ' schema-request-chip' : '');
   chip.title = (typeof window.onRequestChipClick === 'function'
     ? 'Click to inspect request · Shift+click to copy\n'
     : 'Click to copy request ID\n') + requestID;
 
   const txt = document.createElement('span');
   txt.className = 'id-chip-text';
-  txt.textContent = 'req:' + shortID(requestID);
+  txt.textContent = 'req:' + requestID;
   chip.appendChild(txt);
 
   chip.addEventListener('click', (e) => {
@@ -2201,7 +2202,7 @@ function renderLoopEntityDetail(loop) {
     appendSchemaRow(relationships.body, 'current conversation', makeSchemaIDList([entity.currentConvID]));
   }
   if (entity.recentConvIDs.length > 0) {
-    appendSchemaRow(relationships.body, 'recent conversations', makeSchemaIDList(entity.recentConvIDs, { maxVisible: 5 }));
+    appendSchemaRow(relationships.body, 'recent conversations', makeSchemaIDList(entity.recentConvIDs));
   }
   if (entity.latestRequestID) {
     appendSchemaRow(relationships.body, 'latest request', makeSchemaIDList([entity.latestRequestID], { request: true }));

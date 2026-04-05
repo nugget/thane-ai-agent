@@ -310,6 +310,7 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
   align-items: center;
   gap: 0.25rem;
   min-width: 0;
+  max-width: 100%;
   font-family: var(--font-mono);
   font-size: 0.65rem;
   background: var(--bg-tertiary);
@@ -327,6 +328,11 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
   white-space: nowrap;
   min-width: 0;
   flex: 1;
+  max-width: 100%;
+}
+
+.id-chip--responsive {
+  flex: 0 1 auto;
 }
 
 .id-chip:hover {
@@ -506,6 +512,17 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
   flex-wrap: wrap;
   gap: 0.28rem;
   align-items: center;
+  max-width: 100%;
+}
+
+.schema-chip-list--ids {
+  align-items: flex-start;
+}
+
+.schema-chip-list--ids .id-chip {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .schema-map {

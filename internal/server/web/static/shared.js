@@ -191,7 +191,7 @@ function buildToolCounts(liveTools) {
 // ID Chip Helpers
 // ---------------------------------------------------------------------------
 
-function makeIDRow(label, value) {
+function makeIDRow(label, value, opts = {}) {
   const row = document.createElement('div');
   row.className = 'id-row';
 
@@ -200,18 +200,17 @@ function makeIDRow(label, value) {
   lbl.textContent = label;
   row.appendChild(lbl);
 
-  row.appendChild(makeIDChip(value));
+  row.appendChild(makeIDChip(value, opts));
   return row;
 }
 
-function makeIDChip(fullID) {
+function makeIDChip(fullID, opts = {}) {
   const chip = document.createElement('span');
-  chip.className = 'id-chip';
+  chip.className = 'id-chip' + (opts.responsive === false ? '' : ' id-chip--responsive');
   chip.title = fullID;
   const txt = document.createElement('span');
   txt.className = 'id-chip-text';
-  // Show first 8 chars (UUID first segment) — full value on hover/click.
-  txt.textContent = fullID.length > 12 ? fullID.slice(0, 8) : fullID;
+  txt.textContent = opts.compact && fullID.length > 12 ? fullID.slice(0, 8) : fullID;
   chip.appendChild(txt);
   chip.addEventListener('click', (e) => {
     e.stopPropagation();
