@@ -826,11 +826,15 @@ function buildLoopEntity(loop) {
   const startedAt = parseTimestamp(loop.started_at) ? loop.started_at : '';
   const lastWakeAt = parseTimestamp(loop.last_wake_at) ? loop.last_wake_at : '';
   const currentConvID = loop._currentConvID || '';
+  const configuredConvID = metadata.conversation_id || '';
   const recentConvIDs = Array.from(new Set(
-    (Array.isArray(loop.recent_conv_ids) ? loop.recent_conv_ids : []).filter(Boolean),
+    [currentConvID, configuredConvID, ...((Array.isArray(loop.recent_conv_ids) ? loop.recent_conv_ids : []).filter(Boolean))],
   ));
+  const primaryConvID = currentConvID || configuredConvID || recentConvIDs[0] || '';
   const trustZone = metadata.trust_zone || '';
   const subsystem = metadata.subsystem || '';
+  const liveTools = Array.isArray(loop._liveTools) ? loop._liveTools.slice() : [];
+  const activeLiveTools = liveTools.filter((entry) => entry && entry.status === 'running');
 
   return {
     kind: 'loop_run',
@@ -845,6 +849,8 @@ function buildLoopEntity(loop) {
     loopID: loop.id,
     parentID: loop.parent_id || '',
     currentConvID,
+    configuredConvID,
+    primaryConvID,
     recentConvIDs,
     latestRequestID,
     latestSnapshot: latest,
@@ -869,7 +875,155 @@ function buildLoopEntity(loop) {
     configTags,
     activeTags,
     allTags,
+    liveTools,
+    activeLiveTools,
   };
+}
+
+function getLoopPrimaryConversationID(entity) {
+  if (!entity) return '';
+  return entity.primaryConvID || entity.currentConvID || entity.configuredConvID || '';
+}
+
+function isConversationBackedLoop(entity) {
+  return !!getLoopPrimaryConversationID(entity);
+}
+
+function makeLoopCurrentTurnAlert(text, kind = 'warn') {
+  const note = document.createElement('div');
+  note.className = 'loop-turn-alert loop-turn-alert--' + kind;
+  note.textContent = text;
+  return note;
+}
+
+function renderLoopCurrentTurnCard(loop, entity, conversationSummary) {
+  const isProcessing = loop.state === 'processing' && !!loop._iterStartTs;
+  const serviceDegraded = isServiceDegraded(loop.name);
+  const latestModelLabel = entity.latestModel || 'model pending';
+  const lastWakeDate = parseTimestamp(entity.lastWakeAt);
+  const lastWakeAgo = lastWakeDate ? timeAgo(lastWakeDate) : '';
+  const threadLabel = conversationSummary ? conversationSummary.label : (getLoopPrimaryConversationID(entity) ? shortID(getLoopPrimaryConversationID(entity)) : 'No thread bound');
+  const activeToolNames = entity.activeLiveTools.map((entry) => entry.tool).filter(Boolean);
+  const iterationLabel = isProcessing
+    ? '#' + formatNumber((entity.iterations || 0) + 1)
+    : (entity.iterations ? '#' + formatNumber(entity.iterations) : 'pending');
+
+  let titleSummary = '';
+  if (isProcessing) {
+    titleSummary = [
+      threadLabel,
+      latestModelLabel !== 'model pending' ? 'on ' + latestModelLabel : '',
+      activeToolNames.length > 0
+        ? `${formatNumber(activeToolNames.length)} tool${activeToolNames.length === 1 ? '' : 's'} in flight`
+        : `iteration ${iterationLabel} in progress`,
+    ].filter(Boolean).join(' · ');
+  } else if (entity.latestRequestID) {
+    titleSummary = [
+      threadLabel,
+      formatSchemaToken(entity.stateLabel),
+      'req ' + shortID(entity.latestRequestID),
+      lastWakeAgo ? 'wake ' + lastWakeAgo : '',
+    ].filter(Boolean).join(' · ');
+  } else {
+    titleSummary = [
+      threadLabel,
+      formatSchemaToken(entity.stateLabel),
+      lastWakeAgo ? 'wake ' + lastWakeAgo : 'awaiting next turn',
+    ].filter(Boolean).join(' · ');
+  }
+
+  const card = makeSchemaCard('Current Turn', 'Active request, live tools, and thread health', {
+    entityKind: entity.kind,
+    key: 'current-turn',
+    titleSummary,
+    titleFacts: [
+      entity.latestRequestID ? `Req ${shortID(entity.latestRequestID)}` : '',
+      serviceDegraded ? 'service degraded' : '',
+      entity.activeLiveTools.length > 0 ? `${formatNumber(entity.activeLiveTools.length)} active tools` : '',
+      entity.trustZone || '',
+    ].filter(Boolean),
+    widgetSummary: titleSummary,
+    widgetFacts: [
+      { label: 'State', value: formatSchemaToken(entity.stateLabel) },
+      { label: 'Thread', value: threadLabel },
+      { label: 'Request', value: entity.latestRequestID ? shortID(entity.latestRequestID) : 'pending' },
+      { label: 'Iteration', value: iterationLabel },
+      { label: 'Model', value: latestModelLabel },
+      { label: 'Health', value: serviceDegraded ? 'degraded' : (entity.lastError ? 'recovering' : 'steady') },
+      entity.activeLiveTools.length > 0
+        ? { label: 'Tools', value: activeToolNames.join(', ') }
+        : null,
+      lastWakeAgo ? { label: 'Wake', value: lastWakeAgo } : null,
+    ],
+    widgetNotes: [
+      entity.trustZone ? { label: 'Trust', value: entity.trustZone } : null,
+      conversationSummary && conversationSummary.metaLine ? conversationSummary.metaLine : null,
+    ].filter(Boolean),
+  });
+
+  const turnMetrics = makeSchemaWidgetGrid([
+    { label: 'State', value: formatSchemaToken(entity.stateLabel) },
+    { label: 'Request', value: entity.latestRequestID ? shortID(entity.latestRequestID) : 'pending' },
+    { label: 'Iteration', value: iterationLabel },
+    { label: 'Model', value: latestModelLabel },
+    { label: 'Health', value: serviceDegraded ? 'degraded' : (entity.lastError ? 'recovering' : 'steady') },
+    entity.activeLiveTools.length > 0
+      ? { label: 'Tools in flight', value: activeToolNames.join(', ') }
+      : { label: 'Thread', value: threadLabel },
+  ]);
+  if (turnMetrics) card.body.appendChild(turnMetrics);
+
+  if (entity.latestRequestID) {
+    const requestWrap = document.createElement('div');
+    requestWrap.className = 'schema-subsection';
+    requestWrap.innerHTML = '<h4 class="schema-subsection__title">Request</h4>';
+    const requestRow = document.createElement('div');
+    requestRow.className = 'loop-turn-request';
+    requestRow.appendChild(makeRequestChip(entity.latestRequestID));
+    requestWrap.appendChild(requestRow);
+    card.body.appendChild(requestWrap);
+  }
+
+  if (serviceDegraded) {
+    card.body.appendChild(makeLoopCurrentTurnAlert('Backing service is degraded. New wakes or tool work may stall upstream even when the loop itself looks calm.', 'warn'));
+  } else if (entity.lastError) {
+    card.body.appendChild(makeLoopCurrentTurnAlert('Last error: ' + entity.lastError, 'error'));
+  }
+
+  if (conversationSummary) {
+    const threadWrap = document.createElement('div');
+    threadWrap.className = 'schema-subsection';
+    threadWrap.innerHTML = '<h4 class="schema-subsection__title">Thread</h4>';
+    threadWrap.appendChild(makeConversationSummaryEntry(conversationSummary, {
+      current: !!(entity.currentConvID && conversationSummary.id === entity.currentConvID),
+    }));
+    card.body.appendChild(threadWrap);
+  }
+
+  const liveWrap = document.createElement('div');
+  liveWrap.className = 'schema-subsection';
+  liveWrap.innerHTML = `<h4 class="schema-subsection__title">${isProcessing ? 'Active Iteration' : 'Latest Iteration'}</h4>`;
+
+  const aggregates = document.createElement('div');
+  aggregates.className = 'detail-aggregates';
+  renderAggregates(loop, aggregates);
+  liveWrap.appendChild(aggregates);
+
+  if (isProcessing) {
+    liveWrap.appendChild(buildLiveCard(loop));
+  } else if (entity.latestSnapshot) {
+    liveWrap.appendChild(buildPastCard(entity.latestSnapshot, loop.handler_only, 0, true));
+  } else {
+    const empty = document.createElement('div');
+    empty.className = 'loop-turn-empty';
+    empty.textContent = entity.latestRequestID
+      ? 'Waiting for the next iteration heartbeat.'
+      : 'No turn data yet. The thread is attached and waiting for its first wake.';
+    liveWrap.appendChild(empty);
+  }
+
+  card.body.appendChild(liveWrap);
+  return card.card;
 }
 
 function inferConversationFamily(conversationID) {
@@ -1083,6 +1237,9 @@ function buildSystemEntity(sys) {
 
 function buildLoopNodeTitle(loop, capacity) {
   const entity = buildLoopEntity(loop);
+  const primaryConvID = getLoopPrimaryConversationID(entity);
+  const convSummary = primaryConvID ? state.conversationDetails.get(primaryConvID) : null;
+  const runningTools = entity.activeLiveTools.map((entry) => entry.tool).filter(Boolean);
   const parts = [entity.title];
   parts.push('Kind: ' + entity.kind);
   parts.push('State: ' + formatSchemaToken(entity.stateLabel));
@@ -1093,11 +1250,18 @@ function buildLoopNodeTitle(loop, capacity) {
   } else {
     parts.push('Anchor: core');
   }
-  if (entity.currentConvID) {
-    parts.push('Conversation: ' + entity.currentConvID);
+  if (primaryConvID) {
+    if (convSummary) {
+      parts.push('Thread: ' + convSummary.label + (convSummary.metaLine ? ' · ' + convSummary.metaLine : ''));
+    } else {
+      parts.push('Conversation: ' + primaryConvID);
+    }
   }
   if (entity.trustZone) {
     parts.push('Trust: ' + entity.trustZone);
+  }
+  if (entity.latestRequestID) {
+    parts.push('Request: ' + shortID(entity.latestRequestID));
   }
   if (capacity.basis === 'context' && capacity.contextWindow > 0) {
     parts.push('Context: ' + formatNumber(capacity.contextWindow));
@@ -1106,6 +1270,18 @@ function buildLoopNodeTitle(loop, capacity) {
   }
   if (entity.latestModel) {
     parts.push('Model: ' + entity.latestModel);
+  }
+  if (runningTools.length > 0) {
+    parts.push('Active tools: ' + runningTools.join(', '));
+  }
+  if (isServiceDegraded(loop.name)) {
+    parts.push('Health: backing service degraded');
+  } else if (entity.lastError) {
+    parts.push('Health: last error ' + truncate(entity.lastError, 72));
+  }
+  if (entity.lastWakeAt) {
+    const lastWakeDate = parseTimestamp(entity.lastWakeAt);
+    if (lastWakeDate) parts.push('Last wake: ' + timeAgo(lastWakeDate));
   }
   return parts.join('\n');
 }
@@ -3047,15 +3223,18 @@ function renderSystemEntityDetail(sys) {
 function renderLoopEntityDetail(loop) {
   const entity = buildLoopEntity(loop);
   detailEntity.innerHTML = '';
-  const currentConversation = getConversationSummaryDetail(entity.currentConvID);
-  const recentHistoryIDs = entity.recentConvIDs.filter((id) => id !== entity.currentConvID);
-  const historyCount = recentHistoryIDs.length + (entity.currentConvID ? 1 : 0);
+  const primaryConvID = getLoopPrimaryConversationID(entity);
+  const currentConversation = getConversationSummaryDetail(primaryConvID);
+  const currentConversationIDs = new Set((entity.currentConvID ? [entity.currentConvID] : []).filter(Boolean));
+  const recentHistoryIDs = entity.recentConvIDs.filter((id) => id !== primaryConvID);
+  const historyCount = recentHistoryIDs.length + (primaryConvID ? 1 : 0);
   const parentLabel = entity.parentID ? shortID(entity.parentID) : 'core';
   const lastWakeDate = parseTimestamp(entity.lastWakeAt);
   const lastWakeAgo = lastWakeDate ? timeAgo(lastWakeDate) : '';
   const latestModelLabel = entity.latestModel || 'model pending';
   const contextLabel = entity.contextWindow ? `${formatNumber(entity.contextWindow)} ctx` : '';
   const missionSummary = entity.hints.mission ? truncate(entity.hints.mission, 92) : '';
+  const conversationBacked = isConversationBackedLoop(entity);
 
   const hero = document.createElement('section');
   hero.className = 'detail-card schema-card schema-card--hero';
@@ -3077,6 +3256,10 @@ function renderLoopEntityDetail(loop) {
     </div>
   `;
   detailEntity.appendChild(hero);
+
+  if (conversationBacked) {
+    detailEntity.appendChild(renderLoopCurrentTurnCard(loop, entity, currentConversation));
+  }
 
   const identity = makeSchemaCard('Identity', 'Role in the graph', {
     entityKind: entity.kind,
@@ -3121,11 +3304,11 @@ function renderLoopEntityDetail(loop) {
   } else {
     appendSchemaRow(relationships.body, 'root anchor', 'core');
   }
-  if (entity.currentConvID) {
+  if (primaryConvID) {
     appendSchemaRow(
       relationships.body,
       'conversation',
-      makeConversationSummaryList([entity.currentConvID], { currentIDs: new Set([entity.currentConvID]) }),
+      makeConversationSummaryList([primaryConvID], { currentIDs: currentConversationIDs }),
       { multiline: true },
     );
   }
@@ -3140,7 +3323,6 @@ function renderLoopEntityDetail(loop) {
   if (entity.latestRequestID) {
     appendSchemaRow(relationships.body, 'latest request', makeSchemaIDList([entity.latestRequestID], { request: true }));
   }
-  detailEntity.appendChild(relationships.card);
 
   const execution = makeSchemaCard('Execution', 'Live state, model, and token flow', {
     entityKind: entity.kind,
@@ -3176,7 +3358,6 @@ function renderLoopEntityDetail(loop) {
     err.textContent = entity.lastError;
     appendSchemaRow(execution.body, 'last error', err, { multiline: true });
   }
-  detailEntity.appendChild(execution.card);
 
   const profile = makeSchemaCard('Profile', 'Intent, trust, and carried context', {
     entityKind: entity.kind,
@@ -3244,7 +3425,6 @@ function renderLoopEntityDetail(loop) {
     if (delegateTask) appendSchemaRow(profile.body, 'delegate task', delegateTask, { multiline: true });
     if (delegateGuidance) appendSchemaRow(profile.body, 'delegate guidance', delegateGuidance, { multiline: true });
   }
-  detailEntity.appendChild(profile.card);
 
   const activity = makeSchemaCard('Activity', 'Recent rhythm and iteration history', {
     entityKind: entity.kind,
@@ -3274,6 +3454,20 @@ function renderLoopEntityDetail(loop) {
   timeline.className = 'iter-timeline';
   renderTimeline(loop, timeline, state.iterationHistory.get(loop.id) || [], loop.id, state.sleepTimers);
   activity.body.appendChild(timeline);
+
+  if (conversationBacked) {
+    detailEntity.appendChild(execution.card);
+    detailEntity.appendChild(relationships.card);
+    detailEntity.appendChild(activity.card);
+    detailEntity.appendChild(profile.card);
+    detailEntity.appendChild(identity.card);
+    return;
+  }
+
+  detailEntity.appendChild(identity.card);
+  detailEntity.appendChild(relationships.card);
+  detailEntity.appendChild(execution.card);
+  detailEntity.appendChild(profile.card);
   detailEntity.appendChild(activity.card);
 }
 

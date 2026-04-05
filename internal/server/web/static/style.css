@@ -938,6 +938,52 @@ body.resize-col .schema-card__fade {
   letter-spacing: 0.05em;
 }
 
+.loop-turn-request {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.38rem;
+  align-items: center;
+  min-width: 0;
+}
+
+.loop-turn-request .id-chip {
+  max-width: 100%;
+}
+
+.loop-turn-alert {
+  padding: 0.6rem 0.72rem;
+  border-radius: 10px;
+  border: 1px solid rgba(110, 118, 129, 0.22);
+  background: rgba(255, 255, 255, 0.025);
+  color: var(--text-secondary);
+  font-size: 0.74rem;
+  line-height: 1.45;
+  text-wrap: pretty;
+}
+
+.loop-turn-alert--warn {
+  border-color: rgba(210, 153, 34, 0.28);
+  background: rgba(210, 153, 34, 0.08);
+  color: var(--orange);
+}
+
+.loop-turn-alert--error {
+  border-color: rgba(248, 81, 73, 0.28);
+  background: rgba(248, 81, 73, 0.08);
+  color: var(--red);
+}
+
+.loop-turn-empty {
+  padding: 0.72rem 0.78rem;
+  border-radius: 10px;
+  border: 1px dashed rgba(110, 118, 129, 0.22);
+  color: var(--text-secondary);
+  font-size: 0.74rem;
+  line-height: 1.5;
+  background: rgba(255, 255, 255, 0.018);
+  text-wrap: pretty;
+}
+
 .schema-request-chip {
   border-color: rgba(45, 212, 191, 0.35);
 }
