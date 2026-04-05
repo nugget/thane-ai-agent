@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -24,9 +25,9 @@ type CapabilityManager interface {
 // CapabilityManifest describes a capability tag for the manifest.
 type CapabilityManifest = toolcatalog.CapabilitySurface
 
-// SetCapabilityTools adds activate_capability and deactivate_capability
-// tools to the registry. These tools let the agent dynamically activate
-// or deactivate capability tags mid-conversation.
+// SetCapabilityTools adds activate_capability, deactivate_capability,
+// and list_loaded_capabilities tools to the registry. These tools let
+// the agent inspect and mutate capability tags mid-conversation.
 //
 // These tools are intentionally not assigned to any tag group. They
 // live in the base registry and survive all tag filtering, ensuring the
@@ -40,6 +41,7 @@ func (r *Registry) SetCapabilityTools(mgr CapabilityManager, manifest []Capabili
 	}
 	r.registerActivateCapability(mgr, manifest, tagManifest)
 	r.registerDeactivateCapability(mgr, tagManifest)
+	r.registerListLoadedCapabilities(mgr, tagManifest)
 }
 
 // extractTag extracts the tag parameter from args, accepting common
@@ -144,6 +146,53 @@ func (r *Registry) registerDeactivateCapability(mgr CapabilityManager, tagManife
 				fmt.Fprintf(&result, " Active: %s.", strings.Join(tags, ", "))
 			}
 			return result.String(), nil
+		},
+	})
+}
+
+// registerListLoadedCapabilities registers the list_loaded_capabilities tool.
+func (r *Registry) registerListLoadedCapabilities(mgr CapabilityManager, tagManifest map[string]CapabilityManifest) {
+	r.Register(&Tool{
+		Name:            "list_loaded_capabilities",
+		AlwaysAvailable: true,
+		Description:     "List the capability tags currently loaded in YOUR current conversation runtime. Use when asked which capabilities or tags are active right now.",
+		Parameters: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{},
+		},
+		Handler: func(ctx context.Context, _ map[string]any) (string, error) {
+			active := mgr.ActiveTags(ctx)
+			tags := make([]string, 0, len(active))
+			for tag, enabled := range active {
+				if enabled {
+					tags = append(tags, tag)
+				}
+			}
+			sort.Strings(tags)
+
+			type loadedCapability struct {
+				Tag          string `json:"tag"`
+				AlwaysActive bool   `json:"always_active,omitempty"`
+				AdHoc        bool   `json:"ad_hoc,omitempty"`
+			}
+			payload := struct {
+				LoadedCapabilities []loadedCapability `json:"loaded_capabilities"`
+			}{
+				LoadedCapabilities: make([]loadedCapability, 0, len(tags)),
+			}
+			for _, tag := range tags {
+				entry := loadedCapability{Tag: tag}
+				if manifest, ok := tagManifest[tag]; ok {
+					entry.AlwaysActive = manifest.AlwaysActive
+					entry.AdHoc = manifest.AdHoc
+				}
+				payload.LoadedCapabilities = append(payload.LoadedCapabilities, entry)
+			}
+			out, err := json.Marshal(payload)
+			if err != nil {
+				return "", fmt.Errorf("marshal loaded capabilities: %w", err)
+			}
+			return string(out), nil
 		},
 	})
 }

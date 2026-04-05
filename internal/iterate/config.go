@@ -107,6 +107,12 @@ type Config struct {
 	// Nil means all tools are available.
 	CheckToolAvail func(name string) bool
 
+	// NormalizeToolCall can rewrite or repair a model-emitted tool call
+	// before availability checks and execution. Use it for runtime
+	// compatibility shims such as aliasing common hallucinated names to
+	// the exact supported tool contract.
+	NormalizeToolCall func(ctx context.Context, iteration int, tc llm.ToolCall) llm.ToolCall
+
 	// --- Text handling ---
 
 	// DeferMixedText controls whether text content from mixed

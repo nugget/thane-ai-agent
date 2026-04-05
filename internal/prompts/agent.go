@@ -12,9 +12,10 @@ const EmptyResponseFallback = "I processed your request but wasn't able to compo
 
 // IllegalToolMessage is the tool result content injected when the model
 // calls a tool that is not available in the current context. The message
-// directs the model to delegate or inform the user rather than retrying.
-// It is a format string accepting the tool name as its single argument.
-const IllegalToolMessage = "Error: tool %q is not available to you. You do not have access to this tool. Delegate the task or inform the user."
+// pushes the model back toward the exact runtime contract instead of
+// encouraging speculative delegation or invented tool names. It is a
+// format string accepting the tool name as its single argument.
+const IllegalToolMessage = "Error: tool %q is not available in this context. Use an available tool by its exact name. Do not invent tool names. For capability state, use activate_capability, deactivate_capability, or list_loaded_capabilities. Otherwise choose another available tool or respond directly."
 
 // TimeoutRecoverySystem is the system prompt for the recovery model
 // when the primary model times out after completing tool calls.

@@ -802,6 +802,131 @@ func (l *Loop) modelInteractionProfileForModel(model string) llm.ModelInteractio
 	return llm.ProfileForModel(input)
 }
 
+func (l *Loop) repairToolCall(tc llm.ToolCall) (llm.ToolCall, bool) {
+	name := strings.TrimSpace(tc.Function.Name)
+	if name == "" {
+		return tc, false
+	}
+	if l.tools != nil && l.tools.Get(name) != nil {
+		return tc, false
+	}
+
+	if repaired, ok := l.repairCapabilityToolCall(tc); ok {
+		return repaired, true
+	}
+	return tc, false
+}
+
+func (l *Loop) repairCapabilityToolCall(tc llm.ToolCall) (llm.ToolCall, bool) {
+	name := canonicalCapabilityAlias(tc.Function.Name)
+	if name == "" {
+		return tc, false
+	}
+
+	switch name {
+	case "list_capabilities", "list_loaded_capabilities", "loaded_capabilities", "active_capabilities", "get_loaded_capabilities":
+		tc.Function.Name = "list_loaded_capabilities"
+		if tc.Function.Arguments == nil {
+			tc.Function.Arguments = map[string]any{}
+		}
+		return tc, true
+	case "request_capability", "load_capability":
+		if tag, ok := l.resolveCapabilityTagAlias(extractCapabilityTagArg(tc.Function.Arguments)); ok {
+			tc.Function.Name = "activate_capability"
+			tc.Function.Arguments = map[string]any{"tag": tag}
+			return tc, true
+		}
+	case "drop_capability", "unload_capability":
+		if tag, ok := l.resolveCapabilityTagAlias(extractCapabilityTagArg(tc.Function.Arguments)); ok {
+			tc.Function.Name = "deactivate_capability"
+			tc.Function.Arguments = map[string]any{"tag": tag}
+			return tc, true
+		}
+	}
+
+	for _, prefix := range []struct {
+		Prefix string
+		Tool   string
+	}{
+		{Prefix: "activate_", Tool: "activate_capability"},
+		{Prefix: "request_", Tool: "activate_capability"},
+		{Prefix: "load_", Tool: "activate_capability"},
+		{Prefix: "deactivate_", Tool: "deactivate_capability"},
+		{Prefix: "disable_", Tool: "deactivate_capability"},
+		{Prefix: "drop_", Tool: "deactivate_capability"},
+		{Prefix: "unload_", Tool: "deactivate_capability"},
+	} {
+		if tail, ok := strings.CutPrefix(name, prefix.Prefix); ok {
+			if tag, ok := l.resolveCapabilityTagAlias(tail); ok {
+				tc.Function.Name = prefix.Tool
+				tc.Function.Arguments = map[string]any{"tag": tag}
+				return tc, true
+			}
+		}
+	}
+
+	if tail, ok := strings.CutSuffix(name, "_capability"); ok {
+		if tag, ok := l.resolveCapabilityTagAlias(tail); ok {
+			tc.Function.Name = "activate_capability"
+			tc.Function.Arguments = map[string]any{"tag": tag}
+			return tc, true
+		}
+	}
+
+	return tc, false
+}
+
+func (l *Loop) resolveCapabilityTagAlias(alias string) (string, bool) {
+	alias = canonicalCapabilityAlias(alias)
+	if alias == "" {
+		return "", false
+	}
+	candidates := []string{alias}
+	if trimmed, ok := strings.CutSuffix(alias, "_capability"); ok && trimmed != "" {
+		candidates = append(candidates, trimmed)
+	}
+	for _, candidate := range candidates {
+		for _, entry := range l.capSurface {
+			if canonicalCapabilityAlias(entry.Tag) == candidate {
+				return entry.Tag, true
+			}
+		}
+		for tag := range l.capTags {
+			if canonicalCapabilityAlias(tag) == candidate {
+				return tag, true
+			}
+		}
+	}
+	return "", false
+}
+
+func extractCapabilityTagArg(args map[string]any) string {
+	if len(args) == 0 {
+		return ""
+	}
+	for _, key := range []string{"tag", "capability", "name"} {
+		if value, ok := args[key].(string); ok {
+			if trimmed := strings.TrimSpace(value); trimmed != "" {
+				return trimmed
+			}
+		}
+	}
+	return ""
+}
+
+func canonicalCapabilityAlias(value string) string {
+	value = strings.TrimSpace(strings.ToLower(value))
+	if value == "" {
+		return ""
+	}
+	replacer := strings.NewReplacer("-", "_", " ", "_")
+	value = replacer.Replace(value)
+	for strings.Contains(value, "__") {
+		value = strings.ReplaceAll(value, "__", "_")
+	}
+	return strings.Trim(value, "_")
+}
+
 // injectEgo injects the ego.md content into the system prompt. When a
 // provenance store is configured, delta-relative metadata (time since
 // last modification, revision count) is prepended. Otherwise, the file
@@ -1449,6 +1574,18 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 				return toolsForIter.FilteredCopy(l.orchestratorTools).Get(toolName) != nil
 			}
 			return toolsForIter.Get(toolName) != nil
+		},
+
+		NormalizeToolCall: func(iterCtx context.Context, i int, tc llm.ToolCall) llm.ToolCall {
+			repaired, changed := l.repairToolCall(tc)
+			if changed {
+				logging.Logger(iterCtx).Info("repaired tool call",
+					"iteration", i,
+					"from", tc.Function.Name,
+					"to", repaired.Function.Name,
+				)
+			}
+			return repaired
 		},
 
 		CheckBudget: func(totalOut int) bool {

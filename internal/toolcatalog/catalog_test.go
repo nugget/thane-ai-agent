@@ -71,6 +71,9 @@ func TestRenderLoadedCapabilitySummary_EmptyStateExplainsAvailability(t *testing
 	if !strings.Contains(summary, "\"loaded_capabilities\":[]") {
 		t.Fatalf("summary = %q, want empty loaded_capabilities array", summary)
 	}
+	if !strings.Contains(summary, "\"list\":\"list_loaded_capabilities\"") {
+		t.Fatalf("summary = %q, want list_loaded_capabilities helper", summary)
+	}
 }
 
 func TestRenderCapabilityManifestMarkdown_UsesExactToolNames(t *testing.T) {
@@ -82,6 +85,9 @@ func TestRenderCapabilityManifestMarkdown_UsesExactToolNames(t *testing.T) {
 	}
 	if !strings.Contains(manifest, "\"activate\":\"activate_capability\"") {
 		t.Fatalf("manifest = %q, want activate_capability example", manifest)
+	}
+	if !strings.Contains(manifest, "\"list\":\"list_loaded_capabilities\"") {
+		t.Fatalf("manifest = %q, want list_loaded_capabilities example", manifest)
 	}
 	if !strings.Contains(manifest, "\"delegate\":\"thane_delegate\"") {
 		t.Fatalf("manifest = %q, want thane_delegate example", manifest)
