@@ -1108,6 +1108,7 @@ const SCHEMA_CARD_PRESET_HEIGHTS = Object.freeze({
   title: 58,
   widget: 220,
 });
+const SCHEMA_CARD_LAYOUT_ORDER = Object.freeze(['title', 'widget', 'full']);
 
 function loadDashboardPrefs() {
   try {
@@ -1257,12 +1258,25 @@ function inferSchemaCardDensity(metrics, height) {
   return 'full';
 }
 
+function formatSchemaCardMode(mode) {
+  return mode === 'title' ? 'Title' : mode === 'widget' ? 'Widget' : 'Full';
+}
+
+function nextSchemaCardMode(mode) {
+  const current = SCHEMA_CARD_LAYOUT_ORDER.includes(mode) ? mode : 'full';
+  const idx = SCHEMA_CARD_LAYOUT_ORDER.indexOf(current);
+  return SCHEMA_CARD_LAYOUT_ORDER[(idx + 1) % SCHEMA_CARD_LAYOUT_ORDER.length];
+}
+
 function updateSchemaCardControls(card, activeMode) {
-  for (const btn of card.querySelectorAll('.schema-card__control')) {
-    const active = btn.dataset.layoutMode === activeMode;
-    btn.classList.toggle('schema-card__control--active', active);
-    btn.setAttribute('aria-pressed', active ? 'true' : 'false');
-  }
+  const btn = card.querySelector('.schema-card__control');
+  if (!btn) return;
+  const current = SCHEMA_CARD_LAYOUT_ORDER.includes(activeMode) ? activeMode : 'full';
+  const next = nextSchemaCardMode(current);
+  btn.dataset.layoutMode = current;
+  btn.textContent = formatSchemaCardMode(current);
+  btn.title = 'Switch card view to ' + formatSchemaCardMode(next);
+  btn.setAttribute('aria-label', 'Switch card view to ' + formatSchemaCardMode(next));
 }
 
 function syncSchemaCardLayout(card, overrideLayout = null) {
@@ -2433,25 +2447,18 @@ function makeSchemaCard(title, meta, opts = {}) {
   if (isResizable) {
     const controls = document.createElement('div');
     controls.className = 'schema-card__controls';
-
-    for (const mode of ['title', 'widget', 'full']) {
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.className = 'schema-card__control';
-      btn.dataset.layoutMode = mode;
-      btn.textContent = mode === 'title' ? 'Title' : mode === 'widget' ? 'Widget' : 'Full';
-      btn.title = mode === 'title'
-        ? 'Show the header as a compact title card'
-        : mode === 'widget'
-          ? 'Show a medium detail card with internal scrolling'
-          : 'Show the full card detail';
-      btn.addEventListener('click', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        applySchemaCardPreset(card, mode);
-      });
-      controls.appendChild(btn);
-    }
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'schema-card__control';
+    btn.textContent = 'Full';
+    btn.title = 'Switch card view';
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const current = card.dataset.layoutMode || 'full';
+      applySchemaCardPreset(card, nextSchemaCardMode(current));
+    });
+    controls.appendChild(btn);
 
     header.appendChild(controls);
   }

@@ -407,10 +407,10 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
 }
 
 .schema-card__header {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: start;
-  gap: 0.55rem;
+  position: relative;
+  display: block;
+  min-height: 1.5rem;
+  padding-right: 4.15rem;
   margin-bottom: 0.38rem;
 }
 
@@ -437,12 +437,10 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
 }
 
 .schema-card__controls {
+  position: absolute;
+  top: 0;
+  right: 0;
   display: inline-flex;
-  flex-wrap: nowrap;
-  justify-content: flex-end;
-  align-self: start;
-  gap: 0.18rem;
-  margin-top: -0.05rem;
 }
 
 .schema-card__control {
@@ -450,8 +448,9 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
   border-radius: 999px;
   background: rgba(13, 17, 23, 0.68);
   color: var(--text-secondary);
-  padding: 0.05rem 0.4rem;
-  min-height: 1.35rem;
+  width: 3.8rem;
+  padding: 0.05rem 0.5rem;
+  min-height: 1.45rem;
   font-size: 0.58rem;
   font-weight: 700;
   line-height: 1;
@@ -2644,13 +2643,7 @@ body.resize-col .schema-card__fade {
   }
 
   .schema-card__header {
-    grid-template-columns: 1fr;
-    gap: 0.25rem;
-  }
-
-  .schema-card__controls {
-    justify-content: flex-start;
-    gap: 0.16rem;
+    padding-right: 4rem;
   }
 
   .schema-row {
@@ -2691,14 +2684,8 @@ body.resize-col .schema-card__fade {
     font-size: 0.66rem;
   }
 
-  .schema-card__controls {
-    display: inline-flex;
-    flex-wrap: wrap;
-    justify-content: flex-start;
-  }
-
-  .schema-card__control {
-    flex: 0 0 auto;
+  .schema-card__header {
+    padding-right: 3.85rem;
   }
 
   .conversation-summary__summary {
