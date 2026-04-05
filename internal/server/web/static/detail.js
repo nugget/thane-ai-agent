@@ -360,6 +360,9 @@ function getLatestLoopSnapshot() {
 }
 
 function getLatestLoopRequestID() {
+  if (loopData && loopData.state === 'processing' && loopData._currentRequestID) {
+    return loopData._currentRequestID;
+  }
   const latest = getLatestLoopSnapshot();
   return (latest && latest.request_id) || '';
 }
@@ -663,6 +666,7 @@ function connectSSE() {
         if (match._llmContext && match._llmContext.model) {
           match._liveModel = match._llmContext.model;
         }
+        match._currentRequestID = (match._llmContext && match._llmContext.request_id) || '';
       }
       loopData = match;
       document.title = 'Thane \u00b7 ' + (match.name || nodeId.slice(0, 8)) + ' forensics';

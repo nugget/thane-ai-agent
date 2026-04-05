@@ -1375,6 +1375,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			)
 			if stream != nil {
 				startData := map[string]any{
+					"request_id": requestID,
 					"est_tokens": iterMsgTokens + systemTokens,
 					"messages":   len(msgs),
 					"iteration":  i,
@@ -1399,6 +1400,9 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 				stream(llm.StreamEvent{
 					Kind:     llm.KindLLMResponse,
 					Response: llmResp,
+					Data: map[string]any{
+						"request_id": requestID,
+					},
 				})
 			}
 			iterLog := logging.Logger(iterCtx)

@@ -923,6 +923,7 @@ function buildLiveCard(loop) {
   card.appendChild(header);
 
   const ctx = loop._llmContext;
+  const liveRequestID = loop._currentRequestID || (ctx && ctx.request_id) || '';
   const summary = document.createElement('div');
   summary.className = 'iter-card__summary-line';
   const summaryBits = [];
@@ -973,6 +974,7 @@ function buildLiveCard(loop) {
 
   const liveFacts = makeIterationFacts([
     { label: 'Turn', value: '#' + ((loop.iterations || 0) + 1) },
+    { label: 'Request', value: liveRequestID ? shortID(liveRequestID) : '' },
     { label: 'Model', value: loop._liveModel ? shortModelName(loop._liveModel) : '' },
     { label: 'Messages', value: ctx && ctx.messages ? formatNumber(ctx.messages) : '' },
     { label: 'Estimated context', value: ctx && ctx.est_tokens ? formatTokens(ctx.est_tokens) : '' },
@@ -980,6 +982,22 @@ function buildLiveCard(loop) {
     { label: 'Complexity', value: ctx && ctx.complexity ? ctx.complexity : '' },
   ]);
   if (liveFacts) card.appendChild(liveFacts);
+
+  if (liveRequestID && typeof window.onRequestChipClick === 'function') {
+    const reqChip = document.createElement('span');
+    reqChip.className = 'log-id-chip log-id-chip--clickable';
+    reqChip.textContent = 'req:' + shortID(liveRequestID);
+    reqChip.title = 'Click to inspect request\n' + liveRequestID;
+    reqChip.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (e.shiftKey) {
+        navigator.clipboard.writeText(liveRequestID);
+        return;
+      }
+      window.onRequestChipClick(liveRequestID);
+    });
+    card.appendChild(reqChip);
+  }
 
   // Live tool list.
   const tools = loop._liveTools || [];
@@ -1285,6 +1303,7 @@ function clearLiveTelemetry(loop) {
   loop._liveTools = [];
   loop._liveModel = '';
   loop._llmContext = null;
+  loop._currentRequestID = '';
 }
 
 // ---------------------------------------------------------------------------
@@ -1318,6 +1337,7 @@ function applyLoopEventToLoop(evt, ctx) {
       loop._supervisor = !!d.supervisor;
       loop.attempts = d.attempt || loop.attempts;
       loop._currentConvID = d.conversation_id || null;
+      loop._currentRequestID = d.request_id || '';
       ctx.sleepTimers.delete(ctx.loopId);
       loop._liveTools = [];
       loop._liveModel = '';
@@ -1385,7 +1405,9 @@ function applyLoopEventToLoop(evt, ctx) {
 
     case 'loop_llm_start':
       loop._liveModel = d.model || '';
+      loop._currentRequestID = d.request_id || loop._currentRequestID || '';
       loop._llmContext = {
+        request_id: d.request_id || '',
         est_tokens: d.est_tokens || 0,
         messages: d.messages || 0,
         tools: d.tools || 0,
@@ -1399,6 +1421,7 @@ function applyLoopEventToLoop(evt, ctx) {
 
     case 'loop_llm_response':
       loop._liveModel = d.model || '';
+      loop._currentRequestID = d.request_id || loop._currentRequestID || '';
       if (!loop._iterStartTs) loop._iterStartTs = Date.now();
       return null;
 

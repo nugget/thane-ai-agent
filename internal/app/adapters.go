@@ -945,11 +945,15 @@ func (a *loopAdapter) Run(ctx context.Context, req looppkg.Request, _ looppkg.St
 				req.OnProgress(events.KindLoopToolDone, data)
 			case agent.KindLLMResponse:
 				if e.Response != nil {
-					req.OnProgress(events.KindLoopLLMResponse, map[string]any{
+					data := map[string]any{
 						"model":         e.Response.Model,
 						"input_tokens":  e.Response.InputTokens,
 						"output_tokens": e.Response.OutputTokens,
-					})
+					}
+					for k, v := range e.Data {
+						data[k] = v
+					}
+					req.OnProgress(events.KindLoopLLMResponse, data)
 				}
 			}
 		}
