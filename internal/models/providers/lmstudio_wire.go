@@ -345,17 +345,5 @@ func lmStudioContentText(v any) string {
 }
 
 func applyTextToolFallback(resp *llm.ChatResponse, validToolNames []string) {
-	if resp == nil || len(resp.Message.ToolCalls) > 0 || resp.Message.Content == "" {
-		return
-	}
-	if parsed := parseTextToolCalls(resp.Message.Content, validToolNames); len(parsed) > 0 {
-		resp.Message.ToolCalls = parsed
-		resp.Message.Content = ""
-		return
-	}
-	if looksLikeHallucinatedToolCall(resp.Message.Content) {
-		resp.Message.Content = ""
-		return
-	}
-	resp.Message.Content = stripTrailingToolCallJSON(resp.Message.Content, validToolNames)
+	llm.ApplyTextToolCallFallback(resp, validToolNames, llm.DefaultToolCallTextProfile())
 }

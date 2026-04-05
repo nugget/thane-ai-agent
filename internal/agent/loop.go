@@ -645,6 +645,10 @@ type promptSection struct {
 }
 
 func (l *Loop) buildSystemPrompt(ctx context.Context, userMessage string, history []memory.Message) string {
+	return l.buildSystemPromptWithProfile(ctx, userMessage, history, llm.DefaultModelInteractionProfile())
+}
+
+func (l *Loop) buildSystemPromptWithProfile(ctx context.Context, userMessage string, history []memory.Message, profile llm.ModelInteractionProfile) string {
 	var sb strings.Builder
 
 	// Snapshot active tags from the per-Run capability scope.
@@ -721,6 +725,14 @@ func (l *Loop) buildSystemPrompt(ctx context.Context, userMessage string, histor
 		seal()
 	}
 
+	if contract := strings.TrimSpace(profile.ToolCallingContract()); contract != "" {
+		mark("TOOL CALLING CONTRACT")
+		sb.WriteString("\n\n## Tool Calling Contract\n\n")
+		sb.WriteString(contract)
+		sb.WriteString("\n")
+		seal()
+	}
+
 	// 4. Current Conditions (environment — where/when am I)
 	// Placed early because models attend more strongly to content near
 	// the beginning. Uses H1 heading to signal operational importance.
@@ -770,6 +782,24 @@ func (l *Loop) buildSystemPrompt(ctx context.Context, userMessage string, histor
 	}
 
 	return sb.String()
+}
+
+func (l *Loop) modelInteractionProfileForModel(model string) llm.ModelInteractionProfile {
+	input := llm.ModelProfileInput{Model: strings.TrimSpace(model)}
+	cat := l.currentModelCatalog()
+	if cat == nil {
+		return llm.ProfileForModel(input)
+	}
+	dep, err := cat.ResolveDeploymentRef(model)
+	if err != nil {
+		return llm.ProfileForModel(input)
+	}
+	input.Provider = dep.Provider
+	input.Model = dep.ModelName
+	input.Family = dep.Family
+	input.Families = append([]string(nil), dep.Families...)
+	input.TrainedForToolUse = dep.TrainedForToolUse
+	return llm.ProfileForModel(input)
 }
 
 // injectEgo injects the ego.md content into the system prompt. When a
@@ -1271,6 +1301,22 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		log.Debug("model specified in request, skipping router", "model", model)
 	}
 
+	if req.SystemPrompt == "" {
+		usageInfo.Model = model
+		if cat := l.currentModelCatalog(); cat != nil {
+			if dep, err := cat.ResolveDeploymentRef(model); err == nil && dep.ContextWindow > 0 {
+				usageInfo.ContextWindow = dep.ContextWindow
+			}
+		}
+		systemPrompt = l.buildSystemPromptWithProfile(promptCtx, userMessage, history, l.modelInteractionProfileForModel(model))
+		if line := awareness.FormatContextUsage(usageInfo); line != "" {
+			systemPrompt += "\n" + line
+		}
+		if len(llmMessages) > 0 && llmMessages[0].Role == "system" {
+			llmMessages[0].Content = systemPrompt
+		}
+	}
+
 	l.seedLiveRequestDetail(ctx, requestID, systemPrompt, userMessage, model, 0, llmMessages)
 
 	startTime := time.Now()
@@ -1426,7 +1472,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			// Skip rebuild when a custom SystemPrompt is in use (e.g.,
 			// OpenClaw profiles that assemble their own context).
 			if i > 0 && len(msgs) > 0 && msgs[0].Role == "system" && req.SystemPrompt == "" {
-				rebuilt := l.buildSystemPrompt(iterCtx, userMessage, history)
+				rebuilt := l.buildSystemPromptWithProfile(iterCtx, userMessage, history, l.modelInteractionProfileForModel(currentModel))
 				// Omit FormatContextUsage — usageInfo was computed before the
 				// run and would be misleading after prompt content changes.
 				msgs[0].Content = rebuilt
