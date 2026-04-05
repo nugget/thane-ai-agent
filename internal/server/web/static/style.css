@@ -89,6 +89,109 @@ body {
 .conn-badge--connecting { background: var(--orange-dim); color: var(--orange); }
 .conn-badge--disconnected { background: var(--red-dim); color: var(--red); }
 
+/* === Notification Stack === */
+.notification-stack {
+  position: fixed;
+  top: 3.3rem;
+  right: 0.9rem;
+  z-index: 65;
+  display: grid;
+  gap: 0.55rem;
+  width: min(24rem, calc(100vw - 1.8rem));
+  pointer-events: none;
+}
+
+.notification-card {
+  pointer-events: auto;
+  display: grid;
+  gap: 0.45rem;
+  padding: 0.72rem 0.78rem;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  background: rgba(13, 17, 23, 0.94);
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.28);
+  backdrop-filter: blur(8px);
+}
+
+.notification-card--info {
+  border-color: rgba(88, 166, 255, 0.3);
+}
+
+.notification-card--warn {
+  border-color: rgba(210, 153, 34, 0.42);
+}
+
+.notification-card--error {
+  border-color: rgba(248, 81, 73, 0.46);
+}
+
+.notification-card__header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.notification-card__eyebrow {
+  color: var(--text-secondary);
+  font-size: 0.66rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+}
+
+.notification-card__age {
+  color: var(--text-muted);
+  font-size: 0.68rem;
+}
+
+.notification-card__title {
+  margin: 0;
+  color: var(--text-primary);
+  font-size: 0.88rem;
+  line-height: 1.3;
+}
+
+.notification-card__body {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 0.76rem;
+  line-height: 1.5;
+}
+
+.notification-card__actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.45rem;
+}
+
+.notification-card__action,
+.notification-card__dismiss {
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  font-family: var(--font-sans);
+  cursor: pointer;
+}
+
+.notification-card__action {
+  padding: 0.24rem 0.62rem;
+}
+
+.notification-card__dismiss {
+  width: 1.8rem;
+  height: 1.8rem;
+}
+
+.notification-card__action:hover,
+.notification-card__dismiss:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
 /* === Main Layout === */
 .main {
   display: flex;
@@ -2499,6 +2602,13 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
 
 /* === Responsive === */
 @media (max-width: 768px) {
+  .notification-stack {
+    top: 3.6rem;
+    right: 0.75rem;
+    left: 0.75rem;
+    width: auto;
+  }
+
   .main { flex-direction: column; }
 
   .resize-handle--v {

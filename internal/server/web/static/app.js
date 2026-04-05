@@ -11,6 +11,7 @@ const state = {
   loops: new Map(),       // id -> loop status object
   selected: null,         // id of currently selected loop ('__system__' for system node)
   events: [],             // recent events (newest first, capped)
+  notifications: [],      // active dashboard notifications (newest first)
   sleepTimers: new Map(), // id -> { startedAt: number (ms timestamp), durationMs: number }
   iterationHistory: new Map(), // id -> array of iteration snapshots (newest first)
   system: null,           // system status object from /api/system
@@ -21,6 +22,7 @@ const state = {
 };
 
 const MAX_EVENTS = 50;
+const MAX_NOTIFICATIONS = 8;
 
 // ---------------------------------------------------------------------------
 // Force-Directed Physics Layout
@@ -596,6 +598,160 @@ function positionNodeRimBadge(badge, nodeR) {
   badge.setAttribute('transform', `translate(${x.toFixed(1)} ${y.toFixed(1)})`);
 }
 
+function notificationTTL(level) {
+  switch (level) {
+    case 'error':
+      return 0;
+    case 'warn':
+      return 20000;
+    default:
+      return 8000;
+  }
+}
+
+function pruneNotificationSignatures(now) {
+  for (const [signature, ts] of recentNotificationSignatures.entries()) {
+    if (now - ts > 5 * 60 * 1000) {
+      recentNotificationSignatures.delete(signature);
+    }
+  }
+}
+
+function dismissNotification(id) {
+  const idx = state.notifications.findIndex((note) => note.id === id);
+  if (idx === -1) return;
+  state.notifications.splice(idx, 1);
+  renderNotifications();
+}
+
+function dismissNotificationBySignature(signature) {
+  const idx = state.notifications.findIndex((note) => note.signature === signature);
+  if (idx === -1) return;
+  state.notifications.splice(idx, 1);
+  renderNotifications();
+}
+
+function scheduleNotificationExpiry(note) {
+  if (!note.expiresAt) return;
+  const delay = Math.max(0, note.expiresAt - Date.now()) + 50;
+  window.setTimeout(() => {
+    const current = state.notifications.find((entry) => entry.id === note.id);
+    if (!current || current.expiresAt !== note.expiresAt) return;
+    dismissNotification(note.id);
+  }, delay);
+}
+
+function addNotification(opts) {
+  if (!notificationStack) return;
+  const now = Date.now();
+  pruneNotificationSignatures(now);
+
+  const level = opts.level || 'info';
+  const signature = opts.signature || `${level}:${opts.title}:${opts.message || ''}`;
+  const ttlMs = Object.prototype.hasOwnProperty.call(opts, 'ttlMs')
+    ? opts.ttlMs
+    : notificationTTL(level);
+  const expiresAt = ttlMs > 0 ? now + ttlMs : null;
+  const existing = state.notifications.find((note) => note.signature === signature);
+  if (existing) {
+    existing.level = level;
+    existing.title = opts.title;
+    existing.message = opts.message || '';
+    existing.createdAt = now;
+    existing.expiresAt = expiresAt;
+    existing.action = opts.action || null;
+    existing.actionLabel = opts.actionLabel || '';
+    existing.sourceLabel = opts.sourceLabel || '';
+    state.notifications = [existing, ...state.notifications.filter((note) => note.id !== existing.id)];
+    renderNotifications();
+    scheduleNotificationExpiry(existing);
+    return;
+  }
+
+  const cooldownMs = opts.cooldownMs == null ? 15000 : opts.cooldownMs;
+  const lastSeen = recentNotificationSignatures.get(signature);
+  if (lastSeen && cooldownMs > 0 && (now - lastSeen) < cooldownMs) return;
+  recentNotificationSignatures.set(signature, now);
+
+  const note = {
+    id: nextNotificationID++,
+    signature,
+    level,
+    title: opts.title,
+    message: opts.message || '',
+    sourceLabel: opts.sourceLabel || '',
+    action: opts.action || null,
+    actionLabel: opts.actionLabel || '',
+    createdAt: now,
+    expiresAt,
+  };
+  state.notifications.unshift(note);
+  if (state.notifications.length > MAX_NOTIFICATIONS) {
+    state.notifications.length = MAX_NOTIFICATIONS;
+  }
+  renderNotifications();
+  scheduleNotificationExpiry(note);
+}
+
+function renderNotifications() {
+  if (!notificationStack) return;
+  notificationStack.innerHTML = '';
+  notificationStack.hidden = state.notifications.length === 0;
+  for (const note of state.notifications) {
+    const card = document.createElement('article');
+    card.className = 'notification-card notification-card--' + note.level;
+
+    const header = document.createElement('div');
+    header.className = 'notification-card__header';
+
+    const eyebrow = document.createElement('div');
+    eyebrow.className = 'notification-card__eyebrow';
+    eyebrow.textContent = note.sourceLabel || (note.level === 'error' ? 'Error' : note.level === 'warn' ? 'Warning' : 'Notice');
+    header.appendChild(eyebrow);
+
+    const age = document.createElement('time');
+    age.className = 'notification-card__age';
+    age.textContent = timeAgo(new Date(note.createdAt));
+    header.appendChild(age);
+    card.appendChild(header);
+
+    const title = document.createElement('h3');
+    title.className = 'notification-card__title';
+    title.textContent = note.title;
+    card.appendChild(title);
+
+    if (note.message) {
+      const body = document.createElement('p');
+      body.className = 'notification-card__body';
+      body.textContent = note.message;
+      card.appendChild(body);
+    }
+
+    const actions = document.createElement('div');
+    actions.className = 'notification-card__actions';
+    if (typeof note.action === 'function') {
+      const inspect = document.createElement('button');
+      inspect.className = 'notification-card__action';
+      inspect.type = 'button';
+      inspect.textContent = note.actionLabel || 'Inspect';
+      inspect.addEventListener('click', () => note.action());
+      actions.appendChild(inspect);
+    }
+
+    const dismiss = document.createElement('button');
+    dismiss.className = 'notification-card__dismiss';
+    dismiss.type = 'button';
+    dismiss.title = 'Dismiss notification';
+    dismiss.setAttribute('aria-label', 'Dismiss notification');
+    dismiss.textContent = '×';
+    dismiss.addEventListener('click', () => dismissNotification(note.id));
+    actions.appendChild(dismiss);
+
+    card.appendChild(actions);
+    notificationStack.appendChild(card);
+  }
+}
+
 function formatSchemaToken(value) {
   if (!value) return '';
   return String(value).replace(/_/g, ' ');
@@ -752,6 +908,7 @@ const emptyState = $('#empty-state');
 const logEmpty = $('#log-empty');
 const logScroll = $('#log-scroll');
 const logBody = $('#log-body');
+const notificationStack = $('#notification-stack');
 const legendPanel = $('#legend-panel');
 const legendBackdrop = $('#legend-backdrop');
 const legendToggleBtn = $('#toggle-legend');
@@ -789,6 +946,9 @@ function saveDashboardPrefs(prefs) {
 }
 
 const dashboardPrefs = loadDashboardPrefs();
+let nextNotificationID = 1;
+const recentNotificationSignatures = new Map();
+let connectionWasDegraded = false;
 
 // ---------------------------------------------------------------------------
 // Trust Zone Underglow
@@ -863,12 +1023,38 @@ function connect() {
 
   eventSource.onerror = () => {
     setConnState('disconnected');
+    if (!connectionWasDegraded) {
+      connectionWasDegraded = true;
+      addNotification({
+        level: 'warn',
+        sourceLabel: 'Connection',
+        title: 'Live event stream disconnected',
+        message: 'Dashboard updates may be stale until the event stream reconnects.',
+        action: () => selectSystem(),
+        actionLabel: 'Inspect core',
+        signature: 'sse-disconnected',
+        cooldownMs: 0,
+      });
+    }
     // EventSource auto-reconnects; the snapshot on reconnect
     // will restore full state.
   };
 
   eventSource.onopen = () => {
     setConnState('connected');
+    if (connectionWasDegraded) {
+      connectionWasDegraded = false;
+      dismissNotificationBySignature('sse-disconnected');
+      addNotification({
+        level: 'info',
+        sourceLabel: 'Connection',
+        title: 'Live event stream restored',
+        message: 'Dashboard updates are live again.',
+        signature: 'sse-restored',
+        ttlMs: 6000,
+        cooldownMs: 0,
+      });
+    }
     fetchVersionInfo(); // re-sync uptime on reconnect
   };
 }
@@ -955,6 +1141,20 @@ function handleLoopEvent(evt) {
     fetchLoops();
   }
 
+  if (evt.kind === 'loop_error') {
+    const message = (evt.data && evt.data.error) || loop.last_error || 'Loop iteration failed.';
+    addNotification({
+      level: 'error',
+      sourceLabel: 'Loop',
+      title: (loop.name || loopId) + ' failed',
+      message: truncate(message, 220),
+      action: () => selectLoop(loopId),
+      actionLabel: 'Inspect loop',
+      signature: `loop-error:${loopId}:${message}`,
+      cooldownMs: 30000,
+    });
+  }
+
   renderAll();
 }
 
@@ -1004,6 +1204,25 @@ function handleDelegateEvent(evt) {
         entry._delegateExhaustReason = evt.data.exhaust_reason || '';
         entry._delegateDurationMs = evt.data.duration_ms || 0;
         entry._delegateIterations = evt.data.iterations || 0;
+      }
+
+      if (evt.data.error || evt.data.exhausted) {
+        const targetLoopID = entry ? syntheticId : (evt.data.parent_loop_id || '');
+        addNotification({
+          level: evt.data.error ? 'error' : 'warn',
+          sourceLabel: 'Delegate',
+          title: evt.data.error ? 'Background delegate failed' : 'Background delegate exhausted',
+          message: truncate(evt.data.error || evt.data.exhaust_reason || entry?._delegateTask || 'Delegate did not complete successfully.', 220),
+          action: targetLoopID
+            ? () => {
+              if (state.loops.has(targetLoopID)) selectLoop(targetLoopID);
+              else selectSystem();
+            }
+            : () => selectSystem(),
+          actionLabel: targetLoopID ? 'Inspect loop' : 'Inspect core',
+          signature: `delegate-failure:${did}:${evt.data.error || evt.data.exhaust_reason || ''}`,
+          cooldownMs: 30000,
+        });
       }
 
       // Fade to translucent, then remove after a linger period.
@@ -1126,20 +1345,59 @@ let systemStartTime = null; // derived from system uptime for local ticking
 
 async function fetchSystemStatus() {
   try {
+    const previous = state.system;
     const resp = await fetch('/api/system');
     if (resp.status === 404) {
       state.system = null;
       return;
     }
-    state.system = await resp.json();
+    const next = await resp.json();
+    state.system = next;
     // Derive start time so we can tick uptime locally.
     if (state.system.uptime) {
       const uptimeMs = parseDuration(state.system.uptime);
       systemStartTime = Date.now() - uptimeMs;
     }
+    emitSystemNotifications(previous, next);
     renderAll();
   } catch (err) {
     console.warn('Failed to fetch system status:', err);
+  }
+}
+
+function emitSystemNotifications(previous, next) {
+  if (!previous || !next) return;
+  const prevHealth = previous.health || {};
+  const nextHealth = next.health || {};
+  const names = new Set([...Object.keys(prevHealth), ...Object.keys(nextHealth)]);
+
+  for (const name of names) {
+    const prevReady = prevHealth[name] ? prevHealth[name].ready : undefined;
+    const nextReady = nextHealth[name] ? nextHealth[name].ready : undefined;
+    if (prevReady === true && nextReady === false) {
+      addNotification({
+        level: 'warn',
+        sourceLabel: 'Service',
+        title: `${name} degraded`,
+        message: truncate((nextHealth[name] && nextHealth[name].last_error) || `${name} became unavailable.`, 220),
+        action: () => selectSystem(),
+        actionLabel: 'Inspect core',
+        signature: `service-degraded:${name}:${(nextHealth[name] && nextHealth[name].last_error) || ''}`,
+        cooldownMs: 0,
+      });
+    } else if (prevReady === false && nextReady === true) {
+      addNotification({
+        level: 'info',
+        sourceLabel: 'Service',
+        title: `${name} recovered`,
+        message: `${name} is ready again.`,
+        action: () => selectSystem(),
+        actionLabel: 'Inspect core',
+        signature: `service-recovered:${name}`,
+        ttlMs: 7000,
+        cooldownMs: 0,
+      });
+    }
   }
 }
 
