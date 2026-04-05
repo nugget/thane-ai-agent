@@ -2546,6 +2546,26 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
     gap: 0.25rem;
   }
 
+  .schema-row {
+    grid-template-columns: minmax(4.75rem, 6.25rem) minmax(0, 1fr);
+    gap: 0.45rem;
+  }
+
+  .system-summary-grid {
+    grid-template-columns: repeat(auto-fit, minmax(7.5rem, 1fr));
+  }
+
+  .conversation-summary__facts {
+    grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr));
+  }
+
+  .detail-metrics {
+    grid-template-columns: minmax(4.25rem, auto) minmax(0, 1fr);
+    gap: 0.2rem 0.55rem;
+  }
+}
+
+@container inspector (max-width: 29rem) {
   .schema-hero {
     flex-direction: column;
     gap: 0.55rem;
