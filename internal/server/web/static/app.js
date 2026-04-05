@@ -185,6 +185,19 @@ function getOrbitFamilyRadius(parentID, loops, branchLoads) {
   return radius;
 }
 
+function getLoopOrbitRadiusBias(parentID, loop, branchLoads) {
+  const load = branchLoads.get(loop.id);
+  if (!load) return 0;
+  const footprint = getLoopBranchFootprint(load);
+  if (footprint <= 0 && load.descendants <= 0) return 0;
+
+  if (!parentID) {
+    return Math.min(240, footprint * 0.34 + load.descendants * 12);
+  }
+
+  return Math.min(132, footprint * 0.18 + load.descendants * 6);
+}
+
 function getGraphMotionScale(nodeCount) {
   if (nodeCount <= 8) return 1;
   return Math.max(0.52, 1 - ((nodeCount - 8) * 0.03));
@@ -236,7 +249,7 @@ function buildOrbitTargets(cx, cy, branchLoads, siblingIndex, vw, vh) {
 
   function layoutFamily(parentID, loops, center, inwardAngle, depth) {
     if (!loops || loops.length === 0) return;
-    const radius = getOrbitFamilyRadius(parentID, loops, branchLoads);
+    const baseRadius = getOrbitFamilyRadius(parentID, loops, branchLoads);
     const step = (Math.PI * 2) / loops.length;
     const startAngle = Number.isFinite(inwardAngle) ? inwardAngle + (step * 0.5) : -Math.PI / 2;
     const shapeStrength = Math.max(0.18, 1 - (depth * 0.16));
@@ -245,6 +258,7 @@ function buildOrbitTargets(cx, cy, branchLoads, siblingIndex, vw, vh) {
 
     for (let i = 0; i < loops.length; i += 1) {
       const loop = loops[i];
+      const radius = baseRadius + getLoopOrbitRadiusBias(parentID, loop, branchLoads);
       const angle = startAngle + (step * i);
       const x = center.x + Math.cos(angle) * radius * shapeX;
       const y = center.y + Math.sin(angle) * radius * shapeY;
