@@ -51,8 +51,10 @@ const physics = {
   orbitProjectionMinBlend: 0.032,
   orbitProjectionDistanceScale: 96,
   orbitProjectionVelocityDamping: 0.74,
+  orbitAspectStrength: 0.42,
   overlapRepulsionStrength: 0.16,
   overlapRepulsionRange: 1.2,
+  parentChildRepulsionMultiplier: 1.55,
   edgeNodeRepulsion:  0.22,
   edgeNodePadding:    44,
   channelChildSpacingMultiplier: 1.22,
@@ -60,7 +62,7 @@ const physics = {
   maxVelocity:        3.4,
   wallStrength:       0.05,
   collisionPadding:   24,
-  resizeVelocityGain: 0.12,
+  resizeVelocityGain: 0.18,
 };
 
 function buildLoopBranchLoads() {
@@ -121,6 +123,11 @@ function getPairSpacingMultiplier(loopA, loopB) {
     return physics.channelChildSpacingMultiplier;
   }
   return 1;
+}
+
+function isParentChildRelation(loopA, loopB) {
+  if (!loopA || !loopB) return false;
+  return loopA.parent_id === loopB.id || loopB.parent_id === loopA.id;
 }
 
 function compareLoopsForLayout(a, b) {
@@ -184,23 +191,30 @@ function normalizeAngle(angle) {
   return out;
 }
 
-function buildOrbitTargets(cx, cy, branchLoads, siblingIndex) {
+function buildOrbitTargets(cx, cy, branchLoads, siblingIndex, vw, vh) {
   const targets = new Map();
   const roots = Array.from(state.loops.values())
     .filter(loop => !loop.parent_id)
     .sort(compareLoopsForLayout);
+
+  const aspect = (vw && vh && vh > 0) ? (vw / vh) : 1;
+  const rootShapeX = 1 + ((Math.sqrt(aspect) - 1) * physics.orbitAspectStrength);
+  const rootShapeY = 1 + (((1 / Math.sqrt(aspect)) - 1) * physics.orbitAspectStrength);
 
   function layoutFamily(parentID, loops, center, inwardAngle, depth) {
     if (!loops || loops.length === 0) return;
     const radius = getOrbitFamilyRadius(parentID, loops, branchLoads);
     const step = (Math.PI * 2) / loops.length;
     const startAngle = Number.isFinite(inwardAngle) ? inwardAngle + (step * 0.5) : -Math.PI / 2;
+    const shapeStrength = Math.max(0.18, 1 - (depth * 0.16));
+    const shapeX = 1 + ((rootShapeX - 1) * shapeStrength);
+    const shapeY = 1 + ((rootShapeY - 1) * shapeStrength);
 
     for (let i = 0; i < loops.length; i += 1) {
       const loop = loops[i];
       const angle = startAngle + (step * i);
-      const x = center.x + Math.cos(angle) * radius;
-      const y = center.y + Math.sin(angle) * radius;
+      const x = center.x + Math.cos(angle) * radius * shapeX;
+      const y = center.y + Math.sin(angle) * radius * shapeY;
       targets.set(loop.id, { parentID, depth, angle, radius, x, y });
       layoutFamily(loop.id, siblingIndex.get(loop.id) || [], { x, y }, normalizeAngle(angle + Math.PI), depth + 1);
     }
@@ -249,7 +263,7 @@ function syncPhysicsNodes(cx, cy) {
 
   const branchLoads = buildLoopBranchLoads();
   const siblingIndex = buildSiblingIndex();
-  const orbitTargets = buildOrbitTargets(cx, cy, branchLoads, siblingIndex);
+  const orbitTargets = buildOrbitTargets(cx, cy, branchLoads, siblingIndex, cx * 2, cy * 2);
 
   // Loop nodes.
   for (const loop of state.loops.values()) {
@@ -356,7 +370,7 @@ function physicsStep(cx, cy, vw, vh) {
   if (n === 0) return;
   const branchLoads = buildLoopBranchLoads();
   const siblingIndex = buildSiblingIndex();
-  const orbitTargets = buildOrbitTargets(cx, cy, branchLoads, siblingIndex);
+  const orbitTargets = buildOrbitTargets(cx, cy, branchLoads, siblingIndex, vw, vh);
   const motionScale = getGraphMotionScale(n);
   const edges = [];
 
@@ -434,8 +448,11 @@ function physicsStep(cx, cy, vw, vh) {
       let dist = Math.sqrt((dx * dx) + (dy * dy));
       const loopA = ids[i] === '__system__' ? null : state.loops.get(ids[i]);
       const loopB = ids[j] === '__system__' ? null : state.loops.get(ids[j]);
-      const spacingMultiplier = getPairSpacingMultiplier(loopA, loopB);
-      const minGap = (getPhysicsNodeExtent(ids[i]) + getPhysicsNodeExtent(ids[j]) + P.collisionPadding) * P.overlapRepulsionRange;
+      let spacingMultiplier = getPairSpacingMultiplier(loopA, loopB);
+      if (isParentChildRelation(loopA, loopB)) {
+        spacingMultiplier *= P.parentChildRepulsionMultiplier;
+      }
+      const minGap = (getPhysicsNodeExtent(ids[i]) + getPhysicsNodeExtent(ids[j]) + P.collisionPadding) * P.overlapRepulsionRange * (isParentChildRelation(loopA, loopB) ? 1.1 : 1);
       if (dist >= minGap) continue;
       if (dist < 0.001) {
         const angle = Math.random() * Math.PI * 2;
