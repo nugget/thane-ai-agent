@@ -46,12 +46,35 @@ const physics = {
   childSpringStrength: 0.06,  // parent ↔ child (3× stronger)
   childRestLength:    80,     // parent ↔ child (tighter cluster)
   repulsionStrength:  5000,
+  channelChildSpacingMultiplier: 1.15,
   damping:            0.92,
   maxVelocity:        5,
   wallStrength:       0.045,
   collisionPadding:   16,
   resizeVelocityGain: 0.12,
 };
+
+function getLoopMetadata(loop) {
+  return (loop && loop.config && loop.config.Metadata) || {};
+}
+
+function isChannelConversationRelation(parentLoop, childLoop) {
+  if (!parentLoop || !childLoop) return false;
+  const parentMeta = getLoopMetadata(parentLoop);
+  const childMeta = getLoopMetadata(childLoop);
+  return parentMeta.category === 'channel' &&
+    childMeta.category === 'channel' &&
+    !!parentMeta.subsystem &&
+    parentMeta.subsystem === childMeta.subsystem &&
+    childLoop.parent_id === parentLoop.id;
+}
+
+function getPairSpacingMultiplier(loopA, loopB) {
+  if (isChannelConversationRelation(loopA, loopB) || isChannelConversationRelation(loopB, loopA)) {
+    return physics.channelChildSpacingMultiplier;
+  }
+  return 1;
+}
 
 // Ensure physics.nodes matches the current set of loops + system node.
 // New nodes spawn at their parent position (or center with jitter).
@@ -209,7 +232,14 @@ function physicsStep(cx, cy, vw, vh) {
     if (!P.nodes.has(loop.id)) continue;
     if (loop.parent_id && P.nodes.has(loop.parent_id)) {
       // Parent↔child: shorter rest length, stronger spring for tight clusters.
-      applySpring(P.nodes.get(loop.parent_id), P.nodes.get(loop.id), P.childSpringStrength, P.childRestLength);
+      const parentLoop = state.loops.get(loop.parent_id);
+      const spacingMultiplier = getPairSpacingMultiplier(parentLoop, loop);
+      applySpring(
+        P.nodes.get(loop.parent_id),
+        P.nodes.get(loop.id),
+        P.childSpringStrength,
+        P.childRestLength * spacingMultiplier,
+      );
     } else if (P.nodes.has('__system__')) {
       // System↔top-level (or orphaned child fallback): standard spring.
       applySpring(P.nodes.get('__system__'), P.nodes.get(loop.id), P.springStrength, P.springRestLength);
@@ -246,9 +276,12 @@ function physicsStep(cx, cy, vw, vh) {
       const dy = b.y - a.y;
       const distSq = dx * dx + dy * dy + EPS;
       const dist = Math.sqrt(distSq);
-      const baseForce = P.repulsionStrength / distSq;
+      const loopA = ids[i] === '__system__' ? null : state.loops.get(ids[i]);
+      const loopB = ids[j] === '__system__' ? null : state.loops.get(ids[j]);
+      const spacingMultiplier = getPairSpacingMultiplier(loopA, loopB);
+      const baseForce = (P.repulsionStrength * spacingMultiplier) / distSq;
       const minGap = getPhysicsNodeExtent(ids[i]) + getPhysicsNodeExtent(ids[j]) + P.collisionPadding;
-      const overlapForce = dist < minGap ? (minGap - dist) * 0.14 : 0;
+      const overlapForce = dist < minGap ? (minGap - dist) * 0.14 * spacingMultiplier : 0;
       const force = baseForce + overlapForce;
       const fx = (dx / dist) * force;
       const fy = (dy / dist) * force;
