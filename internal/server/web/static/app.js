@@ -619,16 +619,6 @@ function getContextTier(contextWindow) {
 }
 
 function getLoopVisualCapacity(loop) {
-  if (loop.handler_only) {
-    return {
-      radius: DEFAULT_NODE_R,
-      label: '',
-      key: 'none',
-      basis: 'none',
-      contextWindow: 0,
-    };
-  }
-
   const contextWindow = getLoopContextWindow(loop);
   if (contextWindow > 0) {
     const tier = getContextTier(contextWindow);
@@ -658,9 +648,9 @@ function getLoopVisualCapacity(loop) {
 
   return {
     radius: DEFAULT_NODE_R,
-    label: '',
-    key: 'none',
-    basis: 'none',
+    label: '?',
+    key: 'unknown',
+    basis: 'unknown',
     contextWindow: 0,
   };
 }

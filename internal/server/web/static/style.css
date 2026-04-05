@@ -2052,8 +2052,10 @@ body.resize-col .schema-card__fade {
   stroke: rgba(210, 153, 34, 0.5);
 }
 
-.node-rim-badge--none {
-  display: none;
+.node-rim-badge--unknown .node-rim-badge__body {
+  stroke-dasharray: 2 2;
+  stroke: rgba(139, 148, 158, 0.46);
+  opacity: 0.82;
 }
 
 /* Supervisor indicator ring */
