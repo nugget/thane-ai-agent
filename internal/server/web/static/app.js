@@ -51,6 +51,8 @@ const physics = {
   orbitProjectionMinBlend: 0.032,
   orbitProjectionDistanceScale: 96,
   orbitProjectionVelocityDamping: 0.74,
+  orbitRadiusVelocityGain: 0.028,
+  orbitRadiusVelocityCap: 1.3,
   orbitAspectStrength: 0.42,
   overlapRepulsionStrength: 0.16,
   overlapRepulsionRange: 1.2,
@@ -262,7 +264,7 @@ function buildOrbitTargets(cx, cy, branchLoads, siblingIndex, vw, vh) {
       const angle = startAngle + (step * i);
       const x = center.x + Math.cos(angle) * radius * shapeX;
       const y = center.y + Math.sin(angle) * radius * shapeY;
-      targets.set(loop.id, { parentID, depth, angle, radius, x, y });
+      targets.set(loop.id, { parentID, depth, angle, radius, x, y, centerX: center.x, centerY: center.y });
       layoutFamily(loop.id, siblingIndex.get(loop.id) || [], { x, y }, normalizeAngle(angle + Math.PI), depth + 1);
     }
   }
@@ -290,6 +292,35 @@ function projectOrbitTargets(targets, positionBlend, velocityDamping) {
     nd.y += dy * blend;
     nd.vx = (nd.vx + (nd.x - prevX)) * velocityDamping;
     nd.vy = (nd.vy + (nd.y - prevY)) * velocityDamping;
+  }
+}
+
+function applyOrbitRadiusElasticity(targets) {
+  if (!targets) return;
+  for (const [id, target] of targets) {
+    const nd = physics.nodes.get(id);
+    if (!nd || nd.pinned || !target) continue;
+
+    const prevRadius = Number.isFinite(nd.lastTargetRadius) ? nd.lastTargetRadius : target.radius;
+    const deltaRadius = target.radius - prevRadius;
+    nd.lastTargetRadius = target.radius;
+    if (Math.abs(deltaRadius) < 0.001) continue;
+
+    let dirX = target.x - target.centerX;
+    let dirY = target.y - target.centerY;
+    let dirLen = Math.sqrt((dirX * dirX) + (dirY * dirY));
+    if (dirLen < 0.001) {
+      dirX = Math.cos(target.angle);
+      dirY = Math.sin(target.angle);
+      dirLen = 1;
+    }
+
+    const impulse = Math.max(
+      -physics.orbitRadiusVelocityCap,
+      Math.min(physics.orbitRadiusVelocityCap, deltaRadius * physics.orbitRadiusVelocityGain),
+    );
+    nd.vx += (dirX / dirLen) * impulse;
+    nd.vy += (dirY / dirLen) * impulse;
   }
 }
 
@@ -472,6 +503,8 @@ function physicsStep(cx, cy, vw, vh) {
   const orbitTargets = buildOrbitTargets(cx, cy, branchLoads, siblingIndex, vw, vh);
   const motionScale = getGraphMotionScale(n);
   const edges = [];
+
+  applyOrbitRadiusElasticity(orbitTargets);
 
   // Reset forces.
   for (const nd of nodes) { nd.fx = 0; nd.fy = 0; }
