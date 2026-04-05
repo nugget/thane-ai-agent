@@ -11,6 +11,17 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/memory"
 )
 
+type recordingChannelSender struct {
+	recipient string
+	message   string
+}
+
+func (s *recordingChannelSender) SendMessage(_ context.Context, recipient, message string) error {
+	s.recipient = recipient
+	s.message = message
+	return nil
+}
+
 func TestCompileLoopAgentRequest(t *testing.T) {
 	req := looppkg.Request{
 		Model:          "spark/gpt-oss:20b",
@@ -111,7 +122,10 @@ func TestConversationSystemInjector(t *testing.T) {
 	if err := inj.InjectSystemMessage("conv-1", "hello from callback"); err != nil {
 		t.Fatalf("InjectSystemMessage: %v", err)
 	}
-	dispatcher := newDetachedLoopCompletionDispatcher(inj)
+	channelSender := &recordingChannelSender{}
+	channelRouter := newLoopChannelDeliveryRouter(inj)
+	channelRouter.ConfigureSignalSender(channelSender.SendMessage)
+	dispatcher := newDetachedLoopCompletionDispatcher(inj, channelRouter)
 	plan := dispatcher.plan(looppkg.CompletionDelivery{
 		Mode:           looppkg.CompletionConversation,
 		ConversationID: "conv-1",
@@ -140,5 +154,57 @@ func TestConversationSystemInjector(t *testing.T) {
 	}
 	if msgs[1].Role != "system" || msgs[1].Content != "hello from detached loop" {
 		t.Fatalf("second message = %#v", msgs[1])
+	}
+
+	channelPlan := dispatcher.plan(looppkg.CompletionDelivery{
+		Mode: looppkg.CompletionChannel,
+		Channel: &looppkg.CompletionChannelTarget{
+			Channel:        "signal",
+			Recipient:      "+15551234567",
+			ConversationID: "conv-1",
+		},
+		Content: "hello from signal completion",
+	})
+	presentedChannel, err := dispatcher.present(context.Background(), channelPlan)
+	if err != nil {
+		t.Fatalf("present channel: %v", err)
+	}
+	if err := dispatcher.dispatch(context.Background(), presentedChannel); err != nil {
+		t.Fatalf("dispatch channel: %v", err)
+	}
+	if channelSender.recipient != "+15551234567" || channelSender.message != "hello from signal completion" {
+		t.Fatalf("channel send = %#v", channelSender)
+	}
+
+	msgs = mem.GetMessages("conv-1")
+	if len(msgs) != 3 {
+		t.Fatalf("messages len after signal channel delivery = %d, want 3", len(msgs))
+	}
+	if msgs[2].Role != "assistant" || msgs[2].Content != "hello from signal completion" {
+		t.Fatalf("third message = %#v", msgs[2])
+	}
+
+	owuPlan := dispatcher.plan(looppkg.CompletionDelivery{
+		Mode: looppkg.CompletionChannel,
+		Channel: &looppkg.CompletionChannelTarget{
+			Channel:        "owu",
+			ConversationID: "conv-1",
+		},
+		Content: "hello from owu completion",
+	})
+	presentedOWU, err := dispatcher.present(context.Background(), owuPlan)
+	if err != nil {
+		t.Fatalf("present owu: %v", err)
+	}
+	if err := dispatcher.dispatch(context.Background(), presentedOWU); err != nil {
+		t.Fatalf("dispatch owu: %v", err)
+	}
+
+	msgs = mem.GetMessages("conv-1")
+	if len(msgs) != 4 {
+		t.Fatalf("messages len after owu channel delivery = %d, want 4", len(msgs))
+	}
+	if msgs[3].Role != "assistant" || msgs[3].Content != "hello from owu completion" {
+		t.Fatalf("fourth message = %#v", msgs[3])
 	}
 }

@@ -25,7 +25,7 @@ func (a *App) initDelegation(s *newState) error {
 	// executor's parent registry snapshot includes the full tool set.
 	delegateExec := delegate.NewExecutor(logger, a.llmClient, a.rtr, a.loop.Tools(), a.modelCatalog.DefaultModel)
 	conversationInjector := &conversationSystemInjector{mem: a.mem, archiver: a.archiveAdapter}
-	completionDispatcher := newDetachedLoopCompletionDispatcher(conversationInjector)
+	completionDispatcher := a.ensureLoopCompletionDispatcher()
 	if len(cfg.Delegate.Profiles) > 0 {
 		overrides := make(map[string]delegate.ProfileOverride, len(cfg.Delegate.Profiles))
 		for name, pc := range cfg.Delegate.Profiles {

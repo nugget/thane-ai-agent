@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -110,4 +111,24 @@ func currentLoopDefinitionView(r *Registry) (*looppkg.DefinitionRegistryView, er
 		return nil, err
 	}
 	return looppkg.BuildDefinitionRegistryView(snapshot, nil), nil
+}
+
+func applyLoopLaunchContextDefaults(ctx context.Context, def looppkg.DefinitionView, launch looppkg.Launch) looppkg.Launch {
+	completion := launch.Spec.Completion
+	if completion == "" {
+		completion = def.Spec.Completion
+	}
+	switch completion {
+	case looppkg.CompletionConversation:
+		if strings.TrimSpace(launch.CompletionConversationID) == "" {
+			_, conversationID, _ := LoopCompletionTargetFromContext(ctx)
+			launch.CompletionConversationID = conversationID
+		}
+	case looppkg.CompletionChannel:
+		if launch.CompletionChannel == nil {
+			_, _, target := LoopCompletionTargetFromContext(ctx)
+			launch.CompletionChannel = target
+		}
+	}
+	return launch
 }

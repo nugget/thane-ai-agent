@@ -1,6 +1,11 @@
 package tools
 
-import "context"
+import (
+	"context"
+	"strings"
+
+	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
+)
 
 type contextKey string
 
@@ -105,4 +110,31 @@ func HintsFromContext(ctx context.Context) map[string]string {
 		return h
 	}
 	return nil
+}
+
+// LoopCompletionTargetFromContext derives the most natural detached
+// completion target for the current tool call context. Signal contexts
+// produce a concrete channel target, OWU-style conversation IDs produce
+// an OWU channel target, and all other contexts fall back to conversation
+// delivery using the current conversation ID.
+func LoopCompletionTargetFromContext(ctx context.Context) (looppkg.Completion, string, *looppkg.CompletionChannelTarget) {
+	conversationID := strings.TrimSpace(ConversationIDFromContext(ctx))
+	hints := HintsFromContext(ctx)
+	source := strings.TrimSpace(hints["source"])
+	sender := strings.TrimSpace(hints["sender"])
+	switch {
+	case source == "signal" && sender != "":
+		return looppkg.CompletionChannel, "", &looppkg.CompletionChannelTarget{
+			Channel:        "signal",
+			Recipient:      sender,
+			ConversationID: conversationID,
+		}
+	case strings.HasPrefix(conversationID, "owu-"):
+		return looppkg.CompletionChannel, "", &looppkg.CompletionChannelTarget{
+			Channel:        "owu",
+			ConversationID: conversationID,
+		}
+	default:
+		return looppkg.CompletionConversation, conversationID, nil
+	}
 }

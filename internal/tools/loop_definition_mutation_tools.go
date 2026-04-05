@@ -175,15 +175,24 @@ func (r *Registry) handleLoopDefinitionLaunch(ctx context.Context, args map[stri
 	if err != nil {
 		return "", fmt.Errorf("launch: %w", err)
 	}
-	result, err := r.launchLoopDefinition(ctx, name, launch)
-	if err != nil {
-		return "", err
-	}
 	view, err := currentLoopDefinitionView(r)
 	if err != nil {
 		return "", err
 	}
 	def, found := findLoopDefinitionView(view, name)
+	if !found {
+		return "", (&looppkg.UnknownDefinitionError{Name: name})
+	}
+	launch = applyLoopLaunchContextDefaults(ctx, def, launch)
+	result, err := r.launchLoopDefinition(ctx, name, launch)
+	if err != nil {
+		return "", err
+	}
+	view, err = currentLoopDefinitionView(r)
+	if err != nil {
+		return "", err
+	}
+	def, found = findLoopDefinitionView(view, name)
 	if !found {
 		return "", fmt.Errorf("definition launched but snapshot is unavailable")
 	}

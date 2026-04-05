@@ -151,6 +151,7 @@ type App struct {
 	loopRegistry           *looppkg.Registry
 	loopDefinitionRegistry *looppkg.DefinitionRegistry
 	loopDefinitionRuntime  *loopDefinitionRuntime
+	loopCompletionDelivery *detachedLoopCompletionDispatcher
 
 	// Metacognitive config (stored for Serve-time use)
 	metacogCfg *metacognitive.Config

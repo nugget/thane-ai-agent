@@ -715,6 +715,11 @@ func (a *App) initChannels(s *newState) error {
 				return nil // non-fatal: system works without Signal
 			}
 			a.signalClient = signalClient
+			if dispatcher := a.ensureLoopCompletionDispatcher(); dispatcher != nil {
+				dispatcher.ConfigureSignalSender(func(ctx context.Context, recipient, message string) error {
+					return (&signalChannelSender{client: signalClient}).SendMessage(ctx, recipient, message)
+				})
+			}
 			a.onCloseErr("signal", signalClient.Close)
 
 			// Register signal_send_message tool so the agent can

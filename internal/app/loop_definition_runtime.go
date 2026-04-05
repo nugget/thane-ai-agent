@@ -41,8 +41,7 @@ func newAppLoopDefinitionRuntime(a *App) *loopDefinitionRuntime {
 	if a == nil || a.loopDefinitionRegistry == nil || a.loopRegistry == nil || a.loop == nil {
 		return nil
 	}
-	injector := &conversationSystemInjector{mem: a.mem, archiver: a.archiveAdapter}
-	dispatcher := newDetachedLoopCompletionDispatcher(injector)
+	dispatcher := a.ensureLoopCompletionDispatcher()
 	return &loopDefinitionRuntime{
 		definitions:  a.loopDefinitionRegistry,
 		loops:        a.loopRegistry,

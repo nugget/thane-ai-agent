@@ -10,27 +10,34 @@ import (
 // from [Spec] so per-launch overrides and delivery hooks can grow here
 // over time without turning [Spec] itself into an ephemeral run object.
 type Launch struct {
-	Spec                     Spec                                   `yaml:"spec,omitempty" json:"spec,omitempty"`
-	Task                     string                                 `yaml:"task,omitempty" json:"task,omitempty"`
-	ParentID                 string                                 `yaml:"parent_id,omitempty" json:"parent_id,omitempty"`
-	Metadata                 map[string]string                      `yaml:"metadata,omitempty" json:"metadata,omitempty"`
-	ConversationID           string                                 `yaml:"conversation_id,omitempty" json:"conversation_id,omitempty"`
-	Model                    string                                 `yaml:"model,omitempty" json:"model,omitempty"`
-	Hints                    map[string]string                      `yaml:"hints,omitempty" json:"hints,omitempty"`
-	AllowedTools             []string                               `yaml:"allowed_tools,omitempty" json:"allowed_tools,omitempty"`
-	ExcludeTools             []string                               `yaml:"exclude_tools,omitempty" json:"exclude_tools,omitempty"`
-	InitialTags              []string                               `yaml:"initial_tags,omitempty" json:"initial_tags,omitempty"`
-	OnProgress               func(kind string, data map[string]any) `yaml:"-" json:"-"`
-	RunTimeout               time.Duration                          `yaml:"run_timeout,omitempty" json:"run_timeout,omitempty"`
-	CompletionConversationID string                                 `yaml:"completion_conversation_id,omitempty" json:"completion_conversation_id,omitempty"`
-	SkipContext              bool                                   `yaml:"skip_context,omitempty" json:"skip_context,omitempty"`
-	SkipTagFilter            bool                                   `yaml:"skip_tag_filter,omitempty" json:"skip_tag_filter,omitempty"`
-	SystemPrompt             string                                 `yaml:"system_prompt,omitempty" json:"system_prompt,omitempty"`
-	MaxIterations            int                                    `yaml:"max_iterations,omitempty" json:"max_iterations,omitempty"`
-	MaxOutputTokens          int                                    `yaml:"max_output_tokens,omitempty" json:"max_output_tokens,omitempty"`
-	ToolTimeout              time.Duration                          `yaml:"tool_timeout,omitempty" json:"tool_timeout,omitempty"`
-	UsageRole                string                                 `yaml:"usage_role,omitempty" json:"usage_role,omitempty"`
-	UsageTaskName            string                                 `yaml:"usage_task_name,omitempty" json:"usage_task_name,omitempty"`
+	Spec           Spec                                   `yaml:"spec,omitempty" json:"spec,omitempty"`
+	Task           string                                 `yaml:"task,omitempty" json:"task,omitempty"`
+	ParentID       string                                 `yaml:"parent_id,omitempty" json:"parent_id,omitempty"`
+	Metadata       map[string]string                      `yaml:"metadata,omitempty" json:"metadata,omitempty"`
+	ConversationID string                                 `yaml:"conversation_id,omitempty" json:"conversation_id,omitempty"`
+	Model          string                                 `yaml:"model,omitempty" json:"model,omitempty"`
+	Hints          map[string]string                      `yaml:"hints,omitempty" json:"hints,omitempty"`
+	AllowedTools   []string                               `yaml:"allowed_tools,omitempty" json:"allowed_tools,omitempty"`
+	ExcludeTools   []string                               `yaml:"exclude_tools,omitempty" json:"exclude_tools,omitempty"`
+	InitialTags    []string                               `yaml:"initial_tags,omitempty" json:"initial_tags,omitempty"`
+	OnProgress     func(kind string, data map[string]any) `yaml:"-" json:"-"`
+	RunTimeout     time.Duration                          `yaml:"run_timeout,omitempty" json:"run_timeout,omitempty"`
+	// CompletionConversationID names the live conversation that should
+	// receive detached completion delivery when Spec.Completion is
+	// CompletionConversation.
+	CompletionConversationID string `yaml:"completion_conversation_id,omitempty" json:"completion_conversation_id,omitempty"`
+	// CompletionChannel identifies the interactive channel target that
+	// should receive detached completion delivery when Spec.Completion
+	// is CompletionChannel.
+	CompletionChannel *CompletionChannelTarget `yaml:"completion_channel,omitempty" json:"completion_channel,omitempty"`
+	SkipContext       bool                     `yaml:"skip_context,omitempty" json:"skip_context,omitempty"`
+	SkipTagFilter     bool                     `yaml:"skip_tag_filter,omitempty" json:"skip_tag_filter,omitempty"`
+	SystemPrompt      string                   `yaml:"system_prompt,omitempty" json:"system_prompt,omitempty"`
+	MaxIterations     int                      `yaml:"max_iterations,omitempty" json:"max_iterations,omitempty"`
+	MaxOutputTokens   int                      `yaml:"max_output_tokens,omitempty" json:"max_output_tokens,omitempty"`
+	ToolTimeout       time.Duration            `yaml:"tool_timeout,omitempty" json:"tool_timeout,omitempty"`
+	UsageRole         string                   `yaml:"usage_role,omitempty" json:"usage_role,omitempty"`
+	UsageTaskName     string                   `yaml:"usage_task_name,omitempty" json:"usage_task_name,omitempty"`
 }
 
 // Validate checks that the launch is well-formed.
@@ -43,6 +50,11 @@ func (l *Launch) Validate() error {
 	}
 	if l.Spec.Completion == CompletionConversation && strings.TrimSpace(l.CompletionConversationID) == "" {
 		return fmt.Errorf("loop: completion conversation ID is required for conversation completion")
+	}
+	if l.Spec.Completion == CompletionChannel {
+		if err := l.CompletionChannel.Validate(); err != nil {
+			return err
+		}
 	}
 	spec := l.Spec
 	if l.Task != "" && spec.Task == "" && spec.TaskBuilder == nil && spec.Handler == nil {

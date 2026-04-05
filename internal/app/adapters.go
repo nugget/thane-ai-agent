@@ -572,9 +572,9 @@ func resolveContactByChannelAddress(store *contacts.Store, channel, address stri
 }
 
 // conversationSystemInjector is the shared app-side bridge for writing
-// detached system-originated messages back into live conversations.
-// Both notification callbacks and loops-ng detached completions use
-// this adapter so completion routing converges on one app-level seam.
+// detached messages back into live conversations. Both notification
+// callbacks and loops-ng detached completions use this adapter so
+// completion routing converges on one app-level seam.
 type conversationSystemInjector struct {
 	mem      memory.MemoryStore
 	archiver *memory.ArchiveAdapter
@@ -590,6 +590,19 @@ func (n *conversationSystemInjector) InjectSystemMessage(conversationID, message
 		return nil
 	}
 	return n.mem.AddMessage(conversationID, "system", message)
+}
+
+// InjectAssistantMessage adds an assistant-authored message to the
+// conversation's memory so channel-shaped detached completions can
+// appear in the same transcript as normal replies.
+func (n *conversationSystemInjector) InjectAssistantMessage(conversationID, message string) error {
+	if n == nil || n.mem == nil {
+		return nil
+	}
+	if conversationID == "" || strings.TrimSpace(message) == "" {
+		return nil
+	}
+	return n.mem.AddMessage(conversationID, "assistant", message)
 }
 
 // IsSessionAlive reports whether the conversation has an active

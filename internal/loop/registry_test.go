@@ -353,6 +353,57 @@ func TestRegistryLaunchBackgroundTaskDeliversConversationCompletion(t *testing.T
 	}
 }
 
+func TestRegistryLaunchBackgroundTaskDeliversChannelCompletion(t *testing.T) {
+	t.Parallel()
+
+	sink := &recordingCompletionSink{deliveries: make(chan CompletionDelivery, 1)}
+	r := NewRegistry()
+	result, err := r.Launch(context.Background(), Launch{
+		Spec: Spec{
+			Name:       "launch-background-channel-completion",
+			Task:       "test",
+			Operation:  OperationBackgroundTask,
+			Completion: CompletionChannel,
+		},
+		CompletionChannel: &CompletionChannelTarget{
+			Channel:        "signal",
+			Recipient:      "+15551234567",
+			ConversationID: "signal-15551234567",
+		},
+		Task: "Check the office lights",
+	}, Deps{
+		Runner:         &noopRunner{},
+		CompletionSink: sink.DeliverCompletion,
+	})
+	if err != nil {
+		t.Fatalf("Launch: %v", err)
+	}
+	if !result.Detached {
+		t.Fatal("Detached = false, want true")
+	}
+
+	select {
+	case delivery := <-sink.deliveries:
+		if delivery.Mode != CompletionChannel {
+			t.Fatalf("Mode = %q, want channel", delivery.Mode)
+		}
+		if delivery.Channel == nil {
+			t.Fatal("Channel = nil, want target")
+		}
+		if delivery.Channel.Channel != "signal" || delivery.Channel.Recipient != "+15551234567" || delivery.Channel.ConversationID != "signal-15551234567" {
+			t.Fatalf("Channel = %#v", delivery.Channel)
+		}
+		if delivery.LoopID != result.LoopID {
+			t.Fatalf("LoopID = %q, want %q", delivery.LoopID, result.LoopID)
+		}
+		if !strings.Contains(delivery.Content, "Check the office lights") || !strings.Contains(delivery.Content, "ok") {
+			t.Fatalf("Content = %q", delivery.Content)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for detached channel completion delivery")
+	}
+}
+
 func TestRegistryLaunchRunTimeoutStopsJoinedLoop(t *testing.T) {
 	t.Parallel()
 
@@ -572,6 +623,22 @@ func TestLaunchValidateRequiresConversationCompletionTarget(t *testing.T) {
 	}
 	if err := launch.Validate(); err == nil {
 		t.Fatal("Validate() error = nil, want missing conversation target error")
+	}
+}
+
+func TestLaunchValidateRequiresChannelCompletionTarget(t *testing.T) {
+	t.Parallel()
+
+	launch := Launch{
+		Spec: Spec{
+			Name:       "launch-missing-channel-target",
+			Task:       "background work",
+			Operation:  OperationBackgroundTask,
+			Completion: CompletionChannel,
+		},
+	}
+	if err := launch.Validate(); err == nil {
+		t.Fatal("Validate() error = nil, want missing channel target error")
 	}
 }
 

@@ -19,6 +19,7 @@ type testLoopDefinitionDeps struct {
 	persistedPolicy  map[string]looppkg.DefinitionPolicy
 	deletedPolicy    []string
 	reconciled       []string
+	lastLaunch       looppkg.Launch
 }
 
 func newTestLoopDefinitionDeps(t *testing.T) *testLoopDefinitionDeps {
@@ -84,6 +85,7 @@ func newTestLoopDefinitionDeps(t *testing.T) *testLoopDefinitionDeps {
 			return nil
 		},
 		LaunchDefinition: func(_ context.Context, name string, launch looppkg.Launch) (looppkg.LaunchResult, error) {
+			deps.lastLaunch = launch
 			spec, ok := deps.defs.Get(name)
 			if !ok {
 				return looppkg.LaunchResult{}, &looppkg.UnknownDefinitionError{Name: name}
@@ -266,6 +268,66 @@ func TestLoopDefinitionSetPolicyAndLaunch(t *testing.T) {
 	}
 	if launchResp.Result.LoopID != "loop-123" {
 		t.Fatalf("launch loop_id = %q, want loop-123", launchResp.Result.LoopID)
+	}
+}
+
+func TestLoopDefinitionLaunchDefaultsCompletionTargetFromSignalContext(t *testing.T) {
+	deps := newTestLoopDefinitionDeps(t)
+
+	if err := deps.defs.Upsert(looppkg.Spec{
+		Name:       "signal_background",
+		Task:       "Report back later.",
+		Operation:  looppkg.OperationBackgroundTask,
+		Completion: looppkg.CompletionChannel,
+	}, time.Now()); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+
+	ctx := WithConversationID(context.Background(), "signal-15551234567")
+	ctx = WithHints(ctx, map[string]string{
+		"source": "signal",
+		"sender": "+15551234567",
+	})
+
+	if _, err := deps.reg.Get("loop_definition_launch").Handler(ctx, map[string]any{
+		"name": "signal_background",
+	}); err != nil {
+		t.Fatalf("loop_definition_launch: %v", err)
+	}
+
+	if deps.lastLaunch.CompletionChannel == nil {
+		t.Fatal("CompletionChannel = nil, want inferred signal target")
+	}
+	if deps.lastLaunch.CompletionChannel.Channel != "signal" || deps.lastLaunch.CompletionChannel.Recipient != "+15551234567" || deps.lastLaunch.CompletionChannel.ConversationID != "signal-15551234567" {
+		t.Fatalf("CompletionChannel = %#v", deps.lastLaunch.CompletionChannel)
+	}
+}
+
+func TestLoopDefinitionLaunchDefaultsCompletionTargetFromOWUContext(t *testing.T) {
+	deps := newTestLoopDefinitionDeps(t)
+
+	if err := deps.defs.Upsert(looppkg.Spec{
+		Name:       "owu_background",
+		Task:       "Report back later.",
+		Operation:  looppkg.OperationBackgroundTask,
+		Completion: looppkg.CompletionChannel,
+	}, time.Now()); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+
+	ctx := WithConversationID(context.Background(), "owu-abc123")
+
+	if _, err := deps.reg.Get("loop_definition_launch").Handler(ctx, map[string]any{
+		"name": "owu_background",
+	}); err != nil {
+		t.Fatalf("loop_definition_launch: %v", err)
+	}
+
+	if deps.lastLaunch.CompletionChannel == nil {
+		t.Fatal("CompletionChannel = nil, want inferred owu target")
+	}
+	if deps.lastLaunch.CompletionChannel.Channel != "owu" || deps.lastLaunch.CompletionChannel.ConversationID != "owu-abc123" {
+		t.Fatalf("CompletionChannel = %#v", deps.lastLaunch.CompletionChannel)
 	}
 }
 

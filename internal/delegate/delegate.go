@@ -292,8 +292,8 @@ func (e *Executor) StartBackground(ctx context.Context, task, profileName, guida
 		return "", err
 	}
 
-	targetConversationID := strings.TrimSpace(tools.ConversationIDFromContext(ctx))
-	if targetConversationID == "" {
+	completion, targetConversationID, targetChannel := tools.LoopCompletionTargetFromContext(ctx)
+	if completion == looppkg.CompletionConversation && targetConversationID == "" {
 		return "", fmt.Errorf("background delegation requires a target conversation")
 	}
 
@@ -303,7 +303,7 @@ func (e *Executor) StartBackground(ctx context.Context, task, profileName, guida
 		loopMaxDuration = prep.maxDuration
 	}
 
-	launchResult, err := e.loopRegistry.Launch(ctx, e.buildLoopLaunch(prep, task, guidance, looppkg.OperationBackgroundTask, looppkg.CompletionConversation, targetConversationID, loopName, loopMaxDuration, nil), looppkg.Deps{
+	launchResult, err := e.loopRegistry.Launch(ctx, e.buildLoopLaunch(prep, task, guidance, looppkg.OperationBackgroundTask, completion, targetConversationID, targetChannel, loopName, loopMaxDuration, nil), looppkg.Deps{
 		Runner:         e.loopRunner,
 		Logger:         prep.log,
 		EventBus:       e.eventBus,
@@ -780,7 +780,7 @@ func (e *Executor) executeViaLoop(ctx context.Context, task, profileName, guidan
 	var toolCalls []ToolCallOutcome
 
 	runStart := time.Now()
-	launchResult, err := e.loopRegistry.Launch(ctx, e.buildLoopLaunch(prep, task, guidance, looppkg.OperationRequestReply, looppkg.CompletionReturn, "", loopName, loopMaxDuration, func(kind string, data map[string]any) {
+	launchResult, err := e.loopRegistry.Launch(ctx, e.buildLoopLaunch(prep, task, guidance, looppkg.OperationRequestReply, looppkg.CompletionReturn, "", nil, loopName, loopMaxDuration, func(kind string, data map[string]any) {
 		if kind != events.KindLoopToolDone {
 			return
 		}
@@ -853,7 +853,7 @@ func (e *Executor) executeViaLoop(ctx context.Context, task, profileName, guidan
 	}, nil
 }
 
-func (e *Executor) buildLoopLaunch(prep *preparedExecution, task, guidance string, operation looppkg.Operation, completion looppkg.Completion, completionConversationID, loopName string, loopMaxDuration time.Duration, onProgress func(kind string, data map[string]any)) looppkg.Launch {
+func (e *Executor) buildLoopLaunch(prep *preparedExecution, task, guidance string, operation looppkg.Operation, completion looppkg.Completion, completionConversationID string, completionChannel *looppkg.CompletionChannelTarget, loopName string, loopMaxDuration time.Duration, onProgress func(kind string, data map[string]any)) looppkg.Launch {
 	hints := make(map[string]string, len(prep.profile.RouterHints)+2)
 	for k, v := range prep.profile.RouterHints {
 		hints[k] = v
@@ -892,6 +892,7 @@ func (e *Executor) buildLoopLaunch(prep *preparedExecution, task, guidance strin
 		UsageTaskName:            prep.profile.Name,
 		RunTimeout:               prep.maxDuration,
 		CompletionConversationID: completionConversationID,
+		CompletionChannel:        looppkg.CloneCompletionChannelTarget(completionChannel),
 		OnProgress:               onProgress,
 	}
 }

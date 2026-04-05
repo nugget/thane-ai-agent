@@ -183,7 +183,7 @@ func (r *Registry) registerLoopDefinitionTools() {
 
 	r.Register(&Tool{
 		Name:        "loop_definition_launch",
-		Description: "Launch one stored loop definition by name using its persisted spec plus optional per-launch overrides. Use this instead of resending the full definition for request_reply, background_task, or on-demand service launches.",
+		Description: "Launch one stored loop definition by name using its persisted spec plus optional per-launch overrides. Use this instead of resending the full definition for request_reply, background_task, or on-demand service launches. When a launch uses conversation or channel completion and no explicit target is provided, the tool defaults to the current conversation or interactive channel context.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

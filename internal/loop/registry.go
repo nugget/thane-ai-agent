@@ -346,14 +346,20 @@ func (r *Registry) startDetachedCompletion(launch Launch, l *Loop) {
 	if l == nil {
 		return
 	}
-	if launch.Spec.Completion != CompletionConversation {
+	if launch.Spec.Completion != CompletionConversation && launch.Spec.Completion != CompletionChannel {
 		return
 	}
 	if l.deps.CompletionSink == nil {
 		return
 	}
 	conversationID := strings.TrimSpace(launch.CompletionConversationID)
+	channelTarget := CloneCompletionChannelTarget(launch.CompletionChannel)
 	if conversationID == "" {
+		if launch.Spec.Completion == CompletionConversation {
+			return
+		}
+	}
+	if channelTarget == nil && launch.Spec.Completion == CompletionChannel {
 		return
 	}
 
@@ -374,8 +380,9 @@ func (r *Registry) startDetachedCompletion(launch Launch, l *Loop) {
 		defer cancel()
 
 		if err := l.deps.CompletionSink(deliveryCtx, CompletionDelivery{
-			Mode:           CompletionConversation,
+			Mode:           launch.Spec.Completion,
 			ConversationID: conversationID,
+			Channel:        channelTarget,
 			Content:        content,
 			LoopID:         l.id,
 			LoopName:       l.config.Name,
@@ -386,6 +393,7 @@ func (r *Registry) startDetachedCompletion(launch Launch, l *Loop) {
 				"loop_id", l.id,
 				"loop_name", l.config.Name,
 				"conversation_id", conversationID,
+				"channel_target", channelTarget,
 				"error", err,
 			)
 		}

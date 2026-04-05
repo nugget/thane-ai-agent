@@ -3,6 +3,8 @@ package tools
 import (
 	"context"
 	"testing"
+
+	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
 )
 
 func TestConversationIDFromContext(t *testing.T) {
@@ -138,4 +140,55 @@ func TestContextKeysIndependent(t *testing.T) {
 	if got := ToolCallIDFromContext(ctx); got != "call-1" {
 		t.Errorf("ToolCallIDFromContext() = %q, want %q", got, "call-1")
 	}
+}
+
+func TestLoopCompletionTargetFromContext(t *testing.T) {
+	t.Run("signal context returns channel target", func(t *testing.T) {
+		ctx := WithConversationID(context.Background(), "signal-15551234567")
+		ctx = WithHints(ctx, map[string]string{
+			"source": "signal",
+			"sender": "+15551234567",
+		})
+
+		mode, conversationID, target := LoopCompletionTargetFromContext(ctx)
+		if mode != looppkg.CompletionChannel {
+			t.Fatalf("mode = %q, want channel", mode)
+		}
+		if conversationID != "" {
+			t.Fatalf("conversationID = %q, want empty", conversationID)
+		}
+		if target == nil || target.Channel != "signal" || target.Recipient != "+15551234567" || target.ConversationID != "signal-15551234567" {
+			t.Fatalf("target = %#v", target)
+		}
+	})
+
+	t.Run("owu conversation returns owu channel target", func(t *testing.T) {
+		ctx := WithConversationID(context.Background(), "owu-abc123")
+
+		mode, conversationID, target := LoopCompletionTargetFromContext(ctx)
+		if mode != looppkg.CompletionChannel {
+			t.Fatalf("mode = %q, want channel", mode)
+		}
+		if conversationID != "" {
+			t.Fatalf("conversationID = %q, want empty", conversationID)
+		}
+		if target == nil || target.Channel != "owu" || target.ConversationID != "owu-abc123" {
+			t.Fatalf("target = %#v", target)
+		}
+	})
+
+	t.Run("other context falls back to conversation", func(t *testing.T) {
+		ctx := WithConversationID(context.Background(), "conv-123")
+
+		mode, conversationID, target := LoopCompletionTargetFromContext(ctx)
+		if mode != looppkg.CompletionConversation {
+			t.Fatalf("mode = %q, want conversation", mode)
+		}
+		if conversationID != "conv-123" {
+			t.Fatalf("conversationID = %q, want conv-123", conversationID)
+		}
+		if target != nil {
+			t.Fatalf("target = %#v, want nil", target)
+		}
+	})
 }

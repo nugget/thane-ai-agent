@@ -1222,8 +1222,8 @@ func TestToolHandler_AsyncModeLaunchesBackgroundDelegate(t *testing.T) {
 	if !strings.Contains(result, "[Delegate STARTED:") {
 		t.Fatalf("result = %q, want async started header", result)
 	}
-	if !strings.Contains(result, "conv-async") {
-		t.Fatalf("result = %q, want target conversation ID", result)
+	if !strings.Contains(result, "current conversation or interactive channel") {
+		t.Fatalf("result = %q, want generic async delivery description", result)
 	}
 
 	select {
@@ -1242,6 +1242,55 @@ func TestToolHandler_AsyncModeLaunchesBackgroundDelegate(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for detached completion delivery")
+	}
+}
+
+func TestStartBackground_UsesSignalChannelCompletionTarget(t *testing.T) {
+	t.Parallel()
+
+	registry := looppkg.NewRegistry()
+	t.Cleanup(func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		registry.ShutdownAll(shutdownCtx)
+	})
+	sink := &delegateCompletionSink{deliveries: make(chan looppkg.CompletionDelivery, 1)}
+
+	exec := NewExecutor(slog.Default(), nil, nil, newTestRegistry(), "spark/gpt-oss:20b")
+	exec.ConfigureLoopExecution(&mockLoopRunner{
+		resp: &looppkg.Response{
+			Content: "Signal delegate answer",
+			Model:   "deepslate/google/gemma-3-4b",
+		},
+	}, registry)
+	exec.ConfigureLoopCompletionSink(sink.DeliverCompletion)
+
+	ctx := tools.WithConversationID(context.Background(), "signal-15551234567")
+	ctx = tools.WithHints(ctx, map[string]string{
+		"source": "signal",
+		"sender": "+15551234567",
+	})
+
+	if _, err := exec.StartBackground(ctx, "Check the office light", "", "", nil, nil); err != nil {
+		t.Fatalf("StartBackground() error = %v", err)
+	}
+
+	select {
+	case delivery := <-sink.deliveries:
+		if delivery.Mode != looppkg.CompletionChannel {
+			t.Fatalf("Mode = %q, want channel", delivery.Mode)
+		}
+		if delivery.Channel == nil {
+			t.Fatal("Channel = nil, want target")
+		}
+		if delivery.Channel.Channel != "signal" || delivery.Channel.Recipient != "+15551234567" || delivery.Channel.ConversationID != "signal-15551234567" {
+			t.Fatalf("Channel = %#v", delivery.Channel)
+		}
+		if delivery.Response == nil || delivery.Response.Content != "Signal delegate answer" {
+			t.Fatalf("Response = %#v, want signal delegate answer", delivery.Response)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for signal channel completion delivery")
 	}
 }
 
