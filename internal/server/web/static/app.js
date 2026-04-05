@@ -1355,6 +1355,9 @@ let lastDetailSelectionKey = null;
 let detailInteractionHoldUntil = 0;
 let detailPointerSelectionActive = false;
 let detailInstantLayoutUntil = 0;
+const DETAIL_POINTER_GUARD_MS = 120;
+const DETAIL_COPY_GUARD_MS = 220;
+const DETAIL_SELECTION_RELEASE_MS = 220;
 
 function clampValue(value, min, max) {
   return Math.max(min, Math.min(max, value));
@@ -1580,7 +1583,7 @@ function applySchemaCardPreset(card, mode) {
   renderDetail({ force: true, instantLayout: true });
 }
 
-function bumpDetailInteractionHold(ms = 1200) {
+function bumpDetailInteractionHold(ms = DETAIL_COPY_GUARD_MS) {
   detailInteractionHoldUntil = Math.max(detailInteractionHoldUntil, Date.now() + ms);
 }
 
@@ -3690,7 +3693,17 @@ function selectSystem() {
 // Animation Loop (sleep countdowns + progress rings)
 // ---------------------------------------------------------------------------
 
-let _lastTickSec = 0;
+let _lastDetailTickMs = 0;
+
+function currentDetailTickIntervalMs() {
+  if (!state.selected || !state.loops.has(state.selected)) return 1000;
+  const loop = state.loops.get(state.selected);
+  if (!loop) return 1000;
+  if (loop.state === 'processing' || loop.state === 'sleeping' || loop.state === 'waiting') {
+    return 250;
+  }
+  return 1000;
+}
 
 function tick() {
   // Physics simulation — run every frame for smooth organic motion.
@@ -3700,10 +3713,10 @@ function tick() {
     updateNodePositions();
   }
 
-  // Throttle detail updates to ~1Hz (sleep countdowns don't need 60fps).
-  const nowSec = Math.floor(Date.now() / 1000);
-  if (nowSec !== _lastTickSec) {
-    _lastTickSec = nowSec;
+  // Keep the selected inspector lively without redrawing at full frame rate.
+  const nowMs = Date.now();
+  if ((nowMs - _lastDetailTickMs) >= currentDetailTickIntervalMs()) {
+    _lastDetailTickMs = nowMs;
     if (state.selected && state.loops.has(state.selected)) {
       try { renderDetail(); } catch (e) { console.error('tick renderDetail:', e); }
     }
@@ -3801,23 +3814,23 @@ if (detailPanel) {
     if (e.button !== 0) return;
     if (e.target.closest('button, .btn, .toggle-btn, .id-chip, .log-id-chip, summary, a, .schema-card__control')) return;
     detailPointerSelectionActive = true;
-    bumpDetailInteractionHold(2000);
+    bumpDetailInteractionHold(DETAIL_POINTER_GUARD_MS);
   });
 
   detailPanel.addEventListener('copy', () => {
-    bumpDetailInteractionHold(1200);
+    bumpDetailInteractionHold(DETAIL_COPY_GUARD_MS);
   });
 }
 
 document.addEventListener('pointerup', () => {
   if (!detailPointerSelectionActive) return;
   detailPointerSelectionActive = false;
-  bumpDetailInteractionHold(900);
+  bumpDetailInteractionHold(DETAIL_SELECTION_RELEASE_MS);
 });
 
 document.addEventListener('selectionchange', () => {
   if (detailTextSelectionActive()) {
-    bumpDetailInteractionHold(1500);
+    bumpDetailInteractionHold(DETAIL_SELECTION_RELEASE_MS);
   }
 });
 
