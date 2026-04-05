@@ -544,6 +544,13 @@ func (p *Publisher) publishAvailability(ctx context.Context, cm *autopaho.Connec
 		QoS:     1,
 		Retain:  true,
 	}); err != nil {
+		if status == "offline" && strings.Contains(err.Error(), "no connection available") {
+			p.logger.Debug("mqtt offline availability publish skipped",
+				"status", status,
+				"error", err,
+			)
+			return
+		}
 		p.logger.Warn("mqtt availability publish failed",
 			"status", status, "error", err)
 	} else {
