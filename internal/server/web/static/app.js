@@ -2463,7 +2463,7 @@ function renderSystemEntityDetail(sys) {
         <div class="schema-kind">${entity.kind}</div>
         <h2 class="detail-name">${escapeHTML(entity.title)}</h2>
         <div class="schema-subtitle">
-          Center of gravity for <strong>${formatNumber(entity.liveLoopCount)} live loops</strong>
+          <strong>${formatNumber(entity.liveLoopCount)} live loops</strong>
           across ${formatNumber(entity.serviceCount)} runtime services
         </div>
       </div>
@@ -2476,7 +2476,7 @@ function renderSystemEntityDetail(sys) {
   `;
   detailEntity.appendChild(hero);
 
-  const identity = makeSchemaCard('Identity', 'build lineage, process identity, and runtime provenance');
+  const identity = makeSchemaCard('Identity', 'Build lineage, process identity, and runtime provenance');
   appendSchemaRow(identity.body, 'anchor kind', entity.kind);
   appendSchemaRow(identity.body, 'status', formatSchemaToken(entity.state));
   appendSchemaRow(identity.body, 'uptime', entity.uptime);
@@ -2488,7 +2488,7 @@ function renderSystemEntityDetail(sys) {
   appendSchemaRow(identity.body, 'arch', entity.arch);
   detailEntity.appendChild(identity.card);
 
-  const topology = makeSchemaCard('Topology', 'how the live graph is arranged right now');
+  const topology = makeSchemaCard('Topology', 'Live graph shape and routing footprint');
   appendSchemaRow(topology.body, 'live loops', formatNumber(entity.liveLoopCount));
   appendSchemaRow(topology.body, 'root loops', formatNumber(entity.rootLoopCount));
   appendSchemaRow(topology.body, 'child loops', formatNumber(entity.childLoopCount));
@@ -2501,7 +2501,7 @@ function renderSystemEntityDetail(sys) {
   appendSchemaRow(topology.body, 'deployments', formatNumber(entity.deploymentCount));
   detailEntity.appendChild(topology.card);
 
-  const services = makeSchemaCard('Services', 'what is healthy, strained, or waiting to recover');
+  const services = makeSchemaCard('Services', 'Service health, strain, and recovery state');
   const servicesEl = document.createElement('div');
   servicesEl.className = 'system-services';
   renderSystemServices(servicesEl, entity.health);
@@ -2558,8 +2558,8 @@ function renderLoopEntityDetail(loop) {
         <div class="schema-kind">${entity.kind}</div>
         <h2 class="detail-name">${escapeHTML(entity.title)}</h2>
         <div class="schema-subtitle">
-          Seen here as <strong>${escapeHTML(entity.categoryLabel)}</strong>
-          because of ${escapeHTML(entity.categorySource)}
+          <strong>${escapeHTML(entity.categoryLabel)}</strong>
+          via ${escapeHTML(entity.categorySource)}
         </div>
       </div>
       <div class="schema-badge-list">
@@ -2571,7 +2571,7 @@ function renderLoopEntityDetail(loop) {
   `;
   detailEntity.appendChild(hero);
 
-  const identity = makeSchemaCard('Identity', 'the role this node plays in the graph');
+  const identity = makeSchemaCard('Identity', 'Role in the graph');
   appendSchemaRow(identity.body, 'loop_id', makeIDChip(entity.loopID));
   appendSchemaRow(identity.body, 'entity kind', entity.kind);
   appendSchemaRow(identity.body, 'execution mode', entity.executionMode);
@@ -2580,7 +2580,7 @@ function renderLoopEntityDetail(loop) {
   if (entity.subsystem) appendSchemaRow(identity.body, 'subsystem', entity.subsystem);
   detailEntity.appendChild(identity.card);
 
-  const relationships = makeSchemaCard('Relationships', 'parents, conversations, and request trail');
+  const relationships = makeSchemaCard('Relationships', 'Parents, conversations, and request trail');
   if (entity.parentID) {
     appendSchemaRow(relationships.body, 'parent loop', makeIDChip(entity.parentID));
   } else {
@@ -2608,7 +2608,7 @@ function renderLoopEntityDetail(loop) {
   }
   detailEntity.appendChild(relationships.card);
 
-  const execution = makeSchemaCard('Execution', 'its live pulse: state, model, and token flow');
+  const execution = makeSchemaCard('Execution', 'Live state, model, and token flow');
   appendSchemaRow(execution.body, 'state', formatSchemaToken(entity.stateLabel));
   appendSchemaRow(execution.body, 'started', entity.startedAt ? timeAgo(new Date(entity.startedAt)) : '');
   appendSchemaRow(execution.body, 'last wake', entity.lastWakeAt ? timeAgo(new Date(entity.lastWakeAt)) : '');
@@ -2627,7 +2627,7 @@ function renderLoopEntityDetail(loop) {
   }
   detailEntity.appendChild(execution.card);
 
-  const profile = makeSchemaCard('Profile', 'intent, trust, and the context this run carries');
+  const profile = makeSchemaCard('Profile', 'Intent, trust, and carried context');
   if (entity.hints.mission) appendSchemaRow(profile.body, 'mission', entity.hints.mission);
   if (entity.hints.source) appendSchemaRow(profile.body, 'source hint', entity.hints.source);
   if (entity.hints.delegation_gating) appendSchemaRow(profile.body, 'delegation gating', entity.hints.delegation_gating);
@@ -2676,7 +2676,7 @@ function renderLoopEntityDetail(loop) {
   }
   detailEntity.appendChild(profile.card);
 
-  const activity = makeSchemaCard('Activity', 'the recent rhythm of this run');
+  const activity = makeSchemaCard('Activity', 'Recent rhythm and iteration history');
   const aggregates = document.createElement('div');
   aggregates.className = 'detail-aggregates';
   renderAggregates(loop, aggregates);

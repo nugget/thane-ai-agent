@@ -27,14 +27,14 @@
         <g id="canvas-world"></g>
       </svg>
       <div id="empty-state" class="empty-state">
-        <p>No loops running</p>
+        <p>No live loops</p>
       </div>
     </section>
 
     <div class="resize-handle resize-handle--v" id="resize-v"></div>
     <aside class="detail-panel" id="detail-panel">
       <div id="detail-placeholder" class="detail-placeholder">
-        <p>Select an entity to inspect</p>
+        <p>Entity inspection target</p>
       </div>
       <div id="detail-content" class="detail-content" hidden>
         <div id="detail-entity" class="detail-entity"></div>
@@ -60,7 +60,7 @@
     <div class="log-toolbar">
       <div class="log-toolbar__copy">
         <h3 class="section-title">Logs</h3>
-        <p class="log-toolbar__subtitle">Diagnostic tail for focused debugging</p>
+        <p class="log-toolbar__subtitle">Focused diagnostic tail</p>
       </div>
       <div class="log-filters">
         <select id="log-level" class="log-select">
@@ -105,7 +105,7 @@
     <div class="legend-panel__header">
       <div>
         <h2 class="legend-panel__title">Graph Legend</h2>
-        <p class="legend-panel__subtitle">How to read node fills, rings, halos, badges, and live cues.</p>
+        <p class="legend-panel__subtitle">Node fills, rings, halos, badges, and live cues.</p>
       </div>
       <button id="legend-close" class="btn" title="Close legend">&times;</button>
     </div>
