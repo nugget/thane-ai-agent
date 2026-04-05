@@ -113,10 +113,10 @@ func HintsFromContext(ctx context.Context) map[string]string {
 }
 
 // LoopCompletionTargetFromContext derives the most natural detached
-// completion target for the current tool call context. Signal contexts
-// produce a concrete channel target, OWU-style conversation IDs produce
-// an OWU channel target, and all other contexts fall back to conversation
-// delivery using the current conversation ID.
+// completion target for the current tool call context. The returned
+// conversation ID always reflects the current live conversation when one
+// is available, even when the preferred detached delivery target is a
+// channel target such as Signal or OWU.
 func LoopCompletionTargetFromContext(ctx context.Context) (looppkg.Completion, string, *looppkg.CompletionChannelTarget) {
 	conversationID := strings.TrimSpace(ConversationIDFromContext(ctx))
 	hints := HintsFromContext(ctx)
@@ -124,13 +124,13 @@ func LoopCompletionTargetFromContext(ctx context.Context) (looppkg.Completion, s
 	sender := strings.TrimSpace(hints["sender"])
 	switch {
 	case source == "signal" && sender != "":
-		return looppkg.CompletionChannel, "", &looppkg.CompletionChannelTarget{
+		return looppkg.CompletionChannel, conversationID, &looppkg.CompletionChannelTarget{
 			Channel:        "signal",
 			Recipient:      sender,
 			ConversationID: conversationID,
 		}
-	case strings.HasPrefix(conversationID, "owu-"):
-		return looppkg.CompletionChannel, "", &looppkg.CompletionChannelTarget{
+	case source == "owu" || strings.HasPrefix(conversationID, "owu-"):
+		return looppkg.CompletionChannel, conversationID, &looppkg.CompletionChannelTarget{
 			Channel:        "owu",
 			ConversationID: conversationID,
 		}

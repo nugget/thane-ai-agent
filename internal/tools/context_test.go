@@ -154,11 +154,29 @@ func TestLoopCompletionTargetFromContext(t *testing.T) {
 		if mode != looppkg.CompletionChannel {
 			t.Fatalf("mode = %q, want channel", mode)
 		}
-		if conversationID != "" {
-			t.Fatalf("conversationID = %q, want empty", conversationID)
+		if conversationID != "signal-15551234567" {
+			t.Fatalf("conversationID = %q, want signal-15551234567", conversationID)
 		}
 		if target == nil || target.Channel != "signal" || target.Recipient != "+15551234567" || target.ConversationID != "signal-15551234567" {
 			t.Fatalf("target = %#v", target)
+		}
+	})
+
+	t.Run("signal context without sender falls back to conversation", func(t *testing.T) {
+		ctx := WithConversationID(context.Background(), "signal-15551234567")
+		ctx = WithHints(ctx, map[string]string{
+			"source": "signal",
+		})
+
+		mode, conversationID, target := LoopCompletionTargetFromContext(ctx)
+		if mode != looppkg.CompletionConversation {
+			t.Fatalf("mode = %q, want conversation", mode)
+		}
+		if conversationID != "signal-15551234567" {
+			t.Fatalf("conversationID = %q, want signal-15551234567", conversationID)
+		}
+		if target != nil {
+			t.Fatalf("target = %#v, want nil", target)
 		}
 	})
 
@@ -169,10 +187,28 @@ func TestLoopCompletionTargetFromContext(t *testing.T) {
 		if mode != looppkg.CompletionChannel {
 			t.Fatalf("mode = %q, want channel", mode)
 		}
-		if conversationID != "" {
-			t.Fatalf("conversationID = %q, want empty", conversationID)
+		if conversationID != "owu-abc123" {
+			t.Fatalf("conversationID = %q, want owu-abc123", conversationID)
 		}
 		if target == nil || target.Channel != "owu" || target.ConversationID != "owu-abc123" {
+			t.Fatalf("target = %#v", target)
+		}
+	})
+
+	t.Run("owu source hint returns owu channel target", func(t *testing.T) {
+		ctx := WithConversationID(context.Background(), "conv-owu-1")
+		ctx = WithHints(ctx, map[string]string{
+			"source": "owu",
+		})
+
+		mode, conversationID, target := LoopCompletionTargetFromContext(ctx)
+		if mode != looppkg.CompletionChannel {
+			t.Fatalf("mode = %q, want channel", mode)
+		}
+		if conversationID != "conv-owu-1" {
+			t.Fatalf("conversationID = %q, want conv-owu-1", conversationID)
+		}
+		if target == nil || target.Channel != "owu" || target.ConversationID != "conv-owu-1" {
 			t.Fatalf("target = %#v", target)
 		}
 	})

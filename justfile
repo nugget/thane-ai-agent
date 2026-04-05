@@ -287,10 +287,11 @@ loop-definition-smoke base_url="http://127.0.0.1:8080":
     python3 -u scripts/loop_definition_smoke.py --base-url {{base_url}}
 
 # Focused loops-ng regression pass for the packages that own the new
-# loop definition, launch, completion, and app delivery surfaces.
+# loop definition, launch, completion, app delivery, and interactive
+# channel integration surfaces.
 [group('operations')]
 loops-ng-contract-tests:
-    go test -race ./internal/loop ./internal/tools ./internal/delegate ./internal/app
+    go test -race ./internal/loop ./internal/tools ./internal/delegate ./internal/app ./internal/channels/signal ./internal/server/api
 
 # Broader loops-ng smoke pass: focused regression packages plus live
 # loop-definition runtime smoke against a running dev instance.

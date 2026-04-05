@@ -303,6 +303,35 @@ func TestLoopDefinitionLaunchDefaultsCompletionTargetFromSignalContext(t *testin
 	}
 }
 
+func TestLoopDefinitionLaunchDefaultsConversationCompletionFromSignalContext(t *testing.T) {
+	deps := newTestLoopDefinitionDeps(t)
+
+	if err := deps.defs.Upsert(looppkg.Spec{
+		Name:       "signal_conversation",
+		Task:       "Keep me posted here.",
+		Operation:  looppkg.OperationBackgroundTask,
+		Completion: looppkg.CompletionConversation,
+	}, time.Now()); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+
+	ctx := WithConversationID(context.Background(), "signal-15551234567")
+	ctx = WithHints(ctx, map[string]string{
+		"source": "signal",
+		"sender": "+15551234567",
+	})
+
+	if _, err := deps.reg.Get("loop_definition_launch").Handler(ctx, map[string]any{
+		"name": "signal_conversation",
+	}); err != nil {
+		t.Fatalf("loop_definition_launch: %v", err)
+	}
+
+	if deps.lastLaunch.CompletionConversationID != "signal-15551234567" {
+		t.Fatalf("CompletionConversationID = %q, want signal-15551234567", deps.lastLaunch.CompletionConversationID)
+	}
+}
+
 func TestLoopDefinitionLaunchDefaultsCompletionTargetFromOWUContext(t *testing.T) {
 	deps := newTestLoopDefinitionDeps(t)
 
@@ -328,6 +357,31 @@ func TestLoopDefinitionLaunchDefaultsCompletionTargetFromOWUContext(t *testing.T
 	}
 	if deps.lastLaunch.CompletionChannel.Channel != "owu" || deps.lastLaunch.CompletionChannel.ConversationID != "owu-abc123" {
 		t.Fatalf("CompletionChannel = %#v", deps.lastLaunch.CompletionChannel)
+	}
+}
+
+func TestLoopDefinitionLaunchDefaultsConversationCompletionFromOWUContext(t *testing.T) {
+	deps := newTestLoopDefinitionDeps(t)
+
+	if err := deps.defs.Upsert(looppkg.Spec{
+		Name:       "owu_conversation",
+		Task:       "Keep me posted here.",
+		Operation:  looppkg.OperationBackgroundTask,
+		Completion: looppkg.CompletionConversation,
+	}, time.Now()); err != nil {
+		t.Fatalf("Upsert: %v", err)
+	}
+
+	ctx := WithConversationID(context.Background(), "owu-abc123")
+
+	if _, err := deps.reg.Get("loop_definition_launch").Handler(ctx, map[string]any{
+		"name": "owu_conversation",
+	}); err != nil {
+		t.Fatalf("loop_definition_launch: %v", err)
+	}
+
+	if deps.lastLaunch.CompletionConversationID != "owu-abc123" {
+		t.Fatalf("CompletionConversationID = %q, want owu-abc123", deps.lastLaunch.CompletionConversationID)
 	}
 }
 
