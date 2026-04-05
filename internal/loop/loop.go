@@ -490,6 +490,9 @@ func (l *Loop) Status() Status {
 
 	// Deep copy llmContext for late-connecting dashboard clients.
 	var llmCtxCopy map[string]any
+	requestBaseInitialTags := append([]string(nil), l.requestBase.InitialTags...)
+	requestOverrideInitialTags := append([]string(nil), l.requestOverride.InitialTags...)
+	activatedTagsCopy := append([]string(nil), l.activatedTags...)
 	if len(l.llmContext) > 0 {
 		llmCtxCopy = make(map[string]any, len(l.llmContext))
 		for k, v := range l.llmContext {
@@ -526,12 +529,19 @@ func (l *Loop) Status() Status {
 	// Call the active tags callback outside the lock to avoid
 	// lock-ordering issues with the agent loop's tagMu.
 	// Deep-copy the result so callers can't mutate internal state.
+	defaultLoadedTags := mergeUniqueStrings(requestBaseInitialTags, requestOverrideInitialTags, activatedTagsCopy)
 	if atFunc != nil {
 		if tags := atFunc(); len(tags) > 0 {
 			cp := make([]string, len(tags))
 			copy(cp, tags)
 			s.ActiveTags = cp
 		}
+	}
+	if len(s.ActiveTags) == 0 && len(defaultLoadedTags) > 0 {
+		s.ActiveTags = append([]string(nil), defaultLoadedTags...)
+	}
+	if len(s.ActiveTags) == 0 && len(iterCopy) > 0 && len(iterCopy[0].ActiveTags) > 0 {
+		s.ActiveTags = append([]string(nil), iterCopy[0].ActiveTags...)
 	}
 
 	effectiveTools := []string(nil)
@@ -554,7 +564,8 @@ func (l *Loop) Status() Status {
 	if len(iterCopy) > 0 && len(iterCopy[0].ToolsUsed) > 0 {
 		lastToolsUsed = iterCopy[0].ToolsUsed
 	}
-	s.Tooling = BuildToolingState(cfgCopy.Tags, s.ActiveTags, effectiveTools, cfgCopy.ExcludeTools, loadedCaps, lastToolsUsed)
+	configuredTags := mergeUniqueStrings(cfgCopy.Tags, requestBaseInitialTags, requestOverrideInitialTags)
+	s.Tooling = BuildToolingState(configuredTags, s.ActiveTags, effectiveTools, cfgCopy.ExcludeTools, loadedCaps, lastToolsUsed)
 
 	return s
 }
@@ -824,6 +835,30 @@ func (l *Loop) run(ctx context.Context) {
 					Elapsed:    time.Since(iterStart),
 				}
 			}
+			if model, ok := summary["model"].(string); ok && model != "" && result != nil {
+				result.Model = model
+				delete(summary, "model")
+			}
+			if inputTokens, ok := summary["input_tokens"].(int); ok && result != nil {
+				result.InputTokens = inputTokens
+				delete(summary, "input_tokens")
+			}
+			if outputTokens, ok := summary["output_tokens"].(int); ok && result != nil {
+				result.OutputTokens = outputTokens
+				delete(summary, "output_tokens")
+			}
+			if activeTags, ok := summary["active_tags"].([]string); ok && result != nil {
+				result.ActiveTags = append([]string(nil), activeTags...)
+				delete(summary, "active_tags")
+			}
+			if effectiveTools, ok := summary["effective_tools"].([]string); ok && result != nil {
+				result.EffectiveTools = append([]string(nil), effectiveTools...)
+				delete(summary, "effective_tools")
+			}
+			if loadedCapabilities, ok := summary["loaded_capabilities"].([]toolcatalog.LoadedCapabilityEntry); ok && result != nil {
+				result.LoadedCapabilities = append([]toolcatalog.LoadedCapabilityEntry(nil), loadedCapabilities...)
+				delete(summary, "loaded_capabilities")
+			}
 			// Extract request_id from summary if the handler reported
 			// one (e.g., signal/OWU handlers that call agent.Run).
 			// Only remove from summary when successfully copied to
@@ -977,7 +1012,14 @@ func (l *Loop) run(ctx context.Context) {
 				if len(result.ActiveTags) > 0 {
 					snap.ActiveTags = append([]string(nil), result.ActiveTags...)
 				}
-				snap.Tooling = BuildToolingState(nil, result.ActiveTags, result.EffectiveTools, nil, result.LoadedCapabilities, result.ToolsUsed)
+				snap.Tooling = BuildToolingState(
+					mergeUniqueStrings(l.config.Tags, l.requestBase.InitialTags, l.requestOverride.InitialTags),
+					result.ActiveTags,
+					result.EffectiveTools,
+					l.config.ExcludeTools,
+					result.LoadedCapabilities,
+					result.ToolsUsed,
+				)
 
 				iterLog.Debug("loop iteration complete",
 					"model", result.Model,

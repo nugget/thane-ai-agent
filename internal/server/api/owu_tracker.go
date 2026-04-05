@@ -12,6 +12,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/events"
 	"github.com/nugget/thane-ai-agent/internal/loop"
 	"github.com/nugget/thane-ai-agent/internal/memory"
+	"github.com/nugget/thane-ai-agent/internal/toolcatalog"
 )
 
 // owuWork is a single request dispatched to a per-conversation child loop.
@@ -188,10 +189,13 @@ func (t *OWUTracker) ensureConvLoop(_ context.Context, convID, displayName strin
 			w.respCh <- owuResult{resp: resp, err: err}
 			if resp != nil {
 				loop.ReportAgentRun(hCtx, loop.AgentRunSummary{
-					RequestID:    resp.RequestID,
-					Model:        resp.Model,
-					InputTokens:  resp.InputTokens,
-					OutputTokens: resp.OutputTokens,
+					RequestID:          resp.RequestID,
+					Model:              resp.Model,
+					InputTokens:        resp.InputTokens,
+					OutputTokens:       resp.OutputTokens,
+					ActiveTags:         append([]string(nil), resp.ActiveTags...),
+					EffectiveTools:     append([]string(nil), resp.EffectiveTools...),
+					LoadedCapabilities: append([]toolcatalog.LoadedCapabilityEntry(nil), resp.LoadedCapabilities...),
 				})
 			}
 			return err

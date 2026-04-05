@@ -19,6 +19,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/loop"
 	"github.com/nugget/thane-ai-agent/internal/memory"
 	"github.com/nugget/thane-ai-agent/internal/router"
+	"github.com/nugget/thane-ai-agent/internal/toolcatalog"
 )
 
 // AgentRunner abstracts the agent loop for testability. The real
@@ -637,10 +638,13 @@ func (b *Bridge) handleMessage(ctx context.Context, env *Envelope, progressFn fu
 
 	// Report iteration stats for the loop dashboard.
 	if summary := loop.ReportAgentRun(ctx, loop.AgentRunSummary{
-		RequestID:    resp.RequestID,
-		Model:        resp.Model,
-		InputTokens:  resp.InputTokens,
-		OutputTokens: resp.OutputTokens,
+		RequestID:          resp.RequestID,
+		Model:              resp.Model,
+		InputTokens:        resp.InputTokens,
+		OutputTokens:       resp.OutputTokens,
+		ActiveTags:         append([]string(nil), resp.ActiveTags...),
+		EffectiveTools:     append([]string(nil), resp.EffectiveTools...),
+		LoadedCapabilities: append([]toolcatalog.LoadedCapabilityEntry(nil), resp.LoadedCapabilities...),
 	}); summary != nil {
 		summary["message_len"] = len(content)
 		summary["response_len"] = len(resp.Content)

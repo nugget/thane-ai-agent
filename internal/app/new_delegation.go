@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"sort"
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/agent"
@@ -224,22 +223,6 @@ func (a *App) initDelegation(s *newState) error {
 
 		// Behavioral lenses are wired below (outside this block)
 		// so they work even without capability_tags configured.
-
-		// Expose the agent loop's active tags to every process loop
-		// spawned through the registry so the dashboard can display
-		// dynamically activated capabilities.
-		a.loopRegistry.SetDefaultActiveTagsFunc(func() []string {
-			tags := a.loop.LastRunTags()
-			if tags == nil {
-				return nil
-			}
-			result := make([]string, 0, len(tags))
-			for t := range tags {
-				result = append(result, t)
-			}
-			sort.Strings(result)
-			return result
-		})
 
 		// Wire tag context into delegates. The closure captures both the
 		// assembler and the loop so delegates always see the latest

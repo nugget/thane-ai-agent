@@ -562,6 +562,14 @@ func TestRegistryLaunchAppliesRequestOverrides(t *testing.T) {
 	if captured.UsageRole != "delegate" || captured.UsageTaskName != "general" {
 		t.Fatalf("Usage = role %q task %q", captured.UsageRole, captured.UsageTaskName)
 	}
+	if result.FinalStatus == nil {
+		t.Fatal("FinalStatus = nil, want status")
+	}
+	for _, want := range []string{"profile_tag", "launch_tag"} {
+		if !slices.Contains(result.FinalStatus.Tooling.ConfiguredTags, want) {
+			t.Fatalf("FinalStatus.Tooling.ConfiguredTags = %#v, missing %q", result.FinalStatus.Tooling.ConfiguredTags, want)
+		}
+	}
 }
 
 func TestRegistryLaunchForwardsOnProgress(t *testing.T) {

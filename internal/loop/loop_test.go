@@ -11,6 +11,7 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/events"
 	"github.com/nugget/thane-ai-agent/internal/router"
+	"github.com/nugget/thane-ai-agent/internal/toolcatalog"
 )
 
 // fixedRand returns a RandSource that always returns the same value.
@@ -1961,6 +1962,74 @@ func TestActiveTagsInStatus(t *testing.T) {
 	status = l.Status()
 	if status.ActiveTags != nil {
 		t.Errorf("ActiveTags should be nil when callback returns nil, got %v", status.ActiveTags)
+	}
+}
+
+func TestHandlerReportedToolingPersistsIntoStatus(t *testing.T) {
+	t.Parallel()
+
+	bus := events.New()
+	l, err := New(Config{
+		Name: "handler-tooling-test",
+		Handler: func(ctx context.Context, _ any) error {
+			ReportAgentRun(ctx, AgentRunSummary{
+				RequestID:      "req-handler",
+				Model:          "test-model",
+				InputTokens:    42,
+				OutputTokens:   9,
+				ActiveTags:     []string{"forge", "ha"},
+				EffectiveTools: []string{"forge_issue_list", "get_state"},
+				LoadedCapabilities: []toolcatalog.LoadedCapabilityEntry{
+					{Tag: "forge", Description: "Forge tools", ToolCount: 8},
+					{Tag: "ha", Description: "Home Assistant tools", ToolCount: 5},
+				},
+			})
+			return nil
+		},
+		SleepMin:     1 * time.Millisecond,
+		SleepMax:     1 * time.Millisecond,
+		SleepDefault: 1 * time.Millisecond,
+		Jitter:       Float64Ptr(0),
+		MaxIter:      1,
+	}, Deps{EventBus: bus})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	if err := l.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	select {
+	case <-l.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("loop did not finish")
+	}
+
+	status := l.Status()
+	if len(status.RecentIterations) != 1 {
+		t.Fatalf("RecentIterations = %d, want 1", len(status.RecentIterations))
+	}
+	snap := status.RecentIterations[0]
+	if snap.RequestID != "req-handler" {
+		t.Fatalf("RequestID = %q, want req-handler", snap.RequestID)
+	}
+	if !slices.Equal(snap.ActiveTags, []string{"forge", "ha"}) {
+		t.Fatalf("snap.ActiveTags = %v, want [forge ha]", snap.ActiveTags)
+	}
+	if !slices.Equal(snap.EffectiveTools, []string{"forge_issue_list", "get_state"}) {
+		t.Fatalf("snap.EffectiveTools = %v, want [forge_issue_list get_state]", snap.EffectiveTools)
+	}
+	if len(snap.Tooling.LoadedCapabilities) != 2 {
+		t.Fatalf("snap.Tooling.LoadedCapabilities = %v, want 2 entries", snap.Tooling.LoadedCapabilities)
+	}
+	if !slices.Equal(status.Tooling.LoadedTags, []string{"forge", "ha"}) {
+		t.Fatalf("status.Tooling.LoadedTags = %v, want [forge ha]", status.Tooling.LoadedTags)
+	}
+	if !slices.Equal(status.Tooling.EffectiveTools, []string{"forge_issue_list", "get_state"}) {
+		t.Fatalf("status.Tooling.EffectiveTools = %v, want [forge_issue_list get_state]", status.Tooling.EffectiveTools)
+	}
+	if len(status.Tooling.LoadedCapabilities) != 2 {
+		t.Fatalf("status.Tooling.LoadedCapabilities = %v, want 2 entries", status.Tooling.LoadedCapabilities)
 	}
 }
 
