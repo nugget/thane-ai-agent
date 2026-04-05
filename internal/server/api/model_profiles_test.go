@@ -43,6 +43,15 @@ func TestNormalizeModelSelection(t *testing.T) {
 			wantHintValue: "device_control",
 		},
 		{
+			name:          "ops profile",
+			rawModel:      "thane:ops",
+			hints:         map[string]string{"channel": "api"},
+			premiumFloor:  "8",
+			wantModel:     "",
+			wantHintKey:   router.HintDelegationGating,
+			wantHintValue: "disabled",
+		},
+		{
 			name:         "explicit deployment preserved",
 			rawModel:     "spark/gpt-oss:20b",
 			hints:        map[string]string{"channel": "api"},
@@ -71,11 +80,19 @@ func TestNormalizeModelSelection(t *testing.T) {
 				if hints[router.HintVirtualModel] != "thane:premium" {
 					t.Fatalf("virtual model hint = %q, want thane:premium", hints[router.HintVirtualModel])
 				}
+				if got := hints[router.DelegateHintKey(router.HintQualityFloor)]; got != "" {
+					t.Fatalf("delegate quality floor = %q, want empty", got)
+				}
+				if got := hints[router.DelegateHintKey(router.HintLocalOnly)]; got != "" {
+					t.Fatalf("delegate local_only = %q, want empty", got)
+				}
+			}
+			if tt.rawModel == "thane:ops" {
+				if hints[router.HintVirtualModel] != "thane:ops" {
+					t.Fatalf("virtual model hint = %q, want thane:ops", hints[router.HintVirtualModel])
+				}
 				if hints[router.DelegateHintKey(router.HintQualityFloor)] != "8" {
 					t.Fatalf("delegate quality floor = %q, want 8", hints[router.DelegateHintKey(router.HintQualityFloor)])
-				}
-				if hints[router.DelegateHintKey(router.HintLocalOnly)] != "false" {
-					t.Fatalf("delegate local_only = %q, want false", hints[router.DelegateHintKey(router.HintLocalOnly)])
 				}
 			}
 			if tt.wantHintKey != "" && hints[tt.wantHintKey] != tt.wantHintValue {

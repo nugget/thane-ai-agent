@@ -710,7 +710,7 @@ func TestExecute_GeneralProfileSelectsLocalModel(t *testing.T) {
 	}
 }
 
-func TestExecute_InheritedVirtualModelPolicyOverridesDelegateRouting(t *testing.T) {
+func TestExecute_OpsVirtualModelOverridesDelegateRouting(t *testing.T) {
 	rtr := router.NewRouter(slog.Default(), router.Config{
 		DefaultModel: "local-model",
 		LocalFirst:   true,
@@ -737,7 +737,7 @@ func TestExecute_InheritedVirtualModelPolicyOverridesDelegateRouting(t *testing.
 		router.DelegateHintKey(router.HintQualityFloor): "10",
 		router.DelegateHintKey(router.HintLocalOnly):    "false",
 		router.DelegateHintKey(router.HintPreferSpeed):  "false",
-		router.HintVirtualModel:                         "thane:premium",
+		router.HintVirtualModel:                         "thane:ops",
 	})
 
 	result, err := exec.Execute(ctx, "Investigate this issue deeply", "general", "", nil, nil)
@@ -746,6 +746,45 @@ func TestExecute_InheritedVirtualModelPolicyOverridesDelegateRouting(t *testing.
 	}
 	if result.Model != "cloud-model" {
 		t.Fatalf("Model = %q, want cloud-model", result.Model)
+	}
+}
+
+func TestExecute_PremiumVirtualModelKeepsDelegateRoutingAdaptive(t *testing.T) {
+	rtr := router.NewRouter(slog.Default(), router.Config{
+		DefaultModel: "local-model",
+		LocalFirst:   true,
+		Models: []router.Model{
+			{Name: "local-model", Provider: "ollama", SupportsTools: true, Speed: 8, Quality: 5, CostTier: 0, ContextWindow: 8192},
+			{Name: "cloud-model", Provider: "anthropic", SupportsTools: true, Speed: 6, Quality: 10, CostTier: 3, ContextWindow: 8192},
+		},
+		MaxAuditLog: 10,
+	})
+
+	mock := &mockLLMClient{
+		responses: []*llm.ChatResponse{
+			{
+				Model:        "local-model",
+				Message:      llm.Message{Role: "assistant", Content: "Completed with local model."},
+				InputTokens:  100,
+				OutputTokens: 20,
+			},
+		},
+	}
+
+	exec := NewExecutor(slog.Default(), mock, rtr, newTestRegistry(), "local-model")
+	ctx := tools.WithHints(context.Background(), map[string]string{
+		router.HintQualityFloor: "10",
+		router.HintLocalOnly:    "false",
+		router.HintPreferSpeed:  "false",
+		router.HintVirtualModel: "thane:premium",
+	})
+
+	result, err := exec.Execute(ctx, "Investigate this issue deeply", "general", "", nil, nil)
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if result.Model != "local-model" {
+		t.Fatalf("Model = %q, want local-model", result.Model)
 	}
 }
 

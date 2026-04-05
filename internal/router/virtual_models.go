@@ -185,15 +185,10 @@ func builtinVirtualModels(runtime VirtualModelRuntime) []VirtualModel {
 		},
 		{
 			Name:        "thane:premium",
-			Description: "frontier-first assistant (frontier orchestrator and delegates)",
+			Description: "frontier-first assistant (frontier orchestrator, adaptive delegates)",
 			Exposed:     true,
 			Aliases:     []string{"thane:best", "thane:thinking"},
 			TopLevel: LoopProfile{
-				QualityFloor: premiumFloor,
-				LocalOnly:    "false",
-				PreferSpeed:  "false",
-			},
-			Delegate: LoopProfile{
 				QualityFloor: premiumFloor,
 				LocalOnly:    "false",
 				PreferSpeed:  "false",

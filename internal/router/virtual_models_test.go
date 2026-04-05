@@ -28,7 +28,7 @@ func TestExposedVirtualModels(t *testing.T) {
 	}
 }
 
-func TestResolveVirtualModelSelection_PremiumAddsDelegatePolicy(t *testing.T) {
+func TestResolveVirtualModelSelection_PremiumKeepsDelegatePolicyAdaptive(t *testing.T) {
 	selection := ResolveVirtualModelSelection("thane:premium", map[string]string{"channel": "api"}, VirtualModelRuntime{
 		PremiumQualityFloor: "9",
 	}, slog.Default())
@@ -47,6 +47,30 @@ func TestResolveVirtualModelSelection_PremiumAddsDelegatePolicy(t *testing.T) {
 	}
 	if selection.Hints[HintVirtualModel] != "thane:premium" {
 		t.Fatalf("virtual_model = %q, want thane:premium", selection.Hints[HintVirtualModel])
+	}
+	for _, hint := range []string{HintQualityFloor, HintLocalOnly, HintPreferSpeed, HintMission} {
+		if got := selection.Hints[DelegateHintKey(hint)]; got != "" {
+			t.Fatalf("delegate %s = %q, want empty", hint, got)
+		}
+	}
+	if got := selection.Hints[HintDelegateModel]; got != "" {
+		t.Fatalf("delegate model = %q, want empty", got)
+	}
+}
+
+func TestResolveVirtualModelSelection_OpsAddsDelegatePolicy(t *testing.T) {
+	selection := ResolveVirtualModelSelection("thane:ops", map[string]string{"channel": "api"}, VirtualModelRuntime{
+		PremiumQualityFloor: "9",
+	}, slog.Default())
+
+	if !selection.Known {
+		t.Fatal("Known = false, want true")
+	}
+	if selection.CanonicalName != "thane:ops" {
+		t.Fatalf("CanonicalName = %q, want thane:ops", selection.CanonicalName)
+	}
+	if selection.Hints[HintVirtualModel] != "thane:ops" {
+		t.Fatalf("virtual_model = %q, want thane:ops", selection.Hints[HintVirtualModel])
 	}
 	if selection.Hints[DelegateHintKey(HintQualityFloor)] != "9" {
 		t.Fatalf("delegate quality_floor = %q, want 9", selection.Hints[DelegateHintKey(HintQualityFloor)])
