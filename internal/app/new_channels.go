@@ -13,6 +13,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/attachments"
 	"github.com/nugget/thane-ai-agent/internal/channels/email"
 	sigcli "github.com/nugget/thane-ai-agent/internal/channels/signal"
+	"github.com/nugget/thane-ai-agent/internal/config"
 	"github.com/nugget/thane-ai-agent/internal/connwatch"
 	"github.com/nugget/thane-ai-agent/internal/contacts"
 	"github.com/nugget/thane-ai-agent/internal/forge"
@@ -30,6 +31,21 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/search"
 	"github.com/nugget/thane-ai-agent/internal/tools"
 )
+
+func toMCPToolOverrides(cfg map[string]config.MCPToolConfig) map[string]mcp.ToolOverride {
+	if len(cfg) == 0 {
+		return nil
+	}
+	out := make(map[string]mcp.ToolOverride, len(cfg))
+	for name, toolCfg := range cfg {
+		out[name] = mcp.ToolOverride{
+			Enabled:     toolCfg.Enabled,
+			Tags:        append([]string(nil), toolCfg.Tags...),
+			Description: toolCfg.Description,
+		}
+	}
+	return out
+}
 
 // initChannels wires tools and external channels into the agent loop.
 // Sections include fact store, contact directory, notifications, email,
@@ -658,7 +674,12 @@ func (a *App) initChannels(s *newState) error {
 		count, err := mcp.BridgeTools(
 			bridgeCtx,
 			client, serverCfg.Name, a.loop.Tools(),
-			serverCfg.IncludeTools, serverCfg.ExcludeTools,
+			mcp.BridgeOptions{
+				Include:       serverCfg.IncludeTools,
+				Exclude:       serverCfg.ExcludeTools,
+				DefaultTags:   serverCfg.DefaultTags,
+				ToolOverrides: toMCPToolOverrides(serverCfg.Tools),
+			},
 			a.logger,
 		)
 		bridgeCancel()

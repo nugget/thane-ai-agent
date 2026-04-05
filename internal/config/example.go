@@ -401,7 +401,6 @@ func ExampleConfig() *Config {
 		CapabilityTags: map[string]CapabilityTagConfig{
 			"ha": {
 				Description:  "Home Assistant tools and sensors",
-				Tools:        []string{"get_ha_states", "call_ha_service", "get_ha_history"},
 				AlwaysActive: true,
 			},
 		},

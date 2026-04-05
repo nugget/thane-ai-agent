@@ -83,7 +83,7 @@ func TestBridgeTools_AllTools(t *testing.T) {
 	registry := tools.NewEmptyRegistry()
 	logger := slog.Default()
 
-	count, err := BridgeTools(context.Background(), client, "home-assistant", registry, nil, nil, logger)
+	count, err := BridgeTools(context.Background(), client, "home-assistant", registry, BridgeOptions{}, logger)
 	if err != nil {
 		t.Fatalf("BridgeTools: %v", err)
 	}
@@ -133,7 +133,7 @@ func TestBridgeTools_IncludeFilter(t *testing.T) {
 	logger := slog.Default()
 
 	count, err := BridgeTools(context.Background(), client, "ha", registry,
-		[]string{"get_entities", "get_history"}, nil, logger)
+		BridgeOptions{Include: []string{"get_entities", "get_history"}}, logger)
 	if err != nil {
 		t.Fatalf("BridgeTools: %v", err)
 	}
@@ -167,7 +167,7 @@ func TestBridgeTools_ExcludeFilter(t *testing.T) {
 	logger := slog.Default()
 
 	count, err := BridgeTools(context.Background(), client, "ha", registry,
-		nil, []string{"call_service"}, logger)
+		BridgeOptions{Exclude: []string{"call_service"}}, logger)
 	if err != nil {
 		t.Fatalf("BridgeTools: %v", err)
 	}
@@ -197,7 +197,7 @@ func TestBridgeTools_HandlerProxiesCallTool(t *testing.T) {
 	registry := tools.NewEmptyRegistry()
 	logger := slog.Default()
 
-	_, err := BridgeTools(context.Background(), client, "ha", registry, nil, nil, logger)
+	_, err := BridgeTools(context.Background(), client, "ha", registry, BridgeOptions{}, logger)
 	if err != nil {
 		t.Fatalf("BridgeTools: %v", err)
 	}
@@ -238,5 +238,59 @@ func TestBridgeTools_HandlerProxiesCallTool(t *testing.T) {
 	}
 	if !found {
 		t.Error("tools/call request should use original MCP name 'get_state', not namespaced name")
+	}
+}
+
+func TestBridgeTools_MetadataOverrides(t *testing.T) {
+	mt := newMockTransport()
+	mt.addResponse("tools/list", toolsListResult{
+		Tools: []ToolDefinition{
+			{Name: "create_pull_request", Description: "Raw MCP description", InputSchema: map[string]any{"type": "object"}},
+			{Name: "delete_branch", Description: "Dangerous branch delete", InputSchema: map[string]any{"type": "object"}},
+		},
+	})
+
+	client := NewClient("github", mt, nil)
+	registry := tools.NewEmptyRegistry()
+	logger := slog.Default()
+	enabled := false
+
+	count, err := BridgeTools(context.Background(), client, "github", registry, BridgeOptions{
+		DefaultTags: []string{"forge"},
+		ToolOverrides: map[string]ToolOverride{
+			"create_pull_request": {
+				Description: "Open a pull request in GitHub",
+				Tags:        []string{"forge", "publish"},
+			},
+			"delete_branch": {
+				Enabled: &enabled,
+			},
+		},
+	}, logger)
+	if err != nil {
+		t.Fatalf("BridgeTools: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("count = %d, want 1", count)
+	}
+
+	tool := registry.Get("mcp_github_create_pull_request")
+	if tool == nil {
+		t.Fatal("expected mcp_github_create_pull_request")
+	}
+	if tool.Description != "Open a pull request in GitHub" {
+		t.Fatalf("Description = %q", tool.Description)
+	}
+	if tool.Source != "mcp" {
+		t.Fatalf("Source = %q, want mcp", tool.Source)
+	}
+	if tool.CanonicalID != "mcp:github/create_pull_request" {
+		t.Fatalf("CanonicalID = %q", tool.CanonicalID)
+	}
+	if len(tool.DefaultTags) != 2 || tool.DefaultTags[0] != "forge" || tool.DefaultTags[1] != "publish" {
+		t.Fatalf("DefaultTags = %#v", tool.DefaultTags)
+	}
+	if registry.Get("mcp_github_delete_branch") != nil {
+		t.Fatal("delete_branch should be disabled by override")
 	}
 }

@@ -40,6 +40,7 @@ import (
 	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
 	"github.com/nugget/thane-ai-agent/internal/router"
 	"github.com/nugget/thane-ai-agent/internal/search"
+	"github.com/nugget/thane-ai-agent/internal/toolcatalog"
 	"gopkg.in/yaml.v3"
 )
 
@@ -176,18 +177,20 @@ type Config struct {
 	// Delegate configures the thane_delegate tool's split-model execution.
 	Delegate DelegateConfig `yaml:"delegate"`
 
-	// CapabilityTags defines named groups of tools and talents that
-	// can be activated or deactivated per session. Tags marked
-	// always_active are loaded unconditionally. Other tags are
-	// activated via activate_capability/deactivate_capability tools or
-	// channel-pinned configuration.
+	// CapabilityTags overlays the compiled-in tool/tag baseline with
+	// operator-defined descriptions, tool membership overrides, and
+	// custom tags. Tags marked always_active are loaded
+	// unconditionally. Other tags are activated via
+	// activate_capability/deactivate_capability tools or channel-pinned
+	// configuration.
 	CapabilityTags map[string]CapabilityTagConfig `yaml:"capability_tags"`
 
 	// ChannelTags maps conversation source channels (e.g., "signal",
 	// "email") to lists of capability tag names that are automatically
 	// activated when a message arrives on that channel. This is
 	// additive to always-active tags and any tags the agent requests
-	// at runtime. Tag names must reference entries in [CapabilityTags].
+	// at runtime. Tag names must reference either compiled-in tags or
+	// entries in [CapabilityTags].
 	ChannelTags map[string][]string `yaml:"channel_tags"`
 
 	// MCP configures external MCP (Model Context Protocol) server
@@ -909,15 +912,18 @@ type DelegateProfileConfig struct {
 }
 
 // CapabilityTagConfig defines a named group of tools (and optionally
-// talents) that can be loaded together. Tags marked AlwaysActive are
-// included in every session unconditionally.
+// talents) that can be loaded together. For compiled-in tags, empty
+// Description and Tools act as "keep the built-in defaults". Tags
+// marked AlwaysActive are included in every session unconditionally.
 type CapabilityTagConfig struct {
 	// Description is a human-readable summary shown in the capability
-	// manifest so the agent knows what activating this tag provides.
+	// manifest so the agent knows what activating this tag provides. For
+	// compiled-in tags, empty keeps the built-in description.
 	Description string `yaml:"description"`
 
 	// Tools lists the tool names belonging to this tag. A tool can
 	// appear in multiple tags; it loads when any of its tags is active.
+	// For compiled-in tags, empty keeps the built-in tool membership.
 	Tools []string `yaml:"tools"`
 
 	// AlwaysActive tags cannot be deactivated. They are included in
@@ -929,11 +935,11 @@ type CapabilityTagConfig struct {
 // consistent. It ensures a description is present and the tools list is
 // non-empty. Tag names are validated by the caller since they are map
 // keys in the parent Config struct.
-func (c CapabilityTagConfig) Validate(tagName string) error {
-	if strings.TrimSpace(c.Description) == "" {
+func (c CapabilityTagConfig) Validate(tagName string, builtin bool) error {
+	if strings.TrimSpace(c.Description) == "" && !builtin {
 		return fmt.Errorf("capability_tags.%s.description must not be empty", tagName)
 	}
-	if len(c.Tools) == 0 {
+	if len(c.Tools) == 0 && !builtin {
 		return fmt.Errorf("capability_tags.%s.tools must not be empty", tagName)
 	}
 	return nil
@@ -1154,6 +1160,27 @@ type MCPServerConfig struct {
 	// ExcludeTools is an optional blocklist of MCP tool names to skip.
 	// Cannot be used together with IncludeTools.
 	ExcludeTools []string `yaml:"exclude_tools"`
+
+	// DefaultTags lists tool tags/toolsets assigned to bridged MCP tools
+	// from this server unless a per-tool override replaces them.
+	DefaultTags []string `yaml:"default_tags"`
+
+	// Tools contains optional metadata overrides keyed by the raw MCP tool
+	// name reported by the server.
+	Tools map[string]MCPToolConfig `yaml:"tools"`
+}
+
+// MCPToolConfig configures operator-supplied metadata for a bridged MCP tool.
+type MCPToolConfig struct {
+	// Enabled controls whether the tool is bridged. Nil keeps the default
+	// include/exclude behavior.
+	Enabled *bool `yaml:"enabled"`
+
+	// Tags replaces the server default tags for this tool when non-empty.
+	Tags []string `yaml:"tags"`
+
+	// Description overrides the description reported by the MCP server.
+	Description string `yaml:"description"`
 }
 
 // SignalConfig configures the native Signal message bridge using
@@ -1845,14 +1872,34 @@ func (c *Config) Validate() error {
 	if err := c.validateMCP(); err != nil {
 		return err
 	}
+	allowedTags := make(map[string]bool)
+	for tagName := range toolcatalog.BuiltinTagSpecs() {
+		allowedTags[tagName] = true
+	}
+	for _, srv := range c.MCP.Servers {
+		for _, tag := range srv.DefaultTags {
+			if trimmed := strings.TrimSpace(tag); trimmed != "" {
+				allowedTags[trimmed] = true
+			}
+		}
+		for _, toolCfg := range srv.Tools {
+			for _, tag := range toolCfg.Tags {
+				if trimmed := strings.TrimSpace(tag); trimmed != "" {
+					allowedTags[trimmed] = true
+				}
+			}
+		}
+	}
 	for tagName, tagCfg := range c.CapabilityTags {
-		if err := tagCfg.Validate(tagName); err != nil {
+		builtin := toolcatalog.HasBuiltinTag(tagName) || allowedTags[tagName]
+		if err := tagCfg.Validate(tagName, builtin); err != nil {
 			return err
 		}
+		allowedTags[tagName] = true
 	}
 	for channel, tagNames := range c.ChannelTags {
 		for _, tagName := range tagNames {
-			if _, ok := c.CapabilityTags[tagName]; !ok {
+			if !allowedTags[tagName] {
 				return fmt.Errorf("channel_tags.%s references undefined capability tag %q", channel, tagName)
 			}
 		}

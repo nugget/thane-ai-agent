@@ -290,18 +290,17 @@ talents_dir: ./talents
 #       budget exhaustion. Zero keeps the builtin default (25000).
 #       max_tokens: 25000
 #
-# (optional) CapabilityTags defines named groups of tools and talents that
+# (optional) CapabilityTags overlays the compiled-in tool/tag baseline with
 # capability_tags:
 #   ha:
 #     Description is a human-readable summary shown in the capability
-#     manifest so the agent knows what activating this tag provides.
+#     manifest so the agent knows what activating this tag provides. For
+#     compiled-in tags, empty keeps the built-in description.
 #     description: Home Assistant tools and sensors
 #     Tools lists the tool names belonging to this tag. A tool can
 #     appear in multiple tags; it loads when any of its tags is active.
-#     tools:
-#       - get_ha_states
-#       - call_ha_service
-#       - get_ha_history
+#     For compiled-in tags, empty keeps the built-in tool membership.
+#     tools: []
 #     AlwaysActive tags cannot be deactivated. They are included in
 #     every session regardless of channel or agent requests.
 #     always_active: true
@@ -344,6 +343,12 @@ talents_dir: ./talents
 #       ExcludeTools is an optional blocklist of MCP tool names to skip.
 #       Cannot be used together with IncludeTools.
 #       exclude_tools: []
+#       DefaultTags lists tool tags/toolsets assigned to bridged MCP tools
+#       from this server unless a per-tool override replaces them.
+#       default_tags: []
+#       Tools contains optional metadata overrides keyed by the raw MCP tool
+#       name reported by the server.
+#       tools: {}
 #
 # (optional) MQTT configures MQTT publishing for Home Assistant device discovery
 # mqtt:

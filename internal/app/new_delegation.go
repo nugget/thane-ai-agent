@@ -19,6 +19,7 @@ import (
 func (a *App) initDelegation(s *newState) error {
 	cfg := a.cfg
 	logger := a.logger
+	resolvedCapTags := resolveCapabilityTags(a.loop.Tools(), cfg.CapabilityTags)
 
 	// --- Delegation ---
 	// Register thane_delegate tool AFTER all other tools so the delegate
@@ -53,7 +54,7 @@ func (a *App) initDelegation(s *newState) error {
 	delegateExec.ConfigureLoopCompletionSink(completionDispatcher.Deliver)
 	delegateExec.ConfigureSessionLifecycle(a.archiveAdapter, a.mem)
 	var alwaysActiveTags []string
-	for tag, tagCfg := range cfg.CapabilityTags {
+	for tag, tagCfg := range resolvedCapTags {
 		if tagCfg.AlwaysActive {
 			alwaysActiveTags = append(alwaysActiveTags, tag)
 		}
@@ -129,10 +130,11 @@ func (a *App) initDelegation(s *newState) error {
 	}
 
 	// --- Capability tags ---
-	// Tag-driven tool and talent filtering. When configured, tools and
-	// talents are grouped into named capabilities that can be activated
+	// Tag-driven tool and talent filtering. Tools contribute a compiled-in
+	// baseline of default tags/toolsets, then config overlays descriptions,
+	// membership overrides, and custom tags. The final tags can be activated
 	// per-conversation via activate_capability/deactivate_capability tools.
-	if len(cfg.CapabilityTags) > 0 {
+	if len(resolvedCapTags) > 0 {
 		// parsedTalents was loaded above; copy the slice header so the
 		// manifest prepend below doesn't modify the outer variable.
 		capTalents := append([]talents.Talent(nil), s.parsedTalents...)
@@ -142,7 +144,7 @@ func (a *App) initDelegation(s *newState) error {
 		// (e.g., shell_exec disabled). Non-fatal: skip the missing tool.
 		// Tools in s.deferredTools are registered by StartWorkers and are
 		// expected to be absent during New().
-		for tag, tagCfg := range cfg.CapabilityTags {
+		for tag, tagCfg := range resolvedCapTags {
 			for _, toolName := range tagCfg.Tools {
 				if a.loop.Tools().Get(toolName) == nil && !s.deferredTools[toolName] {
 					logger.Warn("capability tag references unregistered tool",
@@ -164,7 +166,7 @@ func (a *App) initDelegation(s *newState) error {
 		}
 
 		tagCtxAssembler := agent.NewTagContextAssembler(agent.TagContextAssemblerConfig{
-			CapTags:  cfg.CapabilityTags,
+			CapTags:  resolvedCapTags,
 			KBDir:    kbDir,
 			HAInject: a.loop.HAInject(),
 			Logger:   logger.With("component", "tag_context"),
@@ -181,10 +183,10 @@ func (a *App) initDelegation(s *newState) error {
 		kbCounts := tagCtxAssembler.KBArticleTags()
 		liveProviders := a.loop.TagContextProviders()
 
-		tagIndex := make(map[string][]string, len(cfg.CapabilityTags))
-		descriptions := make(map[string]string, len(cfg.CapabilityTags))
-		alwaysActiveMap := make(map[string]bool, len(cfg.CapabilityTags))
-		for tag, tagCfg := range cfg.CapabilityTags {
+		tagIndex := make(map[string][]string, len(resolvedCapTags))
+		descriptions := make(map[string]string, len(resolvedCapTags))
+		alwaysActiveMap := make(map[string]bool, len(resolvedCapTags))
+		for tag, tagCfg := range resolvedCapTags {
 			tagIndex[tag] = tagCfg.Tools
 			descriptions[tag] = tagCfg.Description
 			alwaysActiveMap[tag] = tagCfg.AlwaysActive
@@ -206,8 +208,8 @@ func (a *App) initDelegation(s *newState) error {
 		// Discover ad-hoc tags from KB articles and talents that aren't
 		// in the config. These can be activated at runtime to load their
 		// tagged content without requiring config changes.
-		configuredTags := make(map[string]bool, len(cfg.CapabilityTags))
-		for tag := range cfg.CapabilityTags {
+		configuredTags := make(map[string]bool, len(resolvedCapTags))
+		for tag := range resolvedCapTags {
 			configuredTags[tag] = true
 		}
 		adHocTags := make(map[string]bool)
@@ -235,7 +237,7 @@ func (a *App) initDelegation(s *newState) error {
 			capTalents = append([]talents.Talent{*manifestTalent}, capTalents...)
 		}
 
-		a.loop.SetCapabilityTags(cfg.CapabilityTags, capTalents)
+		a.loop.SetCapabilityTags(resolvedCapTags, capTalents)
 		a.loop.Tools().SetCapabilityTools(a.loop, manifest)
 		a.loop.SetTagContextAssembler(tagCtxAssembler)
 		a.loop.SetCapabilityTagStore(agent.NewOpstateCapabilityTagStore(a.opStore))
@@ -272,7 +274,7 @@ func (a *App) initDelegation(s *newState) error {
 			activeTagNames = append(activeTagNames, tag)
 		}
 		logger.Info("capability tags enabled",
-			"tags", len(cfg.CapabilityTags),
+			"tags", len(resolvedCapTags),
 			"always_active", activeTagNames,
 			"talents", len(s.parsedTalents),
 			"kb_tagged_articles", kbCounts,
