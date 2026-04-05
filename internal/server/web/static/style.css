@@ -259,11 +259,15 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
 
 /* === Detail Panel (right) === */
 .detail-panel {
-  width: 280px;
+  width: clamp(18rem, 31vw, 38rem);
   flex-shrink: 0;
+  max-width: min(56rem, 62vw);
   background: var(--bg-secondary);
   overflow-y: auto;
-  min-width: 200px;
+  min-width: 16rem;
+  container-type: inline-size;
+  container-name: inspector;
+  scrollbar-gutter: stable;
 }
 
 .detail-placeholder {
@@ -278,7 +282,7 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
 .detail-placeholder[hidden] { display: none; }
 
 .detail-content {
-  padding: 0.75rem;
+  padding: clamp(0.65rem, 1.6vw, 0.95rem);
   min-width: 0;
   overflow: hidden;
 }
@@ -388,13 +392,13 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
   background: var(--bg-secondary);
   border: 1px solid var(--border);
   border-radius: 6px;
-  padding: 0.6rem 0.75rem;
+  padding: clamp(0.55rem, 1.25vw, 0.85rem);
   margin-bottom: 0.75rem;
 }
 
 .detail-entity {
   display: grid;
-  gap: 0.75rem;
+  gap: clamp(0.55rem, 1.2vw, 0.85rem);
 }
 
 .detail-entity .detail-card {
@@ -415,11 +419,14 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
   text-transform: uppercase;
   letter-spacing: 0.06em;
   color: var(--text-secondary);
+  text-wrap: balance;
 }
 
 .schema-card__meta {
   color: var(--text-muted);
   font-size: 0.68rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .schema-card__body {
@@ -436,6 +443,7 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
   align-items: flex-start;
   justify-content: space-between;
   gap: 0.75rem;
+  flex-wrap: wrap;
 }
 
 .schema-hero__copy {
@@ -456,6 +464,7 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
   color: var(--text-secondary);
   font-size: 0.76rem;
   line-height: 1.45;
+  text-wrap: pretty;
 }
 
 .schema-subtitle strong {
@@ -484,7 +493,7 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
 
 .schema-row {
   display: grid;
-  grid-template-columns: minmax(6.5rem, 7.75rem) minmax(0, 1fr);
+  grid-template-columns: minmax(5.5rem, 8rem) minmax(0, 1fr);
   gap: 0.6rem;
   align-items: start;
 }
@@ -582,6 +591,7 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
   font-size: 0.82rem;
   font-weight: 600;
   line-height: 1.3;
+  text-wrap: balance;
 }
 
 .conversation-summary__badge {
@@ -639,12 +649,13 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
   color: var(--text-primary);
   font-size: 0.74rem;
   line-height: 1.5;
+  text-wrap: pretty;
 }
 
 .conversation-summary__facts {
   display: grid;
   gap: 0.34rem;
-  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
 }
 
 .conversation-summary__fact {
@@ -734,6 +745,7 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
   font-size: 1rem;
   font-weight: 600;
   color: var(--accent);
+  text-wrap: balance;
 }
 
 .state-badge {
@@ -801,7 +813,7 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
 /* === Metrics === */
 .detail-metrics {
   display: grid;
-  grid-template-columns: auto 1fr;
+  grid-template-columns: minmax(5rem, auto) minmax(0, 1fr);
   gap: 0.25rem 0.75rem;
   font-size: 0.8rem;
   margin-bottom: 0.75rem;
@@ -824,7 +836,7 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
 .detail-aggregates {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.15rem;
+  gap: 0.2rem 0.35rem;
   font-size: 0.7rem;
   font-family: var(--font-mono);
   color: var(--text-secondary);
@@ -1728,7 +1740,7 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
 
 .system-summary-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr));
   gap: 0.5rem;
 }
 
@@ -1757,9 +1769,7 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
   color: var(--text-primary);
   font-size: 0.76rem;
   font-family: var(--font-mono);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .system-services {
@@ -2521,6 +2531,97 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
   }
 }
 
+@container inspector (max-width: 34rem) {
+  .detail-content {
+    padding: 0.65rem;
+  }
+
+  .detail-card {
+    padding: 0.58rem 0.65rem;
+  }
+
+  .schema-card__header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 0.25rem;
+  }
+
+  .schema-hero {
+    flex-direction: column;
+    gap: 0.55rem;
+  }
+
+  .schema-badge-list {
+    justify-content: flex-start;
+  }
+
+  .schema-row {
+    grid-template-columns: 1fr;
+    gap: 0.18rem;
+  }
+
+  .schema-row__label {
+    font-size: 0.66rem;
+  }
+
+  .conversation-summary__summary {
+    grid-template-columns: 1fr;
+    gap: 0.35rem;
+  }
+
+  .conversation-summary__chevron {
+    justify-self: flex-start;
+  }
+
+  .conversation-summary__facts,
+  .system-summary-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .detail-metrics,
+  .request-meta-bar {
+    grid-template-columns: 1fr;
+  }
+
+  .request-meta-bar {
+    display: grid;
+    gap: 0.35rem;
+  }
+
+  .waterfall__bar,
+  .request-content__header {
+    flex-wrap: wrap;
+  }
+
+  .waterfall__call-id {
+    width: 100%;
+  }
+}
+
+@container inspector (min-width: 44rem) {
+  .schema-row {
+    grid-template-columns: 8.75rem minmax(0, 1fr);
+  }
+
+  .schema-card__body {
+    gap: 0.55rem;
+  }
+
+  .conversation-summary__facts {
+    grid-template-columns: repeat(auto-fit, minmax(12.5rem, 1fr));
+  }
+
+  .system-summary-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@container inspector (min-width: 54rem) {
+  .system-summary-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+
 /* Completed delegate: fade to translucent but stay clickable */
 .loop-node--fading .node-inner {
   opacity: 0.35;
@@ -2795,12 +2896,14 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
   }
 
   .canvas-panel {
-    min-height: 200px;
+    min-height: 38svh;
   }
 
   .detail-panel {
-    width: 100%;
+    width: 100% !important;
     min-width: 0;
-    max-height: 250px;
+    max-width: none;
+    min-height: 16rem;
+    max-height: min(54svh, 34rem);
   }
 }
