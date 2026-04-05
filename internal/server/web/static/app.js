@@ -1043,6 +1043,49 @@ function renderLoopCurrentTurnCard(loop, entity, conversationSummary) {
   ]);
   if (turnMetrics) card.body.appendChild(turnMetrics);
 
+  const brief = document.createElement('div');
+  brief.className = 'loop-turn-brief';
+  const briefSummary = document.createElement('div');
+  briefSummary.className = 'loop-turn-brief__summary';
+  if (isProcessing) {
+    briefSummary.textContent = entity.activeLiveTools.length > 0
+      ? `The loop is actively working this turn, with ${entity.activeLiveTools.length} tool${entity.activeLiveTools.length === 1 ? '' : 's'} in flight and fresh telemetry arriving as the model progresses.`
+      : 'The loop is actively working this turn. Watch the live telemetry below for context growth, tool activity, and model progress.';
+  } else if (entity.latestSnapshot) {
+    briefSummary.textContent = entity.lastError
+      ? 'The latest recorded turn ended with an error. The snapshot below shows the last retained request, model, timing, and tool activity for triage.'
+      : 'The loop is currently idle. The latest recorded turn below is the best executive summary of recent behavior and near-term future.';
+  } else {
+    briefSummary.textContent = 'No retained turn snapshot is available yet. This view will fill in once the loop completes its first recorded iteration.';
+  }
+  brief.appendChild(briefSummary);
+
+  const briefGrid = document.createElement('div');
+  briefGrid.className = 'loop-turn-brief__grid';
+  const briefFacts = [
+    { label: 'Thread', value: threadLabel },
+    { label: 'Request', value: entity.latestRequestID ? shortID(entity.latestRequestID) : 'pending' },
+    { label: 'Model', value: latestModelLabel },
+    { label: 'State', value: formatSchemaToken(entity.stateLabel) },
+    { label: 'Context', value: contextLabel || 'pending' },
+    { label: 'Wake', value: lastWakeAgo || 'pending' },
+  ];
+  for (const item of briefFacts) {
+    const cell = document.createElement('div');
+    cell.className = 'loop-turn-brief__metric';
+    const value = document.createElement('div');
+    value.className = 'loop-turn-brief__metric-value';
+    value.textContent = item.value;
+    cell.appendChild(value);
+    const label = document.createElement('div');
+    label.className = 'loop-turn-brief__metric-label';
+    label.textContent = item.label;
+    cell.appendChild(label);
+    briefGrid.appendChild(cell);
+  }
+  brief.appendChild(briefGrid);
+  card.body.appendChild(brief);
+
   if (entity.latestRequestID) {
     const requestWrap = document.createElement('div');
     requestWrap.className = 'schema-subsection';
@@ -3678,6 +3721,43 @@ function renderLoopEntityDetail(loop) {
   aggregates.className = 'detail-aggregates';
   renderAggregates(loop, aggregates);
   activity.body.appendChild(aggregates);
+
+  if (entity.latestSnapshot) {
+    const latestWrap = document.createElement('div');
+    latestWrap.className = 'loop-turn-brief';
+    const latestSummary = document.createElement('div');
+    latestSummary.className = 'loop-turn-brief__summary';
+    latestSummary.textContent = entity.lastError
+      ? 'Most recent recorded turn ended with an error. Use the request chip below to inspect retained prompt and tool-call detail.'
+      : 'Most recent recorded turn gives the best quick read on how this loop has been behaving recently.';
+    latestWrap.appendChild(latestSummary);
+
+    const latestGrid = document.createElement('div');
+    latestGrid.className = 'loop-turn-brief__grid';
+    const latestFacts = [
+      { label: 'Iteration', value: '#' + formatNumber(entity.latestSnapshot.number || entity.iterations || 0) },
+      { label: 'Request', value: entity.latestSnapshot.request_id ? shortID(entity.latestSnapshot.request_id) : 'pending' },
+      { label: 'Model', value: entity.latestSnapshot.model ? shortModelName(entity.latestSnapshot.model) : latestModelLabel },
+      { label: 'Duration', value: entity.latestSnapshot.elapsed_ms ? formatDuration(entity.latestSnapshot.elapsed_ms) : 'pending' },
+      { label: 'Input', value: entity.latestSnapshot.input_tokens ? formatTokens(entity.latestSnapshot.input_tokens) : '0' },
+      { label: 'Output', value: entity.latestSnapshot.output_tokens ? formatTokens(entity.latestSnapshot.output_tokens) : '0' },
+    ];
+    for (const item of latestFacts) {
+      const cell = document.createElement('div');
+      cell.className = 'loop-turn-brief__metric';
+      const value = document.createElement('div');
+      value.className = 'loop-turn-brief__metric-value';
+      value.textContent = item.value;
+      cell.appendChild(value);
+      const label = document.createElement('div');
+      label.className = 'loop-turn-brief__metric-label';
+      label.textContent = item.label;
+      cell.appendChild(label);
+      latestGrid.appendChild(cell);
+    }
+    latestWrap.appendChild(latestGrid);
+    activity.body.appendChild(latestWrap);
+  }
 
   const timeline = document.createElement('div');
   timeline.className = 'iter-timeline';

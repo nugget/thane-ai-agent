@@ -27,6 +27,11 @@
       min-height: 0;
       position: relative;
     }
+    .popup-logs[hidden],
+    .popup-request[hidden],
+    .popup-resize[hidden] {
+      display: none !important;
+    }
     .popup-logs .log-scroll {
       flex: 1;
       overflow-y: auto;
@@ -51,6 +56,7 @@
     .popup-request {
       flex: 1;
       min-height: 0;
+      min-width: 0;
       display: flex;
       flex-direction: column;
       gap: 0.9rem;
@@ -148,6 +154,10 @@
     .forensics-card__body {
       padding: 0.9rem;
     }
+    .forensics-card__body > .detail-ids,
+    .forensics-card__body > .detail-aggregates {
+      margin-bottom: 0.65rem;
+    }
     .forensics-empty {
       display: flex;
       align-items: center;
@@ -166,6 +176,11 @@
     .forensics-content[hidden],
     .forensics-waterfall[hidden] {
       display: none;
+    }
+    .forensics-content,
+    .forensics-waterfall {
+      width: 100%;
+      min-width: 0;
     }
     .popup-resize {
       width: 4px;

@@ -781,6 +781,53 @@ function buildLogDetail(td, entry) {
 
 // buildLiveCard creates the green-bordered card for a currently-running
 // iteration. Caller passes the loop data object.
+function makeIterationFact(label, value) {
+  if (value === null || value === undefined || value === '') return null;
+  const cell = document.createElement('div');
+  cell.className = 'iter-card__fact';
+
+  const valueEl = document.createElement('div');
+  valueEl.className = 'iter-card__fact-value';
+  valueEl.textContent = String(value);
+  cell.appendChild(valueEl);
+
+  const labelEl = document.createElement('div');
+  labelEl.className = 'iter-card__fact-label';
+  labelEl.textContent = String(label);
+  cell.appendChild(labelEl);
+
+  return cell;
+}
+
+function makeIterationFacts(items) {
+  const valid = (items || []).filter((item) => item && item.value !== null && item.value !== undefined && item.value !== '');
+  if (valid.length === 0) return null;
+  const grid = document.createElement('div');
+  grid.className = 'iter-card__facts';
+  for (const item of valid) {
+    const fact = makeIterationFact(item.label, item.value);
+    if (fact) grid.appendChild(fact);
+  }
+  return grid;
+}
+
+function buildPastIterationSummary(snap, handlerOnly) {
+  const bits = [];
+  if (snap.error) {
+    bits.push('Turn failed' + (snap.elapsed_ms ? ' after ' + formatDuration(snap.elapsed_ms) : ''));
+  } else {
+    bits.push('Turn completed' + (snap.elapsed_ms ? ' in ' + formatDuration(snap.elapsed_ms) : ''));
+  }
+  if (snap.model) bits.push('on ' + shortModelName(snap.model));
+  if (!handlerOnly && (snap.input_tokens || snap.output_tokens)) {
+    bits.push(formatTokens(snap.input_tokens || 0) + ' in / ' + formatTokens(snap.output_tokens || 0) + ' out');
+  }
+  if (snap.tools_used && Object.keys(snap.tools_used).length > 0) {
+    bits.push(Object.keys(snap.tools_used).length + ' tool' + (Object.keys(snap.tools_used).length === 1 ? '' : 's'));
+  }
+  return bits.join(' · ');
+}
+
 function buildLiveCard(loop) {
   const card = document.createElement('div');
   card.className = 'iter-card iter-card--live' + (loop._supervisor ? ' iter-card--supervisor' : '');
@@ -813,6 +860,17 @@ function buildLiveCard(loop) {
   header.appendChild(model);
   card.appendChild(header);
 
+  const ctx = loop._llmContext;
+  const summary = document.createElement('div');
+  summary.className = 'iter-card__summary-line';
+  const summaryBits = [];
+  if (loop._liveModel) summaryBits.push('Actively sampling on ' + shortModelName(loop._liveModel));
+  else summaryBits.push('Current turn is live');
+  if (ctx && ctx.intent) summaryBits.push(ctx.intent.replace(/_/g, ' '));
+  if (ctx && ctx.reasoning) summaryBits.push(ctx.reasoning);
+  summary.textContent = summaryBits.join(' · ');
+  card.appendChild(summary);
+
   // Context meter (if we have context info).
   if (loop.context_window && loop.last_input_tokens) {
     const pct = Math.min(100, (loop.last_input_tokens / loop.context_window) * 100);
@@ -830,7 +888,6 @@ function buildLiveCard(loop) {
   }
 
   // LLM call context line (from loop_llm_start enrichment).
-  const ctx = loop._llmContext;
   if (ctx && (ctx.est_tokens || ctx.messages)) {
     const info = document.createElement('div');
     info.className = 'iter-card__llm-context';
@@ -844,6 +901,16 @@ function buildLiveCard(loop) {
     if (ctx.reasoning) info.title = ctx.reasoning;
     card.appendChild(info);
   }
+
+  const liveFacts = makeIterationFacts([
+    { label: 'Iteration', value: '#' + ((loop.iterations || 0) + 1) },
+    { label: 'Model', value: loop._liveModel ? shortModelName(loop._liveModel) : '' },
+    { label: 'Messages', value: ctx && ctx.messages ? ctx.messages : '' },
+    { label: 'Est tokens', value: ctx && ctx.est_tokens ? formatTokens(ctx.est_tokens) : '' },
+    { label: 'Tools', value: ctx && ctx.tools ? ctx.tools : '' },
+    { label: 'Complexity', value: ctx && ctx.complexity ? ctx.complexity : '' },
+  ]);
+  if (liveFacts) card.appendChild(liveFacts);
 
   // Live tool list.
   const tools = loop._liveTools || [];
@@ -932,6 +999,24 @@ function buildPastCard(snap, handlerOnly, idx, startExpanded) {
   const body = document.createElement('div');
   body.className = 'iter-card__body';
   body.hidden = !startExpanded;
+
+  const summary = buildPastIterationSummary(snap, handlerOnly);
+  if (summary) {
+    const summaryEl = document.createElement('div');
+    summaryEl.className = 'iter-card__summary-line';
+    summaryEl.textContent = summary;
+    body.appendChild(summaryEl);
+  }
+
+  const facts = makeIterationFacts([
+    { label: 'Request', value: snap.request_id ? shortID(snap.request_id) : '' },
+    { label: 'Model', value: snap.model ? shortModelName(snap.model) : (handlerOnly ? 'handler' : '') },
+    { label: 'Duration', value: snap.elapsed_ms ? formatDuration(snap.elapsed_ms) : '' },
+    { label: 'Context', value: snap.context_window ? formatNumber(snap.context_window) : '' },
+    { label: 'Tools', value: snap.tools_used ? Object.keys(snap.tools_used).length : '' },
+    { label: 'When', value: snap.completed_at ? timeAgo(new Date(snap.completed_at)) : '' },
+  ]);
+  if (facts) body.appendChild(facts);
 
   // Token info (skip for handler-only).
   if (!handlerOnly && (snap.input_tokens || snap.output_tokens)) {
