@@ -1698,11 +1698,11 @@ function applySchemaCardPreset(card, mode) {
   const cardKey = card.dataset.cardKey || '';
   setSchemaCardLayout(entityKind, cardKey, { mode, height: 0 });
   detailInstantLayoutUntil = Date.now() + 250;
-  bumpDetailInteractionHold(450);
+  bumpDetailInteractionHold(180);
   if (detailPanel) detailPanel.classList.add('detail-panel--instant');
   syncSchemaCardLayout(card, { mode, height: 0 });
   requestAnimationFrame(() => {
-    detailPanel?.classList.remove('detail-panel--instant');
+    renderDetail({ force: true, instantLayout: true });
   });
 }
 
