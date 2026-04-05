@@ -79,14 +79,21 @@ func (a *App) initLogging(augmentedDirs []string) error {
 	)
 	a.logger = logger
 
-	// Content retention — create after the final logger so warnings
-	// go through the configured handler.
+	// Live request inspection is always available from a bounded in-memory
+	// buffer so recent turns can be inspected even when archival storage
+	// is disabled.
+	a.liveRequestStore = logging.NewLiveRequestStore(logging.DefaultLiveRequestStoreSize, cfg.Logging.ContentMaxLength())
+	a.requestRecorder = a.liveRequestStore.WriteRequest
+
+	// Persistent content retention — create after the final logger so
+	// warnings go through the configured handler.
 	if cfg.Logging.RetainContent && a.indexDB != nil {
 		cw, cwErr := logging.NewContentWriter(a.indexDB, cfg.Logging.ContentMaxLength(), logger)
 		if cwErr != nil {
 			logger.Warn("failed to create content writer, content retention disabled", "error", cwErr)
 		} else {
 			a.contentWriter = cw
+			a.requestRecorder = logging.CombineRequestRecorders(a.liveRequestStore.WriteRequest, cw.WriteRequest)
 			a.onCloseErr("content-writer", cw.Close)
 			logger.Info("content retention enabled",
 				"max_content_length", cfg.Logging.ContentMaxLength(),

@@ -49,9 +49,9 @@ type LogQuerier interface {
 	Query(params logging.QueryParams) ([]logging.LogEntry, error)
 }
 
-// ContentQuerier fetches retained request content (system prompts,
-// tool call details, message bodies) from the log index. Nil disables
-// the request detail API endpoint.
+// ContentQuerier fetches live or retained request content (system
+// prompts, tool call details, message bodies). Nil disables the
+// request detail API endpoint.
 type ContentQuerier interface {
 	QueryRequestDetail(requestID string) (*logging.RequestDetail, error)
 }

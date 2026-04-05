@@ -129,10 +129,12 @@ type App struct {
 	mcpClients []*mcp.Client
 
 	// Logging infrastructure
-	indexDB       *sql.DB
-	indexHandler  *logging.IndexHandler
-	contentWriter *logging.ContentWriter
-	rotator       *logging.Rotator
+	indexDB          *sql.DB
+	indexHandler     *logging.IndexHandler
+	liveRequestStore *logging.LiveRequestStore
+	requestRecorder  logging.RequestRecordFunc
+	contentWriter    *logging.ContentWriter
+	rotator          *logging.Rotator
 
 	// Attachment and vision
 	attachmentStore *attachments.Store

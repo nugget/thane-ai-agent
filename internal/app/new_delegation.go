@@ -39,8 +39,8 @@ func (a *App) initDelegation(s *newState) error {
 		delegateExec.ApplyProfileOverrides(overrides)
 	}
 	delegateExec.SetTimezone(cfg.Timezone)
-	if a.contentWriter != nil {
-		delegateExec.SetContentWriter(a.contentWriter)
+	if a.requestRecorder != nil {
+		delegateExec.SetRequestRecorder(a.requestRecorder)
 	}
 	delegateExec.SetArchiver(a.archiveStore)
 	delegateExec.SetUsageRecorder(a.usageStore, cfg.Pricing, a.modelCatalog)

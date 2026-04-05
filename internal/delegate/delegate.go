@@ -95,7 +95,7 @@ type Executor struct {
 	forgeContext     string
 	tagCtxFunc       tagContextFunc // nil-safe — replaces forgeContext when set
 	eventBus         *events.Bus
-	contentWriter    *logging.ContentWriter
+	requestRecorder  logging.RequestRecordFunc
 	loopRunner       looppkg.Runner
 	loopRegistry     *looppkg.Registry
 	completionSink   looppkg.CompletionSink
@@ -227,9 +227,10 @@ func (e *Executor) SetTagContextFunc(fn tagContextFunc) {
 	e.tagCtxFunc = fn
 }
 
-// SetContentWriter configures content retention for delegate executions.
-func (e *Executor) SetContentWriter(w *logging.ContentWriter) {
-	e.contentWriter = w
+// SetRequestRecorder configures request detail recording for delegate
+// executions.
+func (e *Executor) SetRequestRecorder(recorder logging.RequestRecordFunc) {
+	e.requestRecorder = recorder
 }
 
 // ConfigureLoopExecution configures loop-backed delegate execution. When both
@@ -637,11 +638,11 @@ func (e *Executor) executeLegacy(ctx context.Context, task, profileName, guidanc
 				// partial iterate.Result comes from the engine's error path
 				// and lacks an ExhaustReason, but the delegate knows it's
 				// ExhaustWallClock.
-				if e.contentWriter != nil {
+				if e.requestRecorder != nil {
 					go func() {
 						retainCtx, retainCancel := context.WithTimeout(context.Background(), 5*time.Second)
 						defer retainCancel()
-						e.contentWriter.WriteRequest(retainCtx, logging.RequestContent{
+						e.requestRecorder(retainCtx, logging.RequestContent{
 							RequestID:        did,
 							SystemPrompt:     messages[0].Content,
 							UserContent:      userMsg.String(),
@@ -1205,13 +1206,12 @@ type completionRecord struct {
 	iterations       []iterate.IterationRecord
 }
 
-// retainContent persists request-level content for a delegate execution.
-// No-op when the content writer is nil (content retention disabled).
+// retainContent captures request-level content for a delegate execution.
 func (e *Executor) retainContent(ctx context.Context, delegateID, systemPrompt, userContent string, result *iterate.Result) {
-	if e.contentWriter == nil || result == nil {
+	if e.requestRecorder == nil || result == nil {
 		return
 	}
-	e.contentWriter.WriteRequest(ctx, logging.RequestContent{
+	e.requestRecorder(ctx, logging.RequestContent{
 		RequestID:        delegateID,
 		SystemPrompt:     systemPrompt,
 		UserContent:      userContent,

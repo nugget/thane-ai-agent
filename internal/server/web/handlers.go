@@ -118,9 +118,9 @@ func (s *WebServer) handleLoopLogs(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleRequestDetail returns the full retained content for a single
-// request, including system prompt, user/assistant messages, tool call
-// arguments and results, and token metadata.
+// handleRequestDetail returns the full live or retained content for a
+// single request, including system prompt, user/assistant messages,
+// tool call arguments and results, and token metadata.
 func (s *WebServer) handleRequestDetail(w http.ResponseWriter, r *http.Request) {
 	requestID := r.PathValue("id")
 	if requestID == "_probe" {
@@ -130,7 +130,7 @@ func (s *WebServer) handleRequestDetail(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if s.contentQuerier == nil {
-		s.writeJSONError(w, "content retention not available", http.StatusServiceUnavailable)
+		s.writeJSONError(w, "request detail not available", http.StatusServiceUnavailable)
 		return
 	}
 

@@ -810,6 +810,26 @@ func (a *contentQueryAdapter) QueryRequestDetail(requestID string) (*logging.Req
 	return logging.QueryRequestDetail(a.db, requestID)
 }
 
+// fallbackContentQuerier checks the primary source first, then falls back
+// to a secondary querier when the primary has no matching request detail.
+type fallbackContentQuerier struct {
+	primary  web.ContentQuerier
+	fallback web.ContentQuerier
+}
+
+func (q *fallbackContentQuerier) QueryRequestDetail(requestID string) (*logging.RequestDetail, error) {
+	if q.primary != nil {
+		detail, err := q.primary.QueryRequestDetail(requestID)
+		if err != nil || detail != nil {
+			return detail, err
+		}
+	}
+	if q.fallback == nil {
+		return nil, nil
+	}
+	return q.fallback.QueryRequestDetail(requestID)
+}
+
 // systemStatusAdapter bridges [connwatch.Manager] and [buildinfo] to the
 // web package's [web.SystemStatusProvider] interface, keeping the web
 // package decoupled from connwatch and buildinfo.

@@ -552,13 +552,16 @@ func (a *App) initServers(s *newState) error {
 			SystemStatus: &systemStatusAdapter{connMgr: a.connMgr, modelRegistry: a.modelRegistry, router: a.rtr},
 			Logger:       logger,
 		}
+		if a.liveRequestStore != nil {
+			webCfg.ContentQuerier = a.liveRequestStore
+		}
 		if a.indexDB != nil {
 			webCfg.LogQuerier = &logQueryAdapter{db: a.indexDB}
-			// Content querier is only useful when content retention is
-			// enabled — without it every request detail lookup returns
-			// empty, making the inspectable chips misleading.
 			if cfg.Logging.RetainContent {
-				webCfg.ContentQuerier = &contentQueryAdapter{db: a.indexDB}
+				webCfg.ContentQuerier = &fallbackContentQuerier{
+					primary:  a.liveRequestStore,
+					fallback: &contentQueryAdapter{db: a.indexDB},
+				}
 			}
 		}
 		server.SetWebServer(web.NewWebServer(webCfg))

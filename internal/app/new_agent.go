@@ -98,8 +98,8 @@ func (a *App) initAgentLoop(s *newState) error {
 	loop.SetTimezone(cfg.Timezone)
 	loop.UseModelRegistry(a.modelRegistry)
 	loop.UseModelRuntime(a.modelRuntime)
-	if a.contentWriter != nil {
-		loop.SetContentWriter(a.contentWriter)
+	if a.requestRecorder != nil {
+		loop.SetRequestRecorder(a.requestRecorder)
 	}
 	if recoveryModel != "" {
 		loop.SetRecoveryModel(recoveryModel)

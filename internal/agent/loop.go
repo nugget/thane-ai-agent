@@ -218,7 +218,7 @@ type Loop struct {
 	archiver          SessionArchiver
 	extractor         *memory.Extractor
 	orchestratorTools []string                       // Restricted tool set for orchestrator mode (nil = all tools)
-	contentWriter     *logging.ContentWriter         // nil = content retention disabled
+	requestRecorder   logging.RequestRecordFunc      // nil = request detail inspection disabled
 	usageStore        *usage.Store                   // nil = no usage recording
 	pricing           map[string]config.PricingEntry // model→cost for usage recording
 	usageCatalog      *models.Catalog
@@ -385,11 +385,11 @@ func (l *Loop) SetRecoveryModel(model string) {
 	l.recoveryModel = model
 }
 
-// SetContentWriter configures the content retention writer. When set,
-// system prompts, tool call details, and request/response content are
-// persisted to the log index database after each request completes.
-func (l *Loop) SetContentWriter(w *logging.ContentWriter) {
-	l.contentWriter = w
+// SetRequestRecorder configures request detail recording. When set,
+// completed requests are captured for live inspection and optional
+// persistent retention.
+func (l *Loop) SetRequestRecorder(recorder logging.RequestRecordFunc) {
+	l.requestRecorder = recorder
 }
 
 // SetCapabilityTags configures tag-driven tool and talent filtering.
@@ -1830,14 +1830,13 @@ func (l *Loop) archiveIterations(log *slog.Logger, convID string, iterations []i
 	}
 }
 
-// retainContent persists request-level content (system prompt, tool call
-// details, messages) to the log index database. No-op when the content
-// writer is nil (content retention disabled).
+// retainContent captures request-level content (system prompt, tool call
+// details, messages) for live inspection and optional persistence.
 func (l *Loop) retainContent(ctx context.Context, requestID, systemPrompt, userMessage string, result *iterate.Result) {
-	if l.contentWriter == nil {
+	if l.requestRecorder == nil {
 		return
 	}
-	l.contentWriter.WriteRequest(ctx, logging.RequestContent{
+	l.requestRecorder(ctx, logging.RequestContent{
 		RequestID:        requestID,
 		SystemPrompt:     systemPrompt,
 		UserContent:      userMessage,
