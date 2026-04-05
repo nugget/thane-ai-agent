@@ -710,6 +710,45 @@ func TestExecute_GeneralProfileSelectsLocalModel(t *testing.T) {
 	}
 }
 
+func TestExecute_InheritedVirtualModelPolicyOverridesDelegateRouting(t *testing.T) {
+	rtr := router.NewRouter(slog.Default(), router.Config{
+		DefaultModel: "local-model",
+		LocalFirst:   true,
+		Models: []router.Model{
+			{Name: "local-model", Provider: "ollama", SupportsTools: true, Speed: 8, Quality: 5, CostTier: 0, ContextWindow: 8192},
+			{Name: "cloud-model", Provider: "anthropic", SupportsTools: true, Speed: 6, Quality: 10, CostTier: 3, ContextWindow: 8192},
+		},
+		MaxAuditLog: 10,
+	})
+
+	mock := &mockLLMClient{
+		responses: []*llm.ChatResponse{
+			{
+				Model:        "cloud-model",
+				Message:      llm.Message{Role: "assistant", Content: "Completed with frontier model."},
+				InputTokens:  100,
+				OutputTokens: 20,
+			},
+		},
+	}
+
+	exec := NewExecutor(slog.Default(), mock, rtr, newTestRegistry(), "local-model")
+	ctx := tools.WithHints(context.Background(), map[string]string{
+		router.DelegateHintKey(router.HintQualityFloor): "10",
+		router.DelegateHintKey(router.HintLocalOnly):    "false",
+		router.DelegateHintKey(router.HintPreferSpeed):  "false",
+		router.HintVirtualModel:                         "thane:premium",
+	})
+
+	result, err := exec.Execute(ctx, "Investigate this issue deeply", "general", "", nil, nil)
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if result.Model != "cloud-model" {
+		t.Fatalf("Model = %q, want cloud-model", result.Model)
+	}
+}
+
 func TestToolHandler_ExhaustedOutput(t *testing.T) {
 	// Always return tool calls to exhaust the iteration budget.
 	toolCallResp := &llm.ChatResponse{

@@ -34,7 +34,7 @@ func TestNormalizeModelSelection(t *testing.T) {
 			wantHintValue: "8",
 		},
 		{
-			name:          "command profile",
+			name:          "assist alias profile",
 			rawModel:      "thane:command",
 			hints:         map[string]string{"channel": "api"},
 			premiumFloor:  "8",
@@ -66,6 +66,17 @@ func TestNormalizeModelSelection(t *testing.T) {
 			}
 			if hints["channel"] != "api" {
 				t.Fatalf("channel hint = %q, want api", hints["channel"])
+			}
+			if tt.rawModel == "thane:premium" {
+				if hints[router.HintVirtualModel] != "thane:premium" {
+					t.Fatalf("virtual model hint = %q, want thane:premium", hints[router.HintVirtualModel])
+				}
+				if hints[router.DelegateHintKey(router.HintQualityFloor)] != "8" {
+					t.Fatalf("delegate quality floor = %q, want 8", hints[router.DelegateHintKey(router.HintQualityFloor)])
+				}
+				if hints[router.DelegateHintKey(router.HintLocalOnly)] != "false" {
+					t.Fatalf("delegate local_only = %q, want false", hints[router.DelegateHintKey(router.HintLocalOnly)])
+				}
 			}
 			if tt.wantHintKey != "" && hints[tt.wantHintKey] != tt.wantHintValue {
 				t.Fatalf("%s = %q, want %q", tt.wantHintKey, hints[tt.wantHintKey], tt.wantHintValue)

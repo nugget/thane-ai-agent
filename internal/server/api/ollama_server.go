@@ -152,8 +152,7 @@ func (s *OllamaServer) handleGenerate(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleTags handles GET /api/tags (list models).
-// Returns a list of available models in Ollama's expected format.
-// Currently returns "thane:latest" as the only available model.
+// Returns the exposed virtual execution policies in Ollama's expected format.
 func (s *OllamaServer) handleTags(w http.ResponseWriter, r *http.Request) {
 	handleOllamaTagsShared(w, r, s.logger)
 }

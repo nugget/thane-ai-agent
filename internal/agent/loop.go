@@ -1643,6 +1643,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 
 			toolCtx := tools.WithConversationID(iterCtx, convID)
 			toolCtx = tools.WithChannelBinding(toolCtx, channelBinding)
+			toolCtx = tools.WithHints(toolCtx, req.Hints)
 			if l.archiver != nil {
 				if sid := l.archiver.ActiveSessionID(convID); sid != "" {
 					toolCtx = tools.WithSessionID(toolCtx, sid)

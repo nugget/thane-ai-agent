@@ -772,6 +772,7 @@ type preparedExecution struct {
 	parentLoopID     string
 	channelBinding   *memory.ChannelBinding
 	profile          *Profile
+	routeHints       map[string]string
 	log              *slog.Logger
 	systemPrompt     string
 	userMessage      string
@@ -875,8 +876,8 @@ func (e *Executor) executeViaLoop(ctx context.Context, task, profileName, guidan
 }
 
 func (e *Executor) buildLoopLaunch(prep *preparedExecution, task, guidance string, operation looppkg.Operation, completion looppkg.Completion, completionConversationID string, completionChannel *looppkg.CompletionChannelTarget, loopName string, loopMaxDuration time.Duration, onProgress func(kind string, data map[string]any)) looppkg.Launch {
-	hints := make(map[string]string, len(prep.profile.RouterHints)+2)
-	for k, v := range prep.profile.RouterHints {
+	hints := make(map[string]string, len(prep.routeHints)+2)
+	for k, v := range prep.routeHints {
 		hints[k] = v
 	}
 	hints["source"] = "delegate"
@@ -917,6 +918,15 @@ func (e *Executor) buildLoopLaunch(prep *preparedExecution, task, guidance strin
 		CompletionChannel:        looppkg.CloneCompletionChannelTarget(completionChannel),
 		OnProgress:               onProgress,
 	}
+}
+
+func (e *Executor) effectiveDelegateRouterHints(ctx context.Context, profile *Profile) map[string]string {
+	base := profile.RouterHints
+	if base == nil {
+		base = map[string]string{}
+	}
+	_, merged := router.OverlayDelegateHints(base, tools.HintsFromContext(ctx))
+	return merged
 }
 
 func (e *Executor) stopLoopForCancellation(loopID string, prep *preparedExecution) bool {
@@ -1141,6 +1151,7 @@ func (e *Executor) prepareExecution(ctx context.Context, task, profileName, guid
 		parentLoopID:     tools.LoopIDFromContext(ctx),
 		channelBinding:   tools.ChannelBindingFromContext(ctx),
 		profile:          profile,
+		routeHints:       e.effectiveDelegateRouterHints(ctx, profile),
 		log:              log,
 		systemPrompt:     sb.String(),
 		userMessage:      userMsg.String(),
@@ -1158,13 +1169,20 @@ func (e *Executor) prepareExecution(ctx context.Context, task, profileName, guid
 // selectModel picks a model for the delegate via the router or falls back to the default.
 func (e *Executor) selectModel(ctx context.Context, task string, profile *Profile, toolCount int) string {
 	log := logging.Logger(ctx)
+	if explicitModel, _ := router.OverlayDelegateHints(nil, tools.HintsFromContext(ctx)); explicitModel != "" {
+		log.Debug("delegate model selected by inherited policy",
+			"model", explicitModel,
+		)
+		return explicitModel
+	}
+	hints := e.effectiveDelegateRouterHints(ctx, profile)
 	if e.router != nil {
 		model, _ := e.router.Route(ctx, router.Request{
 			Query:      task,
 			NeedsTools: toolCount > 0,
 			ToolCount:  toolCount,
 			Priority:   router.PriorityBackground,
-			Hints:      profile.RouterHints,
+			Hints:      hints,
 		})
 		if model != "" {
 			log.Debug("delegate model selected by router",

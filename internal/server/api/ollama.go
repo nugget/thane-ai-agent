@@ -21,6 +21,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/agent"
 	"github.com/nugget/thane-ai-agent/internal/logging"
 	"github.com/nugget/thane-ai-agent/internal/memory"
+	"github.com/nugget/thane-ai-agent/internal/router"
 )
 
 // OllamaChatRequest is the Ollama /api/chat request format.
@@ -496,8 +497,8 @@ func handleOllamaStreamingChatShared(w http.ResponseWriter, r *http.Request, req
 //
 // The response format matches Ollama's /api/tags endpoint specification.
 func handleOllamaTagsShared(w http.ResponseWriter, r *http.Request, logger *slog.Logger) {
-	// Expose routing profiles as Ollama "models".
-	// Callers select a profile via the model picker; Thane maps it to routing hints.
+	// Expose execution policies as Ollama "models". These entries describe how
+	// Thane should route the orchestrator loop and any delegate sub-loops.
 	now := time.Now().UTC().Format(time.RFC3339)
 	baseDetails := OllamaModelDetail{
 		Format:            "thane",
@@ -507,26 +508,15 @@ func handleOllamaTagsShared(w http.ResponseWriter, r *http.Request, logger *slog
 		QuantizationLevel: "native",
 	}
 
-	profiles := []struct {
-		name   string
-		digest string
-	}{
-		{"thane:latest", "daily conversation (default routing)"},
-		{"thane:trigger", "automation / machine fire-and-forget (local, minimal)"},
-		{"thane:command", "quick task execution (fast, device control)"},
-		{"thane:premium", "complex reasoning (best available model)"},
-		{"thane:ops", "operations / direct tool access (no delegation gating)"},
-		{"thane:peer", "agent-to-agent communication"},
-		{"thane:local", "local/free models only"},
-	}
+	profiles := router.ExposedVirtualModels(router.VirtualModelRuntime{})
 
 	var models []OllamaModel
 	for _, p := range profiles {
 		models = append(models, OllamaModel{
-			Name:       p.name,
-			Model:      p.name,
+			Name:       p.Name,
+			Model:      p.Name,
 			ModifiedAt: now,
-			Digest:     p.digest,
+			Digest:     p.Description,
 			Details:    baseDetails,
 		})
 	}
