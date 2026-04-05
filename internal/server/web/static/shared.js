@@ -978,7 +978,7 @@ function buildLiveCard(loop) {
     summaryBits.push(effectiveTools.length + ' tools in scope');
   }
   if (activeTags.length > 0) {
-    summaryBits.push(activeTags.length + ' capabilities active');
+    summaryBits.push(activeTags.length + ' tags loaded');
   }
   if (ctx && ctx.intent) summaryBits.push(ctx.intent.replace(/_/g, ' '));
   if (ctx && ctx.reasoning) summaryBits.push(ctx.reasoning);
@@ -1025,7 +1025,7 @@ function buildLiveCard(loop) {
     { label: 'Estimated context', value: ctx && ctx.est_tokens ? formatTokens(ctx.est_tokens) : '' },
     { label: 'Active tools', value: activeToolCalls > 0 ? formatNumber(activeToolCalls) : (ctx && ctx.tools ? formatNumber(ctx.tools) : '') },
     { label: 'Tool surface', value: effectiveTools.length > 0 ? formatNumber(effectiveTools.length) : '' },
-    { label: 'Capabilities', value: activeTags.length > 0 ? formatNumber(activeTags.length) : '' },
+    { label: 'Loaded tags', value: activeTags.length > 0 ? activeTags.join(', ') : '' },
     { label: 'Complexity', value: ctx && ctx.complexity ? ctx.complexity : '' },
   ]);
   if (liveFacts) card.appendChild(liveFacts);
@@ -1048,7 +1048,7 @@ function buildLiveCard(loop) {
 
   const liveScope = makeIterationScopePanel([
     activeTags.length > 0
-      ? { label: 'Capabilities active', values: activeTags, className: 'tag-chip tag-chip--active' }
+      ? { label: 'Loaded tags', values: activeTags, className: 'tag-chip tag-chip--active' }
       : null,
     effectiveTools.length > 0
       ? { label: 'Tool surface', values: effectiveTools, className: 'iter-card__tool-item iter-card__tool-item--scope' }
@@ -1165,7 +1165,7 @@ function buildPastCard(snap, handlerOnly, idx, startExpanded) {
     { label: 'Duration', value: snap.elapsed_ms ? formatDuration(snap.elapsed_ms) : '' },
     { label: 'Tool calls', value: toolCalls > 0 ? formatNumber(toolCalls) : '' },
     { label: 'Tool surface', value: effectiveTools.length > 0 ? formatNumber(effectiveTools.length) : '' },
-    { label: 'Capabilities', value: activeTags.length > 0 ? formatNumber(activeTags.length) : '' },
+    { label: 'Loaded tags', value: activeTags.length > 0 ? activeTags.join(', ') : '' },
     !handlerOnly ? { label: 'Input tokens', value: snap.input_tokens ? formatTokens(snap.input_tokens) : '' } : { label: 'Handler signals', value: summarySignals > 0 ? formatNumber(summarySignals) : '' },
     !handlerOnly ? { label: 'Output tokens', value: snap.output_tokens ? formatTokens(snap.output_tokens) : '' } : { label: 'When', value: snap.completed_at ? timeAgo(new Date(snap.completed_at)) : '' },
     !handlerOnly ? { label: 'Context window', value: snap.context_window ? formatNumber(snap.context_window) : '' } : null,
@@ -1201,7 +1201,7 @@ function buildPastCard(snap, handlerOnly, idx, startExpanded) {
 
   const pastScope = makeIterationScopePanel([
     activeTags.length > 0
-      ? { label: 'Capabilities active', values: activeTags, className: 'tag-chip tag-chip--active' }
+      ? { label: 'Loaded tags', values: activeTags, className: 'tag-chip tag-chip--active' }
       : null,
     effectiveTools.length > 0
       ? { label: 'Tool surface', values: effectiveTools, className: 'iter-card__tool-item iter-card__tool-item--scope' }

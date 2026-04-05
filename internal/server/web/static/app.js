@@ -1052,7 +1052,7 @@ function renderLoopCurrentTurnCard(loop, entity, conversationSummary) {
       threadLabel,
       latestModelLabel !== 'model pending' ? 'on ' + latestModelLabel : '',
       currentEffectiveTools.length > 0 ? `${formatNumber(currentEffectiveTools.length)} tools in scope` : '',
-      currentScopeTags.length > 0 ? `${formatNumber(currentScopeTags.length)} capabilities active` : '',
+      currentScopeTags.length > 0 ? `${formatNumber(currentScopeTags.length)} tags loaded` : '',
       activeToolNames.length > 0
         ? `${formatNumber(activeToolNames.length)} tool${activeToolNames.length === 1 ? '' : 's'} in flight`
         : `iteration ${iterationLabel} in progress`,
@@ -1092,7 +1092,7 @@ function renderLoopCurrentTurnCard(loop, entity, conversationSummary) {
       { label: 'Model', value: latestModelLabel },
       { label: 'Health', value: serviceDegraded ? 'degraded' : (entity.lastError ? 'recovering' : 'steady') },
       currentEffectiveTools.length > 0 ? { label: 'Tool surface', value: formatNumber(currentEffectiveTools.length) } : null,
-      currentScopeTags.length > 0 ? { label: 'Capabilities', value: formatNumber(currentScopeTags.length) } : null,
+      currentScopeTags.length > 0 ? { label: 'Loaded tags', value: currentScopeTags.join(', ') } : null,
       entity.activeLiveTools.length > 0 ? { label: 'Tools live', value: activeToolSet.join(', ') } : null,
       lastWakeAgo ? { label: 'Wake', value: lastWakeAgo } : null,
     ],
@@ -1112,7 +1112,7 @@ function renderLoopCurrentTurnCard(loop, entity, conversationSummary) {
       ? { label: 'Tools in flight', value: activeToolSet.join(', ') }
       : { label: 'Thread', value: threadLabel },
     currentEffectiveTools.length > 0 ? { label: 'Tool surface', value: formatNumber(currentEffectiveTools.length) } : null,
-    currentScopeTags.length > 0 ? { label: 'Capabilities', value: formatNumber(currentScopeTags.length) } : null,
+    currentScopeTags.length > 0 ? { label: 'Loaded tags', value: currentScopeTags.join(', ') } : null,
   ]);
   if (turnMetrics) card.body.appendChild(turnMetrics);
 
@@ -1123,10 +1123,10 @@ function renderLoopCurrentTurnCard(loop, entity, conversationSummary) {
   if (isProcessing) {
     briefSummary.textContent = entity.activeLiveTools.length > 0
       ? `The loop is actively working this turn, with ${entity.activeLiveTools.length} tool${entity.activeLiveTools.length === 1 ? '' : 's'} in flight${currentEffectiveTools.length > 0 ? ` across a ${formatNumber(currentEffectiveTools.length)}-tool surface` : ''}.`
-      : 'The loop is actively working this turn. Watch the live telemetry below for context growth, active capabilities, tool surface, and model progress.';
+      : 'The loop is actively working this turn. Watch the live telemetry below for context growth, loaded tags, tool surface, and model progress.';
   } else if (entity.latestSnapshot) {
     briefSummary.textContent = entity.lastError
-      ? 'The latest recorded turn ended with an error. The snapshot below shows the last request detail, active capabilities, tool surface, timing, and tool activity for triage.'
+      ? 'The latest recorded turn ended with an error. The snapshot below shows the last request detail, loaded tags, tool surface, timing, and tool activity for triage.'
       : 'The loop is currently idle. The latest recorded turn below is the best executive summary of recent behavior, tool surface, and near-term future.';
   } else {
     briefSummary.textContent = 'No request detail snapshot is available yet. This view will fill in once the loop completes its first recorded iteration.';
@@ -1141,7 +1141,7 @@ function renderLoopCurrentTurnCard(loop, entity, conversationSummary) {
     { label: 'Model', value: latestModelLabel },
     { label: 'State', value: formatSchemaToken(entity.stateLabel) },
     { label: 'Context', value: contextLabel || 'pending' },
-    { label: 'Capabilities', value: currentScopeTags.length > 0 ? formatNumber(currentScopeTags.length) : 'none' },
+    { label: 'Loaded tags', value: currentScopeTags.length > 0 ? currentScopeTags.join(', ') : 'none' },
     { label: 'Tool surface', value: currentEffectiveTools.length > 0 ? formatNumber(currentEffectiveTools.length) : 'pending' },
     { label: 'Wake', value: lastWakeAgo || 'pending' },
   ];
@@ -1160,6 +1160,19 @@ function renderLoopCurrentTurnCard(loop, entity, conversationSummary) {
   }
   brief.appendChild(briefGrid);
   card.body.appendChild(brief);
+
+  const loadedTagsWrap = document.createElement('div');
+  loadedTagsWrap.className = 'schema-subsection';
+  loadedTagsWrap.innerHTML = '<h4 class="schema-subsection__title">Loaded Tags</h4>';
+  if (currentScopeTags.length > 0) {
+    loadedTagsWrap.appendChild(makeSchemaChipList(currentScopeTags, 'tag-chip tag-chip--active'));
+  } else {
+    const empty = document.createElement('div');
+    empty.className = 'loop-turn-empty';
+    empty.textContent = 'No capability tags are currently loaded for this loop.';
+    loadedTagsWrap.appendChild(empty);
+  }
+  card.body.appendChild(loadedTagsWrap);
 
   if (entity.latestRequestID) {
     const requestWrap = document.createElement('div');
@@ -1462,7 +1475,7 @@ function buildLoopNodeTitle(loop, capacity) {
     parts.push('Model: ' + entity.latestModel);
   }
   if (scopeTags.length > 0) {
-    parts.push('Capabilities: ' + scopeTags.join(', '));
+    parts.push('Loaded tags: ' + scopeTags.join(', '));
   }
   if (toolSurface.length > 0) {
     parts.push('Tool surface: ' + toolSurface.join(', '));
@@ -3611,6 +3624,12 @@ function renderLoopEntityDetail(loop) {
   if (primaryConvID) {
     utilities.appendChild(makeInspectorUtility('thread', makeIDChip(primaryConvID)));
   }
+  utilities.appendChild(makeInspectorUtility(
+    'loaded tags',
+    entity.currentScopeTags.length > 0
+      ? makeSchemaChipList(entity.currentScopeTags, 'tag-chip tag-chip--active')
+      : 'none',
+  ));
   if (entity.latestRequestID) {
     utilities.appendChild(makeInspectorUtility('request', makeRequestChip(entity.latestRequestID)));
   }
@@ -3724,32 +3743,32 @@ function renderLoopEntityDetail(loop) {
     key: 'tooling',
     titleSummary: [
       entity.currentScopeTags.length > 0
-        ? `${formatNumber(entity.currentScopeTags.length)} capabilities active`
-        : (entity.configTags.length > 0 ? `${formatNumber(entity.configTags.length)} capabilities configured` : ''),
+        ? `${formatNumber(entity.currentScopeTags.length)} tags loaded`
+        : (entity.configTags.length > 0 ? `${formatNumber(entity.configTags.length)} tags configured` : ''),
       currentEffectiveTools.length > 0
         ? `${formatNumber(currentEffectiveTools.length)} tools in scope`
         : (entity.excludedTools.length > 0 ? `${formatNumber(entity.excludedTools.length)} tools excluded` : ''),
       liveToolNames.length > 0 ? `${formatNumber(liveToolNames.length)} tools live` : '',
-    ].filter(Boolean).join(' · ') || 'Capabilities and tool surface pending.',
+    ].filter(Boolean).join(' · ') || 'Loaded tags and tool surface pending.',
     titleFacts: [
       entity.configTags.length ? `${formatNumber(entity.configTags.length)} configured` : '',
-      entity.activeTags.length ? `${formatNumber(entity.activeTags.length)} active` : '',
+      entity.currentScopeTags.length ? `${formatNumber(entity.currentScopeTags.length)} loaded` : '',
       currentEffectiveTools.length ? `${formatNumber(currentEffectiveTools.length)} in scope` : '',
       liveToolNames.length ? `${formatNumber(liveToolNames.length)} running` : '',
     ].filter(Boolean),
     widgetFacts: [
-      entity.configTags.length ? { label: 'Configured caps', value: formatNumber(entity.configTags.length) } : null,
-      entity.activeTags.length ? { label: 'Active caps', value: formatNumber(entity.activeTags.length) } : null,
+      entity.configTags.length ? { label: 'Configured tags', value: entity.configTags.join(', ') } : null,
+      entity.currentScopeTags.length ? { label: 'Loaded tags', value: entity.currentScopeTags.join(', ') } : null,
       currentEffectiveTools.length ? { label: 'Tool surface', value: formatNumber(currentEffectiveTools.length) } : null,
       entity.excludedTools.length ? { label: 'Excluded', value: formatNumber(entity.excludedTools.length) } : null,
       liveToolNames.length ? { label: 'Running', value: liveToolNames.join(', ') } : null,
     ],
   });
   if (entity.configTags.length > 0) {
-    appendSchemaRow(tooling.body, 'configured capabilities', makeSchemaChipList(entity.configTags, 'tag-chip tag-chip--muted'));
+    appendSchemaRow(tooling.body, 'configured tags', makeSchemaChipList(entity.configTags, 'tag-chip tag-chip--muted'));
   }
-  if (entity.activeTags.length > 0) {
-    appendSchemaRow(tooling.body, 'active capabilities', makeSchemaChipList(entity.activeTags, 'tag-chip tag-chip--active'));
+  if (entity.currentScopeTags.length > 0) {
+    appendSchemaRow(tooling.body, 'loaded tags', makeSchemaChipList(entity.currentScopeTags, 'tag-chip tag-chip--active'));
   }
   if (entity.excludedTools.length > 0) {
     appendSchemaRow(tooling.body, 'excluded tools', makeSchemaChipList(entity.excludedTools, 'iter-card__tool-item iter-card__tool-item--scope'));
