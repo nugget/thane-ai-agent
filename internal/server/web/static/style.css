@@ -2472,6 +2472,37 @@ body.resize-col .schema-card__fade {
     var(--bg-primary);
 }
 
+.request-page {
+  display: block;
+  height: auto;
+  min-height: 100vh;
+  overflow-x: hidden;
+  overflow-y: auto;
+  color-scheme: dark;
+  background:
+    radial-gradient(circle at top right, rgba(45, 212, 191, 0.04), transparent 24%),
+    radial-gradient(circle at left center, rgba(88, 166, 255, 0.04), transparent 22%),
+    var(--bg-primary);
+}
+
+.request-page .request-window {
+  min-height: 100vh;
+}
+
+.request-page .request-window__sidebar {
+  background: linear-gradient(180deg, rgba(22, 27, 34, 0.98), rgba(13, 17, 23, 0.98));
+}
+
+.request-page .request-window__main {
+  background:
+    linear-gradient(180deg, rgba(13, 17, 23, 0.96), rgba(13, 17, 23, 0.99)),
+    var(--bg-primary);
+}
+
+.request-page .request-window__empty {
+  background: rgba(28, 33, 40, 0.42);
+}
+
 .registry-shell {
   max-width: 1320px;
   margin: 0 auto;
@@ -2544,6 +2575,12 @@ body.resize-col .schema-card__fade {
 
 .registry-empty[hidden],
 .registry-section[hidden] {
+  display: none !important;
+}
+
+.request-window__empty[hidden],
+.request-content[hidden],
+.waterfall[hidden] {
   display: none !important;
 }
 

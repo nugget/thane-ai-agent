@@ -23,6 +23,24 @@ let refreshTimer = null;
 let requestDetailAvailable = null;
 let copyStatusTimer = null;
 
+function makeMetaBarItem(label, value, opts = {}) {
+  const item = document.createElement('span');
+  item.className = 'request-meta-bar__item';
+
+  const labelEl = document.createElement('span');
+  labelEl.className = 'request-meta-bar__label';
+  labelEl.textContent = label;
+
+  const valueEl = document.createElement('span');
+  valueEl.className = 'request-meta-bar__value' + (opts.warn ? ' request-meta-bar__value--warn' : '');
+  valueEl.textContent = value;
+
+  item.appendChild(labelEl);
+  item.appendChild(document.createTextNode(' '));
+  item.appendChild(valueEl);
+  return item;
+}
+
 function renderUnavailableState(message, subtitle = 'Request detail is not available in this runtime.') {
   els.title.textContent = 'Request ' + shortID(requestID);
   els.subtitle.textContent = subtitle;
@@ -33,18 +51,16 @@ function renderUnavailableState(message, subtitle = 'Request detail is not avail
   els.meta.innerHTML = '';
   const meta = document.createElement('div');
   meta.className = 'request-meta-bar';
-  const item = document.createElement('span');
-  item.className = 'request-meta-bar__item';
-  item.innerHTML =
-    '<span class="request-meta-bar__label">status</span> ' +
-    '<span class="request-meta-bar__value request-meta-bar__value--warn">' + escapeHTML(message) + '</span>';
-  meta.appendChild(item);
+  meta.appendChild(makeMetaBarItem('status', message, { warn: true }));
   els.meta.appendChild(meta);
   els.empty.textContent = message;
   setRequestLoaded(false);
 }
 
 function setRequestLoaded(loaded) {
+  if (loaded) {
+    els.empty.textContent = '';
+  }
   els.empty.hidden = loaded;
   els.content.hidden = !loaded;
   els.waterfall.hidden = !loaded;

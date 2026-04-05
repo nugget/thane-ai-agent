@@ -2200,19 +2200,36 @@ function renderRequestDetail(detail, els) {
     if (!item.value) continue;
     const el = document.createElement('span');
     el.className = 'request-meta-bar__item';
-    el.innerHTML =
-      '<span class="request-meta-bar__label">' + escapeHTML(item.label) + '</span> ' +
-      '<span class="request-meta-bar__value' + (item.warn ? ' request-meta-bar__value--warn' : '') +
-      '">' + escapeHTML(item.value) + '</span>';
+
+    const labelEl = document.createElement('span');
+    labelEl.className = 'request-meta-bar__label';
+    labelEl.textContent = item.label;
+
+    const valueEl = document.createElement('span');
+    valueEl.className = 'request-meta-bar__value' + (item.warn ? ' request-meta-bar__value--warn' : '');
+    valueEl.textContent = item.value;
+
+    el.appendChild(labelEl);
+    el.appendChild(document.createTextNode(' '));
+    el.appendChild(valueEl);
     bar.appendChild(el);
   }
   if (detail.tools_used) {
     for (const [name, count] of Object.entries(detail.tools_used)) {
       const el = document.createElement('span');
       el.className = 'request-meta-bar__item';
-      el.innerHTML =
-        '<span class="request-meta-bar__label">' + escapeHTML(name) + '</span> ' +
-        '<span class="request-meta-bar__value">&times;' + count + '</span>';
+
+      const labelEl = document.createElement('span');
+      labelEl.className = 'request-meta-bar__label';
+      labelEl.textContent = name;
+
+      const valueEl = document.createElement('span');
+      valueEl.className = 'request-meta-bar__value';
+      valueEl.textContent = '\u00d7' + count;
+
+      el.appendChild(labelEl);
+      el.appendChild(document.createTextNode(' '));
+      el.appendChild(valueEl);
       bar.appendChild(el);
     }
   }
