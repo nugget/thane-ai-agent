@@ -914,6 +914,11 @@ function renderNodes() {
   // Linking lines: create/remove DOM elements and apply state classes.
   // Position updates (x1/y1/x2/y2) are handled by updateNodePositions().
   renderLinkingLines(hasSystem, loops);
+
+  // Write positions immediately for newly created nodes and edges so they do
+  // not flash at the SVG origin or briefly appear disconnected while waiting
+  // for the next animation tick.
+  updateNodePositions();
 }
 
 // Manage linking line DOM lifecycle — create/remove elements and apply
