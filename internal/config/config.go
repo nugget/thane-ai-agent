@@ -125,12 +125,25 @@ type Config struct {
 	Embeddings EmbeddingsConfig `yaml:"embeddings"`
 
 	// Workspace configures the agent's sandboxed file system access.
+	// In multi-root deployments, set Path to the common writable parent
+	// (for example ~/Thane) and use Paths for semantic roots like
+	// core:, kb:, generated:, and scratchpad:.
 	Workspace WorkspaceConfig `yaml:"workspace"`
 
 	// Paths maps named prefixes to directory paths for file resolution.
 	// Each entry creates a prefix (e.g., "kb" → kb:path resolves to
 	// the configured directory). Supports ~ expansion at resolver
 	// construction time.
+	//
+	// Typical prefixes are:
+	//   - core:       high-integrity core docs (persona, ego, metacognitive)
+	//   - kb:         curated knowledge / indexed documents
+	//   - generated:  model-produced durable outputs (reports, dailies)
+	//   - scratchpad: low-integrity writable work area
+	//
+	// This is the main transition seam toward policy-managed document
+	// roots: the prefixes express intent even before dedicated doc_roots
+	// policy exists in config.
 	Paths map[string]string `yaml:"paths"`
 
 	// ExtraPath lists additional directories to prepend to the process
@@ -142,16 +155,22 @@ type Config struct {
 	// ShellExec configures the agent's ability to run shell commands.
 	ShellExec ShellExecConfig `yaml:"shell_exec"`
 
-	// DataDir is the root directory for SQLite databases (memory, facts,
-	// scheduler, and checkpoints). Default: "./db".
+	// DataDir is the root directory for SQLite databases and other
+	// opaque runtime state (memory, facts, scheduler, checkpoints).
+	// Keep this separate from human-authored and model-authored
+	// document roots. Default: "./db".
 	DataDir string `yaml:"data_dir"`
 
 	// TalentsDir is the directory containing talent markdown files that
-	// extend the system prompt. Default: "./talents".
+	// extend the system prompt. In higher-integrity deployments, this is
+	// a curated managed root rather than a scratch workspace.
+	// Default: "./talents".
 	TalentsDir string `yaml:"talents_dir"`
 
 	// PersonaFile is an optional markdown file that replaces the default
-	// system prompt with a custom agent identity.
+	// system prompt with a custom agent identity. Prefer placing this in
+	// a high-integrity core root (for example ~/Thane/core/persona.md)
+	// rather than a scratch or compatibility workspace.
 	PersonaFile string `yaml:"persona_file"`
 
 	// Context configures static context injection into the system prompt.
@@ -567,7 +586,9 @@ type AttachmentsConfig struct {
 	// store. When set, received attachments are stored by SHA-256 hash
 	// instead of being copied with their original filenames. The
 	// metadata index is stored at {data_dir}/attachments.db.
-	// Supports ~ expansion. Example: ~/Thane/attachments
+	// Supports ~ expansion. This is a durable generated-artifact root,
+	// not a hand-edited document root. Example:
+	// ~/Thane/generated/attachments
 	StoreDir string       `yaml:"store_dir"`
 	Vision   VisionConfig `yaml:"vision"`
 }
@@ -604,7 +625,10 @@ func (v VisionConfig) ParsedTimeout() time.Duration {
 // write.
 type ProvenanceConfig struct {
 	// Path is the directory for the provenance git repository.
-	// Supports ~ expansion. Example: ~/Thane/identity
+	// Supports ~ expansion. Today this is the integrity-tracked root for
+	// core documents such as ego.md and metacognitive.md; over time this
+	// generalizes into per-root integrity policy. Example:
+	// ~/Thane/core
 	Path string `yaml:"path"`
 
 	// SigningKey is the path to an SSH private key used to sign
@@ -808,12 +832,16 @@ type EmbeddingsConfig struct {
 
 // ContextConfig configures context injection into the system prompt.
 // Files listed in InjectFiles are re-read on every agent turn so that
-// external edits (e.g. MEMORY.md updated by another runtime) are
-// visible without restart. Paths are resolved once at startup.
+// external edits are visible without restart. Prefer small, curated
+// files from stable managed roots (for example core/MEMORY.md) over
+// broad compatibility mounts or app-private scratch state. Paths are
+// resolved once at startup.
 type ContextConfig struct {
 	// InjectFiles is a list of file paths to re-read and inject into
 	// the system prompt on every turn. Paths support ~ expansion.
 	// Missing or unreadable files are silently skipped at read time.
+	// Common fits are MEMORY.md, USER.md, or other operator-curated
+	// context files that live in a core document root.
 	InjectFiles []string `yaml:"inject_files"`
 }
 
@@ -878,7 +906,9 @@ type ExtractionConfig struct {
 type EpisodicConfig struct {
 	// DailyDir is the directory containing daily memory files named
 	// YYYY-MM-DD.md. Supports ~ expansion. If empty, daily memory
-	// file injection is disabled.
+	// file injection is disabled. Prefer a generated/provenance-aware
+	// root (for example ~/Thane/generated/daily) over legacy shared
+	// application state directories.
 	DailyDir string `yaml:"daily_dir"`
 
 	// LookbackDays is how many days of daily memory files to include.
@@ -983,12 +1013,15 @@ func (c CapabilityTagConfig) Validate(tagName string, builtin bool) error {
 // Path and cannot escape it.
 type WorkspaceConfig struct {
 	// Path is the root directory for file operations. If empty, file
-	// tools are disabled entirely.
+	// tools are disabled entirely. In multi-root setups, this should be
+	// the common writable parent that contains Thane-owned roots such as
+	// core/, talents/, knowledge/, generated/, and scratchpad/.
 	Path string `yaml:"path"`
 
 	// ReadOnlyDirs are additional directories the agent can read from
-	// but not write to. Useful for giving the agent access to reference
-	// material outside its workspace.
+	// but not write to. Useful for compatibility or reference roots that
+	// must remain outside Thane's writable authority, such as a legacy
+	// OpenClaw workspace or an external vault mirror.
 	ReadOnlyDirs []string `yaml:"read_only_dirs"`
 }
 
@@ -1194,7 +1227,10 @@ type MCPServerConfig struct {
 	ExcludeTools []string `yaml:"exclude_tools"`
 
 	// DefaultTags lists tool tags/toolsets assigned to bridged MCP tools
-	// from this server unless a per-tool override replaces them.
+	// from this server unless a per-tool override replaces them. Prefer
+	// using this to attach MCP tools to existing capability/toolbox
+	// groups instead of hand-maintaining every bridged tool name inside
+	// capability_tags.*.tools.
 	DefaultTags []string `yaml:"default_tags"`
 
 	// Tools contains optional metadata overrides keyed by the raw MCP tool
@@ -1387,6 +1423,8 @@ type MediaConfig struct {
 	// TranscriptDir is the directory for durable transcript storage.
 	// Each transcript is saved as a markdown file with YAML frontmatter.
 	// If empty, transcripts are returned in-context only (not persisted).
+	// This is typically a generated/artifact root rather than a curated
+	// knowledge root.
 	TranscriptDir string `yaml:"transcript_dir"`
 
 	// SummarizeModel is the preferred model for transcript summarization.
@@ -1432,7 +1470,9 @@ type MetacognitiveConfig struct {
 	Enabled bool `yaml:"enabled"`
 
 	// StateFile is the path to the persistent state file, relative to
-	// the workspace root. Default: "metacognitive.md".
+	// the workspace root. For managed-root layouts, place this under a
+	// core root such as core/metacognitive.md. Default:
+	// "metacognitive.md".
 	StateFile string `yaml:"state_file"`
 
 	// MinSleep is the minimum allowed sleep duration between iterations.
@@ -1503,6 +1543,12 @@ type OpenClawConfig struct {
 	// WorkspacePath is the root directory containing the agent's
 	// workspace files (AGENTS.md, SOUL.md, USER.md, MEMORY.md, etc.)
 	// and memory directory. Supports ~ expansion.
+	//
+	// Treat this as a compatibility/workspace-emulation root for the
+	// thane:openclaw profile, not as Thane's canonical core document
+	// root. If legacy OpenClaw remains in service, prefer a separate
+	// Thane-owned clone of the workspace instead of a shared mutable
+	// directory.
 	// Default: ~/Thane/openclaw.
 	WorkspacePath string `yaml:"workspace"`
 

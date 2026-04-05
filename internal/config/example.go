@@ -96,7 +96,10 @@ func ExampleConfig() *Config {
 		TalentsDir: "./talents",
 
 		Paths: map[string]string{
-			"kb": "./knowledge",
+			"core":       "./core",
+			"generated":  "./generated",
+			"kb":         "./knowledge",
+			"scratchpad": "./scratchpad",
 		},
 
 		ShellExec: ShellExecConfig{
@@ -215,7 +218,7 @@ func ExampleConfig() *Config {
 		},
 
 		Attachments: AttachmentsConfig{
-			StoreDir: "~/Thane/attachments",
+			StoreDir: "~/Thane/generated/attachments",
 			Vision: VisionConfig{
 				Enabled: true,
 				Model:   "llava:latest",
@@ -225,7 +228,7 @@ func ExampleConfig() *Config {
 		},
 
 		Provenance: ProvenanceConfig{
-			Path:       "~/Thane/identity",
+			Path:       "~/Thane/core",
 			SigningKey: "~/.ssh/id_ed25519",
 		},
 
@@ -301,7 +304,7 @@ func ExampleConfig() *Config {
 		Context: ContextConfig{
 			InjectFiles: []string{
 				"~/.agents.md",
-				"~/Thane/MEMORY.md",
+				"~/Thane/core/MEMORY.md",
 			},
 		},
 
@@ -320,7 +323,7 @@ func ExampleConfig() *Config {
 		},
 
 		Episodic: EpisodicConfig{
-			DailyDir:      "~/Thane/daily",
+			DailyDir:      "~/Thane/generated/daily",
 			LookbackDays:  2,
 			HistoryTokens: 4000,
 		},
@@ -341,13 +344,13 @@ func ExampleConfig() *Config {
 			FeedCheckInterval:  3600,
 			MaxFeeds:           50,
 			Analysis: AnalysisConfig{
-				DefaultOutputPath: "~/Sync/Vault/Media",
+				DefaultOutputPath: "~/Thane/generated/media",
 			},
 		},
 
 		Metacognitive: MetacognitiveConfig{
 			Enabled:               false,
-			StateFile:             "metacognitive.md",
+			StateFile:             "core/metacognitive.md",
 			MinSleep:              "2m",
 			MaxSleep:              "30m",
 			DefaultSleep:          "10m",
@@ -418,7 +421,7 @@ func ExampleConfig() *Config {
 
 		Timezone: "America/Chicago",
 
-		PersonaFile: "./persona.md",
+		PersonaFile: "~/Thane/core/persona.md",
 
 		ExtraPath: []string{
 			"$HOME/.local/bin",

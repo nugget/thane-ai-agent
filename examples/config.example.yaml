@@ -121,20 +121,39 @@ embeddings:
   model: nomic-embed-text
   baseurl: ""
 # Workspace configures the agent's sandboxed file system access.
+# In multi-root deployments, set Path to the common writable parent
+# (for example ~/Thane) and use Paths for semantic roots like
+# core:, kb:, generated:, and scratchpad:.
 workspace:
   # Path is the root directory for file operations. If empty, file
-  # tools are disabled entirely.
+  # tools are disabled entirely. In multi-root setups, this should be
+  # the common writable parent that contains Thane-owned roots such as
+  # core/, talents/, knowledge/, generated/, and scratchpad/.
   path: ""
   # ReadOnlyDirs are additional directories the agent can read from
-  # but not write to. Useful for giving the agent access to reference
-  # material outside its workspace.
+  # but not write to. Useful for compatibility or reference roots that
+  # must remain outside Thane's writable authority, such as a legacy
+  # OpenClaw workspace or an external vault mirror.
   read_only_dirs: []
 # Paths maps named prefixes to directory paths for file resolution.
 # Each entry creates a prefix (e.g., "kb" → kb:path resolves to
 # the configured directory). Supports ~ expansion at resolver
 # construction time.
+# 
+# Typical prefixes are:
+#   - core:       high-integrity core docs (persona, ego, metacognitive)
+#   - kb:         curated knowledge / indexed documents
+#   - generated:  model-produced durable outputs (reports, dailies)
+#   - scratchpad: low-integrity writable work area
+# 
+# This is the main transition seam toward policy-managed document
+# roots: the prefixes express intent even before dedicated doc_roots
+# policy exists in config.
 paths:
+  core: ./core
+  generated: ./generated
   kb: ./knowledge
+  scratchpad: ./scratchpad
 #
 # (optional) ExtraPath lists additional directories to prepend to the process
 # extra_path:
@@ -165,24 +184,30 @@ shell_exec:
   # DefaultTimeoutSec is the maximum wall-clock time a command may
   # run before being killed. Default: 30.
   default_timeout_sec: 30
-# DataDir is the root directory for SQLite databases (memory, facts,
-# scheduler, and checkpoints). Default: "./db".
+# DataDir is the root directory for SQLite databases and other
+# opaque runtime state (memory, facts, scheduler, checkpoints).
+# Keep this separate from human-authored and model-authored
+# document roots. Default: "./db".
 data_dir: ./db
 # TalentsDir is the directory containing talent markdown files that
-# extend the system prompt. Default: "./talents".
+# extend the system prompt. In higher-integrity deployments, this is
+# a curated managed root rather than a scratch workspace.
+# Default: "./talents".
 talents_dir: ./talents
 #
 # (optional) PersonaFile is an optional markdown file that replaces the default
-# persona_file: ./persona.md
+# persona_file: ~/Thane/core/persona.md
 #
 # (optional) Context configures static context injection into the system prompt.
 # context:
 #   InjectFiles is a list of file paths to re-read and inject into
 #   the system prompt on every turn. Paths support ~ expansion.
 #   Missing or unreadable files are silently skipped at read time.
+#   Common fits are MEMORY.md, USER.md, or other operator-curated
+#   context files that live in a core document root.
 #   inject_files:
 #     - ~/.agents.md
-#     - ~/Thane/MEMORY.md
+#     - ~/Thane/core/MEMORY.md
 #
 # (optional) Archive configures session archive behavior.
 # archive:
@@ -243,8 +268,10 @@ talents_dir: ./talents
 # episodic:
 #   DailyDir is the directory containing daily memory files named
 #   YYYY-MM-DD.md. Supports ~ expansion. If empty, daily memory
-#   file injection is disabled.
-#   daily_dir: ~/Thane/daily
+#   file injection is disabled. Prefer a generated/provenance-aware
+#   root (for example ~/Thane/generated/daily) over legacy shared
+#   application state directories.
+#   daily_dir: ~/Thane/generated/daily
 #   LookbackDays is how many days of daily memory files to include.
 #   Today and the previous (LookbackDays-1) days are checked.
 #   Default: 2 (today + yesterday).
@@ -344,7 +371,10 @@ talents_dir: ./talents
 #       Cannot be used together with IncludeTools.
 #       exclude_tools: []
 #       DefaultTags lists tool tags/toolsets assigned to bridged MCP tools
-#       from this server unless a per-tool override replaces them.
+#       from this server unless a per-tool override replaces them. Prefer
+#       using this to attach MCP tools to existing capability/toolbox
+#       groups instead of hand-maintaining every bridged tool name inside
+#       capability_tags.*.tools.
 #       default_tags: []
 #       Tools contains optional metadata overrides keyed by the raw MCP tool
 #       name reported by the server.
@@ -565,8 +595,10 @@ talents_dir: ./talents
 #   store. When set, received attachments are stored by SHA-256 hash
 #   instead of being copied with their original filenames. The
 #   metadata index is stored at {data_dir}/attachments.db.
-#   Supports ~ expansion. Example: ~/Thane/attachments
-#   store_dir: ~/Thane/attachments
+#   Supports ~ expansion. This is a durable generated-artifact root,
+#   not a hand-edited document root. Example:
+#   ~/Thane/generated/attachments
+#   store_dir: ~/Thane/generated/attachments
 #   vision:
 #     enabled: true
 #     model: llava:latest
@@ -576,8 +608,11 @@ talents_dir: ./talents
 # (optional) Provenance configures git-backed file storage with SSH signature
 # provenance:
 #   Path is the directory for the provenance git repository.
-#   Supports ~ expansion. Example: ~/Thane/identity
-#   path: ~/Thane/identity
+#   Supports ~ expansion. Today this is the integrity-tracked root for
+#   core documents such as ego.md and metacognitive.md; over time this
+#   generalizes into per-root integrity policy. Example:
+#   ~/Thane/core
+#   path: ~/Thane/core
 #   SigningKey is the path to an SSH private key used to sign
 #   commits. The key is loaded at startup and held in memory.
 #   Supports ~ expansion. Example: ~/.ssh/id_ed25519
@@ -654,6 +689,8 @@ talents_dir: ./talents
 #   TranscriptDir is the directory for durable transcript storage.
 #   Each transcript is saved as a markdown file with YAML frontmatter.
 #   If empty, transcripts are returned in-context only (not persisted).
+#   This is typically a generated/artifact root rather than a curated
+#   knowledge root.
 #   transcript_dir: ""
 #   SummarizeModel is the preferred model for transcript summarization.
 #   When set, it is passed as a routing hint (soft preference, not
@@ -673,7 +710,7 @@ talents_dir: ./talents
 #     DefaultOutputPath is the base directory for analysis output when
 #     a feed has no per-feed output_path configured. Supports ~ expansion.
 #     Example: ~/Sync/Aimee/Vault/Media
-#     default_output_path: ~/Sync/Vault/Media
+#     default_output_path: ~/Thane/generated/media
 #     DatabasePath is the SQLite database file for engagement tracking.
 #     If empty, defaults to {data_dir}/media_engagement.db at startup.
 #     database_path: ""
@@ -683,8 +720,10 @@ talents_dir: ./talents
 #   Enabled controls whether the metacognitive loop starts. Default: false.
 #   enabled: false
 #   StateFile is the path to the persistent state file, relative to
-#   the workspace root. Default: "metacognitive.md".
-#   state_file: metacognitive.md
+#   the workspace root. For managed-root layouts, place this under a
+#   core root such as core/metacognitive.md. Default:
+#   "metacognitive.md".
+#   state_file: core/metacognitive.md
 #   MinSleep is the minimum allowed sleep duration between iterations.
 #   The LLM cannot request a shorter sleep via set_next_sleep.
 #   Default: "2m". Parsed as a Go duration string.
@@ -775,6 +814,12 @@ talents_dir: ./talents
 #   WorkspacePath is the root directory containing the agent's
 #   workspace files (AGENTS.md, SOUL.md, USER.md, MEMORY.md, etc.)
 #   and memory directory. Supports ~ expansion.
+#
+#   Treat this as a compatibility/workspace-emulation root for the
+#   thane:openclaw profile, not as Thane's canonical core document
+#   root. If legacy OpenClaw remains in service, prefer a separate
+#   Thane-owned clone of the workspace instead of a shared mutable
+#   directory.
 #   Default: ~/Thane/openclaw.
 #   workspace: ~/Thane/openclaw
 #   SkillsDirs is a list of directories to scan for SKILL.md files.
