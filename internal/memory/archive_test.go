@@ -440,6 +440,14 @@ func TestSetSessionMetadata(t *testing.T) {
 	}
 
 	meta := &SessionMetadata{
+		ChannelBinding: &ChannelBinding{
+			Channel:     "signal",
+			Address:     "+15551234567",
+			ContactID:   "contact-1",
+			ContactName: "Alice Smith",
+			TrustZone:   "known",
+			LinkSource:  "tel",
+		},
 		OneLiner:     "Built session archive system",
 		Paragraph:    "Marathon session building the complete archive system with FTS5 search.",
 		Detailed:     "Full session archive with gap-aware context expansion, import tool, and metadata.",
@@ -481,6 +489,9 @@ func TestSetSessionMetadata(t *testing.T) {
 	}
 	if got.Metadata.ToolsUsed["shell_exec"] != 12 {
 		t.Errorf("tools_used: got %v", got.Metadata.ToolsUsed)
+	}
+	if got.Metadata.ChannelBinding == nil || got.Metadata.ChannelBinding.ContactName != "Alice Smith" {
+		t.Errorf("channel_binding: got %#v", got.Metadata.ChannelBinding)
 	}
 	if len(got.Metadata.KeyDecisions) != 2 {
 		t.Errorf("key_decisions: got %v", got.Metadata.KeyDecisions)
@@ -702,6 +713,42 @@ func TestStartSessionWithOptions_ParentFields(t *testing.T) {
 	}
 	if fetched.ParentToolCallID != "call_xyz" {
 		t.Errorf("fetched ParentToolCallID = %q, want %q", fetched.ParentToolCallID, "call_xyz")
+	}
+}
+
+func TestStartSessionWithOptions_ChannelBinding(t *testing.T) {
+	store := newTestArchiveStore(t)
+
+	child, err := store.StartSessionWithOptions("signal-15551234567",
+		WithChannelBinding(&ChannelBinding{
+			Channel:     "signal",
+			Address:     "+15551234567",
+			ContactID:   "contact-1",
+			ContactName: "Alice Smith",
+			TrustZone:   "known",
+			LinkSource:  "tel",
+		}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if child.Metadata == nil || child.Metadata.ChannelBinding == nil {
+		t.Fatalf("child metadata = %#v", child.Metadata)
+	}
+	if child.Metadata.ChannelBinding.ContactName != "Alice Smith" {
+		t.Fatalf("child channel binding = %#v", child.Metadata.ChannelBinding)
+	}
+
+	fetched, err := store.GetSession(child.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fetched.Metadata == nil || fetched.Metadata.ChannelBinding == nil {
+		t.Fatalf("fetched metadata = %#v", fetched.Metadata)
+	}
+	if fetched.Metadata.ChannelBinding.Channel != "signal" || fetched.Metadata.ChannelBinding.ContactID != "contact-1" {
+		t.Fatalf("fetched channel binding = %#v", fetched.Metadata.ChannelBinding)
 	}
 }
 

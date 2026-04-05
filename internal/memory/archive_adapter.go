@@ -102,7 +102,11 @@ func (a *ArchiveAdapter) linkIterations(conversationID, sessionID string) {
 
 // StartSession begins a new session and returns its ID.
 func (a *ArchiveAdapter) StartSession(conversationID string) (string, error) {
-	sess, err := a.store.StartSession(conversationID)
+	var opts []SessionOption
+	if binding := a.conversationChannelBinding(conversationID); binding != nil {
+		opts = append(opts, WithChannelBinding(binding))
+	}
+	sess, err := a.store.StartSessionWithOptions(conversationID, opts...)
 	if err != nil {
 		return "", err
 	}
@@ -225,4 +229,20 @@ func (a *ArchiveAdapter) LinkPendingIterationToolCalls(sessionID string) error {
 // Store returns the underlying ArchiveStore for direct access (API endpoints, etc.)
 func (a *ArchiveAdapter) Store() *ArchiveStore {
 	return a.store
+}
+
+func (a *ArchiveAdapter) conversationChannelBinding(conversationID string) *ChannelBinding {
+	if conversationID == "" {
+		return nil
+	}
+	switch store := a.msgStore.(type) {
+	case *SQLiteStore:
+		conv := store.GetConversation(conversationID)
+		if conv == nil || conv.Metadata == nil {
+			return nil
+		}
+		return conv.Metadata.ChannelBinding.Clone()
+	default:
+		return nil
+	}
 }

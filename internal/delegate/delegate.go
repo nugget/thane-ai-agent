@@ -361,6 +361,9 @@ func (e *Executor) executeLegacy(ctx context.Context, task, profileName, guidanc
 		if parentToolCallID != "" {
 			opts = append(opts, memory.WithParentToolCall(parentToolCallID))
 		}
+		if binding := tools.ChannelBindingFromContext(ctx); binding != nil {
+			opts = append(opts, memory.WithChannelBinding(binding))
+		}
 
 		sess, err := e.archiver.StartSessionWithOptions(convID, opts...)
 		if err != nil {
@@ -1012,6 +1015,9 @@ func (e *Executor) prepareExecution(ctx context.Context, task, profileName, guid
 		}
 		if parentToolCallID != "" {
 			opts = append(opts, memory.WithParentToolCall(parentToolCallID))
+		}
+		if binding := tools.ChannelBindingFromContext(ctx); binding != nil {
+			opts = append(opts, memory.WithChannelBinding(binding))
 		}
 
 		sess, err := e.archiver.StartSessionWithOptions(conversationID, opts...)

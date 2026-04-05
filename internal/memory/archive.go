@@ -109,10 +109,29 @@ func WithParentToolCall(id string) SessionOption {
 	return func(s *Session) { s.ParentToolCallID = id }
 }
 
+// WithChannelBinding snapshots the effective conversation/channel
+// binding onto the archived session at creation time.
+func WithChannelBinding(binding *ChannelBinding) SessionOption {
+	return func(s *Session) {
+		if binding == nil {
+			return
+		}
+		if s.Metadata == nil {
+			s.Metadata = &SessionMetadata{}
+		}
+		s.Metadata.ChannelBinding = binding.Clone()
+	}
+}
+
 // SessionMetadata holds rich, LLM-generated metadata for human-oriented
 // search and browsing. Stored as JSON in the database for flexibility —
 // new fields can be added without schema migrations.
 type SessionMetadata struct {
+	// ChannelBinding is the channel/contact binding snapshot active when
+	// the session was created. This preserves the security-policy
+	// identity view Thane had at the time for later forensics.
+	ChannelBinding *ChannelBinding `json:"channel_binding,omitempty"`
+
 	// Summaries at different lengths for different display contexts.
 	OneLiner  string `json:"one_liner,omitempty"` // ~10 words
 	Paragraph string `json:"paragraph,omitempty"` // 2-4 sentences
@@ -1480,7 +1499,7 @@ func (s *ArchiveStore) expandContext(
 
 // StartSession creates a new session record with the current time.
 func (s *ArchiveStore) StartSession(conversationID string) (*Session, error) {
-	return s.StartSessionAt(conversationID, time.Now().UTC())
+	return s.StartSessionWithOptions(conversationID)
 }
 
 // StartSessionAt creates a new session record with a specific start time.
@@ -1508,8 +1527,9 @@ func (s *ArchiveStore) StartSessionAt(conversationID string, startedAt time.Time
 }
 
 // StartSessionWithOptions creates a new session record with optional
-// parent linkage. Use [WithParentSession] and [WithParentToolCall] to
-// set parent fields for delegate sessions.
+// parent linkage and metadata snapshots. Use [WithParentSession],
+// [WithParentToolCall], and [WithChannelBinding] to stamp archive-only
+// session context at creation time.
 func (s *ArchiveStore) StartSessionWithOptions(conversationID string, opts ...SessionOption) (*Session, error) {
 	id, err := uuid.NewV7()
 	if err != nil {
@@ -1524,12 +1544,16 @@ func (s *ArchiveStore) StartSessionWithOptions(conversationID string, opts ...Se
 	for _, opt := range opts {
 		opt(sess)
 	}
+	metaJSON, err := sessionMetadataJSON(sess.Metadata)
+	if err != nil {
+		return nil, fmt.Errorf("marshal metadata: %w", err)
+	}
 
 	if _, err = s.db.Exec(`
-		INSERT INTO sessions (id, conversation_id, started_at, message_count, parent_session_id, parent_tool_call_id)
-		VALUES (?, ?, ?, 0, ?, ?)
+		INSERT INTO sessions (id, conversation_id, started_at, message_count, metadata, parent_session_id, parent_tool_call_id)
+		VALUES (?, ?, ?, 0, ?, ?, ?)
 	`, sess.ID, conversationID, sess.StartedAt.Format(time.RFC3339Nano),
-		nullString(sess.ParentSessionID), nullString(sess.ParentToolCallID)); err != nil {
+		nullString(string(metaJSON)), nullString(sess.ParentSessionID), nullString(sess.ParentToolCallID)); err != nil {
 		return nil, fmt.Errorf("insert session: %w", err)
 	}
 
@@ -1615,13 +1639,22 @@ func (s *ArchiveStore) SetSessionSummary(sessionID string, summary string) error
 // SetSessionMetadata updates the full rich metadata for a session,
 // including title, tags, summary, and structured metadata JSON.
 func (s *ArchiveStore) SetSessionMetadata(sessionID string, meta *SessionMetadata, title string, tags []string) error {
-	var metaJSON []byte
-	if meta != nil {
-		var err error
-		metaJSON, err = json.Marshal(meta)
-		if err != nil {
-			return fmt.Errorf("marshal metadata: %w", err)
+	existingMeta, err := s.sessionMetadata(sessionID)
+	if err != nil {
+		return err
+	}
+	if existingMeta != nil && existingMeta.ChannelBinding != nil {
+		if meta == nil {
+			meta = &SessionMetadata{}
 		}
+		if meta.ChannelBinding == nil {
+			meta.ChannelBinding = existingMeta.ChannelBinding.Clone()
+		}
+	}
+
+	metaJSON, err := sessionMetadataJSON(meta)
+	if err != nil {
+		return fmt.Errorf("marshal metadata: %w", err)
 	}
 
 	var tagsJSON []byte
@@ -1642,11 +1675,34 @@ func (s *ArchiveStore) SetSessionMetadata(sessionID string, meta *SessionMetadat
 		}
 	}
 
-	_, err := s.db.Exec(`
+	_, err = s.db.Exec(`
 		UPDATE sessions SET title = ?, tags = ?, metadata = ?, summary = ?
 		WHERE id = ?
 	`, nullString(title), nullString(string(tagsJSON)), nullString(string(metaJSON)), nullString(summary), sessionID)
 	return err
+}
+
+func sessionMetadataJSON(meta *SessionMetadata) ([]byte, error) {
+	if meta == nil {
+		return nil, nil
+	}
+	return json.Marshal(meta)
+}
+
+func (s *ArchiveStore) sessionMetadata(sessionID string) (*SessionMetadata, error) {
+	row := s.db.QueryRow(`SELECT metadata FROM sessions WHERE id = ?`, sessionID)
+	var metaJSON sql.NullString
+	if err := row.Scan(&metaJSON); err != nil {
+		return nil, fmt.Errorf("load session metadata: %w", err)
+	}
+	if !metaJSON.Valid || strings.TrimSpace(metaJSON.String) == "" {
+		return nil, nil
+	}
+	var meta SessionMetadata
+	if err := json.Unmarshal([]byte(metaJSON.String), &meta); err != nil {
+		return nil, fmt.Errorf("parse session metadata: %w", err)
+	}
+	return &meta, nil
 }
 
 // ActiveSession returns the most recent unclosed session for a conversation, if any.

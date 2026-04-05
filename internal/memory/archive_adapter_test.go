@@ -153,6 +153,38 @@ func TestAdapter_SessionLifecycle(t *testing.T) {
 	}
 }
 
+func TestAdapter_StartSessionSnapshotsConversationBinding(t *testing.T) {
+	adapter, archiveStore, workingStore := newTestAdapter(t)
+
+	err := workingStore.BindConversationChannel("signal-15551234567", &ChannelBinding{
+		Channel:     "signal",
+		Address:     "+15551234567",
+		ContactID:   "contact-1",
+		ContactName: "Alice Smith",
+		TrustZone:   "known",
+		LinkSource:  "tel",
+	})
+	if err != nil {
+		t.Fatalf("BindConversationChannel: %v", err)
+	}
+
+	sid, err := adapter.StartSession("signal-15551234567")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	sess, err := archiveStore.GetSession(sid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sess.Metadata == nil || sess.Metadata.ChannelBinding == nil {
+		t.Fatalf("session metadata = %#v", sess.Metadata)
+	}
+	if sess.Metadata.ChannelBinding.ContactName != "Alice Smith" || sess.Metadata.ChannelBinding.TrustZone != "known" {
+		t.Fatalf("session channel binding = %#v", sess.Metadata.ChannelBinding)
+	}
+}
+
 func TestAdapter_EnsureSession(t *testing.T) {
 	adapter, _, _ := newTestAdapter(t)
 
