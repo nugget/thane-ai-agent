@@ -28,6 +28,18 @@ const forensics = {
   content: $('#forensics-content'),
   waterfall: $('#forensics-waterfall'),
 };
+const popupFooter = {
+  version: $('#popup-footer-version'),
+  uptime: $('#popup-footer-uptime'),
+  arch: $('#popup-footer-arch'),
+  go: $('#popup-footer-go'),
+  loopState: $('#popup-footer-loop-state'),
+  loopRuntime: $('#popup-footer-loop-runtime'),
+  loopIterations: $('#popup-footer-loop-iterations'),
+  loopTokens: $('#popup-footer-loop-tokens'),
+  loopContext: $('#popup-footer-loop-context'),
+  loopWake: $('#popup-footer-loop-wake'),
+};
 
 // ---------------------------------------------------------------------------
 // Connection Status (dot indicator instead of status bar)
@@ -62,6 +74,7 @@ let activeRequestID = '';
 let activeRequestJSON = '';
 let pinnedRequestID = '';
 let followLatestRequest = true;
+let serverStartTime = null;
 
 function startLogPoll() {
   if (logPollInterval) clearInterval(logPollInterval);
@@ -69,6 +82,98 @@ function startLogPoll() {
   pollLabel.textContent = secs + 's';
   const fetchFn = nodeType === 'system' ? fetchSystemLogs : fetchLoopLogs;
   logPollInterval = setInterval(fetchFn, secs * 1000);
+}
+
+async function fetchVersionInfo() {
+  try {
+    const resp = await fetch('/v1/version');
+    if (!resp.ok) return;
+    const info = await resp.json();
+
+    const ver = info.version || 'dev';
+    const commit = (info.git_commit || 'unknown').slice(0, 7);
+    if (popupFooter.version) popupFooter.version.textContent = ver + ' (' + commit + ')';
+    if (popupFooter.arch) popupFooter.arch.textContent = (info.os || '') + '/' + (info.arch || '');
+    if (popupFooter.go) popupFooter.go.textContent = info.go_version || '';
+
+    if (info.uptime) {
+      const uptimeMs = parseDuration(info.uptime);
+      serverStartTime = Date.now() - uptimeMs;
+    }
+
+    updatePopupFooter();
+  } catch (err) {
+    console.warn('Failed to fetch version info:', err);
+  }
+}
+
+function setFooterItem(el, value, extraClass = '') {
+  if (!el) return;
+  el.hidden = !value;
+  el.textContent = value || '';
+  el.className = 'footer-item' + (extraClass ? ' ' + extraClass : '');
+}
+
+function updatePopupUptime() {
+  if (!popupFooter.uptime || serverStartTime === null) return;
+  popupFooter.uptime.textContent = 'up ' + formatUptimeLong(Date.now() - serverStartTime);
+}
+
+function formatLoopFooterWake(loop) {
+  if (!loop) return '';
+  if (loop.state === 'sleeping') {
+    const sleepTimer = sleepTimers.get(nodeId);
+    if (sleepTimer && sleepTimer.durationMs > 0) {
+      const remaining = sleepTimer.durationMs - (Date.now() - sleepTimer.startedAt);
+      if (remaining > 0) return 'sleep ' + formatDuration(remaining);
+    }
+    return 'sleeping';
+  }
+  if (loop.state === 'waiting') return 'awaiting event';
+  const lastWake = parseTimestamp(loop.last_wake_at);
+  if (!lastWake) return '';
+  return 'wake ' + timeAgo(lastWake);
+}
+
+function updatePopupFooter() {
+  updatePopupUptime();
+  if (nodeType !== 'loop' || !loopData) {
+    setFooterItem(popupFooter.loopState, '');
+    setFooterItem(popupFooter.loopRuntime, '');
+    setFooterItem(popupFooter.loopIterations, '');
+    setFooterItem(popupFooter.loopTokens, '');
+    setFooterItem(popupFooter.loopContext, '');
+    setFooterItem(popupFooter.loopWake, '');
+    return;
+  }
+
+  const loopStarted = parseTimestamp(loopData.started_at);
+  const totalTokens = (loopData.total_input_tokens || 0) + (loopData.total_output_tokens || 0);
+  const iterations = loopData._delegate ? (loopData._delegateIterations || 0) : (loopData.iterations || 0);
+  const attempts = loopData.attempts || 0;
+
+  setFooterItem(
+    popupFooter.loopState,
+    formatSchemaToken(loopData.state || 'pending'),
+    loopData.state === 'processing' ? 'footer-item--live' : 'footer-item--accent',
+  );
+  setFooterItem(popupFooter.loopRuntime, loopStarted ? 'loop ' + formatUptimeLong(Date.now() - loopStarted.getTime()) : '');
+  setFooterItem(
+    popupFooter.loopIterations,
+    iterations > 0 || attempts > 0
+      ? `${formatNumber(iterations)} iter${attempts !== iterations ? ' · ' + formatNumber(attempts) + ' att' : ''}`
+      : '',
+  );
+  setFooterItem(popupFooter.loopTokens, totalTokens > 0 ? formatTokens(totalTokens) + ' tok' : '');
+
+  let contextText = '';
+  if (loopData.context_window && loopData.last_input_tokens) {
+    contextText = 'ctx ' + formatTokens(loopData.last_input_tokens) + ' / ' + formatNumber(loopData.context_window);
+  } else if (loopData.context_window) {
+    contextText = 'ctx ' + formatNumber(loopData.context_window);
+  }
+  setFooterItem(popupFooter.loopContext, contextText);
+  setFooterItem(popupFooter.loopWake, formatLoopFooterWake(loopData));
 }
 
 pollSlider.addEventListener('input', () => {
@@ -106,11 +211,15 @@ function initSystem() {
   showSystemLogsView();
   $('#system-detail').hidden = false;
 
+  void fetchVersionInfo();
   fetchSystemStatus();
   fetchSystemLogs();
   setInterval(fetchSystemStatus, 10000);
   startLogPoll();
-  setInterval(updateSystemUptime, 1000);
+  setInterval(() => {
+    updateSystemUptime();
+    updatePopupFooter();
+  }, 1000);
 }
 
 async function fetchSystemStatus() {
@@ -134,6 +243,7 @@ async function fetchSystemStatus() {
       registryDeployments: $('#system-registry-deployments'),
     });
     updateSystemUptime();
+    updatePopupFooter();
 
     setConnStatus('ok', 'Connected \u2014 last updated ' + formatTime(new Date()));
   } catch (err) {
@@ -144,7 +254,12 @@ async function fetchSystemStatus() {
 function updateSystemUptime() {
   if (systemStartTime === null) return;
   const ms = Date.now() - systemStartTime;
-  $('#system-uptime').textContent = formatUptimeLong(ms);
+  const el = $('#system-uptime');
+  if (el) el.textContent = formatUptimeLong(ms);
+  if (serverStartTime === null) {
+    serverStartTime = systemStartTime;
+  }
+  updatePopupUptime();
 }
 
 async function fetchSystemLogs() {
@@ -226,28 +341,66 @@ function renderForensicsCurrent(loop) {
   const latestSnap = getLatestLoopSnapshot();
   const latestModel = loop._liveModel || loop._lastModel || latestSnap?.model || '';
   const currentConvID = loop._currentConvID || latestSnap?.conv_id || '';
+  const targetRequestID = followLatestRequest ? latestRequestID : (pinnedRequestID || latestRequestID);
   const chips = [
+    { text: followLatestRequest ? 'live follow' : 'pinned', focus: true },
     { text: formatSchemaToken(loop.state || 'pending') },
     latestModel ? { text: shortModelName(latestModel) } : null,
     currentConvID ? { text: 'thread ' + shortID(currentConvID) } : null,
-    latestRequestID ? { text: 'req ' + shortID(latestRequestID), request: true } : null,
+    targetRequestID ? { text: 'req ' + shortID(targetRequestID), request: true, full: targetRequestID } : null,
   ].filter(Boolean);
 
   forensics.current.innerHTML = '';
   for (const item of chips) {
     const el = document.createElement(item.request ? 'button' : 'span');
-    el.className = 'forensics-chip' + (item.request ? ' forensics-chip--request' : '');
+    el.className = 'forensics-chip'
+      + (item.request ? ' forensics-chip--request' : '')
+      + (item.focus ? ' forensics-chip--focus' : '');
     el.textContent = item.text;
     if (item.request) {
       el.type = 'button';
-      el.title = latestRequestID;
+      el.title = item.full || '';
       el.addEventListener('click', () => {
+        if (!item.full) return;
         followLatestRequest = false;
-        pinnedRequestID = latestRequestID;
+        pinnedRequestID = item.full;
         syncLoopRequestDetail(true);
       });
     }
     forensics.current.appendChild(el);
+  }
+}
+
+function setForensicsRequestLoading(requestID) {
+  activeRequestID = requestID || '';
+  activeRequestJSON = '';
+  if (forensics.ids) {
+    forensics.ids.innerHTML = '';
+    if (requestID) {
+      forensics.ids.appendChild(makeIDRow('request_id', requestID));
+    }
+  }
+  if (forensics.meta) {
+    forensics.meta.innerHTML = '';
+  }
+  if (forensics.requestMeta) {
+    const metaBits = [];
+    if (!followLatestRequest) metaBits.push('Pinned');
+    if (requestID) metaBits.push('Loading req ' + shortID(requestID));
+    forensics.requestMeta.textContent = metaBits.join(' · ');
+    forensics.requestMeta.classList.toggle('forensics-card__meta--loading', !!requestID);
+  }
+  if (forensics.waterfallMeta) {
+    forensics.waterfallMeta.textContent = requestID ? 'Waiting for request detail' : '';
+  }
+  if (forensics.empty) {
+    forensics.empty.textContent = requestID
+      ? 'Loading retained request ' + shortID(requestID) + '…'
+      : 'Waiting for the first retained request in this loop.';
+  }
+  setForensicsLoaded(false);
+  if (requestSection) {
+    requestSection.scrollTo({ top: 0, behavior: 'smooth' });
   }
 }
 
@@ -257,7 +410,10 @@ async function fetchRequestDetailIntoForensics(requestID) {
     activeRequestJSON = '';
     if (forensics.ids) forensics.ids.innerHTML = '';
     if (forensics.meta) forensics.meta.innerHTML = '';
-    if (forensics.requestMeta) forensics.requestMeta.textContent = '';
+    if (forensics.requestMeta) {
+      forensics.requestMeta.textContent = '';
+      forensics.requestMeta.classList.remove('forensics-card__meta--loading');
+    }
     if (forensics.waterfallMeta) forensics.waterfallMeta.textContent = '';
     if (forensics.empty) {
       forensics.empty.textContent = loopData && loopData.state === 'processing'
@@ -269,6 +425,8 @@ async function fetchRequestDetailIntoForensics(requestID) {
     return;
   }
 
+  setForensicsRequestLoading(requestID);
+
   try {
     const resp = await fetch('/api/requests/' + encodeURIComponent(requestID));
     if (!resp.ok) {
@@ -276,9 +434,12 @@ async function fetchRequestDetailIntoForensics(requestID) {
       activeRequestJSON = '';
       if (forensics.ids) forensics.ids.innerHTML = '';
       if (forensics.meta) forensics.meta.innerHTML = '';
-      if (forensics.requestMeta) forensics.requestMeta.textContent = resp.status === 404
-        ? 'Request retention unavailable'
-        : 'Request detail failed (' + resp.status + ')';
+      if (forensics.requestMeta) {
+        forensics.requestMeta.textContent = resp.status === 404
+          ? 'Request retention unavailable'
+          : 'Request detail failed (' + resp.status + ')';
+        forensics.requestMeta.classList.remove('forensics-card__meta--loading');
+      }
       if (forensics.waterfallMeta) forensics.waterfallMeta.textContent = '';
       if (forensics.empty) {
         forensics.empty.textContent = resp.status === 404
@@ -301,6 +462,7 @@ async function fetchRequestDetailIntoForensics(requestID) {
       if (detail.model) metaBits.push(shortModelName(detail.model));
       if (detail.iteration_count) metaBits.push(formatNumber(detail.iteration_count) + ' iterations');
       forensics.requestMeta.textContent = metaBits.join(' · ');
+      forensics.requestMeta.classList.remove('forensics-card__meta--loading');
     }
     if (forensics.waterfallMeta) {
       const waterfallBits = [];
@@ -323,7 +485,10 @@ async function fetchRequestDetailIntoForensics(requestID) {
     console.warn('Failed to fetch request detail:', err);
     if (forensics.ids) forensics.ids.innerHTML = '';
     if (forensics.meta) forensics.meta.innerHTML = '';
-    if (forensics.requestMeta) forensics.requestMeta.textContent = 'Request detail failed';
+    if (forensics.requestMeta) {
+      forensics.requestMeta.textContent = 'Request detail failed';
+      forensics.requestMeta.classList.remove('forensics-card__meta--loading');
+    }
     if (forensics.empty) forensics.empty.textContent = 'Request detail failed to load.';
     setForensicsLoaded(false);
     updateForensicsControls();
@@ -379,6 +544,7 @@ function initLoop() {
 
   showLoopForensicsView();
   $('#loop-detail').hidden = false;
+  void fetchVersionInfo();
   window.onRequestChipClick = (requestID) => {
     if (!requestID) return;
     followLatestRequest = false;
@@ -511,6 +677,7 @@ function renderLoopDetail() {
   // Iteration timeline.
   renderTimeline(loopData, $('#detail-timeline'), iterationHistory, nodeId, sleepTimers);
   syncLoopRequestDetail();
+  updatePopupFooter();
 
   // Capabilities: show configured tags (muted if inactive) and
   // dynamically activated tags (dashed border if not in config).
@@ -546,6 +713,8 @@ function renderLoopDetail() {
 function tickLoop() {
   if (loopData) {
     renderLoopDetail();
+  } else {
+    updatePopupFooter();
   }
 }
 

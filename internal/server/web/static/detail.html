@@ -125,6 +125,11 @@
       border-color: rgba(88, 166, 255, 0.28);
       background: rgba(88, 166, 255, 0.12);
     }
+    .forensics-chip--focus {
+      color: var(--accent);
+      border-color: rgba(45, 212, 191, 0.28);
+      background: rgba(45, 212, 191, 0.14);
+    }
     .forensics-card {
       border: 1px solid var(--border);
       border-radius: 12px;
@@ -150,6 +155,9 @@
     .forensics-card__meta {
       color: var(--text-muted);
       font-size: 0.69rem;
+    }
+    .forensics-card__meta--loading {
+      color: var(--accent);
     }
     .forensics-card__body {
       padding: 0.9rem;
@@ -275,6 +283,25 @@
     .inspector-body::-webkit-scrollbar-track { background: transparent; }
     .inspector-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
     .inspector-body::-webkit-scrollbar-thumb:hover { background: var(--border-light); }
+    .popup-footer {
+      flex-wrap: wrap;
+      gap: 0.6rem 1rem;
+      padding-inline: 0.85rem;
+    }
+    .popup-footer .footer-item[hidden] {
+      display: none;
+    }
+    .popup-footer .footer-item--accent {
+      color: var(--text-primary);
+    }
+    .popup-footer .footer-item--live {
+      color: var(--accent);
+    }
+    @media (max-width: 720px) {
+      .popup-footer {
+        font-size: 0.66rem;
+      }
+    }
     /* (status bar removed — connection state shown via dot in inspector) */
   </style>
 </head>
@@ -423,6 +450,19 @@
       </div>
     </section>
   </div>
+
+  <footer class="footer popup-footer" id="popup-footer">
+    <span id="popup-footer-version" class="footer-item"></span>
+    <span id="popup-footer-uptime" class="footer-item"></span>
+    <span id="popup-footer-arch" class="footer-item"></span>
+    <span id="popup-footer-go" class="footer-item"></span>
+    <span id="popup-footer-loop-state" class="footer-item footer-item--accent" hidden></span>
+    <span id="popup-footer-loop-runtime" class="footer-item" hidden></span>
+    <span id="popup-footer-loop-iterations" class="footer-item" hidden></span>
+    <span id="popup-footer-loop-tokens" class="footer-item" hidden></span>
+    <span id="popup-footer-loop-context" class="footer-item" hidden></span>
+    <span id="popup-footer-loop-wake" class="footer-item" hidden></span>
+  </footer>
 
   <script src="/static/shared.js"></script>
   <script src="/static/detail.js"></script>
