@@ -174,7 +174,11 @@ function getOrbitFamilyRadius(parentID, loops, branchLoads) {
   const requiredCircumference = loops.reduce((sum, loop) => sum + getOrbitSlotSize(parentID, loop, branchLoads), 0);
   let radius = Math.max(baseRadius, requiredCircumference / (Math.PI * 2));
   if (parentID) {
-    radius += Math.min(56, getPhysicsNodeExtent(parentID) * 0.35);
+    const parentExtent = getPhysicsNodeExtent(parentID);
+    const maxChildExtent = loops.reduce((max, loop) => Math.max(max, getPhysicsNodeExtent(loop.id)), 0);
+    const parentClearance = parentExtent + maxChildExtent + physics.collisionPadding + 8;
+    radius = Math.max(radius, parentClearance);
+    radius += Math.min(56, parentExtent * 0.35);
   }
   return radius;
 }
@@ -246,6 +250,37 @@ function projectOrbitTargets(targets, positionBlend, velocityDamping) {
   }
 }
 
+function kickOrbitReflow(orbitTargets, loopIDs) {
+  if (!orbitTargets || !loopIDs || loopIDs.length === 0) return;
+
+  const affected = new Set();
+  for (const loopID of loopIDs) {
+    let cursor = state.loops.get(loopID);
+    while (cursor) {
+      affected.add(cursor.id);
+      const parentID = cursor.parent_id;
+      for (const loop of state.loops.values()) {
+        if (loop.parent_id === parentID) affected.add(loop.id);
+      }
+      if (!parentID) break;
+      cursor = state.loops.get(parentID) || null;
+    }
+  }
+
+  for (const id of affected) {
+    const nd = physics.nodes.get(id);
+    const target = orbitTargets.get(id);
+    if (!nd || !target || nd.pinned) continue;
+    const dx = target.x - nd.x;
+    const dy = target.y - nd.y;
+    const dist = Math.sqrt((dx * dx) + (dy * dy));
+    if (dist < 0.001) continue;
+    const gain = Math.min(0.34, 0.08 + (dist / 420) * 0.18);
+    nd.vx += dx * gain * 0.12;
+    nd.vy += dy * gain * 0.12;
+  }
+}
+
 // Ensure physics.nodes matches the current set of loops + system node.
 // New nodes spawn at their parent position (or center with jitter).
 function syncPhysicsNodes(cx, cy) {
@@ -264,13 +299,26 @@ function syncPhysicsNodes(cx, cy) {
   const branchLoads = buildLoopBranchLoads();
   const siblingIndex = buildSiblingIndex();
   const orbitTargets = buildOrbitTargets(cx, cy, branchLoads, siblingIndex, cx * 2, cy * 2);
+  const addedLoopIDs = [];
 
   // Loop nodes.
   for (const loop of state.loops.values()) {
     if (physics.nodes.has(loop.id)) continue;
     let sx, sy;
     const target = orbitTargets.get(loop.id);
-    if (target) {
+    const parentNode = loop.parent_id ? physics.nodes.get(loop.parent_id) : null;
+    if (target && parentNode) {
+      const childExtent = getPhysicsNodeExtent(loop.id);
+      const parentExtent = getPhysicsNodeExtent(loop.parent_id);
+      const spawnRadius = Math.max(
+        parentExtent + childExtent + physics.collisionPadding + 6,
+        target.radius * 0.72,
+      );
+      const jitter = 6 + Math.random() * 8;
+      const angle = target.angle + ((Math.random() - 0.5) * 0.28);
+      sx = parentNode.x + Math.cos(angle) * (spawnRadius + jitter);
+      sy = parentNode.y + Math.sin(angle) * (spawnRadius + jitter);
+    } else if (target) {
       const jitter = 6 + Math.random() * 8;
       const angle = target.angle + ((Math.random() - 0.5) * 0.5);
       sx = target.x + Math.cos(angle) * jitter;
@@ -280,6 +328,7 @@ function syncPhysicsNodes(cx, cy) {
       sy = cy + (Math.random() * 40 - 20);
     }
     physics.nodes.set(loop.id, { x: sx, y: sy, vx: 0, vy: 0, pinned: false });
+    addedLoopIDs.push(loop.id);
   }
 
   // Remove physics nodes for loops that no longer exist (and aren't system).
@@ -289,6 +338,10 @@ function syncPhysicsNodes(cx, cy) {
     if (!state.loops.has(id) && !canvasWorld.querySelector(`[data-loop-id="${id}"].loop-node--exiting`)) {
       physics.nodes.delete(id);
     }
+  }
+
+  if (addedLoopIDs.length > 0) {
+    kickOrbitReflow(orbitTargets, addedLoopIDs);
   }
 }
 
