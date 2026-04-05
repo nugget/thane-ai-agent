@@ -790,6 +790,8 @@ function buildLoopEntity(loop) {
   const allTags = Array.from(new Set([...configTags, ...activeTags])).sort();
   const latestModel = loop._liveModel || loop._lastModel || (latest && latest.model) || '';
   const latestRequestID = (latest && latest.request_id) || '';
+  const startedAt = parseTimestamp(loop.started_at) ? loop.started_at : '';
+  const lastWakeAt = parseTimestamp(loop.last_wake_at) ? loop.last_wake_at : '';
   const currentConvID = loop._currentConvID || '';
   const recentConvIDs = Array.from(new Set(
     (Array.isArray(loop.recent_conv_ids) ? loop.recent_conv_ids : []).filter(Boolean),
@@ -814,8 +816,8 @@ function buildLoopEntity(loop) {
     latestRequestID,
     latestSnapshot: latest,
     latestModel,
-    startedAt: loop.started_at || '',
-    lastWakeAt: loop.last_wake_at || '',
+    startedAt,
+    lastWakeAt,
     iterations: loop.iterations || 0,
     attempts: loop.attempts || 0,
     lastInputTokens: loop.last_input_tokens || 0,
@@ -1482,7 +1484,8 @@ function connect() {
       // Seed live telemetry for loops already in processing state
       // so the Live Activity section shows immediately on connect.
       if (s.state === 'processing') {
-        s._iterStartTs = s.last_wake_at ? new Date(s.last_wake_at).getTime() : Date.now();
+        const lastWake = parseTimestamp(s.last_wake_at);
+        s._iterStartTs = lastWake ? lastWake.getTime() : Date.now();
         s._liveTools = [];
         s._liveModel = '';
         // Restore LLM context from snapshot so late-connecting clients
@@ -2986,7 +2989,8 @@ function renderLoopEntityDetail(loop) {
   const recentHistoryIDs = entity.recentConvIDs.filter((id) => id !== entity.currentConvID);
   const historyCount = recentHistoryIDs.length + (entity.currentConvID ? 1 : 0);
   const parentLabel = entity.parentID ? shortID(entity.parentID) : 'core';
-  const lastWakeAgo = entity.lastWakeAt ? timeAgo(new Date(entity.lastWakeAt)) : '';
+  const lastWakeDate = parseTimestamp(entity.lastWakeAt);
+  const lastWakeAgo = lastWakeDate ? timeAgo(lastWakeDate) : '';
   const latestModelLabel = entity.latestModel || 'model pending';
   const contextLabel = entity.contextWindow ? `${formatNumber(entity.contextWindow)} ctx` : '';
   const missionSummary = entity.hints.mission ? truncate(entity.hints.mission, 92) : '';
@@ -3096,7 +3100,7 @@ function renderLoopEntityDetail(loop) {
   });
   appendSchemaRow(execution.body, 'state', formatSchemaToken(entity.stateLabel));
   appendSchemaRow(execution.body, 'started', entity.startedAt ? timeAgo(new Date(entity.startedAt)) : '');
-  appendSchemaRow(execution.body, 'last wake', entity.lastWakeAt ? timeAgo(new Date(entity.lastWakeAt)) : '');
+  appendSchemaRow(execution.body, 'last wake', lastWakeDate ? timeAgo(lastWakeDate) : '');
   appendSchemaRow(execution.body, 'iterations', formatNumber(entity.iterations));
   appendSchemaRow(execution.body, 'attempts', formatNumber(entity.attempts));
   appendSchemaRow(execution.body, 'consecutive errors', entity.consecutiveErrors ? formatNumber(entity.consecutiveErrors) : '');

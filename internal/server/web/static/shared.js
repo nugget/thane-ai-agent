@@ -51,7 +51,9 @@ function formatTimeShort(date) {
 }
 
 function timeAgo(date) {
+  if (!(date instanceof Date) || isNaN(date)) return '';
   const diff = Date.now() - date.getTime();
+  if (diff < 0) return 'soon';
   const sec = Math.floor(diff / 1000);
   if (sec < 60) return sec + 's ago';
   const min = Math.floor(sec / 60);
@@ -228,8 +230,9 @@ function makeIDChip(fullID, opts = {}) {
 
 function parseTimestamp(raw) {
   if (!raw) return null;
+  if (typeof raw === 'string' && raw.startsWith('0001-01-01T00:00:00')) return null;
   const date = new Date(raw);
-  if (isNaN(date)) return null;
+  if (isNaN(date) || date.getUTCFullYear() <= 1) return null;
   return date;
 }
 
@@ -1293,7 +1296,8 @@ function renderAggregates(loop, el) {
   if (!loop._delegate && att !== iter) parts.push(formatNumber(att) + ' att');
   const totalTok = (loop.total_input_tokens || 0) + (loop.total_output_tokens || 0);
   if (totalTok > 0) parts.push(formatTokens(totalTok) + ' tok');
-  if (loop.started_at) parts.push(timeAgo(new Date(loop.started_at)));
+  const startedAt = parseTimestamp(loop.started_at);
+  if (startedAt) parts.push(timeAgo(startedAt));
   if (loop.last_error) {
     parts.push('<span class="agg-error">' + escapeHTML(truncate(loop.last_error, 40)) + '</span>');
   }
