@@ -826,6 +826,41 @@ function makeIterationFacts(items) {
   return grid;
 }
 
+function makeIterationChipGroup(label, values, className) {
+  const valid = Array.isArray(values) ? values.filter(Boolean) : [];
+  if (valid.length === 0) return null;
+  const group = document.createElement('div');
+  group.className = 'iter-card__scope-group';
+
+  const labelEl = document.createElement('div');
+  labelEl.className = 'iter-card__scope-label';
+  labelEl.textContent = label;
+  group.appendChild(labelEl);
+
+  const chips = document.createElement('div');
+  chips.className = 'iter-card__scope-chips';
+  for (const value of valid) {
+    const chip = document.createElement('span');
+    chip.className = className;
+    chip.textContent = value;
+    chips.appendChild(chip);
+  }
+  group.appendChild(chips);
+  return group;
+}
+
+function makeIterationScopePanel(items) {
+  const valid = (items || []).filter(Boolean);
+  if (valid.length === 0) return null;
+  const panel = document.createElement('div');
+  panel.className = 'iter-card__scope';
+  for (const item of valid) {
+    const group = makeIterationChipGroup(item.label, item.values, item.className);
+    if (group) panel.appendChild(group);
+  }
+  return panel.childElementCount > 0 ? panel : null;
+}
+
 function buildPastIterationSummary(snap, handlerOnly) {
   const toolCalls = countToolCalls(snap.tools_used);
   const summarySignals = countSummarySignals(snap.summary);
@@ -924,6 +959,10 @@ function buildLiveCard(loop) {
 
   const ctx = loop._llmContext;
   const liveRequestID = loop._currentRequestID || (ctx && ctx.request_id) || '';
+  const activeTags = Array.isArray(ctx && ctx.active_tags) && ctx.active_tags.length > 0
+    ? ctx.active_tags
+    : (Array.isArray(loop.active_tags) ? loop.active_tags : []);
+  const effectiveTools = Array.isArray(ctx && ctx.effective_tools) ? ctx.effective_tools : [];
   const summary = document.createElement('div');
   summary.className = 'iter-card__summary-line';
   const summaryBits = [];
@@ -934,6 +973,12 @@ function buildLiveCard(loop) {
     summaryBits.push('Current turn is sampling on ' + shortModelName(loop._liveModel));
   } else {
     summaryBits.push('Current turn is active');
+  }
+  if (effectiveTools.length > 0) {
+    summaryBits.push(effectiveTools.length + ' tools in scope');
+  }
+  if (activeTags.length > 0) {
+    summaryBits.push(activeTags.length + ' capabilities active');
   }
   if (ctx && ctx.intent) summaryBits.push(ctx.intent.replace(/_/g, ' '));
   if (ctx && ctx.reasoning) summaryBits.push(ctx.reasoning);
@@ -979,6 +1024,8 @@ function buildLiveCard(loop) {
     { label: 'Messages', value: ctx && ctx.messages ? formatNumber(ctx.messages) : '' },
     { label: 'Estimated context', value: ctx && ctx.est_tokens ? formatTokens(ctx.est_tokens) : '' },
     { label: 'Active tools', value: activeToolCalls > 0 ? formatNumber(activeToolCalls) : (ctx && ctx.tools ? formatNumber(ctx.tools) : '') },
+    { label: 'Tool surface', value: effectiveTools.length > 0 ? formatNumber(effectiveTools.length) : '' },
+    { label: 'Capabilities', value: activeTags.length > 0 ? formatNumber(activeTags.length) : '' },
     { label: 'Complexity', value: ctx && ctx.complexity ? ctx.complexity : '' },
   ]);
   if (liveFacts) card.appendChild(liveFacts);
@@ -998,6 +1045,16 @@ function buildLiveCard(loop) {
     });
     card.appendChild(reqChip);
   }
+
+  const liveScope = makeIterationScopePanel([
+    activeTags.length > 0
+      ? { label: 'Capabilities active', values: activeTags, className: 'tag-chip tag-chip--active' }
+      : null,
+    effectiveTools.length > 0
+      ? { label: 'Tool surface', values: effectiveTools, className: 'iter-card__tool-item iter-card__tool-item--scope' }
+      : null,
+  ]);
+  if (liveScope) card.appendChild(liveScope);
 
   // Live tool list.
   const tools = loop._liveTools || [];
@@ -1100,11 +1157,15 @@ function buildPastCard(snap, handlerOnly, idx, startExpanded) {
 
   const toolCalls = countToolCalls(snap.tools_used);
   const summarySignals = countSummarySignals(snap.summary);
+  const activeTags = Array.isArray(snap.active_tags) ? snap.active_tags : [];
+  const effectiveTools = Array.isArray(snap.effective_tools) ? snap.effective_tools : [];
   const facts = makeIterationFacts([
     { label: 'Health', value: buildPastIterationHealth(snap) },
     { label: 'Request', value: snap.request_id ? shortID(snap.request_id) : '' },
     { label: 'Duration', value: snap.elapsed_ms ? formatDuration(snap.elapsed_ms) : '' },
     { label: 'Tool calls', value: toolCalls > 0 ? formatNumber(toolCalls) : '' },
+    { label: 'Tool surface', value: effectiveTools.length > 0 ? formatNumber(effectiveTools.length) : '' },
+    { label: 'Capabilities', value: activeTags.length > 0 ? formatNumber(activeTags.length) : '' },
     !handlerOnly ? { label: 'Input tokens', value: snap.input_tokens ? formatTokens(snap.input_tokens) : '' } : { label: 'Handler signals', value: summarySignals > 0 ? formatNumber(summarySignals) : '' },
     !handlerOnly ? { label: 'Output tokens', value: snap.output_tokens ? formatTokens(snap.output_tokens) : '' } : { label: 'When', value: snap.completed_at ? timeAgo(new Date(snap.completed_at)) : '' },
     !handlerOnly ? { label: 'Context window', value: snap.context_window ? formatNumber(snap.context_window) : '' } : null,
@@ -1137,6 +1198,16 @@ function buildPastCard(snap, handlerOnly, idx, startExpanded) {
     });
     body.appendChild(reqChip);
   }
+
+  const pastScope = makeIterationScopePanel([
+    activeTags.length > 0
+      ? { label: 'Capabilities active', values: activeTags, className: 'tag-chip tag-chip--active' }
+      : null,
+    effectiveTools.length > 0
+      ? { label: 'Tool surface', values: effectiveTools, className: 'iter-card__tool-item iter-card__tool-item--scope' }
+      : null,
+  ]);
+  if (pastScope) body.appendChild(pastScope);
 
   // Tool chips.
   const toolsUsed = snap.tools_used;
@@ -1367,6 +1438,8 @@ function applyLoopEventToLoop(evt, ctx) {
         output_tokens: d.output_tokens || 0,
         context_window: d.context_window || 0,
         tools_used: d.tools_used || buildToolCounts(loop._liveTools),
+        effective_tools: Array.isArray(d.effective_tools) ? d.effective_tools.slice() : null,
+        active_tags: Array.isArray(d.active_tags) ? d.active_tags.slice() : null,
         elapsed_ms: d.elapsed_ms || 0,
         supervisor: loop._lastSupervisor || false,
         started_at: loop._iterStartTs ? new Date(loop._iterStartTs).toISOString() : evt.ts,
@@ -1411,6 +1484,8 @@ function applyLoopEventToLoop(evt, ctx) {
         est_tokens: d.est_tokens || 0,
         messages: d.messages || 0,
         tools: d.tools || 0,
+        effective_tools: Array.isArray(d.effective_tools) ? d.effective_tools.slice() : [],
+        active_tags: Array.isArray(d.active_tags) ? d.active_tags.slice() : [],
         iteration: d.iteration,
         complexity: d.complexity || '',
         intent: d.intent || '',

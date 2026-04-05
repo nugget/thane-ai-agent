@@ -983,6 +983,7 @@ func (a *loopAdapter) Run(ctx context.Context, req looppkg.Request, _ looppkg.St
 		CacheReadInputTokens:     resp.CacheReadInputTokens,
 		ContextWindow:            ctxWindow,
 		ToolsUsed:                resp.ToolsUsed,
+		EffectiveTools:           append([]string(nil), resp.EffectiveTools...),
 		RequestID:                resp.RequestID,
 		Iterations:               resp.Iterations,
 		Exhausted:                resp.Exhausted,

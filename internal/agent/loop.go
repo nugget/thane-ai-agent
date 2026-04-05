@@ -108,6 +108,7 @@ type Response struct {
 	CacheCreationInputTokens int            `json:"cache_creation_input_tokens,omitempty"`
 	CacheReadInputTokens     int            `json:"cache_read_input_tokens,omitempty"`
 	ToolsUsed                map[string]int `json:"tools_used,omitempty"` // tool name → call count
+	EffectiveTools           []string       `json:"effective_tools,omitempty"`
 	Iterations               int            `json:"iterations,omitempty"`
 	Exhausted                bool           `json:"exhausted,omitempty"`
 
@@ -1301,6 +1302,42 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		}
 		return toolsForIter
 	}
+	activeTagList := func() []string {
+		if scope == nil {
+			return nil
+		}
+		tagSnap := scope.Snapshot()
+		if len(tagSnap) == 0 {
+			return nil
+		}
+		tags := make([]string, 0, len(tagSnap))
+		for tag, active := range tagSnap {
+			if active {
+				tags = append(tags, tag)
+			}
+		}
+		sort.Strings(tags)
+		return tags
+	}
+	effectiveToolNames := func() []string {
+		toolsForIter := currentTools()
+		if gatingActive {
+			toolsForIter = toolsForIter.FilteredCopy(l.orchestratorTools)
+		}
+		defs := toolsForIter.List()
+		if len(defs) == 0 {
+			return nil
+		}
+		names := make([]string, 0, len(defs))
+		for _, def := range defs {
+			name, _ := def["name"].(string)
+			if name != "" {
+				names = append(names, name)
+			}
+		}
+		sort.Strings(names)
+		return names
+	}
 
 	// Build iterate.Config with agent-specific callbacks.
 	iterCfg := iterate.Config{
@@ -1374,11 +1411,15 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 				"system_tokens", systemTokens,
 			)
 			if stream != nil {
+				effectiveTools := effectiveToolNames()
 				startData := map[string]any{
-					"request_id": requestID,
-					"est_tokens": iterMsgTokens + systemTokens,
-					"messages":   len(msgs),
-					"iteration":  i,
+					"request_id":      requestID,
+					"est_tokens":      iterMsgTokens + systemTokens,
+					"messages":        len(msgs),
+					"iteration":       i,
+					"tools":           len(effectiveTools),
+					"effective_tools": effectiveTools,
+					"active_tags":     activeTagList(),
 				}
 				if routerDecision != nil {
 					startData["complexity"] = routerDecision.Complexity.String()
@@ -1612,6 +1653,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		CacheCreationInputTokens: iterResult.CacheCreationInputTokens,
 		CacheReadInputTokens:     iterResult.CacheReadInputTokens,
 		ToolsUsed:                iterResult.ToolsUsed,
+		EffectiveTools:           effectiveToolNames(),
 		Iterations:               iterResult.IterationCount,
 		Exhausted:                iterResult.Exhausted,
 		SessionID:                sessionID,

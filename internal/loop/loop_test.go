@@ -1811,20 +1811,25 @@ type progressRunner struct {
 func (r *progressRunner) Run(_ context.Context, req RunRequest, _ StreamCallback) (*RunResponse, error) {
 	if req.OnProgress != nil {
 		req.OnProgress(events.KindLoopLLMStart, map[string]any{
-			"model":      "test-model",
-			"est_tokens": 12345,
-			"messages":   3,
-			"tools":      7,
-			"complexity": "moderate",
-			"intent":     "check_status",
+			"model":           "test-model",
+			"est_tokens":      12345,
+			"messages":        3,
+			"tools":           7,
+			"effective_tools": []string{"alpha_tool", "beta_tool"},
+			"active_tags":     []string{"forge", "memory"},
+			"complexity":      "moderate",
+			"intent":          "check_status",
 		})
 	}
 	<-r.gate
 	return &RunResponse{
-		Content:      "ok",
-		Model:        "test-model",
-		InputTokens:  100,
-		OutputTokens: 20,
+		Content:        "ok",
+		Model:          "test-model",
+		RequestID:      "req-live",
+		InputTokens:    100,
+		OutputTokens:   20,
+		EffectiveTools: []string{"alpha_tool", "beta_tool"},
+		ActiveTags:     []string{"forge", "memory"},
 	}, nil
 }
 
@@ -1882,6 +1887,12 @@ func TestLLMContextInStatus(t *testing.T) {
 	if status.LLMContext["complexity"] != "moderate" {
 		t.Errorf("LLMContext[complexity] = %v, want moderate", status.LLMContext["complexity"])
 	}
+	if got, ok := status.LLMContext["effective_tools"].([]string); !ok || len(got) != 2 || got[0] != "alpha_tool" || got[1] != "beta_tool" {
+		t.Errorf("LLMContext[effective_tools] = %#v, want [alpha_tool beta_tool]", status.LLMContext["effective_tools"])
+	}
+	if got, ok := status.LLMContext["active_tags"].([]string); !ok || len(got) != 2 || got[0] != "forge" || got[1] != "memory" {
+		t.Errorf("LLMContext[active_tags] = %#v, want [forge memory]", status.LLMContext["active_tags"])
+	}
 
 	// LLMContext should not contain loop infrastructure keys.
 	if _, ok := status.LLMContext["loop_id"]; ok {
@@ -1900,6 +1911,17 @@ func TestLLMContextInStatus(t *testing.T) {
 	status = l.Status()
 	if status.LLMContext != nil {
 		t.Errorf("LLMContext should be nil after iteration, got %v", status.LLMContext)
+	}
+
+	if len(status.RecentIterations) != 1 {
+		t.Fatalf("RecentIterations = %d, want 1", len(status.RecentIterations))
+	}
+	snap := status.RecentIterations[0]
+	if len(snap.EffectiveTools) != 2 || snap.EffectiveTools[0] != "alpha_tool" || snap.EffectiveTools[1] != "beta_tool" {
+		t.Errorf("RecentIterations[0].EffectiveTools = %v, want [alpha_tool beta_tool]", snap.EffectiveTools)
+	}
+	if len(snap.ActiveTags) != 2 || snap.ActiveTags[0] != "forge" || snap.ActiveTags[1] != "memory" {
+		t.Errorf("RecentIterations[0].ActiveTags = %v, want [forge memory]", snap.ActiveTags)
 	}
 }
 

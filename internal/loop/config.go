@@ -319,6 +319,13 @@ type IterationResult struct {
 	ContextWindow int
 	// ToolsUsed maps tool names to invocation counts.
 	ToolsUsed map[string]int
+	// EffectiveTools lists the tools that were visible to the model for
+	// this iteration after allowlists, excludes, capability tags, and
+	// delegation gating were applied.
+	EffectiveTools []string
+	// ActiveTags holds the capability tags active at the end of this
+	// iteration.
+	ActiveTags []string
 	// Elapsed is the wall-clock duration of the iteration.
 	Elapsed time.Duration
 	// Supervisor indicates whether this was a supervisor iteration.
@@ -348,6 +355,10 @@ type IterationSnapshot struct {
 	ContextWindow int `json:"context_window,omitempty"`
 	// ToolsUsed maps tool names to invocation counts.
 	ToolsUsed map[string]int `json:"tools_used,omitempty"`
+	// EffectiveTools lists the tools visible to the model for this turn.
+	EffectiveTools []string `json:"effective_tools,omitempty"`
+	// ActiveTags holds the capability tags active for this turn.
+	ActiveTags []string `json:"active_tags,omitempty"`
 	// ElapsedMs is the wall-clock duration of the iteration in
 	// milliseconds. Stored as int64 (not time.Duration) so the JSON
 	// value is directly usable by the client without nanosecond

@@ -81,6 +81,7 @@ type Response struct {
 	CacheReadInputTokens     int            `yaml:"cache_read_input_tokens,omitempty" json:"cache_read_input_tokens,omitempty"`
 	ContextWindow            int            `yaml:"context_window,omitempty" json:"context_window,omitempty"`
 	ToolsUsed                map[string]int `yaml:"tools_used,omitempty" json:"tools_used,omitempty"`
+	EffectiveTools           []string       `yaml:"effective_tools,omitempty" json:"effective_tools,omitempty"`
 	RequestID                string         `yaml:"request_id,omitempty" json:"request_id,omitempty"`
 	Iterations               int            `yaml:"iterations,omitempty" json:"iterations,omitempty"`
 	Exhausted                bool           `yaml:"exhausted,omitempty" json:"exhausted,omitempty"`
@@ -468,6 +469,12 @@ func (l *Loop) Status() Status {
 					m[k] = v
 				}
 				iterCopy[i].ToolsUsed = m
+			}
+			if len(snap.EffectiveTools) > 0 {
+				iterCopy[i].EffectiveTools = append([]string(nil), snap.EffectiveTools...)
+			}
+			if len(snap.ActiveTags) > 0 {
+				iterCopy[i].ActiveTags = append([]string(nil), snap.ActiveTags...)
 			}
 			if len(snap.Summary) > 0 {
 				s := make(map[string]any, len(snap.Summary))
@@ -940,6 +947,12 @@ func (l *Loop) run(ctx context.Context) {
 						snap.ToolsUsed[k] = v
 					}
 				}
+				if len(result.EffectiveTools) > 0 {
+					snap.EffectiveTools = append([]string(nil), result.EffectiveTools...)
+				}
+				if len(result.ActiveTags) > 0 {
+					snap.ActiveTags = append([]string(nil), result.ActiveTags...)
+				}
 
 				iterLog.Debug("loop iteration complete",
 					"model", result.Model,
@@ -958,6 +971,8 @@ func (l *Loop) run(ctx context.Context) {
 					"context_window":  result.ContextWindow,
 					"elapsed_ms":      result.Elapsed.Milliseconds(),
 					"tools_used":      result.ToolsUsed,
+					"effective_tools": result.EffectiveTools,
+					"active_tags":     result.ActiveTags,
 					"supervisor":      result.Supervisor,
 					"conversation_id": convID,
 				}
@@ -1001,14 +1016,16 @@ func (l *Loop) run(ctx context.Context) {
 			// per-iteration logger correlation.
 			if err == nil && l.config.PostIterate != nil {
 				postResult := IterationResult{
-					ConvID:       convID,
-					Model:        result.Model,
-					InputTokens:  result.InputTokens,
-					OutputTokens: result.OutputTokens,
-					ToolsUsed:    result.ToolsUsed,
-					Elapsed:      result.Elapsed,
-					Supervisor:   result.Supervisor,
-					Sleep:        sleep,
+					ConvID:         convID,
+					Model:          result.Model,
+					InputTokens:    result.InputTokens,
+					OutputTokens:   result.OutputTokens,
+					ToolsUsed:      result.ToolsUsed,
+					EffectiveTools: append([]string(nil), result.EffectiveTools...),
+					ActiveTags:     append([]string(nil), result.ActiveTags...),
+					Elapsed:        result.Elapsed,
+					Supervisor:     result.Supervisor,
+					Sleep:          sleep,
 				}
 				if postErr := l.config.PostIterate(iterCtx, postResult); postErr != nil {
 					iterLog.Warn("PostIterate callback failed", "error", postErr)
@@ -1245,14 +1262,16 @@ func (l *Loop) iterate(ctx context.Context, isSupervisor bool, convID string) (*
 	}
 
 	return &IterationResult{
-		Model:         resp.Model,
-		InputTokens:   resp.InputTokens,
-		OutputTokens:  resp.OutputTokens,
-		ContextWindow: resp.ContextWindow,
-		ToolsUsed:     resp.ToolsUsed,
-		RequestID:     resp.RequestID,
-		Elapsed:       time.Since(iterStart),
-		Supervisor:    isSupervisor,
+		Model:          resp.Model,
+		InputTokens:    resp.InputTokens,
+		OutputTokens:   resp.OutputTokens,
+		ContextWindow:  resp.ContextWindow,
+		ToolsUsed:      resp.ToolsUsed,
+		EffectiveTools: append([]string(nil), resp.EffectiveTools...),
+		ActiveTags:     append([]string(nil), resp.ActiveTags...),
+		RequestID:      resp.RequestID,
+		Elapsed:        time.Since(iterStart),
+		Supervisor:     isSupervisor,
 	}, nil
 }
 
@@ -1313,6 +1332,9 @@ func cloneResponse(resp *Response) *Response {
 		for k, v := range resp.ToolsUsed {
 			out.ToolsUsed[k] = v
 		}
+	}
+	if len(resp.EffectiveTools) > 0 {
+		out.EffectiveTools = append([]string(nil), resp.EffectiveTools...)
 	}
 	if len(resp.ActiveTags) > 0 {
 		out.ActiveTags = append([]string(nil), resp.ActiveTags...)

@@ -934,11 +934,23 @@ function describeLoopExecutionMode(loop) {
 function buildLoopEntity(loop) {
   const categoryInfo = getLoopCategoryInfo(loop);
   const latest = getLoopLatestSnapshot(loop);
+  const llmContext = loop._llmContext || null;
   const hints = (loop.config && loop.config.Hints) || {};
   const metadata = (loop.config && loop.config.Metadata) || {};
   const configTags = ((loop.config && loop.config.Tags) || []).slice().sort();
+  const excludedTools = ((loop.config && loop.config.ExcludeTools) || []).slice().sort();
   const activeTags = ((loop.active_tags || [])).slice().sort();
   const allTags = Array.from(new Set([...configTags, ...activeTags])).sort();
+  const liveScopeTags = (Array.isArray(llmContext && llmContext.active_tags) ? llmContext.active_tags : []).slice().sort();
+  const latestScopeTags = (Array.isArray(latest && latest.active_tags) ? latest.active_tags : []).slice().sort();
+  const currentScopeTags = Array.from(new Set([
+    ...(liveScopeTags.length > 0 ? liveScopeTags : []),
+    ...((liveScopeTags.length === 0 && activeTags.length > 0) ? activeTags : []),
+    ...((liveScopeTags.length === 0 && activeTags.length === 0) ? latestScopeTags : []),
+  ])).sort();
+  const liveEffectiveTools = (Array.isArray(llmContext && llmContext.effective_tools) ? llmContext.effective_tools : []).slice().sort();
+  const latestEffectiveTools = (Array.isArray(latest && latest.effective_tools) ? latest.effective_tools : []).slice().sort();
+  const currentEffectiveTools = (liveEffectiveTools.length > 0 ? liveEffectiveTools : latestEffectiveTools).slice();
   const latestModel = loop._liveModel || loop._lastModel || (latest && latest.model) || '';
   const latestRequestID = (latest && latest.request_id) || '';
   const startedAt = parseTimestamp(loop.started_at) ? loop.started_at : '';
@@ -991,8 +1003,12 @@ function buildLoopEntity(loop) {
     subsystem,
     trustZone,
     configTags,
+    excludedTools,
     activeTags,
     allTags,
+    currentScopeTags,
+    currentEffectiveTools,
+    latestEffectiveTools,
     liveTools,
     activeLiveTools,
   };
@@ -1022,6 +1038,9 @@ function renderLoopCurrentTurnCard(loop, entity, conversationSummary) {
   const lastWakeAgo = lastWakeDate ? timeAgo(lastWakeDate) : '';
   const threadLabel = conversationSummary ? conversationSummary.label : (getLoopPrimaryConversationID(entity) ? shortID(getLoopPrimaryConversationID(entity)) : 'No thread bound');
   const activeToolNames = entity.activeLiveTools.map((entry) => entry.tool).filter(Boolean);
+  const activeToolSet = Array.from(new Set(activeToolNames)).sort();
+  const currentScopeTags = entity.currentScopeTags || [];
+  const currentEffectiveTools = entity.currentEffectiveTools || [];
   const iterationLabel = isProcessing
     ? '#' + formatNumber((entity.iterations || 0) + 1)
     : (entity.iterations ? '#' + formatNumber(entity.iterations) : 'pending');
@@ -1032,6 +1051,8 @@ function renderLoopCurrentTurnCard(loop, entity, conversationSummary) {
     titleSummary = [
       threadLabel,
       latestModelLabel !== 'model pending' ? 'on ' + latestModelLabel : '',
+      currentEffectiveTools.length > 0 ? `${formatNumber(currentEffectiveTools.length)} tools in scope` : '',
+      currentScopeTags.length > 0 ? `${formatNumber(currentScopeTags.length)} capabilities active` : '',
       activeToolNames.length > 0
         ? `${formatNumber(activeToolNames.length)} tool${activeToolNames.length === 1 ? '' : 's'} in flight`
         : `iteration ${iterationLabel} in progress`,
@@ -1041,6 +1062,7 @@ function renderLoopCurrentTurnCard(loop, entity, conversationSummary) {
       threadLabel,
       formatSchemaToken(entity.stateLabel),
       'req ' + shortID(entity.latestRequestID),
+      currentEffectiveTools.length > 0 ? `${formatNumber(currentEffectiveTools.length)} tools in scope` : '',
       lastWakeAgo ? 'wake ' + lastWakeAgo : '',
     ].filter(Boolean).join(' · ');
   } else {
@@ -1069,9 +1091,9 @@ function renderLoopCurrentTurnCard(loop, entity, conversationSummary) {
       { label: 'Iteration', value: iterationLabel },
       { label: 'Model', value: latestModelLabel },
       { label: 'Health', value: serviceDegraded ? 'degraded' : (entity.lastError ? 'recovering' : 'steady') },
-      entity.activeLiveTools.length > 0
-        ? { label: 'Tools', value: activeToolNames.join(', ') }
-        : null,
+      currentEffectiveTools.length > 0 ? { label: 'Tool surface', value: formatNumber(currentEffectiveTools.length) } : null,
+      currentScopeTags.length > 0 ? { label: 'Capabilities', value: formatNumber(currentScopeTags.length) } : null,
+      entity.activeLiveTools.length > 0 ? { label: 'Tools live', value: activeToolSet.join(', ') } : null,
       lastWakeAgo ? { label: 'Wake', value: lastWakeAgo } : null,
     ],
     widgetNotes: [
@@ -1087,8 +1109,10 @@ function renderLoopCurrentTurnCard(loop, entity, conversationSummary) {
     { label: 'Model', value: latestModelLabel },
     { label: 'Health', value: serviceDegraded ? 'degraded' : (entity.lastError ? 'recovering' : 'steady') },
     entity.activeLiveTools.length > 0
-      ? { label: 'Tools in flight', value: activeToolNames.join(', ') }
+      ? { label: 'Tools in flight', value: activeToolSet.join(', ') }
       : { label: 'Thread', value: threadLabel },
+    currentEffectiveTools.length > 0 ? { label: 'Tool surface', value: formatNumber(currentEffectiveTools.length) } : null,
+    currentScopeTags.length > 0 ? { label: 'Capabilities', value: formatNumber(currentScopeTags.length) } : null,
   ]);
   if (turnMetrics) card.body.appendChild(turnMetrics);
 
@@ -1098,12 +1122,12 @@ function renderLoopCurrentTurnCard(loop, entity, conversationSummary) {
   briefSummary.className = 'loop-turn-brief__summary';
   if (isProcessing) {
     briefSummary.textContent = entity.activeLiveTools.length > 0
-      ? `The loop is actively working this turn, with ${entity.activeLiveTools.length} tool${entity.activeLiveTools.length === 1 ? '' : 's'} in flight and fresh telemetry arriving as the model progresses.`
-      : 'The loop is actively working this turn. Watch the live telemetry below for context growth, tool activity, and model progress.';
+      ? `The loop is actively working this turn, with ${entity.activeLiveTools.length} tool${entity.activeLiveTools.length === 1 ? '' : 's'} in flight${currentEffectiveTools.length > 0 ? ` across a ${formatNumber(currentEffectiveTools.length)}-tool surface` : ''}.`
+      : 'The loop is actively working this turn. Watch the live telemetry below for context growth, active capabilities, tool surface, and model progress.';
   } else if (entity.latestSnapshot) {
     briefSummary.textContent = entity.lastError
-      ? 'The latest recorded turn ended with an error. The snapshot below shows the last request detail, model, timing, and tool activity for triage.'
-      : 'The loop is currently idle. The latest recorded turn below is the best executive summary of recent behavior and near-term future.';
+      ? 'The latest recorded turn ended with an error. The snapshot below shows the last request detail, active capabilities, tool surface, timing, and tool activity for triage.'
+      : 'The loop is currently idle. The latest recorded turn below is the best executive summary of recent behavior, tool surface, and near-term future.';
   } else {
     briefSummary.textContent = 'No request detail snapshot is available yet. This view will fill in once the loop completes its first recorded iteration.';
   }
@@ -1117,6 +1141,8 @@ function renderLoopCurrentTurnCard(loop, entity, conversationSummary) {
     { label: 'Model', value: latestModelLabel },
     { label: 'State', value: formatSchemaToken(entity.stateLabel) },
     { label: 'Context', value: contextLabel || 'pending' },
+    { label: 'Capabilities', value: currentScopeTags.length > 0 ? formatNumber(currentScopeTags.length) : 'none' },
+    { label: 'Tool surface', value: currentEffectiveTools.length > 0 ? formatNumber(currentEffectiveTools.length) : 'pending' },
     { label: 'Wake', value: lastWakeAgo || 'pending' },
   ];
   for (const item of briefFacts) {
@@ -1402,6 +1428,8 @@ function buildLoopNodeTitle(loop, capacity) {
   const primaryConvID = getLoopPrimaryConversationID(entity);
   const convSummary = primaryConvID ? state.conversationDetails.get(primaryConvID) : null;
   const runningTools = entity.activeLiveTools.map((entry) => entry.tool).filter(Boolean);
+  const scopeTags = entity.currentScopeTags || entity.activeTags || [];
+  const toolSurface = entity.currentEffectiveTools || [];
   const parts = [entity.title];
   parts.push('Kind: ' + entity.kind);
   parts.push('State: ' + formatSchemaToken(entity.stateLabel));
@@ -1432,6 +1460,12 @@ function buildLoopNodeTitle(loop, capacity) {
   }
   if (entity.latestModel) {
     parts.push('Model: ' + entity.latestModel);
+  }
+  if (scopeTags.length > 0) {
+    parts.push('Capabilities: ' + scopeTags.join(', '));
+  }
+  if (toolSurface.length > 0) {
+    parts.push('Tool surface: ' + toolSurface.join(', '));
   }
   if (runningTools.length > 0) {
     parts.push('Active tools: ' + runningTools.join(', '));
@@ -3546,6 +3580,11 @@ function renderLoopEntityDetail(loop) {
   const contextLabel = entity.contextWindow ? `${formatNumber(entity.contextWindow)} ctx` : '';
   const missionSummary = entity.hints.mission ? truncate(entity.hints.mission, 92) : '';
   const conversationBacked = isConversationBackedLoop(entity);
+  const currentEffectiveTools = entity.currentEffectiveTools || [];
+  const latestToolsUsed = entity.latestSnapshot && entity.latestSnapshot.tools_used
+    ? Object.keys(entity.latestSnapshot.tools_used).filter(Boolean).sort()
+    : [];
+  const liveToolNames = Array.from(new Set(entity.activeLiveTools.map((entry) => entry.tool).filter(Boolean))).sort();
 
   const hero = document.createElement('section');
   hero.className = 'detail-card schema-card schema-card--hero';
@@ -3680,24 +3719,72 @@ function renderLoopEntityDetail(loop) {
     appendSchemaRow(execution.body, 'last error', err, { multiline: true });
   }
 
+  const tooling = makeSchemaCard('Tooling', 'Capability scope, tool surface, and live activity', {
+    entityKind: entity.kind,
+    key: 'tooling',
+    titleSummary: [
+      entity.currentScopeTags.length > 0
+        ? `${formatNumber(entity.currentScopeTags.length)} capabilities active`
+        : (entity.configTags.length > 0 ? `${formatNumber(entity.configTags.length)} capabilities configured` : ''),
+      currentEffectiveTools.length > 0
+        ? `${formatNumber(currentEffectiveTools.length)} tools in scope`
+        : (entity.excludedTools.length > 0 ? `${formatNumber(entity.excludedTools.length)} tools excluded` : ''),
+      liveToolNames.length > 0 ? `${formatNumber(liveToolNames.length)} tools live` : '',
+    ].filter(Boolean).join(' · ') || 'Capabilities and tool surface pending.',
+    titleFacts: [
+      entity.configTags.length ? `${formatNumber(entity.configTags.length)} configured` : '',
+      entity.activeTags.length ? `${formatNumber(entity.activeTags.length)} active` : '',
+      currentEffectiveTools.length ? `${formatNumber(currentEffectiveTools.length)} in scope` : '',
+      liveToolNames.length ? `${formatNumber(liveToolNames.length)} running` : '',
+    ].filter(Boolean),
+    widgetFacts: [
+      entity.configTags.length ? { label: 'Configured caps', value: formatNumber(entity.configTags.length) } : null,
+      entity.activeTags.length ? { label: 'Active caps', value: formatNumber(entity.activeTags.length) } : null,
+      currentEffectiveTools.length ? { label: 'Tool surface', value: formatNumber(currentEffectiveTools.length) } : null,
+      entity.excludedTools.length ? { label: 'Excluded', value: formatNumber(entity.excludedTools.length) } : null,
+      liveToolNames.length ? { label: 'Running', value: liveToolNames.join(', ') } : null,
+    ],
+  });
+  if (entity.configTags.length > 0) {
+    appendSchemaRow(tooling.body, 'configured capabilities', makeSchemaChipList(entity.configTags, 'tag-chip tag-chip--muted'));
+  }
+  if (entity.activeTags.length > 0) {
+    appendSchemaRow(tooling.body, 'active capabilities', makeSchemaChipList(entity.activeTags, 'tag-chip tag-chip--active'));
+  }
+  if (entity.excludedTools.length > 0) {
+    appendSchemaRow(tooling.body, 'excluded tools', makeSchemaChipList(entity.excludedTools, 'iter-card__tool-item iter-card__tool-item--scope'));
+  }
+  if (currentEffectiveTools.length > 0) {
+    appendSchemaRow(
+      tooling.body,
+      loop.state === 'processing' ? 'tool surface this turn' : 'tool surface last turn',
+      makeSchemaChipList(currentEffectiveTools, 'iter-card__tool-item iter-card__tool-item--scope'),
+      { multiline: true },
+    );
+  }
+  if (liveToolNames.length > 0) {
+    appendSchemaRow(tooling.body, 'tools in flight', makeSchemaChipList(liveToolNames, 'iter-card__tool-item'));
+  }
+  if (latestToolsUsed.length > 0) {
+    appendSchemaRow(tooling.body, 'tools used last turn', makeSchemaChipList(latestToolsUsed, 'iter-card__tool-item'));
+  }
+
   const profile = makeSchemaCard('Profile', 'Intent, trust, and carried context', {
     entityKind: entity.kind,
     key: 'profile',
     titleSummary: missionSummary || [
       entity.trustZone ? `trust ${entity.trustZone}` : '',
-      entity.activeTags.length ? `${formatNumber(entity.activeTags.length)} active tags` : '',
       entity.hints.source ? `source ${entity.hints.source}` : '',
-    ].filter(Boolean).join(' · ') || 'Hints, trust, and carried tags.',
+    ].filter(Boolean).join(' · ') || 'Hints, trust, and operating posture.',
     titleFacts: [
       entity.trustZone || '',
-      entity.activeTags.length ? `${formatNumber(entity.activeTags.length)} active` : '',
-      entity.configTags.length ? `${formatNumber(entity.configTags.length)} configured` : '',
+      entity.hints.source || '',
+      entity.hints.delegation_gating || '',
     ].filter(Boolean),
     widgetFacts: [
       entity.trustZone ? { label: 'Trust', value: entity.trustZone } : null,
       entity.hints.source ? { label: 'Source', value: entity.hints.source } : null,
       entity.hints.delegation_gating ? { label: 'Gating', value: entity.hints.delegation_gating } : null,
-      entity.activeTags.length ? { label: 'Tags', value: entity.activeTags.join(', ') } : null,
     ],
   });
   if (entity.hints.mission) appendSchemaRow(profile.body, 'mission', entity.hints.mission);
@@ -3731,13 +3818,6 @@ function renderLoopEntityDetail(loop) {
     appendSchemaRow(profile.body, 'metadata', wrap, { multiline: true });
   }
 
-  if (entity.configTags.length > 0) {
-    appendSchemaRow(profile.body, 'configured tags', makeSchemaChipList(entity.configTags, 'tag-chip tag-chip--muted'));
-  }
-  if (entity.activeTags.length > 0) {
-    appendSchemaRow(profile.body, 'active tags', makeSchemaChipList(entity.activeTags, 'tag-chip tag-chip--active'));
-  }
-
   const delegateTask = entity.metadata.delegate_task || '';
   const delegateGuidance = entity.metadata.delegate_guidance || '';
   const delegateProfile = entity.metadata.delegate_profile || '';
@@ -3747,6 +3827,7 @@ function renderLoopEntityDetail(loop) {
     if (delegateGuidance) appendSchemaRow(profile.body, 'delegate guidance', delegateGuidance, { multiline: true });
   }
 
+  detailEntity.appendChild(tooling.card);
   const activity = makeSchemaCard('Activity', 'Recent rhythm and iteration history', {
     entityKind: entity.kind,
     key: 'activity',
