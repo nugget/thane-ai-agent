@@ -72,6 +72,18 @@ type capabilityActionTools struct {
 	Delegate   string `json:"delegate,omitempty"`
 }
 
+func defaultCapabilityActionTools(includeDelegate bool) capabilityActionTools {
+	tools := capabilityActionTools{
+		Activate:   "activate_capability",
+		Deactivate: "deactivate_capability",
+		List:       "list_loaded_capabilities",
+	}
+	if includeDelegate {
+		tools.Delegate = "thane_delegate"
+	}
+	return tools
+}
+
 var builtinToolSpecs = map[string]BuiltinToolSpec{
 	"archive_search":              {CanonicalID: "native:archive_search", Source: NativeToolSource, DefaultTags: []string{"archive"}},
 	"archive_session_transcript":  {CanonicalID: "native:archive_session_transcript", Source: NativeToolSource, DefaultTags: []string{"archive"}},
@@ -264,11 +276,13 @@ func SortCapabilitySurface(entries []CapabilitySurface) []CapabilitySurface {
 // RenderCapabilityActivationDescription renders the activate_capability
 // tool help text from the shared capability surface.
 func RenderCapabilityActivationDescription(entries []CapabilitySurface) string {
+	actionTools := defaultCapabilityActionTools(true)
 	var sb strings.Builder
 	sb.WriteString("Activate a capability to load its tools and context into YOUR current conversation. ")
 	sb.WriteString("This modifies your own runtime — it cannot be delegated. ")
-	sb.WriteString("The only valid capability tools are `activate_capability`, `deactivate_capability`, and `list_loaded_capabilities`; do not invent per-capability tool names. ")
-	sb.WriteString("Delegates get capabilities via the tags parameter on `thane_delegate`.\n\n")
+	sb.WriteString(fmt.Sprintf("The only valid capability tools are `%s`, `%s`, and `%s`; do not invent per-capability tool names. ",
+		actionTools.Activate, actionTools.Deactivate, actionTools.List))
+	sb.WriteString(fmt.Sprintf("Delegates get capabilities via the tags parameter on `%s`.\n\n", actionTools.Delegate))
 	sb.WriteString("Available capabilities:\n")
 
 	for _, entry := range SortCapabilitySurface(entries) {
@@ -279,7 +293,8 @@ func RenderCapabilityActivationDescription(entries []CapabilitySurface) string {
 			entry.Tag, capabilityDescription(entry), len(entry.Tools)))
 	}
 
-	sb.WriteString("\nUse list_loaded_capabilities to see which tags are currently loaded, and deactivate_capability when done to keep your tool set focused.")
+	sb.WriteString(fmt.Sprintf("\nUse %s to see which tags are currently loaded, and %s when done to keep your tool set focused.",
+		actionTools.List, actionTools.Deactivate))
 	return sb.String()
 }
 
@@ -300,13 +315,8 @@ func RenderCapabilityManifestMarkdown(entries []CapabilitySurface) string {
 		Kind:                              "capability_catalog",
 		CatalogEntriesAreNotLoaded:        true,
 		InventedCapabilityToolsAreInvalid: true,
-		ActivationTools: capabilityActionTools{
-			Activate:   "activate_capability",
-			Deactivate: "deactivate_capability",
-			List:       "list_loaded_capabilities",
-			Delegate:   "thane_delegate",
-		},
-		Capabilities: make(map[string]capabilityCatalogEntry, len(entries)),
+		ActivationTools:                   defaultCapabilityActionTools(true),
+		Capabilities:                      make(map[string]capabilityCatalogEntry, len(entries)),
 	}
 
 	for _, entry := range SortCapabilitySurface(entries) {
@@ -388,12 +398,8 @@ func RenderLoadedCapabilitySummary(entries []CapabilitySurface, activeTags map[s
 	}{
 		Kind:                       "loaded_capabilities",
 		CatalogEntriesAreNotLoaded: true,
-		ActivationTools: capabilityActionTools{
-			Activate:   "activate_capability",
-			Deactivate: "deactivate_capability",
-			List:       "list_loaded_capabilities",
-		},
-		LoadedCapabilities: loaded,
+		ActivationTools:            defaultCapabilityActionTools(false),
+		LoadedCapabilities:         loaded,
 	}
 
 	data, err := json.Marshal(payload)

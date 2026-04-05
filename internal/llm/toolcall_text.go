@@ -94,17 +94,9 @@ func ApplyTextToolCallFallback(resp *ChatResponse, validToolNames []string, prof
 // LooksLikeHallucinatedToolCall reports whether content has the shape
 // of a tool call but does not match any valid tool.
 func LooksLikeHallucinatedToolCall(content string, profile ToolCallTextProfile) bool {
-	trimmed := strings.TrimSpace(content)
+	trimmed := normalizeToolCallPayload(content, profile)
 	if trimmed == "" {
 		return false
-	}
-	if profile.AcceptMarkdownFences {
-		if payload, ok := extractFencedToolPayload(trimmed); ok {
-			trimmed = payload
-		}
-	}
-	if profile.AcceptTaggedToolCalls {
-		trimmed = extractTaggedToolPayload(trimmed)
 	}
 	if trimmed == "" || trimmed[0] != '{' {
 		return false
@@ -152,9 +144,29 @@ func StripTrailingToolCallText(content string, validTools []string, profile Tool
 // ParseTextToolCalls attempts to extract structured tool calls from
 // raw assistant text.
 func ParseTextToolCalls(content string, validTools []string, profile ToolCallTextProfile) []ToolCall {
-	content = strings.TrimSpace(content)
+	content = normalizeToolCallPayload(content, profile)
 	if content == "" {
 		return nil
+	}
+	return parseNormalizedTextToolCalls(content, validTools, profile, profile.AcceptToolNameJSONArgs)
+}
+
+// ParseTextToolCallsForRepair extracts tool-shaped JSON payloads even
+// when the tool names do not currently match the valid tool list. This
+// lets later runtime layers repair aliases such as forge_capability or
+// list_capabilities instead of dropping them as hallucinated text.
+func ParseTextToolCallsForRepair(content string, profile ToolCallTextProfile) []ToolCall {
+	content = normalizeToolCallPayload(content, profile)
+	if content == "" {
+		return nil
+	}
+	return parseNormalizedTextToolCalls(content, nil, profile, false)
+}
+
+func normalizeToolCallPayload(content string, profile ToolCallTextProfile) string {
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return ""
 	}
 	if profile.AcceptMarkdownFences {
 		if payload, ok := extractFencedToolPayload(content); ok {
@@ -164,7 +176,10 @@ func ParseTextToolCalls(content string, validTools []string, profile ToolCallTex
 	if profile.AcceptTaggedToolCalls {
 		content = extractTaggedToolPayload(content)
 	}
+	return strings.TrimSpace(content)
+}
 
+func parseNormalizedTextToolCalls(content string, validTools []string, profile ToolCallTextProfile, allowToolNameJSONArgs bool) []ToolCall {
 	if calls := parseToolCallJSONArray(content, validTools); len(calls) > 0 {
 		return calls
 	}
@@ -176,40 +191,8 @@ func ParseTextToolCalls(content string, validTools []string, profile ToolCallTex
 			return calls
 		}
 	}
-	if profile.AcceptToolNameJSONArgs {
+	if allowToolNameJSONArgs {
 		if calls := parseToolNameJSONArgs(content, validTools); len(calls) > 0 {
-			return calls
-		}
-	}
-	return nil
-}
-
-// ParseTextToolCallsForRepair extracts tool-shaped JSON payloads even
-// when the tool names do not currently match the valid tool list. This
-// lets later runtime layers repair aliases such as forge_capability or
-// list_capabilities instead of dropping them as hallucinated text.
-func ParseTextToolCallsForRepair(content string, profile ToolCallTextProfile) []ToolCall {
-	content = strings.TrimSpace(content)
-	if content == "" {
-		return nil
-	}
-	if profile.AcceptMarkdownFences {
-		if payload, ok := extractFencedToolPayload(content); ok {
-			content = payload
-		}
-	}
-	if profile.AcceptTaggedToolCalls {
-		content = extractTaggedToolPayload(content)
-	}
-
-	if calls := parseToolCallJSONArray(content, nil); len(calls) > 0 {
-		return calls
-	}
-	if calls := parseSingleToolCallJSON(content, nil); len(calls) > 0 {
-		return calls
-	}
-	if profile.AcceptConcatenatedJSON {
-		if calls := parseConcatenatedToolCallJSON(content, nil); len(calls) > 0 {
 			return calls
 		}
 	}

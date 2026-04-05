@@ -223,38 +223,7 @@ func MergeInventory(base *Catalog, inv *Inventory) (*Catalog, error) {
 			key := deploymentKey(ri.ResourceID, m.Name)
 			if idx, ok := deploymentIndexByResourceModel[key]; ok {
 				dep := out.Deployments[idx]
-				if m.ModelType != "" {
-					dep.ModelType = m.ModelType
-				}
-				if m.Publisher != "" {
-					dep.Publisher = m.Publisher
-				}
-				if m.CompatibilityType != "" {
-					dep.CompatibilityType = m.CompatibilityType
-				}
-				if m.State != "" {
-					dep.RunnerState = m.State
-				}
-				if m.Family != "" {
-					dep.Family = m.Family
-				}
-				if len(m.Families) > 0 {
-					dep.Families = append([]string(nil), m.Families...)
-				}
-				if m.ParameterSize != "" {
-					dep.ParameterSize = m.ParameterSize
-				}
-				if m.Quantization != "" {
-					dep.Quantization = m.Quantization
-				}
-				dep.ObservedSupportsTools = m.SupportsTools || caps.SupportsTools
-				dep.ObservedSupportsStreaming = m.SupportsStreaming || caps.SupportsStreaming
-				dep.ObservedContextWindow = m.ContextWindow
-				dep.MaxContextWindow = m.MaxContextWindow
-				dep.LoadedContextWindow = m.LoadedContextWindow
-				dep.LoadedInstanceID = m.LoadedInstanceID
-				dep.SupportsImages = m.SupportsImages
-				applyObservedCapabilities(&dep, caps)
+				mergeDiscoveredDeployment(&dep, m, caps)
 				out.Deployments[idx] = dep
 				continue
 			}
@@ -262,35 +231,7 @@ func MergeInventory(base *Catalog, inv *Inventory) (*Catalog, error) {
 			if existingByID[id] {
 				continue
 			}
-			dep := Deployment{
-				ID:                        id,
-				ModelName:                 m.Name,
-				ModelType:                 m.ModelType,
-				Publisher:                 m.Publisher,
-				Provider:                  ri.Provider,
-				ResourceID:                ri.ResourceID,
-				Server:                    ri.ResourceID,
-				CompatibilityType:         m.CompatibilityType,
-				RunnerState:               m.State,
-				ObservedSupportsTools:     m.SupportsTools || caps.SupportsTools,
-				TrainedForToolUse:         m.TrainedForToolUse,
-				ObservedSupportsStreaming: m.SupportsStreaming || caps.SupportsStreaming,
-				SupportsImages:            m.SupportsImages,
-				ObservedContextWindow:     firstPositiveInt(m.ContextWindow, base.ContextWindowForModel(m.Name, 0)),
-				MaxContextWindow:          m.MaxContextWindow,
-				LoadedContextWindow:       m.LoadedContextWindow,
-				LoadedInstanceID:          m.LoadedInstanceID,
-				Speed:                     5,
-				Quality:                   5,
-				CostTier:                  defaultCostTier(ri.Provider),
-				Source:                    DeploymentSourceDiscovered,
-				Routable:                  false,
-				Family:                    m.Family,
-				Families:                  append([]string(nil), m.Families...),
-				ParameterSize:             m.ParameterSize,
-				Quantization:              m.Quantization,
-			}
-			applyObservedCapabilities(&dep, caps)
+			dep := newDiscoveredDeployment(base, ri, m, caps, id)
 			out.Deployments = append(out.Deployments, dep)
 			existingByResourceModel[key] = true
 			deploymentIndexByResourceModel[key] = len(out.Deployments) - 1
@@ -302,6 +243,84 @@ func MergeInventory(base *Catalog, inv *Inventory) (*Catalog, error) {
 		return nil, err
 	}
 	return out, nil
+}
+
+func mergeDiscoveredDeployment(dep *Deployment, model DiscoveredModel, caps modelproviders.Capabilities) {
+	if dep == nil {
+		return
+	}
+	if model.ModelType != "" {
+		dep.ModelType = model.ModelType
+	}
+	if model.Publisher != "" {
+		dep.Publisher = model.Publisher
+	}
+	if model.CompatibilityType != "" {
+		dep.CompatibilityType = model.CompatibilityType
+	}
+	if model.State != "" {
+		dep.RunnerState = model.State
+	}
+	if model.Family != "" {
+		dep.Family = model.Family
+	}
+	if len(model.Families) > 0 {
+		dep.Families = append([]string(nil), model.Families...)
+	}
+	if model.ParameterSize != "" {
+		dep.ParameterSize = model.ParameterSize
+	}
+	if model.Quantization != "" {
+		dep.Quantization = model.Quantization
+	}
+	dep.ObservedSupportsTools = observedBoolCapability(model.SupportsTools, caps.SupportsTools)
+	dep.ObservedSupportsStreaming = observedBoolCapability(model.SupportsStreaming, caps.SupportsStreaming)
+	dep.ObservedContextWindow = model.ContextWindow
+	dep.MaxContextWindow = model.MaxContextWindow
+	dep.LoadedContextWindow = model.LoadedContextWindow
+	dep.LoadedInstanceID = model.LoadedInstanceID
+	dep.SupportsImages = model.SupportsImages
+	if model.TrainedForToolUse {
+		dep.TrainedForToolUse = true
+	}
+	applyObservedCapabilities(dep, caps)
+}
+
+func newDiscoveredDeployment(base *Catalog, ri ResourceInventory, model DiscoveredModel, caps modelproviders.Capabilities, id string) Deployment {
+	dep := Deployment{
+		ID:                        id,
+		ModelName:                 model.Name,
+		ModelType:                 model.ModelType,
+		Publisher:                 model.Publisher,
+		Provider:                  ri.Provider,
+		ResourceID:                ri.ResourceID,
+		Server:                    ri.ResourceID,
+		CompatibilityType:         model.CompatibilityType,
+		RunnerState:               model.State,
+		ObservedSupportsTools:     observedBoolCapability(model.SupportsTools, caps.SupportsTools),
+		TrainedForToolUse:         model.TrainedForToolUse,
+		ObservedSupportsStreaming: observedBoolCapability(model.SupportsStreaming, caps.SupportsStreaming),
+		SupportsImages:            model.SupportsImages,
+		ObservedContextWindow:     firstPositiveInt(model.ContextWindow, base.ContextWindowForModel(model.Name, 0)),
+		MaxContextWindow:          model.MaxContextWindow,
+		LoadedContextWindow:       model.LoadedContextWindow,
+		LoadedInstanceID:          model.LoadedInstanceID,
+		Speed:                     5,
+		Quality:                   5,
+		CostTier:                  defaultCostTier(ri.Provider),
+		Source:                    DeploymentSourceDiscovered,
+		Routable:                  false,
+		Family:                    model.Family,
+		Families:                  append([]string(nil), model.Families...),
+		ParameterSize:             model.ParameterSize,
+		Quantization:              model.Quantization,
+	}
+	applyObservedCapabilities(&dep, caps)
+	return dep
+}
+
+func observedBoolCapability(modelValue, providerValue bool) bool {
+	return modelValue || providerValue
 }
 
 func firstPositiveInt(values ...int) int {
