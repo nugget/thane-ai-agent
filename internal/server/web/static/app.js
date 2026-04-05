@@ -1131,6 +1131,36 @@ const dashboardPrefs = loadDashboardPrefs();
 let nextNotificationID = 1;
 const recentNotificationSignatures = new Map();
 let connectionWasDegraded = false;
+let lastDetailSelectionKey = null;
+
+function currentDetailSelectionKey() {
+  if (typeof activeRequestID !== 'undefined' && activeRequestID) return 'request:' + activeRequestID;
+  if (state.selected === '__system__') return 'system';
+  if (state.selected) return 'loop:' + state.selected;
+  return null;
+}
+
+function withPreservedDetailScroll(renderFn) {
+  const panel = document.getElementById('detail-panel');
+  const selectionKey = currentDetailSelectionKey();
+  const preserve = !!panel && selectionKey !== null && selectionKey === lastDetailSelectionKey;
+  const previousTop = preserve ? panel.scrollTop : 0;
+
+  renderFn();
+
+  if (panel) {
+    if (preserve) {
+      requestAnimationFrame(() => {
+        const maxTop = Math.max(0, panel.scrollHeight - panel.clientHeight);
+        panel.scrollTop = Math.min(previousTop, maxTop);
+      });
+    } else {
+      panel.scrollTop = 0;
+    }
+  }
+
+  lastDetailSelectionKey = selectionKey;
+}
 
 // ---------------------------------------------------------------------------
 // Trust Zone Underglow
@@ -2690,27 +2720,29 @@ function buildSystemContextMenu(sys) {
 }
 
 function renderDetail() {
-  const isSystem = state.selected === '__system__';
-  const isLoop = state.selected && state.loops.has(state.selected);
+  withPreservedDetailScroll(() => {
+    const isSystem = state.selected === '__system__';
+    const isLoop = state.selected && state.loops.has(state.selected);
 
-  if (isSystem && state.system) {
+    if (isSystem && state.system) {
+      detailPlaceholder.hidden = true;
+      detailContent.hidden = false;
+      renderSystemDetail();
+      return;
+    }
+
+    if (!isLoop) {
+      detailPlaceholder.hidden = false;
+      detailContent.hidden = true;
+      return;
+    }
+
     detailPlaceholder.hidden = true;
     detailContent.hidden = false;
-    renderSystemDetail();
-    return;
-  }
 
-  if (!isLoop) {
-    detailPlaceholder.hidden = false;
-    detailContent.hidden = true;
-    return;
-  }
-
-  detailPlaceholder.hidden = true;
-  detailContent.hidden = false;
-
-  const loop = state.loops.get(state.selected);
-  renderLoopEntityDetail(loop);
+    const loop = state.loops.get(state.selected);
+    renderLoopEntityDetail(loop);
+  });
 }
 
 // renderAggregates, renderTimeline, clearLiveTelemetry are in shared.js.
