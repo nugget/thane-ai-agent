@@ -3,11 +3,13 @@ package app
 import (
 	"errors"
 	"io/fs"
+	"maps"
 	"os"
 	"strings"
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/agent"
+	"github.com/nugget/thane-ai-agent/internal/models"
 	"github.com/nugget/thane-ai-agent/internal/paths"
 	"github.com/nugget/thane-ai-agent/internal/scheduler"
 )
@@ -27,19 +29,7 @@ func (a *App) initAgentLoop(s *newState) error {
 	// Uses a cloud model (Sonnet) for higher-quality reflection output.
 	if cfg.Workspace.Path != "" {
 		reflectionInterval := 24 * time.Hour
-		reflectionModel := "claude-sonnet-4-20250514"
-		if resolved, err := a.modelCatalog.ResolveModelRef(reflectionModel); err == nil {
-			reflectionModel = resolved
-		}
-		reflectionPayload := scheduler.Payload{
-			Kind: scheduler.PayloadWake,
-			Data: map[string]any{
-				"message":       "periodic_reflection",
-				"model":         reflectionModel,
-				"local_only":    "false",
-				"quality_floor": "7",
-			},
-		}
+		reflectionPayload := desiredPeriodicReflectionPayload(a.modelCatalog)
 
 		existing, err := a.schedStore.GetTaskByName(periodicReflectionTaskName)
 		if err != nil {
@@ -61,20 +51,10 @@ func (a *App) initAgentLoop(s *newState) error {
 				logger.Info("periodic_reflection task registered", "interval", reflectionInterval)
 			}
 		} else {
-			// Migrate existing tasks from 15min/local-only to daily/Sonnet.
-			needsUpdate := false
-			if existing.Schedule.Every != nil && existing.Schedule.Every.Duration < reflectionInterval {
-				existing.Schedule.Every.Duration = reflectionInterval
-				needsUpdate = true
-			}
-			if existing.Payload.Data["model"] == nil {
-				existing.Payload = reflectionPayload
-				needsUpdate = true
-			}
-			if !existing.Enabled {
-				existing.Enabled = true
-				needsUpdate = true
-			}
+			// Keep this built-in task converged to the current desired
+			// schedule and payload so stale persisted model refs self-heal
+			// after config/catalog changes.
+			needsUpdate := syncPeriodicReflectionTask(existing, reflectionInterval, reflectionPayload)
 			if needsUpdate {
 				if err := a.sched.UpdateTask(existing); err != nil {
 					logger.Error("failed to update periodic_reflection task", "error", err)
@@ -181,4 +161,66 @@ func (a *App) initAgentLoop(s *newState) error {
 	a.archiveAdapter.EnsureSession("default")
 
 	return nil
+}
+
+func desiredPeriodicReflectionPayload(modelCatalog *models.Catalog) scheduler.Payload {
+	reflectionModel := "claude-sonnet-4-20250514"
+	if modelCatalog != nil {
+		if resolved, err := modelCatalog.ResolveModelRef(reflectionModel); err == nil {
+			reflectionModel = resolved
+		}
+	}
+	return scheduler.Payload{
+		Kind: scheduler.PayloadWake,
+		Data: map[string]any{
+			"message":       "periodic_reflection",
+			"model":         reflectionModel,
+			"local_only":    "false",
+			"quality_floor": "7",
+		},
+	}
+}
+
+func syncPeriodicReflectionTask(task *scheduler.Task, interval time.Duration, payload scheduler.Payload) bool {
+	needsUpdate := false
+
+	if task.Schedule.Kind != scheduler.ScheduleEvery || task.Schedule.Every == nil || task.Schedule.Every.Duration != interval {
+		task.Schedule.Kind = scheduler.ScheduleEvery
+		task.Schedule.Every = &scheduler.Duration{Duration: interval}
+		needsUpdate = true
+	}
+
+	if !periodicReflectionPayloadEqual(task.Payload, payload) {
+		task.Payload = cloneSchedulerPayload(payload)
+		needsUpdate = true
+	}
+
+	if !task.Enabled {
+		task.Enabled = true
+		needsUpdate = true
+	}
+
+	return needsUpdate
+}
+
+func periodicReflectionPayloadEqual(a, b scheduler.Payload) bool {
+	if a.Kind != b.Kind {
+		return false
+	}
+	if len(a.Data) != len(b.Data) {
+		return false
+	}
+	return maps.EqualFunc(a.Data, b.Data, func(left, right any) bool {
+		ls, lok := left.(string)
+		rs, rok := right.(string)
+		return lok && rok && ls == rs
+	})
+}
+
+func cloneSchedulerPayload(in scheduler.Payload) scheduler.Payload {
+	out := scheduler.Payload{Kind: in.Kind}
+	if len(in.Data) > 0 {
+		out.Data = maps.Clone(in.Data)
+	}
+	return out
 }
