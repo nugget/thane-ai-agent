@@ -514,6 +514,10 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
   margin-bottom: 0.15rem;
 }
 
+.schema-card--title .schema-card__meta {
+  display: none;
+}
+
 .schema-card--title .schema-card__body-shell {
   max-height: 0 !important;
   overflow: hidden;
