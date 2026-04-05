@@ -1105,10 +1105,9 @@ const DEFAULT_DASHBOARD_PREFS = {
 const DETAIL_CARD_LAYOUTS_KEY = 'thane.dashboard.cardLayouts.v1';
 const DEFAULT_SCHEMA_CARD_LAYOUT = Object.freeze({ mode: 'full', height: 0 });
 const SCHEMA_CARD_PRESET_HEIGHTS = Object.freeze({
-  title: 78,
+  title: 58,
   widget: 220,
 });
-const SCHEMA_CARD_SNAP_PX = 18;
 
 function loadDashboardPrefs() {
   try {
@@ -1143,7 +1142,6 @@ let connectionWasDegraded = false;
 let lastDetailSelectionKey = null;
 let detailInteractionHoldUntil = 0;
 let detailPointerSelectionActive = false;
-let detailCardResizeState = null;
 
 function clampValue(value, min, max) {
   return Math.max(min, Math.min(max, value));
@@ -1158,8 +1156,8 @@ function loadDetailCardLayouts() {
     const result = {};
     for (const [key, layout] of Object.entries(parsed)) {
       if (!layout || typeof layout !== 'object') continue;
-      const mode = ['title', 'widget', 'full', 'custom'].includes(layout.mode) ? layout.mode : 'full';
-      const height = Number.isFinite(layout.height) ? Math.max(0, Number(layout.height)) : 0;
+      const mode = ['title', 'widget', 'full'].includes(layout.mode) ? layout.mode : 'widget';
+      const height = 0;
       result[key] = { mode, height };
     }
     return result;
@@ -1191,8 +1189,8 @@ function setSchemaCardLayout(entityKind, cardKey, layout) {
   const storageKey = makeSchemaCardLayoutKey(entityKind, cardKey);
   if (!storageKey) return;
   const next = {
-    mode: ['title', 'widget', 'full', 'custom'].includes(layout.mode) ? layout.mode : 'full',
-    height: Number.isFinite(layout.height) ? Math.max(0, Number(layout.height)) : 0,
+    mode: ['title', 'widget', 'full'].includes(layout.mode) ? layout.mode : 'full',
+    height: 0,
   };
   detailCardLayouts[storageKey] = next;
   saveDetailCardLayouts();
@@ -1202,8 +1200,7 @@ function measureSchemaCardLayout(card) {
   const header = card.querySelector('.schema-card__header');
   const bodyShell = card.querySelector('.schema-card__body-shell');
   const body = card.querySelector('.schema-card__body');
-  const resize = card.querySelector('.schema-card__resize');
-  if (!header || !bodyShell || !body || !resize) return null;
+  if (!header || !bodyShell || !body) return null;
 
   const cardStyle = window.getComputedStyle(card);
   const headerStyle = window.getComputedStyle(header);
@@ -1215,16 +1212,15 @@ function measureSchemaCardLayout(card) {
   ].reduce((sum, value) => sum + (parseFloat(value) || 0), 0);
   const headerGap = parseFloat(headerStyle.marginBottom) || 0;
   const headerHeight = header.offsetHeight;
-  const resizeHeight = resize.offsetHeight;
   const bodyHeight = body.scrollHeight;
 
   const titleHeight = Math.max(
-    Math.ceil(cardExtras + headerHeight + headerGap + resizeHeight),
+    Math.ceil(cardExtras + headerHeight + headerGap),
     SCHEMA_CARD_PRESET_HEIGHTS.title,
   );
   const fullHeight = Math.max(
     titleHeight,
-    Math.ceil(cardExtras + headerHeight + headerGap + bodyHeight + resizeHeight),
+    Math.ceil(cardExtras + headerHeight + headerGap + bodyHeight),
   );
   const widgetHeight = clampValue(
     SCHEMA_CARD_PRESET_HEIGHTS.widget,
@@ -1236,7 +1232,6 @@ function measureSchemaCardLayout(card) {
     cardExtras,
     headerGap,
     headerHeight,
-    resizeHeight,
     bodyHeight,
     titleHeight,
     widgetHeight,
@@ -1250,8 +1245,6 @@ function getSchemaCardHeightForLayout(metrics, layout) {
       return metrics.titleHeight;
     case 'widget':
       return metrics.widgetHeight;
-    case 'custom':
-      return clampValue(layout.height || metrics.widgetHeight, metrics.titleHeight, metrics.fullHeight);
     case 'full':
     default:
       return metrics.fullHeight;
@@ -1261,8 +1254,7 @@ function getSchemaCardHeightForLayout(metrics, layout) {
 function inferSchemaCardDensity(metrics, height) {
   if (height <= metrics.titleHeight + 8) return 'title';
   if (height <= metrics.widgetHeight + 18) return 'widget';
-  if (height >= metrics.fullHeight - 8) return 'full';
-  return 'custom';
+  return 'full';
 }
 
 function updateSchemaCardControls(card, activeMode) {
@@ -1270,20 +1262,6 @@ function updateSchemaCardControls(card, activeMode) {
     const active = btn.dataset.layoutMode === activeMode;
     btn.classList.toggle('schema-card__control--active', active);
     btn.setAttribute('aria-pressed', active ? 'true' : 'false');
-  }
-}
-
-function describeSchemaCardLayout(mode) {
-  switch (mode) {
-    case 'title':
-      return 'Title card';
-    case 'widget':
-      return 'Widget panel';
-    case 'custom':
-      return 'Custom height';
-    case 'full':
-    default:
-      return 'Full detail';
   }
 }
 
@@ -1296,15 +1274,14 @@ function syncSchemaCardLayout(card, overrideLayout = null) {
 
   const bodyShell = card.querySelector('.schema-card__body-shell');
   const body = card.querySelector('.schema-card__body');
-  const resizeLabel = card.querySelector('.schema-card__resize-label');
-  if (!bodyShell || !body || !resizeLabel) return;
+  if (!bodyShell || !body) return;
 
   const stored = overrideLayout || getSchemaCardLayout(entityKind, cardKey);
   const desiredHeight = getSchemaCardHeightForLayout(metrics, stored);
   const density = inferSchemaCardDensity(metrics, desiredHeight);
   const clipped = desiredHeight < metrics.fullHeight - 1;
 
-  card.classList.remove('schema-card--title', 'schema-card--widget', 'schema-card--full', 'schema-card--custom', 'schema-card--clipped');
+  card.classList.remove('schema-card--title', 'schema-card--widget', 'schema-card--full', 'schema-card--clipped');
   card.classList.add('schema-card--' + density);
   card.dataset.layoutMode = stored.mode;
   card.dataset.layoutDensity = density;
@@ -1316,7 +1293,7 @@ function syncSchemaCardLayout(card, overrideLayout = null) {
     body.style.removeProperty('overflow-y');
   } else {
     const totalHeight = clampValue(desiredHeight, metrics.titleHeight, metrics.fullHeight);
-    const bodyLimit = Math.max(0, totalHeight - metrics.cardExtras - metrics.headerHeight - metrics.headerGap - metrics.resizeHeight);
+    const bodyLimit = Math.max(0, totalHeight - metrics.cardExtras - metrics.headerHeight - metrics.headerGap);
     card.style.height = totalHeight + 'px';
     bodyShell.style.visibility = density === 'title' ? 'hidden' : 'visible';
     bodyShell.style.maxHeight = density === 'title' ? '0px' : bodyLimit + 'px';
@@ -1327,8 +1304,7 @@ function syncSchemaCardLayout(card, overrideLayout = null) {
     card.classList.add('schema-card--clipped');
   }
 
-  resizeLabel.textContent = describeSchemaCardLayout(density);
-  updateSchemaCardControls(card, stored.mode === 'custom' ? density : stored.mode);
+  updateSchemaCardControls(card, stored.mode);
 }
 
 function syncAllSchemaCardLayouts() {
@@ -1343,19 +1319,6 @@ function applySchemaCardPreset(card, mode) {
   setSchemaCardLayout(entityKind, cardKey, { mode, height: 0 });
   syncSchemaCardLayout(card);
   bumpDetailInteractionHold(900);
-}
-
-function snapSchemaCardLayout(metrics, height) {
-  if (Math.abs(height - metrics.titleHeight) <= SCHEMA_CARD_SNAP_PX) {
-    return { mode: 'title', height: 0 };
-  }
-  if (Math.abs(height - metrics.widgetHeight) <= SCHEMA_CARD_SNAP_PX) {
-    return { mode: 'widget', height: 0 };
-  }
-  if (Math.abs(height - metrics.fullHeight) <= SCHEMA_CARD_SNAP_PX) {
-    return { mode: 'full', height: 0 };
-  }
-  return { mode: 'custom', height };
 }
 
 function bumpDetailInteractionHold(ms = 1200) {
@@ -1375,7 +1338,6 @@ function detailTextSelectionActive() {
 }
 
 function shouldDeferDetailRender() {
-  if (detailCardResizeState) return true;
   if (detailPointerSelectionActive) return true;
   if (detailTextSelectionActive()) {
     bumpDetailInteractionHold(1500);
@@ -2511,43 +2473,6 @@ function makeSchemaCard(title, meta, opts = {}) {
 
   card.appendChild(bodyShell);
 
-  if (isResizable) {
-    const resize = document.createElement('div');
-    resize.className = 'schema-card__resize';
-    resize.title = 'Drag to resize this card';
-
-    const grip = document.createElement('span');
-    grip.className = 'schema-card__resize-grip';
-    grip.setAttribute('aria-hidden', 'true');
-    resize.appendChild(grip);
-
-    const resizeLabel = document.createElement('span');
-    resizeLabel.className = 'schema-card__resize-label';
-    resizeLabel.textContent = 'Full detail';
-    resize.appendChild(resizeLabel);
-
-    resize.addEventListener('pointerdown', (e) => {
-      if (e.button !== 0) return;
-      e.preventDefault();
-      e.stopPropagation();
-      const metrics = measureSchemaCardLayout(card);
-      if (!metrics) return;
-      detailCardResizeState = {
-        card,
-        entityKind: card.dataset.entityKind || '',
-        cardKey: card.dataset.cardKey || '',
-        startY: e.clientY,
-        startHeight: card.getBoundingClientRect().height,
-        metrics,
-      };
-      detailCardResizeState.card.classList.add('schema-card--resizing');
-      detailInteractionHoldUntil = Number.POSITIVE_INFINITY;
-      document.body.classList.add('resize-row');
-    });
-
-    card.appendChild(resize);
-  }
-
   return { card, body, header };
 }
 
@@ -3301,7 +3226,7 @@ setLogsVisible(dashboardPrefs.logsVisible);
 if (detailPanel) {
   detailPanel.addEventListener('pointerdown', (e) => {
     if (e.button !== 0) return;
-    if (e.target.closest('button, .btn, .toggle-btn, .id-chip, .log-id-chip, summary, a, .schema-card__resize, .schema-card__control')) return;
+    if (e.target.closest('button, .btn, .toggle-btn, .id-chip, .log-id-chip, summary, a, .schema-card__control')) return;
     detailPointerSelectionActive = true;
     bumpDetailInteractionHold(2000);
   });
@@ -3311,51 +3236,10 @@ if (detailPanel) {
   });
 }
 
-document.addEventListener('pointermove', (e) => {
-  if (!detailCardResizeState) return;
-  e.preventDefault();
-  const nextHeight = clampValue(
-    detailCardResizeState.startHeight + (e.clientY - detailCardResizeState.startY),
-    detailCardResizeState.metrics.titleHeight,
-    detailCardResizeState.metrics.fullHeight,
-  );
-  syncSchemaCardLayout(detailCardResizeState.card, { mode: 'custom', height: nextHeight });
-});
-
 document.addEventListener('pointerup', () => {
-  if (detailCardResizeState) {
-    const card = detailCardResizeState.card;
-    const metrics = measureSchemaCardLayout(card) || detailCardResizeState.metrics;
-    const finalHeight = clampValue(
-      card.getBoundingClientRect().height,
-      metrics.titleHeight,
-      metrics.fullHeight,
-    );
-    const snapped = snapSchemaCardLayout(metrics, finalHeight);
-    setSchemaCardLayout(
-      detailCardResizeState.entityKind,
-      detailCardResizeState.cardKey,
-      snapped,
-    );
-    syncSchemaCardLayout(card);
-    card.classList.remove('schema-card--resizing');
-    detailCardResizeState = null;
-    detailInteractionHoldUntil = Date.now() + 900;
-    document.body.classList.remove('resize-row');
-  }
   if (!detailPointerSelectionActive) return;
   detailPointerSelectionActive = false;
   bumpDetailInteractionHold(900);
-});
-
-document.addEventListener('pointercancel', () => {
-  if (!detailCardResizeState) return;
-  const card = detailCardResizeState.card;
-  syncSchemaCardLayout(card);
-  card.classList.remove('schema-card--resizing');
-  detailCardResizeState = null;
-  detailInteractionHoldUntil = Date.now() + 900;
-  document.body.classList.remove('resize-row');
 });
 
 document.addEventListener('selectionchange', () => {
