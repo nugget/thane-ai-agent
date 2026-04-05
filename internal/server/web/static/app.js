@@ -50,7 +50,9 @@ const physics = {
   branchContainmentStrength: 0.008,
   siblingAnchorStrength: 0.028,
   rootAngularBalanceStrength: 0.2,
+  rootRadialBalanceStrength: 0.06,
   siblingAngularBalanceStrength: 0.18,
+  siblingRadialBalanceStrength: 0.07,
   crossBranchRepulsionMultiplier: 1.45,
   sameBranchRepulsionMultiplier: 0.9,
   edgeNodeRepulsion:  0.2,
@@ -321,6 +323,36 @@ function applyAngularEquilibrium(entries, centerForEntry, strength) {
   }
 }
 
+function applyRadialEquilibrium(entries, centerForEntry, targetRadiusForEntry, strength) {
+  if (!entries || entries.length === 0) return;
+
+  for (const entry of entries) {
+    const nd = physics.nodes.get(entry.id);
+    if (!nd || nd.pinned) continue;
+    const center = centerForEntry(entry);
+    if (!center) continue;
+    const targetRadius = targetRadiusForEntry(entry);
+    if (!Number.isFinite(targetRadius) || targetRadius <= 0) continue;
+
+    let dx = nd.x - center.x;
+    let dy = nd.y - center.y;
+    let radius = Math.sqrt((dx * dx) + (dy * dy));
+    if (radius < 0.001) {
+      const fallbackAngle = Number.isFinite(entry.angle) ? entry.angle : (-Math.PI / 2);
+      dx = Math.cos(fallbackAngle);
+      dy = Math.sin(fallbackAngle);
+      radius = 1;
+    }
+
+    const radialX = dx / radius;
+    const radialY = dy / radius;
+    const radiusError = targetRadius - radius;
+    const force = radiusError * strength;
+    nd.fx += radialX * force;
+    nd.fy += radialY * force;
+  }
+}
+
 // Ensure physics.nodes matches the current set of loops + system node.
 // New nodes spawn at their parent position (or center with jitter).
 function syncPhysicsNodes(cx, cy) {
@@ -558,6 +590,12 @@ function physicsStep(cx, cy, vw, vh) {
   // circle around their center rather than collapsing into one favored arc.
   const rootEntries = Array.from(topLevelTargets.keys()).map(id => ({ id }));
   applyAngularEquilibrium(rootEntries, () => ({ x: cx, y: cy }), P.rootAngularBalanceStrength);
+  applyRadialEquilibrium(
+    rootEntries.map(id => ({ ...id, angle: topLevelTargets.get(id.id)?.angle })),
+    () => ({ x: cx, y: cy }),
+    entry => topLevelTargets.get(entry.id)?.radius || 0,
+    P.rootRadialBalanceStrength,
+  );
 
   for (const [parentID, siblings] of siblingIndex) {
     const parent = P.nodes.get(parentID);
@@ -566,6 +604,20 @@ function physicsStep(cx, cy, vw, vh) {
       siblings.map(loop => ({ id: loop.id })),
       () => ({ x: parent.x, y: parent.y }),
       P.siblingAngularBalanceStrength,
+    );
+    applyRadialEquilibrium(
+      siblings.map(loop => {
+        const target = siblingTargets.get(loop.id);
+        return { id: loop.id, angle: target?.angle, ring: target?.ring || 0 };
+      }),
+      () => ({ x: parent.x, y: parent.y }),
+      entry => {
+        const loop = state.loops.get(entry.id);
+        const parentLoop = state.loops.get(parentID);
+        const spacingMultiplier = getPairSpacingMultiplier(parentLoop, loop);
+        return P.childRestLength * spacingMultiplier * (1 + (entry.ring || 0) * 0.48);
+      },
+      P.siblingRadialBalanceStrength,
     );
   }
 
