@@ -75,6 +75,9 @@ let activeRequestJSON = '';
 let pinnedRequestID = '';
 let followLatestRequest = true;
 let serverStartTime = null;
+let requestDetailAvailable = null;
+let requestDetailProbeInFlight = null;
+let requestDetailCooldown = { requestID: '', status: 0, until: 0 };
 
 function startLogPoll() {
   if (logPollInterval) clearInterval(logPollInterval);
@@ -174,6 +177,55 @@ function updatePopupFooter() {
   }
   setFooterItem(popupFooter.loopContext, contextText);
   setFooterItem(popupFooter.loopWake, formatLoopFooterWake(loopData));
+}
+
+async function probeContentRetention() {
+  if (requestDetailProbeInFlight) return requestDetailProbeInFlight;
+  requestDetailProbeInFlight = (async () => {
+    try {
+      const resp = await fetch('/api/requests/_probe');
+      requestDetailAvailable = resp.ok && resp.headers.get('X-Request-Detail-Available') === 'true';
+    } catch (_) {
+      requestDetailAvailable = null;
+    } finally {
+      requestDetailProbeInFlight = null;
+    }
+    return requestDetailAvailable;
+  })();
+  return requestDetailProbeInFlight;
+}
+
+function renderRequestDetailUnavailable(message, meta = '') {
+  activeRequestJSON = '';
+  if (forensics.ids) forensics.ids.innerHTML = '';
+  if (forensics.meta) forensics.meta.innerHTML = '';
+  if (forensics.requestMeta) {
+    forensics.requestMeta.textContent = meta;
+    forensics.requestMeta.classList.remove('forensics-card__meta--loading');
+  }
+  if (forensics.waterfallMeta) forensics.waterfallMeta.textContent = '';
+  if (forensics.empty) forensics.empty.textContent = message;
+  setForensicsLoaded(false);
+  updateForensicsControls();
+}
+
+function shouldCooldownRequestDetail(requestID, force = false) {
+  if (force) return false;
+  return requestDetailCooldown.requestID === requestID && Date.now() < requestDetailCooldown.until;
+}
+
+function rememberRequestDetailFailure(requestID, status) {
+  const now = Date.now();
+  let until = now + 15000;
+  if (status === 404) until = now + 30000;
+  if (status === 503) until = now + 300000;
+  requestDetailCooldown = { requestID, status, until };
+}
+
+function clearRequestDetailCooldown(requestID) {
+  if (requestDetailCooldown.requestID === requestID) {
+    requestDetailCooldown = { requestID: '', status: 0, until: 0 };
+  }
 }
 
 pollSlider.addEventListener('input', () => {
@@ -408,6 +460,7 @@ async function fetchRequestDetailIntoForensics(requestID) {
   if (!requestID) {
     activeRequestID = '';
     activeRequestJSON = '';
+    clearRequestDetailCooldown(requestID);
     if (forensics.ids) forensics.ids.innerHTML = '';
     if (forensics.meta) forensics.meta.innerHTML = '';
     if (forensics.requestMeta) {
@@ -425,6 +478,15 @@ async function fetchRequestDetailIntoForensics(requestID) {
     return;
   }
 
+  if (requestDetailAvailable === false) {
+    activeRequestID = requestID;
+    renderRequestDetailUnavailable(
+      'Request detail is unavailable because content retention is disabled for this runtime. Live loop telemetry in the sidebar still reflects the turn as it runs.',
+      'Content retention unavailable',
+    );
+    return;
+  }
+
   setForensicsRequestLoading(requestID);
 
   try {
@@ -432,19 +494,27 @@ async function fetchRequestDetailIntoForensics(requestID) {
     if (!resp.ok) {
       activeRequestID = requestID;
       activeRequestJSON = '';
+      if (resp.status === 503) {
+        requestDetailAvailable = false;
+      }
+      rememberRequestDetailFailure(requestID, resp.status);
       if (forensics.ids) forensics.ids.innerHTML = '';
       if (forensics.meta) forensics.meta.innerHTML = '';
       if (forensics.requestMeta) {
         forensics.requestMeta.textContent = resp.status === 404
-          ? 'Request retention unavailable'
-          : 'Request detail failed (' + resp.status + ')';
+          ? 'Request detail unavailable'
+          : resp.status === 503
+            ? 'Content retention unavailable'
+            : 'Request detail failed (' + resp.status + ')';
         forensics.requestMeta.classList.remove('forensics-card__meta--loading');
       }
       if (forensics.waterfallMeta) forensics.waterfallMeta.textContent = '';
       if (forensics.empty) {
         forensics.empty.textContent = resp.status === 404
-          ? 'Request detail is unavailable. Content retention may be disabled or this request may have been evicted.'
-          : 'Request detail failed to load.';
+          ? 'This retained request is no longer available. It may have been evicted, or request retention may not include this turn.'
+          : resp.status === 503
+            ? 'Request detail is unavailable because content retention is disabled for this runtime.'
+            : 'Request detail failed to load.';
       }
       setForensicsLoaded(false);
       updateForensicsControls();
@@ -454,6 +524,7 @@ async function fetchRequestDetailIntoForensics(requestID) {
     const detail = await resp.json();
     activeRequestID = requestID;
     activeRequestJSON = JSON.stringify(detail, null, 2);
+    clearRequestDetailCooldown(requestID);
 
     if (forensics.requestMeta) {
       const metaBits = [];
@@ -483,6 +554,7 @@ async function fetchRequestDetailIntoForensics(requestID) {
     updateForensicsControls();
   } catch (err) {
     console.warn('Failed to fetch request detail:', err);
+    rememberRequestDetailFailure(requestID, 0);
     if (forensics.ids) forensics.ids.innerHTML = '';
     if (forensics.meta) forensics.meta.innerHTML = '';
     if (forensics.requestMeta) {
@@ -524,6 +596,12 @@ function syncLoopRequestDetail(force = false) {
     return;
   }
 
+  if (requestDetailAvailable === false) {
+    void fetchRequestDetailIntoForensics(targetRequestID);
+    return;
+  }
+
+  if (shouldCooldownRequestDetail(targetRequestID, force)) return;
   if (!force && activeRequestID === targetRequestID && forensics.empty?.hidden) return;
   void fetchRequestDetailIntoForensics(targetRequestID);
 }
@@ -545,6 +623,7 @@ function initLoop() {
   showLoopForensicsView();
   $('#loop-detail').hidden = false;
   void fetchVersionInfo();
+  void probeContentRetention().then(() => syncLoopRequestDetail(true));
   window.onRequestChipClick = (requestID) => {
     if (!requestID) return;
     followLatestRequest = false;
