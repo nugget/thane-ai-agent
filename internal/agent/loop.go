@@ -1539,7 +1539,8 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		}
 		names := make([]string, 0, len(defs))
 		for _, def := range defs {
-			name, _ := def["name"].(string)
+			fn, _ := def["function"].(map[string]any)
+			name, _ := fn["name"].(string)
 			if name != "" {
 				names = append(names, name)
 			}
@@ -1893,6 +1894,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		SessionID:                sessionID,
 		RequestID:                requestID,
 		ActiveTags:               activeTags,
+		LoadedCapabilities:       toolcatalog.BuildLoadedCapabilityEntries(l.capSurface, activeTags),
 	}
 
 	l.recordLiveRequestDetail(ctx, requestID, systemPrompt, userMessage, iterResult)
