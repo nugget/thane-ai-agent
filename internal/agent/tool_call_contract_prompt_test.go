@@ -30,6 +30,9 @@ func TestBuildSystemPromptWithProfile_AddsToolCallingContractForRawTextModels(t 
 	if !strings.Contains(prompt, "Do not wrap the JSON in markdown fences.") {
 		t.Fatalf("prompt missing anti-fence guidance: %s", prompt)
 	}
+	if !strings.Contains(prompt, "Capability and tag requests are tool actions") {
+		t.Fatalf("prompt missing capability tool-action guidance: %s", prompt)
+	}
 }
 
 func TestBuildSystemPromptWithProfile_OmitsToolCallingContractForNativeModels(t *testing.T) {

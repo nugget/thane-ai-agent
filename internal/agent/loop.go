@@ -720,6 +720,7 @@ func (l *Loop) buildSystemPromptWithProfile(ctx context.Context, userMessage str
 	if activeSummary := toolcatalog.RenderLoadedCapabilitySummary(l.capSurface, tags); activeSummary != "" {
 		mark("ACTIVE CAPABILITIES")
 		sb.WriteString("\n\n## Active Capabilities\n\n")
+		sb.WriteString("Capability and tag changes are runtime actions. If the user asks to activate, deactivate, load, unload, or inspect loaded capabilities/tags, use the exact capability tools named below.\n\n")
 		sb.WriteString(activeSummary)
 		sb.WriteString("\n")
 		seal()

@@ -93,6 +93,7 @@ func (p ModelInteractionProfile) ToolCallingContract() string {
 	return strings.Join([]string{
 		"When you need a tool, emit only one compact JSON object with exactly these fields:",
 		`{"name":"exact_tool_name","arguments":{...}}`,
+		"Capability and tag requests are tool actions: if the user asks to activate, deactivate, load, unload, or inspect loaded capabilities/tags, use the exact capability tool instead of answering conversationally.",
 		"Do not wrap the JSON in markdown fences.",
 		"Do not add prose before or after the JSON.",
 		"Do not invent tool names.",
