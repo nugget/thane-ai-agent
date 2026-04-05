@@ -54,6 +54,9 @@ const physics = {
   orbitRadiusVelocityGain: 0.028,
   orbitRadiusVelocityCap: 1.3,
   orbitAspectStrength: 0.42,
+  viewportReflowVelocityGain: 0.18,
+  viewportReflowPositionBlend: 0.08,
+  viewportReflowVelocityCap: 3.2,
   pinnedAnchorStrength: 0.16,
   pinnedAnchorDamping: 0.72,
   overlapRepulsionStrength: 0.16,
@@ -347,7 +350,7 @@ function applyOrbitRadiusElasticity(targets) {
   }
 }
 
-function kickOrbitReflow(orbitTargets, loopIDs) {
+function kickOrbitReflow(orbitTargets, loopIDs, intensity = 1) {
   if (!orbitTargets || !loopIDs || loopIDs.length === 0) return;
 
   const affected = new Set();
@@ -372,10 +375,32 @@ function kickOrbitReflow(orbitTargets, loopIDs) {
     const dy = target.y - nd.y;
     const dist = Math.sqrt((dx * dx) + (dy * dy));
     if (dist < 0.001) continue;
-    const gain = Math.min(0.34, 0.08 + (dist / 420) * 0.18);
-    nd.vx += dx * gain * 0.12;
-    nd.vy += dy * gain * 0.12;
+    const scaledIntensity = Math.max(0.4, intensity);
+    const gain = Math.min(0.34, 0.08 + (dist / 420) * 0.18) * scaledIntensity;
+    const blend = Math.min(0.18, physics.viewportReflowPositionBlend * scaledIntensity);
+    nd.x += dx * blend;
+    nd.y += dy * blend;
+    nd.vx += dx * gain * physics.viewportReflowVelocityGain;
+    nd.vy += dy * gain * physics.viewportReflowVelocityGain;
+    nd.vx = Math.max(-physics.viewportReflowVelocityCap, Math.min(physics.viewportReflowVelocityCap, nd.vx));
+    nd.vy = Math.max(-physics.viewportReflowVelocityCap, Math.min(physics.viewportReflowVelocityCap, nd.vy));
   }
+}
+
+function kickViewportReflow(prevRect, nextRect) {
+  if (!nextRect || state.loops.size === 0) return;
+  const branchLoads = buildLoopBranchLoads();
+  const siblingIndex = buildSiblingIndex();
+  const orbitTargets = buildOrbitTargets(nextRect.cx, nextRect.cy, branchLoads, siblingIndex, nextRect.width, nextRect.height);
+  const loopIDs = Array.from(state.loops.keys());
+  const prevAspect = prevRect && prevRect.height > 0 ? prevRect.width / prevRect.height : nextRect.width / nextRect.height;
+  const nextAspect = nextRect.height > 0 ? nextRect.width / nextRect.height : prevAspect;
+  const aspectDelta = Math.abs(nextAspect - prevAspect);
+  const sizeDelta = prevRect && prevRect.width > 0 && prevRect.height > 0
+    ? Math.abs((nextRect.width * nextRect.height) - (prevRect.width * prevRect.height)) / (prevRect.width * prevRect.height)
+    : 0;
+  const intensity = Math.min(1.8, 0.7 + aspectDelta * 0.9 + sizeDelta * 0.45);
+  kickOrbitReflow(orbitTargets, loopIDs, intensity);
 }
 
 function updatePinnedAnchorPositions() {
@@ -538,8 +563,10 @@ function refreshCanvasViewport() {
   const nextRect = getCanvasRectSnapshot();
   if (!nextRect) return null;
   if (isCanvasRectChanged(state.canvasRect, nextRect)) {
-    reflowPhysicsNodes(state.canvasRect, nextRect);
+    const prevRect = state.canvasRect;
+    reflowPhysicsNodes(prevRect, nextRect);
     state.canvasRect = cloneRect(nextRect);
+    kickViewportReflow(prevRect, nextRect);
   }
   return nextRect;
 }
