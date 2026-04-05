@@ -474,11 +474,13 @@ func (a *App) initStores(s *newState) error {
 	// Task execution dependencies. The runner reads a.loop at call time
 	// (not capture time) so it sees the loop constructed by initAgentLoop.
 	var deps taskExecDeps
+	deps.launch = a.loopRegistry.Launch
 	deps.logger = logger
+	deps.eventBus = a.eventBus
 	deps.workspacePath = cfg.Workspace.Path
 
 	executeTask := func(ctx context.Context, task *scheduler.Task, exec *scheduler.Execution) error {
-		deps.runner = a.loop // read at execution time, set by initAgentLoop
+		deps.runner = &loopAdapter{agentLoop: a.loop, router: a.rtr, capSurface: a.capSurface}
 		return runScheduledTask(ctx, task, exec, deps)
 	}
 

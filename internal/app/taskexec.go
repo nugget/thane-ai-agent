@@ -8,9 +8,12 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/agent"
+	"github.com/nugget/thane-ai-agent/internal/events"
 	"github.com/nugget/thane-ai-agent/internal/logging"
+	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
 	"github.com/nugget/thane-ai-agent/internal/prompts"
 	"github.com/nugget/thane-ai-agent/internal/router"
 	"github.com/nugget/thane-ai-agent/internal/scheduler"
@@ -20,7 +23,9 @@ import (
 // scheduled task. Used for startup registration and context injection.
 const periodicReflectionTaskName = "periodic_reflection"
 
-// agentRunner abstracts the agent loop for task execution testing.
+// agentRunner abstracts direct agent dispatch sites that still bypass
+// loops-ng launch semantics (for example, handler-triggered wake paths
+// that create their own conversations).
 type agentRunner interface {
 	Run(ctx context.Context, req *agent.Request, stream agent.StreamCallback) (*agent.Response, error)
 }
@@ -29,14 +34,16 @@ type agentRunner interface {
 // executor. Using a struct avoids a growing parameter list as more
 // task types are added.
 type taskExecDeps struct {
-	runner        agentRunner
+	launch        func(context.Context, looppkg.Launch, looppkg.Deps) (looppkg.LaunchResult, error)
+	runner        looppkg.Runner
+	eventBus      *events.Bus
 	logger        *slog.Logger
 	workspacePath string
 }
 
-// runScheduledTask handles execution of a scheduled task by dispatching
-// PayloadWake tasks to the agent loop. Unsupported payload kinds are
-// logged and silently ignored (returning nil, not an error).
+// runScheduledTask handles execution of a scheduled task by compiling it
+// into a transient loops-ng launch. Unsupported payload kinds are logged
+// and silently ignored (returning nil, not an error).
 func runScheduledTask(ctx context.Context, task *scheduler.Task, exec *scheduler.Execution, deps taskExecDeps) error {
 	log := deps.logger.With(
 		"subsystem", logging.SubsystemScheduler,
@@ -53,7 +60,39 @@ func runScheduledTask(ctx context.Context, task *scheduler.Task, exec *scheduler
 		deps.logger.Warn("unsupported task payload kind", "kind", task.Payload.Kind)
 		return nil
 	}
+	if deps.launch == nil {
+		return fmt.Errorf("scheduled task %q: loop launcher is not configured", task.Name)
+	}
+	if deps.runner == nil {
+		return fmt.Errorf("scheduled task %q: loop runner is not configured", task.Name)
+	}
 
+	launch := buildScheduledTaskLaunch(ctx, task, exec, deps.workspacePath, deps.logger)
+	result, err := deps.launch(ctx, launch, looppkg.Deps{
+		Runner:   deps.runner,
+		Logger:   deps.logger,
+		EventBus: deps.eventBus,
+	})
+	if err != nil {
+		return fmt.Errorf("scheduled task %q: %w", task.Name, err)
+	}
+	if result.Response != nil {
+		exec.Result = result.Response.Content
+	}
+
+	deps.logger.Debug("task completed",
+		"task_id", task.ID,
+		"task_name", task.Name,
+		"loop_id", result.LoopID,
+		"result_len", len(exec.Result),
+	)
+	return nil
+}
+
+// buildScheduledTaskLaunch compiles a persisted scheduler task and one
+// execution record into a loops-ng launch with scheduler-specific
+// routing, metadata, and timeout inheritance.
+func buildScheduledTaskLaunch(ctx context.Context, task *scheduler.Task, exec *scheduler.Execution, workspacePath string, logger *slog.Logger) looppkg.Launch {
 	msg, _ := task.Payload.Data["message"].(string)
 	if msg == "" {
 		msg = "Scheduled wake: " + task.Name
@@ -61,40 +100,43 @@ func runScheduledTask(ctx context.Context, task *scheduler.Task, exec *scheduler
 
 	// Context injection for periodic_reflection: read ego.md and build
 	// the reflection prompt with its current contents.
-	if task.Name == periodicReflectionTaskName && deps.workspacePath != "" {
-		egoContent := readEgoMD(deps.workspacePath, deps.logger)
+	if task.Name == periodicReflectionTaskName && workspacePath != "" {
+		egoContent := readEgoMD(workspacePath, logger)
 		msg = prompts.PeriodicReflectionPrompt(egoContent)
 	}
 
-	// Build the wake routing profile via LoopProfile so scheduled tasks
-	// use the same routing/config path as the newer wake subsystems.
 	seed := buildScheduledTaskLoopProfile(task)
-	reqOpts := seed.RequestOptions()
 
-	// Each execution gets a fresh conversation so prior poll/wake context
-	// doesn't accumulate across cycles. The execution ID (UUIDv7) ensures
-	// uniqueness while the task ID prefix aids log correlation.
-	req := &agent.Request{
+	launch := looppkg.Launch{
+		Spec: looppkg.Spec{
+			Name:       "scheduler:" + task.Name,
+			Task:       "Execute the scheduled task prompt exactly as requested.",
+			Operation:  looppkg.OperationRequestReply,
+			Completion: looppkg.CompletionNone,
+			Profile:    seed,
+			Metadata: map[string]string{
+				"subsystem": "scheduler",
+				"category":  "task",
+				"task_id":   task.ID,
+				"task_name": task.Name,
+			},
+		},
+		Task:           msg,
 		ConversationID: fmt.Sprintf("sched-%s-%s", task.ID, exec.ID),
-		Model:          reqOpts.Model,
-		Messages:       []agent.Message{{Role: "user", Content: msg}},
-		Hints:          reqOpts.Hints,
-		ExcludeTools:   reqOpts.ExcludeTools,
-		InitialTags:    reqOpts.InitialTags,
+		Metadata: map[string]string{
+			"execution_id": exec.ID,
+		},
+		UsageRole:     "scheduler",
+		UsageTaskName: task.Name,
 	}
 
-	resp, err := deps.runner.Run(ctx, req, nil)
-	if err != nil {
-		return fmt.Errorf("scheduled task %q: %w", task.Name, err)
+	if deadline, ok := ctx.Deadline(); ok {
+		if timeout := time.Until(deadline); timeout > 0 {
+			launch.RunTimeout = timeout
+		}
 	}
-	exec.Result = resp.Content
 
-	deps.logger.Debug("task completed",
-		"task_id", task.ID,
-		"task_name", task.Name,
-		"result_len", len(resp.Content),
-	)
-	return nil
+	return launch
 }
 
 // buildScheduledTaskLoopProfile converts a wake task payload into the
