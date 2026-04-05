@@ -290,7 +290,17 @@ loop-definition-smoke base_url="http://127.0.0.1:8080":
 # loop definition, launch, completion, app delivery, and interactive
 # channel integration surfaces.
 [group('operations')]
+web-static-check:
+    node --check internal/server/web/static/app.js
+    node --check internal/server/web/static/detail.js
+    node --check internal/server/web/static/shared.js
+
+# Focused loops-ng regression pass for the packages that own the new
+# loop definition, launch, completion, app delivery, interactive
+# channel integration, and dashboard graph surfaces.
+[group('operations')]
 loops-ng-contract-tests:
+    just web-static-check
     go test -race ./internal/loop ./internal/tools ./internal/delegate ./internal/app ./internal/channels/signal ./internal/server/api
 
 # Broader loops-ng smoke pass: focused regression packages plus live
