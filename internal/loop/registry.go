@@ -82,7 +82,7 @@ func (r *Registry) Register(l *Loop) error {
 	}
 
 	r.loops[l.id] = l
-	r.logger.Info("loop registered",
+	r.logger.Debug("loop registered",
 		"loop_id", l.id,
 		"loop_name", l.config.Name,
 		"parent_id", l.config.ParentID,
@@ -101,7 +101,7 @@ func (r *Registry) Deregister(id string) {
 		return
 	}
 	delete(r.loops, id)
-	r.logger.Info("loop deregistered",
+	r.logger.Debug("loop deregistered",
 		"loop_id", id,
 		"active_loops", len(r.loops),
 	)
@@ -392,11 +392,21 @@ func (r *Registry) startDetachedCompletion(launch Launch, l *Loop) {
 			r.logger.Warn("detached loop completion delivery failed",
 				"loop_id", l.id,
 				"loop_name", l.config.Name,
+				"delivery_mode", launch.Spec.Completion,
 				"conversation_id", conversationID,
 				"channel_target", channelTarget,
+				"delivery_timeout", detachedCompletionTimeout,
 				"error", err,
 			)
+			return
 		}
+		r.logger.Info("detached loop completion delivered",
+			"loop_id", l.id,
+			"loop_name", l.config.Name,
+			"delivery_mode", launch.Spec.Completion,
+			"conversation_id", conversationID,
+			"channel_target", channelTarget,
+		)
 	}()
 }
 
@@ -449,6 +459,7 @@ func (r *Registry) StopLoop(id string) error {
 	default:
 		r.logger.Warn("loop goroutine still running after Stop, keeping registered",
 			"loop_id", id,
+			"loop_name", l.config.Name,
 		)
 	}
 

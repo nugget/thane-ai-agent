@@ -50,8 +50,11 @@ func (r *loopChannelDeliveryRouter) ConfigureSignalSender(sender channelMessageS
 }
 
 func (r *loopChannelDeliveryRouter) Deliver(ctx context.Context, target *looppkg.CompletionChannelTarget, content string) error {
-	if r == nil || target == nil {
-		return nil
+	if r == nil {
+		return fmt.Errorf("loop completion channel delivery is not configured")
+	}
+	if target == nil {
+		return fmt.Errorf("loop completion channel target is required")
 	}
 	switch target.Channel {
 	case "signal":
@@ -70,7 +73,7 @@ func (r *loopChannelDeliveryRouter) Deliver(ctx context.Context, target *looppkg
 		return nil
 	case "owu":
 		if r.conversations == nil {
-			return nil
+			return fmt.Errorf("owu completion delivery is not configured")
 		}
 		if target.ConversationID == "" {
 			return fmt.Errorf("owu completion delivery requires conversation_id")
@@ -159,12 +162,12 @@ func (d *detachedLoopCompletionDispatcher) dispatch(ctx context.Context, present
 		return nil
 	case looppkg.CompletionConversation:
 		if d.conversations == nil {
-			return nil
+			return fmt.Errorf("conversation completion delivery is not configured")
 		}
 		return d.conversations.InjectSystemMessage(presented.ConversationID, presented.Content)
 	case looppkg.CompletionChannel:
 		if d.channels == nil {
-			return nil
+			return fmt.Errorf("channel completion delivery is not configured")
 		}
 		return d.channels.Deliver(ctx, presented.Channel, presented.Content)
 	default:

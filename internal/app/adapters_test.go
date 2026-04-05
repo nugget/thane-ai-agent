@@ -208,3 +208,28 @@ func TestConversationSystemInjector(t *testing.T) {
 		t.Fatalf("fourth message = %#v", msgs[3])
 	}
 }
+
+func TestDetachedLoopCompletionDispatcherRequiresConfiguredTargets(t *testing.T) {
+	dispatcher := newDetachedLoopCompletionDispatcher(nil, nil)
+
+	err := dispatcher.dispatch(context.Background(), loopCompletionPresentation{
+		Mode:           looppkg.CompletionConversation,
+		ConversationID: "conv-1",
+		Content:        "hello",
+	})
+	if err == nil || err.Error() != "conversation completion delivery is not configured" {
+		t.Fatalf("conversation dispatch error = %v", err)
+	}
+
+	err = dispatcher.dispatch(context.Background(), loopCompletionPresentation{
+		Mode: looppkg.CompletionChannel,
+		Channel: &looppkg.CompletionChannelTarget{
+			Channel:   "signal",
+			Recipient: "+15551234567",
+		},
+		Content: "hello",
+	})
+	if err == nil || err.Error() != "channel completion delivery is not configured" {
+		t.Fatalf("channel dispatch error = %v", err)
+	}
+}

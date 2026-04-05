@@ -314,6 +314,14 @@ func (e *Executor) StartBackground(ctx context.Context, task, profileName, guida
 		return "", fmt.Errorf("delegate failed to start in background: %w", err)
 	}
 
+	prep.log.Info("delegate background started",
+		"loop_id", launchResult.LoopID,
+		"completion_mode", completion,
+		"completion_conversation_id", targetConversationID,
+		"completion_channel", looppkg.CloneCompletionChannelTarget(targetChannel),
+		"run_timeout", loopMaxDuration.Round(time.Second),
+	)
+
 	e.finishDetachedLoopExecution(launchResult.LoopID, prep)
 	return launchResult.LoopID, nil
 }

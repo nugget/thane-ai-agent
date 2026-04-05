@@ -623,12 +623,14 @@ func (l *Loop) run(ctx context.Context) {
 			},
 		})
 
-		logger.Info("loop initial sleep before first iteration",
+		logger.Debug("loop initial sleep before first iteration",
 			"duration", initialSleep.Round(time.Second),
 		)
 
 		if !sleepCtx(ctx, initialSleep) {
-			logger.Info("loop stopped during initial sleep")
+			logger.Debug("loop stopped during initial sleep",
+				"phase", "initial_sleep",
+			)
 			l.emitStopped()
 			return
 		}
@@ -670,16 +672,18 @@ func (l *Loop) run(ctx context.Context) {
 			event, waitErr = l.config.WaitFunc(ctx)
 			if waitErr != nil {
 				if ctx.Err() != nil {
-					logger.Info("loop stopped")
+					logger.Debug("loop stopped while waiting for event",
+						"phase", "wait",
+					)
 					break
 				}
 				// WaitFunc error (not cancellation) — apply backoff
 				// before retrying. This prevents tight-looping when
 				// the upstream source is temporarily broken.
-				logger.Warn("wait failed", "error", waitErr)
 				l.mu.Lock()
 				l.lastError = waitErr.Error()
 				l.consecutiveErrors++
+				consecutiveErrors := l.consecutiveErrors
 				l.mu.Unlock()
 				l.setState(StateError)
 				l.publishEvent(events.Event{
@@ -694,8 +698,16 @@ func (l *Loop) run(ctx context.Context) {
 					},
 				})
 				backoff := l.computeSleep()
+				logger.Warn("loop wait failed",
+					"error", waitErr,
+					"consecutive_errors", consecutiveErrors,
+					"backoff", backoff.Round(time.Second),
+				)
 				if !sleepCtx(ctx, backoff) {
-					logger.Info("loop stopped during wait backoff")
+					logger.Debug("loop stopped during wait backoff",
+						"phase", "wait_backoff",
+						"backoff", backoff.Round(time.Second),
+					)
 					break
 				}
 				continue // retry from top
@@ -863,10 +875,15 @@ func (l *Loop) run(ctx context.Context) {
 
 			if err != nil {
 				if ctx.Err() != nil {
-					logger.Info("loop stopped")
+					logger.Debug("loop stopped during processing",
+						"phase", "processing",
+					)
 					break
 				}
-				iterLog.Warn("loop iteration failed", "error", err)
+				iterLog.Warn("loop iteration failed",
+					"error", err,
+					"elapsed_ms", time.Since(iterStartTime).Milliseconds(),
+				)
 				l.mu.Lock()
 				l.lastError = err.Error()
 				l.consecutiveErrors++
@@ -1013,10 +1030,12 @@ func (l *Loop) run(ctx context.Context) {
 				},
 			})
 
-			iterLog.Info("loop sleeping", "duration", sleep.Round(time.Second))
+			iterLog.Debug("loop sleeping", "duration", sleep.Round(time.Second))
 
 			if !sleepCtx(ctx, sleep) {
-				logger.Info("loop stopped")
+				logger.Debug("loop stopped during sleep",
+					"phase", "sleep",
+				)
 				break
 			}
 		}
@@ -1028,6 +1047,43 @@ func (l *Loop) run(ctx context.Context) {
 // emitStopped transitions the loop to StateStopped and publishes a
 // KindLoopStopped event. It is called from every exit path in run().
 func (l *Loop) emitStopped() {
+	l.mu.Lock()
+	iterations := l.iterations
+	attempts := l.attempts
+	lastError := l.lastError
+	consecutiveErrors := l.consecutiveErrors
+	startedAt := l.startedAt
+	handlerOnly := l.config.Handler != nil
+	eventDriven := l.config.WaitFunc != nil
+	l.mu.Unlock()
+
+	logger := l.deps.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	logger = logger.With(
+		"subsystem", logging.SubsystemLoop,
+		"loop_id", l.id,
+		"loop_name", l.config.Name,
+	)
+
+	attrs := []any{
+		"iterations", iterations,
+		"attempts", attempts,
+		"handler_only", handlerOnly,
+		"event_driven", eventDriven,
+	}
+	if !startedAt.IsZero() {
+		attrs = append(attrs, "uptime", time.Since(startedAt).Round(time.Second))
+	}
+	if lastError != "" {
+		attrs = append(attrs, "last_error", lastError)
+	}
+	if consecutiveErrors > 0 {
+		attrs = append(attrs, "consecutive_errors", consecutiveErrors)
+	}
+	logger.Info("loop stopped", attrs...)
+
 	l.setState(StateStopped)
 	l.publishEvent(events.Event{
 		Timestamp: time.Now(),
@@ -1036,8 +1092,8 @@ func (l *Loop) emitStopped() {
 		Data: map[string]any{
 			"loop_id":    l.id,
 			"loop_name":  l.config.Name,
-			"iterations": l.iterations,
-			"attempts":   l.attempts,
+			"iterations": iterations,
+			"attempts":   attempts,
 		},
 	})
 }

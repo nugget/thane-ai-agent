@@ -68,6 +68,14 @@ func (r *loopDefinitionRuntime) deps() looppkg.Deps {
 	}
 }
 
+func (r *loopDefinitionRuntime) definitionLogger(name string) *slog.Logger {
+	logger := r.logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return logger.With("definition_name", name)
+}
+
 func (r *loopDefinitionRuntime) definition(name string) (looppkg.DefinitionSnapshot, bool) {
 	snap := r.definitions.Snapshot()
 	if snap == nil {
@@ -289,10 +297,15 @@ func (r *loopDefinitionRuntime) ReconcileDefinition(ctx context.Context, name st
 	if name == "" {
 		return nil
 	}
+	log := r.definitionLogger(name)
 	def, found := r.definition(name)
 	existing := r.loops.GetByName(name)
 	if !found {
 		if existing != nil {
+			log.Info("stopping loop definition service",
+				"reason", "definition_removed",
+				"loop_id", existing.ID(),
+			)
 			return r.loops.StopLoop(existing.ID())
 		}
 		return nil
@@ -300,6 +313,24 @@ func (r *loopDefinitionRuntime) ReconcileDefinition(ctx context.Context, name st
 	eligibility := def.Spec.Conditions.Evaluate(r.nowTime())
 	if def.Spec.Operation != looppkg.OperationService || def.PolicyState != looppkg.DefinitionPolicyStateActive || !eligibility.Eligible {
 		if existing != nil {
+			reason := "not_service"
+			switch {
+			case def.Spec.Operation != looppkg.OperationService:
+				reason = "non_service_definition"
+			case def.PolicyState == looppkg.DefinitionPolicyStateInactive:
+				reason = "policy_inactive"
+			case def.PolicyState == looppkg.DefinitionPolicyStatePaused:
+				reason = "policy_paused"
+			case !eligibility.Eligible:
+				reason = "condition_ineligible"
+			}
+			log.Info("stopping loop definition service",
+				"reason", reason,
+				"source", def.Source,
+				"policy_state", def.PolicyState,
+				"eligibility_reason", eligibility.Reason,
+				"loop_id", existing.ID(),
+			)
 			return r.loops.StopLoop(existing.ID())
 		}
 		return nil
@@ -307,6 +338,11 @@ func (r *loopDefinitionRuntime) ReconcileDefinition(ctx context.Context, name st
 	if existing != nil {
 		return nil
 	}
+	log.Info("starting loop definition service",
+		"source", def.Source,
+		"policy_state", def.PolicyState,
+		"completion", def.Spec.Completion,
+	)
 	_, err := r.loops.SpawnSpec(r.serviceContext(), def.Spec, r.deps())
 	return err
 }
@@ -324,6 +360,7 @@ func (r *loopDefinitionRuntime) LaunchDefinition(ctx context.Context, name strin
 	if name == "" {
 		return looppkg.LaunchResult{}, fmt.Errorf("definition name is required")
 	}
+	log := r.definitionLogger(name)
 	def, found := r.definition(name)
 	if !found {
 		return looppkg.LaunchResult{}, &looppkg.UnknownDefinitionError{Name: name}
@@ -339,6 +376,10 @@ func (r *loopDefinitionRuntime) LaunchDefinition(ctx context.Context, name strin
 	}
 	if def.Spec.Operation == looppkg.OperationService {
 		if existing := r.loops.GetByName(name); existing != nil {
+			log.Info("using existing running loop definition service",
+				"loop_id", existing.ID(),
+				"operation", looppkg.OperationService,
+			)
 			return looppkg.LaunchResult{
 				LoopID:    existing.ID(),
 				Operation: looppkg.OperationService,
@@ -348,7 +389,25 @@ func (r *loopDefinitionRuntime) LaunchDefinition(ctx context.Context, name strin
 	}
 
 	launch.Spec = def.Spec
-	return r.loops.Launch(ctx, launch, r.deps())
+	log.Info("launching loop definition",
+		"source", def.Source,
+		"operation", def.Spec.Operation,
+		"completion", def.Spec.Completion,
+		"policy_state", def.PolicyState,
+		"conversation_id", launch.ConversationID,
+		"completion_conversation_id", launch.CompletionConversationID,
+		"completion_channel", looppkg.CloneCompletionChannelTarget(launch.CompletionChannel),
+	)
+	result, err := r.loops.Launch(ctx, launch, r.deps())
+	if err != nil {
+		return looppkg.LaunchResult{}, err
+	}
+	log.Info("loop definition launched",
+		"loop_id", result.LoopID,
+		"operation", result.Operation,
+		"detached", result.Detached,
+	)
+	return result, nil
 }
 
 func findLoopDefinitionByName(snapshot *looppkg.DefinitionRegistrySnapshot, name string) (looppkg.DefinitionSnapshot, bool) {
