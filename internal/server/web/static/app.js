@@ -46,9 +46,11 @@ const physics = {
   springRestLength:   164,
   childSpringStrength: 0.05,
   childRestLength:    112,
-  orbitAttractionStrength: 0.075,
-  orbitProjectionBlend: 0.38,
-  orbitProjectionVelocityDamping: 0.68,
+  orbitAttractionStrength: 0.058,
+  orbitProjectionBlend: 0.14,
+  orbitProjectionMinBlend: 0.032,
+  orbitProjectionDistanceScale: 96,
+  orbitProjectionVelocityDamping: 0.74,
   overlapRepulsionStrength: 0.16,
   overlapRepulsionRange: 1.2,
   edgeNodeRepulsion:  0.22,
@@ -213,10 +215,18 @@ function projectOrbitTargets(targets, positionBlend, velocityDamping) {
   for (const [id, target] of targets) {
     const nd = physics.nodes.get(id);
     if (!nd || nd.pinned || !target) continue;
+    const dx = target.x - nd.x;
+    const dy = target.y - nd.y;
+    const dist = Math.sqrt((dx * dx) + (dy * dy));
+    const distanceScale = physics.orbitProjectionDistanceScale || 1;
+    const scaledBlend = dist > 0.001
+      ? positionBlend * Math.min(1, distanceScale / dist)
+      : positionBlend;
+    const blend = Math.max(physics.orbitProjectionMinBlend || 0, scaledBlend);
     const prevX = nd.x;
     const prevY = nd.y;
-    nd.x += (target.x - nd.x) * positionBlend;
-    nd.y += (target.y - nd.y) * positionBlend;
+    nd.x += dx * blend;
+    nd.y += dy * blend;
     nd.vx = (nd.vx + (nd.x - prevX)) * velocityDamping;
     nd.vy = (nd.vy + (nd.y - prevY)) * velocityDamping;
   }
