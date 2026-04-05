@@ -202,6 +202,20 @@ function getLoopOrbitRadiusBias(parentID, loop, branchLoads) {
   return Math.min(132, footprint * 0.18 + load.descendants * 6);
 }
 
+function getLoopOrbitDemand(parentID, loop, branchLoads) {
+  const load = branchLoads.get(loop.id);
+  const base = getOrbitSlotSize(parentID, loop, branchLoads);
+  if (!load) return base;
+  const footprint = getLoopBranchFootprint(load);
+  return base + Math.min(parentID ? 120 : 220, footprint * (parentID ? 0.18 : 0.28) + load.descendants * (parentID ? 5 : 10));
+}
+
+function compareLoopsForOrbit(parentID, a, b, branchLoads) {
+  const demandDiff = getLoopOrbitDemand(parentID, b, branchLoads) - getLoopOrbitDemand(parentID, a, branchLoads);
+  if (Math.abs(demandDiff) > 0.001) return demandDiff;
+  return compareLoopsForLayout(a, b);
+}
+
 function getGraphMotionScale(nodeCount) {
   if (nodeCount <= 8) return 1;
   return Math.max(0.52, 1 - ((nodeCount - 8) * 0.03));
@@ -253,21 +267,28 @@ function buildOrbitTargets(cx, cy, branchLoads, siblingIndex, vw, vh) {
 
   function layoutFamily(parentID, loops, center, inwardAngle, depth) {
     if (!loops || loops.length === 0) return;
-    const baseRadius = getOrbitFamilyRadius(parentID, loops, branchLoads);
-    const step = (Math.PI * 2) / loops.length;
-    const startAngle = Number.isFinite(inwardAngle) ? inwardAngle + (step * 0.5) : -Math.PI / 2;
+    const familyLoops = loops.slice().sort((a, b) => compareLoopsForOrbit(parentID, a, b, branchLoads));
+    const baseRadius = getOrbitFamilyRadius(parentID, familyLoops, branchLoads);
     const shapeStrength = Math.max(0.18, 1 - (depth * 0.16));
     const shapeX = 1 + ((rootShapeX - 1) * shapeStrength);
     const shapeY = 1 + ((rootShapeY - 1) * shapeStrength);
+    const majorAxisAngle = shapeY > shapeX ? -Math.PI / 2 : 0;
+    const demands = familyLoops.map(loop => getLoopOrbitDemand(parentID, loop, branchLoads));
+    const totalDemand = demands.reduce((sum, demand) => sum + demand, 0) || familyLoops.length;
+    const firstSpan = (demands[0] / totalDemand) * Math.PI * 2;
+    const startAngle = Number.isFinite(inwardAngle) ? inwardAngle : (majorAxisAngle - firstSpan / 2);
+    let cursor = 0;
 
-    for (let i = 0; i < loops.length; i += 1) {
-      const loop = loops[i];
+    for (let i = 0; i < familyLoops.length; i += 1) {
+      const loop = familyLoops[i];
       const radius = baseRadius + getLoopOrbitRadiusBias(parentID, loop, branchLoads);
-      const angle = startAngle + (step * i);
+      const span = (demands[i] / totalDemand) * Math.PI * 2;
+      const angle = startAngle + cursor + span / 2;
       const x = center.x + Math.cos(angle) * radius * shapeX;
       const y = center.y + Math.sin(angle) * radius * shapeY;
       targets.set(loop.id, { parentID, depth, angle, radius, x, y, centerX: center.x, centerY: center.y });
       layoutFamily(loop.id, siblingIndex.get(loop.id) || [], { x, y }, normalizeAngle(angle + Math.PI), depth + 1);
+      cursor += span;
     }
   }
 
