@@ -1499,9 +1499,9 @@ function updateSchemaCardControls(card, activeMode) {
   const next = nextSchemaCardMode(current);
   btn.dataset.layoutMode = current;
   btn.dataset.targetMode = next;
-  btn.innerHTML = makeSchemaCardModeIcon(next);
-  btn.title = 'Switch card view to ' + formatSchemaCardMode(next);
-  btn.setAttribute('aria-label', 'Switch card view to ' + formatSchemaCardMode(next));
+  btn.innerHTML = makeSchemaCardModeIcon(current);
+  btn.title = 'Current view: ' + formatSchemaCardMode(current) + '. Click for ' + formatSchemaCardMode(next);
+  btn.setAttribute('aria-label', 'Current view: ' + formatSchemaCardMode(current) + '. Click for ' + formatSchemaCardMode(next));
 }
 
 function syncSchemaCardLayout(card, overrideLayout = null) {
@@ -2894,6 +2894,65 @@ function makeSchemaChipList(values, className = 'tag-chip') {
   return wrap;
 }
 
+function makeInspectorUtility(label, content) {
+  const wrap = document.createElement('div');
+  wrap.className = 'inspector-utility';
+
+  const labelEl = document.createElement('span');
+  labelEl.className = 'inspector-utility__label';
+  labelEl.textContent = label;
+  wrap.appendChild(labelEl);
+
+  if (typeof content === 'string' || typeof content === 'number' || typeof content === 'boolean') {
+    const valueEl = document.createElement('span');
+    valueEl.className = 'inspector-utility__value';
+    valueEl.textContent = String(content);
+    wrap.appendChild(valueEl);
+  } else if (content) {
+    wrap.appendChild(content);
+  }
+
+  return wrap;
+}
+
+function makeInspectorActionButton(label, title, onClick) {
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'inspector-action-btn';
+  btn.textContent = label;
+  btn.title = title || label;
+  btn.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    onClick(e.currentTarget);
+  });
+  return btn;
+}
+
+function makeLoopExportButton(loop, entity, conversationSummary) {
+  return makeInspectorActionButton(
+    'Copy JSON',
+    'Copy node JSON for debugging or handoff',
+    (btn) => {
+      const payload = {
+        exported_at: new Date().toISOString(),
+        entity,
+        loop,
+        conversation: conversationSummary || null,
+      };
+      navigator.clipboard.writeText(JSON.stringify(payload, null, 2)).then(() => {
+        btn.classList.add('inspector-action-btn--copied');
+        const prev = btn.textContent;
+        btn.textContent = 'Copied';
+        setTimeout(() => {
+          btn.classList.remove('inspector-action-btn--copied');
+          btn.textContent = prev;
+        }, 1200);
+      });
+    },
+  );
+}
+
 function makeConversationFact(label, value) {
   if (!value) return null;
   const row = document.createElement('div');
@@ -3255,6 +3314,17 @@ function renderLoopEntityDetail(loop) {
       </div>
     </div>
   `;
+  const utilities = document.createElement('div');
+  utilities.className = 'inspector-utility-bar';
+  utilities.appendChild(makeInspectorUtility('loop', makeIDChip(entity.loopID)));
+  if (primaryConvID) {
+    utilities.appendChild(makeInspectorUtility('thread', makeIDChip(primaryConvID)));
+  }
+  if (entity.latestRequestID) {
+    utilities.appendChild(makeInspectorUtility('request', makeRequestChip(entity.latestRequestID)));
+  }
+  utilities.appendChild(makeInspectorUtility('export', makeLoopExportButton(loop, entity, currentConversation)));
+  hero.appendChild(utilities);
   detailEntity.appendChild(hero);
 
   if (conversationBacked) {
@@ -3457,18 +3527,18 @@ function renderLoopEntityDetail(loop) {
 
   if (conversationBacked) {
     detailEntity.appendChild(execution.card);
-    detailEntity.appendChild(relationships.card);
     detailEntity.appendChild(activity.card);
+    detailEntity.appendChild(relationships.card);
     detailEntity.appendChild(profile.card);
     detailEntity.appendChild(identity.card);
     return;
   }
 
-  detailEntity.appendChild(identity.card);
-  detailEntity.appendChild(relationships.card);
   detailEntity.appendChild(execution.card);
-  detailEntity.appendChild(profile.card);
   detailEntity.appendChild(activity.card);
+  detailEntity.appendChild(relationships.card);
+  detailEntity.appendChild(profile.card);
+  detailEntity.appendChild(identity.card);
 }
 
 function buildLoopContextMenu(loop) {
