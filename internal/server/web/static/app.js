@@ -58,6 +58,8 @@ const physics = {
   edgeNodeRepulsion:  0.22,
   edgeNodePadding:    44,
   channelChildSpacingMultiplier: 1.22,
+  nodeEnterDurationMs: 700,
+  nodeEnterExtentBoost: 0.34,
   damping:            0.88,
   maxVelocity:        3.4,
   wallStrength:       0.05,
@@ -188,6 +190,33 @@ function getGraphMotionScale(nodeCount) {
   return Math.max(0.52, 1 - ((nodeCount - 8) * 0.03));
 }
 
+function getNowMs() {
+  return (typeof performance !== 'undefined' && typeof performance.now === 'function')
+    ? performance.now()
+    : Date.now();
+}
+
+function clampUnit(value) {
+  return Math.max(0, Math.min(1, value));
+}
+
+function easeOutBack(t) {
+  const x = clampUnit(t) - 1;
+  const c1 = 1.70158;
+  const c3 = c1 + 1;
+  return 1 + (c3 * x * x * x) + (c1 * x * x);
+}
+
+function getNodeEnterInfluence(id) {
+  const nd = physics.nodes.get(id);
+  if (!nd || !nd.createdAt) return 0;
+  const elapsed = getNowMs() - nd.createdAt;
+  const duration = physics.nodeEnterDurationMs || 0;
+  if (duration <= 0 || elapsed >= duration) return 0;
+  const progress = clampUnit(elapsed / duration);
+  return Math.max(0, 1 - easeOutBack(progress));
+}
+
 function normalizeAngle(angle) {
   let out = angle;
   while (out < 0) out += Math.PI * 2;
@@ -300,6 +329,7 @@ function syncPhysicsNodes(cx, cy) {
   const siblingIndex = buildSiblingIndex();
   const orbitTargets = buildOrbitTargets(cx, cy, branchLoads, siblingIndex, cx * 2, cy * 2);
   const addedLoopIDs = [];
+  const nowMs = getNowMs();
 
   // Loop nodes.
   for (const loop of state.loops.values()) {
@@ -327,7 +357,7 @@ function syncPhysicsNodes(cx, cy) {
       sx = cx + (Math.random() * 40 - 20);
       sy = cy + (Math.random() * 40 - 20);
     }
-    physics.nodes.set(loop.id, { x: sx, y: sy, vx: 0, vy: 0, pinned: false });
+    physics.nodes.set(loop.id, { x: sx, y: sy, vx: 0, vy: 0, pinned: false, createdAt: nowMs });
     addedLoopIDs.push(loop.id);
   }
 
@@ -410,7 +440,9 @@ function getPhysicsNodeExtent(id) {
   if (!loop) return DEFAULT_NODE_R + 14;
   // Space the graph by the visible outer ring/halo footprint rather than
   // just the core circle so neighboring node borders don't visually touch.
-  return getLoopVisualCapacity(loop).radius + 14;
+  const base = getLoopVisualCapacity(loop).radius + 14;
+  const enterInfluence = getNodeEnterInfluence(id);
+  return base * (1 + enterInfluence * physics.nodeEnterExtentBoost);
 }
 
 // Run one physics simulation step. The hierarchy defines the desired orbit
