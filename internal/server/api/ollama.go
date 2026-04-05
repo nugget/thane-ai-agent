@@ -358,9 +358,10 @@ func handleOllamaStreamingChatShared(w http.ResponseWriter, r *http.Request, req
 				buffer = append(buffer, event)
 			}
 
-			// Start streaming after we get some content and no tool calls
-			// Use a smaller threshold to handle short responses
-			if event.Kind == agent.KindToken && len(buffer) >= 2 && !hasToolCalls {
+			// Start streaming on the first text chunk so short or
+			// coarse-grained upstream deltas don't get buffered until
+			// completion. Tool-call paths still short-circuit above.
+			if event.Kind == agent.KindToken && len(buffer) >= 1 && !hasToolCalls {
 				streaming = true
 				// Flush buffered content
 				for _, bufferedEvent := range buffer {

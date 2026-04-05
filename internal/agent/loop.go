@@ -1319,6 +1319,38 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		sort.Strings(tags)
 		return tags
 	}
+	var (
+		liveStreamMu        sync.Mutex
+		liveStreamModel     string
+		liveStreamIteration int
+		liveStreamMessages  []llm.Message
+		liveStreamText      strings.Builder
+	)
+	liveStreamCallback := stream
+	if stream != nil && l.liveRequestRecorder != nil {
+		liveStreamCallback = func(event llm.StreamEvent) {
+			if event.Kind == llm.KindToken && event.Token != "" {
+				liveStreamMu.Lock()
+				liveStreamText.WriteString(event.Token)
+				content := liveStreamText.String()
+				model := liveStreamModel
+				iterationCount := liveStreamIteration
+				msgs := append([]llm.Message(nil), liveStreamMessages...)
+				liveStreamMu.Unlock()
+
+				l.liveRequestRecorder(ctx, logging.RequestContent{
+					RequestID:        requestID,
+					SystemPrompt:     systemPrompt,
+					UserContent:      userMessage,
+					Model:            model,
+					AssistantContent: content,
+					IterationCount:   iterationCount,
+					Messages:         msgs,
+				})
+			}
+			stream(event)
+		}
+	}
 	effectiveToolNames := func() []string {
 		toolsForIter := currentTools()
 		if gatingActive {
@@ -1344,7 +1376,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		MaxIterations:   maxIterations,
 		Model:           model,
 		LLM:             l.llm,
-		Stream:          stream,
+		Stream:          liveStreamCallback,
 		DeferMixedText:  true,
 		NudgeOnEmpty:    true,
 		NudgePrompt:     prompts.EmptyResponseNudge,
@@ -1398,7 +1430,15 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 				systemTokens = len(rebuilt) / 4
 			}
 
-			l.seedLiveRequestDetail(iterCtx, requestID, systemPrompt, userMessage, currentModel, i, msgs)
+			msgSnapshot := append([]llm.Message(nil), msgs...)
+			liveStreamMu.Lock()
+			liveStreamModel = currentModel
+			liveStreamIteration = i
+			liveStreamMessages = msgSnapshot
+			liveStreamText.Reset()
+			liveStreamMu.Unlock()
+
+			l.seedLiveRequestDetail(iterCtx, requestID, systemPrompt, userMessage, currentModel, i, msgSnapshot)
 
 			iterMsgTokens := 0
 			for _, m := range msgs {
@@ -1661,6 +1701,8 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		ActiveTags:               activeTags,
 	}
 
+	l.recordLiveRequestDetail(ctx, requestID, systemPrompt, userMessage, iterResult)
+
 	l.recordUsage(ctx, req, iterResult.Model, iterResult.InputTokens, iterResult.OutputTokens, iterResult.CacheCreationInputTokens, iterResult.CacheReadInputTokens, convID, sessionTag, requestID)
 	l.archiveIterations(log, convID, iterResult.Iterations)
 
@@ -1894,6 +1936,26 @@ func (l *Loop) retainContent(ctx context.Context, requestID, systemPrompt, userM
 		return
 	}
 	l.requestRecorder(ctx, logging.RequestContent{
+		RequestID:        requestID,
+		SystemPrompt:     systemPrompt,
+		UserContent:      userMessage,
+		Model:            result.Model,
+		AssistantContent: result.Content,
+		IterationCount:   result.IterationCount,
+		InputTokens:      result.InputTokens,
+		OutputTokens:     result.OutputTokens,
+		ToolsUsed:        result.ToolsUsed,
+		Exhausted:        result.Exhausted,
+		ExhaustReason:    result.ExhaustReason,
+		Messages:         result.Messages,
+	})
+}
+
+func (l *Loop) recordLiveRequestDetail(ctx context.Context, requestID, systemPrompt, userMessage string, result *iterate.Result) {
+	if l.liveRequestRecorder == nil || result == nil {
+		return
+	}
+	l.liveRequestRecorder(ctx, logging.RequestContent{
 		RequestID:        requestID,
 		SystemPrompt:     systemPrompt,
 		UserContent:      userMessage,
