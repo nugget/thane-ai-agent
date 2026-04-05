@@ -24,7 +24,10 @@
   <main class="main">
     <section class="canvas-panel" id="canvas-panel">
       <svg id="canvas" width="100%" height="100%">
-        <g id="canvas-world"></g>
+        <g id="canvas-world">
+          <g id="canvas-edge-layer"></g>
+          <g id="canvas-node-layer"></g>
+        </g>
       </svg>
       <div id="empty-state" class="empty-state">
         <p>No live loops</p>

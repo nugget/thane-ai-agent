@@ -42,15 +42,19 @@ const physics = {
   // Tuning constants — tweak these for feel.
   centerGravity:      0.002,
   springStrength:     0.02,
-  springRestLength:   120,    // system ↔ top-level
+  springRestLength:   154,    // system ↔ top-level
   childSpringStrength: 0.06,  // parent ↔ child (3× stronger)
-  childRestLength:    80,     // parent ↔ child (tighter cluster)
-  repulsionStrength:  5000,
-  channelChildSpacingMultiplier: 1.15,
-  damping:            0.92,
-  maxVelocity:        5,
+  childRestLength:    96,     // parent ↔ child (tighter cluster with breathing room)
+  repulsionStrength:  5600,
+  branchAnchorStrength: 0.018,
+  siblingAnchorStrength: 0.03,
+  edgeNodeRepulsion:  0.11,
+  edgeNodePadding:    28,
+  channelChildSpacingMultiplier: 1.22,
+  damping:            0.93,
+  maxVelocity:        6,
   wallStrength:       0.045,
-  collisionPadding:   16,
+  collisionPadding:   22,
   resizeVelocityGain: 0.12,
 };
 
@@ -126,6 +130,72 @@ function getPairSpacingMultiplier(loopA, loopB) {
     return physics.channelChildSpacingMultiplier;
   }
   return 1;
+}
+
+function compareLoopsForLayout(a, b) {
+  const aMeta = getLoopMetadata(a);
+  const bMeta = getLoopMetadata(b);
+  const aCategory = normalizeVisualCategory(getLoopCategory(a));
+  const bCategory = normalizeVisualCategory(getLoopCategory(b));
+  const aKey = [aCategory, aMeta.subsystem || '', a.name || a.id];
+  const bKey = [bCategory, bMeta.subsystem || '', b.name || b.id];
+  return aKey.join('\u0000').localeCompare(bKey.join('\u0000'));
+}
+
+function buildSiblingIndex() {
+  const siblings = new Map();
+  for (const loop of state.loops.values()) {
+    if (!loop.parent_id) continue;
+    if (!siblings.has(loop.parent_id)) siblings.set(loop.parent_id, []);
+    siblings.get(loop.parent_id).push(loop);
+  }
+  for (const list of siblings.values()) {
+    list.sort(compareLoopsForLayout);
+  }
+  return siblings;
+}
+
+function buildTopLevelOrbitTargets(cx, cy, branchLoads) {
+  const roots = Array.from(state.loops.values())
+    .filter(loop => !loop.parent_id && physics.nodes.has(loop.id))
+    .sort(compareLoopsForLayout);
+  const targets = new Map();
+  if (roots.length === 0) return targets;
+
+  const startAngle = -Math.PI / 2;
+  const step = (Math.PI * 2) / roots.length;
+  for (let i = 0; i < roots.length; i += 1) {
+    const loop = roots[i];
+    const radius = physics.springRestLength * getLoopClusterRestMultiplier(branchLoads.get(loop.id));
+    const angle = startAngle + (step * i);
+    targets.set(loop.id, {
+      angle,
+      radius,
+      x: cx + Math.cos(angle) * radius,
+      y: cy + Math.sin(angle) * radius,
+    });
+  }
+  return targets;
+}
+
+function buildSiblingOrbitTargets(siblingIndex) {
+  const targets = new Map();
+  for (const [parentID, siblings] of siblingIndex) {
+    const count = siblings.length;
+    if (count === 0) continue;
+    const step = (Math.PI * 2) / count;
+    const startAngle = -Math.PI / 2;
+    for (let i = 0; i < count; i += 1) {
+      const ring = Math.floor(i / 6);
+      const loop = siblings[i];
+      targets.set(loop.id, {
+        parentID,
+        angle: startAngle + (step * i),
+        ring,
+      });
+    }
+  }
+  return targets;
 }
 
 // Ensure physics.nodes matches the current set of loops + system node.
@@ -260,6 +330,10 @@ function physicsStep(cx, cy, vw, vh) {
   const n = nodes.length;
   if (n === 0) return;
   const branchLoads = buildLoopBranchLoads();
+  const siblingIndex = buildSiblingIndex();
+  const topLevelTargets = buildTopLevelOrbitTargets(cx, cy, branchLoads);
+  const siblingTargets = buildSiblingOrbitTargets(siblingIndex);
+  const edges = [];
 
   // Anisotropic gravity — scale per-axis so the node cloud stretches
   // to fill non-square viewports. On a square viewport the factors
@@ -280,6 +354,15 @@ function physicsStep(cx, cy, vw, vh) {
     nd.fy += (cy - nd.y) * gravY;
   }
 
+  // 1b. Root orbit anchors — encourage top-level branches to settle into
+  // distinct pockets instead of collapsing into one undifferentiated cloud.
+  for (const [loopID, target] of topLevelTargets) {
+    const nd = P.nodes.get(loopID);
+    if (!nd || nd.pinned) continue;
+    nd.fx += (target.x - nd.x) * P.branchAnchorStrength;
+    nd.fy += (target.y - nd.y) * P.branchAnchorStrength;
+  }
+
   // 2. Spring forces — build edge list from loop relationships.
   for (const loop of state.loops.values()) {
     if (!P.nodes.has(loop.id)) continue;
@@ -287,24 +370,48 @@ function physicsStep(cx, cy, vw, vh) {
       // Parent↔child: shorter rest length, stronger spring for tight clusters.
       const parentLoop = state.loops.get(loop.parent_id);
       const spacingMultiplier = getPairSpacingMultiplier(parentLoop, loop);
+      const source = P.nodes.get(loop.parent_id);
+      const target = P.nodes.get(loop.id);
+      const restLength = P.childRestLength * spacingMultiplier;
       applySpring(
-        P.nodes.get(loop.parent_id),
-        P.nodes.get(loop.id),
+        source,
+        target,
         P.childSpringStrength,
-        P.childRestLength * spacingMultiplier,
+        restLength,
       );
+      edges.push({ sourceId: loop.parent_id, targetId: loop.id, source, target });
     } else if (P.nodes.has('__system__')) {
       // System↔top-level (or orphaned child fallback): stretch farther out
       // as a branch accumulates more descendants so cluster roots get the
       // breathing room their hanging subgraph visually needs.
       const restMultiplier = loop.parent_id ? 1 : getLoopClusterRestMultiplier(branchLoads.get(loop.id));
+      const source = P.nodes.get('__system__');
+      const target = P.nodes.get(loop.id);
+      const restLength = P.springRestLength * restMultiplier;
       applySpring(
-        P.nodes.get('__system__'),
-        P.nodes.get(loop.id),
+        source,
+        target,
         P.springStrength,
-        P.springRestLength * restMultiplier,
+        restLength,
       );
+      edges.push({ sourceId: '__system__', targetId: loop.id, source, target });
     }
+  }
+
+  // 2b. Sibling orbit anchors — spread children around their parent so each
+  // branch reads as a small island of related activity.
+  for (const [childID, target] of siblingTargets) {
+    const child = P.nodes.get(childID);
+    const parent = P.nodes.get(target.parentID);
+    if (!child || !parent || child.pinned) continue;
+    const loop = state.loops.get(childID);
+    const parentLoop = state.loops.get(target.parentID);
+    const spacingMultiplier = getPairSpacingMultiplier(parentLoop, loop);
+    const radius = P.childRestLength * spacingMultiplier * (1 + target.ring * 0.48);
+    const anchorX = parent.x + Math.cos(target.angle) * radius;
+    const anchorY = parent.y + Math.sin(target.angle) * radius;
+    child.fx += (anchorX - child.x) * P.siblingAnchorStrength;
+    child.fy += (anchorY - child.y) * P.siblingAnchorStrength;
   }
 
   // 3. Soft border gravity keeps the cloud within the viewport while still
@@ -360,7 +467,56 @@ function physicsStep(cx, cy, vw, vh) {
     }
   }
 
-  // 5. Integration + damping.
+  // 5. Edge/node clearance — unrelated nodes should not sit comfortably on
+  // top of connector lines.
+  for (const edge of edges) {
+    const ax = edge.source.x;
+    const ay = edge.source.y;
+    const bx = edge.target.x;
+    const by = edge.target.y;
+    const segDx = bx - ax;
+    const segDy = by - ay;
+    const segLenSq = segDx * segDx + segDy * segDy;
+    if (segLenSq < 1) continue;
+
+    for (let i = 0; i < n; i += 1) {
+      const nodeID = ids[i];
+      if (nodeID === edge.sourceId || nodeID === edge.targetId) continue;
+      const nd = nodes[i];
+      if (nd.pinned) continue;
+
+      const t = Math.max(0, Math.min(1, (((nd.x - ax) * segDx) + ((nd.y - ay) * segDy)) / segLenSq));
+      const px = ax + segDx * t;
+      const py = ay + segDy * t;
+      let awayX = nd.x - px;
+      let awayY = nd.y - py;
+      let dist = Math.sqrt((awayX * awayX) + (awayY * awayY));
+      const clearance = getPhysicsNodeExtent(nodeID) + P.edgeNodePadding;
+      if (dist >= clearance) continue;
+      if (dist < 0.001) {
+        awayX = -segDy;
+        awayY = segDx;
+        dist = Math.sqrt((awayX * awayX) + (awayY * awayY)) || 1;
+      }
+      const nx = awayX / dist;
+      const ny = awayY / dist;
+      const force = (clearance - dist) * P.edgeNodeRepulsion;
+      nd.fx += nx * force;
+      nd.fy += ny * force;
+
+      const endpointShare = force * 0.2;
+      if (!edge.source.pinned) {
+        edge.source.fx -= nx * endpointShare * (1 - t);
+        edge.source.fy -= ny * endpointShare * (1 - t);
+      }
+      if (!edge.target.pinned) {
+        edge.target.fx -= nx * endpointShare * t;
+        edge.target.fy -= ny * endpointShare * t;
+      }
+    }
+  }
+
+  // 6. Integration + damping.
   for (let i = 0; i < n; i++) {
     const id = ids[i];
     const nd = nodes[i];
@@ -418,19 +574,19 @@ function updateNodePositions() {
   // System node.
   const sysP = physics.nodes.get('__system__');
   if (sysP) {
-    const sysG = canvasWorld.querySelector('.system-node');
+    const sysG = canvasNodeLayer.querySelector('.system-node');
     if (sysG) sysG.setAttribute('transform', `translate(${sysP.x},${sysP.y})`);
   }
 
   // Loop nodes.
   for (const [id, nd] of physics.nodes) {
     if (id === '__system__') continue;
-    const g = canvasWorld.querySelector(`[data-loop-id="${id}"]`);
+    const g = canvasNodeLayer.querySelector(`[data-loop-id="${id}"]`);
     if (g) g.setAttribute('transform', `translate(${nd.x},${nd.y})`);
   }
 
   // Linking line endpoints.
-  const lines = canvasWorld.querySelectorAll('.link-line');
+  const lines = canvasEdgeLayer.querySelectorAll('.link-line');
   for (const line of lines) {
     const targetId = line.dataset.targetLoop;
     const parentLoop = line.dataset.parentLoop;
@@ -1536,6 +1692,8 @@ function buildLoopNodeTitle(loop, capacity) {
 const $ = (sel) => document.querySelector(sel);
 const canvas = $('#canvas');
 const canvasWorld = $('#canvas-world');
+const canvasEdgeLayer = $('#canvas-edge-layer');
+const canvasNodeLayer = $('#canvas-node-layer');
 const connBadge = $('#conn-status');
 const detailPlaceholder = $('#detail-placeholder');
 const detailPanel = $('#detail-panel');
@@ -2491,7 +2649,7 @@ function renderNodes() {
   }
 
   // Remove nodes for loops that no longer exist (with exit animation).
-  const existingGroups = canvasWorld.querySelectorAll('.loop-node');
+  const existingGroups = canvasNodeLayer.querySelectorAll('.loop-node');
   for (const g of existingGroups) {
     const id = g.dataset.loopId;
     if (!state.loops.has(id)) {
@@ -2512,7 +2670,7 @@ function renderNodes() {
   if (hasSystem) {
     renderSystemNode();
   } else {
-    const existing = canvasWorld.querySelector('.system-node');
+    const existing = canvasNodeLayer.querySelector('.system-node');
     if (existing) existing.remove();
   }
 
@@ -2541,7 +2699,7 @@ function renderLinkingLines(hasSystem, loops) {
   const allValidTargets = new Set([...activeIds, ...childKeys]);
 
   // Remove stale link lines for loops that no longer exist.
-  const existing = canvasWorld.querySelectorAll('.link-line');
+  const existing = canvasEdgeLayer.querySelectorAll('.link-line');
   for (const el of existing) {
     const target = el.dataset.targetLoop;
     const isSystemLink = !el.dataset.parentLoop;
@@ -2555,15 +2713,14 @@ function renderLinkingLines(hasSystem, loops) {
   // System → top-level lines.
   if (hasSystem) {
     for (const loop of topLevel) {
-      let line = canvasWorld.querySelector(`.link-line[data-target-loop="${loop.id}"]:not([data-parent-loop])`);
+      let line = canvasEdgeLayer.querySelector(`.link-line[data-target-loop="${loop.id}"]:not([data-parent-loop])`);
 
       if (!line) {
         line = createSVG('line', {
           class: 'link-line',
           'data-target-loop': loop.id,
         });
-        // Insert before nodes so lines draw behind them.
-        canvasWorld.insertBefore(line, canvasWorld.firstChild);
+        canvasEdgeLayer.appendChild(line);
       }
 
       // State-driven styling: error or degraded service turns the line orange/red.
@@ -2581,7 +2738,7 @@ function renderLinkingLines(hasSystem, loops) {
   // Parent → child lines.
   for (const child of children) {
     const selector = `.link-line[data-target-loop="${child.id}"][data-parent-loop="${child.parent_id}"]`;
-    let line = canvasWorld.querySelector(selector);
+    let line = canvasEdgeLayer.querySelector(selector);
 
     if (!line) {
       line = createSVG('line', {
@@ -2589,7 +2746,7 @@ function renderLinkingLines(hasSystem, loops) {
         'data-target-loop': child.id,
         'data-parent-loop': child.parent_id,
       });
-      canvasWorld.insertBefore(line, canvasWorld.firstChild);
+      canvasEdgeLayer.appendChild(line);
     }
 
     // State-driven styling for child lines.
@@ -2609,7 +2766,7 @@ function flashLinkingLine(loopId) {
   const selector = loopId
     ? `.link-line[data-target-loop="${loopId}"]`
     : '.link-line';
-  const lines = canvasWorld.querySelectorAll(selector);
+  const lines = canvasEdgeLayer.querySelectorAll(selector);
   for (const line of lines) {
     const baseClass = line.getAttribute('class').replace(' link-line--flash', '');
     line.setAttribute('class', baseClass + ' link-line--flash');
@@ -2624,7 +2781,7 @@ function renderNode(loop) {
   const capacity = getLoopVisualCapacity(loop);
   const nodeR = capacity.radius;
   const ringR = nodeR + 12;
-  let group = canvasWorld.querySelector(`[data-loop-id="${loop.id}"]`);
+  let group = canvasNodeLayer.querySelector(`[data-loop-id="${loop.id}"]`);
 
   if (!group) {
     group = createSVG('g', {
@@ -2749,7 +2906,7 @@ function renderNode(loop) {
     inner.appendChild(rimBadge);
     inner.appendChild(label);
     group.appendChild(inner);
-    canvasWorld.appendChild(group);
+    canvasNodeLayer.appendChild(group);
 
     // Mark as known — enter animation is triggered by renderNodes().
     state.knownLoopIds.add(loop.id);
@@ -2923,7 +3080,7 @@ function renderSystemNode() {
   const sys = state.system;
   const s = 48, r = 10; // 1:1 square, s = side length
   const ringR = s / 2 + 12; // glow ring radius (matches loop node pattern)
-  let group = canvasWorld.querySelector('.system-node');
+  let group = canvasNodeLayer.querySelector('.system-node');
 
   if (!group) {
     group = createSVG('g', { class: 'system-node' });
@@ -2976,7 +3133,7 @@ function renderSystemNode() {
     label.textContent = 'core';
     group.appendChild(label);
 
-    canvasWorld.appendChild(group);
+    canvasNodeLayer.appendChild(group);
   }
 
   // Update health-based fill.
