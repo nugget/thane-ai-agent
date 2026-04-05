@@ -78,6 +78,7 @@ let serverStartTime = null;
 let requestDetailAvailable = null;
 let requestDetailProbeInFlight = null;
 let requestDetailCooldown = { requestID: '', status: 0, until: 0 };
+let recentlyCompletedRequest = { requestID: '', until: 0 };
 
 function startLogPoll() {
   if (logPollInterval) clearInterval(logPollInterval);
@@ -226,6 +227,25 @@ function clearRequestDetailCooldown(requestID) {
   if (requestDetailCooldown.requestID === requestID) {
     requestDetailCooldown = { requestID: '', status: 0, until: 0 };
   }
+}
+
+function noteRecentlyCompletedRequest(requestID) {
+  if (!requestID) return;
+  recentlyCompletedRequest = {
+    requestID,
+    until: Date.now() + 5000,
+  };
+}
+
+function shouldRefreshRecentlyCompletedRequest(requestID) {
+  return !!requestID
+    && recentlyCompletedRequest.requestID === requestID
+    && Date.now() < recentlyCompletedRequest.until;
+}
+
+function clearRecentlyCompletedRequest(requestID) {
+  if (!requestID || recentlyCompletedRequest.requestID !== requestID) return;
+  recentlyCompletedRequest = { requestID: '', until: 0 };
 }
 
 pollSlider.addEventListener('input', () => {
@@ -525,9 +545,13 @@ async function fetchRequestDetailIntoForensics(requestID) {
     }
 
     const detail = await resp.json();
+    const detailLooksFinal = !!(detail.assistant_content || detail.output_tokens > 0 || detail.exhausted);
     activeRequestID = requestID;
     activeRequestJSON = JSON.stringify(detail, null, 2);
     clearRequestDetailCooldown(requestID);
+    if (detailLooksFinal) {
+      clearRecentlyCompletedRequest(requestID);
+    }
 
     if (forensics.requestMeta) {
       const metaBits = [];
@@ -604,8 +628,9 @@ function syncLoopRequestDetail(force = false) {
     return;
   }
 
+  const refreshCompleted = shouldRefreshRecentlyCompletedRequest(targetRequestID);
   if (shouldCooldownRequestDetail(targetRequestID, force)) return;
-  if (!force && activeRequestID === targetRequestID && forensics.empty?.hidden) return;
+  if (!force && activeRequestID === targetRequestID && forensics.empty?.hidden && !refreshCompleted) return;
   void fetchRequestDetailIntoForensics(targetRequestID);
 }
 
@@ -712,6 +737,10 @@ function applyLoopEvent(evt) {
     if (iterationHistory.length > MAX_ITERATION_HISTORY) {
       iterationHistory.length = MAX_ITERATION_HISTORY;
     }
+  }
+
+  if (evt.kind === 'loop_iteration_complete' && evt.data && evt.data.request_id) {
+    noteRecentlyCompletedRequest(evt.data.request_id);
   }
 
   // Capability tools change active_tags — refetch to update chips.
