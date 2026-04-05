@@ -455,34 +455,6 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
   font-size: 0.74rem;
 }
 
-.inspector-action-btn {
-  appearance: none;
-  border: 1px solid rgba(110, 118, 129, 0.24);
-  border-radius: 999px;
-  padding: 0.28rem 0.64rem;
-  background: rgba(255, 255, 255, 0.025);
-  color: var(--text-secondary);
-  font-size: 0.68rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
-}
-
-.inspector-action-btn:hover {
-  background: var(--bg-hover);
-  color: var(--text-primary);
-}
-
-.inspector-action-btn:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
-.inspector-action-btn--copied {
-  border-color: rgba(63, 185, 80, 0.32);
-  color: var(--green);
-}
-
 .schema-card__meta {
   color: var(--text-muted);
   font-size: 0.68rem;
@@ -2757,6 +2729,22 @@ body.resize-col .schema-card__fade {
   margin: 0.2rem 0;
   padding: 0;
   pointer-events: none;
+}
+
+@media (pointer: coarse) {
+  .context-menu {
+    min-width: 220px;
+    border-radius: 12px;
+    padding: 0.35rem 0;
+  }
+
+  .context-menu li {
+    min-height: 2.65rem;
+    display: flex;
+    align-items: center;
+    padding: 0.6rem 0.95rem;
+    font-size: 0.92rem;
+  }
 }
 
 /* === Linking Lines === */

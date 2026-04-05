@@ -293,6 +293,7 @@ loop-definition-smoke base_url="http://127.0.0.1:8080":
 web-static-check:
     node --check internal/server/web/static/app.js
     node --check internal/server/web/static/detail.js
+    node --check internal/server/web/static/request.js
     node --check internal/server/web/static/shared.js
 
 # Focused loops-ng regression pass for the packages that own the new

@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Thane - Request</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <style>
+    body {
+      display: flex;
+      flex-direction: column;
+      min-height: 100vh;
+      background: var(--bg);
+    }
+    .request-window {
+      flex: 1;
+      min-height: 0;
+      display: grid;
+      grid-template-columns: minmax(17rem, 24rem) minmax(0, 1fr);
+    }
+    .request-window__sidebar {
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 0.8rem;
+      padding: 1rem;
+      border-right: 1px solid var(--border);
+      background: var(--bg-secondary);
+      overflow-y: auto;
+    }
+    .request-window__main {
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 0.9rem;
+      padding: 1rem;
+      overflow-y: auto;
+    }
+    .request-window__hero {
+      display: grid;
+      gap: 0.65rem;
+    }
+    .request-window__actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.45rem;
+      align-items: center;
+    }
+    .request-window__title {
+      margin: 0;
+      font-size: 1.1rem;
+      font-weight: 700;
+      line-height: 1.2;
+    }
+    .request-window__subtitle {
+      margin: 0;
+      color: var(--text-secondary);
+      font-size: 0.78rem;
+      line-height: 1.45;
+      text-wrap: pretty;
+    }
+    .request-window__empty {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 16rem;
+      color: var(--text-muted);
+      font-size: 0.86rem;
+      text-align: center;
+      text-wrap: pretty;
+      border: 1px dashed var(--border);
+      border-radius: 12px;
+      padding: 1rem;
+      background: rgba(255, 255, 255, 0.02);
+    }
+    @media (max-width: 980px) {
+      .request-window {
+        grid-template-columns: 1fr;
+      }
+      .request-window__sidebar {
+        border-right: 0;
+        border-bottom: 1px solid var(--border);
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="request-window">
+    <aside class="request-window__sidebar">
+      <section class="detail-card request-window__hero">
+        <div>
+          <div class="schema-kind">request_detail</div>
+          <h1 id="request-window-title" class="request-window__title">Request</h1>
+          <p id="request-window-subtitle" class="request-window__subtitle">Prompt, content, and tool-call waterfall.</p>
+        </div>
+        <div class="request-window__actions">
+          <button id="request-window-refresh" class="btn btn--sm" type="button">Refresh</button>
+          <button id="request-window-copy" class="copy-btn" type="button">JSON</button>
+        </div>
+      </section>
+
+      <section class="detail-card">
+        <h3 class="section-title">IDs</h3>
+        <div id="request-window-ids" class="detail-ids"></div>
+      </section>
+
+      <section class="detail-card">
+        <h3 class="section-title">Summary</h3>
+        <div id="request-window-meta" class="detail-aggregates"></div>
+      </section>
+    </aside>
+
+    <section class="request-window__main">
+      <div id="request-window-empty" class="request-window__empty">Loading request detail…</div>
+      <div id="request-window-content" class="request-content" hidden></div>
+      <div id="request-window-waterfall" class="waterfall" hidden></div>
+    </section>
+  </main>
+
+  <script src="/static/shared.js"></script>
+  <script src="/static/request.js"></script>
+</body>
+</html>

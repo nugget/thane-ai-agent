@@ -1425,12 +1425,59 @@ let lastDetailSelectionKey = null;
 let detailInteractionHoldUntil = 0;
 let detailPointerSelectionActive = false;
 let detailInstantLayoutUntil = 0;
+let nodeLongPressTimer = 0;
+let nodeLongPressState = null;
+let suppressNextNodeClickUntil = 0;
 const DETAIL_POINTER_GUARD_MS = 120;
 const DETAIL_COPY_GUARD_MS = 220;
 const DETAIL_SELECTION_RELEASE_MS = 220;
+const NODE_LONG_PRESS_MS = 460;
+const NODE_LONG_PRESS_MOVE_PX = 14;
 
 function clampValue(value, min, max) {
   return Math.max(min, Math.min(max, value));
+}
+
+function clearNodeLongPress() {
+  if (nodeLongPressTimer) {
+    clearTimeout(nodeLongPressTimer);
+    nodeLongPressTimer = 0;
+  }
+  nodeLongPressState = null;
+}
+
+function shouldUseTouchContextMenu(e) {
+  if (!e) return false;
+  return e.pointerType === 'touch' || e.pointerType === 'pen' ||
+    (typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches);
+}
+
+function scheduleNodeLongPress(e, opts) {
+  if (!shouldUseTouchContextMenu(e)) return;
+  clearNodeLongPress();
+  nodeLongPressState = {
+    x: e.clientX,
+    y: e.clientY,
+    show: opts.show,
+    select: opts.select || null,
+  };
+  nodeLongPressTimer = window.setTimeout(() => {
+    const pending = nodeLongPressState;
+    clearNodeLongPress();
+    if (!pending) return;
+    if (typeof pending.select === 'function') pending.select();
+    if (typeof pending.show === 'function') pending.show(pending.x, pending.y);
+    suppressNextNodeClickUntil = Date.now() + 700;
+  }, NODE_LONG_PRESS_MS);
+}
+
+function updateNodeLongPress(e) {
+  if (!nodeLongPressState) return;
+  const dx = e.clientX - nodeLongPressState.x;
+  const dy = e.clientY - nodeLongPressState.y;
+  if (Math.hypot(dx, dy) > NODE_LONG_PRESS_MOVE_PX) {
+    clearNodeLongPress();
+  }
 }
 
 function loadDetailCardLayouts() {
@@ -2403,11 +2450,24 @@ function renderNode(loop) {
       'data-loop-id': loop.id,
       'data-category': category,
     });
-    group.addEventListener('click', () => selectLoop(loop.id));
+    group.addEventListener('click', () => {
+      if (Date.now() < suppressNextNodeClickUntil) return;
+      selectLoop(loop.id);
+    });
     group.addEventListener('contextmenu', (e) => {
       e.preventDefault();
       showContextMenu(e.clientX, e.clientY, buildLoopContextMenu(loop));
     });
+    group.addEventListener('pointerdown', (e) => {
+      scheduleNodeLongPress(e, {
+        select: () => focusLoop(loop.id),
+        show: (x, y) => showContextMenu(x, y, buildLoopContextMenu(loop)),
+      });
+    });
+    group.addEventListener('pointermove', updateNodeLongPress);
+    group.addEventListener('pointerup', clearNodeLongPress);
+    group.addEventListener('pointercancel', clearNodeLongPress);
+    group.addEventListener('pointerleave', clearNodeLongPress);
 
     // Inner group for enter/exit scale animation (children drawn at origin).
     const inner = createSVG('g', { class: 'node-inner' });
@@ -2685,11 +2745,24 @@ function renderSystemNode() {
 
   if (!group) {
     group = createSVG('g', { class: 'system-node' });
-    group.addEventListener('click', () => selectSystem());
+    group.addEventListener('click', () => {
+      if (Date.now() < suppressNextNodeClickUntil) return;
+      selectSystem();
+    });
     group.addEventListener('contextmenu', (e) => {
       e.preventDefault();
       showContextMenu(e.clientX, e.clientY, buildSystemContextMenu(sys));
     });
+    group.addEventListener('pointerdown', (e) => {
+      scheduleNodeLongPress(e, {
+        select: () => focusSystem(),
+        show: (x, y) => showContextMenu(x, y, buildSystemContextMenu(sys)),
+      });
+    });
+    group.addEventListener('pointermove', updateNodeLongPress);
+    group.addEventListener('pointerup', clearNodeLongPress);
+    group.addEventListener('pointercancel', clearNodeLongPress);
+    group.addEventListener('pointerleave', clearNodeLongPress);
 
     const title = createSVG('title', {});
     title.textContent = buildSystemNodeTitle(sys);
@@ -2988,42 +3061,30 @@ function makeInspectorUtility(label, content) {
   return wrap;
 }
 
-function makeInspectorActionButton(label, title, onClick) {
-  const btn = document.createElement('button');
-  btn.type = 'button';
-  btn.className = 'inspector-action-btn';
-  btn.textContent = label;
-  btn.title = title || label;
-  btn.addEventListener('click', (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    onClick(e.currentTarget);
-  });
-  return btn;
+function copyLoopEntityJSON(loop) {
+  const entity = buildLoopEntity(loop);
+  const conversationID = getLoopPrimaryConversationID(entity);
+  const conversation = conversationID ? (state.conversationDetails.get(conversationID) || null) : null;
+  const history = state.iterationHistory.get(loop.id) || [];
+  const payload = {
+    exported_at: new Date().toISOString(),
+    entity,
+    loop,
+    conversation,
+    iteration_history: history,
+  };
+  return navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
 }
 
-function makeLoopExportButton(loop, entity, conversationSummary) {
-  return makeInspectorActionButton(
-    'Copy JSON',
-    'Copy node JSON for debugging or handoff',
-    (btn) => {
-      const payload = {
-        exported_at: new Date().toISOString(),
-        entity,
-        loop,
-        conversation: conversationSummary || null,
-      };
-      navigator.clipboard.writeText(JSON.stringify(payload, null, 2)).then(() => {
-        btn.classList.add('inspector-action-btn--copied');
-        const prev = btn.textContent;
-        btn.textContent = 'Copied';
-        setTimeout(() => {
-          btn.classList.remove('inspector-action-btn--copied');
-          btn.textContent = prev;
-        }, 1200);
-      });
-    },
-  );
+function copySystemEntityJSON(sys) {
+  const entity = buildSystemEntity(sys || state.system || {});
+  const payload = {
+    exported_at: new Date().toISOString(),
+    entity,
+    system: sys || state.system || null,
+    loops: Array.from(state.loops.values()),
+  };
+  return navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
 }
 
 function makeConversationFact(label, value) {
@@ -3396,7 +3457,6 @@ function renderLoopEntityDetail(loop) {
   if (entity.latestRequestID) {
     utilities.appendChild(makeInspectorUtility('request', makeRequestChip(entity.latestRequestID)));
   }
-  utilities.appendChild(makeInspectorUtility('export', makeLoopExportButton(loop, entity, currentConversation)));
   hero.appendChild(utilities);
   detailEntity.appendChild(hero);
 
@@ -3616,16 +3676,20 @@ function renderLoopEntityDetail(loop) {
 
 function buildLoopContextMenu(loop) {
   const entity = buildLoopEntity(loop);
+  const primaryConvID = getLoopPrimaryConversationID(entity);
   const items = [
     { label: 'kind: ' + entity.kind, disabled: true },
     { label: 'visual: ' + entity.categoryLabel + ' · ' + entity.categorySource, disabled: true },
     { label: 'relation: ' + entity.relation + (entity.parentID ? ' · parent ' + shortID(entity.parentID) : ' · anchored to core'), disabled: true },
-    entity.currentConvID ? { label: 'conversation: ' + shortID(entity.currentConvID), disabled: true } : null,
+    primaryConvID ? { label: 'conversation: ' + shortID(primaryConvID), disabled: true } : null,
     entity.trustZone ? { label: 'trust: ' + entity.trustZone, disabled: true } : null,
     { separator: true },
   ].filter(Boolean);
   if (!loop.id.startsWith('delegate-')) {
-    items.push({ label: 'Open in window', action: () => openDetailWindow('loop', loop.id) });
+    items.push({ label: 'Open telemetry window', action: () => openDetailWindow('loop', loop.id) });
+  }
+  if (entity.latestRequestID) {
+    items.push({ label: 'Open request window', action: () => openRequestWindow(entity.latestRequestID) });
   }
   if (entity.parentID && state.loops.has(entity.parentID)) {
     items.push({ label: 'Select parent loop', action: () => selectLoop(entity.parentID) });
@@ -3633,15 +3697,16 @@ function buildLoopContextMenu(loop) {
     items.push({ label: 'Select core anchor', action: () => selectSystem() });
   }
   if (entity.latestRequestID && typeof window.onRequestChipClick === 'function') {
-    items.push({ label: 'Open latest request', action: () => showRequestDetail(entity.latestRequestID) });
+    items.push({ label: 'Open request in pane', action: () => showRequestDetail(entity.latestRequestID) });
   }
   items.push({ separator: true });
+  items.push({ label: 'Copy node JSON', action: () => { void copyLoopEntityJSON(loop); } });
   items.push({ label: 'Copy loop ID', action: () => navigator.clipboard.writeText(entity.loopID) });
   if (entity.parentID) {
     items.push({ label: 'Copy parent loop ID', action: () => navigator.clipboard.writeText(entity.parentID) });
   }
-  if (entity.currentConvID) {
-    items.push({ label: 'Copy current conversation ID', action: () => navigator.clipboard.writeText(entity.currentConvID) });
+  if (primaryConvID) {
+    items.push({ label: 'Copy conversation ID', action: () => navigator.clipboard.writeText(primaryConvID) });
   }
   if (entity.latestRequestID) {
     items.push({ label: 'Copy latest request ID', action: () => navigator.clipboard.writeText(entity.latestRequestID) });
@@ -3670,8 +3735,10 @@ function buildSystemContextMenu(sys) {
     { label: 'services: ' + entity.readyCount + '/' + entity.serviceCount + ' ready', disabled: true },
     { label: 'routing: ' + entity.routingMode + (entity.defaultModel ? ' · ' + entity.defaultModel : ''), disabled: true },
     { separator: true },
-    { label: 'Open in window', action: () => openDetailWindow('system') },
+    { label: 'Open core window', action: () => openDetailWindow('system') },
     { label: 'Inspect core', action: () => selectSystem() },
+    { separator: true },
+    { label: 'Copy core JSON', action: () => { void copySystemEntityJSON(sys || state.system || {}); } },
   ];
 }
 
@@ -3748,6 +3815,15 @@ function selectLoop(loopId) {
   renderAll();
 }
 
+function focusLoop(loopId) {
+  if (!loopId) return;
+  if (state.selected !== loopId) {
+    state.selected = loopId;
+    fetchLogs(loopId);
+    renderAll();
+  }
+}
+
 function selectSystem() {
   if (state.selected === '__system__') {
     state.selected = null;
@@ -3757,6 +3833,14 @@ function selectSystem() {
     showLogHint('Logs in the dashboard are node-scoped. Select a loop to inspect its diagnostic tail.');
   }
   renderAll();
+}
+
+function focusSystem() {
+  if (state.selected !== '__system__') {
+    state.selected = '__system__';
+    showLogHint('Logs in the dashboard are node-scoped. Select a loop to inspect its diagnostic tail.');
+    renderAll();
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -3972,6 +4056,21 @@ function openDetailWindow(type, id) {
     'popup=yes,width=900,height=450'
   );
   // Set title once loaded (cross-origin safe since same origin).
+  if (w) {
+    w.addEventListener('load', () => {
+      w.document.title = 'Thane \u00b7 ' + name;
+    });
+  }
+}
+
+function openRequestWindow(requestID) {
+  if (!requestID) return;
+  const name = 'Request ' + shortID(requestID);
+  const w = window.open(
+    '/static/request.html?id=' + encodeURIComponent(requestID),
+    'request-' + requestID,
+    'popup=yes,width=1180,height=860'
+  );
   if (w) {
     w.addEventListener('load', () => {
       w.document.title = 'Thane \u00b7 ' + name;
