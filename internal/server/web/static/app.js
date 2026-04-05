@@ -684,7 +684,7 @@ function buildSystemEntity(sys) {
   const routingMode = registry.local_first ? 'local-first' : 'policy';
   return {
     kind: 'runtime_anchor',
-    title: 'Runtime',
+    title: 'Core',
     state: sys.status || 'unknown',
     uptime: sys.uptime || '',
     version: version.version || '',
@@ -718,7 +718,7 @@ function buildLoopNodeTitle(loop, capacity) {
   if (entity.parentID) {
     parts.push('Parent: ' + entity.parentID);
   } else {
-    parts.push('Anchor: runtime');
+    parts.push('Anchor: core');
   }
   if (entity.currentConvID) {
     parts.push('Conversation: ' + entity.currentConvID);
@@ -1622,7 +1622,7 @@ function renderSystemNode() {
       class: 'node-label',
       y: s / 2 + SYSTEM_LABEL_GAP,
     });
-    label.textContent = 'runtime';
+    label.textContent = 'core';
     group.appendChild(label);
 
     canvasWorld.appendChild(group);
@@ -1904,7 +1904,7 @@ function renderLoopEntityDetail(loop) {
   if (entity.parentID) {
     appendSchemaRow(relationships.body, 'parent loop', makeIDChip(entity.parentID));
   } else {
-    appendSchemaRow(relationships.body, 'root anchor', 'runtime');
+    appendSchemaRow(relationships.body, 'root anchor', 'core');
   }
   if (entity.currentConvID) {
     appendSchemaRow(relationships.body, 'current conversation', makeSchemaIDList([entity.currentConvID]));
@@ -1917,24 +1917,24 @@ function renderLoopEntityDetail(loop) {
   }
   detailEntity.appendChild(relationships.card);
 
-  const runtime = makeSchemaCard('Runtime', 'current execution state');
-  appendSchemaRow(runtime.body, 'state', formatSchemaToken(entity.stateLabel));
-  appendSchemaRow(runtime.body, 'started', entity.startedAt ? timeAgo(new Date(entity.startedAt)) : '');
-  appendSchemaRow(runtime.body, 'last wake', entity.lastWakeAt ? timeAgo(new Date(entity.lastWakeAt)) : '');
-  appendSchemaRow(runtime.body, 'iterations', formatNumber(entity.iterations));
-  appendSchemaRow(runtime.body, 'attempts', formatNumber(entity.attempts));
-  appendSchemaRow(runtime.body, 'consecutive errors', entity.consecutiveErrors ? formatNumber(entity.consecutiveErrors) : '');
-  appendSchemaRow(runtime.body, 'latest model', entity.latestModel);
-  appendSchemaRow(runtime.body, 'context window', entity.contextWindow ? formatNumber(entity.contextWindow) : '');
-  appendSchemaRow(runtime.body, 'last io', entity.lastInputTokens || entity.lastOutputTokens ? `${formatTokens(entity.lastInputTokens)} in · ${formatTokens(entity.lastOutputTokens)} out` : '');
-  appendSchemaRow(runtime.body, 'total io', entity.totalInputTokens || entity.totalOutputTokens ? `${formatTokens(entity.totalInputTokens)} in · ${formatTokens(entity.totalOutputTokens)} out` : '');
+  const execution = makeSchemaCard('Execution', 'current execution state');
+  appendSchemaRow(execution.body, 'state', formatSchemaToken(entity.stateLabel));
+  appendSchemaRow(execution.body, 'started', entity.startedAt ? timeAgo(new Date(entity.startedAt)) : '');
+  appendSchemaRow(execution.body, 'last wake', entity.lastWakeAt ? timeAgo(new Date(entity.lastWakeAt)) : '');
+  appendSchemaRow(execution.body, 'iterations', formatNumber(entity.iterations));
+  appendSchemaRow(execution.body, 'attempts', formatNumber(entity.attempts));
+  appendSchemaRow(execution.body, 'consecutive errors', entity.consecutiveErrors ? formatNumber(entity.consecutiveErrors) : '');
+  appendSchemaRow(execution.body, 'latest model', entity.latestModel);
+  appendSchemaRow(execution.body, 'context window', entity.contextWindow ? formatNumber(entity.contextWindow) : '');
+  appendSchemaRow(execution.body, 'last io', entity.lastInputTokens || entity.lastOutputTokens ? `${formatTokens(entity.lastInputTokens)} in · ${formatTokens(entity.lastOutputTokens)} out` : '');
+  appendSchemaRow(execution.body, 'total io', entity.totalInputTokens || entity.totalOutputTokens ? `${formatTokens(entity.totalInputTokens)} in · ${formatTokens(entity.totalOutputTokens)} out` : '');
   if (entity.lastError) {
     const err = document.createElement('div');
     err.className = 'system-item__error';
     err.textContent = entity.lastError;
-    appendSchemaRow(runtime.body, 'last error', err, { multiline: true });
+    appendSchemaRow(execution.body, 'last error', err, { multiline: true });
   }
-  detailEntity.appendChild(runtime.card);
+  detailEntity.appendChild(execution.card);
 
   const profile = makeSchemaCard('Profile', 'hints, metadata, and capability context');
   if (entity.hints.mission) appendSchemaRow(profile.body, 'mission', entity.hints.mission);
@@ -2003,7 +2003,7 @@ function buildLoopContextMenu(loop) {
   const items = [
     { label: 'kind: ' + entity.kind, disabled: true },
     { label: 'visual: ' + entity.categoryLabel + ' · ' + entity.categorySource, disabled: true },
-    { label: 'relation: ' + entity.relation + (entity.parentID ? ' · parent ' + shortID(entity.parentID) : ' · anchored to runtime'), disabled: true },
+    { label: 'relation: ' + entity.relation + (entity.parentID ? ' · parent ' + shortID(entity.parentID) : ' · anchored to core'), disabled: true },
     entity.currentConvID ? { label: 'conversation: ' + shortID(entity.currentConvID), disabled: true } : null,
     entity.trustZone ? { label: 'trust: ' + entity.trustZone, disabled: true } : null,
     { separator: true },
@@ -2014,7 +2014,7 @@ function buildLoopContextMenu(loop) {
   if (entity.parentID && state.loops.has(entity.parentID)) {
     items.push({ label: 'Select parent loop', action: () => selectLoop(entity.parentID) });
   } else if (!entity.parentID && state.system) {
-    items.push({ label: 'Select runtime anchor', action: () => selectSystem() });
+    items.push({ label: 'Select core anchor', action: () => selectSystem() });
   }
   if (entity.latestRequestID && typeof window.onRequestChipClick === 'function') {
     items.push({ label: 'Open latest request', action: () => showRequestDetail(entity.latestRequestID) });
@@ -2055,7 +2055,7 @@ function buildSystemContextMenu(sys) {
     { label: 'routing: ' + entity.routingMode + (entity.defaultModel ? ' · ' + entity.defaultModel : ''), disabled: true },
     { separator: true },
     { label: 'Open in window', action: () => openDetailWindow('system') },
-    { label: 'Inspect runtime', action: () => selectSystem() },
+    { label: 'Inspect core', action: () => selectSystem() },
   ];
 }
 
@@ -2314,7 +2314,7 @@ function openDetailWindow(type, id) {
     ? '?type=system'
     : '?type=loop&id=' + encodeURIComponent(id);
   const name = type === 'system'
-    ? 'Runtime'
+    ? 'Core'
     : (state.loops.get(id)?.name || id?.slice(0, 8) || 'Loop');
   const w = window.open(
     '/static/detail.html' + params + '&name=' + encodeURIComponent(name),

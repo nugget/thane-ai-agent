@@ -46,7 +46,7 @@ const nodeId = urlParams.get('id') || '';
 const nodeName = urlParams.get('name') || '';
 
 // Set title immediately from URL param, refined later from SSE data.
-document.title = 'Thane \u00b7 ' + (nodeName || (nodeType === 'system' ? 'Runtime' : nodeId.slice(0, 8)));
+document.title = 'Thane \u00b7 ' + (nodeName || (nodeType === 'system' ? 'Core' : nodeId.slice(0, 8)));
 
 // Utility functions (formatTokens, formatDuration, formatTime, etc.),
 // card builders, and log rendering are in shared.js.
