@@ -1195,9 +1195,8 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
   stroke: rgba(210, 153, 34, 0.5);
 }
 
-.node-rim-badge--unknown .node-rim-badge__body {
-  stroke-dasharray: 2 2;
-  opacity: 0.75;
+.node-rim-badge--none {
+  display: none;
 }
 
 /* Supervisor indicator ring */

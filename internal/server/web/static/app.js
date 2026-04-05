@@ -357,6 +357,16 @@ function getContextTier(contextWindow) {
 }
 
 function getLoopVisualCapacity(loop) {
+  if (loop.handler_only) {
+    return {
+      radius: DEFAULT_NODE_R,
+      label: '',
+      key: 'none',
+      basis: 'none',
+      contextWindow: 0,
+    };
+  }
+
   const contextWindow = getLoopContextWindow(loop);
   if (contextWindow > 0) {
     const tier = getContextTier(contextWindow);
@@ -369,7 +379,10 @@ function getLoopVisualCapacity(loop) {
     };
   }
 
-  const modelName = loop._liveModel || loop._lastModel || '';
+  const recent = loop.recent_iterations && loop.recent_iterations.length > 0
+    ? loop.recent_iterations[0]
+    : null;
+  const modelName = loop._liveModel || loop._lastModel || (recent && recent.model) || '';
   const params = getModelParams(modelName);
   if (params !== null) {
     return {
@@ -383,9 +396,9 @@ function getLoopVisualCapacity(loop) {
 
   return {
     radius: DEFAULT_NODE_R,
-    label: '?',
-    key: 'unknown',
-    basis: 'unknown',
+    label: '',
+    key: 'none',
+    basis: 'none',
     contextWindow: 0,
   };
 }
