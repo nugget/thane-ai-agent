@@ -977,6 +977,7 @@ function renderLoopCurrentTurnCard(loop, entity, conversationSummary) {
   const iterationLabel = isProcessing
     ? '#' + formatNumber((entity.iterations || 0) + 1)
     : (entity.iterations ? '#' + formatNumber(entity.iterations) : 'pending');
+  const contextLabel = entity.contextWindow ? `${formatNumber(entity.contextWindow)} ctx` : '';
 
   let titleSummary = '';
   if (isProcessing) {
