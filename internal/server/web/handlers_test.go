@@ -585,3 +585,45 @@ func TestHandleRequestDetail_NoQuerier(t *testing.T) {
 		t.Errorf("status = %d, want 503 when ContentQuerier is nil", w.Code)
 	}
 }
+
+func TestHandleRequestDetail_ProbeAvailable(t *testing.T) {
+	t.Parallel()
+
+	srv := NewWebServer(Config{
+		LoopRegistry:   &stubRegistry{},
+		EventBus:       events.New(),
+		ContentQuerier: &stubContentQuerier{},
+	})
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	req := httptest.NewRequest("GET", "/api/requests/_probe", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", w.Code)
+	}
+	if got := w.Header().Get("X-Request-Detail-Available"); got != "true" {
+		t.Fatalf("header X-Request-Detail-Available = %q, want true", got)
+	}
+}
+
+func TestHandleRequestDetail_ProbeUnavailable(t *testing.T) {
+	t.Parallel()
+
+	srv := newTestServer(&stubRegistry{}, nil, events.New())
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	req := httptest.NewRequest("GET", "/api/requests/_probe", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", w.Code)
+	}
+	if got := w.Header().Get("X-Request-Detail-Available"); got != "false" {
+		t.Fatalf("header X-Request-Detail-Available = %q, want false", got)
+	}
+}

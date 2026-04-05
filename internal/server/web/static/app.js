@@ -3790,14 +3790,14 @@ renderDetail = function() {
 };
 
 // Probe whether content retention is enabled. The callback is only set
-// if the API endpoint is available (not 503), so request ID chips in
+// if the API endpoint reports availability, so request ID chips in
 // shared.js render as plain copy-on-click when retention is disabled.
 async function probeContentRetention() {
   try {
-    // Use a dummy ID — we only care about the status code.
+    // Use a dedicated probe endpoint shape that always succeeds so
+    // devtools don't fill with intentional 503s when retention is off.
     const resp = await fetch('/api/requests/_probe');
-    // 404 = endpoint works, no such request. 503 = retention disabled.
-    if (resp.status !== 503) {
+    if (resp.ok && resp.headers.get('X-Request-Detail-Available') === 'true') {
       window.onRequestChipClick = showRequestDetail;
     }
   } catch (_) {

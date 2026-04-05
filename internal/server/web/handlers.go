@@ -122,12 +122,18 @@ func (s *WebServer) handleLoopLogs(w http.ResponseWriter, r *http.Request) {
 // request, including system prompt, user/assistant messages, tool call
 // arguments and results, and token metadata.
 func (s *WebServer) handleRequestDetail(w http.ResponseWriter, r *http.Request) {
+	requestID := r.PathValue("id")
+	if requestID == "_probe" {
+		w.Header().Set("X-Request-Detail-Available", strconv.FormatBool(s.contentQuerier != nil))
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
 	if s.contentQuerier == nil {
 		s.writeJSONError(w, "content retention not available", http.StatusServiceUnavailable)
 		return
 	}
 
-	requestID := r.PathValue("id")
 	if requestID == "" {
 		s.writeJSONError(w, "missing request id", http.StatusBadRequest)
 		return
