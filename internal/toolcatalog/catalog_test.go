@@ -46,21 +46,30 @@ func TestRenderLoadedCapabilitySummary_UsesDescriptionsAndFallsBackForUnknownTag
 		"unknown": true,
 	})
 
-	if !strings.Contains(summary, "`forge`: Forge and code review tools. (2 tools loaded)") {
+	if !strings.Contains(summary, "\"kind\":\"loaded_capabilities\"") {
+		t.Fatalf("summary = %q, want loaded-capabilities kind", summary)
+	}
+	if !strings.Contains(summary, "\"tag\":\"forge\"") {
 		t.Fatalf("summary = %q, want forge detail", summary)
 	}
-	if !strings.Contains(summary, "`unknown`: active capability tag.") {
+	if !strings.Contains(summary, "\"description\":\"Forge and code review tools.\"") {
+		t.Fatalf("summary = %q, want forge description", summary)
+	}
+	if !strings.Contains(summary, "\"tool_count\":2") {
+		t.Fatalf("summary = %q, want forge tool_count", summary)
+	}
+	if !strings.Contains(summary, "\"tag\":\"unknown\"") {
 		t.Fatalf("summary = %q, want unknown-tag fallback", summary)
 	}
 }
 
 func TestRenderLoadedCapabilitySummary_EmptyStateExplainsAvailability(t *testing.T) {
 	summary := RenderLoadedCapabilitySummary(nil, nil)
-	if !strings.Contains(summary, "None loaded right now") {
-		t.Fatalf("summary = %q, want empty-state guidance", summary)
+	if !strings.Contains(summary, "\"kind\":\"loaded_capabilities\"") {
+		t.Fatalf("summary = %q, want loaded-capabilities kind", summary)
 	}
-	if !strings.Contains(summary, "`activate_capability`") {
-		t.Fatalf("summary = %q, want activate_capability guidance", summary)
+	if !strings.Contains(summary, "\"loaded_capabilities\":[]") {
+		t.Fatalf("summary = %q, want empty loaded_capabilities array", summary)
 	}
 }
 
@@ -68,16 +77,19 @@ func TestRenderCapabilityManifestMarkdown_UsesExactToolNames(t *testing.T) {
 	manifest := RenderCapabilityManifestMarkdown([]CapabilitySurface{
 		{Tag: "forge", Description: "Forge tools.", Tools: []string{"forge_pr_get"}},
 	})
-	if !strings.Contains(manifest, "`activate_capability(tag: \"name\")`") {
+	if !strings.Contains(manifest, "\"kind\":\"capability_catalog\"") {
+		t.Fatalf("manifest = %q, want capability_catalog kind", manifest)
+	}
+	if !strings.Contains(manifest, "\"activate\":\"activate_capability\"") {
 		t.Fatalf("manifest = %q, want activate_capability example", manifest)
 	}
-	if !strings.Contains(manifest, "`thane_delegate(task: \"...\", tags: [\"name\"])`") {
+	if !strings.Contains(manifest, "\"delegate\":\"thane_delegate\"") {
 		t.Fatalf("manifest = %q, want thane_delegate example", manifest)
 	}
-	if !strings.Contains(manifest, "not automatically loaded") {
-		t.Fatalf("manifest = %q, want available-vs-loaded guidance", manifest)
+	if !strings.Contains(manifest, "\"catalog_entries_are_not_loaded\":true") {
+		t.Fatalf("manifest = %q, want available-vs-loaded flag", manifest)
 	}
-	if !strings.Contains(manifest, "Do not invent per-capability tool names") {
-		t.Fatalf("manifest = %q, want anti-invention guidance", manifest)
+	if !strings.Contains(manifest, "\"invented_capability_tool_names_are_invalid\":true") {
+		t.Fatalf("manifest = %q, want anti-invention flag", manifest)
 	}
 }

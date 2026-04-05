@@ -44,6 +44,33 @@ type CapabilitySurface struct {
 	AdHoc        bool
 }
 
+type capabilityContextSummary struct {
+	KBArticles int  `json:"kb_articles,omitempty"`
+	Live       bool `json:"live,omitempty"`
+}
+
+type capabilityCatalogEntry struct {
+	Status      string                    `json:"status"`
+	Description string                    `json:"description"`
+	ToolCount   int                       `json:"tool_count,omitempty"`
+	Context     *capabilityContextSummary `json:"context,omitempty"`
+}
+
+type loadedCapabilityEntry struct {
+	Tag          string                    `json:"tag"`
+	Description  string                    `json:"description,omitempty"`
+	ToolCount    int                       `json:"tool_count,omitempty"`
+	AlwaysActive bool                      `json:"always_active,omitempty"`
+	AdHoc        bool                      `json:"ad_hoc,omitempty"`
+	Context      *capabilityContextSummary `json:"context,omitempty"`
+}
+
+type capabilityActionTools struct {
+	Activate   string `json:"activate"`
+	Deactivate string `json:"deactivate"`
+	Delegate   string `json:"delegate,omitempty"`
+}
+
 var builtinToolSpecs = map[string]BuiltinToolSpec{
 	"archive_search":              {CanonicalID: "native:archive_search", Source: NativeToolSource, DefaultTags: []string{"archive"}},
 	"archive_session_transcript":  {CanonicalID: "native:archive_session_transcript", Source: NativeToolSource, DefaultTags: []string{"archive"}},
@@ -255,27 +282,28 @@ func RenderCapabilityActivationDescription(entries []CapabilitySurface) string {
 }
 
 // RenderCapabilityManifestMarkdown renders the model-facing capability
-// catalog as markdown plus a compact JSON block.
+// catalog as a heading plus a compact JSON payload.
 func RenderCapabilityManifestMarkdown(entries []CapabilitySurface) string {
 	if len(entries) == 0 {
 		return ""
 	}
 
-	type ctxSummary struct {
-		KBArticles int  `json:"kb_articles,omitempty"`
-		Live       bool `json:"live,omitempty"`
-	}
-	type capabilityJSON struct {
-		Status      string      `json:"status"`
-		Description string      `json:"description"`
-		ToolCount   int         `json:"tools,omitempty"`
-		Context     *ctxSummary `json:"context,omitempty"`
-	}
-
 	payload := struct {
-		Capabilities map[string]capabilityJSON `json:"capabilities"`
+		Kind                              string                            `json:"kind"`
+		CatalogEntriesAreNotLoaded        bool                              `json:"catalog_entries_are_not_loaded"`
+		InventedCapabilityToolsAreInvalid bool                              `json:"invented_capability_tool_names_are_invalid"`
+		ActivationTools                   capabilityActionTools             `json:"activation_tools"`
+		Capabilities                      map[string]capabilityCatalogEntry `json:"available_capabilities"`
 	}{
-		Capabilities: make(map[string]capabilityJSON, len(entries)),
+		Kind:                              "capability_catalog",
+		CatalogEntriesAreNotLoaded:        true,
+		InventedCapabilityToolsAreInvalid: true,
+		ActivationTools: capabilityActionTools{
+			Activate:   "activate_capability",
+			Deactivate: "deactivate_capability",
+			Delegate:   "thane_delegate",
+		},
+		Capabilities: make(map[string]capabilityCatalogEntry, len(entries)),
 	}
 
 	for _, entry := range SortCapabilitySurface(entries) {
@@ -287,13 +315,13 @@ func RenderCapabilityManifestMarkdown(entries []CapabilitySurface) string {
 			status = "always_active"
 		}
 
-		rendered := capabilityJSON{
+		rendered := capabilityCatalogEntry{
 			Status:      status,
 			Description: capabilityDescription(entry),
 			ToolCount:   len(entry.Tools),
 		}
 		if entry.KBArticles > 0 || entry.LiveContext {
-			rendered.Context = &ctxSummary{
+			rendered.Context = &capabilityContextSummary{
 				KBArticles: entry.KBArticles,
 				Live:       entry.LiveContext,
 			}
@@ -303,16 +331,11 @@ func RenderCapabilityManifestMarkdown(entries []CapabilitySurface) string {
 
 	data, err := json.Marshal(payload)
 	if err != nil {
-		return "### Available Capabilities\n\n{\"error\":\"manifest marshal failed\"}"
+		return "### Available Capabilities\n\n{\"kind\":\"capability_catalog\",\"error\":\"manifest marshal failed\"}"
 	}
 
 	var sb strings.Builder
 	sb.WriteString("### Available Capabilities\n\n")
-	sb.WriteString("These capabilities are available to request; they are not automatically loaded just because they appear here. ")
-	sb.WriteString("To load one into this conversation, call `activate_capability(tag: \"name\")`. ")
-	sb.WriteString("To remove one, call `deactivate_capability(tag: \"name\")`. ")
-	sb.WriteString("For one-off delegated work, use `thane_delegate(task: \"...\", tags: [\"name\"])`. ")
-	sb.WriteString("Do not invent per-capability tool names like `forge_capability`.\n\n")
 	sb.Write(data)
 	return sb.String()
 }
@@ -320,10 +343,6 @@ func RenderCapabilityManifestMarkdown(entries []CapabilitySurface) string {
 // RenderLoadedCapabilitySummary renders the currently loaded
 // capabilities for always-on prompt context.
 func RenderLoadedCapabilitySummary(entries []CapabilitySurface, activeTags map[string]bool) string {
-	if len(activeTags) == 0 {
-		return "- None loaded right now. Capabilities listed in the catalog are available to request, not active until `activate_capability` succeeds."
-	}
-
 	byTag := make(map[string]CapabilitySurface, len(entries))
 	for _, entry := range entries {
 		byTag[entry.Tag] = entry
@@ -335,27 +354,49 @@ func RenderLoadedCapabilitySummary(entries []CapabilitySurface, activeTags map[s
 	}
 	sort.Strings(names)
 
-	lines := make([]string, 0, len(names))
+	loaded := make([]loadedCapabilityEntry, 0, len(names))
 	for _, tag := range names {
 		entry, ok := byTag[tag]
 		if !ok {
-			lines = append(lines, fmt.Sprintf("- `%s`: active capability tag.", tag))
+			loaded = append(loaded, loadedCapabilityEntry{Tag: tag})
 			continue
 		}
-		desc := capabilityDescription(entry)
-		switch {
-		case desc != "" && len(entry.Tools) > 0:
-			lines = append(lines, fmt.Sprintf("- `%s`: %s (%d tools loaded)", tag, desc, len(entry.Tools)))
-		case desc != "":
-			lines = append(lines, fmt.Sprintf("- `%s`: %s", tag, desc))
-		case len(entry.Tools) > 0:
-			lines = append(lines, fmt.Sprintf("- `%s`: %d tools loaded.", tag, len(entry.Tools)))
-		default:
-			lines = append(lines, fmt.Sprintf("- `%s`: active capability tag.", tag))
+		rendered := loadedCapabilityEntry{
+			Tag:          tag,
+			Description:  capabilityDescription(entry),
+			ToolCount:    len(entry.Tools),
+			AlwaysActive: entry.AlwaysActive,
+			AdHoc:        entry.AdHoc,
 		}
+		if entry.KBArticles > 0 || entry.LiveContext {
+			rendered.Context = &capabilityContextSummary{
+				KBArticles: entry.KBArticles,
+				Live:       entry.LiveContext,
+			}
+		}
+		loaded = append(loaded, rendered)
 	}
 
-	return strings.Join(lines, "\n")
+	payload := struct {
+		Kind                       string                  `json:"kind"`
+		CatalogEntriesAreNotLoaded bool                    `json:"catalog_entries_are_not_loaded"`
+		ActivationTools            capabilityActionTools   `json:"activation_tools"`
+		LoadedCapabilities         []loadedCapabilityEntry `json:"loaded_capabilities"`
+	}{
+		Kind:                       "loaded_capabilities",
+		CatalogEntriesAreNotLoaded: true,
+		ActivationTools: capabilityActionTools{
+			Activate:   "activate_capability",
+			Deactivate: "deactivate_capability",
+		},
+		LoadedCapabilities: loaded,
+	}
+
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return "{\"kind\":\"loaded_capabilities\",\"error\":\"summary marshal failed\"}"
+	}
+	return string(data)
 }
 
 func capabilityDescription(entry CapabilitySurface) string {

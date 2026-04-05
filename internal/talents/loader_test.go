@@ -273,19 +273,26 @@ func TestGenerateManifest(t *testing.T) {
 	jsonStr := talent.Content[jsonStart:]
 
 	var parsed struct {
-		Capabilities map[string]struct {
+		Kind                       string `json:"kind"`
+		CatalogEntriesAreNotLoaded bool   `json:"catalog_entries_are_not_loaded"`
+		Capabilities               map[string]struct {
 			Status      string `json:"status"`
 			Description string `json:"description"`
-			ToolCount   int    `json:"tools"`
+			ToolCount   int    `json:"tool_count"`
 			Context     *struct {
-				ConfigFiles int  `json:"config_files"`
-				KBArticles  int  `json:"kb_articles"`
-				Live        bool `json:"live"`
+				KBArticles int  `json:"kb_articles"`
+				Live       bool `json:"live"`
 			} `json:"context"`
-		} `json:"capabilities"`
+		} `json:"available_capabilities"`
 	}
 	if err := json.Unmarshal([]byte(jsonStr), &parsed); err != nil {
 		t.Fatalf("manifest JSON should be valid: %v\nJSON: %s", err, jsonStr)
+	}
+	if parsed.Kind != "capability_catalog" {
+		t.Fatalf("kind = %q, want capability_catalog", parsed.Kind)
+	}
+	if !parsed.CatalogEntriesAreNotLoaded {
+		t.Fatal("catalog_entries_are_not_loaded should be true")
 	}
 
 	// Configured tag: ha
