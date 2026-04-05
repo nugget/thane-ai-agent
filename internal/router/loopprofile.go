@@ -7,14 +7,14 @@ import (
 	"strings"
 )
 
-// LoopSeed captures the common routing and configuration parameters
+// LoopProfile captures the common routing and configuration parameters
 // shared by all agent wake sites. It is serializable via both YAML
 // (for config file embedding) and JSON (for API and tool payloads).
 //
 // Each field maps to a well-known routing hint or agent.Request
 // property. Zero-value fields are omitted during serialization and
-// ignored by [LoopSeed.Hints].
-type LoopSeed struct {
+// ignored by [LoopProfile.Hints].
+type LoopProfile struct {
 	// Model sets an explicit model, bypassing the router. When empty,
 	// the router selects based on the other hint fields.
 	Model string `yaml:"model,omitempty" json:"model,omitempty"`
@@ -43,9 +43,9 @@ type LoopSeed struct {
 	// ExcludeTools lists tool names to filter out of the agent run.
 	ExcludeTools []string `yaml:"exclude_tools,omitempty" json:"exclude_tools,omitempty"`
 
-	// SeedTags lists capability tags to activate at the start of the
+	// InitialTags lists capability tags to activate at the start of the
 	// agent run.
-	SeedTags []string `yaml:"seed_tags,omitempty" json:"seed_tags,omitempty"`
+	InitialTags []string `yaml:"initial_tags,omitempty" json:"initial_tags,omitempty"`
 
 	// ExtraHints carries arbitrary key-value routing hints that are
 	// merged last, allowing callers to override or extend the typed
@@ -58,19 +58,19 @@ type LoopSeed struct {
 }
 
 // RequestOptions contains the agent request fields derived from a
-// LoopSeed. Callers can merge additional channel- or trigger-specific
+// LoopProfile. Callers can merge additional channel- or trigger-specific
 // hints on top of these shared routing defaults.
 type RequestOptions struct {
 	Model        string
 	Hints        map[string]string
 	ExcludeTools []string
-	SeedTags     []string
+	InitialTags  []string
 }
 
-// Hints builds a routing hints map from the seed's typed fields.
+// Hints builds a routing hints map from the profile's typed fields.
 // Only non-empty fields are included. ExtraHints are merged last and
 // can override typed fields.
-func (s *LoopSeed) Hints() map[string]string {
+func (s *LoopProfile) Hints() map[string]string {
 	h := make(map[string]string)
 
 	if s.QualityFloor != "" {
@@ -118,10 +118,10 @@ var validDelegationGating = map[string]bool{
 	"disabled": true,
 }
 
-// Validate checks that the seed's typed fields contain semantically
+// Validate checks that the profile's typed fields contain semantically
 // valid values. It does not require any field to be set — an empty
-// LoopSeed is valid. Returns nil on success.
-func (s *LoopSeed) Validate() error {
+// LoopProfile is valid. Returns nil on success.
+func (s *LoopProfile) Validate() error {
 	if s.QualityFloor != "" {
 		n, err := strconv.Atoi(s.QualityFloor)
 		if err != nil || n < 1 || n > 10 {
@@ -174,10 +174,10 @@ func ValidateTopicFilter(filter string) error {
 	return nil
 }
 
-// RequestOptions returns the request-ready fields implied by the seed.
+// RequestOptions returns the request-ready fields implied by the profile.
 // Slices are copied so callers can mutate the result without affecting
-// the underlying LoopSeed.
-func (s *LoopSeed) RequestOptions() RequestOptions {
+// the underlying LoopProfile.
+func (s *LoopProfile) RequestOptions() RequestOptions {
 	opts := RequestOptions{
 		Model: s.Model,
 		Hints: s.Hints(),
@@ -186,8 +186,8 @@ func (s *LoopSeed) RequestOptions() RequestOptions {
 	if len(s.ExcludeTools) > 0 {
 		opts.ExcludeTools = append([]string(nil), s.ExcludeTools...)
 	}
-	if len(s.SeedTags) > 0 {
-		opts.SeedTags = append([]string(nil), s.SeedTags...)
+	if len(s.InitialTags) > 0 {
+		opts.InitialTags = append([]string(nil), s.InitialTags...)
 	}
 
 	return opts

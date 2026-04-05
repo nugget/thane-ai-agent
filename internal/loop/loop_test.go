@@ -3,12 +3,14 @@ package loop
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/events"
+	"github.com/nugget/thane-ai-agent/internal/router"
 )
 
 // fixedRand returns a RandSource that always returns the same value.
@@ -909,6 +911,90 @@ func TestHintsMerge(t *testing.T) {
 	// Loop-generated hints should still be present.
 	if capturedHints["loop_name"] != "hints-merge" {
 		t.Errorf("loop_name hint = %q, want hints-merge", capturedHints["loop_name"])
+	}
+}
+
+func TestNewFromSpecAppliesProfileToRequest(t *testing.T) {
+	t.Parallel()
+
+	var captured Request
+	var mu sync.Mutex
+
+	runner := &inspectingRunner{
+		onRun: func(req RunRequest) {
+			mu.Lock()
+			captured = Request{
+				Model:         req.Model,
+				Messages:      append([]Message(nil), req.Messages...),
+				ExcludeTools:  append([]string(nil), req.ExcludeTools...),
+				InitialTags:   append([]string(nil), req.InitialTags...),
+				SkipTagFilter: req.SkipTagFilter,
+				Hints:         cloneStringMap(req.Hints),
+			}
+			mu.Unlock()
+		},
+	}
+
+	l, err := NewFromSpec(Spec{
+		Name:         "spec-profile",
+		Task:         "evaluate the alert",
+		SleepMin:     1 * time.Millisecond,
+		SleepMax:     2 * time.Millisecond,
+		SleepDefault: 1 * time.Millisecond,
+		Jitter:       Float64Ptr(0),
+		MaxIter:      1,
+		Profile: router.LoopProfile{
+			Model:        "spark/gpt-oss:20b",
+			Mission:      "automation",
+			ExcludeTools: []string{"shell_exec"},
+			InitialTags:  []string{"homeassistant"},
+			Instructions: "stay concise",
+			PreferSpeed:  "true",
+			LocalOnly:    "false",
+			QualityFloor: "7",
+			ExtraHints:   map[string]string{"source": "profile"},
+		},
+		ExcludeTools: []string{"dangerous_tool"},
+		Hints: map[string]string{
+			"source": "spec",
+		},
+	}, Deps{Runner: runner})
+	if err != nil {
+		t.Fatalf("NewFromSpec: %v", err)
+	}
+
+	_ = l.Start(context.Background())
+	<-l.Done()
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	if captured.Model != "spark/gpt-oss:20b" {
+		t.Fatalf("Model = %q, want spark/gpt-oss:20b", captured.Model)
+	}
+	if len(captured.Messages) == 0 {
+		t.Fatal("Messages empty")
+	}
+	if got := captured.Messages[0].Content; got != "Instructions: stay concise\n\nevaluate the alert" {
+		t.Fatalf("Message content = %q", got)
+	}
+	if captured.Hints["mission"] != "automation" {
+		t.Fatalf("mission hint = %q, want automation", captured.Hints["mission"])
+	}
+	if captured.Hints["quality_floor"] != "7" {
+		t.Fatalf("quality_floor hint = %q, want 7", captured.Hints["quality_floor"])
+	}
+	if captured.Hints["prefer_speed"] != "true" {
+		t.Fatalf("prefer_speed hint = %q, want true", captured.Hints["prefer_speed"])
+	}
+	if captured.Hints["source"] != "spec" {
+		t.Fatalf("source hint = %q, want spec", captured.Hints["source"])
+	}
+	if !slices.Contains(captured.ExcludeTools, "shell_exec") || !slices.Contains(captured.ExcludeTools, "dangerous_tool") {
+		t.Fatalf("ExcludeTools = %#v", captured.ExcludeTools)
+	}
+	if !slices.Contains(captured.InitialTags, "homeassistant") {
+		t.Fatalf("InitialTags = %#v", captured.InitialTags)
 	}
 }
 

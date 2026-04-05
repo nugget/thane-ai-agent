@@ -52,7 +52,7 @@ type Request struct {
 	AllowedTools    []string          `json:"-"`               // Optional allowlist of tools visible for this run
 	ExcludeTools    []string          `json:"-"`               // Tool names to exclude from this run (e.g., lifecycle tools for recurring wakes)
 	SkipTagFilter   bool              `json:"-"`               // Bypass capability tag filtering (for self-scoping contexts like metacognitive)
-	SeedTags        []string          `json:"-"`               // Tags to activate at Run start (carried forward from previous loop iterations)
+	InitialTags     []string          `json:"-"`               // Tags to activate at Run start (carried forward from previous loop iterations)
 	MaxIterations   int               `json:"-"`               // Optional per-request iteration cap (0 = default)
 	MaxOutputTokens int               `json:"-"`               // Optional output-token budget across all iterations (0 = unlimited)
 	ToolTimeout     time.Duration     `json:"-"`               // Optional per-tool timeout (0 = no extra timeout)
@@ -1034,7 +1034,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		}
 		scope = newCapabilityScope(l.capTags, lenses)
 		// Seed tags carried forward from previous loop iterations.
-		for _, tag := range req.SeedTags {
+		for _, tag := range req.InitialTags {
 			_ = scope.Request(tag)
 		}
 		// Restore conversation-persisted capability tags.

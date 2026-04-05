@@ -5,6 +5,7 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/channels/email"
 	"github.com/nugget/thane-ai-agent/internal/forge"
+	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
 	"github.com/nugget/thane-ai-agent/internal/router"
 	"github.com/nugget/thane-ai-agent/internal/search"
 )
@@ -151,12 +152,12 @@ func ExampleConfig() *Config {
 				{Topic: "frigate/events"},
 				{
 					Topic: "automation/wake/security",
-					Wake: &router.LoopSeed{
+					Wake: &router.LoopProfile{
 						QualityFloor:     "7",
 						Mission:          "automation",
 						LocalOnly:        "false",
 						DelegationGating: "disabled",
-						SeedTags:         []string{"homeassistant"},
+						InitialTags:      []string{"homeassistant"},
 						Instructions:     "Evaluate the security event and decide if action is needed.",
 					},
 				},
@@ -226,6 +227,41 @@ func ExampleConfig() *Config {
 		Provenance: ProvenanceConfig{
 			Path:       "~/Thane/identity",
 			SigningKey: "~/.ssh/id_ed25519",
+		},
+
+		Loops: LoopsConfig{
+			Definitions: []looppkg.Spec{
+				{
+					Name:       "office_watch",
+					Enabled:    true,
+					Task:       "Watch the office and report noteworthy changes or trends.",
+					Operation:  looppkg.OperationService,
+					Completion: looppkg.CompletionNone,
+					Conditions: looppkg.Conditions{
+						Schedule: &looppkg.ScheduleCondition{
+							Timezone: "America/Chicago",
+							Windows: []looppkg.ScheduleWindow{{
+								Days:  []string{"mon", "tue", "wed", "thu", "fri"},
+								Start: "08:30",
+								End:   "18:00",
+							}},
+						},
+					},
+					Profile: router.LoopProfile{
+						Mission:          "background",
+						DelegationGating: "disabled",
+						InitialTags:      []string{"homeassistant"},
+						Instructions:     "Be concise and focus on high-signal observations.",
+					},
+					SleepMin:     2 * time.Minute,
+					SleepMax:     10 * time.Minute,
+					SleepDefault: 5 * time.Minute,
+					Jitter:       looppkg.Float64Ptr(0.2),
+					Metadata: map[string]string{
+						"category": "observer",
+					},
+				},
+			},
 		},
 
 		Forge: forge.Config{

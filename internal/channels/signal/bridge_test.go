@@ -231,7 +231,7 @@ func TestBridge_CustomRoutingConfigKeepsSignalContext(t *testing.T) {
 	}
 }
 
-func TestSignalRoutingConfigLoopSeed(t *testing.T) {
+func TestSignalRoutingConfigLoopProfile(t *testing.T) {
 	cfg := config.SignalRoutingConfig{
 		Model:            "claude-sonnet-4-20250514",
 		QualityFloor:     "8",
@@ -239,7 +239,7 @@ func TestSignalRoutingConfigLoopSeed(t *testing.T) {
 		DelegationGating: "disabled",
 	}
 
-	seed := cfg.LoopSeed()
+	seed := cfg.LoopProfile()
 	opts := seed.RequestOptions()
 
 	if opts.Model != "claude-sonnet-4-20250514" {

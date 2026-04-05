@@ -75,7 +75,7 @@ Topic conventions: Use thane/{device_name}/wake/{purpose} for instance-directed 
 					"items":       map[string]any{"type": "string"},
 					"description": "Tool names to exclude from the wake conversation",
 				},
-				"seed_tags": map[string]any{
+				"initial_tags": map[string]any{
 					"type":        "array",
 					"items":       map[string]any{"type": "string"},
 					"description": "Capability tags to activate at wake start",

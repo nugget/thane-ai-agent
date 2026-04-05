@@ -45,10 +45,10 @@ func (t *Tools) HandleListWakeSubscriptions(_ context.Context, _ map[string]any)
 			ID:           ws.ID,
 			Topic:        ws.Topic,
 			Source:       ws.Source,
-			Mission:      ws.Seed.Mission,
-			QualityFloor: ws.Seed.QualityFloor,
-			Model:        ws.Seed.Model,
-			Instructions: ws.Seed.Instructions,
+			Mission:      ws.Profile.Mission,
+			QualityFloor: ws.Profile.QualityFloor,
+			Model:        ws.Profile.Model,
+			Instructions: ws.Profile.Instructions,
 		}
 	}
 
@@ -60,7 +60,7 @@ func (t *Tools) HandleListWakeSubscriptions(_ context.Context, _ map[string]any)
 }
 
 // HandleAddWakeSubscription creates a new runtime wake subscription.
-// Required args: "topic". Optional: all LoopSeed fields.
+// Required args: "topic". Optional: all LoopProfile fields.
 func (t *Tools) HandleAddWakeSubscription(_ context.Context, args map[string]any) (string, error) {
 	topic, _ := args["topic"].(string)
 	topic = strings.TrimSpace(topic)
@@ -68,7 +68,7 @@ func (t *Tools) HandleAddWakeSubscription(_ context.Context, args map[string]any
 		return "", fmt.Errorf("topic is required")
 	}
 
-	seed := router.LoopSeed{
+	profile := router.LoopProfile{
 		Model:            stringArg(args, "model"),
 		QualityFloor:     stringArg(args, "quality_floor"),
 		Mission:          stringArg(args, "mission"),
@@ -79,19 +79,19 @@ func (t *Tools) HandleAddWakeSubscription(_ context.Context, args map[string]any
 	}
 
 	if raw, ok := args["exclude_tools"]; ok {
-		seed.ExcludeTools = toStringSlice(raw)
+		profile.ExcludeTools = toStringSlice(raw)
 	}
-	if raw, ok := args["seed_tags"]; ok {
-		seed.SeedTags = toStringSlice(raw)
+	if raw, ok := args["initial_tags"]; ok {
+		profile.InitialTags = toStringSlice(raw)
 	}
 
-	// Validate the seed before persisting — fail fast with a clear
+	// Validate the profile before persisting — fail fast with a clear
 	// error rather than storing an invalid subscription.
-	if err := seed.Validate(); err != nil {
-		return "", fmt.Errorf("invalid seed: %w", err)
+	if err := profile.Validate(); err != nil {
+		return "", fmt.Errorf("invalid profile: %w", err)
 	}
 
-	ws, err := t.store.Add(topic, seed)
+	ws, err := t.store.Add(topic, profile)
 	if err != nil {
 		return "", err
 	}

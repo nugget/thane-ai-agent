@@ -70,19 +70,21 @@ type App struct {
 	modelRegistry         *models.Registry
 
 	// Core subsystems
-	mem                      *memory.SQLiteStore
-	archiveStore             *memory.ArchiveStore
-	archiveAdapter           *memory.ArchiveAdapter
-	wmStore                  *memory.WorkingMemoryStore
-	factStore                *knowledge.Store
-	contactStore             *contacts.Store
-	opStore                  *opstate.Store
-	modelPolicyStore         *modelPolicyStore
-	modelResourcePolicyStore *modelResourcePolicyStore
-	modelExperienceStore     *modelExperienceStore
-	usageStore               *usage.Store
-	schedStore               *scheduler.Store
-	sched                    *scheduler.Scheduler
+	mem                       *memory.SQLiteStore
+	archiveStore              *memory.ArchiveStore
+	archiveAdapter            *memory.ArchiveAdapter
+	wmStore                   *memory.WorkingMemoryStore
+	factStore                 *knowledge.Store
+	contactStore              *contacts.Store
+	opStore                   *opstate.Store
+	modelPolicyStore          *modelPolicyStore
+	modelResourcePolicyStore  *modelResourcePolicyStore
+	modelExperienceStore      *modelExperienceStore
+	loopDefinitionStore       *loopDefinitionStore
+	loopDefinitionPolicyStore *loopDefinitionPolicyStore
+	usageStore                *usage.Store
+	schedStore                *scheduler.Store
+	sched                     *scheduler.Scheduler
 
 	// Agent loop and router
 	loop *agent.Loop
@@ -146,7 +148,9 @@ type App struct {
 	checkpointer *checkpoint.Checkpointer
 
 	// Loop registry
-	loopRegistry *looppkg.Registry
+	loopRegistry           *looppkg.Registry
+	loopDefinitionRegistry *looppkg.DefinitionRegistry
+	loopDefinitionRuntime  *loopDefinitionRuntime
 
 	// Metacognitive config (stored for Serve-time use)
 	metacogCfg *metacognitive.Config

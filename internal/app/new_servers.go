@@ -50,6 +50,15 @@ func (a *App) initServers(s *newState) error {
 	)
 	server.SetMemoryStore(a.mem)
 	server.SetArchiveStore(a.archiveStore)
+	server.UseLoopDefinitionRegistry(a.loopDefinitionRegistry)
+	server.ConfigureLoopDefinitionView(a.loopDefinitionView)
+	server.ConfigureLoopDefinitionPersistence(a.persistLoopDefinition, a.deletePersistedLoopDefinition)
+	server.ConfigureLoopDefinitionLifecycle(
+		a.persistLoopDefinitionPolicy,
+		a.deletePersistedLoopDefinitionPolicy,
+		a.reconcileLoopDefinition,
+		a.launchLoopDefinition,
+	)
 	server.SetEventBus(a.eventBus)
 	server.SetConnManager(func() map[string]api.DependencyStatus {
 		status := a.connMgr.Status()
@@ -257,7 +266,7 @@ func (a *App) initServers(s *newState) error {
 		a.mqttPub = mqttPub
 
 		// --- MQTT wake subscription store ---
-		// Manages topic-to-LoopSeed mappings for wake-on-message.
+		// Manages topic-to-LoopProfile mappings for wake-on-message.
 		// Config-defined wake subscriptions are loaded from
 		// cfg.MQTT.Subscriptions; runtime subscriptions persist in SQLite.
 		subStore, err := mqtt.NewSubscriptionStore(a.mem.DB(), logger)
@@ -575,13 +584,13 @@ func (a *App) initServers(s *newState) error {
 		}
 
 		adapter := &loopAdapter{agentLoop: a.loop, router: a.rtr}
-		loopCfg := metacognitive.BuildLoopConfig(metacogCfg, metacognitive.Opts{
+		loopSpec := metacognitive.BuildSpec(metacogCfg, metacognitive.Opts{
 			WorkspacePath:   cfg.Workspace.Path,
 			StateFilePath:   metacogStatePath,
 			ProvenanceStore: a.provenanceStore,
 			StateFileName:   stateFileName,
 		})
-		loopCfg.Setup = func(l *looppkg.Loop) {
+		loopSpec.Setup = func(l *looppkg.Loop) {
 			metacognitive.RegisterTools(a.loop.Tools(), l, metacogCfg, metacogStatePath, a.provenanceStore)
 		}
 
@@ -591,7 +600,7 @@ func (a *App) initServers(s *newState) error {
 			EventBus: a.eventBus,
 		}
 		a.deferWorker("metacognitive", func(ctx context.Context) error {
-			if _, err := a.loopRegistry.SpawnLoop(ctx, loopCfg, metacogDeps); err != nil {
+			if _, err := a.loopRegistry.SpawnSpec(ctx, loopSpec, metacogDeps); err != nil {
 				return fmt.Errorf("spawn metacognitive loop: %w", err)
 			}
 			return nil
@@ -603,6 +612,34 @@ func (a *App) initServers(s *newState) error {
 			"max_sleep", cfg.Metacognitive.MaxSleep,
 			"supervisor_probability", cfg.Metacognitive.SupervisorProbability,
 		)
+	}
+
+	// --- Loop definition services ---
+	// Durable loops-ng service definitions are bootstrapped from the
+	// immutable+overlay definition registry. Existing special-case loops
+	// still start through their legacy paths for now; bootstrap skips
+	// duplicate names so the later migration can remain mechanical.
+	if a.loopDefinitionRuntime != nil {
+		a.deferWorker("loop-definition-services", func(ctx context.Context) error {
+			result, err := a.loopDefinitionRuntime.StartEnabledServices(ctx)
+			if err != nil {
+				return err
+			}
+			if result.Started > 0 || result.SkippedInactive > 0 || result.SkippedPaused > 0 || result.SkippedIneligible > 0 || result.SkippedExisting > 0 || result.SkippedNonService > 0 {
+				logger.Info("loop definition services reconciled",
+					"started", result.Started,
+					"skipped_inactive", result.SkippedInactive,
+					"skipped_paused", result.SkippedPaused,
+					"skipped_ineligible", result.SkippedIneligible,
+					"skipped_existing", result.SkippedExisting,
+					"skipped_non_service", result.SkippedNonService,
+				)
+			}
+			return nil
+		})
+		a.deferWorker("loop-definition-schedule", func(ctx context.Context) error {
+			return a.loopDefinitionRuntime.StartScheduleWatcher(ctx)
+		})
 	}
 
 	return nil

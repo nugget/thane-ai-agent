@@ -66,9 +66,9 @@ func runScheduledTask(ctx context.Context, task *scheduler.Task, exec *scheduler
 		msg = prompts.PeriodicReflectionPrompt(egoContent)
 	}
 
-	// Build the wake routing profile via LoopSeed so scheduled tasks
+	// Build the wake routing profile via LoopProfile so scheduled tasks
 	// use the same routing/config path as the newer wake subsystems.
-	seed := buildScheduledTaskLoopSeed(task)
+	seed := buildScheduledTaskLoopProfile(task)
 	reqOpts := seed.RequestOptions()
 
 	// Each execution gets a fresh conversation so prior poll/wake context
@@ -80,7 +80,7 @@ func runScheduledTask(ctx context.Context, task *scheduler.Task, exec *scheduler
 		Messages:       []agent.Message{{Role: "user", Content: msg}},
 		Hints:          reqOpts.Hints,
 		ExcludeTools:   reqOpts.ExcludeTools,
-		SeedTags:       reqOpts.SeedTags,
+		InitialTags:    reqOpts.InitialTags,
 	}
 
 	resp, err := deps.runner.Run(ctx, req, nil)
@@ -97,11 +97,11 @@ func runScheduledTask(ctx context.Context, task *scheduler.Task, exec *scheduler
 	return nil
 }
 
-// buildScheduledTaskLoopSeed converts a wake task payload into the
-// shared LoopSeed routing/config shape. Tasks can override the default
+// buildScheduledTaskLoopProfile converts a wake task payload into the
+// shared LoopProfile routing/config shape. Tasks can override the default
 // local-only, cheapest-model behavior with model/local_only/
 // quality_floor payload fields.
-func buildScheduledTaskLoopSeed(task *scheduler.Task) router.LoopSeed {
+func buildScheduledTaskLoopProfile(task *scheduler.Task) router.LoopProfile {
 	model, _ := task.Payload.Data["model"].(string)
 
 	localOnly := "true"
@@ -114,7 +114,7 @@ func buildScheduledTaskLoopSeed(task *scheduler.Task) router.LoopSeed {
 		qualityFloor = qf
 	}
 
-	return router.LoopSeed{
+	return router.LoopProfile{
 		Model:            model,
 		LocalOnly:        localOnly,
 		QualityFloor:     qualityFloor,

@@ -571,24 +571,33 @@ func resolveContactByChannelAddress(store *contacts.Store, channel, address stri
 	return nilID, false
 }
 
-// notifSessionInjector adapts the memory store and archive adapter
-// into a [notifications.SessionInjector]. It avoids importing
-// notifications in the memory package by using this thin adapter in
-// the app package.
-type notifSessionInjector struct {
-	mem      *memory.SQLiteStore
+// conversationSystemInjector is the shared app-side bridge for writing
+// detached system-originated messages back into live conversations.
+// Both notification callbacks and loops-ng detached completions use
+// this adapter so completion routing converges on one app-level seam.
+type conversationSystemInjector struct {
+	mem      memory.MemoryStore
 	archiver *memory.ArchiveAdapter
 }
 
 // InjectSystemMessage adds a system message to the conversation's
 // memory so the agent sees it on the next turn.
-func (n *notifSessionInjector) InjectSystemMessage(conversationID, message string) error {
+func (n *conversationSystemInjector) InjectSystemMessage(conversationID, message string) error {
+	if n == nil || n.mem == nil {
+		return nil
+	}
+	if conversationID == "" || strings.TrimSpace(message) == "" {
+		return nil
+	}
 	return n.mem.AddMessage(conversationID, "system", message)
 }
 
 // IsSessionAlive reports whether the conversation has an active
 // archive session.
-func (n *notifSessionInjector) IsSessionAlive(conversationID string) bool {
+func (n *conversationSystemInjector) IsSessionAlive(conversationID string) bool {
+	if n == nil || n.archiver == nil || conversationID == "" {
+		return false
+	}
 	return n.archiver.ActiveSessionID(conversationID) != ""
 }
 
@@ -812,23 +821,10 @@ type loopAdapter struct {
 // ellipsis to keep event payloads bounded.
 const maxToolResultLen = 2000
 
-// Run converts a [looppkg.RunRequest] to [agent.Request], calls the agent
-// loop, and converts the result back to [looppkg.RunResponse].
-func (a *loopAdapter) Run(ctx context.Context, req looppkg.RunRequest, _ looppkg.StreamCallback) (*looppkg.RunResponse, error) {
-	// Convert messages.
-	msgs := make([]agent.Message, len(req.Messages))
-	for i, m := range req.Messages {
-		msgs[i] = agent.Message{Role: m.Role, Content: m.Content}
-	}
-
-	agentReq := &agent.Request{
-		ConversationID: req.ConversationID,
-		Messages:       msgs,
-		ExcludeTools:   req.ExcludeTools,
-		SkipTagFilter:  req.SkipTagFilter,
-		Hints:          req.Hints,
-		SeedTags:       req.SeedTags,
-	}
+// Run converts a [looppkg.Request] to [agent.Request], calls the agent
+// loop, and converts the result back to [looppkg.Response].
+func (a *loopAdapter) Run(ctx context.Context, req looppkg.Request, _ looppkg.StreamCallback) (*looppkg.Response, error) {
+	agentReq := compileLoopAgentRequest(req)
 
 	// Build an agent streaming callback that relays tool and LLM
 	// events through the loop's OnProgress callback.
@@ -896,16 +892,58 @@ func (a *loopAdapter) Run(ctx context.Context, req looppkg.RunRequest, _ looppkg
 		}
 	}
 
-	return &looppkg.RunResponse{
-		Content:       resp.Content,
-		Model:         resp.Model,
-		InputTokens:   resp.InputTokens,
-		OutputTokens:  resp.OutputTokens,
-		ContextWindow: ctxWindow,
-		ToolsUsed:     resp.ToolsUsed,
-		RequestID:     resp.RequestID,
-		ActiveTags:    resp.ActiveTags,
+	return &looppkg.Response{
+		Content:                  resp.Content,
+		Model:                    resp.Model,
+		FinishReason:             resp.FinishReason,
+		InputTokens:              resp.InputTokens,
+		OutputTokens:             resp.OutputTokens,
+		CacheCreationInputTokens: resp.CacheCreationInputTokens,
+		CacheReadInputTokens:     resp.CacheReadInputTokens,
+		ContextWindow:            ctxWindow,
+		ToolsUsed:                resp.ToolsUsed,
+		RequestID:                resp.RequestID,
+		Iterations:               resp.Iterations,
+		Exhausted:                resp.Exhausted,
+		ActiveTags:               resp.ActiveTags,
 	}, nil
+}
+
+func compileLoopAgentRequest(req looppkg.Request) *agent.Request {
+	// Convert messages.
+	msgs := make([]agent.Message, len(req.Messages))
+	for i, m := range req.Messages {
+		msgs[i] = agent.Message{Role: m.Role, Content: m.Content}
+	}
+
+	return &agent.Request{
+		Model:           req.Model,
+		ConversationID:  req.ConversationID,
+		Messages:        msgs,
+		SkipContext:     req.SkipContext,
+		AllowedTools:    append([]string(nil), req.AllowedTools...),
+		ExcludeTools:    append([]string(nil), req.ExcludeTools...),
+		SkipTagFilter:   req.SkipTagFilter,
+		Hints:           cloneStringMap(req.Hints),
+		InitialTags:     append([]string(nil), req.InitialTags...),
+		MaxIterations:   req.MaxIterations,
+		MaxOutputTokens: req.MaxOutputTokens,
+		ToolTimeout:     req.ToolTimeout,
+		UsageRole:       req.UsageRole,
+		UsageTaskName:   req.UsageTaskName,
+		SystemPrompt:    req.SystemPrompt,
+	}
+}
+
+func cloneStringMap(src map[string]string) map[string]string {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := make(map[string]string, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
 }
 
 // itoa converts an int to a string without importing strconv at the top

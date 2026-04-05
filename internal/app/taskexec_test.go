@@ -364,11 +364,11 @@ func TestRunScheduledTask_PayloadPartialOverride(t *testing.T) {
 	}
 }
 
-func TestBuildScheduledTaskLoopSeed(t *testing.T) {
+func TestBuildScheduledTaskLoopProfile(t *testing.T) {
 	tests := []struct {
 		name string
 		task *scheduler.Task
-		want router.LoopSeed
+		want router.LoopProfile
 	}{
 		{
 			name: "defaults",
@@ -378,7 +378,7 @@ func TestBuildScheduledTaskLoopSeed(t *testing.T) {
 					Kind: scheduler.PayloadWake,
 				},
 			},
-			want: router.LoopSeed{
+			want: router.LoopProfile{
 				LocalOnly:        "true",
 				QualityFloor:     "1",
 				Mission:          "automation",
@@ -402,7 +402,7 @@ func TestBuildScheduledTaskLoopSeed(t *testing.T) {
 					},
 				},
 			},
-			want: router.LoopSeed{
+			want: router.LoopProfile{
 				Model:            "claude-sonnet-4-20250514",
 				LocalOnly:        "false",
 				QualityFloor:     "7",
@@ -418,7 +418,7 @@ func TestBuildScheduledTaskLoopSeed(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := buildScheduledTaskLoopSeed(tt.task)
+			got := buildScheduledTaskLoopProfile(tt.task)
 
 			if got.Model != tt.want.Model {
 				t.Fatalf("Model = %q, want %q", got.Model, tt.want.Model)

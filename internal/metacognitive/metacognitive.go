@@ -137,18 +137,25 @@ type Opts struct {
 	StateFileName string
 }
 
-// BuildLoopConfig returns a [loop.Config] that implements the
-// metacognitive loop. The returned config uses TaskBuilder and
-// PostIterate closures to read state, build prompts, and append
-// iteration logs — all previously handled by the old Loop struct.
-func BuildLoopConfig(cfg Config, opts Opts) loop.Config {
-	return loop.Config{
+// BuildSpec returns a [loop.Spec] that implements the metacognitive
+// loop as a standard loops-ng service. The returned spec uses
+// TaskBuilder and PostIterate closures to read state, build prompts,
+// and append iteration logs.
+func BuildSpec(cfg Config, opts Opts) loop.Spec {
+	return loop.Spec{
 		Name:         "metacognitive",
+		Operation:    loop.OperationService,
+		Completion:   loop.CompletionNone,
 		SleepMin:     cfg.MinSleep,
 		SleepMax:     cfg.MaxSleep,
 		SleepDefault: cfg.DefaultSleep,
 		Jitter:       loop.Float64Ptr(cfg.Jitter),
 		ExcludeTools: metacogExcludeTools,
+		Profile: router.LoopProfile{
+			Mission:          "metacognitive",
+			DelegationGating: "disabled",
+			ExtraHints:       map[string]string{"source": "metacognitive"},
+		},
 
 		Supervisor:     cfg.SupervisorProbability > 0,
 		SupervisorProb: cfg.SupervisorProbability,
@@ -156,12 +163,6 @@ func BuildLoopConfig(cfg Config, opts Opts) loop.Config {
 		// TaskBuilder handles supervisor augmentation itself via
 		// prompts.MetacognitivePrompt, so SupervisorContext is empty.
 		SupervisorQualityFloor: cfg.SupervisorQualityFloor,
-
-		Hints: map[string]string{
-			"source":                    "metacognitive",
-			router.HintMission:          "metacognitive",
-			router.HintDelegationGating: "disabled",
-		},
 
 		TaskBuilder: func(ctx context.Context, isSupervisor bool) (string, error) {
 			stateContent, err := readStateFile(opts.StateFilePath)
@@ -188,6 +189,24 @@ func BuildLoopConfig(cfg Config, opts Opts) loop.Config {
 			return nil
 		},
 	}
+}
+
+// BuildLoopConfig returns the engine-facing [loop.Config] view of the
+// metacognitive loop. Kept as a compatibility bridge while loops-ng
+// adoption is in progress.
+func BuildLoopConfig(cfg Config, opts Opts) loop.Config {
+	spec := BuildSpec(cfg, opts)
+	out := spec.ToConfig()
+	profileHints := spec.Profile.Hints()
+	if len(profileHints) > 0 {
+		if out.Hints == nil {
+			out.Hints = make(map[string]string, len(profileHints))
+		}
+		for k, v := range profileHints {
+			out.Hints[k] = v
+		}
+	}
+	return out
 }
 
 // metacogExcludeTools lists tools that the metacognitive loop should not

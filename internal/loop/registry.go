@@ -5,8 +5,12 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strings"
 	"sync"
+	"time"
 )
+
+const detachedCompletionTimeout = 10 * time.Second
 
 // Registry tracks all active loops and provides visibility into what is
 // running. It enforces concurrency limits and coordinates graceful
@@ -209,15 +213,7 @@ func (r *Registry) ShutdownAll(ctx context.Context) int {
 	return stopped
 }
 
-// SpawnLoop creates a new loop with the given config, registers it, and
-// starts it. This is the primary entry point for creating loops. Returns
-// the loop ID on success.
-func (r *Registry) SpawnLoop(ctx context.Context, cfg Config, deps Deps) (string, error) {
-	l, err := New(cfg, deps)
-	if err != nil {
-		return "", fmt.Errorf("create loop %q: %w", cfg.Name, err)
-	}
-
+func (r *Registry) configureLoop(l *Loop, setup func(*Loop)) {
 	// Apply the default active tags callback so every loop can
 	// surface active capabilities on the dashboard. The callback
 	// returns nil when no tags are configured, which is safe.
@@ -230,28 +226,192 @@ func (r *Registry) SpawnLoop(ctx context.Context, cfg Config, deps Deps) (string
 
 	// Call Setup before Register/Start so the caller can register
 	// tools or perform other initialization that needs *Loop.
-	if cfg.Setup != nil {
-		cfg.Setup(l)
+	if setup != nil {
+		setup(l)
 	}
+}
+
+func (r *Registry) startLoop(ctx context.Context, name string, l *Loop, setup func(*Loop), autoDeregister bool) error {
+	r.configureLoop(l, setup)
 
 	if err := r.Register(l); err != nil {
-		return "", err
+		return err
 	}
 
 	if err := l.Start(ctx); err != nil {
 		r.Deregister(l.id)
-		return "", fmt.Errorf("start loop %q: %w", cfg.Name, err)
+		return fmt.Errorf("start loop %q: %w", name, err)
 	}
 
-	// Automatically deregister the loop when its goroutine exits so
-	// that naturally completed loops (MaxIter, MaxDuration, context
-	// cancellation) do not consume registry capacity.
-	go func(id string, done <-chan struct{}) {
-		<-done
-		r.Deregister(id)
-	}(l.id, l.Done())
+	if autoDeregister {
+		go func(id string, done <-chan struct{}) {
+			<-done
+			r.Deregister(id)
+		}(l.id, l.Done())
+	}
+
+	return nil
+}
+
+// SpawnLoop creates a new loop with the given config, registers it, and
+// starts it. This is the primary entry point for creating loops. Returns
+// the loop ID on success.
+func (r *Registry) SpawnLoop(ctx context.Context, cfg Config, deps Deps) (string, error) {
+	l, err := New(cfg, deps)
+	if err != nil {
+		return "", fmt.Errorf("create loop %q: %w", cfg.Name, err)
+	}
+	if err := r.startLoop(ctx, cfg.Name, l, cfg.Setup, true); err != nil {
+		return "", err
+	}
 
 	return l.id, nil
+}
+
+// SpawnSpec creates, registers, and starts a loop from a [Spec]. It is
+// the additive loops-ng entrypoint while existing call sites continue to
+// use [Registry.SpawnLoop] with [Config].
+func (r *Registry) SpawnSpec(ctx context.Context, spec Spec, deps Deps) (string, error) {
+	l, err := NewFromSpec(spec, deps)
+	if err != nil {
+		return "", fmt.Errorf("create loop %q: %w", spec.Name, err)
+	}
+	if err := r.startLoop(ctx, spec.Name, l, spec.ToConfig().Setup, true); err != nil {
+		return "", err
+	}
+
+	return l.id, nil
+}
+
+// Launch starts a loops-ng [Launch]. Request/reply launches wait for
+// completion and return a final status snapshot; background and service
+// launches detach immediately and leave the loop running in the
+// registry.
+func (r *Registry) Launch(ctx context.Context, launch Launch, deps Deps) (LaunchResult, error) {
+	if err := launch.Validate(); err != nil {
+		return LaunchResult{}, err
+	}
+
+	spec := launch.Spec
+	spec.Operation = effectiveOperation(spec.Operation)
+	l, err := NewFromLaunch(launch, deps)
+	if err != nil {
+		return LaunchResult{}, fmt.Errorf("create loop %q: %w", spec.Name, err)
+	}
+
+	cfg := l.config
+	detached := spec.Operation != OperationRequestReply
+	if err := r.startLoop(ctx, spec.Name, l, cfg.Setup, detached); err != nil {
+		return LaunchResult{}, err
+	}
+
+	result := LaunchResult{
+		LoopID:    l.id,
+		Operation: spec.Operation,
+		Detached:  detached,
+	}
+	if detached {
+		r.startDetachedCompletion(launch, l)
+		return result, nil
+	}
+
+	finalStatus := make(chan Status, 1)
+	go func() {
+		<-l.Done()
+		finalStatus <- l.Status()
+		r.Deregister(l.id)
+	}()
+
+	waitCtx := ctx
+	waitCancel := func() {}
+	if launch.RunTimeout > 0 {
+		waitCtx, waitCancel = context.WithTimeout(ctx, launch.RunTimeout)
+	}
+	defer waitCancel()
+
+	select {
+	case st := <-finalStatus:
+		result.Response = l.lastResponseSnapshot()
+		result.FinalStatus = &st
+		return result, nil
+	case <-waitCtx.Done():
+		if launch.RunTimeout > 0 && waitCtx.Err() == context.DeadlineExceeded {
+			l.Stop()
+		}
+		return result, waitCtx.Err()
+	}
+}
+
+func (r *Registry) startDetachedCompletion(launch Launch, l *Loop) {
+	if l == nil {
+		return
+	}
+	if launch.Spec.Completion != CompletionConversation {
+		return
+	}
+	if l.deps.CompletionSink == nil {
+		return
+	}
+	conversationID := strings.TrimSpace(launch.CompletionConversationID)
+	if conversationID == "" {
+		return
+	}
+
+	go func() {
+		done := l.Done()
+		if done != nil {
+			<-done
+		}
+
+		resp := l.lastResponseSnapshot()
+		status := l.Status()
+		content := formatCompletionContent(launch, resp, status)
+		if strings.TrimSpace(content) == "" {
+			return
+		}
+
+		deliveryCtx, cancel := context.WithTimeout(context.Background(), detachedCompletionTimeout)
+		defer cancel()
+
+		if err := l.deps.CompletionSink(deliveryCtx, CompletionDelivery{
+			Mode:           CompletionConversation,
+			ConversationID: conversationID,
+			Content:        content,
+			LoopID:         l.id,
+			LoopName:       l.config.Name,
+			Response:       resp,
+			Status:         &status,
+		}); err != nil {
+			r.logger.Warn("detached loop completion delivery failed",
+				"loop_id", l.id,
+				"loop_name", l.config.Name,
+				"conversation_id", conversationID,
+				"error", err,
+			)
+		}
+	}()
+}
+
+func formatCompletionContent(launch Launch, resp *Response, status Status) string {
+	label := strings.TrimSpace(launch.Task)
+	if label == "" {
+		label = strings.TrimSpace(launch.Spec.Name)
+	}
+	if label == "" {
+		label = "background task"
+	}
+
+	prefix := fmt.Sprintf("Background task complete (%s).", label)
+	switch {
+	case resp != nil && strings.TrimSpace(resp.Content) != "":
+		return prefix + "\n\n" + resp.Content
+	case status.LastError != "":
+		return prefix + "\n\nTask failed: " + status.LastError
+	case resp != nil && resp.Exhausted && resp.FinishReason != "":
+		return prefix + "\n\nTask exhausted: " + resp.FinishReason
+	default:
+		return prefix
+	}
 }
 
 // StopLoop stops a loop by ID and deregisters it once the goroutine

@@ -74,7 +74,7 @@ func TestToolsHandleAddWithSeedArrays(t *testing.T) {
 	args := map[string]any{
 		"topic":         "arrays/test",
 		"exclude_tools": []any{"shell_exec", "web_fetch"},
-		"seed_tags":     []any{"homeassistant", "security"},
+		"initial_tags":  []any{"homeassistant", "security"},
 	}
 
 	_, err := tools.HandleAddWakeSubscription(context.Background(), args)
@@ -86,11 +86,11 @@ func TestToolsHandleAddWithSeedArrays(t *testing.T) {
 	if len(subs) != 1 {
 		t.Fatalf("expected 1 sub, got %d", len(subs))
 	}
-	if len(subs[0].Seed.ExcludeTools) != 2 {
-		t.Errorf("exclude_tools len = %d, want 2", len(subs[0].Seed.ExcludeTools))
+	if len(subs[0].Profile.ExcludeTools) != 2 {
+		t.Errorf("exclude_tools len = %d, want 2", len(subs[0].Profile.ExcludeTools))
 	}
-	if len(subs[0].Seed.SeedTags) != 2 {
-		t.Errorf("seed_tags len = %d, want 2", len(subs[0].Seed.SeedTags))
+	if len(subs[0].Profile.InitialTags) != 2 {
+		t.Errorf("initial_tags len = %d, want 2", len(subs[0].Profile.InitialTags))
 	}
 }
 
@@ -134,9 +134,9 @@ func TestToolsHandleRemove(t *testing.T) {
 func TestToolsHandleRemoveConfigProtected(t *testing.T) {
 	tools := newTestTools(t)
 
-	seed := router.LoopSeed{Mission: "automation"}
+	profile := router.LoopProfile{Mission: "automation"}
 	if err := tools.store.LoadConfig([]config.SubscriptionConfig{
-		{Topic: "config/test", Wake: &seed},
+		{Topic: "config/test", Wake: &profile},
 	}); err != nil {
 		t.Fatalf("LoadConfig: %v", err)
 	}

@@ -2,6 +2,7 @@ package loop
 
 import (
 	"context"
+	"encoding"
 	"errors"
 	"fmt"
 	"time"
@@ -46,6 +47,9 @@ const (
 // fires again while the loop is already running.
 type RetriggerMode int
 
+var _ encoding.TextMarshaler = RetriggerMode(0)
+var _ encoding.TextUnmarshaler = (*RetriggerMode)(nil)
+
 const (
 	// RetriggerSingle ignores re-triggers while the loop is running.
 	RetriggerSingle RetriggerMode = iota
@@ -56,6 +60,61 @@ const (
 	// RetriggerSpawn spawns another instance of the loop.
 	RetriggerSpawn
 )
+
+// String returns the stable textual form of the retrigger mode.
+func (m RetriggerMode) String() string {
+	switch m {
+	case RetriggerSingle:
+		return "single"
+	case RetriggerRestart:
+		return "restart"
+	case RetriggerQueue:
+		return "queue"
+	case RetriggerSpawn:
+		return "spawn"
+	default:
+		return fmt.Sprintf("unknown(%d)", int(m))
+	}
+}
+
+// MarshalText implements [encoding.TextMarshaler].
+func (m RetriggerMode) MarshalText() ([]byte, error) {
+	switch m {
+	case RetriggerSingle, RetriggerRestart, RetriggerQueue, RetriggerSpawn:
+		return []byte(m.String()), nil
+	default:
+		return nil, fmt.Errorf("loop: unsupported retrigger mode %d", int(m))
+	}
+}
+
+// UnmarshalText implements [encoding.TextUnmarshaler].
+func (m *RetriggerMode) UnmarshalText(text []byte) error {
+	if m == nil {
+		return fmt.Errorf("loop: nil retrigger mode")
+	}
+	parsed, err := ParseRetriggerMode(string(text))
+	if err != nil {
+		return err
+	}
+	*m = parsed
+	return nil
+}
+
+// ParseRetriggerMode parses the stable textual form of a retrigger mode.
+func ParseRetriggerMode(raw string) (RetriggerMode, error) {
+	switch raw {
+	case "", "single":
+		return RetriggerSingle, nil
+	case "restart":
+		return RetriggerRestart, nil
+	case "queue":
+		return RetriggerQueue, nil
+	case "spawn":
+		return RetriggerSpawn, nil
+	default:
+		return RetriggerSingle, fmt.Errorf("loop: unsupported retrigger mode %q", raw)
+	}
+}
 
 // Config holds the configuration for a loop. All fields with zero values
 // use sensible defaults.
@@ -166,7 +225,7 @@ type Config struct {
 	// skips iteration accounting and continues to the next cycle.
 	Handler func(ctx context.Context, event any) error `json:"-"`
 
-	// Hints are merged into RunRequest hints for each iteration.
+	// Hints are merged into Request hints for each iteration.
 	// Config hints override loop-generated defaults (e.g., setting
 	// "source" to "metacognitive" instead of "loop").
 	Hints map[string]string

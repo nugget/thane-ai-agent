@@ -384,6 +384,35 @@ func TestFormatToolsUsed_Sorted(t *testing.T) {
 
 // --- BuildLoopConfig tests ---
 
+func TestBuildSpec(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := testConfig()
+	opts := Opts{
+		WorkspacePath: tmpDir,
+		StateFilePath: filepath.Join(tmpDir, cfg.StateFile),
+	}
+
+	spec := BuildSpec(cfg, opts)
+	if spec.Name != "metacognitive" {
+		t.Errorf("Name = %q, want metacognitive", spec.Name)
+	}
+	if spec.Operation != loop.OperationService {
+		t.Errorf("Operation = %q, want %q", spec.Operation, loop.OperationService)
+	}
+	if spec.Completion != loop.CompletionNone {
+		t.Errorf("Completion = %q, want %q", spec.Completion, loop.CompletionNone)
+	}
+	if spec.Profile.Mission != "metacognitive" {
+		t.Errorf("Profile.Mission = %q, want metacognitive", spec.Profile.Mission)
+	}
+	if spec.Profile.DelegationGating != "disabled" {
+		t.Errorf("Profile.DelegationGating = %q, want disabled", spec.Profile.DelegationGating)
+	}
+	if spec.Profile.ExtraHints["source"] != "metacognitive" {
+		t.Errorf("Profile.ExtraHints[source] = %q, want metacognitive", spec.Profile.ExtraHints["source"])
+	}
+}
+
 func TestBuildLoopConfig(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := testConfig()

@@ -56,7 +56,7 @@ func newTestWakeStore(t *testing.T) *mqtt.SubscriptionStore {
 
 func TestMQTTWakeHandlerMatchingTopic(t *testing.T) {
 	store := newTestWakeStore(t)
-	seed := router.LoopSeed{
+	seed := router.LoopProfile{
 		Mission:          "automation",
 		QualityFloor:     "7",
 		DelegationGating: "disabled",
@@ -148,7 +148,7 @@ func TestMQTTWakeHandlerNoMatchFallback(t *testing.T) {
 
 func TestMQTTWakeHandlerWithRegistry(t *testing.T) {
 	store := newTestWakeStore(t)
-	seed := router.LoopSeed{Instructions: "test instructions"}
+	seed := router.LoopProfile{Instructions: "test instructions"}
 	if err := store.LoadConfig([]config.SubscriptionConfig{
 		{Topic: "home/sensor/wake", Wake: &seed},
 	}); err != nil {
@@ -193,8 +193,8 @@ func TestMQTTWakeHandlerWithRegistry(t *testing.T) {
 
 func TestMQTTWakeHandlerFanOut(t *testing.T) {
 	store := newTestWakeStore(t)
-	seedA := router.LoopSeed{Mission: "automation", Instructions: "check temperature"}
-	seedB := router.LoopSeed{Mission: "background", Instructions: "log reading"}
+	seedA := router.LoopProfile{Mission: "automation", Instructions: "check temperature"}
+	seedB := router.LoopProfile{Mission: "background", Instructions: "log reading"}
 	if err := store.LoadConfig([]config.SubscriptionConfig{
 		{Topic: "sensors/+/reading", Wake: &seedA},
 		{Topic: "sensors/+/reading", Wake: &seedB},
@@ -242,7 +242,7 @@ func TestMQTTWakeHandlerFanOut(t *testing.T) {
 
 func TestMQTTWakeHandlerNoRegistryDropsMessage(t *testing.T) {
 	store := newTestWakeStore(t)
-	seed := router.LoopSeed{Mission: "automation"}
+	seed := router.LoopProfile{Mission: "automation"}
 	if err := store.LoadConfig([]config.SubscriptionConfig{
 		{Topic: "test/topic", Wake: &seed},
 	}); err != nil {
@@ -310,25 +310,25 @@ func TestBuildWakeMessage(t *testing.T) {
 	}
 }
 
-func TestApplyLoopSeed(t *testing.T) {
-	seed := router.LoopSeed{
+func TestApplyLoopProfile(t *testing.T) {
+	seed := router.LoopProfile{
 		Model:            "claude-3-opus",
 		QualityFloor:     "8",
 		Mission:          "automation",
 		LocalOnly:        "false",
 		DelegationGating: "disabled",
 		ExcludeTools:     []string{"shell_exec"},
-		SeedTags:         []string{"homeassistant"},
+		InitialTags:      []string{"homeassistant"},
 		ExtraHints:       map[string]string{"custom": "value"},
 	}
 
 	req := &agent.Request{
 		Hints:        map[string]string{"existing": "hint"},
 		ExcludeTools: []string{"files_read"},
-		SeedTags:     []string{"baseline"},
+		InitialTags:  []string{"baseline"},
 	}
 
-	applyLoopSeed(&seed, req)
+	applyLoopProfile(&seed, req)
 
 	if req.Model != "claude-3-opus" {
 		t.Errorf("Model = %q, want %q", req.Model, "claude-3-opus")
@@ -348,8 +348,8 @@ func TestApplyLoopSeed(t *testing.T) {
 	if len(req.ExcludeTools) != 2 || req.ExcludeTools[0] != "files_read" || req.ExcludeTools[1] != "shell_exec" {
 		t.Errorf("ExcludeTools = %v, want [files_read shell_exec]", req.ExcludeTools)
 	}
-	if len(req.SeedTags) != 2 || req.SeedTags[0] != "baseline" || req.SeedTags[1] != "homeassistant" {
-		t.Errorf("SeedTags = %v, want [baseline homeassistant]", req.SeedTags)
+	if len(req.InitialTags) != 2 || req.InitialTags[0] != "baseline" || req.InitialTags[1] != "homeassistant" {
+		t.Errorf("InitialTags = %v, want [baseline homeassistant]", req.InitialTags)
 	}
 }
 

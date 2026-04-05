@@ -18,21 +18,24 @@ import (
 // Runner abstracts the agent loop for LLM calls. Satisfied by
 // *agent.Loop. Defined here to avoid a circular import.
 type Runner interface {
-	Run(ctx context.Context, req RunRequest, stream StreamCallback) (*RunResponse, error)
+	Run(ctx context.Context, req Request, stream StreamCallback) (*Response, error)
 }
 
-// RunRequest mirrors the fields of agent.Request that loops need.
-// The loop package defines its own type to avoid importing agent.
-type RunRequest struct {
-	ConversationID string
-	Messages       []RunMessage
-	ExcludeTools   []string
-	SkipTagFilter  bool
-	Hints          map[string]string
-	// SeedTags are capability tags to activate at the start of the Run,
+// Request mirrors the loop-facing fields of agent.Request. The loop
+// package defines its own type to avoid importing agent.
+type Request struct {
+	Model          string            `yaml:"model,omitempty" json:"model,omitempty"`
+	ConversationID string            `yaml:"conversation_id,omitempty" json:"conversation_id,omitempty"`
+	Messages       []Message         `yaml:"messages,omitempty" json:"messages,omitempty"`
+	SkipContext    bool              `yaml:"skip_context,omitempty" json:"skip_context,omitempty"`
+	AllowedTools   []string          `yaml:"allowed_tools,omitempty" json:"allowed_tools,omitempty"`
+	ExcludeTools   []string          `yaml:"exclude_tools,omitempty" json:"exclude_tools,omitempty"`
+	SkipTagFilter  bool              `yaml:"skip_tag_filter,omitempty" json:"skip_tag_filter,omitempty"`
+	Hints          map[string]string `yaml:"hints,omitempty" json:"hints,omitempty"`
+	// InitialTags are capability tags to activate at the start of the Run,
 	// in addition to always-active and channel-pinned tags. Used by loops
 	// to carry forward tags activated in previous iterations.
-	SeedTags []string
+	InitialTags []string `yaml:"initial_tags,omitempty" json:"initial_tags,omitempty"`
 
 	// OnProgress is called by the Runner during execution to report
 	// in-flight activity (tool calls, LLM responses). The kind
@@ -40,30 +43,54 @@ type RunRequest struct {
 	// event-specific fields. The loop automatically injects loop_id
 	// and loop_name into data before publishing. Nil means no
 	// progress reporting.
-	OnProgress func(kind string, data map[string]any) `json:"-"`
+	OnProgress func(kind string, data map[string]any) `yaml:"-" json:"-"`
+
+	MaxIterations   int           `yaml:"max_iterations,omitempty" json:"max_iterations,omitempty"`
+	MaxOutputTokens int           `yaml:"max_output_tokens,omitempty" json:"max_output_tokens,omitempty"`
+	ToolTimeout     time.Duration `yaml:"tool_timeout,omitempty" json:"tool_timeout,omitempty"`
+	UsageRole       string        `yaml:"usage_role,omitempty" json:"usage_role,omitempty"`
+	UsageTaskName   string        `yaml:"usage_task_name,omitempty" json:"usage_task_name,omitempty"`
+	SystemPrompt    string        `yaml:"system_prompt,omitempty" json:"system_prompt,omitempty"`
 }
 
-// RunMessage is a chat message for the runner.
-type RunMessage struct {
-	Role    string
-	Content string
+// RunRequest is kept as a compatibility alias while loops-ng migrates
+// onto Request as the primary loop-facing run descriptor.
+type RunRequest = Request
+
+// Message is a chat message for the runner.
+type Message struct {
+	Role    string `yaml:"role" json:"role"`
+	Content string `yaml:"content" json:"content"`
 }
 
-// RunResponse mirrors agent.Response fields that loops consume.
-// RunResponse holds the result of an LLM call executed by a [Runner].
-type RunResponse struct {
-	Content       string
-	Model         string
-	InputTokens   int
-	OutputTokens  int
-	ContextWindow int
-	ToolsUsed     map[string]int
-	RequestID     string
+// RunMessage is kept as a compatibility alias while loops-ng migrates
+// onto Message as the primary loop-facing message type.
+type RunMessage = Message
+
+// Response mirrors agent.Response fields that loops consume. It holds
+// the result of an LLM call executed by a [Runner].
+type Response struct {
+	Content                  string         `yaml:"content,omitempty" json:"content,omitempty"`
+	Model                    string         `yaml:"model,omitempty" json:"model,omitempty"`
+	FinishReason             string         `yaml:"finish_reason,omitempty" json:"finish_reason,omitempty"`
+	InputTokens              int            `yaml:"input_tokens,omitempty" json:"input_tokens,omitempty"`
+	OutputTokens             int            `yaml:"output_tokens,omitempty" json:"output_tokens,omitempty"`
+	CacheCreationInputTokens int            `yaml:"cache_creation_input_tokens,omitempty" json:"cache_creation_input_tokens,omitempty"`
+	CacheReadInputTokens     int            `yaml:"cache_read_input_tokens,omitempty" json:"cache_read_input_tokens,omitempty"`
+	ContextWindow            int            `yaml:"context_window,omitempty" json:"context_window,omitempty"`
+	ToolsUsed                map[string]int `yaml:"tools_used,omitempty" json:"tools_used,omitempty"`
+	RequestID                string         `yaml:"request_id,omitempty" json:"request_id,omitempty"`
+	Iterations               int            `yaml:"iterations,omitempty" json:"iterations,omitempty"`
+	Exhausted                bool           `yaml:"exhausted,omitempty" json:"exhausted,omitempty"`
 	// ActiveTags is the set of capability tags that were active at the
 	// end of the Run. Loops use this to carry forward activations to
 	// subsequent iterations.
-	ActiveTags []string
+	ActiveTags []string `yaml:"active_tags,omitempty" json:"active_tags,omitempty"`
 }
+
+// RunResponse is kept as a compatibility alias while loops-ng
+// migrates onto Response as the primary loop-facing response type.
+type RunResponse = Response
 
 // StreamCallback receives streaming events. Nil disables streaming.
 type StreamCallback func(event any)
@@ -94,6 +121,9 @@ type Deps struct {
 	// Runner executes LLM iterations. Required unless [Config].Handler
 	// is set (Handler-only loops do not call the Runner).
 	Runner Runner
+	// CompletionSink receives detached completion deliveries such as
+	// background-task results injected into conversations.
+	CompletionSink CompletionSink
 	// Logger for loop operations. Defaults to slog.Default().
 	Logger *slog.Logger
 	// EventBus publishes loop lifecycle events. Nil disables events.
@@ -142,9 +172,33 @@ type Loop struct {
 	// read it via [Loop.CurrentConvID].
 	currentConvID string
 
+	// requestBase carries the per-iteration request shaping derived
+	// from a loops-ng [Spec]'s [router.LoopProfile]. It is additive and
+	// only populated for loops created via [NewFromSpec].
+	requestBase Request
+
+	// requestOverride carries launch-specific per-run overrides
+	// applied on top of the spec/profile-derived request shaping.
+	requestOverride Request
+
+	// requestInstructions is extra guidance derived from a loops-ng
+	// [Spec]'s [router.LoopProfile]. It is prepended to each iteration
+	// task when present.
+	requestInstructions string
+
+	// lastResponse is the most recent successful runner response for
+	// this loop. Joined request/reply launches surface this as their
+	// concrete result payload once the loop finishes.
+	lastResponse *Response
+
+	// taskOverride replaces the spec/config task for launch-driven,
+	// one-shot runs that need per-run input without mutating the
+	// underlying [Spec].
+	taskOverride string
+
 	// activatedTags tracks capability tags activated during previous
-	// iterations. Carried forward via SeedTags on the next RunRequest
-	// so activations persist across the loop's lifetime.
+	// iterations. Carried forward via InitialTags on the next Request so
+	// activations persist across the loop's lifetime.
 	activatedTags []string
 
 	// recentConvIDs is a ring buffer of conversation IDs from the most
@@ -213,6 +267,61 @@ func New(cfg Config, deps Deps) (*Loop, error) {
 		deps:   deps,
 		state:  StatePending,
 	}, nil
+}
+
+// NewFromSpec creates a loop from a [Spec], validating the loops-ng
+// fields before compiling the engine-facing [Config]. This is an
+// additive bridge for gradually moving call sites onto Spec.
+func NewFromSpec(spec Spec, deps Deps) (*Loop, error) {
+	if err := spec.Validate(); err != nil {
+		return nil, err
+	}
+	l, err := New(spec.ToConfig(), deps)
+	if err != nil {
+		return nil, err
+	}
+	l.requestBase = spec.profileRequest()
+	l.requestInstructions = spec.Profile.Instructions
+	return l, nil
+}
+
+// NewFromLaunch creates a loop from a [Launch], validating the launch,
+// compiling the underlying [Spec], and applying per-run request and
+// metadata overrides. This is the additive bridge used by
+// [Registry.Launch].
+func NewFromLaunch(launch Launch, deps Deps) (*Loop, error) {
+	if err := launch.Validate(); err != nil {
+		return nil, err
+	}
+
+	spec := launch.Spec
+	if launch.Task != "" && spec.Task == "" && spec.TaskBuilder == nil && spec.Handler == nil {
+		spec.Task = launch.Task
+	}
+	cfg := spec.ToConfig()
+	if launch.ParentID != "" {
+		cfg.ParentID = launch.ParentID
+	}
+	if len(launch.Metadata) > 0 {
+		merged := cloneStringMap(cfg.Metadata)
+		if merged == nil {
+			merged = make(map[string]string, len(launch.Metadata))
+		}
+		for k, v := range launch.Metadata {
+			merged[k] = v
+		}
+		cfg.Metadata = merged
+	}
+
+	l, err := New(cfg, deps)
+	if err != nil {
+		return nil, err
+	}
+	l.requestBase = spec.profileRequest()
+	l.requestInstructions = spec.Profile.Instructions
+	l.requestOverride = launch.requestOverride()
+	l.taskOverride = launch.Task
+	return l, nil
 }
 
 // ID returns the unique loop identifier.
@@ -1012,22 +1121,53 @@ func (l *Loop) iterate(ctx context.Context, isSupervisor bool, convID string) (*
 			task = l.config.SupervisorContext + "\n\n" + task
 		}
 	}
+	if l.taskOverride != "" {
+		task = l.taskOverride
+	}
+
+	if l.requestInstructions != "" {
+		task = "Instructions: " + l.requestInstructions + "\n\n" + task
+	}
+
+	// Merge loops-ng profile hints over loop-generated defaults.
+	for k, v := range l.requestBase.Hints {
+		hints[k] = v
+	}
 
 	// Merge config hints over loop-generated defaults.
 	for k, v := range l.config.Hints {
 		hints[k] = v
 	}
+	for k, v := range l.requestOverride.Hints {
+		hints[k] = v
+	}
 
-	req := RunRequest{
-		ConversationID: convID,
-		Messages: []RunMessage{
+	conversationID := convID
+	if l.requestOverride.ConversationID != "" {
+		conversationID = l.requestOverride.ConversationID
+	}
+
+	skipTagFilter := len(l.config.Tags) == 0 || l.requestOverride.SkipTagFilter
+
+	req := Request{
+		Model:          firstNonEmpty(l.requestOverride.Model, l.requestBase.Model),
+		ConversationID: conversationID,
+		Messages: []Message{
 			{Role: "user", Content: task},
 		},
-		ExcludeTools:  l.config.ExcludeTools,
-		SkipTagFilter: len(l.config.Tags) == 0,
-		Hints:         hints,
-		OnProgress:    l.makeProgressFunc(),
-		SeedTags:      l.activatedTags, // carry forward from previous iterations
+		SkipContext:     l.requestOverride.SkipContext,
+		AllowedTools:    append([]string(nil), l.requestOverride.AllowedTools...),
+		ExcludeTools:    mergeUniqueStrings(l.requestBase.ExcludeTools, l.config.ExcludeTools, l.requestOverride.ExcludeTools),
+		SkipTagFilter:   skipTagFilter,
+		Hints:           hints,
+		OnProgress:      composeProgressFuncs(l.makeProgressFunc(), l.requestOverride.OnProgress),
+		InitialTags:     mergeUniqueStrings(l.requestBase.InitialTags, l.requestOverride.InitialTags, l.activatedTags),
+		MaxIterations:   l.requestOverride.MaxIterations,
+		MaxOutputTokens: l.requestOverride.MaxOutputTokens,
+		ToolTimeout:     l.requestOverride.ToolTimeout,
+		UsageRole:       l.requestOverride.UsageRole,
+		UsageTaskName:   l.requestOverride.UsageTaskName,
+		SystemPrompt:    l.requestOverride.SystemPrompt,
 	}
 
 	resp, err := l.deps.Runner.Run(ctx, req, nil)
@@ -1038,6 +1178,7 @@ func (l *Loop) iterate(ctx context.Context, isSupervisor bool, convID string) (*
 	if err == nil {
 		l.mu.Lock()
 		l.activatedTags = resp.ActiveTags
+		l.lastResponse = cloneResponse(resp)
 		l.mu.Unlock()
 	}
 	if err != nil {
@@ -1054,6 +1195,76 @@ func (l *Loop) iterate(ctx context.Context, isSupervisor bool, convID string) (*
 		Elapsed:       time.Since(iterStart),
 		Supervisor:    isSupervisor,
 	}, nil
+}
+
+func mergeUniqueStrings(parts ...[]string) []string {
+	var merged []string
+	seen := make(map[string]struct{})
+	for _, part := range parts {
+		for _, item := range part {
+			if item == "" {
+				continue
+			}
+			if _, ok := seen[item]; ok {
+				continue
+			}
+			seen[item] = struct{}{}
+			merged = append(merged, item)
+		}
+	}
+	if len(merged) == 0 {
+		return nil
+	}
+	return merged
+}
+
+func composeProgressFuncs(callbacks ...func(kind string, data map[string]any)) func(kind string, data map[string]any) {
+	var active []func(kind string, data map[string]any)
+	for _, cb := range callbacks {
+		if cb != nil {
+			active = append(active, cb)
+		}
+	}
+	if len(active) == 0 {
+		return nil
+	}
+	return func(kind string, data map[string]any) {
+		for _, cb := range active {
+			cb(kind, data)
+		}
+	}
+}
+
+func cloneResponse(resp *Response) *Response {
+	if resp == nil {
+		return nil
+	}
+	out := *resp
+	if len(resp.ToolsUsed) > 0 {
+		out.ToolsUsed = make(map[string]int, len(resp.ToolsUsed))
+		for k, v := range resp.ToolsUsed {
+			out.ToolsUsed[k] = v
+		}
+	}
+	if len(resp.ActiveTags) > 0 {
+		out.ActiveTags = append([]string(nil), resp.ActiveTags...)
+	}
+	return &out
+}
+
+func (l *Loop) lastResponseSnapshot() *Response {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return cloneResponse(l.lastResponse)
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // computeSleep returns the sleep duration for the next cycle. If

@@ -24,6 +24,8 @@ func (a *App) initDelegation(s *newState) error {
 	// Register thane_delegate tool AFTER all other tools so the delegate
 	// executor's parent registry snapshot includes the full tool set.
 	delegateExec := delegate.NewExecutor(logger, a.llmClient, a.rtr, a.loop.Tools(), a.modelCatalog.DefaultModel)
+	conversationInjector := &conversationSystemInjector{mem: a.mem, archiver: a.archiveAdapter}
+	completionDispatcher := newDetachedLoopCompletionDispatcher(conversationInjector)
 	if len(cfg.Delegate.Profiles) > 0 {
 		overrides := make(map[string]delegate.ProfileOverride, len(cfg.Delegate.Profiles))
 		for name, pc := range cfg.Delegate.Profiles {
@@ -44,7 +46,8 @@ func (a *App) initDelegation(s *newState) error {
 	delegateExec.SetUsageRecorder(a.usageStore, cfg.Pricing, a.modelCatalog)
 	delegateExec.UseModelRegistry(a.modelRegistry)
 	delegateExec.SetEventBus(a.eventBus)
-	delegateExec.ConfigureLoopExecution(a.loop, a.loopRegistry)
+	delegateExec.ConfigureLoopExecution(&loopAdapter{agentLoop: a.loop, router: a.rtr}, a.loopRegistry)
+	delegateExec.ConfigureLoopCompletionSink(completionDispatcher.Deliver)
 	delegateExec.ConfigureSessionLifecycle(a.archiveAdapter, a.mem)
 	var alwaysActiveTags []string
 	for tag, tagCfg := range cfg.CapabilityTags {
@@ -75,10 +78,9 @@ func (a *App) initDelegation(s *newState) error {
 	// notifications. Requires both the notification record store and the
 	// delegate executor (for spawning responses when the session is gone).
 	if a.notifRecords != nil {
-		sessionInj := &notifSessionInjector{mem: a.mem, archiver: a.archiveAdapter}
 		delegateSpn := &notifDelegateSpawner{exec: delegateExec}
 		a.notifCallbackDispatcher = notifications.NewCallbackDispatcher(
-			a.notifRecords, sessionInj, delegateSpn, cfg.MQTT.DeviceName, logger,
+			a.notifRecords, conversationInjector, delegateSpn, cfg.MQTT.DeviceName, logger,
 		)
 
 		// Use the router for escalation so timeout_action: "escalate"

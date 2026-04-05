@@ -370,7 +370,7 @@ talents_dir: ./talents
 #       topic: homeassistant/+/+/state
 #       Wake, when non-nil, enables agent wake on this topic. Messages
 #       arriving on the topic trigger an agent conversation using the
-#       seed's routing configuration. When nil, messages are received
+#       profile's routing configuration. When nil, messages are received
 #       for ambient awareness only (debug-logged, not acted upon).
 #       wake:
 #         model: ""
@@ -380,7 +380,7 @@ talents_dir: ./talents
 #         delegation_gating: ""
 #         prefer_speed: ""
 #         exclude_tools: []
-#         seed_tags: []
+#         initial_tags: []
 #         extra_hints: {}
 #         instructions: ""
 #     - # Topic is the MQTT topic filter (e.g., "homeassistant/+/+/state",
@@ -388,7 +388,7 @@ talents_dir: ./talents
 #       topic: frigate/events
 #       Wake, when non-nil, enables agent wake on this topic. Messages
 #       arriving on the topic trigger an agent conversation using the
-#       seed's routing configuration. When nil, messages are received
+#       profile's routing configuration. When nil, messages are received
 #       for ambient awareness only (debug-logged, not acted upon).
 #       wake:
 #         model: ""
@@ -398,7 +398,7 @@ talents_dir: ./talents
 #         delegation_gating: ""
 #         prefer_speed: ""
 #         exclude_tools: []
-#         seed_tags: []
+#         initial_tags: []
 #         extra_hints: {}
 #         instructions: ""
 #     - # Topic is the MQTT topic filter (e.g., "homeassistant/+/+/state",
@@ -406,7 +406,7 @@ talents_dir: ./talents
 #       topic: automation/wake/security
 #       Wake, when non-nil, enables agent wake on this topic. Messages
 #       arriving on the topic trigger an agent conversation using the
-#       seed's routing configuration. When nil, messages are received
+#       profile's routing configuration. When nil, messages are received
 #       for ambient awareness only (debug-logged, not acted upon).
 #       wake:
 #         model: ""
@@ -416,7 +416,7 @@ talents_dir: ./talents
 #         delegation_gating: disabled
 #         prefer_speed: ""
 #         exclude_tools: []
-#         seed_tags:
+#         initial_tags:
 #           - homeassistant
 #         extra_hints: {}
 #         instructions: Evaluate the security event and decide if action is needed.
@@ -708,6 +708,60 @@ talents_dir: ./talents
 #     QualityFloor is the minimum quality rating (1–10) for model
 #     selection. Default: 3 for normal iterations, 8 for supervisor.
 #     quality_floor: 8
+#
+# (optional) Loops configures immutable loop definitions loaded from the config
+# loops:
+#   Definitions is the set of config-defined loop specs. These specs
+#   are immutable at runtime; dynamic loop creation lives in the
+#   persistent overlay registry instead.
+#   definitions:
+#     - name: office_watch
+#       enabled: true
+#       task: Watch the office and report noteworthy changes or trends.
+#       profile:
+#         model: ""
+#         quality_floor: ""
+#         mission: background
+#         local_only: ""
+#         delegation_gating: disabled
+#         prefer_speed: ""
+#         exclude_tools: []
+#         initial_tags:
+#           - homeassistant
+#         extra_hints: {}
+#         instructions: Be concise and focus on high-signal observations.
+#       operation: service
+#       completion: none
+#       conditions:
+#         schedule:
+#           timezone: America/Chicago
+#           windows:
+#             - days:
+#                 - mon
+#                 - tue
+#                 - wed
+#                 - thu
+#                 - fri
+#               start: 08:30
+#               end: 18:00
+#       tags: []
+#       exclude_tools: []
+#       sleep_min: 2m
+#       sleep_max: 10m
+#       sleep_default: 5m
+#       jitter: 0.2
+#       max_duration: 0s
+#       max_iter: 0
+#       supervisor: false
+#       supervisor_prob: 0.0
+#       quality_floor: 0
+#       supervisor_context: ""
+#       supervisor_quality_floor: 0
+#       on_retrigger: 0
+#       hints: {}
+#       metadata:
+#         category: observer
+#       parent_id: ""
 #
 # (optional) OpenClaw configures the thane:openclaw Ollama profile, which
 # openclaw:
