@@ -44,7 +44,9 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/router"
 	"github.com/nugget/thane-ai-agent/internal/scheduler"
 	"github.com/nugget/thane-ai-agent/internal/server/api"
+	"github.com/nugget/thane-ai-agent/internal/telemetry"
 	"github.com/nugget/thane-ai-agent/internal/toolcatalog"
+	"github.com/nugget/thane-ai-agent/internal/unifi"
 	"github.com/nugget/thane-ai-agent/internal/usage"
 )
 
@@ -149,6 +151,13 @@ type App struct {
 
 	// Media
 	mediaStore *media.MediaStore
+
+	// Service loop runtimes hydrated into built-in loops-ng definitions.
+	unifiPoller        *unifi.Poller
+	haStateWatcher     *homeassistant.StateWatcher
+	emailPoller        *email.Poller
+	mediaFeedPoller    *media.FeedPoller
+	telemetryPublisher *telemetry.Publisher
 
 	// Checkpointing
 	checkpointer *checkpoint.Checkpointer

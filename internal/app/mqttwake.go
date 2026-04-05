@@ -33,7 +33,7 @@ const mqttWakeTimeout = 5 * time.Minute
 type mqttWakeDeps struct {
 	registry *looppkg.Registry
 	eventBus *events.Bus
-	parentID *atomic.Value // stores string; set by deferred worker, read by handler goroutines
+	parentID *atomic.Value // stores string; populated lazily from the mqtt service loop
 }
 
 // mqttWakeHandler returns a MessageHandler that dispatches agent
@@ -126,6 +126,14 @@ func dispatchViaLoop(
 	if deps.parentID != nil {
 		if v, ok := deps.parentID.Load().(string); ok {
 			parentID = v
+		}
+	}
+	if parentID == "" && deps.registry != nil {
+		if parent := deps.registry.GetByName(mqttPublisherDefinitionName); parent != nil {
+			parentID = parent.ID()
+			if deps.parentID != nil {
+				deps.parentID.Store(parentID)
+			}
 		}
 	}
 

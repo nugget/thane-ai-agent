@@ -15,7 +15,6 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/config"
 	"github.com/nugget/thane-ai-agent/internal/connwatch"
 	"github.com/nugget/thane-ai-agent/internal/contacts"
-	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
 	"github.com/nugget/thane-ai-agent/internal/platform"
 	"github.com/nugget/thane-ai-agent/internal/server/api"
 	"github.com/nugget/thane-ai-agent/internal/server/web"
@@ -218,6 +217,7 @@ func (a *App) initServers(s *newState) error {
 	// --- MQTT publisher ---
 	// Optional: publishes HA MQTT discovery messages and periodic sensor
 	// state updates so Thane appears as a native HA device.
+	var mqttConnectWorker func(context.Context) error
 	if cfg.MQTT.Configured() {
 		var err error
 		a.mqttInstanceID, err = mqtt.LoadOrCreateInstanceID(cfg.DataDir)
@@ -312,9 +312,9 @@ func (a *App) initServers(s *newState) error {
 			}
 		}
 
-		// Track the mqtt parent loop ID once it's spawned (deferred
-		// worker runs after this wiring, so we use atomic.Value for
-		// safe cross-goroutine access).
+		// Track the mqtt parent loop ID once the definition runtime
+		// starts the publisher loop. The wake handler can populate this
+		// lazily from the loop registry when the first message arrives.
 		var mqttParentID atomic.Value
 		mqttParentID.Store("") // initialize with zero-value string
 		wakeDeps := mqttWakeDeps{
@@ -332,10 +332,10 @@ func (a *App) initServers(s *newState) error {
 		mqttTools := mqtt.NewTools(subStore)
 		a.loop.Tools().SetMQTTSubscriptionTools(mqttTools)
 
-		// Defer MQTT connection, initial publish, and publisher loop
-		// to StartWorkers. The publisher object and message handler are
-		// already wired above; this just activates the network connection.
-		a.deferWorker("mqtt-connect", func(ctx context.Context) error {
+		// Defer MQTT connection to StartWorkers. The publisher object,
+		// tooling, and message handler are already wired above; this just
+		// activates the network connection.
+		mqttConnectWorker = func(ctx context.Context) error {
 			// Pass the long-lived server context as the lifecycle context
 			// for the MQTT ConnectionManager. A short-lived context here
 			// would kill the connection as soon as it expired (#572).
@@ -361,37 +361,13 @@ func (a *App) initServers(s *newState) error {
 			// Publish immediately on connect, then let the loop handle the schedule.
 			mqttPub.PublishStates(ctx)
 
-			mqttInterval := mqttPub.PublishInterval()
-			parentID, err := a.loopRegistry.SpawnLoop(ctx, looppkg.Config{
-				Name:         "mqtt",
-				SleepMin:     mqttInterval,
-				SleepMax:     mqttInterval,
-				SleepDefault: mqttInterval,
-				Jitter:       looppkg.Float64Ptr(0),
-				Handler: func(ctx context.Context, _ any) error {
-					mqttPub.PublishStates(ctx)
-					return nil
-				},
-				Metadata: map[string]string{
-					"subsystem": "mqtt",
-					"category":  "publisher",
-				},
-			}, looppkg.Deps{
-				Logger:   logger,
-				EventBus: a.eventBus,
-			})
-			if err != nil {
-				return fmt.Errorf("spawn mqtt loop: %w", err)
-			}
-			mqttParentID.Store(parentID)
-
 			logger.Info("mqtt connected",
 				"broker", cfg.MQTT.Broker,
 				"device_name", cfg.MQTT.DeviceName,
 				"interval", cfg.MQTT.PublishIntervalSec,
 			)
 			return nil
-		})
+		}
 
 		logger.Info("mqtt publishing enabled",
 			"broker", cfg.MQTT.Broker,
@@ -509,32 +485,7 @@ func (a *App) initServers(s *newState) error {
 
 		telCollector := telemetry.NewCollector(telSources)
 		telPub := telemetry.NewPublisher(telCollector, a.mqttPub, telBuilder, logger)
-
-		telInterval := time.Duration(cfg.MQTT.Telemetry.Interval) * time.Second
-		telLoopCfg := looppkg.Config{
-			Name:         "telemetry",
-			SleepMin:     telInterval,
-			SleepMax:     telInterval,
-			SleepDefault: telInterval,
-			Jitter:       looppkg.Float64Ptr(0),
-			Handler: func(ctx context.Context, _ any) error {
-				return telPub.Publish(ctx)
-			},
-			Metadata: map[string]string{
-				"subsystem": "mqtt",
-				"category":  "telemetry",
-			},
-		}
-		telLoopDeps := looppkg.Deps{
-			Logger:   logger,
-			EventBus: a.eventBus,
-		}
-		a.deferWorker("telemetry", func(ctx context.Context) error {
-			if _, err := a.loopRegistry.SpawnLoop(ctx, telLoopCfg, telLoopDeps); err != nil {
-				return fmt.Errorf("spawn telemetry loop: %w", err)
-			}
-			return nil
-		})
+		a.telemetryPublisher = telPub
 
 		logger.Info("mqtt telemetry enabled",
 			"interval", cfg.MQTT.Telemetry.Interval,
@@ -570,9 +521,8 @@ func (a *App) initServers(s *newState) error {
 	// --- Loop definition services ---
 	// Durable loops-ng service definitions are bootstrapped from the
 	// immutable+overlay definition registry. Built-in services like
-	// metacognitive can participate as first-class definitions via
-	// runtime spec hydration; remaining startup-owned services still
-	// start through their legacy paths for now.
+	// metacognitive, pollers, watchers, and MQTT publishers participate
+	// as first-class definitions via runtime spec hydration.
 	if a.loopDefinitionRuntime != nil {
 		a.deferWorker("loop-definition-services", func(ctx context.Context) error {
 			result, err := a.loopDefinitionRuntime.StartEnabledServices(ctx)
@@ -594,6 +544,9 @@ func (a *App) initServers(s *newState) error {
 		a.deferWorker("loop-definition-schedule", func(ctx context.Context) error {
 			return a.loopDefinitionRuntime.StartScheduleWatcher(ctx)
 		})
+	}
+	if mqttConnectWorker != nil {
+		a.deferWorker("mqtt-connect", mqttConnectWorker)
 	}
 
 	return nil

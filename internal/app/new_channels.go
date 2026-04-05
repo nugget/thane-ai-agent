@@ -19,7 +19,6 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/forge"
 	"github.com/nugget/thane-ai-agent/internal/knowledge"
 	"github.com/nugget/thane-ai-agent/internal/llm"
-	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
 	"github.com/nugget/thane-ai-agent/internal/mcp"
 	"github.com/nugget/thane-ai-agent/internal/media"
 	"github.com/nugget/thane-ai-agent/internal/memory"
@@ -155,28 +154,7 @@ func (a *App) initChannels(s *newState) error {
 		// an agent conversation only when new mail is detected.
 		if a.cfg.Email.PollIntervalSec > 0 {
 			poller := email.NewPoller(emailMgr, a.opStore, a.logger)
-			pollInterval := time.Duration(a.cfg.Email.PollIntervalSec) * time.Second
-			loopCfg := looppkg.Config{
-				Name:         "email-poller",
-				SleepMin:     pollInterval,
-				SleepMax:     pollInterval,
-				SleepDefault: pollInterval,
-				Jitter:       looppkg.Float64Ptr(0),
-				Handler:      emailPollHandler(poller, a.loop, a.logger),
-				Metadata: map[string]string{
-					"subsystem": "email",
-				},
-			}
-			loopDeps := looppkg.Deps{
-				Logger:   a.logger,
-				EventBus: a.eventBus,
-			}
-			a.deferWorker("email-poller", func(ctx context.Context) error {
-				if _, err := a.loopRegistry.SpawnLoop(ctx, loopCfg, loopDeps); err != nil {
-					return fmt.Errorf("spawn email poller loop: %w", err)
-				}
-				return nil
-			})
+			a.emailPoller = poller
 		}
 
 		a.logger.Info("email enabled", "accounts", emailMgr.AccountNames(), "poll_interval", a.cfg.Email.PollIntervalSec)
@@ -584,31 +562,10 @@ func (a *App) initChannels(s *newState) error {
 	// agent conversation only when new content is detected.
 	if a.cfg.Media.FeedCheckInterval > 0 {
 		feedPoller := media.NewFeedPoller(a.opStore, a.logger)
-		pollInterval := time.Duration(a.cfg.Media.FeedCheckInterval) * time.Second
-		loopCfg := looppkg.Config{
-			Name:         "media-feed-poller",
-			SleepMin:     pollInterval,
-			SleepMax:     pollInterval,
-			SleepDefault: pollInterval,
-			Jitter:       looppkg.Float64Ptr(0),
-			Handler:      mediaFeedHandler(feedPoller, a.loop, a.logger),
-			Metadata: map[string]string{
-				"subsystem": "media",
-			},
-		}
-		loopDeps := looppkg.Deps{
-			Logger:   a.logger,
-			EventBus: a.eventBus,
-		}
-		a.deferWorker("media-feed-poller", func(ctx context.Context) error {
-			if _, err := a.loopRegistry.SpawnLoop(ctx, loopCfg, loopDeps); err != nil {
-				return fmt.Errorf("spawn media feed poller loop: %w", err)
-			}
-			return nil
-		})
+		a.mediaFeedPoller = feedPoller
 
 		a.logger.Info("media feed polling enabled",
-			"interval", pollInterval,
+			"interval", time.Duration(a.cfg.Media.FeedCheckInterval)*time.Second,
 			"max_feeds", a.cfg.Media.MaxFeeds,
 		)
 	}

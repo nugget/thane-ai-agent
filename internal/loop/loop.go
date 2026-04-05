@@ -715,9 +715,10 @@ func (l *Loop) run(ctx context.Context) {
 			var waitErr error
 			event, waitErr = l.config.WaitFunc(ctx)
 			if waitErr != nil {
-				if ctx.Err() != nil {
+				if ctx.Err() != nil || errors.Is(waitErr, context.Canceled) || errors.Is(waitErr, context.DeadlineExceeded) {
 					logger.Debug("loop stopped while waiting for event",
 						"phase", "wait",
+						"error", waitErr,
 					)
 					break
 				}

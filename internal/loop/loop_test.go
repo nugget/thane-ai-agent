@@ -1486,6 +1486,45 @@ func TestWaitFuncError(t *testing.T) {
 	}
 }
 
+func TestWaitFuncContextCanceledStopsLoop(t *testing.T) {
+	t.Parallel()
+
+	var handled atomic.Int32
+	l, err := New(Config{
+		Name:         "wait-cancel",
+		SleepMin:     1 * time.Millisecond,
+		SleepMax:     2 * time.Millisecond,
+		SleepDefault: 1 * time.Millisecond,
+		Jitter:       Float64Ptr(0),
+		WaitFunc: func(context.Context) (any, error) {
+			return nil, context.Canceled
+		},
+		Handler: func(_ context.Context, _ any) error {
+			handled.Add(1)
+			return nil
+		},
+	}, Deps{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	_ = l.Start(context.Background())
+
+	select {
+	case <-l.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("loop did not finish within 5s")
+	}
+
+	status := l.Status()
+	if status.Iterations != 0 {
+		t.Errorf("iterations = %d, want 0", status.Iterations)
+	}
+	if handled.Load() != 0 {
+		t.Errorf("handled = %d, want 0", handled.Load())
+	}
+}
+
 func TestWaitFuncPublishesWaitEvent(t *testing.T) {
 	t.Parallel()
 
