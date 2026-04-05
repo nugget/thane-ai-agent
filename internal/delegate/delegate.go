@@ -1169,6 +1169,7 @@ func (e *Executor) prepareExecution(ctx context.Context, task, profileName, guid
 // selectModel picks a model for the delegate via the router or falls back to the default.
 func (e *Executor) selectModel(ctx context.Context, task string, profile *Profile, toolCount int) string {
 	log := logging.Logger(ctx)
+	needsStreaming := e.loopRunner != nil && e.loopRegistry != nil
 	if explicitModel, _ := router.OverlayDelegateHints(nil, tools.HintsFromContext(ctx)); explicitModel != "" {
 		log.Debug("delegate model selected by inherited policy",
 			"model", explicitModel,
@@ -1178,11 +1179,12 @@ func (e *Executor) selectModel(ctx context.Context, task string, profile *Profil
 	hints := e.effectiveDelegateRouterHints(ctx, profile)
 	if e.router != nil {
 		model, _ := e.router.Route(ctx, router.Request{
-			Query:      task,
-			NeedsTools: toolCount > 0,
-			ToolCount:  toolCount,
-			Priority:   router.PriorityBackground,
-			Hints:      hints,
+			Query:          task,
+			NeedsTools:     toolCount > 0,
+			NeedsStreaming: needsStreaming,
+			ToolCount:      toolCount,
+			Priority:       router.PriorityBackground,
+			Hints:          hints,
 		})
 		if model != "" {
 			log.Debug("delegate model selected by router",

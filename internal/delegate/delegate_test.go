@@ -788,6 +788,44 @@ func TestExecute_PremiumVirtualModelKeepsDelegateRoutingAdaptive(t *testing.T) {
 	}
 }
 
+func TestExecute_LoopBackedDelegateRequiresStreamingCapableModel(t *testing.T) {
+	rtr := router.NewRouter(slog.Default(), router.Config{
+		DefaultModel: "local-model",
+		LocalFirst:   true,
+		Models: []router.Model{
+			{Name: "local-model", Provider: "ollama", SupportsTools: true, SupportsStreaming: false, Speed: 8, Quality: 5, CostTier: 0, ContextWindow: 8192},
+			{Name: "cloud-model", Provider: "anthropic", SupportsTools: true, SupportsStreaming: true, Speed: 6, Quality: 10, CostTier: 3, ContextWindow: 8192},
+		},
+		MaxAuditLog: 10,
+	})
+
+	var captured looppkg.Request
+	runner := &mockLoopRunner{
+		onRun: func(req looppkg.Request) {
+			captured = req
+		},
+		resp: &looppkg.Response{
+			Content:      "streaming-capable delegate answer",
+			Model:        "cloud-model",
+			FinishReason: "stop",
+		},
+	}
+
+	exec := NewExecutor(slog.Default(), nil, rtr, newTestRegistry(), "local-model")
+	exec.ConfigureLoopExecution(runner, looppkg.NewRegistry())
+
+	result, err := exec.Execute(context.Background(), "Inspect the current working directory", "general", "", nil, nil)
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if captured.Model != "cloud-model" {
+		t.Fatalf("captured model = %q, want cloud-model", captured.Model)
+	}
+	if result.Content != "streaming-capable delegate answer" {
+		t.Fatalf("Content = %q, want streaming-capable delegate answer", result.Content)
+	}
+}
+
 func TestToolHandler_ExhaustedOutput(t *testing.T) {
 	// Always return tool calls to exhaust the iteration budget.
 	toolCallResp := &llm.ChatResponse{
