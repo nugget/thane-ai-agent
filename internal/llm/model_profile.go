@@ -69,9 +69,20 @@ func ProfileForModel(input ModelProfileInput) ModelInteractionProfile {
 	switch {
 	case strings.Contains(haystack, "claude") || strings.Contains(haystack, "anthropic"):
 		profile.Name = "anthropic_native"
+	case strings.Contains(haystack, "gpt-oss"):
+		// OpenAI's gpt-oss guidance distinguishes between direct Harmony
+		// deployments and provider-backed serving layers like Ollama or
+		// vLLM. In Thane we talk to provider APIs, so keep the prompt-side
+		// contract native and rely on provider normalization plus our
+		// runtime fallback if raw text still leaks through.
+		if input.TrainedForToolUse || strings.Contains(haystack, "ollama") || strings.Contains(haystack, "lmstudio") {
+			profile.Name = "gpt_oss_provider_native"
+			break
+		}
+		profile.Name = "gpt_oss_raw_text_tools"
+		profile.ToolCallStyle = ToolCallStyleRawTextJSON
 	case strings.Contains(haystack, "gemma"),
 		strings.Contains(haystack, "qwen"),
-		strings.Contains(haystack, "gpt-oss"),
 		strings.Contains(haystack, "llama"),
 		strings.Contains(haystack, "mistral"):
 		profile.Name = "local_raw_text_tools"

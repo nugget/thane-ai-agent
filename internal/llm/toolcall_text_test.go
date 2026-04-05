@@ -18,7 +18,7 @@ func TestParseTextToolCalls_FencedToolBlock(t *testing.T) {
 	}
 }
 
-func TestApplyTextToolCallFallback_SuppressesInvalidFencedToolShape(t *testing.T) {
+func TestApplyTextToolCallFallback_PreservesUnknownToolShapeForRuntimeRepair(t *testing.T) {
 	profile := DefaultToolCallTextProfile()
 	resp := &ChatResponse{
 		Message: Message{
@@ -28,11 +28,14 @@ func TestApplyTextToolCallFallback_SuppressesInvalidFencedToolShape(t *testing.T
 
 	ApplyTextToolCallFallback(resp, []string{"activate_capability", "deactivate_capability"}, profile)
 
-	if len(resp.Message.ToolCalls) != 0 {
-		t.Fatalf("len(tool_calls) = %d, want 0", len(resp.Message.ToolCalls))
+	if len(resp.Message.ToolCalls) != 1 {
+		t.Fatalf("len(tool_calls) = %d, want 1", len(resp.Message.ToolCalls))
+	}
+	if resp.Message.ToolCalls[0].Function.Name != "list_capabilities" {
+		t.Fatalf("tool name = %q, want list_capabilities", resp.Message.ToolCalls[0].Function.Name)
 	}
 	if resp.Message.Content != "" {
-		t.Fatalf("content = %q, want empty after suppressing hallucinated tool shape", resp.Message.Content)
+		t.Fatalf("content = %q, want empty after promoting repairable tool shape", resp.Message.Content)
 	}
 }
 
