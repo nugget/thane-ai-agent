@@ -1199,9 +1199,11 @@ function setSchemaCardLayout(entityKind, cardKey, layout) {
 
 function measureSchemaCardLayout(card) {
   const header = card.querySelector('.schema-card__header');
+  const titleShell = card.querySelector('.schema-card__title-shell');
+  const widgetShell = card.querySelector('.schema-card__widget-shell');
   const bodyShell = card.querySelector('.schema-card__body-shell');
   const body = card.querySelector('.schema-card__body');
-  if (!header || !bodyShell || !body) return null;
+  if (!header || !titleShell || !widgetShell || !bodyShell || !body) return null;
 
   const cardStyle = window.getComputedStyle(card);
   const headerStyle = window.getComputedStyle(header);
@@ -1213,26 +1215,36 @@ function measureSchemaCardLayout(card) {
   ].reduce((sum, value) => sum + (parseFloat(value) || 0), 0);
   const headerGap = parseFloat(headerStyle.marginBottom) || 0;
   const headerHeight = header.offsetHeight;
+  const prevTitleDisplay = titleShell.style.display;
+  const prevWidgetDisplay = widgetShell.style.display;
+  titleShell.style.display = titleShell.childNodes.length ? 'grid' : 'none';
+  widgetShell.style.display = widgetShell.childNodes.length ? 'grid' : 'none';
+  const titleHeightContent = titleShell.scrollHeight;
+  const widgetHeightContent = widgetShell.scrollHeight;
+  titleShell.style.display = prevTitleDisplay;
+  widgetShell.style.display = prevWidgetDisplay;
   const bodyHeight = body.scrollHeight;
 
   const titleHeight = Math.max(
-    Math.ceil(cardExtras + headerHeight + headerGap),
+    Math.ceil(cardExtras + headerHeight + (titleHeightContent > 0 ? headerGap + titleHeightContent : 0)),
     SCHEMA_CARD_PRESET_HEIGHTS.title,
   );
+  const widgetHeight = Math.max(
+    titleHeight,
+    Math.ceil(cardExtras + headerHeight + (widgetHeightContent > 0 ? headerGap + widgetHeightContent : 0)),
+  );
   const fullHeight = Math.max(
+    widgetHeight,
     titleHeight,
     Math.ceil(cardExtras + headerHeight + headerGap + bodyHeight),
-  );
-  const widgetHeight = clampValue(
-    SCHEMA_CARD_PRESET_HEIGHTS.widget,
-    Math.min(fullHeight, titleHeight + 68),
-    fullHeight,
   );
 
   return {
     cardExtras,
     headerGap,
     headerHeight,
+    titleHeightContent,
+    widgetHeightContent,
     bodyHeight,
     titleHeight,
     widgetHeight,
@@ -1274,7 +1286,8 @@ function updateSchemaCardControls(card, activeMode) {
   const current = SCHEMA_CARD_LAYOUT_ORDER.includes(activeMode) ? activeMode : 'full';
   const next = nextSchemaCardMode(current);
   btn.dataset.layoutMode = current;
-  btn.textContent = formatSchemaCardMode(current);
+  btn.dataset.targetMode = next;
+  btn.innerHTML = makeSchemaCardModeIcon(next);
   btn.title = 'Switch card view to ' + formatSchemaCardMode(next);
   btn.setAttribute('aria-label', 'Switch card view to ' + formatSchemaCardMode(next));
 }
@@ -1287,8 +1300,10 @@ function syncSchemaCardLayout(card, overrideLayout = null) {
   if (!metrics) return;
 
   const bodyShell = card.querySelector('.schema-card__body-shell');
+  const titleShell = card.querySelector('.schema-card__title-shell');
+  const widgetShell = card.querySelector('.schema-card__widget-shell');
   const body = card.querySelector('.schema-card__body');
-  if (!bodyShell || !body) return;
+  if (!bodyShell || !titleShell || !widgetShell || !body) return;
 
   const stored = overrideLayout || getSchemaCardLayout(entityKind, cardKey);
   const desiredHeight = getSchemaCardHeightForLayout(metrics, stored);
@@ -1302,6 +1317,8 @@ function syncSchemaCardLayout(card, overrideLayout = null) {
 
   if (density === 'full' && stored.mode === 'full') {
     card.style.removeProperty('height');
+    titleShell.style.removeProperty('display');
+    widgetShell.style.removeProperty('display');
     bodyShell.style.removeProperty('max-height');
     bodyShell.style.visibility = 'visible';
     body.style.removeProperty('overflow-y');
@@ -1309,12 +1326,28 @@ function syncSchemaCardLayout(card, overrideLayout = null) {
     const totalHeight = clampValue(desiredHeight, metrics.titleHeight, metrics.fullHeight);
     const bodyLimit = Math.max(0, totalHeight - metrics.cardExtras - metrics.headerHeight - metrics.headerGap);
     card.style.height = totalHeight + 'px';
-    bodyShell.style.visibility = density === 'title' ? 'hidden' : 'visible';
-    bodyShell.style.maxHeight = density === 'title' ? '0px' : bodyLimit + 'px';
-    body.style.overflowY = clipped && density !== 'title' ? 'auto' : 'visible';
+    if (density === 'title') {
+      titleShell.style.display = titleShell.scrollHeight > 0 ? 'grid' : 'none';
+      widgetShell.style.display = 'none';
+      bodyShell.style.visibility = 'hidden';
+      bodyShell.style.maxHeight = '0px';
+      body.style.overflowY = 'visible';
+    } else if (density === 'widget') {
+      titleShell.style.display = 'none';
+      widgetShell.style.display = widgetShell.scrollHeight > 0 ? 'grid' : 'none';
+      bodyShell.style.visibility = 'hidden';
+      bodyShell.style.maxHeight = '0px';
+      body.style.overflowY = 'visible';
+    } else {
+      titleShell.style.display = 'none';
+      widgetShell.style.display = 'none';
+      bodyShell.style.visibility = 'visible';
+      bodyShell.style.maxHeight = bodyLimit + 'px';
+      body.style.overflowY = clipped ? 'auto' : 'visible';
+    }
   }
 
-  if (clipped && density !== 'title') {
+  if (clipped && density === 'full') {
     card.classList.add('schema-card--clipped');
   }
 
@@ -2414,6 +2447,66 @@ function updateSystemUptime() {
 // Rendering — Detail Panel
 // ---------------------------------------------------------------------------
 
+function makeSchemaCardModeIcon(mode) {
+  const bars = mode === 'title'
+    ? [{ y: 10, h: 4 }]
+    : mode === 'widget'
+      ? [{ y: 6, h: 4 }, { y: 14, h: 4 }]
+      : [{ y: 4, h: 3.5 }, { y: 10.25, h: 3.5 }, { y: 16.5, h: 3.5 }];
+  const rects = bars
+    .map(({ y, h }) => `<rect x="4" y="${y}" width="16" height="${h}" rx="1.8" ry="1.8"></rect>`)
+    .join('');
+  return `
+    <svg viewBox="0 0 24 24" aria-hidden="true" class="schema-card__control-icon">
+      ${rects}
+    </svg>
+  `;
+}
+
+function makeSchemaCompactFacts(items, className = 'schema-card__facts') {
+  const values = (items || []).filter(Boolean);
+  if (values.length === 0) return null;
+  const wrap = document.createElement('div');
+  wrap.className = className;
+  for (const item of values) {
+    const fact = document.createElement('span');
+    fact.className = 'schema-card__fact';
+    if (typeof item === 'string' || typeof item === 'number') {
+      fact.textContent = String(item);
+    } else {
+      const label = item.label ? String(item.label).trim() : '';
+      const value = item.value === null || item.value === undefined ? '' : String(item.value).trim();
+      fact.textContent = label && value ? `${label}: ${value}` : (value || label);
+    }
+    if (!fact.textContent) continue;
+    wrap.appendChild(fact);
+  }
+  return wrap.childNodes.length ? wrap : null;
+}
+
+function makeSchemaWidgetGrid(facts) {
+  const items = (facts || []).filter((item) => item && item.value !== null && item.value !== undefined && item.value !== '');
+  if (items.length === 0) return null;
+  const grid = document.createElement('div');
+  grid.className = 'schema-widget-grid';
+  for (const item of items) {
+    const cell = document.createElement('div');
+    cell.className = 'schema-widget-metric';
+    const value = document.createElement('div');
+    value.className = 'schema-widget-metric__value';
+    value.textContent = String(item.value);
+    cell.appendChild(value);
+    if (item.label) {
+      const label = document.createElement('div');
+      label.className = 'schema-widget-metric__label';
+      label.textContent = String(item.label);
+      cell.appendChild(label);
+    }
+    grid.appendChild(cell);
+  }
+  return grid;
+}
+
 function makeSchemaCard(title, meta, opts = {}) {
   const card = document.createElement('section');
   card.className = 'detail-card schema-card';
@@ -2442,14 +2535,6 @@ function makeSchemaCard(title, meta, opts = {}) {
     heading.appendChild(metaEl);
   }
 
-  const titleSummary = (opts.titleSummary || '').trim();
-  if (titleSummary) {
-    const summaryEl = document.createElement('span');
-    summaryEl.className = 'schema-card__summary';
-    summaryEl.textContent = titleSummary;
-    heading.appendChild(summaryEl);
-  }
-
   header.appendChild(heading);
 
   if (isResizable) {
@@ -2473,6 +2558,34 @@ function makeSchemaCard(title, meta, opts = {}) {
 
   card.appendChild(header);
 
+  const titleShell = document.createElement('div');
+  titleShell.className = 'schema-card__title-shell';
+  const titleSummary = (opts.titleSummary || '').trim();
+  if (titleSummary) {
+    const summaryEl = document.createElement('p');
+    summaryEl.className = 'schema-card__summary';
+    summaryEl.textContent = titleSummary;
+    titleShell.appendChild(summaryEl);
+  }
+  const titleFacts = makeSchemaCompactFacts(opts.titleFacts, 'schema-card__facts schema-card__facts--title');
+  if (titleFacts) titleShell.appendChild(titleFacts);
+  card.appendChild(titleShell);
+
+  const widgetShell = document.createElement('div');
+  widgetShell.className = 'schema-card__widget-shell';
+  const widgetSummary = (opts.widgetSummary || opts.titleSummary || '').trim();
+  if (widgetSummary) {
+    const summaryEl = document.createElement('p');
+    summaryEl.className = 'schema-card__summary schema-card__summary--widget';
+    summaryEl.textContent = widgetSummary;
+    widgetShell.appendChild(summaryEl);
+  }
+  const widgetGrid = makeSchemaWidgetGrid(opts.widgetFacts);
+  if (widgetGrid) widgetShell.appendChild(widgetGrid);
+  const widgetFacts = makeSchemaCompactFacts(opts.widgetNotes, 'schema-card__facts schema-card__facts--widget');
+  if (widgetFacts) widgetShell.appendChild(widgetFacts);
+  card.appendChild(widgetShell);
+
   const bodyShell = document.createElement('div');
   bodyShell.className = 'schema-card__body-shell';
 
@@ -2488,7 +2601,7 @@ function makeSchemaCard(title, meta, opts = {}) {
 
   card.appendChild(bodyShell);
 
-  return { card, body, header };
+  return { card, body, header, titleShell, widgetShell };
 }
 
 function appendSchemaRow(body, label, value, opts = {}) {
@@ -2686,6 +2799,12 @@ function makeConversationSummaryList(ids, opts = {}) {
   return list;
 }
 
+function getConversationSummaryDetail(conversationID) {
+  if (!conversationID) return null;
+  ensureConversationSummary(conversationID);
+  return state.conversationDetails.get(conversationID) || buildPendingConversationSummary(conversationID);
+}
+
 function makeRequestChip(requestID) {
   const chip = document.createElement('span');
   chip.className = 'id-chip id-chip--responsive' + (typeof window.onRequestChipClick === 'function' ? ' schema-request-chip' : '');
@@ -2720,6 +2839,7 @@ function objectEntriesExcluding(obj, excludedKeys) {
 function renderSystemEntityDetail(sys) {
   const entity = buildSystemEntity(sys);
   detailEntity.innerHTML = '';
+  const unhealthyCount = Math.max(0, entity.serviceCount - entity.readyCount);
 
   const hero = document.createElement('section');
   hero.className = 'detail-card schema-card schema-card--hero';
@@ -2745,7 +2865,14 @@ function renderSystemEntityDetail(sys) {
   const identity = makeSchemaCard('Identity', 'Build lineage, process identity, and runtime provenance', {
     entityKind: entity.kind,
     key: 'identity',
-    titleSummary: 'Version, uptime, and build provenance.',
+    titleSummary: `${formatSchemaToken(entity.state)} · ${entity.version || 'dev build'} · ${entity.uptime || 'uptime pending'}`,
+    titleFacts: [entity.commit ? shortID(entity.commit) : '', entity.arch || '', entity.goVersion || ''].filter(Boolean),
+    widgetFacts: [
+      { label: 'Status', value: formatSchemaToken(entity.state) },
+      { label: 'Version', value: entity.version || 'dev' },
+      { label: 'Uptime', value: entity.uptime || 'pending' },
+      entity.commit ? { label: 'Commit', value: shortID(entity.commit) } : null,
+    ],
   });
   appendSchemaRow(identity.body, 'anchor kind', entity.kind);
   appendSchemaRow(identity.body, 'status', formatSchemaToken(entity.state));
@@ -2761,7 +2888,14 @@ function renderSystemEntityDetail(sys) {
   const topology = makeSchemaCard('Topology', 'Live graph shape and routing footprint', {
     entityKind: entity.kind,
     key: 'topology',
-    titleSummary: 'Loop counts, routing load, and registry footprint.',
+    titleSummary: `${formatNumber(entity.liveLoopCount)} live loops across ${formatNumber(entity.serviceCount)} services.`,
+    titleFacts: [entity.routingMode, entity.defaultModel || '', `${formatNumber(entity.rootLoopCount)} root`].filter(Boolean),
+    widgetFacts: [
+      { label: 'Live', value: formatNumber(entity.liveLoopCount) },
+      { label: 'Root', value: formatNumber(entity.rootLoopCount) },
+      { label: 'Child', value: formatNumber(entity.childLoopCount) },
+      { label: 'Requests', value: formatNumber(entity.totalRequests) },
+    ],
   });
   appendSchemaRow(topology.body, 'live loops', formatNumber(entity.liveLoopCount));
   appendSchemaRow(topology.body, 'root loops', formatNumber(entity.rootLoopCount));
@@ -2778,7 +2912,16 @@ function renderSystemEntityDetail(sys) {
   const services = makeSchemaCard('Services', 'Service health, strain, and recovery state', {
     entityKind: entity.kind,
     key: 'services',
-    titleSummary: 'Readiness, degradation, and recovery across services.',
+    titleSummary: unhealthyCount > 0
+      ? `${formatNumber(entity.readyCount)} ready · ${formatNumber(unhealthyCount)} degraded or down.`
+      : `${formatNumber(entity.readyCount)} of ${formatNumber(entity.serviceCount)} services ready.`,
+    titleFacts: [entity.serviceCount ? `${formatNumber(entity.serviceCount)} total` : '', unhealthyCount ? `${formatNumber(unhealthyCount)} impacted` : 'all healthy'].filter(Boolean),
+    widgetFacts: [
+      { label: 'Ready', value: formatNumber(entity.readyCount) },
+      { label: 'Total', value: formatNumber(entity.serviceCount) },
+      { label: 'Impacted', value: formatNumber(unhealthyCount) },
+      { label: 'State', value: formatSchemaToken(entity.state) },
+    ],
   });
   const servicesEl = document.createElement('div');
   servicesEl.className = 'system-services';
@@ -2789,7 +2932,14 @@ function renderSystemEntityDetail(sys) {
   const registryCard = makeSchemaCard('Model Registry', '', {
     entityKind: entity.kind,
     key: 'model-registry',
-    titleSummary: 'Resources, deployments, and router coverage.',
+    titleSummary: `${formatNumber(entity.resourceCount)} resources and ${formatNumber(entity.deploymentCount)} deployments in play.`,
+    titleFacts: [entity.defaultModel || '', `gen ${formatNumber(entity.registryGeneration)}`].filter(Boolean),
+    widgetFacts: [
+      { label: 'Resources', value: formatNumber(entity.resourceCount) },
+      { label: 'Deployments', value: formatNumber(entity.deploymentCount) },
+      { label: 'Generation', value: formatNumber(entity.registryGeneration) },
+      { label: 'Routing', value: entity.routingMode },
+    ],
   });
   const registryMeta = document.createElement('span');
   registryMeta.className = 'schema-card__meta';
@@ -2832,6 +2982,14 @@ function renderSystemEntityDetail(sys) {
 function renderLoopEntityDetail(loop) {
   const entity = buildLoopEntity(loop);
   detailEntity.innerHTML = '';
+  const currentConversation = getConversationSummaryDetail(entity.currentConvID);
+  const recentHistoryIDs = entity.recentConvIDs.filter((id) => id !== entity.currentConvID);
+  const historyCount = recentHistoryIDs.length + (entity.currentConvID ? 1 : 0);
+  const parentLabel = entity.parentID ? shortID(entity.parentID) : 'core';
+  const lastWakeAgo = entity.lastWakeAt ? timeAgo(new Date(entity.lastWakeAt)) : '';
+  const latestModelLabel = entity.latestModel || 'model pending';
+  const contextLabel = entity.contextWindow ? `${formatNumber(entity.contextWindow)} ctx` : '';
+  const missionSummary = entity.hints.mission ? truncate(entity.hints.mission, 92) : '';
 
   const hero = document.createElement('section');
   hero.className = 'detail-card schema-card schema-card--hero';
@@ -2857,7 +3015,14 @@ function renderLoopEntityDetail(loop) {
   const identity = makeSchemaCard('Identity', 'Role in the graph', {
     entityKind: entity.kind,
     key: 'identity',
-    titleSummary: 'Role, execution mode, and classification.',
+    titleSummary: `${entity.executionMode} · ${entity.categoryLabel.toLowerCase()}${entity.subsystem ? ' · ' + entity.subsystem : ''}`,
+    titleFacts: [entity.relation, entity.categorySource, entity.subsystem || ''].filter(Boolean),
+    widgetFacts: [
+      { label: 'Mode', value: entity.executionMode },
+      { label: 'Visual', value: entity.categoryLabel },
+      { label: 'Relation', value: entity.relation },
+      entity.subsystem ? { label: 'Subsystem', value: entity.subsystem } : null,
+    ],
   });
   appendSchemaRow(identity.body, 'loop_id', makeIDChip(entity.loopID));
   appendSchemaRow(identity.body, 'entity kind', entity.kind);
@@ -2870,14 +3035,26 @@ function renderLoopEntityDetail(loop) {
   const relationships = makeSchemaCard('Relationships', 'Parents, conversations, and request trail', {
     entityKind: entity.kind,
     key: 'relationships',
-    titleSummary: 'Parentage, active thread, and request lineage.',
+    titleSummary: currentConversation
+      ? `${currentConversation.label}${currentConversation.metaLine ? ' · ' + currentConversation.metaLine : ''}`
+      : (entity.parentID ? `Child loop of ${shortID(entity.parentID)}.` : 'Root loop anchored to core.'),
+    titleFacts: [
+      entity.parentID ? `Parent ${shortID(entity.parentID)}` : 'Anchor core',
+      historyCount ? `${formatNumber(historyCount)} threads` : '',
+      entity.latestRequestID ? `Req ${shortID(entity.latestRequestID)}` : '',
+    ].filter(Boolean),
+    widgetFacts: [
+      { label: 'Parent', value: parentLabel },
+      { label: 'Thread', value: currentConversation ? currentConversation.label : 'none' },
+      { label: 'History', value: historyCount ? `${formatNumber(historyCount)} convs` : 'none' },
+      entity.latestRequestID ? { label: 'Request', value: shortID(entity.latestRequestID) } : null,
+    ],
   });
   if (entity.parentID) {
     appendSchemaRow(relationships.body, 'parent loop', makeIDChip(entity.parentID));
   } else {
     appendSchemaRow(relationships.body, 'root anchor', 'core');
   }
-  const recentHistoryIDs = entity.recentConvIDs.filter((id) => id !== entity.currentConvID);
   if (entity.currentConvID) {
     appendSchemaRow(
       relationships.body,
@@ -2902,7 +3079,20 @@ function renderLoopEntityDetail(loop) {
   const execution = makeSchemaCard('Execution', 'Live state, model, and token flow', {
     entityKind: entity.kind,
     key: 'execution',
-    titleSummary: 'State, model selection, and token flow.',
+    titleSummary: [formatSchemaToken(entity.stateLabel), latestModelLabel, contextLabel].filter(Boolean).join(' · '),
+    titleFacts: [
+      entity.iterations ? `${formatNumber(entity.iterations)} iterations` : '',
+      lastWakeAgo ? `wake ${lastWakeAgo}` : '',
+      entity.consecutiveErrors ? `${formatNumber(entity.consecutiveErrors)} errors` : '',
+    ].filter(Boolean),
+    widgetFacts: [
+      { label: 'State', value: formatSchemaToken(entity.stateLabel) },
+      { label: 'Model', value: latestModelLabel },
+      contextLabel ? { label: 'Context', value: contextLabel } : null,
+      entity.lastInputTokens || entity.lastOutputTokens
+        ? { label: 'Last I/O', value: `${formatTokens(entity.lastInputTokens)} · ${formatTokens(entity.lastOutputTokens)}` }
+        : null,
+    ],
   });
   appendSchemaRow(execution.body, 'state', formatSchemaToken(entity.stateLabel));
   appendSchemaRow(execution.body, 'started', entity.startedAt ? timeAgo(new Date(entity.startedAt)) : '');
@@ -2925,7 +3115,22 @@ function renderLoopEntityDetail(loop) {
   const profile = makeSchemaCard('Profile', 'Intent, trust, and carried context', {
     entityKind: entity.kind,
     key: 'profile',
-    titleSummary: 'Mission, trust, tags, and carried hints.',
+    titleSummary: missionSummary || [
+      entity.trustZone ? `trust ${entity.trustZone}` : '',
+      entity.activeTags.length ? `${formatNumber(entity.activeTags.length)} active tags` : '',
+      entity.hints.source ? `source ${entity.hints.source}` : '',
+    ].filter(Boolean).join(' · ') || 'Hints, trust, and carried tags.',
+    titleFacts: [
+      entity.trustZone || '',
+      entity.activeTags.length ? `${formatNumber(entity.activeTags.length)} active` : '',
+      entity.configTags.length ? `${formatNumber(entity.configTags.length)} configured` : '',
+    ].filter(Boolean),
+    widgetFacts: [
+      entity.trustZone ? { label: 'Trust', value: entity.trustZone } : null,
+      entity.hints.source ? { label: 'Source', value: entity.hints.source } : null,
+      entity.hints.delegation_gating ? { label: 'Gating', value: entity.hints.delegation_gating } : null,
+      entity.activeTags.length ? { label: 'Tags', value: entity.activeTags.join(', ') } : null,
+    ],
   });
   if (entity.hints.mission) appendSchemaRow(profile.body, 'mission', entity.hints.mission);
   if (entity.hints.source) appendSchemaRow(profile.body, 'source hint', entity.hints.source);
@@ -2978,7 +3183,21 @@ function renderLoopEntityDetail(loop) {
   const activity = makeSchemaCard('Activity', 'Recent rhythm and iteration history', {
     entityKind: entity.kind,
     key: 'activity',
-    titleSummary: 'Wake rhythm, iteration history, and recent events.',
+    titleSummary: [
+      entity.iterations ? `${formatNumber(entity.iterations)} iterations` : 'No iterations yet',
+      entity.attempts ? `${formatNumber(entity.attempts)} attempts` : '',
+      lastWakeAgo ? `wake ${lastWakeAgo}` : '',
+    ].filter(Boolean).join(' · '),
+    titleFacts: [
+      entity.latestSnapshot && entity.latestSnapshot.completed_at ? 'recent snapshot' : '',
+      entity.lastError ? 'last error present' : '',
+    ].filter(Boolean),
+    widgetFacts: [
+      { label: 'Iterations', value: formatNumber(entity.iterations) },
+      { label: 'Attempts', value: formatNumber(entity.attempts) },
+      { label: 'Last wake', value: lastWakeAgo || 'pending' },
+      { label: 'Errors', value: formatNumber(entity.consecutiveErrors || 0) },
+    ],
   });
   const aggregates = document.createElement('div');
   aggregates.className = 'detail-aggregates';
