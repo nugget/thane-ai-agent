@@ -506,6 +506,13 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
   transition: height 0.2s ease, border-color 0.2s ease;
 }
 
+body.resize-col .schema-card--resizable,
+body.resize-col .schema-card__body-shell,
+body.resize-col .schema-card__body,
+body.resize-col .schema-card__fade {
+  transition: none !important;
+}
+
 .schema-card--resizable.schema-card--clipped .schema-card__fade {
   opacity: 1;
 }
