@@ -2442,6 +2442,14 @@ function makeSchemaCard(title, meta, opts = {}) {
     heading.appendChild(metaEl);
   }
 
+  const titleSummary = (opts.titleSummary || '').trim();
+  if (titleSummary) {
+    const summaryEl = document.createElement('span');
+    summaryEl.className = 'schema-card__summary';
+    summaryEl.textContent = titleSummary;
+    heading.appendChild(summaryEl);
+  }
+
   header.appendChild(heading);
 
   if (isResizable) {
@@ -2737,6 +2745,7 @@ function renderSystemEntityDetail(sys) {
   const identity = makeSchemaCard('Identity', 'Build lineage, process identity, and runtime provenance', {
     entityKind: entity.kind,
     key: 'identity',
+    titleSummary: 'Version, uptime, and build provenance.',
   });
   appendSchemaRow(identity.body, 'anchor kind', entity.kind);
   appendSchemaRow(identity.body, 'status', formatSchemaToken(entity.state));
@@ -2752,6 +2761,7 @@ function renderSystemEntityDetail(sys) {
   const topology = makeSchemaCard('Topology', 'Live graph shape and routing footprint', {
     entityKind: entity.kind,
     key: 'topology',
+    titleSummary: 'Loop counts, routing load, and registry footprint.',
   });
   appendSchemaRow(topology.body, 'live loops', formatNumber(entity.liveLoopCount));
   appendSchemaRow(topology.body, 'root loops', formatNumber(entity.rootLoopCount));
@@ -2768,6 +2778,7 @@ function renderSystemEntityDetail(sys) {
   const services = makeSchemaCard('Services', 'Service health, strain, and recovery state', {
     entityKind: entity.kind,
     key: 'services',
+    titleSummary: 'Readiness, degradation, and recovery across services.',
   });
   const servicesEl = document.createElement('div');
   servicesEl.className = 'system-services';
@@ -2778,6 +2789,7 @@ function renderSystemEntityDetail(sys) {
   const registryCard = makeSchemaCard('Model Registry', '', {
     entityKind: entity.kind,
     key: 'model-registry',
+    titleSummary: 'Resources, deployments, and router coverage.',
   });
   const registryMeta = document.createElement('span');
   registryMeta.className = 'schema-card__meta';
@@ -2845,6 +2857,7 @@ function renderLoopEntityDetail(loop) {
   const identity = makeSchemaCard('Identity', 'Role in the graph', {
     entityKind: entity.kind,
     key: 'identity',
+    titleSummary: 'Role, execution mode, and classification.',
   });
   appendSchemaRow(identity.body, 'loop_id', makeIDChip(entity.loopID));
   appendSchemaRow(identity.body, 'entity kind', entity.kind);
@@ -2857,6 +2870,7 @@ function renderLoopEntityDetail(loop) {
   const relationships = makeSchemaCard('Relationships', 'Parents, conversations, and request trail', {
     entityKind: entity.kind,
     key: 'relationships',
+    titleSummary: 'Parentage, active thread, and request lineage.',
   });
   if (entity.parentID) {
     appendSchemaRow(relationships.body, 'parent loop', makeIDChip(entity.parentID));
@@ -2888,6 +2902,7 @@ function renderLoopEntityDetail(loop) {
   const execution = makeSchemaCard('Execution', 'Live state, model, and token flow', {
     entityKind: entity.kind,
     key: 'execution',
+    titleSummary: 'State, model selection, and token flow.',
   });
   appendSchemaRow(execution.body, 'state', formatSchemaToken(entity.stateLabel));
   appendSchemaRow(execution.body, 'started', entity.startedAt ? timeAgo(new Date(entity.startedAt)) : '');
@@ -2910,6 +2925,7 @@ function renderLoopEntityDetail(loop) {
   const profile = makeSchemaCard('Profile', 'Intent, trust, and carried context', {
     entityKind: entity.kind,
     key: 'profile',
+    titleSummary: 'Mission, trust, tags, and carried hints.',
   });
   if (entity.hints.mission) appendSchemaRow(profile.body, 'mission', entity.hints.mission);
   if (entity.hints.source) appendSchemaRow(profile.body, 'source hint', entity.hints.source);
@@ -2962,6 +2978,7 @@ function renderLoopEntityDetail(loop) {
   const activity = makeSchemaCard('Activity', 'Recent rhythm and iteration history', {
     entityKind: entity.kind,
     key: 'activity',
+    titleSummary: 'Wake rhythm, iteration history, and recent events.',
   });
   const aggregates = document.createElement('div');
   aggregates.className = 'detail-aggregates';

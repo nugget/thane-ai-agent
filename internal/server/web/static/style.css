@@ -436,6 +436,17 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
   overflow-wrap: anywhere;
 }
 
+.schema-card__summary {
+  display: none;
+  color: var(--text-muted);
+  font-size: 0.67rem;
+  line-height: 1.15;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .schema-card__controls {
   position: absolute;
   top: 0;
@@ -531,11 +542,15 @@ body.resize-col .schema-card__fade {
 }
 
 .schema-card--title .schema-card__heading {
-  gap: 0;
+  gap: 0.08rem;
 }
 
 .schema-card--title .schema-card__title {
   line-height: 1.05;
+}
+
+.schema-card--title .schema-card__summary {
+  display: block;
 }
 
 .schema-card--title .schema-card__control {
