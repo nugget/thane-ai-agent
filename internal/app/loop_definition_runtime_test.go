@@ -194,6 +194,54 @@ func TestLoopDefinitionRuntimeReconcileDefinitionStopsInactiveService(t *testing
 	}
 }
 
+func TestLoopDefinitionRuntimeReconcileDefinitionServiceSurvivesRequestContext(t *testing.T) {
+	t.Parallel()
+
+	registry, err := looppkg.NewDefinitionRegistry([]looppkg.Spec{
+		{
+			Name:         "office_watch",
+			Enabled:      true,
+			Task:         "Watch the office.",
+			Operation:    looppkg.OperationService,
+			Completion:   looppkg.CompletionNone,
+			SleepMin:     time.Minute,
+			SleepMax:     time.Minute,
+			SleepDefault: time.Minute,
+			Jitter:       looppkg.Float64Ptr(0),
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewDefinitionRegistry: %v", err)
+	}
+
+	loops := looppkg.NewRegistry()
+	t.Cleanup(func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		loops.ShutdownAll(shutdownCtx)
+	})
+
+	runtime := &loopDefinitionRuntime{
+		definitions: registry,
+		loops:       loops,
+		runner:      testLoopRunner{},
+		logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+		now:         time.Now,
+		scheduleCh:  make(chan struct{}, 1),
+	}
+
+	requestCtx, cancel := context.WithCancel(context.Background())
+	if err := runtime.ReconcileDefinition(requestCtx, "office_watch"); err != nil {
+		t.Fatalf("ReconcileDefinition(active): %v", err)
+	}
+	cancel()
+	time.Sleep(10 * time.Millisecond)
+
+	if loops.GetByName("office_watch") == nil {
+		t.Fatal("expected office_watch to keep running after request context cancellation")
+	}
+}
+
 func TestLoopDefinitionRuntimeLaunchDefinition(t *testing.T) {
 	t.Parallel()
 

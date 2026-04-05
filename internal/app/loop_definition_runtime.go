@@ -26,14 +26,15 @@ type loopDefinitionBootstrapResult struct {
 // loop registry. It intentionally owns only startup/runtime plumbing;
 // the definition registry remains the source of truth for stored specs.
 type loopDefinitionRuntime struct {
-	definitions *looppkg.DefinitionRegistry
-	loops       *looppkg.Registry
-	runner      looppkg.Runner
-	completion  looppkg.CompletionSink
-	logger      *slog.Logger
-	eventBus    *events.Bus
-	now         func() time.Time
-	scheduleCh  chan struct{}
+	definitions  *looppkg.DefinitionRegistry
+	loops        *looppkg.Registry
+	runner       looppkg.Runner
+	completion   looppkg.CompletionSink
+	logger       *slog.Logger
+	eventBus     *events.Bus
+	lifecycleCtx context.Context
+	now          func() time.Time
+	scheduleCh   chan struct{}
 }
 
 func newAppLoopDefinitionRuntime(a *App) *loopDefinitionRuntime {
@@ -43,14 +44,15 @@ func newAppLoopDefinitionRuntime(a *App) *loopDefinitionRuntime {
 	injector := &conversationSystemInjector{mem: a.mem, archiver: a.archiveAdapter}
 	dispatcher := newDetachedLoopCompletionDispatcher(injector)
 	return &loopDefinitionRuntime{
-		definitions: a.loopDefinitionRegistry,
-		loops:       a.loopRegistry,
-		runner:      &loopAdapter{agentLoop: a.loop, router: a.rtr},
-		completion:  dispatcher.Deliver,
-		logger:      a.logger,
-		eventBus:    a.eventBus,
-		now:         time.Now,
-		scheduleCh:  make(chan struct{}, 1),
+		definitions:  a.loopDefinitionRegistry,
+		loops:        a.loopRegistry,
+		runner:       &loopAdapter{agentLoop: a.loop, router: a.rtr},
+		completion:   dispatcher.Deliver,
+		logger:       a.logger,
+		eventBus:     a.eventBus,
+		lifecycleCtx: context.Background(),
+		now:          time.Now,
+		scheduleCh:   make(chan struct{}, 1),
 	}
 }
 
@@ -120,6 +122,13 @@ func (r *loopDefinitionRuntime) signalScheduleChange() {
 	}
 }
 
+func (r *loopDefinitionRuntime) serviceContext() context.Context {
+	if r != nil && r.lifecycleCtx != nil {
+		return r.lifecycleCtx
+	}
+	return context.Background()
+}
+
 func (r *loopDefinitionRuntime) nextScheduleTransition(now time.Time) time.Time {
 	if r == nil || r.definitions == nil {
 		return time.Time{}
@@ -163,6 +172,9 @@ func (r *loopDefinitionRuntime) ReconcileAllDefinitions(ctx context.Context) err
 func (r *loopDefinitionRuntime) StartScheduleWatcher(ctx context.Context) error {
 	if r == nil || r.definitions == nil {
 		return nil
+	}
+	if ctx != nil {
+		r.lifecycleCtx = ctx
 	}
 	logger := r.logger
 	if logger == nil {
@@ -223,6 +235,7 @@ func (r *loopDefinitionRuntime) StartEnabledServices(ctx context.Context) (loopD
 	if r.runner == nil {
 		return loopDefinitionBootstrapResult{}, fmt.Errorf("loop definition runtime requires a runner")
 	}
+	r.lifecycleCtx = ctx
 
 	snap := r.definitions.Snapshot()
 	if snap == nil || len(snap.Definitions) == 0 {
@@ -295,7 +308,7 @@ func (r *loopDefinitionRuntime) ReconcileDefinition(ctx context.Context, name st
 	if existing != nil {
 		return nil
 	}
-	_, err := r.loops.SpawnSpec(ctx, def.Spec, r.deps())
+	_, err := r.loops.SpawnSpec(r.serviceContext(), def.Spec, r.deps())
 	return err
 }
 

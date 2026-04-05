@@ -281,6 +281,18 @@ serve: build
 logs workdir="./Thane":
     tail -f {{workdir}}/logs/thane.log
 
+# Live smoke test for loops-ng loop definition registry behavior against a running dev instance
+[group('operations')]
+loop-definition-smoke base_url="http://127.0.0.1:8080":
+    python3 -u scripts/loop_definition_smoke.py --base-url {{base_url}}
+
+# Live smoke test with restart/persistence validation. Example:
+# RESTART_CMD='cd /path/to/dev-workspace && just restart' just loop-definition-persistence
+[group('operations')]
+loop-definition-persistence base_url="http://127.0.0.1:8080":
+    @test -n "$RESTART_CMD" || (echo "Set RESTART_CMD to the restart command for your live dev instance" && exit 1)
+    RESTART_CMD="$RESTART_CMD" python3 -u scripts/loop_definition_smoke.py --base-url {{base_url}} --restart-cmd "$RESTART_CMD"
+
 # --- Release ---
 
 # Tag and publish a GitHub release (usage: just release 0.2.0)
