@@ -39,32 +39,25 @@ const CONVERSATION_SESSION_LIMIT = 8;
 
 const physics = {
   nodes: new Map(),  // id -> { x, y, vx, vy, pinned }
-  // Tuning constants — tweak these for feel.
-  centerGravity:      0.0016,
-  springStrength:     0.02,
-  springRestLength:   154,    // system ↔ top-level
-  childSpringStrength: 0.06,  // parent ↔ child (3× stronger)
-  childRestLength:    96,     // parent ↔ child (tighter cluster with breathing room)
-  repulsionStrength:  5600,
-  branchAnchorStrength: 0.024,
-  branchContainmentStrength: 0.008,
-  siblingAnchorStrength: 0.028,
-  rootAngularBalanceStrength: 0.2,
-  rootRadialBalanceStrength: 0.06,
-  siblingAngularBalanceStrength: 0.18,
-  siblingRadialBalanceStrength: 0.07,
-  rootOrbitProjection: 0.18,
-  siblingOrbitProjection: 0.2,
-  orbitProjectionVelocityDamping: 0.72,
-  crossBranchRepulsionMultiplier: 1.45,
-  sameBranchRepulsionMultiplier: 0.9,
-  edgeNodeRepulsion:  0.2,
-  edgeNodePadding:    40,
+  // The layout is hierarchy-first, with physics used only to smooth motion
+  // and resolve conflicts. This follows the Gource pattern much more closely
+  // than a global force soup.
+  springStrength:     0.014,
+  springRestLength:   164,
+  childSpringStrength: 0.05,
+  childRestLength:    112,
+  orbitAttractionStrength: 0.075,
+  orbitProjectionBlend: 0.38,
+  orbitProjectionVelocityDamping: 0.68,
+  overlapRepulsionStrength: 0.16,
+  overlapRepulsionRange: 1.2,
+  edgeNodeRepulsion:  0.22,
+  edgeNodePadding:    44,
   channelChildSpacingMultiplier: 1.22,
-  damping:            0.9,
-  maxVelocity:        4.4,
-  wallStrength:       0.045,
-  collisionPadding:   22,
+  damping:            0.88,
+  maxVelocity:        3.4,
+  wallStrength:       0.05,
+  collisionPadding:   24,
   resizeVelocityGain: 0.12,
 };
 
@@ -104,20 +97,6 @@ function buildLoopBranchLoads() {
 function getLoopBranchFootprint(load) {
   if (!load) return 0;
   return Math.max(0, load.branchExtent - load.ownExtent);
-}
-
-function getLoopClusterRestMultiplier(load) {
-  if (!load || load.descendants <= 0) return 1;
-  const descendantFactor = Math.min(0.75, load.descendants * 0.09);
-  const footprintFactor = Math.min(0.35, getLoopBranchFootprint(load) / Math.max(load.ownExtent * 18, 1));
-  return 1 + descendantFactor + footprintFactor;
-}
-
-function getLoopClusterRepulsionMultiplier(load) {
-  if (!load || load.descendants <= 0) return 1;
-  const descendantFactor = Math.min(0.95, load.descendants * 0.11);
-  const footprintFactor = Math.min(0.5, getLoopBranchFootprint(load) / Math.max(load.ownExtent * 12, 1));
-  return 1 + descendantFactor + footprintFactor;
 }
 
 function getLoopMetadata(loop) {
@@ -165,106 +144,35 @@ function buildSiblingIndex() {
   return siblings;
 }
 
-function buildBranchIndex() {
-  const rootByID = new Map();
-  const depthByID = new Map();
-  const descendantsByRoot = new Map();
-  const childrenByParent = new Map();
-
-  for (const loop of state.loops.values()) {
-    if (!loop.parent_id) continue;
-    if (!childrenByParent.has(loop.parent_id)) childrenByParent.set(loop.parent_id, []);
-    childrenByParent.get(loop.parent_id).push(loop.id);
-  }
-
-  function visit(loopID, rootID, depth) {
-    rootByID.set(loopID, rootID);
-    depthByID.set(loopID, depth);
-    if (!descendantsByRoot.has(rootID)) descendantsByRoot.set(rootID, []);
-    descendantsByRoot.get(rootID).push(loopID);
-    const children = childrenByParent.get(loopID) || [];
-    for (const childID of children) {
-      visit(childID, rootID, depth + 1);
-    }
-  }
-
-  const roots = Array.from(state.loops.values())
-    .filter(loop => !loop.parent_id)
-    .sort(compareLoopsForLayout);
-  for (const root of roots) {
-    visit(root.id, root.id, 0);
-  }
-
-  for (const loop of state.loops.values()) {
-    if (rootByID.has(loop.id)) continue;
-    visit(loop.id, loop.id, 0);
-  }
-
-  return { rootByID, depthByID, descendantsByRoot };
-}
-
-function buildTopLevelOrbitTargets(cx, cy, branchLoads) {
-  const roots = Array.from(state.loops.values())
-    .filter(loop => !loop.parent_id && physics.nodes.has(loop.id))
-    .sort(compareLoopsForLayout);
-  const targets = new Map();
-  if (roots.length === 0) return targets;
-
-  const requiredCircumference = roots.reduce((sum, loop) => {
-    const load = branchLoads.get(loop.id);
-    const extent = getPhysicsNodeExtent(loop.id);
-    const branchFootprint = getLoopBranchFootprint(load);
-    return sum + Math.max(
-      extent * 2 + 76,
-      physics.springRestLength * getLoopClusterRestMultiplier(load) * 0.95,
-      extent * 2 + Math.min(220, branchFootprint * 0.22),
-    );
-  }, 0);
-  const baseRadius = Math.max(
-    physics.springRestLength * 1.05,
-    requiredCircumference / (Math.PI * 2),
+function getOrbitSlotSize(parentID, loop, branchLoads) {
+  const parentLoop = parentID ? state.loops.get(parentID) : null;
+  const spacingMultiplier = getPairSpacingMultiplier(parentLoop, loop);
+  const load = branchLoads.get(loop.id);
+  const extent = getPhysicsNodeExtent(loop.id);
+  const footprint = getLoopBranchFootprint(load);
+  const basePadding = physics.collisionPadding + (parentID ? 30 : 42);
+  const subtreeAllowance = footprint <= 0 ? 0 : Math.min(parentID ? 92 : 156, footprint * (parentID ? 0.16 : 0.24));
+  return Math.max(
+    extent * 2 + basePadding,
+    extent * 2 + subtreeAllowance,
+    (parentID ? physics.childRestLength : physics.springRestLength) * spacingMultiplier * (parentID ? 0.9 : 1.05),
   );
-
-  const startAngle = -Math.PI / 2;
-  const step = (Math.PI * 2) / roots.length;
-  for (let i = 0; i < roots.length; i += 1) {
-    const loop = roots[i];
-    const load = branchLoads.get(loop.id);
-    const radius = baseRadius + Math.min(140, getLoopBranchFootprint(load) * 0.16);
-    const angle = startAngle + (step * i);
-    targets.set(loop.id, {
-      angle,
-      radius,
-      x: cx + Math.cos(angle) * radius,
-      y: cy + Math.sin(angle) * radius,
-    });
-  }
-  return targets;
 }
 
-function buildSiblingOrbitTargets(siblingIndex) {
-  const targets = new Map();
-  for (const [parentID, siblings] of siblingIndex) {
-    const count = siblings.length;
-    if (count === 0) continue;
-    const step = (Math.PI * 2) / count;
-    const startAngle = -Math.PI / 2;
-    for (let i = 0; i < count; i += 1) {
-      const ring = Math.floor(i / 6);
-      const loop = siblings[i];
-      targets.set(loop.id, {
-        parentID,
-        angle: startAngle + (step * i),
-        ring,
-      });
-    }
+function getOrbitFamilyRadius(parentID, loops, branchLoads) {
+  if (!loops || loops.length === 0) return parentID ? physics.childRestLength : physics.springRestLength;
+  const baseRadius = parentID ? physics.childRestLength : physics.springRestLength;
+  const requiredCircumference = loops.reduce((sum, loop) => sum + getOrbitSlotSize(parentID, loop, branchLoads), 0);
+  let radius = Math.max(baseRadius, requiredCircumference / (Math.PI * 2));
+  if (parentID) {
+    radius += Math.min(56, getPhysicsNodeExtent(parentID) * 0.35);
   }
-  return targets;
+  return radius;
 }
 
 function getGraphMotionScale(nodeCount) {
   if (nodeCount <= 8) return 1;
-  return Math.max(0.58, 1 - ((nodeCount - 8) * 0.026));
+  return Math.max(0.52, 1 - ((nodeCount - 8) * 0.03));
 }
 
 function normalizeAngle(angle) {
@@ -274,104 +182,41 @@ function normalizeAngle(angle) {
   return out;
 }
 
-function positiveAngleDelta(from, to) {
-  return normalizeAngle(to - from);
-}
+function buildOrbitTargets(cx, cy, branchLoads, siblingIndex) {
+  const targets = new Map();
+  const roots = Array.from(state.loops.values())
+    .filter(loop => !loop.parent_id)
+    .sort(compareLoopsForLayout);
 
-function applyAngularEquilibrium(entries, centerForEntry, strength) {
-  if (!entries || entries.length < 2) return;
+  function layoutFamily(parentID, loops, center, inwardAngle, depth) {
+    if (!loops || loops.length === 0) return;
+    const radius = getOrbitFamilyRadius(parentID, loops, branchLoads);
+    const step = (Math.PI * 2) / loops.length;
+    const startAngle = Number.isFinite(inwardAngle) ? inwardAngle + (step * 0.5) : -Math.PI / 2;
 
-  const positioned = [];
-  for (const entry of entries) {
-    const nd = physics.nodes.get(entry.id);
-    if (!nd || nd.pinned) continue;
-    const center = centerForEntry(entry);
-    if (!center) continue;
-    const dx = nd.x - center.x;
-    const dy = nd.y - center.y;
-    const radius = Math.sqrt((dx * dx) + (dy * dy));
-    if (radius < 12) continue;
-    positioned.push({
-      ...entry,
-      node: nd,
-      center,
-      radius,
-      angle: normalizeAngle(Math.atan2(dy, dx)),
-    });
-  }
-
-  if (positioned.length < 2) return;
-  positioned.sort((a, b) => a.angle - b.angle);
-
-  const targetGap = (Math.PI * 2) / positioned.length;
-  for (let i = 0; i < positioned.length; i += 1) {
-    const current = positioned[i];
-    const next = positioned[(i + 1) % positioned.length];
-    const gap = positiveAngleDelta(current.angle, next.angle);
-    const gapError = targetGap - gap;
-    if (Math.abs(gapError) < 0.001) continue;
-
-    const radiusScale = Math.max(0.55, Math.min(1.35, Math.min(current.radius, next.radius) / 120));
-    const force = gapError * strength * radiusScale;
-
-    const currentTangentX = -Math.sin(current.angle);
-    const currentTangentY = Math.cos(current.angle);
-    const nextTangentX = -Math.sin(next.angle);
-    const nextTangentY = Math.cos(next.angle);
-
-    current.node.fx -= currentTangentX * force;
-    current.node.fy -= currentTangentY * force;
-    next.node.fx += nextTangentX * force;
-    next.node.fy += nextTangentY * force;
-  }
-}
-
-function applyRadialEquilibrium(entries, centerForEntry, targetRadiusForEntry, strength) {
-  if (!entries || entries.length === 0) return;
-
-  for (const entry of entries) {
-    const nd = physics.nodes.get(entry.id);
-    if (!nd || nd.pinned) continue;
-    const center = centerForEntry(entry);
-    if (!center) continue;
-    const targetRadius = targetRadiusForEntry(entry);
-    if (!Number.isFinite(targetRadius) || targetRadius <= 0) continue;
-
-    let dx = nd.x - center.x;
-    let dy = nd.y - center.y;
-    let radius = Math.sqrt((dx * dx) + (dy * dy));
-    if (radius < 0.001) {
-      const fallbackAngle = Number.isFinite(entry.angle) ? entry.angle : (-Math.PI / 2);
-      dx = Math.cos(fallbackAngle);
-      dy = Math.sin(fallbackAngle);
-      radius = 1;
+    for (let i = 0; i < loops.length; i += 1) {
+      const loop = loops[i];
+      const angle = startAngle + (step * i);
+      const x = center.x + Math.cos(angle) * radius;
+      const y = center.y + Math.sin(angle) * radius;
+      targets.set(loop.id, { parentID, depth, angle, radius, x, y });
+      layoutFamily(loop.id, siblingIndex.get(loop.id) || [], { x, y }, normalizeAngle(angle + Math.PI), depth + 1);
     }
-
-    const radialX = dx / radius;
-    const radialY = dy / radius;
-    const radiusError = targetRadius - radius;
-    const force = radiusError * strength;
-    nd.fx += radialX * force;
-    nd.fy += radialY * force;
   }
+
+  layoutFamily(null, roots, { x: cx, y: cy }, Number.NaN, 0);
+  return targets;
 }
 
-function projectOrbitFamily(entries, centerForEntry, targetForEntry, positionBlend, velocityDamping) {
-  if (!entries || entries.length === 0 || positionBlend <= 0) return;
-
-  for (const entry of entries) {
-    const nd = physics.nodes.get(entry.id);
-    if (!nd || nd.pinned) continue;
-    const center = centerForEntry(entry);
-    const target = targetForEntry(entry);
-    if (!center || !target) continue;
-
-    const targetX = center.x + Math.cos(target.angle) * target.radius;
-    const targetY = center.y + Math.sin(target.angle) * target.radius;
+function projectOrbitTargets(targets, positionBlend, velocityDamping) {
+  if (!targets || positionBlend <= 0) return;
+  for (const [id, target] of targets) {
+    const nd = physics.nodes.get(id);
+    if (!nd || nd.pinned || !target) continue;
     const prevX = nd.x;
     const prevY = nd.y;
-    nd.x += (targetX - nd.x) * positionBlend;
-    nd.y += (targetY - nd.y) * positionBlend;
+    nd.x += (target.x - nd.x) * positionBlend;
+    nd.y += (target.y - nd.y) * positionBlend;
     nd.vx = (nd.vx + (nd.x - prevX)) * velocityDamping;
     nd.vy = (nd.vy + (nd.y - prevY)) * velocityDamping;
   }
@@ -392,31 +237,23 @@ function syncPhysicsNodes(cx, cy) {
     physics.nodes.delete('__system__');
   }
 
+  const branchLoads = buildLoopBranchLoads();
+  const siblingIndex = buildSiblingIndex();
+  const orbitTargets = buildOrbitTargets(cx, cy, branchLoads, siblingIndex);
+
   // Loop nodes.
   for (const loop of state.loops.values()) {
     if (physics.nodes.has(loop.id)) continue;
     let sx, sy;
-    if (loop.parent_id) {
-      // Children spawn near their parent.
-      const parent = physics.nodes.get(loop.parent_id);
-      if (parent) {
-        // Spawn at child rest length from parent with random angle
-        // so the spring starts near equilibrium.
-        const a = Math.random() * 2 * Math.PI;
-        sx = parent.x + physics.childRestLength * Math.cos(a);
-        sy = parent.y + physics.childRestLength * Math.sin(a);
-      } else {
-        sx = cx + (Math.random() * 40 - 20);
-        sy = cy + (Math.random() * 40 - 20);
-      }
+    const target = orbitTargets.get(loop.id);
+    if (target) {
+      const jitter = 6 + Math.random() * 8;
+      const angle = target.angle + ((Math.random() - 0.5) * 0.5);
+      sx = target.x + Math.cos(angle) * jitter;
+      sy = target.y + Math.sin(angle) * jitter;
     } else {
-      // Top-level nodes spawn at the spring rest length from center
-      // (random angle) so the spring starts near equilibrium instead
-      // of repelling the node outward from inside the rest length.
-      const angle = Math.random() * 2 * Math.PI;
-      const r = physics.springRestLength * (0.8 + Math.random() * 0.4);
-      sx = cx + r * Math.cos(angle);
-      sy = cy + r * Math.sin(angle);
+      sx = cx + (Math.random() * 40 - 20);
+      sy = cy + (Math.random() * 40 - 20);
     }
     physics.nodes.set(loop.id, { x: sx, y: sy, vx: 0, vy: 0, pinned: false });
   }
@@ -499,9 +336,8 @@ function getPhysicsNodeExtent(id) {
   return getLoopVisualCapacity(loop).radius + 14;
 }
 
-// Run one physics simulation step. Applies center gravity, spring
-// attraction (system↔top-level, parent↔child), pairwise repulsion,
-// then integrates velocity and position with damping.
+// Run one physics simulation step. The hierarchy defines the desired orbit
+// structure, and physics is only used to smooth motion plus resolve overlap.
 function physicsStep(cx, cy, vw, vh) {
   const P = physics;
   const nodes = Array.from(P.nodes.values());
@@ -509,66 +345,31 @@ function physicsStep(cx, cy, vw, vh) {
   const n = nodes.length;
   if (n === 0) return;
   const branchLoads = buildLoopBranchLoads();
-  const branchIndex = buildBranchIndex();
   const siblingIndex = buildSiblingIndex();
-  const topLevelTargets = buildTopLevelOrbitTargets(cx, cy, branchLoads);
-  const siblingTargets = buildSiblingOrbitTargets(siblingIndex);
+  const orbitTargets = buildOrbitTargets(cx, cy, branchLoads, siblingIndex);
   const motionScale = getGraphMotionScale(n);
   const edges = [];
-
-  // Anisotropic gravity — scale per-axis so the node cloud stretches
-  // to fill non-square viewports. On a square viewport the factors
-  // are both 1.0 (no-op). On a 2:1 ultrawide, X gravity drops ~30%
-  // and Y rises ~40%, naturally spreading nodes along the wide axis.
-  const aspect = (vw && vh && vh > 0) ? vw / vh : 1;
-  const sqrtA = Math.sqrt(aspect);
-  const gravX = P.centerGravity / sqrtA;
-  const gravY = P.centerGravity * sqrtA;
 
   // Reset forces.
   for (const nd of nodes) { nd.fx = 0; nd.fy = 0; }
 
-  // 1. Center gravity — anisotropic pull toward (cx, cy).
-  for (const nd of nodes) {
-    if (nd.pinned) continue;
-    nd.fx += (cx - nd.x) * gravX;
-    nd.fy += (cy - nd.y) * gravY;
-  }
-
-  // 1b. Root orbit anchors — encourage top-level branches to settle into
-  // distinct pockets instead of collapsing into one undifferentiated cloud.
-  for (const [loopID, target] of topLevelTargets) {
+  // 1. Orbit attraction — every node chases an explicit parent-centered slot.
+  for (const [loopID, target] of orbitTargets) {
     const nd = P.nodes.get(loopID);
     if (!nd || nd.pinned) continue;
-    nd.fx += (target.x - nd.x) * P.branchAnchorStrength;
-    nd.fy += (target.y - nd.y) * P.branchAnchorStrength;
+    nd.fx += (target.x - nd.x) * P.orbitAttractionStrength;
+    nd.fy += (target.y - nd.y) * P.orbitAttractionStrength;
   }
 
-  // 1c. Branch containment — descendants should feel like they belong to
-  // their top-level branch pocket, not to the undifferentiated center.
-  for (const loop of state.loops.values()) {
-    if (!loop.parent_id) continue;
-    const nd = P.nodes.get(loop.id);
-    if (!nd || nd.pinned) continue;
-    const rootID = branchIndex.rootByID.get(loop.id);
-    const target = topLevelTargets.get(rootID);
-    if (!target) continue;
-    const depth = branchIndex.depthByID.get(loop.id) || 1;
-    const depthStrength = 1 + Math.min(0.8, (depth - 1) * 0.18);
-    nd.fx += (target.x - nd.x) * P.branchContainmentStrength * depthStrength;
-    nd.fy += (target.y - nd.y) * P.branchContainmentStrength * depthStrength;
-  }
-
-  // 2. Spring forces — build edge list from loop relationships.
+  // 2. Edge springs — keep the rendered connectors taut without letting them
+  // dominate the structure.
   for (const loop of state.loops.values()) {
     if (!P.nodes.has(loop.id)) continue;
     if (loop.parent_id && P.nodes.has(loop.parent_id)) {
-      // Parent↔child: shorter rest length, stronger spring for tight clusters.
-      const parentLoop = state.loops.get(loop.parent_id);
-      const spacingMultiplier = getPairSpacingMultiplier(parentLoop, loop);
       const source = P.nodes.get(loop.parent_id);
       const target = P.nodes.get(loop.id);
-      const restLength = P.childRestLength * spacingMultiplier;
+      const targetSpec = orbitTargets.get(loop.id);
+      const restLength = targetSpec ? targetSpec.radius : P.childRestLength;
       applySpring(
         source,
         target,
@@ -577,13 +378,10 @@ function physicsStep(cx, cy, vw, vh) {
       );
       edges.push({ sourceId: loop.parent_id, targetId: loop.id, source, target });
     } else if (P.nodes.has('__system__')) {
-      // System↔top-level (or orphaned child fallback): stretch farther out
-      // as a branch accumulates more descendants so cluster roots get the
-      // breathing room their hanging subgraph visually needs.
-      const restMultiplier = loop.parent_id ? 1 : getLoopClusterRestMultiplier(branchLoads.get(loop.id));
       const source = P.nodes.get('__system__');
       const target = P.nodes.get(loop.id);
-      const restLength = P.springRestLength * restMultiplier;
+      const targetSpec = orbitTargets.get(loop.id);
+      const restLength = targetSpec ? targetSpec.radius : P.springRestLength;
       applySpring(
         source,
         target,
@@ -592,57 +390,6 @@ function physicsStep(cx, cy, vw, vh) {
       );
       edges.push({ sourceId: '__system__', targetId: loop.id, source, target });
     }
-  }
-
-  // 2b. Sibling orbit anchors — spread children around their parent so each
-  // branch reads as a small island of related activity.
-  for (const [childID, target] of siblingTargets) {
-    const child = P.nodes.get(childID);
-    const parent = P.nodes.get(target.parentID);
-    if (!child || !parent || child.pinned) continue;
-    const loop = state.loops.get(childID);
-    const parentLoop = state.loops.get(target.parentID);
-    const spacingMultiplier = getPairSpacingMultiplier(parentLoop, loop);
-    const radius = P.childRestLength * spacingMultiplier * (1 + target.ring * 0.48);
-    const anchorX = parent.x + Math.cos(target.angle) * radius;
-    const anchorY = parent.y + Math.sin(target.angle) * radius;
-    child.fx += (anchorX - child.x) * P.siblingAnchorStrength;
-    child.fy += (anchorY - child.y) * P.siblingAnchorStrength;
-  }
-
-  // 2c. Angular equilibrium — orbital families should try to use the full
-  // circle around their center rather than collapsing into one favored arc.
-  const rootEntries = Array.from(topLevelTargets.keys()).map(id => ({ id }));
-  applyAngularEquilibrium(rootEntries, () => ({ x: cx, y: cy }), P.rootAngularBalanceStrength);
-  applyRadialEquilibrium(
-    rootEntries.map(id => ({ ...id, angle: topLevelTargets.get(id.id)?.angle })),
-    () => ({ x: cx, y: cy }),
-    entry => topLevelTargets.get(entry.id)?.radius || 0,
-    P.rootRadialBalanceStrength,
-  );
-
-  for (const [parentID, siblings] of siblingIndex) {
-    const parent = P.nodes.get(parentID);
-    if (!parent || siblings.length < 2) continue;
-    applyAngularEquilibrium(
-      siblings.map(loop => ({ id: loop.id })),
-      () => ({ x: parent.x, y: parent.y }),
-      P.siblingAngularBalanceStrength,
-    );
-    applyRadialEquilibrium(
-      siblings.map(loop => {
-        const target = siblingTargets.get(loop.id);
-        return { id: loop.id, angle: target?.angle, ring: target?.ring || 0 };
-      }),
-      () => ({ x: parent.x, y: parent.y }),
-      entry => {
-        const loop = state.loops.get(entry.id);
-        const parentLoop = state.loops.get(parentID);
-        const spacingMultiplier = getPairSpacingMultiplier(parentLoop, loop);
-        return P.childRestLength * spacingMultiplier * (1 + (entry.ring || 0) * 0.48);
-      },
-      P.siblingRadialBalanceStrength,
-    );
   }
 
   // 3. Soft border gravity keeps the cloud within the viewport while still
@@ -666,38 +413,27 @@ function physicsStep(cx, cy, vw, vh) {
     else if (nd.y > maxY) nd.fy -= (nd.y - maxY) * P.wallStrength;
   }
 
-  // 4. Pairwise repulsion (O(n²), fine for dashboard-sized graphs).
-  const EPS = 100; // prevents division-by-zero / explosion at overlap
+  // 4. Pairwise repulsion — Gource-style conflict resolution rather than a
+  // long-range inverse-square field. Nodes mostly honor their family slots
+  // unless they actually interfere with each other.
   for (let i = 0; i < n; i++) {
     for (let j = i + 1; j < n; j++) {
       const a = nodes[i], b = nodes[j];
-      const dx = b.x - a.x;
-      const dy = b.y - a.y;
-      const distSq = dx * dx + dy * dy + EPS;
-      const dist = Math.sqrt(distSq);
+      let dx = b.x - a.x;
+      let dy = b.y - a.y;
+      let dist = Math.sqrt((dx * dx) + (dy * dy));
       const loopA = ids[i] === '__system__' ? null : state.loops.get(ids[i]);
       const loopB = ids[j] === '__system__' ? null : state.loops.get(ids[j]);
-      let spacingMultiplier = getPairSpacingMultiplier(loopA, loopB);
-      const rootA = ids[i] === '__system__' ? '__system__' : (branchIndex.rootByID.get(ids[i]) || ids[i]);
-      const rootB = ids[j] === '__system__' ? '__system__' : (branchIndex.rootByID.get(ids[j]) || ids[j]);
-      if (rootA !== rootB) {
-        spacingMultiplier *= P.crossBranchRepulsionMultiplier;
-      } else if (rootA !== '__system__') {
-        spacingMultiplier *= P.sameBranchRepulsionMultiplier;
+      const spacingMultiplier = getPairSpacingMultiplier(loopA, loopB);
+      const minGap = (getPhysicsNodeExtent(ids[i]) + getPhysicsNodeExtent(ids[j]) + P.collisionPadding) * P.overlapRepulsionRange;
+      if (dist >= minGap) continue;
+      if (dist < 0.001) {
+        const angle = Math.random() * Math.PI * 2;
+        dx = Math.cos(angle);
+        dy = Math.sin(angle);
+        dist = 1;
       }
-      if (ids[i] === '__system__' && loopB && !loopB.parent_id) {
-        spacingMultiplier *= getLoopClusterRepulsionMultiplier(branchLoads.get(loopB.id));
-      } else if (ids[j] === '__system__' && loopA && !loopA.parent_id) {
-        spacingMultiplier *= getLoopClusterRepulsionMultiplier(branchLoads.get(loopA.id));
-      } else if (loopA && loopB && !loopA.parent_id && !loopB.parent_id) {
-        const multA = getLoopClusterRepulsionMultiplier(branchLoads.get(loopA.id));
-        const multB = getLoopClusterRepulsionMultiplier(branchLoads.get(loopB.id));
-        spacingMultiplier *= 1 + (((multA - 1) + (multB - 1)) * 0.2);
-      }
-      const baseForce = (P.repulsionStrength * spacingMultiplier) / distSq;
-      const minGap = getPhysicsNodeExtent(ids[i]) + getPhysicsNodeExtent(ids[j]) + P.collisionPadding;
-      const overlapForce = dist < minGap ? (minGap - dist) * 0.14 * spacingMultiplier : 0;
-      const force = baseForce + overlapForce;
+      const force = (minGap - dist) * P.overlapRepulsionStrength * spacingMultiplier;
       const fx = (dx / dist) * force;
       const fy = (dy / dist) * force;
       a.fx -= fx; a.fy -= fy;
@@ -799,39 +535,9 @@ function physicsStep(cx, cy, vw, vh) {
     }
   }
 
-  // 7. Family orbit projection — after the global force soup settles,
-  // nudge each sibling family back toward an explicit equalized orbit
-  // around its parent. This keeps the hierarchy readable without
-  // special-casing tier 1: roots are just the children of core.
-  projectOrbitFamily(
-    Array.from(topLevelTargets.keys()).map(id => ({ id })),
-    () => ({ x: cx, y: cy }),
-    entry => topLevelTargets.get(entry.id) || null,
-    P.rootOrbitProjection,
-    P.orbitProjectionVelocityDamping,
-  );
-
-  for (const [parentID, siblings] of siblingIndex) {
-    const parent = P.nodes.get(parentID);
-    if (!parent || siblings.length === 0) continue;
-    projectOrbitFamily(
-      siblings.map(loop => ({ id: loop.id })),
-      () => ({ x: parent.x, y: parent.y }),
-      entry => {
-        const target = siblingTargets.get(entry.id);
-        if (!target) return null;
-        const loop = state.loops.get(entry.id);
-        const parentLoop = state.loops.get(parentID);
-        const spacingMultiplier = getPairSpacingMultiplier(parentLoop, loop);
-        return {
-          angle: target.angle,
-          radius: P.childRestLength * spacingMultiplier * (1 + target.ring * 0.48),
-        };
-      },
-      P.siblingOrbitProjection,
-      P.orbitProjectionVelocityDamping,
-    );
-  }
+  // 7. Orbit projection — keep the hierarchy primary, with motion used for
+  // smoothing instead of letting the force solver invent topology.
+  projectOrbitTargets(orbitTargets, P.orbitProjectionBlend, P.orbitProjectionVelocityDamping);
 }
 
 // Apply a spring force between two nodes.
