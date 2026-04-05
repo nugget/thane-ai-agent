@@ -1364,8 +1364,8 @@ function applySchemaCardPreset(card, mode) {
   const entityKind = card.dataset.entityKind || '';
   const cardKey = card.dataset.cardKey || '';
   setSchemaCardLayout(entityKind, cardKey, { mode, height: 0 });
-  syncSchemaCardLayout(card);
-  bumpDetailInteractionHold(900);
+  bumpDetailInteractionHold(450);
+  renderDetail({ force: true });
 }
 
 function bumpDetailInteractionHold(ms = 1200) {
@@ -1400,9 +1400,9 @@ function currentDetailSelectionKey() {
   return null;
 }
 
-function withPreservedDetailScroll(renderFn) {
+function withPreservedDetailScroll(renderFn, opts = {}) {
   const selectionKey = currentDetailSelectionKey();
-  if (detailPanel && selectionKey !== null && selectionKey === lastDetailSelectionKey && shouldDeferDetailRender()) {
+  if (!opts.force && detailPanel && selectionKey !== null && selectionKey === lastDetailSelectionKey && shouldDeferDetailRender()) {
     return;
   }
 
@@ -3272,7 +3272,7 @@ function buildSystemContextMenu(sys) {
   ];
 }
 
-function renderDetail() {
+function renderDetail(opts = {}) {
   withPreservedDetailScroll(() => {
     const isSystem = state.selected === '__system__';
     const isLoop = state.selected && state.loops.has(state.selected);
@@ -3295,7 +3295,7 @@ function renderDetail() {
 
     const loop = state.loops.get(state.selected);
     renderLoopEntityDetail(loop);
-  });
+  }, opts);
 }
 
 // renderAggregates, renderTimeline, clearLiveTelemetry are in shared.js.
