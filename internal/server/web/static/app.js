@@ -54,6 +54,58 @@ const physics = {
   resizeVelocityGain: 0.12,
 };
 
+function buildLoopBranchLoads() {
+  const childrenByParent = new Map();
+  for (const loop of state.loops.values()) {
+    if (!loop.parent_id) continue;
+    if (!childrenByParent.has(loop.parent_id)) childrenByParent.set(loop.parent_id, []);
+    childrenByParent.get(loop.parent_id).push(loop.id);
+  }
+
+  const cache = new Map();
+
+  function measure(loopID) {
+    if (cache.has(loopID)) return cache.get(loopID);
+    const ownExtent = getPhysicsNodeExtent(loopID);
+    const childIDs = childrenByParent.get(loopID) || [];
+    let descendants = 0;
+    let branchExtent = ownExtent;
+    for (const childID of childIDs) {
+      const childLoad = measure(childID);
+      descendants += 1 + childLoad.descendants;
+      branchExtent += childLoad.branchExtent;
+    }
+    const load = { ownExtent, descendants, branchExtent };
+    cache.set(loopID, load);
+    return load;
+  }
+
+  for (const loop of state.loops.values()) {
+    measure(loop.id);
+  }
+
+  return cache;
+}
+
+function getLoopBranchFootprint(load) {
+  if (!load) return 0;
+  return Math.max(0, load.branchExtent - load.ownExtent);
+}
+
+function getLoopClusterRestMultiplier(load) {
+  if (!load || load.descendants <= 0) return 1;
+  const descendantFactor = Math.min(0.75, load.descendants * 0.09);
+  const footprintFactor = Math.min(0.35, getLoopBranchFootprint(load) / Math.max(load.ownExtent * 18, 1));
+  return 1 + descendantFactor + footprintFactor;
+}
+
+function getLoopClusterRepulsionMultiplier(load) {
+  if (!load || load.descendants <= 0) return 1;
+  const descendantFactor = Math.min(0.95, load.descendants * 0.11);
+  const footprintFactor = Math.min(0.5, getLoopBranchFootprint(load) / Math.max(load.ownExtent * 12, 1));
+  return 1 + descendantFactor + footprintFactor;
+}
+
 function getLoopMetadata(loop) {
   return (loop && loop.config && loop.config.Metadata) || {};
 }
@@ -207,6 +259,7 @@ function physicsStep(cx, cy, vw, vh) {
   const ids = Array.from(P.nodes.keys());
   const n = nodes.length;
   if (n === 0) return;
+  const branchLoads = buildLoopBranchLoads();
 
   // Anisotropic gravity — scale per-axis so the node cloud stretches
   // to fill non-square viewports. On a square viewport the factors
@@ -241,8 +294,16 @@ function physicsStep(cx, cy, vw, vh) {
         P.childRestLength * spacingMultiplier,
       );
     } else if (P.nodes.has('__system__')) {
-      // System↔top-level (or orphaned child fallback): standard spring.
-      applySpring(P.nodes.get('__system__'), P.nodes.get(loop.id), P.springStrength, P.springRestLength);
+      // System↔top-level (or orphaned child fallback): stretch farther out
+      // as a branch accumulates more descendants so cluster roots get the
+      // breathing room their hanging subgraph visually needs.
+      const restMultiplier = loop.parent_id ? 1 : getLoopClusterRestMultiplier(branchLoads.get(loop.id));
+      applySpring(
+        P.nodes.get('__system__'),
+        P.nodes.get(loop.id),
+        P.springStrength,
+        P.springRestLength * restMultiplier,
+      );
     }
   }
 
@@ -278,7 +339,16 @@ function physicsStep(cx, cy, vw, vh) {
       const dist = Math.sqrt(distSq);
       const loopA = ids[i] === '__system__' ? null : state.loops.get(ids[i]);
       const loopB = ids[j] === '__system__' ? null : state.loops.get(ids[j]);
-      const spacingMultiplier = getPairSpacingMultiplier(loopA, loopB);
+      let spacingMultiplier = getPairSpacingMultiplier(loopA, loopB);
+      if (ids[i] === '__system__' && loopB && !loopB.parent_id) {
+        spacingMultiplier *= getLoopClusterRepulsionMultiplier(branchLoads.get(loopB.id));
+      } else if (ids[j] === '__system__' && loopA && !loopA.parent_id) {
+        spacingMultiplier *= getLoopClusterRepulsionMultiplier(branchLoads.get(loopA.id));
+      } else if (loopA && loopB && !loopA.parent_id && !loopB.parent_id) {
+        const multA = getLoopClusterRepulsionMultiplier(branchLoads.get(loopA.id));
+        const multB = getLoopClusterRepulsionMultiplier(branchLoads.get(loopB.id));
+        spacingMultiplier *= 1 + (((multA - 1) + (multB - 1)) * 0.2);
+      }
       const baseForce = (P.repulsionStrength * spacingMultiplier) / distSq;
       const minGap = getPhysicsNodeExtent(ids[i]) + getPhysicsNodeExtent(ids[j]) + P.collisionPadding;
       const overlapForce = dist < minGap ? (minGap - dist) * 0.14 * spacingMultiplier : 0;
