@@ -16,7 +16,6 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/connwatch"
 	"github.com/nugget/thane-ai-agent/internal/contacts"
 	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
-	"github.com/nugget/thane-ai-agent/internal/metacognitive"
 	"github.com/nugget/thane-ai-agent/internal/platform"
 	"github.com/nugget/thane-ai-agent/internal/server/api"
 	"github.com/nugget/thane-ai-agent/internal/server/web"
@@ -25,8 +24,8 @@ import (
 
 // initServers creates servers, infrastructure services, and background
 // publisher loops. This covers the API server, checkpointer, OWU tracker,
-// Ollama-compatible server, CardDAV, MQTT publishing, web dashboard, and
-// the metacognitive loop.
+// Ollama-compatible server, CardDAV, MQTT publishing, the web dashboard,
+// and durable loop-definition services.
 func (a *App) initServers(s *newState) error {
 	cfg := a.cfg
 	logger := a.logger
@@ -568,61 +567,12 @@ func (a *App) initServers(s *newState) error {
 		logger.Info("cognition engine dashboard enabled", "url", fmt.Sprintf("http://localhost:%d/", cfg.Listen.Port))
 	}
 
-	// --- Metacognitive loop ---
-	if cfg.Metacognitive.Enabled {
-		metacogCfg, err := metacognitive.ParseConfig(cfg.Metacognitive)
-		if err != nil {
-			return fmt.Errorf("metacognitive config: %w", err)
-		}
-		a.metacogCfg = &metacogCfg
-
-		// Resolve state file path: provenance store when configured,
-		// workspace-relative otherwise. Uses filepath.Base to normalize
-		// config values like "Thane/metacognitive.md" to flat layout.
-		stateFileName := filepath.Base(metacogCfg.StateFile)
-		var metacogStatePath string
-		if a.provenanceStore != nil {
-			metacogStatePath = a.provenanceStore.FilePath(stateFileName)
-		} else {
-			metacogStatePath = filepath.Join(cfg.Workspace.Path, metacogCfg.StateFile)
-		}
-
-		adapter := &loopAdapter{agentLoop: a.loop, router: a.rtr}
-		loopSpec := metacognitive.BuildSpec(metacogCfg, metacognitive.Opts{
-			WorkspacePath:   cfg.Workspace.Path,
-			StateFilePath:   metacogStatePath,
-			ProvenanceStore: a.provenanceStore,
-			StateFileName:   stateFileName,
-		})
-		loopSpec.Setup = func(l *looppkg.Loop) {
-			metacognitive.RegisterTools(a.loop.Tools(), l, metacogCfg, metacogStatePath, a.provenanceStore)
-		}
-
-		metacogDeps := looppkg.Deps{
-			Runner:   adapter,
-			Logger:   logger,
-			EventBus: a.eventBus,
-		}
-		a.deferWorker("metacognitive", func(ctx context.Context) error {
-			if _, err := a.loopRegistry.SpawnSpec(ctx, loopSpec, metacogDeps); err != nil {
-				return fmt.Errorf("spawn metacognitive loop: %w", err)
-			}
-			return nil
-		})
-
-		logger.Info("metacognitive loop enabled",
-			"state_file", cfg.Metacognitive.StateFile,
-			"min_sleep", cfg.Metacognitive.MinSleep,
-			"max_sleep", cfg.Metacognitive.MaxSleep,
-			"supervisor_probability", cfg.Metacognitive.SupervisorProbability,
-		)
-	}
-
 	// --- Loop definition services ---
 	// Durable loops-ng service definitions are bootstrapped from the
-	// immutable+overlay definition registry. Existing special-case loops
-	// still start through their legacy paths for now; bootstrap skips
-	// duplicate names so the later migration can remain mechanical.
+	// immutable+overlay definition registry. Built-in services like
+	// metacognitive can participate as first-class definitions via
+	// runtime spec hydration; remaining startup-owned services still
+	// start through their legacy paths for now.
 	if a.loopDefinitionRuntime != nil {
 		a.deferWorker("loop-definition-services", func(ctx context.Context) error {
 			result, err := a.loopDefinitionRuntime.StartEnabledServices(ctx)

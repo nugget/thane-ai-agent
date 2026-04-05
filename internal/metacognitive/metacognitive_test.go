@@ -413,6 +413,42 @@ func TestBuildSpec(t *testing.T) {
 	}
 }
 
+func TestDefinitionSpecPersistable(t *testing.T) {
+	cfg := testConfig()
+
+	spec := DefinitionSpec(cfg)
+	if spec.Name != DefinitionName {
+		t.Errorf("Name = %q, want %q", spec.Name, DefinitionName)
+	}
+	if spec.TaskBuilder != nil || spec.PostIterate != nil || spec.Setup != nil {
+		t.Fatal("DefinitionSpec should not include runtime hooks")
+	}
+	if err := spec.ValidatePersistable(); err != nil {
+		t.Fatalf("ValidatePersistable: %v", err)
+	}
+}
+
+func TestHydrateSpecAttachesLoopRuntimeHooks(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := testConfig()
+	opts := Opts{
+		WorkspacePath: tmpDir,
+		StateFilePath: filepath.Join(tmpDir, cfg.StateFile),
+		StateFileName: cfg.StateFile,
+	}
+
+	spec := HydrateSpec(DefinitionSpec(cfg), cfg, opts)
+	if spec.TaskBuilder == nil {
+		t.Fatal("TaskBuilder should be set after hydration")
+	}
+	if spec.PostIterate == nil {
+		t.Fatal("PostIterate should be set after hydration")
+	}
+	if spec.Setup != nil {
+		t.Fatal("HydrateSpec should not attach app-level setup hooks")
+	}
+}
+
 func TestBuildLoopConfig(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := testConfig()

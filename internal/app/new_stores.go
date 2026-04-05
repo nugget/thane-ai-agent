@@ -27,14 +27,6 @@ const (
 	modelExperiencePersistInterval = 5 * time.Second
 )
 
-func modelResourceRefreshCallbacks(ctx context.Context, resourceID string, refresh func(context.Context, string)) (func(), func(error)) {
-	return func() {
-			refresh(ctx, "resource_ready:"+resourceID)
-		}, func(error) {
-			refresh(ctx, "resource_down:"+resourceID)
-		}
-}
-
 // initStores creates data stores, background infrastructure, and the
 // model router. Most components are passive — their goroutines are
 // started later via deferred workers — but connwatch watchers start
@@ -65,7 +57,12 @@ func (a *App) initStores(s *newState) error {
 	loopRegistry := looppkg.NewRegistry(looppkg.WithRegistryLogger(logger))
 	a.loopRegistry = loopRegistry
 
-	loopDefinitionRegistry, err := looppkg.NewDefinitionRegistry(cfg.Loops.Definitions)
+	baseDefinitions, err := a.buildLoopDefinitionBaseSpecs()
+	if err != nil {
+		return err
+	}
+
+	loopDefinitionRegistry, err := looppkg.NewDefinitionRegistry(baseDefinitions)
 	if err != nil {
 		return fmt.Errorf("create loop definition registry: %w", err)
 	}

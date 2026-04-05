@@ -156,7 +156,7 @@ type App struct {
 	loopDefinitionRuntime  *loopDefinitionRuntime
 	loopCompletionDelivery *detachedLoopCompletionDispatcher
 
-	// Metacognitive config (stored for Serve-time use)
+	// Metacognitive config (stored for loop-definition hydration)
 	metacogCfg *metacognitive.Config
 
 	// Event bus

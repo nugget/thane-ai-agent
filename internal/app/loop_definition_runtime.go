@@ -30,6 +30,7 @@ type loopDefinitionRuntime struct {
 	loops        *looppkg.Registry
 	runner       looppkg.Runner
 	completion   looppkg.CompletionSink
+	hydrate      func(looppkg.Spec) (looppkg.Spec, error)
 	logger       *slog.Logger
 	eventBus     *events.Bus
 	lifecycleCtx context.Context
@@ -47,6 +48,7 @@ func newAppLoopDefinitionRuntime(a *App) *loopDefinitionRuntime {
 		loops:        a.loopRegistry,
 		runner:       &loopAdapter{agentLoop: a.loop, router: a.rtr},
 		completion:   dispatcher.Deliver,
+		hydrate:      a.hydrateLoopDefinitionSpec,
 		logger:       a.logger,
 		eventBus:     a.eventBus,
 		lifecycleCtx: context.Background(),
@@ -74,6 +76,13 @@ func (r *loopDefinitionRuntime) definitionLogger(name string) *slog.Logger {
 		logger = slog.Default()
 	}
 	return logger.With("definition_name", name)
+}
+
+func (r *loopDefinitionRuntime) runtimeSpec(spec looppkg.Spec) (looppkg.Spec, error) {
+	if r == nil || r.hydrate == nil {
+		return spec, nil
+	}
+	return r.hydrate(spec)
 }
 
 func (r *loopDefinitionRuntime) definition(name string) (looppkg.DefinitionSnapshot, bool) {
@@ -275,7 +284,11 @@ func (r *loopDefinitionRuntime) StartEnabledServices(ctx context.Context) (loopD
 			continue
 		}
 
-		if _, err := r.loops.SpawnSpec(ctx, spec, r.deps()); err != nil {
+		runtimeSpec, err := r.runtimeSpec(spec)
+		if err != nil {
+			return result, fmt.Errorf("hydrate loop definition %q: %w", spec.Name, err)
+		}
+		if _, err := r.loops.SpawnSpec(ctx, runtimeSpec, r.deps()); err != nil {
 			return result, fmt.Errorf("spawn loop definition %q: %w", spec.Name, err)
 		}
 		result.Started++
@@ -338,12 +351,16 @@ func (r *loopDefinitionRuntime) ReconcileDefinition(ctx context.Context, name st
 	if existing != nil {
 		return nil
 	}
+	runtimeSpec, err := r.runtimeSpec(def.Spec)
+	if err != nil {
+		return fmt.Errorf("hydrate loop definition %q: %w", name, err)
+	}
 	log.Info("starting loop definition service",
 		"source", def.Source,
 		"policy_state", def.PolicyState,
 		"completion", def.Spec.Completion,
 	)
-	_, err := r.loops.SpawnSpec(r.serviceContext(), def.Spec, r.deps())
+	_, err = r.loops.SpawnSpec(r.serviceContext(), runtimeSpec, r.deps())
 	return err
 }
 
@@ -388,11 +405,15 @@ func (r *loopDefinitionRuntime) LaunchDefinition(ctx context.Context, name strin
 		}
 	}
 
-	launch.Spec = def.Spec
+	runtimeSpec, err := r.runtimeSpec(def.Spec)
+	if err != nil {
+		return looppkg.LaunchResult{}, fmt.Errorf("hydrate loop definition %q: %w", name, err)
+	}
+	launch.Spec = runtimeSpec
 	log.Info("launching loop definition",
 		"source", def.Source,
-		"operation", def.Spec.Operation,
-		"completion", def.Spec.Completion,
+		"operation", runtimeSpec.Operation,
+		"completion", runtimeSpec.Completion,
 		"policy_state", def.PolicyState,
 		"conversation_id", launch.ConversationID,
 		"completion_conversation_id", launch.CompletionConversationID,

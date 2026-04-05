@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -135,6 +136,59 @@ func TestLoopDefinitionRuntimeSkipsExistingLoopName(t *testing.T) {
 	}
 	if result.Started != 0 || result.SkippedExisting != 1 {
 		t.Fatalf("result = %+v, want started=0 existing=1", result)
+	}
+}
+
+func TestLoopDefinitionRuntimeStartEnabledServicesHydratesRuntimeSpec(t *testing.T) {
+	t.Parallel()
+
+	registry, err := looppkg.NewDefinitionRegistry([]looppkg.Spec{{
+		Name:         "metacognitive",
+		Enabled:      true,
+		Task:         "Observe and reflect.",
+		Operation:    looppkg.OperationService,
+		Completion:   looppkg.CompletionNone,
+		SleepMin:     time.Minute,
+		SleepMax:     time.Minute,
+		SleepDefault: time.Minute,
+		Jitter:       looppkg.Float64Ptr(0),
+	}})
+	if err != nil {
+		t.Fatalf("NewDefinitionRegistry: %v", err)
+	}
+
+	loops := looppkg.NewRegistry()
+	t.Cleanup(func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		loops.ShutdownAll(shutdownCtx)
+	})
+
+	var setupCalls atomic.Int32
+	runtime := &loopDefinitionRuntime{
+		definitions: registry,
+		loops:       loops,
+		runner:      testLoopRunner{},
+		hydrate: func(spec looppkg.Spec) (looppkg.Spec, error) {
+			spec.Setup = func(*looppkg.Loop) {
+				setupCalls.Add(1)
+			}
+			return spec, nil
+		},
+		logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
+		now:        time.Now,
+		scheduleCh: make(chan struct{}, 1),
+	}
+
+	result, err := runtime.StartEnabledServices(context.Background())
+	if err != nil {
+		t.Fatalf("StartEnabledServices: %v", err)
+	}
+	if result.Started != 1 {
+		t.Fatalf("result = %+v, want started=1", result)
+	}
+	if setupCalls.Load() != 1 {
+		t.Fatalf("hydrate Setup calls = %d, want 1", setupCalls.Load())
 	}
 }
 
