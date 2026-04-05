@@ -201,8 +201,10 @@ func MergeInventory(base *Catalog, inv *Inventory) (*Catalog, error) {
 
 	existingByResourceModel := make(map[string]bool, len(out.Deployments))
 	existingByID := make(map[string]bool, len(out.Deployments))
-	for _, dep := range out.Deployments {
+	deploymentIndexByResourceModel := make(map[string]int, len(out.Deployments))
+	for i, dep := range out.Deployments {
 		existingByResourceModel[deploymentKey(dep.ResourceID, dep.ModelName)] = true
+		deploymentIndexByResourceModel[deploymentKey(dep.ResourceID, dep.ModelName)] = i
 		existingByID[dep.ID] = true
 	}
 
@@ -219,43 +221,79 @@ func MergeInventory(base *Catalog, inv *Inventory) (*Catalog, error) {
 				continue
 			}
 			key := deploymentKey(ri.ResourceID, m.Name)
-			if existingByResourceModel[key] {
+			if idx, ok := deploymentIndexByResourceModel[key]; ok {
+				dep := out.Deployments[idx]
+				if m.ModelType != "" {
+					dep.ModelType = m.ModelType
+				}
+				if m.Publisher != "" {
+					dep.Publisher = m.Publisher
+				}
+				if m.CompatibilityType != "" {
+					dep.CompatibilityType = m.CompatibilityType
+				}
+				if m.State != "" {
+					dep.RunnerState = m.State
+				}
+				if m.Family != "" {
+					dep.Family = m.Family
+				}
+				if len(m.Families) > 0 {
+					dep.Families = append([]string(nil), m.Families...)
+				}
+				if m.ParameterSize != "" {
+					dep.ParameterSize = m.ParameterSize
+				}
+				if m.Quantization != "" {
+					dep.Quantization = m.Quantization
+				}
+				dep.ObservedSupportsTools = m.SupportsTools || caps.SupportsTools
+				dep.ObservedSupportsStreaming = m.SupportsStreaming || caps.SupportsStreaming
+				dep.ObservedContextWindow = m.ContextWindow
+				dep.MaxContextWindow = m.MaxContextWindow
+				dep.LoadedContextWindow = m.LoadedContextWindow
+				dep.LoadedInstanceID = m.LoadedInstanceID
+				dep.SupportsImages = m.SupportsImages
+				applyObservedCapabilities(&dep, caps)
+				out.Deployments[idx] = dep
 				continue
 			}
 			id := ri.ResourceID + "/" + m.Name
 			if existingByID[id] {
 				continue
 			}
-			out.Deployments = append(out.Deployments, Deployment{
-				ID:                    id,
-				ModelName:             m.Name,
-				ModelType:             m.ModelType,
-				Publisher:             m.Publisher,
-				Provider:              ri.Provider,
-				ResourceID:            ri.ResourceID,
-				Server:                ri.ResourceID,
-				CompatibilityType:     m.CompatibilityType,
-				RunnerState:           m.State,
-				SupportsTools:         m.SupportsTools || caps.SupportsTools,
-				TrainedForToolUse:     m.TrainedForToolUse,
-				ProviderSupportsTools: caps.SupportsTools,
-				SupportsStreaming:     m.SupportsStreaming || caps.SupportsStreaming,
-				SupportsImages:        m.SupportsImages,
-				ContextWindow:         firstPositiveInt(m.ContextWindow, base.ContextWindowForModel(m.Name, 8192)),
-				MaxContextWindow:      m.MaxContextWindow,
-				LoadedContextWindow:   m.LoadedContextWindow,
-				LoadedInstanceID:      m.LoadedInstanceID,
-				Speed:                 5,
-				Quality:               5,
-				CostTier:              defaultCostTier(ri.Provider),
-				Source:                DeploymentSourceDiscovered,
-				Routable:              false,
-				Family:                m.Family,
-				Families:              append([]string(nil), m.Families...),
-				ParameterSize:         m.ParameterSize,
-				Quantization:          m.Quantization,
-			})
+			dep := Deployment{
+				ID:                        id,
+				ModelName:                 m.Name,
+				ModelType:                 m.ModelType,
+				Publisher:                 m.Publisher,
+				Provider:                  ri.Provider,
+				ResourceID:                ri.ResourceID,
+				Server:                    ri.ResourceID,
+				CompatibilityType:         m.CompatibilityType,
+				RunnerState:               m.State,
+				ObservedSupportsTools:     m.SupportsTools || caps.SupportsTools,
+				TrainedForToolUse:         m.TrainedForToolUse,
+				ObservedSupportsStreaming: m.SupportsStreaming || caps.SupportsStreaming,
+				SupportsImages:            m.SupportsImages,
+				ObservedContextWindow:     firstPositiveInt(m.ContextWindow, base.ContextWindowForModel(m.Name, 0)),
+				MaxContextWindow:          m.MaxContextWindow,
+				LoadedContextWindow:       m.LoadedContextWindow,
+				LoadedInstanceID:          m.LoadedInstanceID,
+				Speed:                     5,
+				Quality:                   5,
+				CostTier:                  defaultCostTier(ri.Provider),
+				Source:                    DeploymentSourceDiscovered,
+				Routable:                  false,
+				Family:                    m.Family,
+				Families:                  append([]string(nil), m.Families...),
+				ParameterSize:             m.ParameterSize,
+				Quantization:              m.Quantization,
+			}
+			applyObservedCapabilities(&dep, caps)
+			out.Deployments = append(out.Deployments, dep)
 			existingByResourceModel[key] = true
+			deploymentIndexByResourceModel[key] = len(out.Deployments) - 1
 			existingByID[id] = true
 		}
 	}

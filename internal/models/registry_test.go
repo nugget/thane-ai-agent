@@ -4,7 +4,13 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	modelproviders "github.com/nugget/thane-ai-agent/internal/models/providers"
 )
+
+func boolPtr(v bool) *bool {
+	return &v
+}
 
 func TestRegistryApplyInventoryBuildsEffectiveSnapshot(t *testing.T) {
 	t.Parallel()
@@ -128,8 +134,76 @@ func TestRegistryApplyInventoryBuildsEffectiveSnapshot(t *testing.T) {
 	if !qwen.SupportsTools || !qwen.ProviderSupportsTools || !qwen.SupportsStreaming {
 		t.Fatalf("spark/qwen3:8b capabilities = %+v, want provider-driven tools/streaming", qwen)
 	}
+	if !qwen.ObservedSupportsTools || !qwen.ObservedSupportsStreaming {
+		t.Fatalf("spark/qwen3:8b observed capabilities = %+v, want observed tools/streaming", qwen)
+	}
 	if qwen.SupportsImages {
 		t.Fatalf("spark/qwen3:8b capabilities = %+v, want image support=false", qwen)
+	}
+}
+
+func TestRegistrySnapshotIncludesObservedAndEffectiveDeploymentAttributes(t *testing.T) {
+	t.Parallel()
+
+	base := &Catalog{
+		DefaultModel: "spark/gpt-oss:20b",
+		Resources: []Resource{
+			{
+				ID:           "spark",
+				Provider:     "ollama",
+				URL:          "http://spark.example",
+				Capabilities: modelproviders.CapabilitiesForProvider("ollama"),
+			},
+		},
+		Deployments: []Deployment{
+			{
+				ID:                        "spark/gpt-oss:20b",
+				ModelName:                 "gpt-oss:20b",
+				Provider:                  "ollama",
+				ResourceID:                "spark",
+				Server:                    "spark",
+				ObservedSupportsTools:     true,
+				ObservedSupportsStreaming: true,
+				ObservedContextWindow:     131072,
+				ContextWindow:             8192,
+				ContextWindowOverride:     8192,
+				SupportsTools:             true,
+				SupportsStreaming:         false,
+				SupportsStreamingOverride: boolPtr(false),
+				ProviderSupportsTools:     true,
+				Source:                    DeploymentSourceConfig,
+				Routable:                  true,
+			},
+		},
+	}
+	if err := base.reindex(base.DefaultModel, base.RecoveryModel); err != nil {
+		t.Fatalf("reindex base: %v", err)
+	}
+
+	reg, err := NewRegistry(base)
+	if err != nil {
+		t.Fatalf("NewRegistry: %v", err)
+	}
+
+	snap := reg.Snapshot()
+	dep, ok := findPolicySnapshot(snap, "spark/gpt-oss:20b")
+	if !ok {
+		t.Fatal("missing spark/gpt-oss:20b snapshot")
+	}
+	if !dep.ObservedSupportsTools {
+		t.Fatalf("dep.ObservedSupportsTools = false, want true")
+	}
+	if !dep.ObservedSupportsStreaming {
+		t.Fatalf("dep.ObservedSupportsStreaming = false, want true")
+	}
+	if dep.SupportsStreaming {
+		t.Fatalf("dep.SupportsStreaming = true, want false from effective override")
+	}
+	if dep.ObservedContextWindow != 131072 {
+		t.Fatalf("dep.ObservedContextWindow = %d, want 131072", dep.ObservedContextWindow)
+	}
+	if dep.ContextWindow != 8192 {
+		t.Fatalf("dep.ContextWindow = %d, want 8192 effective override", dep.ContextWindow)
 	}
 }
 

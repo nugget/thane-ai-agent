@@ -37,30 +37,33 @@ const (
 // same upstream model on different resources becomes distinct
 // deployments with distinct IDs.
 type Deployment struct {
-	ID                    string
-	ModelName             string
-	ModelType             string
-	Publisher             string
-	Provider              string
-	ResourceID            string
-	Server                string
-	CompatibilityType     string
-	RunnerState           string
-	SupportsTools         bool
-	TrainedForToolUse     bool
-	ProviderSupportsTools bool
-	SupportsStreaming     bool
-	SupportsImages        bool
-	ContextWindow         int
-	MaxContextWindow      int
-	LoadedContextWindow   int
-	LoadedInstanceID      string
-	Speed                 int
-	Quality               int
-	CostTier              int
-	MinComplexity         string
-	Source                DeploymentSource
-	Routable              bool
+	ID                        string
+	ModelName                 string
+	ModelType                 string
+	Publisher                 string
+	Provider                  string
+	ResourceID                string
+	Server                    string
+	CompatibilityType         string
+	RunnerState               string
+	SupportsTools             bool
+	ObservedSupportsTools     bool
+	TrainedForToolUse         bool
+	ProviderSupportsTools     bool
+	SupportsStreaming         bool
+	ObservedSupportsStreaming bool
+	SupportsImages            bool
+	ContextWindow             int
+	ObservedContextWindow     int
+	MaxContextWindow          int
+	LoadedContextWindow       int
+	LoadedInstanceID          string
+	Speed                     int
+	Quality                   int
+	CostTier                  int
+	MinComplexity             string
+	Source                    DeploymentSource
+	Routable                  bool
 
 	// Provider-exported metadata kept alongside the normalized Thane
 	// deployment so later routing/policy layers can reason with it.
@@ -78,6 +81,10 @@ type Deployment struct {
 	ResourcePolicySource    DeploymentPolicySource
 	ResourcePolicyReason    string
 	ResourcePolicyUpdatedAt time.Time
+
+	SupportsToolsOverride     *bool
+	SupportsStreamingOverride *bool
+	ContextWindowOverride     int
 }
 
 // Catalog is the normalized, provider-aware model view used by both
@@ -178,33 +185,33 @@ func BuildCatalog(cfg *config.Config) (*Catalog, error) {
 	}
 
 	type unresolved struct {
-		ID                  string
-		ModelName           string
-		ModelType           string
-		Publisher           string
-		Provider            string
-		ResourceID          string
-		Server              string
-		CompatibilityType   string
-		RunnerState         string
-		SupportsTools       bool
-		SupportsStreaming   *bool
-		TrainedForToolUse   bool
-		ContextWindow       int
-		MaxContextWindow    int
-		LoadedContextWindow int
-		LoadedInstanceID    string
-		Speed               int
-		Quality             int
-		CostTier            int
-		MinComplexity       string
-		Source              DeploymentSource
-		Routable            bool
-		AlwaysQualify       bool
-		Family              string
-		Families            []string
-		ParameterSize       string
-		Quantization        string
+		ID                    string
+		ModelName             string
+		ModelType             string
+		Publisher             string
+		Provider              string
+		ResourceID            string
+		Server                string
+		CompatibilityType     string
+		RunnerState           string
+		SupportsToolsOverride *bool
+		SupportsStreaming     *bool
+		TrainedForToolUse     bool
+		ContextWindowOverride int
+		MaxContextWindow      int
+		LoadedContextWindow   int
+		LoadedInstanceID      string
+		Speed                 int
+		Quality               int
+		CostTier              int
+		MinComplexity         string
+		Source                DeploymentSource
+		Routable              bool
+		AlwaysQualify         bool
+		Family                string
+		Families              []string
+		ParameterSize         string
+		Quantization          string
 	}
 
 	var pending []unresolved
@@ -260,20 +267,26 @@ func BuildCatalog(cfg *config.Config) (*Catalog, error) {
 		}
 
 		pending = append(pending, unresolved{
-			ModelName:         m.Name,
-			Provider:          provider,
-			ResourceID:        resourceID,
-			Server:            resourceName,
-			SupportsTools:     m.SupportsTools,
-			SupportsStreaming: m.SupportsStreaming,
-			TrainedForToolUse: m.SupportsTools,
-			ContextWindow:     m.ContextWindow,
-			Speed:             m.Speed,
-			Quality:           m.Quality,
-			CostTier:          m.CostTier,
-			MinComplexity:     m.MinComplexity,
-			Source:            DeploymentSourceConfig,
-			Routable:          true,
+			ModelName:  m.Name,
+			Provider:   provider,
+			ResourceID: resourceID,
+			Server:     resourceName,
+			SupportsToolsOverride: func() *bool {
+				override, ok := m.SupportsToolsOverride()
+				if !ok {
+					return nil
+				}
+				return override
+			}(),
+			SupportsStreaming:     m.SupportsStreaming,
+			TrainedForToolUse:     m.SupportsTools,
+			ContextWindowOverride: m.ContextWindow,
+			Speed:                 m.Speed,
+			Quality:               m.Quality,
+			CostTier:              m.CostTier,
+			MinComplexity:         m.MinComplexity,
+			Source:                DeploymentSourceConfig,
+			Routable:              true,
 		})
 		countByModel[m.Name]++
 	}
@@ -289,38 +302,35 @@ func BuildCatalog(cfg *config.Config) (*Catalog, error) {
 		}
 
 		dep := Deployment{
-			ID:                  id,
-			ModelName:           p.ModelName,
-			ModelType:           p.ModelType,
-			Publisher:           p.Publisher,
-			Provider:            p.Provider,
-			ResourceID:          p.ResourceID,
-			Server:              p.Server,
-			CompatibilityType:   p.CompatibilityType,
-			RunnerState:         p.RunnerState,
-			SupportsTools:       p.SupportsTools,
-			TrainedForToolUse:   p.TrainedForToolUse,
-			ContextWindow:       p.ContextWindow,
-			MaxContextWindow:    p.MaxContextWindow,
-			LoadedContextWindow: p.LoadedContextWindow,
-			LoadedInstanceID:    p.LoadedInstanceID,
-			Speed:               p.Speed,
-			Quality:             p.Quality,
-			CostTier:            p.CostTier,
-			MinComplexity:       p.MinComplexity,
-			Source:              p.Source,
-			Routable:            p.Routable,
-			Family:              p.Family,
-			Families:            append([]string(nil), p.Families...),
-			ParameterSize:       p.ParameterSize,
-			Quantization:        p.Quantization,
+			ID:                        id,
+			ModelName:                 p.ModelName,
+			ModelType:                 p.ModelType,
+			Publisher:                 p.Publisher,
+			Provider:                  p.Provider,
+			ResourceID:                p.ResourceID,
+			Server:                    p.Server,
+			CompatibilityType:         p.CompatibilityType,
+			RunnerState:               p.RunnerState,
+			TrainedForToolUse:         p.TrainedForToolUse,
+			MaxContextWindow:          p.MaxContextWindow,
+			LoadedContextWindow:       p.LoadedContextWindow,
+			LoadedInstanceID:          p.LoadedInstanceID,
+			Speed:                     p.Speed,
+			Quality:                   p.Quality,
+			CostTier:                  p.CostTier,
+			MinComplexity:             p.MinComplexity,
+			Source:                    p.Source,
+			Routable:                  p.Routable,
+			Family:                    p.Family,
+			Families:                  append([]string(nil), p.Families...),
+			ParameterSize:             p.ParameterSize,
+			Quantization:              p.Quantization,
+			SupportsToolsOverride:     p.SupportsToolsOverride,
+			SupportsStreamingOverride: p.SupportsStreaming,
+			ContextWindowOverride:     p.ContextWindowOverride,
 		}
 		if res, ok := resourceByID[p.ResourceID]; ok {
-			dep.ProviderSupportsTools = res.Capabilities.SupportsTools
-			dep.SupportsStreaming = res.Capabilities.SupportsStreaming
-			if p.SupportsStreaming != nil {
-				dep.SupportsStreaming = *p.SupportsStreaming
-			}
+			applyObservedCapabilities(&dep, res.Capabilities)
 			dep.SupportsImages = modelproviders.SupportsImagesForModel(
 				dep.Provider,
 				dep.ModelName,
@@ -342,6 +352,57 @@ func BuildCatalog(cfg *config.Config) (*Catalog, error) {
 	}
 
 	return cat, nil
+}
+
+func boolOverrideValue(override *bool, fallback bool) bool {
+	if override != nil {
+		return *override
+	}
+	return fallback
+}
+
+func defaultContextWindowForProvider(provider string) int {
+	switch strings.TrimSpace(provider) {
+	case "anthropic":
+		return 200000
+	default:
+		return 8192
+	}
+}
+
+func effectiveContextWindow(dep *Deployment) int {
+	if dep == nil {
+		return 0
+	}
+	if dep.ContextWindowOverride > 0 {
+		return dep.ContextWindowOverride
+	}
+	if dep.ObservedContextWindow > 0 {
+		return dep.ObservedContextWindow
+	}
+	if dep.LoadedContextWindow > 0 {
+		return dep.LoadedContextWindow
+	}
+	if dep.MaxContextWindow > 0 {
+		return dep.MaxContextWindow
+	}
+	return defaultContextWindowForProvider(dep.Provider)
+}
+
+func applyObservedCapabilities(dep *Deployment, caps modelproviders.Capabilities) {
+	if dep == nil {
+		return
+	}
+	dep.ProviderSupportsTools = caps.SupportsTools
+	if !dep.ObservedSupportsTools {
+		dep.ObservedSupportsTools = caps.SupportsTools
+	}
+	if !dep.ObservedSupportsStreaming {
+		dep.ObservedSupportsStreaming = caps.SupportsStreaming
+	}
+	dep.SupportsTools = boolOverrideValue(dep.SupportsToolsOverride, dep.ObservedSupportsTools)
+	dep.SupportsStreaming = boolOverrideValue(dep.SupportsStreamingOverride, dep.ObservedSupportsStreaming)
+	dep.ContextWindow = effectiveContextWindow(dep)
 }
 
 func hasProviderResource(resourceByID map[string]Resource, id, provider string) bool {

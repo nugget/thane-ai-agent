@@ -703,13 +703,45 @@ type ModelConfig struct {
 	Name              string `yaml:"name"`               // Model identifier (e.g., "claude-opus-4-20250514")
 	Provider          string `yaml:"provider"`           // Provider name: ollama, anthropic, lmstudio. Defaults to ollama when no resource is set
 	Resource          string `yaml:"resource"`           // Named provider resource from models.resources for this deployment
-	SupportsTools     bool   `yaml:"supports_tools"`     // Whether the model can invoke tool calls
-	SupportsStreaming *bool  `yaml:"supports_streaming"` // Optional per-deployment streaming override. Nil inherits provider/resource capability.
-	ContextWindow     int    `yaml:"context_window"`     // Maximum context length in tokens
+	SupportsTools     bool   `yaml:"supports_tools"`     // Optional per-deployment tool-use override. When omitted, runtime/provider capability is used.
+	SupportsStreaming *bool  `yaml:"supports_streaming"` // Optional per-deployment streaming override. Nil inherits observed runtime/provider capability.
+	ContextWindow     int    `yaml:"context_window"`     // Optional per-deployment context-window override. Zero inherits observed runtime metadata.
 	Speed             int    `yaml:"speed"`              // Relative speed rating, 1 (slow) to 10 (fast)
 	Quality           int    `yaml:"quality"`            // Relative quality rating, 1 (low) to 10 (high)
 	CostTier          int    `yaml:"cost_tier"`          // 0=local/free, 1=cheap, 2=moderate, 3=expensive
 	MinComplexity     string `yaml:"min_complexity"`     // Minimum task complexity: simple, moderate, complex
+
+	supportsToolsSet bool `yaml:"-"`
+}
+
+// SupportsToolsOverride reports whether supports_tools was explicitly
+// set in config, returning the configured value when present.
+func (m ModelConfig) SupportsToolsOverride() (*bool, bool) {
+	if !m.supportsToolsSet {
+		return nil, false
+	}
+	value := m.SupportsTools
+	return &value, true
+}
+
+// UnmarshalYAML preserves whether optional override fields were
+// explicitly authored in config so later layers can distinguish
+// operator policy from omitted defaults.
+func (m *ModelConfig) UnmarshalYAML(node *yaml.Node) error {
+	type raw ModelConfig
+	var decoded raw
+	if err := node.Decode(&decoded); err != nil {
+		return err
+	}
+	*m = ModelConfig(decoded)
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		key := strings.TrimSpace(node.Content[i].Value)
+		if key == "supports_tools" {
+			m.supportsToolsSet = true
+			break
+		}
+	}
+	return nil
 }
 
 // ModelServerConfig describes a named model provider resource.

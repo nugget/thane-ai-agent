@@ -17,6 +17,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/models"
 	modelproviders "github.com/nugget/thane-ai-agent/internal/models/providers"
 	"github.com/nugget/thane-ai-agent/internal/router"
+	"gopkg.in/yaml.v3"
 )
 
 func testModelRegistryFromConfig(t *testing.T, cfg *config.Config) *models.Registry {
@@ -36,22 +37,24 @@ func testModelRegistryFromConfig(t *testing.T, cfg *config.Config) *models.Regis
 func TestRun_ExplicitModelRejectsConfiguredToollessDeployment(t *testing.T) {
 	mock := &mockLLM{}
 	loop := buildTestLoop(mock, []string{"recall_fact"})
-	loop.UseModelRegistry(testModelRegistryFromConfig(t, &config.Config{
-		Models: config.ModelsConfig{
-			Default: "toolless",
-			Resources: map[string]config.ModelServerConfig{
-				"default": {URL: "http://localhost:11434", Provider: "ollama"},
-			},
-			Available: []config.ModelConfig{
-				{
-					Name:          "toolless",
-					Resource:      "default",
-					SupportsTools: false,
-					ContextWindow: 8192,
-				},
-			},
-		},
-	}))
+	var cfg config.Config
+	raw := `
+models:
+  default: toolless
+  resources:
+    default:
+      url: http://localhost:11434
+      provider: ollama
+  available:
+    - name: toolless
+      resource: default
+      supports_tools: false
+      context_window: 8192
+`
+	if err := yaml.Unmarshal([]byte(raw), &cfg); err != nil {
+		t.Fatalf("yaml.Unmarshal: %v", err)
+	}
+	loop.UseModelRegistry(testModelRegistryFromConfig(t, &cfg))
 
 	_, err := loop.Run(context.Background(), &Request{
 		Model:    "toolless",
