@@ -74,6 +74,13 @@ func TestHandleOllamaStreamingChatShared_StreamsFirstTokenImmediately(t *testing
 	firstTokenBody := make(chan string, 1)
 
 	run := func(_ context.Context, _ *agent.Request, cb agent.StreamCallback) (*agent.Response, error) {
+		initial := rec.String()
+		if !strings.Contains(initial, `"content":""`) {
+			t.Fatalf("body before first token = %q, want initial empty chunk", initial)
+		}
+		if got := rec.Header().Get("X-Accel-Buffering"); got != "no" {
+			t.Fatalf("X-Accel-Buffering = %q, want %q", got, "no")
+		}
 		cb(agent.StreamEvent{Kind: agent.KindToken, Token: "hello"})
 		firstTokenBody <- rec.String()
 		close(firstTokenWritten)

@@ -316,6 +316,7 @@ func handleOllamaStreamingChatShared(w http.ResponseWriter, r *http.Request, req
 	// hop-by-hop header forbidden in HTTP/2 (RFC 9113 §8.2.2).
 	w.Header().Set("Content-Type", "application/x-ndjson")
 	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Accel-Buffering", "no")
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -336,6 +337,21 @@ func handleOllamaStreamingChatShared(w http.ResponseWriter, r *http.Request, req
 	var buffer []agent.StreamEvent
 	var hasToolCalls bool
 	var streaming bool
+
+	// Emit an immediate empty assistant chunk so downstream clients know
+	// the stream is live even when first-token latency is high.
+	initial := OllamaChatResponse{
+		Model:     model,
+		CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		Message: OllamaChatMessage{
+			Role:    "assistant",
+			Content: "",
+		},
+		Done: false,
+	}
+	data, _ := json.Marshal(initial)
+	fmt.Fprintf(w, "%s\n", data)
+	flusher.Flush()
 
 	// Create stream callback that buffers initially, then streams if no tool calls
 	streamCallback := func(event agent.StreamEvent) {
@@ -469,7 +485,7 @@ func handleOllamaStreamingChatShared(w http.ResponseWriter, r *http.Request, req
 		TotalDuration: duration.Nanoseconds(),
 		EvalDuration:  duration.Nanoseconds(),
 	}
-	data, _ := json.Marshal(final)
+	data, _ = json.Marshal(final)
 	fmt.Fprintf(w, "%s\n", data)
 	flusher.Flush()
 }
