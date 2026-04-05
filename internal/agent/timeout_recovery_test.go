@@ -431,6 +431,41 @@ func TestExplicitModelError_DoesNotFailOver(t *testing.T) {
 	}
 }
 
+func TestCanceledContext_DoesNotFailOver(t *testing.T) {
+	t.Parallel()
+
+	mock := &mockTimeoutLLM{}
+	loop := buildTestLoopWithLLM(mock, nil)
+	loop.model = "fallback-model"
+
+	reqCtx, cancelReq := context.WithCancel(context.Background())
+	cancelReq()
+	iterCtx, cancelIter := context.WithCancel(context.Background())
+	cancelIter()
+
+	timeoutRecovered := false
+	handler := loop.buildLLMErrorHandler(reqCtx, nil, loop.model, &Request{}, &timeoutRecovered)
+
+	_, _, err := handler(
+		iterCtx,
+		errors.New(`request failed: Post "https://api.anthropic.com/v1/messages": context canceled`),
+		"claude-opus-4-20250514",
+		nil,
+		nil,
+		nil,
+	)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("handler error = %v, want context canceled", err)
+	}
+
+	mock.mu.Lock()
+	callCount := len(mock.calls)
+	mock.mu.Unlock()
+	if callCount != 0 {
+		t.Fatalf("LLM call count = %d, want 0 (no failover)", callCount)
+	}
+}
+
 func TestRoutedUserFixableAPIError_DoesNotFailOver(t *testing.T) {
 	t.Parallel()
 

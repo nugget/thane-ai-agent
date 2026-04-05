@@ -1891,6 +1891,10 @@ func (l *Loop) buildLLMErrorHandler(ctx context.Context, stream llm.StreamCallba
 		_ llm.StreamCallback) (*llm.ChatResponse, string, error) {
 
 		iterLog := logging.Logger(iterCtx)
+		if cancelErr := canceledContextError(err, ctx, iterCtx); cancelErr != nil {
+			iterLog.Debug("LLM call canceled", "error", cancelErr, "model", model)
+			return nil, "", cancelErr
+		}
 		iterLog.Error("LLM call failed", "error", err, "model", model)
 
 		if isTimeout(err) {
@@ -2160,6 +2164,21 @@ func isTimeout(err error) bool {
 	return strings.Contains(msg, "timeout") ||
 		strings.Contains(msg, "overloaded") ||
 		strings.Contains(msg, "529")
+}
+
+func canceledContextError(err error, contexts ...context.Context) error {
+	for _, ctx := range contexts {
+		if ctx == nil {
+			continue
+		}
+		if errors.Is(ctx.Err(), context.Canceled) {
+			return context.Canceled
+		}
+	}
+	if errors.Is(err, context.Canceled) {
+		return context.Canceled
+	}
+	return nil
 }
 
 func isUserFixableModelError(err error) bool {
