@@ -78,7 +78,7 @@ async function fetchRequestDetail() {
         );
       } else if (resp.status === 404) {
         renderUnavailableState(
-          'This retained request is unavailable. It may have been evicted or retention may not include this turn.',
+          'This request detail is unavailable. It may have aged out of the live buffer, or archival storage may not include this turn.',
           'Stored request content is missing for this request ID.',
         );
       } else {

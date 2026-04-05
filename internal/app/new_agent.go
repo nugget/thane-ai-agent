@@ -98,6 +98,9 @@ func (a *App) initAgentLoop(s *newState) error {
 	loop.SetTimezone(cfg.Timezone)
 	loop.UseModelRegistry(a.modelRegistry)
 	loop.UseModelRuntime(a.modelRuntime)
+	if a.liveRequestRecorder != nil {
+		loop.UseLiveRequestRecorder(a.liveRequestRecorder)
+	}
 	if a.requestRecorder != nil {
 		loop.SetRequestRecorder(a.requestRecorder)
 	}

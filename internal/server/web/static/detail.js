@@ -217,7 +217,7 @@ function shouldCooldownRequestDetail(requestID, force = false) {
 function rememberRequestDetailFailure(requestID, status) {
   const now = Date.now();
   let until = now + 15000;
-  if (status === 404) until = now + 30000;
+  if (status === 404) until = now + 2000;
   if (status === 503) until = now + 300000;
   requestDetailCooldown = { requestID, status, until };
 }
@@ -376,11 +376,11 @@ function updateForensicsControls() {
   if (followLatestRequest) {
     forensics.follow.textContent = 'Following latest';
     forensics.follow.classList.add('toggle-btn--active');
-    forensics.follow.title = 'Following the latest retained request for this loop';
+    forensics.follow.title = 'Following the latest request detail for this loop';
   } else {
     forensics.follow.textContent = 'Resume live follow';
     forensics.follow.classList.remove('toggle-btn--active');
-    forensics.follow.title = 'Jump back to the latest retained request';
+    forensics.follow.title = 'Jump back to the latest request detail';
   }
   if (forensics.openRequest) {
     forensics.openRequest.disabled = !activeRequestID;
@@ -447,8 +447,8 @@ function setForensicsRequestLoading(requestID) {
   }
   if (forensics.empty) {
     forensics.empty.textContent = requestID
-      ? 'Loading retained request ' + shortID(requestID) + '…'
-      : 'Waiting for the first retained request in this loop.';
+      ? 'Loading request detail ' + shortID(requestID) + '…'
+      : 'Waiting for the first request detail in this loop.';
   }
   setForensicsLoaded(false);
   if (requestSection) {
@@ -470,8 +470,8 @@ async function fetchRequestDetailIntoForensics(requestID) {
     if (forensics.waterfallMeta) forensics.waterfallMeta.textContent = '';
     if (forensics.empty) {
       forensics.empty.textContent = loopData && loopData.state === 'processing'
-        ? 'The loop is active, but the current request is not retained yet. Live tool and iteration telemetry stays in the sidebar until request detail becomes available.'
-        : 'Waiting for the first retained request in this loop.';
+        ? 'The loop is active, but request detail is still materializing for the current turn. Live tool and iteration telemetry stays in the sidebar until it is ready.'
+        : 'Waiting for the first request detail in this loop.';
     }
     setForensicsLoaded(false);
     updateForensicsControls();
@@ -511,7 +511,7 @@ async function fetchRequestDetailIntoForensics(requestID) {
       if (forensics.waterfallMeta) forensics.waterfallMeta.textContent = '';
       if (forensics.empty) {
         forensics.empty.textContent = resp.status === 404
-          ? 'This retained request is no longer available. It may have been evicted, or request retention may not include this turn.'
+          ? 'This request detail is no longer available. It may have been evicted from the live buffer, or archival content may not include this turn.'
           : resp.status === 503
             ? 'Request detail is unavailable because content retention is disabled for this runtime.'
             : 'Request detail failed to load.';
@@ -580,7 +580,7 @@ function syncLoopRequestDetail(force = false) {
   }
   if (forensics.subtitle) {
     const subtitleBits = [
-      followLatestRequest ? 'Following the latest retained request for this loop.' : 'Pinned to a specific retained request for comparison.',
+      followLatestRequest ? 'Following the latest request detail for this loop.' : 'Pinned to a specific request detail for comparison.',
       loopData.state === 'processing' ? 'Live tool and iteration telemetry stays in the sidebar while the turn runs.' : '',
     ].filter(Boolean);
     forensics.subtitle.textContent = subtitleBits.join(' ');

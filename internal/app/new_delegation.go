@@ -39,6 +39,9 @@ func (a *App) initDelegation(s *newState) error {
 		delegateExec.ApplyProfileOverrides(overrides)
 	}
 	delegateExec.SetTimezone(cfg.Timezone)
+	if a.liveRequestRecorder != nil {
+		delegateExec.UseLiveRequestRecorder(a.liveRequestRecorder)
+	}
 	if a.requestRecorder != nil {
 		delegateExec.SetRequestRecorder(a.requestRecorder)
 	}

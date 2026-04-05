@@ -77,30 +77,31 @@ type tagContextFunc func(ctx context.Context, activeTags map[string]bool) string
 
 // Executor runs delegate sub-agent tasks.
 type Executor struct {
-	logger           *slog.Logger
-	llm              llm.Client
-	router           *router.Router
-	parentReg        *tools.Registry
-	profiles         map[string]*Profile
-	timezone         string
-	defaultModel     string
-	archiver         *memory.ArchiveStore
-	tempFiles        labelExpander
-	usageStore       *usage.Store
-	pricing          map[string]config.PricingEntry
-	usageCatalog     *models.Catalog
-	modelRegistry    *models.Registry
-	alwaysActiveTags []string
-	lensProvider     func() []string // returns active global lenses (nil = none)
-	forgeContext     string
-	tagCtxFunc       tagContextFunc // nil-safe — replaces forgeContext when set
-	eventBus         *events.Bus
-	requestRecorder  logging.RequestRecordFunc
-	loopRunner       looppkg.Runner
-	loopRegistry     *looppkg.Registry
-	completionSink   looppkg.CompletionSink
-	sessionArchiver  agent.SessionArchiver
-	conversations    *memory.SQLiteStore
+	logger              *slog.Logger
+	llm                 llm.Client
+	router              *router.Router
+	parentReg           *tools.Registry
+	profiles            map[string]*Profile
+	timezone            string
+	defaultModel        string
+	archiver            *memory.ArchiveStore
+	tempFiles           labelExpander
+	usageStore          *usage.Store
+	pricing             map[string]config.PricingEntry
+	usageCatalog        *models.Catalog
+	modelRegistry       *models.Registry
+	alwaysActiveTags    []string
+	lensProvider        func() []string // returns active global lenses (nil = none)
+	forgeContext        string
+	tagCtxFunc          tagContextFunc // nil-safe — replaces forgeContext when set
+	eventBus            *events.Bus
+	liveRequestRecorder logging.RequestRecordFunc
+	requestRecorder     logging.RequestRecordFunc
+	loopRunner          looppkg.Runner
+	loopRegistry        *looppkg.Registry
+	completionSink      looppkg.CompletionSink
+	sessionArchiver     agent.SessionArchiver
+	conversations       *memory.SQLiteStore
 }
 
 // NewExecutor creates a delegate executor.
@@ -231,6 +232,12 @@ func (e *Executor) SetTagContextFunc(fn tagContextFunc) {
 // executions.
 func (e *Executor) SetRequestRecorder(recorder logging.RequestRecordFunc) {
 	e.requestRecorder = recorder
+}
+
+// UseLiveRequestRecorder configures live request detail recording for
+// in-flight delegate turns.
+func (e *Executor) UseLiveRequestRecorder(recorder logging.RequestRecordFunc) {
+	e.liveRequestRecorder = recorder
 }
 
 // ConfigureLoopExecution configures loop-backed delegate execution. When both
@@ -485,6 +492,7 @@ func (e *Executor) executeLegacy(ctx context.Context, task, profileName, guidanc
 
 	// Select model via router.
 	model := e.selectModel(ctx, task, profile, len(toolDefs))
+	e.seedLiveRequestDetail(ctx, did, messages[0].Content, userMsg.String(), model, 0, messages)
 
 	startTime := time.Now()
 	var totalInput, totalOutput, totalCacheCreate, totalCacheRead int
@@ -1224,6 +1232,20 @@ func (e *Executor) retainContent(ctx context.Context, delegateID, systemPrompt, 
 		Exhausted:        result.Exhausted,
 		ExhaustReason:    result.ExhaustReason,
 		Messages:         result.Messages,
+	})
+}
+
+func (e *Executor) seedLiveRequestDetail(ctx context.Context, requestID, systemPrompt, userContent, model string, iterationCount int, messages []llm.Message) {
+	if e.liveRequestRecorder == nil {
+		return
+	}
+	e.liveRequestRecorder(ctx, logging.RequestContent{
+		RequestID:      requestID,
+		SystemPrompt:   systemPrompt,
+		UserContent:    userContent,
+		Model:          model,
+		IterationCount: iterationCount,
+		Messages:       messages,
 	})
 }
 

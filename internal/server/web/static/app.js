@@ -1054,10 +1054,10 @@ function renderLoopCurrentTurnCard(loop, entity, conversationSummary) {
       : 'The loop is actively working this turn. Watch the live telemetry below for context growth, tool activity, and model progress.';
   } else if (entity.latestSnapshot) {
     briefSummary.textContent = entity.lastError
-      ? 'The latest recorded turn ended with an error. The snapshot below shows the last retained request, model, timing, and tool activity for triage.'
+      ? 'The latest recorded turn ended with an error. The snapshot below shows the last request detail, model, timing, and tool activity for triage.'
       : 'The loop is currently idle. The latest recorded turn below is the best executive summary of recent behavior and near-term future.';
   } else {
-    briefSummary.textContent = 'No retained turn snapshot is available yet. This view will fill in once the loop completes its first recorded iteration.';
+    briefSummary.textContent = 'No request detail snapshot is available yet. This view will fill in once the loop completes its first recorded iteration.';
   }
   brief.appendChild(briefSummary);
 
@@ -3729,7 +3729,7 @@ function renderLoopEntityDetail(loop) {
     const latestSummary = document.createElement('div');
     latestSummary.className = 'loop-turn-brief__summary';
     latestSummary.textContent = entity.lastError
-      ? 'Most recent recorded turn ended with an error. Use the request chip below to inspect retained prompt and tool-call detail.'
+      ? 'Most recent recorded turn ended with an error. Use the request chip below to inspect prompt and tool-call detail.'
       : 'Most recent recorded turn gives the best quick read on how this loop has been behaving recently.';
     latestWrap.appendChild(latestSummary);
 

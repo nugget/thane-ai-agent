@@ -115,6 +115,53 @@ func TestLiveRequestStore_EvictsOldest(t *testing.T) {
 	}
 }
 
+func TestLiveRequestStore_UpdatesExistingRequest(t *testing.T) {
+	t.Parallel()
+
+	store := NewLiveRequestStore(4, 0)
+	store.WriteRequest(context.Background(), RequestContent{
+		RequestID:      "r_update",
+		SystemPrompt:   "system",
+		UserContent:    "user",
+		Model:          "model-a",
+		IterationCount: 0,
+		Messages: []llm.Message{
+			{Role: "system", Content: "system"},
+			{Role: "user", Content: "user"},
+		},
+	})
+	store.WriteRequest(context.Background(), RequestContent{
+		RequestID:        "r_update",
+		SystemPrompt:     "system",
+		UserContent:      "user",
+		Model:            "model-b",
+		AssistantContent: "done",
+		IterationCount:   2,
+		Messages: []llm.Message{
+			{Role: "system", Content: "system"},
+			{Role: "user", Content: "user"},
+			{Role: "assistant", Content: "done"},
+		},
+	})
+
+	detail, err := store.QueryRequestDetail("r_update")
+	if err != nil {
+		t.Fatalf("QueryRequestDetail: %v", err)
+	}
+	if detail == nil {
+		t.Fatal("QueryRequestDetail returned nil detail")
+	}
+	if detail.Model != "model-b" {
+		t.Fatalf("Model = %q, want model-b", detail.Model)
+	}
+	if detail.AssistantContent != "done" {
+		t.Fatalf("AssistantContent = %q, want done", detail.AssistantContent)
+	}
+	if detail.IterationCount != 2 {
+		t.Fatalf("IterationCount = %d, want 2", detail.IterationCount)
+	}
+}
+
 func TestCombineRequestRecorders_FansOutToAllSinks(t *testing.T) {
 	t.Parallel()
 

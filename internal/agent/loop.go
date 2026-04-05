@@ -198,32 +198,33 @@ type SessionArchiver interface {
 
 // Loop is the core agent execution loop.
 type Loop struct {
-	logger            *slog.Logger
-	memory            MemoryStore
-	compactor         Compactor
-	router            *router.Router
-	llm               llm.Client
-	tools             *tools.Registry
-	model             string
-	recoveryModel     string            // Fast model for timeout recovery summaries (empty = disabled)
-	retryBaseDelay    time.Duration     // Base backoff delay between timeout retries (0 = use default)
-	persona           string            // Persona content (replaces base system prompt if set)
-	egoFile           string            // Path to ego.md — read fresh each turn for system prompt
-	provenanceStore   *provenance.Store // Optional provenance store for ego.md metadata injection
-	injectFiles       []string          // Paths to context files — re-read each turn
-	timezone          string            // IANA timezone for Current Conditions (e.g., "America/Chicago")
-	contextWindow     int               // Context window size of default model
-	failoverHandler   FailoverHandler
-	contextProvider   ContextProvider
-	archiver          SessionArchiver
-	extractor         *memory.Extractor
-	orchestratorTools []string                       // Restricted tool set for orchestrator mode (nil = all tools)
-	requestRecorder   logging.RequestRecordFunc      // nil = request detail inspection disabled
-	usageStore        *usage.Store                   // nil = no usage recording
-	pricing           map[string]config.PricingEntry // model→cost for usage recording
-	usageCatalog      *models.Catalog
-	modelRegistry     *models.Registry
-	modelRuntime      *models.Runtime
+	logger              *slog.Logger
+	memory              MemoryStore
+	compactor           Compactor
+	router              *router.Router
+	llm                 llm.Client
+	tools               *tools.Registry
+	model               string
+	recoveryModel       string            // Fast model for timeout recovery summaries (empty = disabled)
+	retryBaseDelay      time.Duration     // Base backoff delay between timeout retries (0 = use default)
+	persona             string            // Persona content (replaces base system prompt if set)
+	egoFile             string            // Path to ego.md — read fresh each turn for system prompt
+	provenanceStore     *provenance.Store // Optional provenance store for ego.md metadata injection
+	injectFiles         []string          // Paths to context files — re-read each turn
+	timezone            string            // IANA timezone for Current Conditions (e.g., "America/Chicago")
+	contextWindow       int               // Context window size of default model
+	failoverHandler     FailoverHandler
+	contextProvider     ContextProvider
+	archiver            SessionArchiver
+	extractor           *memory.Extractor
+	orchestratorTools   []string                       // Restricted tool set for orchestrator mode (nil = all tools)
+	liveRequestRecorder logging.RequestRecordFunc      // nil = no live request detail prefill
+	requestRecorder     logging.RequestRecordFunc      // nil = request detail inspection disabled
+	usageStore          *usage.Store                   // nil = no usage recording
+	pricing             map[string]config.PricingEntry // model→cost for usage recording
+	usageCatalog        *models.Catalog
+	modelRegistry       *models.Registry
+	modelRuntime        *models.Runtime
 
 	// Capability tags — per-Run tool/talent filtering.
 	//
@@ -390,6 +391,12 @@ func (l *Loop) SetRecoveryModel(model string) {
 // persistent retention.
 func (l *Loop) SetRequestRecorder(recorder logging.RequestRecordFunc) {
 	l.requestRecorder = recorder
+}
+
+// UseLiveRequestRecorder configures live request detail recording for
+// in-flight turns. This is typically a lightweight in-memory sink.
+func (l *Loop) UseLiveRequestRecorder(recorder logging.RequestRecordFunc) {
+	l.liveRequestRecorder = recorder
 }
 
 // SetCapabilityTags configures tag-driven tool and talent filtering.
@@ -1259,6 +1266,8 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		log.Debug("model specified in request, skipping router", "model", model)
 	}
 
+	l.seedLiveRequestDetail(ctx, requestID, systemPrompt, userMessage, model, 0, llmMessages)
+
 	startTime := time.Now()
 
 	// Estimate system prompt size for cost logging.
@@ -1351,6 +1360,8 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 				systemPrompt = rebuilt // keep retained content in sync
 				systemTokens = len(rebuilt) / 4
 			}
+
+			l.seedLiveRequestDetail(iterCtx, requestID, systemPrompt, userMessage, currentModel, i, msgs)
 
 			iterMsgTokens := 0
 			for _, m := range msgs {
@@ -1849,6 +1860,20 @@ func (l *Loop) retainContent(ctx context.Context, requestID, systemPrompt, userM
 		Exhausted:        result.Exhausted,
 		ExhaustReason:    result.ExhaustReason,
 		Messages:         result.Messages,
+	})
+}
+
+func (l *Loop) seedLiveRequestDetail(ctx context.Context, requestID, systemPrompt, userMessage, model string, iterationCount int, messages []llm.Message) {
+	if l.liveRequestRecorder == nil {
+		return
+	}
+	l.liveRequestRecorder(ctx, logging.RequestContent{
+		RequestID:      requestID,
+		SystemPrompt:   systemPrompt,
+		UserContent:    userMessage,
+		Model:          model,
+		IterationCount: iterationCount,
+		Messages:       messages,
 	})
 }
 
