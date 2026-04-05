@@ -598,11 +598,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	hints := map[string]string{
 		"channel": "api", // Native OpenAI-compatible API
 	}
-	var openClawCfg *config.OpenClawConfig
-	if s.loop != nil {
-		openClawCfg = s.loop.OpenClawConfig()
-	}
-	model, hints, systemPrompt := normalizeModelSelection(req.Model, hints, premiumQualityFloor(s.router), openClawCfg, log)
+	model, hints, systemPrompt := normalizeModelSelection(req.Model, hints, premiumQualityFloor(s.router), log)
 
 	agentReq := &agent.Request{
 		Messages:     messages,

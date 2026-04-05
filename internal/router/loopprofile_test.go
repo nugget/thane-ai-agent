@@ -124,7 +124,6 @@ func TestLoopProfileValidate(t *testing.T) {
 		{name: "mission device_control", seed: LoopProfile{Mission: "device_control"}},
 		{name: "mission background", seed: LoopProfile{Mission: "background"}},
 		{name: "mission metacognitive", seed: LoopProfile{Mission: "metacognitive"}},
-		{name: "mission openclaw", seed: LoopProfile{Mission: "openclaw"}},
 		{name: "mission reflect", seed: LoopProfile{Mission: "reflect"}},
 		{name: "mission with spaces", seed: LoopProfile{Mission: "my mission"}, wantErr: true},
 		{name: "mission with uppercase", seed: LoopProfile{Mission: "Automation"}, wantErr: true},

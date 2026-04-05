@@ -133,7 +133,7 @@ workspace:
   # ReadOnlyDirs are additional directories the agent can read from
   # but not write to. Useful for compatibility or reference roots that
   # must remain outside Thane's writable authority, such as a legacy
-  # OpenClaw workspace or an external vault mirror.
+  # workspace or an external vault mirror.
   read_only_dirs: []
 # Paths maps named prefixes to directory paths for file resolution.
 # Each entry creates a prefix (e.g., "kb" → kb:path resolves to
@@ -808,31 +808,6 @@ talents_dir: ./talents
 #       metadata:
 #         category: observer
 #       parent_id: ""
-#
-# (optional) OpenClaw configures the thane:openclaw Ollama profile, which
-# openclaw:
-#   WorkspacePath is the root directory containing the agent's
-#   workspace files (AGENTS.md, SOUL.md, USER.md, MEMORY.md, etc.)
-#   and memory directory. Supports ~ expansion.
-#
-#   Treat this as a compatibility/workspace-emulation root for the
-#   thane:openclaw profile, not as Thane's canonical core document
-#   root. If legacy OpenClaw remains in service, prefer a separate
-#   Thane-owned clone of the workspace instead of a shared mutable
-#   directory.
-#   Default: ~/Thane/openclaw.
-#   workspace: ~/Thane/openclaw
-#   SkillsDirs is a list of directories to scan for SKILL.md files.
-#   Directories are searched in order; skills in earlier directories
-#   override same-named skills in later ones.
-#   Default: [~/Thane/openclaw/skills].
-#   skills_dirs:
-#     - ~/Thane/openclaw/skills
-#   MaxFileChars is the maximum characters per injected workspace
-#   file. Files exceeding this limit are truncated using the 70/20
-#   head/tail strategy matching OpenClaw v2026.2.9 behavior.
-#   Default: 20000.
-#   max_file_chars: 20000
 #
 # (optional) Debug configures diagnostic options for inspecting the assembled
 # debug:

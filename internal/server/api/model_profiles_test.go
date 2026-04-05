@@ -60,7 +60,7 @@ func TestNormalizeModelSelection(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			model, hints, systemPrompt := normalizeModelSelection(tt.rawModel, tt.hints, tt.premiumFloor, nil, testAPILogger())
+			model, hints, systemPrompt := normalizeModelSelection(tt.rawModel, tt.hints, tt.premiumFloor, testAPILogger())
 			if model != tt.wantModel {
 				t.Fatalf("model = %q, want %q", model, tt.wantModel)
 			}

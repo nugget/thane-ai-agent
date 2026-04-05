@@ -5,12 +5,10 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/nugget/thane-ai-agent/internal/config"
-	"github.com/nugget/thane-ai-agent/internal/openclaw"
 	"github.com/nugget/thane-ai-agent/internal/router"
 )
 
-func normalizeModelSelection(rawModel string, hints map[string]string, premiumFloor string, openClawCfg *config.OpenClawConfig, logger *slog.Logger) (string, map[string]string, string) {
+func normalizeModelSelection(rawModel string, hints map[string]string, premiumFloor string, logger *slog.Logger) (string, map[string]string, string) {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -52,19 +50,6 @@ func normalizeModelSelection(rawModel string, hints map[string]string, premiumFl
 		outHints[router.HintQualityFloor] = "1"
 		outHints[router.HintModelPreference] = ""
 		outHints[router.HintLocalOnly] = "true"
-	case "thane:openclaw":
-		model = ""
-		if openClawCfg != nil {
-			outHints[router.HintQualityFloor] = premiumFloor
-			outHints[router.HintMission] = "openclaw"
-			if prompt, err := openclaw.BuildSystemPrompt(openClawCfg, false); err == nil {
-				systemPrompt = prompt
-			} else {
-				logger.Warn("openclaw prompt build failed, falling back to default", "error", err)
-			}
-		} else {
-			logger.Warn("thane:openclaw requested but openclaw config not set, using default routing")
-		}
 	case "thane:thinking":
 		logger.Warn("deprecated profile, use thane:premium", "profile", model)
 		model = ""

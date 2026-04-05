@@ -413,12 +413,6 @@ func ExampleConfig() *Config {
 			"email":  {"forge"},
 		},
 
-		OpenClaw: &OpenClawConfig{
-			WorkspacePath: "~/Thane/openclaw",
-			SkillsDirs:    []string{"~/Thane/openclaw/skills"},
-			MaxFileChars:  20000,
-		},
-
 		Timezone: "America/Chicago",
 
 		PersonaFile: "~/Thane/core/persona.md",

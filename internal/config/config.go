@@ -289,12 +289,6 @@ type Config struct {
 	// runtime.
 	Loops LoopsConfig `yaml:"loops"`
 
-	// OpenClaw configures the thane:openclaw Ollama profile, which
-	// replicates OpenClaw's workspace-aware agent behavior using
-	// Thane's plumbing. When nil, the thane:openclaw profile is
-	// unavailable and requests fall back to default routing.
-	OpenClaw *OpenClawConfig `yaml:"openclaw"`
-
 	// Debug configures diagnostic options for inspecting the assembled
 	// system prompt and other internal state.
 	Debug DebugConfig `yaml:"debug"`
@@ -1021,7 +1015,7 @@ type WorkspaceConfig struct {
 	// ReadOnlyDirs are additional directories the agent can read from
 	// but not write to. Useful for compatibility or reference roots that
 	// must remain outside Thane's writable authority, such as a legacy
-	// OpenClaw workspace or an external vault mirror.
+	// workspace or an external vault mirror.
 	ReadOnlyDirs []string `yaml:"read_only_dirs"`
 }
 
@@ -1536,35 +1530,6 @@ type StateWindowConfig struct {
 	MaxAgeMinutes int `yaml:"max_age_minutes"`
 }
 
-// OpenClawConfig configures the thane:openclaw Ollama profile. This profile
-// replicates OpenClaw's workspace-aware agent behavior (file injection,
-// skill discovery, memory conventions) using Thane's agent loop.
-type OpenClawConfig struct {
-	// WorkspacePath is the root directory containing the agent's
-	// workspace files (AGENTS.md, SOUL.md, USER.md, MEMORY.md, etc.)
-	// and memory directory. Supports ~ expansion.
-	//
-	// Treat this as a compatibility/workspace-emulation root for the
-	// thane:openclaw profile, not as Thane's canonical core document
-	// root. If legacy OpenClaw remains in service, prefer a separate
-	// Thane-owned clone of the workspace instead of a shared mutable
-	// directory.
-	// Default: ~/Thane/openclaw.
-	WorkspacePath string `yaml:"workspace"`
-
-	// SkillsDirs is a list of directories to scan for SKILL.md files.
-	// Directories are searched in order; skills in earlier directories
-	// override same-named skills in later ones.
-	// Default: [~/Thane/openclaw/skills].
-	SkillsDirs []string `yaml:"skills_dirs"`
-
-	// MaxFileChars is the maximum characters per injected workspace
-	// file. Files exceeding this limit are truncated using the 70/20
-	// head/tail strategy matching OpenClaw v2026.2.9 behavior.
-	// Default: 20000.
-	MaxFileChars int `yaml:"max_file_chars"`
-}
-
 // Load reads a YAML configuration file, expands environment variables,
 // applies defaults for any unset fields, and validates the result.
 //
@@ -1836,19 +1801,6 @@ func (c *Config) applyDefaults() {
 	}
 	if c.StateWindow.MaxAgeMinutes == 0 {
 		c.StateWindow.MaxAgeMinutes = 30
-	}
-
-	// OpenClaw defaults — apply only when the section is present.
-	if c.OpenClaw != nil {
-		if c.OpenClaw.WorkspacePath == "" {
-			c.OpenClaw.WorkspacePath = "~/Thane/openclaw"
-		}
-		if len(c.OpenClaw.SkillsDirs) == 0 {
-			c.OpenClaw.SkillsDirs = []string{filepath.Join(c.OpenClaw.WorkspacePath, "skills")}
-		}
-		if c.OpenClaw.MaxFileChars <= 0 {
-			c.OpenClaw.MaxFileChars = 20000
-		}
 	}
 
 	for i := range c.Models.Available {

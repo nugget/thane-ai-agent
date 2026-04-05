@@ -206,7 +206,7 @@ func handleOllamaChatShared(w http.ResponseWriter, r *http.Request, loop *agent.
 	if !auxiliary {
 		hints["source"] = "owu"
 	}
-	model, hints, ocSystemPrompt := normalizeModelSelection(req.Model, hints, premiumQualityFloor(loop.Router()), loop.OpenClawConfig(), logger)
+	model, hints, ocSystemPrompt := normalizeModelSelection(req.Model, hints, premiumQualityFloor(loop.Router()), logger)
 
 	// Derive a conversation ID from the message history.
 	// Open WebUI sends full history with each request, so hashing the first
@@ -518,7 +518,6 @@ func handleOllamaTagsShared(w http.ResponseWriter, r *http.Request, logger *slog
 		{"thane:ops", "operations / direct tool access (no delegation gating)"},
 		{"thane:peer", "agent-to-agent communication"},
 		{"thane:local", "local/free models only"},
-		{"thane:openclaw", "OpenClaw workspace emulation (premium model)"},
 	}
 
 	var models []OllamaModel

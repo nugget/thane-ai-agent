@@ -59,7 +59,6 @@ var optionalKeys = map[string]bool{
 	"media":           true,
 	"metacognitive":   true,
 	"loops":           true,
-	"openclaw":        true,
 	"capability_tags": true,
 	"channel_tags":    true,
 	"timezone":        true,
