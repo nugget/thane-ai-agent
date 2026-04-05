@@ -272,6 +272,19 @@ func (r *contactPhoneResolver) ResolvePhone(phone string) (string, string, bool)
 	return matches[0].FormattedName, matches[0].TrustZone, true
 }
 
+// contactChannelBindingResolver resolves a channel/address pair to a
+// typed conversation binding with contact identity when available.
+type contactChannelBindingResolver struct {
+	store *contacts.Store
+}
+
+// ResolveChannelBinding returns a typed binding for the given
+// channel/address pair. It always returns a channel-scoped binding when
+// the inputs are non-empty, even if no contact match is found.
+func (r *contactChannelBindingResolver) ResolveChannelBinding(channel, address string) *memory.ChannelBinding {
+	return resolveChannelBinding(r.store, channel, address)
+}
+
 // contactNameLookup resolves contact names to rich context profiles for
 // channel context injection. Implements agent.ContactLookup.
 type contactNameLookup struct {
@@ -537,6 +550,37 @@ func updateContactInteraction(store *contacts.Store, logger *slog.Logger, conver
 // address. For Signal, checks IMPP (signal:address) then TEL fallback.
 // For email, checks EMAIL property.
 func resolveContactByChannelAddress(store *contacts.Store, channel, address string) (uuid.UUID, bool) {
+	id, _, ok := resolveContactByChannelLink(store, channel, address)
+	return id, ok
+}
+
+func resolveChannelBinding(store *contacts.Store, channel, address string) *memory.ChannelBinding {
+	binding := (&memory.ChannelBinding{
+		Channel: channel,
+		Address: address,
+	}).Normalize()
+	if binding == nil || store == nil {
+		return binding
+	}
+
+	contactID, linkSource, found := resolveContactByChannelLink(store, binding.Channel, binding.Address)
+	if !found {
+		return binding
+	}
+
+	contact, err := store.Get(contactID)
+	if err != nil || contact == nil {
+		return binding
+	}
+
+	binding.ContactID = contact.ID.String()
+	binding.ContactName = contact.FormattedName
+	binding.TrustZone = contact.TrustZone
+	binding.LinkSource = linkSource
+	return binding.Normalize()
+}
+
+func resolveContactByChannelLink(store *contacts.Store, channel, address string) (uuid.UUID, string, bool) {
 	var nilID uuid.UUID
 
 	switch channel {
@@ -551,24 +595,24 @@ func resolveContactByChannelAddress(store *contacts.Store, channel, address stri
 		for _, addr := range candidates {
 			matches, err := store.FindByPropertyExact("IMPP", "signal:"+addr)
 			if err == nil && len(matches) == 1 {
-				return matches[0].ID, true
+				return matches[0].ID, "impp", true
 			}
 		}
 		// Fallback to TEL (also try both forms).
 		for _, addr := range candidates {
 			matches, err := store.FindByPropertyExact("TEL", addr)
 			if err == nil && len(matches) == 1 {
-				return matches[0].ID, true
+				return matches[0].ID, "tel", true
 			}
 		}
 	case "email":
 		matches, err := store.FindByPropertyExact("EMAIL", address)
 		if err == nil && len(matches) == 1 {
-			return matches[0].ID, true
+			return matches[0].ID, "email", true
 		}
 	}
 
-	return nilID, false
+	return nilID, "", false
 }
 
 // conversationSystemInjector is the shared app-side bridge for writing
@@ -932,6 +976,7 @@ func compileLoopAgentRequest(req looppkg.Request) *agent.Request {
 	return &agent.Request{
 		Model:           req.Model,
 		ConversationID:  req.ConversationID,
+		ChannelBinding:  req.ChannelBinding.Clone(),
 		Messages:        msgs,
 		SkipContext:     req.SkipContext,
 		AllowedTools:    append([]string(nil), req.AllowedTools...),

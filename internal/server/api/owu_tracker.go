@@ -11,6 +11,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/agent"
 	"github.com/nugget/thane-ai-agent/internal/events"
 	"github.com/nugget/thane-ai-agent/internal/loop"
+	"github.com/nugget/thane-ai-agent/internal/memory"
 )
 
 // owuWork is a single request dispatched to a per-conversation child loop.
@@ -31,11 +32,12 @@ type owuResult struct {
 // per-conversation child loops so that Open WebUI sessions appear on
 // the dashboard with full in-flight event visibility.
 type OWUTracker struct {
-	ctx      context.Context // long-lived context for spawning child loops
-	registry *loop.Registry
-	eventBus *events.Bus
-	runner   *agent.Loop
-	logger   *slog.Logger
+	ctx              context.Context // long-lived context for spawning child loops
+	registry         *loop.Registry
+	eventBus         *events.Bus
+	runner           *agent.Loop
+	logger           *slog.Logger
+	bindConversation func(conversationID string, binding *memory.ChannelBinding) error
 
 	mu       sync.Mutex
 	parentID string
@@ -72,19 +74,38 @@ func NewOWUTracker(ctx context.Context, registry *loop.Registry, eventBus *event
 	return t, nil
 }
 
+// UseConversationBindingWriter configures durable conversation binding
+// persistence for OWU-backed conversations.
+func (t *OWUTracker) UseConversationBindingWriter(bind func(string, *memory.ChannelBinding) error) {
+	if t == nil {
+		return
+	}
+	t.bindConversation = bind
+}
+
 // Dispatch routes an agent request through the per-conversation child loop.
 // The supplied streamCallback receives tokens/tool events for HTTP streaming;
 // the loop infrastructure receives the same events for dashboard visibility.
 // displayName is a human-friendly label for the conversation node
 // (e.g., a truncation of the first message).
 func (t *OWUTracker) Dispatch(ctx context.Context, req *agent.Request, streamCallback agent.StreamCallback, displayName string) (*agent.Response, error) {
-	if t.registry == nil {
-		return t.runner.Run(ctx, req, streamCallback)
-	}
-
 	convID := req.ConversationID
 	if convID == "" || convID == "owu-auxiliary" {
 		// Auxiliary requests bypass loop tracking.
+		return t.runner.Run(ctx, req, streamCallback)
+	}
+	if req.ChannelBinding == nil {
+		req.ChannelBinding = (&memory.ChannelBinding{Channel: "owu"}).Normalize()
+	}
+	if t.bindConversation != nil && req.ChannelBinding != nil {
+		if err := t.bindConversation(convID, req.ChannelBinding); err != nil {
+			t.logger.Warn("failed to persist owu conversation binding",
+				"conversation_id", convID,
+				"error", err,
+			)
+		}
+	}
+	if t.registry == nil {
 		return t.runner.Run(ctx, req, streamCallback)
 	}
 

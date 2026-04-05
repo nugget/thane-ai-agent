@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
+	"github.com/nugget/thane-ai-agent/internal/memory"
 )
 
 type contextKey string
@@ -15,6 +16,7 @@ const toolCallIDKey contextKey = "tool_call_id"
 const iterationIndexKey contextKey = "iteration_index"
 const hintsKey contextKey = "hints"
 const loopIDKey contextKey = "loop_id"
+const channelBindingKey contextKey = "channel_binding"
 
 // WithConversationID adds the conversation ID to the context.
 func WithConversationID(ctx context.Context, id string) context.Context {
@@ -112,6 +114,24 @@ func HintsFromContext(ctx context.Context) map[string]string {
 	return nil
 }
 
+// WithChannelBinding adds a typed channel binding to the context. Nil
+// bindings are ignored.
+func WithChannelBinding(ctx context.Context, binding *memory.ChannelBinding) context.Context {
+	if binding == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, channelBindingKey, binding.Clone())
+}
+
+// ChannelBindingFromContext extracts the typed channel binding from the
+// context. Returns nil when unset.
+func ChannelBindingFromContext(ctx context.Context) *memory.ChannelBinding {
+	if binding, ok := ctx.Value(channelBindingKey).(*memory.ChannelBinding); ok {
+		return binding.Clone()
+	}
+	return nil
+}
+
 // LoopCompletionTargetFromContext derives the most natural detached
 // completion target for the current tool call context. The returned
 // conversation ID always reflects the current live conversation when one
@@ -122,6 +142,15 @@ func LoopCompletionTargetFromContext(ctx context.Context) (looppkg.Completion, s
 	hints := HintsFromContext(ctx)
 	source := strings.TrimSpace(hints["source"])
 	sender := strings.TrimSpace(hints["sender"])
+	binding := ChannelBindingFromContext(ctx)
+	if binding != nil {
+		if source == "" {
+			source = strings.TrimSpace(binding.Channel)
+		}
+		if sender == "" {
+			sender = strings.TrimSpace(binding.Address)
+		}
+	}
 	switch {
 	case source == "signal" && sender != "":
 		return looppkg.CompletionChannel, conversationID, &looppkg.CompletionChannelTarget{

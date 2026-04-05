@@ -769,15 +769,16 @@ func (a *App) initChannels(s *newState) error {
 			}
 
 			bridge := sigcli.NewBridge(sigcli.BridgeConfig{
-				Client:        signalClient,
-				Runner:        a.loop,
-				Logger:        a.logger,
-				RateLimit:     a.cfg.Signal.RateLimitPerMinute,
-				HandleTimeout: a.cfg.Signal.HandleTimeout,
-				Routing:       a.cfg.Signal.Routing,
-				Rotator:       signalRotator,
-				IdleTimeout:   idleTimeout,
-				Resolver:      &contactPhoneResolver{store: contactStore},
+				Client:           signalClient,
+				Runner:           a.loop,
+				Logger:           a.logger,
+				RateLimit:        a.cfg.Signal.RateLimitPerMinute,
+				HandleTimeout:    a.cfg.Signal.HandleTimeout,
+				Routing:          a.cfg.Signal.Routing,
+				Rotator:          signalRotator,
+				IdleTimeout:      idleTimeout,
+				Resolver:         &contactChannelBindingResolver{store: contactStore},
+				BindConversation: a.mem.BindConversationChannel,
 				Attachments: sigcli.AttachmentConfig{
 					SourceDir: a.cfg.Signal.AttachmentSourceDir,
 					DestDir:   a.cfg.Signal.AttachmentDir,

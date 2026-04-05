@@ -20,6 +20,7 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/agent"
 	"github.com/nugget/thane-ai-agent/internal/logging"
+	"github.com/nugget/thane-ai-agent/internal/memory"
 )
 
 // OllamaChatRequest is the Ollama /api/chat request format.
@@ -202,6 +203,9 @@ func handleOllamaChatShared(w http.ResponseWriter, r *http.Request, loop *agent.
 	hints := map[string]string{
 		"channel": "ollama",
 	}
+	if !auxiliary {
+		hints["source"] = "owu"
+	}
 	model, hints, ocSystemPrompt := normalizeModelSelection(req.Model, hints, premiumQualityFloor(loop.Router()), loop.OpenClawConfig(), logger)
 
 	// Derive a conversation ID from the message history.
@@ -216,11 +220,17 @@ func handleOllamaChatShared(w http.ResponseWriter, r *http.Request, loop *agent.
 		conversationID = "owu-auxiliary"
 	}
 
+	var channelBinding *memory.ChannelBinding
+	if !auxiliary {
+		channelBinding = (&memory.ChannelBinding{Channel: "owu"}).Normalize()
+	}
+
 	agentReq := &agent.Request{
 		Messages:       messages,
 		Model:          model,
 		Hints:          hints,
 		ConversationID: conversationID,
+		ChannelBinding: channelBinding,
 		SkipContext:    auxiliary,
 		SystemPrompt:   ocSystemPrompt,
 	}

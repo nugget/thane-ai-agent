@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/nugget/thane-ai-agent/internal/contacts"
+	"github.com/nugget/thane-ai-agent/internal/memory"
 	"github.com/nugget/thane-ai-agent/internal/tools"
 )
 
@@ -103,10 +105,14 @@ func NewChannelProvider(contacts ContactLookup) *ChannelProvider {
 func (p *ChannelProvider) GetContext(ctx context.Context, _ string) (string, error) {
 	hints := tools.HintsFromContext(ctx)
 	if hints == nil {
-		return "", nil
+		hints = map[string]string{}
 	}
 
 	source := hints["source"]
+	binding := tools.ChannelBindingFromContext(ctx)
+	if source == "" && binding != nil {
+		source = binding.Channel
+	}
 	if source == "" {
 		return "", nil
 	}
@@ -114,6 +120,12 @@ func (p *ChannelProvider) GetContext(ctx context.Context, _ string) (string, err
 	// Determine sender identity.
 	senderName := hints["sender_name"]
 	senderRaw := hints["sender"] // phone number, matrix ID, email, etc.
+	if senderName == "" && binding != nil {
+		senderName = binding.ContactName
+	}
+	if senderRaw == "" && binding != nil {
+		senderRaw = binding.Address
+	}
 
 	// Only emit context for recognized channels.
 	channelNote, knownChannel := channelDefaults[source]
@@ -125,6 +137,9 @@ func (p *ChannelProvider) GetContext(ctx context.Context, _ string) (string, err
 	var contactCtx *ContactContext
 	if senderName != "" && p.contacts != nil {
 		contactCtx = p.contacts.LookupContact(senderName, source)
+	}
+	if contactCtx == nil && binding != nil {
+		contactCtx = contactContextFromBinding(binding, source)
 	}
 
 	// Synthesize unknown-sender context when resolution fails.
@@ -169,6 +184,46 @@ func (p *ChannelProvider) GetContext(ctx context.Context, _ string) (string, err
 	sb.WriteString("\n```\n")
 
 	return sb.String(), nil
+}
+
+func contactContextFromBinding(binding *memory.ChannelBinding, source string) *ContactContext {
+	binding = binding.Normalize()
+	if binding == nil {
+		return nil
+	}
+	displayName := binding.ContactName
+	if displayName == "" {
+		displayName = binding.Address
+	}
+	if displayName == "" {
+		return nil
+	}
+	policy := contacts.Policy(binding.TrustZone)
+	if binding.TrustZone == "" {
+		policy = contacts.Policy(contacts.ZoneUnknown)
+	}
+	ctx := &ContactContext{
+		ID:        binding.ContactID,
+		Name:      displayName,
+		TrustZone: binding.TrustZone,
+		TrustPolicy: &TrustPolicyView{
+			FrontierModel:     policy.FrontierModelAccess,
+			ProactiveOutreach: policy.ProactiveOutreach,
+			ToolAccess:        policy.ToolAccess,
+			SendGating:        policy.SendGating,
+		},
+	}
+	if ctx.TrustZone == "" {
+		ctx.TrustZone = string(contacts.ZoneUnknown)
+	}
+	if source != "" {
+		if binding.Address == "" {
+			ctx.Channels = map[string]any{source: true}
+		} else {
+			ctx.Channels = map[string]any{source: binding.Address}
+		}
+	}
+	return ctx
 }
 
 // formatSourceName returns a human-readable channel name.

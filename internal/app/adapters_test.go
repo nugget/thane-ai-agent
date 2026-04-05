@@ -26,6 +26,11 @@ func TestCompileLoopAgentRequest(t *testing.T) {
 	req := looppkg.Request{
 		Model:          "spark/gpt-oss:20b",
 		ConversationID: "conv-123",
+		ChannelBinding: &memory.ChannelBinding{
+			Channel:     "signal",
+			Address:     "+15551234567",
+			ContactName: "Alice Smith",
+		},
 		Messages: []looppkg.Message{
 			{Role: "system", Content: "stay focused"},
 			{Role: "user", Content: "summarize this"},
@@ -51,6 +56,9 @@ func TestCompileLoopAgentRequest(t *testing.T) {
 	if got.ConversationID != req.ConversationID {
 		t.Fatalf("ConversationID = %q, want %q", got.ConversationID, req.ConversationID)
 	}
+	if got.ChannelBinding == nil || got.ChannelBinding.Channel != "signal" || got.ChannelBinding.ContactName != "Alice Smith" {
+		t.Fatalf("ChannelBinding = %#v", got.ChannelBinding)
+	}
 	if len(got.Messages) != 2 || got.Messages[0].Role != "system" || got.Messages[1].Content != "summarize this" {
 		t.Fatalf("Messages = %#v", got.Messages)
 	}
@@ -74,6 +82,7 @@ func TestCompileLoopAgentRequest(t *testing.T) {
 	got.ExcludeTools[0] = "changed"
 	got.Hints["mission"] = "changed"
 	got.InitialTags[0] = "changed"
+	got.ChannelBinding.ContactName = "changed"
 
 	if req.AllowedTools[0] != "alpha" {
 		t.Fatalf("AllowedTools mutated = %#v", req.AllowedTools)
@@ -86,6 +95,9 @@ func TestCompileLoopAgentRequest(t *testing.T) {
 	}
 	if req.InitialTags[0] != "monitoring" {
 		t.Fatalf("InitialTags mutated = %#v", req.InitialTags)
+	}
+	if req.ChannelBinding.ContactName != "Alice Smith" {
+		t.Fatalf("ChannelBinding mutated = %#v", req.ChannelBinding)
 	}
 }
 

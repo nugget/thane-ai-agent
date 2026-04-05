@@ -114,6 +114,9 @@ func currentLoopDefinitionView(r *Registry) (*looppkg.DefinitionRegistryView, er
 }
 
 func applyLoopLaunchContextDefaults(ctx context.Context, def looppkg.DefinitionView, launch looppkg.Launch) looppkg.Launch {
+	if launch.ChannelBinding == nil {
+		launch.ChannelBinding = ChannelBindingFromContext(ctx)
+	}
 	completion := launch.Spec.Completion
 	if completion == "" {
 		completion = def.Spec.Completion

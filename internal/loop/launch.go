@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/nugget/thane-ai-agent/internal/memory"
 )
 
 // Launch describes a single loops-ng launch request. It is separate
@@ -15,6 +17,7 @@ type Launch struct {
 	ParentID       string                                 `yaml:"parent_id,omitempty" json:"parent_id,omitempty"`
 	Metadata       map[string]string                      `yaml:"metadata,omitempty" json:"metadata,omitempty"`
 	ConversationID string                                 `yaml:"conversation_id,omitempty" json:"conversation_id,omitempty"`
+	ChannelBinding *memory.ChannelBinding                 `yaml:"channel_binding,omitempty" json:"channel_binding,omitempty"`
 	Model          string                                 `yaml:"model,omitempty" json:"model,omitempty"`
 	Hints          map[string]string                      `yaml:"hints,omitempty" json:"hints,omitempty"`
 	AllowedTools   []string                               `yaml:"allowed_tools,omitempty" json:"allowed_tools,omitempty"`
@@ -70,6 +73,7 @@ func (l *Launch) requestOverride() Request {
 	return Request{
 		Model:           l.Model,
 		ConversationID:  l.ConversationID,
+		ChannelBinding:  l.ChannelBinding.Clone(),
 		SkipContext:     l.SkipContext,
 		AllowedTools:    append([]string(nil), l.AllowedTools...),
 		ExcludeTools:    append([]string(nil), l.ExcludeTools...),

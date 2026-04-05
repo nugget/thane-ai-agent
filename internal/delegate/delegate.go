@@ -758,6 +758,7 @@ type preparedExecution struct {
 	conversationID   string
 	archiveSessionID string
 	parentLoopID     string
+	channelBinding   *memory.ChannelBinding
 	profile          *Profile
 	log              *slog.Logger
 	systemPrompt     string
@@ -887,6 +888,7 @@ func (e *Executor) buildLoopLaunch(prep *preparedExecution, task, guidance strin
 		Task:                     prep.userMessage,
 		ParentID:                 prep.parentLoopID,
 		ConversationID:           prep.conversationID,
+		ChannelBinding:           prep.channelBinding.Clone(),
 		Model:                    prep.model,
 		Hints:                    hints,
 		AllowedTools:             append([]string(nil), prep.toolNames...),
@@ -1122,6 +1124,7 @@ func (e *Executor) prepareExecution(ctx context.Context, task, profileName, guid
 		conversationID:   conversationID,
 		archiveSessionID: archiveSessionID,
 		parentLoopID:     tools.LoopIDFromContext(ctx),
+		channelBinding:   tools.ChannelBindingFromContext(ctx),
 		profile:          profile,
 		log:              log,
 		systemPrompt:     sb.String(),

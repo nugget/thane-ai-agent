@@ -44,20 +44,21 @@ type Message struct {
 
 // Request represents an incoming agent request.
 type Request struct {
-	Messages        []Message         `json:"messages"`
-	Model           string            `json:"model,omitempty"`
-	ConversationID  string            `json:"conversation_id,omitempty"`
-	Hints           map[string]string `json:"hints,omitempty"` // Routing hints (channel, mission, etc.)
-	SkipContext     bool              `json:"-"`               // Skip memory, tools, and context injection (for lightweight completions)
-	AllowedTools    []string          `json:"-"`               // Optional allowlist of tools visible for this run
-	ExcludeTools    []string          `json:"-"`               // Tool names to exclude from this run (e.g., lifecycle tools for recurring wakes)
-	SkipTagFilter   bool              `json:"-"`               // Bypass capability tag filtering (for self-scoping contexts like metacognitive)
-	InitialTags     []string          `json:"-"`               // Tags to activate at Run start (carried forward from previous loop iterations)
-	MaxIterations   int               `json:"-"`               // Optional per-request iteration cap (0 = default)
-	MaxOutputTokens int               `json:"-"`               // Optional output-token budget across all iterations (0 = unlimited)
-	ToolTimeout     time.Duration     `json:"-"`               // Optional per-tool timeout (0 = no extra timeout)
-	UsageRole       string            `json:"-"`               // Optional usage role override (e.g., "delegate")
-	UsageTaskName   string            `json:"-"`               // Optional usage task name override
+	Messages        []Message              `json:"messages"`
+	Model           string                 `json:"model,omitempty"`
+	ConversationID  string                 `json:"conversation_id,omitempty"`
+	ChannelBinding  *memory.ChannelBinding `json:"channel_binding,omitempty"`
+	Hints           map[string]string      `json:"hints,omitempty"` // Routing hints (channel, mission, etc.)
+	SkipContext     bool                   `json:"-"`               // Skip memory, tools, and context injection (for lightweight completions)
+	AllowedTools    []string               `json:"-"`               // Optional allowlist of tools visible for this run
+	ExcludeTools    []string               `json:"-"`               // Tool names to exclude from this run (e.g., lifecycle tools for recurring wakes)
+	SkipTagFilter   bool                   `json:"-"`               // Bypass capability tag filtering (for self-scoping contexts like metacognitive)
+	InitialTags     []string               `json:"-"`               // Tags to activate at Run start (carried forward from previous loop iterations)
+	MaxIterations   int                    `json:"-"`               // Optional per-request iteration cap (0 = default)
+	MaxOutputTokens int                    `json:"-"`               // Optional output-token budget across all iterations (0 = unlimited)
+	ToolTimeout     time.Duration          `json:"-"`               // Optional per-tool timeout (0 = no extra timeout)
+	UsageRole       string                 `json:"-"`               // Optional usage role override (e.g., "delegate")
+	UsageTaskName   string                 `json:"-"`               // Optional usage task name override
 
 	// SystemPrompt, when non-empty, replaces the output of
 	// buildSystemPrompt(). Used by profiles that assemble their
@@ -1094,8 +1095,13 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	// Build messages for LLM. Enrich ctx with conversation ID so that
 	// context providers (e.g. working memory) can scope their output.
 	// Propagate request hints so channel-aware providers can adapt.
+	channelBinding := req.ChannelBinding.Clone()
+	if channelBinding == nil {
+		channelBinding = l.conversationChannelBinding(convID)
+	}
 	promptCtx := tools.WithConversationID(ctx, convID)
 	promptCtx = tools.WithHints(promptCtx, req.Hints)
+	promptCtx = tools.WithChannelBinding(promptCtx, channelBinding)
 
 	var systemPrompt string
 	if req.SystemPrompt != "" {
@@ -1402,6 +1408,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			toolCallIDStr := toolCallID.String()
 
 			toolCtx := tools.WithConversationID(iterCtx, convID)
+			toolCtx = tools.WithChannelBinding(toolCtx, channelBinding)
 			if l.archiver != nil {
 				if sid := l.archiver.ActiveSessionID(convID); sid != "" {
 					toolCtx = tools.WithSessionID(toolCtx, sid)
@@ -1609,6 +1616,25 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	}()
 
 	return resp, nil
+}
+
+func (l *Loop) conversationChannelBinding(conversationID string) *memory.ChannelBinding {
+	if conversationID == "" || l.memory == nil {
+		return nil
+	}
+	var conv *memory.Conversation
+	switch store := l.memory.(type) {
+	case *memory.SQLiteStore:
+		conv = store.GetConversation(conversationID)
+	case *memory.Store:
+		conv = store.GetConversation(conversationID)
+	default:
+		return nil
+	}
+	if conv == nil || conv.Metadata == nil {
+		return nil
+	}
+	return conv.Metadata.ChannelBinding.Clone()
 }
 
 // buildLLMErrorHandler returns the OnLLMError callback that implements

@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/nugget/thane-ai-agent/internal/memory"
 	"github.com/nugget/thane-ai-agent/internal/tools"
 )
 
@@ -174,6 +175,39 @@ func TestChannelProvider_SignalNoSenderInfo(t *testing.T) {
 	contact := parseContactJSON(t, got)
 	if contact.Name != "unknown sender" {
 		t.Errorf("name: got %q, want %q", contact.Name, "unknown sender")
+	}
+}
+
+func TestChannelProvider_UsesChannelBindingWhenHintsAreSparse(t *testing.T) {
+	p := NewChannelProvider(nil)
+	ctx := tools.WithChannelBinding(context.Background(), &memory.ChannelBinding{
+		Channel:     "signal",
+		Address:     "+15551234567",
+		ContactID:   "contact-1",
+		ContactName: "Alice Smith",
+		TrustZone:   "known",
+	})
+
+	got, err := p.GetContext(ctx, "hello")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	contact := parseContactJSON(t, got)
+	if contact.ID != "contact-1" {
+		t.Fatalf("contact ID = %q, want contact-1", contact.ID)
+	}
+	if contact.Name != "Alice Smith" {
+		t.Fatalf("name = %q, want Alice Smith", contact.Name)
+	}
+	if contact.TrustZone != "known" {
+		t.Fatalf("trust_zone = %q, want known", contact.TrustZone)
+	}
+	if contact.TrustPolicy == nil || contact.TrustPolicy.SendGating == "" {
+		t.Fatalf("trust_policy = %#v", contact.TrustPolicy)
+	}
+	if signal, ok := contact.Channels["signal"]; !ok || signal != "+15551234567" {
+		t.Fatalf("channels = %#v", contact.Channels)
 	}
 }
 

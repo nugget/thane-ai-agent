@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/nugget/thane-ai-agent/internal/events"
 	"github.com/nugget/thane-ai-agent/internal/logging"
+	"github.com/nugget/thane-ai-agent/internal/memory"
 )
 
 // Runner abstracts the agent loop for LLM calls. Satisfied by
@@ -24,14 +25,15 @@ type Runner interface {
 // Request mirrors the loop-facing fields of agent.Request. The loop
 // package defines its own type to avoid importing agent.
 type Request struct {
-	Model          string            `yaml:"model,omitempty" json:"model,omitempty"`
-	ConversationID string            `yaml:"conversation_id,omitempty" json:"conversation_id,omitempty"`
-	Messages       []Message         `yaml:"messages,omitempty" json:"messages,omitempty"`
-	SkipContext    bool              `yaml:"skip_context,omitempty" json:"skip_context,omitempty"`
-	AllowedTools   []string          `yaml:"allowed_tools,omitempty" json:"allowed_tools,omitempty"`
-	ExcludeTools   []string          `yaml:"exclude_tools,omitempty" json:"exclude_tools,omitempty"`
-	SkipTagFilter  bool              `yaml:"skip_tag_filter,omitempty" json:"skip_tag_filter,omitempty"`
-	Hints          map[string]string `yaml:"hints,omitempty" json:"hints,omitempty"`
+	Model          string                 `yaml:"model,omitempty" json:"model,omitempty"`
+	ConversationID string                 `yaml:"conversation_id,omitempty" json:"conversation_id,omitempty"`
+	ChannelBinding *memory.ChannelBinding `yaml:"channel_binding,omitempty" json:"channel_binding,omitempty"`
+	Messages       []Message              `yaml:"messages,omitempty" json:"messages,omitempty"`
+	SkipContext    bool                   `yaml:"skip_context,omitempty" json:"skip_context,omitempty"`
+	AllowedTools   []string               `yaml:"allowed_tools,omitempty" json:"allowed_tools,omitempty"`
+	ExcludeTools   []string               `yaml:"exclude_tools,omitempty" json:"exclude_tools,omitempty"`
+	SkipTagFilter  bool                   `yaml:"skip_tag_filter,omitempty" json:"skip_tag_filter,omitempty"`
+	Hints          map[string]string      `yaml:"hints,omitempty" json:"hints,omitempty"`
 	// InitialTags are capability tags to activate at the start of the Run,
 	// in addition to always-active and channel-pinned tags. Used by loops
 	// to carry forward tags activated in previous iterations.
@@ -1208,6 +1210,7 @@ func (l *Loop) iterate(ctx context.Context, isSupervisor bool, convID string) (*
 	req := Request{
 		Model:          firstNonEmpty(l.requestOverride.Model, l.requestBase.Model),
 		ConversationID: conversationID,
+		ChannelBinding: firstNonNilChannelBinding(l.requestOverride.ChannelBinding, l.requestBase.ChannelBinding),
 		Messages: []Message{
 			{Role: "user", Content: task},
 		},
@@ -1251,6 +1254,15 @@ func (l *Loop) iterate(ctx context.Context, isSupervisor bool, convID string) (*
 		Elapsed:       time.Since(iterStart),
 		Supervisor:    isSupervisor,
 	}, nil
+}
+
+func firstNonNilChannelBinding(bindings ...*memory.ChannelBinding) *memory.ChannelBinding {
+	for _, binding := range bindings {
+		if binding != nil {
+			return binding.Clone()
+		}
+	}
+	return nil
 }
 
 func mergeUniqueStrings(parts ...[]string) []string {

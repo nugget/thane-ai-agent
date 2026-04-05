@@ -166,6 +166,7 @@ func (a *App) initServers(s *newState) error {
 	if err != nil {
 		return fmt.Errorf("create owu tracker: %w", err)
 	}
+	owuTracker.UseConversationBindingWriter(a.mem.BindConversationChannel)
 	server.SetOWUTracker(owuTracker)
 
 	// --- Ollama-compatible API server ---
