@@ -1425,6 +1425,7 @@ let lastDetailSelectionKey = null;
 let detailInteractionHoldUntil = 0;
 let detailPointerSelectionActive = false;
 let detailInstantLayoutUntil = 0;
+let detailInteractiveHoverActive = false;
 let nodeLongPressTimer = 0;
 let nodeLongPressState = null;
 let suppressNextNodeClickUntil = 0;
@@ -1697,11 +1698,24 @@ function applySchemaCardPreset(card, mode) {
   const cardKey = card.dataset.cardKey || '';
   setSchemaCardLayout(entityKind, cardKey, { mode, height: 0 });
   detailInstantLayoutUntil = Date.now() + 250;
-  renderDetail({ force: true, instantLayout: true });
+  bumpDetailInteractionHold(450);
+  if (detailPanel) detailPanel.classList.add('detail-panel--instant');
+  syncSchemaCardLayout(card, { mode, height: 0 });
+  requestAnimationFrame(() => {
+    detailPanel?.classList.remove('detail-panel--instant');
+  });
 }
 
 function bumpDetailInteractionHold(ms = DETAIL_COPY_GUARD_MS) {
   detailInteractionHoldUntil = Math.max(detailInteractionHoldUntil, Date.now() + ms);
+}
+
+function isDetailInteractiveTarget(node) {
+  if (!detailPanel || !node) return false;
+  const el = node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement;
+  return !!(el && detailPanel.contains(el) && el.closest(
+    'button, .btn, .toggle-btn, .id-chip, .log-id-chip, summary, a, .schema-card__control',
+  ));
 }
 
 function nodeWithinDetailPanel(node) {
@@ -1717,6 +1731,7 @@ function detailTextSelectionActive() {
 }
 
 function shouldDeferDetailRender() {
+  if (detailInteractiveHoverActive) return true;
   if (detailPointerSelectionActive) return true;
   if (detailTextSelectionActive()) {
     bumpDetailInteractionHold(1500);
@@ -3966,9 +3981,29 @@ setLogsVisible(dashboardPrefs.logsVisible);
 if (detailPanel) {
   detailPanel.addEventListener('pointerdown', (e) => {
     if (e.button !== 0) return;
-    if (e.target.closest('button, .btn, .toggle-btn, .id-chip, .log-id-chip, summary, a, .schema-card__control')) return;
+    if (isDetailInteractiveTarget(e.target)) {
+      bumpDetailInteractionHold(450);
+      return;
+    }
     detailPointerSelectionActive = true;
     bumpDetailInteractionHold(DETAIL_POINTER_GUARD_MS);
+  });
+
+  detailPanel.addEventListener('pointerover', (e) => {
+    if (!isDetailInteractiveTarget(e.target)) return;
+    detailInteractiveHoverActive = true;
+    bumpDetailInteractionHold(120);
+  });
+
+  detailPanel.addEventListener('pointerout', (e) => {
+    if (!isDetailInteractiveTarget(e.target)) return;
+    if (isDetailInteractiveTarget(e.relatedTarget)) return;
+    detailInteractiveHoverActive = false;
+    bumpDetailInteractionHold(90);
+  });
+
+  detailPanel.addEventListener('pointerleave', () => {
+    detailInteractiveHoverActive = false;
   });
 
   detailPanel.addEventListener('copy', () => {
