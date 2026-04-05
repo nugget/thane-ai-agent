@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/nugget/thane-ai-agent/internal/toolcatalog"
 )
 
 // CapabilityManager controls per-Run capability tag activation.
@@ -20,12 +22,7 @@ type CapabilityManager interface {
 }
 
 // CapabilityManifest describes a capability tag for the manifest.
-type CapabilityManifest struct {
-	Tag          string
-	Description  string
-	Tools        []string
-	AlwaysActive bool
-}
+type CapabilityManifest = toolcatalog.CapabilitySurface
 
 // SetCapabilityTools adds activate_capability and deactivate_capability
 // tools to the registry. These tools let the agent dynamically activate
@@ -68,25 +65,10 @@ func extractTag(args map[string]any) string {
 
 // registerActivateCapability registers the activate_capability tool.
 func (r *Registry) registerActivateCapability(mgr CapabilityManager, manifest []CapabilityManifest, tagManifest map[string]CapabilityManifest) {
-	// Build the available tags list for the description.
-	var availableDesc strings.Builder
-	availableDesc.WriteString("Activate a capability to load its tools and context into YOUR current conversation. ")
-	availableDesc.WriteString("This modifies your own runtime — it cannot be delegated. ")
-	availableDesc.WriteString("Delegates get capabilities via the tags parameter on thane_delegate.\n\n")
-	availableDesc.WriteString("Available capabilities:\n")
-	for _, m := range manifest {
-		if m.AlwaysActive {
-			continue
-		}
-		availableDesc.WriteString(fmt.Sprintf("- **%s**: %s (%d tools)\n",
-			m.Tag, m.Description, len(m.Tools)))
-	}
-	availableDesc.WriteString("\nUse deactivate_capability when done to keep your tool set focused.")
-
 	r.Register(&Tool{
 		Name:            "activate_capability",
 		AlwaysAvailable: true,
-		Description:     availableDesc.String(),
+		Description:     toolcatalog.RenderCapabilityActivationDescription(manifest),
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -170,17 +152,5 @@ func (r *Registry) registerDeactivateCapability(mgr CapabilityManager, tagManife
 // from the config map. This is used both for the tool description and for
 // generating the capability manifest talent.
 func BuildCapabilityManifest(tags map[string][]string, descriptions map[string]string, alwaysActive map[string]bool) []CapabilityManifest {
-	manifest := make([]CapabilityManifest, 0, len(tags))
-	for tag, toolNames := range tags {
-		manifest = append(manifest, CapabilityManifest{
-			Tag:          tag,
-			Description:  descriptions[tag],
-			Tools:        toolNames,
-			AlwaysActive: alwaysActive[tag],
-		})
-	}
-	sort.Slice(manifest, func(i, j int) bool {
-		return manifest[i].Tag < manifest[j].Tag
-	})
-	return manifest
+	return toolcatalog.BuildCapabilitySurface(tags, descriptions, alwaysActive)
 }

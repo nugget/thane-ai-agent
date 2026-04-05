@@ -1,6 +1,12 @@
 package toolcatalog
 
-import "maps"
+import (
+	"encoding/json"
+	"fmt"
+	"maps"
+	"sort"
+	"strings"
+)
 
 // ToolSource identifies where a tool originates.
 type ToolSource string
@@ -21,6 +27,21 @@ type BuiltinToolSpec struct {
 type BuiltinTagSpec struct {
 	Description  string
 	AlwaysActive bool
+}
+
+// CapabilitySurface captures the resolved model-facing view of a
+// capability/toolset. It is intentionally transport-agnostic so
+// prompt renderers, tool help text, and future caching/freshness
+// policies can all work from the same semantic shape.
+type CapabilitySurface struct {
+	Tag          string
+	Description  string
+	Tools        []string
+	AlwaysActive bool
+	Loaded       bool
+	KBArticles   int
+	LiveContext  bool
+	AdHoc        bool
 }
 
 var builtinToolSpecs = map[string]BuiltinToolSpec{
@@ -179,4 +200,176 @@ func BuiltinTagSpecs() map[string]BuiltinTagSpec {
 func HasBuiltinTag(name string) bool {
 	_, ok := builtinTagSpecs[name]
 	return ok
+}
+
+// BuildCapabilitySurface builds a sorted capability surface from
+// tag membership and descriptions.
+func BuildCapabilitySurface(tags map[string][]string, descriptions map[string]string, alwaysActive map[string]bool) []CapabilitySurface {
+	surface := make([]CapabilitySurface, 0, len(tags))
+	for tag, toolNames := range tags {
+		copiedTools := append([]string(nil), toolNames...)
+		sort.Strings(copiedTools)
+		surface = append(surface, CapabilitySurface{
+			Tag:          tag,
+			Description:  descriptions[tag],
+			Tools:        copiedTools,
+			AlwaysActive: alwaysActive[tag],
+		})
+	}
+	return SortCapabilitySurface(surface)
+}
+
+// SortCapabilitySurface returns a sorted copy of the capability surface.
+func SortCapabilitySurface(entries []CapabilitySurface) []CapabilitySurface {
+	if len(entries) == 0 {
+		return nil
+	}
+	sorted := make([]CapabilitySurface, len(entries))
+	copy(sorted, entries)
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].Tag < sorted[j].Tag
+	})
+	return sorted
+}
+
+// RenderCapabilityActivationDescription renders the activate_capability
+// tool help text from the shared capability surface.
+func RenderCapabilityActivationDescription(entries []CapabilitySurface) string {
+	var sb strings.Builder
+	sb.WriteString("Activate a capability to load its tools and context into YOUR current conversation. ")
+	sb.WriteString("This modifies your own runtime — it cannot be delegated. ")
+	sb.WriteString("Delegates get capabilities via the tags parameter on thane_delegate.\n\n")
+	sb.WriteString("Available capabilities:\n")
+
+	for _, entry := range SortCapabilitySurface(entries) {
+		if entry.AlwaysActive {
+			continue
+		}
+		sb.WriteString(fmt.Sprintf("- **%s**: %s (%d tools)\n",
+			entry.Tag, capabilityDescription(entry), len(entry.Tools)))
+	}
+
+	sb.WriteString("\nUse deactivate_capability when done to keep your tool set focused.")
+	return sb.String()
+}
+
+// RenderCapabilityManifestMarkdown renders the model-facing capability
+// catalog as markdown plus a compact JSON block.
+func RenderCapabilityManifestMarkdown(entries []CapabilitySurface) string {
+	if len(entries) == 0 {
+		return ""
+	}
+
+	type ctxSummary struct {
+		KBArticles int  `json:"kb_articles,omitempty"`
+		Live       bool `json:"live,omitempty"`
+	}
+	type capabilityJSON struct {
+		Status      string      `json:"status"`
+		Description string      `json:"description"`
+		ToolCount   int         `json:"tools,omitempty"`
+		Context     *ctxSummary `json:"context,omitempty"`
+	}
+
+	payload := struct {
+		Capabilities map[string]capabilityJSON `json:"capabilities"`
+	}{
+		Capabilities: make(map[string]capabilityJSON, len(entries)),
+	}
+
+	for _, entry := range SortCapabilitySurface(entries) {
+		status := "available"
+		switch {
+		case entry.AdHoc:
+			status = "discoverable"
+		case entry.AlwaysActive:
+			status = "always_active"
+		}
+
+		rendered := capabilityJSON{
+			Status:      status,
+			Description: capabilityDescription(entry),
+			ToolCount:   len(entry.Tools),
+		}
+		if entry.KBArticles > 0 || entry.LiveContext {
+			rendered.Context = &ctxSummary{
+				KBArticles: entry.KBArticles,
+				Live:       entry.LiveContext,
+			}
+		}
+		payload.Capabilities[entry.Tag] = rendered
+	}
+
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return "### Available Capabilities\n\n{\"error\":\"manifest marshal failed\"}"
+	}
+
+	var sb strings.Builder
+	sb.WriteString("### Available Capabilities\n\n")
+	sb.WriteString("Activate with `activate_capability(tag: \"name\")`, or `delegate(task, tags: [\"name\"])` for one-off tasks. ")
+	sb.WriteString("Deactivate with `deactivate_capability(tag: \"name\")` when done. Ad-hoc tags work too — any tagged KB articles or talents will load.\n\n")
+	sb.Write(data)
+	return sb.String()
+}
+
+// RenderLoadedCapabilitySummary renders the currently loaded
+// capabilities for always-on prompt context.
+func RenderLoadedCapabilitySummary(entries []CapabilitySurface, activeTags map[string]bool) string {
+	if len(activeTags) == 0 {
+		return ""
+	}
+
+	byTag := make(map[string]CapabilitySurface, len(entries))
+	for _, entry := range entries {
+		byTag[entry.Tag] = entry
+	}
+
+	names := make([]string, 0, len(activeTags))
+	for tag := range activeTags {
+		names = append(names, tag)
+	}
+	sort.Strings(names)
+
+	lines := make([]string, 0, len(names))
+	for _, tag := range names {
+		entry, ok := byTag[tag]
+		if !ok {
+			lines = append(lines, fmt.Sprintf("- `%s`: active capability tag.", tag))
+			continue
+		}
+		desc := capabilityDescription(entry)
+		switch {
+		case desc != "" && len(entry.Tools) > 0:
+			lines = append(lines, fmt.Sprintf("- `%s`: %s (%d tools loaded)", tag, desc, len(entry.Tools)))
+		case desc != "":
+			lines = append(lines, fmt.Sprintf("- `%s`: %s", tag, desc))
+		case len(entry.Tools) > 0:
+			lines = append(lines, fmt.Sprintf("- `%s`: %d tools loaded.", tag, len(entry.Tools)))
+		default:
+			lines = append(lines, fmt.Sprintf("- `%s`: active capability tag.", tag))
+		}
+	}
+
+	return strings.Join(lines, "\n")
+}
+
+func capabilityDescription(entry CapabilitySurface) string {
+	if desc := strings.TrimSpace(entry.Description); desc != "" {
+		return desc
+	}
+	if entry.AdHoc {
+		parts := make([]string, 0, 2)
+		if entry.KBArticles > 0 {
+			parts = append(parts, fmt.Sprintf("%d tagged KB article(s)", entry.KBArticles))
+		}
+		if entry.LiveContext {
+			parts = append(parts, "live context")
+		}
+		if len(parts) == 0 {
+			return "Ad-hoc capability discovered from tagged context."
+		}
+		return "Ad-hoc capability with " + strings.Join(parts, " and ") + "."
+	}
+	return ""
 }

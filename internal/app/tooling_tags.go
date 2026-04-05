@@ -64,3 +64,41 @@ func firstNonEmpty(parts ...string) string {
 	}
 	return ""
 }
+
+func buildCapabilitySurface(
+	resolved map[string]config.CapabilityTagConfig,
+	kbCounts map[string]int,
+	liveTags map[string]bool,
+	adHocTags map[string]bool,
+) []toolcatalog.CapabilitySurface {
+	tagIndex := make(map[string][]string, len(resolved))
+	descriptions := make(map[string]string, len(resolved))
+	alwaysActive := make(map[string]bool, len(resolved))
+	for tag, cfg := range resolved {
+		tagIndex[tag] = append([]string(nil), cfg.Tools...)
+		descriptions[tag] = cfg.Description
+		alwaysActive[tag] = cfg.AlwaysActive
+	}
+
+	surface := toolcatalog.BuildCapabilitySurface(tagIndex, descriptions, alwaysActive)
+	indexByTag := make(map[string]int, len(surface))
+	for i := range surface {
+		indexByTag[surface[i].Tag] = i
+		surface[i].KBArticles = kbCounts[surface[i].Tag]
+		surface[i].LiveContext = liveTags[surface[i].Tag]
+	}
+
+	for tag := range adHocTags {
+		if _, ok := indexByTag[tag]; ok {
+			continue
+		}
+		surface = append(surface, toolcatalog.CapabilitySurface{
+			Tag:         tag,
+			KBArticles:  kbCounts[tag],
+			LiveContext: liveTags[tag],
+			AdHoc:       true,
+		})
+	}
+
+	return toolcatalog.SortCapabilitySurface(surface)
+}

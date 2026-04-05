@@ -2,12 +2,13 @@
 package talents
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/nugget/thane-ai-agent/internal/toolcatalog"
 )
 
 // Loader handles talent file loading.
@@ -172,29 +173,7 @@ func parseTagsLine(frontmatter string) []string {
 }
 
 // ManifestEntry describes a capability tag for the auto-generated manifest.
-type ManifestEntry struct {
-	Tag          string
-	Description  string
-	Tools        []string
-	AlwaysActive bool
-	KBArticles   int  // tagged KB articles auto-loaded when active
-	LiveContext  bool // has a registered TagContextProvider
-	AdHoc        bool // discovered from KB/talents, not in config
-}
-
-// capabilityJSON is the JSON structure for a single capability tag.
-type capabilityJSON struct {
-	Status      string      `json:"status"`
-	Description string      `json:"description"`
-	ToolCount   int         `json:"tools,omitempty"`
-	Context     *ctxSummary `json:"context,omitempty"`
-}
-
-// ctxSummary describes context sources for a capability.
-type ctxSummary struct {
-	KBArticles int  `json:"kb_articles,omitempty"`
-	Live       bool `json:"live,omitempty"`
-}
+type ManifestEntry = toolcatalog.CapabilitySurface
 
 // GenerateManifest creates a Talent containing the capability manifest
 // as compact JSON. Tool names are omitted — the model already has tool
@@ -208,67 +187,9 @@ func GenerateManifest(entries []ManifestEntry) *Talent {
 		return nil
 	}
 
-	var sb strings.Builder
-	sb.WriteString("### Available Capabilities\n\n")
-	sb.WriteString("Activate with `activate_capability(tag: \"name\")`, or `delegate(task, tags: [\"name\"])` for one-off tasks. ")
-	sb.WriteString("Deactivate with `deactivate_capability(tag: \"name\")` when done. Ad-hoc tags work too — any tagged KB articles or talents will load.\n\n")
-
-	// Sort entries by tag name for deterministic JSON output.
-	// Input may come from map iteration (nondeterministic order).
-	sorted := make([]ManifestEntry, len(entries))
-	copy(sorted, entries)
-	sort.Slice(sorted, func(i, j int) bool {
-		return sorted[i].Tag < sorted[j].Tag
-	})
-
-	// Build JSON capabilities map. Ad-hoc tags (discovered from
-	// KB/talents but not in config) get status "discoverable" with
-	// their context metadata preserved.
-	caps := make(map[string]capabilityJSON, len(sorted))
-
-	for _, e := range sorted {
-		status := "available"
-		switch {
-		case e.AdHoc:
-			status = "discoverable"
-		case e.AlwaysActive:
-			status = "always_active"
-		}
-
-		c := capabilityJSON{
-			Status:      status,
-			Description: e.Description,
-			ToolCount:   len(e.Tools),
-		}
-
-		// Only include context summary if there are sources.
-		if e.KBArticles > 0 || e.LiveContext {
-			c.Context = &ctxSummary{
-				KBArticles: e.KBArticles,
-				Live:       e.LiveContext,
-			}
-		}
-
-		caps[e.Tag] = c
-	}
-
-	wrapper := struct {
-		Capabilities map[string]capabilityJSON `json:"capabilities"`
-	}{
-		Capabilities: caps,
-	}
-
-	data, err := json.Marshal(wrapper)
-	if err != nil {
-		// Emit valid JSON even on marshal failure.
-		sb.WriteString(`{"error":"manifest marshal failed"}`)
-	} else {
-		sb.Write(data)
-	}
-
 	return &Talent{
 		Name:    "_capability_manifest",
 		Tags:    nil, // Untagged — always loads
-		Content: sb.String(),
+		Content: toolcatalog.RenderCapabilityManifestMarkdown(entries),
 	}
 }

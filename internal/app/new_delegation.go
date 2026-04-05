@@ -183,28 +183,6 @@ func (a *App) initDelegation(s *newState) error {
 		kbCounts := tagCtxAssembler.KBArticleTags()
 		liveProviders := a.loop.TagContextProviders()
 
-		tagIndex := make(map[string][]string, len(resolvedCapTags))
-		descriptions := make(map[string]string, len(resolvedCapTags))
-		alwaysActiveMap := make(map[string]bool, len(resolvedCapTags))
-		for tag, tagCfg := range resolvedCapTags {
-			tagIndex[tag] = tagCfg.Tools
-			descriptions[tag] = tagCfg.Description
-			alwaysActiveMap[tag] = tagCfg.AlwaysActive
-		}
-		manifest := tools.BuildCapabilityManifest(tagIndex, descriptions, alwaysActiveMap)
-
-		manifestEntries := make([]talents.ManifestEntry, len(manifest))
-		for i, m := range manifest {
-			manifestEntries[i] = talents.ManifestEntry{
-				Tag:          m.Tag,
-				Description:  m.Description,
-				Tools:        m.Tools,
-				AlwaysActive: m.AlwaysActive,
-				KBArticles:   kbCounts[m.Tag],
-				LiveContext:  liveProviders[m.Tag] != nil,
-			}
-		}
-
 		// Discover ad-hoc tags from KB articles and talents that aren't
 		// in the config. These can be activated at runtime to load their
 		// tagged content without requiring config changes.
@@ -225,20 +203,21 @@ func (a *App) initDelegation(s *newState) error {
 				}
 			}
 		}
-		for tag := range adHocTags {
-			manifestEntries = append(manifestEntries, talents.ManifestEntry{
-				Tag:        tag,
-				AdHoc:      true,
-				KBArticles: kbCounts[tag],
-			})
+
+		liveTags := make(map[string]bool, len(liveProviders))
+		for tag := range liveProviders {
+			liveTags[tag] = true
 		}
 
-		if manifestTalent := talents.GenerateManifest(manifestEntries); manifestTalent != nil {
+		capSurface := buildCapabilitySurface(resolvedCapTags, kbCounts, liveTags, adHocTags)
+
+		if manifestTalent := talents.GenerateManifest(capSurface); manifestTalent != nil {
 			capTalents = append([]talents.Talent{*manifestTalent}, capTalents...)
 		}
 
 		a.loop.SetCapabilityTags(resolvedCapTags, capTalents)
-		a.loop.Tools().SetCapabilityTools(a.loop, manifest)
+		a.loop.UseCapabilitySurface(capSurface)
+		a.loop.Tools().SetCapabilityTools(a.loop, capSurface)
 		a.loop.SetTagContextAssembler(tagCtxAssembler)
 		a.loop.SetCapabilityTagStore(agent.NewOpstateCapabilityTagStore(a.opStore))
 

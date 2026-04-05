@@ -31,6 +31,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/router"
 	"github.com/nugget/thane-ai-agent/internal/scheduler"
 	"github.com/nugget/thane-ai-agent/internal/talents"
+	"github.com/nugget/thane-ai-agent/internal/toolcatalog"
 	"github.com/nugget/thane-ai-agent/internal/tools"
 	"github.com/nugget/thane-ai-agent/internal/usage"
 )
@@ -238,6 +239,7 @@ type Loop struct {
 	channelTags   map[string][]string                   // channel name → tag names (static)
 	capTagStore   CapabilityTagStore                    // persists activated tags per conversation (nil = no persistence)
 	lensProvider  func() []string                       // returns active global lenses (nil = none)
+	capSurface    []toolcatalog.CapabilitySurface       // resolved capability surface for model-facing rendering
 
 	// lastRunTags is a snapshot of the most recent Run()'s active
 	// tags, used by the dashboard callback (which has no context).
@@ -428,6 +430,13 @@ func (l *Loop) SetCapabilityTags(capTags map[string]config.CapabilityTagConfig, 
 		}
 	}
 	l.lastRunTagsMu.Unlock()
+}
+
+// UseCapabilitySurface stores the resolved capability surface used by
+// shared model-facing renderers such as prompt summaries and capability
+// manifest/help generation.
+func (l *Loop) UseCapabilitySurface(surface []toolcatalog.CapabilitySurface) {
+	l.capSurface = toolcatalog.SortCapabilitySurface(surface)
 }
 
 // SetUsageRecorder configures persistent token usage recording. When
@@ -702,17 +711,12 @@ func (l *Loop) buildSystemPrompt(ctx context.Context, userMessage string, histor
 	}
 
 	// 3c. Active capabilities — compact list of currently loaded tags.
-	// The full catalog (descriptions, tool counts, context sources) is
-	// in the capability manifest talent; this just shows current state.
-	if len(tags) > 0 {
+	// Uses the shared capability surface so the loaded-state summary is
+	// generated from the same semantic source as the manifest and tool docs.
+	if activeSummary := toolcatalog.RenderLoadedCapabilitySummary(l.capSurface, tags); activeSummary != "" {
 		mark("ACTIVE CAPABILITIES")
-		sorted := make([]string, 0, len(tags))
-		for t := range tags {
-			sorted = append(sorted, t)
-		}
-		sort.Strings(sorted)
-		sb.WriteString("\n\nActive capabilities: ")
-		sb.WriteString(strings.Join(sorted, ", "))
+		sb.WriteString("\n\n## Active Capabilities\n\n")
+		sb.WriteString(activeSummary)
 		sb.WriteString("\n")
 		seal()
 	}
