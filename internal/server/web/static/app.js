@@ -757,6 +757,39 @@ const legendBackdrop = $('#legend-backdrop');
 const legendToggleBtn = $('#toggle-legend');
 const legendCloseBtn = $('#legend-close');
 
+const DASHBOARD_PREFS_KEY = 'thane.dashboard.ui.v1';
+const DEFAULT_DASHBOARD_PREFS = {
+  inspectorVisible: true,
+  logsVisible: false,
+};
+
+function loadDashboardPrefs() {
+  try {
+    const raw = window.localStorage.getItem(DASHBOARD_PREFS_KEY);
+    if (!raw) return { ...DEFAULT_DASHBOARD_PREFS };
+    const parsed = JSON.parse(raw);
+    return {
+      inspectorVisible: parsed.inspectorVisible !== false,
+      logsVisible: parsed.logsVisible === true,
+    };
+  } catch (_) {
+    return { ...DEFAULT_DASHBOARD_PREFS };
+  }
+}
+
+function saveDashboardPrefs(prefs) {
+  try {
+    window.localStorage.setItem(DASHBOARD_PREFS_KEY, JSON.stringify({
+      inspectorVisible: prefs.inspectorVisible !== false,
+      logsVisible: prefs.logsVisible === true,
+    }));
+  } catch (_) {
+    // Ignore storage failures; UI still functions with in-memory state.
+  }
+}
+
+const dashboardPrefs = loadDashboardPrefs();
+
 // ---------------------------------------------------------------------------
 // Trust Zone Underglow
 // ---------------------------------------------------------------------------
@@ -2107,19 +2140,22 @@ function renderLogs(entries) {
   renderLogRows(entries, { logEmpty, logScroll, logBody });
 }
 
+function showLogHint(message) {
+  logBody.innerHTML = '';
+  logScroll.hidden = true;
+  logEmpty.hidden = false;
+  logEmpty.querySelector('p').textContent = message;
+}
+
 // ---------------------------------------------------------------------------
 // Selection
 // ---------------------------------------------------------------------------
 
 function selectLoop(loopId) {
-  clearInterval(systemLogInterval);
-  systemLogInterval = null;
   if (state.selected === loopId) {
     // Deselect.
     state.selected = null;
-    logEmpty.hidden = false;
-    logEmpty.querySelector('p').textContent = 'Click a loop node to load logs';
-    logScroll.hidden = true;
+    showLogHint('Select a loop node to inspect its diagnostic tail');
   } else {
     state.selected = loopId;
     fetchLogs(loopId);
@@ -2127,37 +2163,15 @@ function selectLoop(loopId) {
   renderAll();
 }
 
-let systemLogInterval = null;
-
 function selectSystem() {
-  clearInterval(systemLogInterval);
-  systemLogInterval = null;
   if (state.selected === '__system__') {
     state.selected = null;
-    logEmpty.hidden = false;
-    logEmpty.querySelector('p').textContent = 'Click a loop node to load logs';
-    logScroll.hidden = true;
+    showLogHint('Select a loop node to inspect its diagnostic tail');
   } else {
     state.selected = '__system__';
-    fetchSystemLogs();
-    systemLogInterval = setInterval(fetchSystemLogs, 10000);
+    showLogHint('Logs in the dashboard are node-scoped. Select a loop to inspect its diagnostic tail.');
   }
   renderAll();
-}
-
-async function fetchSystemLogs() {
-  const level = $('#log-level').value;
-  let url = '/api/system/logs?limit=100';
-  if (level) url += '&level=' + encodeURIComponent(level);
-
-  try {
-    const resp = await fetch(url);
-    if (!resp.ok) return;
-    const data = await resp.json();
-    renderLogs(data.entries || []);
-  } catch (err) {
-    console.warn('Failed to fetch system logs:', err);
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -2203,9 +2217,11 @@ function tick() {
 
 function refreshLogs() {
   if (state.selected === '__system__') {
-    fetchSystemLogs();
+    showLogHint('Logs in the dashboard are node-scoped. Select a loop to inspect its diagnostic tail.');
   } else if (state.selected) {
     fetchLogs(state.selected);
+  } else {
+    showLogHint('Select a loop node to inspect its diagnostic tail');
   }
 }
 
@@ -2217,23 +2233,33 @@ $('#log-refresh').addEventListener('click', refreshLogs);
 // ---------------------------------------------------------------------------
 
 function toggleInspector() {
-  const panel = document.getElementById('detail-panel');
-  const handle = document.getElementById('resize-v');
-  const btn = document.getElementById('toggle-inspector');
-  const visible = !panel.hidden;
-  panel.hidden = visible;
-  handle.hidden = visible;
-  btn.classList.toggle('toggle-btn--active', !visible);
+  setInspectorVisible(document.getElementById('detail-panel').hidden);
 }
 
 function toggleLogs() {
+  setLogsVisible(document.getElementById('log-panel').hidden);
+}
+
+function setInspectorVisible(visible) {
+  const panel = document.getElementById('detail-panel');
+  const handle = document.getElementById('resize-v');
+  const btn = document.getElementById('toggle-inspector');
+  panel.hidden = !visible;
+  handle.hidden = !visible;
+  btn.classList.toggle('toggle-btn--active', visible);
+  dashboardPrefs.inspectorVisible = visible;
+  saveDashboardPrefs(dashboardPrefs);
+}
+
+function setLogsVisible(visible) {
   const panel = document.getElementById('log-panel');
   const handle = document.getElementById('resize-h');
   const btn = document.getElementById('toggle-logs');
-  const visible = !panel.hidden;
-  panel.hidden = visible;
-  handle.hidden = visible;
-  btn.classList.toggle('toggle-btn--active', !visible);
+  panel.hidden = !visible;
+  handle.hidden = !visible;
+  btn.classList.toggle('toggle-btn--active', visible);
+  dashboardPrefs.logsVisible = visible;
+  saveDashboardPrefs(dashboardPrefs);
 }
 
 function setLegendVisible(visible) {
@@ -2253,6 +2279,9 @@ $('#toggle-logs').addEventListener('click', toggleLogs);
 legendToggleBtn?.addEventListener('click', toggleLegend);
 legendCloseBtn?.addEventListener('click', () => setLegendVisible(false));
 legendBackdrop?.addEventListener('click', () => setLegendVisible(false));
+
+setInspectorVisible(dashboardPrefs.inspectorVisible);
+setLogsVisible(dashboardPrefs.logsVisible);
 
 // ---------------------------------------------------------------------------
 // Context Menu

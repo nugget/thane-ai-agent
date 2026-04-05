@@ -927,12 +927,13 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
 /* === Log Panel (bottom) === */
 .log-panel {
   flex-shrink: 0;
-  height: 220px;
+  height: 180px;
   background: var(--bg-secondary);
   display: flex;
   flex-direction: column;
   overflow: hidden;
   min-height: 80px;
+  border-top: 1px solid rgba(255, 255, 255, 0.04);
 }
 
 .log-toolbar {
@@ -944,7 +945,17 @@ body.resize-col *, body.resize-row * { cursor: inherit; user-select: none; }
   flex-shrink: 0;
 }
 
+.log-toolbar__copy {
+  display: grid;
+  gap: 0.1rem;
+}
+
 .log-toolbar .section-title { margin-bottom: 0; }
+
+.log-toolbar__subtitle {
+  color: var(--text-muted);
+  font-size: 0.68rem;
+}
 
 .log-filters {
   display: flex;

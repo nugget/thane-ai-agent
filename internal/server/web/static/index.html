@@ -13,7 +13,7 @@
     </div>
     <div class="header-right">
       <button id="toggle-inspector" class="toggle-btn toggle-btn--active" title="Toggle inspector panel (I)"><span class="toggle-icon"></span> Inspector</button>
-      <button id="toggle-logs" class="toggle-btn toggle-btn--active" title="Toggle log panel (L)"><span class="toggle-icon"></span> Logs</button>
+      <button id="toggle-logs" class="toggle-btn" title="Toggle diagnostic log panel (L)"><span class="toggle-icon"></span> Logs</button>
       <button id="toggle-legend" class="toggle-btn" title="Toggle graph legend (?)"><span class="toggle-icon"></span> Legend</button>
       <span id="conn-status" class="conn-badge conn-badge--connecting">connecting</span>
     </div>
@@ -53,10 +53,13 @@
     </aside>
   </main>
 
-  <div class="resize-handle resize-handle--h" id="resize-h"></div>
-  <section class="log-panel" id="log-panel">
+  <div class="resize-handle resize-handle--h" id="resize-h" hidden></div>
+  <section class="log-panel" id="log-panel" hidden>
     <div class="log-toolbar">
-      <h3 class="section-title">Logs</h3>
+      <div class="log-toolbar__copy">
+        <h3 class="section-title">Logs</h3>
+        <p class="log-toolbar__subtitle">Diagnostic tail for focused debugging</p>
+      </div>
       <div class="log-filters">
         <select id="log-level" class="log-select">
           <option value="">All Levels</option>
