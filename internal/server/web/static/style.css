@@ -1998,6 +1998,12 @@ body.resize-col .schema-card__fade {
   transition: opacity 0.3s ease, stroke 0.4s ease, stroke-width 0.3s ease;
 }
 
+.node-occlusion {
+  fill: rgba(13, 17, 23, 0.94);
+  stroke: none;
+  pointer-events: none;
+}
+
 /* Main core */
 .node-shape {
   stroke: rgba(230, 237, 243, 0.16);

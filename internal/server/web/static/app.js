@@ -40,19 +40,22 @@ const CONVERSATION_SESSION_LIMIT = 8;
 const physics = {
   nodes: new Map(),  // id -> { x, y, vx, vy, pinned }
   // Tuning constants — tweak these for feel.
-  centerGravity:      0.002,
+  centerGravity:      0.0016,
   springStrength:     0.02,
   springRestLength:   154,    // system ↔ top-level
   childSpringStrength: 0.06,  // parent ↔ child (3× stronger)
   childRestLength:    96,     // parent ↔ child (tighter cluster with breathing room)
   repulsionStrength:  5600,
-  branchAnchorStrength: 0.018,
-  siblingAnchorStrength: 0.03,
-  edgeNodeRepulsion:  0.11,
-  edgeNodePadding:    28,
+  branchAnchorStrength: 0.024,
+  branchContainmentStrength: 0.008,
+  siblingAnchorStrength: 0.028,
+  crossBranchRepulsionMultiplier: 1.45,
+  sameBranchRepulsionMultiplier: 0.9,
+  edgeNodeRepulsion:  0.2,
+  edgeNodePadding:    40,
   channelChildSpacingMultiplier: 1.22,
-  damping:            0.93,
-  maxVelocity:        6,
+  damping:            0.9,
+  maxVelocity:        4.4,
   wallStrength:       0.045,
   collisionPadding:   22,
   resizeVelocityGain: 0.12,
@@ -155,6 +158,44 @@ function buildSiblingIndex() {
   return siblings;
 }
 
+function buildBranchIndex() {
+  const rootByID = new Map();
+  const depthByID = new Map();
+  const descendantsByRoot = new Map();
+  const childrenByParent = new Map();
+
+  for (const loop of state.loops.values()) {
+    if (!loop.parent_id) continue;
+    if (!childrenByParent.has(loop.parent_id)) childrenByParent.set(loop.parent_id, []);
+    childrenByParent.get(loop.parent_id).push(loop.id);
+  }
+
+  function visit(loopID, rootID, depth) {
+    rootByID.set(loopID, rootID);
+    depthByID.set(loopID, depth);
+    if (!descendantsByRoot.has(rootID)) descendantsByRoot.set(rootID, []);
+    descendantsByRoot.get(rootID).push(loopID);
+    const children = childrenByParent.get(loopID) || [];
+    for (const childID of children) {
+      visit(childID, rootID, depth + 1);
+    }
+  }
+
+  const roots = Array.from(state.loops.values())
+    .filter(loop => !loop.parent_id)
+    .sort(compareLoopsForLayout);
+  for (const root of roots) {
+    visit(root.id, root.id, 0);
+  }
+
+  for (const loop of state.loops.values()) {
+    if (rootByID.has(loop.id)) continue;
+    visit(loop.id, loop.id, 0);
+  }
+
+  return { rootByID, depthByID, descendantsByRoot };
+}
+
 function buildTopLevelOrbitTargets(cx, cy, branchLoads) {
   const roots = Array.from(state.loops.values())
     .filter(loop => !loop.parent_id && physics.nodes.has(loop.id))
@@ -162,11 +203,27 @@ function buildTopLevelOrbitTargets(cx, cy, branchLoads) {
   const targets = new Map();
   if (roots.length === 0) return targets;
 
+  const requiredCircumference = roots.reduce((sum, loop) => {
+    const load = branchLoads.get(loop.id);
+    const extent = getPhysicsNodeExtent(loop.id);
+    const branchFootprint = getLoopBranchFootprint(load);
+    return sum + Math.max(
+      extent * 2 + 76,
+      physics.springRestLength * getLoopClusterRestMultiplier(load) * 0.95,
+      extent * 2 + Math.min(220, branchFootprint * 0.22),
+    );
+  }, 0);
+  const baseRadius = Math.max(
+    physics.springRestLength * 1.05,
+    requiredCircumference / (Math.PI * 2),
+  );
+
   const startAngle = -Math.PI / 2;
   const step = (Math.PI * 2) / roots.length;
   for (let i = 0; i < roots.length; i += 1) {
     const loop = roots[i];
-    const radius = physics.springRestLength * getLoopClusterRestMultiplier(branchLoads.get(loop.id));
+    const load = branchLoads.get(loop.id);
+    const radius = baseRadius + Math.min(140, getLoopBranchFootprint(load) * 0.16);
     const angle = startAngle + (step * i);
     targets.set(loop.id, {
       angle,
@@ -196,6 +253,11 @@ function buildSiblingOrbitTargets(siblingIndex) {
     }
   }
   return targets;
+}
+
+function getGraphMotionScale(nodeCount) {
+  if (nodeCount <= 8) return 1;
+  return Math.max(0.58, 1 - ((nodeCount - 8) * 0.026));
 }
 
 // Ensure physics.nodes matches the current set of loops + system node.
@@ -330,9 +392,11 @@ function physicsStep(cx, cy, vw, vh) {
   const n = nodes.length;
   if (n === 0) return;
   const branchLoads = buildLoopBranchLoads();
+  const branchIndex = buildBranchIndex();
   const siblingIndex = buildSiblingIndex();
   const topLevelTargets = buildTopLevelOrbitTargets(cx, cy, branchLoads);
   const siblingTargets = buildSiblingOrbitTargets(siblingIndex);
+  const motionScale = getGraphMotionScale(n);
   const edges = [];
 
   // Anisotropic gravity — scale per-axis so the node cloud stretches
@@ -361,6 +425,21 @@ function physicsStep(cx, cy, vw, vh) {
     if (!nd || nd.pinned) continue;
     nd.fx += (target.x - nd.x) * P.branchAnchorStrength;
     nd.fy += (target.y - nd.y) * P.branchAnchorStrength;
+  }
+
+  // 1c. Branch containment — descendants should feel like they belong to
+  // their top-level branch pocket, not to the undifferentiated center.
+  for (const loop of state.loops.values()) {
+    if (!loop.parent_id) continue;
+    const nd = P.nodes.get(loop.id);
+    if (!nd || nd.pinned) continue;
+    const rootID = branchIndex.rootByID.get(loop.id);
+    const target = topLevelTargets.get(rootID);
+    if (!target) continue;
+    const depth = branchIndex.depthByID.get(loop.id) || 1;
+    const depthStrength = 1 + Math.min(0.8, (depth - 1) * 0.18);
+    nd.fx += (target.x - nd.x) * P.branchContainmentStrength * depthStrength;
+    nd.fy += (target.y - nd.y) * P.branchContainmentStrength * depthStrength;
   }
 
   // 2. Spring forces — build edge list from loop relationships.
@@ -447,6 +526,13 @@ function physicsStep(cx, cy, vw, vh) {
       const loopA = ids[i] === '__system__' ? null : state.loops.get(ids[i]);
       const loopB = ids[j] === '__system__' ? null : state.loops.get(ids[j]);
       let spacingMultiplier = getPairSpacingMultiplier(loopA, loopB);
+      const rootA = ids[i] === '__system__' ? '__system__' : (branchIndex.rootByID.get(ids[i]) || ids[i]);
+      const rootB = ids[j] === '__system__' ? '__system__' : (branchIndex.rootByID.get(ids[j]) || ids[j]);
+      if (rootA !== rootB) {
+        spacingMultiplier *= P.crossBranchRepulsionMultiplier;
+      } else if (rootA !== '__system__') {
+        spacingMultiplier *= P.sameBranchRepulsionMultiplier;
+      }
       if (ids[i] === '__system__' && loopB && !loopB.parent_id) {
         spacingMultiplier *= getLoopClusterRepulsionMultiplier(branchLoads.get(loopB.id));
       } else if (ids[j] === '__system__' && loopA && !loopA.parent_id) {
@@ -500,11 +586,15 @@ function physicsStep(cx, cy, vw, vh) {
       }
       const nx = awayX / dist;
       const ny = awayY / dist;
-      const force = (clearance - dist) * P.edgeNodeRepulsion;
+      const pressure = clearance - dist;
+      const midSegmentBias = 1 - Math.min(1, Math.abs(0.5 - t) * 2);
+      const force = pressure * P.edgeNodeRepulsion * (1 + midSegmentBias * 1.5 + (pressure / clearance) * 1.4);
       nd.fx += nx * force;
       nd.fy += ny * force;
+      nd.vx += nx * pressure * 0.04;
+      nd.vy += ny * pressure * 0.04;
 
-      const endpointShare = force * 0.2;
+      const endpointShare = force * (0.22 + midSegmentBias * 0.2);
       if (!edge.source.pinned) {
         edge.source.fx -= nx * endpointShare * (1 - t);
         edge.source.fy -= ny * endpointShare * (1 - t);
@@ -521,12 +611,13 @@ function physicsStep(cx, cy, vw, vh) {
     const id = ids[i];
     const nd = nodes[i];
     if (nd.pinned) continue;
-    nd.vx = (nd.vx + nd.fx) * P.damping;
-    nd.vy = (nd.vy + nd.fy) * P.damping;
+    nd.vx = (nd.vx + nd.fx * motionScale) * P.damping;
+    nd.vy = (nd.vy + nd.fy * motionScale) * P.damping;
     // Clamp velocity.
     const speed = Math.sqrt(nd.vx * nd.vx + nd.vy * nd.vy);
-    if (speed > P.maxVelocity) {
-      const scale = P.maxVelocity / speed;
+    const maxVelocity = Math.max(2.6, P.maxVelocity * motionScale);
+    if (speed > maxVelocity) {
+      const scale = maxVelocity / speed;
       nd.vx *= scale;
       nd.vy *= scale;
     }
@@ -2834,6 +2925,11 @@ function renderNode(loop) {
       fill: 'none',
     });
 
+    const occlusionDisk = createSVG('circle', {
+      class: 'node-occlusion',
+      r: nodeR + 6,
+    });
+
     // Glow ring (always a circle regardless of shape).
     const ring = createSVG('circle', {
       class: 'node-ring node-ring--pending',
@@ -2898,6 +2994,7 @@ function renderNode(loop) {
     label.textContent = slash > 0 ? displayName.slice(slash + 1) : displayName;
 
     inner.appendChild(selectionRing);
+    inner.appendChild(occlusionDisk);
     inner.appendChild(ring);
     inner.appendChild(sleepRing);
     inner.appendChild(shapeEl);
@@ -2953,6 +3050,7 @@ function renderNode(loop) {
     // Update dependent radii.
     const newRingR = nodeR + 12;
     group.querySelector('.selection-ring').setAttribute('r', nodeR + 18);
+    group.querySelector('.node-occlusion').setAttribute('r', nodeR + 6);
     group.querySelector('.node-ring').setAttribute('r', newRingR);
     const sleepRing = group.querySelector('.sleep-ring');
     const newSleepR = nodeR;
