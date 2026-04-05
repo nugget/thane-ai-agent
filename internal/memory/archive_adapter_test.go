@@ -3,6 +3,7 @@ package memory
 import (
 	"log/slog"
 	"os"
+	"slices"
 	"testing"
 	"time"
 )
@@ -260,5 +261,25 @@ func TestAdapter_ActiveSessionStartedAt(t *testing.T) {
 	// Should return zero again.
 	if got := adapter.ActiveSessionStartedAt("conv-1"); !got.IsZero() {
 		t.Errorf("expected zero time after session end, got %v", got)
+	}
+}
+
+func TestAdapter_ActiveConversationIDs(t *testing.T) {
+	adapter, archiveStore, _ := newTestAdapter(t)
+
+	// Cached active session.
+	if _, err := adapter.StartSession("conv-cached"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Store-only active session (simulates restart / cache miss).
+	if _, err := archiveStore.StartSession("conv-store"); err != nil {
+		t.Fatal(err)
+	}
+
+	got := adapter.ActiveConversationIDs()
+	want := []string{"conv-cached", "conv-store"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("ActiveConversationIDs() = %v, want %v", got, want)
 	}
 }

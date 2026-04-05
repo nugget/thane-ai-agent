@@ -143,15 +143,17 @@ func (w *SummarizerWorker) Stop() {
 func (w *SummarizerWorker) run(ctx context.Context) {
 	defer close(w.done)
 
-	// Phase 0: close orphaned sessions from prior crashes.
+	// Phase 0: recover unclosed sessions from a prior run.
 	// If the process was killed (SIGKILL, OOM, panic), EndSession never
-	// ran and ended_at stays NULL. Close any session started before this
-	// process so it becomes eligible for summarization.
+	// ran and ended_at stays NULL. Graceful shutdown can also leave an
+	// open session behind if the conversation was still active. Close any
+	// session started before this process so it becomes eligible for
+	// summarization.
 	closed, err := w.store.CloseOrphanedSessions(w.startTime)
 	if err != nil {
 		w.logger.Error("failed to close orphaned sessions", "error", err)
 	} else if closed > 0 {
-		w.logger.Warn("closed orphaned sessions from prior crash",
+		w.logger.Info("recovered unclosed sessions from prior run",
 			"count", closed,
 		)
 	}

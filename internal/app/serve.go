@@ -63,22 +63,6 @@ func (a *App) Serve(ctx context.Context) error {
 		<-ctx.Done()
 		a.logger.Info("shutdown signal received")
 
-		// Archive conversation before shutdown
-		a.loop.ShutdownArchive("default")
-
-		// Publish MQTT offline status before disconnecting.
-		if a.mqttPub != nil {
-			offlineCtx, offlineCancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer offlineCancel()
-			if err := a.mqttPub.Stop(offlineCtx); err != nil {
-				a.logger.Error("mqtt shutdown failed", "error", err)
-			}
-		}
-
-		if _, err := a.checkpointer.CreateShutdown(); err != nil {
-			a.logger.Error("failed to create shutdown checkpoint", "error", err)
-		}
-
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer shutdownCancel()
 		if err := a.server.Shutdown(shutdownCtx); err != nil {
@@ -96,6 +80,31 @@ func (a *App) Serve(ctx context.Context) error {
 		}
 		if shutdownCtx.Err() == context.DeadlineExceeded {
 			a.logger.Warn("server shutdown timed out; some connections may have been forcefully terminated")
+		}
+
+		// Archive any still-active conversations now that the servers have
+		// stopped accepting work and in-flight requests have drained.
+		if a.archiveAdapter != nil && a.loop != nil {
+			activeConversationIDs := a.archiveAdapter.ActiveConversationIDs()
+			if len(activeConversationIDs) > 0 {
+				a.logger.Info("archiving active conversations before shutdown", "count", len(activeConversationIDs))
+				for _, conversationID := range activeConversationIDs {
+					a.loop.ShutdownArchive(conversationID)
+				}
+			}
+		}
+
+		// Publish MQTT offline status before disconnecting.
+		if a.mqttPub != nil {
+			offlineCtx, offlineCancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer offlineCancel()
+			if err := a.mqttPub.Stop(offlineCtx); err != nil {
+				a.logger.Error("mqtt shutdown failed", "error", err)
+			}
+		}
+
+		if _, err := a.checkpointer.CreateShutdown(); err != nil {
+			a.logger.Error("failed to create shutdown checkpoint", "error", err)
 		}
 	}()
 

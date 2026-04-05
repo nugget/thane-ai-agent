@@ -2,6 +2,7 @@ package memory
 
 import (
 	"log/slog"
+	"slices"
 	"sync"
 	"time"
 )
@@ -213,6 +214,42 @@ func (a *ArchiveAdapter) ActiveSessionStartedAt(conversationID string) time.Time
 	a.mu.Unlock()
 
 	return sess.StartedAt
+}
+
+// ActiveConversationIDs returns the conversation IDs with currently open
+// sessions. It prefers the in-memory cache for hot-path accuracy and
+// merges in any active sessions found in the store so startup recovery
+// and direct store writes are also reflected.
+func (a *ArchiveAdapter) ActiveConversationIDs() []string {
+	ids := make(map[string]struct{})
+
+	a.mu.RLock()
+	for conversationID, entry := range a.sessions {
+		if entry.id == "" {
+			continue
+		}
+		ids[conversationID] = struct{}{}
+	}
+	a.mu.RUnlock()
+
+	sessions, err := a.store.ActiveSessionsWithLastActivity()
+	if err != nil {
+		a.logger.Warn("failed to enumerate active sessions", "error", err)
+	} else {
+		for _, sess := range sessions {
+			if sess.SessionID == "" || sess.ConversationID == "" {
+				continue
+			}
+			ids[sess.ConversationID] = struct{}{}
+		}
+	}
+
+	out := make([]string, 0, len(ids))
+	for conversationID := range ids {
+		out = append(out, conversationID)
+	}
+	slices.Sort(out)
+	return out
 }
 
 // ArchiveIterations persists a batch of iteration records to the archive store.
