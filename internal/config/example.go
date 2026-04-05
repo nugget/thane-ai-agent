@@ -237,6 +237,16 @@ func ExampleConfig() *Config {
 					Task:       "Watch the office and report noteworthy changes or trends.",
 					Operation:  looppkg.OperationService,
 					Completion: looppkg.CompletionNone,
+					Conditions: looppkg.Conditions{
+						Schedule: &looppkg.ScheduleCondition{
+							Timezone: "America/Chicago",
+							Windows: []looppkg.ScheduleWindow{{
+								Days:  []string{"mon", "tue", "wed", "thu", "fri"},
+								Start: "08:30",
+								End:   "18:00",
+							}},
+						},
+					},
 					Profile: router.LoopProfile{
 						Mission:          "background",
 						DelegationGating: "disabled",

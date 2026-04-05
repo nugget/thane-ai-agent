@@ -290,3 +290,58 @@ func TestLoopDefinitionListFiltersRuntimeState(t *testing.T) {
 		t.Fatalf("items = %+v, want one sleeping metacog_like", got.Items)
 	}
 }
+
+func TestLoopDefinitionListFiltersEligibility(t *testing.T) {
+	deps := newTestLoopDefinitionDeps(t)
+
+	deps.reg.loopDefinitionView = func() *looppkg.DefinitionRegistryView {
+		return &looppkg.DefinitionRegistryView{
+			Generation: 1,
+			Definitions: []looppkg.DefinitionView{
+				{
+					DefinitionSnapshot: looppkg.DefinitionSnapshot{
+						Name: "eligible_watch",
+						Spec: looppkg.Spec{
+							Name:      "eligible_watch",
+							Task:      "watch",
+							Operation: looppkg.OperationService,
+						},
+					},
+					Eligibility: looppkg.DefinitionEligibilityStatus{Eligible: true},
+				},
+				{
+					DefinitionSnapshot: looppkg.DefinitionSnapshot{
+						Name: "ineligible_watch",
+						Spec: looppkg.Spec{
+							Name:      "ineligible_watch",
+							Task:      "watch later",
+							Operation: looppkg.OperationService,
+						},
+					},
+					Eligibility: looppkg.DefinitionEligibilityStatus{
+						Eligible: false,
+						Reason:   "outside scheduled windows",
+					},
+				},
+			},
+		}
+	}
+
+	out, err := deps.reg.Get("loop_definition_list").Handler(context.Background(), map[string]any{
+		"eligible": "false",
+	})
+	if err != nil {
+		t.Fatalf("loop_definition_list(eligible): %v", err)
+	}
+
+	var got struct {
+		Count int                      `json:"count"`
+		Items []looppkg.DefinitionView `json:"items"`
+	}
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatalf("unmarshal list: %v", err)
+	}
+	if got.Count != 1 || got.Items[0].Name != "ineligible_watch" {
+		t.Fatalf("items = %+v, want one ineligible_watch definition", got.Items)
+	}
+}

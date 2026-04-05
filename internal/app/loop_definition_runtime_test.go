@@ -65,6 +65,8 @@ func TestLoopDefinitionRuntimeStartEnabledServices(t *testing.T) {
 		runner:      testLoopRunner{},
 		logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
 		eventBus:    events.New(),
+		now:         time.Now,
+		scheduleCh:  make(chan struct{}, 1),
 	}
 
 	result, err := runtime.StartEnabledServices(context.Background())
@@ -123,6 +125,8 @@ func TestLoopDefinitionRuntimeSkipsExistingLoopName(t *testing.T) {
 		loops:       loops,
 		runner:      testLoopRunner{},
 		logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+		now:         time.Now,
+		scheduleCh:  make(chan struct{}, 1),
 	}
 
 	result, err := runtime.StartEnabledServices(context.Background())
@@ -166,6 +170,8 @@ func TestLoopDefinitionRuntimeReconcileDefinitionStopsInactiveService(t *testing
 		loops:       loops,
 		runner:      testLoopRunner{},
 		logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+		now:         time.Now,
+		scheduleCh:  make(chan struct{}, 1),
 	}
 
 	if err := runtime.ReconcileDefinition(context.Background(), "office_watch"); err != nil {
@@ -223,6 +229,8 @@ func TestLoopDefinitionRuntimeLaunchDefinition(t *testing.T) {
 		loops:       loops,
 		runner:      testLoopRunner{},
 		logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+		now:         time.Now,
+		scheduleCh:  make(chan struct{}, 1),
 	}
 
 	result, err := runtime.LaunchDefinition(context.Background(), "delegate_like", looppkg.Launch{
@@ -282,6 +290,8 @@ func TestLoopDefinitionRuntimeSnapshotIncludesRunningLoop(t *testing.T) {
 		loops:       loops,
 		runner:      testLoopRunner{},
 		logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+		now:         time.Now,
+		scheduleCh:  make(chan struct{}, 1),
 	}
 	if err := runtime.ReconcileDefinition(context.Background(), "office_watch"); err != nil {
 		t.Fatalf("ReconcileDefinition: %v", err)
@@ -296,5 +306,156 @@ func TestLoopDefinitionRuntimeSnapshotIncludesRunningLoop(t *testing.T) {
 	}
 	if len(view.Definitions) != 1 || !view.Definitions[0].Runtime.Running {
 		t.Fatalf("Definitions = %+v, want one running definition", view.Definitions)
+	}
+}
+
+func TestLoopDefinitionRuntimeStartEnabledServicesSkipsIneligibleDefinition(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 7, 2, 0, 0, 0, time.UTC) // Monday 21:00 CDT
+	registry, err := looppkg.NewDefinitionRegistry([]looppkg.Spec{
+		{
+			Name:       "night_watch",
+			Enabled:    true,
+			Task:       "Watch overnight.",
+			Operation:  looppkg.OperationService,
+			Completion: looppkg.CompletionNone,
+			Conditions: looppkg.Conditions{
+				Schedule: &looppkg.ScheduleCondition{
+					Timezone: "America/Chicago",
+					Windows: []looppkg.ScheduleWindow{{
+						Days:  []string{"mon"},
+						Start: "09:00",
+						End:   "17:00",
+					}},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewDefinitionRegistry: %v", err)
+	}
+
+	runtime := &loopDefinitionRuntime{
+		definitions: registry,
+		loops:       looppkg.NewRegistry(),
+		runner:      testLoopRunner{},
+		logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+		now:         func() time.Time { return now },
+		scheduleCh:  make(chan struct{}, 1),
+	}
+
+	result, err := runtime.StartEnabledServices(context.Background())
+	if err != nil {
+		t.Fatalf("StartEnabledServices: %v", err)
+	}
+	if result.Started != 0 || result.SkippedIneligible != 1 {
+		t.Fatalf("result = %+v, want started=0 skipped_ineligible=1", result)
+	}
+}
+
+func TestLoopDefinitionRuntimeReconcileDefinitionStopsWhenConditionsNoLongerMatch(t *testing.T) {
+	t.Parallel()
+
+	current := time.Date(2026, 4, 6, 15, 0, 0, 0, time.UTC) // Monday 10:00 CDT
+	registry, err := looppkg.NewDefinitionRegistry([]looppkg.Spec{
+		{
+			Name:         "office_watch",
+			Enabled:      true,
+			Task:         "Watch the office.",
+			Operation:    looppkg.OperationService,
+			Completion:   looppkg.CompletionNone,
+			SleepMin:     time.Minute,
+			SleepMax:     time.Minute,
+			SleepDefault: time.Minute,
+			Jitter:       looppkg.Float64Ptr(0),
+			Conditions: looppkg.Conditions{
+				Schedule: &looppkg.ScheduleCondition{
+					Timezone: "America/Chicago",
+					Windows: []looppkg.ScheduleWindow{{
+						Days:  []string{"mon"},
+						Start: "09:00",
+						End:   "17:00",
+					}},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewDefinitionRegistry: %v", err)
+	}
+
+	loops := looppkg.NewRegistry()
+	t.Cleanup(func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		loops.ShutdownAll(shutdownCtx)
+	})
+
+	runtime := &loopDefinitionRuntime{
+		definitions: registry,
+		loops:       loops,
+		runner:      testLoopRunner{},
+		logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+		now:         func() time.Time { return current },
+		scheduleCh:  make(chan struct{}, 1),
+	}
+
+	if err := runtime.ReconcileDefinition(context.Background(), "office_watch"); err != nil {
+		t.Fatalf("ReconcileDefinition(active): %v", err)
+	}
+	if loops.GetByName("office_watch") == nil {
+		t.Fatal("expected office_watch to be running while eligible")
+	}
+
+	current = time.Date(2026, 4, 6, 23, 30, 0, 0, time.UTC) // Monday 18:30 CDT
+	if err := runtime.ReconcileDefinition(context.Background(), "office_watch"); err != nil {
+		t.Fatalf("ReconcileDefinition(ineligible): %v", err)
+	}
+	if loops.GetByName("office_watch") != nil {
+		t.Fatal("expected office_watch to stop after leaving its schedule window")
+	}
+}
+
+func TestLoopDefinitionRuntimeLaunchDefinitionRejectsIneligibleDefinition(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 4, 6, 23, 30, 0, 0, time.UTC) // Monday 18:30 CDT
+	registry, err := looppkg.NewDefinitionRegistry([]looppkg.Spec{
+		{
+			Name:       "day_shift",
+			Enabled:    true,
+			Task:       "Handle one request.",
+			Operation:  looppkg.OperationRequestReply,
+			Completion: looppkg.CompletionReturn,
+			Conditions: looppkg.Conditions{
+				Schedule: &looppkg.ScheduleCondition{
+					Timezone: "America/Chicago",
+					Windows: []looppkg.ScheduleWindow{{
+						Days:  []string{"mon"},
+						Start: "09:00",
+						End:   "17:00",
+					}},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewDefinitionRegistry: %v", err)
+	}
+
+	runtime := &loopDefinitionRuntime{
+		definitions: registry,
+		loops:       looppkg.NewRegistry(),
+		runner:      testLoopRunner{},
+		logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
+		now:         func() time.Time { return now },
+		scheduleCh:  make(chan struct{}, 1),
+	}
+
+	_, err = runtime.LaunchDefinition(context.Background(), "day_shift", looppkg.Launch{})
+	var ineligible *looppkg.IneligibleDefinitionError
+	if err == nil || !errors.As(err, &ineligible) {
+		t.Fatalf("LaunchDefinition error = %v, want *IneligibleDefinitionError", err)
 	}
 }

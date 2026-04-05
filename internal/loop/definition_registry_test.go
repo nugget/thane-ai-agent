@@ -238,6 +238,16 @@ func TestBuildDefinitionRegistryViewIncludesRuntimeState(t *testing.T) {
 			Task:       "Observe and reflect.",
 			Operation:  OperationService,
 			Completion: CompletionNone,
+			Conditions: Conditions{
+				Schedule: &ScheduleCondition{
+					Timezone: "America/Chicago",
+					Windows: []ScheduleWindow{{
+						Days:  []string{"mon"},
+						Start: "09:00",
+						End:   "17:00",
+					}},
+				},
+			},
 		},
 		{
 			Name:       "paused_watch",
@@ -251,13 +261,14 @@ func TestBuildDefinitionRegistryViewIncludesRuntimeState(t *testing.T) {
 		t.Fatalf("NewDefinitionRegistry: %v", err)
 	}
 
-	view := BuildDefinitionRegistryView(reg.Snapshot(), map[string]DefinitionRuntimeStatus{
+	now := time.Date(2026, 4, 6, 15, 0, 0, 0, time.UTC)
+	view := buildDefinitionRegistryViewAt(reg.Snapshot(), map[string]DefinitionRuntimeStatus{
 		"metacog_like": {
 			Running: true,
 			LoopID:  "loop-123",
 			State:   StateSleeping,
 		},
-	})
+	}, now)
 	if view == nil {
 		t.Fatal("BuildDefinitionRegistryView returned nil")
 	}
@@ -267,13 +278,22 @@ func TestBuildDefinitionRegistryViewIncludesRuntimeState(t *testing.T) {
 	if view.ByPolicyState[string(DefinitionPolicyStateActive)] != 1 || view.ByPolicyState[string(DefinitionPolicyStateInactive)] != 1 {
 		t.Fatalf("ByPolicyState = %+v, want active=1 inactive=1", view.ByPolicyState)
 	}
+	if view.ByEligibilityState[definitionEligibilityStateEligible] != 2 || view.ByEligibilityState[definitionEligibilityStateIneligible] != 0 {
+		t.Fatalf("ByEligibilityState = %+v, want eligible=2 ineligible=0", view.ByEligibilityState)
+	}
 	if view.ByRuntimeState[string(StateSleeping)] != 1 || view.ByRuntimeState[definitionRuntimeStateNotRunning] != 1 {
 		t.Fatalf("ByRuntimeState = %+v, want sleeping=1 not_running=1", view.ByRuntimeState)
 	}
 	if !view.Definitions[0].Runtime.Running {
 		t.Fatal("metacog_like runtime should be running")
 	}
+	if !view.Definitions[0].Eligibility.Eligible {
+		t.Fatal("metacog_like eligibility should be true")
+	}
 	if view.Definitions[1].Runtime.Running {
 		t.Fatal("paused_watch runtime should not be running")
+	}
+	if !view.Definitions[1].Eligibility.Eligible {
+		t.Fatal("paused_watch eligibility should be true")
 	}
 }

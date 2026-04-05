@@ -334,12 +334,15 @@ func (s *Server) handleLoopDefinitionLaunch(w http.ResponseWriter, r *http.Reque
 		var unknown *looppkg.UnknownDefinitionError
 		var inactive *looppkg.InactiveDefinitionError
 		var paused *looppkg.PausedDefinitionError
+		var ineligible *looppkg.IneligibleDefinitionError
 		switch {
 		case errors.As(err, &unknown):
 			s.errorResponse(w, http.StatusNotFound, err.Error())
 		case errors.As(err, &inactive):
 			s.errorResponse(w, http.StatusConflict, err.Error())
 		case errors.As(err, &paused):
+			s.errorResponse(w, http.StatusConflict, err.Error())
+		case errors.As(err, &ineligible):
 			s.errorResponse(w, http.StatusConflict, err.Error())
 		default:
 			s.errorResponse(w, http.StatusBadRequest, err.Error())

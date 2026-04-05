@@ -24,17 +24,18 @@ func (r *Registry) handleLoopDefinitionSummary(_ context.Context, _ map[string]a
 		names = append(names, def.Name)
 	}
 	return ldMarshalToolJSON(map[string]any{
-		"generation":          view.Generation,
-		"definition_count":    len(view.Definitions),
-		"config_definitions":  view.ConfigDefinitions,
-		"overlay_definitions": view.OverlayDefinitions,
-		"running_definitions": view.RunningDefinitions,
-		"by_source":           bySource,
-		"by_operation":        byOperation,
-		"by_completion":       byCompletion,
-		"by_policy_state":     view.ByPolicyState,
-		"by_runtime_state":    view.ByRuntimeState,
-		"names":               names,
+		"generation":           view.Generation,
+		"definition_count":     len(view.Definitions),
+		"config_definitions":   view.ConfigDefinitions,
+		"overlay_definitions":  view.OverlayDefinitions,
+		"running_definitions":  view.RunningDefinitions,
+		"by_source":            bySource,
+		"by_operation":         byOperation,
+		"by_completion":        byCompletion,
+		"by_policy_state":      view.ByPolicyState,
+		"by_eligibility_state": view.ByEligibilityState,
+		"by_runtime_state":     view.ByRuntimeState,
+		"names":                names,
 	})
 }
 
@@ -49,6 +50,7 @@ func (r *Registry) handleLoopDefinitionList(_ context.Context, args map[string]a
 	completion := ldStringArg(args, "completion")
 	policyState := ldStringArg(args, "policy_state")
 	runtimeState := strings.ToLower(ldStringArg(args, "runtime_state"))
+	eligibleFilter := ldStringArg(args, "eligible")
 	limit := ldIntArg(args, "limit")
 	if limit <= 0 {
 		limit = defaultLoopDefinitionListLimit
@@ -70,6 +72,18 @@ func (r *Registry) handleLoopDefinitionList(_ context.Context, args map[string]a
 		}
 		if policyState != "" && string(def.PolicyState) != policyState {
 			continue
+		}
+		if eligibleFilter != "" {
+			switch strings.ToLower(eligibleFilter) {
+			case "true":
+				if !def.Eligibility.Eligible {
+					continue
+				}
+			case "false":
+				if def.Eligibility.Eligible {
+					continue
+				}
+			}
 		}
 		if runtimeState != "" {
 			currentRuntimeState := "not_running"

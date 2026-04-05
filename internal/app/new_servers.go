@@ -625,16 +625,20 @@ func (a *App) initServers(s *newState) error {
 			if err != nil {
 				return err
 			}
-			if result.Started > 0 || result.SkippedInactive > 0 || result.SkippedPaused > 0 || result.SkippedExisting > 0 || result.SkippedNonService > 0 {
+			if result.Started > 0 || result.SkippedInactive > 0 || result.SkippedPaused > 0 || result.SkippedIneligible > 0 || result.SkippedExisting > 0 || result.SkippedNonService > 0 {
 				logger.Info("loop definition services reconciled",
 					"started", result.Started,
 					"skipped_inactive", result.SkippedInactive,
 					"skipped_paused", result.SkippedPaused,
+					"skipped_ineligible", result.SkippedIneligible,
 					"skipped_existing", result.SkippedExisting,
 					"skipped_non_service", result.SkippedNonService,
 				)
 			}
 			return nil
+		})
+		a.deferWorker("loop-definition-schedule", func(ctx context.Context) error {
+			return a.loopDefinitionRuntime.StartScheduleWatcher(ctx)
 		})
 	}
 

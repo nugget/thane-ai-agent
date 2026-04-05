@@ -13,6 +13,7 @@ type specJSON struct {
 	Profile                any               `json:"profile,omitempty"`
 	Operation              Operation         `json:"operation,omitempty"`
 	Completion             Completion        `json:"completion,omitempty"`
+	Conditions             Conditions        `json:"conditions,omitempty"`
 	Tags                   []string          `json:"tags,omitempty"`
 	ExcludeTools           []string          `json:"exclude_tools,omitempty"`
 	SleepMin               string            `json:"sleep_min,omitempty"`
@@ -43,6 +44,7 @@ func (s Spec) MarshalJSON() ([]byte, error) {
 		Profile:                s.Profile,
 		Operation:              s.Operation,
 		Completion:             s.Completion,
+		Conditions:             s.Conditions,
 		Tags:                   s.Tags,
 		ExcludeTools:           s.ExcludeTools,
 		SleepMin:               durationString(s.SleepMin),
@@ -100,6 +102,7 @@ func (s *Spec) UnmarshalJSON(data []byte) error {
 		Task:                   wire.Task,
 		Operation:              wire.Operation,
 		Completion:             wire.Completion,
+		Conditions:             cloneConditions(wire.Conditions),
 		Tags:                   append([]string(nil), wire.Tags...),
 		ExcludeTools:           append([]string(nil), wire.ExcludeTools...),
 		SleepMin:               sleepMin,

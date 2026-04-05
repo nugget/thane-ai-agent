@@ -732,6 +732,18 @@ talents_dir: ./talents
 #         instructions: Be concise and focus on high-signal observations.
 #       operation: service
 #       completion: none
+#       conditions:
+#         schedule:
+#           timezone: America/Chicago
+#           windows:
+#             - days:
+#                 - mon
+#                 - tue
+#                 - wed
+#                 - thu
+#                 - fri
+#               start: 08:30
+#               end: 18:00
 #       tags: []
 #       exclude_tools: []
 #       sleep_min: 2m

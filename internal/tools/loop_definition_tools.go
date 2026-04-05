@@ -90,6 +90,11 @@ func (r *Registry) registerLoopDefinitionTools() {
 					"type":        "string",
 					"description": "Optional runtime state filter such as not_running, pending, sleeping, waiting, processing, error, or stopped.",
 				},
+				"eligible": map[string]any{
+					"type":        "string",
+					"enum":        []string{"true", "false"},
+					"description": "Optional effective eligibility filter based on the definition's current schedule/conditions.",
+				},
 				"limit": map[string]any{
 					"type":        "integer",
 					"description": fmt.Sprintf("Maximum results to return (default %d, max %d).", defaultLoopDefinitionListLimit, maxLoopDefinitionListLimit),

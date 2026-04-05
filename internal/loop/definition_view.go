@@ -34,7 +34,8 @@ type DefinitionRuntimeStatus struct {
 // exposed by loops-ng read surfaces.
 type DefinitionView struct {
 	DefinitionSnapshot `yaml:",inline"`
-	Runtime            DefinitionRuntimeStatus `yaml:"runtime,omitempty" json:"runtime"`
+	Eligibility        DefinitionEligibilityStatus `yaml:"eligibility,omitempty" json:"eligibility"`
+	Runtime            DefinitionRuntimeStatus     `yaml:"runtime,omitempty" json:"runtime"`
 }
 
 // DefinitionRegistryView is the effective combined view of stored loop
@@ -46,6 +47,7 @@ type DefinitionRegistryView struct {
 	OverlayDefinitions int              `yaml:"overlay_definitions,omitempty" json:"overlay_definitions"`
 	RunningDefinitions int              `yaml:"running_definitions,omitempty" json:"running_definitions"`
 	ByPolicyState      map[string]int   `yaml:"by_policy_state,omitempty" json:"by_policy_state,omitempty"`
+	ByEligibilityState map[string]int   `yaml:"by_eligibility_state,omitempty" json:"by_eligibility_state,omitempty"`
 	ByRuntimeState     map[string]int   `yaml:"by_runtime_state,omitempty" json:"by_runtime_state,omitempty"`
 	Definitions        []DefinitionView `yaml:"definitions,omitempty" json:"definitions,omitempty"`
 }
@@ -54,6 +56,10 @@ type DefinitionRegistryView struct {
 // with an optional runtime-state map to produce the effective loops-ng
 // registry view used by API and tool read surfaces.
 func BuildDefinitionRegistryView(snapshot *DefinitionRegistrySnapshot, runtime map[string]DefinitionRuntimeStatus) *DefinitionRegistryView {
+	return buildDefinitionRegistryViewAt(snapshot, runtime, time.Now())
+}
+
+func buildDefinitionRegistryViewAt(snapshot *DefinitionRegistrySnapshot, runtime map[string]DefinitionRuntimeStatus, now time.Time) *DefinitionRegistryView {
 	if snapshot == nil {
 		return nil
 	}
@@ -64,11 +70,13 @@ func BuildDefinitionRegistryView(snapshot *DefinitionRegistrySnapshot, runtime m
 		ConfigDefinitions:  snapshot.ConfigDefinitions,
 		OverlayDefinitions: snapshot.OverlayDefinitions,
 		ByPolicyState:      make(map[string]int),
+		ByEligibilityState: make(map[string]int),
 		ByRuntimeState:     make(map[string]int),
 		Definitions:        make([]DefinitionView, 0, len(snapshot.Definitions)),
 	}
 
 	for _, def := range snapshot.Definitions {
+		eligibility := def.Spec.Conditions.Evaluate(now)
 		status, ok := runtime[def.Name]
 		if ok && status.Running {
 			view.RunningDefinitions++
@@ -82,8 +90,14 @@ func BuildDefinitionRegistryView(snapshot *DefinitionRegistrySnapshot, runtime m
 			status = DefinitionRuntimeStatus{}
 		}
 		view.ByPolicyState[string(def.PolicyState)]++
+		if eligibility.Eligible {
+			view.ByEligibilityState[definitionEligibilityStateEligible]++
+		} else {
+			view.ByEligibilityState[definitionEligibilityStateIneligible]++
+		}
 		view.Definitions = append(view.Definitions, DefinitionView{
 			DefinitionSnapshot: def,
+			Eligibility:        eligibility,
 			Runtime:            status,
 		})
 	}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/events"
 	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
@@ -16,6 +17,7 @@ type loopDefinitionBootstrapResult struct {
 	Started           int `json:"started"`
 	SkippedInactive   int `json:"skipped_inactive"`
 	SkippedPaused     int `json:"skipped_paused"`
+	SkippedIneligible int `json:"skipped_ineligible"`
 	SkippedExisting   int `json:"skipped_existing"`
 	SkippedNonService int `json:"skipped_non_service"`
 }
@@ -30,6 +32,8 @@ type loopDefinitionRuntime struct {
 	completion  looppkg.CompletionSink
 	logger      *slog.Logger
 	eventBus    *events.Bus
+	now         func() time.Time
+	scheduleCh  chan struct{}
 }
 
 func newAppLoopDefinitionRuntime(a *App) *loopDefinitionRuntime {
@@ -45,6 +49,8 @@ func newAppLoopDefinitionRuntime(a *App) *loopDefinitionRuntime {
 		completion:  dispatcher.Deliver,
 		logger:      a.logger,
 		eventBus:    a.eventBus,
+		now:         time.Now,
+		scheduleCh:  make(chan struct{}, 1),
 	}
 }
 
@@ -97,6 +103,114 @@ func (r *loopDefinitionRuntime) Snapshot() *looppkg.DefinitionRegistryView {
 	return looppkg.BuildDefinitionRegistryView(r.definitions.Snapshot(), r.runtimeStatusByName())
 }
 
+func (r *loopDefinitionRuntime) nowTime() time.Time {
+	if r == nil || r.now == nil {
+		return time.Now()
+	}
+	return r.now()
+}
+
+func (r *loopDefinitionRuntime) signalScheduleChange() {
+	if r == nil || r.scheduleCh == nil {
+		return
+	}
+	select {
+	case r.scheduleCh <- struct{}{}:
+	default:
+	}
+}
+
+func (r *loopDefinitionRuntime) nextScheduleTransition(now time.Time) time.Time {
+	if r == nil || r.definitions == nil {
+		return time.Time{}
+	}
+	snap := r.definitions.Snapshot()
+	if snap == nil {
+		return time.Time{}
+	}
+	next := time.Time{}
+	for _, def := range snap.Definitions {
+		if def.Spec.Operation != looppkg.OperationService || def.PolicyState != looppkg.DefinitionPolicyStateActive {
+			continue
+		}
+		eligibility := def.Spec.Conditions.Evaluate(now)
+		if eligibility.NextTransitionAt.IsZero() {
+			continue
+		}
+		if next.IsZero() || eligibility.NextTransitionAt.Before(next) {
+			next = eligibility.NextTransitionAt
+		}
+	}
+	return next
+}
+
+func (r *loopDefinitionRuntime) ReconcileAllDefinitions(ctx context.Context) error {
+	if r == nil || r.definitions == nil {
+		return nil
+	}
+	snap := r.definitions.Snapshot()
+	if snap == nil {
+		return nil
+	}
+	for _, def := range snap.Definitions {
+		if err := r.ReconcileDefinition(ctx, def.Name); err != nil {
+			return fmt.Errorf("reconcile %q: %w", def.Name, err)
+		}
+	}
+	return nil
+}
+
+func (r *loopDefinitionRuntime) StartScheduleWatcher(ctx context.Context) error {
+	if r == nil || r.definitions == nil {
+		return nil
+	}
+	logger := r.logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	if r.scheduleCh == nil {
+		r.scheduleCh = make(chan struct{}, 1)
+	}
+	go func() {
+		for {
+			next := r.nextScheduleTransition(r.nowTime())
+			if next.IsZero() {
+				select {
+				case <-ctx.Done():
+					return
+				case <-r.scheduleCh:
+					continue
+				}
+			}
+
+			wait := time.Until(next)
+			if wait < time.Second {
+				wait = time.Second
+			}
+			timer := time.NewTimer(wait)
+			select {
+			case <-ctx.Done():
+				if !timer.Stop() {
+					<-timer.C
+				}
+				return
+			case <-r.scheduleCh:
+				if !timer.Stop() {
+					<-timer.C
+				}
+				continue
+			case <-timer.C:
+				reconcileCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+				if err := r.ReconcileAllDefinitions(reconcileCtx); err != nil {
+					logger.Warn("loop definition schedule reconcile failed", "error", err)
+				}
+				cancel()
+			}
+		}
+	}()
+	return nil
+}
+
 // StartEnabledServices starts durable service definitions that are
 // currently enabled and not already present in the live loop registry.
 // It relies on the loop engine's own initial jittered sleep to stagger
@@ -132,6 +246,9 @@ func (r *loopDefinitionRuntime) StartEnabledServices(ctx context.Context) (loopD
 		case def.PolicyState == looppkg.DefinitionPolicyStatePaused:
 			result.SkippedPaused++
 			continue
+		case !def.Spec.Conditions.Evaluate(r.nowTime()).Eligible:
+			result.SkippedIneligible++
+			continue
 		case r.loops.GetByName(spec.Name) != nil:
 			result.SkippedExisting++
 			logger.Debug("skipping loop definition bootstrap for existing loop", "name", spec.Name)
@@ -155,6 +272,7 @@ func (r *loopDefinitionRuntime) ReconcileDefinition(ctx context.Context, name st
 	if r == nil || r.loops == nil || r.definitions == nil {
 		return nil
 	}
+	defer r.signalScheduleChange()
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return nil
@@ -167,7 +285,8 @@ func (r *loopDefinitionRuntime) ReconcileDefinition(ctx context.Context, name st
 		}
 		return nil
 	}
-	if def.Spec.Operation != looppkg.OperationService || def.PolicyState != looppkg.DefinitionPolicyStateActive {
+	eligibility := def.Spec.Conditions.Evaluate(r.nowTime())
+	if def.Spec.Operation != looppkg.OperationService || def.PolicyState != looppkg.DefinitionPolicyStateActive || !eligibility.Eligible {
 		if existing != nil {
 			return r.loops.StopLoop(existing.ID())
 		}
@@ -202,6 +321,9 @@ func (r *loopDefinitionRuntime) LaunchDefinition(ctx context.Context, name strin
 		return looppkg.LaunchResult{}, &looppkg.InactiveDefinitionError{Name: name}
 	case looppkg.DefinitionPolicyStatePaused:
 		return looppkg.LaunchResult{}, &looppkg.PausedDefinitionError{Name: name}
+	}
+	if eligibility := def.Spec.Conditions.Evaluate(r.nowTime()); !eligibility.Eligible {
+		return looppkg.LaunchResult{}, &looppkg.IneligibleDefinitionError{Name: name, Reason: eligibility.Reason}
 	}
 	if def.Spec.Operation == looppkg.OperationService {
 		if existing := r.loops.GetByName(name); existing != nil {

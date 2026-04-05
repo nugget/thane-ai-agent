@@ -92,6 +92,11 @@ type Spec struct {
 	// caller, conversation, or channel.
 	Completion Completion `yaml:"completion,omitempty" json:"completion,omitempty"`
 
+	// Conditions constrain when the definition is currently eligible to
+	// run or launch. When empty, the definition is always eligible
+	// unless blocked by policy.
+	Conditions Conditions `yaml:"conditions,omitempty" json:"conditions,omitempty"`
+
 	// Tags are capability tags for tool scoping. When non-empty,
 	// the loop's tool registry is filtered to tools matching these
 	// tags (plus always-active tags).
@@ -174,6 +179,9 @@ func (s *Spec) Validate() error {
 	}
 	if !validCompletions[s.Completion] {
 		return fmt.Errorf("loop: unsupported completion %q", s.Completion)
+	}
+	if err := s.Conditions.Validate(); err != nil {
+		return fmt.Errorf("loop: conditions: %w", err)
 	}
 	if err := s.Profile.Validate(); err != nil {
 		return fmt.Errorf("loop: profile: %w", err)

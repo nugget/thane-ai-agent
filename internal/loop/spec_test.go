@@ -164,6 +164,16 @@ func TestSpecJSONRoundTripUsesHumanFacingFields(t *testing.T) {
 			InitialTags:  []string{"homeassistant"},
 			Instructions: "Be concise.",
 		},
+		Conditions: Conditions{
+			Schedule: &ScheduleCondition{
+				Timezone: "America/Chicago",
+				Windows: []ScheduleWindow{{
+					Days:  []string{"mon", "tue", "wed", "thu", "fri"},
+					Start: "09:00",
+					End:   "17:00",
+				}},
+			},
+		},
 		SleepMin:     5 * time.Minute,
 		SleepMax:     30 * time.Minute,
 		SleepDefault: 10 * time.Minute,
@@ -176,7 +186,7 @@ func TestSpecJSONRoundTripUsesHumanFacingFields(t *testing.T) {
 		t.Fatalf("json.Marshal: %v", err)
 	}
 	gotJSON := string(data)
-	for _, want := range []string{`"enabled":true`, `"sleep_min":"5m0s"`, `"sleep_max":"30m0s"`, `"max_duration":"1h0m0s"`, `"on_retrigger":"restart"`} {
+	for _, want := range []string{`"enabled":true`, `"sleep_min":"5m0s"`, `"sleep_max":"30m0s"`, `"max_duration":"1h0m0s"`, `"on_retrigger":"restart"`, `"conditions":{"schedule":{"timezone":"America/Chicago"`} {
 		if !strings.Contains(gotJSON, want) {
 			t.Fatalf("json = %s, want substring %s", gotJSON, want)
 		}
@@ -194,5 +204,8 @@ func TestSpecJSONRoundTripUsesHumanFacingFields(t *testing.T) {
 	}
 	if !roundTrip.Enabled {
 		t.Fatal("Enabled = false, want true")
+	}
+	if roundTrip.Conditions.Schedule == nil || roundTrip.Conditions.Schedule.Timezone != "America/Chicago" {
+		t.Fatalf("Conditions = %+v, want America/Chicago schedule", roundTrip.Conditions)
 	}
 }

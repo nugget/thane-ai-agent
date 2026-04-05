@@ -290,6 +290,7 @@ func (r *DefinitionRegistry) ReplaceOverlay(records map[string]DefinitionRecord)
 
 func cloneSpec(s Spec) Spec {
 	clone := s
+	clone.Conditions = cloneConditions(s.Conditions)
 	clone.Tags = append([]string(nil), s.Tags...)
 	clone.ExcludeTools = append([]string(nil), s.ExcludeTools...)
 	clone.Jitter = cloneFloat64Ptr(s.Jitter)
