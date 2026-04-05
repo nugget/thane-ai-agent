@@ -1105,7 +1105,7 @@ const DEFAULT_DASHBOARD_PREFS = {
 const DETAIL_CARD_LAYOUTS_KEY = 'thane.dashboard.cardLayouts.v1';
 const DEFAULT_SCHEMA_CARD_LAYOUT = Object.freeze({ mode: 'full', height: 0 });
 const SCHEMA_CARD_PRESET_HEIGHTS = Object.freeze({
-  title: 58,
+  title: 44,
   widget: 220,
 });
 const SCHEMA_CARD_LAYOUT_ORDER = Object.freeze(['title', 'widget', 'full']);

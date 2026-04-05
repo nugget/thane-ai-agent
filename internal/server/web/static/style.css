@@ -517,11 +517,29 @@ body.resize-col .schema-card__fade {
 }
 
 .schema-card--title .schema-card__header {
-  margin-bottom: 0.15rem;
+  min-height: 1.2rem;
+  margin-bottom: 0;
 }
 
 .schema-card--title .schema-card__meta {
   display: none;
+}
+
+.schema-card--title {
+  padding-top: 0.44rem;
+  padding-bottom: 0.38rem;
+}
+
+.schema-card--title .schema-card__heading {
+  gap: 0;
+}
+
+.schema-card--title .schema-card__title {
+  line-height: 1.05;
+}
+
+.schema-card--title .schema-card__control {
+  min-height: 1.2rem;
 }
 
 .schema-card--title .schema-card__body-shell {
