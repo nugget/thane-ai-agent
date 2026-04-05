@@ -14,6 +14,7 @@
     <div class="header-right">
       <button id="toggle-inspector" class="toggle-btn toggle-btn--active" title="Toggle inspector panel (I)"><span class="toggle-icon"></span> Inspector</button>
       <button id="toggle-logs" class="toggle-btn toggle-btn--active" title="Toggle log panel (L)"><span class="toggle-icon"></span> Logs</button>
+      <button id="toggle-legend" class="toggle-btn" title="Toggle graph legend (?)"><span class="toggle-icon"></span> Legend</button>
       <span id="conn-status" class="conn-badge conn-badge--connecting">connecting</span>
     </div>
   </header>
@@ -150,6 +151,229 @@
     <span id="footer-go" class="footer-item"></span>
     <a href="https://github.com/nugget/thane-ai-agent" class="footer-link" target="_blank" rel="noopener">github.com/nugget/thane-ai-agent</a>
   </footer>
+
+  <div id="legend-backdrop" class="legend-backdrop" hidden></div>
+  <aside id="legend-panel" class="legend-panel" hidden>
+    <div class="legend-panel__header">
+      <div>
+        <h2 class="legend-panel__title">Graph Legend</h2>
+        <p class="legend-panel__subtitle">How to read node fills, rings, halos, badges, and live cues.</p>
+      </div>
+      <button id="legend-close" class="btn" title="Close legend">&times;</button>
+    </div>
+
+    <section class="legend-section">
+      <h3 class="section-title">Node Anatomy</h3>
+      <div class="legend-anatomy">
+        <div class="legend-node-demo" aria-hidden="true">
+          <div class="legend-node-demo__trust"></div>
+          <div class="legend-node-demo__selection"></div>
+          <div class="legend-node-demo__supervisor"></div>
+          <div class="legend-node-demo__ring"></div>
+          <div class="legend-node-demo__sleep"></div>
+          <div class="legend-node-demo__core"></div>
+          <div class="legend-node-demo__badge">128k</div>
+          <div class="legend-node-demo__sigil">@</div>
+        </div>
+        <div class="legend-list">
+          <div class="legend-item">
+            <span class="legend-marker legend-marker--fill">@</span>
+            <div class="legend-copy">
+              <strong>Core fill and sigil</strong>
+              <p>Entity family: channel, delegate, scheduled, metacognitive, or generic.</p>
+            </div>
+          </div>
+          <div class="legend-item">
+            <span class="legend-marker legend-marker--ring"></span>
+            <div class="legend-copy">
+              <strong>Outer ring</strong>
+              <p>Current runtime state. Ring thickness grows with context utilization.</p>
+            </div>
+          </div>
+          <div class="legend-item">
+            <span class="legend-marker legend-marker--sleep"></span>
+            <div class="legend-copy">
+              <strong>Sleep arc</strong>
+              <p>Countdown progress for sleeping loops.</p>
+            </div>
+          </div>
+          <div class="legend-item">
+            <span class="legend-marker legend-marker--halo"></span>
+            <div class="legend-copy">
+              <strong>Halos and glows</strong>
+              <p>Selection halo, supervisor ring, and trust underglow add high-value context.</p>
+            </div>
+          </div>
+          <div class="legend-item">
+            <span class="legend-marker legend-marker--badge">8k</span>
+            <div class="legend-copy">
+              <strong>Rim badge</strong>
+              <p>Capacity label. Solid badges are real context tiers; dashed badges are model-size estimates.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="legend-section">
+      <h3 class="section-title">Node Categories</h3>
+      <div class="legend-chip-grid">
+        <div class="legend-chip">
+          <span class="legend-mini-node legend-mini-node--generic">•</span>
+          <div class="legend-copy">
+            <strong>Generic</strong>
+            <p>Default runtime loop.</p>
+          </div>
+        </div>
+        <div class="legend-chip">
+          <span class="legend-mini-node legend-mini-node--metacognitive">M</span>
+          <div class="legend-copy">
+            <strong>Metacognitive</strong>
+            <p>Reflection and supervisor-style cognition.</p>
+          </div>
+        </div>
+        <div class="legend-chip">
+          <span class="legend-mini-node legend-mini-node--channel">@</span>
+          <div class="legend-copy">
+            <strong>Channel</strong>
+            <p>Signal, OWU, and other interactive surfaces.</p>
+          </div>
+        </div>
+        <div class="legend-chip">
+          <span class="legend-mini-node legend-mini-node--delegate">↗</span>
+          <div class="legend-copy">
+            <strong>Delegate</strong>
+            <p>Child work spawned from another loop.</p>
+          </div>
+        </div>
+        <div class="legend-chip">
+          <span class="legend-mini-node legend-mini-node--scheduled">◷</span>
+          <div class="legend-copy">
+            <strong>Scheduled</strong>
+            <p>Timer or cron-style work.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="legend-section">
+      <h3 class="section-title">Runtime States</h3>
+      <div class="legend-chip-grid">
+        <div class="legend-chip">
+          <span class="legend-state-swatch legend-state-swatch--sleeping"></span>
+          <div class="legend-copy">
+            <strong>Sleeping</strong>
+            <p>Timer running until the next wake.</p>
+          </div>
+        </div>
+        <div class="legend-chip">
+          <span class="legend-state-swatch legend-state-swatch--waiting"></span>
+          <div class="legend-copy">
+            <strong>Waiting</strong>
+            <p>Blocked on input, event, or callback.</p>
+          </div>
+        </div>
+        <div class="legend-chip">
+          <span class="legend-state-swatch legend-state-swatch--processing"></span>
+          <div class="legend-copy">
+            <strong>Processing</strong>
+            <p>Actively thinking, planning, or using tools.</p>
+          </div>
+        </div>
+        <div class="legend-chip">
+          <span class="legend-state-swatch legend-state-swatch--supervisor"></span>
+          <div class="legend-copy">
+            <strong>Supervisor</strong>
+            <p>Processing with supervisor emphasis.</p>
+          </div>
+        </div>
+        <div class="legend-chip">
+          <span class="legend-state-swatch legend-state-swatch--degraded"></span>
+          <div class="legend-copy">
+            <strong>Degraded or Error</strong>
+            <p>Service trouble, warning state, or failed work.</p>
+          </div>
+        </div>
+        <div class="legend-chip">
+          <span class="legend-state-swatch legend-state-swatch--stopped"></span>
+          <div class="legend-copy">
+            <strong>Stopped or Idle</strong>
+            <p>Inactive, completed, or no longer running.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="legend-section">
+      <h3 class="section-title">Capacity and Trust</h3>
+      <div class="legend-capacity-row">
+        <span class="legend-capacity-badge legend-capacity-badge--context">8k</span>
+        <span class="legend-capacity-badge legend-capacity-badge--context">32k</span>
+        <span class="legend-capacity-badge legend-capacity-badge--context">128k</span>
+        <span class="legend-capacity-badge legend-capacity-badge--context">256k</span>
+        <span class="legend-capacity-badge legend-capacity-badge--context">512k</span>
+        <span class="legend-capacity-badge legend-capacity-badge--model">70b</span>
+      </div>
+      <p class="legend-note">Larger nodes usually indicate larger context capacity. Dashed badges are model-size estimates when context is not yet known.</p>
+      <div class="legend-chip-grid">
+        <div class="legend-chip">
+          <span class="legend-glow-swatch legend-glow-swatch--admin"></span>
+          <div class="legend-copy">
+            <strong>Admin trust</strong>
+            <p>Highest-trust contact or channel context.</p>
+          </div>
+        </div>
+        <div class="legend-chip">
+          <span class="legend-glow-swatch legend-glow-swatch--household"></span>
+          <div class="legend-copy">
+            <strong>Household trust</strong>
+            <p>Known household or intimate context.</p>
+          </div>
+        </div>
+        <div class="legend-chip">
+          <span class="legend-glow-swatch legend-glow-swatch--trusted"></span>
+          <div class="legend-copy">
+            <strong>Trusted or known</strong>
+            <p>Recognized contact with softer guardrails.</p>
+          </div>
+        </div>
+        <div class="legend-chip">
+          <span class="legend-glow-swatch legend-glow-swatch--unknown"></span>
+          <div class="legend-copy">
+            <strong>Unknown</strong>
+            <p>Low-trust or unverified contact binding.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="legend-section">
+      <h3 class="section-title">Links and Live Activity</h3>
+      <div class="legend-link-list">
+        <div class="legend-link-item">
+          <span class="legend-line-swatch"></span>
+          <div class="legend-copy">
+            <strong>Relationship line</strong>
+            <p>Parent-child or topology relationship.</p>
+          </div>
+        </div>
+        <div class="legend-link-item">
+          <span class="legend-line-swatch legend-line-swatch--child"></span>
+          <div class="legend-copy">
+            <strong>Child or delegate line</strong>
+            <p>Spawned work and subordinate loops.</p>
+          </div>
+        </div>
+        <div class="legend-link-item">
+          <span class="legend-line-swatch legend-line-swatch--flash"></span>
+          <div class="legend-copy">
+            <strong>Activity flash</strong>
+            <p>Recent supervisor or iteration activity.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+  </aside>
 
   <div id="context-menu" class="context-menu" hidden>
     <ul id="context-menu-items"></ul>

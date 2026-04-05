@@ -17,6 +17,7 @@ const state = {
   prevIterations: new Map(), // id -> last known iteration count (for flash detection)
   prevErrors: new Map(),     // id -> last known error string (for shake detection)
   knownLoopIds: new Set(),   // ids we've rendered before (for enter animation)
+  canvasRect: null,          // last observed canvas viewport for responsive graph reflow
 };
 
 const MAX_EVENTS = 50;
@@ -36,6 +37,9 @@ const physics = {
   repulsionStrength:  5000,
   damping:            0.92,
   maxVelocity:        5,
+  wallStrength:       0.045,
+  collisionPadding:   18,
+  resizeVelocityGain: 0.12,
 };
 
 // Ensure physics.nodes matches the current set of loops + system node.
@@ -92,6 +96,72 @@ function syncPhysicsNodes(cx, cy) {
   }
 }
 
+function cloneRect(rect) {
+  return rect ? { width: rect.width, height: rect.height } : null;
+}
+
+function getCanvasRectSnapshot() {
+  return cloneRect(canvas.getBoundingClientRect());
+}
+
+function isCanvasRectChanged(prevRect, nextRect) {
+  if (!prevRect || !nextRect) return true;
+  return Math.abs(prevRect.width - nextRect.width) > 0.5 ||
+    Math.abs(prevRect.height - nextRect.height) > 0.5;
+}
+
+function reflowPhysicsNodes(prevRect, nextRect) {
+  if (!prevRect || !nextRect || prevRect.width <= 0 || prevRect.height <= 0 ||
+      nextRect.width <= 0 || nextRect.height <= 0) {
+    return;
+  }
+
+  const prevCx = prevRect.width / 2;
+  const prevCy = prevRect.height / 2;
+  const nextCx = nextRect.width / 2;
+  const nextCy = nextRect.height / 2;
+  const scaleX = Math.max(0.65, Math.min(1.65, nextRect.width / prevRect.width));
+  const scaleY = Math.max(0.65, Math.min(1.65, nextRect.height / prevRect.height));
+
+  for (const [id, nd] of physics.nodes) {
+    if (id === '__system__') {
+      nd.x = nextCx;
+      nd.y = nextCy;
+      nd.vx = 0;
+      nd.vy = 0;
+      continue;
+    }
+
+    const oldX = nd.x;
+    const oldY = nd.y;
+    const dx = oldX - prevCx;
+    const dy = oldY - prevCy;
+    const nextX = nextCx + dx * scaleX;
+    const nextY = nextCy + dy * scaleY;
+    nd.x = nextX;
+    nd.y = nextY;
+    nd.vx += (nextX - oldX) * physics.resizeVelocityGain;
+    nd.vy += (nextY - oldY) * physics.resizeVelocityGain;
+  }
+}
+
+function refreshCanvasViewport() {
+  const nextRect = getCanvasRectSnapshot();
+  if (!nextRect) return null;
+  if (isCanvasRectChanged(state.canvasRect, nextRect)) {
+    reflowPhysicsNodes(state.canvasRect, nextRect);
+    state.canvasRect = cloneRect(nextRect);
+  }
+  return nextRect;
+}
+
+function getPhysicsNodeRadius(id) {
+  if (id === '__system__') return 30;
+  const loop = state.loops.get(id);
+  if (!loop) return DEFAULT_NODE_R;
+  return getLoopVisualCapacity(loop).radius;
+}
+
 // Run one physics simulation step. Applies center gravity, spring
 // attraction (system↔top-level, parent↔child), pairwise repulsion,
 // then integrates velocity and position with damping.
@@ -133,7 +203,28 @@ function physicsStep(cx, cy, vw, vh) {
     }
   }
 
-  // 3. Pairwise repulsion (O(n²), fine for ≤20 nodes).
+  // 3. Soft border gravity keeps the cloud within the viewport while still
+  // letting the force layout breathe and adapt to different aspect ratios.
+  const padX = Math.max(44, vw * 0.08);
+  const padY = Math.max(52, vh * 0.1);
+  for (let i = 0; i < n; i++) {
+    const id = ids[i];
+    const nd = nodes[i];
+    if (nd.pinned) continue;
+    const radius = getPhysicsNodeRadius(id);
+    const minX = padX + radius;
+    const maxX = Math.max(minX, vw - padX - radius);
+    const minY = padY + radius;
+    const maxY = Math.max(minY, vh - padY - radius);
+
+    if (nd.x < minX) nd.fx += (minX - nd.x) * P.wallStrength;
+    else if (nd.x > maxX) nd.fx -= (nd.x - maxX) * P.wallStrength;
+
+    if (nd.y < minY) nd.fy += (minY - nd.y) * P.wallStrength;
+    else if (nd.y > maxY) nd.fy -= (nd.y - maxY) * P.wallStrength;
+  }
+
+  // 4. Pairwise repulsion (O(n²), fine for dashboard-sized graphs).
   const EPS = 100; // prevents division-by-zero / explosion at overlap
   for (let i = 0; i < n; i++) {
     for (let j = i + 1; j < n; j++) {
@@ -141,8 +232,11 @@ function physicsStep(cx, cy, vw, vh) {
       const dx = b.x - a.x;
       const dy = b.y - a.y;
       const distSq = dx * dx + dy * dy + EPS;
-      const force = P.repulsionStrength / distSq;
       const dist = Math.sqrt(distSq);
+      const baseForce = P.repulsionStrength / distSq;
+      const minGap = getPhysicsNodeRadius(ids[i]) + getPhysicsNodeRadius(ids[j]) + P.collisionPadding;
+      const overlapForce = dist < minGap ? (minGap - dist) * 0.14 : 0;
+      const force = baseForce + overlapForce;
       const fx = (dx / dist) * force;
       const fy = (dy / dist) * force;
       a.fx -= fx; a.fy -= fy;
@@ -150,8 +244,10 @@ function physicsStep(cx, cy, vw, vh) {
     }
   }
 
-  // 4. Integration + damping.
-  for (const nd of nodes) {
+  // 5. Integration + damping.
+  for (let i = 0; i < n; i++) {
+    const id = ids[i];
+    const nd = nodes[i];
     if (nd.pinned) continue;
     nd.vx = (nd.vx + nd.fx) * P.damping;
     nd.vy = (nd.vy + nd.fy) * P.damping;
@@ -164,6 +260,28 @@ function physicsStep(cx, cy, vw, vh) {
     }
     nd.x += nd.vx;
     nd.y += nd.vy;
+
+    // Safety clamp after integration so a burst of forces cannot eject nodes
+    // off-screen between frames.
+    const radius = getPhysicsNodeRadius(id);
+    const minX = padX + radius;
+    const maxX = Math.max(minX, vw - padX - radius);
+    const minY = padY + radius;
+    const maxY = Math.max(minY, vh - padY - radius);
+    if (nd.x < minX) {
+      nd.x = minX;
+      nd.vx *= 0.5;
+    } else if (nd.x > maxX) {
+      nd.x = maxX;
+      nd.vx *= 0.5;
+    }
+    if (nd.y < minY) {
+      nd.y = minY;
+      nd.vy *= 0.5;
+    } else if (nd.y > maxY) {
+      nd.y = maxY;
+      nd.vy *= 0.5;
+    }
   }
 }
 
@@ -476,6 +594,10 @@ const emptyState = $('#empty-state');
 const logEmpty = $('#log-empty');
 const logScroll = $('#log-scroll');
 const logBody = $('#log-body');
+const legendPanel = $('#legend-panel');
+const legendBackdrop = $('#legend-backdrop');
+const legendToggleBtn = $('#toggle-legend');
+const legendCloseBtn = $('#legend-close');
 
 // ---------------------------------------------------------------------------
 // Trust Zone Underglow
@@ -855,7 +977,7 @@ function renderNodes() {
   emptyState.hidden = loops.length > 0 || hasSystem;
 
   // Canvas center — used as gravity anchor and for new-node spawn.
-  const rect = canvas.getBoundingClientRect();
+  const rect = refreshCanvasViewport() || canvas.getBoundingClientRect();
   const cx = rect.width / 2;
   const cy = rect.height / 2;
 
@@ -1795,8 +1917,23 @@ function toggleLogs() {
   btn.classList.toggle('toggle-btn--active', !visible);
 }
 
+function setLegendVisible(visible) {
+  if (!legendPanel || !legendBackdrop || !legendToggleBtn) return;
+  legendPanel.hidden = !visible;
+  legendBackdrop.hidden = !visible;
+  legendToggleBtn.classList.toggle('toggle-btn--active', visible);
+}
+
+function toggleLegend() {
+  if (!legendPanel) return;
+  setLegendVisible(legendPanel.hidden);
+}
+
 $('#toggle-inspector').addEventListener('click', toggleInspector);
 $('#toggle-logs').addEventListener('click', toggleLogs);
+legendToggleBtn?.addEventListener('click', toggleLegend);
+legendCloseBtn?.addEventListener('click', () => setLegendVisible(false));
+legendBackdrop?.addEventListener('click', () => setLegendVisible(false));
 
 // ---------------------------------------------------------------------------
 // Context Menu
@@ -1885,11 +2022,15 @@ document.addEventListener('keydown', (e) => {
     case 'l':
       toggleLogs();
       break;
+    case '?':
+      toggleLegend();
+      break;
     case 'escape':
       if (activeRequestID) {
         closeRequestDetail();
       }
       hideContextMenu();
+      setLegendVisible(false);
       break;
   }
 });
@@ -2005,6 +2146,23 @@ function updateUptime() {
     document.body.classList.remove('resize-col', 'resize-row');
     dragging = null;
   });
+})();
+
+// Keep the graph responsive to real canvas size changes, including panel
+// toggles and drag-resizing, not just top-level window resizes.
+(function initCanvasViewportObserver() {
+  const canvasPanel = document.getElementById('canvas-panel');
+  const syncViewport = () => {
+    refreshCanvasViewport();
+    updateNodePositions();
+  };
+
+  if (typeof ResizeObserver !== 'undefined' && canvasPanel) {
+    const observer = new ResizeObserver(() => syncViewport());
+    observer.observe(canvasPanel);
+  }
+
+  window.addEventListener('resize', syncViewport);
 })();
 
 // ---------------------------------------------------------------------------
