@@ -8,7 +8,7 @@ Thank you for your interest in contributing to Thane!
 
 - Open an issue to discuss features or architecture
 - Share your Home Assistant use cases that could benefit from an autonomous agent
-- Provide feedback on the design in [ARCHITECTURE.md](ARCHITECTURE.md)
+- Provide feedback on the design in the [Architecture docs](docs/understanding/architecture.md)
 
 ### Code
 
@@ -19,7 +19,7 @@ Thank you for your interest in contributing to Thane!
 
 ### Documentation
 
-- Improve README, ARCHITECTURE, or code comments
+- Improve README, docs/, or code comments
 - Add examples and use cases
 - Fix typos and clarify confusing sections
 

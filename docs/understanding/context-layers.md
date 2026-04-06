@@ -3,9 +3,6 @@
 Thane constructs its system prompt from four distinct layers. Each has a
 specific purpose. Mixing concerns across layers degrades agent behavior.
 
-For conventions on how dynamic and model-facing data should be shaped
-inside those layers, see [Model-Facing Context](model-facing-context.md).
-
 ## The Four Layers
 
 ### 1. Persona (`persona_file`)
@@ -21,10 +18,8 @@ read like a character description, not an instruction manual.
 behavioral triggers.
 
 **Example signals:**
-- ✅ "You're direct and helpful without being performative."
-- ✅ "Have opinions. If something seems like a bad idea, say so."
-- ❌ "Only use tools when the user asks." (this is behavioral guidance → talent)
-- ❌ "Primary Tool: control_device" (this is operational → talent or inject file)
+- "You're direct and helpful without being performative."
+- "Have opinions. If something seems like a bad idea, say so."
 
 See `examples/persona.example.md` for a reference implementation.
 
@@ -51,8 +46,10 @@ interaction styles.
 - `time-awareness.md` — reason about time, schedules, urgency
 - `tool-guidance.md` — when and how to use tools
 
-**Custom talents:** Add `.md` files to the talents directory. They're loaded
-alphabetically and injected into the system prompt.
+Custom talents: add `.md` files to the talents directory. They're loaded
+alphabetically and injected into the system prompt. Talents are tag-filtered
+— each can declare required capability tags via YAML frontmatter, loading
+only when those tags are active.
 
 ### 3. Inject Files (`inject_files`)
 
@@ -94,7 +91,8 @@ The system prompt is assembled in this order:
 5. **Dynamic context** — facts, memory (what's relevant now)
 6. **Compaction summary** — continuity (what happened before)
 
-This mirrors natural orientation: identity → knowledge → awareness → norms → memory.
+This mirrors natural orientation: identity, knowledge, awareness, norms,
+memory.
 
 ## Anti-Patterns
 
@@ -103,11 +101,4 @@ This mirrors natural orientation: identity → knowledge → awareness → norms
 | Tool rules in persona | Suppresses personality (e.g., "only use tools when asked" kills proactive behavior) | Move to `tool-guidance.md` talent |
 | Identity in talents | Confusing — talent says "you are X" but persona says "you are Y" | Keep identity in persona only |
 | Behavioral directives in inject files | Inject files are knowledge, not instructions | Move directives to talents |
-| Static time in build info | Model treats version metadata as ignorable | Use Current Conditions section (#127) |
-
-## Future: Adaptive Context
-
-Currently all layers are loaded statically. Future work (#120, #127) will
-make context assembly dynamic — adjusting which talents, how much memory,
-and what conditions are included based on the cognitive demands of each
-interaction.
+| Static time in build info | Model treats version metadata as ignorable | Use Current Conditions section |
