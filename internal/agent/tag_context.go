@@ -228,12 +228,7 @@ func (a *TagContextAssembler) KBMenuHints() map[string]KBMenuHint {
 }
 
 func isEntryPointKind(kind string) bool {
-	switch strings.TrimSpace(kind) {
-	case "entry_point", "decision_tree":
-		return true
-	default:
-		return false
-	}
+	return strings.TrimSpace(kind) == "entry_point"
 }
 
 // scanKBArticles walks the KB directory for .md files with tags:
