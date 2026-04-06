@@ -222,7 +222,7 @@ func TestCloseSession_ClearsPersistedCapabilityTags(t *testing.T) {
 	store := newTestCapStore(t)
 	loop.SetCapabilityTagStore(store)
 
-	if err := store.SaveTags("conv1", []string{"forge", "search"}); err != nil {
+	if err := store.SaveTags("conv1", []string{"forge", "web"}); err != nil {
 		t.Fatalf("SaveTags() error: %v", err)
 	}
 	if err := mem.AddMessage("conv1", "user", "hello"); err != nil {
@@ -466,7 +466,7 @@ func TestSplitSession_ClearsPersistedCapabilityTags(t *testing.T) {
 	store := newTestCapStore(t)
 	loop.SetCapabilityTagStore(store)
 
-	if err := store.SaveTags("conv1", []string{"forge", "search"}); err != nil {
+	if err := store.SaveTags("conv1", []string{"forge", "web"}); err != nil {
 		t.Fatalf("SaveTags() error: %v", err)
 	}
 	for _, m := range []memory.Message{

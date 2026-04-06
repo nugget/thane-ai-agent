@@ -14,7 +14,7 @@ Choose the next move deliberately:
 - If the truth probably already lives on GitHub, activate `forge`.
 - If the truth is in the checked-out workspace, activate `files`.
 - If the repo is not enough and you need outside docs or a named web
-  source, activate `search`.
+  source, activate `web`.
 - If the work becomes physical and local, activate `shell` only when
   command execution is genuinely the next move.
 

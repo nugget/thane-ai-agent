@@ -401,7 +401,7 @@ func ExampleConfig() *Config {
 		},
 
 		ChannelTags: map[string][]string{
-			"signal": {"ha", "search"},
+			"signal": {"ha", "web"},
 			"email":  {"forge"},
 		},
 

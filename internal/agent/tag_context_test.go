@@ -535,7 +535,7 @@ func TestTagContextAssembler_KBArticleTags(t *testing.T) {
 
 func TestTagContextAssembler_KBMenuHints(t *testing.T) {
 	kbDir := t.TempDir()
-	os.WriteFile(filepath.Join(kbDir, "knowledge-tree.md"), []byte("---\nkind: entry_point\ntags: [knowledge]\nteaser: \"Activate when the next move is about internal docs or durable knowledge.\"\nnext_tags: [files, memory, search]\n---\nTREE"), 0o644)
+	os.WriteFile(filepath.Join(kbDir, "knowledge-tree.md"), []byte("---\nkind: entry_point\ntags: [knowledge]\nteaser: \"Activate when the next move is about internal docs or durable knowledge.\"\nnext_tags: [files, memory, web]\n---\nTREE"), 0o644)
 	os.WriteFile(filepath.Join(kbDir, "knowledge-article.md"), []byte("---\ntags: [knowledge]\n---\nARTICLE"), 0o644)
 
 	a := NewTagContextAssembler(TagContextAssemblerConfig{
@@ -551,7 +551,7 @@ func TestTagContextAssembler_KBMenuHints(t *testing.T) {
 	if hint.Teaser != "Activate when the next move is about internal docs or durable knowledge." {
 		t.Fatalf("teaser = %q", hint.Teaser)
 	}
-	if got := strings.Join(hint.NextTags, ","); got != "files,memory,search" {
+	if got := strings.Join(hint.NextTags, ","); got != "files,memory,web" {
 		t.Fatalf("next_tags = %q", got)
 	}
 }

@@ -163,7 +163,7 @@ Domain-specific behavioral guidance should move behind tags, for example:
 
 - `forge` for GitHub/forge workflows
 - `ha` for Home Assistant control norms and caution
-- `search` for search and fetch habits
+- `web` for remote retrieval and wider-web discovery habits
 - `interactive` for owner-facing conversational loops
 - `signal` for Signal-specific tone and response patterns
 - `owu` for Open WebUI specifics
@@ -347,13 +347,13 @@ The current working depth is:
 - depth 1 choices:
   - `activate files`
   - `activate memory`
-  - `activate search`
-  - `delegate with files,search`
+  - `activate web`
+  - `delegate with files,web`
   - `respond`
 - depth 2 doctrine:
   - `files`: semantic references, document reads, quoting, editing
   - `memory`: compact durable facts vs documents
-  - `search`: outside verification and enrichment
+  - `web`: remote retrieval, outside verification, and discovery
 
 That is intentionally shallow. A good early guardrail is to resist
 going deeper than roughly two hops of branching until we have evidence
@@ -403,7 +403,7 @@ Tagged KB articles are the preferred home for:
 - [ ] Keep only a compact runtime contract in `internal/prompts/agent.go`.
 - [ ] Shrink `## Active Capabilities` to loaded-state facts, not
       capability doctrine.
-- [ ] Move forge, search, Home Assistant, and channel-specific teaching
+- [ ] Move forge, web, Home Assistant, and channel-specific teaching
       into tagged KB articles.
 - [ ] Add targeted tagged articles for `interactive`, `signal`, `owu`,
       and `owner`.

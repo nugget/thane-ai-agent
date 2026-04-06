@@ -13,7 +13,7 @@ Choose the next move deliberately:
 - If the truth is already named in a local document, dossier, note, or
   semantic path, activate `files`.
 - If the truth is already named on the web, in a URL or page, activate
-  `search`.
+  `web`.
 - If the turn wants a distilled truth that should survive beyond this
   moment, activate `memory`.
 - If the answer probably lives in prior sessions, earlier threads, or

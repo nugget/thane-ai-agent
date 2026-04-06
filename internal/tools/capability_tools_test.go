@@ -60,10 +60,10 @@ func (m *mockCapabilityManager) ActiveTags(_ context.Context) map[string]bool {
 }
 
 func TestActivateCapability(t *testing.T) {
-	mgr := newMockCapabilityManager("ha", "search")
+	mgr := newMockCapabilityManager("ha", "web")
 	manifest := []CapabilityManifest{
 		{Tag: "ha", Description: "Home Assistant", Tools: []string{"get_state"}, AlwaysActive: false},
-		{Tag: "search", Description: "Web search", Tools: []string{"web_search"}, AlwaysActive: false},
+		{Tag: "web", Description: "Web retrieval", Tools: []string{"web_search"}, AlwaysActive: false},
 	}
 
 	reg := NewEmptyRegistry()
@@ -97,13 +97,13 @@ func TestActivateCapability(t *testing.T) {
 }
 
 func TestDeactivateCapability(t *testing.T) {
-	mgr := newMockCapabilityManager("ha", "search")
+	mgr := newMockCapabilityManager("ha", "web")
 	mgr.activeTags["ha"] = true
-	mgr.activeTags["search"] = true
+	mgr.activeTags["web"] = true
 
 	manifest := []CapabilityManifest{
 		{Tag: "ha", Description: "Home Assistant", Tools: []string{"get_state", "call_service"}, AlwaysActive: false},
-		{Tag: "search", Description: "Web search", Tools: []string{"web_search"}, AlwaysActive: false},
+		{Tag: "web", Description: "Web retrieval", Tools: []string{"web_search"}, AlwaysActive: false},
 	}
 
 	reg := NewEmptyRegistry()
@@ -130,13 +130,13 @@ func TestDeactivateCapability(t *testing.T) {
 	}
 
 	// Response should list remaining active tags.
-	if !strings.Contains(result, "Active: search") {
+	if !strings.Contains(result, "Active: web") {
 		t.Errorf("result = %q, want to list remaining active tags", result)
 	}
 
-	// search should still be active.
-	if !mgr.activeTags["search"] {
-		t.Error("search tag should still be active")
+	// web should still be active.
+	if !mgr.activeTags["web"] {
+		t.Error("web tag should still be active")
 	}
 }
 
@@ -177,15 +177,15 @@ func TestListLoadedCapabilities(t *testing.T) {
 }
 
 func TestResetCapabilities(t *testing.T) {
-	mgr := newMockCapabilityManager("forge", "search", "core")
+	mgr := newMockCapabilityManager("forge", "web", "core")
 	mgr.activeTags["forge"] = true
-	mgr.activeTags["search"] = true
+	mgr.activeTags["web"] = true
 	mgr.activeTags["core"] = true
 	mgr.baseline = map[string]bool{"core": true}
 
 	manifest := []CapabilityManifest{
 		{Tag: "forge", Description: "Forge tools", Tools: []string{"forge_pr_get"}},
-		{Tag: "search", Description: "Search tools", Tools: []string{"web_fetch"}},
+		{Tag: "web", Description: "Web tools", Tools: []string{"web_fetch"}},
 		{Tag: "core", Description: "Core tools", Tools: []string{"thane_delegate"}, AlwaysActive: true},
 	}
 
@@ -204,13 +204,13 @@ func TestResetCapabilities(t *testing.T) {
 	if !strings.Contains(result, "Capability state reset to baseline.") {
 		t.Fatalf("result = %q, want baseline-reset confirmation", result)
 	}
-	if !strings.Contains(result, "Deactivated: forge, search.") {
+	if !strings.Contains(result, "Deactivated: forge, web.") {
 		t.Fatalf("result = %q, want dropped tag list", result)
 	}
 	if !strings.Contains(result, "Active: core.") {
 		t.Fatalf("result = %q, want remaining baseline tag list", result)
 	}
-	if mgr.activeTags["forge"] || mgr.activeTags["search"] {
+	if mgr.activeTags["forge"] || mgr.activeTags["web"] {
 		t.Fatalf("activeTags = %#v, want only baseline tags left", mgr.activeTags)
 	}
 	if !mgr.activeTags["core"] {
@@ -243,10 +243,10 @@ func TestDeactivateCapability_EmptyTag(t *testing.T) {
 }
 
 func TestActivateCapability_DescriptionContainsManifest(t *testing.T) {
-	mgr := newMockCapabilityManager("ha", "search")
+	mgr := newMockCapabilityManager("ha", "web")
 	manifest := []CapabilityManifest{
 		{Tag: "ha", Description: "Home Assistant tools", Tools: []string{"get_state", "call_service"}, AlwaysActive: true},
-		{Tag: "search", Description: "Web search tools", Tools: []string{"web_search"}, AlwaysActive: false},
+		{Tag: "web", Description: "Web retrieval tools", Tools: []string{"web_search"}, AlwaysActive: false},
 	}
 
 	reg := NewEmptyRegistry()
@@ -260,8 +260,8 @@ func TestActivateCapability_DescriptionContainsManifest(t *testing.T) {
 	}
 
 	// Non-always-active tags should appear.
-	if !strings.Contains(tool.Description, "**search**") {
-		t.Errorf("description should mention 'search': %s", tool.Description)
+	if !strings.Contains(tool.Description, "**web**") {
+		t.Errorf("description should mention 'web': %s", tool.Description)
 	}
 	if !strings.Contains(tool.Description, "(1 tools)") {
 		t.Errorf("description should list tool count: %s", tool.Description)
@@ -270,12 +270,12 @@ func TestActivateCapability_DescriptionContainsManifest(t *testing.T) {
 
 func TestBuildCapabilityManifest(t *testing.T) {
 	tags := map[string][]string{
-		"ha":     {"get_state", "call_service"},
-		"search": {"web_search"},
+		"ha":  {"get_state", "call_service"},
+		"web": {"web_search"},
 	}
 	descriptions := map[string]string{
-		"ha":     "Home Assistant",
-		"search": "Web search",
+		"ha":  "Home Assistant",
+		"web": "Web retrieval",
 	}
 	alwaysActive := map[string]bool{
 		"ha": true,
@@ -291,14 +291,14 @@ func TestBuildCapabilityManifest(t *testing.T) {
 	if manifest[0].Tag != "ha" {
 		t.Errorf("manifest[0].Tag = %q, want %q", manifest[0].Tag, "ha")
 	}
-	if manifest[1].Tag != "search" {
-		t.Errorf("manifest[1].Tag = %q, want %q", manifest[1].Tag, "search")
+	if manifest[1].Tag != "web" {
+		t.Errorf("manifest[1].Tag = %q, want %q", manifest[1].Tag, "web")
 	}
 	if !manifest[0].AlwaysActive {
 		t.Error("ha should be always_active")
 	}
 	if manifest[1].AlwaysActive {
-		t.Error("search should not be always_active")
+		t.Error("web should not be always_active")
 	}
 }
 
@@ -311,7 +311,7 @@ func TestRegistryFilterByTags(t *testing.T) {
 
 	reg.SetTagIndex(map[string][]string{
 		"ha":     {"get_state", "call_service"},
-		"search": {"web_search"},
+		"web":    {"web_search"},
 		"memory": {"remember_fact"},
 	})
 
@@ -338,14 +338,14 @@ func TestRegistryFilterByTags(t *testing.T) {
 			wantOut: []string{"web_search", "remember_fact"},
 		},
 		{
-			name:    "search tag only",
-			tags:    []string{"search"},
+			name:    "web tag only",
+			tags:    []string{"web"},
 			wantIn:  []string{"web_search"},
 			wantOut: []string{"get_state", "call_service", "remember_fact"},
 		},
 		{
 			name:    "multiple tags",
-			tags:    []string{"ha", "search"},
+			tags:    []string{"ha", "web"},
 			wantIn:  []string{"get_state", "call_service", "web_search"},
 			wantOut: []string{"remember_fact"},
 		},
@@ -388,8 +388,8 @@ func TestRegistryFilterByTags_AlwaysAvailable(t *testing.T) {
 	reg.Register(&Tool{Name: "plain_untagged", Description: "Not tagged, not meta"})
 
 	reg.SetTagIndex(map[string][]string{
-		"ha":     {"get_state"},
-		"search": {"web_search"},
+		"ha":  {"get_state"},
+		"web": {"web_search"},
 	})
 
 	tests := []struct {
@@ -405,8 +405,8 @@ func TestRegistryFilterByTags_AlwaysAvailable(t *testing.T) {
 			wantOut: []string{"web_search", "plain_untagged"},
 		},
 		{
-			name:    "always-available tools survive search-only filter",
-			tags:    []string{"search"},
+			name:    "always-available tools survive web-only filter",
+			tags:    []string{"web"},
 			wantIn:  []string{"web_search", "activate_capability", "deactivate_capability", "list_loaded_capabilities", "reset_capabilities"},
 			wantOut: []string{"get_state", "plain_untagged"},
 		},
@@ -443,8 +443,8 @@ func TestRegistryFilterByTags_AlwaysAvailable(t *testing.T) {
 func TestRegistryTaggedToolNames(t *testing.T) {
 	reg := NewEmptyRegistry()
 	reg.SetTagIndex(map[string][]string{
-		"ha":     {"get_state", "call_service"},
-		"search": {"web_search"},
+		"ha":  {"get_state", "call_service"},
+		"web": {"web_search"},
 	})
 
 	if names := reg.TaggedToolNames("ha"); len(names) != 2 {

@@ -35,8 +35,8 @@ func TestParseFrontmatter_Tags(t *testing.T) {
 		},
 		{
 			name:     "quoted tags are normalized",
-			raw:      "---\ntags: [\"knowledge\", 'search']\n---\nContent here.",
-			wantTags: []string{"knowledge", "search"},
+			raw:      "---\ntags: [\"knowledge\", 'web']\n---\nContent here.",
+			wantTags: []string{"knowledge", "web"},
 			wantBody: "Content here.",
 		},
 		{
@@ -53,8 +53,8 @@ func TestParseFrontmatter_Tags(t *testing.T) {
 		},
 		{
 			name:     "frontmatter with extra fields",
-			raw:      "---\nauthor: test\ntags: [core, search]\npriority: 1\n---\nBody.",
-			wantTags: []string{"core", "search"},
+			raw:      "---\nauthor: test\ntags: [core, web]\npriority: 1\n---\nBody.",
+			wantTags: []string{"core", "web"},
 			wantBody: "Body.",
 		},
 		{
@@ -97,7 +97,7 @@ func TestParseFrontmatter_Tags(t *testing.T) {
 }
 
 func TestParseFrontmatterMetadata(t *testing.T) {
-	raw := "---\nkind: entry_point\ntags: [development, forge]\nteaser: \"Activate when the next move is about repos or code.\"\nnext_tags: [forge, files, search]\nauthor: test\n---\nBody."
+	raw := "---\nkind: entry_point\ntags: [development, forge]\nteaser: \"Activate when the next move is about repos or code.\"\nnext_tags: [forge, files, web]\nauthor: test\n---\nBody."
 
 	meta, body := ParseFrontmatterMetadata(raw)
 
@@ -113,8 +113,8 @@ func TestParseFrontmatterMetadata(t *testing.T) {
 	if meta.Teaser != "Activate when the next move is about repos or code." {
 		t.Fatalf("teaser = %q", meta.Teaser)
 	}
-	if got := strings.Join(meta.NextTags, ","); got != "forge,files,search" {
-		t.Fatalf("next_tags = %q, want forge,files,search", got)
+	if got := strings.Join(meta.NextTags, ","); got != "forge,files,web" {
+		t.Fatalf("next_tags = %q, want forge,files,web", got)
 	}
 }
 
@@ -122,7 +122,7 @@ func TestFilterByTags(t *testing.T) {
 	all := []Talent{
 		{Name: "core", Tags: nil, Content: "core guidance"},
 		{Name: "ha-tools", Tags: []string{"ha"}, Content: "ha guidance"},
-		{Name: "search-tools", Tags: []string{"search"}, Content: "search guidance"},
+		{Name: "web-tools", Tags: []string{"web"}, Content: "web guidance"},
 		{Name: "multi", Tags: []string{"ha", "physical"}, Content: "multi guidance"},
 	}
 
@@ -135,36 +135,36 @@ func TestFilterByTags(t *testing.T) {
 		{
 			name:       "nil active tags includes all",
 			activeTags: nil,
-			want:       []string{"core guidance", "ha guidance", "search guidance", "multi guidance"},
+			want:       []string{"core guidance", "ha guidance", "web guidance", "multi guidance"},
 		},
 		{
 			name:       "ha tag active",
 			activeTags: map[string]bool{"ha": true},
 			want:       []string{"core guidance", "ha guidance", "multi guidance"},
-			wantAbsent: []string{"search guidance"},
+			wantAbsent: []string{"web guidance"},
 		},
 		{
-			name:       "search tag active",
-			activeTags: map[string]bool{"search": true},
-			want:       []string{"core guidance", "search guidance"},
+			name:       "web tag active",
+			activeTags: map[string]bool{"web": true},
+			want:       []string{"core guidance", "web guidance"},
 			wantAbsent: []string{"ha guidance", "multi guidance"},
 		},
 		{
 			name:       "multiple tags active",
-			activeTags: map[string]bool{"ha": true, "search": true},
-			want:       []string{"core guidance", "ha guidance", "search guidance", "multi guidance"},
+			activeTags: map[string]bool{"ha": true, "web": true},
+			want:       []string{"core guidance", "ha guidance", "web guidance", "multi guidance"},
 		},
 		{
 			name:       "unknown tag only loads untagged",
 			activeTags: map[string]bool{"nonexistent": true},
 			want:       []string{"core guidance"},
-			wantAbsent: []string{"ha guidance", "search guidance", "multi guidance"},
+			wantAbsent: []string{"ha guidance", "web guidance", "multi guidance"},
 		},
 		{
 			name:       "empty active tags map loads only untagged",
 			activeTags: map[string]bool{},
 			want:       []string{"core guidance"},
-			wantAbsent: []string{"ha guidance", "search guidance", "multi guidance"},
+			wantAbsent: []string{"ha guidance", "web guidance", "multi guidance"},
 		},
 	}
 
@@ -224,7 +224,7 @@ func TestTalents(t *testing.T) {
 	// Write talent files with and without frontmatter.
 	writeFile(t, dir, "core.md", "# Core\nAlways loaded.")
 	writeFile(t, dir, "ha-tools.md", "---\nkind: entry_point\ntags: [ha]\n---\n# HA Tools\nHome Assistant guidance.")
-	writeFile(t, dir, "search.md", "---\ntags: [search, web]\n---\n# Search\nSearch guidance.")
+	writeFile(t, dir, "web.md", "---\ntags: [web, remote]\n---\n# Web\nWeb guidance.")
 
 	loader := NewLoader(dir)
 	talents, err := loader.Talents()
@@ -236,7 +236,7 @@ func TestTalents(t *testing.T) {
 		t.Fatalf("len(talents) = %d, want 3", len(talents))
 	}
 
-	// Sorted by filename: core, ha-tools, search
+	// Sorted by filename: core, ha-tools, web
 	if talents[0].Name != "core" {
 		t.Errorf("talents[0].Name = %q, want %q", talents[0].Name, "core")
 	}
@@ -260,14 +260,14 @@ func TestTalents(t *testing.T) {
 		t.Errorf("talents[1].Kind = %q, want entry_point", talents[1].Kind)
 	}
 
-	if talents[2].Name != "search" {
-		t.Errorf("talents[2].Name = %q, want %q", talents[2].Name, "search")
+	if talents[2].Name != "web" {
+		t.Errorf("talents[2].Name = %q, want %q", talents[2].Name, "web")
 	}
 	if len(talents[2].Tags) != 2 {
 		t.Fatalf("len(talents[2].Tags) = %d, want 2", len(talents[2].Tags))
 	}
-	if talents[2].Tags[0] != "search" || talents[2].Tags[1] != "web" {
-		t.Errorf("talents[2].Tags = %v, want [search web]", talents[2].Tags)
+	if talents[2].Tags[0] != "web" || talents[2].Tags[1] != "remote" {
+		t.Errorf("talents[2].Tags = %v, want [web remote]", talents[2].Tags)
 	}
 }
 
@@ -296,7 +296,7 @@ func TestTalents_MissingDir(t *testing.T) {
 func TestGenerateManifest(t *testing.T) {
 	entries := []ManifestEntry{
 		{Tag: "ha", Description: "Home Assistant tools", Tools: []string{"get_state", "call_service"}, AlwaysActive: true, KBArticles: 3, LiveContext: true},
-		{Tag: "search", Description: "Web search tools", Tools: []string{"web_search", "web_fetch"}, AlwaysActive: false},
+		{Tag: "web", Description: "Web retrieval tools", Tools: []string{"web_search", "web_fetch"}, AlwaysActive: false},
 		{Tag: "hpde", AdHoc: true, KBArticles: 2},
 	}
 
@@ -365,13 +365,13 @@ func TestGenerateManifest(t *testing.T) {
 		t.Errorf("ha context = %+v, want kb=3 live=true", ha.Context)
 	}
 
-	// Configured tag: search
-	search, ok := parsed.Capabilities["search"]
+	// Configured tag: web
+	web, ok := parsed.Capabilities["web"]
 	if !ok {
-		t.Fatal("missing search capability")
+		t.Fatal("missing web capability")
 	}
-	if search.Status != "available" {
-		t.Errorf("search status = %q, want available", search.Status)
+	if web.Status != "available" {
+		t.Errorf("web status = %q, want available", web.Status)
 	}
 
 	// Ad-hoc tag: hpde
@@ -435,7 +435,7 @@ func TestShouldIncludeTalent(t *testing.T) {
 		{
 			name:       "tagged with non-matching active tag",
 			talent:     Talent{Tags: []string{"ha"}},
-			activeTags: map[string]bool{"search": true},
+			activeTags: map[string]bool{"web": true},
 			want:       false,
 		},
 		{

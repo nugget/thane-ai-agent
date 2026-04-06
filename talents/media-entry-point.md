@@ -15,7 +15,7 @@ Choose the next move deliberately:
 - If the object came in as a local upload or attachment, activate
   `attachments`.
 - If the object still has to be found or fetched from the wider web,
-  activate `search`.
+  activate `web`.
 
 When media work starts mixing with unrelated domains, delegate before
 the loop turns into a junk drawer.

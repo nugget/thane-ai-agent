@@ -336,7 +336,7 @@ talents_dir: ./talents
 #     - forge
 #   signal:
 #     - ha
-#     - search
+#     - web
 #
 # (optional) MCP configures external MCP (Model Context Protocol) server
 # mcp:

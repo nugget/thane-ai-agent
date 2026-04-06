@@ -9,27 +9,27 @@ func TestBuildCapabilitySurface_SortsTagsAndTools(t *testing.T) {
 	surface := BuildCapabilitySurface(
 		map[string][]string{
 			"interactive": nil,
-			"search":      {"web_search", "web_fetch"},
+			"web":         {"web_search", "web_fetch"},
 			"forge":       {"forge_pr_get", "forge_search"},
 		},
 		map[string]string{
 			"interactive": "Interactive loop guidance",
-			"search":      "Search tools",
+			"web":         "Web tools",
 			"forge":       "Forge tools",
 		},
 		map[string]bool{
 			"forge": true,
 		},
 		map[string]bool{
-			"search": true,
+			"web": true,
 		},
 	)
 
 	if len(surface) != 3 {
 		t.Fatalf("len(surface) = %d, want 3", len(surface))
 	}
-	if got := []string{surface[0].Tag, surface[1].Tag, surface[2].Tag}; strings.Join(got, ",") != "forge,interactive,search" {
-		t.Fatalf("tags = %v, want [forge interactive search]", got)
+	if got := []string{surface[0].Tag, surface[1].Tag, surface[2].Tag}; strings.Join(got, ",") != "forge,interactive,web" {
+		t.Fatalf("tags = %v, want [forge interactive web]", got)
 	}
 	if !surface[0].AlwaysActive {
 		t.Fatal("forge should be always active")
@@ -38,10 +38,10 @@ func TestBuildCapabilitySurface_SortsTagsAndTools(t *testing.T) {
 		t.Fatal("interactive should be a menu tag")
 	}
 	if !surface[2].Protected {
-		t.Fatal("search should be protected")
+		t.Fatal("web should be protected")
 	}
 	if got := strings.Join(surface[2].Tools, ","); got != "web_fetch,web_search" {
-		t.Fatalf("search tools = %q", got)
+		t.Fatalf("web tools = %q", got)
 	}
 }
 
@@ -92,7 +92,7 @@ func TestRenderLoadedCapabilitySummary_EmptyStateExplainsAvailability(t *testing
 
 func TestRenderCapabilityManifestMarkdown_UsesExactToolNames(t *testing.T) {
 	manifest := RenderCapabilityManifestMarkdown([]CapabilitySurface{
-		{Tag: "development", Description: "Development entry point.", Teaser: "Activate when the next move is about code or repos.", NextTags: []string{"forge", "files", "search"}, Menu: true},
+		{Tag: "development", Description: "Development entry point.", Teaser: "Activate when the next move is about code or repos.", NextTags: []string{"forge", "files", "web"}, Menu: true},
 		{Tag: "forge", Description: "Forge tools.", Tools: []string{"forge_pr_get"}},
 	})
 	if !strings.Contains(manifest, "\"kind\":\"capability_menu\"") {
@@ -122,7 +122,7 @@ func TestRenderCapabilityManifestMarkdown_UsesExactToolNames(t *testing.T) {
 	if !strings.Contains(manifest, "\"teaser\":\"Activate when the next move is about code or repos.\"") {
 		t.Fatalf("manifest = %q, want teaser", manifest)
 	}
-	if !strings.Contains(manifest, "\"next_tags\":[\"forge\",\"files\",\"search\"]") {
+	if !strings.Contains(manifest, "\"next_tags\":[\"forge\",\"files\",\"web\"]") {
 		t.Fatalf("manifest = %q, want next_tags", manifest)
 	}
 	if strings.Contains(manifest, "\"forge\":{") {
@@ -132,7 +132,7 @@ func TestRenderCapabilityManifestMarkdown_UsesExactToolNames(t *testing.T) {
 
 func TestRenderCapabilityActivationDescription_ShowsMenuTags(t *testing.T) {
 	desc := RenderCapabilityActivationDescription([]CapabilitySurface{
-		{Tag: "development", Description: "Development entry point.", Teaser: "Activate when the next move is about code or repos.", NextTags: []string{"forge", "files", "search"}, Menu: true},
+		{Tag: "development", Description: "Development entry point.", Teaser: "Activate when the next move is about code or repos.", NextTags: []string{"forge", "files", "web"}, Menu: true},
 		{Tag: "forge", Description: "Forge tools.", Tools: []string{"forge_pr_get"}},
 		{Tag: "owner", Description: "Owner guidance.", Menu: true, Protected: true},
 	})
@@ -149,7 +149,7 @@ func TestRenderCapabilityActivationDescription_ShowsMenuTags(t *testing.T) {
 	if !strings.Contains(desc, "Activate when the next move is about code or repos.") {
 		t.Fatalf("description = %q, want teaser wording", desc)
 	}
-	if !strings.Contains(desc, "next: forge, files, search") {
+	if !strings.Contains(desc, "next: forge, files, web") {
 		t.Fatalf("description = %q, want next-tags hint", desc)
 	}
 	if strings.Contains(desc, "**forge**") {

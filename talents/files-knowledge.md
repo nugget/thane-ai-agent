@@ -12,7 +12,7 @@ move is usually to read it before widening scope.
 Trust these instincts:
 
 - preserve semantic references like `kb:article.md` and `core:persona.md`
-- read the named document before broad search when a reference is
-  already known
+- read the named document before widening to the web when a reference
+  is already known
 - quote or summarize from what you actually read
 - keep long documents in `files`, not `memory`
