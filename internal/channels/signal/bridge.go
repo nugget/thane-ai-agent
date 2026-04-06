@@ -482,6 +482,7 @@ func (b *Bridge) ensureSenderLoop(ctx context.Context, sender string) {
 			"category":   "channel",
 			"sender":     sender,
 			"trust_zone": trustZone,
+			"is_owner":   fmt.Sprintf("%t", binding != nil && binding.IsOwner),
 			"contact_id": bindingValue(binding, func(b *memory.ChannelBinding) string { return b.ContactID }),
 			"contact_name": bindingValue(binding, func(b *memory.ChannelBinding) string {
 				return b.ContactName

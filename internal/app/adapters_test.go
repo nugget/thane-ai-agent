@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/nugget/thane-ai-agent/internal/contacts"
 	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
 	"github.com/nugget/thane-ai-agent/internal/memory"
 )
@@ -257,5 +259,34 @@ func TestDetachedLoopCompletionDispatcherRequiresConversationID(t *testing.T) {
 	})
 	if err == nil || err.Error() != "conversation completion delivery requires a non-empty conversation ID" {
 		t.Fatalf("conversation dispatch error = %v", err)
+	}
+}
+
+func TestContactChannelBindingResolverCachesConfiguredOwnerContact(t *testing.T) {
+	store, err := contacts.NewStore(t.TempDir()+"/contacts.db", slog.Default())
+	if err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	tools := contacts.NewTools(store)
+	if _, err := tools.SaveContact(`{"name":"Aimee","kind":"individual","trust_zone":"admin","facts":{"email":"aimee@example.com"}}`); err != nil {
+		t.Fatalf("SaveContact: %v", err)
+	}
+
+	resolver := &contactChannelBindingResolver{
+		store:            store,
+		ownerContactName: "Aimee",
+	}
+
+	first := resolver.cachedOwnerContactID()
+	if first == uuid.Nil {
+		t.Fatal("cachedOwnerContactID() returned zero UUID")
+	}
+
+	resolver.ownerContactName = "Nobody"
+	second := resolver.cachedOwnerContactID()
+	if second != first {
+		t.Fatalf("cachedOwnerContactID() after rename = %v, want cached %v", second, first)
 	}
 }

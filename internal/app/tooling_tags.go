@@ -13,15 +13,30 @@ import (
 func resolveCapabilityTags(reg *tools.Registry, overrides map[string]config.CapabilityTagConfig) map[string]config.CapabilityTagConfig {
 	resolved := make(map[string]config.CapabilityTagConfig)
 	builtinTags := toolcatalog.BuiltinTagSpecs()
+	for tag, spec := range builtinTags {
+		if !shouldSeedBuiltinTag(tag, spec) {
+			continue
+		}
+		resolved[tag] = config.CapabilityTagConfig{
+			Description:  firstNonEmpty(strings.TrimSpace(spec.Description), generatedTagDescription(tag)),
+			AlwaysActive: spec.AlwaysActive,
+			Protected:    spec.Protected,
+		}
+	}
 	for tag, toolNames := range reg.MetadataTagIndex() {
 		spec := builtinTags[tag]
 		sortedToolNames := append([]string(nil), toolNames...)
 		sort.Strings(sortedToolNames)
-		resolved[tag] = config.CapabilityTagConfig{
-			Description:  firstNonEmpty(strings.TrimSpace(spec.Description), generatedTagDescription(tag)),
-			Tools:        sortedToolNames,
-			AlwaysActive: spec.AlwaysActive,
+		merged := resolved[tag]
+		merged.Description = firstNonEmpty(strings.TrimSpace(spec.Description), merged.Description, generatedTagDescription(tag))
+		merged.Tools = sortedToolNames
+		if spec.AlwaysActive {
+			merged.AlwaysActive = true
 		}
+		if spec.Protected {
+			merged.Protected = true
+		}
+		resolved[tag] = merged
 	}
 	for tag, override := range overrides {
 		merged := resolved[tag]
@@ -35,12 +50,27 @@ func resolveCapabilityTags(reg *tools.Registry, overrides map[string]config.Capa
 		if override.AlwaysActive {
 			merged.AlwaysActive = true
 		}
+		if override.Protected {
+			merged.Protected = true
+		}
 		if strings.TrimSpace(merged.Description) == "" {
 			merged.Description = generatedTagDescription(tag)
 		}
 		resolved[tag] = merged
 	}
 	return resolved
+}
+
+func shouldSeedBuiltinTag(tag string, spec toolcatalog.BuiltinTagSpec) bool {
+	if spec.Protected {
+		return true
+	}
+	switch tag {
+	case "interactive", "owu":
+		return true
+	default:
+		return false
+	}
 }
 
 func generatedTagDescription(tag string) string {
@@ -76,13 +106,15 @@ func buildCapabilitySurface(
 	tagIndex := make(map[string][]string, len(resolved))
 	descriptions := make(map[string]string, len(resolved))
 	alwaysActive := make(map[string]bool, len(resolved))
+	protected := make(map[string]bool, len(resolved))
 	for tag, cfg := range resolved {
 		tagIndex[tag] = append([]string(nil), cfg.Tools...)
 		descriptions[tag] = cfg.Description
 		alwaysActive[tag] = cfg.AlwaysActive
+		protected[tag] = cfg.Protected
 	}
 
-	surface := toolcatalog.BuildCapabilitySurface(tagIndex, descriptions, alwaysActive)
+	surface := toolcatalog.BuildCapabilitySurface(tagIndex, descriptions, alwaysActive, protected)
 	indexByTag := make(map[string]int, len(surface))
 	for i := range surface {
 		indexByTag[surface[i].Tag] = i
@@ -96,6 +128,8 @@ func buildCapabilitySurface(
 		}
 		surface = append(surface, toolcatalog.CapabilitySurface{
 			Tag:         tag,
+			Description: descriptions[tag],
+			Protected:   protected[tag],
 			KBArticles:  kbCounts[tag],
 			LiveContext: liveTags[tag],
 			AdHoc:       true,

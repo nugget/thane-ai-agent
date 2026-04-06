@@ -23,12 +23,14 @@ func setupCapabilityLoop(mock *mockLLM, extraNames []string, capTags map[string]
 	tagTools := make(map[string][]string, len(capTags))
 	descriptions := make(map[string]string, len(capTags))
 	alwaysActive := make(map[string]bool, len(capTags))
+	protected := make(map[string]bool, len(capTags))
 	for tag, cfg := range capTags {
 		tagTools[tag] = cfg.Tools
 		descriptions[tag] = cfg.Description
 		alwaysActive[tag] = cfg.AlwaysActive
+		protected[tag] = cfg.Protected
 	}
-	manifest := tools.BuildCapabilityManifest(tagTools, descriptions, alwaysActive)
+	manifest := tools.BuildCapabilityManifest(tagTools, descriptions, alwaysActive, protected)
 	loop.Tools().SetCapabilityTools(loop, manifest)
 
 	return loop
@@ -173,6 +175,7 @@ func TestRunResponseSurfacesEffectiveToolsAndLoadedCapabilities(t *testing.T) {
 		map[string][]string{"ha": {"get_state"}},
 		map[string]string{"ha": "Home Assistant tools"},
 		map[string]bool{"ha": true},
+		nil,
 	))
 
 	resp, err := loop.Run(context.Background(), &Request{
@@ -247,6 +250,7 @@ func TestCapabilityActivation_DoesNotBleedActiveStateAcrossConversations(t *test
 	loop.UseCapabilitySurface(tools.BuildCapabilityManifest(
 		map[string][]string{"forge": {"forge_tool"}},
 		map[string]string{"forge": "Forge tools"},
+		nil,
 		nil,
 	))
 	loop.SetCapabilityTagStore(newTestCapStore(t))

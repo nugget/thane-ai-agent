@@ -127,6 +127,22 @@ func (r *Registry) registerContactTools() {
 	})
 
 	r.Register(&Tool{
+		Name:        "owner_contact",
+		Description: "Return the primary owner/operator contact record with rich details and contact properties, plus a structured summary of currently active owner-scoped channels. Uses identity.owner_contact_name when configured; otherwise falls back to the sole admin contact if exactly one exists.",
+		Parameters: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{},
+		},
+		Handler: func(ctx context.Context, args map[string]any) (string, error) {
+			argsJSON, err := json.Marshal(args)
+			if err != nil {
+				return "", fmt.Errorf("failed to serialize arguments: %w", err)
+			}
+			return r.contactTools.OwnerContact(string(argsJSON))
+		},
+	})
+
+	r.Register(&Tool{
 		Name:        "forget_contact",
 		Description: "Remove a contact from the directory by name.",
 		Parameters: map[string]any{

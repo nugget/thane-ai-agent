@@ -324,6 +324,11 @@ talents_dir: ./talents
 #     AlwaysActive tags cannot be deactivated. They are included in
 #     every session regardless of channel or agent requests.
 #     always_active: true
+#     Protected tags are reserved for runtime trust and environment
+#     assertions (for example an owner-authenticated conversation).
+#     They are visible to the model when active, but cannot be toggled
+#     via activate_capability or deactivate_capability.
+#     protected: false
 #
 # (optional) ChannelTags maps conversation source channels (e.g., "signal",
 # channel_tags:
@@ -581,6 +586,12 @@ talents_dir: ./talents
 #   record. When set, export_vcf name="self" resolves to this
 #   contact.
 #   contact_name: Thane
+#   OwnerContactName is the formatted name of the primary human
+#   owner/operator contact record. When set, the owner_contact tool
+#   resolves directly to this contact instead of guessing from trust
+#   zones. When empty, owner_contact falls back to the sole admin
+#   contact if exactly one exists.
+#   owner_contact_name: Aimee
 #
 # (optional) Attachments configures content-addressed attachment storage.
 # attachments:

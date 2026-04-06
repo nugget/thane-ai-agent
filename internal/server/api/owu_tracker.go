@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -97,7 +98,12 @@ func (t *OWUTracker) Dispatch(ctx context.Context, req *agent.Request, streamCal
 		return t.runner.Run(ctx, req, streamCallback)
 	}
 	if req.ChannelBinding == nil {
-		req.ChannelBinding = (&memory.ChannelBinding{Channel: "owu"}).Normalize()
+		req.ChannelBinding = (&memory.ChannelBinding{Channel: "owu", IsOwner: true}).Normalize()
+	} else {
+		req.ChannelBinding = req.ChannelBinding.Normalize()
+		if req.ChannelBinding != nil && req.ChannelBinding.Channel == "owu" {
+			req.ChannelBinding.IsOwner = true
+		}
 	}
 	if t.bindConversation != nil && req.ChannelBinding != nil {
 		if err := t.bindConversation(convID, req.ChannelBinding); err != nil {
@@ -111,7 +117,7 @@ func (t *OWUTracker) Dispatch(ctx context.Context, req *agent.Request, streamCal
 		return t.runner.Run(ctx, req, streamCallback)
 	}
 
-	ch := t.ensureConvLoop(ctx, convID, displayName)
+	ch := t.ensureConvLoop(ctx, convID, displayName, req.ChannelBinding != nil && req.ChannelBinding.IsOwner)
 
 	work := owuWork{
 		reqCtx:   ctx,
@@ -139,7 +145,7 @@ const convChanSize = 4 // allow a small queue of concurrent requests
 // ensureConvLoop lazily spawns a per-conversation child loop.
 // Uses the tracker's long-lived context (not the HTTP request context)
 // so the loop survives beyond the first request.
-func (t *OWUTracker) ensureConvLoop(_ context.Context, convID, displayName string) chan owuWork {
+func (t *OWUTracker) ensureConvLoop(_ context.Context, convID, displayName string, isOwner bool) chan owuWork {
 	t.mu.Lock()
 	if ch, ok := t.convChs[convID]; ok {
 		t.mu.Unlock()
@@ -214,6 +220,7 @@ func (t *OWUTracker) ensureConvLoop(_ context.Context, convID, displayName strin
 			"subsystem":       "owu",
 			"category":        "channel",
 			"conversation_id": convID,
+			"is_owner":        strconv.FormatBool(isOwner),
 		},
 	}, loop.Deps{Logger: t.logger, EventBus: t.eventBus})
 	if err != nil {

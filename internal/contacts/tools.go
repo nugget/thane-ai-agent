@@ -12,6 +12,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/emersion/go-vcard"
 	"github.com/google/uuid"
@@ -22,11 +23,27 @@ type EmbeddingClient interface {
 	Generate(ctx context.Context, text string) ([]float32, error)
 }
 
+// OwnerChannelActivity describes one currently active owner-scoped
+// interactive channel loop.
+type OwnerChannelActivity struct {
+	Channel        string
+	LoopID         string
+	LoopName       string
+	ConversationID string
+	ContactName    string
+	State          string
+	LastActive     time.Time
+}
+
+const ownerActivitySummaryLimit = 8
+
 // Tools provides contact-related tools for the agent.
 type Tools struct {
-	store           *Store
-	embeddings      EmbeddingClient
-	selfContactName string
+	store            *Store
+	embeddings       EmbeddingClient
+	selfContactName  string
+	ownerContactName string
+	ownerActivity    func() []OwnerChannelActivity
 }
 
 // NewTools creates contact tools using the given store.
@@ -43,6 +60,74 @@ func (t *Tools) SetEmbeddingClient(client EmbeddingClient) {
 // in export operations.
 func (t *Tools) SetSelfContactName(name string) {
 	t.selfContactName = name
+}
+
+// SetOwnerContactName sets the contact name used to resolve the
+// primary human owner/operator contact.
+func (t *Tools) SetOwnerContactName(name string) {
+	t.ownerContactName = name
+}
+
+// SetOwnerActivitySource configures a source of active owner-scoped
+// channel activity for the owner_contact helper.
+func (t *Tools) SetOwnerActivitySource(src func() []OwnerChannelActivity) {
+	t.ownerActivity = src
+}
+
+// OwnerContact returns the configured owner contact, or falls back to
+// the sole admin contact when no explicit owner contact name is set.
+func (t *Tools) OwnerContact(_ string) (string, error) {
+	c, err := t.resolveOwnerContact()
+	if err != nil {
+		return "", err
+	}
+	var sb strings.Builder
+	sb.WriteString(formatContact(c))
+	if summary := t.formatOwnerActivitySummary(); summary != "" {
+		sb.WriteString("\n\n")
+		sb.WriteString(summary)
+	}
+	return sb.String(), nil
+}
+
+func (t *Tools) resolveOwnerContact() (*Contact, error) {
+	name := strings.TrimSpace(t.ownerContactName)
+	if name != "" {
+		c, err := t.store.ResolveContact(name)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("configured owner contact %q not found", name)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("resolve configured owner contact: %w", err)
+		}
+		full, err := t.store.GetWithProperties(c.ID)
+		if err != nil {
+			return nil, fmt.Errorf("get configured owner contact details: %w", err)
+		}
+		return full, nil
+	}
+
+	admins, err := t.store.FindByTrustZone(ZoneAdmin)
+	if err != nil {
+		return nil, fmt.Errorf("list admin contacts: %w", err)
+	}
+	switch len(admins) {
+	case 0:
+		return nil, fmt.Errorf("owner contact not configured: set identity.owner_contact_name or mark exactly one admin contact")
+	case 1:
+		full, err := t.store.GetWithProperties(admins[0].ID)
+		if err != nil {
+			return nil, fmt.Errorf("get owner contact details: %w", err)
+		}
+		return full, nil
+	default:
+		names := make([]string, 0, len(admins))
+		for _, admin := range admins {
+			names = append(names, admin.FormattedName)
+		}
+		sort.Strings(names)
+		return nil, fmt.Errorf("owner contact is ambiguous: multiple admin contacts found (%s); set identity.owner_contact_name", strings.Join(names, ", "))
+	}
 }
 
 // SaveContactArgs are arguments for the save_contact tool.
@@ -880,6 +965,76 @@ func formatContact(c *Contact) string {
 	}
 
 	return sb.String()
+}
+
+func (t *Tools) formatOwnerActivitySummary() string {
+	if t == nil || t.ownerActivity == nil {
+		return ""
+	}
+	channels := t.ownerActivity()
+	if len(channels) == 0 {
+		return ""
+	}
+
+	sort.Slice(channels, func(i, j int) bool {
+		return channels[i].LastActive.After(channels[j].LastActive)
+	})
+
+	type activityView struct {
+		Channel        string `json:"channel"`
+		LoopID         string `json:"loop_id,omitempty"`
+		LoopName       string `json:"loop_name,omitempty"`
+		ConversationID string `json:"conversation_id,omitempty"`
+		ContactName    string `json:"contact_name,omitempty"`
+		State          string `json:"state,omitempty"`
+		LastActive     string `json:"last_active,omitempty"`
+	}
+	payload := struct {
+		ActiveOwnerChannels []activityView `json:"active_owner_channels"`
+		ByChannel           map[string]int `json:"by_channel,omitempty"`
+		Total               int            `json:"total"`
+		Displayed           int            `json:"displayed,omitempty"`
+		Omitted             int            `json:"omitted,omitempty"`
+		MostRecentActive    string         `json:"most_recent_active,omitempty"`
+	}{
+		ActiveOwnerChannels: make([]activityView, 0, min(len(channels), ownerActivitySummaryLimit)),
+		ByChannel:           make(map[string]int),
+		Total:               len(channels),
+	}
+	for _, ch := range channels {
+		payload.ByChannel[ch.Channel]++
+	}
+
+	visible := channels
+	if len(visible) > ownerActivitySummaryLimit {
+		payload.Omitted = len(visible) - ownerActivitySummaryLimit
+		visible = visible[:ownerActivitySummaryLimit]
+	}
+	payload.Displayed = len(visible)
+
+	for _, ch := range visible {
+		view := activityView{
+			Channel:        ch.Channel,
+			LoopID:         ch.LoopID,
+			LoopName:       ch.LoopName,
+			ConversationID: ch.ConversationID,
+			ContactName:    ch.ContactName,
+			State:          ch.State,
+		}
+		if !ch.LastActive.IsZero() {
+			view.LastActive = ch.LastActive.UTC().Format(time.RFC3339)
+			if payload.MostRecentActive == "" {
+				payload.MostRecentActive = view.LastActive
+			}
+		}
+		payload.ActiveOwnerChannels = append(payload.ActiveOwnerChannels, view)
+	}
+
+	data, err := json.MarshalIndent(payload, "", "  ")
+	if err != nil {
+		return ""
+	}
+	return "Active owner channels:\n```json\n" + string(data) + "\n```"
 }
 
 // formatContactList formats multiple contacts for display.

@@ -16,6 +16,7 @@ func TestSQLiteStoreConversationChannelBindingRoundTrip(t *testing.T) {
 		ContactName: "Alice Smith",
 		TrustZone:   "known",
 		LinkSource:  "tel",
+		IsOwner:     true,
 	}
 	if err := store.BindConversationChannel("signal-15551234567", binding); err != nil {
 		t.Fatalf("BindConversationChannel: %v", err)
@@ -31,6 +32,9 @@ func TestSQLiteStoreConversationChannelBindingRoundTrip(t *testing.T) {
 	got := conv.Metadata.ChannelBinding
 	if got.Channel != "signal" || got.Address != "+15551234567" || got.ContactID != "contact-1" {
 		t.Fatalf("ChannelBinding = %#v", got)
+	}
+	if !got.IsOwner {
+		t.Fatalf("ChannelBinding.IsOwner = false, want true")
 	}
 
 	all := store.GetAllConversations()

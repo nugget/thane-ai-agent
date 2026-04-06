@@ -7,6 +7,7 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/config"
 	"github.com/nugget/thane-ai-agent/internal/llm"
+	"github.com/nugget/thane-ai-agent/internal/memory"
 )
 
 func TestChannelTags_ActivatedBySource(t *testing.T) {
@@ -336,5 +337,68 @@ func TestChannelTags_DropNonPinnedTagAllowed(t *testing.T) {
 	}
 	if !active["signal"] {
 		t.Error("signal tag should still be active (channel-pinned)")
+	}
+}
+
+func TestProtectedTags_CannotBeActivatedManually(t *testing.T) {
+	scope := newCapabilityScope(map[string]config.CapabilityTagConfig{
+		"owner": {
+			Description: "Owner-scoped privileged tools.",
+			Protected:   true,
+		},
+	}, nil)
+
+	err := scope.Request("owner")
+	if err == nil {
+		t.Fatal("expected protected tag activation to fail")
+	}
+	if !strings.Contains(err.Error(), "protected tag") {
+		t.Fatalf("error = %v, want protected-tag message", err)
+	}
+}
+
+func TestProtectedOwnerTag_ActivatedByChannelBinding(t *testing.T) {
+	mock := &mockLLM{
+		responses: []*llm.ChatResponse{
+			{
+				Model:        "test-model",
+				Message:      llm.Message{Role: "assistant", Content: "Done."},
+				InputTokens:  100,
+				OutputTokens: 10,
+			},
+		},
+	}
+
+	loop := buildTestLoop(mock, []string{"owner_tool", "base_tool"})
+	loop.SetCapabilityTags(map[string]config.CapabilityTagConfig{
+		"owner": {
+			Description: "Owner-scoped privileged tools.",
+			Tools:       []string{"owner_tool"},
+			Protected:   true,
+		},
+		"base": {
+			Description:  "Base tools",
+			Tools:        []string{"base_tool"},
+			AlwaysActive: true,
+		},
+	}, nil)
+
+	_, err := loop.Run(context.Background(), &Request{
+		Messages: []Message{{Role: "user", Content: "owner request"}},
+		ChannelBinding: &memory.ChannelBinding{
+			Channel: "owu",
+			IsOwner: true,
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+
+	if len(mock.calls) < 1 {
+		t.Fatal("expected at least 1 LLM call")
+	}
+	names := toolNames(mock.calls[0].Tools)
+	if !hasName(names, "owner_tool") {
+		t.Fatalf("owner_tool should be available for owner binding: %v", names)
 	}
 }

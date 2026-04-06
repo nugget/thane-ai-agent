@@ -213,7 +213,8 @@ func ExampleConfig() *Config {
 		},
 
 		Identity: IdentityConfig{
-			ContactName: "Thane",
+			ContactName:      "Thane",
+			OwnerContactName: "Aimee",
 		},
 
 		Attachments: AttachmentsConfig{

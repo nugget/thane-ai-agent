@@ -1177,10 +1177,16 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		}, nil
 	}
 
+	channelBinding := req.ChannelBinding.Clone()
+	if channelBinding == nil {
+		channelBinding = l.conversationChannelBinding(convID)
+	}
+
 	// Create a per-Run capability scope seeded with always-active tags.
 	// Channel-pinned tags are merged based on the request's source hint.
-	// The scope is stored in the context so tool handlers and system
-	// prompt assembly read/write per-Run state, not global state.
+	// Runtime-asserted tags (such as owner) are pinned from typed
+	// conversation bindings so tool gating can rely on Go-validated
+	// metadata instead of prompt reconstruction.
 	var scope *capabilityScope
 	if l.capTags != nil {
 		var lenses []string
@@ -1212,6 +1218,14 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 				)
 			}
 		}
+		if channelBinding != nil && channelBinding.IsOwner {
+			scope.PinChannelTags([]string{"owner"})
+			log.Info("runtime tag activated",
+				"tag", "owner",
+				"channel", channelBinding.Channel,
+				"contact_name", channelBinding.ContactName,
+			)
+		}
 		ctx = withCapabilityScope(ctx, scope)
 		l.updateLastRunTags(scope)
 	}
@@ -1219,10 +1233,6 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	// Build messages for LLM. Enrich ctx with conversation ID so that
 	// context providers (e.g. working memory) can scope their output.
 	// Propagate request hints so channel-aware providers can adapt.
-	channelBinding := req.ChannelBinding.Clone()
-	if channelBinding == nil {
-		channelBinding = l.conversationChannelBinding(convID)
-	}
 	promptCtx := tools.WithConversationID(ctx, convID)
 	promptCtx = tools.WithHints(promptCtx, req.Hints)
 	promptCtx = tools.WithChannelBinding(promptCtx, channelBinding)

@@ -18,6 +18,9 @@ func TestBuildCapabilitySurface_SortsTagsAndTools(t *testing.T) {
 		map[string]bool{
 			"forge": true,
 		},
+		map[string]bool{
+			"search": true,
+		},
 	)
 
 	if len(surface) != 2 {
@@ -28,6 +31,9 @@ func TestBuildCapabilitySurface_SortsTagsAndTools(t *testing.T) {
 	}
 	if !surface[0].AlwaysActive {
 		t.Fatal("forge should be always active")
+	}
+	if !surface[1].Protected {
+		t.Fatal("search should be protected")
 	}
 	if got := strings.Join(surface[1].Tools, ","); got != "web_fetch,web_search" {
 		t.Fatalf("search tools = %q", got)

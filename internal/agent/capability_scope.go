@@ -130,6 +130,15 @@ func (s *capabilityScope) UserActivatedTags() []string {
 // and static context) and ad-hoc tags (KB articles, talents, live
 // providers only) are accepted.
 func (s *capabilityScope) Request(tag string) error {
+	if cfg, ok := s.capTags[tag]; ok && cfg.Protected {
+		s.mu.Lock()
+		alreadyActive := s.active[tag]
+		s.mu.Unlock()
+		if alreadyActive {
+			return nil
+		}
+		return fmt.Errorf("cannot activate protected tag %q (runtime asserted)", tag)
+	}
 	s.mu.Lock()
 	s.active[tag] = true
 	s.mu.Unlock()
@@ -141,6 +150,9 @@ func (s *capabilityScope) Request(tag string) error {
 func (s *capabilityScope) Drop(tag string) error {
 	if cfg, ok := s.capTags[tag]; ok && cfg.AlwaysActive {
 		return fmt.Errorf("cannot drop always-active tag: %q", tag)
+	}
+	if cfg, ok := s.capTags[tag]; ok && cfg.Protected {
+		return fmt.Errorf("cannot drop protected tag %q (runtime asserted)", tag)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()

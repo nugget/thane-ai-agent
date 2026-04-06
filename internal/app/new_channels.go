@@ -89,6 +89,13 @@ func (a *App) initChannels(s *newState) error {
 	if a.cfg.Identity.ContactName != "" {
 		contactTools.SetSelfContactName(a.cfg.Identity.ContactName)
 	}
+	if a.cfg.Identity.OwnerContactName != "" {
+		contactTools.SetOwnerContactName(a.cfg.Identity.OwnerContactName)
+	}
+	ownerActivity := (&ownerChannelActivityAdapter{
+		loops: &channelLoopAdapter{registry: a.loopRegistry},
+	}).ActiveOwnerChannels
+	contactTools.SetOwnerActivitySource(ownerActivity)
 	a.loop.Tools().SetContactTools(contactTools)
 	a.logger.Info("contact store initialized", "path", a.cfg.DataDir+"/contacts.db")
 
@@ -660,15 +667,18 @@ func (a *App) initChannels(s *newState) error {
 			}
 
 			bridge := sigcli.NewBridge(sigcli.BridgeConfig{
-				Client:           signalClient,
-				Runner:           a.loop,
-				Logger:           a.logger,
-				RateLimit:        a.cfg.Signal.RateLimitPerMinute,
-				HandleTimeout:    a.cfg.Signal.HandleTimeout,
-				Routing:          a.cfg.Signal.Routing,
-				Rotator:          signalRotator,
-				IdleTimeout:      idleTimeout,
-				Resolver:         &contactChannelBindingResolver{store: contactStore},
+				Client:        signalClient,
+				Runner:        a.loop,
+				Logger:        a.logger,
+				RateLimit:     a.cfg.Signal.RateLimitPerMinute,
+				HandleTimeout: a.cfg.Signal.HandleTimeout,
+				Routing:       a.cfg.Signal.Routing,
+				Rotator:       signalRotator,
+				IdleTimeout:   idleTimeout,
+				Resolver: &contactChannelBindingResolver{
+					store:            contactStore,
+					ownerContactName: a.cfg.Identity.OwnerContactName,
+				},
 				BindConversation: a.mem.BindConversationChannel,
 				Attachments: sigcli.AttachmentConfig{
 					SourceDir: a.cfg.Signal.AttachmentSourceDir,

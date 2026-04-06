@@ -111,7 +111,7 @@ func (r *Registry) registerDeactivateCapability(mgr CapabilityManager, tagManife
 		Name:            "deactivate_capability",
 		AlwaysAvailable: true,
 		Description: "Deactivate a capability to remove its tools and context from YOUR current conversation. " +
-			"Always-active tags cannot be deactivated. Use when you no longer need a capability's tools to keep your context focused.",
+			"Always-active and protected tags cannot be deactivated. Use when you no longer need a capability's tools to keep your context focused.",
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -173,6 +173,7 @@ func (r *Registry) registerListLoadedCapabilities(mgr CapabilityManager, tagMani
 			type loadedCapability struct {
 				Tag          string `json:"tag"`
 				AlwaysActive bool   `json:"always_active,omitempty"`
+				Protected    bool   `json:"protected,omitempty"`
 				AdHoc        bool   `json:"ad_hoc,omitempty"`
 			}
 			payload := struct {
@@ -184,6 +185,7 @@ func (r *Registry) registerListLoadedCapabilities(mgr CapabilityManager, tagMani
 				entry := loadedCapability{Tag: tag}
 				if manifest, ok := tagManifest[tag]; ok {
 					entry.AlwaysActive = manifest.AlwaysActive
+					entry.Protected = manifest.Protected
 					entry.AdHoc = manifest.AdHoc
 				}
 				payload.LoadedCapabilities = append(payload.LoadedCapabilities, entry)
@@ -200,6 +202,6 @@ func (r *Registry) registerListLoadedCapabilities(mgr CapabilityManager, tagMani
 // BuildCapabilityManifest creates a sorted list of capability descriptions
 // from the config map. This is used both for the tool description and for
 // generating the capability manifest talent.
-func BuildCapabilityManifest(tags map[string][]string, descriptions map[string]string, alwaysActive map[string]bool) []CapabilityManifest {
-	return toolcatalog.BuildCapabilitySurface(tags, descriptions, alwaysActive)
+func BuildCapabilityManifest(tags map[string][]string, descriptions map[string]string, alwaysActive map[string]bool, protected map[string]bool) []CapabilityManifest {
+	return toolcatalog.BuildCapabilitySurface(tags, descriptions, alwaysActive, protected)
 }
