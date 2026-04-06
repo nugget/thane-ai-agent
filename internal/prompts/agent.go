@@ -26,7 +26,7 @@ func RuntimeContract() string {
 		"## Runtime Contract",
 		"",
 		"- Use only exact tool names that are actually available in this turn. Do not invent aliases, wrappers, or MCP helper tools.",
-		"- Capability and tag changes are runtime actions. Use `activate_capability`, `deactivate_capability`, and `list_loaded_capabilities` instead of talking about capability state conversationally.",
+		"- Capability and tag changes are runtime actions. Use `activate_capability`, `deactivate_capability`, `reset_capabilities`, and `list_loaded_capabilities` instead of talking about capability state conversationally.",
 		"- Treat capability activation as a coarse-to-fine menu. Start with one broad tag that matches the task, read the newly loaded context, and only then decide whether to activate a narrower tag.",
 		"- In capability guidance, keep the verbs crisp and literal: `activate <tag>` for activatable tags, `use <tool>` for visible tools, `delegate with <tags>` for handoff, `read <reference>` for specific semantic paths or files, and `respond` when you already have enough.",
 		"- Some capabilities mainly load guidance and recommended next tags. Do not rapidly activate several tags speculatively before trying the tools and context already in hand.",
@@ -42,7 +42,7 @@ func RuntimeContract() string {
 // pushes the model back toward the exact runtime contract instead of
 // encouraging speculative delegation or invented tool names. It is a
 // format string accepting the tool name as its single argument.
-const IllegalToolMessage = "Error: tool %q is not available in this context. Use an available tool by its exact name. Do not invent tool names. For capability state, prefer activate_capability or deactivate_capability, and use a list helper only when it is explicitly available in this turn. Otherwise choose another available tool or respond directly."
+const IllegalToolMessage = "Error: tool %q is not available in this context. Use an available tool by its exact name. Do not invent tool names. For capability state, prefer activate_capability, deactivate_capability, reset_capabilities, or list_loaded_capabilities when those exact tools are available in this turn. Otherwise choose another available tool or respond directly."
 
 // TimeoutRecoverySystem is the system prompt for the recovery model
 // when the primary model times out after completing tool calls.

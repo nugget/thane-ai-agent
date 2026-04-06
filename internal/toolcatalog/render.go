@@ -26,8 +26,8 @@ func RenderCapabilityActivationDescription(entries []CapabilitySurface) string {
 	var sb strings.Builder
 	sb.WriteString("Activate a capability to load its tools and context into YOUR current conversation. ")
 	sb.WriteString("This modifies your own runtime — it cannot be delegated. ")
-	sb.WriteString(fmt.Sprintf("The only valid capability tools are `%s`, `%s`, and `%s`; do not invent per-capability tool names. ",
-		actionTools.Activate, actionTools.Deactivate, actionTools.List))
+	sb.WriteString(fmt.Sprintf("The only valid capability tools are `%s`, `%s`, `%s`, and `%s`; do not invent per-capability tool names. ",
+		actionTools.Activate, actionTools.Deactivate, actionTools.Reset, actionTools.List))
 	sb.WriteString(fmt.Sprintf("Delegates get capabilities via the tags parameter on `%s`.\n\n", actionTools.Delegate))
 	sb.WriteString("Treat capability activation like a coarse-to-fine menu: start with one broad tag, read the newly loaded context, and only then decide whether to activate a narrower tag.\n\n")
 	sb.WriteString("Capability menu:\n")
@@ -52,8 +52,8 @@ func RenderCapabilityActivationDescription(entries []CapabilitySurface) string {
 		}
 	}
 
-	sb.WriteString(fmt.Sprintf("\nUse %s to see which tags are currently loaded, and %s when done to keep your tool set focused.",
-		actionTools.List, actionTools.Deactivate))
+	sb.WriteString(fmt.Sprintf("\nUse %s to see which tags are currently loaded, %s to return to baseline, and %s when you only want to drop one specific tag.",
+		actionTools.List, actionTools.Reset, actionTools.Deactivate))
 	return sb.String()
 }
 

@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -11,6 +12,7 @@ import (
 type mockCapabilityManager struct {
 	activeTags map[string]bool
 	allTags    map[string]bool // valid tag names
+	baseline   map[string]bool
 }
 
 func newMockCapabilityManager(validTags ...string) *mockCapabilityManager {
@@ -38,6 +40,19 @@ func (m *mockCapabilityManager) DropCapability(_ context.Context, tag string) er
 	}
 	delete(m.activeTags, tag)
 	return nil
+}
+
+func (m *mockCapabilityManager) ResetCapabilities(_ context.Context) ([]string, error) {
+	var dropped []string
+	for tag := range m.activeTags {
+		if m.baseline[tag] {
+			continue
+		}
+		dropped = append(dropped, tag)
+		delete(m.activeTags, tag)
+	}
+	sort.Strings(dropped)
+	return dropped, nil
 }
 
 func (m *mockCapabilityManager) ActiveTags(_ context.Context) map[string]bool {
@@ -158,6 +173,48 @@ func TestListLoadedCapabilities(t *testing.T) {
 	}
 	if !strings.Contains(result, "\"always_active\":true") {
 		t.Fatalf("result = %q, want always_active metadata", result)
+	}
+}
+
+func TestResetCapabilities(t *testing.T) {
+	mgr := newMockCapabilityManager("forge", "search", "core")
+	mgr.activeTags["forge"] = true
+	mgr.activeTags["search"] = true
+	mgr.activeTags["core"] = true
+	mgr.baseline = map[string]bool{"core": true}
+
+	manifest := []CapabilityManifest{
+		{Tag: "forge", Description: "Forge tools", Tools: []string{"forge_pr_get"}},
+		{Tag: "search", Description: "Search tools", Tools: []string{"web_fetch"}},
+		{Tag: "core", Description: "Core tools", Tools: []string{"thane_delegate"}, AlwaysActive: true},
+	}
+
+	reg := NewEmptyRegistry()
+	reg.SetCapabilityTools(mgr, manifest)
+
+	tool := reg.Get("reset_capabilities")
+	if tool == nil {
+		t.Fatal("reset_capabilities not registered")
+	}
+
+	result, err := tool.Handler(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("reset_capabilities error: %v", err)
+	}
+	if !strings.Contains(result, "Capability state reset to baseline.") {
+		t.Fatalf("result = %q, want baseline-reset confirmation", result)
+	}
+	if !strings.Contains(result, "Deactivated: forge, search.") {
+		t.Fatalf("result = %q, want dropped tag list", result)
+	}
+	if !strings.Contains(result, "Active: core.") {
+		t.Fatalf("result = %q, want remaining baseline tag list", result)
+	}
+	if mgr.activeTags["forge"] || mgr.activeTags["search"] {
+		t.Fatalf("activeTags = %#v, want only baseline tags left", mgr.activeTags)
+	}
+	if !mgr.activeTags["core"] {
+		t.Fatalf("activeTags = %#v, want core to remain active", mgr.activeTags)
 	}
 }
 
@@ -322,10 +379,11 @@ func TestRegistryFilterByTags_AlwaysAvailable(t *testing.T) {
 	reg.Register(&Tool{Name: "get_state", Description: "HA state"})
 	reg.Register(&Tool{Name: "web_search", Description: "Search"})
 	// AlwaysAvailable meta-tools (like activate_capability, deactivate_capability,
-	// and list_loaded_capabilities)
+	// list_loaded_capabilities, and reset_capabilities)
 	reg.Register(&Tool{Name: "activate_capability", Description: "Activate a tag", AlwaysAvailable: true})
 	reg.Register(&Tool{Name: "deactivate_capability", Description: "Deactivate a tag", AlwaysAvailable: true})
 	reg.Register(&Tool{Name: "list_loaded_capabilities", Description: "List loaded tags", AlwaysAvailable: true})
+	reg.Register(&Tool{Name: "reset_capabilities", Description: "Reset capability state", AlwaysAvailable: true})
 	// Untagged tool WITHOUT AlwaysAvailable — should be filtered out
 	reg.Register(&Tool{Name: "plain_untagged", Description: "Not tagged, not meta"})
 
@@ -343,25 +401,25 @@ func TestRegistryFilterByTags_AlwaysAvailable(t *testing.T) {
 		{
 			name:    "always-available tools survive ha-only filter",
 			tags:    []string{"ha"},
-			wantIn:  []string{"get_state", "activate_capability", "deactivate_capability", "list_loaded_capabilities"},
+			wantIn:  []string{"get_state", "activate_capability", "deactivate_capability", "list_loaded_capabilities", "reset_capabilities"},
 			wantOut: []string{"web_search", "plain_untagged"},
 		},
 		{
 			name:    "always-available tools survive search-only filter",
 			tags:    []string{"search"},
-			wantIn:  []string{"web_search", "activate_capability", "deactivate_capability", "list_loaded_capabilities"},
+			wantIn:  []string{"web_search", "activate_capability", "deactivate_capability", "list_loaded_capabilities", "reset_capabilities"},
 			wantOut: []string{"get_state", "plain_untagged"},
 		},
 		{
 			name:    "always-available tools survive unknown-tag filter",
 			tags:    []string{"nonexistent"},
-			wantIn:  []string{"activate_capability", "deactivate_capability", "list_loaded_capabilities"},
+			wantIn:  []string{"activate_capability", "deactivate_capability", "list_loaded_capabilities", "reset_capabilities"},
 			wantOut: []string{"get_state", "web_search", "plain_untagged"},
 		},
 		{
 			name:   "nil tags returns everything",
 			tags:   nil,
-			wantIn: []string{"get_state", "web_search", "activate_capability", "deactivate_capability", "list_loaded_capabilities", "plain_untagged"},
+			wantIn: []string{"get_state", "web_search", "activate_capability", "deactivate_capability", "list_loaded_capabilities", "reset_capabilities", "plain_untagged"},
 		},
 	}
 

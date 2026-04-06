@@ -12,7 +12,8 @@ import (
 )
 
 // setupCapabilityLoop builds a Loop with capability tags configured and the
-// activate_capability / deactivate_capability tools registered. This mirrors the
+// activate_capability / deactivate_capability / reset_capabilities tools
+// registered. This mirrors the
 // production wiring in cmd/thane/main.go.
 func setupCapabilityLoop(mock *mockLLM, extraNames []string, capTags map[string]config.CapabilityTagConfig) *Loop {
 	loop := buildTestLoop(mock, extraNames)
@@ -190,7 +191,7 @@ func TestRunResponseSurfacesEffectiveToolsAndLoadedCapabilities(t *testing.T) {
 	if !slices.Contains(resp.EffectiveTools, "get_state") {
 		t.Fatalf("EffectiveTools = %#v, want get_state", resp.EffectiveTools)
 	}
-	for _, toolName := range []string{"activate_capability", "deactivate_capability", "list_loaded_capabilities"} {
+	for _, toolName := range []string{"activate_capability", "deactivate_capability", "reset_capabilities", "list_loaded_capabilities"} {
 		if !slices.Contains(resp.EffectiveTools, toolName) {
 			t.Fatalf("EffectiveTools = %#v, missing %q", resp.EffectiveTools, toolName)
 		}

@@ -81,6 +81,7 @@ type LoadedCapabilityEntry struct {
 type CapabilityActionTools struct {
 	Activate   string `json:"activate"`
 	Deactivate string `json:"deactivate"`
+	Reset      string `json:"reset,omitempty"`
 	List       string `json:"list,omitempty"`
 	Delegate   string `json:"delegate,omitempty"`
 }
@@ -101,6 +102,7 @@ func defaultCapabilityActionTools(includeDelegate bool) CapabilityActionTools {
 	tools := CapabilityActionTools{
 		Activate:   "activate_capability",
 		Deactivate: "deactivate_capability",
+		Reset:      "reset_capabilities",
 		List:       "list_loaded_capabilities",
 	}
 	if includeDelegate {
@@ -266,6 +268,7 @@ var builtinToolSpecs = map[string]BuiltinToolSpec{
 	"list_contacts":               {CanonicalID: "native:list_contacts", Source: NativeToolSource, DefaultTags: []string{"contacts"}},
 	"list_entities":               {CanonicalID: "native:list_entities", Source: NativeToolSource, DefaultTags: []string{"ha", "homeassistant"}},
 	"list_loaded_capabilities":    {CanonicalID: "native:list_loaded_capabilities", Source: NativeToolSource},
+	"reset_capabilities":          {CanonicalID: "native:reset_capabilities", Source: NativeToolSource},
 	"list_tasks":                  {CanonicalID: "native:list_tasks", Source: NativeToolSource, DefaultTags: []string{"scheduler"}},
 	"logs_query":                  {CanonicalID: "native:logs_query", Source: NativeToolSource, DefaultTags: []string{"diagnostics"}},
 	"lookup_contact":              {CanonicalID: "native:lookup_contact", Source: NativeToolSource, DefaultTags: []string{"contacts"}},

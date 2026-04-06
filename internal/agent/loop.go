@@ -559,6 +559,28 @@ func (l *Loop) DropCapability(ctx context.Context, tag string) error {
 	return nil
 }
 
+// ResetCapabilities returns the current Run to baseline capability
+// state by dropping all user-activated tags while preserving
+// always-active, protected, and pinned tags.
+func (l *Loop) ResetCapabilities(ctx context.Context) ([]string, error) {
+	scope := capabilityScopeFromContext(ctx)
+	if scope == nil {
+		return nil, fmt.Errorf("no capability scope in context")
+	}
+
+	dropped := scope.UserActivatedTags()
+	sort.Strings(dropped)
+	for _, tag := range dropped {
+		if err := scope.Drop(tag); err != nil {
+			return nil, err
+		}
+	}
+
+	l.updateLastRunTags(scope)
+	l.logger.Info("capability state reset to baseline", "dropped_tags", dropped)
+	return dropped, nil
+}
+
 // updateLastRunTags copies the scope's active tags into lastRunTags
 // so the dashboard (which has no context) can display current state.
 func (l *Loop) updateLastRunTags(scope *capabilityScope) {
@@ -816,6 +838,10 @@ func (l *Loop) repairCapabilityToolCall(tc llm.ToolCall) (llm.ToolCall, bool) {
 		if tc.Function.Arguments == nil {
 			tc.Function.Arguments = map[string]any{}
 		}
+		return tc, true
+	case "reset_capability", "reset_capabilities", "reset_loaded_capabilities", "reset_capability_state", "restore_capability_baseline":
+		tc.Function.Name = "reset_capabilities"
+		tc.Function.Arguments = map[string]any{}
 		return tc, true
 	case "request_capability", "load_capability":
 		if tag, ok := l.resolveCapabilityTagAlias(extractCapabilityTagArg(tc.Function.Arguments)); ok {

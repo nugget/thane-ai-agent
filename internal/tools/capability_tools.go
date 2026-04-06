@@ -18,6 +18,9 @@ type CapabilityManager interface {
 	RequestCapability(ctx context.Context, tag string) error
 	// DropCapability deactivates a capability tag for the current Run.
 	DropCapability(ctx context.Context, tag string) error
+	// ResetCapabilities drops all voluntary tags for the current Run,
+	// returning the tags that were removed.
+	ResetCapabilities(ctx context.Context) ([]string, error)
 	// ActiveTags returns the set of currently active tags for the Run.
 	ActiveTags(ctx context.Context) map[string]bool
 }
@@ -26,8 +29,9 @@ type CapabilityManager interface {
 type CapabilityManifest = toolcatalog.CapabilitySurface
 
 // SetCapabilityTools adds activate_capability, deactivate_capability,
-// and list_loaded_capabilities tools to the registry. These tools let
-// the agent inspect and mutate capability tags mid-conversation.
+// reset_capabilities, and list_loaded_capabilities tools to the
+// registry. These tools let the agent inspect and mutate capability
+// tags mid-conversation.
 //
 // These tools are intentionally not assigned to any tag group. They
 // live in the base registry and survive all tag filtering, ensuring the
@@ -41,6 +45,7 @@ func (r *Registry) SetCapabilityTools(mgr CapabilityManager, manifest []Capabili
 	}
 	r.registerActivateCapability(mgr, manifest, tagManifest)
 	r.registerDeactivateCapability(mgr, tagManifest)
+	r.registerResetCapabilities(mgr, tagManifest)
 	r.registerListLoadedCapabilities(mgr, tagManifest)
 }
 
@@ -144,6 +149,59 @@ func (r *Registry) registerDeactivateCapability(mgr CapabilityManager, tagManife
 				}
 				sort.Strings(tags)
 				fmt.Fprintf(&result, " Active: %s.", strings.Join(tags, ", "))
+			}
+			return result.String(), nil
+		},
+	})
+}
+
+// registerResetCapabilities registers the reset_capabilities tool.
+func (r *Registry) registerResetCapabilities(mgr CapabilityManager, tagManifest map[string]CapabilityManifest) {
+	r.Register(&Tool{
+		Name:            "reset_capabilities",
+		AlwaysAvailable: true,
+		Description: "Reset your current conversation back to baseline capability state by deactivating all voluntary tags at once. " +
+			"Always-active, protected, and channel-pinned tags remain loaded. Use when the loop feels too widened or you want to return to the channel's default stance.",
+		Parameters: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{},
+		},
+		Handler: func(ctx context.Context, _ map[string]any) (string, error) {
+			dropped, err := mgr.ResetCapabilities(ctx)
+			if err != nil {
+				return "", err
+			}
+
+			active := mgr.ActiveTags(ctx)
+			remaining := make([]string, 0, len(active))
+			for tag, enabled := range active {
+				if enabled {
+					remaining = append(remaining, tag)
+				}
+			}
+			sort.Strings(remaining)
+
+			if len(dropped) == 0 {
+				if len(remaining) == 0 {
+					return "Capability state is already at baseline.", nil
+				}
+				return fmt.Sprintf("Capability state is already at baseline. Active: %s.", strings.Join(remaining, ", ")), nil
+			}
+
+			var result strings.Builder
+			fmt.Fprintf(&result, "Capability state reset to baseline. Deactivated: %s.", strings.Join(dropped, ", "))
+			var removedTools []string
+			for _, tag := range dropped {
+				if manifest, ok := tagManifest[tag]; ok {
+					removedTools = append(removedTools, manifest.Tools...)
+				}
+			}
+			if len(removedTools) > 0 {
+				sort.Strings(removedTools)
+				fmt.Fprintf(&result, " Tools removed: %s.", strings.Join(removedTools, ", "))
+			}
+			if len(remaining) > 0 {
+				fmt.Fprintf(&result, " Active: %s.", strings.Join(remaining, ", "))
 			}
 			return result.String(), nil
 		},

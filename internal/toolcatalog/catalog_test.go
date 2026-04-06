@@ -85,6 +85,9 @@ func TestRenderLoadedCapabilitySummary_EmptyStateExplainsAvailability(t *testing
 	if !strings.Contains(summary, "\"list\":\"list_loaded_capabilities\"") {
 		t.Fatalf("summary = %q, want list_loaded_capabilities helper", summary)
 	}
+	if !strings.Contains(summary, "\"reset\":\"reset_capabilities\"") {
+		t.Fatalf("summary = %q, want reset_capabilities helper", summary)
+	}
 }
 
 func TestRenderCapabilityManifestMarkdown_UsesExactToolNames(t *testing.T) {
@@ -97,6 +100,9 @@ func TestRenderCapabilityManifestMarkdown_UsesExactToolNames(t *testing.T) {
 	}
 	if !strings.Contains(manifest, "\"activate\":\"activate_capability\"") {
 		t.Fatalf("manifest = %q, want activate_capability example", manifest)
+	}
+	if !strings.Contains(manifest, "\"reset\":\"reset_capabilities\"") {
+		t.Fatalf("manifest = %q, want reset_capabilities example", manifest)
 	}
 	if !strings.Contains(manifest, "\"list\":\"list_loaded_capabilities\"") {
 		t.Fatalf("manifest = %q, want list_loaded_capabilities example", manifest)
@@ -133,6 +139,9 @@ func TestRenderCapabilityActivationDescription_ShowsMenuTags(t *testing.T) {
 
 	if !strings.Contains(desc, "coarse-to-fine menu") {
 		t.Fatalf("description = %q, want coarse-to-fine guidance", desc)
+	}
+	if !strings.Contains(desc, "`reset_capabilities`") {
+		t.Fatalf("description = %q, want reset_capabilities exact tool name", desc)
 	}
 	if !strings.Contains(desc, "**development**") {
 		t.Fatalf("description = %q, want development menu bullet", desc)
