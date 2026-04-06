@@ -1,4 +1,5 @@
 ---
+kind: decision_tree
 tags: [media]
 ---
 

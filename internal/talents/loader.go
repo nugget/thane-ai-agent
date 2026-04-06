@@ -28,6 +28,13 @@ type Talent struct {
 	Content string   // Markdown content (frontmatter stripped)
 }
 
+// Frontmatter captures the subset of markdown metadata Thane currently
+// understands for talents and tagged KB articles.
+type Frontmatter struct {
+	Tags []string
+	Kind string
+}
+
 // listFiles returns a sorted slice of .md filenames in l.dir.
 // Returns nil, nil when dir is unset or does not exist.
 func (l *Loader) listFiles() ([]string, error) {
@@ -67,8 +74,8 @@ func (l *Loader) Talents() ([]Talent, error) {
 			return nil, fmt.Errorf("read talent %s: %w", f, err)
 		}
 		name := strings.TrimSuffix(f, ".md")
-		tags, content := ParseFrontmatter(string(data))
-		ts = append(ts, Talent{Name: name, Tags: tags, Content: content})
+		meta, content := ParseFrontmatterMetadata(string(data))
+		ts = append(ts, Talent{Name: name, Tags: meta.Tags, Content: content})
 	}
 	return ts, nil
 }
@@ -117,8 +124,16 @@ func shouldIncludeTalent(t Talent, activeTags map[string]bool) bool {
 //	tags: [ha, physical]
 //	---
 func ParseFrontmatter(raw string) ([]string, string) {
+	meta, content := ParseFrontmatterMetadata(raw)
+	return meta.Tags, content
+}
+
+// ParseFrontmatterMetadata extracts the supported frontmatter fields and
+// returns both the parsed metadata and the stripped body content. Unknown
+// keys are ignored.
+func ParseFrontmatterMetadata(raw string) (Frontmatter, string) {
 	if !strings.HasPrefix(raw, "---") {
-		return nil, raw
+		return Frontmatter{}, raw
 	}
 
 	// Find the closing "---" delimiter.
@@ -129,47 +144,54 @@ func ParseFrontmatter(raw string) ([]string, string) {
 	} else if len(rest) > 1 && rest[0] == '\r' && rest[1] == '\n' {
 		rest = rest[2:]
 	} else {
-		return nil, raw // No newline after opening ---
+		return Frontmatter{}, raw // No newline after opening ---
 	}
 
 	closeIdx := strings.Index(rest, "\n---")
 	if closeIdx < 0 {
-		return nil, raw // No closing ---
+		return Frontmatter{}, raw // No closing ---
 	}
 
 	frontmatter := rest[:closeIdx]
 	content := rest[closeIdx+4:] // Skip "\n---"
 	content = strings.TrimLeft(content, "\r\n")
 
-	tags := parseTagsLine(frontmatter)
-	return tags, content
+	meta := parseFrontmatterLines(frontmatter)
+	return meta, content
 }
 
-// parseTagsLine extracts tags from a "tags: [a, b, c]" line within
-// frontmatter. Returns nil if no tags line is found.
-func parseTagsLine(frontmatter string) []string {
+// parseFrontmatterLines extracts the currently supported metadata keys
+// from frontmatter. Unknown keys are ignored.
+func parseFrontmatterLines(frontmatter string) Frontmatter {
+	var meta Frontmatter
 	for _, line := range strings.Split(frontmatter, "\n") {
 		line = strings.TrimSpace(line)
-		if !strings.HasPrefix(line, "tags:") {
+		switch {
+		case strings.HasPrefix(line, "tags:"):
+			value := strings.TrimPrefix(line, "tags:")
+			value = strings.TrimSpace(value)
+
+			// Handle [a, b, c] format.
+			value = strings.TrimPrefix(value, "[")
+			value = strings.TrimSuffix(value, "]")
+
+			var tags []string
+			for _, part := range strings.Split(value, ",") {
+				tag := strings.TrimSpace(part)
+				if tag != "" {
+					tags = append(tags, tag)
+				}
+			}
+			meta.Tags = tags
+		case strings.HasPrefix(line, "kind:"):
+			value := strings.TrimSpace(strings.TrimPrefix(line, "kind:"))
+			value = strings.Trim(value, `"'`)
+			meta.Kind = value
+		default:
 			continue
 		}
-		value := strings.TrimPrefix(line, "tags:")
-		value = strings.TrimSpace(value)
-
-		// Handle [a, b, c] format.
-		value = strings.TrimPrefix(value, "[")
-		value = strings.TrimSuffix(value, "]")
-
-		var tags []string
-		for _, part := range strings.Split(value, ",") {
-			tag := strings.TrimSpace(part)
-			if tag != "" {
-				tags = append(tags, tag)
-			}
-		}
-		return tags
 	}
-	return nil
+	return meta
 }
 
 // ManifestEntry describes a capability tag for the auto-generated manifest.

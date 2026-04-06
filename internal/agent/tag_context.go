@@ -36,6 +36,7 @@ type TagContextAssembler struct {
 type kbArticle struct {
 	Path string   // absolute file path
 	Tags []string // from frontmatter
+	Kind string   // frontmatter kind: decision_tree or empty/article
 	Name string   // filename without .md
 }
 
@@ -106,7 +107,7 @@ func (a *TagContextAssembler) Build(ctx context.Context, activeTags map[string]b
 		}
 		// Strip frontmatter before injection — the model doesn't need
 		// the YAML metadata, just the knowledge content.
-		_, content := talents.ParseFrontmatter(string(data))
+		_, content := talents.ParseFrontmatterMetadata(string(data))
 		data = homeassistant.ResolveInject(ctx, []byte(content), a.haInject, a.logger)
 		a.appendContent(&buf, data)
 		if buf.Len() >= maxTagContextBytes {
@@ -216,14 +217,15 @@ func scanKBArticles(dir string) ([]kbArticle, error) {
 			return nil // skip unreadable files
 		}
 
-		tags, _ := talents.ParseFrontmatter(string(data))
-		if len(tags) == 0 {
+		meta, _ := talents.ParseFrontmatterMetadata(string(data))
+		if len(meta.Tags) == 0 {
 			return nil // untagged KB articles are not auto-loaded
 		}
 
 		articles = append(articles, kbArticle{
 			Path: path,
-			Tags: tags,
+			Tags: meta.Tags,
+			Kind: strings.TrimSpace(meta.Kind),
 			Name: strings.TrimSuffix(d.Name(), ".md"),
 		})
 		return nil
@@ -234,6 +236,12 @@ func scanKBArticles(dir string) ([]kbArticle, error) {
 
 	// Sort for deterministic ordering.
 	sort.Slice(articles, func(i, j int) bool {
+		if articles[i].Kind == "decision_tree" && articles[j].Kind != "decision_tree" {
+			return true
+		}
+		if articles[i].Kind != "decision_tree" && articles[j].Kind == "decision_tree" {
+			return false
+		}
 		return articles[i].Path < articles[j].Path
 	})
 

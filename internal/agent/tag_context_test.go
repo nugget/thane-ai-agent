@@ -153,6 +153,39 @@ func TestBuildSystemPrompt_TagContextDedup(t *testing.T) {
 	}
 }
 
+func TestBuildSystemPrompt_TagContextDecisionTreeFirst(t *testing.T) {
+	kbDir := t.TempDir()
+	os.WriteFile(filepath.Join(kbDir, "article.md"),
+		[]byte("---\ntags: [development]\n---\nARTICLE_MARKER"), 0o644)
+	os.WriteFile(filepath.Join(kbDir, "tree.md"),
+		[]byte("---\nkind: decision_tree\ntags: [development]\n---\nTREE_MARKER"), 0o644)
+
+	capTags := map[string]config.CapabilityTagConfig{
+		"development": {
+			Description:  "Development entry point",
+			AlwaysActive: true,
+		},
+	}
+
+	l := newTagTestLoop()
+	l.SetCapabilityTags(capTags, nil)
+	l.SetTagContextAssembler(NewTagContextAssembler(TagContextAssemblerConfig{
+		CapTags: capTags,
+		KBDir:   kbDir,
+		Logger:  l.logger,
+	}))
+
+	prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello", nil)
+	treeIdx := strings.Index(prompt, "TREE_MARKER")
+	articleIdx := strings.Index(prompt, "ARTICLE_MARKER")
+	if treeIdx < 0 || articleIdx < 0 {
+		t.Fatalf("prompt missing expected markers:\n%s", prompt)
+	}
+	if treeIdx > articleIdx {
+		t.Fatalf("decision tree should precede doctrine article in prompt:\n%s", prompt)
+	}
+}
+
 func TestBuildSystemPrompt_TagContextNoCapTags(t *testing.T) {
 	l := newMinimalLoop()
 	// capTags not set — should not inject any tag context

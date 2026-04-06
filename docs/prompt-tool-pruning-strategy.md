@@ -239,6 +239,19 @@ Each root-tag article should answer only local questions:
 That keeps the documents operator-friendly and avoids recreating the old
 "one immortal encyclopedia" problem in KB form.
 
+### Distinguishing trees from articles
+
+Decision trees and doctrine articles should remain separate documents
+even when they share a tag.
+
+The current working convention is:
+
+- `kind: decision_tree` for navigation or triage documents
+- no `kind` field for ordinary doctrine or knowledge articles
+
+When both exist for the same active tag, decision trees should appear
+first so the model sees navigation scaffolding before richer doctrine.
+
 ## Layer Responsibilities
 
 ### `workspace/core`

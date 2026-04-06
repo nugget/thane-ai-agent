@@ -90,6 +90,22 @@ func TestParseFrontmatter_Tags(t *testing.T) {
 	}
 }
 
+func TestParseFrontmatterMetadata(t *testing.T) {
+	raw := "---\nkind: decision_tree\ntags: [development, forge]\nauthor: test\n---\nBody."
+
+	meta, body := ParseFrontmatterMetadata(raw)
+
+	if body != "Body." {
+		t.Fatalf("body = %q, want %q", body, "Body.")
+	}
+	if meta.Kind != "decision_tree" {
+		t.Fatalf("kind = %q, want decision_tree", meta.Kind)
+	}
+	if got := strings.Join(meta.Tags, ","); got != "development,forge" {
+		t.Fatalf("tags = %q, want development,forge", got)
+	}
+}
+
 func TestFilterByTags(t *testing.T) {
 	all := []Talent{
 		{Name: "core", Tags: nil, Content: "core guidance"},
