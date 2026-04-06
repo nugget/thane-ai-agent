@@ -150,7 +150,7 @@ func (c *AnthropicClient) ChatStream(ctx context.Context, model string, messages
 	anthropicMsgs, systemPrompt := convertToAnthropic(messages)
 	anthropicTools := convertToolsToAnthropic(tools)
 	systemPayload := anthropicSystemPayload(messages, systemPrompt)
-	explicitCaching := anthropicUsesExplicitPromptCaching(systemPayload, anthropicTools)
+	explicitCaching := anthropicUsesExplicitPromptCaching(systemPayload)
 
 	c.logger.Debug("preparing request",
 		"model", model,
@@ -462,18 +462,13 @@ func promptCacheRuns(sections []llm.PromptSection) []promptCacheRun {
 	return runs
 }
 
-func anthropicUsesExplicitPromptCaching(system any, tools []anthropicTool) bool {
+func anthropicUsesExplicitPromptCaching(system any) bool {
 	switch blocks := system.(type) {
 	case []anthropicContent:
 		for _, block := range blocks {
 			if block.CacheControl != nil {
 				return true
 			}
-		}
-	}
-	for _, tool := range tools {
-		if tool.CacheControl != nil {
-			return true
 		}
 	}
 	return false

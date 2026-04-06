@@ -218,6 +218,36 @@ func TestResetCapabilities(t *testing.T) {
 	}
 }
 
+func TestResetCapabilities_TruncatesRemovedTools(t *testing.T) {
+	mgr := newMockCapabilityManager("alpha", "beta", "core")
+	mgr.activeTags["alpha"] = true
+	mgr.activeTags["beta"] = true
+	mgr.activeTags["core"] = true
+	mgr.baseline = map[string]bool{"core": true}
+
+	manifest := []CapabilityManifest{
+		{Tag: "alpha", Tools: []string{"a1", "a2", "a3", "a4", "a5"}},
+		{Tag: "beta", Tools: []string{"b1", "b2", "b3", "b4", "b5"}},
+		{Tag: "core", Tools: []string{"thane_delegate"}, AlwaysActive: true},
+	}
+
+	reg := NewEmptyRegistry()
+	reg.SetCapabilityTools(mgr, manifest)
+
+	tool := reg.Get("reset_capabilities")
+	if tool == nil {
+		t.Fatal("reset_capabilities not registered")
+	}
+
+	result, err := tool.Handler(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("reset_capabilities error: %v", err)
+	}
+	if !strings.Contains(result, "Tools removed: a1, a2, a3, a4, a5, b1, b2, b3, and 2 more.") {
+		t.Fatalf("result = %q, want truncated tool list", result)
+	}
+}
+
 func TestActivateCapability_EmptyTag(t *testing.T) {
 	mgr := newMockCapabilityManager("ha")
 	reg := NewEmptyRegistry()

@@ -257,6 +257,55 @@ func TestAnthropicSystemPayload_UsesPromptSectionsWhenPresent(t *testing.T) {
 	}
 }
 
+func TestAnthropicPromptCacheControl_NotSuppressedByToolCacheBreakpoints(t *testing.T) {
+	tools := convertToolsToAnthropic([]map[string]any{
+		{
+			"type": "function",
+			"function": map[string]any{
+				"name":        "get_state",
+				"description": "Get entity state",
+				"parameters":  map[string]any{"type": "object"},
+			},
+		},
+	})
+	if len(tools) != 1 || tools[0].CacheControl == nil {
+		t.Fatalf("expected tool cache control, got %+v", tools)
+	}
+
+	systemPayload := anthropicSystemPayload([]llm.Message{{Role: "system", Content: "You are a helpful assistant."}}, "You are a helpful assistant.")
+	explicit := anthropicUsesExplicitPromptCaching(systemPayload)
+	if explicit {
+		t.Fatal("plain-string system prompt should not count as explicit prompt caching")
+	}
+
+	ctrl := anthropicPromptCacheControl("You are a helpful assistant.", []anthropicMessage{{Role: "user", Content: "check"}}, tools, explicit)
+	if ctrl == nil || ctrl.Type != "ephemeral" {
+		t.Fatalf("request-level cache_control = %+v, want ephemeral", ctrl)
+	}
+}
+
+func TestAnthropicPromptCacheControl_SuppressedBySectionCacheBreakpoints(t *testing.T) {
+	systemPayload := anthropicSystemPayload([]llm.Message{
+		{
+			Role:    "system",
+			Content: "fallback",
+			Sections: []llm.PromptSection{
+				{Name: "PERSONA", Content: "PERSONA", CacheTTL: "1h"},
+			},
+		},
+	}, "fallback")
+
+	explicit := anthropicUsesExplicitPromptCaching(systemPayload)
+	if !explicit {
+		t.Fatal("sectioned system prompt should count as explicit prompt caching")
+	}
+
+	ctrl := anthropicPromptCacheControl("fallback", []anthropicMessage{{Role: "user", Content: "check"}}, nil, explicit)
+	if ctrl != nil {
+		t.Fatalf("request-level cache_control = %+v, want nil when explicit system block caching is present", ctrl)
+	}
+}
+
 func TestShouldUseAnthropicPromptCaching(t *testing.T) {
 	tests := []struct {
 		name   string

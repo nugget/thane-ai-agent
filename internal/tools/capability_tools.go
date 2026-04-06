@@ -70,6 +70,42 @@ func extractTag(args map[string]any) string {
 	return ""
 }
 
+const maxResetRemovedToolNames = 8
+
+func summarizeRemovedTools(tags []string, tagManifest map[string]CapabilityManifest) string {
+	if len(tags) == 0 {
+		return ""
+	}
+
+	seen := make(map[string]struct{})
+	var removedTools []string
+	for _, tag := range tags {
+		manifest, ok := tagManifest[tag]
+		if !ok {
+			continue
+		}
+		for _, tool := range manifest.Tools {
+			if _, dup := seen[tool]; dup {
+				continue
+			}
+			seen[tool] = struct{}{}
+			removedTools = append(removedTools, tool)
+		}
+	}
+	if len(removedTools) == 0 {
+		return ""
+	}
+
+	sort.Strings(removedTools)
+	if len(removedTools) <= maxResetRemovedToolNames {
+		return fmt.Sprintf(" Tools removed: %s.", strings.Join(removedTools, ", "))
+	}
+
+	shown := removedTools[:maxResetRemovedToolNames]
+	remaining := len(removedTools) - len(shown)
+	return fmt.Sprintf(" Tools removed: %s, and %d more.", strings.Join(shown, ", "), remaining)
+}
+
 // registerActivateCapability registers the activate_capability tool.
 func (r *Registry) registerActivateCapability(mgr CapabilityManager, manifest []CapabilityManifest, tagManifest map[string]CapabilityManifest) {
 	r.Register(&Tool{
@@ -190,15 +226,8 @@ func (r *Registry) registerResetCapabilities(mgr CapabilityManager, tagManifest 
 
 			var result strings.Builder
 			fmt.Fprintf(&result, "Capability state reset to baseline. Deactivated: %s.", strings.Join(dropped, ", "))
-			var removedTools []string
-			for _, tag := range dropped {
-				if manifest, ok := tagManifest[tag]; ok {
-					removedTools = append(removedTools, manifest.Tools...)
-				}
-			}
-			if len(removedTools) > 0 {
-				sort.Strings(removedTools)
-				fmt.Fprintf(&result, " Tools removed: %s.", strings.Join(removedTools, ", "))
+			if removedSummary := summarizeRemovedTools(dropped, tagManifest); removedSummary != "" {
+				result.WriteString(removedSummary)
 			}
 			if len(remaining) > 0 {
 				fmt.Fprintf(&result, " Active: %s.", strings.Join(remaining, ", "))
