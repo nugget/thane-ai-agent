@@ -54,6 +54,7 @@ type Request struct {
 	UsageRole       string        `yaml:"usage_role,omitempty" json:"usage_role,omitempty"`
 	UsageTaskName   string        `yaml:"usage_task_name,omitempty" json:"usage_task_name,omitempty"`
 	SystemPrompt    string        `yaml:"system_prompt,omitempty" json:"system_prompt,omitempty"`
+	FallbackContent string        `yaml:"fallback_content,omitempty" json:"fallback_content,omitempty"`
 }
 
 // RunRequest is kept as a compatibility alias while loops-ng migrates
@@ -823,6 +824,7 @@ func (l *Loop) run(ctx context.Context) {
 			handlerCtx := context.WithValue(iterCtx, iterSummaryKey{}, summary)
 			handlerCtx = context.WithValue(handlerCtx, progressFuncKey{}, l.makeProgressFunc())
 			handlerCtx = withLoopID(handlerCtx, l.id)
+			handlerCtx = withFallbackContent(handlerCtx, l.config.FallbackContent)
 			if handlerErr := l.config.Handler(handlerCtx, event); handlerErr != nil {
 				if errors.Is(handlerErr, ErrNoOp) {
 					noOp = true
@@ -1307,6 +1309,7 @@ func (l *Loop) iterate(ctx context.Context, isSupervisor bool, convID string) (*
 		Hints:           hints,
 		OnProgress:      composeProgressFuncs(l.makeProgressFunc(), l.requestOverride.OnProgress),
 		InitialTags:     mergeUniqueStrings(l.requestBase.InitialTags, l.requestOverride.InitialTags, l.activatedTags),
+		FallbackContent: firstNonEmpty(l.requestOverride.FallbackContent, l.requestBase.FallbackContent, l.config.FallbackContent),
 		MaxIterations:   l.requestOverride.MaxIterations,
 		MaxOutputTokens: l.requestOverride.MaxOutputTokens,
 		ToolTimeout:     l.requestOverride.ToolTimeout,

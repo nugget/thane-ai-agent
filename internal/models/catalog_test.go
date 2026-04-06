@@ -484,6 +484,21 @@ func TestMergeDiscoveredDeployment_PreservesExistingRuntimeMetadataOnZeroValues(
 	}
 }
 
+func TestMergeDiscoveredDeployment_PreservesExistingImageSupportWhenDiscoveryIsFalse(t *testing.T) {
+	dep := &Deployment{
+		SupportsImages: true,
+	}
+
+	mergeDiscoveredDeployment(dep, DiscoveredModel{
+		Name:           "qwen-vl:latest",
+		SupportsImages: false,
+	}, modelproviders.Capabilities{})
+
+	if !dep.SupportsImages {
+		t.Fatal("dep.SupportsImages = false, want sticky true preservation")
+	}
+}
+
 func TestMergeInventory_SkipsNonChatDiscoveredModels(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Models.Resources = map[string]config.ModelServerConfig{

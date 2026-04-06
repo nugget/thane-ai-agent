@@ -37,6 +37,7 @@ type Launch struct {
 	SkipContext       bool                     `yaml:"skip_context,omitempty" json:"skip_context,omitempty"`
 	SkipTagFilter     bool                     `yaml:"skip_tag_filter,omitempty" json:"skip_tag_filter,omitempty"`
 	SystemPrompt      string                   `yaml:"system_prompt,omitempty" json:"system_prompt,omitempty"`
+	FallbackContent   string                   `yaml:"fallback_content,omitempty" json:"fallback_content,omitempty"`
 	MaxIterations     int                      `yaml:"max_iterations,omitempty" json:"max_iterations,omitempty"`
 	MaxOutputTokens   int                      `yaml:"max_output_tokens,omitempty" json:"max_output_tokens,omitempty"`
 	ToolTimeout       time.Duration            `yaml:"tool_timeout,omitempty" json:"tool_timeout,omitempty"`
@@ -62,6 +63,7 @@ type launchJSON struct {
 	SkipContext              bool                     `json:"skip_context,omitempty"`
 	SkipTagFilter            bool                     `json:"skip_tag_filter,omitempty"`
 	SystemPrompt             string                   `json:"system_prompt,omitempty"`
+	FallbackContent          string                   `json:"fallback_content,omitempty"`
 	MaxIterations            int                      `json:"max_iterations,omitempty"`
 	MaxOutputTokens          int                      `json:"max_output_tokens,omitempty"`
 	ToolTimeout              string                   `json:"tool_timeout,omitempty"`
@@ -88,6 +90,7 @@ func (l Launch) MarshalJSON() ([]byte, error) {
 		SkipContext:              l.SkipContext,
 		SkipTagFilter:            l.SkipTagFilter,
 		SystemPrompt:             l.SystemPrompt,
+		FallbackContent:          l.FallbackContent,
 		MaxIterations:            l.MaxIterations,
 		MaxOutputTokens:          l.MaxOutputTokens,
 		ToolTimeout:              durationString(l.ToolTimeout),
@@ -131,6 +134,7 @@ func (l *Launch) UnmarshalJSON(data []byte) error {
 		SkipContext:              wire.SkipContext,
 		SkipTagFilter:            wire.SkipTagFilter,
 		SystemPrompt:             wire.SystemPrompt,
+		FallbackContent:          wire.FallbackContent,
 		MaxIterations:            wire.MaxIterations,
 		MaxOutputTokens:          wire.MaxOutputTokens,
 		ToolTimeout:              toolTimeout,
@@ -178,6 +182,7 @@ func (l *Launch) requestOverride() Request {
 		Hints:           cloneStringMap(l.Hints),
 		InitialTags:     append([]string(nil), l.InitialTags...),
 		OnProgress:      l.OnProgress,
+		FallbackContent: l.FallbackContent,
 		MaxIterations:   l.MaxIterations,
 		MaxOutputTokens: l.MaxOutputTokens,
 		ToolTimeout:     l.ToolTimeout,

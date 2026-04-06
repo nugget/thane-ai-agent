@@ -232,6 +232,11 @@ type Config struct {
 	// "source" to "metacognitive" instead of "loop").
 	Hints map[string]string
 
+	// FallbackContent is static text used when the loop's nested agent run
+	// or direct request/reply execution finishes without any user-visible
+	// content. Interactive loops can set this to guarantee a reply.
+	FallbackContent string
+
 	// Setup is called by [Registry.SpawnLoop] after [New] but before
 	// [Loop.Start]. Use it to register tools or perform other setup
 	// that requires a *Loop reference before the goroutine launches.

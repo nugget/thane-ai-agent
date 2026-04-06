@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -544,7 +545,7 @@ func (p *Publisher) publishAvailability(ctx context.Context, cm *autopaho.Connec
 		QoS:     1,
 		Retain:  true,
 	}); err != nil {
-		if status == "offline" && strings.Contains(err.Error(), "no connection available") {
+		if status == "offline" && isMQTTNoConnectionError(err) {
 			p.logger.Debug("mqtt offline availability publish skipped",
 				"status", status,
 				"error", err,
@@ -556,6 +557,16 @@ func (p *Publisher) publishAvailability(ctx context.Context, cm *autopaho.Connec
 	} else {
 		p.logger.Info("mqtt availability published", "status", status)
 	}
+}
+
+func isMQTTNoConnectionError(err error) bool {
+	for err != nil {
+		if strings.Contains(err.Error(), "no connection available") {
+			return true
+		}
+		err = errors.Unwrap(err)
+	}
+	return false
 }
 
 // --- Subscriptions ---

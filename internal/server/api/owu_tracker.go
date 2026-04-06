@@ -12,6 +12,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/events"
 	"github.com/nugget/thane-ai-agent/internal/loop"
 	"github.com/nugget/thane-ai-agent/internal/memory"
+	"github.com/nugget/thane-ai-agent/internal/prompts"
 	"github.com/nugget/thane-ai-agent/internal/toolcatalog"
 )
 
@@ -185,7 +186,14 @@ func (t *OWUTracker) ensureConvLoop(_ context.Context, convID, displayName strin
 			// Fan-out: forward agent stream events to both the HTTP
 			// streaming callback and the loop progress func.
 			combined := fanOutStream(w.callback, progressStream)
+			fallbackContent := loop.FallbackContent(hCtx)
+			if w.req != nil && w.req.FallbackContent == "" {
+				w.req.FallbackContent = fallbackContent
+			}
 			resp, err := t.runner.Run(runCtx, w.req, combined)
+			if resp != nil && strings.TrimSpace(resp.Content) == "" && fallbackContent != "" {
+				resp.Content = fallbackContent
+			}
 			w.respCh <- owuResult{resp: resp, err: err}
 			if resp != nil {
 				loop.ReportAgentRun(hCtx, loop.AgentRunSummary{
@@ -200,7 +208,8 @@ func (t *OWUTracker) ensureConvLoop(_ context.Context, convID, displayName strin
 			}
 			return err
 		},
-		ParentID: parentID,
+		ParentID:        parentID,
+		FallbackContent: prompts.InteractiveEmptyResponseFallback,
 		Metadata: map[string]string{
 			"subsystem":       "owu",
 			"category":        "channel",

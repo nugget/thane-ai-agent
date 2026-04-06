@@ -505,7 +505,8 @@ func TestValidate_ChannelTagsValid(t *testing.T) {
 func TestValidate_ChannelTagsBuiltinTagValid(t *testing.T) {
 	cfg := Default()
 	cfg.ChannelTags = map[string][]string{
-		"signal": {"ha", "search"},
+		"signal": {"ha", "search", "interactive"},
+		"owu":    {"interactive", "owu"},
 	}
 
 	if err := cfg.Validate(); err != nil {

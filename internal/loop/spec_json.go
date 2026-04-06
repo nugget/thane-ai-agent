@@ -29,6 +29,7 @@ type specJSON struct {
 	SupervisorQualityFloor int               `json:"supervisor_quality_floor,omitempty"`
 	OnRetrigger            string            `json:"on_retrigger,omitempty"`
 	Hints                  map[string]string `json:"hints,omitempty"`
+	FallbackContent        string            `json:"fallback_content,omitempty"`
 	Metadata               map[string]string `json:"metadata,omitempty"`
 	ParentID               string            `json:"parent_id,omitempty"`
 }
@@ -58,11 +59,16 @@ func (s Spec) MarshalJSON() ([]byte, error) {
 		QualityFloor:           s.QualityFloor,
 		SupervisorContext:      s.SupervisorContext,
 		SupervisorQualityFloor: s.SupervisorQualityFloor,
-		OnRetrigger:            retriggerString(s.OnRetrigger),
 		Hints:                  s.Hints,
+		FallbackContent:        s.FallbackContent,
 		Metadata:               s.Metadata,
 		ParentID:               s.ParentID,
 	}
+	onRetrigger, err := s.OnRetrigger.MarshalText()
+	if err != nil {
+		return nil, err
+	}
+	wire.OnRetrigger = string(onRetrigger)
 	return json.Marshal(wire)
 }
 
@@ -118,6 +124,7 @@ func (s *Spec) UnmarshalJSON(data []byte) error {
 		SupervisorQualityFloor: wire.SupervisorQualityFloor,
 		OnRetrigger:            onRetrigger,
 		Hints:                  cloneStringMap(wire.Hints),
+		FallbackContent:        wire.FallbackContent,
 		Metadata:               cloneStringMap(wire.Metadata),
 		ParentID:               wire.ParentID,
 	}
@@ -138,13 +145,6 @@ func durationString(d time.Duration) string {
 		return ""
 	}
 	return d.String()
-}
-
-func retriggerString(m RetriggerMode) string {
-	if m == RetriggerSingle {
-		return ""
-	}
-	return m.String()
 }
 
 func parseOptionalDuration(raw string) (time.Duration, error) {

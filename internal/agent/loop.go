@@ -59,6 +59,7 @@ type Request struct {
 	ToolTimeout     time.Duration          `json:"-"`               // Optional per-tool timeout (0 = no extra timeout)
 	UsageRole       string                 `json:"-"`               // Optional usage role override (e.g., "delegate")
 	UsageTaskName   string                 `json:"-"`               // Optional usage task name override
+	FallbackContent string                 `json:"-"`               // Optional static fallback text when the run yields no content
 
 	// SystemPrompt, when non-empty, replaces the output of
 	// buildSystemPrompt(). Used by callers that assemble their own
@@ -649,6 +650,12 @@ func (l *Loop) buildSystemPromptWithProfile(ctx context.Context, userMessage str
 
 	// 2. Ego (self-reflection — what have I been noticing/thinking)
 	l.injectEgo(ctx, &sb, mark, seal)
+
+	// 2b. Runtime contract (execution semantics — how should I use tools)
+	mark("RUNTIME CONTRACT")
+	sb.WriteString("\n\n")
+	sb.WriteString(prompts.RuntimeContract())
+	seal()
 
 	// 3. Injected context (knowledge — what do I know)
 	// Re-read inject_files each turn so external changes (e.g. MEMORY.md
@@ -1508,7 +1515,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		DeferMixedText:  true,
 		NudgeOnEmpty:    true,
 		NudgePrompt:     prompts.EmptyResponseNudge,
-		FallbackContent: prompts.EmptyResponseFallback,
+		FallbackContent: firstNonEmpty(req.FallbackContent, prompts.EmptyResponseFallback),
 
 		// Per-iteration tool definitions: recompute effective tools each
 		// iteration so tags activated via activate_capability are reflected.
@@ -2616,6 +2623,15 @@ type historyEntry struct {
 	Role      string `json:"role"`
 	Timestamp string `json:"timestamp"`
 	Text      string `json:"text"`
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 // formatHistoryJSON serializes conversation history as a compact JSON

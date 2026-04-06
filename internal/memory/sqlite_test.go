@@ -41,3 +41,30 @@ func TestSQLiteStoreConversationChannelBindingRoundTrip(t *testing.T) {
 		t.Fatalf("GetAllConversations binding = %#v", all[0].Metadata.ChannelBinding)
 	}
 }
+
+func TestSQLiteStoreGetOrCreateConversation_InvalidMetadataTreatedAsNil(t *testing.T) {
+	store, err := NewSQLiteStore(t.TempDir()+"/memory.db", 100)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	_, err = store.db.Exec(`
+		INSERT INTO conversations (id, created_at, updated_at, metadata)
+		VALUES (?, datetime('now'), datetime('now'), ?)
+	`, "broken-conv", `{"channel_binding":`)
+	if err != nil {
+		t.Fatalf("insert broken conversation: %v", err)
+	}
+
+	conv, err := store.GetOrCreateConversation("broken-conv")
+	if err != nil {
+		t.Fatalf("GetOrCreateConversation: %v", err)
+	}
+	if conv == nil {
+		t.Fatal("GetOrCreateConversation() = nil, want conversation")
+	}
+	if conv.Metadata != nil {
+		t.Fatalf("Metadata = %#v, want nil for invalid stored metadata", conv.Metadata)
+	}
+}

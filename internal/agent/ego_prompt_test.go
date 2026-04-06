@@ -98,6 +98,25 @@ func TestBuildSystemPrompt_NoEgoFile(t *testing.T) {
 	}
 }
 
+func TestBuildSystemPrompt_RuntimeContractIncluded(t *testing.T) {
+	l := newMinimalLoop()
+
+	prompt := l.buildSystemPrompt(context.Background(), "summarize kb:article.md", nil)
+
+	if !strings.Contains(prompt, "## Runtime Contract") {
+		t.Fatal("system prompt should contain runtime contract section")
+	}
+	if !strings.Contains(prompt, "Use only exact tool names") {
+		t.Fatal("runtime contract should teach exact tool naming")
+	}
+	if !strings.Contains(prompt, "`kb:article.md`") {
+		t.Fatal("runtime contract should teach kb: path references")
+	}
+	if !strings.Contains(prompt, "`thane_delegate`") {
+		t.Fatal("runtime contract should mention delegation when top-level tools are gated")
+	}
+}
+
 // --- inject_files tests ---
 
 func TestBuildSystemPrompt_InjectFilesIncluded(t *testing.T) {

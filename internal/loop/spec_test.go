@@ -80,11 +80,12 @@ func TestSpecValidate(t *testing.T) {
 func TestSpecToConfigCopiesMutableFields(t *testing.T) {
 	jitter := 0.4
 	spec := &Spec{
-		Name:         "copy-test",
-		Task:         "Watch the room.",
-		Tags:         []string{"monitoring"},
-		ExcludeTools: []string{"shell_exec"},
-		Jitter:       &jitter,
+		Name:            "copy-test",
+		Task:            "Watch the room.",
+		Tags:            []string{"monitoring"},
+		ExcludeTools:    []string{"shell_exec"},
+		Jitter:          &jitter,
+		FallbackContent: "please try again",
 		Hints: map[string]string{
 			"source": "loop",
 		},
@@ -114,6 +115,9 @@ func TestSpecToConfigCopiesMutableFields(t *testing.T) {
 	}
 	if *spec.Jitter != 0.4 {
 		t.Fatalf("spec.Jitter mutated = %v", *spec.Jitter)
+	}
+	if cfg.FallbackContent != "please try again" {
+		t.Fatalf("cfg.FallbackContent = %q, want %q", cfg.FallbackContent, "please try again")
 	}
 }
 
@@ -218,5 +222,21 @@ func TestSpecJSONInvalidOnRetriggerNamesField(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "on_retrigger") {
 		t.Fatalf("error = %v, want on_retrigger context", err)
+	}
+}
+
+func TestSpecJSONMarshalRejectsUnsupportedRetriggerMode(t *testing.T) {
+	spec := Spec{
+		Name:        "bad",
+		Task:        "watch",
+		OnRetrigger: RetriggerMode(99),
+	}
+
+	_, err := json.Marshal(spec)
+	if err == nil {
+		t.Fatal("expected error for unsupported retrigger mode")
+	}
+	if !strings.Contains(err.Error(), "unsupported retrigger mode") {
+		t.Fatalf("error = %v, want unsupported retrigger mode", err)
 	}
 }

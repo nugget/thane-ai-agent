@@ -287,7 +287,7 @@ func mergeDiscoveredDeployment(dep *Deployment, model DiscoveredModel, caps mode
 	if model.LoadedInstanceID != "" {
 		dep.LoadedInstanceID = model.LoadedInstanceID
 	}
-	dep.SupportsImages = model.SupportsImages
+	dep.SupportsImages = dep.SupportsImages || model.SupportsImages
 	if model.TrainedForToolUse {
 		dep.TrainedForToolUse = true
 	}

@@ -19,6 +19,18 @@ func newTestArchiveStore(t *testing.T) *ArchiveStore {
 	return store
 }
 
+func TestSessionMetadata_MissingSessionReturnsSpecificError(t *testing.T) {
+	store := newTestArchiveStore(t)
+
+	_, err := store.sessionMetadata("missing-session")
+	if err == nil {
+		t.Fatal("sessionMetadata error = nil, want missing session error")
+	}
+	if got, want := err.Error(), "session not found: missing-session"; got != want {
+		t.Fatalf("sessionMetadata error = %q, want %q", got, want)
+	}
+}
+
 func TestArchiveMessages_BasicInsert(t *testing.T) {
 	store := newTestArchiveStore(t)
 

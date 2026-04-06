@@ -105,7 +105,7 @@ func buildScheduledTaskLaunch(ctx context.Context, task *scheduler.Task, exec *s
 		msg = prompts.PeriodicReflectionPrompt(egoContent)
 	}
 
-	seed := buildScheduledTaskLoopProfile(task)
+	profile := buildScheduledTaskLoopProfile(task)
 
 	launch := looppkg.Launch{
 		Spec: looppkg.Spec{
@@ -113,7 +113,7 @@ func buildScheduledTaskLaunch(ctx context.Context, task *scheduler.Task, exec *s
 			Task:       "Execute the scheduled task prompt exactly as requested.",
 			Operation:  looppkg.OperationRequestReply,
 			Completion: looppkg.CompletionNone,
-			Profile:    seed,
+			Profile:    profile,
 			Metadata: map[string]string{
 				"subsystem": "scheduler",
 				"category":  "task",

@@ -814,6 +814,7 @@ talents_dir: ./talents
 #       supervisor_quality_floor: 0
 #       on_retrigger: 0
 #       hints: {}
+#       fallback_content: ""
 #       metadata:
 #         category: observer
 #       parent_id: ""

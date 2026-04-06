@@ -3,6 +3,7 @@ package memory
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -1693,6 +1694,9 @@ func (s *ArchiveStore) sessionMetadata(sessionID string) (*SessionMetadata, erro
 	row := s.db.QueryRow(`SELECT metadata FROM sessions WHERE id = ?`, sessionID)
 	var metaJSON sql.NullString
 	if err := row.Scan(&metaJSON); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, fmt.Errorf("session not found: %s", sessionID)
+		}
 		return nil, fmt.Errorf("load session metadata: %w", err)
 	}
 	if !metaJSON.Valid || strings.TrimSpace(metaJSON.String) == "" {

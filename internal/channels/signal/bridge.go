@@ -18,6 +18,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/logging"
 	"github.com/nugget/thane-ai-agent/internal/loop"
 	"github.com/nugget/thane-ai-agent/internal/memory"
+	"github.com/nugget/thane-ai-agent/internal/prompts"
 	"github.com/nugget/thane-ai-agent/internal/router"
 	"github.com/nugget/thane-ai-agent/internal/toolcatalog"
 )
@@ -474,7 +475,8 @@ func (b *Bridge) ensureSenderLoop(ctx context.Context, sender string) {
 			b.handleMessage(hCtx, env, progressFn)
 			return nil
 		},
-		ParentID: parentID,
+		ParentID:        parentID,
+		FallbackContent: prompts.InteractiveEmptyResponseFallback,
 		Metadata: map[string]string{
 			"subsystem":  "signal",
 			"category":   "channel",
@@ -600,15 +602,17 @@ func (b *Bridge) handleMessage(ctx context.Context, env *Envelope, progressFn fu
 		"source": "signal",
 		"sender": sender,
 	})
+	fallbackContent := loop.FallbackContent(ctx)
 
 	req := &agent.Request{
-		ConversationID: convID,
-		ChannelBinding: channelBinding,
-		Messages:       []agent.Message{{Role: "user", Content: content}},
-		Model:          opts.Model,
-		Hints:          opts.Hints,
-		ExcludeTools:   opts.ExcludeTools,
-		InitialTags:    opts.InitialTags,
+		ConversationID:  convID,
+		ChannelBinding:  channelBinding,
+		Messages:        []agent.Message{{Role: "user", Content: content}},
+		Model:           opts.Model,
+		Hints:           opts.Hints,
+		ExcludeTools:    opts.ExcludeTools,
+		InitialTags:     opts.InitialTags,
+		FallbackContent: fallbackContent,
 	}
 
 	stream := agent.BuildProgressStream(progressFn)
@@ -634,6 +638,9 @@ func (b *Bridge) handleMessage(ctx context.Context, env *Envelope, progressFn fu
 	if err != nil {
 		log.Error("signal agent run failed", "error", err)
 		return
+	}
+	if resp != nil && strings.TrimSpace(resp.Content) == "" && fallbackContent != "" {
+		resp.Content = fallbackContent
 	}
 
 	// Report iteration stats for the loop dashboard.
@@ -719,14 +726,16 @@ func (b *Bridge) handleReaction(ctx context.Context, env *Envelope) {
 		"reaction_emoji":        reaction.Emoji,
 		"target_sent_timestamp": fmt.Sprintf("%d", reaction.TargetSentTimestamp),
 	})
+	fallbackContent := loop.FallbackContent(ctx)
 
 	req := &agent.Request{
-		ConversationID: convID,
-		Messages:       []agent.Message{{Role: "user", Content: content}},
-		Model:          opts.Model,
-		Hints:          opts.Hints,
-		ExcludeTools:   opts.ExcludeTools,
-		InitialTags:    opts.InitialTags,
+		ConversationID:  convID,
+		Messages:        []agent.Message{{Role: "user", Content: content}},
+		Model:           opts.Model,
+		Hints:           opts.Hints,
+		ExcludeTools:    opts.ExcludeTools,
+		InitialTags:     opts.InitialTags,
+		FallbackContent: fallbackContent,
 	}
 
 	resp, err := b.runner.Run(ctx, req, nil)
@@ -747,6 +756,9 @@ func (b *Bridge) handleReaction(ctx context.Context, env *Envelope) {
 	if err != nil {
 		rlog.Error("signal agent run failed (reaction)", "error", err)
 		return
+	}
+	if resp != nil && strings.TrimSpace(resp.Content) == "" && fallbackContent != "" {
+		resp.Content = fallbackContent
 	}
 
 	if agentAlreadySent(resp.ToolsUsed) || resp.Content == "" {

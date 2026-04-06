@@ -154,6 +154,11 @@ type Spec struct {
 	// Hints are merged into Request hints for each iteration.
 	Hints map[string]string `yaml:"hints,omitempty" json:"hints,omitempty"`
 
+	// FallbackContent is static text used when the loop completes a
+	// request/reply run without any user-visible content. Interactive
+	// loops can set this to guarantee a reply.
+	FallbackContent string `yaml:"fallback_content,omitempty" json:"fallback_content,omitempty"`
+
 	// Setup is called by the registry spawn helpers after [New] or
 	// [NewFromSpec] but before [Loop.Start].
 	Setup func(l *Loop) `yaml:"-" json:"-"`
@@ -250,6 +255,7 @@ func (s *Spec) ToConfig() Config {
 		WaitFunc:               ns.WaitFunc,
 		Handler:                ns.Handler,
 		Hints:                  cloneStringMap(ns.Hints),
+		FallbackContent:        ns.FallbackContent,
 		Setup:                  ns.Setup,
 		Metadata:               cloneStringMap(ns.Metadata),
 		ParentID:               ns.ParentID,

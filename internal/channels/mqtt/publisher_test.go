@@ -2,6 +2,8 @@ package mqtt
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -236,6 +238,17 @@ func TestPublisher_SetMessageHandler(t *testing.T) {
 	}
 	if string(gotPayload) != "hello" {
 		t.Errorf("payload = %q, want %q", gotPayload, "hello")
+	}
+}
+
+func TestIsMQTTNoConnectionError(t *testing.T) {
+	err := fmt.Errorf("publish failed: %w", errors.New("no connection available"))
+	if !isMQTTNoConnectionError(err) {
+		t.Fatal("isMQTTNoConnectionError() = false, want true for wrapped connection error")
+	}
+
+	if isMQTTNoConnectionError(errors.New("different failure")) {
+		t.Fatal("isMQTTNoConnectionError() = true, want false for unrelated error")
 	}
 }
 

@@ -14,7 +14,7 @@ func (r *DefinitionRegistry) ApplyPolicy(name string, policy DefinitionPolicy, u
 	}
 	name = strings.TrimSpace(name)
 	if name == "" {
-		return fmt.Errorf("definition name is required")
+		return fmt.Errorf("loop: definition name is required")
 	}
 	state, err := ParseDefinitionPolicyState(string(policy.State))
 	if err != nil {
@@ -52,7 +52,7 @@ func (r *DefinitionRegistry) ClearPolicy(name string, updatedAt time.Time) error
 	}
 	name = strings.TrimSpace(name)
 	if name == "" {
-		return fmt.Errorf("definition name is required")
+		return fmt.Errorf("loop: definition name is required")
 	}
 	if updatedAt.IsZero() {
 		updatedAt = time.Now()

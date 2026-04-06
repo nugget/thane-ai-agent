@@ -207,9 +207,15 @@ func (s *SQLiteStore) GetOrCreateConversation(id string) (*Conversation, error) 
 	if metadata.Valid {
 		meta, err := parseConversationMetadata(metadata.String)
 		if err != nil {
-			return nil, fmt.Errorf("parse conversation metadata: %w", err)
+			if s.logger != nil {
+				s.logger.Warn("conversation metadata is invalid JSON; treating metadata as nil",
+					"conversation_id", id,
+					"error", err,
+				)
+			}
+		} else {
+			conv.Metadata = meta
 		}
-		conv.Metadata = meta
 	}
 	if conv.CreatedAt.IsZero() {
 		conv.CreatedAt = now
