@@ -7,7 +7,6 @@ import (
 	"io/fs"
 	"log/slog"
 	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/agent"
@@ -173,11 +172,12 @@ func buildScheduledTaskLoopProfile(task *scheduler.Task) router.LoopProfile {
 // prompt. Content beyond this limit is truncated with a marker.
 const maxEgoBytes = 16 * 1024
 
-// readEgoMD reads the ego.md file from the workspace. Returns an empty
-// string if the file does not exist (first reflection creates it).
+// readEgoMD reads the ego.md file from the fixed workspace/core root.
+// Returns an empty string if the file does not exist (first reflection
+// creates it).
 // Content is capped at maxEgoBytes to bound prompt size.
 func readEgoMD(workspacePath string, logger *slog.Logger) string {
-	egoPath := filepath.Join(workspacePath, "ego.md")
+	egoPath := coreFilePath(workspacePath, "ego.md")
 	data, err := os.ReadFile(egoPath)
 	if err != nil {
 		if !errors.Is(err, fs.ErrNotExist) {

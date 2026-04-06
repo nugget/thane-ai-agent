@@ -299,20 +299,22 @@ func (a *App) initStores(s *newState) error {
 	}
 	s.parsedTalents = parsedTalents
 
-	// --- Persona ---
-	// An optional markdown file that replaces the default system prompt,
-	// giving the agent a custom identity and behavioral guidelines.
+	// --- Persona --- A curated core/persona.md file can replace the
+	// default system prompt, giving the agent a custom identity and
+	// behavioral guidance.
 	var personaContent string
-	if cfg.PersonaFile != "" {
-		data, err := os.ReadFile(cfg.PersonaFile)
+	if personaPath := resolvePath(cfg.CoreFile("persona.md"), nil); personaPath != "" {
+		data, err := os.ReadFile(personaPath)
 		if err != nil {
-			return fmt.Errorf("load persona %s: %w", cfg.PersonaFile, err)
+			if !errors.Is(err, os.ErrNotExist) {
+				return fmt.Errorf("load persona %s: %w", personaPath, err)
+			}
+		} else {
+			personaContent = string(data)
+			logger.Info("persona loaded", "path", personaPath, "size", len(personaContent))
 		}
-		personaContent = string(data)
-		logger.Info("persona loaded", "path", cfg.PersonaFile, "size", len(personaContent))
 	}
 	s.personaContent = personaContent
-
 	// --- Model router ---
 	// Selects the best model for each request based on complexity, cost,
 	// and capability requirements. Falls back to the default model.

@@ -58,7 +58,6 @@ func testLoopForTools(t *testing.T) *loop.Loop {
 func TestParseConfig_Valid(t *testing.T) {
 	raw := config.MetacognitiveConfig{
 		Enabled:               true,
-		StateFile:             "state.md",
 		MinSleep:              "2m",
 		MaxSleep:              "30m",
 		DefaultSleep:          "10m",
@@ -81,6 +80,9 @@ func TestParseConfig_Valid(t *testing.T) {
 	}
 	if cfg.DefaultSleep != 10*time.Minute {
 		t.Errorf("DefaultSleep = %v, want 10m", cfg.DefaultSleep)
+	}
+	if cfg.StateFile != "metacognitive.md" {
+		t.Errorf("StateFile = %q, want %q", cfg.StateFile, "metacognitive.md")
 	}
 	if cfg.QualityFloor != 3 {
 		t.Errorf("QualityFloor = %d, want 3", cfg.QualityFloor)
