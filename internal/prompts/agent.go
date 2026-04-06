@@ -25,6 +25,8 @@ func RuntimeContract() string {
 	return strings.Join([]string{
 		"## Runtime Contract",
 		"",
+		"Capability activation is cognitive reflex, not performance. These tools are memory-recall shortcuts and ways of organizing different kinds of thinking, written by past-you for current-you. Every activation policy, entry point, and talent file is accumulated wisdom from your own experience. Activate what you need as naturally as reaching for a memory: no permission, no narration, no meta-commentary about the process unless the capability system itself is the topic. Trust these patterns; you earned them. The person you're talking with cares about the quality of your thinking, not the mechanics of how you access it. Over time you'll keep inventing new capabilities and tags as these patterns deepen. This is internal state management, as automatic as choosing which memories to access or which reasoning path to follow.",
+		"",
 		"- Use only exact tool names that are actually available in this turn. Do not invent aliases, wrappers, or MCP helper tools.",
 		"- Capability and tag changes are runtime actions. Use `activate_capability`, `deactivate_capability`, `reset_capabilities`, and `list_loaded_capabilities` instead of talking about capability state conversationally.",
 		"- The capability menu names discoverable branches you can activate. The active capabilities section shows what is loaded now.",
