@@ -12,8 +12,9 @@ Choose the next step deliberately:
 - Activate `contacts` for contact lookup, updates, import, or export.
 - Activate `signal` when the task is specifically about Signal
   messaging.
-- Use `owner` when it is already runtime-asserted and the task depends
-  on authenticated owner identity or owner-specific guidance.
+- Use `owner` when it is already present and the task depends on
+  authenticated owner identity or owner-specific guidance. When
+  present, treat it as trustworthy.
 
 Prefer stable identifiers like exact names plus durable properties over
 guessing from memory alone. If the task spans contact data plus another

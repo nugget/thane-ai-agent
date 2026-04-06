@@ -41,7 +41,7 @@ func RenderCapabilityActivationDescription(entries []CapabilitySurface) string {
 			desc = capabilityDescription(entry)
 		}
 		if entry.Protected {
-			sb.WriteString(fmt.Sprintf("- **%s**: %s (%d tools; protected, runtime-asserted, not manually activatable)\n",
+			sb.WriteString(fmt.Sprintf("- **%s**: %s (%d tools; protected, trustworthy when present, not manually activatable)\n",
 				entry.Tag, desc, len(entry.Tools)))
 		} else {
 			sb.WriteString(fmt.Sprintf("- **%s**: %s (%d tools)\n",

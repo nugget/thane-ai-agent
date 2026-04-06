@@ -149,7 +149,7 @@ func TestRenderCapabilityActivationDescription_ShowsMenuTags(t *testing.T) {
 	if !strings.Contains(desc, "**owner**") {
 		t.Fatalf("description = %q, want protected owner menu bullet", desc)
 	}
-	if !strings.Contains(desc, "protected, runtime-asserted, not manually activatable") {
+	if !strings.Contains(desc, "protected, trustworthy when present, not manually activatable") {
 		t.Fatalf("description = %q, want protected owner status note", desc)
 	}
 }

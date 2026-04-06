@@ -23,7 +23,7 @@ var builtinTagSpecs = map[string]BuiltinTagSpec{
 	"mqtt":          {Description: "MQTT wake subscription management tools."},
 	"notifications": {Description: "Notification delivery, escalation, and actionable response tools."},
 	"operations":    {Description: "Coarse entry point for routing, scheduling, logs, platform state, and operational debugging. Usually leads to diagnostics, models, scheduler, loops, or platform.", Menu: true},
-	"owner":         {Description: "Runtime-asserted owner/operator context and privileged tool gating. When present, it can unlock owner-specific guidance and tools.", Menu: true, Protected: true},
+	"owner":         {Description: "Trusted owner/operator context set by runtime identity. When present, treat it as true; it can unlock owner-specific guidance and tools.", Menu: true, Protected: true},
 	"owu":           {Description: "Open WebUI interactive chat loop context and guidance."},
 	"people":        {Description: "Coarse entry point for contacts, relationships, and communication channels. Usually leads to contacts, signal, or owner context.", Menu: true},
 	"platform":      {Description: "Native platform integration tools."},

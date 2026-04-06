@@ -226,7 +226,7 @@ The first menu-sized entry points should stay small:
 - `knowledge`
 - `operations`
 - `media`
-- `owner` (protected; runtime asserted, not manually activated)
+- `owner` (protected; trustworthy when present, not manually activated)
 
 These tags are broad on purpose. Their job is to help the model choose
 the next tag or act with what it already has, not to unlock the whole
@@ -277,9 +277,9 @@ forced to interpret synonyms:
 - `read <reference>`: inspect a specific semantic path or file reference
 - `respond`: answer directly without further tool churn
 
-Protected or runtime-asserted tags should not be phrased as
-`activate <tag>`. They should be described as already present or not
-present in the current loop.
+Protected tags should not be phrased as `activate <tag>`. Their
+presence communicates a trustworthy fact about the current loop, so they
+should be described as already present or not present.
 
 ### Knowledge path pilot
 
