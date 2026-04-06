@@ -252,6 +252,21 @@ The current working convention is:
 When both exist for the same active tag, decision trees should appear
 first so the model sees navigation scaffolding before richer doctrine.
 
+### Fixed decision-tree verbs
+
+Decision trees should use a tiny stable verb set so the model is not
+forced to interpret synonyms:
+
+- `activate <tag>`: load an activatable capability tag
+- `use <tool>`: call a tool that is already visible in this turn
+- `delegate with <tags>`: hand off bounded work with explicit tags
+- `read <reference>`: inspect a specific semantic path or file reference
+- `respond`: answer directly without further tool churn
+
+Protected or runtime-asserted tags should not be phrased as
+`activate <tag>`. They should be described as already present or not
+present in the current loop.
+
 ## Layer Responsibilities
 
 ### `workspace/core`
