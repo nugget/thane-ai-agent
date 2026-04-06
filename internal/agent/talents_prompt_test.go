@@ -32,3 +32,29 @@ func TestBuildSystemPrompt_TaggedTalentsLoadForActiveTags(t *testing.T) {
 		t.Fatalf("prompt missing untagged talent: %s", prompt)
 	}
 }
+
+func TestBuildSystemPrompt_CommunicationSlicesFollowActiveTags(t *testing.T) {
+	l := newTagTestLoop()
+	parsed := []talents.Talent{
+		{Name: "communication", Tags: nil, Content: "CORE_COMMUNICATION_MARKER"},
+		{Name: "interactive-communication", Tags: []string{"interactive"}, Content: "INTERACTIVE_COMMUNICATION_MARKER"},
+		{Name: "development-communication", Tags: []string{"development", "forge"}, Content: "DEVELOPMENT_COMMUNICATION_MARKER"},
+	}
+	l.SetCapabilityTags(map[string]config.CapabilityTagConfig{
+		"interactive": {Description: "Interactive", AlwaysActive: true},
+		"development": {Description: "Development", AlwaysActive: false},
+		"forge":       {Description: "Forge", AlwaysActive: false},
+	}, parsed)
+
+	prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello", nil)
+
+	if !strings.Contains(prompt, "CORE_COMMUNICATION_MARKER") {
+		t.Fatalf("prompt missing core communication slice: %s", prompt)
+	}
+	if !strings.Contains(prompt, "INTERACTIVE_COMMUNICATION_MARKER") {
+		t.Fatalf("prompt missing interactive communication slice: %s", prompt)
+	}
+	if strings.Contains(prompt, "DEVELOPMENT_COMMUNICATION_MARKER") {
+		t.Fatalf("prompt should not include development communication slice: %s", prompt)
+	}
+}

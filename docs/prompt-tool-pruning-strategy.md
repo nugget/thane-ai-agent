@@ -377,6 +377,11 @@ One concrete cut already landed on this branch: the always-on
 doctrine, with the exhaustive failure tables and tool-specific gotchas
 removed from immortal prompt space.
 
+Another concrete cut now landed as well: `talents/communication.md` was
+reduced to universal communication guidance, while interactive
+conversation behavior and development-writing norms moved into tagged
+talents for `interactive` and `development`/`forge`.
+
 ## Guardrails
 
 - Do not solve prompt bloat by creating a different giant prompt in a
