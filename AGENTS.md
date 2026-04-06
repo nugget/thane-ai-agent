@@ -79,3 +79,20 @@ internal/
 - **File tools** are sandboxed to the configured workspace directory
 - **HA tokens** and **API keys** live in `config.yaml` — keep it `chmod 600`
 - **httpkit** never disables TLS verification by default (`WithTLSInsecureSkipVerify` is opt-in)
+
+## GitHub Collaboration
+
+Leave pull requests as clean and reflective of reality as you can. Open
+review threads, stale PR descriptions, and unchecked test-plan items all
+signal unfinished work to the next reader.
+
+**When addressing review feedback:**
+1. Fix the issue in a commit
+2. Reply to the thread with the fixing commit hash and a one-line explanation
+3. Resolve the conversation
+4. If a comment is intentionally deferred (out of scope, follow-up issue), say so explicitly before resolving — don't silently close without context
+
+**PR hygiene:**
+- Keep the PR description accurate as scope changes
+- Check off test plan items as they are verified
+- Leave unresolved only the threads that still need real work or a decision

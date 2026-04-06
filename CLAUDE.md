@@ -117,6 +117,9 @@ internal/
 ## GitHub Collaboration
 
 Be a good GitHub collaborator. Review threads left open signal to the next reader that work is unfinished — always close the loop.
+Leave pull requests as clean and reflective of reality as you can.
+Stale descriptions, dangling threads, and outdated test-plan checklists
+create confusion for whoever picks the work up next.
 
 **When addressing review feedback:**
 1. Fix the issue in a commit
