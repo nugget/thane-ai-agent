@@ -1,5 +1,5 @@
 ---
-kind: decision_tree
+kind: entry_point
 tags: [people]
 teaser: "Activate when the next move is about contacts, relationships, or channel identity."
 next_tags: [contacts, signal]

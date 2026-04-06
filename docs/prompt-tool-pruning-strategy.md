@@ -195,7 +195,7 @@ This is the opposite of a "browse and load everything" posture.
 ## Progressive Disclosure Model
 
 The current working model is a coarse-to-fine capability menu backed by
-decision-tree documents.
+entry-point documents that lead into a broader decision tree.
 
 The important design choice is that these should be the same documents,
 not two parallel systems:
@@ -227,9 +227,9 @@ These tags are broad on purpose. Their job is to help the model choose
 the next tag or act with what it already has, not to unlock the whole
 world immediately.
 
-### Decision-tree article shape
+### Entry-point document shape
 
-Each root-tag article should answer only local questions:
+Each root-tag entry-point document should answer only local questions:
 
 - what kind of request belongs here
 - what tools or narrower tags are usually relevant next
@@ -239,24 +239,25 @@ Each root-tag article should answer only local questions:
 That keeps the documents operator-friendly and avoids recreating the old
 "one immortal encyclopedia" problem in KB form.
 
-### Distinguishing trees from articles
+### Distinguishing entry points from articles
 
-Decision trees and doctrine articles should remain separate documents
-even when they share a tag.
+Entry points and doctrine articles should remain separate documents even
+when they share a tag.
 
 The current working convention is:
 
-- `kind: decision_tree` for navigation or triage documents
+- `kind: entry_point` for the first navigation or triage document on a
+  path
 - `teaser:` for short pre-activation menu copy
 - `next_tags:` for structured likely follow-on tags
 - no `kind` field for ordinary doctrine or knowledge articles
 
-When both exist for the same active tag, decision trees should appear
+When both exist for the same active tag, entry points should appear
 first so the model sees navigation scaffolding before richer doctrine.
 
-### Fixed decision-tree verbs
+### Fixed tree-navigation verbs
 
-Decision trees should use a tiny stable verb set so the model is not
+Tree navigation should use a tiny stable verb set so the model is not
 forced to interpret synonyms:
 
 - `activate <tag>`: load an activatable capability tag

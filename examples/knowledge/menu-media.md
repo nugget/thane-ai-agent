@@ -1,5 +1,5 @@
 ---
-kind: decision_tree
+kind: entry_point
 tags: [media]
 teaser: "Activate when the next move is about transcripts, feed content, media analysis, or attachments."
 next_tags: [media, feeds, attachments, search]

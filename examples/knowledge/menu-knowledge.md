@@ -1,5 +1,5 @@
 ---
-kind: decision_tree
+kind: entry_point
 tags: [knowledge]
 teaser: "Activate when the next move is about internal docs, kb: references, durable facts, or citations."
 next_tags: [files, memory, search]

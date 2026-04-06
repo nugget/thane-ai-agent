@@ -1,5 +1,5 @@
 ---
-kind: decision_tree
+kind: entry_point
 tags: [home]
 teaser: "Activate when the next move is about the house, devices, rooms, sensors, or automations."
 next_tags: [ha, notifications, awareness]

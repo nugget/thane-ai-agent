@@ -153,12 +153,12 @@ func TestBuildSystemPrompt_TagContextDedup(t *testing.T) {
 	}
 }
 
-func TestBuildSystemPrompt_TagContextDecisionTreeFirst(t *testing.T) {
+func TestBuildSystemPrompt_TagContextEntryPointFirst(t *testing.T) {
 	kbDir := t.TempDir()
 	os.WriteFile(filepath.Join(kbDir, "article.md"),
 		[]byte("---\ntags: [development]\n---\nARTICLE_MARKER"), 0o644)
 	os.WriteFile(filepath.Join(kbDir, "tree.md"),
-		[]byte("---\nkind: decision_tree\ntags: [development]\n---\nTREE_MARKER"), 0o644)
+		[]byte("---\nkind: entry_point\ntags: [development]\n---\nTREE_MARKER"), 0o644)
 
 	capTags := map[string]config.CapabilityTagConfig{
 		"development": {
@@ -182,7 +182,7 @@ func TestBuildSystemPrompt_TagContextDecisionTreeFirst(t *testing.T) {
 		t.Fatalf("prompt missing expected markers:\n%s", prompt)
 	}
 	if treeIdx > articleIdx {
-		t.Fatalf("decision tree should precede doctrine article in prompt:\n%s", prompt)
+		t.Fatalf("entry-point guidance should precede doctrine article in prompt:\n%s", prompt)
 	}
 }
 
@@ -535,7 +535,7 @@ func TestTagContextAssembler_KBArticleTags(t *testing.T) {
 
 func TestTagContextAssembler_KBMenuHints(t *testing.T) {
 	kbDir := t.TempDir()
-	os.WriteFile(filepath.Join(kbDir, "knowledge-tree.md"), []byte("---\nkind: decision_tree\ntags: [knowledge]\nteaser: \"Activate when the next move is about internal docs or durable knowledge.\"\nnext_tags: [files, memory, search]\n---\nTREE"), 0o644)
+	os.WriteFile(filepath.Join(kbDir, "knowledge-tree.md"), []byte("---\nkind: entry_point\ntags: [knowledge]\nteaser: \"Activate when the next move is about internal docs or durable knowledge.\"\nnext_tags: [files, memory, search]\n---\nTREE"), 0o644)
 	os.WriteFile(filepath.Join(kbDir, "knowledge-article.md"), []byte("---\ntags: [knowledge]\n---\nARTICLE"), 0o644)
 
 	a := NewTagContextAssembler(TagContextAssemblerConfig{

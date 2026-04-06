@@ -36,13 +36,13 @@ type TagContextAssembler struct {
 type kbArticle struct {
 	Path     string   // absolute file path
 	Tags     []string // from frontmatter
-	Kind     string   // frontmatter kind: decision_tree or empty/article
-	Teaser   string   // short menu teaser for decision-tree docs
-	NextTags []string // suggested next tags from a decision tree
+	Kind     string   // frontmatter kind: entry_point or empty/article
+	Teaser   string   // short menu teaser for entry-point docs
+	NextTags []string // suggested next tags from an entry point
 	Name     string   // filename without .md
 }
 
-// KBMenuHint captures decision-tree metadata that can be surfaced in
+// KBMenuHint captures entry-point metadata that can be surfaced in
 // the capability menu before a tag is activated.
 type KBMenuHint struct {
 	Teaser   string
@@ -200,7 +200,7 @@ func (a *TagContextAssembler) KBArticleTags() map[string]int {
 }
 
 // KBMenuHints returns one root-menu hint per tag, sourced from tagged
-// KB decision-tree documents. The first teaser encountered for a tag
+// KB entry-point documents. The first teaser encountered for a tag
 // wins, with deterministic ordering provided by scanKBArticles.
 func (a *TagContextAssembler) KBMenuHints() map[string]KBMenuHint {
 	if a == nil {
@@ -208,7 +208,7 @@ func (a *TagContextAssembler) KBMenuHints() map[string]KBMenuHint {
 	}
 	hints := make(map[string]KBMenuHint)
 	for _, article := range a.kbArticles {
-		if article.Kind != "decision_tree" {
+		if !isEntryPointKind(article.Kind) {
 			continue
 		}
 		if strings.TrimSpace(article.Teaser) == "" && len(article.NextTags) == 0 {
@@ -225,6 +225,15 @@ func (a *TagContextAssembler) KBMenuHints() map[string]KBMenuHint {
 		}
 	}
 	return hints
+}
+
+func isEntryPointKind(kind string) bool {
+	switch strings.TrimSpace(kind) {
+	case "entry_point", "decision_tree":
+		return true
+	default:
+		return false
+	}
 }
 
 // scanKBArticles walks the KB directory for .md files with tags:
@@ -275,10 +284,10 @@ func scanKBArticles(dir string) ([]kbArticle, error) {
 
 	// Sort for deterministic ordering.
 	sort.Slice(articles, func(i, j int) bool {
-		if articles[i].Kind == "decision_tree" && articles[j].Kind != "decision_tree" {
+		if isEntryPointKind(articles[i].Kind) && !isEntryPointKind(articles[j].Kind) {
 			return true
 		}
-		if articles[i].Kind != "decision_tree" && articles[j].Kind == "decision_tree" {
+		if !isEntryPointKind(articles[i].Kind) && isEntryPointKind(articles[j].Kind) {
 			return false
 		}
 		return articles[i].Path < articles[j].Path

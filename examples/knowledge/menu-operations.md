@@ -1,5 +1,5 @@
 ---
-kind: decision_tree
+kind: entry_point
 tags: [operations]
 teaser: "Activate when the next move is about logs, routing, scheduling, loop policy, or system debugging."
 next_tags: [diagnostics, models, scheduler, loops, platform]

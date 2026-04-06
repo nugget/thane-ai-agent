@@ -1,5 +1,5 @@
 ---
-kind: decision_tree
+kind: entry_point
 tags: [interactive]
 teaser: "Activate when the next move is about how to behave in a live human conversation."
 next_tags: [signal, owu]

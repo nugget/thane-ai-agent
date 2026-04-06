@@ -1,5 +1,5 @@
 ---
-kind: decision_tree
+kind: entry_point
 tags: [development]
 teaser: "Activate when the next move is about software, repositories, code changes, or release engineering."
 next_tags: [forge, files, search, shell]
