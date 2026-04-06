@@ -7,9 +7,6 @@ next_tags: [files, memory, search]
 
 # Knowledge Decision Tree
 
-Activate this tag when the next move is about understanding, citing,
-editing, or organizing Thane's durable knowledge.
-
 Choose the next move deliberately:
 
 - Need a specific article, dossier, note, or semantic path such as

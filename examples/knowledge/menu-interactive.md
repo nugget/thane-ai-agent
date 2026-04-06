@@ -7,9 +7,6 @@ next_tags: [signal, owu]
 
 # Interactive Decision Tree
 
-Activate this tag for conversational loops where a human counterparty is
-waiting on the answer.
-
 Choose the next step deliberately:
 
 - Activate `signal` when the channel is messaging-centric or the task is

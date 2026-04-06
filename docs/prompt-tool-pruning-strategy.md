@@ -236,6 +236,10 @@ Each root-tag entry-point document should answer only local questions:
 - when to stop narrowing and just use currently visible tools
 - when to delegate instead of serially loading more context
 
+The teaser already did the activation advertisement. Once the tag is
+active, the entry-point body should not waste space repeating that same
+pitch after the heading.
+
 That keeps the documents operator-friendly and avoids recreating the old
 "one immortal encyclopedia" problem in KB form.
 

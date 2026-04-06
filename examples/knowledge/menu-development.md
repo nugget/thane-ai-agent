@@ -7,9 +7,6 @@ next_tags: [forge, files, search, shell]
 
 # Development Decision Tree
 
-Activate this tag when the request is broadly about software, repositories,
-code changes, GitHub work, debugging, or release engineering.
-
 Choose the next step deliberately:
 
 - Activate `forge` when the task is about issues, pull requests, checks,

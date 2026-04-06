@@ -4,9 +4,6 @@ tags: [knowledge]
 
 # Knowledge
 
-Activate `knowledge` when the next move is about internal documents,
-`kb:` references, durable facts, or citations.
-
 Choose the next move deliberately:
 
 - Need a specific article, dossier, note, or semantic path? Activate

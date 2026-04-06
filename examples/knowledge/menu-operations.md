@@ -7,9 +7,6 @@ next_tags: [diagnostics, models, scheduler, loops, platform]
 
 # Operations Decision Tree
 
-Activate this tag when the request is about system health, routing,
-scheduling, logs, loop policy, or operational debugging.
-
 Choose the next step deliberately:
 
 - Activate `diagnostics` for logs, usage, version, or debugging data.

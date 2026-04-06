@@ -7,9 +7,6 @@ next_tags: [contacts, signal]
 
 # People Decision Tree
 
-Activate this tag when the request is about a person, contact record,
-relationship, or communication channel identity.
-
 Choose the next step deliberately:
 
 - Activate `contacts` for contact lookup, updates, import, or export.

@@ -7,9 +7,6 @@ next_tags: [ha, notifications, awareness]
 
 # Home Decision Tree
 
-Activate this tag when the request is about the house, rooms, devices,
-sensors, occupants, or home automations.
-
 Choose the next step deliberately:
 
 - Activate `ha` for Home Assistant state, control, registry, and

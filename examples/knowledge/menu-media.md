@@ -7,9 +7,6 @@ next_tags: [media, feeds, attachments, search]
 
 # Media Decision Tree
 
-Activate this tag when the request is about transcripts, media analysis,
-followed feeds, or media-derived context.
-
 Choose the next step deliberately:
 
 - Use `media` tools for transcript retrieval and saved analysis.
