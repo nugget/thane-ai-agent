@@ -94,7 +94,6 @@ type CapabilityCatalogView struct {
 
 type LoadedCapabilityView struct {
 	Kind               string                  `json:"kind"`
-	ActivationTools    CapabilityActionTools   `json:"activation_tools"`
 	LoadedCapabilities []LoadedCapabilityEntry `json:"loaded_capabilities"`
 }
 
@@ -194,9 +193,9 @@ func BuildLoadedCapabilityEntries(entries []CapabilitySurface, activeTags []stri
 }
 
 func BuildLoadedCapabilityView(entries []CapabilitySurface, activeTags []string, includeDelegate bool) LoadedCapabilityView {
+	_ = includeDelegate
 	return LoadedCapabilityView{
 		Kind:               "loaded_capabilities",
-		ActivationTools:    defaultCapabilityActionTools(includeDelegate),
 		LoadedCapabilities: BuildLoadedCapabilityEntries(entries, activeTags),
 	}
 }
@@ -378,15 +377,11 @@ func RenderLoadedCapabilitySummary(entries []CapabilitySurface, activeTags map[s
 	}
 
 	payload := struct {
-		Kind                       string                  `json:"kind"`
-		CatalogEntriesAreNotLoaded bool                    `json:"catalog_entries_are_not_loaded"`
-		ActivationTools            CapabilityActionTools   `json:"activation_tools"`
-		LoadedCapabilities         []LoadedCapabilityEntry `json:"loaded_capabilities"`
+		Kind               string                  `json:"kind"`
+		LoadedCapabilities []LoadedCapabilityEntry `json:"loaded_capabilities"`
 	}{
-		Kind:                       "loaded_capabilities",
-		CatalogEntriesAreNotLoaded: true,
-		ActivationTools:            defaultCapabilityActionTools(false),
-		LoadedCapabilities:         BuildLoadedCapabilityEntries(entries, names),
+		Kind:               "loaded_capabilities",
+		LoadedCapabilities: BuildLoadedCapabilityEntries(entries, names),
 	}
 
 	data, err := json.Marshal(payload)

@@ -328,9 +328,8 @@ func TestGenerateManifest(t *testing.T) {
 	jsonStr := talent.Content[jsonStart:]
 
 	var parsed struct {
-		Kind                    string `json:"kind"`
-		MenuEntriesAreNotLoaded bool   `json:"menu_entries_are_not_loaded"`
-		Capabilities            map[string]struct {
+		Kind         string `json:"kind"`
+		Capabilities map[string]struct {
 			Status      string `json:"status"`
 			Description string `json:"description"`
 			ToolCount   int    `json:"tool_count"`
@@ -345,9 +344,6 @@ func TestGenerateManifest(t *testing.T) {
 	}
 	if parsed.Kind != "capability_menu" {
 		t.Fatalf("kind = %q, want capability_menu", parsed.Kind)
-	}
-	if !parsed.MenuEntriesAreNotLoaded {
-		t.Fatal("menu_entries_are_not_loaded should be true")
 	}
 
 	// Configured tag: ha

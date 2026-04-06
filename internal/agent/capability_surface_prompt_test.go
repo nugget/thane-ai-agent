@@ -30,9 +30,6 @@ func TestBuildSystemPrompt_ActiveCapabilitiesUseSharedSurface(t *testing.T) {
 	if !strings.Contains(prompt, "## Active Capabilities") {
 		t.Fatalf("prompt missing Active Capabilities section: %s", prompt)
 	}
-	if !strings.Contains(prompt, "Capability and tag changes are runtime actions.") {
-		t.Fatalf("prompt missing capability tool-action framing: %s", prompt)
-	}
 	if !strings.Contains(prompt, "\"kind\":\"loaded_capabilities\"") {
 		t.Fatalf("prompt missing loaded-capabilities kind: %s", prompt)
 	}
@@ -57,9 +54,6 @@ func TestBuildSystemPrompt_ActiveCapabilitiesEmptyStateUsesSharedSurface(t *test
 	prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello", nil)
 	if !strings.Contains(prompt, "## Active Capabilities") {
 		t.Fatalf("prompt missing Active Capabilities section: %s", prompt)
-	}
-	if !strings.Contains(prompt, "Capability and tag changes are runtime actions.") {
-		t.Fatalf("prompt missing capability tool-action framing: %s", prompt)
 	}
 	if !strings.Contains(prompt, "\"kind\":\"loaded_capabilities\"") {
 		t.Fatalf("prompt missing loaded-capabilities kind: %s", prompt)

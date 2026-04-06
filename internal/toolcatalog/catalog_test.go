@@ -82,11 +82,8 @@ func TestRenderLoadedCapabilitySummary_EmptyStateExplainsAvailability(t *testing
 	if !strings.Contains(summary, "\"loaded_capabilities\":[]") {
 		t.Fatalf("summary = %q, want empty loaded_capabilities array", summary)
 	}
-	if !strings.Contains(summary, "\"list\":\"list_loaded_capabilities\"") {
-		t.Fatalf("summary = %q, want list_loaded_capabilities helper", summary)
-	}
-	if !strings.Contains(summary, "\"reset\":\"reset_capabilities\"") {
-		t.Fatalf("summary = %q, want reset_capabilities helper", summary)
+	if strings.Contains(summary, "\"activation_tools\"") {
+		t.Fatalf("summary = %q, want loaded-capabilities summary to stay state-only", summary)
 	}
 }
 
@@ -110,12 +107,6 @@ func TestRenderCapabilityManifestMarkdown_UsesExactToolNames(t *testing.T) {
 	if !strings.Contains(manifest, "\"delegate\":\"thane_delegate\"") {
 		t.Fatalf("manifest = %q, want thane_delegate example", manifest)
 	}
-	if !strings.Contains(manifest, "\"menu_entries_are_not_loaded\":true") {
-		t.Fatalf("manifest = %q, want menu-vs-loaded flag", manifest)
-	}
-	if !strings.Contains(manifest, "\"invented_capability_tool_names_are_invalid\":true") {
-		t.Fatalf("manifest = %q, want anti-invention flag", manifest)
-	}
 	if !strings.Contains(manifest, "\"development\"") {
 		t.Fatalf("manifest = %q, want development menu entry", manifest)
 	}
@@ -124,6 +115,9 @@ func TestRenderCapabilityManifestMarkdown_UsesExactToolNames(t *testing.T) {
 	}
 	if !strings.Contains(manifest, "\"next_tags\":[\"forge\",\"files\",\"web\"]") {
 		t.Fatalf("manifest = %q, want next_tags", manifest)
+	}
+	if strings.Contains(manifest, "\"tag\":\"\"") {
+		t.Fatalf("manifest = %q, want menu entries keyed by tag without empty inner tag fields", manifest)
 	}
 	if strings.Contains(manifest, "\"forge\":{") {
 		t.Fatalf("manifest = %q, want non-menu forge hidden from menu entries", manifest)

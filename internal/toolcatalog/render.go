@@ -64,26 +64,27 @@ func RenderCapabilityManifestMarkdown(entries []CapabilitySurface) string {
 		return ""
 	}
 
+	type capabilityMenuEntry struct {
+		Status      string                    `json:"status"`
+		Description string                    `json:"description"`
+		Teaser      string                    `json:"teaser,omitempty"`
+		NextTags    []string                  `json:"next_tags,omitempty"`
+		ToolCount   int                       `json:"tool_count,omitempty"`
+		Context     *CapabilityContextSummary `json:"context,omitempty"`
+	}
+
 	payload := struct {
-		Kind                              string                            `json:"kind"`
-		MenuEntriesAreNotLoaded           bool                              `json:"menu_entries_are_not_loaded"`
-		InventedCapabilityToolsAreInvalid bool                              `json:"invented_capability_tool_names_are_invalid"`
-		ActivateBroadTagsFirst            bool                              `json:"activate_broad_tags_first"`
-		DeeperTagsAreIntroducedByContext  bool                              `json:"deeper_tags_are_introduced_by_loaded_context"`
-		ActivationTools                   CapabilityActionTools             `json:"activation_tools"`
-		CapabilityMenu                    map[string]CapabilityCatalogEntry `json:"capability_menu"`
+		Kind            string                         `json:"kind"`
+		ActivationTools CapabilityActionTools          `json:"activation_tools"`
+		CapabilityMenu  map[string]capabilityMenuEntry `json:"capability_menu"`
 	}{
-		Kind:                              "capability_menu",
-		MenuEntriesAreNotLoaded:           true,
-		InventedCapabilityToolsAreInvalid: true,
-		ActivateBroadTagsFirst:            true,
-		DeeperTagsAreIntroducedByContext:  true,
-		ActivationTools:                   defaultCapabilityActionTools(true),
-		CapabilityMenu:                    make(map[string]CapabilityCatalogEntry, len(entries)),
+		Kind:            "capability_menu",
+		ActivationTools: defaultCapabilityActionTools(true),
+		CapabilityMenu:  make(map[string]capabilityMenuEntry, len(entries)),
 	}
 
 	for _, rendered := range BuildCapabilityCatalogView(selectCapabilityMenuEntries(entries), true).Capabilities {
-		payload.CapabilityMenu[rendered.Tag] = CapabilityCatalogEntry{
+		payload.CapabilityMenu[rendered.Tag] = capabilityMenuEntry{
 			Status:      rendered.Status,
 			Description: rendered.Description,
 			Teaser:      rendered.Teaser,
