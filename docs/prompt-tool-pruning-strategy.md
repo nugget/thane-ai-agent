@@ -267,6 +267,31 @@ Protected or runtime-asserted tags should not be phrased as
 `activate <tag>`. They should be described as already present or not
 present in the current loop.
 
+### Knowledge path pilot
+
+`knowledge` is the current pilot path because it has low channel
+complexity and a relatively shallow branch structure.
+
+The current working depth is:
+
+- depth 0: menu entry `knowledge`
+- depth 1 choices:
+  - `activate files`
+  - `activate memory`
+  - `activate search`
+  - `delegate with files,search`
+  - `respond`
+- depth 2 doctrine:
+  - `files`: semantic references, document reads, quoting, editing
+  - `memory`: compact durable facts vs documents
+  - `search`: outside verification and enrichment
+
+That is intentionally shallow. A good early guardrail is to resist
+going deeper than roughly two hops of branching until we have evidence
+that the extra depth materially helps. This is also a likely future
+model-family tuning knob: stronger models may tolerate a broader or
+deeper tree than weaker ones.
+
 ## Layer Responsibilities
 
 ### `workspace/core`
