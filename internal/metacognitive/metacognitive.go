@@ -52,6 +52,10 @@ const iterationLogRetention = 5
 // blocks. Used for scanning/pruning.
 const iterationLogPrefix = "<!-- iteration_log:"
 
+// stateFileName is the fixed filename of the metacognitive state
+// document. The app runtime places it under workspace/core.
+const stateFileName = "metacognitive.md"
+
 // ProvenanceWriter is the subset of [provenance.Store] needed by the
 // metacognitive loop for committing state file updates.
 type ProvenanceWriter interface {
@@ -81,7 +85,7 @@ func hasProvenanceWriter(store ProvenanceWriter) bool {
 // in [config.MetacognitiveConfig]).
 type Config struct {
 	Enabled                bool
-	StateFile              string // relative to workspace
+	StateFile              string // fixed filename under workspace/core
 	MinSleep               time.Duration
 	MaxSleep               time.Duration
 	DefaultSleep           time.Duration
@@ -109,7 +113,7 @@ func ParseConfig(raw config.MetacognitiveConfig) (Config, error) {
 	}
 	return Config{
 		Enabled:                raw.Enabled,
-		StateFile:              raw.StateFile,
+		StateFile:              stateFileName,
 		MinSleep:               minSleep,
 		MaxSleep:               maxSleep,
 		DefaultSleep:           defaultSleep,

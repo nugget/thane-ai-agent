@@ -125,9 +125,10 @@ type Config struct {
 	Embeddings EmbeddingsConfig `yaml:"embeddings"`
 
 	// Workspace configures the agent's sandboxed file system access.
-	// In multi-root deployments, set Path to the common writable parent
-	// (for example ~/Thane) and use Paths for semantic roots like
-	// core:, kb:, generated:, and scratchpad:.
+	// The workspace root is also the anchor for Thane's fixed core
+	// document root at {workspace.path}/core, which holds canonical
+	// always-on files at stable locations such as persona.md, ego.md,
+	// mission.md, and metacognitive.md.
 	Workspace WorkspaceConfig `yaml:"workspace"`
 
 	// Paths maps named prefixes to directory paths for file resolution.
@@ -136,14 +137,12 @@ type Config struct {
 	// construction time.
 	//
 	// Typical prefixes are:
-	//   - core:       high-integrity core docs (persona, ego, metacognitive)
 	//   - kb:         curated knowledge / indexed documents
 	//   - generated:  model-produced durable outputs (reports, dailies)
 	//   - scratchpad: low-integrity writable work area
 	//
-	// This is the main transition seam toward policy-managed document
-	// roots: the prefixes express intent even before dedicated doc_roots
-	// policy exists in config.
+	// The core: prefix is reserved and always derived from
+	// {workspace.path}/core; it is not configured here.
 	Paths map[string]string `yaml:"paths"`
 
 	// ExtraPath lists additional directories to prepend to the process
@@ -166,15 +165,6 @@ type Config struct {
 	// a curated managed root rather than a scratch workspace.
 	// Default: "./talents".
 	TalentsDir string `yaml:"talents_dir"`
-
-	// PersonaFile is an optional markdown file that replaces the default
-	// system prompt with a custom agent identity. Prefer placing this in
-	// a high-integrity core root (for example ~/Thane/core/persona.md)
-	// rather than a scratch or compatibility workspace.
-	PersonaFile string `yaml:"persona_file"`
-
-	// Context configures static context injection into the system prompt.
-	Context ContextConfig `yaml:"context"`
 
 	// Archive configures session archive behavior.
 	Archive ArchiveConfig `yaml:"archive"`
@@ -256,8 +246,9 @@ type Config struct {
 	// Provenance configures git-backed file storage with SSH signature
 	// enforcement. Files written through a provenance store are
 	// automatically committed with cryptographic signatures, providing
-	// tamper detection, audit history, and rollback. Identity files
-	// (ego.md, metacognitive.md) are the primary clients.
+	// tamper detection, audit history, and rollback. Newer core-root
+	// layouts read always-on identity documents directly from
+	// {workspace.path}/core rather than from this store.
 	Provenance ProvenanceConfig `yaml:"provenance"`
 
 	// StateWindow configures the rolling window of recent Home Assistant
@@ -619,9 +610,9 @@ func (v VisionConfig) ParsedTimeout() time.Duration {
 // write.
 type ProvenanceConfig struct {
 	// Path is the directory for the provenance git repository.
-	// Supports ~ expansion. Today this is the integrity-tracked root for
-	// core documents such as ego.md and metacognitive.md; over time this
-	// generalizes into per-root integrity policy. Example:
+	// Supports ~ expansion. This is a legacy seam toward future
+	// integrity-tracked document roots and no longer defines the fixed
+	// workspace/core locations of always-on identity files. Example:
 	// ~/Thane/core
 	Path string `yaml:"path"`
 
@@ -830,21 +821,6 @@ type EmbeddingsConfig struct {
 	// BaseURL overrides the Ollama endpoint used for embeddings. Empty
 	// falls back to the default model resource/provider selection.
 	BaseURL string `yaml:"baseurl"`
-}
-
-// ContextConfig configures context injection into the system prompt.
-// Files listed in InjectFiles are re-read on every agent turn so that
-// external edits are visible without restart. Prefer small, curated
-// files from stable managed roots (for example core/MEMORY.md) over
-// broad compatibility mounts or app-private scratch state. Paths are
-// resolved once at startup.
-type ContextConfig struct {
-	// InjectFiles is a list of file paths to re-read and inject into
-	// the system prompt on every turn. Paths support ~ expansion.
-	// Missing or unreadable files are silently skipped at read time.
-	// Common fits are MEMORY.md, USER.md, or other operator-curated
-	// context files that live in a core document root.
-	InjectFiles []string `yaml:"inject_files"`
 }
 
 // ArchiveConfig configures session archive behavior.
@@ -1475,12 +1451,6 @@ type MetacognitiveConfig struct {
 	// Enabled controls whether the metacognitive loop starts. Default: false.
 	Enabled bool `yaml:"enabled"`
 
-	// StateFile is the path to the persistent state file, relative to
-	// the workspace root. For managed-root layouts, place this under a
-	// core root such as core/metacognitive.md. Default:
-	// "metacognitive.md".
-	StateFile string `yaml:"state_file"`
-
 	// MinSleep is the minimum allowed sleep duration between iterations.
 	// The LLM cannot request a shorter sleep via set_next_sleep.
 	// Default: "2m". Parsed as a Go duration string.
@@ -1738,9 +1708,6 @@ func (c *Config) applyDefaults() {
 	}
 
 	// Metacognitive loop defaults.
-	if c.Metacognitive.StateFile == "" {
-		c.Metacognitive.StateFile = "metacognitive.md"
-	}
 	if c.Metacognitive.MinSleep == "" {
 		c.Metacognitive.MinSleep = "2m"
 	}
@@ -2089,7 +2056,7 @@ func (c *Config) validateMetacognitive() error {
 		return nil
 	}
 	if c.Workspace.Path == "" {
-		return fmt.Errorf("metacognitive requires workspace.path (state file lives there)")
+		return fmt.Errorf("metacognitive requires workspace.path (state file lives under workspace/core)")
 	}
 	minSleep, err := time.ParseDuration(c.Metacognitive.MinSleep)
 	if err != nil {
@@ -2117,6 +2084,40 @@ func (c *Config) validateMetacognitive() error {
 		return fmt.Errorf("metacognitive.supervisor_probability %.2f must be in [0.0, 1.0]", c.Metacognitive.SupervisorProbability)
 	}
 	return nil
+}
+
+// CoreRoot returns the fixed high-integrity core document root derived
+// from [Workspace.Path]. When workspace.path is unset, CoreRoot returns
+// the empty string.
+func (c *Config) CoreRoot() string {
+	if strings.TrimSpace(c.Workspace.Path) == "" {
+		return ""
+	}
+	return filepath.Join(c.Workspace.Path, "core")
+}
+
+// CoreFile returns the absolute-or-relative path to a named file in the
+// fixed core document root. When workspace.path is unset, CoreFile
+// returns the empty string.
+func (c *Config) CoreFile(name string) string {
+	if strings.TrimSpace(name) == "" {
+		return ""
+	}
+	root := c.CoreRoot()
+	if root == "" {
+		return ""
+	}
+	return filepath.Join(root, name)
+}
+
+// CoreInjectFiles returns the curated always-on files that should be
+// re-read and injected into the system prompt on every turn.
+func (c *Config) CoreInjectFiles() []string {
+	mission := c.CoreFile("mission.md")
+	if mission == "" {
+		return nil
+	}
+	return []string{mission}
 }
 
 func (c *Config) validateLoops() error {

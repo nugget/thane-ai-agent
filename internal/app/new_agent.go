@@ -97,24 +97,26 @@ func (a *App) initAgentLoop(s *newState) error {
 	// Build a resolver from the paths: config map. This handles kb:,
 	// scratchpad:, and any future directory-based prefixes. The
 	// resolver expands ~ in base directories at construction time.
-	// Auto-register core: prefix pointing at the workspace root so
-	// models can reference core:ego.md without knowing the filesystem
-	// path. User-defined core: (with or without trailing colon) in
-	// config takes precedence.
+	// core: is reserved and always points at {workspace.path}/core.
 	if cfg.Workspace.Path != "" {
 		if cfg.Paths == nil {
 			cfg.Paths = make(map[string]string)
 		}
-		hasCore := false
-		for k := range cfg.Paths {
-			if strings.TrimSuffix(k, ":") == "core" {
-				hasCore = true
-				break
+		derivedCore := coreRootPath(cfg.Workspace.Path)
+		for k, v := range cfg.Paths {
+			if strings.TrimSuffix(k, ":") != "core" {
+				continue
 			}
+			if strings.TrimSpace(v) != derivedCore {
+				logger.Info("ignoring configured core path; core root is derived from workspace.path",
+					"configured_key", k,
+					"configured_path", v,
+					"derived_path", derivedCore,
+				)
+			}
+			delete(cfg.Paths, k)
 		}
-		if !hasCore {
-			cfg.Paths["core"] = cfg.Workspace.Path
-		}
+		cfg.Paths["core"] = derivedCore
 	}
 
 	var resolver *paths.Resolver
@@ -125,27 +127,26 @@ func (a *App) initAgentLoop(s *newState) error {
 	s.resolver = resolver
 
 	// --- Context injection ---
-	// Resolve inject_file paths at startup (tilde expansion, existence
-	// check) but defer reading to each agent turn so external edits
-	// (e.g. MEMORY.md updated by another runtime) are visible without
-	// restart.
-	if len(cfg.Context.InjectFiles) > 0 {
+	// Resolve fixed core context files at startup (tilde expansion,
+	// existence check) but defer reading to each agent turn so edits
+	// under workspace/core are visible without restart.
+	if injectFiles := cfg.CoreInjectFiles(); len(injectFiles) > 0 {
 		var resolved []string
-		for _, path := range cfg.Context.InjectFiles {
+		for _, path := range injectFiles {
 			path = resolvePath(path, resolver)
 			if _, err := os.Stat(path); err != nil {
 				if errors.Is(err, fs.ErrNotExist) {
-					logger.Warn("context inject file not found", "path", path)
+					logger.Warn("core context file not found", "path", path)
 				} else {
-					logger.Warn("context inject file unreadable", "path", path, "error", err)
+					logger.Warn("core context file unreadable", "path", path, "error", err)
 				}
 				// Still include the path — the file may appear later.
 			}
 			resolved = append(resolved, path)
-			logger.Debug("context inject file registered", "path", path)
+			logger.Debug("core context file registered", "path", path)
 		}
 		loop.SetInjectFiles(resolved)
-		logger.Info("context inject files registered", "files", len(resolved))
+		logger.Info("core context files registered", "files", len(resolved))
 	}
 
 	// Start initial session

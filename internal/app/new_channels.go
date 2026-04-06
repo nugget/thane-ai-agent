@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nugget/thane-ai-agent/internal/attachments"
 	"github.com/nugget/thane-ai-agent/internal/channels/email"
 	sigcli "github.com/nugget/thane-ai-agent/internal/channels/signal"
 	"github.com/nugget/thane-ai-agent/internal/config"
@@ -23,9 +22,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/media"
 	"github.com/nugget/thane-ai-agent/internal/memory"
 	"github.com/nugget/thane-ai-agent/internal/notifications"
-	"github.com/nugget/thane-ai-agent/internal/paths"
 	"github.com/nugget/thane-ai-agent/internal/prompts"
-	"github.com/nugget/thane-ai-agent/internal/provenance"
 	"github.com/nugget/thane-ai-agent/internal/router"
 	"github.com/nugget/thane-ai-agent/internal/search"
 	"github.com/nugget/thane-ai-agent/internal/tools"
@@ -252,107 +249,23 @@ func (a *App) initChannels(s *newState) error {
 		a.loop.SetExtractor(extractor)
 	}
 
-	// --- Provenance store ---
-	// Git-backed file storage with SSH signature enforcement. When
-	// configured, identity files (ego.md, metacognitive.md) are
-	// auto-committed with cryptographic signatures on every write.
-	if a.cfg.Provenance.Configured() {
-		keyPath := paths.ExpandHome(a.cfg.Provenance.SigningKey)
-		signer, err := provenance.NewSSHFileSigner(keyPath)
-		if err != nil {
-			return fmt.Errorf("load provenance signing key %s: %w", keyPath, err)
-		}
-		storePath := paths.ExpandHome(a.cfg.Provenance.Path)
-		a.provenanceStore, err = provenance.New(storePath, signer, a.logger)
-		if err != nil {
-			return fmt.Errorf("init provenance store at %s: %w", storePath, err)
-		}
-		a.logger.Info("provenance store initialized",
-			"path", storePath,
-			"public_key", signer.PublicKey(),
-		)
-	}
+	// Provenance storage is intentionally not initialized here because
+	// there is currently no runtime consumer wired to use it. Skipping
+	// startup avoids unnecessary work and prevents misleading logs that
+	// imply provenance is active when it is not.
 
 	// --- Attachment store ---
 	// Content-addressed file storage with SHA-256 deduplication.
 	// When configured, channels (Signal, email) store attachments
 	// by content hash with a SQLite metadata index.
-	if a.cfg.Attachments.StoreDir != "" {
-		storeDir := paths.ExpandHome(a.cfg.Attachments.StoreDir)
-		attachDbPath := filepath.Join(a.cfg.DataDir, "attachments.db")
-		var err error
-		a.attachmentStore, err = attachments.NewStore(attachDbPath, storeDir, a.logger)
-		if err != nil {
-			return fmt.Errorf("init attachment store: %w", err)
-		}
-		a.onCloseErr("attachments", a.attachmentStore.Close)
-		a.logger.Info("attachment store initialized",
-			"db", attachDbPath,
-			"store_dir", storeDir,
-		)
-	}
-
-	// --- Vision analyzer ---
-	// When both the attachment store and vision config are enabled,
-	// images are automatically analyzed on ingest using a vision-capable
-	// LLM. Results are cached in the attachment metadata index.
-	if a.attachmentStore != nil && a.cfg.Attachments.Vision.Enabled {
-		a.visionAnalyzer = attachments.NewAnalyzer(a.attachmentStore, attachments.AnalyzerConfig{
-			Client:  a.llmClient,
-			Model:   a.cfg.Attachments.Vision.Model,
-			Prompt:  a.cfg.Attachments.Vision.Prompt,
-			Timeout: a.cfg.Attachments.Vision.ParsedTimeout(),
-			Logger:  a.logger,
-		})
-		a.logger.Info("vision analyzer enabled",
-			"model", a.cfg.Attachments.Vision.Model,
-			"timeout", a.cfg.Attachments.Vision.ParsedTimeout(),
-		)
-	}
-
-	// --- Attachment tools ---
-	// When the attachment store is configured, the agent can list,
-	// search, and describe attachments. Vision analysis is available
-	// when the analyzer is also configured.
-	if a.attachmentStore != nil {
-		attachmentTools := attachments.NewTools(a.attachmentStore, a.visionAnalyzer)
-		a.loop.Tools().SetAttachmentTools(attachmentTools)
-		a.logger.Info("attachment tools registered")
+	if err := a.initAttachmentRuntime(); err != nil {
+		return err
 	}
 
 	// --- File tools ---
 	// When a workspace path is configured, the agent can read and write
 	// files within that directory. All paths are sandboxed.
-	if a.cfg.Workspace.Path != "" {
-		fileTools := tools.NewFileTools(a.cfg.Workspace.Path, a.cfg.Workspace.ReadOnlyDirs)
-		if s.resolver != nil {
-			fileTools.SetResolver(s.resolver)
-		}
-		a.loop.Tools().SetFileTools(fileTools)
-
-		// Ego file: prefer provenance store path, fall back to workspace.
-		if a.provenanceStore != nil {
-			a.loop.SetEgoFile(a.provenanceStore.FilePath("ego.md"))
-			a.loop.SetProvenanceStore(a.provenanceStore)
-			a.logger.Info("ego.md backed by provenance store")
-		} else {
-			egoPath := filepath.Join(a.cfg.Workspace.Path, "ego.md")
-			if s.resolver != nil {
-				if resolved, err := s.resolver.Resolve("core:ego.md"); err != nil {
-					a.logger.Warn("failed to resolve core:ego.md, using default",
-						"error", err,
-						"default_path", egoPath,
-					)
-				} else {
-					egoPath = resolved
-				}
-			}
-			a.loop.SetEgoFile(egoPath)
-		}
-		a.logger.Info("file tools enabled", "workspace", a.cfg.Workspace.Path)
-	} else {
-		a.logger.Info("file tools disabled (no workspace path configured)")
-	}
+	a.initFileTools(s)
 
 	// --- Temp file store ---
 	// Provides create_temp_file tool for orchestrator-delegate data passing.

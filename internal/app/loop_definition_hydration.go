@@ -45,18 +45,13 @@ func (a *App) hydrateLoopDefinitionSpec(spec looppkg.Spec) (looppkg.Spec, error)
 			return looppkg.Spec{}, fmt.Errorf("metacognitive definition requires metacognitive config")
 		}
 		stateFileName := filepath.Base(a.metacogCfg.StateFile)
-		stateFilePath := filepath.Join(a.cfg.Workspace.Path, a.metacogCfg.StateFile)
-		if a.provenanceStore != nil {
-			stateFilePath = a.provenanceStore.FilePath(stateFileName)
-		}
+		stateFilePath := coreFilePath(a.cfg.Workspace.Path, stateFileName)
 		runtimeSpec := metacognitive.HydrateSpec(spec, *a.metacogCfg, metacognitive.Opts{
-			WorkspacePath:   a.cfg.Workspace.Path,
-			StateFilePath:   stateFilePath,
-			ProvenanceStore: a.provenanceStore,
-			StateFileName:   stateFileName,
+			StateFilePath: stateFilePath,
+			StateFileName: stateFileName,
 		})
 		runtimeSpec.Setup = func(l *looppkg.Loop) {
-			metacognitive.RegisterTools(a.loop.Tools(), l, *a.metacogCfg, stateFilePath, a.provenanceStore)
+			metacognitive.RegisterTools(a.loop.Tools(), l, *a.metacogCfg, stateFilePath, nil)
 		}
 		return runtimeSpec, nil
 	case unifiPollerDefinitionName:
