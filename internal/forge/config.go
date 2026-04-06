@@ -108,7 +108,7 @@ func NewManager(cfg Config, logger *slog.Logger) (*Manager, error) {
 		case "github":
 			httpClient := httpkit.NewClient(
 				httpkit.WithTimeout(30*time.Second),
-				httpkit.WithUserAgent("thane-forge/1.0"),
+				httpkit.WithTruthfulUserAgent(httpkit.AgentSurfaceForge),
 			)
 			provider, err = NewGitHub(httpClient, acct.Token, acct.URL, logger)
 			if err != nil {

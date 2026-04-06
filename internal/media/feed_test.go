@@ -3,10 +3,15 @@ package media
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
+
+	"github.com/nugget/thane-ai-agent/internal/buildinfo"
+	"github.com/nugget/thane-ai-agent/internal/httpkit"
 )
 
 func TestParseFeed_Atom(t *testing.T) {
@@ -258,6 +263,44 @@ func TestResolveYouTubeFeed_HandleURL(t *testing.T) {
 	}
 	if m := ytChannelIDRe.FindStringSubmatch(html2); len(m) != 2 || m[1] != "UCjson456def" {
 		t.Errorf("ytChannelIDRe failed to extract channel ID from JSON")
+	}
+}
+
+func TestResolveYouTubeFeed_HandleURL_UsesTruthfulUserAgent(t *testing.T) {
+	html := `<html><head>
+	<link rel="canonical" href="https://www.youtube.com/channel/UCabc123xyz">
+	</head><body></body></html>`
+
+	var seenUA string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenUA = r.Header.Get("User-Agent")
+		w.Write([]byte(html))
+	}))
+	defer srv.Close()
+
+	srvURL, err := url.Parse(srv.URL)
+	if err != nil {
+		t.Fatalf("parse server URL: %v", err)
+	}
+
+	transport := httpkit.NewTransport()
+	transport.DialContext = func(ctx context.Context, network, _ string) (net.Conn, error) {
+		var d net.Dialer
+		return d.DialContext(ctx, network, srvURL.Host)
+	}
+	httpClient := httpkit.NewClient(httpkit.WithTransport(transport))
+
+	handleURL := "http://www.youtube.com/@testhandle"
+	got, err := resolveYouTubeFeed(context.Background(), httpClient, handleURL)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	wantFeed := "https://www.youtube.com/feeds/videos.xml?channel_id=UCabc123xyz"
+	if got != wantFeed {
+		t.Fatalf("got %q, want %q", got, wantFeed)
+	}
+	if seenUA != buildinfo.UserAgent() {
+		t.Fatalf("expected truthful UA %q, got %q", buildinfo.UserAgent(), seenUA)
 	}
 }
 

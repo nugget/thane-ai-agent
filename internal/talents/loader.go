@@ -25,7 +25,17 @@ func NewLoader(dir string) *Loader {
 type Talent struct {
 	Name    string   // Filename without .md extension
 	Tags    []string // Tags from YAML frontmatter (nil = untagged)
+	Kind    string   // Optional frontmatter kind (for example entry_point)
 	Content string   // Markdown content (frontmatter stripped)
+}
+
+// Frontmatter captures the subset of markdown metadata Thane currently
+// understands for talents and tagged KB articles.
+type Frontmatter struct {
+	Tags     []string
+	Kind     string
+	Teaser   string
+	NextTags []string
 }
 
 // listFiles returns a sorted slice of .md filenames in l.dir.
@@ -67,8 +77,8 @@ func (l *Loader) Talents() ([]Talent, error) {
 			return nil, fmt.Errorf("read talent %s: %w", f, err)
 		}
 		name := strings.TrimSuffix(f, ".md")
-		tags, content := ParseFrontmatter(string(data))
-		ts = append(ts, Talent{Name: name, Tags: tags, Content: content})
+		meta, content := ParseFrontmatterMetadata(string(data))
+		ts = append(ts, Talent{Name: name, Tags: meta.Tags, Kind: meta.Kind, Content: content})
 	}
 	return ts, nil
 }
@@ -77,14 +87,59 @@ func (l *Loader) Talents() ([]Talent, error) {
 // given active tags. Untagged talents are always included (they have
 // no tag restrictions). If activeTags is nil, all talents are included.
 func FilterByTags(talents []Talent, activeTags map[string]bool) string {
-	var parts []string
-	for _, t := range talents {
-		if shouldIncludeTalent(t, activeTags) {
-			parts = append(parts, t.Content)
-		}
+	alwaysOn, tagged := SplitByTags(talents, activeTags)
+	switch {
+	case alwaysOn == "":
+		return tagged
+	case tagged == "":
+		return alwaysOn
+	default:
+		return alwaysOn + "\n\n---\n\n" + tagged
 	}
-	if len(parts) == 0 {
+}
+
+func talentOrderKey(t Talent) int {
+	switch {
+	case len(t.Tags) == 0:
+		return 0
+	case strings.TrimSpace(t.Kind) == "entry_point":
+		return 1
+	default:
+		return 2
+	}
+}
+
+// SplitByTags partitions included talents into always-on and tagged
+// groups, preserving the same ordering rules used by FilterByTags.
+func SplitByTags(all []Talent, activeTags map[string]bool) (alwaysOn string, tagged string) {
+	var alwaysIncluded []Talent
+	var taggedIncluded []Talent
+	for _, t := range all {
+		if !shouldIncludeTalent(t, activeTags) {
+			continue
+		}
+		if len(t.Tags) == 0 {
+			alwaysIncluded = append(alwaysIncluded, t)
+			continue
+		}
+		taggedIncluded = append(taggedIncluded, t)
+	}
+	sort.SliceStable(alwaysIncluded, func(i, j int) bool {
+		return talentOrderKey(alwaysIncluded[i]) < talentOrderKey(alwaysIncluded[j])
+	})
+	sort.SliceStable(taggedIncluded, func(i, j int) bool {
+		return talentOrderKey(taggedIncluded[i]) < talentOrderKey(taggedIncluded[j])
+	})
+	return renderTalents(alwaysIncluded), renderTalents(taggedIncluded)
+}
+
+func renderTalents(included []Talent) string {
+	if len(included) == 0 {
 		return ""
+	}
+	parts := make([]string, 0, len(included))
+	for _, t := range included {
+		parts = append(parts, t.Content)
 	}
 	return strings.Join(parts, "\n\n---\n\n")
 }
@@ -117,8 +172,16 @@ func shouldIncludeTalent(t Talent, activeTags map[string]bool) bool {
 //	tags: [ha, physical]
 //	---
 func ParseFrontmatter(raw string) ([]string, string) {
+	meta, content := ParseFrontmatterMetadata(raw)
+	return meta.Tags, content
+}
+
+// ParseFrontmatterMetadata extracts the supported frontmatter fields and
+// returns both the parsed metadata and the stripped body content. Unknown
+// keys are ignored.
+func ParseFrontmatterMetadata(raw string) (Frontmatter, string) {
 	if !strings.HasPrefix(raw, "---") {
-		return nil, raw
+		return Frontmatter{}, raw
 	}
 
 	// Find the closing "---" delimiter.
@@ -129,55 +192,78 @@ func ParseFrontmatter(raw string) ([]string, string) {
 	} else if len(rest) > 1 && rest[0] == '\r' && rest[1] == '\n' {
 		rest = rest[2:]
 	} else {
-		return nil, raw // No newline after opening ---
+		return Frontmatter{}, raw // No newline after opening ---
 	}
 
 	closeIdx := strings.Index(rest, "\n---")
 	if closeIdx < 0 {
-		return nil, raw // No closing ---
+		return Frontmatter{}, raw // No closing ---
 	}
 
 	frontmatter := rest[:closeIdx]
 	content := rest[closeIdx+4:] // Skip "\n---"
 	content = strings.TrimLeft(content, "\r\n")
 
-	tags := parseTagsLine(frontmatter)
-	return tags, content
+	meta := parseFrontmatterLines(frontmatter)
+	return meta, content
 }
 
-// parseTagsLine extracts tags from a "tags: [a, b, c]" line within
-// frontmatter. Returns nil if no tags line is found.
-func parseTagsLine(frontmatter string) []string {
+// parseFrontmatterLines extracts the currently supported metadata keys
+// from frontmatter. Unknown keys are ignored.
+func parseFrontmatterLines(frontmatter string) Frontmatter {
+	var meta Frontmatter
 	for _, line := range strings.Split(frontmatter, "\n") {
 		line = strings.TrimSpace(line)
-		if !strings.HasPrefix(line, "tags:") {
+		switch {
+		case strings.HasPrefix(line, "tags:"):
+			value := strings.TrimPrefix(line, "tags:")
+			value = strings.TrimSpace(value)
+
+			// Handle [a, b, c] format.
+			value = strings.TrimPrefix(value, "[")
+			value = strings.TrimSuffix(value, "]")
+
+			var tags []string
+			for _, part := range strings.Split(value, ",") {
+				tag := strings.Trim(strings.TrimSpace(part), `"'`)
+				if tag != "" {
+					tags = append(tags, tag)
+				}
+			}
+			meta.Tags = tags
+		case strings.HasPrefix(line, "kind:"):
+			value := strings.TrimSpace(strings.TrimPrefix(line, "kind:"))
+			value = strings.Trim(value, `"'`)
+			meta.Kind = value
+		case strings.HasPrefix(line, "teaser:"):
+			value := strings.TrimSpace(strings.TrimPrefix(line, "teaser:"))
+			value = strings.Trim(value, `"'`)
+			meta.Teaser = value
+		case strings.HasPrefix(line, "next_tags:"):
+			value := strings.TrimSpace(strings.TrimPrefix(line, "next_tags:"))
+			value = strings.TrimPrefix(value, "[")
+			value = strings.TrimSuffix(value, "]")
+			var tags []string
+			for _, part := range strings.Split(value, ",") {
+				tag := strings.Trim(strings.TrimSpace(part), `"'`)
+				if tag != "" {
+					tags = append(tags, tag)
+				}
+			}
+			meta.NextTags = tags
+		default:
 			continue
 		}
-		value := strings.TrimPrefix(line, "tags:")
-		value = strings.TrimSpace(value)
-
-		// Handle [a, b, c] format.
-		value = strings.TrimPrefix(value, "[")
-		value = strings.TrimSuffix(value, "]")
-
-		var tags []string
-		for _, part := range strings.Split(value, ",") {
-			tag := strings.TrimSpace(part)
-			if tag != "" {
-				tags = append(tags, tag)
-			}
-		}
-		return tags
 	}
-	return nil
+	return meta
 }
 
 // ManifestEntry describes a capability tag for the auto-generated manifest.
 type ManifestEntry = toolcatalog.CapabilitySurface
 
-// GenerateManifest creates a Talent containing the capability manifest
-// as compact JSON. Tool names are omitted — the model already has tool
-// definitions in its schema. The manifest provides tag descriptions,
+// GenerateManifest creates a Talent containing the capability menu as
+// compact JSON. Tool names are omitted — the model already has tool
+// definitions in its schema. The menu provides root-tag descriptions,
 // tool counts, and context source metadata.
 //
 // The generated talent has no tags (always loads). Returns nil when

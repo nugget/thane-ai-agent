@@ -6,6 +6,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/nugget/thane-ai-agent/internal/buildinfo"
 )
 
 func TestExtractHTML(t *testing.T) {
@@ -51,8 +53,8 @@ func TestFetch(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Verify User-Agent is set
 		ua := r.Header.Get("User-Agent")
-		if !strings.HasPrefix(ua, "Thane/") {
-			t.Errorf("expected Thane User-Agent, got %q", ua)
+		if ua != buildinfo.UserAgent() {
+			t.Errorf("expected Thane User-Agent %q, got %q", buildinfo.UserAgent(), ua)
 		}
 
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")

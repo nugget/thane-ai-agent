@@ -73,12 +73,26 @@ models:
   resources:
     default:
       url: http://your-primary-ollama-server:11434
+      # Provider name for this resource. Default: ollama.
       provider: ollama
+      # APIKey is an optional bearer/API key for providers that require auth.
       api_key: ""
+      # IdleTTLSeconds asks supported local runners to keep models warm for
+      # this many idle seconds after an inference request. LM Studio honors
+      # this via the native `ttl` request field on inference endpoints.
+      # Zero lets the runner use its default behavior.
+      idle_ttl_seconds: 0
     edge:
       url: http://your-edge-ollama-server:11434
+      # Provider name for this resource. Default: ollama.
       provider: ollama
+      # APIKey is an optional bearer/API key for providers that require auth.
       api_key: ""
+      # IdleTTLSeconds asks supported local runners to keep models warm for
+      # this many idle seconds after an inference request. LM Studio honors
+      # this via the native `ttl` request field on inference endpoints.
+      # Zero lets the runner use its default behavior.
+      idle_ttl_seconds: 0
   # LocalFirst prefers local (cost_tier=0) models over cloud models
   # when routing decisions are made by the model router.
   local_first: true
@@ -336,7 +350,7 @@ talents_dir: ./talents
 #     - forge
 #   signal:
 #     - ha
-#     - search
+#     - web
 #
 # (optional) MCP configures external MCP (Model Context Protocol) server
 # mcp:

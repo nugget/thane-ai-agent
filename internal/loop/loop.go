@@ -494,6 +494,7 @@ func (l *Loop) Status() Status {
 	requestBaseInitialTags := append([]string(nil), l.requestBase.InitialTags...)
 	requestOverrideInitialTags := append([]string(nil), l.requestOverride.InitialTags...)
 	activatedTagsCopy := append([]string(nil), l.activatedTags...)
+	handlerOnly := l.config.Handler != nil
 	if len(l.llmContext) > 0 {
 		llmCtxCopy = make(map[string]any, len(l.llmContext))
 		for k, v := range l.llmContext {
@@ -541,7 +542,7 @@ func (l *Loop) Status() Status {
 	if len(s.ActiveTags) == 0 && len(defaultLoadedTags) > 0 {
 		s.ActiveTags = append([]string(nil), defaultLoadedTags...)
 	}
-	if len(s.ActiveTags) == 0 && len(iterCopy) > 0 && len(iterCopy[0].ActiveTags) > 0 {
+	if len(s.ActiveTags) == 0 && !handlerOnly && len(iterCopy) > 0 && len(iterCopy[0].ActiveTags) > 0 {
 		s.ActiveTags = append([]string(nil), iterCopy[0].ActiveTags...)
 	}
 
@@ -550,19 +551,19 @@ func (l *Loop) Status() Status {
 		effectiveTools = append(effectiveTools, tooling.EffectiveTools...)
 	} else if got, ok := llmCtxCopy["effective_tools"].([]string); ok {
 		effectiveTools = append(effectiveTools, got...)
-	} else if len(iterCopy) > 0 {
+	} else if !handlerOnly && len(iterCopy) > 0 {
 		effectiveTools = append(effectiveTools, iterCopy[0].EffectiveTools...)
 	}
 
 	loadedCaps := []toolcatalog.LoadedCapabilityEntry(nil)
 	if tooling, ok := llmCtxCopy["tooling"].(ToolingState); ok && len(tooling.LoadedCapabilities) > 0 {
 		loadedCaps = append(loadedCaps, tooling.LoadedCapabilities...)
-	} else if len(iterCopy) > 0 {
+	} else if !handlerOnly && len(iterCopy) > 0 {
 		loadedCaps = append(loadedCaps, iterCopy[0].Tooling.LoadedCapabilities...)
 	}
 
 	lastToolsUsed := map[string]int(nil)
-	if len(iterCopy) > 0 && len(iterCopy[0].ToolsUsed) > 0 {
+	if !handlerOnly && len(iterCopy) > 0 && len(iterCopy[0].ToolsUsed) > 0 {
 		lastToolsUsed = iterCopy[0].ToolsUsed
 	}
 	configuredTags := mergeUniqueStrings(cfgCopy.Tags, requestBaseInitialTags, requestOverrideInitialTags)

@@ -559,6 +559,28 @@ func (l *Loop) DropCapability(ctx context.Context, tag string) error {
 	return nil
 }
 
+// ResetCapabilities returns the current Run to baseline capability
+// state by dropping all user-activated tags while preserving
+// always-active, protected, and pinned tags.
+func (l *Loop) ResetCapabilities(ctx context.Context) ([]string, error) {
+	scope := capabilityScopeFromContext(ctx)
+	if scope == nil {
+		return nil, fmt.Errorf("no capability scope in context")
+	}
+
+	dropped := scope.UserActivatedTags()
+	sort.Strings(dropped)
+	for _, tag := range dropped {
+		if err := scope.Drop(tag); err != nil {
+			return nil, err
+		}
+	}
+
+	l.updateLastRunTags(scope)
+	l.logger.Info("capability state reset to baseline", "dropped_tags", dropped)
+	return dropped, nil
+}
+
 // updateLastRunTags copies the scope's active tags into lastRunTags
 // so the dashboard (which has no context) can display current state.
 func (l *Loop) updateLastRunTags(scope *capabilityScope) {
@@ -625,10 +647,16 @@ type promptSection struct {
 }
 
 func (l *Loop) buildSystemPrompt(ctx context.Context, userMessage string, history []memory.Message) string {
-	return l.buildSystemPromptWithProfile(ctx, userMessage, history, llm.DefaultModelInteractionProfile())
+	prompt, _ := l.buildSystemPromptWithProfileSections(ctx, userMessage, history, llm.DefaultModelInteractionProfile())
+	return prompt
 }
 
 func (l *Loop) buildSystemPromptWithProfile(ctx context.Context, userMessage string, history []memory.Message, profile llm.ModelInteractionProfile) string {
+	prompt, _ := l.buildSystemPromptWithProfileSections(ctx, userMessage, history, profile)
+	return prompt
+}
+
+func (l *Loop) buildSystemPromptWithProfileSections(ctx context.Context, userMessage string, history []memory.Message, profile llm.ModelInteractionProfile) (string, []llm.PromptSection) {
 	var sb strings.Builder
 
 	// Snapshot active tags from the per-Run capability scope.
@@ -680,16 +708,50 @@ func (l *Loop) buildSystemPromptWithProfile(ctx context.Context, userMessage str
 		}
 	}
 
-	// 3b. Tag context (capability knowledge — what does my active role need)
-	// Delegates to the shared TagContextAssembler which merges three
-	// sources: static config files, tagged KB articles, and live
-	// providers. A 2-second timeout bounds all HA entity resolution.
+	if contract := strings.TrimSpace(profile.ToolCallingContract()); contract != "" {
+		mark("TOOL CALLING CONTRACT")
+		sb.WriteString("\n\n## Tool Calling Contract\n\n")
+		sb.WriteString(contract)
+		sb.WriteString("\n")
+		seal()
+	}
+
+	// 4. Talents (behavior — how should I act)
+	// Keep always-on guidance ahead of volatile context so provider-side
+	// prompt caching can retain the stable behavioral prefix.
+	alwaysOnTalents, taggedTalents := talents.SplitByTags(l.parsedTalents, tags)
+	if alwaysOnTalents != "" {
+		mark("TALENTS ALWAYS ON")
+		sb.WriteString("\n\n## Behavioral Guidance\n\n")
+		sb.WriteString(alwaysOnTalents)
+		seal()
+	}
+	if taggedTalents != "" {
+		mark("TALENTS TAGGED")
+		if alwaysOnTalents != "" {
+			sb.WriteString("\n\n---\n\n")
+		} else {
+			sb.WriteString("\n\n## Behavioral Guidance\n\n")
+		}
+		sb.WriteString(taggedTalents)
+		seal()
+	}
+
+	// 5. Active capabilities (dynamic runtime state).
+	if activeSummary := toolcatalog.RenderLoadedCapabilitySummary(l.capSurface, tags); activeSummary != "" {
+		mark("ACTIVE CAPABILITIES")
+		sb.WriteString("\n\n## Active Capabilities\n\n")
+		sb.WriteString(activeSummary)
+		sb.WriteString("\n")
+		seal()
+	}
+
+	// 6. Tag context (capability knowledge — what does my active role need)
+	// Keep it before current conditions for continuity, but uncached.
 	if l.tagContextAssembler != nil && tags != nil {
 		haCtx, haCancel := context.WithTimeout(ctx, 2*time.Second)
 		defer haCancel()
 
-		// Snapshot live providers under lock so Build sees a consistent
-		// view without holding the lock during I/O.
 		providers := l.TagContextProviders()
 
 		if tagCtx := l.tagContextAssembler.Build(haCtx, tags, providers); tagCtx != "" {
@@ -700,46 +762,13 @@ func (l *Loop) buildSystemPromptWithProfile(ctx context.Context, userMessage str
 		}
 	}
 
-	// 3c. Active capabilities — compact list of currently loaded tags.
-	// Uses the shared capability surface so the loaded-state summary is
-	// generated from the same semantic source as the manifest and tool docs.
-	if activeSummary := toolcatalog.RenderLoadedCapabilitySummary(l.capSurface, tags); activeSummary != "" {
-		mark("ACTIVE CAPABILITIES")
-		sb.WriteString("\n\n## Active Capabilities\n\n")
-		sb.WriteString("Capability and tag changes are runtime actions. If the user asks to activate, deactivate, load, unload, or inspect loaded capabilities/tags, use the exact capability tools named below.\n\n")
-		sb.WriteString(activeSummary)
-		sb.WriteString("\n")
-		seal()
-	}
-
-	if contract := strings.TrimSpace(profile.ToolCallingContract()); contract != "" {
-		mark("TOOL CALLING CONTRACT")
-		sb.WriteString("\n\n## Tool Calling Contract\n\n")
-		sb.WriteString(contract)
-		sb.WriteString("\n")
-		seal()
-	}
-
-	// 4. Current Conditions (environment — where/when am I)
-	// Placed early because models attend more strongly to content near
-	// the beginning. Uses H1 heading to signal operational importance.
+	// 7. Current Conditions (environment — where/when am I)
 	mark("CURRENT CONDITIONS")
 	sb.WriteString("\n\n")
 	sb.WriteString(awareness.CurrentConditions(l.timezone))
-
 	seal()
 
-	// 5. Talents (behavior — how should I act)
-	// Filter by active tags; nil tags means no filtering (all talents load).
-	talentContent := talents.FilterByTags(l.parsedTalents, tags)
-	if talentContent != "" {
-		mark("TALENTS")
-		sb.WriteString("\n\n## Behavioral Guidance\n\n")
-		sb.WriteString(talentContent)
-		seal()
-	}
-
-	// 6. Dynamic context (what's relevant right now)
+	// 8. Dynamic context (what's relevant right now)
 	if l.contextProvider != nil {
 		dynCtx, err := l.contextProvider.GetContext(ctx, userMessage)
 		if err != nil {
@@ -752,7 +781,7 @@ func (l *Loop) buildSystemPromptWithProfile(ctx context.Context, userMessage str
 		}
 	}
 
-	// 7. Conversation History (structural JSON — earlier messages in this conversation)
+	// 9. Conversation History (structural JSON — earlier messages in this conversation)
 	// Embedding history as JSON in the system prompt creates an unambiguous
 	// boundary between "what happened before" and "what just arrived." The
 	// new user input follows as a standard chat message after this prompt.
@@ -768,7 +797,44 @@ func (l *Loop) buildSystemPromptWithProfile(ctx context.Context, userMessage str
 		seal()
 	}
 
-	return sb.String()
+	text := sb.String()
+	return text, promptSectionsFromBoundaries(text, sections)
+}
+
+func promptSectionsFromBoundaries(text string, sections []promptSection) []llm.PromptSection {
+	if len(sections) == 0 {
+		return nil
+	}
+	result := make([]llm.PromptSection, 0, len(sections))
+	for _, section := range sections {
+		if section.end <= section.start || section.start < 0 || section.end > len(text) {
+			continue
+		}
+		result = append(result, llm.PromptSection{
+			Name:     section.name,
+			Content:  text[section.start:section.end],
+			CacheTTL: promptSectionCacheTTL(section.name),
+		})
+	}
+	return result
+}
+
+func promptSectionCacheTTL(name string) string {
+	switch name {
+	case "PERSONA", "EGO", "RUNTIME CONTRACT", "INJECTED CONTEXT", "TOOL CALLING CONTRACT", "TALENTS ALWAYS ON":
+		return "1h"
+	case "TALENTS TAGGED":
+		return "5m"
+	default:
+		return ""
+	}
+}
+
+func appendPromptSection(sections []llm.PromptSection, section llm.PromptSection) []llm.PromptSection {
+	if strings.TrimSpace(section.Content) == "" {
+		return sections
+	}
+	return append(sections, section)
 }
 
 func (l *Loop) modelInteractionProfileForModel(model string) llm.ModelInteractionProfile {
@@ -816,6 +882,10 @@ func (l *Loop) repairCapabilityToolCall(tc llm.ToolCall) (llm.ToolCall, bool) {
 		if tc.Function.Arguments == nil {
 			tc.Function.Arguments = map[string]any{}
 		}
+		return tc, true
+	case "reset_capability", "reset_capabilities", "reset_loaded_capabilities", "reset_capability_state", "restore_capability_baseline":
+		tc.Function.Name = "reset_capabilities"
+		tc.Function.Arguments = map[string]any{}
 		return tc, true
 	case "request_capability", "load_capability":
 		if tag, ok := l.resolveCapabilityTagAlias(extractCapabilityTagArg(tc.Function.Arguments)); ok {
@@ -1238,10 +1308,11 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	promptCtx = tools.WithChannelBinding(promptCtx, channelBinding)
 
 	var systemPrompt string
+	var systemSections []llm.PromptSection
 	if req.SystemPrompt != "" {
 		systemPrompt = req.SystemPrompt
 	} else {
-		systemPrompt = l.buildSystemPrompt(promptCtx, userMessage, history)
+		systemPrompt, systemSections = l.buildSystemPromptWithProfileSections(promptCtx, userMessage, history, llm.DefaultModelInteractionProfile())
 	}
 
 	// Context usage — appended to the system prompt after all sections
@@ -1277,8 +1348,9 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 
 	var llmMessages []llm.Message
 	llmMessages = append(llmMessages, llm.Message{
-		Role:    "system",
-		Content: systemPrompt,
+		Role:     "system",
+		Content:  systemPrompt,
+		Sections: systemSections,
 	})
 
 	// History is now embedded as JSON in the system prompt (section 7)
@@ -1389,7 +1461,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 
 	if req.SystemPrompt == "" {
 		usageInfo.Model = model
-		systemPrompt = l.buildSystemPromptWithProfile(promptCtx, userMessage, history, l.modelInteractionProfileForModel(model))
+		systemPrompt, systemSections = l.buildSystemPromptWithProfileSections(promptCtx, userMessage, history, l.modelInteractionProfileForModel(model))
 	}
 
 	usageInfo.Model = model
@@ -1406,9 +1478,14 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	usageInfo.TokenCount = finalChars / 4 // rough char-to-token estimate
 	if line := awareness.FormatContextUsage(usageInfo); line != "" {
 		systemPrompt += "\n" + line
+		systemSections = appendPromptSection(systemSections, llm.PromptSection{
+			Name:    "CONTEXT USAGE",
+			Content: "\n" + line,
+		})
 	}
 	if len(llmMessages) > 0 && llmMessages[0].Role == "system" {
 		llmMessages[0].Content = systemPrompt
+		llmMessages[0].Sections = systemSections
 	}
 
 	l.seedLiveRequestDetail(ctx, requestID, systemPrompt, userMessage, model, 0, llmMessages)
@@ -2314,6 +2391,7 @@ func (l *Loop) GetContextWindow() int {
 // ResetConversation archives and then clears the conversation history.
 func (l *Loop) ResetConversation(conversationID string) error {
 	l.archiveAndEndSession(conversationID, "reset")
+	l.clearPersistedCapabilityTags(conversationID)
 
 	// Clean up temp files for this conversation.
 	if l.tools != nil {
@@ -2352,6 +2430,7 @@ func (l *Loop) CloseSession(conversationID, reason, carryForward string) error {
 
 	// Archive and end current session (same pattern as ResetConversation).
 	l.archiveAndEndSession(conversationID, reason)
+	l.clearPersistedCapabilityTags(conversationID)
 
 	// Clean up temp files for this conversation.
 	if l.tools != nil {
@@ -2458,6 +2537,7 @@ func (l *Loop) SplitSession(conversationID string, atIndex int, atMessage string
 			l.logger.Error("failed to end session at split point", "error", err)
 		}
 	}
+	l.clearPersistedCapabilityTags(conversationID)
 
 	// Start a new session for the post-split messages.
 	if _, err := l.archiver.StartSession(conversationID); err != nil {
@@ -2553,6 +2633,18 @@ func (l *Loop) archiveAndEndSession(conversationID, reason string) {
 		if err := l.archiver.EndSession(sid, reason); err != nil {
 			l.logger.Error("failed to end session", "error", err)
 		}
+	}
+}
+
+func (l *Loop) clearPersistedCapabilityTags(conversationID string) {
+	if l.capTagStore == nil || conversationID == "" {
+		return
+	}
+	if err := l.capTagStore.SaveTags(conversationID, nil); err != nil {
+		l.logger.Warn("failed to clear conversation capability tags",
+			"conversation_id", conversationID,
+			"error", err,
+		)
 	}
 }
 

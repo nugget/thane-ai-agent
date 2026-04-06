@@ -153,6 +153,39 @@ func TestBuildSystemPrompt_TagContextDedup(t *testing.T) {
 	}
 }
 
+func TestBuildSystemPrompt_TagContextEntryPointFirst(t *testing.T) {
+	kbDir := t.TempDir()
+	os.WriteFile(filepath.Join(kbDir, "article.md"),
+		[]byte("---\ntags: [development]\n---\nARTICLE_MARKER"), 0o644)
+	os.WriteFile(filepath.Join(kbDir, "tree.md"),
+		[]byte("---\nkind: entry_point\ntags: [development]\n---\nTREE_MARKER"), 0o644)
+
+	capTags := map[string]config.CapabilityTagConfig{
+		"development": {
+			Description:  "Development entry point",
+			AlwaysActive: true,
+		},
+	}
+
+	l := newTagTestLoop()
+	l.SetCapabilityTags(capTags, nil)
+	l.SetTagContextAssembler(NewTagContextAssembler(TagContextAssemblerConfig{
+		CapTags: capTags,
+		KBDir:   kbDir,
+		Logger:  l.logger,
+	}))
+
+	prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello", nil)
+	treeIdx := strings.Index(prompt, "TREE_MARKER")
+	articleIdx := strings.Index(prompt, "ARTICLE_MARKER")
+	if treeIdx < 0 || articleIdx < 0 {
+		t.Fatalf("prompt missing expected markers:\n%s", prompt)
+	}
+	if treeIdx > articleIdx {
+		t.Fatalf("entry-point guidance should precede doctrine article in prompt:\n%s", prompt)
+	}
+}
+
 func TestBuildSystemPrompt_TagContextNoCapTags(t *testing.T) {
 	l := newMinimalLoop()
 	// capTags not set — should not inject any tag context
@@ -497,6 +530,29 @@ func TestTagContextAssembler_KBArticleTags(t *testing.T) {
 	}
 	if counts["ha"] != 2 {
 		t.Errorf("ha KB count = %d, want 2", counts["ha"])
+	}
+}
+
+func TestTagContextAssembler_KBMenuHints(t *testing.T) {
+	kbDir := t.TempDir()
+	os.WriteFile(filepath.Join(kbDir, "knowledge-tree.md"), []byte("---\nkind: entry_point\ntags: [knowledge]\nteaser: \"Activate when the next move is about internal docs or durable knowledge.\"\nnext_tags: [files, memory, web]\n---\nTREE"), 0o644)
+	os.WriteFile(filepath.Join(kbDir, "knowledge-article.md"), []byte("---\ntags: [knowledge]\n---\nARTICLE"), 0o644)
+
+	a := NewTagContextAssembler(TagContextAssemblerConfig{
+		CapTags: map[string]config.CapabilityTagConfig{},
+		KBDir:   kbDir,
+	})
+
+	hints := a.KBMenuHints()
+	hint, ok := hints["knowledge"]
+	if !ok {
+		t.Fatal("knowledge menu hint missing")
+	}
+	if hint.Teaser != "Activate when the next move is about internal docs or durable knowledge." {
+		t.Fatalf("teaser = %q", hint.Teaser)
+	}
+	if got := strings.Join(hint.NextTags, ","); got != "files,memory,web" {
+		t.Fatalf("next_tags = %q", got)
 	}
 }
 

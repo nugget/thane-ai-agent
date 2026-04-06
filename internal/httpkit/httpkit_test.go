@@ -11,6 +11,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/nugget/thane-ai-agent/internal/buildinfo"
 )
 
 func TestNewClient_DefaultTimeout(t *testing.T) {
@@ -65,8 +67,26 @@ func TestNewClient_DefaultUserAgent(t *testing.T) {
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
-	if !strings.HasPrefix(string(body), "Thane/") {
-		t.Errorf("expected Thane/ prefix, got %q", body)
+	if got, want := string(body), buildinfo.UserAgent(); got != want {
+		t.Errorf("expected default UA %q, got %q", want, got)
+	}
+}
+
+func TestNewClient_TruthfulUserAgent(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(r.Header.Get("User-Agent")))
+	}))
+	defer srv.Close()
+
+	c := NewClient(WithTruthfulUserAgent(AgentSurfaceForge))
+	resp, err := c.Get(srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if got, want := string(body), buildinfo.UserAgentFor(buildinfo.AgentSurfaceForge); got != want {
+		t.Errorf("expected truthful forge UA %q, got %q", want, got)
 	}
 }
 

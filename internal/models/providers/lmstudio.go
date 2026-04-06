@@ -18,28 +18,39 @@ import (
 
 // LMStudioClient is a client for LM Studio's OpenAI-compatible API.
 type LMStudioClient struct {
-	baseURL    string
-	apiKey     string
-	httpClient *http.Client
-	logger     *slog.Logger
-	watcher    llm.ReadyWatcher
+	baseURL        string
+	apiKey         string
+	idleTTLSeconds int
+	httpClient     *http.Client
+	logger         *slog.Logger
+	watcher        llm.ReadyWatcher
 }
 
 // NewLMStudioClient creates a new LM Studio client.
 func NewLMStudioClient(baseURL, apiKey string, logger *slog.Logger) *LMStudioClient {
+	return NewLMStudioClientWithTTL(baseURL, apiKey, logger, 0)
+}
+
+// NewLMStudioClientWithTTL creates a new LM Studio client with a
+// resource-level idle TTL hint for inference requests.
+func NewLMStudioClientWithTTL(baseURL, apiKey string, logger *slog.Logger, idleTTLSeconds int) *LMStudioClient {
 	if baseURL == "" {
 		baseURL = "http://localhost:1234"
 	}
 	if logger == nil {
 		logger = slog.Default()
 	}
+	if idleTTLSeconds < 0 {
+		idleTTLSeconds = 0
+	}
 	t := httpkit.NewTransport()
 	t.ResponseHeaderTimeout = 5 * time.Minute
 
 	return &LMStudioClient{
-		baseURL: strings.TrimRight(baseURL, "/"),
-		apiKey:  strings.TrimSpace(apiKey),
-		logger:  logger.With("provider", "lmstudio"),
+		baseURL:        strings.TrimRight(baseURL, "/"),
+		apiKey:         strings.TrimSpace(apiKey),
+		idleTTLSeconds: idleTTLSeconds,
+		logger:         logger.With("provider", "lmstudio"),
 		httpClient: httpkit.NewClient(
 			httpkit.WithTimeout(0),
 			httpkit.WithTransport(t),
@@ -82,6 +93,7 @@ func (c *LMStudioClient) ChatStream(ctx context.Context, model string, messages 
 		Messages: wireMessages,
 		Stream:   stream,
 		Tools:    tools,
+		TTL:      c.idleTTLSeconds,
 	}
 	if stream {
 		req.StreamOptions = &lmStudioStreamOptions{IncludeUsage: true}
@@ -97,6 +109,7 @@ func (c *LMStudioClient) ChatStream(ctx context.Context, model string, messages 
 		"messages", len(messages),
 		"tools", len(tools),
 		"stream", stream,
+		"idle_ttl_seconds", c.idleTTLSeconds,
 	)
 	c.logger.Log(ctx, llm.LevelTrace, "request payload", "json", string(jsonData))
 

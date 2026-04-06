@@ -34,9 +34,19 @@ type TagContextAssembler struct {
 // kbArticle is a knowledge base file with tag affinity parsed from
 // frontmatter. Reuses the talent frontmatter format: tags: [a, b].
 type kbArticle struct {
-	Path string   // absolute file path
-	Tags []string // from frontmatter
-	Name string   // filename without .md
+	Path     string   // absolute file path
+	Tags     []string // from frontmatter
+	Kind     string   // frontmatter kind: entry_point or empty/article
+	Teaser   string   // short menu teaser for entry-point docs
+	NextTags []string // suggested next tags from an entry point
+	Name     string   // filename without .md
+}
+
+// KBMenuHint captures entry-point metadata that can be surfaced in
+// the capability menu before a tag is activated.
+type KBMenuHint struct {
+	Teaser   string
+	NextTags []string
 }
 
 // TagContextAssemblerConfig holds the construction parameters for a
@@ -106,7 +116,7 @@ func (a *TagContextAssembler) Build(ctx context.Context, activeTags map[string]b
 		}
 		// Strip frontmatter before injection — the model doesn't need
 		// the YAML metadata, just the knowledge content.
-		_, content := talents.ParseFrontmatter(string(data))
+		_, content := talents.ParseFrontmatterMetadata(string(data))
 		data = homeassistant.ResolveInject(ctx, []byte(content), a.haInject, a.logger)
 		a.appendContent(&buf, data)
 		if buf.Len() >= maxTagContextBytes {
@@ -189,6 +199,38 @@ func (a *TagContextAssembler) KBArticleTags() map[string]int {
 	return counts
 }
 
+// KBMenuHints returns one root-menu hint per tag, sourced from tagged
+// KB entry-point documents. The first teaser encountered for a tag
+// wins, with deterministic ordering provided by scanKBArticles.
+func (a *TagContextAssembler) KBMenuHints() map[string]KBMenuHint {
+	if a == nil {
+		return nil
+	}
+	hints := make(map[string]KBMenuHint)
+	for _, article := range a.kbArticles {
+		if !isEntryPointKind(article.Kind) {
+			continue
+		}
+		if strings.TrimSpace(article.Teaser) == "" && len(article.NextTags) == 0 {
+			continue
+		}
+		for _, tag := range article.Tags {
+			if _, exists := hints[tag]; exists {
+				continue
+			}
+			hints[tag] = KBMenuHint{
+				Teaser:   strings.TrimSpace(article.Teaser),
+				NextTags: append([]string(nil), article.NextTags...),
+			}
+		}
+	}
+	return hints
+}
+
+func isEntryPointKind(kind string) bool {
+	return strings.TrimSpace(kind) == "entry_point"
+}
+
 // scanKBArticles walks the KB directory for .md files with tags:
 // frontmatter. Only top-level and one-level-deep files are scanned
 // (matching typical KB layouts like kb:dossiers/foo.md).
@@ -216,15 +258,18 @@ func scanKBArticles(dir string) ([]kbArticle, error) {
 			return nil // skip unreadable files
 		}
 
-		tags, _ := talents.ParseFrontmatter(string(data))
-		if len(tags) == 0 {
+		meta, _ := talents.ParseFrontmatterMetadata(string(data))
+		if len(meta.Tags) == 0 {
 			return nil // untagged KB articles are not auto-loaded
 		}
 
 		articles = append(articles, kbArticle{
-			Path: path,
-			Tags: tags,
-			Name: strings.TrimSuffix(d.Name(), ".md"),
+			Path:     path,
+			Tags:     meta.Tags,
+			Kind:     strings.TrimSpace(meta.Kind),
+			Teaser:   strings.TrimSpace(meta.Teaser),
+			NextTags: append([]string(nil), meta.NextTags...),
+			Name:     strings.TrimSuffix(d.Name(), ".md"),
 		})
 		return nil
 	})
@@ -234,6 +279,12 @@ func scanKBArticles(dir string) ([]kbArticle, error) {
 
 	// Sort for deterministic ordering.
 	sort.Slice(articles, func(i, j int) bool {
+		if isEntryPointKind(articles[i].Kind) && !isEntryPointKind(articles[j].Kind) {
+			return true
+		}
+		if !isEntryPointKind(articles[i].Kind) && isEntryPointKind(articles[j].Kind) {
+			return false
+		}
 		return articles[i].Path < articles[j].Path
 	})
 

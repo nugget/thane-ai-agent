@@ -2,7 +2,6 @@ package toolcatalog
 
 import (
 	"encoding/json"
-	"fmt"
 	"maps"
 	"sort"
 	"strings"
@@ -27,6 +26,7 @@ type BuiltinToolSpec struct {
 type BuiltinTagSpec struct {
 	Description  string
 	AlwaysActive bool
+	Menu         bool
 	Protected    bool
 }
 
@@ -37,8 +37,11 @@ type BuiltinTagSpec struct {
 type CapabilitySurface struct {
 	Tag          string
 	Description  string
+	Teaser       string
+	NextTags     []string
 	Tools        []string
 	AlwaysActive bool
+	Menu         bool
 	Protected    bool
 	Loaded       bool
 	KBArticles   int
@@ -55,6 +58,8 @@ type CapabilityCatalogEntry struct {
 	Tag          string                    `json:"tag"`
 	Status       string                    `json:"status"`
 	Description  string                    `json:"description"`
+	Teaser       string                    `json:"teaser,omitempty"`
+	NextTags     []string                  `json:"next_tags,omitempty"`
 	ToolCount    int                       `json:"tool_count,omitempty"`
 	Tools        []string                  `json:"tools,omitempty"`
 	AlwaysActive bool                      `json:"always_active,omitempty"`
@@ -76,6 +81,7 @@ type LoadedCapabilityEntry struct {
 type CapabilityActionTools struct {
 	Activate   string `json:"activate"`
 	Deactivate string `json:"deactivate"`
+	Reset      string `json:"reset,omitempty"`
 	List       string `json:"list,omitempty"`
 	Delegate   string `json:"delegate,omitempty"`
 }
@@ -88,7 +94,6 @@ type CapabilityCatalogView struct {
 
 type LoadedCapabilityView struct {
 	Kind               string                  `json:"kind"`
-	ActivationTools    CapabilityActionTools   `json:"activation_tools"`
 	LoadedCapabilities []LoadedCapabilityEntry `json:"loaded_capabilities"`
 }
 
@@ -96,6 +101,7 @@ func defaultCapabilityActionTools(includeDelegate bool) CapabilityActionTools {
 	tools := CapabilityActionTools{
 		Activate:   "activate_capability",
 		Deactivate: "deactivate_capability",
+		Reset:      "reset_capabilities",
 		List:       "list_loaded_capabilities",
 	}
 	if includeDelegate {
@@ -126,6 +132,8 @@ func BuildCapabilityCatalogView(entries []CapabilitySurface, includeDelegate boo
 			Tag:          entry.Tag,
 			Status:       status,
 			Description:  capabilityDescription(entry),
+			Teaser:       strings.TrimSpace(entry.Teaser),
+			NextTags:     append([]string(nil), entry.NextTags...),
 			ToolCount:    len(entry.Tools),
 			Tools:        append([]string(nil), entry.Tools...),
 			AlwaysActive: entry.AlwaysActive,
@@ -185,9 +193,9 @@ func BuildLoadedCapabilityEntries(entries []CapabilitySurface, activeTags []stri
 }
 
 func BuildLoadedCapabilityView(entries []CapabilitySurface, activeTags []string, includeDelegate bool) LoadedCapabilityView {
+	_ = includeDelegate
 	return LoadedCapabilityView{
 		Kind:               "loaded_capabilities",
-		ActivationTools:    defaultCapabilityActionTools(includeDelegate),
 		LoadedCapabilities: BuildLoadedCapabilityEntries(entries, activeTags),
 	}
 }
@@ -259,6 +267,7 @@ var builtinToolSpecs = map[string]BuiltinToolSpec{
 	"list_contacts":               {CanonicalID: "native:list_contacts", Source: NativeToolSource, DefaultTags: []string{"contacts"}},
 	"list_entities":               {CanonicalID: "native:list_entities", Source: NativeToolSource, DefaultTags: []string{"ha", "homeassistant"}},
 	"list_loaded_capabilities":    {CanonicalID: "native:list_loaded_capabilities", Source: NativeToolSource},
+	"reset_capabilities":          {CanonicalID: "native:reset_capabilities", Source: NativeToolSource},
 	"list_tasks":                  {CanonicalID: "native:list_tasks", Source: NativeToolSource, DefaultTags: []string{"scheduler"}},
 	"logs_query":                  {CanonicalID: "native:logs_query", Source: NativeToolSource, DefaultTags: []string{"diagnostics"}},
 	"lookup_contact":              {CanonicalID: "native:lookup_contact", Source: NativeToolSource, DefaultTags: []string{"contacts"}},
@@ -274,7 +283,7 @@ var builtinToolSpecs = map[string]BuiltinToolSpec{
 	"media_feeds":                 {CanonicalID: "native:media_feeds", Source: NativeToolSource, DefaultTags: []string{"feeds"}},
 	"media_follow":                {CanonicalID: "native:media_follow", Source: NativeToolSource, DefaultTags: []string{"feeds"}},
 	"media_save_analysis":         {CanonicalID: "native:media_save_analysis", Source: NativeToolSource, DefaultTags: []string{"media"}},
-	"media_transcript":            {CanonicalID: "native:media_transcript", Source: NativeToolSource, DefaultTags: []string{"media", "search"}},
+	"media_transcript":            {CanonicalID: "native:media_transcript", Source: NativeToolSource, DefaultTags: []string{"media", "web"}},
 	"media_unfollow":              {CanonicalID: "native:media_unfollow", Source: NativeToolSource, DefaultTags: []string{"feeds"}},
 	"model_deployment_set_policy": {CanonicalID: "native:model_deployment_set_policy", Source: NativeToolSource, DefaultTags: []string{"models"}},
 	"model_registry_get":          {CanonicalID: "native:model_registry_get", Source: NativeToolSource, DefaultTags: []string{"models"}},
@@ -299,8 +308,8 @@ var builtinToolSpecs = map[string]BuiltinToolSpec{
 	"session_working_memory":      {CanonicalID: "native:session_working_memory", Source: NativeToolSource, DefaultTags: []string{"memory"}},
 	"signal_send_message":         {CanonicalID: "native:signal_send_message", Source: NativeToolSource, DefaultTags: []string{"signal"}},
 	"signal_send_reaction":        {CanonicalID: "native:signal_send_reaction", Source: NativeToolSource, DefaultTags: []string{"signal"}},
-	"web_fetch":                   {CanonicalID: "native:web_fetch", Source: NativeToolSource, DefaultTags: []string{"search"}},
-	"web_search":                  {CanonicalID: "native:web_search", Source: NativeToolSource, DefaultTags: []string{"search"}},
+	"web_fetch":                   {CanonicalID: "native:web_fetch", Source: NativeToolSource, DefaultTags: []string{"web"}},
+	"web_search":                  {CanonicalID: "native:web_search", Source: NativeToolSource, DefaultTags: []string{"web"}},
 	"add_context_entity":          {CanonicalID: "native:add_context_entity", Source: NativeToolSource, DefaultTags: []string{"awareness"}},
 	"remove_context_entity":       {CanonicalID: "native:remove_context_entity", Source: NativeToolSource, DefaultTags: []string{"awareness"}},
 }
@@ -333,11 +342,13 @@ func BuildCapabilitySurface(tags map[string][]string, descriptions map[string]st
 	for tag, toolNames := range tags {
 		copiedTools := append([]string(nil), toolNames...)
 		sort.Strings(copiedTools)
+		spec := builtinTagSpecs[tag]
 		surface = append(surface, CapabilitySurface{
 			Tag:          tag,
 			Description:  descriptions[tag],
 			Tools:        copiedTools,
 			AlwaysActive: alwaysActive[tag],
+			Menu:         spec.Menu,
 			Protected:    protected[tag],
 		})
 	}
@@ -357,84 +368,6 @@ func SortCapabilitySurface(entries []CapabilitySurface) []CapabilitySurface {
 	return sorted
 }
 
-// RenderCapabilityActivationDescription renders the activate_capability
-// tool help text from the shared capability surface.
-func RenderCapabilityActivationDescription(entries []CapabilitySurface) string {
-	actionTools := defaultCapabilityActionTools(true)
-	var sb strings.Builder
-	sb.WriteString("Activate a capability to load its tools and context into YOUR current conversation. ")
-	sb.WriteString("This modifies your own runtime — it cannot be delegated. ")
-	sb.WriteString(fmt.Sprintf("The only valid capability tools are `%s`, `%s`, and `%s`; do not invent per-capability tool names. ",
-		actionTools.Activate, actionTools.Deactivate, actionTools.List))
-	sb.WriteString(fmt.Sprintf("Delegates get capabilities via the tags parameter on `%s`.\n\n", actionTools.Delegate))
-	sb.WriteString("Available capabilities:\n")
-
-	for _, entry := range SortCapabilitySurface(entries) {
-		if entry.AlwaysActive || entry.Protected {
-			continue
-		}
-		sb.WriteString(fmt.Sprintf("- **%s**: %s (%d tools)\n",
-			entry.Tag, capabilityDescription(entry), len(entry.Tools)))
-	}
-
-	sb.WriteString(fmt.Sprintf("\nUse %s to see which tags are currently loaded, and %s when done to keep your tool set focused.",
-		actionTools.List, actionTools.Deactivate))
-	if hasProtectedCapability(entries) {
-		sb.WriteString(" Protected tags are runtime-asserted and cannot be activated manually.")
-	}
-	return sb.String()
-}
-
-func hasProtectedCapability(entries []CapabilitySurface) bool {
-	for _, entry := range entries {
-		if entry.Protected {
-			return true
-		}
-	}
-	return false
-}
-
-// RenderCapabilityManifestMarkdown renders the model-facing capability
-// catalog as a heading plus a compact JSON payload.
-func RenderCapabilityManifestMarkdown(entries []CapabilitySurface) string {
-	if len(entries) == 0 {
-		return ""
-	}
-
-	payload := struct {
-		Kind                              string                            `json:"kind"`
-		CatalogEntriesAreNotLoaded        bool                              `json:"catalog_entries_are_not_loaded"`
-		InventedCapabilityToolsAreInvalid bool                              `json:"invented_capability_tool_names_are_invalid"`
-		ActivationTools                   CapabilityActionTools             `json:"activation_tools"`
-		Capabilities                      map[string]CapabilityCatalogEntry `json:"available_capabilities"`
-	}{
-		Kind:                              "capability_catalog",
-		CatalogEntriesAreNotLoaded:        true,
-		InventedCapabilityToolsAreInvalid: true,
-		ActivationTools:                   defaultCapabilityActionTools(true),
-		Capabilities:                      make(map[string]CapabilityCatalogEntry, len(entries)),
-	}
-
-	for _, rendered := range BuildCapabilityCatalogView(entries, true).Capabilities {
-		payload.Capabilities[rendered.Tag] = CapabilityCatalogEntry{
-			Status:      rendered.Status,
-			Description: rendered.Description,
-			ToolCount:   rendered.ToolCount,
-			Context:     rendered.Context,
-		}
-	}
-
-	data, err := json.Marshal(payload)
-	if err != nil {
-		return "### Available Capabilities\n\n{\"kind\":\"capability_catalog\",\"error\":\"manifest marshal failed\"}"
-	}
-
-	var sb strings.Builder
-	sb.WriteString("### Available Capabilities\n\n")
-	sb.Write(data)
-	return sb.String()
-}
-
 // RenderLoadedCapabilitySummary renders the currently loaded
 // capabilities for always-on prompt context.
 func RenderLoadedCapabilitySummary(entries []CapabilitySurface, activeTags map[string]bool) string {
@@ -444,15 +377,11 @@ func RenderLoadedCapabilitySummary(entries []CapabilitySurface, activeTags map[s
 	}
 
 	payload := struct {
-		Kind                       string                  `json:"kind"`
-		CatalogEntriesAreNotLoaded bool                    `json:"catalog_entries_are_not_loaded"`
-		ActivationTools            CapabilityActionTools   `json:"activation_tools"`
-		LoadedCapabilities         []LoadedCapabilityEntry `json:"loaded_capabilities"`
+		Kind               string                  `json:"kind"`
+		LoadedCapabilities []LoadedCapabilityEntry `json:"loaded_capabilities"`
 	}{
-		Kind:                       "loaded_capabilities",
-		CatalogEntriesAreNotLoaded: true,
-		ActivationTools:            defaultCapabilityActionTools(false),
-		LoadedCapabilities:         BuildLoadedCapabilityEntries(entries, names),
+		Kind:               "loaded_capabilities",
+		LoadedCapabilities: BuildLoadedCapabilityEntries(entries, names),
 	}
 
 	data, err := json.Marshal(payload)
@@ -460,24 +389,4 @@ func RenderLoadedCapabilitySummary(entries []CapabilitySurface, activeTags map[s
 		return "{\"kind\":\"loaded_capabilities\",\"error\":\"summary marshal failed\"}"
 	}
 	return string(data)
-}
-
-func capabilityDescription(entry CapabilitySurface) string {
-	if desc := strings.TrimSpace(entry.Description); desc != "" {
-		return desc
-	}
-	if entry.AdHoc {
-		parts := make([]string, 0, 2)
-		if entry.KBArticles > 0 {
-			parts = append(parts, fmt.Sprintf("%d tagged KB article(s)", entry.KBArticles))
-		}
-		if entry.LiveContext {
-			parts = append(parts, "live context")
-		}
-		if len(parts) == 0 {
-			return "Ad-hoc capability discovered from tagged context."
-		}
-		return "Ad-hoc capability with " + strings.Join(parts, " and ") + "."
-	}
-	return ""
 }

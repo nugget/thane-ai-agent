@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -165,6 +166,9 @@ func TestLMStudioChat_NonStreamingToolCalls(t *testing.T) {
 		if len(req.Tools) != 1 {
 			t.Fatalf("len(req.Tools) = %d, want 1", len(req.Tools))
 		}
+		if req.TTL != 600 {
+			t.Fatalf("req.TTL = %d, want 600", req.TTL)
+		}
 		_ = json.NewEncoder(w).Encode(lmStudioChatResponse{
 			Model:   "deepslate/qwen3:8b",
 			Created: 1712160000,
@@ -191,7 +195,7 @@ func TestLMStudioChat_NonStreamingToolCalls(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewLMStudioClient(srv.URL, "secret-token", nil)
+	client := NewLMStudioClientWithTTL(srv.URL, "secret-token", nil, 600)
 	resp, err := client.Chat(context.Background(), "qwen3:8b", []llm.Message{{Role: "user", Content: "check the sun"}}, []map[string]any{
 		{"type": "function", "function": map[string]any{"name": "get_state"}},
 	})
@@ -212,6 +216,40 @@ func TestLMStudioChat_NonStreamingToolCalls(t *testing.T) {
 	}
 	if got := resp.Message.ToolCalls[0].Function.Arguments["entity_id"]; got != "sun.sun" {
 		t.Fatalf("tool args entity_id = %v, want sun.sun", got)
+	}
+}
+
+func TestLMStudioChat_DefaultIdleTTLOmitsRequestField(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read request body: %v", err)
+		}
+		if strings.Contains(string(body), `"ttl":`) {
+			t.Fatalf("request body unexpectedly contained ttl field: %s", string(body))
+		}
+		_ = json.NewEncoder(w).Encode(lmStudioChatResponse{
+			Model: "deepslate/qwen3:8b",
+			Choices: []lmStudioChatChoice{{
+				Index: 0,
+				Message: &lmStudioMessageResponse{
+					Role:    "assistant",
+					Content: "ok",
+				},
+			}},
+		})
+	}))
+	defer srv.Close()
+
+	client := NewLMStudioClient(srv.URL, "", nil)
+	resp, err := client.Chat(context.Background(), "qwen3:8b", []llm.Message{{Role: "user", Content: "ok?"}}, nil)
+	if err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+	if resp.Message.Content != "ok" {
+		t.Fatalf("resp.Message.Content = %q, want ok", resp.Message.Content)
 	}
 }
 

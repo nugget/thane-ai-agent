@@ -12,7 +12,8 @@ import (
 )
 
 // setupCapabilityLoop builds a Loop with capability tags configured and the
-// activate_capability / deactivate_capability tools registered. This mirrors the
+// activate_capability / deactivate_capability / reset_capabilities tools
+// registered. This mirrors the
 // production wiring in cmd/thane/main.go.
 func setupCapabilityLoop(mock *mockLLM, extraNames []string, capTags map[string]config.CapabilityTagConfig) *Loop {
 	loop := buildTestLoop(mock, extraNames)
@@ -190,7 +191,7 @@ func TestRunResponseSurfacesEffectiveToolsAndLoadedCapabilities(t *testing.T) {
 	if !slices.Contains(resp.EffectiveTools, "get_state") {
 		t.Fatalf("EffectiveTools = %#v, want get_state", resp.EffectiveTools)
 	}
-	for _, toolName := range []string{"activate_capability", "deactivate_capability", "list_loaded_capabilities"} {
+	for _, toolName := range []string{"activate_capability", "deactivate_capability", "reset_capabilities", "list_loaded_capabilities"} {
 		if !slices.Contains(resp.EffectiveTools, toolName) {
 			t.Fatalf("EffectiveTools = %#v, missing %q", resp.EffectiveTools, toolName)
 		}
@@ -278,6 +279,90 @@ func TestCapabilityActivation_DoesNotBleedActiveStateAcrossConversations(t *test
 	}
 	if len(resp2.LoadedCapabilities) != 0 {
 		t.Fatalf("conv-2 LoadedCapabilities = %#v, want none", resp2.LoadedCapabilities)
+	}
+}
+
+func TestCloseSession_NextRunStartsAtChannelBaseline(t *testing.T) {
+	mock := &mockLLM{
+		responses: []*llm.ChatResponse{
+			{
+				Model: "test-model",
+				Message: llm.Message{
+					Role: "assistant",
+					ToolCalls: []llm.ToolCall{{
+						ID: "call-req-cap",
+						Function: struct {
+							Name      string         `json:"name"`
+							Arguments map[string]any `json:"arguments"`
+						}{
+							Name:      "activate_capability",
+							Arguments: map[string]any{"tag": "forge"},
+						},
+					}},
+				},
+				InputTokens:  100,
+				OutputTokens: 10,
+			},
+			{
+				Model:        "test-model",
+				Message:      llm.Message{Role: "assistant", Content: "Forge ready."},
+				InputTokens:  120,
+				OutputTokens: 10,
+			},
+			{
+				Model:        "test-model",
+				Message:      llm.Message{Role: "assistant", Content: "Fresh session."},
+				InputTokens:  100,
+				OutputTokens: 10,
+			},
+		},
+	}
+
+	capTags := map[string]config.CapabilityTagConfig{
+		"forge": {
+			Description: "Forge tools",
+			Tools:       []string{"forge_tool"},
+		},
+		"web": {
+			Description: "Web tools",
+			Tools:       []string{"web_fetch", "web_search"},
+		},
+	}
+
+	loop := setupCapabilityLoop(mock, []string{"forge_tool", "web_fetch", "web_search"}, capTags)
+	loop.SetCapabilityTagStore(newTestCapStore(t))
+	loop.SetChannelTags(map[string][]string{
+		"signal": {"web"},
+	})
+	loop.memory = newMockMemWithCompaction()
+	loop.archiver = &mockArchiver{activeID: "old-session"}
+
+	resp1, err := loop.Run(context.Background(), &Request{
+		ConversationID: "conv-1",
+		Hints:          map[string]string{"source": "signal"},
+		Messages:       []Message{{Role: "user", Content: "activate forge"}},
+	}, nil)
+	if err != nil {
+		t.Fatalf("Run conv-1 error: %v", err)
+	}
+	if !slices.Equal(resp1.ActiveTags, []string{"forge", "web"}) {
+		t.Fatalf("conv-1 ActiveTags = %#v, want [forge web]", resp1.ActiveTags)
+	}
+
+	if err := loop.CloseSession("conv-1", "idle", "Carry this forward."); err != nil {
+		t.Fatalf("CloseSession() error: %v", err)
+	}
+
+	resp2, err := loop.Run(context.Background(), &Request{
+		ConversationID: "conv-1",
+		Hints:          map[string]string{"source": "signal"},
+		Messages:       []Message{{Role: "user", Content: "fresh session"}},
+	}, nil)
+	if err != nil {
+		t.Fatalf("Run conv-1 fresh-session error: %v", err)
+	}
+	if !slices.Equal(resp2.ActiveTags, []string{"web"}) {
+		t.Fatalf("fresh session ActiveTags = %#v, want [web]", resp2.ActiveTags)
 	}
 }
 

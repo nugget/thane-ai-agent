@@ -263,6 +263,25 @@ func TestApplyDefaults_EmbeddingsBaseURLUsesImplicitOllamaServer(t *testing.T) {
 	}
 }
 
+func TestValidate_ModelResourceIdleTTLNegative(t *testing.T) {
+	cfg := Default()
+	cfg.Models.Resources = map[string]ModelServerConfig{
+		"deepslate": {
+			URL:            "http://127.0.0.1:1234",
+			Provider:       "lmstudio",
+			IdleTTLSeconds: -1,
+		},
+	}
+
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("expected validation error for negative idle_ttl_seconds")
+	}
+	if !strings.Contains(err.Error(), "models.resources.deepslate.idle_ttl_seconds") {
+		t.Fatalf("error = %v, want models.resources.deepslate.idle_ttl_seconds", err)
+	}
+}
+
 func TestValidate_PersonDevicesValid(t *testing.T) {
 	cfg := Default()
 	cfg.Person.Track = []string{"person.alice"}
@@ -505,7 +524,7 @@ func TestValidate_ChannelTagsValid(t *testing.T) {
 func TestValidate_ChannelTagsBuiltinTagValid(t *testing.T) {
 	cfg := Default()
 	cfg.ChannelTags = map[string][]string{
-		"signal": {"ha", "search", "interactive"},
+		"signal": {"ha", "web", "interactive"},
 		"owu":    {"interactive", "owu"},
 	}
 

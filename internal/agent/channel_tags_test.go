@@ -402,3 +402,46 @@ func TestProtectedOwnerTag_ActivatedByChannelBinding(t *testing.T) {
 		t.Fatalf("owner_tool should be available for owner binding: %v", names)
 	}
 }
+
+func TestResetCapabilities_DropsOnlyVoluntaryTags(t *testing.T) {
+	capTags := map[string]config.CapabilityTagConfig{
+		"base": {
+			Description:  "Base tools",
+			AlwaysActive: true,
+		},
+		"signal": {Description: "Signal channel"},
+		"owner": {
+			Description: "Owner-scoped privileged tools.",
+			Protected:   true,
+		},
+		"extra": {Description: "Voluntary extra tools"},
+	}
+
+	scope := newCapabilityScope(capTags, nil)
+	scope.PinChannelTags([]string{"signal", "owner"})
+	if err := scope.Request("extra"); err != nil {
+		t.Fatalf("Request(extra) error: %v", err)
+	}
+
+	ctx := withCapabilityScope(context.Background(), scope)
+	loop := buildTestLoop(&mockLLM{}, nil)
+	loop.SetCapabilityTags(capTags, nil)
+
+	dropped, err := loop.ResetCapabilities(ctx)
+	if err != nil {
+		t.Fatalf("ResetCapabilities() error: %v", err)
+	}
+	if len(dropped) != 1 || dropped[0] != "extra" {
+		t.Fatalf("dropped = %#v, want [extra]", dropped)
+	}
+
+	active := scope.Snapshot()
+	if active["extra"] {
+		t.Fatalf("active = %#v, want extra dropped", active)
+	}
+	for _, tag := range []string{"base", "signal", "owner"} {
+		if !active[tag] {
+			t.Fatalf("active = %#v, want %s preserved", active, tag)
+		}
+	}
+}

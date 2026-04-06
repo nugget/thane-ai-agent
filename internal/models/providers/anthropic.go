@@ -57,7 +57,7 @@ func NewAnthropicClient(apiKey string, logger *slog.Logger) *AnthropicClient {
 type anthropicRequest struct {
 	Model        string                 `json:"model"`
 	Messages     []anthropicMessage     `json:"messages"`
-	System       string                 `json:"system,omitempty"`
+	System       any                    `json:"system,omitempty"`
 	MaxTokens    int                    `json:"max_tokens"`
 	Stream       bool                   `json:"stream,omitempty"`
 	Tools        []anthropicTool        `json:"tools,omitempty"`
@@ -75,14 +75,15 @@ type anthropicMessage struct {
 }
 
 type anthropicContent struct {
-	Type      string                `json:"type"`
-	Text      string                `json:"text,omitempty"`
-	ID        string                `json:"id,omitempty"`
-	Name      string                `json:"name,omitempty"`
-	Input     any                   `json:"input,omitempty"`
-	ToolUseID string                `json:"tool_use_id,omitempty"`
-	Content   string                `json:"content,omitempty"` // for tool_result
-	Source    *anthropicImageSource `json:"source,omitempty"`  // for image content blocks
+	Type         string                 `json:"type"`
+	Text         string                 `json:"text,omitempty"`
+	ID           string                 `json:"id,omitempty"`
+	Name         string                 `json:"name,omitempty"`
+	Input        any                    `json:"input,omitempty"`
+	ToolUseID    string                 `json:"tool_use_id,omitempty"`
+	Content      string                 `json:"content,omitempty"` // for tool_result
+	Source       *anthropicImageSource  `json:"source,omitempty"`  // for image content blocks
+	CacheControl *anthropicCacheControl `json:"cache_control,omitempty"`
 }
 
 // anthropicImageSource describes a base64-encoded image for the
@@ -94,9 +95,10 @@ type anthropicImageSource struct {
 }
 
 type anthropicTool struct {
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
-	InputSchema any    `json:"input_schema"`
+	Name         string                 `json:"name"`
+	Description  string                 `json:"description,omitempty"`
+	InputSchema  any                    `json:"input_schema"`
+	CacheControl *anthropicCacheControl `json:"cache_control,omitempty"`
 }
 
 type anthropicResponse struct {
@@ -147,6 +149,8 @@ func (c *AnthropicClient) ChatStream(ctx context.Context, model string, messages
 	// Convert messages and extract system prompt
 	anthropicMsgs, systemPrompt := convertToAnthropic(messages)
 	anthropicTools := convertToolsToAnthropic(tools)
+	systemPayload := anthropicSystemPayload(messages, systemPrompt)
+	explicitCaching := anthropicUsesExplicitPromptCaching(systemPayload)
 
 	c.logger.Debug("preparing request",
 		"model", model,
@@ -154,16 +158,17 @@ func (c *AnthropicClient) ChatStream(ctx context.Context, model string, messages
 		"tools", len(anthropicTools),
 		"stream", stream,
 		"system_len", len(systemPrompt),
+		"explicit_cache", explicitCaching,
 	)
 
 	req := anthropicRequest{
 		Model:        model,
 		Messages:     anthropicMsgs,
-		System:       systemPrompt,
+		System:       systemPayload,
 		MaxTokens:    4096,
 		Stream:       stream,
 		Tools:        anthropicTools,
-		CacheControl: anthropicPromptCacheControl(systemPrompt, anthropicMsgs, anthropicTools),
+		CacheControl: anthropicPromptCacheControl(systemPrompt, anthropicMsgs, anthropicTools, explicitCaching),
 	}
 
 	jsonData, err := json.Marshal(req)
@@ -248,6 +253,8 @@ func (c *AnthropicClient) handleNonStreaming(ctx context.Context, body io.Reader
 		"model", result.Model,
 		"input_tokens", result.InputTokens,
 		"output_tokens", result.OutputTokens,
+		"cache_creation_input_tokens", result.CacheCreationInputTokens,
+		"cache_read_input_tokens", result.CacheReadInputTokens,
 		"tool_calls", len(result.Message.ToolCalls),
 	)
 	c.logger.Log(ctx, llm.LevelTrace, "response content", "content", result.Message.Content)
@@ -374,6 +381,8 @@ func (c *AnthropicClient) handleStreaming(ctx context.Context, body io.Reader, c
 		"model", resp.Model,
 		"input_tokens", resp.InputTokens,
 		"output_tokens", resp.OutputTokens,
+		"cache_creation_input_tokens", resp.CacheCreationInputTokens,
+		"cache_read_input_tokens", resp.CacheReadInputTokens,
 		"content_len", len(resp.Message.Content),
 		"tool_calls", len(resp.Message.ToolCalls),
 	)
@@ -382,11 +391,87 @@ func (c *AnthropicClient) handleStreaming(ctx context.Context, body io.Reader, c
 	return resp, nil
 }
 
-func anthropicPromptCacheControl(systemPrompt string, messages []anthropicMessage, tools []anthropicTool) *anthropicCacheControl {
-	if !shouldUseAnthropicPromptCaching(systemPrompt, messages, tools) {
+func anthropicPromptCacheControl(systemPrompt string, messages []anthropicMessage, tools []anthropicTool, explicit bool) *anthropicCacheControl {
+	if explicit || !shouldUseAnthropicPromptCaching(systemPrompt, messages, tools) {
 		return nil
 	}
 	return &anthropicCacheControl{Type: "ephemeral"}
+}
+
+func anthropicSystemPayload(messages []llm.Message, fallback string) any {
+	for _, msg := range messages {
+		if msg.Role != "system" || len(msg.Sections) == 0 {
+			continue
+		}
+		blocks := anthropicSystemBlocks(msg.Sections)
+		if len(blocks) > 0 {
+			return blocks
+		}
+		break
+	}
+	return fallback
+}
+
+func anthropicSystemBlocks(sections []llm.PromptSection) []anthropicContent {
+	blocks := make([]anthropicContent, 0, len(sections))
+	for _, section := range sections {
+		if section.Content == "" {
+			continue
+		}
+		blocks = append(blocks, anthropicContent{
+			Type: "text",
+			Text: section.Content,
+		})
+	}
+	if len(blocks) == 0 {
+		return nil
+	}
+	for _, run := range promptCacheRuns(sections) {
+		blocks[run.end].CacheControl = &anthropicCacheControl{
+			Type: "ephemeral",
+			TTL:  run.ttl,
+		}
+	}
+	return blocks
+}
+
+type promptCacheRun struct {
+	ttl   string
+	start int
+	end   int
+}
+
+func promptCacheRuns(sections []llm.PromptSection) []promptCacheRun {
+	var runs []promptCacheRun
+	blockIndex := -1
+	for _, section := range sections {
+		if section.Content == "" {
+			continue
+		}
+		blockIndex++
+		ttl := strings.TrimSpace(section.CacheTTL)
+		if ttl == "" {
+			continue
+		}
+		if len(runs) == 0 || runs[len(runs)-1].ttl != ttl {
+			runs = append(runs, promptCacheRun{ttl: ttl, start: blockIndex, end: blockIndex})
+			continue
+		}
+		runs[len(runs)-1].end = blockIndex
+	}
+	return runs
+}
+
+func anthropicUsesExplicitPromptCaching(system any) bool {
+	switch blocks := system.(type) {
+	case []anthropicContent:
+		for _, block := range blocks {
+			if block.CacheControl != nil {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func shouldUseAnthropicPromptCaching(systemPrompt string, messages []anthropicMessage, tools []anthropicTool) bool {
@@ -529,6 +614,9 @@ func convertToolsToAnthropic(tools []map[string]any) []anthropicTool {
 			Description: desc,
 			InputSchema: params,
 		})
+	}
+	if len(result) > 0 {
+		result[len(result)-1].CacheControl = &anthropicCacheControl{Type: "ephemeral", TTL: "1h"}
 	}
 	return result
 }

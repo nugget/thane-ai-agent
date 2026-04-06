@@ -18,6 +18,7 @@ type Resource struct {
 	ID              string
 	Provider        string
 	URL             string
+	IdleTTLSeconds  int
 	Capabilities    modelproviders.Capabilities
 	PolicyState     DeploymentPolicyState
 	PolicySource    DeploymentPolicySource
@@ -154,10 +155,11 @@ func BuildCatalog(cfg *config.Config) (*Catalog, error) {
 				provider = "ollama"
 			}
 			res := Resource{
-				ID:           name,
-				Provider:     provider,
-				URL:          srv.URL,
-				Capabilities: modelproviders.CapabilitiesForProvider(provider),
+				ID:             name,
+				Provider:       provider,
+				URL:            srv.URL,
+				IdleTTLSeconds: srv.IdleTTLSeconds,
+				Capabilities:   modelproviders.CapabilitiesForProvider(provider),
 			}
 			resourceByID[res.ID] = res
 			resources = append(resources, res)

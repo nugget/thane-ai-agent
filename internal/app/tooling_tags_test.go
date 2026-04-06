@@ -27,17 +27,17 @@ func TestResolveCapabilityTags_UsesRegistryMetadataAsBaseline(t *testing.T) {
 	})
 
 	resolved := resolveCapabilityTags(reg, nil)
-	if _, ok := resolved["search"]; !ok {
-		t.Fatalf("expected search tag in resolved catalog")
+	if _, ok := resolved["web"]; !ok {
+		t.Fatalf("expected web tag in resolved catalog")
 	}
 	if _, ok := resolved["shell"]; !ok {
 		t.Fatalf("expected shell tag in resolved catalog")
 	}
-	if len(resolved["search"].Tools) != 1 || resolved["search"].Tools[0] != "web_search" {
-		t.Fatalf("search tools = %#v", resolved["search"].Tools)
+	if len(resolved["web"].Tools) != 1 || resolved["web"].Tools[0] != "web_search" {
+		t.Fatalf("web tools = %#v", resolved["web"].Tools)
 	}
-	if resolved["search"].Description == "" {
-		t.Fatal("search description should be populated")
+	if resolved["web"].Description == "" {
+		t.Fatal("web description should be populated")
 	}
 }
 
@@ -52,8 +52,8 @@ func TestResolveCapabilityTags_ConfigOverridesReplaceToolsAndDescription(t *test
 	})
 
 	resolved := resolveCapabilityTags(reg, map[string]config.CapabilityTagConfig{
-		"search": {
-			Description: "Custom search surface",
+		"web": {
+			Description: "Custom web surface",
 			Tools:       []string{"web_fetch"},
 		},
 		"review": {
@@ -62,11 +62,11 @@ func TestResolveCapabilityTags_ConfigOverridesReplaceToolsAndDescription(t *test
 		},
 	})
 
-	if resolved["search"].Description != "Custom search surface" {
-		t.Fatalf("search description = %q", resolved["search"].Description)
+	if resolved["web"].Description != "Custom web surface" {
+		t.Fatalf("web description = %q", resolved["web"].Description)
 	}
-	if len(resolved["search"].Tools) != 1 || resolved["search"].Tools[0] != "web_fetch" {
-		t.Fatalf("search tools = %#v", resolved["search"].Tools)
+	if len(resolved["web"].Tools) != 1 || resolved["web"].Tools[0] != "web_fetch" {
+		t.Fatalf("web tools = %#v", resolved["web"].Tools)
 	}
 	if len(resolved["review"].Tools) != 2 {
 		t.Fatalf("review tools = %#v", resolved["review"].Tools)

@@ -180,6 +180,7 @@ func (a *App) initDelegation(s *newState) error {
 
 		// Build manifest entries with enriched context info.
 		kbCounts := tagCtxAssembler.KBArticleTags()
+		menuHints := tagCtxAssembler.KBMenuHints()
 		liveProviders := a.loop.TagContextProviders()
 
 		// Discover ad-hoc tags from KB articles and talents that aren't
@@ -208,7 +209,7 @@ func (a *App) initDelegation(s *newState) error {
 			liveTags[tag] = true
 		}
 
-		capSurface := buildCapabilitySurface(resolvedCapTags, kbCounts, liveTags, adHocTags)
+		capSurface := buildCapabilitySurface(resolvedCapTags, kbCounts, menuHints, liveTags, adHocTags)
 		a.capSurface = capSurface
 
 		if manifestTalent := talents.GenerateManifest(capSurface); manifestTalent != nil {
