@@ -146,7 +146,10 @@ func TestRenderCapabilityActivationDescription_ShowsMenuTags(t *testing.T) {
 	if strings.Contains(desc, "**forge**") {
 		t.Fatalf("description = %q, want forge omitted from top-level menu", desc)
 	}
-	if !strings.Contains(desc, "Protected tags are runtime-asserted") {
-		t.Fatalf("description = %q, want protected-tag note", desc)
+	if !strings.Contains(desc, "**owner**") {
+		t.Fatalf("description = %q, want protected owner menu bullet", desc)
+	}
+	if !strings.Contains(desc, "protected, runtime-asserted, not manually activatable") {
+		t.Fatalf("description = %q, want protected owner status note", desc)
 	}
 }

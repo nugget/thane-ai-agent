@@ -34,6 +34,12 @@ func TestParseFrontmatter_Tags(t *testing.T) {
 			wantBody: "Content here.",
 		},
 		{
+			name:     "quoted tags are normalized",
+			raw:      "---\ntags: [\"knowledge\", 'search']\n---\nContent here.",
+			wantTags: []string{"knowledge", "search"},
+			wantBody: "Content here.",
+		},
+		{
 			name:     "no closing delimiter",
 			raw:      "---\ntags: [ha]\nContent without close.",
 			wantTags: nil,

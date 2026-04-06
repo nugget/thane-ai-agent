@@ -198,7 +198,7 @@ func parseFrontmatterLines(frontmatter string) Frontmatter {
 
 			var tags []string
 			for _, part := range strings.Split(value, ",") {
-				tag := strings.TrimSpace(part)
+				tag := strings.Trim(strings.TrimSpace(part), `"'`)
 				if tag != "" {
 					tags = append(tags, tag)
 				}

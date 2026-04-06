@@ -33,15 +33,20 @@ func RenderCapabilityActivationDescription(entries []CapabilitySurface) string {
 	sb.WriteString("Capability menu:\n")
 
 	for _, entry := range selectCapabilityMenuEntries(entries) {
-		if entry.AlwaysActive || entry.Protected {
+		if entry.AlwaysActive {
 			continue
 		}
 		desc := strings.TrimSpace(entry.Teaser)
 		if desc == "" {
 			desc = capabilityDescription(entry)
 		}
-		sb.WriteString(fmt.Sprintf("- **%s**: %s (%d tools)\n",
-			entry.Tag, desc, len(entry.Tools)))
+		if entry.Protected {
+			sb.WriteString(fmt.Sprintf("- **%s**: %s (%d tools; protected, runtime-asserted, not manually activatable)\n",
+				entry.Tag, desc, len(entry.Tools)))
+		} else {
+			sb.WriteString(fmt.Sprintf("- **%s**: %s (%d tools)\n",
+				entry.Tag, desc, len(entry.Tools)))
+		}
 		if len(entry.NextTags) > 0 {
 			sb.WriteString(fmt.Sprintf("  next: %s\n", strings.Join(entry.NextTags, ", ")))
 		}
@@ -49,19 +54,7 @@ func RenderCapabilityActivationDescription(entries []CapabilitySurface) string {
 
 	sb.WriteString(fmt.Sprintf("\nUse %s to see which tags are currently loaded, and %s when done to keep your tool set focused.",
 		actionTools.List, actionTools.Deactivate))
-	if hasProtectedCapability(entries) {
-		sb.WriteString(" Protected tags are runtime-asserted and cannot be activated manually.")
-	}
 	return sb.String()
-}
-
-func hasProtectedCapability(entries []CapabilitySurface) bool {
-	for _, entry := range entries {
-		if entry.Protected {
-			return true
-		}
-	}
-	return false
 }
 
 // RenderCapabilityManifestMarkdown renders the model-facing capability
