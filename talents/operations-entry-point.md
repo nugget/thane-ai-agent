@@ -1,6 +1,8 @@
 ---
 kind: entry_point
 tags: [operations]
+teaser: "Activate when the next move is about Thane's own runtime: logs, routing, schedules, loops, platform state, or system health."
+next_tags: [diagnostics, models, scheduler, loops, session, mqtt, ha, platform]
 ---
 
 # Operations Entry Point

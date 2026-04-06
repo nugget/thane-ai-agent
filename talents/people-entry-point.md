@@ -1,6 +1,8 @@
 ---
 kind: entry_point
 tags: [people]
+teaser: "Activate when the work is about a person: identity, relationship context, contact history, or communication channel choice."
+next_tags: [contacts, signal, email, owner]
 ---
 
 # People Entry Point

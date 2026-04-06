@@ -180,7 +180,7 @@ func (a *App) initDelegation(s *newState) error {
 
 		// Build manifest entries with enriched context info.
 		kbCounts := tagCtxAssembler.KBArticleTags()
-		menuHints := tagCtxAssembler.KBMenuHints()
+		menuHints := mergeMenuHints(talentMenuHints(capTalents), tagCtxAssembler.KBMenuHints())
 		liveProviders := a.loop.TagContextProviders()
 
 		// Discover ad-hoc tags from KB articles and talents that aren't
