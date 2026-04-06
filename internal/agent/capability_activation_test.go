@@ -282,6 +282,90 @@ func TestCapabilityActivation_DoesNotBleedActiveStateAcrossConversations(t *test
 	}
 }
 
+func TestCloseSession_NextRunStartsAtChannelBaseline(t *testing.T) {
+	mock := &mockLLM{
+		responses: []*llm.ChatResponse{
+			{
+				Model: "test-model",
+				Message: llm.Message{
+					Role: "assistant",
+					ToolCalls: []llm.ToolCall{{
+						ID: "call-req-cap",
+						Function: struct {
+							Name      string         `json:"name"`
+							Arguments map[string]any `json:"arguments"`
+						}{
+							Name:      "activate_capability",
+							Arguments: map[string]any{"tag": "forge"},
+						},
+					}},
+				},
+				InputTokens:  100,
+				OutputTokens: 10,
+			},
+			{
+				Model:        "test-model",
+				Message:      llm.Message{Role: "assistant", Content: "Forge ready."},
+				InputTokens:  120,
+				OutputTokens: 10,
+			},
+			{
+				Model:        "test-model",
+				Message:      llm.Message{Role: "assistant", Content: "Fresh session."},
+				InputTokens:  100,
+				OutputTokens: 10,
+			},
+		},
+	}
+
+	capTags := map[string]config.CapabilityTagConfig{
+		"forge": {
+			Description: "Forge tools",
+			Tools:       []string{"forge_tool"},
+		},
+		"web": {
+			Description: "Web tools",
+			Tools:       []string{"web_fetch", "web_search"},
+		},
+	}
+
+	loop := setupCapabilityLoop(mock, []string{"forge_tool", "web_fetch", "web_search"}, capTags)
+	loop.SetCapabilityTagStore(newTestCapStore(t))
+	loop.SetChannelTags(map[string][]string{
+		"signal": {"web"},
+	})
+	loop.memory = newMockMemWithCompaction()
+	loop.archiver = &mockArchiver{activeID: "old-session"}
+
+	resp1, err := loop.Run(context.Background(), &Request{
+		ConversationID: "conv-1",
+		Hints:          map[string]string{"source": "signal"},
+		Messages:       []Message{{Role: "user", Content: "activate forge"}},
+	}, nil)
+	if err != nil {
+		t.Fatalf("Run conv-1 error: %v", err)
+	}
+	if !slices.Equal(resp1.ActiveTags, []string{"forge", "web"}) {
+		t.Fatalf("conv-1 ActiveTags = %#v, want [forge web]", resp1.ActiveTags)
+	}
+
+	if err := loop.CloseSession("conv-1", "idle", "Carry this forward."); err != nil {
+		t.Fatalf("CloseSession() error: %v", err)
+	}
+
+	resp2, err := loop.Run(context.Background(), &Request{
+		ConversationID: "conv-1",
+		Hints:          map[string]string{"source": "signal"},
+		Messages:       []Message{{Role: "user", Content: "fresh session"}},
+	}, nil)
+	if err != nil {
+		t.Fatalf("Run conv-1 fresh-session error: %v", err)
+	}
+	if !slices.Equal(resp2.ActiveTags, []string{"web"}) {
+		t.Fatalf("fresh session ActiveTags = %#v, want [web]", resp2.ActiveTags)
+	}
+}
+
 // TestIllegalStrikes_NotResetByMetaTool verifies that the illegal strike
 // counter is not reset by capability meta-tools (activate_capability,
 // deactivate_capability), preventing infinite activate→blocked→activate loops.

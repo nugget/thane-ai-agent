@@ -2004,7 +2004,7 @@ func TestActiveTagsInStatus(t *testing.T) {
 	}
 }
 
-func TestHandlerReportedToolingPersistsIntoStatus(t *testing.T) {
+func TestHandlerReportedToolingStaysInRecentIterationsOnly(t *testing.T) {
 	t.Parallel()
 
 	bus := events.New()
@@ -2061,14 +2061,14 @@ func TestHandlerReportedToolingPersistsIntoStatus(t *testing.T) {
 	if len(snap.Tooling.LoadedCapabilities) != 2 {
 		t.Fatalf("snap.Tooling.LoadedCapabilities = %v, want 2 entries", snap.Tooling.LoadedCapabilities)
 	}
-	if !slices.Equal(status.Tooling.LoadedTags, []string{"forge", "ha"}) {
-		t.Fatalf("status.Tooling.LoadedTags = %v, want [forge ha]", status.Tooling.LoadedTags)
+	if len(status.Tooling.LoadedTags) != 0 {
+		t.Fatalf("status.Tooling.LoadedTags = %v, want empty for idle handler loop", status.Tooling.LoadedTags)
 	}
-	if !slices.Equal(status.Tooling.EffectiveTools, []string{"forge_issue_list", "get_state"}) {
-		t.Fatalf("status.Tooling.EffectiveTools = %v, want [forge_issue_list get_state]", status.Tooling.EffectiveTools)
+	if len(status.Tooling.EffectiveTools) != 0 {
+		t.Fatalf("status.Tooling.EffectiveTools = %v, want empty for idle handler loop", status.Tooling.EffectiveTools)
 	}
-	if len(status.Tooling.LoadedCapabilities) != 2 {
-		t.Fatalf("status.Tooling.LoadedCapabilities = %v, want 2 entries", status.Tooling.LoadedCapabilities)
+	if len(status.Tooling.LoadedCapabilities) != 0 {
+		t.Fatalf("status.Tooling.LoadedCapabilities = %v, want empty for idle handler loop", status.Tooling.LoadedCapabilities)
 	}
 }
 
