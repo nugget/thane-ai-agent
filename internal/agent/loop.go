@@ -1241,9 +1241,6 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	}
 
 	usageInfo := awareness.ContextUsageInfo{
-		Model:          l.model,
-		Routed:         l.router != nil,
-		TokenCount:     totalChars / 4, // rough char-to-token estimate
 		ContextWindow:  l.contextWindow,
 		MessageCount:   len(history),
 		ConversationID: convID,
@@ -1259,9 +1256,6 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		if started := l.archiver.ActiveSessionStartedAt(convID); !started.IsZero() {
 			usageInfo.SessionAge = time.Since(started)
 		}
-	}
-	if line := awareness.FormatContextUsage(usageInfo); line != "" {
-		systemPrompt += "\n" + line
 	}
 
 	var llmMessages []llm.Message
@@ -1378,18 +1372,26 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 
 	if req.SystemPrompt == "" {
 		usageInfo.Model = model
-		if cat := l.currentModelCatalog(); cat != nil {
-			if dep, err := cat.ResolveDeploymentRef(model); err == nil && dep.ContextWindow > 0 {
-				usageInfo.ContextWindow = dep.ContextWindow
-			}
-		}
 		systemPrompt = l.buildSystemPromptWithProfile(promptCtx, userMessage, history, l.modelInteractionProfileForModel(model))
-		if line := awareness.FormatContextUsage(usageInfo); line != "" {
-			systemPrompt += "\n" + line
+	}
+
+	usageInfo.Model = model
+	usageInfo.Routed = routerDecision != nil
+	if cat := l.currentModelCatalog(); cat != nil {
+		if dep, err := cat.ResolveDeploymentRef(model); err == nil && dep.ContextWindow > 0 {
+			usageInfo.ContextWindow = dep.ContextWindow
 		}
-		if len(llmMessages) > 0 && llmMessages[0].Role == "system" {
-			llmMessages[0].Content = systemPrompt
-		}
+	}
+	finalChars := len(systemPrompt)
+	for _, m := range req.Messages {
+		finalChars += len(m.Content)
+	}
+	usageInfo.TokenCount = finalChars / 4 // rough char-to-token estimate
+	if line := awareness.FormatContextUsage(usageInfo); line != "" {
+		systemPrompt += "\n" + line
+	}
+	if len(llmMessages) > 0 && llmMessages[0].Role == "system" {
+		llmMessages[0].Content = systemPrompt
 	}
 
 	l.seedLiveRequestDetail(ctx, requestID, systemPrompt, userMessage, model, 0, llmMessages)

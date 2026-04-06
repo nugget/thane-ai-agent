@@ -49,6 +49,49 @@ func TestAllowedTools_RestrictsVisibleTools(t *testing.T) {
 	}
 }
 
+func TestExplicitSystemPrompt_ContextUsageUsesResolvedModel(t *testing.T) {
+	mock := &mockLLM{
+		responses: []*llm.ChatResponse{
+			{
+				Model:        "explicit-model",
+				Message:      llm.Message{Role: "assistant", Content: "Done."},
+				InputTokens:  42,
+				OutputTokens: 7,
+			},
+		},
+	}
+
+	loop := buildTestLoop(mock, nil)
+	loop.model = "default-model"
+	loop.contextWindow = 200000
+
+	_, err := loop.Run(context.Background(), &Request{
+		Model:        "explicit-model",
+		SystemPrompt: "Delegate system prompt",
+		Messages:     []Message{{Role: "user", Content: "say hi"}},
+	}, nil)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(mock.calls) != 1 {
+		t.Fatalf("mock call count = %d, want 1", len(mock.calls))
+	}
+	if len(mock.calls[0].Messages) == 0 {
+		t.Fatal("expected system prompt message")
+	}
+
+	systemPrompt := mock.calls[0].Messages[0].Content
+	if !strings.Contains(systemPrompt, "**Context:** explicit-model") {
+		t.Fatalf("system prompt missing resolved model context line:\n%s", systemPrompt)
+	}
+	if strings.Contains(systemPrompt, "**Context:** default-model") {
+		t.Fatalf("system prompt retained default model in context line:\n%s", systemPrompt)
+	}
+	if strings.Contains(systemPrompt, "(routed)") {
+		t.Fatalf("system prompt should not mark explicit model as routed:\n%s", systemPrompt)
+	}
+}
+
 func TestRun_ResponseIncludesIterationMetadata(t *testing.T) {
 	mock := &mockLLM{
 		responses: []*llm.ChatResponse{
