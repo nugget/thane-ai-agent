@@ -13,6 +13,7 @@ import (
 type testLoopDefinitionDeps struct {
 	reg              *Registry
 	defs             *looppkg.DefinitionRegistry
+	activeLoops      *looppkg.Registry
 	persisted        map[string]looppkg.Spec
 	persistedUpdated map[string]time.Time
 	deleted          []string
@@ -45,12 +46,14 @@ func newTestLoopDefinitionDeps(t *testing.T) *testLoopDefinitionDeps {
 	deps := &testLoopDefinitionDeps{
 		reg:              reg,
 		defs:             defs,
+		activeLoops:      looppkg.NewRegistry(),
 		persisted:        make(map[string]looppkg.Spec),
 		persistedUpdated: make(map[string]time.Time),
 		persistedPolicy:  make(map[string]looppkg.DefinitionPolicy),
 	}
 	reg.ConfigureLoopDefinitionTools(LoopDefinitionToolDeps{
-		Registry: defs,
+		Registry:    defs,
+		ActiveLoops: deps.activeLoops,
 		View: func() *looppkg.DefinitionRegistryView {
 			return looppkg.BuildDefinitionRegistryView(defs.Snapshot(), map[string]looppkg.DefinitionRuntimeStatus{
 				"metacog_like": {
@@ -111,6 +114,7 @@ func TestConfigureLoopDefinitionTools_RegistersTools(t *testing.T) {
 		"loop_definition_delete",
 		"loop_definition_set_policy",
 		"loop_definition_launch",
+		"loop_trigger_run",
 	} {
 		if deps.reg.Get(name) == nil {
 			t.Fatalf("%s tool not registered", name)
@@ -118,6 +122,9 @@ func TestConfigureLoopDefinitionTools_RegistersTools(t *testing.T) {
 	}
 	if deps.reg.loopDefinitionRegistry != deps.defs {
 		t.Fatal("loop definition registry dependency was not stored")
+	}
+	if deps.reg.activeLoopRegistry != deps.activeLoops {
+		t.Fatal("active loop registry dependency was not stored")
 	}
 }
 

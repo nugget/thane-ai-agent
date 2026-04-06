@@ -9,16 +9,24 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 )
 
-// WatchedEntity represents a single watchlist entry with its options.
-type WatchedEntity struct {
-	EntityID string
-	Tags     []string // capability tags — empty means always visible
-	History  []int    // delta offsets in seconds (e.g., [600, 3600, 86400])
+const (
+	legacyWatchlistTable       = "watched_entities"
+	watchlistSubscriptionTable = "watched_entity_subscriptions"
+)
+
+// WatchedSubscription represents one entity subscription scope with its stored
+// options. Empty Scope means the entity is always visible.
+type WatchedSubscription struct {
+	EntityID  string
+	Scope     string
+	History   []int
+	ExpiresAt *time.Time
 }
 
-// WatchlistStore persists the set of watched entity IDs in SQLite.
+// WatchlistStore persists the set of watched entity subscriptions in SQLite.
 type WatchlistStore struct {
 	db *sql.DB
 }
@@ -33,182 +41,190 @@ func NewWatchlistStore(db *sql.DB) (*WatchlistStore, error) {
 }
 
 func (s *WatchlistStore) migrate() error {
-	// Create table if it doesn't exist.
 	_, err := s.db.Exec(`
-		CREATE TABLE IF NOT EXISTS watched_entities (
-			entity_id TEXT PRIMARY KEY,
+		CREATE TABLE IF NOT EXISTS watched_entity_subscriptions (
+			entity_id TEXT NOT NULL,
+			scope     TEXT NOT NULL DEFAULT '',
 			added_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-			tags      TEXT NOT NULL DEFAULT '',
-			options   TEXT NOT NULL DEFAULT '{}'
+			options   TEXT NOT NULL DEFAULT '{}',
+			PRIMARY KEY (scope, entity_id)
 		)
 	`)
 	if err != nil {
 		return err
 	}
 
-	// Add columns for existing databases (idempotent). Only the
-	// "duplicate column" error is expected and ignored; other ALTER
-	// failures are surfaced.
-	for _, col := range []struct{ name, def string }{
-		{"tags", "TEXT NOT NULL DEFAULT ''"},
-		{"options", "TEXT NOT NULL DEFAULT '{}'"},
-	} {
-		_, err = s.db.Exec(fmt.Sprintf(
-			`ALTER TABLE watched_entities ADD COLUMN %s %s`, col.name, col.def,
-		))
-		if err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
-			return fmt.Errorf("alter watched_entities add column %s: %w", col.name, err)
-		}
+	ok, err := s.hasTable(legacyWatchlistTable)
+	if err != nil {
+		return fmt.Errorf("check legacy watchlist table: %w", err)
+	}
+	if !ok {
+		return nil
+	}
+
+	count, err := s.subscriptionCount()
+	if err != nil {
+		return fmt.Errorf("count normalized watchlist subscriptions: %w", err)
+	}
+	if count > 0 {
+		return nil
+	}
+
+	if err := s.migrateLegacyWatchlist(); err != nil {
+		return fmt.Errorf("migrate legacy watchlist rows: %w", err)
 	}
 
 	return nil
 }
 
-// Add inserts an entity into the watchlist with no tags or options.
+// Add inserts an entity into the watchlist with no scope or options.
 // Duplicates are silently ignored. Use [AddWithOptions] for richer
 // subscriptions.
 func (s *WatchlistStore) Add(entityID string) error {
 	_, err := s.db.Exec(
-		`INSERT OR IGNORE INTO watched_entities (entity_id) VALUES (?)`,
+		`INSERT INTO watched_entity_subscriptions (entity_id, scope, options)
+		 VALUES (?, '', '{}')
+		 ON CONFLICT(scope, entity_id) DO NOTHING`,
 		entityID,
 	)
 	return err
 }
 
-// AddWithOptions inserts or updates an entity with tags and history
-// offsets. On conflict (duplicate entity_id), the tags and options are
-// updated to the new values.
-func (s *WatchlistStore) AddWithOptions(entityID string, tags []string, history []int) error {
-	tagsStr := strings.Join(tags, ",")
+// AddWithOptions inserts or updates entity subscriptions with tag scopes,
+// historical offsets, and an optional TTL. Empty tags means the entity is
+// always visible in context.
+func (s *WatchlistStore) AddWithOptions(entityID string, tags []string, history []int, ttlSeconds int) error {
+	scopes := normalizeScopes(tags)
 
-	opts := map[string]any{}
-	if len(history) > 0 {
-		opts["history"] = history
-	}
-	optsJSON, err := json.Marshal(opts)
+	optsJSON, err := marshalWatchlistOptions(history, ttlSeconds)
 	if err != nil {
 		return fmt.Errorf("marshal options: %w", err)
 	}
 
-	_, err = s.db.Exec(`
-		INSERT INTO watched_entities (entity_id, tags, options)
-		VALUES (?, ?, ?)
-		ON CONFLICT(entity_id) DO UPDATE SET tags = excluded.tags, options = excluded.options
-	`, entityID, tagsStr, string(optsJSON))
-	return err
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin watchlist tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	for _, scope := range scopes {
+		if _, err := tx.Exec(`
+			INSERT INTO watched_entity_subscriptions (entity_id, scope, options)
+			VALUES (?, ?, ?)
+			ON CONFLICT(scope, entity_id) DO UPDATE SET options = excluded.options
+		`, entityID, scope, string(optsJSON)); err != nil {
+			return fmt.Errorf("upsert watchlist subscription for %s/%s: %w", entityID, scope, err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit watchlist tx: %w", err)
+	}
+	return nil
 }
 
-// Remove deletes an entity from the watchlist. Non-existent IDs are a no-op.
+// Remove deletes all subscriptions for an entity. Non-existent IDs are a no-op.
 func (s *WatchlistStore) Remove(entityID string) error {
-	_, err := s.db.Exec(
-		`DELETE FROM watched_entities WHERE entity_id = ?`,
-		entityID,
-	)
-	return err
+	return s.RemoveWithScopes(entityID, nil)
 }
 
-// List returns all watched entity IDs in insertion order (unfiltered).
+// RemoveWithScopes deletes subscriptions for an entity. When scopes is empty,
+// all subscriptions for the entity are removed.
+func (s *WatchlistStore) RemoveWithScopes(entityID string, scopes []string) error {
+	if len(scopes) == 0 {
+		_, err := s.db.Exec(
+			`DELETE FROM watched_entity_subscriptions WHERE entity_id = ?`,
+			entityID,
+		)
+		return err
+	}
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin watchlist delete tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	for _, scope := range normalizeScopes(scopes) {
+		if _, err := tx.Exec(
+			`DELETE FROM watched_entity_subscriptions WHERE entity_id = ? AND scope = ?`,
+			entityID, scope,
+		); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// List returns all watched entity IDs in insertion order (deduplicated across
+// scoped subscriptions).
 func (s *WatchlistStore) List() ([]string, error) {
-	rows, err := s.db.Query(
-		`SELECT entity_id FROM watched_entities ORDER BY added_at ASC`,
-	)
+	subs, err := s.ListSubscriptions("")
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
-	var ids []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
+	ids := make([]string, 0, len(subs))
+	seen := make(map[string]bool, len(subs))
+	for _, sub := range subs {
+		if seen[sub.EntityID] {
+			continue
 		}
-		ids = append(ids, id)
+		seen[sub.EntityID] = true
+		ids = append(ids, sub.EntityID)
 	}
-	return ids, rows.Err()
+	return ids, nil
 }
 
-// ListUntagged returns watched entities that have no capability tags
+// ListUntagged returns watched entities that have no capability scope
 // (always visible in context regardless of active tags).
 func (s *WatchlistStore) ListUntagged() ([]string, error) {
-	rows, err := s.db.Query(
-		`SELECT entity_id FROM watched_entities WHERE tags = '' ORDER BY added_at ASC`,
-	)
+	subs, err := s.listScopedSubscriptions("")
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
-	var ids []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		ids = append(ids, id)
+	ids := make([]string, 0, len(subs))
+	for _, sub := range subs {
+		ids = append(ids, sub.EntityID)
 	}
-	return ids, rows.Err()
+	return ids, nil
 }
 
-// ListByTag returns watched entities that include the given capability
-// tag. Used by the tag context assembler to inject entity context only
-// when a tag is active.
-func (s *WatchlistStore) ListByTag(tag string) ([]WatchedEntity, error) {
-	// SQLite doesn't have array types, so tags are stored as
-	// comma-separated values. We match with LIKE for single-tag
-	// queries and post-filter for exactness.
-	rows, err := s.db.Query(
-		`SELECT entity_id, tags, options FROM watched_entities
-		 WHERE tags LIKE ? ORDER BY added_at ASC`,
-		"%"+tag+"%",
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var entities []WatchedEntity
-	for rows.Next() {
-		var id, tagsStr, optsJSON string
-		if err := rows.Scan(&id, &tagsStr, &optsJSON); err != nil {
-			return nil, err
-		}
-		tags := splitTags(tagsStr)
-		if !containsTag(tags, tag) {
-			continue // LIKE matched a substring, not the exact tag
-		}
-		entities = append(entities, WatchedEntity{
-			EntityID: id,
-			Tags:     tags,
-			History:  parseHistory(optsJSON),
-		})
-	}
-	return entities, rows.Err()
+// ListByTag returns watched entity subscriptions for the given capability
+// tag. Used by the tag context assembler to inject entity context only when a
+// tag is active.
+func (s *WatchlistStore) ListByTag(tag string) ([]WatchedSubscription, error) {
+	return s.listScopedSubscriptions(tag)
 }
 
-// DistinctTags returns all unique tags across all watched entities.
+// ListSubscriptions returns active subscriptions. When scope is empty, all
+// scopes are returned.
+func (s *WatchlistStore) ListSubscriptions(scope string) ([]WatchedSubscription, error) {
+	query := `SELECT entity_id, scope, options FROM watched_entity_subscriptions`
+	var args []any
+	if scope != "" {
+		query += ` WHERE scope = ?`
+		args = append(args, scope)
+	}
+	query += ` ORDER BY added_at ASC`
+	return s.scanActiveSubscriptions(query, args...)
+}
+
+// DistinctTags returns all unique active scopes across watched entities.
 // Used at startup to register tag-scoped watchlist providers.
 func (s *WatchlistStore) DistinctTags() ([]string, error) {
-	rows, err := s.db.Query(
-		`SELECT DISTINCT tags FROM watched_entities WHERE tags != '' ORDER BY tags ASC`,
-	)
+	subs, err := s.ListSubscriptions("")
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
 	seen := make(map[string]bool)
-	for rows.Next() {
-		var tagsStr string
-		if err := rows.Scan(&tagsStr); err != nil {
-			return nil, err
+	for _, sub := range subs {
+		if sub.Scope == "" {
+			continue
 		}
-		for _, tag := range splitTags(tagsStr) {
-			seen[tag] = true
-		}
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
+		seen[sub.Scope] = true
 	}
 
 	tags := make([]string, 0, len(seen))
@@ -217,6 +233,217 @@ func (s *WatchlistStore) DistinctTags() ([]string, error) {
 	}
 	sort.Strings(tags)
 	return tags, nil
+}
+
+func (s *WatchlistStore) listScopedSubscriptions(scope string) ([]WatchedSubscription, error) {
+	return s.scanActiveSubscriptions(
+		`SELECT entity_id, scope, options FROM watched_entity_subscriptions
+		 WHERE scope = ? ORDER BY added_at ASC`,
+		scope,
+	)
+}
+
+func (s *WatchlistStore) scanActiveSubscriptions(query string, args ...any) ([]WatchedSubscription, error) {
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	now := time.Now().UTC()
+	var (
+		subs    []WatchedSubscription
+		expired []subscriptionKey
+	)
+	for rows.Next() {
+		var entityID, scope, optsJSON string
+		if err := rows.Scan(&entityID, &scope, &optsJSON); err != nil {
+			return nil, err
+		}
+		opts := parseWatchlistOptions(optsJSON)
+		if opts.expired(now) {
+			expired = append(expired, subscriptionKey{EntityID: entityID, Scope: scope})
+			continue
+		}
+		subs = append(subs, WatchedSubscription{
+			EntityID:  entityID,
+			Scope:     scope,
+			History:   append([]int(nil), opts.History...),
+			ExpiresAt: cloneTimePtr(opts.ExpiresAt),
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := s.removeExpiredSubscriptions(expired); err != nil {
+		return nil, err
+	}
+	return subs, nil
+}
+
+func (s *WatchlistStore) removeExpiredSubscriptions(keys []subscriptionKey) error {
+	if len(keys) == 0 {
+		return nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin expired watchlist cleanup: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	for _, key := range keys {
+		if _, err := tx.Exec(
+			`DELETE FROM watched_entity_subscriptions WHERE entity_id = ? AND scope = ?`,
+			key.EntityID, key.Scope,
+		); err != nil {
+			return fmt.Errorf("delete expired watchlist subscription %s/%s: %w", key.EntityID, key.Scope, err)
+		}
+	}
+	return tx.Commit()
+}
+
+func (s *WatchlistStore) hasTable(name string) (bool, error) {
+	var found string
+	err := s.db.QueryRow(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?`, name).Scan(&found)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (s *WatchlistStore) subscriptionCount() (int, error) {
+	var count int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM watched_entity_subscriptions`).Scan(&count); err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+func (s *WatchlistStore) migrateLegacyWatchlist() error {
+	rows, err := s.db.Query(`SELECT entity_id, tags, options, added_at FROM watched_entities ORDER BY added_at ASC`)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	for rows.Next() {
+		var entityID, tagsStr, optsJSON, addedAt string
+		if err := rows.Scan(&entityID, &tagsStr, &optsJSON, &addedAt); err != nil {
+			return err
+		}
+		for _, scope := range normalizeScopes(splitTags(tagsStr)) {
+			if _, err := tx.Exec(`
+				INSERT OR IGNORE INTO watched_entity_subscriptions (entity_id, scope, added_at, options)
+				VALUES (?, ?, ?, ?)
+			`, entityID, scope, addedAt, normalizeLegacyOptions(optsJSON)); err != nil {
+				return err
+			}
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+type subscriptionKey struct {
+	EntityID string
+	Scope    string
+}
+
+type watchlistOptions struct {
+	History   []int
+	ExpiresAt *time.Time
+}
+
+type watchlistOptionsWire struct {
+	History   []int  `json:"history,omitempty"`
+	ExpiresAt string `json:"expires_at,omitempty"`
+}
+
+func marshalWatchlistOptions(history []int, ttlSeconds int) ([]byte, error) {
+	wire := watchlistOptionsWire{
+		History: append([]int(nil), history...),
+	}
+	if ttlSeconds > 0 {
+		wire.ExpiresAt = time.Now().UTC().Add(time.Duration(ttlSeconds) * time.Second).Format(time.RFC3339)
+	}
+	return json.Marshal(wire)
+}
+
+func parseWatchlistOptions(optsJSON string) watchlistOptions {
+	if optsJSON == "" || optsJSON == "{}" {
+		return watchlistOptions{}
+	}
+	var wire watchlistOptionsWire
+	if err := json.Unmarshal([]byte(optsJSON), &wire); err != nil {
+		return watchlistOptions{}
+	}
+	out := watchlistOptions{
+		History: append([]int(nil), wire.History...),
+	}
+	if wire.ExpiresAt != "" {
+		if ts, err := time.Parse(time.RFC3339, wire.ExpiresAt); err == nil {
+			ts = ts.UTC()
+			out.ExpiresAt = &ts
+		}
+	}
+	return out
+}
+
+func (o watchlistOptions) expired(now time.Time) bool {
+	return o.ExpiresAt != nil && !o.ExpiresAt.After(now)
+}
+
+func normalizeLegacyOptions(optsJSON string) string {
+	if optsJSON == "" {
+		return "{}"
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(optsJSON), &payload); err != nil {
+		return "{}"
+	}
+	normalized, err := json.Marshal(payload)
+	if err != nil {
+		return "{}"
+	}
+	return string(normalized)
+}
+
+func normalizeScopes(tags []string) []string {
+	if len(tags) == 0 {
+		return []string{""}
+	}
+	var scopes []string
+	seen := make(map[string]bool, len(tags))
+	for _, tag := range tags {
+		tag = strings.TrimSpace(tag)
+		if tag == "" || seen[tag] {
+			continue
+		}
+		seen[tag] = true
+		scopes = append(scopes, tag)
+	}
+	if len(scopes) == 0 {
+		return []string{""}
+	}
+	return scopes
+}
+
+func cloneTimePtr(src *time.Time) *time.Time {
+	if src == nil {
+		return nil
+	}
+	cp := *src
+	return &cp
 }
 
 func splitTags(s string) []string {
@@ -231,26 +458,4 @@ func splitTags(s string) []string {
 		}
 	}
 	return tags
-}
-
-func containsTag(tags []string, tag string) bool {
-	for _, t := range tags {
-		if t == tag {
-			return true
-		}
-	}
-	return false
-}
-
-func parseHistory(optsJSON string) []int {
-	if optsJSON == "" || optsJSON == "{}" {
-		return nil
-	}
-	var opts struct {
-		History []int `json:"history"`
-	}
-	if err := json.Unmarshal([]byte(optsJSON), &opts); err != nil {
-		return nil
-	}
-	return opts.History
 }

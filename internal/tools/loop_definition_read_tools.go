@@ -146,3 +146,33 @@ func (r *Registry) handleLoopDefinitionGet(_ context.Context, args map[string]an
 		"definition": def,
 	})
 }
+
+func (r *Registry) handleLoopTriggerRun(_ context.Context, args map[string]any) (string, error) {
+	if r.activeLoopRegistry == nil {
+		return "", fmt.Errorf("loop runtime is not configured")
+	}
+
+	name := ldStringArg(args, "name")
+	loopID := ldStringArg(args, "loop_id")
+	if name == "" && loopID == "" {
+		return "", fmt.Errorf("name or loop_id is required")
+	}
+
+	forceSupervisor, _ := args["force_supervisor"].(bool)
+	contextMessage := ldStringArg(args, "context_message")
+
+	result, err := r.activeLoopRegistry.TriggerRun(looppkg.TriggerRequest{
+		Name:            name,
+		LoopID:          loopID,
+		ForceSupervisor: forceSupervisor,
+		ContextMessage:  contextMessage,
+	})
+	if err != nil {
+		return "", err
+	}
+
+	return ldMarshalToolJSON(map[string]any{
+		"status":  "ok",
+		"trigger": result,
+	})
+}

@@ -237,6 +237,16 @@ type Loop struct {
 	// tool handler) to override the default sleep for one cycle.
 	nextSleep time.Duration
 
+	// triggerWakeCh interrupts timer-driven sleep so a loop can run
+	// immediately without waiting for its next natural wake.
+	triggerWakeCh chan struct{}
+	// forceNextSupervisor promotes the next triggered run into a
+	// supervisor iteration regardless of the loop's normal dice roll.
+	forceNextSupervisor bool
+	// triggerContextMessages are one-shot notes injected into the next
+	// triggered run and then cleared.
+	triggerContextMessages []string
+
 	// consecutiveErrors tracks sequential failures for backoff.
 	consecutiveErrors int
 }
@@ -268,10 +278,11 @@ func New(cfg Config, deps Deps) (*Loop, error) {
 	id, _ := uuid.NewV7()
 
 	return &Loop{
-		id:     id.String(),
-		config: cfg,
-		deps:   deps,
-		state:  StatePending,
+		id:            id.String(),
+		config:        cfg,
+		deps:          deps,
+		state:         StatePending,
+		triggerWakeCh: make(chan struct{}, 1),
 	}, nil
 }
 
@@ -673,7 +684,7 @@ func (l *Loop) run(ctx context.Context) {
 			"duration", initialSleep.Round(time.Second),
 		)
 
-		if !sleepCtx(ctx, initialSleep) {
+		if !sleepCtxOrWake(ctx, initialSleep, l.triggerWakeCh) {
 			logger.Debug("loop stopped during initial sleep",
 				"phase", "initial_sleep",
 			)
@@ -786,7 +797,8 @@ func (l *Loop) run(ctx context.Context) {
 		l.mu.Unlock()
 
 		// Determine if this is a supervisor iteration.
-		isSupervisor := l.config.Supervisor && l.config.SupervisorProb > 0 && l.deps.Rand.Float64() < l.config.SupervisorProb
+		forceSupervisor, triggerContext := l.consumeTriggerOverrides()
+		isSupervisor := forceSupervisor || (l.config.Supervisor && l.config.SupervisorProb > 0 && l.deps.Rand.Float64() < l.config.SupervisorProb)
 
 		iterLog := logger.With(
 			"conversation_id", convID,
@@ -905,7 +917,7 @@ func (l *Loop) run(ctx context.Context) {
 				l.recentConvIDs = l.recentConvIDs[:recentConvIDsCap]
 			}
 			l.mu.Unlock()
-			result, err = l.iterate(iterCtx, isSupervisor, convID)
+			result, err = l.iterate(iterCtx, isSupervisor, convID, triggerContext)
 		}
 
 		// Clear in-flight state after iteration completes.
@@ -1123,7 +1135,7 @@ func (l *Loop) run(ctx context.Context) {
 
 			iterLog.Debug("loop sleeping", "duration", sleep.Round(time.Second))
 
-			if !sleepCtx(ctx, sleep) {
+			if !sleepCtxOrWake(ctx, sleep, l.triggerWakeCh) {
 				logger.Debug("loop stopped during sleep",
 					"phase", "sleep",
 				)
@@ -1232,7 +1244,7 @@ func (l *Loop) makeProgressFunc() func(string, map[string]any) {
 
 // iterate performs a single loop iteration: build prompt and run the
 // LLM via the agent runner.
-func (l *Loop) iterate(ctx context.Context, isSupervisor bool, convID string) (*IterationResult, error) {
+func (l *Loop) iterate(ctx context.Context, isSupervisor bool, convID string, triggerContext []string) (*IterationResult, error) {
 	iterStart := time.Now()
 
 	// Build routing hints.
@@ -1274,6 +1286,9 @@ func (l *Loop) iterate(ctx context.Context, isSupervisor bool, convID string) (*
 
 	if l.requestInstructions != "" {
 		task = "Instructions: " + l.requestInstructions + "\n\n" + task
+	}
+	if len(triggerContext) > 0 {
+		task = formatTriggerContext(triggerContext) + task
 	}
 
 	// Merge loops-ng profile hints over loop-generated defaults.

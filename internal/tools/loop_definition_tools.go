@@ -18,6 +18,7 @@ const (
 // definition overlay.
 type LoopDefinitionToolDeps struct {
 	Registry         *looppkg.DefinitionRegistry
+	ActiveLoops      *looppkg.Registry
 	View             func() *looppkg.DefinitionRegistryView
 	PersistSpec      func(looppkg.Spec, time.Time) error
 	DeleteSpec       func(string) error
@@ -31,6 +32,7 @@ type LoopDefinitionToolDeps struct {
 // the loop-definition tool family and registers the tools.
 func (r *Registry) ConfigureLoopDefinitionTools(deps LoopDefinitionToolDeps) {
 	r.loopDefinitionRegistry = deps.Registry
+	r.activeLoopRegistry = deps.ActiveLoops
 	r.loopDefinitionView = deps.View
 	r.persistLoopDefinition = deps.PersistSpec
 	r.deletePersistedLoopDefinition = deps.DeleteSpec
@@ -199,5 +201,32 @@ func (r *Registry) registerLoopDefinitionTools() {
 			"required": []string{"name"},
 		},
 		Handler: r.handleLoopDefinitionLaunch,
+	})
+
+	r.Register(&Tool{
+		Name:        "loop_trigger_run",
+		Description: "Wake a sleeping timer-driven loop immediately for one extra run. Optionally force that wake into supervisor mode and attach one-shot trigger context that applies only to the next run. Use this to tap a loop on the shoulder when new information arrives between its normal wake cycles.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"name": map[string]any{
+					"type":        "string",
+					"description": "Loop name to trigger. Provide either name or loop_id.",
+				},
+				"loop_id": map[string]any{
+					"type":        "string",
+					"description": "Specific running loop ID to trigger. Provide either loop_id or name.",
+				},
+				"force_supervisor": map[string]any{
+					"type":        "boolean",
+					"description": "When true, force the triggered run to execute as a supervisor iteration.",
+				},
+				"context_message": map[string]any{
+					"type":        "string",
+					"description": "Optional one-shot context note injected only into the triggered run.",
+				},
+			},
+		},
+		Handler: r.handleLoopTriggerRun,
 	})
 }
