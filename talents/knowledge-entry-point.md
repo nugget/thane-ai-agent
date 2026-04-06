@@ -15,7 +15,10 @@ Choose the next move deliberately:
   Activate `memory`.
 - Need prior sessions, old threads, or transcript retrieval from your
   own history? Activate `archive`.
-- Need outside confirmation or enrichment? Activate `search`.
+- Need to read, summarize, or inspect a named URL or web page? Activate
+  `search`.
+- Need outside confirmation, broader discovery, or enrichment beyond a
+  named source? Activate `search`.
 - Need a mixed read-plus-enrichment pass? Delegate with `files,search`.
 - Already have enough? Respond.
 
