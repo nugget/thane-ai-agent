@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/nugget/thane-ai-agent/internal/config"
+	"github.com/nugget/thane-ai-agent/internal/llm"
 	"github.com/nugget/thane-ai-agent/internal/talents"
 )
 
@@ -81,5 +82,53 @@ func TestBuildSystemPrompt_EntryPointTalentsPrecedeTaggedDoctrine(t *testing.T) 
 	}
 	if coreIdx >= entryIdx || entryIdx >= commIdx || entryIdx >= doctrineIdx {
 		t.Fatalf("unexpected ordering:\n%s", prompt)
+	}
+}
+
+func TestBuildSystemPromptWithProfileSections_SplitsCacheableBehaviorPrefix(t *testing.T) {
+	l := newTagTestLoop()
+	l.persona = "PERSONA_MARKER"
+	parsed := []talents.Talent{
+		{Name: "readme", Tags: nil, Content: "CORE_MARKER"},
+		{Name: "interactive-entry-point", Tags: []string{"interactive"}, Kind: "entry_point", Content: "INTERACTIVE_ENTRY_MARKER"},
+		{Name: "interactive-doctrine", Tags: []string{"interactive"}, Content: "INTERACTIVE_DOCTRINE_MARKER"},
+	}
+	l.SetCapabilityTags(map[string]config.CapabilityTagConfig{
+		"interactive": {Description: "Interactive", AlwaysActive: true},
+	}, parsed)
+
+	prompt, sections := l.buildSystemPromptWithProfileSections(
+		testCtxForLoop(l),
+		"hello",
+		nil,
+		llm.DefaultModelInteractionProfile(),
+	)
+
+	if !strings.Contains(prompt, "CORE_MARKER") || !strings.Contains(prompt, "INTERACTIVE_ENTRY_MARKER") {
+		t.Fatalf("prompt missing expected markers:\n%s", prompt)
+	}
+
+	indexByName := make(map[string]int, len(sections))
+	sectionByName := make(map[string]llm.PromptSection, len(sections))
+	for i, section := range sections {
+		indexByName[section.Name] = i
+		sectionByName[section.Name] = section
+	}
+
+	if got := sectionByName["PERSONA"].CacheTTL; got != "1h" {
+		t.Fatalf("PERSONA CacheTTL = %q, want 1h", got)
+	}
+	if got := sectionByName["TALENTS ALWAYS ON"].CacheTTL; got != "1h" {
+		t.Fatalf("TALENTS ALWAYS ON CacheTTL = %q, want 1h", got)
+	}
+	if got := sectionByName["TALENTS TAGGED"].CacheTTL; got != "5m" {
+		t.Fatalf("TALENTS TAGGED CacheTTL = %q, want 5m", got)
+	}
+	if got := sectionByName["CURRENT CONDITIONS"].CacheTTL; got != "" {
+		t.Fatalf("CURRENT CONDITIONS CacheTTL = %q, want empty", got)
+	}
+	if indexByName["TALENTS ALWAYS ON"] >= indexByName["TALENTS TAGGED"] ||
+		indexByName["TALENTS TAGGED"] >= indexByName["CURRENT CONDITIONS"] {
+		t.Fatalf("unexpected cacheable-prefix ordering: %#v", indexByName)
 	}
 }

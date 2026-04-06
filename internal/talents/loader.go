@@ -87,23 +87,15 @@ func (l *Loader) Talents() ([]Talent, error) {
 // given active tags. Untagged talents are always included (they have
 // no tag restrictions). If activeTags is nil, all talents are included.
 func FilterByTags(talents []Talent, activeTags map[string]bool) string {
-	var included []Talent
-	for _, t := range talents {
-		if shouldIncludeTalent(t, activeTags) {
-			included = append(included, t)
-		}
+	alwaysOn, tagged := SplitByTags(talents, activeTags)
+	switch {
+	case alwaysOn == "":
+		return tagged
+	case tagged == "":
+		return alwaysOn
+	default:
+		return alwaysOn + "\n\n---\n\n" + tagged
 	}
-	if len(included) == 0 {
-		return ""
-	}
-	sort.SliceStable(included, func(i, j int) bool {
-		return talentOrderKey(included[i]) < talentOrderKey(included[j])
-	})
-	var parts []string
-	for _, t := range included {
-		parts = append(parts, t.Content)
-	}
-	return strings.Join(parts, "\n\n---\n\n")
 }
 
 func talentOrderKey(t Talent) int {
@@ -115,6 +107,41 @@ func talentOrderKey(t Talent) int {
 	default:
 		return 2
 	}
+}
+
+// SplitByTags partitions included talents into always-on and tagged
+// groups, preserving the same ordering rules used by FilterByTags.
+func SplitByTags(all []Talent, activeTags map[string]bool) (alwaysOn string, tagged string) {
+	var alwaysIncluded []Talent
+	var taggedIncluded []Talent
+	for _, t := range all {
+		if !shouldIncludeTalent(t, activeTags) {
+			continue
+		}
+		if len(t.Tags) == 0 {
+			alwaysIncluded = append(alwaysIncluded, t)
+			continue
+		}
+		taggedIncluded = append(taggedIncluded, t)
+	}
+	sort.SliceStable(alwaysIncluded, func(i, j int) bool {
+		return talentOrderKey(alwaysIncluded[i]) < talentOrderKey(alwaysIncluded[j])
+	})
+	sort.SliceStable(taggedIncluded, func(i, j int) bool {
+		return talentOrderKey(taggedIncluded[i]) < talentOrderKey(taggedIncluded[j])
+	})
+	return renderTalents(alwaysIncluded), renderTalents(taggedIncluded)
+}
+
+func renderTalents(included []Talent) string {
+	if len(included) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(included))
+	for _, t := range included {
+		parts = append(parts, t.Content)
+	}
+	return strings.Join(parts, "\n\n---\n\n")
 }
 
 // shouldIncludeTalent returns true if the talent should be included

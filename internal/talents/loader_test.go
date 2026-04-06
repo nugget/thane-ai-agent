@@ -218,6 +218,35 @@ func TestFilterByTags_EntryPointsPrecedeTaggedDoctrine(t *testing.T) {
 	}
 }
 
+func TestSplitByTags_PreservesAlwaysOnAndTaggedOrdering(t *testing.T) {
+	all := []Talent{
+		{Name: "manifest", Tags: nil, Content: "MANIFEST"},
+		{Name: "core", Tags: nil, Content: "CORE"},
+		{Name: "interactive-communication", Tags: []string{"interactive"}, Content: "INTERACTIVE_COMM"},
+		{Name: "interactive-entry-point", Tags: []string{"interactive"}, Kind: "entry_point", Content: "INTERACTIVE_ENTRY"},
+		{Name: "interactive-doctrine", Tags: []string{"interactive"}, Content: "INTERACTIVE_DOCTRINE"},
+	}
+
+	alwaysOn, tagged := SplitByTags(all, map[string]bool{"interactive": true})
+
+	if strings.Contains(alwaysOn, "INTERACTIVE_") {
+		t.Fatalf("alwaysOn should not contain tagged talents:\n%s", alwaysOn)
+	}
+	if !strings.Contains(alwaysOn, "MANIFEST") || !strings.Contains(alwaysOn, "CORE") {
+		t.Fatalf("alwaysOn missing expected content:\n%s", alwaysOn)
+	}
+
+	entryIdx := strings.Index(tagged, "INTERACTIVE_ENTRY")
+	commIdx := strings.Index(tagged, "INTERACTIVE_COMM")
+	doctrineIdx := strings.Index(tagged, "INTERACTIVE_DOCTRINE")
+	if entryIdx < 0 || commIdx < 0 || doctrineIdx < 0 {
+		t.Fatalf("tagged missing expected content:\n%s", tagged)
+	}
+	if entryIdx >= commIdx || entryIdx >= doctrineIdx {
+		t.Fatalf("entry point should precede tagged doctrine:\n%s", tagged)
+	}
+}
+
 func TestTalents(t *testing.T) {
 	dir := t.TempDir()
 

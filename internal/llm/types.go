@@ -18,13 +18,23 @@ type ImageContent struct {
 	MediaType string // MIME type: "image/jpeg", "image/png", etc.
 }
 
+// PromptSection preserves the semantic sections of a system prompt so
+// providers can apply transport-specific optimizations such as prompt
+// caching without changing the prompt text itself.
+type PromptSection struct {
+	Name     string
+	Content  string
+	CacheTTL string // optional provider hint, for example "1h" or "5m"
+}
+
 // Message represents a chat message for the LLM.
 type Message struct {
-	Role       string         `json:"role"`
-	Content    string         `json:"content"`
-	Images     []ImageContent `json:"-"` // multimodal images; marshaled per-provider
-	ToolCalls  []ToolCall     `json:"tool_calls,omitempty"`
-	ToolCallID string         `json:"tool_call_id,omitempty"` // For tool responses
+	Role       string          `json:"role"`
+	Content    string          `json:"content"`
+	Images     []ImageContent  `json:"-"` // multimodal images; marshaled per-provider
+	Sections   []PromptSection `json:"-"` // system-prompt sections; provider-specific
+	ToolCalls  []ToolCall      `json:"tool_calls,omitempty"`
+	ToolCallID string          `json:"tool_call_id,omitempty"` // For tool responses
 }
 
 // ToolCall represents a tool call from the model.

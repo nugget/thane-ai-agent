@@ -120,6 +120,9 @@ func TestConvertToolsToAnthropic(t *testing.T) {
 	if result[0].Description != "Get entity state" {
 		t.Errorf("expected description, got %s", result[0].Description)
 	}
+	if result[0].CacheControl == nil || result[0].CacheControl.TTL != "1h" {
+		t.Fatalf("expected last tool to carry 1h cache control, got %+v", result[0].CacheControl)
+	}
 }
 
 func TestConvertFromAnthropic(t *testing.T) {
@@ -191,11 +194,66 @@ func TestAnthropicRequestSerialization(t *testing.T) {
 	if decoded.Model != req.Model {
 		t.Errorf("model mismatch: %s vs %s", decoded.Model, req.Model)
 	}
-	if decoded.System != req.System {
-		t.Errorf("system mismatch: %s vs %s", decoded.System, req.System)
+	decodedSystem, ok := decoded.System.(string)
+	if !ok {
+		t.Fatalf("decoded.System type = %T, want string", decoded.System)
+	}
+	if decodedSystem != req.System {
+		t.Errorf("system mismatch: %s vs %s", decodedSystem, req.System)
 	}
 	if decoded.CacheControl == nil || decoded.CacheControl.Type != "ephemeral" {
 		t.Fatalf("cache_control = %+v, want ephemeral", decoded.CacheControl)
+	}
+}
+
+func TestAnthropicSystemBlocks_ApplyCacheBreakpoints(t *testing.T) {
+	sections := []llm.PromptSection{
+		{Name: "PERSONA", Content: "PERSONA", CacheTTL: "1h"},
+		{Name: "RUNTIME CONTRACT", Content: "RUNTIME", CacheTTL: "1h"},
+		{Name: "TALENTS TAGGED", Content: "TAGGED", CacheTTL: "5m"},
+		{Name: "CURRENT CONDITIONS", Content: "NOW"},
+	}
+
+	blocks := anthropicSystemBlocks(sections)
+	if len(blocks) != 4 {
+		t.Fatalf("len(blocks) = %d, want 4", len(blocks))
+	}
+	if blocks[0].CacheControl != nil {
+		t.Fatalf("first 1h block should not carry the breakpoint: %+v", blocks[0].CacheControl)
+	}
+	if blocks[1].CacheControl == nil || blocks[1].CacheControl.TTL != "1h" {
+		t.Fatalf("second block should close the 1h cache run: %+v", blocks[1].CacheControl)
+	}
+	if blocks[2].CacheControl == nil || blocks[2].CacheControl.TTL != "5m" {
+		t.Fatalf("tagged block should close the 5m cache run: %+v", blocks[2].CacheControl)
+	}
+	if blocks[3].CacheControl != nil {
+		t.Fatalf("uncached tail should not carry cache control: %+v", blocks[3].CacheControl)
+	}
+}
+
+func TestAnthropicSystemPayload_UsesPromptSectionsWhenPresent(t *testing.T) {
+	messages := []llm.Message{
+		{
+			Role:    "system",
+			Content: "opaque fallback",
+			Sections: []llm.PromptSection{
+				{Name: "PERSONA", Content: "PERSONA", CacheTTL: "1h"},
+				{Name: "CURRENT CONDITIONS", Content: "NOW"},
+			},
+		},
+	}
+
+	payload := anthropicSystemPayload(messages, "opaque fallback")
+	blocks, ok := payload.([]anthropicContent)
+	if !ok {
+		t.Fatalf("payload type = %T, want []anthropicContent", payload)
+	}
+	if len(blocks) != 2 {
+		t.Fatalf("len(blocks) = %d, want 2", len(blocks))
+	}
+	if blocks[0].CacheControl == nil || blocks[0].CacheControl.TTL != "1h" {
+		t.Fatalf("expected cached persona block, got %+v", blocks[0].CacheControl)
 	}
 }
 
