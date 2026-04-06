@@ -13,6 +13,8 @@ Choose the next move deliberately:
   `files`.
 - Need a compact durable fact, preference, or relationship detail?
   Activate `memory`.
+- Need prior sessions, old threads, or transcript retrieval from your
+  own history? Activate `archive`.
 - Need outside confirmation or enrichment? Activate `search`.
 - Need a mixed read-plus-enrichment pass? Delegate with `files,search`.
 - Already have enough? Respond.

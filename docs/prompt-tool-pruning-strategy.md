@@ -232,6 +232,15 @@ These tags are broad on purpose. Their job is to help the model choose
 the next tag or act with what it already has, not to unlock the whole
 world immediately.
 
+Do not solve every missing family by adding another root. Prefer
+second-hop specialization routes from an existing root when the domain
+already has a natural home:
+
+- `archive` under `knowledge`
+- `session` under `interactive` and `operations`
+- `email` under `people`
+- `mqtt` under `operations`
+
 ### Entry-point document shape
 
 Each root-tag entry-point document should answer only local questions:

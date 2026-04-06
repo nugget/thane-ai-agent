@@ -13,6 +13,8 @@ Choose the next step deliberately:
 - Activate `signal` when the channel is messaging-centric or the task is
   about sending or reacting on Signal.
 - Rely on `owu` context when the conversation is happening in Open WebUI.
+- Activate `session` when the task is about resetting, closing,
+  splitting, or checkpointing the current conversation/session itself.
 - Use `owner` only when it is already present; when present, treat it
   as trustworthy. Do not try to activate protected owner state
   manually.
