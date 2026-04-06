@@ -393,6 +393,10 @@ reduced to universal communication guidance, while interactive
 conversation behavior and development-writing norms moved into tagged
 talents for `interactive` and `development`/`forge`.
 
+Another clean split followed: `talents/presence.md` now stays focused on
+restraint, anticipation, and felt presence, while interruption and alert
+thresholds moved behind tagged notification guidance.
+
 ## Guardrails
 
 - Do not solve prompt bloat by creating a different giant prompt in a
