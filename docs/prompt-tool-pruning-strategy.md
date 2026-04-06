@@ -44,6 +44,56 @@ This layering is mostly sound. The problem is that the always-on layers
 still carry too much evergreen tool doctrine, and the tagged/contextual
 layers are not yet doing enough of the behavioral teaching.
 
+## Fresh Production Snapshot
+
+On April 6, 2026 we inspected a fresh retained production prompt from
+`r_aac0d80a025e3a61.json`. The total prompt length was 110,466
+characters.
+
+The high-level sections measured roughly:
+
+- persona: 4.1k
+- ego: 9.8k
+- runtime contract: 1.2k
+- injected core context: 1.8k
+- capability context: 17.9k
+- active capabilities: 1.4k
+- current conditions: 0.2k
+- behavioral guidance: 25.3k
+- relevant context: 6.5k
+- conversation history: 42.5k
+
+That snapshot matters for two reasons:
+
+- the prompt is still far larger than it needs to be for routine turns
+- tool and capability doctrine are duplicated across capability context
+  and behavioral guidance, not just immortal prompt layers
+
+### Concrete duplicated sections from the snapshot
+
+The retained prompt still included all of these sections:
+
+- `# Tool Reference & Pitfalls`
+- `# Writing Quality GitHub Issues`
+- `# Thane Development Workflow`
+- `# How the Knowledge Base Works`
+- `# Tool Hygiene`
+- `# Delegation`
+- `# Knowledge`
+- `### Available Capabilities`
+
+This is the exact duplication pattern we want to remove.
+
+### Important nuance
+
+The fresh snapshot showed that the old tool essays are not only in
+always-on talents. A large portion of them are arriving through tagged
+capability or channel context as well. That means the pruning pass
+cannot be limited to a single prompt file. We need to trim both:
+
+- the base or talent-side teaching
+- the tagged KB or channel-side articles that are currently overstuffed
+
 ## Problems To Fix
 
 ### 1. Always-on prompt is too large
@@ -177,6 +227,8 @@ Tagged KB articles are the preferred home for:
 
 - [ ] Audit the exact always-on sections currently emitted by
       `buildSystemPromptWithProfile`.
+- [ ] Record section-size measurements from real retained prompts and
+      keep this tracking doc updated with current evidence.
 - [ ] Remove duplicated tool/capability essays from always-on prompt
       assembly.
 - [ ] Keep only a compact runtime contract in `internal/prompts/agent.go`.
@@ -192,6 +244,30 @@ Tagged KB articles are the preferred home for:
       by tagged articles.
 - [ ] Capture literal retained prompt snapshots before and after pruning
       so regressions are observable.
+
+## First Safe Cuts
+
+Based on the April 6 production snapshot, the first low-risk cuts
+should be:
+
+1. Keep `## Runtime Contract`, but make it the only always-on tool
+   doctrine block.
+2. Remove `### Available Capabilities` from behavioral guidance.
+   Loaded capability state already appears in `## Active Capabilities`.
+3. Remove `# Tool Hygiene`, `# Delegation`, and `# Knowledge` from
+   talents or other always-on behavioral guidance.
+4. Split the giant tagged or channel article currently carrying:
+   - `# Tool Reference & Pitfalls`
+   - `# Writing Quality GitHub Issues`
+   - `# Thane Development Workflow`
+   - `# How the Knowledge Base Works`
+5. Re-home those into narrower tagged articles such as `forge`,
+   `interactive`, `owner`, or a future repo or development tag.
+6. Keep channel-specific voice and tone sections with the channel
+   article, but move tool and operator manuals out of it.
+
+This should materially reduce prompt size before we touch more
+sensitive areas like conversation history or ego shaping.
 
 ## Guardrails
 
@@ -237,4 +313,3 @@ We should consider this work successful when:
 - tagged context explains domain-specific behavior better than the old
   always-on prose
 - prompt debugging becomes easier because each layer has a clearer job
-
