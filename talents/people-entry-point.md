@@ -10,7 +10,8 @@ handles. Begin with the most stable anchor you have.
 
 Choose the next move deliberately:
 
-- If you need the contact record itself, activate `contacts`.
+- If you need the contact directory or stored relationship record,
+  activate `contacts`.
 - If the task is specifically about Signal messaging, activate
   `signal`.
 - If the relationship thread lives in inbox history or email
