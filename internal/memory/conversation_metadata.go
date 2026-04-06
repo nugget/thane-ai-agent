@@ -16,6 +16,7 @@ type ChannelBinding struct {
 	ContactName string `json:"contact_name,omitempty"`
 	TrustZone   string `json:"trust_zone,omitempty"`
 	LinkSource  string `json:"link_source,omitempty"`
+	IsOwner     bool   `json:"is_owner,omitempty"`
 }
 
 // Clone returns a deep copy of the binding.

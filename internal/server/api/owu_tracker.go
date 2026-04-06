@@ -97,7 +97,7 @@ func (t *OWUTracker) Dispatch(ctx context.Context, req *agent.Request, streamCal
 		return t.runner.Run(ctx, req, streamCallback)
 	}
 	if req.ChannelBinding == nil {
-		req.ChannelBinding = (&memory.ChannelBinding{Channel: "owu"}).Normalize()
+		req.ChannelBinding = (&memory.ChannelBinding{Channel: "owu", IsOwner: true}).Normalize()
 	}
 	if t.bindConversation != nil && req.ChannelBinding != nil {
 		if err := t.bindConversation(convID, req.ChannelBinding); err != nil {
@@ -214,6 +214,7 @@ func (t *OWUTracker) ensureConvLoop(_ context.Context, convID, displayName strin
 			"subsystem":       "owu",
 			"category":        "channel",
 			"conversation_id": convID,
+			"is_owner":        "true",
 		},
 	}, loop.Deps{Logger: t.logger, EventBus: t.eventBus})
 	if err != nil {

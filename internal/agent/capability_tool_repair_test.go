@@ -66,6 +66,7 @@ func TestRepairToolCall_RepairsInventedCapabilityToolName(t *testing.T) {
 		map[string][]string{"forge": {"forge_tool"}},
 		map[string]string{"forge": "Forge tools"},
 		nil,
+		nil,
 	))
 	loop.Tools().Register(&tools.Tool{
 		Name:        "forge_tool",
@@ -143,6 +144,7 @@ func TestRepairToolCall_RepairsListCapabilitiesAlias(t *testing.T) {
 		map[string][]string{"ha": {"get_state"}},
 		map[string]string{"ha": "Home Assistant tools"},
 		map[string]bool{"ha": true},
+		nil,
 	))
 
 	resp, err := loop.Run(context.Background(), &Request{

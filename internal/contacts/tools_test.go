@@ -2,9 +2,11 @@ package contacts
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 // fakeEmbedder returns a fixed embedding for any text.
@@ -852,6 +854,105 @@ func TestExportVCF_SelfWithTrustZoneFilter(t *testing.T) {
 	}
 	if strings.Contains(result, "555-0000") {
 		t.Error("unknown zone export should not contain phone")
+	}
+}
+
+func TestOwnerContact_ConfiguredName(t *testing.T) {
+	tools := newTestTools(t)
+	tools.SetOwnerContactName("Aimee")
+
+	_, err := tools.SaveContact(`{"name":"Aimee","kind":"individual","trust_zone":"household","facts":{"email":"aimee@example.com"}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := tools.OwnerContact(`{}`)
+	if err != nil {
+		t.Fatalf("OwnerContact() error = %v", err)
+	}
+	if !strings.Contains(result, "**Aimee**") {
+		t.Fatalf("OwnerContact() = %q, want contact name", result)
+	}
+	if !strings.Contains(result, "aimee@example.com") {
+		t.Fatalf("OwnerContact() = %q, want contact property details", result)
+	}
+}
+
+func TestOwnerContact_FallsBackToSoleAdmin(t *testing.T) {
+	tools := newTestTools(t)
+
+	_, err := tools.SaveContact(`{"name":"Nugget","kind":"individual","trust_zone":"admin","facts":{"phone":"+15551234567"}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := tools.OwnerContact(`{}`)
+	if err != nil {
+		t.Fatalf("OwnerContact() error = %v", err)
+	}
+	if !strings.Contains(result, "**Nugget**") {
+		t.Fatalf("OwnerContact() = %q, want admin contact name", result)
+	}
+}
+
+func TestOwnerContact_IncludesActiveOwnerChannels(t *testing.T) {
+	tools := newTestTools(t)
+	tools.SetOwnerContactName("Aimee")
+	tools.SetOwnerActivitySource(func() []OwnerChannelActivity {
+		return []OwnerChannelActivity{
+			{
+				Channel:        "owu",
+				LoopID:         "loop-1",
+				LoopName:       "owu/task",
+				ConversationID: "owu-conv-1",
+				State:          "processing",
+				LastActive:     time.Date(2026, 4, 5, 19, 0, 0, 0, time.UTC),
+			},
+			{
+				Channel:        "signal",
+				LoopID:         "loop-2",
+				LoopName:       "signal/+15551234567",
+				ConversationID: "signal-15551234567",
+				ContactName:    "Aimee",
+				State:          "idle",
+				LastActive:     time.Date(2026, 4, 5, 18, 45, 0, 0, time.UTC),
+			},
+		}
+	})
+
+	_, err := tools.SaveContact(`{"name":"Aimee","kind":"individual","trust_zone":"household","facts":{"email":"aimee@example.com"}}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := tools.OwnerContact(`{}`)
+	if err != nil {
+		t.Fatalf("OwnerContact() error = %v", err)
+	}
+	if !strings.Contains(result, "active_owner_channels") {
+		t.Fatalf("OwnerContact() = %q, want structured owner channel summary", result)
+	}
+	if !strings.Contains(result, "\"owu\"") || !strings.Contains(result, "\"signal\"") {
+		t.Fatalf("OwnerContact() = %q, want both owner channels", result)
+	}
+}
+
+func TestOwnerContact_AmbiguousAdminRequiresConfig(t *testing.T) {
+	tools := newTestTools(t)
+
+	for _, name := range []string{"Aimee", "Nugget"} {
+		_, err := tools.SaveContact(fmt.Sprintf(`{"name":%q,"kind":"individual","trust_zone":"admin"}`, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	_, err := tools.OwnerContact(`{}`)
+	if err == nil {
+		t.Fatal("expected ambiguity error when multiple admin contacts exist")
+	}
+	if !strings.Contains(err.Error(), "identity.owner_contact_name") {
+		t.Fatalf("error = %v, want owner contact config hint", err)
 	}
 }
 

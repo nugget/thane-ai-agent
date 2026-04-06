@@ -572,6 +572,13 @@ type IdentityConfig struct {
 	// record. When set, export_vcf name="self" resolves to this
 	// contact.
 	ContactName string `yaml:"contact_name"`
+
+	// OwnerContactName is the formatted name of the primary human
+	// owner/operator contact record. When set, the owner_contact tool
+	// resolves directly to this contact instead of guessing from trust
+	// zones. When empty, owner_contact falls back to the sole admin
+	// contact if exactly one exists.
+	OwnerContactName string `yaml:"owner_contact_name"`
 }
 
 // AttachmentsConfig configures content-addressed attachment storage.
@@ -979,6 +986,8 @@ type DelegateProfileConfig struct {
 // talents) that can be loaded together. For compiled-in tags, empty
 // Description and Tools act as "keep the built-in defaults". Tags
 // marked AlwaysActive are included in every session unconditionally.
+// Tags marked Protected are runtime-asserted and cannot be manually
+// activated or deactivated by the model.
 type CapabilityTagConfig struct {
 	// Description is a human-readable summary shown in the capability
 	// manifest so the agent knows what activating this tag provides. For
@@ -997,6 +1006,12 @@ type CapabilityTagConfig struct {
 	// AlwaysActive tags cannot be deactivated. They are included in
 	// every session regardless of channel or agent requests.
 	AlwaysActive bool `yaml:"always_active"`
+
+	// Protected tags are reserved for runtime trust and environment
+	// assertions (for example an owner-authenticated conversation).
+	// They are visible to the model when active, but cannot be toggled
+	// via activate_capability or deactivate_capability.
+	Protected bool `yaml:"protected"`
 }
 
 // Validate checks that the capability tag configuration is internally
@@ -1770,6 +1785,7 @@ func (c *Config) applyDefaults() {
 			"remember_fact",
 			"save_contact",
 			"lookup_contact",
+			"owner_contact",
 			"session_working_memory",
 			"session_close",
 			"archive_search",

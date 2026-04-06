@@ -73,12 +73,14 @@ func setupCapabilityLoopWithClient(client llm.Client, extraNames []string, capTa
 	tagTools := make(map[string][]string, len(capTags))
 	descriptions := make(map[string]string, len(capTags))
 	alwaysActive := make(map[string]bool, len(capTags))
+	protected := make(map[string]bool, len(capTags))
 	for tag, cfg := range capTags {
 		tagTools[tag] = cfg.Tools
 		descriptions[tag] = cfg.Description
 		alwaysActive[tag] = cfg.AlwaysActive
+		protected[tag] = cfg.Protected
 	}
-	manifest := tools.BuildCapabilityManifest(tagTools, descriptions, alwaysActive)
+	manifest := tools.BuildCapabilityManifest(tagTools, descriptions, alwaysActive, protected)
 	loop.Tools().SetCapabilityTools(loop, manifest)
 	loop.UseCapabilitySurface(manifest)
 	return loop

@@ -27,6 +27,7 @@ type BuiltinToolSpec struct {
 type BuiltinTagSpec struct {
 	Description  string
 	AlwaysActive bool
+	Protected    bool
 }
 
 // CapabilitySurface captures the resolved model-facing view of a
@@ -38,6 +39,7 @@ type CapabilitySurface struct {
 	Description  string
 	Tools        []string
 	AlwaysActive bool
+	Protected    bool
 	Loaded       bool
 	KBArticles   int
 	LiveContext  bool
@@ -56,6 +58,7 @@ type CapabilityCatalogEntry struct {
 	ToolCount    int                       `json:"tool_count,omitempty"`
 	Tools        []string                  `json:"tools,omitempty"`
 	AlwaysActive bool                      `json:"always_active,omitempty"`
+	Protected    bool                      `json:"protected,omitempty"`
 	AdHoc        bool                      `json:"ad_hoc,omitempty"`
 	Context      *CapabilityContextSummary `json:"context,omitempty"`
 }
@@ -65,6 +68,7 @@ type LoadedCapabilityEntry struct {
 	Description  string                    `json:"description,omitempty"`
 	ToolCount    int                       `json:"tool_count,omitempty"`
 	AlwaysActive bool                      `json:"always_active,omitempty"`
+	Protected    bool                      `json:"protected,omitempty"`
 	AdHoc        bool                      `json:"ad_hoc,omitempty"`
 	Context      *CapabilityContextSummary `json:"context,omitempty"`
 }
@@ -114,6 +118,8 @@ func BuildCapabilityCatalogView(entries []CapabilitySurface, includeDelegate boo
 			status = "discoverable"
 		case entry.AlwaysActive:
 			status = "always_active"
+		case entry.Protected:
+			status = "protected"
 		}
 
 		rendered := CapabilityCatalogEntry{
@@ -123,6 +129,7 @@ func BuildCapabilityCatalogView(entries []CapabilitySurface, includeDelegate boo
 			ToolCount:    len(entry.Tools),
 			Tools:        append([]string(nil), entry.Tools...),
 			AlwaysActive: entry.AlwaysActive,
+			Protected:    entry.Protected,
 			AdHoc:        entry.AdHoc,
 		}
 		if entry.KBArticles > 0 || entry.LiveContext {
@@ -162,6 +169,7 @@ func BuildLoadedCapabilityEntries(entries []CapabilitySurface, activeTags []stri
 			Description:  capabilityDescription(entry),
 			ToolCount:    len(entry.Tools),
 			AlwaysActive: entry.AlwaysActive,
+			Protected:    entry.Protected,
 			AdHoc:        entry.AdHoc,
 		}
 		if entry.KBArticles > 0 || entry.LiveContext {
@@ -254,6 +262,7 @@ var builtinToolSpecs = map[string]BuiltinToolSpec{
 	"list_tasks":                  {CanonicalID: "native:list_tasks", Source: NativeToolSource, DefaultTags: []string{"scheduler"}},
 	"logs_query":                  {CanonicalID: "native:logs_query", Source: NativeToolSource, DefaultTags: []string{"diagnostics"}},
 	"lookup_contact":              {CanonicalID: "native:lookup_contact", Source: NativeToolSource, DefaultTags: []string{"contacts"}},
+	"owner_contact":               {CanonicalID: "native:owner_contact", Source: NativeToolSource, DefaultTags: []string{"owner"}},
 	"loop_definition_delete":      {CanonicalID: "native:loop_definition_delete", Source: NativeToolSource, DefaultTags: []string{"loops"}},
 	"loop_definition_get":         {CanonicalID: "native:loop_definition_get", Source: NativeToolSource, DefaultTags: []string{"loops"}},
 	"loop_definition_launch":      {CanonicalID: "native:loop_definition_launch", Source: NativeToolSource, DefaultTags: []string{"loops"}},
@@ -296,34 +305,6 @@ var builtinToolSpecs = map[string]BuiltinToolSpec{
 	"remove_context_entity":       {CanonicalID: "native:remove_context_entity", Source: NativeToolSource, DefaultTags: []string{"awareness"}},
 }
 
-var builtinTagSpecs = map[string]BuiltinTagSpec{
-	"archive":       {Description: "Archive search and transcript retrieval across past conversations."},
-	"attachments":   {Description: "Attachment listing, search, and vision description tools."},
-	"awareness":     {Description: "Watchlist and live-context entity management tools."},
-	"contacts":      {Description: "Contact storage, lookup, and vCard import/export tools."},
-	"diagnostics":   {Description: "Logs, usage, version, and operational debugging tools."},
-	"email":         {Description: "Email inbox reading, search, and sending tools."},
-	"feeds":         {Description: "Media feed following and feed management tools."},
-	"files":         {Description: "Workspace file read, write, edit, and search tools."},
-	"forge":         {Description: "Forge and code-collaboration tools for issues, pull requests, checks, and reviews."},
-	"ha":            {Description: "Home Assistant state, control, registry, and automation tools."},
-	"homeassistant": {Description: "Alias for ha: Home Assistant state, control, registry, and automation tools."},
-	"interactive":   {Description: "Interactive chat loop context and guidance."},
-	"loops":         {Description: "Loop definition inspection, policy, and launch tools."},
-	"media":         {Description: "Media transcript and analysis tools."},
-	"memory":        {Description: "Persistent fact memory and working-memory tools."},
-	"models":        {Description: "Model registry inspection, routing, and policy tools."},
-	"mqtt":          {Description: "MQTT wake subscription management tools."},
-	"notifications": {Description: "Notification delivery, escalation, and actionable response tools."},
-	"owu":           {Description: "Open WebUI interactive chat loop context and guidance."},
-	"platform":      {Description: "Native platform integration tools."},
-	"scheduler":     {Description: "Scheduling and task management tools."},
-	"search":        {Description: "Web search and web content retrieval tools."},
-	"session":       {Description: "Conversation/session lifecycle and checkpoint tools."},
-	"shell":         {Description: "Shell execution tools for local command work."},
-	"signal":        {Description: "Signal messaging tools."},
-}
-
 // LookupBuiltinToolSpec returns the compiled-in tool spec for a tool name.
 func LookupBuiltinToolSpec(name string) (BuiltinToolSpec, bool) {
 	spec, ok := builtinToolSpecs[name]
@@ -347,7 +328,7 @@ func HasBuiltinTag(name string) bool {
 
 // BuildCapabilitySurface builds a sorted capability surface from
 // tag membership and descriptions.
-func BuildCapabilitySurface(tags map[string][]string, descriptions map[string]string, alwaysActive map[string]bool) []CapabilitySurface {
+func BuildCapabilitySurface(tags map[string][]string, descriptions map[string]string, alwaysActive map[string]bool, protected map[string]bool) []CapabilitySurface {
 	surface := make([]CapabilitySurface, 0, len(tags))
 	for tag, toolNames := range tags {
 		copiedTools := append([]string(nil), toolNames...)
@@ -357,6 +338,7 @@ func BuildCapabilitySurface(tags map[string][]string, descriptions map[string]st
 			Description:  descriptions[tag],
 			Tools:        copiedTools,
 			AlwaysActive: alwaysActive[tag],
+			Protected:    protected[tag],
 		})
 	}
 	return SortCapabilitySurface(surface)
@@ -388,7 +370,7 @@ func RenderCapabilityActivationDescription(entries []CapabilitySurface) string {
 	sb.WriteString("Available capabilities:\n")
 
 	for _, entry := range SortCapabilitySurface(entries) {
-		if entry.AlwaysActive {
+		if entry.AlwaysActive || entry.Protected {
 			continue
 		}
 		sb.WriteString(fmt.Sprintf("- **%s**: %s (%d tools)\n",
@@ -397,7 +379,19 @@ func RenderCapabilityActivationDescription(entries []CapabilitySurface) string {
 
 	sb.WriteString(fmt.Sprintf("\nUse %s to see which tags are currently loaded, and %s when done to keep your tool set focused.",
 		actionTools.List, actionTools.Deactivate))
+	if hasProtectedCapability(entries) {
+		sb.WriteString(" Protected tags are runtime-asserted and cannot be activated manually.")
+	}
 	return sb.String()
+}
+
+func hasProtectedCapability(entries []CapabilitySurface) bool {
+	for _, entry := range entries {
+		if entry.Protected {
+			return true
+		}
+	}
+	return false
 }
 
 // RenderCapabilityManifestMarkdown renders the model-facing capability

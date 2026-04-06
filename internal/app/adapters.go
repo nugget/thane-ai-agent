@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"sort"
 	"strings"
 	"time"
 
@@ -276,14 +277,15 @@ func (r *contactPhoneResolver) ResolvePhone(phone string) (string, string, bool)
 // contactChannelBindingResolver resolves a channel/address pair to a
 // typed conversation binding with contact identity when available.
 type contactChannelBindingResolver struct {
-	store *contacts.Store
+	store            *contacts.Store
+	ownerContactName string
 }
 
 // ResolveChannelBinding returns a typed binding for the given
 // channel/address pair. It always returns a channel-scoped binding when
 // the inputs are non-empty, even if no contact match is found.
 func (r *contactChannelBindingResolver) ResolveChannelBinding(channel, address string) *memory.ChannelBinding {
-	return resolveChannelBinding(r.store, channel, address)
+	return resolveChannelBinding(r.store, channel, address, r.ownerContactName)
 }
 
 // contactNameLookup resolves contact names to rich context profiles for
@@ -555,7 +557,7 @@ func resolveContactByChannelAddress(store *contacts.Store, channel, address stri
 	return id, ok
 }
 
-func resolveChannelBinding(store *contacts.Store, channel, address string) *memory.ChannelBinding {
+func resolveChannelBinding(store *contacts.Store, channel, address string, ownerContactName string) *memory.ChannelBinding {
 	binding := (&memory.ChannelBinding{
 		Channel: channel,
 		Address: address,
@@ -578,7 +580,28 @@ func resolveChannelBinding(store *contacts.Store, channel, address string) *memo
 	binding.ContactName = contact.FormattedName
 	binding.TrustZone = contact.TrustZone
 	binding.LinkSource = linkSource
+	binding.IsOwner = isOwnerContact(store, contact, ownerContactName)
 	return binding.Normalize()
+}
+
+func isOwnerContact(store *contacts.Store, contact *contacts.Contact, ownerContactName string) bool {
+	if store == nil || contact == nil {
+		return false
+	}
+
+	if name := strings.TrimSpace(ownerContactName); name != "" {
+		owner, err := store.ResolveContact(name)
+		if err != nil || owner == nil {
+			return false
+		}
+		return owner.ID == contact.ID
+	}
+
+	admins, err := store.FindByTrustZone(contacts.ZoneAdmin)
+	if err != nil || len(admins) != 1 {
+		return false
+	}
+	return admins[0].ID == contact.ID
 }
 
 func resolveContactByChannelLink(store *contacts.Store, channel, address string) (uuid.UUID, string, bool) {
@@ -727,6 +750,50 @@ func (r *signalMemoryRecorder) RecordOutbound(phone, message string) error {
 type channelActivityAdapter struct {
 	loops *channelLoopAdapter
 	store *contacts.Store
+}
+
+// ownerChannelActivityAdapter returns active channel loops that the
+// runtime has marked as owner-scoped. This lets helper tools surface a
+// structured view of current owner conversations without inferring
+// authenticity from prompt hints.
+type ownerChannelActivityAdapter struct {
+	loops *channelLoopAdapter
+}
+
+// ActiveOwnerChannels returns active owner-scoped channel loops in a
+// stable order, newest activity first.
+func (a *ownerChannelActivityAdapter) ActiveOwnerChannels() []contacts.OwnerChannelActivity {
+	if a == nil || a.loops == nil {
+		return nil
+	}
+	loops := a.loops.ChannelLoops()
+	result := make([]contacts.OwnerChannelActivity, 0, len(loops))
+	for _, l := range loops {
+		if !strings.EqualFold(l.Metadata["is_owner"], "true") {
+			continue
+		}
+		subsystem := l.Metadata["subsystem"]
+		if subsystem == "" {
+			continue
+		}
+		convID := l.Metadata["conversation_id"]
+		if convID == "" && len(l.RecentConvIDs) > 0 {
+			convID = l.RecentConvIDs[0]
+		}
+		result = append(result, contacts.OwnerChannelActivity{
+			Channel:        subsystem,
+			LoopID:         l.ID,
+			LoopName:       l.Name,
+			ConversationID: convID,
+			ContactName:    l.Metadata["contact_name"],
+			State:          l.State,
+			LastActive:     l.LastWakeAt,
+		})
+	}
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].LastActive.After(result[j].LastActive)
+	})
+	return result
 }
 
 // ActiveChannels returns channel activity entries for active channel

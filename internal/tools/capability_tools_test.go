@@ -224,7 +224,7 @@ func TestBuildCapabilityManifest(t *testing.T) {
 		"ha": true,
 	}
 
-	manifest := BuildCapabilityManifest(tags, descriptions, alwaysActive)
+	manifest := BuildCapabilityManifest(tags, descriptions, alwaysActive, nil)
 
 	if len(manifest) != 2 {
 		t.Fatalf("len(manifest) = %d, want 2", len(manifest))
