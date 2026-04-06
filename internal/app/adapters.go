@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -279,13 +280,18 @@ func (r *contactPhoneResolver) ResolvePhone(phone string) (string, string, bool)
 type contactChannelBindingResolver struct {
 	store            *contacts.Store
 	ownerContactName string
+
+	mu                 sync.Mutex
+	ownerContactID     uuid.UUID
+	ownerContactCached bool
 }
 
 // ResolveChannelBinding returns a typed binding for the given
 // channel/address pair. It always returns a channel-scoped binding when
 // the inputs are non-empty, even if no contact match is found.
 func (r *contactChannelBindingResolver) ResolveChannelBinding(channel, address string) *memory.ChannelBinding {
-	return resolveChannelBinding(r.store, channel, address, r.ownerContactName)
+	ownerConfigured := strings.TrimSpace(r.ownerContactName) != ""
+	return resolveChannelBinding(r.store, channel, address, ownerConfigured, r.cachedOwnerContactID())
 }
 
 // contactNameLookup resolves contact names to rich context profiles for
@@ -557,7 +563,7 @@ func resolveContactByChannelAddress(store *contacts.Store, channel, address stri
 	return id, ok
 }
 
-func resolveChannelBinding(store *contacts.Store, channel, address string, ownerContactName string) *memory.ChannelBinding {
+func resolveChannelBinding(store *contacts.Store, channel, address string, ownerConfigured bool, ownerContactID uuid.UUID) *memory.ChannelBinding {
 	binding := (&memory.ChannelBinding{
 		Channel: channel,
 		Address: address,
@@ -580,21 +586,36 @@ func resolveChannelBinding(store *contacts.Store, channel, address string, owner
 	binding.ContactName = contact.FormattedName
 	binding.TrustZone = contact.TrustZone
 	binding.LinkSource = linkSource
-	binding.IsOwner = isOwnerContact(store, contact, ownerContactName)
+	binding.IsOwner = isOwnerContact(store, contact, ownerConfigured, ownerContactID)
 	return binding.Normalize()
 }
 
-func isOwnerContact(store *contacts.Store, contact *contacts.Contact, ownerContactName string) bool {
+func (r *contactChannelBindingResolver) cachedOwnerContactID() uuid.UUID {
+	if r == nil || r.store == nil || strings.TrimSpace(r.ownerContactName) == "" {
+		return uuid.Nil
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.ownerContactCached {
+		return r.ownerContactID
+	}
+
+	owner, err := r.store.ResolveContact(r.ownerContactName)
+	if err == nil && owner != nil {
+		r.ownerContactID = owner.ID
+	}
+	r.ownerContactCached = true
+	return r.ownerContactID
+}
+
+func isOwnerContact(store *contacts.Store, contact *contacts.Contact, ownerConfigured bool, ownerContactID uuid.UUID) bool {
 	if store == nil || contact == nil {
 		return false
 	}
 
-	if name := strings.TrimSpace(ownerContactName); name != "" {
-		owner, err := store.ResolveContact(name)
-		if err != nil || owner == nil {
-			return false
-		}
-		return owner.ID == contact.ID
+	if ownerConfigured {
+		return ownerContactID != uuid.Nil && ownerContactID == contact.ID
 	}
 
 	admins, err := store.FindByTrustZone(contacts.ZoneAdmin)

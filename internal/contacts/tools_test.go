@@ -2,6 +2,7 @@ package contacts
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -953,6 +954,64 @@ func TestOwnerContact_AmbiguousAdminRequiresConfig(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "identity.owner_contact_name") {
 		t.Fatalf("error = %v, want owner contact config hint", err)
+	}
+}
+
+func TestOwnerContact_LimitsOwnerActivitySummary(t *testing.T) {
+	tools := newTestTools(t)
+	tools.SetOwnerContactName("Aimee")
+	tools.SetOwnerActivitySource(func() []OwnerChannelActivity {
+		out := make([]OwnerChannelActivity, 0, ownerActivitySummaryLimit+3)
+		for i := 0; i < ownerActivitySummaryLimit+3; i++ {
+			out = append(out, OwnerChannelActivity{
+				Channel:        "owu",
+				LoopID:         fmt.Sprintf("loop-%d", i),
+				ConversationID: fmt.Sprintf("conv-%d", i),
+				LastActive:     time.Date(2026, 4, 5, 19, 0, 0, 0, time.UTC).Add(-time.Duration(i) * time.Minute),
+			})
+		}
+		return out
+	})
+
+	if _, err := tools.SaveContact(`{"name":"Aimee","kind":"individual","trust_zone":"household","facts":{"email":"aimee@example.com"}}`); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := tools.OwnerContact(`{}`)
+	if err != nil {
+		t.Fatalf("OwnerContact() error = %v", err)
+	}
+
+	start := strings.Index(result, "```json\n")
+	endRel := -1
+	if start >= 0 {
+		endRel = strings.Index(result[start+8:], "\n```")
+	}
+	if start < 0 || endRel < 0 {
+		t.Fatalf("OwnerContact() = %q, want embedded JSON summary", result)
+	}
+	end := start + 8 + endRel
+
+	var payload struct {
+		ActiveOwnerChannels []map[string]any `json:"active_owner_channels"`
+		Total               int              `json:"total"`
+		Displayed           int              `json:"displayed"`
+		Omitted             int              `json:"omitted"`
+	}
+	if err := json.Unmarshal([]byte(result[start+8:end]), &payload); err != nil {
+		t.Fatalf("unmarshal owner activity summary: %v", err)
+	}
+	if payload.Total != ownerActivitySummaryLimit+3 {
+		t.Fatalf("summary total = %d, want %d", payload.Total, ownerActivitySummaryLimit+3)
+	}
+	if len(payload.ActiveOwnerChannels) != ownerActivitySummaryLimit {
+		t.Fatalf("visible owner channels = %d, want %d", len(payload.ActiveOwnerChannels), ownerActivitySummaryLimit)
+	}
+	if payload.Displayed != ownerActivitySummaryLimit {
+		t.Fatalf("displayed = %d, want %d", payload.Displayed, ownerActivitySummaryLimit)
+	}
+	if payload.Omitted != 3 {
+		t.Fatalf("omitted = %d, want 3", payload.Omitted)
 	}
 }
 

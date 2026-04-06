@@ -35,6 +35,8 @@ type OwnerChannelActivity struct {
 	LastActive     time.Time
 }
 
+const ownerActivitySummaryLimit = 8
+
 // Tools provides contact-related tools for the agent.
 type Tools struct {
 	store            *Store
@@ -991,14 +993,26 @@ func (t *Tools) formatOwnerActivitySummary() string {
 		ActiveOwnerChannels []activityView `json:"active_owner_channels"`
 		ByChannel           map[string]int `json:"by_channel,omitempty"`
 		Total               int            `json:"total"`
+		Displayed           int            `json:"displayed,omitempty"`
+		Omitted             int            `json:"omitted,omitempty"`
 		MostRecentActive    string         `json:"most_recent_active,omitempty"`
 	}{
-		ActiveOwnerChannels: make([]activityView, 0, len(channels)),
+		ActiveOwnerChannels: make([]activityView, 0, min(len(channels), ownerActivitySummaryLimit)),
 		ByChannel:           make(map[string]int),
 		Total:               len(channels),
 	}
 	for _, ch := range channels {
 		payload.ByChannel[ch.Channel]++
+	}
+
+	visible := channels
+	if len(visible) > ownerActivitySummaryLimit {
+		payload.Omitted = len(visible) - ownerActivitySummaryLimit
+		visible = visible[:ownerActivitySummaryLimit]
+	}
+	payload.Displayed = len(visible)
+
+	for _, ch := range visible {
 		view := activityView{
 			Channel:        ch.Channel,
 			LoopID:         ch.LoopID,
