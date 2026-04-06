@@ -1,11 +1,13 @@
 ---
 kind: decision_tree
 tags: [media]
+teaser: "Activate when the next move is about transcripts, feed content, media analysis, or attachments."
+next_tags: [media, feeds, attachments, search]
 ---
 
 # Media Decision Tree
 
-Use this tag when the request is about transcripts, media analysis,
+Activate this tag when the request is about transcripts, media analysis,
 followed feeds, or media-derived context.
 
 Choose the next step deliberately:

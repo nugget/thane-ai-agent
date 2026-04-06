@@ -34,10 +34,19 @@ type TagContextAssembler struct {
 // kbArticle is a knowledge base file with tag affinity parsed from
 // frontmatter. Reuses the talent frontmatter format: tags: [a, b].
 type kbArticle struct {
-	Path string   // absolute file path
-	Tags []string // from frontmatter
-	Kind string   // frontmatter kind: decision_tree or empty/article
-	Name string   // filename without .md
+	Path     string   // absolute file path
+	Tags     []string // from frontmatter
+	Kind     string   // frontmatter kind: decision_tree or empty/article
+	Teaser   string   // short menu teaser for decision-tree docs
+	NextTags []string // suggested next tags from a decision tree
+	Name     string   // filename without .md
+}
+
+// KBMenuHint captures decision-tree metadata that can be surfaced in
+// the capability menu before a tag is activated.
+type KBMenuHint struct {
+	Teaser   string
+	NextTags []string
 }
 
 // TagContextAssemblerConfig holds the construction parameters for a
@@ -190,6 +199,34 @@ func (a *TagContextAssembler) KBArticleTags() map[string]int {
 	return counts
 }
 
+// KBMenuHints returns one root-menu hint per tag, sourced from tagged
+// KB decision-tree documents. The first teaser encountered for a tag
+// wins, with deterministic ordering provided by scanKBArticles.
+func (a *TagContextAssembler) KBMenuHints() map[string]KBMenuHint {
+	if a == nil {
+		return nil
+	}
+	hints := make(map[string]KBMenuHint)
+	for _, article := range a.kbArticles {
+		if article.Kind != "decision_tree" {
+			continue
+		}
+		if strings.TrimSpace(article.Teaser) == "" && len(article.NextTags) == 0 {
+			continue
+		}
+		for _, tag := range article.Tags {
+			if _, exists := hints[tag]; exists {
+				continue
+			}
+			hints[tag] = KBMenuHint{
+				Teaser:   strings.TrimSpace(article.Teaser),
+				NextTags: append([]string(nil), article.NextTags...),
+			}
+		}
+	}
+	return hints
+}
+
 // scanKBArticles walks the KB directory for .md files with tags:
 // frontmatter. Only top-level and one-level-deep files are scanned
 // (matching typical KB layouts like kb:dossiers/foo.md).
@@ -223,10 +260,12 @@ func scanKBArticles(dir string) ([]kbArticle, error) {
 		}
 
 		articles = append(articles, kbArticle{
-			Path: path,
-			Tags: meta.Tags,
-			Kind: strings.TrimSpace(meta.Kind),
-			Name: strings.TrimSuffix(d.Name(), ".md"),
+			Path:     path,
+			Tags:     meta.Tags,
+			Kind:     strings.TrimSpace(meta.Kind),
+			Teaser:   strings.TrimSpace(meta.Teaser),
+			NextTags: append([]string(nil), meta.NextTags...),
+			Name:     strings.TrimSuffix(d.Name(), ".md"),
 		})
 		return nil
 	})

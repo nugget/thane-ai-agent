@@ -1,11 +1,13 @@
 ---
 kind: decision_tree
 tags: [development]
+teaser: "Activate when the next move is about software, repositories, code changes, or release engineering."
+next_tags: [forge, files, search, shell]
 ---
 
 # Development Decision Tree
 
-Use this tag when the request is broadly about software, repositories,
+Activate this tag when the request is broadly about software, repositories,
 code changes, GitHub work, debugging, or release engineering.
 
 Choose the next step deliberately:

@@ -247,6 +247,8 @@ even when they share a tag.
 The current working convention is:
 
 - `kind: decision_tree` for navigation or triage documents
+- `teaser:` for short pre-activation menu copy
+- `next_tags:` for structured likely follow-on tags
 - no `kind` field for ordinary doctrine or knowledge articles
 
 When both exist for the same active tag, decision trees should appear

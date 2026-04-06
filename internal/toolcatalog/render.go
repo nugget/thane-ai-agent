@@ -36,8 +36,15 @@ func RenderCapabilityActivationDescription(entries []CapabilitySurface) string {
 		if entry.AlwaysActive || entry.Protected {
 			continue
 		}
+		desc := strings.TrimSpace(entry.Teaser)
+		if desc == "" {
+			desc = capabilityDescription(entry)
+		}
 		sb.WriteString(fmt.Sprintf("- **%s**: %s (%d tools)\n",
-			entry.Tag, capabilityDescription(entry), len(entry.Tools)))
+			entry.Tag, desc, len(entry.Tools)))
+		if len(entry.NextTags) > 0 {
+			sb.WriteString(fmt.Sprintf("  next: %s\n", strings.Join(entry.NextTags, ", ")))
+		}
 	}
 
 	sb.WriteString(fmt.Sprintf("\nUse %s to see which tags are currently loaded, and %s when done to keep your tool set focused.",
@@ -86,6 +93,8 @@ func RenderCapabilityManifestMarkdown(entries []CapabilitySurface) string {
 		payload.CapabilityMenu[rendered.Tag] = CapabilityCatalogEntry{
 			Status:      rendered.Status,
 			Description: rendered.Description,
+			Teaser:      rendered.Teaser,
+			NextTags:    append([]string(nil), rendered.NextTags...),
 			ToolCount:   rendered.ToolCount,
 			Context:     rendered.Context,
 		}

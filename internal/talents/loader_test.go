@@ -91,7 +91,7 @@ func TestParseFrontmatter_Tags(t *testing.T) {
 }
 
 func TestParseFrontmatterMetadata(t *testing.T) {
-	raw := "---\nkind: decision_tree\ntags: [development, forge]\nauthor: test\n---\nBody."
+	raw := "---\nkind: decision_tree\ntags: [development, forge]\nteaser: \"Activate when the next move is about repos or code.\"\nnext_tags: [forge, files, search]\nauthor: test\n---\nBody."
 
 	meta, body := ParseFrontmatterMetadata(raw)
 
@@ -103,6 +103,12 @@ func TestParseFrontmatterMetadata(t *testing.T) {
 	}
 	if got := strings.Join(meta.Tags, ","); got != "development,forge" {
 		t.Fatalf("tags = %q, want development,forge", got)
+	}
+	if meta.Teaser != "Activate when the next move is about repos or code." {
+		t.Fatalf("teaser = %q", meta.Teaser)
+	}
+	if got := strings.Join(meta.NextTags, ","); got != "forge,files,search" {
+		t.Fatalf("next_tags = %q, want forge,files,search", got)
 	}
 }
 

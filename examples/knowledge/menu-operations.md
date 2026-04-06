@@ -1,11 +1,13 @@
 ---
 kind: decision_tree
 tags: [operations]
+teaser: "Activate when the next move is about logs, routing, scheduling, loop policy, or system debugging."
+next_tags: [diagnostics, models, scheduler, loops, platform]
 ---
 
 # Operations Decision Tree
 
-Use this tag when the request is about system health, routing,
+Activate this tag when the request is about system health, routing,
 scheduling, logs, loop policy, or operational debugging.
 
 Choose the next step deliberately:

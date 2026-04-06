@@ -1,11 +1,13 @@
 ---
 kind: decision_tree
 tags: [knowledge]
+teaser: "Activate when the next move is about internal docs, kb: references, durable facts, or citations."
+next_tags: [files, memory, search]
 ---
 
 # Knowledge Decision Tree
 
-Use this tag when the next move is about understanding, citing,
+Activate this tag when the next move is about understanding, citing,
 editing, or organizing Thane's durable knowledge.
 
 Choose the next move deliberately:

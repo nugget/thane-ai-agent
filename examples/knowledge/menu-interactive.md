@@ -1,11 +1,13 @@
 ---
 kind: decision_tree
 tags: [interactive]
+teaser: "Activate when the next move is about how to behave in a live human conversation."
+next_tags: [signal, owu]
 ---
 
 # Interactive Decision Tree
 
-Use this tag for conversational loops where a human counterparty is
+Activate this tag for conversational loops where a human counterparty is
 waiting on the answer.
 
 Choose the next step deliberately:

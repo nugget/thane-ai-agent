@@ -1,11 +1,13 @@
 ---
 kind: decision_tree
 tags: [people]
+teaser: "Activate when the next move is about contacts, relationships, or channel identity."
+next_tags: [contacts, signal]
 ---
 
 # People Decision Tree
 
-Use this tag when the request is about a person, contact record,
+Activate this tag when the request is about a person, contact record,
 relationship, or communication channel identity.
 
 Choose the next step deliberately:

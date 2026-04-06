@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/nugget/thane-ai-agent/internal/agent"
 	"github.com/nugget/thane-ai-agent/internal/config"
 	"github.com/nugget/thane-ai-agent/internal/toolcatalog"
 	"github.com/nugget/thane-ai-agent/internal/tools"
@@ -100,6 +101,7 @@ func firstNonEmpty(parts ...string) string {
 func buildCapabilitySurface(
 	resolved map[string]config.CapabilityTagConfig,
 	kbCounts map[string]int,
+	menuHints map[string]agent.KBMenuHint,
 	liveTags map[string]bool,
 	adHocTags map[string]bool,
 ) []toolcatalog.CapabilitySurface {
@@ -119,6 +121,10 @@ func buildCapabilitySurface(
 	for i := range surface {
 		indexByTag[surface[i].Tag] = i
 		surface[i].KBArticles = kbCounts[surface[i].Tag]
+		if hint, ok := menuHints[surface[i].Tag]; ok {
+			surface[i].Teaser = hint.Teaser
+			surface[i].NextTags = append([]string(nil), hint.NextTags...)
+		}
 		surface[i].LiveContext = liveTags[surface[i].Tag]
 	}
 
@@ -129,6 +135,8 @@ func buildCapabilitySurface(
 		surface = append(surface, toolcatalog.CapabilitySurface{
 			Tag:         tag,
 			Description: descriptions[tag],
+			Teaser:      menuHints[tag].Teaser,
+			NextTags:    append([]string(nil), menuHints[tag].NextTags...),
 			Protected:   protected[tag],
 			KBArticles:  kbCounts[tag],
 			LiveContext: liveTags[tag],

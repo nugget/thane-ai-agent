@@ -31,8 +31,10 @@ type Talent struct {
 // Frontmatter captures the subset of markdown metadata Thane currently
 // understands for talents and tagged KB articles.
 type Frontmatter struct {
-	Tags []string
-	Kind string
+	Tags     []string
+	Kind     string
+	Teaser   string
+	NextTags []string
 }
 
 // listFiles returns a sorted slice of .md filenames in l.dir.
@@ -187,6 +189,22 @@ func parseFrontmatterLines(frontmatter string) Frontmatter {
 			value := strings.TrimSpace(strings.TrimPrefix(line, "kind:"))
 			value = strings.Trim(value, `"'`)
 			meta.Kind = value
+		case strings.HasPrefix(line, "teaser:"):
+			value := strings.TrimSpace(strings.TrimPrefix(line, "teaser:"))
+			value = strings.Trim(value, `"'`)
+			meta.Teaser = value
+		case strings.HasPrefix(line, "next_tags:"):
+			value := strings.TrimSpace(strings.TrimPrefix(line, "next_tags:"))
+			value = strings.TrimPrefix(value, "[")
+			value = strings.TrimSuffix(value, "]")
+			var tags []string
+			for _, part := range strings.Split(value, ",") {
+				tag := strings.Trim(strings.TrimSpace(part), `"'`)
+				if tag != "" {
+					tags = append(tags, tag)
+				}
+			}
+			meta.NextTags = tags
 		default:
 			continue
 		}

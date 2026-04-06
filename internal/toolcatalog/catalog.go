@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"maps"
 	"sort"
+	"strings"
 )
 
 // ToolSource identifies where a tool originates.
@@ -36,6 +37,8 @@ type BuiltinTagSpec struct {
 type CapabilitySurface struct {
 	Tag          string
 	Description  string
+	Teaser       string
+	NextTags     []string
 	Tools        []string
 	AlwaysActive bool
 	Menu         bool
@@ -55,6 +58,8 @@ type CapabilityCatalogEntry struct {
 	Tag          string                    `json:"tag"`
 	Status       string                    `json:"status"`
 	Description  string                    `json:"description"`
+	Teaser       string                    `json:"teaser,omitempty"`
+	NextTags     []string                  `json:"next_tags,omitempty"`
 	ToolCount    int                       `json:"tool_count,omitempty"`
 	Tools        []string                  `json:"tools,omitempty"`
 	AlwaysActive bool                      `json:"always_active,omitempty"`
@@ -126,6 +131,8 @@ func BuildCapabilityCatalogView(entries []CapabilitySurface, includeDelegate boo
 			Tag:          entry.Tag,
 			Status:       status,
 			Description:  capabilityDescription(entry),
+			Teaser:       strings.TrimSpace(entry.Teaser),
+			NextTags:     append([]string(nil), entry.NextTags...),
 			ToolCount:    len(entry.Tools),
 			Tools:        append([]string(nil), entry.Tools...),
 			AlwaysActive: entry.AlwaysActive,

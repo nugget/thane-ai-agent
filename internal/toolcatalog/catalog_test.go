@@ -89,7 +89,7 @@ func TestRenderLoadedCapabilitySummary_EmptyStateExplainsAvailability(t *testing
 
 func TestRenderCapabilityManifestMarkdown_UsesExactToolNames(t *testing.T) {
 	manifest := RenderCapabilityManifestMarkdown([]CapabilitySurface{
-		{Tag: "development", Description: "Development entry point.", Menu: true},
+		{Tag: "development", Description: "Development entry point.", Teaser: "Activate when the next move is about code or repos.", NextTags: []string{"forge", "files", "search"}, Menu: true},
 		{Tag: "forge", Description: "Forge tools.", Tools: []string{"forge_pr_get"}},
 	})
 	if !strings.Contains(manifest, "\"kind\":\"capability_menu\"") {
@@ -113,14 +113,20 @@ func TestRenderCapabilityManifestMarkdown_UsesExactToolNames(t *testing.T) {
 	if !strings.Contains(manifest, "\"development\"") {
 		t.Fatalf("manifest = %q, want development menu entry", manifest)
 	}
-	if strings.Contains(manifest, "\"forge\"") {
-		t.Fatalf("manifest = %q, want non-menu forge hidden from menu", manifest)
+	if !strings.Contains(manifest, "\"teaser\":\"Activate when the next move is about code or repos.\"") {
+		t.Fatalf("manifest = %q, want teaser", manifest)
+	}
+	if !strings.Contains(manifest, "\"next_tags\":[\"forge\",\"files\",\"search\"]") {
+		t.Fatalf("manifest = %q, want next_tags", manifest)
+	}
+	if strings.Contains(manifest, "\"forge\":{") {
+		t.Fatalf("manifest = %q, want non-menu forge hidden from menu entries", manifest)
 	}
 }
 
 func TestRenderCapabilityActivationDescription_ShowsMenuTags(t *testing.T) {
 	desc := RenderCapabilityActivationDescription([]CapabilitySurface{
-		{Tag: "development", Description: "Development entry point.", Menu: true},
+		{Tag: "development", Description: "Development entry point.", Teaser: "Activate when the next move is about code or repos.", NextTags: []string{"forge", "files", "search"}, Menu: true},
 		{Tag: "forge", Description: "Forge tools.", Tools: []string{"forge_pr_get"}},
 		{Tag: "owner", Description: "Owner guidance.", Menu: true, Protected: true},
 	})
@@ -130,6 +136,12 @@ func TestRenderCapabilityActivationDescription_ShowsMenuTags(t *testing.T) {
 	}
 	if !strings.Contains(desc, "**development**") {
 		t.Fatalf("description = %q, want development menu bullet", desc)
+	}
+	if !strings.Contains(desc, "Activate when the next move is about code or repos.") {
+		t.Fatalf("description = %q, want teaser wording", desc)
+	}
+	if !strings.Contains(desc, "next: forge, files, search") {
+		t.Fatalf("description = %q, want next-tags hint", desc)
 	}
 	if strings.Contains(desc, "**forge**") {
 		t.Fatalf("description = %q, want forge omitted from top-level menu", desc)

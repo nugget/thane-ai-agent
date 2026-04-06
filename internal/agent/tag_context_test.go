@@ -533,6 +533,29 @@ func TestTagContextAssembler_KBArticleTags(t *testing.T) {
 	}
 }
 
+func TestTagContextAssembler_KBMenuHints(t *testing.T) {
+	kbDir := t.TempDir()
+	os.WriteFile(filepath.Join(kbDir, "knowledge-tree.md"), []byte("---\nkind: decision_tree\ntags: [knowledge]\nteaser: \"Activate when the next move is about internal docs or durable knowledge.\"\nnext_tags: [files, memory, search]\n---\nTREE"), 0o644)
+	os.WriteFile(filepath.Join(kbDir, "knowledge-article.md"), []byte("---\ntags: [knowledge]\n---\nARTICLE"), 0o644)
+
+	a := NewTagContextAssembler(TagContextAssemblerConfig{
+		CapTags: map[string]config.CapabilityTagConfig{},
+		KBDir:   kbDir,
+	})
+
+	hints := a.KBMenuHints()
+	hint, ok := hints["knowledge"]
+	if !ok {
+		t.Fatal("knowledge menu hint missing")
+	}
+	if hint.Teaser != "Activate when the next move is about internal docs or durable knowledge." {
+		t.Fatalf("teaser = %q", hint.Teaser)
+	}
+	if got := strings.Join(hint.NextTags, ","); got != "files,memory,search" {
+		t.Fatalf("next_tags = %q", got)
+	}
+}
+
 func TestBuildSystemPrompt_TagContextViaProvider(t *testing.T) {
 	l := newTagTestLoop()
 	setTagsWithAssembler(l, map[string]config.CapabilityTagConfig{

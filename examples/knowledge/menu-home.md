@@ -1,11 +1,13 @@
 ---
 kind: decision_tree
 tags: [home]
+teaser: "Activate when the next move is about the house, devices, rooms, sensors, or automations."
+next_tags: [ha, notifications, awareness]
 ---
 
 # Home Decision Tree
 
-Use this tag when the request is about the house, rooms, devices,
+Activate this tag when the request is about the house, rooms, devices,
 sensors, occupants, or home automations.
 
 Choose the next step deliberately:
