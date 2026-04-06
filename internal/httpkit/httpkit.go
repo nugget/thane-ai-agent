@@ -73,6 +73,22 @@ func WithUserAgent(ua string) ClientOption {
 	return func(c *clientConfig) { c.userAgent = ua }
 }
 
+// AgentSurface re-exports the standard buildinfo surface vocabulary so
+// callers can opt into precise truthful disclosure without inventing
+// one-off User-Agent strings.
+type AgentSurface = buildinfo.AgentSurface
+
+const (
+	AgentSurfaceGeneral = buildinfo.AgentSurfaceGeneral
+	AgentSurfaceForge   = buildinfo.AgentSurfaceForge
+)
+
+// WithTruthfulUserAgent uses Thane's canonical truthful User-Agent
+// generation for the given standard surface.
+func WithTruthfulUserAgent(surface AgentSurface) ClientOption {
+	return func(c *clientConfig) { c.userAgent = buildinfo.UserAgentFor(surface) }
+}
+
 // WithoutUserAgent disables the automatic User-Agent roundtripper.
 func WithoutUserAgent() ClientOption {
 	return func(c *clientConfig) { c.skipUserAgent = true }

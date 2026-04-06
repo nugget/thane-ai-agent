@@ -250,7 +250,6 @@ func resolveYouTubeFeed(ctx context.Context, httpClient *http.Client, rawURL str
 	if err != nil {
 		return "", fmt.Errorf("create request: %w", err)
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0")
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
