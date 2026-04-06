@@ -2340,6 +2340,7 @@ func (l *Loop) GetContextWindow() int {
 // ResetConversation archives and then clears the conversation history.
 func (l *Loop) ResetConversation(conversationID string) error {
 	l.archiveAndEndSession(conversationID, "reset")
+	l.clearPersistedCapabilityTags(conversationID)
 
 	// Clean up temp files for this conversation.
 	if l.tools != nil {
@@ -2378,6 +2379,7 @@ func (l *Loop) CloseSession(conversationID, reason, carryForward string) error {
 
 	// Archive and end current session (same pattern as ResetConversation).
 	l.archiveAndEndSession(conversationID, reason)
+	l.clearPersistedCapabilityTags(conversationID)
 
 	// Clean up temp files for this conversation.
 	if l.tools != nil {
@@ -2484,6 +2486,7 @@ func (l *Loop) SplitSession(conversationID string, atIndex int, atMessage string
 			l.logger.Error("failed to end session at split point", "error", err)
 		}
 	}
+	l.clearPersistedCapabilityTags(conversationID)
 
 	// Start a new session for the post-split messages.
 	if _, err := l.archiver.StartSession(conversationID); err != nil {
@@ -2579,6 +2582,18 @@ func (l *Loop) archiveAndEndSession(conversationID, reason string) {
 		if err := l.archiver.EndSession(sid, reason); err != nil {
 			l.logger.Error("failed to end session", "error", err)
 		}
+	}
+}
+
+func (l *Loop) clearPersistedCapabilityTags(conversationID string) {
+	if l.capTagStore == nil || conversationID == "" {
+		return
+	}
+	if err := l.capTagStore.SaveTags(conversationID, nil); err != nil {
+		l.logger.Warn("failed to clear conversation capability tags",
+			"conversation_id", conversationID,
+			"error", err,
+		)
 	}
 }
 

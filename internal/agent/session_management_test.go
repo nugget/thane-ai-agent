@@ -215,6 +215,33 @@ func TestCloseSession(t *testing.T) {
 	}
 }
 
+func TestCloseSession_ClearsPersistedCapabilityTags(t *testing.T) {
+	mem := newMockMemWithCompaction()
+	archiver := &mockArchiver{activeID: "old-session"}
+	loop := newTestLoop(mem, archiver)
+	store := newTestCapStore(t)
+	loop.SetCapabilityTagStore(store)
+
+	if err := store.SaveTags("conv1", []string{"forge", "search"}); err != nil {
+		t.Fatalf("SaveTags() error: %v", err)
+	}
+	if err := mem.AddMessage("conv1", "user", "hello"); err != nil {
+		t.Fatalf("AddMessage() error: %v", err)
+	}
+
+	if err := loop.CloseSession("conv1", "topic change", "Carry this forward."); err != nil {
+		t.Fatalf("CloseSession() error: %v", err)
+	}
+
+	tags, err := store.LoadTags("conv1")
+	if err != nil {
+		t.Fatalf("LoadTags() error: %v", err)
+	}
+	if tags != nil {
+		t.Fatalf("persisted tags = %#v, want cleared after session close", tags)
+	}
+}
+
 func TestCheckpointSession(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -429,6 +456,66 @@ func TestSplitSession(t *testing.T) {
 				t.Errorf("messages after split = %d, want %d", len(msgs), tt.wantPostSplit)
 			}
 		})
+	}
+}
+
+func TestSplitSession_ClearsPersistedCapabilityTags(t *testing.T) {
+	mem := newMockMemWithCompaction()
+	archiver := &mockArchiver{activeID: "active-session"}
+	loop := newTestLoop(mem, archiver)
+	store := newTestCapStore(t)
+	loop.SetCapabilityTagStore(store)
+
+	if err := store.SaveTags("conv1", []string{"forge", "search"}); err != nil {
+		t.Fatalf("SaveTags() error: %v", err)
+	}
+	for _, m := range []memory.Message{
+		{Role: "user", Content: "msg1"},
+		{Role: "assistant", Content: "msg2"},
+		{Role: "user", Content: "msg3"},
+	} {
+		if err := mem.AddMessage("conv1", m.Role, m.Content); err != nil {
+			t.Fatalf("AddMessage() error: %v", err)
+		}
+	}
+
+	if err := loop.SplitSession("conv1", -1, ""); err != nil {
+		t.Fatalf("SplitSession() error: %v", err)
+	}
+
+	tags, err := store.LoadTags("conv1")
+	if err != nil {
+		t.Fatalf("LoadTags() error: %v", err)
+	}
+	if tags != nil {
+		t.Fatalf("persisted tags = %#v, want cleared after session split", tags)
+	}
+}
+
+func TestResetConversation_ClearsPersistedCapabilityTags(t *testing.T) {
+	mem := newMockMemWithCompaction()
+	archiver := &mockArchiver{activeID: "old-session"}
+	loop := newTestLoop(mem, archiver)
+	store := newTestCapStore(t)
+	loop.SetCapabilityTagStore(store)
+
+	if err := store.SaveTags("conv1", []string{"forge"}); err != nil {
+		t.Fatalf("SaveTags() error: %v", err)
+	}
+	if err := mem.AddMessage("conv1", "user", "hello"); err != nil {
+		t.Fatalf("AddMessage() error: %v", err)
+	}
+
+	if err := loop.ResetConversation("conv1"); err != nil {
+		t.Fatalf("ResetConversation() error: %v", err)
+	}
+
+	tags, err := store.LoadTags("conv1")
+	if err != nil {
+		t.Fatalf("LoadTags() error: %v", err)
+	}
+	if tags != nil {
+		t.Fatalf("persisted tags = %#v, want cleared after conversation reset", tags)
 	}
 }
 
