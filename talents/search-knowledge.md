@@ -4,14 +4,16 @@ tags: [search]
 
 # Search For Knowledge Work
 
-`search` is how you widen the world after local truth runs out. It is
-not a substitute for choosing a source.
+`search` is the branch for remote sources. Sometimes that means widening
+the world. Sometimes it means simply reading the page already in front
+of you.
 
-If a URL is already in hand, the world is no longer unknown. Read the
-named page first with the visible fetch tool.
+Treat a named URL differently from an unnamed question. A named URL is
+retrieval. An unnamed question is discovery.
 
 Trust these instincts:
 
+- if a URL is already in hand, use the visible page-fetch tool first
 - widen only when the answer depends on material not already in the
   workspace or memory
 - if discovery and reading are both needed, search first and then fetch

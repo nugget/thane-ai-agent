@@ -5,22 +5,21 @@ tags: [knowledge]
 
 # Knowledge Entry Point
 
-Knowledge work goes wrong when you choose the wrong source of truth.
-Feel first for where the truth probably lives.
+The first question is not what the topic is. It is where the truth would
+live if you had to verify it for yourself.
 
 Choose the next move deliberately:
 
-- If a specific article, dossier, note, or semantic path is already in
-  view, activate `files`.
-- If the turn wants a compact durable truth about a person, preference,
-  or relationship, activate `memory`.
-- If the turn reaches backward into old sessions or earlier threads,
-  activate `archive`.
-- If a URL is already named and the page itself is the object, activate
+- If the truth is already named in a local document, dossier, note, or
+  semantic path, activate `files`.
+- If the truth is already named on the web, in a URL or page, activate
   `search`.
-- If the turn genuinely needs broader outside discovery or corroboration
-  beyond a named source, activate `search`.
-- If two sources of truth need to meet, delegate with `files,search`.
+- If the turn wants a distilled truth that should survive beyond this
+  moment, activate `memory`.
+- If the answer probably lives in prior sessions, earlier threads, or
+  old exchanges, activate `archive`.
+- If more than one surface is claiming authority, delegate with the
+  relevant tags before you flatten them together.
 - If the source is already clear and enough is in hand, respond.
 
 When a semantic reference is already present, treat it as a strong hint
