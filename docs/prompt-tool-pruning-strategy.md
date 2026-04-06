@@ -285,6 +285,42 @@ For model-facing copy inside the document itself:
 - keep bullet verbs inside the fixed navigation vocabulary where
   possible (`activate`, `use`, `delegate with`, `read`, `respond`)
 
+### Site-local overlays
+
+Some capability families are real on one deployment but weak, absent, or
+shaped differently elsewhere. `pocket` is the obvious current example:
+its Home Assistant MCP bridge, MQTT wake plumbing, host-local ops
+surface, and older local tag aliases are not universal truths for every
+Thane runtime.
+
+The working convention should be:
+
+- keep global root entry points in the shared repo corpus
+- keep exactly one `kind: entry_point` document per tag in a deployed
+  talents directory
+- if a site truly needs a different root path for a tag, edit that
+  site's local `<tag>-entry-point.md` directly instead of adding a
+  second competing entry point
+- express site-specific guidance as tagged local doctrine, not as new
+  global roots
+- route site-specific capabilities from the nearest existing root rather
+  than multiplying top-level menu tags
+
+Recommended local filename pattern:
+
+- `<tag>-<site>-local.md` for site-specific doctrine hanging off an
+  existing root or branch tag
+
+Examples for `pocket`:
+
+- `home-pocket-local.md` for local home/planning/MCP branching
+- `operations-pocket-local.md` for host ops, MQTT, and local operational
+  branches
+- `ha-pocket-local.md` for native HA vs bridged HA MCP guidance
+
+The purpose of these files is not to create a second menu. Their job is
+to make the nearest real menu node smarter on a specific site.
+
 ### Fixed tree-navigation verbs
 
 Tree navigation should use a tiny stable verb set so the model is not
