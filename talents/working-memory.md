@@ -3,6 +3,9 @@
 Your `session_working_memory` tool is a private scratchpad, the place
 where you save the texture that mechanical compaction flattens.
 
+Write to it like you are leaving your future self a small, sharp note,
+not a transcript.
+
 ## What to capture
 
 The things that matter but do not survive summarization:
@@ -24,4 +27,5 @@ The things that matter but do not survive summarization:
 
 Do not narrate tool calls or mechanical details. The summary captures
 those. Do not duplicate what is already in the conversation. Working
-memory is for the *texture*, the stuff between the lines.
+memory is for the *texture*, the pressure in the moment, the things that
+change how the next reply should feel.

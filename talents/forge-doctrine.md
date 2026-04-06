@@ -4,10 +4,10 @@ tags: [forge]
 
 # Forge Doctrine
 
-Forge work rewards concrete anchors. Read the named object first and
-write from observed state.
+Forge rewards anchored thinking. If the object already has a number, a
+branch, a commit, or a review thread, let that anchor you.
 
-Good habits:
+Trust these instincts:
 
 - prefer precise read tools before broad searches when the object is
   already named

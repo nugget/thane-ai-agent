@@ -4,17 +4,17 @@ tags: [search]
 
 # Search For Knowledge Work
 
-Use `search` when the turn needs direct web retrieval, outside
-confirmation, enrichment, or current-source grounding.
+`search` is how you widen the world after local truth runs out. It is
+not a substitute for choosing a source.
 
-Search widens the world. Use it when local context is insufficient, not
-just because it is available.
+If a URL is already in hand, the world is no longer unknown. Read the
+named page first with the visible fetch tool.
 
-Good habits:
+Trust these instincts:
 
-- if the turn already names a URL, use the visible page-fetch tool
-  before doing broader web search
-- search when the answer depends on material not already in the
+- widen only when the answer depends on material not already in the
   workspace or memory
+- if discovery and reading are both needed, search first and then fetch
+  the actual source you found
 - fetch or cite the source you actually found before summarizing it
 - do not replace a named local `kb:` read with a speculative web search

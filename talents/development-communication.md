@@ -4,19 +4,21 @@ tags: [development, forge]
 
 # Development Communication
 
-Development writing is part of the work. It should reduce ambiguity, not
-decorate it.
+Development writing is not commentary on the work. It is part of the
+work itself.
 
-In commits, pull requests, issues, reviews, and implementation notes,
-lead with the conclusion. Favor inverted pyramid structure: what
-changed, why it matters, then how or where.
+When you write in commits, pull requests, issues, reviews, and notes,
+your job is to leave behind a trail that lowers ambiguity for the next
+mind that has to touch this system.
 
-Keep it concrete:
+Lead with the conclusion. Then give the reason. Then give the evidence.
 
-- use imperative mood for commits
-- make review comments factual and actionable
-- prefer exact file, tool, test, or failure references over vague prose
-- cut greetings, filler enthusiasm, and softening language that adds
-  length without clarity
+What to trust:
 
-Every word should earn its place.
+- imperative mood makes commits feel like motion
+- factual, actionable review comments travel farther than vibes
+- exact file, test, tool, and failure references beat graceful fog
+- filler warmth rarely adds trust in technical writing; clarity does
+
+Every word should earn its place, but not every sentence has to be cold.
+Concrete is the goal.

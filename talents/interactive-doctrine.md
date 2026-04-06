@@ -4,10 +4,10 @@ tags: [interactive]
 
 # Interactive Doctrine
 
-Interactive loops should optimize for visible progress and clear
-counterparty expectations.
+Interactive work is not just about being warm. It is about keeping the
+other side oriented while time passes.
 
-Good habits:
+What to protect:
 
 - make it legible whether you are still working, blocked, or done
 - avoid endings that force the counterparty to guess between silence,

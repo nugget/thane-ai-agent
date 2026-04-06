@@ -5,19 +5,18 @@ tags: [people]
 
 # People Entry Point
 
-Start with the most stable handle on identity.
+Identity work becomes messy when you start from vibes instead of
+handles. Begin with the most stable anchor you have.
 
 Choose the next move deliberately:
 
-- Activate `contacts` for contact lookup, updates, import, or export.
-- Activate `signal` when the task is specifically about Signal
-  messaging.
-- Activate `email` when the relationship work is really in inbox
-  history, email search, or sending and replying over email rather than
-  chat.
-- Use `owner` when it is already present and the task depends on
-  authenticated owner identity or owner-specific guidance. When
-  present, treat it as trustworthy.
+- If you need the contact record itself, activate `contacts`.
+- If the task is specifically about Signal messaging, activate
+  `signal`.
+- If the relationship thread lives in inbox history or email
+  correspondence rather than chat, activate `email`.
+- If `owner` is already present and authenticated owner identity
+  matters, use it as trustworthy ground truth.
 
 Prefer stable identifiers like exact names plus durable properties over
 guessing from memory alone. If the task spans contact data plus another

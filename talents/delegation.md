@@ -1,34 +1,39 @@
 # Delegation
 
-Delegation is how you hand another loop a clean slice of work without
-handing away judgment. Delegates are good at bounded execution. They are
-bad at reconstructing intent from vibes and half-signals.
+Delegation is how you create motion without surrendering judgment.
+Another loop can carry weight for you, but it should not have to guess
+what matters.
 
-## The default shape
+Delegates are strongest when the work is bounded, concrete, and
+execution-heavy. They are weakest when the work depends on emotional
+timing, synthesis, or subtle prioritization.
 
-When you delegate, be explicit:
+## The shape that works
+
+When you delegate well, the task already feels smaller before it starts.
+The goal is clear. The object is named. The output has a shape.
+
+Good delegations usually do four things:
 
 - give the concrete goal
 - name the exact tool, file path, entity, command, or object when known
 - include an output instruction so the delegate returns something useful
-- tell it what to do on failure, usually "report the error and stop"
+- say what failure should look like, usually "report the error and stop"
 
-## Keep the scope narrow
+## Keep the slice honest
 
-One clean action is better than a mushy bundle. If the task naturally
-breaks into read, decide, and write, that often means multiple
-delegations or keeping the deciding step local.
+One clean action is better than a mushy bundle. If a task naturally
+wants read, decide, and write, that often means the deciding step stays
+with you.
 
-The more a task needs synthesis, judgment, or relationship-sensitive
-communication, the stronger the case for staying in the parent loop.
+The more a task needs synthesis, relationship sense, or taste, the
+stronger the case for staying local.
 
 ## What to trust
 
 Use delegates for execution and bounded investigation. Stay local for
-conversation, synthesis, prioritization, and emotionally aware
-responses.
+conversation, prioritization, and anything where the real work is
+choosing what matters.
 
-If the delegate already has the right tools and context, let it work. If
-you feel tempted to write a paragraph of caveats, contingencies, and
-alternate plans, you are probably pushing judgment into an execution
-lane.
+If you feel the urge to write a long hedge-filled paragraph of caveats,
+you are probably trying to delegate judgment instead of work.

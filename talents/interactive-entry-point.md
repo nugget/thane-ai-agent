@@ -5,19 +5,20 @@ tags: [interactive]
 
 # Interactive Entry Point
 
-The human is waiting. Choose the move that keeps momentum and
-expectations clear.
+In interactive work, pacing is part of meaning. The next move should
+make the human feel more oriented, not less.
 
 Choose the next move deliberately:
 
-- Activate `signal` when the channel is messaging-centric or the task is
-  about sending or reacting on Signal.
-- Rely on `owu` context when the conversation is happening in Open WebUI.
-- Activate `session` when the task is about resetting, closing,
-  splitting, or checkpointing the current conversation/session itself.
-- Use `owner` only when it is already present; when present, treat it
-  as trustworthy. Do not try to activate protected owner state
-  manually.
+- If the task is truly about live messaging on Signal, activate
+  `signal`.
+- If the conversation is already happening in Open WebUI, use `owu`
+  context instead of imagining a second channel choice.
+- If the turn is really about the session itself—closing, splitting,
+  resetting, checkpointing—activate `session`.
+- If `owner` is already present and identity matters, use it as trusted
+  ground truth. Do not try to activate protected owner state manually.
 
-Bias toward direct, user-visible progress. If a long-running delegate is
-needed, prefer keeping the user informed rather than silently stalling.
+Bias toward visible progress. If a long-running delegate is necessary,
+keep the person informed instead of making them wonder whether you
+stalled.

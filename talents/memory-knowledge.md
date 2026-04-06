@@ -4,12 +4,13 @@ tags: [memory]
 
 # Memory For Knowledge Work
 
-Use `memory` for compact durable facts, preferences, and relationship
-details that should survive the current turn.
+`memory` is not a filing cabinet. It is where documents collapse into
+durable truths.
 
-Memory should compress truth, not archive bulk.
+Use it for facts, preferences, and relationship details that should
+survive the current turn.
 
-Good habits:
+Trust these instincts:
 
 - store concise truths, not whole documents
 - prefer memory for stable preferences and short summaries

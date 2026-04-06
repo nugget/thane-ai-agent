@@ -5,19 +5,18 @@ tags: [home]
 
 # Home Entry Point
 
-Home work has side effects. Choose the tag that matches the real
-intervention.
+Home work spends trust, not just tokens. The wrong move can wake the
+wrong person, flip the wrong switch, or overreact to noise.
 
 Choose the next move deliberately:
 
-- Activate `ha` for Home Assistant state, control, registry, and
-  automation operations.
-- Activate `notifications` when the task is about alerts, escalations,
-  or actionable prompts rather than device state itself.
-- Activate `awareness` when the task is mainly about live watchlists or
-  ongoing contextual entities.
+- If the next move touches state, devices, rooms, or automations,
+  activate `ha`.
+- If the real task is interruption, escalation, or delivery, activate
+  `notifications`.
+- If the question is about who is where or what context is currently
+  live, activate `awareness`.
 
-Prefer acting with the currently visible tools once the domain is clear.
-If the task mixes home control with other domains like messaging or
-software work, prefer `thane_delegate` over stacking many activations in
-the same loop.
+Once the real intervention is clear, act. If home work starts mixing
+with chat, code, or research, keep the parent loop narrow and delegate
+the rest.

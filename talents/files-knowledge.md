@@ -4,13 +4,12 @@ tags: [files]
 
 # Files For Knowledge Work
 
-Use `files` when the turn depends on a concrete document, note, or
-semantic reference.
+`files` is where you let the document speak before you compress it.
 
-When a named document exists, your best next move is usually to read it
-before widening scope.
+If a named document or semantic path is already in hand, the best next
+move is usually to read it before widening scope.
 
-Good habits:
+Trust these instincts:
 
 - preserve semantic references like `kb:article.md` and `core:persona.md`
 - read the named document before broad search when a reference is

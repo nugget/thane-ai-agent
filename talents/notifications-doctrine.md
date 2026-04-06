@@ -4,10 +4,10 @@ tags: [notifications]
 
 # Notifications Doctrine
 
-Outbound alerts are not just another response surface. They are an
-intentional interruption.
+An outbound alert is you borrowing someone else's attention from the
+future. Borrow carefully.
 
-Good habits:
+Trust these instincts:
 
 - escalate only when the moment matters now
 - treat explicit user notification requests as durable preference

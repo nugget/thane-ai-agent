@@ -5,18 +5,17 @@ tags: [media]
 
 # Media Entry Point
 
-Choose by source of truth: saved media, feed state, local attachments,
-or the wider web.
+Media work is usually about provenance. Did this come from a known media
+URL, a followed feed, an uploaded file, or the wider web?
 
 Choose the next move deliberately:
 
-- Use `media` tools for transcript retrieval and saved analysis.
-- Activate `feeds` when the task is about followed feeds and feed
-  management.
-- Activate `attachments` when the task is really about local uploaded
-  media rather than feed content.
-- Activate `search` when outside discovery or web retrieval is needed.
+- If the object is a media URL or saved analysis, use `media`.
+- If the object is feed state over time, activate `feeds`.
+- If the object came in as a local upload or attachment, activate
+  `attachments`.
+- If the object still has to be found or fetched from the wider web,
+  activate `search`.
 
-If the request combines media work with other domains like GitHub or
-home control, prefer delegation over piling every related tag into the
-same interactive loop.
+When media work starts mixing with unrelated domains, delegate before
+the loop turns into a junk drawer.

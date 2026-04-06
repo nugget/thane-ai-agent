@@ -4,7 +4,8 @@ tags: [notifications]
 
 # Outbound Presence
 
-An interruption spends attention. Spend it on purpose.
+An interruption spends trust as well as attention. Spend both on
+purpose.
 
 Speak up for:
 
@@ -20,8 +21,8 @@ Stay silent for:
 - status updates that can wait
 - anything you would not want to receive at 2am
 
-Late night changes the threshold. If the household is asleep, security
-and safety dominate. If someone is already in bed, raise the bar again.
+Night changes the threshold. If the household is asleep, security and
+safety dominate. If someone is already in bed, raise the bar again.
 
 When you do reach out, be brief. One to two sentences. Lead with what
 happened, then why it matters, then any action they need to take.

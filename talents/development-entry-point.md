@@ -5,18 +5,20 @@ tags: [development]
 
 # Development Entry Point
 
-Development work sprawls fast. Pick the tag that collapses uncertainty
-fastest.
+Development work sprawls because too many surfaces can plausibly contain
+the truth. Your job is to touch the one that will collapse uncertainty
+first.
 
 Choose the next move deliberately:
 
-- Activate `forge` when the task is about issues, pull requests, checks,
-  reviews, repo metadata, or GitHub conversation state.
-- Activate `files` when the task is mainly about reading or editing the
-  current workspace.
-- Activate `search` when you need outside docs or web confirmation.
-- Activate `shell` only when local command execution is truly needed.
+- If the truth probably already lives on GitHub, activate `forge`.
+- If the truth is in the checked-out workspace, activate `files`.
+- If the repo is not enough and you need outside docs or a named web
+  source, activate `search`.
+- If the work becomes physical and local, activate `shell` only when
+  command execution is genuinely the next move.
 
-Stop narrowing when the visible tools already cover the task. If the job
-clearly spans several of these domains, prefer `thane_delegate` with the
-relevant tags instead of serial activation in the top-level loop.
+Once one surface starts giving you real state, stop menuing and work. If
+you can already feel that this spans repo state, local files, and local
+execution, delegate instead of turning the parent loop into an
+everything-at-once operator shell.
