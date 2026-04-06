@@ -58,3 +58,28 @@ func TestBuildSystemPrompt_CommunicationSlicesFollowActiveTags(t *testing.T) {
 		t.Fatalf("prompt should not include development communication slice: %s", prompt)
 	}
 }
+
+func TestBuildSystemPrompt_EntryPointTalentsPrecedeTaggedDoctrine(t *testing.T) {
+	l := newTagTestLoop()
+	parsed := []talents.Talent{
+		{Name: "readme", Tags: nil, Content: "CORE_MARKER"},
+		{Name: "interactive-entry-point", Tags: []string{"interactive"}, Kind: "entry_point", Content: "INTERACTIVE_ENTRY_MARKER"},
+		{Name: "interactive-communication", Tags: []string{"interactive"}, Content: "INTERACTIVE_COMM_MARKER"},
+		{Name: "interactive-doctrine", Tags: []string{"interactive"}, Content: "INTERACTIVE_DOCTRINE_MARKER"},
+	}
+	l.SetCapabilityTags(map[string]config.CapabilityTagConfig{
+		"interactive": {Description: "Interactive", AlwaysActive: true},
+	}, parsed)
+
+	prompt := l.buildSystemPrompt(testCtxForLoop(l), "hello", nil)
+	coreIdx := strings.Index(prompt, "CORE_MARKER")
+	entryIdx := strings.Index(prompt, "INTERACTIVE_ENTRY_MARKER")
+	commIdx := strings.Index(prompt, "INTERACTIVE_COMM_MARKER")
+	doctrineIdx := strings.Index(prompt, "INTERACTIVE_DOCTRINE_MARKER")
+	if coreIdx < 0 || entryIdx < 0 || commIdx < 0 || doctrineIdx < 0 {
+		t.Fatalf("prompt missing expected markers:\n%s", prompt)
+	}
+	if coreIdx >= entryIdx || entryIdx >= commIdx || entryIdx >= doctrineIdx {
+		t.Fatalf("unexpected ordering:\n%s", prompt)
+	}
+}

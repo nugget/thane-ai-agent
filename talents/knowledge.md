@@ -1,4 +1,5 @@
 ---
+kind: entry_point
 tags: [knowledge]
 ---
 

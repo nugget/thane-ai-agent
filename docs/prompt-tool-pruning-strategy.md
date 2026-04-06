@@ -397,6 +397,13 @@ Another clean split followed: `talents/presence.md` now stays focused on
 restraint, anticipation, and felt presence, while interruption and alert
 thresholds moved behind tagged notification guidance.
 
+The root-menu experiment is also live in the prompt path now, not just
+in examples: broad tags like `development`, `home`, `interactive`,
+`knowledge`, `media`, `operations`, and `people` now have tagged
+entry-point talents, and tagged doctrine slices like `forge`,
+`interactive`, and `notifications` now load as real behavioral guidance
+when active.
+
 ## Guardrails
 
 - Do not solve prompt bloat by creating a different giant prompt in a

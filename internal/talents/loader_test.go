@@ -191,12 +191,33 @@ func TestFilterByTags_Empty(t *testing.T) {
 	}
 }
 
+func TestFilterByTags_EntryPointsPrecedeTaggedDoctrine(t *testing.T) {
+	all := []Talent{
+		{Name: "core", Tags: nil, Content: "CORE"},
+		{Name: "interactive-communication", Tags: []string{"interactive"}, Content: "INTERACTIVE_COMM"},
+		{Name: "interactive-entry-point", Tags: []string{"interactive"}, Kind: "entry_point", Content: "INTERACTIVE_ENTRY"},
+		{Name: "interactive-doctrine", Tags: []string{"interactive"}, Content: "INTERACTIVE_DOCTRINE"},
+	}
+
+	result := FilterByTags(all, map[string]bool{"interactive": true})
+	coreIdx := strings.Index(result, "CORE")
+	entryIdx := strings.Index(result, "INTERACTIVE_ENTRY")
+	commIdx := strings.Index(result, "INTERACTIVE_COMM")
+	doctrineIdx := strings.Index(result, "INTERACTIVE_DOCTRINE")
+	if coreIdx < 0 || entryIdx < 0 || commIdx < 0 || doctrineIdx < 0 {
+		t.Fatalf("missing expected markers in result:\n%s", result)
+	}
+	if coreIdx >= entryIdx || entryIdx >= commIdx || entryIdx >= doctrineIdx {
+		t.Fatalf("unexpected ordering:\n%s", result)
+	}
+}
+
 func TestTalents(t *testing.T) {
 	dir := t.TempDir()
 
 	// Write talent files with and without frontmatter.
 	writeFile(t, dir, "core.md", "# Core\nAlways loaded.")
-	writeFile(t, dir, "ha-tools.md", "---\ntags: [ha]\n---\n# HA Tools\nHome Assistant guidance.")
+	writeFile(t, dir, "ha-tools.md", "---\nkind: entry_point\ntags: [ha]\n---\n# HA Tools\nHome Assistant guidance.")
 	writeFile(t, dir, "search.md", "---\ntags: [search, web]\n---\n# Search\nSearch guidance.")
 
 	loader := NewLoader(dir)
@@ -216,6 +237,9 @@ func TestTalents(t *testing.T) {
 	if talents[0].Tags != nil {
 		t.Errorf("talents[0].Tags = %v, want nil", talents[0].Tags)
 	}
+	if talents[0].Kind != "" {
+		t.Errorf("talents[0].Kind = %q, want empty", talents[0].Kind)
+	}
 	if !strings.Contains(talents[0].Content, "Always loaded") {
 		t.Errorf("talents[0].Content missing expected text")
 	}
@@ -225,6 +249,9 @@ func TestTalents(t *testing.T) {
 	}
 	if len(talents[1].Tags) != 1 || talents[1].Tags[0] != "ha" {
 		t.Errorf("talents[1].Tags = %v, want [ha]", talents[1].Tags)
+	}
+	if talents[1].Kind != "entry_point" {
+		t.Errorf("talents[1].Kind = %q, want entry_point", talents[1].Kind)
 	}
 
 	if talents[2].Name != "search" {

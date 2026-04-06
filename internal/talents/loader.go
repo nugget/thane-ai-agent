@@ -25,6 +25,7 @@ func NewLoader(dir string) *Loader {
 type Talent struct {
 	Name    string   // Filename without .md extension
 	Tags    []string // Tags from YAML frontmatter (nil = untagged)
+	Kind    string   // Optional frontmatter kind (for example entry_point)
 	Content string   // Markdown content (frontmatter stripped)
 }
 
@@ -77,7 +78,7 @@ func (l *Loader) Talents() ([]Talent, error) {
 		}
 		name := strings.TrimSuffix(f, ".md")
 		meta, content := ParseFrontmatterMetadata(string(data))
-		ts = append(ts, Talent{Name: name, Tags: meta.Tags, Content: content})
+		ts = append(ts, Talent{Name: name, Tags: meta.Tags, Kind: meta.Kind, Content: content})
 	}
 	return ts, nil
 }
@@ -86,16 +87,34 @@ func (l *Loader) Talents() ([]Talent, error) {
 // given active tags. Untagged talents are always included (they have
 // no tag restrictions). If activeTags is nil, all talents are included.
 func FilterByTags(talents []Talent, activeTags map[string]bool) string {
-	var parts []string
+	var included []Talent
 	for _, t := range talents {
 		if shouldIncludeTalent(t, activeTags) {
-			parts = append(parts, t.Content)
+			included = append(included, t)
 		}
 	}
-	if len(parts) == 0 {
+	if len(included) == 0 {
 		return ""
 	}
+	sort.SliceStable(included, func(i, j int) bool {
+		return talentOrderKey(included[i]) < talentOrderKey(included[j])
+	})
+	var parts []string
+	for _, t := range included {
+		parts = append(parts, t.Content)
+	}
 	return strings.Join(parts, "\n\n---\n\n")
+}
+
+func talentOrderKey(t Talent) int {
+	switch {
+	case len(t.Tags) == 0:
+		return 0
+	case strings.TrimSpace(t.Kind) == "entry_point":
+		return 1
+	default:
+		return 2
+	}
 }
 
 // shouldIncludeTalent returns true if the talent should be included
