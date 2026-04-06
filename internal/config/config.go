@@ -762,9 +762,16 @@ func (m *ModelConfig) UnmarshalYAML(node *yaml.Node) error {
 
 // ModelServerConfig describes a named model provider resource.
 type ModelServerConfig struct {
-	URL      string `yaml:"url"`
-	Provider string `yaml:"provider"` // Default: ollama
-	APIKey   string `yaml:"api_key"`  // Optional bearer/API key for providers that require auth
+	URL string `yaml:"url"`
+	// Provider name for this resource. Default: ollama.
+	Provider string `yaml:"provider"`
+	// APIKey is an optional bearer/API key for providers that require auth.
+	APIKey string `yaml:"api_key"`
+	// IdleTTLSeconds asks supported local runners to keep models warm for
+	// this many idle seconds after an inference request. LM Studio honors
+	// this via the native `ttl` request field on inference endpoints.
+	// Zero lets the runner use its default behavior.
+	IdleTTLSeconds int `yaml:"idle_ttl_seconds"`
 }
 
 // PreferredOllamaURL returns the best available Ollama URL for callers
@@ -2040,6 +2047,9 @@ func (c *Config) validateModels() error {
 		}
 		if strings.TrimSpace(srv.URL) == "" {
 			return fmt.Errorf("models.resources.%s.url is required", name)
+		}
+		if srv.IdleTTLSeconds < 0 {
+			return fmt.Errorf("models.resources.%s.idle_ttl_seconds must be >= 0", name)
 		}
 	}
 	for i, m := range c.Models.Available {

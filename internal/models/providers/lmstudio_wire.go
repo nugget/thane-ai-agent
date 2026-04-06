@@ -46,6 +46,7 @@ type lmStudioChatRequest struct {
 	Messages      []lmStudioMessage      `json:"messages"`
 	Stream        bool                   `json:"stream,omitempty"`
 	Tools         []map[string]any       `json:"tools,omitempty"`
+	TTL           int                    `json:"ttl,omitempty"`
 	StreamOptions *lmStudioStreamOptions `json:"stream_options,omitempty"`
 }
 

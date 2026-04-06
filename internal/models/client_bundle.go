@@ -58,7 +58,7 @@ func BuildClients(cat *Catalog, cfg *config.Config, logger *slog.Logger) (*Clien
 			}
 			client = oc
 		case "lmstudio":
-			lc := modelproviders.NewLMStudioClient(res.URL, serverAPIKey(cfg, res.ID), logger.With("resource", res.ID))
+			lc := modelproviders.NewLMStudioClientWithTTL(res.URL, serverAPIKey(cfg, res.ID), logger.With("resource", res.ID), res.IdleTTLSeconds)
 			lmstudioClients[res.ID] = lc
 			healthClients[res.ID] = ResourceHealthClient{
 				Ping:          lc.Ping,
