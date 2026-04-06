@@ -192,6 +192,53 @@ The desired model posture is:
 
 This is the opposite of a "browse and load everything" posture.
 
+## Progressive Disclosure Model
+
+The current working model is a coarse-to-fine capability menu backed by
+decision-tree documents.
+
+The important design choice is that these should be the same documents,
+not two parallel systems:
+
+- the manifest exposes a small set of broad entry-point tags
+- activating one broad tag loads a tagged article for that domain
+- that article acts like a local decision tree
+- the article defines the next tier of options, narrower tags, and
+  delegation boundaries
+
+In other words, the "phone tree" is only the navigation posture. The
+actual content should live in normal tagged KB articles that remain
+useful even outside that posture.
+
+### Initial root menu tags
+
+The first menu-sized entry points should stay small:
+
+- `interactive`
+- `development`
+- `home`
+- `people`
+- `knowledge`
+- `operations`
+- `media`
+- `owner` (protected; runtime asserted, not manually activated)
+
+These tags are broad on purpose. Their job is to help the model choose
+the next tag or act with what it already has, not to unlock the whole
+world immediately.
+
+### Decision-tree article shape
+
+Each root-tag article should answer only local questions:
+
+- what kind of request belongs here
+- what tools or narrower tags are usually relevant next
+- when to stop narrowing and just use currently visible tools
+- when to delegate instead of serially loading more context
+
+That keeps the documents operator-friendly and avoids recreating the old
+"one immortal encyclopedia" problem in KB form.
+
 ## Layer Responsibilities
 
 ### `workspace/core`

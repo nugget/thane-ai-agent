@@ -62,11 +62,11 @@ func resolveCapabilityTags(reg *tools.Registry, overrides map[string]config.Capa
 }
 
 func shouldSeedBuiltinTag(tag string, spec toolcatalog.BuiltinTagSpec) bool {
-	if spec.Protected {
+	if spec.Protected || spec.Menu {
 		return true
 	}
 	switch tag {
-	case "interactive", "owu":
+	case "owu":
 		return true
 	default:
 		return false

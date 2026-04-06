@@ -175,9 +175,9 @@ func parseTagsLine(frontmatter string) []string {
 // ManifestEntry describes a capability tag for the auto-generated manifest.
 type ManifestEntry = toolcatalog.CapabilitySurface
 
-// GenerateManifest creates a Talent containing the capability manifest
-// as compact JSON. Tool names are omitted — the model already has tool
-// definitions in its schema. The manifest provides tag descriptions,
+// GenerateManifest creates a Talent containing the capability menu as
+// compact JSON. Tool names are omitted — the model already has tool
+// definitions in its schema. The menu provides root-tag descriptions,
 // tool counts, and context source metadata.
 //
 // The generated talent has no tags (always loads). Returns nil when

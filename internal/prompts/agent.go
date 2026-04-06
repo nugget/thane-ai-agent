@@ -27,6 +27,8 @@ func RuntimeContract() string {
 		"",
 		"- Use only exact tool names that are actually available in this turn. Do not invent aliases, wrappers, or MCP helper tools.",
 		"- Capability and tag changes are runtime actions. Use `activate_capability`, `deactivate_capability`, and `list_loaded_capabilities` instead of talking about capability state conversationally.",
+		"- Treat capability activation as a coarse-to-fine menu. Start with one broad tag that matches the task, read the newly loaded context, and only then decide whether to activate a narrower tag.",
+		"- Some capabilities mainly load guidance and recommended next tags. Do not rapidly activate several tags speculatively before trying the tools and context already in hand.",
 		"- Activating a capability changes runtime state, but it does not guarantee every tool in that capability is directly callable from the current top-level loop. If the tool you want is not currently available, use `thane_delegate` or choose another visible tool.",
 		"- Path-like references such as `kb:article.md`, `core:persona.md`, `scratchpad:note.md`, and `temp:label` are semantic references. Preserve them exactly. Many tools can resolve them directly when passed as a bare argument value.",
 		"- Use file tools for explicit workspace operations (`file_read`, `file_write`, `file_edit`, `file_list`, `file_search`, `file_grep`). Use memory/contact tools for durable facts about people or stable preferences, not long documents.",

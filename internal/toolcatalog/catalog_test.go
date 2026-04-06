@@ -8,12 +8,14 @@ import (
 func TestBuildCapabilitySurface_SortsTagsAndTools(t *testing.T) {
 	surface := BuildCapabilitySurface(
 		map[string][]string{
-			"search": {"web_search", "web_fetch"},
-			"forge":  {"forge_pr_get", "forge_search"},
+			"interactive": nil,
+			"search":      {"web_search", "web_fetch"},
+			"forge":       {"forge_pr_get", "forge_search"},
 		},
 		map[string]string{
-			"search": "Search tools",
-			"forge":  "Forge tools",
+			"interactive": "Interactive loop guidance",
+			"search":      "Search tools",
+			"forge":       "Forge tools",
 		},
 		map[string]bool{
 			"forge": true,
@@ -23,19 +25,22 @@ func TestBuildCapabilitySurface_SortsTagsAndTools(t *testing.T) {
 		},
 	)
 
-	if len(surface) != 2 {
-		t.Fatalf("len(surface) = %d, want 2", len(surface))
+	if len(surface) != 3 {
+		t.Fatalf("len(surface) = %d, want 3", len(surface))
 	}
-	if surface[0].Tag != "forge" || surface[1].Tag != "search" {
-		t.Fatalf("tags = [%s %s], want [forge search]", surface[0].Tag, surface[1].Tag)
+	if got := []string{surface[0].Tag, surface[1].Tag, surface[2].Tag}; strings.Join(got, ",") != "forge,interactive,search" {
+		t.Fatalf("tags = %v, want [forge interactive search]", got)
 	}
 	if !surface[0].AlwaysActive {
 		t.Fatal("forge should be always active")
 	}
-	if !surface[1].Protected {
+	if !surface[1].Menu {
+		t.Fatal("interactive should be a menu tag")
+	}
+	if !surface[2].Protected {
 		t.Fatal("search should be protected")
 	}
-	if got := strings.Join(surface[1].Tools, ","); got != "web_fetch,web_search" {
+	if got := strings.Join(surface[2].Tools, ","); got != "web_fetch,web_search" {
 		t.Fatalf("search tools = %q", got)
 	}
 }
@@ -84,10 +89,11 @@ func TestRenderLoadedCapabilitySummary_EmptyStateExplainsAvailability(t *testing
 
 func TestRenderCapabilityManifestMarkdown_UsesExactToolNames(t *testing.T) {
 	manifest := RenderCapabilityManifestMarkdown([]CapabilitySurface{
+		{Tag: "development", Description: "Development entry point.", Menu: true},
 		{Tag: "forge", Description: "Forge tools.", Tools: []string{"forge_pr_get"}},
 	})
-	if !strings.Contains(manifest, "\"kind\":\"capability_catalog\"") {
-		t.Fatalf("manifest = %q, want capability_catalog kind", manifest)
+	if !strings.Contains(manifest, "\"kind\":\"capability_menu\"") {
+		t.Fatalf("manifest = %q, want capability_menu kind", manifest)
 	}
 	if !strings.Contains(manifest, "\"activate\":\"activate_capability\"") {
 		t.Fatalf("manifest = %q, want activate_capability example", manifest)
@@ -98,10 +104,37 @@ func TestRenderCapabilityManifestMarkdown_UsesExactToolNames(t *testing.T) {
 	if !strings.Contains(manifest, "\"delegate\":\"thane_delegate\"") {
 		t.Fatalf("manifest = %q, want thane_delegate example", manifest)
 	}
-	if !strings.Contains(manifest, "\"catalog_entries_are_not_loaded\":true") {
-		t.Fatalf("manifest = %q, want available-vs-loaded flag", manifest)
+	if !strings.Contains(manifest, "\"menu_entries_are_not_loaded\":true") {
+		t.Fatalf("manifest = %q, want menu-vs-loaded flag", manifest)
 	}
 	if !strings.Contains(manifest, "\"invented_capability_tool_names_are_invalid\":true") {
 		t.Fatalf("manifest = %q, want anti-invention flag", manifest)
+	}
+	if !strings.Contains(manifest, "\"development\"") {
+		t.Fatalf("manifest = %q, want development menu entry", manifest)
+	}
+	if strings.Contains(manifest, "\"forge\"") {
+		t.Fatalf("manifest = %q, want non-menu forge hidden from menu", manifest)
+	}
+}
+
+func TestRenderCapabilityActivationDescription_ShowsMenuTags(t *testing.T) {
+	desc := RenderCapabilityActivationDescription([]CapabilitySurface{
+		{Tag: "development", Description: "Development entry point.", Menu: true},
+		{Tag: "forge", Description: "Forge tools.", Tools: []string{"forge_pr_get"}},
+		{Tag: "owner", Description: "Owner guidance.", Menu: true, Protected: true},
+	})
+
+	if !strings.Contains(desc, "coarse-to-fine menu") {
+		t.Fatalf("description = %q, want coarse-to-fine guidance", desc)
+	}
+	if !strings.Contains(desc, "**development**") {
+		t.Fatalf("description = %q, want development menu bullet", desc)
+	}
+	if strings.Contains(desc, "**forge**") {
+		t.Fatalf("description = %q, want forge omitted from top-level menu", desc)
+	}
+	if !strings.Contains(desc, "Protected tags are runtime-asserted") {
+		t.Fatalf("description = %q, want protected-tag note", desc)
 	}
 }
