@@ -7,6 +7,8 @@ next_tags: [contacts, signal]
 
 # People Decision Tree
 
+Start with the most stable handle on identity.
+
 Choose the next step deliberately:
 
 - Activate `contacts` for contact lookup, updates, import, or export.

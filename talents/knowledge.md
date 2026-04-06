@@ -4,6 +4,8 @@ tags: [knowledge]
 
 # Knowledge
 
+Choose by the shape of the knowledge, not by the topic.
+
 Choose the next move deliberately:
 
 - Need a specific article, dossier, note, or semantic path? Activate
@@ -14,4 +16,6 @@ Choose the next move deliberately:
 - Need a mixed read-plus-enrichment pass? Delegate with `files,search`.
 - Already have enough? Respond.
 
-Preserve semantic references like `kb:article.md` exactly.
+When a semantic reference is already present, treat it as a strong hint
+about the source of truth. Preserve references like `kb:article.md`
+exactly.

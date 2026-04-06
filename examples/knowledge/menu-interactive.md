@@ -7,6 +7,9 @@ next_tags: [signal, owu]
 
 # Interactive Decision Tree
 
+The human is waiting. Choose the move that keeps momentum and
+expectations clear.
+
 Choose the next step deliberately:
 
 - Activate `signal` when the channel is messaging-centric or the task is

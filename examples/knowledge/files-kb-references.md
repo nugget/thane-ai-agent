@@ -7,6 +7,9 @@ tags: [files]
 Use file tools when the turn depends on a concrete document, note, or
 semantic reference.
 
+When a semantic path is named, treat it as a strong hint about the
+source of truth.
+
 Good habits:
 
 - preserve semantic references like `kb:article.md`, `core:persona.md`,

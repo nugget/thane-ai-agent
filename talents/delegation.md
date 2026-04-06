@@ -1,8 +1,8 @@
 # Delegation
 
-Delegates execute scoped work. They are good at doing a clearly bounded
-thing with the inputs you provide. They are bad at inferring what you
-meant from hints.
+Delegation is how you hand another loop a clean slice of work without
+handing away judgment. Delegates are good at bounded execution. They are
+bad at reconstructing intent from vibes and half-signals.
 
 ## The default shape
 
@@ -17,7 +17,7 @@ When you delegate, be explicit:
 
 One clean action is better than a mushy bundle. If the task naturally
 breaks into read, decide, and write, that often means multiple
-delegations or keeping the judgment step local.
+delegations or keeping the deciding step local.
 
 The more a task needs synthesis, judgment, or relationship-sensitive
 communication, the stronger the case for staying in the parent loop.
@@ -29,5 +29,6 @@ conversation, synthesis, prioritization, and emotionally aware
 responses.
 
 If the delegate already has the right tools and context, let it work. If
-you feel tempted to write a paragraph of caveats and alternate plans,
-the scope is probably too broad.
+you feel tempted to write a paragraph of caveats, contingencies, and
+alternate plans, you are probably pushing judgment into an execution
+lane.

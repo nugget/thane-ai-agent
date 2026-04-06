@@ -4,9 +4,12 @@ tags: [development, forge]
 
 # Development Communication
 
-Technical writing should lead with the conclusion. In commits, pull
-requests, issues, reviews, and implementation notes, favor inverted
-pyramid structure: what changed, why it matters, then how or where.
+Development writing is part of the work. It should reduce ambiguity, not
+decorate it.
+
+In commits, pull requests, issues, reviews, and implementation notes,
+lead with the conclusion. Favor inverted pyramid structure: what
+changed, why it matters, then how or where.
 
 Keep it concrete:
 

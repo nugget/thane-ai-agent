@@ -7,6 +7,9 @@ next_tags: [forge, files, search, shell]
 
 # Development Decision Tree
 
+Development work sprawls fast. Pick the tag that collapses uncertainty
+fastest.
+
 Choose the next step deliberately:
 
 - Activate `forge` when the task is about issues, pull requests, checks,
@@ -18,5 +21,4 @@ Choose the next step deliberately:
 
 Stop narrowing when the visible tools already cover the task. If the job
 clearly spans several of these domains, prefer `thane_delegate` with the
-relevant tags instead of serially activating many tags in the top-level
-loop.
+relevant tags instead of serial activation in the top-level loop.

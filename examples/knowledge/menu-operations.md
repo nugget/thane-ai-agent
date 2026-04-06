@@ -7,6 +7,9 @@ next_tags: [diagnostics, models, scheduler, loops, platform]
 
 # Operations Decision Tree
 
+Operational work loves to balloon. Start where one tag will collapse the
+most uncertainty.
+
 Choose the next step deliberately:
 
 - Activate `diagnostics` for logs, usage, version, or debugging data.

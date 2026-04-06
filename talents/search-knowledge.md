@@ -7,6 +7,9 @@ tags: [search]
 Use `search` when the turn needs outside confirmation, enrichment, or
 current-source grounding.
 
+Search widens the world. Use it when local context is insufficient, not
+just because it is available.
+
 Good habits:
 
 - search when the answer depends on material not already in the

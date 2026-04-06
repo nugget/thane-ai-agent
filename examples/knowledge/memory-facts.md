@@ -7,6 +7,8 @@ tags: [memory]
 Use memory tools for concise durable facts, preferences, and
 relationship details that should survive the current turn.
 
+Memory should compress, not archive.
+
 Good habits:
 
 - store compact truths, not long documents

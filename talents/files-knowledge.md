@@ -7,6 +7,9 @@ tags: [files]
 Use `files` when the turn depends on a concrete document, note, or
 semantic reference.
 
+When a named document exists, your best next move is usually to read it
+before widening scope.
+
 Good habits:
 
 - preserve semantic references like `kb:article.md` and `core:persona.md`

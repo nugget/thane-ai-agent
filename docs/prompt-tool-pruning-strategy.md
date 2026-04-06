@@ -8,6 +8,11 @@ It is a strategy and tracking document, not a frozen design. The exact
 runtime contract, tagged KB article shapes, and capability-loading
 posture will continue to evolve as we test behavior on real loops.
 
+The writing standard is not "dry" or "purely procedural." Model-centric
+phrasing, philosophy, and felt bias are all welcome when they create
+better behavior. The rule is simply that each line must be doing real
+work.
+
 ## Why This Exists
 
 Recent live prompt inspection showed a familiar failure mode:
@@ -239,6 +244,8 @@ Each root-tag entry-point document should answer only local questions:
 The teaser already did the activation advertisement. Once the tag is
 active, the entry-point body should not waste space repeating that same
 pitch after the heading.
+
+Every byte in an entry-point file should make the next choice easier.
 
 That keeps the documents operator-friendly and avoids recreating the old
 "one immortal encyclopedia" problem in KB form.

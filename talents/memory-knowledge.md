@@ -7,6 +7,8 @@ tags: [memory]
 Use `memory` for compact durable facts, preferences, and relationship
 details that should survive the current turn.
 
+Memory should compress truth, not archive bulk.
+
 Good habits:
 
 - store concise truths, not whole documents

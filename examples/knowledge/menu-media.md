@@ -7,6 +7,9 @@ next_tags: [media, feeds, attachments, search]
 
 # Media Decision Tree
 
+Choose by source of truth: saved media, feed state, local attachments,
+or the wider web.
+
 Choose the next step deliberately:
 
 - Use `media` tools for transcript retrieval and saved analysis.

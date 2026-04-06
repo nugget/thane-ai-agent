@@ -7,6 +7,9 @@ tags: [forge]
 Use forge tools when the request is genuinely about repository state,
 issues, pull requests, checks, or review conversations.
 
+Forge work rewards concrete anchors. Read the named object first and
+write from observed state.
+
 Good habits:
 
 - prefer precise read tools before broad searches when the object is

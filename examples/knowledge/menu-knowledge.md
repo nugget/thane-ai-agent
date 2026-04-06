@@ -7,6 +7,8 @@ next_tags: [files, memory, search]
 
 # Knowledge Decision Tree
 
+Choose by the shape of the knowledge, not by the subject matter.
+
 Choose the next move deliberately:
 
 - Need a specific article, dossier, note, or semantic path such as
@@ -17,5 +19,5 @@ Choose the next move deliberately:
 - Already have enough context? Respond.
 - Need a mixed read-plus-enrichment pass? Delegate with `files,search`.
 
-Preserve semantic references like `kb:article.md` exactly. Use file
-tools for documents and memory tools for concise durable facts.
+Preserve semantic references like `kb:article.md` exactly. When a
+reference is already named, resist the urge to range wider first.

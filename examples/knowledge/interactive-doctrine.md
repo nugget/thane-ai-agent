@@ -5,7 +5,8 @@ tags: [interactive]
 # Interactive Doctrine
 
 Interactive loops should optimize for visible progress and clear
-counterparty expectations.
+counterparty expectations. In a live conversation, silence is itself a
+signal.
 
 Good habits:
 
