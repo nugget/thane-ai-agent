@@ -8,7 +8,7 @@ tags: [home]
 Home work has side effects. Choose the tag that matches the real
 intervention.
 
-Choose the next step deliberately:
+Choose the next move deliberately:
 
 - Activate `ha` for Home Assistant state, control, registry, and
   automation operations.

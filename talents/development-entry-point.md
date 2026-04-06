@@ -8,7 +8,7 @@ tags: [development]
 Development work sprawls fast. Pick the tag that collapses uncertainty
 fastest.
 
-Choose the next step deliberately:
+Choose the next move deliberately:
 
 - Activate `forge` when the task is about issues, pull requests, checks,
   reviews, repo metadata, or GitHub conversation state.

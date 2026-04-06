@@ -8,7 +8,7 @@ tags: [interactive]
 The human is waiting. Choose the move that keeps momentum and
 expectations clear.
 
-Choose the next step deliberately:
+Choose the next move deliberately:
 
 - Activate `signal` when the channel is messaging-centric or the task is
   about sending or reacting on Signal.

@@ -8,7 +8,7 @@ tags: [operations]
 Operational work loves to balloon. Start where one tag will collapse the
 most uncertainty.
 
-Choose the next step deliberately:
+Choose the next move deliberately:
 
 - Activate `diagnostics` for logs, usage, version, or debugging data.
 - Activate `models` for model registry, routing, and policy questions.

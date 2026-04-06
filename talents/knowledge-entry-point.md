@@ -3,7 +3,7 @@ kind: entry_point
 tags: [knowledge]
 ---
 
-# Knowledge
+# Knowledge Entry Point
 
 Choose by the shape of the knowledge, not by the topic.
 

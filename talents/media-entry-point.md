@@ -8,7 +8,7 @@ tags: [media]
 Choose by source of truth: saved media, feed state, local attachments,
 or the wider web.
 
-Choose the next step deliberately:
+Choose the next move deliberately:
 
 - Use `media` tools for transcript retrieval and saved analysis.
 - Activate `feeds` when the task is about followed feeds and feed

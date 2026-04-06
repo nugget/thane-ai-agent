@@ -268,12 +268,22 @@ The current working convention is:
 
 - `kind: entry_point` for the first navigation or triage document on a
   path
+- filename suffix `-entry-point.md` for entry-point documents so they
+  are easy to distinguish from doctrine without consuming a root-name
+  prefix
 - `teaser:` for short pre-activation menu copy
 - `next_tags:` for structured likely follow-on tags
 - no `kind` field for ordinary doctrine or knowledge articles
 
 When both exist for the same active tag, entry points should appear
 first so the model sees navigation scaffolding before richer doctrine.
+
+For model-facing copy inside the document itself:
+
+- heading format should be `# <Domain> Entry Point`
+- use one stable cue line: `Choose the next move deliberately:`
+- keep bullet verbs inside the fixed navigation vocabulary where
+  possible (`activate`, `use`, `delegate with`, `read`, `respond`)
 
 ### Fixed tree-navigation verbs
 

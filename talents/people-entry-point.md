@@ -7,7 +7,7 @@ tags: [people]
 
 Start with the most stable handle on identity.
 
-Choose the next step deliberately:
+Choose the next move deliberately:
 
 - Activate `contacts` for contact lookup, updates, import, or export.
 - Activate `signal` when the task is specifically about Signal
