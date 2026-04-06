@@ -372,7 +372,7 @@ This should materially reduce prompt size before we touch more
 sensitive areas like conversation history or ego shaping.
 
 One concrete cut already landed on this branch: the always-on
-`talents/05-delegation.md` file was reduced to universal delegation
+`talents/delegation.md` file was reduced to universal delegation
 doctrine, with the exhaustive failure tables and tool-specific gotchas
 removed from immortal prompt space.
 
