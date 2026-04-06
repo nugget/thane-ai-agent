@@ -278,6 +278,19 @@ The current working convention is:
 When both exist for the same active tag, entry points should appear
 first so the model sees navigation scaffolding before richer doctrine.
 
+The broader filename vocabulary should also stay explicit for authors,
+even though the model never sees filenames directly:
+
+- `foundation.md` for the always-injected behavioral substrate that
+  re-establishes posture before any tagged guidance loads
+- `*-doctrine.md` for operational guidance inside a domain
+- `*-communication.md` for tone, pacing, rapport, and felt presence in
+  a domain
+
+These jobs are different. Do not collapse them casually. Navigation,
+operation, and felt presence strengthen each other best when each stays
+clear about its role.
+
 For model-facing copy inside the document itself:
 
 - heading format should be `# <Domain> Entry Point`
