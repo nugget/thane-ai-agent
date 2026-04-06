@@ -164,6 +164,38 @@ func TestBuildSystemPrompt_TagContextNoCapTags(t *testing.T) {
 	}
 }
 
+func TestBuildSystemPrompt_TagContextChannelPinnedBuiltinTagIncluded(t *testing.T) {
+	kbDir := t.TempDir()
+	err := os.WriteFile(
+		filepath.Join(kbDir, "interactive.md"),
+		[]byte("---\ntags: [interactive]\n---\nINTERACTIVE_CONTEXT_MARKER"),
+		0644,
+	)
+	if err != nil {
+		t.Fatalf("write kb article: %v", err)
+	}
+
+	l := newMinimalLoop()
+	l.SetTagContextAssembler(NewTagContextAssembler(TagContextAssemblerConfig{
+		KBDir:    kbDir,
+		Logger:   l.logger,
+		HAInject: l.HAInject(),
+	}))
+
+	scope := newCapabilityScope(nil, nil)
+	scope.PinChannelTags([]string{"interactive"})
+	ctx := withCapabilityScope(context.Background(), scope)
+
+	prompt := l.buildSystemPrompt(ctx, "hello", nil)
+
+	if !strings.Contains(prompt, "INTERACTIVE_CONTEXT_MARKER") {
+		t.Fatal("channel-pinned builtin helper tag should inject matching KB article")
+	}
+	if !strings.Contains(prompt, "Capability Context") {
+		t.Fatal("prompt should include capability context heading for channel-pinned helper tag")
+	}
+}
+
 func TestBuildSystemPrompt_TagContextOrderAfterInjected(t *testing.T) {
 	dir := t.TempDir()
 	injected := filepath.Join(dir, "injected.md")

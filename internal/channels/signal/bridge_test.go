@@ -19,6 +19,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/agent"
 	"github.com/nugget/thane-ai-agent/internal/attachments"
 	"github.com/nugget/thane-ai-agent/internal/config"
+	"github.com/nugget/thane-ai-agent/internal/memory"
 	"github.com/nugget/thane-ai-agent/internal/router"
 )
 
@@ -231,7 +232,7 @@ func TestBridge_CustomRoutingConfigKeepsSignalContext(t *testing.T) {
 	}
 }
 
-func TestSignalRoutingConfigLoopSeed(t *testing.T) {
+func TestSignalRoutingConfigLoopProfile(t *testing.T) {
 	cfg := config.SignalRoutingConfig{
 		Model:            "claude-sonnet-4-20250514",
 		QualityFloor:     "8",
@@ -239,7 +240,7 @@ func TestSignalRoutingConfigLoopSeed(t *testing.T) {
 		DelegationGating: "disabled",
 	}
 
-	seed := cfg.LoopSeed()
+	seed := cfg.LoopProfile()
 	opts := seed.RequestOptions()
 
 	if opts.Model != "claude-sonnet-4-20250514" {
@@ -763,17 +764,30 @@ func TestBridge_LastInboundTimestamp(t *testing.T) {
 	}
 }
 
-// mockResolver resolves phone numbers to contact names for testing.
+// mockResolver resolves Signal senders to typed channel bindings for testing.
 type mockResolver struct {
 	contacts map[string]string // phone → name
 }
 
-func (m *mockResolver) ResolvePhone(phone string) (string, string, bool) {
+func (m *mockResolver) ResolveChannelBinding(channel, phone string) *memory.ChannelBinding {
+	if channel != "signal" {
+		return nil
+	}
 	name, ok := m.contacts[phone]
 	if !ok {
-		return "", "", false
+		return (&memory.ChannelBinding{
+			Channel: "signal",
+			Address: phone,
+		}).Normalize()
 	}
-	return name, "known", true
+	return (&memory.ChannelBinding{
+		Channel:     "signal",
+		Address:     phone,
+		ContactID:   "contact-1",
+		ContactName: name,
+		TrustZone:   "known",
+		LinkSource:  "tel",
+	}).Normalize()
 }
 
 func TestBridge_ContactResolution(t *testing.T) {
@@ -799,6 +813,9 @@ func TestBridge_ContactResolution(t *testing.T) {
 	}
 	if req.Hints["sender_name"] != "Alice Smith" {
 		t.Errorf("sender_name hint = %q, want %q", req.Hints["sender_name"], "Alice Smith")
+	}
+	if req.ChannelBinding == nil || req.ChannelBinding.ContactID != "contact-1" || req.ChannelBinding.ContactName != "Alice Smith" {
+		t.Fatalf("ChannelBinding = %#v", req.ChannelBinding)
 	}
 }
 
@@ -826,6 +843,9 @@ func TestBridge_ContactResolution_Unknown(t *testing.T) {
 	}
 	if _, exists := req.Hints["sender_name"]; exists {
 		t.Errorf("sender_name hint should not be set for unknown sender, got %q", req.Hints["sender_name"])
+	}
+	if req.ChannelBinding == nil || req.ChannelBinding.Channel != "signal" || req.ChannelBinding.Address != "+15551234567" {
+		t.Fatalf("ChannelBinding = %#v", req.ChannelBinding)
 	}
 }
 

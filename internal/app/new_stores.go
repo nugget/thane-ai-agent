@@ -27,14 +27,6 @@ const (
 	modelExperiencePersistInterval = 5 * time.Second
 )
 
-func modelResourceRefreshCallbacks(ctx context.Context, resourceID string, refresh func(context.Context, string)) (func(), func(error)) {
-	return func() {
-			refresh(ctx, "resource_ready:"+resourceID)
-		}, func(error) {
-			refresh(ctx, "resource_down:"+resourceID)
-		}
-}
-
 // initStores creates data stores, background infrastructure, and the
 // model router. Most components are passive — their goroutines are
 // started later via deferred workers — but connwatch watchers start
@@ -65,6 +57,17 @@ func (a *App) initStores(s *newState) error {
 	loopRegistry := looppkg.NewRegistry(looppkg.WithRegistryLogger(logger))
 	a.loopRegistry = loopRegistry
 
+	baseDefinitions, err := a.buildLoopDefinitionBaseSpecs()
+	if err != nil {
+		return err
+	}
+
+	loopDefinitionRegistry, err := looppkg.NewDefinitionRegistry(baseDefinitions)
+	if err != nil {
+		return fmt.Errorf("create loop definition registry: %w", err)
+	}
+	a.loopDefinitionRegistry = loopDefinitionRegistry
+
 	// --- Demo loops (debug) ---
 	if cfg.Debug.DemoLoops {
 		a.deferWorker("demo-loops", func(ctx context.Context) error {
@@ -80,7 +83,7 @@ func (a *App) initStores(s *newState) error {
 	// SQLite-backed conversation memory. Persists across restarts so the
 	// agent can resume in-progress conversations.
 	dbPath := cfg.DataDir + "/thane.db"
-	mem, err := memory.NewSQLiteStore(dbPath, 100)
+	mem, err := memory.NewSQLiteStoreWithLogger(dbPath, 100, logger.With("component", "memory_store"))
 	if err != nil {
 		return fmt.Errorf("open memory database %s: %w", dbPath, err)
 	}
@@ -409,6 +412,22 @@ func (a *App) initStores(s *newState) error {
 	if err := a.modelExperienceStore.LoadInto(a.rtr, logger); err != nil {
 		return fmt.Errorf("load persisted model registry experience: %w", err)
 	}
+	a.loopDefinitionStore = newLoopDefinitionStore(opStore)
+	if err := a.loopDefinitionStore.LoadInto(a.loopDefinitionRegistry, logger); err != nil {
+		return fmt.Errorf("load persisted loop definitions: %w", err)
+	}
+	a.loopDefinitionPolicyStore = newLoopDefinitionPolicyStore(opStore)
+	if err := a.loopDefinitionPolicyStore.LoadInto(a.loopDefinitionRegistry, logger); err != nil {
+		return fmt.Errorf("load persisted loop definition policies: %w", err)
+	}
+	if snap := a.loopDefinitionRegistry.Snapshot(); snap != nil {
+		logger.Info("loop definition registry initialized",
+			"generation", snap.Generation,
+			"config_definitions", snap.ConfigDefinitions,
+			"overlay_definitions", snap.OverlayDefinitions,
+			"definitions", len(snap.Definitions),
+		)
+	}
 	if a.modelExperienceStore != nil && a.rtr != nil {
 		a.deferWorker("model-experience-persist", func(ctx context.Context) error {
 			lastPersisted := a.rtr.ExperienceVersion()
@@ -455,11 +474,13 @@ func (a *App) initStores(s *newState) error {
 	// Task execution dependencies. The runner reads a.loop at call time
 	// (not capture time) so it sees the loop constructed by initAgentLoop.
 	var deps taskExecDeps
+	deps.launch = a.loopRegistry.Launch
 	deps.logger = logger
+	deps.eventBus = a.eventBus
 	deps.workspacePath = cfg.Workspace.Path
 
 	executeTask := func(ctx context.Context, task *scheduler.Task, exec *scheduler.Execution) error {
-		deps.runner = a.loop // read at execution time, set by initAgentLoop
+		deps.runner = &loopAdapter{agentLoop: a.loop, router: a.rtr, capSurface: a.capSurface}
 		return runScheduledTask(ctx, task, exec, deps)
 	}
 

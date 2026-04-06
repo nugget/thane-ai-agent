@@ -94,6 +94,7 @@ models:
       provider: ""
       resource: edge
       supports_tools: true
+      supports_streaming: false
       context_window: 32768
       speed: 9
       quality: 5
@@ -103,6 +104,7 @@ models:
       provider: ""
       resource: default
       supports_tools: true
+      supports_streaming: false
       context_window: 131072
       speed: 3
       quality: 9
@@ -115,24 +117,48 @@ models:
 #
 # Embeddings configures vector embedding generation for semantic search.
 embeddings:
+  # Enabled controls whether Thane generates embeddings at ingest and
+  # lookup time for semantic search and related recall paths.
   enabled: false
+  # Model is the embedding model name. Default: "nomic-embed-text".
   model: nomic-embed-text
+  # BaseURL overrides the Ollama endpoint used for embeddings. Empty
+  # falls back to the default model resource/provider selection.
   baseurl: ""
 # Workspace configures the agent's sandboxed file system access.
+# In multi-root deployments, set Path to the common writable parent
+# (for example ~/Thane) and use Paths for semantic roots like
+# core:, kb:, generated:, and scratchpad:.
 workspace:
   # Path is the root directory for file operations. If empty, file
-  # tools are disabled entirely.
+  # tools are disabled entirely. In multi-root setups, this should be
+  # the common writable parent that contains Thane-owned roots such as
+  # core/, talents/, knowledge/, generated/, and scratchpad/.
   path: ""
   # ReadOnlyDirs are additional directories the agent can read from
-  # but not write to. Useful for giving the agent access to reference
-  # material outside its workspace.
+  # but not write to. Useful for compatibility or reference roots that
+  # must remain outside Thane's writable authority, such as a legacy
+  # workspace or an external vault mirror.
   read_only_dirs: []
 # Paths maps named prefixes to directory paths for file resolution.
 # Each entry creates a prefix (e.g., "kb" → kb:path resolves to
 # the configured directory). Supports ~ expansion at resolver
 # construction time.
+# 
+# Typical prefixes are:
+#   - core:       high-integrity core docs (persona, ego, metacognitive)
+#   - kb:         curated knowledge / indexed documents
+#   - generated:  model-produced durable outputs (reports, dailies)
+#   - scratchpad: low-integrity writable work area
+# 
+# This is the main transition seam toward policy-managed document
+# roots: the prefixes express intent even before dedicated doc_roots
+# policy exists in config.
 paths:
+  core: ./core
+  generated: ./generated
   kb: ./knowledge
+  scratchpad: ./scratchpad
 #
 # (optional) ExtraPath lists additional directories to prepend to the process
 # extra_path:
@@ -163,24 +189,30 @@ shell_exec:
   # DefaultTimeoutSec is the maximum wall-clock time a command may
   # run before being killed. Default: 30.
   default_timeout_sec: 30
-# DataDir is the root directory for SQLite databases (memory, facts,
-# scheduler, and checkpoints). Default: "./db".
+# DataDir is the root directory for SQLite databases and other
+# opaque runtime state (memory, facts, scheduler, checkpoints).
+# Keep this separate from human-authored and model-authored
+# document roots. Default: "./db".
 data_dir: ./db
 # TalentsDir is the directory containing talent markdown files that
-# extend the system prompt. Default: "./talents".
+# extend the system prompt. In higher-integrity deployments, this is
+# a curated managed root rather than a scratch workspace.
+# Default: "./talents".
 talents_dir: ./talents
 #
 # (optional) PersonaFile is an optional markdown file that replaces the default
-# persona_file: ./persona.md
+# persona_file: ~/Thane/core/persona.md
 #
 # (optional) Context configures static context injection into the system prompt.
 # context:
 #   InjectFiles is a list of file paths to re-read and inject into
 #   the system prompt on every turn. Paths support ~ expansion.
 #   Missing or unreadable files are silently skipped at read time.
+#   Common fits are MEMORY.md, USER.md, or other operator-curated
+#   context files that live in a core document root.
 #   inject_files:
 #     - ~/.agents.md
-#     - ~/Thane/MEMORY.md
+#     - ~/Thane/core/MEMORY.md
 #
 # (optional) Archive configures session archive behavior.
 # archive:
@@ -241,8 +273,10 @@ talents_dir: ./talents
 # episodic:
 #   DailyDir is the directory containing daily memory files named
 #   YYYY-MM-DD.md. Supports ~ expansion. If empty, daily memory
-#   file injection is disabled.
-#   daily_dir: ~/Thane/daily
+#   file injection is disabled. Prefer a generated/provenance-aware
+#   root (for example ~/Thane/generated/daily) over legacy shared
+#   application state directories.
+#   daily_dir: ~/Thane/generated/daily
 #   LookbackDays is how many days of daily memory files to include.
 #   Today and the previous (LookbackDays-1) days are checked.
 #   Default: 2 (today + yesterday).
@@ -288,18 +322,21 @@ talents_dir: ./talents
 #       budget exhaustion. Zero keeps the builtin default (25000).
 #       max_tokens: 25000
 #
-# (optional) CapabilityTags defines named groups of tools and talents that
+# (optional) CapabilityTags overlays the compiled-in tool/tag baseline with
 # capability_tags:
 #   ha:
 #     Description is a human-readable summary shown in the capability
-#     manifest so the agent knows what activating this tag provides.
+#     manifest so the agent knows what activating this tag provides. For
+#     compiled-in tags, empty keeps the built-in description.
 #     description: Home Assistant tools and sensors
 #     Tools lists the tool names belonging to this tag. A tool can
 #     appear in multiple tags; it loads when any of its tags is active.
-#     tools:
-#       - get_ha_states
-#       - call_ha_service
-#       - get_ha_history
+#
+#     For compiled-in tags, empty keeps the built-in tool membership.
+#     Prefer leaving this empty for built-in or MCP-backed tags unless
+#     you intentionally want to replace the compiled/operator-derived
+#     membership with an explicit list.
+#     tools: []
 #     AlwaysActive tags cannot be deactivated. They are included in
 #     every session regardless of channel or agent requests.
 #     always_active: true
@@ -342,6 +379,15 @@ talents_dir: ./talents
 #       ExcludeTools is an optional blocklist of MCP tool names to skip.
 #       Cannot be used together with IncludeTools.
 #       exclude_tools: []
+#       DefaultTags lists tool tags/toolsets assigned to bridged MCP tools
+#       from this server unless a per-tool override replaces them. Prefer
+#       using this to attach MCP tools to existing capability/toolbox
+#       groups instead of hand-maintaining every bridged tool name inside
+#       capability_tags.*.tools.
+#       default_tags: []
+#       Tools contains optional metadata overrides keyed by the raw MCP tool
+#       name reported by the server.
+#       tools: {}
 #
 # (optional) MQTT configures MQTT publishing for Home Assistant device discovery
 # mqtt:
@@ -370,7 +416,7 @@ talents_dir: ./talents
 #       topic: homeassistant/+/+/state
 #       Wake, when non-nil, enables agent wake on this topic. Messages
 #       arriving on the topic trigger an agent conversation using the
-#       seed's routing configuration. When nil, messages are received
+#       profile's routing configuration. When nil, messages are received
 #       for ambient awareness only (debug-logged, not acted upon).
 #       wake:
 #         model: ""
@@ -380,7 +426,7 @@ talents_dir: ./talents
 #         delegation_gating: ""
 #         prefer_speed: ""
 #         exclude_tools: []
-#         seed_tags: []
+#         initial_tags: []
 #         extra_hints: {}
 #         instructions: ""
 #     - # Topic is the MQTT topic filter (e.g., "homeassistant/+/+/state",
@@ -388,7 +434,7 @@ talents_dir: ./talents
 #       topic: frigate/events
 #       Wake, when non-nil, enables agent wake on this topic. Messages
 #       arriving on the topic trigger an agent conversation using the
-#       seed's routing configuration. When nil, messages are received
+#       profile's routing configuration. When nil, messages are received
 #       for ambient awareness only (debug-logged, not acted upon).
 #       wake:
 #         model: ""
@@ -398,7 +444,7 @@ talents_dir: ./talents
 #         delegation_gating: ""
 #         prefer_speed: ""
 #         exclude_tools: []
-#         seed_tags: []
+#         initial_tags: []
 #         extra_hints: {}
 #         instructions: ""
 #     - # Topic is the MQTT topic filter (e.g., "homeassistant/+/+/state",
@@ -406,7 +452,7 @@ talents_dir: ./talents
 #       topic: automation/wake/security
 #       Wake, when non-nil, enables agent wake on this topic. Messages
 #       arriving on the topic trigger an agent conversation using the
-#       seed's routing configuration. When nil, messages are received
+#       profile's routing configuration. When nil, messages are received
 #       for ambient awareness only (debug-logged, not acted upon).
 #       wake:
 #         model: ""
@@ -416,7 +462,7 @@ talents_dir: ./talents
 #         delegation_gating: disabled
 #         prefer_speed: ""
 #         exclude_tools: []
-#         seed_tags:
+#         initial_tags:
 #           - homeassistant
 #         extra_hints: {}
 #         instructions: Evaluate the security event and decide if action is needed.
@@ -558,8 +604,10 @@ talents_dir: ./talents
 #   store. When set, received attachments are stored by SHA-256 hash
 #   instead of being copied with their original filenames. The
 #   metadata index is stored at {data_dir}/attachments.db.
-#   Supports ~ expansion. Example: ~/Thane/attachments
-#   store_dir: ~/Thane/attachments
+#   Supports ~ expansion. This is a durable generated-artifact root,
+#   not a hand-edited document root. Example:
+#   ~/Thane/generated/attachments
+#   store_dir: ~/Thane/generated/attachments
 #   vision:
 #     enabled: true
 #     model: llava:latest
@@ -569,8 +617,11 @@ talents_dir: ./talents
 # (optional) Provenance configures git-backed file storage with SSH signature
 # provenance:
 #   Path is the directory for the provenance git repository.
-#   Supports ~ expansion. Example: ~/Thane/identity
-#   path: ~/Thane/identity
+#   Supports ~ expansion. Today this is the integrity-tracked root for
+#   core documents such as ego.md and metacognitive.md; over time this
+#   generalizes into per-root integrity policy. Example:
+#   ~/Thane/core
+#   path: ~/Thane/core
 #   SigningKey is the path to an SSH private key used to sign
 #   commits. The key is loaded at startup and held in memory.
 #   Supports ~ expansion. Example: ~/.ssh/id_ed25519
@@ -647,6 +698,8 @@ talents_dir: ./talents
 #   TranscriptDir is the directory for durable transcript storage.
 #   Each transcript is saved as a markdown file with YAML frontmatter.
 #   If empty, transcripts are returned in-context only (not persisted).
+#   This is typically a generated/artifact root rather than a curated
+#   knowledge root.
 #   transcript_dir: ""
 #   SummarizeModel is the preferred model for transcript summarization.
 #   When set, it is passed as a routing hint (soft preference, not
@@ -666,7 +719,7 @@ talents_dir: ./talents
 #     DefaultOutputPath is the base directory for analysis output when
 #     a feed has no per-feed output_path configured. Supports ~ expansion.
 #     Example: ~/Sync/Aimee/Vault/Media
-#     default_output_path: ~/Sync/Vault/Media
+#     default_output_path: ~/Thane/generated/media
 #     DatabasePath is the SQLite database file for engagement tracking.
 #     If empty, defaults to {data_dir}/media_engagement.db at startup.
 #     database_path: ""
@@ -676,8 +729,10 @@ talents_dir: ./talents
 #   Enabled controls whether the metacognitive loop starts. Default: false.
 #   enabled: false
 #   StateFile is the path to the persistent state file, relative to
-#   the workspace root. Default: "metacognitive.md".
-#   state_file: metacognitive.md
+#   the workspace root. For managed-root layouts, place this under a
+#   core root such as core/metacognitive.md. Default:
+#   "metacognitive.md".
+#   state_file: core/metacognitive.md
 #   MinSleep is the minimum allowed sleep duration between iterations.
 #   The LLM cannot request a shorter sleep via set_next_sleep.
 #   Default: "2m". Parsed as a Go duration string.
@@ -709,24 +764,60 @@ talents_dir: ./talents
 #     selection. Default: 3 for normal iterations, 8 for supervisor.
 #     quality_floor: 8
 #
-# (optional) OpenClaw configures the thane:openclaw Ollama profile, which
-# openclaw:
-#   WorkspacePath is the root directory containing the agent's
-#   workspace files (AGENTS.md, SOUL.md, USER.md, MEMORY.md, etc.)
-#   and memory directory. Supports ~ expansion.
-#   Default: ~/Thane/openclaw.
-#   workspace: ~/Thane/openclaw
-#   SkillsDirs is a list of directories to scan for SKILL.md files.
-#   Directories are searched in order; skills in earlier directories
-#   override same-named skills in later ones.
-#   Default: [~/Thane/openclaw/skills].
-#   skills_dirs:
-#     - ~/Thane/openclaw/skills
-#   MaxFileChars is the maximum characters per injected workspace
-#   file. Files exceeding this limit are truncated using the 70/20
-#   head/tail strategy matching OpenClaw v2026.2.9 behavior.
-#   Default: 20000.
-#   max_file_chars: 20000
+# (optional) Loops configures immutable loop definitions loaded from the config
+# loops:
+#   Definitions is the set of config-defined loop specs. These specs
+#   are immutable at runtime; dynamic loop creation lives in the
+#   persistent overlay registry instead.
+#   definitions:
+#     - name: office_watch
+#       enabled: true
+#       task: Watch the office and report noteworthy changes or trends.
+#       profile:
+#         model: ""
+#         quality_floor: ""
+#         mission: background
+#         local_only: ""
+#         delegation_gating: disabled
+#         prefer_speed: ""
+#         exclude_tools: []
+#         initial_tags:
+#           - homeassistant
+#         extra_hints: {}
+#         instructions: Be concise and focus on high-signal observations.
+#       operation: service
+#       completion: none
+#       conditions:
+#         schedule:
+#           timezone: America/Chicago
+#           windows:
+#             - days:
+#                 - mon
+#                 - tue
+#                 - wed
+#                 - thu
+#                 - fri
+#               start: 08:30
+#               end: 18:00
+#       tags: []
+#       exclude_tools: []
+#       sleep_min: 2m
+#       sleep_max: 10m
+#       sleep_default: 5m
+#       jitter: 0.2
+#       max_duration: 0s
+#       max_iter: 0
+#       supervisor: false
+#       supervisor_prob: 0.0
+#       quality_floor: 0
+#       supervisor_context: ""
+#       supervisor_quality_floor: 0
+#       on_retrigger: 0
+#       hints: {}
+#       fallback_content: ""
+#       metadata:
+#         category: observer
+#       parent_id: ""
 #
 # (optional) Debug configures diagnostic options for inspecting the assembled
 # debug:

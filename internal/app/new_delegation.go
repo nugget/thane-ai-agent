@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"sort"
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/agent"
@@ -19,11 +18,14 @@ import (
 func (a *App) initDelegation(s *newState) error {
 	cfg := a.cfg
 	logger := a.logger
+	resolvedCapTags := resolveCapabilityTags(a.loop.Tools(), cfg.CapabilityTags)
 
 	// --- Delegation ---
 	// Register thane_delegate tool AFTER all other tools so the delegate
 	// executor's parent registry snapshot includes the full tool set.
 	delegateExec := delegate.NewExecutor(logger, a.llmClient, a.rtr, a.loop.Tools(), a.modelCatalog.DefaultModel)
+	conversationInjector := &conversationSystemInjector{mem: a.mem, archiver: a.archiveAdapter}
+	completionDispatcher := a.ensureLoopCompletionDispatcher()
 	if len(cfg.Delegate.Profiles) > 0 {
 		overrides := make(map[string]delegate.ProfileOverride, len(cfg.Delegate.Profiles))
 		for name, pc := range cfg.Delegate.Profiles {
@@ -37,17 +39,21 @@ func (a *App) initDelegation(s *newState) error {
 		delegateExec.ApplyProfileOverrides(overrides)
 	}
 	delegateExec.SetTimezone(cfg.Timezone)
-	if a.contentWriter != nil {
-		delegateExec.SetContentWriter(a.contentWriter)
+	if a.liveRequestRecorder != nil {
+		delegateExec.UseLiveRequestRecorder(a.liveRequestRecorder)
+	}
+	if a.requestRecorder != nil {
+		delegateExec.SetRequestRecorder(a.requestRecorder)
 	}
 	delegateExec.SetArchiver(a.archiveStore)
 	delegateExec.SetUsageRecorder(a.usageStore, cfg.Pricing, a.modelCatalog)
 	delegateExec.UseModelRegistry(a.modelRegistry)
 	delegateExec.SetEventBus(a.eventBus)
-	delegateExec.ConfigureLoopExecution(a.loop, a.loopRegistry)
+	delegateExec.ConfigureLoopExecution(&loopAdapter{agentLoop: a.loop, router: a.rtr, capSurface: a.capSurface}, a.loopRegistry)
+	delegateExec.ConfigureLoopCompletionSink(completionDispatcher.Deliver)
 	delegateExec.ConfigureSessionLifecycle(a.archiveAdapter, a.mem)
 	var alwaysActiveTags []string
-	for tag, tagCfg := range cfg.CapabilityTags {
+	for tag, tagCfg := range resolvedCapTags {
 		if tagCfg.AlwaysActive {
 			alwaysActiveTags = append(alwaysActiveTags, tag)
 		}
@@ -75,10 +81,9 @@ func (a *App) initDelegation(s *newState) error {
 	// notifications. Requires both the notification record store and the
 	// delegate executor (for spawning responses when the session is gone).
 	if a.notifRecords != nil {
-		sessionInj := &notifSessionInjector{mem: a.mem, archiver: a.archiveAdapter}
 		delegateSpn := &notifDelegateSpawner{exec: delegateExec}
 		a.notifCallbackDispatcher = notifications.NewCallbackDispatcher(
-			a.notifRecords, sessionInj, delegateSpn, cfg.MQTT.DeviceName, logger,
+			a.notifRecords, conversationInjector, delegateSpn, cfg.MQTT.DeviceName, logger,
 		)
 
 		// Use the router for escalation so timeout_action: "escalate"
@@ -124,10 +129,11 @@ func (a *App) initDelegation(s *newState) error {
 	}
 
 	// --- Capability tags ---
-	// Tag-driven tool and talent filtering. When configured, tools and
-	// talents are grouped into named capabilities that can be activated
+	// Tag-driven tool and talent filtering. Tools contribute a compiled-in
+	// baseline of default tags/toolsets, then config overlays descriptions,
+	// membership overrides, and custom tags. The final tags can be activated
 	// per-conversation via activate_capability/deactivate_capability tools.
-	if len(cfg.CapabilityTags) > 0 {
+	if len(resolvedCapTags) > 0 {
 		// parsedTalents was loaded above; copy the slice header so the
 		// manifest prepend below doesn't modify the outer variable.
 		capTalents := append([]talents.Talent(nil), s.parsedTalents...)
@@ -137,7 +143,7 @@ func (a *App) initDelegation(s *newState) error {
 		// (e.g., shell_exec disabled). Non-fatal: skip the missing tool.
 		// Tools in s.deferredTools are registered by StartWorkers and are
 		// expected to be absent during New().
-		for tag, tagCfg := range cfg.CapabilityTags {
+		for tag, tagCfg := range resolvedCapTags {
 			for _, toolName := range tagCfg.Tools {
 				if a.loop.Tools().Get(toolName) == nil && !s.deferredTools[toolName] {
 					logger.Warn("capability tag references unregistered tool",
@@ -159,7 +165,7 @@ func (a *App) initDelegation(s *newState) error {
 		}
 
 		tagCtxAssembler := agent.NewTagContextAssembler(agent.TagContextAssemblerConfig{
-			CapTags:  cfg.CapabilityTags,
+			CapTags:  resolvedCapTags,
 			KBDir:    kbDir,
 			HAInject: a.loop.HAInject(),
 			Logger:   logger.With("component", "tag_context"),
@@ -176,33 +182,11 @@ func (a *App) initDelegation(s *newState) error {
 		kbCounts := tagCtxAssembler.KBArticleTags()
 		liveProviders := a.loop.TagContextProviders()
 
-		tagIndex := make(map[string][]string, len(cfg.CapabilityTags))
-		descriptions := make(map[string]string, len(cfg.CapabilityTags))
-		alwaysActiveMap := make(map[string]bool, len(cfg.CapabilityTags))
-		for tag, tagCfg := range cfg.CapabilityTags {
-			tagIndex[tag] = tagCfg.Tools
-			descriptions[tag] = tagCfg.Description
-			alwaysActiveMap[tag] = tagCfg.AlwaysActive
-		}
-		manifest := tools.BuildCapabilityManifest(tagIndex, descriptions, alwaysActiveMap)
-
-		manifestEntries := make([]talents.ManifestEntry, len(manifest))
-		for i, m := range manifest {
-			manifestEntries[i] = talents.ManifestEntry{
-				Tag:          m.Tag,
-				Description:  m.Description,
-				Tools:        m.Tools,
-				AlwaysActive: m.AlwaysActive,
-				KBArticles:   kbCounts[m.Tag],
-				LiveContext:  liveProviders[m.Tag] != nil,
-			}
-		}
-
 		// Discover ad-hoc tags from KB articles and talents that aren't
 		// in the config. These can be activated at runtime to load their
 		// tagged content without requiring config changes.
-		configuredTags := make(map[string]bool, len(cfg.CapabilityTags))
-		for tag := range cfg.CapabilityTags {
+		configuredTags := make(map[string]bool, len(resolvedCapTags))
+		for tag := range resolvedCapTags {
 			configuredTags[tag] = true
 		}
 		adHocTags := make(map[string]bool)
@@ -218,41 +202,27 @@ func (a *App) initDelegation(s *newState) error {
 				}
 			}
 		}
-		for tag := range adHocTags {
-			manifestEntries = append(manifestEntries, talents.ManifestEntry{
-				Tag:        tag,
-				AdHoc:      true,
-				KBArticles: kbCounts[tag],
-			})
+
+		liveTags := make(map[string]bool, len(liveProviders))
+		for tag := range liveProviders {
+			liveTags[tag] = true
 		}
 
-		if manifestTalent := talents.GenerateManifest(manifestEntries); manifestTalent != nil {
+		capSurface := buildCapabilitySurface(resolvedCapTags, kbCounts, liveTags, adHocTags)
+		a.capSurface = capSurface
+
+		if manifestTalent := talents.GenerateManifest(capSurface); manifestTalent != nil {
 			capTalents = append([]talents.Talent{*manifestTalent}, capTalents...)
 		}
 
-		a.loop.SetCapabilityTags(cfg.CapabilityTags, capTalents)
-		a.loop.Tools().SetCapabilityTools(a.loop, manifest)
+		a.loop.SetCapabilityTags(resolvedCapTags, capTalents)
+		a.loop.UseCapabilitySurface(capSurface)
+		a.loop.Tools().SetCapabilityTools(a.loop, capSurface)
 		a.loop.SetTagContextAssembler(tagCtxAssembler)
 		a.loop.SetCapabilityTagStore(agent.NewOpstateCapabilityTagStore(a.opStore))
 
 		// Behavioral lenses are wired below (outside this block)
 		// so they work even without capability_tags configured.
-
-		// Expose the agent loop's active tags to every process loop
-		// spawned through the registry so the dashboard can display
-		// dynamically activated capabilities.
-		a.loopRegistry.SetDefaultActiveTagsFunc(func() []string {
-			tags := a.loop.LastRunTags()
-			if tags == nil {
-				return nil
-			}
-			result := make([]string, 0, len(tags))
-			for t := range tags {
-				result = append(result, t)
-			}
-			sort.Strings(result)
-			return result
-		})
 
 		// Wire tag context into delegates. The closure captures both the
 		// assembler and the loop so delegates always see the latest
@@ -267,7 +237,7 @@ func (a *App) initDelegation(s *newState) error {
 			activeTagNames = append(activeTagNames, tag)
 		}
 		logger.Info("capability tags enabled",
-			"tags", len(cfg.CapabilityTags),
+			"tags", len(resolvedCapTags),
 			"always_active", activeTagNames,
 			"talents", len(s.parsedTalents),
 			"kb_tagged_articles", kbCounts,

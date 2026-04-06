@@ -13,12 +13,12 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/attachments"
 	"github.com/nugget/thane-ai-agent/internal/channels/email"
 	sigcli "github.com/nugget/thane-ai-agent/internal/channels/signal"
+	"github.com/nugget/thane-ai-agent/internal/config"
 	"github.com/nugget/thane-ai-agent/internal/connwatch"
 	"github.com/nugget/thane-ai-agent/internal/contacts"
 	"github.com/nugget/thane-ai-agent/internal/forge"
 	"github.com/nugget/thane-ai-agent/internal/knowledge"
 	"github.com/nugget/thane-ai-agent/internal/llm"
-	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
 	"github.com/nugget/thane-ai-agent/internal/mcp"
 	"github.com/nugget/thane-ai-agent/internal/media"
 	"github.com/nugget/thane-ai-agent/internal/memory"
@@ -30,6 +30,21 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/search"
 	"github.com/nugget/thane-ai-agent/internal/tools"
 )
+
+func toMCPToolOverrides(cfg map[string]config.MCPToolConfig) map[string]mcp.ToolOverride {
+	if len(cfg) == 0 {
+		return nil
+	}
+	out := make(map[string]mcp.ToolOverride, len(cfg))
+	for name, toolCfg := range cfg {
+		out[name] = mcp.ToolOverride{
+			Enabled:     toolCfg.Enabled,
+			Tags:        append([]string(nil), toolCfg.Tags...),
+			Description: toolCfg.Description,
+		}
+	}
+	return out
+}
 
 // initChannels wires tools and external channels into the agent loop.
 // Sections include fact store, contact directory, notifications, email,
@@ -139,28 +154,7 @@ func (a *App) initChannels(s *newState) error {
 		// an agent conversation only when new mail is detected.
 		if a.cfg.Email.PollIntervalSec > 0 {
 			poller := email.NewPoller(emailMgr, a.opStore, a.logger)
-			pollInterval := time.Duration(a.cfg.Email.PollIntervalSec) * time.Second
-			loopCfg := looppkg.Config{
-				Name:         "email-poller",
-				SleepMin:     pollInterval,
-				SleepMax:     pollInterval,
-				SleepDefault: pollInterval,
-				Jitter:       looppkg.Float64Ptr(0),
-				Handler:      emailPollHandler(poller, a.loop, a.logger),
-				Metadata: map[string]string{
-					"subsystem": "email",
-				},
-			}
-			loopDeps := looppkg.Deps{
-				Logger:   a.logger,
-				EventBus: a.eventBus,
-			}
-			a.deferWorker("email-poller", func(ctx context.Context) error {
-				if _, err := a.loopRegistry.SpawnLoop(ctx, loopCfg, loopDeps); err != nil {
-					return fmt.Errorf("spawn email poller loop: %w", err)
-				}
-				return nil
-			})
+			a.emailPoller = poller
 		}
 
 		a.logger.Info("email enabled", "accounts", emailMgr.AccountNames(), "poll_interval", a.cfg.Email.PollIntervalSec)
@@ -393,6 +387,9 @@ func (a *App) initChannels(s *newState) error {
 	// register the cost_summary tool so the agent can query its own spend.
 	a.loop.SetUsageRecorder(a.usageStore, a.cfg.Pricing, a.modelCatalog)
 	a.loop.Tools().SetUsageStore(a.usageStore)
+	if a.loopDefinitionRuntime == nil {
+		a.loopDefinitionRuntime = newAppLoopDefinitionRuntime(a)
+	}
 	a.loop.Tools().ConfigureModelRegistryTools(tools.ModelRegistryToolDeps{
 		Registry:                a.modelRegistry,
 		Router:                  a.rtr,
@@ -401,6 +398,16 @@ func (a *App) initChannels(s *newState) error {
 		DeleteDeploymentPolicy:  a.deletePersistedModelRegistryPolicy,
 		PersistResourcePolicy:   a.persistModelRegistryResourcePolicy,
 		DeleteResourcePolicy:    a.deletePersistedModelRegistryResourcePolicy,
+	})
+	a.loop.Tools().ConfigureLoopDefinitionTools(tools.LoopDefinitionToolDeps{
+		Registry:         a.loopDefinitionRegistry,
+		View:             a.loopDefinitionView,
+		PersistSpec:      a.persistLoopDefinition,
+		DeleteSpec:       a.deletePersistedLoopDefinition,
+		PersistPolicy:    a.persistLoopDefinitionPolicy,
+		DeletePolicy:     a.deletePersistedLoopDefinitionPolicy,
+		Reconcile:        a.reconcileLoopDefinition,
+		LaunchDefinition: a.launchLoopDefinition,
 	})
 
 	// --- Log index query ---
@@ -555,31 +562,10 @@ func (a *App) initChannels(s *newState) error {
 	// agent conversation only when new content is detected.
 	if a.cfg.Media.FeedCheckInterval > 0 {
 		feedPoller := media.NewFeedPoller(a.opStore, a.logger)
-		pollInterval := time.Duration(a.cfg.Media.FeedCheckInterval) * time.Second
-		loopCfg := looppkg.Config{
-			Name:         "media-feed-poller",
-			SleepMin:     pollInterval,
-			SleepMax:     pollInterval,
-			SleepDefault: pollInterval,
-			Jitter:       looppkg.Float64Ptr(0),
-			Handler:      mediaFeedHandler(feedPoller, a.loop, a.logger),
-			Metadata: map[string]string{
-				"subsystem": "media",
-			},
-		}
-		loopDeps := looppkg.Deps{
-			Logger:   a.logger,
-			EventBus: a.eventBus,
-		}
-		a.deferWorker("media-feed-poller", func(ctx context.Context) error {
-			if _, err := a.loopRegistry.SpawnLoop(ctx, loopCfg, loopDeps); err != nil {
-				return fmt.Errorf("spawn media feed poller loop: %w", err)
-			}
-			return nil
-		})
+		a.mediaFeedPoller = feedPoller
 
 		a.logger.Info("media feed polling enabled",
-			"interval", pollInterval,
+			"interval", time.Duration(a.cfg.Media.FeedCheckInterval)*time.Second,
 			"max_feeds", a.cfg.Media.MaxFeeds,
 		)
 	}
@@ -645,7 +631,12 @@ func (a *App) initChannels(s *newState) error {
 		count, err := mcp.BridgeTools(
 			bridgeCtx,
 			client, serverCfg.Name, a.loop.Tools(),
-			serverCfg.IncludeTools, serverCfg.ExcludeTools,
+			mcp.BridgeOptions{
+				Include:       serverCfg.IncludeTools,
+				Exclude:       serverCfg.ExcludeTools,
+				DefaultTags:   serverCfg.DefaultTags,
+				ToolOverrides: toMCPToolOverrides(serverCfg.Tools),
+			},
 			a.logger,
 		)
 		bridgeCancel()
@@ -702,6 +693,11 @@ func (a *App) initChannels(s *newState) error {
 				return nil // non-fatal: system works without Signal
 			}
 			a.signalClient = signalClient
+			if dispatcher := a.ensureLoopCompletionDispatcher(); dispatcher != nil {
+				dispatcher.ConfigureSignalSender(func(ctx context.Context, recipient, message string) error {
+					return (&signalChannelSender{client: signalClient}).SendMessage(ctx, recipient, message)
+				})
+			}
 			a.onCloseErr("signal", signalClient.Close)
 
 			// Register signal_send_message tool so the agent can
@@ -751,15 +747,16 @@ func (a *App) initChannels(s *newState) error {
 			}
 
 			bridge := sigcli.NewBridge(sigcli.BridgeConfig{
-				Client:        signalClient,
-				Runner:        a.loop,
-				Logger:        a.logger,
-				RateLimit:     a.cfg.Signal.RateLimitPerMinute,
-				HandleTimeout: a.cfg.Signal.HandleTimeout,
-				Routing:       a.cfg.Signal.Routing,
-				Rotator:       signalRotator,
-				IdleTimeout:   idleTimeout,
-				Resolver:      &contactPhoneResolver{store: contactStore},
+				Client:           signalClient,
+				Runner:           a.loop,
+				Logger:           a.logger,
+				RateLimit:        a.cfg.Signal.RateLimitPerMinute,
+				HandleTimeout:    a.cfg.Signal.HandleTimeout,
+				Routing:          a.cfg.Signal.Routing,
+				Rotator:          signalRotator,
+				IdleTimeout:      idleTimeout,
+				Resolver:         &contactChannelBindingResolver{store: contactStore},
+				BindConversation: a.mem.BindConversationChannel,
 				Attachments: sigcli.AttachmentConfig{
 					SourceDir: a.cfg.Signal.AttachmentSourceDir,
 					DestDir:   a.cfg.Signal.AttachmentDir,

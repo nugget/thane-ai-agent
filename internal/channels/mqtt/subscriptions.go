@@ -16,14 +16,14 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/router"
 )
 
-// WakeSubscription pairs an MQTT topic filter with the LoopSeed
+// WakeSubscription pairs an MQTT topic filter with the LoopProfile
 // configuration used to wake the agent when a message arrives.
 type WakeSubscription struct {
-	ID        string          `json:"id"`
-	Topic     string          `json:"topic"`
-	Seed      router.LoopSeed `json:"seed"`
-	Source    string          `json:"source"` // "config" or "runtime"
-	CreatedAt time.Time       `json:"created_at"`
+	ID        string             `json:"id"`
+	Topic     string             `json:"topic"`
+	Profile   router.LoopProfile `json:"profile"`
+	Source    string             `json:"source"` // "config" or "runtime"
+	CreatedAt time.Time          `json:"created_at"`
 }
 
 // SubscriptionStore manages wake-enabled MQTT subscriptions with
@@ -80,12 +80,12 @@ func (s *SubscriptionStore) loadRuntime() error {
 
 	for rows.Next() {
 		var ws WakeSubscription
-		var seedJSON, createdAt string
-		if err := rows.Scan(&ws.ID, &ws.Topic, &seedJSON, &ws.Source, &createdAt); err != nil {
+		var profileJSON, createdAt string
+		if err := rows.Scan(&ws.ID, &ws.Topic, &profileJSON, &ws.Source, &createdAt); err != nil {
 			return err
 		}
-		if err := json.Unmarshal([]byte(seedJSON), &ws.Seed); err != nil {
-			s.logger.Warn("skipping subscription with invalid seed JSON",
+		if err := json.Unmarshal([]byte(profileJSON), &ws.Profile); err != nil {
+			s.logger.Warn("skipping subscription with invalid profile JSON",
 				"id", ws.ID, "error", err)
 			continue
 		}
@@ -106,8 +106,8 @@ func (s *SubscriptionStore) loadRuntime() error {
 				"id", ws.ID, "topic", ws.Topic, "error", err)
 			continue
 		}
-		if err := ws.Seed.Validate(); err != nil {
-			s.logger.Warn("skipping persisted subscription with invalid seed",
+		if err := ws.Profile.Validate(); err != nil {
+			s.logger.Warn("skipping persisted subscription with invalid profile",
 				"id", ws.ID, "topic", ws.Topic, "error", err)
 			continue
 		}
@@ -122,7 +122,7 @@ func (s *SubscriptionStore) loadRuntime() error {
 // a non-nil Wake field are loaded. Config subscriptions are not persisted
 // to SQLite and cannot be removed via [SubscriptionStore.Remove].
 // Returns an error if any wake subscription has an invalid topic filter
-// or seed — config-backed triggers should fail at startup rather than
+// or profile — config-backed triggers should fail at startup rather than
 // silently dropping messages at runtime.
 func (s *SubscriptionStore) LoadConfig(subs []config.SubscriptionConfig) error {
 	s.mu.Lock()
@@ -146,12 +146,12 @@ func (s *SubscriptionStore) LoadConfig(subs []config.SubscriptionConfig) error {
 			return fmt.Errorf("mqtt.subscriptions[%d]: invalid topic %q: %w", i, sc.Topic, err)
 		}
 		if err := sc.Wake.Validate(); err != nil {
-			return fmt.Errorf("mqtt.subscriptions[%d] (topic %q): invalid wake seed: %w", i, sc.Topic, err)
+			return fmt.Errorf("mqtt.subscriptions[%d] (topic %q): invalid wake profile: %w", i, sc.Topic, err)
 		}
 		s.subs = append(s.subs, WakeSubscription{
 			ID:        fmt.Sprintf("cfg-%s-%d", topicHash(sc.Topic), i),
 			Topic:     sc.Topic,
-			Seed:      *sc.Wake,
+			Profile:   *sc.Wake,
 			Source:    "config",
 			CreatedAt: time.Now(),
 		})
@@ -170,33 +170,33 @@ func (s *SubscriptionStore) SetSubscribeHook(fn func(topics []string)) {
 }
 
 // Add creates a runtime wake subscription, persists it to SQLite, and
-// returns the new subscription. The topic filter and seed are validated
+// returns the new subscription. The topic filter and profile are validated
 // before persistence — invalid values are rejected early rather than
 // stored and retried forever.
-func (s *SubscriptionStore) Add(topic string, seed router.LoopSeed) (WakeSubscription, error) {
+func (s *SubscriptionStore) Add(topic string, profile router.LoopProfile) (WakeSubscription, error) {
 	if err := router.ValidateTopicFilter(topic); err != nil {
 		return WakeSubscription{}, fmt.Errorf("invalid topic filter: %w", err)
 	}
-	if err := seed.Validate(); err != nil {
-		return WakeSubscription{}, fmt.Errorf("invalid loop seed: %w", err)
+	if err := profile.Validate(); err != nil {
+		return WakeSubscription{}, fmt.Errorf("invalid loop profile: %w", err)
 	}
 
 	ws := WakeSubscription{
 		ID:        fmt.Sprintf("rt-%s-%d", topicHash(topic), time.Now().UnixMilli()),
 		Topic:     topic,
-		Seed:      seed,
+		Profile:   profile,
 		Source:    "runtime",
 		CreatedAt: time.Now(),
 	}
 
-	seedJSON, err := json.Marshal(ws.Seed)
+	profileJSON, err := json.Marshal(ws.Profile)
 	if err != nil {
-		return WakeSubscription{}, fmt.Errorf("marshal seed: %w", err)
+		return WakeSubscription{}, fmt.Errorf("marshal profile: %w", err)
 	}
 
 	_, err = s.db.Exec(
 		`INSERT INTO mqtt_wake_subscriptions (id, topic, seed_json, source, created_at) VALUES (?, ?, ?, ?, ?)`,
-		ws.ID, ws.Topic, string(seedJSON), ws.Source, ws.CreatedAt.Format(time.RFC3339),
+		ws.ID, ws.Topic, string(profileJSON), ws.Source, ws.CreatedAt.Format(time.RFC3339),
 	)
 	if err != nil {
 		return WakeSubscription{}, fmt.Errorf("insert subscription: %w", err)
@@ -262,7 +262,7 @@ func (s *SubscriptionStore) List() []WakeSubscription {
 
 // Matches returns all wake subscriptions whose topic filter matches
 // the given concrete MQTT topic. Multiple subscriptions on the same
-// topic (with different LoopSeed configurations) are all returned,
+// topic (with different LoopProfile configurations) are all returned,
 // enabling fan-out dispatch.
 func (s *SubscriptionStore) Matches(topic string) []WakeSubscription {
 	s.mu.RLock()

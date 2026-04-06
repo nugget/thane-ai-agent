@@ -63,6 +63,45 @@ For operational data, compact structure usually beats paragraph prose.
 Use prose for behavioral guidance and framing. Use data structures for
 facts, events, entities, and state.
 
+### 5. Generated runtime data defaults to JSON
+
+If Go is generating runtime state for later model consumption, the
+default shape is typed JSON, not markdown prose.
+
+Use markdown for:
+
+- section boundaries
+- brief framing notes
+- normative instructions
+
+Use JSON for:
+
+- live operational state
+- capability catalogs and loaded state
+- environment data
+- event projections
+- any payload we may later diff, cache, trim, or suppress by policy
+
+Do not make this a per-call stylistic decision. JSON is the default for
+generated model-facing data unless prose is genuinely the clearer
+contract.
+
+### 6. Model families get adapters, not one universal prompt
+
+Different model families do not interpret the same context and tool
+surfaces equally well. Claude-style tool use, OpenAI-style structured
+tool use, and local open-model raw-text tool use are different runtime
+contracts.
+
+When behavior differs meaningfully by family or provider:
+
+- add a shared adapter/profile layer
+- keep the semantic source of truth shared
+- vary the rendered contract or recovery behavior by model family
+
+Do not assume a prompt that evolved around one premium model will
+transfer cleanly to a broader registry.
+
 ## Conventions
 
 ### Choose the simplest shape that removes ambiguity
@@ -75,6 +114,9 @@ Use:
 - markdown headings and short notes for section boundaries or human-scale
   framing
 - prose only when the content is genuinely instructional
+
+Generated runtime context should look like environment data, not like
+part of the active conversation.
 
 Avoid turning structured state into narrative just because it reads more
 nicely to humans.
@@ -169,6 +211,8 @@ prefer compactness.
 ## Anti-Patterns
 
 - Human-optimized terse names that make the model infer purpose
+- Essay-like markdown for generated operational state that could have
+  been a compact schema
 - Raw absolute timestamps in recency-sensitive context
 - Static markdown files for live operational state
 - Dumping raw upstream payloads when a smaller projection would do

@@ -6,7 +6,9 @@ import (
 	"testing"
 
 	"github.com/nugget/thane-ai-agent/internal/config"
+	modelproviders "github.com/nugget/thane-ai-agent/internal/models/providers"
 	"github.com/nugget/thane-ai-agent/internal/router"
+	"gopkg.in/yaml.v3"
 )
 
 func TestBuildCatalog_LegacyOllamaURLCreatesDefaultResource(t *testing.T) {
@@ -193,6 +195,121 @@ func TestCatalogContextWindowForModel_UsesLargestMatchingDeployment(t *testing.T
 	}
 }
 
+func TestBuildCatalog_ModelStreamingOverrideWinsOverProviderCapability(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Models.Resources = map[string]config.ModelServerConfig{
+		"mirror": {URL: "http://mirror:11434", Provider: "ollama"},
+	}
+	supportsStreaming := false
+	cfg.Models.Available = []config.ModelConfig{
+		{
+			Name:              "gpt-oss:20b",
+			Resource:          "mirror",
+			SupportsTools:     true,
+			SupportsStreaming: &supportsStreaming,
+			ContextWindow:     8192,
+			Speed:             6,
+			Quality:           6,
+			CostTier:          0,
+		},
+	}
+
+	cat, err := BuildCatalog(cfg)
+	if err != nil {
+		t.Fatalf("BuildCatalog() error = %v", err)
+	}
+
+	dep, ok := cat.byID["gpt-oss:20b"]
+	if !ok {
+		t.Fatal("catalog missing gpt-oss:20b deployment")
+	}
+	if !dep.ProviderSupportsTools {
+		t.Fatalf("dep.ProviderSupportsTools = false, want true")
+	}
+	if dep.SupportsStreaming {
+		t.Fatalf("dep.SupportsStreaming = true, want false from model override")
+	}
+
+	routerCfg := cat.RouterConfig(100)
+	if got := len(routerCfg.Models); got != 1 {
+		t.Fatalf("len(router models) = %d, want 1", got)
+	}
+	if routerCfg.Models[0].SupportsStreaming {
+		t.Fatalf("router model SupportsStreaming = true, want false from model override")
+	}
+}
+
+func TestBuildCatalog_OmittedToolsOverrideInheritsProviderCapability(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Models.Resources = map[string]config.ModelServerConfig{
+		"mirror": {URL: "http://mirror:11434", Provider: "ollama"},
+	}
+	cfg.Models.Available = []config.ModelConfig{
+		{
+			Name:          "gpt-oss:20b",
+			Resource:      "mirror",
+			ContextWindow: 8192,
+			Speed:         6,
+			Quality:       6,
+			CostTier:      0,
+		},
+	}
+
+	cat, err := BuildCatalog(cfg)
+	if err != nil {
+		t.Fatalf("BuildCatalog() error = %v", err)
+	}
+
+	dep, ok := cat.byID["gpt-oss:20b"]
+	if !ok {
+		t.Fatal("catalog missing gpt-oss:20b deployment")
+	}
+	if !dep.ProviderSupportsTools {
+		t.Fatalf("dep.ProviderSupportsTools = false, want true")
+	}
+	if !dep.ObservedSupportsTools {
+		t.Fatalf("dep.ObservedSupportsTools = false, want inherited provider capability")
+	}
+	if !dep.SupportsTools {
+		t.Fatalf("dep.SupportsTools = false, want effective inherited tool support")
+	}
+}
+
+func TestBuildCatalog_SupportsToolsFalseActsAsExplicitOverride(t *testing.T) {
+	var cfg config.Config
+	raw := `
+models:
+  resources:
+    mirror:
+      url: http://mirror:11434
+      provider: ollama
+  available:
+    - name: gpt-oss:20b
+      resource: mirror
+      supports_tools: false
+      context_window: 8192
+`
+	if err := yaml.Unmarshal([]byte(raw), &cfg); err != nil {
+		t.Fatalf("yaml.Unmarshal() error = %v", err)
+	}
+
+	cat, err := BuildCatalog(&cfg)
+	if err != nil {
+		t.Fatalf("BuildCatalog() error = %v", err)
+	}
+
+	dep, ok := cat.byID["gpt-oss:20b"]
+	if !ok {
+		t.Fatal("catalog missing gpt-oss:20b deployment")
+	}
+	if dep.ProviderSupportsTools != true {
+		t.Fatalf("dep.ProviderSupportsTools = false, want true")
+	}
+	if dep.SupportsTools {
+		t.Fatalf("dep.SupportsTools = true, want false from explicit override")
+	}
+}
+
 func TestMergeInventory_AddsDiscoveredDeploymentsAsNonRoutable(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Models.OllamaURL = "http://localhost:11434"
@@ -269,6 +386,116 @@ func TestMergeInventory_AddsDiscoveredDeploymentsAsNonRoutable(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("router config missing configured qwen3:4b deployment")
+	}
+}
+
+func TestMergeInventory_UpdatesConfiguredDeploymentWithObservedRuntime(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Models.Resources = map[string]config.ModelServerConfig{
+		"spark": {URL: "http://spark:11434", Provider: "ollama"},
+	}
+	cfg.Models.Available = []config.ModelConfig{
+		{Name: "gpt-oss:20b", Resource: "spark", ContextWindow: 0, Speed: 7, Quality: 6, CostTier: 0},
+	}
+
+	base, err := BuildCatalog(cfg)
+	if err != nil {
+		t.Fatalf("BuildCatalog() error = %v", err)
+	}
+
+	merged, err := MergeInventory(base, &Inventory{
+		Resources: []ResourceInventory{
+			{
+				ResourceID: "spark",
+				Provider:   "ollama",
+				Attempted:  true,
+				Models: []DiscoveredModel{
+					{
+						Name:                "gpt-oss:20b",
+						SupportsTools:       true,
+						SupportsStreaming:   true,
+						ContextWindow:       131072,
+						MaxContextWindow:    131072,
+						LoadedContextWindow: 8192,
+						LoadedInstanceID:    "gpt-oss-20b-live",
+						Family:              "gpt-oss",
+					},
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("MergeInventory() error = %v", err)
+	}
+
+	dep, ok := merged.byID["gpt-oss:20b"]
+	if !ok {
+		t.Fatal("merged catalog missing configured deployment")
+	}
+	if dep.Source != DeploymentSourceConfig {
+		t.Fatalf("dep.Source = %q, want %q", dep.Source, DeploymentSourceConfig)
+	}
+	if dep.ObservedSupportsStreaming != true {
+		t.Fatalf("dep.ObservedSupportsStreaming = false, want true")
+	}
+	if dep.ObservedContextWindow != 131072 {
+		t.Fatalf("dep.ObservedContextWindow = %d, want 131072", dep.ObservedContextWindow)
+	}
+	if dep.ContextWindow != 131072 {
+		t.Fatalf("dep.ContextWindow = %d, want effective observed context window", dep.ContextWindow)
+	}
+	if dep.LoadedContextWindow != 8192 {
+		t.Fatalf("dep.LoadedContextWindow = %d, want 8192", dep.LoadedContextWindow)
+	}
+	if dep.LoadedInstanceID != "gpt-oss-20b-live" {
+		t.Fatalf("dep.LoadedInstanceID = %q, want %q", dep.LoadedInstanceID, "gpt-oss-20b-live")
+	}
+}
+
+func TestMergeDiscoveredDeployment_PreservesExistingRuntimeMetadataOnZeroValues(t *testing.T) {
+	dep := &Deployment{
+		ObservedContextWindow: 131072,
+		MaxContextWindow:      131072,
+		LoadedContextWindow:   8192,
+		LoadedInstanceID:      "gpt-oss-20b-live",
+	}
+
+	mergeDiscoveredDeployment(dep, DiscoveredModel{
+		Name:                "gpt-oss:20b",
+		SupportsTools:       true,
+		SupportsStreaming:   true,
+		ContextWindow:       0,
+		MaxContextWindow:    0,
+		LoadedContextWindow: 0,
+		LoadedInstanceID:    "",
+	}, modelproviders.Capabilities{})
+
+	if dep.ObservedContextWindow != 131072 {
+		t.Fatalf("dep.ObservedContextWindow = %d, want 131072", dep.ObservedContextWindow)
+	}
+	if dep.MaxContextWindow != 131072 {
+		t.Fatalf("dep.MaxContextWindow = %d, want 131072", dep.MaxContextWindow)
+	}
+	if dep.LoadedContextWindow != 8192 {
+		t.Fatalf("dep.LoadedContextWindow = %d, want 8192", dep.LoadedContextWindow)
+	}
+	if dep.LoadedInstanceID != "gpt-oss-20b-live" {
+		t.Fatalf("dep.LoadedInstanceID = %q, want %q", dep.LoadedInstanceID, "gpt-oss-20b-live")
+	}
+}
+
+func TestMergeDiscoveredDeployment_PreservesExistingImageSupportWhenDiscoveryIsFalse(t *testing.T) {
+	dep := &Deployment{
+		SupportsImages: true,
+	}
+
+	mergeDiscoveredDeployment(dep, DiscoveredModel{
+		Name:           "qwen-vl:latest",
+		SupportsImages: false,
+	}, modelproviders.Capabilities{})
+
+	if !dep.SupportsImages {
+		t.Fatal("dep.SupportsImages = false, want sticky true preservation")
 	}
 }
 

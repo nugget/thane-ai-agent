@@ -15,6 +15,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/events"
 	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
 	"github.com/nugget/thane-ai-agent/internal/router"
+	"github.com/nugget/thane-ai-agent/internal/toolcatalog"
 )
 
 // maxWakePayloadBytes is the maximum MQTT payload size included in the
@@ -32,7 +33,7 @@ const mqttWakeTimeout = 5 * time.Minute
 type mqttWakeDeps struct {
 	registry *looppkg.Registry
 	eventBus *events.Bus
-	parentID *atomic.Value // stores string; set by deferred worker, read by handler goroutines
+	parentID *atomic.Value // stores string; populated lazily from the mqtt service loop
 }
 
 // mqttWakeHandler returns a MessageHandler that dispatches agent
@@ -76,13 +77,13 @@ func mqttWakeHandler(
 			ws := ws // capture loop variable
 			go func() {
 				convID := fmt.Sprintf("mqtt-wake-%s-%d", ws.ID, time.Now().UnixMilli())
-				msg := buildWakeMessage(topic, payload, ws.Seed.Instructions)
+				msg := buildWakeMessage(topic, payload, ws.Profile.Instructions)
 
 				req := &agent.Request{
 					ConversationID: convID,
 					Messages:       []agent.Message{{Role: "user", Content: msg}},
 				}
-				applyLoopSeed(&ws.Seed, req)
+				applyLoopProfile(&ws.Profile, req)
 
 				// Always tag the source so tools and logging can identify
 				// MQTT-triggered conversations.
@@ -125,6 +126,14 @@ func dispatchViaLoop(
 	if deps.parentID != nil {
 		if v, ok := deps.parentID.Load().(string); ok {
 			parentID = v
+		}
+	}
+	if parentID == "" && deps.registry != nil {
+		if parent := deps.registry.GetByName(mqttPublisherDefinitionName); parent != nil {
+			parentID = parent.ID()
+			if deps.parentID != nil {
+				deps.parentID.Store(parentID)
+			}
 		}
 	}
 
@@ -170,10 +179,13 @@ func dispatchViaLoop(
 			}
 
 			looppkg.ReportAgentRun(hCtx, looppkg.AgentRunSummary{
-				RequestID:    resp.RequestID,
-				Model:        resp.Model,
-				InputTokens:  resp.InputTokens,
-				OutputTokens: resp.OutputTokens,
+				RequestID:          resp.RequestID,
+				Model:              resp.Model,
+				InputTokens:        resp.InputTokens,
+				OutputTokens:       resp.OutputTokens,
+				ActiveTags:         append([]string(nil), resp.ActiveTags...),
+				EffectiveTools:     append([]string(nil), resp.EffectiveTools...),
+				LoadedCapabilities: append([]toolcatalog.LoadedCapabilityEntry(nil), resp.LoadedCapabilities...),
 			})
 
 			logger.Info("mqtt wake complete",
@@ -250,12 +262,12 @@ func sanitizePayload(payload []byte) string {
 	return truncated + fmt.Sprintf("\n\n[Truncated: %d bytes total, showing first %d bytes]", len(s), maxWakePayloadBytes)
 }
 
-// applyLoopSeed applies a LoopSeed's configuration to an agent.Request.
+// applyLoopProfile applies a LoopProfile's configuration to an agent.Request.
 // It sets the model, merges routing hints, and copies tool exclusions
-// and seed tags. This function lives in the app package rather than on
-// LoopSeed itself to avoid a circular import between router and agent.
-func applyLoopSeed(seed *router.LoopSeed, req *agent.Request) {
-	opts := seed.RequestOptions()
+// and initial tags. This function lives in the app package rather than on
+// LoopProfile itself to avoid a circular import between router and agent.
+func applyLoopProfile(profile *router.LoopProfile, req *agent.Request) {
+	opts := profile.RequestOptions()
 
 	if opts.Model != "" {
 		req.Model = opts.Model
@@ -273,7 +285,7 @@ func applyLoopSeed(seed *router.LoopSeed, req *agent.Request) {
 	if len(opts.ExcludeTools) > 0 {
 		req.ExcludeTools = append(req.ExcludeTools, opts.ExcludeTools...)
 	}
-	if len(opts.SeedTags) > 0 {
-		req.SeedTags = append(req.SeedTags, opts.SeedTags...)
+	if len(opts.InitialTags) > 0 {
+		req.InitialTags = append(req.InitialTags, opts.InitialTags...)
 	}
 }

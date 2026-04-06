@@ -36,6 +36,10 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/router"
 )
 
+// DefinitionName is the durable loops-ng definition name for the
+// metacognitive service.
+const DefinitionName = "metacognitive"
+
 // maxStateBytes is the maximum metacognitive.md content read per
 // iteration. Content beyond this limit is truncated with a marker.
 const maxStateBytes = 16 * 1024
@@ -137,57 +141,99 @@ type Opts struct {
 	StateFileName string
 }
 
-// BuildLoopConfig returns a [loop.Config] that implements the
-// metacognitive loop. The returned config uses TaskBuilder and
-// PostIterate closures to read state, build prompts, and append
-// iteration logs — all previously handled by the old Loop struct.
-func BuildLoopConfig(cfg Config, opts Opts) loop.Config {
-	return loop.Config{
-		Name:         "metacognitive",
+// DefinitionSpec returns the persistable loops-ng definition for the
+// metacognitive service. Runtime hooks are attached later by
+// [HydrateSpec] so the definition can live in the durable registry.
+func DefinitionSpec(cfg Config) loop.Spec {
+	return loop.Spec{
+		Name:         DefinitionName,
+		Enabled:      cfg.Enabled,
+		Task:         "Observe the system, reason about its recent behavior, and update metacognitive state when needed.",
+		Operation:    loop.OperationService,
+		Completion:   loop.CompletionNone,
 		SleepMin:     cfg.MinSleep,
 		SleepMax:     cfg.MaxSleep,
 		SleepDefault: cfg.DefaultSleep,
 		Jitter:       loop.Float64Ptr(cfg.Jitter),
 		ExcludeTools: metacogExcludeTools,
+		Profile: router.LoopProfile{
+			Mission:          "metacognitive",
+			DelegationGating: "disabled",
+			ExtraHints:       map[string]string{"source": "metacognitive"},
+		},
 
-		Supervisor:     cfg.SupervisorProbability > 0,
-		SupervisorProb: cfg.SupervisorProbability,
-		QualityFloor:   cfg.QualityFloor,
-		// TaskBuilder handles supervisor augmentation itself via
-		// prompts.MetacognitivePrompt, so SupervisorContext is empty.
+		Supervisor:             cfg.SupervisorProbability > 0,
+		SupervisorProb:         cfg.SupervisorProbability,
+		QualityFloor:           cfg.QualityFloor,
 		SupervisorQualityFloor: cfg.SupervisorQualityFloor,
-
-		Hints: map[string]string{
-			"source":                    "metacognitive",
-			router.HintMission:          "metacognitive",
-			router.HintDelegationGating: "disabled",
-		},
-
-		TaskBuilder: func(ctx context.Context, isSupervisor bool) (string, error) {
-			stateContent, err := readStateFile(opts.StateFilePath)
-			if err != nil {
-				log := logging.Logger(ctx)
-				if errors.Is(err, fs.ErrNotExist) {
-					log.Info("metacognitive state file not found, starting fresh",
-						"path", opts.StateFilePath,
-					)
-				} else {
-					log.Warn("metacognitive state file read failed, starting with empty state",
-						"error", err,
-						"path", opts.StateFilePath,
-					)
-				}
-				stateContent = ""
-			}
-			return prompts.MetacognitivePrompt(stateContent, isSupervisor), nil
-		},
-
-		PostIterate: func(ctx context.Context, result loop.IterationResult) error {
-			log := logging.Logger(ctx)
-			appendIterationLog(ctx, log, opts.StateFilePath, opts.ProvenanceStore, opts.StateFileName, &result)
-			return nil
+		Metadata: map[string]string{
+			"subsystem": "metacognitive",
+			"category":  "service",
 		},
 	}
+}
+
+// HydrateSpec attaches the runtime-only hooks needed to execute the
+// metacognitive service from a durable loops-ng definition.
+func HydrateSpec(spec loop.Spec, cfg Config, opts Opts) loop.Spec {
+	spec = loop.Spec(spec)
+	if strings.TrimSpace(spec.Name) == "" {
+		spec.Name = DefinitionName
+	}
+	spec.TaskBuilder = func(ctx context.Context, isSupervisor bool) (string, error) {
+		stateContent, err := readStateFile(opts.StateFilePath)
+		if err != nil {
+			log := logging.Logger(ctx)
+			if errors.Is(err, fs.ErrNotExist) {
+				log.Info("metacognitive state file not found, starting fresh",
+					"path", opts.StateFilePath,
+				)
+			} else {
+				log.Warn("metacognitive state file read failed, starting with empty state",
+					"error", err,
+					"path", opts.StateFilePath,
+				)
+			}
+			stateContent = ""
+		}
+		return prompts.MetacognitivePrompt(stateContent, isSupervisor), nil
+	}
+	spec.PostIterate = func(ctx context.Context, result loop.IterationResult) error {
+		log := logging.Logger(ctx)
+		appendIterationLog(ctx, log, opts.StateFilePath, opts.ProvenanceStore, opts.StateFileName, &result)
+		return nil
+	}
+	return spec
+}
+
+// BuildSpec returns a [loop.Spec] that implements the metacognitive
+// loop as a standard loops-ng service. The returned spec uses
+// TaskBuilder and PostIterate closures to read state, build prompts,
+// and append iteration logs.
+func BuildSpec(cfg Config, opts Opts) loop.Spec {
+	spec := DefinitionSpec(cfg)
+	// TaskBuilder handles supervisor augmentation itself via
+	// prompts.MetacognitivePrompt, so SupervisorContext is empty.
+	spec.SupervisorContext = ""
+	return HydrateSpec(spec, cfg, opts)
+}
+
+// BuildLoopConfig returns the engine-facing [loop.Config] view of the
+// metacognitive loop. Kept as a compatibility bridge while loops-ng
+// adoption is in progress.
+func BuildLoopConfig(cfg Config, opts Opts) loop.Config {
+	spec := BuildSpec(cfg, opts)
+	out := spec.ToConfig()
+	profileHints := spec.Profile.Hints()
+	if len(profileHints) > 0 {
+		if out.Hints == nil {
+			out.Hints = make(map[string]string, len(profileHints))
+		}
+		for k, v := range profileHints {
+			out.Hints[k] = v
+		}
+	}
+	return out
 }
 
 // metacogExcludeTools lists tools that the metacognitive loop should not

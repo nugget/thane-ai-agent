@@ -27,6 +27,11 @@
       min-height: 0;
       position: relative;
     }
+    .popup-logs[hidden],
+    .popup-request[hidden],
+    .popup-resize[hidden] {
+      display: none !important;
+    }
     .popup-logs .log-scroll {
       flex: 1;
       overflow-y: auto;
@@ -48,6 +53,143 @@
       pointer-events: none;
     }
     .popup-logs .log-empty[hidden] { display: none; }
+    .popup-request {
+      flex: 1 1 50%;
+      min-height: 0;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 0.9rem;
+      overflow-y: auto;
+      padding: 0.95rem;
+      background:
+        radial-gradient(circle at top left, rgba(86, 212, 221, 0.06), transparent 34%),
+        radial-gradient(circle at top right, rgba(188, 140, 255, 0.05), transparent 28%),
+        var(--bg-primary);
+    }
+    .popup-request[hidden] { display: none; }
+    .forensics-hero {
+      display: grid;
+      gap: 0.7rem;
+      padding: 0.95rem 1rem;
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: linear-gradient(180deg, rgba(28, 33, 40, 0.92), rgba(22, 27, 34, 0.98));
+    }
+    .forensics-hero__copy {
+      display: grid;
+      gap: 0.2rem;
+      min-width: 0;
+    }
+    .forensics-hero__title {
+      margin: 0;
+      font-size: 1.08rem;
+      line-height: 1.2;
+      font-weight: 700;
+      text-wrap: balance;
+    }
+    .forensics-hero__subtitle {
+      margin: 0;
+      color: var(--text-secondary);
+      font-size: 0.78rem;
+      line-height: 1.45;
+      text-wrap: pretty;
+    }
+    .forensics-hero__actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.45rem;
+      align-items: center;
+    }
+    .forensics-chip-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.45rem;
+      align-items: center;
+    }
+    .forensics-chip {
+      display: inline-flex;
+      align-items: center;
+      min-height: 1.8rem;
+      padding: 0.16rem 0.68rem;
+      border-radius: 999px;
+      border: 1px solid rgba(110, 118, 129, 0.22);
+      background: rgba(255, 255, 255, 0.03);
+      color: var(--text-secondary);
+      font-size: 0.72rem;
+      line-height: 1;
+      white-space: nowrap;
+    }
+    .forensics-chip--request {
+      color: var(--blue);
+      border-color: rgba(88, 166, 255, 0.28);
+      background: rgba(88, 166, 255, 0.12);
+    }
+    .forensics-chip--focus {
+      color: var(--accent);
+      border-color: rgba(45, 212, 191, 0.28);
+      background: rgba(45, 212, 191, 0.14);
+    }
+    .forensics-card {
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      background: rgba(22, 27, 34, 0.9);
+      overflow: hidden;
+    }
+    .forensics-card__header {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 0.6rem;
+      padding: 0.72rem 0.9rem 0.58rem;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+    }
+    .forensics-card__title {
+      margin: 0;
+      font-size: 0.75rem;
+      font-weight: 700;
+      color: var(--text-secondary);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+    }
+    .forensics-card__meta {
+      color: var(--text-muted);
+      font-size: 0.69rem;
+    }
+    .forensics-card__meta--loading {
+      color: var(--accent);
+    }
+    .forensics-card__body {
+      padding: 0.9rem;
+    }
+    .forensics-card__body > .detail-ids,
+    .forensics-card__body > .detail-aggregates {
+      margin-bottom: 0.65rem;
+    }
+    .forensics-empty {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 15rem;
+      padding: 1rem;
+      border: 1px dashed rgba(110, 118, 129, 0.26);
+      border-radius: 12px;
+      color: var(--text-muted);
+      font-size: 0.84rem;
+      text-align: center;
+      text-wrap: pretty;
+      background: rgba(255, 255, 255, 0.02);
+    }
+    .forensics-empty[hidden] { display: none; }
+    .forensics-content[hidden],
+    .forensics-waterfall[hidden] {
+      display: none;
+    }
+    .forensics-content,
+    .forensics-waterfall {
+      width: 100%;
+      min-width: 0;
+    }
     .popup-resize {
       width: 4px;
       flex-shrink: 0;
@@ -57,7 +199,7 @@
     }
     .popup-resize:hover, .popup-resize--active { background: var(--accent); }
     .popup-inspector {
-      width: 240px;
+      width: calc(50% - 2px);
       min-width: 160px;
       flex-shrink: 0;
       display: flex;
@@ -77,6 +219,9 @@
     }
     .inspector-row + .inspector-row {
       padding-top: 0;
+    }
+    .inspector-row[hidden] {
+      display: none;
     }
     .inspector-row .toggle-btn {
       font-size: 0.65rem;
@@ -138,12 +283,70 @@
     .inspector-body::-webkit-scrollbar-track { background: transparent; }
     .inspector-body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
     .inspector-body::-webkit-scrollbar-thumb:hover { background: var(--border-light); }
+    .popup-footer {
+      flex-wrap: wrap;
+      gap: 0.6rem 1rem;
+      padding-inline: 0.85rem;
+    }
+    .popup-footer .footer-item[hidden] {
+      display: none;
+    }
+    .popup-footer .footer-item--accent {
+      color: var(--text-primary);
+    }
+    .popup-footer .footer-item--live {
+      color: var(--accent);
+    }
+    @media (max-width: 720px) {
+      .popup-footer {
+        font-size: 0.66rem;
+      }
+    }
     /* (status bar removed — connection state shown via dot in inspector) */
   </style>
 </head>
 <body>
   <div class="popup-main">
-    <!-- Logs take the main area — column headers at the very top -->
+    <section id="request-section" class="popup-request" hidden>
+      <section class="forensics-hero">
+        <div class="forensics-hero__copy">
+          <div class="schema-kind">loop_forensics</div>
+          <h1 id="forensics-title" class="forensics-hero__title">Conversation tracer</h1>
+          <p id="forensics-subtitle" class="forensics-hero__subtitle">Following live loop behavior, request context, and tool activity.</p>
+        </div>
+        <div id="forensics-current" class="forensics-chip-row"></div>
+        <div class="forensics-hero__actions">
+          <button id="forensics-follow" class="toggle-btn toggle-btn--active" type="button">Following latest</button>
+          <button id="forensics-open-request" class="btn btn--sm" type="button">Open request window</button>
+          <button id="forensics-copy-json" class="copy-btn" type="button">JSON</button>
+        </div>
+      </section>
+
+      <section class="forensics-card">
+        <div class="forensics-card__header">
+          <h2 class="forensics-card__title">Request Detail</h2>
+          <span id="forensics-request-meta" class="forensics-card__meta"></span>
+        </div>
+        <div class="forensics-card__body">
+          <div id="forensics-ids" class="detail-ids"></div>
+          <div id="forensics-meta" class="detail-aggregates"></div>
+          <div id="forensics-empty" class="forensics-empty">Waiting for the first retained request in this loop.</div>
+          <div id="forensics-content" class="request-content forensics-content" hidden></div>
+        </div>
+      </section>
+
+      <section class="forensics-card">
+        <div class="forensics-card__header">
+          <h2 class="forensics-card__title">Tool Waterfall</h2>
+          <span id="forensics-waterfall-meta" class="forensics-card__meta"></span>
+        </div>
+        <div class="forensics-card__body">
+          <div id="forensics-waterfall" class="waterfall forensics-waterfall" hidden></div>
+        </div>
+      </section>
+    </section>
+
+    <!-- Logs take the main area for system mode -->
     <section class="popup-logs" id="logs-section">
       <div id="log-scroll" class="log-scroll">
         <table id="log-table" class="log-table">
@@ -189,7 +392,7 @@
         <!-- System detail (shown for type=system) -->
         <div id="system-detail" hidden>
           <div class="detail-header">
-            <h2 class="detail-name">Runtime</h2>
+            <h2 class="detail-name">Core</h2>
             <span id="system-status" class="state-badge"></span>
           </div>
           <div class="system-sections">
@@ -209,26 +412,21 @@
 
             <section class="detail-card system-section">
               <div class="system-section-header">
-                <h3 class="section-title">Model Registry</h3>
-                <span id="system-registry-meta" class="system-section-meta"></span>
+                <h3 class="section-title">Registries</h3>
+                <span id="system-registries-meta" class="system-section-meta"></span>
               </div>
-              <div id="system-registry-summary" class="system-summary-grid"></div>
+              <div id="system-registries-summary" class="system-summary-grid"></div>
 
               <div class="system-subsection">
-                <h4 class="system-subtitle">Resources</h4>
-                <div id="system-registry-resources" class="system-list"></div>
-              </div>
-
-              <div class="system-subsection">
-                <h4 class="system-subtitle">Deployments</h4>
-                <div id="system-registry-deployments" class="system-list"></div>
+                <h4 class="system-subtitle">Registry Windows</h4>
+                <div id="system-registries-list" class="system-list"></div>
               </div>
             </section>
           </div>
         </div>
       </div>
       <div class="inspector-footer">
-        <div class="inspector-row">
+        <div id="log-controls-row" class="inspector-row">
           <label class="poll-label" id="poll-rate-label" for="poll-rate">2s</label>
           <input type="range" id="poll-rate" class="poll-slider" min="1" max="60" value="2">
           <select id="log-level" class="log-select">
@@ -239,7 +437,7 @@
             <option value="DEBUG">Debug+</option>
           </select>
         </div>
-        <div class="inspector-row">
+        <div id="inspector-actions-row" class="inspector-row">
           <button id="toggle-side" class="toggle-btn" title="Swap inspector side">&#x21C4; Swap</button>
           <span class="spacer"></span>
           <span id="conn-dot" class="conn-dot" title="Connecting..."></span>
@@ -247,6 +445,19 @@
       </div>
     </section>
   </div>
+
+  <footer class="footer popup-footer" id="popup-footer">
+    <span id="popup-footer-version" class="footer-item"></span>
+    <span id="popup-footer-uptime" class="footer-item"></span>
+    <span id="popup-footer-arch" class="footer-item"></span>
+    <span id="popup-footer-go" class="footer-item"></span>
+    <span id="popup-footer-loop-state" class="footer-item footer-item--accent" hidden></span>
+    <span id="popup-footer-loop-runtime" class="footer-item" hidden></span>
+    <span id="popup-footer-loop-iterations" class="footer-item" hidden></span>
+    <span id="popup-footer-loop-tokens" class="footer-item" hidden></span>
+    <span id="popup-footer-loop-context" class="footer-item" hidden></span>
+    <span id="popup-footer-loop-wake" class="footer-item" hidden></span>
+  </footer>
 
   <script src="/static/shared.js"></script>
   <script src="/static/detail.js"></script>

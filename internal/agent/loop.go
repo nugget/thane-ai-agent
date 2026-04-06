@@ -25,12 +25,12 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/loop"
 	"github.com/nugget/thane-ai-agent/internal/memory"
 	"github.com/nugget/thane-ai-agent/internal/models"
-	"github.com/nugget/thane-ai-agent/internal/openclaw"
 	"github.com/nugget/thane-ai-agent/internal/prompts"
 	"github.com/nugget/thane-ai-agent/internal/provenance"
 	"github.com/nugget/thane-ai-agent/internal/router"
 	"github.com/nugget/thane-ai-agent/internal/scheduler"
 	"github.com/nugget/thane-ai-agent/internal/talents"
+	"github.com/nugget/thane-ai-agent/internal/toolcatalog"
 	"github.com/nugget/thane-ai-agent/internal/tools"
 	"github.com/nugget/thane-ai-agent/internal/usage"
 )
@@ -44,29 +44,27 @@ type Message struct {
 
 // Request represents an incoming agent request.
 type Request struct {
-	Messages        []Message         `json:"messages"`
-	Model           string            `json:"model,omitempty"`
-	ConversationID  string            `json:"conversation_id,omitempty"`
-	Hints           map[string]string `json:"hints,omitempty"` // Routing hints (channel, mission, etc.)
-	SkipContext     bool              `json:"-"`               // Skip memory, tools, and context injection (for lightweight completions)
-	AllowedTools    []string          `json:"-"`               // Optional allowlist of tools visible for this run
-	ExcludeTools    []string          `json:"-"`               // Tool names to exclude from this run (e.g., lifecycle tools for recurring wakes)
-	SkipTagFilter   bool              `json:"-"`               // Bypass capability tag filtering (for self-scoping contexts like metacognitive)
-	SeedTags        []string          `json:"-"`               // Tags to activate at Run start (carried forward from previous loop iterations)
-	MaxIterations   int               `json:"-"`               // Optional per-request iteration cap (0 = default)
-	MaxOutputTokens int               `json:"-"`               // Optional output-token budget across all iterations (0 = unlimited)
-	ToolTimeout     time.Duration     `json:"-"`               // Optional per-tool timeout (0 = no extra timeout)
-	UsageRole       string            `json:"-"`               // Optional usage role override (e.g., "delegate")
-	UsageTaskName   string            `json:"-"`               // Optional usage task name override
+	Messages        []Message              `json:"messages"`
+	Model           string                 `json:"model,omitempty"`
+	ConversationID  string                 `json:"conversation_id,omitempty"`
+	ChannelBinding  *memory.ChannelBinding `json:"channel_binding,omitempty"`
+	Hints           map[string]string      `json:"hints,omitempty"` // Routing hints (channel, mission, etc.)
+	SkipContext     bool                   `json:"-"`               // Skip memory, tools, and context injection (for lightweight completions)
+	AllowedTools    []string               `json:"-"`               // Optional allowlist of tools visible for this run
+	ExcludeTools    []string               `json:"-"`               // Tool names to exclude from this run (e.g., lifecycle tools for recurring wakes)
+	SkipTagFilter   bool                   `json:"-"`               // Bypass capability tag filtering (for self-scoping contexts like metacognitive)
+	InitialTags     []string               `json:"-"`               // Tags to activate at Run start (carried forward from previous loop iterations)
+	MaxIterations   int                    `json:"-"`               // Optional per-request iteration cap (0 = default)
+	MaxOutputTokens int                    `json:"-"`               // Optional output-token budget across all iterations (0 = unlimited)
+	ToolTimeout     time.Duration          `json:"-"`               // Optional per-tool timeout (0 = no extra timeout)
+	UsageRole       string                 `json:"-"`               // Optional usage role override (e.g., "delegate")
+	UsageTaskName   string                 `json:"-"`               // Optional usage task name override
+	FallbackContent string                 `json:"-"`               // Optional static fallback text when the run yields no content
 
 	// SystemPrompt, when non-empty, replaces the output of
-	// buildSystemPrompt(). Used by profiles that assemble their
-	// own context externally (e.g., thane:openclaw).
+	// buildSystemPrompt(). Used by callers that assemble their own
+	// prompt context externally.
 	SystemPrompt string `json:"-"`
-
-	// isFlushTurn is an internal flag that prevents recursive pre-compaction
-	// memory flush turns. Not settable by callers.
-	isFlushTurn bool
 }
 
 // StreamEvent is a single event in a streaming response.
@@ -99,16 +97,18 @@ const maxTagContextBytes = 64 * 1024
 // Response represents the agent's response.
 // Response is the result of a single agent Run() call.
 type Response struct {
-	Content                  string         `json:"content"`
-	Model                    string         `json:"model"`
-	FinishReason             string         `json:"finish_reason"`
-	InputTokens              int            `json:"input_tokens,omitempty"`
-	OutputTokens             int            `json:"output_tokens,omitempty"`
-	CacheCreationInputTokens int            `json:"cache_creation_input_tokens,omitempty"`
-	CacheReadInputTokens     int            `json:"cache_read_input_tokens,omitempty"`
-	ToolsUsed                map[string]int `json:"tools_used,omitempty"` // tool name → call count
-	Iterations               int            `json:"iterations,omitempty"`
-	Exhausted                bool           `json:"exhausted,omitempty"`
+	Content                  string                              `json:"content"`
+	Model                    string                              `json:"model"`
+	FinishReason             string                              `json:"finish_reason"`
+	InputTokens              int                                 `json:"input_tokens,omitempty"`
+	OutputTokens             int                                 `json:"output_tokens,omitempty"`
+	CacheCreationInputTokens int                                 `json:"cache_creation_input_tokens,omitempty"`
+	CacheReadInputTokens     int                                 `json:"cache_read_input_tokens,omitempty"`
+	ToolsUsed                map[string]int                      `json:"tools_used,omitempty"` // tool name → call count
+	EffectiveTools           []string                            `json:"effective_tools,omitempty"`
+	LoadedCapabilities       []toolcatalog.LoadedCapabilityEntry `json:"loaded_capabilities,omitempty"`
+	Iterations               int                                 `json:"iterations,omitempty"`
+	Exhausted                bool                                `json:"exhausted,omitempty"`
 
 	// SessionID and RequestID are set by Run() so callers can
 	// correlate post-run log lines with the agent loop's context.
@@ -141,8 +141,7 @@ type Compactor interface {
 	NeedsCompaction(conversationID string) bool
 	Compact(ctx context.Context, conversationID string) error
 	// CompactionThreshold returns the token count at which compaction
-	// triggers. Used by profiles that need to run pre-compaction hooks
-	// (e.g., OpenClaw memory flush).
+	// triggers.
 	CompactionThreshold() int
 }
 
@@ -197,32 +196,33 @@ type SessionArchiver interface {
 
 // Loop is the core agent execution loop.
 type Loop struct {
-	logger            *slog.Logger
-	memory            MemoryStore
-	compactor         Compactor
-	router            *router.Router
-	llm               llm.Client
-	tools             *tools.Registry
-	model             string
-	recoveryModel     string            // Fast model for timeout recovery summaries (empty = disabled)
-	retryBaseDelay    time.Duration     // Base backoff delay between timeout retries (0 = use default)
-	persona           string            // Persona content (replaces base system prompt if set)
-	egoFile           string            // Path to ego.md — read fresh each turn for system prompt
-	provenanceStore   *provenance.Store // Optional provenance store for ego.md metadata injection
-	injectFiles       []string          // Paths to context files — re-read each turn
-	timezone          string            // IANA timezone for Current Conditions (e.g., "America/Chicago")
-	contextWindow     int               // Context window size of default model
-	failoverHandler   FailoverHandler
-	contextProvider   ContextProvider
-	archiver          SessionArchiver
-	extractor         *memory.Extractor
-	orchestratorTools []string                       // Restricted tool set for orchestrator mode (nil = all tools)
-	contentWriter     *logging.ContentWriter         // nil = content retention disabled
-	usageStore        *usage.Store                   // nil = no usage recording
-	pricing           map[string]config.PricingEntry // model→cost for usage recording
-	usageCatalog      *models.Catalog
-	modelRegistry     *models.Registry
-	modelRuntime      *models.Runtime
+	logger              *slog.Logger
+	memory              MemoryStore
+	compactor           Compactor
+	router              *router.Router
+	llm                 llm.Client
+	tools               *tools.Registry
+	model               string
+	recoveryModel       string            // Fast model for timeout recovery summaries (empty = disabled)
+	retryBaseDelay      time.Duration     // Base backoff delay between timeout retries (0 = use default)
+	persona             string            // Persona content (replaces base system prompt if set)
+	egoFile             string            // Path to ego.md — read fresh each turn for system prompt
+	provenanceStore     *provenance.Store // Optional provenance store for ego.md metadata injection
+	injectFiles         []string          // Paths to context files — re-read each turn
+	timezone            string            // IANA timezone for Current Conditions (e.g., "America/Chicago")
+	contextWindow       int               // Context window size of default model
+	failoverHandler     FailoverHandler
+	contextProvider     ContextProvider
+	archiver            SessionArchiver
+	extractor           *memory.Extractor
+	orchestratorTools   []string                       // Restricted tool set for orchestrator mode (nil = all tools)
+	liveRequestRecorder logging.RequestRecordFunc      // nil = no live request detail prefill
+	requestRecorder     logging.RequestRecordFunc      // nil = request detail inspection disabled
+	usageStore          *usage.Store                   // nil = no usage recording
+	pricing             map[string]config.PricingEntry // model→cost for usage recording
+	usageCatalog        *models.Catalog
+	modelRegistry       *models.Registry
+	modelRuntime        *models.Runtime
 
 	// Capability tags — per-Run tool/talent filtering.
 	//
@@ -235,6 +235,7 @@ type Loop struct {
 	channelTags   map[string][]string                   // channel name → tag names (static)
 	capTagStore   CapabilityTagStore                    // persists activated tags per conversation (nil = no persistence)
 	lensProvider  func() []string                       // returns active global lenses (nil = none)
+	capSurface    []toolcatalog.CapabilitySurface       // resolved capability surface for model-facing rendering
 
 	// lastRunTags is a snapshot of the most recent Run()'s active
 	// tags, used by the dashboard callback (which has no context).
@@ -254,10 +255,6 @@ type Loop struct {
 
 	// haInject resolves <!-- ha-inject: ... --> directives in tag context files.
 	haInject homeassistant.StateFetcher
-
-	// openClawConfig holds the OpenClaw workspace configuration.
-	// When non-nil, the thane:openclaw Ollama profile is available.
-	openClawConfig *config.OpenClawConfig
 
 	// nowFunc returns the current time. Tests override this for
 	// deterministic output; production code leaves it as time.Now.
@@ -384,11 +381,17 @@ func (l *Loop) SetRecoveryModel(model string) {
 	l.recoveryModel = model
 }
 
-// SetContentWriter configures the content retention writer. When set,
-// system prompts, tool call details, and request/response content are
-// persisted to the log index database after each request completes.
-func (l *Loop) SetContentWriter(w *logging.ContentWriter) {
-	l.contentWriter = w
+// SetRequestRecorder configures request detail recording. When set,
+// completed requests are captured for live inspection and optional
+// persistent retention.
+func (l *Loop) SetRequestRecorder(recorder logging.RequestRecordFunc) {
+	l.requestRecorder = recorder
+}
+
+// UseLiveRequestRecorder configures live request detail recording for
+// in-flight turns. This is typically a lightweight in-memory sink.
+func (l *Loop) UseLiveRequestRecorder(recorder logging.RequestRecordFunc) {
+	l.liveRequestRecorder = recorder
 }
 
 // SetCapabilityTags configures tag-driven tool and talent filtering.
@@ -419,6 +422,13 @@ func (l *Loop) SetCapabilityTags(capTags map[string]config.CapabilityTagConfig, 
 		}
 	}
 	l.lastRunTagsMu.Unlock()
+}
+
+// UseCapabilitySurface stores the resolved capability surface used by
+// shared model-facing renderers such as prompt summaries and capability
+// manifest/help generation.
+func (l *Loop) UseCapabilitySurface(surface []toolcatalog.CapabilitySurface) {
+	l.capSurface = toolcatalog.SortCapabilitySurface(surface)
 }
 
 // SetUsageRecorder configures persistent token usage recording. When
@@ -479,18 +489,6 @@ func (l *Loop) SetHAInject(fetcher homeassistant.StateFetcher) {
 // configured.
 func (l *Loop) HAInject() homeassistant.StateFetcher {
 	return l.haInject
-}
-
-// SetOpenClawConfig configures the OpenClaw workspace settings. When
-// non-nil, the thane:openclaw Ollama profile becomes available.
-func (l *Loop) SetOpenClawConfig(cfg *config.OpenClawConfig) {
-	l.openClawConfig = cfg
-}
-
-// OpenClawConfig returns the OpenClaw configuration, or nil if the
-// thane:openclaw profile is not configured.
-func (l *Loop) OpenClawConfig() *config.OpenClawConfig {
-	return l.openClawConfig
 }
 
 // ActiveTags returns a snapshot of the currently active capability tags.
@@ -627,6 +625,10 @@ type promptSection struct {
 }
 
 func (l *Loop) buildSystemPrompt(ctx context.Context, userMessage string, history []memory.Message) string {
+	return l.buildSystemPromptWithProfile(ctx, userMessage, history, llm.DefaultModelInteractionProfile())
+}
+
+func (l *Loop) buildSystemPromptWithProfile(ctx context.Context, userMessage string, history []memory.Message, profile llm.ModelInteractionProfile) string {
 	var sb strings.Builder
 
 	// Snapshot active tags from the per-Run capability scope.
@@ -648,6 +650,12 @@ func (l *Loop) buildSystemPrompt(ctx context.Context, userMessage string, histor
 
 	// 2. Ego (self-reflection — what have I been noticing/thinking)
 	l.injectEgo(ctx, &sb, mark, seal)
+
+	// 2b. Runtime contract (execution semantics — how should I use tools)
+	mark("RUNTIME CONTRACT")
+	sb.WriteString("\n\n")
+	sb.WriteString(prompts.RuntimeContract())
+	seal()
 
 	// 3. Injected context (knowledge — what do I know)
 	// Re-read inject_files each turn so external changes (e.g. MEMORY.md
@@ -693,17 +701,21 @@ func (l *Loop) buildSystemPrompt(ctx context.Context, userMessage string, histor
 	}
 
 	// 3c. Active capabilities — compact list of currently loaded tags.
-	// The full catalog (descriptions, tool counts, context sources) is
-	// in the capability manifest talent; this just shows current state.
-	if len(tags) > 0 {
+	// Uses the shared capability surface so the loaded-state summary is
+	// generated from the same semantic source as the manifest and tool docs.
+	if activeSummary := toolcatalog.RenderLoadedCapabilitySummary(l.capSurface, tags); activeSummary != "" {
 		mark("ACTIVE CAPABILITIES")
-		sorted := make([]string, 0, len(tags))
-		for t := range tags {
-			sorted = append(sorted, t)
-		}
-		sort.Strings(sorted)
-		sb.WriteString("\n\nActive capabilities: ")
-		sb.WriteString(strings.Join(sorted, ", "))
+		sb.WriteString("\n\n## Active Capabilities\n\n")
+		sb.WriteString("Capability and tag changes are runtime actions. If the user asks to activate, deactivate, load, unload, or inspect loaded capabilities/tags, use the exact capability tools named below.\n\n")
+		sb.WriteString(activeSummary)
+		sb.WriteString("\n")
+		seal()
+	}
+
+	if contract := strings.TrimSpace(profile.ToolCallingContract()); contract != "" {
+		mark("TOOL CALLING CONTRACT")
+		sb.WriteString("\n\n## Tool Calling Contract\n\n")
+		sb.WriteString(contract)
 		sb.WriteString("\n")
 		seal()
 	}
@@ -757,6 +769,149 @@ func (l *Loop) buildSystemPrompt(ctx context.Context, userMessage string, histor
 	}
 
 	return sb.String()
+}
+
+func (l *Loop) modelInteractionProfileForModel(model string) llm.ModelInteractionProfile {
+	input := llm.ModelProfileInput{Model: strings.TrimSpace(model)}
+	cat := l.currentModelCatalog()
+	if cat == nil {
+		return llm.ProfileForModel(input)
+	}
+	dep, err := cat.ResolveDeploymentRef(model)
+	if err != nil {
+		return llm.ProfileForModel(input)
+	}
+	input.Provider = dep.Provider
+	input.Model = dep.ModelName
+	input.Family = dep.Family
+	input.Families = append([]string(nil), dep.Families...)
+	input.TrainedForToolUse = dep.TrainedForToolUse
+	return llm.ProfileForModel(input)
+}
+
+func (l *Loop) repairToolCall(tc llm.ToolCall) (llm.ToolCall, bool) {
+	name := strings.TrimSpace(tc.Function.Name)
+	if name == "" {
+		return tc, false
+	}
+	if l.tools != nil && l.tools.Get(name) != nil {
+		return tc, false
+	}
+
+	if repaired, ok := l.repairCapabilityToolCall(tc); ok {
+		return repaired, true
+	}
+	return tc, false
+}
+
+func (l *Loop) repairCapabilityToolCall(tc llm.ToolCall) (llm.ToolCall, bool) {
+	name := canonicalCapabilityAlias(tc.Function.Name)
+	if name == "" {
+		return tc, false
+	}
+
+	switch name {
+	case "list_capabilities", "list_loaded_capabilities", "loaded_capabilities", "active_capabilities", "get_loaded_capabilities":
+		tc.Function.Name = "list_loaded_capabilities"
+		if tc.Function.Arguments == nil {
+			tc.Function.Arguments = map[string]any{}
+		}
+		return tc, true
+	case "request_capability", "load_capability":
+		if tag, ok := l.resolveCapabilityTagAlias(extractCapabilityTagArg(tc.Function.Arguments)); ok {
+			tc.Function.Name = "activate_capability"
+			tc.Function.Arguments = map[string]any{"tag": tag}
+			return tc, true
+		}
+	case "drop_capability", "unload_capability":
+		if tag, ok := l.resolveCapabilityTagAlias(extractCapabilityTagArg(tc.Function.Arguments)); ok {
+			tc.Function.Name = "deactivate_capability"
+			tc.Function.Arguments = map[string]any{"tag": tag}
+			return tc, true
+		}
+	}
+
+	for _, prefix := range []struct {
+		Prefix string
+		Tool   string
+	}{
+		{Prefix: "activate_", Tool: "activate_capability"},
+		{Prefix: "request_", Tool: "activate_capability"},
+		{Prefix: "load_", Tool: "activate_capability"},
+		{Prefix: "deactivate_", Tool: "deactivate_capability"},
+		{Prefix: "disable_", Tool: "deactivate_capability"},
+		{Prefix: "drop_", Tool: "deactivate_capability"},
+		{Prefix: "unload_", Tool: "deactivate_capability"},
+	} {
+		if tail, ok := strings.CutPrefix(name, prefix.Prefix); ok {
+			if tag, ok := l.resolveCapabilityTagAlias(tail); ok {
+				tc.Function.Name = prefix.Tool
+				tc.Function.Arguments = map[string]any{"tag": tag}
+				return tc, true
+			}
+		}
+	}
+
+	if tail, ok := strings.CutSuffix(name, "_capability"); ok {
+		if tag, ok := l.resolveCapabilityTagAlias(tail); ok {
+			tc.Function.Name = "activate_capability"
+			tc.Function.Arguments = map[string]any{"tag": tag}
+			return tc, true
+		}
+	}
+
+	return tc, false
+}
+
+func (l *Loop) resolveCapabilityTagAlias(alias string) (string, bool) {
+	alias = canonicalCapabilityAlias(alias)
+	if alias == "" {
+		return "", false
+	}
+	candidates := []string{alias}
+	if trimmed, ok := strings.CutSuffix(alias, "_capability"); ok && trimmed != "" {
+		candidates = append(candidates, trimmed)
+	}
+	for _, candidate := range candidates {
+		for _, entry := range l.capSurface {
+			if canonicalCapabilityAlias(entry.Tag) == candidate {
+				return entry.Tag, true
+			}
+		}
+		for tag := range l.capTags {
+			if canonicalCapabilityAlias(tag) == candidate {
+				return tag, true
+			}
+		}
+	}
+	return "", false
+}
+
+func extractCapabilityTagArg(args map[string]any) string {
+	if len(args) == 0 {
+		return ""
+	}
+	for _, key := range []string{"tag", "capability", "name"} {
+		if value, ok := args[key].(string); ok {
+			if trimmed := strings.TrimSpace(value); trimmed != "" {
+				return trimmed
+			}
+		}
+	}
+	return ""
+}
+
+func canonicalCapabilityAlias(value string) string {
+	value = strings.TrimSpace(strings.ToLower(value))
+	if value == "" {
+		return ""
+	}
+	replacer := strings.NewReplacer("-", "_", " ", "_")
+	value = replacer.Replace(value)
+	for strings.Contains(value, "__") {
+		value = strings.ReplaceAll(value, "__", "_")
+	}
+	return strings.Trim(value, "_")
 }
 
 // injectEgo injects the ego.md content into the system prompt. When a
@@ -1034,7 +1189,7 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		}
 		scope = newCapabilityScope(l.capTags, lenses)
 		// Seed tags carried forward from previous loop iterations.
-		for _, tag := range req.SeedTags {
+		for _, tag := range req.InitialTags {
 			_ = scope.Request(tag)
 		}
 		// Restore conversation-persisted capability tags.
@@ -1061,41 +1216,16 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		l.updateLastRunTags(scope)
 	}
 
-	// Pre-compaction memory flush: when the request has a custom system
-	// prompt (OpenClaw profile) and tokens are approaching the compaction
-	// threshold, run a lightweight flush turn so durable memories are
-	// written to disk before compaction erases context. Runs at most once
-	// per compaction cycle per conversation.
-	if req.SystemPrompt != "" && !req.isFlushTurn && l.compactor != nil {
-		tokenCount := l.memory.GetTokenCount(convID)
-		threshold := l.compactor.CompactionThreshold()
-		flushCfg := openclaw.DefaultMemoryFlushConfig()
-		if openclaw.ShouldFlush(tokenCount, threshold, flushCfg.SoftThresholdTokens) {
-			log.Info("running pre-compaction memory flush",
-				"tokens", tokenCount,
-				"threshold", threshold,
-				"flush_turn", true,
-			)
-			flushReq := &Request{
-				Messages:       []Message{{Role: "user", Content: flushCfg.Prompt}},
-				ConversationID: convID,
-				Hints:          req.Hints,
-				SystemPrompt:   req.SystemPrompt + "\n\n" + flushCfg.SystemPromptSuffix,
-				isFlushTurn:    true, // prevent recursive flush
-			}
-			if _, flushErr := l.Run(ctx, flushReq, nil); flushErr != nil {
-				log.Warn("pre-compaction memory flush failed", "error", flushErr)
-			}
-			// Refresh history after flush (may have added messages).
-			history = l.memory.GetMessages(convID)
-		}
-	}
-
 	// Build messages for LLM. Enrich ctx with conversation ID so that
 	// context providers (e.g. working memory) can scope their output.
 	// Propagate request hints so channel-aware providers can adapt.
+	channelBinding := req.ChannelBinding.Clone()
+	if channelBinding == nil {
+		channelBinding = l.conversationChannelBinding(convID)
+	}
 	promptCtx := tools.WithConversationID(ctx, convID)
 	promptCtx = tools.WithHints(promptCtx, req.Hints)
+	promptCtx = tools.WithChannelBinding(promptCtx, channelBinding)
 
 	var systemPrompt string
 	if req.SystemPrompt != "" {
@@ -1118,9 +1248,6 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	}
 
 	usageInfo := awareness.ContextUsageInfo{
-		Model:          l.model,
-		Routed:         l.router != nil,
-		TokenCount:     totalChars / 4, // rough char-to-token estimate
 		ContextWindow:  l.contextWindow,
 		MessageCount:   len(history),
 		ConversationID: convID,
@@ -1136,9 +1263,6 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		if started := l.archiver.ActiveSessionStartedAt(convID); !started.IsZero() {
 			usageInfo.SessionAge = time.Since(started)
 		}
-	}
-	if line := awareness.FormatContextUsage(usageInfo); line != "" {
-		systemPrompt += "\n" + line
 	}
 
 	var llmMessages []llm.Message
@@ -1253,6 +1377,32 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		log.Debug("model specified in request, skipping router", "model", model)
 	}
 
+	if req.SystemPrompt == "" {
+		usageInfo.Model = model
+		systemPrompt = l.buildSystemPromptWithProfile(promptCtx, userMessage, history, l.modelInteractionProfileForModel(model))
+	}
+
+	usageInfo.Model = model
+	usageInfo.Routed = routerDecision != nil
+	if cat := l.currentModelCatalog(); cat != nil {
+		if dep, err := cat.ResolveDeploymentRef(model); err == nil && dep.ContextWindow > 0 {
+			usageInfo.ContextWindow = dep.ContextWindow
+		}
+	}
+	finalChars := len(systemPrompt)
+	for _, m := range req.Messages {
+		finalChars += len(m.Content)
+	}
+	usageInfo.TokenCount = finalChars / 4 // rough char-to-token estimate
+	if line := awareness.FormatContextUsage(usageInfo); line != "" {
+		systemPrompt += "\n" + line
+	}
+	if len(llmMessages) > 0 && llmMessages[0].Role == "system" {
+		llmMessages[0].Content = systemPrompt
+	}
+
+	l.seedLiveRequestDetail(ctx, requestID, systemPrompt, userMessage, model, 0, llmMessages)
+
 	startTime := time.Now()
 
 	// Estimate system prompt size for cost logging.
@@ -1286,17 +1436,86 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		}
 		return toolsForIter
 	}
+	activeTagList := func() []string {
+		if scope == nil {
+			return nil
+		}
+		tagSnap := scope.Snapshot()
+		if len(tagSnap) == 0 {
+			return nil
+		}
+		tags := make([]string, 0, len(tagSnap))
+		for tag, active := range tagSnap {
+			if active {
+				tags = append(tags, tag)
+			}
+		}
+		sort.Strings(tags)
+		return tags
+	}
+	var (
+		liveStreamMu        sync.Mutex
+		liveStreamModel     string
+		liveStreamIteration int
+		liveStreamMessages  []llm.Message
+		liveStreamText      strings.Builder
+	)
+	liveStreamCallback := stream
+	if stream != nil && l.liveRequestRecorder != nil {
+		liveStreamCallback = func(event llm.StreamEvent) {
+			if event.Kind == llm.KindToken && event.Token != "" {
+				liveStreamMu.Lock()
+				liveStreamText.WriteString(event.Token)
+				content := liveStreamText.String()
+				model := liveStreamModel
+				iterationCount := liveStreamIteration
+				msgs := append([]llm.Message(nil), liveStreamMessages...)
+				liveStreamMu.Unlock()
+
+				l.liveRequestRecorder(ctx, logging.RequestContent{
+					RequestID:        requestID,
+					SystemPrompt:     systemPrompt,
+					UserContent:      userMessage,
+					Model:            model,
+					AssistantContent: content,
+					IterationCount:   iterationCount,
+					Messages:         msgs,
+				})
+			}
+			stream(event)
+		}
+	}
+	effectiveToolNames := func() []string {
+		toolsForIter := currentTools()
+		if gatingActive {
+			toolsForIter = toolsForIter.FilteredCopy(l.orchestratorTools)
+		}
+		defs := toolsForIter.List()
+		if len(defs) == 0 {
+			return nil
+		}
+		names := make([]string, 0, len(defs))
+		for _, def := range defs {
+			fn, _ := def["function"].(map[string]any)
+			name, _ := fn["name"].(string)
+			if name != "" {
+				names = append(names, name)
+			}
+		}
+		sort.Strings(names)
+		return names
+	}
 
 	// Build iterate.Config with agent-specific callbacks.
 	iterCfg := iterate.Config{
 		MaxIterations:   maxIterations,
 		Model:           model,
 		LLM:             l.llm,
-		Stream:          stream,
+		Stream:          liveStreamCallback,
 		DeferMixedText:  true,
 		NudgeOnEmpty:    true,
 		NudgePrompt:     prompts.EmptyResponseNudge,
-		FallbackContent: prompts.EmptyResponseFallback,
+		FallbackContent: firstNonEmpty(req.FallbackContent, prompts.EmptyResponseFallback),
 
 		// Per-iteration tool definitions: recompute effective tools each
 		// iteration so tags activated via activate_capability are reflected.
@@ -1317,6 +1536,18 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			return toolsForIter.Get(toolName) != nil
 		},
 
+		NormalizeToolCall: func(iterCtx context.Context, i int, tc llm.ToolCall) llm.ToolCall {
+			repaired, changed := l.repairToolCall(tc)
+			if changed {
+				logging.Logger(iterCtx).Info("repaired tool call",
+					"iteration", i,
+					"from", tc.Function.Name,
+					"to", repaired.Function.Name,
+				)
+			}
+			return repaired
+		},
+
 		CheckBudget: func(totalOut int) bool {
 			return req.MaxOutputTokens > 0 && totalOut >= req.MaxOutputTokens
 		},
@@ -1335,16 +1566,26 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			// - Capability context reflects tags activated mid-run
 			// - Watchlist entities, state changes, and conditions are fresh
 			// - KB articles and live providers see current tag state
-			// Skip rebuild when a custom SystemPrompt is in use (e.g.,
-			// OpenClaw profiles that assemble their own context).
+			// Skip rebuild when a custom SystemPrompt is in use for callers
+			// that assemble their own context externally.
 			if i > 0 && len(msgs) > 0 && msgs[0].Role == "system" && req.SystemPrompt == "" {
-				rebuilt := l.buildSystemPrompt(iterCtx, userMessage, history)
+				rebuilt := l.buildSystemPromptWithProfile(iterCtx, userMessage, history, l.modelInteractionProfileForModel(currentModel))
 				// Omit FormatContextUsage — usageInfo was computed before the
 				// run and would be misleading after prompt content changes.
 				msgs[0].Content = rebuilt
 				systemPrompt = rebuilt // keep retained content in sync
 				systemTokens = len(rebuilt) / 4
 			}
+
+			msgSnapshot := append([]llm.Message(nil), msgs...)
+			liveStreamMu.Lock()
+			liveStreamModel = currentModel
+			liveStreamIteration = i
+			liveStreamMessages = msgSnapshot
+			liveStreamText.Reset()
+			liveStreamMu.Unlock()
+
+			l.seedLiveRequestDetail(iterCtx, requestID, systemPrompt, userMessage, currentModel, i, msgSnapshot)
 
 			iterMsgTokens := 0
 			for _, m := range msgs {
@@ -1357,10 +1598,15 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 				"system_tokens", systemTokens,
 			)
 			if stream != nil {
+				effectiveTools := effectiveToolNames()
 				startData := map[string]any{
-					"est_tokens": iterMsgTokens + systemTokens,
-					"messages":   len(msgs),
-					"iteration":  i,
+					"request_id":      requestID,
+					"est_tokens":      iterMsgTokens + systemTokens,
+					"messages":        len(msgs),
+					"iteration":       i,
+					"tools":           len(effectiveTools),
+					"effective_tools": effectiveTools,
+					"active_tags":     activeTagList(),
 				}
 				if routerDecision != nil {
 					startData["complexity"] = routerDecision.Complexity.String()
@@ -1382,6 +1628,9 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 				stream(llm.StreamEvent{
 					Kind:     llm.KindLLMResponse,
 					Response: llmResp,
+					Data: map[string]any{
+						"request_id": requestID,
+					},
 				})
 			}
 			iterLog := logging.Logger(iterCtx)
@@ -1402,6 +1651,8 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 			toolCallIDStr := toolCallID.String()
 
 			toolCtx := tools.WithConversationID(iterCtx, convID)
+			toolCtx = tools.WithChannelBinding(toolCtx, channelBinding)
+			toolCtx = tools.WithHints(toolCtx, req.Hints)
 			if l.archiver != nil {
 				if sid := l.archiver.ActiveSessionID(convID); sid != "" {
 					toolCtx = tools.WithSessionID(toolCtx, sid)
@@ -1448,11 +1699,16 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 				currentToolCancel = nil
 			}
 			if stream != nil {
+				doneData := map[string]any{
+					"active_tags":     activeTagList(),
+					"effective_tools": effectiveToolNames(),
+				}
 				stream(llm.StreamEvent{
 					Kind:       llm.KindToolCallDone,
 					ToolName:   toolName,
 					ToolResult: result,
 					ToolError:  errMsg,
+					Data:       doneData,
 				})
 			}
 			// Record tool call completion.
@@ -1590,12 +1846,16 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 		CacheCreationInputTokens: iterResult.CacheCreationInputTokens,
 		CacheReadInputTokens:     iterResult.CacheReadInputTokens,
 		ToolsUsed:                iterResult.ToolsUsed,
+		EffectiveTools:           effectiveToolNames(),
 		Iterations:               iterResult.IterationCount,
 		Exhausted:                iterResult.Exhausted,
 		SessionID:                sessionID,
 		RequestID:                requestID,
 		ActiveTags:               activeTags,
+		LoadedCapabilities:       toolcatalog.BuildLoadedCapabilityEntries(l.capSurface, activeTags),
 	}
+
+	l.recordLiveRequestDetail(ctx, requestID, systemPrompt, userMessage, iterResult)
 
 	l.recordUsage(ctx, req, iterResult.Model, iterResult.InputTokens, iterResult.OutputTokens, iterResult.CacheCreationInputTokens, iterResult.CacheReadInputTokens, convID, sessionTag, requestID)
 	l.archiveIterations(log, convID, iterResult.Iterations)
@@ -1611,6 +1871,25 @@ func (l *Loop) Run(ctx context.Context, req *Request, stream StreamCallback) (re
 	return resp, nil
 }
 
+func (l *Loop) conversationChannelBinding(conversationID string) *memory.ChannelBinding {
+	if conversationID == "" || l.memory == nil {
+		return nil
+	}
+	var conv *memory.Conversation
+	switch store := l.memory.(type) {
+	case *memory.SQLiteStore:
+		conv = store.GetConversation(conversationID)
+	case *memory.Store:
+		conv = store.GetConversation(conversationID)
+	default:
+		return nil
+	}
+	if conv == nil || conv.Metadata == nil {
+		return nil
+	}
+	return conv.Metadata.ChannelBinding.Clone()
+}
+
 // buildLLMErrorHandler returns the OnLLMError callback that implements
 // the agent's timeout retry, recovery model downshift, and failover logic.
 func (l *Loop) buildLLMErrorHandler(ctx context.Context, stream llm.StreamCallback, defaultModel string, req *Request, timeoutRecovered *bool) func(context.Context, error, string, []llm.Message, []map[string]any, llm.StreamCallback) (*llm.ChatResponse, string, error) {
@@ -1621,6 +1900,10 @@ func (l *Loop) buildLLMErrorHandler(ctx context.Context, stream llm.StreamCallba
 		_ llm.StreamCallback) (*llm.ChatResponse, string, error) {
 
 		iterLog := logging.Logger(iterCtx)
+		if cancelErr := canceledContextError(err, ctx, iterCtx); cancelErr != nil {
+			iterLog.Debug("LLM call canceled", "error", cancelErr, "model", model)
+			return nil, "", cancelErr
+		}
 		iterLog.Error("LLM call failed", "error", err, "model", model)
 
 		if isTimeout(err) {
@@ -1804,14 +2087,13 @@ func (l *Loop) archiveIterations(log *slog.Logger, convID string, iterations []i
 	}
 }
 
-// retainContent persists request-level content (system prompt, tool call
-// details, messages) to the log index database. No-op when the content
-// writer is nil (content retention disabled).
+// retainContent captures request-level content (system prompt, tool call
+// details, messages) for live inspection and optional persistence.
 func (l *Loop) retainContent(ctx context.Context, requestID, systemPrompt, userMessage string, result *iterate.Result) {
-	if l.contentWriter == nil {
+	if l.requestRecorder == nil {
 		return
 	}
-	l.contentWriter.WriteRequest(ctx, logging.RequestContent{
+	l.requestRecorder(ctx, logging.RequestContent{
 		RequestID:        requestID,
 		SystemPrompt:     systemPrompt,
 		UserContent:      userMessage,
@@ -1824,6 +2106,40 @@ func (l *Loop) retainContent(ctx context.Context, requestID, systemPrompt, userM
 		Exhausted:        result.Exhausted,
 		ExhaustReason:    result.ExhaustReason,
 		Messages:         result.Messages,
+	})
+}
+
+func (l *Loop) recordLiveRequestDetail(ctx context.Context, requestID, systemPrompt, userMessage string, result *iterate.Result) {
+	if l.liveRequestRecorder == nil || result == nil {
+		return
+	}
+	l.liveRequestRecorder(ctx, logging.RequestContent{
+		RequestID:        requestID,
+		SystemPrompt:     systemPrompt,
+		UserContent:      userMessage,
+		Model:            result.Model,
+		AssistantContent: result.Content,
+		IterationCount:   result.IterationCount,
+		InputTokens:      result.InputTokens,
+		OutputTokens:     result.OutputTokens,
+		ToolsUsed:        result.ToolsUsed,
+		Exhausted:        result.Exhausted,
+		ExhaustReason:    result.ExhaustReason,
+		Messages:         result.Messages,
+	})
+}
+
+func (l *Loop) seedLiveRequestDetail(ctx context.Context, requestID, systemPrompt, userMessage, model string, iterationCount int, messages []llm.Message) {
+	if l.liveRequestRecorder == nil {
+		return
+	}
+	l.liveRequestRecorder(ctx, logging.RequestContent{
+		RequestID:      requestID,
+		SystemPrompt:   systemPrompt,
+		UserContent:    userMessage,
+		Model:          model,
+		IterationCount: iterationCount,
+		Messages:       messages,
 	})
 }
 
@@ -1857,6 +2173,21 @@ func isTimeout(err error) bool {
 	return strings.Contains(msg, "timeout") ||
 		strings.Contains(msg, "overloaded") ||
 		strings.Contains(msg, "529")
+}
+
+func canceledContextError(err error, contexts ...context.Context) error {
+	for _, ctx := range contexts {
+		if ctx == nil {
+			continue
+		}
+		if errors.Is(ctx.Err(), context.Canceled) {
+			return context.Canceled
+		}
+	}
+	if errors.Is(err, context.Canceled) {
+		return context.Canceled
+	}
+	return nil
 }
 
 func isUserFixableModelError(err error) bool {
@@ -2292,6 +2623,15 @@ type historyEntry struct {
 	Role      string `json:"role"`
 	Timestamp string `json:"timestamp"`
 	Text      string `json:"text"`
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 // formatHistoryJSON serializes conversation history as a compact JSON

@@ -29,6 +29,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/router"
 	"github.com/nugget/thane-ai-agent/internal/server/api"
 	"github.com/nugget/thane-ai-agent/internal/server/web"
+	"github.com/nugget/thane-ai-agent/internal/toolcatalog"
 )
 
 // factSetterFunc adapts knowledge.Store to the memory.FactSetter interface,
@@ -270,6 +271,19 @@ func (r *contactPhoneResolver) ResolvePhone(phone string) (string, string, bool)
 		return "", "", false
 	}
 	return matches[0].FormattedName, matches[0].TrustZone, true
+}
+
+// contactChannelBindingResolver resolves a channel/address pair to a
+// typed conversation binding with contact identity when available.
+type contactChannelBindingResolver struct {
+	store *contacts.Store
+}
+
+// ResolveChannelBinding returns a typed binding for the given
+// channel/address pair. It always returns a channel-scoped binding when
+// the inputs are non-empty, even if no contact match is found.
+func (r *contactChannelBindingResolver) ResolveChannelBinding(channel, address string) *memory.ChannelBinding {
+	return resolveChannelBinding(r.store, channel, address)
 }
 
 // contactNameLookup resolves contact names to rich context profiles for
@@ -537,6 +551,37 @@ func updateContactInteraction(store *contacts.Store, logger *slog.Logger, conver
 // address. For Signal, checks IMPP (signal:address) then TEL fallback.
 // For email, checks EMAIL property.
 func resolveContactByChannelAddress(store *contacts.Store, channel, address string) (uuid.UUID, bool) {
+	id, _, ok := resolveContactByChannelLink(store, channel, address)
+	return id, ok
+}
+
+func resolveChannelBinding(store *contacts.Store, channel, address string) *memory.ChannelBinding {
+	binding := (&memory.ChannelBinding{
+		Channel: channel,
+		Address: address,
+	}).Normalize()
+	if binding == nil || store == nil {
+		return binding
+	}
+
+	contactID, linkSource, found := resolveContactByChannelLink(store, binding.Channel, binding.Address)
+	if !found {
+		return binding
+	}
+
+	contact, err := store.Get(contactID)
+	if err != nil || contact == nil {
+		return binding
+	}
+
+	binding.ContactID = contact.ID.String()
+	binding.ContactName = contact.FormattedName
+	binding.TrustZone = contact.TrustZone
+	binding.LinkSource = linkSource
+	return binding.Normalize()
+}
+
+func resolveContactByChannelLink(store *contacts.Store, channel, address string) (uuid.UUID, string, bool) {
 	var nilID uuid.UUID
 
 	switch channel {
@@ -551,44 +596,66 @@ func resolveContactByChannelAddress(store *contacts.Store, channel, address stri
 		for _, addr := range candidates {
 			matches, err := store.FindByPropertyExact("IMPP", "signal:"+addr)
 			if err == nil && len(matches) == 1 {
-				return matches[0].ID, true
+				return matches[0].ID, "impp", true
 			}
 		}
 		// Fallback to TEL (also try both forms).
 		for _, addr := range candidates {
 			matches, err := store.FindByPropertyExact("TEL", addr)
 			if err == nil && len(matches) == 1 {
-				return matches[0].ID, true
+				return matches[0].ID, "tel", true
 			}
 		}
 	case "email":
 		matches, err := store.FindByPropertyExact("EMAIL", address)
 		if err == nil && len(matches) == 1 {
-			return matches[0].ID, true
+			return matches[0].ID, "email", true
 		}
 	}
 
-	return nilID, false
+	return nilID, "", false
 }
 
-// notifSessionInjector adapts the memory store and archive adapter
-// into a [notifications.SessionInjector]. It avoids importing
-// notifications in the memory package by using this thin adapter in
-// the app package.
-type notifSessionInjector struct {
-	mem      *memory.SQLiteStore
+// conversationSystemInjector is the shared app-side bridge for writing
+// detached messages back into live conversations. Both notification
+// callbacks and loops-ng detached completions use this adapter so
+// completion routing converges on one app-level seam.
+type conversationSystemInjector struct {
+	mem      memory.MemoryStore
 	archiver *memory.ArchiveAdapter
 }
 
 // InjectSystemMessage adds a system message to the conversation's
 // memory so the agent sees it on the next turn.
-func (n *notifSessionInjector) InjectSystemMessage(conversationID, message string) error {
+func (n *conversationSystemInjector) InjectSystemMessage(conversationID, message string) error {
+	if n == nil || n.mem == nil {
+		return nil
+	}
+	if conversationID == "" || strings.TrimSpace(message) == "" {
+		return nil
+	}
 	return n.mem.AddMessage(conversationID, "system", message)
+}
+
+// InjectAssistantMessage adds an assistant-authored message to the
+// conversation's memory so channel-shaped detached completions can
+// appear in the same transcript as normal replies.
+func (n *conversationSystemInjector) InjectAssistantMessage(conversationID, message string) error {
+	if n == nil || n.mem == nil {
+		return nil
+	}
+	if conversationID == "" || strings.TrimSpace(message) == "" {
+		return nil
+	}
+	return n.mem.AddMessage(conversationID, "assistant", message)
 }
 
 // IsSessionAlive reports whether the conversation has an active
 // archive session.
-func (n *notifSessionInjector) IsSessionAlive(conversationID string) bool {
+func (n *conversationSystemInjector) IsSessionAlive(conversationID string) bool {
+	if n == nil || n.archiver == nil || conversationID == "" {
+		return false
+	}
 	return n.archiver.ActiveSessionID(conversationID) != ""
 }
 
@@ -744,6 +811,26 @@ func (a *contentQueryAdapter) QueryRequestDetail(requestID string) (*logging.Req
 	return logging.QueryRequestDetail(a.db, requestID)
 }
 
+// fallbackContentQuerier checks the primary source first, then falls back
+// to a secondary querier when the primary has no matching request detail.
+type fallbackContentQuerier struct {
+	primary  web.ContentQuerier
+	fallback web.ContentQuerier
+}
+
+func (q *fallbackContentQuerier) QueryRequestDetail(requestID string) (*logging.RequestDetail, error) {
+	if q.primary != nil {
+		detail, err := q.primary.QueryRequestDetail(requestID)
+		if err != nil || detail != nil {
+			return detail, err
+		}
+	}
+	if q.fallback == nil {
+		return nil, nil
+	}
+	return q.fallback.QueryRequestDetail(requestID)
+}
+
 // systemStatusAdapter bridges [connwatch.Manager] and [buildinfo] to the
 // web package's [web.SystemStatusProvider] interface, keeping the web
 // package decoupled from connwatch and buildinfo.
@@ -751,6 +838,7 @@ type systemStatusAdapter struct {
 	connMgr       *connwatch.Manager
 	modelRegistry *models.Registry
 	router        *router.Router
+	capSurface    []toolcatalog.CapabilitySurface
 }
 
 // Health returns the health state of all watched services.
@@ -798,13 +886,24 @@ func (a *systemStatusAdapter) RouterStats() *router.Stats {
 	return &stats
 }
 
+// CapabilityCatalog returns the runtime capability catalog used by the
+// agent prompt/tooling layer.
+func (a *systemStatusAdapter) CapabilityCatalog() *toolcatalog.CapabilityCatalogView {
+	if len(a.capSurface) == 0 {
+		return nil
+	}
+	view := toolcatalog.BuildCapabilityCatalogView(a.capSurface, true)
+	return &view
+}
+
 // loopAdapter bridges [looppkg.Runner] to [*agent.Loop], converting
 // between the loop package's request/response types and the agent
 // package's types. It lives in internal/app to avoid a circular import
 // between the loop and agent packages.
 type loopAdapter struct {
-	agentLoop *agent.Loop
-	router    *router.Router
+	agentLoop  *agent.Loop
+	router     *router.Router
+	capSurface []toolcatalog.CapabilitySurface
 }
 
 // maxToolResultLen is the maximum tool result length forwarded to the
@@ -812,23 +911,10 @@ type loopAdapter struct {
 // ellipsis to keep event payloads bounded.
 const maxToolResultLen = 2000
 
-// Run converts a [looppkg.RunRequest] to [agent.Request], calls the agent
-// loop, and converts the result back to [looppkg.RunResponse].
-func (a *loopAdapter) Run(ctx context.Context, req looppkg.RunRequest, _ looppkg.StreamCallback) (*looppkg.RunResponse, error) {
-	// Convert messages.
-	msgs := make([]agent.Message, len(req.Messages))
-	for i, m := range req.Messages {
-		msgs[i] = agent.Message{Role: m.Role, Content: m.Content}
-	}
-
-	agentReq := &agent.Request{
-		ConversationID: req.ConversationID,
-		Messages:       msgs,
-		ExcludeTools:   req.ExcludeTools,
-		SkipTagFilter:  req.SkipTagFilter,
-		Hints:          req.Hints,
-		SeedTags:       req.SeedTags,
-	}
+// Run converts a [looppkg.Request] to [agent.Request], calls the agent
+// loop, and converts the result back to [looppkg.Response].
+func (a *loopAdapter) Run(ctx context.Context, req looppkg.Request, _ looppkg.StreamCallback) (*looppkg.Response, error) {
+	agentReq := compileLoopAgentRequest(req)
 
 	// Build an agent streaming callback that relays tool and LLM
 	// events through the loop's OnProgress callback.
@@ -838,8 +924,19 @@ func (a *loopAdapter) Run(ctx context.Context, req looppkg.RunRequest, _ looppkg
 			switch e.Kind {
 			case agent.KindLLMStart:
 				if e.Response != nil {
+					activeTags, _ := e.Data["active_tags"].([]string)
+					effectiveTools, _ := e.Data["effective_tools"].([]string)
+					loadedCapabilities := toolcatalog.BuildLoadedCapabilityEntries(a.capSurface, activeTags)
 					data := map[string]any{
 						"model": e.Response.Model,
+						"tooling": looppkg.BuildToolingState(
+							nil,
+							activeTags,
+							effectiveTools,
+							nil,
+							loadedCapabilities,
+							nil,
+						),
 					}
 					// Forward enrichment data from agent (tokens, tools, router).
 					for k, v := range e.Data {
@@ -869,14 +966,33 @@ func (a *loopAdapter) Run(ctx context.Context, req looppkg.RunRequest, _ looppkg
 					}
 					data["result"] = r
 				}
+				activeTags, _ := e.Data["active_tags"].([]string)
+				effectiveTools, _ := e.Data["effective_tools"].([]string)
+				if len(activeTags) > 0 || len(effectiveTools) > 0 {
+					loadedCapabilities := toolcatalog.BuildLoadedCapabilityEntries(a.capSurface, activeTags)
+					data["active_tags"] = append([]string(nil), activeTags...)
+					data["effective_tools"] = append([]string(nil), effectiveTools...)
+					data["tooling"] = looppkg.BuildToolingState(
+						nil,
+						activeTags,
+						effectiveTools,
+						nil,
+						loadedCapabilities,
+						nil,
+					)
+				}
 				req.OnProgress(events.KindLoopToolDone, data)
 			case agent.KindLLMResponse:
 				if e.Response != nil {
-					req.OnProgress(events.KindLoopLLMResponse, map[string]any{
+					data := map[string]any{
 						"model":         e.Response.Model,
 						"input_tokens":  e.Response.InputTokens,
 						"output_tokens": e.Response.OutputTokens,
-					})
+					}
+					for k, v := range e.Data {
+						data[k] = v
+					}
+					req.OnProgress(events.KindLoopLLMResponse, data)
 				}
 			}
 		}
@@ -885,6 +1001,11 @@ func (a *loopAdapter) Run(ctx context.Context, req looppkg.RunRequest, _ looppkg
 	resp, err := a.agentLoop.Run(ctx, agentReq, agentStream)
 	if err != nil {
 		return nil, err
+	}
+
+	loadedCapabilities := append([]toolcatalog.LoadedCapabilityEntry(nil), resp.LoadedCapabilities...)
+	if len(loadedCapabilities) == 0 {
+		loadedCapabilities = toolcatalog.BuildLoadedCapabilityEntries(a.capSurface, resp.ActiveTags)
 	}
 
 	// Use the routed model's context window if available, otherwise
@@ -896,16 +1017,61 @@ func (a *loopAdapter) Run(ctx context.Context, req looppkg.RunRequest, _ looppkg
 		}
 	}
 
-	return &looppkg.RunResponse{
-		Content:       resp.Content,
-		Model:         resp.Model,
-		InputTokens:   resp.InputTokens,
-		OutputTokens:  resp.OutputTokens,
-		ContextWindow: ctxWindow,
-		ToolsUsed:     resp.ToolsUsed,
-		RequestID:     resp.RequestID,
-		ActiveTags:    resp.ActiveTags,
+	return &looppkg.Response{
+		Content:                  resp.Content,
+		Model:                    resp.Model,
+		FinishReason:             resp.FinishReason,
+		InputTokens:              resp.InputTokens,
+		OutputTokens:             resp.OutputTokens,
+		CacheCreationInputTokens: resp.CacheCreationInputTokens,
+		CacheReadInputTokens:     resp.CacheReadInputTokens,
+		ContextWindow:            ctxWindow,
+		ToolsUsed:                resp.ToolsUsed,
+		EffectiveTools:           append([]string(nil), resp.EffectiveTools...),
+		LoadedCapabilities:       append([]toolcatalog.LoadedCapabilityEntry(nil), loadedCapabilities...),
+		RequestID:                resp.RequestID,
+		Iterations:               resp.Iterations,
+		Exhausted:                resp.Exhausted,
+		ActiveTags:               resp.ActiveTags,
 	}, nil
+}
+
+func compileLoopAgentRequest(req looppkg.Request) *agent.Request {
+	// Convert messages.
+	msgs := make([]agent.Message, len(req.Messages))
+	for i, m := range req.Messages {
+		msgs[i] = agent.Message{Role: m.Role, Content: m.Content}
+	}
+
+	return &agent.Request{
+		Model:           req.Model,
+		ConversationID:  req.ConversationID,
+		ChannelBinding:  req.ChannelBinding.Clone(),
+		Messages:        msgs,
+		SkipContext:     req.SkipContext,
+		AllowedTools:    append([]string(nil), req.AllowedTools...),
+		ExcludeTools:    append([]string(nil), req.ExcludeTools...),
+		SkipTagFilter:   req.SkipTagFilter,
+		Hints:           cloneStringMap(req.Hints),
+		InitialTags:     append([]string(nil), req.InitialTags...),
+		MaxIterations:   req.MaxIterations,
+		MaxOutputTokens: req.MaxOutputTokens,
+		ToolTimeout:     req.ToolTimeout,
+		UsageRole:       req.UsageRole,
+		UsageTaskName:   req.UsageTaskName,
+		SystemPrompt:    req.SystemPrompt,
+	}
+}
+
+func cloneStringMap(src map[string]string) map[string]string {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := make(map[string]string, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
 }
 
 // itoa converts an int to a string without importing strconv at the top

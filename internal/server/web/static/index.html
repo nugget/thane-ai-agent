@@ -13,46 +13,34 @@
     </div>
     <div class="header-right">
       <button id="toggle-inspector" class="toggle-btn toggle-btn--active" title="Toggle inspector panel (I)"><span class="toggle-icon"></span> Inspector</button>
-      <button id="toggle-logs" class="toggle-btn toggle-btn--active" title="Toggle log panel (L)"><span class="toggle-icon"></span> Logs</button>
+      <button id="toggle-logs" class="toggle-btn" title="Toggle diagnostic log panel (L)"><span class="toggle-icon"></span> Logs</button>
+      <button id="toggle-legend" class="toggle-btn" title="Toggle graph legend (?)"><span class="toggle-icon"></span> Legend</button>
       <span id="conn-status" class="conn-badge conn-badge--connecting">connecting</span>
     </div>
   </header>
 
+  <section id="notification-stack" class="notification-stack" hidden aria-live="polite" aria-atomic="false"></section>
+
   <main class="main">
     <section class="canvas-panel" id="canvas-panel">
       <svg id="canvas" width="100%" height="100%">
-        <g id="canvas-world"></g>
+        <g id="canvas-world">
+          <g id="canvas-edge-layer"></g>
+          <g id="canvas-node-layer"></g>
+        </g>
       </svg>
       <div id="empty-state" class="empty-state">
-        <p>No loops running</p>
+        <p>No live loops</p>
       </div>
     </section>
 
     <div class="resize-handle resize-handle--v" id="resize-v"></div>
     <aside class="detail-panel" id="detail-panel">
       <div id="detail-placeholder" class="detail-placeholder">
-        <p>Select a loop to inspect</p>
+        <p>Entity inspection target</p>
       </div>
       <div id="detail-content" class="detail-content" hidden>
-        <div class="detail-card">
-          <div class="detail-header">
-            <h2 id="detail-name" class="detail-name"></h2>
-            <span id="detail-state" class="state-badge"></span>
-          </div>
-          <div id="detail-ids" class="detail-ids"></div>
-          <div id="detail-tags" class="detail-tags" hidden>
-            <div id="detail-tags-list" class="tag-list"></div>
-          </div>
-        </div>
-
-        <!-- Delegate call arguments (only shown for delegate nodes) -->
-        <div id="detail-delegate" class="detail-delegate" hidden></div>
-
-        <!-- Aggregate stats (compact, single row) -->
-        <div id="detail-aggregates" class="detail-aggregates"></div>
-
-        <!-- Iteration timeline (JS-populated) -->
-        <div id="detail-timeline" class="iter-timeline"></div>
+        <div id="detail-entity" class="detail-entity"></div>
       </div>
       <div id="request-detail" class="detail-content" hidden>
         <div class="detail-header">
@@ -67,52 +55,16 @@
         <div id="request-detail-content" class="request-content"></div>
         <div id="request-detail-waterfall" class="waterfall"></div>
       </div>
-      <div id="system-detail" class="detail-content" hidden>
-        <div class="detail-header">
-          <h2 class="detail-name">Runtime</h2>
-          <span id="system-status" class="state-badge"></span>
-        </div>
-        <div class="system-sections">
-          <section class="detail-card system-section">
-            <div class="system-section-header">
-              <h3 class="section-title">Overview</h3>
-            </div>
-            <div id="system-overview" class="system-summary-grid"></div>
-          </section>
-
-          <section class="detail-card system-section">
-            <div class="system-section-header">
-              <h3 class="section-title">Services</h3>
-            </div>
-            <div id="system-services" class="system-services"></div>
-          </section>
-
-          <section class="detail-card system-section">
-            <div class="system-section-header">
-              <h3 class="section-title">Model Registry</h3>
-              <span id="system-registry-meta" class="system-section-meta"></span>
-            </div>
-            <div id="system-registry-summary" class="system-summary-grid"></div>
-
-            <div class="system-subsection">
-              <h4 class="system-subtitle">Resources</h4>
-              <div id="system-registry-resources" class="system-list"></div>
-            </div>
-
-            <div class="system-subsection">
-              <h4 class="system-subtitle">Deployments</h4>
-              <div id="system-registry-deployments" class="system-list"></div>
-            </div>
-          </section>
-        </div>
-      </div>
     </aside>
   </main>
 
-  <div class="resize-handle resize-handle--h" id="resize-h"></div>
-  <section class="log-panel" id="log-panel">
+  <div class="resize-handle resize-handle--h" id="resize-h" hidden></div>
+  <section class="log-panel" id="log-panel" hidden>
     <div class="log-toolbar">
-      <h3 class="section-title">Logs</h3>
+      <div class="log-toolbar__copy">
+        <h3 class="section-title">Logs</h3>
+        <p class="log-toolbar__subtitle">Focused diagnostic tail</p>
+      </div>
       <div class="log-filters">
         <select id="log-level" class="log-select">
           <option value="">All Levels</option>
@@ -150,6 +102,229 @@
     <span id="footer-go" class="footer-item"></span>
     <a href="https://github.com/nugget/thane-ai-agent" class="footer-link" target="_blank" rel="noopener">github.com/nugget/thane-ai-agent</a>
   </footer>
+
+  <div id="legend-backdrop" class="legend-backdrop" hidden></div>
+  <aside id="legend-panel" class="legend-panel" hidden>
+    <div class="legend-panel__header">
+      <div>
+        <h2 class="legend-panel__title">Graph Legend</h2>
+        <p class="legend-panel__subtitle">Entity family, runtime state, trust, lineage, and capacity cues.</p>
+      </div>
+      <button id="legend-close" class="btn" title="Close legend">&times;</button>
+    </div>
+
+    <section class="legend-section">
+      <h3 class="section-title">Node Anatomy</h3>
+      <div class="legend-anatomy">
+        <div class="legend-node-demo" aria-hidden="true">
+          <div class="legend-node-demo__trust"></div>
+          <div class="legend-node-demo__selection"></div>
+          <div class="legend-node-demo__supervisor"></div>
+          <div class="legend-node-demo__ring"></div>
+          <div class="legend-node-demo__sleep"></div>
+          <div class="legend-node-demo__core"></div>
+          <div class="legend-node-demo__badge">128k</div>
+          <div class="legend-node-demo__sigil">@</div>
+        </div>
+        <div class="legend-list">
+          <div class="legend-item">
+            <span class="legend-marker legend-marker--fill">@</span>
+            <div class="legend-copy">
+              <strong>Family fill and glyph</strong>
+              <p>The center mark identifies the entity family carried in schema metadata.</p>
+            </div>
+          </div>
+          <div class="legend-item">
+            <span class="legend-marker legend-marker--ring"></span>
+            <div class="legend-copy">
+              <strong>State ring</strong>
+              <p>Color reflects current runtime state. Ring weight grows with context pressure.</p>
+            </div>
+          </div>
+          <div class="legend-item">
+            <span class="legend-marker legend-marker--sleep"></span>
+            <div class="legend-copy">
+              <strong>Sleep timer</strong>
+              <p>Arc progress shows time remaining before the next wake.</p>
+            </div>
+          </div>
+          <div class="legend-item">
+            <span class="legend-marker legend-marker--halo"></span>
+            <div class="legend-copy">
+              <strong>Selection, trust, and supervision</strong>
+              <p>Halo, underglow, and outer accents add operator context without changing identity.</p>
+            </div>
+          </div>
+          <div class="legend-item">
+            <span class="legend-marker legend-marker--badge">8k</span>
+            <div class="legend-copy">
+              <strong>Capacity badge</strong>
+              <p>Context tier when known. Dashed badges are model-size estimates before live capacity is observed.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="legend-section">
+      <h3 class="section-title">Entity Families</h3>
+      <div class="legend-chip-grid">
+        <div class="legend-chip">
+          <span class="legend-mini-node legend-mini-node--generic">•</span>
+          <div class="legend-copy">
+            <strong>Base loop</strong>
+            <p>Default family when no specialized schema hint is present.</p>
+          </div>
+        </div>
+        <div class="legend-chip">
+          <span class="legend-mini-node legend-mini-node--metacognitive">M</span>
+          <div class="legend-copy">
+            <strong>Reflective</strong>
+            <p>Supervisory or self-reflective cognition family.</p>
+          </div>
+        </div>
+        <div class="legend-chip">
+          <span class="legend-mini-node legend-mini-node--channel">@</span>
+          <div class="legend-copy">
+            <strong>Conversation-bound</strong>
+            <p>Loop bound to an external conversation or surface.</p>
+          </div>
+        </div>
+        <div class="legend-chip">
+          <span class="legend-mini-node legend-mini-node--delegate">↗</span>
+          <div class="legend-copy">
+            <strong>Spawned child</strong>
+            <p>Child execution launched on behalf of another loop.</p>
+          </div>
+        </div>
+        <div class="legend-chip">
+          <span class="legend-mini-node legend-mini-node--scheduled">◷</span>
+          <div class="legend-copy">
+            <strong>Time-bound</strong>
+            <p>Loop awakened by a timer or schedule policy.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="legend-section">
+      <h3 class="section-title">Runtime States</h3>
+      <div class="legend-chip-grid">
+        <div class="legend-chip">
+          <span class="legend-state-swatch legend-state-swatch--sleeping"></span>
+          <div class="legend-copy">
+            <strong>Sleeping</strong>
+            <p>Timer running until the next wake.</p>
+          </div>
+        </div>
+        <div class="legend-chip">
+          <span class="legend-state-swatch legend-state-swatch--waiting"></span>
+          <div class="legend-copy">
+            <strong>Waiting</strong>
+            <p>Paused on input, event, or external completion.</p>
+          </div>
+        </div>
+        <div class="legend-chip">
+          <span class="legend-state-swatch legend-state-swatch--processing"></span>
+          <div class="legend-copy">
+            <strong>Processing</strong>
+            <p>Active turn in progress: model work, planning, or tools.</p>
+          </div>
+        </div>
+        <div class="legend-chip">
+          <span class="legend-state-swatch legend-state-swatch--supervisor"></span>
+          <div class="legend-copy">
+            <strong>Supervisor</strong>
+            <p>Processing with supervisory or reflective emphasis.</p>
+          </div>
+        </div>
+        <div class="legend-chip">
+          <span class="legend-state-swatch legend-state-swatch--degraded"></span>
+          <div class="legend-copy">
+            <strong>Degraded or Error</strong>
+            <p>Recent failure, degraded dependency, or unhealthy turn.</p>
+          </div>
+        </div>
+        <div class="legend-chip">
+          <span class="legend-state-swatch legend-state-swatch--stopped"></span>
+          <div class="legend-copy">
+            <strong>Stopped or Idle</strong>
+            <p>No active work and no pending wake right now.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="legend-section">
+      <h3 class="section-title">Capacity and Trust</h3>
+      <div class="legend-capacity-row">
+        <span class="legend-capacity-badge legend-capacity-badge--context">8k</span>
+        <span class="legend-capacity-badge legend-capacity-badge--context">32k</span>
+        <span class="legend-capacity-badge legend-capacity-badge--context">128k</span>
+        <span class="legend-capacity-badge legend-capacity-badge--context">256k</span>
+        <span class="legend-capacity-badge legend-capacity-badge--context">512k</span>
+        <span class="legend-capacity-badge legend-capacity-badge--model">70b</span>
+      </div>
+      <p class="legend-note">Node scale usually tracks observed context capacity. Dashed badges mark model estimates or still-unknown capacity before live data is known.</p>
+      <div class="legend-chip-grid">
+        <div class="legend-chip">
+          <span class="legend-glow-swatch legend-glow-swatch--admin"></span>
+          <div class="legend-copy">
+            <strong>Admin trust</strong>
+            <p>Highest-trust binding from contact or channel policy.</p>
+          </div>
+        </div>
+        <div class="legend-chip">
+          <span class="legend-glow-swatch legend-glow-swatch--household"></span>
+          <div class="legend-copy">
+            <strong>Household trust</strong>
+            <p>Household or intimate binding with expanded context.</p>
+          </div>
+        </div>
+        <div class="legend-chip">
+          <span class="legend-glow-swatch legend-glow-swatch--trusted"></span>
+          <div class="legend-copy">
+            <strong>Trusted or known</strong>
+            <p>Recognized binding with softer guardrails.</p>
+          </div>
+        </div>
+        <div class="legend-chip">
+          <span class="legend-glow-swatch legend-glow-swatch--unknown"></span>
+          <div class="legend-copy">
+            <strong>Unknown</strong>
+            <p>Unverified or low-trust binding.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="legend-section">
+      <h3 class="section-title">Lineage and Activity</h3>
+      <div class="legend-link-list">
+        <div class="legend-link-item">
+          <span class="legend-line-swatch"></span>
+          <div class="legend-copy">
+            <strong>Relationship line</strong>
+            <p>Declared lineage or topology edge.</p>
+          </div>
+        </div>
+        <div class="legend-link-item">
+          <span class="legend-line-swatch legend-line-swatch--child"></span>
+          <div class="legend-copy">
+            <strong>Child or delegate line</strong>
+            <p>Child execution, delegation, or branch growth away from an anchor.</p>
+          </div>
+        </div>
+        <div class="legend-link-item">
+          <span class="legend-line-swatch legend-line-swatch--flash"></span>
+          <div class="legend-copy">
+            <strong>Activity flash</strong>
+            <p>Recent wake, iteration, or supervisory surge on that path.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+  </aside>
 
   <div id="context-menu" class="context-menu" hidden>
     <ul id="context-menu-items"></ul>

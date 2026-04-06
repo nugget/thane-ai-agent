@@ -17,7 +17,10 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/events"
 	"github.com/nugget/thane-ai-agent/internal/logging"
 	"github.com/nugget/thane-ai-agent/internal/loop"
+	"github.com/nugget/thane-ai-agent/internal/memory"
+	"github.com/nugget/thane-ai-agent/internal/prompts"
 	"github.com/nugget/thane-ai-agent/internal/router"
+	"github.com/nugget/thane-ai-agent/internal/toolcatalog"
 )
 
 // AgentRunner abstracts the agent loop for testability. The real
@@ -47,14 +50,11 @@ type ChannelSender interface {
 	SendMessage(ctx context.Context, recipient, message string) error
 }
 
-// ContactResolver resolves a phone number to a contact name and trust
-// zone. The bridge uses this to inject a sender_name hint into agent
-// requests and to propagate trust zone metadata to loop nodes.
+// ContactResolver resolves a channel/address pair to a typed channel
+// binding. The bridge uses this to inject sender identity into agent
+// requests and to persist contact-backed bindings on the conversation.
 type ContactResolver interface {
-	// ResolvePhone returns the contact name and trust zone for the
-	// given phone number. Returns ("", "", false) if no matching
-	// contact is found.
-	ResolvePhone(phone string) (name string, trustZone string, ok bool)
+	ResolveChannelBinding(channel, address string) *memory.ChannelBinding
 }
 
 // defaultHandleTimeout bounds how long a single inbound message may be
@@ -112,39 +112,41 @@ type VisionAnalyzer interface {
 
 // BridgeConfig holds the dependencies for a Bridge.
 type BridgeConfig struct {
-	Client          *Client
-	Runner          AgentRunner
-	Logger          *slog.Logger
-	RateLimit       int                        // per sender per minute; 0 = unlimited
-	HandleTimeout   time.Duration              // per-message processing timeout; 0 = defaultHandleTimeout
-	Routing         config.SignalRoutingConfig // model selection and routing hints
-	Rotator         SessionRotator             // nil disables idle session rotation
-	IdleTimeout     time.Duration              // 0 disables idle session rotation
-	Resolver        ContactResolver            // nil disables phone→name resolution
-	Attachments     AttachmentConfig           // attachment storage configuration
-	AttachmentStore *attachments.Store         // content-addressed store; nil = legacy copy
-	VisionAnalyzer  VisionAnalyzer             // nil disables vision analysis
-	Registry        *loop.Registry             // loop registry for dashboard visibility
-	EventBus        *events.Bus                // event bus for in-flight events
+	Client           *Client
+	Runner           AgentRunner
+	Logger           *slog.Logger
+	RateLimit        int                                                               // per sender per minute; 0 = unlimited
+	HandleTimeout    time.Duration                                                     // per-message processing timeout; 0 = defaultHandleTimeout
+	Routing          config.SignalRoutingConfig                                        // model selection and routing hints
+	Rotator          SessionRotator                                                    // nil disables idle session rotation
+	IdleTimeout      time.Duration                                                     // 0 disables idle session rotation
+	Resolver         ContactResolver                                                   // nil disables phone→name resolution
+	BindConversation func(conversationID string, binding *memory.ChannelBinding) error // nil disables conversation binding persistence
+	Attachments      AttachmentConfig                                                  // attachment storage configuration
+	AttachmentStore  *attachments.Store                                                // content-addressed store; nil = legacy copy
+	VisionAnalyzer   VisionAnalyzer                                                    // nil disables vision analysis
+	Registry         *loop.Registry                                                    // loop registry for dashboard visibility
+	EventBus         *events.Bus                                                       // event bus for in-flight events
 }
 
 // Bridge receives Signal messages from the signal-cli client, routes
 // them through the agent loop, and sends responses back via Signal.
 type Bridge struct {
-	client          *Client
-	runner          AgentRunner
-	logger          *slog.Logger
-	rateLimit       int
-	handleTimeout   time.Duration
-	routing         config.SignalRoutingConfig
-	rotator         SessionRotator
-	idleTimeout     time.Duration
-	resolver        ContactResolver
-	attachments     AttachmentConfig
-	attachmentStore *attachments.Store
-	visionAnalyzer  VisionAnalyzer
-	registry        *loop.Registry
-	eventBus        *events.Bus
+	client           *Client
+	runner           AgentRunner
+	logger           *slog.Logger
+	rateLimit        int
+	handleTimeout    time.Duration
+	routing          config.SignalRoutingConfig
+	rotator          SessionRotator
+	idleTimeout      time.Duration
+	resolver         ContactResolver
+	bindConversation func(conversationID string, binding *memory.ChannelBinding) error
+	attachments      AttachmentConfig
+	attachmentStore  *attachments.Store
+	visionAnalyzer   VisionAnalyzer
+	registry         *loop.Registry
+	eventBus         *events.Bus
 
 	mu            sync.Mutex
 	senderTimes   map[string][]time.Time
@@ -174,23 +176,24 @@ func NewBridge(cfg BridgeConfig) *Bridge {
 	}
 
 	return &Bridge{
-		client:          cfg.Client,
-		runner:          cfg.Runner,
-		logger:          logger,
-		rateLimit:       cfg.RateLimit,
-		handleTimeout:   handleTimeout,
-		routing:         cfg.Routing,
-		rotator:         cfg.Rotator,
-		idleTimeout:     cfg.IdleTimeout,
-		resolver:        cfg.Resolver,
-		attachments:     cfg.Attachments,
-		attachmentStore: cfg.AttachmentStore,
-		visionAnalyzer:  cfg.VisionAnalyzer,
-		registry:        cfg.Registry,
-		eventBus:        cfg.EventBus,
-		senderTimes:     make(map[string][]time.Time),
-		lastInboundTS:   make(map[string]lastMessage),
-		senderChans:     make(map[string]chan *Envelope),
+		client:           cfg.Client,
+		runner:           cfg.Runner,
+		logger:           logger,
+		rateLimit:        cfg.RateLimit,
+		handleTimeout:    handleTimeout,
+		routing:          cfg.Routing,
+		rotator:          cfg.Rotator,
+		idleTimeout:      cfg.IdleTimeout,
+		resolver:         cfg.Resolver,
+		bindConversation: cfg.BindConversation,
+		attachments:      cfg.Attachments,
+		attachmentStore:  cfg.AttachmentStore,
+		visionAnalyzer:   cfg.VisionAnalyzer,
+		registry:         cfg.Registry,
+		eventBus:         cfg.EventBus,
+		senderTimes:      make(map[string][]time.Time),
+		lastInboundTS:    make(map[string]lastMessage),
+		senderChans:      make(map[string]chan *Envelope),
 	}
 }
 
@@ -422,10 +425,13 @@ func (b *Bridge) ensureSenderLoop(ctx context.Context, sender string) {
 	// Resolve a display name and trust zone for the loop node.
 	loopName := "signal/" + sanitizePhone(sender)
 	trustZone := "unknown"
-	if b.resolver != nil {
-		if name, zone, ok := b.resolver.ResolvePhone(sender); ok {
-			loopName = "signal/" + sanitizeLoopName(name)
-			trustZone = zone
+	binding := b.resolveBinding(sender)
+	if binding != nil {
+		if binding.ContactName != "" {
+			loopName = "signal/" + sanitizeLoopName(binding.ContactName)
+		}
+		if binding.TrustZone != "" {
+			trustZone = binding.TrustZone
 		}
 	}
 
@@ -469,12 +475,20 @@ func (b *Bridge) ensureSenderLoop(ctx context.Context, sender string) {
 			b.handleMessage(hCtx, env, progressFn)
 			return nil
 		},
-		ParentID: parentID,
+		ParentID:        parentID,
+		FallbackContent: prompts.InteractiveEmptyResponseFallback,
 		Metadata: map[string]string{
 			"subsystem":  "signal",
 			"category":   "channel",
 			"sender":     sender,
 			"trust_zone": trustZone,
+			"contact_id": bindingValue(binding, func(b *memory.ChannelBinding) string { return b.ContactID }),
+			"contact_name": bindingValue(binding, func(b *memory.ChannelBinding) string {
+				return b.ContactName
+			}),
+			"binding_source": bindingValue(binding, func(b *memory.ChannelBinding) string {
+				return b.LinkSource
+			}),
 		},
 	}, loop.Deps{Logger: b.logger, EventBus: b.eventBus})
 	if err != nil {
@@ -537,6 +551,12 @@ func (b *Bridge) handleMessage(ctx context.Context, env *Envelope, progressFn fu
 		}
 	}
 	content := formatMessage(env, attachmentDescs)
+	channelBinding := b.resolveBinding(sender)
+	if b.bindConversation != nil && channelBinding != nil {
+		if err := b.bindConversation(convID, channelBinding); err != nil {
+			log.Warn("failed to persist signal conversation binding", "error", err)
+		}
+	}
 
 	log.Info("signal message received",
 		"message_len", len(env.DataMessage.Message),
@@ -582,14 +602,17 @@ func (b *Bridge) handleMessage(ctx context.Context, env *Envelope, progressFn fu
 		"source": "signal",
 		"sender": sender,
 	})
+	fallbackContent := loop.FallbackContent(ctx)
 
 	req := &agent.Request{
-		ConversationID: convID,
-		Messages:       []agent.Message{{Role: "user", Content: content}},
-		Model:          opts.Model,
-		Hints:          opts.Hints,
-		ExcludeTools:   opts.ExcludeTools,
-		SeedTags:       opts.SeedTags,
+		ConversationID:  convID,
+		ChannelBinding:  channelBinding,
+		Messages:        []agent.Message{{Role: "user", Content: content}},
+		Model:           opts.Model,
+		Hints:           opts.Hints,
+		ExcludeTools:    opts.ExcludeTools,
+		InitialTags:     opts.InitialTags,
+		FallbackContent: fallbackContent,
 	}
 
 	stream := agent.BuildProgressStream(progressFn)
@@ -616,13 +639,19 @@ func (b *Bridge) handleMessage(ctx context.Context, env *Envelope, progressFn fu
 		log.Error("signal agent run failed", "error", err)
 		return
 	}
+	if resp != nil && strings.TrimSpace(resp.Content) == "" && fallbackContent != "" {
+		resp.Content = fallbackContent
+	}
 
 	// Report iteration stats for the loop dashboard.
 	if summary := loop.ReportAgentRun(ctx, loop.AgentRunSummary{
-		RequestID:    resp.RequestID,
-		Model:        resp.Model,
-		InputTokens:  resp.InputTokens,
-		OutputTokens: resp.OutputTokens,
+		RequestID:          resp.RequestID,
+		Model:              resp.Model,
+		InputTokens:        resp.InputTokens,
+		OutputTokens:       resp.OutputTokens,
+		ActiveTags:         append([]string(nil), resp.ActiveTags...),
+		EffectiveTools:     append([]string(nil), resp.EffectiveTools...),
+		LoadedCapabilities: append([]toolcatalog.LoadedCapabilityEntry(nil), resp.LoadedCapabilities...),
 	}); summary != nil {
 		summary["message_len"] = len(content)
 		summary["response_len"] = len(resp.Content)
@@ -697,14 +726,16 @@ func (b *Bridge) handleReaction(ctx context.Context, env *Envelope) {
 		"reaction_emoji":        reaction.Emoji,
 		"target_sent_timestamp": fmt.Sprintf("%d", reaction.TargetSentTimestamp),
 	})
+	fallbackContent := loop.FallbackContent(ctx)
 
 	req := &agent.Request{
-		ConversationID: convID,
-		Messages:       []agent.Message{{Role: "user", Content: content}},
-		Model:          opts.Model,
-		Hints:          opts.Hints,
-		ExcludeTools:   opts.ExcludeTools,
-		SeedTags:       opts.SeedTags,
+		ConversationID:  convID,
+		Messages:        []agent.Message{{Role: "user", Content: content}},
+		Model:           opts.Model,
+		Hints:           opts.Hints,
+		ExcludeTools:    opts.ExcludeTools,
+		InitialTags:     opts.InitialTags,
+		FallbackContent: fallbackContent,
 	}
 
 	resp, err := b.runner.Run(ctx, req, nil)
@@ -725,6 +756,9 @@ func (b *Bridge) handleReaction(ctx context.Context, env *Envelope) {
 	if err != nil {
 		rlog.Error("signal agent run failed (reaction)", "error", err)
 		return
+	}
+	if resp != nil && strings.TrimSpace(resp.Content) == "" && fallbackContent != "" {
+		resp.Content = fallbackContent
 	}
 
 	if agentAlreadySent(resp.ToolsUsed) || resp.Content == "" {
@@ -770,7 +804,7 @@ func (b *Bridge) startTypingRefresh(ctx context.Context, recipient string) conte
 }
 
 func (b *Bridge) requestOptions(sender string, extraHints map[string]string) router.RequestOptions {
-	seed := b.routing.LoopSeed()
+	seed := b.routing.LoopProfile()
 	opts := seed.RequestOptions()
 	if len(extraHints) > 0 {
 		if opts.Hints == nil {
@@ -782,15 +816,43 @@ func (b *Bridge) requestOptions(sender string, extraHints map[string]string) rou
 	}
 
 	if b.resolver != nil {
-		if name, _, ok := b.resolver.ResolvePhone(sender); ok {
+		if binding := b.resolveBinding(sender); binding != nil && binding.ContactName != "" {
 			if opts.Hints == nil {
 				opts.Hints = make(map[string]string, 1)
 			}
-			opts.Hints["sender_name"] = name
+			opts.Hints["sender_name"] = binding.ContactName
 		}
 	}
 
 	return opts
+}
+
+func (b *Bridge) resolveBinding(sender string) *memory.ChannelBinding {
+	binding := (&memory.ChannelBinding{
+		Channel: "signal",
+		Address: sender,
+	}).Normalize()
+	if b == nil || b.resolver == nil {
+		return binding
+	}
+	resolved := b.resolver.ResolveChannelBinding("signal", sender)
+	if resolved == nil {
+		return binding
+	}
+	if resolved.Channel == "" {
+		resolved.Channel = "signal"
+	}
+	if resolved.Address == "" {
+		resolved.Address = sender
+	}
+	return resolved.Normalize()
+}
+
+func bindingValue(binding *memory.ChannelBinding, pick func(*memory.ChannelBinding) string) string {
+	if binding == nil || pick == nil {
+		return ""
+	}
+	return pick(binding)
 }
 
 // allowSender checks whether the sender is within the per-minute rate

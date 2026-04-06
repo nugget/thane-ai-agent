@@ -14,6 +14,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/loop"
 	"github.com/nugget/thane-ai-agent/internal/models"
 	"github.com/nugget/thane-ai-agent/internal/router"
+	"github.com/nugget/thane-ai-agent/internal/toolcatalog"
 )
 
 // --- Test Doubles ---
@@ -44,11 +45,13 @@ func (q *stubLogQuerier) Query(_ logging.QueryParams) ([]logging.LogEntry, error
 
 // stubContentQuerier implements [ContentQuerier] for tests.
 type stubContentQuerier struct {
-	detail *logging.RequestDetail
-	err    error
+	detail        *logging.RequestDetail
+	err           error
+	lastRequestID string
 }
 
-func (q *stubContentQuerier) QueryRequestDetail(_ string) (*logging.RequestDetail, error) {
+func (q *stubContentQuerier) QueryRequestDetail(requestID string) (*logging.RequestDetail, error) {
+	q.lastRequestID = requestID
 	return q.detail, q.err
 }
 
@@ -67,6 +70,7 @@ type stubSystemStatus struct {
 	version       map[string]string
 	modelRegistry *models.RegistrySnapshot
 	routerStats   *router.Stats
+	capCatalog    *toolcatalog.CapabilityCatalogView
 }
 
 func (s *stubSystemStatus) Health() map[string]ServiceHealth { return s.health }
@@ -76,6 +80,9 @@ func (s *stubSystemStatus) ModelRegistry() *models.RegistrySnapshot {
 	return s.modelRegistry
 }
 func (s *stubSystemStatus) RouterStats() *router.Stats { return s.routerStats }
+func (s *stubSystemStatus) CapabilityCatalog() *toolcatalog.CapabilityCatalogView {
+	return s.capCatalog
+}
 
 // --- Tests ---
 
@@ -341,6 +348,17 @@ func TestHandleSystem_Healthy(t *testing.T) {
 				"spark/gpt-oss:20b": {Provider: "ollama", Resource: "spark", UpstreamModel: "gpt-oss:20b", Requests: 3, Successes: 3, AvgLatencyMs: 420, AvgTokensUsed: 1800},
 			},
 		},
+		capCatalog: &toolcatalog.CapabilityCatalogView{
+			Kind: "capability_catalog",
+			ActivationTools: toolcatalog.CapabilityActionTools{
+				Activate:   "activate_capability",
+				Deactivate: "deactivate_capability",
+				List:       "list_loaded_capabilities",
+			},
+			Capabilities: []toolcatalog.CapabilityCatalogEntry{
+				{Tag: "forge", Status: "available", Description: "Forge tools", ToolCount: 12},
+			},
+		},
 	}
 
 	srv := NewWebServer(Config{
@@ -395,6 +413,14 @@ func TestHandleSystem_Healthy(t *testing.T) {
 	}
 	if routerStats["total_requests"] != float64(3) {
 		t.Errorf("total_requests = %v, want 3", routerStats["total_requests"])
+	}
+	capCatalog, ok := body["capability_catalog"].(map[string]any)
+	if !ok {
+		t.Fatal("capability_catalog field missing or not a map")
+	}
+	caps, ok := capCatalog["capabilities"].([]any)
+	if !ok || len(caps) != 1 {
+		t.Fatalf("capability catalog entries = %T len=%d, want 1 entry", capCatalog["capabilities"], len(caps))
 	}
 }
 
@@ -583,5 +609,77 @@ func TestHandleRequestDetail_NoQuerier(t *testing.T) {
 
 	if w.Code != http.StatusServiceUnavailable {
 		t.Errorf("status = %d, want 503 when ContentQuerier is nil", w.Code)
+	}
+}
+
+func TestHandleRequestDetail_ProbeAvailable(t *testing.T) {
+	t.Parallel()
+
+	srv := NewWebServer(Config{
+		LoopRegistry:   &stubRegistry{},
+		EventBus:       events.New(),
+		ContentQuerier: &stubContentQuerier{},
+	})
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	req := httptest.NewRequest("GET", "/api/request-detail/_probe", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", w.Code)
+	}
+	if got := w.Header().Get("X-Request-Detail-Available"); got != "true" {
+		t.Fatalf("header X-Request-Detail-Available = %q, want true", got)
+	}
+}
+
+func TestHandleRequestDetail_ProbeUnavailable(t *testing.T) {
+	t.Parallel()
+
+	srv := newTestServer(&stubRegistry{}, nil, events.New())
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	req := httptest.NewRequest("GET", "/api/request-detail/_probe", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204", w.Code)
+	}
+	if got := w.Header().Get("X-Request-Detail-Available"); got != "false" {
+		t.Fatalf("header X-Request-Detail-Available = %q, want false", got)
+	}
+}
+
+func TestHandleRequestDetail_AllowsLiteralProbeRequestID(t *testing.T) {
+	t.Parallel()
+
+	cq := &stubContentQuerier{
+		detail: &logging.RequestDetail{
+			RequestID: "_probe",
+			Model:     "test-model",
+		},
+	}
+
+	srv := NewWebServer(Config{
+		LoopRegistry:   &stubRegistry{},
+		EventBus:       events.New(),
+		ContentQuerier: cq,
+	})
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	req := httptest.NewRequest("GET", "/api/requests/_probe", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	if cq.lastRequestID != "_probe" {
+		t.Fatalf("queried request id = %q, want _probe", cq.lastRequestID)
 	}
 }

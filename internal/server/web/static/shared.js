@@ -51,7 +51,9 @@ function formatTimeShort(date) {
 }
 
 function timeAgo(date) {
+  if (!(date instanceof Date) || isNaN(date)) return '';
   const diff = Date.now() - date.getTime();
+  if (diff < 0) return 'soon';
   const sec = Math.floor(diff / 1000);
   if (sec < 60) return sec + 's ago';
   const min = Math.floor(sec / 60);
@@ -126,6 +128,11 @@ function truncate(s, max) {
   return s.slice(0, max) + '\u2026';
 }
 
+function formatSchemaToken(value) {
+  if (!value) return '';
+  return String(value).replace(/_/g, ' ');
+}
+
 // formatToolTooltip builds a readable tooltip string for a live tool entry.
 // Fields: tool (name), status ("running"/"done"/"error"), args, result, error.
 function formatToolTooltip(entry) {
@@ -187,11 +194,21 @@ function buildToolCounts(liveTools) {
   return counts;
 }
 
+function countToolCalls(toolsUsed) {
+  if (!toolsUsed) return 0;
+  return Object.values(toolsUsed).reduce((sum, count) => sum + (count || 0), 0);
+}
+
+function countSummarySignals(summary) {
+  if (!summary) return 0;
+  return Object.keys(summary).length;
+}
+
 // ---------------------------------------------------------------------------
 // ID Chip Helpers
 // ---------------------------------------------------------------------------
 
-function makeIDRow(label, value) {
+function makeIDRow(label, value, opts = {}) {
   const row = document.createElement('div');
   row.className = 'id-row';
 
@@ -200,18 +217,17 @@ function makeIDRow(label, value) {
   lbl.textContent = label;
   row.appendChild(lbl);
 
-  row.appendChild(makeIDChip(value));
+  row.appendChild(makeIDChip(value, opts));
   return row;
 }
 
-function makeIDChip(fullID) {
+function makeIDChip(fullID, opts = {}) {
   const chip = document.createElement('span');
-  chip.className = 'id-chip';
+  chip.className = 'id-chip' + (opts.responsive === false ? '' : ' id-chip--responsive');
   chip.title = fullID;
   const txt = document.createElement('span');
   txt.className = 'id-chip-text';
-  // Show first 8 chars (UUID first segment) — full value on hover/click.
-  txt.textContent = fullID.length > 12 ? fullID.slice(0, 8) : fullID;
+  txt.textContent = opts.compact && fullID.length > 12 ? fullID.slice(0, 8) : fullID;
   chip.appendChild(txt);
   chip.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -229,8 +245,9 @@ function makeIDChip(fullID) {
 
 function parseTimestamp(raw) {
   if (!raw) return null;
+  if (typeof raw === 'string' && raw.startsWith('0001-01-01T00:00:00')) return null;
   const date = new Date(raw);
-  if (isNaN(date)) return null;
+  if (isNaN(date) || date.getUTCFullYear() <= 1) return null;
   return date;
 }
 
@@ -561,6 +578,146 @@ function renderModelRegistry(summaryEl, resourcesEl, deploymentsEl, metaEl, regi
   }
 }
 
+function renderSystemRegistries(summaryEl, listEl, metaEl, sys, actions = {}) {
+  if (summaryEl) summaryEl.innerHTML = '';
+  if (listEl) listEl.innerHTML = '';
+  if (metaEl) metaEl.textContent = '';
+  if (!summaryEl && !listEl && !metaEl) return;
+
+  const capabilities = getCapabilityCatalogEntries(sys);
+  const capabilitySummary = summarizeCapabilityCatalog(capabilities);
+  const registry = (sys && sys.model_registry) || {};
+  const resources = Array.isArray(registry.resources) ? registry.resources : [];
+  const deployments = Array.isArray(registry.deployments) ? registry.deployments : [];
+  const readyActions = [
+    typeof actions.toolbox === 'function' ? 'toolbox' : '',
+    typeof actions.models === 'function' ? 'models' : '',
+  ].filter(Boolean);
+
+  if (summaryEl) {
+    summaryEl.appendChild(buildSystemStat('Windows', formatNumber(readyActions.length)));
+    summaryEl.appendChild(buildSystemStat('Capabilities', formatNumber(capabilitySummary.capabilityCount)));
+    summaryEl.appendChild(buildSystemStat('Tools', formatNumber(capabilitySummary.uniqueToolCount)));
+    summaryEl.appendChild(buildSystemStat('Resources', formatNumber(resources.length)));
+    summaryEl.appendChild(buildSystemStat('Deployments', formatNumber(deployments.length)));
+  }
+
+  if (metaEl) {
+    metaEl.textContent = readyActions.length > 0
+      ? 'focused registry windows'
+      : 'registry launchers pending';
+  }
+
+  if (!listEl) return;
+
+  const entries = [
+    {
+      title: 'Toolbox & Capabilities',
+      metric: formatNumber(capabilitySummary.capabilityCount) + ' capabilities',
+      description: 'Runtime-defined capability catalog, tool membership, and operator-facing toolbox inventory.',
+      chips: [
+        buildSystemChip(formatNumber(capabilitySummary.uniqueToolCount) + ' tools', 'config'),
+        capabilitySummary.alwaysActiveCount > 0 ? buildSystemChip(formatNumber(capabilitySummary.alwaysActiveCount) + ' always-on', 'ok') : null,
+        capabilitySummary.discoverableCount > 0 ? buildSystemChip(formatNumber(capabilitySummary.discoverableCount) + ' discoverable', 'warn') : null,
+        capabilitySummary.liveContextCount > 0 ? buildSystemChip(formatNumber(capabilitySummary.liveContextCount) + ' live context', 'ok') : null,
+      ].filter(Boolean),
+      facts: [
+        capabilitySummary.capabilityCount > 0
+          ? 'Browse the current runtime toolbox without relying on config as the source of truth.'
+          : 'Capability catalog is not available yet.',
+      ],
+      actionLabel: 'Open toolbox window',
+      action: typeof actions.toolbox === 'function' ? actions.toolbox : null,
+    },
+    {
+      title: 'Model Registry',
+      metric: formatNumber(deployments.length) + ' deployments',
+      description: 'Routing inventory, provider resources, deployment policy, and observed model runtime attributes.',
+      chips: [
+        buildSystemChip(formatNumber(resources.length) + ' resources', 'resource'),
+        buildSystemChip(formatNumber(deployments.length) + ' deployments', 'provider'),
+        registry.default_model ? buildSystemChip('default ' + registry.default_model, 'config') : null,
+      ].filter(Boolean),
+      facts: [
+        registry.generation
+          ? 'Generation ' + formatNumber(registry.generation) + ' with current routing state and policy overlays.'
+          : 'Model registry state is not available yet.',
+      ],
+      actionLabel: 'Open model registry',
+      action: typeof actions.models === 'function' ? actions.models : null,
+    },
+    {
+      title: 'Scheduled Loops',
+      metric: 'planned',
+      description: 'Future registry window for scheduled loop definitions, cadence, and wake-policy inspection.',
+      chips: [
+        buildSystemChip('coming soon', 'muted'),
+      ],
+      facts: [
+        'This will follow the same focused-window pattern once scheduler registry data is exposed.',
+      ],
+      actionLabel: '',
+      action: null,
+    },
+  ];
+
+  for (const entry of entries) {
+    const item = document.createElement('div');
+    item.className = 'system-item';
+
+    const header = document.createElement('div');
+    header.className = 'system-item__header';
+
+    const title = document.createElement('div');
+    title.className = 'system-item__title';
+    title.textContent = entry.title;
+    header.appendChild(title);
+
+    const metric = document.createElement('div');
+    metric.className = 'system-item__metric';
+    metric.textContent = entry.metric;
+    header.appendChild(metric);
+
+    item.appendChild(header);
+
+    const subtitle = document.createElement('div');
+    subtitle.className = 'system-item__subtitle';
+    subtitle.textContent = entry.description;
+    item.appendChild(subtitle);
+
+    if (entry.chips.length > 0) {
+      const chips = document.createElement('div');
+      chips.className = 'system-item__chips';
+      for (const chip of entry.chips) chips.appendChild(chip);
+      item.appendChild(chips);
+    }
+
+    for (const fact of entry.facts) {
+      const facts = document.createElement('div');
+      facts.className = 'system-item__facts';
+      facts.textContent = fact;
+      item.appendChild(facts);
+    }
+
+    if (entry.action) {
+      const actionsEl = document.createElement('div');
+      actionsEl.className = 'system-item__actions';
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'toggle-btn system-item__button';
+      btn.textContent = entry.actionLabel || 'Open';
+      btn.addEventListener('click', (event) => {
+        event.preventDefault();
+        entry.action();
+      });
+      actionsEl.appendChild(btn);
+      item.appendChild(actionsEl);
+    }
+
+    listEl.appendChild(item);
+  }
+}
+
 function renderSystemInspector(sys, els) {
   if (!sys || !els) return;
 
@@ -595,6 +752,302 @@ function renderSystemInspector(sys, els) {
     sys.model_registry,
     sys.router_stats,
   );
+
+  if (els.capabilitySummary || els.capabilityList || els.capabilityMeta) {
+    const capabilities = getCapabilityCatalogEntries(sys);
+    renderCapabilityCatalog(
+      els.capabilitySummary,
+      els.capabilityList,
+      els.capabilityMeta,
+      capabilities,
+      (sys.capability_catalog && sys.capability_catalog.activation_tools) || null,
+    );
+  }
+
+  if (els.registriesSummary || els.registriesList || els.registriesMeta) {
+    renderSystemRegistries(
+      els.registriesSummary,
+      els.registriesList,
+      els.registriesMeta,
+      sys,
+      els.registryActions || {},
+    );
+  }
+}
+
+function cloneTokenList(values) {
+  if (!Array.isArray(values)) return [];
+  return Array.from(new Set(values.filter(Boolean).map((value) => String(value)))).sort((a, b) => a.localeCompare(b));
+}
+
+function cloneCountMap(raw) {
+  if (!raw || typeof raw !== 'object') return {};
+  const out = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (!key) continue;
+    const count = Number(value || 0);
+    if (Number.isFinite(count) && count > 0) out[key] = count;
+  }
+  return out;
+}
+
+function readToolingArray(raw, snakeKey, camelKey) {
+  if (!raw || typeof raw !== 'object') return [];
+  if (Array.isArray(raw[snakeKey])) return cloneTokenList(raw[snakeKey]);
+  if (Array.isArray(raw[camelKey])) return cloneTokenList(raw[camelKey]);
+  return [];
+}
+
+function normalizeCapabilityCatalogEntry(entry) {
+  if (!entry || typeof entry !== 'object') return null;
+  const tag = String(entry.tag || entry.Tag || '').trim();
+  if (!tag) return null;
+  const status = String(entry.status || entry.Status || 'available').trim() || 'available';
+  const description = String(entry.description || entry.Description || '').trim();
+  const toolCount = Number(entry.tool_count || entry.toolCount || 0);
+  const tools = cloneTokenList(entry.tools || entry.Tools || []);
+  const context = entry.context || entry.Context || null;
+  return {
+    tag,
+    status,
+    description,
+    toolCount: Number.isFinite(toolCount) ? toolCount : 0,
+    tools,
+    alwaysActive: !!(entry.always_active || entry.alwaysActive),
+    adHoc: !!(entry.ad_hoc || entry.adHoc),
+    context: context && typeof context === 'object'
+      ? {
+          kbArticles: Number(context.kb_articles || context.kbArticles || 0),
+          live: !!context.live,
+        }
+      : null,
+  };
+}
+
+function normalizeLoadedCapabilityEntry(entry) {
+  if (!entry || typeof entry !== 'object') return null;
+  const tag = String(entry.tag || entry.Tag || '').trim();
+  if (!tag) return null;
+  const description = String(entry.description || entry.Description || '').trim();
+  const toolCount = Number(entry.tool_count || entry.toolCount || 0);
+  const context = entry.context || entry.Context || null;
+  return {
+    tag,
+    description,
+    toolCount: Number.isFinite(toolCount) ? toolCount : 0,
+    alwaysActive: !!(entry.always_active || entry.alwaysActive),
+    adHoc: !!(entry.ad_hoc || entry.adHoc),
+    context: context && typeof context === 'object'
+      ? {
+          kbArticles: Number(context.kb_articles || context.kbArticles || 0),
+          live: !!context.live,
+        }
+      : null,
+  };
+}
+
+function normalizeLoadedCapabilities(entries, loadedTags) {
+  const result = [];
+  const seen = new Set();
+  for (const entry of Array.isArray(entries) ? entries : []) {
+    const normalized = normalizeLoadedCapabilityEntry(entry);
+    if (!normalized || seen.has(normalized.tag)) continue;
+    seen.add(normalized.tag);
+    result.push(normalized);
+  }
+  for (const tag of cloneTokenList(loadedTags)) {
+    if (seen.has(tag)) continue;
+    seen.add(tag);
+    result.push({ tag, description: '', toolCount: 0, alwaysActive: false, adHoc: false, context: null });
+  }
+  result.sort((a, b) => a.tag.localeCompare(b.tag));
+  return result;
+}
+
+function normalizeTooling(raw, fallback = {}) {
+  const configuredTags = cloneTokenList([
+    ...readToolingArray(raw, 'configured_tags', 'configuredTags'),
+    ...cloneTokenList(fallback.configuredTags || fallback.configured_tags || []),
+  ]);
+  const loadedTags = cloneTokenList([
+    ...readToolingArray(raw, 'loaded_tags', 'loadedTags'),
+    ...cloneTokenList(fallback.loadedTags || fallback.loaded_tags || []),
+  ]);
+  const effectiveTools = cloneTokenList([
+    ...readToolingArray(raw, 'effective_tools', 'effectiveTools'),
+    ...cloneTokenList(fallback.effectiveTools || fallback.effective_tools || []),
+  ]);
+  const excludedTools = cloneTokenList([
+    ...readToolingArray(raw, 'excluded_tools', 'excludedTools'),
+    ...cloneTokenList(fallback.excludedTools || fallback.excluded_tools || []),
+  ]);
+  const rawLoaded = raw && typeof raw === 'object'
+    ? (raw.loaded_capabilities || raw.loadedCapabilities || [])
+    : (fallback.loadedCapabilities || fallback.loaded_capabilities || []);
+  return {
+    configuredTags,
+    loadedTags,
+    loadedCapabilities: normalizeLoadedCapabilities(rawLoaded, loadedTags),
+    effectiveTools,
+    excludedTools,
+    toolsUsed: Object.assign(
+      {},
+      cloneCountMap(fallback.toolsUsed || fallback.tools_used || null),
+      cloneCountMap(raw && typeof raw === 'object' ? (raw.tools_used || raw.toolsUsed || null) : null),
+    ),
+  };
+}
+
+function getCapabilityCatalogEntries(system) {
+  const catalog = system && system.capability_catalog;
+  if (!catalog || !Array.isArray(catalog.capabilities)) return [];
+  return catalog.capabilities
+    .map((entry) => normalizeCapabilityCatalogEntry(entry))
+    .filter(Boolean)
+    .sort((a, b) => a.tag.localeCompare(b.tag));
+}
+
+function summarizeCapabilityCatalog(entries) {
+  const valid = Array.isArray(entries) ? entries : [];
+  const uniqueTools = new Set();
+  let alwaysActiveCount = 0;
+  let discoverableCount = 0;
+  let liveContextCount = 0;
+  for (const entry of valid) {
+    if (entry.alwaysActive) alwaysActiveCount++;
+    if (entry.status === 'discoverable' || entry.adHoc) discoverableCount++;
+    if (entry.context && entry.context.live) liveContextCount++;
+    for (const tool of entry.tools || []) uniqueTools.add(tool);
+  }
+  return {
+    capabilityCount: valid.length,
+    uniqueToolCount: uniqueTools.size,
+    alwaysActiveCount,
+    discoverableCount,
+    liveContextCount,
+  };
+}
+
+function describeCapabilityEntry(entry) {
+  if (!entry) return '';
+  const parts = [];
+  if (entry.description) parts.push(entry.description);
+  const meta = [];
+  if (entry.toolCount > 0) meta.push(formatNumber(entry.toolCount) + ' tools');
+  if (entry.alwaysActive) meta.push('always active');
+  else if (entry.status) meta.push(formatSchemaToken(entry.status));
+  if (entry.context && entry.context.kbArticles > 0) meta.push(formatNumber(entry.context.kbArticles) + ' KB');
+  if (entry.context && entry.context.live) meta.push('live context');
+  if (meta.length > 0) parts.push(meta.join(' · '));
+  return parts.join(' — ');
+}
+
+function makeIterationCapabilityGroup(label, entries, className = 'tag-chip tag-chip--active') {
+  const valid = Array.isArray(entries) ? entries.filter((entry) => entry && entry.tag) : [];
+  if (valid.length === 0) return null;
+  const group = document.createElement('div');
+  group.className = 'iter-card__scope-group';
+
+  const labelEl = document.createElement('div');
+  labelEl.className = 'iter-card__scope-label';
+  labelEl.textContent = label;
+  group.appendChild(labelEl);
+
+  const chips = document.createElement('div');
+  chips.className = 'iter-card__scope-chips';
+  for (const entry of valid) {
+    const chip = document.createElement('span');
+    chip.className = className;
+    chip.textContent = entry.tag;
+    const desc = describeCapabilityEntry(entry);
+    if (desc) chip.title = desc;
+    chips.appendChild(chip);
+  }
+  group.appendChild(chips);
+  return group;
+}
+
+function renderCapabilityCatalog(summaryEl, listEl, metaEl, entries, activationTools) {
+  if (summaryEl) summaryEl.innerHTML = '';
+  if (listEl) listEl.innerHTML = '';
+  if (metaEl) metaEl.textContent = '';
+
+  if (!summaryEl && !listEl && !metaEl) return;
+
+  const valid = Array.isArray(entries) ? entries : [];
+  const summary = summarizeCapabilityCatalog(valid);
+
+  if (summaryEl) {
+    if (valid.length === 0) {
+      summaryEl.appendChild(buildSystemEmpty('Capability catalog not available'));
+    } else {
+      summaryEl.appendChild(buildSystemStat('Capabilities', formatNumber(summary.capabilityCount)));
+      summaryEl.appendChild(buildSystemStat('Tools', formatNumber(summary.uniqueToolCount)));
+      summaryEl.appendChild(buildSystemStat('Always-on', formatNumber(summary.alwaysActiveCount)));
+      summaryEl.appendChild(buildSystemStat('Discoverable', formatNumber(summary.discoverableCount)));
+      summaryEl.appendChild(buildSystemStat('Live context', formatNumber(summary.liveContextCount)));
+    }
+  }
+
+  if (metaEl) {
+    const actionNames = [];
+    if (activationTools && activationTools.activate) actionNames.push(activationTools.activate);
+    if (activationTools && activationTools.deactivate) actionNames.push(activationTools.deactivate);
+    if (activationTools && activationTools.list) actionNames.push(activationTools.list);
+    metaEl.textContent = actionNames.length > 0 ? actionNames.join(' · ') : '';
+  }
+
+  if (!listEl) return;
+  if (valid.length === 0) {
+    listEl.appendChild(buildSystemEmpty('No capabilities registered'));
+    return;
+  }
+
+  for (const entry of valid) {
+    const item = document.createElement('div');
+    item.className = 'system-item';
+
+    const header = document.createElement('div');
+    header.className = 'system-item__header';
+
+    const title = document.createElement('div');
+    title.className = 'system-item__title';
+    title.textContent = entry.tag;
+    header.appendChild(title);
+
+    const side = document.createElement('div');
+    side.className = 'system-item__metric';
+    side.textContent = formatNumber(entry.toolCount) + ' tools';
+    header.appendChild(side);
+    item.appendChild(header);
+
+    const subtitle = document.createElement('div');
+    subtitle.className = 'system-item__subtitle';
+    subtitle.textContent = entry.description || 'Capability description pending';
+    item.appendChild(subtitle);
+
+    const chips = document.createElement('div');
+    chips.className = 'system-item__chips';
+    chips.appendChild(buildSystemChip(entry.status || 'available', entry.alwaysActive ? 'ok' : entry.adHoc ? 'warn' : 'config'));
+    if (entry.alwaysActive) chips.appendChild(buildSystemChip('always-on', 'ok'));
+    if (entry.context && entry.context.live) chips.appendChild(buildSystemChip('live context', 'ok'));
+    if (entry.context && entry.context.kbArticles > 0) chips.appendChild(buildSystemChip(formatNumber(entry.context.kbArticles) + ' KB', 'config'));
+    item.appendChild(chips);
+
+    if (entry.tools && entry.tools.length > 0) {
+      const tools = document.createElement('div');
+      tools.className = 'iter-card__scope-chips';
+      for (const tool of entry.tools) {
+        const chip = document.createElement('span');
+        chip.className = 'iter-card__tool-item iter-card__tool-item--scope';
+        chip.textContent = tool;
+        tools.appendChild(chip);
+      }
+      item.appendChild(tools);
+    }
+
+    listEl.appendChild(item);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -779,6 +1232,137 @@ function buildLogDetail(td, entry) {
 
 // buildLiveCard creates the green-bordered card for a currently-running
 // iteration. Caller passes the loop data object.
+function makeIterationFact(label, value) {
+  if (value === null || value === undefined || value === '') return null;
+  const cell = document.createElement('div');
+  cell.className = 'iter-card__fact';
+
+  const valueEl = document.createElement('div');
+  valueEl.className = 'iter-card__fact-value';
+  valueEl.textContent = String(value);
+  cell.appendChild(valueEl);
+
+  const labelEl = document.createElement('div');
+  labelEl.className = 'iter-card__fact-label';
+  labelEl.textContent = String(label);
+  cell.appendChild(labelEl);
+
+  return cell;
+}
+
+function makeIterationFacts(items) {
+  const valid = (items || []).filter((item) => item && item.value !== null && item.value !== undefined && item.value !== '');
+  if (valid.length === 0) return null;
+  const grid = document.createElement('div');
+  grid.className = 'iter-card__facts';
+  for (const item of valid) {
+    const fact = makeIterationFact(item.label, item.value);
+    if (fact) grid.appendChild(fact);
+  }
+  return grid;
+}
+
+function makeIterationChipGroup(label, values, className) {
+  const valid = Array.isArray(values) ? values.filter(Boolean) : [];
+  if (valid.length === 0) return null;
+  const group = document.createElement('div');
+  group.className = 'iter-card__scope-group';
+
+  const labelEl = document.createElement('div');
+  labelEl.className = 'iter-card__scope-label';
+  labelEl.textContent = label;
+  group.appendChild(labelEl);
+
+  const chips = document.createElement('div');
+  chips.className = 'iter-card__scope-chips';
+  for (const value of valid) {
+    const chip = document.createElement('span');
+    chip.className = className;
+    chip.textContent = value;
+    chips.appendChild(chip);
+  }
+  group.appendChild(chips);
+  return group;
+}
+
+function makeIterationScopePanel(items) {
+  const valid = (items || []).filter(Boolean);
+  if (valid.length === 0) return null;
+  const panel = document.createElement('div');
+  panel.className = 'iter-card__scope';
+  for (const item of valid) {
+    const group = item.capabilities
+      ? makeIterationCapabilityGroup(item.label, item.capabilities, item.className)
+      : makeIterationChipGroup(item.label, item.values, item.className);
+    if (group) panel.appendChild(group);
+  }
+  return panel.childElementCount > 0 ? panel : null;
+}
+
+function buildPastIterationSummary(snap, handlerOnly) {
+  const toolCalls = countToolCalls(snap.tools_used);
+  const summarySignals = countSummarySignals(snap.summary);
+  const bits = [];
+  if (snap.error) {
+    bits.push('Turn ended with an issue' + (snap.elapsed_ms ? ' after ' + formatDuration(snap.elapsed_ms) : ''));
+  } else if (handlerOnly) {
+    bits.push('Handler pass completed cleanly' + (snap.elapsed_ms ? ' in ' + formatDuration(snap.elapsed_ms) : ''));
+  } else {
+    bits.push('Model turn completed cleanly' + (snap.elapsed_ms ? ' in ' + formatDuration(snap.elapsed_ms) : ''));
+  }
+  if (snap.model) bits.push('on ' + shortModelName(snap.model));
+  if (!handlerOnly && (snap.input_tokens || snap.output_tokens)) {
+    bits.push(formatTokens(snap.input_tokens || 0) + ' in / ' + formatTokens(snap.output_tokens || 0) + ' out');
+  }
+  if (toolCalls > 0) {
+    bits.push(toolCalls + ' tool call' + (toolCalls === 1 ? '' : 's'));
+  }
+  if (handlerOnly && summarySignals > 0) {
+    bits.push(summarySignals + ' reported signal' + (summarySignals === 1 ? '' : 's'));
+  }
+  return bits.join(' · ');
+}
+
+function buildPastIterationHeaderTitle(snap, handlerOnly) {
+  const bits = [];
+  if (snap.request_id) bits.push('req ' + shortID(snap.request_id));
+  if (snap.model) bits.push(shortModelName(snap.model));
+  if (handlerOnly && bits.length === 0) bits.push('handler snapshot');
+  if (bits.length === 0) bits.push('recent turn');
+  return bits.join(' · ');
+}
+
+function buildPastIterationStatusLabel(snap, handlerOnly) {
+  if (snap.error) return 'Issue';
+  if (snap.supervisor) return 'Supervisor';
+  if (handlerOnly) return 'Handler';
+  return 'Turn';
+}
+
+function buildPastIterationHealth(snap) {
+  if (snap.error) return 'issue';
+  return 'clean';
+}
+
+function buildAggregateStat(label, value, opts = {}) {
+  if (value === null || value === undefined || value === '') return null;
+  const item = document.createElement('div');
+  item.className = 'agg-stat' + (opts.emphasis ? ' agg-stat--emphasis' : '');
+
+  const valueEl = document.createElement('div');
+  valueEl.className = 'agg-stat__value';
+  valueEl.textContent = String(value);
+  if (opts.title) valueEl.title = opts.title;
+  item.appendChild(valueEl);
+
+  const labelEl = document.createElement('div');
+  labelEl.className = 'agg-stat__label';
+  labelEl.textContent = String(label);
+  item.appendChild(labelEl);
+
+  return item;
+}
+
 function buildLiveCard(loop) {
   const card = document.createElement('div');
   card.className = 'iter-card iter-card--live' + (loop._supervisor ? ' iter-card--supervisor' : '');
@@ -811,13 +1395,49 @@ function buildLiveCard(loop) {
   header.appendChild(model);
   card.appendChild(header);
 
+  const ctx = loop._llmContext;
+  const liveRequestID = loop._currentRequestID || (ctx && ctx.request_id) || '';
+  const liveTooling = normalizeTooling(ctx && ctx.tooling, {
+    configuredTags: loop.tooling && loop.tooling.configured_tags,
+    loadedTags: Array.isArray(ctx && ctx.active_tags) && ctx.active_tags.length > 0
+      ? ctx.active_tags
+      : (Array.isArray(loop.active_tags) ? loop.active_tags : []),
+    effectiveTools: Array.isArray(ctx && ctx.effective_tools) ? ctx.effective_tools : [],
+    excludedTools: loop.tooling && loop.tooling.excluded_tools,
+  });
+  const activeTags = liveTooling.loadedTags;
+  const loadedCapabilities = liveTooling.loadedCapabilities;
+  const effectiveTools = liveTooling.effectiveTools;
+  const summary = document.createElement('div');
+  summary.className = 'iter-card__summary-line';
+  const summaryBits = [];
+  const activeToolCalls = loop._liveTools ? loop._liveTools.length : 0;
+  if (activeToolCalls > 0) {
+    summaryBits.push('Current turn has ' + activeToolCalls + ' active tool call' + (activeToolCalls === 1 ? '' : 's'));
+  } else if (loop._liveModel) {
+    summaryBits.push('Current turn is sampling on ' + shortModelName(loop._liveModel));
+  } else {
+    summaryBits.push('Current turn is active');
+  }
+  if (effectiveTools.length > 0) {
+    summaryBits.push(effectiveTools.length + ' tools in scope');
+  }
+  if (loadedCapabilities.length > 0) {
+    summaryBits.push(loadedCapabilities.length + ' capabilities loaded');
+  }
+  if (ctx && ctx.intent) summaryBits.push(ctx.intent.replace(/_/g, ' '));
+  if (ctx && ctx.reasoning) summaryBits.push(ctx.reasoning);
+  summary.textContent = summaryBits.join(' · ');
+  card.appendChild(summary);
+
   // Context meter (if we have context info).
-  if (loop.context_window && loop.last_input_tokens) {
-    const pct = Math.min(100, (loop.last_input_tokens / loop.context_window) * 100);
+  const contextNumerator = (ctx && ctx.est_tokens) || loop.last_input_tokens || 0;
+  if (loop.context_window && contextNumerator) {
+    const pct = Math.min(100, (contextNumerator / loop.context_window) * 100);
     const meter = document.createElement('div');
     meter.className = 'context-meter';
     meter.innerHTML =
-      '<span class="context-meter__label">Context</span>' +
+      '<span class="context-meter__label">Context load</span>' +
       '<div class="context-meter__track">' +
         '<div class="context-meter__fill' +
         (pct >= 80 ? ' context-meter__fill--crit' : pct >= 50 ? ' context-meter__fill--warn' : '') +
@@ -828,7 +1448,6 @@ function buildLiveCard(loop) {
   }
 
   // LLM call context line (from loop_llm_start enrichment).
-  const ctx = loop._llmContext;
   if (ctx && (ctx.est_tokens || ctx.messages)) {
     const info = document.createElement('div');
     info.className = 'iter-card__llm-context';
@@ -842,6 +1461,45 @@ function buildLiveCard(loop) {
     if (ctx.reasoning) info.title = ctx.reasoning;
     card.appendChild(info);
   }
+
+  const liveFacts = makeIterationFacts([
+    { label: 'Turn', value: '#' + ((loop.iterations || 0) + 1) },
+    { label: 'Request', value: liveRequestID ? shortID(liveRequestID) : '' },
+    { label: 'Model', value: loop._liveModel ? shortModelName(loop._liveModel) : '' },
+    { label: 'Messages', value: ctx && ctx.messages ? formatNumber(ctx.messages) : '' },
+    { label: 'Estimated context', value: ctx && ctx.est_tokens ? formatTokens(ctx.est_tokens) : '' },
+    { label: 'Active tools', value: activeToolCalls > 0 ? formatNumber(activeToolCalls) : (ctx && ctx.tools ? formatNumber(ctx.tools) : '') },
+    { label: 'Tool surface', value: effectiveTools.length > 0 ? formatNumber(effectiveTools.length) : '' },
+    { label: 'Loaded capabilities', value: loadedCapabilities.length > 0 ? loadedCapabilities.map((entry) => entry.tag).join(', ') : '' },
+    { label: 'Complexity', value: ctx && ctx.complexity ? ctx.complexity : '' },
+  ]);
+  if (liveFacts) card.appendChild(liveFacts);
+
+  if (liveRequestID && typeof window.onRequestChipClick === 'function') {
+    const reqChip = document.createElement('span');
+    reqChip.className = 'log-id-chip log-id-chip--clickable';
+    reqChip.textContent = 'req:' + shortID(liveRequestID);
+    reqChip.title = 'Click to inspect request\n' + liveRequestID;
+    reqChip.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (e.shiftKey) {
+        navigator.clipboard.writeText(liveRequestID);
+        return;
+      }
+      window.onRequestChipClick(liveRequestID);
+    });
+    card.appendChild(reqChip);
+  }
+
+  const liveScope = makeIterationScopePanel([
+    loadedCapabilities.length > 0
+      ? { label: 'Loaded capabilities', capabilities: loadedCapabilities, className: 'tag-chip tag-chip--active' }
+      : null,
+    effectiveTools.length > 0
+      ? { label: 'Tool surface', values: effectiveTools, className: 'iter-card__tool-item iter-card__tool-item--scope' }
+      : null,
+  ]);
+  if (liveScope) card.appendChild(liveScope);
 
   // Live tool list.
   const tools = loop._liveTools || [];
@@ -892,13 +1550,16 @@ function buildPastCard(snap, handlerOnly, idx, startExpanded) {
   const header = document.createElement('div');
   header.className = 'iter-card__header';
 
-  const num = document.createElement('span');
-  num.className = 'iter-card__number';
-  num.textContent = isError ? '\u2717' : '#' + (snap.number || '?');
+  const status = document.createElement('span');
+  status.className = 'iter-card__status-pill'
+    + (isError ? ' iter-card__status-pill--error' : '')
+    + (snap.supervisor ? ' iter-card__status-pill--supervisor' : '')
+    + (!isError && !snap.supervisor ? ' iter-card__status-pill--ok' : '');
+  status.textContent = buildPastIterationStatusLabel(snap, handlerOnly);
 
-  const model = document.createElement('span');
-  model.className = 'iter-card__model';
-  model.textContent = snap.model ? shortModelName(snap.model) : (handlerOnly ? 'handler' : '');
+  const title = document.createElement('span');
+  title.className = 'iter-card__title';
+  title.textContent = buildPastIterationHeaderTitle(snap, handlerOnly);
 
   const dur = document.createElement('span');
   dur.className = 'iter-card__duration';
@@ -908,8 +1569,8 @@ function buildPastCard(snap, handlerOnly, idx, startExpanded) {
   chevron.className = 'iter-card__chevron';
   chevron.textContent = startExpanded ? '\u25be' : '\u25b8';
 
-  header.appendChild(num);
-  header.appendChild(model);
+  header.appendChild(status);
+  header.appendChild(title);
   const spacer = document.createElement('span');
   spacer.className = 'iter-card__spacer';
   header.appendChild(spacer);
@@ -926,10 +1587,42 @@ function buildPastCard(snap, handlerOnly, idx, startExpanded) {
   header.appendChild(chevron);
   card.appendChild(header);
 
+  const preview = buildPastIterationSummary(snap, handlerOnly);
+  if (preview) {
+    const previewEl = document.createElement('div');
+    previewEl.className = 'iter-card__preview';
+    previewEl.textContent = preview;
+    card.appendChild(previewEl);
+  }
+
   // Body (hidden by default, toggled on click).
   const body = document.createElement('div');
   body.className = 'iter-card__body';
   body.hidden = !startExpanded;
+
+  const toolCalls = countToolCalls(snap.tools_used);
+  const summarySignals = countSummarySignals(snap.summary);
+  const snapTooling = normalizeTooling(snap.tooling, {
+    loadedTags: Array.isArray(snap.active_tags) ? snap.active_tags : [],
+    effectiveTools: Array.isArray(snap.effective_tools) ? snap.effective_tools : [],
+    toolsUsed: snap.tools_used || null,
+  });
+  const activeTags = snapTooling.loadedTags;
+  const loadedCapabilities = snapTooling.loadedCapabilities;
+  const effectiveTools = snapTooling.effectiveTools;
+  const facts = makeIterationFacts([
+    { label: 'Health', value: buildPastIterationHealth(snap) },
+    { label: 'Request', value: snap.request_id ? shortID(snap.request_id) : '' },
+    { label: 'Duration', value: snap.elapsed_ms ? formatDuration(snap.elapsed_ms) : '' },
+    { label: 'Tool calls', value: toolCalls > 0 ? formatNumber(toolCalls) : '' },
+    { label: 'Tool surface', value: effectiveTools.length > 0 ? formatNumber(effectiveTools.length) : '' },
+    { label: 'Loaded capabilities', value: loadedCapabilities.length > 0 ? loadedCapabilities.map((entry) => entry.tag).join(', ') : '' },
+    !handlerOnly ? { label: 'Input tokens', value: snap.input_tokens ? formatTokens(snap.input_tokens) : '' } : { label: 'Handler signals', value: summarySignals > 0 ? formatNumber(summarySignals) : '' },
+    !handlerOnly ? { label: 'Output tokens', value: snap.output_tokens ? formatTokens(snap.output_tokens) : '' } : { label: 'When', value: snap.completed_at ? timeAgo(new Date(snap.completed_at)) : '' },
+    !handlerOnly ? { label: 'Context window', value: snap.context_window ? formatNumber(snap.context_window) : '' } : null,
+    !handlerOnly ? { label: 'When', value: snap.completed_at ? timeAgo(new Date(snap.completed_at)) : '' } : null,
+  ]);
+  if (facts) body.appendChild(facts);
 
   // Token info (skip for handler-only).
   if (!handlerOnly && (snap.input_tokens || snap.output_tokens)) {
@@ -956,6 +1649,16 @@ function buildPastCard(snap, handlerOnly, idx, startExpanded) {
     });
     body.appendChild(reqChip);
   }
+
+  const pastScope = makeIterationScopePanel([
+    loadedCapabilities.length > 0
+      ? { label: 'Loaded capabilities', capabilities: loadedCapabilities, className: 'tag-chip tag-chip--active' }
+      : null,
+    effectiveTools.length > 0
+      ? { label: 'Tool surface', values: effectiveTools, className: 'iter-card__tool-item iter-card__tool-item--scope' }
+      : null,
+  ]);
+  if (pastScope) body.appendChild(pastScope);
 
   // Tool chips.
   const toolsUsed = snap.tools_used;
@@ -1122,6 +1825,7 @@ function clearLiveTelemetry(loop) {
   loop._liveTools = [];
   loop._liveModel = '';
   loop._llmContext = null;
+  loop._currentRequestID = '';
 }
 
 // ---------------------------------------------------------------------------
@@ -1155,6 +1859,7 @@ function applyLoopEventToLoop(evt, ctx) {
       loop._supervisor = !!d.supervisor;
       loop.attempts = d.attempt || loop.attempts;
       loop._currentConvID = d.conversation_id || null;
+      loop._currentRequestID = d.request_id || '';
       ctx.sleepTimers.delete(ctx.loopId);
       loop._liveTools = [];
       loop._liveModel = '';
@@ -1174,6 +1879,23 @@ function applyLoopEventToLoop(evt, ctx) {
       if (loop._supervisor) loop.last_supervisor_iter = loop.iterations;
       loop._supervisor = false;
 
+      const tooling = normalizeTooling(d.tooling, {
+        configuredTags: loop.tooling && loop.tooling.configured_tags,
+        loadedTags: Array.isArray(d.active_tags) ? d.active_tags : [],
+        effectiveTools: Array.isArray(d.effective_tools) ? d.effective_tools : [],
+        excludedTools: loop.tooling && loop.tooling.excluded_tools,
+        toolsUsed: d.tools_used || null,
+      });
+      loop.active_tags = tooling.loadedTags.slice();
+      loop.tooling = {
+        configured_tags: tooling.configuredTags.slice(),
+        loaded_tags: tooling.loadedTags.slice(),
+        loaded_capabilities: tooling.loadedCapabilities.slice(),
+        effective_tools: tooling.effectiveTools.slice(),
+        excluded_tools: tooling.excludedTools.slice(),
+        tools_used: Object.keys(tooling.toolsUsed).length > 0 ? tooling.toolsUsed : null,
+      };
+
       const delegateCalls = extractDelegateCalls(loop._liveTools);
       const snap = {
         number: loop.iterations,
@@ -1183,7 +1905,17 @@ function applyLoopEventToLoop(evt, ctx) {
         input_tokens: d.input_tokens || 0,
         output_tokens: d.output_tokens || 0,
         context_window: d.context_window || 0,
-        tools_used: d.tools_used || buildToolCounts(loop._liveTools),
+        tools_used: Object.keys(tooling.toolsUsed).length > 0 ? tooling.toolsUsed : buildToolCounts(loop._liveTools),
+        effective_tools: tooling.effectiveTools.length > 0 ? tooling.effectiveTools.slice() : null,
+        active_tags: tooling.loadedTags.length > 0 ? tooling.loadedTags.slice() : null,
+        tooling: {
+          configured_tags: tooling.configuredTags.slice(),
+          loaded_tags: tooling.loadedTags.slice(),
+          loaded_capabilities: tooling.loadedCapabilities.slice(),
+          effective_tools: tooling.effectiveTools.slice(),
+          excluded_tools: tooling.excludedTools.slice(),
+          tools_used: Object.keys(tooling.toolsUsed).length > 0 ? tooling.toolsUsed : null,
+        },
         elapsed_ms: d.elapsed_ms || 0,
         supervisor: loop._lastSupervisor || false,
         started_at: loop._iterStartTs ? new Date(loop._iterStartTs).toISOString() : evt.ts,
@@ -1212,20 +1944,53 @@ function applyLoopEventToLoop(evt, ctx) {
           }
         }
       }
-      // Signal that active capabilities may have changed so the
-      // caller can refetch loop status for updated active_tags.
-      if (d.tool === 'activate_capability' || d.tool === 'deactivate_capability' ||
-          d.tool === 'activate_lens' || d.tool === 'deactivate_lens') {
-        return { capabilityChanged: true };
+      if (d.tooling) {
+        const tooling = normalizeTooling(d.tooling, {
+          configuredTags: loop.tooling && loop.tooling.configured_tags,
+          loadedTags: Array.isArray(d.active_tags) ? d.active_tags : (Array.isArray(loop.active_tags) ? loop.active_tags : []),
+          effectiveTools: Array.isArray(d.effective_tools) ? d.effective_tools : [],
+          excludedTools: loop.tooling && loop.tooling.excluded_tools,
+        });
+        loop.active_tags = tooling.loadedTags.slice();
+        loop.tooling = {
+          configured_tags: tooling.configuredTags.slice(),
+          loaded_tags: tooling.loadedTags.slice(),
+          loaded_capabilities: tooling.loadedCapabilities.slice(),
+          effective_tools: tooling.effectiveTools.slice(),
+          excluded_tools: tooling.excludedTools.slice(),
+          tools_used: Object.keys(tooling.toolsUsed).length > 0 ? tooling.toolsUsed : null,
+        };
+        if (!loop._llmContext) loop._llmContext = {};
+        loop._llmContext.tooling = loop.tooling;
+        loop._llmContext.active_tags = tooling.loadedTags.slice();
+        loop._llmContext.effective_tools = tooling.effectiveTools.slice();
       }
       return null;
 
     case 'loop_llm_start':
       loop._liveModel = d.model || '';
+      loop._currentRequestID = d.request_id || loop._currentRequestID || '';
+      const liveTooling = normalizeTooling(d.tooling, {
+        configuredTags: loop.tooling && loop.tooling.configured_tags,
+        loadedTags: Array.isArray(d.active_tags) ? d.active_tags : (Array.isArray(loop.active_tags) ? loop.active_tags : []),
+        effectiveTools: Array.isArray(d.effective_tools) ? d.effective_tools : [],
+        excludedTools: loop.tooling && loop.tooling.excluded_tools,
+      });
       loop._llmContext = {
+        request_id: d.request_id || '',
         est_tokens: d.est_tokens || 0,
         messages: d.messages || 0,
         tools: d.tools || 0,
+        effective_tools: liveTooling.effectiveTools.slice(),
+        active_tags: liveTooling.loadedTags.slice(),
+        tooling: {
+          configured_tags: liveTooling.configuredTags.slice(),
+          loaded_tags: liveTooling.loadedTags.slice(),
+          loaded_capabilities: liveTooling.loadedCapabilities.slice(),
+          effective_tools: liveTooling.effectiveTools.slice(),
+          excluded_tools: liveTooling.excludedTools.slice(),
+          tools_used: Object.keys(liveTooling.toolsUsed).length > 0 ? liveTooling.toolsUsed : null,
+        },
         iteration: d.iteration,
         complexity: d.complexity || '',
         intent: d.intent || '',
@@ -1236,6 +2001,7 @@ function applyLoopEventToLoop(evt, ctx) {
 
     case 'loop_llm_response':
       loop._liveModel = d.model || '';
+      loop._currentRequestID = d.request_id || loop._currentRequestID || '';
       if (!loop._iterStartTs) loop._iterStartTs = Date.now();
       return null;
 
@@ -1283,22 +2049,56 @@ function applyLoopEventToLoop(evt, ctx) {
 // renderAggregates builds the one-line stats summary (iterations, tokens,
 // age, last error) into the given DOM element.
 function renderAggregates(loop, el) {
-  const parts = [];
-  // Delegate nodes track iterations via their completion event, not
-  // the loop counter (which is never incremented for synthetic nodes).
+  el.innerHTML = '';
   const iter = loop._delegate
     ? (loop._delegateIterations || 0)
     : (loop.iterations || 0);
   const att = loop.attempts || 0;
-  parts.push(formatNumber(iter) + ' iter');
-  if (!loop._delegate && att !== iter) parts.push(formatNumber(att) + ' att');
+  const failedAttempts = Math.max(0, att - iter);
   const totalTok = (loop.total_input_tokens || 0) + (loop.total_output_tokens || 0);
-  if (totalTok > 0) parts.push(formatTokens(totalTok) + ' tok');
-  if (loop.started_at) parts.push(timeAgo(new Date(loop.started_at)));
+  const startedAt = parseTimestamp(loop.started_at);
+  const lastWake = parseTimestamp(loop.last_wake_at);
+
+  const summary = document.createElement('div');
+  summary.className = 'agg-summary';
   if (loop.last_error) {
-    parts.push('<span class="agg-error">' + escapeHTML(truncate(loop.last_error, 40)) + '</span>');
+    summary.textContent = 'Recent execution ended with an issue. Review the latest error and recent turn details below.';
+  } else if (loop.state === 'processing') {
+    summary.textContent = 'Active turn is running now. Live telemetry below follows the current request, context load, and tool activity.';
+  } else if (loop.state === 'waiting' && loop.event_driven) {
+    summary.textContent = 'Event-driven loop is idle and waiting for the next trigger.';
+  } else if (loop.state === 'sleeping') {
+    summary.textContent = 'Timed loop is idle between turns and will wake on its next scheduled interval.';
+  } else {
+    summary.textContent = 'Recent loop health, throughput, and runtime totals for this anchor.';
   }
-  el.innerHTML = parts.join(' <span class="agg-sep">\u00b7</span> ');
+  el.appendChild(summary);
+
+  const grid = document.createElement('div');
+  grid.className = 'agg-grid';
+  const stats = [
+    buildAggregateStat('State', formatSchemaToken(loop.state || 'pending'), { emphasis: true }),
+    buildAggregateStat('Loop mode', loop.event_driven ? 'event driven' : 'timed sleep'),
+    buildAggregateStat('Successful turns', formatNumber(iter)),
+    buildAggregateStat('Failed attempts', failedAttempts > 0 ? formatNumber(failedAttempts) : '0'),
+    totalTok > 0 ? buildAggregateStat('Total tokens', formatTokens(totalTok)) : null,
+    startedAt ? buildAggregateStat('Started', timeAgo(startedAt), { title: startedAt.toISOString() }) : null,
+    lastWake ? buildAggregateStat('Last wake', timeAgo(lastWake), { title: lastWake.toISOString() }) : null,
+    loop.context_window ? buildAggregateStat('Context window', formatNumber(loop.context_window)) : null,
+    loop.consecutive_errors > 0 ? buildAggregateStat('Error streak', formatNumber(loop.consecutive_errors)) : buildAggregateStat('Health', 'clean'),
+  ].filter(Boolean);
+
+  for (const stat of stats) {
+    grid.appendChild(stat);
+  }
+  el.appendChild(grid);
+
+  if (loop.last_error) {
+    const err = document.createElement('div');
+    err.className = 'agg-error';
+    err.textContent = loop.last_error;
+    el.appendChild(err);
+  }
 }
 
 // renderTimeline builds the vertical iteration timeline (live card +
@@ -1400,19 +2200,36 @@ function renderRequestDetail(detail, els) {
     if (!item.value) continue;
     const el = document.createElement('span');
     el.className = 'request-meta-bar__item';
-    el.innerHTML =
-      '<span class="request-meta-bar__label">' + escapeHTML(item.label) + '</span> ' +
-      '<span class="request-meta-bar__value' + (item.warn ? ' request-meta-bar__value--warn' : '') +
-      '">' + escapeHTML(item.value) + '</span>';
+
+    const labelEl = document.createElement('span');
+    labelEl.className = 'request-meta-bar__label';
+    labelEl.textContent = item.label;
+
+    const valueEl = document.createElement('span');
+    valueEl.className = 'request-meta-bar__value' + (item.warn ? ' request-meta-bar__value--warn' : '');
+    valueEl.textContent = item.value;
+
+    el.appendChild(labelEl);
+    el.appendChild(document.createTextNode(' '));
+    el.appendChild(valueEl);
     bar.appendChild(el);
   }
   if (detail.tools_used) {
     for (const [name, count] of Object.entries(detail.tools_used)) {
       const el = document.createElement('span');
       el.className = 'request-meta-bar__item';
-      el.innerHTML =
-        '<span class="request-meta-bar__label">' + escapeHTML(name) + '</span> ' +
-        '<span class="request-meta-bar__value">&times;' + count + '</span>';
+
+      const labelEl = document.createElement('span');
+      labelEl.className = 'request-meta-bar__label';
+      labelEl.textContent = name;
+
+      const valueEl = document.createElement('span');
+      valueEl.className = 'request-meta-bar__value';
+      valueEl.textContent = '\u00d7' + count;
+
+      el.appendChild(labelEl);
+      el.appendChild(document.createTextNode(' '));
+      el.appendChild(valueEl);
       bar.appendChild(el);
     }
   }

@@ -2,9 +2,12 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/nugget/thane-ai-agent/internal/toolcatalog"
 )
 
 // CapabilityManager controls per-Run capability tag activation.
@@ -20,16 +23,11 @@ type CapabilityManager interface {
 }
 
 // CapabilityManifest describes a capability tag for the manifest.
-type CapabilityManifest struct {
-	Tag          string
-	Description  string
-	Tools        []string
-	AlwaysActive bool
-}
+type CapabilityManifest = toolcatalog.CapabilitySurface
 
-// SetCapabilityTools adds activate_capability and deactivate_capability
-// tools to the registry. These tools let the agent dynamically activate
-// or deactivate capability tags mid-conversation.
+// SetCapabilityTools adds activate_capability, deactivate_capability,
+// and list_loaded_capabilities tools to the registry. These tools let
+// the agent inspect and mutate capability tags mid-conversation.
 //
 // These tools are intentionally not assigned to any tag group. They
 // live in the base registry and survive all tag filtering, ensuring the
@@ -43,6 +41,7 @@ func (r *Registry) SetCapabilityTools(mgr CapabilityManager, manifest []Capabili
 	}
 	r.registerActivateCapability(mgr, manifest, tagManifest)
 	r.registerDeactivateCapability(mgr, tagManifest)
+	r.registerListLoadedCapabilities(mgr, tagManifest)
 }
 
 // extractTag extracts the tag parameter from args, accepting common
@@ -68,25 +67,10 @@ func extractTag(args map[string]any) string {
 
 // registerActivateCapability registers the activate_capability tool.
 func (r *Registry) registerActivateCapability(mgr CapabilityManager, manifest []CapabilityManifest, tagManifest map[string]CapabilityManifest) {
-	// Build the available tags list for the description.
-	var availableDesc strings.Builder
-	availableDesc.WriteString("Activate a capability to load its tools and context into YOUR current conversation. ")
-	availableDesc.WriteString("This modifies your own runtime — it cannot be delegated. ")
-	availableDesc.WriteString("Delegates get capabilities via the tags parameter on thane_delegate.\n\n")
-	availableDesc.WriteString("Available capabilities:\n")
-	for _, m := range manifest {
-		if m.AlwaysActive {
-			continue
-		}
-		availableDesc.WriteString(fmt.Sprintf("- **%s**: %s (%d tools)\n",
-			m.Tag, m.Description, len(m.Tools)))
-	}
-	availableDesc.WriteString("\nUse deactivate_capability when done to keep your tool set focused.")
-
 	r.Register(&Tool{
 		Name:            "activate_capability",
 		AlwaysAvailable: true,
-		Description:     availableDesc.String(),
+		Description:     toolcatalog.RenderCapabilityActivationDescription(manifest),
 		Parameters: map[string]any{
 			"type": "object",
 			"properties": map[string]any{
@@ -166,21 +150,56 @@ func (r *Registry) registerDeactivateCapability(mgr CapabilityManager, tagManife
 	})
 }
 
+// registerListLoadedCapabilities registers the list_loaded_capabilities tool.
+func (r *Registry) registerListLoadedCapabilities(mgr CapabilityManager, tagManifest map[string]CapabilityManifest) {
+	r.Register(&Tool{
+		Name:            "list_loaded_capabilities",
+		AlwaysAvailable: true,
+		Description:     "List the capability tags currently loaded in YOUR current conversation runtime. Use when asked which capabilities or tags are active right now.",
+		Parameters: map[string]any{
+			"type":       "object",
+			"properties": map[string]any{},
+		},
+		Handler: func(ctx context.Context, _ map[string]any) (string, error) {
+			active := mgr.ActiveTags(ctx)
+			tags := make([]string, 0, len(active))
+			for tag, enabled := range active {
+				if enabled {
+					tags = append(tags, tag)
+				}
+			}
+			sort.Strings(tags)
+
+			type loadedCapability struct {
+				Tag          string `json:"tag"`
+				AlwaysActive bool   `json:"always_active,omitempty"`
+				AdHoc        bool   `json:"ad_hoc,omitempty"`
+			}
+			payload := struct {
+				LoadedCapabilities []loadedCapability `json:"loaded_capabilities"`
+			}{
+				LoadedCapabilities: make([]loadedCapability, 0, len(tags)),
+			}
+			for _, tag := range tags {
+				entry := loadedCapability{Tag: tag}
+				if manifest, ok := tagManifest[tag]; ok {
+					entry.AlwaysActive = manifest.AlwaysActive
+					entry.AdHoc = manifest.AdHoc
+				}
+				payload.LoadedCapabilities = append(payload.LoadedCapabilities, entry)
+			}
+			out, err := json.Marshal(payload)
+			if err != nil {
+				return "", fmt.Errorf("marshal loaded capabilities: %w", err)
+			}
+			return string(out), nil
+		},
+	})
+}
+
 // BuildCapabilityManifest creates a sorted list of capability descriptions
 // from the config map. This is used both for the tool description and for
 // generating the capability manifest talent.
 func BuildCapabilityManifest(tags map[string][]string, descriptions map[string]string, alwaysActive map[string]bool) []CapabilityManifest {
-	manifest := make([]CapabilityManifest, 0, len(tags))
-	for tag, toolNames := range tags {
-		manifest = append(manifest, CapabilityManifest{
-			Tag:          tag,
-			Description:  descriptions[tag],
-			Tools:        toolNames,
-			AlwaysActive: alwaysActive[tag],
-		})
-	}
-	sort.Slice(manifest, func(i, j int) bool {
-		return manifest[i].Tag < manifest[j].Tag
-	})
-	return manifest
+	return toolcatalog.BuildCapabilitySurface(tags, descriptions, alwaysActive)
 }

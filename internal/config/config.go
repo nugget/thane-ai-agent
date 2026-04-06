@@ -37,8 +37,10 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/channels/email"
 	"github.com/nugget/thane-ai-agent/internal/forge"
+	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
 	"github.com/nugget/thane-ai-agent/internal/router"
 	"github.com/nugget/thane-ai-agent/internal/search"
+	"github.com/nugget/thane-ai-agent/internal/toolcatalog"
 	"gopkg.in/yaml.v3"
 )
 
@@ -123,12 +125,25 @@ type Config struct {
 	Embeddings EmbeddingsConfig `yaml:"embeddings"`
 
 	// Workspace configures the agent's sandboxed file system access.
+	// In multi-root deployments, set Path to the common writable parent
+	// (for example ~/Thane) and use Paths for semantic roots like
+	// core:, kb:, generated:, and scratchpad:.
 	Workspace WorkspaceConfig `yaml:"workspace"`
 
 	// Paths maps named prefixes to directory paths for file resolution.
 	// Each entry creates a prefix (e.g., "kb" → kb:path resolves to
 	// the configured directory). Supports ~ expansion at resolver
 	// construction time.
+	//
+	// Typical prefixes are:
+	//   - core:       high-integrity core docs (persona, ego, metacognitive)
+	//   - kb:         curated knowledge / indexed documents
+	//   - generated:  model-produced durable outputs (reports, dailies)
+	//   - scratchpad: low-integrity writable work area
+	//
+	// This is the main transition seam toward policy-managed document
+	// roots: the prefixes express intent even before dedicated doc_roots
+	// policy exists in config.
 	Paths map[string]string `yaml:"paths"`
 
 	// ExtraPath lists additional directories to prepend to the process
@@ -140,16 +155,22 @@ type Config struct {
 	// ShellExec configures the agent's ability to run shell commands.
 	ShellExec ShellExecConfig `yaml:"shell_exec"`
 
-	// DataDir is the root directory for SQLite databases (memory, facts,
-	// scheduler, and checkpoints). Default: "./db".
+	// DataDir is the root directory for SQLite databases and other
+	// opaque runtime state (memory, facts, scheduler, checkpoints).
+	// Keep this separate from human-authored and model-authored
+	// document roots. Default: "./db".
 	DataDir string `yaml:"data_dir"`
 
 	// TalentsDir is the directory containing talent markdown files that
-	// extend the system prompt. Default: "./talents".
+	// extend the system prompt. In higher-integrity deployments, this is
+	// a curated managed root rather than a scratch workspace.
+	// Default: "./talents".
 	TalentsDir string `yaml:"talents_dir"`
 
 	// PersonaFile is an optional markdown file that replaces the default
-	// system prompt with a custom agent identity.
+	// system prompt with a custom agent identity. Prefer placing this in
+	// a high-integrity core root (for example ~/Thane/core/persona.md)
+	// rather than a scratch or compatibility workspace.
 	PersonaFile string `yaml:"persona_file"`
 
 	// Context configures static context injection into the system prompt.
@@ -175,18 +196,20 @@ type Config struct {
 	// Delegate configures the thane_delegate tool's split-model execution.
 	Delegate DelegateConfig `yaml:"delegate"`
 
-	// CapabilityTags defines named groups of tools and talents that
-	// can be activated or deactivated per session. Tags marked
-	// always_active are loaded unconditionally. Other tags are
-	// activated via activate_capability/deactivate_capability tools or
-	// channel-pinned configuration.
+	// CapabilityTags overlays the compiled-in tool/tag baseline with
+	// operator-defined descriptions, tool membership overrides, and
+	// custom tags. Tags marked always_active are loaded
+	// unconditionally. Other tags are activated via
+	// activate_capability/deactivate_capability tools or channel-pinned
+	// configuration.
 	CapabilityTags map[string]CapabilityTagConfig `yaml:"capability_tags"`
 
 	// ChannelTags maps conversation source channels (e.g., "signal",
 	// "email") to lists of capability tag names that are automatically
 	// activated when a message arrives on that channel. This is
 	// additive to always-active tags and any tags the agent requests
-	// at runtime. Tag names must reference entries in [CapabilityTags].
+	// at runtime. Tag names must reference either compiled-in tags or
+	// entries in [CapabilityTags].
 	ChannelTags map[string][]string `yaml:"channel_tags"`
 
 	// MCP configures external MCP (Model Context Protocol) server
@@ -260,11 +283,11 @@ type Config struct {
 	// reasons via LLM, and adapts its own sleep cycle between iterations.
 	Metacognitive MetacognitiveConfig `yaml:"metacognitive"`
 
-	// OpenClaw configures the thane:openclaw Ollama profile, which
-	// replicates OpenClaw's workspace-aware agent behavior using
-	// Thane's plumbing. When nil, the thane:openclaw profile is
-	// unavailable and requests fall back to default routing.
-	OpenClaw *OpenClawConfig `yaml:"openclaw"`
+	// Loops configures immutable loop definitions loaded from the config
+	// file. These definitions become the base layer for the loops-ng
+	// definition registry, with a persistent dynamic overlay applied at
+	// runtime.
+	Loops LoopsConfig `yaml:"loops"`
 
 	// Debug configures diagnostic options for inspecting the assembled
 	// system prompt and other internal state.
@@ -557,7 +580,9 @@ type AttachmentsConfig struct {
 	// store. When set, received attachments are stored by SHA-256 hash
 	// instead of being copied with their original filenames. The
 	// metadata index is stored at {data_dir}/attachments.db.
-	// Supports ~ expansion. Example: ~/Thane/attachments
+	// Supports ~ expansion. This is a durable generated-artifact root,
+	// not a hand-edited document root. Example:
+	// ~/Thane/generated/attachments
 	StoreDir string       `yaml:"store_dir"`
 	Vision   VisionConfig `yaml:"vision"`
 }
@@ -594,7 +619,10 @@ func (v VisionConfig) ParsedTimeout() time.Duration {
 // write.
 type ProvenanceConfig struct {
 	// Path is the directory for the provenance git repository.
-	// Supports ~ expansion. Example: ~/Thane/identity
+	// Supports ~ expansion. Today this is the integrity-tracked root for
+	// core documents such as ego.md and metacognitive.md; over time this
+	// generalizes into per-root integrity policy. Example:
+	// ~/Thane/core
 	Path string `yaml:"path"`
 
 	// SigningKey is the path to an SSH private key used to sign
@@ -690,15 +718,48 @@ type ModelsConfig struct {
 // The model router uses these fields to select the best model for each
 // request.
 type ModelConfig struct {
-	Name          string `yaml:"name"`           // Model identifier (e.g., "claude-opus-4-20250514")
-	Provider      string `yaml:"provider"`       // Provider name: ollama, anthropic, lmstudio. Defaults to ollama when no resource is set
-	Resource      string `yaml:"resource"`       // Named provider resource from models.resources for this deployment
-	SupportsTools bool   `yaml:"supports_tools"` // Whether the model can invoke tool calls
-	ContextWindow int    `yaml:"context_window"` // Maximum context length in tokens
-	Speed         int    `yaml:"speed"`          // Relative speed rating, 1 (slow) to 10 (fast)
-	Quality       int    `yaml:"quality"`        // Relative quality rating, 1 (low) to 10 (high)
-	CostTier      int    `yaml:"cost_tier"`      // 0=local/free, 1=cheap, 2=moderate, 3=expensive
-	MinComplexity string `yaml:"min_complexity"` // Minimum task complexity: simple, moderate, complex
+	Name              string `yaml:"name"`               // Model identifier (e.g., "claude-opus-4-20250514")
+	Provider          string `yaml:"provider"`           // Provider name: ollama, anthropic, lmstudio. Defaults to ollama when no resource is set
+	Resource          string `yaml:"resource"`           // Named provider resource from models.resources for this deployment
+	SupportsTools     bool   `yaml:"supports_tools"`     // Optional per-deployment tool-use override. When omitted, runtime/provider capability is used.
+	SupportsStreaming *bool  `yaml:"supports_streaming"` // Optional per-deployment streaming override. Nil inherits observed runtime/provider capability.
+	ContextWindow     int    `yaml:"context_window"`     // Optional per-deployment context-window override. Zero inherits observed runtime metadata.
+	Speed             int    `yaml:"speed"`              // Relative speed rating, 1 (slow) to 10 (fast)
+	Quality           int    `yaml:"quality"`            // Relative quality rating, 1 (low) to 10 (high)
+	CostTier          int    `yaml:"cost_tier"`          // 0=local/free, 1=cheap, 2=moderate, 3=expensive
+	MinComplexity     string `yaml:"min_complexity"`     // Minimum task complexity: simple, moderate, complex
+
+	supportsToolsSet bool `yaml:"-"`
+}
+
+// SupportsToolsOverride reports whether supports_tools was explicitly
+// set in config, returning the configured value when present.
+func (m ModelConfig) SupportsToolsOverride() (*bool, bool) {
+	if !m.supportsToolsSet {
+		return nil, false
+	}
+	value := m.SupportsTools
+	return &value, true
+}
+
+// UnmarshalYAML preserves whether optional override fields were
+// explicitly authored in config so later layers can distinguish
+// operator policy from omitted defaults.
+func (m *ModelConfig) UnmarshalYAML(node *yaml.Node) error {
+	type raw ModelConfig
+	var decoded raw
+	if err := node.Decode(&decoded); err != nil {
+		return err
+	}
+	*m = ModelConfig(decoded)
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		key := strings.TrimSpace(node.Content[i].Value)
+		if key == "supports_tools" {
+			m.supportsToolsSet = true
+			break
+		}
+	}
+	return nil
 }
 
 // ModelServerConfig describes a named model provider resource.
@@ -755,22 +816,34 @@ func (c SearchConfig) Configured() bool {
 }
 
 // EmbeddingsConfig configures vector embedding generation for semantic
-// search over the fact store. When Enabled is false, ingested facts are
-// stored without embeddings and semantic search is unavailable.
+// recall features. When Enabled is false, Thane still stores facts and
+// contacts, but vector-backed lookup and similarity search are disabled
+// for those stores and related ingest paths.
 type EmbeddingsConfig struct {
-	Enabled bool   `yaml:"enabled"`
-	Model   string `yaml:"model"`   // Embedding model name. Default: "nomic-embed-text"
-	BaseURL string `yaml:"baseurl"` // Ollama URL for knowledge. Default: models.ollama_url
+	// Enabled controls whether Thane generates embeddings at ingest and
+	// lookup time for semantic search and related recall paths.
+	Enabled bool `yaml:"enabled"`
+
+	// Model is the embedding model name. Default: "nomic-embed-text".
+	Model string `yaml:"model"`
+
+	// BaseURL overrides the Ollama endpoint used for embeddings. Empty
+	// falls back to the default model resource/provider selection.
+	BaseURL string `yaml:"baseurl"`
 }
 
 // ContextConfig configures context injection into the system prompt.
 // Files listed in InjectFiles are re-read on every agent turn so that
-// external edits (e.g. MEMORY.md updated by another runtime) are
-// visible without restart. Paths are resolved once at startup.
+// external edits are visible without restart. Prefer small, curated
+// files from stable managed roots (for example core/MEMORY.md) over
+// broad compatibility mounts or app-private scratch state. Paths are
+// resolved once at startup.
 type ContextConfig struct {
 	// InjectFiles is a list of file paths to re-read and inject into
 	// the system prompt on every turn. Paths support ~ expansion.
 	// Missing or unreadable files are silently skipped at read time.
+	// Common fits are MEMORY.md, USER.md, or other operator-curated
+	// context files that live in a core document root.
 	InjectFiles []string `yaml:"inject_files"`
 }
 
@@ -835,7 +908,9 @@ type ExtractionConfig struct {
 type EpisodicConfig struct {
 	// DailyDir is the directory containing daily memory files named
 	// YYYY-MM-DD.md. Supports ~ expansion. If empty, daily memory
-	// file injection is disabled.
+	// file injection is disabled. Prefer a generated/provenance-aware
+	// root (for example ~/Thane/generated/daily) over legacy shared
+	// application state directories.
 	DailyDir string `yaml:"daily_dir"`
 
 	// LookbackDays is how many days of daily memory files to include.
@@ -901,15 +976,22 @@ type DelegateProfileConfig struct {
 }
 
 // CapabilityTagConfig defines a named group of tools (and optionally
-// talents) that can be loaded together. Tags marked AlwaysActive are
-// included in every session unconditionally.
+// talents) that can be loaded together. For compiled-in tags, empty
+// Description and Tools act as "keep the built-in defaults". Tags
+// marked AlwaysActive are included in every session unconditionally.
 type CapabilityTagConfig struct {
 	// Description is a human-readable summary shown in the capability
-	// manifest so the agent knows what activating this tag provides.
+	// manifest so the agent knows what activating this tag provides. For
+	// compiled-in tags, empty keeps the built-in description.
 	Description string `yaml:"description"`
 
 	// Tools lists the tool names belonging to this tag. A tool can
 	// appear in multiple tags; it loads when any of its tags is active.
+	//
+	// For compiled-in tags, empty keeps the built-in tool membership.
+	// Prefer leaving this empty for built-in or MCP-backed tags unless
+	// you intentionally want to replace the compiled/operator-derived
+	// membership with an explicit list.
 	Tools []string `yaml:"tools"`
 
 	// AlwaysActive tags cannot be deactivated. They are included in
@@ -921,11 +1003,11 @@ type CapabilityTagConfig struct {
 // consistent. It ensures a description is present and the tools list is
 // non-empty. Tag names are validated by the caller since they are map
 // keys in the parent Config struct.
-func (c CapabilityTagConfig) Validate(tagName string) error {
-	if strings.TrimSpace(c.Description) == "" {
+func (c CapabilityTagConfig) Validate(tagName string, builtin bool) error {
+	if strings.TrimSpace(c.Description) == "" && !builtin {
 		return fmt.Errorf("capability_tags.%s.description must not be empty", tagName)
 	}
-	if len(c.Tools) == 0 {
+	if len(c.Tools) == 0 && !builtin {
 		return fmt.Errorf("capability_tags.%s.tools must not be empty", tagName)
 	}
 	return nil
@@ -937,12 +1019,15 @@ func (c CapabilityTagConfig) Validate(tagName string) error {
 // Path and cannot escape it.
 type WorkspaceConfig struct {
 	// Path is the root directory for file operations. If empty, file
-	// tools are disabled entirely.
+	// tools are disabled entirely. In multi-root setups, this should be
+	// the common writable parent that contains Thane-owned roots such as
+	// core/, talents/, knowledge/, generated/, and scratchpad/.
 	Path string `yaml:"path"`
 
 	// ReadOnlyDirs are additional directories the agent can read from
-	// but not write to. Useful for giving the agent access to reference
-	// material outside its workspace.
+	// but not write to. Useful for compatibility or reference roots that
+	// must remain outside Thane's writable authority, such as a legacy
+	// workspace or an external vault mirror.
 	ReadOnlyDirs []string `yaml:"read_only_dirs"`
 }
 
@@ -994,9 +1079,9 @@ type SubscriptionConfig struct {
 
 	// Wake, when non-nil, enables agent wake on this topic. Messages
 	// arriving on the topic trigger an agent conversation using the
-	// seed's routing configuration. When nil, messages are received
+	// profile's routing configuration. When nil, messages are received
 	// for ambient awareness only (debug-logged, not acted upon).
-	Wake *router.LoopSeed `yaml:"wake,omitempty"`
+	Wake *router.LoopProfile `yaml:"wake,omitempty"`
 }
 
 // TelemetryConfig configures MQTT telemetry publishing. When Enabled
@@ -1146,6 +1231,30 @@ type MCPServerConfig struct {
 	// ExcludeTools is an optional blocklist of MCP tool names to skip.
 	// Cannot be used together with IncludeTools.
 	ExcludeTools []string `yaml:"exclude_tools"`
+
+	// DefaultTags lists tool tags/toolsets assigned to bridged MCP tools
+	// from this server unless a per-tool override replaces them. Prefer
+	// using this to attach MCP tools to existing capability/toolbox
+	// groups instead of hand-maintaining every bridged tool name inside
+	// capability_tags.*.tools.
+	DefaultTags []string `yaml:"default_tags"`
+
+	// Tools contains optional metadata overrides keyed by the raw MCP tool
+	// name reported by the server.
+	Tools map[string]MCPToolConfig `yaml:"tools"`
+}
+
+// MCPToolConfig configures operator-supplied metadata for a bridged MCP tool.
+type MCPToolConfig struct {
+	// Enabled controls whether the tool is bridged. Nil keeps the default
+	// include/exclude behavior.
+	Enabled *bool `yaml:"enabled"`
+
+	// Tags replaces the server default tags for this tool when non-empty.
+	Tags []string `yaml:"tags"`
+
+	// Description overrides the description reported by the MCP server.
+	Description string `yaml:"description"`
 }
 
 // SignalConfig configures the native Signal message bridge using
@@ -1227,14 +1336,14 @@ type SignalRoutingConfig struct {
 	DelegationGating string `yaml:"delegation_gating"`
 }
 
-// LoopSeed converts the Signal routing config into the shared
-// LoopSeed representation used by wake-style entrypoints.
+// LoopProfile converts the Signal routing config into the shared
+// LoopProfile representation used by wake-style entrypoints.
 //
 // It intentionally maps only the fields exposed by SignalRoutingConfig.
-// LoopSeed-only fields such as ExcludeTools and SeedTags are omitted
+// LoopProfile-only fields such as ExcludeTools and InitialTags are omitted
 // until Signal grows explicit config for them.
-func (c SignalRoutingConfig) LoopSeed() router.LoopSeed {
-	return router.LoopSeed{
+func (c SignalRoutingConfig) LoopProfile() router.LoopProfile {
+	return router.LoopProfile{
 		Model:            c.Model,
 		QualityFloor:     c.QualityFloor,
 		Mission:          c.Mission,
@@ -1320,6 +1429,8 @@ type MediaConfig struct {
 	// TranscriptDir is the directory for durable transcript storage.
 	// Each transcript is saved as a markdown file with YAML frontmatter.
 	// If empty, transcripts are returned in-context only (not persisted).
+	// This is typically a generated/artifact root rather than a curated
+	// knowledge root.
 	TranscriptDir string `yaml:"transcript_dir"`
 
 	// SummarizeModel is the preferred model for transcript summarization.
@@ -1365,7 +1476,9 @@ type MetacognitiveConfig struct {
 	Enabled bool `yaml:"enabled"`
 
 	// StateFile is the path to the persistent state file, relative to
-	// the workspace root. Default: "metacognitive.md".
+	// the workspace root. For managed-root layouts, place this under a
+	// core root such as core/metacognitive.md. Default:
+	// "metacognitive.md".
 	StateFile string `yaml:"state_file"`
 
 	// MinSleep is the minimum allowed sleep duration between iterations.
@@ -1407,6 +1520,15 @@ type MetacognitiveRouterConfig struct {
 	QualityFloor int `yaml:"quality_floor"`
 }
 
+// LoopsConfig configures immutable loops-ng definitions loaded from the
+// config file.
+type LoopsConfig struct {
+	// Definitions is the set of config-defined loop specs. These specs
+	// are immutable at runtime; dynamic loop creation lives in the
+	// persistent overlay registry instead.
+	Definitions []looppkg.Spec `yaml:"definitions"`
+}
+
 // StateWindowConfig configures the rolling window of recent Home Assistant
 // state changes injected into the agent's system prompt.
 type StateWindowConfig struct {
@@ -1418,29 +1540,6 @@ type StateWindowConfig struct {
 	// older than this are excluded from the context output at read
 	// time. Default: 30.
 	MaxAgeMinutes int `yaml:"max_age_minutes"`
-}
-
-// OpenClawConfig configures the thane:openclaw Ollama profile. This profile
-// replicates OpenClaw's workspace-aware agent behavior (file injection,
-// skill discovery, memory conventions) using Thane's agent loop.
-type OpenClawConfig struct {
-	// WorkspacePath is the root directory containing the agent's
-	// workspace files (AGENTS.md, SOUL.md, USER.md, MEMORY.md, etc.)
-	// and memory directory. Supports ~ expansion.
-	// Default: ~/Thane/openclaw.
-	WorkspacePath string `yaml:"workspace"`
-
-	// SkillsDirs is a list of directories to scan for SKILL.md files.
-	// Directories are searched in order; skills in earlier directories
-	// override same-named skills in later ones.
-	// Default: [~/Thane/openclaw/skills].
-	SkillsDirs []string `yaml:"skills_dirs"`
-
-	// MaxFileChars is the maximum characters per injected workspace
-	// file. Files exceeding this limit are truncated using the 70/20
-	// head/tail strategy matching OpenClaw v2026.2.9 behavior.
-	// Default: 20000.
-	MaxFileChars int `yaml:"max_file_chars"`
 }
 
 // Load reads a YAML configuration file, expands environment variables,
@@ -1716,19 +1815,6 @@ func (c *Config) applyDefaults() {
 		c.StateWindow.MaxAgeMinutes = 30
 	}
 
-	// OpenClaw defaults — apply only when the section is present.
-	if c.OpenClaw != nil {
-		if c.OpenClaw.WorkspacePath == "" {
-			c.OpenClaw.WorkspacePath = "~/Thane/openclaw"
-		}
-		if len(c.OpenClaw.SkillsDirs) == 0 {
-			c.OpenClaw.SkillsDirs = []string{filepath.Join(c.OpenClaw.WorkspacePath, "skills")}
-		}
-		if c.OpenClaw.MaxFileChars <= 0 {
-			c.OpenClaw.MaxFileChars = 20000
-		}
-	}
-
 	for i := range c.Models.Available {
 		if c.Models.Available[i].Provider == "" && c.Models.Available[i].Resource == "" {
 			c.Models.Available[i].Provider = "ollama"
@@ -1828,14 +1914,34 @@ func (c *Config) Validate() error {
 	if err := c.validateMCP(); err != nil {
 		return err
 	}
+	allowedTags := make(map[string]bool)
+	for tagName := range toolcatalog.BuiltinTagSpecs() {
+		allowedTags[tagName] = true
+	}
+	for _, srv := range c.MCP.Servers {
+		for _, tag := range srv.DefaultTags {
+			if trimmed := strings.TrimSpace(tag); trimmed != "" {
+				allowedTags[trimmed] = true
+			}
+		}
+		for _, toolCfg := range srv.Tools {
+			for _, tag := range toolCfg.Tags {
+				if trimmed := strings.TrimSpace(tag); trimmed != "" {
+					allowedTags[trimmed] = true
+				}
+			}
+		}
+	}
 	for tagName, tagCfg := range c.CapabilityTags {
-		if err := tagCfg.Validate(tagName); err != nil {
+		builtin := toolcatalog.HasBuiltinTag(tagName) || allowedTags[tagName]
+		if err := tagCfg.Validate(tagName, builtin); err != nil {
 			return err
 		}
+		allowedTags[tagName] = true
 	}
 	for channel, tagNames := range c.ChannelTags {
 		for _, tagName := range tagNames {
-			if _, ok := c.CapabilityTags[tagName]; !ok {
+			if !allowedTags[tagName] {
 				return fmt.Errorf("channel_tags.%s references undefined capability tag %q", channel, tagName)
 			}
 		}
@@ -1929,6 +2035,9 @@ func (c *Config) Validate() error {
 	if err := c.validateMetacognitive(); err != nil {
 		return err
 	}
+	if err := c.validateLoops(); err != nil {
+		return err
+	}
 	if err := c.validateDelegate(); err != nil {
 		return err
 	}
@@ -2006,6 +2115,23 @@ func (c *Config) validateMetacognitive() error {
 	}
 	if c.Metacognitive.SupervisorProbability < 0 || c.Metacognitive.SupervisorProbability > 1.0 {
 		return fmt.Errorf("metacognitive.supervisor_probability %.2f must be in [0.0, 1.0]", c.Metacognitive.SupervisorProbability)
+	}
+	return nil
+}
+
+func (c *Config) validateLoops() error {
+	if len(c.Loops.Definitions) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(c.Loops.Definitions))
+	for i, spec := range c.Loops.Definitions {
+		if err := spec.ValidatePersistable(); err != nil {
+			return fmt.Errorf("loops.definitions[%d]: %w", i, err)
+		}
+		if _, exists := seen[spec.Name]; exists {
+			return fmt.Errorf("loops.definitions[%d]: duplicate definition %q", i, spec.Name)
+		}
+		seen[spec.Name] = struct{}{}
 	}
 	return nil
 }
@@ -2098,8 +2224,8 @@ func (c *Config) validateSignal() error {
 	if c.Signal.HandleTimeout < 0 {
 		return fmt.Errorf("signal.handle_timeout %s must be non-negative", c.Signal.HandleTimeout)
 	}
-	seed := c.Signal.Routing.LoopSeed()
-	if err := seed.Validate(); err != nil {
+	profile := c.Signal.Routing.LoopProfile()
+	if err := profile.Validate(); err != nil {
 		return fmt.Errorf("signal.routing: %w", err)
 	}
 	return nil

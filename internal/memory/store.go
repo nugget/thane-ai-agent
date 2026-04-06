@@ -51,10 +51,11 @@ type Message struct {
 
 // Conversation holds the state of a single conversation.
 type Conversation struct {
-	ID        string    `json:"id"`
-	Messages  []Message `json:"messages"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID        string                `json:"id"`
+	Messages  []Message             `json:"messages"`
+	Metadata  *ConversationMetadata `json:"metadata,omitempty"`
+	CreatedAt time.Time             `json:"created_at"`
+	UpdatedAt time.Time             `json:"updated_at"`
 }
 
 // Store manages conversation memory.
@@ -253,7 +254,42 @@ func (c *Conversation) copy() *Conversation {
 	return &Conversation{
 		ID:        c.ID,
 		Messages:  msgs,
+		Metadata:  c.Metadata.Clone(),
 		CreatedAt: c.CreatedAt,
 		UpdatedAt: c.UpdatedAt,
 	}
+}
+
+// PutConversationMetadata replaces the typed metadata for a
+// conversation, creating the conversation record if needed.
+func (s *Store) PutConversationMetadata(conversationID string, metadata *ConversationMetadata) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	conv, ok := s.conversations[conversationID]
+	if !ok {
+		conv = &Conversation{
+			ID:        conversationID,
+			Messages:  []Message{},
+			CreatedAt: time.Now(),
+		}
+		s.conversations[conversationID] = conv
+	}
+	conv.Metadata = metadata.Clone()
+	conv.UpdatedAt = time.Now()
+	return nil
+}
+
+// BindConversationChannel updates only the channel-binding
+// portion of a conversation's typed metadata.
+func (s *Store) BindConversationChannel(conversationID string, binding *ChannelBinding) error {
+	var metadata *ConversationMetadata
+	if conv := s.GetConversation(conversationID); conv != nil && conv.Metadata != nil {
+		metadata = conv.Metadata.Clone()
+	}
+	if metadata == nil {
+		metadata = &ConversationMetadata{}
+	}
+	metadata.ChannelBinding = binding.Normalize()
+	return s.PutConversationMetadata(conversationID, metadata)
 }

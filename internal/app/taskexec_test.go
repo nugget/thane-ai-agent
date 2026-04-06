@@ -8,27 +8,60 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
-	"github.com/nugget/thane-ai-agent/internal/agent"
+	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
 	"github.com/nugget/thane-ai-agent/internal/router"
 	"github.com/nugget/thane-ai-agent/internal/scheduler"
 )
 
-// mockRunner records calls to Run and returns a canned response.
-type mockRunner struct {
-	req  *agent.Request
-	resp *agent.Response
-	err  error
+type mockTaskLauncher struct {
+	launch *looppkg.Launch
+	deps   *looppkg.Deps
+	result looppkg.LaunchResult
+	err    error
 }
 
-func (m *mockRunner) Run(_ context.Context, req *agent.Request, _ agent.StreamCallback) (*agent.Response, error) {
-	m.req = req
-	return m.resp, m.err
+func (m *mockTaskLauncher) Launch(_ context.Context, launch looppkg.Launch, deps looppkg.Deps) (looppkg.LaunchResult, error) {
+	capturedLaunch := launch
+	capturedLaunch.Metadata = cloneTestStringMap(launch.Metadata)
+	capturedLaunch.Hints = cloneTestStringMap(launch.Hints)
+	capturedLaunch.ExcludeTools = append([]string(nil), launch.ExcludeTools...)
+	capturedLaunch.InitialTags = append([]string(nil), launch.InitialTags...)
+	capturedLaunch.Spec.Metadata = cloneTestStringMap(launch.Spec.Metadata)
+	capturedLaunch.Spec.ExcludeTools = append([]string(nil), launch.Spec.ExcludeTools...)
+	capturedLaunch.Spec.Profile.ExcludeTools = append([]string(nil), launch.Spec.Profile.ExcludeTools...)
+	capturedLaunch.Spec.Profile.InitialTags = append([]string(nil), launch.Spec.Profile.InitialTags...)
+	capturedLaunch.Spec.Profile.ExtraHints = cloneTestStringMap(launch.Spec.Profile.ExtraHints)
+	m.launch = &capturedLaunch
+	capturedDeps := deps
+	m.deps = &capturedDeps
+	return m.result, m.err
+}
+
+func cloneTestStringMap(src map[string]string) map[string]string {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := make(map[string]string, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
+}
+
+type stubLoopRunner struct{}
+
+func (stubLoopRunner) Run(context.Context, looppkg.Request, looppkg.StreamCallback) (*looppkg.Response, error) {
+	return &looppkg.Response{}, nil
 }
 
 func TestRunScheduledTask_WakePayload(t *testing.T) {
-	runner := &mockRunner{
-		resp: &agent.Response{Content: "I checked the sensors."},
+	launcher := &mockTaskLauncher{
+		result: looppkg.LaunchResult{
+			LoopID:   "loop-sched",
+			Response: &looppkg.Response{Content: "I checked the sensors."},
+		},
 	}
 
 	task := &scheduler.Task{
@@ -41,61 +74,72 @@ func TestRunScheduledTask_WakePayload(t *testing.T) {
 	}
 	exec := &scheduler.Execution{ID: "exec-aaa"}
 
-	err := runScheduledTask(context.Background(), task, exec, taskExecDeps{runner: runner, logger: slog.Default()})
+	err := runScheduledTask(context.Background(), task, exec, taskExecDeps{
+		launch: launcher.Launch,
+		runner: stubLoopRunner{},
+		logger: slog.Default(),
+	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Verify the runner was called.
-	if runner.req == nil {
-		t.Fatal("runner.Run was not called")
+	if launcher.launch == nil {
+		t.Fatal("launcher.Launch was not called")
 	}
 
-	// Verify the message was passed through.
-	if len(runner.req.Messages) != 1 {
-		t.Fatalf("expected 1 message, got %d", len(runner.req.Messages))
+	if launcher.launch.Task != "Check sensors and report." {
+		t.Errorf("Task = %q, want %q", launcher.launch.Task, "Check sensors and report.")
 	}
-	if runner.req.Messages[0].Content != "Check sensors and report." {
-		t.Errorf("message = %q, want %q", runner.req.Messages[0].Content, "Check sensors and report.")
+	if launcher.launch.Spec.Name != "scheduler:Heartbeat" {
+		t.Errorf("Spec.Name = %q, want %q", launcher.launch.Spec.Name, "scheduler:Heartbeat")
 	}
-	if runner.req.Messages[0].Role != "user" {
-		t.Errorf("role = %q, want %q", runner.req.Messages[0].Role, "user")
+	if launcher.launch.Spec.Operation != looppkg.OperationRequestReply {
+		t.Errorf("Spec.Operation = %q, want %q", launcher.launch.Spec.Operation, looppkg.OperationRequestReply)
 	}
-
-	// Verify trigger-profile hints.
-	if runner.req.Hints["source"] != "scheduler" {
-		t.Errorf("hint source = %q, want %q", runner.req.Hints["source"], "scheduler")
+	if launcher.launch.Spec.Task == "" {
+		t.Error("Spec.Task should provide a non-empty validation baseline")
 	}
-	if runner.req.Hints["task"] != "Heartbeat" {
-		t.Errorf("hint task = %q, want %q", runner.req.Hints["task"], "Heartbeat")
+	if launcher.launch.Spec.Profile.ExtraHints["source"] != "scheduler" {
+		t.Errorf("hint source = %q, want %q", launcher.launch.Spec.Profile.ExtraHints["source"], "scheduler")
 	}
-	if runner.req.Hints[router.HintLocalOnly] != "true" {
-		t.Errorf("hint local_only = %q, want %q", runner.req.Hints[router.HintLocalOnly], "true")
+	if launcher.launch.Spec.Profile.ExtraHints["task"] != "Heartbeat" {
+		t.Errorf("hint task = %q, want %q", launcher.launch.Spec.Profile.ExtraHints["task"], "Heartbeat")
 	}
-	if runner.req.Hints[router.HintQualityFloor] != "1" {
-		t.Errorf("hint quality_floor = %q, want %q", runner.req.Hints[router.HintQualityFloor], "1")
+	if launcher.launch.Spec.Profile.LocalOnly != "true" {
+		t.Errorf("hint local_only = %q, want %q", launcher.launch.Spec.Profile.LocalOnly, "true")
 	}
-	if runner.req.Hints[router.HintMission] != "automation" {
-		t.Errorf("hint mission = %q, want %q", runner.req.Hints[router.HintMission], "automation")
+	if launcher.launch.Spec.Profile.QualityFloor != "1" {
+		t.Errorf("hint quality_floor = %q, want %q", launcher.launch.Spec.Profile.QualityFloor, "1")
 	}
-	if runner.req.Hints[router.HintDelegationGating] != "disabled" {
-		t.Errorf("hint delegation_gating = %q, want %q", runner.req.Hints[router.HintDelegationGating], "disabled")
+	if launcher.launch.Spec.Profile.Mission != "automation" {
+		t.Errorf("hint mission = %q, want %q", launcher.launch.Spec.Profile.Mission, "automation")
 	}
-
-	// Each execution should get a unique conversation ID (task + exec).
-	if runner.req.ConversationID != "sched-task-1-exec-aaa" {
-		t.Errorf("ConversationID = %q, want %q", runner.req.ConversationID, "sched-task-1-exec-aaa")
+	if launcher.launch.Spec.Profile.DelegationGating != "disabled" {
+		t.Errorf("hint delegation_gating = %q, want %q", launcher.launch.Spec.Profile.DelegationGating, "disabled")
 	}
-
-	// Verify execution result was populated.
+	if launcher.launch.ConversationID != "sched-task-1-exec-aaa" {
+		t.Errorf("ConversationID = %q, want %q", launcher.launch.ConversationID, "sched-task-1-exec-aaa")
+	}
+	if launcher.launch.Metadata["execution_id"] != "exec-aaa" {
+		t.Errorf("execution_id = %q, want %q", launcher.launch.Metadata["execution_id"], "exec-aaa")
+	}
+	if launcher.launch.Spec.Metadata["task_id"] != "task-1" {
+		t.Errorf("task_id = %q, want %q", launcher.launch.Spec.Metadata["task_id"], "task-1")
+	}
+	if launcher.launch.UsageRole != "scheduler" {
+		t.Errorf("UsageRole = %q, want %q", launcher.launch.UsageRole, "scheduler")
+	}
+	if launcher.deps == nil || launcher.deps.Runner == nil {
+		t.Fatal("launch deps should include a loop runner")
+	}
 	if exec.Result != "I checked the sensors." {
 		t.Errorf("exec.Result = %q, want %q", exec.Result, "I checked the sensors.")
 	}
 }
 
 func TestRunScheduledTask_DefaultMessage(t *testing.T) {
-	runner := &mockRunner{
-		resp: &agent.Response{Content: "ok"},
+	launcher := &mockTaskLauncher{
+		result: looppkg.LaunchResult{Response: &looppkg.Response{Content: "ok"}},
 	}
 
 	task := &scheduler.Task{
@@ -108,19 +152,23 @@ func TestRunScheduledTask_DefaultMessage(t *testing.T) {
 	}
 	exec := &scheduler.Execution{}
 
-	err := runScheduledTask(context.Background(), task, exec, taskExecDeps{runner: runner, logger: slog.Default()})
+	err := runScheduledTask(context.Background(), task, exec, taskExecDeps{
+		launch: launcher.Launch,
+		runner: stubLoopRunner{},
+		logger: slog.Default(),
+	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if runner.req.Messages[0].Content != "Scheduled wake: Morning Check" {
-		t.Errorf("default message = %q, want %q", runner.req.Messages[0].Content, "Scheduled wake: Morning Check")
+	if launcher.launch.Task != "Scheduled wake: Morning Check" {
+		t.Errorf("default message = %q, want %q", launcher.launch.Task, "Scheduled wake: Morning Check")
 	}
 }
 
 func TestRunScheduledTask_NilData(t *testing.T) {
-	runner := &mockRunner{
-		resp: &agent.Response{Content: "ok"},
+	launcher := &mockTaskLauncher{
+		result: looppkg.LaunchResult{Response: &looppkg.Response{Content: "ok"}},
 	}
 
 	task := &scheduler.Task{
@@ -133,18 +181,22 @@ func TestRunScheduledTask_NilData(t *testing.T) {
 	}
 	exec := &scheduler.Execution{}
 
-	err := runScheduledTask(context.Background(), task, exec, taskExecDeps{runner: runner, logger: slog.Default()})
+	err := runScheduledTask(context.Background(), task, exec, taskExecDeps{
+		launch: launcher.Launch,
+		runner: stubLoopRunner{},
+		logger: slog.Default(),
+	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if runner.req.Messages[0].Content != "Scheduled wake: Nightly" {
-		t.Errorf("message = %q, want %q", runner.req.Messages[0].Content, "Scheduled wake: Nightly")
+	if launcher.launch.Task != "Scheduled wake: Nightly" {
+		t.Errorf("message = %q, want %q", launcher.launch.Task, "Scheduled wake: Nightly")
 	}
 }
 
 func TestRunScheduledTask_UnsupportedPayload(t *testing.T) {
-	runner := &mockRunner{}
+	launcher := &mockTaskLauncher{}
 
 	task := &scheduler.Task{
 		ID:   "task-4",
@@ -155,20 +207,23 @@ func TestRunScheduledTask_UnsupportedPayload(t *testing.T) {
 	}
 	exec := &scheduler.Execution{}
 
-	err := runScheduledTask(context.Background(), task, exec, taskExecDeps{runner: runner, logger: slog.Default()})
+	err := runScheduledTask(context.Background(), task, exec, taskExecDeps{
+		launch: launcher.Launch,
+		runner: stubLoopRunner{},
+		logger: slog.Default(),
+	})
 	if err != nil {
 		t.Fatalf("unsupported payload should return nil, got %v", err)
 	}
 
-	// Runner should NOT have been called.
-	if runner.req != nil {
-		t.Error("runner.Run should not be called for unsupported payload kinds")
+	if launcher.launch != nil {
+		t.Error("launcher should not be called for unsupported payload kinds")
 	}
 }
 
-func TestRunScheduledTask_RunnerError(t *testing.T) {
-	runner := &mockRunner{
-		err: errors.New("LLM unavailable"),
+func TestRunScheduledTask_LauncherError(t *testing.T) {
+	launcher := &mockTaskLauncher{
+		err: errors.New("launch unavailable"),
 	}
 
 	task := &scheduler.Task{
@@ -181,12 +236,16 @@ func TestRunScheduledTask_RunnerError(t *testing.T) {
 	}
 	exec := &scheduler.Execution{}
 
-	err := runScheduledTask(context.Background(), task, exec, taskExecDeps{runner: runner, logger: slog.Default()})
+	err := runScheduledTask(context.Background(), task, exec, taskExecDeps{
+		launch: launcher.Launch,
+		runner: stubLoopRunner{},
+		logger: slog.Default(),
+	})
 	if err == nil {
-		t.Fatal("expected error when runner fails")
+		t.Fatal("expected error when launcher fails")
 	}
-	if !errors.Is(err, runner.err) {
-		t.Errorf("error = %v, want wrapped %v", err, runner.err)
+	if !errors.Is(err, launcher.err) {
+		t.Errorf("error = %v, want wrapped %v", err, launcher.err)
 	}
 }
 
@@ -198,8 +257,8 @@ func TestRunScheduledTask_PeriodicReflection(t *testing.T) {
 		t.Fatalf("write ego.md: %v", err)
 	}
 
-	runner := &mockRunner{
-		resp: &agent.Response{Content: "Updated ego.md"},
+	launcher := &mockTaskLauncher{
+		result: looppkg.LaunchResult{Response: &looppkg.Response{Content: "Updated ego.md"}},
 	}
 
 	task := &scheduler.Task{
@@ -212,13 +271,17 @@ func TestRunScheduledTask_PeriodicReflection(t *testing.T) {
 	}
 	exec := &scheduler.Execution{}
 
-	err := runScheduledTask(context.Background(), task, exec, taskExecDeps{runner: runner, logger: slog.Default(), workspacePath: workspace})
+	err := runScheduledTask(context.Background(), task, exec, taskExecDeps{
+		launch:        launcher.Launch,
+		runner:        stubLoopRunner{},
+		logger:        slog.Default(),
+		workspacePath: workspace,
+	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// The message should contain the reflection prompt with ego.md content.
-	msg := runner.req.Messages[0].Content
+	msg := launcher.launch.Task
 	if !strings.Contains(msg, "periodic reflection") {
 		t.Error("message should contain reflection prompt text")
 	}
@@ -234,8 +297,8 @@ func TestRunScheduledTask_PeriodicReflection_NoEgoFile(t *testing.T) {
 	// Workspace exists but ego.md does not.
 	workspace := t.TempDir()
 
-	runner := &mockRunner{
-		resp: &agent.Response{Content: "Created ego.md"},
+	launcher := &mockTaskLauncher{
+		result: looppkg.LaunchResult{Response: &looppkg.Response{Content: "Created ego.md"}},
 	}
 
 	task := &scheduler.Task{
@@ -248,12 +311,17 @@ func TestRunScheduledTask_PeriodicReflection_NoEgoFile(t *testing.T) {
 	}
 	exec := &scheduler.Execution{}
 
-	err := runScheduledTask(context.Background(), task, exec, taskExecDeps{runner: runner, logger: slog.Default(), workspacePath: workspace})
+	err := runScheduledTask(context.Background(), task, exec, taskExecDeps{
+		launch:        launcher.Launch,
+		runner:        stubLoopRunner{},
+		logger:        slog.Default(),
+		workspacePath: workspace,
+	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	msg := runner.req.Messages[0].Content
+	msg := launcher.launch.Task
 	if !strings.Contains(msg, "does not exist yet") {
 		t.Error("message should contain first-run placeholder when ego.md is missing")
 	}
@@ -264,8 +332,8 @@ func TestRunScheduledTask_PeriodicReflection_NoEgoFile(t *testing.T) {
 
 func TestRunScheduledTask_PeriodicReflection_NoWorkspace(t *testing.T) {
 	// No workspace path — falls through to raw payload message.
-	runner := &mockRunner{
-		resp: &agent.Response{Content: "ok"},
+	launcher := &mockTaskLauncher{
+		result: looppkg.LaunchResult{Response: &looppkg.Response{Content: "ok"}},
 	}
 
 	task := &scheduler.Task{
@@ -278,21 +346,25 @@ func TestRunScheduledTask_PeriodicReflection_NoWorkspace(t *testing.T) {
 	}
 	exec := &scheduler.Execution{}
 
-	err := runScheduledTask(context.Background(), task, exec, taskExecDeps{runner: runner, logger: slog.Default()})
+	err := runScheduledTask(context.Background(), task, exec, taskExecDeps{
+		launch: launcher.Launch,
+		runner: stubLoopRunner{},
+		logger: slog.Default(),
+	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	// Without a workspace, the raw message should be used.
-	msg := runner.req.Messages[0].Content
+	msg := launcher.launch.Task
 	if msg != "periodic_reflection" {
 		t.Errorf("message = %q, want raw payload %q", msg, "periodic_reflection")
 	}
 }
 
 func TestRunScheduledTask_PayloadModelOverride(t *testing.T) {
-	runner := &mockRunner{
-		resp: &agent.Response{Content: "reflected"},
+	launcher := &mockTaskLauncher{
+		result: looppkg.LaunchResult{Response: &looppkg.Response{Content: "reflected"}},
 	}
 
 	task := &scheduler.Task{
@@ -310,25 +382,29 @@ func TestRunScheduledTask_PayloadModelOverride(t *testing.T) {
 	}
 	exec := &scheduler.Execution{}
 
-	err := runScheduledTask(context.Background(), task, exec, taskExecDeps{runner: runner, logger: slog.Default()})
+	err := runScheduledTask(context.Background(), task, exec, taskExecDeps{
+		launch: launcher.Launch,
+		runner: stubLoopRunner{},
+		logger: slog.Default(),
+	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if runner.req.Model != "claude-sonnet-4-20250514" {
-		t.Errorf("model = %q, want %q", runner.req.Model, "claude-sonnet-4-20250514")
+	if launcher.launch.Spec.Profile.Model != "claude-sonnet-4-20250514" {
+		t.Errorf("model = %q, want %q", launcher.launch.Spec.Profile.Model, "claude-sonnet-4-20250514")
 	}
-	if runner.req.Hints[router.HintLocalOnly] != "false" {
-		t.Errorf("hint local_only = %q, want %q", runner.req.Hints[router.HintLocalOnly], "false")
+	if launcher.launch.Spec.Profile.LocalOnly != "false" {
+		t.Errorf("hint local_only = %q, want %q", launcher.launch.Spec.Profile.LocalOnly, "false")
 	}
-	if runner.req.Hints[router.HintQualityFloor] != "7" {
-		t.Errorf("hint quality_floor = %q, want %q", runner.req.Hints[router.HintQualityFloor], "7")
+	if launcher.launch.Spec.Profile.QualityFloor != "7" {
+		t.Errorf("hint quality_floor = %q, want %q", launcher.launch.Spec.Profile.QualityFloor, "7")
 	}
 }
 
 func TestRunScheduledTask_PayloadPartialOverride(t *testing.T) {
-	runner := &mockRunner{
-		resp: &agent.Response{Content: "ok"},
+	launcher := &mockTaskLauncher{
+		result: looppkg.LaunchResult{Response: &looppkg.Response{Content: "ok"}},
 	}
 
 	task := &scheduler.Task{
@@ -345,30 +421,71 @@ func TestRunScheduledTask_PayloadPartialOverride(t *testing.T) {
 	}
 	exec := &scheduler.Execution{}
 
-	err := runScheduledTask(context.Background(), task, exec, taskExecDeps{runner: runner, logger: slog.Default()})
+	err := runScheduledTask(context.Background(), task, exec, taskExecDeps{
+		launch: launcher.Launch,
+		runner: stubLoopRunner{},
+		logger: slog.Default(),
+	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	// Model should be empty (no override).
-	if runner.req.Model != "" {
-		t.Errorf("model = %q, want empty", runner.req.Model)
+	if launcher.launch.Spec.Profile.Model != "" {
+		t.Errorf("model = %q, want empty", launcher.launch.Spec.Profile.Model)
 	}
 	// local_only should default to "true".
-	if runner.req.Hints[router.HintLocalOnly] != "true" {
-		t.Errorf("hint local_only = %q, want %q", runner.req.Hints[router.HintLocalOnly], "true")
+	if launcher.launch.Spec.Profile.LocalOnly != "true" {
+		t.Errorf("hint local_only = %q, want %q", launcher.launch.Spec.Profile.LocalOnly, "true")
 	}
 	// quality_floor should use the override.
-	if runner.req.Hints[router.HintQualityFloor] != "5" {
-		t.Errorf("hint quality_floor = %q, want %q", runner.req.Hints[router.HintQualityFloor], "5")
+	if launcher.launch.Spec.Profile.QualityFloor != "5" {
+		t.Errorf("hint quality_floor = %q, want %q", launcher.launch.Spec.Profile.QualityFloor, "5")
 	}
 }
 
-func TestBuildScheduledTaskLoopSeed(t *testing.T) {
+func TestRunScheduledTask_UsesContextDeadlineAsRunTimeout(t *testing.T) {
+	launcher := &mockTaskLauncher{
+		result: looppkg.LaunchResult{Response: &looppkg.Response{Content: "ok"}},
+	}
+
+	task := &scheduler.Task{
+		ID:   "task-timeout",
+		Name: "Timed",
+		Payload: scheduler.Payload{
+			Kind: scheduler.PayloadWake,
+			Data: map[string]any{"message": "bounded"},
+		},
+	}
+	exec := &scheduler.Execution{ID: "exec-timeout"}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	err := runScheduledTask(ctx, task, exec, taskExecDeps{
+		launch: launcher.Launch,
+		runner: stubLoopRunner{},
+		logger: slog.Default(),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if launcher.launch == nil {
+		t.Fatal("launcher.Launch was not called")
+	}
+	if launcher.launch.RunTimeout <= 0 {
+		t.Fatalf("RunTimeout = %v, want > 0", launcher.launch.RunTimeout)
+	}
+	if launcher.launch.RunTimeout > 2*time.Minute {
+		t.Fatalf("RunTimeout = %v, want <= 2m", launcher.launch.RunTimeout)
+	}
+}
+
+func TestBuildScheduledTaskLoopProfile(t *testing.T) {
 	tests := []struct {
 		name string
 		task *scheduler.Task
-		want router.LoopSeed
+		want router.LoopProfile
 	}{
 		{
 			name: "defaults",
@@ -378,7 +495,7 @@ func TestBuildScheduledTaskLoopSeed(t *testing.T) {
 					Kind: scheduler.PayloadWake,
 				},
 			},
-			want: router.LoopSeed{
+			want: router.LoopProfile{
 				LocalOnly:        "true",
 				QualityFloor:     "1",
 				Mission:          "automation",
@@ -402,7 +519,7 @@ func TestBuildScheduledTaskLoopSeed(t *testing.T) {
 					},
 				},
 			},
-			want: router.LoopSeed{
+			want: router.LoopProfile{
 				Model:            "claude-sonnet-4-20250514",
 				LocalOnly:        "false",
 				QualityFloor:     "7",
@@ -418,7 +535,7 @@ func TestBuildScheduledTaskLoopSeed(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := buildScheduledTaskLoopSeed(tt.task)
+			got := buildScheduledTaskLoopProfile(tt.task)
 
 			if got.Model != tt.want.Model {
 				t.Fatalf("Model = %q, want %q", got.Model, tt.want.Model)

@@ -5,18 +5,21 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strings"
 	"sync"
+	"time"
 )
+
+const detachedCompletionTimeout = 10 * time.Second
 
 // Registry tracks all active loops and provides visibility into what is
 // running. It enforces concurrency limits and coordinates graceful
 // shutdown.
 type Registry struct {
-	mu                    sync.RWMutex
-	loops                 map[string]*Loop
-	maxLoops              int
-	logger                *slog.Logger
-	defaultActiveTagsFunc func() []string
+	mu       sync.RWMutex
+	loops    map[string]*Loop
+	maxLoops int
+	logger   *slog.Logger
 }
 
 // RegistryOption configures a Registry.
@@ -52,17 +55,6 @@ func NewRegistry(opts ...RegistryOption) *Registry {
 	return r
 }
 
-// SetDefaultActiveTagsFunc configures a callback that is automatically
-// applied (via [Loop.SetActiveTagsFunc]) to every loop created through
-// [Registry.SpawnLoop]. This lets the wiring layer provide a single
-// source of truth for active capability tags without threading the
-// callback through every package that spawns loops.
-func (r *Registry) SetDefaultActiveTagsFunc(fn func() []string) {
-	r.mu.Lock()
-	r.defaultActiveTagsFunc = fn
-	r.mu.Unlock()
-}
-
 // Register adds a loop to the registry. Returns an error if the loop's
 // ID is already registered or the concurrency limit would be exceeded.
 // The loop is not started — call [Loop.Start] after registering.
@@ -78,7 +70,7 @@ func (r *Registry) Register(l *Loop) error {
 	}
 
 	r.loops[l.id] = l
-	r.logger.Info("loop registered",
+	r.logger.Debug("loop registered",
 		"loop_id", l.id,
 		"loop_name", l.config.Name,
 		"parent_id", l.config.ParentID,
@@ -97,7 +89,7 @@ func (r *Registry) Deregister(id string) {
 		return
 	}
 	delete(r.loops, id)
-	r.logger.Info("loop deregistered",
+	r.logger.Debug("loop deregistered",
 		"loop_id", id,
 		"active_loops", len(r.loops),
 	)
@@ -209,6 +201,36 @@ func (r *Registry) ShutdownAll(ctx context.Context) int {
 	return stopped
 }
 
+func (r *Registry) configureLoop(l *Loop, setup func(*Loop)) {
+	// Call Setup before Register/Start so the caller can register
+	// tools or perform other initialization that needs *Loop.
+	if setup != nil {
+		setup(l)
+	}
+}
+
+func (r *Registry) startLoop(ctx context.Context, name string, l *Loop, setup func(*Loop), autoDeregister bool) error {
+	r.configureLoop(l, setup)
+
+	if err := r.Register(l); err != nil {
+		return err
+	}
+
+	if err := l.Start(ctx); err != nil {
+		r.Deregister(l.id)
+		return fmt.Errorf("start loop %q: %w", name, err)
+	}
+
+	if autoDeregister {
+		go func(id string, done <-chan struct{}) {
+			<-done
+			r.Deregister(id)
+		}(l.id, l.Done())
+	}
+
+	return nil
+}
+
 // SpawnLoop creates a new loop with the given config, registers it, and
 // starts it. This is the primary entry point for creating loops. Returns
 // the loop ID on success.
@@ -217,41 +239,175 @@ func (r *Registry) SpawnLoop(ctx context.Context, cfg Config, deps Deps) (string
 	if err != nil {
 		return "", fmt.Errorf("create loop %q: %w", cfg.Name, err)
 	}
-
-	// Apply the default active tags callback so every loop can
-	// surface active capabilities on the dashboard. The callback
-	// returns nil when no tags are configured, which is safe.
-	r.mu.RLock()
-	atFunc := r.defaultActiveTagsFunc
-	r.mu.RUnlock()
-	if atFunc != nil {
-		l.SetActiveTagsFunc(atFunc)
-	}
-
-	// Call Setup before Register/Start so the caller can register
-	// tools or perform other initialization that needs *Loop.
-	if cfg.Setup != nil {
-		cfg.Setup(l)
-	}
-
-	if err := r.Register(l); err != nil {
+	if err := r.startLoop(ctx, cfg.Name, l, cfg.Setup, true); err != nil {
 		return "", err
 	}
 
-	if err := l.Start(ctx); err != nil {
-		r.Deregister(l.id)
-		return "", fmt.Errorf("start loop %q: %w", cfg.Name, err)
+	return l.id, nil
+}
+
+// SpawnSpec creates, registers, and starts a loop from a [Spec]. It is
+// the additive loops-ng entrypoint while existing call sites continue to
+// use [Registry.SpawnLoop] with [Config].
+func (r *Registry) SpawnSpec(ctx context.Context, spec Spec, deps Deps) (string, error) {
+	l, err := NewFromSpec(spec, deps)
+	if err != nil {
+		return "", fmt.Errorf("create loop %q: %w", spec.Name, err)
+	}
+	if err := r.startLoop(ctx, spec.Name, l, spec.ToConfig().Setup, true); err != nil {
+		return "", err
 	}
 
-	// Automatically deregister the loop when its goroutine exits so
-	// that naturally completed loops (MaxIter, MaxDuration, context
-	// cancellation) do not consume registry capacity.
-	go func(id string, done <-chan struct{}) {
-		<-done
-		r.Deregister(id)
-	}(l.id, l.Done())
-
 	return l.id, nil
+}
+
+// Launch starts a loops-ng [Launch]. Request/reply launches wait for
+// completion and return a final status snapshot; background and service
+// launches detach immediately and leave the loop running in the
+// registry.
+func (r *Registry) Launch(ctx context.Context, launch Launch, deps Deps) (LaunchResult, error) {
+	if err := launch.Validate(); err != nil {
+		return LaunchResult{}, err
+	}
+
+	spec := launch.Spec
+	spec.Operation = effectiveOperation(spec.Operation)
+	l, err := NewFromLaunch(launch, deps)
+	if err != nil {
+		return LaunchResult{}, fmt.Errorf("create loop %q: %w", spec.Name, err)
+	}
+
+	cfg := l.config
+	detached := spec.Operation != OperationRequestReply
+	if err := r.startLoop(ctx, spec.Name, l, cfg.Setup, detached); err != nil {
+		return LaunchResult{}, err
+	}
+
+	result := LaunchResult{
+		LoopID:    l.id,
+		Operation: spec.Operation,
+		Detached:  detached,
+	}
+	if detached {
+		r.startDetachedCompletion(launch, l)
+		return result, nil
+	}
+
+	finalStatus := make(chan Status, 1)
+	go func() {
+		<-l.Done()
+		finalStatus <- l.Status()
+		r.Deregister(l.id)
+	}()
+
+	waitCtx := ctx
+	waitCancel := func() {}
+	if launch.RunTimeout > 0 {
+		waitCtx, waitCancel = context.WithTimeout(ctx, launch.RunTimeout)
+	}
+	defer waitCancel()
+
+	select {
+	case st := <-finalStatus:
+		result.Response = l.lastResponseSnapshot()
+		result.FinalStatus = &st
+		return result, nil
+	case <-waitCtx.Done():
+		if launch.RunTimeout > 0 && waitCtx.Err() == context.DeadlineExceeded {
+			l.Stop()
+		}
+		return result, waitCtx.Err()
+	}
+}
+
+func (r *Registry) startDetachedCompletion(launch Launch, l *Loop) {
+	if l == nil {
+		return
+	}
+	if launch.Spec.Completion != CompletionConversation && launch.Spec.Completion != CompletionChannel {
+		return
+	}
+	if l.deps.CompletionSink == nil {
+		return
+	}
+	conversationID := strings.TrimSpace(launch.CompletionConversationID)
+	channelTarget := CloneCompletionChannelTarget(launch.CompletionChannel)
+	if conversationID == "" {
+		if launch.Spec.Completion == CompletionConversation {
+			return
+		}
+	}
+	if channelTarget == nil && launch.Spec.Completion == CompletionChannel {
+		return
+	}
+
+	go func() {
+		done := l.Done()
+		if done != nil {
+			<-done
+		}
+
+		resp := l.lastResponseSnapshot()
+		status := l.Status()
+		content := formatCompletionContent(launch, resp, status)
+		if strings.TrimSpace(content) == "" {
+			return
+		}
+
+		deliveryCtx, cancel := context.WithTimeout(context.Background(), detachedCompletionTimeout)
+		defer cancel()
+
+		if err := l.deps.CompletionSink(deliveryCtx, CompletionDelivery{
+			Mode:           launch.Spec.Completion,
+			ConversationID: conversationID,
+			Channel:        channelTarget,
+			Content:        content,
+			LoopID:         l.id,
+			LoopName:       l.config.Name,
+			Response:       resp,
+			Status:         &status,
+		}); err != nil {
+			r.logger.Warn("detached loop completion delivery failed",
+				"loop_id", l.id,
+				"loop_name", l.config.Name,
+				"delivery_mode", launch.Spec.Completion,
+				"conversation_id", conversationID,
+				"channel_target", channelTarget,
+				"delivery_timeout", detachedCompletionTimeout,
+				"error", err,
+			)
+			return
+		}
+		r.logger.Info("detached loop completion delivered",
+			"loop_id", l.id,
+			"loop_name", l.config.Name,
+			"delivery_mode", launch.Spec.Completion,
+			"conversation_id", conversationID,
+			"channel_target", channelTarget,
+		)
+	}()
+}
+
+func formatCompletionContent(launch Launch, resp *Response, status Status) string {
+	label := strings.TrimSpace(launch.Task)
+	if label == "" {
+		label = strings.TrimSpace(launch.Spec.Name)
+	}
+	if label == "" {
+		label = "background task"
+	}
+
+	prefix := fmt.Sprintf("Background task complete (%s).", label)
+	switch {
+	case resp != nil && strings.TrimSpace(resp.Content) != "":
+		return prefix + "\n\n" + resp.Content
+	case status.LastError != "":
+		return prefix + "\n\nTask failed: " + status.LastError
+	case resp != nil && resp.Exhausted && resp.FinishReason != "":
+		return prefix + "\n\nTask exhausted: " + resp.FinishReason
+	default:
+		return prefix
+	}
 }
 
 // StopLoop stops a loop by ID and deregisters it once the goroutine
@@ -281,6 +437,7 @@ func (r *Registry) StopLoop(id string) error {
 	default:
 		r.logger.Warn("loop goroutine still running after Stop, keeping registered",
 			"loop_id", id,
+			"loop_name", l.config.Name,
 		)
 	}
 

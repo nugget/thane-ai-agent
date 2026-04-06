@@ -24,6 +24,12 @@ func ToolDefinition() map[string]any {
 				"default":     "general",
 				"description": "Delegation profile — controls which tools and context the delegate receives",
 			},
+			"mode": map[string]any{
+				"type":        "string",
+				"enum":        []string{"sync", "async"},
+				"default":     "sync",
+				"description": "Execution mode. Use 'sync' for a direct reply now, or 'async' to run in the background and deliver the result back through the current conversation or interactive channel when it completes.",
+			},
 			"guidance": map[string]any{
 				"type":        "string",
 				"description": "Optional hints to steer execution (entity names, what to focus on, output format preferences)",
@@ -64,6 +70,13 @@ func ToolHandler(exec *Executor) func(ctx context.Context, args map[string]any) 
 		if profileName == "" {
 			profileName = "general"
 		}
+		mode, _ := args["mode"].(string)
+		if mode == "" {
+			mode = "sync"
+		}
+		if mode != "sync" && mode != "async" {
+			return "Error: mode must be one of [sync, async]", nil
+		}
 
 		guidance, _ := args["guidance"].(string)
 
@@ -86,11 +99,18 @@ func ToolHandler(exec *Executor) func(ctx context.Context, args map[string]any) 
 			}
 		}
 
+		if mode == "async" {
+			loopID, err := exec.StartBackground(ctx, task, profileName, guidance, tags, pathPrefixes)
+			if err != nil {
+				return fmt.Sprintf("[Delegate error: profile=%s, mode=%s] %s", profileName, mode, err.Error()), nil
+			}
+			return fmt.Sprintf("[Delegate STARTED: profile=%s, mode=async, loop_id=%s]\n\nBackground delegate launched. Its result will be delivered back through the current conversation or interactive channel when it completes.", profileName, loopID), nil
+		}
+
 		result, err := exec.Execute(ctx, task, profileName, guidance, tags, pathPrefixes)
 		if err != nil {
 			return fmt.Sprintf("[Delegate error: profile=%s] %s", profileName, err.Error()), nil
 		}
-
 		summary := formatExecSummary(result)
 
 		// Format the result with explicit success/failure headers so the

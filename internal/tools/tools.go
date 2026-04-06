@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -17,12 +18,14 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/contacts"
 	"github.com/nugget/thane-ai-agent/internal/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/knowledge"
+	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
 	"github.com/nugget/thane-ai-agent/internal/media"
 	"github.com/nugget/thane-ai-agent/internal/models"
 	"github.com/nugget/thane-ai-agent/internal/notifications"
 	routepkg "github.com/nugget/thane-ai-agent/internal/router"
 	"github.com/nugget/thane-ai-agent/internal/scheduler"
 	"github.com/nugget/thane-ai-agent/internal/search"
+	"github.com/nugget/thane-ai-agent/internal/toolcatalog"
 	"github.com/nugget/thane-ai-agent/internal/usage"
 )
 
@@ -34,6 +37,10 @@ type Tool struct {
 	Handler            func(ctx context.Context, args map[string]any) (string, error) `json:"-"`
 	AlwaysAvailable    bool                                                           `json:"-"` // Survives capability tag filtering.
 	SkipContentResolve bool                                                           `json:"-"` // Exempt from prefix-to-content resolution.
+	CanonicalID        string                                                         `json:"-"`
+	Source             string                                                         `json:"-"`
+	Origin             string                                                         `json:"-"`
+	DefaultTags        []string                                                       `json:"-"`
 }
 
 // Registry holds available tools.
@@ -68,6 +75,14 @@ type Registry struct {
 	deletePersistedModelRegistryPolicy         func(string) error
 	persistModelRegistryResourcePolicy         func(string, models.ResourcePolicy) error
 	deletePersistedModelRegistryResourcePolicy func(string) error
+	loopDefinitionRegistry                     *looppkg.DefinitionRegistry
+	loopDefinitionView                         func() *looppkg.DefinitionRegistryView
+	persistLoopDefinition                      func(looppkg.Spec, time.Time) error
+	deletePersistedLoopDefinition              func(string) error
+	persistLoopDefinitionPolicy                func(string, looppkg.DefinitionPolicy) error
+	deletePersistedLoopDefinitionPolicy        func(string) error
+	reconcileLoopDefinition                    func(context.Context, string) error
+	launchLoopDefinition                       func(context.Context, string, looppkg.Launch) (looppkg.LaunchResult, error)
 
 	contentResolver *ContentResolver
 }
@@ -844,6 +859,21 @@ func (r *Registry) registerBuiltins() {
 
 // Register adds a tool to the registry.
 func (r *Registry) Register(t *Tool) {
+	if spec, ok := toolcatalog.LookupBuiltinToolSpec(t.Name); ok {
+		if t.CanonicalID == "" {
+			t.CanonicalID = spec.CanonicalID
+		}
+		if t.Source == "" {
+			t.Source = string(spec.Source)
+		}
+		t.DefaultTags = mergeUniqueStrings(spec.DefaultTags, t.DefaultTags)
+	}
+	if t.CanonicalID == "" {
+		t.CanonicalID = t.Name
+	}
+	if t.Source == "" {
+		t.Source = string(toolcatalog.NativeToolSource)
+	}
 	r.tools[t.Name] = t
 }
 
@@ -912,6 +942,31 @@ func (r *Registry) FilteredCopyExcluding(exclude []string) *Registry {
 		}
 	}
 	return filtered
+}
+
+// MetadataTagIndex builds a tag-to-tool mapping from per-tool default
+// metadata. Tags with no registered tools are omitted.
+func (r *Registry) MetadataTagIndex() map[string][]string {
+	if len(r.tools) == 0 {
+		return nil
+	}
+	tagIndex := make(map[string][]string)
+	for name, t := range r.tools {
+		for _, tag := range t.DefaultTags {
+			tag = strings.TrimSpace(tag)
+			if tag == "" {
+				continue
+			}
+			tagIndex[tag] = append(tagIndex[tag], name)
+		}
+	}
+	if len(tagIndex) == 0 {
+		return nil
+	}
+	for tag := range tagIndex {
+		sort.Strings(tagIndex[tag])
+	}
+	return tagIndex
 }
 
 // SetTagIndex builds the tag-to-tool mapping from config. Each tag
@@ -996,6 +1051,22 @@ func (r *Registry) Execute(ctx context.Context, name string, argsJSON string) (s
 	}
 
 	return tool.Handler(ctx, args)
+}
+
+func mergeUniqueStrings(parts ...[]string) []string {
+	seen := make(map[string]bool)
+	var merged []string
+	for _, part := range parts {
+		for _, item := range part {
+			item = strings.TrimSpace(item)
+			if item == "" || seen[item] {
+				continue
+			}
+			seen[item] = true
+			merged = append(merged, item)
+		}
+	}
+	return merged
 }
 
 // Tool handlers

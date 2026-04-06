@@ -125,6 +125,42 @@ func TestDeactivateCapability(t *testing.T) {
 	}
 }
 
+func TestListLoadedCapabilities(t *testing.T) {
+	mgr := newMockCapabilityManager("forge", "ha")
+	mgr.activeTags["forge"] = true
+	mgr.activeTags["ha"] = true
+
+	manifest := []CapabilityManifest{
+		{Tag: "forge", Description: "Forge tools", Tools: []string{"forge_pr_get"}},
+		{Tag: "ha", Description: "Home Assistant tools", Tools: []string{"get_state"}, AlwaysActive: true},
+	}
+
+	reg := NewEmptyRegistry()
+	reg.SetCapabilityTools(mgr, manifest)
+
+	tool := reg.Get("list_loaded_capabilities")
+	if tool == nil {
+		t.Fatal("list_loaded_capabilities not registered")
+	}
+
+	result, err := tool.Handler(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("list_loaded_capabilities error: %v", err)
+	}
+	if !strings.Contains(result, "\"loaded_capabilities\"") {
+		t.Fatalf("result = %q, want loaded_capabilities payload", result)
+	}
+	if !strings.Contains(result, "\"tag\":\"forge\"") {
+		t.Fatalf("result = %q, want forge tag", result)
+	}
+	if !strings.Contains(result, "\"tag\":\"ha\"") {
+		t.Fatalf("result = %q, want ha tag", result)
+	}
+	if !strings.Contains(result, "\"always_active\":true") {
+		t.Fatalf("result = %q, want always_active metadata", result)
+	}
+}
+
 func TestActivateCapability_EmptyTag(t *testing.T) {
 	mgr := newMockCapabilityManager("ha")
 	reg := NewEmptyRegistry()
@@ -285,9 +321,11 @@ func TestRegistryFilterByTags_AlwaysAvailable(t *testing.T) {
 	// Tagged tools
 	reg.Register(&Tool{Name: "get_state", Description: "HA state"})
 	reg.Register(&Tool{Name: "web_search", Description: "Search"})
-	// AlwaysAvailable meta-tools (like activate_capability, deactivate_capability)
+	// AlwaysAvailable meta-tools (like activate_capability, deactivate_capability,
+	// and list_loaded_capabilities)
 	reg.Register(&Tool{Name: "activate_capability", Description: "Activate a tag", AlwaysAvailable: true})
 	reg.Register(&Tool{Name: "deactivate_capability", Description: "Deactivate a tag", AlwaysAvailable: true})
+	reg.Register(&Tool{Name: "list_loaded_capabilities", Description: "List loaded tags", AlwaysAvailable: true})
 	// Untagged tool WITHOUT AlwaysAvailable — should be filtered out
 	reg.Register(&Tool{Name: "plain_untagged", Description: "Not tagged, not meta"})
 
@@ -305,25 +343,25 @@ func TestRegistryFilterByTags_AlwaysAvailable(t *testing.T) {
 		{
 			name:    "always-available tools survive ha-only filter",
 			tags:    []string{"ha"},
-			wantIn:  []string{"get_state", "activate_capability", "deactivate_capability"},
+			wantIn:  []string{"get_state", "activate_capability", "deactivate_capability", "list_loaded_capabilities"},
 			wantOut: []string{"web_search", "plain_untagged"},
 		},
 		{
 			name:    "always-available tools survive search-only filter",
 			tags:    []string{"search"},
-			wantIn:  []string{"web_search", "activate_capability", "deactivate_capability"},
+			wantIn:  []string{"web_search", "activate_capability", "deactivate_capability", "list_loaded_capabilities"},
 			wantOut: []string{"get_state", "plain_untagged"},
 		},
 		{
 			name:    "always-available tools survive unknown-tag filter",
 			tags:    []string{"nonexistent"},
-			wantIn:  []string{"activate_capability", "deactivate_capability"},
+			wantIn:  []string{"activate_capability", "deactivate_capability", "list_loaded_capabilities"},
 			wantOut: []string{"get_state", "web_search", "plain_untagged"},
 		},
 		{
 			name:   "nil tags returns everything",
 			tags:   nil,
-			wantIn: []string{"get_state", "web_search", "activate_capability", "deactivate_capability", "plain_untagged"},
+			wantIn: []string{"get_state", "web_search", "activate_capability", "deactivate_capability", "list_loaded_capabilities", "plain_untagged"},
 		},
 	}
 

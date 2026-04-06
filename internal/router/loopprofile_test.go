@@ -5,20 +5,20 @@ import (
 	"testing"
 )
 
-func TestLoopSeedHints(t *testing.T) {
+func TestLoopProfileHints(t *testing.T) {
 	tests := []struct {
 		name string
-		seed LoopSeed
+		seed LoopProfile
 		want map[string]string
 	}{
 		{
 			name: "empty seed produces empty map",
-			seed: LoopSeed{},
+			seed: LoopProfile{},
 			want: map[string]string{},
 		},
 		{
 			name: "all typed fields populated",
-			seed: LoopSeed{
+			seed: LoopProfile{
 				QualityFloor:     "7",
 				Mission:          "automation",
 				LocalOnly:        "false",
@@ -35,7 +35,7 @@ func TestLoopSeedHints(t *testing.T) {
 		},
 		{
 			name: "only populated fields appear",
-			seed: LoopSeed{
+			seed: LoopProfile{
 				QualityFloor: "5",
 				Mission:      "conversation",
 			},
@@ -46,7 +46,7 @@ func TestLoopSeedHints(t *testing.T) {
 		},
 		{
 			name: "extra hints merged",
-			seed: LoopSeed{
+			seed: LoopProfile{
 				Mission: "automation",
 				ExtraHints: map[string]string{
 					"source": "frigate",
@@ -61,7 +61,7 @@ func TestLoopSeedHints(t *testing.T) {
 		},
 		{
 			name: "extra hints override typed fields",
-			seed: LoopSeed{
+			seed: LoopProfile{
 				Mission: "automation",
 				ExtraHints: map[string]string{
 					HintMission: "device_control",
@@ -73,7 +73,7 @@ func TestLoopSeedHints(t *testing.T) {
 		},
 		{
 			name: "model not in hints",
-			seed: LoopSeed{
+			seed: LoopProfile{
 				Model:        "claude-3-opus",
 				QualityFloor: "10",
 			},
@@ -100,41 +100,40 @@ func TestLoopSeedHints(t *testing.T) {
 	}
 }
 
-func TestLoopSeedValidate(t *testing.T) {
+func TestLoopProfileValidate(t *testing.T) {
 	tests := []struct {
 		name    string
-		seed    LoopSeed
+		seed    LoopProfile
 		wantErr bool
 	}{
-		{name: "empty seed is valid", seed: LoopSeed{}},
-		{name: "fully populated valid seed", seed: LoopSeed{
+		{name: "empty seed is valid", seed: LoopProfile{}},
+		{name: "fully populated valid seed", seed: LoopProfile{
 			QualityFloor:     "7",
 			Mission:          "automation",
 			LocalOnly:        "false",
 			DelegationGating: "disabled",
 			PreferSpeed:      "true",
 		}},
-		{name: "quality_floor boundary low", seed: LoopSeed{QualityFloor: "1"}},
-		{name: "quality_floor boundary high", seed: LoopSeed{QualityFloor: "10"}},
-		{name: "quality_floor zero", seed: LoopSeed{QualityFloor: "0"}, wantErr: true},
-		{name: "quality_floor eleven", seed: LoopSeed{QualityFloor: "11"}, wantErr: true},
-		{name: "quality_floor non-numeric", seed: LoopSeed{QualityFloor: "high"}, wantErr: true},
-		{name: "quality_floor negative", seed: LoopSeed{QualityFloor: "-1"}, wantErr: true},
-		{name: "mission conversation", seed: LoopSeed{Mission: "conversation"}},
-		{name: "mission device_control", seed: LoopSeed{Mission: "device_control"}},
-		{name: "mission background", seed: LoopSeed{Mission: "background"}},
-		{name: "mission metacognitive", seed: LoopSeed{Mission: "metacognitive"}},
-		{name: "mission openclaw", seed: LoopSeed{Mission: "openclaw"}},
-		{name: "mission reflect", seed: LoopSeed{Mission: "reflect"}},
-		{name: "mission with spaces", seed: LoopSeed{Mission: "my mission"}, wantErr: true},
-		{name: "mission with uppercase", seed: LoopSeed{Mission: "Automation"}, wantErr: true},
-		{name: "mission starts with digit", seed: LoopSeed{Mission: "1automation"}, wantErr: true},
-		{name: "mission empty string", seed: LoopSeed{Mission: ""}},
-		{name: "local_only invalid", seed: LoopSeed{LocalOnly: "yes"}, wantErr: true},
-		{name: "local_only true", seed: LoopSeed{LocalOnly: "true"}},
-		{name: "prefer_speed invalid", seed: LoopSeed{PreferSpeed: "fast"}, wantErr: true},
-		{name: "delegation_gating invalid", seed: LoopSeed{DelegationGating: "partial"}, wantErr: true},
-		{name: "delegation_gating enabled", seed: LoopSeed{DelegationGating: "enabled"}},
+		{name: "quality_floor boundary low", seed: LoopProfile{QualityFloor: "1"}},
+		{name: "quality_floor boundary high", seed: LoopProfile{QualityFloor: "10"}},
+		{name: "quality_floor zero", seed: LoopProfile{QualityFloor: "0"}, wantErr: true},
+		{name: "quality_floor eleven", seed: LoopProfile{QualityFloor: "11"}, wantErr: true},
+		{name: "quality_floor non-numeric", seed: LoopProfile{QualityFloor: "high"}, wantErr: true},
+		{name: "quality_floor negative", seed: LoopProfile{QualityFloor: "-1"}, wantErr: true},
+		{name: "mission conversation", seed: LoopProfile{Mission: "conversation"}},
+		{name: "mission device_control", seed: LoopProfile{Mission: "device_control"}},
+		{name: "mission background", seed: LoopProfile{Mission: "background"}},
+		{name: "mission metacognitive", seed: LoopProfile{Mission: "metacognitive"}},
+		{name: "mission reflect", seed: LoopProfile{Mission: "reflect"}},
+		{name: "mission with spaces", seed: LoopProfile{Mission: "my mission"}, wantErr: true},
+		{name: "mission with uppercase", seed: LoopProfile{Mission: "Automation"}, wantErr: true},
+		{name: "mission starts with digit", seed: LoopProfile{Mission: "1automation"}, wantErr: true},
+		{name: "mission empty string", seed: LoopProfile{Mission: ""}},
+		{name: "local_only invalid", seed: LoopProfile{LocalOnly: "yes"}, wantErr: true},
+		{name: "local_only true", seed: LoopProfile{LocalOnly: "true"}},
+		{name: "prefer_speed invalid", seed: LoopProfile{PreferSpeed: "fast"}, wantErr: true},
+		{name: "delegation_gating invalid", seed: LoopProfile{DelegationGating: "partial"}, wantErr: true},
+		{name: "delegation_gating enabled", seed: LoopProfile{DelegationGating: "enabled"}},
 	}
 
 	for _, tt := range tests {
@@ -147,15 +146,15 @@ func TestLoopSeedValidate(t *testing.T) {
 	}
 }
 
-func TestLoopSeedRequestOptions(t *testing.T) {
-	seed := LoopSeed{
+func TestLoopProfileRequestOptions(t *testing.T) {
+	seed := LoopProfile{
 		Model:            "claude-sonnet-4-20250514",
 		QualityFloor:     "7",
 		Mission:          "automation",
 		LocalOnly:        "false",
 		DelegationGating: "disabled",
 		ExcludeTools:     []string{"resolve_anticipation", "cancel_anticipation"},
-		SeedTags:         []string{"scheduler", "wake"},
+		InitialTags:      []string{"scheduler", "wake"},
 		ExtraHints: map[string]string{
 			"source": "scheduler",
 		},
@@ -175,17 +174,17 @@ func TestLoopSeedRequestOptions(t *testing.T) {
 	if len(opts.ExcludeTools) != len(seed.ExcludeTools) {
 		t.Fatalf("ExcludeTools len = %d, want %d", len(opts.ExcludeTools), len(seed.ExcludeTools))
 	}
-	if len(opts.SeedTags) != len(seed.SeedTags) {
-		t.Fatalf("SeedTags len = %d, want %d", len(opts.SeedTags), len(seed.SeedTags))
+	if len(opts.InitialTags) != len(seed.InitialTags) {
+		t.Fatalf("InitialTags len = %d, want %d", len(opts.InitialTags), len(seed.InitialTags))
 	}
 
 	opts.ExcludeTools[0] = "changed"
-	opts.SeedTags[0] = "changed"
+	opts.InitialTags[0] = "changed"
 	if seed.ExcludeTools[0] != "resolve_anticipation" {
 		t.Fatalf("seed ExcludeTools mutated to %q", seed.ExcludeTools[0])
 	}
-	if seed.SeedTags[0] != "scheduler" {
-		t.Fatalf("seed SeedTags mutated to %q", seed.SeedTags[0])
+	if seed.InitialTags[0] != "scheduler" {
+		t.Fatalf("seed InitialTags mutated to %q", seed.InitialTags[0])
 	}
 }
 
@@ -219,8 +218,8 @@ func TestValidateTopicFilter(t *testing.T) {
 	}
 }
 
-func TestLoopSeedJSONRoundTrip(t *testing.T) {
-	original := LoopSeed{
+func TestLoopProfileJSONRoundTrip(t *testing.T) {
+	original := LoopProfile{
 		Model:            "gpt-4o",
 		QualityFloor:     "8",
 		Mission:          "automation",
@@ -228,7 +227,7 @@ func TestLoopSeedJSONRoundTrip(t *testing.T) {
 		DelegationGating: "disabled",
 		PreferSpeed:      "true",
 		ExcludeTools:     []string{"shell_exec", "web_fetch"},
-		SeedTags:         []string{"homeassistant", "security"},
+		InitialTags:      []string{"homeassistant", "security"},
 		ExtraHints:       map[string]string{"source": "frigate"},
 		Instructions:     "Analyse the camera event and decide if action is needed.",
 	}
@@ -238,7 +237,7 @@ func TestLoopSeedJSONRoundTrip(t *testing.T) {
 		t.Fatalf("marshal: %v", err)
 	}
 
-	var restored LoopSeed
+	var restored LoopProfile
 	if err := json.Unmarshal(data, &restored); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -272,12 +271,12 @@ func TestLoopSeedJSONRoundTrip(t *testing.T) {
 			t.Errorf("ExcludeTools[%d] = %q, want %q", i, restored.ExcludeTools[i], v)
 		}
 	}
-	if len(restored.SeedTags) != len(original.SeedTags) {
-		t.Fatalf("SeedTags len = %d, want %d", len(restored.SeedTags), len(original.SeedTags))
+	if len(restored.InitialTags) != len(original.InitialTags) {
+		t.Fatalf("InitialTags len = %d, want %d", len(restored.InitialTags), len(original.InitialTags))
 	}
-	for i, v := range original.SeedTags {
-		if restored.SeedTags[i] != v {
-			t.Errorf("SeedTags[%d] = %q, want %q", i, restored.SeedTags[i], v)
+	for i, v := range original.InitialTags {
+		if restored.InitialTags[i] != v {
+			t.Errorf("InitialTags[%d] = %q, want %q", i, restored.InitialTags[i], v)
 		}
 	}
 	if len(restored.ExtraHints) != len(original.ExtraHints) {

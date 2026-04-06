@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"sync/atomic"
 	"time"
 )
 
@@ -38,10 +39,11 @@ type StdioTransport struct {
 	config StdioConfig
 	logger *slog.Logger
 
-	sem    chan struct{} // capacity-1 semaphore; replaces sync.Mutex
-	cmd    *exec.Cmd
-	stdin  io.WriteCloser
-	reader *bufio.Reader
+	sem     chan struct{} // capacity-1 semaphore; replaces sync.Mutex
+	cmd     *exec.Cmd
+	stdin   io.WriteCloser
+	reader  *bufio.Reader
+	closing atomic.Bool
 }
 
 // NewStdioTransport creates a stdio transport for the given config.
@@ -67,6 +69,7 @@ func (t *StdioTransport) start(_ context.Context) error {
 		// Process is still running.
 		return nil
 	}
+	t.closing.Store(false)
 
 	t.logger.Info("starting MCP subprocess",
 		"command", t.config.Command,
@@ -265,6 +268,7 @@ func (t *StdioTransport) stop() error {
 	if t.cmd == nil || t.cmd.Process == nil {
 		return nil
 	}
+	t.closing.Store(true)
 
 	t.logger.Info("stopping MCP subprocess", "pid", t.cmd.Process.Pid)
 
@@ -280,14 +284,23 @@ func (t *StdioTransport) stop() error {
 	select {
 	case err := <-done:
 		t.cmd = nil
-		return err
+		t.stdin = nil
+		t.reader = nil
+		if err != nil {
+			t.logger.Debug("MCP subprocess exited during shutdown", "error", err)
+		}
+		return nil
 	case <-time.After(5 * time.Second):
 		t.logger.Warn("MCP subprocess did not exit gracefully, killing",
 			"pid", t.cmd.Process.Pid,
 		)
 		_ = t.cmd.Process.Kill()
-		<-done
+		if err := <-done; err != nil {
+			t.logger.Debug("MCP subprocess exited after forced shutdown", "error", err)
+		}
 		t.cmd = nil
+		t.stdin = nil
+		t.reader = nil
 		return nil
 	}
 }

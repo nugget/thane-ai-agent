@@ -5,6 +5,7 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/channels/email"
 	"github.com/nugget/thane-ai-agent/internal/forge"
+	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
 	"github.com/nugget/thane-ai-agent/internal/router"
 	"github.com/nugget/thane-ai-agent/internal/search"
 )
@@ -95,7 +96,10 @@ func ExampleConfig() *Config {
 		TalentsDir: "./talents",
 
 		Paths: map[string]string{
-			"kb": "./knowledge",
+			"core":       "./core",
+			"generated":  "./generated",
+			"kb":         "./knowledge",
+			"scratchpad": "./scratchpad",
 		},
 
 		ShellExec: ShellExecConfig{
@@ -151,12 +155,12 @@ func ExampleConfig() *Config {
 				{Topic: "frigate/events"},
 				{
 					Topic: "automation/wake/security",
-					Wake: &router.LoopSeed{
+					Wake: &router.LoopProfile{
 						QualityFloor:     "7",
 						Mission:          "automation",
 						LocalOnly:        "false",
 						DelegationGating: "disabled",
-						SeedTags:         []string{"homeassistant"},
+						InitialTags:      []string{"homeassistant"},
 						Instructions:     "Evaluate the security event and decide if action is needed.",
 					},
 				},
@@ -214,7 +218,7 @@ func ExampleConfig() *Config {
 		},
 
 		Attachments: AttachmentsConfig{
-			StoreDir: "~/Thane/attachments",
+			StoreDir: "~/Thane/generated/attachments",
 			Vision: VisionConfig{
 				Enabled: true,
 				Model:   "llava:latest",
@@ -224,8 +228,43 @@ func ExampleConfig() *Config {
 		},
 
 		Provenance: ProvenanceConfig{
-			Path:       "~/Thane/identity",
+			Path:       "~/Thane/core",
 			SigningKey: "~/.ssh/id_ed25519",
+		},
+
+		Loops: LoopsConfig{
+			Definitions: []looppkg.Spec{
+				{
+					Name:       "office_watch",
+					Enabled:    true,
+					Task:       "Watch the office and report noteworthy changes or trends.",
+					Operation:  looppkg.OperationService,
+					Completion: looppkg.CompletionNone,
+					Conditions: looppkg.Conditions{
+						Schedule: &looppkg.ScheduleCondition{
+							Timezone: "America/Chicago",
+							Windows: []looppkg.ScheduleWindow{{
+								Days:  []string{"mon", "tue", "wed", "thu", "fri"},
+								Start: "08:30",
+								End:   "18:00",
+							}},
+						},
+					},
+					Profile: router.LoopProfile{
+						Mission:          "background",
+						DelegationGating: "disabled",
+						InitialTags:      []string{"homeassistant"},
+						Instructions:     "Be concise and focus on high-signal observations.",
+					},
+					SleepMin:     2 * time.Minute,
+					SleepMax:     10 * time.Minute,
+					SleepDefault: 5 * time.Minute,
+					Jitter:       looppkg.Float64Ptr(0.2),
+					Metadata: map[string]string{
+						"category": "observer",
+					},
+				},
+			},
 		},
 
 		Forge: forge.Config{
@@ -265,7 +304,7 @@ func ExampleConfig() *Config {
 		Context: ContextConfig{
 			InjectFiles: []string{
 				"~/.agents.md",
-				"~/Thane/MEMORY.md",
+				"~/Thane/core/MEMORY.md",
 			},
 		},
 
@@ -284,7 +323,7 @@ func ExampleConfig() *Config {
 		},
 
 		Episodic: EpisodicConfig{
-			DailyDir:      "~/Thane/daily",
+			DailyDir:      "~/Thane/generated/daily",
 			LookbackDays:  2,
 			HistoryTokens: 4000,
 		},
@@ -305,13 +344,13 @@ func ExampleConfig() *Config {
 			FeedCheckInterval:  3600,
 			MaxFeeds:           50,
 			Analysis: AnalysisConfig{
-				DefaultOutputPath: "~/Sync/Vault/Media",
+				DefaultOutputPath: "~/Thane/generated/media",
 			},
 		},
 
 		Metacognitive: MetacognitiveConfig{
 			Enabled:               false,
-			StateFile:             "metacognitive.md",
+			StateFile:             "core/metacognitive.md",
 			MinSleep:              "2m",
 			MaxSleep:              "30m",
 			DefaultSleep:          "10m",
@@ -365,7 +404,6 @@ func ExampleConfig() *Config {
 		CapabilityTags: map[string]CapabilityTagConfig{
 			"ha": {
 				Description:  "Home Assistant tools and sensors",
-				Tools:        []string{"get_ha_states", "call_ha_service", "get_ha_history"},
 				AlwaysActive: true,
 			},
 		},
@@ -375,15 +413,9 @@ func ExampleConfig() *Config {
 			"email":  {"forge"},
 		},
 
-		OpenClaw: &OpenClawConfig{
-			WorkspacePath: "~/Thane/openclaw",
-			SkillsDirs:    []string{"~/Thane/openclaw/skills"},
-			MaxFileChars:  20000,
-		},
-
 		Timezone: "America/Chicago",
 
-		PersonaFile: "./persona.md",
+		PersonaFile: "~/Thane/core/persona.md",
 
 		ExtraPath: []string{
 			"$HOME/.local/bin",

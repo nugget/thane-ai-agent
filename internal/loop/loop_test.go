@@ -3,12 +3,15 @@ package loop
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/nugget/thane-ai-agent/internal/events"
+	"github.com/nugget/thane-ai-agent/internal/router"
+	"github.com/nugget/thane-ai-agent/internal/toolcatalog"
 )
 
 // fixedRand returns a RandSource that always returns the same value.
@@ -912,6 +915,90 @@ func TestHintsMerge(t *testing.T) {
 	}
 }
 
+func TestNewFromSpecAppliesProfileToRequest(t *testing.T) {
+	t.Parallel()
+
+	var captured Request
+	var mu sync.Mutex
+
+	runner := &inspectingRunner{
+		onRun: func(req RunRequest) {
+			mu.Lock()
+			captured = Request{
+				Model:         req.Model,
+				Messages:      append([]Message(nil), req.Messages...),
+				ExcludeTools:  append([]string(nil), req.ExcludeTools...),
+				InitialTags:   append([]string(nil), req.InitialTags...),
+				SkipTagFilter: req.SkipTagFilter,
+				Hints:         cloneStringMap(req.Hints),
+			}
+			mu.Unlock()
+		},
+	}
+
+	l, err := NewFromSpec(Spec{
+		Name:         "spec-profile",
+		Task:         "evaluate the alert",
+		SleepMin:     1 * time.Millisecond,
+		SleepMax:     2 * time.Millisecond,
+		SleepDefault: 1 * time.Millisecond,
+		Jitter:       Float64Ptr(0),
+		MaxIter:      1,
+		Profile: router.LoopProfile{
+			Model:        "spark/gpt-oss:20b",
+			Mission:      "automation",
+			ExcludeTools: []string{"shell_exec"},
+			InitialTags:  []string{"homeassistant"},
+			Instructions: "stay concise",
+			PreferSpeed:  "true",
+			LocalOnly:    "false",
+			QualityFloor: "7",
+			ExtraHints:   map[string]string{"source": "profile"},
+		},
+		ExcludeTools: []string{"dangerous_tool"},
+		Hints: map[string]string{
+			"source": "spec",
+		},
+	}, Deps{Runner: runner})
+	if err != nil {
+		t.Fatalf("NewFromSpec: %v", err)
+	}
+
+	_ = l.Start(context.Background())
+	<-l.Done()
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	if captured.Model != "spark/gpt-oss:20b" {
+		t.Fatalf("Model = %q, want spark/gpt-oss:20b", captured.Model)
+	}
+	if len(captured.Messages) == 0 {
+		t.Fatal("Messages empty")
+	}
+	if got := captured.Messages[0].Content; got != "Instructions: stay concise\n\nevaluate the alert" {
+		t.Fatalf("Message content = %q", got)
+	}
+	if captured.Hints["mission"] != "automation" {
+		t.Fatalf("mission hint = %q, want automation", captured.Hints["mission"])
+	}
+	if captured.Hints["quality_floor"] != "7" {
+		t.Fatalf("quality_floor hint = %q, want 7", captured.Hints["quality_floor"])
+	}
+	if captured.Hints["prefer_speed"] != "true" {
+		t.Fatalf("prefer_speed hint = %q, want true", captured.Hints["prefer_speed"])
+	}
+	if captured.Hints["source"] != "spec" {
+		t.Fatalf("source hint = %q, want spec", captured.Hints["source"])
+	}
+	if !slices.Contains(captured.ExcludeTools, "shell_exec") || !slices.Contains(captured.ExcludeTools, "dangerous_tool") {
+		t.Fatalf("ExcludeTools = %#v", captured.ExcludeTools)
+	}
+	if !slices.Contains(captured.InitialTags, "homeassistant") {
+		t.Fatalf("InitialTags = %#v", captured.InitialTags)
+	}
+}
+
 func TestCurrentConvID(t *testing.T) {
 	t.Parallel()
 
@@ -1399,6 +1486,45 @@ func TestWaitFuncError(t *testing.T) {
 	}
 }
 
+func TestWaitFuncContextCanceledStopsLoop(t *testing.T) {
+	t.Parallel()
+
+	var handled atomic.Int32
+	l, err := New(Config{
+		Name:         "wait-cancel",
+		SleepMin:     1 * time.Millisecond,
+		SleepMax:     2 * time.Millisecond,
+		SleepDefault: 1 * time.Millisecond,
+		Jitter:       Float64Ptr(0),
+		WaitFunc: func(context.Context) (any, error) {
+			return nil, context.Canceled
+		},
+		Handler: func(_ context.Context, _ any) error {
+			handled.Add(1)
+			return nil
+		},
+	}, Deps{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	_ = l.Start(context.Background())
+
+	select {
+	case <-l.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("loop did not finish within 5s")
+	}
+
+	status := l.Status()
+	if status.Iterations != 0 {
+		t.Errorf("iterations = %d, want 0", status.Iterations)
+	}
+	if handled.Load() != 0 {
+		t.Errorf("handled = %d, want 0", handled.Load())
+	}
+}
+
 func TestWaitFuncPublishesWaitEvent(t *testing.T) {
 	t.Parallel()
 
@@ -1725,20 +1851,25 @@ type progressRunner struct {
 func (r *progressRunner) Run(_ context.Context, req RunRequest, _ StreamCallback) (*RunResponse, error) {
 	if req.OnProgress != nil {
 		req.OnProgress(events.KindLoopLLMStart, map[string]any{
-			"model":      "test-model",
-			"est_tokens": 12345,
-			"messages":   3,
-			"tools":      7,
-			"complexity": "moderate",
-			"intent":     "check_status",
+			"model":           "test-model",
+			"est_tokens":      12345,
+			"messages":        3,
+			"tools":           7,
+			"effective_tools": []string{"alpha_tool", "beta_tool"},
+			"active_tags":     []string{"forge", "memory"},
+			"complexity":      "moderate",
+			"intent":          "check_status",
 		})
 	}
 	<-r.gate
 	return &RunResponse{
-		Content:      "ok",
-		Model:        "test-model",
-		InputTokens:  100,
-		OutputTokens: 20,
+		Content:        "ok",
+		Model:          "test-model",
+		RequestID:      "req-live",
+		InputTokens:    100,
+		OutputTokens:   20,
+		EffectiveTools: []string{"alpha_tool", "beta_tool"},
+		ActiveTags:     []string{"forge", "memory"},
 	}, nil
 }
 
@@ -1796,6 +1927,12 @@ func TestLLMContextInStatus(t *testing.T) {
 	if status.LLMContext["complexity"] != "moderate" {
 		t.Errorf("LLMContext[complexity] = %v, want moderate", status.LLMContext["complexity"])
 	}
+	if got, ok := status.LLMContext["effective_tools"].([]string); !ok || len(got) != 2 || got[0] != "alpha_tool" || got[1] != "beta_tool" {
+		t.Errorf("LLMContext[effective_tools] = %#v, want [alpha_tool beta_tool]", status.LLMContext["effective_tools"])
+	}
+	if got, ok := status.LLMContext["active_tags"].([]string); !ok || len(got) != 2 || got[0] != "forge" || got[1] != "memory" {
+		t.Errorf("LLMContext[active_tags] = %#v, want [forge memory]", status.LLMContext["active_tags"])
+	}
 
 	// LLMContext should not contain loop infrastructure keys.
 	if _, ok := status.LLMContext["loop_id"]; ok {
@@ -1814,6 +1951,17 @@ func TestLLMContextInStatus(t *testing.T) {
 	status = l.Status()
 	if status.LLMContext != nil {
 		t.Errorf("LLMContext should be nil after iteration, got %v", status.LLMContext)
+	}
+
+	if len(status.RecentIterations) != 1 {
+		t.Fatalf("RecentIterations = %d, want 1", len(status.RecentIterations))
+	}
+	snap := status.RecentIterations[0]
+	if len(snap.EffectiveTools) != 2 || snap.EffectiveTools[0] != "alpha_tool" || snap.EffectiveTools[1] != "beta_tool" {
+		t.Errorf("RecentIterations[0].EffectiveTools = %v, want [alpha_tool beta_tool]", snap.EffectiveTools)
+	}
+	if len(snap.ActiveTags) != 2 || snap.ActiveTags[0] != "forge" || snap.ActiveTags[1] != "memory" {
+		t.Errorf("RecentIterations[0].ActiveTags = %v, want [forge memory]", snap.ActiveTags)
 	}
 }
 
@@ -1853,6 +2001,74 @@ func TestActiveTagsInStatus(t *testing.T) {
 	status = l.Status()
 	if status.ActiveTags != nil {
 		t.Errorf("ActiveTags should be nil when callback returns nil, got %v", status.ActiveTags)
+	}
+}
+
+func TestHandlerReportedToolingPersistsIntoStatus(t *testing.T) {
+	t.Parallel()
+
+	bus := events.New()
+	l, err := New(Config{
+		Name: "handler-tooling-test",
+		Handler: func(ctx context.Context, _ any) error {
+			ReportAgentRun(ctx, AgentRunSummary{
+				RequestID:      "req-handler",
+				Model:          "test-model",
+				InputTokens:    42,
+				OutputTokens:   9,
+				ActiveTags:     []string{"forge", "ha"},
+				EffectiveTools: []string{"forge_issue_list", "get_state"},
+				LoadedCapabilities: []toolcatalog.LoadedCapabilityEntry{
+					{Tag: "forge", Description: "Forge tools", ToolCount: 8},
+					{Tag: "ha", Description: "Home Assistant tools", ToolCount: 5},
+				},
+			})
+			return nil
+		},
+		SleepMin:     1 * time.Millisecond,
+		SleepMax:     1 * time.Millisecond,
+		SleepDefault: 1 * time.Millisecond,
+		Jitter:       Float64Ptr(0),
+		MaxIter:      1,
+	}, Deps{EventBus: bus})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	if err := l.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	select {
+	case <-l.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("loop did not finish")
+	}
+
+	status := l.Status()
+	if len(status.RecentIterations) != 1 {
+		t.Fatalf("RecentIterations = %d, want 1", len(status.RecentIterations))
+	}
+	snap := status.RecentIterations[0]
+	if snap.RequestID != "req-handler" {
+		t.Fatalf("RequestID = %q, want req-handler", snap.RequestID)
+	}
+	if !slices.Equal(snap.ActiveTags, []string{"forge", "ha"}) {
+		t.Fatalf("snap.ActiveTags = %v, want [forge ha]", snap.ActiveTags)
+	}
+	if !slices.Equal(snap.EffectiveTools, []string{"forge_issue_list", "get_state"}) {
+		t.Fatalf("snap.EffectiveTools = %v, want [forge_issue_list get_state]", snap.EffectiveTools)
+	}
+	if len(snap.Tooling.LoadedCapabilities) != 2 {
+		t.Fatalf("snap.Tooling.LoadedCapabilities = %v, want 2 entries", snap.Tooling.LoadedCapabilities)
+	}
+	if !slices.Equal(status.Tooling.LoadedTags, []string{"forge", "ha"}) {
+		t.Fatalf("status.Tooling.LoadedTags = %v, want [forge ha]", status.Tooling.LoadedTags)
+	}
+	if !slices.Equal(status.Tooling.EffectiveTools, []string{"forge_issue_list", "get_state"}) {
+		t.Fatalf("status.Tooling.EffectiveTools = %v, want [forge_issue_list get_state]", status.Tooling.EffectiveTools)
+	}
+	if len(status.Tooling.LoadedCapabilities) != 2 {
+		t.Fatalf("status.Tooling.LoadedCapabilities = %v, want 2 entries", status.Tooling.LoadedCapabilities)
 	}
 }
 

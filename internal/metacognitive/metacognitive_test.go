@@ -384,6 +384,71 @@ func TestFormatToolsUsed_Sorted(t *testing.T) {
 
 // --- BuildLoopConfig tests ---
 
+func TestBuildSpec(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := testConfig()
+	opts := Opts{
+		WorkspacePath: tmpDir,
+		StateFilePath: filepath.Join(tmpDir, cfg.StateFile),
+	}
+
+	spec := BuildSpec(cfg, opts)
+	if spec.Name != "metacognitive" {
+		t.Errorf("Name = %q, want metacognitive", spec.Name)
+	}
+	if spec.Operation != loop.OperationService {
+		t.Errorf("Operation = %q, want %q", spec.Operation, loop.OperationService)
+	}
+	if spec.Completion != loop.CompletionNone {
+		t.Errorf("Completion = %q, want %q", spec.Completion, loop.CompletionNone)
+	}
+	if spec.Profile.Mission != "metacognitive" {
+		t.Errorf("Profile.Mission = %q, want metacognitive", spec.Profile.Mission)
+	}
+	if spec.Profile.DelegationGating != "disabled" {
+		t.Errorf("Profile.DelegationGating = %q, want disabled", spec.Profile.DelegationGating)
+	}
+	if spec.Profile.ExtraHints["source"] != "metacognitive" {
+		t.Errorf("Profile.ExtraHints[source] = %q, want metacognitive", spec.Profile.ExtraHints["source"])
+	}
+}
+
+func TestDefinitionSpecPersistable(t *testing.T) {
+	cfg := testConfig()
+
+	spec := DefinitionSpec(cfg)
+	if spec.Name != DefinitionName {
+		t.Errorf("Name = %q, want %q", spec.Name, DefinitionName)
+	}
+	if spec.TaskBuilder != nil || spec.PostIterate != nil || spec.Setup != nil {
+		t.Fatal("DefinitionSpec should not include runtime hooks")
+	}
+	if err := spec.ValidatePersistable(); err != nil {
+		t.Fatalf("ValidatePersistable: %v", err)
+	}
+}
+
+func TestHydrateSpecAttachesLoopRuntimeHooks(t *testing.T) {
+	tmpDir := t.TempDir()
+	cfg := testConfig()
+	opts := Opts{
+		WorkspacePath: tmpDir,
+		StateFilePath: filepath.Join(tmpDir, cfg.StateFile),
+		StateFileName: cfg.StateFile,
+	}
+
+	spec := HydrateSpec(DefinitionSpec(cfg), cfg, opts)
+	if spec.TaskBuilder == nil {
+		t.Fatal("TaskBuilder should be set after hydration")
+	}
+	if spec.PostIterate == nil {
+		t.Fatal("PostIterate should be set after hydration")
+	}
+	if spec.Setup != nil {
+		t.Fatal("HydrateSpec should not attach app-level setup hooks")
+	}
+}
+
 func TestBuildLoopConfig(t *testing.T) {
 	tmpDir := t.TempDir()
 	cfg := testConfig()

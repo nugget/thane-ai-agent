@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 
@@ -144,6 +145,135 @@ func TestCapabilityActivation_MidLoop(t *testing.T) {
 	iter1Tools := toolNames(mock.calls[1].Tools)
 	if !hasName(iter1Tools, "forge_tool") {
 		t.Error("forge_tool should be in iter 1 tool definitions (activated by activate_capability)")
+	}
+}
+
+func TestRunResponseSurfacesEffectiveToolsAndLoadedCapabilities(t *testing.T) {
+	mock := &mockLLM{
+		responses: []*llm.ChatResponse{
+			{
+				Model:        "test-model",
+				Message:      llm.Message{Role: "assistant", Content: "All set."},
+				InputTokens:  100,
+				OutputTokens: 12,
+			},
+		},
+	}
+
+	capTags := map[string]config.CapabilityTagConfig{
+		"ha": {
+			Description:  "Home Assistant tools",
+			Tools:        []string{"get_state"},
+			AlwaysActive: true,
+		},
+	}
+
+	loop := setupCapabilityLoop(mock, []string{"get_state"}, capTags)
+	loop.UseCapabilitySurface(tools.BuildCapabilityManifest(
+		map[string][]string{"ha": {"get_state"}},
+		map[string]string{"ha": "Home Assistant tools"},
+		map[string]bool{"ha": true},
+	))
+
+	resp, err := loop.Run(context.Background(), &Request{
+		Messages: []Message{{Role: "user", Content: "what can you do here?"}},
+	}, nil)
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	if resp == nil {
+		t.Fatal("expected non-nil response")
+	}
+	if !slices.Contains(resp.EffectiveTools, "get_state") {
+		t.Fatalf("EffectiveTools = %#v, want get_state", resp.EffectiveTools)
+	}
+	for _, toolName := range []string{"activate_capability", "deactivate_capability", "list_loaded_capabilities"} {
+		if !slices.Contains(resp.EffectiveTools, toolName) {
+			t.Fatalf("EffectiveTools = %#v, missing %q", resp.EffectiveTools, toolName)
+		}
+	}
+	if !slices.Equal(resp.ActiveTags, []string{"ha"}) {
+		t.Fatalf("ActiveTags = %#v, want [ha]", resp.ActiveTags)
+	}
+	if len(resp.LoadedCapabilities) != 1 || resp.LoadedCapabilities[0].Tag != "ha" {
+		t.Fatalf("LoadedCapabilities = %#v, want ha entry", resp.LoadedCapabilities)
+	}
+}
+
+func TestCapabilityActivation_DoesNotBleedActiveStateAcrossConversations(t *testing.T) {
+	mock := &mockLLM{
+		responses: []*llm.ChatResponse{
+			{
+				Model: "test-model",
+				Message: llm.Message{
+					Role: "assistant",
+					ToolCalls: []llm.ToolCall{{
+						ID: "call-req-cap",
+						Function: struct {
+							Name      string         `json:"name"`
+							Arguments map[string]any `json:"arguments"`
+						}{
+							Name:      "activate_capability",
+							Arguments: map[string]any{"tag": "forge"},
+						},
+					}},
+				},
+				InputTokens:  100,
+				OutputTokens: 10,
+			},
+			{
+				Model:        "test-model",
+				Message:      llm.Message{Role: "assistant", Content: "Forge ready."},
+				InputTokens:  120,
+				OutputTokens: 10,
+			},
+			{
+				Model:        "test-model",
+				Message:      llm.Message{Role: "assistant", Content: "Fresh conversation."},
+				InputTokens:  100,
+				OutputTokens: 10,
+			},
+		},
+	}
+
+	capTags := map[string]config.CapabilityTagConfig{
+		"forge": {
+			Description: "Forge tools",
+			Tools:       []string{"forge_tool"},
+		},
+	}
+
+	loop := setupCapabilityLoop(mock, []string{"forge_tool"}, capTags)
+	loop.UseCapabilitySurface(tools.BuildCapabilityManifest(
+		map[string][]string{"forge": {"forge_tool"}},
+		map[string]string{"forge": "Forge tools"},
+		nil,
+	))
+	loop.SetCapabilityTagStore(newTestCapStore(t))
+
+	resp1, err := loop.Run(context.Background(), &Request{
+		ConversationID: "conv-1",
+		Messages:       []Message{{Role: "user", Content: "activate forge"}},
+	}, nil)
+	if err != nil {
+		t.Fatalf("Run conv-1 error: %v", err)
+	}
+	if !slices.Equal(resp1.ActiveTags, []string{"forge"}) {
+		t.Fatalf("conv-1 ActiveTags = %#v, want [forge]", resp1.ActiveTags)
+	}
+
+	resp2, err := loop.Run(context.Background(), &Request{
+		ConversationID: "conv-2",
+		Messages:       []Message{{Role: "user", Content: "what can you do here?"}},
+	}, nil)
+	if err != nil {
+		t.Fatalf("Run conv-2 error: %v", err)
+	}
+	if len(resp2.ActiveTags) != 0 {
+		t.Fatalf("conv-2 ActiveTags = %#v, want none", resp2.ActiveTags)
+	}
+	if len(resp2.LoadedCapabilities) != 0 {
+		t.Fatalf("conv-2 LoadedCapabilities = %#v, want none", resp2.LoadedCapabilities)
 	}
 }
 

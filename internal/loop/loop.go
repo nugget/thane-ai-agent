@@ -13,26 +13,32 @@ import (
 	"github.com/google/uuid"
 	"github.com/nugget/thane-ai-agent/internal/events"
 	"github.com/nugget/thane-ai-agent/internal/logging"
+	"github.com/nugget/thane-ai-agent/internal/memory"
+	"github.com/nugget/thane-ai-agent/internal/toolcatalog"
 )
 
 // Runner abstracts the agent loop for LLM calls. Satisfied by
 // *agent.Loop. Defined here to avoid a circular import.
 type Runner interface {
-	Run(ctx context.Context, req RunRequest, stream StreamCallback) (*RunResponse, error)
+	Run(ctx context.Context, req Request, stream StreamCallback) (*Response, error)
 }
 
-// RunRequest mirrors the fields of agent.Request that loops need.
-// The loop package defines its own type to avoid importing agent.
-type RunRequest struct {
-	ConversationID string
-	Messages       []RunMessage
-	ExcludeTools   []string
-	SkipTagFilter  bool
-	Hints          map[string]string
-	// SeedTags are capability tags to activate at the start of the Run,
+// Request mirrors the loop-facing fields of agent.Request. The loop
+// package defines its own type to avoid importing agent.
+type Request struct {
+	Model          string                 `yaml:"model,omitempty" json:"model,omitempty"`
+	ConversationID string                 `yaml:"conversation_id,omitempty" json:"conversation_id,omitempty"`
+	ChannelBinding *memory.ChannelBinding `yaml:"channel_binding,omitempty" json:"channel_binding,omitempty"`
+	Messages       []Message              `yaml:"messages,omitempty" json:"messages,omitempty"`
+	SkipContext    bool                   `yaml:"skip_context,omitempty" json:"skip_context,omitempty"`
+	AllowedTools   []string               `yaml:"allowed_tools,omitempty" json:"allowed_tools,omitempty"`
+	ExcludeTools   []string               `yaml:"exclude_tools,omitempty" json:"exclude_tools,omitempty"`
+	SkipTagFilter  bool                   `yaml:"skip_tag_filter,omitempty" json:"skip_tag_filter,omitempty"`
+	Hints          map[string]string      `yaml:"hints,omitempty" json:"hints,omitempty"`
+	// InitialTags are capability tags to activate at the start of the Run,
 	// in addition to always-active and channel-pinned tags. Used by loops
 	// to carry forward tags activated in previous iterations.
-	SeedTags []string
+	InitialTags []string `yaml:"initial_tags,omitempty" json:"initial_tags,omitempty"`
 
 	// OnProgress is called by the Runner during execution to report
 	// in-flight activity (tool calls, LLM responses). The kind
@@ -40,30 +46,57 @@ type RunRequest struct {
 	// event-specific fields. The loop automatically injects loop_id
 	// and loop_name into data before publishing. Nil means no
 	// progress reporting.
-	OnProgress func(kind string, data map[string]any) `json:"-"`
+	OnProgress func(kind string, data map[string]any) `yaml:"-" json:"-"`
+
+	MaxIterations   int           `yaml:"max_iterations,omitempty" json:"max_iterations,omitempty"`
+	MaxOutputTokens int           `yaml:"max_output_tokens,omitempty" json:"max_output_tokens,omitempty"`
+	ToolTimeout     time.Duration `yaml:"tool_timeout,omitempty" json:"tool_timeout,omitempty"`
+	UsageRole       string        `yaml:"usage_role,omitempty" json:"usage_role,omitempty"`
+	UsageTaskName   string        `yaml:"usage_task_name,omitempty" json:"usage_task_name,omitempty"`
+	SystemPrompt    string        `yaml:"system_prompt,omitempty" json:"system_prompt,omitempty"`
+	FallbackContent string        `yaml:"fallback_content,omitempty" json:"fallback_content,omitempty"`
 }
 
-// RunMessage is a chat message for the runner.
-type RunMessage struct {
-	Role    string
-	Content string
+// RunRequest is kept as a compatibility alias while loops-ng migrates
+// onto Request as the primary loop-facing run descriptor.
+type RunRequest = Request
+
+// Message is a chat message for the runner.
+type Message struct {
+	Role    string `yaml:"role" json:"role"`
+	Content string `yaml:"content" json:"content"`
 }
 
-// RunResponse mirrors agent.Response fields that loops consume.
-// RunResponse holds the result of an LLM call executed by a [Runner].
-type RunResponse struct {
-	Content       string
-	Model         string
-	InputTokens   int
-	OutputTokens  int
-	ContextWindow int
-	ToolsUsed     map[string]int
-	RequestID     string
+// RunMessage is kept as a compatibility alias while loops-ng migrates
+// onto Message as the primary loop-facing message type.
+type RunMessage = Message
+
+// Response mirrors agent.Response fields that loops consume. It holds
+// the result of an LLM call executed by a [Runner].
+type Response struct {
+	Content                  string                              `yaml:"content,omitempty" json:"content,omitempty"`
+	Model                    string                              `yaml:"model,omitempty" json:"model,omitempty"`
+	FinishReason             string                              `yaml:"finish_reason,omitempty" json:"finish_reason,omitempty"`
+	InputTokens              int                                 `yaml:"input_tokens,omitempty" json:"input_tokens,omitempty"`
+	OutputTokens             int                                 `yaml:"output_tokens,omitempty" json:"output_tokens,omitempty"`
+	CacheCreationInputTokens int                                 `yaml:"cache_creation_input_tokens,omitempty" json:"cache_creation_input_tokens,omitempty"`
+	CacheReadInputTokens     int                                 `yaml:"cache_read_input_tokens,omitempty" json:"cache_read_input_tokens,omitempty"`
+	ContextWindow            int                                 `yaml:"context_window,omitempty" json:"context_window,omitempty"`
+	ToolsUsed                map[string]int                      `yaml:"tools_used,omitempty" json:"tools_used,omitempty"`
+	EffectiveTools           []string                            `yaml:"effective_tools,omitempty" json:"effective_tools,omitempty"`
+	LoadedCapabilities       []toolcatalog.LoadedCapabilityEntry `yaml:"loaded_capabilities,omitempty" json:"loaded_capabilities,omitempty"`
+	RequestID                string                              `yaml:"request_id,omitempty" json:"request_id,omitempty"`
+	Iterations               int                                 `yaml:"iterations,omitempty" json:"iterations,omitempty"`
+	Exhausted                bool                                `yaml:"exhausted,omitempty" json:"exhausted,omitempty"`
 	// ActiveTags is the set of capability tags that were active at the
 	// end of the Run. Loops use this to carry forward activations to
 	// subsequent iterations.
-	ActiveTags []string
+	ActiveTags []string `yaml:"active_tags,omitempty" json:"active_tags,omitempty"`
 }
+
+// RunResponse is kept as a compatibility alias while loops-ng
+// migrates onto Response as the primary loop-facing response type.
+type RunResponse = Response
 
 // StreamCallback receives streaming events. Nil disables streaming.
 type StreamCallback func(event any)
@@ -94,6 +127,9 @@ type Deps struct {
 	// Runner executes LLM iterations. Required unless [Config].Handler
 	// is set (Handler-only loops do not call the Runner).
 	Runner Runner
+	// CompletionSink receives detached completion deliveries such as
+	// background-task results injected into conversations.
+	CompletionSink CompletionSink
 	// Logger for loop operations. Defaults to slog.Default().
 	Logger *slog.Logger
 	// EventBus publishes loop lifecycle events. Nil disables events.
@@ -142,9 +178,33 @@ type Loop struct {
 	// read it via [Loop.CurrentConvID].
 	currentConvID string
 
+	// requestBase carries the per-iteration request shaping derived
+	// from a loops-ng [Spec]'s [router.LoopProfile]. It is additive and
+	// only populated for loops created via [NewFromSpec].
+	requestBase Request
+
+	// requestOverride carries launch-specific per-run overrides
+	// applied on top of the spec/profile-derived request shaping.
+	requestOverride Request
+
+	// requestInstructions is extra guidance derived from a loops-ng
+	// [Spec]'s [router.LoopProfile]. It is prepended to each iteration
+	// task when present.
+	requestInstructions string
+
+	// lastResponse is the most recent successful runner response for
+	// this loop. Joined request/reply launches surface this as their
+	// concrete result payload once the loop finishes.
+	lastResponse *Response
+
+	// taskOverride replaces the spec/config task for launch-driven,
+	// one-shot runs that need per-run input without mutating the
+	// underlying [Spec].
+	taskOverride string
+
 	// activatedTags tracks capability tags activated during previous
-	// iterations. Carried forward via SeedTags on the next RunRequest
-	// so activations persist across the loop's lifetime.
+	// iterations. Carried forward via InitialTags on the next Request so
+	// activations persist across the loop's lifetime.
 	activatedTags []string
 
 	// recentConvIDs is a ring buffer of conversation IDs from the most
@@ -213,6 +273,61 @@ func New(cfg Config, deps Deps) (*Loop, error) {
 		deps:   deps,
 		state:  StatePending,
 	}, nil
+}
+
+// NewFromSpec creates a loop from a [Spec], validating the loops-ng
+// fields before compiling the engine-facing [Config]. This is an
+// additive bridge for gradually moving call sites onto Spec.
+func NewFromSpec(spec Spec, deps Deps) (*Loop, error) {
+	if err := spec.Validate(); err != nil {
+		return nil, err
+	}
+	l, err := New(spec.ToConfig(), deps)
+	if err != nil {
+		return nil, err
+	}
+	l.requestBase = spec.profileRequest()
+	l.requestInstructions = spec.Profile.Instructions
+	return l, nil
+}
+
+// NewFromLaunch creates a loop from a [Launch], validating the launch,
+// compiling the underlying [Spec], and applying per-run request and
+// metadata overrides. This is the additive bridge used by
+// [Registry.Launch].
+func NewFromLaunch(launch Launch, deps Deps) (*Loop, error) {
+	if err := launch.Validate(); err != nil {
+		return nil, err
+	}
+
+	spec := launch.Spec
+	if launch.Task != "" && spec.Task == "" && spec.TaskBuilder == nil && spec.Handler == nil {
+		spec.Task = launch.Task
+	}
+	cfg := spec.ToConfig()
+	if launch.ParentID != "" {
+		cfg.ParentID = launch.ParentID
+	}
+	if len(launch.Metadata) > 0 {
+		merged := cloneStringMap(cfg.Metadata)
+		if merged == nil {
+			merged = make(map[string]string, len(launch.Metadata))
+		}
+		for k, v := range launch.Metadata {
+			merged[k] = v
+		}
+		cfg.Metadata = merged
+	}
+
+	l, err := New(cfg, deps)
+	if err != nil {
+		return nil, err
+	}
+	l.requestBase = spec.profileRequest()
+	l.requestInstructions = spec.Profile.Instructions
+	l.requestOverride = launch.requestOverride()
+	l.taskOverride = launch.Task
+	return l, nil
 }
 
 // ID returns the unique loop identifier.
@@ -358,6 +473,12 @@ func (l *Loop) Status() Status {
 				}
 				iterCopy[i].ToolsUsed = m
 			}
+			if len(snap.EffectiveTools) > 0 {
+				iterCopy[i].EffectiveTools = append([]string(nil), snap.EffectiveTools...)
+			}
+			if len(snap.ActiveTags) > 0 {
+				iterCopy[i].ActiveTags = append([]string(nil), snap.ActiveTags...)
+			}
 			if len(snap.Summary) > 0 {
 				s := make(map[string]any, len(snap.Summary))
 				for k, v := range snap.Summary {
@@ -370,6 +491,9 @@ func (l *Loop) Status() Status {
 
 	// Deep copy llmContext for late-connecting dashboard clients.
 	var llmCtxCopy map[string]any
+	requestBaseInitialTags := append([]string(nil), l.requestBase.InitialTags...)
+	requestOverrideInitialTags := append([]string(nil), l.requestOverride.InitialTags...)
+	activatedTagsCopy := append([]string(nil), l.activatedTags...)
 	if len(l.llmContext) > 0 {
 		llmCtxCopy = make(map[string]any, len(l.llmContext))
 		for k, v := range l.llmContext {
@@ -406,6 +530,7 @@ func (l *Loop) Status() Status {
 	// Call the active tags callback outside the lock to avoid
 	// lock-ordering issues with the agent loop's tagMu.
 	// Deep-copy the result so callers can't mutate internal state.
+	defaultLoadedTags := mergeUniqueStrings(requestBaseInitialTags, requestOverrideInitialTags, activatedTagsCopy)
 	if atFunc != nil {
 		if tags := atFunc(); len(tags) > 0 {
 			cp := make([]string, len(tags))
@@ -413,6 +538,35 @@ func (l *Loop) Status() Status {
 			s.ActiveTags = cp
 		}
 	}
+	if len(s.ActiveTags) == 0 && len(defaultLoadedTags) > 0 {
+		s.ActiveTags = append([]string(nil), defaultLoadedTags...)
+	}
+	if len(s.ActiveTags) == 0 && len(iterCopy) > 0 && len(iterCopy[0].ActiveTags) > 0 {
+		s.ActiveTags = append([]string(nil), iterCopy[0].ActiveTags...)
+	}
+
+	effectiveTools := []string(nil)
+	if tooling, ok := llmCtxCopy["tooling"].(ToolingState); ok && len(tooling.EffectiveTools) > 0 {
+		effectiveTools = append(effectiveTools, tooling.EffectiveTools...)
+	} else if got, ok := llmCtxCopy["effective_tools"].([]string); ok {
+		effectiveTools = append(effectiveTools, got...)
+	} else if len(iterCopy) > 0 {
+		effectiveTools = append(effectiveTools, iterCopy[0].EffectiveTools...)
+	}
+
+	loadedCaps := []toolcatalog.LoadedCapabilityEntry(nil)
+	if tooling, ok := llmCtxCopy["tooling"].(ToolingState); ok && len(tooling.LoadedCapabilities) > 0 {
+		loadedCaps = append(loadedCaps, tooling.LoadedCapabilities...)
+	} else if len(iterCopy) > 0 {
+		loadedCaps = append(loadedCaps, iterCopy[0].Tooling.LoadedCapabilities...)
+	}
+
+	lastToolsUsed := map[string]int(nil)
+	if len(iterCopy) > 0 && len(iterCopy[0].ToolsUsed) > 0 {
+		lastToolsUsed = iterCopy[0].ToolsUsed
+	}
+	configuredTags := mergeUniqueStrings(cfgCopy.Tags, requestBaseInitialTags, requestOverrideInitialTags)
+	s.Tooling = BuildToolingState(configuredTags, s.ActiveTags, effectiveTools, cfgCopy.ExcludeTools, loadedCaps, lastToolsUsed)
 
 	return s
 }
@@ -514,12 +668,14 @@ func (l *Loop) run(ctx context.Context) {
 			},
 		})
 
-		logger.Info("loop initial sleep before first iteration",
+		logger.Debug("loop initial sleep before first iteration",
 			"duration", initialSleep.Round(time.Second),
 		)
 
 		if !sleepCtx(ctx, initialSleep) {
-			logger.Info("loop stopped during initial sleep")
+			logger.Debug("loop stopped during initial sleep",
+				"phase", "initial_sleep",
+			)
 			l.emitStopped()
 			return
 		}
@@ -560,17 +716,20 @@ func (l *Loop) run(ctx context.Context) {
 			var waitErr error
 			event, waitErr = l.config.WaitFunc(ctx)
 			if waitErr != nil {
-				if ctx.Err() != nil {
-					logger.Info("loop stopped")
+				if ctx.Err() != nil || errors.Is(waitErr, context.Canceled) || errors.Is(waitErr, context.DeadlineExceeded) {
+					logger.Debug("loop stopped while waiting for event",
+						"phase", "wait",
+						"error", waitErr,
+					)
 					break
 				}
 				// WaitFunc error (not cancellation) — apply backoff
 				// before retrying. This prevents tight-looping when
 				// the upstream source is temporarily broken.
-				logger.Warn("wait failed", "error", waitErr)
 				l.mu.Lock()
 				l.lastError = waitErr.Error()
 				l.consecutiveErrors++
+				consecutiveErrors := l.consecutiveErrors
 				l.mu.Unlock()
 				l.setState(StateError)
 				l.publishEvent(events.Event{
@@ -585,8 +744,16 @@ func (l *Loop) run(ctx context.Context) {
 					},
 				})
 				backoff := l.computeSleep()
+				logger.Warn("loop wait failed",
+					"error", waitErr,
+					"consecutive_errors", consecutiveErrors,
+					"backoff", backoff.Round(time.Second),
+				)
 				if !sleepCtx(ctx, backoff) {
-					logger.Info("loop stopped during wait backoff")
+					logger.Debug("loop stopped during wait backoff",
+						"phase", "wait_backoff",
+						"backoff", backoff.Round(time.Second),
+					)
 					break
 				}
 				continue // retry from top
@@ -657,6 +824,7 @@ func (l *Loop) run(ctx context.Context) {
 			handlerCtx := context.WithValue(iterCtx, iterSummaryKey{}, summary)
 			handlerCtx = context.WithValue(handlerCtx, progressFuncKey{}, l.makeProgressFunc())
 			handlerCtx = withLoopID(handlerCtx, l.id)
+			handlerCtx = withFallbackContent(handlerCtx, l.config.FallbackContent)
 			if handlerErr := l.config.Handler(handlerCtx, event); handlerErr != nil {
 				if errors.Is(handlerErr, ErrNoOp) {
 					noOp = true
@@ -669,6 +837,30 @@ func (l *Loop) run(ctx context.Context) {
 					Supervisor: isSupervisor,
 					Elapsed:    time.Since(iterStart),
 				}
+			}
+			if model, ok := summary["model"].(string); ok && model != "" && result != nil {
+				result.Model = model
+				delete(summary, "model")
+			}
+			if inputTokens, ok := summary["input_tokens"].(int); ok && result != nil {
+				result.InputTokens = inputTokens
+				delete(summary, "input_tokens")
+			}
+			if outputTokens, ok := summary["output_tokens"].(int); ok && result != nil {
+				result.OutputTokens = outputTokens
+				delete(summary, "output_tokens")
+			}
+			if activeTags, ok := summary["active_tags"].([]string); ok && result != nil {
+				result.ActiveTags = append([]string(nil), activeTags...)
+				delete(summary, "active_tags")
+			}
+			if effectiveTools, ok := summary["effective_tools"].([]string); ok && result != nil {
+				result.EffectiveTools = append([]string(nil), effectiveTools...)
+				delete(summary, "effective_tools")
+			}
+			if loadedCapabilities, ok := summary["loaded_capabilities"].([]toolcatalog.LoadedCapabilityEntry); ok && result != nil {
+				result.LoadedCapabilities = append([]toolcatalog.LoadedCapabilityEntry(nil), loadedCapabilities...)
+				delete(summary, "loaded_capabilities")
 			}
 			// Extract request_id from summary if the handler reported
 			// one (e.g., signal/OWU handlers that call agent.Run).
@@ -754,10 +946,15 @@ func (l *Loop) run(ctx context.Context) {
 
 			if err != nil {
 				if ctx.Err() != nil {
-					logger.Info("loop stopped")
+					logger.Debug("loop stopped during processing",
+						"phase", "processing",
+					)
 					break
 				}
-				iterLog.Warn("loop iteration failed", "error", err)
+				iterLog.Warn("loop iteration failed",
+					"error", err,
+					"elapsed_ms", time.Since(iterStartTime).Milliseconds(),
+				)
 				l.mu.Lock()
 				l.lastError = err.Error()
 				l.consecutiveErrors++
@@ -812,6 +1009,20 @@ func (l *Loop) run(ctx context.Context) {
 						snap.ToolsUsed[k] = v
 					}
 				}
+				if len(result.EffectiveTools) > 0 {
+					snap.EffectiveTools = append([]string(nil), result.EffectiveTools...)
+				}
+				if len(result.ActiveTags) > 0 {
+					snap.ActiveTags = append([]string(nil), result.ActiveTags...)
+				}
+				snap.Tooling = BuildToolingState(
+					mergeUniqueStrings(l.config.Tags, l.requestBase.InitialTags, l.requestOverride.InitialTags),
+					result.ActiveTags,
+					result.EffectiveTools,
+					l.config.ExcludeTools,
+					result.LoadedCapabilities,
+					result.ToolsUsed,
+				)
 
 				iterLog.Debug("loop iteration complete",
 					"model", result.Model,
@@ -830,6 +1041,9 @@ func (l *Loop) run(ctx context.Context) {
 					"context_window":  result.ContextWindow,
 					"elapsed_ms":      result.Elapsed.Milliseconds(),
 					"tools_used":      result.ToolsUsed,
+					"effective_tools": result.EffectiveTools,
+					"active_tags":     result.ActiveTags,
+					"tooling":         snap.Tooling,
 					"supervisor":      result.Supervisor,
 					"conversation_id": convID,
 				}
@@ -873,14 +1087,16 @@ func (l *Loop) run(ctx context.Context) {
 			// per-iteration logger correlation.
 			if err == nil && l.config.PostIterate != nil {
 				postResult := IterationResult{
-					ConvID:       convID,
-					Model:        result.Model,
-					InputTokens:  result.InputTokens,
-					OutputTokens: result.OutputTokens,
-					ToolsUsed:    result.ToolsUsed,
-					Elapsed:      result.Elapsed,
-					Supervisor:   result.Supervisor,
-					Sleep:        sleep,
+					ConvID:         convID,
+					Model:          result.Model,
+					InputTokens:    result.InputTokens,
+					OutputTokens:   result.OutputTokens,
+					ToolsUsed:      result.ToolsUsed,
+					EffectiveTools: append([]string(nil), result.EffectiveTools...),
+					ActiveTags:     append([]string(nil), result.ActiveTags...),
+					Elapsed:        result.Elapsed,
+					Supervisor:     result.Supervisor,
+					Sleep:          sleep,
 				}
 				if postErr := l.config.PostIterate(iterCtx, postResult); postErr != nil {
 					iterLog.Warn("PostIterate callback failed", "error", postErr)
@@ -904,10 +1120,12 @@ func (l *Loop) run(ctx context.Context) {
 				},
 			})
 
-			iterLog.Info("loop sleeping", "duration", sleep.Round(time.Second))
+			iterLog.Debug("loop sleeping", "duration", sleep.Round(time.Second))
 
 			if !sleepCtx(ctx, sleep) {
-				logger.Info("loop stopped")
+				logger.Debug("loop stopped during sleep",
+					"phase", "sleep",
+				)
 				break
 			}
 		}
@@ -919,6 +1137,43 @@ func (l *Loop) run(ctx context.Context) {
 // emitStopped transitions the loop to StateStopped and publishes a
 // KindLoopStopped event. It is called from every exit path in run().
 func (l *Loop) emitStopped() {
+	l.mu.Lock()
+	iterations := l.iterations
+	attempts := l.attempts
+	lastError := l.lastError
+	consecutiveErrors := l.consecutiveErrors
+	startedAt := l.startedAt
+	handlerOnly := l.config.Handler != nil
+	eventDriven := l.config.WaitFunc != nil
+	l.mu.Unlock()
+
+	logger := l.deps.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	logger = logger.With(
+		"subsystem", logging.SubsystemLoop,
+		"loop_id", l.id,
+		"loop_name", l.config.Name,
+	)
+
+	attrs := []any{
+		"iterations", iterations,
+		"attempts", attempts,
+		"handler_only", handlerOnly,
+		"event_driven", eventDriven,
+	}
+	if !startedAt.IsZero() {
+		attrs = append(attrs, "uptime", time.Since(startedAt).Round(time.Second))
+	}
+	if lastError != "" {
+		attrs = append(attrs, "last_error", lastError)
+	}
+	if consecutiveErrors > 0 {
+		attrs = append(attrs, "consecutive_errors", consecutiveErrors)
+	}
+	logger.Info("loop stopped", attrs...)
+
 	l.setState(StateStopped)
 	l.publishEvent(events.Event{
 		Timestamp: time.Now(),
@@ -927,8 +1182,8 @@ func (l *Loop) emitStopped() {
 		Data: map[string]any{
 			"loop_id":    l.id,
 			"loop_name":  l.config.Name,
-			"iterations": l.iterations,
-			"attempts":   l.attempts,
+			"iterations": iterations,
+			"attempts":   attempts,
 		},
 	})
 }
@@ -1012,22 +1267,55 @@ func (l *Loop) iterate(ctx context.Context, isSupervisor bool, convID string) (*
 			task = l.config.SupervisorContext + "\n\n" + task
 		}
 	}
+	if l.taskOverride != "" {
+		task = l.taskOverride
+	}
+
+	if l.requestInstructions != "" {
+		task = "Instructions: " + l.requestInstructions + "\n\n" + task
+	}
+
+	// Merge loops-ng profile hints over loop-generated defaults.
+	for k, v := range l.requestBase.Hints {
+		hints[k] = v
+	}
 
 	// Merge config hints over loop-generated defaults.
 	for k, v := range l.config.Hints {
 		hints[k] = v
 	}
+	for k, v := range l.requestOverride.Hints {
+		hints[k] = v
+	}
 
-	req := RunRequest{
-		ConversationID: convID,
-		Messages: []RunMessage{
+	conversationID := convID
+	if l.requestOverride.ConversationID != "" {
+		conversationID = l.requestOverride.ConversationID
+	}
+
+	skipTagFilter := len(l.config.Tags) == 0 || l.requestOverride.SkipTagFilter
+
+	req := Request{
+		Model:          firstNonEmpty(l.requestOverride.Model, l.requestBase.Model),
+		ConversationID: conversationID,
+		ChannelBinding: firstNonNilChannelBinding(l.requestOverride.ChannelBinding, l.requestBase.ChannelBinding),
+		Messages: []Message{
 			{Role: "user", Content: task},
 		},
-		ExcludeTools:  l.config.ExcludeTools,
-		SkipTagFilter: len(l.config.Tags) == 0,
-		Hints:         hints,
-		OnProgress:    l.makeProgressFunc(),
-		SeedTags:      l.activatedTags, // carry forward from previous iterations
+		SkipContext:     l.requestOverride.SkipContext,
+		AllowedTools:    append([]string(nil), l.requestOverride.AllowedTools...),
+		ExcludeTools:    mergeUniqueStrings(l.requestBase.ExcludeTools, l.config.ExcludeTools, l.requestOverride.ExcludeTools),
+		SkipTagFilter:   skipTagFilter,
+		Hints:           hints,
+		OnProgress:      composeProgressFuncs(l.makeProgressFunc(), l.requestOverride.OnProgress),
+		InitialTags:     mergeUniqueStrings(l.requestBase.InitialTags, l.requestOverride.InitialTags, l.activatedTags),
+		FallbackContent: firstNonEmpty(l.requestOverride.FallbackContent, l.requestBase.FallbackContent, l.config.FallbackContent),
+		MaxIterations:   l.requestOverride.MaxIterations,
+		MaxOutputTokens: l.requestOverride.MaxOutputTokens,
+		ToolTimeout:     l.requestOverride.ToolTimeout,
+		UsageRole:       l.requestOverride.UsageRole,
+		UsageTaskName:   l.requestOverride.UsageTaskName,
+		SystemPrompt:    l.requestOverride.SystemPrompt,
 	}
 
 	resp, err := l.deps.Runner.Run(ctx, req, nil)
@@ -1038,6 +1326,7 @@ func (l *Loop) iterate(ctx context.Context, isSupervisor bool, convID string) (*
 	if err == nil {
 		l.mu.Lock()
 		l.activatedTags = resp.ActiveTags
+		l.lastResponse = cloneResponse(resp)
 		l.mu.Unlock()
 	}
 	if err != nil {
@@ -1045,15 +1334,99 @@ func (l *Loop) iterate(ctx context.Context, isSupervisor bool, convID string) (*
 	}
 
 	return &IterationResult{
-		Model:         resp.Model,
-		InputTokens:   resp.InputTokens,
-		OutputTokens:  resp.OutputTokens,
-		ContextWindow: resp.ContextWindow,
-		ToolsUsed:     resp.ToolsUsed,
-		RequestID:     resp.RequestID,
-		Elapsed:       time.Since(iterStart),
-		Supervisor:    isSupervisor,
+		Model:          resp.Model,
+		InputTokens:    resp.InputTokens,
+		OutputTokens:   resp.OutputTokens,
+		ContextWindow:  resp.ContextWindow,
+		ToolsUsed:      resp.ToolsUsed,
+		EffectiveTools: append([]string(nil), resp.EffectiveTools...),
+		ActiveTags:     append([]string(nil), resp.ActiveTags...),
+		RequestID:      resp.RequestID,
+		Elapsed:        time.Since(iterStart),
+		Supervisor:     isSupervisor,
 	}, nil
+}
+
+func firstNonNilChannelBinding(bindings ...*memory.ChannelBinding) *memory.ChannelBinding {
+	for _, binding := range bindings {
+		if binding != nil {
+			return binding.Clone()
+		}
+	}
+	return nil
+}
+
+func mergeUniqueStrings(parts ...[]string) []string {
+	var merged []string
+	seen := make(map[string]struct{})
+	for _, part := range parts {
+		for _, item := range part {
+			if item == "" {
+				continue
+			}
+			if _, ok := seen[item]; ok {
+				continue
+			}
+			seen[item] = struct{}{}
+			merged = append(merged, item)
+		}
+	}
+	if len(merged) == 0 {
+		return nil
+	}
+	return merged
+}
+
+func composeProgressFuncs(callbacks ...func(kind string, data map[string]any)) func(kind string, data map[string]any) {
+	var active []func(kind string, data map[string]any)
+	for _, cb := range callbacks {
+		if cb != nil {
+			active = append(active, cb)
+		}
+	}
+	if len(active) == 0 {
+		return nil
+	}
+	return func(kind string, data map[string]any) {
+		for _, cb := range active {
+			cb(kind, data)
+		}
+	}
+}
+
+func cloneResponse(resp *Response) *Response {
+	if resp == nil {
+		return nil
+	}
+	out := *resp
+	if len(resp.ToolsUsed) > 0 {
+		out.ToolsUsed = make(map[string]int, len(resp.ToolsUsed))
+		for k, v := range resp.ToolsUsed {
+			out.ToolsUsed[k] = v
+		}
+	}
+	if len(resp.EffectiveTools) > 0 {
+		out.EffectiveTools = append([]string(nil), resp.EffectiveTools...)
+	}
+	if len(resp.ActiveTags) > 0 {
+		out.ActiveTags = append([]string(nil), resp.ActiveTags...)
+	}
+	return &out
+}
+
+func (l *Loop) lastResponseSnapshot() *Response {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return cloneResponse(l.lastResponse)
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // computeSleep returns the sleep duration for the next cycle. If

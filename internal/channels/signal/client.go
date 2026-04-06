@@ -73,6 +73,7 @@ type Client struct {
 	messages chan *Envelope // inbound message notifications
 	done     chan struct{}  // closed when reader goroutine exits
 	waitErr  chan error     // receives cmd.Wait result (exactly once)
+	closing  atomic.Bool
 }
 
 // NewClient creates a signal-cli JSON-RPC client. Call Start to launch
@@ -99,6 +100,11 @@ func (c *Client) Start(ctx context.Context) error {
 		"command", c.command,
 		"args", c.args,
 	)
+
+	go func() {
+		<-ctx.Done()
+		c.closing.Store(true)
+	}()
 
 	cmd := exec.CommandContext(ctx, c.command, c.args...)
 	cmd.Env = os.Environ()
@@ -134,9 +140,17 @@ func (c *Client) Start(ctx context.Context) error {
 	go func() {
 		err := cmd.Wait()
 		if err != nil {
-			c.logger.Error("signal-cli subprocess exited with error", "error", err)
+			if c.closing.Load() {
+				c.logger.Debug("signal-cli subprocess exited during shutdown", "error", err)
+			} else {
+				c.logger.Error("signal-cli subprocess exited with error", "error", err)
+			}
 		} else {
-			c.logger.Info("signal-cli subprocess exited")
+			if c.closing.Load() {
+				c.logger.Debug("signal-cli subprocess exited cleanly during shutdown")
+			} else {
+				c.logger.Info("signal-cli subprocess exited")
+			}
 		}
 		c.waitErr <- err
 	}()
@@ -231,6 +245,7 @@ func (c *Client) Close() error {
 	if c.cmd == nil || c.cmd.Process == nil {
 		return nil
 	}
+	c.closing.Store(true)
 
 	c.logger.Info("stopping signal-cli subprocess", "pid", c.cmd.Process.Pid)
 
@@ -243,13 +258,18 @@ func (c *Client) Close() error {
 	// force-kill after a timeout.
 	select {
 	case err := <-c.waitErr:
-		return err
+		if err != nil {
+			c.logger.Debug("signal-cli shutdown completed with expected exit error", "error", err)
+		}
+		return nil
 	case <-time.After(5 * time.Second):
 		c.logger.Warn("signal-cli did not exit gracefully, killing",
 			"pid", c.cmd.Process.Pid,
 		)
 		_ = c.cmd.Process.Kill()
-		<-c.waitErr
+		if err := <-c.waitErr; err != nil {
+			c.logger.Debug("signal-cli exited after forced shutdown", "error", err)
+		}
 		return nil
 	}
 }

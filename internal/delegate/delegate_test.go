@@ -11,7 +11,9 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/config"
 	"github.com/nugget/thane-ai-agent/internal/database"
+	"github.com/nugget/thane-ai-agent/internal/events"
 	"github.com/nugget/thane-ai-agent/internal/llm"
+	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
 	"github.com/nugget/thane-ai-agent/internal/models"
 	"github.com/nugget/thane-ai-agent/internal/router"
 	"github.com/nugget/thane-ai-agent/internal/tools"
@@ -87,6 +89,22 @@ func newTestRegistry() *tools.Registry {
 		},
 	})
 	return r
+}
+
+type mockLoopRunner struct {
+	onRun func(req looppkg.Request)
+	resp  *looppkg.Response
+	err   error
+}
+
+func (m *mockLoopRunner) Run(_ context.Context, req looppkg.Request, _ looppkg.StreamCallback) (*looppkg.Response, error) {
+	if m.onRun != nil {
+		m.onRun(req)
+	}
+	if req.OnProgress != nil {
+		req.OnProgress(events.KindLoopToolDone, map[string]any{"tool": "get_state"})
+	}
+	return m.resp, m.err
 }
 
 func TestExecute_SimpleTextResponse(t *testing.T) {
@@ -190,6 +208,81 @@ func TestExecute_WithToolCalls(t *testing.T) {
 	}
 	if result.Duration <= 0 {
 		t.Errorf("Duration = %v, want > 0", result.Duration)
+	}
+}
+
+func TestExecute_LoopBackedPathUsesLaunch(t *testing.T) {
+	t.Parallel()
+
+	var captured looppkg.Request
+	runner := &mockLoopRunner{
+		onRun: func(req looppkg.Request) {
+			captured = req
+		},
+		resp: &looppkg.Response{
+			Content:                  "delegate answer",
+			Model:                    "deepslate/google/gemma-3-4b",
+			FinishReason:             "stop",
+			InputTokens:              120,
+			OutputTokens:             42,
+			CacheCreationInputTokens: 11,
+			CacheReadInputTokens:     7,
+			Iterations:               2,
+			Exhausted:                false,
+		},
+	}
+
+	exec := NewExecutor(slog.Default(), nil, nil, newTestRegistry(), "spark/gpt-oss:20b")
+	exec.ConfigureLoopExecution(runner, looppkg.NewRegistry())
+
+	result, err := exec.Execute(context.Background(), "Check the office light", "ha", "Be concise", []string{"homeassistant"}, nil)
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if result.Content != "delegate answer" {
+		t.Fatalf("Content = %q, want delegate answer", result.Content)
+	}
+	if result.Model != "deepslate/google/gemma-3-4b" {
+		t.Fatalf("Model = %q", result.Model)
+	}
+	if result.Iterations != 2 {
+		t.Fatalf("Iterations = %d, want 2", result.Iterations)
+	}
+	if result.InputTokens != 120 || result.OutputTokens != 42 {
+		t.Fatalf("tokens = %d/%d", result.InputTokens, result.OutputTokens)
+	}
+	if result.CacheCreationInputTokens != 11 || result.CacheReadInputTokens != 7 {
+		t.Fatalf("cache tokens = %d/%d", result.CacheCreationInputTokens, result.CacheReadInputTokens)
+	}
+	if result.Exhausted {
+		t.Fatal("Exhausted = true, want false")
+	}
+	if len(result.ToolCalls) != 1 || result.ToolCalls[0].Name != "get_state" || !result.ToolCalls[0].Success {
+		t.Fatalf("ToolCalls = %#v", result.ToolCalls)
+	}
+	if captured.ConversationID == "" {
+		t.Fatal("ConversationID = empty, want delegate conversation")
+	}
+	if captured.Model != "spark/gpt-oss:20b" {
+		t.Fatalf("captured Model = %q, want spark/gpt-oss:20b", captured.Model)
+	}
+	if captured.SystemPrompt == "" {
+		t.Fatal("SystemPrompt = empty, want delegate prompt")
+	}
+	if len(captured.Messages) != 1 || !strings.Contains(captured.Messages[0].Content, "Check the office light") || !strings.Contains(captured.Messages[0].Content, "Be concise") {
+		t.Fatalf("Messages = %#v", captured.Messages)
+	}
+	if captured.Hints["source"] != "delegate" {
+		t.Fatalf("source hint = %q, want delegate", captured.Hints["source"])
+	}
+	if captured.Hints[router.HintDelegationGating] != "disabled" {
+		t.Fatalf("delegation gating hint = %q, want disabled", captured.Hints[router.HintDelegationGating])
+	}
+	if captured.SkipTagFilter {
+		t.Fatal("SkipTagFilter = true, want false for explicit tag-scoped delegate")
+	}
+	if captured.UsageRole != "delegate" || captured.UsageTaskName != "ha" {
+		t.Fatalf("usage role/task = %q/%q", captured.UsageRole, captured.UsageTaskName)
 	}
 }
 
@@ -614,6 +707,122 @@ func TestExecute_GeneralProfileSelectsLocalModel(t *testing.T) {
 	}
 	if result.Model != "local-model" {
 		t.Errorf("Model = %q, want %q", result.Model, "local-model")
+	}
+}
+
+func TestExecute_OpsVirtualModelOverridesDelegateRouting(t *testing.T) {
+	rtr := router.NewRouter(slog.Default(), router.Config{
+		DefaultModel: "local-model",
+		LocalFirst:   true,
+		Models: []router.Model{
+			{Name: "local-model", Provider: "ollama", SupportsTools: true, Speed: 8, Quality: 5, CostTier: 0, ContextWindow: 8192},
+			{Name: "cloud-model", Provider: "anthropic", SupportsTools: true, Speed: 6, Quality: 10, CostTier: 3, ContextWindow: 8192},
+		},
+		MaxAuditLog: 10,
+	})
+
+	mock := &mockLLMClient{
+		responses: []*llm.ChatResponse{
+			{
+				Model:        "cloud-model",
+				Message:      llm.Message{Role: "assistant", Content: "Completed with frontier model."},
+				InputTokens:  100,
+				OutputTokens: 20,
+			},
+		},
+	}
+
+	exec := NewExecutor(slog.Default(), mock, rtr, newTestRegistry(), "local-model")
+	ctx := tools.WithHints(context.Background(), map[string]string{
+		router.DelegateHintKey(router.HintQualityFloor): "10",
+		router.DelegateHintKey(router.HintLocalOnly):    "false",
+		router.DelegateHintKey(router.HintPreferSpeed):  "false",
+		router.HintVirtualModel:                         "thane:ops",
+	})
+
+	result, err := exec.Execute(ctx, "Investigate this issue deeply", "general", "", nil, nil)
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if result.Model != "cloud-model" {
+		t.Fatalf("Model = %q, want cloud-model", result.Model)
+	}
+}
+
+func TestExecute_PremiumVirtualModelKeepsDelegateRoutingAdaptive(t *testing.T) {
+	rtr := router.NewRouter(slog.Default(), router.Config{
+		DefaultModel: "local-model",
+		LocalFirst:   true,
+		Models: []router.Model{
+			{Name: "local-model", Provider: "ollama", SupportsTools: true, Speed: 8, Quality: 5, CostTier: 0, ContextWindow: 8192},
+			{Name: "cloud-model", Provider: "anthropic", SupportsTools: true, Speed: 6, Quality: 10, CostTier: 3, ContextWindow: 8192},
+		},
+		MaxAuditLog: 10,
+	})
+
+	mock := &mockLLMClient{
+		responses: []*llm.ChatResponse{
+			{
+				Model:        "local-model",
+				Message:      llm.Message{Role: "assistant", Content: "Completed with local model."},
+				InputTokens:  100,
+				OutputTokens: 20,
+			},
+		},
+	}
+
+	exec := NewExecutor(slog.Default(), mock, rtr, newTestRegistry(), "local-model")
+	ctx := tools.WithHints(context.Background(), map[string]string{
+		router.HintQualityFloor: "10",
+		router.HintLocalOnly:    "false",
+		router.HintPreferSpeed:  "false",
+		router.HintVirtualModel: "thane:premium",
+	})
+
+	result, err := exec.Execute(ctx, "Investigate this issue deeply", "general", "", nil, nil)
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if result.Model != "local-model" {
+		t.Fatalf("Model = %q, want local-model", result.Model)
+	}
+}
+
+func TestExecute_LoopBackedDelegateRequiresStreamingCapableModel(t *testing.T) {
+	rtr := router.NewRouter(slog.Default(), router.Config{
+		DefaultModel: "local-model",
+		LocalFirst:   true,
+		Models: []router.Model{
+			{Name: "local-model", Provider: "ollama", SupportsTools: true, SupportsStreaming: false, Speed: 8, Quality: 5, CostTier: 0, ContextWindow: 8192},
+			{Name: "cloud-model", Provider: "anthropic", SupportsTools: true, SupportsStreaming: true, Speed: 6, Quality: 10, CostTier: 3, ContextWindow: 8192},
+		},
+		MaxAuditLog: 10,
+	})
+
+	var captured looppkg.Request
+	runner := &mockLoopRunner{
+		onRun: func(req looppkg.Request) {
+			captured = req
+		},
+		resp: &looppkg.Response{
+			Content:      "streaming-capable delegate answer",
+			Model:        "cloud-model",
+			FinishReason: "stop",
+		},
+	}
+
+	exec := NewExecutor(slog.Default(), nil, rtr, newTestRegistry(), "local-model")
+	exec.ConfigureLoopExecution(runner, looppkg.NewRegistry())
+
+	result, err := exec.Execute(context.Background(), "Inspect the current working directory", "general", "", nil, nil)
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if captured.Model != "cloud-model" {
+		t.Fatalf("captured model = %q, want cloud-model", captured.Model)
+	}
+	if result.Content != "streaming-capable delegate answer" {
+		t.Fatalf("Content = %q, want streaming-capable delegate answer", result.Content)
 	}
 }
 
@@ -1096,6 +1305,111 @@ func TestToolHandler_FailedHeaderNoOutput(t *testing.T) {
 	}
 }
 
+func TestToolHandler_AsyncModeLaunchesBackgroundDelegate(t *testing.T) {
+	t.Parallel()
+
+	runner := &mockLoopRunner{
+		resp: &looppkg.Response{
+			Content: "Background delegate answer",
+			Model:   "deepslate/google/gemma-3-4b",
+		},
+	}
+	registry := looppkg.NewRegistry()
+	t.Cleanup(func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		registry.ShutdownAll(shutdownCtx)
+	})
+	sink := &delegateCompletionSink{deliveries: make(chan looppkg.CompletionDelivery, 1)}
+
+	exec := NewExecutor(slog.Default(), nil, nil, newTestRegistry(), "spark/gpt-oss:20b")
+	exec.ConfigureLoopExecution(runner, registry)
+	exec.ConfigureLoopCompletionSink(sink.DeliverCompletion)
+
+	handler := ToolHandler(exec)
+	ctx := tools.WithConversationID(context.Background(), "conv-async")
+	result, err := handler(ctx, map[string]any{
+		"task": "Check the office light",
+		"mode": "async",
+	})
+	if err != nil {
+		t.Fatalf("ToolHandler() error = %v", err)
+	}
+	if !strings.Contains(result, "[Delegate STARTED:") {
+		t.Fatalf("result = %q, want async started header", result)
+	}
+	if !strings.Contains(result, "current conversation or interactive channel") {
+		t.Fatalf("result = %q, want generic async delivery description", result)
+	}
+
+	select {
+	case delivery := <-sink.deliveries:
+		if delivery.ConversationID != "conv-async" {
+			t.Fatalf("ConversationID = %q, want conv-async", delivery.ConversationID)
+		}
+		if delivery.Mode != looppkg.CompletionConversation {
+			t.Fatalf("Mode = %q, want conversation", delivery.Mode)
+		}
+		if delivery.Response == nil || delivery.Response.Content != "Background delegate answer" {
+			t.Fatalf("Response = %#v, want background delegate answer", delivery.Response)
+		}
+		if !strings.Contains(delivery.Content, "Background task complete") {
+			t.Fatalf("Content = %q, want background completion message", delivery.Content)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for detached completion delivery")
+	}
+}
+
+func TestStartBackground_UsesSignalChannelCompletionTarget(t *testing.T) {
+	t.Parallel()
+
+	registry := looppkg.NewRegistry()
+	t.Cleanup(func() {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		registry.ShutdownAll(shutdownCtx)
+	})
+	sink := &delegateCompletionSink{deliveries: make(chan looppkg.CompletionDelivery, 1)}
+
+	exec := NewExecutor(slog.Default(), nil, nil, newTestRegistry(), "spark/gpt-oss:20b")
+	exec.ConfigureLoopExecution(&mockLoopRunner{
+		resp: &looppkg.Response{
+			Content: "Signal delegate answer",
+			Model:   "deepslate/google/gemma-3-4b",
+		},
+	}, registry)
+	exec.ConfigureLoopCompletionSink(sink.DeliverCompletion)
+
+	ctx := tools.WithConversationID(context.Background(), "signal-15551234567")
+	ctx = tools.WithHints(ctx, map[string]string{
+		"source": "signal",
+		"sender": "+15551234567",
+	})
+
+	if _, err := exec.StartBackground(ctx, "Check the office light", "", "", nil, nil); err != nil {
+		t.Fatalf("StartBackground() error = %v", err)
+	}
+
+	select {
+	case delivery := <-sink.deliveries:
+		if delivery.Mode != looppkg.CompletionChannel {
+			t.Fatalf("Mode = %q, want channel", delivery.Mode)
+		}
+		if delivery.Channel == nil {
+			t.Fatal("Channel = nil, want target")
+		}
+		if delivery.Channel.Channel != "signal" || delivery.Channel.Recipient != "+15551234567" || delivery.Channel.ConversationID != "signal-15551234567" {
+			t.Fatalf("Channel = %#v", delivery.Channel)
+		}
+		if delivery.Response == nil || delivery.Response.Content != "Signal delegate answer" {
+			t.Fatalf("Response = %#v, want signal delegate answer", delivery.Response)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for signal channel completion delivery")
+	}
+}
+
 func TestExecute_ToolTimeoutRecovery(t *testing.T) {
 	// Register a tool that blocks longer than the per-tool timeout.
 	reg := tools.NewEmptyRegistry()
@@ -1200,6 +1514,15 @@ func TestExecute_ToolTimeoutRecovery(t *testing.T) {
 	if !found {
 		t.Error("LLM did not receive tool timeout error in messages")
 	}
+}
+
+type delegateCompletionSink struct {
+	deliveries chan looppkg.CompletionDelivery
+}
+
+func (s *delegateCompletionSink) DeliverCompletion(_ context.Context, delivery looppkg.CompletionDelivery) error {
+	s.deliveries <- delivery
+	return nil
 }
 
 // TestExecute_NonCooperativeToolTimeout verifies that the delegate

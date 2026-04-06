@@ -1,6 +1,10 @@
 package loop
 
-import "context"
+import (
+	"context"
+
+	"github.com/nugget/thane-ai-agent/internal/toolcatalog"
+)
 
 type iterSummaryKey struct{}
 
@@ -22,10 +26,13 @@ func IterationSummary(ctx context.Context) map[string]any {
 // to avoid an import cycle — agent imports loop, not the other way
 // around.
 type AgentRunSummary struct {
-	RequestID    string
-	Model        string
-	InputTokens  int
-	OutputTokens int
+	RequestID          string
+	Model              string
+	InputTokens        int
+	OutputTokens       int
+	ActiveTags         []string
+	EffectiveTools     []string
+	LoadedCapabilities []toolcatalog.LoadedCapabilityEntry
 }
 
 // ReportAgentRun writes standard agent-run metrics into the current
@@ -47,6 +54,15 @@ func ReportAgentRun(ctx context.Context, s AgentRunSummary) map[string]any {
 	summary["model"] = s.Model
 	summary["input_tokens"] = s.InputTokens
 	summary["output_tokens"] = s.OutputTokens
+	if len(s.ActiveTags) > 0 {
+		summary["active_tags"] = append([]string(nil), s.ActiveTags...)
+	}
+	if len(s.EffectiveTools) > 0 {
+		summary["effective_tools"] = append([]string(nil), s.EffectiveTools...)
+	}
+	if len(s.LoadedCapabilities) > 0 {
+		summary["loaded_capabilities"] = append([]toolcatalog.LoadedCapabilityEntry(nil), s.LoadedCapabilities...)
+	}
 	return summary
 }
 

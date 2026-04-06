@@ -1,0 +1,106 @@
+package app
+
+import (
+	"fmt"
+	"sort"
+	"strings"
+
+	"github.com/nugget/thane-ai-agent/internal/config"
+	"github.com/nugget/thane-ai-agent/internal/toolcatalog"
+	"github.com/nugget/thane-ai-agent/internal/tools"
+)
+
+func resolveCapabilityTags(reg *tools.Registry, overrides map[string]config.CapabilityTagConfig) map[string]config.CapabilityTagConfig {
+	resolved := make(map[string]config.CapabilityTagConfig)
+	builtinTags := toolcatalog.BuiltinTagSpecs()
+	for tag, toolNames := range reg.MetadataTagIndex() {
+		spec := builtinTags[tag]
+		sortedToolNames := append([]string(nil), toolNames...)
+		sort.Strings(sortedToolNames)
+		resolved[tag] = config.CapabilityTagConfig{
+			Description:  firstNonEmpty(strings.TrimSpace(spec.Description), generatedTagDescription(tag)),
+			Tools:        sortedToolNames,
+			AlwaysActive: spec.AlwaysActive,
+		}
+	}
+	for tag, override := range overrides {
+		merged := resolved[tag]
+		if desc := strings.TrimSpace(override.Description); desc != "" {
+			merged.Description = desc
+		}
+		if len(override.Tools) > 0 {
+			merged.Tools = append([]string(nil), override.Tools...)
+			sort.Strings(merged.Tools)
+		}
+		if override.AlwaysActive {
+			merged.AlwaysActive = true
+		}
+		if strings.TrimSpace(merged.Description) == "" {
+			merged.Description = generatedTagDescription(tag)
+		}
+		resolved[tag] = merged
+	}
+	return resolved
+}
+
+func generatedTagDescription(tag string) string {
+	tag = strings.TrimSpace(tag)
+	if tag == "" {
+		return "Tool group."
+	}
+	readable := strings.ReplaceAll(tag, "_", " ")
+	readable = strings.ReplaceAll(readable, "-", " ")
+	readable = strings.TrimSpace(readable)
+	if readable == "" {
+		return "Tool group."
+	}
+	readable = strings.ToUpper(readable[:1]) + readable[1:]
+	return fmt.Sprintf("%s tools.", readable)
+}
+
+func firstNonEmpty(parts ...string) string {
+	for _, part := range parts {
+		if strings.TrimSpace(part) != "" {
+			return part
+		}
+	}
+	return ""
+}
+
+func buildCapabilitySurface(
+	resolved map[string]config.CapabilityTagConfig,
+	kbCounts map[string]int,
+	liveTags map[string]bool,
+	adHocTags map[string]bool,
+) []toolcatalog.CapabilitySurface {
+	tagIndex := make(map[string][]string, len(resolved))
+	descriptions := make(map[string]string, len(resolved))
+	alwaysActive := make(map[string]bool, len(resolved))
+	for tag, cfg := range resolved {
+		tagIndex[tag] = append([]string(nil), cfg.Tools...)
+		descriptions[tag] = cfg.Description
+		alwaysActive[tag] = cfg.AlwaysActive
+	}
+
+	surface := toolcatalog.BuildCapabilitySurface(tagIndex, descriptions, alwaysActive)
+	indexByTag := make(map[string]int, len(surface))
+	for i := range surface {
+		indexByTag[surface[i].Tag] = i
+		surface[i].KBArticles = kbCounts[surface[i].Tag]
+		surface[i].LiveContext = liveTags[surface[i].Tag]
+	}
+
+	for tag := range adHocTags {
+		if _, ok := indexByTag[tag]; ok {
+			continue
+		}
+		surface = append(surface, toolcatalog.CapabilitySurface{
+			Tag:         tag,
+			KBArticles:  kbCounts[tag],
+			LiveContext: liveTags[tag],
+			AdHoc:       true,
+		})
+	}
+
+	return toolcatalog.SortCapabilitySurface(surface)
+}

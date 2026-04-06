@@ -10,6 +10,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/llm"
 	"github.com/nugget/thane-ai-agent/internal/memory"
 	"github.com/nugget/thane-ai-agent/internal/prompts"
+	"github.com/nugget/thane-ai-agent/internal/router"
 	"github.com/nugget/thane-ai-agent/internal/tools"
 )
 
@@ -179,6 +180,69 @@ func TestToolGating_RestrictedAllIterations(t *testing.T) {
 		if hasName(names, "web_search") {
 			t.Errorf("call[%d] tools should NOT contain web_search: %v", idx, names)
 		}
+	}
+}
+
+func TestToolExecutionContext_PropagatesRequestHints(t *testing.T) {
+	mock := &mockLLM{
+		responses: []*llm.ChatResponse{
+			{
+				Model: "test-model",
+				Message: llm.Message{
+					Role: "assistant",
+					ToolCalls: []llm.ToolCall{{
+						ID: "call-1",
+						Function: struct {
+							Name      string         `json:"name"`
+							Arguments map[string]any `json:"arguments"`
+						}{
+							Name:      "inspect_hints",
+							Arguments: map[string]any{},
+						},
+					}},
+				},
+			},
+			{
+				Model:        "test-model",
+				Message:      llm.Message{Role: "assistant", Content: "Done."},
+				InputTokens:  20,
+				OutputTokens: 5,
+			},
+		},
+	}
+
+	loop := buildTestLoop(mock, nil)
+
+	var captured map[string]string
+	loop.tools.Register(&tools.Tool{
+		Name:        "inspect_hints",
+		Description: "inspect hints",
+		Parameters:  map[string]any{"type": "object", "properties": map[string]any{}},
+		Handler: func(ctx context.Context, _ map[string]any) (string, error) {
+			hints := tools.HintsFromContext(ctx)
+			captured = make(map[string]string, len(hints))
+			for k, v := range hints {
+				captured[k] = v
+			}
+			return "ok", nil
+		},
+	})
+
+	_, err := loop.Run(context.Background(), &Request{
+		Messages: []Message{{Role: "user", Content: "inspect"}},
+		Hints: map[string]string{
+			"source": "owu",
+			router.DelegateHintKey(router.HintQualityFloor): "10",
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	if captured["source"] != "owu" {
+		t.Fatalf("captured source = %q, want owu", captured["source"])
+	}
+	if captured[router.DelegateHintKey(router.HintQualityFloor)] != "10" {
+		t.Fatalf("captured delegate quality floor = %q, want 10", captured[router.DelegateHintKey(router.HintQualityFloor)])
 	}
 }
 

@@ -53,6 +53,31 @@ func TestExecute_KnownToolDoesNotReturnErrToolUnavailable(t *testing.T) {
 	}
 }
 
+func TestRegister_AppliesCompiledToolMetadata(t *testing.T) {
+	reg := &Registry{tools: make(map[string]*Tool)}
+	reg.Register(&Tool{
+		Name:        "web_search",
+		Description: "search",
+		Handler: func(_ context.Context, _ map[string]any) (string, error) {
+			return "", nil
+		},
+	})
+
+	tool := reg.Get("web_search")
+	if tool == nil {
+		t.Fatal("web_search not registered")
+	}
+	if tool.Source != "native" {
+		t.Fatalf("Source = %q, want native", tool.Source)
+	}
+	if tool.CanonicalID != "native:web_search" {
+		t.Fatalf("CanonicalID = %q", tool.CanonicalID)
+	}
+	if len(tool.DefaultTags) != 1 || tool.DefaultTags[0] != "search" {
+		t.Fatalf("DefaultTags = %#v", tool.DefaultTags)
+	}
+}
+
 func TestFormatEntityState(t *testing.T) {
 	tests := []struct {
 		name       string

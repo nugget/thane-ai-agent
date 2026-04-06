@@ -20,6 +20,8 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/agent"
 	"github.com/nugget/thane-ai-agent/internal/logging"
+	"github.com/nugget/thane-ai-agent/internal/memory"
+	"github.com/nugget/thane-ai-agent/internal/router"
 )
 
 // OllamaChatRequest is the Ollama /api/chat request format.
@@ -202,7 +204,10 @@ func handleOllamaChatShared(w http.ResponseWriter, r *http.Request, loop *agent.
 	hints := map[string]string{
 		"channel": "ollama",
 	}
-	model, hints, ocSystemPrompt := normalizeModelSelection(req.Model, hints, premiumQualityFloor(loop.Router()), loop.OpenClawConfig(), logger)
+	if !auxiliary {
+		hints["source"] = "owu"
+	}
+	model, hints, ocSystemPrompt := normalizeModelSelection(req.Model, hints, premiumQualityFloor(loop.Router()), logger)
 
 	// Derive a conversation ID from the message history.
 	// Open WebUI sends full history with each request, so hashing the first
@@ -216,11 +221,17 @@ func handleOllamaChatShared(w http.ResponseWriter, r *http.Request, loop *agent.
 		conversationID = "owu-auxiliary"
 	}
 
+	var channelBinding *memory.ChannelBinding
+	if !auxiliary {
+		channelBinding = (&memory.ChannelBinding{Channel: "owu"}).Normalize()
+	}
+
 	agentReq := &agent.Request{
 		Messages:       messages,
 		Model:          model,
 		Hints:          hints,
 		ConversationID: conversationID,
+		ChannelBinding: channelBinding,
 		SkipContext:    auxiliary,
 		SystemPrompt:   ocSystemPrompt,
 	}
@@ -306,6 +317,7 @@ func handleOllamaStreamingChatShared(w http.ResponseWriter, r *http.Request, req
 	// hop-by-hop header forbidden in HTTP/2 (RFC 9113 §8.2.2).
 	w.Header().Set("Content-Type", "application/x-ndjson")
 	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("X-Accel-Buffering", "no")
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -326,6 +338,21 @@ func handleOllamaStreamingChatShared(w http.ResponseWriter, r *http.Request, req
 	var buffer []agent.StreamEvent
 	var hasToolCalls bool
 	var streaming bool
+
+	// Emit an immediate empty assistant chunk so downstream clients know
+	// the stream is live even when first-token latency is high.
+	initial := OllamaChatResponse{
+		Model:     model,
+		CreatedAt: time.Now().UTC().Format(time.RFC3339Nano),
+		Message: OllamaChatMessage{
+			Role:    "assistant",
+			Content: "",
+		},
+		Done: false,
+	}
+	data, _ := json.Marshal(initial)
+	fmt.Fprintf(w, "%s\n", data)
+	flusher.Flush()
 
 	// Create stream callback that buffers initially, then streams if no tool calls
 	streamCallback := func(event agent.StreamEvent) {
@@ -348,9 +375,10 @@ func handleOllamaStreamingChatShared(w http.ResponseWriter, r *http.Request, req
 				buffer = append(buffer, event)
 			}
 
-			// Start streaming after we get some content and no tool calls
-			// Use a smaller threshold to handle short responses
-			if event.Kind == agent.KindToken && len(buffer) >= 2 && !hasToolCalls {
+			// Start streaming on the first text chunk so short or
+			// coarse-grained upstream deltas don't get buffered until
+			// completion. Tool-call paths still short-circuit above.
+			if event.Kind == agent.KindToken && len(buffer) >= 1 && !hasToolCalls {
 				streaming = true
 				// Flush buffered content
 				for _, bufferedEvent := range buffer {
@@ -458,7 +486,7 @@ func handleOllamaStreamingChatShared(w http.ResponseWriter, r *http.Request, req
 		TotalDuration: duration.Nanoseconds(),
 		EvalDuration:  duration.Nanoseconds(),
 	}
-	data, _ := json.Marshal(final)
+	data, _ = json.Marshal(final)
 	fmt.Fprintf(w, "%s\n", data)
 	flusher.Flush()
 }
@@ -469,8 +497,8 @@ func handleOllamaStreamingChatShared(w http.ResponseWriter, r *http.Request, req
 //
 // The response format matches Ollama's /api/tags endpoint specification.
 func handleOllamaTagsShared(w http.ResponseWriter, r *http.Request, logger *slog.Logger) {
-	// Expose routing profiles as Ollama "models".
-	// Callers select a profile via the model picker; Thane maps it to routing hints.
+	// Expose execution policies as Ollama "models". These entries describe how
+	// Thane should route the orchestrator loop and any delegate sub-loops.
 	now := time.Now().UTC().Format(time.RFC3339)
 	baseDetails := OllamaModelDetail{
 		Format:            "thane",
@@ -480,27 +508,15 @@ func handleOllamaTagsShared(w http.ResponseWriter, r *http.Request, logger *slog
 		QuantizationLevel: "native",
 	}
 
-	profiles := []struct {
-		name   string
-		digest string
-	}{
-		{"thane:latest", "daily conversation (default routing)"},
-		{"thane:trigger", "automation / machine fire-and-forget (local, minimal)"},
-		{"thane:command", "quick task execution (fast, device control)"},
-		{"thane:premium", "complex reasoning (best available model)"},
-		{"thane:ops", "operations / direct tool access (no delegation gating)"},
-		{"thane:peer", "agent-to-agent communication"},
-		{"thane:local", "local/free models only"},
-		{"thane:openclaw", "OpenClaw workspace emulation (premium model)"},
-	}
+	profiles := router.ExposedVirtualModels(router.VirtualModelRuntime{})
 
 	var models []OllamaModel
 	for _, p := range profiles {
 		models = append(models, OllamaModel{
-			Name:       p.name,
-			Model:      p.name,
+			Name:       p.Name,
+			Model:      p.Name,
 			ModifiedAt: now,
-			Digest:     p.digest,
+			Digest:     p.Description,
 			Details:    baseDetails,
 		})
 	}

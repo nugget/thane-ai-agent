@@ -1,5 +1,7 @@
 package prompts
 
+import "strings"
+
 // EmptyResponseNudge is the prompt injected when the model returns no
 // content after executing tool calls. It gives the model one more
 // chance to produce a user-visible response.
@@ -10,11 +12,34 @@ const EmptyResponseNudge = "You executed tool calls but did not provide a respon
 // max-iterations recovery).
 const EmptyResponseFallback = "I processed your request but wasn't able to compose a response. Please try again."
 
+// InteractiveEmptyResponseFallback is a safer user-visible fallback for
+// interactive loops that must return something even when the model ends
+// the turn without content.
+const InteractiveEmptyResponseFallback = "I hit a problem before I could finish that. Please try again."
+
+// RuntimeContract teaches the live execution model that prompt-injected
+// identity files cannot reliably convey: exact tool naming, capability
+// activation semantics, delegation when top-level tools are gated, and
+// semantic path references like kb:article.md.
+func RuntimeContract() string {
+	return strings.Join([]string{
+		"## Runtime Contract",
+		"",
+		"- Use only exact tool names that are actually available in this turn. Do not invent aliases, wrappers, or MCP helper tools.",
+		"- Capability and tag changes are runtime actions. Use `activate_capability`, `deactivate_capability`, and `list_loaded_capabilities` instead of talking about capability state conversationally.",
+		"- Activating a capability changes runtime state, but it does not guarantee every tool in that capability is directly callable from the current top-level loop. If the tool you want is not currently available, use `thane_delegate` or choose another visible tool.",
+		"- Path-like references such as `kb:article.md`, `core:persona.md`, `scratchpad:note.md`, and `temp:label` are semantic references. Preserve them exactly. Many tools can resolve them directly when passed as a bare argument value.",
+		"- Use file tools for explicit workspace operations (`file_read`, `file_write`, `file_edit`, `file_list`, `file_search`, `file_grep`). Use memory/contact tools for durable facts about people or stable preferences, not long documents.",
+		"- If a tool is unavailable in this context, do not retry with guessed names. Either pick an available tool, delegate, or answer directly.",
+	}, "\n")
+}
+
 // IllegalToolMessage is the tool result content injected when the model
 // calls a tool that is not available in the current context. The message
-// directs the model to delegate or inform the user rather than retrying.
-// It is a format string accepting the tool name as its single argument.
-const IllegalToolMessage = "Error: tool %q is not available to you. You do not have access to this tool. Delegate the task or inform the user."
+// pushes the model back toward the exact runtime contract instead of
+// encouraging speculative delegation or invented tool names. It is a
+// format string accepting the tool name as its single argument.
+const IllegalToolMessage = "Error: tool %q is not available in this context. Use an available tool by its exact name. Do not invent tool names. For capability state, prefer activate_capability or deactivate_capability, and use a list helper only when it is explicitly available in this turn. Otherwise choose another available tool or respond directly."
 
 // TimeoutRecoverySystem is the system prompt for the recovery model
 // when the primary model times out after completing tool calls.

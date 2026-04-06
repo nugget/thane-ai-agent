@@ -18,6 +18,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/loop"
 	"github.com/nugget/thane-ai-agent/internal/models"
 	"github.com/nugget/thane-ai-agent/internal/router"
+	"github.com/nugget/thane-ai-agent/internal/toolcatalog"
 )
 
 //go:embed static/*
@@ -49,9 +50,9 @@ type LogQuerier interface {
 	Query(params logging.QueryParams) ([]logging.LogEntry, error)
 }
 
-// ContentQuerier fetches retained request content (system prompts,
-// tool call details, message bodies) from the log index. Nil disables
-// the request detail API endpoint.
+// ContentQuerier fetches live or retained request content (system
+// prompts, tool call details, message bodies). Nil disables the
+// request detail API endpoint.
 type ContentQuerier interface {
 	QueryRequestDetail(requestID string) (*logging.RequestDetail, error)
 }
@@ -69,6 +70,8 @@ type SystemStatusProvider interface {
 	ModelRegistry() *models.RegistrySnapshot
 	// RouterStats returns the current router statistics snapshot.
 	RouterStats() *router.Stats
+	// CapabilityCatalog returns the resolved runtime capability catalog.
+	CapabilityCatalog() *toolcatalog.CapabilityCatalogView
 }
 
 // ServiceHealth describes the health of a single watched service.
@@ -136,6 +139,7 @@ func (s *WebServer) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/loops", s.handleLoops)
 	mux.HandleFunc("GET /api/loops/events", s.handleLoopEvents)
 	mux.HandleFunc("GET /api/loops/{id}/logs", s.handleLoopLogs)
+	mux.HandleFunc("GET /api/request-detail/_probe", s.handleRequestDetailProbe)
 	mux.HandleFunc("GET /api/requests/{id}", s.handleRequestDetail)
 	mux.HandleFunc("GET /api/system/logs", s.handleSystemLogs)
 }

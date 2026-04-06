@@ -11,15 +11,27 @@ const state = {
   loops: new Map(),       // id -> loop status object
   selected: null,         // id of currently selected loop ('__system__' for system node)
   events: [],             // recent events (newest first, capped)
+  notifications: [],      // active dashboard notifications (newest first)
   sleepTimers: new Map(), // id -> { startedAt: number (ms timestamp), durationMs: number }
   iterationHistory: new Map(), // id -> array of iteration snapshots (newest first)
   system: null,           // system status object from /api/system
   prevIterations: new Map(), // id -> last known iteration count (for flash detection)
   prevErrors: new Map(),     // id -> last known error string (for shake detection)
   knownLoopIds: new Set(),   // ids we've rendered before (for enter animation)
+  canvasRect: null,          // last observed canvas viewport for responsive graph reflow
+  conversationIndex: {
+    fetchedAt: 0,
+    loading: null,
+    summaries: new Map(),
+  },
+  conversationDetails: new Map(), // conversation_id -> derived dashboard summary
+  conversationLoads: new Map(),   // conversation_id -> in-flight loader promise
 };
 
 const MAX_EVENTS = 50;
+const MAX_NOTIFICATIONS = 8;
+const CONVERSATION_SUMMARY_TTL_MS = 15000;
+const CONVERSATION_SESSION_LIMIT = 8;
 
 // ---------------------------------------------------------------------------
 // Force-Directed Physics Layout
@@ -27,16 +39,398 @@ const MAX_EVENTS = 50;
 
 const physics = {
   nodes: new Map(),  // id -> { x, y, vx, vy, pinned }
-  // Tuning constants — tweak these for feel.
-  centerGravity:      0.002,
-  springStrength:     0.02,
-  springRestLength:   120,    // system ↔ top-level
-  childSpringStrength: 0.06,  // parent ↔ child (3× stronger)
-  childRestLength:    80,     // parent ↔ child (tighter cluster)
-  repulsionStrength:  5000,
-  damping:            0.92,
-  maxVelocity:        5,
+  // The layout is hierarchy-first, with physics used only to smooth motion
+  // and resolve conflicts. This follows the Gource pattern much more closely
+  // than a global force soup.
+  springStrength:     0.014,
+  springRestLength:   164,
+  childSpringStrength: 0.05,
+  childRestLength:    112,
+  orbitAttractionStrength: 0.058,
+  orbitProjectionBlend: 0.14,
+  orbitProjectionMinBlend: 0.032,
+  orbitProjectionDistanceScale: 96,
+  orbitProjectionVelocityDamping: 0.74,
+  orbitRadiusVelocityGain: 0.028,
+  orbitRadiusVelocityCap: 1.3,
+  orbitAspectStrength: 0.42,
+  viewportReflowVelocityGain: 0.18,
+  viewportReflowPositionBlend: 0.08,
+  viewportReflowVelocityCap: 3.2,
+  pinnedAnchorStrength: 0.16,
+  pinnedAnchorDamping: 0.72,
+  overlapRepulsionStrength: 0.16,
+  overlapRepulsionRange: 1.2,
+  parentChildRepulsionMultiplier: 1.55,
+  edgeNodeRepulsion:  0.22,
+  edgeNodePadding:    44,
+  channelChildSpacingMultiplier: 1.22,
+  nodeEnterDurationMs: 700,
+  nodeEnterExtentBoost: 0.34,
+  damping:            0.88,
+  maxVelocity:        3.4,
+  wallStrength:       0.05,
+  collisionPadding:   24,
+  resizeVelocityGain: 0.18,
 };
+
+function buildLoopBranchLoads() {
+  const childrenByParent = new Map();
+  for (const loop of state.loops.values()) {
+    if (!loop.parent_id) continue;
+    if (!childrenByParent.has(loop.parent_id)) childrenByParent.set(loop.parent_id, []);
+    childrenByParent.get(loop.parent_id).push(loop.id);
+  }
+
+  const cache = new Map();
+
+  function measure(loopID) {
+    if (cache.has(loopID)) return cache.get(loopID);
+    const ownExtent = getPhysicsNodeExtent(loopID);
+    const childIDs = childrenByParent.get(loopID) || [];
+    let descendants = 0;
+    let branchExtent = ownExtent;
+    for (const childID of childIDs) {
+      const childLoad = measure(childID);
+      descendants += 1 + childLoad.descendants;
+      branchExtent += childLoad.branchExtent;
+    }
+    const load = { ownExtent, descendants, branchExtent };
+    cache.set(loopID, load);
+    return load;
+  }
+
+  for (const loop of state.loops.values()) {
+    measure(loop.id);
+  }
+
+  return cache;
+}
+
+function getLoopBranchFootprint(load) {
+  if (!load) return 0;
+  return Math.max(0, load.branchExtent - load.ownExtent);
+}
+
+function getLoopMetadata(loop) {
+  return (loop && loop.config && loop.config.Metadata) || {};
+}
+
+function isChannelConversationRelation(parentLoop, childLoop) {
+  if (!parentLoop || !childLoop) return false;
+  const parentMeta = getLoopMetadata(parentLoop);
+  const childMeta = getLoopMetadata(childLoop);
+  return parentMeta.category === 'channel' &&
+    childMeta.category === 'channel' &&
+    !!parentMeta.subsystem &&
+    parentMeta.subsystem === childMeta.subsystem &&
+    childLoop.parent_id === parentLoop.id;
+}
+
+function getPairSpacingMultiplier(loopA, loopB) {
+  if (isChannelConversationRelation(loopA, loopB) || isChannelConversationRelation(loopB, loopA)) {
+    return physics.channelChildSpacingMultiplier;
+  }
+  return 1;
+}
+
+function isParentChildRelation(loopA, loopB) {
+  if (!loopA || !loopB) return false;
+  return loopA.parent_id === loopB.id || loopB.parent_id === loopA.id;
+}
+
+function compareLoopsForLayout(a, b) {
+  const aMeta = getLoopMetadata(a);
+  const bMeta = getLoopMetadata(b);
+  const aCategory = normalizeVisualCategory(getLoopCategory(a));
+  const bCategory = normalizeVisualCategory(getLoopCategory(b));
+  const aKey = [aCategory, aMeta.subsystem || '', a.name || a.id];
+  const bKey = [bCategory, bMeta.subsystem || '', b.name || b.id];
+  return aKey.join('\u0000').localeCompare(bKey.join('\u0000'));
+}
+
+function buildSiblingIndex() {
+  const siblings = new Map();
+  for (const loop of state.loops.values()) {
+    if (!loop.parent_id) continue;
+    if (!siblings.has(loop.parent_id)) siblings.set(loop.parent_id, []);
+    siblings.get(loop.parent_id).push(loop);
+  }
+  for (const list of siblings.values()) {
+    list.sort(compareLoopsForLayout);
+  }
+  return siblings;
+}
+
+function getOrbitSlotSize(parentID, loop, branchLoads) {
+  const parentLoop = parentID ? state.loops.get(parentID) : null;
+  const spacingMultiplier = getPairSpacingMultiplier(parentLoop, loop);
+  const load = branchLoads.get(loop.id);
+  const extent = getPhysicsNodeExtent(loop.id);
+  const footprint = getLoopBranchFootprint(load);
+  const basePadding = physics.collisionPadding + (parentID ? 30 : 42);
+  const subtreeAllowance = footprint <= 0 ? 0 : Math.min(parentID ? 92 : 156, footprint * (parentID ? 0.16 : 0.24));
+  return Math.max(
+    extent * 2 + basePadding,
+    extent * 2 + subtreeAllowance,
+    (parentID ? physics.childRestLength : physics.springRestLength) * spacingMultiplier * (parentID ? 0.9 : 1.05),
+  );
+}
+
+function getOrbitFamilyRadius(parentID, loops, branchLoads) {
+  if (!loops || loops.length === 0) return parentID ? physics.childRestLength : physics.springRestLength;
+  const baseRadius = parentID ? physics.childRestLength : physics.springRestLength;
+  const requiredCircumference = loops.reduce((sum, loop) => sum + getOrbitSlotSize(parentID, loop, branchLoads), 0);
+  let radius = Math.max(baseRadius, requiredCircumference / (Math.PI * 2));
+  if (parentID) {
+    const parentExtent = getPhysicsNodeExtent(parentID);
+    const maxChildExtent = loops.reduce((max, loop) => Math.max(max, getPhysicsNodeExtent(loop.id)), 0);
+    const parentClearance = parentExtent + maxChildExtent + physics.collisionPadding + 8;
+    radius = Math.max(radius, parentClearance);
+    radius += Math.min(56, parentExtent * 0.35);
+  }
+  return radius;
+}
+
+function getLoopOrbitRadiusBias(parentID, loop, branchLoads) {
+  const load = branchLoads.get(loop.id);
+  if (!load) return 0;
+  const footprint = getLoopBranchFootprint(load);
+  if (footprint <= 0 && load.descendants <= 0) return 0;
+
+  if (!parentID) {
+    return Math.min(240, footprint * 0.34 + load.descendants * 12);
+  }
+
+  return Math.min(132, footprint * 0.18 + load.descendants * 6);
+}
+
+function getLoopOrbitDemand(parentID, loop, branchLoads) {
+  const load = branchLoads.get(loop.id);
+  const base = getOrbitSlotSize(parentID, loop, branchLoads);
+  if (!load) return base;
+  const footprint = getLoopBranchFootprint(load);
+  return base + Math.min(parentID ? 120 : 220, footprint * (parentID ? 0.18 : 0.28) + load.descendants * (parentID ? 5 : 10));
+}
+
+function compareLoopsForOrbit(parentID, a, b, branchLoads) {
+  const demandDiff = getLoopOrbitDemand(parentID, b, branchLoads) - getLoopOrbitDemand(parentID, a, branchLoads);
+  if (Math.abs(demandDiff) > 0.001) return demandDiff;
+  return compareLoopsForLayout(a, b);
+}
+
+function getGraphMotionScale(nodeCount) {
+  if (nodeCount <= 8) return 1;
+  return Math.max(0.52, 1 - ((nodeCount - 8) * 0.03));
+}
+
+function getNowMs() {
+  return (typeof performance !== 'undefined' && typeof performance.now === 'function')
+    ? performance.now()
+    : Date.now();
+}
+
+function clampUnit(value) {
+  return Math.max(0, Math.min(1, value));
+}
+
+function easeOutBack(t) {
+  const x = clampUnit(t) - 1;
+  const c1 = 1.70158;
+  const c3 = c1 + 1;
+  return 1 + (c3 * x * x * x) + (c1 * x * x);
+}
+
+function getNodeEnterInfluence(id) {
+  const nd = physics.nodes.get(id);
+  if (!nd || !nd.createdAt) return 0;
+  const elapsed = getNowMs() - nd.createdAt;
+  const duration = physics.nodeEnterDurationMs || 0;
+  if (duration <= 0 || elapsed >= duration) return 0;
+  const progress = clampUnit(elapsed / duration);
+  return Math.max(0, 1 - easeOutBack(progress));
+}
+
+function normalizeAngle(angle) {
+  let out = angle;
+  while (out < 0) out += Math.PI * 2;
+  while (out >= Math.PI * 2) out -= Math.PI * 2;
+  return out;
+}
+
+function buildOrbitTargets(cx, cy, branchLoads, siblingIndex, vw, vh) {
+  const targets = new Map();
+  const roots = Array.from(state.loops.values())
+    .filter(loop => !loop.parent_id)
+    .sort(compareLoopsForLayout);
+
+  const aspect = (vw && vh && vh > 0) ? (vw / vh) : 1;
+  const rootShapeX = 1 + ((Math.sqrt(aspect) - 1) * physics.orbitAspectStrength);
+  const rootShapeY = 1 + (((1 / Math.sqrt(aspect)) - 1) * physics.orbitAspectStrength);
+
+  function layoutFamily(parentID, loops, center, inwardAngle, depth) {
+    if (!loops || loops.length === 0) return;
+    const familyLoops = loops.slice().sort((a, b) => compareLoopsForOrbit(parentID, a, b, branchLoads));
+    const baseRadius = getOrbitFamilyRadius(parentID, familyLoops, branchLoads);
+    const shapeStrength = Math.max(0.18, 1 - (depth * 0.16));
+    const shapeX = 1 + ((rootShapeX - 1) * shapeStrength);
+    const shapeY = 1 + ((rootShapeY - 1) * shapeStrength);
+    const majorAxisAngle = shapeY > shapeX ? -Math.PI / 2 : 0;
+    const demands = familyLoops.map(loop => getLoopOrbitDemand(parentID, loop, branchLoads));
+    const totalDemand = demands.reduce((sum, demand) => sum + demand, 0) || familyLoops.length;
+    const firstSpan = (demands[0] / totalDemand) * Math.PI * 2;
+    const startAngle = Number.isFinite(inwardAngle) ? inwardAngle : (majorAxisAngle - firstSpan / 2);
+    let cursor = 0;
+
+    for (let i = 0; i < familyLoops.length; i += 1) {
+      const loop = familyLoops[i];
+      const radius = baseRadius + getLoopOrbitRadiusBias(parentID, loop, branchLoads);
+      const span = (demands[i] / totalDemand) * Math.PI * 2;
+      const angle = startAngle + cursor + span / 2;
+      const x = center.x + Math.cos(angle) * radius * shapeX;
+      const y = center.y + Math.sin(angle) * radius * shapeY;
+      targets.set(loop.id, { parentID, depth, angle, radius, x, y, centerX: center.x, centerY: center.y });
+      layoutFamily(loop.id, siblingIndex.get(loop.id) || [], { x, y }, normalizeAngle(angle + Math.PI), depth + 1);
+      cursor += span;
+    }
+  }
+
+  layoutFamily(null, roots, { x: cx, y: cy }, Number.NaN, 0);
+  return targets;
+}
+
+function projectOrbitTargets(targets, positionBlend, velocityDamping) {
+  if (!targets || positionBlend <= 0) return;
+  for (const [id, target] of targets) {
+    const nd = physics.nodes.get(id);
+    if (!nd || nd.pinned || !target) continue;
+    const dx = target.x - nd.x;
+    const dy = target.y - nd.y;
+    const dist = Math.sqrt((dx * dx) + (dy * dy));
+    const distanceScale = physics.orbitProjectionDistanceScale || 1;
+    const scaledBlend = dist > 0.001
+      ? positionBlend * Math.min(1, distanceScale / dist)
+      : positionBlend;
+    const blend = Math.max(physics.orbitProjectionMinBlend || 0, scaledBlend);
+    const prevX = nd.x;
+    const prevY = nd.y;
+    nd.x += dx * blend;
+    nd.y += dy * blend;
+    nd.vx = (nd.vx + (nd.x - prevX)) * velocityDamping;
+    nd.vy = (nd.vy + (nd.y - prevY)) * velocityDamping;
+  }
+}
+
+function applyOrbitRadiusElasticity(targets) {
+  if (!targets) return;
+  for (const [id, target] of targets) {
+    const nd = physics.nodes.get(id);
+    if (!nd || nd.pinned || !target) continue;
+
+    const prevRadius = Number.isFinite(nd.lastTargetRadius) ? nd.lastTargetRadius : target.radius;
+    const deltaRadius = target.radius - prevRadius;
+    nd.lastTargetRadius = target.radius;
+    if (Math.abs(deltaRadius) < 0.001) continue;
+
+    let dirX = target.x - target.centerX;
+    let dirY = target.y - target.centerY;
+    let dirLen = Math.sqrt((dirX * dirX) + (dirY * dirY));
+    if (dirLen < 0.001) {
+      dirX = Math.cos(target.angle);
+      dirY = Math.sin(target.angle);
+      dirLen = 1;
+    }
+
+    const impulse = Math.max(
+      -physics.orbitRadiusVelocityCap,
+      Math.min(physics.orbitRadiusVelocityCap, deltaRadius * physics.orbitRadiusVelocityGain),
+    );
+    nd.vx += (dirX / dirLen) * impulse;
+    nd.vy += (dirY / dirLen) * impulse;
+  }
+}
+
+function kickOrbitReflow(orbitTargets, loopIDs, intensity = 1) {
+  if (!orbitTargets || !loopIDs || loopIDs.length === 0) return;
+
+  const affected = new Set();
+  for (const loopID of loopIDs) {
+    let cursor = state.loops.get(loopID);
+    while (cursor) {
+      affected.add(cursor.id);
+      const parentID = cursor.parent_id;
+      for (const loop of state.loops.values()) {
+        if (loop.parent_id === parentID) affected.add(loop.id);
+      }
+      if (!parentID) break;
+      cursor = state.loops.get(parentID) || null;
+    }
+  }
+
+  for (const id of affected) {
+    const nd = physics.nodes.get(id);
+    const target = orbitTargets.get(id);
+    if (!nd || !target || nd.pinned) continue;
+    const dx = target.x - nd.x;
+    const dy = target.y - nd.y;
+    const dist = Math.sqrt((dx * dx) + (dy * dy));
+    if (dist < 0.001) continue;
+    const scaledIntensity = Math.max(0.4, intensity);
+    const gain = Math.min(0.34, 0.08 + (dist / 420) * 0.18) * scaledIntensity;
+    const blend = Math.min(0.18, physics.viewportReflowPositionBlend * scaledIntensity);
+    nd.x += dx * blend;
+    nd.y += dy * blend;
+    nd.vx += dx * gain * physics.viewportReflowVelocityGain;
+    nd.vy += dy * gain * physics.viewportReflowVelocityGain;
+    nd.vx = Math.max(-physics.viewportReflowVelocityCap, Math.min(physics.viewportReflowVelocityCap, nd.vx));
+    nd.vy = Math.max(-physics.viewportReflowVelocityCap, Math.min(physics.viewportReflowVelocityCap, nd.vy));
+  }
+}
+
+function kickViewportReflow(prevRect, nextRect) {
+  if (!nextRect || state.loops.size === 0) return;
+  const branchLoads = buildLoopBranchLoads();
+  const siblingIndex = buildSiblingIndex();
+  const orbitTargets = buildOrbitTargets(nextRect.cx, nextRect.cy, branchLoads, siblingIndex, nextRect.width, nextRect.height);
+  const loopIDs = Array.from(state.loops.keys());
+  const prevAspect = prevRect && prevRect.height > 0 ? prevRect.width / prevRect.height : nextRect.width / nextRect.height;
+  const nextAspect = nextRect.height > 0 ? nextRect.width / nextRect.height : prevAspect;
+  const aspectDelta = Math.abs(nextAspect - prevAspect);
+  const sizeDelta = prevRect && prevRect.width > 0 && prevRect.height > 0
+    ? Math.abs((nextRect.width * nextRect.height) - (prevRect.width * prevRect.height)) / (prevRect.width * prevRect.height)
+    : 0;
+  const intensity = Math.min(1.8, 0.7 + aspectDelta * 0.9 + sizeDelta * 0.45);
+  kickOrbitReflow(orbitTargets, loopIDs, intensity);
+}
+
+function updatePinnedAnchorPositions() {
+  for (const nd of physics.nodes.values()) {
+    if (!nd || !nd.pinned) continue;
+    if (!Number.isFinite(nd.targetX) || !Number.isFinite(nd.targetY)) continue;
+
+    const dx = nd.targetX - nd.x;
+    const dy = nd.targetY - nd.y;
+    if (Math.abs(dx) < 0.001 && Math.abs(dy) < 0.001 && Math.abs(nd.vx || 0) < 0.001 && Math.abs(nd.vy || 0) < 0.001) {
+      nd.x = nd.targetX;
+      nd.y = nd.targetY;
+      nd.vx = 0;
+      nd.vy = 0;
+      continue;
+    }
+
+    nd.vx = ((nd.vx || 0) + dx * physics.pinnedAnchorStrength) * physics.pinnedAnchorDamping;
+    nd.vy = ((nd.vy || 0) + dy * physics.pinnedAnchorStrength) * physics.pinnedAnchorDamping;
+    nd.x += nd.vx;
+    nd.y += nd.vy;
+
+    if (Math.abs(nd.targetX - nd.x) < 0.08 && Math.abs(nd.targetY - nd.y) < 0.08 && Math.abs(nd.vx) < 0.08 && Math.abs(nd.vy) < 0.08) {
+      nd.x = nd.targetX;
+      nd.y = nd.targetY;
+      nd.vx = 0;
+      nd.vy = 0;
+    }
+  }
+}
 
 // Ensure physics.nodes matches the current set of loops + system node.
 // New nodes spawn at their parent position (or center with jitter).
@@ -45,41 +439,53 @@ function syncPhysicsNodes(cx, cy) {
   if (state.system) {
     const sys = physics.nodes.get('__system__');
     if (sys) {
-      sys.x = cx; sys.y = cy;
+      sys.targetX = cx;
+      sys.targetY = cy;
+      if (!Number.isFinite(sys.x) || !Number.isFinite(sys.y)) {
+        sys.x = cx;
+        sys.y = cy;
+      }
     } else {
-      physics.nodes.set('__system__', { x: cx, y: cy, vx: 0, vy: 0, pinned: true });
+      physics.nodes.set('__system__', { x: cx, y: cy, vx: 0, vy: 0, pinned: true, targetX: cx, targetY: cy });
     }
   } else {
     physics.nodes.delete('__system__');
   }
 
+  const branchLoads = buildLoopBranchLoads();
+  const siblingIndex = buildSiblingIndex();
+  const orbitTargets = buildOrbitTargets(cx, cy, branchLoads, siblingIndex, cx * 2, cy * 2);
+  const addedLoopIDs = [];
+  const nowMs = getNowMs();
+
   // Loop nodes.
   for (const loop of state.loops.values()) {
     if (physics.nodes.has(loop.id)) continue;
     let sx, sy;
-    if (loop.parent_id) {
-      // Children spawn near their parent.
-      const parent = physics.nodes.get(loop.parent_id);
-      if (parent) {
-        // Spawn at child rest length from parent with random angle
-        // so the spring starts near equilibrium.
-        const a = Math.random() * 2 * Math.PI;
-        sx = parent.x + physics.childRestLength * Math.cos(a);
-        sy = parent.y + physics.childRestLength * Math.sin(a);
-      } else {
-        sx = cx + (Math.random() * 40 - 20);
-        sy = cy + (Math.random() * 40 - 20);
-      }
+    const target = orbitTargets.get(loop.id);
+    const parentNode = loop.parent_id ? physics.nodes.get(loop.parent_id) : null;
+    if (target && parentNode) {
+      const childExtent = getPhysicsNodeExtent(loop.id);
+      const parentExtent = getPhysicsNodeExtent(loop.parent_id);
+      const spawnRadius = Math.max(
+        parentExtent + childExtent + physics.collisionPadding + 6,
+        target.radius * 0.72,
+      );
+      const jitter = 6 + Math.random() * 8;
+      const angle = target.angle + ((Math.random() - 0.5) * 0.28);
+      sx = parentNode.x + Math.cos(angle) * (spawnRadius + jitter);
+      sy = parentNode.y + Math.sin(angle) * (spawnRadius + jitter);
+    } else if (target) {
+      const jitter = 6 + Math.random() * 8;
+      const angle = target.angle + ((Math.random() - 0.5) * 0.5);
+      sx = target.x + Math.cos(angle) * jitter;
+      sy = target.y + Math.sin(angle) * jitter;
     } else {
-      // Top-level nodes spawn at the spring rest length from center
-      // (random angle) so the spring starts near equilibrium instead
-      // of repelling the node outward from inside the rest length.
-      const angle = Math.random() * 2 * Math.PI;
-      const r = physics.springRestLength * (0.8 + Math.random() * 0.4);
-      sx = cx + r * Math.cos(angle);
-      sy = cy + r * Math.sin(angle);
+      sx = cx + (Math.random() * 40 - 20);
+      sy = cy + (Math.random() * 40 - 20);
     }
-    physics.nodes.set(loop.id, { x: sx, y: sy, vx: 0, vy: 0, pinned: false });
+    physics.nodes.set(loop.id, { x: sx, y: sy, vx: 0, vy: 0, pinned: false, createdAt: nowMs });
+    addedLoopIDs.push(loop.id);
   }
 
   // Remove physics nodes for loops that no longer exist (and aren't system).
@@ -90,59 +496,195 @@ function syncPhysicsNodes(cx, cy) {
       physics.nodes.delete(id);
     }
   }
+
+  if (addedLoopIDs.length > 0) {
+    kickOrbitReflow(orbitTargets, addedLoopIDs);
+  }
 }
 
-// Run one physics simulation step. Applies center gravity, spring
-// attraction (system↔top-level, parent↔child), pairwise repulsion,
-// then integrates velocity and position with damping.
+function cloneRect(rect) {
+  return rect ? { width: rect.width, height: rect.height, cx: rect.cx, cy: rect.cy } : null;
+}
+
+function getLayoutViewportRect() {
+  const rect = canvas.getBoundingClientRect();
+  const zoom = Math.max(0.001, viewport.zoom || 1);
+  const width = rect.width / zoom;
+  const height = rect.height / zoom;
+  const cx = (rect.width / 2 - viewport.panX) / zoom;
+  const cy = (rect.height / 2 - viewport.panY) / zoom;
+  return { width, height, cx, cy };
+}
+
+function getCanvasRectSnapshot() {
+  return cloneRect(getLayoutViewportRect());
+}
+
+function isCanvasRectChanged(prevRect, nextRect) {
+  if (!prevRect || !nextRect) return true;
+  return Math.abs(prevRect.width - nextRect.width) > 0.5 ||
+    Math.abs(prevRect.height - nextRect.height) > 0.5;
+}
+
+function reflowPhysicsNodes(prevRect, nextRect) {
+  if (!prevRect || !nextRect || prevRect.width <= 0 || prevRect.height <= 0 ||
+      nextRect.width <= 0 || nextRect.height <= 0) {
+    return;
+  }
+
+  const prevCx = Number.isFinite(prevRect.cx) ? prevRect.cx : (prevRect.width / 2);
+  const prevCy = Number.isFinite(prevRect.cy) ? prevRect.cy : (prevRect.height / 2);
+  const nextCx = Number.isFinite(nextRect.cx) ? nextRect.cx : (nextRect.width / 2);
+  const nextCy = Number.isFinite(nextRect.cy) ? nextRect.cy : (nextRect.height / 2);
+  const scaleX = Math.max(0.65, Math.min(1.65, nextRect.width / prevRect.width));
+  const scaleY = Math.max(0.65, Math.min(1.65, nextRect.height / prevRect.height));
+
+  for (const [id, nd] of physics.nodes) {
+    if (id === '__system__') {
+      nd.targetX = nextCx;
+      nd.targetY = nextCy;
+      continue;
+    }
+
+    const oldX = nd.x;
+    const oldY = nd.y;
+    const dx = oldX - prevCx;
+    const dy = oldY - prevCy;
+    const nextX = nextCx + dx * scaleX;
+    const nextY = nextCy + dy * scaleY;
+    nd.x = nextX;
+    nd.y = nextY;
+    nd.vx += (nextX - oldX) * physics.resizeVelocityGain;
+    nd.vy += (nextY - oldY) * physics.resizeVelocityGain;
+  }
+}
+
+function refreshCanvasViewport() {
+  const nextRect = getCanvasRectSnapshot();
+  if (!nextRect) return null;
+  if (isCanvasRectChanged(state.canvasRect, nextRect)) {
+    const prevRect = state.canvasRect;
+    reflowPhysicsNodes(prevRect, nextRect);
+    state.canvasRect = cloneRect(nextRect);
+    kickViewportReflow(prevRect, nextRect);
+  }
+  return nextRect;
+}
+
+function getPhysicsNodeExtent(id) {
+  if (id === '__system__') return 38;
+  const loop = state.loops.get(id);
+  if (!loop) return DEFAULT_NODE_R + 14;
+  // Space the graph by the visible outer ring/halo footprint rather than
+  // just the core circle so neighboring node borders don't visually touch.
+  const base = getLoopVisualCapacity(loop).radius + 14;
+  const enterInfluence = getNodeEnterInfluence(id);
+  return base * (1 + enterInfluence * physics.nodeEnterExtentBoost);
+}
+
+// Run one physics simulation step. The hierarchy defines the desired orbit
+// structure, and physics is only used to smooth motion plus resolve overlap.
 function physicsStep(cx, cy, vw, vh) {
   const P = physics;
   const nodes = Array.from(P.nodes.values());
   const ids = Array.from(P.nodes.keys());
   const n = nodes.length;
   if (n === 0) return;
+  const branchLoads = buildLoopBranchLoads();
+  const siblingIndex = buildSiblingIndex();
+  const orbitTargets = buildOrbitTargets(cx, cy, branchLoads, siblingIndex, vw, vh);
+  const motionScale = getGraphMotionScale(n);
+  const edges = [];
 
-  // Anisotropic gravity — scale per-axis so the node cloud stretches
-  // to fill non-square viewports. On a square viewport the factors
-  // are both 1.0 (no-op). On a 2:1 ultrawide, X gravity drops ~30%
-  // and Y rises ~40%, naturally spreading nodes along the wide axis.
-  const aspect = (vw && vh && vh > 0) ? vw / vh : 1;
-  const sqrtA = Math.sqrt(aspect);
-  const gravX = P.centerGravity / sqrtA;
-  const gravY = P.centerGravity * sqrtA;
+  applyOrbitRadiusElasticity(orbitTargets);
 
   // Reset forces.
   for (const nd of nodes) { nd.fx = 0; nd.fy = 0; }
 
-  // 1. Center gravity — anisotropic pull toward (cx, cy).
-  for (const nd of nodes) {
-    if (nd.pinned) continue;
-    nd.fx += (cx - nd.x) * gravX;
-    nd.fy += (cy - nd.y) * gravY;
+  // 1. Orbit attraction — every node chases an explicit parent-centered slot.
+  for (const [loopID, target] of orbitTargets) {
+    const nd = P.nodes.get(loopID);
+    if (!nd || nd.pinned) continue;
+    nd.fx += (target.x - nd.x) * P.orbitAttractionStrength;
+    nd.fy += (target.y - nd.y) * P.orbitAttractionStrength;
   }
 
-  // 2. Spring forces — build edge list from loop relationships.
+  // 2. Edge springs — keep the rendered connectors taut without letting them
+  // dominate the structure.
   for (const loop of state.loops.values()) {
     if (!P.nodes.has(loop.id)) continue;
     if (loop.parent_id && P.nodes.has(loop.parent_id)) {
-      // Parent↔child: shorter rest length, stronger spring for tight clusters.
-      applySpring(P.nodes.get(loop.parent_id), P.nodes.get(loop.id), P.childSpringStrength, P.childRestLength);
+      const source = P.nodes.get(loop.parent_id);
+      const target = P.nodes.get(loop.id);
+      const targetSpec = orbitTargets.get(loop.id);
+      const restLength = targetSpec ? targetSpec.radius : P.childRestLength;
+      applySpring(
+        source,
+        target,
+        P.childSpringStrength,
+        restLength,
+      );
+      edges.push({ sourceId: loop.parent_id, targetId: loop.id, source, target });
     } else if (P.nodes.has('__system__')) {
-      // System↔top-level (or orphaned child fallback): standard spring.
-      applySpring(P.nodes.get('__system__'), P.nodes.get(loop.id), P.springStrength, P.springRestLength);
+      const source = P.nodes.get('__system__');
+      const target = P.nodes.get(loop.id);
+      const targetSpec = orbitTargets.get(loop.id);
+      const restLength = targetSpec ? targetSpec.radius : P.springRestLength;
+      applySpring(
+        source,
+        target,
+        P.springStrength,
+        restLength,
+      );
+      edges.push({ sourceId: '__system__', targetId: loop.id, source, target });
     }
   }
 
-  // 3. Pairwise repulsion (O(n²), fine for ≤20 nodes).
-  const EPS = 100; // prevents division-by-zero / explosion at overlap
+  // 3. Soft border gravity keeps the cloud within the viewport while still
+  // letting the force layout breathe and adapt to different aspect ratios.
+  const padX = Math.max(44, vw * 0.08);
+  const padY = Math.max(52, vh * 0.1);
+  for (let i = 0; i < n; i++) {
+    const id = ids[i];
+    const nd = nodes[i];
+    if (nd.pinned) continue;
+    const radius = getPhysicsNodeExtent(id);
+    const minX = padX + radius;
+    const maxX = Math.max(minX, vw - padX - radius);
+    const minY = padY + radius;
+    const maxY = Math.max(minY, vh - padY - radius);
+
+    if (nd.x < minX) nd.fx += (minX - nd.x) * P.wallStrength;
+    else if (nd.x > maxX) nd.fx -= (nd.x - maxX) * P.wallStrength;
+
+    if (nd.y < minY) nd.fy += (minY - nd.y) * P.wallStrength;
+    else if (nd.y > maxY) nd.fy -= (nd.y - maxY) * P.wallStrength;
+  }
+
+  // 4. Pairwise repulsion — Gource-style conflict resolution rather than a
+  // long-range inverse-square field. Nodes mostly honor their family slots
+  // unless they actually interfere with each other.
   for (let i = 0; i < n; i++) {
     for (let j = i + 1; j < n; j++) {
       const a = nodes[i], b = nodes[j];
-      const dx = b.x - a.x;
-      const dy = b.y - a.y;
-      const distSq = dx * dx + dy * dy + EPS;
-      const force = P.repulsionStrength / distSq;
-      const dist = Math.sqrt(distSq);
+      let dx = b.x - a.x;
+      let dy = b.y - a.y;
+      let dist = Math.sqrt((dx * dx) + (dy * dy));
+      const loopA = ids[i] === '__system__' ? null : state.loops.get(ids[i]);
+      const loopB = ids[j] === '__system__' ? null : state.loops.get(ids[j]);
+      let spacingMultiplier = getPairSpacingMultiplier(loopA, loopB);
+      if (isParentChildRelation(loopA, loopB)) {
+        spacingMultiplier *= P.parentChildRepulsionMultiplier;
+      }
+      const minGap = (getPhysicsNodeExtent(ids[i]) + getPhysicsNodeExtent(ids[j]) + P.collisionPadding) * P.overlapRepulsionRange * (isParentChildRelation(loopA, loopB) ? 1.1 : 1);
+      if (dist >= minGap) continue;
+      if (dist < 0.001) {
+        const angle = Math.random() * Math.PI * 2;
+        dx = Math.cos(angle);
+        dy = Math.sin(angle);
+        dist = 1;
+      }
+      const force = (minGap - dist) * P.overlapRepulsionStrength * spacingMultiplier;
       const fx = (dx / dist) * force;
       const fy = (dy / dist) * force;
       a.fx -= fx; a.fy -= fy;
@@ -150,21 +692,103 @@ function physicsStep(cx, cy, vw, vh) {
     }
   }
 
-  // 4. Integration + damping.
-  for (const nd of nodes) {
+  // 5. Edge/node clearance — unrelated nodes should not sit comfortably on
+  // top of connector lines.
+  for (const edge of edges) {
+    const ax = edge.source.x;
+    const ay = edge.source.y;
+    const bx = edge.target.x;
+    const by = edge.target.y;
+    const segDx = bx - ax;
+    const segDy = by - ay;
+    const segLenSq = segDx * segDx + segDy * segDy;
+    if (segLenSq < 1) continue;
+
+    for (let i = 0; i < n; i += 1) {
+      const nodeID = ids[i];
+      if (nodeID === edge.sourceId || nodeID === edge.targetId) continue;
+      const nd = nodes[i];
+      if (nd.pinned) continue;
+
+      const t = Math.max(0, Math.min(1, (((nd.x - ax) * segDx) + ((nd.y - ay) * segDy)) / segLenSq));
+      const px = ax + segDx * t;
+      const py = ay + segDy * t;
+      let awayX = nd.x - px;
+      let awayY = nd.y - py;
+      let dist = Math.sqrt((awayX * awayX) + (awayY * awayY));
+      const clearance = getPhysicsNodeExtent(nodeID) + P.edgeNodePadding;
+      if (dist >= clearance) continue;
+      if (dist < 0.001) {
+        awayX = -segDy;
+        awayY = segDx;
+        dist = Math.sqrt((awayX * awayX) + (awayY * awayY)) || 1;
+      }
+      const nx = awayX / dist;
+      const ny = awayY / dist;
+      const pressure = clearance - dist;
+      const midSegmentBias = 1 - Math.min(1, Math.abs(0.5 - t) * 2);
+      const force = pressure * P.edgeNodeRepulsion * (1 + midSegmentBias * 1.5 + (pressure / clearance) * 1.4);
+      nd.fx += nx * force;
+      nd.fy += ny * force;
+      nd.vx += nx * pressure * 0.04;
+      nd.vy += ny * pressure * 0.04;
+
+      const endpointShare = force * (0.22 + midSegmentBias * 0.2);
+      if (!edge.source.pinned) {
+        edge.source.fx -= nx * endpointShare * (1 - t);
+        edge.source.fy -= ny * endpointShare * (1 - t);
+      }
+      if (!edge.target.pinned) {
+        edge.target.fx -= nx * endpointShare * t;
+        edge.target.fy -= ny * endpointShare * t;
+      }
+    }
+  }
+
+  // 6. Integration + damping.
+  for (let i = 0; i < n; i++) {
+    const id = ids[i];
+    const nd = nodes[i];
     if (nd.pinned) continue;
-    nd.vx = (nd.vx + nd.fx) * P.damping;
-    nd.vy = (nd.vy + nd.fy) * P.damping;
+    nd.vx = (nd.vx + nd.fx * motionScale) * P.damping;
+    nd.vy = (nd.vy + nd.fy * motionScale) * P.damping;
     // Clamp velocity.
     const speed = Math.sqrt(nd.vx * nd.vx + nd.vy * nd.vy);
-    if (speed > P.maxVelocity) {
-      const scale = P.maxVelocity / speed;
+    const maxVelocity = Math.max(2.6, P.maxVelocity * motionScale);
+    if (speed > maxVelocity) {
+      const scale = maxVelocity / speed;
       nd.vx *= scale;
       nd.vy *= scale;
     }
     nd.x += nd.vx;
     nd.y += nd.vy;
+
+    // Safety clamp after integration so a burst of forces cannot eject nodes
+    // off-screen between frames.
+    const radius = getPhysicsNodeExtent(id);
+    const minX = padX + radius;
+    const maxX = Math.max(minX, vw - padX - radius);
+    const minY = padY + radius;
+    const maxY = Math.max(minY, vh - padY - radius);
+    if (nd.x < minX) {
+      nd.x = minX;
+      nd.vx *= 0.5;
+    } else if (nd.x > maxX) {
+      nd.x = maxX;
+      nd.vx *= 0.5;
+    }
+    if (nd.y < minY) {
+      nd.y = minY;
+      nd.vy *= 0.5;
+    } else if (nd.y > maxY) {
+      nd.y = maxY;
+      nd.vy *= 0.5;
+    }
   }
+
+  // 7. Orbit projection — keep the hierarchy primary, with motion used for
+  // smoothing instead of letting the force solver invent topology.
+  projectOrbitTargets(orbitTargets, P.orbitProjectionBlend, P.orbitProjectionVelocityDamping);
 }
 
 // Apply a spring force between two nodes.
@@ -184,19 +808,19 @@ function updateNodePositions() {
   // System node.
   const sysP = physics.nodes.get('__system__');
   if (sysP) {
-    const sysG = canvasWorld.querySelector('.system-node');
+    const sysG = canvasNodeLayer.querySelector('.system-node');
     if (sysG) sysG.setAttribute('transform', `translate(${sysP.x},${sysP.y})`);
   }
 
   // Loop nodes.
   for (const [id, nd] of physics.nodes) {
     if (id === '__system__') continue;
-    const g = canvasWorld.querySelector(`[data-loop-id="${id}"]`);
+    const g = canvasNodeLayer.querySelector(`[data-loop-id="${id}"]`);
     if (g) g.setAttribute('transform', `translate(${nd.x},${nd.y})`);
   }
 
   // Linking line endpoints.
-  const lines = canvasWorld.querySelectorAll('.link-line');
+  const lines = canvasEdgeLayer.querySelectorAll('.link-line');
   for (const line of lines) {
     const targetId = line.dataset.targetLoop;
     const parentLoop = line.dataset.parentLoop;
@@ -214,33 +838,77 @@ function updateNodePositions() {
 }
 
 // ---------------------------------------------------------------------------
-// Loop Category + Shape + Model Sizing
+// Graph Visual Grammar: Category, State, and Capacity
 // ---------------------------------------------------------------------------
 
-// Derive a visual category from loop data. Drives which SVG shape is drawn.
-function getLoopCategory(loop) {
-  const hints = loop.config && loop.config.Hints;
-  if (hints && hints.source === 'metacognitive') return 'metacognitive';
-  const meta = loop.config && loop.config.Metadata;
-  if (meta && meta.category) return meta.category;
-  if (loop.parent_id) return 'delegate';
-  const name = (loop.name || '').toLowerCase();
-  if (/signal|email|mqtt|slack|irc/.test(name)) return 'channel';
-  if (/sched|cron|timer/.test(name)) return 'scheduled';
-  return 'generic';
-}
-
-// Category → icon displayed inside the node circle.
-const CATEGORY_ICONS = {
-  metacognitive: '🧠',
-  channel:       '💬',
-  delegate:      '🔀',
-  scheduled:     '🕐',
-  generic:       '⚙️',
+const CATEGORY_LABELS = {
+  metacognitive: 'metacognitive',
+  channel: 'channel',
+  delegate: 'delegate',
+  scheduled: 'scheduled',
+  generic: 'generic',
 };
 
+const NODE_LABEL_GAP = 24;
+const SYSTEM_LABEL_GAP = 20;
+
+// Derive a visual category from loop data. Drives fill tone and sigil.
+function getLoopCategoryInfo(loop) {
+  const hints = loop.config && loop.config.Hints;
+  if (hints && hints.source === 'metacognitive') {
+    return { category: 'metacognitive', source: 'hint source=metacognitive' };
+  }
+  const meta = loop.config && loop.config.Metadata;
+  if (meta && meta.category) {
+    return {
+      category: normalizeVisualCategory(meta.category),
+      source: 'metadata.category=' + meta.category,
+    };
+  }
+  if (loop.parent_id) {
+    return { category: 'delegate', source: 'parent_id relationship' };
+  }
+  const name = (loop.name || '').toLowerCase();
+  if (/signal|email|mqtt|slack|irc/.test(name)) {
+    return { category: 'channel', source: 'name heuristic' };
+  }
+  if (/sched|cron|timer/.test(name)) {
+    return { category: 'scheduled', source: 'name heuristic' };
+  }
+  return { category: 'generic', source: 'default fallback' };
+}
+
+function getLoopCategory(loop) {
+  return getLoopCategoryInfo(loop).category;
+}
+
+// Category → compact center sigil. The graph uses circles throughout, so
+// entity meaning rides on fill, rings, and restrained iconography instead
+// of divergent node shapes.
+const CATEGORY_SIGILS = {
+  metacognitive: 'M',
+  channel:       '@',
+  delegate:      '↗',
+  scheduled:     '◷',
+  generic:       '•',
+};
+
+function normalizeVisualCategory(category) {
+  return CATEGORY_SIGILS[category] ? category : 'generic';
+}
+
+// Context-window tiers drive node radius. The steps are intentionally
+// weighted for readability instead of being proportional to raw tokens.
+const CONTEXT_TIERS = [
+  { key: 'ctx-8k',   max: 8192,   label: '8k',   radius: 24 },
+  { key: 'ctx-32k',  max: 32768,  label: '32k',  radius: 28 },
+  { key: 'ctx-128k', max: 131072, label: '128k', radius: 34 },
+  { key: 'ctx-256k', max: 262144, label: '256k', radius: 40 },
+  { key: 'ctx-512k', max: Infinity, label: '512k', radius: 46 },
+];
+
 // Model name → approximate parameter count (billions).
-// Used for area-proportional node sizing with sqrt compression.
+// Used only as a fallback when we do not know the active context window yet.
 const MODEL_SIZES = {
   // Anthropic
   'claude-haiku':        8,
@@ -294,23 +962,155 @@ function getModelParams(modelName) {
 }
 
 // Compute node radius from model parameters using sqrt compression.
-// Returns a radius in [MIN_NODE_R, MAX_NODE_R].
+// This is only used as a fallback capacity estimate when we do not yet have
+// a real context window for the loop.
 const MIN_NODE_R = 22;
 const MAX_NODE_R = 50;
 const DEFAULT_NODE_R = 32;
 
-function getModelRadius(modelName) {
-  const params = getModelParams(modelName);
+function getModelRadiusFromParams(params) {
   if (params === null) return DEFAULT_NODE_R;
 
-  // sqrt compression: area ∝ sqrt(params).
-  // Calibrated so 8B → MIN_NODE_R, 300B → MAX_NODE_R.
   const minParams = 3;    // floor (smallest model we'd see)
   const maxParams = 700;  // ceiling (largest model we'd see)
   const t = (Math.sqrt(params) - Math.sqrt(minParams)) /
             (Math.sqrt(maxParams) - Math.sqrt(minParams));
   const clamped = Math.max(0, Math.min(1, t));
   return MIN_NODE_R + clamped * (MAX_NODE_R - MIN_NODE_R);
+}
+
+function getModelRadius(modelName) {
+  return getModelRadiusFromParams(getModelParams(modelName));
+}
+
+function getLoopContextWindow(loop) {
+  if (!loop) return 0;
+  const recent = loop.recent_iterations && loop.recent_iterations.length > 0
+    ? loop.recent_iterations[0]
+    : null;
+  const candidates = [
+    loop.context_window,
+    loop.config && loop.config.ContextWindow,
+    loop._llmContext && loop._llmContext.context_window,
+    loop._llmContext && loop._llmContext.max_context_length,
+    recent && recent.context_window,
+  ];
+  for (const candidate of candidates) {
+    const n = Number(candidate);
+    if (Number.isFinite(n) && n > 0) return n;
+  }
+  return 0;
+}
+
+function getLoopConfiguredModelRef(loop) {
+  return (loop && loop.config && typeof loop.config.Model === 'string' && loop.config.Model) || '';
+}
+
+function getSystemDefaultModelRef() {
+  return (((state.system || {}).model_registry || {}).default_model || '').trim();
+}
+
+function deploymentMatchesModelRef(dep, ref) {
+  if (!dep || !ref) return false;
+  const normalizedRef = String(ref).trim().toLowerCase();
+  if (!normalizedRef) return false;
+  const deploymentID = String(dep.id || '').trim().toLowerCase();
+  const deploymentModel = String(dep.model || '').trim().toLowerCase();
+  if (deploymentID === normalizedRef || deploymentModel === normalizedRef) return true;
+  return deploymentID.endsWith('/' + normalizedRef);
+}
+
+function getRegistryContextWindowForModel(ref) {
+  if (!ref) return 0;
+  const registry = (state.system && state.system.model_registry) || null;
+  const deployments = registry && Array.isArray(registry.deployments) ? registry.deployments : [];
+  let maxWindow = 0;
+  for (const dep of deployments) {
+    if (!deploymentMatchesModelRef(dep, ref)) continue;
+    const candidates = [
+      dep.loaded_context_window,
+      dep.max_context_window,
+      dep.context_window,
+    ];
+    for (const candidate of candidates) {
+      const n = Number(candidate);
+      if (Number.isFinite(n) && n > maxWindow) {
+        maxWindow = n;
+      }
+    }
+  }
+  return maxWindow;
+}
+
+function getContextTier(contextWindow) {
+  for (const tier of CONTEXT_TIERS) {
+    if (contextWindow <= tier.max) return tier;
+  }
+  return CONTEXT_TIERS[CONTEXT_TIERS.length - 1];
+}
+
+function getLoopVisualCapacity(loop) {
+  const contextWindow = getLoopContextWindow(loop);
+  if (contextWindow > 0) {
+    const tier = getContextTier(contextWindow);
+    return {
+      radius: tier.radius,
+      label: tier.label,
+      key: tier.key,
+      basis: 'context',
+      contextWindow,
+    };
+  }
+
+  const recent = loop.recent_iterations && loop.recent_iterations.length > 0
+    ? loop.recent_iterations[0]
+    : null;
+  const configuredModel = getLoopConfiguredModelRef(loop);
+  const modelName = loop._liveModel
+    || loop._lastModel
+    || (recent && recent.model)
+    || configuredModel
+    || getSystemDefaultModelRef()
+    || '';
+  const registryContextWindow = getRegistryContextWindowForModel(modelName);
+  if (registryContextWindow > 0) {
+    const tier = getContextTier(registryContextWindow);
+    return {
+      radius: tier.radius,
+      label: tier.label,
+      key: tier.key,
+      basis: 'context',
+      contextWindow: registryContextWindow,
+    };
+  }
+  const params = getModelParams(modelName);
+  if (params !== null) {
+    return {
+      radius: getModelRadiusFromParams(params),
+      label: params + 'b',
+      key: 'model-estimate',
+      basis: 'model',
+      contextWindow: 0,
+    };
+  }
+
+  return {
+    radius: DEFAULT_NODE_R,
+    label: '?',
+    key: 'unknown',
+    basis: 'unknown',
+    contextWindow: 0,
+  };
+}
+
+function getLoopVisualState(loop) {
+  const isSup = loop._supervisor && loop.state === 'processing';
+  const svcDegraded = isServiceDegraded(loop.name);
+  if (isSup) return 'supervisor';
+  if (svcDegraded && (loop.state === 'sleeping' || loop.state === 'waiting' || loop.state === 'pending')) {
+    return 'degraded';
+  }
+  return loop.state || 'pending';
 }
 
 // Check whether a loop's backing service is degraded (not ready) in
@@ -339,6 +1139,786 @@ function updateNodeShape(el, category, r) {
   el.setAttribute('r', r);
 }
 
+function positionNodeRimBadge(badge, nodeR) {
+  if (!badge) return;
+  const angle = -40 * Math.PI / 180;
+  const orbit = nodeR + 14;
+  const x = Math.cos(angle) * orbit;
+  const y = Math.sin(angle) * orbit;
+  badge.setAttribute('transform', `translate(${x.toFixed(1)} ${y.toFixed(1)})`);
+}
+
+function notificationTTL(level) {
+  switch (level) {
+    case 'error':
+      return 0;
+    case 'warn':
+      return 20000;
+    default:
+      return 8000;
+  }
+}
+
+function pruneNotificationSignatures(now) {
+  for (const [signature, ts] of recentNotificationSignatures.entries()) {
+    if (now - ts > 5 * 60 * 1000) {
+      recentNotificationSignatures.delete(signature);
+    }
+  }
+}
+
+function dismissNotification(id) {
+  const idx = state.notifications.findIndex((note) => note.id === id);
+  if (idx === -1) return;
+  state.notifications.splice(idx, 1);
+  renderNotifications();
+}
+
+function dismissNotificationBySignature(signature) {
+  const idx = state.notifications.findIndex((note) => note.signature === signature);
+  if (idx === -1) return;
+  state.notifications.splice(idx, 1);
+  renderNotifications();
+}
+
+function scheduleNotificationExpiry(note) {
+  if (!note.expiresAt) return;
+  const delay = Math.max(0, note.expiresAt - Date.now()) + 50;
+  window.setTimeout(() => {
+    const current = state.notifications.find((entry) => entry.id === note.id);
+    if (!current || current.expiresAt !== note.expiresAt) return;
+    dismissNotification(note.id);
+  }, delay);
+}
+
+function addNotification(opts) {
+  if (!notificationStack) return;
+  const now = Date.now();
+  pruneNotificationSignatures(now);
+
+  const level = opts.level || 'info';
+  const signature = opts.signature || `${level}:${opts.title}:${opts.message || ''}`;
+  const ttlMs = Object.prototype.hasOwnProperty.call(opts, 'ttlMs')
+    ? opts.ttlMs
+    : notificationTTL(level);
+  const expiresAt = ttlMs > 0 ? now + ttlMs : null;
+  const existing = state.notifications.find((note) => note.signature === signature);
+  if (existing) {
+    existing.level = level;
+    existing.title = opts.title;
+    existing.message = opts.message || '';
+    existing.createdAt = now;
+    existing.expiresAt = expiresAt;
+    existing.action = opts.action || null;
+    existing.actionLabel = opts.actionLabel || '';
+    existing.sourceLabel = opts.sourceLabel || '';
+    state.notifications = [existing, ...state.notifications.filter((note) => note.id !== existing.id)];
+    renderNotifications();
+    scheduleNotificationExpiry(existing);
+    return;
+  }
+
+  const cooldownMs = opts.cooldownMs == null ? 15000 : opts.cooldownMs;
+  const lastSeen = recentNotificationSignatures.get(signature);
+  if (lastSeen && cooldownMs > 0 && (now - lastSeen) < cooldownMs) return;
+  recentNotificationSignatures.set(signature, now);
+
+  const note = {
+    id: nextNotificationID++,
+    signature,
+    level,
+    title: opts.title,
+    message: opts.message || '',
+    sourceLabel: opts.sourceLabel || '',
+    action: opts.action || null,
+    actionLabel: opts.actionLabel || '',
+    createdAt: now,
+    expiresAt,
+  };
+  state.notifications.unshift(note);
+  if (state.notifications.length > MAX_NOTIFICATIONS) {
+    state.notifications.length = MAX_NOTIFICATIONS;
+  }
+  renderNotifications();
+  scheduleNotificationExpiry(note);
+}
+
+function renderNotifications() {
+  if (!notificationStack) return;
+  notificationStack.innerHTML = '';
+  notificationStack.hidden = state.notifications.length === 0;
+  for (const note of state.notifications) {
+    const card = document.createElement('article');
+    card.className = 'notification-card notification-card--' + note.level;
+
+    const header = document.createElement('div');
+    header.className = 'notification-card__header';
+
+    const eyebrow = document.createElement('div');
+    eyebrow.className = 'notification-card__eyebrow';
+    eyebrow.textContent = note.sourceLabel || (note.level === 'error' ? 'Error' : note.level === 'warn' ? 'Warning' : 'Notice');
+    header.appendChild(eyebrow);
+
+    const age = document.createElement('time');
+    age.className = 'notification-card__age';
+    age.textContent = timeAgo(new Date(note.createdAt));
+    header.appendChild(age);
+    card.appendChild(header);
+
+    const title = document.createElement('h3');
+    title.className = 'notification-card__title';
+    title.textContent = note.title;
+    card.appendChild(title);
+
+    if (note.message) {
+      const body = document.createElement('p');
+      body.className = 'notification-card__body';
+      body.textContent = note.message;
+      card.appendChild(body);
+    }
+
+    const actions = document.createElement('div');
+    actions.className = 'notification-card__actions';
+    if (typeof note.action === 'function') {
+      const inspect = document.createElement('button');
+      inspect.className = 'notification-card__action';
+      inspect.type = 'button';
+      inspect.textContent = note.actionLabel || 'Inspect';
+      inspect.addEventListener('click', () => note.action());
+      actions.appendChild(inspect);
+    }
+
+    const dismiss = document.createElement('button');
+    dismiss.className = 'notification-card__dismiss';
+    dismiss.type = 'button';
+    dismiss.title = 'Dismiss notification';
+    dismiss.setAttribute('aria-label', 'Dismiss notification');
+    dismiss.textContent = '×';
+    dismiss.addEventListener('click', () => dismissNotification(note.id));
+    actions.appendChild(dismiss);
+
+    card.appendChild(actions);
+    notificationStack.appendChild(card);
+  }
+}
+
+function formatSchemaToken(value) {
+  if (!value) return '';
+  return String(value).replace(/_/g, ' ');
+}
+
+function getLoopLatestSnapshot(loop) {
+  const history = state.iterationHistory.get(loop.id);
+  if (history && history.length > 0) return history[0];
+  return loop.recent_iterations && loop.recent_iterations.length > 0
+    ? loop.recent_iterations[0]
+    : null;
+}
+
+function describeLoopExecutionMode(loop) {
+  if (loop.handler_only) return 'handler';
+  if (loop.event_driven) return 'event-driven llm';
+  return 'timer-driven llm';
+}
+
+function buildLoopEntity(loop) {
+  const categoryInfo = getLoopCategoryInfo(loop);
+  const latest = getLoopLatestSnapshot(loop);
+  const llmContext = loop._llmContext || null;
+  const hints = (loop.config && loop.config.Hints) || {};
+  const metadata = (loop.config && loop.config.Metadata) || {};
+  const loopTooling = normalizeTooling(loop.tooling, {
+    configuredTags: (loop.config && loop.config.Tags) || [],
+    loadedTags: loop.active_tags || [],
+    excludedTools: (loop.config && loop.config.ExcludeTools) || [],
+  });
+  const latestTooling = normalizeTooling(latest && latest.tooling, {
+    configuredTags: loopTooling.configuredTags,
+    loadedTags: latest && latest.active_tags,
+    effectiveTools: latest && latest.effective_tools,
+    excludedTools: loopTooling.excludedTools,
+    toolsUsed: latest && latest.tools_used,
+  });
+  const liveTooling = normalizeTooling(llmContext && llmContext.tooling, {
+    configuredTags: loopTooling.configuredTags,
+    loadedTags: llmContext && llmContext.active_tags,
+    effectiveTools: llmContext && llmContext.effective_tools,
+    excludedTools: loopTooling.excludedTools,
+  });
+  const currentTooling = (liveTooling.loadedTags.length > 0 || liveTooling.effectiveTools.length > 0 || liveTooling.loadedCapabilities.length > 0)
+    ? liveTooling
+    : ((latestTooling.loadedTags.length > 0 || latestTooling.effectiveTools.length > 0 || latestTooling.loadedCapabilities.length > 0)
+      ? latestTooling
+      : loopTooling);
+  const configTags = loopTooling.configuredTags.slice();
+  const excludedTools = loopTooling.excludedTools.slice();
+  const activeTags = loopTooling.loadedTags.slice();
+  const allTags = Array.from(new Set([...configTags, ...activeTags])).sort();
+  const currentScopeTags = currentTooling.loadedTags.slice();
+  const currentLoadedCapabilities = currentTooling.loadedCapabilities.slice();
+  const latestLoadedCapabilities = latestTooling.loadedCapabilities.slice();
+  const currentEffectiveTools = currentTooling.effectiveTools.slice();
+  const latestEffectiveTools = latestTooling.effectiveTools.slice();
+  const currentToolsUsed = currentTooling.toolsUsed || {};
+  const latestToolsUsed = latestTooling.toolsUsed || {};
+  const latestModel = loop._liveModel || loop._lastModel || (latest && latest.model) || '';
+  const latestRequestID = (latest && latest.request_id) || '';
+  const startedAt = parseTimestamp(loop.started_at) ? loop.started_at : '';
+  const lastWakeAt = parseTimestamp(loop.last_wake_at) ? loop.last_wake_at : '';
+  const currentConvID = loop._currentConvID || '';
+  const configuredConvID = metadata.conversation_id || '';
+  const recentConvIDs = Array.from(new Set(
+    [currentConvID, configuredConvID, ...((Array.isArray(loop.recent_conv_ids) ? loop.recent_conv_ids : []).filter(Boolean))],
+  ));
+  const primaryConvID = currentConvID || configuredConvID || recentConvIDs[0] || '';
+  const trustZone = metadata.trust_zone || '';
+  const subsystem = metadata.subsystem || '';
+  const liveTools = Array.isArray(loop._liveTools) ? loop._liveTools.slice() : [];
+  const activeLiveTools = liveTools.filter((entry) => entry && entry.status === 'running');
+
+  return {
+    kind: 'loop_run',
+    title: loop.name || loop.id,
+    state: loop.state || 'pending',
+    stateLabel: loop._supervisor && loop.state === 'processing' ? 'supervisor' : (loop.state || 'pending'),
+    category: categoryInfo.category,
+    categoryLabel: CATEGORY_LABELS[categoryInfo.category] || categoryInfo.category,
+    categorySource: categoryInfo.source,
+    executionMode: describeLoopExecutionMode(loop),
+    relation: loop.parent_id ? 'child' : 'root',
+    loopID: loop.id,
+    parentID: loop.parent_id || '',
+    currentConvID,
+    configuredConvID,
+    primaryConvID,
+    recentConvIDs,
+    latestRequestID,
+    latestSnapshot: latest,
+    latestModel,
+    startedAt,
+    lastWakeAt,
+    iterations: loop.iterations || 0,
+    attempts: loop.attempts || 0,
+    lastInputTokens: loop.last_input_tokens || 0,
+    lastOutputTokens: loop.last_output_tokens || 0,
+    totalInputTokens: loop.total_input_tokens || 0,
+    totalOutputTokens: loop.total_output_tokens || 0,
+    contextWindow: getLoopContextWindow(loop),
+    lastError: loop.last_error || '',
+    consecutiveErrors: loop.consecutive_errors || 0,
+    handlerOnly: !!loop.handler_only,
+    eventDriven: !!loop.event_driven,
+    hints,
+    metadata,
+    subsystem,
+    trustZone,
+    configTags,
+    excludedTools,
+    activeTags,
+    allTags,
+    availableCapabilities: getCapabilityCatalogEntries(state.system),
+    currentLoadedCapabilities,
+    latestLoadedCapabilities,
+    currentScopeTags,
+    currentEffectiveTools,
+    latestEffectiveTools,
+    currentToolsUsed,
+    latestToolsUsed,
+    liveTools,
+    activeLiveTools,
+  };
+}
+
+function getLoopPrimaryConversationID(entity) {
+  if (!entity) return '';
+  return entity.primaryConvID || entity.currentConvID || entity.configuredConvID || '';
+}
+
+function isConversationBackedLoop(entity) {
+  return !!getLoopPrimaryConversationID(entity);
+}
+
+function makeLoopCurrentTurnAlert(text, kind = 'warn') {
+  const note = document.createElement('div');
+  note.className = 'loop-turn-alert loop-turn-alert--' + kind;
+  note.textContent = text;
+  return note;
+}
+
+function renderLoopCurrentTurnCard(loop, entity, conversationSummary) {
+  const isProcessing = loop.state === 'processing' && !!loop._iterStartTs;
+  const serviceDegraded = isServiceDegraded(loop.name);
+  const latestModelLabel = entity.latestModel || 'model pending';
+  const lastWakeDate = parseTimestamp(entity.lastWakeAt);
+  const lastWakeAgo = lastWakeDate ? timeAgo(lastWakeDate) : '';
+  const threadLabel = conversationSummary ? conversationSummary.label : (getLoopPrimaryConversationID(entity) ? shortID(getLoopPrimaryConversationID(entity)) : 'No thread bound');
+  const activeToolNames = entity.activeLiveTools.map((entry) => entry.tool).filter(Boolean);
+  const activeToolSet = Array.from(new Set(activeToolNames)).sort();
+  const currentLoadedCapabilities = entity.currentLoadedCapabilities || [];
+  const currentEffectiveTools = entity.currentEffectiveTools || [];
+  const iterationLabel = isProcessing
+    ? '#' + formatNumber((entity.iterations || 0) + 1)
+    : (entity.iterations ? '#' + formatNumber(entity.iterations) : 'pending');
+  const contextLabel = entity.contextWindow ? `${formatNumber(entity.contextWindow)} ctx` : '';
+
+  let titleSummary = '';
+  if (isProcessing) {
+    titleSummary = [
+      threadLabel,
+      latestModelLabel !== 'model pending' ? 'on ' + latestModelLabel : '',
+      currentEffectiveTools.length > 0 ? `${formatNumber(currentEffectiveTools.length)} tools in scope` : '',
+      currentLoadedCapabilities.length > 0 ? `${formatNumber(currentLoadedCapabilities.length)} capabilities loaded` : '',
+      activeToolNames.length > 0
+        ? `${formatNumber(activeToolNames.length)} tool${activeToolNames.length === 1 ? '' : 's'} in flight`
+        : `iteration ${iterationLabel} in progress`,
+    ].filter(Boolean).join(' · ');
+  } else if (entity.latestRequestID) {
+    titleSummary = [
+      threadLabel,
+      formatSchemaToken(entity.stateLabel),
+      'req ' + shortID(entity.latestRequestID),
+      currentEffectiveTools.length > 0 ? `${formatNumber(currentEffectiveTools.length)} tools in scope` : '',
+      lastWakeAgo ? 'wake ' + lastWakeAgo : '',
+    ].filter(Boolean).join(' · ');
+  } else {
+    titleSummary = [
+      threadLabel,
+      formatSchemaToken(entity.stateLabel),
+      lastWakeAgo ? 'wake ' + lastWakeAgo : 'awaiting next turn',
+    ].filter(Boolean).join(' · ');
+  }
+
+  const card = makeSchemaCard('Current Turn', 'Active request, live tools, and thread health', {
+    entityKind: entity.kind,
+    key: 'current-turn',
+    titleSummary,
+    titleFacts: [
+      entity.latestRequestID ? `Req ${shortID(entity.latestRequestID)}` : '',
+      serviceDegraded ? 'service degraded' : '',
+      entity.activeLiveTools.length > 0 ? `${formatNumber(entity.activeLiveTools.length)} active tools` : '',
+      entity.trustZone || '',
+    ].filter(Boolean),
+    widgetSummary: titleSummary,
+    widgetFacts: [
+      { label: 'State', value: formatSchemaToken(entity.stateLabel) },
+      { label: 'Thread', value: threadLabel },
+      { label: 'Request', value: entity.latestRequestID ? shortID(entity.latestRequestID) : 'pending' },
+      { label: 'Iteration', value: iterationLabel },
+      { label: 'Model', value: latestModelLabel },
+      { label: 'Health', value: serviceDegraded ? 'degraded' : (entity.lastError ? 'recovering' : 'steady') },
+      currentEffectiveTools.length > 0 ? { label: 'Tool surface', value: formatNumber(currentEffectiveTools.length) } : null,
+      currentLoadedCapabilities.length > 0 ? { label: 'Loaded capabilities', value: currentLoadedCapabilities.map((entry) => entry.tag).join(', ') } : null,
+      entity.activeLiveTools.length > 0 ? { label: 'Tools live', value: activeToolSet.join(', ') } : null,
+      lastWakeAgo ? { label: 'Wake', value: lastWakeAgo } : null,
+    ],
+    widgetNotes: [
+      entity.trustZone ? { label: 'Trust', value: entity.trustZone } : null,
+      conversationSummary && conversationSummary.metaLine ? conversationSummary.metaLine : null,
+    ].filter(Boolean),
+  });
+
+  const turnMetrics = makeSchemaWidgetGrid([
+    { label: 'State', value: formatSchemaToken(entity.stateLabel) },
+    { label: 'Request', value: entity.latestRequestID ? shortID(entity.latestRequestID) : 'pending' },
+    { label: 'Iteration', value: iterationLabel },
+    { label: 'Model', value: latestModelLabel },
+    { label: 'Health', value: serviceDegraded ? 'degraded' : (entity.lastError ? 'recovering' : 'steady') },
+    entity.activeLiveTools.length > 0
+      ? { label: 'Tools in flight', value: activeToolSet.join(', ') }
+      : { label: 'Thread', value: threadLabel },
+    currentEffectiveTools.length > 0 ? { label: 'Tool surface', value: formatNumber(currentEffectiveTools.length) } : null,
+    currentLoadedCapabilities.length > 0 ? { label: 'Loaded capabilities', value: currentLoadedCapabilities.map((entry) => entry.tag).join(', ') } : null,
+  ]);
+  if (turnMetrics) card.body.appendChild(turnMetrics);
+
+  const brief = document.createElement('div');
+  brief.className = 'loop-turn-brief';
+  const briefSummary = document.createElement('div');
+  briefSummary.className = 'loop-turn-brief__summary';
+  if (isProcessing) {
+    briefSummary.textContent = entity.activeLiveTools.length > 0
+      ? `The loop is actively working this turn, with ${entity.activeLiveTools.length} tool${entity.activeLiveTools.length === 1 ? '' : 's'} in flight${currentEffectiveTools.length > 0 ? ` across a ${formatNumber(currentEffectiveTools.length)}-tool surface` : ''}.`
+      : 'The loop is actively working this turn. Watch the live telemetry below for context growth, loaded capabilities, tool surface, and model progress.';
+  } else if (entity.latestSnapshot) {
+    briefSummary.textContent = entity.lastError
+      ? 'The latest recorded turn ended with an error. The snapshot below shows the last request detail, loaded capabilities, tool surface, timing, and tool activity for triage.'
+      : 'The loop is currently idle. The latest recorded turn below is the best executive summary of recent behavior, tool surface, and near-term future.';
+  } else {
+    briefSummary.textContent = 'No request detail snapshot is available yet. This view will fill in once the loop completes its first recorded iteration.';
+  }
+  brief.appendChild(briefSummary);
+
+  const briefGrid = document.createElement('div');
+  briefGrid.className = 'loop-turn-brief__grid';
+  const briefFacts = [
+    { label: 'Thread', value: threadLabel },
+    { label: 'Request', value: entity.latestRequestID ? shortID(entity.latestRequestID) : 'pending' },
+    { label: 'Model', value: latestModelLabel },
+    { label: 'State', value: formatSchemaToken(entity.stateLabel) },
+    { label: 'Context', value: contextLabel || 'pending' },
+    { label: 'Loaded capabilities', value: currentLoadedCapabilities.length > 0 ? currentLoadedCapabilities.map((entry) => entry.tag).join(', ') : 'none' },
+    { label: 'Tool surface', value: currentEffectiveTools.length > 0 ? formatNumber(currentEffectiveTools.length) : 'pending' },
+    { label: 'Wake', value: lastWakeAgo || 'pending' },
+  ];
+  for (const item of briefFacts) {
+    const cell = document.createElement('div');
+    cell.className = 'loop-turn-brief__metric';
+    const value = document.createElement('div');
+    value.className = 'loop-turn-brief__metric-value';
+    value.textContent = item.value;
+    cell.appendChild(value);
+    const label = document.createElement('div');
+    label.className = 'loop-turn-brief__metric-label';
+    label.textContent = item.label;
+    cell.appendChild(label);
+    briefGrid.appendChild(cell);
+  }
+  brief.appendChild(briefGrid);
+  card.body.appendChild(brief);
+
+  const loadedTagsWrap = document.createElement('div');
+  loadedTagsWrap.className = 'schema-subsection';
+  loadedTagsWrap.innerHTML = '<h4 class="schema-subsection__title">Loaded Capabilities</h4>';
+  if (currentLoadedCapabilities.length > 0) {
+    loadedTagsWrap.appendChild(makeSchemaChipList(currentLoadedCapabilities.map((entry) => entry.tag), 'tag-chip tag-chip--active'));
+  } else {
+    const empty = document.createElement('div');
+    empty.className = 'loop-turn-empty';
+    empty.textContent = 'No capabilities are currently loaded for this loop.';
+    loadedTagsWrap.appendChild(empty);
+  }
+  card.body.appendChild(loadedTagsWrap);
+
+  if (entity.latestRequestID) {
+    const requestWrap = document.createElement('div');
+    requestWrap.className = 'schema-subsection';
+    requestWrap.innerHTML = '<h4 class="schema-subsection__title">Request</h4>';
+    const requestRow = document.createElement('div');
+    requestRow.className = 'loop-turn-request';
+    requestRow.appendChild(makeRequestChip(entity.latestRequestID));
+    requestWrap.appendChild(requestRow);
+    card.body.appendChild(requestWrap);
+  }
+
+  if (serviceDegraded) {
+    card.body.appendChild(makeLoopCurrentTurnAlert('Backing service is degraded. New wakes or tool work may stall upstream even when the loop itself looks calm.', 'warn'));
+  } else if (entity.lastError) {
+    card.body.appendChild(makeLoopCurrentTurnAlert('Last error: ' + entity.lastError, 'error'));
+  }
+
+  if (conversationSummary) {
+    const threadWrap = document.createElement('div');
+    threadWrap.className = 'schema-subsection';
+    threadWrap.innerHTML = '<h4 class="schema-subsection__title">Thread</h4>';
+    threadWrap.appendChild(makeConversationSummaryEntry(conversationSummary, {
+      current: !!(entity.currentConvID && conversationSummary.id === entity.currentConvID),
+    }));
+    card.body.appendChild(threadWrap);
+  }
+
+  const liveWrap = document.createElement('div');
+  liveWrap.className = 'schema-subsection';
+  liveWrap.innerHTML = `<h4 class="schema-subsection__title">${isProcessing ? 'Active Iteration' : 'Latest Iteration'}</h4>`;
+
+  const aggregates = document.createElement('div');
+  aggregates.className = 'detail-aggregates';
+  renderAggregates(loop, aggregates);
+  liveWrap.appendChild(aggregates);
+
+  if (isProcessing) {
+    liveWrap.appendChild(buildLiveCard(loop));
+  } else if (entity.latestSnapshot) {
+    liveWrap.appendChild(buildPastCard(entity.latestSnapshot, loop.handler_only, 0, true));
+  } else {
+    const empty = document.createElement('div');
+    empty.className = 'loop-turn-empty';
+    empty.textContent = entity.latestRequestID
+      ? 'Waiting for the next iteration heartbeat.'
+      : 'No turn data yet. The thread is attached and waiting for its first wake.';
+    liveWrap.appendChild(empty);
+  }
+
+  card.body.appendChild(liveWrap);
+  return card.card;
+}
+
+function inferConversationFamily(conversationID) {
+  if (!conversationID) return 'conversation';
+  if (conversationID.startsWith('owu-')) return 'owu';
+  if (conversationID.startsWith('signal-')) return 'signal';
+  if (conversationID.startsWith('delegate-')) return 'delegate';
+  return 'conversation';
+}
+
+function formatConversationChannel(channel) {
+  switch ((channel || '').toLowerCase()) {
+    case 'owu': return 'OWU';
+    case 'signal': return 'Signal';
+    case 'mqtt': return 'MQTT';
+    case 'email': return 'Email';
+    default: return channel ? String(channel) : '';
+  }
+}
+
+function describeConversationFallback(conversationID) {
+  switch (inferConversationFamily(conversationID)) {
+    case 'owu':
+      return 'OWU conversation';
+    case 'signal':
+      return 'Signal conversation';
+    case 'delegate':
+      return 'Delegate conversation';
+    default:
+      return 'Conversation ' + shortID(conversationID);
+  }
+}
+
+function buildConversationLabel(conversationID, binding, latestSession) {
+  if (binding && binding.contact_name) return binding.contact_name;
+  const title = (latestSession && latestSession.title ? latestSession.title : '').trim();
+  if (title) return title;
+  const oneLiner = (((latestSession || {}).metadata || {}).one_liner || '').trim();
+  if (oneLiner) return oneLiner;
+  const channel = formatConversationChannel(binding && binding.channel);
+  if (channel) return channel + ' conversation';
+  return describeConversationFallback(conversationID);
+}
+
+function buildConversationSummary(conversationID, conversation, sessions, opts = {}) {
+  const latestSession = Array.isArray(sessions) && sessions.length > 0 ? sessions[0] : null;
+  const metadata = (latestSession && latestSession.metadata) || {};
+  const binding = (metadata && metadata.channel_binding) || null;
+  const channelLabel = formatConversationChannel((binding && binding.channel) || inferConversationFamily(conversationID));
+  const updatedAtRaw = (conversation && conversation.updated_at) ||
+    (latestSession && (latestSession.ended_at || latestSession.started_at)) || '';
+  const updatedAt = parseTimestamp(updatedAtRaw);
+  const sessionTimestampRaw = latestSession ? (latestSession.ended_at || latestSession.started_at || '') : '';
+  const sessionTimestamp = parseTimestamp(sessionTimestampRaw);
+  const sessionCount = Array.isArray(sessions) ? sessions.length : 0;
+  const latestTitle = (latestSession && latestSession.title ? latestSession.title : '').trim();
+  const summaryText = (metadata.paragraph || latestSession?.summary || metadata.one_liner || '').trim();
+  const label = buildConversationLabel(conversationID, binding, latestSession);
+  const active = !!(latestSession && !latestSession.ended_at);
+  const metaParts = [];
+  if (channelLabel) metaParts.push(channelLabel);
+  if (binding && binding.trust_zone) metaParts.push(binding.trust_zone);
+  if (updatedAt) metaParts.push('active ' + timeAgo(updatedAt));
+  if (Number.isFinite(conversation && conversation.message_count)) metaParts.push(formatNumber(conversation.message_count) + ' msgs');
+  if (sessionCount > 0) metaParts.push(formatNumber(sessionCount) + ' sessions');
+
+  return {
+    id: conversationID,
+    label,
+    active,
+    error: !!opts.error,
+    loading: !!opts.loading,
+    metaLine: metaParts.join(' · '),
+    channelLabel,
+    trustZone: binding && binding.trust_zone ? binding.trust_zone : '',
+    contactName: binding && binding.contact_name ? binding.contact_name : '',
+    address: binding && binding.address ? binding.address : '',
+    linkSource: binding && binding.link_source ? binding.link_source : '',
+    updatedAt,
+    updatedAtRaw,
+    messageCount: Number.isFinite(conversation && conversation.message_count) ? conversation.message_count : null,
+    sessionCount,
+    latestSessionID: latestSession && latestSession.id ? latestSession.id : '',
+    latestSessionTitle: latestTitle,
+    latestSessionSummary: summaryText,
+    latestSessionAge: sessionTimestamp ? timeAgo(sessionTimestamp) : '',
+    latestSessionWhen: sessionTimestamp ? formatTimeShort(sessionTimestamp) : '',
+    latestSessionState: latestSession ? (latestSession.ended_at ? 'closed' : 'active') : '',
+    fetchedAt: Date.now(),
+  };
+}
+
+function buildPendingConversationSummary(conversationID) {
+  return buildConversationSummary(conversationID, null, [], { loading: true });
+}
+
+async function ensureConversationIndex() {
+  if (state.conversationIndex.summaries.size > 0 &&
+      (Date.now() - state.conversationIndex.fetchedAt) < CONVERSATION_SUMMARY_TTL_MS) {
+    return state.conversationIndex.summaries;
+  }
+  if (state.conversationIndex.loading) return state.conversationIndex.loading;
+
+  state.conversationIndex.loading = fetch('/v1/conversations')
+    .then((resp) => {
+      if (!resp.ok) throw new Error('conversation index unavailable: ' + resp.status);
+      return resp.json();
+    })
+    .then((body) => {
+      const summaries = new Map();
+      for (const conv of body.conversations || []) {
+        if (conv && conv.id) summaries.set(conv.id, conv);
+      }
+      state.conversationIndex.summaries = summaries;
+      state.conversationIndex.fetchedAt = Date.now();
+      return summaries;
+    })
+    .catch((err) => {
+      console.warn('Failed to load conversation index:', err);
+      if (state.conversationIndex.summaries.size > 0) {
+        return state.conversationIndex.summaries;
+      }
+      throw err;
+    })
+    .finally(() => {
+      state.conversationIndex.loading = null;
+    });
+
+  return state.conversationIndex.loading;
+}
+
+function refreshSelectedLoopInspector() {
+  if (state.selected && state.selected !== '__system__' && state.loops.has(state.selected)) {
+    renderDetail();
+  }
+}
+
+function ensureConversationSummary(conversationID) {
+  if (!conversationID) return;
+  const cached = state.conversationDetails.get(conversationID);
+  if (cached && (Date.now() - cached.fetchedAt) < CONVERSATION_SUMMARY_TTL_MS) {
+    return;
+  }
+  if (state.conversationLoads.has(conversationID)) return;
+
+  const load = Promise.allSettled([
+    ensureConversationIndex(),
+    fetch('/v1/archive/sessions?conversation_id=' + encodeURIComponent(conversationID) + '&limit=' + CONVERSATION_SESSION_LIMIT)
+      .then((resp) => {
+        if (!resp.ok) throw new Error('archive sessions unavailable: ' + resp.status);
+        return resp.json();
+      })
+      .then((body) => Array.isArray(body.sessions) ? body.sessions : []),
+  ]).then(([conversationResult, sessionsResult]) => {
+    const index = conversationResult.status === 'fulfilled' ? conversationResult.value : new Map();
+    const sessions = sessionsResult.status === 'fulfilled' ? sessionsResult.value : [];
+    const conversation = index.get(conversationID) || null;
+    const detail = buildConversationSummary(conversationID, conversation, sessions, {
+      error: conversationResult.status !== 'fulfilled' && sessionsResult.status !== 'fulfilled',
+    });
+    state.conversationDetails.set(conversationID, detail);
+    refreshSelectedLoopInspector();
+  }).catch((err) => {
+    console.warn('Failed to load conversation summary:', conversationID, err);
+    state.conversationDetails.set(conversationID, buildConversationSummary(conversationID, null, [], { error: true }));
+    refreshSelectedLoopInspector();
+  }).finally(() => {
+    state.conversationLoads.delete(conversationID);
+  });
+
+  state.conversationLoads.set(conversationID, load);
+}
+
+function buildSystemEntity(sys) {
+  const health = (sys && sys.health) || {};
+  const serviceKeys = Object.keys(health);
+  const readyCount = serviceKeys.filter((key) => health[key] && health[key].ready).length;
+  const registry = (sys && sys.model_registry) || {};
+  const routerStats = (sys && sys.router_stats) || {};
+  const capabilityCatalog = (sys && sys.capability_catalog) || null;
+  const capabilityEntries = getCapabilityCatalogEntries(sys);
+  const capabilitySummary = summarizeCapabilityCatalog(capabilityEntries);
+  const resources = Array.isArray(registry.resources) ? registry.resources : [];
+  const deployments = Array.isArray(registry.deployments) ? registry.deployments : [];
+  const version = (sys && sys.version) || {};
+  const rootLoops = Array.from(state.loops.values()).filter((loop) => !loop.parent_id).length;
+  const childLoops = Math.max(0, state.loops.size - rootLoops);
+  const routingMode = registry.local_first ? 'local-first' : 'policy';
+  return {
+    kind: 'runtime_anchor',
+    title: 'Core',
+    state: sys.status || 'unknown',
+    uptime: sys.uptime || '',
+    version: version.version || '',
+    commit: version.git_commit || '',
+    goVersion: version.go_version || '',
+    arch: version.os && version.arch ? `${version.os}/${version.arch}` : '',
+    serviceCount: serviceKeys.length,
+    readyCount,
+    liveLoopCount: state.loops.size,
+    rootLoopCount: rootLoops,
+    childLoopCount: childLoops,
+    totalRequests: Number(routerStats.total_requests || 0),
+    routingMode,
+    defaultModel: registry.default_model || '',
+    registryGeneration: Number(registry.generation || 0),
+    resourceCount: resources.length,
+    deploymentCount: deployments.length,
+    capabilityCatalog,
+    capabilityEntries,
+    capabilityCount: capabilitySummary.capabilityCount,
+    toolboxToolCount: capabilitySummary.uniqueToolCount,
+    alwaysActiveCapabilityCount: capabilitySummary.alwaysActiveCount,
+    discoverableCapabilityCount: capabilitySummary.discoverableCount,
+    routerStats,
+    registry,
+    health,
+  };
+}
+
+function buildLoopNodeTitle(loop, capacity) {
+  const entity = buildLoopEntity(loop);
+  const primaryConvID = getLoopPrimaryConversationID(entity);
+  const convSummary = primaryConvID ? state.conversationDetails.get(primaryConvID) : null;
+  const runningTools = entity.activeLiveTools.map((entry) => entry.tool).filter(Boolean);
+  const scopeTags = (entity.currentLoadedCapabilities || []).map((entry) => entry.tag);
+  const toolSurface = entity.currentEffectiveTools || [];
+  const parts = [entity.title];
+  parts.push('Kind: ' + entity.kind);
+  parts.push('State: ' + formatSchemaToken(entity.stateLabel));
+  parts.push('Visual: ' + entity.categoryLabel + ' (' + entity.categorySource + ')');
+  parts.push('Execution: ' + entity.executionMode);
+  if (entity.parentID) {
+    parts.push('Parent: ' + entity.parentID);
+  } else {
+    parts.push('Anchor: core');
+  }
+  if (primaryConvID) {
+    if (convSummary) {
+      parts.push('Thread: ' + convSummary.label + (convSummary.metaLine ? ' · ' + convSummary.metaLine : ''));
+    } else {
+      parts.push('Conversation: ' + primaryConvID);
+    }
+  }
+  if (entity.trustZone) {
+    parts.push('Trust: ' + entity.trustZone);
+  }
+  if (entity.latestRequestID) {
+    parts.push('Request: ' + shortID(entity.latestRequestID));
+  }
+  if (capacity.basis === 'context' && capacity.contextWindow > 0) {
+    parts.push('Context: ' + formatNumber(capacity.contextWindow));
+  } else if (capacity.basis === 'model') {
+    parts.push('Capacity: est. ' + capacity.label);
+  }
+  if (entity.latestModel) {
+    parts.push('Model: ' + entity.latestModel);
+  }
+  if (scopeTags.length > 0) {
+    parts.push('Loaded capabilities: ' + scopeTags.join(', '));
+  }
+  if (toolSurface.length > 0) {
+    parts.push('Tool surface: ' + toolSurface.join(', '));
+  }
+  if (runningTools.length > 0) {
+    parts.push('Active tools: ' + runningTools.join(', '));
+  }
+  if (isServiceDegraded(loop.name)) {
+    parts.push('Health: backing service degraded');
+  } else if (entity.lastError) {
+    parts.push('Health: last error ' + truncate(entity.lastError, 72));
+  }
+  if (entity.lastWakeAt) {
+    const lastWakeDate = parseTimestamp(entity.lastWakeAt);
+    if (lastWakeDate) parts.push('Last wake: ' + timeAgo(lastWakeDate));
+  }
+  return parts.join('\n');
+}
+
 // ---------------------------------------------------------------------------
 // DOM References
 // ---------------------------------------------------------------------------
@@ -346,13 +1926,444 @@ function updateNodeShape(el, category, r) {
 const $ = (sel) => document.querySelector(sel);
 const canvas = $('#canvas');
 const canvasWorld = $('#canvas-world');
+const canvasEdgeLayer = $('#canvas-edge-layer');
+const canvasNodeLayer = $('#canvas-node-layer');
 const connBadge = $('#conn-status');
 const detailPlaceholder = $('#detail-placeholder');
+const detailPanel = $('#detail-panel');
 const detailContent = $('#detail-content');
+const detailEntity = $('#detail-entity');
 const emptyState = $('#empty-state');
 const logEmpty = $('#log-empty');
 const logScroll = $('#log-scroll');
 const logBody = $('#log-body');
+const notificationStack = $('#notification-stack');
+const legendPanel = $('#legend-panel');
+const legendBackdrop = $('#legend-backdrop');
+const legendToggleBtn = $('#toggle-legend');
+const legendCloseBtn = $('#legend-close');
+
+const DASHBOARD_PREFS_KEY = 'thane.dashboard.ui.v1';
+const DEFAULT_DASHBOARD_PREFS = {
+  inspectorVisible: true,
+  logsVisible: false,
+};
+const DETAIL_CARD_LAYOUTS_KEY = 'thane.dashboard.cardLayouts.v1';
+const DEFAULT_SCHEMA_CARD_LAYOUT = Object.freeze({ mode: 'full', height: 0 });
+const SCHEMA_CARD_PRESET_HEIGHTS = Object.freeze({
+  title: 44,
+  widget: 220,
+});
+const SCHEMA_CARD_LAYOUT_ORDER = Object.freeze(['title', 'widget', 'full']);
+
+function loadDashboardPrefs() {
+  try {
+    const raw = window.localStorage.getItem(DASHBOARD_PREFS_KEY);
+    if (!raw) return { ...DEFAULT_DASHBOARD_PREFS };
+    const parsed = JSON.parse(raw);
+    return {
+      inspectorVisible: parsed.inspectorVisible !== false,
+      logsVisible: parsed.logsVisible === true,
+    };
+  } catch (_) {
+    return { ...DEFAULT_DASHBOARD_PREFS };
+  }
+}
+
+function saveDashboardPrefs(prefs) {
+  try {
+    window.localStorage.setItem(DASHBOARD_PREFS_KEY, JSON.stringify({
+      inspectorVisible: prefs.inspectorVisible !== false,
+      logsVisible: prefs.logsVisible === true,
+    }));
+  } catch (_) {
+    // Ignore storage failures; UI still functions with in-memory state.
+  }
+}
+
+const dashboardPrefs = loadDashboardPrefs();
+const detailCardLayouts = loadDetailCardLayouts();
+let nextNotificationID = 1;
+const recentNotificationSignatures = new Map();
+let connectionWasDegraded = false;
+let lastDetailSelectionKey = null;
+let detailInteractionHoldUntil = 0;
+let detailPointerSelectionActive = false;
+let detailInstantLayoutUntil = 0;
+let detailInteractiveHoverActive = false;
+let nodeLongPressTimer = 0;
+let nodeLongPressState = null;
+let suppressNextNodeClickUntil = 0;
+const DETAIL_POINTER_GUARD_MS = 120;
+const DETAIL_COPY_GUARD_MS = 220;
+const DETAIL_SELECTION_RELEASE_MS = 220;
+const NODE_LONG_PRESS_MS = 460;
+const NODE_LONG_PRESS_MOVE_PX = 14;
+
+function clampValue(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function clearNodeLongPress() {
+  if (nodeLongPressTimer) {
+    clearTimeout(nodeLongPressTimer);
+    nodeLongPressTimer = 0;
+  }
+  nodeLongPressState = null;
+}
+
+function shouldUseTouchContextMenu(e) {
+  if (!e) return false;
+  return e.pointerType === 'touch' || e.pointerType === 'pen' ||
+    (typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches);
+}
+
+function scheduleNodeLongPress(e, opts) {
+  if (!shouldUseTouchContextMenu(e)) return;
+  clearNodeLongPress();
+  nodeLongPressState = {
+    x: e.clientX,
+    y: e.clientY,
+    show: opts.show,
+    select: opts.select || null,
+  };
+  nodeLongPressTimer = window.setTimeout(() => {
+    const pending = nodeLongPressState;
+    clearNodeLongPress();
+    if (!pending) return;
+    if (typeof pending.select === 'function') pending.select();
+    if (typeof pending.show === 'function') pending.show(pending.x, pending.y);
+    suppressNextNodeClickUntil = Date.now() + 700;
+  }, NODE_LONG_PRESS_MS);
+}
+
+function updateNodeLongPress(e) {
+  if (!nodeLongPressState) return;
+  const dx = e.clientX - nodeLongPressState.x;
+  const dy = e.clientY - nodeLongPressState.y;
+  if (Math.hypot(dx, dy) > NODE_LONG_PRESS_MOVE_PX) {
+    clearNodeLongPress();
+  }
+}
+
+function loadDetailCardLayouts() {
+  try {
+    const raw = window.localStorage.getItem(DETAIL_CARD_LAYOUTS_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return {};
+    const result = {};
+    for (const [key, layout] of Object.entries(parsed)) {
+      if (!layout || typeof layout !== 'object') continue;
+      const mode = ['title', 'widget', 'full'].includes(layout.mode) ? layout.mode : 'widget';
+      const height = 0;
+      result[key] = { mode, height };
+    }
+    return result;
+  } catch (_) {
+    return {};
+  }
+}
+
+function saveDetailCardLayouts() {
+  try {
+    window.localStorage.setItem(DETAIL_CARD_LAYOUTS_KEY, JSON.stringify(detailCardLayouts));
+  } catch (_) {
+    // Ignore storage failures; in-memory sizing still works.
+  }
+}
+
+function makeSchemaCardLayoutKey(entityKind, cardKey) {
+  if (!entityKind || !cardKey) return '';
+  return entityKind + ':' + cardKey;
+}
+
+function getSchemaCardLayout(entityKind, cardKey) {
+  const key = makeSchemaCardLayoutKey(entityKind, cardKey);
+  const stored = key ? detailCardLayouts[key] : null;
+  return stored ? { ...stored } : { ...DEFAULT_SCHEMA_CARD_LAYOUT };
+}
+
+function setSchemaCardLayout(entityKind, cardKey, layout) {
+  const storageKey = makeSchemaCardLayoutKey(entityKind, cardKey);
+  if (!storageKey) return;
+  const next = {
+    mode: ['title', 'widget', 'full'].includes(layout.mode) ? layout.mode : 'full',
+    height: 0,
+  };
+  detailCardLayouts[storageKey] = next;
+  saveDetailCardLayouts();
+}
+
+function measureSchemaCardLayout(card) {
+  const header = card.querySelector('.schema-card__header');
+  const titleShell = card.querySelector('.schema-card__title-shell');
+  const widgetShell = card.querySelector('.schema-card__widget-shell');
+  const bodyShell = card.querySelector('.schema-card__body-shell');
+  const body = card.querySelector('.schema-card__body');
+  if (!header || !titleShell || !widgetShell || !bodyShell || !body) return null;
+
+  const cardStyle = window.getComputedStyle(card);
+  const headerStyle = window.getComputedStyle(header);
+  const cardExtras = [
+    cardStyle.paddingTop,
+    cardStyle.paddingBottom,
+    cardStyle.borderTopWidth,
+    cardStyle.borderBottomWidth,
+  ].reduce((sum, value) => sum + (parseFloat(value) || 0), 0);
+  const headerGap = parseFloat(headerStyle.marginBottom) || 0;
+  const headerHeight = header.offsetHeight;
+  const prevTitleDisplay = titleShell.style.display;
+  const prevWidgetDisplay = widgetShell.style.display;
+  titleShell.style.display = titleShell.childNodes.length ? 'grid' : 'none';
+  widgetShell.style.display = widgetShell.childNodes.length ? 'grid' : 'none';
+  const titleHeightContent = titleShell.scrollHeight;
+  const widgetHeightContent = widgetShell.scrollHeight;
+  titleShell.style.display = prevTitleDisplay;
+  widgetShell.style.display = prevWidgetDisplay;
+  const bodyHeight = body.scrollHeight;
+
+  const titleHeight = Math.max(
+    Math.ceil(cardExtras + headerHeight + (titleHeightContent > 0 ? headerGap + titleHeightContent : 0)),
+    SCHEMA_CARD_PRESET_HEIGHTS.title,
+  );
+  const widgetHeight = Math.max(
+    titleHeight,
+    Math.ceil(cardExtras + headerHeight + (widgetHeightContent > 0 ? headerGap + widgetHeightContent : 0)),
+  );
+  const fullHeight = Math.max(
+    widgetHeight,
+    titleHeight,
+    Math.ceil(cardExtras + headerHeight + headerGap + bodyHeight),
+  );
+
+  return {
+    cardExtras,
+    headerGap,
+    headerHeight,
+    titleHeightContent,
+    widgetHeightContent,
+    bodyHeight,
+    titleHeight,
+    widgetHeight,
+    fullHeight,
+  };
+}
+
+function getSchemaCardHeightForLayout(metrics, layout) {
+  switch (layout.mode) {
+    case 'title':
+      return metrics.titleHeight;
+    case 'widget':
+      return metrics.widgetHeight;
+    case 'full':
+    default:
+      return metrics.fullHeight;
+  }
+}
+
+function inferSchemaCardDensity(metrics, height) {
+  if (height <= metrics.titleHeight + 8) return 'title';
+  if (height <= metrics.widgetHeight + 18) return 'widget';
+  return 'full';
+}
+
+function formatSchemaCardMode(mode) {
+  return mode === 'title' ? 'Title' : mode === 'widget' ? 'Widget' : 'Full';
+}
+
+function nextSchemaCardMode(mode) {
+  const current = SCHEMA_CARD_LAYOUT_ORDER.includes(mode) ? mode : 'full';
+  const idx = SCHEMA_CARD_LAYOUT_ORDER.indexOf(current);
+  return SCHEMA_CARD_LAYOUT_ORDER[(idx + 1) % SCHEMA_CARD_LAYOUT_ORDER.length];
+}
+
+function updateSchemaCardControls(card, activeMode) {
+  const btn = card.querySelector('.schema-card__control');
+  if (!btn) return;
+  const current = SCHEMA_CARD_LAYOUT_ORDER.includes(activeMode) ? activeMode : 'full';
+  const next = nextSchemaCardMode(current);
+  btn.dataset.layoutMode = current;
+  btn.dataset.targetMode = next;
+  btn.innerHTML = makeSchemaCardModeIcon(current);
+  btn.title = 'Current view: ' + formatSchemaCardMode(current) + '. Click for ' + formatSchemaCardMode(next);
+  btn.setAttribute('aria-label', 'Current view: ' + formatSchemaCardMode(current) + '. Click for ' + formatSchemaCardMode(next));
+}
+
+function syncSchemaCardLayout(card, overrideLayout = null) {
+  if (!card || !card.classList.contains('schema-card--resizable')) return;
+  const entityKind = card.dataset.entityKind || '';
+  const cardKey = card.dataset.cardKey || '';
+  const metrics = measureSchemaCardLayout(card);
+  if (!metrics) return;
+
+  const bodyShell = card.querySelector('.schema-card__body-shell');
+  const titleShell = card.querySelector('.schema-card__title-shell');
+  const widgetShell = card.querySelector('.schema-card__widget-shell');
+  const body = card.querySelector('.schema-card__body');
+  if (!bodyShell || !titleShell || !widgetShell || !body) return;
+
+  const stored = overrideLayout || getSchemaCardLayout(entityKind, cardKey);
+  const desiredHeight = getSchemaCardHeightForLayout(metrics, stored);
+  const density = inferSchemaCardDensity(metrics, desiredHeight);
+  const clipped = desiredHeight < metrics.fullHeight - 1;
+
+  card.classList.remove('schema-card--title', 'schema-card--widget', 'schema-card--full', 'schema-card--clipped');
+  card.classList.add('schema-card--' + density);
+  card.dataset.layoutMode = stored.mode;
+  card.dataset.layoutDensity = density;
+
+  if (density === 'full' && stored.mode === 'full') {
+    card.style.removeProperty('height');
+    titleShell.style.removeProperty('display');
+    widgetShell.style.removeProperty('display');
+    bodyShell.style.removeProperty('max-height');
+    bodyShell.style.visibility = 'visible';
+    body.style.removeProperty('overflow-y');
+  } else {
+    const totalHeight = clampValue(desiredHeight, metrics.titleHeight, metrics.fullHeight);
+    const bodyLimit = Math.max(0, totalHeight - metrics.cardExtras - metrics.headerHeight - metrics.headerGap);
+    card.style.height = totalHeight + 'px';
+    if (density === 'title') {
+      titleShell.style.display = titleShell.scrollHeight > 0 ? 'grid' : 'none';
+      widgetShell.style.display = 'none';
+      bodyShell.style.visibility = 'hidden';
+      bodyShell.style.maxHeight = '0px';
+      body.style.overflowY = 'visible';
+    } else if (density === 'widget') {
+      titleShell.style.display = 'none';
+      widgetShell.style.display = widgetShell.scrollHeight > 0 ? 'grid' : 'none';
+      bodyShell.style.visibility = 'hidden';
+      bodyShell.style.maxHeight = '0px';
+      body.style.overflowY = 'visible';
+    } else {
+      titleShell.style.display = 'none';
+      widgetShell.style.display = 'none';
+      bodyShell.style.visibility = 'visible';
+      bodyShell.style.maxHeight = bodyLimit + 'px';
+      body.style.overflowY = clipped ? 'auto' : 'visible';
+    }
+  }
+
+  if (clipped && density === 'full') {
+    card.classList.add('schema-card--clipped');
+  }
+
+  updateSchemaCardControls(card, stored.mode);
+}
+
+function syncAllSchemaCardLayouts() {
+  for (const card of detailEntity.querySelectorAll('.schema-card--resizable')) {
+    syncSchemaCardLayout(card);
+  }
+}
+
+function applySchemaCardPreset(card, mode) {
+  const entityKind = card.dataset.entityKind || '';
+  const cardKey = card.dataset.cardKey || '';
+  setSchemaCardLayout(entityKind, cardKey, { mode, height: 0 });
+  detailInstantLayoutUntil = Date.now() + 250;
+  bumpDetailInteractionHold(180);
+  if (detailPanel) detailPanel.classList.add('detail-panel--instant');
+  syncSchemaCardLayout(card, { mode, height: 0 });
+  requestAnimationFrame(() => {
+    renderDetail({ force: true, instantLayout: true });
+  });
+}
+
+function bumpDetailInteractionHold(ms = DETAIL_COPY_GUARD_MS) {
+  detailInteractionHoldUntil = Math.max(detailInteractionHoldUntil, Date.now() + ms);
+}
+
+function isDetailInteractiveTarget(node) {
+  if (!detailPanel || !node) return false;
+  const el = node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement;
+  return !!(el && detailPanel.contains(el) && el.closest(
+    'button, .btn, .toggle-btn, .id-chip, .log-id-chip, summary, a, .schema-card__control',
+  ));
+}
+
+function nodeWithinDetailPanel(node) {
+  if (!detailPanel || !node) return false;
+  const el = node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement;
+  return !!el && detailPanel.contains(el);
+}
+
+function detailTextSelectionActive() {
+  const sel = typeof window.getSelection === 'function' ? window.getSelection() : null;
+  if (!sel || sel.isCollapsed || sel.rangeCount === 0) return false;
+  return nodeWithinDetailPanel(sel.anchorNode) || nodeWithinDetailPanel(sel.focusNode);
+}
+
+function shouldDeferDetailRender() {
+  if (detailInteractiveHoverActive) return true;
+  if (detailPointerSelectionActive) return true;
+  if (detailTextSelectionActive()) {
+    bumpDetailInteractionHold(1500);
+    return true;
+  }
+  return Date.now() < detailInteractionHoldUntil;
+}
+
+function currentDetailSelectionKey() {
+  if (typeof activeRequestID !== 'undefined' && activeRequestID) return 'request:' + activeRequestID;
+  if (state.selected === '__system__') return 'system';
+  if (state.selected) return 'loop:' + state.selected;
+  return null;
+}
+
+function captureOpenDetailKeys() {
+  const keys = new Set();
+  for (const el of detailEntity.querySelectorAll('details[data-detail-key][open]')) {
+    const key = el.dataset.detailKey;
+    if (key) keys.add(key);
+  }
+  return keys;
+}
+
+function restoreOpenDetailKeys(keys) {
+  if (!keys || keys.size === 0) return;
+  for (const key of keys) {
+    const el = detailEntity.querySelector(`details[data-detail-key="${CSS.escape(key)}"]`);
+    if (el) el.open = true;
+  }
+}
+
+function withPreservedDetailScroll(renderFn, opts = {}) {
+  const selectionKey = currentDetailSelectionKey();
+  if (!opts.force && detailPanel && selectionKey !== null && selectionKey === lastDetailSelectionKey && shouldDeferDetailRender()) {
+    return;
+  }
+
+  const preserve = !!detailPanel && selectionKey !== null && selectionKey === lastDetailSelectionKey;
+  const previousTop = preserve ? detailPanel.scrollTop : 0;
+  const openDetailKeys = preserve ? captureOpenDetailKeys() : new Set();
+
+  if (detailPanel) {
+    const instant = !!opts.instantLayout || Date.now() < detailInstantLayoutUntil;
+    detailPanel.classList.toggle('detail-panel--instant', instant);
+  }
+
+  renderFn();
+  restoreOpenDetailKeys(openDetailKeys);
+  syncAllSchemaCardLayouts();
+
+  if (detailPanel) {
+    if (preserve) {
+      requestAnimationFrame(() => {
+        const maxTop = Math.max(0, detailPanel.scrollHeight - detailPanel.clientHeight);
+        detailPanel.scrollTop = Math.min(previousTop, maxTop);
+      });
+    } else {
+      detailPanel.scrollTop = 0;
+    }
+    requestAnimationFrame(() => {
+      detailPanel.classList.remove('detail-panel--instant');
+    });
+  }
+
+  lastDetailSelectionKey = selectionKey;
+}
 
 // ---------------------------------------------------------------------------
 // Trust Zone Underglow
@@ -382,8 +2393,19 @@ const TRUST_ZONE_COLORS = {
 // ---------------------------------------------------------------------------
 
 let eventSource = null;
+let eventSourceClosing = false;
+
+function disconnectEventStream() {
+  eventSourceClosing = true;
+  if (eventSource) {
+    eventSource.close();
+    eventSource = null;
+  }
+}
 
 function connect() {
+  disconnectEventStream();
+  eventSourceClosing = false;
   setConnState('connecting');
   eventSource = new EventSource('/api/loops/events');
 
@@ -399,7 +2421,8 @@ function connect() {
       // Seed live telemetry for loops already in processing state
       // so the Live Activity section shows immediately on connect.
       if (s.state === 'processing') {
-        s._iterStartTs = s.last_wake_at ? new Date(s.last_wake_at).getTime() : Date.now();
+        const lastWake = parseTimestamp(s.last_wake_at);
+        s._iterStartTs = lastWake ? lastWake.getTime() : Date.now();
         s._liveTools = [];
         s._liveModel = '';
         // Restore LLM context from snapshot so late-connecting clients
@@ -426,16 +2449,47 @@ function connect() {
   });
 
   eventSource.onerror = () => {
+    if (eventSourceClosing) return;
     setConnState('disconnected');
+    if (!connectionWasDegraded) {
+      connectionWasDegraded = true;
+      addNotification({
+        level: 'warn',
+        sourceLabel: 'Connection',
+        title: 'Live event stream disconnected',
+        message: 'Dashboard updates may be stale until the event stream reconnects.',
+        action: () => selectSystem(),
+        actionLabel: 'Inspect core',
+        signature: 'sse-disconnected',
+        cooldownMs: 0,
+      });
+    }
     // EventSource auto-reconnects; the snapshot on reconnect
     // will restore full state.
   };
 
   eventSource.onopen = () => {
+    if (eventSourceClosing) return;
     setConnState('connected');
+    if (connectionWasDegraded) {
+      connectionWasDegraded = false;
+      dismissNotificationBySignature('sse-disconnected');
+      addNotification({
+        level: 'info',
+        sourceLabel: 'Connection',
+        title: 'Live event stream restored',
+        message: 'Dashboard updates are live again.',
+        signature: 'sse-restored',
+        ttlMs: 6000,
+        cooldownMs: 0,
+      });
+    }
     fetchVersionInfo(); // re-sync uptime on reconnect
   };
 }
+
+window.addEventListener('pagehide', disconnectEventStream);
+window.addEventListener('beforeunload', disconnectEventStream);
 
 let connState = 'connecting';
 
@@ -513,10 +2567,18 @@ function handleLoopEvent(evt) {
     }
   }
 
-  // Capability tools change active_tags — refetch loop status so
-  // the dashboard shows the updated capability state immediately.
-  if (result && result.capabilityChanged) {
-    fetchLoops();
+  if (evt.kind === 'loop_error') {
+    const message = (evt.data && evt.data.error) || loop.last_error || 'Loop iteration failed.';
+    addNotification({
+      level: 'error',
+      sourceLabel: 'Loop',
+      title: (loop.name || loopId) + ' failed',
+      message: truncate(message, 220),
+      action: () => selectLoop(loopId),
+      actionLabel: 'Inspect loop',
+      signature: `loop-error:${loopId}:${message}`,
+      cooldownMs: 30000,
+    });
   }
 
   renderAll();
@@ -568,6 +2630,25 @@ function handleDelegateEvent(evt) {
         entry._delegateExhaustReason = evt.data.exhaust_reason || '';
         entry._delegateDurationMs = evt.data.duration_ms || 0;
         entry._delegateIterations = evt.data.iterations || 0;
+      }
+
+      if (evt.data.error || evt.data.exhausted) {
+        const targetLoopID = entry ? syntheticId : (evt.data.parent_loop_id || '');
+        addNotification({
+          level: evt.data.error ? 'error' : 'warn',
+          sourceLabel: 'Delegate',
+          title: evt.data.error ? 'Background delegate failed' : 'Background delegate exhausted',
+          message: truncate(evt.data.error || evt.data.exhaust_reason || entry?._delegateTask || 'Delegate did not complete successfully.', 220),
+          action: targetLoopID
+            ? () => {
+              if (state.loops.has(targetLoopID)) selectLoop(targetLoopID);
+              else selectSystem();
+            }
+            : () => selectSystem(),
+          actionLabel: targetLoopID ? 'Inspect loop' : 'Inspect core',
+          signature: `delegate-failure:${did}:${evt.data.error || evt.data.exhaust_reason || ''}`,
+          cooldownMs: 30000,
+        });
       }
 
       // Fade to translucent, then remove after a linger period.
@@ -690,20 +2771,59 @@ let systemStartTime = null; // derived from system uptime for local ticking
 
 async function fetchSystemStatus() {
   try {
+    const previous = state.system;
     const resp = await fetch('/api/system');
     if (resp.status === 404) {
       state.system = null;
       return;
     }
-    state.system = await resp.json();
+    const next = await resp.json();
+    state.system = next;
     // Derive start time so we can tick uptime locally.
     if (state.system.uptime) {
       const uptimeMs = parseDuration(state.system.uptime);
       systemStartTime = Date.now() - uptimeMs;
     }
+    emitSystemNotifications(previous, next);
     renderAll();
   } catch (err) {
     console.warn('Failed to fetch system status:', err);
+  }
+}
+
+function emitSystemNotifications(previous, next) {
+  if (!previous || !next) return;
+  const prevHealth = previous.health || {};
+  const nextHealth = next.health || {};
+  const names = new Set([...Object.keys(prevHealth), ...Object.keys(nextHealth)]);
+
+  for (const name of names) {
+    const prevReady = prevHealth[name] ? prevHealth[name].ready : undefined;
+    const nextReady = nextHealth[name] ? nextHealth[name].ready : undefined;
+    if (prevReady === true && nextReady === false) {
+      addNotification({
+        level: 'warn',
+        sourceLabel: 'Service',
+        title: `${name} degraded`,
+        message: truncate((nextHealth[name] && nextHealth[name].last_error) || `${name} became unavailable.`, 220),
+        action: () => selectSystem(),
+        actionLabel: 'Inspect core',
+        signature: `service-degraded:${name}:${(nextHealth[name] && nextHealth[name].last_error) || ''}`,
+        cooldownMs: 0,
+      });
+    } else if (prevReady === false && nextReady === true) {
+      addNotification({
+        level: 'info',
+        sourceLabel: 'Service',
+        title: `${name} recovered`,
+        message: `${name} is ready again.`,
+        action: () => selectSystem(),
+        actionLabel: 'Inspect core',
+        signature: `service-recovered:${name}`,
+        ttlMs: 7000,
+        cooldownMs: 0,
+      });
+    }
   }
 }
 
@@ -732,9 +2852,9 @@ function renderNodes() {
   emptyState.hidden = loops.length > 0 || hasSystem;
 
   // Canvas center — used as gravity anchor and for new-node spawn.
-  const rect = canvas.getBoundingClientRect();
-  const cx = rect.width / 2;
-  const cy = rect.height / 2;
+  const rect = refreshCanvasViewport() || getLayoutViewportRect();
+  const cx = rect.cx;
+  const cy = rect.cy;
 
   // Sync physics state with current loops (add new, remove stale).
   syncPhysicsNodes(cx, cy);
@@ -763,7 +2883,7 @@ function renderNodes() {
   }
 
   // Remove nodes for loops that no longer exist (with exit animation).
-  const existingGroups = canvasWorld.querySelectorAll('.loop-node');
+  const existingGroups = canvasNodeLayer.querySelectorAll('.loop-node');
   for (const g of existingGroups) {
     const id = g.dataset.loopId;
     if (!state.loops.has(id)) {
@@ -784,13 +2904,18 @@ function renderNodes() {
   if (hasSystem) {
     renderSystemNode();
   } else {
-    const existing = canvasWorld.querySelector('.system-node');
+    const existing = canvasNodeLayer.querySelector('.system-node');
     if (existing) existing.remove();
   }
 
   // Linking lines: create/remove DOM elements and apply state classes.
   // Position updates (x1/y1/x2/y2) are handled by updateNodePositions().
   renderLinkingLines(hasSystem, loops);
+
+  // Write positions immediately for newly created nodes and edges so they do
+  // not flash at the SVG origin or briefly appear disconnected while waiting
+  // for the next animation tick.
+  updateNodePositions();
 }
 
 // Manage linking line DOM lifecycle — create/remove elements and apply
@@ -808,7 +2933,7 @@ function renderLinkingLines(hasSystem, loops) {
   const allValidTargets = new Set([...activeIds, ...childKeys]);
 
   // Remove stale link lines for loops that no longer exist.
-  const existing = canvasWorld.querySelectorAll('.link-line');
+  const existing = canvasEdgeLayer.querySelectorAll('.link-line');
   for (const el of existing) {
     const target = el.dataset.targetLoop;
     const isSystemLink = !el.dataset.parentLoop;
@@ -822,15 +2947,14 @@ function renderLinkingLines(hasSystem, loops) {
   // System → top-level lines.
   if (hasSystem) {
     for (const loop of topLevel) {
-      let line = canvasWorld.querySelector(`.link-line[data-target-loop="${loop.id}"]:not([data-parent-loop])`);
+      let line = canvasEdgeLayer.querySelector(`.link-line[data-target-loop="${loop.id}"]:not([data-parent-loop])`);
 
       if (!line) {
         line = createSVG('line', {
           class: 'link-line',
           'data-target-loop': loop.id,
         });
-        // Insert before nodes so lines draw behind them.
-        canvasWorld.insertBefore(line, canvasWorld.firstChild);
+        canvasEdgeLayer.appendChild(line);
       }
 
       // State-driven styling: error or degraded service turns the line orange/red.
@@ -848,7 +2972,7 @@ function renderLinkingLines(hasSystem, loops) {
   // Parent → child lines.
   for (const child of children) {
     const selector = `.link-line[data-target-loop="${child.id}"][data-parent-loop="${child.parent_id}"]`;
-    let line = canvasWorld.querySelector(selector);
+    let line = canvasEdgeLayer.querySelector(selector);
 
     if (!line) {
       line = createSVG('line', {
@@ -856,7 +2980,7 @@ function renderLinkingLines(hasSystem, loops) {
         'data-target-loop': child.id,
         'data-parent-loop': child.parent_id,
       });
-      canvasWorld.insertBefore(line, canvasWorld.firstChild);
+      canvasEdgeLayer.appendChild(line);
     }
 
     // State-driven styling for child lines.
@@ -876,7 +3000,7 @@ function flashLinkingLine(loopId) {
   const selector = loopId
     ? `.link-line[data-target-loop="${loopId}"]`
     : '.link-line';
-  const lines = canvasWorld.querySelectorAll(selector);
+  const lines = canvasEdgeLayer.querySelectorAll(selector);
   for (const line of lines) {
     const baseClass = line.getAttribute('class').replace(' link-line--flash', '');
     line.setAttribute('class', baseClass + ' link-line--flash');
@@ -887,10 +3011,11 @@ function flashLinkingLine(loopId) {
 }
 
 function renderNode(loop) {
-  const category = getLoopCategory(loop);
-  const nodeR = getModelRadius(loop._lastModel);
+  const category = normalizeVisualCategory(getLoopCategory(loop));
+  const capacity = getLoopVisualCapacity(loop);
+  const nodeR = capacity.radius;
   const ringR = nodeR + 12;
-  let group = canvasWorld.querySelector(`[data-loop-id="${loop.id}"]`);
+  let group = canvasNodeLayer.querySelector(`[data-loop-id="${loop.id}"]`);
 
   if (!group) {
     group = createSVG('g', {
@@ -898,25 +3023,31 @@ function renderNode(loop) {
       'data-loop-id': loop.id,
       'data-category': category,
     });
-    group.addEventListener('click', () => selectLoop(loop.id));
+    group.addEventListener('click', () => {
+      if (Date.now() < suppressNextNodeClickUntil) return;
+      selectLoop(loop.id);
+    });
     group.addEventListener('contextmenu', (e) => {
       e.preventDefault();
-      const items = [];
-      // Synthetic delegate nodes have no backend endpoint — skip detail popup.
-      if (!loop.id.startsWith('delegate-')) {
-        items.push({ label: 'Open in window', action: () => openDetailWindow('loop', loop.id) });
-        items.push({ separator: true });
-      }
-      items.push({ label: 'Copy loop ID', action: () => navigator.clipboard.writeText(loop.id) });
-      showContextMenu(e.clientX, e.clientY, items);
+      showContextMenu(e.clientX, e.clientY, buildLoopContextMenu(loop));
     });
+    group.addEventListener('pointerdown', (e) => {
+      scheduleNodeLongPress(e, {
+        select: () => focusLoop(loop.id),
+        show: (x, y) => showContextMenu(x, y, buildLoopContextMenu(loop)),
+      });
+    });
+    group.addEventListener('pointermove', updateNodeLongPress);
+    group.addEventListener('pointerup', clearNodeLongPress);
+    group.addEventListener('pointercancel', clearNodeLongPress);
+    group.addEventListener('pointerleave', clearNodeLongPress);
 
     // Inner group for enter/exit scale animation (children drawn at origin).
     const inner = createSVG('g', { class: 'node-inner' });
 
     // Native SVG tooltip — instant, no delay.
     const title = createSVG('title', {});
-    title.textContent = loop.name || loop.id;
+    title.textContent = buildLoopNodeTitle(loop, capacity);
     inner.appendChild(title);
 
     // Trust zone underglow — diffused coloured circle behind the node.
@@ -931,12 +3062,22 @@ function renderNode(loop) {
       inner.appendChild(glow);
     }
 
+    const selectionRing = createSVG('circle', {
+      class: 'selection-ring',
+      r: nodeR + 18,
+      fill: 'none',
+    });
+
+    const occlusionDisk = createSVG('circle', {
+      class: 'node-occlusion',
+      r: nodeR + 6,
+    });
+
     // Glow ring (always a circle regardless of shape).
     const ring = createSVG('circle', {
-      class: 'node-ring',
+      class: 'node-ring node-ring--pending',
       r: ringR,
       fill: 'none',
-      stroke: 'var(--accent)',
       'stroke-width': 2,
     });
 
@@ -957,9 +3098,9 @@ function renderNode(loop) {
       class: 'node-icon',
       'text-anchor': 'middle',
       'dominant-baseline': 'central',
-      'font-size': Math.round(nodeR * 0.7),
+      'font-size': Math.round(nodeR * 0.5),
     });
-    icon.textContent = CATEGORY_ICONS[category] || CATEGORY_ICONS.generic;
+    icon.textContent = CATEGORY_SIGILS[category] || CATEGORY_SIGILS.generic;
 
     // Supervisor ring (larger circle outside the node).
     const supDot = createSVG('circle', {
@@ -967,10 +3108,27 @@ function renderNode(loop) {
       r: nodeR + 10,
     });
 
+    const rimBadge = createSVG('g', {
+      class: 'node-rim-badge',
+    });
+    const rimBadgeBody = createSVG('circle', {
+      class: 'node-rim-badge__body',
+      r: 11,
+    });
+    const rimBadgeText = createSVG('text', {
+      class: 'node-rim-badge__text',
+      'text-anchor': 'middle',
+      'dominant-baseline': 'central',
+    });
+    rimBadgeText.textContent = capacity.label;
+    rimBadge.appendChild(rimBadgeBody);
+    rimBadge.appendChild(rimBadgeText);
+    positionNodeRimBadge(rimBadge, nodeR);
+
     // Label.
     const label = createSVG('text', {
       class: 'node-label',
-      y: nodeR + 18,
+      y: nodeR + NODE_LABEL_GAP,
     });
     // Child loops show just the suffix after "/" since the parent
     // line makes the hierarchy clear (e.g., "signal/Alice" → "Alice").
@@ -978,14 +3136,17 @@ function renderNode(loop) {
     const slash = loop.parent_id ? displayName.indexOf('/') : -1;
     label.textContent = slash > 0 ? displayName.slice(slash + 1) : displayName;
 
+    inner.appendChild(selectionRing);
+    inner.appendChild(occlusionDisk);
     inner.appendChild(ring);
     inner.appendChild(sleepRing);
     inner.appendChild(shapeEl);
     inner.appendChild(icon);
     inner.appendChild(supDot);
+    inner.appendChild(rimBadge);
     inner.appendChild(label);
     group.appendChild(inner);
-    canvasWorld.appendChild(group);
+    canvasNodeLayer.appendChild(group);
 
     // Mark as known — enter animation is triggered by renderNodes().
     state.knownLoopIds.add(loop.id);
@@ -1019,6 +3180,9 @@ function renderNode(loop) {
     glowEl.remove();
   }
 
+  const title = group.querySelector('title');
+  if (title) title.textContent = buildLoopNodeTitle(loop, capacity);
+
   // Dynamic resizing — update shape, rings, label when model changes.
   const prevR = parseFloat(group.dataset.nodeR) || DEFAULT_NODE_R;
   if (Math.abs(nodeR - prevR) > 0.5) {
@@ -1028,6 +3192,8 @@ function renderNode(loop) {
 
     // Update dependent radii.
     const newRingR = nodeR + 12;
+    group.querySelector('.selection-ring').setAttribute('r', nodeR + 18);
+    group.querySelector('.node-occlusion').setAttribute('r', nodeR + 6);
     group.querySelector('.node-ring').setAttribute('r', newRingR);
     const sleepRing = group.querySelector('.sleep-ring');
     const newSleepR = nodeR;
@@ -1035,41 +3201,44 @@ function renderNode(loop) {
     const circ = 2 * Math.PI * newSleepR;
     sleepRing.setAttribute('stroke-dasharray', circ);
     group.querySelector('.supervisor-dot').setAttribute('r', nodeR + 10);
+    positionNodeRimBadge(group.querySelector('.node-rim-badge'), nodeR);
     const iconEl = group.querySelector('.node-icon');
-    if (iconEl) iconEl.setAttribute('font-size', Math.round(nodeR * 0.7));
-    group.querySelector('.node-label').setAttribute('y', nodeR + 18);
+    if (iconEl) iconEl.setAttribute('font-size', Math.round(nodeR * 0.5));
+    group.querySelector('.node-label').setAttribute('y', nodeR + NODE_LABEL_GAP);
   }
   group.dataset.nodeR = nodeR;
+  group.setAttribute('data-category', category);
 
-  // Update state class on main shape — supervisor processing gets its own style.
-  // If the loop's backing service is degraded, override idle states with the
-  // degraded visual so the canvas reflects connwatch health.
   const shapeEl = group.querySelector('.node-shape');
-  const isSup = loop._supervisor && loop.state === 'processing';
-  const svcDegraded = isServiceDegraded(loop.name);
-  let stateClass;
-  if (isSup) {
-    stateClass = 'node-shape--supervisor';
-  } else if (svcDegraded && (loop.state === 'sleeping' || loop.state === 'waiting')) {
-    stateClass = 'node-shape--degraded';
-  } else {
-    stateClass = 'node-shape--' + (loop.state || 'pending');
-  }
-  shapeEl.setAttribute('class', 'node-shape ' + stateClass);
+  const iconEl = group.querySelector('.node-icon');
+  const visualState = getLoopVisualState(loop);
+  shapeEl.setAttribute('class', 'node-shape node-shape--category-' + category + ' node-shape--activity-' + visualState);
+  iconEl.textContent = CATEGORY_SIGILS[category] || CATEGORY_SIGILS.generic;
+  iconEl.setAttribute('class', 'node-icon node-icon--' + category);
 
-  // Stroke width represents context utilization percentage.
-  const ctxPct = (loop.context_window > 0 && loop.last_input_tokens > 0)
-    ? Math.min(1, loop.last_input_tokens / loop.context_window)
+  const ring = group.querySelector('.node-ring');
+  ring.setAttribute('class', 'node-ring node-ring--' + visualState);
+
+  // Ring thickness represents context utilization percentage.
+  const ctxPct = (capacity.contextWindow > 0 && loop.last_input_tokens > 0)
+    ? Math.min(1, loop.last_input_tokens / capacity.contextWindow)
     : 0;
   const minStroke = 2;
-  const maxStroke = 10;
+  const maxStroke = 8;
   const strokeW = ctxPct > 0
     ? minStroke + ctxPct * (maxStroke - minStroke)
     : minStroke;
-  shapeEl.setAttribute('stroke-width', strokeW.toFixed(1));
+  ring.setAttribute('stroke-width', strokeW.toFixed(1));
+
+  const rimBadge = group.querySelector('.node-rim-badge');
+  rimBadge.setAttribute('class', 'node-rim-badge node-rim-badge--' + capacity.basis);
+  const rimBadgeText = rimBadge.querySelector('.node-rim-badge__text');
+  rimBadgeText.textContent = capacity.label;
+  positionNodeRimBadge(rimBadge, nodeR);
 
   // Supervisor ring (outer pulsing ring around node).
   const supDot = group.querySelector('.supervisor-dot');
+  const isSup = visualState === 'supervisor';
   supDot.setAttribute('class',
     'supervisor-dot' + (isSup ? ' supervisor-dot--active' : ''));
   // Also show dimmed ring when last iteration was supervisor (memory).
@@ -1152,20 +3321,31 @@ function renderSystemNode() {
   const sys = state.system;
   const s = 48, r = 10; // 1:1 square, s = side length
   const ringR = s / 2 + 12; // glow ring radius (matches loop node pattern)
-  let group = canvasWorld.querySelector('.system-node');
+  let group = canvasNodeLayer.querySelector('.system-node');
 
   if (!group) {
     group = createSVG('g', { class: 'system-node' });
-    group.addEventListener('click', () => selectSystem());
+    group.addEventListener('click', () => {
+      if (Date.now() < suppressNextNodeClickUntil) return;
+      selectSystem();
+    });
     group.addEventListener('contextmenu', (e) => {
       e.preventDefault();
-      showContextMenu(e.clientX, e.clientY, [
-        { label: 'Open in window', action: () => openDetailWindow('system') },
-      ]);
+      showContextMenu(e.clientX, e.clientY, buildSystemContextMenu(sys));
     });
+    group.addEventListener('pointerdown', (e) => {
+      scheduleNodeLongPress(e, {
+        select: () => focusSystem(),
+        show: (x, y) => showContextMenu(x, y, buildSystemContextMenu(sys)),
+      });
+    });
+    group.addEventListener('pointermove', updateNodeLongPress);
+    group.addEventListener('pointerup', clearNodeLongPress);
+    group.addEventListener('pointercancel', clearNodeLongPress);
+    group.addEventListener('pointerleave', clearNodeLongPress);
 
     const title = createSVG('title', {});
-    title.textContent = 'Runtime';
+    title.textContent = buildSystemNodeTitle(sys);
     group.appendChild(title);
 
     // Glow/selection ring (same as loop nodes).
@@ -1189,12 +3369,12 @@ function renderSystemNode() {
 
     const label = createSVG('text', {
       class: 'node-label',
-      y: s / 2 + 16,
+      y: s / 2 + SYSTEM_LABEL_GAP,
     });
-    label.textContent = 'runtime';
+    label.textContent = 'core';
     group.appendChild(label);
 
-    canvasWorld.appendChild(group);
+    canvasNodeLayer.appendChild(group);
   }
 
   // Update health-based fill.
@@ -1203,6 +3383,8 @@ function renderSystemNode() {
     ? 'system-rect system-rect--healthy'
     : 'system-rect system-rect--degraded';
   rect.setAttribute('class', cls);
+  const title = group.querySelector('title');
+  if (title) title.textContent = buildSystemNodeTitle(sys);
 
   // Selection highlight (uses node-ring halo, same as loop nodes).
   if (state.selected === '__system__') {
@@ -1215,274 +3397,1059 @@ function renderSystemNode() {
 function renderSystemDetail() {
   const sys = state.system;
   if (!sys) return;
-
-  renderSystemInspector(sys, {
-    badge: $('#system-status'),
-    overview: $('#system-overview'),
-    services: $('#system-services'),
-    registryMeta: $('#system-registry-meta'),
-    registrySummary: $('#system-registry-summary'),
-    registryResources: $('#system-registry-resources'),
-    registryDeployments: $('#system-registry-deployments'),
-  });
-
-  // Uptime is ticked live in tick(); overwrite the seeded value.
-  updateSystemUptime();
+  renderSystemEntityDetail(sys);
 }
 
 function updateSystemUptime() {
+  const uptimeEl = detailEntity.querySelector('[data-live-system-uptime]');
+  if (!uptimeEl) return;
   if (systemStartTime === null) {
-    $('#system-uptime').textContent = state.system ? (state.system.uptime || '-') : '-';
+    uptimeEl.textContent = state.system ? (state.system.uptime || '-') : '-';
     return;
   }
   const ms = Date.now() - systemStartTime;
-  $('#system-uptime').textContent = formatUptimeLong(ms);
+  uptimeEl.textContent = formatUptimeLong(ms);
 }
 
 // ---------------------------------------------------------------------------
 // Rendering — Detail Panel
 // ---------------------------------------------------------------------------
 
-const systemDetail = $('#system-detail');
+function makeSchemaCardModeIcon(mode) {
+  const bars = mode === 'title'
+    ? [{ y: 10, h: 4 }]
+    : mode === 'widget'
+      ? [{ y: 6, h: 4 }, { y: 14, h: 4 }]
+      : [{ y: 4, h: 3.5 }, { y: 10.25, h: 3.5 }, { y: 16.5, h: 3.5 }];
+  const rects = bars
+    .map(({ y, h }) => `<rect x="4" y="${y}" width="16" height="${h}" rx="1.8" ry="1.8"></rect>`)
+    .join('');
+  return `
+    <svg viewBox="0 0 24 24" aria-hidden="true" class="schema-card__control-icon">
+      ${rects}
+    </svg>
+  `;
+}
 
-function renderDetail() {
-  const isSystem = state.selected === '__system__';
-  const isLoop = state.selected && state.loops.has(state.selected);
-
-  if (isSystem && state.system) {
-    detailPlaceholder.hidden = true;
-    detailContent.hidden = true;
-    systemDetail.hidden = false;
-    renderSystemDetail();
-    return;
-  }
-
-  systemDetail.hidden = true;
-
-  if (!isLoop) {
-    detailPlaceholder.hidden = false;
-    detailContent.hidden = true;
-    return;
-  }
-
-  detailPlaceholder.hidden = true;
-  detailContent.hidden = false;
-
-  const loop = state.loops.get(state.selected);
-
-  $('#detail-name').textContent = loop.name || loop.id;
-
-  const badge = $('#detail-state');
-  const isSup = loop._supervisor && loop.state === 'processing';
-  badge.textContent = isSup ? 'supervisor' : (loop.state || 'unknown');
-  badge.className = 'state-badge state-badge--' + (isSup ? 'supervisor' : (loop.state || 'pending'));
-
-  // IDs section.
-  renderDetailIDs(loop);
-
-  // Delegate detail (task, profile, guidance, tags).
-  renderDelegateDetail(loop);
-
-  // Aggregate stats bar.
-  renderAggregates(loop, $('#detail-aggregates'));
-
-  // Iteration timeline.
-  renderTimeline(loop, $('#detail-timeline'), state.iterationHistory.get(loop.id) || [], loop.id, state.sleepTimers);
-
-  // Capabilities: show configured tags (muted if inactive) and
-  // dynamically activated tags (dashed border if not in config).
-  const configTags = (loop.config && loop.config.Tags) || [];
-  const activeTags = new Set(loop.active_tags || []);
-  const allTags = new Set([...configTags, ...activeTags]);
-  const tagsSection = $('#detail-tags');
-  const tagsList = $('#detail-tags-list');
-  if (allTags.size > 0) {
-    tagsSection.hidden = false;
-    tagsList.innerHTML = '';
-    for (const tag of [...allTags].sort()) {
-      const chip = document.createElement('span');
-      const inConfig = configTags.includes(tag);
-      const isActive = activeTags.has(tag);
-      chip.className = 'tag-chip'
-        + (isActive && inConfig ? ' tag-chip--active' : '')
-        + (!isActive && inConfig ? ' tag-chip--muted' : '')
-        + (isActive && !inConfig ? ' tag-chip--dynamic' : '');
-      chip.textContent = tag;
-      tagsList.appendChild(chip);
+function makeSchemaCompactFacts(items, className = 'schema-card__facts') {
+  const values = (items || []).filter(Boolean);
+  if (values.length === 0) return null;
+  const wrap = document.createElement('div');
+  wrap.className = className;
+  for (const item of values) {
+    const fact = document.createElement('span');
+    fact.className = 'schema-card__fact';
+    if (typeof item === 'string' || typeof item === 'number') {
+      fact.textContent = String(item);
+    } else {
+      const label = item.label ? String(item.label).trim() : '';
+      const value = item.value === null || item.value === undefined ? '' : String(item.value).trim();
+      fact.textContent = label && value ? `${label}: ${value}` : (value || label);
     }
-  } else {
-    tagsSection.hidden = true;
+    if (!fact.textContent) continue;
+    wrap.appendChild(fact);
   }
+  return wrap.childNodes.length ? wrap : null;
+}
+
+function makeSchemaWidgetGrid(facts) {
+  const items = (facts || []).filter((item) => item && item.value !== null && item.value !== undefined && item.value !== '');
+  if (items.length === 0) return null;
+  const grid = document.createElement('div');
+  grid.className = 'schema-widget-grid';
+  for (const item of items) {
+    const cell = document.createElement('div');
+    cell.className = 'schema-widget-metric';
+    const value = document.createElement('div');
+    value.className = 'schema-widget-metric__value';
+    value.textContent = String(item.value);
+    cell.appendChild(value);
+    if (item.label) {
+      const label = document.createElement('div');
+      label.className = 'schema-widget-metric__label';
+      label.textContent = String(item.label);
+      cell.appendChild(label);
+    }
+    grid.appendChild(cell);
+  }
+  return grid;
+}
+
+function makeSchemaCard(title, meta, opts = {}) {
+  const card = document.createElement('section');
+  card.className = 'detail-card schema-card';
+  const isResizable = opts.resizable !== false;
+  if (isResizable) {
+    card.classList.add('schema-card--resizable');
+    card.dataset.entityKind = opts.entityKind || '';
+    card.dataset.cardKey = opts.key || title.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+  }
+
+  const header = document.createElement('div');
+  header.className = 'schema-card__header';
+
+  const heading = document.createElement('div');
+  heading.className = 'schema-card__heading';
+
+  const titleEl = document.createElement('h3');
+  titleEl.className = 'schema-card__title';
+  titleEl.textContent = title;
+  heading.appendChild(titleEl);
+
+  if (meta) {
+    const metaEl = document.createElement('span');
+    metaEl.className = 'schema-card__meta';
+    metaEl.textContent = meta;
+    heading.appendChild(metaEl);
+  }
+
+  header.appendChild(heading);
+
+  if (isResizable) {
+    const controls = document.createElement('div');
+    controls.className = 'schema-card__controls';
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'schema-card__control';
+    btn.textContent = 'Full';
+    btn.title = 'Switch card view';
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const current = card.dataset.layoutMode || 'full';
+      applySchemaCardPreset(card, nextSchemaCardMode(current));
+    });
+    controls.appendChild(btn);
+
+    header.appendChild(controls);
+  }
+
+  card.appendChild(header);
+
+  const titleShell = document.createElement('div');
+  titleShell.className = 'schema-card__title-shell';
+  const titleSummary = (opts.titleSummary || '').trim();
+  if (titleSummary) {
+    const summaryEl = document.createElement('p');
+    summaryEl.className = 'schema-card__summary';
+    summaryEl.textContent = titleSummary;
+    titleShell.appendChild(summaryEl);
+  }
+  const titleFacts = makeSchemaCompactFacts(opts.titleFacts, 'schema-card__facts schema-card__facts--title');
+  if (titleFacts) titleShell.appendChild(titleFacts);
+  card.appendChild(titleShell);
+
+  const widgetShell = document.createElement('div');
+  widgetShell.className = 'schema-card__widget-shell';
+  const widgetSummary = (opts.widgetSummary || opts.titleSummary || '').trim();
+  if (widgetSummary) {
+    const summaryEl = document.createElement('p');
+    summaryEl.className = 'schema-card__summary schema-card__summary--widget';
+    summaryEl.textContent = widgetSummary;
+    widgetShell.appendChild(summaryEl);
+  }
+  const widgetGrid = makeSchemaWidgetGrid(opts.widgetFacts);
+  if (widgetGrid) widgetShell.appendChild(widgetGrid);
+  const widgetFacts = makeSchemaCompactFacts(opts.widgetNotes, 'schema-card__facts schema-card__facts--widget');
+  if (widgetFacts) widgetShell.appendChild(widgetFacts);
+  card.appendChild(widgetShell);
+
+  const bodyShell = document.createElement('div');
+  bodyShell.className = 'schema-card__body-shell';
+
+  const body = document.createElement('div');
+  body.className = 'schema-card__body';
+  bodyShell.appendChild(body);
+
+  if (isResizable) {
+    const fade = document.createElement('div');
+    fade.className = 'schema-card__fade';
+    bodyShell.appendChild(fade);
+  }
+
+  card.appendChild(bodyShell);
+
+  return { card, body, header, titleShell, widgetShell };
+}
+
+function appendSchemaRow(body, label, value, opts = {}) {
+  if (value === null || value === undefined || value === '') return;
+  const row = document.createElement('div');
+  row.className = 'schema-row' + (opts.multiline ? ' schema-row--multiline' : '');
+
+  const labelEl = document.createElement('div');
+  labelEl.className = 'schema-row__label';
+  labelEl.textContent = label;
+  row.appendChild(labelEl);
+
+  const valueEl = document.createElement('div');
+  valueEl.className = 'schema-row__value';
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') {
+    valueEl.textContent = String(value);
+  } else {
+    valueEl.appendChild(value);
+  }
+  if (opts.valueAttrs) {
+    for (const [name, attrValue] of Object.entries(opts.valueAttrs)) {
+      if (attrValue === null || attrValue === undefined) continue;
+      valueEl.setAttribute(name, String(attrValue));
+    }
+  }
+  row.appendChild(valueEl);
+  body.appendChild(row);
+  return { row, valueEl };
+}
+
+function makeSchemaIDList(ids, opts = {}) {
+  const wrap = document.createElement('div');
+  wrap.className = 'schema-chip-list schema-chip-list--ids';
+  const limit = Number.isFinite(opts.maxVisible) ? Math.max(0, Number(opts.maxVisible)) : ids.length;
+  const visible = ids.slice(0, limit);
+  for (const id of visible) {
+    wrap.appendChild(opts.request ? makeRequestChip(id) : makeIDChip(id));
+  }
+  if (limit < ids.length) {
+    const more = document.createElement('span');
+    more.className = 'id-chip id-chip--muted';
+    more.textContent = '+' + (ids.length - limit);
+    wrap.appendChild(more);
+  }
+  return wrap;
+}
+
+function makeSchemaChipList(values, className = 'tag-chip') {
+  const wrap = document.createElement('div');
+  wrap.className = 'schema-chip-list';
+  for (const value of values) {
+    const chip = document.createElement('span');
+    chip.className = className;
+    chip.textContent = value;
+    wrap.appendChild(chip);
+  }
+  return wrap;
+}
+
+function makeInspectorUtility(label, content) {
+  const wrap = document.createElement('div');
+  wrap.className = 'inspector-utility';
+
+  const labelEl = document.createElement('span');
+  labelEl.className = 'inspector-utility__label';
+  labelEl.textContent = label;
+  wrap.appendChild(labelEl);
+
+  if (typeof content === 'string' || typeof content === 'number' || typeof content === 'boolean') {
+    const valueEl = document.createElement('span');
+    valueEl.className = 'inspector-utility__value';
+    valueEl.textContent = String(content);
+    wrap.appendChild(valueEl);
+  } else if (content) {
+    wrap.appendChild(content);
+  }
+
+  return wrap;
+}
+
+function copyLoopEntityJSON(loop) {
+  const entity = buildLoopEntity(loop);
+  const conversationID = getLoopPrimaryConversationID(entity);
+  const conversation = conversationID ? (state.conversationDetails.get(conversationID) || null) : null;
+  const history = state.iterationHistory.get(loop.id) || [];
+  const payload = {
+    exported_at: new Date().toISOString(),
+    entity,
+    loop,
+    conversation,
+    iteration_history: history,
+  };
+  return navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
+}
+
+function copySystemEntityJSON(sys) {
+  const entity = buildSystemEntity(sys || state.system || {});
+  const payload = {
+    exported_at: new Date().toISOString(),
+    entity,
+    system: sys || state.system || null,
+    loops: Array.from(state.loops.values()),
+  };
+  return navigator.clipboard.writeText(JSON.stringify(payload, null, 2));
+}
+
+function makeConversationFact(label, value) {
+  if (!value) return null;
+  const row = document.createElement('div');
+  row.className = 'conversation-summary__fact';
+
+  const labelEl = document.createElement('span');
+  labelEl.className = 'conversation-summary__fact-label';
+  labelEl.textContent = label;
+  row.appendChild(labelEl);
+
+  const valueEl = document.createElement('span');
+  valueEl.className = 'conversation-summary__fact-value';
+  valueEl.textContent = value;
+  row.appendChild(valueEl);
+
+  return row;
+}
+
+function makeConversationSummaryEntry(summary, opts = {}) {
+  const details = document.createElement('details');
+  details.className = 'conversation-summary' + (opts.current ? ' conversation-summary--current' : '');
+  details.dataset.detailKey = 'conversation:' + summary.id;
+
+  const summaryEl = document.createElement('summary');
+  summaryEl.className = 'conversation-summary__summary';
+
+  const copy = document.createElement('div');
+  copy.className = 'conversation-summary__copy';
+
+  const titleRow = document.createElement('div');
+  titleRow.className = 'conversation-summary__title-row';
+
+  const title = document.createElement('span');
+  title.className = 'conversation-summary__title';
+  title.textContent = summary.label;
+  titleRow.appendChild(title);
+
+  if (opts.current) {
+    const badge = document.createElement('span');
+    badge.className = 'conversation-summary__badge conversation-summary__badge--current';
+    badge.textContent = 'current';
+    titleRow.appendChild(badge);
+  }
+  if (summary.active) {
+    const badge = document.createElement('span');
+    badge.className = 'conversation-summary__badge conversation-summary__badge--active';
+    badge.textContent = 'active';
+    titleRow.appendChild(badge);
+  }
+  if (summary.loading) {
+    const badge = document.createElement('span');
+    badge.className = 'conversation-summary__badge';
+    badge.textContent = 'loading';
+    titleRow.appendChild(badge);
+  }
+  copy.appendChild(titleRow);
+
+  const meta = document.createElement('div');
+  meta.className = 'conversation-summary__meta';
+  meta.textContent = summary.error
+    ? 'Conversation details unavailable'
+    : (summary.metaLine || 'No archived session detail yet');
+  copy.appendChild(meta);
+  summaryEl.appendChild(copy);
+
+  const chevron = document.createElement('span');
+  chevron.className = 'conversation-summary__chevron';
+  chevron.textContent = 'Details';
+  summaryEl.appendChild(chevron);
+
+  details.appendChild(summaryEl);
+
+  const body = document.createElement('div');
+  body.className = 'conversation-summary__body';
+
+  if (summary.latestSessionSummary) {
+    const desc = document.createElement('p');
+    desc.className = 'conversation-summary__description';
+    desc.textContent = summary.latestSessionSummary;
+    body.appendChild(desc);
+  }
+
+  const facts = document.createElement('div');
+  facts.className = 'conversation-summary__facts';
+  const factEls = [
+    makeConversationFact('channel', summary.channelLabel),
+    makeConversationFact('contact', summary.contactName),
+    makeConversationFact('address', summary.address),
+    makeConversationFact('trust', summary.trustZone),
+    makeConversationFact('session title', summary.latestSessionTitle && summary.latestSessionTitle !== summary.label
+      ? summary.latestSessionTitle
+      : ''),
+    makeConversationFact('last active', summary.updatedAt ? timeAgo(summary.updatedAt) : ''),
+    makeConversationFact('latest session', summary.latestSessionState
+      ? summary.latestSessionState + (summary.latestSessionAge ? ' · ' + summary.latestSessionAge : '')
+      : ''),
+    makeConversationFact('history', summary.sessionCount ? formatNumber(summary.sessionCount) + ' sessions' : ''),
+    makeConversationFact('working set', Number.isFinite(summary.messageCount) ? formatNumber(summary.messageCount) + ' messages' : ''),
+  ].filter(Boolean);
+  for (const fact of factEls) facts.appendChild(fact);
+  if (factEls.length > 0) body.appendChild(facts);
+
+  const ids = document.createElement('div');
+  ids.className = 'conversation-summary__ids';
+
+  const convBlock = document.createElement('div');
+  convBlock.className = 'conversation-summary__id-block';
+  const convLabel = document.createElement('span');
+  convLabel.className = 'conversation-summary__id-label';
+  convLabel.textContent = 'conversation';
+  convBlock.appendChild(convLabel);
+  convBlock.appendChild(makeIDChip(summary.id));
+  ids.appendChild(convBlock);
+
+  if (summary.latestSessionID) {
+    const sessBlock = document.createElement('div');
+    sessBlock.className = 'conversation-summary__id-block';
+    const sessLabel = document.createElement('span');
+    sessLabel.className = 'conversation-summary__id-label';
+    sessLabel.textContent = 'latest session';
+    sessBlock.appendChild(sessLabel);
+    sessBlock.appendChild(makeIDChip(summary.latestSessionID));
+    ids.appendChild(sessBlock);
+  }
+
+  body.appendChild(ids);
+  details.appendChild(body);
+  return details;
+}
+
+function makeConversationSummaryList(ids, opts = {}) {
+  const uniqueIDs = Array.from(new Set((ids || []).filter(Boolean)));
+  const list = document.createElement('div');
+  list.className = 'conversation-summary-list';
+
+  for (const conversationID of uniqueIDs) {
+    ensureConversationSummary(conversationID);
+    const summary = state.conversationDetails.get(conversationID) || buildPendingConversationSummary(conversationID);
+    list.appendChild(makeConversationSummaryEntry(summary, {
+      current: !!(opts.currentIDs && opts.currentIDs.has(conversationID)),
+    }));
+  }
+
+  return list;
+}
+
+function getConversationSummaryDetail(conversationID) {
+  if (!conversationID) return null;
+  ensureConversationSummary(conversationID);
+  return state.conversationDetails.get(conversationID) || buildPendingConversationSummary(conversationID);
+}
+
+function makeRequestChip(requestID) {
+  const chip = document.createElement('span');
+  chip.className = 'id-chip id-chip--responsive' + (typeof window.onRequestChipClick === 'function' ? ' schema-request-chip' : '');
+  chip.title = (typeof window.onRequestChipClick === 'function'
+    ? 'Click to inspect request · Shift+click to copy\n'
+    : 'Click to copy request ID\n') + requestID;
+
+  const txt = document.createElement('span');
+  txt.className = 'id-chip-text';
+  txt.textContent = 'req:' + requestID;
+  chip.appendChild(txt);
+
+  chip.addEventListener('click', (e) => {
+    e.stopPropagation();
+    if (!e.shiftKey && typeof window.onRequestChipClick === 'function') {
+      window.onRequestChipClick(requestID);
+      return;
+    }
+    navigator.clipboard.writeText(requestID).then(() => {
+      chip.classList.add('id-chip--copied');
+      setTimeout(() => chip.classList.remove('id-chip--copied'), 1200);
+    });
+  });
+  return chip;
+}
+
+function objectEntriesExcluding(obj, excludedKeys) {
+  const excluded = new Set(excludedKeys || []);
+  return Object.entries(obj || {}).filter(([key, value]) => !excluded.has(key) && value !== '');
+}
+
+function renderSystemEntityDetail(sys) {
+  const entity = buildSystemEntity(sys);
+  detailEntity.innerHTML = '';
+  const unhealthyCount = Math.max(0, entity.serviceCount - entity.readyCount);
+
+  const hero = document.createElement('section');
+  hero.className = 'detail-card schema-card schema-card--hero';
+  hero.innerHTML = `
+    <div class="schema-hero">
+      <div class="schema-hero__copy">
+        <div class="schema-kind">${entity.kind}</div>
+        <h2 class="detail-name">${escapeHTML(entity.title)}</h2>
+        <div class="schema-subtitle">
+          <strong>${formatNumber(entity.liveLoopCount)} live loops</strong>
+          across ${formatNumber(entity.serviceCount)} runtime services
+        </div>
+      </div>
+      <div class="schema-badge-list">
+        <span class="state-badge state-badge--${escapeHTML(entity.state === 'healthy' ? 'sleeping' : 'error')}">${escapeHTML(formatSchemaToken(entity.state))}</span>
+        <span class="schema-badge">${escapeHTML(entity.routingMode)}</span>
+        <span class="schema-badge">${escapeHTML(`${entity.readyCount}/${entity.serviceCount} ready`)}</span>
+      </div>
+    </div>
+  `;
+  detailEntity.appendChild(hero);
+
+  const identity = makeSchemaCard('Identity', 'Build lineage, process identity, and runtime provenance', {
+    entityKind: entity.kind,
+    key: 'identity',
+    titleSummary: `${formatSchemaToken(entity.state)} · ${entity.version || 'dev build'} · ${entity.uptime || 'uptime pending'}`,
+    titleFacts: [entity.commit ? shortID(entity.commit) : '', entity.arch || '', entity.goVersion || ''].filter(Boolean),
+    widgetFacts: [
+      { label: 'Status', value: formatSchemaToken(entity.state) },
+      { label: 'Version', value: entity.version || 'dev' },
+      { label: 'Uptime', value: entity.uptime || 'pending' },
+      entity.commit ? { label: 'Commit', value: shortID(entity.commit) } : null,
+    ],
+  });
+  appendSchemaRow(identity.body, 'anchor kind', entity.kind);
+  appendSchemaRow(identity.body, 'status', formatSchemaToken(entity.state));
+  appendSchemaRow(identity.body, 'uptime', entity.uptime, {
+    valueAttrs: { 'data-live-system-uptime': 'true' },
+  });
+  appendSchemaRow(identity.body, 'version', entity.version);
+  if (entity.commit) {
+    appendSchemaRow(identity.body, 'commit', makeSchemaIDList([entity.commit], { maxVisible: 1 }));
+  }
+  appendSchemaRow(identity.body, 'go', entity.goVersion);
+  appendSchemaRow(identity.body, 'arch', entity.arch);
+  detailEntity.appendChild(identity.card);
+
+  const topology = makeSchemaCard('Topology', 'Live graph shape and routing footprint', {
+    entityKind: entity.kind,
+    key: 'topology',
+    titleSummary: `${formatNumber(entity.liveLoopCount)} live loops across ${formatNumber(entity.serviceCount)} services.`,
+    titleFacts: [entity.routingMode, entity.defaultModel || '', `${formatNumber(entity.rootLoopCount)} root`].filter(Boolean),
+    widgetFacts: [
+      { label: 'Live', value: formatNumber(entity.liveLoopCount) },
+      { label: 'Root', value: formatNumber(entity.rootLoopCount) },
+      { label: 'Child', value: formatNumber(entity.childLoopCount) },
+      { label: 'Requests', value: formatNumber(entity.totalRequests) },
+    ],
+  });
+  appendSchemaRow(topology.body, 'live loops', formatNumber(entity.liveLoopCount));
+  appendSchemaRow(topology.body, 'root loops', formatNumber(entity.rootLoopCount));
+  appendSchemaRow(topology.body, 'child loops', formatNumber(entity.childLoopCount));
+  appendSchemaRow(topology.body, 'services ready', `${formatNumber(entity.readyCount)} / ${formatNumber(entity.serviceCount)}`);
+  appendSchemaRow(topology.body, 'router requests', formatNumber(entity.totalRequests));
+  appendSchemaRow(topology.body, 'routing mode', entity.routingMode);
+  appendSchemaRow(topology.body, 'default model', entity.defaultModel);
+  appendSchemaRow(topology.body, 'registry generation', formatNumber(entity.registryGeneration));
+  appendSchemaRow(topology.body, 'model resources', formatNumber(entity.resourceCount));
+  appendSchemaRow(topology.body, 'deployments', formatNumber(entity.deploymentCount));
+  detailEntity.appendChild(topology.card);
+
+  const services = makeSchemaCard('Services', 'Service health, strain, and recovery state', {
+    entityKind: entity.kind,
+    key: 'services',
+    titleSummary: unhealthyCount > 0
+      ? `${formatNumber(entity.readyCount)} ready · ${formatNumber(unhealthyCount)} degraded or down.`
+      : `${formatNumber(entity.readyCount)} of ${formatNumber(entity.serviceCount)} services ready.`,
+    titleFacts: [entity.serviceCount ? `${formatNumber(entity.serviceCount)} total` : '', unhealthyCount ? `${formatNumber(unhealthyCount)} impacted` : 'all healthy'].filter(Boolean),
+    widgetFacts: [
+      { label: 'Ready', value: formatNumber(entity.readyCount) },
+      { label: 'Total', value: formatNumber(entity.serviceCount) },
+      { label: 'Impacted', value: formatNumber(unhealthyCount) },
+      { label: 'State', value: formatSchemaToken(entity.state) },
+    ],
+  });
+  const servicesEl = document.createElement('div');
+  servicesEl.className = 'system-services';
+  renderSystemServices(servicesEl, entity.health);
+  services.body.appendChild(servicesEl);
+  detailEntity.appendChild(services.card);
+
+  const registries = makeSchemaCard('Registries', 'Focused windows for runtime catalogs and operator inventories', {
+    entityKind: entity.kind,
+    key: 'registries',
+    titleSummary: 'Open dedicated windows for toolbox, capability, and model inventory inspection instead of carrying the full registries in the core pane.',
+    titleFacts: [entity.defaultModel ? `default ${entity.defaultModel}` : '', `gen ${formatNumber(entity.registryGeneration)}`].filter(Boolean),
+    widgetFacts: [
+      { label: 'Capabilities', value: formatNumber(entity.capabilityCount) },
+      { label: 'Tools', value: formatNumber(entity.toolboxToolCount) },
+      { label: 'Resources', value: formatNumber(entity.resourceCount) },
+      { label: 'Deployments', value: formatNumber(entity.deploymentCount) },
+    ],
+  });
+  const registriesMeta = document.createElement('span');
+  registriesMeta.className = 'schema-card__meta';
+  const registriesHeading = registries.header.querySelector('.schema-card__heading');
+  if (registriesHeading) registriesHeading.appendChild(registriesMeta);
+
+  const registriesSummary = document.createElement('div');
+  registriesSummary.className = 'system-summary-grid';
+  registries.body.appendChild(registriesSummary);
+
+  const registriesWrap = document.createElement('div');
+  registriesWrap.className = 'schema-subsection';
+  registriesWrap.innerHTML = '<h4 class="schema-subsection__title">Core Registries</h4>';
+  const registriesList = document.createElement('div');
+  registriesList.className = 'system-list';
+  registriesWrap.appendChild(registriesList);
+  registries.body.appendChild(registriesWrap);
+
+  renderSystemRegistries(
+    registriesSummary,
+    registriesList,
+    registriesMeta,
+    sys,
+    {
+      toolbox: () => openRegistryWindow('toolbox'),
+      models: () => openRegistryWindow('models'),
+    },
+  );
+  detailEntity.appendChild(registries.card);
+
+  updateSystemUptime();
+}
+
+function renderLoopEntityDetail(loop) {
+  const entity = buildLoopEntity(loop);
+  detailEntity.innerHTML = '';
+  const primaryConvID = getLoopPrimaryConversationID(entity);
+  const currentConversation = getConversationSummaryDetail(primaryConvID);
+  const currentConversationIDs = new Set((entity.currentConvID ? [entity.currentConvID] : []).filter(Boolean));
+  const recentHistoryIDs = entity.recentConvIDs.filter((id) => id !== primaryConvID);
+  const historyCount = recentHistoryIDs.length + (primaryConvID ? 1 : 0);
+  const parentLabel = entity.parentID ? shortID(entity.parentID) : 'core';
+  const lastWakeDate = parseTimestamp(entity.lastWakeAt);
+  const lastWakeAgo = lastWakeDate ? timeAgo(lastWakeDate) : '';
+  const latestModelLabel = entity.latestModel || 'model pending';
+  const contextLabel = entity.contextWindow ? `${formatNumber(entity.contextWindow)} ctx` : '';
+  const missionSummary = entity.hints.mission ? truncate(entity.hints.mission, 92) : '';
+  const conversationBacked = isConversationBackedLoop(entity);
+  const currentEffectiveTools = entity.currentEffectiveTools || [];
+  const currentLoadedCapabilities = entity.currentLoadedCapabilities || [];
+  const latestToolsUsed = Object.keys(entity.latestToolsUsed || {}).filter(Boolean).sort();
+  const liveToolNames = Array.from(new Set(entity.activeLiveTools.map((entry) => entry.tool).filter(Boolean))).sort();
+
+  const hero = document.createElement('section');
+  hero.className = 'detail-card schema-card schema-card--hero';
+  hero.innerHTML = `
+    <div class="schema-hero">
+      <div class="schema-hero__copy">
+        <div class="schema-kind">${entity.kind}</div>
+        <h2 class="detail-name">${escapeHTML(entity.title)}</h2>
+        <div class="schema-subtitle">
+          <strong>${escapeHTML(entity.categoryLabel)}</strong>
+          via ${escapeHTML(entity.categorySource)}
+        </div>
+      </div>
+      <div class="schema-badge-list">
+        <span class="state-badge state-badge--${escapeHTML(entity.stateLabel === 'supervisor' ? 'supervisor' : entity.state)}">${escapeHTML(formatSchemaToken(entity.stateLabel))}</span>
+        <span class="schema-badge">${escapeHTML(entity.executionMode)}</span>
+        <span class="schema-badge">${escapeHTML(entity.relation)}</span>
+      </div>
+    </div>
+  `;
+  const utilities = document.createElement('div');
+  utilities.className = 'inspector-utility-bar';
+  utilities.appendChild(makeInspectorUtility('loop', makeIDChip(entity.loopID)));
+  if (primaryConvID) {
+    utilities.appendChild(makeInspectorUtility('thread', makeIDChip(primaryConvID)));
+  }
+  utilities.appendChild(makeInspectorUtility(
+    'loaded capabilities',
+    currentLoadedCapabilities.length > 0
+      ? makeSchemaChipList(currentLoadedCapabilities.map((entry) => entry.tag), 'tag-chip tag-chip--active')
+      : 'none',
+  ));
+  if (entity.latestRequestID) {
+    utilities.appendChild(makeInspectorUtility('request', makeRequestChip(entity.latestRequestID)));
+  }
+  hero.appendChild(utilities);
+  detailEntity.appendChild(hero);
+
+  if (conversationBacked) {
+    detailEntity.appendChild(renderLoopCurrentTurnCard(loop, entity, currentConversation));
+  }
+
+  const identity = makeSchemaCard('Identity', 'Role in the graph', {
+    entityKind: entity.kind,
+    key: 'identity',
+    titleSummary: `${entity.executionMode} · ${entity.categoryLabel.toLowerCase()}${entity.subsystem ? ' · ' + entity.subsystem : ''}`,
+    titleFacts: [entity.relation, entity.categorySource, entity.subsystem || ''].filter(Boolean),
+    widgetFacts: [
+      { label: 'Mode', value: entity.executionMode },
+      { label: 'Visual', value: entity.categoryLabel },
+      { label: 'Relation', value: entity.relation },
+      entity.subsystem ? { label: 'Subsystem', value: entity.subsystem } : null,
+    ],
+  });
+  appendSchemaRow(identity.body, 'loop_id', makeIDChip(entity.loopID));
+  appendSchemaRow(identity.body, 'entity kind', entity.kind);
+  appendSchemaRow(identity.body, 'execution mode', entity.executionMode);
+  appendSchemaRow(identity.body, 'visual category', entity.categoryLabel);
+  appendSchemaRow(identity.body, 'classification source', entity.categorySource);
+  if (entity.subsystem) appendSchemaRow(identity.body, 'subsystem', entity.subsystem);
+  detailEntity.appendChild(identity.card);
+
+  const relationships = makeSchemaCard('Relationships', 'Parents, conversations, and request trail', {
+    entityKind: entity.kind,
+    key: 'relationships',
+    titleSummary: currentConversation
+      ? `${currentConversation.label}${currentConversation.metaLine ? ' · ' + currentConversation.metaLine : ''}`
+      : (entity.parentID ? `Child loop of ${shortID(entity.parentID)}.` : 'Root loop anchored to core.'),
+    titleFacts: [
+      entity.parentID ? `Parent ${shortID(entity.parentID)}` : 'Anchor core',
+      historyCount ? `${formatNumber(historyCount)} threads` : '',
+      entity.latestRequestID ? `Req ${shortID(entity.latestRequestID)}` : '',
+    ].filter(Boolean),
+    widgetFacts: [
+      { label: 'Parent', value: parentLabel },
+      { label: 'Thread', value: currentConversation ? currentConversation.label : 'none' },
+      { label: 'History', value: historyCount ? `${formatNumber(historyCount)} convs` : 'none' },
+      entity.latestRequestID ? { label: 'Request', value: shortID(entity.latestRequestID) } : null,
+    ],
+  });
+  if (entity.parentID) {
+    appendSchemaRow(relationships.body, 'parent loop', makeIDChip(entity.parentID));
+  } else {
+    appendSchemaRow(relationships.body, 'root anchor', 'core');
+  }
+  if (primaryConvID) {
+    appendSchemaRow(
+      relationships.body,
+      'conversation',
+      makeConversationSummaryList([primaryConvID], { currentIDs: currentConversationIDs }),
+      { multiline: true },
+    );
+  }
+  if (recentHistoryIDs.length > 0) {
+    appendSchemaRow(
+      relationships.body,
+      'conversation history',
+      makeConversationSummaryList(recentHistoryIDs),
+      { multiline: true },
+    );
+  }
+  if (entity.latestRequestID) {
+    appendSchemaRow(relationships.body, 'latest request', makeSchemaIDList([entity.latestRequestID], { request: true }));
+  }
+
+  const execution = makeSchemaCard('Execution', 'Live state, model, and token flow', {
+    entityKind: entity.kind,
+    key: 'execution',
+    titleSummary: [formatSchemaToken(entity.stateLabel), latestModelLabel, contextLabel].filter(Boolean).join(' · '),
+    titleFacts: [
+      entity.iterations ? `${formatNumber(entity.iterations)} iterations` : '',
+      lastWakeAgo ? `wake ${lastWakeAgo}` : '',
+      entity.consecutiveErrors ? `${formatNumber(entity.consecutiveErrors)} errors` : '',
+    ].filter(Boolean),
+    widgetFacts: [
+      { label: 'State', value: formatSchemaToken(entity.stateLabel) },
+      { label: 'Model', value: latestModelLabel },
+      contextLabel ? { label: 'Context', value: contextLabel } : null,
+      entity.lastInputTokens || entity.lastOutputTokens
+        ? { label: 'Last I/O', value: `${formatTokens(entity.lastInputTokens)} · ${formatTokens(entity.lastOutputTokens)}` }
+        : null,
+    ],
+  });
+  appendSchemaRow(execution.body, 'state', formatSchemaToken(entity.stateLabel));
+  appendSchemaRow(execution.body, 'started', entity.startedAt ? timeAgo(new Date(entity.startedAt)) : '');
+  appendSchemaRow(execution.body, 'last wake', lastWakeDate ? timeAgo(lastWakeDate) : '');
+  appendSchemaRow(execution.body, 'iterations', formatNumber(entity.iterations));
+  appendSchemaRow(execution.body, 'attempts', formatNumber(entity.attempts));
+  appendSchemaRow(execution.body, 'consecutive errors', entity.consecutiveErrors ? formatNumber(entity.consecutiveErrors) : '');
+  appendSchemaRow(execution.body, 'latest model', entity.latestModel);
+  appendSchemaRow(execution.body, 'context window', entity.contextWindow ? formatNumber(entity.contextWindow) : '');
+  appendSchemaRow(execution.body, 'last io', entity.lastInputTokens || entity.lastOutputTokens ? `${formatTokens(entity.lastInputTokens)} in · ${formatTokens(entity.lastOutputTokens)} out` : '');
+  appendSchemaRow(execution.body, 'total io', entity.totalInputTokens || entity.totalOutputTokens ? `${formatTokens(entity.totalInputTokens)} in · ${formatTokens(entity.totalOutputTokens)} out` : '');
+  if (entity.lastError) {
+    const err = document.createElement('div');
+    err.className = 'system-item__error';
+    err.textContent = entity.lastError;
+    appendSchemaRow(execution.body, 'last error', err, { multiline: true });
+  }
+
+  const tooling = makeSchemaCard('Tooling', 'Capability scope, tool surface, and live activity', {
+    entityKind: entity.kind,
+    key: 'tooling',
+    titleSummary: [
+      currentLoadedCapabilities.length > 0
+        ? `${formatNumber(currentLoadedCapabilities.length)} capabilities loaded`
+        : (entity.configTags.length > 0 ? `${formatNumber(entity.configTags.length)} tags configured` : ''),
+      currentEffectiveTools.length > 0
+        ? `${formatNumber(currentEffectiveTools.length)} tools in scope`
+        : (entity.excludedTools.length > 0 ? `${formatNumber(entity.excludedTools.length)} tools excluded` : ''),
+      entity.availableCapabilities.length > 0 ? `${formatNumber(entity.availableCapabilities.length)} capabilities available` : '',
+      liveToolNames.length > 0 ? `${formatNumber(liveToolNames.length)} tools live` : '',
+    ].filter(Boolean).join(' · ') || 'Capability state and tool surface pending.',
+    titleFacts: [
+      entity.configTags.length ? `${formatNumber(entity.configTags.length)} configured` : '',
+      currentLoadedCapabilities.length ? `${formatNumber(currentLoadedCapabilities.length)} loaded` : '',
+      currentEffectiveTools.length ? `${formatNumber(currentEffectiveTools.length)} in scope` : '',
+      liveToolNames.length ? `${formatNumber(liveToolNames.length)} running` : '',
+    ].filter(Boolean),
+    widgetFacts: [
+      entity.configTags.length ? { label: 'Configured tags', value: entity.configTags.join(', ') } : null,
+      currentLoadedCapabilities.length ? { label: 'Loaded capabilities', value: currentLoadedCapabilities.map((entry) => entry.tag).join(', ') } : null,
+      entity.availableCapabilities.length ? { label: 'Available capabilities', value: formatNumber(entity.availableCapabilities.length) } : null,
+      currentEffectiveTools.length ? { label: 'Tool surface', value: formatNumber(currentEffectiveTools.length) } : null,
+      entity.excludedTools.length ? { label: 'Excluded', value: formatNumber(entity.excludedTools.length) } : null,
+      liveToolNames.length ? { label: 'Running', value: liveToolNames.join(', ') } : null,
+    ],
+  });
+  if (entity.configTags.length > 0) {
+    appendSchemaRow(tooling.body, 'configured tags', makeSchemaChipList(entity.configTags, 'tag-chip tag-chip--muted'));
+  }
+  if (currentLoadedCapabilities.length > 0) {
+    appendSchemaRow(tooling.body, 'loaded capabilities', makeSchemaChipList(currentLoadedCapabilities.map((entry) => entry.tag), 'tag-chip tag-chip--active'));
+  }
+  if (entity.availableCapabilities.length > 0) {
+    appendSchemaRow(tooling.body, 'available capabilities', makeSchemaChipList(entity.availableCapabilities.map((entry) => entry.tag), 'tag-chip'));
+  }
+  if (entity.excludedTools.length > 0) {
+    appendSchemaRow(tooling.body, 'excluded tools', makeSchemaChipList(entity.excludedTools, 'iter-card__tool-item iter-card__tool-item--scope'));
+  }
+  if (currentEffectiveTools.length > 0) {
+    appendSchemaRow(
+      tooling.body,
+      loop.state === 'processing' ? 'tool surface this turn' : 'tool surface last turn',
+      makeSchemaChipList(currentEffectiveTools, 'iter-card__tool-item iter-card__tool-item--scope'),
+      { multiline: true },
+    );
+  }
+  if (liveToolNames.length > 0) {
+    appendSchemaRow(tooling.body, 'tools in flight', makeSchemaChipList(liveToolNames, 'iter-card__tool-item'));
+  }
+  if (latestToolsUsed.length > 0) {
+    appendSchemaRow(tooling.body, 'tools used last turn', makeSchemaChipList(latestToolsUsed, 'iter-card__tool-item'));
+  }
+
+  const profile = makeSchemaCard('Profile', 'Intent, trust, and carried context', {
+    entityKind: entity.kind,
+    key: 'profile',
+    titleSummary: missionSummary || [
+      entity.trustZone ? `trust ${entity.trustZone}` : '',
+      entity.hints.source ? `source ${entity.hints.source}` : '',
+    ].filter(Boolean).join(' · ') || 'Hints, trust, and operating posture.',
+    titleFacts: [
+      entity.trustZone || '',
+      entity.hints.source || '',
+      entity.hints.delegation_gating || '',
+    ].filter(Boolean),
+    widgetFacts: [
+      entity.trustZone ? { label: 'Trust', value: entity.trustZone } : null,
+      entity.hints.source ? { label: 'Source', value: entity.hints.source } : null,
+      entity.hints.delegation_gating ? { label: 'Gating', value: entity.hints.delegation_gating } : null,
+    ],
+  });
+  if (entity.hints.mission) appendSchemaRow(profile.body, 'mission', entity.hints.mission);
+  if (entity.hints.source) appendSchemaRow(profile.body, 'source hint', entity.hints.source);
+  if (entity.hints.delegation_gating) appendSchemaRow(profile.body, 'delegation gating', entity.hints.delegation_gating);
+  if (entity.trustZone) appendSchemaRow(profile.body, 'trust zone', entity.trustZone);
+
+  const extraHints = objectEntriesExcluding(entity.hints, ['mission', 'source', 'delegation_gating']);
+  if (extraHints.length > 0) {
+    const wrap = document.createElement('div');
+    wrap.className = 'schema-map';
+    for (const [key, value] of extraHints) {
+      const item = document.createElement('span');
+      item.className = 'schema-map__item';
+      item.textContent = key + '=' + value;
+      wrap.appendChild(item);
+    }
+    appendSchemaRow(profile.body, 'extra hints', wrap, { multiline: true });
+  }
+
+  const extraMetadata = objectEntriesExcluding(entity.metadata, ['category', 'subsystem', 'trust_zone', 'delegate_task', 'delegate_guidance', 'delegate_profile']);
+  if (extraMetadata.length > 0) {
+    const wrap = document.createElement('div');
+    wrap.className = 'schema-map';
+    for (const [key, value] of extraMetadata) {
+      const item = document.createElement('span');
+      item.className = 'schema-map__item';
+      item.textContent = key + '=' + value;
+      wrap.appendChild(item);
+    }
+    appendSchemaRow(profile.body, 'metadata', wrap, { multiline: true });
+  }
+
+  const delegateTask = entity.metadata.delegate_task || '';
+  const delegateGuidance = entity.metadata.delegate_guidance || '';
+  const delegateProfile = entity.metadata.delegate_profile || '';
+  if (delegateTask || delegateGuidance || delegateProfile) {
+    if (delegateProfile) appendSchemaRow(profile.body, 'delegate profile', delegateProfile);
+    if (delegateTask) appendSchemaRow(profile.body, 'delegate task', delegateTask, { multiline: true });
+    if (delegateGuidance) appendSchemaRow(profile.body, 'delegate guidance', delegateGuidance, { multiline: true });
+  }
+
+  detailEntity.appendChild(tooling.card);
+  const activity = makeSchemaCard('Activity', 'Recent rhythm and iteration history', {
+    entityKind: entity.kind,
+    key: 'activity',
+    titleSummary: [
+      entity.iterations ? `${formatNumber(entity.iterations)} iterations` : 'No iterations yet',
+      entity.attempts ? `${formatNumber(entity.attempts)} attempts` : '',
+      lastWakeAgo ? `wake ${lastWakeAgo}` : '',
+    ].filter(Boolean).join(' · '),
+    titleFacts: [
+      entity.latestSnapshot && entity.latestSnapshot.completed_at ? 'recent snapshot' : '',
+      entity.lastError ? 'last error present' : '',
+    ].filter(Boolean),
+    widgetFacts: [
+      { label: 'Iterations', value: formatNumber(entity.iterations) },
+      { label: 'Attempts', value: formatNumber(entity.attempts) },
+      { label: 'Last wake', value: lastWakeAgo || 'pending' },
+      { label: 'Errors', value: formatNumber(entity.consecutiveErrors || 0) },
+    ],
+  });
+  const aggregates = document.createElement('div');
+  aggregates.className = 'detail-aggregates';
+  renderAggregates(loop, aggregates);
+  activity.body.appendChild(aggregates);
+
+  if (entity.latestSnapshot) {
+    const latestWrap = document.createElement('div');
+    latestWrap.className = 'loop-turn-brief';
+    const latestSummary = document.createElement('div');
+    latestSummary.className = 'loop-turn-brief__summary';
+    latestSummary.textContent = entity.lastError
+      ? 'Most recent recorded turn ended with an error. Use the request chip below to inspect prompt and tool-call detail.'
+      : 'Most recent recorded turn gives the best quick read on how this loop has been behaving recently.';
+    latestWrap.appendChild(latestSummary);
+
+    const latestGrid = document.createElement('div');
+    latestGrid.className = 'loop-turn-brief__grid';
+    const latestFacts = [
+      { label: 'Iteration', value: '#' + formatNumber(entity.latestSnapshot.number || entity.iterations || 0) },
+      { label: 'Request', value: entity.latestSnapshot.request_id ? shortID(entity.latestSnapshot.request_id) : 'pending' },
+      { label: 'Model', value: entity.latestSnapshot.model ? shortModelName(entity.latestSnapshot.model) : latestModelLabel },
+      { label: 'Duration', value: entity.latestSnapshot.elapsed_ms ? formatDuration(entity.latestSnapshot.elapsed_ms) : 'pending' },
+      { label: 'Input', value: entity.latestSnapshot.input_tokens ? formatTokens(entity.latestSnapshot.input_tokens) : '0' },
+      { label: 'Output', value: entity.latestSnapshot.output_tokens ? formatTokens(entity.latestSnapshot.output_tokens) : '0' },
+    ];
+    for (const item of latestFacts) {
+      const cell = document.createElement('div');
+      cell.className = 'loop-turn-brief__metric';
+      const value = document.createElement('div');
+      value.className = 'loop-turn-brief__metric-value';
+      value.textContent = item.value;
+      cell.appendChild(value);
+      const label = document.createElement('div');
+      label.className = 'loop-turn-brief__metric-label';
+      label.textContent = item.label;
+      cell.appendChild(label);
+      latestGrid.appendChild(cell);
+    }
+    latestWrap.appendChild(latestGrid);
+    activity.body.appendChild(latestWrap);
+  }
+
+  const timeline = document.createElement('div');
+  timeline.className = 'iter-timeline';
+  renderTimeline(loop, timeline, state.iterationHistory.get(loop.id) || [], loop.id, state.sleepTimers);
+  activity.body.appendChild(timeline);
+
+  if (conversationBacked) {
+    detailEntity.appendChild(execution.card);
+    detailEntity.appendChild(activity.card);
+    detailEntity.appendChild(relationships.card);
+    detailEntity.appendChild(profile.card);
+    detailEntity.appendChild(identity.card);
+    return;
+  }
+
+  detailEntity.appendChild(execution.card);
+  detailEntity.appendChild(activity.card);
+  detailEntity.appendChild(relationships.card);
+  detailEntity.appendChild(profile.card);
+  detailEntity.appendChild(identity.card);
+}
+
+function buildLoopContextMenu(loop) {
+  const entity = buildLoopEntity(loop);
+  const primaryConvID = getLoopPrimaryConversationID(entity);
+  const items = [
+    { label: 'kind: ' + entity.kind, disabled: true },
+    { label: 'visual: ' + entity.categoryLabel + ' · ' + entity.categorySource, disabled: true },
+    { label: 'relation: ' + entity.relation + (entity.parentID ? ' · parent ' + shortID(entity.parentID) : ' · anchored to core'), disabled: true },
+    primaryConvID ? { label: 'conversation: ' + shortID(primaryConvID), disabled: true } : null,
+    entity.trustZone ? { label: 'trust: ' + entity.trustZone, disabled: true } : null,
+    { separator: true },
+  ].filter(Boolean);
+  if (!loop.id.startsWith('delegate-')) {
+    items.push({ label: 'Open live forensics', action: () => openDetailWindow('loop', loop.id) });
+  }
+  if (entity.latestRequestID) {
+    items.push({ label: 'Open request window', action: () => openRequestWindow(entity.latestRequestID) });
+  }
+  if (entity.parentID && state.loops.has(entity.parentID)) {
+    items.push({ label: 'Select parent loop', action: () => selectLoop(entity.parentID) });
+  } else if (!entity.parentID && state.system) {
+    items.push({ label: 'Select core anchor', action: () => selectSystem() });
+  }
+  if (entity.latestRequestID && typeof window.onRequestChipClick === 'function') {
+    items.push({ label: 'Open request in pane', action: () => showRequestDetail(entity.latestRequestID) });
+  }
+  items.push({ separator: true });
+  items.push({ label: 'Copy node JSON', action: () => { void copyLoopEntityJSON(loop); } });
+  items.push({ label: 'Copy loop ID', action: () => navigator.clipboard.writeText(entity.loopID) });
+  if (entity.parentID) {
+    items.push({ label: 'Copy parent loop ID', action: () => navigator.clipboard.writeText(entity.parentID) });
+  }
+  if (primaryConvID) {
+    items.push({ label: 'Copy conversation ID', action: () => navigator.clipboard.writeText(primaryConvID) });
+  }
+  if (entity.latestRequestID) {
+    items.push({ label: 'Copy latest request ID', action: () => navigator.clipboard.writeText(entity.latestRequestID) });
+  }
+  return items;
+}
+
+function buildSystemNodeTitle(sys) {
+  const entity = buildSystemEntity(sys || state.system || {});
+  return [
+    entity.title,
+    'Kind: ' + entity.kind,
+    'Status: ' + formatSchemaToken(entity.state),
+    'Topology: ' + formatNumber(entity.liveLoopCount) + ' loops · ' + formatNumber(entity.rootLoopCount) + ' roots',
+    'Services: ' + entity.readyCount + '/' + entity.serviceCount + ' ready',
+    'Routing: ' + entity.routingMode + (entity.defaultModel ? ' (' + entity.defaultModel + ')' : ''),
+  ].join('\n');
+}
+
+function buildSystemContextMenu(sys) {
+  const entity = buildSystemEntity(sys || state.system || {});
+  return [
+    { label: 'kind: ' + entity.kind, disabled: true },
+    { label: 'status: ' + formatSchemaToken(entity.state), disabled: true },
+    { label: 'topology: ' + formatNumber(entity.liveLoopCount) + ' loops · ' + formatNumber(entity.rootLoopCount) + ' roots', disabled: true },
+    { label: 'services: ' + entity.readyCount + '/' + entity.serviceCount + ' ready', disabled: true },
+    { label: 'routing: ' + entity.routingMode + (entity.defaultModel ? ' · ' + entity.defaultModel : ''), disabled: true },
+    { separator: true },
+    { label: 'Open core window', action: () => openDetailWindow('system') },
+    { label: 'Open toolbox window', action: () => openRegistryWindow('toolbox') },
+    { label: 'Open model registry', action: () => openRegistryWindow('models') },
+    { label: 'Inspect core', action: () => selectSystem() },
+    { separator: true },
+    { label: 'Copy core JSON', action: () => { void copySystemEntityJSON(sys || state.system || {}); } },
+  ];
+}
+
+function renderDetail(opts = {}) {
+  withPreservedDetailScroll(() => {
+    const isSystem = state.selected === '__system__';
+    const isLoop = state.selected && state.loops.has(state.selected);
+
+    if (isSystem && state.system) {
+      detailPlaceholder.hidden = true;
+      detailContent.hidden = false;
+      renderSystemDetail();
+      return;
+    }
+
+    if (!isLoop) {
+      detailPlaceholder.hidden = false;
+      detailContent.hidden = true;
+      return;
+    }
+
+    detailPlaceholder.hidden = true;
+    detailContent.hidden = false;
+
+    const loop = state.loops.get(state.selected);
+    renderLoopEntityDetail(loop);
+  }, opts);
 }
 
 // renderAggregates, renderTimeline, clearLiveTelemetry are in shared.js.
-
-function formatFuzzy(ms) {
-  const sec = Math.round(ms / 1000);
-  if (sec < 5) return 'moments';
-  if (sec < 60) return 'about ' + sec + 's';
-  const min = Math.floor(sec / 60);
-  const remSec = sec % 60;
-  if (min < 2) return 'about a minute';
-  if (remSec < 15) return min + ' min';
-  return min + ' min ' + remSec + 's';
-}
-
-function renderDetailIDs(loop) {
-  const container = $('#detail-ids');
-  container.innerHTML = '';
-
-  // Loop ID.
-  if (loop.id) {
-    container.appendChild(makeIDRow('loop_id', loop.id));
-  }
-
-  // Parent ID.
-  if (loop.parent_id) {
-    container.appendChild(makeIDRow('parent_id', loop.parent_id));
-  }
-
-  // Active conversation ID (from current iteration).
-  if (loop._currentConvID) {
-    container.appendChild(makeIDRow('conv_id', loop._currentConvID));
-  }
-
-  // Recent conversation IDs — skip for handler-only loops where the
-  // IDs are just iteration counters with no associated LLM conversation.
-  const convs = loop.recent_conv_ids;
-  const MAX_VISIBLE_CONVS = 5;
-  if (convs && convs.length > 0 && (!loop.handler_only || getLoopCategory(loop) === 'delegate')) {
-    const row = document.createElement('div');
-    row.className = 'id-row';
-
-    const label = document.createElement('span');
-    label.className = 'id-label';
-    label.textContent = 'recent';
-    row.appendChild(label);
-
-    const chips = document.createElement('span');
-    chips.className = 'id-convs';
-    const visible = convs.slice(0, MAX_VISIBLE_CONVS);
-    for (const cid of visible) {
-      chips.appendChild(makeIDChip(cid));
-    }
-    if (convs.length > MAX_VISIBLE_CONVS) {
-      const more = document.createElement('span');
-      more.className = 'id-chip id-chip--muted';
-      more.textContent = '+' + (convs.length - MAX_VISIBLE_CONVS);
-      chips.appendChild(more);
-    }
-    row.appendChild(chips);
-    container.appendChild(row);
-  }
-}
-
-// ---------------------------------------------------------------------------
-// Rendering — Delegate Detail
-// ---------------------------------------------------------------------------
-
-function renderDelegateDetail(loop) {
-  const container = $('#detail-delegate');
-  const meta = (loop.config && loop.config.Metadata) || {};
-  const isSynthetic = !!loop._delegate;
-  const isRealDelegate = !isSynthetic && getLoopCategory(loop) === 'delegate';
-  if (!isSynthetic && !isRealDelegate) {
-    container.hidden = true;
-    return;
-  }
-  container.hidden = false;
-  container.innerHTML = '';
-
-  const taskText = isSynthetic ? loop._delegateTask : (meta.delegate_task || '');
-  const guidanceText = isSynthetic ? loop._delegateGuidance : (meta.delegate_guidance || '');
-  const profileText = isSynthetic ? loop._delegateProfile : (meta.delegate_profile || '');
-  const tags = isSynthetic ? (loop._delegateTags || []) : (((loop.config && loop.config.Tags) || []).slice());
-  const latestSnap = (state.iterationHistory.get(loop.id) || [])[0] || null;
-  const latestSummary = (latestSnap && latestSnap.summary) || {};
-  const exhausted = isSynthetic ? !!loop._delegateExhausted : !!latestSummary.delegate_exhausted;
-  const exhaustReason = isSynthetic ? (loop._delegateExhaustReason || '') : (latestSummary.delegate_finish_reason || '');
-  const iterCount = isSynthetic ? (loop._delegateIterations || 0) : (latestSummary.delegate_iterations || loop.iterations || 0);
-  const durationMs = isSynthetic
-    ? (loop._delegateDurationMs || 0)
-    : ((latestSnap && latestSnap.elapsed_ms) || 0);
-
-  // Task.
-  if (taskText) {
-    const taskEl = document.createElement('div');
-    taskEl.className = 'delegate-field';
-    const label = document.createElement('span');
-    label.className = 'delegate-label';
-    label.textContent = 'Task';
-    taskEl.appendChild(label);
-    const val = document.createElement('span');
-    val.className = 'delegate-value delegate-task';
-    val.textContent = taskText;
-    taskEl.appendChild(val);
-    container.appendChild(taskEl);
-  }
-
-  // Guidance.
-  if (guidanceText) {
-    const guidEl = document.createElement('div');
-    guidEl.className = 'delegate-field';
-    const label = document.createElement('span');
-    label.className = 'delegate-label';
-    label.textContent = 'Guidance';
-    guidEl.appendChild(label);
-    const val = document.createElement('span');
-    val.className = 'delegate-value';
-    val.textContent = guidanceText;
-    guidEl.appendChild(val);
-    container.appendChild(guidEl);
-  }
-
-  // Profile + tags row.
-  const metaRow = document.createElement('div');
-  metaRow.className = 'delegate-meta';
-  if (profileText) {
-    const chip = document.createElement('span');
-    chip.className = 'tag-chip';
-    chip.textContent = profileText;
-    metaRow.appendChild(chip);
-  }
-  if (tags.length > 0) {
-    for (const tag of tags) {
-      const chip = document.createElement('span');
-      chip.className = 'tag-chip tag-chip--muted';
-      chip.textContent = tag;
-      metaRow.appendChild(chip);
-    }
-  }
-  if (metaRow.children.length > 0) container.appendChild(metaRow);
-
-  // Completion result (shown after delegate finishes).
-  if (loop.state === 'completed' || loop.state === 'error' || loop.state === 'stopped') {
-    const resultEl = document.createElement('div');
-    let resultClass = 'delegate-result--ok';
-    let icon = '\u2713';
-    let status = 'Succeeded';
-
-    if (loop.state === 'stopped') {
-      resultClass = 'delegate-result--neutral';
-      icon = '\u25a0';
-      status = exhaustReason ? 'Stopped \u2014 ' + exhaustReason : 'Stopped';
-    } else if (loop.state === 'error' || exhausted) {
-      resultClass = 'delegate-result--failed';
-      icon = '\u2717';
-      status = exhausted
-        ? 'Failed' + (exhaustReason ? ' \u2014 ' + exhaustReason : '')
-        : 'Failed';
-    }
-
-    resultEl.className = 'delegate-result ' + resultClass;
-
-    const parts = [icon + ' ' + status];
-    if (iterCount > 0) parts.push(iterCount + ' iter');
-    if (durationMs > 0) parts.push(formatFuzzy(durationMs));
-    resultEl.textContent = parts.join(' \u00b7 ');
-    container.appendChild(resultEl);
-  }
-}
 
 // makeIDRow, makeIDChip, shortID, shortModelName, buildToolCounts,
 // escapeHTML, truncate are in shared.js.
@@ -1506,19 +4473,22 @@ function renderLogs(entries) {
   renderLogRows(entries, { logEmpty, logScroll, logBody });
 }
 
+function showLogHint(message) {
+  logBody.innerHTML = '';
+  logScroll.hidden = true;
+  logEmpty.hidden = false;
+  logEmpty.querySelector('p').textContent = message;
+}
+
 // ---------------------------------------------------------------------------
 // Selection
 // ---------------------------------------------------------------------------
 
 function selectLoop(loopId) {
-  clearInterval(systemLogInterval);
-  systemLogInterval = null;
   if (state.selected === loopId) {
     // Deselect.
     state.selected = null;
-    logEmpty.hidden = false;
-    logEmpty.querySelector('p').textContent = 'Click a loop node to load logs';
-    logScroll.hidden = true;
+    showLogHint('Select a loop node to inspect its diagnostic tail');
   } else {
     state.selected = loopId;
     fetchLogs(loopId);
@@ -1526,36 +4496,31 @@ function selectLoop(loopId) {
   renderAll();
 }
 
-let systemLogInterval = null;
+function focusLoop(loopId) {
+  if (!loopId) return;
+  if (state.selected !== loopId) {
+    state.selected = loopId;
+    fetchLogs(loopId);
+    renderAll();
+  }
+}
 
 function selectSystem() {
-  clearInterval(systemLogInterval);
-  systemLogInterval = null;
   if (state.selected === '__system__') {
     state.selected = null;
-    logEmpty.hidden = false;
-    logEmpty.querySelector('p').textContent = 'Click a loop node to load logs';
-    logScroll.hidden = true;
+    showLogHint('Select a loop node to inspect its diagnostic tail');
   } else {
     state.selected = '__system__';
-    fetchSystemLogs();
-    systemLogInterval = setInterval(fetchSystemLogs, 10000);
+    showLogHint('Logs in the dashboard are node-scoped. Select a loop to inspect its diagnostic tail.');
   }
   renderAll();
 }
 
-async function fetchSystemLogs() {
-  const level = $('#log-level').value;
-  let url = '/api/system/logs?limit=100';
-  if (level) url += '&level=' + encodeURIComponent(level);
-
-  try {
-    const resp = await fetch(url);
-    if (!resp.ok) return;
-    const data = await resp.json();
-    renderLogs(data.entries || []);
-  } catch (err) {
-    console.warn('Failed to fetch system logs:', err);
+function focusSystem() {
+  if (state.selected !== '__system__') {
+    state.selected = '__system__';
+    showLogHint('Logs in the dashboard are node-scoped. Select a loop to inspect its diagnostic tail.');
+    renderAll();
   }
 }
 
@@ -1563,20 +4528,31 @@ async function fetchSystemLogs() {
 // Animation Loop (sleep countdowns + progress rings)
 // ---------------------------------------------------------------------------
 
-let _lastTickSec = 0;
+let _lastDetailTickMs = 0;
+
+function currentDetailTickIntervalMs() {
+  if (!state.selected || !state.loops.has(state.selected)) return 1000;
+  const loop = state.loops.get(state.selected);
+  if (!loop) return 1000;
+  if (loop.state === 'processing' || loop.state === 'sleeping' || loop.state === 'waiting') {
+    return 250;
+  }
+  return 1000;
+}
 
 function tick() {
   // Physics simulation — run every frame for smooth organic motion.
-  const rect = canvas.getBoundingClientRect();
+  const rect = refreshCanvasViewport() || getLayoutViewportRect();
   if (rect.width > 0 && rect.height > 0) {
-    physicsStep(rect.width / 2, rect.height / 2, rect.width, rect.height);
+    physicsStep(rect.cx, rect.cy, rect.width, rect.height);
+    updatePinnedAnchorPositions();
     updateNodePositions();
   }
 
-  // Throttle detail updates to ~1Hz (sleep countdowns don't need 60fps).
-  const nowSec = Math.floor(Date.now() / 1000);
-  if (nowSec !== _lastTickSec) {
-    _lastTickSec = nowSec;
+  // Keep the selected inspector lively without redrawing at full frame rate.
+  const nowMs = Date.now();
+  if ((nowMs - _lastDetailTickMs) >= currentDetailTickIntervalMs()) {
+    _lastDetailTickMs = nowMs;
     if (state.selected && state.loops.has(state.selected)) {
       try { renderDetail(); } catch (e) { console.error('tick renderDetail:', e); }
     }
@@ -1602,9 +4578,11 @@ function tick() {
 
 function refreshLogs() {
   if (state.selected === '__system__') {
-    fetchSystemLogs();
+    showLogHint('Logs in the dashboard are node-scoped. Select a loop to inspect its diagnostic tail.');
   } else if (state.selected) {
     fetchLogs(state.selected);
+  } else {
+    showLogHint('Select a loop node to inspect its diagnostic tail');
   }
 }
 
@@ -1616,27 +4594,101 @@ $('#log-refresh').addEventListener('click', refreshLogs);
 // ---------------------------------------------------------------------------
 
 function toggleInspector() {
-  const panel = document.getElementById('detail-panel');
-  const handle = document.getElementById('resize-v');
-  const btn = document.getElementById('toggle-inspector');
-  const visible = !panel.hidden;
-  panel.hidden = visible;
-  handle.hidden = visible;
-  btn.classList.toggle('toggle-btn--active', !visible);
+  setInspectorVisible(document.getElementById('detail-panel').hidden);
 }
 
 function toggleLogs() {
+  setLogsVisible(document.getElementById('log-panel').hidden);
+}
+
+function setInspectorVisible(visible) {
+  const panel = document.getElementById('detail-panel');
+  const handle = document.getElementById('resize-v');
+  const btn = document.getElementById('toggle-inspector');
+  panel.hidden = !visible;
+  handle.hidden = !visible;
+  btn.classList.toggle('toggle-btn--active', visible);
+  dashboardPrefs.inspectorVisible = visible;
+  saveDashboardPrefs(dashboardPrefs);
+  if (visible) requestAnimationFrame(() => syncAllSchemaCardLayouts());
+}
+
+function setLogsVisible(visible) {
   const panel = document.getElementById('log-panel');
   const handle = document.getElementById('resize-h');
   const btn = document.getElementById('toggle-logs');
-  const visible = !panel.hidden;
-  panel.hidden = visible;
-  handle.hidden = visible;
-  btn.classList.toggle('toggle-btn--active', !visible);
+  panel.hidden = !visible;
+  handle.hidden = !visible;
+  btn.classList.toggle('toggle-btn--active', visible);
+  dashboardPrefs.logsVisible = visible;
+  saveDashboardPrefs(dashboardPrefs);
+}
+
+function setLegendVisible(visible) {
+  if (!legendPanel || !legendBackdrop || !legendToggleBtn) return;
+  legendPanel.hidden = !visible;
+  legendBackdrop.hidden = !visible;
+  legendToggleBtn.classList.toggle('toggle-btn--active', visible);
+}
+
+function toggleLegend() {
+  if (!legendPanel) return;
+  setLegendVisible(legendPanel.hidden);
 }
 
 $('#toggle-inspector').addEventListener('click', toggleInspector);
 $('#toggle-logs').addEventListener('click', toggleLogs);
+legendToggleBtn?.addEventListener('click', toggleLegend);
+legendCloseBtn?.addEventListener('click', () => setLegendVisible(false));
+legendBackdrop?.addEventListener('click', () => setLegendVisible(false));
+
+setInspectorVisible(dashboardPrefs.inspectorVisible);
+setLogsVisible(dashboardPrefs.logsVisible);
+
+if (detailPanel) {
+  detailPanel.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    if (isDetailInteractiveTarget(e.target)) {
+      bumpDetailInteractionHold(450);
+      return;
+    }
+    detailPointerSelectionActive = true;
+    bumpDetailInteractionHold(DETAIL_POINTER_GUARD_MS);
+  });
+
+  detailPanel.addEventListener('pointerover', (e) => {
+    if (!isDetailInteractiveTarget(e.target)) return;
+    detailInteractiveHoverActive = true;
+    bumpDetailInteractionHold(120);
+  });
+
+  detailPanel.addEventListener('pointerout', (e) => {
+    if (!isDetailInteractiveTarget(e.target)) return;
+    if (isDetailInteractiveTarget(e.relatedTarget)) return;
+    detailInteractiveHoverActive = false;
+    bumpDetailInteractionHold(90);
+  });
+
+  detailPanel.addEventListener('pointerleave', () => {
+    detailInteractiveHoverActive = false;
+  });
+
+  detailPanel.addEventListener('copy', () => {
+    bumpDetailInteractionHold(DETAIL_COPY_GUARD_MS);
+  });
+}
+
+document.addEventListener('pointerup', () => {
+  if (!detailPointerSelectionActive) return;
+  detailPointerSelectionActive = false;
+  bumpDetailInteractionHold(DETAIL_SELECTION_RELEASE_MS);
+});
+
+document.addEventListener('selectionchange', () => {
+  if (detailTextSelectionActive()) {
+    bumpDetailInteractionHold(DETAIL_SELECTION_RELEASE_MS);
+  }
+});
 
 // ---------------------------------------------------------------------------
 // Context Menu
@@ -1656,10 +4708,14 @@ function showContextMenu(clientX, clientY, items) {
     }
     const li = document.createElement('li');
     li.textContent = item.label;
-    li.addEventListener('click', () => {
-      hideContextMenu();
-      item.action();
-    });
+    if (item.disabled) {
+      li.className = 'context-menu-item context-menu-item--disabled';
+    } else {
+      li.addEventListener('click', () => {
+        hideContextMenu();
+        item.action();
+      });
+    }
     contextMenuItems.appendChild(li);
   }
 
@@ -1694,14 +4750,47 @@ function openDetailWindow(type, id) {
     ? '?type=system'
     : '?type=loop&id=' + encodeURIComponent(id);
   const name = type === 'system'
-    ? 'Runtime'
+    ? 'Core'
     : (state.loops.get(id)?.name || id?.slice(0, 8) || 'Loop');
+  const title = type === 'system' ? name : name + ' forensics';
   const w = window.open(
     '/static/detail.html' + params + '&name=' + encodeURIComponent(name),
-    'detail-' + (id || 'system'),
-    'popup=yes,width=900,height=450'
+    (type === 'system' ? 'detail-' : 'forensics-') + (id || 'system'),
+    type === 'system'
+      ? 'popup=yes,width=900,height=450'
+      : 'popup=yes,width=1380,height=920'
   );
   // Set title once loaded (cross-origin safe since same origin).
+  if (w) {
+    w.addEventListener('load', () => {
+      w.document.title = 'Thane \u00b7 ' + title;
+    });
+  }
+}
+
+function openRegistryWindow(registry) {
+  const key = String(registry || 'toolbox').trim().toLowerCase();
+  const name = key === 'models' ? 'Model Registry' : key === 'scheduled' ? 'Scheduled Loops' : 'Toolbox & Capabilities';
+  const w = window.open(
+    '/static/registry.html?registry=' + encodeURIComponent(key),
+    'registry-' + key,
+    'popup=yes,width=1280,height=920'
+  );
+  if (w) {
+    w.addEventListener('load', () => {
+      w.document.title = 'Thane \u00b7 ' + name;
+    });
+  }
+}
+
+function openRequestWindow(requestID) {
+  if (!requestID) return;
+  const name = 'Request ' + shortID(requestID);
+  const w = window.open(
+    '/static/request.html?id=' + encodeURIComponent(requestID),
+    'request-' + requestID,
+    'popup=yes,width=1180,height=860'
+  );
   if (w) {
     w.addEventListener('load', () => {
       w.document.title = 'Thane \u00b7 ' + name;
@@ -1725,11 +4814,15 @@ document.addEventListener('keydown', (e) => {
     case 'l':
       toggleLogs();
       break;
+    case '?':
+      toggleLegend();
+      break;
     case 'escape':
       if (activeRequestID) {
         closeRequestDetail();
       }
       hideContextMenu();
+      setLegendVisible(false);
       break;
   }
 });
@@ -1823,6 +4916,7 @@ function updateUptime() {
       const newWidth = mainRect.right - e.clientX;
       const clamped = Math.max(200, Math.min(newWidth, mainRect.width - 200));
       detailPanel.style.width = clamped + 'px';
+      syncAllSchemaCardLayouts();
     } else if (dragging === 'h') {
       // Log panel is at the bottom — height = distance from mouse to bottom of body
       // minus footer height.
@@ -1845,6 +4939,32 @@ function updateUptime() {
     document.body.classList.remove('resize-col', 'resize-row');
     dragging = null;
   });
+})();
+
+(function initInspectorCardObserver() {
+  if (typeof ResizeObserver === 'undefined' || !detailPanel) return;
+  const observer = new ResizeObserver(() => {
+    if (detailPanel.hidden) return;
+    syncAllSchemaCardLayouts();
+  });
+  observer.observe(detailPanel);
+})();
+
+// Keep the graph responsive to real canvas size changes, including panel
+// toggles and drag-resizing, not just top-level window resizes.
+(function initCanvasViewportObserver() {
+  const canvasPanel = document.getElementById('canvas-panel');
+  const syncViewport = () => {
+    refreshCanvasViewport();
+    updateNodePositions();
+  };
+
+  if (typeof ResizeObserver !== 'undefined' && canvasPanel) {
+    const observer = new ResizeObserver(() => syncViewport());
+    observer.observe(canvasPanel);
+  }
+
+  window.addEventListener('resize', syncViewport);
 })();
 
 // ---------------------------------------------------------------------------
@@ -1949,10 +5069,22 @@ let activeRequestID = null;
 
 // Cached raw detail JSON for copy-as-JSON feature.
 let activeRequestJSON = null;
+let requestDetailAvailable = null;
 
 // AbortController for in-flight request detail fetches. Prevents stale
 // data from overwriting the panel when the user clicks rapidly.
 let requestDetailAbort = null;
+
+function inspectRequest(requestID) {
+  if (!requestID) return;
+  if (requestDetailAvailable === false) {
+    openRequestWindow(requestID);
+    return;
+  }
+  void showRequestDetail(requestID);
+}
+
+window.onRequestChipClick = inspectRequest;
 
 async function showRequestDetail(requestID) {
   if (!requestID) return;
@@ -1974,6 +5106,12 @@ async function showRequestDetail(requestID) {
     if (requestDetailAbort !== controller) return;
 
     if (!resp.ok) {
+      if (resp.status === 503) {
+        requestDetailAvailable = false;
+        openRequestWindow(requestID);
+        closeRequestDetail();
+        return;
+      }
       if (resp.status === 404) {
         console.warn('Request detail not found:', requestID);
       }
@@ -1992,7 +5130,6 @@ async function showRequestDetail(requestID) {
     // Show the request detail panel, hide others.
     detailPlaceholder.hidden = true;
     detailContent.hidden = true;
-    systemDetail.hidden = true;
     requestDetailPanel.hidden = false;
 
     renderRequestDetail(detail, requestDetailEls);
@@ -2046,19 +5183,18 @@ renderDetail = function() {
 };
 
 // Probe whether content retention is enabled. The callback is only set
-// if the API endpoint is available (not 503), so request ID chips in
+// if the API endpoint reports availability, so request ID chips in
 // shared.js render as plain copy-on-click when retention is disabled.
 async function probeContentRetention() {
   try {
-    // Use a dummy ID — we only care about the status code.
-    const resp = await fetch('/api/requests/_probe');
-    // 404 = endpoint works, no such request. 503 = retention disabled.
-    if (resp.status !== 503) {
-      window.onRequestChipClick = showRequestDetail;
-    }
+    // Use a dedicated probe endpoint shape that always succeeds so
+    // devtools don't fill with intentional 503s when retention is off.
+    const resp = await fetch('/api/request-detail/_probe');
+    requestDetailAvailable = resp.ok && resp.headers.get('X-Request-Detail-Available') === 'true';
   } catch (_) {
-    // Network error — leave chips as non-inspectable.
+    requestDetailAvailable = null;
   }
+  window.onRequestChipClick = inspectRequest;
 }
 
 // ---------------------------------------------------------------------------

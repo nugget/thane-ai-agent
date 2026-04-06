@@ -73,42 +73,45 @@ type RegistryResourceSnapshot struct {
 // RegistryDeploymentSnapshot is the API-facing state for one effective
 // deployment in the merged catalog.
 type RegistryDeploymentSnapshot struct {
-	ID                    string                 `json:"id"`
-	Model                 string                 `json:"model"`
-	ModelType             string                 `json:"model_type,omitempty"`
-	Publisher             string                 `json:"publisher,omitempty"`
-	Provider              string                 `json:"provider"`
-	Resource              string                 `json:"resource"`
-	Source                DeploymentSource       `json:"source"`
-	Routable              bool                   `json:"routable"`
-	RoutableSource        DeploymentPolicySource `json:"routable_source"`
-	CompatibilityType     string                 `json:"compatibility_type,omitempty"`
-	RunnerState           string                 `json:"runner_state,omitempty"`
-	SupportsTools         bool                   `json:"supports_tools,omitempty"`
-	TrainedForToolUse     bool                   `json:"trained_for_tool_use,omitempty"`
-	ProviderSupportsTools bool                   `json:"provider_supports_tools,omitempty"`
-	SupportsStreaming     bool                   `json:"supports_streaming,omitempty"`
-	SupportsImages        bool                   `json:"supports_images,omitempty"`
-	ContextWindow         int                    `json:"context_window,omitempty"`
-	MaxContextWindow      int                    `json:"max_context_window,omitempty"`
-	LoadedContextWindow   int                    `json:"loaded_context_window,omitempty"`
-	LoadedInstanceID      string                 `json:"loaded_instance_id,omitempty"`
-	Speed                 int                    `json:"speed,omitempty"`
-	Quality               int                    `json:"quality,omitempty"`
-	CostTier              int                    `json:"cost_tier,omitempty"`
-	MinComplexity         string                 `json:"min_complexity,omitempty"`
-	Family                string                 `json:"family,omitempty"`
-	Families              []string               `json:"families,omitempty"`
-	ParameterSize         string                 `json:"parameter_size,omitempty"`
-	Quantization          string                 `json:"quantization,omitempty"`
-	PolicyState           DeploymentPolicyState  `json:"policy_state"`
-	PolicySource          DeploymentPolicySource `json:"policy_source"`
-	PolicyReason          string                 `json:"policy_reason,omitempty"`
-	PolicyUpdated         string                 `json:"policy_updated_at,omitempty"`
-	ResourcePolicyState   DeploymentPolicyState  `json:"resource_policy_state"`
-	ResourcePolicySource  DeploymentPolicySource `json:"resource_policy_source"`
-	ResourcePolicyReason  string                 `json:"resource_policy_reason,omitempty"`
-	ResourcePolicyUpdated string                 `json:"resource_policy_updated_at,omitempty"`
+	ID                        string                 `json:"id"`
+	Model                     string                 `json:"model"`
+	ModelType                 string                 `json:"model_type,omitempty"`
+	Publisher                 string                 `json:"publisher,omitempty"`
+	Provider                  string                 `json:"provider"`
+	Resource                  string                 `json:"resource"`
+	Source                    DeploymentSource       `json:"source"`
+	Routable                  bool                   `json:"routable"`
+	RoutableSource            DeploymentPolicySource `json:"routable_source"`
+	CompatibilityType         string                 `json:"compatibility_type,omitempty"`
+	RunnerState               string                 `json:"runner_state,omitempty"`
+	SupportsTools             bool                   `json:"supports_tools,omitempty"`
+	ObservedSupportsTools     bool                   `json:"observed_supports_tools,omitempty"`
+	TrainedForToolUse         bool                   `json:"trained_for_tool_use,omitempty"`
+	ProviderSupportsTools     bool                   `json:"provider_supports_tools,omitempty"`
+	SupportsStreaming         bool                   `json:"supports_streaming,omitempty"`
+	ObservedSupportsStreaming bool                   `json:"observed_supports_streaming,omitempty"`
+	SupportsImages            bool                   `json:"supports_images,omitempty"`
+	ContextWindow             int                    `json:"context_window,omitempty"`
+	ObservedContextWindow     int                    `json:"observed_context_window,omitempty"`
+	MaxContextWindow          int                    `json:"max_context_window,omitempty"`
+	LoadedContextWindow       int                    `json:"loaded_context_window,omitempty"`
+	LoadedInstanceID          string                 `json:"loaded_instance_id,omitempty"`
+	Speed                     int                    `json:"speed,omitempty"`
+	Quality                   int                    `json:"quality,omitempty"`
+	CostTier                  int                    `json:"cost_tier,omitempty"`
+	MinComplexity             string                 `json:"min_complexity,omitempty"`
+	Family                    string                 `json:"family,omitempty"`
+	Families                  []string               `json:"families,omitempty"`
+	ParameterSize             string                 `json:"parameter_size,omitempty"`
+	Quantization              string                 `json:"quantization,omitempty"`
+	PolicyState               DeploymentPolicyState  `json:"policy_state"`
+	PolicySource              DeploymentPolicySource `json:"policy_source"`
+	PolicyReason              string                 `json:"policy_reason,omitempty"`
+	PolicyUpdated             string                 `json:"policy_updated_at,omitempty"`
+	ResourcePolicyState       DeploymentPolicyState  `json:"resource_policy_state"`
+	ResourcePolicySource      DeploymentPolicySource `json:"resource_policy_source"`
+	ResourcePolicyReason      string                 `json:"resource_policy_reason,omitempty"`
+	ResourcePolicyUpdated     string                 `json:"resource_policy_updated_at,omitempty"`
 }
 
 // NewRegistry constructs a registry from the immutable config-defined
@@ -260,42 +263,45 @@ func (r *Registry) Snapshot() *RegistrySnapshot {
 
 	for _, dep := range r.effective.Deployments {
 		snap.Deployments = append(snap.Deployments, RegistryDeploymentSnapshot{
-			ID:                    dep.ID,
-			Model:                 dep.ModelName,
-			ModelType:             dep.ModelType,
-			Publisher:             dep.Publisher,
-			Provider:              dep.Provider,
-			Resource:              dep.ResourceID,
-			Source:                dep.Source,
-			Routable:              dep.Routable,
-			RoutableSource:        dep.RoutableSource,
-			CompatibilityType:     dep.CompatibilityType,
-			RunnerState:           dep.RunnerState,
-			SupportsTools:         dep.SupportsTools,
-			TrainedForToolUse:     dep.TrainedForToolUse,
-			ProviderSupportsTools: dep.ProviderSupportsTools,
-			SupportsStreaming:     dep.SupportsStreaming,
-			SupportsImages:        dep.SupportsImages,
-			ContextWindow:         dep.ContextWindow,
-			MaxContextWindow:      dep.MaxContextWindow,
-			LoadedContextWindow:   dep.LoadedContextWindow,
-			LoadedInstanceID:      dep.LoadedInstanceID,
-			Speed:                 dep.Speed,
-			Quality:               dep.Quality,
-			CostTier:              dep.CostTier,
-			MinComplexity:         dep.MinComplexity,
-			Family:                dep.Family,
-			Families:              append([]string(nil), dep.Families...),
-			ParameterSize:         dep.ParameterSize,
-			Quantization:          dep.Quantization,
-			PolicyState:           dep.PolicyState,
-			PolicySource:          dep.PolicySource,
-			PolicyReason:          dep.PolicyReason,
-			PolicyUpdated:         formatPolicyTime(dep.PolicyUpdatedAt),
-			ResourcePolicyState:   dep.ResourcePolicyState,
-			ResourcePolicySource:  dep.ResourcePolicySource,
-			ResourcePolicyReason:  dep.ResourcePolicyReason,
-			ResourcePolicyUpdated: formatPolicyTime(dep.ResourcePolicyUpdatedAt),
+			ID:                        dep.ID,
+			Model:                     dep.ModelName,
+			ModelType:                 dep.ModelType,
+			Publisher:                 dep.Publisher,
+			Provider:                  dep.Provider,
+			Resource:                  dep.ResourceID,
+			Source:                    dep.Source,
+			Routable:                  dep.Routable,
+			RoutableSource:            dep.RoutableSource,
+			CompatibilityType:         dep.CompatibilityType,
+			RunnerState:               dep.RunnerState,
+			SupportsTools:             dep.SupportsTools,
+			ObservedSupportsTools:     dep.ObservedSupportsTools,
+			TrainedForToolUse:         dep.TrainedForToolUse,
+			ProviderSupportsTools:     dep.ProviderSupportsTools,
+			SupportsStreaming:         dep.SupportsStreaming,
+			ObservedSupportsStreaming: dep.ObservedSupportsStreaming,
+			SupportsImages:            dep.SupportsImages,
+			ContextWindow:             dep.ContextWindow,
+			ObservedContextWindow:     dep.ObservedContextWindow,
+			MaxContextWindow:          dep.MaxContextWindow,
+			LoadedContextWindow:       dep.LoadedContextWindow,
+			LoadedInstanceID:          dep.LoadedInstanceID,
+			Speed:                     dep.Speed,
+			Quality:                   dep.Quality,
+			CostTier:                  dep.CostTier,
+			MinComplexity:             dep.MinComplexity,
+			Family:                    dep.Family,
+			Families:                  append([]string(nil), dep.Families...),
+			ParameterSize:             dep.ParameterSize,
+			Quantization:              dep.Quantization,
+			PolicyState:               dep.PolicyState,
+			PolicySource:              dep.PolicySource,
+			PolicyReason:              dep.PolicyReason,
+			PolicyUpdated:             formatPolicyTime(dep.PolicyUpdatedAt),
+			ResourcePolicyState:       dep.ResourcePolicyState,
+			ResourcePolicySource:      dep.ResourcePolicySource,
+			ResourcePolicyReason:      dep.ResourcePolicyReason,
+			ResourcePolicyUpdated:     formatPolicyTime(dep.ResourcePolicyUpdatedAt),
 		})
 	}
 

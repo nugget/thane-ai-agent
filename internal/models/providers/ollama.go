@@ -340,18 +340,7 @@ func (c *OllamaClient) ChatStream(ctx context.Context, model string, messages []
 // extractToolNames extracts tool names from the tools definition.
 // Tools are expected to be in OpenAI/Ollama format with function.name.
 func extractToolNames(tools []map[string]any) []string {
-	if len(tools) == 0 {
-		return nil
-	}
-	names := make([]string, 0, len(tools))
-	for _, tool := range tools {
-		if fn, ok := tool["function"].(map[string]any); ok {
-			if name, ok := fn["name"].(string); ok && name != "" {
-				names = append(names, name)
-			}
-		}
-	}
-	return names
+	return llm.ExtractToolNames(tools)
 }
 
 // looksLikeToolCall checks if accumulated stream content might be a text-based
@@ -361,24 +350,7 @@ func extractToolNames(tools []map[string]any) []string {
 // stripTrailingToolCallJSON removes JSON tool call objects appended to the end
 // of prose content. Returns the cleaned prose (or original if no trailing JSON found).
 func stripTrailingToolCallJSON(content string, validTools []string) string {
-	lastBrace := strings.LastIndex(content, "{")
-	if lastBrace <= 0 {
-		return content
-	}
-	jsonPart := strings.TrimSpace(content[lastBrace:])
-	var obj struct {
-		Name      string         `json:"name"`
-		Arguments map[string]any `json:"arguments"`
-	}
-	if err := json.Unmarshal([]byte(jsonPart), &obj); err != nil || obj.Name == "" {
-		return content
-	}
-	// It's a tool call shape — strip it regardless of whether the name is valid
-	cleaned := strings.TrimSpace(content[:lastBrace])
-	if cleaned == "" {
-		return content // Don't strip if there's no prose left
-	}
-	return cleaned
+	return llm.StripTrailingToolCallText(content, validTools, llm.DefaultToolCallTextProfile())
 }
 
 // looksLikeHallucinatedToolCall checks if content is JSON with "name" and "arguments"
@@ -386,33 +358,11 @@ func stripTrailingToolCallJSON(content string, validTools []string) string {
 // (meaning the tool name is invalid). This is a hallucinated tool call that should
 // be suppressed rather than shown to the user.
 func looksLikeHallucinatedToolCall(content string) bool {
-	trimmed := strings.TrimSpace(content)
-	if trimmed == "" || trimmed[0] != '{' {
-		return false
-	}
-	var obj map[string]any
-	if err := json.Unmarshal([]byte(trimmed), &obj); err != nil {
-		return false
-	}
-	_, hasName := obj["name"]
-	_, hasArgs := obj["arguments"]
-	return hasName && hasArgs
+	return llm.LooksLikeHallucinatedToolCall(content, llm.DefaultToolCallTextProfile())
 }
 
 func looksLikeToolCall(content string) bool {
-	trimmed := strings.TrimSpace(content)
-	if trimmed == "" {
-		return false
-	}
-	// JSON object that might contain "name" — common tool call format
-	if trimmed[0] == '{' {
-		return true
-	}
-	// <tool_call> tag format
-	if strings.HasPrefix(trimmed, "<tool_call>") || strings.HasPrefix(trimmed, "<tool") {
-		return true
-	}
-	return false
+	return llm.LooksLikeTextToolCall(content, llm.DefaultToolCallTextProfile())
 }
 
 // parseTextToolCalls attempts to extract tool calls from content text.
@@ -426,158 +376,7 @@ func looksLikeToolCall(content string) bool {
 // This prevents false positives when models output JSON that happens to have
 // name/arguments fields but isn't meant to be a tool call.
 func parseTextToolCalls(content string, validTools []string) []llm.ToolCall {
-	content = strings.TrimSpace(content)
-	if content == "" {
-		return nil
-	}
-
-	// Try to extract from <tool_call> tags
-	if strings.Contains(content, "<tool_call>") {
-		start := strings.Index(content, "<tool_call>")
-		end := strings.Index(content, "</tool_call>")
-		if start != -1 && end > start {
-			content = strings.TrimSpace(content[start+len("<tool_call>") : end])
-		} else if start != -1 {
-			// No closing tag, take rest of content
-			content = strings.TrimSpace(content[start+len("<tool_call>"):])
-		}
-	}
-
-	var result []llm.ToolCall
-
-	// Try parsing as array of tool calls
-	var calls []struct {
-		Name      string         `json:"name"`
-		Arguments map[string]any `json:"arguments"`
-	}
-	if err := json.Unmarshal([]byte(content), &calls); err == nil && len(calls) > 0 {
-		for _, c := range calls {
-			if c.Name == "" {
-				continue
-			}
-			if !isValidTool(c.Name, validTools) {
-				continue
-			}
-			result = append(result, llm.ToolCall{
-				Function: struct {
-					Name      string         `json:"name"`
-					Arguments map[string]any `json:"arguments"`
-				}{
-					Name:      c.Name,
-					Arguments: c.Arguments,
-				},
-			})
-		}
-		return result
-	}
-
-	// Try parsing as single tool call object
-	var single struct {
-		Name      string         `json:"name"`
-		Arguments map[string]any `json:"arguments"`
-	}
-	if err := json.Unmarshal([]byte(content), &single); err == nil && single.Name != "" {
-		if isValidTool(single.Name, validTools) {
-			return []llm.ToolCall{{
-				Function: struct {
-					Name      string         `json:"name"`
-					Arguments map[string]any `json:"arguments"`
-				}{
-					Name:      single.Name,
-					Arguments: single.Arguments,
-				},
-			}}
-		}
-	}
-
-	// Try parsing concatenated JSON objects: {"name":"a","arguments":{}}{"name":"b","arguments":{}}
-	// Common with qwen and other models that emit multiple tool calls as adjacent JSON blobs.
-	if strings.Count(content, `"name"`) > 1 && strings.Contains(content, "}{") {
-		dec := json.NewDecoder(strings.NewReader(content))
-		for dec.More() {
-			var tc struct {
-				Name      string         `json:"name"`
-				Arguments map[string]any `json:"arguments"`
-			}
-			if err := dec.Decode(&tc); err != nil {
-				break
-			}
-			if tc.Name != "" && isValidTool(tc.Name, validTools) {
-				result = append(result, llm.ToolCall{
-					Function: struct {
-						Name      string         `json:"name"`
-						Arguments map[string]any `json:"arguments"`
-					}{
-						Name:      tc.Name,
-						Arguments: tc.Arguments,
-					},
-				})
-			}
-		}
-		if len(result) > 0 {
-			return result
-		}
-	}
-
-	// Try parsing "tool_name {json_args}" format (common with some models)
-	// e.g., "find_entity {"description": "access point LED", "area": "office"}"
-	for _, toolName := range validTools {
-		prefix := toolName + " "
-		if strings.HasPrefix(content, prefix) {
-			argsJSON := strings.TrimPrefix(content, prefix)
-			// Try to find where the JSON ends (handle trailing text)
-			argsJSON = strings.TrimSpace(argsJSON)
-
-			// Find the matching closing brace
-			if strings.HasPrefix(argsJSON, "{") {
-				depth := 0
-				endIdx := -1
-				for i, c := range argsJSON {
-					if c == '{' {
-						depth++
-					} else if c == '}' {
-						depth--
-						if depth == 0 {
-							endIdx = i + 1
-							break
-						}
-					}
-				}
-				if endIdx > 0 {
-					argsJSON = argsJSON[:endIdx]
-				}
-			}
-
-			var args map[string]any
-			if err := json.Unmarshal([]byte(argsJSON), &args); err == nil {
-				return []llm.ToolCall{{
-					Function: struct {
-						Name      string         `json:"name"`
-						Arguments map[string]any `json:"arguments"`
-					}{
-						Name:      toolName,
-						Arguments: args,
-					},
-				}}
-			}
-		}
-	}
-
-	return nil
-}
-
-// isValidTool checks if a tool name is in the valid tools list.
-// Returns true if validTools is nil or empty (no validation).
-func isValidTool(name string, validTools []string) bool {
-	if len(validTools) == 0 {
-		return true
-	}
-	for _, v := range validTools {
-		if v == name {
-			return true
-		}
-	}
-	return false
+	return llm.ParseTextToolCalls(content, validTools, llm.DefaultToolCallTextProfile())
 }
 
 // Ping checks if Ollama is reachable.

@@ -44,6 +44,9 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/router"
 	"github.com/nugget/thane-ai-agent/internal/scheduler"
 	"github.com/nugget/thane-ai-agent/internal/server/api"
+	"github.com/nugget/thane-ai-agent/internal/telemetry"
+	"github.com/nugget/thane-ai-agent/internal/toolcatalog"
+	"github.com/nugget/thane-ai-agent/internal/unifi"
 	"github.com/nugget/thane-ai-agent/internal/usage"
 )
 
@@ -70,23 +73,27 @@ type App struct {
 	modelRegistry         *models.Registry
 
 	// Core subsystems
-	mem                      *memory.SQLiteStore
-	archiveStore             *memory.ArchiveStore
-	archiveAdapter           *memory.ArchiveAdapter
-	wmStore                  *memory.WorkingMemoryStore
-	factStore                *knowledge.Store
-	contactStore             *contacts.Store
-	opStore                  *opstate.Store
-	modelPolicyStore         *modelPolicyStore
-	modelResourcePolicyStore *modelResourcePolicyStore
-	modelExperienceStore     *modelExperienceStore
-	usageStore               *usage.Store
-	schedStore               *scheduler.Store
-	sched                    *scheduler.Scheduler
+	mem                       *memory.SQLiteStore
+	archiveStore              *memory.ArchiveStore
+	archiveAdapter            *memory.ArchiveAdapter
+	wmStore                   *memory.WorkingMemoryStore
+	factStore                 *knowledge.Store
+	contactStore              *contacts.Store
+	opStore                   *opstate.Store
+	modelPolicyStore          *modelPolicyStore
+	modelResourcePolicyStore  *modelResourcePolicyStore
+	modelExperienceStore      *modelExperienceStore
+	loopDefinitionStore       *loopDefinitionStore
+	loopDefinitionPolicyStore *loopDefinitionPolicyStore
+	usageStore                *usage.Store
+	schedStore                *scheduler.Store
+	sched                     *scheduler.Scheduler
 
 	// Agent loop and router
 	loop *agent.Loop
 	rtr  *router.Router
+	// Shared capability surface used by prompt renderers and dashboard views.
+	capSurface []toolcatalog.CapabilitySurface
 
 	// Compaction and summarization
 	compactor     *memory.Compactor
@@ -127,10 +134,13 @@ type App struct {
 	mcpClients []*mcp.Client
 
 	// Logging infrastructure
-	indexDB       *sql.DB
-	indexHandler  *logging.IndexHandler
-	contentWriter *logging.ContentWriter
-	rotator       *logging.Rotator
+	indexDB             *sql.DB
+	indexHandler        *logging.IndexHandler
+	liveRequestStore    *logging.LiveRequestStore
+	liveRequestRecorder logging.RequestRecordFunc
+	requestRecorder     logging.RequestRecordFunc
+	contentWriter       *logging.ContentWriter
+	rotator             *logging.Rotator
 
 	// Attachment and vision
 	attachmentStore *attachments.Store
@@ -142,13 +152,23 @@ type App struct {
 	// Media
 	mediaStore *media.MediaStore
 
+	// Service loop runtimes hydrated into built-in loops-ng definitions.
+	unifiPoller        *unifi.Poller
+	haStateWatcher     *homeassistant.StateWatcher
+	emailPoller        *email.Poller
+	mediaFeedPoller    *media.FeedPoller
+	telemetryPublisher *telemetry.Publisher
+
 	// Checkpointing
 	checkpointer *checkpoint.Checkpointer
 
 	// Loop registry
-	loopRegistry *looppkg.Registry
+	loopRegistry           *looppkg.Registry
+	loopDefinitionRegistry *looppkg.DefinitionRegistry
+	loopDefinitionRuntime  *loopDefinitionRuntime
+	loopCompletionDelivery *detachedLoopCompletionDispatcher
 
-	// Metacognitive config (stored for Serve-time use)
+	// Metacognitive config (stored for loop-definition hydration)
 	metacogCfg *metacognitive.Config
 
 	// Event bus

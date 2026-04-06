@@ -227,6 +227,40 @@ func TestEngine_MultipleToolCalls(t *testing.T) {
 	}
 }
 
+func TestEngine_NormalizeToolCallPersistsNormalizedMessage(t *testing.T) {
+	mock := &mockLLM{
+		responses: []*llm.ChatResponse{
+			toolCallResponse(makeToolCall("search_alias", map[string]any{"q": "test"})),
+			textResponse("Done."),
+		},
+	}
+	exec := &mockExecutor{results: map[string]string{"search": "result data"}}
+	cfg := baseCfg(mock, exec)
+	cfg.NormalizeToolCall = func(_ context.Context, _ int, tc llm.ToolCall) llm.ToolCall {
+		tc.Function.Name = "search"
+		return tc
+	}
+
+	engine := &Engine{}
+	result, err := engine.Run(context.Background(), cfg, baseMessages())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(exec.calls) != 1 || exec.calls[0] != "search" {
+		t.Fatalf("executor calls = %v, want [search]", exec.calls)
+	}
+	if len(result.Messages) < 3 {
+		t.Fatalf("expected at least 3 messages, got %d", len(result.Messages))
+	}
+	assistantMsg := result.Messages[2]
+	if len(assistantMsg.ToolCalls) != 1 {
+		t.Fatalf("assistant tool calls = %#v, want one tool call", assistantMsg.ToolCalls)
+	}
+	if assistantMsg.ToolCalls[0].Function.Name != "search" {
+		t.Fatalf("stored tool name = %q, want normalized name search", assistantMsg.ToolCalls[0].Function.Name)
+	}
+}
+
 func TestEngine_MaxIterationsExhaustion(t *testing.T) {
 	// Model always returns tool calls, never text, for MaxIterations rounds.
 	// Then the force-text call (iteration 3) returns text.

@@ -397,30 +397,41 @@ func TestSignalConfig_Configured(t *testing.T) {
 func TestValidate_CapabilityTagEmptyDescription(t *testing.T) {
 	cfg := Default()
 	cfg.CapabilityTags = map[string]CapabilityTagConfig{
-		"ha": {Description: "", Tools: []string{"get_state"}},
+		"custom": {Description: "", Tools: []string{"get_state"}},
 	}
 
 	err := cfg.Validate()
 	if err == nil {
 		t.Fatal("expected validation error for empty description")
 	}
-	if !strings.Contains(err.Error(), "capability_tags.ha.description") {
-		t.Errorf("error should mention capability_tags.ha.description, got: %v", err)
+	if !strings.Contains(err.Error(), "capability_tags.custom.description") {
+		t.Errorf("error should mention capability_tags.custom.description, got: %v", err)
 	}
 }
 
 func TestValidate_CapabilityTagEmptyTools(t *testing.T) {
 	cfg := Default()
 	cfg.CapabilityTags = map[string]CapabilityTagConfig{
-		"search": {Description: "Web search", Tools: nil},
+		"custom": {Description: "Web search", Tools: nil},
 	}
 
 	err := cfg.Validate()
 	if err == nil {
 		t.Fatal("expected validation error for empty tools")
 	}
-	if !strings.Contains(err.Error(), "capability_tags.search.tools") {
-		t.Errorf("error should mention capability_tags.search.tools, got: %v", err)
+	if !strings.Contains(err.Error(), "capability_tags.custom.tools") {
+		t.Errorf("error should mention capability_tags.custom.tools, got: %v", err)
+	}
+}
+
+func TestValidate_BuiltinCapabilityOverlayMayOmitDescriptionAndTools(t *testing.T) {
+	cfg := Default()
+	cfg.CapabilityTags = map[string]CapabilityTagConfig{
+		"ha": {AlwaysActive: true},
+	}
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("unexpected validation error for builtin overlay: %v", err)
 	}
 }
 
@@ -487,6 +498,18 @@ func TestValidate_ChannelTagsValid(t *testing.T) {
 
 	err := cfg.Validate()
 	if err != nil {
+		t.Fatalf("unexpected validation error: %v", err)
+	}
+}
+
+func TestValidate_ChannelTagsBuiltinTagValid(t *testing.T) {
+	cfg := Default()
+	cfg.ChannelTags = map[string][]string{
+		"signal": {"ha", "search", "interactive"},
+		"owu":    {"interactive", "owu"},
+	}
+
+	if err := cfg.Validate(); err != nil {
 		t.Fatalf("unexpected validation error: %v", err)
 	}
 }

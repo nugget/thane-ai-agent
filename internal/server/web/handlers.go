@@ -44,6 +44,9 @@ func (s *WebServer) handleSystem(w http.ResponseWriter, r *http.Request) {
 	if stats := s.systemStatus.RouterStats(); stats != nil {
 		body["router_stats"] = stats
 	}
+	if catalog := s.systemStatus.CapabilityCatalog(); catalog != nil {
+		body["capability_catalog"] = catalog
+	}
 	s.writeJSON(w, body)
 }
 
@@ -118,16 +121,16 @@ func (s *WebServer) handleLoopLogs(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// handleRequestDetail returns the full retained content for a single
-// request, including system prompt, user/assistant messages, tool call
-// arguments and results, and token metadata.
+// handleRequestDetail returns the full live or retained content for a
+// single request, including system prompt, user/assistant messages,
+// tool call arguments and results, and token metadata.
 func (s *WebServer) handleRequestDetail(w http.ResponseWriter, r *http.Request) {
+	requestID := r.PathValue("id")
 	if s.contentQuerier == nil {
-		s.writeJSONError(w, "content retention not available", http.StatusServiceUnavailable)
+		s.writeJSONError(w, "request detail not available", http.StatusServiceUnavailable)
 		return
 	}
 
-	requestID := r.PathValue("id")
 	if requestID == "" {
 		s.writeJSONError(w, "missing request id", http.StatusBadRequest)
 		return
@@ -145,6 +148,11 @@ func (s *WebServer) handleRequestDetail(w http.ResponseWriter, r *http.Request) 
 	}
 
 	s.writeJSON(w, detail)
+}
+
+func (s *WebServer) handleRequestDetailProbe(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("X-Request-Detail-Available", strconv.FormatBool(s.contentQuerier != nil))
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // handleSystemLogs returns all log entries across the entire runtime.

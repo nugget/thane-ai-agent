@@ -16,12 +16,23 @@ import (
 type SQLiteStore struct {
 	db          *sql.DB
 	maxMessages int
+	logger      *slog.Logger
 }
 
 // NewSQLiteStore creates a new SQLite-backed store.
 func NewSQLiteStore(dbPath string, maxMessages int) (*SQLiteStore, error) {
+	return NewSQLiteStoreWithLogger(dbPath, maxMessages, nil)
+}
+
+// NewSQLiteStoreWithLogger creates a new SQLite-backed store and uses
+// logger for non-fatal data-integrity warnings encountered while
+// reading existing rows. Nil falls back to [slog.Default].
+func NewSQLiteStoreWithLogger(dbPath string, maxMessages int, logger *slog.Logger) (*SQLiteStore, error) {
 	if maxMessages <= 0 {
 		maxMessages = 100
+	}
+	if logger == nil {
+		logger = slog.Default()
 	}
 
 	db, err := database.Open(dbPath)
@@ -32,6 +43,7 @@ func NewSQLiteStore(dbPath string, maxMessages int) (*SQLiteStore, error) {
 	store := &SQLiteStore{
 		db:          db,
 		maxMessages: maxMessages,
+		logger:      logger,
 	}
 
 	if err := store.migrate(); err != nil {
@@ -181,11 +193,37 @@ func (s *SQLiteStore) GetOrCreateConversation(id string) (*Conversation, error) 
 		return nil, fmt.Errorf("create conversation: %w", err)
 	}
 
-	return &Conversation{
-		ID:        id,
-		CreatedAt: now,
-		UpdatedAt: now,
-	}, nil
+	row := s.db.QueryRow(`
+		SELECT id, created_at, updated_at, metadata
+		FROM conversations
+		WHERE id = ?
+	`, id)
+
+	var conv Conversation
+	var metadata sql.NullString
+	if err := row.Scan(&conv.ID, &conv.CreatedAt, &conv.UpdatedAt, &metadata); err != nil {
+		return nil, fmt.Errorf("load conversation: %w", err)
+	}
+	if metadata.Valid {
+		meta, err := parseConversationMetadata(metadata.String)
+		if err != nil {
+			if s.logger != nil {
+				s.logger.Warn("conversation metadata is invalid JSON; treating metadata as nil",
+					"conversation_id", id,
+					"error", err,
+				)
+			}
+		} else {
+			conv.Metadata = meta
+		}
+	}
+	if conv.CreatedAt.IsZero() {
+		conv.CreatedAt = now
+	}
+	if conv.UpdatedAt.IsZero() {
+		conv.UpdatedAt = now
+	}
+	return &conv, nil
 }
 
 // AddMessage adds a message to a conversation.
@@ -251,12 +289,24 @@ func (s *SQLiteStore) GetMessages(conversationID string) []Message {
 // GetConversation retrieves a conversation by ID.
 func (s *SQLiteStore) GetConversation(id string) *Conversation {
 	row := s.db.QueryRow(`
-		SELECT id, created_at, updated_at FROM conversations WHERE id = ?
+		SELECT id, created_at, updated_at, metadata FROM conversations WHERE id = ?
 	`, id)
 
 	var conv Conversation
-	if err := row.Scan(&conv.ID, &conv.CreatedAt, &conv.UpdatedAt); err != nil {
+	var metadata sql.NullString
+	if err := row.Scan(&conv.ID, &conv.CreatedAt, &conv.UpdatedAt, &metadata); err != nil {
 		return nil
+	}
+	if metadata.Valid {
+		meta, err := parseConversationMetadata(metadata.String)
+		if err != nil {
+			s.logger.Warn("conversation metadata invalid",
+				"conversation_id", id,
+				"error", err,
+			)
+		} else {
+			conv.Metadata = meta
+		}
 	}
 
 	conv.Messages = s.GetMessages(id)
@@ -304,7 +354,7 @@ func (s *SQLiteStore) Stats() map[string]any {
 // GetAllConversations returns all conversations for checkpointing.
 func (s *SQLiteStore) GetAllConversations() []*Conversation {
 	rows, err := s.db.Query(`
-		SELECT id, created_at, updated_at FROM conversations ORDER BY updated_at DESC
+		SELECT id, created_at, updated_at, metadata FROM conversations ORDER BY updated_at DESC
 	`)
 	if err != nil {
 		return nil
@@ -314,7 +364,8 @@ func (s *SQLiteStore) GetAllConversations() []*Conversation {
 	var convs []*Conversation
 	for rows.Next() {
 		var id, createdAt, updatedAt string
-		if err := rows.Scan(&id, &createdAt, &updatedAt); err != nil {
+		var metadata sql.NullString
+		if err := rows.Scan(&id, &createdAt, &updatedAt, &metadata); err != nil {
 			continue
 		}
 
@@ -322,14 +373,24 @@ func (s *SQLiteStore) GetAllConversations() []*Conversation {
 			ID:       id,
 			Messages: s.GetMessages(id),
 		}
+		if metadata.Valid {
+			if meta, err := parseConversationMetadata(metadata.String); err != nil {
+				s.logger.Warn("conversation metadata invalid during snapshot",
+					"conversation_id", id,
+					"error", err,
+				)
+			} else {
+				conv.Metadata = meta
+			}
+		}
 		if t, err := database.ParseTimestamp(createdAt); err != nil {
-			slog.Warn("GetAllConversations: invalid created_at",
+			s.logger.Warn("conversation created_at invalid during snapshot",
 				"conversation_id", id, "created_at", createdAt, "error", err)
 		} else {
 			conv.CreatedAt = t
 		}
 		if t, err := database.ParseTimestamp(updatedAt); err != nil {
-			slog.Warn("GetAllConversations: invalid updated_at",
+			s.logger.Warn("conversation updated_at invalid during snapshot",
 				"conversation_id", id, "updated_at", updatedAt, "error", err)
 		} else {
 			conv.UpdatedAt = t
@@ -338,6 +399,42 @@ func (s *SQLiteStore) GetAllConversations() []*Conversation {
 		convs = append(convs, conv)
 	}
 	return convs
+}
+
+// PutConversationMetadata replaces the typed metadata for a
+// conversation, creating the conversation row if needed.
+func (s *SQLiteStore) PutConversationMetadata(conversationID string, metadata *ConversationMetadata) error {
+	if _, err := s.GetOrCreateConversation(conversationID); err != nil {
+		return err
+	}
+	raw, err := marshalConversationMetadata(metadata)
+	if err != nil {
+		return fmt.Errorf("marshal conversation metadata: %w", err)
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	_, err = s.db.Exec(`
+		UPDATE conversations
+		SET metadata = ?, updated_at = ?
+		WHERE id = ?
+	`, raw, now, conversationID)
+	if err != nil {
+		return fmt.Errorf("update conversation metadata: %w", err)
+	}
+	return nil
+}
+
+// BindConversationChannel updates only the channel-binding
+// portion of a conversation's typed metadata.
+func (s *SQLiteStore) BindConversationChannel(conversationID string, binding *ChannelBinding) error {
+	var metadata *ConversationMetadata
+	if conv := s.GetConversation(conversationID); conv != nil && conv.Metadata != nil {
+		metadata = conv.Metadata.Clone()
+	}
+	if metadata == nil {
+		metadata = &ConversationMetadata{}
+	}
+	metadata.ChannelBinding = binding.Normalize()
+	return s.PutConversationMetadata(conversationID, metadata)
 }
 
 // GetAllMessages retrieves ALL messages for a conversation, including compacted ones.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"regexp"
 	"strings"
 
@@ -12,6 +13,21 @@ import (
 
 // sanitizeRe matches characters that are not lowercase alphanumeric or underscore.
 var sanitizeRe = regexp.MustCompile(`[^a-z0-9_]`)
+
+// ToolOverride carries operator-supplied metadata for a bridged MCP tool.
+type ToolOverride struct {
+	Enabled     *bool
+	Tags        []string
+	Description string
+}
+
+// BridgeOptions control how MCP tools are bridged into Thane's registry.
+type BridgeOptions struct {
+	Include       []string
+	Exclude       []string
+	DefaultTags   []string
+	ToolOverrides map[string]ToolOverride
+}
 
 // BridgeTools discovers tools from an MCP client and registers them on
 // the given tool registry. Tool names are namespaced as
@@ -23,7 +39,7 @@ var sanitizeRe = regexp.MustCompile(`[^a-z0-9_]`)
 //   - If both are empty, all tools are registered.
 //
 // BridgeTools returns the number of tools registered.
-func BridgeTools(ctx context.Context, client *Client, serverName string, registry *tools.Registry, include, exclude []string, logger *slog.Logger) (int, error) {
+func BridgeTools(ctx context.Context, client *Client, serverName string, registry *tools.Registry, opts BridgeOptions, logger *slog.Logger) (int, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -33,11 +49,15 @@ func BridgeTools(ctx context.Context, client *Client, serverName string, registr
 		return 0, fmt.Errorf("list tools from %s: %w", serverName, err)
 	}
 
-	includeSet := toSet(include)
-	excludeSet := toSet(exclude)
+	includeSet := toSet(opts.Include)
+	excludeSet := toSet(opts.Exclude)
 
 	count := 0
 	for _, td := range mcpTools {
+		override := opts.ToolOverrides[td.Name]
+		if override.Enabled != nil && !*override.Enabled {
+			continue
+		}
 		if len(includeSet) > 0 {
 			if !includeSet[td.Name] {
 				continue
@@ -47,7 +67,7 @@ func BridgeTools(ctx context.Context, client *Client, serverName string, registr
 		}
 
 		name := ToolName(serverName, td.Name)
-		registry.Register(bridgeTool(client, name, td))
+		registry.Register(bridgeTool(client, serverName, name, td, opts.DefaultTags, override))
 		count++
 
 		logger.Debug("bridged MCP tool",
@@ -70,18 +90,34 @@ func ToolName(serverName, mcpToolName string) string {
 }
 
 // bridgeTool creates a Thane tool that proxies calls to an MCP server.
-func bridgeTool(client *Client, name string, td ToolDefinition) *tools.Tool {
+func bridgeTool(client *Client, serverName, name string, td ToolDefinition, defaultTags []string, override ToolOverride) *tools.Tool {
 	// Capture the original MCP tool name for the call.
 	mcpName := td.Name
+	description := td.Description
+	if desc := strings.TrimSpace(override.Description); desc != "" {
+		description = desc
+	}
+	tags := defaultTags
+	if len(override.Tags) > 0 {
+		tags = override.Tags
+	}
 
 	return &tools.Tool{
 		Name:        name,
-		Description: td.Description,
+		Description: description,
 		Parameters:  td.InputSchema,
+		CanonicalID: canonicalToolID(serverName, mcpName),
+		Source:      "mcp",
+		Origin:      serverName,
+		DefaultTags: append([]string(nil), tags...),
 		Handler: func(ctx context.Context, args map[string]any) (string, error) {
 			return client.CallTool(ctx, mcpName, args)
 		},
 	}
+}
+
+func canonicalToolID(serverName, toolName string) string {
+	return fmt.Sprintf("mcp:%s/%s", url.PathEscape(serverName), url.PathEscape(toolName))
 }
 
 // sanitize converts a name to lowercase and replaces non-alphanumeric

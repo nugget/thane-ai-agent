@@ -281,6 +281,51 @@ serve: build
 logs workdir="./Thane":
     tail -f {{workdir}}/logs/thane.log
 
+# Live smoke test for loops-ng loop definition registry behavior against a running dev instance
+[group('operations')]
+loop-definition-smoke base_url="http://127.0.0.1:8080":
+    python3 -u scripts/loop_definition_smoke.py --base-url {{base_url}}
+
+# Focused loops-ng regression pass for the packages that own the new
+# loop definition, launch, completion, app delivery, and interactive
+# channel integration surfaces.
+[group('operations')]
+web-static-check:
+    node --check internal/server/web/static/app.js
+    node --check internal/server/web/static/detail.js
+    node --check internal/server/web/static/request.js
+    node --check internal/server/web/static/shared.js
+
+# Focused loops-ng regression pass for the packages that own the new
+# loop definition, launch, completion, app delivery, interactive
+# channel integration, and dashboard graph surfaces.
+[group('operations')]
+loops-ng-contract-tests:
+    just web-static-check
+    go test -race ./internal/loop ./internal/tools ./internal/delegate ./internal/app ./internal/channels/signal ./internal/server/api
+
+# Broader loops-ng smoke pass: focused regression packages plus live
+# loop-definition runtime smoke against a running dev instance.
+[group('operations')]
+loops-ng-smoke base_url="http://127.0.0.1:8080":
+    just loops-ng-contract-tests
+    just loop-definition-smoke {{base_url}}
+
+# Live smoke test with restart/persistence validation. Example:
+# RESTART_CMD='cd /path/to/dev-workspace && just restart' just loop-definition-persistence
+[group('operations')]
+loop-definition-persistence base_url="http://127.0.0.1:8080":
+    @test -n "$RESTART_CMD" || (echo "Set RESTART_CMD to the restart command for your live dev instance" && exit 1)
+    RESTART_CMD="$RESTART_CMD" python3 -u scripts/loop_definition_smoke.py --base-url {{base_url}} --restart-cmd "$RESTART_CMD"
+
+# Full loops-ng persistence pass: focused regression packages plus the
+# live restart/persistence harness.
+[group('operations')]
+loops-ng-persistence base_url="http://127.0.0.1:8080":
+    @test -n "$RESTART_CMD" || (echo "Set RESTART_CMD to the restart command for your live dev instance" && exit 1)
+    just loops-ng-contract-tests
+    RESTART_CMD="$RESTART_CMD" just loop-definition-persistence {{base_url}}
+
 # --- Release ---
 
 # Tag and publish a GitHub release (usage: just release 0.2.0)

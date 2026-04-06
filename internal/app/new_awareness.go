@@ -12,7 +12,6 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/contacts"
 	"github.com/nugget/thane-ai-agent/internal/homeassistant"
 	"github.com/nugget/thane-ai-agent/internal/knowledge"
-	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
 	"github.com/nugget/thane-ai-agent/internal/memory"
 	"github.com/nugget/thane-ai-agent/internal/notifications"
 	"github.com/nugget/thane-ai-agent/internal/tools"
@@ -165,30 +164,7 @@ func (a *App) initAwareness(s *newState) error {
 			APRooms:      cfg.Person.APRooms,
 			Logger:       logger,
 		})
-
-		unifiLoopCfg := looppkg.Config{
-			Name:         "unifi-poller",
-			SleepMin:     pollInterval,
-			SleepMax:     pollInterval,
-			SleepDefault: pollInterval,
-			Jitter:       looppkg.Float64Ptr(0),
-			Handler: func(ctx context.Context, _ any) error {
-				return poller.Poll(ctx)
-			},
-			Metadata: map[string]string{
-				"subsystem": "unifi",
-			},
-		}
-		unifiLoopDeps := looppkg.Deps{
-			Logger:   logger,
-			EventBus: a.eventBus,
-		}
-		a.deferWorker("unifi-poller", func(ctx context.Context) error {
-			if _, err := a.loopRegistry.SpawnLoop(ctx, unifiLoopCfg, unifiLoopDeps); err != nil {
-				return fmt.Errorf("spawn unifi poller loop: %w", err)
-			}
-			return nil
-		})
+		a.unifiPoller = poller
 
 		// Register UniFi with connwatch for health endpoint visibility.
 		a.connMgr.Watch(s.ctx, connwatch.WatcherConfig{
@@ -281,104 +257,11 @@ func (a *App) initAwareness(s *newState) error {
 		}
 
 		watcher := homeassistant.NewStateWatcher(a.haWS.Events(), filter, limiter, handler, logger)
-		haEvents := watcher.Events()
-
-		a.deferWorker("ha-state-watcher", func(ctx context.Context) error {
-			// Derive a cancellable context so the loop exits cleanly
-			// when the HA event channel closes.
-			haLoopCtx, haLoopCancel := context.WithCancel(ctx)
-
-			// Track last cleanup time for periodic rate-limiter maintenance.
-			lastCleanup := time.Now()
-			const haCleanupInterval = 5 * time.Minute
-			const haBatchWindow = 1 * time.Second
-			const haBatchMax = 100
-
-			if _, err := a.loopRegistry.SpawnLoop(haLoopCtx, looppkg.Config{
-				Name: "ha-state-watcher",
-				WaitFunc: func(wCtx context.Context) (any, error) {
-					// Block until at least one event arrives, then drain
-					// up to haBatchMax events within haBatchWindow. This
-					// debounces high-frequency HA state changes into one
-					// loop iteration per batch.
-					cleanupTimer := time.NewTimer(haCleanupInterval)
-					defer cleanupTimer.Stop()
-
-					var batch []homeassistant.Event
-
-					// Wait for the first event (or cleanup/cancel).
-					select {
-					case <-wCtx.Done():
-						return nil, wCtx.Err()
-					case ev, ok := <-haEvents:
-						if !ok {
-							haLoopCancel()
-							return nil, context.Canceled
-						}
-						batch = append(batch, ev)
-					case <-cleanupTimer.C:
-						watcher.CleanupRateLimiter()
-						lastCleanup = time.Now()
-						return nil, nil
-					}
-
-					// Drain additional events within the batch window.
-					drainTimer := time.NewTimer(haBatchWindow)
-					defer drainTimer.Stop()
-				drain:
-					for len(batch) < haBatchMax {
-						select {
-						case <-wCtx.Done():
-							break drain
-						case ev, ok := <-haEvents:
-							if !ok {
-								break drain
-							}
-							batch = append(batch, ev)
-						case <-drainTimer.C:
-							break drain
-						}
-					}
-
-					return batch, nil
-				},
-				Handler: func(ctx context.Context, payload any) error {
-					var processed int
-					if batch, ok := payload.([]homeassistant.Event); ok {
-						for _, ev := range batch {
-							if watcher.HandleEvent(ev) {
-								processed++
-							}
-						}
-					}
-					if time.Since(lastCleanup) > haCleanupInterval {
-						watcher.CleanupRateLimiter()
-						lastCleanup = time.Now()
-					}
-					if processed == 0 {
-						return looppkg.ErrNoOp
-					}
-					if summary := looppkg.IterationSummary(ctx); summary != nil {
-						summary["events_processed"] = processed
-					}
-					return nil
-				},
-				Metadata: map[string]string{
-					"subsystem": "homeassistant",
-					"category":  "listener",
-				},
-			}, looppkg.Deps{
-				Logger:   logger,
-				EventBus: a.eventBus,
-			}); err != nil {
-				return fmt.Errorf("spawn ha-state-watcher loop: %w", err)
-			}
-			logger.Info("state watcher started",
-				"entity_globs", globs,
-				"rate_limit_per_minute", cfg.HomeAssistant.Subscribe.RateLimitPerMinute,
-			)
-			return nil
-		})
+		a.haStateWatcher = watcher
+		logger.Info("state watcher configured",
+			"entity_globs", globs,
+			"rate_limit_per_minute", cfg.HomeAssistant.Subscribe.RateLimitPerMinute,
+		)
 	}
 
 	return nil

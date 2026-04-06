@@ -144,6 +144,57 @@ func TestEmptyResponse_FallbackAfterNudge(t *testing.T) {
 	}
 }
 
+func TestEmptyResponse_UsesRequestFallbackAfterNudge(t *testing.T) {
+	mock := &mockLLM{
+		responses: []*llm.ChatResponse{
+			{
+				Model: "test-model",
+				Message: llm.Message{
+					Role: "assistant",
+					ToolCalls: []llm.ToolCall{{
+						ID: "call-1",
+						Function: struct {
+							Name      string         `json:"name"`
+							Arguments map[string]any `json:"arguments"`
+						}{
+							Name:      "recall_fact",
+							Arguments: map[string]any{},
+						},
+					}},
+				},
+				InputTokens:  100,
+				OutputTokens: 50,
+			},
+			{
+				Model:        "test-model",
+				Message:      llm.Message{Role: "assistant", Content: ""},
+				InputTokens:  200,
+				OutputTokens: 2,
+			},
+			{
+				Model:        "test-model",
+				Message:      llm.Message{Role: "assistant", Content: ""},
+				InputTokens:  250,
+				OutputTokens: 2,
+			},
+		},
+	}
+
+	loop := buildTestLoop(mock, []string{"recall_fact"})
+
+	resp, err := loop.Run(context.Background(), &Request{
+		Messages:        []Message{{Role: "user", Content: "check the lights"}},
+		FallbackContent: "interactive fallback",
+	}, nil)
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+
+	if resp.Content != "interactive fallback" {
+		t.Errorf("response content = %q, want %q", resp.Content, "interactive fallback")
+	}
+}
+
 func TestEmptyResponse_FirstIterNudged(t *testing.T) {
 	// First-turn empty text now follows the same nudge path as later
 	// empty completions so the agent does not silently return blank.

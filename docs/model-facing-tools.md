@@ -14,6 +14,28 @@ rules that are easiest to get wrong.
 
 ## Philosophy
 
+### 0. Tool calling is a runtime contract, not just a prompt
+
+Tool use has to survive three layers:
+
+- the semantic tool catalog
+- the prompt/tool advertisement rendered for the model
+- the provider/model runtime that turns model output into actual tool calls
+
+Do not assume every model family emits native tool-call structures just
+because one premium model does. Some local/open models emit raw JSON or
+fenced pseudo-tool payloads instead. Thane should centralize those
+compatibility rules instead of scattering parser heuristics across
+providers.
+
+When model families differ:
+
+- keep one semantic tool catalog
+- add a shared model-family adapter/profile layer
+- centralize raw-text tool-call recovery in one runtime seam
+- vary prompt-side tool contracts only where the model family actually
+  needs it
+
 ### 1. Name tools for decision clarity
 
 Tool names should explain action, object, and scope when ambiguity is
@@ -199,6 +221,22 @@ Examples:
 
 If the model has to re-run a broad search just to recover the argument
 for a follow-up call, the first tool did not expose enough.
+
+### 10. Prefer exact machine-readable tool contracts
+
+When the model needs generated information about available tools,
+capabilities, or activation affordances, default to compact structured
+data over narrative explanation.
+
+The model should be able to tell:
+
+- which tools are actually callable
+- which capabilities are loaded vs merely available
+- which exact tool names are valid
+- which recovery path applies if a tool family uses raw-text fallback
+
+Do not hide those distinctions in prose if a stable JSON shape would
+make them obvious.
 
 ## Common Pitfalls
 

@@ -15,8 +15,6 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/config"
 	"github.com/nugget/thane-ai-agent/internal/connwatch"
 	"github.com/nugget/thane-ai-agent/internal/contacts"
-	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
-	"github.com/nugget/thane-ai-agent/internal/metacognitive"
 	"github.com/nugget/thane-ai-agent/internal/platform"
 	"github.com/nugget/thane-ai-agent/internal/server/api"
 	"github.com/nugget/thane-ai-agent/internal/server/web"
@@ -25,8 +23,8 @@ import (
 
 // initServers creates servers, infrastructure services, and background
 // publisher loops. This covers the API server, checkpointer, OWU tracker,
-// Ollama-compatible server, CardDAV, MQTT publishing, web dashboard, and
-// the metacognitive loop.
+// Ollama-compatible server, CardDAV, MQTT publishing, the web dashboard,
+// and durable loop-definition services.
 func (a *App) initServers(s *newState) error {
 	cfg := a.cfg
 	logger := a.logger
@@ -50,6 +48,15 @@ func (a *App) initServers(s *newState) error {
 	)
 	server.SetMemoryStore(a.mem)
 	server.SetArchiveStore(a.archiveStore)
+	server.UseLoopDefinitionRegistry(a.loopDefinitionRegistry)
+	server.ConfigureLoopDefinitionView(a.loopDefinitionView)
+	server.ConfigureLoopDefinitionPersistence(a.persistLoopDefinition, a.deletePersistedLoopDefinition)
+	server.ConfigureLoopDefinitionLifecycle(
+		a.persistLoopDefinitionPolicy,
+		a.deletePersistedLoopDefinitionPolicy,
+		a.reconcileLoopDefinition,
+		a.launchLoopDefinition,
+	)
 	server.SetEventBus(a.eventBus)
 	server.SetConnManager(func() map[string]api.DependencyStatus {
 		status := a.connMgr.Status()
@@ -157,6 +164,7 @@ func (a *App) initServers(s *newState) error {
 	if err != nil {
 		return fmt.Errorf("create owu tracker: %w", err)
 	}
+	owuTracker.UseConversationBindingWriter(a.mem.BindConversationChannel)
 	server.SetOWUTracker(owuTracker)
 
 	// --- Ollama-compatible API server ---
@@ -209,6 +217,7 @@ func (a *App) initServers(s *newState) error {
 	// --- MQTT publisher ---
 	// Optional: publishes HA MQTT discovery messages and periodic sensor
 	// state updates so Thane appears as a native HA device.
+	var mqttConnectWorker func(context.Context) error
 	if cfg.MQTT.Configured() {
 		var err error
 		a.mqttInstanceID, err = mqtt.LoadOrCreateInstanceID(cfg.DataDir)
@@ -257,7 +266,7 @@ func (a *App) initServers(s *newState) error {
 		a.mqttPub = mqttPub
 
 		// --- MQTT wake subscription store ---
-		// Manages topic-to-LoopSeed mappings for wake-on-message.
+		// Manages topic-to-LoopProfile mappings for wake-on-message.
 		// Config-defined wake subscriptions are loaded from
 		// cfg.MQTT.Subscriptions; runtime subscriptions persist in SQLite.
 		subStore, err := mqtt.NewSubscriptionStore(a.mem.DB(), logger)
@@ -303,9 +312,9 @@ func (a *App) initServers(s *newState) error {
 			}
 		}
 
-		// Track the mqtt parent loop ID once it's spawned (deferred
-		// worker runs after this wiring, so we use atomic.Value for
-		// safe cross-goroutine access).
+		// Track the mqtt parent loop ID once the definition runtime
+		// starts the publisher loop. The wake handler can populate this
+		// lazily from the loop registry when the first message arrives.
 		var mqttParentID atomic.Value
 		mqttParentID.Store("") // initialize with zero-value string
 		wakeDeps := mqttWakeDeps{
@@ -323,10 +332,10 @@ func (a *App) initServers(s *newState) error {
 		mqttTools := mqtt.NewTools(subStore)
 		a.loop.Tools().SetMQTTSubscriptionTools(mqttTools)
 
-		// Defer MQTT connection, initial publish, and publisher loop
-		// to StartWorkers. The publisher object and message handler are
-		// already wired above; this just activates the network connection.
-		a.deferWorker("mqtt-connect", func(ctx context.Context) error {
+		// Defer MQTT connection to StartWorkers. The publisher object,
+		// tooling, and message handler are already wired above; this just
+		// activates the network connection.
+		mqttConnectWorker = func(ctx context.Context) error {
 			// Pass the long-lived server context as the lifecycle context
 			// for the MQTT ConnectionManager. A short-lived context here
 			// would kill the connection as soon as it expired (#572).
@@ -352,37 +361,13 @@ func (a *App) initServers(s *newState) error {
 			// Publish immediately on connect, then let the loop handle the schedule.
 			mqttPub.PublishStates(ctx)
 
-			mqttInterval := mqttPub.PublishInterval()
-			parentID, err := a.loopRegistry.SpawnLoop(ctx, looppkg.Config{
-				Name:         "mqtt",
-				SleepMin:     mqttInterval,
-				SleepMax:     mqttInterval,
-				SleepDefault: mqttInterval,
-				Jitter:       looppkg.Float64Ptr(0),
-				Handler: func(ctx context.Context, _ any) error {
-					mqttPub.PublishStates(ctx)
-					return nil
-				},
-				Metadata: map[string]string{
-					"subsystem": "mqtt",
-					"category":  "publisher",
-				},
-			}, looppkg.Deps{
-				Logger:   logger,
-				EventBus: a.eventBus,
-			})
-			if err != nil {
-				return fmt.Errorf("spawn mqtt loop: %w", err)
-			}
-			mqttParentID.Store(parentID)
-
 			logger.Info("mqtt connected",
 				"broker", cfg.MQTT.Broker,
 				"device_name", cfg.MQTT.DeviceName,
 				"interval", cfg.MQTT.PublishIntervalSec,
 			)
 			return nil
-		})
+		}
 
 		logger.Info("mqtt publishing enabled",
 			"broker", cfg.MQTT.Broker,
@@ -500,32 +485,7 @@ func (a *App) initServers(s *newState) error {
 
 		telCollector := telemetry.NewCollector(telSources)
 		telPub := telemetry.NewPublisher(telCollector, a.mqttPub, telBuilder, logger)
-
-		telInterval := time.Duration(cfg.MQTT.Telemetry.Interval) * time.Second
-		telLoopCfg := looppkg.Config{
-			Name:         "telemetry",
-			SleepMin:     telInterval,
-			SleepMax:     telInterval,
-			SleepDefault: telInterval,
-			Jitter:       looppkg.Float64Ptr(0),
-			Handler: func(ctx context.Context, _ any) error {
-				return telPub.Publish(ctx)
-			},
-			Metadata: map[string]string{
-				"subsystem": "mqtt",
-				"category":  "telemetry",
-			},
-		}
-		telLoopDeps := looppkg.Deps{
-			Logger:   logger,
-			EventBus: a.eventBus,
-		}
-		a.deferWorker("telemetry", func(ctx context.Context) error {
-			if _, err := a.loopRegistry.SpawnLoop(ctx, telLoopCfg, telLoopDeps); err != nil {
-				return fmt.Errorf("spawn telemetry loop: %w", err)
-			}
-			return nil
-		})
+		a.telemetryPublisher = telPub
 
 		logger.Info("mqtt telemetry enabled",
 			"interval", cfg.MQTT.Telemetry.Interval,
@@ -539,70 +499,54 @@ func (a *App) initServers(s *newState) error {
 		webCfg := web.Config{
 			LoopRegistry: a.loopRegistry,
 			EventBus:     a.eventBus,
-			SystemStatus: &systemStatusAdapter{connMgr: a.connMgr, modelRegistry: a.modelRegistry, router: a.rtr},
+			SystemStatus: &systemStatusAdapter{connMgr: a.connMgr, modelRegistry: a.modelRegistry, router: a.rtr, capSurface: a.capSurface},
 			Logger:       logger,
+		}
+		if a.liveRequestStore != nil {
+			webCfg.ContentQuerier = a.liveRequestStore
 		}
 		if a.indexDB != nil {
 			webCfg.LogQuerier = &logQueryAdapter{db: a.indexDB}
-			// Content querier is only useful when content retention is
-			// enabled — without it every request detail lookup returns
-			// empty, making the inspectable chips misleading.
 			if cfg.Logging.RetainContent {
-				webCfg.ContentQuerier = &contentQueryAdapter{db: a.indexDB}
+				webCfg.ContentQuerier = &fallbackContentQuerier{
+					primary:  a.liveRequestStore,
+					fallback: &contentQueryAdapter{db: a.indexDB},
+				}
 			}
 		}
 		server.SetWebServer(web.NewWebServer(webCfg))
 		logger.Info("cognition engine dashboard enabled", "url", fmt.Sprintf("http://localhost:%d/", cfg.Listen.Port))
 	}
 
-	// --- Metacognitive loop ---
-	if cfg.Metacognitive.Enabled {
-		metacogCfg, err := metacognitive.ParseConfig(cfg.Metacognitive)
-		if err != nil {
-			return fmt.Errorf("metacognitive config: %w", err)
-		}
-		a.metacogCfg = &metacogCfg
-
-		// Resolve state file path: provenance store when configured,
-		// workspace-relative otherwise. Uses filepath.Base to normalize
-		// config values like "Thane/metacognitive.md" to flat layout.
-		stateFileName := filepath.Base(metacogCfg.StateFile)
-		var metacogStatePath string
-		if a.provenanceStore != nil {
-			metacogStatePath = a.provenanceStore.FilePath(stateFileName)
-		} else {
-			metacogStatePath = filepath.Join(cfg.Workspace.Path, metacogCfg.StateFile)
-		}
-
-		adapter := &loopAdapter{agentLoop: a.loop, router: a.rtr}
-		loopCfg := metacognitive.BuildLoopConfig(metacogCfg, metacognitive.Opts{
-			WorkspacePath:   cfg.Workspace.Path,
-			StateFilePath:   metacogStatePath,
-			ProvenanceStore: a.provenanceStore,
-			StateFileName:   stateFileName,
-		})
-		loopCfg.Setup = func(l *looppkg.Loop) {
-			metacognitive.RegisterTools(a.loop.Tools(), l, metacogCfg, metacogStatePath, a.provenanceStore)
-		}
-
-		metacogDeps := looppkg.Deps{
-			Runner:   adapter,
-			Logger:   logger,
-			EventBus: a.eventBus,
-		}
-		a.deferWorker("metacognitive", func(ctx context.Context) error {
-			if _, err := a.loopRegistry.SpawnLoop(ctx, loopCfg, metacogDeps); err != nil {
-				return fmt.Errorf("spawn metacognitive loop: %w", err)
+	// --- Loop definition services ---
+	// Durable loops-ng service definitions are bootstrapped from the
+	// immutable+overlay definition registry. Built-in services like
+	// metacognitive, pollers, watchers, and MQTT publishers participate
+	// as first-class definitions via runtime spec hydration.
+	if a.loopDefinitionRuntime != nil {
+		a.deferWorker("loop-definition-services", func(ctx context.Context) error {
+			result, err := a.loopDefinitionRuntime.StartEnabledServices(ctx)
+			if err != nil {
+				return err
+			}
+			if result.Started > 0 || result.SkippedInactive > 0 || result.SkippedPaused > 0 || result.SkippedIneligible > 0 || result.SkippedExisting > 0 || result.SkippedNonService > 0 {
+				logger.Info("loop definition services reconciled",
+					"started", result.Started,
+					"skipped_inactive", result.SkippedInactive,
+					"skipped_paused", result.SkippedPaused,
+					"skipped_ineligible", result.SkippedIneligible,
+					"skipped_existing", result.SkippedExisting,
+					"skipped_non_service", result.SkippedNonService,
+				)
 			}
 			return nil
 		})
-
-		logger.Info("metacognitive loop enabled",
-			"state_file", cfg.Metacognitive.StateFile,
-			"min_sleep", cfg.Metacognitive.MinSleep,
-			"max_sleep", cfg.Metacognitive.MaxSleep,
-			"supervisor_probability", cfg.Metacognitive.SupervisorProbability,
-		)
+		a.deferWorker("loop-definition-schedule", func(ctx context.Context) error {
+			return a.loopDefinitionRuntime.StartScheduleWatcher(ctx)
+		})
+	}
+	if mqttConnectWorker != nil {
+		a.deferWorker("mqtt-connect", mqttConnectWorker)
 	}
 
 	return nil

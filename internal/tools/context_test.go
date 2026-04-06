@@ -3,6 +3,9 @@ package tools
 import (
 	"context"
 	"testing"
+
+	looppkg "github.com/nugget/thane-ai-agent/internal/loop"
+	"github.com/nugget/thane-ai-agent/internal/memory"
 )
 
 func TestConversationIDFromContext(t *testing.T) {
@@ -128,6 +131,7 @@ func TestContextKeysIndependent(t *testing.T) {
 	ctx = WithConversationID(ctx, "conv-1")
 	ctx = WithSessionID(ctx, "sess-1")
 	ctx = WithToolCallID(ctx, "call-1")
+	ctx = WithChannelBinding(ctx, &memory.ChannelBinding{Channel: "signal", Address: "+15551234567"})
 
 	if got := ConversationIDFromContext(ctx); got != "conv-1" {
 		t.Errorf("ConversationIDFromContext() = %q, want %q", got, "conv-1")
@@ -138,4 +142,135 @@ func TestContextKeysIndependent(t *testing.T) {
 	if got := ToolCallIDFromContext(ctx); got != "call-1" {
 		t.Errorf("ToolCallIDFromContext() = %q, want %q", got, "call-1")
 	}
+	if got := ChannelBindingFromContext(ctx); got == nil || got.Channel != "signal" || got.Address != "+15551234567" {
+		t.Errorf("ChannelBindingFromContext() = %#v", got)
+	}
+}
+
+func TestChannelBindingFromContext(t *testing.T) {
+	binding := &memory.ChannelBinding{
+		Channel:     "signal",
+		Address:     "+15551234567",
+		ContactID:   "contact-1",
+		ContactName: "Alice Smith",
+		TrustZone:   "known",
+	}
+	ctx := WithChannelBinding(context.Background(), binding)
+	got := ChannelBindingFromContext(ctx)
+	if got == nil {
+		t.Fatal("ChannelBindingFromContext() = nil, want binding")
+	}
+	if got.ContactName != "Alice Smith" || got.ContactID != "contact-1" {
+		t.Fatalf("ChannelBindingFromContext() = %#v", got)
+	}
+	got.ContactName = "changed"
+	if binding.ContactName != "Alice Smith" {
+		t.Fatalf("binding mutated = %#v", binding)
+	}
+}
+
+func TestLoopCompletionTargetFromContext(t *testing.T) {
+	t.Run("signal context returns channel target", func(t *testing.T) {
+		ctx := WithConversationID(context.Background(), "signal-15551234567")
+		ctx = WithHints(ctx, map[string]string{
+			"source": "signal",
+			"sender": "+15551234567",
+		})
+
+		mode, conversationID, target := LoopCompletionTargetFromContext(ctx)
+		if mode != looppkg.CompletionChannel {
+			t.Fatalf("mode = %q, want channel", mode)
+		}
+		if conversationID != "signal-15551234567" {
+			t.Fatalf("conversationID = %q, want signal-15551234567", conversationID)
+		}
+		if target == nil || target.Channel != "signal" || target.Recipient != "+15551234567" || target.ConversationID != "signal-15551234567" {
+			t.Fatalf("target = %#v", target)
+		}
+	})
+
+	t.Run("signal context without sender falls back to conversation", func(t *testing.T) {
+		ctx := WithConversationID(context.Background(), "signal-15551234567")
+		ctx = WithHints(ctx, map[string]string{
+			"source": "signal",
+		})
+
+		mode, conversationID, target := LoopCompletionTargetFromContext(ctx)
+		if mode != looppkg.CompletionConversation {
+			t.Fatalf("mode = %q, want conversation", mode)
+		}
+		if conversationID != "signal-15551234567" {
+			t.Fatalf("conversationID = %q, want signal-15551234567", conversationID)
+		}
+		if target != nil {
+			t.Fatalf("target = %#v, want nil", target)
+		}
+	})
+
+	t.Run("channel binding can drive signal target without hints", func(t *testing.T) {
+		ctx := WithConversationID(context.Background(), "signal-15551234567")
+		ctx = WithChannelBinding(ctx, &memory.ChannelBinding{
+			Channel: "signal",
+			Address: "+15551234567",
+		})
+
+		mode, conversationID, target := LoopCompletionTargetFromContext(ctx)
+		if mode != looppkg.CompletionChannel {
+			t.Fatalf("mode = %q, want channel", mode)
+		}
+		if conversationID != "signal-15551234567" {
+			t.Fatalf("conversationID = %q, want signal-15551234567", conversationID)
+		}
+		if target == nil || target.Channel != "signal" || target.Recipient != "+15551234567" {
+			t.Fatalf("target = %#v", target)
+		}
+	})
+
+	t.Run("owu conversation returns owu channel target", func(t *testing.T) {
+		ctx := WithConversationID(context.Background(), "owu-abc123")
+
+		mode, conversationID, target := LoopCompletionTargetFromContext(ctx)
+		if mode != looppkg.CompletionChannel {
+			t.Fatalf("mode = %q, want channel", mode)
+		}
+		if conversationID != "owu-abc123" {
+			t.Fatalf("conversationID = %q, want owu-abc123", conversationID)
+		}
+		if target == nil || target.Channel != "owu" || target.ConversationID != "owu-abc123" {
+			t.Fatalf("target = %#v", target)
+		}
+	})
+
+	t.Run("owu source hint returns owu channel target", func(t *testing.T) {
+		ctx := WithConversationID(context.Background(), "conv-owu-1")
+		ctx = WithHints(ctx, map[string]string{
+			"source": "owu",
+		})
+
+		mode, conversationID, target := LoopCompletionTargetFromContext(ctx)
+		if mode != looppkg.CompletionChannel {
+			t.Fatalf("mode = %q, want channel", mode)
+		}
+		if conversationID != "conv-owu-1" {
+			t.Fatalf("conversationID = %q, want conv-owu-1", conversationID)
+		}
+		if target == nil || target.Channel != "owu" || target.ConversationID != "conv-owu-1" {
+			t.Fatalf("target = %#v", target)
+		}
+	})
+
+	t.Run("other context falls back to conversation", func(t *testing.T) {
+		ctx := WithConversationID(context.Background(), "conv-123")
+
+		mode, conversationID, target := LoopCompletionTargetFromContext(ctx)
+		if mode != looppkg.CompletionConversation {
+			t.Fatalf("mode = %q, want conversation", mode)
+		}
+		if conversationID != "conv-123" {
+			t.Fatalf("conversationID = %q, want conv-123", conversationID)
+		}
+		if target != nil {
+			t.Fatalf("target = %#v, want nil", target)
+		}
+	})
 }

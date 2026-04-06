@@ -195,6 +195,14 @@ func (e *Engine) Run(ctx context.Context, cfg Config, messages []llm.Message) (*
 				llmResp.Message.Content = ""
 			}
 
+			if cfg.NormalizeToolCall != nil {
+				normalizedToolCalls := make([]llm.ToolCall, 0, len(llmResp.Message.ToolCalls))
+				for _, rawTC := range llmResp.Message.ToolCalls {
+					normalizedToolCalls = append(normalizedToolCalls, cfg.NormalizeToolCall(iterCtx, i, rawTC))
+				}
+				llmResp.Message.ToolCalls = normalizedToolCalls
+			}
+
 			// Add assistant message with tool calls.
 			messages = append(messages, llmResp.Message)
 
@@ -437,11 +445,11 @@ func (e *Engine) forceText(ctx context.Context, cfg Config, model string, messag
 
 	// Only attempt the force-text call if the last message is a tool result.
 	if len(messages) > 0 && messages[len(messages)-1].Role == "tool" {
-		log.Warn("forcing text response", "reason", partial.ExhaustReason)
+		log.Warn("forcing text response", "reason", partial.ExhaustReason, "model", model)
 
 		resp, err := cfg.LLM.ChatStream(ctx, model, messages, nil, cfg.Stream)
 		if err != nil {
-			log.Error("force-text LLM call failed", "error", err)
+			log.Error("force-text LLM call failed", "model", model, "reason", partial.ExhaustReason, "error", err)
 			if partial.Content == "" {
 				partial.Content = cfg.FallbackContent
 				if partial.Content == "" {
@@ -460,7 +468,7 @@ func (e *Engine) forceText(ctx context.Context, cfg Config, model string, messag
 
 		content := resp.Message.Content
 		if content == "" {
-			log.Error("empty response in force-text recovery")
+			log.Error("empty response in force-text recovery", "model", model, "reason", partial.ExhaustReason)
 			content = cfg.FallbackContent
 			if content == "" {
 				content = prompts.EmptyResponseFallback

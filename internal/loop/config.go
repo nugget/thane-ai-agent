@@ -2,9 +2,12 @@ package loop
 
 import (
 	"context"
+	"encoding"
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/nugget/thane-ai-agent/internal/toolcatalog"
 )
 
 // ErrNoOp is returned by a [Config.Handler] to signal that the
@@ -46,6 +49,9 @@ const (
 // fires again while the loop is already running.
 type RetriggerMode int
 
+var _ encoding.TextMarshaler = RetriggerMode(0)
+var _ encoding.TextUnmarshaler = (*RetriggerMode)(nil)
+
 const (
 	// RetriggerSingle ignores re-triggers while the loop is running.
 	RetriggerSingle RetriggerMode = iota
@@ -56,6 +62,61 @@ const (
 	// RetriggerSpawn spawns another instance of the loop.
 	RetriggerSpawn
 )
+
+// String returns the stable textual form of the retrigger mode.
+func (m RetriggerMode) String() string {
+	switch m {
+	case RetriggerSingle:
+		return "single"
+	case RetriggerRestart:
+		return "restart"
+	case RetriggerQueue:
+		return "queue"
+	case RetriggerSpawn:
+		return "spawn"
+	default:
+		return fmt.Sprintf("unknown(%d)", int(m))
+	}
+}
+
+// MarshalText implements [encoding.TextMarshaler].
+func (m RetriggerMode) MarshalText() ([]byte, error) {
+	switch m {
+	case RetriggerSingle, RetriggerRestart, RetriggerQueue, RetriggerSpawn:
+		return []byte(m.String()), nil
+	default:
+		return nil, fmt.Errorf("loop: unsupported retrigger mode %d", int(m))
+	}
+}
+
+// UnmarshalText implements [encoding.TextUnmarshaler].
+func (m *RetriggerMode) UnmarshalText(text []byte) error {
+	if m == nil {
+		return fmt.Errorf("loop: nil retrigger mode")
+	}
+	parsed, err := ParseRetriggerMode(string(text))
+	if err != nil {
+		return err
+	}
+	*m = parsed
+	return nil
+}
+
+// ParseRetriggerMode parses the stable textual form of a retrigger mode.
+func ParseRetriggerMode(raw string) (RetriggerMode, error) {
+	switch raw {
+	case "", "single":
+		return RetriggerSingle, nil
+	case "restart":
+		return RetriggerRestart, nil
+	case "queue":
+		return RetriggerQueue, nil
+	case "spawn":
+		return RetriggerSpawn, nil
+	default:
+		return RetriggerSingle, fmt.Errorf("loop: unsupported retrigger mode %q", raw)
+	}
+}
 
 // Config holds the configuration for a loop. All fields with zero values
 // use sensible defaults.
@@ -166,10 +227,15 @@ type Config struct {
 	// skips iteration accounting and continues to the next cycle.
 	Handler func(ctx context.Context, event any) error `json:"-"`
 
-	// Hints are merged into RunRequest hints for each iteration.
+	// Hints are merged into Request hints for each iteration.
 	// Config hints override loop-generated defaults (e.g., setting
 	// "source" to "metacognitive" instead of "loop").
 	Hints map[string]string
+
+	// FallbackContent is static text used when the loop's nested agent run
+	// or direct request/reply execution finishes without any user-visible
+	// content. Interactive loops can set this to guarantee a reply.
+	FallbackContent string
 
 	// Setup is called by [Registry.SpawnLoop] after [New] but before
 	// [Loop.Start]. Use it to register tools or perform other setup
@@ -260,6 +326,16 @@ type IterationResult struct {
 	ContextWindow int
 	// ToolsUsed maps tool names to invocation counts.
 	ToolsUsed map[string]int
+	// EffectiveTools lists the tools that were visible to the model for
+	// this iteration after allowlists, excludes, capability tags, and
+	// delegation gating were applied.
+	EffectiveTools []string
+	// ActiveTags holds the capability tags active at the end of this
+	// iteration.
+	ActiveTags []string
+	// LoadedCapabilities captures the structured capability entries
+	// corresponding to the tags loaded for this iteration.
+	LoadedCapabilities []toolcatalog.LoadedCapabilityEntry
 	// Elapsed is the wall-clock duration of the iteration.
 	Elapsed time.Duration
 	// Supervisor indicates whether this was a supervisor iteration.
@@ -289,6 +365,12 @@ type IterationSnapshot struct {
 	ContextWindow int `json:"context_window,omitempty"`
 	// ToolsUsed maps tool names to invocation counts.
 	ToolsUsed map[string]int `json:"tools_used,omitempty"`
+	// EffectiveTools lists the tools visible to the model for this turn.
+	EffectiveTools []string `json:"effective_tools,omitempty"`
+	// ActiveTags holds the capability tags active for this turn.
+	ActiveTags []string `json:"active_tags,omitempty"`
+	// Tooling captures the authoritative tool/capability view for this turn.
+	Tooling ToolingState `json:"tooling,omitempty"`
 	// ElapsedMs is the wall-clock duration of the iteration in
 	// milliseconds. Stored as int64 (not time.Duration) so the JSON
 	// value is directly usable by the client without nanosecond
@@ -373,6 +455,8 @@ type Status struct {
 	// ActiveTags holds the currently active capability tags at the time
 	// of the snapshot. Nil when capability tagging is not configured.
 	ActiveTags []string `json:"active_tags,omitempty"`
+	// Tooling captures the resolved loop-level tool/capability state.
+	Tooling ToolingState `json:"tooling,omitempty"`
 	// Config is a copy of the loop's configuration.
 	Config Config `json:"config"`
 }
