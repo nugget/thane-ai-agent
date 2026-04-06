@@ -96,7 +96,6 @@ func ExampleConfig() *Config {
 		TalentsDir: "./talents",
 
 		Paths: map[string]string{
-			"core":       "./core",
 			"generated":  "./generated",
 			"kb":         "./knowledge",
 			"scratchpad": "./scratchpad",
@@ -302,13 +301,6 @@ func ExampleConfig() *Config {
 			},
 		},
 
-		Context: ContextConfig{
-			InjectFiles: []string{
-				"~/.agents.md",
-				"~/Thane/core/MEMORY.md",
-			},
-		},
-
 		Archive: ArchiveConfig{
 			MetadataModel:      "qwen2.5-coder:32b",
 			SummarizeInterval:  300,
@@ -351,7 +343,6 @@ func ExampleConfig() *Config {
 
 		Metacognitive: MetacognitiveConfig{
 			Enabled:               false,
-			StateFile:             "core/metacognitive.md",
 			MinSleep:              "2m",
 			MaxSleep:              "30m",
 			DefaultSleep:          "10m",
@@ -415,8 +406,6 @@ func ExampleConfig() *Config {
 		},
 
 		Timezone: "America/Chicago",
-
-		PersonaFile: "~/Thane/core/persona.md",
 
 		ExtraPath: []string{
 			"$HOME/.local/bin",

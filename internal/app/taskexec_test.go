@@ -250,10 +250,14 @@ func TestRunScheduledTask_LauncherError(t *testing.T) {
 }
 
 func TestRunScheduledTask_PeriodicReflection(t *testing.T) {
-	// Create a workspace with an ego.md file.
+	// Create a workspace with a core/ego.md file.
 	workspace := t.TempDir()
+	coreDir := filepath.Join(workspace, "core")
+	if err := os.MkdirAll(coreDir, 0o755); err != nil {
+		t.Fatalf("mkdir core: %v", err)
+	}
 	egoContent := "# My Reflections\n\nI notice the lights change at sunset."
-	if err := os.WriteFile(filepath.Join(workspace, "ego.md"), []byte(egoContent), 0644); err != nil {
+	if err := os.WriteFile(filepath.Join(coreDir, "ego.md"), []byte(egoContent), 0644); err != nil {
 		t.Fatalf("write ego.md: %v", err)
 	}
 
@@ -294,7 +298,7 @@ func TestRunScheduledTask_PeriodicReflection(t *testing.T) {
 }
 
 func TestRunScheduledTask_PeriodicReflection_NoEgoFile(t *testing.T) {
-	// Workspace exists but ego.md does not.
+	// Workspace exists but core/ego.md does not.
 	workspace := t.TempDir()
 
 	launcher := &mockTaskLauncher{

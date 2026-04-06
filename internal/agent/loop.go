@@ -658,8 +658,8 @@ func (l *Loop) buildSystemPromptWithProfile(ctx context.Context, userMessage str
 	seal()
 
 	// 3. Injected context (knowledge — what do I know)
-	// Re-read inject_files each turn so external changes (e.g. MEMORY.md
-	// updated by another runtime) are visible without restart.
+	// Re-read registered core context files each turn so external edits
+	// (for example mission.md updates) are visible without restart.
 	if len(l.injectFiles) > 0 {
 		var ctxBuf strings.Builder
 		for _, path := range l.injectFiles {

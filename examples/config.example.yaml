@@ -126,9 +126,10 @@ embeddings:
   # falls back to the default model resource/provider selection.
   baseurl: ""
 # Workspace configures the agent's sandboxed file system access.
-# In multi-root deployments, set Path to the common writable parent
-# (for example ~/Thane) and use Paths for semantic roots like
-# core:, kb:, generated:, and scratchpad:.
+# The workspace root is also the anchor for Thane's fixed core
+# document root at {workspace.path}/core, which holds canonical
+# always-on files at stable locations such as persona.md, ego.md,
+# mission.md, and metacognitive.md.
 workspace:
   # Path is the root directory for file operations. If empty, file
   # tools are disabled entirely. In multi-root setups, this should be
@@ -146,16 +147,13 @@ workspace:
 # construction time.
 # 
 # Typical prefixes are:
-#   - core:       high-integrity core docs (persona, ego, metacognitive)
 #   - kb:         curated knowledge / indexed documents
 #   - generated:  model-produced durable outputs (reports, dailies)
 #   - scratchpad: low-integrity writable work area
 # 
-# This is the main transition seam toward policy-managed document
-# roots: the prefixes express intent even before dedicated doc_roots
-# policy exists in config.
+# The core: prefix is reserved and always derived from
+# {workspace.path}/core; it is not configured here.
 paths:
-  core: ./core
   generated: ./generated
   kb: ./knowledge
   scratchpad: ./scratchpad
@@ -199,20 +197,6 @@ data_dir: ./db
 # a curated managed root rather than a scratch workspace.
 # Default: "./talents".
 talents_dir: ./talents
-#
-# (optional) PersonaFile is an optional markdown file that replaces the default
-# persona_file: ~/Thane/core/persona.md
-#
-# (optional) Context configures static context injection into the system prompt.
-# context:
-#   InjectFiles is a list of file paths to re-read and inject into
-#   the system prompt on every turn. Paths support ~ expansion.
-#   Missing or unreadable files are silently skipped at read time.
-#   Common fits are MEMORY.md, USER.md, or other operator-curated
-#   context files that live in a core document root.
-#   inject_files:
-#     - ~/.agents.md
-#     - ~/Thane/core/MEMORY.md
 #
 # (optional) Archive configures session archive behavior.
 # archive:
@@ -628,9 +612,9 @@ talents_dir: ./talents
 # (optional) Provenance configures git-backed file storage with SSH signature
 # provenance:
 #   Path is the directory for the provenance git repository.
-#   Supports ~ expansion. Today this is the integrity-tracked root for
-#   core documents such as ego.md and metacognitive.md; over time this
-#   generalizes into per-root integrity policy. Example:
+#   Supports ~ expansion. This is a legacy seam toward future
+#   integrity-tracked document roots and no longer defines the fixed
+#   workspace/core locations of always-on identity files. Example:
 #   ~/Thane/core
 #   path: ~/Thane/core
 #   SigningKey is the path to an SSH private key used to sign
@@ -739,11 +723,6 @@ talents_dir: ./talents
 # metacognitive:
 #   Enabled controls whether the metacognitive loop starts. Default: false.
 #   enabled: false
-#   StateFile is the path to the persistent state file, relative to
-#   the workspace root. For managed-root layouts, place this under a
-#   core root such as core/metacognitive.md. Default:
-#   "metacognitive.md".
-#   state_file: core/metacognitive.md
 #   MinSleep is the minimum allowed sleep duration between iterations.
 #   The LLM cannot request a shorter sleep via set_next_sleep.
 #   Default: "2m". Parsed as a Go duration string.

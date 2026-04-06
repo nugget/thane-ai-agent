@@ -40,7 +40,6 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/notifications"
 	"github.com/nugget/thane-ai-agent/internal/opstate"
 	"github.com/nugget/thane-ai-agent/internal/platform"
-	"github.com/nugget/thane-ai-agent/internal/provenance"
 	"github.com/nugget/thane-ai-agent/internal/router"
 	"github.com/nugget/thane-ai-agent/internal/scheduler"
 	"github.com/nugget/thane-ai-agent/internal/server/api"
@@ -145,9 +144,6 @@ type App struct {
 	// Attachment and vision
 	attachmentStore *attachments.Store
 	visionAnalyzer  *attachments.Analyzer
-
-	// Provenance
-	provenanceStore *provenance.Store
 
 	// Media
 	mediaStore *media.MediaStore
