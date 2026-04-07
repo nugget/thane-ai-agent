@@ -45,7 +45,7 @@ case "$target_os" in
         archive_path="$output_dir/${package_name}.zip"
         (
             cd "$stage_dir"
-            COPYFILE_DISABLE=1 zip -X -rq "$archive_path" "$package_name"
+            COPYFILE_DISABLE=1 ditto -c -k --norsrc --keepParent "$package_name" "$archive_path"
         )
         ;;
     *)
