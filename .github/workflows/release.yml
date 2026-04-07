@@ -185,6 +185,11 @@ jobs:
           labels: |
             org.opencontainers.image.title=Thane
             org.opencontainers.image.description=Autonomous AI agent for Home Assistant
+            org.opencontainers.image.authors=David McNett (https://github.com/nugget)
+            org.opencontainers.image.url=https://github.com/nugget/thane-ai-agent
+            org.opencontainers.image.source=https://github.com/nugget/thane-ai-agent
+            org.opencontainers.image.documentation=https://github.com/nugget/thane-ai-agent/tree/main/docs
+            org.opencontainers.image.licenses=Apache-2.0
             org.opencontainers.image.vendor=nugget
 
       - name: Build and push multi-arch container

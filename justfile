@@ -491,9 +491,39 @@ release-snapshot version target_os=host_os target_arch=host_arch cc="":
     fi
     just release-checksums "{{version}}"
 
-# Run the full local release dress rehearsal, but stop before any
-# off-machine publication steps such as notarization, tag push, or
-# GitHub release/container publishing.
+# Build and package a Linux release archive through Docker Buildx.
+# This keeps the local dress rehearsal able to produce Linux artifacts
+# even on non-Linux hosts with CGO enabled.
+[group('release-engineering')]
+release-archive-linux-docker version target_arch:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    version="{{version}}"
+    target_arch="{{target_arch}}"
+    export_dir="dist/docker-export/linux-${target_arch}"
+    binary="$export_dir/thane"
+
+    version="${version#v}"
+    rm -rf "$export_dir"
+    mkdir -p "$export_dir"
+
+    docker buildx build \
+        --platform "linux/${target_arch}" \
+        --target artifact \
+        --build-arg THANE_VERSION="v${version}" \
+        --build-arg BUILD_COMMIT="{{git_commit}}" \
+        --build-arg BUILD_BRANCH="{{git_branch}}" \
+        --build-arg BUILD_TIME="{{build_time}}" \
+        --output "type=local,dest=${export_dir}" \
+        .
+
+    archive="$(scripts/package-release.sh "$version" linux "$target_arch" "$binary" "{{release-dir}}")"
+    printf '%s\n' "$archive"
+
+# Run the full local release dress rehearsal, including local signing
+# and optional Apple notarization when configured, but stop before any
+# GitHub publication steps such as tag push, release upload, or
+# container publishing.
 [group('release-engineering')]
 release-breakpoint version target_os=host_os target_arch=host_arch cc="" container_tag="thane:release-breakpoint":
     #!/usr/bin/env bash
@@ -516,10 +546,13 @@ release-breakpoint version target_os=host_os target_arch=host_arch cc="" contain
     just ci
 
     if [ -n "$cc" ]; then
-        THANE_NOTARY_PROFILE="" just release-snapshot "v${version}" "$target_os" "$target_arch" "$cc"
+        just release-archive "v${version}" "$target_os" "$target_arch" "$cc"
     else
-        THANE_NOTARY_PROFILE="" just release-snapshot "v${version}" "$target_os" "$target_arch"
+        just release-archive "v${version}" "$target_os" "$target_arch"
     fi
+    just release-archive-linux-docker "v${version}" amd64
+    just release-archive-linux-docker "v${version}" arm64
+    just release-checksums "v${version}"
 
     just container "$container_tag"
     docker run --rm "$container_tag" version
@@ -527,9 +560,11 @@ release-breakpoint version target_os=host_os target_arch=host_arch cc="" contain
     echo ""
     echo "Local release breakpoint complete."
     echo "  Archives/checksums: {{release-dir}}/"
+    echo "  Included archives: {{target_os}}/{{target_arch}}, linux/amd64, linux/arm64"
     echo "  Container smoke tag: $container_tag"
     echo ""
-    echo "Nothing was pushed, tagged, notarized, or published."
+    echo "Nothing was tagged, pushed, or published to GitHub."
+    echo "If THANE_NOTARY_PROFILE was set, Apple notarization was completed during this run."
     echo "Next off-machine step when ready:"
     echo "  just release v${version}"
 

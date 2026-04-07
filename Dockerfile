@@ -29,6 +29,10 @@ RUN CGO_ENABLED=1 GOOS="${TARGETOS}" GOARCH="${TARGETARCH:-amd64}" \
         -X github.com/nugget/thane-ai-agent/internal/buildinfo.BuildTime=${BUILD_TIME}" \
       -o /out/thane ./cmd/thane
 
+FROM scratch AS artifact
+
+COPY --from=builder /out/thane /thane
+
 FROM alpine:3.20
 
 ARG THANE_VERSION=dev
@@ -38,13 +42,17 @@ ARG BUILD_TIME=unknown
 LABEL \
     org.opencontainers.image.title="Thane" \
     org.opencontainers.image.description="Autonomous AI agent for Home Assistant" \
+    org.opencontainers.image.authors="David McNett (https://github.com/nugget)" \
     org.opencontainers.image.url="https://github.com/nugget/thane-ai-agent" \
     org.opencontainers.image.source="https://github.com/nugget/thane-ai-agent" \
     org.opencontainers.image.documentation="https://github.com/nugget/thane-ai-agent/tree/main/docs" \
+    org.opencontainers.image.vendor="nugget" \
     org.opencontainers.image.licenses="Apache-2.0" \
     org.opencontainers.image.version="${THANE_VERSION}" \
+    org.opencontainers.image.ref.name="${THANE_VERSION}" \
     org.opencontainers.image.revision="${BUILD_COMMIT}" \
     org.opencontainers.image.created="${BUILD_TIME}" \
+    org.opencontainers.image.base.name="docker.io/library/alpine:3.20" \
     io.hass.name="Thane" \
     io.hass.description="Autonomous AI agent for Home Assistant" \
     io.hass.version="${THANE_VERSION}" \
