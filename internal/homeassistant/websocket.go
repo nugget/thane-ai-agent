@@ -265,7 +265,7 @@ func (c *WSClient) GetAreaRegistry(ctx context.Context) ([]Area, error) {
 	return areas, nil
 }
 
-// GetEntityRegistry retrieves the entity registry via WebSocket.
+// GetEntityRegistryWS retrieves the entity registry via WebSocket.
 func (c *WSClient) GetEntityRegistryWS(ctx context.Context) ([]EntityRegistryEntry, error) {
 	id := c.msgID.Add(1)
 	msg := map[string]any{

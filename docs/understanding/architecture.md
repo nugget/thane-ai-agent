@@ -100,10 +100,14 @@ This means Thane works with HA out of the box — no custom integration needed.
 
 ### Agent Loop
 
-The core reasoning cycle. Receives a request — from a user, event trigger,
-or scheduled task — assembles context from memory, contacts, and home state,
-activates capability tags, plans tool calls, delegates tool-heavy work to
-local models, and shapes a response.
+The universal execution primitive. Every piece of work — a user
+conversation, a background delegation, a persistent watcher — runs as
+a loop with the same reasoning cycle: context assembly, tag activation,
+planning, tool execution, response. Loops come in three modes:
+request/reply (one-shot conversations), background tasks (detached
+delegation), and autonomous loops (persistent, self-paced — the agent
+directs its own attention). A registry tracks all active loops and
+coordinates shutdown.
 See [The Agent Loop](agent-loop.md).
 
 ### Model Router

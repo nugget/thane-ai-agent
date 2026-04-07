@@ -93,9 +93,14 @@ architecture:
 architecture-check:
     @bash scripts/architecture.sh check
 
+# Check internal markdown links (no network requests)
+[group('test')]
+link-check:
+    lychee --offline --no-progress '**/*.md'
+
 # CI: format check, lint, and tests
 [group('test')]
-ci: fmt-check mod-tidy-check config-generate-check architecture-check lint test
+ci: fmt-check mod-tidy-check config-generate-check architecture-check link-check lint test
 
 # --- Install ---
 
