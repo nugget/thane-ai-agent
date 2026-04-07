@@ -770,6 +770,7 @@ type preparedExecution struct {
 	conversationID   string
 	archiveSessionID string
 	parentLoopID     string
+	parentLoopName   string
 	channelBinding   *memory.ChannelBinding
 	profile          *Profile
 	routeHints       map[string]string
@@ -1149,6 +1150,7 @@ func (e *Executor) prepareExecution(ctx context.Context, task, profileName, guid
 		conversationID:   conversationID,
 		archiveSessionID: archiveSessionID,
 		parentLoopID:     tools.LoopIDFromContext(ctx),
+		parentLoopName:   tools.HintsFromContext(ctx)["loop_name"],
 		channelBinding:   tools.ChannelBindingFromContext(ctx),
 		profile:          profile,
 		routeHints:       e.effectiveDelegateRouterHints(ctx, profile),
@@ -1213,6 +1215,8 @@ type completionRecord struct {
 	log              *slog.Logger
 	delegateID       string
 	conversationID   string
+	parentLoopID     string
+	parentLoopName   string
 	archiveSessionID string
 	task             string
 	guidance         string
@@ -1299,6 +1303,8 @@ func (e *Executor) recordCompletion(rec *completionRecord) {
 			Timestamp:                now,
 			RequestID:                rec.delegateID,
 			ConversationID:           rec.conversationID,
+			LoopID:                   rec.parentLoopID,
+			LoopName:                 rec.parentLoopName,
 			Model:                    identity.Model,
 			UpstreamModel:            identity.UpstreamModel,
 			Resource:                 identity.Resource,

@@ -1933,6 +1933,15 @@ const detailPlaceholder = $('#detail-placeholder');
 const detailPanel = $('#detail-panel');
 const detailContent = $('#detail-content');
 const detailEntity = $('#detail-entity');
+const costDashboardPanel = $('#cost-dashboard');
+const costDashboardEls = {
+  subtitle: $('#cost-dashboard-subtitle'),
+  hours: $('#cost-dashboard-hours'),
+  refresh: $('#cost-dashboard-refresh'),
+  close: $('#cost-dashboard-close'),
+  empty: $('#cost-dashboard-empty'),
+  content: $('#cost-dashboard-content'),
+};
 const emptyState = $('#empty-state');
 const logEmpty = $('#log-empty');
 const logScroll = $('#log-scroll');
@@ -1955,6 +1964,7 @@ const SCHEMA_CARD_PRESET_HEIGHTS = Object.freeze({
   widget: 220,
 });
 const SCHEMA_CARD_LAYOUT_ORDER = Object.freeze(['title', 'widget', 'full']);
+const COST_DASHBOARD_REFRESH_MS = 15000;
 
 function loadDashboardPrefs() {
   try {
@@ -3600,6 +3610,32 @@ function appendSchemaRow(body, label, value, opts = {}) {
   return { row, valueEl };
 }
 
+function appendSchemaNodeRow(body, labelContent, valueContent, opts = {}) {
+  if (valueContent === null || valueContent === undefined || valueContent === '') return null;
+  const row = document.createElement('div');
+  row.className = 'schema-row' + (opts.multiline ? ' schema-row--multiline' : '');
+
+  const labelEl = document.createElement('div');
+  labelEl.className = 'schema-row__label';
+  if (typeof labelContent === 'string' || typeof labelContent === 'number' || typeof labelContent === 'boolean') {
+    labelEl.textContent = String(labelContent);
+  } else if (labelContent) {
+    labelEl.appendChild(labelContent);
+  }
+  row.appendChild(labelEl);
+
+  const valueEl = document.createElement('div');
+  valueEl.className = 'schema-row__value';
+  if (typeof valueContent === 'string' || typeof valueContent === 'number' || typeof valueContent === 'boolean') {
+    valueEl.textContent = String(valueContent);
+  } else if (valueContent) {
+    valueEl.appendChild(valueContent);
+  }
+  row.appendChild(valueEl);
+  body.appendChild(row);
+  return { row, valueEl };
+}
+
 function makeSchemaIDList(ids, opts = {}) {
   const wrap = document.createElement('div');
   wrap.className = 'schema-chip-list schema-chip-list--ids';
@@ -3648,6 +3684,286 @@ function makeInspectorUtility(label, content) {
   }
 
   return wrap;
+}
+
+let costDashboardVisible = false;
+let costDashboardAbort = null;
+let costDashboardData = null;
+let costDashboardRefreshedAt = '';
+
+function formatUSD(value) {
+  const n = Number(value || 0);
+  if (!Number.isFinite(n)) return '$0.00';
+  if (Math.abs(n) >= 100 || n === 0) return '$' + n.toFixed(2);
+  if (Math.abs(n) >= 1) return '$' + n.toFixed(2);
+  if (Math.abs(n) >= 0.01) return '$' + n.toFixed(3);
+  return '$' + n.toFixed(4);
+}
+
+function getUsageGroup(groups, key) {
+  return (groups || []).find((entry) => entry && entry.key === key);
+}
+
+function formatUsageSummaryLine(summary, opts = {}) {
+  const sum = summary || {};
+  const bits = [
+    formatUSD(sum.total_cost_usd || 0),
+    formatTokens((sum.total_input_tokens || 0) + (sum.total_output_tokens || 0)) + ' tok',
+  ];
+  if (opts.requests && opts.requests > 0) {
+    bits.push(formatNumber(opts.requests) + ' req');
+  } else if ((sum.total_records || 0) > 0) {
+    bits.push(formatNumber(sum.total_records || 0) + ' calls');
+  }
+  return bits.join(' · ');
+}
+
+function makeInlineWrap() {
+  const wrap = document.createElement('div');
+  wrap.style.display = 'flex';
+  wrap.style.flexWrap = 'wrap';
+  wrap.style.gap = '0.35rem';
+  wrap.style.alignItems = 'center';
+  return wrap;
+}
+
+function renderCostDashboardShell() {
+  detailPlaceholder.hidden = true;
+  detailContent.hidden = true;
+  requestDetailPanel.hidden = true;
+  costDashboardPanel.hidden = false;
+}
+
+function renderCostDashboardEmpty(message) {
+  renderCostDashboardShell();
+  costDashboardEls.empty.hidden = false;
+  costDashboardEls.empty.textContent = message;
+  costDashboardEls.content.hidden = true;
+  costDashboardEls.content.innerHTML = '';
+}
+
+function buildUsageGroupedCard(title, meta, groups, opts = {}) {
+  const card = makeSchemaCard(title, meta, {
+    titleSummary: opts.titleSummary || '',
+    widgetFacts: opts.widgetFacts || [],
+    key: 'cost-' + title.toLowerCase().replace(/[^a-z0-9]+/g, '-'),
+    entityKind: 'cost-dashboard',
+  });
+  const entries = (groups || []).slice(0, opts.limit || 8);
+  if (entries.length === 0) {
+    appendSchemaRow(card.body, 'status', 'No records in this window.');
+    return card.card;
+  }
+  for (const entry of entries) {
+    const label = truncate(entry.key || '(unset)', opts.maxLabel || 32);
+    appendSchemaRow(card.body, label, formatUsageSummaryLine(entry.summary));
+  }
+  return card.card;
+}
+
+function buildLoopUsageCard(data) {
+  const card = makeSchemaCard('Loop burn', 'Current loop attribution', {
+    titleSummary: 'Loop-linked Anthropic and local spend, grouped by the loop that triggered the request.',
+    widgetFacts: [
+      { label: 'loops', value: formatNumber((data.by_loop || []).length) },
+      { label: 'window', value: data.hours + 'h' },
+    ],
+    key: 'cost-loop-burn',
+    entityKind: 'cost-dashboard',
+  });
+  const entries = (data.by_loop || []).slice(0, 10);
+  if (entries.length === 0) {
+    appendSchemaRow(card.body, 'status', 'No loop-attributed usage in this window.');
+    return card.card;
+  }
+  for (const entry of entries) {
+    const valueWrap = makeInlineWrap();
+    const summary = document.createElement('span');
+    summary.textContent = formatUsageSummaryLine(entry.summary, { requests: entry.request_count || 0 });
+    valueWrap.appendChild(summary);
+    if (entry.loop_id && state.loops.has(entry.loop_id)) {
+      const btn = document.createElement('button');
+      btn.className = 'btn btn--sm';
+      btn.textContent = 'Select';
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        closeCostDashboard();
+        selectLoop(entry.loop_id);
+      });
+      valueWrap.appendChild(btn);
+    }
+    appendSchemaRow(card.body, truncate(entry.loop_name || entry.loop_id || '(loop)', 28), valueWrap);
+  }
+  return card.card;
+}
+
+function buildRequestUsageCard(data) {
+  const card = makeSchemaCard('Top requests', 'Request-level drill-down', {
+    titleSummary: 'Highest-cost requests in the selected window. Request chips open the existing request detail pane.',
+    widgetFacts: [
+      { label: 'shown', value: formatNumber((data.top_requests || []).length) },
+      { label: 'window', value: data.hours + 'h' },
+    ],
+    key: 'cost-top-requests',
+    entityKind: 'cost-dashboard',
+  });
+  const entries = (data.top_requests || []).slice(0, 10);
+  if (entries.length === 0) {
+    appendSchemaRow(card.body, 'status', 'No request records in this window.');
+    return card.card;
+  }
+  for (const entry of entries) {
+    const label = makeRequestChip(entry.request_id);
+    const valueWrap = makeInlineWrap();
+    const summary = document.createElement('span');
+    summary.textContent = formatUsageSummaryLine(entry.summary);
+    valueWrap.appendChild(summary);
+    if (entry.loop_name) {
+      const loopNote = document.createElement('span');
+      loopNote.className = 'schema-card__fact';
+      loopNote.textContent = 'loop: ' + truncate(entry.loop_name, 18);
+      valueWrap.appendChild(loopNote);
+    }
+    if (entry.loop_id && state.loops.has(entry.loop_id)) {
+      const btn = document.createElement('button');
+      btn.className = 'btn btn--sm';
+      btn.textContent = 'Select loop';
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        closeCostDashboard();
+        selectLoop(entry.loop_id);
+      });
+      valueWrap.appendChild(btn);
+    }
+    appendSchemaNodeRow(card.body, label, valueWrap);
+  }
+  return card.card;
+}
+
+function renderCostDashboardContent(data) {
+  renderCostDashboardShell();
+  costDashboardEls.empty.hidden = true;
+  costDashboardEls.content.hidden = false;
+  costDashboardEls.content.innerHTML = '';
+
+  const providerAnthropic = getUsageGroup(data.by_provider, 'anthropic');
+  const summary = data.summary || {};
+  const totalRequests = summary.total_records || 0;
+  const anthropicCost = providerAnthropic && providerAnthropic.summary ? providerAnthropic.summary.total_cost_usd || 0 : 0;
+  costDashboardEls.subtitle.textContent =
+    `${data.hours}h window · anthropic ${formatUSD(anthropicCost)} · refreshed ${costDashboardRefreshedAt || 'just now'}`;
+
+  const overview = makeSchemaCard('Spend snapshot', 'Current lookback window', {
+    titleSummary: 'Single-pane token and API spend view, anchored on persistent usage records and linked back to live request detail.',
+    widgetFacts: [
+      { label: 'Anthropic', value: formatUSD(anthropicCost) },
+      { label: 'Total', value: formatUSD(summary.total_cost_usd || 0) },
+      { label: 'Requests', value: formatNumber(totalRequests) },
+      { label: 'Total I/O', value: formatTokens((summary.total_input_tokens || 0) + (summary.total_output_tokens || 0)) },
+    ],
+    key: 'cost-overview',
+    entityKind: 'cost-dashboard',
+  });
+  appendSchemaRow(overview.body, 'input', formatTokens(summary.total_input_tokens || 0));
+  appendSchemaRow(overview.body, 'output', formatTokens(summary.total_output_tokens || 0));
+  appendSchemaRow(overview.body, 'cache write', formatTokens(summary.total_cache_creation_input_tokens || 0));
+  appendSchemaRow(overview.body, 'cache read', formatTokens(summary.total_cache_read_input_tokens || 0));
+  appendSchemaRow(overview.body, 'records', formatNumber(summary.total_records || 0));
+  costDashboardEls.content.appendChild(overview.card);
+
+  costDashboardEls.content.appendChild(buildLoopUsageCard(data));
+  costDashboardEls.content.appendChild(buildRequestUsageCard(data));
+  costDashboardEls.content.appendChild(buildUsageGroupedCard('By provider', 'Where spend lands', data.by_provider, {
+    titleSummary: 'Anthropic should stand out immediately here when frontier spend is active.',
+    widgetFacts: [{ label: 'providers', value: formatNumber((data.by_provider || []).length) }],
+  }));
+  costDashboardEls.content.appendChild(buildUsageGroupedCard('By resource', 'Which runtime resource burned it', data.by_resource, {
+    widgetFacts: [{ label: 'resources', value: formatNumber((data.by_resource || []).length) }],
+  }));
+  costDashboardEls.content.appendChild(buildUsageGroupedCard('By deployment', 'Resolved deployment IDs', data.by_model, {
+    widgetFacts: [{ label: 'deployments', value: formatNumber((data.by_model || []).length) }],
+  }));
+  costDashboardEls.content.appendChild(buildUsageGroupedCard('By upstream model', 'Provider-native model names', data.by_upstream_model, {
+    widgetFacts: [{ label: 'models', value: formatNumber((data.by_upstream_model || []).length) }],
+  }));
+  costDashboardEls.content.appendChild(buildUsageGroupedCard('By role', 'Interactive vs delegate vs scheduled burn', data.by_role, {
+    widgetFacts: [{ label: 'roles', value: formatNumber((data.by_role || []).length) }],
+  }));
+  costDashboardEls.content.appendChild(buildUsageGroupedCard('By task', 'Named task buckets when present', data.by_task, {
+    widgetFacts: [{ label: 'tasks', value: formatNumber((data.by_task || []).length) }],
+  }));
+}
+
+async function fetchCostDashboard() {
+  if (!costDashboardVisible) return;
+  const hours = Number(costDashboardEls.hours && costDashboardEls.hours.value) || 24;
+  if (costDashboardAbort) {
+    costDashboardAbort.abort();
+  }
+  const controller = new AbortController();
+  costDashboardAbort = controller;
+
+  if (!costDashboardData) {
+    renderCostDashboardEmpty('Loading usage overview…');
+  }
+
+  try {
+    const resp = await fetch('/api/usage/overview?hours=' + encodeURIComponent(hours) + '&limit=20', {
+      signal: controller.signal,
+    });
+    if (costDashboardAbort !== controller) return;
+    if (!resp.ok) {
+      renderCostDashboardEmpty('Usage overview failed to load (' + resp.status + ').');
+      return;
+    }
+    const data = await resp.json();
+    if (costDashboardAbort !== controller) return;
+    costDashboardData = data;
+    costDashboardRefreshedAt = new Date().toLocaleTimeString();
+    renderCostDashboardContent(data);
+  } catch (err) {
+    if (err.name === 'AbortError') return;
+    console.warn('Failed to fetch cost dashboard:', err);
+    renderCostDashboardEmpty('Usage overview failed to load.');
+  }
+}
+
+function openCostDashboard(opts = {}) {
+  costDashboardVisible = true;
+  if (!detailPanel.hidden) {
+    // no-op; the panel is already available
+  } else {
+    setInspectorVisible(true);
+  }
+  focusSystem();
+  if (requestDetailAbort) {
+    requestDetailAbort.abort();
+    requestDetailAbort = null;
+  }
+  activeRequestID = null;
+  activeRequestJSON = null;
+  requestDetailPanel.hidden = true;
+  renderDetail();
+  if (!opts.skipHash) {
+    window.location.hash = 'costs';
+  }
+  void fetchCostDashboard();
+}
+
+function closeCostDashboard(opts = {}) {
+  if (!costDashboardVisible) return;
+  costDashboardVisible = false;
+  costDashboardPanel.hidden = true;
+  costDashboardEls.content.hidden = true;
+  costDashboardEls.empty.hidden = false;
+  if (costDashboardAbort) {
+    costDashboardAbort.abort();
+    costDashboardAbort = null;
+  }
+  renderAll();
+  if (!opts.skipHash && window.location.hash === '#costs') {
+    history.replaceState(null, '', window.location.pathname + window.location.search);
+  }
 }
 
 function copyLoopEntityJSON(loop) {
@@ -4414,6 +4730,7 @@ function buildSystemContextMenu(sys) {
     { label: 'services: ' + entity.readyCount + '/' + entity.serviceCount + ' ready', disabled: true },
     { label: 'routing: ' + entity.routingMode + (entity.defaultModel ? ' · ' + entity.defaultModel : ''), disabled: true },
     { separator: true },
+    { label: 'Open cost dashboard', action: () => openCostDashboard() },
     { label: 'Open core window', action: () => openDetailWindow('system') },
     { label: 'Open toolbox window', action: () => openRegistryWindow('toolbox') },
     { label: 'Open model registry', action: () => openRegistryWindow('models') },
@@ -4425,6 +4742,16 @@ function buildSystemContextMenu(sys) {
 
 function renderDetail(opts = {}) {
   withPreservedDetailScroll(() => {
+    if (costDashboardVisible) {
+      renderCostDashboardShell();
+      if (costDashboardData) {
+        renderCostDashboardContent(costDashboardData);
+      } else {
+        renderCostDashboardEmpty('Loading usage overview…');
+      }
+      return;
+    }
+
     const isSystem = state.selected === '__system__';
     const isLoop = state.selected && state.loops.has(state.selected);
 
@@ -5130,6 +5457,7 @@ async function showRequestDetail(requestID) {
     // Show the request detail panel, hide others.
     detailPlaceholder.hidden = true;
     detailContent.hidden = true;
+    costDashboardPanel.hidden = true;
     requestDetailPanel.hidden = false;
 
     renderRequestDetail(detail, requestDetailEls);
@@ -5154,8 +5482,12 @@ function closeRequestDetail() {
   requestDetailPanel.hidden = true;
   // Restore the previous detail panel state.
   renderAll();
-  // Clear hash while preserving path and query string.
-  history.replaceState(null, '', window.location.pathname + window.location.search);
+  if (costDashboardVisible) {
+    history.replaceState(null, '', window.location.pathname + window.location.search + '#costs');
+  } else {
+    // Clear hash while preserving path and query string.
+    history.replaceState(null, '', window.location.pathname + window.location.search);
+  }
 }
 
 $('#request-detail-close').addEventListener('click', closeRequestDetail);
@@ -5170,6 +5502,17 @@ $('#request-detail-copy').addEventListener('click', () => {
       btn.classList.remove('copy-btn--copied');
     }, 1200);
   });
+});
+
+costDashboardEls.refresh?.addEventListener('click', () => {
+  if (!costDashboardVisible) return;
+  void fetchCostDashboard();
+});
+costDashboardEls.close?.addEventListener('click', () => closeCostDashboard());
+costDashboardEls.hours?.addEventListener('change', () => {
+  if (!costDashboardVisible) return;
+  costDashboardData = null;
+  void fetchCostDashboard();
 });
 
 // Override renderDetail to respect active request detail view.
@@ -5204,6 +5547,7 @@ async function probeContentRetention() {
 function handleHashRoute() {
   const hash = window.location.hash;
   const match = hash && hash.match(/^#request\/(.+)$/);
+  const wantsCosts = hash === '#costs';
 
   if (match) {
     const id = decodeURIComponent(match[1]);
@@ -5212,6 +5556,11 @@ function handleHashRoute() {
     if (id !== activeRequestID) {
       showRequestDetail(id);
     }
+    return;
+  }
+
+  if (wantsCosts) {
+    openCostDashboard({ skipHash: true });
     return;
   }
 
@@ -5226,6 +5575,9 @@ function handleHashRoute() {
     }
     requestDetailPanel.hidden = true;
     renderAll();
+  }
+  if (costDashboardVisible) {
+    closeCostDashboard({ skipHash: true });
   }
 }
 
@@ -5243,4 +5595,9 @@ probeContentRetention().then(handleHashRoute);
 setInterval(updateUptime, 1000);
 // Refresh system status every 10s.
 setInterval(fetchSystemStatus, 10000);
+// Refresh the cost dashboard while it is open.
+setInterval(() => {
+  if (!costDashboardVisible) return;
+  void fetchCostDashboard();
+}, COST_DASHBOARD_REFRESH_MS);
 requestAnimationFrame(tick);

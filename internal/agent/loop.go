@@ -2790,11 +2790,19 @@ func (l *Loop) recordUsage(ctx context.Context, req *Request, model string, tota
 
 	identity := usage.ResolveModelIdentity(model, l.currentModelCatalog())
 	cost := usage.ComputeDetailedCostForIdentity(identity, totalIn, cacheCreateIn, cacheReadIn, totalOut, l.pricing)
+	loopID := ""
+	loopName := ""
+	if req.Hints != nil {
+		loopID = req.Hints["loop_id"]
+		loopName = req.Hints["loop_name"]
+	}
 	rec := usage.Record{
 		Timestamp:                time.Now(),
 		RequestID:                requestID,
 		SessionID:                sessionTag,
 		ConversationID:           convID,
+		LoopID:                   loopID,
+		LoopName:                 loopName,
 		Model:                    identity.Model,
 		UpstreamModel:            identity.UpstreamModel,
 		Resource:                 identity.Resource,

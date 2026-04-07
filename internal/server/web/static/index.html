@@ -42,6 +42,27 @@
       <div id="detail-content" class="detail-content" hidden>
         <div id="detail-entity" class="detail-entity"></div>
       </div>
+      <div id="cost-dashboard" class="detail-content" hidden>
+        <div class="detail-header">
+          <div class="cost-dashboard__heading">
+            <h2 class="detail-name">Usage &amp; Cost</h2>
+            <p id="cost-dashboard-subtitle" class="detail-subtitle">Live token burn and API spend.</p>
+          </div>
+          <div class="cost-dashboard__controls">
+            <select id="cost-dashboard-hours" class="log-select" title="Usage lookback window">
+              <option value="1">1h</option>
+              <option value="6">6h</option>
+              <option value="24" selected>24h</option>
+              <option value="72">72h</option>
+              <option value="168">7d</option>
+            </select>
+            <button id="cost-dashboard-refresh" class="btn btn--sm">Refresh</button>
+            <button id="cost-dashboard-close" class="btn btn--sm" title="Close cost dashboard">&times;</button>
+          </div>
+        </div>
+        <div id="cost-dashboard-empty" class="request-window__empty">Loading usage overview…</div>
+        <div id="cost-dashboard-content" hidden></div>
+      </div>
       <div id="request-detail" class="detail-content" hidden>
         <div class="detail-header">
           <h2 class="detail-name">Request Detail</h2>

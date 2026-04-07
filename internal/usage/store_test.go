@@ -252,6 +252,90 @@ func TestSummaryByTask(t *testing.T) {
 	}
 }
 
+func TestSummaryByLoop(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+
+	now := time.Now().UTC()
+	recs := []Record{
+		{Timestamp: now, RequestID: "r1", LoopID: "loop-a", LoopName: "battery watch", Model: "m", Provider: "anthropic", InputTokens: 100, OutputTokens: 50, CostUSD: 1.5, Role: "scheduled"},
+		{Timestamp: now, RequestID: "r2", LoopID: "loop-a", LoopName: "battery watch", Model: "m", Provider: "anthropic", InputTokens: 200, OutputTokens: 100, CostUSD: 2.5, Role: "scheduled"},
+		{Timestamp: now, RequestID: "r3", LoopID: "loop-b", LoopName: "mail triage", Model: "m", Provider: "anthropic", InputTokens: 50, OutputTokens: 25, CostUSD: 0.5, Role: "scheduled"},
+		{Timestamp: now, RequestID: "r4", Model: "m", Provider: "anthropic", InputTokens: 10, OutputTokens: 5, CostUSD: 0.1, Role: "interactive"},
+	}
+	for _, rec := range recs {
+		if err := s.Record(ctx, rec); err != nil {
+			t.Fatalf("Record: %v", err)
+		}
+	}
+
+	start := now.Add(-1 * time.Minute)
+	end := now.Add(1 * time.Minute)
+	result, err := s.SummaryByLoop(start, end)
+	if err != nil {
+		t.Fatalf("SummaryByLoop: %v", err)
+	}
+
+	if len(result) != 2 {
+		t.Fatalf("got %d loop groups, want 2", len(result))
+	}
+	if result[0].LoopID != "loop-a" {
+		t.Fatalf("first loop = %q, want loop-a", result[0].LoopID)
+	}
+	if result[0].LoopName != "battery watch" {
+		t.Errorf("first loop name = %q, want battery watch", result[0].LoopName)
+	}
+	if result[0].RequestCount != 2 {
+		t.Errorf("loop-a RequestCount = %d, want 2", result[0].RequestCount)
+	}
+	if result[0].Summary.TotalCostUSD != 4.0 {
+		t.Errorf("loop-a cost = %f, want 4.0", result[0].Summary.TotalCostUSD)
+	}
+}
+
+func TestTopRequests(t *testing.T) {
+	s := testStore(t)
+	ctx := context.Background()
+
+	base := time.Now().UTC()
+	recs := []Record{
+		{Timestamp: base.Add(-2 * time.Second), RequestID: "r-top", LoopID: "loop-a", LoopName: "battery watch", ConversationID: "conv-a", SessionID: "sess-a", Model: "edge/claude-sonnet", UpstreamModel: "claude-sonnet", Resource: "edge", Provider: "anthropic", InputTokens: 100, OutputTokens: 50, CostUSD: 1.25, Role: "scheduled", TaskName: "battery_scan"},
+		{Timestamp: base.Add(-1 * time.Second), RequestID: "r-top", LoopID: "loop-a", LoopName: "battery watch", ConversationID: "conv-a", SessionID: "sess-a", Model: "edge/claude-sonnet", UpstreamModel: "claude-sonnet", Resource: "edge", Provider: "anthropic", InputTokens: 200, OutputTokens: 75, CostUSD: 2.25, Role: "scheduled", TaskName: "battery_scan"},
+		{Timestamp: base, RequestID: "r-low", LoopID: "loop-b", LoopName: "mail triage", ConversationID: "conv-b", SessionID: "sess-b", Model: "edge/claude-sonnet", UpstreamModel: "claude-sonnet", Resource: "edge", Provider: "anthropic", InputTokens: 50, OutputTokens: 25, CostUSD: 0.5, Role: "scheduled", TaskName: "mail_scan"},
+	}
+	for _, rec := range recs {
+		if err := s.Record(ctx, rec); err != nil {
+			t.Fatalf("Record: %v", err)
+		}
+	}
+
+	start := base.Add(-1 * time.Minute)
+	end := base.Add(1 * time.Minute)
+	result, err := s.TopRequests(start, end, 10)
+	if err != nil {
+		t.Fatalf("TopRequests: %v", err)
+	}
+
+	if len(result) != 2 {
+		t.Fatalf("got %d request groups, want 2", len(result))
+	}
+	if result[0].RequestID != "r-top" {
+		t.Fatalf("top request = %q, want r-top", result[0].RequestID)
+	}
+	if result[0].LoopID != "loop-a" || result[0].LoopName != "battery watch" {
+		t.Errorf("top request loop = %q/%q, want loop-a/battery watch", result[0].LoopID, result[0].LoopName)
+	}
+	if result[0].Summary.TotalRecords != 2 {
+		t.Errorf("top request records = %d, want 2", result[0].Summary.TotalRecords)
+	}
+	if result[0].Summary.TotalCostUSD != 3.5 {
+		t.Errorf("top request cost = %f, want 3.5", result[0].Summary.TotalCostUSD)
+	}
+	if result[0].ConversationID != "conv-a" || result[0].SessionID != "sess-a" {
+		t.Errorf("top request conversation/session = %q/%q, want conv-a/sess-a", result[0].ConversationID, result[0].SessionID)
+	}
+}
+
 func TestQueryByPeriod_Filters(t *testing.T) {
 	s := testStore(t)
 	ctx := context.Background()
@@ -670,6 +754,12 @@ func TestMigrate_AddsDeploymentMetadataColumns(t *testing.T) {
 	}
 	if !database.HasColumn(db, "usage_records", "resource") {
 		t.Fatal("expected resource column after migration")
+	}
+	if !database.HasColumn(db, "usage_records", "loop_id") {
+		t.Fatal("expected loop_id column after migration")
+	}
+	if !database.HasColumn(db, "usage_records", "loop_name") {
+		t.Fatal("expected loop_name column after migration")
 	}
 	if !database.HasColumn(db, "usage_records", "cache_creation_input_tokens") {
 		t.Fatal("expected cache_creation_input_tokens column after migration")

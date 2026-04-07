@@ -1070,11 +1070,35 @@ body.resize-col .schema-card__fade {
 
 .detail-header .state-badge { margin-left: auto; }
 
+.cost-dashboard__heading {
+  min-width: 0;
+}
+
+.cost-dashboard__controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.35rem;
+  margin-left: auto;
+  flex-wrap: wrap;
+}
+
 .detail-name {
   font-size: 1rem;
   font-weight: 600;
   color: var(--accent);
   text-wrap: balance;
+}
+
+.detail-subtitle {
+  margin: 0.12rem 0 0;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+}
+
+#cost-dashboard-content {
+  display: grid;
+  gap: 0.75rem;
 }
 
 .state-badge {

@@ -23,6 +23,8 @@ type Record struct {
 	RequestID                string
 	SessionID                string
 	ConversationID           string
+	LoopID                   string
+	LoopName                 string
 	Model                    string // Selected deployment ID when known
 	UpstreamModel            string
 	Resource                 string
@@ -63,6 +65,31 @@ type GroupedSummary struct {
 	Summary Summary `json:"summary"`
 }
 
+// LoopSummary describes aggregated usage attributed to a loop.
+type LoopSummary struct {
+	LoopID       string  `json:"loop_id"`
+	LoopName     string  `json:"loop_name,omitempty"`
+	RequestCount int     `json:"request_count"`
+	Summary      Summary `json:"summary"`
+}
+
+// RequestSummary describes aggregated usage for a single request.
+type RequestSummary struct {
+	RequestID      string  `json:"request_id"`
+	CreatedAt      string  `json:"created_at"`
+	ConversationID string  `json:"conversation_id,omitempty"`
+	SessionID      string  `json:"session_id,omitempty"`
+	LoopID         string  `json:"loop_id,omitempty"`
+	LoopName       string  `json:"loop_name,omitempty"`
+	Model          string  `json:"model,omitempty"`
+	UpstreamModel  string  `json:"upstream_model,omitempty"`
+	Resource       string  `json:"resource,omitempty"`
+	Provider       string  `json:"provider,omitempty"`
+	Role           string  `json:"role,omitempty"`
+	TaskName       string  `json:"task_name,omitempty"`
+	Summary        Summary `json:"summary"`
+}
+
 // Store is an append-only SQLite store for token usage records. All
 // public methods are safe for concurrent use (SQLite serializes writes).
 type Store struct {
@@ -93,6 +120,8 @@ func (s *Store) migrate() error {
 		request_id      TEXT NOT NULL,
 		session_id      TEXT,
 		conversation_id TEXT,
+		loop_id         TEXT,
+		loop_name       TEXT,
 		model           TEXT NOT NULL,
 		provider        TEXT NOT NULL,
 		input_tokens    INTEGER NOT NULL,
@@ -102,6 +131,7 @@ func (s *Store) migrate() error {
 		task_name       TEXT
 	);
 	CREATE INDEX IF NOT EXISTS idx_usage_timestamp ON usage_records(timestamp);
+	CREATE INDEX IF NOT EXISTS idx_usage_request ON usage_records(request_id);
 	CREATE INDEX IF NOT EXISTS idx_usage_session ON usage_records(session_id);
 	CREATE INDEX IF NOT EXISTS idx_usage_conversation ON usage_records(conversation_id);
 	`
@@ -114,10 +144,19 @@ func (s *Store) migrate() error {
 	if err := database.AddColumn(s.db, "usage_records", "resource", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return err
 	}
+	if err := database.AddColumn(s.db, "usage_records", "loop_id", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+	if err := database.AddColumn(s.db, "usage_records", "loop_name", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
 	if err := database.AddColumn(s.db, "usage_records", "cache_creation_input_tokens", "INTEGER NOT NULL DEFAULT 0"); err != nil {
 		return err
 	}
 	if err := database.AddColumn(s.db, "usage_records", "cache_read_input_tokens", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return err
+	}
+	if _, err := s.db.Exec(`CREATE INDEX IF NOT EXISTS idx_usage_loop ON usage_records(loop_id);`); err != nil {
 		return err
 	}
 	return nil
@@ -139,14 +178,16 @@ func (s *Store) Record(ctx context.Context, rec Record) error {
 
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO usage_records
-			(id, timestamp, request_id, session_id, conversation_id, model, upstream_model, resource, provider,
+			(id, timestamp, request_id, session_id, conversation_id, loop_id, loop_name, model, upstream_model, resource, provider,
 			 input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens, cost_usd, role, task_name)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		rec.ID,
 		rec.Timestamp.UTC().Format(time.RFC3339),
 		rec.RequestID,
 		rec.SessionID,
 		rec.ConversationID,
+		rec.LoopID,
+		rec.LoopName,
 		rec.Model,
 		rec.UpstreamModel,
 		rec.Resource,
@@ -219,60 +260,6 @@ func (s *Store) SummaryByRole(start, end time.Time) ([]GroupedSummary, error) {
 // task_name are grouped under the key "".
 func (s *Store) SummaryByTask(start, end time.Time) ([]GroupedSummary, error) {
 	return s.summaryGroupedBy("task_name", start, end)
-}
-
-// SummaryByGroup dispatches the grouped summary query based on the
-// caller-provided grouping key.
-func (s *Store) SummaryByGroup(groupBy string, start, end time.Time) ([]GroupedSummary, error) {
-	switch strings.TrimSpace(groupBy) {
-	case "deployment", "model":
-		return s.SummaryByModel(start, end)
-	case "upstream_model":
-		return s.SummaryByUpstreamModel(start, end)
-	case "provider":
-		return s.SummaryByProvider(start, end)
-	case "resource":
-		return s.SummaryByResource(start, end)
-	case "role":
-		return s.SummaryByRole(start, end)
-	case "task":
-		return s.SummaryByTask(start, end)
-	default:
-		return nil, fmt.Errorf("unsupported group_by %q; use one of [\"deployment\" \"model\" \"upstream_model\" \"provider\" \"resource\" \"role\" \"task\"]", groupBy)
-	}
-}
-
-func (s *Store) summaryGroupedBy(column string, start, end time.Time) ([]GroupedSummary, error) {
-	// column is always a compile-time constant from our own methods,
-	// never user input, so embedding it directly is safe.
-	query := fmt.Sprintf(
-		`SELECT COALESCE(%s, ''), COUNT(*), COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0),
-		        COALESCE(SUM(cache_creation_input_tokens), 0), COALESCE(SUM(cache_read_input_tokens), 0), COALESCE(SUM(cost_usd), 0)
-		 FROM usage_records
-		 WHERE timestamp >= ? AND timestamp < ?
-		 GROUP BY %s
-		 ORDER BY SUM(cost_usd) DESC`,
-		column, column,
-	)
-
-	rows, err := s.db.Query(query,
-		start.UTC().Format(time.RFC3339),
-		end.UTC().Format(time.RFC3339),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("query usage by %s: %w", column, err)
-	}
-	defer rows.Close()
-
-	var result []GroupedSummary
-	for rows.Next() {
-		var gs GroupedSummary
-		if err := rows.Scan(&gs.Key, &gs.Summary.TotalRecords, &gs.Summary.TotalInputTokens, &gs.Summary.TotalOutputTokens, &gs.Summary.TotalCacheCreationInputTokens, &gs.Summary.TotalCacheReadInputTokens, &gs.Summary.TotalCostUSD); err != nil {
-			return nil, fmt.Errorf("scan usage by %s: %w", column, err)
-		}
-		result = append(result, gs)
-	}
-	return result, rows.Err()
 }
 
 // ResolveModelIdentity resolves usage-facing metadata for a selected

@@ -19,6 +19,7 @@ import (
 	"github.com/nugget/thane-ai-agent/internal/models"
 	"github.com/nugget/thane-ai-agent/internal/router"
 	"github.com/nugget/thane-ai-agent/internal/toolcatalog"
+	"github.com/nugget/thane-ai-agent/internal/usage"
 )
 
 //go:embed static/*
@@ -97,6 +98,8 @@ type Config struct {
 	// ContentQuerier enables request detail drill-down. Nil disables
 	// the /api/requests/{id} endpoint.
 	ContentQuerier ContentQuerier
+	// UsageStore enables the cost dashboard API. Nil disables it.
+	UsageStore *usage.Store
 	// SystemStatus provides runtime health for the system canvas node.
 	// Nil disables the system node.
 	SystemStatus SystemStatusProvider
@@ -110,6 +113,7 @@ type WebServer struct {
 	eventBus       *events.Bus
 	logQuerier     LogQuerier
 	contentQuerier ContentQuerier
+	usageStore     *usage.Store
 	systemStatus   SystemStatusProvider
 	logger         *slog.Logger
 }
@@ -125,6 +129,7 @@ func NewWebServer(cfg Config) *WebServer {
 		eventBus:       cfg.EventBus,
 		logQuerier:     cfg.LogQuerier,
 		contentQuerier: cfg.ContentQuerier,
+		usageStore:     cfg.UsageStore,
 		systemStatus:   cfg.SystemStatus,
 		logger:         logger,
 	}
@@ -141,6 +146,7 @@ func (s *WebServer) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/loops/{id}/logs", s.handleLoopLogs)
 	mux.HandleFunc("GET /api/request-detail/_probe", s.handleRequestDetailProbe)
 	mux.HandleFunc("GET /api/requests/{id}", s.handleRequestDetail)
+	mux.HandleFunc("GET /api/usage/overview", s.handleUsageOverview)
 	mux.HandleFunc("GET /api/system/logs", s.handleSystemLogs)
 }
 

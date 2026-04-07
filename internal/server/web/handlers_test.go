@@ -9,12 +9,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nugget/thane-ai-agent/internal/database"
 	"github.com/nugget/thane-ai-agent/internal/events"
 	"github.com/nugget/thane-ai-agent/internal/logging"
 	"github.com/nugget/thane-ai-agent/internal/loop"
 	"github.com/nugget/thane-ai-agent/internal/models"
 	"github.com/nugget/thane-ai-agent/internal/router"
 	"github.com/nugget/thane-ai-agent/internal/toolcatalog"
+	"github.com/nugget/thane-ai-agent/internal/usage"
 )
 
 // --- Test Doubles ---
@@ -53,6 +55,27 @@ type stubContentQuerier struct {
 func (q *stubContentQuerier) QueryRequestDetail(requestID string) (*logging.RequestDetail, error) {
 	q.lastRequestID = requestID
 	return q.detail, q.err
+}
+
+func newUsageStoreForTest(t *testing.T, records ...usage.Record) *usage.Store {
+	t.Helper()
+
+	db, err := database.OpenMemory()
+	if err != nil {
+		t.Fatalf("database.OpenMemory: %v", err)
+	}
+	t.Cleanup(func() { db.Close() })
+
+	store, err := usage.NewStore(db)
+	if err != nil {
+		t.Fatalf("usage.NewStore: %v", err)
+	}
+	for _, rec := range records {
+		if err := store.Record(t.Context(), rec); err != nil {
+			t.Fatalf("store.Record(%q): %v", rec.RequestID, err)
+		}
+	}
+	return store
 }
 
 func newTestServer(reg LoopRegistry, lq LogQuerier, bus *events.Bus) *WebServer {
@@ -681,5 +704,122 @@ func TestHandleRequestDetail_AllowsLiteralProbeRequestID(t *testing.T) {
 	}
 	if cq.lastRequestID != "_probe" {
 		t.Fatalf("queried request id = %q, want _probe", cq.lastRequestID)
+	}
+}
+
+func TestHandleUsageOverview(t *testing.T) {
+	t.Parallel()
+
+	now := time.Now().UTC()
+	store := newUsageStoreForTest(t,
+		usage.Record{
+			Timestamp:      now.Add(-2 * time.Hour),
+			RequestID:      "r_123",
+			ConversationID: "conv-1",
+			SessionID:      "sess-1",
+			LoopID:         "loop-a",
+			LoopName:       "battery watch",
+			Model:          "edge/claude-sonnet",
+			UpstreamModel:  "claude-sonnet",
+			Resource:       "edge",
+			Provider:       "anthropic",
+			InputTokens:    100,
+			OutputTokens:   50,
+			CostUSD:        3.50,
+			Role:           "scheduled",
+			TaskName:       "battery_scan",
+		},
+		usage.Record{
+			Timestamp:      now.Add(-1 * time.Hour),
+			RequestID:      "r_456",
+			ConversationID: "conv-2",
+			SessionID:      "sess-2",
+			LoopID:         "loop-a",
+			LoopName:       "battery watch",
+			Model:          "edge/claude-sonnet",
+			UpstreamModel:  "claude-sonnet",
+			Resource:       "edge",
+			Provider:       "anthropic",
+			InputTokens:    200,
+			OutputTokens:   100,
+			CostUSD:        0.75,
+			Role:           "scheduled",
+			TaskName:       "battery_scan",
+		},
+	)
+
+	srv := NewWebServer(Config{
+		LoopRegistry: &stubRegistry{},
+		EventBus:     events.New(),
+		UsageStore:   store,
+	})
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	req := httptest.NewRequest("GET", "/api/usage/overview?hours=48&limit=7", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+
+	var resp usageOverviewResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Hours != 48 {
+		t.Fatalf("hours = %d, want 48", resp.Hours)
+	}
+	if resp.Summary == nil || resp.Summary.TotalCostUSD != 4.25 {
+		t.Fatalf("summary = %#v, want total cost 4.25", resp.Summary)
+	}
+	if len(resp.ByProvider) != 1 || resp.ByProvider[0].Key != "anthropic" {
+		t.Fatalf("by_provider = %#v, want anthropic", resp.ByProvider)
+	}
+	if len(resp.ByLoop) != 1 || resp.ByLoop[0].LoopID != "loop-a" {
+		t.Fatalf("by_loop = %#v, want loop-a", resp.ByLoop)
+	}
+	if len(resp.TopRequests) != 2 || resp.TopRequests[0].RequestID != "r_123" {
+		t.Fatalf("top_requests = %#v, want r_123 first and two rows", resp.TopRequests)
+	}
+	if resp.TopRequests[0].Summary.TotalCostUSD != 3.50 {
+		t.Fatalf("top_requests[0] = %#v, want total cost 3.50", resp.TopRequests[0])
+	}
+}
+
+func TestHandleUsageOverview_RequiresUsageQuerier(t *testing.T) {
+	t.Parallel()
+
+	srv := newTestServer(&stubRegistry{}, nil, events.New())
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	req := httptest.NewRequest("GET", "/api/usage/overview", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", w.Code)
+	}
+}
+
+func TestHandleUsageOverview_RejectsBadHours(t *testing.T) {
+	t.Parallel()
+
+	srv := NewWebServer(Config{
+		LoopRegistry: &stubRegistry{},
+		EventBus:     events.New(),
+		UsageStore:   newUsageStoreForTest(t),
+	})
+	mux := http.NewServeMux()
+	srv.RegisterRoutes(mux)
+
+	req := httptest.NewRequest("GET", "/api/usage/overview?hours=bogus", nil)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", w.Code)
 	}
 }

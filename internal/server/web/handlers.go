@@ -11,7 +11,23 @@ import (
 
 	"github.com/nugget/thane-ai-agent/internal/events"
 	"github.com/nugget/thane-ai-agent/internal/logging"
+	"github.com/nugget/thane-ai-agent/internal/usage"
 )
+
+type usageOverviewResponse struct {
+	Start       string                 `json:"start"`
+	End         string                 `json:"end"`
+	Hours       int                    `json:"hours"`
+	Summary     *usage.Summary         `json:"summary"`
+	ByProvider  []usage.GroupedSummary `json:"by_provider,omitempty"`
+	ByResource  []usage.GroupedSummary `json:"by_resource,omitempty"`
+	ByModel     []usage.GroupedSummary `json:"by_model,omitempty"`
+	ByUpstream  []usage.GroupedSummary `json:"by_upstream_model,omitempty"`
+	ByRole      []usage.GroupedSummary `json:"by_role,omitempty"`
+	ByTask      []usage.GroupedSummary `json:"by_task,omitempty"`
+	ByLoop      []usage.LoopSummary    `json:"by_loop,omitempty"`
+	TopRequests []usage.RequestSummary `json:"top_requests,omitempty"`
+}
 
 // handleSystem returns runtime health, uptime, and version info for
 // the system node on the dashboard canvas.
@@ -153,6 +169,89 @@ func (s *WebServer) handleRequestDetail(w http.ResponseWriter, r *http.Request) 
 func (s *WebServer) handleRequestDetailProbe(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("X-Request-Detail-Available", strconv.FormatBool(s.contentQuerier != nil))
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func parsePositiveIntParam(raw string, fallback, max int) (int, error) {
+	if strings.TrimSpace(raw) == "" {
+		return fallback, nil
+	}
+	n, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil || n <= 0 {
+		return 0, fmt.Errorf("must be a positive integer")
+	}
+	if max > 0 && n > max {
+		return max, nil
+	}
+	return n, nil
+}
+
+func (s *WebServer) handleUsageOverview(w http.ResponseWriter, r *http.Request) {
+	if s.usageStore == nil {
+		s.writeJSONError(w, "usage overview not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	hours, err := parsePositiveIntParam(r.URL.Query().Get("hours"), 24, 24*365)
+	if err != nil {
+		s.writeJSONError(w, "hours must be a positive integer", http.StatusBadRequest)
+		return
+	}
+	limit, err := parsePositiveIntParam(r.URL.Query().Get("limit"), 20, 100)
+	if err != nil {
+		s.writeJSONError(w, "limit must be a positive integer", http.StatusBadRequest)
+		return
+	}
+
+	end := time.Now().UTC().Truncate(time.Second)
+	start := end.Add(-time.Duration(hours) * time.Hour)
+	queryEnd := end.Add(1 * time.Second)
+
+	summary, err := s.usageStore.Summary(start, queryEnd)
+	if err != nil {
+		s.logger.Warn("usage overview summary query failed", "error", err, "hours", hours)
+		s.writeJSONError(w, "usage summary query failed", http.StatusInternalServerError)
+		return
+	}
+
+	groupNames := []string{"provider", "resource", "model", "upstream_model", "role", "task"}
+	groupResults := make(map[string][]usage.GroupedSummary, len(groupNames))
+	for _, groupName := range groupNames {
+		grouped, err := s.usageStore.SummaryByGroup(groupName, start, queryEnd)
+		if err != nil {
+			s.logger.Warn("usage overview group query failed", "group_by", groupName, "error", err)
+			s.writeJSONError(w, "usage group query failed", http.StatusInternalServerError)
+			return
+		}
+		groupResults[groupName] = grouped
+	}
+
+	byLoop, err := s.usageStore.SummaryByLoop(start, queryEnd)
+	if err != nil {
+		s.logger.Warn("usage overview loop query failed", "error", err)
+		s.writeJSONError(w, "usage loop query failed", http.StatusInternalServerError)
+		return
+	}
+	topRequests, err := s.usageStore.TopRequests(start, queryEnd, limit)
+	if err != nil {
+		s.logger.Warn("usage overview request query failed", "error", err, "limit", limit)
+		s.writeJSONError(w, "usage request query failed", http.StatusInternalServerError)
+		return
+	}
+
+	s.writeJSON(w, usageOverviewResponse{
+		Start:       start.UTC().Format(time.RFC3339),
+		End:         end.UTC().Format(time.RFC3339),
+		Hours:       hours,
+		Summary:     summary,
+		ByProvider:  groupResults["provider"],
+		ByResource:  groupResults["resource"],
+		ByModel:     groupResults["model"],
+		ByUpstream:  groupResults["upstream_model"],
+		ByRole:      groupResults["role"],
+		ByTask:      groupResults["task"],
+		ByLoop:      byLoop,
+		TopRequests: topRequests,
+	})
 }
 
 // handleSystemLogs returns all log entries across the entire runtime.
