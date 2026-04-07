@@ -1,12 +1,50 @@
 # The Agent Loop
 
-The agent loop is Thane's core reasoning cycle. Every request — whether from
-a user typing in the dashboard, a Home Assistant voice command, an MQTT wake
-subscription, or a scheduled task — enters the same loop.
+The loop is Thane's universal execution primitive. Every piece of work —
+a user conversation, a background watcher, a delegation task — runs as a
+loop with the same core reasoning cycle.
 
-## The Cycle
+## Loop Operations
 
-Each request runs through up to ten iterations:
+Loops come in three modes:
+
+**Request/Reply** — A user asks, the agent reasons and responds, the loop
+ends. This is what drives conversations through the API and Home Assistant.
+One-shot, synchronous, bounded.
+
+**Background Task** — A detached task whose result is delivered later
+through a non-blocking path (injected into a conversation, sent to a
+channel, or delivered via notification). Delegation runs in this mode —
+the orchestrator spawns a background loop for the delegate, continues
+reasoning, and picks up the result when it's ready.
+
+**Autonomous Loop** — A persistent loop that runs continuously alongside
+the main agent, directing its own attention. This is where Thane's agency
+lives: the ability to wonder about something and then actively look for
+it. Autonomous loops don't run on a fixed schedule — the agent controls
+its own pacing through `set_next_sleep`, deciding after each iteration
+how long until it looks again. Jitter randomizes the timing further,
+ensuring no two cycles are identical and that data sampling reflects
+genuine observation rather than mechanical polling.
+
+Autonomous loops come in two flavors: *self-paced* loops wake on a
+model-controlled sleep schedule (metacognitive reflection, ego
+maintenance — the agent decides when to look and how long to dwell),
+while *event-driven* loops block until an external event arrives (MQTT
+wake subscriptions that fire when a topic receives a message). Both
+observe the environment and act when something is worth responding to.
+
+An optional **supervisor** model can be invoked probabilistically during
+autonomous loop iterations — a frontier-quality model that provides
+periodic oversight of the local model's work.
+
+A **loop registry** tracks all active loops, enforces concurrency limits,
+and coordinates graceful shutdown. The registry provides operational
+visibility into what's running, health status, and resource consumption.
+
+## The Reasoning Cycle
+
+Each loop iteration runs through the same steps:
 
 ### 1. Context Assembly
 
@@ -105,11 +143,18 @@ Tags activated during a conversation persist for the duration of that
 session. A request that starts by activating `email` doesn't need to
 reactivate it on subsequent turns. Tags reset when the session closes.
 
-## Iteration Budget
+## Iteration Budgets
 
-The loop runs a maximum of ten iterations per request. Each iteration is
+**Request/reply loops** run a maximum of ten iterations. Each iteration is
 one LLM call plus tool execution. This prevents runaway tool-call chains
-while giving the agent enough room for multi-step reasoning.
+while giving the agent enough room for multi-step reasoning. On exhaustion,
+a final `tools=nil` call forces a text response.
+
+**Autonomous loops** iterate indefinitely with model-controlled pacing
+(bounded by `sleep_min` / `sleep_max`, randomized by jitter). The agent
+decides its own cadence — how long to dwell, when to look again.
+
+**Background tasks** have configurable iteration and wall-clock limits.
 
 The agent sees its token budget in the context, so it can make informed
 decisions about when to checkpoint, delegate, or wrap up.
